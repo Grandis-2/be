@@ -42,16 +42,6 @@ public class TestQueues {
         return Optional.empty();
     }
 
-    /**
-     * 조건에 맞는 메시지가 지금 큐에 있는지 지우지 않고 들여다본다. 받자마자 다시 보이게 해(가시성 0) 소비기를
-     * 방해하지 않는다. 없음을 확인할 때는 여러 번 불러 본다(SQS 는 한 번에 일부만 돌려준다).
-     */
-    public boolean contains(String queue, Predicate<Message> match) {
-        return sqs.receiveMessage(request -> request.queueUrl(url(queue)).waitTimeSeconds(0)
-                        .maxNumberOfMessages(10).visibilityTimeout(0)).messages().stream()
-                .anyMatch(match);
-    }
-
     /** 대기 중 + 받았지만 아직 지우지 않은 메시지 수. */
     public int messagesIn(String queue) {
         Map<QueueAttributeName, String> attributes = sqs.getQueueAttributes(request -> request

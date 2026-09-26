@@ -3,6 +3,7 @@ package com.grandis.nova.preorder.sqs;
 import com.grandis.nova.preorder.accept.AcceptResult;
 import com.grandis.nova.preorder.accept.PreorderAcceptService;
 import com.grandis.nova.preorder.catalog.CatalogClient;
+import com.grandis.nova.preorder.event.PreorderEventDispatcher;
 import com.grandis.nova.preorder.outbox.OutboxEvent;
 import com.grandis.nova.preorder.outbox.OutboxMessage.RegisterJobReady;
 import com.grandis.nova.preorder.outbox.OutboxWriter;
@@ -19,6 +20,7 @@ import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 import software.amazon.awssdk.services.sqs.model.Message;
 import tools.jackson.databind.JsonNode;
@@ -29,6 +31,7 @@ import java.util.concurrent.ThreadLocalRandom;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.Mockito.mockingDetails;
 
 /** 실제 SQS 프로토콜(Floci)로 발행 · 소비 · DLQ 와 흐름 ①(접수 → 외부 등록 → 결제 가능)을 확인한다. */
 @SqsIntegrationTest
@@ -41,6 +44,10 @@ class SqsMessagingTest {
 
     @Autowired
     TestQueues queues;
+
+    /** 호출 기록만 읽어 메시지가 몇 번 처리됐는지 센다(스텁하지 않는다). */
+    @MockitoSpyBean
+    PreorderEventDispatcher dispatcher;
 
     @Autowired
     PreorderAcceptService acceptService;
@@ -86,15 +93,18 @@ class SqsMessagingTest {
         String eventId = ShopFixtures.unique();
         String externalNumber = "R-" + ShopFixtures.unique();
 
-        queues.send("preorder-events", externalJobSucceeded(eventId,
-                fixtures.workerSucceeds(preorderId, "REGISTER"), AcceptFixtures.tokenOf(accepted), externalNumber));
+        String body = externalJobSucceeded(eventId, fixtures.workerSucceeds(preorderId, "REGISTER"),
+                AcceptFixtures.tokenOf(accepted), externalNumber);
+
+        queues.send("preorder-events", body);
 
         await().atMost(TIMEOUT).until(() -> "PAYABLE".equals(status(preorderId)));
         assertThat(jdbcTemplate.queryForObject("SELECT external_reference FROM preorders WHERE id = ?",
                 String.class, preorderId)).isEqualTo(externalNumber);
-        await().alias("처리한 메시지는 숨김도 대기도 아닌, 큐에서 사라진다")
-                .during(Duration.ofSeconds(2)).atMost(TIMEOUT)
-                .until(() -> !queues.contains("preorder-events", m -> m.body().contains(eventId)));
+        // 지우지 못했다면 가시성 시간(2s) 뒤 다시 보여 한 번 더 처리된다 — 그 몇 배를 기다려도 한 번이어야 한다
+        await().alias("처리한 메시지는 지워져 다시 처리되지 않는다")
+                .during(Duration.ofSeconds(8)).atMost(TIMEOUT)
+                .until(() -> dispatchCount(body) == 1);
     }
 
     /** 같은 메시지가 다시 전달돼도(SQS 는 최소 1회 전달) 상태 전이는 한 번이다. */
@@ -109,11 +119,11 @@ class SqsMessagingTest {
         queues.send("preorder-events", body);
         queues.send("preorder-events", body);
 
-        await().atMost(TIMEOUT).until(() -> "PAYABLE".equals(status(preorderId)));
-        await().during(Duration.ofSeconds(3)).atMost(TIMEOUT)
-                .until(() -> fixtures.count("""
-                        SELECT COUNT(*) FROM preorder_events WHERE preorder_id = ? AND to_status = 'PAYABLE'
-                        """, preorderId) == 1);
+        await().alias("두 메시지를 모두 처리한다").atMost(TIMEOUT).until(() -> dispatchCount(body) == 2);
+        assertThat(status(preorderId)).isEqualTo("PAYABLE");
+        assertThat(fixtures.count("""
+                SELECT COUNT(*) FROM preorder_events WHERE preorder_id = ? AND to_status = 'PAYABLE'
+                """, preorderId)).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject("SELECT external_reference FROM preorders WHERE id = ?",
                 String.class, preorderId)).isEqualTo(externalNumber);
     }
@@ -161,6 +171,13 @@ class SqsMessagingTest {
                  "aggregateId":%d,"occurredAt":"2026-09-03T01:00:03.470Z",
                  "payload":{"syncJobId":%d,"preorderId":"%s","jobType":"REGISTER","externalNumber":"%s"}}
                 """.formatted(eventId, syncJobId, syncJobId, token, externalNumber);
+    }
+
+    private long dispatchCount(String body) {
+        return mockingDetails(dispatcher).getInvocations().stream()
+                .filter(invocation -> invocation.getMethod().getName().equals("dispatch"))
+                .filter(invocation -> body.equals(invocation.getArgument(0)))
+                .count();
     }
 
     private String status(Long preorderId) {
