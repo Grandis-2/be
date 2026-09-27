@@ -1,17 +1,33 @@
 apply plugin: 'org.springframework.boot'
 
+// 카카오 로그인(프론트 주도 코드 교환, D-1) · JWT 발급 · 관리자 로그인 · 회원.
+// spring-security-oauth2-client 는 쓰지 않는다. 카카오 호출은 RestClient 두 번이다.
 dependencies {
     implementation project(':common:types')
     implementation project(':common:web')
+    implementation project(':common:security')
+    implementation project(':common:redis')
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    // JJWT 는 common:security 가 api(jjwt-api)·runtimeOnly(impl·jackson)로 들고 온다. 여기서 다시 적지 않는다 — 버전은 한 곳에서만
     runtimeOnly 'com.mysql:mysql-connector-j'
+
+    // DB 동작(잠금 · UNIQUE 충돌 · CHECK · 조건부 UPDATE 영향 행)은 MySQL 로만 검증한다. H2 는 쓰지 않는다.
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    testImplementation 'org.testcontainers:testcontainers-mysql'
+    // 시험 DB 는 Flyway 마이그레이션(스키마 정본)으로 만든다. 서비스는 Flyway 를 실행하지 않으므로 시험 의존으로만 둔다.
+    testImplementation 'org.flywaydb:flyway-core'
+    testRuntimeOnly 'org.flywaydb:flyway-mysql'
 }
 
-dependencies {
-    implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'  // 카카오
-    implementation 'org.springframework.boot:spring-boot-starter-data-redis'     // 리프레시 토큰
-    implementation 'io.jsonwebtoken:jjwt-impl:0.12.6'
-    implementation 'io.jsonwebtoken:jjwt-jackson:0.12.6'
+tasks.named('test') {
+    def migrations = rootProject.file('flyway-project/migrations')
+    // 시험이 읽는 것을 입력으로 선언한다. 안 하면 마이그레이션만 고쳤을 때 test 가 UP-TO-DATE 로 안 돌고,
+    // ddl-auto=validate 가 바뀐 스키마와 대조되지 않은 채 초록이 나온다.
+    inputs.dir(migrations).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName('migrations')
+    // 경로는 실행 시점에 넘긴다. 절대 경로를 systemProperty 로 박으면 기계마다 달라 빌드 캐시가 안 맞는다.
+    jvmArgumentProviders.add({ ["-Dnova.migrations-path=${migrations.absolutePath}".toString()] } as CommandLineArgumentProvider)
 }
