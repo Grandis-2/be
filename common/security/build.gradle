@@ -1,14 +1,23 @@
 // JWT 검증과 인증 컨텍스트. HTTP 서비스 4개가 공유한다.
 // 발급(로그인·재발급)은 member 가 한다. 여기는 검증만 둔다.
+// D-3: 폐기 표식(sid·nbf) 조회 때문에 common:redis 를 의존한다. 401/403 봉투와 traceId 때문에 common:web 을 의존한다.
 apply plugin: 'java-library'
 
 dependencies {
     api project(':common:types')
+    api project(':common:redis')
     api 'org.springframework.boot:spring-boot-starter-security'
     api 'io.jsonwebtoken:jjwt-api:0.12.6'
     runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
     runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
 
+    implementation project(':common:web')                                   // ApiResponse 봉투 · MdcContextFilter 의 traceId
     implementation 'org.springframework:spring-web'
     implementation 'org.springframework:spring-webmvc'
+    implementation 'org.springframework.boot:spring-boot-starter-json'      // 401/403 봉투를 직접 쓴다 (Jackson 3)
+    compileOnly 'jakarta.servlet:jakarta.servlet-api'                       // 컨테이너(tomcat-embed-core)가 런타임에 제공한다
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-web'
+    testImplementation 'org.springframework.boot:spring-boot-webmvc-test'   // Boot 4: MockMvc 지원이 여기로
+    testImplementation 'org.springframework.boot:spring-boot-security-test'
 }
