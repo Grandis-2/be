@@ -35,6 +35,9 @@ public class OutboxWriter {
     /**
      * 메시지를 적고 행 id 를 돌려준다. event_id 는 여기서 새 UUID 로 정한다.
      * 엔티티는 돌려주지 않는다 — 발행 칸을 가진 JPA 엔티티가 업무 코드로 나가지 않게 한다.
+     *
+     * common:outbox 이전 시: preorder 의 append 는 OutboxEvent 를 돌려준다. 공통 쪽에서 한 모양으로 정한다 — 이 모듈의
+     * 호출자(F6)는 반환값을 쓰지 않는다.
      */
     public Long append(OutboxMessage message) {
         Objects.requireNonNull(message.aggregateId(), "aggregateId");

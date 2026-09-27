@@ -65,7 +65,12 @@ public record PreorderOrderSettled(@JsonIgnore Long preorderInternalId, String p
         return preorderInternalId;
     }
 
-    /** 받는 쪽 {@code PreorderOrderSettled.Result} 와 이름이 같아야 한다. */
+    /**
+     * 받는 쪽 {@code PreorderOrderSettled.Result} 와 이름이 같아야 한다.
+     *
+     * common:outbox 이전 시: 이 enum 과 RejectReason 은 preorder 에 한 벌 더 있다(사유는 그쪽에서 문자열).
+     * 계약 record 를 common:message 로 옮기면 한 벌로 줄이고, 테스트의 복제 record(PreorderSideSettled)도 지운다.
+     */
     public enum Result {
         NO_ORDER,
         CANCELED,
