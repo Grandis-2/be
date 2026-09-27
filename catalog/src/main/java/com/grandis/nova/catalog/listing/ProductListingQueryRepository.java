@@ -13,12 +13,17 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 /**
- * 상품 목록 · 검색의 읽기 전용 저장소. **catalog 가 다른 서비스의 표를 읽는 유일한 자리**다 —
+ * 상품 목록 · 검색 · 상세의 읽기 전용 저장소. **catalog 가 다른 서비스의 표를 읽는 유일한 자리**다 —
  * preorder 소유 preorder_campaigns(opens_at · closes_at)와 order 소유 option_inventories(재고 집계)를 여기서만, SELECT 로만 읽는다.
  * 노출 조건(오픈 예정 · 마감 · 마감 + 120시간 숨김 · 품절)이 페이징 조건이라 쿼리 안에 있어야 한다. HTTP 로 받아 거르면 페이지가 깨진다.
+ * 판매 중(ACTIVE) 옵션이 하나도 없는 상품(옵션 없음 · 전부 판매 중지)은 목록에 남기고 sellable=false 로 알린다 — 화면이 "판매 중지" 를 그린다
+ * (사용자 결정 2026-09-27). 숨기지 않는다.
  *
  * 시각은 datetime(6) UTC 벽시계다. Instant 를 UTC LocalDateTime 으로 바꿔 넘기고 같은 방식으로 읽는다 — Timestamp 로 넘기면 JVM 시간대로 바뀐다.
  * 정렬은 계약대로 productId 내림차순 고정이다.
@@ -42,6 +47,8 @@ public class ProductListingQueryRepository {
             SELECT p.id, p.sale_mode, p.title, p.status, c.opens_at, c.closes_at,
                    (SELECT MIN(o.price) FROM product_options o
                      WHERE o.product_id = p.id AND o.status = 'ACTIVE') AS min_price,
+                   EXISTS (SELECT 1 FROM product_options po
+                            WHERE po.product_id = p.id AND po.status = 'ACTIVE') AS sellable,
                    (SELECT i.url FROM product_images i
                      WHERE i.product_id = p.id AND i.kind = 'GALLERY' AND i.is_primary = 1
                      ORDER BY (i.bundle_key <> ''), i.bundle_key LIMIT 1) AS image_url,
@@ -115,6 +122,28 @@ public class ProductListingQueryRepository {
         params.addValue(axisKey + "Axis", axisKey).addValue(axisKey + "Values", values);
     }
 
+    /** 사전예약 회차 시각. 회차가 없으면 비어 있다. */
+    public Optional<CampaignWindow> findCampaign(Long productId) {
+        List<CampaignWindow> rows = jdbc.query(
+                "SELECT opens_at, closes_at FROM preorder_campaigns WHERE product_id = :productId",
+                new MapSqlParameterSource("productId", productId),
+                (rs, rowNum) -> new CampaignWindow(instant(rs, "opens_at"), instant(rs, "closes_at")));
+        return rows.stream().findFirst();
+    }
+
+    /** 옵션별 가용 수량(총량 − 선점 − 판매). 재고 행이 없는 옵션은 빠진다 — 판매 불가로 읽는다. */
+    public Map<Long, Integer> findAvailableQuantities(Long productId) {
+        Map<Long, Integer> available = new HashMap<>();
+        jdbc.query("""
+                SELECT o.id, inv.stock_total - inv.stock_reserved - inv.stock_sold AS available
+                  FROM product_options o
+                  JOIN option_inventories inv ON inv.option_id = o.id
+                 WHERE o.product_id = :productId
+                """, new MapSqlParameterSource("productId", productId),
+                (rs, rowNum) -> available.put(rs.getLong("id"), rs.getInt("available")));
+        return available;
+    }
+
     /** LIKE 의 와일드카드(% _ \)를 문자로 취급한다. */
     static String escapeLike(String text) {
         return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
@@ -128,8 +157,8 @@ public class ProductListingQueryRepository {
                 ? PreorderSaleStatus.of(opensAt, closesAt, now) : null;
         BigDecimal minPrice = rs.getBigDecimal("min_price");
         return new ProductListItem(rs.getLong("id"), saleMode, rs.getString("title"), rs.getString("image_url"),
-                SaleStatus.valueOf(rs.getString("status")), minPrice, rs.getBoolean("sold_out"), preorderStatus,
-                opensAt, closesAt);
+                SaleStatus.valueOf(rs.getString("status")), minPrice, rs.getBoolean("sellable"), rs.getBoolean("sold_out"),
+                preorderStatus, opensAt, closesAt);
     }
 
     private static Instant instant(ResultSet rs, String column) throws SQLException {

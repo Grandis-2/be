@@ -95,6 +95,15 @@ public class ShopFixtures {
                 """, optionId, total, reserved, sold);
     }
 
+    /** 필터 · 표시 JSON 까지 넣은 옵션. */
+    public Long optionWithAttributes(Long productId, String status, BigDecimal price, String title,
+                                     String filterJson, String displayJson) {
+        return insert("""
+                INSERT INTO product_options (product_id, sku, title, price, filter_attributes, display_attributes, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """, productId, unique(), title, price, filterJson, displayJson, status);
+    }
+
     public Long option(Long productId, String status, BigDecimal price) {
         return insert("""
                 INSERT INTO product_options (product_id, sku, title, price, status, created_at, updated_at)

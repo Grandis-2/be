@@ -75,11 +75,40 @@ class ProductListApiTest {
         }
 
         @Test
+        @DisplayName("판매 중 옵션이 하나도 없는 상품(옵션 없음 · 전부 판매 중지)은 목록에 남고 sellable=false 로 알린다 — 화면이 판매 중지를 그린다")
+        void productsWithoutActiveOptionStayListedAsNotSellable() throws Exception {
+            Long shown = visibleInStock("판매 중 옵션 있음");
+            fixtures.option(shown, "ACTIVE", new BigDecimal("1000"));
+            fixtures.option(shown, "PAUSED", new BigDecimal("900"));
+            Long noOptions = visibleInStock("옵션 없음");
+            Long allPaused = visibleInStock("전부 판매 중지");
+            fixtures.option(allPaused, "PAUSED", new BigDecimal("1000"));
+            Instant now = Instant.now();
+            Long preorderAllPaused = visiblePreorder("사전예약 전부 판매 중지", now.minus(HOUR), now.plus(HOUR));
+            fixtures.option(preorderAllPaused, "PAUSED", new BigDecimal("1000"));
+
+            JsonNode items = list();
+            assertThat(ids(items)).containsExactlyInAnyOrder(shown, noOptions, allPaused, preorderAllPaused);
+            assertThat(find(items, shown).get("sellable").asBoolean()).isTrue();
+            assertThat(find(items, shown).get("minPrice").decimalValue()).isEqualByComparingTo("1000");
+            for (Long notSellable : List.of(noOptions, allPaused, preorderAllPaused)) {
+                JsonNode item = find(items, notSellable);
+                assertThat(item.get("sellable").asBoolean()).as("product %d", notSellable).isFalse();
+                assertThat(item.get("minPrice").isNull()).isTrue();
+                assertThat(item.get("status").asString()).as("상품 자체는 판매 중").isEqualTo("ACTIVE");
+            }
+            // 사전예약은 옵션이 전부 판매 중지여도 품절이 아니다(품절은 재고 개념) — 판매 중지 표시로만 알린다
+            assertThat(find(items, preorderAllPaused).get("soldOut").asBoolean()).isFalse();
+            assertThat(find(items, allPaused).get("soldOut").asBoolean()).as("일반은 살 수 있는 옵션이 없으니 품절").isTrue();
+        }
+
+        @Test
         @DisplayName("사전예약은 오픈 전 · 접수 중 · 마감 뒤 120시간 안이면 보이고 그 단계가 실린다. 120시간이 지나면 숨는다")
         void preorderPhasesAndHideAfterClose() throws Exception {
             Instant now = Instant.now();
             Long beforeOpen = visiblePreorder("오픈 전", now.plus(HOUR), now.plus(HOUR.multipliedBy(2)));
             Long open = visiblePreorder("접수 중", now.minus(HOUR), now.plus(HOUR));
+            fixtures.option(open, "ACTIVE", new BigDecimal("1000"));
             Long closedRecently = visiblePreorder("마감 119h", now.minus(HOUR.multipliedBy(120)), now.minus(HOUR.multipliedBy(119)));
             Long closedLongAgo = visiblePreorder("마감 121h", now.minus(HOUR.multipliedBy(122)), now.minus(HOUR.multipliedBy(121)));
             Long noCampaign = fixtures.product(categoryId, "PREORDER", "ACTIVE", "회차 없음", tag);
@@ -119,7 +148,7 @@ class ProductListApiTest {
         }
 
         @Test
-        @DisplayName("일반 상품은 판매 중 옵션의 가용 재고가 전부 없으면 품절이다. 재고 행이 없는 옵션은 판매 불가로 본다")
+        @DisplayName("일반 상품은 가용 재고가 있는 판매 중 옵션이 없으면 품절(재고 행 없음 = 판매 불가). 사전예약은 품절이 없다")
         void soldOutWhenNoActiveOptionHasStock() throws Exception {
             Long allGone = visibleInStock("품절");
             Long gone = fixtures.option(allGone, "ACTIVE", new BigDecimal("1000"));
@@ -127,12 +156,15 @@ class ProductListApiTest {
             fixtures.option(allGone, "ACTIVE", new BigDecimal("1000"));            // 재고 행 없음
             Long pausedWithStock = fixtures.option(allGone, "PAUSED", new BigDecimal("1000"));
             fixtures.inventory(pausedWithStock, 9, 0, 0);                            // 판매 중지 옵션의 재고는 안 센다
-            Long noOptions = visibleInStock("옵션 없음");
+            Instant now = Instant.now();
+            Long preorderActive = visiblePreorder("사전예약 판매 중", now.minus(HOUR), now.plus(HOUR));
+            fixtures.option(preorderActive, "ACTIVE", new BigDecimal("1000"));          // 재고 행 없어도 사전예약은 살 수 있다
 
             JsonNode items = list();
             assertThat(find(items, allGone).get("soldOut").asBoolean()).isTrue();
-            assertThat(find(items, noOptions).get("soldOut").asBoolean()).isTrue();
-            assertThat(find(items, noOptions).get("minPrice").isNull()).isTrue();
+            assertThat(find(items, allGone).get("minPrice").decimalValue()).isEqualByComparingTo("1000");
+            // 사전예약은 재고 행이 없으므로 품절이 되지 않는다
+            assertThat(find(items, preorderActive).get("soldOut").asBoolean()).isFalse();
         }
 
         @Test

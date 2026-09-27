@@ -57,7 +57,7 @@ be/
 | --- | --- |
 | `preorder` → `products` · `product_options` · `categories` | 접수 시점 값을 복사한다 |
 | `order` → `products` · `product_options` | 금액 확인 |
-| `catalog` → `preorder_campaigns`(`opens_at` · `closes_at`) · `option_inventories` | 목록·검색의 노출 조건(오픈 예정 · 마감 · 마감+120시간 숨김 · 품절)이 **페이징 조건**이라 쿼리 안에 있어야 한다. 읽기 전용 저장소 한 곳에서만 읽고 쓰지 않는다 |
+| `catalog` → `preorder_campaigns`(`opens_at` · `closes_at`) · `option_inventories` | 목록·검색의 노출 조건(오픈 예정 · 마감 · 마감+120시간 숨김 · 품절)이 **페이징 조건**이라 쿼리 안에 있어야 한다. 상세의 회차 시각 · 옵션별 가용 수량도 같은 곳에서 읽는다. 읽기 전용 저장소 한 곳에서만 읽고 쓰지 않는다 |
 
 preorder 는 catalog 를 API(`GET /internal/products/{id}/options`)로 묻고 catalog 는 preorder 표를 SQL 로 읽는 비대칭은 이유가 다르기 때문이다. 앞은 값을 복사하고, 뒤는 조건으로 거른다.
 
