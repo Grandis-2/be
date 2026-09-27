@@ -1,0 +1,29 @@
+package com.grandis.nova.catalog.listing;
+
+import com.grandis.nova.catalog.product.SaleMode;
+import com.grandis.nova.catalog.product.SaleStatus;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+
+/**
+ * 목록의 한 상품. 노출 규칙을 지난 상품만 여기 온다(등록 완료 · 공개 · 판매 중 · 사전예약이면 마감 + 120시간 전).
+ *
+ * @param imageUrl       대표 사진. 기본 묶음('')의 대표가 있으면 그것, 없으면 첫 색상 묶음의 대표. 사진이 없으면 null(화면이 대체 이미지)
+ * @param minPrice       판매 중(ACTIVE) 옵션의 최저가. 품절 옵션 포함, 판매 중지 옵션 제외. 판매 중 옵션이 없으면 null
+ * @param soldOut        일반 상품에서 판매 중 옵션의 가용 재고가 전부 0 이하(재고 행이 없는 옵션은 판매 불가). 사전예약은 항상 false
+ * @param preorderStatus 사전예약의 접수 단계. 일반 상품은 null
+ */
+public record ProductListItem(
+        Long productId,
+        SaleMode saleMode,
+        String title,
+        String imageUrl,
+        SaleStatus status,
+        BigDecimal minPrice,
+        boolean soldOut,
+        PreorderSaleStatus preorderStatus,
+        Instant opensAt,
+        Instant closesAt
+) {
+}

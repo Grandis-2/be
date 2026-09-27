@@ -25,4 +25,6 @@ tasks.named('test') {
     inputs.dir(migrations).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName('migrations')
     // 모듈 작업 디렉터리에 기대지 않고 절대 경로로 넘긴다.
     jvmArgumentProviders.add({ ["-Dnova.migrations-path=${migrations.absolutePath}".toString()] } as CommandLineArgumentProvider)
+    // UTC 가 아닌 시간대로 고정한다. CI(ubuntu, UTC)에서는 Timestamp 로 시각을 넘기는 실수가 변환 없이 통과해 안 드러난다(실측).
+    systemProperty 'user.timezone', 'Asia/Seoul'
 }
