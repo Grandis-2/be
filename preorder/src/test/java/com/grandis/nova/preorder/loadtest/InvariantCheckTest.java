@@ -73,6 +73,30 @@ class InvariantCheckTest {
         }
     }
 
+    @Test
+    void 한_예약의_이벤트_누락과_다른_예약의_중복이_상쇄되지_않는다() {
+        ShopFixtures fixtures = new ShopFixtures(jdbcTemplate);
+        AcceptFixtures accepts = new AcceptFixtures(acceptService, fixtures, catalogClient);
+        PreorderProduct product = fixtures.openPreorderProduct();
+        Long missing = accepts.accept(fixtures.customer(), product).preorder().getId();
+        Long duplicated = accepts.accept(fixtures.customer(), product).preorder().getId();
+        accepts.accept(fixtures.customer(), product);
+
+        jdbcTemplate.update("""
+                DELETE o FROM outbox_events o JOIN preorder_sync_jobs j ON j.id = o.aggregate_id
+                 WHERE j.preorder_id = ? AND o.event_type = 'REGISTER_JOB_READY'
+                """, missing);
+        jdbcTemplate.update("""
+                INSERT INTO outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, created_at)
+                SELECT UUID(), o.aggregate_type, o.aggregate_id, o.event_type, o.payload, o.created_at
+                  FROM outbox_events o JOIN preorder_sync_jobs j ON j.id = o.aggregate_id
+                 WHERE j.preorder_id = ? AND o.event_type = 'REGISTER_JOB_READY'
+                """, duplicated);
+
+        assertThat(((Number) invariants(product.productId()).get("register_event_mismatch")).longValue())
+                .isEqualTo(2);
+    }
+
     /** 세션 변수를 쓰므로 SET 과 SELECT 를 같은 커넥션에서 실행한다. */
     private Map<String, Object> invariants(Long productId) {
         return jdbcTemplate.execute((ConnectionCallback<Map<String, Object>>) connection -> {

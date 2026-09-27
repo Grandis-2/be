@@ -42,6 +42,8 @@ export const options = {
   thresholds: {
     'checks{name:accept}': ['rate>0.99'],
     'http_req_duration{name:accept}': ['p(95)<300', 'p(99)<500'],
+    // VU 가 모자라 시작하지 못한 접수도 실패로 본다
+    dropped_iterations: ['count==0'],
   },
 };
 
@@ -50,8 +52,19 @@ export function setup() {
   if (!PRODUCT_ID || !OPTION_ID || !TICKET_SECRET) {
     fail('PRODUCT_ID · OPTION_ID · TICKET_SECRET 가 필요하다');
   }
+  // 회원 토큰이 실리므로 로컬이 아니면 HTTPS 만 허용한다
+  if (!/^https:\/\//.test(BASE_URL) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(BASE_URL)) {
+    fail(`BASE_URL 은 https 여야 한다(로컬만 http 허용): ${BASE_URL}`);
+  }
   if (members.length < total) {
     fail(`회원 토큰이 ${total} 개 필요한데 ${members.length} 개다 — 한 회원은 한 상품에 한 번만 접수된다`);
+  }
+  const customerIds = new Set();
+  for (let i = 0; i < total; i++) {
+    customerIds.add(members[i].customerId);
+  }
+  if (customerIds.size < total) {
+    fail(`앞 ${total} 줄에 같은 customerId 가 ${total - customerIds.size} 개 겹친다`);
   }
 }
 
