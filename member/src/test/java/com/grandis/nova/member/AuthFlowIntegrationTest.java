@@ -169,7 +169,8 @@ class AuthFlowIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.displayName").value("홍길동"))
                 .andExpect(jsonPath("$.data.role").value("USER"))
-                .andExpect(jsonPath("$.data.sessionToken").doesNotExist());   // api-spec GET /session data 는 {displayName, role} 둘
+                .andExpect(jsonPath("$.data.profileComplete").value(false))   // 가입 직후라 아직 안 채웠다
+                .andExpect(jsonPath("$.data.sessionToken").doesNotExist());   // GET /session 에 토큰은 없다
         mvc.perform(get("/api/v1/session"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
@@ -193,7 +194,9 @@ class AuthFlowIntegrationTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
         // 재사용 탐지는 세션을 통째로 끊는다: 새 리프레시도 죽는다
-        mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(refreshCookie(rotated))).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(refreshCookie(rotated)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
     }
 
     @Test
@@ -253,7 +256,35 @@ class AuthFlowIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.role").value("ADMIN"))
                 .andExpect(jsonPath("$.data.displayName").value(org.hamcrest.Matchers.nullValue()))
+                // 관리자는 회원 행이 없어 입력할 정보도 없다. 재발급 응답에도 그 값이 실린다 — 화면이 이 경로로도 들어온다.
+                .andExpect(jsonPath("$.data.profileComplete").value(true))
                 .andExpect(cookie().exists(AuthCookies.ADMIN_REFRESH_TOKEN));
+    }
+
+    @Test
+    @DisplayName("관리자 리프레시도 한 번만 쓴다: 교체된 쿠키를 다시 내면 401, 세션이 끊겨 새 쿠키도 죽는다")
+    void adminRefreshCookieIsSingleUse() throws Exception {
+        MvcResult login = mvc.perform(post("/api/v1/admin/session").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"admin\",\"password\":\"" + ADMIN_PASSWORD + "\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        Cookie first = login.getResponse().getCookie(AuthCookies.ADMIN_REFRESH_TOKEN);
+
+        MvcResult rotated = mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(first))
+                .andExpect(status().isOk())
+                .andReturn();
+        Cookie second = rotated.getResponse().getCookie(AuthCookies.ADMIN_REFRESH_TOKEN);
+        assertThat(second.getValue()).isNotEqualTo(first.getValue());
+
+        // 옛 쿠키 재사용 → 401. 회원 쪽과 같은 규칙인데 저장소가 다르다(관리자는 Redis 비교교환, 회원은 DB 행 잠금).
+        mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(first))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
+        // 재사용을 보면 세션을 끊는다 — 방금 받은 새 쿠키도 같이 죽는다.
+        // 상태만 보면 안 된다: 401 은 다른 사유로도 난다. 봉투의 코드까지 봐야 "폐기돼서" 임이 고정된다.
+        mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(second))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
     }
 
     @Test

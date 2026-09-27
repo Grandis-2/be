@@ -84,7 +84,8 @@ public class AuthController {
     public ResponseEntity<ApiResponse<LoginResponse>> kakaoCallback(@Valid @RequestBody KakaoCallbackRequest request,
                                                                      HttpServletRequest servletRequest) {
         KakaoLoginService.LoginResult result = kakaoLogin.login(request.code(), request.redirectUri(), clientOf(servletRequest));
-        return withRefreshCookie(result.tokens(), Role.USER, new LoginResponse(result.tokens().accessToken(), result.displayName(), result.role()));
+        return withRefreshCookie(result.tokens(), Role.USER,
+                new LoginResponse(result.tokens().accessToken(), result.displayName(), result.role(), result.profileComplete()));
     }
 
     @PostMapping("/session/refresh")
@@ -102,14 +103,16 @@ public class AuthController {
         }
         // 실패할 수 있는 DB 조회(회원 이름)를 회전 **앞**에 둔다. 여기서 던지면 리프레시가 아직 교체되지 않아 같은 쿠키로 다시 올 수 있다.
         String subject = tokens.subjectOf(refreshToken, role);
-        String displayName = displayNameOf(new AuthenticatedPrincipal(subject, role));
+        SessionOwner owner = ownerOf(new AuthenticatedPrincipal(subject, role));
         TokenService.Rotated rotated = tokens.rotate(refreshToken, role, clientOf(request));
-        return withRefreshCookie(rotated.tokens(), role, new LoginResponse(rotated.tokens().accessToken(), displayName, role));
+        return withRefreshCookie(rotated.tokens(), role,
+                new LoginResponse(rotated.tokens().accessToken(), owner.displayName(), role, owner.profileComplete()));
     }
 
     @GetMapping("/session")
     public ApiResponse<SessionInfoResponse> session(@AuthenticationPrincipal AuthenticatedPrincipal principal) {
-        return ApiResponse.ok(new SessionInfoResponse(displayNameOf(principal), principal.role()));
+        SessionOwner owner = ownerOf(principal);
+        return ApiResponse.ok(new SessionInfoResponse(owner.displayName(), principal.role(), owner.profileComplete()));
     }
 
     @DeleteMapping("/session")
@@ -190,9 +193,17 @@ public class AuthController {
                 .body(ApiResponse.ok(body));
     }
 
-    private String displayNameOf(AuthenticatedPrincipal principal) {
+    /**
+     * 세션 주인에서 화면이 쓰는 두 값. 회원 행을 한 번만 읽어 둘 다 꺼낸다 — 표시 이름과 입력 완료 여부를 따로 조회하면 조회가 둘이 된다.
+     *
+     * 관리자는 회원 행이 없다. 표시 이름은 null 이고 입력 완료는 true 다 — 입력할 정보가 없으니 막을 것도 없다.
+     */
+    private record SessionOwner(String displayName, boolean profileComplete) {
+    }
+
+    private SessionOwner ownerOf(AuthenticatedPrincipal principal) {
         if (principal.role() != Role.USER) {
-            return null;
+            return new SessionOwner(null, true);
         }
         long customerId;
         try {
@@ -202,7 +213,8 @@ public class AuthController {
             throw new InvalidTokenException("non-numeric subject for USER");
         }
         // 행이 없으면 401 — CustomerService 와 같은 규칙. 탈퇴가 없어 지금은 도달하지 않는 갈래다.
-        return customers.findById(customerId).map(c -> c.getDisplayName())
+        return customers.findById(customerId)
+                .map(c -> new SessionOwner(c.getDisplayName(), c.profile().isComplete()))
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.UNAUTHENTICATED));
     }
 }
