@@ -7,6 +7,9 @@ import org.springframework.jdbc.support.KeyHolder;
 import java.math.BigDecimal;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
@@ -62,6 +65,48 @@ public class ShopFixtures {
                 """, categoryId, saleMode, status);
     }
 
+    /** 제목 · 검색 키워드까지 지정한 상품. 목록 시험이 자기 상품만 골라내는 데 쓴다. */
+    public Long product(Long categoryId, String saleMode, String status, String title, String tags) {
+        return insert("""
+                INSERT INTO products (category_id, sale_mode, title, tags, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """, categoryId, saleMode, title, tags, status);
+    }
+
+    /** 등록이 끝난 상품 — 노출 규칙의 앞 조건. */
+    public void completeRegistration(Long productId) {
+        registration(productId, unique());
+        jdbcTemplate.update("UPDATE product_registrations SET completed_at = UTC_TIMESTAMP(6) WHERE product_id = ?", productId);
+    }
+
+    /** preorder 소유 표. catalog 코드는 쓰지 않고 시험 데이터로만 넣는다. */
+    public void campaign(Long productId, Instant opensAt, Instant closesAt) {
+        jdbcTemplate.update("""
+                INSERT INTO preorder_campaigns (product_id, opens_at, closes_at, created_at, updated_at)
+                VALUES (?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """, productId, utc(opensAt), utc(closesAt));
+    }
+
+    /** order 소유 표. 가용 = total - reserved - sold. */
+    public void inventory(Long optionId, int total, int reserved, int sold) {
+        jdbcTemplate.update("""
+                INSERT INTO option_inventories (option_id, stock_total, stock_reserved, stock_sold, updated_at)
+                VALUES (?, ?, ?, ?, UTC_TIMESTAMP(6))
+                """, optionId, total, reserved, sold);
+    }
+
+    public Long option(Long productId, String status, BigDecimal price) {
+        return insert("""
+                INSERT INTO product_options (product_id, sku, title, price, status, created_at, updated_at)
+                VALUES (?, ?, '옵션', ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """, productId, unique(), price, status);
+    }
+
+    /** DB 는 UTC 벽시계 시각을 담는다. Timestamp 로 넘기면 JVM 시간대로 바뀌어 들어간다. */
+    private static LocalDateTime utc(Instant instant) {
+        return LocalDateTime.ofInstant(instant, ZoneOffset.UTC);
+    }
+
     public Long option(Long productId, String status) {
         return insert("""
                 INSERT INTO product_options (product_id, sku, title, price, status, created_at, updated_at)
@@ -84,10 +129,15 @@ public class ShopFixtures {
     }
 
     public Long value(Long axisId, String normalizedValue, int position) {
+        return value(axisId, normalizedValue, normalizedValue, position);
+    }
+
+    /** 표시값과 정규화값을 갈라 넣는다 — 둘을 같게 넣으면 어느 칸으로 비교하는지 시험이 못 가른다. */
+    public Long value(Long axisId, String displayValue, String normalizedValue, int position) {
         return insert("""
                 INSERT INTO product_option_values (axis_id, value, normalized_value, surcharge, position, created_at, updated_at)
                 VALUES (?, ?, ?, 0, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, axisId, normalizedValue, normalizedValue, position);
+                """, axisId, displayValue, normalizedValue, position);
     }
 
     public void selection(Long productId, Long optionId, Long axisId, Long valueId) {
@@ -98,10 +148,14 @@ public class ShopFixtures {
     }
 
     public Long image(Long productId, String kind, String bundleKey, int position, boolean primary) {
+        return image(productId, kind, bundleKey, position, primary, "https://img.example/x.jpg");
+    }
+
+    public Long image(Long productId, String kind, String bundleKey, int position, boolean primary, String url) {
         return insert("""
                 INSERT INTO product_images (product_id, kind, bundle_key, position, url, is_primary, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 'https://img.example/x.jpg', ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, productId, kind, bundleKey, position, primary);
+                VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """, productId, kind, bundleKey, position, url, primary);
     }
 
     public void registration(Long productId, String idempotencyKey) {
