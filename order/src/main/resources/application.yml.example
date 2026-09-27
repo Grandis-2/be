@@ -32,18 +32,23 @@ spring:
 server:
   port: 8084
 
-spring.cloud.aws:
-  region:
-    static: ap-northeast-2
-  credentials:
-    access-key: test
-    secret-key: test
-  sqs:
-    endpoint: http://localhost:4566
-
 nova:
+  # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다
   sqs:
-    notification-queue: nova-notification
+    region: ap-northeast-2
+    endpoint: http://localhost:4566
+    api-call-timeout: 3s
+    # 논리 목적지 → 실제 큐 이름(환경마다 접두어를 붙일 때만)
+    # queues:
+    #   preorder-events: dev-preorder-events
+    consumer:
+      enabled: true
+      queue: order-events
+      concurrency: 1
+      wait-seconds: 20
+      visibility: 5m       # 처리 한 건보다 길게
+      backoff-base: 5s
+      backoff-max: 5m
 
 # 검증만 한다. 공개키 하나면 되고 member 를 호출하지 않는다.
 jwt:
