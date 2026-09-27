@@ -29,7 +29,8 @@ public class SecurityConfig {
                         handling.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
-                        .requestMatchers("/internal/**").authenticated()
+                        // 내부 조회는 접수(USER)와 관리자 등록(ADMIN)이 같이 쓴다. 역할이 둘뿐이라 authenticated() 와 동작은 같지만 계약대로 적는다
+                        .requestMatchers("/internal/**").hasAnyRole("USER", "ADMIN")
                         .anyRequest().permitAll())
                 .build();
     }

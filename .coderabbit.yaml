@@ -233,6 +233,9 @@ reviews:
         - product_images 의 GALLERY bundle_key 가 그 상품 color 축의 정규화값(또는 '')인지 검사하지 않으면 지적한다.
         - product_options 의 combination_key · filter_attributes · title 과 product_option_selections 를 OptionCombination 밖에서 따로 만들면 지적한다.
         - product_images.position 을 한 UPDATE 로 교환하거나, 이동 UPDATE 에 방향에 맞는 ORDER BY 가 없으면 지적한다(UNIQUE 는 행마다 검사된다).
+        - 응답 한 건에 products.visible 과 product_registrations.completed_at 을 함께 실으면서 두 표를 따로 SELECT 하면 지적한다.
+          READ COMMITTED 는 문장마다 스냅샷을 새로 잡아 완료 커밋이 사이에 끼면 없던 조합이 나온다. 한 문장(JOIN)으로 읽는다.
+        - /internal/** 은 USER · ADMIN 만 허용하고 비공개 · 미완료 상품도 200 으로 준다. 여기서 먼저 숨기면 지적한다 — 숨김 판정은 호출자다.
 
     # ─────────────────────────────────────────────────────────────
     # 6. member — 로그인 · 토큰 · 회원
