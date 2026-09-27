@@ -133,8 +133,11 @@ reviews:
         # 경계
         - orders · order_items · payments · payment_transactions · cart_items 는 읽기도 지적한다.
           결제 가능 여부는 order 의 API 로 답하고, 결과는 이벤트로 받는다.
-        - product_variants 는 읽기만 허용한다. 쓰기(INSERT · UPDATE · DELETE)면 지적한다.
+        - products · product_variants · categories 를 직접 읽거나 쓰면 지적한다. 상품 · 옵션 값은 catalog 내부 API
+          (GET /internal/products/{productId}/options)로 묻고 캐시한다.
         - 접수 시 상품명 · 옵션명 · 가격은 예약 행에 복사한다. 매번 카탈로그를 조회해 표시하면 지적한다.
+        - /internal/** (서비스 간 호출) 와 /actuator/** (지표 수집)는 공개 경로가 아니다(ALB 규칙에 넣지 않는다).
+          여기에 사용자용 기능을 두거나, /internal/** 이 전달받은 사용자 토큰의 주인 확인 없이 응답하면 지적한다.
 
         # 정해진 것(ERD v13)
         - 사전예약은 재고를 선점하지 않는다(결정 3). 사전예약 옵션의 재고를 차감 · 확보하면 지적한다.
@@ -222,6 +225,8 @@ reviews:
       instructions: |
         - 재고 칼럼(stock_total · stock_reserved · stock_sold)은 읽기만 허용한다. 변경하면 지적한다.
         - preorders · orders · payments 는 읽기도 지적한다.
+        - preorder_campaigns · shipment_batches 는 상품 목록 · 상세의 모집 일정 · 배송 차수 표시에만 읽는다.
+          쓰기(INSERT · UPDATE · DELETE)면 지적한다. 소유와 변경은 preorder 다.
         - sku 는 모델 안에서 유일하다. 중복 검사를 애플리케이션 조회로만 하면 UNIQUE 제약을 함께 쓰도록 제안한다.
         - 상품 · 옵션의 물리 삭제는 지적한다. 신청 이력이 있으므로 상태로 숨긴다.
         - 모집 오픈 이후 모집 일정 · 배송 기준을 바꾸는 경로는 지적한다.
@@ -343,7 +348,7 @@ reviews:
              catalog 의 preorders 조회, member 의 customers 외 테이블 조회)
 
           허용된 읽기 — 이것만 실패가 아니다.
-          - preorder → products · product_variants · categories (접수 시점 값 복사)
+          - catalog → preorder_campaigns · shipment_batches (상품 목록 · 상세의 모집 일정 · 배송 차수)
           - order → products · product_variants (금액 · 재고 확인)
           - worker → preorders (처리 대상 확인)
           - batch → 전부 (읽기 전용 모듈)
