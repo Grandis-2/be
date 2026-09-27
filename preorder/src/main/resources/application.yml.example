@@ -55,27 +55,31 @@ spring:
 server:
   port: 8083
 
-# 로컬은 LocalStack 을 쓴다. 배포 환경에서는 endpoint 를 비우고 IAM 역할을 쓴다.
-spring.cloud.aws:
-  region:
-    static: ap-northeast-2
-  credentials:
-    access-key: test
-    secret-key: test
-  sqs:
-    endpoint: http://localhost:4566
-
 nova:
   # 대기열 입장권. 게이트웨이와 같은 비밀(Secrets Manager). 형식: gateway-auth-tokens.md 5절
   admission-ticket:
     secret: ${WAITING_TOKEN_SECRET}
     previous: ${WAITING_TOKEN_PREVIOUS:}
     rollout-ends-at: ${WAITING_TOKEN_ROLLOUT_ENDS_AT:}
+  # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다
   sqs:
-    preorder-queue: nova-preorder
-  # 아웃박스 발행. transport 는 필수(없으면 기동 실패). log 는 보내지 않고 로그로만 남긴다
+    region: ap-northeast-2
+    endpoint: http://localhost:4566
+    api-call-timeout: 3s
+    # 논리 목적지 → 실제 큐 이름(환경마다 접두어를 붙일 때만)
+    # queues:
+    #   preorder-register: dev-preorder-register
+    consumer:
+      enabled: true
+      queue: preorder-events
+      concurrency: 1
+      wait-seconds: 20
+      visibility: 5m       # 처리 한 건(회차 취소 포함)보다 길게
+      backoff-base: 5s
+      backoff-max: 5m
+  # 아웃박스 발행. transport 는 필수(없으면 기동 실패): sqs, 또는 보내지 않고 로그로만 남기는 log
   outbox:
-    transport: log
+    transport: sqs
     concurrency: 32        # 커밋 직후 발행 동시 실행 상한(가상 스레드). 넘치면 릴레이가 보낸다
     relay-interval: 10s    # 릴레이 주기
     relay-after: 1m        # 만든 지 이만큼 지난 미발행 행만 재발행

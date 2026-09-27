@@ -111,15 +111,17 @@ class PreorderLedgerTest {
     @Test
     void 등록_확인은_한_번만_되고_결제_기한_기준_시각을_찍는다() {
         Long id = ledger.accept(draft(customerId), EventActor.USER, null).getId();
+        String externalReference = "EXT-" + ShopFixtures.unique();
 
-        assertThat(ledger.confirmRegister(id, "EXT-1")).isEqualTo(new PreorderTransition(true, PAYABLE));
+        assertThat(ledger.confirmRegister(id, externalReference)).isEqualTo(new PreorderTransition(true, PAYABLE));
         Object payableFrom = row(id).get("payable_from");
-        assertThat(ledger.confirmRegister(id, "EXT-2")).isEqualTo(new PreorderTransition(false, PAYABLE));
+        assertThat(ledger.confirmRegister(id, "EXT-" + ShopFixtures.unique()))
+                .isEqualTo(new PreorderTransition(false, PAYABLE));
 
         assertThat(payableFrom).isNotNull();
         assertThat(row(id))
                 .containsEntry("status", "PAYABLE")
-                .containsEntry("external_reference", "EXT-1")
+                .containsEntry("external_reference", externalReference)
                 .containsEntry("payable_from", payableFrom);
         assertThat(history(id)).containsExactly("1:null>PENDING_SYNC:USER", "2:PENDING_SYNC>PAYABLE:SYSTEM");
     }
@@ -137,7 +139,7 @@ class PreorderLedgerTest {
     @Test
     void PAYABLE_에서_시작한_취소가_거절되면_PAYABLE_로_되돌린다() {
         Long id = ledger.accept(draft(customerId), EventActor.USER, null).getId();
-        ledger.confirmRegister(id, "EXT-1");
+        ledger.confirmRegister(id, "EXT-" + ShopFixtures.unique());
         ledger.fire(id, CANCEL_REQUESTED, EventActor.USER, null);
 
         PreorderTransition result = ledger.fire(id, CANCEL_REJECTED, EventActor.SYSTEM, "SHIPPING_STARTED");

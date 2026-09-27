@@ -130,14 +130,15 @@ class PreorderQueryApiTest {
     @Test
     void 상세는_결제_기한과_취소_가능_여부를_준다() throws Exception {
         AcceptResult accepted = accepts.accept(customerId);
+        String externalReference = "EXT-" + ShopFixtures.unique();
         transactionTemplate.executeWithoutResult(status ->
-                ledger.confirmRegister(accepted.preorder().getId(), "EXT-1"));
+                ledger.confirmRegister(accepted.preorder().getId(), externalReference));
 
         mockMvc.perform(get("/api/v1/preorders/" + AcceptFixtures.tokenOf(accepted))
                         .with(user(customerId.toString()).roles("USER")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("PAYABLE"))
-                .andExpect(jsonPath("$.data.externalReference").value("EXT-1"))
+                .andExpect(jsonPath("$.data.externalReference").value(externalReference))
                 .andExpect(jsonPath("$.data.cancelable").value(true))
                 .andExpect(jsonPath("$.data.paymentDueAt").exists())
                 .andExpect(jsonPath("$.data.version").value(2))
