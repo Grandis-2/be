@@ -360,7 +360,7 @@ reviews:
           허용된 읽기 — 이것만 실패가 아니다.
           - preorder → products · product_options · categories (접수 시점 값 복사)
           - order → products · product_options (금액 · 재고 확인)
-          - catalog → preorder_campaigns(opens_at · closes_at) · option_inventories (목록 · 검색의 노출 조건. 읽기 전용 저장소 한 곳)
+          - catalog → preorder_campaigns(opens_at · closes_at) · option_inventories (목록 · 검색의 노출 조건, 상세의 회차 시각 · 옵션별 가용 수량. 읽기 전용 저장소 한 곳)
           - worker → preorders (처리 대상 확인)
           - batch → 전부 (읽기 전용 모듈)
 
