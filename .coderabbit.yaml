@@ -7,7 +7,7 @@
 # 스타일 · 포맷은 리뷰 대상이 아니다. 정확성과 경계 위반만 본다.
 #
 # 소유 경계(README 기준)
-#   member    customers
+#   member    customers · refresh_tokens
 #   catalog   categories · products · product_variants(재고 칼럼 제외)
 #   preorder  preorders · preorder_events · preorder_campaigns · shipment_batches
 #   order     orders · order_items · order_events · cart_items · payments · payment_transactions
@@ -230,7 +230,7 @@ reviews:
     # ─────────────────────────────────────────────────────────────
     - path: "member/**/*.java"
       instructions: |
-        - customers 외 테이블은 읽기도 지적한다.
+        - customers · refresh_tokens 외 테이블은 읽기도 지적한다. 이 둘은 member 소유다(README 의 소유 테이블 표).
         - 리프레시 토큰을 원문으로 저장하면 지적한다. 해시만 저장한다.
         - 리프레시 회전 시 이전 토큰을 무효화하지 않으면 지적한다. 재사용 감지 시 같은 체인 전체를 폐기한다.
         - 서명 키 · 카카오 시크릿이 코드나 기본 설정값에 들어 있으면 지적한다.
@@ -339,7 +339,7 @@ reviews:
 
           - 아래 "허용된 읽기"에 없는 비소유 테이블을 읽는다
             (모듈별 지시문이 금지한 읽기가 우선한다. 예: preorder 의 payments 조회,
-             catalog 의 preorders 조회, member 의 customers 외 테이블 조회)
+             catalog 의 preorders 조회, member 의 customers · refresh_tokens 외 테이블 조회)
 
           허용된 읽기 — 이것만 실패가 아니다.
           - preorder → products · product_variants · categories (접수 시점 값 복사)
