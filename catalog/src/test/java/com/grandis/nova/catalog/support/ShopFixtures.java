@@ -28,18 +28,27 @@ public class ShopFixtures {
 
     /** 새 상위 카테고리. 다른 모듈 픽스처와 같은 모양(parent 없이). */
     public Long category() {
+        return category(unique(), "스마트폰");
+    }
+
+    /** code 는 유일해야 한다 — 순서를 가르고 싶으면 접두사 + unique() 로 만든다. */
+    public Long category(String code, String name) {
         return insert("""
                 INSERT INTO categories (code, name, created_at, updated_at)
-                VALUES (?, '스마트폰', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, unique());
+                VALUES (?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """, code, name);
     }
 
     /** 상위 아래 하위 카테고리. */
     public Long childCategory(Long parentId, String name) {
+        return childCategory(parentId, unique(), name);
+    }
+
+    public Long childCategory(Long parentId, String code, String name) {
         return insert("""
                 INSERT INTO categories (code, name, parent_id, created_at, updated_at)
                 VALUES (?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, unique(), name, parentId);
+                """, code, name, parentId);
     }
 
     public Long product(String saleMode, String status) {

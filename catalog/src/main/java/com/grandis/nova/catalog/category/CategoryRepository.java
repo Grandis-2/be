@@ -9,6 +9,8 @@ public interface CategoryRepository extends JpaRepository<Category, Long> {
 
     Optional<Category> findByCode(String code);
 
+    List<Category> findAllByOrderById();
+
     List<Category> findByParentIdIsNullOrderById();
 
     List<Category> findByParentIdOrderById(Long parentId);
