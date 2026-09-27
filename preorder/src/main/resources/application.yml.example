@@ -56,6 +56,11 @@ external:
   mock:
     base-url: http://localhost:8081
 
-# 검증만 한다. 공개키 하나면 되고 member 를 호출하지 않는다.
+# 검증만 한다(개인키 없음). 공개키는 member 가 게시하는 JWKS(GET /.well-known/jwks.json)에서 받아 kid 로 고른다 —
+# 기동 직후와 5분마다 백그라운드로 받고, 요청 스레드는 캐시만 읽는다. 키를 바꿀 때 이 서비스는 재배포하지 않는다.
+# issuer·audience 는 member 와 같은 값이어야 검증이 통과한다.
 jwt:
-  public-key: file:${JWT_PUBLIC_KEY_PATH:./keys/jwt-public.pem}
+  issuer: nova
+  audience: nova-api
+  jwk-set-uri: https://member.example.com/.well-known/jwks.json
+  # jwk-set-allow-http: true    # VPC 안 Cloud Map 주소(http://member.ureca.local:8080/…)를 쓰는 동안만 명시. 서비스 간 TLS 가 붙으면 지운다
