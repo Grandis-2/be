@@ -32,6 +32,16 @@ class OrderArchitectureTest {
             .should().dependOnClassesThat().resideInAPackage(ORDER + ".persistence..")
             .because("JPA 엔티티를 직접 쓰면 원장 · 도메인 규칙을 건너뛴다");
 
+    /**
+     * 아웃박스는 주문 도메인을 모른다. 결제 등 다른 유스케이스도 쓰고, 발행 계층을 공통 모듈로 옮길 때 떼어낼 수 있어야 한다.
+     * 주문 상태 → 메시지 결과 변환은 부르는 유스케이스가 한다.
+     */
+    @ArchTest
+    static final ArchRule outboxIsIndependentOfOrderDomain = noClasses()
+            .that().resideInAPackage("com.grandis.nova.order.outbox..")
+            .should().dependOnClassesThat().resideInAPackage(ORDER + "..")
+            .because("아웃박스는 주문 도메인과 따로 움직이는 기록 계층이다");
+
     /** 도메인 · 값 · 명령은 프레임워크를 모른다. */
     @ArchTest
     static final ArchRule coreIsFrameworkFree = noClasses()
