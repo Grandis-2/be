@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.catalog;
 
+import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.LoadingCache;
 import com.grandis.nova.common.BusinessException;
@@ -41,7 +42,13 @@ public class CatalogReader {
                 .refreshAfterWrite(REFRESH_AFTER)
                 .expireAfterWrite(EXPIRE_AFTER)
                 .maximumSize(MAXIMUM_PRODUCTS)
+                .recordStats()
                 .build(this::load);
+    }
+
+    /** 지표 등록용(CatalogCacheMetrics). */
+    Cache<Long, Optional<ProductCatalog>> cache() {
+        return products;
     }
 
     /**

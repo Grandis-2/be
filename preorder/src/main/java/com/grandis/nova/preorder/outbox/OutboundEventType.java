@@ -1,5 +1,8 @@
 package com.grandis.nova.preorder.outbox;
 
+import java.util.Arrays;
+import java.util.List;
+
 /** preorder 가 발행하는 이벤트 종류와 논리 목적지. 릴레이는 이 종류만 다시 보낸다. */
 public enum OutboundEventType {
 
@@ -16,5 +19,10 @@ public enum OutboundEventType {
 
     public String destination() {
         return destination;
+    }
+
+    /** outbox_events.event_type 에 적힌 값들. preorder 가 발행 · 재발행하는 행을 가를 때 쓴다. */
+    public static List<String> names() {
+        return Arrays.stream(values()).map(Enum::name).toList();
     }
 }

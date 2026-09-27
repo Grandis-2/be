@@ -34,4 +34,16 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
             """, nativeQuery = true)
     List<OutboxEvent> lockUnpublished(@Param("createdBefore") Instant createdBefore,
                                       @Param("eventTypes") Collection<String> eventTypes, @Param("limit") int limit);
+
+    /** 아직 보내지 못한 행 수. 늘어나면 전송이 막힌 것이다. */
+    @Query(value = "SELECT COUNT(*) FROM outbox_events WHERE published_at IS NULL AND event_type IN (:eventTypes)",
+            nativeQuery = true)
+    long countUnpublished(@Param("eventTypes") Collection<String> eventTypes);
+
+    /** 미발행 행 가운데 가장 많이 실패한 횟수. 한 행만 계속 실패하는 것(독이 든 메시지)을 드러낸다. */
+    @Query(value = """
+            SELECT COALESCE(MAX(publish_attempts), 0) FROM outbox_events
+             WHERE published_at IS NULL AND event_type IN (:eventTypes)
+            """, nativeQuery = true)
+    int maxUnpublishedAttempts(@Param("eventTypes") Collection<String> eventTypes);
 }

@@ -10,7 +10,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
-import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -23,9 +22,7 @@ class OutboxRelay {
 
     private static final Logger log = LoggerFactory.getLogger(OutboxRelay.class);
 
-    private static final List<String> OWN_EVENT_TYPES = Arrays.stream(OutboundEventType.values())
-            .map(Enum::name)
-            .toList();
+    private static final List<String> OWN_EVENT_TYPES = OutboundEventType.names();
 
     private final OutboxEventRepository outboxEvents;
     private final OutboxPublisher publisher;
