@@ -94,6 +94,22 @@ class CategoryApiTest {
     }
 
     @Test
+    @DisplayName("자기 참조 · 서로 가리키는 순환 행도 오류 없이 응답에서 빠진다")
+    void cyclesAreDroppedWithoutError() throws Exception {
+        Long self = fixtures.category();
+        jdbcTemplate.update("UPDATE categories SET parent_id = id WHERE id = ?", self);
+        Long first = fixtures.category();
+        Long second = fixtures.childCategory(first, "둘째");
+        jdbcTemplate.update("UPDATE categories SET parent_id = ? WHERE id = ?", second, first);
+
+        JsonNode items = itemsOf(mockMvc.perform(get("/api/v1/categories"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+
+        assertThat(allIdsOf(items)).doesNotContain(self, first, second);
+    }
+
+    @Test
     @DisplayName("로그인 없이 볼 수 있다")
     void isPublic() throws Exception {
         mockMvc.perform(get("/api/v1/categories"))
