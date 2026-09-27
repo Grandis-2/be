@@ -26,7 +26,7 @@ tone_instructions: |
 
 reviews:
   profile: "assertive"          # 정확성 위주. 지적이 많다고 느끼면 chill 로 낮춘다
-  request_changes_workflow: false
+  request_changes_workflow: true   # 지적이 남아 있으면 Request changes 로 머지를 막는다
   high_level_summary: true
   review_status: true
   collapse_walkthrough: true
@@ -309,22 +309,23 @@ reviews:
       instructions: "모듈이 자기 소유가 아닌 테이블을 읽거나 쓰는 변경이면 제안한다"
   auto_apply_labels: false
 
-  # 머지 전 점검. 지금은 경고로만 두고, 팀이 익숙해지면 error 로 올린다
+  # 머지 전 점검. 실패하면 머지를 막는다.
+  # 오탐으로 막히면 skip-review 라벨 또는 관리자 우회로 푼다.
   pre_merge_checks:
     title:
-      mode: "warning"
+      mode: "error"
       requirements: |
         형식은 <type>(<이슈 키>): <요약> 이다. 예: feat(NV-7): 사전예약 접수 API 추가
         type 은 feat · fix · refactor · test · docs · chore 중 하나.
         요약은 한국어이고 마침표로 끝내지 않는다.
         에픽 → main PR 은 이슈 키 대신 에픽 키를 쓴다.
     description:
-      mode: "warning"
+      mode: "error"
     issue_assessment:
-      mode: "warning"
+      mode: "error"
     custom_checks:
       - name: "모듈 경계"
-        mode: "warning"
+        mode: "error"
         instructions: |
           쓰기(INSERT · UPDATE · DELETE)와 읽기(SELECT)를 나눠서 판정한다.
           소유 경계는 파일 상단 주석을 따른다.
@@ -351,7 +352,7 @@ reviews:
 
           위 조건에 해당하지 않으면 통과로 표시한다.
       - name: "동시성 안전"
-        mode: "warning"
+        mode: "error"
         instructions: |
           접수 · 재고 차감 · 작업 선점 · 결제 반영 코드가 바뀐 PR 에서 다음이면 실패로 표시한다.
           - 조회 후 변경(check-then-act) 으로 동시성을 막고 있다
