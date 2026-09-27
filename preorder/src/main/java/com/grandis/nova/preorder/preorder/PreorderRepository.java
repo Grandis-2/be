@@ -101,4 +101,15 @@ public interface PreorderRepository extends JpaRepository<Preorder, Long>, JpaSp
     /** 상품의 예약을 순번 순으로 읽는다. uq_preorder_position(product_id, queue_position) 을 탄다. */
     List<Preorder> findByProductIdAndStatusInOrderByQueuePosition(Long productId, Collection<PreorderStatus> statuses,
                                                                    Limit limit);
+
+    /** 상태별 예약 수. ix_preorder_payable(status, payable_from) 로 인덱스만 읽는다. */
+    @Query("select p.status as status, count(p) as count from Preorder p group by p.status")
+    List<StatusCount> countByStatus();
+
+    interface StatusCount {
+
+        PreorderStatus getStatus();
+
+        long getCount();
+    }
 }

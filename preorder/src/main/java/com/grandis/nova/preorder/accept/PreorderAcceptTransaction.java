@@ -16,6 +16,8 @@ import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderRepository;
 import com.grandis.nova.preorder.syncjob.PreorderSyncJob;
 import com.grandis.nova.preorder.syncjob.PreorderSyncJobRepository;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -53,12 +55,15 @@ public class PreorderAcceptTransaction {
     private final JsonMapper jsonMapper;
     private final Clock clock;
     private final String externalScope;
+    /** 회차 행 잠금을 얻기까지 기다린 시간. 오픈 순간 접수가 이 한 행에 줄을 서므로 부하 시험의 핵심 지표다. */
+    private final Timer campaignLockWait;
 
     public PreorderAcceptTransaction(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
                                      PreorderRepository preorders, PreorderLedger ledger,
                                      PreorderSyncJobRepository syncJobs, OutboxWriter outboxWriter,
                                      JsonMapper jsonMapper, Clock clock,
-                                     @Value("${nova.external-mock.scope:preorder}") String externalScope) {
+                                     @Value("${nova.external-mock.scope:preorder}") String externalScope,
+                                     MeterRegistry meterRegistry) {
         this.campaigns = campaigns;
         this.batches = batches;
         this.preorders = preorders;
@@ -68,6 +73,9 @@ public class PreorderAcceptTransaction {
         this.jsonMapper = jsonMapper;
         this.clock = clock;
         this.externalScope = externalScope;
+        this.campaignLockWait = Timer.builder("preorder.campaign.lock.wait")
+                .publishPercentileHistogram()
+                .register(meterRegistry);
     }
 
     /**
@@ -75,7 +83,8 @@ public class PreorderAcceptTransaction {
      */
     @Transactional
     public AcceptResult accept(AcceptCommand command, Optional<ProductCatalog> product) {
-        Optional<PreorderCampaign> campaign = campaigns.findForUpdate(command.productId());
+        Optional<PreorderCampaign> campaign =
+                campaignLockWait.record(() -> campaigns.findForUpdate(command.productId()));
 
         Optional<Preorder> existing = preorders.findByCustomerIdAndIdempotencyKey(
                 command.customerId(), command.idempotencyKey());

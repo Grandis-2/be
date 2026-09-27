@@ -10,11 +10,14 @@ import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.PreorderRepository;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.web.ValidationFailures;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * 사전예약 접수. 트랜잭션 밖의 일(입장권 검증 · 카탈로그 조회 · UNIQUE 충돌 해석)을 맡고
@@ -31,17 +34,23 @@ public class PreorderAcceptService {
     static final String UQ_IDEMPOTENCY = "uq_preorder_idempotency";
     static final String FK_CUSTOMER = "fk_preorder_customer";
 
+    /** 접수 시간 · 결과(accepted · replayed · 오류 코드)별 건수. */
+    static final String ACCEPT_METRIC = "preorder.accept";
+
     private final AdmissionTicketVerifier ticketVerifier;
     private final CatalogReader catalogReader;
     private final PreorderAcceptTransaction transaction;
     private final PreorderRepository preorders;
+    private final MeterRegistry meterRegistry;
 
     public PreorderAcceptService(AdmissionTicketVerifier ticketVerifier, CatalogReader catalogReader,
-                                 PreorderAcceptTransaction transaction, PreorderRepository preorders) {
+                                 PreorderAcceptTransaction transaction, PreorderRepository preorders,
+                                 MeterRegistry meterRegistry) {
         this.ticketVerifier = ticketVerifier;
         this.catalogReader = catalogReader;
         this.transaction = transaction;
         this.preorders = preorders;
+        this.meterRegistry = meterRegistry;
     }
 
     /**
@@ -51,6 +60,19 @@ public class PreorderAcceptService {
      */
     public AcceptResult acceptByCustomer(Long customerId, Long queryProductId, Long productId, Long optionId,
                                          String idempotencyKey, String admissionTicket) {
+        return measured(() -> acceptVerified(customerId, queryProductId, productId, optionId, idempotencyKey,
+                admissionTicket));
+    }
+
+    /** 관리자 대신 접수. 같은 트랜잭션 · 같은 규칙이고 입장권만 없다. */
+    public AcceptResult acceptByAdmin(Long customerId, Long productId, Long optionId, String idempotencyKey,
+                                      String reason, String internalNote) {
+        return measured(() -> accept(new AcceptCommand(customerId, productId, optionId, idempotencyKey, null,
+                EventActor.ADMIN, reason, internalNote)));
+    }
+
+    private AcceptResult acceptVerified(Long customerId, Long queryProductId, Long productId, Long optionId,
+                                        String idempotencyKey, String admissionTicket) {
         if (!queryProductId.equals(productId)) {
             throw ValidationFailures.of("productId", "쿼리의 productId 와 같아야 합니다.");
         }
@@ -63,11 +85,20 @@ public class PreorderAcceptService {
                 EventActor.USER, null, null));
     }
 
-    /** 관리자 대신 접수. 같은 트랜잭션 · 같은 규칙이고 입장권만 없다. */
-    public AcceptResult acceptByAdmin(Long customerId, Long productId, Long optionId, String idempotencyKey,
-                                      String reason, String internalNote) {
-        return accept(new AcceptCommand(customerId, productId, optionId, idempotencyKey, null,
-                EventActor.ADMIN, reason, internalNote));
+    /** 결과 태그는 accepted · replayed · 오류 코드(유한한 값)이고, 그 밖의 예외는 error 로 센다. */
+    private AcceptResult measured(Supplier<AcceptResult> accept) {
+        Timer.Sample sample = Timer.start(meterRegistry);
+        String outcome = "error";
+        try {
+            AcceptResult result = accept.get();
+            outcome = result.replayed() ? "replayed" : "accepted";
+            return result;
+        } catch (BusinessException e) {
+            outcome = e.errorCode().name();
+            throw e;
+        } finally {
+            sample.stop(meterRegistry.timer(ACCEPT_METRIC, "outcome", outcome));
+        }
     }
 
     private AcceptResult accept(AcceptCommand command) {

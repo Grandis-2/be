@@ -7,6 +7,7 @@ import com.grandis.nova.preorder.catalog.CatalogReader;
 import com.grandis.nova.preorder.preorder.Preorder;
 import com.grandis.nova.preorder.preorder.PreorderRepository;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.hibernate.exception.ConstraintViolationException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,7 +41,8 @@ class PreorderAcceptServiceTest {
         preorders = mock(PreorderRepository.class);
         CatalogReader catalogReader = mock(CatalogReader.class);
         given(catalogReader.findProduct(PRODUCT_ID)).willReturn(Optional.empty());
-        service = new PreorderAcceptService(mock(AdmissionTicketVerifier.class), catalogReader, transaction, preorders);
+        service = new PreorderAcceptService(mock(AdmissionTicketVerifier.class), catalogReader, transaction, preorders,
+                new SimpleMeterRegistry());
     }
 
     @Test

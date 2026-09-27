@@ -55,6 +55,24 @@ spring:
 server:
   port: 8083
 
+# 관측. /actuator/** 는 ALB 경로에 넣지 않는다(내부 수집기만 접근). 부하 시험의 p99 를 보려고 요청 지연은 히스토그램으로 낸다
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        preorder.accept: true
+        preorder.events.handle: true
+        preorder.events.lag: true
+
 nova:
   # 대기열 입장권. 게이트웨이와 같은 비밀(Secrets Manager). 형식: gateway-auth-tokens.md 5절
   admission-ticket:
@@ -84,6 +102,9 @@ nova:
     relay-interval: 10s    # 릴레이 주기
     relay-after: 1m        # 만든 지 이만큼 지난 미발행 행만 재발행
     relay-batch: 100
+  # DB 에서 세는 상태 지표(예약 상태별 수 · 미발행 아웃박스) 갱신 주기
+  metrics:
+    refresh-interval: 30s
   # 외부 예약 Mock 등록 요청의 scope(시험 실행 범위). 접수 때 request_payload 에 고정된다
   external-mock:
     scope: preorder

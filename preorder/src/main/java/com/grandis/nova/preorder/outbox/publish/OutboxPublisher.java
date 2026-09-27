@@ -4,6 +4,7 @@ import com.grandis.nova.preorder.outbox.EventEnvelope;
 import com.grandis.nova.preorder.outbox.OutboundEventType;
 import com.grandis.nova.preorder.outbox.OutboxEvent;
 import com.grandis.nova.preorder.outbox.OutboxEventRepository;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -18,19 +19,23 @@ import java.time.Clock;
 @Component
 class OutboxPublisher {
 
+    static final String PUBLISH_METRIC = "preorder.outbox.publish";
+
     private static final Logger log = LoggerFactory.getLogger(OutboxPublisher.class);
 
     private final OutboxEventRepository outboxEvents;
     private final MessageTransport transport;
     private final JsonMapper jsonMapper;
     private final Clock clock;
+    private final MeterRegistry meterRegistry;
 
     OutboxPublisher(OutboxEventRepository outboxEvents, MessageTransport transport, JsonMapper jsonMapper,
-                    Clock clock) {
+                    Clock clock, MeterRegistry meterRegistry) {
         this.outboxEvents = outboxEvents;
         this.transport = transport;
         this.jsonMapper = jsonMapper;
         this.clock = clock;
+        this.meterRegistry = meterRegistry;
     }
 
     /** 이미 발행된 행(릴레이가 먼저 보냄)은 건너뛴다. */
@@ -45,12 +50,19 @@ class OutboxPublisher {
         try {
             transport.send(toMessage(event));
         } catch (RuntimeException e) {
+            count(event, "failure");
             outboxEvents.recordFailure(event.getId());
             log.warn("아웃박스 발행 실패 — 릴레이가 다시 보낸다 outboxEventId={} eventType={}",
                     event.getId(), event.getEventType(), e);
             return false;
         }
+        count(event, "success");
         return outboxEvents.markPublished(event.getId(), clock.instant()) == 1;
+    }
+
+    /** 전송 결과를 이벤트 종류별로 센다. 실패가 늘면 전송 구현 · 큐 장애다. */
+    private void count(OutboxEvent event, String outcome) {
+        meterRegistry.counter(PUBLISH_METRIC, "eventType", event.getEventType(), "outcome", outcome).increment();
     }
 
     private OutboundMessage toMessage(OutboxEvent event) {
