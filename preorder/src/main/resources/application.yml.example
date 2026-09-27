@@ -55,8 +55,11 @@ spring:
 server:
   port: 8083
 
-# 관측. /actuator/** 는 ALB 경로에 넣지 않는다(내부 수집기만 접근). 부하 시험의 p99 를 보려고 요청 지연은 히스토그램으로 낸다
+# 관측. 관리 엔드포인트는 앱과 다른 포트로 분리한다 — ALB 대상 그룹은 앱 포트만, 수집기만 관리 포트에 접근한다.
+# 부하 시험의 p99 를 보려고 요청 지연은 히스토그램으로 낸다
 management:
+  server:
+    port: 9083
   endpoints:
     web:
       exposure:
