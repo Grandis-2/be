@@ -92,8 +92,22 @@ tasks.register('serviceGraph') {
                 .collect { it.path }
                 .toSorted()
 
+        // 모듈마다 자기 전이 의존을 닫아 둔다. 서비스가 아닌 common 모듈도 포함한다.
+        // 바뀐 모듈이 이 목록에 있으면 그 모듈을 다시 테스트해야 한다.
+        def closures = [:]
+        modules.each { path ->
+            def closed = [] as TreeSet
+            def queue = [path]
+            while (queue) {
+                def cur = queue.remove(0)
+                if (!closed.add(cur)) continue
+                queue.addAll(directDeps(rootProject.project(cur)))
+            }
+            closures[path] = closed.toList()
+        }
+
         def json = groovy.json.JsonOutput.toJson(
-                [projects: dirs, services: services, modules: modules])
+                [projects: dirs, services: services, modules: modules, closures: closures])
         def out = new File(rootProject.buildDir, 'service-graph.json')
         out.parentFile.mkdirs()
         out.text = groovy.json.JsonOutput.prettyPrint(json)

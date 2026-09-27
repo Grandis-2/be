@@ -2,9 +2,9 @@ name: database
 
 on:
   pull_request:
-    branches: [main, 'epic/**']
+    branches: [main, dev, 'epic/**']
   push:
-    branches: [main]
+    branches: [main, dev]
 
 permissions:
   contents: read
