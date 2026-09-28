@@ -17,6 +17,6 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 @SpringBootTest(properties = "nova.admission-ticket.secret=" + PreorderIntegrationTest.ADMISSION_TICKET_SECRET)
 @ActiveProfiles({"test", "sqs-test"})
-@Import({MySqlTestConfig.class, SqsTestConfig.class})
+@Import({MySqlTestConfig.class, SecurityTestConfig.class, SqsTestConfig.class})
 public @interface SqsIntegrationTest {
 }
