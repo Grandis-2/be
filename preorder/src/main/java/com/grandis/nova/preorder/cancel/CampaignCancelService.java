@@ -1,6 +1,6 @@
 package com.grandis.nova.preorder.cancel;
 
-import com.grandis.nova.preorder.campaign.PreorderCampaignRepository;
+import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.integration.catalog.CatalogReader;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
@@ -26,14 +26,14 @@ public class CampaignCancelService {
     private static final String DEFAULT_REASON = "사전예약 회차 판매 중지";
     private static final int REASON_MAX_LENGTH = 500;
 
-    private final PreorderCampaignRepository campaigns;
+    private final Campaigns campaigns;
     private final Preorders preorders;
     private final CancelStarter cancelStarter;
     private final CatalogReader catalogReader;
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
 
-    public CampaignCancelService(PreorderCampaignRepository campaigns, Preorders preorders,
+    public CampaignCancelService(Campaigns campaigns, Preorders preorders,
                                  CancelStarter cancelStarter, CatalogReader catalogReader,
                                  TransactionTemplate transactionTemplate, Clock clock) {
         this.campaigns = campaigns;
@@ -45,8 +45,7 @@ public class CampaignCancelService {
     }
 
     public void cancel(Long productId, String reason) {
-        transactionTemplate.executeWithoutResult(status -> campaigns.findForUpdate(productId)
-                .ifPresent(campaign -> campaign.closeNow(clock.instant())));
+        campaigns.closeNow(productId, clock.instant());
         catalogReader.evict(productId);
         String eventReason = eventReason(reason);
         boolean more = true;

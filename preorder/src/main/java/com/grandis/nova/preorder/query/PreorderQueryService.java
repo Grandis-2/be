@@ -5,8 +5,8 @@ import com.grandis.nova.common.Cursor;
 import com.grandis.nova.common.CursorPage;
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.preorder.PreorderErrorCode;
-import com.grandis.nova.preorder.campaign.ShipmentBatch;
-import com.grandis.nova.preorder.campaign.ShipmentBatchRepository;
+import com.grandis.nova.preorder.campaign.Campaigns;
+import com.grandis.nova.preorder.campaign.ShipmentBatchSnapshot;
 import com.grandis.nova.preorder.preorder.AdminPreorderSearch;
 import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
@@ -25,7 +25,6 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -39,14 +38,14 @@ import java.util.stream.Collectors;
 public class PreorderQueryService {
 
     private final Preorders preorders;
-    private final ShipmentBatchRepository batches;
+    private final Campaigns campaigns;
     private final PreorderSyncJobRepository syncJobs;
     private final SyncAttemptReader syncAttempts;
 
-    PreorderQueryService(Preorders preorders, ShipmentBatchRepository batches, PreorderSyncJobRepository syncJobs,
+    PreorderQueryService(Preorders preorders, Campaigns campaigns, PreorderSyncJobRepository syncJobs,
                          SyncAttemptReader syncAttempts) {
         this.preorders = preorders;
-        this.batches = batches;
+        this.campaigns = campaigns;
         this.syncJobs = syncJobs;
         this.syncAttempts = syncAttempts;
     }
@@ -72,7 +71,7 @@ public class PreorderQueryService {
     /** 예약 하나. 본인과 관리자만 볼 수 있고, 남의 예약은 존재를 알리지 않는다(404). */
     public PreorderView.Summary findOne(Viewer viewer, String preorderToken) {
         PreorderSnapshot preorder = require(viewer, preorderToken);
-        return new PreorderView.Summary(preorder, batches.getAssigned(preorder.shipmentBatchId()));
+        return new PreorderView.Summary(preorder, campaigns.getBatch(preorder.shipmentBatchId()));
     }
 
     /** 상태 전이 이력(번호 순). 접근 규칙은 상세와 같다. */
@@ -95,7 +94,7 @@ public class PreorderQueryService {
     public PreorderView.AdminDetail findOneForAdmin(String preorderToken) {
         PreorderSnapshot preorder = preorders.getByToken(preorderToken);
         List<PreorderSyncJob> jobs = syncJobs.findByPreorderIdOrderByJobType(preorder.id());
-        return new PreorderView.AdminDetail(preorder, batches.getAssigned(preorder.shipmentBatchId()), jobs,
+        return new PreorderView.AdminDetail(preorder, campaigns.getBatch(preorder.shipmentBatchId()), jobs,
                 syncAttempts.findByJobIds(jobs.stream().map(PreorderSyncJob::getId).toList()),
                 preorders.history(preorder.id()));
     }
@@ -109,9 +108,8 @@ public class PreorderQueryService {
     }
 
     private <T> List<T> withBatches(List<PreorderSnapshot> found, BatchMapper<T> mapper) {
-        Map<Long, ShipmentBatch> byId = batches.findAllById(
-                        found.stream().map(PreorderSnapshot::shipmentBatchId).distinct().toList()).stream()
-                .collect(Collectors.toMap(ShipmentBatch::getId, Function.identity()));
+        Map<Long, ShipmentBatchSnapshot> byId = campaigns.findBatches(
+                found.stream().map(PreorderSnapshot::shipmentBatchId).distinct().toList());
         return found.stream().map(preorder -> mapper.map(preorder, byId.get(preorder.shipmentBatchId()))).toList();
     }
 
@@ -126,6 +124,6 @@ public class PreorderQueryService {
 
     @FunctionalInterface
     private interface BatchMapper<T> {
-        T map(PreorderSnapshot preorder, ShipmentBatch batch);
+        T map(PreorderSnapshot preorder, ShipmentBatchSnapshot batch);
     }
 }

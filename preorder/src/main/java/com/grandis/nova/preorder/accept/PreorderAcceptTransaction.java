@@ -2,10 +2,9 @@ package com.grandis.nova.preorder.accept;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
-import com.grandis.nova.preorder.campaign.PreorderCampaign;
-import com.grandis.nova.preorder.campaign.PreorderCampaignRepository;
-import com.grandis.nova.preorder.campaign.ShipmentBatch;
-import com.grandis.nova.preorder.campaign.ShipmentBatchRepository;
+import com.grandis.nova.preorder.campaign.CampaignSchedule;
+import com.grandis.nova.preorder.campaign.Campaigns;
+import com.grandis.nova.preorder.campaign.IssuedPosition;
 import com.grandis.nova.preorder.integration.catalog.OptionSnapshot;
 import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
 import com.grandis.nova.preorder.outbox.OutboxMessage.RegisterJobReady;
@@ -46,8 +45,7 @@ import java.util.UUID;
 @Component
 class PreorderAcceptTransaction {
 
-    private final PreorderCampaignRepository campaigns;
-    private final ShipmentBatchRepository batches;
+    private final Campaigns campaigns;
     private final Preorders preorders;
     private final PreorderLedger ledger;
     private final PreorderSyncJobRepository syncJobs;
@@ -58,14 +56,13 @@ class PreorderAcceptTransaction {
     /** 회차 행 잠금을 얻기까지 기다린 시간. 오픈 순간 접수가 이 한 행에 줄을 서므로 부하 시험의 핵심 지표다. */
     private final Timer campaignLockWait;
 
-    PreorderAcceptTransaction(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
+    PreorderAcceptTransaction(Campaigns campaigns,
                                      Preorders preorders, PreorderLedger ledger,
                                      PreorderSyncJobRepository syncJobs, OutboxWriter outboxWriter,
                                      JsonMapper jsonMapper, Clock clock,
                                      @Value("${nova.external-mock.scope:preorder}") String externalScope,
                                      MeterRegistry meterRegistry) {
         this.campaigns = campaigns;
-        this.batches = batches;
         this.preorders = preorders;
         this.ledger = ledger;
         this.syncJobs = syncJobs;
@@ -83,8 +80,8 @@ class PreorderAcceptTransaction {
      */
     @Transactional
     public AcceptResult accept(AcceptCommand command, Optional<ProductCatalog> product) {
-        Optional<PreorderCampaign> campaign =
-                campaignLockWait.record(() -> campaigns.findForUpdate(command.productId()));
+        Optional<CampaignSchedule> campaign =
+                campaignLockWait.record(() -> campaigns.lockForAccept(command.productId()));
 
         Optional<PreorderSnapshot> existing = preorders.findByIdempotencyKey(
                 command.customerId(), command.idempotencyKey());
@@ -93,16 +90,12 @@ class PreorderAcceptTransaction {
         }
 
         OptionSnapshot option = requireOnSale(command, product);
-        PreorderCampaign opened = requireAccepting(campaign);
-
-        long position = opened.issueQueuePosition();
-        ShipmentBatch batch = batches.findCovering(command.productId(), position)
-                .orElseThrow(() -> new IllegalStateException(
-                        "순번이 속한 배송 차수가 없다: productId=" + command.productId() + ", position=" + position));
+        requireAccepting(campaign);
+        IssuedPosition issued = campaigns.issuePosition(command.productId());
 
         String preorderToken = UUID.randomUUID().toString();
         PreorderSnapshot preorder = ledger.accept(new NewPreorder(preorderToken, command.customerId(),
-                command.productId(), command.optionId(), batch.getId(), position, command.admissionTicketId(),
+                command.productId(), command.optionId(), issued.batch().id(), issued.position(), command.admissionTicketId(),
                 command.idempotencyKey(), option.productTitle(), option.optionTitle(), option.price(),
                 command.internalNote()), command.actor(), command.reason());
 
@@ -111,7 +104,7 @@ class PreorderAcceptTransaction {
         PreorderSyncJob job = syncJobs.save(PreorderSyncJob.register(preorder.id(), payload));
         outboxWriter.append(new RegisterJobReady(job.getId(), preorderToken));
 
-        return new AcceptResult(preorder, batch, false);
+        return new AcceptResult(preorder, issued.batch(), false);
     }
 
     /**
@@ -135,7 +128,7 @@ class PreorderAcceptTransaction {
         if (!different.isEmpty()) {
             throw new BusinessException(PreorderErrorCode.KEY_PAYLOAD_MISMATCH, Map.of("fields", different));
         }
-        return new AcceptResult(existing, batches.getAssigned(existing.shipmentBatchId()), true);
+        return new AcceptResult(existing, campaigns.getBatch(existing.shipmentBatchId()), true);
     }
 
     private static OptionSnapshot requireOnSale(AcceptCommand command, Optional<ProductCatalog> product) {
@@ -148,17 +141,16 @@ class PreorderAcceptTransaction {
     }
 
     /** 회차가 없는 사전예약 상품은 아직 열리지 않은 것으로 본다. */
-    private PreorderCampaign requireAccepting(Optional<PreorderCampaign> campaign) {
-        PreorderCampaign found = campaign.orElseThrow(() -> new BusinessException(PreorderErrorCode.SALE_NOT_OPEN));
+    private void requireAccepting(Optional<CampaignSchedule> campaign) {
+        CampaignSchedule found = campaign.orElseThrow(() -> new BusinessException(PreorderErrorCode.SALE_NOT_OPEN));
         Instant now = clock.instant();
-        if (now.isBefore(found.getOpensAt())) {
+        if (now.isBefore(found.opensAt())) {
             throw new BusinessException(PreorderErrorCode.SALE_NOT_OPEN,
-                    Map.of("reason", "opensAt=" + found.getOpensAt()));
+                    Map.of("reason", "opensAt=" + found.opensAt()));
         }
-        if (!now.isBefore(found.getClosesAt())) {
+        if (!now.isBefore(found.closesAt())) {
             throw new BusinessException(PreorderErrorCode.SALE_CLOSED,
-                    Map.of("reason", "closesAt=" + found.getClosesAt()));
+                    Map.of("reason", "closesAt=" + found.closesAt()));
         }
-        return found;
     }
 }
