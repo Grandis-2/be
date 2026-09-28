@@ -17,7 +17,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.grandis.nova.common.security.JwtAuthenticationFilter;
+import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.web.RequestIdFilter;
 import com.grandis.nova.member.auth.api.AuthCookies;
 import com.grandis.nova.member.auth.application.KakaoLoginService;
@@ -165,7 +165,7 @@ class AuthFlowIntegrationTest {
         MvcResult r = login();
         String access = json(r, "/data/sessionToken");
 
-        mvc.perform(get("/api/v1/session").header(JwtAuthenticationFilter.HEADER, access))
+        mvc.perform(get("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(access)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.displayName").value("홍길동"))
                 .andExpect(jsonPath("$.data.role").value("USER"))
@@ -242,13 +242,15 @@ class AuthFlowIntegrationTest {
     }
 
     @Test
-    @DisplayName("관리자 리프레시는 admin_refresh_token 쿠키로 오고, 그것만으로 재발급되며 회원 쿠키와 이름이 다르다")
+    @DisplayName("관리자 리프레시는 admin_refresh_token 쿠키로 오고, 그것만으로 재발급되며 회원 쿠키와 이름이 다르다(회원 쿠키는 만료로만 실린다)")
     void adminRefreshCookieIsSeparate() throws Exception {
         MvcResult ok = mvc.perform(post("/api/v1/admin/session").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"username\":\"admin\",\"password\":\"" + ADMIN_PASSWORD + "\"}"))
                 .andExpect(status().isOk())
                 .andExpect(cookie().exists(AuthCookies.ADMIN_REFRESH_TOKEN))
-                .andExpect(cookie().doesNotExist(AuthCookies.REFRESH_TOKEN))
+                // 회원 쿠키는 값 없이 Max-Age=0 — 한 브라우저에 한 역할. 살아 있는 회원 리프레시가 같이 내려가지 않는다
+                .andExpect(cookie().maxAge(AuthCookies.REFRESH_TOKEN, 0))
+                .andExpect(cookie().value(AuthCookies.REFRESH_TOKEN, ""))
                 .andReturn();
         Cookie adminCookie = ok.getResponse().getCookie(AuthCookies.ADMIN_REFRESH_TOKEN);
 
@@ -293,7 +295,7 @@ class AuthFlowIntegrationTest {
         MvcResult r = login();
         Cookie refresh = refreshCookie(r);
 
-        mvc.perform(delete("/api/v1/session").header(JwtAuthenticationFilter.HEADER, "not-a-jwt").cookie(refresh))
+        mvc.perform(delete("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value("not-a-jwt")).cookie(refresh))
                 .andExpect(status().isNoContent())
                 .andExpect(cookie().maxAge(AuthCookies.REFRESH_TOKEN, 0))
                 .andExpect(cookie().maxAge(AuthCookies.ADMIN_REFRESH_TOKEN, 0));
@@ -301,7 +303,7 @@ class AuthFlowIntegrationTest {
         mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(refresh)).andExpect(status().isUnauthorized());
         // 아무것도 없이 쳐도, 헤더·쿠키 셋 다 의미 없는 문자열이어도 204 — 로그아웃은 실패하지 않는다(500 이 아니다)
         mvc.perform(delete("/api/v1/session")).andExpect(status().isNoContent());
-        mvc.perform(delete("/api/v1/session").header(JwtAuthenticationFilter.HEADER, "garbage")
+        mvc.perform(delete("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value("garbage"))
                         .cookie(new Cookie(AuthCookies.REFRESH_TOKEN, "garbage"), new Cookie(AuthCookies.ADMIN_REFRESH_TOKEN, "%%%")))
                 .andExpect(status().isNoContent())
                 .andExpect(cookie().maxAge(AuthCookies.REFRESH_TOKEN, 0));
@@ -314,12 +316,53 @@ class AuthFlowIntegrationTest {
         String access = json(r, "/data/sessionToken");
         Cookie refresh = refreshCookie(r);
 
-        mvc.perform(delete("/api/v1/session").header(JwtAuthenticationFilter.HEADER, access))
+        mvc.perform(delete("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(access)))
                 .andExpect(status().isNoContent())
                 .andExpect(cookie().maxAge(AuthCookies.REFRESH_TOKEN, 0));
 
         mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(refresh)).andExpect(status().isUnauthorized());
-        mvc.perform(get("/api/v1/session").header(JwtAuthenticationFilter.HEADER, access)).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(access))).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("한 브라우저에는 한 역할 — 로그인 응답은 자기 역할 쿠키를 내리면서 상대 역할 쿠키를 만료시킨다(회원 → 관리자, 관리자 → 회원)")
+    void loginExpiresTheOtherRolesCookie() throws Exception {
+        MvcResult user = login();
+        assertThat(setCookies(user)).anySatisfy(c -> assertThat(c).startsWith(AuthCookies.REFRESH_TOKEN + "=").doesNotContain("Max-Age=0"));
+        assertThat(setCookies(user)).anySatisfy(c -> assertThat(c).startsWith(AuthCookies.ADMIN_REFRESH_TOKEN + "=;").contains("Max-Age=0"));
+
+        MvcResult admin = adminLoginOk();
+        assertThat(setCookies(admin)).anySatisfy(c -> assertThat(c).startsWith(AuthCookies.ADMIN_REFRESH_TOKEN + "=").doesNotContain("Max-Age=0"));
+        assertThat(setCookies(admin)).anySatisfy(c -> assertThat(c).startsWith(AuthCookies.REFRESH_TOKEN + "=;").contains("Max-Age=0"));
+
+        // 브라우저가 만료 쿠키를 지우지 않은 채 둘 다 보내는 손으로 만든 상태에서는 회원 쿠키를 따른다(문서화된 순서)
+        Cookie adminCookie = admin.getResponse().getCookie(AuthCookies.ADMIN_REFRESH_TOKEN);
+        mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(refreshCookie(user), adminCookie))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.role").value("USER"));
+        // 관리자 쿠키만 보내면 관리자 재발급
+        mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(adminCookie))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.role").value("ADMIN"));
+    }
+
+    @Test
+    @DisplayName("로그아웃의 액세스 토큰도 같은 추출기 — Basic 스킴 · 스킴만 있는 헤더는 없는 것으로 보고 204")
+    void logoutIgnoresNonBearerAuthorization() throws Exception {
+        for (String header : new String[] {"Basic dXNlcjpwdw==", "Bearer", "Bearer a b"}) {
+            mvc.perform(delete("/api/v1/session").header(BearerTokens.HEADER, header)).andExpect(status().isNoContent());
+        }
+    }
+
+    private MvcResult adminLoginOk() throws Exception {
+        return mvc.perform(post("/api/v1/admin/session").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"admin\",\"password\":\"" + ADMIN_PASSWORD + "\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+    }
+
+    private static java.util.List<String> setCookies(MvcResult r) {
+        return r.getResponse().getHeaders("Set-Cookie");
     }
 
     @Test
@@ -333,7 +376,7 @@ class AuthFlowIntegrationTest {
                 .andExpect(jsonPath("$.data.displayName").doesNotExist())   // api-spec POST /admin/session data 는 {sessionToken, role} 둘
                 .andReturn();
         String admin = json(ok, "/data/sessionToken");
-        mvc.perform(get("/api/v1/session").header(JwtAuthenticationFilter.HEADER, admin))
+        mvc.perform(get("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(admin)))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.role").value("ADMIN"));
 
         mvc.perform(post("/api/v1/admin/session").contentType(MediaType.APPLICATION_JSON)

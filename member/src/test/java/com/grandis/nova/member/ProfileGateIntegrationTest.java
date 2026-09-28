@@ -10,7 +10,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.grandis.nova.common.security.JwtAuthenticationFilter;
+import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.web.RequestIdFilter;
 import com.grandis.nova.member.auth.api.AuthCookies;
 import com.grandis.nova.member.auth.infrastructure.kakao.KakaoOAuthClient;
@@ -99,7 +99,7 @@ class ProfileGateIntegrationTest {
     }
 
     private void save(String token, String body) throws Exception {
-        mvc.perform(put(PROFILE).header(JwtAuthenticationFilter.HEADER, token)
+        mvc.perform(put(PROFILE).header(BearerTokens.HEADER, BearerTokens.value(token))
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isOk());
     }
@@ -117,7 +117,7 @@ class ProfileGateIntegrationTest {
         String token = accessTokenOf(login());
         save(token, FULL);
 
-        mvc.perform(get("/api/v1/session").header(JwtAuthenticationFilter.HEADER, token))
+        mvc.perform(get("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(token)))
                 .andExpect(jsonPath("$.data.profileComplete").value(true));
         assertThat(flagOf(login())).isTrue();
     }
@@ -133,7 +133,7 @@ class ProfileGateIntegrationTest {
         };
         for (String[] each : partial) {
             save(token, each[1]);
-            mvc.perform(get("/api/v1/session").header(JwtAuthenticationFilter.HEADER, token))
+            mvc.perform(get("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(token)))
                     .andExpect(jsonPath("$.data.profileComplete").value(false));
         }
     }
@@ -178,7 +178,7 @@ class ProfileGateIntegrationTest {
                 .andReturn();
         String adminAccess = accessTokenOf(r);
 
-        mvc.perform(get("/api/v1/session").header(JwtAuthenticationFilter.HEADER, adminAccess))
+        mvc.perform(get("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(adminAccess)))
                 .andExpect(jsonPath("$.data.role").value("ADMIN"))
                 .andExpect(jsonPath("$.data.profileComplete").value(true));
     }
