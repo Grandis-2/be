@@ -1,8 +1,8 @@
 package com.grandis.nova.preorder.api;
 
+import com.grandis.nova.common.security.CurrentCustomerId;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.accept.PreorderAcceptService;
-import com.grandis.nova.preorder.web.CurrentCustomerId;
 import com.grandis.nova.preorder.web.IdempotencyKeys;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;

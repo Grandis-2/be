@@ -26,8 +26,9 @@ import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Map;
 
+import static com.grandis.nova.preorder.support.AccessTokens.admin;
+import static com.grandis.nova.preorder.support.AccessTokens.customer;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -149,7 +150,7 @@ class AcceptPreorderApiTest {
                         .header("X-Admission-Ticket", ticket(product.productId(), customerId))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"productId\":%d}".formatted(product.productId()))
-                        .with(user(customerId.toString()).roles("USER")))
+                        .with(customer(customerId)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
                 .andExpect(jsonPath("$.error.details.violations[0].field").value("optionId"));
@@ -169,7 +170,7 @@ class AcceptPreorderApiTest {
                         .header("X-Admission-Ticket", ticket(product.productId(), customerId))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(product.productId(), product.optionId()))
-                        .with(user(customerId.toString()).roles("USER")))
+                        .with(customer(customerId)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("IDEMPOTENCY_KEY_REQUIRED"));
     }
@@ -196,7 +197,7 @@ class AcceptPreorderApiTest {
                         .content("""
                                 {"productId":%d,"optionId":%d,"customerId":%d,"reason":" "}
                                 """.formatted(product.productId(), product.optionId(), customerId))
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
                 .andExpect(jsonPath("$.error.details.violations[0].field").value("reason"));
@@ -298,7 +299,7 @@ class AcceptPreorderApiTest {
                 .andExpect(status().isUnauthorized());
         mockMvc.perform(request(customerId, product.productId(), product.productId(), product.optionId(),
                         "key-admin-user-api", ticket(product.productId(), customerId))
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
     }
@@ -326,7 +327,7 @@ class AcceptPreorderApiTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("MEMBER_NOT_FOUND"));
         mockMvc.perform(adminRequest(customerId, "key-admin-0003", "전화 접수")
-                        .with(user(customerId.toString()).roles("USER")))
+                        .with(customer(customerId)))
                 .andExpect(status().isForbidden());
     }
 
@@ -342,7 +343,7 @@ class AcceptPreorderApiTest {
                 .header("Idempotency-Key", key)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(json(productId, optionId))
-                .with(user(customer.toString()).roles("USER"));
+                .with(customer(customer));
         return ticket == null ? builder : builder.header("X-Admission-Ticket", ticket);
     }
 
@@ -353,7 +354,7 @@ class AcceptPreorderApiTest {
                 .content("""
                         {"productId":%d,"optionId":%d,"customerId":%d,"reason":"%s","internalNote":"VIP"}
                         """.formatted(product.productId(), product.optionId(), customer, reason))
-                .with(user("admin").roles("ADMIN"));
+                .with(admin());
     }
 
     private static String json(Long productId, Long optionId) {

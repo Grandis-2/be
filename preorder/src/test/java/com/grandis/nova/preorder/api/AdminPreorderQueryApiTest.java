@@ -17,10 +17,11 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
 
+import static com.grandis.nova.preorder.support.AccessTokens.admin;
+import static com.grandis.nova.preorder.support.AccessTokens.customer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.hasSize;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -60,14 +61,14 @@ class AdminPreorderQueryApiTest {
         accepts.accept(fixtures.customer());
 
         mockMvc.perform(get("/api/v1/admin/preorders").param("customerId", customerId.toString())
-                        .param("page", "0").param("size", "1").with(user("admin").roles("ADMIN")))
+                        .param("page", "0").param("size", "1").with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.total").value(2))
                 .andExpect(jsonPath("$.data.page").value(0))
                 .andExpect(jsonPath("$.data.customerId").doesNotExist());
         mockMvc.perform(get("/api/v1/admin/preorders").param("productId", mine.preorder().getProductId().toString())
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(mine)))
                 .andExpect(jsonPath("$.data.items[0].customerId").value(customerId))
@@ -84,7 +85,7 @@ class AdminPreorderQueryApiTest {
                 """, deadLettered.preorder().getId());
 
         mockMvc.perform(get("/api/v1/admin/preorders").param("registerJobStatus", "DEAD_LETTER")
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(deadLettered)))
                 .andExpect(jsonPath("$.data.items[0].registerJobStatus").value("DEAD_LETTER"));
@@ -95,7 +96,7 @@ class AdminPreorderQueryApiTest {
         // 이 테스트만의 데이터가 아니라 스키마 전체를 본다. 목록이 최신순이므로 방금 만든 예약이 첫 줄이어야 한다.
         AcceptResult accepted = accepts.accept(customerId);
 
-        mockMvc.perform(get("/api/v1/admin/preorders").with(user("admin").roles("ADMIN")))
+        mockMvc.perform(get("/api/v1/admin/preorders").with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.total", greaterThanOrEqualTo(1)))
                 .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(accepted)))
@@ -108,7 +109,7 @@ class AdminPreorderQueryApiTest {
 
         mockMvc.perform(get("/api/v1/admin/preorders").param("customerId", customerId.toString())
                         .param("from", Instant.now().plusSeconds(60).toString())
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(jsonPath("$.data.items", hasSize(0)))
                 .andExpect(jsonPath("$.data.total").value(0));
     }
@@ -121,7 +122,7 @@ class AdminPreorderQueryApiTest {
         fixtures.syncAttempt(jobId, 1, "TRANSIENT_FAILURE", 503, "UPSTREAM_UNAVAILABLE");
         fixtures.syncAttempt(jobId, 2, null, null, null);
 
-        mockMvc.perform(get("/api/v1/admin/preorders/" + AcceptFixtures.tokenOf(accepted)).with(user("admin").roles("ADMIN")))
+        mockMvc.perform(get("/api/v1/admin/preorders/" + AcceptFixtures.tokenOf(accepted)).with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.customerId").value(customerId))
                 .andExpect(jsonPath("$.data.admissionTicketId").exists())
@@ -141,7 +142,7 @@ class AdminPreorderQueryApiTest {
 
         mockMvc.perform(patch("/api/v1/admin/preorders/" + AcceptFixtures.tokenOf(accepted))
                         .contentType(MediaType.APPLICATION_JSON).content("{\"internalNote\":\"VIP 고객\"}")
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.internalNote").value("VIP 고객"))
                 .andExpect(jsonPath("$.data.events", hasSize(1)));
@@ -156,7 +157,7 @@ class AdminPreorderQueryApiTest {
         mockMvc.perform(patch("/api/v1/admin/preorders/" + AcceptFixtures.tokenOf(accepted))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"internalNote\":\"메모\",\"optionId\":9}")
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("PREORDER_FIELD_IMMUTABLE"))
                 .andExpect(jsonPath("$.error.details.fields[0]").value("optionId"));
@@ -165,10 +166,10 @@ class AdminPreorderQueryApiTest {
     @Test
     void 없는_예약은_404_사용자_토큰은_403() throws Exception {
         mockMvc.perform(get("/api/v1/admin/preorders/" + ShopFixtures.unique())
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("PREORDER_NOT_FOUND"));
-        mockMvc.perform(get("/api/v1/admin/preorders").with(user(customerId.toString()).roles("USER")))
+        mockMvc.perform(get("/api/v1/admin/preorders").with(customer(customerId)))
                 .andExpect(status().isForbidden());
     }
 

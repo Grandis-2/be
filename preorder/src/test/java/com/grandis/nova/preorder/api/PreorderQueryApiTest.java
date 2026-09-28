@@ -22,8 +22,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.List;
 
+import static com.grandis.nova.preorder.support.AccessTokens.admin;
+import static com.grandis.nova.preorder.support.AccessTokens.customer;
 import static org.hamcrest.Matchers.hasSize;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -69,7 +70,7 @@ class PreorderQueryApiTest {
         AcceptResult newer = accepts.accept(customerId);
         accepts.accept(fixtures.customer());
 
-        mockMvc.perform(get("/api/v1/preorders").with(user(customerId.toString()).roles("USER")))
+        mockMvc.perform(get("/api/v1/preorders").with(customer(customerId)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items", hasSize(2)))
                 .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(newer)))
@@ -82,14 +83,14 @@ class PreorderQueryApiTest {
         List<AcceptResult> accepted = List.of(accepts.accept(customerId), accepts.accept(customerId), accepts.accept(customerId));
 
         String firstPage = mockMvc.perform(get("/api/v1/preorders").param("size", "2")
-                        .with(user(customerId.toString()).roles("USER")))
+                        .with(customer(customerId)))
                 .andExpect(jsonPath("$.data.items", hasSize(2)))
                 .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(accepted.get(2))))
                 .andReturn().getResponse().getContentAsString();
         String cursor = JsonPath.read(firstPage, "$.data.nextCursor");
 
         mockMvc.perform(get("/api/v1/preorders").param("size", "2").param("cursor", cursor)
-                        .with(user(customerId.toString()).roles("USER")))
+                        .with(customer(customerId)))
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(accepted.getFirst())))
                 .andExpect(jsonPath("$.data.nextCursor").doesNotExist());
@@ -102,11 +103,11 @@ class PreorderQueryApiTest {
         cancels.complete(canceled.preorder().getId());
 
         mockMvc.perform(get("/api/v1/preorders").param("status", "PENDING_SYNC")
-                        .with(user(customerId.toString()).roles("USER")))
+                        .with(customer(customerId)))
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(kept)));
         mockMvc.perform(get("/api/v1/preorders").param("productId", kept.preorder().getProductId().toString())
-                        .with(user(customerId.toString()).roles("USER")))
+                        .with(customer(customerId)))
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(kept)));
     }
@@ -114,14 +115,14 @@ class PreorderQueryApiTest {
     @Test
     void 잘못된_크기나_커서는_400() throws Exception {
         mockMvc.perform(get("/api/v1/preorders").param("size", "0")
-                        .with(user(customerId.toString()).roles("USER")))
+                        .with(customer(customerId)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.details.violations[0].field").value("size"));
         for (String brokenCursor : List.of("!!not-base64!!",
                 Base64.getUrlEncoder().withoutPadding().encodeToString("어제|3".getBytes(StandardCharsets.UTF_8)),
                 Base64.getUrlEncoder().withoutPadding().encodeToString("2026-10-01T00:00:00Z".getBytes(StandardCharsets.UTF_8)))) {
             mockMvc.perform(get("/api/v1/preorders").param("cursor", brokenCursor)
-                            .with(user(customerId.toString()).roles("USER")))
+                            .with(customer(customerId)))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
         }
@@ -135,7 +136,7 @@ class PreorderQueryApiTest {
                 ledger.confirmRegister(accepted.preorder().getId(), externalReference));
 
         mockMvc.perform(get("/api/v1/preorders/" + AcceptFixtures.tokenOf(accepted))
-                        .with(user(customerId.toString()).roles("USER")))
+                        .with(customer(customerId)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("PAYABLE"))
                 .andExpect(jsonPath("$.data.externalReference").value(externalReference))
@@ -151,7 +152,7 @@ class PreorderQueryApiTest {
         cancels.complete(accepted.preorder().getId());
 
         mockMvc.perform(get("/api/v1/preorders/" + AcceptFixtures.tokenOf(accepted))
-                        .with(user(customerId.toString()).roles("USER")))
+                        .with(customer(customerId)))
                 .andExpect(jsonPath("$.data.status").value("CANCELED"))
                 .andExpect(jsonPath("$.data.paymentDueAt").doesNotExist())
                 .andExpect(jsonPath("$.data.cancelable").value(false));
@@ -162,10 +163,10 @@ class PreorderQueryApiTest {
         AcceptResult mine = accepts.accept(customerId);
 
         mockMvc.perform(get("/api/v1/preorders/" + AcceptFixtures.tokenOf(mine))
-                        .with(user(fixtures.customer().toString()).roles("USER")))
+                        .with(customer(fixtures.customer())))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("PREORDER_NOT_FOUND"));
-        mockMvc.perform(get("/api/v1/preorders/" + AcceptFixtures.tokenOf(mine)).with(user("admin").roles("ADMIN")))
+        mockMvc.perform(get("/api/v1/preorders/" + AcceptFixtures.tokenOf(mine)).with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.preorderId").value(AcceptFixtures.tokenOf(mine)));
     }
@@ -176,7 +177,7 @@ class PreorderQueryApiTest {
         cancels.complete(accepted.preorder().getId());
 
         mockMvc.perform(get("/api/v1/preorders/" + AcceptFixtures.tokenOf(accepted) + "/history")
-                        .with(user(customerId.toString()).roles("USER")))
+                        .with(customer(customerId)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items", hasSize(3)))
                 .andExpect(jsonPath("$.data.items[0].eventSequence").value(1))
@@ -189,7 +190,7 @@ class PreorderQueryApiTest {
     @Test
     void 로그인하지_않으면_401_관리자_토큰은_목록을_못_본다() throws Exception {
         mockMvc.perform(get("/api/v1/preorders")).andExpect(status().isUnauthorized());
-        mockMvc.perform(get("/api/v1/preorders").with(user("admin").roles("ADMIN")))
+        mockMvc.perform(get("/api/v1/preorders").with(admin()))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
     }
