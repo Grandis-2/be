@@ -11,7 +11,7 @@ import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.preorder.PreorderTransition;
 import com.grandis.nova.preorder.preorder.PreorderTrigger;
 import com.grandis.nova.preorder.preorder.Preorders;
-import com.grandis.nova.preorder.syncjob.PreorderSyncJobRepository;
+import com.grandis.nova.preorder.syncjob.SyncJobs;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,11 +29,11 @@ public class CancelStarter {
 
     private final PreorderLedger ledger;
     private final Preorders preorders;
-    private final PreorderSyncJobRepository syncJobs;
+    private final SyncJobs syncJobs;
     private final OutboxWriter outboxWriter;
     private final Clock clock;
 
-    public CancelStarter(PreorderLedger ledger, Preorders preorders, PreorderSyncJobRepository syncJobs,
+    public CancelStarter(PreorderLedger ledger, Preorders preorders, SyncJobs syncJobs,
                          OutboxWriter outboxWriter, Clock clock) {
         this.ledger = ledger;
         this.preorders = preorders;

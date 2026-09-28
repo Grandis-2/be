@@ -13,8 +13,7 @@ import com.grandis.nova.preorder.preorder.NewPreorder;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.Preorders;
-import com.grandis.nova.preorder.syncjob.PreorderSyncJob;
-import com.grandis.nova.preorder.syncjob.PreorderSyncJobRepository;
+import com.grandis.nova.preorder.syncjob.SyncJobs;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.springframework.beans.factory.annotation.Value;
@@ -48,7 +47,7 @@ class PreorderAcceptTransaction {
     private final Campaigns campaigns;
     private final Preorders preorders;
     private final PreorderLedger ledger;
-    private final PreorderSyncJobRepository syncJobs;
+    private final SyncJobs syncJobs;
     private final OutboxWriter outboxWriter;
     private final JsonMapper jsonMapper;
     private final Clock clock;
@@ -58,7 +57,7 @@ class PreorderAcceptTransaction {
 
     PreorderAcceptTransaction(Campaigns campaigns,
                                      Preorders preorders, PreorderLedger ledger,
-                                     PreorderSyncJobRepository syncJobs, OutboxWriter outboxWriter,
+                                     SyncJobs syncJobs, OutboxWriter outboxWriter,
                                      JsonMapper jsonMapper, Clock clock,
                                      @Value("${nova.external-mock.scope:preorder}") String externalScope,
                                      MeterRegistry meterRegistry) {
@@ -101,8 +100,8 @@ class PreorderAcceptTransaction {
 
         String payload = jsonMapper.writeValueAsString(RegisterRequestPayload.of(preorderToken,
                 command.customerId(), command.productId(), option.sku(), externalScope));
-        PreorderSyncJob job = syncJobs.save(PreorderSyncJob.register(preorder.id(), payload));
-        outboxWriter.append(new RegisterJobReady(job.getId(), preorderToken));
+        Long jobId = syncJobs.createRegister(preorder.id(), payload);
+        outboxWriter.append(new RegisterJobReady(jobId, preorderToken));
 
         return new AcceptResult(preorder, issued.batch(), false);
     }

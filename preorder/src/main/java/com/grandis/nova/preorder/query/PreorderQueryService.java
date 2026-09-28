@@ -12,11 +12,10 @@ import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.preorder.Preorders;
-import com.grandis.nova.preorder.syncjob.PreorderSyncJob;
-import com.grandis.nova.preorder.syncjob.PreorderSyncJobRepository;
 import com.grandis.nova.preorder.syncjob.SyncAttemptReader;
+import com.grandis.nova.preorder.syncjob.SyncJobSnapshot;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
-import com.grandis.nova.preorder.syncjob.SyncJobType;
+import com.grandis.nova.preorder.syncjob.SyncJobs;
 import com.grandis.nova.preorder.web.Viewer;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,7 +24,6 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
  * 예약 조회. 쓰기가 없어 읽기 전용 트랜잭션이다.
@@ -39,10 +37,10 @@ public class PreorderQueryService {
 
     private final Preorders preorders;
     private final Campaigns campaigns;
-    private final PreorderSyncJobRepository syncJobs;
+    private final SyncJobs syncJobs;
     private final SyncAttemptReader syncAttempts;
 
-    PreorderQueryService(Preorders preorders, Campaigns campaigns, PreorderSyncJobRepository syncJobs,
+    PreorderQueryService(Preorders preorders, Campaigns campaigns, SyncJobs syncJobs,
                          SyncAttemptReader syncAttempts) {
         this.preorders = preorders;
         this.campaigns = campaigns;
@@ -93,9 +91,9 @@ public class PreorderQueryService {
     /** 관리자 상세. 작업 · 시도 · 이력까지 함께 읽는다. */
     public PreorderView.AdminDetail findOneForAdmin(String preorderToken) {
         PreorderSnapshot preorder = preorders.getByToken(preorderToken);
-        List<PreorderSyncJob> jobs = syncJobs.findByPreorderIdOrderByJobType(preorder.id());
+        List<SyncJobSnapshot> jobs = syncJobs.findByPreorder(preorder.id());
         return new PreorderView.AdminDetail(preorder, campaigns.getBatch(preorder.shipmentBatchId()), jobs,
-                syncAttempts.findByJobIds(jobs.stream().map(PreorderSyncJob::getId).toList()),
+                syncAttempts.findByJobIds(jobs.stream().map(SyncJobSnapshot::id).toList()),
                 preorders.history(preorder.id()));
     }
 
@@ -114,12 +112,7 @@ public class PreorderQueryService {
     }
 
     private Map<Long, SyncJobStatus> registerJobStatuses(Collection<PreorderSnapshot> found) {
-        if (found.isEmpty()) {
-            return Map.of();
-        }
-        return syncJobs.findByPreorderIdInAndJobType(found.stream().map(PreorderSnapshot::id).toList(),
-                        SyncJobType.REGISTER).stream()
-                .collect(Collectors.toMap(PreorderSyncJob::getPreorderId, PreorderSyncJob::getStatus));
+        return syncJobs.registerStatuses(found.stream().map(PreorderSnapshot::id).toList());
     }
 
     @FunctionalInterface

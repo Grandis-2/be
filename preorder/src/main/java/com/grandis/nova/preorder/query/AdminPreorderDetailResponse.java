@@ -26,7 +26,7 @@ record AdminPreorderDetailResponse(
                 preorder.admissionTicketId(), preorder.internalNote(),
                 view.syncJobs().stream()
                         .map(job -> SyncJobResponse.from(job, preorder.preorderToken(),
-                                attempts.getOrDefault(job.getId(), List.of())))
+                                attempts.getOrDefault(job.id(), List.of())))
                         .toList(),
                 view.events().stream().map(PreorderEventResponse::from).toList());
     }

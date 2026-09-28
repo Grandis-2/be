@@ -10,10 +10,10 @@ import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.preorder.PreorderTrigger;
 import com.grandis.nova.preorder.preorder.Preorders;
-import com.grandis.nova.preorder.syncjob.PreorderSyncJob;
-import com.grandis.nova.preorder.syncjob.PreorderSyncJobRepository;
+import com.grandis.nova.preorder.syncjob.SyncJobSnapshot;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 import com.grandis.nova.preorder.syncjob.SyncJobType;
+import com.grandis.nova.preorder.syncjob.SyncJobs;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -43,13 +43,13 @@ public class PreorderEventHandler {
             EventActor.SYSTEM, "DEADLINE_EXCEEDED");
 
     private final Preorders preorders;
-    private final PreorderSyncJobRepository syncJobs;
+    private final SyncJobs syncJobs;
     private final PreorderLedger ledger;
     private final OutboxWriter outboxWriter;
     private final JsonMapper jsonMapper;
 
     public PreorderEventHandler(Preorders preorders,
-                                PreorderSyncJobRepository syncJobs, PreorderLedger ledger, OutboxWriter outboxWriter,
+                                SyncJobs syncJobs, PreorderLedger ledger, OutboxWriter outboxWriter,
                                 JsonMapper jsonMapper) {
         this.preorders = preorders;
         this.syncJobs = syncJobs;
@@ -64,14 +64,14 @@ public class PreorderEventHandler {
      */
     @Transactional
     public void onExternalJobSucceeded(ExternalJobSucceeded message) {
-        Optional<PreorderSyncJob> job = syncJobs.findById(message.syncJobId())
-                .filter(found -> found.getStatus() == SyncJobStatus.SUCCEEDED);
+        Optional<SyncJobSnapshot> job = syncJobs.findById(message.syncJobId())
+                .filter(found -> found.status() == SyncJobStatus.SUCCEEDED);
         if (job.isEmpty()) {
             log.warn("성공하지 않은 작업의 성공 이벤트를 무시한다 syncJobId={}", message.syncJobId());
             return;
         }
-        Long preorderId = job.get().getPreorderId();
-        if (job.get().getJobType() == SyncJobType.REGISTER) {
+        Long preorderId = job.get().preorderId();
+        if (job.get().jobType() == SyncJobType.REGISTER) {
             ledger.confirmRegister(preorderId, message.externalNumber());
         } else {
             ledger.fire(preorderId, PreorderTrigger.CANCEL_COMPLETED, EventActor.SYSTEM, null);
@@ -116,13 +116,13 @@ public class PreorderEventHandler {
 
     /** 예약 행은 이미 잠겨 있다. CANCEL 작업이 이미 있으면 만들지 않는다 — 같은 결과를 두 번 받아도 작업은 하나다. */
     private void requestExternalCancel(PreorderSnapshot preorder) {
-        if (syncJobs.findByPreorderIdAndJobType(preorder.id(), SyncJobType.CANCEL).isPresent()) {
+        if (syncJobs.exists(preorder.id(), SyncJobType.CANCEL)) {
             return;
         }
         String payload = jsonMapper.writeValueAsString(new CancelRequestPayload(preorder.preorderToken(),
                 preorder.externalReference(), mockCancelReason(preorder.id())));
-        PreorderSyncJob job = syncJobs.save(PreorderSyncJob.cancel(preorder.id(), payload));
-        outboxWriter.append(new CancelJobReady(job.getId(), preorder.preorderToken()));
+        Long jobId = syncJobs.createCancel(preorder.id(), payload);
+        outboxWriter.append(new CancelJobReady(jobId, preorder.preorderToken()));
     }
 
     /** 이력에 남길 거절 사유. order 가 사유를 주지 않았으면 결과만 남긴다. */

@@ -24,11 +24,15 @@ public record SyncJobResponse(
         List<SyncAttemptResponse> attempts
 ) {
 
-    public static SyncJobResponse from(PreorderSyncJob job, String preorderToken, List<SyncAttempt> attempts) {
+    public static SyncJobResponse from(SyncJobSnapshot job, String preorderToken, List<SyncAttempt> attempts) {
         List<SyncAttemptResponse> responses = attempts.stream().map(SyncAttemptResponse::from).toList();
-        return new SyncJobResponse(job.getId(), preorderToken, job.getJobType(), job.getStatus(),
-                responses.size(), lastErrorCode(attempts), job.getLeaseExpiresAt(), job.getDeadLetteredAt(),
-                job.getCreatedAt(), job.getUpdatedAt(), job.getRequestPayload(), responses);
+        return new SyncJobResponse(job.id(), preorderToken, job.jobType(), job.status(),
+                responses.size(), lastErrorCode(attempts), job.leaseExpiresAt(), job.deadLetteredAt(),
+                job.createdAt(), job.updatedAt(), job.requestPayload(), responses);
+    }
+
+    static SyncJobResponse from(PreorderSyncJob job, String preorderToken, List<SyncAttempt> attempts) {
+        return from(SyncJobSnapshot.of(job), preorderToken, attempts);
     }
 
     private static String lastErrorCode(List<SyncAttempt> attempts) {
