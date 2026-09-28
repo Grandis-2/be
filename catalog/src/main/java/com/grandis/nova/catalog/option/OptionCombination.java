@@ -53,7 +53,18 @@ public final class OptionCombination {
 
     /** 축이 없는 상품의 유일한 옵션. 상품당 하나는 DB UNIQUE(product_id, combination_key = '') 가 지킨다. */
     public static OptionCombination none(Long productId, String title) {
-        return new OptionCombination(productId, List.of(), ProductOptionValue.normalize(title));
+        return new OptionCombination(productId, List.of(), titleOf(List.of(), title));
+    }
+
+    /**
+     * 옵션 표시명 규칙 한 곳 — 축 순서의 값 표시명을 " / " 로 잇고(블랙 / 256GB), 값이 없으면 상품 표시명의 정규화값이다.
+     * 저장 전에 길이를 재는 검증기도 이 함수를 쓴다. 따로 만들면 검사와 저장이 어긋난다.
+     */
+    public static String titleOf(List<String> displayValues, String productTitle) {
+        if (displayValues.isEmpty()) {
+            return ProductOptionValue.normalize(productTitle);
+        }
+        return String.join(TITLE_SEPARATOR, displayValues);
     }
 
     public static OptionCombination of(Long productId, List<Pick> picks) {
@@ -110,7 +121,7 @@ public final class OptionCombination {
         if (isStandalone()) {
             return standaloneTitle;
         }
-        return picks.stream().map(pick -> pick.value().getValue()).collect(Collectors.joining(TITLE_SEPARATOR));
+        return titleOf(picks.stream().map(pick -> pick.value().getValue()).toList(), null);
     }
 
     /** 목록 필터 축(color · storage)의 정규화값 JSON. 없으면 null. preorder 가 접수 때 이 JSON 을 복사한다. */
