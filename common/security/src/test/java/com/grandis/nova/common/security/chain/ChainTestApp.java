@@ -11,15 +11,17 @@ import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 체인 테스트용 최소 앱. SecurityConfig 는 서비스에 복사될 예시 그대로다 — 이 규칙이 각 서비스에 복사될 것이다.
  * 공개 8개(api-spec): 상품 GET 4 · 배송 차수 안내 · /auth/kakao/* 2 · /admin/session · /session/refresh(쿠키로 식별). 여기서는 대표만 둔다.
- * 컨트롤러는 조회 실패 시 닫는 경로 5개·공개 경로·관리자 경로·@CurrentCustomerId 경로·본문 있는 경로를 하나씩 대표한다.
+ * 컨트롤러는 조회 실패 시 닫는 경로 7개(공통 기본 3 + 이 앱이 설정으로 더한 도메인 경로 4)·공개 경로·관리자 경로·@CurrentCustomerId 경로·본문 있는 경로를 하나씩 대표한다.
  */
 @SpringBootApplication(scanBasePackages = "com.grandis.nova")
 public class ChainTestApp {
@@ -58,6 +60,16 @@ public class ChainTestApp {
             return ApiResponse.ok(Map.of("scope", "admin"));
         }
 
+        @PostMapping("/api/v1/admin/preorders/{id}/cancel")
+        ApiResponse<Map<String, String>> adminCancel(@PathVariable("id") String id) {
+            return ApiResponse.ok(Map.of("ok", "admin-cancel"));
+        }
+
+        @PutMapping("/api/v1/me/default-address")
+        ApiResponse<Map<String, String>> putAddress(@CurrentCustomerId Long customerId) {
+            return ApiResponse.ok(Map.of("ok", "address"));
+        }
+
         @PostMapping("/api/v1/admin/session")
         ApiResponse<Map<String, String>> adminLogin() {
             return ApiResponse.ok(Map.of("role", "ADMIN"));
@@ -68,28 +80,38 @@ public class ChainTestApp {
             return ApiResponse.ok(Map.of("ok", "refresh"));
         }
 
-        @PostMapping("/api/v1/reservations")
+        @PostMapping("/api/v1/preorders")
         ApiResponse<Map<String, String>> intake(@RequestBody(required = false) IntakeRequest body) {
             return ApiResponse.ok(Map.of("ok", "intake"));
         }
 
-        @PostMapping("/api/v1/reservations/{id}/cancel")
-        ApiResponse<Map<String, String>> cancelReservation(@PathVariable String id) {
+        @GetMapping("/api/v1/preorders/{id}")
+        ApiResponse<Map<String, String>> preorder(@PathVariable("id") String id) {
+            return ApiResponse.ok(Map.of("id", id));
+        }
+
+        @PostMapping("/api/v1/preorders/{id}/cancel")
+        ApiResponse<Map<String, String>> cancelPreorder(@PathVariable("id") String id) {
             return ApiResponse.ok(Map.of("ok", "cancel"));
         }
 
+        @PatchMapping("/api/v1/orders/{orderId}/shipping-address")
+        ApiResponse<Map<String, String>> changeShippingAddress(@PathVariable("orderId") String orderId) {
+            return ApiResponse.ok(Map.of("ok", "address"));
+        }
+
         @PostMapping("/api/v1/orders/{orderId}/cancel")
-        ApiResponse<Map<String, String>> cancelOrder(@PathVariable String orderId) {
+        ApiResponse<Map<String, String>> cancelOrder(@PathVariable("orderId") String orderId) {
             return ApiResponse.ok(Map.of("ok", "cancel"));
         }
 
         @PostMapping("/api/v1/orders/{orderId}/payment-attempts")
-        ApiResponse<Map<String, String>> paymentInit(@PathVariable String orderId) {
+        ApiResponse<Map<String, String>> paymentInit(@PathVariable("orderId") String orderId) {
             return ApiResponse.ok(Map.of("ok", "init"));
         }
 
         @PostMapping("/api/v1/orders/{orderId}/payment-attempts/{tx}/confirm")
-        ApiResponse<Map<String, String>> confirm(@PathVariable String orderId, @PathVariable String tx) {
+        ApiResponse<Map<String, String>> confirm(@PathVariable("orderId") String orderId, @PathVariable("tx") String tx) {
             return ApiResponse.ok(Map.of("ok", "confirm"));
         }
     }

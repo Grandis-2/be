@@ -3,13 +3,14 @@ package com.grandis.nova.member;
 import com.grandis.nova.member.support.MemberIntegrationTest;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.grandis.nova.common.security.JwtAuthenticationFilter;
+import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.security.JwtTokenProvider;
 import com.grandis.nova.common.security.RevocationChecker;
 import com.grandis.nova.common.security.Role;
@@ -62,13 +63,26 @@ class LogoutWhenRedisDownTest {
     }
 
     @Test
+    @DisplayName("DELETE /admin/sessions: 표식을 못 심으면 503 DEPENDENCY_UNAVAILABLE(retryable) — 아무 세션도 안 끊긴 것을 204 로 숨기지 않는다")
+    void revokeAllAdminSessionsIs503WhenRedisDown() throws Exception {
+        when(checker.isRevoked(any())).thenReturn(false);   // 부르는 관리자 토큰은 살아 있다
+        doThrow(DOWN).when(revocations).revokeAll(any(), any());
+        String admin = provider.create("admin", Role.ADMIN, UUID.randomUUID(), TokenType.ACCESS);
+
+        mvc().perform(delete("/api/v1/admin/sessions").header(BearerTokens.HEADER, BearerTokens.value(admin)))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error.code").value("DEPENDENCY_UNAVAILABLE"))
+                .andExpect(jsonPath("$.error.details.retryable").value(true));
+    }
+
+    @Test
     @DisplayName("저장소·체커가 전부 예외를 던지면 503 DEPENDENCY_UNAVAILABLE(details.retryable=true) 이고 refresh 쿠키는 만료로 내려온다")
     void logoutIs503RetryableWhenRedisDown() throws Exception {
         doThrow(DOWN).when(refreshTokens).revokeSession(any());
         doThrow(DOWN).when(revocations).revokeSession(any(), any());
         doThrow(new com.grandis.nova.common.security.RevocationCheckFailedException(DOWN)).when(checker).isRevoked(any());
 
-        mvc().perform(delete("/api/v1/session").header(JwtAuthenticationFilter.HEADER, accessToken()))
+        mvc().perform(delete("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(accessToken())))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.error.code").value("DEPENDENCY_UNAVAILABLE"))
                 .andExpect(jsonPath("$.error.details.retryable").value(true))
@@ -82,7 +96,7 @@ class LogoutWhenRedisDownTest {
         doThrow(DOWN).when(refreshTokens).find(any());
 
         mvc().perform(delete("/api/v1/session")
-                        .header(JwtAuthenticationFilter.HEADER, accessToken())
+                        .header(BearerTokens.HEADER, BearerTokens.value(accessToken()))
                         .cookie(new jakarta.servlet.http.Cookie(AuthCookies.REFRESH_TOKEN, "opaque-token")))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.error.code").value("DEPENDENCY_UNAVAILABLE"))
@@ -98,7 +112,7 @@ class LogoutWhenRedisDownTest {
     void markStillWrittenWhenDeleteFails() throws Exception {
         doThrow(DOWN).when(refreshTokens).revokeSession(any());
 
-        mvc().perform(delete("/api/v1/session").header(JwtAuthenticationFilter.HEADER, accessToken()))
+        mvc().perform(delete("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(accessToken())))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.error.code").value("DEPENDENCY_UNAVAILABLE"))
                 .andExpect(jsonPath("$.error.details.retryable").value(true))
@@ -113,7 +127,7 @@ class LogoutWhenRedisDownTest {
     void refreshStillDeletedWhenMarkFails() throws Exception {
         doThrow(DOWN).when(revocations).revokeSession(any(), any());
 
-        mvc().perform(delete("/api/v1/session").header(JwtAuthenticationFilter.HEADER, accessToken()))
+        mvc().perform(delete("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(accessToken())))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.error.code").value("DEPENDENCY_UNAVAILABLE"))
                 .andExpect(jsonPath("$.error.details.retryable").value(true))
