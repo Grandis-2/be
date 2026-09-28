@@ -8,7 +8,7 @@ import com.grandis.nova.preorder.event.PreorderEventHandler;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
-import com.grandis.nova.preorder.preorder.PreorderRepository;
+import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
@@ -48,7 +48,7 @@ class PayabilityApiTest {
     CancelStarter cancelStarter;
 
     @Autowired
-    PreorderRepository preorders;
+    Preorders preorders;
 
     @MockitoBean
     CatalogClient catalogClient;
@@ -63,7 +63,7 @@ class PayabilityApiTest {
         fixtures = new ShopFixtures(jdbcTemplate);
         customerId = fixtures.customer();
         AcceptResult accepted = new AcceptFixtures(acceptService, fixtures, catalogClient).accept(customerId);
-        preorderId = accepted.preorder().getId();
+        preorderId = accepted.preorder().id();
         token = AcceptFixtures.tokenOf(accepted);
     }
 

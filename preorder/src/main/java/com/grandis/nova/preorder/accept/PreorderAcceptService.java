@@ -7,8 +7,7 @@ import com.grandis.nova.preorder.admission.AdmissionTicketVerifier;
 import com.grandis.nova.preorder.integration.catalog.CatalogReader;
 import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
 import com.grandis.nova.preorder.preorder.EventActor;
-import com.grandis.nova.preorder.preorder.PreorderRepository;
-import com.grandis.nova.preorder.preorder.PreorderStatus;
+import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.web.ValidationFailures;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -40,11 +39,11 @@ public class PreorderAcceptService {
     private final AdmissionTicketVerifier ticketVerifier;
     private final CatalogReader catalogReader;
     private final PreorderAcceptTransaction transaction;
-    private final PreorderRepository preorders;
+    private final Preorders preorders;
     private final MeterRegistry meterRegistry;
 
     public PreorderAcceptService(AdmissionTicketVerifier ticketVerifier, CatalogReader catalogReader,
-                                 PreorderAcceptTransaction transaction, PreorderRepository preorders,
+                                 PreorderAcceptTransaction transaction, Preorders preorders,
                                  MeterRegistry meterRegistry) {
         this.ticketVerifier = ticketVerifier;
         this.catalogReader = catalogReader;
@@ -116,9 +115,8 @@ public class PreorderAcceptService {
             // 같은 키가 다른 모델로 동시에 들어오면 서로 다른 회차를 잠가 재전송 확인을 지나칠 수 있다. 다시 본다.
             case UQ_IDEMPOTENCY -> transaction.findReplay(command).orElseThrow(() -> e);
             case UQ_ACTIVE -> throw new BusinessException(PreorderErrorCode.ACTIVE_PREORDER_EXISTS,
-                    preorders.findFirstByCustomerIdAndProductIdAndStatusNot(
-                                    command.customerId(), command.productId(), PreorderStatus.CANCELED)
-                            .map(existing -> Map.<String, Object>of("existingPreorderId", existing.getPreorderToken()))
+                    preorders.findActive(command.customerId(), command.productId())
+                            .map(existing -> Map.<String, Object>of("existingPreorderId", existing.preorderToken()))
                             .orElse(null));
             case UQ_ADMISSION -> throw new BusinessException(PreorderErrorCode.ADMISSION_TICKET_USED);
             case FK_CUSTOMER -> throw new BusinessException(PreorderErrorCode.MEMBER_NOT_FOUND);

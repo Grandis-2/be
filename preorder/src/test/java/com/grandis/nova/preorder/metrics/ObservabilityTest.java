@@ -98,7 +98,7 @@ class ObservabilityTest {
     @Test
     void 이벤트는_종류별_처리_결과와_소비_지연을_남긴다() {
         AcceptResult result = accepts.accept(fixtures.customer());
-        Long jobId = fixtures.workerSucceeds(result.preorder().getId(), "REGISTER");
+        Long jobId = fixtures.workerSucceeds(result.preorder().id(), "REGISTER");
         long succeeded = timerCount("preorder.events.handle", "eventType", "EXTERNAL_JOB_SUCCEEDED");
         long unknown = timerCount("preorder.events.handle", "eventType", "UNKNOWN");
 
@@ -120,7 +120,7 @@ class ObservabilityTest {
     @Test
     void 발생_시각이_미래면_소비_지연을_0_으로_남긴다() {
         AcceptResult result = accepts.accept(fixtures.customer());
-        Long jobId = fixtures.workerSucceeds(result.preorder().getId(), "REGISTER");
+        Long jobId = fixtures.workerSucceeds(result.preorder().id(), "REGISTER");
         Timer lag = registry.timer("preorder.events.lag", "eventType", "EXTERNAL_JOB_SUCCEEDED");
         long count = lag.count();
         double total = lag.totalTime(TimeUnit.NANOSECONDS);

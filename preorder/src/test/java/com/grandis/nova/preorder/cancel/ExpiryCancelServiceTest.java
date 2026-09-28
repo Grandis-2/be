@@ -7,7 +7,7 @@ import com.grandis.nova.preorder.event.PreorderEventHandler;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
-import com.grandis.nova.preorder.preorder.PreorderRepository;
+import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.Concurrently.Outcome;
 import com.grandis.nova.preorder.support.Concurrently;
@@ -41,7 +41,7 @@ class ExpiryCancelServiceTest {
     CancelStarter cancelStarter;
 
     @Autowired
-    PreorderRepository preorders;
+    Preorders preorders;
 
     @Autowired
     JdbcTemplate jdbcTemplate;
@@ -57,7 +57,7 @@ class ExpiryCancelServiceTest {
     void setUp() {
         fixtures = new ShopFixtures(jdbcTemplate);
         AcceptResult accepted = new AcceptFixtures(acceptService, fixtures, catalogClient).accept(fixtures.customer());
-        preorderId = accepted.preorder().getId();
+        preorderId = accepted.preorder().id();
         token = AcceptFixtures.tokenOf(accepted);
     }
 

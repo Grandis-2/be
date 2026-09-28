@@ -97,6 +97,7 @@ public class Preorder extends BaseEntity {
         this.productTitleSnapshot = draft.productTitleSnapshot();
         this.optionTitleSnapshot = draft.optionTitleSnapshot();
         this.unitPriceSnapshot = draft.unitPriceSnapshot();
+        this.internalNote = draft.internalNote();
         this.status = PreorderStatus.PENDING_SYNC;
         this.eventSequence = PreorderEvent.FIRST_SEQUENCE;
     }

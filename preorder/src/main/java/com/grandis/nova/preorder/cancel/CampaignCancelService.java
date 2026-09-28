@@ -4,10 +4,9 @@ import com.grandis.nova.preorder.campaign.PreorderCampaignRepository;
 import com.grandis.nova.preorder.integration.catalog.CatalogReader;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
-import com.grandis.nova.preorder.preorder.Preorder;
-import com.grandis.nova.preorder.preorder.PreorderRepository;
+import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
-import org.springframework.data.domain.Limit;
+import com.grandis.nova.preorder.preorder.Preorders;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -28,13 +27,13 @@ public class CampaignCancelService {
     private static final int REASON_MAX_LENGTH = 500;
 
     private final PreorderCampaignRepository campaigns;
-    private final PreorderRepository preorders;
+    private final Preorders preorders;
     private final CancelStarter cancelStarter;
     private final CatalogReader catalogReader;
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
 
-    public CampaignCancelService(PreorderCampaignRepository campaigns, PreorderRepository preorders,
+    public CampaignCancelService(PreorderCampaignRepository campaigns, Preorders preorders,
                                  CancelStarter cancelStarter, CatalogReader catalogReader,
                                  TransactionTemplate transactionTemplate, Clock clock) {
         this.campaigns = campaigns;
@@ -58,8 +57,7 @@ public class CampaignCancelService {
 
     /** @return 한 묶음을 가득 채웠으면 true — 남은 예약이 더 있을 수 있다 */
     private boolean cancelBatch(Long productId, String reason) {
-        List<Preorder> batch = preorders.findByProductIdAndStatusInOrderByQueuePosition(productId, ACTIVE,
-                Limit.of(BATCH_SIZE));
+        List<PreorderSnapshot> batch = preorders.findByProduct(productId, ACTIVE, BATCH_SIZE);
         batch.forEach(preorder -> cancelStarter.start(preorder, EventActor.ADMIN, reason,
                 CancelReason.CAMPAIGN_CANCELED));
         return batch.size() == BATCH_SIZE;

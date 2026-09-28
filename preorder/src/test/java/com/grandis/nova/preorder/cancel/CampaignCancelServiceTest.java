@@ -11,7 +11,7 @@ import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
-import com.grandis.nova.preorder.preorder.PreorderRepository;
+import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
@@ -70,7 +70,7 @@ class CampaignCancelServiceTest {
     PreorderEventHandler handler;
 
     @Autowired
-    PreorderRepository preorders;
+    Preorders preorders;
 
     @Autowired
     JdbcTemplate jdbcTemplate;
@@ -91,12 +91,12 @@ class CampaignCancelServiceTest {
 
     @Test
     void 판매_중지하면_회차를_마감하고_진행_중_예약만_관리자_사유로_취소를_시작한다() {
-        Long pending = accept().preorder().getId();
+        Long pending = accept().preorder().id();
         AcceptResult payable = accept();
         handler.onExternalJobSucceeded(new ExternalJobSucceeded(
-                fixtures.workerSucceeds(payable.preorder().getId(), "REGISTER"),
+                fixtures.workerSucceeds(payable.preorder().id(), "REGISTER"),
                 AcceptFixtures.tokenOf(payable), "REGISTER", "R-" + ShopFixtures.unique()));
-        Long alreadyCanceling = accept().preorder().getId();
+        Long alreadyCanceling = accept().preorder().id();
         cancelStarter.start(preorders.findById(alreadyCanceling).orElseThrow(), EventActor.USER, null,
                 CancelReason.USER);
         Instant before = Instant.now();
@@ -105,7 +105,7 @@ class CampaignCancelServiceTest {
 
         assertThat(closesAt()).isBeforeOrEqualTo(Instant.now()).isAfterOrEqualTo(before.minusSeconds(1));
         assertThat(statuses()).containsOnly("CANCELING");
-        for (Long id : List.of(pending, payable.preorder().getId())) {
+        for (Long id : List.of(pending, payable.preorder().id())) {
             assertThat(cancelingEvents(id)).containsExactly(Map.of("actor", "ADMIN", "reason", "공급 차질로 사전예약 취소"));
             assertThat(outboxReasons(id)).containsExactly("CAMPAIGN_CANCELED");
         }
@@ -137,7 +137,7 @@ class CampaignCancelServiceTest {
     @Test
     void 중간에_멈춘_뒤_같은_이벤트를_다시_받으면_남은_예약만_이어서_취소한다() {
         List<Long> ids = IntStream.rangeClosed(0, CampaignCancelService.BATCH_SIZE)
-                .mapToObj(i -> accept().preorder().getId())
+                .mapToObj(i -> accept().preorder().id())
                 .toList();
         AtomicInteger starts = new AtomicInteger();
         willAnswer(invocation -> {
@@ -196,7 +196,7 @@ class CampaignCancelServiceTest {
                 release.countDown();
             }
 
-            Long preorderId = accepting.get(10, TimeUnit.SECONDS).preorder().getId();
+            Long preorderId = accepting.get(10, TimeUnit.SECONDS).preorder().id();
             canceling.get(10, TimeUnit.SECONDS);
             assertThat(cancelingEvents(preorderId)).hasSize(1);
             assertThat(statuses()).containsExactly("CANCELING");
@@ -220,12 +220,12 @@ class CampaignCancelServiceTest {
 
     @Test
     void 사유가_비었으면_기본_문구를_길면_500자로_잘라_남긴다() {
-        Long blank = accept().preorder().getId();
+        Long blank = accept().preorder().id();
         campaignCancelService.cancel(product.productId(), " ");
         assertThat(cancelingEvents(blank).getFirst().get("reason")).isEqualTo("사전예약 회차 판매 중지");
 
         PreorderProduct other = fixtures.openPreorderProduct();
-        Long longReason = accepts.accept(fixtures.customer(), other).preorder().getId();
+        Long longReason = accepts.accept(fixtures.customer(), other).preorder().id();
         campaignCancelService.cancel(other.productId(), "가".repeat(600));
         assertThat((String) cancelingEvents(longReason).getFirst().get("reason")).hasSize(500);
     }

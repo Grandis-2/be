@@ -100,13 +100,13 @@ class PreorderQueryApiTest {
     void 상태와_상품으로_거른다() throws Exception {
         AcceptResult kept = accepts.accept(customerId);
         AcceptResult canceled = accepts.accept(customerId);
-        cancels.complete(canceled.preorder().getId());
+        cancels.complete(canceled.preorder().id());
 
         mockMvc.perform(get("/api/v1/preorders").param("status", "PENDING_SYNC")
                         .with(customer(customerId)))
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(kept)));
-        mockMvc.perform(get("/api/v1/preorders").param("productId", kept.preorder().getProductId().toString())
+        mockMvc.perform(get("/api/v1/preorders").param("productId", kept.preorder().productId().toString())
                         .with(customer(customerId)))
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(kept)));
@@ -133,7 +133,7 @@ class PreorderQueryApiTest {
         AcceptResult accepted = accepts.accept(customerId);
         String externalReference = "EXT-" + ShopFixtures.unique();
         transactionTemplate.executeWithoutResult(status ->
-                ledger.confirmRegister(accepted.preorder().getId(), externalReference));
+                ledger.confirmRegister(accepted.preorder().id(), externalReference));
 
         mockMvc.perform(get("/api/v1/preorders/" + AcceptFixtures.tokenOf(accepted))
                         .with(customer(customerId)))
@@ -149,7 +149,7 @@ class PreorderQueryApiTest {
     @Test
     void 취소된_예약은_결제_기한도_취소_버튼도_없다() throws Exception {
         AcceptResult accepted = accepts.accept(customerId);
-        cancels.complete(accepted.preorder().getId());
+        cancels.complete(accepted.preorder().id());
 
         mockMvc.perform(get("/api/v1/preorders/" + AcceptFixtures.tokenOf(accepted))
                         .with(customer(customerId)))
@@ -174,7 +174,7 @@ class PreorderQueryApiTest {
     @Test
     void 이력은_번호_순으로_준다() throws Exception {
         AcceptResult accepted = accepts.accept(customerId);
-        cancels.complete(accepted.preorder().getId());
+        cancels.complete(accepted.preorder().id());
 
         mockMvc.perform(get("/api/v1/preorders/" + AcceptFixtures.tokenOf(accepted) + "/history")
                         .with(customer(customerId)))

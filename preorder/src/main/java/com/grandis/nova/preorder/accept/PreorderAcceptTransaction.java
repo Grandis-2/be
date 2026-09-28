@@ -11,9 +11,9 @@ import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
 import com.grandis.nova.preorder.outbox.OutboxMessage.RegisterJobReady;
 import com.grandis.nova.preorder.outbox.OutboxWriter;
 import com.grandis.nova.preorder.preorder.NewPreorder;
-import com.grandis.nova.preorder.preorder.Preorder;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
-import com.grandis.nova.preorder.preorder.PreorderRepository;
+import com.grandis.nova.preorder.preorder.PreorderSnapshot;
+import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.syncjob.PreorderSyncJob;
 import com.grandis.nova.preorder.syncjob.PreorderSyncJobRepository;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -48,7 +48,7 @@ class PreorderAcceptTransaction {
 
     private final PreorderCampaignRepository campaigns;
     private final ShipmentBatchRepository batches;
-    private final PreorderRepository preorders;
+    private final Preorders preorders;
     private final PreorderLedger ledger;
     private final PreorderSyncJobRepository syncJobs;
     private final OutboxWriter outboxWriter;
@@ -59,7 +59,7 @@ class PreorderAcceptTransaction {
     private final Timer campaignLockWait;
 
     PreorderAcceptTransaction(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
-                                     PreorderRepository preorders, PreorderLedger ledger,
+                                     Preorders preorders, PreorderLedger ledger,
                                      PreorderSyncJobRepository syncJobs, OutboxWriter outboxWriter,
                                      JsonMapper jsonMapper, Clock clock,
                                      @Value("${nova.external-mock.scope:preorder}") String externalScope,
@@ -86,7 +86,7 @@ class PreorderAcceptTransaction {
         Optional<PreorderCampaign> campaign =
                 campaignLockWait.record(() -> campaigns.findForUpdate(command.productId()));
 
-        Optional<Preorder> existing = preorders.findByCustomerIdAndIdempotencyKey(
+        Optional<PreorderSnapshot> existing = preorders.findByIdempotencyKey(
                 command.customerId(), command.idempotencyKey());
         if (existing.isPresent()) {
             return replay(existing.get(), command);
@@ -101,16 +101,14 @@ class PreorderAcceptTransaction {
                         "순번이 속한 배송 차수가 없다: productId=" + command.productId() + ", position=" + position));
 
         String preorderToken = UUID.randomUUID().toString();
-        Preorder preorder = ledger.accept(new NewPreorder(preorderToken, command.customerId(), command.productId(),
-                command.optionId(), batch.getId(), position, command.admissionTicketId(), command.idempotencyKey(),
-                option.productTitle(), option.optionTitle(), option.price()), command.actor(), command.reason());
-        if (command.internalNote() != null) {
-            preorder.changeInternalNote(command.internalNote());
-        }
+        PreorderSnapshot preorder = ledger.accept(new NewPreorder(preorderToken, command.customerId(),
+                command.productId(), command.optionId(), batch.getId(), position, command.admissionTicketId(),
+                command.idempotencyKey(), option.productTitle(), option.optionTitle(), option.price(),
+                command.internalNote()), command.actor(), command.reason());
 
         String payload = jsonMapper.writeValueAsString(RegisterRequestPayload.of(preorderToken,
                 command.customerId(), command.productId(), option.sku(), externalScope));
-        PreorderSyncJob job = syncJobs.save(PreorderSyncJob.register(preorder.getId(), payload));
+        PreorderSyncJob job = syncJobs.save(PreorderSyncJob.register(preorder.id(), payload));
         outboxWriter.append(new RegisterJobReady(job.getId(), preorderToken));
 
         return new AcceptResult(preorder, batch, false);
@@ -122,22 +120,22 @@ class PreorderAcceptTransaction {
      */
     @Transactional(readOnly = true)
     public Optional<AcceptResult> findReplay(AcceptCommand command) {
-        return preorders.findByCustomerIdAndIdempotencyKey(command.customerId(), command.idempotencyKey())
+        return preorders.findByIdempotencyKey(command.customerId(), command.idempotencyKey())
                 .map(existing -> replay(existing, command));
     }
 
-    private AcceptResult replay(Preorder existing, AcceptCommand command) {
+    private AcceptResult replay(PreorderSnapshot existing, AcceptCommand command) {
         List<String> different = new ArrayList<>();
-        if (!existing.getProductId().equals(command.productId())) {
+        if (!existing.productId().equals(command.productId())) {
             different.add("productId");
         }
-        if (!existing.getOptionId().equals(command.optionId())) {
+        if (!existing.optionId().equals(command.optionId())) {
             different.add("optionId");
         }
         if (!different.isEmpty()) {
             throw new BusinessException(PreorderErrorCode.KEY_PAYLOAD_MISMATCH, Map.of("fields", different));
         }
-        return new AcceptResult(existing, batches.getAssigned(existing.getShipmentBatchId()), true);
+        return new AcceptResult(existing, batches.getAssigned(existing.shipmentBatchId()), true);
     }
 
     private static OptionSnapshot requireOnSale(AcceptCommand command, Optional<ProductCatalog> product) {

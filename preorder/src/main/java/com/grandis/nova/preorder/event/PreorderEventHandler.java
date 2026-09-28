@@ -4,13 +4,12 @@ import com.grandis.nova.preorder.cancel.CancelRequestPayload;
 import com.grandis.nova.preorder.outbox.OutboxMessage.CancelJobReady;
 import com.grandis.nova.preorder.outbox.OutboxWriter;
 import com.grandis.nova.preorder.preorder.EventActor;
-import com.grandis.nova.preorder.preorder.Preorder;
-import com.grandis.nova.preorder.preorder.PreorderEvent;
-import com.grandis.nova.preorder.preorder.PreorderEventRepository;
+import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
-import com.grandis.nova.preorder.preorder.PreorderRepository;
+import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.preorder.PreorderTrigger;
+import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.syncjob.PreorderSyncJob;
 import com.grandis.nova.preorder.syncjob.PreorderSyncJobRepository;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
@@ -43,18 +42,16 @@ public class PreorderEventHandler {
             EventActor.ADMIN, "ADMIN_CANCEL",
             EventActor.SYSTEM, "DEADLINE_EXCEEDED");
 
-    private final PreorderRepository preorders;
-    private final PreorderEventRepository events;
+    private final Preorders preorders;
     private final PreorderSyncJobRepository syncJobs;
     private final PreorderLedger ledger;
     private final OutboxWriter outboxWriter;
     private final JsonMapper jsonMapper;
 
-    public PreorderEventHandler(PreorderRepository preorders, PreorderEventRepository events,
+    public PreorderEventHandler(Preorders preorders,
                                 PreorderSyncJobRepository syncJobs, PreorderLedger ledger, OutboxWriter outboxWriter,
                                 JsonMapper jsonMapper) {
         this.preorders = preorders;
-        this.events = events;
         this.syncJobs = syncJobs;
         this.ledger = ledger;
         this.outboxWriter = outboxWriter;
@@ -90,16 +87,16 @@ public class PreorderEventHandler {
      */
     @Transactional
     public void onOrderSettled(PreorderOrderSettled message) {
-        Preorder preorder = preorders.findByPreorderToken(message.preorderId())
+        PreorderSnapshot preorder = preorders.findByToken(message.preorderId())
                 .orElseThrow(() -> new IllegalArgumentException("예약이 없다: " + message.preorderId()));
-        if (!isCurrentCancel(preorder.getId(), message.cancelSequence())) {
+        if (!isCurrentCancel(preorder.id(), message.cancelSequence())) {
             log.warn("지금 취소 시도의 결과가 아니라 무시한다 preorderId={} cancelSequence={}",
                     message.preorderId(), message.cancelSequence());
             return;
         }
         switch (message.result()) {
             case NO_ORDER, CANCELED -> requestExternalCancel(preorder);
-            case REJECTED -> ledger.fire(preorder.getId(), PreorderTrigger.CANCEL_REJECTED,
+            case REJECTED -> ledger.fire(preorder.id(), PreorderTrigger.CANCEL_REJECTED,
                     EventActor.SYSTEM, rejectionReason(message.reason()));
         }
     }
@@ -109,23 +106,23 @@ public class PreorderEventHandler {
      * 잠금은 이 트랜잭션 끝까지 유지되므로 뒤이은 판단 사이에 새 취소가 끼어들지 못한다.
      */
     private boolean isCurrentCancel(Long preorderId, Long cancelSequence) {
-        PreorderStatus status = preorders.findStatusForUpdate(preorderId).orElseThrow();
+        PreorderStatus status = ledger.lockStatus(preorderId);
         return status == PreorderStatus.CANCELING
-                && events.findFirstByPreorderIdAndToStatusOrderByEventSequenceDesc(preorderId, PreorderStatus.CANCELING)
-                        .map(PreorderEvent::getEventSequence)
+                && preorders.lastTransitionTo(preorderId, PreorderStatus.CANCELING)
+                        .map(PreorderHistoryEntry::eventSequence)
                         .filter(cancelSequence::equals)
                         .isPresent();
     }
 
     /** 예약 행은 이미 잠겨 있다. CANCEL 작업이 이미 있으면 만들지 않는다 — 같은 결과를 두 번 받아도 작업은 하나다. */
-    private void requestExternalCancel(Preorder preorder) {
-        if (syncJobs.findByPreorderIdAndJobType(preorder.getId(), SyncJobType.CANCEL).isPresent()) {
+    private void requestExternalCancel(PreorderSnapshot preorder) {
+        if (syncJobs.findByPreorderIdAndJobType(preorder.id(), SyncJobType.CANCEL).isPresent()) {
             return;
         }
-        String payload = jsonMapper.writeValueAsString(new CancelRequestPayload(preorder.getPreorderToken(),
-                preorder.getExternalReference(), mockCancelReason(preorder.getId())));
-        PreorderSyncJob job = syncJobs.save(PreorderSyncJob.cancel(preorder.getId(), payload));
-        outboxWriter.append(new CancelJobReady(job.getId(), preorder.getPreorderToken()));
+        String payload = jsonMapper.writeValueAsString(new CancelRequestPayload(preorder.preorderToken(),
+                preorder.externalReference(), mockCancelReason(preorder.id())));
+        PreorderSyncJob job = syncJobs.save(PreorderSyncJob.cancel(preorder.id(), payload));
+        outboxWriter.append(new CancelJobReady(job.getId(), preorder.preorderToken()));
     }
 
     /** 이력에 남길 거절 사유. order 가 사유를 주지 않았으면 결과만 남긴다. */
@@ -135,8 +132,8 @@ public class PreorderEventHandler {
 
     /** 취소를 시작한 이력의 주체로 Mock 감사 사유를 정한다. */
     private String mockCancelReason(Long preorderId) {
-        return events.findFirstByPreorderIdAndToStatusOrderByEventSequenceDesc(preorderId, PreorderStatus.CANCELING)
-                .map(PreorderEvent::getActor)
+        return preorders.lastTransitionTo(preorderId, PreorderStatus.CANCELING)
+                .map(PreorderHistoryEntry::actor)
                 .map(MOCK_CANCEL_REASONS::get)
                 .orElse(null);
     }

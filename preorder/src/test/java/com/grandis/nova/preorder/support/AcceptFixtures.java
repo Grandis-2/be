@@ -50,6 +50,6 @@ public class AcceptFixtures {
 
     /** 예약의 공개 UUID. 조회 API 는 이 값으로 부른다. */
     public static String tokenOf(AcceptResult result) {
-        return result.preorder().getPreorderToken();
+        return result.preorder().preorderToken();
     }
 }

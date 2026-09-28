@@ -2,6 +2,7 @@ package com.grandis.nova.preorder.preorder;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.OffsetPage;
+import org.springframework.data.domain.Limit;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
@@ -42,10 +43,38 @@ public class Preorders {
         return PreorderSnapshot.of(preorders.getByToken(preorderToken));
     }
 
+    public Optional<PreorderSnapshot> findById(Long preorderId) {
+        return preorders.findById(preorderId).map(PreorderSnapshot::of);
+    }
+
     /** id → 예약. 없는 id 는 빠진다. */
     public Map<Long, PreorderSnapshot> findAllById(Collection<Long> preorderIds) {
         return preorders.findAllById(preorderIds).stream()
                 .collect(Collectors.toMap(Preorder::getId, PreorderSnapshot::of));
+    }
+
+    /** 회원이 그 접수 키로 만든 예약(취소된 것 포함). */
+    public Optional<PreorderSnapshot> findByIdempotencyKey(Long customerId, String idempotencyKey) {
+        return preorders.findByCustomerIdAndIdempotencyKey(customerId, idempotencyKey).map(PreorderSnapshot::of);
+    }
+
+    /** 회원의 그 상품 진행 중(취소 완료가 아닌) 예약. */
+    public Optional<PreorderSnapshot> findActive(Long customerId, Long productId) {
+        return preorders.findFirstByCustomerIdAndProductIdAndStatusNot(customerId, productId, PreorderStatus.CANCELED)
+                .map(PreorderSnapshot::of);
+    }
+
+    /** 상품의 그 상태 예약을 순번 순으로 최대 limit 건. */
+    public List<PreorderSnapshot> findByProduct(Long productId, Collection<PreorderStatus> statuses, int limit) {
+        return preorders.findByProductIdAndStatusInOrderByQueuePosition(productId, statuses, Limit.of(limit)).stream()
+                .map(PreorderSnapshot::of)
+                .toList();
+    }
+
+    /** 그 상태로 들어간 마지막 이력. 취소 시도 순번(cancelSequence)과 취소를 시작한 주체를 가린다. */
+    public Optional<PreorderHistoryEntry> lastTransitionTo(Long preorderId, PreorderStatus toStatus) {
+        return events.findFirstByPreorderIdAndToStatusOrderByEventSequenceDesc(preorderId, toStatus)
+                .map(PreorderHistoryEntry::of);
     }
 
     /** 이력(번호 순). */

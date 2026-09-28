@@ -7,6 +7,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Optional;
 
 /**
  * 예약 상태를 바꾸는 유일한 길. 호출하는 쪽은 사건({@link PreorderTrigger})만 알리고,
@@ -38,12 +39,17 @@ public class PreorderLedger {
      * UNIQUE 충돌(같은 모델 활성 예약 · 쓴 입장권 · 같은 접수 키)은 여기서 삼키지 않고 그대로 올려 보낸다 —
      * 어느 제약인지에 따라 응답이 달라서 접수 유스케이스가 판정한다.
      */
-    public Preorder accept(NewPreorder draft, EventActor actor, String reason) {
+    public PreorderSnapshot accept(NewPreorder draft, EventActor actor, String reason) {
         PreorderEvent.requireReason(actor, reason);
         Preorder preorder = preorders.saveAndFlush(new Preorder(draft));
         entityManager.persist(new PreorderEvent(preorder.getId(), PreorderEvent.FIRST_SEQUENCE,
                 null, PreorderStatus.PENDING_SYNC, actor, reason, clock.instant()));
-        return preorder;
+        return PreorderSnapshot.of(preorder);
+    }
+
+    /** 예약 행을 잠그고 읽는다. 판정과 전이 사이에 다른 변경이 끼지 못하게 할 때 쓴다(만료 등). */
+    public Optional<PreorderSnapshot> lockByToken(String preorderToken) {
+        return preorders.findForUpdateByPreorderToken(preorderToken).map(PreorderSnapshot::of);
     }
 
     /** 관리자 전용 메모. 이력을 남기지 않는 유일한 변경이다. @throws BusinessException PREORDER_NOT_FOUND */

@@ -78,8 +78,8 @@ class InvariantCheckTest {
         ShopFixtures fixtures = new ShopFixtures(jdbcTemplate);
         AcceptFixtures accepts = new AcceptFixtures(acceptService, fixtures, catalogClient);
         PreorderProduct product = fixtures.openPreorderProduct();
-        Long missing = accepts.accept(fixtures.customer(), product).preorder().getId();
-        Long duplicated = accepts.accept(fixtures.customer(), product).preorder().getId();
+        Long missing = accepts.accept(fixtures.customer(), product).preorder().id();
+        Long duplicated = accepts.accept(fixtures.customer(), product).preorder().id();
         accepts.accept(fixtures.customer(), product);
 
         jdbcTemplate.update("""
