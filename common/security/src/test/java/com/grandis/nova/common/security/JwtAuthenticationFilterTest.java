@@ -57,7 +57,7 @@ class JwtAuthenticationFilterTest {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", path);
         request.setServletPath(path);
         if (token != null) {
-            request.addHeader(JwtAuthenticationFilter.HEADER, token);
+            request.addHeader(BearerTokens.HEADER, BearerTokens.value(token));
         }
         return request;
     }
@@ -75,6 +75,19 @@ class JwtAuthenticationFilterTest {
     @DisplayName("헤더가 없으면 아무것도 하지 않고 다음으로 넘긴다 — 폐기 조회도 안 한다")
     void noHeaderPassesThrough() throws Exception {
         assertThat(run(request("/api/v1/reservations", null))).isNull();
+        verifyNoInteractions(checker);
+    }
+
+    @Test
+    @DisplayName("다른 스킴(Basic) · 스킴만 · 토큰 뒤에 더 붙은 헤더는 자격 증명 없음으로 넘긴다 — 파싱도 폐기 조회도 안 한다")
+    void nonBearerAuthorizationPassesThrough() throws Exception {
+        for (String header : new String[] {"Basic dXNlcjpwdw==", "Bearer", "Bearer " + access("101", Role.USER) + " extra"}) {
+            MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/reservations");
+            request.setServletPath("/api/v1/reservations");
+            request.addHeader(BearerTokens.HEADER, header);
+            assertThat(run(request)).as(header).isNull();
+            assertThat(request.getAttribute(JwtAuthenticationFilter.ATTR_FAILURE_REASON)).as("거절이 아니라 없음").isNull();
+        }
         verifyNoInteractions(checker);
     }
 
