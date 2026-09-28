@@ -6,6 +6,8 @@ import com.grandis.nova.preorder.syncjob.SyncJobAdminService;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 import com.grandis.nova.preorder.syncjob.SyncJobType;
 import com.grandis.nova.preorder.syncjob.SyncJobView;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -19,6 +21,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /** 외부 동기화 작업 조회와 DEAD_LETTER 재처리. 재처리는 요청만 남기고 작업을 되돌리는 것은 worker 다. */
+@Tag(name = "관리자 · 동기화 작업")
 @RestController
 @RequestMapping("/api/v1/admin/sync-jobs")
 public class AdminSyncJobController {
@@ -29,6 +32,7 @@ public class AdminSyncJobController {
         this.syncJobAdminService = syncJobAdminService;
     }
 
+    @Operation(summary = "동기화 작업 목록")
     @GetMapping
     public ApiResponse<SyncJobListResponse> list(
             @RequestParam(required = false) SyncJobType jobType,
@@ -41,17 +45,20 @@ public class AdminSyncJobController {
                 groupByError, PageSizes.requirePage(page), PageSizes.require(size))));
     }
 
+    @Operation(summary = "동기화 작업 상세")
     @GetMapping("/{syncJobId}")
     public ApiResponse<SyncJobResponse> get(@PathVariable Long syncJobId) {
         return ApiResponse.ok(detail(syncJobAdminService.findOne(syncJobId)));
     }
 
+    @Operation(summary = "DEAD_LETTER 작업 재처리 요청")
     @PostMapping("/{syncJobId}/reprocess")
     public ResponseEntity<ApiResponse<SyncJobSummaryResponse>> reprocess(@PathVariable Long syncJobId,
                                                                          Authentication admin) {
         return accepted(SyncJobSummaryResponse.from(syncJobAdminService.reprocess(syncJobId, admin.getName())));
     }
 
+    @Operation(summary = "조건으로 일괄 재처리 요청")
     @PostMapping("/reprocess-batch")
     public ResponseEntity<ApiResponse<BatchReprocess>> reprocessBatch(
             @Valid @RequestBody ReprocessBatchRequest request, Authentication admin) {

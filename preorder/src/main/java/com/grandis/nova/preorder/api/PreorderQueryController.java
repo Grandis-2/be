@@ -7,6 +7,8 @@ import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.query.PreorderQueryService;
 import com.grandis.nova.preorder.web.CurrentViewer;
 import com.grandis.nova.preorder.web.Viewer;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -16,6 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 /** 내 예약 조회. 목록은 본인 것만, 상세 · 이력은 본인과 관리자만 본다. */
+@Tag(name = "사전예약")
 @RestController
 @RequestMapping("/api/v1/preorders")
 public class PreorderQueryController {
@@ -26,6 +29,7 @@ public class PreorderQueryController {
         this.queryService = queryService;
     }
 
+    @Operation(summary = "내 예약 목록(커서 페이지)")
     @GetMapping
     public ApiResponse<CursorPage<PreorderSummaryResponse>> list(
             @CurrentCustomerId Long customerId,
@@ -37,11 +41,13 @@ public class PreorderQueryController {
                 .map(PreorderSummaryResponse::from));
     }
 
+    @Operation(summary = "예약 상세(본인 · 관리자)")
     @GetMapping("/{preorderId}")
     public ApiResponse<PreorderDetailResponse> get(@CurrentViewer Viewer viewer, @PathVariable String preorderId) {
         return ApiResponse.ok(PreorderDetailResponse.from(queryService.findOne(viewer, preorderId)));
     }
 
+    @Operation(summary = "예약 이력(본인 · 관리자)")
     @GetMapping("/{preorderId}/history")
     public ApiResponse<Items<PreorderEventResponse>> history(@CurrentViewer Viewer viewer,
                                                              @PathVariable String preorderId) {

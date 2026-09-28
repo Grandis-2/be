@@ -4,6 +4,7 @@ apply plugin: 'org.springframework.boot'
 ext {
     awsSdkVersion = '2.55.6'
     flociTestcontainersVersion = '2.16.1'
+    springdocVersion = '3.1.1'
 }
 
 dependencies {
@@ -16,6 +17,8 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     // 다른 서비스 내부 API 는 HTTP Interface(@HttpExchange) + RestClient 로 부른다.
     implementation 'org.springframework.boot:spring-boot-starter-restclient'
+    // API 문서(OpenAPI · Swagger UI). 기본은 꺼 두고 dev 프로파일에서만 켠다
+    implementation "org.springdoc:springdoc-openapi-starter-webmvc-ui:${springdocVersion}"
     implementation 'com.github.ben-manes.caffeine:caffeine'
     // 관측: actuator 지표를 Prometheus 형식(/actuator/prometheus)으로 내놓는다. 수집은 CloudWatch 에이전트 · KEDA 가 한다.
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
