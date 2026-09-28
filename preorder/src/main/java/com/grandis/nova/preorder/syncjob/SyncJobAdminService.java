@@ -41,7 +41,7 @@ class SyncJobAdminService {
     private final SyncJobReprocessor reprocessor;
     private final TaskExecutor reprocessExecutor;
 
-    public SyncJobAdminService(PreorderSyncJobRepository syncJobs, PreorderRepository preorders,
+    SyncJobAdminService(PreorderSyncJobRepository syncJobs, PreorderRepository preorders,
                                SyncAttemptReader syncAttempts, ReprocessCandidateReader candidateReader,
                                SyncJobReprocessor reprocessor,
                                @Qualifier(SyncJobConfig.REPROCESS_EXECUTOR) TaskExecutor reprocessExecutor) {

@@ -18,7 +18,7 @@ class InternalPreorderController {
 
     private final PayabilityService payabilityService;
 
-    public InternalPreorderController(PayabilityService payabilityService) {
+    InternalPreorderController(PayabilityService payabilityService) {
         this.payabilityService = payabilityService;
     }
 

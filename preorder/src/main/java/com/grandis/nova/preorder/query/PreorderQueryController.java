@@ -26,7 +26,7 @@ class PreorderQueryController {
 
     private final PreorderQueryService queryService;
 
-    public PreorderQueryController(PreorderQueryService queryService) {
+    PreorderQueryController(PreorderQueryService queryService) {
         this.queryService = queryService;
     }
 

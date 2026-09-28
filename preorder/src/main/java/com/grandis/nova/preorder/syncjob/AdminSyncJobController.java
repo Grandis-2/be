@@ -24,7 +24,7 @@ class AdminSyncJobController {
 
     private final SyncJobAdminService syncJobAdminService;
 
-    public AdminSyncJobController(SyncJobAdminService syncJobAdminService) {
+    AdminSyncJobController(SyncJobAdminService syncJobAdminService) {
         this.syncJobAdminService = syncJobAdminService;
     }
 

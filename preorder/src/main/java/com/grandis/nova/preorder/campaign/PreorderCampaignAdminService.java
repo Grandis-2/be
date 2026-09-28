@@ -26,7 +26,7 @@ class PreorderCampaignAdminService {
     private final PreorderCampaignWriter writer;
     private final CatalogReader catalogReader;
 
-    public PreorderCampaignAdminService(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
+    PreorderCampaignAdminService(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
                                         PreorderCampaignWriter writer, CatalogReader catalogReader) {
         this.campaigns = campaigns;
         this.batches = batches;

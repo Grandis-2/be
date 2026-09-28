@@ -23,7 +23,7 @@ class SyncJobReprocessor {
     private final PreorderRepository preorders;
     private final OutboxWriter outboxWriter;
 
-    public SyncJobReprocessor(PreorderSyncJobRepository syncJobs, PreorderRepository preorders,
+    SyncJobReprocessor(PreorderSyncJobRepository syncJobs, PreorderRepository preorders,
                               OutboxWriter outboxWriter) {
         this.syncJobs = syncJobs;
         this.preorders = preorders;

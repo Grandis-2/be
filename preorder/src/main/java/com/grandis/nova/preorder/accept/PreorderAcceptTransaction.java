@@ -58,7 +58,7 @@ class PreorderAcceptTransaction {
     /** 회차 행 잠금을 얻기까지 기다린 시간. 오픈 순간 접수가 이 한 행에 줄을 서므로 부하 시험의 핵심 지표다. */
     private final Timer campaignLockWait;
 
-    public PreorderAcceptTransaction(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
+    PreorderAcceptTransaction(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
                                      PreorderRepository preorders, PreorderLedger ledger,
                                      PreorderSyncJobRepository syncJobs, OutboxWriter outboxWriter,
                                      JsonMapper jsonMapper, Clock clock,

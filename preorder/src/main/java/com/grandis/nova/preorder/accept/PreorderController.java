@@ -24,7 +24,7 @@ class PreorderController {
 
     private final PreorderAcceptService acceptService;
 
-    public PreorderController(PreorderAcceptService acceptService) {
+    PreorderController(PreorderAcceptService acceptService) {
         this.acceptService = acceptService;
     }
 

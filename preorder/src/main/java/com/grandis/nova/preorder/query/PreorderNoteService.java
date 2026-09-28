@@ -13,7 +13,7 @@ class PreorderNoteService {
 
     private final PreorderRepository preorders;
 
-    public PreorderNoteService(PreorderRepository preorders) {
+    PreorderNoteService(PreorderRepository preorders) {
         this.preorders = preorders;
     }
 

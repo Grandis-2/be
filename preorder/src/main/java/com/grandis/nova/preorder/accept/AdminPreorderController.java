@@ -20,7 +20,7 @@ class AdminPreorderController {
 
     private final PreorderAcceptService acceptService;
 
-    public AdminPreorderController(PreorderAcceptService acceptService) {
+    AdminPreorderController(PreorderAcceptService acceptService) {
         this.acceptService = acceptService;
     }
 

@@ -22,7 +22,7 @@ class PreorderCancelController {
 
     private final PreorderCancelService cancelService;
 
-    public PreorderCancelController(PreorderCancelService cancelService) {
+    PreorderCancelController(PreorderCancelService cancelService) {
         this.cancelService = cancelService;
     }
 

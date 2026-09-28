@@ -23,7 +23,7 @@ class ProductShipmentBatchController {
 
     private final ShipmentBatchQueryService queryService;
 
-    public ProductShipmentBatchController(ShipmentBatchQueryService queryService) {
+    ProductShipmentBatchController(ShipmentBatchQueryService queryService) {
         this.queryService = queryService;
     }
 

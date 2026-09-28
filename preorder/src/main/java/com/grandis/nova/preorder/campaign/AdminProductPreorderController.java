@@ -27,7 +27,7 @@ class AdminProductPreorderController {
     private final PreorderCampaignAdminService campaignService;
     private final Clock clock;
 
-    public AdminProductPreorderController(PreorderCampaignAdminService campaignService, Clock clock) {
+    AdminProductPreorderController(PreorderCampaignAdminService campaignService, Clock clock) {
         this.campaignService = campaignService;
         this.clock = clock;
     }

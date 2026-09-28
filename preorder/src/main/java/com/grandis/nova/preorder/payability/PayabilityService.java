@@ -20,7 +20,7 @@ class PayabilityService {
     private final PreorderRepository preorders;
     private final Clock clock;
 
-    public PayabilityService(PreorderRepository preorders, Clock clock) {
+    PayabilityService(PreorderRepository preorders, Clock clock) {
         this.preorders = preorders;
         this.clock = clock;
     }

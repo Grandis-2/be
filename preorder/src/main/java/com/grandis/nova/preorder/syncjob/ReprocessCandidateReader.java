@@ -26,7 +26,7 @@ class ReprocessCandidateReader {
 
     private final JdbcTemplate jdbcTemplate;
 
-    public ReprocessCandidateReader(JdbcTemplate jdbcTemplate) {
+    ReprocessCandidateReader(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
     }
 

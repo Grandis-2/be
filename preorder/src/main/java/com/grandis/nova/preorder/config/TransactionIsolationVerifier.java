@@ -24,7 +24,7 @@ class TransactionIsolationVerifier implements ApplicationRunner {
 
     private final JdbcTemplate jdbcTemplate;
 
-    public TransactionIsolationVerifier(JdbcTemplate jdbcTemplate) {
+    TransactionIsolationVerifier(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
     }
 

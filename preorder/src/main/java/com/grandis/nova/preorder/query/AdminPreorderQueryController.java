@@ -28,7 +28,7 @@ class AdminPreorderQueryController {
     private final PreorderQueryService queryService;
     private final PreorderNoteService noteService;
 
-    public AdminPreorderQueryController(PreorderQueryService queryService, PreorderNoteService noteService) {
+    AdminPreorderQueryController(PreorderQueryService queryService, PreorderNoteService noteService) {
         this.queryService = queryService;
         this.noteService = noteService;
     }
