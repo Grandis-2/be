@@ -7,15 +7,15 @@ import com.grandis.nova.preorder.catalog.CatalogClient;
 import com.grandis.nova.preorder.order.Cancelability;
 import com.grandis.nova.preorder.order.OrderClient;
 import com.grandis.nova.preorder.support.AcceptFixtures;
-import com.grandis.nova.preorder.support.Concurrently;
+import com.grandis.nova.preorder.support.AccessTokens;
 import com.grandis.nova.preorder.support.Concurrently.Outcome;
+import com.grandis.nova.preorder.support.Concurrently;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -41,8 +41,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @PreorderIntegrationTest
 @AutoConfigureMockMvc
 class PreorderCancelApiTest {
-
-    static final String BEARER = "Bearer user-access-token";
 
     @Autowired
     MockMvc mockMvc;
@@ -76,15 +74,15 @@ class PreorderCancelApiTest {
     void 취소를_시작하면_202_CANCELING_이고_등록_작업_무효화와_주문_정리_요청을_남긴다() throws Exception {
         orderAnswers(true, null);
 
-        mockMvc.perform(post("/api/v1/preorders/{id}/cancel", token)
-                        .header(HttpHeaders.AUTHORIZATION, BEARER)
-                        .with(customer(customerId)))
+        String sessionToken = AccessTokens.customerToken(customerId);
+
+        mockMvc.perform(post("/api/v1/preorders/{id}/cancel", token).with(AccessTokens.withToken(sessionToken)))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.preorderId").value(token))
                 .andExpect(jsonPath("$.data.status").value("CANCELING"))
                 .andExpect(jsonPath("$.data.version").value(2));
 
-        verify(orderClient).getCancelability(token, BEARER);
+        verify(orderClient).getCancelability(token, sessionToken);
         assertThat(jobStatus("REGISTER")).isEqualTo("CANCELED");
         Map<String, Object> outbox = jdbcTemplate.queryForMap("""
                 SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.reason')) AS reason,

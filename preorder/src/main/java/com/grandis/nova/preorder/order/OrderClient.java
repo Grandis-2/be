@@ -1,7 +1,7 @@
 package com.grandis.nova.preorder.order;
 
+import com.grandis.nova.common.security.JwtAuthenticationFilter;
 import com.grandis.nova.common.web.ApiResponse;
-import org.springframework.http.HttpHeaders;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.service.annotation.GetExchange;
@@ -17,6 +17,6 @@ public interface OrderClient {
     /** 취소를 시작하기 전에 "배송을 시작했나" 를 묻는다. 주문이 없으면 cancelable = true, orderStatus = null. */
     @GetExchange("/by-preorder/{preorderId}/cancelability")
     ApiResponse<Cancelability> getCancelability(@PathVariable String preorderId,
-                                                @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false)
-                                                String authorization);
+                                                @RequestHeader(value = JwtAuthenticationFilter.HEADER, required = false)
+                                                String sessionToken);
 }

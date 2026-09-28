@@ -31,18 +31,18 @@ public class OrderCancelabilityChecker {
     }
 
     /** @throws BusinessException 배송이 시작됐으면 PREORDER_NOT_CANCELABLE */
-    public void requireCancelable(String preorderToken, String authorization) {
-        Cancelability cancelability = fetch(preorderToken, authorization);
+    public void requireCancelable(String preorderToken, String sessionToken) {
+        Cancelability cancelability = fetch(preorderToken, sessionToken);
         if (!cancelability.cancelable()) {
             throw new BusinessException(PreorderErrorCode.PREORDER_NOT_CANCELABLE,
                     Map.of("reason", "orderStatus=" + cancelability.orderStatus()));
         }
     }
 
-    private Cancelability fetch(String preorderToken, String authorization) {
+    private Cancelability fetch(String preorderToken, String sessionToken) {
         Cancelability answer;
         try {
-            answer = orderClient.getCancelability(preorderToken, authorization).data();
+            answer = orderClient.getCancelability(preorderToken, sessionToken).data();
         } catch (HttpClientErrorException e) {
             if (e.getStatusCode().isSameCodeAs(HttpStatus.UNAUTHORIZED)) {
                 throw new BusinessException(CommonErrorCode.UNAUTHENTICATED);
