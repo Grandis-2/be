@@ -11,7 +11,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
-public interface PreorderSyncJobRepository extends JpaRepository<PreorderSyncJob, Long>,
+interface PreorderSyncJobRepository extends JpaRepository<PreorderSyncJob, Long>,
         JpaSpecificationExecutor<PreorderSyncJob> {
 
     /** 끝난 REGISTER 작업. 무효화하지 않는다. */

@@ -25,7 +25,7 @@ import java.time.Instant;
  */
 @Entity
 @Table(name = "preorders")
-public class Preorder extends BaseEntity {
+class Preorder extends BaseEntity {
 
     /** 결제 기한. payable_from 부터 이만큼이다(ERD: 연장 없음). */
     @Id
@@ -100,15 +100,6 @@ public class Preorder extends BaseEntity {
         this.internalNote = draft.internalNote();
         this.status = PreorderStatus.PENDING_SYNC;
         this.eventSequence = PreorderEvent.FIRST_SEQUENCE;
-    }
-
-    /** 계산은 {@link PreorderSnapshot} 에 있다. */
-    public Instant paymentDueAt() {
-        return PreorderSnapshot.of(this).paymentDueAt();
-    }
-
-    public boolean isCancelable() {
-        return PreorderSnapshot.of(this).isCancelable();
     }
 
     /** 관리자 전용 메모. 이력을 남기지 않는다. */

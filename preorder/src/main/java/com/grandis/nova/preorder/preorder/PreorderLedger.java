@@ -28,7 +28,7 @@ public class PreorderLedger {
     private final EntityManager entityManager;
     private final Clock clock;
 
-    public PreorderLedger(PreorderRepository preorders, EntityManager entityManager, Clock clock) {
+    PreorderLedger(PreorderRepository preorders, EntityManager entityManager, Clock clock) {
         this.preorders = preorders;
         this.entityManager = entityManager;
         this.clock = clock;

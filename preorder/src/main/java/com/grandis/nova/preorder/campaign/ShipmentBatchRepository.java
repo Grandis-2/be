@@ -7,7 +7,7 @@ import org.springframework.data.repository.query.Param;
 import java.util.List;
 import java.util.Optional;
 
-public interface ShipmentBatchRepository extends JpaRepository<ShipmentBatch, Long> {
+interface ShipmentBatchRepository extends JpaRepository<ShipmentBatch, Long> {
 
     List<ShipmentBatch> findByProductIdOrderByBatchNumber(Long productId);
 

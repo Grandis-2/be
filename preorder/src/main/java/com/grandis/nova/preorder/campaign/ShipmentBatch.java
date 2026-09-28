@@ -22,7 +22,7 @@ import java.time.LocalDate;
 @Entity
 @Table(name = "shipment_batches")
 @EntityListeners(AuditingEntityListener.class)
-public class ShipmentBatch {
+class ShipmentBatch {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

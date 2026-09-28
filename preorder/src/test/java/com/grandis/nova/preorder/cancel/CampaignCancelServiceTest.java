@@ -4,7 +4,7 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.accept.AcceptResult;
 import com.grandis.nova.preorder.accept.PreorderAcceptService;
-import com.grandis.nova.preorder.campaign.PreorderCampaignRepository;
+import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.event.ExternalJobSucceeded;
 import com.grandis.nova.preorder.event.PreorderEventHandler;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
@@ -61,7 +61,7 @@ class CampaignCancelServiceTest {
     PreorderLedger ledger;
 
     @MockitoSpyBean
-    PreorderCampaignRepository campaigns;
+    Campaigns campaigns;
 
     @Autowired
     PreorderAcceptService acceptService;
@@ -181,12 +181,13 @@ class CampaignCancelServiceTest {
             Future<?> canceling;
             try {
                 assertThat(acceptLocked.await(10, TimeUnit.SECONDS)).isTrue();
-                // 접수는 이미 회차를 잠갔으므로 이 뒤의 잠금 조회는 판매 중지의 것이다. 원래 저장소로 넘기는 기본 응답을 쓴다
-                Answer<?> delegate = mockingDetails(campaigns).getMockCreationSettings().getDefaultAnswer();
+                // 접수는 이미 회차를 잠갔으므로 이 뒤의 회차 닫기는 판매 중지의 것이다. 실제 동작은 그대로 둔다
+                Campaigns target = AopTestUtils.getUltimateTargetObject(campaigns);
+                Answer<?> delegate = mockingDetails(target).getMockCreationSettings().getDefaultAnswer();
                 willAnswer(invocation -> {
                     cancelWaiting.countDown();
                     return delegate.answer(invocation);
-                }).given(campaigns).findForUpdate(any());
+                }).given(target).closeNow(any(), any());
                 canceling = executor.submit(() -> campaignCancelService.cancel(product.productId(), "공급 차질"));
                 assertThat(cancelWaiting.await(10, TimeUnit.SECONDS)).isTrue();
                 await().alias("접수가 회차를 잠근 동안 판매 중지는 끝나지 않는다")

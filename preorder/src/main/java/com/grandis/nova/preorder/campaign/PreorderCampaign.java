@@ -18,7 +18,7 @@ import java.time.Instant;
  */
 @Entity
 @Table(name = "preorder_campaigns")
-public class PreorderCampaign extends BaseEntity {
+class PreorderCampaign extends BaseEntity {
 
     private static final Duration CLOSED_BEFORE_OPEN = Duration.ofMillis(1);
 

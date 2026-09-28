@@ -20,7 +20,7 @@ import java.time.Instant;
 @Table(name = "preorder_events")
 @IdClass(PreorderEvent.Key.class)
 @Immutable
-public class PreorderEvent {
+class PreorderEvent {
 
     /** 접수 이력의 번호. 예약 행의 카운터도 이 값으로 시작한다. */
     static final long FIRST_SEQUENCE = 1;
