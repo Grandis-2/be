@@ -18,6 +18,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.grandis.nova.common.security.BearerTokens;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import com.grandis.nova.member.auth.application.AdminLoginService;
+import com.grandis.nova.common.security.AuthRedisKeys;
 import com.grandis.nova.common.web.RequestIdFilter;
 import com.grandis.nova.member.auth.api.AuthCookies;
 import com.grandis.nova.member.auth.application.KakaoLoginService;
@@ -25,6 +28,7 @@ import com.grandis.nova.member.auth.infrastructure.kakao.KakaoOAuthClient;
 import com.grandis.nova.member.auth.infrastructure.kakao.KakaoUserInfo;
 import com.grandis.nova.member.customer.CustomerRepository;
 import jakarta.servlet.http.Cookie;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
@@ -68,6 +72,7 @@ class AuthFlowIntegrationTest {
     @Autowired RequestIdFilter requestIdFilter;
     @Autowired CustomerRepository customers;
     @Autowired KakaoLoginService loginService;
+    @Autowired StringRedisTemplate redis;
     @MockitoBean KakaoOAuthClient kakao;
 
     private MockMvc mvc;
@@ -361,8 +366,44 @@ class AuthFlowIntegrationTest {
                 .andReturn();
     }
 
-    private static java.util.List<String> setCookies(MvcResult r) {
+    private static List<String> setCookies(MvcResult r) {
         return r.getResponse().getHeaders("Set-Cookie");
+    }
+
+    @Test
+    @DisplayName("DELETE /admin/sessions: 관리자 세션 전부 폐기 — 부른 세션의 액세스 · 리프레시도 즉시 401, 관리자 쿠키 만료. 회원은 403, 익명은 401")
+    void revokeAllAdminSessions() throws Exception {
+        MvcResult admin = adminLoginOk();
+        String adminAccess = json(admin, "/data/sessionToken");
+        Cookie adminCookie = admin.getResponse().getCookie(AuthCookies.ADMIN_REFRESH_TOKEN);
+        MvcResult other = adminLoginOk();
+        String otherAccess = json(other, "/data/sessionToken");
+        MvcResult user = login();
+        try {
+            mvc.perform(delete("/api/v1/admin/sessions")).andExpect(status().isUnauthorized());
+            mvc.perform(delete("/api/v1/admin/sessions").header(BearerTokens.HEADER, BearerTokens.value(json(user, "/data/sessionToken"))))
+                    .andExpect(status().isForbidden());
+
+            mvc.perform(delete("/api/v1/admin/sessions").header(BearerTokens.HEADER, BearerTokens.value(adminAccess)))
+                    .andExpect(status().isNoContent())
+                    .andExpect(cookie().maxAge(AuthCookies.ADMIN_REFRESH_TOKEN, 0));
+
+            for (String access : new String[] {adminAccess, otherAccess}) {
+                mvc.perform(get("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(access)))
+                        .andExpect(status().isUnauthorized());
+            }
+            mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(adminCookie)).andExpect(status().isUnauthorized());
+            // 회원 세션은 그대로다 — 관리자 subject 의 not-before 표식이라 회원에게는 안 걸린다
+            mvc.perform(get("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(json(user, "/data/sessionToken"))))
+                    .andExpect(status().isOk());
+        } finally {
+            clearAdminNotBefore();
+        }
+    }
+
+    /** 관리자 subject 의 not-before 표식은 같은 초에 발급된 토큰까지 거부한다 — 다음 시험의 관리자 로그인에 번지지 않게 지운다. */
+    private void clearAdminNotBefore() {
+        redis.delete(AuthRedisKeys.notBefore(AdminLoginService.ADMIN_SUBJECT));
     }
 
     @Test
