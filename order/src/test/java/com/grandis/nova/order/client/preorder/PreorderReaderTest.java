@@ -1,4 +1,4 @@
-package com.grandis.nova.order.preorder;
+package com.grandis.nova.order.client.preorder;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;

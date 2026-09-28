@@ -1,4 +1,4 @@
-package com.grandis.nova.order.preorder;
+package com.grandis.nova.order.client.preorder;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

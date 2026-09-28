@@ -1,8 +1,8 @@
 package com.grandis.nova.order.support;
 
 import com.grandis.nova.common.web.ApiResponse;
-import com.grandis.nova.order.preorder.PreorderClient;
-import com.grandis.nova.order.preorder.PreorderSnapshot;
+import com.grandis.nova.order.client.preorder.PreorderClient;
+import com.grandis.nova.order.client.preorder.PreorderSnapshot;
 import com.grandis.nova.order.support.OrderFixtures.PreorderProduct;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;

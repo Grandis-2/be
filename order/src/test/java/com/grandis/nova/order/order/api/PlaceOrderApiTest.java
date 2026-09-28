@@ -1,7 +1,7 @@
 package com.grandis.nova.order.order.api;
 
-import com.grandis.nova.order.preorder.PreorderClient;
-import com.grandis.nova.order.preorder.PreorderSnapshot;
+import com.grandis.nova.order.client.preorder.PreorderClient;
+import com.grandis.nova.order.client.preorder.PreorderSnapshot;
 import com.grandis.nova.order.support.Concurrently;
 import com.grandis.nova.order.support.Concurrently.Outcome;
 import com.grandis.nova.order.support.OrderFixtures;

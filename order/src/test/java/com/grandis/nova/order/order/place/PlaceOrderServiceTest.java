@@ -3,6 +3,8 @@ package com.grandis.nova.order.order.place;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.order.OrderErrorCode;
+import com.grandis.nova.order.client.preorder.PreorderReader;
+import com.grandis.nova.order.client.preorder.PreorderSnapshot;
 import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
@@ -12,8 +14,6 @@ import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.Money;
 import com.grandis.nova.order.order.vo.OrderToken;
 import com.grandis.nova.order.order.vo.ShipTo;
-import com.grandis.nova.order.preorder.PreorderReader;
-import com.grandis.nova.order.preorder.PreorderSnapshot;
 import com.grandis.nova.order.support.OrderFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,7 +40,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 /** 재시도 · 기한 경계처럼 DB 로 일으키기 어려운 분기. 원장 · 저장소 · preorder 는 대역이다. */
-class PreorderOrderServiceTest {
+class PlaceOrderServiceTest {
 
     static final Instant NOW = Instant.parse("2026-09-25T00:00:00Z");
     static final String PREORDER_UUID = "0b8f6a3e-5a8c-4d59-9a53-3c1f0e0f7a11";
@@ -51,7 +51,7 @@ class PreorderOrderServiceTest {
     OrderLedger ledger = mock(OrderLedger.class);
     OrderReader orderReader = mock(OrderReader.class);
     PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
-    PreorderOrderService service = new PreorderOrderService(preorderReader, ledger, orderReader, transactionManager,
+    PlaceOrderService service = new PlaceOrderService(preorderReader, ledger, orderReader, transactionManager,
             Clock.fixed(NOW, ZoneOffset.UTC));
 
     @BeforeEach
@@ -82,7 +82,7 @@ class PreorderOrderServiceTest {
         assertThatThrownBy(() -> service.place(CUSTOMER_ID, PREORDER_UUID, OrderFixtures.ADDRESS))
                 .isInstanceOfSatisfying(BusinessException.class,
                         e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
-        verify(ledger, times(PreorderOrderService.MAX_ATTEMPTS)).place(any(), any());
+        verify(ledger, times(PlaceOrderService.MAX_ATTEMPTS)).place(any(), any());
     }
 
     // 바깥 트랜잭션에 참여하면 원장 예외 뒤의 재시도 · 재조회가 rollback-only 인 같은 트랜잭션에서 일어난다.

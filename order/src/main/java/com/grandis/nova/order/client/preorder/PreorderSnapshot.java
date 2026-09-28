@@ -1,4 +1,4 @@
-package com.grandis.nova.order.preorder;
+package com.grandis.nova.order.client.preorder;
 
 import java.math.BigDecimal;
 import java.time.Duration;

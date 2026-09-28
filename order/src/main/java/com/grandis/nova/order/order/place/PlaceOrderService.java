@@ -3,6 +3,8 @@ package com.grandis.nova.order.order.place;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.order.OrderErrorCode;
+import com.grandis.nova.order.client.preorder.PreorderReader;
+import com.grandis.nova.order.client.preorder.PreorderSnapshot;
 import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.command.PlaceOrderCommand;
 import com.grandis.nova.order.order.domain.enums.OrderSource;
@@ -12,8 +14,6 @@ import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderDraft;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
-import com.grandis.nova.order.preorder.PreorderReader;
-import com.grandis.nova.order.preorder.PreorderSnapshot;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.PessimisticLockingFailureException;
@@ -27,7 +27,8 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 사전예약 주문 생성. PAYABLE 예약 하나에 주문 하나(uq_order_preorder)를 만든다.
+ * 주문 생성(order 의 유스케이스). 지금은 사전예약 출처(source=PREORDER)만 받는다 — 다른 출처가 생기면 여기서 나눈다.
+ * PAYABLE 예약 하나에 주문 하나(uq_order_preorder)를 만든다. 예약 정보는 preorder 서비스에 HTTP 로 묻는다(client.preorder).
  *
  * 순서: 예약 조회(preorder, 트랜잭션 밖) → 본인 확인 → 기존 주문 확인 → 결제 가능 · 기한 확인 → 원장 place(트랜잭션).
  *
@@ -54,9 +55,9 @@ import java.util.Optional;
  *   재시도 · 새 트랜잭션 재조회가 rollback-only 인 같은 트랜잭션에서 일어난다. 그래서 들어올 때 확인한다.
  */
 @Service
-public class PreorderOrderService {
+public class PlaceOrderService {
 
-    private static final Logger log = LoggerFactory.getLogger(PreorderOrderService.class);
+    private static final Logger log = LoggerFactory.getLogger(PlaceOrderService.class);
 
     static final int MAX_ATTEMPTS = 3;
 
@@ -69,7 +70,7 @@ public class PreorderOrderService {
     // 받는지 확인한다(JpaAuditingConfig 주석 참고).
     private final Clock clock;
 
-    public PreorderOrderService(PreorderReader preorderReader, OrderLedger ledger, OrderReader orderReader,
+    public PlaceOrderService(PreorderReader preorderReader, OrderLedger ledger, OrderReader orderReader,
                                 PlatformTransactionManager transactionManager, Clock clock) {
         this.preorderReader = preorderReader;
         this.ledger = ledger;
