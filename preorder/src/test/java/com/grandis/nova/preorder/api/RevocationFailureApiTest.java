@@ -2,16 +2,23 @@ package com.grandis.nova.preorder.api;
 
 import com.grandis.nova.common.security.RevocationCheckFailedException;
 import com.grandis.nova.common.security.RevocationChecker;
+import com.grandis.nova.preorder.catalog.CatalogClient;
+import com.grandis.nova.preorder.support.AdmissionTickets;
+import com.grandis.nova.preorder.support.CatalogStubs;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
+import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.dao.QueryTimeoutException;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+
+import java.time.Instant;
 
 import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
@@ -35,11 +42,16 @@ class RevocationFailureApiTest {
     @MockitoBean
     RevocationChecker revocationChecker;
 
+    @MockitoBean
+    CatalogClient catalogClient;
+
+    ShopFixtures fixtures;
     Long customerId;
 
     @BeforeEach
     void setUp() {
-        customerId = new ShopFixtures(jdbcTemplate).customer();
+        fixtures = new ShopFixtures(jdbcTemplate);
+        customerId = fixtures.customer();
         given(revocationChecker.isRevoked(any()))
                 .willThrow(new RevocationCheckFailedException(new QueryTimeoutException("redis down")));
     }
@@ -52,7 +64,20 @@ class RevocationFailureApiTest {
     }
 
     @Test
-    void 내_예약_조회는_통과한다() throws Exception {
+    void 접수와_내_예약_조회는_통과한다() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        CatalogStubs.stubPreorderProduct(catalogClient, product.productId(),
+                CatalogStubs.activeOption(product.optionId()));
+
+        mockMvc.perform(post("/api/v1/preorders").param("productId", product.productId().toString())
+                        .header("Idempotency-Key", "key-" + ShopFixtures.unique())
+                        .header("X-Admission-Ticket",
+                                AdmissionTickets.issue(product.productId(), customerId, Instant.now()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"productId\":%d,\"optionId\":%d}".formatted(product.productId(),
+                                product.optionId()))
+                        .with(customer(customerId)))
+                .andExpect(status().isAccepted());
         mockMvc.perform(get("/api/v1/preorders").with(customer(customerId))).andExpect(status().isOk());
     }
 }
