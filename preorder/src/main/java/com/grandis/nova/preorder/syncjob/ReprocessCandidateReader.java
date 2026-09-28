@@ -18,10 +18,7 @@ class ReprocessCandidateReader {
             SELECT j.id, j.job_type, j.status, p.status, a.error_code
               FROM preorder_sync_jobs j
               JOIN preorders p ON p.id = j.preorder_id
-              LEFT JOIN preorder_sync_attempts a ON a.sync_job_id = j.id
-                   AND a.attempt_number = (SELECT MAX(b.attempt_number) FROM preorder_sync_attempts b
-                                            WHERE b.sync_job_id = j.id)
-            """;
+            """ + SyncAttemptReader.LATEST_ATTEMPT_JOIN;
 
     private static final RowMapper<ReprocessCandidate> CANDIDATE = (rs, rowNum) -> new ReprocessCandidate(
             rs.getLong(1), SyncJobType.valueOf(rs.getString(2)), SyncJobStatus.valueOf(rs.getString(3)),
