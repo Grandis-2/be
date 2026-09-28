@@ -18,11 +18,12 @@ import java.time.Instant;
  * 아웃박스 행 = 메시지 하나. 업무 변경과 같은 트랜잭션에서 INSERT 해서
  * "업무는 커밋됐는데 메시지가 큐에 못 들어간" 창을 없앤다.
  *
- * 여기서는 기록만 한다. 발행 결과(published_at · publish_attempts)는 발행기가 벌크 UPDATE 로 채울 칸이라
- * updatable 을 막지 않는다. 엔티티는 이 패키지 밖으로 나가지 않는다 — 밖에는 행 id 만 준다.
+ * 발행 결과(published_at · publish_attempts)는 발행기가 저장소의 벌크 UPDATE 로 채운다. 엔티티로는 바꾸지 않으므로
+ * setter 가 없다. 엔티티는 이 패키지 밖으로 나가지 않는다 — 밖에는 행 id 만 준다. 발행기도 같은 패키지에 두어
+ * getter 를 package-private 로 둔다.
  * updated_at 이 없는 표라 BaseEntity 를 쓰지 않는다.
  *
- * common:outbox 이전 시: preorder 의 같은 엔티티는 public 이다(발행기가 하위 패키지에서 쓴다). 칼럼 매핑은 같으므로
+ * common:outbox 이전 시: preorder 의 같은 엔티티는 public 이다(발행기가 하위 패키지에서 쓴다). 칼럼 매핑 · getter 는 같으므로
  * 한 벌로 합치고, 공개 범위는 공통 모듈의 패키지 구성에 맞춘다. 각 모듈은 @EntityScan · @EnableJpaRepositories 에
  * 공통 패키지를 더해야 한다(자동 스캔은 애플리케이션 패키지만 본다).
  */
@@ -75,5 +76,33 @@ class OutboxEvent {
 
     Long getId() {
         return id;
+    }
+
+    String getEventId() {
+        return eventId;
+    }
+
+    String getAggregateType() {
+        return aggregateType;
+    }
+
+    Long getAggregateId() {
+        return aggregateId;
+    }
+
+    String getEventType() {
+        return eventType;
+    }
+
+    String getPayload() {
+        return payload;
+    }
+
+    Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    Instant getPublishedAt() {
+        return publishedAt;
     }
 }
