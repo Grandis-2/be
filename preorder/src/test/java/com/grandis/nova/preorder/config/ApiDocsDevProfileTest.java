@@ -7,6 +7,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.not;
@@ -32,6 +33,8 @@ class ApiDocsDevProfileTest {
                 .andExpect(jsonPath("$.paths['/api/v1/preorders'].get.parameters[*].name",
                         not(hasItem("customerId"))))
                 .andExpect(jsonPath("$.paths['/api/v1/preorders'].get.responses['401']").exists())
+                .andExpect(jsonPath("$.paths['/api/v1/products/{productId}/shipment-batches'].get.security",
+                        empty()))
                 .andExpect(jsonPath("$.paths['/api/v1/admin/preorders']").doesNotExist());
     }
 
