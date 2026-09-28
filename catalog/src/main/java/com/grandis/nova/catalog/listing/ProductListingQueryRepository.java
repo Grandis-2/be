@@ -19,7 +19,7 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * 상품 목록 · 검색 · 상세의 읽기 전용 저장소. **catalog 가 다른 서비스의 표를 읽는 유일한 자리**다 —
+ * 상품 목록 · 검색 · 상세 · 관리자 목록의 읽기 전용 저장소. **catalog 가 다른 서비스의 표를 읽는 유일한 자리**다 —
  * preorder 소유 preorder_campaigns(opens_at · closes_at)와 order 소유 option_inventories(재고 집계)를 여기서만, SELECT 로만 읽는다.
  * 노출 조건(오픈 예정 · 마감 · 마감 + 120시간 숨김 · 품절)이 페이징 조건이라 쿼리 안에 있어야 한다. HTTP 로 받아 거르면 페이지가 깨진다.
  * 판매 중(ACTIVE) 옵션이 하나도 없는 상품(옵션 없음 · 전부 판매 중지)은 목록에 남기고 sellable=false 로 알린다 — 화면이 "판매 중지" 를 그린다
@@ -60,6 +60,26 @@ public class ProductListingQueryRepository {
                         THEN 1 ELSE 0 END AS sold_out
             """;
 
+    /** 관리자 목록 — 노출 규칙 없이 전부. 등록 기록은 없을 수 있어 LEFT JOIN. */
+    private static final String FROM_ALL = """
+              FROM products p
+              LEFT JOIN product_registrations r ON r.product_id = p.id
+              LEFT JOIN preorder_campaigns c ON c.product_id = p.id
+             WHERE 1 = 1
+            """;
+
+    private static final String ADMIN_COLUMNS = """
+            ,
+                   p.visible, r.completed_at, r.blocked_reason,
+                   (SELECT COUNT(*) FROM product_options oc WHERE oc.product_id = p.id) AS option_count
+            """;
+
+    /** 건수는 products 와 필터만 본다 — 회차 · 등록 기록은 건수에 영향이 없다(둘 다 product_id 가 PRIMARY KEY 라 행이 안 는다). */
+    private static final String COUNT_FROM = """
+              FROM products p
+             WHERE 1 = 1
+            """;
+
     private final NamedParameterJdbcTemplate jdbc;
 
     public ProductListingQueryRepository(NamedParameterJdbcTemplate jdbc) {
@@ -83,6 +103,45 @@ public class ProductListingQueryRepository {
         return jdbc.query(sql.toString(), params, (rs, rowNum) -> toItem(rs, now));
     }
 
+    public long countForAdmin(AdminProductListFilter filter) {
+        StringBuilder sql = new StringBuilder("SELECT COUNT(*)").append(COUNT_FROM);
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        appendAdminFilters(sql, params, filter);
+        Long count = jdbc.queryForObject(sql.toString(), params, Long.class);
+        return count == null ? 0 : count;
+    }
+
+    /** 회원 목록과 같은 열(최저가 · 대표 사진 · 판매 가능 · 품절 · 회차)에 공개 여부 · 등록 완료 · 막힘 사유를 더해 읽는다. */
+    public List<AdminProductListItem> findForAdmin(AdminProductListFilter filter, Instant now, int page, int size) {
+        StringBuilder sql = new StringBuilder(SELECT_ITEMS.stripTrailing()).append(ADMIN_COLUMNS).append(FROM_ALL);
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        appendAdminFilters(sql, params, filter);
+        sql.append(" ORDER BY p.id DESC LIMIT :limit OFFSET :offset");
+        params.addValue("limit", size).addValue("offset", (long) page * size);
+        return jdbc.query(sql.toString(), params, (rs, rowNum) -> AdminProductListItem.of(toItem(rs, now),
+                rs.getBoolean("visible"), rs.getObject("completed_at", LocalDateTime.class) != null, rs.getString("blocked_reason"),
+                rs.getInt("option_count")));
+    }
+
+    private static void appendAdminFilters(StringBuilder sql, MapSqlParameterSource params, AdminProductListFilter filter) {
+        if (filter.saleMode() != null) {
+            sql.append(" AND p.sale_mode = :saleMode");
+            params.addValue("saleMode", filter.saleMode().name());
+        }
+        if (filter.status() != null) {
+            sql.append(" AND p.status = :status");
+            params.addValue("status", filter.status().name());
+        }
+        appendTextFilter(sql, params, filter.q());
+    }
+
+    private static void appendTextFilter(StringBuilder sql, MapSqlParameterSource params, String q) {
+        if (q != null) {
+            sql.append(" AND (p.title LIKE :q ESCAPE '\\\\' OR p.tags LIKE :q ESCAPE '\\\\')");
+            params.addValue("q", "%" + escapeLike(q) + "%");
+        }
+    }
+
     private static MapSqlParameterSource baseParams(Instant now) {
         return new MapSqlParameterSource("hideBefore", utc(now.minus(HIDE_AFTER_CLOSE)));
     }
@@ -96,10 +155,7 @@ public class ProductListingQueryRepository {
             sql.append(" AND p.category_id IN (SELECT ct.id FROM categories ct WHERE ct.id = :categoryId OR ct.parent_id = :categoryId)");
             params.addValue("categoryId", filter.categoryId());
         }
-        if (filter.q() != null) {
-            sql.append(" AND (p.title LIKE :q ESCAPE '\\\\' OR p.tags LIKE :q ESCAPE '\\\\')");
-            params.addValue("q", "%" + escapeLike(filter.q()) + "%");
-        }
+        appendTextFilter(sql, params, filter.q());
         if (!filter.colors().isEmpty() || !filter.storages().isEmpty()) {
             // 필터 조건은 판매 중 옵션 하나가 모든 축을 함께 만족해야 한다. 품절은 포함, 판매 중지는 제외
             sql.append(" AND EXISTS (SELECT 1 FROM product_options o WHERE o.product_id = p.id AND o.status = 'ACTIVE'");

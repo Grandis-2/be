@@ -12,6 +12,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -66,6 +67,42 @@ class ProductDetailServiceTest {
         ProductDetailView after = service.findProduct(productId, false);
         assertThat(after.variants().getFirst().price()).isEqualByComparingTo("2000");
         assertThat(after.soldOut()).isTrue();
+    }
+
+    @Test
+    @DisplayName("관리자 상세를 읽는 도중 커밋된 가격 변경도 이번 응답에 섞이지 않는다 — 회원 상세와 같은 REPEATABLE READ")
+    void adminDetailReadsOneSnapshot() {
+        Long productId = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "관리자 스냅샷", null);
+        Long option = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
+        boolean[] hookRan = {false};
+        SqlHookInspector.before("product_options", () -> {
+            commitOnAnotherConnection("UPDATE product_options SET price = 2000 WHERE id = " + option);
+            hookRan[0] = true;
+        });
+
+        AdminProductDetail detail = service.findAdminProduct(productId);
+
+        assertThat(hookRan[0]).isTrue();
+        assertThat(detail.product().variants().getFirst().price()).isEqualByComparingTo("1000");
+        assertThat(service.findAdminProduct(productId).product().variants().getFirst().price()).as("대조군").isEqualByComparingTo("2000");
+    }
+
+    @Test
+    @DisplayName("관리자 상세도 공개 여부와 등록 기록을 한 문장(JOIN)으로 읽는다 — 따로 읽으면 visible 과 completed 의 스냅샷이 갈린다")
+    void adminDetailReadsProductAndRegistrationInOneStatement() {
+        Long productId = fixtures.product("PREORDER", "ACTIVE");
+        fixtures.registration(productId, ShopFixtures.unique());
+        SqlHookInspector.reset();
+
+        AdminProductDetail detail = service.findAdminProduct(productId);
+
+        List<String> registrationReads = SqlHookInspector.executed.stream()
+                .filter(sql -> sql.contains("product_registrations")).toList();
+        assertThat(registrationReads).as("등록 기록을 읽는 문장은 하나").hasSize(1);
+        assertThat(registrationReads.getFirst()).as("그 문장이 products 도 읽는다").contains("products");
+        assertThat(detail.registration()).isNotNull();
+        assertThat(detail.registration().isCompleted()).isFalse();
+        assertThat(detail.product().visible()).as("관리자 상세의 visible 은 칸 그대로(픽스처 기본값 1) — 완료 여부와 섞지 않는다").isTrue();
     }
 
     private void commitOnAnotherConnection(String sql) {
