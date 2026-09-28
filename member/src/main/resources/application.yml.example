@@ -54,6 +54,7 @@ kakao:
 admin:
   username: admin
   password-hash: CHANGE_ME_TO_BCRYPT_HASH
+  # 자격증명을 바꾼 뒤에는 배포 완료 후 관리자 토큰으로 DELETE /api/v1/admin/sessions 를 한 번 부른다 — 이전 관리자 세션 전부 폐기(D-16)
 
 auth:
   # 리프레시 쿠키. 로컬 http 에서는 false 로.

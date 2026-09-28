@@ -10,8 +10,6 @@ import com.grandis.nova.common.security.TokenType;
 import com.grandis.nova.common.web.RequestIdFilter;
 import com.grandis.nova.common.security.RevocationCheckProperties;
 import com.grandis.nova.member.support.Containers;
-import org.springframework.context.annotation.Import;
-import com.grandis.nova.member.support.InMemoryFingerprintStoreConfig;
 import com.grandis.nova.member.auth.api.AuthCookies;
 import com.grandis.nova.member.auth.application.AdminProperties;
 import com.grandis.nova.member.auth.infrastructure.kakao.KakaoProperties;
@@ -48,7 +46,6 @@ import org.springframework.test.context.DynamicPropertySource;
  * Hikari 격리 수준, spring.data.redis.timeout → Lettuce 명령 타임아웃, 카카오·관리자·쿠키·닫는 경로 바인딩.
  */
 @SpringBootTest(classes = MemberApplication.class)
-@Import(InMemoryFingerprintStoreConfig.class)   // 이 컨텍스트의 관리자 해시는 예시 값이라 Redis 지문과 다르다 — 대역으로 다른 시험의 관리자 토큰을 안 끊는다
 @DisplayName("application.yml.example 이 그대로 뜬다 (실제 MySQL)")
 class ConfigBindingTest {
 

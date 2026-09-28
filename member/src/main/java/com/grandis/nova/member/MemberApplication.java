@@ -3,7 +3,6 @@ package com.grandis.nova.member;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
-import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * 카카오 로그인 · JWT 발급 · 관리자 로그인 · 회원. ECS desired 2~4.
@@ -11,7 +10,6 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  */
 @SpringBootApplication(scanBasePackages = "com.grandis.nova")
 @EnableJpaAuditing
-@EnableScheduling   // 관리자 자격증명 확인의 재시도(AdminCredentialRotationGuard) 하나뿐이다
 public class MemberApplication {
 
     public static void main(String[] args) {
