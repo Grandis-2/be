@@ -1,7 +1,7 @@
 package com.grandis.nova.preorder.query;
 
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
-import com.grandis.nova.preorder.preorder.Preorder;
+import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.syncjob.SyncAttempt;
 import com.grandis.nova.preorder.syncjob.SyncJobResponse;
 
@@ -19,13 +19,13 @@ record AdminPreorderDetailResponse(
 ) {
 
     public static AdminPreorderDetailResponse from(PreorderView.AdminDetail view) {
-        Preorder preorder = view.preorder();
+        PreorderSnapshot preorder = view.preorder();
         PreorderView.Summary summary = new PreorderView.Summary(preorder, view.shipmentBatch());
         Map<Long, List<SyncAttempt>> attempts = view.attempts();
-        return new AdminPreorderDetailResponse(PreorderDetailResponse.from(summary), preorder.getCustomerId(),
-                preorder.getAdmissionTicketId(), preorder.getInternalNote(),
+        return new AdminPreorderDetailResponse(PreorderDetailResponse.from(summary), preorder.customerId(),
+                preorder.admissionTicketId(), preorder.internalNote(),
                 view.syncJobs().stream()
-                        .map(job -> SyncJobResponse.from(job, preorder.getPreorderToken(),
+                        .map(job -> SyncJobResponse.from(job, preorder.preorderToken(),
                                 attempts.getOrDefault(job.getId(), List.of())))
                         .toList(),
                 view.events().stream().map(PreorderEventResponse::from).toList());

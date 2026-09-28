@@ -1,7 +1,7 @@
 package com.grandis.nova.preorder.query;
 
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
-import com.grandis.nova.preorder.preorder.Preorder;
+import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 
 /**
  * 예약 상세(openapi PreorderDetail). 목록 항목에 외부 예약 번호와 취소 가능 여부가 더 붙는다.
@@ -14,8 +14,8 @@ record PreorderDetailResponse(
 ) {
 
     public static PreorderDetailResponse from(PreorderView.Summary view) {
-        Preorder preorder = view.preorder();
+        PreorderSnapshot preorder = view.preorder();
         return new PreorderDetailResponse(PreorderSummaryResponse.from(view),
-                preorder.getExternalReference(), preorder.isCancelable());
+                preorder.externalReference(), preorder.isCancelable());
     }
 }

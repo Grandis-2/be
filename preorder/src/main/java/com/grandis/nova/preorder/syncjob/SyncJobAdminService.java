@@ -3,8 +3,8 @@ package com.grandis.nova.preorder.syncjob;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.preorder.PreorderErrorCode;
-import com.grandis.nova.preorder.preorder.Preorder;
-import com.grandis.nova.preorder.preorder.PreorderRepository;
+import com.grandis.nova.preorder.preorder.PreorderSnapshot;
+import com.grandis.nova.preorder.preorder.Preorders;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -20,8 +20,6 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 /** 관리자 동기화 작업 조회 · 재처리. */
 @Service
@@ -35,13 +33,13 @@ class SyncJobAdminService {
             Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by(Sort.Direction.DESC, "id"));
 
     private final PreorderSyncJobRepository syncJobs;
-    private final PreorderRepository preorders;
+    private final Preorders preorders;
     private final SyncAttemptReader syncAttempts;
     private final ReprocessCandidateReader candidateReader;
     private final SyncJobReprocessor reprocessor;
     private final TaskExecutor reprocessExecutor;
 
-    SyncJobAdminService(PreorderSyncJobRepository syncJobs, PreorderRepository preorders,
+    SyncJobAdminService(PreorderSyncJobRepository syncJobs, Preorders preorders,
                                SyncAttemptReader syncAttempts, ReprocessCandidateReader candidateReader,
                                SyncJobReprocessor reprocessor,
                                @Qualifier(SyncJobConfig.REPROCESS_EXECUTOR) TaskExecutor reprocessExecutor) {
@@ -135,23 +133,21 @@ class SyncJobAdminService {
         if (preorderToken == null) {
             return Optional.of(new SyncJobFilter(jobType, status, null));
         }
-        return preorders.findByPreorderToken(preorderToken)
-                .map(preorder -> new SyncJobFilter(jobType, status, preorder.getId()));
+        return preorders.findByToken(preorderToken)
+                .map(preorder -> new SyncJobFilter(jobType, status, preorder.id()));
     }
 
     private List<SyncJobView> views(List<PreorderSyncJob> jobs) {
-        Map<Long, Preorder> owners = preordersOf(jobs);
+        Map<Long, PreorderSnapshot> owners = preordersOf(jobs);
         Map<Long, List<SyncAttempt>> attempts = syncAttempts.findByJobIds(ids(jobs));
         return jobs.stream()
-                .map(job -> new SyncJobView(job, owners.get(job.getPreorderId()).getPreorderToken(),
+                .map(job -> new SyncJobView(job, owners.get(job.getPreorderId()).preorderToken(),
                         attempts.getOrDefault(job.getId(), List.of())))
                 .toList();
     }
 
-    private Map<Long, Preorder> preordersOf(Collection<PreorderSyncJob> jobs) {
-        List<Long> preorderIds = jobs.stream().map(PreorderSyncJob::getPreorderId).distinct().toList();
-        return preorders.findAllById(preorderIds).stream()
-                .collect(Collectors.toMap(Preorder::getId, Function.identity()));
+    private Map<Long, PreorderSnapshot> preordersOf(Collection<PreorderSyncJob> jobs) {
+        return preorders.findAllById(jobs.stream().map(PreorderSyncJob::getPreorderId).distinct().toList());
     }
 
     private static List<Long> ids(Collection<PreorderSyncJob> jobs) {

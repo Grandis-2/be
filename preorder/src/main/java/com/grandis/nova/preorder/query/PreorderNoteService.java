@@ -1,6 +1,6 @@
 package com.grandis.nova.preorder.query;
 
-import com.grandis.nova.preorder.preorder.PreorderRepository;
+import com.grandis.nova.preorder.preorder.PreorderLedger;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -11,14 +11,14 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 class PreorderNoteService {
 
-    private final PreorderRepository preorders;
+    private final PreorderLedger ledger;
 
-    PreorderNoteService(PreorderRepository preorders) {
-        this.preorders = preorders;
+    PreorderNoteService(PreorderLedger ledger) {
+        this.ledger = ledger;
     }
 
     @Transactional
     public void changeInternalNote(String preorderToken, String internalNote) {
-        preorders.getByToken(preorderToken).changeInternalNote(internalNote);
+        ledger.changeInternalNote(preorderToken, internalNote);
     }
 }

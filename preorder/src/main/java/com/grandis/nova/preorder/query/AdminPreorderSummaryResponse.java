@@ -13,6 +13,6 @@ record AdminPreorderSummaryResponse(
     public static AdminPreorderSummaryResponse from(PreorderView.AdminSummary view) {
         return new AdminPreorderSummaryResponse(
                 PreorderSummaryResponse.from(new PreorderView.Summary(view.preorder(), view.shipmentBatch())),
-                view.preorder().getCustomerId(), view.registerJobStatus());
+                view.preorder().customerId(), view.registerJobStatus());
     }
 }

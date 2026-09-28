@@ -137,7 +137,7 @@ class PreorderAcceptTransaction {
         if (!different.isEmpty()) {
             throw new BusinessException(PreorderErrorCode.KEY_PAYLOAD_MISMATCH, Map.of("fields", different));
         }
-        return new AcceptResult(existing, batches.getAssigned(existing), true);
+        return new AcceptResult(existing, batches.getAssigned(existing.getShipmentBatchId()), true);
     }
 
     private static OptionSnapshot requireOnSale(AcceptCommand command, Optional<ProductCatalog> product) {

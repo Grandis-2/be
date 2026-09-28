@@ -1,7 +1,7 @@
 package com.grandis.nova.preorder.query;
 
 import com.grandis.nova.preorder.preorder.EventActor;
-import com.grandis.nova.preorder.preorder.PreorderEvent;
+import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 
 import java.time.Instant;
@@ -16,8 +16,8 @@ record PreorderEventResponse(
         Instant createdAt
 ) {
 
-    public static PreorderEventResponse from(PreorderEvent event) {
-        return new PreorderEventResponse(event.getEventSequence(), event.getFromStatus(), event.getToStatus(),
-                event.getActor(), event.getReason(), event.getCreatedAt());
+    public static PreorderEventResponse from(PreorderHistoryEntry event) {
+        return new PreorderEventResponse(event.eventSequence(), event.fromStatus(), event.toStatus(),
+                event.actor(), event.reason(), event.createdAt());
     }
 }

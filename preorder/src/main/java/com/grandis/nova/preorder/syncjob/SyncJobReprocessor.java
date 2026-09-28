@@ -4,7 +4,7 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.outbox.OutboxMessage.SyncJobReprocessRequested;
 import com.grandis.nova.preorder.outbox.OutboxWriter;
-import com.grandis.nova.preorder.preorder.PreorderRepository;
+import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,13 +20,13 @@ import java.util.Optional;
 class SyncJobReprocessor {
 
     private final PreorderSyncJobRepository syncJobs;
-    private final PreorderRepository preorders;
+    private final PreorderLedger ledger;
     private final OutboxWriter outboxWriter;
 
-    SyncJobReprocessor(PreorderSyncJobRepository syncJobs, PreorderRepository preorders,
+    SyncJobReprocessor(PreorderSyncJobRepository syncJobs, PreorderLedger ledger,
                               OutboxWriter outboxWriter) {
         this.syncJobs = syncJobs;
-        this.preorders = preorders;
+        this.ledger = ledger;
         this.outboxWriter = outboxWriter;
     }
 
@@ -35,7 +35,7 @@ class SyncJobReprocessor {
     public PreorderSyncJob reprocess(Long syncJobId, String requestedBy) {
         Long preorderId = syncJobs.findPreorderId(syncJobId)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.SYNC_JOB_NOT_FOUND));
-        PreorderStatus preorderStatus = preorders.findStatusForUpdate(preorderId).orElseThrow();
+        PreorderStatus preorderStatus = ledger.lockStatus(preorderId);
         // 잠근 뒤 처음 읽어야 그 사이 취소가 바꾼 작업 상태를 본다
         PreorderSyncJob job = syncJobs.findById(syncJobId).orElseThrow();
         Optional<String> blocker = blocker(job.getJobType(), job.getStatus(), preorderStatus);

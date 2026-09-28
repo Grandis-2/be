@@ -46,6 +46,11 @@ public class PreorderLedger {
         return preorder;
     }
 
+    /** 관리자 전용 메모. 이력을 남기지 않는 유일한 변경이다. @throws BusinessException PREORDER_NOT_FOUND */
+    public void changeInternalNote(String preorderToken, String internalNote) {
+        preorders.getByToken(preorderToken).changeInternalNote(internalNote);
+    }
+
     /**
      * 사건을 적용한다. 지금 상태에서 의미 없는 사건이면(중복 · 늦은 도착) 아무것도 바꾸지 않고
      * applied = false 와 지금 상태를 돌려준다 — 같은 메시지를 두 번 받아도 결과가 같다.
@@ -90,7 +95,12 @@ public class PreorderLedger {
         return new PreorderTransition(true, to);
     }
 
-    private PreorderStatus lockStatus(Long preorderId) {
+    /**
+     * 예약 행을 잠그고 지금 상태를 읽는다. 전이 없이 예약과 순서를 맞춰야 하는 변경(작업 재처리 등)이 쓴다.
+     *
+     * @throws IllegalArgumentException 예약이 없다
+     */
+    public PreorderStatus lockStatus(Long preorderId) {
         return preorders.findStatusForUpdate(preorderId)
                 .orElseThrow(() -> new IllegalArgumentException("예약이 없다: " + preorderId));
     }

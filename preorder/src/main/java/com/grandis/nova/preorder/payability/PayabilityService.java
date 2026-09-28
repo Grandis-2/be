@@ -2,8 +2,8 @@ package com.grandis.nova.preorder.payability;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
-import com.grandis.nova.preorder.preorder.Preorder;
-import com.grandis.nova.preorder.preorder.PreorderRepository;
+import com.grandis.nova.preorder.preorder.PreorderSnapshot;
+import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.web.Viewer;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,18 +17,18 @@ import java.time.Clock;
 @Service
 class PayabilityService {
 
-    private final PreorderRepository preorders;
+    private final Preorders preorders;
     private final Clock clock;
 
-    PayabilityService(PreorderRepository preorders, Clock clock) {
+    PayabilityService(Preorders preorders, Clock clock) {
         this.preorders = preorders;
         this.clock = clock;
     }
 
     @Transactional(readOnly = true)
     public Payability check(Viewer viewer, String preorderToken) {
-        Preorder preorder = preorders.getByToken(preorderToken);
-        if (!viewer.canSee(preorder.getCustomerId())) {
+        PreorderSnapshot preorder = preorders.getByToken(preorderToken);
+        if (!viewer.canSee(preorder.customerId())) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
         }
         return new Payability(preorder, preorder.payabilityBlocker(clock.instant()));
