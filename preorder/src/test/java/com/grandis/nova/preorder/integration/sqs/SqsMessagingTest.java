@@ -27,10 +27,14 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mockingDetails;
 
 /** 실제 SQS 프로토콜(Floci)로 발행 · 소비 · DLQ 와 흐름 ①(접수 → 외부 등록 → 결제 가능)을 확인한다. */
@@ -45,9 +49,11 @@ class SqsMessagingTest {
     @Autowired
     TestQueues queues;
 
-    /** 호출 기록만 읽어 메시지가 몇 번 처리됐는지 센다(스텁하지 않는다). */
+    /** 실제 처리는 그대로 하고, 받은 횟수(진입)와 끝까지 처리한 횟수(정상 반환)를 센다. */
     @MockitoSpyBean
     PreorderEventDispatcher dispatcher;
+
+    final Map<String, Integer> handled = new ConcurrentHashMap<>();
 
     @Autowired
     PreorderAcceptService acceptService;
@@ -69,6 +75,11 @@ class SqsMessagingTest {
     @BeforeEach
     void setUp() {
         fixtures = new ShopFixtures(jdbcTemplate);
+        doAnswer(invocation -> {
+            invocation.callRealMethod();
+            handled.merge(invocation.getArgument(0), 1, Integer::sum);
+            return null;
+        }).when(dispatcher).dispatch(anyString());
     }
 
     @Test
@@ -119,7 +130,9 @@ class SqsMessagingTest {
         queues.send("preorder-events", body);
         queues.send("preorder-events", body);
 
-        await().alias("두 메시지를 모두 처리한다").atMost(TIMEOUT).until(() -> dispatchCount(body) == 2);
+        // 받은 횟수는 처리 도중에도 오르므로, 두 번째 처리가 끝난 뒤에 확인한다
+        await().alias("두 메시지를 모두 끝까지 처리한다").atMost(TIMEOUT)
+                .until(() -> handled.getOrDefault(body, 0) == 2);
         assertThat(status(preorderId)).isEqualTo("PAYABLE");
         assertThat(fixtures.count("""
                 SELECT COUNT(*) FROM preorder_events WHERE preorder_id = ? AND to_status = 'PAYABLE'
@@ -173,6 +186,7 @@ class SqsMessagingTest {
                 """.formatted(eventId, syncJobId, syncJobId, token, externalNumber);
     }
 
+    /** 받은 횟수(호출 기록은 진입 시점). 끝까지 처리했는지는 handled 로 본다. */
     private long dispatchCount(String body) {
         return mockingDetails(dispatcher).getInvocations().stream()
                 .filter(invocation -> invocation.getMethod().getName().equals("dispatch"))
