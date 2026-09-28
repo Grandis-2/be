@@ -21,7 +21,12 @@ public class RevocationFailurePolicy {
 
     public RevocationFailurePolicy(RevocationCheckProperties properties) {
         PathPatternRequestMatcher.Builder builder = PathPatternRequestMatcher.withDefaults();
-        this.failClosed = properties.failClosedPaths().stream().map(builder::matcher).map(m -> (RequestMatcher) m).toList();
+        // 항목에 메서드가 있으면 그 메서드만, 없으면 모든 메서드가 닫힌다
+        this.failClosed = properties.entries().stream()
+                .map(entry -> (RequestMatcher) entry.method()
+                        .map(method -> builder.matcher(method, entry.pattern()))
+                        .orElseGet(() -> builder.matcher(entry.pattern())))
+                .toList();
         // 설정으로 덮을 수 있는 목록이라 실효값을 기동 로그에 남긴다. 오타 하나가 닫는 경로를 조용히 줄인다.
         log.info("auth.revocation-check.fail-closed-paths = {}", properties.failClosedPaths());
     }

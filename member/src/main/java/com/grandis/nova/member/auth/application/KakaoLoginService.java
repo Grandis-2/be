@@ -43,7 +43,7 @@ public class KakaoLoginService {
 
         // 제재 칸이 생기기 전까지 로그인은 막지 않는다. nbf 확인은 필터가 한다. 여기서는 발급만.
         TokenService.IssuedTokens issued = tokens.issue(String.valueOf(customer.getId()), Role.USER, client);
-        return new LoginResult(issued, customer.getDisplayName(), Role.USER);
+        return new LoginResult(issued, customer.getDisplayName(), Role.USER, customer.profile().isComplete());
     }
 
     private Customer findOrCreate(KakaoUserInfo user) {
@@ -57,6 +57,7 @@ public class KakaoLoginService {
         });
     }
 
-    public record LoginResult(TokenService.IssuedTokens tokens, String displayName, Role role) {
+    /** `profileComplete` 가 false 면 화면이 내 정보 입력을 먼저 받는다. 가입 직후에는 언제나 false 다. */
+    public record LoginResult(TokenService.IssuedTokens tokens, String displayName, Role role, boolean profileComplete) {
     }
 }

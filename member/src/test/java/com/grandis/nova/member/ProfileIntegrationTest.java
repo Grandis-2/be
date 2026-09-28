@@ -7,7 +7,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.grandis.nova.common.security.JwtAuthenticationFilter;
+import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.security.JwtTokenProvider;
 import com.grandis.nova.common.security.Role;
 import com.grandis.nova.common.security.TokenType;
@@ -78,7 +78,7 @@ class ProfileIntegrationTest {
     @Test
     @DisplayName("가입 직후에는 셋 다 null 이고 표시 이름만 있다 — 카카오가 닉네임 말고는 주지 않는다")
     void freshCustomerHasOnlyDisplayName() throws Exception {
-        mvc.perform(get(PATH).header(JwtAuthenticationFilter.HEADER, userToken))
+        mvc.perform(get(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.displayName").value("카카오닉네임"))
                 .andExpect(jsonPath("$.data.name").value(org.hamcrest.Matchers.nullValue()))
@@ -89,14 +89,14 @@ class ProfileIntegrationTest {
     @Test
     @DisplayName("PUT 전체 → 200 에 저장된 값, GET 왕복 같음, DB 세 칸이 채워짐. 표시 이름은 안 바뀐다")
     void putThenGetRoundTrip() throws Exception {
-        mvc.perform(put(PATH).header(JwtAuthenticationFilter.HEADER, userToken).contentType(MediaType.APPLICATION_JSON).content(FULL))
+        mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON).content(FULL))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.name").value("홍길동"))
                 .andExpect(jsonPath("$.data.email").value("hong@example.com"))
                 .andExpect(jsonPath("$.data.phoneNumber").value("010-1234-5678"))
                 .andExpect(jsonPath("$.data.displayName").value("카카오닉네임"));
 
-        mvc.perform(get(PATH).header(JwtAuthenticationFilter.HEADER, userToken))
+        mvc.perform(get(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.email").value("hong@example.com"));
         assertThat(row()).containsEntry("name", "홍길동").containsEntry("email", "hong@example.com")
@@ -108,11 +108,11 @@ class ProfileIntegrationTest {
     @Test
     @DisplayName("안 보낸 칸과 빈 문자열은 비운다 — 부분 갱신이 아니라 통째 교체다")
     void omittedAndBlankFieldsAreCleared() throws Exception {
-        mvc.perform(put(PATH).header(JwtAuthenticationFilter.HEADER, userToken).contentType(MediaType.APPLICATION_JSON).content(FULL))
+        mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON).content(FULL))
                 .andExpect(status().isOk());
 
         // 이름만 보낸다 → 나머지 둘은 비워진다
-        mvc.perform(put(PATH).header(JwtAuthenticationFilter.HEADER, userToken).contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"김철수\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.name").value("김철수"))
@@ -120,7 +120,7 @@ class ProfileIntegrationTest {
         assertThat(row()).containsEntry("name", "김철수").containsEntry("email", null).containsEntry("phone_number", null);
 
         // 빈 문자열·공백도 null 로 저장된다 (varchar 에 빈 문자열을 섞지 않는다)
-        mvc.perform(put(PATH).header(JwtAuthenticationFilter.HEADER, userToken).contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
                         .content(body("   ", "", null)))
                 .andExpect(status().isOk());
         assertThat(row()).containsEntry("name", null).containsEntry("email", null);
@@ -129,11 +129,11 @@ class ProfileIntegrationTest {
     @Test
     @DisplayName("이메일 형식이 아니면 400 VALIDATION_FAILED 에 그 칸 이름. 기존 값은 그대로다")
     void invalidEmailIsRejected() throws Exception {
-        mvc.perform(put(PATH).header(JwtAuthenticationFilter.HEADER, userToken).contentType(MediaType.APPLICATION_JSON).content(FULL))
+        mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON).content(FULL))
                 .andExpect(status().isOk());
 
         for (String bad : new String[] {"not-an-email", "hong@", "@example.com", "hong example@x.com"}) {
-            mvc.perform(put(PATH).header(JwtAuthenticationFilter.HEADER, userToken).contentType(MediaType.APPLICATION_JSON)
+            mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
                             .content(body("홍길동", bad, "010-1234-5678")))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
@@ -146,13 +146,13 @@ class ProfileIntegrationTest {
     @DisplayName("길이는 글자 수로 센다: 이름 50 이모지는 통과, 51 은 400. NFD 한글도 정규화한 뒤 센다")
     void lengthIsCountedInCodePoints() throws Exception {
         String emoji = "😀";   // 😀 char 2개 = 코드포인트 1개
-        mvc.perform(put(PATH).header(JwtAuthenticationFilter.HEADER, userToken).contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
                         .content(body(emoji.repeat(50), null, null)))
                 .andExpect(status().isOk());
         assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(name) FROM customers WHERE id = ?", Integer.class, customer.getId()))
                 .isEqualTo(50);
 
-        mvc.perform(put(PATH).header(JwtAuthenticationFilter.HEADER, userToken).contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
                         .content(body(emoji.repeat(51), null, null)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.details.violations[?(@.field == 'name')]").exists());
@@ -160,7 +160,7 @@ class ProfileIntegrationTest {
         String nfc = "한국어이름".repeat(10);                                                   // 코드포인트 50
         String nfd = java.text.Normalizer.normalize(nfc, java.text.Normalizer.Form.NFD);       // 정규화 전 130
         assertThat(nfd.codePointCount(0, nfd.length())).isEqualTo(130);
-        mvc.perform(put(PATH).header(JwtAuthenticationFilter.HEADER, userToken).contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
                         .content(body(nfd, null, null)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.name").value(nfc));
@@ -176,7 +176,7 @@ class ProfileIntegrationTest {
         // 로컬 64 + "@" + 도메인 190(라벨 63·63·62) = 255. 라벨 상한을 지켜 형식 검사도 함께 통과한다.
         String longest = "a".repeat(64) + "@" + "b".repeat(63) + "." + "c".repeat(63) + "." + "d".repeat(62);
         assertThat(longest).hasSize(255);
-        mvc.perform(put(PATH).header(JwtAuthenticationFilter.HEADER, userToken).contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
                         .content(body(null, longest, "0".repeat(20))))
                 .andExpect(status().isOk());
         assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(email) FROM customers WHERE id = ?", Integer.class, customer.getId()))
@@ -185,14 +185,14 @@ class ProfileIntegrationTest {
         // 한 글자만 더 붙인다. 형식은 그대로 유효하고 길이만 넘는다 — 거절하는 규칙이 크기 규칙임이 이 한 쌍으로 갈린다.
         String tooLong = longest + "d";
         assertThat(tooLong).hasSize(256);
-        mvc.perform(put(PATH).header(JwtAuthenticationFilter.HEADER, userToken).contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
                         .content(body(null, tooLong, null)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.details.violations[?(@.field == 'email')]").exists());
         assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(email) FROM customers WHERE id = ?", Integer.class, customer.getId()))
                 .isEqualTo(255);   // 거절된 요청은 아무것도 안 바꾼다
 
-        mvc.perform(put(PATH).header(JwtAuthenticationFilter.HEADER, userToken).contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
                         .content(body(null, null, "0".repeat(21))))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.details.violations[?(@.field == 'phoneNumber')]").exists());
@@ -247,7 +247,7 @@ class ProfileIntegrationTest {
     @DisplayName("연락처는 형식을 보지 않는다 — 국가번호·내선 표기가 나라마다 달라 서버가 정하지 않는다(기본 배송지 연락처와 같은 규칙)")
     void phoneFormatIsNotEnforced() throws Exception {
         for (String phone : new String[] {"+82 10-1234-5678", "010 1234 5678", "01012345678"}) {
-            mvc.perform(put(PATH).header(JwtAuthenticationFilter.HEADER, userToken).contentType(MediaType.APPLICATION_JSON)
+            mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
                             .content(body(null, null, phone)))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.data.phoneNumber").value(phone));
@@ -258,7 +258,7 @@ class ProfileIntegrationTest {
     @DisplayName("내 정보와 기본 배송지를 동시에 저장해도 서로를 덮지 않는다 — 한 행이지만 다른 자원이다")
     void concurrentProfileAndAddressEditsDoNotClobberEachOther() throws Exception {
         // 먼저 배송지를 채워 둔다. 그래야 "프로필 저장이 배송지를 지웠다" 가 눈에 보인다.
-        mvc.perform(put("/api/v1/me/default-address").header(JwtAuthenticationFilter.HEADER, userToken)
+        mvc.perform(put("/api/v1/me/default-address").header(BearerTokens.HEADER, BearerTokens.value(userToken))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"홍길동\",\"phone\":\"01012345678\",\"postalCode\":\"06236\",\"line1\":\"서울\",\"line2\":null}"))
                 .andExpect(status().isOk());
@@ -325,10 +325,10 @@ class ProfileIntegrationTest {
     @DisplayName("ADMIN 토큰은 403, 토큰이 없으면 401 — 남의 정보를 보거나 바꿀 길이 없다")
     void adminIs403AndAnonymousIs401() throws Exception {
         String admin = provider.create("admin", Role.ADMIN, UUID.randomUUID(), TokenType.ACCESS);
-        mvc.perform(get(PATH).header(JwtAuthenticationFilter.HEADER, admin))
+        mvc.perform(get(PATH).header(BearerTokens.HEADER, BearerTokens.value(admin)))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
-        mvc.perform(put(PATH).header(JwtAuthenticationFilter.HEADER, admin).contentType(MediaType.APPLICATION_JSON).content(FULL))
+        mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(admin)).contentType(MediaType.APPLICATION_JSON).content(FULL))
                 .andExpect(status().isForbidden());
         mvc.perform(get(PATH)).andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
@@ -341,10 +341,10 @@ class ProfileIntegrationTest {
         Customer other = customers.saveAndFlush(Customer.fromKakao("t" + UUID.randomUUID().toString().replace("-", "").substring(0, 18), "다른사람"));
         String otherToken = provider.create(String.valueOf(other.getId()), Role.USER, UUID.randomUUID(), TokenType.ACCESS);
 
-        mvc.perform(put(PATH).header(JwtAuthenticationFilter.HEADER, userToken).contentType(MediaType.APPLICATION_JSON).content(FULL))
+        mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON).content(FULL))
                 .andExpect(status().isOk());
 
-        mvc.perform(get(PATH).header(JwtAuthenticationFilter.HEADER, otherToken))
+        mvc.perform(get(PATH).header(BearerTokens.HEADER, BearerTokens.value(otherToken)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.displayName").value("다른사람"))
                 .andExpect(jsonPath("$.data.email").value(org.hamcrest.Matchers.nullValue()));

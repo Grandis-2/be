@@ -5,7 +5,7 @@ import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.security.AuthenticatedPrincipal;
 import com.grandis.nova.common.security.InvalidTokenException;
 import com.grandis.nova.common.security.JsonAuthFailureHandlers;
-import com.grandis.nova.common.security.JwtAuthenticationFilter;
+import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.security.JwtTokenProvider;
 import com.grandis.nova.common.security.Role;
 import com.grandis.nova.common.security.TokenClaims;
@@ -32,7 +32,6 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -44,10 +43,14 @@ import org.springframework.web.bind.annotation.RestController;
  * - POST /session/refresh (쿠키) → 200 같은 모양 + 새 쿠키. 공개 경로. Origin 허용 목록(RefreshOriginPolicy) → 회원 이름을 **먼저** 읽고(
  *   회전 뒤에 DB 가 죽으면 회전만 되고 쿠키를 못 줘 다음 시도가 재사용으로 찍힌다) → TokenService.rotate(폐기 검사 두 번 포함).
  * - GET /session → {displayName, role}. USER 면 customers 에서 이름을 읽는다.
+ * - 로그인(카카오 · 관리자) 응답은 자기 역할의 리프레시 쿠키를 내리면서 **상대 역할의 쿠키를 만료**시킨다 — 한 브라우저에는 한 역할(2026-09-28).
+ *   그래야 관리자로 로그인한 브라우저에 남은 회원 쿠키가 재발급을 회원 쪽으로 끌고 가지 않는다.
  * - DELETE /session → 204 + 두 쿠키 만료. **공개 경로**: 만료된 액세스로도 로그아웃이 되어야 한다. 액세스 헤더·회원 쿠키·관리자 쿠키
  *   중 파싱되는 것의 sid 를 전부 폐기한다. 폐기 표식·리프레시 삭제 중 하나라도 저장소 장애로 못 했으면 **503 DEPENDENCY_UNAVAILABLE(details.retryable=true)**
  *   — 쿠키는 그래도 지워 이 브라우저는 로그아웃되지만, 서버 쪽 폐기가 안 끝난 것을 204 로 숨기지 않는다. 프론트는 액세스 헤더로 로그아웃을 다시 보낸다.
  * - POST /admin/session {username, password} → 200 {sessionToken, role: ADMIN} + 쿠키 admin_refresh_token / 401 INVALID_CREDENTIALS.
+ * - DELETE /admin/sessions (ADMIN) → 204 + 관리자 쿠키 만료. 관리자 세션 **전부** 폐기(부른 세션 포함, D-16). 자격증명 교체 절차의 마지막 단계이고
+ *   유출 의심 때 즉시 끊는 길. 배포 중 옛 태스크가 발급한 세션도 이 호출 이전 발급이라 같이 죽는다. 표식을 못 심으면 503 DEPENDENCY_UNAVAILABLE(retryable).
  */
 @RestController
 @RequestMapping("/api/v1")
@@ -84,7 +87,8 @@ public class AuthController {
     public ResponseEntity<ApiResponse<LoginResponse>> kakaoCallback(@Valid @RequestBody KakaoCallbackRequest request,
                                                                      HttpServletRequest servletRequest) {
         KakaoLoginService.LoginResult result = kakaoLogin.login(request.code(), request.redirectUri(), clientOf(servletRequest));
-        return withRefreshCookie(result.tokens(), Role.USER, new LoginResponse(result.tokens().accessToken(), result.displayName(), result.role()));
+        return withRefreshCookie(result.tokens(), Role.USER,
+                new LoginResponse(result.tokens().accessToken(), result.displayName(), result.role(), result.profileComplete()));
     }
 
     @PostMapping("/session/refresh")
@@ -93,7 +97,7 @@ public class AuthController {
         // 쿠키는 원문으로 읽는다 — @CookieValue 의 URL 디코딩이 잘못된 값에 500 을 냈다(AuthCookies.raw)
         String userRefresh = AuthCookies.raw(request, AuthCookies.REFRESH_TOKEN);
         String adminRefresh = AuthCookies.raw(request, AuthCookies.ADMIN_REFRESH_TOKEN);
-        // 회원 쿠키가 있으면 그것을, 없으면 관리자 쿠키를. 둘 다 있으면 회원(한 브라우저에서 둘을 같이 쓰는 건 개발 중뿐이다).
+        // 회원 쿠키가 있으면 그것을, 없으면 관리자 쿠키를. 로그인이 상대 역할 쿠키를 지우므로 둘 다 있는 건 손으로 만든 상태뿐이고, 그때는 회원.
         // 어느 쿠키로 왔는지가 곧 역할이다 — 회원 리프레시는 불투명 난수라 값 자체에는 주인도 역할도 적혀 있지 않다.
         Role role = present(userRefresh) ? Role.USER : Role.ADMIN;
         String refreshToken = present(userRefresh) ? userRefresh : adminRefresh;
@@ -102,20 +106,22 @@ public class AuthController {
         }
         // 실패할 수 있는 DB 조회(회원 이름)를 회전 **앞**에 둔다. 여기서 던지면 리프레시가 아직 교체되지 않아 같은 쿠키로 다시 올 수 있다.
         String subject = tokens.subjectOf(refreshToken, role);
-        String displayName = displayNameOf(new AuthenticatedPrincipal(subject, role));
+        SessionOwner owner = ownerOf(new AuthenticatedPrincipal(subject, role));
         TokenService.Rotated rotated = tokens.rotate(refreshToken, role, clientOf(request));
-        return withRefreshCookie(rotated.tokens(), role, new LoginResponse(rotated.tokens().accessToken(), displayName, role));
+        return withRefreshCookie(rotated.tokens(), role,
+                new LoginResponse(rotated.tokens().accessToken(), owner.displayName(), role, owner.profileComplete()));
     }
 
     @GetMapping("/session")
     public ApiResponse<SessionInfoResponse> session(@AuthenticationPrincipal AuthenticatedPrincipal principal) {
-        return ApiResponse.ok(new SessionInfoResponse(displayNameOf(principal), principal.role()));
+        SessionOwner owner = ownerOf(principal);
+        return ApiResponse.ok(new SessionInfoResponse(owner.displayName(), principal.role(), owner.profileComplete()));
     }
 
     @DeleteMapping("/session")
-    public ResponseEntity<ApiResponse<Void>> logout(
-            HttpServletRequest request,
-            @RequestHeader(name = JwtAuthenticationFilter.HEADER, required = false) String accessToken) {
+    public ResponseEntity<ApiResponse<Void>> logout(HttpServletRequest request) {
+        // 액세스 토큰은 필터와 같은 추출기로 — 잘 갖춘 Bearer 헤더가 아니면 없는 것으로(로그아웃은 그래도 된다)
+        String accessToken = BearerTokens.extract(request).orElse(null);
         String userRefresh = AuthCookies.raw(request, AuthCookies.REFRESH_TOKEN);
         String adminRefresh = AuthCookies.raw(request, AuthCookies.ADMIN_REFRESH_TOKEN);
         Set<UUID> sessions = new LinkedHashSet<>();
@@ -172,6 +178,23 @@ public class AuthController {
         return withRefreshCookie(issued, Role.ADMIN, new AdminSessionResponse(issued.accessToken(), Role.ADMIN));
     }
 
+    @DeleteMapping("/admin/sessions")
+    public ResponseEntity<ApiResponse<Void>> revokeAllAdminSessions() {
+        try {
+            tokens.revokeAll(AdminLoginService.ADMIN_SUBJECT);
+        } catch (DataAccessException e) {
+            // 표식을 못 심었다 — 아무 세션도 안 끊겼다. 204 로 숨기지 않는다
+            log.warn("admin sessions not revoked cause={}", e.getClass().getSimpleName());
+            CommonErrorCode code = CommonErrorCode.DEPENDENCY_UNAVAILABLE;
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(ApiResponse.fail(code, code.defaultMessage(), JsonAuthFailureHandlers.RETRYABLE_DETAILS));
+        }
+        log.warn("all admin sessions revoked by operator");
+        return ResponseEntity.status(HttpStatus.NO_CONTENT)
+                .header(HttpHeaders.SET_COOKIE, cookies.expiredRefresh(Role.ADMIN).toString())
+                .build();
+    }
+
     private static boolean present(String s) {
         return s != null && !s.isBlank();
     }
@@ -184,15 +207,26 @@ public class AuthController {
         return new ClientInfo(request.getRemoteAddr(), request.getHeader(HttpHeaders.USER_AGENT));
     }
 
+    /** 자기 역할의 리프레시 쿠키를 내리고 상대 역할의 쿠키는 만료시킨다 — 한 브라우저에는 한 역할. */
     private <T> ResponseEntity<ApiResponse<T>> withRefreshCookie(TokenService.IssuedTokens issued, Role role, T body) {
+        Role other = role == Role.ADMIN ? Role.USER : Role.ADMIN;
         return ResponseEntity.ok()
                 .header(HttpHeaders.SET_COOKIE, cookies.refresh(issued.refreshToken(), issued.refreshTokenMaxAge(), role).toString())
+                .header(HttpHeaders.SET_COOKIE, cookies.expiredRefresh(other).toString())
                 .body(ApiResponse.ok(body));
     }
 
-    private String displayNameOf(AuthenticatedPrincipal principal) {
+    /**
+     * 세션 주인에서 화면이 쓰는 두 값. 회원 행을 한 번만 읽어 둘 다 꺼낸다 — 표시 이름과 입력 완료 여부를 따로 조회하면 조회가 둘이 된다.
+     *
+     * 관리자는 회원 행이 없다. 표시 이름은 null 이고 입력 완료는 true 다 — 입력할 정보가 없으니 막을 것도 없다.
+     */
+    private record SessionOwner(String displayName, boolean profileComplete) {
+    }
+
+    private SessionOwner ownerOf(AuthenticatedPrincipal principal) {
         if (principal.role() != Role.USER) {
-            return null;
+            return new SessionOwner(null, true);
         }
         long customerId;
         try {
@@ -202,7 +236,8 @@ public class AuthController {
             throw new InvalidTokenException("non-numeric subject for USER");
         }
         // 행이 없으면 401 — CustomerService 와 같은 규칙. 탈퇴가 없어 지금은 도달하지 않는 갈래다.
-        return customers.findById(customerId).map(c -> c.getDisplayName())
+        return customers.findById(customerId)
+                .map(c -> new SessionOwner(c.getDisplayName(), c.profile().isComplete()))
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.UNAUTHENTICATED));
     }
 }
