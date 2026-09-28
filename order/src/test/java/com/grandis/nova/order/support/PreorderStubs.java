@@ -4,11 +4,16 @@ import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.order.client.preorder.PreorderClient;
 import com.grandis.nova.order.client.preorder.PreorderPayability;
 import com.grandis.nova.order.support.OrderFixtures.PreorderProduct;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 
+import tools.jackson.databind.json.JsonMapper;
+
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 
@@ -68,10 +73,38 @@ public final class PreorderStubs {
         given(client.getPayability(eq(payability.preorderId()), any())).willReturn(ApiResponse.ok(payability));
     }
 
-    /** 4xx(401 토큰 거절 · 403 남의 예약 · 404 없음 등). */
+    /** 4xx(401 토큰 거절 · 403 남의 예약 등). 본문 없음 — 404 는 본문의 code 로 나뉘므로 아래 둘을 쓴다. */
     public static void stubClientError(PreorderClient client, String preorderId, HttpStatus status) {
         given(client.getPayability(eq(preorderId), any()))
                 .willThrow(HttpClientErrorException.create(status, status.getReasonPhrase(), null, null, null));
+    }
+
+    /** 예약 없음. preorder 는 404 + error.code PREORDER_NOT_FOUND 로 답한다. */
+    public static void stubPreorderNotFound(PreorderClient client, String preorderId) {
+        given(client.getPayability(eq(preorderId), any())).willThrow(notFound("PREORDER_NOT_FOUND"));
+    }
+
+    /** 경로 없음(배포 순서 어긋남 · 잘못된 주소). preorder 공통 처리기는 404 + error.code NOT_FOUND 로 답한다. */
+    public static void stubRouteNotFound(PreorderClient client, String preorderId) {
+        given(client.getPayability(eq(preorderId), any())).willThrow(notFound("NOT_FOUND"));
+    }
+
+    /**
+     * preorder 의 실패 봉투를 실은 404. RestClient 가 만드는 예외처럼 본문을 봉투로 읽을 수 있게 변환 함수를 단다
+     * (응답 본문 변환은 PreorderClientTest 가 실제 클라이언트로 확인한다).
+     */
+    public static HttpClientErrorException notFound(String code) {
+        byte[] body = """
+                {"success":false,"data":null,"error":{"code":"%s","message":"없음","details":null},
+                 "timestamp":"2026-09-03T02:00:00Z","traceId":"t-1"}
+                """.formatted(code).getBytes(StandardCharsets.UTF_8);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpClientErrorException e = HttpClientErrorException.create(HttpStatus.NOT_FOUND, "Not Found", headers, body,
+                StandardCharsets.UTF_8);
+        JsonMapper mapper = JsonMapper.builder().build();
+        e.setBodyConvertFunction(type -> mapper.readValue(body, mapper.constructType(type.getType())));
+        return e;
     }
 
     public static void stubServerError(PreorderClient client, String preorderId, HttpStatus status) {

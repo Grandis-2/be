@@ -2,7 +2,10 @@ package com.grandis.nova.order.client.preorder;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.order.client.InternalCallFailures;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
@@ -19,8 +22,12 @@ import java.util.Optional;
 @Component
 public class PreorderReader {
 
+    private static final Logger log = LoggerFactory.getLogger(PreorderReader.class);
+
     static final String DEPENDENCY = "preorder";
     static final String OPERATION = "getPayability";
+    /** preorder PreorderErrorCode.PREORDER_NOT_FOUND. 경로가 없을 때의 404 는 공통 NOT_FOUND 라 이것으로 가린다. */
+    static final String PREORDER_NOT_FOUND = "PREORDER_NOT_FOUND";
 
     private final PreorderClient preorderClient;
 
@@ -34,12 +41,21 @@ public class PreorderReader {
      * @param sessionToken 사용자가 보낸 세션 토큰 그대로
      * @throws BusinessException     UNAUTHENTICATED — preorder 가 토큰을 거절(401).
      *                               DEPENDENCY_UNAVAILABLE — 타임아웃 · 연결 실패 · 5xx
-     * @throws IllegalStateException 그 밖의 4xx — 계약 불일치 같은 연동 오류(500)
+     * @throws IllegalStateException 그 밖의 4xx, 예약 없음이 아닌 404(경로 없음 · 잘못된 주소) — 연동 오류(500)
      */
     public Optional<PreorderPayability> find(String preorderId, String sessionToken) {
         try {
             return Optional.ofNullable(preorderClient.getPayability(preorderId, sessionToken).data());
-        } catch (HttpClientErrorException.NotFound | HttpClientErrorException.Forbidden e) {
+        } catch (HttpClientErrorException.NotFound e) {
+            if (isPreorderNotFound(e)) {
+                return Optional.empty();
+            }
+            // 배포 순서 어긋남 · base-url 오류면 모든 주문이 "예약 없음" 으로 보인다. 조용히 삼키지 않는다.
+            throw InternalCallFailures.integrationError(DEPENDENCY, OPERATION, e);
+        } catch (HttpClientErrorException.Forbidden e) {
+            // 소유자 아님과 preorder 보안 체인 거절이 같은 FORBIDDEN 이라 구분할 수 없다. 권한 규칙이 어긋나 모든 주문이
+            // 404 로 보일 때 흔적이 남도록 한 줄 남긴다(토큰 · 예약 UUID 는 싣지 않는다).
+            log.info("{} {} 403 — 예약 없음으로 숨김", DEPENDENCY, OPERATION);
             return Optional.empty();
         } catch (HttpClientErrorException.Unauthorized e) {
             throw new BusinessException(CommonErrorCode.UNAUTHENTICATED);
@@ -47,6 +63,16 @@ public class PreorderReader {
             throw InternalCallFailures.integrationError(DEPENDENCY, OPERATION, e);
         } catch (RestClientException e) {
             throw InternalCallFailures.unavailable(DEPENDENCY, OPERATION, e);
+        }
+    }
+
+    /** 404 본문이 preorder 의 "예약 없음" 봉투인지. 읽을 수 없는 본문은 예약 없음으로 보지 않는다. */
+    private static boolean isPreorderNotFound(HttpClientErrorException e) {
+        try {
+            ApiResponse<?> body = e.getResponseBodyAs(ApiResponse.class);
+            return body != null && body.error() != null && PREORDER_NOT_FOUND.equals(body.error().code());
+        } catch (RuntimeException unreadable) {
+            return false;
         }
     }
 }

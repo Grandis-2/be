@@ -13,6 +13,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.test.web.client.response.DefaultResponseCreator;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.support.RestClientAdapter;
@@ -136,6 +137,30 @@ class PreorderClientTest {
                 .isInstanceOf(HttpClientErrorException.NotFound.class);
     }
 
+    // 404 는 본문의 code 로 나뉜다: 예약 없음(PREORDER_NOT_FOUND)만 빈 결과, 경로 없음(공통 NOT_FOUND) · 본문 없음은 연동 오류.
+    @Test
+    void preorderNotFoundBodyIsEmpty() {
+        server.expect(requestTo(PAYABILITY_URL)).andRespond(notFound("PREORDER_NOT_FOUND"));
+
+        assertThat(new PreorderReader(client).find(PREORDER_UUID, SESSION)).isEmpty();
+    }
+
+    @Test
+    void routeNotFoundBodyIsIntegrationError() {
+        server.expect(requestTo(PAYABILITY_URL)).andRespond(notFound("NOT_FOUND"));
+
+        assertThatThrownBy(() -> new PreorderReader(client).find(PREORDER_UUID, SESSION))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void notFoundWithoutBodyIsIntegrationError() {
+        server.expect(requestTo(PAYABILITY_URL)).andRespond(withStatus(HttpStatus.NOT_FOUND));
+
+        assertThatThrownBy(() -> new PreorderReader(client).find(PREORDER_UUID, SESSION))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
     @Test
     void someoneElsesPreorderIsForbidden() {
         server.expect(requestTo(PAYABILITY_URL)).andRespond(withStatus(HttpStatus.FORBIDDEN));
@@ -147,7 +172,7 @@ class PreorderClientTest {
     // 실패를 로그로 남기는 경로(연동 오류 · 장애)에서도 전달한 토큰은 로그와 예외 메시지에 없다.
     @ParameterizedTest
     @EnumSource(value = HttpStatus.class,
-            names = {"BAD_REQUEST", "UNAUTHORIZED", "FORBIDDEN", "SERVICE_UNAVAILABLE"})
+            names = {"BAD_REQUEST", "UNAUTHORIZED", "FORBIDDEN", "NOT_FOUND", "SERVICE_UNAVAILABLE"})
     void sessionTokenIsNotLoggedOnFailure(HttpStatus status, CapturedOutput output) {
         server.expect(requestTo(PAYABILITY_URL)).andRespond(withStatus(status).body("{\"success\":false}")
                 .contentType(MediaType.APPLICATION_JSON));
@@ -172,5 +197,12 @@ class PreorderClientTest {
         for (Throwable t = thrown; t != null; t = t.getCause()) {
             assertThat(String.valueOf(t.getMessage())).doesNotContain(SESSION);
         }
+    }
+
+    private static DefaultResponseCreator notFound(String code) {
+        return withStatus(HttpStatus.NOT_FOUND).contentType(MediaType.APPLICATION_JSON).body("""
+                {"success":false,"data":null,"error":{"code":"%s","message":"없음","details":null},
+                 "timestamp":"2026-09-03T02:00:00Z","traceId":"t-1"}
+                """.formatted(code));
     }
 }

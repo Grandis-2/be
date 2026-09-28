@@ -238,11 +238,23 @@ class PlaceOrderApiTest {
 
     @Test
     void unknownPreorderIsNotFound() throws Exception {
-        PreorderStubs.stubClientError(preorderClient, token, HttpStatus.NOT_FOUND);
+        PreorderStubs.stubPreorderNotFound(preorderClient, token);
 
         place(customerId, token)
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("PREORDER_NOT_FOUND"));
+    }
+
+    // preorder 에 경로가 없으면(배포 순서 · 주소 오류) "예약 없음" 으로 숨기지 않고 연동 오류로 드러낸다.
+    @Test
+    void preorderRouteNotFoundIsInternalError() throws Exception {
+        PreorderStubs.stubRouteNotFound(preorderClient, token);
+
+        place(customerId, token)
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.error.code").value("INTERNAL_ERROR"));
+
+        assertThat(orderCount()).isZero();
     }
 
     @ParameterizedTest

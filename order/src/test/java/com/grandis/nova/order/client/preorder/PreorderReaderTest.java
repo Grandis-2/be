@@ -3,6 +3,7 @@ package com.grandis.nova.order.client.preorder;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.web.ApiResponse;
+import com.grandis.nova.order.support.PreorderStubs;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
@@ -38,10 +39,25 @@ class PreorderReaderTest {
     }
 
     @Test
-    void notFoundIsEmpty() {
-        given(client.getPayability(PREORDER_UUID, SESSION)).willThrow(clientError(HttpStatus.NOT_FOUND));
+    void preorderNotFoundIsEmpty() {
+        given(client.getPayability(PREORDER_UUID, SESSION)).willThrow(PreorderStubs.notFound("PREORDER_NOT_FOUND"));
 
         assertThat(reader.find(PREORDER_UUID, SESSION)).isEmpty();
+    }
+
+    // 경로가 없거나(배포 순서 · 주소 오류) 본문을 읽을 수 없는 404 는 "예약 없음" 이 아니라 연동 오류다 — 삼키면 모든 주문이 404 로 보인다.
+    @Test
+    void routeNotFoundIsIntegrationError() {
+        given(client.getPayability(PREORDER_UUID, SESSION)).willThrow(PreorderStubs.notFound("NOT_FOUND"));
+
+        assertThatThrownBy(() -> reader.find(PREORDER_UUID, SESSION)).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void notFoundWithoutBodyIsIntegrationError() {
+        given(client.getPayability(PREORDER_UUID, SESSION)).willThrow(clientError(HttpStatus.NOT_FOUND));
+
+        assertThatThrownBy(() -> reader.find(PREORDER_UUID, SESSION)).isInstanceOf(IllegalStateException.class);
     }
 
     // 남의 예약(403)도 없는 것과 같이 비운다 — 사용자에게는 404 로 존재를 숨긴다.
