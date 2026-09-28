@@ -1,6 +1,6 @@
 package com.grandis.nova.order.config;
 
-import com.grandis.nova.order.preorder.PreorderClient;
+import com.grandis.nova.order.client.preorder.PreorderClient;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.service.registry.ImportHttpServices;
 
