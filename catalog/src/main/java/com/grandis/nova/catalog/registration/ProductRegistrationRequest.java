@@ -11,6 +11,8 @@ import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -44,11 +46,16 @@ public record ProductRegistrationRequest(
     public static final int MAX_COMBINATIONS = 500;
 
     public ProductRegistrationRequest {
-        optionAxes = optionAxes == null ? List.of() : List.copyOf(optionAxes);
-        combinations = combinations == null ? List.of() : List.copyOf(combinations);
-        shipmentBatches = shipmentBatches == null ? List.of() : List.copyOf(shipmentBatches);
+        optionAxes = frozen(optionAxes);
+        combinations = frozen(combinations);
+        shipmentBatches = frozen(shipmentBatches);
         warranty = warranty == null ? new Warranty(false, BigDecimal.ZERO) : warranty;
         images = images == null ? new Images(List.of(), List.of()) : images;
+    }
+
+    /** null 원소를 남긴 채 얼린다 — List.copyOf 는 null 원소에 NPE 를 던져 {@code @NotNull} 원소 검사(칸 경로)가 돌기 전에 죽는다. */
+    static <T> List<T> frozen(List<T> list) {
+        return list == null ? List.of() : Collections.unmodifiableList(new ArrayList<>(list));
     }
 
     public record Warranty(@NotNull Boolean offered, @DecimalMin("0") BigDecimal surcharge) {
@@ -60,6 +67,9 @@ public record ProductRegistrationRequest(
     /** @param key color · storage 또는 관리자 입력 키(소문자로 접는다) */
     public record OptionAxis(@NotBlank @Size(max = 40) String key, @NotBlank @Size(max = 60) String label,
                              @NotEmpty @Size(max = MAX_VALUES_PER_AXIS) List<@NotNull @Valid OptionValue> values) {
+        public OptionAxis {
+            values = frozen(values);
+        }
     }
 
     public record OptionValue(@NotBlank @Size(max = 60) String value, @DecimalMin("0") BigDecimal surcharge) {
@@ -89,15 +99,21 @@ public record ProductRegistrationRequest(
      */
     public record Images(List<@NotNull @Valid GalleryBundle> gallery, List<@NotNull @Valid DetailBundle> detail) {
         public Images {
-            gallery = gallery == null ? List.of() : List.copyOf(gallery);
-            detail = detail == null ? List.of() : List.copyOf(detail);
+            gallery = frozen(gallery);
+            detail = frozen(detail);
         }
     }
 
     public record GalleryBundle(@Size(max = 60) String color, @NotEmpty List<@NotNull @Valid Image> items) {
+        public GalleryBundle {
+            items = frozen(items);
+        }
     }
 
     public record DetailBundle(@NotBlank @Size(max = 60) String section, @NotEmpty List<@NotNull @Valid Image> items) {
+        public DetailBundle {
+            items = frozen(items);
+        }
     }
 
     public record Image(@NotBlank @Size(max = 1000) String url, Boolean primary) {

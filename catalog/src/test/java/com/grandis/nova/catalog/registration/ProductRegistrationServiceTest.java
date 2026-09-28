@@ -3,11 +3,14 @@ package com.grandis.nova.catalog.registration;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
+import com.grandis.nova.catalog.support.SqlHookInspector;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.TestPropertySource;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -15,11 +18,15 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** ② 에 넘길 계획이 요청에서 맞게 뽑히는지 — 컨트롤러는 계획을 안 쓰므로 서비스로 본다. */
 @CatalogIntegrationTest
+@TestPropertySource(properties =
+        "spring.jpa.properties.hibernate.session_factory.statement_inspector=com.grandis.nova.catalog.support.SqlHookInspector")
 class ProductRegistrationServiceTest {
 
     @Autowired JdbcTemplate jdbcTemplate;
@@ -32,6 +39,45 @@ class ProductRegistrationServiceTest {
     void setUp() {
         fixtures = new ShopFixtures(jdbcTemplate);
         categoryId = fixtures.category();
+        SqlHookInspector.reset();
+    }
+
+    @AfterEach
+    void tearDown() {
+        SqlHookInspector.reset();
+    }
+
+    @Test
+    @DisplayName("201 미리보기는 등록과 같은 트랜잭션에서 읽는다 — 미리보기 문장이 도는 시점에 등록 행은 아직 커밋 전이다")
+    void previewIsReadInsideTheRegistrationTransaction() {
+        String key = "k-" + ShopFixtures.unique();
+        Integer[] committedRowsAtPreview = {null};
+        // 미리보기의 상품 + 등록 JOIN 문장 직전에, 다른 커넥션에서 등록 행이 보이는지 센다
+        SqlHookInspector.before("left join product_registrations", () -> committedRowsAtPreview[0] = countOnAnotherConnection(key));
+
+        RegistrationOutcome created = service.register(key, inStockRequest());
+
+        assertThat(committedRowsAtPreview[0]).as("훅이 돌았고, 그 시점에 등록 행은 커밋 전이었다").isZero();
+        assertThat(created.preview().productId()).isEqualTo(created.plan().productId());
+        assertThat(created.preview().visible()).isFalse();
+        assertThat(countOnAnotherConnection(key)).as("대조군: 커밋 뒤에는 보인다").isEqualTo(1);
+    }
+
+    private Integer countOnAnotherConnection(String key) {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            return executor.submit(() -> jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM product_registrations WHERE idempotency_key = ?", Integer.class, key)).get();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private ProductRegistrationRequest inStockRequest() {
+        return new ProductRegistrationRequest(categoryId, SaleMode.IN_STOCK, "케이블", null, null, true, new BigDecimal("9000"), null,
+                null, List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, null, 3)), null, null, null);
     }
 
     @Test

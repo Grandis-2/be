@@ -1,7 +1,5 @@
 package com.grandis.nova.catalog.api;
 
-import com.grandis.nova.catalog.detail.ProductDetailService;
-import com.grandis.nova.catalog.detail.ProductDetailView;
 import com.grandis.nova.catalog.registration.ProductRegistrationRequest;
 import com.grandis.nova.catalog.registration.ProductRegistrationService;
 import com.grandis.nova.catalog.registration.RegistrationRequestParser;
@@ -32,13 +30,10 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdminProductController {
 
     private final ProductRegistrationService registrationService;
-    private final ProductDetailService detailService;
     private final RegistrationRequestParser parser;
 
-    public AdminProductController(ProductRegistrationService registrationService, ProductDetailService detailService,
-                                  RegistrationRequestParser parser) {
+    public AdminProductController(ProductRegistrationService registrationService, RegistrationRequestParser parser) {
         this.registrationService = registrationService;
-        this.detailService = detailService;
         this.parser = parser;
     }
 
@@ -49,11 +44,8 @@ public class AdminProductController {
         ProductRegistrationRequest request = parser.parse(body);
         RegistrationOutcome outcome = registrationService.register(idempotencyKey, request);
         return switch (outcome.kind()) {
-            case CREATED -> {
-                ProductDetailView product = detailService.findProduct(outcome.registration().productId(), true);
-                yield ResponseEntity.status(HttpStatus.CREATED)
-                        .body(ApiResponse.ok(new ProductRegistrationResponse(outcome.registration(), product)));
-            }
+            case CREATED -> ResponseEntity.status(HttpStatus.CREATED)
+                    .body(ApiResponse.ok(new ProductRegistrationResponse(outcome.registration(), outcome.preview())));
             case REPLAYED -> ResponseEntity.ok(ApiResponse.ok(new ProductRegistrationResponse(outcome.registration(), null)));
             case IN_PROGRESS -> ResponseEntity.status(HttpStatus.ACCEPTED)
                     .body(ApiResponse.ok(new ProductRegistrationResponse(outcome.registration(), null)));

@@ -371,12 +371,15 @@ class AdminProductRegistrationApiTest {
                     "optionAxes[0].values[2].value");
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("").replace("{ \"value\": \"화이트\" }", "{ \"value\": \"BLACK\" }, { \"value\": \"ＢＬＡＣＫ\" }")),
                     "optionAxes[0].values[2].value");
-            // 확장 문자(ß=ss)는 앱의 흉내가 못 잡고 DB UNIQUE 가 잡는다 — 그래도 500 이 아니라 400 이어야 한다
+            // 확장 문자(ß=ss)는 앱의 흉내가 못 잡고 DB UNIQUE 가 잡는다 — 그래도 500 이 아니라 400 이어야 하고,
+            // 그 전에 INSERT 된 상품 · 축은 남지 않아야 한다(실패 응답에 반쪽 상품 없음)
+            int productsBefore = productsInCategory();
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("").replace("{ \"value\": \"화이트\" }", "{ \"value\": \"Straße\" }, { \"value\": \"Strasse\" }")),
                     "optionAxes[0].values");
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("""
                     "images": { "detail": [ { "section": "Straße", "items": [ { "url": "https://img/1.jpg" } ] }, { "section": "Strasse", "items": [ { "url": "https://img/2.jpg" } ] } ] },
                     """)), "images.detail[1].section");
+            assertThat(productsInCategory()).as("400 뒤에 상품 행이 남지 않는다").isEqualTo(productsBefore);
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("").replace("\"categoryId\": " + categoryId, "\"categoryId\": 999999999")),
                     "categoryId");
             // 표시명(값을 " / " 로 이은 것) 122자 — SKU 는 직접 줘서 SKU 길이 규칙에 먼저 안 걸리게
@@ -389,6 +392,34 @@ class AdminProductRegistrationApiTest {
                     "combinations[color=" + longColor + ", storage=" + longStorage + "]");
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("").replace("{ \"value\": \"화이트\" }", "null")),
                     "optionAxes[0].values[1]");
+            // 최상위 목록의 null 원소도 칸 경로로 400 (List.copyOf 의 NPE 로 "body" 가 되면 안 된다)
+            expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("\"combinations\": [ null ],")), "combinations[0]");
+            expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("\"images\": { \"gallery\": [ null ] },")), "images.gallery[0]");
+            expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("").replace(
+                    "\"shipmentBatches\": [ { \"batchNumber\": 1", "\"shipmentBatches\": [ null, { \"batchNumber\": 1")), "shipmentBatches[0]");
+        }
+
+        @Test
+        @DisplayName("배송 차수의 모양은 ① 전에 거른다 — 번호 · 시작 순번 양의 정수와 유일, 종료 ≥ 시작 또는 마지막만 null, 배송 종료 ≥ 시작")
+        void shipmentBatchRules() throws Exception {
+            String two = """
+                    "shipmentBatches": [ { "batchNumber": %s, "positionFrom": %s, "positionTo": %s, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "%s" },
+                                         { "batchNumber": %s, "positionFrom": %s, "positionTo": null, "estimatedShipStart": "2026-11-08", "estimatedShipEnd": "2026-11-14" } ]
+                    """;
+            String ok = two.formatted(1, 1, 100, "2026-11-07", 2, 101, 200);
+            register("k-" + ShopFixtures.unique(), withBatches(ok)).andExpect(status().isCreated());
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches(two.formatted(0, 1, 100, "2026-11-07", 2, 101, 200))), "shipmentBatches[0].batchNumber");
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches(two.formatted(1, 1, 100, "2026-11-07", 1, 101, 200))), "shipmentBatches[1].batchNumber");
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches(two.formatted(1, 0, 100, "2026-11-07", 2, 101, 200))), "shipmentBatches[0].positionFrom");
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches(two.formatted(1, 1, 100, "2026-11-07", 2, 1, 200))), "shipmentBatches[1].positionFrom");
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches(two.formatted(1, 1, "null", "2026-11-07", 2, 101, 200))), "shipmentBatches[0].positionTo");
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches(two.formatted(1, 50, 49, "2026-11-07", 2, 101, 200))), "shipmentBatches[0].positionTo");
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches(two.formatted(1, 1, 100, "2026-10-31", 2, 101, 200))), "shipmentBatches[0].estimatedShipEnd");
+        }
+
+        private String withBatches(String batches) {
+            int from = preorderBody("").indexOf("\"shipmentBatches\"");
+            return preorderBody("").substring(0, from) + batches + "}";
         }
 
         @Test
@@ -463,6 +494,10 @@ class AdminProductRegistrationApiTest {
         MockHttpServletRequestBuilder request = post(PATH).header("Idempotency-Key", key)
                 .contentType(MediaType.APPLICATION_JSON).content(body).with(user("admin").roles("ADMIN"));
         return mockMvc.perform(request);
+    }
+
+    private int productsInCategory() {
+        return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM products WHERE category_id = ?", Integer.class, categoryId);
     }
 
     private static void expectValidation(ResultActions actions, String field) throws Exception {

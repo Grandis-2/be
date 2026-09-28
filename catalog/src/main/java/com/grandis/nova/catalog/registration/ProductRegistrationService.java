@@ -2,6 +2,8 @@ package com.grandis.nova.catalog.registration;
 
 import com.grandis.nova.catalog.CatalogErrorCode;
 import com.grandis.nova.catalog.category.CategoryRepository;
+import com.grandis.nova.catalog.detail.ProductDetailService;
+import com.grandis.nova.catalog.detail.ProductDetailView;
 import com.grandis.nova.catalog.image.ProductImage;
 import com.grandis.nova.catalog.image.ProductImageRepository;
 import com.grandis.nova.catalog.option.OptionCombination;
@@ -54,6 +56,7 @@ public class ProductRegistrationService {
     private final ProductImageRepository images;
     private final ProductRegistrationRepository registrations;
     private final ProductRegistrationValidator validator;
+    private final ProductDetailService detailService;
     private final Clock clock;
     private final Duration minOpenLead;
 
@@ -61,7 +64,7 @@ public class ProductRegistrationService {
                                       ProductOptionValueRepository values, ProductOptionRepository options,
                                       ProductOptionSelectionRepository selections, ProductImageRepository images,
                                       ProductRegistrationRepository registrations, ProductRegistrationValidator validator,
-                                      Clock clock,
+                                      ProductDetailService detailService, Clock clock,
                                       @org.springframework.beans.factory.annotation.Value("${catalog.registration.min-open-lead:PT30M}")
                                       Duration minOpenLead) {
         this.categories = categories;
@@ -73,6 +76,7 @@ public class ProductRegistrationService {
         this.images = images;
         this.registrations = registrations;
         this.validator = validator;
+        this.detailService = detailService;
         this.clock = clock;
         this.minOpenLead = minOpenLead;
     }
@@ -102,7 +106,7 @@ public class ProductRegistrationService {
             }
             RegistrationOutcome.Kind kind = registration.isCompleted()
                     ? RegistrationOutcome.Kind.REPLAYED : RegistrationOutcome.Kind.IN_PROGRESS;
-            return new RegistrationOutcome(kind, RegistrationStatusView.from(registration), null);
+            return new RegistrationOutcome(kind, RegistrationStatusView.from(registration), null, null);
         }
 
         if (!categories.existsById(request.categoryId())) {
@@ -169,7 +173,10 @@ public class ProductRegistrationService {
                         : new RegistrationPlan.Campaign(request.campaign().opensAt(), request.campaign().closesAt()),
                 request.shipmentBatches().stream().map(batch -> new RegistrationPlan.ShipmentBatch(batch.batchNumber(),
                         batch.positionFrom(), batch.positionTo(), batch.estimatedShipStart(), batch.estimatedShipEnd())).toList());
-        return new RegistrationOutcome(RegistrationOutcome.Kind.CREATED, RegistrationStatusView.from(registration), plan);
+        // 미리보기는 커밋 전에 같은 트랜잭션에서 읽는다. 커밋 뒤 따로 읽으면 그 사이에 완료 · 공개 전환(③)이 끼어
+        // completed=false · visible=true 라는 있은 적 없는 조합을 실을 수 있다. 커밋 전엔 남이 이 상품을 못 건드린다
+        ProductDetailView preview = detailService.findProduct(productId, true);
+        return new RegistrationOutcome(RegistrationOutcome.Kind.CREATED, RegistrationStatusView.from(registration), plan, preview);
     }
 
     @Transactional(readOnly = true)

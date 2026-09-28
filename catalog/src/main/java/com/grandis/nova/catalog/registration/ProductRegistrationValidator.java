@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog.registration;
 
+import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.catalog.option.ProductOptionAxis;
 import com.grandis.nova.catalog.option.ProductOptionValue;
 import com.grandis.nova.catalog.product.SaleMode;
@@ -103,6 +104,7 @@ public class ProductRegistrationValidator {
                 throw ValidationFailures.of("campaign.opensAt",
                         "오픈은 지금부터 %d분 뒤여야 합니다.".formatted(minOpenLead.toMinutes()));
             }
+            requireBatchShape(request.shipmentBatches());
         } else {
             if (request.campaign() != null) {
                 throw ValidationFailures.of("campaign", "일반 상품은 회차를 받지 않습니다.");
@@ -116,6 +118,43 @@ public class ProductRegistrationValidator {
         }
         requireWholeWon(request.basePrice(), "basePrice");
         requireWholeWon(request.warranty().surcharge(), "warranty.surcharge");
+    }
+
+    /**
+     * 배송 차수의 모양 — preorder 가 차수를 받을 때 거는 규칙(api-spec "배송 차수 처리 규칙": 번호 · 시작 순번 양의 정수,
+     * 번호 · 시작 유일, 종료 ≥ 시작 또는 마지막만 null, 배송 종료 ≥ 시작)을 ① 전에 같은 기준으로 먼저 거른다.
+     * 여기서 안 거르면 ① 은 저장되고 ② 가 거절해 미완료 등록만 남는다. 최종 판정은 preorder 다.
+     */
+    private static void requireBatchShape(List<ProductRegistrationRequest.ShipmentBatch> batches) {
+        Set<Integer> numbers = new HashSet<>();
+        Set<Long> starts = new HashSet<>();
+        long lastStart = batches.stream().mapToLong(ProductRegistrationRequest.ShipmentBatch::positionFrom).max().orElse(0);
+        for (int i = 0; i < batches.size(); i++) {
+            var batch = batches.get(i);
+            String field = "shipmentBatches[%d]".formatted(i);
+            if (batch.batchNumber() < 1) {
+                throw ValidationFailures.of(field + ".batchNumber", "차수 번호는 1 이상입니다.");
+            }
+            if (!numbers.add(batch.batchNumber())) {
+                throw ValidationFailures.of(field + ".batchNumber", "같은 차수 번호가 두 번 왔습니다.");
+            }
+            if (batch.positionFrom() < 1) {
+                throw ValidationFailures.of(field + ".positionFrom", "시작 순번은 1 이상입니다.");
+            }
+            if (!starts.add(batch.positionFrom())) {
+                throw ValidationFailures.of(field + ".positionFrom", "같은 시작 순번이 두 번 왔습니다.");
+            }
+            if (batch.positionTo() == null) {
+                if (batch.positionFrom() != lastStart) {
+                    throw ValidationFailures.of(field + ".positionTo", "종료 순번은 마지막 차수만 비울 수 있습니다.");
+                }
+            } else if (batch.positionTo() < batch.positionFrom()) {
+                throw ValidationFailures.of(field + ".positionTo", "종료 순번은 시작 순번 이상입니다.");
+            }
+            if (batch.estimatedShipEnd().isBefore(batch.estimatedShipStart())) {
+                throw ValidationFailures.of(field + ".estimatedShipEnd", "배송 종료는 시작 이후여야 합니다.");
+            }
+        }
     }
 
     private static List<Axis> normalizeAxes(List<OptionAxis> requested) {
@@ -259,15 +298,13 @@ public class ProductRegistrationValidator {
     }
 
     /** 저장 때 OptionCombination.title() 이 내는 것과 같은 모양(축 순, 표시값을 " / " 로). 길이 검사에 쓴다. */
+    /** 표시명 규칙은 {@link OptionCombination#titleOf} 하나다 — 여기서는 저장 전에 길이를 재려고 같은 함수로 미리 만든다. */
     private static String title(List<Axis> axes, Map<String, String> selections, String productTitle) {
-        if (axes.isEmpty()) {
-            return ProductOptionValue.normalize(productTitle);
-        }
         List<String> parts = new ArrayList<>();
         for (Axis axis : axes) {
             parts.add(axis.value(selections.get(axis.key())).display());
         }
-        return String.join(" / ", parts);
+        return OptionCombination.titleOf(parts, productTitle);
     }
 
     private static List<GalleryDraft> normalizeGallery(ProductRegistrationRequest request, List<Axis> axes) {
