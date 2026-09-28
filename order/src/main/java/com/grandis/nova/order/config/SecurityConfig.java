@@ -31,6 +31,9 @@ public class SecurityConfig {
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/v1/orders/**").authenticated()
+                        // 서비스 간 내부 API. 호출자가 사용자 토큰을 그대로 싣는다 — 회원 · 관리자 모두, 주인 확인은 유스케이스가 한다.
+                        // 아래 permitAll 로 떨어지면 인증 없이 열린다.
+                        .requestMatchers("/internal/**").authenticated()
                         .anyRequest().permitAll())
                 .build();
     }
