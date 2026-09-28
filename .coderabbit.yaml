@@ -330,6 +330,9 @@ reviews:
       mode: "error"
     issue_assessment:
       mode: "error"
+    # 주석은 핵심만 다는 방침이라 함수별 문서 주석 비율은 보지 않는다
+    docstrings:
+      mode: "off"
     custom_checks:
       - name: "모듈 경계"
         mode: "error"
@@ -352,6 +355,7 @@ reviews:
           - catalog → preorder_campaigns · shipment_batches (상품 목록 · 상세의 모집 일정 · 배송 차수)
           - order → products · product_variants (금액 · 재고 확인)
           - worker → preorders (처리 대상 확인)
+          - preorder → preorder_sync_jobs · preorder_sync_attempts (행 생성 · 취소 시 무효화 · 관리자 조회 · 재처리 판정)
           - batch → 전부 (읽기 전용 모듈)
 
           허용된 쓰기 예외 — 실패가 아니다.
