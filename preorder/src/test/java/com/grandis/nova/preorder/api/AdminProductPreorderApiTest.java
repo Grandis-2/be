@@ -18,9 +18,10 @@ import org.springframework.test.web.servlet.ResultActions;
 import java.time.Instant;
 import java.time.LocalDateTime;
 
+import static com.grandis.nova.preorder.support.AccessTokens.admin;
+import static com.grandis.nova.preorder.support.AccessTokens.customer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -86,7 +87,7 @@ class AdminProductPreorderApiTest {
                 .andExpect(jsonPath("$.error.code").value("PRODUCT_ALREADY_OPEN"));
         mockMvc.perform(put("/api/v1/admin/products/{id}/shipment-batches", product.productId())
                         .contentType(MediaType.APPLICATION_JSON).content(THREE_BATCHES)
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("PRODUCT_ALREADY_OPEN"));
         assertThat(fixtures.count("SELECT COUNT(*) FROM shipment_batches WHERE product_id = ?",
@@ -115,7 +116,7 @@ class AdminProductPreorderApiTest {
 
         mockMvc.perform(put("/api/v1/admin/products/{id}/shipment-batches", productId)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"batches\":[null]}")
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
     }
@@ -146,7 +147,7 @@ class AdminProductPreorderApiTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
         mockMvc.perform(get("/api/v1/admin/products/{id}/preorder-campaign", inStock)
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(status().isNotFound());
     }
 
@@ -158,7 +159,7 @@ class AdminProductPreorderApiTest {
 
         mockMvc.perform(put("/api/v1/admin/products/{id}/shipment-batches", productId)
                         .contentType(MediaType.APPLICATION_JSON).content(THREE_BATCHES)
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items", hasSize(3)))
                 .andExpect(jsonPath("$.data.items[2].positionTo").doesNotExist());
@@ -168,11 +169,11 @@ class AdminProductPreorderApiTest {
                         .content("""
                                 {"batches":[{"batchNumber":1,"positionFrom":1,"positionTo":null,
                                  "estimatedShipStart":"2026-09-25","estimatedShipEnd":"2026-09-29"}]}""")
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items", hasSize(1)));
         mockMvc.perform(get("/api/v1/admin/products/{id}/shipment-batches", productId)
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.items[0].batchNumber").value(1));
         assertThat(fixtures.count("SELECT COUNT(*) FROM shipment_batches WHERE product_id = ?", productId)).isEqualTo(1);
@@ -192,7 +193,7 @@ class AdminProductPreorderApiTest {
                                    "estimatedShipStart":"2026-09-25","estimatedShipEnd":"2026-09-29"},
                                   {"batchNumber":2,"positionFrom":900,"positionTo":null,
                                    "estimatedShipStart":"2026-10-05","estimatedShipEnd":"2026-10-09"}]}""")
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("SHIPMENT_BATCH_INVALID"))
                 .andExpect(jsonPath("$.error.details.reason").exists());
@@ -205,7 +206,7 @@ class AdminProductPreorderApiTest {
 
         mockMvc.perform(put("/api/v1/admin/products/{id}/shipment-batches", productId)
                         .contentType(MediaType.APPLICATION_JSON).content(THREE_BATCHES)
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
     }
@@ -215,7 +216,7 @@ class AdminProductPreorderApiTest {
         Long productId = preorderProduct();
 
         mockMvc.perform(get("/api/v1/admin/products/{id}/preorder-campaign", productId)
-                        .with(user("1024").roles("USER")))
+                        .with(customer(1024L)))
                 .andExpect(status().isForbidden());
         mockMvc.perform(get("/api/v1/admin/products/{id}/preorder-campaign", productId))
                 .andExpect(status().isUnauthorized());
@@ -237,7 +238,7 @@ class AdminProductPreorderApiTest {
         return mockMvc.perform(put("/api/v1/admin/products/{id}/preorder-campaign", productId)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"opensAt\":\"%s\",\"closesAt\":\"%s\"}".formatted(opensAt, closesAt))
-                .with(user("admin").roles("ADMIN")));
+                .with(admin()));
     }
 
 }

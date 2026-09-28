@@ -26,13 +26,14 @@ import org.springframework.web.client.ResourceAccessException;
 import java.util.List;
 import java.util.Map;
 
+import static com.grandis.nova.preorder.support.AccessTokens.admin;
+import static com.grandis.nova.preorder.support.AccessTokens.customer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -77,7 +78,7 @@ class PreorderCancelApiTest {
 
         mockMvc.perform(post("/api/v1/preorders/{id}/cancel", token)
                         .header(HttpHeaders.AUTHORIZATION, BEARER)
-                        .with(user(customerId.toString()).roles("USER")))
+                        .with(customer(customerId)))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.preorderId").value(token))
                 .andExpect(jsonPath("$.data.status").value("CANCELING"))
@@ -168,7 +169,7 @@ class PreorderCancelApiTest {
 
         mockMvc.perform(post("/api/v1/admin/preorders/{id}/cancel", token)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"매크로 의심 접수\"}")
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.status").value("CANCELING"));
 
@@ -182,18 +183,18 @@ class PreorderCancelApiTest {
     void 관리자_사유가_짧으면_400_사용자_토큰으로는_관리자_취소를_못_한다() throws Exception {
         mockMvc.perform(post("/api/v1/admin/preorders/{id}/cancel", token)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"짧음\"}")
-                        .with(user("admin").roles("ADMIN")))
+                        .with(admin()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.details.violations[0].field").value("reason"));
         mockMvc.perform(post("/api/v1/admin/preorders/{id}/cancel", token)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"매크로 의심 접수\"}")
-                        .with(user(customerId.toString()).roles("USER")))
+                        .with(customer(customerId)))
                 .andExpect(status().isForbidden());
     }
 
     private ResultActions cancel(Long customer) throws Exception {
         return mockMvc.perform(post("/api/v1/preorders/{id}/cancel", token)
-                .with(user(customer.toString()).roles("USER")));
+                .with(customer(customer)));
     }
 
     private void orderAnswers(boolean cancelable, String orderStatus) {

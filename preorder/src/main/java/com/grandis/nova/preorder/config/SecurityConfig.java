@@ -1,37 +1,29 @@
 package com.grandis.nova.preorder.config;
 
+import com.grandis.nova.common.security.SecurityFilterChainSupport;
+import jakarta.servlet.DispatcherType;
+import org.springframework.boot.security.autoconfigure.actuate.web.servlet.EndpointRequest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
-import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 
 /**
- * 최소 보안 설정 — 경로별 권한만 정한다. 토큰 검증 필터는 없다.
- *
- * 액세스 토큰 검증은 member 팀의 common:security(NV-44)가 맡는다. 머지되면 그 필터가 SecurityContext 를 채우고
- * 이 체인을 그쪽 구성으로 바꾼다. 그때까지 운영에서는 인증된 요청이 없으므로 보호 경로는 401 이다.
+ * 경로별 권한. 토큰 검증 · 401/403 봉투는 common:security 가 맡는다. 적지 않은 경로는 거부한다.
+ * 관리 엔드포인트는 앱과 다른 포트라 외부에서 닿지 않으므로 health · prometheus 는 인증 없이 연다.
  */
 @Configuration(proxyBeanMethods = false)
 public class SecurityConfig {
 
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http) {
-        return http
-                .csrf(AbstractHttpConfigurer::disable)
-                .httpBasic(AbstractHttpConfigurer::disable)
-                .formLogin(AbstractHttpConfigurer::disable)
-                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .exceptionHandling(handling ->
-                        handling.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
-                .authorizeHttpRequests(authorize -> authorize
-                        .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
-                        .requestMatchers("/api/v1/preorders/**").authenticated()
-                        .requestMatchers("/internal/**").authenticated()
-                        .anyRequest().permitAll())
-                .build();
+    SecurityFilterChain securityFilterChain(HttpSecurity http, SecurityFilterChainSupport support) throws Exception {
+        return support.build(http, authorize -> authorize
+                .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                .requestMatchers(EndpointRequest.to("health", "prometheus")).permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/products/*/shipment-batches").permitAll()
+                .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                .requestMatchers("/api/v1/preorders/**", "/internal/**").authenticated()
+                .anyRequest().denyAll());
     }
 }

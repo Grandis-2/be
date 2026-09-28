@@ -21,8 +21,9 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
+import static com.grandis.nova.preorder.support.AccessTokens.admin;
+import static com.grandis.nova.preorder.support.AccessTokens.customer;
 import static org.hamcrest.Matchers.nullValue;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -114,14 +115,14 @@ class PayabilityApiTest {
         payability(fixtures.customer())
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
-        mockMvc.perform(get("/internal/preorders/{id}/payability", token).with(user("admin").roles("ADMIN")))
+        mockMvc.perform(get("/internal/preorders/{id}/payability", token).with(admin()))
                 .andExpect(status().isOk());
     }
 
     @Test
     void 없는_예약은_404_토큰이_없으면_401() throws Exception {
         mockMvc.perform(get("/internal/preorders/{id}/payability", ShopFixtures.unique())
-                        .with(user(customerId.toString()).roles("USER")))
+                        .with(customer(customerId)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("PREORDER_NOT_FOUND"));
         mockMvc.perform(get("/internal/preorders/{id}/payability", token))
@@ -135,6 +136,6 @@ class PayabilityApiTest {
 
     private ResultActions payability(Long customer) throws Exception {
         return mockMvc.perform(get("/internal/preorders/{id}/payability", token)
-                .with(user(customer.toString()).roles("USER")));
+                .with(customer(customer)));
     }
 }

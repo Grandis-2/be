@@ -1,9 +1,9 @@
 package com.grandis.nova.preorder.api;
 
+import com.grandis.nova.common.security.CurrentCustomerId;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.cancel.CancelResult;
 import com.grandis.nova.preorder.cancel.PreorderCancelService;
-import com.grandis.nova.preorder.web.CurrentCustomerId;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;

@@ -1,10 +1,10 @@
 package com.grandis.nova.preorder.api;
 
 import com.grandis.nova.common.CursorPage;
+import com.grandis.nova.common.security.CurrentCustomerId;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.query.PreorderQueryService;
-import com.grandis.nova.preorder.web.CurrentCustomerId;
 import com.grandis.nova.preorder.web.CurrentViewer;
 import com.grandis.nova.preorder.web.Viewer;
 import org.springframework.web.bind.annotation.GetMapping;

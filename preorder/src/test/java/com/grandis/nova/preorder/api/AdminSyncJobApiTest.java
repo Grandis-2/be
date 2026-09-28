@@ -41,6 +41,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.LongStream;
 
+import static com.grandis.nova.preorder.support.AccessTokens.admin;
+import static com.grandis.nova.preorder.support.AccessTokens.customer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
@@ -49,7 +51,6 @@ import static org.mockito.Mockito.mockingDetails;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.nullValue;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -104,7 +105,7 @@ class AdminSyncJobApiTest {
         fixtures.syncAttempt(jobId, 1, "TRANSIENT_FAILURE", 503, "HTTP_503");
         fixtures.syncAttempt(jobId, 2, "REJECTED", 422, "MOCK_REJECTED");
 
-        admin(get("/api/v1/admin/sync-jobs").param("status", "DEAD_LETTER").param("preorderId", token))
+        asAdmin(get("/api/v1/admin/sync-jobs").param("status", "DEAD_LETTER").param("preorderId", token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.items[0].syncJobId").value(jobId))
@@ -115,9 +116,9 @@ class AdminSyncJobApiTest {
                 .andExpect(jsonPath("$.data.items[0].deadLetteredAt").exists())
                 .andExpect(jsonPath("$.data.total").value(1))
                 .andExpect(jsonPath("$.data.errorGroups").value(nullValue()));
-        admin(get("/api/v1/admin/sync-jobs").param("status", "PENDING").param("preorderId", token))
+        asAdmin(get("/api/v1/admin/sync-jobs").param("status", "PENDING").param("preorderId", token))
                 .andExpect(jsonPath("$.data.items", hasSize(0)));
-        admin(get("/api/v1/admin/sync-jobs").param("preorderId", ShopFixtures.unique()))
+        asAdmin(get("/api/v1/admin/sync-jobs").param("preorderId", ShopFixtures.unique()))
                 .andExpect(jsonPath("$.data.items", hasSize(0)))
                 .andExpect(jsonPath("$.data.total").value(0));
     }
@@ -131,7 +132,7 @@ class AdminSyncJobApiTest {
             fixtures.syncAttempt(jobId, 2, "REJECTED", 422, code);
         }
 
-        admin(get("/api/v1/admin/sync-jobs").param("status", "DEAD_LETTER").param("groupByError", "true"))
+        asAdmin(get("/api/v1/admin/sync-jobs").param("status", "DEAD_LETTER").param("groupByError", "true"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.errorGroups[?(@.errorCode == '%s')].count".formatted(code), contains(2)));
     }
@@ -141,13 +142,13 @@ class AdminSyncJobApiTest {
         Long jobId = fixtures.deadLetter(preorderId);
         fixtures.syncAttempt(jobId, 1, "REJECTED", 422, "MOCK_REJECTED");
 
-        admin(get("/api/v1/admin/sync-jobs/{id}", jobId))
+        asAdmin(get("/api/v1/admin/sync-jobs/{id}", jobId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.syncJobId").value(jobId))
                 .andExpect(jsonPath("$.data.requestPayload.ourReservationId").value(token))
                 .andExpect(jsonPath("$.data.attempts", hasSize(1)))
                 .andExpect(jsonPath("$.data.attempts[0].errorCode").value("MOCK_REJECTED"));
-        admin(get("/api/v1/admin/sync-jobs/{id}", Long.MAX_VALUE))
+        asAdmin(get("/api/v1/admin/sync-jobs/{id}", Long.MAX_VALUE))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("SYNC_JOB_NOT_FOUND"));
     }
@@ -156,7 +157,7 @@ class AdminSyncJobApiTest {
     void DEAD_LETTER_인_등록_작업은_202_로_재처리_요청을_남긴다() throws Exception {
         Long jobId = fixtures.deadLetter(preorderId);
 
-        admin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId))
+        asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.syncJobId").value(jobId))
                 .andExpect(jsonPath("$.data.status").value("DEAD_LETTER"));
@@ -169,8 +170,8 @@ class AdminSyncJobApiTest {
     void 같은_작업을_연달아_재처리하면_받아들인_요청마다_한_건씩_남긴다() throws Exception {
         Long jobId = fixtures.deadLetter(preorderId);
 
-        admin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId)).andExpect(status().isAccepted());
-        admin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId)).andExpect(status().isAccepted());
+        asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId)).andExpect(status().isAccepted());
+        asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId)).andExpect(status().isAccepted());
 
         assertThat(reprocessRequests(jobId)).hasSize(2);
     }
@@ -180,7 +181,7 @@ class AdminSyncJobApiTest {
         Long jobId = fixtures.deadLetter(preorderId);
 
         List<Outcome<Integer>> outcomes = Concurrently.run(2, i -> () ->
-                admin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId)).andReturn().getResponse().getStatus());
+                asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId)).andReturn().getResponse().getStatus());
 
         assertThat(outcomes).allSatisfy(outcome -> assertThat(outcome.value()).isEqualTo(202));
         assertThat(reprocessRequests(jobId)).hasSize(2);
@@ -192,14 +193,14 @@ class AdminSyncJobApiTest {
                 "SELECT id FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'REGISTER'", Long.class,
                 preorderId);
 
-        admin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId))
+        asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("SYNC_JOB_NOT_REPROCESSABLE"))
                 .andExpect(jsonPath("$.error.details.reason").value("jobType=REGISTER, status=PENDING"));
 
         cancelStarter.start(preorders.findById(preorderId).orElseThrow(), EventActor.USER, null, CancelReason.USER);
         fixtures.deadLetter(preorderId);
-        admin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId))
+        asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.details.reason").value("preorderStatus=CANCELING"));
 
@@ -230,7 +231,7 @@ class AdminSyncJobApiTest {
                     reprocessWaiting.countDown();
                     return delegate.answer(invocation);
                 }).given(preorders).findStatusForUpdate(any());
-                reprocessing = executor.submit(() -> admin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId))
+                reprocessing = executor.submit(() -> asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId))
                         .andReturn().getResponse());
                 assertThat(reprocessWaiting.await(10, TimeUnit.SECONDS)).isTrue();
                 await().alias("취소가 예약을 잠근 동안 재처리는 끝나지 않는다")
@@ -251,7 +252,7 @@ class AdminSyncJobApiTest {
 
     @Test
     void 관리자가_아니면_403_토큰이_없으면_401() throws Exception {
-        mockMvc.perform(get("/api/v1/admin/sync-jobs").with(user("1").roles("USER")))
+        mockMvc.perform(get("/api/v1/admin/sync-jobs").with(customer(1L)))
                 .andExpect(status().isForbidden());
         mockMvc.perform(post("/api/v1/admin/sync-jobs/{id}/reprocess", 1L))
                 .andExpect(status().isUnauthorized());
@@ -333,12 +334,12 @@ class AdminSyncJobApiTest {
     }
 
     private ResultActions batch(String body) throws Exception {
-        return admin(post("/api/v1/admin/sync-jobs/reprocess-batch")
+        return asAdmin(post("/api/v1/admin/sync-jobs/reprocess-batch")
                 .contentType(MediaType.APPLICATION_JSON).content(body));
     }
 
-    private ResultActions admin(MockHttpServletRequestBuilder request) throws Exception {
-        return mockMvc.perform(request.with(user("admin").roles("ADMIN")));
+    private ResultActions asAdmin(MockHttpServletRequestBuilder request) throws Exception {
+        return mockMvc.perform(request.with(admin()));
     }
 
     private static void awaitQuietly(CountDownLatch latch) {

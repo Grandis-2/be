@@ -1,5 +1,7 @@
 package com.grandis.nova.preorder.web;
 
+import com.grandis.nova.common.security.CurrentCustomerId;
+
 import java.lang.annotation.Documented;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
