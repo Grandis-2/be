@@ -3,6 +3,7 @@ package com.grandis.nova.catalog.api;
 import com.grandis.nova.catalog.detail.ProductDetailService;
 import com.grandis.nova.catalog.detail.ProductDetailView;
 import com.grandis.nova.catalog.listing.ProductListFilter;
+import com.grandis.nova.catalog.listing.ProductListItem;
 import com.grandis.nova.catalog.listing.ProductListingService;
 import com.grandis.nova.catalog.web.Viewers;
 import com.grandis.nova.catalog.product.SaleMode;
@@ -43,7 +44,7 @@ public class ProductController {
     }
 
     @GetMapping
-    public ApiResponse<ProductPageResponse> list(
+    public ApiResponse<ProductPageResponse<ProductListItem>> list(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) Long categoryId,
             @RequestParam(required = false) SaleMode saleMode,

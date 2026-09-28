@@ -12,7 +12,9 @@ import java.util.Map;
 /**
  * 상품 상세. 배송 차수는 싣지 않는다 — preorder 의 공개 API 를 프론트가 부른다(catalog 는 shipment_batches 를 읽지 않는다).
  *
- * @param visible        관리자 미리보기에서 비공개 상품을 구분한다. 회원에게는 늘 true(비공개면 404)
+ * @param visible        회원 상세(미리보기 포함)에서는 "회원에게 실제로 보이는가"(등록 완료 AND 공개) — 회원에게는 늘 true(아니면 404),
+ *                       관리자 미리보기에서 false 면 비공개 · 미완료다. 관리자 목록 · 상세에서는 products.visible 칸 그대로이고
+ *                       등록 완료는 registration 이 따로 말한다
  * @param sellable       판매 중 옵션이 하나 이상 있다(목록과 같은 규칙). false 면 화면이 "판매 중지" 를 그린다
  * @param soldOut        일반 상품에서 가용 재고가 있는 판매 중 옵션이 없다(목록과 같은 규칙). 사전예약은 항상 false
  * @param campaign       사전예약 회차. 일반 상품은 null

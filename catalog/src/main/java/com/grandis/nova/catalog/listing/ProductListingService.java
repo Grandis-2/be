@@ -33,4 +33,13 @@ public class ProductListingService {
         List<ProductListItem> items = total == 0 ? List.of() : repository.find(filter, now, page, size);
         return OffsetPage.of(items, page, size, total);
     }
+
+    /** 관리자 목록 — 노출 규칙 없이 전부. 건수와 목록은 위와 같은 이유로 한 스냅샷이다. */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public OffsetPage<AdminProductListItem> listForAdmin(AdminProductListFilter filter, int page, int size) {
+        Instant now = clock.instant();
+        long total = repository.countForAdmin(filter);
+        List<AdminProductListItem> items = total == 0 ? List.of() : repository.findForAdmin(filter, now, page, size);
+        return OffsetPage.of(items, page, size, total);
+    }
 }

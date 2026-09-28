@@ -85,8 +85,27 @@ public class ProductDetailService {
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public ProductDetailView findProduct(Long productId, boolean adminPreview) {
         ProductWithRegistration found = requireViewable(productId, adminPreview);
+        // 회원 상세(미리보기 포함)의 visible 은 "회원에게 실제로 보이는가" — 완료 AND 공개
+        return assemble(found, found.isRegistrationCompleted() && found.product().isVisible());
+    }
+
+    /**
+     * 관리자 상세 — 노출 규칙 없이 어떤 상품이든(비공개 · 미완료 · 판매 중지 · 오래된 마감) 상세와 등록 기록을 준다.
+     * 등록 기록은 상품과 같은 문장에서 온 것이라 visible 과 completed 가 한 스냅샷이다. 없는 상품만 404.
+     */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public AdminProductDetail findAdminProduct(Long productId) {
+        ProductWithRegistration found = products.findWithRegistration(productId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
+        // 관리자 목록 · 상세의 visible 은 products.visible 칸 그대로 — 등록 완료는 registration 이 따로 말한다
+        return new AdminProductDetail(assemble(found, found.product().isVisible()), found.product().getTags(),
+                found.registration().orElse(null));
+    }
+
+    /** @param visible 응답에 실을 visible — 회원 상세는 완료 AND 공개(실제 노출), 관리자 상세는 칸 그대로 */
+    private ProductDetailView assemble(ProductWithRegistration found, boolean visible) {
+        Long productId = found.product().getId();
         Product product = found.product();
-        boolean visible = found.isRegistrationCompleted() && product.isVisible();
         Instant now = clock.instant();
 
         List<ProductOptionAxis> productAxes = axes.findByProductIdOrderByPosition(productId);
