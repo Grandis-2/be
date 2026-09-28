@@ -12,16 +12,13 @@ import java.util.stream.Collectors;
 
 /** 일괄 재처리 후보를 id 와 판정 값만으로 읽는다. 작업 · 예약 · 마지막 시도를 한 쿼리로 붙이고 건수를 제한한다. */
 @Component
-public class ReprocessCandidateReader {
+class ReprocessCandidateReader {
 
     private static final String SELECT = """
             SELECT j.id, j.job_type, j.status, p.status, a.error_code
               FROM preorder_sync_jobs j
               JOIN preorders p ON p.id = j.preorder_id
-              LEFT JOIN preorder_sync_attempts a ON a.sync_job_id = j.id
-                   AND a.attempt_number = (SELECT MAX(b.attempt_number) FROM preorder_sync_attempts b
-                                            WHERE b.sync_job_id = j.id)
-            """;
+            """ + SyncAttemptReader.LATEST_ATTEMPT_JOIN;
 
     private static final RowMapper<ReprocessCandidate> CANDIDATE = (rs, rowNum) -> new ReprocessCandidate(
             rs.getLong(1), SyncJobType.valueOf(rs.getString(2)), SyncJobStatus.valueOf(rs.getString(3)),
@@ -29,7 +26,7 @@ public class ReprocessCandidateReader {
 
     private final JdbcTemplate jdbcTemplate;
 
-    public ReprocessCandidateReader(JdbcTemplate jdbcTemplate) {
+    ReprocessCandidateReader(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
     }
 

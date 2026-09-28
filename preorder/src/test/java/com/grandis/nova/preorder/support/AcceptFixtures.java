@@ -2,7 +2,7 @@ package com.grandis.nova.preorder.support;
 
 import com.grandis.nova.preorder.accept.AcceptResult;
 import com.grandis.nova.preorder.accept.PreorderAcceptService;
-import com.grandis.nova.preorder.catalog.CatalogClient;
+import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 
 import java.time.Instant;

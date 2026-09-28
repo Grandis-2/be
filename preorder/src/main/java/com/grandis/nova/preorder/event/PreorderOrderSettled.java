@@ -6,7 +6,7 @@ package com.grandis.nova.preorder.event;
  * @param reason         REJECTED 일 때 SHIPPED · PAID(만료 경합)
  * @param cancelSequence PREORDER_CANCEL_REQUESTED 에서 받은 값 그대로. 어느 취소 시도의 결과인지 가린다
  */
-public record PreorderOrderSettled(String preorderId, Result result, String reason, Long cancelSequence) {
+record PreorderOrderSettled(String preorderId, Result result, String reason, Long cancelSequence) {
 
     /** 시도를 가릴 수 없는 결과는 반영하지 않고 실패로 올린다 — 조용히 버리면 예약이 취소 중에 멈춘다. */
     public PreorderOrderSettled {

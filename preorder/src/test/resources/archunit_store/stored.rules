@@ -1,0 +1,4 @@
+#
+#Mon Sep 28 15:13:10 KST 2026
+classes\ that\ are\ annotated\ with\ @Entity\ or\ are\ assignable\ to\ org.springframework.data.repository.Repository\ should\ \uC18C\uC720\ \uD328\uD0A4\uC9C0\ \uC548\uC5D0\uC11C\uB9CC\ \uC4F0\uC778\uB2E4=3e440ed0-483d-4134-877d-5d7372556a06
+no\ classes\ that\ reside\ in\ any\ package\ ['com.grandis.nova.preorder.outbox..',\ 'com.grandis.nova.preorder.admission..',\ 'com.grandis.nova.preorder.web..']\ should\ depend\ on\ classes\ that\ reside\ in\ any\ package\ ['com.grandis.nova.preorder.accept..',\ 'com.grandis.nova.preorder.cancel..',\ 'com.grandis.nova.preorder.query..',\ 'com.grandis.nova.preorder.payability..',\ 'com.grandis.nova.preorder.event..',\ 'com.grandis.nova.preorder.config..',\ 'com.grandis.nova.preorder.metrics..',\ 'com.grandis.nova.preorder.preorder..',\ 'com.grandis.nova.preorder.campaign..',\ 'com.grandis.nova.preorder.syncjob..',\ 'com.grandis.nova.preorder.integration..']=05744742-839c-4742-beaf-9aaeb1ad25ae

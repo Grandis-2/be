@@ -96,15 +96,6 @@ public class PreorderQueryService {
         return events.findByPreorderIdOrderByEventSequence(require(viewer, preorderToken).getId());
     }
 
-    /** 공개 배송 차수. 차수가 없으면 사전예약 상품이 아니거나 아직 준비 전이다. */
-    public List<ShipmentBatch> findShipmentBatches(Long productId) {
-        List<ShipmentBatch> found = batches.findByProductIdOrderByBatchNumber(productId);
-        if (found.isEmpty()) {
-            throw new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND);
-        }
-        return found;
-    }
-
     public OffsetPage<PreorderView.AdminSummary> findForAdmin(AdminPreorderFilter filter, int page, int size) {
         Specification<Preorder> specification = PreorderSpecifications.allOf(
                 PreorderSpecifications.status(filter.status()),

@@ -1,0 +1,3 @@
+Constructor <com.grandis.nova.preorder.outbox.OutboxMessage$PreorderCancelRequested.<init>(java.lang.Long, java.lang.String, java.lang.Long, com.grandis.nova.preorder.preorder.CancelReason, java.lang.Long)> has parameter of type <com.grandis.nova.preorder.preorder.CancelReason> in (OutboxMessage.java:0)
+Field <com.grandis.nova.preorder.outbox.OutboxMessage$PreorderCancelRequested.reason> has type <com.grandis.nova.preorder.preorder.CancelReason> in (OutboxMessage.java:0)
+Method <com.grandis.nova.preorder.outbox.OutboxMessage$PreorderCancelRequested.reason()> has return type <com.grandis.nova.preorder.preorder.CancelReason> in (OutboxMessage.java:0)

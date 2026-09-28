@@ -7,5 +7,5 @@ import com.grandis.nova.preorder.preorder.PreorderStatus;
  *
  * @param version 늦게 도착한 이전 응답을 버리는 데 쓴다(preorders.event_sequence)
  */
-public record CancelResult(String preorderId, PreorderStatus status, long version) {
+record CancelResult(String preorderId, PreorderStatus status, long version) {
 }

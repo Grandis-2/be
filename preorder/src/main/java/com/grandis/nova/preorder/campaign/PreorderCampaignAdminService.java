@@ -2,8 +2,8 @@ package com.grandis.nova.preorder.campaign;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
-import com.grandis.nova.preorder.catalog.CatalogReader;
-import com.grandis.nova.preorder.catalog.ProductCatalog;
+import com.grandis.nova.preorder.integration.catalog.CatalogReader;
+import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
 import com.grandis.nova.preorder.web.ValidationFailures;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -19,14 +19,14 @@ import java.util.List;
  * 오픈 뒤에는 일정도 차수도 바꾸지 않는다(ERD 결정 29 · 30) — 이미 배정된 순번의 뜻이 달라진다.
  */
 @Service
-public class PreorderCampaignAdminService {
+class PreorderCampaignAdminService {
 
     private final PreorderCampaignRepository campaigns;
     private final ShipmentBatchRepository batches;
     private final PreorderCampaignWriter writer;
     private final CatalogReader catalogReader;
 
-    public PreorderCampaignAdminService(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
+    PreorderCampaignAdminService(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
                                         PreorderCampaignWriter writer, CatalogReader catalogReader) {
         this.campaigns = campaigns;
         this.batches = batches;

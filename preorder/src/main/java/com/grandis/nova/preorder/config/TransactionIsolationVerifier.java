@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
  * 빠뜨려도 오류가 나지 않고 부하가 걸릴 때까지 아무도 모른다. 그래서 설정값이 아니라 세션의 실제 값을 본다.
  */
 @Component
-public class TransactionIsolationVerifier implements ApplicationRunner {
+class TransactionIsolationVerifier implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(TransactionIsolationVerifier.class);
 
@@ -24,7 +24,7 @@ public class TransactionIsolationVerifier implements ApplicationRunner {
 
     private final JdbcTemplate jdbcTemplate;
 
-    public TransactionIsolationVerifier(JdbcTemplate jdbcTemplate) {
+    TransactionIsolationVerifier(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
     }
 

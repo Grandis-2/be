@@ -3,7 +3,7 @@ package com.grandis.nova.preorder.event;
 import com.grandis.nova.preorder.accept.AcceptResult;
 import com.grandis.nova.preorder.accept.PreorderAcceptService;
 import com.grandis.nova.preorder.cancel.CancelStarter;
-import com.grandis.nova.preorder.catalog.CatalogClient;
+import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.PreorderRepository;

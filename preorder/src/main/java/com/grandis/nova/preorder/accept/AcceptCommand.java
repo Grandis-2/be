@@ -9,7 +9,7 @@ import com.grandis.nova.preorder.preorder.EventActor;
  * @param reason            관리자 대신 접수의 사유(이력). 사용자 접수면 null
  * @param internalNote      관리자 메모. 없으면 null
  */
-public record AcceptCommand(
+record AcceptCommand(
         Long customerId,
         Long productId,
         Long optionId,

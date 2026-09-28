@@ -1,13 +1,13 @@
 package com.grandis.nova.preorder.loadtest;
 
 import com.grandis.nova.preorder.accept.PreorderAcceptService;
-import com.grandis.nova.preorder.catalog.CatalogClient;
+import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.support.AcceptFixtures;
-import com.grandis.nova.preorder.support.Concurrently;
 import com.grandis.nova.preorder.support.Concurrently.Outcome;
+import com.grandis.nova.preorder.support.Concurrently;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
-import com.grandis.nova.preorder.support.ShopFixtures;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
+import com.grandis.nova.preorder.support.ShopFixtures;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

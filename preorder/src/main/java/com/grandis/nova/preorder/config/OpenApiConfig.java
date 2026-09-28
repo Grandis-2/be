@@ -29,7 +29,7 @@ import java.util.Map;
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnBooleanProperty("springdoc.api-docs.enabled")
-public class OpenApiConfig {
+class OpenApiConfig {
 
     private static final String SESSION_TOKEN = "sessionToken";
 

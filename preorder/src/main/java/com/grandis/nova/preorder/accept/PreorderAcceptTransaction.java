@@ -6,8 +6,8 @@ import com.grandis.nova.preorder.campaign.PreorderCampaign;
 import com.grandis.nova.preorder.campaign.PreorderCampaignRepository;
 import com.grandis.nova.preorder.campaign.ShipmentBatch;
 import com.grandis.nova.preorder.campaign.ShipmentBatchRepository;
-import com.grandis.nova.preorder.catalog.OptionSnapshot;
-import com.grandis.nova.preorder.catalog.ProductCatalog;
+import com.grandis.nova.preorder.integration.catalog.OptionSnapshot;
+import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
 import com.grandis.nova.preorder.outbox.OutboxMessage.RegisterJobReady;
 import com.grandis.nova.preorder.outbox.OutboxWriter;
 import com.grandis.nova.preorder.preorder.NewPreorder;
@@ -44,7 +44,7 @@ import java.util.UUID;
  * SQS 발행도 없다 — 커밋 뒤 발행기가 아웃박스 알림을 받아 보낸다.
  */
 @Component
-public class PreorderAcceptTransaction {
+class PreorderAcceptTransaction {
 
     private final PreorderCampaignRepository campaigns;
     private final ShipmentBatchRepository batches;
@@ -58,7 +58,7 @@ public class PreorderAcceptTransaction {
     /** 회차 행 잠금을 얻기까지 기다린 시간. 오픈 순간 접수가 이 한 행에 줄을 서므로 부하 시험의 핵심 지표다. */
     private final Timer campaignLockWait;
 
-    public PreorderAcceptTransaction(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
+    PreorderAcceptTransaction(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
                                      PreorderRepository preorders, PreorderLedger ledger,
                                      PreorderSyncJobRepository syncJobs, OutboxWriter outboxWriter,
                                      JsonMapper jsonMapper, Clock clock,

@@ -9,11 +9,11 @@ import org.springframework.transaction.annotation.Transactional;
  * 상품 · 옵션 · 회원 · 순번 · 차수 · 외부 키는 접수 뒤 바뀌지 않는다.
  */
 @Service
-public class PreorderNoteService {
+class PreorderNoteService {
 
     private final PreorderRepository preorders;
 
-    public PreorderNoteService(PreorderRepository preorders) {
+    PreorderNoteService(PreorderRepository preorders) {
         this.preorders = preorders;
     }
 

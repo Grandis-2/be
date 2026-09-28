@@ -11,7 +11,7 @@ import java.time.Duration;
  * @param relayBatch  릴레이 한 번에 잠가 보내는 최대 행 수
  */
 @ConfigurationProperties("nova.outbox")
-public record OutboxProperties(
+record OutboxProperties(
         @DefaultValue("32") int concurrency,
         @DefaultValue("1m") Duration relayAfter,
         @DefaultValue("100") int relayBatch

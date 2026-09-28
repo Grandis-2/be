@@ -5,6 +5,7 @@ ext {
     awsSdkVersion = '2.55.6'
     flociTestcontainersVersion = '2.16.1'
     springdocVersion = '3.1.1'
+    archunitVersion = '1.5.1'
 }
 
 dependencies {
@@ -42,6 +43,8 @@ dependencies {
     // 테스트는 기본적으로 지표 내보내기를 끈다. Prometheus 엔드포인트를 확인하는 테스트만 켠다(@AutoConfigureMetrics).
     testImplementation 'org.springframework.boot:spring-boot-micrometer-metrics-test'
     testImplementation 'org.springframework.security:spring-security-test'
+    // 모듈 경계 규칙(ModuleBoundaryTest)
+    testImplementation "com.tngtech.archunit:archunit-junit5:${archunitVersion}"
     // 테스트 DB 는 Flyway 마이그레이션(스키마 정본)으로 만든다. 서비스는 Flyway 를 실행하지 않으므로 테스트 의존으로만 둔다.
     testImplementation 'org.springframework.boot:spring-boot-starter-flyway'
     testRuntimeOnly 'org.flywaydb:flyway-mysql'

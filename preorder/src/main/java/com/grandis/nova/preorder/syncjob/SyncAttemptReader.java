@@ -34,14 +34,17 @@ public class SyncAttemptReader {
             rs.getObject(5, Integer.class), rs.getString(6), rs.getString(7),
             rs.getTimestamp(8).toInstant(), instantOrNull(rs.getTimestamp(9)));
 
-    /** 작업마다 마지막 시도 하나를 붙인다. 시도가 없는 작업은 error_code 가 NULL 이다. */
-    private static final String LAST_ERROR_CODES = """
-            SELECT j.id, a.error_code
-              FROM preorder_sync_jobs j
+    /** 작업(j)에 마지막 시도(a) 하나를 붙이는 조인. 시도가 없는 작업은 a 가 NULL 이다. 재처리 후보도 같은 정의를 쓴다. */
+    static final String LATEST_ATTEMPT_JOIN = """
               LEFT JOIN preorder_sync_attempts a ON a.sync_job_id = j.id
                    AND a.attempt_number = (SELECT MAX(b.attempt_number) FROM preorder_sync_attempts b
                                             WHERE b.sync_job_id = j.id)
             """;
+
+    private static final String LAST_ERROR_CODES = """
+            SELECT j.id, a.error_code
+              FROM preorder_sync_jobs j
+            """ + LATEST_ATTEMPT_JOIN;
 
     private final JdbcTemplate jdbcTemplate;
 

@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Map;
 
 /** 조회 결과. 예약과 함께 화면이 필요로 하는 것(배송 차수 등)을 담는다. */
-public final class PreorderView {
+final class PreorderView {
 
     private PreorderView() {
     }
