@@ -18,8 +18,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 계약 contracts/preorder-internal.md 를 응답 모양 그대로 본다. 인증 필터는 아직 없어(common:security 도입 전)
- * 시험은 MockMvc 의 user() 로 인증된 요청을 만든다.
+ * 계약 contracts/preorder-internal.md 를 응답 모양 그대로 본다. 응답 모양 시험은 MockMvc 의 user() 로 인증된 요청을 만들고,
+ * 실제 토큰(Bearer · 서명 · 만료 · 폐기)의 통과 · 거절은 TokenAuthenticationApiTest 가 본다.
  */
 @CatalogIntegrationTest
 @AutoConfigureMockMvc

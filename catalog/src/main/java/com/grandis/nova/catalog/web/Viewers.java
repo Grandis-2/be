@@ -9,7 +9,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
  * 미리보기는 같은 공개 URL 이 호출자에 따라 다른 응답을 주는 자리다. 응답이 공유 캐시에 남으면 비공개 상품이 샌다.
  * 지금은 Spring Security 기본값이 모든 응답에 Cache-Control: no-store 를 붙인다(실측). 목록 성능 때문에 캐시 헤더를 켜게 되면
  * 미리보기 응답은 빼야 한다 — ProductDetailApiTest 가 관리자 미리보기 응답의 no-store 를 단언한다.
- * 토큰 검증 필터 채택 전에는 늘 익명이라 false(닫힌 쪽)다.
+ * 인증은 common:security 의 필터가 `Authorization: Bearer` 로 채운다(NV-139). 토큰이 없거나 틀리면 익명이라 false(닫힌 쪽)다.
  */
 public final class Viewers {
 
