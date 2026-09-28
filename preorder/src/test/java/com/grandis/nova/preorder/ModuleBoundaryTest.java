@@ -71,7 +71,7 @@ class ModuleBoundaryTest {
     @ArchTest
     static final ArchRule 엔티티와_리포지토리는_소유_모듈_밖에서_쓰지_않는다 = FreezingArchRule.freeze(classes()
             .that().areAnnotatedWith(Entity.class).or().areAssignableTo(Repository.class)
-            .should(onlyBeAccessedFromTheirOwnPackage()));
+            .should(onlyBeAccessedFromTheirOwnModule()));
 
     @ArchTest
     static final ArchRule 외부_서비스_클라이언트는_integration_안에서만_쓴다 = classes()
@@ -88,17 +88,23 @@ class ModuleBoundaryTest {
             .that().areAnnotatedWith(RestController.class)
             .should().dependOnClassesThat().areAssignableTo(Repository.class);
 
-    private static ArchCondition<JavaClass> onlyBeAccessedFromTheirOwnPackage() {
-        return new ArchCondition<>("소유 패키지 안에서만 쓰인다") {
+    private static ArchCondition<JavaClass> onlyBeAccessedFromTheirOwnModule() {
+        return new ArchCondition<>("소유 모듈 안에서만 쓰인다") {
             @Override
             public void check(JavaClass owned, ConditionEvents events) {
                 for (Dependency dependency : owned.getDirectDependenciesToSelf()) {
-                    if (!dependency.getOriginClass().getPackageName().equals(owned.getPackageName())) {
+                    if (!moduleOf(dependency.getOriginClass()).equals(moduleOf(owned))) {
                         events.add(SimpleConditionEvent.violated(dependency, dependency.getDescription()));
                     }
                 }
             }
         };
+    }
+
+    /** 모듈은 최상위 패키지다(outbox.publish 는 outbox 모듈). */
+    private static String moduleOf(JavaClass javaClass) {
+        String relative = javaClass.getPackageName().substring(ROOT.length());
+        return relative.isEmpty() ? "" : relative.substring(1).split("\\.")[0];
     }
 
     private static String module(String name) {
