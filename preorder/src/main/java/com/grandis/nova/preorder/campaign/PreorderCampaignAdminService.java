@@ -2,8 +2,8 @@ package com.grandis.nova.preorder.campaign;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
-import com.grandis.nova.preorder.catalog.CatalogReader;
-import com.grandis.nova.preorder.catalog.ProductCatalog;
+import com.grandis.nova.preorder.integration.catalog.CatalogReader;
+import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
 import com.grandis.nova.preorder.web.ValidationFailures;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;

@@ -1,8 +1,8 @@
 package com.grandis.nova.preorder.support;
 
 import com.grandis.nova.common.web.ApiResponse;
-import com.grandis.nova.preorder.catalog.CatalogClient;
-import com.grandis.nova.preorder.catalog.ProductCatalog;
+import com.grandis.nova.preorder.integration.catalog.CatalogClient;
+import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
 import org.springframework.web.client.HttpClientErrorException;
 
 import java.math.BigDecimal;

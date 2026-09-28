@@ -2,7 +2,7 @@ package com.grandis.nova.preorder.cancel;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
-import com.grandis.nova.preorder.order.OrderCancelabilityChecker;
+import com.grandis.nova.preorder.integration.order.OrderCancelabilityChecker;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.Preorder;

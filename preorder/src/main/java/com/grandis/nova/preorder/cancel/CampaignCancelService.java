@@ -1,7 +1,7 @@
 package com.grandis.nova.preorder.cancel;
 
 import com.grandis.nova.preorder.campaign.PreorderCampaignRepository;
-import com.grandis.nova.preorder.catalog.CatalogReader;
+import com.grandis.nova.preorder.integration.catalog.CatalogReader;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.Preorder;

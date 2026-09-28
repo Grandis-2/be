@@ -3,7 +3,7 @@ package com.grandis.nova.preorder.accept;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.admission.AdmissionTicketVerifier;
-import com.grandis.nova.preorder.catalog.CatalogReader;
+import com.grandis.nova.preorder.integration.catalog.CatalogReader;
 import com.grandis.nova.preorder.preorder.Preorder;
 import com.grandis.nova.preorder.preorder.PreorderRepository;
 import com.grandis.nova.preorder.preorder.PreorderStatus;

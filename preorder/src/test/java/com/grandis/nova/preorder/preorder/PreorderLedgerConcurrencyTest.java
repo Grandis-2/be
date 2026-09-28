@@ -1,10 +1,10 @@
 package com.grandis.nova.preorder.preorder;
 
-import com.grandis.nova.preorder.support.Concurrently;
 import com.grandis.nova.preorder.support.Concurrently.Outcome;
+import com.grandis.nova.preorder.support.Concurrently;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
-import com.grandis.nova.preorder.support.ShopFixtures;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
+import com.grandis.nova.preorder.support.ShopFixtures;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;

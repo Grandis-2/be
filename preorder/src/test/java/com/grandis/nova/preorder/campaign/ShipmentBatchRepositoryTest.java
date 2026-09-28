@@ -1,8 +1,8 @@
 package com.grandis.nova.preorder.campaign;
 
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
-import com.grandis.nova.preorder.support.ShopFixtures;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
+import com.grandis.nova.preorder.support.ShopFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
