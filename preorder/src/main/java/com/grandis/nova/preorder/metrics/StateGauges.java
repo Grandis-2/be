@@ -1,7 +1,6 @@
 package com.grandis.nova.preorder.metrics;
 
-import com.grandis.nova.preorder.outbox.OutboundEventType;
-import com.grandis.nova.preorder.outbox.OutboxEventRepository;
+import com.grandis.nova.preorder.outbox.OutboxBacklog;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.preorder.Preorders;
 import io.micrometer.core.instrument.Gauge;
@@ -10,7 +9,6 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.util.EnumMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -21,17 +19,15 @@ import java.util.concurrent.atomic.AtomicLong;
 @Component
 class StateGauges {
 
-    private static final List<String> OWN_EVENT_TYPES = OutboundEventType.names();
-
     private final Preorders preorders;
-    private final OutboxEventRepository outboxEvents;
+    private final OutboxBacklog outboxBacklog;
     private final Map<PreorderStatus, AtomicLong> statusCounts = new EnumMap<>(PreorderStatus.class);
     private final AtomicLong unpublished = new AtomicLong();
     private final AtomicLong maxUnpublishedAttempts = new AtomicLong();
 
-    StateGauges(Preorders preorders, OutboxEventRepository outboxEvents, MeterRegistry meterRegistry) {
+    StateGauges(Preorders preorders, OutboxBacklog outboxBacklog, MeterRegistry meterRegistry) {
         this.preorders = preorders;
-        this.outboxEvents = outboxEvents;
+        this.outboxBacklog = outboxBacklog;
         for (PreorderStatus status : PreorderStatus.values()) {
             AtomicLong count = new AtomicLong();
             statusCounts.put(status, count);
@@ -50,7 +46,7 @@ class StateGauges {
         Map<PreorderStatus, Long> counts = preorders.countByStatus();
         // 새 값을 다 센 뒤에 바꾼다 — 먼저 0 으로 비우면 그사이 수집에 0 이 잡힌다
         statusCounts.forEach((status, count) -> count.set(counts.getOrDefault(status, 0L)));
-        unpublished.set(outboxEvents.countUnpublished(OWN_EVENT_TYPES));
-        maxUnpublishedAttempts.set(outboxEvents.maxUnpublishedAttempts(OWN_EVENT_TYPES));
+        unpublished.set(outboxBacklog.unpublishedCount());
+        maxUnpublishedAttempts.set(outboxBacklog.maxUnpublishedAttempts());
     }
 }

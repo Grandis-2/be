@@ -1,8 +1,8 @@
 package com.grandis.nova.preorder.outbox;
 
-import com.grandis.nova.preorder.outbox.OutboxMessage.CancelJobReady;
-import com.grandis.nova.preorder.outbox.OutboxMessage.PreorderCancelRequested;
-import com.grandis.nova.preorder.outbox.OutboxMessage.RegisterJobReady;
+import com.grandis.nova.preorder.accept.RegisterJobReady;
+import com.grandis.nova.preorder.cancel.PreorderCancelRequested;
+import com.grandis.nova.preorder.event.CancelJobReady;
 import com.grandis.nova.preorder.outbox.publish.OutboxAfterCommitPublisher;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;

@@ -1,7 +1,7 @@
 package com.grandis.nova.preorder.outbox.publish;
 
+import com.grandis.nova.preorder.accept.RegisterJobReady;
 import com.grandis.nova.preorder.outbox.OutboxEvent;
-import com.grandis.nova.preorder.outbox.OutboxMessage.RegisterJobReady;
 import com.grandis.nova.preorder.outbox.OutboxWriter;
 import com.grandis.nova.preorder.support.Concurrently.Outcome;
 import com.grandis.nova.preorder.support.Concurrently;

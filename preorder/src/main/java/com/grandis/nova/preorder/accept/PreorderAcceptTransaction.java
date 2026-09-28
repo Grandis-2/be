@@ -7,7 +7,6 @@ import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.campaign.IssuedPosition;
 import com.grandis.nova.preorder.integration.catalog.OptionSnapshot;
 import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
-import com.grandis.nova.preorder.outbox.OutboxMessage.RegisterJobReady;
 import com.grandis.nova.preorder.outbox.OutboxWriter;
 import com.grandis.nova.preorder.preorder.NewPreorder;
 import com.grandis.nova.preorder.preorder.PreorderLedger;

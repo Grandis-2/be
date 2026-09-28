@@ -1,7 +1,6 @@
 package com.grandis.nova.preorder.event;
 
 import com.grandis.nova.preorder.cancel.CancelRequestPayload;
-import com.grandis.nova.preorder.outbox.OutboxMessage.CancelJobReady;
 import com.grandis.nova.preorder.outbox.OutboxWriter;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;

@@ -1,4 +1,0 @@
-Constructor <com.grandis.nova.preorder.metrics.StateGauges.<init>(com.grandis.nova.preorder.preorder.Preorders, com.grandis.nova.preorder.outbox.OutboxEventRepository, io.micrometer.core.instrument.MeterRegistry)> has parameter of type <com.grandis.nova.preorder.outbox.OutboxEventRepository> in (StateGauges.java:0)
-Field <com.grandis.nova.preorder.metrics.StateGauges.outboxEvents> has type <com.grandis.nova.preorder.outbox.OutboxEventRepository> in (StateGauges.java:0)
-Method <com.grandis.nova.preorder.metrics.StateGauges.refresh()> calls method <com.grandis.nova.preorder.outbox.OutboxEventRepository.countUnpublished(java.util.Collection)> in (StateGauges.java:53)
-Method <com.grandis.nova.preorder.metrics.StateGauges.refresh()> calls method <com.grandis.nova.preorder.outbox.OutboxEventRepository.maxUnpublishedAttempts(java.util.Collection)> in (StateGauges.java:54)
