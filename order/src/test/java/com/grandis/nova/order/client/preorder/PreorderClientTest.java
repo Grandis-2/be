@@ -1,7 +1,14 @@
 package com.grandis.nova.order.client.preorder;
 
+import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.order.web.SessionHeader;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -12,19 +19,34 @@ import org.springframework.web.client.support.RestClientAdapter;
 import org.springframework.web.service.invoker.HttpServiceProxyFactory;
 
 import java.math.BigDecimal;
+import java.net.SocketTimeoutException;
 import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.headerDoesNotExist;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withException;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
-/** 가정한 계약(NV-55 계획서 §4-1)의 경로와 응답 봉투를 그대로 읽는지. */
+/**
+ * 실제 계약(order-handoff.md 요청 2, preorder InternalPreorderController)의 경로 · 헤더 · 응답을 그대로 읽는지.
+ * 기준은 문서가 아니라 preorder 구현이다 — 문서의 헤더(Authorization: Bearer)가 구현(X-Session-Token)과 달랐다.
+ *
+ * 계약 대조: 아래 JSON 은 preorder PayabilityResponse 를 ApiResponse 로 감싼 모양을 복제한 것이다(preorder 는 order 의
+ * 의존성이 아니라 직접 직렬화할 수 없다). preorder 쪽 필드가 바뀌면 이 예시도 같이 바꾼다.
+ */
+@ExtendWith(OutputCaptureExtension.class)
 class PreorderClientTest {
 
     static final String PREORDER_UUID = "0b8f6a3e-5a8c-4d59-9a53-3c1f0e0f7a11";
+    static final String PAYABILITY_URL = "http://preorder/internal/preorders/" + PREORDER_UUID + "/payability";
+    // 전달할 세션 토큰 자리(접두어 없음). 로그 검사에도 쓴다. 실제 토큰 모양이 아니다.
+    static final String SESSION = "order-client-test-user-7";
 
     MockRestServiceServer server;
     PreorderClient client;
@@ -37,30 +59,118 @@ class PreorderClientTest {
                 .createClient(PreorderClient.class);
     }
 
+    /*
+     * 헤더 이름 고정. preorder 는 common:security JwtAuthenticationFilter.HEADER("X-Session-Token")만 읽고 값은 접두어 없는
+     * JWT 그대로다(preorder OrderClient · PreorderCancelController 도 같은 헤더로 전달). order 는 아직 common:security 에
+     * 의존하지 않아 그 상수를 직접 대조할 수 없으므로 값으로 고정한다.
+     * common:security 도입 시: SessionHeader 를 지우고 이 테스트도 지운다.
+     */
     @Test
-    void readsSnapshotFromEnvelopeData() {
-        server.expect(requestTo("http://preorder/internal/preorders/" + PREORDER_UUID))
+    void sessionHeaderMatchesPreorderAuthenticationFilter() {
+        assertThat(SessionHeader.NAME).isEqualTo("X-Session-Token");
+    }
+
+    @Test
+    void readsPayablePreorderFromEnvelopeAndForwardsSessionToken() {
+        server.expect(requestTo(PAYABILITY_URL))
                 .andExpect(method(HttpMethod.GET))
+                .andExpect(header(SessionHeader.NAME, SESSION))
+                .andExpect(headerDoesNotExist("Authorization"))
                 .andRespond(withSuccess("""
                         {"success":true,
-                         "data":{"id":11,"preorderId":"%s","customerId":7,"productId":3,"optionId":30,
-                                 "productTitle":"Nova 1","optionTitle":"블랙 / 256GB","unitPrice":1250000,
-                                 "status":"PAYABLE","payableFrom":"2026-09-25T01:02:03.123456Z"},
-                         "error":null,"timestamp":"2026-09-25T00:00:00Z","traceId":"t-1"}
+                         "data":{"preorderId":"%s","preorderInternalId":50231,"customerId":1024,
+                                 "productId":101,"optionId":1002,"productTitle":"갤럭시 G999","optionTitle":"256GB 블랙",
+                                 "unitPrice":1290000,"status":"PAYABLE",
+                                 "payableFrom":"2026-09-03T01:00:03.470Z","paymentDueAt":"2026-09-04T01:00:03.470Z",
+                                 "payable":true,"reason":null},
+                         "error":null,"timestamp":"2026-09-03T02:00:00Z","traceId":"t-1"}
                         """.formatted(PREORDER_UUID), MediaType.APPLICATION_JSON));
 
-        PreorderSnapshot snapshot = client.getPreorder(PREORDER_UUID).data();
+        PreorderPayability payability = client.getPayability(PREORDER_UUID, SESSION).data();
 
-        assertThat(snapshot).isEqualTo(new PreorderSnapshot(11L, PREORDER_UUID, 7L, 3L, 30L, "Nova 1", "블랙 / 256GB",
-                new BigDecimal("1250000"), "PAYABLE", Instant.parse("2026-09-25T01:02:03.123456Z")));
+        assertThat(payability).isEqualTo(new PreorderPayability(PREORDER_UUID, 50231L, 1024L, 101L, 1002L,
+                "갤럭시 G999", "256GB 블랙", new BigDecimal("1290000"), "PAYABLE",
+                Instant.parse("2026-09-03T01:00:03.470Z"), Instant.parse("2026-09-04T01:00:03.470Z"), true, null));
+        server.verify();
+    }
+
+    // 결제 불가 예시. 등록 전이면 payableFrom · paymentDueAt 이 null 이다(preorder Preorder.paymentDueAt()).
+    @Test
+    void readsBlockedPreorder() {
+        server.expect(requestTo(PAYABILITY_URL))
+                .andRespond(withSuccess("""
+                        {"success":true,
+                         "data":{"preorderId":"%s","preorderInternalId":50231,"customerId":1024,
+                                 "productId":101,"optionId":1002,"productTitle":"갤럭시 G999","optionTitle":"256GB 블랙",
+                                 "unitPrice":1290000,"status":"PENDING_SYNC",
+                                 "payableFrom":null,"paymentDueAt":null,
+                                 "payable":false,"reason":"NOT_YET_REGISTERED"},
+                         "error":null,"timestamp":"2026-09-03T02:00:00Z","traceId":"t-1"}
+                        """.formatted(PREORDER_UUID), MediaType.APPLICATION_JSON));
+
+        PreorderPayability payability = client.getPayability(PREORDER_UUID, SESSION).data();
+
+        assertThat(payability.payable()).isFalse();
+        assertThat(payability.reason()).isEqualTo("NOT_YET_REGISTERED");
+        assertThat(payability.payableFrom()).isNull();
+        assertThat(payability.paymentDueAt()).isNull();
+    }
+
+    // 헤더가 없으면 빈 값으로라도 싣지 않는다 — preorder 가 401 로 판단한다.
+    @Test
+    void missingSessionTokenIsNotSent() {
+        server.expect(requestTo(PAYABILITY_URL))
+                .andExpect(headerDoesNotExist(SessionHeader.NAME))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED));
+
+        assertThatThrownBy(() -> client.getPayability(PREORDER_UUID, null))
+                .isInstanceOf(HttpClientErrorException.Unauthorized.class);
         server.verify();
     }
 
     @Test
     void missingPreorderIsNotFound() {
-        server.expect(requestTo("http://preorder/internal/preorders/" + PREORDER_UUID))
-                .andRespond(withStatus(HttpStatus.NOT_FOUND));
+        server.expect(requestTo(PAYABILITY_URL)).andRespond(withStatus(HttpStatus.NOT_FOUND));
 
-        assertThatThrownBy(() -> client.getPreorder(PREORDER_UUID)).isInstanceOf(HttpClientErrorException.NotFound.class);
+        assertThatThrownBy(() -> client.getPayability(PREORDER_UUID, SESSION))
+                .isInstanceOf(HttpClientErrorException.NotFound.class);
+    }
+
+    @Test
+    void someoneElsesPreorderIsForbidden() {
+        server.expect(requestTo(PAYABILITY_URL)).andRespond(withStatus(HttpStatus.FORBIDDEN));
+
+        assertThatThrownBy(() -> client.getPayability(PREORDER_UUID, SESSION))
+                .isInstanceOf(HttpClientErrorException.Forbidden.class);
+    }
+
+    // 실패를 로그로 남기는 경로(연동 오류 · 장애)에서도 전달한 토큰은 로그와 예외 메시지에 없다.
+    @ParameterizedTest
+    @EnumSource(value = HttpStatus.class,
+            names = {"BAD_REQUEST", "UNAUTHORIZED", "FORBIDDEN", "SERVICE_UNAVAILABLE"})
+    void sessionTokenIsNotLoggedOnFailure(HttpStatus status, CapturedOutput output) {
+        server.expect(requestTo(PAYABILITY_URL)).andRespond(withStatus(status).body("{\"success\":false}")
+                .contentType(MediaType.APPLICATION_JSON));
+
+        Throwable thrown = catchThrowable(() -> new PreorderReader(client).find(PREORDER_UUID, SESSION));
+
+        assertNoCredential(thrown, output);
+    }
+
+    @Test
+    void sessionTokenIsNotLoggedOnTimeout(CapturedOutput output) {
+        server.expect(requestTo(PAYABILITY_URL)).andRespond(withException(new SocketTimeoutException("Read timed out")));
+
+        Throwable thrown = catchThrowable(() -> new PreorderReader(client).find(PREORDER_UUID, SESSION));
+
+        assertThat(thrown).isInstanceOf(BusinessException.class);
+        assertNoCredential(thrown, output);
+    }
+
+    private static void assertNoCredential(Throwable thrown, CapturedOutput output) {
+        assertThat(output.getAll()).doesNotContain(SESSION);
+        for (Throwable t = thrown; t != null; t = t.getCause()) {
+            assertThat(String.valueOf(t.getMessage())).doesNotContain(SESSION);
+        }
     }
 }
