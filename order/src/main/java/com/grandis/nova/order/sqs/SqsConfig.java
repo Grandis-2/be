@@ -13,7 +13,8 @@ import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.SqsClientBuilder;
 
 /**
- * nova.sqs.region 이 있을 때만 SQS 클라이언트를 만든다. 없으면 소비기는 꺼진다(발행은 NV-79 가 붙인다).
+ * nova.sqs.region 이 있을 때만 SQS 클라이언트를 만든다. 없으면 소비기는 꺼지고, nova.outbox.transport=sqs 면
+ * 전송({@link SqsMessageTransport})이 클라이언트를 찾지 못해 기동이 실패한다.
  *
  * common:outbox 이전 시: preorder sqs.SqsConfig 의 복사본이다. 그대로 공통으로 옮긴다.
  */
