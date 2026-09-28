@@ -266,7 +266,7 @@ class OutboxWriterTest {
         }
     }
 
-    /** 발행기 자리. 커밋 뒤에 받은 신호를 모은다. */
+    /** 커밋 뒤에 받은 신호를 모은다. 발행기(OutboxAfterCommitPublisher)와 별개로 신호 자체만 본다. */
     @TestConfiguration(proxyBeanMethods = false)
     static class CommittedEvents {
 

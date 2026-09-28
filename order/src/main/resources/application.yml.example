@@ -49,6 +49,14 @@ nova:
       visibility: 5m       # 처리 한 건보다 길게
       backoff-base: 5s
       backoff-max: 5m
+  # 아웃박스 발행. transport 는 필수(없으면 기동 실패): sqs, 또는 보내지 않고 로그로만 남기는 log.
+  # log 는 행을 발행 완료로 표시해 다시 보내지 않는다 — 로컬 · 테스트 전용이다. 운영에는 쓰지 않는다
+  outbox:
+    transport: sqs
+    concurrency: 32        # 커밋 직후 발행 동시 실행 상한(가상 스레드). 넘치면 릴레이가 보낸다
+    relay-interval: 10s    # 릴레이 주기
+    relay-after: 1m        # 만든 지 이만큼 지난 미발행 행만 재발행
+    relay-batch: 100
 
 # 검증만 한다. 공개키 하나면 되고 member 를 호출하지 않는다.
 jwt:
