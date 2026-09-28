@@ -11,6 +11,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# 읽기만 한다. 기본 토큰 권한이 read/write 여도 이 워크플로는 저장소에 쓰지 않는다.
+permissions:
+  contents: read
+
 jobs:
   # 어떤 모듈이 있고 무엇이 바뀌었는지 build.gradle 에게 묻는다. 목록을 여기 적지 않는다.
   # 모듈을 추가하면 테스트 잡이 알아서 하나 늘어난다.
@@ -72,8 +76,37 @@ jobs:
       matrix:
         module: ${{ fromJSON(needs.graph.outputs.modules) }}
     name: test ${{ matrix.module }}
+    # common:security 의 폐기 조회 테스트가 아래 Redis(6379) 에 붙는다. 서비스가 없으면 skip 이 아니라 실패한다
+    # (CI 환경변수가 있으면 AssertionError) — 초록인데 테스트가 안 돈 상태를 막기 위해서다.
+    # member 는 테스트가 Testcontainers 로 자기 MySQL·Redis 를 띄우므로 이 서비스도 아래 스키마 단계도 쓰지 않는다.
+    # 모듈마다 컨테이너가 뜨지만 안 쓰는 모듈에는 비용이 몇 초뿐이다.
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:8
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      CI: "true"
     steps:
       - uses: actions/checkout@v4
+
+      # 스키마는 docs/schema.sql(shop · external_mock). 테스트 계정 nova/nova-local 은 여기서 만든다.
+      - name: apply schema
+        run: |
+          mysql -h 127.0.0.1 -uroot -proot < docs/schema.sql
+          mysql -h 127.0.0.1 -uroot -proot -e "CREATE USER 'nova'@'%' IDENTIFIED BY 'nova-local'; GRANT ALL ON shop.* TO 'nova'@'%'; GRANT ALL ON external_mock.* TO 'nova'@'%';"
 
       - uses: actions/setup-java@v4
         with:
@@ -83,6 +116,32 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - run: ./gradlew ${{ matrix.module }}:build --no-daemon
+
+      # 초록과 별개로 "테스트가 정말 돌았는가" 를 본다. 테스트 소스가 있는 모듈인데 결과 XML 이 없거나, 합계가 0 이거나,
+      # skipped 가 있으면 실패다 — 인프라 전제가 빠져 assumeTrue 로 건너뛴 것을 초록으로 두지 않는다. 테스트 소스가 없는 모듈은 통과.
+      - name: test summary
+        if: always()
+        env:
+          MODULE: ${{ matrix.module }}
+        run: |
+          python3 - <<'PY'
+          import glob, os, re, sys
+          module = os.environ['MODULE']
+          d = module.strip(':').replace(':', '/')
+          has_tests = os.path.isdir(os.path.join(d, 'src', 'test'))
+          files = glob.glob(f'{d}/build/test-results/test/*.xml')
+          tot = {'tests': 0, 'skipped': 0, 'failures': 0, 'errors': 0}
+          unparsed = []
+          for f in files:
+              m = re.search(r'tests="(\d+)" skipped="(\d+)" failures="(\d+)" errors="(\d+)"', open(f).read())
+              if not m:
+                  unparsed.append(f); continue
+              for k, v in zip(tot, m.groups()): tot[k] += int(v)
+          print('TEST SUMMARY', module, tot, 'files=%d has_tests=%s unparsed=%s' % (len(files), has_tests, unparsed))
+          if has_tests and (not files or tot['tests'] == 0 or tot['skipped'] > 0 or unparsed):
+              print('::error::테스트 소스가 있는데 결과가 비었거나 skipped 가 있다 — MySQL·Redis 서비스와 스키마 적용을 확인하라')
+              sys.exit(1)
+          PY
 
       # 실패해도 리포트는 남긴다. 어느 테스트가 깨졌는지 보려면 이게 필요하다.
       - uses: actions/upload-artifact@v4
