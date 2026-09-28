@@ -9,7 +9,7 @@ import java.time.Instant;
  * @param saleStatus 저장하지 않고 일정과 서버 시각으로 계산한다
  * @param issuedCount 지금까지 발급한 순번 수(취소 행 포함)
  */
-public record PreorderCampaignResponse(
+record PreorderCampaignResponse(
         Long productId,
         Instant opensAt,
         Instant closesAt,

@@ -17,7 +17,7 @@ import java.util.Optional;
  */
 @Configuration(proxyBeanMethods = false)
 @EnableJpaAuditing(dateTimeProviderRef = "auditingDateTimeProvider")
-public class JpaAuditingConfig {
+class JpaAuditingConfig {
 
     @Bean
     DateTimeProvider auditingDateTimeProvider(Clock clock) {

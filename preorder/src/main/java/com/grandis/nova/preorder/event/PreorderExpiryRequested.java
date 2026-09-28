@@ -1,5 +1,5 @@
 package com.grandis.nova.preorder.event;
 
 /** batch 가 결제 기한이 지난 예약의 만료를 요청했다. */
-public record PreorderExpiryRequested(String preorderId) {
+record PreorderExpiryRequested(String preorderId) {
 }

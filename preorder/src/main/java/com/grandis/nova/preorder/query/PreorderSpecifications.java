@@ -11,7 +11,7 @@ import org.springframework.data.jpa.domain.Specification;
 import java.time.Instant;
 
 /** 목록 조회 조건. 값이 없는 조건은 아무것도 거르지 않는다(Specification.unrestricted). */
-public final class PreorderSpecifications {
+final class PreorderSpecifications {
 
     private PreorderSpecifications() {
     }

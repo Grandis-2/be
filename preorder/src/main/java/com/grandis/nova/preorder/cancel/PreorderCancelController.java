@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
  * Idempotency-Key 는 받지 않는다 — 취소는 상태 조건으로 이미 멱등하다(계약: 선택 헤더).
  */
 @RestController
-public class PreorderCancelController {
+class PreorderCancelController {
 
     private final PreorderCancelService cancelService;
 

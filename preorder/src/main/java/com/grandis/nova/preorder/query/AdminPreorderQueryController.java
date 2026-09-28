@@ -23,7 +23,7 @@ import java.util.Map;
 @Tag(name = "관리자 · 예약")
 @RestController
 @RequestMapping("/api/v1/admin/preorders")
-public class AdminPreorderQueryController {
+class AdminPreorderQueryController {
 
     private final PreorderQueryService queryService;
     private final PreorderNoteService noteService;

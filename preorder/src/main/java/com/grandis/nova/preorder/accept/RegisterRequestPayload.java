@@ -5,7 +5,7 @@ package com.grandis.nova.preorder.accept;
  * 접수 때 preorder_sync_jobs.request_payload 에 고정한다 — 재시도마다 같은 내용을 보내야 외부가 중복으로 본다.
  * 외부 키(Idempotency-Key)는 preorder_token 이며 본문의 ourReservationId 와 같다.
  */
-public record RegisterRequestPayload(
+record RegisterRequestPayload(
         String ourReservationId,
         String customerRef,
         String itemCode,

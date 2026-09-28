@@ -8,7 +8,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 /** @param preorderInternalId order 가 주문의 예약 FK 로 저장할 내부 id */
-public record PayabilityResponse(
+record PayabilityResponse(
         String preorderId,
         Long preorderInternalId,
         Long customerId,

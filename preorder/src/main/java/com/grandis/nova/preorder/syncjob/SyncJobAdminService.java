@@ -25,7 +25,7 @@ import java.util.stream.Collectors;
 
 /** 관리자 동기화 작업 조회 · 재처리. */
 @Service
-public class SyncJobAdminService {
+class SyncJobAdminService {
 
     /** 일괄 재처리 한 번의 최대 건수. 후보를 모두 메모리에 올리지 않는다. */
     public static final int MAX_BATCH_SIZE = 1000;

@@ -18,7 +18,7 @@ import java.util.List;
  * @param clockSkew     서버 시각 오차 허용
  */
 @ConfigurationProperties("nova.admission-ticket")
-public record AdmissionTicketProperties(
+record AdmissionTicketProperties(
         String secret,
         @DefaultValue List<String> previous,
         Instant rolloutEndsAt,

@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Map;
 
 /** 관리자 상세(openapi AdminPreorderDetail). 입장권 · 내부 메모 · 작업 · 이력까지 본다. */
-public record AdminPreorderDetailResponse(
+record AdminPreorderDetailResponse(
         @JsonUnwrapped PreorderDetailResponse detail,
         Long customerId,
         String admissionTicketId,

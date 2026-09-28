@@ -19,7 +19,7 @@ import java.util.List;
  * 오픈 뒤에는 일정도 차수도 바꾸지 않는다(ERD 결정 29 · 30) — 이미 배정된 순번의 뜻이 달라진다.
  */
 @Service
-public class PreorderCampaignAdminService {
+class PreorderCampaignAdminService {
 
     private final PreorderCampaignRepository campaigns;
     private final ShipmentBatchRepository batches;

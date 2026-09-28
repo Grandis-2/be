@@ -15,7 +15,7 @@ import java.time.Clock;
  * 남의 예약이면 403 이다 — 호출한 order 가 사용자에게 404 로 숨긴다.
  */
 @Service
-public class PayabilityService {
+class PayabilityService {
 
     private final PreorderRepository preorders;
     private final Clock clock;

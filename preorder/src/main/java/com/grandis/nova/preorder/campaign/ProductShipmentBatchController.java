@@ -20,7 +20,7 @@ import java.util.List;
 @Tag(name = "배송 차수")
 @RestController
 @RequestMapping("/api/v1/products/{productId}/shipment-batches")
-public class ProductShipmentBatchController {
+class ProductShipmentBatchController {
 
     private final PreorderQueryService queryService;
 

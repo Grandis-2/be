@@ -7,7 +7,7 @@ import com.grandis.nova.preorder.preorder.PreorderStatus;
 import java.time.Instant;
 
 /** 접수 응답(openapi PreorderAccepted). 재전송이면 기존 예약의 현재 값이라 status 가 PENDING_SYNC 가 아닐 수 있다. */
-public record PreorderAcceptedResponse(
+record PreorderAcceptedResponse(
         String preorderId,
         PreorderStatus status,
         long queuePosition,

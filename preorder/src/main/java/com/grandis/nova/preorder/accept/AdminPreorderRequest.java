@@ -5,7 +5,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 /** 관리자 대신 접수. 이력에 남길 사유가 필수다. */
-public record AdminPreorderRequest(
+record AdminPreorderRequest(
         @NotNull Long productId,
         @NotNull Long optionId,
         @NotNull Long customerId,

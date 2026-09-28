@@ -17,7 +17,7 @@ import java.util.Optional;
  * 취소 중 · 취소된 예약은 되살리지 않는다. 취소 경로가 먼저 잠그는 예약 행을 잠가 판정과 기록을 취소와 직렬화한다.
  */
 @Component
-public class SyncJobReprocessor {
+class SyncJobReprocessor {
 
     private final PreorderSyncJobRepository syncJobs;
     private final PreorderRepository preorders;

@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(name = "서비스 간 · 결제 가능")
 @RestController
 @RequestMapping("/internal/preorders")
-public class InternalPreorderController {
+class InternalPreorderController {
 
     private final PayabilityService payabilityService;
 

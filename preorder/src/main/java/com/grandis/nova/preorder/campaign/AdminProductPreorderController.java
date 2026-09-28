@@ -22,7 +22,7 @@ import java.util.List;
 @Tag(name = "관리자 · 모집 일정")
 @RestController
 @RequestMapping("/api/v1/admin/products/{productId}")
-public class AdminProductPreorderController {
+class AdminProductPreorderController {
 
     private final PreorderCampaignAdminService campaignService;
     private final Clock clock;

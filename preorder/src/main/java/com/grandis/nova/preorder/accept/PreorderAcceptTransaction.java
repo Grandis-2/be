@@ -44,7 +44,7 @@ import java.util.UUID;
  * SQS 발행도 없다 — 커밋 뒤 발행기가 아웃박스 알림을 받아 보낸다.
  */
 @Component
-public class PreorderAcceptTransaction {
+class PreorderAcceptTransaction {
 
     private final PreorderCampaignRepository campaigns;
     private final ShipmentBatchRepository batches;

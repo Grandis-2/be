@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(name = "관리자 · 예약")
 @RestController
 @RequestMapping("/api/v1/admin/preorders")
-public class AdminPreorderController {
+class AdminPreorderController {
 
     private final PreorderAcceptService acceptService;
 

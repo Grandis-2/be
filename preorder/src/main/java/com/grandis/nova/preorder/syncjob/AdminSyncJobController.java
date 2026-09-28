@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(name = "관리자 · 동기화 작업")
 @RestController
 @RequestMapping("/api/v1/admin/sync-jobs")
-public class AdminSyncJobController {
+class AdminSyncJobController {
 
     private final SyncJobAdminService syncJobAdminService;
 

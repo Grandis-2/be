@@ -12,7 +12,7 @@ import java.util.stream.Collectors;
 
 /** 일괄 재처리 후보를 id 와 판정 값만으로 읽는다. 작업 · 예약 · 마지막 시도를 한 쿼리로 붙이고 건수를 제한한다. */
 @Component
-public class ReprocessCandidateReader {
+class ReprocessCandidateReader {
 
     private static final String SELECT = """
             SELECT j.id, j.job_type, j.status, p.status, a.error_code

@@ -22,7 +22,7 @@ import java.util.List;
 @Tag(name = "사전예약")
 @RestController
 @RequestMapping("/api/v1/preorders")
-public class PreorderQueryController {
+class PreorderQueryController {
 
     private final PreorderQueryService queryService;
 

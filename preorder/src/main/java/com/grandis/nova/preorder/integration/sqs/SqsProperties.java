@@ -13,7 +13,7 @@ import java.util.Map;
  * @param apiCallTimeout SQS 호출 한 번의 제한 시간. 릴레이가 보내는 동안 행 잠금을 쥐므로 짧게 둔다
  */
 @ConfigurationProperties("nova.sqs")
-public record SqsProperties(
+record SqsProperties(
         String region,
         URI endpoint,
         @DefaultValue("test") String accessKey,

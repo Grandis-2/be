@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(name = "사전예약")
 @RestController
 @RequestMapping("/api/v1/preorders")
-public class PreorderController {
+class PreorderController {
 
     static final String ADMISSION_TICKET = "X-Admission-Ticket";
 

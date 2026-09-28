@@ -13,7 +13,7 @@ import java.util.Map;
  * DB 는 "최대 1개" 까지만 막는다(UNIQUE). 1번부터 연속인지, 구간이 이어지는지,
  * 상한 없는 마지막 차수가 정확히 하나인지는 여기서 본다 — 그래야 어떤 순번이든 속할 차수가 하나다.
  */
-public record ShipmentBatchPlan(List<Line> lines) {
+record ShipmentBatchPlan(List<Line> lines) {
 
     /** 첫 차수는 1번 순번부터 시작한다. */
     static final long FIRST_POSITION = 1;

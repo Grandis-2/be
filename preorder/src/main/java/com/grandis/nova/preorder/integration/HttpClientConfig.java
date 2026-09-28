@@ -11,5 +11,5 @@ import org.springframework.web.service.registry.ImportHttpServices;
 @Configuration(proxyBeanMethods = false)
 @ImportHttpServices(group = "catalog", types = CatalogClient.class)
 @ImportHttpServices(group = "order", types = OrderClient.class)
-public class HttpClientConfig {
+class HttpClientConfig {
 }

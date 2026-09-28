@@ -8,7 +8,7 @@ import jakarta.validation.constraints.Size;
 import java.util.List;
 
 /** @param syncJobIds 비우면 DEAD_LETTER 인 REGISTER 전체 */
-public record ReprocessBatchRequest(
+record ReprocessBatchRequest(
         @Size(max = SyncJobAdminService.MAX_BATCH_SIZE) List<@NotNull Long> syncJobIds,
         String errorCodeFilter,
         @Min(1) @Max(200) Integer ratePerSecond

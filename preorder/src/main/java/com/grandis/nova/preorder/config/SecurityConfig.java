@@ -15,7 +15,7 @@ import org.springframework.security.web.SecurityFilterChain;
  * 폐기 확인 실패 시 막는 경로는 preorder-defaults.properties 에 있다.
  */
 @Configuration(proxyBeanMethods = false)
-public class SecurityConfig {
+class SecurityConfig {
 
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http, SecurityFilterChainSupport support) throws Exception {

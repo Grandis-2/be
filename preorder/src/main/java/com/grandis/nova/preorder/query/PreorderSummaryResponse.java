@@ -12,7 +12,7 @@ import java.time.Instant;
  *
  * @param version 늦게 도착한 이전 응답을 버리는 데 쓴다(preorders.event_sequence)
  */
-public record PreorderSummaryResponse(
+record PreorderSummaryResponse(
         String preorderId,
         Long productId,
         String productTitle,

@@ -3,7 +3,7 @@ package com.grandis.nova.preorder.syncjob;
 
 import java.time.Instant;
 
-public record SyncJobSummaryResponse(
+record SyncJobSummaryResponse(
         Long syncJobId,
         String preorderId,
         SyncJobType jobType,
