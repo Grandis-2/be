@@ -42,6 +42,6 @@ import org.springframework.context.annotation.Import;
         "spring.data.redis.timeout=300ms",
         "spring.data.redis.connect-timeout=200ms"
 })
-@Import(MemberTestContext.class)
+@Import({MemberTestContext.class, InMemoryFingerprintStoreConfig.class})   // 지문 저장소는 컨텍스트 안 대역(설명은 그 클래스)
 public @interface MemberIntegrationTest {
 }

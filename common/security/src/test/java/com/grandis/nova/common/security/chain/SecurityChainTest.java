@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -37,7 +38,15 @@ import org.springframework.web.context.WebApplicationContext;
 @SpringBootTest(classes = ChainTestApp.class, properties = {
         "jwt.issuer=nova-test",
         "jwt.access-token-validity=1h",
-        "jwt.refresh-token-validity=14d"
+        "jwt.refresh-token-validity=14d",
+        // 사전예약 · 주문을 같이 서비스하는 앱의 설정 모양 — 공통 기본(관리자 · 재발급 · 내 정보)에 도메인 경로를 더한 것
+        "auth.revocation-check.fail-closed-paths[0]=/api/v1/admin/**",
+        "auth.revocation-check.fail-closed-paths[1]=/api/v1/session/refresh",
+        "auth.revocation-check.fail-closed-paths[2]=/api/v1/me/**",
+        "auth.revocation-check.fail-closed-paths[3]=/api/v1/orders/*/payment-attempts/**",
+        "auth.revocation-check.fail-closed-paths[4]=POST /api/v1/preorders/*/cancel",
+        "auth.revocation-check.fail-closed-paths[5]=POST /api/v1/orders/*/cancel",
+        "auth.revocation-check.fail-closed-paths[6]=PATCH /api/v1/orders/*/shipping-address"
 })
 @DisplayName("SecurityFilterChain (인가 규칙 · 폐기 조회 실패 정책 · 응답 봉투)")
 class SecurityChainTest {
@@ -182,6 +191,8 @@ class SecurityChainTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.details.retryable").value(true));
         mvc.perform(post("/api/v1/orders/abc/cancel").header(H, BearerTokens.value(user))).andExpect(status().isUnauthorized());
+        // 배송지 변경(개인정보)도 닫힌다 — 2026-09-28 D-2 결정
+        mvc.perform(patch("/api/v1/orders/abc/shipping-address").header(H, BearerTokens.value(user))).andExpect(status().isUnauthorized());
     }
 
     @Test

@@ -16,13 +16,13 @@ import org.springframework.http.HttpMethod;
 class RevocationCheckPropertiesTest {
 
     @Test
-    @DisplayName("null 도 빈 목록도 기본 여섯 개로 대체된다. /api/v1/me/** 와 실제 취소 경로(POST /api/v1/preorders/*/cancel)가 들어 있고, 옛 /reservations 는 없다")
+    @DisplayName("null 도 빈 목록도 기본 셋(관리자 · 재발급 · 내 정보)으로 대체된다 — 도메인 경로(취소 · 결제 · 배송지)는 공통 기본에 없다")
     void nullAndEmptyFallBackToDefaults() {
         assertThat(new RevocationCheckProperties(null).failClosedPaths()).isEqualTo(RevocationCheckProperties.DEFAULT_FAIL_CLOSED_PATHS);
         assertThat(new RevocationCheckProperties(List.of()).failClosedPaths()).isEqualTo(RevocationCheckProperties.DEFAULT_FAIL_CLOSED_PATHS);
-        assertThat(RevocationCheckProperties.DEFAULT_FAIL_CLOSED_PATHS).hasSize(6)
-                .contains("/api/v1/me/**", "/api/v1/session/refresh", "POST /api/v1/preorders/*/cancel", "POST /api/v1/orders/*/cancel")
-                .noneMatch(entry -> entry.contains("/reservations/"));
+        assertThat(RevocationCheckProperties.DEFAULT_FAIL_CLOSED_PATHS)
+                .containsExactly("/api/v1/admin/**", "/api/v1/session/refresh", "/api/v1/me/**")
+                .noneMatch(entry -> entry.contains("/orders/") || entry.contains("/preorders/") || entry.contains("/reservations/"));
     }
 
     @Test

@@ -5,7 +5,7 @@ import java.util.UUID;
 /**
  * 인증이 쓰는 Redis 키의 단일 출처. 쓰는 쪽(member)과 읽는 쪽(필터, HTTP 서비스 4개)이 같은 상수를 본다.
  * 대기열과 Redis 한 대를 같이 쓰므로 접두 `auth:` 로 가른다. 클러스터 모드는 SELECT 로 논리 DB 를 못 나눠 접두가 유일한 경계다.
- * 인증이 쓰는 키는 이 셋뿐이다.
+ * 인증이 쓰는 키는 이 넷뿐이다 — 접두 셋과 단일 키 하나. 운영 ACL 은 `auth:` 접두 전체를 준다(D-9).
  */
 public final class AuthRedisKeys {
 
@@ -17,6 +17,9 @@ public final class AuthRedisKeys {
 
     /** 회원 단위 not-before(epoch 초). 이 시각 이전에 발급된 토큰은 전부 무효. TTL = 리프레시 만료. 제재·탈퇴가 심는다. */
     public static final String NOT_BEFORE_PREFIX = "auth:nbf:";
+
+    /** 관리자 자격증명 지문(SHA-256 hex) 하나. TTL 없음. 기동 때 대조해 다르면 관리자 세션 전체 폐기(D-16). member 만 쓴다. */
+    public static final String ADMIN_CREDENTIAL_FINGERPRINT = "auth:admin:credential-fingerprint";
 
     private AuthRedisKeys() {
     }

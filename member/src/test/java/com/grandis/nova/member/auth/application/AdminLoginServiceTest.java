@@ -24,11 +24,14 @@ class AdminLoginServiceTest {
     private TokenService tokens;
     private AdminLoginService service;
 
+    AdminCredentialRotationGuard guard;
+
     @BeforeEach
     void setUp() {
         encoder = mock(PasswordEncoder.class);
         tokens = mock(TokenService.class);
-        service = new AdminLoginService(new AdminProperties("admin", HASH), encoder, tokens);
+        guard = mock(AdminCredentialRotationGuard.class);
+        service = new AdminLoginService(new AdminProperties("admin", HASH), encoder, tokens, guard);
     }
 
     @Test
@@ -62,5 +65,20 @@ class AdminLoginServiceTest {
         service.login("admin", "pw", ClientInfo.UNKNOWN);
 
         verify(tokens).issue(AdminLoginService.ADMIN_SUBJECT, Role.ADMIN, ClientInfo.UNKNOWN);
+    }
+
+    @Test
+    @DisplayName("자격증명이 맞아도 이 인스턴스의 자격증명이 현재 것이 아니면(가드 거절) 발급하지 않는다. 틀리면 가드를 부르지도 않는다")
+    void staleInstanceDoesNotIssue() {
+        when(encoder.matches("pw", HASH)).thenReturn(true);
+        org.mockito.Mockito.doThrow(new BusinessException(com.grandis.nova.common.CommonErrorCode.DEPENDENCY_UNAVAILABLE))
+                .when(guard).requireCurrentForLogin();
+
+        assertThatThrownBy(() -> service.login("admin", "pw", null)).isInstanceOf(BusinessException.class);
+        verify(tokens, never()).issue(any(), any(), any());
+
+        when(encoder.matches("wrong", HASH)).thenReturn(false);
+        assertThatThrownBy(() -> service.login("admin", "wrong", null)).isInstanceOf(BusinessException.class);
+        verify(guard, times(1)).requireCurrentForLogin();   // 틀린 비밀번호에서는 안 불렸다
     }
 }

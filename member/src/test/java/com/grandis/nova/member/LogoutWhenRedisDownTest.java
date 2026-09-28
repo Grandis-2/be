@@ -3,6 +3,7 @@ package com.grandis.nova.member;
 import com.grandis.nova.member.support.MemberIntegrationTest;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
@@ -59,6 +60,19 @@ class LogoutWhenRedisDownTest {
 
     private String accessToken() {
         return provider.create("101", Role.USER, UUID.randomUUID(), TokenType.ACCESS);
+    }
+
+    @Test
+    @DisplayName("DELETE /admin/sessions: 표식을 못 심으면 503 DEPENDENCY_UNAVAILABLE(retryable) — 아무 세션도 안 끊긴 것을 204 로 숨기지 않는다")
+    void revokeAllAdminSessionsIs503WhenRedisDown() throws Exception {
+        when(checker.isRevoked(any())).thenReturn(false);   // 부르는 관리자 토큰은 살아 있다
+        doThrow(DOWN).when(revocations).revokeAll(any(), any());
+        String admin = provider.create("admin", Role.ADMIN, UUID.randomUUID(), TokenType.ACCESS);
+
+        mvc().perform(delete("/api/v1/admin/sessions").header(BearerTokens.HEADER, BearerTokens.value(admin)))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error.code").value("DEPENDENCY_UNAVAILABLE"))
+                .andExpect(jsonPath("$.error.details.retryable").value(true));
     }
 
     @Test

@@ -49,6 +49,8 @@ import org.springframework.web.bind.annotation.RestController;
  *   중 파싱되는 것의 sid 를 전부 폐기한다. 폐기 표식·리프레시 삭제 중 하나라도 저장소 장애로 못 했으면 **503 DEPENDENCY_UNAVAILABLE(details.retryable=true)**
  *   — 쿠키는 그래도 지워 이 브라우저는 로그아웃되지만, 서버 쪽 폐기가 안 끝난 것을 204 로 숨기지 않는다. 프론트는 액세스 헤더로 로그아웃을 다시 보낸다.
  * - POST /admin/session {username, password} → 200 {sessionToken, role: ADMIN} + 쿠키 admin_refresh_token / 401 INVALID_CREDENTIALS.
+ * - DELETE /admin/sessions (ADMIN) → 204 + 관리자 쿠키 만료. 관리자 세션 **전부** 폐기(부른 세션 포함) — 자격증명 유출 의심 때 운영자가 즉시 끊는 길.
+ *   자격증명 교체 뒤 재기동은 AdminCredentialRotationGuard 가 자동으로 끊는다. 표식을 못 심으면 503 DEPENDENCY_UNAVAILABLE(retryable).
  */
 @RestController
 @RequestMapping("/api/v1")
@@ -174,6 +176,23 @@ public class AuthController {
                                                                           HttpServletRequest servletRequest) {
         TokenService.IssuedTokens issued = adminLogin.login(request.username(), request.password(), clientOf(servletRequest));
         return withRefreshCookie(issued, Role.ADMIN, new AdminSessionResponse(issued.accessToken(), Role.ADMIN));
+    }
+
+    @DeleteMapping("/admin/sessions")
+    public ResponseEntity<ApiResponse<Void>> revokeAllAdminSessions() {
+        try {
+            tokens.revokeAll(AdminLoginService.ADMIN_SUBJECT);
+        } catch (DataAccessException e) {
+            // 표식을 못 심었다 — 아무 세션도 안 끊겼다. 204 로 숨기지 않는다
+            log.warn("admin sessions not revoked cause={}", e.getClass().getSimpleName());
+            CommonErrorCode code = CommonErrorCode.DEPENDENCY_UNAVAILABLE;
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(ApiResponse.fail(code, code.defaultMessage(), JsonAuthFailureHandlers.RETRYABLE_DETAILS));
+        }
+        log.warn("all admin sessions revoked by operator");
+        return ResponseEntity.status(HttpStatus.NO_CONTENT)
+                .header(HttpHeaders.SET_COOKIE, cookies.expiredRefresh(Role.ADMIN).toString())
+                .build();
     }
 
     private static boolean present(String s) {

@@ -10,8 +10,10 @@ import org.springframework.http.HttpMethod;
 
 /**
  * 폐기 조회가 실패했을 때 401 로 닫는 경로 목록. 목록 밖은 전부 열린다(통과 + 경고 + 카운터).
- * 기본값은 아래 여섯 개다. 설정으로 덮어쓸 수 있지만, **빈 목록은 기본값으로 대체한다**(보안 검토에서 잡힌 것: null 만 대체하고 빈 List 는 그대로 써서
- * 전부 fail-open 이 됐었다). 정말 전부 열고 싶다면 이 코드를 고쳐야 한다 — 설정 한 줄로 그렇게 될 수 없게.
+ * 공통 기본값은 **인증이 소유하는 경로 셋**뿐이다 — 관리자 · 재발급 · 내 정보. 사전예약 취소 · 주문 취소 · 결제 · 배송지 같은 **도메인 경로는
+ * 그 경로를 서비스하는 모듈이 자기 설정(`auth.revocation-check.fail-closed-paths`)에 적는다**(공통 모듈은 도메인 개념을 갖지 않는다 —
+ * 2026-09-28 NV-138 리뷰에서 옮김. 그 전에는 여기 있었다). 설정으로 덮어쓸 수 있지만, **빈 목록은 기본값으로 대체한다**(보안 검토에서 잡힌 것:
+ * null 만 대체하고 빈 List 는 그대로 써서 전부 fail-open 이 됐었다). 정말 전부 열고 싶다면 이 코드를 고쳐야 한다 — 설정 한 줄로 그렇게 될 수 없게.
  *
  * <p>항목은 Spring Security 7 의 PathPattern 이고, 앞에 HTTP 메서드를 붙일 수 있다 — {@code "POST /api/v1/preorders/{id}/cancel"} 꼴(경로 조각은 PathPattern 의 별표. 주석 안이라 풀어 적었다).
  * 메서드가 없으면 그 경로의 모든 메서드가 닫힌다. 메서드를 붙이는 이유는 같은 접두를 쓰는 조회(GET)까지 닫지 않으려는 것이다(2026-09-28, NV-138).
@@ -23,9 +25,6 @@ public record RevocationCheckProperties(List<String> failClosedPaths) {
     public static final List<String> DEFAULT_FAIL_CLOSED_PATHS = List.of(
             "/api/v1/admin/**",                        // 관리자 기능. POST /api/v1/admin/session 은 공개라 토큰이 없어 여기 안 걸린다
             "/api/v1/session/refresh",                 // 폐기 세션이 새 토큰을 받는 유일한 통로
-            "/api/v1/orders/*/payment-attempts/**",    // 돈이 움직인다
-            "POST /api/v1/preorders/*/cancel",         // 되돌릴 수 없다. 접수(POST /api/v1/preorders)는 D-2 대로 여는 쪽 — 오픈 스파이크 때 막히면 안 된다
-            "POST /api/v1/orders/*/cancel",
             "/api/v1/me/**");                          // 개인정보(기본 배송지). 접수 흐름 밖이라 닫아도 잃는 게 없다(2026-09-21 추가)
 
     private static final Logger log = LoggerFactory.getLogger(RevocationCheckProperties.class);

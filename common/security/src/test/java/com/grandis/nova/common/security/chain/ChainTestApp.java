@@ -11,6 +11,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -20,7 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 체인 테스트용 최소 앱. SecurityConfig 는 서비스에 복사될 예시 그대로다 — 이 규칙이 각 서비스에 복사될 것이다.
  * 공개 8개(api-spec): 상품 GET 4 · 배송 차수 안내 · /auth/kakao/* 2 · /admin/session · /session/refresh(쿠키로 식별). 여기서는 대표만 둔다.
- * 컨트롤러는 조회 실패 시 닫는 경로 6개·공개 경로·관리자 경로·@CurrentCustomerId 경로·본문 있는 경로를 하나씩 대표한다.
+ * 컨트롤러는 조회 실패 시 닫는 경로 7개(공통 기본 3 + 이 앱이 설정으로 더한 도메인 경로 4)·공개 경로·관리자 경로·@CurrentCustomerId 경로·본문 있는 경로를 하나씩 대표한다.
  */
 @SpringBootApplication(scanBasePackages = "com.grandis.nova")
 public class ChainTestApp {
@@ -92,6 +93,11 @@ public class ChainTestApp {
         @PostMapping("/api/v1/preorders/{id}/cancel")
         ApiResponse<Map<String, String>> cancelPreorder(@PathVariable("id") String id) {
             return ApiResponse.ok(Map.of("ok", "cancel"));
+        }
+
+        @PatchMapping("/api/v1/orders/{orderId}/shipping-address")
+        ApiResponse<Map<String, String>> changeShippingAddress(@PathVariable("orderId") String orderId) {
+            return ApiResponse.ok(Map.of("ok", "address"));
         }
 
         @PostMapping("/api/v1/orders/{orderId}/cancel")
