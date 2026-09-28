@@ -67,7 +67,7 @@ class AdminPreorderQueryApiTest {
                 .andExpect(jsonPath("$.data.total").value(2))
                 .andExpect(jsonPath("$.data.page").value(0))
                 .andExpect(jsonPath("$.data.customerId").doesNotExist());
-        mockMvc.perform(get("/api/v1/admin/preorders").param("productId", mine.preorder().getProductId().toString())
+        mockMvc.perform(get("/api/v1/admin/preorders").param("productId", mine.preorder().productId().toString())
                         .with(admin()))
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(mine)))
@@ -82,7 +82,7 @@ class AdminPreorderQueryApiTest {
         jdbcTemplate.update("""
                 UPDATE preorder_sync_jobs SET status = 'DEAD_LETTER', dead_lettered_at = UTC_TIMESTAMP(6)
                  WHERE preorder_id = ?
-                """, deadLettered.preorder().getId());
+                """, deadLettered.preorder().id());
 
         mockMvc.perform(get("/api/v1/admin/preorders").param("registerJobStatus", "DEAD_LETTER")
                         .with(admin()))
@@ -118,7 +118,7 @@ class AdminPreorderQueryApiTest {
     void 상세는_작업과_시도와_이력을_함께_준다() throws Exception {
         AcceptResult accepted = accepts.accept(customerId);
         Long jobId = jdbcTemplate.queryForObject("SELECT id FROM preorder_sync_jobs WHERE preorder_id = ?",
-                Long.class, accepted.preorder().getId());
+                Long.class, accepted.preorder().id());
         fixtures.syncAttempt(jobId, 1, "TRANSIENT_FAILURE", 503, "UPSTREAM_UNAVAILABLE");
         fixtures.syncAttempt(jobId, 2, null, null, null);
 

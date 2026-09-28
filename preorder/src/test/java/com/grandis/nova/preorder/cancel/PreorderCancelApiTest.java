@@ -88,7 +88,7 @@ class PreorderCancelApiTest {
                 SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.reason')) AS reason,
                        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.preorderId')) AS preorder_id
                   FROM outbox_events WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
-                """, accepted.preorder().getId());
+                """, accepted.preorder().id());
         assertThat(outbox).containsEntry("reason", "USER").containsEntry("preorder_id", token);
     }
 
@@ -105,7 +105,7 @@ class PreorderCancelApiTest {
         verify(orderClient).getCancelability(eq(token), any());
         assertThat(fixtures.count("""
                 SELECT COUNT(*) FROM outbox_events WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
-                """, accepted.preorder().getId())).isEqualTo(1);
+                """, accepted.preorder().id())).isEqualTo(1);
     }
 
     /** 두 요청이 모두 취소 가능 판정을 받고 시작 트랜잭션에 겹쳐 들어와도 예약 행 잠금으로 한 번만 시작한다. */
@@ -120,7 +120,7 @@ class PreorderCancelApiTest {
                 .andReturn().getResponse().getContentAsString());
 
         assertThat(outcomes).allMatch(Outcome::succeeded);
-        Long preorderId = accepted.preorder().getId();
+        Long preorderId = accepted.preorder().id();
         assertThat(fixtures.count("""
                 SELECT COUNT(*) FROM outbox_events WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
                 """, preorderId)).isEqualTo(1);
@@ -173,7 +173,7 @@ class PreorderCancelApiTest {
 
         assertThat(jdbcTemplate.queryForMap("""
                 SELECT actor, reason FROM preorder_events WHERE preorder_id = ? AND to_status = 'CANCELING'
-                """, accepted.preorder().getId()))
+                """, accepted.preorder().id()))
                 .containsEntry("actor", "ADMIN").containsEntry("reason", "매크로 의심 접수");
     }
 
@@ -202,12 +202,12 @@ class PreorderCancelApiTest {
 
     private String preorderStatus() {
         return jdbcTemplate.queryForObject("SELECT status FROM preorders WHERE id = ?", String.class,
-                accepted.preorder().getId());
+                accepted.preorder().id());
     }
 
     private String jobStatus(String jobType) {
         return jdbcTemplate.queryForObject(
                 "SELECT status FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = ?", String.class,
-                accepted.preorder().getId(), jobType);
+                accepted.preorder().id(), jobType);
     }
 }

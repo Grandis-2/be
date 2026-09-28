@@ -2,8 +2,8 @@ package com.grandis.nova.preorder.cancel;
 
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
-import com.grandis.nova.preorder.preorder.Preorder;
-import com.grandis.nova.preorder.preorder.PreorderRepository;
+import com.grandis.nova.preorder.preorder.PreorderLedger;
+import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,23 +19,23 @@ public class ExpiryCancelService {
 
     private static final Logger log = LoggerFactory.getLogger(ExpiryCancelService.class);
 
-    private final PreorderRepository preorders;
+    private final PreorderLedger ledger;
     private final CancelStarter cancelStarter;
     private final Clock clock;
 
-    public ExpiryCancelService(PreorderRepository preorders, CancelStarter cancelStarter, Clock clock) {
-        this.preorders = preorders;
+    public ExpiryCancelService(PreorderLedger ledger, CancelStarter cancelStarter, Clock clock) {
+        this.ledger = ledger;
         this.cancelStarter = cancelStarter;
         this.clock = clock;
     }
 
     @Transactional
     public void expire(String preorderToken) {
-        Preorder preorder = preorders.findForUpdateByPreorderToken(preorderToken)
+        PreorderSnapshot preorder = ledger.lockByToken(preorderToken)
                 .orElseThrow(() -> new IllegalArgumentException("예약이 없다: " + preorderToken));
         Instant dueAt = preorder.paymentDueAt();
-        if (preorder.getStatus() != PreorderStatus.PAYABLE || clock.instant().isBefore(dueAt)) {
-            log.info("만료 대상이 아니라 무시한다 preorderId={} status={}", preorderToken, preorder.getStatus());
+        if (preorder.status() != PreorderStatus.PAYABLE || clock.instant().isBefore(dueAt)) {
+            log.info("만료 대상이 아니라 무시한다 preorderId={} status={}", preorderToken, preorder.status());
             return;
         }
         cancelStarter.start(preorder, EventActor.SYSTEM, null, CancelReason.EXPIRY);

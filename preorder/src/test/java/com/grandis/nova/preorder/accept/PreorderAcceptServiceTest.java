@@ -4,9 +4,8 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.admission.AdmissionTicketVerifier;
 import com.grandis.nova.preorder.integration.catalog.CatalogReader;
-import com.grandis.nova.preorder.preorder.Preorder;
-import com.grandis.nova.preorder.preorder.PreorderRepository;
-import com.grandis.nova.preorder.preorder.PreorderStatus;
+import com.grandis.nova.preorder.preorder.PreorderSnapshot;
+import com.grandis.nova.preorder.preorder.Preorders;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.hibernate.exception.ConstraintViolationException;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,13 +31,13 @@ class PreorderAcceptServiceTest {
     static final Long PRODUCT_ID = 101L;
 
     PreorderAcceptTransaction transaction;
-    PreorderRepository preorders;
+    Preorders preorders;
     PreorderAcceptService service;
 
     @BeforeEach
     void setUp() {
         transaction = mock(PreorderAcceptTransaction.class);
-        preorders = mock(PreorderRepository.class);
+        preorders = mock(Preorders.class);
         CatalogReader catalogReader = mock(CatalogReader.class);
         given(catalogReader.findProduct(PRODUCT_ID)).willReturn(Optional.empty());
         service = new PreorderAcceptService(mock(AdmissionTicketVerifier.class), catalogReader, transaction, preorders,
@@ -67,10 +66,9 @@ class PreorderAcceptServiceTest {
     @Test
     void 활성_예약_충돌이면_409_와_기존_예약_ID() {
         violates("preorders.uq_preorder_active");
-        Preorder existing = mock(Preorder.class);
-        given(existing.getPreorderToken()).willReturn("9f1c2d3e");
-        given(preorders.findFirstByCustomerIdAndProductIdAndStatusNot(CUSTOMER_ID, PRODUCT_ID,
-                PreorderStatus.CANCELED)).willReturn(Optional.of(existing));
+        PreorderSnapshot existing = mock(PreorderSnapshot.class);
+        given(existing.preorderToken()).willReturn("9f1c2d3e");
+        given(preorders.findActive(CUSTOMER_ID, PRODUCT_ID)).willReturn(Optional.of(existing));
 
         assertThatThrownBy(this::acceptByAdmin)
                 .isInstanceOfSatisfying(BusinessException.class, e -> {

@@ -55,19 +55,19 @@ class PreorderLedgerTest {
 
     @Test
     void 접수하면_PENDING_SYNC_와_첫_이력이_남고_활성으로_표시된다() {
-        Preorder preorder = ledger.accept(draft(customerId), EventActor.USER, null);
+        PreorderSnapshot preorder = ledger.accept(draft(customerId), EventActor.USER, null);
 
-        assertThat(preorder.getId()).isNotNull();
-        assertThat(row(preorder.getId()))
+        assertThat(preorder.id()).isNotNull();
+        assertThat(row(preorder.id()))
                 .containsEntry("status", "PENDING_SYNC")
                 .containsEntry("event_sequence", 1L)
                 .containsEntry("active_marker", 1);
-        assertThat(history(preorder.getId())).containsExactly("1:null>PENDING_SYNC:USER");
+        assertThat(history(preorder.id())).containsExactly("1:null>PENDING_SYNC:USER");
     }
 
     @Test
     void 사건이_적용되면_이력_번호가_하나_오르고_이력이_남는다() {
-        Long id = ledger.accept(draft(customerId), EventActor.USER, null).getId();
+        Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
 
         PreorderTransition result = ledger.fire(id, CANCEL_REQUESTED, EventActor.USER, null);
 
@@ -78,7 +78,7 @@ class PreorderLedgerTest {
 
     @Test
     void 지금_상태에서_의미_없는_사건이면_아무것도_바꾸지_않는다() {
-        Long id = ledger.accept(draft(customerId), EventActor.USER, null).getId();
+        Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
 
         PreorderTransition result = ledger.fire(id, CANCEL_COMPLETED, EventActor.SYSTEM, null);
 
@@ -89,7 +89,7 @@ class PreorderLedgerTest {
 
     @Test
     void 취소를_두_번_요청해도_한_번만_반영된다() {
-        Long id = ledger.accept(draft(customerId), EventActor.USER, null).getId();
+        Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
         ledger.fire(id, CANCEL_REQUESTED, EventActor.USER, null);
 
         PreorderTransition again = ledger.fire(id, CANCEL_REQUESTED, EventActor.USER, null);
@@ -100,7 +100,7 @@ class PreorderLedgerTest {
 
     @Test
     void 등록_확인은_전용_메서드로만_반영한다() {
-        Long id = ledger.accept(draft(customerId), EventActor.USER, null).getId();
+        Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
 
         assertThatThrownBy(() -> ledger.fire(id, REGISTER_CONFIRMED, EventActor.SYSTEM, null))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -110,7 +110,7 @@ class PreorderLedgerTest {
 
     @Test
     void 등록_확인은_한_번만_되고_결제_기한_기준_시각을_찍는다() {
-        Long id = ledger.accept(draft(customerId), EventActor.USER, null).getId();
+        Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
         String externalReference = "EXT-" + ShopFixtures.unique();
 
         assertThat(ledger.confirmRegister(id, externalReference)).isEqualTo(new PreorderTransition(true, PAYABLE));
@@ -128,7 +128,7 @@ class PreorderLedgerTest {
 
     @Test
     void 취소_중인_예약에_늦게_온_등록_확인은_반영하지_않는다() {
-        Long id = ledger.accept(draft(customerId), EventActor.USER, null).getId();
+        Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
         ledger.fire(id, CANCEL_REQUESTED, EventActor.USER, null);
 
         assertThat(ledger.confirmRegister(id, "EXT-LATE")).isEqualTo(new PreorderTransition(false, CANCELING));
@@ -138,7 +138,7 @@ class PreorderLedgerTest {
 
     @Test
     void PAYABLE_에서_시작한_취소가_거절되면_PAYABLE_로_되돌린다() {
-        Long id = ledger.accept(draft(customerId), EventActor.USER, null).getId();
+        Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
         ledger.confirmRegister(id, "EXT-" + ShopFixtures.unique());
         ledger.fire(id, CANCEL_REQUESTED, EventActor.USER, null);
 
@@ -150,7 +150,7 @@ class PreorderLedgerTest {
 
     @Test
     void 결제_가능한_적이_없는_예약의_취소는_거절될_수_없다() {
-        Long id = ledger.accept(draft(customerId), EventActor.USER, null).getId();
+        Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
         ledger.fire(id, CANCEL_REQUESTED, EventActor.USER, null);
 
         assertThatThrownBy(() -> ledger.fire(id, CANCEL_REJECTED, EventActor.SYSTEM, "SHIPPING_STARTED"))
@@ -175,14 +175,14 @@ class PreorderLedgerTest {
 
     @Test
     void 취소가_끝나면_활성_표식이_사라져_같은_모델을_다시_신청할_수_있다() {
-        Long id = ledger.accept(draft(customerId), EventActor.USER, null).getId();
+        Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
         ledger.fire(id, CANCEL_REQUESTED, EventActor.USER, null);
         ledger.fire(id, CANCEL_COMPLETED, EventActor.SYSTEM, null);
 
-        Preorder again = ledger.accept(draft(customerId), EventActor.USER, null);
+        PreorderSnapshot again = ledger.accept(draft(customerId), EventActor.USER, null);
 
         assertThat(row(id)).containsEntry("status", "CANCELED").containsEntry("active_marker", null);
-        assertThat(row(again.getId())).containsEntry("active_marker", 1);
+        assertThat(row(again.id())).containsEntry("active_marker", 1);
     }
 
     @Test
@@ -197,7 +197,7 @@ class PreorderLedgerTest {
 
     @Test
     void 관리자_전이는_사유가_없으면_거부하고_상태를_바꾸지_않는다() {
-        Long id = ledger.accept(draft(customerId), EventActor.USER, null).getId();
+        Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
 
         assertThatThrownBy(() -> ledger.fire(id, CANCEL_REQUESTED, EventActor.ADMIN, " "))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -206,7 +206,7 @@ class PreorderLedgerTest {
 
     @Test
     void 관리자_대신_접수는_입장권_없이_사유와_함께_남는다() {
-        Long id = ledger.accept(draft(customerId, null), EventActor.ADMIN, "전화 접수").getId();
+        Long id = ledger.accept(draft(customerId, null), EventActor.ADMIN, "전화 접수").id();
 
         assertThat(row(id)).containsEntry("admission_ticket_id", null);
         assertThat(history(id)).containsExactly("1:null>PENDING_SYNC:ADMIN");

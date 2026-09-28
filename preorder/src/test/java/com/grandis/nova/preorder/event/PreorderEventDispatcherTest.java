@@ -6,7 +6,7 @@ import com.grandis.nova.preorder.cancel.CancelStarter;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
-import com.grandis.nova.preorder.preorder.PreorderRepository;
+import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
@@ -36,7 +36,7 @@ class PreorderEventDispatcherTest {
     CancelStarter cancelStarter;
 
     @Autowired
-    PreorderRepository preorders;
+    Preorders preorders;
 
     @Autowired
     PreorderEventHandler handler;
@@ -58,7 +58,7 @@ class PreorderEventDispatcherTest {
     void setUp() {
         fixtures = new ShopFixtures(jdbcTemplate);
         AcceptResult accepted = new AcceptFixtures(acceptService, fixtures, catalogClient).accept(fixtures.customer());
-        preorderId = accepted.preorder().getId();
+        preorderId = accepted.preorder().id();
         token = AcceptFixtures.tokenOf(accepted);
     }
 
@@ -104,7 +104,7 @@ class PreorderEventDispatcherTest {
 
     @Test
     void 판매_중지_메시지를_회차_취소로_보낸다() {
-        Long productId = preorders.findById(preorderId).orElseThrow().getProductId();
+        Long productId = preorders.findById(preorderId).orElseThrow().productId();
 
         dispatcher.dispatch(envelope("PREORDER_CAMPAIGN_CANCELED", "PRODUCT", productId,
                 payload().put("productId", productId).put("reason", "공급 차질")));

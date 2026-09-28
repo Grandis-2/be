@@ -2,10 +2,10 @@ package com.grandis.nova.preorder.integration.sqs;
 
 import com.grandis.nova.preorder.accept.AcceptResult;
 import com.grandis.nova.preorder.accept.PreorderAcceptService;
+import com.grandis.nova.preorder.accept.RegisterJobReady;
 import com.grandis.nova.preorder.event.PreorderEventDispatcher;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.outbox.OutboxEvent;
-import com.grandis.nova.preorder.outbox.OutboxMessage.RegisterJobReady;
 import com.grandis.nova.preorder.outbox.OutboxWriter;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.ShopFixtures;
@@ -100,7 +100,7 @@ class SqsMessagingTest {
     @Test
     void 받은_이벤트를_처리하면_그_메시지를_큐에서_지운다() {
         AcceptResult accepted = new AcceptFixtures(acceptService, fixtures, catalogClient).accept(fixtures.customer());
-        Long preorderId = accepted.preorder().getId();
+        Long preorderId = accepted.preorder().id();
         String eventId = ShopFixtures.unique();
         String externalNumber = "R-" + ShopFixtures.unique();
 
@@ -122,7 +122,7 @@ class SqsMessagingTest {
     @Test
     void 같은_이벤트가_두_번_와도_한_번만_반영된다() {
         AcceptResult accepted = new AcceptFixtures(acceptService, fixtures, catalogClient).accept(fixtures.customer());
-        Long preorderId = accepted.preorder().getId();
+        Long preorderId = accepted.preorder().id();
         String externalNumber = "R-" + ShopFixtures.unique();
         String body = externalJobSucceeded(ShopFixtures.unique(), fixtures.workerSucceeds(preorderId, "REGISTER"),
                 AcceptFixtures.tokenOf(accepted), externalNumber);
@@ -164,7 +164,7 @@ class SqsMessagingTest {
     @Test
     void 접수부터_외부_등록_성공까지_SQS_로_이어져_결제_가능이_된다() {
         AcceptResult accepted = new AcceptFixtures(acceptService, fixtures, catalogClient).accept(fixtures.customer());
-        Long preorderId = accepted.preorder().getId();
+        Long preorderId = accepted.preorder().id();
         String token = AcceptFixtures.tokenOf(accepted);
 
         Message registerJobReady = queues.receive("preorder-register", m -> m.body().contains(token), TIMEOUT)

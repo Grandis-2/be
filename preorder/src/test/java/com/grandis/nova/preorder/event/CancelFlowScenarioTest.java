@@ -63,7 +63,7 @@ class CancelFlowScenarioTest {
         fixtures = new ShopFixtures(jdbcTemplate);
         customerId = fixtures.customer();
         AcceptResult accepted = new AcceptFixtures(acceptService, fixtures, catalogClient).accept(customerId);
-        preorderId = accepted.preorder().getId();
+        preorderId = accepted.preorder().id();
         token = AcceptFixtures.tokenOf(accepted);
         given(orderClient.getCancelability(any(), any()))
                 .willReturn(ApiResponse.ok(new Cancelability(token, null, true, null)));

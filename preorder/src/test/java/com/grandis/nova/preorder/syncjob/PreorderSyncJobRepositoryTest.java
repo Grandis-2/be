@@ -43,7 +43,7 @@ class PreorderSyncJobRepositoryTest {
         PreorderProduct product = fixtures.openPreorderProduct();
         preorderId = ledger.accept(new NewPreorder(ShopFixtures.unique(), fixtures.customer(), product.productId(),
                 product.optionId(), product.firstBatchId(), 1, null, ShopFixtures.unique(),
-                "Nova 1", "블랙 / 256GB", new BigDecimal("1250000")), EventActor.ADMIN, "테스트").getId();
+                "Nova 1", "블랙 / 256GB", new BigDecimal("1250000")), EventActor.ADMIN, "테스트").id();
     }
 
     @Test

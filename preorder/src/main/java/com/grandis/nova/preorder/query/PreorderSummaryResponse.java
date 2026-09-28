@@ -1,7 +1,7 @@
 package com.grandis.nova.preorder.query;
 
 import com.grandis.nova.preorder.campaign.ShipmentBatchResponse;
-import com.grandis.nova.preorder.preorder.Preorder;
+import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 
 import java.math.BigDecimal;
@@ -29,11 +29,11 @@ record PreorderSummaryResponse(
 ) {
 
     public static PreorderSummaryResponse from(PreorderView.Summary view) {
-        Preorder preorder = view.preorder();
-        return new PreorderSummaryResponse(preorder.getPreorderToken(), preorder.getProductId(),
-                preorder.getProductTitleSnapshot(), preorder.getOptionId(), preorder.getOptionTitleSnapshot(),
-                preorder.getUnitPriceSnapshot(), preorder.getStatus(), preorder.getQueuePosition(),
-                ShipmentBatchResponse.from(view.shipmentBatch()), preorder.getCreatedAt(),
-                preorder.getPayableFrom(), preorder.paymentDueAt(), preorder.getEventSequence());
+        PreorderSnapshot preorder = view.preorder();
+        return new PreorderSummaryResponse(preorder.preorderToken(), preorder.productId(),
+                preorder.productTitle(), preorder.optionId(), preorder.optionTitle(),
+                preorder.unitPrice(), preorder.status(), preorder.queuePosition(),
+                ShipmentBatchResponse.from(view.shipmentBatch()), preorder.createdAt(),
+                preorder.payableFrom(), preorder.paymentDueAt(), preorder.eventSequence());
     }
 }

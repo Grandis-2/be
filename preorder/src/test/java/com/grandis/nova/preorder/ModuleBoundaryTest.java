@@ -9,7 +9,6 @@ import com.tngtech.archunit.lang.ArchCondition;
 import com.tngtech.archunit.lang.ArchRule;
 import com.tngtech.archunit.lang.ConditionEvents;
 import com.tngtech.archunit.lang.SimpleConditionEvent;
-import com.tngtech.archunit.library.freeze.FreezingArchRule;
 import jakarta.persistence.Entity;
 import org.springframework.data.repository.Repository;
 import org.springframework.web.bind.annotation.RestController;
@@ -23,7 +22,7 @@ import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.sli
 
 /**
  * 모듈 경계. 모듈은 최상위 패키지이고, 유스케이스 → aggregate → 기반 방향으로만 기댄다.
- * 아직 고치지 않은 기존 위반은 src/test/resources/archunit_store 에 기록해 두고 새 위반만 막는다.
+ * aggregate 의 엔티티 · 리포지토리는 소유 모듈 밖에서 쓰지 않는다 — 다른 모듈은 공개 API(서비스 · 스냅샷)로만 주고받는다.
  */
 @AnalyzeClasses(packages = ModuleBoundaryTest.ROOT, importOptions = ImportOption.DoNotIncludeTests.class)
 class ModuleBoundaryTest {
@@ -63,15 +62,15 @@ class ModuleBoundaryTest {
                     modules("preorder", "campaign", "syncjob", "accept", "cancel", "query", "payability")));
 
     @ArchTest
-    static final ArchRule 기반_모듈은_도메인에_기대지_않는다 = FreezingArchRule.freeze(noClasses()
+    static final ArchRule 기반_모듈은_도메인에_기대지_않는다 = noClasses()
             .that().resideInAnyPackage(modules("outbox", "admission", "web"))
             .should().dependOnClassesThat().resideInAnyPackage(concat(USE_CASES, WIRING,
-                    modules("preorder", "campaign", "syncjob", "integration"))));
+                    modules("preorder", "campaign", "syncjob", "integration")));
 
     @ArchTest
-    static final ArchRule 엔티티와_리포지토리는_소유_모듈_밖에서_쓰지_않는다 = FreezingArchRule.freeze(classes()
+    static final ArchRule 엔티티와_리포지토리는_소유_모듈_밖에서_쓰지_않는다 = classes()
             .that().areAnnotatedWith(Entity.class).or().areAssignableTo(Repository.class)
-            .should(onlyBeAccessedFromTheirOwnPackage()));
+            .should(onlyBeAccessedFromTheirOwnModule());
 
     @ArchTest
     static final ArchRule 외부_서비스_클라이언트는_integration_안에서만_쓴다 = classes()
@@ -88,17 +87,23 @@ class ModuleBoundaryTest {
             .that().areAnnotatedWith(RestController.class)
             .should().dependOnClassesThat().areAssignableTo(Repository.class);
 
-    private static ArchCondition<JavaClass> onlyBeAccessedFromTheirOwnPackage() {
-        return new ArchCondition<>("소유 패키지 안에서만 쓰인다") {
+    private static ArchCondition<JavaClass> onlyBeAccessedFromTheirOwnModule() {
+        return new ArchCondition<>("소유 모듈 안에서만 쓰인다") {
             @Override
             public void check(JavaClass owned, ConditionEvents events) {
                 for (Dependency dependency : owned.getDirectDependenciesToSelf()) {
-                    if (!dependency.getOriginClass().getPackageName().equals(owned.getPackageName())) {
+                    if (!moduleOf(dependency.getOriginClass()).equals(moduleOf(owned))) {
                         events.add(SimpleConditionEvent.violated(dependency, dependency.getDescription()));
                     }
                 }
             }
         };
+    }
+
+    /** 모듈은 최상위 패키지다(outbox.publish 는 outbox 모듈). */
+    private static String moduleOf(JavaClass javaClass) {
+        String relative = javaClass.getPackageName().substring(ROOT.length());
+        return relative.isEmpty() ? "" : relative.substring(1).split("\\.")[0];
     }
 
     private static String module(String name) {

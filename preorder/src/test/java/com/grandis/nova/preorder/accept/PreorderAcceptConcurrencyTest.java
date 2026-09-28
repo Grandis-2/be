@@ -77,7 +77,7 @@ class PreorderAcceptConcurrencyTest {
                 product.productId(), product.productId(), product.optionId(), "same-key-0001", ticket));
 
         assertThat(outcomes).allMatch(Outcome::accepted);
-        assertThat(outcomes.stream().map(o -> o.result().preorder().getPreorderToken()).distinct()).hasSize(1);
+        assertThat(outcomes.stream().map(o -> o.result().preorder().preorderToken()).distinct()).hasSize(1);
         assertThat(outcomes.stream().filter(o -> !o.result().replayed())).hasSize(1);
         assertThat(committedPositions()).containsExactly(1L);
         assertThat(nextQueuePosition()).isEqualTo(2);
@@ -194,14 +194,14 @@ class PreorderAcceptConcurrencyTest {
     void 취소가_끝난_뒤_다시_신청하면_새_순번을_받는다() throws Exception {
         Long customerId = fixtures.customer();
         AcceptResult first = acceptByCustomer(customerId, "reapply-key-1");
-        new PreorderCancels(ledger, transactionTemplate).complete(first.preorder().getId());
+        new PreorderCancels(ledger, transactionTemplate).complete(first.preorder().id());
         String laterTicket = AdmissionTickets.issue(product.productId(), customerId,
                 Instant.now().minusSeconds(AdmissionTickets.WINDOW_SECONDS));
 
         AcceptResult again = acceptService.acceptByCustomer(customerId, product.productId(), product.productId(),
                 product.optionId(), "reapply-key-2", laterTicket);
 
-        assertThat(again.preorder().getQueuePosition()).isEqualTo(first.preorder().getQueuePosition() + 1);
+        assertThat(again.preorder().queuePosition()).isEqualTo(first.preorder().queuePosition() + 1);
         assertThat(again.replayed()).isFalse();
     }
 

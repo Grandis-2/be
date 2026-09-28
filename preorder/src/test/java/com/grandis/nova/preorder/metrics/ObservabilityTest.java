@@ -3,9 +3,9 @@ package com.grandis.nova.preorder.metrics;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.accept.AcceptResult;
 import com.grandis.nova.preorder.accept.PreorderAcceptService;
+import com.grandis.nova.preorder.accept.RegisterJobReady;
 import com.grandis.nova.preorder.event.PreorderEventDispatcher;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
-import com.grandis.nova.preorder.outbox.OutboxMessage.RegisterJobReady;
 import com.grandis.nova.preorder.outbox.OutboxWriter;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
@@ -98,7 +98,7 @@ class ObservabilityTest {
     @Test
     void 이벤트는_종류별_처리_결과와_소비_지연을_남긴다() {
         AcceptResult result = accepts.accept(fixtures.customer());
-        Long jobId = fixtures.workerSucceeds(result.preorder().getId(), "REGISTER");
+        Long jobId = fixtures.workerSucceeds(result.preorder().id(), "REGISTER");
         long succeeded = timerCount("preorder.events.handle", "eventType", "EXTERNAL_JOB_SUCCEEDED");
         long unknown = timerCount("preorder.events.handle", "eventType", "UNKNOWN");
 
@@ -120,7 +120,7 @@ class ObservabilityTest {
     @Test
     void 발생_시각이_미래면_소비_지연을_0_으로_남긴다() {
         AcceptResult result = accepts.accept(fixtures.customer());
-        Long jobId = fixtures.workerSucceeds(result.preorder().getId(), "REGISTER");
+        Long jobId = fixtures.workerSucceeds(result.preorder().id(), "REGISTER");
         Timer lag = registry.timer("preorder.events.lag", "eventType", "EXTERNAL_JOB_SUCCEEDED");
         long count = lag.count();
         double total = lag.totalTime(TimeUnit.NANOSECONDS);

@@ -1,7 +1,7 @@
 package com.grandis.nova.preorder.accept;
 
 import com.grandis.nova.preorder.campaign.ShipmentBatchResponse;
-import com.grandis.nova.preorder.preorder.Preorder;
+import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 
 import java.time.Instant;
@@ -20,9 +20,9 @@ record PreorderAcceptedResponse(
     static final String STATUS_URL = "/api/v1/preorders/";
 
     static PreorderAcceptedResponse from(AcceptResult result) {
-        Preorder preorder = result.preorder();
-        return new PreorderAcceptedResponse(preorder.getPreorderToken(), preorder.getStatus(),
-                preorder.getQueuePosition(), ShipmentBatchResponse.from(result.shipmentBatch()),
-                preorder.getCreatedAt(), STATUS_URL + preorder.getPreorderToken(), result.replayed());
+        PreorderSnapshot preorder = result.preorder();
+        return new PreorderAcceptedResponse(preorder.preorderToken(), preorder.status(),
+                preorder.queuePosition(), ShipmentBatchResponse.from(result.shipmentBatch()),
+                preorder.createdAt(), STATUS_URL + preorder.preorderToken(), result.replayed());
     }
 }

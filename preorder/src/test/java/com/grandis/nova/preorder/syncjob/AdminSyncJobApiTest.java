@@ -6,7 +6,8 @@ import com.grandis.nova.preorder.cancel.CancelStarter;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
-import com.grandis.nova.preorder.preorder.PreorderRepository;
+import com.grandis.nova.preorder.preorder.PreorderLedger;
+import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.Concurrently.Outcome;
 import com.grandis.nova.preorder.support.Concurrently;
@@ -22,6 +23,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.test.util.AopTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -70,8 +72,12 @@ class AdminSyncJobApiTest {
     @Autowired
     CancelStarter cancelStarter;
 
+    @Autowired
+    Preorders preorders;
+
+    /** 재처리가 예약 잠금을 기다리는지 보려고 잠금 호출만 가로챈다(실제 동작은 그대로). */
     @MockitoSpyBean
-    PreorderRepository preorders;
+    PreorderLedger ledger;
 
     @Autowired
     TransactionTemplate transactionTemplate;
@@ -92,7 +98,7 @@ class AdminSyncJobApiTest {
         fixtures = new ShopFixtures(jdbcTemplate);
         accepts = new AcceptFixtures(acceptService, fixtures, catalogClient);
         AcceptResult accepted = accepts.accept(fixtures.customer());
-        preorderId = accepted.preorder().getId();
+        preorderId = accepted.preorder().id();
         token = AcceptFixtures.tokenOf(accepted);
     }
 
@@ -124,7 +130,7 @@ class AdminSyncJobApiTest {
     void groupByError_면_마지막_시도의_오류_코드로_묶은_건수를_준다() throws Exception {
         String code = "E-" + ShopFixtures.unique();
         for (int i = 0; i < 2; i++) {
-            Long jobId = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().getId());
+            Long jobId = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
             fixtures.syncAttempt(jobId, 1, "TRANSIENT_FAILURE", 503, "HTTP_503");
             fixtures.syncAttempt(jobId, 2, "REJECTED", 422, code);
         }
@@ -223,11 +229,12 @@ class AdminSyncJobApiTest {
             try {
                 assertThat(cancelLocked.await(10, TimeUnit.SECONDS)).isTrue();
                 // 취소는 이미 예약을 잠갔으므로 이 뒤의 잠금 조회는 재처리의 것이다
-                Answer<?> delegate = mockingDetails(preorders).getMockCreationSettings().getDefaultAnswer();
+                PreorderLedger target = AopTestUtils.getUltimateTargetObject(ledger);
+                Answer<?> delegate = mockingDetails(target).getMockCreationSettings().getDefaultAnswer();
                 willAnswer(invocation -> {
                     reprocessWaiting.countDown();
                     return delegate.answer(invocation);
-                }).given(preorders).findStatusForUpdate(any());
+                }).given(target).lockStatus(any());
                 reprocessing = executor.submit(() -> asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId))
                         .andReturn().getResponse());
                 assertThat(reprocessWaiting.await(10, TimeUnit.SECONDS)).isTrue();
@@ -258,10 +265,10 @@ class AdminSyncJobApiTest {
     @Test
     void 일괄_재처리는_대상과_건너뛴_수를_바로_주고_요청을_이어서_남긴다() throws Exception {
         Long first = fixtures.deadLetter(preorderId);
-        Long second = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().getId());
+        Long second = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
         Long pending = jdbcTemplate.queryForObject(
                 "SELECT id FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'REGISTER'", Long.class,
-                accepts.accept(fixtures.customer()).preorder().getId());
+                accepts.accept(fixtures.customer()).preorder().id());
 
         String body = "{\"syncJobIds\":[%d,%d,%d,%d],\"ratePerSecond\":200}"
                 .formatted(first, second, pending, Long.MAX_VALUE);
@@ -281,7 +288,7 @@ class AdminSyncJobApiTest {
         String code = "E-" + ShopFixtures.unique();
         Long matching = fixtures.deadLetter(preorderId);
         fixtures.syncAttempt(matching, 1, "REJECTED", 422, code);
-        Long other = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().getId());
+        Long other = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
         fixtures.syncAttempt(other, 1, "REJECTED", 422, "OTHER");
 
         batch("{\"errorCodeFilter\":\"%s\"}".formatted(code))
@@ -308,7 +315,7 @@ class AdminSyncJobApiTest {
         String code = "E-" + ShopFixtures.unique();
         Long first = fixtures.deadLetter(preorderId);
         fixtures.syncAttempt(first, 1, "REJECTED", 422, code);
-        Long second = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().getId());
+        Long second = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
         fixtures.syncAttempt(second, 1, "REJECTED", 422, code);
 
         assertThat(candidateReader.findDeadLetters(code, 1))
@@ -322,7 +329,7 @@ class AdminSyncJobApiTest {
         cancelStarter.start(preorders.findById(preorderId).orElseThrow(), EventActor.USER, null, CancelReason.USER);
         Long canceling = fixtures.deadLetter(preorderId);
         fixtures.syncAttempt(canceling, 1, "REJECTED", 422, code);
-        Long reprocessable = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().getId());
+        Long reprocessable = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
         fixtures.syncAttempt(reprocessable, 1, "REJECTED", 422, code);
 
         assertThat(candidateReader.findDeadLetters(code, 1))

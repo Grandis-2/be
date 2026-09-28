@@ -1,10 +1,10 @@
 package com.grandis.nova.preorder.query;
 
-import com.grandis.nova.preorder.campaign.ShipmentBatch;
-import com.grandis.nova.preorder.preorder.Preorder;
-import com.grandis.nova.preorder.preorder.PreorderEvent;
-import com.grandis.nova.preorder.syncjob.PreorderSyncJob;
+import com.grandis.nova.preorder.campaign.ShipmentBatchSnapshot;
+import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
+import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.syncjob.SyncAttempt;
+import com.grandis.nova.preorder.syncjob.SyncJobSnapshot;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 
 import java.util.List;
@@ -16,15 +16,15 @@ final class PreorderView {
     private PreorderView() {
     }
 
-    public record Summary(Preorder preorder, ShipmentBatch shipmentBatch) {
+    public record Summary(PreorderSnapshot preorder, ShipmentBatchSnapshot shipmentBatch) {
     }
 
     /** 관리자 목록. 외부 등록 작업 상태가 더 붙는다(DEAD_LETTER 면 재처리 대기). */
-    public record AdminSummary(Preorder preorder, ShipmentBatch shipmentBatch, SyncJobStatus registerJobStatus) {
+    public record AdminSummary(PreorderSnapshot preorder, ShipmentBatchSnapshot shipmentBatch, SyncJobStatus registerJobStatus) {
     }
 
     /** 관리자 상세. 작업 · 시도 · 이력까지 한 번에 본다. */
-    public record AdminDetail(Preorder preorder, ShipmentBatch shipmentBatch, List<PreorderSyncJob> syncJobs,
-                              Map<Long, List<SyncAttempt>> attempts, List<PreorderEvent> events) {
+    public record AdminDetail(PreorderSnapshot preorder, ShipmentBatchSnapshot shipmentBatch, List<SyncJobSnapshot> syncJobs,
+                              Map<Long, List<SyncAttempt>> attempts, List<PreorderHistoryEntry> events) {
     }
 }

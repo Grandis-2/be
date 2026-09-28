@@ -5,8 +5,8 @@ import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.integration.order.OrderCancelabilityChecker;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
-import com.grandis.nova.preorder.preorder.Preorder;
-import com.grandis.nova.preorder.preorder.PreorderRepository;
+import com.grandis.nova.preorder.preorder.PreorderSnapshot;
+import com.grandis.nova.preorder.preorder.Preorders;
 import org.springframework.stereotype.Service;
 
 /**
@@ -18,11 +18,11 @@ import org.springframework.stereotype.Service;
 @Service
 public class PreorderCancelService {
 
-    private final PreorderRepository preorders;
+    private final Preorders preorders;
     private final OrderCancelabilityChecker cancelabilityChecker;
     private final CancelStarter cancelStarter;
 
-    public PreorderCancelService(PreorderRepository preorders, OrderCancelabilityChecker cancelabilityChecker,
+    public PreorderCancelService(Preorders preorders, OrderCancelabilityChecker cancelabilityChecker,
                                  CancelStarter cancelStarter) {
         this.preorders = preorders;
         this.cancelabilityChecker = cancelabilityChecker;
@@ -31,8 +31,8 @@ public class PreorderCancelService {
 
     /** 회원 본인의 취소. 남의 예약은 존재를 알리지 않는다(404). */
     public CancelResult cancelByCustomer(Long customerId, String preorderToken, String reason, String sessionToken) {
-        Preorder preorder = preorders.getByToken(preorderToken);
-        if (!preorder.getCustomerId().equals(customerId)) {
+        PreorderSnapshot preorder = preorders.getByToken(preorderToken);
+        if (!preorder.customerId().equals(customerId)) {
             throw new BusinessException(PreorderErrorCode.PREORDER_NOT_FOUND);
         }
         return cancel(preorder, EventActor.USER, reason, CancelReason.USER, sessionToken);
@@ -43,14 +43,14 @@ public class PreorderCancelService {
         return cancel(preorders.getByToken(preorderToken), EventActor.ADMIN, reason, CancelReason.ADMIN, sessionToken);
     }
 
-    private CancelResult cancel(Preorder preorder, EventActor actor, String reason, CancelReason cancelReason,
+    private CancelResult cancel(PreorderSnapshot preorder, EventActor actor, String reason, CancelReason cancelReason,
                                 String sessionToken) {
         if (preorder.isCancelable()) {
-            cancelabilityChecker.requireCancelable(preorder.getPreorderToken(), sessionToken);
+            cancelabilityChecker.requireCancelable(preorder.preorderToken(), sessionToken);
             cancelStarter.start(preorder, actor, reason, cancelReason);
         }
-        Preorder current = preorders.getByToken(preorder.getPreorderToken());
-        return new CancelResult(current.getPreorderToken(), current.getStatus(), current.getEventSequence());
+        PreorderSnapshot current = preorders.getByToken(preorder.preorderToken());
+        return new CancelResult(current.preorderToken(), current.status(), current.eventSequence());
     }
 
 }

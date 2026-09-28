@@ -12,8 +12,12 @@ public record ShipmentBatchResponse(
         LocalDate estimatedShipEnd
 ) {
 
-    public static ShipmentBatchResponse from(ShipmentBatch batch) {
-        return new ShipmentBatchResponse(batch.getBatchNumber(), batch.getPositionFrom(), batch.getPositionTo(),
-                batch.getEstimatedShipStart(), batch.getEstimatedShipEnd());
+    public static ShipmentBatchResponse from(ShipmentBatchSnapshot batch) {
+        return new ShipmentBatchResponse(batch.batchNumber(), batch.positionFrom(), batch.positionTo(),
+                batch.estimatedShipStart(), batch.estimatedShipEnd());
+    }
+
+    static ShipmentBatchResponse from(ShipmentBatch batch) {
+        return from(ShipmentBatchSnapshot.of(batch));
     }
 }

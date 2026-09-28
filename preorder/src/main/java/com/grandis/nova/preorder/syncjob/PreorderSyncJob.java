@@ -23,7 +23,7 @@ import java.time.Instant;
  */
 @Entity
 @Table(name = "preorder_sync_jobs")
-public class PreorderSyncJob extends BaseEntity {
+class PreorderSyncJob extends BaseEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

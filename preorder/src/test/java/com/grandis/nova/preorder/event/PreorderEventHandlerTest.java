@@ -6,8 +6,8 @@ import com.grandis.nova.preorder.cancel.CancelStarter;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
-import com.grandis.nova.preorder.preorder.Preorder;
-import com.grandis.nova.preorder.preorder.PreorderRepository;
+import com.grandis.nova.preorder.preorder.PreorderSnapshot;
+import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
@@ -35,7 +35,7 @@ class PreorderEventHandlerTest {
     PreorderAcceptService acceptService;
 
     @Autowired
-    PreorderRepository preorders;
+    Preorders preorders;
 
     @Autowired
     JdbcTemplate jdbcTemplate;
@@ -53,7 +53,7 @@ class PreorderEventHandlerTest {
         fixtures = new ShopFixtures(jdbcTemplate);
         accepts = new AcceptFixtures(acceptService, fixtures, catalogClient);
         AcceptResult accepted = accepts.accept(fixtures.customer());
-        preorderId = accepted.preorder().getId();
+        preorderId = accepted.preorder().id();
         token = AcceptFixtures.tokenOf(accepted);
     }
 
@@ -166,7 +166,7 @@ class PreorderEventHandlerTest {
     }
 
     private void startCancel(EventActor actor) {
-        Preorder preorder = preorders.findById(preorderId).orElseThrow();
+        PreorderSnapshot preorder = preorders.findById(preorderId).orElseThrow();
         cancelStarter.start(preorder, actor, actor == EventActor.ADMIN ? "관리자 취소" : null,
                 actor == EventActor.ADMIN ? CancelReason.ADMIN : CancelReason.USER);
     }

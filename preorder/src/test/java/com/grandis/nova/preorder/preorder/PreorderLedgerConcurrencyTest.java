@@ -42,7 +42,7 @@ class PreorderLedgerConcurrencyTest {
         int requests = 5;
 
         List<Outcome<Long>> outcomes = Concurrently.run(requests, i -> () -> transactionTemplate.execute(status ->
-                ledger.accept(draft(product, customerId, i + 1), EventActor.USER, null).getId()));
+                ledger.accept(draft(product, customerId, i + 1), EventActor.USER, null).id()));
 
         assertThat(outcomes.stream().filter(Outcome::succeeded)).hasSize(1);
         assertThat(outcomes.stream().filter(o -> !o.succeeded()))
