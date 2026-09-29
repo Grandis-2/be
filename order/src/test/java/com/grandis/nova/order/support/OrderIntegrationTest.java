@@ -2,6 +2,7 @@ package com.grandis.nova.order.support;
 
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.annotation.AliasFor;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -45,4 +46,8 @@ import java.lang.annotation.Target;
 })
 @Import({MySqlContainerConfig.class, TestJwt.class})
 public @interface OrderIntegrationTest {
+
+    /** 기본은 MockMvc(MOCK). 내장 톰캣을 실제로 띄워 HTTP 로 쳐야 하는 시험만 RANDOM_PORT 로 바꾼다. */
+    @AliasFor(annotation = SpringBootTest.class)
+    SpringBootTest.WebEnvironment webEnvironment() default SpringBootTest.WebEnvironment.MOCK;
 }

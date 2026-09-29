@@ -9,6 +9,12 @@ dependencies {
     // 서블릿 API 는 실행 환경(톰캣)이 준다. 여기서 끌어오면 버전이 두 벌이 된다.
     compileOnly 'jakarta.servlet:jakarta.servlet-api'
     testImplementation 'jakarta.servlet:jakarta.servlet-api'
+
+    // OpenAPI 문서. swagger 는 스프링 BOM 에 없어 springdoc BOM 으로 맞춘다 — api 라야 서비스 컴파일에도 버전이 정해진다
+    api platform('org.springdoc:springdoc-openapi-bom:3.1.1')
+    api 'io.swagger.core.v3:swagger-annotations-jakarta'                   // 컨트롤러 · DTO 의 @Operation · @Schema
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui'     // 본체는 서비스 코드가 참조하지 않는다
+
     // 봉투의 JSON 모양(null 필드 유지 · 시각 ISO 문자열)을 실제 직렬화로 확인한다
     testImplementation 'org.springframework.boot:spring-boot-starter-jackson'
 }

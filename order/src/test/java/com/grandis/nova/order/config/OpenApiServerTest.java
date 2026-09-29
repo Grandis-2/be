@@ -1,0 +1,132 @@
+package com.grandis.nova.order.config;
+
+import com.grandis.nova.common.security.BearerTokens;
+import com.grandis.nova.common.security.JwtTokenProvider;
+import com.grandis.nova.common.security.RevocationChecker;
+import com.grandis.nova.common.security.Role;
+import com.grandis.nova.common.security.TokenType;
+import com.grandis.nova.order.client.preorder.PreorderClient;
+import com.grandis.nova.order.support.OrderIntegrationTest;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * 내장 톰캣을 띄워 HTTP 로 확인한다 — MockMvc 는 정적 리소스 서빙 · 메시지 컨버터 등록을 그대로 재현하지 않는다.
+ * springdoc 가 Jackson 2 모듈을 끌고 와도 응답 직렬화(ISO 시각 · null 필드 유지)가 그대로인지도 본다.
+ */
+@OrderIntegrationTest(webEnvironment = WebEnvironment.RANDOM_PORT)
+@TestPropertySource(properties = {
+        "springdoc.api-docs.enabled=true",
+        "springdoc.swagger-ui.enabled=true"
+})
+class OpenApiServerTest {
+
+    static final JsonMapper JSON = JsonMapper.builder().build();
+
+    final HttpClient http = HttpClient.newHttpClient();   // 리다이렉트를 따라가지 않는다(302 를 본다)
+
+    @Value("${local.server.port}")
+    int port;
+
+    @Autowired
+    JwtTokenProvider tokens;
+
+    @MockitoBean
+    RevocationChecker revocationChecker;   // Redis 없음
+
+    @MockitoBean
+    PreorderClient preorderClient;
+
+    @Test
+    void apiDocsServeOrderPathsAnonymously() throws Exception {
+        HttpResponse<String> response = get("/v3/api-docs");
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.headers().firstValue("Content-Type")).hasValueSatisfying(
+                type -> assertThat(type).startsWith("application/json"));
+        JsonNode doc = JSON.readTree(response.body());
+        assertThat(doc.path("openapi").asString()).startsWith("3.");
+        assertThat(doc.path("paths").has("/api/v1/orders/{orderId}")).isTrue();
+    }
+
+    @Test
+    void yamlVariantAndUiConfigAreOpen() throws Exception {
+        HttpResponse<String> yaml = get("/v3/api-docs.yaml");
+        assertThat(yaml.statusCode()).isEqualTo(200);
+        assertThat(yaml.body()).startsWith("openapi:");
+
+        assertThat(get("/v3/api-docs/swagger-config").statusCode()).isEqualTo(200);
+    }
+
+    @Test
+    void swaggerUiIsServedFromWebjar() throws Exception {
+        HttpResponse<String> index = get("/swagger-ui/index.html");
+        assertThat(index.statusCode()).isEqualTo(200);
+        assertThat(index.body()).contains("swagger-ui");
+
+        HttpResponse<String> entry = get("/swagger-ui.html");
+        assertThat(entry.statusCode()).isEqualTo(302);
+        assertThat(entry.headers().firstValue("Location")).hasValueSatisfying(
+                location -> assertThat(location).contains("/swagger-ui/index.html"));
+    }
+
+    @Test
+    void docsPathsAreOpenForGetOnly() throws Exception {
+        HttpResponse<String> response = http.send(HttpRequest.newBuilder(uri("/v3/api-docs"))
+                .POST(HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.ofString());
+
+        assertThat(response.statusCode()).isEqualTo(401);
+    }
+
+    /** 컨버터를 거치는 응답이어야 한다 — 401 봉투는 ObjectMapper 로 직접 쓴다. 주문이 없는 예약이라 orderStatus · reason 이 null 이다. */
+    @Test
+    void responseSerializationStaysJackson3Shaped() throws Exception {
+        String user = tokens.create("101", Role.USER, UUID.randomUUID(), TokenType.ACCESS);
+        HttpResponse<String> response = http.send(HttpRequest.newBuilder(
+                        uri("/internal/orders/by-preorder/987654321/cancelability"))
+                .header(BearerTokens.HEADER, BearerTokens.value(user)).GET().build(), HttpResponse.BodyHandlers.ofString());
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        JsonNode body = JSON.readTree(response.body());
+        assertThat(body.path("timestamp").isString()).isTrue();
+        assertThat(body.path("timestamp").asString()).matches("\\d{4}-\\d{2}-\\d{2}T.*Z");
+        assertThat(body.has("error")).isTrue();
+        assertThat(body.path("error").isNull()).isTrue();
+        assertThat(body.path("data").has("orderStatus")).isTrue();
+        assertThat(body.path("data").path("orderStatus").isNull()).isTrue();
+        assertThat(body.path("data").path("reason").isNull()).isTrue();
+    }
+
+    /** 스키마는 swagger-core 가 Jackson 2 로 만든다. @JsonUnwrapped 가 반영돼 실제 JSON 처럼 평평해야 한다. */
+    @Test
+    void unwrappedDtoSchemaIsFlatLikeTheRealJson() throws Exception {
+        JsonNode schemas = JSON.readTree(get("/v3/api-docs").body()).path("components").path("schemas");
+        JsonNode detail = schemas.path("OrderDetailResponse").path("properties");
+
+        assertThat(detail.has("orderId")).isTrue();
+        assertThat(detail.has("events")).isTrue();
+        assertThat(detail.has("order")).isFalse();
+    }
+
+    private HttpResponse<String> get(String path) throws Exception {
+        return http.send(HttpRequest.newBuilder(uri(path)).GET().build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private URI uri(String path) {
+        return URI.create("http://localhost:" + port + path);
+    }
+}
