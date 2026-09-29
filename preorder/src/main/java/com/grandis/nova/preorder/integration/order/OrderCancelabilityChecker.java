@@ -2,6 +2,7 @@ package com.grandis.nova.preorder.integration.order;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.integration.Dependencies;
 import com.grandis.nova.preorder.integration.DependencyGuard;
@@ -35,18 +36,19 @@ public class OrderCancelabilityChecker {
     }
 
     /** @throws BusinessException 배송이 시작됐으면 PREORDER_NOT_CANCELABLE */
-    public void requireCancelable(String preorderToken, String sessionToken) {
-        Cancelability cancelability = fetch(preorderToken, sessionToken);
+    public void requireCancelable(String preorderToken, String accessToken) {
+        Cancelability cancelability = fetch(preorderToken, accessToken);
         if (!cancelability.cancelable()) {
             throw new BusinessException(PreorderErrorCode.PREORDER_NOT_CANCELABLE,
                     Map.of("reason", "orderStatus=" + cancelability.orderStatus()));
         }
     }
 
-    private Cancelability fetch(String preorderToken, String sessionToken) {
+    private Cancelability fetch(String preorderToken, String accessToken) {
         Cancelability answer;
         try {
-            answer = dependencyGuard.call(DEPENDENCY, () -> orderClient.getCancelability(preorderToken, sessionToken))
+            String authorization = accessToken == null ? null : BearerTokens.value(accessToken);
+            answer = dependencyGuard.call(DEPENDENCY, () -> orderClient.getCancelability(preorderToken, authorization))
                     .data();
         } catch (HttpClientErrorException e) {
             if (e.getStatusCode().isSameCodeAs(HttpStatus.UNAUTHORIZED)) {

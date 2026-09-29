@@ -20,22 +20,31 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class OrderCancelabilityCheckerTest {
 
     static final String TOKEN = "9f1c2d3e";
-    static final String SESSION_TOKEN = "access-token";
+    static final String ACCESS_TOKEN = "access-token";
 
     @Test
-    void 취소_가능하면_통과하고_받은_토큰을_그대로_싣는다() {
+    void 취소_가능하면_통과하고_받은_토큰을_Bearer_헤더로_싣는다() {
         FakeOrderClient client = FakeOrderClient.answering(new Cancelability(TOKEN, null, true, null));
 
-        assertThatCode(() -> new OrderCancelabilityChecker(client, DependencyGuards.passThrough()).requireCancelable(TOKEN, SESSION_TOKEN))
+        assertThatCode(() -> new OrderCancelabilityChecker(client, DependencyGuards.passThrough()).requireCancelable(TOKEN, ACCESS_TOKEN))
                 .doesNotThrowAnyException();
-        assertThat(client.receivedSessionToken).isEqualTo(SESSION_TOKEN);
+        assertThat(client.receivedAuthorization).isEqualTo("Bearer " + ACCESS_TOKEN);
+    }
+
+    @Test
+    void 토큰이_없으면_인증_헤더를_싣지_않는다() {
+        FakeOrderClient client = FakeOrderClient.answering(new Cancelability(TOKEN, null, true, null));
+
+        new OrderCancelabilityChecker(client, DependencyGuards.passThrough()).requireCancelable(TOKEN, null);
+
+        assertThat(client.receivedAuthorization).isNull();
     }
 
     @Test
     void 배송이_시작됐으면_409_와_주문_상태() {
         FakeOrderClient client = FakeOrderClient.answering(new Cancelability(TOKEN, "SHIPPED", false, "SHIPPED"));
 
-        assertThatThrownBy(() -> new OrderCancelabilityChecker(client, DependencyGuards.passThrough()).requireCancelable(TOKEN, SESSION_TOKEN))
+        assertThatThrownBy(() -> new OrderCancelabilityChecker(client, DependencyGuards.passThrough()).requireCancelable(TOKEN, ACCESS_TOKEN))
                 .isInstanceOfSatisfying(BusinessException.class, e -> {
                     assertThat(e.errorCode()).isEqualTo(PreorderErrorCode.PREORDER_NOT_CANCELABLE);
                     assertThat(e.details()).containsEntry("reason", "orderStatus=SHIPPED");
@@ -59,7 +68,7 @@ class OrderCancelabilityCheckerTest {
     void 그_밖의_4xx_는_재시도_안내가_아니라_연동_오류다() {
         FakeOrderClient client = FakeOrderClient.failing(clientError(HttpStatus.BAD_REQUEST));
 
-        assertThatThrownBy(() -> new OrderCancelabilityChecker(client, DependencyGuards.passThrough()).requireCancelable(TOKEN, SESSION_TOKEN))
+        assertThatThrownBy(() -> new OrderCancelabilityChecker(client, DependencyGuards.passThrough()).requireCancelable(TOKEN, ACCESS_TOKEN))
                 .isInstanceOf(IllegalStateException.class)
                 .isNotInstanceOf(BusinessException.class);
     }
@@ -68,14 +77,14 @@ class OrderCancelabilityCheckerTest {
     void 판정_없이_성공_응답이면_연동_오류다() {
         FakeOrderClient client = FakeOrderClient.answering(null);
 
-        assertThatThrownBy(() -> new OrderCancelabilityChecker(client, DependencyGuards.passThrough()).requireCancelable(TOKEN, SESSION_TOKEN))
+        assertThatThrownBy(() -> new OrderCancelabilityChecker(client, DependencyGuards.passThrough()).requireCancelable(TOKEN, ACCESS_TOKEN))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(TOKEN);
     }
 
     private static ErrorCode errorOf(RestClientException failure) {
         try {
-            new OrderCancelabilityChecker(FakeOrderClient.failing(failure), DependencyGuards.passThrough()).requireCancelable(TOKEN, SESSION_TOKEN);
+            new OrderCancelabilityChecker(FakeOrderClient.failing(failure), DependencyGuards.passThrough()).requireCancelable(TOKEN, ACCESS_TOKEN);
         } catch (BusinessException e) {
             return e.errorCode();
         }
@@ -90,7 +99,7 @@ class OrderCancelabilityCheckerTest {
 
         private final Cancelability answer;
         private final RestClientException failure;
-        String receivedSessionToken;
+        String receivedAuthorization;
 
         private FakeOrderClient(Cancelability answer, RestClientException failure) {
             this.answer = answer;
@@ -106,8 +115,8 @@ class OrderCancelabilityCheckerTest {
         }
 
         @Override
-        public ApiResponse<Cancelability> getCancelability(String preorderId, String sessionToken) {
-            receivedSessionToken = sessionToken;
+        public ApiResponse<Cancelability> getCancelability(String preorderId, String authorization) {
+            receivedAuthorization = authorization;
             if (failure != null) {
                 throw failure;
             }
