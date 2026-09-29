@@ -29,6 +29,7 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * 주문 읽기 · 쓰기 포트의 JPA 구현. 엔티티는 여기서 만들고 여기서 도메인으로 바꿔 내보낸다.
@@ -44,7 +45,12 @@ import java.util.Optional;
 @Repository
 class JpaOrderStore implements OrderReader, OrderWriter {
 
-    static final String UQ_ORDER_PREORDER = "uq_order_preorder";
+    /**
+     * 예약 식별 칸의 유일 키. 같은 예약으로 다시 넣으면 둘 다 겹치는데, 여러 키가 겹칠 때 어느 이름으로 알리는지는 MySQL 이
+     * 보장하지 않는다(인덱스 재구성 · 버전에 따라 바뀔 수 있다). 그래서 이름으로 가르지 않고 둘 다 같은 예외로 올린다 —
+     * 정말 그 예약의 주문인지는 부른 쪽이 새 트랜잭션에서 다시 읽어 판정한다.
+     */
+    static final Set<String> PREORDER_KEYS = Set.of("uq_order_preorder", "uq_order_preorder_token");
 
     private final OrderJpaRepository orders;
     private final OrderItemJpaRepository items;
@@ -72,7 +78,7 @@ class JpaOrderStore implements OrderReader, OrderWriter {
         try {
             return OrderMapper.toDomain(orders.saveAndFlush(OrderMapper.toEntity(order)));
         } catch (DataIntegrityViolationException e) {
-            if (violates(e, UQ_ORDER_PREORDER)) {
+            if (PREORDER_KEYS.stream().anyMatch(key -> violates(e, key))) {
                 throw new OrderAlreadyPlacedException(order.preorderId(), e);
             }
             throw e;

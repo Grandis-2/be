@@ -42,6 +42,9 @@ public class OrderJpaEntity extends BaseEntity {
     @Column(updatable = false)
     private Long preorderId;
 
+    @Column(updatable = false, length = 36)
+    private String preorderToken;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, updatable = false, length = 30)
     private OrderStatus status;
@@ -79,14 +82,15 @@ public class OrderJpaEntity extends BaseEntity {
     protected OrderJpaEntity() {
     }
 
-    public OrderJpaEntity(String orderToken, Long customerId, OrderSource source, Long preorderId, OrderStatus status,
-                          BigDecimal totalAmount, Instant paymentDueAt, Instant stockReleasedAt,
+    public OrderJpaEntity(String orderToken, Long customerId, OrderSource source, Long preorderId, String preorderToken,
+                          OrderStatus status, BigDecimal totalAmount, Instant paymentDueAt, Instant stockReleasedAt,
                           String shipToName, String shipToPhone, String shipToPostalCode, String shipToLine1,
                           String shipToLine2, String internalNote, long eventSequence) {
         this.orderToken = orderToken;
         this.customerId = customerId;
         this.source = source;
         this.preorderId = preorderId;
+        this.preorderToken = preorderToken;
         this.status = status;
         this.totalAmount = totalAmount;
         this.paymentDueAt = paymentDueAt;
@@ -118,6 +122,10 @@ public class OrderJpaEntity extends BaseEntity {
 
     public Long getPreorderId() {
         return preorderId;
+    }
+
+    public String getPreorderToken() {
+        return preorderToken;
     }
 
     public OrderStatus getStatus() {

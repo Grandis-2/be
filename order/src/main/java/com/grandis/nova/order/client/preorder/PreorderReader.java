@@ -43,9 +43,28 @@ public class PreorderReader {
      * @throws BusinessException     UNAUTHENTICATED — preorder 가 토큰을 거절(401).
      *                               DEPENDENCY_UNAVAILABLE — 타임아웃 · 연결 실패 · 5xx
      * @throws IllegalStateException 연동 오류(500) — 그 밖의 4xx, 예약 없음이 아닌 404(경로 없음 · 잘못된 주소),
-     *                               읽을 수 없는 응답(본문 · Content-Type 이 계약과 다름)
+     *                               읽을 수 없는 응답(본문 · Content-Type 이 계약과 다름), 물은 예약이 아닌 응답
      */
     public Optional<PreorderPayability> find(String preorderId, String sessionToken) {
+        Optional<PreorderPayability> found = call(preorderId, sessionToken);
+        found.ifPresent(payability -> requireSamePreorder(preorderId, payability));
+        return found;
+    }
+
+    /**
+     * 응답의 예약이 물은 예약인가. 주문은 응답의 UUID 와 내부 id 를 한 짝으로 저장하므로(orders.preorder_token · preorder_id),
+     * 다른 예약의 응답을 받아 저장하면 짝이 어긋난 주문이 생긴다. 다시 물어도 같으므로 연동 오류(500)다.
+     * 대소문자까지 같아야 한다 — preorders.preorder_token 은 utf8mb4_bin 이다.
+     */
+    private static void requireSamePreorder(String requested, PreorderPayability payability) {
+        if (!requested.equals(payability.preorderId())) {
+            log.error("{} 연동 오류 {} 물은 예약과 다른 응답 requested={} returned={}",
+                    DEPENDENCY, OPERATION, requested, payability.preorderId());
+            throw new IllegalStateException(DEPENDENCY + " 연동 오류: 물은 예약과 다른 응답");
+        }
+    }
+
+    private Optional<PreorderPayability> call(String preorderId, String sessionToken) {
         try {
             return Optional.ofNullable(preorderClient.getPayability(preorderId, authorization(sessionToken)).data());
         } catch (HttpClientErrorException.NotFound e) {

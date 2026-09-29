@@ -10,6 +10,7 @@ import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.exception.OrderAlreadyPlacedException;
 import com.grandis.nova.order.order.domain.model.Order;
+import com.grandis.nova.order.order.domain.model.OrderDraft;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.Money;
 import com.grandis.nova.order.order.vo.OrderToken;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
@@ -75,6 +77,20 @@ class PlaceOrderServiceTest {
         verify(ledger, times(2)).place(any(), any());
     }
 
+    // 예약 내부 id 와 공개 UUID 는 같은 응답에서 함께 옮긴다 — 짝을 DB 가 아니라 이것이 보장한다(orders.preorder_token).
+    @Test
+    void draftCarriesPreorderIdAndTokenFromTheSameResponse() {
+        payable();
+        given(ledger.place(any(), any())).willReturn(order(OrderStatus.AWAITING_PAYMENT));
+
+        service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS);
+
+        ArgumentCaptor<OrderDraft> draft = ArgumentCaptor.forClass(OrderDraft.class);
+        verify(ledger).place(draft.capture(), any());
+        assertThat(draft.getValue().preorderId()).isEqualTo(PREORDER_ID);
+        assertThat(draft.getValue().preorderToken()).isEqualTo(PREORDER_UUID);
+    }
+
     @Test
     void deadlockGivesUpAfterMaxAttempts() {
         payable();
@@ -103,7 +119,7 @@ class PlaceOrderServiceTest {
     @Test
     void existingOrderOfAnotherCustomerIsHidden() {
         payable();
-        Order foreign = new Order(100L, OrderToken.issue(), 999L, OrderSource.PREORDER, PREORDER_ID,
+        Order foreign = new Order(100L, OrderToken.issue(), 999L, OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID,
                 OrderStatus.AWAITING_PAYMENT, Money.won(1_250_000), null, null,
                 new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), null, 1, NOW, NOW);
         given(orderReader.findByPreorderId(PREORDER_ID)).willReturn(Optional.of(foreign));
@@ -125,6 +141,40 @@ class PlaceOrderServiceTest {
 
         assertThat(result.created()).isFalse();
         assertThat(result.order()).isEqualTo(committed);
+    }
+
+    /*
+     * 예약 식별 키가 겹쳤는데 이 예약 id 의 주문이 없다 — 다른 예약이 같은 UUID 를 쓰고 있다(짝 어긋남).
+     * 두 키 중 어느 이름으로 알렸든 저장소는 같은 예외를 올리므로, 여기서 다시 읽어 가른다. 기존 주문으로 숨기지 않는다.
+     */
+    @Test
+    void duplicateKeyWithoutOrderOfThisPreorderIsDataInconsistency() {
+        payable();
+        given(ledger.place(any(), any())).willThrow(new OrderAlreadyPlacedException(PREORDER_ID, null));
+
+        assertThatThrownBy(() -> service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("이 예약의 주문이 없다");
+    }
+
+    // 그 예약 id 의 주문이 있어도 예약 UUID 가 다르면 짝이 어긋난 주문이다 — "이 예약의 주문" 으로 돌려주지 않는다.
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void existingOrderWithAnotherPreorderTokenIsNotReturned(boolean foundAfterDuplicateKey) {
+        payable();
+        Order mismatched = new Order(100L, OrderToken.issue(), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID,
+                "1c9e2b7d-3f4a-4b5c-8d6e-7f8091a2b3c4", OrderStatus.AWAITING_PAYMENT, Money.won(1_250_000), null, null,
+                new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), null, 1, NOW, NOW);
+        if (foundAfterDuplicateKey) {
+            given(orderReader.findByPreorderId(PREORDER_ID)).willReturn(Optional.empty(), Optional.of(mismatched));
+            given(ledger.place(any(), any())).willThrow(new OrderAlreadyPlacedException(PREORDER_ID, null));
+        } else {
+            given(orderReader.findByPreorderId(PREORDER_ID)).willReturn(Optional.of(mismatched));
+        }
+
+        assertThatThrownBy(() -> service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("예약 UUID 가 예약과 다르다");
     }
 
     // 받은 토큰을 preorder 호출까지 그대로 넘긴다.
@@ -205,7 +255,7 @@ class PlaceOrderServiceTest {
     }
 
     private static Order order(OrderStatus status) {
-        return new Order(100L, OrderToken.issue(), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID, status,
+        return new Order(100L, OrderToken.issue(), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID, status,
                 Money.won(1_250_000), null, null,
                 new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), null, 1, NOW, NOW);
     }

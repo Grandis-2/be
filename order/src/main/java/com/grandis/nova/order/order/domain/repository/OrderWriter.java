@@ -22,7 +22,7 @@ public interface OrderWriter {
     /**
      * 새 주문을 저장하고 id · 생성 시각이 채워진 주문을 돌려준다.
      *
-     * @throws OrderAlreadyPlacedException 그 예약의 주문이 이미 있다
+     * @throws OrderAlreadyPlacedException 예약 식별 칸(내부 id · UUID)이 이미 쓰였다. 그 예약의 주문인지는 부른 쪽이 확인한다
      */
     Order insert(Order order);
 

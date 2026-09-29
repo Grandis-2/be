@@ -22,14 +22,14 @@ public final class OrderMapper {
     public static OrderJpaEntity toEntity(Order order) {
         ShipTo shipTo = order.shipTo();
         return new OrderJpaEntity(order.orderToken().value(), order.customerId(), order.source(),
-                order.preorderId(), order.status(), order.totalAmount().amount(), order.paymentDueAt(),
+                order.preorderId(), order.preorderToken(), order.status(), order.totalAmount().amount(), order.paymentDueAt(),
                 order.stockReleasedAt(), shipTo.name(), shipTo.phone(), shipTo.postalCode(), shipTo.line1(),
                 shipTo.line2(), order.internalNote(), order.eventSequence());
     }
 
     public static Order toDomain(OrderJpaEntity entity) {
         return new Order(entity.getId(), new OrderToken(entity.getOrderToken()), entity.getCustomerId(),
-                entity.getSource(), entity.getPreorderId(), entity.getStatus(), new Money(entity.getTotalAmount()),
+                entity.getSource(), entity.getPreorderId(), entity.getPreorderToken(), entity.getStatus(), new Money(entity.getTotalAmount()),
                 entity.getPaymentDueAt(), entity.getStockReleasedAt(),
                 new ShipTo(entity.getShipToName(), entity.getShipToPhone(), entity.getShipToPostalCode(),
                         entity.getShipToLine1(), entity.getShipToLine2()),

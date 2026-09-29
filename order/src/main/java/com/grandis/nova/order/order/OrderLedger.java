@@ -58,8 +58,8 @@ public class OrderLedger {
     /**
      * 새 주문과 항목 · 첫 이력(번호 1, from 없음)을 저장한다. 금액은 항목에서 계산하고 공개 토큰은 여기서 발급한다.
      *
-     * @throws OrderAlreadyPlacedException 그 예약의 주문이 이미 있다 — 기존 주문을 돌려줄지(200) 취소된 주문이라
-     *                                     거절할지(409)는 생성 유스케이스가 새 트랜잭션에서 조회해 판정한다
+     * @throws OrderAlreadyPlacedException 예약 식별 칸(내부 id · UUID)이 이미 쓰였다 — 그 예약의 주문인지, 기존 주문을
+     *                                     돌려줄지(200) 취소된 주문이라 거절할지(409)는 생성 유스케이스가 새 트랜잭션에서 조회해 판정한다
      */
     public Order place(OrderDraft draft, EventCause cause) {
         Order order = writer.insert(Order.place(draft, OrderToken.issue()));

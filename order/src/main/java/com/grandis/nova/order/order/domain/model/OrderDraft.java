@@ -15,12 +15,14 @@ import java.util.Set;
  * 여기서 거르는 것은 어느 출처든 지켜야 하는 규칙이다(ck_order_preorder_link · uq_order_item_option 과 같다).
  * 지금 어떤 출처를 받아 줄지는 {@link Order#place} 가 정한다.
  *
- * @param preorderId 사전예약 주문이면 그 예약의 내부 id, 아니면 null
+ * @param preorderId    사전예약 주문이면 그 예약의 내부 id, 아니면 null
+ * @param preorderToken 사전예약 주문이면 그 예약의 공개 UUID(preorder_id 와 같은 예약), 아니면 null
  */
 public record OrderDraft(
         Long customerId,
         OrderSource source,
         Long preorderId,
+        String preorderToken,
         ShipTo shipTo,
         List<OrderLine> lines
 ) {
@@ -34,6 +36,7 @@ public record OrderDraft(
         if ((source == OrderSource.PREORDER) != (preorderId != null)) {
             throw new IllegalArgumentException("사전예약 주문만 preorderId 를 가진다: source=" + source);
         }
+        PreorderTokens.requireLinked(source, preorderToken);
         if (lines.isEmpty()) {
             throw new IllegalArgumentException("주문상품이 없다");
         }
