@@ -47,5 +47,13 @@ class OrderArchitectureTest {
     static final ArchRule coreIsFrameworkFree = noClasses()
             .that().resideInAnyPackage(ORDER + ".domain..", ORDER + ".vo..", ORDER + ".command..")
             .should().dependOnClassesThat().resideInAnyPackage(
-                    "jakarta.persistence..", "org.springframework..", "org.hibernate..", ORDER + ".persistence..");
+                    "jakarta.persistence..", "org.springframework..", "org.hibernate..", "io.swagger..", "org.springdoc..", ORDER + ".persistence..");
+
+    /** Swagger · springdoc 애노테이션은 HTTP 경계(order.api 의 컨트롤러 · DTO, web 의 파라미터 애노테이션)에만 붙인다. */
+    @ArchTest
+    static final ArchRule openApiAnnotationsStayAtHttpBoundary = noClasses()
+            .that().resideInAPackage("com.grandis.nova.order..")
+            .and().resideOutsideOfPackages(ORDER + ".api..", "com.grandis.nova.order.web..")
+            .should().dependOnClassesThat().resideInAnyPackage("io.swagger..", "org.springdoc..")
+            .because("문서는 HTTP 계약을 적는다. 계약 밖 클래스가 문서 모양을 정하면 안 된다");
 }
