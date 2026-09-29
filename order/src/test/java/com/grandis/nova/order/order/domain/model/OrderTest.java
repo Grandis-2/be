@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Instant;
 import java.util.List;
 
+import static com.grandis.nova.order.order.domain.model.OrderDraftTest.PREORDER_UUID;
 import static com.grandis.nova.order.order.domain.model.OrderDraftTest.SHIP_TO;
 import static com.grandis.nova.order.order.domain.model.OrderDraftTest.line;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -20,7 +21,7 @@ class OrderTest {
     void newPreorderOrderAwaitsPaymentWithFirstSequenceAndNoDueDate() {
         OrderToken token = OrderToken.issue();
 
-        Order order = Order.place(new OrderDraft(1L, OrderSource.PREORDER, 7L, SHIP_TO,
+        Order order = Order.place(new OrderDraft(1L, OrderSource.PREORDER, 7L, PREORDER_UUID, SHIP_TO,
                 List.of(line(10L, 1, 1_250_000))), token);
 
         assertThat(order.id()).isNull();
@@ -29,11 +30,12 @@ class OrderTest {
         assertThat(order.eventSequence()).isEqualTo(OrderEvent.FIRST_SEQUENCE);
         assertThat(order.totalAmount()).isEqualTo(Money.won(1_250_000));
         assertThat(order.paymentDueAt()).isNull();
+        assertThat(order.preorderToken()).isEqualTo(PREORDER_UUID);
     }
 
     @Test
     void onlyPreorderOrdersCanBePlacedForNow() {
-        OrderDraft buyNow = new OrderDraft(1L, OrderSource.BUY_NOW, null, SHIP_TO, List.of(line(10L, 1, 1000)));
+        OrderDraft buyNow = new OrderDraft(1L, OrderSource.BUY_NOW, null, null, SHIP_TO, List.of(line(10L, 1, 1000)));
 
         assertThatThrownBy(() -> Order.place(buyNow, OrderToken.issue()))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -42,8 +44,8 @@ class OrderTest {
 
     @Test
     void preorderOrderHasExactlyOneUnitOfOneOption() {
-        OrderDraft twoUnits = new OrderDraft(1L, OrderSource.PREORDER, 7L, SHIP_TO, List.of(line(10L, 2, 1000)));
-        OrderDraft twoOptions = new OrderDraft(1L, OrderSource.PREORDER, 7L, SHIP_TO,
+        OrderDraft twoUnits = new OrderDraft(1L, OrderSource.PREORDER, 7L, PREORDER_UUID, SHIP_TO, List.of(line(10L, 2, 1000)));
+        OrderDraft twoOptions = new OrderDraft(1L, OrderSource.PREORDER, 7L, PREORDER_UUID, SHIP_TO,
                 List.of(line(10L, 1, 1000), line(11L, 1, 1000)));
 
         assertThatThrownBy(() -> Order.place(twoUnits, OrderToken.issue())).isInstanceOf(IllegalArgumentException.class);
@@ -74,6 +76,15 @@ class OrderTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    // 되살린 행에도 ck_order_preorder_token 규칙을 건다.
+    @Test
+    void constructorRejectsPreorderOrderWithoutPreorderToken() {
+        assertThatThrownBy(() -> new Order(1L, TOKEN, 1L, OrderSource.PREORDER, 7L, null, OrderStatus.AWAITING_PAYMENT,
+                Money.won(1000), null, null, SHIP_TO, null, 1, Instant.EPOCH, Instant.EPOCH))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("preorderToken");
+    }
+
     @Test
     void constructorRejectsEventSequenceBelowOne() {
         assertThatThrownBy(() -> order(OrderSource.PREORDER, 7L, OrderStatus.AWAITING_PAYMENT, null, null, 0))
@@ -83,7 +94,7 @@ class OrderTest {
     // 배송지 · 관리자 메모에는 개인정보가 들어갈 수 있다. 로그 · 예외 메시지로 새지 않게 식별 · 상태만 싣는다.
     @Test
     void toStringCarriesNoPersonalData() {
-        Order order = new Order(1L, TOKEN, 1L, OrderSource.PREORDER, 7L, OrderStatus.AWAITING_PAYMENT,
+        Order order = new Order(1L, TOKEN, 1L, OrderSource.PREORDER, 7L, PREORDER_UUID, OrderStatus.AWAITING_PAYMENT,
                 Money.won(1000), null, null, SHIP_TO, "고객 요청: 010-9999-8888 로 연락", 1, Instant.EPOCH, Instant.EPOCH);
 
         assertThat(order.toString())
@@ -106,7 +117,8 @@ class OrderTest {
 
     private static Order order(OrderSource source, Long preorderId, OrderStatus status, Instant paymentDueAt,
                                Instant stockReleasedAt, long eventSequence) {
-        return new Order(1L, TOKEN, 1L, source, preorderId, status, Money.won(1000), paymentDueAt, stockReleasedAt,
+        String preorderToken = source == OrderSource.PREORDER ? PREORDER_UUID : null;
+        return new Order(1L, TOKEN, 1L, source, preorderId, preorderToken, status, Money.won(1000), paymentDueAt, stockReleasedAt,
                 SHIP_TO, null, eventSequence, Instant.EPOCH, Instant.EPOCH);
     }
 }

@@ -15,8 +15,8 @@ import java.time.Instant;
  * ERD 가 시간을 UTC datetime(6) 으로 정했으므로 Instant 를 쓴다.
  * LocalDateTime 은 시간대 정보가 없어 "이 값이 UTC 인가" 를 코드에서 알 수 없다.
  *
- * 쓰는 앱은 @EnableJpaAuditing 을 켜야 한다. 안 켜면 값이 null 로 들어가고
- * NOT NULL 제약에 걸려서야 드러난다.
+ * 쓰는 앱은 Auditing 을 켜야 한다 — common:jpa 를 의존하거나(저장 해상도 시계로 켜진다) @EnableJpaAuditing 을 직접 켠다.
+ * 둘 다 하면 기동이 실패한다. 안 켜면 값이 null 로 들어가고 NOT NULL 제약에 걸려서야 드러난다.
  */
 @MappedSuperclass
 @EntityListeners(AuditingEntityListener.class)

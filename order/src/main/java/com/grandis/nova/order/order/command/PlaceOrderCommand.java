@@ -14,18 +14,20 @@ import java.util.List;
  * 주문 생성 입력. 유스케이스가 요청 · 외부 조회 결과를 모아 만든다. 값만 옮기고 규칙은 모른다 —
  * {@link #toDraft()} 가 VO · 도메인으로 바꾸면서 검사한다. 금액 칸이 없다.
  *
- * @param preorderId 사전예약 주문이면 그 예약의 내부 id
+ * @param preorderId    사전예약 주문이면 그 예약의 내부 id
+ * @param preorderToken 사전예약 주문이면 그 예약의 공개 UUID
  */
 public record PlaceOrderCommand(
         Long customerId,
         OrderSource source,
         Long preorderId,
+        String preorderToken,
         Address shipTo,
         List<Line> lines
 ) {
 
     public OrderDraft toDraft() {
-        return new OrderDraft(customerId, source, preorderId, shipTo.toShipTo(),
+        return new OrderDraft(customerId, source, preorderId, preorderToken, shipTo.toShipTo(),
                 lines.stream().map(Line::toOrderLine).toList());
     }
 

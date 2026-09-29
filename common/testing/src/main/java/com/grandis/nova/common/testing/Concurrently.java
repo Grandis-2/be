@@ -1,4 +1,4 @@
-package com.grandis.nova.order.support;
+package com.grandis.nova.common.testing;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -13,8 +13,6 @@ import java.util.concurrent.TimeoutException;
 import java.util.function.IntFunction;
 
 /**
- * preorder 테스트 지원 코드의 복사본이다. 서비스 모듈끼리 의존하지 않으므로 공유하지 않는다.
- *
  * 작업 여러 개를 한꺼번에 출발시키고 각 결과(값 또는 던진 예외)를 순서대로 모은다.
  * 작업은 모두 만든 뒤 한 신호로 동시에 시작한다 — 먼저 만든 스레드가 먼저 끝나 경합이 사라지지 않게.
  */

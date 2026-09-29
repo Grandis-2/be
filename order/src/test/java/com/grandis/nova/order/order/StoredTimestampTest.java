@@ -1,6 +1,6 @@
 package com.grandis.nova.order.order;
 
-import com.grandis.nova.order.config.JpaAuditingConfig;
+import com.grandis.nova.common.jpa.StorageClock;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.enums.OrderTrigger;
 import com.grandis.nova.order.order.domain.model.Order;
@@ -45,7 +45,7 @@ class StoredTimestampTest {
     Clock storageClock;
 
     static Clock nanosecondClock() {
-        return JpaAuditingConfig.atStorageResolution(Clock.fixed(NANOS, ZoneOffset.UTC));
+        return StorageClock.atStorageResolution(Clock.fixed(NANOS, ZoneOffset.UTC));
     }
 
     @Autowired

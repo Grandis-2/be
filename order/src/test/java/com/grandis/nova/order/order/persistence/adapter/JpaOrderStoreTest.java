@@ -65,7 +65,7 @@ class JpaOrderStoreTest {
      */
     @Test
     void storedOrderAndItemsReadBackFromDatabaseUnchanged() {
-        OrderDraft draft = new OrderDraft(customerId, OrderSource.PREORDER, preorderId,
+        OrderDraft draft = new OrderDraft(customerId, OrderSource.PREORDER, preorderId, OrderFixtures.preorderToken(preorderId),
                 new ShipTo("홍길동", "010-0000-0000", "04524", "세종대로 110", "3층"),
                 preorderCommand(customerId, preorderId, product).toDraft().lines());
         Order placed = Order.place(draft, OrderToken.issue());
@@ -79,7 +79,7 @@ class JpaOrderStoreTest {
                 .ignoringFields("id", "createdAt", "updatedAt")
                 .isEqualTo(placed);
         assertThat(loaded.id()).isEqualTo(stored.id());
-        // 시계가 DB 해상도(마이크로초)라 저장하고 돌려준 시각과 DB 행의 시각이 같다(JpaAuditingConfig).
+        // 시계가 DB 해상도(마이크로초)라 저장하고 돌려준 시각과 DB 행의 시각이 같다(common:jpa StorageClock).
         assertThat(loaded.createdAt()).isEqualTo(stored.createdAt());
         assertThat(reader.findByOrderToken(placed.orderToken())).contains(loaded);
         assertThat(reader.findByPreorderId(preorderId)).contains(loaded);
@@ -91,7 +91,7 @@ class JpaOrderStoreTest {
     void insertAcceptsOnlyNewAwaitingPaymentOrders() {
         Order placed = Order.place(preorderCommand(customerId, preorderId, product).toDraft(), OrderToken.issue());
         Order delivered = new Order(null, placed.orderToken(), customerId, OrderSource.PREORDER, preorderId,
-                OrderStatus.DELIVERED, placed.totalAmount(), null, null, placed.shipTo(), null, 5, null, null);
+                placed.preorderToken(), OrderStatus.DELIVERED, placed.totalAmount(), null, null, placed.shipTo(), null, 5, null, null);
         Order stored = writer.insert(placed);
 
         assertThatThrownBy(() -> writer.insert(delivered))

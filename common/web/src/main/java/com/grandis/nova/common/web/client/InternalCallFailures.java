@@ -1,4 +1,4 @@
-package com.grandis.nova.order.client;
+package com.grandis.nova.common.web.client;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
@@ -16,7 +16,8 @@ import org.springframework.web.client.UnknownContentTypeException;
  *   Content-Type 이 계약과 다름). 사용자 잘못이 아니므로 상대의 상태를 그대로 돌려주지 않는다(문구는 공통 처리기가 숨긴다).
  * - 일시 장애(503) — 타임아웃 · 연결 실패 · 5xx. 다시 시도를 안내한다. 연동 오류를 여기로 보내면 그 안내가 거짓이 된다.
  *
- * 4xx · 5xx 규칙은 preorder 의 같은 이름 클래스와 같다. 읽을 수 없는 응답을 500 으로 가르는 것은 order 에만 있다.
+ * order 에서 옮겨 왔다(NV-156). preorder 에는 아직 같은 이름의 자체 클래스가 있다 — 4xx · 5xx 규칙은 같고, 읽을 수 없는 응답을
+ * 500 으로 가르는 것과 unavailable 의 반환 타입(preorder 는 Retry-After 를 싣는 하위 예외)이 다르다.
  */
 public final class InternalCallFailures {
 

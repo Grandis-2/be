@@ -23,6 +23,7 @@ import java.util.Objects;
  * 생성자는 어느 경로로 만들든 지켜야 하는 규칙(DB CHECK 와 같다)을 검사한다. 새 주문을 받을지의 규칙은 {@link #place} 에 있다.
  *
  * @param id              저장 전이면 null
+ * @param preorderToken   사전예약 주문이 가리키는 예약의 공개 UUID. 결제 때 preorder 에 다시 물을 때 쓴다. 아니면 null
  * @param paymentDueAt    일반 주문의 10분 기한. 사전예약 주문은 예약의 24시간 기한을 따르므로 늘 null
  * @param stockReleasedAt 일반 판매의 재고 반환 표식. 사전예약 주문은 늘 null
  * @param createdAt       저장 전이면 null
@@ -34,6 +35,7 @@ public record Order(
         Long customerId,
         OrderSource source,
         Long preorderId,
+        String preorderToken,
         OrderStatus status,
         Money totalAmount,
         Instant paymentDueAt,
@@ -57,6 +59,7 @@ public record Order(
         if (preorder != (preorderId != null)) {
             throw new IllegalArgumentException("사전예약 주문만 preorderId 를 가진다: source=" + source);
         }
+        PreorderTokens.requireLinked(source, preorderToken);
         // ck_order_due
         if (preorder != (paymentDueAt == null)) {
             throw new IllegalArgumentException("결제 기한은 일반 주문에만 있다: source=" + source);
@@ -84,7 +87,7 @@ public record Order(
             throw new IllegalArgumentException("사전예약 주문은 옵션 하나 · 수량 1이다");
         }
         return new Order(null, orderToken, draft.customerId(), draft.source(), draft.preorderId(),
-                OrderStatus.AWAITING_PAYMENT, draft.totalAmount(), null, null, draft.shipTo(), null,
+                draft.preorderToken(), OrderStatus.AWAITING_PAYMENT, draft.totalAmount(), null, null, draft.shipTo(), null,
                 OrderEvent.FIRST_SEQUENCE, null, null);
     }
 

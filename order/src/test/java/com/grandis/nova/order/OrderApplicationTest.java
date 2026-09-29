@@ -1,6 +1,6 @@
 package com.grandis.nova.order;
 
-import com.grandis.nova.order.config.JpaAuditingConfig;
+import com.grandis.nova.common.jpa.StorageClock;
 import com.grandis.nova.order.config.TransactionIsolationVerifier;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import org.junit.jupiter.api.Test;
@@ -43,7 +43,7 @@ class OrderApplicationTest {
      */
     @Test
     void applicationClockIsAtStorageResolution() {
-        assertThat(clock).isEqualTo(JpaAuditingConfig.atStorageResolution(Clock.systemUTC()));
+        assertThat(clock).isEqualTo(StorageClock.atStorageResolution(Clock.systemUTC()));
     }
 
     @Test

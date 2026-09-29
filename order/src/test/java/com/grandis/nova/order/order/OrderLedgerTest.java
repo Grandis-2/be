@@ -107,6 +107,28 @@ class OrderLedgerTest {
                 .satisfies(e -> assertThat(((OrderAlreadyPlacedException) e).getPreorderId()).isEqualTo(preorderId));
     }
 
+    /*
+     * 다른 예약 id 에 이미 쓰인 예약 UUID — uq_order_preorder_token 이 막는다. 저장소는 두 예약 키 중 어느 것이 겹쳐도 같은
+     * 도메인 예외로 올린다(여러 키가 겹칠 때 어느 이름으로 알릴지 MySQL 이 보장하지 않으므로 이름으로 가르지 않는다).
+     * 짝이 어긋난 것인지는 생성 유스케이스가 예약 id 로 다시 읽어 가른다(PlaceOrderServiceTest).
+     */
+    @Test
+    void preorderTokenOfAnotherPreorderIsRejectedAsPreorderKeyConflict() {
+        Long first = preorder();
+        ledger.place(draft(first), EventCause.user());
+        // 회원당 상품마다 진행 중인 예약은 하나라(uq_preorder_active) 다른 상품의 예약이다.
+        PreorderProduct otherProduct = fixtures.preorderProduct();
+        Long second = fixtures.payablePreorder(customerId, otherProduct, 1);
+        OrderDraft borrowed = preorderCommand(customerId, second, otherProduct).toDraft();
+        OrderDraft mismatched = new OrderDraft(borrowed.customerId(), borrowed.source(), second,
+                OrderFixtures.preorderToken(first), borrowed.shipTo(), borrowed.lines());
+
+        assertThatThrownBy(() -> ledger.place(mismatched, EventCause.user()))
+                .isInstanceOf(OrderAlreadyPlacedException.class)
+                .satisfies(e -> assertThat(e).rootCause().hasMessageContaining("uq_order_preorder_token"))
+                .satisfies(e -> assertThat(((OrderAlreadyPlacedException) e).getPreorderId()).isEqualTo(second));
+    }
+
     // 앱의 회원 대조를 빠뜨려도 복합 FK(fk_order_preorder)가 한 번 더 막는다. 이건 도메인 예외로 바꾸지 않는다.
     @Test
     void orderForAnotherCustomersPreorderIsRejectedByForeignKey() {
@@ -130,7 +152,7 @@ class OrderLedgerTest {
 
     @Test
     void nonPreorderSourceIsRejectedBeforeWriting() {
-        OrderDraft buyNow = new OrderDraft(customerId, OrderSource.BUY_NOW, null, draft(1L).shipTo(), draft(1L).lines());
+        OrderDraft buyNow = new OrderDraft(customerId, OrderSource.BUY_NOW, null, null, draft(1L).shipTo(), draft(1L).lines());
 
         assertThatThrownBy(() -> ledger.place(buyNow, EventCause.user()))
                 .isInstanceOf(IllegalArgumentException.class);

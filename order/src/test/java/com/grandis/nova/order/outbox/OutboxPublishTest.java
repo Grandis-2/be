@@ -1,8 +1,8 @@
 package com.grandis.nova.order.outbox;
 
 import com.grandis.nova.order.outbox.PreorderOrderSettled.RejectReason;
-import com.grandis.nova.order.support.Concurrently;
-import com.grandis.nova.order.support.Concurrently.Outcome;
+import com.grandis.nova.common.testing.Concurrently;
+import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

@@ -65,12 +65,12 @@ public class OrderFixtures {
     }
 
     /**
-     * 결제 가능한 예약. 주문은 이 상태의 예약에서만 만들어진다.
+     * 결제 가능한 예약. 주문은 이 상태의 예약에서만 만들어진다. 공개 UUID 는 {@link #preorderToken(Long)} 이다.
      *
      * @param queuePosition 같은 상품 안에서 겹치지 않아야 한다(uq_preorder_position)
      */
     public Long payablePreorder(Long customerId, PreorderProduct product, long queuePosition) {
-        return insert("""
+        Long preorderId = insert("""
                 INSERT INTO preorders (preorder_token, customer_id, product_id, option_id, shipment_batch_id,
                                        queue_position, idempotency_key, product_title_snapshot,
                                        option_title_snapshot, unit_price_snapshot, status, payable_from,
@@ -79,6 +79,16 @@ public class OrderFixtures {
                         UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
                 """, unique(), customerId, product.productId(), product.optionId(), product.batchId(),
                 queuePosition, unique(), PRODUCT_TITLE, OPTION_TITLE, UNIT_PRICE);
+        jdbcTemplate.update("UPDATE preorders SET preorder_token = ? WHERE id = ?", preorderToken(preorderId), preorderId);
+        return preorderId;
+    }
+
+    /**
+     * 픽스처 예약의 공개 UUID. id 로 정해 두어, 예약 id 만 받는 명령(static)도 DB 와 같은 짝(preorder_id ↔ preorder_token)을
+     * 싣는다. id 가 겹치지 않으므로 UUID 도 겹치지 않는다.
+     */
+    public static String preorderToken(Long preorderId) {
+        return "00000000-0000-4000-8000-%012d".formatted(preorderId);
     }
 
     /** 그 예약으로 옵션 하나 · 수량 1 을 주문하는 명령. */
@@ -88,8 +98,8 @@ public class OrderFixtures {
 
     public static PlaceOrderCommand preorderCommand(Long customerId, Long preorderId, PreorderProduct product,
                                                     Long optionId, int quantity) {
-        return new PlaceOrderCommand(customerId, OrderSource.PREORDER, preorderId, ADDRESS, List.of(
-                new PlaceOrderCommand.Line(product.productId(), optionId, quantity, UNIT_PRICE,
+        return new PlaceOrderCommand(customerId, OrderSource.PREORDER, preorderId, preorderToken(preorderId), ADDRESS,
+                List.of(new PlaceOrderCommand.Line(product.productId(), optionId, quantity, UNIT_PRICE,
                         PRODUCT_TITLE, OPTION_TITLE)));
     }
 

@@ -41,6 +41,31 @@ class PreorderReaderTest {
         assertThat(reader.find(PREORDER_UUID, SESSION)).contains(payability);
     }
 
+    // 주문은 응답의 UUID 와 내부 id 를 한 짝으로 저장한다. 다른 예약의 응답이면 짝이 어긋난 주문이 생기므로 연동 오류다.
+    @Test
+    void responseForAnotherPreorderIsIntegrationError() {
+        Instant payableFrom = Instant.now();
+        PreorderPayability another = new PreorderPayability("1c9e2b7d-3f4a-4b5c-8d6e-7f8091a2b3c4", 2L, 7L, 3L, 30L,
+                "Nova 1", "블랙", new BigDecimal("1000"), "PAYABLE", payableFrom, payableFrom.plus(Duration.ofHours(24)),
+                true, null);
+        given(client.getPayability(PREORDER_UUID, AUTHORIZATION)).willReturn(ApiResponse.ok(another));
+
+        assertThatThrownBy(() -> reader.find(PREORDER_UUID, SESSION))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("물은 예약과 다른 응답");
+    }
+
+    // preorders.preorder_token 은 대소문자를 구별한다(utf8mb4_bin). 대문자로 돌아오면 다른 값이다.
+    @Test
+    void responseUuidMustMatchExactlyIncludingCase() {
+        Instant payableFrom = Instant.now();
+        PreorderPayability upper = new PreorderPayability(PREORDER_UUID.toUpperCase(), 1L, 7L, 3L, 30L, "Nova 1",
+                "블랙", new BigDecimal("1000"), "PAYABLE", payableFrom, payableFrom.plus(Duration.ofHours(24)), true, null);
+        given(client.getPayability(PREORDER_UUID, AUTHORIZATION)).willReturn(ApiResponse.ok(upper));
+
+        assertThatThrownBy(() -> reader.find(PREORDER_UUID, SESSION)).isInstanceOf(IllegalStateException.class);
+    }
+
     @Test
     void preorderNotFoundIsEmpty() {
         given(client.getPayability(PREORDER_UUID, AUTHORIZATION)).willThrow(PreorderStubs.notFound("PREORDER_NOT_FOUND"));

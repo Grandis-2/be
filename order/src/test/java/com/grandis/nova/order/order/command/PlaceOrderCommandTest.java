@@ -14,12 +14,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PlaceOrderCommandTest {
 
+    static final String PREORDER_UUID = "0b8f6a3e-5a8c-4d59-9a53-3c1f0e0f7a11";
     static final PlaceOrderCommand.Address ADDRESS =
             new PlaceOrderCommand.Address("홍길동", "010-0000-0000", "04524", "세종대로 110", "");
 
     @Test
     void convertsToDraftWithValueObjects() {
-        PlaceOrderCommand command = new PlaceOrderCommand(1L, OrderSource.PREORDER, 7L, ADDRESS, List.of(
+        PlaceOrderCommand command = new PlaceOrderCommand(1L, OrderSource.PREORDER, 7L, PREORDER_UUID, ADDRESS, List.of(
                 new PlaceOrderCommand.Line(100L, 10L, 1, new BigDecimal("1250000"), "Nova 1", "블랙 / 256GB")));
 
         OrderDraft draft = command.toDraft();
@@ -31,7 +32,7 @@ class PlaceOrderCommandTest {
 
     @Test
     void toStringHidesShippingAddress() {
-        PlaceOrderCommand command = new PlaceOrderCommand(1L, OrderSource.PREORDER, 7L, ADDRESS, List.of(
+        PlaceOrderCommand command = new PlaceOrderCommand(1L, OrderSource.PREORDER, 7L, PREORDER_UUID, ADDRESS, List.of(
                 new PlaceOrderCommand.Line(100L, 10L, 1, new BigDecimal("1250000"), "Nova 1", "블랙 / 256GB")));
 
         assertThat(command.toString()).doesNotContain("홍길동", "010-0000-0000", "04524", "세종대로");
@@ -40,7 +41,7 @@ class PlaceOrderCommandTest {
     // 명령은 값만 옮긴다. 규칙 위반은 도메인으로 바꿀 때 드러난다.
     @Test
     void invalidValuesFailOnConversion() {
-        PlaceOrderCommand negativePrice = new PlaceOrderCommand(1L, OrderSource.PREORDER, 7L, ADDRESS, List.of(
+        PlaceOrderCommand negativePrice = new PlaceOrderCommand(1L, OrderSource.PREORDER, 7L, PREORDER_UUID, ADDRESS, List.of(
                 new PlaceOrderCommand.Line(100L, 10L, 1, new BigDecimal("-1"), "Nova 1", "블랙 / 256GB")));
 
         assertThatThrownBy(negativePrice::toDraft).isInstanceOf(IllegalArgumentException.class);
