@@ -12,7 +12,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * 인증 필터. 순서는 헤더 → 파싱 → ACCESS 확인 → 폐기 조회 → 컨텍스트.
+ * 인증 필터. 순서는 헤더({@code Authorization: Bearer}, {@link BearerTokens}) → 파싱 → ACCESS 확인 → 폐기 조회 → 컨텍스트.
  *
  * 이 필터는 401 을 직접 내지 않는다. 인증에 실패하면 컨텍스트를 비운 채 다음으로 넘기고, 보호 경로면 entry point 가 401 을 낸다.
  * 그래서 공개 경로에 잘못된 토큰이 와도 통과한다 — 401 은 인가 규칙이 보호 경로에서만 낸다. 실패 이유는 요청 속성과 WARN 로그에만 남는다.
@@ -21,7 +21,6 @@ import org.springframework.web.filter.OncePerRequestFilter;
  */
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
-    public static final String HEADER = "X-Session-Token";
     /** 인증 실패 이유. entry point 가 읽어 봉투에 넣지 않고 로그 상관용으로만 둔다. */
     public static final String ATTR_FAILURE_REASON = JwtAuthenticationFilter.class.getName() + ".reason";
     /** 폐기 조회 실패로 닫힌 경우 true. entry point 가 봉투의 error.details.retryable 을 true 로 낸다. */
@@ -43,8 +42,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
-        String token = request.getHeader(HEADER);
-        if (token == null || token.isBlank() || SecurityContextHolder.getContext().getAuthentication() != null) {
+        // 잘 갖춘 Bearer 헤더가 아니면(없음 · 다른 스킴 · 모양 이상) 자격 증명 없음 — 익명으로 넘긴다
+        String token = BearerTokens.extract(request).orElse(null);
+        if (token == null || SecurityContextHolder.getContext().getAuthentication() != null) {
             chain.doFilter(request, response);
             return;
         }

@@ -1,0 +1,30 @@
+package com.grandis.nova.order.config;
+
+import com.grandis.nova.common.security.SecurityFilterChainSupport;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.web.SecurityFilterChain;
+
+/**
+ * order 의 인가 규칙. 토큰 검증 · 401/403 봉투 · 세션 없음은 common:security 의 SecurityFilterChainSupport 가 한다.
+ *
+ * 이 서비스가 가진 경로만 적고 나머지는 거부한다(denyAll). 규칙 없이 추가된 엔드포인트가 열린 채 배포되지 않게 —
+ * 새 경로는 여기 규칙을 더해야 테스트가 통과한다. 매핑 없는 경로도 404 가 아니라 401(익명) · 403(인증)이다.
+ *
+ * 폐기 조회 실패 때 닫는 경로(auth.revocation-check.fail-closed-paths)는 설정에 있다 — application.yml.example.
+ */
+@Configuration(proxyBeanMethods = false)
+public class SecurityConfig {
+
+    @Bean
+    SecurityFilterChain securityFilterChain(HttpSecurity http, SecurityFilterChainSupport support) throws Exception {
+        return support.build(http, authorize -> authorize
+                .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                .requestMatchers("/api/v1/orders/**").authenticated()
+                // 서비스 간 내부 API. 호출자(preorder)가 사용자 토큰을 Authorization: Bearer 로 그대로 싣는다 —
+                // 회원 · 관리자 모두, 주인 확인은 유스케이스가 한다.
+                .requestMatchers("/internal/**").authenticated()
+                .anyRequest().denyAll());
+    }
+}

@@ -2,7 +2,7 @@ package com.grandis.nova.member;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.grandis.nova.common.security.JwtAuthenticationFilter;
+import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.security.JwtProperties;
 import com.grandis.nova.common.security.JwtTokenProvider;
 import com.grandis.nova.common.security.Role;
@@ -114,7 +114,7 @@ class ConfigBindingTest {
     void secureCookieFlagReachesSetCookieHeader() throws Exception {
         String access = provider.create("101", Role.USER, UUID.randomUUID(), TokenType.ACCESS);
         String setCookie = MockMvcBuilders.webAppContextSetup(context).addFilters(requestIdFilter, springSecurityFilterChain).build()
-                .perform(delete("/api/v1/session").header(JwtAuthenticationFilter.HEADER, access))
+                .perform(delete("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(access)))
                 .andExpect(status().isNoContent())
                 .andReturn().getResponse().getHeader("Set-Cookie");
         assertThat(setCookie).startsWith(AuthCookies.REFRESH_TOKEN + "=")
@@ -137,7 +137,8 @@ class ConfigBindingTest {
         assertThat(kakao.tokenUri()).isEqualTo("https://kauth.kakao.com/oauth/token");
         assertThat(admin.username()).isEqualTo("admin");
         assertThat(cookie.secure()).isTrue();
-        assertThat(revocation.failClosedPaths()).hasSize(6).contains("/api/v1/session/refresh", "/api/v1/me/**");
+        // 예시 yml 은 코드 기본값과 한 글자도 다르지 않아야 한다 — 예시가 어긋나면 그걸 복사한 운영 설정이 조용히 다른 목록을 닫는다
+        assertThat(revocation.failClosedPaths()).containsExactlyElementsOf(RevocationCheckProperties.DEFAULT_FAIL_CLOSED_PATHS);
         assertThat(refreshOrigins.allowedOrigins()).containsExactly("http://localhost:3000");
         assertThat(jwt.issuer()).isEqualTo("nova");
         assertThat(jwt.audience()).isEqualTo("nova-api");
