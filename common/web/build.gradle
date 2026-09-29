@@ -2,6 +2,11 @@
 // worker · batch 는 이 모듈을 쓰지 않으므로 spring-web 을 끌어오지 않는다.
 apply plugin: 'java-library'
 
+// Spring Boot BOM 이 관리하지 않는 라이브러리 버전. 올릴 때 여기만 바꾼다.
+ext {
+    springdocVersion = '3.1.1'
+}
+
 dependencies {
     api project(':common:types')
     api 'org.springframework:spring-web'
@@ -11,7 +16,7 @@ dependencies {
     testImplementation 'jakarta.servlet:jakarta.servlet-api'
 
     // OpenAPI 문서. swagger 는 스프링 BOM 에 없어 springdoc BOM 으로 맞춘다 — api 라야 서비스 컴파일에도 버전이 정해진다
-    api platform('org.springdoc:springdoc-openapi-bom:3.1.1')
+    api platform("org.springdoc:springdoc-openapi-bom:${springdocVersion}")
     api 'io.swagger.core.v3:swagger-annotations-jakarta'                   // 컨트롤러 · DTO 의 @Operation · @Schema
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui'     // 본체는 서비스 코드가 참조하지 않는다
     implementation 'org.springframework.boot:spring-boot-autoconfigure'   // OpenApiConfiguration 의 @ConditionalOnProperty

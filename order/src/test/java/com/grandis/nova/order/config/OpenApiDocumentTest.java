@@ -10,16 +10,12 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.json.JsonMapper;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import static com.grandis.nova.order.config.OpenApiHttp.getJson;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** common:web OpenApiConfiguration 이 만든 문서. 컨텍스트 설정은 OpenApiServerTest 와 같게 둬 캐시를 공유한다. */
@@ -30,8 +26,6 @@ import static org.assertj.core.api.Assertions.assertThat;
         "spring.application.name=order"
 })
 class OpenApiDocumentTest {
-
-    static final JsonMapper JSON = JsonMapper.builder().build();
 
     @Value("${local.server.port}")
     int port;
@@ -46,15 +40,7 @@ class OpenApiDocumentTest {
 
     @BeforeEach
     void fetch() throws Exception {
-        doc = get("/v3/api-docs");
-    }
-
-    private JsonNode get(String path) throws Exception {
-        HttpResponse<String> response = HttpClient.newHttpClient().send(
-                HttpRequest.newBuilder(URI.create("http://localhost:" + port + path)).GET().build(),
-                HttpResponse.BodyHandlers.ofString());
-        assertThat(response.statusCode()).isEqualTo(200);
-        return JSON.readTree(response.body());
+        doc = getJson(port, "/v3/api-docs");
     }
 
     @Test
@@ -105,7 +91,7 @@ class OpenApiDocumentTest {
     /** 한 출처 뒤에서 서비스를 가르는 그룹 문서. 서버 주소가 "/" 라야 Try it out 이 프록시 · ALB 를 거친다. */
     @Test
     void serviceGroupDocumentMatchesAndPointsToTheSameOrigin() throws Exception {
-        JsonNode group = get("/v3/api-docs/order");
+        JsonNode group = getJson(port, "/v3/api-docs/order");
 
         assertThat(group.path("paths").propertyNames()).containsExactlyInAnyOrderElementsOf(doc.path("paths").propertyNames());
         assertThat(group.path("servers").findValuesAsString("url")).containsExactly("/");

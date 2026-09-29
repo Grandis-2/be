@@ -11,13 +11,8 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.json.JsonMapper;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-
+import static com.grandis.nova.order.config.OpenApiHttp.getJson;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** /internal/** 은 기본으로 문서에서 빠지고 내부 전용 스키마도 따라 빠진다. 컨텍스트 설정은 OpenApiServerTest 와 같다. */
@@ -42,7 +37,7 @@ class OpenApiInternalExclusionTest {
     @ParameterizedTest
     @ValueSource(strings = {"/v3/api-docs", "/v3/api-docs/order"})
     void internalApiIsLeftOutOfTheDocument(String path) throws Exception {
-        JsonNode doc = fetchDocument(port, path);
+        JsonNode doc = getJson(port, path);
 
         assertThat(doc.path("paths").propertyNames()).noneMatch(OpenApiInternalExclusionTest::isInternal);
         assertThat(doc.path("components").path("schemas").propertyNames())
@@ -60,7 +55,7 @@ class OpenApiInternalExclusionTest {
         @ParameterizedTest
         @ValueSource(strings = {"/v3/api-docs", "/v3/api-docs/order"})
         void internalApiIsDocumented(String path) throws Exception {
-            JsonNode doc = fetchDocument(port, path);
+            JsonNode doc = getJson(port, path);
 
             assertThat(doc.path("paths").has("/internal/orders/by-preorder/{preorderInternalId}/cancelability")).isTrue();
             assertThat(doc.path("components").path("schemas").has("ApiResponseCancelabilityResponse")).isTrue();
@@ -69,13 +64,5 @@ class OpenApiInternalExclusionTest {
 
     private static boolean isInternal(String path) {
         return path.equals("/internal") || path.startsWith("/internal/");
-    }
-
-    private static JsonNode fetchDocument(int port, String path) throws Exception {
-        HttpResponse<String> response = HttpClient.newHttpClient().send(
-                HttpRequest.newBuilder(URI.create("http://localhost:" + port + path)).GET().build(),
-                HttpResponse.BodyHandlers.ofString());
-        assertThat(response.statusCode()).isEqualTo(200);
-        return JsonMapper.builder().build().readTree(response.body());
     }
 }

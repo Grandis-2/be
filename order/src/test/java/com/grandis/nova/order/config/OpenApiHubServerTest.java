@@ -9,13 +9,8 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.json.JsonMapper;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-
+import static com.grandis.nova.order.config.OpenApiHttp.getJson;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** 허브 설정이 Swagger UI 드롭다운이 되는지. 드롭다운은 이름순이라 첫 화면(primaryName)을 따로 본다. 동작은 서비스와 무관해 order 로 확인한다. */
@@ -39,10 +34,7 @@ class OpenApiHubServerTest {
 
     @Test
     void swaggerUiListsEveryServiceGroup() throws Exception {
-        HttpResponse<String> response = HttpClient.newHttpClient().send(
-                HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/v3/api-docs/swagger-config")).GET().build(),
-                HttpResponse.BodyHandlers.ofString());
-        JsonNode config = JsonMapper.builder().build().readTree(response.body());
+        JsonNode config = getJson(port, "/v3/api-docs/swagger-config");
         JsonNode urls = config.path("urls");
 
         assertThat(urls.findValuesAsString("name")).containsExactlyInAnyOrder("member", "catalog", "preorder", "order");
