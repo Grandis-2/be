@@ -11,8 +11,6 @@ import org.springframework.transaction.annotation.Transactional;
  * 예약 취소 가능 여부. preorder 가 사용자 · 관리자 취소를 시작하기 전에 묻는다. 읽기만 한다({@link OrderReader}).
  *
  * 잠그지 않고 읽는 참고값이다. 이 답과 실제 취소 사이에 배송이 시작되면 예약 취소 수신이 REJECTED(SHIPPED) 로 돌려준다.
- *
- * common:security 도입 시: {@link Viewer} 가 order.web 에 남지 않으면 인자를 그쪽 주체(회원 id · 관리자 여부)로 바꾼다.
  */
 @Service
 @Transactional(readOnly = true)

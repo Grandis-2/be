@@ -5,6 +5,7 @@ import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.PlacedOrders;
+import com.grandis.nova.order.support.TestAuth;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -17,9 +18,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -125,7 +124,7 @@ class OrderCancelabilityApiTest {
         Order others = orders.place(fixtures.customer());
         fixtures.forceStatus(others.id(), "SHIPPED");
 
-        mockMvc.perform(cancelability(others.preorderId()).with(user("admin").roles("ADMIN")))
+        mockMvc.perform(cancelability(others.preorderId()).with(TestAuth.admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.orderStatus").value("SHIPPED"))
                 .andExpect(jsonPath("$.data.cancelable").value(false));
@@ -140,16 +139,16 @@ class OrderCancelabilityApiTest {
     }
 
     /*
-     * /internal/** 규칙이 없으면 anyRequest().permitAll() 로 떨어져 인증 없이 열린다. 위 401 은 @CurrentViewer 리졸버도
-     * 내므로 규칙을 증명하지 못한다 — 리졸버가 없는 자리(매핑 없는 경로)에서 보안 설정이 먼저 막는지 본다(규칙이 없으면 404).
-     * 보안 설정의 401 은 본문이 없다(리졸버의 401 은 봉투가 있다).
+     * /internal/** 는 인증이면 열리는 규칙이다(나머지 거부와 다르다). 위 401 은 @CurrentViewer 리졸버도 내므로 규칙을
+     * 증명하지 못한다 — 리졸버가 없는 자리(매핑 없는 경로)에서 본다: 익명은 보안 설정이 401, 인증되면 규칙을 통과해 404.
+     * 규칙이 빠지면 나머지 거부(denyAll)로 떨어져 인증돼도 403 이 된다.
      */
     @Test
     void securityRuleGuardsWholeInternalPath() throws Exception {
-        mockMvc.perform(get("/internal/orders/nope")).andExpect(status().isUnauthorized());
-        mockMvc.perform(cancelability(1L))
+        mockMvc.perform(get("/internal/orders/nope"))
                 .andExpect(status().isUnauthorized())
-                .andExpect(content().string(""));
+                .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
+        mockMvc.perform(get("/internal/orders/nope").with(me())).andExpect(status().isNotFound());
     }
 
     @Test
@@ -166,18 +165,14 @@ class OrderCancelabilityApiTest {
         mockMvc.perform(get("/api/v1/orders")).andExpect(status().isUnauthorized());
         mockMvc.perform(get("/api/v1/orders").with(me())).andExpect(status().isOk());
         mockMvc.perform(get("/api/v1/admin/orders").with(me())).andExpect(status().isForbidden());
-        mockMvc.perform(get("/api/v1/admin/orders").with(user("admin").roles("ADMIN"))).andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/admin/orders").with(TestAuth.admin())).andExpect(status().isOk());
     }
 
     private static MockHttpServletRequestBuilder cancelability(Long preorderId) {
         return get("/internal/orders/by-preorder/{preorderInternalId}/cancelability", preorderId);
     }
 
-    /*
-     * 임시 인증 방식 — 임시 리졸버(order.web)는 SecurityContext 의 이름을 회원 id 로 읽는다.
-     * common:security 도입 시: user(...) 를 authentication(new NovaAuthentication(...)) 로 바꾼다(OrderQueryApiTest 참고).
-     */
     private RequestPostProcessor me() {
-        return user(customerId.toString()).roles("USER");
+        return TestAuth.customer(customerId);
     }
 }

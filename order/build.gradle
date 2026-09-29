@@ -11,8 +11,9 @@ dependencies {
     implementation project(':common:types')
     implementation project(':common:web')
     implementation project(':common:message')
-    // common:security 도입 시: project(':common:security') 를 더한다. 폐기 표식 조회로 common:redis 가 따라오므로
-    // application.yml 에 spring.data.redis 설정도 더한다.
+    // 액세스 토큰 검증 · 인증 주체. 폐기 표식 조회(Redis)로 common:redis 가 따라온다 — application.yml 에 spring.data.redis 가 필요하다.
+    implementation project(':common:security')
+    implementation project(':common:redis')
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-security'

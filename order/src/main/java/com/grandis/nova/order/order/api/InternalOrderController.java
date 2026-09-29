@@ -10,12 +10,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 서비스 간 내부 API. ALB 를 거치지 않는다. 호출자는 받은 사용자 토큰을 그대로 싣고, 여기서 토큰 주인이
+ * 서비스 간 내부 API. ALB 를 거치지 않는다. 호출자는 받은 사용자 토큰을 그대로 싣고(Authorization: Bearer), 여기서 토큰 주인이
  * 주문 회원인지 확인한다(관리자 통과). 인증은 보안 설정이 경로로 요구한다(/internal/**).
  *
  * 경로의 preorderInternalId 는 예약 내부 id(preorders.id = orders.preorder_id)다. 형식이 틀리면 400.
- *
- * common:security 도입 시: {@link CurrentViewer} 를 order 에 남기면 그대로, 아니면 그쪽 주체로 바꾼다.
  */
 @RestController
 @RequestMapping("/internal/orders")

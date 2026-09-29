@@ -21,6 +21,13 @@ spring:
         jdbc:
           time_zone: UTC
     open-in-view: false
+  data:
+    redis:
+      # 폐기 표식(로그아웃 · 제재) 조회. member 와 같은 Redis. 응답이 늦으면 모든 인증 요청이 늦어지므로 짧게 끊는다
+      host: localhost
+      port: 6379
+      timeout: 300ms
+      connect-timeout: 200ms
   http:
     serviceclient:
       # 주문 생성 때 예약 조회(GET /internal/preorders/{token}). 답이 없으면 주문을 만들지 않고 503 이다.
@@ -58,6 +65,23 @@ nova:
     relay-after: 1m        # 만든 지 이만큼 지난 미발행 행만 재발행
     relay-batch: 100
 
+auth:
+  # 폐기 표식 조회가 실패(Redis 장애)했을 때 401 로 닫는 경로. 목록 밖은 열린다(통과 + 경고 + 카운터).
+  # 목록을 주면 공통 기본값을 **대체**한다 — 그래서 공통 기본 셋(관리자 · 재발급 · 내 정보)도 다시 적는다.
+  # 도메인 경로는 order 가 서비스하는 것: 결제 · 주문 취소 · 배송지 변경(엔드포인트는 예정, 미리 닫아 둔다).
+  # 항목 앞에 HTTP 메서드를 붙이면 그 메서드만 닫는다. 모양이 틀린 항목은 기동 실패다.
+  revocation-check:
+    fail-closed-paths:
+      - /api/v1/admin/**
+      - /api/v1/session/refresh
+      - /api/v1/me/**
+      - /api/v1/orders/*/payment-attempts/**
+      - POST /api/v1/orders/*/cancel
+      - PATCH /api/v1/orders/*/shipping-address
+      # 주문 생성은 열어 둔다(2026-09-29 결정): 닫으면 Redis 장애 동안 전원 주문 불가. 결제 · 취소 · 배송지가 닫혀 있어
+      # 폐기 세션이 만든 미결제 주문으로 할 수 있는 일이 없다. 주문 생성에 재고 선점 같은 부수효과가 붙으면 아래를 켠다
+      # - POST /api/v1/orders
+
 # 검증만 한다(개인키 없음). 공개키는 member 가 게시하는 JWKS(GET /.well-known/jwks.json)에서 받아 kid 로 고른다 —
 # 기동 직후와 5분마다 백그라운드로 받고, 요청 스레드는 캐시만 읽는다. 키를 바꿀 때 이 서비스는 재배포하지 않는다.
 # issuer·audience 는 member 와 같은 값이어야 검증이 통과한다.
@@ -65,4 +89,7 @@ jwt:
   issuer: nova
   audience: nova-api
   jwk-set-uri: https://member.example.com/.well-known/jwks.json
+  # 필수(없으면 기동 실패 — JwtProperties @NotNull). 검증만 하는 서비스에서는 쓰이지 않지만 member 와 같은 값을 둔다
+  access-token-validity: 30m
+  refresh-token-validity: 14d
   # jwk-set-allow-http: true    # VPC 안 Cloud Map 주소(http://member.ureca.local:8080/…)를 쓰는 동안만 명시. 서비스 간 TLS 가 붙으면 지운다
