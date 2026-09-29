@@ -18,7 +18,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -28,7 +30,12 @@ import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-/** 만료 리프레시 행 정리 — 실제 MySQL. 주기 실행은 시험에서 꺼 두고 run() 을 직접 부른다. */
+/**
+ * 만료 리프레시 행 정리 — 실제 MySQL. 주기 실행은 시험에서 꺼 두고 run() 을 직접 부른다.
+ *
+ * 공유 DB 라 다른 시험의 행과 섞이지 않게, 정리 범위를 다루는 시험은 <b>먼 과거의 고정 시계</b>로 만든 정리 객체를 쓴다 — 기준 시각(지금 − 500일)
+ * 근처에 넣은 이 시험의 행만 대상이 된다. 회전과 함께 도는 시험(재사용 · 회전 · 잠금)만 앱의 정리 빈(실제 시계)을 쓴다.
+ */
 @MemberIntegrationTest
 @DisplayName("만료 리프레시 정리")
 class RefreshTokenCleanupTest {
@@ -43,21 +50,35 @@ class RefreshTokenCleanupTest {
 
     long customerId;
     Instant now;
+    Instant base;   // 이 시험의 행을 두는 먼 과거 — 다른 시험의 행은 이보다 훨씬 최근이다
 
     @BeforeEach
     void setUp() {
         customerId = customer();
         now = clock.instant().truncatedTo(ChronoUnit.SECONDS);
+        base = now.minus(Duration.ofDays(500)).minusSeconds(ThreadLocalRandom.current().nextInt(86_400));
+    }
+
+    /** 이 시험이 남긴 행을 지운다 — 먼 과거 행이 다음 시험의 고정 시계 범위에 걸려 개수 단언을 흔들지 않게. */
+    @AfterEach
+    void removeOwnRows() {
+        jdbc.update("DELETE FROM refresh_tokens WHERE customer_id = ?", customerId);
+    }
+
+    /** 고정 시계가 base + offset 을 가리키는 정리. cutoff 는 그 시각 − 액세스 유효기간이다. */
+    private RefreshTokenCleanup cleanupAt(Instant fixedNow, int batchSize, int maxBatches) {
+        return new RefreshTokenCleanup(rows, Clock.fixed(fixedNow, ZoneOffset.UTC), new RefreshTokenCleanup.Settings(batchSize, maxBatches), jwt);
     }
 
     @Test
     @DisplayName("만료된 뒤 액세스 유효기간(30분)이 지난 행만 지운다 — 유예 안의 만료 행 · 유효 행은 남는다")
     void deletesOnlyRowsPastTheGrace() {
-        long longExpired = row(now.minus(Duration.ofHours(1)));
-        long justExpired = row(now.minusSeconds(1));
-        long valid = row(now.plus(Duration.ofDays(1)));
+        Instant fixedNow = base.plus(Duration.ofDays(1));
+        long longExpired = row(fixedNow.minus(Duration.ofHours(1)));
+        long justExpired = row(fixedNow.minusSeconds(1));
+        long valid = row(fixedNow.plus(Duration.ofDays(1)));
 
-        assertThat(cleanup.run()).isGreaterThanOrEqualTo(1);
+        assertThat(cleanupAt(fixedNow, 1000, 1000).run()).isEqualTo(1);
 
         assertThat(exists(longExpired)).isFalse();
         assertThat(exists(justExpired)).as("유예(액세스 유효기간) 안 — 재사용 탐지에 아직 쓰인다").isTrue();
@@ -67,18 +88,15 @@ class RefreshTokenCleanupTest {
     @Test
     @DisplayName("경계는 정확히 만료 + 액세스 유효기간이다 — 그 순간 만료분까지 지우고 1초 늦은 것은 남긴다")
     void graceBoundaryIsExact() {
-        Instant fixedNow = now.plus(Duration.ofDays(400));   // 다른 시험의 행과 섞이지 않는 먼 미래
+        Instant fixedNow = base.plus(Duration.ofDays(1));
         Instant boundary = fixedNow.minus(jwt.accessTokenValidity());
         long atBoundary = row(boundary);
         long oneSecondLater = row(boundary.plusSeconds(1));
-        RefreshTokenCleanup fixed = new RefreshTokenCleanup(rows, Clock.fixed(fixedNow, ZoneOffset.UTC),
-                new RefreshTokenCleanup.Settings(1000, 1000), jwt);
 
-        fixed.run();
+        assertThat(cleanupAt(fixedNow, 1000, 1000).run()).isEqualTo(1);
 
         assertThat(exists(atBoundary)).isFalse();
         assertThat(exists(oneSecondLater)).isTrue();
-        jdbc.update("DELETE FROM refresh_tokens WHERE id = ?", oneSecondLater);   // 먼 미래 행을 남기지 않는다
     }
 
     @Test
@@ -102,12 +120,12 @@ class RefreshTokenCleanupTest {
     @DisplayName("묶음 크기 × 묶음 수가 한 번에 지우는 상한이다 — 남은 것은 다음 실행이 지운다")
     void boundedPerRun() {
         for (int i = 0; i < 5; i++) {
-            row(now.minus(Duration.ofDays(30)).plusSeconds(i));   // 이 시험의 만료 행이 가장 오래돼 먼저 지워진다
+            row(base.plusSeconds(i));
         }
-        RefreshTokenCleanup small = new RefreshTokenCleanup(rows, clock, new RefreshTokenCleanup.Settings(2, 2), jwt);
+        Instant fixedNow = base.plus(Duration.ofHours(1)).plus(jwt.accessTokenValidity());   // cutoff = base + 1시간 — 이 시험의 다섯 행만
 
-        assertThat(small.run()).as("2 × 2").isEqualTo(4);
-        assertThat(cleanup.run()).as("나머지").isGreaterThanOrEqualTo(1);
+        assertThat(cleanupAt(fixedNow, 2, 2).run()).as("2 × 2").isEqualTo(4);
+        assertThat(cleanupAt(fixedNow, 2, 2).run()).as("나머지").isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE customer_id = ?", Long.class, customerId)).isZero();
     }
 

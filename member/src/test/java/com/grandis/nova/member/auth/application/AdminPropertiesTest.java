@@ -57,6 +57,13 @@ class AdminPropertiesTest {
     }
 
     @Test
+    @DisplayName("본문이 bcrypt 문자(./A-Za-z0-9) 밖이면 길이 · cost 가 맞아도 기동이 실패한다")
+    void bodyOutsideBcryptAlphabetFailsStartup() {
+        runner.withPropertyValues("admin.password-hash=$2a$12$" + "!".repeat(53)).run(ctx -> assertThat(ctx).hasFailed());
+        runner.withPropertyValues("admin.password-hash=$2a$12$" + "./AZaz09".repeat(6) + "abcde").run(ctx -> assertThat(ctx).hasNotFailed());   // 대조군
+    }
+
+    @Test
     @DisplayName("cost 11 은 경계 바로 아래라 기동이 실패한다")
     void cost11FailsStartup() {
         runner.withPropertyValues("admin.password-hash=$2a$11$" + "x".repeat(53)).run(ctx -> assertThat(ctx).hasFailed());

@@ -24,7 +24,8 @@ public record AdminProperties(
         String passwordHash
 ) {
 
-    private static final Pattern BCRYPT_COST_12_TO_31 = Pattern.compile("^\\$2[aby]\\$(1[2-9]|2\\d|3[01])\\$.{53}$");
+    /** bcrypt 모양: 버전 · cost 12..31 · 본문 53자(bcrypt 의 base64 문자 `./A-Za-z0-9`). 본문이 그 밖이면 기동은 되고 로그인만 실패하던 설정을 여기서 막는다. */
+    private static final Pattern BCRYPT_COST_12_TO_31 = Pattern.compile("^\\$2[aby]\\$(1[2-9]|2\\d|3[01])\\$[./A-Za-z0-9]{53}$");
 
     public AdminProperties {
         if (passwordHash == null || !BCRYPT_COST_12_TO_31.matcher(passwordHash).matches()) {
