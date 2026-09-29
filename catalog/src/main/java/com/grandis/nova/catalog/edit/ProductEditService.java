@@ -4,6 +4,7 @@ import com.grandis.nova.catalog.CatalogErrorCode;
 import com.grandis.nova.catalog.detail.AdminProductDetail;
 import com.grandis.nova.catalog.detail.ProductDetailService;
 import com.grandis.nova.catalog.detail.ProductDetailView;
+import com.grandis.nova.catalog.image.ImageKind;
 import com.grandis.nova.catalog.image.ProductImageRepository;
 import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
 import com.grandis.nova.catalog.option.OptionCombination;
@@ -375,7 +376,12 @@ public class ProductEditService {
             throw e;
         }
         if (ProductOptionAxis.COLOR.equals(axisKey) && !before.equals(normalized)) {
-            images.renameGalleryBundle(product.getId(), before, normalized);
+            int moved = images.renameGalleryBundle(product.getId(), before, normalized);
+            // 조건부 UPDATE 의 결과를 본다. 0 행은 그 색상에 사진이 없을 때만 정상이다 — 옛 키로 남은 사진이 있으면 이름만 바뀌고 사진이
+            // 어느 색상에도 안 붙은 채 커밋되므로 트랜잭션을 실패시킨다. 상품 행 잠금 안이라 새 사진이 끼어들 수 없다
+            if (moved == 0 && images.countByProductIdAndKindAndBundleKey(product.getId(), ImageKind.GALLERY, before) > 0) {
+                throw new IllegalStateException("gallery bundle " + before + " was not moved to " + normalized);
+            }
         }
         reattributeOptionsUsing(product, value.getId());
     }

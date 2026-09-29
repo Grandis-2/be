@@ -18,4 +18,7 @@ public interface ProductImageRepository extends JpaRepository<ProductImage, Long
     @Modifying(flushAutomatically = true, clearAutomatically = false)
     @Query("update ProductImage i set i.bundleKey = :to where i.productId = :productId and i.kind = com.grandis.nova.catalog.image.ImageKind.GALLERY and i.bundleKey = :from")
     int renameGalleryBundle(@Param("productId") Long productId, @Param("from") String from, @Param("to") String to);
+
+    /** 옮긴 뒤 옛 키로 남은 사진이 있는가 — 옮긴 행이 0 일 때 "사진이 없던 색상" 과 "옮기지 못함" 을 가른다. */
+    long countByProductIdAndKindAndBundleKey(Long productId, ImageKind kind, String bundleKey);
 }

@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -61,6 +63,7 @@ class ProductEditRaceTest {
     Clock clock;
 
     @MockitoSpyBean ProductEditService editService;
+    @MockitoSpyBean com.grandis.nova.catalog.image.ProductImageRepository images;
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired PlatformTransactionManager transactionManager;
@@ -194,6 +197,26 @@ class ProductEditRaceTest {
         var error = JSON.readTree(body).get("error");
         assertThat(error.get("code").asString()).isEqualTo("STATE_CONFLICT");
         assertThat(error.get("details").get("retryable").asBoolean()).isTrue();
+    }
+
+    @Test
+    @DisplayName("색상 이름을 바꿨는데 사진 묶음이 옮겨지지 않으면(갱신 0행 + 옛 키 사진 남음) 트랜잭션을 실패시킨다 — 이름만 바뀐 채 커밋되지 않는다")
+    void galleryMoveThatMissesRowsFailsTheRename() throws Exception {
+        long productId = register("""
+                { "categoryId": %d, "saleMode": "IN_STOCK", "title": "Race", "visible": false, "basePrice": 1000,
+                  "optionAxes": [ { "key": "color", "label": "색상", "values": [ { "value": "블랙" } ] } ],
+                  "combinations": [ { "selections": { "color": "블랙" }, "stock": 1 } ],
+                  "images": { "gallery": [ { "color": "블랙", "items": [ { "url": "https://img/b.jpg" } ] } ] } }
+                """.formatted(categoryId));
+        long black = jdbcTemplate.queryForObject("""
+                SELECT v.id FROM product_option_values v JOIN product_option_axes a ON a.id = v.axis_id WHERE a.product_id = ?
+                """, Long.class, productId);
+        doReturn(0).when(images).renameGalleryBundle(anyLong(), anyString(), anyString());
+
+        assertThatThrownBy(() -> editService.editOptionValue(productId, black, new OptionValueEditRequest("Black", null)))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(jdbcTemplate.queryForObject("SELECT normalized_value FROM product_option_values WHERE id = ?", String.class, black))
+                .as("이름 변경도 되돌려졌다").isEqualTo("블랙");
     }
 
     @Test
