@@ -2,6 +2,9 @@ package com.grandis.nova.catalog.edit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doThrow;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -20,6 +23,7 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -34,7 +38,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.test.context.bean.override.convention.TestBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -54,7 +60,7 @@ class ProductEditRaceTest {
     @TestBean(name = "storageClock", methodName = "controllableClock")
     Clock clock;
 
-    @Autowired ProductEditService editService;
+    @MockitoSpyBean ProductEditService editService;
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired PlatformTransactionManager transactionManager;
@@ -147,21 +153,47 @@ class ProductEditRaceTest {
             awaitBlockedOrDone(edit);
             insertA.countDown();   // 장바구니가 A 를 기다린다 → 교착
             String body = edit.get(60, TimeUnit.SECONDS).getResponse().getContentAsString();
-            // 희생자는 InnoDB 가 고른다. MySQL 8.4 에서 이 모양은 수정 쪽이 희생된다(작성자 1/1, 리뷰어 6/6 실측 — 수정은 옵션 하나를
-            // 고친 채 기다리고, 장바구니는 교착을 만든 두 번째 INSERT 전이라 가볍지 않다). 갈래를 나눠 받아 주지 않는다 — 희생자 선택이 바뀌면
-            // 이 시험이 크게 깨져 매핑을 다른 방법(희생자 고정)으로 다시 태우게 한다
-            assertThat(edit.get().getResponse().getStatus()).as(body).isEqualTo(409);
-            var error = JSON.readTree(body).get("error");
-            assertThat(error.get("code").asString()).isEqualTo("STATE_CONFLICT");
-            assertThat(error.get("details").get("retryable").asBoolean()).isTrue();
-            cart.get(60, TimeUnit.SECONDS);   // 장바구니는 살아남아 두 행을 커밋했다 — 교착이 실제로 났고 수정만 되돌려졌다
-            assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM cart_items WHERE customer_id = ?", Long.class, customerId)).isEqualTo(2L);
-            assertThat(price(productId, "256GB")).as("수정은 통째로 되돌려졌다").isEqualByComparingTo("1000000");
-            assertThat(price(productId, "512GB")).isEqualByComparingTo("1200000");
+            int statusCode = edit.get().getResponse().getStatus();
+            Throwable cartFailure = null;
+            try {
+                cart.get(60, TimeUnit.SECONDS);
+            } catch (ExecutionException e) {
+                cartFailure = e.getCause();
+            }
+            // 희생자는 InnoDB 가 고른다(MySQL 8.4 에서는 수정 쪽이 희생됐다 — 작성자 1/1 · 리뷰어 6/6). 어느 쪽이든 교착이 실제로 났고
+            // 500 이 아니며 남은 상태가 일관되는지를 본다. 409 매핑 자체는 아래 mappingOfLockFailure 가 희생자와 무관하게 결정적으로 시험한다
+            assertThat(statusCode).as(body).isIn(200, 409);
+            if (statusCode == 409) {
+                var error = JSON.readTree(body).get("error");
+                assertThat(error.get("code").asString()).isEqualTo("STATE_CONFLICT");
+                assertThat(error.get("details").get("retryable").asBoolean()).isTrue();
+                assertThat(cartFailure).as("수정이 희생됐으면 장바구니는 살아남는다").isNull();
+                assertThat(price(productId, "256GB")).as("수정은 통째로 되돌려졌다").isEqualByComparingTo("1000000");
+            } else {
+                assertThat(cartFailure).as("수정이 성공했으면 장바구니가 교착 희생자다 — 교착 없이 지나간 실행을 통과시키지 않는다")
+                        .isNotNull();
+                assertThat(rootMessage(cartFailure)).containsIgnoringCase("deadlock");
+                assertThat(price(productId, "256GB")).isEqualByComparingTo("1100000");
+            }
         } finally {
             insertA.countDown();
             pool.shutdownNow();
         }
+    }
+
+    @Test
+    @DisplayName("수정이 잠금 실패(교착 희생 · 잠금 대기 초과)로 끝나면 409 STATE_CONFLICT · retryable — 희생자 선택과 무관하게 매핑만 본다")
+    void mappingOfLockFailure() throws Exception {
+        long productId = registerInStock();
+        doThrow(new CannotAcquireLockException("Deadlock found when trying to get lock"))
+                .when(editService).editProduct(anyLong(), any());
+
+        String body = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch("/api/v1/admin/products/{id}", productId)
+                        .contentType(MediaType.APPLICATION_JSON).with(user("admin").roles("ADMIN")).content("{ \"basePrice\": 1100000 }"))
+                .andExpect(status().isConflict()).andReturn().getResponse().getContentAsString();
+        var error = JSON.readTree(body).get("error");
+        assertThat(error.get("code").asString()).isEqualTo("STATE_CONFLICT");
+        assertThat(error.get("details").get("retryable").asBoolean()).isTrue();
     }
 
     @Test
@@ -239,6 +271,14 @@ class ProductEditRaceTest {
             releaseFirst.countDown();
             pool.shutdownNow();
         }
+    }
+
+    private static String rootMessage(Throwable e) {
+        Throwable root = e;
+        while (root.getCause() != null) {
+            root = root.getCause();
+        }
+        return String.valueOf(root.getMessage());
     }
 
     private long optionId(long productId, String title) {
