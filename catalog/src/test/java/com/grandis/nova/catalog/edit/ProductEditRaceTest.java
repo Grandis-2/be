@@ -147,23 +147,17 @@ class ProductEditRaceTest {
             awaitBlockedOrDone(edit);
             insertA.countDown();   // 장바구니가 A 를 기다린다 → 교착
             String body = edit.get(60, TimeUnit.SECONDS).getResponse().getContentAsString();
-            int statusCode = edit.get().getResponse().getStatus();
-            try {
-                cart.get(60, TimeUnit.SECONDS);
-            } catch (java.util.concurrent.ExecutionException ignored) {
-                // 장바구니 쪽이 희생자로 골렸으면 여기로 온다 — 그때는 수정이 성공한다
-            }
-            assertThat(statusCode).as(body).isNotEqualTo(500);
-            if (statusCode == 409) {
-                var error = JSON.readTree(body).get("error");
-                assertThat(error.get("code").asString()).isEqualTo("STATE_CONFLICT");
-                assertThat(error.get("details").get("retryable").asBoolean()).isTrue();
-                assertThat(price(productId, "256GB")).as("되돌려졌다").isEqualByComparingTo("1000000");
-            } else {
-                assertThat(statusCode).isEqualTo(200);
-                assertThat(price(productId, "256GB")).isEqualByComparingTo("1100000");
-            }
-            victims.add(statusCode);
+            // 희생자는 InnoDB 가 고른다. MySQL 8.4 에서 이 모양은 수정 쪽이 희생된다(작성자 1/1, 리뷰어 6/6 실측 — 수정은 옵션 하나를
+            // 고친 채 기다리고, 장바구니는 교착을 만든 두 번째 INSERT 전이라 가볍지 않다). 갈래를 나눠 받아 주지 않는다 — 희생자 선택이 바뀌면
+            // 이 시험이 크게 깨져 매핑을 다른 방법(희생자 고정)으로 다시 태우게 한다
+            assertThat(edit.get().getResponse().getStatus()).as(body).isEqualTo(409);
+            var error = JSON.readTree(body).get("error");
+            assertThat(error.get("code").asString()).isEqualTo("STATE_CONFLICT");
+            assertThat(error.get("details").get("retryable").asBoolean()).isTrue();
+            cart.get(60, TimeUnit.SECONDS);   // 장바구니는 살아남아 두 행을 커밋했다 — 교착이 실제로 났고 수정만 되돌려졌다
+            assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM cart_items WHERE customer_id = ?", Long.class, customerId)).isEqualTo(2L);
+            assertThat(price(productId, "256GB")).as("수정은 통째로 되돌려졌다").isEqualByComparingTo("1000000");
+            assertThat(price(productId, "512GB")).isEqualByComparingTo("1200000");
         } finally {
             insertA.countDown();
             pool.shutdownNow();
@@ -219,14 +213,6 @@ class ProductEditRaceTest {
     }
 
     // ── 도우미 ─────────────────────────────────────────────────────────────
-
-    /** 교착 시험에서 어느 쪽이 희생됐는지(409 = 수정, 200 = 장바구니). 로그로 남겨 매핑 갈래를 실제로 탔는지 본다. */
-    private static final java.util.List<Integer> victims = new java.util.concurrent.CopyOnWriteArrayList<>();
-
-    @org.junit.jupiter.api.AfterAll
-    static void reportVictims() {
-        System.out.println("DEADLOCK-EDIT-STATUS " + victims);
-    }
 
     /**
      * 첫 수정을 바깥 트랜잭션에 합류시켜 커밋 직전에 붙잡고, 그동안 둘째 수정을 시작한다. 둘째가 DB 에서 기다리거나(잠금) 끝나면(잠금이 없는
