@@ -234,7 +234,7 @@ class AdminProductEditApiTest {
         }
 
         @Test
-        @DisplayName("옵션 수정 — 가격은 수동 고정, 상태는 판매 중지 · 재개. 다른 상품의 옵션 404, 빈 본문 400. 사전예약 오픈 뒤 가격은 409 지만 상태는 된다")
+        @DisplayName("옵션 수정 — 가격은 수동 고정, 상태는 판매 중지 · 재개. 다른 상품의 옵션 404, 빈 본문 400. 사전예약은 오픈 3분 전부터 가격 · 되돌리기 · 판매 상태 전부 409")
         void editVariantPriceAndStatus() throws Exception {
             long productId = registerInStock();
             long variantId = variantIdOf(productId, "블랙 / 256GB");
@@ -267,7 +267,14 @@ class AdminProductEditApiTest {
             fixtures.campaign(preorder, now.minus(HOUR), now.plus(HOUR));
             editVariant(preorder, preorderVariant, "{ \"price\": 1 }").andExpect(status().isConflict());
             editVariant(preorder, preorderVariant, "{ \"resetPrice\": true }").andExpect(status().isConflict());
-            editVariant(preorder, preorderVariant, "{ \"status\": \"PAUSED\" }").andExpect(status().isOk());
+            editVariant(preorder, preorderVariant, "{ \"status\": \"PAUSED\" }")
+                    .andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"));
+            assertThat(jdbcTemplate.queryForObject("SELECT status FROM product_options WHERE id = ?", String.class, preorderVariant))
+                    .as("오픈 뒤 판매 중지는 막혀 판매 상태 그대로").isEqualTo("ACTIVE");
+            long notOpened = registerPreorder();
+            long notOpenedVariant = variantIdOf(notOpened, "블랙 / 256GB");
+            fixtures.campaign(notOpened, now.plus(HOUR), now.plus(HOUR.multipliedBy(2)));
+            editVariant(notOpened, notOpenedVariant, "{ \"status\": \"PAUSED\" }").andExpect(status().isOk());   // 대조군 — 잠금 전에는 된다
             mockMvc.perform(admin(post(PATH + "/{id}/option-values", preorder)).content("{ \"axisKey\": \"color\", \"value\": \"레드\" }"))
                     .andExpect(status().isConflict());
             long storage512 = valueIdOf(preorder, "storage", "512GB");

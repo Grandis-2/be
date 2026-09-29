@@ -133,7 +133,7 @@ public class AdminProductController {
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(variant));
     }
 
-    /** 옵션의 수동 가격 · 판매 상태. 가격은 사전예약 오픈 뒤 409, 상태는 언제나. */
+    /** 옵션의 수동 가격 · 가격 되돌리기 · 판매 상태. 사전예약은 오픈 3분 전부터 전부 409. */
     @PatchMapping("/{productId}/variants/{variantId}")
     public ApiResponse<ProductDetailView.Variant> editVariant(@PathVariable Long productId, @PathVariable Long variantId,
                                                              @RequestBody String body) {

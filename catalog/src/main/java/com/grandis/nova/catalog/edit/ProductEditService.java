@@ -41,8 +41,9 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 관리자 상품 수정 — 표시 정보 · 기본 가격 · 보증, 옵션 값 추가 · 수정, 옵션(조합) 추가 · 수정. 설계 §2.1 · §2.1.1.
  *
- * <p><b>사전예약은 오픈 3분 전부터 기준정보를 못 바꾼다.</b> 표시 정보 · 가격 · 추가금 · 값 · 조합 추가 · 가격 되돌리기 전부 409 STATE_CONFLICT.
- * 옵션의 판매 중지 · 재개만 열려 있다(기준정보가 아니라 운영 명령). 판정은 preorder 의 회차(opens_at − 3분 ≤ 지금)로 하고, 회차가 없으면
+ * <p><b>사전예약은 오픈 3분 전부터 아무것도 못 바꾼다.</b> 표시 정보 · 가격 · 추가금 · 값 · 조합 추가 · 가격 되돌리기 · 옵션 판매 상태 전부
+ * 409 STATE_CONFLICT(2026-09-29 결정 — 판매 상태도 막는다. preorder 는 접수용 상품 사본을 1분마다 새로 받아, 오픈 뒤 판매 중지는 접수에
+ * 늦게 닿는다. 3분 전에 막으면 오픈 때 preorder 사본은 이미 최종 상태다). 판정은 preorder 의 회차(opens_at − 3분 ≤ 지금)로 하고, 회차가 없으면
  * (등록 ② 전) 아직 잠기지 않았다.
  *
  * <p><b>재계산.</b> 기본 가격 · 추가금이 바뀌면 그 값을 고른 옵션 중 수동 가격이 아닌 것만 `기본가 + Σ추가금` 으로 다시 계산한다. 관리자가 직접 고친
@@ -270,28 +271,24 @@ public class ProductEditService {
                 throw ValidationFailures.of("resetPrice", "수동 가격 지정과 자동 계산 되돌리기는 함께 보낼 수 없습니다.");
             }
         }
-        Product product = lockProduct(productId);
+        Product product = requireEditable(productId);   // 판매 상태도 사전예약 오픈 3분 전부터는 못 바꾼다
         ProductOption option = options.findById(variantId)
                 .filter(o -> o.getProductId().equals(productId))
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
         if (request.price() != null) {
-            requireNotOpened(product);   // 가격은 기준정보 — 사전예약 오픈 뒤 금지
             option.overridePrice(request.price());
         }
         if (request.resets()) {
-            requireNotOpened(product);   // 되돌리기도 가격 변경이다
             List<Long> valueIds = selectionsByOption(productId).getOrDefault(variantId, List.of());
             Map<Long, ProductOptionValue> valueById = valuesOf(productId);
             option.resetToComputed(computedPrice(product, valueIds.stream().map(valueById::get).toList()));
         }
         if (request.status() != null) {
-            option.changeStatus(request.status());   // 판매 중지 · 재개는 오픈 뒤에도 된다
+            option.changeStatus(request.status());
         }
         options.flush();
         ProductDetailView.Variant edited = variantOf(productId, variantId);
-        if (request.price() != null || request.resets()) {
-            requireNotOpenedAtCommit(product);
-        }
+        requireNotOpenedAtCommit(product);
         return edited;
     }
 
