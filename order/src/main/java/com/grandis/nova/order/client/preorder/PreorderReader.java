@@ -4,7 +4,7 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.web.ApiResponse;
-import com.grandis.nova.order.client.InternalCallFailures;
+import com.grandis.nova.common.web.client.InternalCallFailures;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
