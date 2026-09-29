@@ -40,7 +40,9 @@ import org.springframework.context.annotation.Import;
         "auth.cookie.secure=false",
         // 기본값(60s)으로는 Redis 가 죽은 갈래가 시험을 멈춰 세운다. 예시 설정과 같은 값으로 빨리 실패시킨다.
         "spring.data.redis.timeout=300ms",
-        "spring.data.redis.connect-timeout=200ms"
+        "spring.data.redis.connect-timeout=200ms",
+        // 주기 정리는 끈다 — 시험이 넣은 만료 행을 도중에 지워 결과가 흔들리지 않게. 정리 시험은 run() 을 직접 부른다
+        "member.refresh-cleanup.cron=-"
 })
 @Import(MemberTestContext.class)
 public @interface MemberIntegrationTest {
