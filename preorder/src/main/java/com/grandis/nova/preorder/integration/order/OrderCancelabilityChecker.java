@@ -3,6 +3,8 @@ package com.grandis.nova.preorder.integration.order;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.preorder.PreorderErrorCode;
+import com.grandis.nova.preorder.integration.Dependencies;
+import com.grandis.nova.preorder.integration.DependencyGuard;
 import com.grandis.nova.preorder.integration.InternalCallFailures;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
@@ -22,12 +24,14 @@ import java.util.Map;
 @Component
 public class OrderCancelabilityChecker {
 
-    static final String DEPENDENCY = "order";
+    static final String DEPENDENCY = Dependencies.ORDER;
 
     private final OrderClient orderClient;
+    private final DependencyGuard dependencyGuard;
 
-    public OrderCancelabilityChecker(OrderClient orderClient) {
+    public OrderCancelabilityChecker(OrderClient orderClient, DependencyGuard dependencyGuard) {
         this.orderClient = orderClient;
+        this.dependencyGuard = dependencyGuard;
     }
 
     /** @throws BusinessException 배송이 시작됐으면 PREORDER_NOT_CANCELABLE */
@@ -42,7 +46,8 @@ public class OrderCancelabilityChecker {
     private Cancelability fetch(String preorderToken, String sessionToken) {
         Cancelability answer;
         try {
-            answer = orderClient.getCancelability(preorderToken, sessionToken).data();
+            answer = dependencyGuard.call(DEPENDENCY, () -> orderClient.getCancelability(preorderToken, sessionToken))
+                    .data();
         } catch (HttpClientErrorException e) {
             if (e.getStatusCode().isSameCodeAs(HttpStatus.UNAUTHORIZED)) {
                 throw new BusinessException(CommonErrorCode.UNAUTHENTICATED);
