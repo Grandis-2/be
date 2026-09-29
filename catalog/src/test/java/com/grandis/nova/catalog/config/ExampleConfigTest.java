@@ -16,10 +16,10 @@ import org.springframework.boot.context.properties.bind.BindException;
 import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.bind.validation.ValidationBindHandler;
+import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
 import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.boot.validation.MessageInterpolatorFactory;
 import org.springframework.core.env.PropertySource;
-import org.springframework.core.env.StandardEnvironment;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
@@ -86,11 +86,10 @@ class ExampleConfigTest {
     private static JwtProperties bindJwt(Resource resource) throws IOException {
         List<PropertySource<?>> sources = new YamlPropertySourceLoader().load("yaml", resource);
         assertThat(sources).isNotEmpty();
-        StandardEnvironment environment = new StandardEnvironment();
-        sources.forEach(environment.getPropertySources()::addLast);
         Validator validator = Validation.byDefaultProvider().configure()
                 .messageInterpolator(new MessageInterpolatorFactory().getObject()).buildValidatorFactory().getValidator();
-        return Binder.get(environment)
+        // YAML 만 본다 — StandardEnvironment 를 쓰면 시스템 속성 · 환경 변수(JWT_REFRESH_TOKEN_VALIDITY 같은)가 빠진 칸을 채워 준다(CodeRabbit 지적)
+        return new Binder(ConfigurationPropertySources.from(sources))
                 .bind("jwt", Bindable.of(JwtProperties.class), new ValidationBindHandler(new SpringValidatorAdapter(validator)))
                 .get();
     }
