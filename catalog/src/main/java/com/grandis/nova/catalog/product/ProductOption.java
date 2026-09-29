@@ -14,6 +14,7 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
+import java.util.Objects;
 
 /**
  * 옵션 = 축마다 값 하나를 고른 조합(예: 블랙 / 256GB). 어느 값을 골랐는지는 product_option_selections 가 갖는다.
@@ -85,6 +86,42 @@ public class ProductOption extends BaseEntity {
     public static ProductOption of(String sku, BigDecimal price, boolean priceOverridden, OptionCombination combination) {
         return new ProductOption(combination.getProductId(), sku, combination.title(), price, priceOverridden,
                 combination.filterAttributes(), combination.displayAttributes(), combination.combinationKey());
+    }
+
+    /** 관리자가 직접 고친 가격. 이후 기본 가격 · 추가금이 바뀌어도 재계산에서 빠진다(설계 §2.1). */
+    public void overridePrice(BigDecimal price) {
+        this.price = Amounts.requireWholeWon(price, "price");
+        this.priceOverridden = true;
+    }
+
+    /** 재계산 결과. 수동 가격이면 무시한다 — 호출자가 가르지 않아도 여기서 지킨다. */
+    public void recomputePrice(BigDecimal computed) {
+        if (!priceOverridden) {
+            this.price = Amounts.requireWholeWon(computed, "price");
+        }
+    }
+
+    /** 수동 가격을 풀고 계산 가격으로 돌아간다. 이후 기본 가격 · 추가금이 바뀌면 다시 재계산에 들어간다. */
+    public void resetToComputed(BigDecimal computed) {
+        this.price = Amounts.requireWholeWon(computed, "price");
+        this.priceOverridden = false;
+    }
+
+    /** 판매 중지 · 재개. 옵션 단위 상태라 상품 상태와 별개다. 기존 주문에는 손대지 않는다. */
+    public void changeStatus(SaleStatus status) {
+        this.status = Objects.requireNonNull(status, "status");
+    }
+
+    /** 값 표시명이 바뀌면 조합 표시명도 따라간다. 규칙은 {@link OptionCombination#titleOf} 하나다. */
+    public void retitle(String title) {
+        this.title = Objects.requireNonNull(title, "title");
+    }
+
+    /** 값 이름이 바뀌었을 때 — 표시명 · 필터 속성 · 표시 속성을 같은 조합에서 다시 만든다(따로 고치면 어긋난다). sku · 조합 키는 그대로. */
+    public void reattribute(OptionCombination combination) {
+        this.title = combination.title();
+        this.filterAttributes = combination.filterAttributes();
+        this.displayAttributes = combination.displayAttributes();
     }
 
     public Long getId() {

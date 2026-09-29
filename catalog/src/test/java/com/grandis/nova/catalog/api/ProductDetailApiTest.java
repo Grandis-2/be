@@ -23,7 +23,6 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -207,8 +206,8 @@ class ProductDetailApiTest {
     class Visibility {
 
         @Test
-        @DisplayName("비공개 · 미완료는 회원에게 404 NOT_FOUND 이고 관리자는 미리보기(visible=false)")
-        void hiddenIsNotFoundExceptForAdmin() throws Exception {
+        @DisplayName("비공개 · 미완료는 누구에게나 404 NOT_FOUND — 관리자도. 미리보기는 관리자 상세로(2026-09-29 결정)")
+        void hiddenIsNotFoundForEveryone() throws Exception {
             Long hidden = visibleInStock();
             jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", hidden);
             Long incomplete = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "미완료", null);
@@ -218,11 +217,9 @@ class ProductDetailApiTest {
                 anonymous(productId).andExpect(status().isNotFound()).andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
                 mockMvc.perform(get("/api/v1/products/{id}", productId).with(user("657").roles("USER")))
                         .andExpect(status().isNotFound());
-                ResultActions preview = mockMvc.perform(get("/api/v1/products/{id}", productId).with(user("admin").roles("ADMIN")))
-                        .andExpect(status().isOk())
-                        // 호출자에 따라 다른 응답이 공유 캐시에 남으면 비공개 상품이 샌다
-                        .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")));
-                assertThat(data(preview).get("visible").asBoolean()).isFalse();
+                // 관리자 토큰도 404 — 공개 경로는 폐기 조회 실패에 열리는 경로라 여기서 관리자를 더 믿지 않는다
+                mockMvc.perform(get("/api/v1/products/{id}", productId).with(user("admin").roles("ADMIN")))
+                        .andExpect(status().isNotFound());
             }
         }
 
@@ -282,7 +279,7 @@ class ProductDetailApiTest {
             mockMvc.perform(get("/api/v1/products/{p}/variants/{v}", hidden, hiddenOption))
                     .andExpect(status().isNotFound());
             mockMvc.perform(get("/api/v1/products/{p}/variants/{v}", hidden, hiddenOption).with(user("admin").roles("ADMIN")))
-                    .andExpect(status().isOk());
+                    .andExpect(status().isNotFound());
         }
     }
 

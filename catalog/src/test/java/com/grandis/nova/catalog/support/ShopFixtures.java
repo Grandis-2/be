@@ -87,6 +87,11 @@ public class ShopFixtures {
                 """, productId, utc(opensAt), utc(closesAt));
     }
 
+    /** preorder 소유 표. preorder 가 회차 오픈 시각을 옮기는 것을 흉내 낸다(시험 데이터). */
+    public void moveCampaignOpensAt(Long productId, Instant opensAt) {
+        jdbcTemplate.update("UPDATE preorder_campaigns SET opens_at = ? WHERE product_id = ?", utc(opensAt), productId);
+    }
+
     /** order 소유 표. 가용 = total - reserved - sold. */
     public void inventory(Long optionId, int total, int reserved, int sold) {
         jdbcTemplate.update("""

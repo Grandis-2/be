@@ -5,7 +5,6 @@ import com.grandis.nova.catalog.detail.ProductDetailView;
 import com.grandis.nova.catalog.listing.ProductListFilter;
 import com.grandis.nova.catalog.listing.ProductListItem;
 import com.grandis.nova.catalog.listing.ProductListingService;
-import com.grandis.nova.catalog.web.Viewers;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.common.web.ApiResponse;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,7 +18,7 @@ import java.util.List;
 /**
  * 상품 목록 · 검색 · 상세 공개 조회. 로그인 없이 볼 수 있다.
  * color · storage 는 같은 이름을 반복해 여러 값을 준다(?color=블랙&color=화이트). 정렬은 productId 내림차순 고정.
- * 상세는 비공개 · 미완료 상품이면 회원에게 404, 관리자에게는 미리보기다.
+ * 상세는 비공개 · 미완료 상품이면 누구에게나 404 — 관리자 미리보기는 없다(관리자는 /api/v1/admin/products/{id}).
  */
 @RestController
 @RequestMapping("/api/v1/products")
@@ -35,12 +34,12 @@ public class ProductController {
 
     @GetMapping("/{productId}")
     public ApiResponse<ProductDetailView> product(@PathVariable Long productId) {
-        return ApiResponse.ok(detailService.findProduct(productId, Viewers.isAdmin()));
+        return ApiResponse.ok(detailService.findProduct(productId));
     }
 
     @GetMapping("/{productId}/variants/{variantId}")
     public ApiResponse<ProductDetailView.Variant> variant(@PathVariable Long productId, @PathVariable Long variantId) {
-        return ApiResponse.ok(detailService.findVariant(productId, variantId, Viewers.isAdmin()));
+        return ApiResponse.ok(detailService.findVariant(productId, variantId));
     }
 
     @GetMapping

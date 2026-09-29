@@ -40,10 +40,10 @@ import java.util.regex.Pattern;
 public class ProductRegistrationValidator {
 
     static final int MAX_GALLERY_IMAGES_PER_BUNDLE = 10;
-    static final int MAX_SKU_LENGTH = 80;
-    static final int MAX_OPTION_TITLE_LENGTH = 120;
-    static final String STANDALONE_SKU = "STD";
-    private static final Pattern STORAGE = Pattern.compile("\\d+(MB|GB|TB)");
+    public static final int MAX_SKU_LENGTH = 80;
+    public static final int MAX_OPTION_TITLE_LENGTH = 120;
+    public static final String STANDALONE_SKU = "STD";
+    public static final Pattern STORAGE = Pattern.compile("\\d+(MB|GB|TB)");
     private static final Pattern COMBINING_MARKS = Pattern.compile("\\p{M}+");
 
     /** 정규화가 끝난 축. values 는 입력 순, key → normalizedValue. */
@@ -83,7 +83,7 @@ public class ProductRegistrationValidator {
      * 안 갈라져 여기서 못 잡는다. 그런 드문 중복은 DB 의 UNIQUE 가 최종 판정하고 서비스가 1062 를 400 으로 돌린다
      * ({@code ProductRegistrationService#saveOrReject}). 이 키는 대부분을 정확한 칸 이름으로 먼저 거르는 1차 그물이다.
      */
-    static String collationKey(String text) {
+    public static String collationKey(String text) {
         String compatible = Normalizer.normalize(text, Normalizer.Form.NFKD);
         return COMBINING_MARKS.matcher(compatible).replaceAll("").toLowerCase(Locale.ROOT);
     }
@@ -372,7 +372,8 @@ public class ProductRegistrationValidator {
         return withDefault;
     }
 
-    private static BigDecimal requireWholeWon(BigDecimal amount, String field) {
+    /** 0 이상의 정수 원 — 아니면 그 칸의 400. 소수는 decimal(12,0) 칼럼이 조용히 반올림하므로 여기서 거절한다. 수정 API 도 같은 판정을 쓴다. */
+    public static BigDecimal requireWholeWon(BigDecimal amount, String field) {
         if (amount == null || amount.signum() < 0 || amount.stripTrailingZeros().scale() > 0) {
             throw ValidationFailures.of(field, "0 이상의 정수 원이어야 합니다.");
         }

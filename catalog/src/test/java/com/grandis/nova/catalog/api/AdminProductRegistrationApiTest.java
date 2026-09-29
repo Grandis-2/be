@@ -307,6 +307,12 @@ class AdminProductRegistrationApiTest {
                     "basePrice");
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("").replace("\"title\": \"Nova 1\"", "\"title\": \"\"")),
                     "title");
+            // 형식이 틀린 값은 그 칸 이름으로 — 본문 전체(body)가 아니다
+            expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("").replace("\"basePrice\": 1000000", "\"basePrice\": \"abc\"")),
+                    "basePrice");
+            // 같은 키가 두 번이면 뒤의 것이 조용히 이기지 않는다
+            expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("").replace("\"title\": \"Nova 1\"", "\"title\": \"Nova 1\", \"title\": \"Nova 2\"")),
+                    "body");
         }
 
         @Test
