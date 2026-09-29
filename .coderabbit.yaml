@@ -80,6 +80,8 @@ reviews:
         # 반드시 지적할 것 (정확성)
         - 사용자 요청을 처리하는 경로(@RestController → @Service)에서 외부 HTTP 호출을 기다리는 코드.
           외부 호출은 워커가 한다.
+          예외(내부 서비스 동기 호출): catalog 상품 조회(캐시 미스일 때만) · order 취소 사전 확인.
+          둘 다 타임아웃 · 서킷 브레이커 · 동시 호출 상한(DependencyGuard)을 거쳐야 하고, 거치지 않으면 지적한다.
         - @Transactional 범위 안의 HTTP 호출 · SQS 전송 · Thread.sleep · 외부 락 대기.
           DB 잠금을 외부 응답 시간만큼 붙잡는다.
         - 조건부 UPDATE 의 결과(영향 행 수)를 확인하지 않고 성공으로 간주하는 코드.
