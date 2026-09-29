@@ -173,7 +173,10 @@ class ObservabilityTest {
                 .andExpect(content().string(containsString("preorder_accept_seconds")))
                 .andExpect(content().string(containsString("preorder_campaign_lock_wait_seconds_bucket")))
                 .andExpect(content().string(containsString("preorder_status_count")))
-                .andExpect(content().string(containsString("hikaricp_connections_pending")));
+                .andExpect(content().string(containsString("hikaricp_connections_pending")))
+                .andExpect(content().string(containsString("resilience4j_circuitbreaker_state")))
+                .andExpect(content().string(containsString("resilience4j_retry_calls")))
+                .andExpect(content().string(containsString("resilience4j_bulkhead_available_concurrent_calls")));
     }
 
     private long timerCount(String name, String tag, String value) {
