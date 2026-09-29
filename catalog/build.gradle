@@ -3,6 +3,8 @@ apply plugin: 'org.springframework.boot'
 dependencies {
     implementation project(':common:types')
     implementation project(':common:web')
+    // 액세스 토큰 검증(JWKS · Bearer) · 401/403 봉투 · 폐기 조회(common:redis 가 따라온다)
+    implementation project(':common:security')
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-security'

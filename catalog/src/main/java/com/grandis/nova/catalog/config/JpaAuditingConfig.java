@@ -2,6 +2,7 @@ package com.grandis.nova.catalog.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.data.auditing.DateTimeProvider;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 
@@ -16,9 +17,9 @@ import java.util.Optional;
  * Auditing 시각도 {@link Clock} 에서 가져온다. 등록 단계 완료 시각 · 리스 만료처럼 코드가 직접 찍는 시각과
  * 같은 시계를 써야 한 트랜잭션 안의 시각들이 서로 어긋나지 않는다.
  *
- * common:security 도입 시: 그쪽 JwtConfiguration 이 조건 없이 같은 이름의 clock() 빈을 정의해 기동이 실패한다(order 선례).
- * 이 시계(마이크로초로 내린 {@link #atStorageResolution})는 유지해야 한다 — common 의 시계를 이것으로 바꾸거나
- * 여기 빈 이름을 바꾸고 @Primary 를 단다.
+ * common:security 의 JwtConfiguration 도 조건 없이 {@code clock} 이라는 이름의 빈을 둔다(실측: 같은 이름이면 기동 실패). 그래서 이 시계는
+ * 이름을 달리하고 {@code @Primary} 로 둔다 — {@link Clock} 을 타입으로 주입받는 모든 자리(등록 · 목록 · 상세 · Auditing · JWT 파싱)가
+ * 마이크로초로 내린 이 시계를 쓴다. JWT 의 iat · exp 는 초 단위라 내림의 영향이 없다.
  */
 @Configuration(proxyBeanMethods = false)
 @EnableJpaAuditing(dateTimeProviderRef = "auditingDateTimeProvider")
@@ -28,7 +29,8 @@ public class JpaAuditingConfig {
     static final Duration STORAGE_RESOLUTION = Duration.ofNanos(1_000);
 
     @Bean
-    Clock clock() {
+    @Primary
+    Clock storageClock() {
         return atStorageResolution(Clock.systemUTC());
     }
 

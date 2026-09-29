@@ -50,3 +50,9 @@ jwt:
   audience: nova-api
   jwk-set-uri: https://member.example.com/.well-known/jwks.json
   # jwk-set-allow-http: true    # VPC 안 Cloud Map 주소(http://member.ureca.local:8080/…)를 쓰는 동안만 명시. 서비스 간 TLS 가 붙으면 지운다
+  # 발급하지 않지만 필수 값이다(없으면 기동 실패 — 실측: 없으면 @NotNull 에서 바인딩 거부). member 와 같게 둔다
+  access-token-validity: 30m
+  refresh-token-validity: 14d
+
+# 폐기 조회 실패 때 닫는 경로는 공통 기본값(/api/v1/admin/** · /api/v1/session/refresh · /api/v1/me/**)을 쓴다 — catalog 의 보호 경로는 관리자뿐이다.
+# auth.revocation-check.fail-closed-paths 를 여기 적으면 그 목록이 기본값을 대체한다(빈 목록은 기본값).

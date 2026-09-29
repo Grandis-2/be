@@ -13,9 +13,9 @@
 | 관리자 등록 흐름 ② (`PUT /admin/products/{id}/preorder-campaign` 등) | preorder `PreorderCampaignAdminService.requirePreorderProduct` | 관리자(ADMIN) | 회차를 붙일 상품이 사전예약 상품인지 확인 |
 | 사용자 접수 (`PreorderAcceptTransaction`) | preorder `CatalogReader`(캐시 경유) | 회원(USER) | 접수 가능 여부 판정과 옵션 스냅샷 복사 |
 
-**인증.** 호출자의 JWT(`X-Session-Token`)를 그대로 전달한다. catalog 는 `common:security` 필터로(채택 뒤) 서명·만료·`aud`·역할·폐기를 검증하고 **이 읽기 엔드포인트는 USER·ADMIN 둘 다 허용**한다(앞으로 생길 `/internal/**` 쓰기 엔드포인트는 ADMIN 만). 업무 판정(접수 가능한가)은 catalog 가 아니라 preorder 가 한다. TLS는 전송 암호화 역할이며 호출 서비스의 접근 제한은 위 노출 조건으로 검증한다. preorder 쪽은 `CatalogClient` 호출에 헤더를 전파하는 인터셉터가 필요하다(지금은 없다).
+**인증.** 호출자의 JWT(`Authorization: Bearer {accessToken}`, 2026-09-28 — 이전 `X-Session-Token`)를 그대로 전달한다. catalog 는 `common:security` 필터로 서명·만료·`aud`·역할·폐기를 검증하고(NV-139 채택) **이 읽기 엔드포인트는 USER·ADMIN 둘 다 허용**한다(앞으로 생길 `/internal/**` 쓰기 엔드포인트는 ADMIN 만). 업무 판정(접수 가능한가)은 catalog 가 아니라 preorder 가 한다. TLS는 전송 암호화 역할이며 호출 서비스의 접근 제한은 위 노출 조건으로 검증한다. preorder 쪽은 `CatalogClient` 호출에 헤더를 전파하는 인터셉터가 필요하다(지금은 없다).
 
-**요청.** 본문 없음. 헤더 `X-Session-Token` 필수, `X-Request-Id`는 있으면 이어 쓴다. 토큰은 요청 단위로 전달하고 캐시나 공용 인터셉터의 가변 필드에 보관하지 않는다.
+**요청.** 본문 없음. 헤더 `Authorization: Bearer {accessToken}` 필수, `X-Request-Id`는 있으면 이어 쓴다. 토큰은 요청 단위로 전달하고 캐시나 공용 인터셉터의 가변 필드에 보관하지 않는다.
 
 **응답 200.** 봉투는 `common:web` 의 `ApiResponse` 그대로.
 
@@ -62,12 +62,12 @@
 
 | 상태 | `error.code` | 언제 |
 | --- | --- | --- |
-| 401 | `UNAUTHENTICATED` | 토큰 없음·만료·폐기. `details.retryable = true` 면 폐기 조회 실패(잠시 후 재시도). 이 봉투는 common:security 의 진입점이 준다 — 채택 전 catalog 는 본문 없이 401 상태만 낸다 |
+| 401 | `UNAUTHENTICATED` | 토큰 없음·만료·폐기·`Authorization` 헤더 모양 이상. 이 봉투는 common:security 의 진입점이 준다(NV-139 부터). **이 경로는 폐기 조회가 실패해도 열린다**(D-2 닫는 경로 밖 — 실측: Redis 를 끊고 USER 토큰 → 200) — 그래서 여기서는 `details.retryable = true` 인 401 이 나오지 않는다. preorder 가 그 갈래를 만들 필요가 없다 |
 | 403 | `FORBIDDEN` | 허용 역할(USER · ADMIN) 밖. catalog 는 `hasAnyRole(USER, ADMIN)` 으로 막는다 |
 | 404 | `PRODUCT_NOT_FOUND` | 상품 없음. preorder 는 **이 코드일 때만** 빈 결과로 바꾼다. 틀린 경로의 404 는 공통 `NOT_FOUND` 로 오므로 그건 연동 오류다(지금 `CatalogReader` 는 코드를 안 보고 404 를 전부 빈 결과로 캐시한다 — 아래 남은 일). 옵션이 없는 상품은 404 가 아니라 `options: []` |
 | 400 · 405 · 500 | `VALIDATION_FAILED` · `METHOD_NOT_ALLOWED` · `INTERNAL_ERROR` | 공통 처리기의 봉투. productId 가 숫자가 아님 · 허용되지 않은 메서드 · 서버 오류(원문은 싣지 않는다) |
 
-현재 `CatalogReader`는 404 외 4xx를 계약 불일치로 처리하지만, 헤더 전파 적용 시 이를 수정한다. 401·403은 인증·권한 실패로 구분하고, 폐기 조회 장애처럼 `details.retryable=true`인 응답은 일시 오류로 분류한다. 오류를 상품 없음으로 캐시하지 않는다.
+현재 `CatalogReader`는 404 외 4xx를 계약 불일치로 처리하지만, 헤더 전파 적용 시 이를 수정한다. 401·403은 인증·권한 실패로 구분한다(이 경로에는 `retryable` 401 이 없다 — 위 표). 오류를 상품 없음으로 캐시하지 않는다.
 
 **호출 목적별 판정 조건 — preorder 가 적용한다.**
 
@@ -90,6 +90,6 @@
 
 ## 상태
 
-1. 인증 — 호출자 JWT 전달(위 "인증"). catalog 는 `/internal/**` 을 USER · ADMIN 만 허용한다. **토큰 검증 필터는 아직 없다** — common:security 채택 때 붙고, 그 전까지 운영에서는 정상 토큰도 401 이다(경로 규칙만 있고 인증을 채우는 것이 없다).
+1. 인증 — 호출자 JWT 전달(위 "인증"). catalog 는 `/internal/**` 을 USER · ADMIN 만 허용하고 **common:security 필터가 토큰을 검증한다**(NV-139). preorder 쪽은 `CatalogClient` 가 `Authorization` 헤더를 전파해야 한다.
 2. `/internal/**` 공개 라우팅 차단 — 인프라에서 병행하되 운영 활성화 전 검증한다.
-3. catalog 쪽: 응답 칸 · 404 · 빈 옵션 목록 · 역할 규칙은 구현됐고 인증 필터 채택은 남았다. preorder 쪽 남은 일: 판정 분리 · DTO 필수값 검사 · 다중 인스턴스 캐시 대응 · 헤더 전파 · 인증 오류 분류 · **`PRODUCT_NOT_FOUND` 일 때만 빈 결과로 바꾸고 그 밖의 404 는 연동 오류로 분류**.
+3. catalog 쪽: 응답 칸 · 404 · 빈 옵션 목록 · 역할 규칙 · 인증 필터까지 구현됐다. preorder 쪽 남은 일: 판정 분리 · DTO 필수값 검사 · 다중 인스턴스 캐시 대응 · 헤더 전파 · 인증 오류 분류 · **`PRODUCT_NOT_FOUND` 일 때만 빈 결과로 바꾸고 그 밖의 404 는 연동 오류로 분류**.

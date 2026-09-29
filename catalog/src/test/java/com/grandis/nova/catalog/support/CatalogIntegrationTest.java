@@ -16,6 +16,9 @@ import java.lang.annotation.Target;
  *
  * 스키마는 flyway-project/migrations 를 Flyway 로 적용해 만든다. 운영 DB 에 쓰는 것과 같은 파일이라
  * 엔티티의 ddl-auto: validate 가 실제 배포 스키마와 대조된다. Flyway 설정은 flyway-project/flyway.toml 과 맞춘다.
+ *
+ * 인증은 common:security 그대로 돈다 — 폐기 표식은 Redis 컨테이너, 토큰 검증 공개키는 {@link AccessTokens} 의 키(SecurityTestConfig).
+ * 요청 인증은 실제 토큰(AccessTokens)으로도, MockMvc 의 user() 로도 만들 수 있다(필터는 이미 인증된 요청은 건드리지 않는다).
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
@@ -30,8 +33,15 @@ import java.lang.annotation.Target;
         "spring.flyway.create-schemas=false",
         "spring.flyway.clean-disabled=true",
         "spring.flyway.validate-migration-naming=true",
-        "spring.threads.virtual.enabled=true"
+        "spring.threads.virtual.enabled=true",
+        // 검증만 한다(개인키 없음). 발급자 · 유효기간은 member 와 같은 값 — 발급하지 않아도 필수 값이다
+        "jwt.issuer=" + AccessTokens.ISSUER,
+        "jwt.access-token-validity=30m",
+        "jwt.refresh-token-validity=14d",
+        // Redis 가 죽은 갈래를 시험할 때 기본값(60s)이면 시험이 멈춰 선다. 예시 설정과 같은 값
+        "spring.data.redis.timeout=300ms",
+        "spring.data.redis.connect-timeout=200ms"
 })
-@Import(MySqlContainerConfig.class)
+@Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class})
 public @interface CatalogIntegrationTest {
 }

@@ -1,37 +1,32 @@
 package com.grandis.nova.catalog.config;
 
+import com.grandis.nova.common.security.SecurityFilterChainSupport;
+import jakarta.servlet.DispatcherType;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
-import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 
 /**
- * 최소 보안 설정 — 경로별 권한만 정한다. 토큰 검증 필터는 없다.
+ * 경로별 권한만 정한다. 토큰 검증(`Authorization: Bearer`, JWKS) · 폐기 조회 · 401/403 봉투는 common:security 의 체인이 맡는다(NV-139 채택).
+ * 폐기 조회가 실패했을 때 닫는 경로는 공통 기본값(`/api/v1/admin/**` · 재발급 · 내 정보)으로 충분하다 — catalog 가 서비스하는 보호 경로는 관리자뿐이다.
  *
- * 액세스 토큰 검증은 common:security 가 맡는다. 머지되면 그 필터가 SecurityContext 를 채우고
- * 이 체인을 그쪽 구성으로 바꾼다. 그때까지 운영에서는 인증된 요청이 없으므로 보호 경로는 401 이다.
+ * 공개 조회는 **명시한 GET 만** 열고 나머지는 거부한다(preorder 와 같은 규약). anyRequest().permitAll() 이면 /admin · /internal 밖에 새로 생기는
+ * 엔드포인트가 기본으로 공개되는데 그걸 잡는 시험이 없다 — 공개로 열 엔드포인트는 여기 목록에 더한다.
+ * 토큰이 있으면 공개 조회에서도 관리자 미리보기처럼 "더 보는" 판정에 쓴다(Viewers).
  */
 @Configuration(proxyBeanMethods = false)
 public class SecurityConfig {
 
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http) {
-        return http
-                .csrf(AbstractHttpConfigurer::disable)
-                .httpBasic(AbstractHttpConfigurer::disable)
-                .formLogin(AbstractHttpConfigurer::disable)
-                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .exceptionHandling(handling ->
-                        handling.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
-                .authorizeHttpRequests(authorize -> authorize
-                        .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
-                        // 내부 조회는 접수(USER)와 관리자 등록(ADMIN)이 같이 쓴다. 역할이 둘뿐이라 authenticated() 와 동작은 같지만 계약대로 적는다
-                        .requestMatchers("/internal/**").hasAnyRole("USER", "ADMIN")
-                        .anyRequest().permitAll())
-                .build();
+    SecurityFilterChain securityFilterChain(HttpSecurity http, SecurityFilterChainSupport support) throws Exception {
+        return support.build(http, authorize -> authorize
+                .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()                                     // 오류 페이지 디스패치
+                .requestMatchers(HttpMethod.GET, "/api/v1/products/**", "/api/v1/categories/**").permitAll()   // 상품 목록 · 상세 · 옵션 상세 · 카테고리 트리
+                .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                // 내부 조회는 접수(USER)와 관리자 등록(ADMIN)이 같이 쓴다. 역할이 둘뿐이라 authenticated() 와 동작은 같지만 계약대로 적는다
+                .requestMatchers("/internal/**").hasAnyRole("USER", "ADMIN")
+                .anyRequest().denyAll());
     }
 }
