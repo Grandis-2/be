@@ -221,7 +221,7 @@ reviews:
       instructions: |
         - 비소유 표 읽기는 둘만 허용한다: preorder_campaigns(opens_at · closes_at) · option_inventories(재고 칼럼 집계).
           목록·검색의 노출 조건(오픈 예정 · 마감 · 마감+120시간 숨김 · 품절)과 상세의 회차 시각 · 옵션별 가용 수량,
-          관리자 목록의 같은 칸에 쓰며 읽기 전용 저장소 한 곳에서만 읽는다.
+          관리자 목록의 같은 칸, 관리자 수정의 오픈 판정(회차 opens_at — 사전예약 오픈 뒤 수정 금지)에 쓰며 읽기 전용 저장소 한 곳에서만 읽는다.
           그 두 표에 INSERT · UPDATE · DELETE 가 있으면 지적한다. 다른 클래스가 같은 표를 읽어도 지적한다.
           src/test 의 픽스처가 시험 데이터로 그 표에 INSERT 하는 것은 예외다 — 운영 코드 경계가 아니라 시험 준비다.
         - shipment_batches 는 읽지 않는다. 상세의 배송 안내는 preorder 의 공개 API(GET /api/v1/products/{id}/shipment-batches)를 프론트가 부른다.
@@ -360,7 +360,7 @@ reviews:
           허용된 읽기 — 이것만 실패가 아니다.
           - preorder → products · product_options · categories (접수 시점 값 복사)
           - order → products · product_options (금액 · 재고 확인)
-          - catalog → preorder_campaigns(opens_at · closes_at) · option_inventories (목록 · 검색의 노출 조건, 상세의 회차 시각 · 옵션별 가용 수량, 관리자 목록의 같은 칸. 읽기 전용 저장소 한 곳)
+          - catalog → preorder_campaigns(opens_at · closes_at) · option_inventories (목록 · 검색의 노출 조건, 상세의 회차 시각 · 옵션별 가용 수량, 관리자 목록의 같은 칸, 관리자 수정의 오픈 판정. 읽기 전용 저장소 한 곳)
           - worker → preorders (처리 대상 확인)
           - batch → 전부 (읽기 전용 모듈)
 

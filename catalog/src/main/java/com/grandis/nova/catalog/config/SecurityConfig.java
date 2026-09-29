@@ -14,7 +14,7 @@ import org.springframework.security.web.SecurityFilterChain;
  *
  * 공개 조회는 **명시한 GET 만** 열고 나머지는 거부한다(preorder 와 같은 규약). anyRequest().permitAll() 이면 /admin · /internal 밖에 새로 생기는
  * 엔드포인트가 기본으로 공개되는데 그걸 잡는 시험이 없다 — 공개로 열 엔드포인트는 여기 목록에 더한다.
- * 토큰이 있으면 공개 조회에서도 관리자 미리보기처럼 "더 보는" 판정에 쓴다(Viewers).
+ * 공개 조회는 토큰을 보지 않는다 — 관리자 미리보기는 관리자 상세(/api/v1/admin/products/{id})로 옮겼다(2026-09-29).
  */
 @Configuration(proxyBeanMethods = false)
 public class SecurityConfig {

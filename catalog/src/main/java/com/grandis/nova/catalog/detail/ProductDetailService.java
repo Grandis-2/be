@@ -81,12 +81,13 @@ public class ProductDetailService {
         this.clock = clock;
     }
 
-    /** @param adminPreview 관리자면 비공개 · 미완료 상품도 돌려준다 */
+    /**
+     * 회원 상세. 등록 완료 AND 공개인 상품만 — 아니면 누구에게나 404(관리자도). 관리자 미리보기는 없다(2026-09-29 결정) —
+     * 관리자는 관리자 상세({@link #findAdminProduct})로 본다. 공개 경로는 폐기 조회 실패에 열리는 경로라 관리자 토큰을 여기서 더 믿지 않는다.
+     */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public ProductDetailView findProduct(Long productId, boolean adminPreview) {
-        ProductWithRegistration found = requireViewable(productId, adminPreview);
-        // 회원 상세(미리보기 포함)의 visible 은 "회원에게 실제로 보이는가" — 완료 AND 공개
-        return assemble(found, found.isRegistrationCompleted() && found.product().isVisible());
+    public ProductDetailView findProduct(Long productId) {
+        return assemble(requireViewable(productId), true);
     }
 
     /**
@@ -102,7 +103,7 @@ public class ProductDetailService {
                 found.registration().orElse(null));
     }
 
-    /** @param visible 응답에 실을 visible — 회원 상세는 완료 AND 공개(실제 노출), 관리자 상세는 칸 그대로 */
+    /** @param visible 응답에 실을 visible — 회원 상세는 노출 규칙을 지났으니 늘 true, 관리자 상세는 칸 그대로 */
     private ProductDetailView assemble(ProductWithRegistration found, boolean visible) {
         Long productId = found.product().getId();
         Product product = found.product();
@@ -155,18 +156,17 @@ public class ProductDetailService {
 
     /** 옵션이 그 상품 소속이 아니면 404. 상품의 노출 규칙을 먼저 적용한다. */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public Variant findVariant(Long productId, Long variantId, boolean adminPreview) {
-        return findProduct(productId, adminPreview).variants().stream()
+    public Variant findVariant(Long productId, Long variantId) {
+        return findProduct(productId).variants().stream()
                 .filter(variant -> variant.variantId().equals(variantId))
                 .findFirst()
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
     }
 
-    private ProductWithRegistration requireViewable(Long productId, boolean adminPreview) {
+    private ProductWithRegistration requireViewable(Long productId) {
         ProductWithRegistration found = products.findWithRegistration(productId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
-        boolean visible = found.isRegistrationCompleted() && found.product().isVisible();
-        if (!visible && !adminPreview) {
+        if (!(found.isRegistrationCompleted() && found.product().isVisible())) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
         return found;

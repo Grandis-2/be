@@ -84,6 +84,19 @@ public class ProductOptionValue extends BaseEntity {
         return normalized;
     }
 
+    /**
+     * 표시 문구 수정(오타 · 띄어쓰기). 정규화값은 바꿀 수 없다(칼럼 updatable=false) — 정규화값이 달라지는 변경은 구성 변경이라
+     * 새 값 추가 + 기존 옵션 판매 중지로 한다(설계 §2.1 "옵션 변경"). 정규화가 같은지는 축 키를 아는 서비스가 확인한다.
+     */
+    public void rename(String value) {
+        this.value = normalize(value);
+    }
+
+    /** 추가금 수정. 호출자가 이 값을 고른 옵션의 가격을 재계산한다(수동 가격 제외). */
+    public void reprice(BigDecimal surcharge) {
+        this.surcharge = Amounts.requireWholeWon(surcharge, "surcharge");
+    }
+
     public Long getId() {
         return id;
     }

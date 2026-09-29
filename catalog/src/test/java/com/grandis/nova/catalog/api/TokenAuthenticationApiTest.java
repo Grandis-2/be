@@ -61,13 +61,14 @@ class TokenAuthenticationApiTest {
     }
 
     @Test
-    @DisplayName("관리자 미리보기도 실제 토큰으로 — 비공개 상품이 관리자 토큰이면 200, 회원 토큰이면 404, 응답은 no-store")
-    void adminPreviewWithRealToken() throws Exception {
+    @DisplayName("비공개 상품은 실제 관리자 토큰으로도 공개 상세에서 404 — 미리보기는 관리자 상세(/api/v1/admin/products/{id})로 200")
+    void noAdminPreviewOnPublicDetail() throws Exception {
         jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", productId);
         mockMvc.perform(get("/api/v1/products/{id}", productId).with(AccessTokens.customer(657L))).andExpect(status().isNotFound());
-        mockMvc.perform(get("/api/v1/products/{id}", productId).with(AccessTokens.admin()))
+        mockMvc.perform(get("/api/v1/products/{id}", productId).with(AccessTokens.admin())).andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/admin/products/{id}", productId).with(AccessTokens.admin()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.visible").value(false))
+                .andExpect(jsonPath("$.data.product.visible").value(false))
                 .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")));
     }
 

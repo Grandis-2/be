@@ -24,6 +24,10 @@ import java.util.Objects;
  * 가격은 basePrice 가 기준이고 옵션의 price 가 최종가다(기본가 + 값별 추가금, 관리자가 직접 고칠 수 있다).
  * 예약 · 주문은 접수 시점 값을 복사하므로 여기를 고쳐도 과거 거래에 소급되지 않는다.
  * image_url 은 product_images 의 GALLERY 대표로 대체돼 폐기 예정이라 매핑하지 않는다.
+ *
+ * <p><b>이미 있는 상품을 고치는 경로는 전부 {@link ProductRepository#findForUpdate} 로 잠그고 읽는다</b>(공개 전환 · 판매 상태 포함).
+ * Hibernate 는 전 칼럼을 UPDATE 하므로 잠그지 않고 읽은 쓰기는 그사이 커밋된 관리자 수정(제목 · 기본가)을 옛 값으로 되돌리고, 재계산된
+ * 옵션 가격만 새 값으로 남아 "가격 = 기본가 + Σ추가금" 이 깨진다(실측). 새 쓰기 경로는 "잠그지 않고 읽기 → 수정 커밋 → 쓰기" 모양의 시험을 같이 둔다.
  */
 @Entity
 @Table(name = "products")
@@ -111,6 +115,35 @@ public class Product extends BaseEntity {
     /** 비공개. 조건 없다. 기존 예약 · 주문에는 손대지 않는다. */
     public void hide() {
         this.visible = false;
+    }
+
+    /** 표시 정보 수정. null 은 "보내지 않음" 이라 그대로 둔다. 사전예약 오픈 뒤 금지는 서비스가 지킨다(회차는 preorder 표). */
+    public void edit(String title, String description, String tags) {
+        if (title != null) {
+            this.title = title.strip();
+        }
+        if (description != null) {
+            this.description = description;
+        }
+        if (tags != null) {
+            this.tags = tags;
+        }
+    }
+
+    /** 기본 가격. 바뀌었으면 true — 호출자가 수동 가격이 아닌 옵션을 재계산한다(설계 §2.1 재계산). */
+    public boolean reprice(BigDecimal basePrice) {
+        BigDecimal next = Amounts.requireWholeWon(basePrice, "basePrice");
+        if (this.basePrice.compareTo(next) == 0) {
+            return false;
+        }
+        this.basePrice = next;
+        return true;
+    }
+
+    /** 보증 설정. 제공하지 않으면 추가금은 0 이다(등록과 같은 규칙). */
+    public void setWarranty(boolean offered, BigDecimal surcharge) {
+        this.warrantyOffered = offered;
+        this.warrantySurcharge = offered ? Amounts.requireWholeWon(surcharge, "warranty.surcharge") : BigDecimal.ZERO;
     }
 
     public Long getId() {

@@ -57,14 +57,14 @@ class ProductDetailServiceTest {
             hookRan[0] = true;
         });
 
-        ProductDetailView view = service.findProduct(productId, false);
+        ProductDetailView view = service.findProduct(productId);
 
         assertThat(hookRan[0]).as("훅이 첫 문장 뒤 · 옵션 문장 앞에서 돌았다").isTrue();
         assertThat(view.variants().getFirst().price()).isEqualByComparingTo("1000");
         assertThat(view.variants().getFirst().availableQuantity()).isEqualTo(5);
         assertThat(view.soldOut()).isFalse();
         // 트랜잭션이 끝난 뒤에는 새 값이 보인다 — 대조군
-        ProductDetailView after = service.findProduct(productId, false);
+        ProductDetailView after = service.findProduct(productId);
         assertThat(after.variants().getFirst().price()).isEqualByComparingTo("2000");
         assertThat(after.soldOut()).isTrue();
     }

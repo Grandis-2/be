@@ -43,14 +43,16 @@ class TokenAuthenticationRedisDownTest {
     }
 
     @Test
-    @DisplayName("폐기 조회 실패 — 관리자 경로는 401 retryable(닫는 경로), 내부 조회 · 관리자 미리보기는 열린 채 통과")
+    @DisplayName("폐기 조회 실패 — 관리자 경로는 401 retryable(닫는 경로), 내부 조회 · 공개 상세는 열린 채 통과")
     void adminClosedOthersOpen() throws Exception {
         mockMvc.perform(get("/api/v1/admin/products").with(AccessTokens.admin()))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"))
                 .andExpect(jsonPath("$.error.details.retryable").value(true));
         mockMvc.perform(get("/internal/products/{id}/options", productId).with(AccessTokens.customer(657L))).andExpect(status().isOk());
-        jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", productId);
+        // 공개 상세는 토큰과 무관하게 열린다 — 비공개면 관리자 토큰으로도 404(미리보기 없음)
         mockMvc.perform(get("/api/v1/products/{id}", productId).with(AccessTokens.admin())).andExpect(status().isOk());
+        jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", productId);
+        mockMvc.perform(get("/api/v1/products/{id}", productId).with(AccessTokens.admin())).andExpect(status().isNotFound());
     }
 }

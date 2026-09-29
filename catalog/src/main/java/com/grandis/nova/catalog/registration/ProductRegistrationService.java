@@ -22,6 +22,7 @@ import com.grandis.nova.catalog.registration.ProductRegistrationValidator.Axis;
 import com.grandis.nova.catalog.registration.ProductRegistrationValidator.Combo;
 import com.grandis.nova.catalog.registration.ProductRegistrationValidator.Draft;
 import com.grandis.nova.catalog.registration.ProductRegistrationValidator.Value;
+import com.grandis.nova.catalog.web.ConstraintViolations;
 import com.grandis.nova.catalog.web.ValidationFailures;
 import com.grandis.nova.common.BusinessException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -175,7 +176,7 @@ public class ProductRegistrationService {
                         batch.positionFrom(), batch.positionTo(), batch.estimatedShipStart(), batch.estimatedShipEnd())).toList());
         // 미리보기는 커밋 전에 같은 트랜잭션에서 읽는다. 커밋 뒤 따로 읽으면 그 사이에 완료 · 공개 전환(③)이 끼어
         // completed=false · visible=true 라는 있은 적 없는 조합을 실을 수 있다. 커밋 전엔 남이 이 상품을 못 건드린다
-        ProductDetailView preview = detailService.findProduct(productId, true);
+        ProductDetailView preview = detailService.findAdminProduct(productId).product();
         return new RegistrationOutcome(RegistrationOutcome.Kind.CREATED, RegistrationStatusView.from(registration), plan, preview);
     }
 
@@ -210,7 +211,7 @@ public class ProductRegistrationService {
             return registrations.saveAndFlush(ProductRegistration.start(productId, idempotencyKey, hash, visible));
         } catch (DataIntegrityViolationException e) {
             // 같은 새 키가 동시에 들어왔다 — 먼저 커밋한 쪽이 이긴다. 이 트랜잭션(상품 포함)은 통째로 돌아간다
-            if (mentions(e, "uq_registration_key")) {
+            if (ConstraintViolations.mentions(e, "uq_registration_key")) {
                 throw new BusinessException(CatalogErrorCode.REGISTRATION_IN_PROGRESS);
             }
             throw e;
@@ -226,19 +227,10 @@ public class ProductRegistrationService {
         try {
             save.run();
         } catch (DataIntegrityViolationException e) {
-            if (mentions(e, constraint)) {
+            if (ConstraintViolations.mentions(e, constraint)) {
                 throw ValidationFailures.of(field, message);
             }
             throw e;
         }
-    }
-
-    private static boolean mentions(Throwable e, String constraint) {
-        for (Throwable t = e; t != null; t = t.getCause()) {
-            if (t.getMessage() != null && t.getMessage().contains(constraint)) {
-                return true;
-            }
-        }
-        return false;
     }
 }
