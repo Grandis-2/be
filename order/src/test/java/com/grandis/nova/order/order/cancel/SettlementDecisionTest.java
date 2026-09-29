@@ -12,7 +12,11 @@ import java.util.EnumSet;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** 원장이 돌려준 상태 × 취소 사유 → 정리 결과. 판정 표(계획서 §5)와 1:1 이다. 모든 상태 · 사유 조합을 돈다. */
+/**
+ * 원장이 돌려준 상태 × 취소 사유 → 정리 결과. 모든 상태 · 사유 조합을 돈다. 판정은 아래 테스트 이름 그대로다:
+ * CANCELED → CANCELED, 출고 뒤(SHIPPED · DELIVERED) → REJECTED(SHIPPED), 결제됨 + 만료 → REJECTED(PAID),
+ * 결제됨 + 그 밖의 사유 · 승인 결과 대기 · 환불 중 → 결과를 미룸(예외), 미결제(AWAITING_PAYMENT)가 돌아오면 버그.
+ */
 class SettlementDecisionTest {
 
     static final EnumSet<OrderStatus> PAID =

@@ -44,7 +44,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class PlaceOrderApiTest {
 
-    // 에픽 완료 조건(NV-45 §5): 동시 100건 → 주문 1건.
+    // 에픽 완료 조건: 같은 예약으로 동시에 100건을 보내도 주문은 1건만 생긴다(나머지는 같은 주문을 돌려받는다).
     static final int CONCURRENT_REQUESTS = 100;
 
     // 같은 상품 안에서 순번이 겹치면 안 된다(uq_preorder_position). 테스트마다 상품을 새로 만들지만 한 테스트 안에서 예약을 여럿 만든다.

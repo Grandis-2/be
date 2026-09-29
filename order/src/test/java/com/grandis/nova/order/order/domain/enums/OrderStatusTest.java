@@ -28,7 +28,12 @@ import static com.grandis.nova.order.order.domain.enums.OrderTrigger.PREPARATION
 import static com.grandis.nova.order.order.domain.enums.OrderTrigger.REFUND_COMPLETED;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** 상태 · 사건의 모든 조합(9 × 9). 여기 없는 조합은 전이하지 않는다. 계획서 §5 전이표와 1:1 이다. */
+/**
+ * 상태 · 사건의 모든 조합(9 × 9). 아래 ALLOWED 가 기대 전이표다 — 결제(요청 · 승인 · 거절) · 준비 · 포장 · 출고 · 배송 완료의
+ * 정방향, 결제 대기 중 취소는 바로 CANCELED(승인 중에는 취소 없음), 결제 후 · 출고 전 취소는 CANCELING 을 거쳐 환불 완료로
+ * CANCELED, 출고 뒤에는 취소 없음.
+ * 여기 없는 조합은 전이하지 않는다(OrderStatus.next 가 비어 있다).
+ */
 class OrderStatusTest {
 
     static final Map<OrderStatus, Map<OrderTrigger, OrderStatus>> ALLOWED = Map.of(
