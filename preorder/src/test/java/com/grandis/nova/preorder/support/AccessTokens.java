@@ -1,6 +1,6 @@
 package com.grandis.nova.preorder.support;
 
-import com.grandis.nova.common.security.JwtAuthenticationFilter;
+import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.security.JwtKeyRing;
 import com.grandis.nova.common.security.JwtProperties;
 import com.grandis.nova.common.security.JwtTokenProvider;
@@ -23,7 +23,7 @@ import java.util.UUID;
 
 /**
  * 테스트용 액세스 토큰 발급기. member 처럼 RS256 으로 서명하고, 앱은 같은 키의 공개키로 검증한다(SecurityTestConfig).
- * 요청에는 실제 세션 토큰 헤더(X-Session-Token)로 실어 인증 필터를 그대로 통과시킨다.
+ * 요청에는 실제 인증 헤더(Authorization: Bearer)로 실어 인증 필터를 그대로 통과시킨다.
  */
 public final class AccessTokens {
 
@@ -70,8 +70,8 @@ public final class AccessTokens {
     /** 이미 실린 토큰은 바꾼다 — 같은 요청에 여러 번 붙이면 마지막 것이 쓰인다. */
     public static RequestPostProcessor withToken(String token) {
         return request -> {
-            request.removeHeader(JwtAuthenticationFilter.HEADER);
-            request.addHeader(JwtAuthenticationFilter.HEADER, token);
+            request.removeHeader(BearerTokens.HEADER);
+            request.addHeader(BearerTokens.HEADER, BearerTokens.value(token));
             return request;
         };
     }

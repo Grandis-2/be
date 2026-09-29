@@ -25,11 +25,11 @@ class ApiDocsDevProfileTest {
     MockMvc mockMvc;
 
     @Test
-    void 사용자_문서는_세션_토큰_헤더로_인증하고_인증_주체는_파라미터로_노출하지_않는다() throws Exception {
+    void 사용자_문서는_Bearer_토큰으로_인증하고_인증_주체는_파라미터로_노출하지_않는다() throws Exception {
         mockMvc.perform(get("/v3/api-docs/public"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.components.securitySchemes.sessionToken.in").value("header"))
-                .andExpect(jsonPath("$.components.securitySchemes.sessionToken.name").value("X-Session-Token"))
+                .andExpect(jsonPath("$.components.securitySchemes.bearerAuth.type").value("http"))
+                .andExpect(jsonPath("$.components.securitySchemes.bearerAuth.scheme").value("bearer"))
                 .andExpect(jsonPath("$.paths['/api/v1/preorders'].get.parameters[*].name",
                         not(hasItem("customerId"))))
                 .andExpect(jsonPath("$.paths['/api/v1/preorders'].get.responses['401']").exists())

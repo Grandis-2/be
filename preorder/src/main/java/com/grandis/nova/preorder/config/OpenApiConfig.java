@@ -2,7 +2,6 @@ package com.grandis.nova.preorder.config;
 
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.security.CurrentCustomerId;
-import com.grandis.nova.common.security.JwtAuthenticationFilter;
 import com.grandis.nova.preorder.web.CurrentViewer;
 import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
@@ -31,7 +30,7 @@ import java.util.Map;
 @ConditionalOnBooleanProperty("springdoc.api-docs.enabled")
 class OpenApiConfig {
 
-    private static final String SESSION_TOKEN = "sessionToken";
+    private static final String BEARER_AUTH = "bearerAuth";
 
     static {
         // 인증 주체는 토큰에서 채운다. 요청 파라미터로 문서에 나오지 않게 한다
@@ -43,12 +42,12 @@ class OpenApiConfig {
         return new OpenAPI()
                 .info(new Info().title("preorder API").version("v1")
                         .description("사전예약 접수 · 조회 · 취소, 모집 일정 관리, 동기화 작업 재처리"))
-                .components(new Components().addSecuritySchemes(SESSION_TOKEN, new SecurityScheme()
-                        .type(SecurityScheme.Type.APIKEY)
-                        .in(SecurityScheme.In.HEADER)
-                        .name(JwtAuthenticationFilter.HEADER)
-                        .description("member 가 발급한 액세스 토큰 원문(Bearer 접두 없음)")))
-                .addSecurityItem(new SecurityRequirement().addList(SESSION_TOKEN));
+                .components(new Components().addSecuritySchemes(BEARER_AUTH, new SecurityScheme()
+                        .type(SecurityScheme.Type.HTTP)
+                        .scheme("bearer")
+                        .bearerFormat("JWT")
+                        .description("member 가 발급한 액세스 토큰(Bearer 접두 없이 입력)")))
+                .addSecurityItem(new SecurityRequirement().addList(BEARER_AUTH));
     }
 
     @Bean

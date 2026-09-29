@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.cancel;
 
+import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.accept.AcceptResult;
 import com.grandis.nova.preorder.accept.PreorderAcceptService;
@@ -77,15 +78,15 @@ class PreorderCancelApiTest {
     void 취소를_시작하면_202_CANCELING_이고_등록_작업_무효화와_주문_정리_요청을_남긴다() throws Exception {
         orderAnswers(true, null);
 
-        String sessionToken = AccessTokens.customerToken(customerId);
+        String accessToken = AccessTokens.customerToken(customerId);
 
-        mockMvc.perform(post("/api/v1/preorders/{id}/cancel", token).with(AccessTokens.withToken(sessionToken)))
+        mockMvc.perform(post("/api/v1/preorders/{id}/cancel", token).with(AccessTokens.withToken(accessToken)))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.preorderId").value(token))
                 .andExpect(jsonPath("$.data.status").value("CANCELING"))
                 .andExpect(jsonPath("$.data.version").value(2));
 
-        verify(orderClient).getCancelability(token, sessionToken);
+        verify(orderClient).getCancelability(token, BearerTokens.value(accessToken));
         assertThat(jobStatus("REGISTER")).isEqualTo("CANCELED");
         Map<String, Object> outbox = jdbcTemplate.queryForMap("""
                 SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.reason')) AS reason,
