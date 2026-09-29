@@ -79,7 +79,7 @@ class JpaOrderStoreTest {
                 .ignoringFields("id", "createdAt", "updatedAt")
                 .isEqualTo(placed);
         assertThat(loaded.id()).isEqualTo(stored.id());
-        // 시계가 DB 해상도(마이크로초)라 저장하고 돌려준 시각과 DB 행의 시각이 같다(JpaAuditingConfig).
+        // 시계가 DB 해상도(마이크로초)라 저장하고 돌려준 시각과 DB 행의 시각이 같다(common:jpa StorageClock).
         assertThat(loaded.createdAt()).isEqualTo(stored.createdAt());
         assertThat(reader.findByOrderToken(placed.orderToken())).contains(loaded);
         assertThat(reader.findByPreorderId(preorderId)).contains(loaded);
