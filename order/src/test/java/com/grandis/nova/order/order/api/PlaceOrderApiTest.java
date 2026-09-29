@@ -2,8 +2,8 @@ package com.grandis.nova.order.order.api;
 
 import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.order.client.preorder.PreorderClient;
-import com.grandis.nova.order.support.Concurrently;
-import com.grandis.nova.order.support.Concurrently.Outcome;
+import com.grandis.nova.common.testing.Concurrently;
+import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderFixtures.PreorderProduct;
 import com.grandis.nova.order.support.OrderIntegrationTest;
