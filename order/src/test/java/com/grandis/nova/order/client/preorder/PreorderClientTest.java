@@ -173,6 +173,31 @@ class PreorderClientTest {
                 .isInstanceOf(HttpClientErrorException.Forbidden.class);
     }
 
+    /*
+     * 2xx 인데 응답이 계약과 다르면(본문 모양 · Content-Type) 다시 불러도 같다 — 일시 장애(503)가 아니라 연동 오류(500).
+     * RestClient 가 실제로 올리는 예외 모양(원인 HttpMessageNotReadableException / UnknownContentTypeException)을 여기서 본다.
+     */
+    @Test
+    void malformedBodyIsIntegrationError(CapturedOutput output) {
+        server.expect(requestTo(PAYABILITY_URL))
+                .andRespond(withSuccess("{\"success\":true,\"data\":{\"payable\":\"not-a-boolean\"", MediaType.APPLICATION_JSON));
+
+        Throwable thrown = catchThrowable(() -> new PreorderReader(client).find(PREORDER_UUID, SESSION));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class);
+        assertNoCredential(thrown, output);
+    }
+
+    @Test
+    void unexpectedContentTypeIsIntegrationError(CapturedOutput output) {
+        server.expect(requestTo(PAYABILITY_URL)).andRespond(withSuccess("<html>gateway</html>", MediaType.TEXT_HTML));
+
+        Throwable thrown = catchThrowable(() -> new PreorderReader(client).find(PREORDER_UUID, SESSION));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class);
+        assertNoCredential(thrown, output);
+    }
+
     // 실패를 로그로 남기는 경로(연동 오류 · 장애)에서도 전달한 토큰은 로그와 예외 메시지에 없다.
     @ParameterizedTest
     @EnumSource(value = HttpStatus.class,

@@ -42,7 +42,8 @@ public class PreorderReader {
      * @param sessionToken 사용자가 보낸 액세스 토큰 원문(접두어 없음). null 이면 싣지 않는다(preorder 가 401)
      * @throws BusinessException     UNAUTHENTICATED — preorder 가 토큰을 거절(401).
      *                               DEPENDENCY_UNAVAILABLE — 타임아웃 · 연결 실패 · 5xx
-     * @throws IllegalStateException 그 밖의 4xx, 예약 없음이 아닌 404(경로 없음 · 잘못된 주소) — 연동 오류(500)
+     * @throws IllegalStateException 연동 오류(500) — 그 밖의 4xx, 예약 없음이 아닌 404(경로 없음 · 잘못된 주소),
+     *                               읽을 수 없는 응답(본문 · Content-Type 이 계약과 다름)
      */
     public Optional<PreorderPayability> find(String preorderId, String sessionToken) {
         try {
@@ -63,6 +64,9 @@ public class PreorderReader {
         } catch (HttpClientErrorException e) {
             throw InternalCallFailures.integrationError(DEPENDENCY, OPERATION, e);
         } catch (RestClientException e) {
+            if (InternalCallFailures.isUnreadableResponse(e)) {
+                throw InternalCallFailures.unreadableResponse(DEPENDENCY, OPERATION, e);
+            }
             throw InternalCallFailures.unavailable(DEPENDENCY, OPERATION, e);
         }
     }
