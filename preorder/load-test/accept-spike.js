@@ -80,7 +80,7 @@ export default function () {
       JSON.stringify({ productId: PRODUCT_ID, optionId: OPTION_ID }), {
         headers: {
           'Content-Type': 'application/json',
-          'X-Session-Token': member.accessToken,
+          'Authorization': `Bearer ${member.accessToken}`,
           'Idempotency-Key': `load-${RUN_ID}-${iteration}`,
           'X-Admission-Ticket': ticket,
         },
