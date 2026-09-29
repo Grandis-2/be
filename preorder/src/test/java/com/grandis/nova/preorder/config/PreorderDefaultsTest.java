@@ -18,6 +18,8 @@ class PreorderDefaultsTest {
 
         assertThat(environment.getProperty("resilience4j.bulkhead.configs.default.max-concurrent-calls")).isEqualTo("20");
         assertThat(environment.getProperty("resilience4j.bulkhead.instances.order.base-config")).isEqualTo("default");
+        assertThat(environment.getProperty("spring.http.serviceclient.catalog.read-timeout")).isEqualTo("1s");
+        assertThat(environment.getProperty("spring.http.serviceclient.order.connect-timeout")).isEqualTo("300ms");
     }
 
     @Test

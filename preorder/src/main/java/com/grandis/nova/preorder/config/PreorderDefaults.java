@@ -21,6 +21,7 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
         Map<String, Object> defaults = new LinkedHashMap<>();
+        dependencyTimeouts(defaults);
         dependencyResilience(defaults);
         environment.getPropertySources().addLast(new MapPropertySource(SOURCE_NAME, defaults));
     }
@@ -29,6 +30,14 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
     @Override
     public int getOrder() {
         return Ordered.LOWEST_PRECEDENCE;
+    }
+
+    /** 내부 호출의 연결 · 읽기 시간 상한. 없으면 HTTP 클라이언트가 응답을 끝없이 기다려 동시 호출 상한을 붙잡는다. */
+    private static void dependencyTimeouts(Map<String, Object> defaults) {
+        for (String dependency : Dependencies.ALL) {
+            defaults.put("spring.http.serviceclient." + dependency + ".connect-timeout", "300ms");
+            defaults.put("spring.http.serviceclient." + dependency + ".read-timeout", "1s");
+        }
     }
 
     /**
