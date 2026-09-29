@@ -23,7 +23,7 @@ public class MemberTestContext {
             registry.add("spring.datasource.password", Containers.MYSQL::getPassword);
             registry.add("spring.data.redis.host", Containers::redisHost);
             registry.add("spring.data.redis.port", Containers::redisPort);
-            // 비용 12 미만은 바인딩이 거부한다. 매 기동 한 번만 계산된다.
+            // 비용 12 미만은 AdminProperties 생성자가 거부한다. 매 기동 한 번만 계산된다.
             registry.add("admin.password-hash", () -> new BCryptPasswordEncoder(12).encode(ADMIN_PASSWORD));
             TestKeys.register(registry);
         };
