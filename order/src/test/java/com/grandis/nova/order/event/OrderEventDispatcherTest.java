@@ -1,8 +1,8 @@
 package com.grandis.nova.order.event;
 
 import com.grandis.nova.order.order.cancel.CancelReason;
-import com.grandis.nova.order.order.cancel.PreorderCancel;
-import com.grandis.nova.order.order.cancel.PreorderCancelSettlement;
+import com.grandis.nova.order.order.cancel.SettlePreorderCancelCommand;
+import com.grandis.nova.order.order.cancel.SettlePreorderCancelService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import tools.jackson.core.JacksonException;
@@ -21,12 +21,12 @@ class OrderEventDispatcherTest {
     static final String PREORDER_UUID = "9f1c2d3e-0000-4000-8000-000000000001";
 
     final JsonMapper jsonMapper = JsonMapper.builder().build();
-    PreorderCancelSettlement settlement;
+    SettlePreorderCancelService settlement;
     OrderEventDispatcher dispatcher;
 
     @BeforeEach
     void setUp() {
-        settlement = mock(PreorderCancelSettlement.class);
+        settlement = mock(SettlePreorderCancelService.class);
         dispatcher = new OrderEventDispatcher(settlement, jsonMapper);
     }
 
@@ -35,7 +35,7 @@ class OrderEventDispatcherTest {
         dispatcher.dispatch(envelope("PREORDER_CANCEL_REQUESTED", "PREORDER", PREORDER_INTERNAL_ID, cancelRequested()));
 
         verify(settlement).settle(
-                new PreorderCancel(PREORDER_INTERNAL_ID, PREORDER_UUID, 1024L, CancelReason.USER, 3L));
+                new SettlePreorderCancelCommand(PREORDER_INTERNAL_ID, PREORDER_UUID, 1024L, CancelReason.USER, 3L));
     }
 
     @Test

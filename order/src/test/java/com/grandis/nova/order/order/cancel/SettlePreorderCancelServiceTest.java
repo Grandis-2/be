@@ -30,13 +30,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * 테스트마다 새 예약(내부 id)을 써서 아웃박스 행이 겹치지 않는다.
  */
 @OrderIntegrationTest
-class PreorderCancelSettlementTest {
+class SettlePreorderCancelServiceTest {
 
     static final long CANCEL_SEQUENCE = 3L;
     static final int REQUESTS = 5;
 
     @Autowired
-    PreorderCancelSettlement settlement;
+    SettlePreorderCancelService settlement;
 
     @Autowired
     OrderLedger ledger;
@@ -104,7 +104,7 @@ class PreorderCancelSettlementTest {
     @Test
     void 같은_요청을_다시_받으면_전이는_한_번이고_같은_결과를_다시_적는다() {
         Order order = placedOrders.place(customerId);
-        PreorderCancel cancel = cancel(order, CancelReason.USER);
+        SettlePreorderCancelCommand cancel = cancel(order, CancelReason.USER);
 
         settlement.settle(cancel);
         settlement.settle(cancel);
@@ -118,7 +118,7 @@ class PreorderCancelSettlementTest {
     @Test
     void 같은_요청이_동시에_와도_전이는_한_번이고_모두_성공한다() throws Exception {
         Order order = placedOrders.place(customerId);
-        PreorderCancel cancel = cancel(order, CancelReason.USER);
+        SettlePreorderCancelCommand cancel = cancel(order, CancelReason.USER);
 
         List<Outcome<Result>> outcomes = Concurrently.run(REQUESTS, i -> () -> settlement.settle(cancel).result());
 
@@ -181,7 +181,7 @@ class PreorderCancelSettlementTest {
         Order order = placedOrders.place(customerId);
         String otherUuid = OrderFixtures.unique();
 
-        settlement.settle(new PreorderCancel(order.preorderId(), otherUuid, customerId, CancelReason.USER,
+        settlement.settle(new SettlePreorderCancelCommand(order.preorderId(), otherUuid, customerId, CancelReason.USER,
                 CANCEL_SEQUENCE));
 
         assertThat(statusOf(order)).isEqualTo("CANCELED");
@@ -193,8 +193,8 @@ class PreorderCancelSettlementTest {
     void 예약의_회원과_주문의_회원이_다르면_아무것도_바꾸지_않고_실패한다() {
         Order order = placedOrders.place(customerId);
 
-        assertThatThrownBy(() -> settlement.settle(new PreorderCancel(order.preorderId(), uuidOf(order.preorderId()),
-                fixtures.customer(), CancelReason.USER, CANCEL_SEQUENCE)))
+        assertThatThrownBy(() -> settlement.settle(new SettlePreorderCancelCommand(order.preorderId(),
+                uuidOf(order.preorderId()), fixtures.customer(), CancelReason.USER, CANCEL_SEQUENCE)))
                 .isInstanceOf(IllegalStateException.class);
 
         assertThat(statusOf(order)).isEqualTo("AWAITING_PAYMENT");
@@ -202,12 +202,12 @@ class PreorderCancelSettlementTest {
         assertThat(outboxRows(order.preorderId())).isEmpty();
     }
 
-    private PreorderCancel cancel(Order order, CancelReason reason) {
+    private SettlePreorderCancelCommand cancel(Order order, CancelReason reason) {
         return cancel(order.preorderId(), uuidOf(order.preorderId()), reason);
     }
 
-    private PreorderCancel cancel(Long preorderId, String preorderUuid, CancelReason reason) {
-        return new PreorderCancel(preorderId, preorderUuid, customerId, reason, CANCEL_SEQUENCE);
+    private SettlePreorderCancelCommand cancel(Long preorderId, String preorderUuid, CancelReason reason) {
+        return new SettlePreorderCancelCommand(preorderId, preorderUuid, customerId, reason, CANCEL_SEQUENCE);
     }
 
     private String uuidOf(Long preorderId) {

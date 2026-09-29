@@ -97,7 +97,7 @@ public enum OrderStatus {
 
     /**
      * 취소를 받아들일 수 있는가. 출고 뒤(SHIPPED · DELIVERED)만 아니다.
-     * 취소 가능 조회 API 가 쓴다. 예약 취소 수신의 배송 거절(PreorderCancelSettlement.settledFor)은 상태 switch 로
+     * 취소 가능 조회 API 가 쓴다. 예약 취소 수신의 배송 거절(SettlePreorderCancelService.settledFor)은 상태 switch 로
      * 따로 적혀 있다 — 두 곳이 어긋나면 조회는 "가능" 이라 하고 실제 취소는 거절하므로 CancelabilityAgreementTest 가 맞물림을 본다.
      * 이미 취소됐거나 취소 중인 주문도 true 다(다시 취소해도 결과가 같다).
      */

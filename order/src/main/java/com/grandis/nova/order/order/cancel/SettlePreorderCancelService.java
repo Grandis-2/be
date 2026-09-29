@@ -33,7 +33,7 @@ import java.util.Set;
  * 바깥 트랜잭션 안에서 부르지 않는다 — 참여해 버려 예외 뒤 바깥 작업까지 rollback-only 가 된다. 부르는 곳은 큐 소비기뿐이다.
  */
 @Service
-public class PreorderCancelSettlement {
+public class SettlePreorderCancelService {
 
     /** 미결제 주문만 여기서 취소한다. 결제된 주문의 취소(환불)는 결제 작업이 전제를 넓힌다. */
     static final Set<OrderStatus> CANCELABLE_HERE = EnumSet.of(OrderStatus.AWAITING_PAYMENT);
@@ -43,7 +43,7 @@ public class PreorderCancelSettlement {
     private final OrderLedger ledger;
     private final OutboxWriter outboxWriter;
 
-    public PreorderCancelSettlement(OrderReader orderReader, OrderLedger ledger, OutboxWriter outboxWriter) {
+    public SettlePreorderCancelService(OrderReader orderReader, OrderLedger ledger, OutboxWriter outboxWriter) {
         this.orderReader = orderReader;
         this.ledger = ledger;
         this.outboxWriter = outboxWriter;
@@ -55,7 +55,7 @@ public class PreorderCancelSettlement {
      * @throws IllegalStateException       예약의 회원과 주문의 회원이 다르다 — 데이터가 어긋났다
      */
     @Transactional
-    public PreorderOrderSettled settle(PreorderCancel cancel) {
+    public PreorderOrderSettled settle(SettlePreorderCancelCommand cancel) {
         // 사유는 원장 호출 전에 만든다 — 원장 안에서 검증에 실패하면 트랜잭션이 rollback-only 가 된다.
         EventCause cause = EventCause.system(CAUSE_PREFIX + cancel.reason());
         Optional<Order> found = orderReader.findByPreorderId(cancel.preorderInternalId());
@@ -83,7 +83,7 @@ public class PreorderCancelSettlement {
      * @throws SettlementDeferredException 승인 결과 대기 · 환불 필요 · 환불 진행 중
      * @throws IllegalStateException       미결제 — 전제에 있으므로 원장이 취소했어야 한다
      */
-    static PreorderOrderSettled settledFor(OrderStatus status, PreorderCancel cancel) {
+    static PreorderOrderSettled settledFor(OrderStatus status, SettlePreorderCancelCommand cancel) {
         return switch (status) {
             // 이번에 취소했든, 이미 취소돼 있었든(재수신) 같다.
             case CANCELED -> PreorderOrderSettled.canceled(
@@ -105,7 +105,7 @@ public class PreorderCancelSettlement {
         };
     }
 
-    private static PreorderOrderSettled rejected(PreorderCancel cancel, RejectReason reason) {
+    private static PreorderOrderSettled rejected(SettlePreorderCancelCommand cancel, RejectReason reason) {
         return PreorderOrderSettled.rejected(
                 cancel.preorderInternalId(), cancel.preorderId(), reason, cancel.cancelSequence());
     }

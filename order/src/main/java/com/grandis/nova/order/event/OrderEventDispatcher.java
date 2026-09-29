@@ -1,6 +1,6 @@
 package com.grandis.nova.order.event;
 
-import com.grandis.nova.order.order.cancel.PreorderCancelSettlement;
+import com.grandis.nova.order.order.cancel.SettlePreorderCancelService;
 import com.grandis.nova.order.outbox.EventEnvelope;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
@@ -19,10 +19,10 @@ public class OrderEventDispatcher {
     /** 예약 이벤트의 aggregate. aggregateId 가 예약 내부 id 라는 뜻이다. */
     static final String PREORDER_AGGREGATE = "PREORDER";
 
-    private final PreorderCancelSettlement cancelSettlement;
+    private final SettlePreorderCancelService cancelSettlement;
     private final JsonMapper jsonMapper;
 
-    public OrderEventDispatcher(PreorderCancelSettlement cancelSettlement, JsonMapper jsonMapper) {
+    public OrderEventDispatcher(SettlePreorderCancelService cancelSettlement, JsonMapper jsonMapper) {
         this.cancelSettlement = cancelSettlement;
         this.jsonMapper = jsonMapper;
     }
