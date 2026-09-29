@@ -1,0 +1,3 @@
+# OpenAPI 문서 노출 정책
+org.springframework.boot.EnvironmentPostProcessor=\
+com.grandis.nova.common.web.OpenApiExposure
