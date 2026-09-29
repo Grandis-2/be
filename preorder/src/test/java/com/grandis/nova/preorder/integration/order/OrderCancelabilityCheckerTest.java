@@ -5,6 +5,7 @@ import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.ErrorCode;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.PreorderErrorCode;
+import com.grandis.nova.preorder.support.DependencyGuards;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
@@ -25,7 +26,7 @@ class OrderCancelabilityCheckerTest {
     void 취소_가능하면_통과하고_받은_토큰을_그대로_싣는다() {
         FakeOrderClient client = FakeOrderClient.answering(new Cancelability(TOKEN, null, true, null));
 
-        assertThatCode(() -> new OrderCancelabilityChecker(client).requireCancelable(TOKEN, SESSION_TOKEN))
+        assertThatCode(() -> new OrderCancelabilityChecker(client, DependencyGuards.passThrough()).requireCancelable(TOKEN, SESSION_TOKEN))
                 .doesNotThrowAnyException();
         assertThat(client.receivedSessionToken).isEqualTo(SESSION_TOKEN);
     }
@@ -34,7 +35,7 @@ class OrderCancelabilityCheckerTest {
     void 배송이_시작됐으면_409_와_주문_상태() {
         FakeOrderClient client = FakeOrderClient.answering(new Cancelability(TOKEN, "SHIPPED", false, "SHIPPED"));
 
-        assertThatThrownBy(() -> new OrderCancelabilityChecker(client).requireCancelable(TOKEN, SESSION_TOKEN))
+        assertThatThrownBy(() -> new OrderCancelabilityChecker(client, DependencyGuards.passThrough()).requireCancelable(TOKEN, SESSION_TOKEN))
                 .isInstanceOfSatisfying(BusinessException.class, e -> {
                     assertThat(e.errorCode()).isEqualTo(PreorderErrorCode.PREORDER_NOT_CANCELABLE);
                     assertThat(e.details()).containsEntry("reason", "orderStatus=SHIPPED");
@@ -58,7 +59,7 @@ class OrderCancelabilityCheckerTest {
     void 그_밖의_4xx_는_재시도_안내가_아니라_연동_오류다() {
         FakeOrderClient client = FakeOrderClient.failing(clientError(HttpStatus.BAD_REQUEST));
 
-        assertThatThrownBy(() -> new OrderCancelabilityChecker(client).requireCancelable(TOKEN, SESSION_TOKEN))
+        assertThatThrownBy(() -> new OrderCancelabilityChecker(client, DependencyGuards.passThrough()).requireCancelable(TOKEN, SESSION_TOKEN))
                 .isInstanceOf(IllegalStateException.class)
                 .isNotInstanceOf(BusinessException.class);
     }
@@ -67,14 +68,14 @@ class OrderCancelabilityCheckerTest {
     void 판정_없이_성공_응답이면_연동_오류다() {
         FakeOrderClient client = FakeOrderClient.answering(null);
 
-        assertThatThrownBy(() -> new OrderCancelabilityChecker(client).requireCancelable(TOKEN, SESSION_TOKEN))
+        assertThatThrownBy(() -> new OrderCancelabilityChecker(client, DependencyGuards.passThrough()).requireCancelable(TOKEN, SESSION_TOKEN))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(TOKEN);
     }
 
     private static ErrorCode errorOf(RestClientException failure) {
         try {
-            new OrderCancelabilityChecker(FakeOrderClient.failing(failure)).requireCancelable(TOKEN, SESSION_TOKEN);
+            new OrderCancelabilityChecker(FakeOrderClient.failing(failure), DependencyGuards.passThrough()).requireCancelable(TOKEN, SESSION_TOKEN);
         } catch (BusinessException e) {
             return e.errorCode();
         }

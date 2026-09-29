@@ -16,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -33,8 +34,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -142,13 +145,15 @@ class PreorderCancelApiTest {
     }
 
     @Test
-    void order_가_답하지_않으면_503_이고_상태는_그대로다() throws Exception {
+    void order_가_답하지_않으면_한_번_다시_묻고_503_과_Retry_After_이며_상태는_그대로다() throws Exception {
         given(orderClient.getCancelability(any(), any())).willThrow(new ResourceAccessException("timeout"));
 
         cancel(customerId)
                 .andExpect(status().isServiceUnavailable())
+                .andExpect(header().string(HttpHeaders.RETRY_AFTER, "1"))
                 .andExpect(jsonPath("$.error.code").value("DEPENDENCY_UNAVAILABLE"));
 
+        verify(orderClient, times(2)).getCancelability(eq(token), any());
         assertThat(preorderStatus()).isEqualTo("PENDING_SYNC");
     }
 

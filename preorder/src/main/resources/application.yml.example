@@ -114,6 +114,17 @@ nova:
   external-mock:
     scope: preorder
 
+# 내부 호출(catalog · order) 장애 대응. 기본값은 코드(PreorderDefaults)에 있고, 바꿀 때만 여기서 덮는다
+# resilience4j:
+#   circuitbreaker:
+#     instances:
+#       order:
+#         wait-duration-in-open-state: 30s
+#   bulkhead:
+#     configs:
+#       default:
+#         max-concurrent-calls: 40
+
 # 외부 예약 Mock (별도 레포)
 external:
   mock:

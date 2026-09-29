@@ -4,6 +4,8 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.LoadingCache;
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.preorder.integration.Dependencies;
+import com.grandis.nova.preorder.integration.DependencyGuard;
 import com.grandis.nova.preorder.integration.InternalCallFailures;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
@@ -27,17 +29,19 @@ import java.util.concurrent.CompletionException;
 @Component
 public class CatalogReader {
 
-    static final String DEPENDENCY = "catalog";
+    static final String DEPENDENCY = Dependencies.CATALOG;
 
     static final Duration REFRESH_AFTER = Duration.ofMinutes(1);
     static final Duration EXPIRE_AFTER = Duration.ofMinutes(30);
     static final long MAXIMUM_PRODUCTS = 1_000;
 
     private final CatalogClient catalogClient;
+    private final DependencyGuard dependencyGuard;
     private final LoadingCache<Long, Optional<ProductCatalog>> products;
 
-    public CatalogReader(CatalogClient catalogClient) {
+    public CatalogReader(CatalogClient catalogClient, DependencyGuard dependencyGuard) {
         this.catalogClient = catalogClient;
+        this.dependencyGuard = dependencyGuard;
         this.products = Caffeine.newBuilder()
                 .refreshAfterWrite(REFRESH_AFTER)
                 .expireAfterWrite(EXPIRE_AFTER)
@@ -94,7 +98,8 @@ public class CatalogReader {
 
     private Optional<ProductCatalog> load(Long productId) {
         try {
-            return Optional.ofNullable(catalogClient.getProduct(productId).data());
+            return Optional.ofNullable(
+                    dependencyGuard.call(DEPENDENCY, () -> catalogClient.getProduct(productId)).data());
         } catch (HttpClientErrorException.NotFound e) {
             return Optional.empty();
         }

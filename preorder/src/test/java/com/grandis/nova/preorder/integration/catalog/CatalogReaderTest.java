@@ -6,6 +6,7 @@ import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.support.CatalogStubs;
 import com.grandis.nova.preorder.support.Concurrently.Outcome;
 import com.grandis.nova.preorder.support.Concurrently;
+import com.grandis.nova.preorder.support.DependencyGuards;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
@@ -26,7 +27,7 @@ class CatalogReaderTest {
     @Test
     void 같은_상품은_한_번만_부르고_이후는_캐시에서_읽는다() {
         FakeCatalogClient client = new FakeCatalogClient();
-        CatalogReader reader = new CatalogReader(client);
+        CatalogReader reader = new CatalogReader(client, DependencyGuards.passThrough());
 
         assertThat(reader.findOption(PRODUCT_ID, OPTION_ID)).get()
                 .extracting(OptionSnapshot::optionTitle).isEqualTo("블랙 / 256GB");
@@ -39,7 +40,7 @@ class CatalogReaderTest {
     void 오픈_순간_동시에_몰려도_catalog_는_한_번만_부른다() throws Exception {
         FakeCatalogClient client = new FakeCatalogClient();
         client.delayMillis = 200;
-        CatalogReader reader = new CatalogReader(client);
+        CatalogReader reader = new CatalogReader(client, DependencyGuards.passThrough());
         int requests = 20;
 
         List<Outcome<Boolean>> outcomes = Concurrently.run(requests, i -> () ->
@@ -52,7 +53,7 @@ class CatalogReaderTest {
 
     @Test
     void 그_상품의_옵션이_아니면_비어_있다() {
-        CatalogReader reader = new CatalogReader(new FakeCatalogClient());
+        CatalogReader reader = new CatalogReader(new FakeCatalogClient(), DependencyGuards.passThrough());
 
         assertThat(reader.findOption(PRODUCT_ID, 999L)).isEmpty();
     }
@@ -62,7 +63,7 @@ class CatalogReaderTest {
         FakeCatalogClient client = new FakeCatalogClient();
         client.notFound = true;
 
-        assertThat(new CatalogReader(client).findOption(PRODUCT_ID, OPTION_ID)).isEmpty();
+        assertThat(new CatalogReader(client, DependencyGuards.passThrough()).findOption(PRODUCT_ID, OPTION_ID)).isEmpty();
     }
 
     @Test
@@ -70,7 +71,7 @@ class CatalogReaderTest {
         FakeCatalogClient client = new FakeCatalogClient();
         client.unavailable = true;
 
-        assertThatThrownBy(() -> new CatalogReader(client).findOption(PRODUCT_ID, OPTION_ID))
+        assertThatThrownBy(() -> new CatalogReader(client, DependencyGuards.passThrough()).findOption(PRODUCT_ID, OPTION_ID))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
@@ -81,7 +82,7 @@ class CatalogReaderTest {
         FakeCatalogClient client = new FakeCatalogClient();
         client.errorStatus = HttpStatus.SERVICE_UNAVAILABLE;
 
-        assertThatThrownBy(() -> new CatalogReader(client).findOption(PRODUCT_ID, OPTION_ID))
+        assertThatThrownBy(() -> new CatalogReader(client, DependencyGuards.passThrough()).findOption(PRODUCT_ID, OPTION_ID))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
@@ -91,7 +92,7 @@ class CatalogReaderTest {
     void 없는_상품_외의_4xx_는_재시도_안내가_아니라_연동_오류다() {
         FakeCatalogClient client = new FakeCatalogClient();
         client.errorStatus = HttpStatus.BAD_REQUEST;
-        CatalogReader reader = new CatalogReader(client);
+        CatalogReader reader = new CatalogReader(client, DependencyGuards.passThrough());
 
         assertThatThrownBy(() -> reader.findOption(PRODUCT_ID, OPTION_ID))
                 .isInstanceOf(IllegalStateException.class)
@@ -104,7 +105,7 @@ class CatalogReaderTest {
     @Test
     void 비우면_다음_조회에서_다시_받는다() {
         FakeCatalogClient client = new FakeCatalogClient();
-        CatalogReader reader = new CatalogReader(client);
+        CatalogReader reader = new CatalogReader(client, DependencyGuards.passThrough());
         reader.findOption(PRODUCT_ID, OPTION_ID);
 
         client.optionStatus = "PAUSED";
@@ -117,7 +118,7 @@ class CatalogReaderTest {
 
     @Test
     void 판매_상태와_판매_방식을_판정한다() {
-        CatalogReader reader = new CatalogReader(new FakeCatalogClient());
+        CatalogReader reader = new CatalogReader(new FakeCatalogClient(), DependencyGuards.passThrough());
 
         OptionSnapshot snapshot = reader.findOption(PRODUCT_ID, OPTION_ID).orElseThrow();
 

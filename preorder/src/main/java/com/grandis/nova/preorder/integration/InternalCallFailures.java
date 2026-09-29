@@ -1,7 +1,5 @@
 package com.grandis.nova.preorder.integration;
 
-import com.grandis.nova.common.BusinessException;
-import com.grandis.nova.common.CommonErrorCode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.client.HttpClientErrorException;
@@ -27,8 +25,8 @@ public final class InternalCallFailures {
         return new IllegalStateException(dependency + " 연동 오류: " + cause.getStatusCode(), cause);
     }
 
-    public static BusinessException unavailable(String dependency, String target, Throwable cause) {
+    public static DependencyUnavailableException unavailable(String dependency, String target, Throwable cause) {
         log.warn("{} 호출 실패 {}", dependency, target, cause);
-        return new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+        return new DependencyUnavailableException(DependencyGuard.SHORT_RETRY_AFTER);
     }
 }
