@@ -22,7 +22,7 @@ import static com.grandis.nova.preorder.support.AccessTokens.withToken;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** 경로별 인증 · 권한. 토큰은 실제로 서명해 X-Session-Token 에 싣고 검증 필터를 그대로 통과시킨다. */
+/** 경로별 인증 · 권한. 토큰은 실제로 서명해 Authorization: Bearer 로 싣고 검증 필터를 그대로 통과시킨다. */
 @PreorderIntegrationTest
 @AutoConfigureMockMvc
 class AuthenticationApiTest {

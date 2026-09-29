@@ -30,23 +30,23 @@ public class PreorderCancelService {
     }
 
     /** 회원 본인의 취소. 남의 예약은 존재를 알리지 않는다(404). */
-    public CancelResult cancelByCustomer(Long customerId, String preorderToken, String reason, String sessionToken) {
+    public CancelResult cancelByCustomer(Long customerId, String preorderToken, String reason, String accessToken) {
         PreorderSnapshot preorder = preorders.getByToken(preorderToken);
         if (!preorder.customerId().equals(customerId)) {
             throw new BusinessException(PreorderErrorCode.PREORDER_NOT_FOUND);
         }
-        return cancel(preorder, EventActor.USER, reason, CancelReason.USER, sessionToken);
+        return cancel(preorder, EventActor.USER, reason, CancelReason.USER, accessToken);
     }
 
     /** 관리자 취소. 사유는 이력에 남는다(필수). */
-    public CancelResult cancelByAdmin(String preorderToken, String reason, String sessionToken) {
-        return cancel(preorders.getByToken(preorderToken), EventActor.ADMIN, reason, CancelReason.ADMIN, sessionToken);
+    public CancelResult cancelByAdmin(String preorderToken, String reason, String accessToken) {
+        return cancel(preorders.getByToken(preorderToken), EventActor.ADMIN, reason, CancelReason.ADMIN, accessToken);
     }
 
     private CancelResult cancel(PreorderSnapshot preorder, EventActor actor, String reason, CancelReason cancelReason,
-                                String sessionToken) {
+                                String accessToken) {
         if (preorder.isCancelable()) {
-            cancelabilityChecker.requireCancelable(preorder.preorderToken(), sessionToken);
+            cancelabilityChecker.requireCancelable(preorder.preorderToken(), accessToken);
             cancelStarter.start(preorder, actor, reason, cancelReason);
         }
         PreorderSnapshot current = preorders.getByToken(preorder.preorderToken());
