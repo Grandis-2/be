@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.integration;
 
 import io.github.resilience4j.bulkhead.BulkheadConfig;
+import io.github.resilience4j.bulkhead.BulkheadFullException;
 import io.github.resilience4j.bulkhead.BulkheadRegistry;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
@@ -38,7 +39,7 @@ class DependencyGuardTest {
             .slowCallRateThreshold(50)
             .waitDurationInOpenState(OPEN_WAIT)
             .permittedNumberOfCallsInHalfOpenState(1)
-            .ignoreExceptions(HttpClientErrorException.class)
+            .ignoreExceptions(HttpClientErrorException.class, BulkheadFullException.class)
             .build());
     final DependencyGuard guard = new DependencyGuard(circuitBreakers,
             RetryRegistry.of(RetryConfig.custom()
@@ -112,7 +113,7 @@ class DependencyGuardTest {
     }
 
     @Test
-    void 동시_호출_상한이_차면_기다리지_않고_바로_503() throws Exception {
+    void 동시_호출_상한이_차면_기다리지_않고_바로_503_이고_회로의_실패로_세지_않는다() throws Exception {
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         CompletableFuture<String> holding = CompletableFuture.supplyAsync(() -> guard.call(DEPENDENCY, () -> {
@@ -126,6 +127,7 @@ class DependencyGuardTest {
             assertThatThrownBy(() -> guard.call(DEPENDENCY, () -> "second"))
                     .isInstanceOfSatisfying(DependencyUnavailableException.class,
                             e -> assertThat(e.retryAfter()).isEqualTo(DependencyGuard.SHORT_RETRY_AFTER));
+            assertThat(circuitBreaker().getMetrics().getNumberOfFailedCalls()).isZero();
         } finally {
             release.countDown();
         }

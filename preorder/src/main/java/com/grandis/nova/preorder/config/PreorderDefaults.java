@@ -54,7 +54,9 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
         defaults.put("resilience4j.circuitbreaker.configs.default.slow-call-rate-threshold", 50);
         defaults.put("resilience4j.circuitbreaker.configs.default.wait-duration-in-open-state", "10s");
         defaults.put("resilience4j.circuitbreaker.configs.default.permitted-number-of-calls-in-half-open-state", 5);
-        defaults.put("resilience4j.circuitbreaker.configs.default.ignore-exceptions", clientError);
+        // 상한 초과는 상대 장애가 아니라 우리 쪽 거절이라 회로의 실패로 세지 않는다(몰림만으로 회로가 열리지 않게)
+        defaults.put("resilience4j.circuitbreaker.configs.default.ignore-exceptions",
+                clientError + ",io.github.resilience4j.bulkhead.BulkheadFullException");
         defaults.put("resilience4j.bulkhead.configs.default.max-concurrent-calls", 20);
         defaults.put("resilience4j.bulkhead.configs.default.max-wait-duration", "0");
         for (String dependency : Dependencies.ALL) {

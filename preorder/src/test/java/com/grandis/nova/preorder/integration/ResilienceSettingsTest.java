@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.integration;
 
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
+import io.github.resilience4j.bulkhead.BulkheadFullException;
 import io.github.resilience4j.bulkhead.BulkheadRegistry;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -55,6 +56,8 @@ class ResilienceSettingsTest {
         assertThat(circuitBreaker.getWaitIntervalFunctionInOpenState().apply(1)).isEqualTo(10_000L);
         assertThat(circuitBreaker.getIgnoreExceptionPredicate().test(
                 HttpClientErrorException.create(HttpStatus.NOT_FOUND, "", null, null, null))).isTrue();
+        assertThat(circuitBreaker.getIgnoreExceptionPredicate().test(
+                BulkheadFullException.createBulkheadFullException(bulkheads.bulkhead(dependency)))).isTrue();
     }
 
     @ParameterizedTest
