@@ -5,6 +5,7 @@ import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.PlacedOrders;
+import com.grandis.nova.order.support.TestAuth;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,7 +27,6 @@ import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -162,19 +162,14 @@ class AdminOrderQueryApiTest {
     void userTokenIsForbidden() throws Exception {
         Order order = orders.place(customerId);
 
-        mockMvc.perform(get("/api/v1/admin/orders").with(user(customerId.toString()).roles("USER")))
+        mockMvc.perform(get("/api/v1/admin/orders").with(TestAuth.customer(customerId)))
                 .andExpect(status().isForbidden());
         mockMvc.perform(get("/api/v1/admin/orders/" + order.orderToken().value())
-                        .with(user(customerId.toString()).roles("USER")))
+                        .with(TestAuth.customer(customerId)))
                 .andExpect(status().isForbidden());
     }
 
-    /*
-     * 임시 인증 방식. common:security 도입 시: 이 파일의 user(...)(여기와 userTokenIsForbidden)를
-     * authentication(new NovaAuthentication(new AuthenticatedPrincipal(..., Role.ADMIN / Role.USER))) 로 바꾼다
-     * (OrderQueryApiTest.me 의 주석 참고).
-     */
     private static RequestPostProcessor admin() {
-        return user("admin").roles("ADMIN");
+        return TestAuth.admin();
     }
 }

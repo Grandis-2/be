@@ -57,7 +57,7 @@ class JwtAuthenticationFilterTest {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", path);
         request.setServletPath(path);
         if (token != null) {
-            request.addHeader(JwtAuthenticationFilter.HEADER, token);
+            request.addHeader(BearerTokens.HEADER, BearerTokens.value(token));
         }
         return request;
     }
@@ -74,14 +74,27 @@ class JwtAuthenticationFilterTest {
     @Test
     @DisplayName("헤더가 없으면 아무것도 하지 않고 다음으로 넘긴다 — 폐기 조회도 안 한다")
     void noHeaderPassesThrough() throws Exception {
-        assertThat(run(request("/api/v1/reservations", null))).isNull();
+        assertThat(run(request("/api/v1/preorders", null))).isNull();
+        verifyNoInteractions(checker);
+    }
+
+    @Test
+    @DisplayName("다른 스킴(Basic) · 스킴만 · 토큰 뒤에 더 붙은 헤더는 자격 증명 없음으로 넘긴다 — 파싱도 폐기 조회도 안 한다")
+    void nonBearerAuthorizationPassesThrough() throws Exception {
+        for (String header : new String[] {"Basic dXNlcjpwdw==", "Bearer", "Bearer " + access("101", Role.USER) + " extra"}) {
+            MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/preorders");
+            request.setServletPath("/api/v1/preorders");
+            request.addHeader(BearerTokens.HEADER, header);
+            assertThat(run(request)).as(header).isNull();
+            assertThat(request.getAttribute(JwtAuthenticationFilter.ATTR_FAILURE_REASON)).as("거절이 아니라 없음").isNull();
+        }
         verifyNoInteractions(checker);
     }
 
     @Test
     @DisplayName("잘못된 토큰은 컨텍스트를 비운 채 넘긴다. 401 은 여기서 내지 않는다")
     void malformedTokenIsRejectedSilently() throws Exception {
-        MockHttpServletRequest request = request("/api/v1/reservations", "not.a.jwt");
+        MockHttpServletRequest request = request("/api/v1/preorders", "not.a.jwt");
 
         assertThat(run(request)).isNull();
         assertThat(request.getAttribute(JwtAuthenticationFilter.ATTR_FAILURE_REASON)).isNotNull();
@@ -94,7 +107,7 @@ class JwtAuthenticationFilterTest {
     void refreshTokenIsRejected() throws Exception {
         String refresh = provider.create("101", Role.USER, sid, TokenType.REFRESH);
 
-        assertThat(run(request("/api/v1/reservations", refresh))).isNull();
+        assertThat(run(request("/api/v1/preorders", refresh))).isNull();
         verifyNoInteractions(checker);
     }
 
@@ -103,7 +116,7 @@ class JwtAuthenticationFilterTest {
     void revokedTokenIsRejected() throws Exception {
         when(checker.isRevoked(any())).thenReturn(true);
 
-        assertThat(run(request("/api/v1/reservations", access("101", Role.USER)))).isNull();
+        assertThat(run(request("/api/v1/preorders", access("101", Role.USER)))).isNull();
     }
 
     @Test
@@ -113,7 +126,7 @@ class JwtAuthenticationFilterTest {
         String[] subjectSeenDownstream = new String[1];
         jakarta.servlet.FilterChain capturing = (req, res) -> subjectSeenDownstream[0] = MDC.get(JwtAuthenticationFilter.MDC_SUBJECT);
 
-        filter.doFilter(request("/api/v1/reservations", access("101", Role.USER)), new MockHttpServletResponse(), capturing);
+        filter.doFilter(request("/api/v1/preorders", access("101", Role.USER)), new MockHttpServletResponse(), capturing);
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
 
         assertThat(auth).isInstanceOf(NovaAuthentication.class);
@@ -137,11 +150,11 @@ class JwtAuthenticationFilterTest {
     }
 
     @Test
-    @DisplayName("폐기 조회 실패 + 열린 경로(접수) → 통과시키고 fallback_open 을 센다")
+    @DisplayName("폐기 조회 실패 + 열린 경로(접수 POST /api/v1/preorders, D-2) → 통과시키고 fallback_open 을 센다")
     void lookupFailureOnOpenPathPasses() throws Exception {
         when(checker.isRevoked(any())).thenThrow(new RevocationCheckFailedException(new RuntimeException("redis down")));
 
-        Authentication auth = run(request("/api/v1/reservations", access("101", Role.USER)));
+        Authentication auth = run(request("/api/v1/preorders", access("101", Role.USER)));
 
         assertThat(auth).isNotNull();
         assertThat(policy.fallbackOpenCount()).isEqualTo(1);
@@ -163,7 +176,7 @@ class JwtAuthenticationFilterTest {
     void unexpectedExceptionPropagates() {
         when(checker.isRevoked(any())).thenThrow(new IllegalStateException("bug"));
 
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> run(request("/api/v1/reservations", access("101", Role.USER))))
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> run(request("/api/v1/preorders", access("101", Role.USER))))
                 .isInstanceOf(IllegalStateException.class);
     }
 
@@ -173,7 +186,7 @@ class JwtAuthenticationFilterTest {
         NovaAuthentication existing = new NovaAuthentication(new AuthenticatedPrincipal("7", Role.USER));
         SecurityContextHolder.getContext().setAuthentication(existing);
 
-        Authentication auth = run(request("/api/v1/reservations", access("101", Role.USER)));
+        Authentication auth = run(request("/api/v1/preorders", access("101", Role.USER)));
 
         assertThat(auth).isSameAs(existing);
         verifyNoInteractions(checker);

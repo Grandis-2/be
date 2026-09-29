@@ -5,6 +5,7 @@ import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.PlacedOrders;
+import com.grandis.nova.order.support.TestAuth;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,7 +23,6 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -195,9 +195,9 @@ class OrderQueryApiTest {
     void adminTokenIsForbiddenOnUserApi() throws Exception {
         Order order = orders.place(customerId);
 
-        mockMvc.perform(get("/api/v1/orders").with(user("admin").roles("ADMIN")))
+        mockMvc.perform(get("/api/v1/orders").with(TestAuth.admin()))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(get("/api/v1/orders/" + order.orderToken().value()).with(user("admin").roles("ADMIN")))
+        mockMvc.perform(get("/api/v1/orders/" + order.orderToken().value()).with(TestAuth.admin()))
                 .andExpect(status().isForbidden());
     }
 
@@ -206,15 +206,8 @@ class OrderQueryApiTest {
         mockMvc.perform(get("/api/v1/orders")).andExpect(status().isUnauthorized());
     }
 
-    /*
-     * 임시 인증 방식 — 임시 리졸버(order.web)는 SecurityContext 의 이름을 회원 id 로 읽는다.
-     * common:security 도입 시: 그쪽 리졸버는 NovaAuthentication 만 인증으로 보므로 user(...) 는 401 이 된다. 이 파일의 user(...) 를
-     *   USER  → authentication(new NovaAuthentication(new AuthenticatedPrincipal(customerId.toString(), Role.USER)))
-     *   ADMIN → authentication(new NovaAuthentication(new AuthenticatedPrincipal("admin", Role.ADMIN)))
-     * 로 바꾼다(NovaAuthentication 이 ROLE_USER · ROLE_ADMIN 권한을 실어 경로 권한 규칙은 그대로 통과한다).
-     */
     private RequestPostProcessor me() {
-        return user(customerId.toString()).roles("USER");
+        return TestAuth.customer(customerId);
     }
 
     private static String encode(String raw) {

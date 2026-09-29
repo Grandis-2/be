@@ -1,40 +1,30 @@
 package com.grandis.nova.order.config;
 
+import com.grandis.nova.common.security.SecurityFilterChainSupport;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
-import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 
 /**
- * 경로별 권한만 정한다. 토큰 검증 필터가 없어 보호 경로는 항상 401 이다.
- * common:security(#14) 머지 후 SecurityFilterChainSupport 로 교체한다.
+ * order 의 인가 규칙. 토큰 검증 · 401/403 봉투 · 세션 없음은 common:security 의 SecurityFilterChainSupport 가 한다.
  *
- * common:security 도입 시: 체인 본문을 SecurityFilterChainSupport.build(http, authorize -> ...) 로 바꾸고 아래 경로 규칙만
- * 넘긴다. 401 · 403 응답은 그쪽 JsonAuthFailureHandlers 가 봉투로 낸다(HttpStatusEntryPoint 를 지운다).
+ * 이 서비스가 가진 경로만 적고 나머지는 거부한다(denyAll). 규칙 없이 추가된 엔드포인트가 열린 채 배포되지 않게 —
+ * 새 경로는 여기 규칙을 더해야 테스트가 통과한다. 매핑 없는 경로도 404 가 아니라 401(익명) · 403(인증)이다.
+ *
+ * 폐기 조회 실패 때 닫는 경로(auth.revocation-check.fail-closed-paths)는 설정에 있다 — application.yml.example.
  */
 @Configuration(proxyBeanMethods = false)
 public class SecurityConfig {
 
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http) {
-        return http
-                .csrf(AbstractHttpConfigurer::disable)
-                .httpBasic(AbstractHttpConfigurer::disable)
-                .formLogin(AbstractHttpConfigurer::disable)
-                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .exceptionHandling(handling ->
-                        handling.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
-                .authorizeHttpRequests(authorize -> authorize
-                        .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
-                        .requestMatchers("/api/v1/orders/**").authenticated()
-                        // 서비스 간 내부 API. 호출자가 사용자 토큰을 그대로 싣는다 — 회원 · 관리자 모두, 주인 확인은 유스케이스가 한다.
-                        // 아래 permitAll 로 떨어지면 인증 없이 열린다.
-                        .requestMatchers("/internal/**").authenticated()
-                        .anyRequest().permitAll())
-                .build();
+    SecurityFilterChain securityFilterChain(HttpSecurity http, SecurityFilterChainSupport support) throws Exception {
+        return support.build(http, authorize -> authorize
+                .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                .requestMatchers("/api/v1/orders/**").authenticated()
+                // 서비스 간 내부 API. 호출자(preorder)가 사용자 토큰을 Authorization: Bearer 로 그대로 싣는다 —
+                // 회원 · 관리자 모두, 주인 확인은 유스케이스가 한다.
+                .requestMatchers("/internal/**").authenticated()
+                .anyRequest().denyAll());
     }
 }

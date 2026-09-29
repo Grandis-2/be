@@ -1,5 +1,6 @@
 package com.grandis.nova.order.order.api;
 
+import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.order.client.preorder.PreorderClient;
 import com.grandis.nova.order.support.Concurrently;
 import com.grandis.nova.order.support.Concurrently.Outcome;
@@ -7,7 +8,7 @@ import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderFixtures.PreorderProduct;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.PreorderStubs;
-import com.grandis.nova.order.web.SessionHeader;
+import com.grandis.nova.order.support.TestAuth;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -28,7 +29,6 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -38,22 +38,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * POST /api/v1/orders (source=PREORDER). MySQL 위에서 돌고 preorder 내부 API 만 대역이다.
  * 대역 응답은 preorder 결제 가능 확인 계약과 같은 모양이다(계약 대조는 PreorderClientTest).
  *
- * common:security 도입 시: 인증 흉내를 user(...).roles(...) 에서 NovaAuthentication 으로 바꾼다
- * (authentication(new NovaAuthentication(new AuthenticatedPrincipal(customerId.toString(), Role.USER))),
- * ADMIN 은 ("admin", Role.ADMIN)). common:security 의 리졸버는
- * NovaAuthentication 만 인증으로 보므로 그대로 두면 모든 요청이 401 이 된다.
+ * 인증은 흉내({@link TestAuth})다 — 필터가 토큰을 읽지 않으므로 Authorization 헤더의 값은 전달 확인용 자리일 뿐이다.
  */
 @OrderIntegrationTest
 @AutoConfigureMockMvc
 class PlaceOrderApiTest {
 
-    // 에픽 완료 조건(NV-45 §5): 동시 100건 → 주문 1건.
+    // 에픽 완료 조건: 같은 예약으로 동시에 100건을 보내도 주문은 1건만 생긴다(나머지는 같은 주문을 돌려받는다).
     static final int CONCURRENT_REQUESTS = 100;
 
     // 같은 상품 안에서 순번이 겹치면 안 된다(uq_preorder_position). 테스트마다 상품을 새로 만들지만 한 테스트 안에서 예약을 여럿 만든다.
     static final AtomicLong QUEUE_POSITION = new AtomicLong();
 
-    // 사용자가 보낸 세션 토큰 자리(SessionHeader, 접두어 없음). preorder 에 그대로 전달돼야 한다. 실제 토큰 모양이 아니다.
+    // 사용자가 보낸 액세스 토큰 자리(Authorization: Bearer 의 값). preorder 에 그대로 전달돼야 한다. 실제 토큰 모양이 아니다.
     static final String SESSION = "place-order-api-test";
 
     @Autowired
@@ -179,24 +176,24 @@ class PlaceOrderApiTest {
         assertThat(orderCount()).isZero();
     }
 
-    // 사용자가 보낸 세션 토큰을 그대로 preorder 에 싣는다(새로 발급하지 않는다).
+    // 사용자가 보낸 액세스 토큰을 그대로 preorder 에 Authorization: Bearer 로 싣는다(새로 발급하지 않는다).
     @Test
-    void forwardsSessionTokenToPreorder() throws Exception {
+    void forwardsAccessTokenToPreorder() throws Exception {
         stubPayable();
 
         place(customerId, token).andExpect(status().isCreated());
 
-        verify(preorderClient).getPayability(token, SESSION);
+        verify(preorderClient).getPayability(token, BearerTokens.value(SESSION));
     }
 
-    // 다른 헤더에 실린 토큰은 전달하지 않는다 — preorder 는 SessionHeader 만 읽는다.
+    // 옛 헤더(X-Session-Token)의 토큰은 읽지도 전달하지도 않는다(NV-137) — 싣지 않으면 preorder 가 401 로 판단한다.
     @Test
-    void authorizationHeaderIsNotForwarded() throws Exception {
+    void legacySessionHeaderIsNotForwarded() throws Exception {
         stubPayable();
 
         mockMvc.perform(post("/api/v1/orders").contentType(MediaType.APPLICATION_JSON).content(body("PREORDER", token))
-                        .header("Authorization", "Bearer " + SESSION)
-                        .with(user(customerId.toString()).roles("USER")))
+                        .header("X-Session-Token", SESSION)
+                        .with(TestAuth.customer(customerId)))
                 .andExpect(status().isCreated());
 
         verify(preorderClient).getPayability(token, null);
@@ -337,7 +334,7 @@ class PlaceOrderApiTest {
     @Test
     void adminIs403() throws Exception {
         mockMvc.perform(post("/api/v1/orders").contentType(MediaType.APPLICATION_JSON).content(body("PREORDER", token))
-                        .with(user("admin").roles("ADMIN")))
+                        .with(TestAuth.admin()))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
     }
@@ -393,8 +390,8 @@ class PlaceOrderApiTest {
 
     private ResultActions perform(Long customer, String json) throws Exception {
         return mockMvc.perform(post("/api/v1/orders").contentType(MediaType.APPLICATION_JSON).content(json)
-                .header(SessionHeader.NAME, SESSION)
-                .with(user(customer.toString()).roles("USER")));
+                .header(BearerTokens.HEADER, BearerTokens.value(SESSION))
+                .with(TestAuth.customer(customer)));
     }
 
     private static String body(String source, String preorderToken) {

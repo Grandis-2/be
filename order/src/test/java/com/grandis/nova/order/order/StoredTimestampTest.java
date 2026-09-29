@@ -12,11 +12,8 @@ import com.grandis.nova.order.support.OrderIntegrationTest;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.convention.TestBean;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
@@ -34,21 +31,21 @@ import static org.assertj.core.api.Assertions.assertThat;
  * macOS 시계는 마이크로초라 이 어긋남을 로컬에서 볼 수 없다.
  */
 @OrderIntegrationTest
-@Import(StoredTimestampTest.NanosecondClock.class)
 @Transactional
 class StoredTimestampTest {
 
     /** 마이크로초 아래가 .9 — 반올림되면 다음 마이크로초가 된다. */
     static final Instant NANOS = Instant.parse("2026-01-01T00:00:00.000000900Z");
 
-    @TestConfiguration(proxyBeanMethods = false)
-    static class NanosecondClock {
+    /*
+     * 운영 저장 시계 빈(storageClock)을 이름으로 바꿔 끼운다. 보정은 운영과 같은 함수로 하고 바탕 시계만 나노초 고정이다.
+     * @Primary 시계를 하나 더 두는 방식은 쓸 수 없다 — common:security 의 clock 과 함께 Clock 빈이 셋, @Primary 가 둘이 된다.
+     */
+    @TestBean(name = "storageClock", methodName = "nanosecondClock")
+    Clock storageClock;
 
-        @Bean
-        @Primary
-        Clock nanosecondClock() {
-            return JpaAuditingConfig.atStorageResolution(Clock.fixed(NANOS, ZoneOffset.UTC));
-        }
+    static Clock nanosecondClock() {
+        return JpaAuditingConfig.atStorageResolution(Clock.fixed(NANOS, ZoneOffset.UTC));
     }
 
     @Autowired

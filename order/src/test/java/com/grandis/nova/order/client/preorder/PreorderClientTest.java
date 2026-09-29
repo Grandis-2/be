@@ -1,7 +1,7 @@
 package com.grandis.nova.order.client.preorder;
 
 import com.grandis.nova.common.BusinessException;
-import com.grandis.nova.order.web.SessionHeader;
+import com.grandis.nova.common.security.BearerTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -36,7 +36,7 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 
 /**
  * 실제 계약(order-handoff.md 요청 2, preorder InternalPreorderController)의 경로 · 헤더 · 응답을 그대로 읽는지.
- * 기준은 문서가 아니라 preorder 구현이다 — 문서의 헤더(Authorization: Bearer)가 구현(X-Session-Token)과 달랐다.
+ * 헤더는 common:security 인증 필터가 읽는 Authorization: Bearer 다(NV-137 — 이전 X-Session-Token 은 더 이상 읽히지 않는다).
  *
  * 계약 대조: 아래 JSON 은 preorder PayabilityResponse 를 ApiResponse 로 감싼 모양을 복제한 것이다(preorder 는 order 의
  * 의존성이 아니라 직접 직렬화할 수 없다). preorder 쪽 필드가 바뀌면 이 예시도 같이 바꾼다.
@@ -46,7 +46,7 @@ class PreorderClientTest {
 
     static final String PREORDER_UUID = "0b8f6a3e-5a8c-4d59-9a53-3c1f0e0f7a11";
     static final String PAYABILITY_URL = "http://preorder/internal/preorders/" + PREORDER_UUID + "/payability";
-    // 전달할 세션 토큰 자리(접두어 없음). 로그 검사에도 쓴다. 실제 토큰 모양이 아니다.
+    // 전달할 액세스 토큰 자리(접두어 없음). 로그 검사에도 쓴다. 실제 토큰 모양이 아니다.
     static final String SESSION = "order-client-test-user-7";
 
     MockRestServiceServer server;
@@ -61,22 +61,26 @@ class PreorderClientTest {
     }
 
     /*
-     * 헤더 이름 고정. preorder 는 common:security JwtAuthenticationFilter.HEADER("X-Session-Token")만 읽고 값은 접두어 없는
-     * JWT 그대로다(preorder OrderClient · PreorderCancelController 도 같은 헤더로 전달). order 는 아직 common:security 에
-     * 의존하지 않아 그 상수를 직접 대조할 수 없으므로 값으로 고정한다.
-     * common:security 도입 시: SessionHeader 를 지우고 이 테스트도 지운다.
+     * 보내는 헤더가 받는 쪽 필터의 규칙(BearerTokens.extract)으로 다시 읽히는지. 이름 · 접두어를 값으로 박지 않고
+     * 같은 규칙으로 대조한다 — 규칙이 바뀌면 여기서 드러난다. 옛 헤더는 싣지 않는다.
      */
     @Test
-    void sessionHeaderMatchesPreorderAuthenticationFilter() {
-        assertThat(SessionHeader.NAME).isEqualTo("X-Session-Token");
+    void forwardedHeaderIsReadableByAuthenticationFilter() {
+        server.expect(requestTo(PAYABILITY_URL))
+                .andExpect(request -> assertThat(BearerTokens.parse(request.getHeaders().getFirst(BearerTokens.HEADER)))
+                        .contains(SESSION))
+                .andExpect(headerDoesNotExist("X-Session-Token"))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED));
+
+        catchThrowable(() -> new PreorderReader(client).find(PREORDER_UUID, SESSION));
+        server.verify();
     }
 
     @Test
     void readsPayablePreorderFromEnvelopeAndForwardsSessionToken() {
         server.expect(requestTo(PAYABILITY_URL))
                 .andExpect(method(HttpMethod.GET))
-                .andExpect(header(SessionHeader.NAME, SESSION))
-                .andExpect(headerDoesNotExist("Authorization"))
+                .andExpect(header(BearerTokens.HEADER, BearerTokens.value(SESSION)))
                 .andRespond(withSuccess("""
                         {"success":true,
                          "data":{"preorderId":"%s","preorderInternalId":50231,"customerId":1024,
@@ -87,7 +91,7 @@ class PreorderClientTest {
                          "error":null,"timestamp":"2026-09-03T02:00:00Z","traceId":"t-1"}
                         """.formatted(PREORDER_UUID), MediaType.APPLICATION_JSON));
 
-        PreorderPayability payability = client.getPayability(PREORDER_UUID, SESSION).data();
+        PreorderPayability payability = client.getPayability(PREORDER_UUID, BearerTokens.value(SESSION)).data();
 
         assertThat(payability).isEqualTo(new PreorderPayability(PREORDER_UUID, 50231L, 1024L, 101L, 1002L,
                 "갤럭시 G999", "256GB 블랙", new BigDecimal("1290000"), "PAYABLE",
@@ -109,7 +113,7 @@ class PreorderClientTest {
                          "error":null,"timestamp":"2026-09-03T02:00:00Z","traceId":"t-1"}
                         """.formatted(PREORDER_UUID), MediaType.APPLICATION_JSON));
 
-        PreorderPayability payability = client.getPayability(PREORDER_UUID, SESSION).data();
+        PreorderPayability payability = client.getPayability(PREORDER_UUID, BearerTokens.value(SESSION)).data();
 
         assertThat(payability.payable()).isFalse();
         assertThat(payability.reason()).isEqualTo("NOT_YET_REGISTERED");
@@ -121,7 +125,7 @@ class PreorderClientTest {
     @Test
     void missingSessionTokenIsNotSent() {
         server.expect(requestTo(PAYABILITY_URL))
-                .andExpect(headerDoesNotExist(SessionHeader.NAME))
+                .andExpect(headerDoesNotExist(BearerTokens.HEADER))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED));
 
         assertThatThrownBy(() -> client.getPayability(PREORDER_UUID, null))
@@ -133,7 +137,7 @@ class PreorderClientTest {
     void missingPreorderIsNotFound() {
         server.expect(requestTo(PAYABILITY_URL)).andRespond(withStatus(HttpStatus.NOT_FOUND));
 
-        assertThatThrownBy(() -> client.getPayability(PREORDER_UUID, SESSION))
+        assertThatThrownBy(() -> client.getPayability(PREORDER_UUID, BearerTokens.value(SESSION)))
                 .isInstanceOf(HttpClientErrorException.NotFound.class);
     }
 
@@ -165,8 +169,33 @@ class PreorderClientTest {
     void someoneElsesPreorderIsForbidden() {
         server.expect(requestTo(PAYABILITY_URL)).andRespond(withStatus(HttpStatus.FORBIDDEN));
 
-        assertThatThrownBy(() -> client.getPayability(PREORDER_UUID, SESSION))
+        assertThatThrownBy(() -> client.getPayability(PREORDER_UUID, BearerTokens.value(SESSION)))
                 .isInstanceOf(HttpClientErrorException.Forbidden.class);
+    }
+
+    /*
+     * 2xx 인데 응답이 계약과 다르면(본문 모양 · Content-Type) 다시 불러도 같다 — 일시 장애(503)가 아니라 연동 오류(500).
+     * RestClient 가 실제로 올리는 예외 모양(원인 HttpMessageNotReadableException / UnknownContentTypeException)을 여기서 본다.
+     */
+    @Test
+    void malformedBodyIsIntegrationError(CapturedOutput output) {
+        server.expect(requestTo(PAYABILITY_URL))
+                .andRespond(withSuccess("{\"success\":true,\"data\":{\"payable\":\"not-a-boolean\"", MediaType.APPLICATION_JSON));
+
+        Throwable thrown = catchThrowable(() -> new PreorderReader(client).find(PREORDER_UUID, SESSION));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class);
+        assertNoCredential(thrown, output);
+    }
+
+    @Test
+    void unexpectedContentTypeIsIntegrationError(CapturedOutput output) {
+        server.expect(requestTo(PAYABILITY_URL)).andRespond(withSuccess("<html>gateway</html>", MediaType.TEXT_HTML));
+
+        Throwable thrown = catchThrowable(() -> new PreorderReader(client).find(PREORDER_UUID, SESSION));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class);
+        assertNoCredential(thrown, output);
     }
 
     // 실패를 로그로 남기는 경로(연동 오류 · 장애)에서도 전달한 토큰은 로그와 예외 메시지에 없다.

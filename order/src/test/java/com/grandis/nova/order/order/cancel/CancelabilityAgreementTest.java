@@ -29,8 +29,8 @@ class CancelabilityAgreementTest {
     private static boolean rejectedForShipment(OrderStatus status, CancelReason reason) {
         PreorderOrderSettled settled;
         try {
-            settled = PreorderCancelSettlement.settledFor(status,
-                    new PreorderCancel(50231L, "9f1c-preorder", 1024L, reason, 3L));
+            settled = SettlePreorderCancelService.settledFor(status,
+                    new SettlePreorderCancelCommand(50231L, "9f1c-preorder", 1024L, reason, 3L));
         } catch (SettlementDeferredException | IllegalStateException e) {
             return false;
         }

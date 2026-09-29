@@ -4,11 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.security.JwtAuthenticationFilter;
 import com.grandis.nova.common.security.JwtTokenProvider;
 import com.grandis.nova.common.security.RevocationCheckFailedException;
@@ -35,7 +38,15 @@ import org.springframework.web.context.WebApplicationContext;
 @SpringBootTest(classes = ChainTestApp.class, properties = {
         "jwt.issuer=nova-test",
         "jwt.access-token-validity=1h",
-        "jwt.refresh-token-validity=14d"
+        "jwt.refresh-token-validity=14d",
+        // 사전예약 · 주문을 같이 서비스하는 앱의 설정 모양 — 공통 기본(관리자 · 재발급 · 내 정보)에 도메인 경로를 더한 것
+        "auth.revocation-check.fail-closed-paths[0]=/api/v1/admin/**",
+        "auth.revocation-check.fail-closed-paths[1]=/api/v1/session/refresh",
+        "auth.revocation-check.fail-closed-paths[2]=/api/v1/me/**",
+        "auth.revocation-check.fail-closed-paths[3]=/api/v1/orders/*/payment-attempts/**",
+        "auth.revocation-check.fail-closed-paths[4]=POST /api/v1/preorders/*/cancel",
+        "auth.revocation-check.fail-closed-paths[5]=POST /api/v1/orders/*/cancel",
+        "auth.revocation-check.fail-closed-paths[6]=PATCH /api/v1/orders/*/shipping-address"
 })
 @DisplayName("SecurityFilterChain (인가 규칙 · 폐기 조회 실패 정책 · 응답 봉투)")
 class SecurityChainTest {
@@ -66,7 +77,7 @@ class SecurityChainTest {
         when(checker.isRevoked(any())).thenReturn(false);
     }
 
-    private static final String H = JwtAuthenticationFilter.HEADER;
+    private static final String H = BearerTokens.HEADER;
 
     @Test
     @DisplayName("토큰 없이 공개 경로는 200")
@@ -77,7 +88,7 @@ class SecurityChainTest {
     @Test
     @DisplayName("토큰 없이 보호 경로는 401 UNAUTHENTICATED 봉투 (traceId 포함, details 없음)")
     void protectedWithoutToken() throws Exception {
-        mvc.perform(post("/api/v1/reservations"))
+        mvc.perform(post("/api/v1/preorders"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().exists(RequestIdFilter.HEADER))
                 .andExpect(jsonPath("$.success").value(false))
@@ -90,26 +101,26 @@ class SecurityChainTest {
     @Test
     @DisplayName("잘못된 토큰은 401")
     void malformedToken() throws Exception {
-        mvc.perform(post("/api/v1/reservations").header(H, "garbage")).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/v1/preorders").header(H, BearerTokens.value("garbage"))).andExpect(status().isUnauthorized());
     }
 
     @Test
     @DisplayName("공개 경로에 잘못된 토큰이 와도 통과한다 (필터는 401 을 직접 내지 않는다)")
     void publicWithGarbageToken() throws Exception {
-        mvc.perform(get("/api/v1/products/1").header(H, "garbage")).andExpect(status().isOk());
+        mvc.perform(get("/api/v1/products/1").header(H, BearerTokens.value("garbage"))).andExpect(status().isOk());
     }
 
     @Test
     @DisplayName("폐기된 토큰은 401")
     void revokedToken() throws Exception {
         when(checker.isRevoked(any())).thenReturn(true);
-        mvc.perform(post("/api/v1/reservations").header(H, user)).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/v1/preorders").header(H, BearerTokens.value(user))).andExpect(status().isUnauthorized());
     }
 
     @Test
     @DisplayName("USER 토큰으로 /me 는 200 이고 @CurrentCustomerId 가 101")
     void userMe() throws Exception {
-        mvc.perform(get("/api/v1/me").header(H, user))
+        mvc.perform(get("/api/v1/me").header(H, BearerTokens.value(user)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.customerId").value(101));
     }
@@ -117,7 +128,7 @@ class SecurityChainTest {
     @Test
     @DisplayName("실측: ADMIN 토큰으로 사용자 API(/me) 는 403 FORBIDDEN 봉투 — 리졸버의 BusinessException 이 GlobalExceptionHandler 로 간다")
     void adminTokenOnCustomerEndpointIs403() throws Exception {
-        mvc.perform(get("/api/v1/me").header(H, admin))
+        mvc.perform(get("/api/v1/me").header(H, BearerTokens.value(admin)))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
@@ -127,7 +138,7 @@ class SecurityChainTest {
     @DisplayName("USER 토큰인데 sub 가 십진수가 아니면 /me 는 500 이 아니라 401")
     void userTokenWithNonNumericSubject() throws Exception {
         String odd = provider.create("abc", Role.USER, UUID.randomUUID(), TokenType.ACCESS);
-        mvc.perform(get("/api/v1/me").header(H, odd))
+        mvc.perform(get("/api/v1/me").header(H, BearerTokens.value(odd)))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
     }
@@ -135,7 +146,7 @@ class SecurityChainTest {
     @Test
     @DisplayName("USER 토큰으로 /admin/** 은 403 FORBIDDEN 봉투 (hasRole 이 ROLE_ADMIN 을 읽는다)")
     void userOnAdminIs403() throws Exception {
-        mvc.perform(get("/api/v1/admin/stats").header(H, user))
+        mvc.perform(get("/api/v1/admin/stats").header(H, BearerTokens.value(user)))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
     }
@@ -143,21 +154,22 @@ class SecurityChainTest {
     @Test
     @DisplayName("ADMIN 토큰으로 /admin/** 은 200")
     void adminOnAdminIs200() throws Exception {
-        mvc.perform(get("/api/v1/admin/stats").header(H, admin)).andExpect(status().isOk());
+        mvc.perform(get("/api/v1/admin/stats").header(H, BearerTokens.value(admin))).andExpect(status().isOk());
     }
 
     @Test
-    @DisplayName("폐기 조회 실패 + 접수(열린 경로) → 200")
+    @DisplayName("폐기 조회 실패 + 접수 POST /api/v1/preorders(열린 경로, D-2) · 접수 조회 GET → 200")
     void lookupFailureOnIntakePasses() throws Exception {
         when(checker.isRevoked(any())).thenThrow(new RevocationCheckFailedException(new RuntimeException("down")));
-        mvc.perform(post("/api/v1/reservations").header(H, user)).andExpect(status().isOk());
+        mvc.perform(post("/api/v1/preorders").header(H, BearerTokens.value(user))).andExpect(status().isOk());
+        mvc.perform(get("/api/v1/preorders/42").header(H, BearerTokens.value(user))).andExpect(status().isOk());
     }
 
     @Test
     @DisplayName("재발급 경로에 액세스 토큰을 들고 오고 Redis 가 죽어 있으면 필터는 인증을 안 하지만 공개 경로라 200 — 진짜 방어는 TokenService.rotate 의 폐기 검사")
     void lookupFailureOnRefreshWithAccessTokenStillReachesController() throws Exception {
         when(checker.isRevoked(any())).thenThrow(new RevocationCheckFailedException(new RuntimeException("down")));
-        var result = mvc.perform(post("/api/v1/session/refresh").header(H, user)).andExpect(status().isOk()).andReturn();
+        var result = mvc.perform(post("/api/v1/session/refresh").header(H, BearerTokens.value(user))).andExpect(status().isOk()).andReturn();
         // 필터의 닫힌 경로 판정은 여기서도 돌았다(요청 속성). 401 로 이어지지 않는 것은 permitAll 이 먼저라서다.
         assertThat(result.getRequest().getAttribute(JwtAuthenticationFilter.ATTR_RETRYABLE)).isEqualTo(Boolean.TRUE);
     }
@@ -165,25 +177,29 @@ class SecurityChainTest {
     @Test
     @DisplayName("재발급은 공개다 — 토큰 없이(쿠키만) 쳐도 인가 단계는 통과한다. 폐기 검사는 이 경로 매칭이 아니라 TokenService.rotate 가 리프레시 클레임으로 한다")
     void refreshIsPublicForCookieOnlyRequests() throws Exception {
-        // 실제 클라이언트 요청 모양(api-spec 3849행): X-Session-Token 없음, Cookie 만. 이때 필터는 헤더가 없어 아무것도 안 한다.
+        // 실제 클라이언트 요청 모양(api-spec 3849행): Authorization 없음, Cookie 만. 이때 필터는 헤더가 없어 아무것도 안 한다.
         when(checker.isRevoked(any())).thenThrow(new RevocationCheckFailedException(new RuntimeException("down")));
         mvc.perform(post("/api/v1/session/refresh").cookie(new jakarta.servlet.http.Cookie("refresh_token", "x")))
                 .andExpect(status().isOk());
     }
 
     @Test
-    @DisplayName("취소 경로 둘(reservations/*/cancel, orders/*/cancel)은 닫힌다")
+    @DisplayName("취소 경로 둘(POST preorders/*/cancel, POST orders/*/cancel)은 닫힌다 — 실제 사전예약 취소 경로다(옛 /reservations 가 아니다)")
     void lookupFailureOnCancelPathsIsClosed() throws Exception {
         when(checker.isRevoked(any())).thenThrow(new RevocationCheckFailedException(new RuntimeException("down")));
-        mvc.perform(post("/api/v1/reservations/abc/cancel").header(H, user)).andExpect(status().isUnauthorized());
-        mvc.perform(post("/api/v1/orders/abc/cancel").header(H, user)).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/v1/preorders/abc/cancel").header(H, BearerTokens.value(user)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.details.retryable").value(true));
+        mvc.perform(post("/api/v1/orders/abc/cancel").header(H, BearerTokens.value(user))).andExpect(status().isUnauthorized());
+        // 배송지 변경(개인정보)도 닫힌다 — 2026-09-28 D-2 결정
+        mvc.perform(patch("/api/v1/orders/abc/shipping-address").header(H, BearerTokens.value(user))).andExpect(status().isUnauthorized());
     }
 
     @Test
     @DisplayName("/api/v1/me/** 는 개인정보라 닫힌다 — 조회 실패 시 401 details.retryable=true. ** 가 0 세그먼트도 먹어 /api/v1/me 자체도")
     void lookupFailureOnMeIsClosed() throws Exception {
         when(checker.isRevoked(any())).thenThrow(new RevocationCheckFailedException(new RuntimeException("down")));
-        mvc.perform(get("/api/v1/me").header(H, user))
+        mvc.perform(get("/api/v1/me").header(H, BearerTokens.value(user)))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.details.retryable").value(true));
     }
@@ -192,13 +208,13 @@ class SecurityChainTest {
     @DisplayName("실측: `/api/v1/orders/*/payment-attempts/**` 는 0 세그먼트도 먹어 결제창 초기화(POST …/payment-attempts)도 닫힌다")
     void lookupFailureOnPaymentInitIsClosed() throws Exception {
         when(checker.isRevoked(any())).thenThrow(new RevocationCheckFailedException(new RuntimeException("down")));
-        mvc.perform(post("/api/v1/orders/1/payment-attempts").header(H, user)).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/v1/orders/1/payment-attempts").header(H, BearerTokens.value(user))).andExpect(status().isUnauthorized());
     }
 
     @Test
     @DisplayName("실측: 본문이 깨진 JSON 은 400 VALIDATION_FAILED 봉투다 (MVC 기본 오류가 500 으로 새지 않는다)")
     void malformedJsonIs400Envelope() throws Exception {
-        mvc.perform(post("/api/v1/reservations").header(H, user)
+        mvc.perform(post("/api/v1/preorders").header(H, BearerTokens.value(user))
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content("{"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.success").value(false))
@@ -208,7 +224,7 @@ class SecurityChainTest {
     @Test
     @DisplayName("실측: 없는 URL 은 404 NOT_FOUND 봉투다")
     void unknownUrlIs404Envelope() throws Exception {
-        mvc.perform(get("/api/v1/nope").header(H, user))
+        mvc.perform(get("/api/v1/nope").header(H, BearerTokens.value(user)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
     }
@@ -216,7 +232,7 @@ class SecurityChainTest {
     @Test
     @DisplayName("실측: 지원하지 않는 메서드는 405 이고 봉투다")
     void wrongMethodIs405Envelope() throws Exception {
-        mvc.perform(post("/api/v1/me").header(H, user))
+        mvc.perform(post("/api/v1/me").header(H, BearerTokens.value(user)))
                 .andExpect(status().isMethodNotAllowed())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.code").value("METHOD_NOT_ALLOWED"));
@@ -226,30 +242,46 @@ class SecurityChainTest {
     @DisplayName("실측: PathPattern `/api/v1/orders/*/payment-attempts/**` 가 confirm 경로에 걸려 닫힌다")
     void lookupFailureOnPaymentConfirmIsClosed() throws Exception {
         when(checker.isRevoked(any())).thenThrow(new RevocationCheckFailedException(new RuntimeException("down")));
-        mvc.perform(post("/api/v1/orders/1/payment-attempts/9/confirm").header(H, user))
+        mvc.perform(post("/api/v1/orders/1/payment-attempts/9/confirm").header(H, BearerTokens.value(user)))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.details.retryable").value(true));
+    }
+
+    @Test
+    @DisplayName("메서드가 없는 기본 항목은 모든 메서드를 닫는다 — 관리자 쓰기(POST /admin/preorders/*/cancel)와 배송지 변경(PUT /me/default-address)도 401")
+    void noMethodEntriesCloseEveryMethod() throws Exception {
+        when(checker.isRevoked(any())).thenThrow(new RevocationCheckFailedException(new RuntimeException("down")));
+        mvc.perform(post("/api/v1/admin/preorders/1/cancel").header(H, BearerTokens.value(admin)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.details.retryable").value(true));
+        mvc.perform(put("/api/v1/me/default-address").header(H, BearerTokens.value(user)))
+                .andExpect(status().isUnauthorized());
+        // 대조군: Redis 가 살아 있으면 둘 다 통과한다 — 401 이 인가 규칙이 아니라 닫는 경로 판정에서 왔다
+        org.mockito.Mockito.reset(checker);
+        when(checker.isRevoked(any())).thenReturn(false);
+        mvc.perform(post("/api/v1/admin/preorders/1/cancel").header(H, BearerTokens.value(admin))).andExpect(status().isOk());
+        mvc.perform(put("/api/v1/me/default-address").header(H, BearerTokens.value(user))).andExpect(status().isOk());
     }
 
     @Test
     @DisplayName("폐기 조회 실패 + ADMIN 이 /admin/** (닫힌 경로) → 401")
     void lookupFailureOnAdminIsClosed() throws Exception {
         when(checker.isRevoked(any())).thenThrow(new RevocationCheckFailedException(new RuntimeException("down")));
-        mvc.perform(get("/api/v1/admin/stats").header(H, admin)).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/v1/admin/stats").header(H, BearerTokens.value(admin))).andExpect(status().isUnauthorized());
     }
 
     @Test
     @DisplayName("실측: 공개 경로 POST /admin/session 에 토큰을 들고 오고 Redis 가 죽어 있어도 200 — 닫힌 패턴에 겹치지만 permitAll 이 먼저다")
     void adminLoginIsPublicEvenWhenLookupFails() throws Exception {
         when(checker.isRevoked(any())).thenThrow(new RevocationCheckFailedException(new RuntimeException("down")));
-        mvc.perform(post("/api/v1/admin/session").header(H, user)).andExpect(status().isOk());
+        mvc.perform(post("/api/v1/admin/session").header(H, BearerTokens.value(user))).andExpect(status().isOk());
         mvc.perform(post("/api/v1/admin/session")).andExpect(status().isOk());
     }
 
     @Test
     @DisplayName("들어온 X-Request-Id 는 그대로 봉투와 응답 헤더에 실린다")
     void traceIdIsEchoed() throws Exception {
-        mvc.perform(post("/api/v1/reservations").header(RequestIdFilter.HEADER, "trace-abc"))
+        mvc.perform(post("/api/v1/preorders").header(RequestIdFilter.HEADER, "trace-abc"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().string(RequestIdFilter.HEADER, "trace-abc"))
                 .andExpect(jsonPath("$.traceId").value("trace-abc"));
@@ -258,7 +290,7 @@ class SecurityChainTest {
     @Test
     @DisplayName("세션 쿠키를 만들지 않는다 (STATELESS)")
     void noSessionCookie() throws Exception {
-        var result = mvc.perform(get("/api/v1/me").header(H, user)).andExpect(status().isOk()).andReturn();
+        var result = mvc.perform(get("/api/v1/me").header(H, BearerTokens.value(user))).andExpect(status().isOk()).andReturn();
         assertThat(result.getResponse().getCookies()).isEmpty();
         assertThat(result.getRequest().getSession(false)).isNull();
     }

@@ -1,7 +1,7 @@
 package com.grandis.nova.order.event;
 
 import com.grandis.nova.order.order.cancel.CancelReason;
-import com.grandis.nova.order.order.cancel.PreorderCancel;
+import com.grandis.nova.order.order.cancel.SettlePreorderCancelCommand;
 
 /**
  * PREORDER_CANCEL_REQUESTED 의 payload(preorder outbox.OutboxMessage.PreorderCancelRequested 가 보낸다).
@@ -21,7 +21,7 @@ public record PreorderCancelRequested(String preorderId, Long customerId, Cancel
         }
     }
 
-    PreorderCancel toCancel(Long preorderInternalId) {
-        return new PreorderCancel(preorderInternalId, preorderId, customerId, reason, cancelSequence);
+    SettlePreorderCancelCommand toCancel(Long preorderInternalId) {
+        return new SettlePreorderCancelCommand(preorderInternalId, preorderId, customerId, reason, cancelSequence);
     }
 }
