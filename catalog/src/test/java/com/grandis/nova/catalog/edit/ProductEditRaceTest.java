@@ -20,7 +20,6 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
@@ -270,7 +269,7 @@ class ProductEditRaceTest {
     }
 
     @Test
-    @DisplayName("수정 중에 preorder 가 회차 오픈을 앞당겨 이미 열렸으면 커밋하지 않는다 — 커밋 직전 판정은 그때까지 커밋된 회차를 본다")
+    @DisplayName("수정 중에 preorder 가 회차 오픈을 앞당겨 이미 잠금 시각이 지났으면 커밋하지 않는다 — 커밋 직전 판정은 그때까지 커밋된 회차를 본다")
     void campaignMovedEarlierDuringTheEditRejectsTheCommit() throws Exception {
         long productId = registerPreorder();
         Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
@@ -279,8 +278,9 @@ class ProductEditRaceTest {
         AtomicInteger reads = new AtomicInteger();
         CLOCK.next = () -> {
             if (reads.getAndIncrement() == 0) {
-                // 첫 판정 순간, 다른 커넥션(preorder)이 오픈을 1분 전으로 옮겨 커밋한다
-                moveOpensAtFromAnotherConnection(productId, now.minus(Duration.ofMinutes(1)));
+                // 첫 판정 순간, 다른 커넥션(preorder)이 오픈을 1분 전으로 옮겨 커밋한다. 회차를 새로 넣는 것은 수정 중에 못 한다 —
+                // preorder_campaigns → products 외래키 확인이 수정이 잡은 상품 행 잠금을 기다린다(실측: 30초 대기 뒤 수정이 먼저 커밋)
+                onAnotherConnection(() -> fixtures.moveCampaignOpensAt(productId, now.minus(Duration.ofMinutes(1))));
             }
             return now;
         };
@@ -332,9 +332,15 @@ class ProductEditRaceTest {
 
     /** member 소유 표 — 장바구니 외래키를 채우려고 시험 데이터로만 넣는다. */
     private long customer() {
-        String kakaoId = "k-" + ShopFixtures.unique();
-        jdbcTemplate.update("INSERT INTO customers (kakao_id, display_name, created_at, updated_at) VALUES (?, 'race', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))", kakaoId);
-        return jdbcTemplate.queryForObject("SELECT id FROM customers WHERE kakao_id = ?", Long.class, kakaoId);
+        org.springframework.jdbc.support.GeneratedKeyHolder key = new org.springframework.jdbc.support.GeneratedKeyHolder();
+        jdbcTemplate.update(connection -> {
+            var insert = connection.prepareStatement(
+                    "INSERT INTO customers (kakao_id, display_name, created_at, updated_at) VALUES (?, 'race', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))",
+                    java.sql.Statement.RETURN_GENERATED_KEYS);
+            insert.setString(1, "k-" + ShopFixtures.unique());
+            return insert;
+        }, key);
+        return key.getKey().longValue();   // 넣은 행의 키 — member 표를 SELECT 하지 않는다
     }
 
     /** order 소유 표 — 다른 모듈의 쓰기를 흉내 낸다(외래키 확인이 옵션 행에 공유 잠금). */
@@ -375,12 +381,12 @@ class ProductEditRaceTest {
         throw new AssertionError("둘째 작업이 30초 안에 기다리지도 끝나지도 않았다");
     }
 
-    private void moveOpensAtFromAnotherConnection(long productId, Instant opensAt) {
-        Thread mover = new Thread(() -> jdbcTemplate.update("UPDATE preorder_campaigns SET opens_at = ? WHERE product_id = ?",
-                LocalDateTime.ofInstant(opensAt, ZoneOffset.UTC), productId));
-        mover.start();
+    /** 다른 커넥션(자동 커밋)에서 실행하고 끝날 때까지 기다린다 — 다른 모듈의 쓰기를 흉내 낸다. */
+    private static void onAnotherConnection(Runnable write) {
+        Thread writer = new Thread(write);
+        writer.start();
         try {
-            mover.join(TimeUnit.SECONDS.toMillis(30));
+            writer.join(TimeUnit.SECONDS.toMillis(30));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);
