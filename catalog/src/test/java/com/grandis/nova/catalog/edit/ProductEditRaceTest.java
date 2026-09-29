@@ -383,13 +383,27 @@ class ProductEditRaceTest {
 
     /** 다른 커넥션(자동 커밋)에서 실행하고 끝날 때까지 기다린다 — 다른 모듈의 쓰기를 흉내 낸다. */
     private static void onAnotherConnection(Runnable write) {
-        Thread writer = new Thread(write);
+        // 쓰기가 실패하거나 끝나지 않으면 그 자리에서 실패한다 — 전제(회차가 옮겨졌다) 없이 뒤 단언이 엉뚱하게 깨지지 않게
+        java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread writer = new Thread(() -> {
+            try {
+                write.run();
+            } catch (Throwable t) {
+                failure.set(t);
+            }
+        });
         writer.start();
         try {
             writer.join(TimeUnit.SECONDS.toMillis(30));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);
+        }
+        if (writer.isAlive()) {
+            throw new AssertionError("다른 커넥션의 쓰기가 30초 안에 끝나지 않았다(잠금 대기)");
+        }
+        if (failure.get() != null) {
+            throw new AssertionError("다른 커넥션의 쓰기가 실패했다", failure.get());
         }
     }
 
