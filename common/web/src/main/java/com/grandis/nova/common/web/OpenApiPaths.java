@@ -14,7 +14,7 @@ public final class OpenApiPaths {
 
     private static final String[] DOCS = {
             "/v3/api-docs/**",
-            "/v3/api-docs.yaml",    // /v3/api-docs/** 에 걸리지 않는다
+            "/v3/api-docs.yaml/**", // YAML 변형(그룹 포함)은 /v3/api-docs/** 와 세그먼트가 달라 따로 적는다
             "/swagger-ui.html",
             "/swagger-ui/**",
     };

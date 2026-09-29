@@ -26,7 +26,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @OrderIntegrationTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = {
         "springdoc.api-docs.enabled=true",
-        "springdoc.swagger-ui.enabled=true"
+        "springdoc.swagger-ui.enabled=true",
+        "spring.application.name=order"
 })
 class OpenApiDocumentTest {
 
@@ -45,11 +46,15 @@ class OpenApiDocumentTest {
 
     @BeforeEach
     void fetch() throws Exception {
+        doc = get("/v3/api-docs");
+    }
+
+    private JsonNode get(String path) throws Exception {
         HttpResponse<String> response = HttpClient.newHttpClient().send(
-                HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/v3/api-docs")).GET().build(),
+                HttpRequest.newBuilder(URI.create("http://localhost:" + port + path)).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
         assertThat(response.statusCode()).isEqualTo(200);
-        doc = JSON.readTree(response.body());
+        return JSON.readTree(response.body());
     }
 
     @Test
@@ -95,6 +100,17 @@ class OpenApiDocumentTest {
         }));
         assertThat(leaked).isEmpty();
         assertThat(doc.path("components").path("schemas").has("Viewer")).isFalse();
+    }
+
+    /** 한 출처 뒤에서 서비스를 가르는 그룹 문서. 서버 주소가 "/" 라야 Try it out 이 프록시 · ALB 를 거친다. */
+    @Test
+    void serviceGroupDocumentMatchesAndPointsToTheSameOrigin() throws Exception {
+        JsonNode group = get("/v3/api-docs/order");
+
+        assertThat(group.path("paths").propertyNames()).containsExactlyInAnyOrderElementsOf(doc.path("paths").propertyNames());
+        assertThat(group.path("servers").findValuesAsString("url")).containsExactly("/");
+        assertThat(doc.path("servers").findValuesAsString("url")).containsExactly("/");
+        assertThat(group.path("paths").path("/api/v1/orders/{orderId}").path("get").path("responses").has("default")).isTrue();
     }
 
     private Map<String, JsonNode> operations() {

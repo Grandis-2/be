@@ -17,9 +17,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** 켜지 않으면 문서가 없다 — 보안 체인이 문서 경로를 열어 두므로 닫는 건 OpenApiExposure 하나다. 컨텍스트 설정은 SecurityRulesTest 와 같다. */
+/**
+ * 켜지 않으면 문서가 없다 — 보안 체인이 문서 경로를 열어 두므로 닫는 건 OpenApiExposure 하나다.
+ * 운영과 같이 서비스 이름을 줘서 그룹 문서(/v3/api-docs/order)까지 생긴 상태로 본다.
+ */
 @OrderIntegrationTest
 @AutoConfigureMockMvc
+@TestPropertySource(properties = "spring.application.name=order")
 class OpenApiOffByDefaultTest {
 
     @Autowired
@@ -32,12 +36,10 @@ class OpenApiOffByDefaultTest {
     PreorderClient preorderClient;
 
     @ParameterizedTest
-    @ValueSource(strings = {"/v3/api-docs", "/v3/api-docs.yaml", "/v3/api-docs/swagger-config",
-            "/swagger-ui.html", "/swagger-ui/index.html"})
+    @ValueSource(strings = {"/v3/api-docs", "/v3/api-docs.yaml", "/v3/api-docs/order", "/v3/api-docs.yaml/order",
+            "/v3/api-docs/swagger-config", "/swagger-ui.html", "/swagger-ui/index.html"})
     void docsAreAbsentUnlessEnabled(String path) throws Exception {
-        mockMvc.perform(get(path))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
+        assertNotFound(path);
     }
 
     /** 부트의 webjar 핸들러는 문서 켜기와 무관하다 — 체인이 막는다. */
@@ -55,11 +57,27 @@ class OpenApiOffByDefaultTest {
     class OddValues {
 
         @ParameterizedTest
-        @ValueSource(strings = {"/v3/api-docs", "/swagger-ui/index.html"})
+        @ValueSource(strings = {"/v3/api-docs", "/v3/api-docs/order", "/v3/api-docs.yaml/order", "/swagger-ui/index.html"})
         void stillClosed(String path) throws Exception {
-            mockMvc.perform(get(path))
-                    .andExpect(status().isNotFound())
-                    .andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
+            assertNotFound(path);
         }
+    }
+
+    /** 허브 설정이 있어도 문서가 꺼져 있으면 UI 설정 · 그룹 문서가 나오지 않는다. */
+    @Nested
+    @TestPropertySource(properties = "nova.openapi.hub-services=member,catalog,preorder,order")
+    class HubConfigured {
+
+        @ParameterizedTest
+        @ValueSource(strings = {"/v3/api-docs/swagger-config", "/v3/api-docs/order", "/swagger-ui/index.html"})
+        void stillClosed(String path) throws Exception {
+            assertNotFound(path);
+        }
+    }
+
+    private void assertNotFound(String path) throws Exception {
+        mockMvc.perform(get(path))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
     }
 }

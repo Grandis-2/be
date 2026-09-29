@@ -12,19 +12,25 @@ import io.swagger.v3.oas.models.media.Schema;
 import io.swagger.v3.oas.models.responses.ApiResponses;
 import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
-import org.springdoc.core.customizers.OpenApiCustomizer;
+import io.swagger.v3.oas.models.servers.Server;
+import org.springdoc.core.customizers.GlobalOpenApiCustomizer;
+import org.springdoc.core.models.GroupedOpenApi;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.ResolvableType;
 
+import java.util.List;
+
 /**
- * HTTP 서비스 공통 OpenAPI 설정: Bearer(JWT) 인증 스킴과 실패 봉투.
+ * HTTP 서비스 공통 OpenAPI 설정.
  *
- * 성공 봉투는 정의하지 않는다 — ApiResponse&lt;T&gt; 가 제네릭이라 springdoc 가 엔드포인트마다 data 타입으로 만든다.
- * 실패는 상태 코드와 무관하게 ApiResponse&lt;Void&gt; 인데 GlobalExceptionHandler 에 @ResponseStatus 가 없어
- * springdoc 가 오류 응답을 만들지 않는다. 그래서 모든 연산에 default 응답으로 건다.
- * 공개 경로는 컨트롤러가 @SecurityRequirements() 로 뺀다.
+ * - 인증: Bearer(JWT)를 문서 전체에 건다. 공개 경로는 컨트롤러가 @SecurityRequirements() 로 뺀다.
+ * - 실패 봉투: GlobalExceptionHandler 에 @ResponseStatus 가 없어 springdoc 가 오류 응답을 만들지 않으므로 모든 연산에
+ *   ApiResponse&lt;Void&gt; 를 default 응답으로 건다. 성공 봉투는 제네릭이라 springdoc 가 data 타입별로 만든다.
+ * - 경로: /v3/api-docs 와 함께 서비스 이름 그룹(/v3/api-docs/{spring.application.name})으로도 낸다. 허브({@link OpenApiHub})가 쓴다.
+ * - 서버 주소: "/" 로 고정한다. springdoc 기본값은 요청받은 서비스 주소라 Try it out 이 프록시 · ALB 를 우회한다.
  */
 @Configuration(proxyBeanMethods = false)
 public class OpenApiConfiguration {
@@ -39,12 +45,19 @@ public class OpenApiConfiguration {
                         .type(SecurityScheme.Type.HTTP)
                         .scheme("bearer")
                         .bearerFormat("JWT")))
-                .addSecurityItem(new SecurityRequirement().addList(BEARER));
+                .addSecurityItem(new SecurityRequirement().addList(BEARER))
+                .servers(List.of(new Server().url("/")));
     }
 
-    /** 스키마는 ApiResponse&lt;Void&gt; 에서 만든다 — 필드를 손으로 베끼면 봉투가 바뀔 때 어긋난다. 이미 있는 default 는 덮지 않는다. */
     @Bean
-    OpenApiCustomizer errorEnvelopeResponse() {
+    @ConditionalOnProperty("spring.application.name")
+    GroupedOpenApi serviceGroup(@Value("${spring.application.name}") String service) {
+        return GroupedOpenApi.builder().group(service).pathsToMatch("/**").build();
+    }
+
+    /** 그룹 문서에도 걸리게 전역 커스터마이저로 둔다. 스키마는 ApiResponse&lt;Void&gt; 에서 만들고, 이미 있는 default 는 덮지 않는다. */
+    @Bean
+    GlobalOpenApiCustomizer errorEnvelopeResponse() {
         return openApi -> {
             boolean v31 = openApi.getSpecVersion() == SpecVersion.V31;
             ResolvedSchema failure = ModelConverters.getInstance(v31).readAllAsResolvedSchema(

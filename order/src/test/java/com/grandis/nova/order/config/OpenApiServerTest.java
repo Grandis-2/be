@@ -31,7 +31,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @OrderIntegrationTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = {
         "springdoc.api-docs.enabled=true",
-        "springdoc.swagger-ui.enabled=true"
+        "springdoc.swagger-ui.enabled=true",
+        "spring.application.name=order"
 })
 class OpenApiServerTest {
 
@@ -69,6 +70,7 @@ class OpenApiServerTest {
         assertThat(yaml.statusCode()).isEqualTo(200);
         assertThat(yaml.body()).startsWith("openapi:");
 
+        assertThat(get("/v3/api-docs.yaml/order").body()).startsWith("openapi:");
         assertThat(get("/v3/api-docs/swagger-config").statusCode()).isEqualTo(200);
     }
 

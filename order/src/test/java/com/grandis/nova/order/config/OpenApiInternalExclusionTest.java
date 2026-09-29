@@ -4,7 +4,8 @@ import com.grandis.nova.common.security.RevocationChecker;
 import com.grandis.nova.order.client.preorder.PreorderClient;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import org.junit.jupiter.api.Nested;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.test.context.TestPropertySource;
@@ -23,7 +24,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @OrderIntegrationTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = {
         "springdoc.api-docs.enabled=true",
-        "springdoc.swagger-ui.enabled=true"
+        "springdoc.swagger-ui.enabled=true",
+        "spring.application.name=order"
 })
 class OpenApiInternalExclusionTest {
 
@@ -36,9 +38,11 @@ class OpenApiInternalExclusionTest {
     @MockitoBean
     PreorderClient preorderClient;
 
-    @Test
-    void internalApiIsLeftOutOfTheDocument() throws Exception {
-        JsonNode doc = fetchDocument(port);
+    /** 기본 문서와 그룹 문서(허브가 쓰는 쪽) 모두에서 빠진다. */
+    @ParameterizedTest
+    @ValueSource(strings = {"/v3/api-docs", "/v3/api-docs/order"})
+    void internalApiIsLeftOutOfTheDocument(String path) throws Exception {
+        JsonNode doc = fetchDocument(port, path);
 
         assertThat(doc.path("paths").propertyNames()).noneMatch(OpenApiInternalExclusionTest::isInternal);
         assertThat(doc.path("components").path("schemas").propertyNames())
@@ -53,9 +57,10 @@ class OpenApiInternalExclusionTest {
         @Value("${local.server.port}")
         int port;
 
-        @Test
-        void internalApiIsDocumented() throws Exception {
-            JsonNode doc = fetchDocument(port);
+        @ParameterizedTest
+        @ValueSource(strings = {"/v3/api-docs", "/v3/api-docs/order"})
+        void internalApiIsDocumented(String path) throws Exception {
+            JsonNode doc = fetchDocument(port, path);
 
             assertThat(doc.path("paths").has("/internal/orders/by-preorder/{preorderInternalId}/cancelability")).isTrue();
             assertThat(doc.path("components").path("schemas").has("ApiResponseCancelabilityResponse")).isTrue();
@@ -66,9 +71,9 @@ class OpenApiInternalExclusionTest {
         return path.equals("/internal") || path.startsWith("/internal/");
     }
 
-    private static JsonNode fetchDocument(int port) throws Exception {
+    private static JsonNode fetchDocument(int port, String path) throws Exception {
         HttpResponse<String> response = HttpClient.newHttpClient().send(
-                HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/v3/api-docs")).GET().build(),
+                HttpRequest.newBuilder(URI.create("http://localhost:" + port + path)).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
         assertThat(response.statusCode()).isEqualTo(200);
         return JsonMapper.builder().build().readTree(response.body());

@@ -1,3 +1,4 @@
-# OpenAPI 문서 노출 정책
+# OpenAPI 문서 노출 정책 · 문서 허브 드롭다운
 org.springframework.boot.EnvironmentPostProcessor=\
-com.grandis.nova.common.web.OpenApiExposure
+com.grandis.nova.common.web.OpenApiExposure,\
+com.grandis.nova.common.web.OpenApiHub
