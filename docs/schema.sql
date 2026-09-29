@@ -124,6 +124,7 @@ CREATE TABLE `orders` (
   `customer_id` bigint NOT NULL,
   `source` varchar(10) NOT NULL,
   `preorder_id` bigint DEFAULT NULL,
+  `preorder_token` char(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL,
   `status` varchar(30) NOT NULL,
   `total_amount` decimal(12,0) NOT NULL,
   `payment_due_at` datetime(6) DEFAULT NULL,
@@ -140,6 +141,7 @@ CREATE TABLE `orders` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_order_token` (`order_token`),
   UNIQUE KEY `uq_order_preorder` (`preorder_id`),
+  UNIQUE KEY `uq_order_preorder_token` (`preorder_token`),
   KEY `ix_order_due` (`status`,`payment_due_at`),
   KEY `ix_order_member_created` (`customer_id`,`created_at`),
   KEY `fk_order_preorder` (`preorder_id`,`customer_id`),
@@ -149,6 +151,7 @@ CREATE TABLE `orders` (
   CONSTRAINT `ck_order_due` CHECK (((`source` = _utf8mb4'PREORDER') = (`payment_due_at` is null))),
   CONSTRAINT `ck_order_preorder_link` CHECK (((`source` = _utf8mb4'PREORDER') = (`preorder_id` is not null))),
   CONSTRAINT `ck_order_preorder_no_stock` CHECK (((`source` <> _utf8mb4'PREORDER') or (`stock_released_at` is null))),
+  CONSTRAINT `ck_order_preorder_token` CHECK (((`source` = _utf8mb4'PREORDER') = (`preorder_token` is not null))),
   CONSTRAINT `ck_order_source` CHECK ((`source` in (_utf8mb4'PREORDER',_utf8mb4'BUY_NOW',_utf8mb4'CART'))),
   CONSTRAINT `ck_order_status` CHECK ((`status` in (_utf8mb4'AWAITING_PAYMENT',_utf8mb4'AUTHORIZING',_utf8mb4'AWAITING_CONFIRMATION',_utf8mb4'PREPARING_ITEMS',_utf8mb4'READY_TO_SHIP',_utf8mb4'SHIPPED',_utf8mb4'DELIVERED',_utf8mb4'CANCELING',_utf8mb4'CANCELED'))),
   CONSTRAINT `ck_order_stock_released_canceled` CHECK (((`stock_released_at` is null) or (`status` = _utf8mb4'CANCELED')))
