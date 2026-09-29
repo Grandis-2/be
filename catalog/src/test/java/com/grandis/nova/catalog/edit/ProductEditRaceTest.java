@@ -105,7 +105,7 @@ class ProductEditRaceTest {
     void manualPriceSurvivesAConcurrentRecompute() throws Exception {
         long productId = registerInStock();
         long option512 = optionId(productId, "512GB");
-        interleave(() -> editService.editVariant(productId, option512, new VariantEditRequest(new BigDecimal("1270000"), null)),
+        interleave(() -> editService.editVariant(productId, option512, new VariantEditRequest(new BigDecimal("1270000"), null, null)),
                 () -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)));
 
         assertThat(price(productId, "512GB")).as("수동 가격 — 옛 상태(수동 아님)로 읽은 재계산이 덮으면 1,300,000").isEqualByComparingTo("1270000");
@@ -197,31 +197,53 @@ class ProductEditRaceTest {
     }
 
     @Test
-    @DisplayName("오픈 시각 그 순간(opens_at == 지금)은 오픈 뒤다 — 409. 1마이크로초 전은 고칠 수 있다")
-    void openBoundaryIsInclusive() throws Exception {
+    @DisplayName("오픈 3분 전 그 순간(지금 == opens_at − 3분)부터 잠긴다 — 409. 1마이크로초 전은 고칠 수 있다")
+    void freezeBoundaryIsInclusive() throws Exception {
         long productId = registerPreorder();
         Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.MICROS);
         fixtures.campaign(productId, opensAt, opensAt.plus(Duration.ofDays(1)));
+        Instant freezesAt = opensAt.minus(ProductEditService.FREEZE_BEFORE_OPEN);
+        assertThat(freezesAt).isEqualTo(opensAt.minus(Duration.ofMinutes(3)));
 
-        CLOCK.next = () -> opensAt;
+        CLOCK.next = () -> freezesAt;
         assertStateConflict(() -> editService.editProduct(productId, titleOnly("그 순간")));
-        CLOCK.next = () -> opensAt.minus(1, ChronoUnit.MICROS);
+        CLOCK.next = () -> opensAt;
+        assertStateConflict(() -> editService.editProduct(productId, titleOnly("오픈")));
+        CLOCK.next = () -> freezesAt.minus(1, ChronoUnit.MICROS);
         editService.editProduct(productId, titleOnly("직전"));
         assertThat(title(productId)).isEqualTo("직전");
     }
 
     @Test
-    @DisplayName("시작 때는 오픈 전이었는데 수정 중에 오픈 시각이 지나면 커밋하지 않는다 — 409, 아무것도 안 남는다")
+    @DisplayName("시작 때는 잠금 전이었는데 수정 중에 잠금 시각(오픈 3분 전)이 지나면 커밋하지 않는다 — 409, 아무것도 안 남는다")
     void openingDuringTheEditRejectsTheCommit() throws Exception {
         long productId = registerPreorder();
         Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.MICROS);
         fixtures.campaign(productId, opensAt, opensAt.plus(Duration.ofDays(1)));
 
         AtomicInteger reads = new AtomicInteger();
-        CLOCK.next = () -> reads.getAndIncrement() == 0 ? opensAt.minusMillis(1) : opensAt;   // 첫 판정 뒤 시간이 오픈을 넘는다
+        Instant freezesAt = opensAt.minus(ProductEditService.FREEZE_BEFORE_OPEN);
+        CLOCK.next = () -> reads.getAndIncrement() == 0 ? freezesAt.minusMillis(1) : freezesAt;   // 첫 판정 뒤 시간이 잠금 시각을 넘는다
         assertStateConflict(() -> editService.editProduct(productId, titleOnly("오픈을 넘긴 수정")));
         assertThat(reads.get()).as("시계를 두 번 이상 읽었다 — 첫 판정은 통과했다").isGreaterThanOrEqualTo(2);
         assertThat(title(productId)).isEqualTo("Race");
+    }
+
+    @Test
+    @DisplayName("가격 되돌리기 중에 잠금 시각이 지나도 커밋하지 않는다 — 되돌리기도 가격 변경이라 커밋 직전에 다시 본다")
+    void openingDuringThePriceResetRejectsTheCommit() throws Exception {
+        long productId = registerPreorder();
+        long optionId = optionId(productId, "256GB");
+        jdbcTemplate.update("UPDATE product_options SET price = 1270000, price_overridden = 1 WHERE id = ?", optionId);
+        Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.MICROS);
+        fixtures.campaign(productId, opensAt, opensAt.plus(Duration.ofDays(1)));
+
+        AtomicInteger reads = new AtomicInteger();
+        Instant freezesAt = opensAt.minus(ProductEditService.FREEZE_BEFORE_OPEN);
+        CLOCK.next = () -> reads.getAndIncrement() == 0 ? freezesAt.minusMillis(1) : freezesAt;
+        assertStateConflict(() -> editService.editVariant(productId, optionId, new VariantEditRequest(null, null, true)));
+        assertThat(reads.get()).as("첫 판정은 통과했다").isGreaterThanOrEqualTo(2);
+        assertThat(price(productId, "256GB")).as("수동 가격 그대로").isEqualByComparingTo("1270000");
     }
 
     @Test

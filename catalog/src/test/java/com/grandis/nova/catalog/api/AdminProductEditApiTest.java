@@ -243,6 +243,17 @@ class AdminProductEditApiTest {
             edit(productId, "{ \"basePrice\": 900000 }").andExpect(status().isOk());
             assertThat(prices(productId)).containsEntry("블랙 / 256GB", "1234000").containsEntry("화이트 / 256GB", "900000");
 
+            // 자동 계산으로 되돌리기 — 지금 기본가 + 추가금이 되고, 이후 기본가를 따라 움직인다
+            JsonNode reset = data(editVariant(productId, variantId, "{ \"resetPrice\": true }").andExpect(status().isOk()));
+            assertThat(reset.get("price").decimalValue()).isEqualByComparingTo("900000");
+            edit(productId, "{ \"basePrice\": 950000 }").andExpect(status().isOk());
+            assertThat(prices(productId)).as("되돌린 옵션은 다시 재계산에 들어간다").containsEntry("블랙 / 256GB", "950000");
+            long manual512 = variantIdOf(productId, "블랙 / 512GB");
+            JsonNode reset512 = data(editVariant(productId, manual512, "{ \"resetPrice\": true }").andExpect(status().isOk()));
+            assertThat(reset512.get("price").decimalValue()).as("기본가 950,000 + 512GB 추가금 200,000").isEqualByComparingTo("1150000");
+            expectValidation(editVariant(productId, variantId, "{ \"price\": 1, \"resetPrice\": true }"), "resetPrice");
+            expectValidation(editVariant(productId, variantId, "{ \"resetPrice\": false }"), "body");
+
             JsonNode paused = data(editVariant(productId, variantId, "{ \"status\": \"PAUSED\" }").andExpect(status().isOk()));
             assertThat(paused.get("status").asString()).isEqualTo("PAUSED");
             expectValidation(editVariant(productId, variantId, "{}"), "body");
@@ -255,6 +266,7 @@ class AdminProductEditApiTest {
             Instant now = Instant.now();
             fixtures.campaign(preorder, now.minus(HOUR), now.plus(HOUR));
             editVariant(preorder, preorderVariant, "{ \"price\": 1 }").andExpect(status().isConflict());
+            editVariant(preorder, preorderVariant, "{ \"resetPrice\": true }").andExpect(status().isConflict());
             editVariant(preorder, preorderVariant, "{ \"status\": \"PAUSED\" }").andExpect(status().isOk());
             mockMvc.perform(admin(post(PATH + "/{id}/option-values", preorder)).content("{ \"axisKey\": \"color\", \"value\": \"레드\" }"))
                     .andExpect(status().isConflict());
@@ -264,7 +276,7 @@ class AdminProductEditApiTest {
             mockMvc.perform(admin(post(PATH + "/{id}/variants", preorder)).content("{ \"selections\": { \"color\": \"화이트\", \"storage\": \"256GB\" } }"))
                     .andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"));
             // 오픈 뒤에는 DB 를 읽어야 아는 400 사유(없는 정규화값 · 이미 있는 조합)보다 409 가 먼저다. 본문만 보고 아는 400(소수 금액 · 빈 본문 · 모르는 칸)은 잠금 전에 먼저 난다
-            mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", preorder, storage512)).content("{ \"value\": \"1TB\" }"))
+            mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", preorder, storage512)).content("{ \"value\": \"256GB\" }"))
                     .andExpect(status().isConflict());
             mockMvc.perform(admin(post(PATH + "/{id}/variants", preorder)).content("{ \"selections\": { \"color\": \"블랙\", \"storage\": \"256GB\" } }"))
                     .andExpect(status().isConflict());
@@ -273,7 +285,7 @@ class AdminProductEditApiTest {
         }
 
         @Test
-        @DisplayName("값 수정 — 표시 문구는 정규화값이 같을 때만(옵션 표시명도 따라간다), 추가금은 그 값을 고른 옵션만 재계산(수동 제외). 정규화가 달라지면 400")
+        @DisplayName("값 수정 — 이름은 오타까지 고칠 수 있고 옵션 표시명 · 필터 속성 · 사진 묶음이 따라간다. 같은 축의 같은 값 · 용량 형식은 400. 추가금은 그 값을 고른 옵션만 재계산(수동 제외)")
         void editOptionValue() throws Exception {
             long productId = registerInStock();
             long storage512 = valueIdOf(productId, "storage", "512GB");
@@ -281,13 +293,29 @@ class AdminProductEditApiTest {
                             .content("{ \"value\": \"512 GB\" }")).andExpect(status().isOk()));
             assertThat(titles(renamed)).contains("블랙 / 512 GB", "화이트 / 512 GB", "블랙 / 256GB");
 
-            expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"value\": \"1TB\" }")), "value");
+            expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"value\": \"256gb\" }")), "value");
+            expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"value\": \"big\" }")), "value");
             expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{}")), "body");
+
+            // 색상 오타 수정: 화이트 → Whtie → White. 표시명 · 필터 속성(preorder 가 복사하는 JSON) · 사진 묶음 키가 따라간다
+            long white = valueIdOf(productId, "color", "화이트");
+            mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, white)).content("{ \"value\": \"Whtie\" }")).andExpect(status().isOk());
+            JsonNode fixed = data(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, white)).content("{ \"value\": \"White\" }"))
+                    .andExpect(status().isOk()));
+            assertThat(titles(fixed)).contains("White / 256GB", "White / 512 GB").doesNotContain("화이트 / 256GB");
+            assertThat(jdbcTemplate.queryForList("SELECT JSON_UNQUOTE(JSON_EXTRACT(filter_attributes, '$.color')) FROM product_options WHERE product_id = ? AND title LIKE 'White%'",
+                    String.class, productId)).containsExactly("White", "White");
+            List<String> bundles = new ArrayList<>();
+            fixed.get("product").get("images").get("gallery").forEach(b -> bundles.add(b.get("bundleKey").asString()));
+            assertThat(bundles).as("사진 묶음 키가 새 이름을 따라간다 — 옛 이름으로 남으면 사진이 어느 색상에도 안 붙는다").containsExactlyInAnyOrder("블랙", "White");
+            // 대소문자만 다른 이름은 자기 자신이라 된다. 다른 값과 같다고 보는 이름(악센트 · 대소문자 · 전각)은 400
+            mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, white)).content("{ \"value\": \"WHITE\" }")).andExpect(status().isOk());
+            expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, white)).content("{ \"value\": \"블랙\" }")), "value");
 
             mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"surcharge\": 300000 }")).andExpect(status().isOk());
             assertThat(prices(productId)).as("512GB 를 고른 옵션만, 수동(블랙 / 512 GB)은 제외")
-                    .containsEntry("블랙 / 512 GB", "1270000").containsEntry("화이트 / 512 GB", "1300000")
-                    .containsEntry("블랙 / 256GB", "1000000").containsEntry("화이트 / 256GB", "1000000");
+                    .containsEntry("블랙 / 512 GB", "1270000").containsEntry("WHITE / 512 GB", "1300000")
+                    .containsEntry("블랙 / 256GB", "1000000").containsEntry("WHITE / 256GB", "1000000");
 
             long other = registerInStock();
             mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", other, storage512)).content("{ \"surcharge\": 1 }")).andExpect(status().isNotFound());

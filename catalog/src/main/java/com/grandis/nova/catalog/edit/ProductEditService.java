@@ -4,6 +4,7 @@ import com.grandis.nova.catalog.CatalogErrorCode;
 import com.grandis.nova.catalog.detail.AdminProductDetail;
 import com.grandis.nova.catalog.detail.ProductDetailService;
 import com.grandis.nova.catalog.detail.ProductDetailView;
+import com.grandis.nova.catalog.image.ProductImageRepository;
 import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
 import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.catalog.option.OptionCombination.Pick;
@@ -25,6 +26,7 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -38,8 +40,9 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 관리자 상품 수정 — 표시 정보 · 기본 가격 · 보증, 옵션 값 추가 · 수정, 옵션(조합) 추가 · 수정. 설계 §2.1 · §2.1.1.
  *
- * <p><b>사전예약 오픈 뒤에는 기준정보를 못 바꾼다.</b> 표시 정보 · 가격 · 추가금 · 값 · 조합 추가 전부 409 STATE_CONFLICT. 옵션의 판매 중지 · 재개만
- * 열려 있다(기준정보가 아니라 운영 명령). 오픈 여부는 preorder 의 회차(opens_at ≤ 지금)로 판정하고, 회차가 없으면(등록 ② 전) 아직 오픈 전이다.
+ * <p><b>사전예약은 오픈 3분 전부터 기준정보를 못 바꾼다.</b> 표시 정보 · 가격 · 추가금 · 값 · 조합 추가 · 가격 되돌리기 전부 409 STATE_CONFLICT.
+ * 옵션의 판매 중지 · 재개만 열려 있다(기준정보가 아니라 운영 명령). 판정은 preorder 의 회차(opens_at − 3분 ≤ 지금)로 하고, 회차가 없으면
+ * (등록 ② 전) 아직 잠기지 않았다.
  *
  * <p><b>재계산.</b> 기본 가격 · 추가금이 바뀌면 그 값을 고른 옵션 중 수동 가격이 아닌 것만 `기본가 + Σ추가금` 으로 다시 계산한다. 관리자가 직접 고친
  * 가격(priceOverridden)은 그대로 둔다.
@@ -55,24 +58,33 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class ProductEditService {
 
+    /**
+     * 사전예약은 오픈 이 시간 전부터 수정을 막는다(2026-09-29 결정). 오픈 시각에 딱 맞춰 막으면 커밋 직전 판정과 커밋 사이 수 ms 와 서버 간 시계 차가
+     * 틈으로 남는다 — 여유를 두어 그 틈에서 오픈이 일어날 수 없게 한다. 시작 판정과 커밋 직전 판정이 같은 기준을 쓴다(requireNotOpened 하나).
+     */
+    public static final Duration FREEZE_BEFORE_OPEN = Duration.ofMinutes(3);
+
     private final ProductRepository products;
     private final ProductOptionAxisRepository axes;
     private final ProductOptionValueRepository values;
     private final ProductOptionRepository options;
     private final ProductOptionSelectionRepository selections;
     private final ProductListingQueryRepository crossReads;
+    private final ProductImageRepository images;
     private final ProductDetailService detailService;
     private final Clock clock;
 
     public ProductEditService(ProductRepository products, ProductOptionAxisRepository axes, ProductOptionValueRepository values,
                               ProductOptionRepository options, ProductOptionSelectionRepository selections,
-                              ProductListingQueryRepository crossReads, ProductDetailService detailService, Clock clock) {
+                              ProductListingQueryRepository crossReads, ProductImageRepository images,
+                              ProductDetailService detailService, Clock clock) {
         this.products = products;
         this.axes = axes;
         this.values = values;
         this.options = options;
         this.selections = selections;
         this.crossReads = crossReads;
+        this.images = images;
         this.detailService = detailService;
         this.clock = clock;
     }
@@ -99,7 +111,7 @@ public class ProductEditService {
         String titleBefore = product.getTitle();
         product.edit(request.title(), request.description(), request.tags());
         if (!product.getTitle().equals(titleBefore)) {
-            retitleOptions(product, null);   // 축 없는 상품의 옵션 표시명은 상품 제목이다
+            retitleStandaloneOptions(product);   // 축 없는 상품의 옵션 표시명은 상품 제목이다
         }
         if (warranty != null) {
             // 보낸 칸만 바뀐다 — 제공만 보내면 기존 추가금을 유지한다. 제공하지 않으면 추가금은 0 이다(엔티티가 지킨다)
@@ -162,11 +174,7 @@ public class ProductEditService {
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
         String axisKey = axisById.get(value.getAxisId()).getAxisKey();
         if (request.value() != null) {
-            if (!normalized(axisKey, request.value(), "value").equals(value.getNormalizedValue())) {
-                throw ValidationFailures.of("value", "표시 문구만 바꿀 수 있습니다(정규화값이 같아야 합니다). 구성이 바뀌면 값을 새로 더하고 옛 옵션을 판매 중지하세요.");
-            }
-            value.rename(request.value());
-            retitleOptions(product, value.getId());
+            renameValue(product, axisKey, value, request.value());
         }
         if (request.surcharge() != null) {
             value.reprice(request.surcharge());
@@ -257,6 +265,9 @@ public class ProductEditService {
         }
         if (request.price() != null) {
             ProductRegistrationValidator.requireWholeWon(request.price(), "price");
+            if (request.resets()) {
+                throw ValidationFailures.of("resetPrice", "수동 가격 지정과 자동 계산 되돌리기는 함께 보낼 수 없습니다.");
+            }
         }
         Product product = lockProduct(productId);
         ProductOption option = options.findById(variantId)
@@ -266,12 +277,18 @@ public class ProductEditService {
             requireNotOpened(product);   // 가격은 기준정보 — 사전예약 오픈 뒤 금지
             option.overridePrice(request.price());
         }
+        if (request.resets()) {
+            requireNotOpened(product);   // 되돌리기도 가격 변경이다
+            List<Long> valueIds = selectionsByOption(productId).getOrDefault(variantId, List.of());
+            Map<Long, ProductOptionValue> valueById = valuesOf(productId);
+            option.resetToComputed(computedPrice(product, valueIds.stream().map(valueById::get).toList()));
+        }
         if (request.status() != null) {
             option.changeStatus(request.status());   // 판매 중지 · 재개는 오픈 뒤에도 된다
         }
         options.flush();
         ProductDetailView.Variant edited = variantOf(productId, variantId);
-        if (request.price() != null) {
+        if (request.price() != null || request.resets()) {
             requireNotOpenedAtCommit(product);
         }
         return edited;
@@ -296,11 +313,11 @@ public class ProductEditService {
         if (product.getSaleMode() != SaleMode.PREORDER) {
             return;
         }
-        boolean opened = crossReads.findCampaign(product.getId())
-                .map(window -> !clock.instant().isBefore(window.opensAt()))
+        boolean frozen = crossReads.findCampaign(product.getId())
+                .map(window -> !clock.instant().isBefore(window.opensAt().minus(FREEZE_BEFORE_OPEN)))
                 .orElse(false);
-        if (opened) {
-            throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "사전예약 오픈 뒤에는 상품 정보 · 옵션 · 가격을 바꿀 수 없습니다.");
+        if (frozen) {
+            throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "사전예약 오픈 3분 전부터는 상품 정보 · 옵션 · 가격을 바꿀 수 없습니다.");
         }
     }
 
@@ -330,26 +347,68 @@ public class ProductEditService {
     }
 
     /**
-     * 옵션 표시명을 다시 만든다. valueId 를 주면 그 값을 고른 옵션을 축 순서대로, null 이면 선택이 없는 옵션(축 없는 상품 — 표시명이 상품
-     * 제목)을. 새 표시명이 길이 상한을 넘으면 400 — 넘긴 채 쓰면 DB 가 1406 으로 거절해 500 이 된다.
+     * 값 이름 수정 — 오타 · 표시 문구 모두(설계 §2.1 "옵션 변경"). 같은 축에 같다고 보는 값(대소문자 · 악센트 · 전각)이 있으면 400, 용량은 형식을
+     * 지켜야 한다. 이름을 복사해 둔 곳을 같은 트랜잭션에서 고친다: 그 값을 고른 옵션의 표시명 · 필터 속성 · 표시 속성, 색상이면 사진 묶음 키.
+     * 이미 접수된 예약 · 주문은 자기 스냅샷을 가지므로 바뀌지 않는다. 뜻이 바뀌는 수정(블랙 → 화이트)도 막지 않는다 — 관리자의 판단이다.
      */
-    private void retitleOptions(Product product, Long valueId) {
+    private void renameValue(Product product, String axisKey, ProductOptionValue value, String raw) {
+        String normalized = normalized(axisKey, raw, "value");
+        if (ProductOptionAxis.STORAGE.equals(axisKey) && !ProductRegistrationValidator.STORAGE.matcher(normalized).matches()) {
+            throw ValidationFailures.of("value", "용량은 숫자 + MB/GB/TB 로 적습니다.");
+        }
+        String key = ProductRegistrationValidator.collationKey(normalized);
+        boolean taken = values.findByAxisIdInOrderByAxisIdAscPositionAsc(List.of(value.getAxisId())).stream()
+                .filter(other -> !other.getId().equals(value.getId()))
+                .anyMatch(other -> ProductRegistrationValidator.collationKey(other.getNormalizedValue()).equals(key));
+        if (taken) {
+            throw ValidationFailures.of("value", "같은 값이 이미 있습니다.");
+        }
+        String before = value.getNormalizedValue();
+        value.rename(raw, normalized);
+        try {
+            values.flush();
+        } catch (DataIntegrityViolationException e) {
+            // 콜레이션 흉내가 못 잡는 같은 값(ß = ss …)은 DB UNIQUE 가 최종 판정한다
+            if (ConstraintViolations.mentionsKey(e, "uq_option_value")) {
+                throw ValidationFailures.of("value", "같은 값이 이미 있습니다.");
+            }
+            throw e;
+        }
+        if (ProductOptionAxis.COLOR.equals(axisKey) && !before.equals(normalized)) {
+            images.renameGalleryBundle(product.getId(), before, normalized);
+        }
+        reattributeOptionsUsing(product, value.getId());
+    }
+
+    /** 그 값을 고른 옵션의 표시명 · 필터 속성 · 표시 속성을 축 순서의 조합에서 다시 만든다. 표시명이 상한을 넘으면 400(DB 1406 → 500 이 되지 않게). */
+    private void reattributeOptionsUsing(Product product, Long valueId) {
         Map<Long, List<Long>> valueIdsByOption = selectionsByOption(product.getId());
         Map<Long, ProductOptionValue> valueById = valuesOf(product.getId());
         Map<Long, ProductOptionAxis> axisById = axesOf(product.getId());
         for (ProductOption option : options.findByProductIdOrderById(product.getId())) {
             List<Long> valueIds = valueIdsByOption.getOrDefault(option.getId(), List.of());
-            if (valueId == null ? !valueIds.isEmpty() : !valueIds.contains(valueId)) {
+            if (!valueIds.contains(valueId)) {
                 continue;
             }
-            List<ProductOptionValue> ordered = new ArrayList<>(valueIds.stream().map(valueById::get).toList());
-            ordered.sort(Comparator.comparingInt(v -> axisById.get(v.getAxisId()).getPosition()));
-            String title = OptionCombination.titleOf(ordered.stream().map(ProductOptionValue::getValue).toList(), product.getTitle());
-            if (title.length() > ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH) {
-                throw ValidationFailures.of(valueId == null ? "title" : "value",
-                        "옵션 표시명이 %d자를 넘습니다: %s".formatted(ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH, title));
+            List<Pick> picks = new ArrayList<>(valueIds.stream()
+                    .map(id -> new Pick(axisById.get(valueById.get(id).getAxisId()), valueById.get(id))).toList());
+            picks.sort(Comparator.comparingInt(pick -> pick.axis().getPosition()));
+            OptionCombination combination = OptionCombination.of(product.getId(), picks);
+            if (combination.title().length() > ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH) {
+                throw ValidationFailures.of("value",
+                        "옵션 표시명이 %d자를 넘습니다: %s".formatted(ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH, combination.title()));
             }
-            option.retitle(title);
+            option.reattribute(combination);
+        }
+    }
+
+    /** 선택이 없는 옵션(축 없는 상품)의 표시명은 상품 제목이다 — 제목이 바뀌면 따라간다. 제목은 100자라 표시명 상한(120)을 넘지 않는다. */
+    private void retitleStandaloneOptions(Product product) {
+        Map<Long, List<Long>> valueIdsByOption = selectionsByOption(product.getId());
+        for (ProductOption option : options.findByProductIdOrderById(product.getId())) {
+            if (valueIdsByOption.getOrDefault(option.getId(), List.of()).isEmpty()) {
+                option.retitle(OptionCombination.titleOf(List.of(), product.getTitle()));
+            }
         }
     }
 

@@ -101,6 +101,12 @@ public class ProductOption extends BaseEntity {
         }
     }
 
+    /** 수동 가격을 풀고 계산 가격으로 돌아간다. 이후 기본 가격 · 추가금이 바뀌면 다시 재계산에 들어간다. */
+    public void resetToComputed(BigDecimal computed) {
+        this.price = Amounts.requireWholeWon(computed, "price");
+        this.priceOverridden = false;
+    }
+
     /** 판매 중지 · 재개. 옵션 단위 상태라 상품 상태와 별개다. 기존 주문에는 손대지 않는다. */
     public void changeStatus(SaleStatus status) {
         this.status = Objects.requireNonNull(status, "status");
@@ -109,6 +115,13 @@ public class ProductOption extends BaseEntity {
     /** 값 표시명이 바뀌면 조합 표시명도 따라간다. 규칙은 {@link OptionCombination#titleOf} 하나다. */
     public void retitle(String title) {
         this.title = Objects.requireNonNull(title, "title");
+    }
+
+    /** 값 이름이 바뀌었을 때 — 표시명 · 필터 속성 · 표시 속성을 같은 조합에서 다시 만든다(따로 고치면 어긋난다). sku · 조합 키는 그대로. */
+    public void reattribute(OptionCombination combination) {
+        this.title = combination.title();
+        this.filterAttributes = combination.filterAttributes();
+        this.displayAttributes = combination.displayAttributes();
     }
 
     public Long getId() {

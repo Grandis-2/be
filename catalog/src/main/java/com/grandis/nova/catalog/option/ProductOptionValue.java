@@ -35,7 +35,7 @@ public class ProductOptionValue extends BaseEntity {
     @Column(nullable = false, length = 60)
     private String value;
 
-    @Column(nullable = false, updatable = false, length = 60)
+    @Column(nullable = false, length = 60)
     private String normalizedValue;
 
     @Column(nullable = false)
@@ -85,11 +85,13 @@ public class ProductOptionValue extends BaseEntity {
     }
 
     /**
-     * 표시 문구 수정(오타 · 띄어쓰기). 정규화값은 바꿀 수 없다(칼럼 updatable=false) — 정규화값이 달라지는 변경은 구성 변경이라
-     * 새 값 추가 + 기존 옵션 판매 중지로 한다(설계 §2.1 "옵션 변경"). 정규화가 같은지는 축 키를 아는 서비스가 확인한다.
+     * 값 이름 수정(오타 · 표시 문구, 설계 §2.1 "옵션 변경"). 정규화값도 같이 바뀐다 — 축 키에 맞는 정규화 · 같은 축 중복 확인은 축을 아는
+     * 서비스가 하고, 이 값을 복사해 둔 곳(옵션 표시명 · 필터 · 표시 속성, 색상 사진 묶음 키)도 서비스가 같은 트랜잭션에서 고친다.
+     * 옵션 조합 키는 값 id 로 만들어 이름과 무관하다.
      */
-    public void rename(String value) {
+    public void rename(String value, String normalizedValue) {
         this.value = normalize(value);
+        this.normalizedValue = normalize(normalizedValue);
     }
 
     /** 추가금 수정. 호출자가 이 값을 고른 옵션의 가격을 재계산한다(수동 가격 제외). */
