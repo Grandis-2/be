@@ -45,13 +45,15 @@ class ClientIpsTest {
     @Test
     @DisplayName("제한 설정 — 시도 수 · 창은 양수, 믿는 프록시 수는 0 이상이어야 기동한다")
     void limitSettingsAreValidated() {
-        assertThatThrownBy(() -> new com.grandis.nova.member.auth.application.AdminLoginLimit(0, java.time.Duration.ofMinutes(1), 2))
+        assertThatThrownBy(() -> new com.grandis.nova.member.auth.application.AdminLoginLimit(0, java.time.Duration.ofMinutes(1), 2, 60))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new com.grandis.nova.member.auth.application.AdminLoginLimit(5, java.time.Duration.ZERO, 2))
+        assertThatThrownBy(() -> new com.grandis.nova.member.auth.application.AdminLoginLimit(5, java.time.Duration.ZERO, 2, 60))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new com.grandis.nova.member.auth.application.AdminLoginLimit(5, java.time.Duration.ofMinutes(1), -1))
+        assertThatThrownBy(() -> new com.grandis.nova.member.auth.application.AdminLoginLimit(5, java.time.Duration.ofMinutes(1), -1, 60))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThat(new com.grandis.nova.member.auth.application.AdminLoginLimit(5, java.time.Duration.ofMinutes(1), 0).trustedProxyHops()).isZero();
+        assertThatThrownBy(() -> new com.grandis.nova.member.auth.application.AdminLoginLimit(5, java.time.Duration.ofMinutes(1), 2, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(new com.grandis.nova.member.auth.application.AdminLoginLimit(5, java.time.Duration.ofMinutes(1), 0, 60).trustedProxyHops()).isZero();
     }
 
     private static MockHttpServletRequest request(String forwardedFor) {

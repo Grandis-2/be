@@ -42,7 +42,10 @@ import org.springframework.context.annotation.Import;
         "spring.data.redis.timeout=300ms",
         "spring.data.redis.connect-timeout=200ms",
         // 주기 정리는 끈다 — 시험이 넣은 만료 행을 도중에 지워 결과가 흔들리지 않게. 정리 시험은 run() 을 직접 부른다
-        "member.refresh-cleanup.cron=-"
+        "member.refresh-cleanup.cron=-",
+        // 관리자 로그인 합계 제한은 시험끼리 공유하는 키 하나라, 기본값(60)이면 여러 시험의 시도가 쌓여 엉뚱한 곳에서 429 가 난다.
+        // 합계 시험은 이 한도 바로 아래로 키를 심어 확인한다(AdminLoginThrottleTest)
+        "auth.admin-login-limit.max-total-attempts=100000"
 })
 @Import(MemberTestContext.class)
 public @interface MemberIntegrationTest {

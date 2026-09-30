@@ -17,6 +17,13 @@ import org.springframework.stereotype.Component;
  * 관리자 로그인 시도 수를 IP 별로 센다(Redis). bcrypt 비교 <b>전에</b> 센다 — 동시에 몰려와도 비싼 비교는 한도만큼만 돈다.
  * 성공하면 지운다. 실패 · 진행 중인 시도는 창이 끝날 때까지 한 번으로 남는다.
  *
+ * <p><b>두 가지를 센다.</b> IP 별(기본 5회)과 모든 IP 합계(기본 60회). 합계는 IP 별 제한을 <b>통과한</b> 시도만 센다 — 막힌 IP 의 요청까지
+ * 세면 IP 하나가 두드리기만 해도 모든 관리자 로그인이 막힌다. 합계는 IP 를 바꿔 가며 오는 공격에도 bcrypt 부하(한 번 약 0.25초)에 천장을 둔다.
+ * 로그인에 성공하면 둘 다 지운다(사용자 결정 2026-09-30) — 공격 중 정상 로그인이 있으면 합계가 다시 열리지만, 그건 정상 로그인이 있을 때뿐이다.
+ * <b>대가:</b> IP 12 개(12 × 5 = 60)면 매분 합계를 채울 수 있고, 그동안은 정상 관리자도 맞는 비밀번호로 429 다(성공 초기화가 올 기회가 없다).
+ * 합계가 차면 경고 로그를 남긴다 — 운영자는 WAF 로 공격 IP 를 막는다.
+ * 두 키는 따로 센다(각각 원자적). 한 스크립트로 묶으면 Redis 클러스터에서 키 슬롯이 달라 실패한다.
+ *
  * <p>INCR 과 만료 설정을 Lua 한 번으로 한다. 따로 부르면 그 사이 프로세스가 죽을 때 만료 없는 키가 남아 그 IP 가 영원히 막힌다. 만료가 없는 키를
  * 만나면(과거 버그 · 수동 조작) 다시 건다.
  *
@@ -55,14 +62,14 @@ public class AdminLoginThrottle {
      */
     public Optional<Duration> acquire(String clientIp) {
         try {
-            List<?> result = redis.execute(COUNT, List.of(AuthRedisKeys.adminLoginAttempts(clientIp)),
-                    String.valueOf(limit.window().toMillis()));
-            long attempts = ((Number) result.get(0)).longValue();
-            long ttlMillis = ((Number) result.get(1)).longValue();
-            if (attempts > limit.maxAttempts()) {
-                return Optional.of(Duration.ofMillis(Math.max(ttlMillis, 1)));
+            Optional<Duration> perIp = count(AuthRedisKeys.adminLoginAttempts(clientIp), limit.maxAttempts());
+            if (perIp.isPresent()) {
+                return perIp;   // 막힌 IP 의 요청은 합계에 세지 않는다
             }
-            return Optional.empty();
+            Optional<Duration> total = count(AuthRedisKeys.ADMIN_LOGIN_ATTEMPTS_TOTAL, limit.maxTotalAttempts());
+            // 합계가 찼다 — 분산 공격일 가능성이 높고, 그동안 정상 관리자도 막힌다. 운영자가 알아챌 신호다(D-4)
+            total.ifPresent(retryAfter -> log.warn("admin login total cap reached (all IPs), rejecting for {}s", retryAfter.toSeconds()));
+            return total;
         } catch (DataAccessException e) {
             log.warn("admin login throttle unavailable, rejecting attempt: {}", e.getClass().getSimpleName());
             throw new Unavailable(e);
@@ -77,10 +84,22 @@ public class AdminLoginThrottle {
         }
     }
 
-    /** 로그인 성공 — 그 IP 의 수를 지운다. 실패해도 창이 끝나면 사라지므로 오류는 삼킨다. */
+    /** 한 키를 센다(이번 시도 포함). 한도를 넘었으면 남은 시간. */
+    private Optional<Duration> count(String key, int max) {
+        List<?> result = redis.execute(COUNT, List.of(key), String.valueOf(limit.window().toMillis()));
+        long attempts = ((Number) result.get(0)).longValue();
+        long ttlMillis = ((Number) result.get(1)).longValue();
+        if (attempts > max) {
+            return Optional.of(Duration.ofMillis(Math.max(ttlMillis, 1)));
+        }
+        return Optional.empty();
+    }
+
+    /** 로그인 성공 — 그 IP 의 수와 합계를 지운다. 실패해도 창이 끝나면 사라지므로 오류는 삼킨다. */
     public void reset(String clientIp) {
         try {
             redis.delete(AuthRedisKeys.adminLoginAttempts(clientIp));
+            redis.delete(AuthRedisKeys.ADMIN_LOGIN_ATTEMPTS_TOTAL);
         } catch (DataAccessException e) {
             log.warn("admin login throttle reset failed: {}", e.getClass().getSimpleName());
         }

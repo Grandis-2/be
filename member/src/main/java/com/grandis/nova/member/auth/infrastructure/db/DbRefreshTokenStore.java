@@ -125,7 +125,9 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
             Instant now = now();
             List<Long> live = rows.findLiveIdsOf(customerId, now.minus(detectionWindow));
             if (!live.isEmpty()) {
-                rows.revokeByIds(live, now);
+                // 고른 뒤 다른 폐기(로그아웃 · 재사용 탐지)가 먼저 끊었으면 그 행은 0 으로 센다 — 이미 끊긴 것이라 실패가 아니다
+                int revoked = rows.revokeByIds(live, now);
+                log.info("member-wide revoke customer={} selected={} revoked={}", customerId, live.size(), revoked);
             }
         });
     }

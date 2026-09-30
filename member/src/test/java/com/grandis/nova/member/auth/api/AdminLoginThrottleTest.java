@@ -39,6 +39,7 @@ import org.springframework.web.context.WebApplicationContext;
  * "클라이언트가 넣은 값, CloudFront 가 붙인 실제 IP, ALB 가 붙인 엣지 IP". 믿는 프록시 2(기본)라 오른쪽에서 두 번째가 실제 IP 다.
  */
 @MemberIntegrationTest
+@org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
 @DisplayName("관리자 로그인 시도 제한 — IP 별 5회, 넘으면 bcrypt 없이 429")
 class AdminLoginThrottleTest {
 
@@ -47,9 +48,17 @@ class AdminLoginThrottleTest {
     @Autowired RequestIdFilter requestIdFilter;
     @MockitoSpyBean PasswordEncoder encoder;
     @MockitoSpyBean StringRedisTemplate redis;
+    @Autowired com.grandis.nova.member.auth.application.AdminLoginLimit limit;
 
     MockMvc mockMvc;
     String viewer;   // 이 시험의 실제 클라이언트 IP — 시험끼리 수가 섞이지 않게 매번 새로
+
+    /** 합계 키는 시험끼리 공유한다 — 심은 값을 남기지 않는다. */
+    @org.junit.jupiter.api.AfterEach
+    void clearTotal() {
+        org.mockito.Mockito.reset(redis);   // 시험이 심은 실패 흉내(삭제 예외)를 먼저 걷는다
+        redis.delete(AuthRedisKeys.ADMIN_LOGIN_ATTEMPTS_TOTAL);
+    }
 
     @BeforeEach
     void setUp() {
@@ -71,6 +80,20 @@ class AdminLoginThrottleTest {
         login(MemberTestContext.ADMIN_PASSWORD, viewer, "198.51.100.7").andExpect(status().isTooManyRequests());
         long retryAfter = Long.parseLong(login("wrong", viewer, "x").andReturn().getResponse().getHeader("Retry-After"));
         assertThat(retryAfter).isBetween(1L, 60L);
+    }
+
+    @Test
+    @DisplayName("같은 IP 에서 20개가 동시에 와도 bcrypt 비교는 정확히 다섯 번, 나머지 열다섯은 429 — 세기가 원자적이다")
+    void concurrentAttemptsFromOneIpRunBcryptOnlyUpToTheLimit() throws Exception {
+        clearInvocations(encoder);
+        java.util.List<com.grandis.nova.member.support.Concurrently.Outcome<Integer>> results =
+                com.grandis.nova.member.support.Concurrently.run(20, i -> () ->
+                        login("wrong", viewer, "x").andReturn().getResponse().getStatus());
+
+        assertThat(results).allSatisfy(r -> assertThat(r.error()).isNull());
+        assertThat(results.stream().filter(r -> r.value() == 401).count()).isEqualTo(5);
+        assertThat(results.stream().filter(r -> r.value() == 429).count()).isEqualTo(15);
+        verify(encoder, org.mockito.Mockito.times(5)).matches(any(), any());
     }
 
     @Test
@@ -155,6 +178,42 @@ class AdminLoginThrottleTest {
     void resetFailureDoesNotFailLogin() throws Exception {
         doThrow(new RedisConnectionFailureException("down")).when(redis).delete(anyString());
         login(MemberTestContext.ADMIN_PASSWORD, viewer, "x").andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("모든 IP 합계가 한도에 닿으면 처음 오는 IP 도 429 다 — IP 를 바꿔 가며 오는 공격에도 bcrypt 부하에 천장이 있다")
+    void totalCapBlocksAcrossIps(org.springframework.boot.test.system.CapturedOutput output) throws Exception {
+        redis.opsForValue().set(AuthRedisKeys.ADMIN_LOGIN_ATTEMPTS_TOTAL, String.valueOf(limit.maxTotalAttempts()), java.time.Duration.ofSeconds(30));
+        clearInvocations(encoder);
+
+        login(MemberTestContext.ADMIN_PASSWORD, viewer, "x")
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.error.code").value("TOO_MANY_LOGIN_ATTEMPTS"))
+                .andExpect(header().exists("Retry-After"));
+        verify(encoder, never()).matches(any(), any());
+        assertThat(output).as("운영 신호 — 04-handoff 가 이 문구를 가리킨다").contains("admin login total cap reached");
+    }
+
+    @Test
+    @DisplayName("IP 별로 막힌 요청은 합계에 세지 않는다 — IP 하나가 두드리기만 해서 모든 관리자 로그인을 막지 못한다")
+    void blockedIpDoesNotConsumeTheTotal() throws Exception {
+        for (int i = 0; i < 5; i++) {
+            login("wrong", viewer, "x").andExpect(status().isUnauthorized());
+        }
+        String before = redis.opsForValue().get(AuthRedisKeys.ADMIN_LOGIN_ATTEMPTS_TOTAL);
+        for (int i = 0; i < 3; i++) {
+            login("wrong", viewer, "x").andExpect(status().isTooManyRequests());
+        }
+        assertThat(redis.opsForValue().get(AuthRedisKeys.ADMIN_LOGIN_ATTEMPTS_TOTAL)).isEqualTo(before);
+        assertThat(before).as("통과한 다섯 번은 합계에 셌다").isEqualTo("5");
+    }
+
+    @Test
+    @DisplayName("로그인에 성공하면 합계도 0 으로 돌아간다")
+    void successResetsTheTotal() throws Exception {
+        redis.opsForValue().set(AuthRedisKeys.ADMIN_LOGIN_ATTEMPTS_TOTAL, "10", java.time.Duration.ofSeconds(30));
+        login(MemberTestContext.ADMIN_PASSWORD, viewer, "x").andExpect(status().isOk());
+        assertThat(redis.hasKey(AuthRedisKeys.ADMIN_LOGIN_ATTEMPTS_TOTAL)).isFalse();
     }
 
     private ResultActions login(String password, String clientIp, String spoofed) throws Exception {

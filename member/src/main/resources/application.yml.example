@@ -86,8 +86,10 @@ auth:
   #   실제보다 크게 잡으면 클라이언트가 위조한 칸을 읽어 제한이 무력해지고, 작게 잡으면 CloudFront 엣지 IP 로 세어 여러 사용자가 한 수를 나눠 쓴다.
   #   프록시 없이 직접 받는 로컬은 0 도 된다.
   # 셀 수 없으면(Redis 장애) 503 retryable 로 거절한다 — Redis 가 죽으면 관리자 토큰 발급도 어차피 실패한다.
+  # max-total-attempts: 모든 IP 를 합친 시도 수(IP 별 제한을 통과한 것만). IP 를 바꿔 가며 오는 공격에도 bcrypt 부하에 천장을 둔다. 성공하면 0.
   admin-login-limit:
     max-attempts: 5
+    max-total-attempts: 60
     window: 1m
     trusted-proxy-hops: 2
   # 리프레시 쿠키. 로컬 http 에서는 false 로.
