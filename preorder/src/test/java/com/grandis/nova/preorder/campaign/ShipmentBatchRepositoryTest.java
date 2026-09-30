@@ -1,5 +1,7 @@
 package com.grandis.nova.preorder.campaign;
 
+import com.grandis.nova.preorder.campaign.domain.ShipmentBatch;
+import com.grandis.nova.preorder.campaign.domain.ShipmentBatchRepository;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 import com.grandis.nova.preorder.support.ShopFixtures;

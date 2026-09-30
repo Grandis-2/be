@@ -1,4 +1,4 @@
-package com.grandis.nova.preorder.campaign;
+package com.grandis.nova.preorder.campaign.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -22,7 +22,7 @@ import java.time.LocalDate;
 @Entity
 @Table(name = "shipment_batches")
 @EntityListeners(AuditingEntityListener.class)
-class ShipmentBatch {
+public class ShipmentBatch {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -63,7 +63,7 @@ class ShipmentBatch {
     }
 
     /** 오픈 전 설정에서만 만든다. 구간 규칙은 {@link ShipmentBatchPlan} 이 본다. */
-    static ShipmentBatch of(Long productId, int batchNumber, long positionFrom, Long positionTo,
+    public static ShipmentBatch of(Long productId, int batchNumber, long positionFrom, Long positionTo,
                             LocalDate estimatedShipStart, LocalDate estimatedShipEnd) {
         return new ShipmentBatch(productId, batchNumber, positionFrom, positionTo,
                 estimatedShipStart, estimatedShipEnd);

@@ -1,5 +1,9 @@
 package com.grandis.nova.preorder.campaign;
 
+import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
+import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository;
+import com.grandis.nova.preorder.campaign.domain.ShipmentBatch;
+import com.grandis.nova.preorder.campaign.domain.ShipmentBatchRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;

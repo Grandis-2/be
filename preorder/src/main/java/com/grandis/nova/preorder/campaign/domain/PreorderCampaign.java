@@ -1,4 +1,4 @@
-package com.grandis.nova.preorder.campaign;
+package com.grandis.nova.preorder.campaign.domain;
 
 import com.grandis.nova.common.BaseEntity;
 import jakarta.persistence.Column;
@@ -18,7 +18,7 @@ import java.time.Instant;
  */
 @Entity
 @Table(name = "preorder_campaigns")
-class PreorderCampaign extends BaseEntity {
+public class PreorderCampaign extends BaseEntity {
 
     private static final Duration CLOSED_BEFORE_OPEN = Duration.ofMillis(1);
 

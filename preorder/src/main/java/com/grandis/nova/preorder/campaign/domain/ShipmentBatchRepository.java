@@ -1,4 +1,4 @@
-package com.grandis.nova.preorder.campaign;
+package com.grandis.nova.preorder.campaign.domain;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -7,7 +7,7 @@ import org.springframework.data.repository.query.Param;
 import java.util.List;
 import java.util.Optional;
 
-interface ShipmentBatchRepository extends JpaRepository<ShipmentBatch, Long> {
+public interface ShipmentBatchRepository extends JpaRepository<ShipmentBatch, Long> {
 
     List<ShipmentBatch> findByProductIdOrderByBatchNumber(Long productId);
 

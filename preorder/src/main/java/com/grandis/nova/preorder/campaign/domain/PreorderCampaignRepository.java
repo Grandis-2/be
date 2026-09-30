@@ -1,4 +1,4 @@
-package com.grandis.nova.preorder.campaign;
+package com.grandis.nova.preorder.campaign.domain;
 
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -8,7 +8,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.util.Optional;
 
-interface PreorderCampaignRepository extends JpaRepository<PreorderCampaign, Long> {
+public interface PreorderCampaignRepository extends JpaRepository<PreorderCampaign, Long> {
 
     /**
      * 회차 행을 SELECT … FOR UPDATE 로 잠근다. 같은 회차의 접수는 여기서 한 줄로 선다.

@@ -1,7 +1,11 @@
-package com.grandis.nova.preorder.campaign;
+package com.grandis.nova.preorder.campaign.application;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
+import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
+import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository;
+import com.grandis.nova.preorder.campaign.domain.ShipmentBatch;
+import com.grandis.nova.preorder.campaign.domain.ShipmentBatchRepository;
 import com.grandis.nova.preorder.web.ValidationFailures;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;

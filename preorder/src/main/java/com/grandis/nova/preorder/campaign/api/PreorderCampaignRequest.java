@@ -1,4 +1,4 @@
-package com.grandis.nova.preorder.campaign;
+package com.grandis.nova.preorder.campaign.api;
 
 import jakarta.validation.constraints.NotNull;
 

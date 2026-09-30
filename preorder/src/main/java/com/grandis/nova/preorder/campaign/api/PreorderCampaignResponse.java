@@ -1,5 +1,8 @@
-package com.grandis.nova.preorder.campaign;
+package com.grandis.nova.preorder.campaign.api;
 
+
+import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
+import com.grandis.nova.preorder.campaign.domain.PreorderSaleStatus;
 
 import java.time.Instant;
 
