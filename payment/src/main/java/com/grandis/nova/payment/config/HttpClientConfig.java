@@ -7,6 +7,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.web.client.support.RestClientHttpServiceGroupConfigurer;
 import org.springframework.web.service.registry.ImportHttpServices;
 
@@ -30,9 +31,13 @@ public class HttpClientConfig {
         return ClientHttpRequestFactoryBuilder.jdk();
     }
 
-    /** Basic 인증은 토스 그룹에만 싣는다 — 다른 클라이언트로 시크릿 키가 새지 않게 그룹 이름으로 거른다. */
+    /**
+     * Basic 인증은 토스 그룹에만 싣는다 — 다른 클라이언트로 시크릿 키가 새지 않게 그룹 이름으로 거른다.
+     * 토스 클라이언트를 만들기 전에 주소 · 시간 예산을 확인한다({@link TossHttpSettingsVerifier}) — 어긋나면 기동 실패.
+     */
     @Bean
-    RestClientHttpServiceGroupConfigurer tossAuthorization(TossProperties properties) {
+    RestClientHttpServiceGroupConfigurer tossAuthorization(TossProperties properties, Environment environment) {
+        TossHttpSettingsVerifier.verify(environment);
         return groups -> groups.filterByName(TossAuthorization.GROUP)
                 .forEachClient((group, builder) -> TossAuthorization.apply(builder, properties));
     }

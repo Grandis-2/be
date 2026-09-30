@@ -26,6 +26,7 @@ spring:
       # 토스페이먼츠 결제 승인 · 취소 · 조회. 읽기 60초는 토스 권장값, 연결 3초는 SYN 재전송 1회 여유(D9).
       # 호출 한 번의 최대 시간 = 연결 3 + 읽기 60 ≤ 리스 70(D12). 읽기는 본문을 다 받을 때까지의 총 기한이다.
       # HTTP 구현은 JDK 로 고정(HttpClientConfig) — 풀 대기가 없고, spring.http.clients.imperative.factory 는 무시된다.
+      # 아래 값이 없거나 합이 리스를 넘거나 리다이렉트를 따라가면 기동하지 않는다(TossHttpSettingsVerifier).
       # 타임아웃은 실패가 아니라 결과 불명이다. 샌드박스 · 운영 주소가 같고 키(test_sk_ · live_sk_)로 갈린다
       toss:
         base-url: https://api.tosspayments.com

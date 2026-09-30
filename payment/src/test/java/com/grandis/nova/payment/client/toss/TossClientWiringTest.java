@@ -181,6 +181,13 @@ class TossClientWiringTest {
         });
     }
 
+    // 시간 예산이 빠지면 뜨지 않는다 — read-timeout 이 없으면 JDK 구현은 응답을 기한 없이 기다린다(검증 규칙은 TossHttpSettingsVerifierTest).
+    @Test
+    void missingReadTimeoutFailsStartup() {
+        runner().withPropertyValues("spring.http.serviceclient.toss.read-timeout=")
+                .run(context -> assertThat(context).getFailure().rootCause().hasMessageContaining("read-timeout"));
+    }
+
     // 시크릿 키가 없으면 뜨지 않는다 — 첫 결제 때가 아니라 배포 때 알게.
     @Test
     void missingCredentialFailsStartup() {
