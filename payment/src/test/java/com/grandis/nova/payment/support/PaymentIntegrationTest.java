@@ -23,7 +23,9 @@ import java.lang.annotation.Target;
         "spring.flyway.schemas=shop",
         "spring.flyway.create-schemas=false",
         "spring.flyway.clean-disabled=true",
-        "spring.flyway.validate-migration-naming=true"
+        "spring.flyway.validate-migration-naming=true",
+        // 토스 가맹점 자격 증명은 필수라 자리만 채운다. 통합 테스트는 토스를 부르지 않는다(client.toss 테스트가 따로 본다)
+        "nova.payment.toss.secret-key=integration-test-unused"
 })
 @Import(MySqlContainerConfig.class)
 public @interface PaymentIntegrationTest {
