@@ -292,6 +292,8 @@ class RefreshTokenDbStoreTest {
             store.revokeSession(sessionId);
             assertThat(java.time.Duration.ofNanos(System.nanoTime() - started))
                     .as("창 밖 행까지 폐기하려 했다면 잠긴 행을 기다린다").isLessThan(java.time.Duration.ofSeconds(5));
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE customer_id = ? AND revoked_at IS NOT NULL", Long.class, customerId))
+                    .as("창이 지난 체인은 폐기하지 않는다 — 잠금을 우회해 UPDATE 한 것도 아니다").isZero();
 
             release.countDown();
             cleanup.get(30, java.util.concurrent.TimeUnit.SECONDS);
