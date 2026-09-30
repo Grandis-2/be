@@ -1,8 +1,13 @@
-package com.grandis.nova.preorder.deadletter;
+package com.grandis.nova.preorder.deadletter.application;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.preorder.PreorderErrorCode;
+import com.grandis.nova.preorder.deadletter.DeadLetterRedriver;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterBody;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterEvent;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterEventRepository;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -19,10 +24,10 @@ import java.util.Map;
  * 두 관리자가 동시에 눌러도 한 번만 보낸다. 보내기 실패는 실제로 갔는지 알 수 없어 REDRIVING 에 두고, STALE_REDRIVE 뒤 다시 선점한다.
  */
 @Component
-class DeadLetterRedrives {
+public class DeadLetterRedrives {
 
     /** 보내다 죽거나 실패해 이만큼 넘게 REDRIVING 인 행은 다시 선점한다. 보내기 한 번(SQS 제한 시간)보다 충분히 길다. */
-    static final Duration STALE_REDRIVE = Duration.ofMinutes(1);
+    public static final Duration STALE_REDRIVE = Duration.ofMinutes(1);
 
     private static final Logger log = LoggerFactory.getLogger(DeadLetterRedrives.class);
 

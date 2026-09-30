@@ -1,4 +1,4 @@
-package com.grandis.nova.preorder.deadletter;
+package com.grandis.nova.preorder.deadletter.application;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

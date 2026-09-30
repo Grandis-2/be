@@ -1,4 +1,4 @@
-package com.grandis.nova.preorder.deadletter;
+package com.grandis.nova.preorder.deadletter.api;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;

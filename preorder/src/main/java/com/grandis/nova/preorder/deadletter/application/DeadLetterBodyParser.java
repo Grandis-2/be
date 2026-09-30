@@ -1,5 +1,7 @@
-package com.grandis.nova.preorder.deadletter;
+package com.grandis.nova.preorder.deadletter.application;
 
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterBody;
+import com.grandis.nova.preorder.deadletter.domain.FailureReason;
 import com.grandis.nova.preorder.event.InboundEventType;
 import com.grandis.nova.preorder.outbox.EventEnvelope;
 import org.springframework.stereotype.Component;
@@ -12,15 +14,15 @@ import tools.jackson.databind.json.JsonMapper;
  * 배포로 받게 되면 그때부터 되돌릴 수 있다.
  */
 @Component
-class DeadLetterBodyParser {
+public class DeadLetterBodyParser {
 
     private final JsonMapper jsonMapper;
 
-    DeadLetterBodyParser(JsonMapper jsonMapper) {
+    public DeadLetterBodyParser(JsonMapper jsonMapper) {
         this.jsonMapper = jsonMapper;
     }
 
-    DeadLetterBody parse(String body) {
+    public DeadLetterBody parse(String body) {
         EventEnvelope envelope;
         try {
             envelope = jsonMapper.readValue(body, EventEnvelope.class);

@@ -1,8 +1,13 @@
-package com.grandis.nova.preorder.deadletter;
+package com.grandis.nova.preorder.deadletter.application;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.preorder.PreorderErrorCode;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterEvent;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterEventRepository;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterStatus;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterSummary;
+import com.grandis.nova.preorder.deadletter.domain.FailureReason;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.Preorders;
 import org.slf4j.Logger;
@@ -25,7 +30,7 @@ import java.util.Optional;
 
 /** 관리자 DLQ 조회 · 되돌리기 · 버리기. */
 @Service
-class DeadLetterAdminService {
+public class DeadLetterAdminService {
 
     /** 일괄 되돌리기 한 번의 최대 건수. */
     public static final int MAX_BATCH_SIZE = 1000;

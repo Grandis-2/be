@@ -1,4 +1,9 @@
-package com.grandis.nova.preorder.deadletter;
+package com.grandis.nova.preorder.deadletter.api;
+
+import com.grandis.nova.preorder.deadletter.application.DeadLetterView;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterEvent;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterStatus;
+import com.grandis.nova.preorder.deadletter.domain.FailureReason;
 
 import java.time.Instant;
 

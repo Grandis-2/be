@@ -1,4 +1,4 @@
-package com.grandis.nova.preorder.deadletter;
+package com.grandis.nova.preorder.deadletter.domain;
 
 import org.springframework.data.domain.Limit;
 import org.springframework.data.domain.Page;
@@ -13,12 +13,12 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
-import static com.grandis.nova.preorder.deadletter.DeadLetterStatus.OPEN;
-import static com.grandis.nova.preorder.deadletter.DeadLetterStatus.REDRIVEN;
-import static com.grandis.nova.preorder.deadletter.DeadLetterStatus.REDRIVING;
+import static com.grandis.nova.preorder.deadletter.domain.DeadLetterStatus.OPEN;
+import static com.grandis.nova.preorder.deadletter.domain.DeadLetterStatus.REDRIVEN;
+import static com.grandis.nova.preorder.deadletter.domain.DeadLetterStatus.REDRIVING;
 
 /** 상태 전이는 모두 현재 상태를 조건으로 한 UPDATE 다. 영향 행이 0 이면 그 사이 다른 쪽이 바꾼 것이다. */
-interface DeadLetterEventRepository extends JpaRepository<DeadLetterEvent, Long> {
+public interface DeadLetterEventRepository extends JpaRepository<DeadLetterEvent, Long> {
 
     /** 요약 칸. 원문(body)은 빼고 읽는다. */
     String SUMMARY_COLUMNS = """

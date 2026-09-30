@@ -1,6 +1,7 @@
-package com.grandis.nova.preorder.deadletter;
+package com.grandis.nova.preorder.deadletter.domain;
 
 import com.grandis.nova.common.BaseEntity;
+import com.grandis.nova.preorder.deadletter.IncomingDeadLetter;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -18,7 +19,7 @@ import java.time.Instant;
  */
 @Entity
 @Table(name = "dead_letter_events")
-class DeadLetterEvent extends BaseEntity {
+public class DeadLetterEvent extends BaseEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -92,7 +93,7 @@ class DeadLetterEvent extends BaseEntity {
     protected DeadLetterEvent() {
     }
 
-    DeadLetterEvent(IncomingDeadLetter incoming, DeadLetterBody parsed, Long preorderId, Long customerId) {
+    public DeadLetterEvent(IncomingDeadLetter incoming, DeadLetterBody parsed, Long preorderId, Long customerId) {
         this.sourceQueue = incoming.sourceQueue();
         this.messageId = incoming.messageId();
         this.body = incoming.body();
@@ -110,7 +111,7 @@ class DeadLetterEvent extends BaseEntity {
     }
 
     /** 되돌리기를 기다리는가 — OPEN 이거나, 보내다 멈춰 staleBefore 전부터 REDRIVING 이다. */
-    boolean waitingForRedrive(Instant staleBefore) {
+    public boolean waitingForRedrive(Instant staleBefore) {
         return status.waitingForRedrive(redriveStartedAt, staleBefore);
     }
 

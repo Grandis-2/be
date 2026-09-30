@@ -1,9 +1,9 @@
-package com.grandis.nova.preorder.deadletter;
+package com.grandis.nova.preorder.deadletter.domain;
 
 import java.time.Instant;
 
 /** DLQ 에서 옮겨 온 메시지의 처리 상태. 전이는 모두 현재 상태를 조건으로 한 UPDATE 로만 한다. */
-enum DeadLetterStatus {
+public enum DeadLetterStatus {
 
     /** 쌓임. 되돌리거나 버릴 수 있다. */
     OPEN,
@@ -19,7 +19,7 @@ enum DeadLetterStatus {
     DISCARDED;
 
     /** 되돌리기를 기다리는가 — OPEN 이거나, 보내다 멈춰 staleBefore 전부터 REDRIVING 이다. */
-    boolean waitingForRedrive(Instant redriveStartedAt, Instant staleBefore) {
+    public boolean waitingForRedrive(Instant redriveStartedAt, Instant staleBefore) {
         return this == OPEN || (this == REDRIVING && redriveStartedAt.isBefore(staleBefore));
     }
 }
