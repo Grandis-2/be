@@ -167,6 +167,7 @@ CREATE TABLE `outbox_events` (
   `event_type` varchar(50) NOT NULL,
   `payload` json NOT NULL,
   `publish_attempts` int NOT NULL DEFAULT '0',
+  `lease_until` datetime(6) DEFAULT NULL,
   `created_at` datetime(6) NOT NULL,
   `published_at` datetime(6) DEFAULT NULL,
   PRIMARY KEY (`id`),

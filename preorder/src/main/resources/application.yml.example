@@ -115,6 +115,7 @@ nova:
     relay-interval: 10s    # 릴레이 주기
     relay-after: 1m        # 만든 지 이만큼 지난 미발행 행만 재발행
     relay-batch: 100
+    relay-lease: 1m        # 가져간 행을 다른 인스턴스가 건너뛰는 시간. 행마다 보내기 직전에 연장한다 — SQS 제한 시간(3s)보다 길게
   # DB 에서 세는 상태 지표(예약 상태별 수 · 미발행 아웃박스) 갱신 주기
   metrics:
     refresh-interval: 30s

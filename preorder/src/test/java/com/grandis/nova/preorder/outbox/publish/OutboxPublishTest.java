@@ -4,6 +4,7 @@ import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.preorder.accept.RegisterJobReady;
 import com.grandis.nova.preorder.outbox.OutboxEvent;
+import com.grandis.nova.preorder.outbox.OutboxEventRepository;
 import com.grandis.nova.preorder.outbox.OutboxWriter;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
@@ -16,13 +17,20 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,6 +54,15 @@ class OutboxPublishTest {
     OutboxRelay relay;
 
     @Autowired
+    OutboxEventRepository outboxEvents;
+
+    @Autowired
+    OutboxPublisher publisher;
+
+    @Autowired
+    OutboxProperties properties;
+
+    @Autowired
     TransactionTemplate transactionTemplate;
 
     @Autowired
@@ -66,6 +83,11 @@ class OutboxPublishTest {
     /** true 면 전송이 실패한다. */
     volatile boolean transportDown;
 
+    /** 이 eventId 를 보낼 때 released 가 열릴 때까지 멈춘다. */
+    volatile String blockedEventId;
+    final CountDownLatch sending = new CountDownLatch(1);
+    final CountDownLatch released = new CountDownLatch(1);
+
     long aggregateId;
 
     @BeforeEach
@@ -76,6 +98,10 @@ class OutboxPublishTest {
                 throw new IllegalStateException("transport down");
             }
             OutboundMessage message = invocation.getArgument(0);
+            if (message.eventId().equals(blockedEventId)) {
+                sending.countDown();
+                released.await(ASYNC_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+            }
             senders.put(message.eventId(), Thread.currentThread());
             sent.add(message);
             return null;
@@ -155,6 +181,105 @@ class OutboxPublishTest {
         assertThat(eventIds).allSatisfy(eventId -> assertThat(sentOf(eventId)).hasSize(1));
     }
 
+    @Test
+    void 보내는_동안_행_잠금을_쥐지_않고_리스만_건다() throws Exception {
+        Long id = insertUnpublished("CANCEL_JOB_READY");
+        blockedEventId = eventIdOf(id);
+
+        CompletableFuture<Integer> relaying = CompletableFuture.supplyAsync(relay::relay);
+        assertThat(sending.await(ASYNC_TIMEOUT.toSeconds(), TimeUnit.SECONDS)).isTrue();
+
+        Long locked = transactionTemplate.execute(status -> jdbcTemplate.queryForObject(
+                "SELECT id FROM outbox_events WHERE id = ? FOR UPDATE NOWAIT", Long.class, id));
+        assertThat(locked).as("다른 트랜잭션이 기다리지 않고 잠근다").isEqualTo(id);
+        assertThat(leaseUntil(id)).isNotNull();
+
+        released.countDown();
+        relaying.get(ASYNC_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+        assertThat(publishedAt(id)).isNotNull();
+    }
+
+    @Test
+    void 리스_중인_행은_건너뛰고_리스가_끝나면_다시_가져간다() {
+        Long id = insertUnpublished("CANCEL_JOB_READY");
+        jdbcTemplate.update(
+                "UPDATE outbox_events SET lease_until = UTC_TIMESTAMP(6) + INTERVAL 5 MINUTE WHERE id = ?", id);
+
+        relay.relay();
+        assertThat(sentOf(eventIdOf(id))).as("다른 인스턴스가 보내는 중").isEmpty();
+
+        jdbcTemplate.update(
+                "UPDATE outbox_events SET lease_until = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ?", id);
+        relay.relay();
+
+        assertThat(publishedAt(id)).as("보내던 인스턴스가 죽어 리스가 끝났다").isNotNull();
+        assertThat(sentOf(eventIdOf(id))).hasSize(1);
+    }
+
+    @Test
+    void 릴레이_전송이_실패하면_시도_횟수를_올리고_리스를_풀어_다음_주기에_다시_보낸다() {
+        Long id = insertUnpublished("CANCEL_JOB_READY");
+        transportDown = true;
+
+        relay.relay();
+
+        assertThat(attempts(id)).isEqualTo(1);
+        assertThat(leaseUntil(id)).isNull();
+        assertThat(publishedAt(id)).isNull();
+
+        transportDown = false;
+        relay.relay();
+        assertThat(publishedAt(id)).isNotNull();
+    }
+
+    @Test
+    void 보내기_전에_리스가_끝나_다른_인스턴스가_가져간_행은_보내지_않는다() {
+        Long id = insertUnpublished("CANCEL_JOB_READY");
+        // 가져간 뒤 보내기 직전(두 번째로 시각을 읽을 때), 다른 인스턴스가 리스를 새로 건 것으로 만든다
+        Clock takenOver = new Clock() {
+            private int reads;
+
+            @Override
+            public ZoneId getZone() {
+                return Clock.systemUTC().getZone();
+            }
+
+            @Override
+            public Clock withZone(ZoneId zone) {
+                return this;
+            }
+
+            @Override
+            public Instant instant() {
+                if (++reads == 2) {
+                    jdbcTemplate.update("UPDATE outbox_events SET lease_until = UTC_TIMESTAMP(6) + INTERVAL 5 MINUTE"
+                            + " WHERE id = ?", id);
+                }
+                return Instant.now().truncatedTo(ChronoUnit.MICROS);
+            }
+        };
+
+        new OutboxRelay(outboxEvents, publisher, properties, transactionTemplate, takenOver).relay();
+
+        assertThat(sentOf(eventIdOf(id))).isEmpty();
+        assertThat(publishedAt(id)).isNull();
+    }
+
+    @Test
+    void 남의_리스는_연장하지도_늦게_실패한_쪽이_풀지도_않는다() {
+        Long id = insertUnpublished("CANCEL_JOB_READY");
+        Instant mine = Instant.parse("2026-01-01T00:00:00Z");
+        jdbcTemplate.update(
+                "UPDATE outbox_events SET lease_until = UTC_TIMESTAMP(6) + INTERVAL 5 MINUTE WHERE id = ?", id);
+        Object theirs = leaseUntil(id);
+
+        assertThat(outboxEvents.renewLease(id, mine, Instant.now())).isZero();
+        outboxEvents.recordFailure(id, mine);
+
+        assertThat(leaseUntil(id)).isEqualTo(theirs);
+        assertThat(attempts(id)).as("실패 횟수는 센다").isEqualTo(1);
+    }
+
     /** 커밋 직후 발행을 거치지 않은 미발행 행. 만든 지 1분이 지난 것으로 둔다. */
     private Long insertUnpublished(String eventType) {
         String eventId = ShopFixtures.unique();
@@ -173,6 +298,10 @@ class OutboxPublishTest {
         return row(id).get("published_at");
     }
 
+    private Object leaseUntil(Long id) {
+        return row(id).get("lease_until");
+    }
+
     private int attempts(Long id) {
         return ((Number) row(id).get("publish_attempts")).intValue();
     }
@@ -183,7 +312,7 @@ class OutboxPublishTest {
 
     private Map<String, Object> row(Long id) {
         return jdbcTemplate.queryForMap(
-                "SELECT event_id, publish_attempts, published_at FROM outbox_events WHERE id = ?", id);
+                "SELECT event_id, publish_attempts, lease_until, published_at FROM outbox_events WHERE id = ?", id);
     }
 
     private List<OutboundMessage> sentOf(String eventId) {

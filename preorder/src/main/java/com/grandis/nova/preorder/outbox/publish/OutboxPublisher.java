@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
+import java.time.Instant;
 
 /**
  * 아웃박스 행을 봉투로 싸서 보내고 결과를 행에 남긴다. 커밋 직후 발행과 릴레이가 함께 쓴다.
@@ -42,16 +43,19 @@ class OutboxPublisher {
     void publishById(Long outboxEventId) {
         outboxEvents.findById(outboxEventId)
                 .filter(event -> event.getPublishedAt() == null)
-                .ifPresent(this::publish);
+                .ifPresent(event -> publish(event, null));
     }
 
-    /** @return 보내고 발행 완료로 표시했으면 true. 이미 표시된 행이면 false */
-    boolean publish(OutboxEvent event) {
+    /**
+     * @param lease 릴레이가 건 리스(없으면 null). 실패하면 이 리스만 푼다
+     * @return 보내고 발행 완료로 표시했으면 true. 이미 표시된 행이면 false
+     */
+    boolean publish(OutboxEvent event, Instant lease) {
         try {
             transport.send(toMessage(event));
         } catch (RuntimeException e) {
             count(event, "failure");
-            outboxEvents.recordFailure(event.getId());
+            outboxEvents.recordFailure(event.getId(), lease);
             log.warn("아웃박스 발행 실패 — 릴레이가 다시 보낸다 outboxEventId={} eventType={}",
                     event.getId(), event.getEventType(), e);
             return false;
