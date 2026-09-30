@@ -1,6 +1,7 @@
 package com.grandis.nova.member;
 
 import com.grandis.nova.common.security.SecurityFilterChainSupport;
+import com.grandis.nova.common.web.OpenApiPaths;
 import com.grandis.nova.member.auth.api.AuthCookies;
 import com.grandis.nova.member.auth.api.RefreshOriginPolicy;
 import com.grandis.nova.member.auth.application.AdminProperties;
@@ -30,6 +31,7 @@ public class MemberSecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/admin/session").permitAll()          // 관리자 로그인
                 .requestMatchers(HttpMethod.POST, "/api/v1/session/refresh").permitAll()        // F-X-01 재발급: 쿠키로 식별
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/session").permitAll()              // 로그아웃: 만료된 액세스로도 되어야 한다
+                .requestMatchers(HttpMethod.GET, OpenApiPaths.docs()).permitAll()                 // OpenAPI 문서(허브)
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated());                                                 // GET /session, /me/**
     }
