@@ -13,7 +13,10 @@ include 'common:testing'    // order — 테스트 지원 (testImplementation �
 include 'member'      // 카카오 로그인 · JWT · 회원
 include 'catalog'     // 상품 · 옵션 · 관리자 등록/편집
 include 'preorder'    // 접수 · 순번 · 회차 · 배송 차수 · 예약 취소
-include 'order'       // 주문 · 결제기록 · 재고 · 장바구니
+include 'order'       // 주문 · 재고 · 장바구니
+
+// 내부 HTTP 진입점 — ECS 서비스. 사용자 요청을 직접 받지 않고 order · draw 가 부른다
+include 'payment'     // 결제 — 토스 연동 · 결제 원장 · 복구 · 환불
 
 // 비 HTTP 진입점 — ECS 서비스
 include 'worker'      // SQS 소비 — 외부 예약 등록 · 알림

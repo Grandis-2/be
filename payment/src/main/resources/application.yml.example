@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: payment
+  datasource:
+    url: jdbc:mysql://localhost:3306/shop?serverTimezone=UTC&characterEncoding=UTF-8
+    username: nova
+    password: CHANGE_ME
+    hikari:
+      # MySQL 서버 기본값은 REPEATABLE READ 다. 반드시 여기서 바꾼다.
+      # 근거: "없는 행을 잠금 읽기로 확인한 뒤 INSERT" 하는 절차가 RR 에서
+      #      갭 락과 삽입 의도 락으로 교착한다 (실측 RR 4/4 데드락, RC 4/4 통과).
+      # 빠뜨려도 오류가 나지 않는다. 부하가 걸릴 때까지 아무도 모른다.
+      transaction-isolation: TRANSACTION_READ_COMMITTED
+      maximum-pool-size: 10
+  jpa:
+    # 정본은 flyway-project/migrations. docs/schema.sql은 생성된 최신 구조다.
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+    open-in-view: false
+
+# 내부 전용. 사용자 트래픽은 order(8084) · draw 를 거쳐 들어온다.
+server:
+  port: 8085
