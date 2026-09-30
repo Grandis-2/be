@@ -2,8 +2,8 @@ package com.grandis.nova.preorder.campaign;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
-import com.grandis.nova.preorder.campaign.application.ShipmentBatchPlan;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatch;
+import com.grandis.nova.preorder.campaign.domain.ShipmentBatchPlan;
 import org.assertj.core.api.ThrowingConsumer;
 import org.junit.jupiter.api.Test;
 

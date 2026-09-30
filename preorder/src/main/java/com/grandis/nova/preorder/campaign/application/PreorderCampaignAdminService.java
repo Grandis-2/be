@@ -5,6 +5,7 @@ import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatch;
+import com.grandis.nova.preorder.campaign.domain.ShipmentBatchPlan;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatchRepository;
 import com.grandis.nova.preorder.integration.catalog.CatalogReader;
 import com.grandis.nova.preorder.integration.catalog.ProductCatalog;

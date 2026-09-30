@@ -18,7 +18,7 @@ public class DeadLetterBodyParser {
 
     private final JsonMapper jsonMapper;
 
-    public DeadLetterBodyParser(JsonMapper jsonMapper) {
+    DeadLetterBodyParser(JsonMapper jsonMapper) {
         this.jsonMapper = jsonMapper;
     }
 

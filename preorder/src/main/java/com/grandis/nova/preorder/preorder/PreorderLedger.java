@@ -47,12 +47,12 @@ public class PreorderLedger {
         Preorder preorder = preorders.saveAndFlush(new Preorder(draft));
         entityManager.persist(new PreorderEvent(preorder.getId(), PreorderEvent.FIRST_SEQUENCE,
                 null, PreorderStatus.PENDING_SYNC, actor, reason, clock.instant()));
-        return PreorderSnapshot.of(preorder);
+        return preorder.toSnapshot();
     }
 
     /** 예약 행을 잠그고 읽는다. 판정과 전이 사이에 다른 변경이 끼지 못하게 할 때 쓴다(만료 등). */
     public Optional<PreorderSnapshot> lockByToken(String preorderToken) {
-        return preorders.findForUpdateByPreorderToken(preorderToken).map(PreorderSnapshot::of);
+        return preorders.findForUpdateByPreorderToken(preorderToken).map(Preorder::toSnapshot);
     }
 
     /** 관리자 전용 메모. 이력을 남기지 않는 유일한 변경이다. @throws BusinessException PREORDER_NOT_FOUND */

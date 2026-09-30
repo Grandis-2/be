@@ -1,7 +1,7 @@
 package com.grandis.nova.preorder.deadletter;
 
-import com.grandis.nova.preorder.deadletter.application.DeadLetterRedrives;
 import com.grandis.nova.preorder.deadletter.domain.DeadLetterEventRepository;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,12 +22,12 @@ public class DeadLetterBacklog {
     }
 
     public long waitingCount() {
-        return events.countWaiting(clock.instant().minus(DeadLetterRedrives.STALE_REDRIVE));
+        return events.countWaiting(clock.instant().minus(DeadLetterStatus.STALE_REDRIVE));
     }
 
     /** 가장 오래 방치된 행의 나이. 없으면 0. */
     public Duration oldestWaitingAge() {
-        return events.findOldestWaitingCreatedAt(clock.instant().minus(DeadLetterRedrives.STALE_REDRIVE))
+        return events.findOldestWaitingCreatedAt(clock.instant().minus(DeadLetterStatus.STALE_REDRIVE))
                 .map(createdAt -> Duration.between(createdAt, clock.instant()))
                 .filter(age -> !age.isNegative())
                 .orElse(Duration.ZERO);

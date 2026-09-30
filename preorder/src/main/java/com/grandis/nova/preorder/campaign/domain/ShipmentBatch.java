@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.campaign.domain;
 
+import com.grandis.nova.preorder.campaign.ShipmentBatchSnapshot;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EntityListeners;
@@ -64,13 +65,19 @@ public class ShipmentBatch {
 
     /** 오픈 전 설정에서만 만든다. 구간 규칙은 {@link ShipmentBatchPlan} 이 본다. */
     public static ShipmentBatch of(Long productId, int batchNumber, long positionFrom, Long positionTo,
-                            LocalDate estimatedShipStart, LocalDate estimatedShipEnd) {
+                                   LocalDate estimatedShipStart, LocalDate estimatedShipEnd) {
         return new ShipmentBatch(productId, batchNumber, positionFrom, positionTo,
                 estimatedShipStart, estimatedShipEnd);
     }
 
     public boolean covers(long position) {
         return positionFrom <= position && (positionTo == null || position <= positionTo);
+    }
+
+    /** 다른 모듈에 넘기는 읽기 전용 값. */
+    public ShipmentBatchSnapshot toSnapshot() {
+        return new ShipmentBatchSnapshot(getId(), getBatchNumber(), getPositionFrom(),
+                getPositionTo(), getEstimatedShipStart(), getEstimatedShipEnd());
     }
 
     public Long getId() {

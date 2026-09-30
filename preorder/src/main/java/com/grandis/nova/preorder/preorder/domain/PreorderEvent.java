@@ -1,6 +1,8 @@
 package com.grandis.nova.preorder.preorder.domain;
 
 import com.grandis.nova.preorder.preorder.EventActor;
+import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
+import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -55,7 +57,7 @@ public class PreorderEvent {
     }
 
     public PreorderEvent(Long preorderId, long eventSequence, PreorderStatus fromStatus, PreorderStatus toStatus,
-                  EventActor actor, String reason, Instant createdAt) {
+                         EventActor actor, String reason, Instant createdAt) {
         actor.requireReason(reason);
         this.preorderId = preorderId;
         this.eventSequence = eventSequence;
@@ -64,6 +66,12 @@ public class PreorderEvent {
         this.actor = actor;
         this.reason = reason;
         this.createdAt = createdAt;
+    }
+
+    /** 다른 모듈에 넘기는 이력 한 줄. */
+    public PreorderHistoryEntry toHistoryEntry() {
+        return new PreorderHistoryEntry(getPreorderId(), getEventSequence(), getFromStatus(),
+                getToStatus(), getActor(), getReason(), getCreatedAt());
     }
 
     public Long getPreorderId() {

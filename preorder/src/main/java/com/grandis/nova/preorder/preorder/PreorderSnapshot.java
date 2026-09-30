@@ -1,7 +1,5 @@
 package com.grandis.nova.preorder.preorder;
 
-import com.grandis.nova.preorder.preorder.domain.Preorder;
-
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
@@ -33,16 +31,6 @@ public record PreorderSnapshot(
 ) {
 
     public static final Duration PAYMENT_WINDOW = Duration.ofHours(24);
-
-    public static PreorderSnapshot of(Preorder preorder) {
-        return new PreorderSnapshot(preorder.getId(), preorder.getPreorderToken(), preorder.getCustomerId(),
-                preorder.getProductId(), preorder.getOptionId(), preorder.getShipmentBatchId(),
-                preorder.getQueuePosition(), preorder.getAdmissionTicketId(), preorder.getIdempotencyKey(),
-                preorder.getProductTitleSnapshot(), preorder.getOptionTitleSnapshot(),
-                preorder.getUnitPriceSnapshot(), preorder.getStatus(), preorder.getPayableFrom(),
-                preorder.getExternalReference(), preorder.getInternalNote(), preorder.getEventSequence(),
-                preorder.getCreatedAt(), preorder.getUpdatedAt());
-    }
 
     /** 결제 기한 — 결제 가능해진 시각부터 24시간. 연장은 없다. PAYABLE 이 아니면 없다. */
     public Instant paymentDueAt() {

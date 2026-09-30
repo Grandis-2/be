@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.syncjob.domain;
 
 import com.grandis.nova.common.BaseEntity;
+import com.grandis.nova.preorder.syncjob.SyncJobSnapshot;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 import com.grandis.nova.preorder.syncjob.SyncJobType;
 import jakarta.persistence.Column;
@@ -74,6 +75,13 @@ public class PreorderSyncJob extends BaseEntity {
     /** 주문 정리가 끝난 뒤(PREORDER_ORDER_SETTLED) 만든다. */
     public static PreorderSyncJob cancel(Long preorderId, String requestPayload) {
         return new PreorderSyncJob(preorderId, SyncJobType.CANCEL, requestPayload);
+    }
+
+    /** 다른 모듈에 넘기는 읽기 전용 값. */
+    public SyncJobSnapshot toSnapshot() {
+        return new SyncJobSnapshot(getId(), getPreorderId(), getJobType(), getStatus(),
+                getRequestPayload(), getLeaseExpiresAt(), getDeadLetteredAt(), getCreatedAt(),
+                getUpdatedAt());
     }
 
     public Long getId() {

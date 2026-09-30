@@ -1,7 +1,6 @@
 package com.grandis.nova.preorder.syncjob;
 
 import com.fasterxml.jackson.annotation.JsonRawValue;
-import com.grandis.nova.preorder.syncjob.api.SyncAttemptResponse;
 import com.grandis.nova.preorder.syncjob.domain.PreorderSyncJob;
 
 import java.time.Instant;
@@ -34,7 +33,7 @@ public record SyncJobResponse(
     }
 
     public static SyncJobResponse from(PreorderSyncJob job, String preorderToken, List<SyncAttempt> attempts) {
-        return from(SyncJobSnapshot.of(job), preorderToken, attempts);
+        return from(job.toSnapshot(), preorderToken, attempts);
     }
 
     private static String lastErrorCode(List<SyncAttempt> attempts) {

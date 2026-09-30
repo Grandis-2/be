@@ -1,7 +1,4 @@
-package com.grandis.nova.preorder.syncjob.api;
-
-
-import com.grandis.nova.preorder.syncjob.SyncAttempt;
+package com.grandis.nova.preorder.syncjob;
 
 import java.time.Instant;
 

@@ -32,7 +32,7 @@ public class Campaigns {
     /** 회차 행을 잠그고 일정을 읽는다. 잠금은 호출한 트랜잭션이 끝날 때까지다. 회차가 없으면 비어 있다. */
     @Transactional(propagation = Propagation.MANDATORY)
     public Optional<CampaignSchedule> lockForAccept(Long productId) {
-        return campaigns.findForUpdate(productId).map(CampaignSchedule::of);
+        return campaigns.findForUpdate(productId).map(PreorderCampaign::toSchedule);
     }
 
     /**
@@ -49,20 +49,20 @@ public class Campaigns {
         ShipmentBatch batch = batches.findCovering(productId, position)
                 .orElseThrow(() -> new IllegalStateException(
                         "순번이 속한 배송 차수가 없다: productId=" + productId + ", position=" + position));
-        return new IssuedPosition(position, ShipmentBatchSnapshot.of(batch));
+        return new IssuedPosition(position, batch.toSnapshot());
     }
 
     /** 예약에 배정된 차수. 없으면 IllegalStateException(오픈 전 검사를 지나친 데이터). */
     @Transactional(readOnly = true)
     public ShipmentBatchSnapshot getBatch(Long shipmentBatchId) {
-        return ShipmentBatchSnapshot.of(batches.getAssigned(shipmentBatchId));
+        return batches.getAssigned(shipmentBatchId).toSnapshot();
     }
 
     /** id → 차수. 없는 id 는 빠진다. */
     @Transactional(readOnly = true)
     public Map<Long, ShipmentBatchSnapshot> findBatches(Collection<Long> shipmentBatchIds) {
         return batches.findAllById(shipmentBatchIds).stream()
-                .collect(Collectors.toMap(ShipmentBatch::getId, ShipmentBatchSnapshot::of));
+                .collect(Collectors.toMap(ShipmentBatch::getId, ShipmentBatch::toSnapshot));
     }
 
     /** 판매 중지: 회차를 지금 시각으로 닫는다. 회차가 없으면 아무것도 하지 않는다. */

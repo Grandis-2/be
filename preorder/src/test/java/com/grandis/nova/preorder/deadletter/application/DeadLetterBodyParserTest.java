@@ -1,6 +1,5 @@
-package com.grandis.nova.preorder.deadletter;
+package com.grandis.nova.preorder.deadletter.application;
 
-import com.grandis.nova.preorder.deadletter.application.DeadLetterBodyParser;
 import com.grandis.nova.preorder.deadletter.domain.DeadLetterBody;
 import com.grandis.nova.preorder.deadletter.domain.FailureReason;
 import org.junit.jupiter.api.Test;

@@ -151,7 +151,7 @@ public class DeadLetterAdminService {
     }
 
     private Instant staleBefore() {
-        return clock.instant().minus(DeadLetterRedrives.STALE_REDRIVE);
+        return clock.instant().minus(DeadLetterStatus.STALE_REDRIVE);
     }
 
     private boolean redrivable(DeadLetterSummary summary, Instant staleBefore) {

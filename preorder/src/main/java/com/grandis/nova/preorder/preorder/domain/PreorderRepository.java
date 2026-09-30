@@ -2,6 +2,7 @@ package com.grandis.nova.preorder.preorder.domain;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
+import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Limit;

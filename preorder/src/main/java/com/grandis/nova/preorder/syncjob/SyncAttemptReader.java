@@ -1,6 +1,6 @@
 package com.grandis.nova.preorder.syncjob;
 
-import com.grandis.nova.preorder.syncjob.application.ErrorGroup;
+import com.grandis.nova.preorder.syncjob.domain.ErrorGroup;
 import com.grandis.nova.preorder.syncjob.domain.SyncJobFilter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;

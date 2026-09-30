@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.campaign.domain;
 
 import com.grandis.nova.common.BaseEntity;
+import com.grandis.nova.preorder.campaign.CampaignSchedule;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
@@ -94,6 +95,11 @@ public class PreorderCampaign extends BaseEntity {
         long position = nextQueuePosition;
         nextQueuePosition = position + 1;
         return position;
+    }
+
+    /** 다른 모듈에 넘기는 모집 일정. */
+    public CampaignSchedule toSchedule() {
+        return new CampaignSchedule(getProductId(), getOpensAt(), getClosesAt());
     }
 
     public Long getProductId() {

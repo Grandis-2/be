@@ -2,8 +2,8 @@ package com.grandis.nova.preorder.syncjob.api;
 
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import com.grandis.nova.common.OffsetPage;
-import com.grandis.nova.preorder.syncjob.application.ErrorGroup;
 import com.grandis.nova.preorder.syncjob.application.SyncJobPage;
+import com.grandis.nova.preorder.syncjob.domain.ErrorGroup;
 
 import java.util.List;
 

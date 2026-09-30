@@ -15,19 +15,16 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 
 /**
  * 원문을 원래 큐로 되돌린다. 선점(OPEN → REDRIVING) → 트랜잭션 밖에서 보내기 → 보냄 기록(REDRIVEN) 순이라
- * 두 관리자가 동시에 눌러도 한 번만 보낸다. 보내기 실패는 실제로 갔는지 알 수 없어 REDRIVING 에 두고, STALE_REDRIVE 뒤 다시 선점한다.
+ * 두 관리자가 동시에 눌러도 한 번만 보낸다. 보내기 실패는 실제로 갔는지 알 수 없어 REDRIVING 에 두고, 멈춘 기준(STALE_REDRIVE) 뒤 다시 선점한다.
  */
 @Component
 public class DeadLetterRedrives {
 
-    /** 보내다 죽거나 실패해 이만큼 넘게 REDRIVING 인 행은 다시 선점한다. 보내기 한 번(SQS 제한 시간)보다 충분히 길다. */
-    public static final Duration STALE_REDRIVE = Duration.ofMinutes(1);
 
     private static final Logger log = LoggerFactory.getLogger(DeadLetterRedrives.class);
 
@@ -63,7 +60,7 @@ public class DeadLetterRedrives {
         }
         Instant startedAt = clock.instant();
         Integer claimed = transactionTemplate.execute(status ->
-                events.claimRedrive(id, requestedBy, startedAt, startedAt.minus(STALE_REDRIVE)));
+                events.claimRedrive(id, requestedBy, startedAt, startedAt.minus(DeadLetterStatus.STALE_REDRIVE)));
         if (claimed == null || claimed != 1) {
             throw notRedrivable("status=" + currentStatus(id));
         }
@@ -71,7 +68,7 @@ public class DeadLetterRedrives {
             sender.redrive(event.getSourceQueue(), event.getBody(), id);
         } catch (RuntimeException e) {
             // 시간 초과는 큐가 이미 받은 뒤일 수 있다. OPEN 으로 돌리면 실제로 간 메시지의 처리 결과를 남길 곳이 없어진다
-            log.warn("DLQ 메시지를 되돌리지 못했다 — {} 뒤 다시 되돌릴 수 있다 deadLetterId={}", STALE_REDRIVE, id, e);
+            log.warn("DLQ 메시지를 되돌리지 못했다 — {} 뒤 다시 되돌릴 수 있다 deadLetterId={}", DeadLetterStatus.STALE_REDRIVE, id, e);
             throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
         }
         Integer recorded = transactionTemplate.execute(status -> events.markRedriven(id, startedAt, clock.instant()));

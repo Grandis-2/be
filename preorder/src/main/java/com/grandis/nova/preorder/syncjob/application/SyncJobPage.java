@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.syncjob.application;
 
 import com.grandis.nova.common.OffsetPage;
+import com.grandis.nova.preorder.syncjob.domain.ErrorGroup;
 
 import java.util.List;
 

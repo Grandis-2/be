@@ -1,6 +1,5 @@
 package com.grandis.nova.preorder.syncjob.api;
 
-
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 import com.grandis.nova.preorder.syncjob.SyncJobType;
 import com.grandis.nova.preorder.syncjob.application.SyncJobView;

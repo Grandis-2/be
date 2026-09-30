@@ -2,6 +2,8 @@ package com.grandis.nova.preorder.preorder.domain;
 
 import com.grandis.nova.common.BaseEntity;
 import com.grandis.nova.preorder.preorder.NewPreorder;
+import com.grandis.nova.preorder.preorder.PreorderLedger;
+import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -107,6 +109,17 @@ public class Preorder extends BaseEntity {
     /** 관리자 전용 메모. 이력을 남기지 않는다. */
     public void changeInternalNote(String internalNote) {
         this.internalNote = internalNote;
+    }
+
+    /** 다른 모듈에 넘기는 읽기 전용 값. */
+    public PreorderSnapshot toSnapshot() {
+        return new PreorderSnapshot(getId(), getPreorderToken(), getCustomerId(),
+                getProductId(), getOptionId(), getShipmentBatchId(),
+                getQueuePosition(), getAdmissionTicketId(), getIdempotencyKey(),
+                getProductTitleSnapshot(), getOptionTitleSnapshot(),
+                getUnitPriceSnapshot(), getStatus(), getPayableFrom(),
+                getExternalReference(), getInternalNote(), getEventSequence(),
+                getCreatedAt(), getUpdatedAt());
     }
 
     public Long getId() {

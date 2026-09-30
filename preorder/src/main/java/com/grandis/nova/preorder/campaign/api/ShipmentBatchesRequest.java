@@ -1,6 +1,6 @@
 package com.grandis.nova.preorder.campaign.api;
 
-import com.grandis.nova.preorder.campaign.application.ShipmentBatchPlan;
+import com.grandis.nova.preorder.campaign.domain.ShipmentBatchPlan;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;

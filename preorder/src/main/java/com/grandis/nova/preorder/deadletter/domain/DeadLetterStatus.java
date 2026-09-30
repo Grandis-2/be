@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.deadletter.domain;
 
+import java.time.Duration;
 import java.time.Instant;
 
 /** DLQ 에서 옮겨 온 메시지의 처리 상태. 전이는 모두 현재 상태를 조건으로 한 UPDATE 로만 한다. */
@@ -17,6 +18,9 @@ public enum DeadLetterStatus {
     REDRIVE_FAILED,
     /** 버림(사유 필수). */
     DISCARDED;
+
+    /** 보내다 죽거나 실패해 이만큼 넘게 REDRIVING 인 행은 다시 선점한다. 보내기 한 번(SQS 제한 시간)보다 충분히 길다. */
+    public static final Duration STALE_REDRIVE = Duration.ofMinutes(1);
 
     /** 되돌리기를 기다리는가 — OPEN 이거나, 보내다 멈춰 staleBefore 전부터 REDRIVING 이다. */
     public boolean waitingForRedrive(Instant redriveStartedAt, Instant staleBefore) {

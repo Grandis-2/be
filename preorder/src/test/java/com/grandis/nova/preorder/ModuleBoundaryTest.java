@@ -73,6 +73,12 @@ class ModuleBoundaryTest {
             .that().resideInAnyPackage(layer("application"))
             .should().dependOnClassesThat().resideInAnyPackage(layer("api"));
 
+    /** 공개 API 가 api 타입을 드러내면 그 타입이 모듈 밖으로 샌다. 최상위가 application · domain 을 쓰는 것은 허용한다. */
+    @ArchTest
+    static final ArchRule 모듈_최상위는_자기_api_에_기대지_않는다 = noClasses()
+            .that(resideInModuleRootOf(LAYERED))
+            .should().dependOnClassesThat().resideInAnyPackage(layer("api"));
+
     @ArchTest
     static final ArchRule 나눈_모듈의_컨트롤러는_api_에_둔다 = classes()
             .that().areAnnotatedWith(RestController.class).and().resideInAnyPackage(modules(LAYERED))
@@ -97,7 +103,7 @@ class ModuleBoundaryTest {
     static final ArchRule 동기화_작업은_회차에_기대지_않는다 = noClasses()
             .that().resideInAPackage(module("syncjob")).should().dependOnClassesThat().resideInAPackage(module("campaign"));
 
-    /** 수신 어댑터(integration.sqs)는 이벤트 분배로 넘기므로 event 는 허용한다. */
+    /** 수신 어댑터(integration.sqs)는 이벤트 분배 · DLQ 적재로 넘기므로 event · deadletter 는 허용한다. */
     @ArchTest
     static final ArchRule 연동은_도메인에_기대지_않는다 = noClasses()
             .that().resideInAPackage(module("integration"))
@@ -154,6 +160,12 @@ class ModuleBoundaryTest {
     private static DescribedPredicate<JavaClass> resideInSubpackageOf(String... names) {
         return DescribedPredicate.describe("나눈 모듈의 하위 패키지", javaClass -> Arrays.stream(names)
                 .anyMatch(name -> javaClass.getPackageName().startsWith(ROOT + "." + name + ".")));
+    }
+
+    /** 나눈 모듈의 최상위 패키지(공개 API). */
+    private static DescribedPredicate<JavaClass> resideInModuleRootOf(String... names) {
+        return DescribedPredicate.describe("나눈 모듈의 최상위 패키지", javaClass -> Arrays.stream(names)
+                .anyMatch(name -> javaClass.getPackageName().equals(ROOT + "." + name)));
     }
 
     /** 나눈 모듈마다 같은 이름의 하위 패키지(api · application · domain). */

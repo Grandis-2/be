@@ -46,7 +46,7 @@ public class SyncJobs {
 
     @Transactional(readOnly = true)
     public Optional<SyncJobSnapshot> findById(Long syncJobId) {
-        return syncJobs.findById(syncJobId).map(SyncJobSnapshot::of);
+        return syncJobs.findById(syncJobId).map(PreorderSyncJob::toSnapshot);
     }
 
     @Transactional(readOnly = true)
@@ -57,7 +57,7 @@ public class SyncJobs {
     /** 예약의 작업(종류 순). */
     @Transactional(readOnly = true)
     public List<SyncJobSnapshot> findByPreorder(Long preorderId) {
-        return syncJobs.findByPreorderIdOrderByJobType(preorderId).stream().map(SyncJobSnapshot::of).toList();
+        return syncJobs.findByPreorderIdOrderByJobType(preorderId).stream().map(PreorderSyncJob::toSnapshot).toList();
     }
 
     /** 예약 id → 등록 작업 상태. 작업이 없는 예약은 빠진다. */
