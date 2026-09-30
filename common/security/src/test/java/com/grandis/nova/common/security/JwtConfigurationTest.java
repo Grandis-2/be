@@ -78,6 +78,20 @@ class JwtConfigurationTest {
     }
 
     @Test
+    @DisplayName("리프레시 수명이 액세스 수명보다 짧으면 기동이 실패한다 — 전체 폐기 표식이 먼저 사라져 끊은 액세스 토큰이 되살아난다. 같으면 된다")
+    void refreshShorterThanAccessFailsStartup() {
+        runner.withPropertyValues("jwt.issuer=nova", "jwt.access-token-validity=2h", "jwt.refresh-token-validity=1h",
+                        "jwt.jwk-set-uri=https://member.example/.well-known/jwks.json")
+                .run(ctx -> {
+                    assertThat(ctx).hasFailed();
+                    assertThat(rootMessage(ctx.getStartupFailure())).contains("jwt.refresh-token-validity must be >= jwt.access-token-validity");
+                });
+        runner.withPropertyValues("jwt.issuer=nova", "jwt.access-token-validity=1h", "jwt.refresh-token-validity=1h",
+                        "jwt.jwk-set-uri=https://member.example/.well-known/jwks.json")
+                .run(ctx -> assertThat(ctx).hasNotFailed());
+    }
+
+    @Test
     @DisplayName("키 소스가 하나도 없으면 기동이 실패한다")
     void noKeySourceFailsStartup() {
         runner.withPropertyValues("jwt.issuer=nova", "jwt.access-token-validity=1h", "jwt.refresh-token-validity=14d").run(ctx -> {

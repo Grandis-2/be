@@ -1,0 +1,15 @@
+// JPA 를 쓰는 서비스만 의존한다 (지금 order). 의존하면 저장 해상도 시계와 JPA Auditing 이 자동설정으로 켜진다.
+// common:types 에 두지 않은 것은 모든 서비스가 types 를 의존해서다 — 거기 두면 켜기를 고를 수 없고,
+// @EnableJpaAuditing 을 직접 켠 서비스(member)는 Auditing 이 두 번 등록돼 기동이 실패한다.
+apply plugin: 'java-library'
+
+dependencies {
+    // @EnableJpaAuditing · DateTimeProvider 만 쓴다. common:types 의 타입은 쓰지 않아 의존하지 않는다(BaseEntity 는 서비스가 직접 의존).
+    implementation 'org.springframework.data:spring-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-autoconfigure'
+    // @EnableJpaAuditing 이 기동 때 요구한다(없으면 BeanDefinitionStoreException). 서비스는 data-jpa 스타터로도 받지만 여기서 스스로 갖춘다.
+    runtimeOnly 'org.springframework:spring-aspects'
+
+    // 자동설정 테스트가 엔티티 없는 EntityManagerFactory 대역을 만든다
+    testImplementation 'jakarta.persistence:jakarta.persistence-api'
+}
