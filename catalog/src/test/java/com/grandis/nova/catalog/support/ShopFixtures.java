@@ -174,8 +174,8 @@ public class ShopFixtures {
 
     public void registration(Long productId, String idempotencyKey) {
         jdbcTemplate.update("""
-                INSERT INTO product_registrations (product_id, idempotency_key, request_hash, requested_visible, created_at, updated_at)
-                VALUES (?, ?, UNHEX(REPEAT('ab', 32)), 1, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                INSERT INTO product_registrations (product_id, idempotency_key, requested_visible, created_at, updated_at)
+                VALUES (?, ?, 1, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
                 """, productId, idempotencyKey);
     }
 

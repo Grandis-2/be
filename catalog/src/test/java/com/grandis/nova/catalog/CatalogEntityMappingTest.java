@@ -147,7 +147,7 @@ class CatalogEntityMappingTest {
         assertThat(visibleInDb(product.getId())).isFalse();
 
         ProductRegistration incomplete = registrations.saveAndFlush(
-                ProductRegistration.start(product.getId(), ShopFixtures.unique(), new byte[ProductRegistration.HASH_LENGTH], true));
+                ProductRegistration.start(product.getId(), ShopFixtures.unique(), true));
         assertThatThrownBy(() -> product.publish(incomplete)).isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(() -> product.publish(null)).isInstanceOf(IllegalArgumentException.class);
 
@@ -171,7 +171,7 @@ class CatalogEntityMappingTest {
         Product product = products.saveAndFlush(Product.register(fixtures.category(), SaleMode.PREORDER,
                 "Nova 1", BigDecimal.ZERO, null, null, false, BigDecimal.ZERO));
         String key = ShopFixtures.unique();
-        registrations.saveAndFlush(ProductRegistration.start(product.getId(), key, new byte[ProductRegistration.HASH_LENGTH], true));
+        registrations.saveAndFlush(ProductRegistration.start(product.getId(), key, true));
         jdbcTemplate.update("UPDATE product_registrations SET blocked_reason = 'OPENED_BEFORE_COMPLETE' WHERE product_id = ?",
                 product.getId());
         entityManager.clear();
@@ -282,29 +282,23 @@ class CatalogEntityMappingTest {
     }
 
     @Test
-    @DisplayName("등록 기록의 해시 · 공개 요청 · 빈 단계 시각이 그대로 남는다")
+    @DisplayName("등록 기록의 공개 요청 · 빈 단계 시각이 그대로 남는다")
     void registrationRoundTrip() {
         Long productId = fixtures.product("PREORDER", "ACTIVE");
-        byte[] hash = new byte[ProductRegistration.HASH_LENGTH];
-        for (int i = 0; i < hash.length; i++) {
-            hash[i] = (byte) i;
-        }
         String key = ShopFixtures.unique();
-        registrations.saveAndFlush(ProductRegistration.start(productId, key, hash, true));
+        registrations.saveAndFlush(ProductRegistration.start(productId, key, true));
 
         Map<String, Object> row = jdbcTemplate.queryForMap(
-                "SELECT HEX(request_hash) AS hash, requested_visible, completed_at, lease_token FROM product_registrations "
+                "SELECT requested_visible, completed_at, lease_token FROM product_registrations "
                         + "WHERE product_id = ?", productId);
-        assertThat(row.get("hash")).isEqualTo("000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F");
         assertThat(row.get("requested_visible")).isEqualTo(true);
         assertThat(row.get("completed_at")).isNull();
         assertThat(row.get("lease_token")).isNull();
 
         ProductRegistration reloaded = registrations.findByIdempotencyKey(key).orElseThrow();
         assertThat(reloaded.getProductId()).isEqualTo(productId);
-        assertThat(reloaded.matchesRequest(hash)).isTrue();
-        hash[0] = 1;
-        assertThat(reloaded.matchesRequest(hash)).isFalse();
+        assertThat(reloaded.getIdempotencyKey()).isEqualTo(key);
+        assertThat(reloaded.isRequestedVisible()).isTrue();
         assertThat(reloaded.isCompleted()).isFalse();
         assertThat(reloaded.isBlocked()).isFalse();
     }
