@@ -100,4 +100,4 @@ jwt:
   # jwk-set-uri: https://…/.well-known/jwks.json   # 검증 서비스(catalog·preorder·order)만. member 는 비운다. https 가 아니면 기동 실패. 5분마다 백그라운드로 다시 받고, 모르는 kid 는 그 요청을 401 로 보낸 뒤 비동기로 다시 받는다(요청 스레드는 기다리지 않는다)
   # jwk-set-allow-http: true                         # VPC 안 Cloud Map 주소(http://member.ureca.local:8080/…)를 쓰는 동안만 명시. TLS 가 붙으면 지운다
   access-token-validity: 30m    # 폐기 표식을 못 읽는 동안(fail-open) 로그아웃·제재된 토큰이 살아남는 상한. 재발급은 쿠키로 자동이라 30분이면 사용자는 못 느낀다
-  refresh-token-validity: 14d   # 0 이나 음수는 기동 실패
+  refresh-token-validity: 14d   # 0 이나 음수, 액세스보다 짧으면 기동 실패

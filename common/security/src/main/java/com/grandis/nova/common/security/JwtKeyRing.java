@@ -4,7 +4,6 @@ import io.jsonwebtoken.Header;
 import io.jsonwebtoken.Locator;
 import io.jsonwebtoken.ProtectedHeader;
 import io.jsonwebtoken.security.Jwk;
-import io.jsonwebtoken.security.JwkSet;
 import io.jsonwebtoken.security.Jwks;
 import java.security.Key;
 import java.security.PublicKey;
@@ -220,13 +219,7 @@ public class JwtKeyRing implements AutoCloseable {
         }
         try {
             String json = rest.get().uri(jwkSetUri).retrieve().body(String.class);
-            JwkSet set = Jwks.setParser().build().parse(json);
-            Map<String, RSAPublicKey> keys = new LinkedHashMap<>();
-            for (Jwk<?> jwk : set.getKeys()) {
-                if (jwk.getId() != null && usableForSignature(jwk) && jwk.toKey() instanceof RSAPublicKey pub) {
-                    keys.put(jwk.getId(), pub);
-                }
-            }
+            Map<String, RSAPublicKey> keys = parseJwks(json);
             fetched.set(Collections.unmodifiableMap(keys));
             log.info("jwks refreshed from {}: {} key(s)", jwkSetUri, keys.size());
             return true;
@@ -262,12 +255,20 @@ public class JwtKeyRing implements AutoCloseable {
         return Map.of("keys", keys);
     }
 
-    /** JWKS 문서를 정적 공개키로 읽는다(시험·검증 전용 서비스가 파일로 받을 때). */
+    /**
+     * JWKS 문서에서 서명 검증에 쓸 키만 고른다 — kid 가 있고 서명용(RS256)이고 2048 비트 이상인 RSA 공개키. 운영 갱신(refreshIfAllowed)과
+     * 파일로 받는 검증 서비스가 같은 이 함수를 쓴다. jjwt 의 JWKS 파서는 1024 비트 키를 스스로 거르지 않는다(리뷰 실측) — 2048 비트 미만은 버리고
+     * 경고를 남긴다. 버린 kid 로 온 토큰은 모르는 kid 와 같은 길로 거절된다.
+     */
     public static Map<String, RSAPublicKey> parseJwks(String json) {
         Map<String, RSAPublicKey> keys = new LinkedHashMap<>();
         for (Jwk<?> jwk : Jwks.setParser().build().parse(json).getKeys()) {
             if (jwk.getId() != null && usableForSignature(jwk) && jwk.toKey() instanceof PublicKey pub && pub instanceof RSAPublicKey rsa) {
-                keys.put(jwk.getId(), rsa);
+                if (PemKeys.strongEnough(rsa)) {
+                    keys.put(jwk.getId(), rsa);
+                } else {
+                    log.warn("jwks key {} ignored: {} bits < {}", jwk.getId(), rsa.getModulus().bitLength(), PemKeys.MIN_RSA_BITS);
+                }
             }
         }
         return keys;
