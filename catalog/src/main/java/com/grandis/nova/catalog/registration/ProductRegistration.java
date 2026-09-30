@@ -8,19 +8,16 @@ import jakarta.persistence.PostLoad;
 import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
 import jakarta.persistence.Transient;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
 import org.springframework.data.domain.Persistable;
 
 import java.time.Instant;
-import java.util.Arrays;
 
 /**
  * 관리자의 "한 번 등록" 기록. 상품당 한 행이고 상품 id 가 곧 PK 다.
  *
  * 등록은 catalog 저장 → preorder(회차 · 차수) 또는 order(재고) 호출 → 완료의 여러 단계다.
  * 단계마다 완료 시각을 두고 FAILED 같은 상태값은 두지 않는다 — 실패는 "완료 시각이 비어 있고 lastError 가 있다" 로 읽고
- * 같은 Idempotency-Key 로 재개한다. requestHash 는 정규화한 요청 본문의 SHA-256 이라 같은 키에 다른 본문이 오면 걸린다.
+ * 같은 Idempotency-Key 로 재개한다. 같은 키로 다시 오면 본문 내용은 대조하지 않는다 — 다른 본문이 오는 것은 프론트 버그일 때뿐이다(2026-09-30 결정).
  * completedAt 이 있어야 노출 · 거래 조건의 앞 조건이 참이 된다. blockedReason 이 있으면 자동 재개가 없다.
  * 리스(leaseToken · leaseExpiresAt)는 동시 재개 제어다 — 단계 기록은 자기 리스일 때만 반영한다. 둘은 같이 있거나 같이 없다(DB CHECK).
  * lastError 는 500자다. 쓰는 쪽이 코드포인트 기준으로 자른다 — 넘기면 오류를 기록하는 UPDATE 가 실패해 오류가 사라진다.
@@ -34,7 +31,6 @@ import java.util.Arrays;
 @Table(name = "product_registrations")
 public class ProductRegistration extends BaseEntity implements Persistable<Long> {
 
-    public static final int HASH_LENGTH = 32;
     public static final int LAST_ERROR_LENGTH = 500;
 
     @Id
@@ -45,11 +41,6 @@ public class ProductRegistration extends BaseEntity implements Persistable<Long>
 
     @Column(nullable = false, updatable = false, length = 100)
     private String idempotencyKey;
-
-    /** 고정 길이 binary(32). 기본 매핑은 varbinary 라 ddl-auto validate 가 거부한다(실측). */
-    @JdbcTypeCode(SqlTypes.BINARY)
-    @Column(nullable = false, updatable = false, length = HASH_LENGTH)
-    private byte[] requestHash;
 
     @Column(nullable = false, updatable = false)
     private boolean requestedVisible;
@@ -76,20 +67,15 @@ public class ProductRegistration extends BaseEntity implements Persistable<Long>
     protected ProductRegistration() {
     }
 
-    private ProductRegistration(Long productId, String idempotencyKey, byte[] requestHash, boolean requestedVisible) {
-        if (requestHash == null || requestHash.length != HASH_LENGTH) {
-            throw new IllegalArgumentException("requestHash must be " + HASH_LENGTH + " bytes");
-        }
+    private ProductRegistration(Long productId, String idempotencyKey, boolean requestedVisible) {
         this.productId = productId;
         this.idempotencyKey = idempotencyKey;
-        this.requestHash = requestHash.clone();
         this.requestedVisible = requestedVisible;
     }
 
     /** catalog 저장 단계가 끝난 직후의 기록. 나머지 단계 시각은 비어 있다. */
-    public static ProductRegistration start(Long productId, String idempotencyKey, byte[] requestHash,
-                                            boolean requestedVisible) {
-        return new ProductRegistration(productId, idempotencyKey, requestHash, requestedVisible);
+    public static ProductRegistration start(Long productId, String idempotencyKey, boolean requestedVisible) {
+        return new ProductRegistration(productId, idempotencyKey, requestedVisible);
     }
 
     public boolean isCompleted() {
@@ -98,11 +84,6 @@ public class ProductRegistration extends BaseEntity implements Persistable<Long>
 
     public boolean isBlocked() {
         return blockedReason != null;
-    }
-
-    /** 같은 키로 온 요청의 본문이 원본과 같은가. */
-    public boolean matchesRequest(byte[] hash) {
-        return Arrays.equals(requestHash, hash);
     }
 
     @Override
@@ -127,10 +108,6 @@ public class ProductRegistration extends BaseEntity implements Persistable<Long>
 
     public String getIdempotencyKey() {
         return idempotencyKey;
-    }
-
-    public byte[] getRequestHash() {
-        return requestHash.clone();
     }
 
     public boolean isRequestedVisible() {

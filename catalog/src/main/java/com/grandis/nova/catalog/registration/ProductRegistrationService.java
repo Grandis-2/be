@@ -39,10 +39,10 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * 관리자 등록의 ① — catalog 트랜잭션. 상품(비공개) · 축 · 값 · 조합 · 선택 · 사진 · 등록 기록(원본 해시)을 한 번에 저장한다.
+ * 관리자 등록의 ① — catalog 트랜잭션. 상품(비공개) · 축 · 값 · 조합 · 선택 · 사진 · 등록 기록을 한 번에 저장한다.
  * ②(preorder · order 호출)와 ③(완료 · 공개 전환)은 등록 조율 티켓이 {@link RegistrationOutcome#plan} 으로 이어 간다.
  *
- * 같은 Idempotency-Key 가 다시 오면 해시를 대조한다 — 다르면 409, 완료됐으면 같은 결과, 미완료면 재개 대상. 응답이 유실된 클라이언트는
+ * 같은 Idempotency-Key 가 다시 오면 본문 내용은 대조하지 않고 첫 등록을 돌려준다 — 완료됐으면 같은 결과, 미완료면 재개 대상. 응답이 유실된 클라이언트는
  * 같은 키로 다시 보내고 productId 를 받는다. 새 키 둘이 동시에 오면 등록 기록의 UNIQUE 가 하나를 거절하고 그 트랜잭션은 통째로 돌아간다.
  */
 @Service
@@ -85,8 +85,10 @@ public class ProductRegistrationService {
     /**
      * @param idempotencyKey 앞뒤를 트림해서 쓴다 — 칼럼(utf8mb4_bin, PAD SPACE)은 뒤 공백만 같게 보고 앞 공백은 다른 키로 보므로(MySQL 8.4.11 실측)
      *                       앱이 양쪽을 잘라 하나의 규칙으로 만든다
-     * @return CREATED 면 ② 계획을 담고, REPLAYED · IN_PROGRESS 면 등록 상태(고정 필드)만 담는다
-     * @throws BusinessException KEY_PAYLOAD_MISMATCH(같은 키 다른 본문) · REGISTRATION_BLOCKED(자동 재개 불가) · REGISTRATION_IN_PROGRESS(동시 새 키)
+     * @return CREATED 면 ② 계획을 담고, REPLAYED · IN_PROGRESS 면 등록 상태(고정 필드)만 담는다. 같은 키로 다시 오면 본문 내용은
+     *         대조하지 않고 첫 등록의 상태를 돌려준다. 형식 검사(모르는 칸 · 필수 칸)는 요청 경계에서 먼저 돌고, 오픈 시각 · 카테고리 검사는
+     *         재전송 판정 뒤에 돈다 — 응답을 잃고 늦게 다시 보내도 productId 를 받는다. 같은 키에 다른 본문은 프론트 버그일 때뿐이다(2026-09-30 결정)
+     * @throws BusinessException REGISTRATION_BLOCKED(자동 재개 불가) · REGISTRATION_IN_PROGRESS(동시 새 키)
      */
     @Transactional
     public RegistrationOutcome register(String idempotencyKey, ProductRegistrationRequest request) {
@@ -94,13 +96,9 @@ public class ProductRegistrationService {
         if (key.isEmpty() || key.length() > 100) {
             throw ValidationFailures.of("Idempotency-Key", "1~100자여야 합니다.");
         }
-        byte[] hash = RequestHashes.sha256(request);
         Optional<ProductRegistration> existing = registrations.findByIdempotencyKey(key);
         if (existing.isPresent()) {
             ProductRegistration registration = existing.get();
-            if (!registration.matchesRequest(hash)) {
-                throw new BusinessException(CatalogErrorCode.KEY_PAYLOAD_MISMATCH);
-            }
             if (registration.isBlocked()) {
                 throw new BusinessException(CatalogErrorCode.REGISTRATION_BLOCKED,
                         Map.of("productId", registration.getProductId(), "blockedReason", registration.getBlockedReason()));
@@ -168,7 +166,7 @@ public class ProductRegistrationService {
             }, "uq_product_image_", "images.detail[%d].section".formatted(i), "같은 영역이 두 번 왔습니다.");
         }
 
-        ProductRegistration registration = saveRegistration(productId, key, hash, request.visible());
+        ProductRegistration registration = saveRegistration(productId, key, request.visible());
         RegistrationPlan plan = new RegistrationPlan(productId, stockByOptionId,
                 request.campaign() == null ? null
                         : new RegistrationPlan.Campaign(request.campaign().opensAt(), request.campaign().closesAt()),
@@ -206,9 +204,9 @@ public class ProductRegistrationService {
         return options.saveAndFlush(ProductOption.of(combo.sku(), combo.price(), combo.priceOverridden(), combination));
     }
 
-    private ProductRegistration saveRegistration(Long productId, String idempotencyKey, byte[] hash, boolean visible) {
+    private ProductRegistration saveRegistration(Long productId, String idempotencyKey, boolean visible) {
         try {
-            return registrations.saveAndFlush(ProductRegistration.start(productId, idempotencyKey, hash, visible));
+            return registrations.saveAndFlush(ProductRegistration.start(productId, idempotencyKey, visible));
         } catch (DataIntegrityViolationException e) {
             // 같은 새 키가 동시에 들어왔다 — 먼저 커밋한 쪽이 이긴다. 이 트랜잭션(상품 포함)은 통째로 돌아간다
             if (ConstraintViolations.mentions(e, "uq_registration_key")) {

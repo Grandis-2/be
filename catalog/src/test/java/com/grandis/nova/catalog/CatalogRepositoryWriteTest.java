@@ -65,19 +65,18 @@ class CatalogRepositoryWriteTest {
     void secondStartOnSameProductIsRejected() {
         Long productId = fixtures.product("PREORDER", "ACTIVE");
         String firstKey = ShopFixtures.unique();
-        registrations.saveAndFlush(ProductRegistration.start(productId, firstKey, hash((byte) 1), true));
+        registrations.saveAndFlush(ProductRegistration.start(productId, firstKey, true));
         jdbcTemplate.update("UPDATE product_registrations SET completed_at = UTC_TIMESTAMP(6), campaign_set_at = UTC_TIMESTAMP(6) "
                 + "WHERE product_id = ?", productId);
 
         assertThatThrownBy(() -> registrations.saveAndFlush(
-                ProductRegistration.start(productId, ShopFixtures.unique(), hash((byte) 2), false)))
+                ProductRegistration.start(productId, ShopFixtures.unique(), false)))
                 .isInstanceOf(DataIntegrityViolationException.class);
 
         Map<String, Object> row = jdbcTemplate.queryForMap(
-                "SELECT idempotency_key, HEX(request_hash) AS hash, completed_at, campaign_set_at, requested_visible "
+                "SELECT idempotency_key, completed_at, campaign_set_at, requested_visible "
                         + "FROM product_registrations WHERE product_id = ?", productId);
         assertThat(row.get("idempotency_key")).isEqualTo(firstKey);
-        assertThat(row.get("hash")).isEqualTo("01".repeat(ProductRegistration.HASH_LENGTH));
         assertThat(row.get("completed_at")).isNotNull();
         assertThat(row.get("campaign_set_at")).isNotNull();
         assertThat(row.get("requested_visible")).isEqualTo(true);
@@ -172,11 +171,5 @@ class CatalogRepositoryWriteTest {
                 "SELECT primary_marker FROM product_images WHERE id = ?", Integer.class, primaryId)).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT primary_marker FROM product_images WHERE id = ?", Integer.class, otherId)).isNull();
-    }
-
-    private static byte[] hash(byte fill) {
-        byte[] hash = new byte[ProductRegistration.HASH_LENGTH];
-        java.util.Arrays.fill(hash, fill);
-        return hash;
     }
 }

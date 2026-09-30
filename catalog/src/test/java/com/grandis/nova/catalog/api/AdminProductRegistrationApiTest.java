@@ -117,7 +117,7 @@ class AdminProductRegistrationApiTest {
             assertThat(detail.get("items").get(0).get("primary").asBoolean()).isFalse();
             assertThat(product.get("imageUrl").asString()).as("기본 묶음이 없으니 사전순 첫 묶음(블랙)의 대표").isEqualTo("https://img/b1.jpg");
 
-            // DB: 비공개 · 수동 가격 표식 · 조합 키 · 등록 기록 해시
+            // DB: 비공개 · 수동 가격 표식 · 조합 키 · 등록 기록
             assertThat(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, productId)).isFalse();
             assertThat(jdbcTemplate.queryForObject(
                     "SELECT price_overridden FROM product_options WHERE product_id = ? AND sku = 'BLK-256'", Boolean.class, productId)).isTrue();
@@ -126,10 +126,9 @@ class AdminProductRegistrationApiTest {
             assertThat(jdbcTemplate.queryForObject(
                     "SELECT COUNT(*) FROM product_option_selections WHERE product_id = ?", Long.class, productId)).isEqualTo(6L);
             Map<String, Object> registration = jdbcTemplate.queryForMap(
-                    "SELECT requested_visible, completed_at, LENGTH(request_hash) AS hash_len FROM product_registrations WHERE product_id = ?", productId);
+                    "SELECT requested_visible, completed_at FROM product_registrations WHERE product_id = ?", productId);
             assertThat(registration.get("requested_visible")).isEqualTo(true);
             assertThat(registration.get("completed_at")).isNull();
-            assertThat(((Number) registration.get("hash_len")).intValue()).isEqualTo(32);
         }
 
         @Test
@@ -166,25 +165,28 @@ class AdminProductRegistrationApiTest {
     class Idempotency {
 
         @Test
-        @DisplayName("같은 키 · 같은 본문(Map 키 순서 · 공백 · 1000.0 표기가 달라도)은 새 상품을 만들지 않고 같은 등록을 돌려준다")
-        void sameKeySameBodyReplays() throws Exception {
+        @DisplayName("같은 키는 본문 내용을 대조하지 않는다 — 제목 · 가격이 달라도 새 상품을 만들지 않고 첫 등록을 돌려준다")
+        void sameKeyReplaysRegardlessOfBody() throws Exception {
             String key = "k-" + ShopFixtures.unique();
-            // selections 는 Map 이라 입력 순서가 그대로 살아남는다 — 정규화가 키를 정렬하지 않으면 다른 해시가 된다
             String original = preorderBody("""
                     "combinations": [ { "selections": { "color": "블랙", "storage": "256GB" }, "sku": "BLK-256" } ],
                     """);
             Long first = productIdOf(register(key, original).andExpect(status().isCreated()));
             long before = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM products", Long.class);
 
-            String reordered = original.replace("\"basePrice\": 1000000", "\"basePrice\":   1000000.0")
-                    .replace("{ \"color\": \"블랙\", \"storage\": \"256GB\" }", "{ \"storage\": \"256GB\", \"color\": \"블랙\" }");
-            assertThat(reordered).isNotEqualTo(original);
-            ResultActions replay = register(key, reordered);
+            String different = original.replace("\"title\": \"Nova 1\"", "\"title\": \"Nova 2\"")
+                    .replace("\"basePrice\": 1000000", "\"basePrice\": 2000000");
+            assertThat(different).contains("Nova 2").contains("2000000");
+            ResultActions replay = register(key, different);
             // 미완료 등록이라 재개 대상(202). 완료 뒤에는 200
             replay.andExpect(status().isAccepted());
             assertThat(productIdOf(replay)).isEqualTo(first);
             assertThat(data(replay).get("product").isNull()).as("200 · 202 는 고정 필드만").isTrue();
             assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM products", Long.class)).isEqualTo(before);
+            // 두 번째 본문은 어디에도 반영되지 않는다 — 첫 등록의 제목 · 가격이 그대로다
+            assertThat(jdbcTemplate.queryForMap("SELECT title, base_price FROM products WHERE id = ?", first))
+                    .containsEntry("title", "Nova 1")
+                    .hasEntrySatisfying("base_price", price -> assertThat(((Number) price).longValue()).isEqualTo(1000000L));
 
             jdbcTemplate.update("UPDATE product_registrations SET completed_at = UTC_TIMESTAMP(6) WHERE product_id = ?", first);
             ResultActions completed = register(key, original).andExpect(status().isOk());
@@ -198,6 +200,22 @@ class AdminProductRegistrationApiTest {
         }
 
         @Test
+        @DisplayName("응답을 잃고 오픈 30분 전이 지난 뒤 다시 보내도 같은 키면 202 와 같은 productId — 새 키로는 400")
+        void lateResendStillReplays() throws Exception {
+            String key = "k-" + ShopFixtures.unique();
+            Long first = productIdOf(register(key, preorderBody("")).andExpect(status().isCreated()));
+
+            // 오픈 시각이 이미 지난 본문 — 최초 등록이면 opensAt 검사에 걸린다
+            String late = preorderBody("").replace(opensAt.toString(), Instant.now().minus(Duration.ofMinutes(1)).toString());
+            assertThat(late).isNotEqualTo(preorderBody(""));
+            ResultActions replay = register(key, late).andExpect(status().isAccepted());
+            assertThat(productIdOf(replay)).isEqualTo(first);
+
+            // 대조군: 같은 본문을 새 키로 보내면 검사에 걸린다
+            expectValidation(register("k-" + ShopFixtures.unique(), late), "campaign.opensAt");
+        }
+
+        @Test
         @DisplayName("막힌 등록은 재개 대상이 아니라 409 REGISTRATION_BLOCKED")
         void blockedRegistrationIsConflict() throws Exception {
             String key = "k-" + ShopFixtures.unique();
@@ -208,17 +226,6 @@ class AdminProductRegistrationApiTest {
                     .andExpect(status().isConflict())
                     .andExpect(jsonPath("$.error.code").value("REGISTRATION_BLOCKED"))
                     .andExpect(jsonPath("$.error.details.blockedReason").value("OPENED_BEFORE_COMPLETE"));
-        }
-
-        @Test
-        @DisplayName("같은 키 · 다른 본문은 409 KEY_PAYLOAD_MISMATCH")
-        void sameKeyDifferentBodyIsConflict() throws Exception {
-            String key = "k-" + ShopFixtures.unique();
-            register(key, preorderBody("")).andExpect(status().isCreated());
-
-            register(key, preorderBody("").replace("\"title\": \"Nova 1\"", "\"title\": \"Nova 2\""))
-                    .andExpect(status().isConflict())
-                    .andExpect(jsonPath("$.error.code").value("KEY_PAYLOAD_MISMATCH"));
         }
 
         @Test
