@@ -7,7 +7,9 @@ public enum AuthErrorCode implements ErrorCode {
     /** 카카오 code 교환·사용자 조회가 안 됐다(만료·재사용된 code, 허용되지 않은 redirect_uri, 카카오 장애). api-spec: 400 */
     INVALID_OAUTH_CALLBACK(400, "인증 요청을 확인할 수 없습니다."),
     /** 관리자 로그인 실패. api-spec: 401 */
-    INVALID_CREDENTIALS(401, "로그인 정보를 확인해 주세요.");
+    INVALID_CREDENTIALS(401, "로그인 정보를 확인해 주세요."),
+    /** 같은 IP 의 관리자 로그인 시도가 제한을 넘었다. `Retry-After` 초 뒤 다시. 계정 존재 여부와 무관하게 같은 응답이다. 429 */
+    TOO_MANY_LOGIN_ATTEMPTS(429, "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요.");
 
     private final int status;
     private final String message;
