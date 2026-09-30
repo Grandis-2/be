@@ -10,7 +10,7 @@ record SyncJobFilter(SyncJobType jobType, SyncJobStatus status, Long preorderId)
                 equalTo("preorderId", preorderId));
     }
 
-    private static Specification<PreorderSyncJob> equalTo(String attribute, Object value) {
+    private Specification<PreorderSyncJob> equalTo(String attribute, Object value) {
         return value == null ? Specification.unrestricted()
                 : (root, query, builder) -> builder.equal(root.get(attribute), value);
     }

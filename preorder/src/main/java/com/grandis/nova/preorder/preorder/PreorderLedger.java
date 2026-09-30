@@ -40,7 +40,7 @@ public class PreorderLedger {
      * 어느 제약인지에 따라 응답이 달라서 접수 유스케이스가 판정한다.
      */
     public PreorderSnapshot accept(NewPreorder draft, EventActor actor, String reason) {
-        PreorderEvent.requireReason(actor, reason);
+        actor.requireReason(reason);
         Preorder preorder = preorders.saveAndFlush(new Preorder(draft));
         entityManager.persist(new PreorderEvent(preorder.getId(), PreorderEvent.FIRST_SEQUENCE,
                 null, PreorderStatus.PENDING_SYNC, actor, reason, clock.instant()));
@@ -69,7 +69,7 @@ public class PreorderLedger {
         if (trigger == PreorderTrigger.REGISTER_CONFIRMED) {
             throw new IllegalArgumentException("등록 확인은 confirmRegister 를 쓴다");
         }
-        PreorderEvent.requireReason(actor, reason);
+        actor.requireReason(reason);
         PreorderStatus from = lockStatus(preorderId);
         PreorderStatus to = from.next(trigger).orElse(null);
         if (to == null) {
@@ -123,7 +123,7 @@ public class PreorderLedger {
     }
 
     /** 행을 잠근 채 읽은 상태를 조건으로 하므로 늘 1행이다. 0 이면 잠금 규칙이 깨진 것이다. */
-    private static void requireOneRow(int updated, Long preorderId) {
+    private void requireOneRow(int updated, Long preorderId) {
         if (updated != 1) {
             throw new IllegalStateException("잠근 예약의 상태가 바뀌었다: preorderId=" + preorderId);
         }

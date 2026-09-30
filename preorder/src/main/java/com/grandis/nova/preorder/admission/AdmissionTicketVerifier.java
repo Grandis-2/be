@@ -124,12 +124,12 @@ public class AdmissionTicketVerifier {
         }
     }
 
-    private static Duration max(Duration a, Duration b) {
+    private Duration max(Duration a, Duration b) {
         return a.compareTo(b) >= 0 ? a : b;
     }
 
     /** Mac 은 스레드 안전하지 않아 호출마다 만든다. */
-    private static byte[] sign(byte[] key, String payload) {
+    private byte[] sign(byte[] key, String payload) {
         try {
             Mac mac = Mac.getInstance(ALGORITHM);
             mac.init(new SecretKeySpec(key, ALGORITHM));
@@ -139,7 +139,7 @@ public class AdmissionTicketVerifier {
         }
     }
 
-    private static byte[] decode(String value) {
+    private byte[] decode(String value) {
         try {
             return DECODER.decode(value);
         } catch (IllegalArgumentException e) {
@@ -147,7 +147,7 @@ public class AdmissionTicketVerifier {
         }
     }
 
-    private static String sha256Hex(String token) {
+    private String sha256Hex(String token) {
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(token.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(digest);
@@ -157,7 +157,7 @@ public class AdmissionTicketVerifier {
     }
 
     /** 약한 키로 조용히 돌지 않는다. 설정이 틀리면 기동을 막는다(waiting 과 같은 규칙). */
-    private static void validate(AdmissionTicketProperties properties) {
+    private void validate(AdmissionTicketProperties properties) {
         String current = properties.secret();
         if (current == null || current.length() < MIN_SECRET_LENGTH) {
             throw new IllegalArgumentException("입장권 비밀키는 %d자 이상이어야 한다".formatted(MIN_SECRET_LENGTH));

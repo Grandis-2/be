@@ -54,7 +54,7 @@ class PreorderEvent {
 
     PreorderEvent(Long preorderId, long eventSequence, PreorderStatus fromStatus, PreorderStatus toStatus,
                   EventActor actor, String reason, Instant createdAt) {
-        requireReason(actor, reason);
+        actor.requireReason(reason);
         this.preorderId = preorderId;
         this.eventSequence = eventSequence;
         this.fromStatus = fromStatus;
@@ -62,13 +62,6 @@ class PreorderEvent {
         this.actor = actor;
         this.reason = reason;
         this.createdAt = createdAt;
-    }
-
-    /** 관리자 전이는 사유가 필요하다(DB CHECK ck_preorder_event_admin_reason 과 같은 규칙). */
-    static void requireReason(EventActor actor, String reason) {
-        if (actor == EventActor.ADMIN && (reason == null || reason.isBlank())) {
-            throw new IllegalArgumentException("관리자 전이는 사유가 필요하다");
-        }
     }
 
     public Long getPreorderId() {

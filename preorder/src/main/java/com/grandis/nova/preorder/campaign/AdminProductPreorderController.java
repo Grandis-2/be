@@ -62,7 +62,7 @@ class AdminProductPreorderController {
                 toResponses(campaignService.replaceBatches(productId, request.toPlan()))));
     }
 
-    private static List<ShipmentBatchResponse> toResponses(List<ShipmentBatch> batches) {
+    private List<ShipmentBatchResponse> toResponses(List<ShipmentBatch> batches) {
         return batches.stream().map(ShipmentBatchResponse::from).toList();
     }
 }

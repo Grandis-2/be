@@ -39,12 +39,12 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
      * 토큰 폐기 확인(Redis)이 실패할 때 막는 경로. 목록 밖은 통과시키고 경고 · 카운터만 남긴다 —
      * 오픈 순간의 접수 · 조회는 Redis 장애에도 받고, 되돌릴 수 없는 취소와 관리자 기능만 막는다.
      */
-    private static void revocationFailClosedPaths(Map<String, Object> defaults) {
+    private void revocationFailClosedPaths(Map<String, Object> defaults) {
         defaults.put("auth.revocation-check.fail-closed-paths", "/api/v1/admin/**,/api/v1/preorders/*/cancel");
     }
 
     /** 내부 호출의 연결 · 읽기 시간 상한. 없으면 HTTP 클라이언트가 응답을 끝없이 기다려 동시 호출 상한을 붙잡는다. */
-    private static void dependencyTimeouts(Map<String, Object> defaults) {
+    private void dependencyTimeouts(Map<String, Object> defaults) {
         for (String dependency : Dependencies.ALL) {
             defaults.put("spring.http.serviceclient." + dependency + ".connect-timeout", "300ms");
             defaults.put("spring.http.serviceclient." + dependency + ".read-timeout", "1s");
@@ -55,7 +55,7 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
      * 내부 호출(catalog · order) 장애 대응. 재시도(연결 실패 · 5xx 만 한 번) → 서킷 브레이커(50건 중 실패 · 1초 넘는 호출이 절반이면
      * 10초 열림) → 동시 호출 상한(20, 기다리지 않음). 4xx 는 재시도하지도 실패로 세지도 않는다. 값은 부하 실측으로 확정한다.
      */
-    private static void dependencyResilience(Map<String, Object> defaults) {
+    private void dependencyResilience(Map<String, Object> defaults) {
         String clientError = "org.springframework.web.client.HttpClientErrorException";
         defaults.put("resilience4j.retry.configs.default.max-attempts", 2);
         defaults.put("resilience4j.retry.configs.default.wait-duration", "50ms");

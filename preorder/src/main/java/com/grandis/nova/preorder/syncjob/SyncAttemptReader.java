@@ -29,7 +29,7 @@ public class SyncAttemptReader {
              ORDER BY sync_job_id, attempt_number
             """;
 
-    private static final RowMapper<SyncAttempt> ATTEMPT = (rs, rowNum) -> new SyncAttempt(
+    private final RowMapper<SyncAttempt> attemptMapper = (rs, rowNum) -> new SyncAttempt(
             rs.getLong(1), rs.getInt(2), rs.getString(3), rs.getString(4),
             rs.getObject(5, Integer.class), rs.getString(6), rs.getString(7),
             rs.getTimestamp(8).toInstant(), instantOrNull(rs.getTimestamp(9)));
@@ -58,7 +58,7 @@ public class SyncAttemptReader {
             return Map.of();
         }
         String placeholders = syncJobIds.stream().map(id -> "?").collect(Collectors.joining(", "));
-        return jdbcTemplate.query(FIND_BY_JOBS.formatted(placeholders), ATTEMPT, syncJobIds.toArray()).stream()
+        return jdbcTemplate.query(FIND_BY_JOBS.formatted(placeholders), attemptMapper, syncJobIds.toArray()).stream()
                 .collect(Collectors.groupingBy(SyncAttempt::syncJobId));
     }
 
@@ -84,7 +84,7 @@ public class SyncAttemptReader {
         return jdbcTemplate.query(sql, (rs, rowNum) -> new ErrorGroup(rs.getString(1), rs.getLong(2)), args.toArray());
     }
 
-    private static Instant instantOrNull(Timestamp timestamp) {
+    private Instant instantOrNull(Timestamp timestamp) {
         return timestamp == null ? null : timestamp.toInstant();
     }
 }

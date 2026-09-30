@@ -38,7 +38,7 @@ class AdminPreorderSearchQuery {
         return total == null ? 0 : total;
     }
 
-    private static String where(AdminPreorderSearch search, MapSqlParameterSource params) {
+    private String where(AdminPreorderSearch search, MapSqlParameterSource params) {
         List<String> conditions = new ArrayList<>();
         if (search.status() != null) {
             conditions.add("p.status = :status");

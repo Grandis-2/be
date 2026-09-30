@@ -66,7 +66,7 @@ class PreorderCampaignAdminService {
         return writer.replaceBatches(productId, plan);
     }
 
-    private static void requirePeriod(Instant opensAt, Instant closesAt) {
+    private void requirePeriod(Instant opensAt, Instant closesAt) {
         if (!closesAt.isAfter(opensAt)) {
             throw ValidationFailures.of("closesAt", "opensAt 보다 뒤여야 합니다.");
         }

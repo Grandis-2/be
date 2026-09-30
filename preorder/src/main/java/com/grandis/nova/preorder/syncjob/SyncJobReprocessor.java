@@ -37,23 +37,13 @@ class SyncJobReprocessor {
         PreorderStatus preorderStatus = ledger.lockStatus(preorderId);
         // 잠근 뒤 처음 읽어야 그 사이 취소가 바꾼 작업 상태를 본다
         PreorderSyncJob job = syncJobs.findById(syncJobId).orElseThrow();
-        Optional<String> blocker = blocker(job.getJobType(), job.getStatus(), preorderStatus);
+        Optional<String> blocker = new ReprocessCandidate(job.getId(), job.getJobType(), job.getStatus(),
+                preorderStatus, null).blocker();
         if (blocker.isPresent()) {
             throw new BusinessException(PreorderErrorCode.SYNC_JOB_NOT_REPROCESSABLE,
                     Map.of("reason", blocker.get()));
         }
         outboxWriter.append(new SyncJobReprocessRequested(job.getId(), requestedBy));
         return job;
-    }
-
-    /** 재처리할 수 없는 까닭. 할 수 있으면 비어 있다. */
-    static Optional<String> blocker(SyncJobType jobType, SyncJobStatus status, PreorderStatus preorderStatus) {
-        if (jobType != SyncJobType.REGISTER || status != SyncJobStatus.DEAD_LETTER) {
-            return Optional.of("jobType=%s, status=%s".formatted(jobType, status));
-        }
-        if (preorderStatus == PreorderStatus.CANCELING || preorderStatus == PreorderStatus.CANCELED) {
-            return Optional.of("preorderStatus=" + preorderStatus);
-        }
-        return Optional.empty();
     }
 }

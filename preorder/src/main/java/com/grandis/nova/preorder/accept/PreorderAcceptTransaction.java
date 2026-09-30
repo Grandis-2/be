@@ -129,7 +129,7 @@ class PreorderAcceptTransaction {
         return new AcceptResult(existing, campaigns.getBatch(existing.shipmentBatchId()), true);
     }
 
-    private static OptionSnapshot requireOnSale(AcceptCommand command, Optional<ProductCatalog> product) {
+    private OptionSnapshot requireOnSale(AcceptCommand command, Optional<ProductCatalog> product) {
         ProductCatalog found = product
                 .filter(ProductCatalog::isOnPreorderSale)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND));

@@ -62,11 +62,11 @@ class AdminSyncJobController {
                 request.rateOrDefault(), admin.getName()));
     }
 
-    private static SyncJobResponse detail(SyncJobView view) {
+    private SyncJobResponse detail(SyncJobView view) {
         return SyncJobResponse.from(view.job(), view.preorderToken(), view.attempts());
     }
 
-    private static <T> ResponseEntity<ApiResponse<T>> accepted(T body) {
+    private <T> ResponseEntity<ApiResponse<T>> accepted(T body) {
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResponse.ok(body));
     }
 }

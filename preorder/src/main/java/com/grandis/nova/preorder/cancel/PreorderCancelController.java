@@ -50,7 +50,7 @@ class PreorderCancelController {
                 accessToken(authorization)));
     }
 
-    private static String accessToken(String authorization) {
+    private String accessToken(String authorization) {
         return BearerTokens.parse(authorization).orElse(null);
     }
 }

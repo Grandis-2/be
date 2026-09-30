@@ -125,7 +125,7 @@ public class PreorderEventHandler {
     }
 
     /** 이력에 남길 거절 사유. order 가 사유를 주지 않았으면 결과만 남긴다. */
-    private static String rejectionReason(String orderReason) {
+    private String rejectionReason(String orderReason) {
         return orderReason == null ? REJECTED_BY_ORDER : REJECTED_BY_ORDER + ":" + orderReason;
     }
 

@@ -150,7 +150,7 @@ class SyncJobAdminService {
         return preorders.findAllById(jobs.stream().map(PreorderSyncJob::getPreorderId).distinct().toList());
     }
 
-    private static List<Long> ids(Collection<PreorderSyncJob> jobs) {
+    private List<Long> ids(Collection<PreorderSyncJob> jobs) {
         return jobs.stream().map(PreorderSyncJob::getId).toList();
     }
 }

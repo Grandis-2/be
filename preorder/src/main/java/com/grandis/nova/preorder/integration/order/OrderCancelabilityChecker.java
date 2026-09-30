@@ -7,7 +7,6 @@ import com.grandis.nova.common.web.client.InternalCallFailures;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.integration.Dependencies;
 import com.grandis.nova.preorder.integration.DependencyGuard;
-import com.grandis.nova.preorder.integration.DependencyUnavailableException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
@@ -63,7 +62,7 @@ public class OrderCancelabilityChecker {
             if (InternalCallFailures.isUnreadableResponse(e)) {
                 throw InternalCallFailures.unreadableResponse(DEPENDENCY, "preorderId=" + preorderToken, e);
             }
-            throw DependencyUnavailableException.callFailed(DEPENDENCY, "preorderId=" + preorderToken, e);
+            throw dependencyGuard.callFailed(DEPENDENCY, "preorderId=" + preorderToken, e);
         }
         if (answer == null) {
             throw new IllegalStateException("order 가 취소 가능 판정 없이 응답했다: preorderId=" + preorderToken);
