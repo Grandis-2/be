@@ -179,13 +179,15 @@ CREATE TABLE `outbox_events` (
 /*!50503 SET character_set_client = utf8mb4 */;
 CREATE TABLE `payment_transactions` (
   `id` bigint NOT NULL AUTO_INCREMENT,
-  `order_id` bigint NOT NULL,
+  `target_type` varchar(20) NOT NULL,
+  `target_id` bigint NOT NULL,
   `transaction_type` varchar(10) NOT NULL,
   `provider_order_id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL,
   `provider_payment_key` varchar(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL,
   `amount` decimal(12,0) NOT NULL,
   `idempotency_key` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   `status` varchar(20) NOT NULL,
+  `active_marker` varchar(10) GENERATED ALWAYS AS ((case when ((`transaction_type` = _utf8mb4'CAPTURE') and (`status` in (_utf8mb4'PROCESSING',_utf8mb4'RETRY_SCHEDULED',_utf8mb4'SUCCEEDED'))) then _utf8mb4'CAPTURE' when ((`transaction_type` = _utf8mb4'REFUND') and (`status` in (_utf8mb4'PENDING',_utf8mb4'PROCESSING',_utf8mb4'RETRY_SCHEDULED',_utf8mb4'SUCCEEDED'))) then _utf8mb4'REFUND' end)) STORED,
   `attempt_count` int NOT NULL DEFAULT '0',
   `next_retry_at` datetime(6) DEFAULT NULL,
   `lease_token` varchar(64) DEFAULT NULL,
@@ -198,15 +200,15 @@ CREATE TABLE `payment_transactions` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_payment_tx_idempotency` (`idempotency_key`),
   UNIQUE KEY `uq_payment_tx_provider_order` (`provider_order_id`),
-  KEY `ix_payment_tx_order` (`order_id`,`created_at`),
+  UNIQUE KEY `uq_payment_tx_active` (`target_type`,`target_id`,`active_marker`),
   KEY `ix_payment_tx_next_retry` (`status`,`next_retry_at`),
   KEY `ix_payment_tx_lease` (`status`,`lease_expires_at`),
-  CONSTRAINT `fk_payment_tx_order` FOREIGN KEY (`order_id`) REFERENCES `orders` (`id`),
   CONSTRAINT `ck_payment_tx_numbers` CHECK (((`amount` >= 0) and (`attempt_count` >= 0))),
   CONSTRAINT `ck_payment_tx_provider_order` CHECK (((`transaction_type` = _utf8mb4'CAPTURE') = (`provider_order_id` is not null))),
   CONSTRAINT `ck_payment_tx_refund_key` CHECK (((`transaction_type` <> _utf8mb4'REFUND') or (`provider_payment_key` is not null))),
   CONSTRAINT `ck_payment_tx_started_key` CHECK (((`status` = _utf8mb4'PENDING') or (`provider_payment_key` is not null))),
   CONSTRAINT `ck_payment_tx_status` CHECK ((`status` in (_utf8mb4'PENDING',_utf8mb4'PROCESSING',_utf8mb4'RETRY_SCHEDULED',_utf8mb4'SUCCEEDED',_utf8mb4'FAILED'))),
+  CONSTRAINT `ck_payment_tx_target_type` CHECK ((`target_type` in (_utf8mb4'ORDER',_utf8mb4'DRAW_ENTRY'))),
   CONSTRAINT `ck_payment_tx_type` CHECK ((`transaction_type` in (_utf8mb4'CAPTURE',_utf8mb4'REFUND')))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
@@ -214,7 +216,8 @@ CREATE TABLE `payment_transactions` (
 /*!50503 SET character_set_client = utf8mb4 */;
 CREATE TABLE `payments` (
   `id` bigint NOT NULL AUTO_INCREMENT,
-  `order_id` bigint NOT NULL,
+  `target_type` varchar(20) NOT NULL,
+  `target_id` bigint NOT NULL,
   `provider_payment_key` varchar(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   `amount` decimal(12,0) NOT NULL,
   `status` varchar(10) NOT NULL,
@@ -223,12 +226,12 @@ CREATE TABLE `payments` (
   `created_at` datetime(6) NOT NULL,
   `updated_at` datetime(6) NOT NULL,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uq_payment_order` (`order_id`),
   UNIQUE KEY `uq_payment_key` (`provider_payment_key`),
-  CONSTRAINT `fk_payment_order` FOREIGN KEY (`order_id`) REFERENCES `orders` (`id`),
+  UNIQUE KEY `uq_payment_target` (`target_type`,`target_id`),
   CONSTRAINT `ck_payment_amount` CHECK ((`amount` >= 0)),
   CONSTRAINT `ck_payment_refunded_at` CHECK (((`status` = _utf8mb4'REFUNDED') = (`refunded_at` is not null))),
-  CONSTRAINT `ck_payment_status` CHECK ((`status` in (_utf8mb4'SUCCEEDED',_utf8mb4'REFUNDED')))
+  CONSTRAINT `ck_payment_status` CHECK ((`status` in (_utf8mb4'SUCCEEDED',_utf8mb4'REFUNDED'))),
+  CONSTRAINT `ck_payment_target_type` CHECK ((`target_type` in (_utf8mb4'ORDER',_utf8mb4'DRAW_ENTRY')))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
