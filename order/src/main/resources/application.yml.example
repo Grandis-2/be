@@ -39,6 +39,14 @@ spring:
 server:
   port: 8084
 
+# OpenAPI 문서. 기본은 꺼져 있고 값이 정확히 true 일 때만 켜진다(빈 값 · no · 오타는 꺼짐). 운영에는 적지 않는다.
+# api-docs 가 주 스위치다 — UI 만 꺼도 스펙은 열린다. /internal/** 은 nova.openapi.include-internal: true 일 때만 실린다.
+# springdoc:
+#   api-docs:
+#     enabled: true
+#   swagger-ui:
+#     enabled: true
+
 nova:
   # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다
   sqs:

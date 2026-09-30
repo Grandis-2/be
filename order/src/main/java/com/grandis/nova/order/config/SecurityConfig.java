@@ -1,8 +1,10 @@
 package com.grandis.nova.order.config;
 
 import com.grandis.nova.common.security.SecurityFilterChainSupport;
+import com.grandis.nova.common.web.OpenApiPaths;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.SecurityFilterChain;
 
@@ -11,6 +13,7 @@ import org.springframework.security.web.SecurityFilterChain;
  *
  * 이 서비스가 가진 경로만 적고 나머지는 거부한다(denyAll). 규칙 없이 추가된 엔드포인트가 열린 채 배포되지 않게 —
  * 새 경로는 여기 규칙을 더해야 테스트가 통과한다. 매핑 없는 경로도 404 가 아니라 401(익명) · 403(인증)이다.
+ * 예외는 OpenAPI 문서 경로다 — GET 으로 열려 있고 문서가 꺼진 환경에서는 404 다.
  *
  * 폐기 조회 실패 때 닫는 경로(auth.revocation-check.fail-closed-paths)는 설정에 있다 — application.yml.example.
  */
@@ -25,6 +28,7 @@ public class SecurityConfig {
                 // 서비스 간 내부 API. 호출자(preorder)가 사용자 토큰을 Authorization: Bearer 로 그대로 싣는다 —
                 // 회원 · 관리자 모두, 주인 확인은 유스케이스가 한다.
                 .requestMatchers("/internal/**").authenticated()
+                .requestMatchers(HttpMethod.GET, OpenApiPaths.docs()).permitAll()                   // OpenAPI 문서
                 .anyRequest().denyAll());
     }
 }

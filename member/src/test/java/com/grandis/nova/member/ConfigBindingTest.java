@@ -66,6 +66,9 @@ class ConfigBindingTest {
         registry.add("spring.flyway.enabled", () -> "false");
         registry.add("admin.password-hash", () -> "$2a$12$" + "R9h/cIPz0gi.URNNX3kh2OPST9/PgBkqquzi.Ss7KIUgO2t0jWMUW");
         TestKeys.register(registry);   // 예시의 private-key 자리표시자를 시험 키로
+        // 예시의 정리 주기(10분마다)는 끈다 — 이 컨텍스트는 JVM 끝까지 캐시되고 같은 MySQL 을 쓰므로, 켜 두면 다른 시험이 넣은 만료 행을
+        // 도중에 지울 수 있다. 예시의 cron 값 자체는 RefreshTokenCleanupWiringTest 가, 나머지 칸은 아래 refreshCleanupSettings 가 본다
+        registry.add("member.refresh-cleanup.cron", () -> "-");
     }
 
     @Autowired DataSource dataSource;
@@ -146,5 +149,14 @@ class ConfigBindingTest {
         assertThat(jwt.keyId()).isEqualTo(TestKeys.KID);
         assertThat(jwt.accessTokenValidity()).isEqualTo(Duration.ofMinutes(30));
         assertThat(jwt.refreshTokenValidity()).isEqualTo(Duration.ofDays(14));
+    }
+
+    @Autowired com.grandis.nova.member.auth.infrastructure.db.RefreshTokenCleanup.Settings refreshCleanup;
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("예시의 리프레시 정리 설정이 바인딩된다 — 묶음 1000 · 최대 100 묶음")
+    void refreshCleanupSettings() {
+        assertThat(refreshCleanup.batchSize()).isEqualTo(1000);
+        assertThat(refreshCleanup.maxBatchesPerRun()).isEqualTo(100);
     }
 }

@@ -56,6 +56,14 @@ admin:
   password-hash: CHANGE_ME_TO_BCRYPT_HASH
   # 자격증명을 바꾼 뒤에는 배포 완료 후 관리자 토큰으로 DELETE /api/v1/admin/sessions 를 한 번 부른다 — 이전 관리자 세션 전부 폐기(D-16)
 
+# 만료된 회원 리프레시 행 정리. 회전마다 행이 하나 늘어 지우지 않으면 표가 끝없이 커진다.
+# 만료 행만 묶음씩 지운다(인스턴스가 여럿이어도 된다). cron 을 "-" 로 두면 끈다.
+member:
+  refresh-cleanup:
+    cron: "0 */10 * * * *"
+    batch-size: 1000
+    max-batches-per-run: 100
+
 auth:
   # 리프레시 쿠키. 로컬 http 에서는 false 로.
   cookie:
