@@ -6,6 +6,8 @@ include 'common:web'        // HTTP 서비스 4개
 include 'common:message'    // preorder · order · worker
 include 'common:redis'      // member · catalog · preorder
 include 'common:security'   // HTTP 서비스 4개 — JWT 검증
+include 'common:jpa'        // order — 저장 해상도 시계 · JPA Auditing (자동설정)
+include 'common:testing'    // order — 테스트 지원 (testImplementation 으로만)
 
 // HTTP 진입점 — ECS 서비스
 include 'member'      // 카카오 로그인 · JWT · 회원
