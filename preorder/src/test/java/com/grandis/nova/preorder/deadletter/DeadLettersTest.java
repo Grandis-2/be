@@ -1,5 +1,7 @@
 package com.grandis.nova.preorder.deadletter;
 
+import com.grandis.nova.common.testing.Concurrently.Outcome;
+import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.preorder.accept.AcceptResult;
 import com.grandis.nova.preorder.accept.PreorderAcceptService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
@@ -91,6 +93,19 @@ class DeadLettersTest {
 
         assertThat(fixtures.count("SELECT COUNT(*) FROM dead_letter_events WHERE message_id = ?", messageId))
                 .isEqualTo(1);
+    }
+
+    /** DLQ 소비기 여럿이 같은 메시지를 겹쳐 받은 경우. UNIQUE 가 한 행만 남기고, 진 쪽은 예외나 false 로 끝난다. */
+    @Test
+    void 같은_메시지를_동시에_적재해도_한_행만_남는다() throws Exception {
+        String messageId = ShopFixtures.unique();
+        IncomingDeadLetter incoming = new IncomingDeadLetter(QUEUE, messageId, "not-json", 5, null, null);
+
+        List<Outcome<Boolean>> outcomes = Concurrently.run(4, i -> () -> deadLetters.record(incoming));
+
+        assertThat(fixtures.count("SELECT COUNT(*) FROM dead_letter_events WHERE message_id = ?", messageId))
+                .isEqualTo(1);
+        assertThat(outcomes.stream().filter(outcome -> outcome.succeeded() && outcome.value())).hasSize(1);
     }
 
     @Test

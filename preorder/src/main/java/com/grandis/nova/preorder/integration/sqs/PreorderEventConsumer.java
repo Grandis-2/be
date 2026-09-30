@@ -46,25 +46,17 @@ class PreorderEventConsumer extends QueuePoller {
     protected void handle(String queueUrl, Message message) {
         try {
             dispatcher.dispatch(message.body());
+            // 되돌린 메시지의 결과를 남기지 못하면 지우지 않고 다시 받는다 — 처리기는 같은 메시지를 두 번 받아도 된다
+            deadLetterId(message).ifPresent(deadLetters::markRedriveSucceeded);
         } catch (RuntimeException e) {
             retryLater(queueUrl, message, e);
             return;
         }
-        deadLetterId(message).ifPresent(this::recordRedriveSucceeded);
         try {
             sqs.deleteMessage(request -> request.queueUrl(queueUrl).receiptHandle(message.receiptHandle()));
         } catch (RuntimeException e) {
             log.warn("처리한 이벤트를 지우지 못했다 — 다시 받으면 멱등하게 한 번 더 처리된다 messageId={}",
                     message.messageId(), e);
-        }
-    }
-
-    /** 결과 기록이 실패해도 처리는 끝났으므로 메시지는 지운다. 그 행은 결과 없이 남는다(REDRIVING 이면 1분 뒤 다시 되돌릴 수 있다). */
-    private void recordRedriveSucceeded(Long deadLetterId) {
-        try {
-            deadLetters.markRedriveSucceeded(deadLetterId);
-        } catch (RuntimeException e) {
-            log.warn("되돌린 메시지의 처리 결과를 남기지 못했다 deadLetterId={}", deadLetterId, e);
         }
     }
 
