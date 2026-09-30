@@ -50,6 +50,9 @@ public class OutboxEvent {
     @Column(nullable = false)
     private int publishAttempts;
 
+    /** 릴레이가 가져간 기한. 그 전에는 다른 릴레이가 이 행을 건너뛴다. NULL 이면 아무도 가져가지 않았다. */
+    private Instant leaseUntil;
+
     @CreatedDate
     @Column(nullable = false, updatable = false)
     private Instant createdAt;

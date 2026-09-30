@@ -37,7 +37,7 @@ class OutboxAfterCommitPublisherTest {
         CountDownLatch release = new CountDownLatch(1);
         willAnswer(invocation -> release.await(5, TimeUnit.SECONDS)).given(publisher).publishById(1L);
         try (SimpleAsyncTaskExecutor executor = new OutboxConfig()
-                .outboxPublishExecutor(new OutboxProperties(1, Duration.ofMinutes(1), 100))) {
+                .outboxPublishExecutor(new OutboxProperties(1, Duration.ofMinutes(1), 100, Duration.ofMinutes(10)))) {
             OutboxAfterCommitPublisher listener = new OutboxAfterCommitPublisher(publisher, executor);
             listener.onAppended(new OutboxAppended(1L));
             verify(publisher, timeout(1_000)).publishById(1L);
