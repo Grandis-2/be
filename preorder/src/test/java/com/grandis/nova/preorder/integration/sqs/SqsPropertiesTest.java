@@ -27,6 +27,18 @@ class SqsPropertiesTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void DLQ_소비기_설정도_SQS_가_받는_범위_밖이면_기동하지_않는다() {
+        assertThatCode(() -> new SqsProperties.DeadLetter(true, "preorder-events-dlq", 20, Duration.ofMinutes(1)))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> new SqsProperties.DeadLetter(true, "preorder-events-dlq", 21, Duration.ofMinutes(1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new SqsProperties.DeadLetter(true, "preorder-events-dlq", 20, Duration.ofMillis(500)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new SqsProperties.DeadLetter(true, "preorder-events-dlq", 20, Duration.ofHours(13)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     private static SqsProperties.Consumer consumer(int maxMessages, int waitSeconds, Duration visibility) {
         return new SqsProperties.Consumer(true, "preorder-events", 1, waitSeconds, maxMessages, visibility,
                 Duration.ofSeconds(5), Duration.ofMinutes(5));

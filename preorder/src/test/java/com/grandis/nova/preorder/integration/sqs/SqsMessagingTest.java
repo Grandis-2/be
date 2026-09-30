@@ -142,14 +142,20 @@ class SqsMessagingTest {
     }
 
     @Test
-    void 처리하지_못하는_메시지는_다시_받다가_DLQ_로_간다() {
+    void 처리하지_못하는_메시지는_다시_받다가_DLQ_를_거쳐_DB_로_옮겨진다() {
         String poison = "not-json-" + ShopFixtures.unique();
 
         queues.send("preorder-events", poison);
 
-        assertThat(queues.receive("preorder-events-dlq", m -> m.body().equals(poison), Duration.ofSeconds(30)))
-                .as("%d 번 받고도 처리하지 못하면 DLQ", FlociTestContainer.MAX_RECEIVE_COUNT)
-                .isPresent();
+        await().alias("%d 번 받고도 처리하지 못하면 DLQ, DLQ 소비기가 DB 로 옮긴다"
+                        .formatted(FlociTestContainer.MAX_RECEIVE_COUNT))
+                .atMost(Duration.ofSeconds(30))
+                .until(() -> fixtures.count("""
+                        SELECT COUNT(*) FROM dead_letter_events
+                         WHERE body = ? AND status = 'OPEN' AND failure_reason = 'UNREADABLE_BODY'
+                        """, poison) == 1);
+        assertThat(queues.receive("preorder-events-dlq", m -> m.body().equals(poison), Duration.ofSeconds(3)))
+                .as("옮긴 메시지는 DLQ 에서 지운다").isEmpty();
     }
 
     /** 빈 큐의 롱 폴링은 대기 시간만큼 걸린다. 클라이언트 기본 제한 시간에 걸려 받기가 실패하면 안 된다. */
@@ -157,7 +163,7 @@ class SqsMessagingTest {
     @ExtendWith(OutputCaptureExtension.class)
     void 롱_폴링이_호출_제한_시간에_걸리지_않는다(CapturedOutput output) {
         await().during(Duration.ofSeconds(8)).atMost(Duration.ofSeconds(10))
-                .until(() -> !output.getOut().contains("이벤트 큐를 받지 못했다"));
+                .until(() -> !output.getOut().contains("큐를 받지 못했다"));
     }
 
     /** 흐름 ①: 접수가 등록 요청을 발행하고, worker 대역이 성공을 알리면 예약이 결제 가능이 된다. */
