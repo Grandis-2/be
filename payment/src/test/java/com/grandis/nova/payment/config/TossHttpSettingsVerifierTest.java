@@ -59,7 +59,9 @@ class TossHttpSettingsVerifierTest {
     // http 면 Basic 인증(시크릿 키)이 평문으로 나간다. loopback(테스트 · 로컬 대역)만 예외다.
     @ParameterizedTest
     @CsvSource({"http://api.tosspayments.com", "http://10.0.0.5:8080", "ftp://api.tosspayments.com", "api.tosspayments.com",
-            "https://"})
+            "https://",
+            // 이름이 127 로 시작할 뿐인 호스트 — DNS 에 따라 외부 서버다. loopback 은 IP 리터럴로만 인정한다
+            "http://127.example.com", "http://127.0.0.1.nip.io:18080", "http://[::2]:18080", "http://128.0.0.1"})
     void nonHttpsBaseUrlFails(String baseUrl) {
         MockEnvironment environment = valid().withProperty("spring.http.serviceclient.toss.base-url", baseUrl);
 
@@ -68,7 +70,8 @@ class TossHttpSettingsVerifierTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"https://api.tosspayments.com", "http://127.0.0.1:18080", "http://localhost:18080", "http://[::1]:18080"})
+    @CsvSource({"https://api.tosspayments.com", "http://127.0.0.1:18080", "http://127.255.0.9:18080", "http://localhost:18080",
+            "http://[::1]:18080"})
     void httpsOrLoopbackPasses(String baseUrl) {
         MockEnvironment environment = valid().withProperty("spring.http.serviceclient.toss.base-url", baseUrl);
 

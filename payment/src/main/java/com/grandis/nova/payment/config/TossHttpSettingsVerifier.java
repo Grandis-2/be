@@ -6,6 +6,7 @@ import org.springframework.boot.http.client.HttpRedirects;
 import org.springframework.boot.http.client.autoconfigure.HttpClientProperties;
 import org.springframework.core.env.Environment;
 
+import java.net.InetAddress;
 import java.net.URI;
 import java.time.Duration;
 
@@ -68,7 +69,19 @@ final class TossHttpSettingsVerifier {
         if (!"http".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null) {
             return false;
         }
-        String host = uri.getHost();
-        return host.equalsIgnoreCase("localhost") || host.equals("[::1]") || host.equals("::1") || host.startsWith("127.");
+        return uri.getHost().equalsIgnoreCase("localhost") || isLoopbackLiteral(uri.getHost());
+    }
+
+    /**
+     * IP 리터럴이고 loopback(127.0.0.0/8 · ::1)인가. 이름을 문자열 접두어로 보지 않는다 — "127.example.com" 은 DNS 에 따라 외부
+     * 서버가 되고, 거기로 Basic 인증(시크릿 키)이 평문으로 나간다. InetAddress.ofLiteral 은 리터럴만 읽고 DNS 를 찾지 않는다.
+     */
+    private static boolean isLoopbackLiteral(String host) {
+        String literal = host.startsWith("[") && host.endsWith("]") ? host.substring(1, host.length() - 1) : host;
+        try {
+            return InetAddress.ofLiteral(literal).isLoopbackAddress();
+        } catch (IllegalArgumentException notLiteral) {
+            return false;
+        }
     }
 }
