@@ -2,7 +2,7 @@ package com.grandis.nova.preorder.loadtest;
 
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.common.testing.Concurrently;
-import com.grandis.nova.preorder.accept.PreorderAcceptService;
+import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;

@@ -1,8 +1,8 @@
 package com.grandis.nova.preorder.integration.sqs;
 
-import com.grandis.nova.preorder.accept.AcceptResult;
-import com.grandis.nova.preorder.accept.PreorderAcceptService;
-import com.grandis.nova.preorder.accept.RegisterJobReady;
+import com.grandis.nova.preorder.accept.application.AcceptResult;
+import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
+import com.grandis.nova.preorder.accept.application.RegisterJobReady;
 import com.grandis.nova.preorder.event.PreorderEventDispatcher;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.outbox.OutboxEvent;
@@ -15,9 +15,9 @@ import com.grandis.nova.preorder.support.containers.FlociTestContainer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;

@@ -2,8 +2,8 @@ package com.grandis.nova.preorder.deadletter;
 
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.common.testing.Concurrently;
-import com.grandis.nova.preorder.accept.AcceptResult;
-import com.grandis.nova.preorder.accept.PreorderAcceptService;
+import com.grandis.nova.preorder.accept.application.AcceptResult;
+import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.deadletter.application.DeadLetterRedrives;
 import com.grandis.nova.preorder.deadletter.domain.DeadLetterEvent;
 import com.grandis.nova.preorder.deadletter.domain.DeadLetterEventRepository;

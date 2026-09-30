@@ -2,7 +2,7 @@ package com.grandis.nova.preorder.outbox.publish;
 
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.common.testing.Concurrently;
-import com.grandis.nova.preorder.accept.RegisterJobReady;
+import com.grandis.nova.preorder.accept.application.RegisterJobReady;
 import com.grandis.nova.preorder.outbox.OutboxEvent;
 import com.grandis.nova.preorder.outbox.OutboxEventRepository;
 import com.grandis.nova.preorder.outbox.OutboxWriter;
