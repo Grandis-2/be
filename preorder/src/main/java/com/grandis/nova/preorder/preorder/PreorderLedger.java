@@ -1,5 +1,8 @@
 package com.grandis.nova.preorder.preorder;
 
+import com.grandis.nova.preorder.preorder.domain.Preorder;
+import com.grandis.nova.preorder.preorder.domain.PreorderEvent;
+import com.grandis.nova.preorder.preorder.domain.PreorderRepository;
 import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;

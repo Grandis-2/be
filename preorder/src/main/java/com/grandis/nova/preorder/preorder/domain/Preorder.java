@@ -1,6 +1,8 @@
-package com.grandis.nova.preorder.preorder;
+package com.grandis.nova.preorder.preorder.domain;
 
 import com.grandis.nova.common.BaseEntity;
+import com.grandis.nova.preorder.preorder.NewPreorder;
+import com.grandis.nova.preorder.preorder.PreorderStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -25,7 +27,7 @@ import java.time.Instant;
  */
 @Entity
 @Table(name = "preorders")
-class Preorder extends BaseEntity {
+public class Preorder extends BaseEntity {
 
     /** 결제 기한. payable_from 부터 이만큼이다(ERD: 연장 없음). */
     @Id
@@ -85,7 +87,7 @@ class Preorder extends BaseEntity {
     }
 
     /** 접수 직후 상태. 첫 이력(번호 1)과 함께 {@link PreorderLedger#accept} 가 저장한다. */
-    Preorder(NewPreorder draft) {
+    public Preorder(NewPreorder draft) {
         this.preorderToken = draft.preorderToken();
         this.customerId = draft.customerId();
         this.productId = draft.productId();

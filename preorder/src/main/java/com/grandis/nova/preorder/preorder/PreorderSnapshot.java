@@ -1,5 +1,7 @@
 package com.grandis.nova.preorder.preorder;
 
+import com.grandis.nova.preorder.preorder.domain.Preorder;
+
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
@@ -32,7 +34,7 @@ public record PreorderSnapshot(
 
     public static final Duration PAYMENT_WINDOW = Duration.ofHours(24);
 
-    static PreorderSnapshot of(Preorder preorder) {
+    public static PreorderSnapshot of(Preorder preorder) {
         return new PreorderSnapshot(preorder.getId(), preorder.getPreorderToken(), preorder.getCustomerId(),
                 preorder.getProductId(), preorder.getOptionId(), preorder.getShipmentBatchId(),
                 preorder.getQueuePosition(), preorder.getAdmissionTicketId(), preorder.getIdempotencyKey(),

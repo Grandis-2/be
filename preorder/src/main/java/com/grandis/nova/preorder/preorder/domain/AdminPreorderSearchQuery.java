@@ -1,5 +1,6 @@
-package com.grandis.nova.preorder.preorder;
+package com.grandis.nova.preorder.preorder.domain;
 
+import com.grandis.nova.preorder.preorder.AdminPreorderSearch;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -13,7 +14,7 @@ import java.util.List;
  * 엔티티 대신 SQL 로 고르고, 예약 값은 id 로 다시 읽는다.
  */
 @Component
-class AdminPreorderSearchQuery {
+public class AdminPreorderSearchQuery {
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
 
@@ -22,7 +23,7 @@ class AdminPreorderSearchQuery {
     }
 
     /** 최신순(created_at · id 내림차순) 한 페이지의 id. */
-    List<Long> findIds(AdminPreorderSearch search, int page, int size) {
+    public List<Long> findIds(AdminPreorderSearch search, int page, int size) {
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("limit", size)
                 .addValue("offset", (long) page * size);
@@ -31,7 +32,7 @@ class AdminPreorderSearchQuery {
         return jdbcTemplate.queryForList(sql, params, Long.class);
     }
 
-    long count(AdminPreorderSearch search) {
+    public long count(AdminPreorderSearch search) {
         MapSqlParameterSource params = new MapSqlParameterSource();
         Long total = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM preorders p" + where(search, params),
                 params, Long.class);

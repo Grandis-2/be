@@ -1,5 +1,7 @@
-package com.grandis.nova.preorder.preorder;
+package com.grandis.nova.preorder.preorder.domain;
 
+import com.grandis.nova.preorder.preorder.EventActor;
+import com.grandis.nova.preorder.preorder.PreorderStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -20,10 +22,10 @@ import java.time.Instant;
 @Table(name = "preorder_events")
 @IdClass(PreorderEvent.Key.class)
 @Immutable
-class PreorderEvent {
+public class PreorderEvent {
 
     /** 접수 이력의 번호. 예약 행의 카운터도 이 값으로 시작한다. */
-    static final long FIRST_SEQUENCE = 1;
+    public static final long FIRST_SEQUENCE = 1;
 
     @Id
     private Long preorderId;
@@ -52,7 +54,7 @@ class PreorderEvent {
     protected PreorderEvent() {
     }
 
-    PreorderEvent(Long preorderId, long eventSequence, PreorderStatus fromStatus, PreorderStatus toStatus,
+    public PreorderEvent(Long preorderId, long eventSequence, PreorderStatus fromStatus, PreorderStatus toStatus,
                   EventActor actor, String reason, Instant createdAt) {
         actor.requireReason(reason);
         this.preorderId = preorderId;
