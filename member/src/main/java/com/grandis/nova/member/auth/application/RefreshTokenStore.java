@@ -27,7 +27,8 @@ public interface RefreshTokenStore {
     /**
      * 회전(RTR). 행을 잠그고 검사한 뒤 정상이면 그 행에 교체 시각을 찍고 같은 체인으로 새 행을 만든다.
      *
-     * 재사용(이미 교체된 원문)이면 같은 체인의 살아 있는 행을 전부 폐기하고 {@link Rotation.Status#REUSED} 를 돌려준다.
+     * 재사용(이미 교체된 원문)이면 같은 체인의 살아 있는 행을 전부 폐기하고 {@link Rotation.Status#REUSED} 를 돌려준다. 단 만료 뒤 액세스 유효기간
+     * (탐지 창)도 지난 토큰은 재사용이어도 체인을 건드리지 않고 {@link Rotation.Status#EXPIRED} 다 — 막을 액세스 토큰이 없고, 정리와 잠금이 맞물린다.
      * **예외가 아니라 값으로 돌려주는 이유**: 예외로 빠져나가면 그 폐기가 롤백된다. 폐기는 커밋되어야 한다.
      */
     Rotation rotate(String presentedRawToken, String newRawToken, ClientInfo client);
