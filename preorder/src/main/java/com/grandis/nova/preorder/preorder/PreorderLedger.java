@@ -1,5 +1,8 @@
 package com.grandis.nova.preorder.preorder;
 
+import com.grandis.nova.preorder.preorder.domain.Preorder;
+import com.grandis.nova.preorder.preorder.domain.PreorderEvent;
+import com.grandis.nova.preorder.preorder.domain.PreorderRepository;
 import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
@@ -40,16 +43,16 @@ public class PreorderLedger {
      * 어느 제약인지에 따라 응답이 달라서 접수 유스케이스가 판정한다.
      */
     public PreorderSnapshot accept(NewPreorder draft, EventActor actor, String reason) {
-        PreorderEvent.requireReason(actor, reason);
+        actor.requireReason(reason);
         Preorder preorder = preorders.saveAndFlush(new Preorder(draft));
         entityManager.persist(new PreorderEvent(preorder.getId(), PreorderEvent.FIRST_SEQUENCE,
                 null, PreorderStatus.PENDING_SYNC, actor, reason, clock.instant()));
-        return PreorderSnapshot.of(preorder);
+        return preorder.toSnapshot();
     }
 
     /** 예약 행을 잠그고 읽는다. 판정과 전이 사이에 다른 변경이 끼지 못하게 할 때 쓴다(만료 등). */
     public Optional<PreorderSnapshot> lockByToken(String preorderToken) {
-        return preorders.findForUpdateByPreorderToken(preorderToken).map(PreorderSnapshot::of);
+        return preorders.findForUpdateByPreorderToken(preorderToken).map(Preorder::toSnapshot);
     }
 
     /** 관리자 전용 메모. 이력을 남기지 않는 유일한 변경이다. @throws BusinessException PREORDER_NOT_FOUND */
@@ -69,7 +72,7 @@ public class PreorderLedger {
         if (trigger == PreorderTrigger.REGISTER_CONFIRMED) {
             throw new IllegalArgumentException("등록 확인은 confirmRegister 를 쓴다");
         }
-        PreorderEvent.requireReason(actor, reason);
+        actor.requireReason(reason);
         PreorderStatus from = lockStatus(preorderId);
         PreorderStatus to = from.next(trigger).orElse(null);
         if (to == null) {
@@ -123,7 +126,7 @@ public class PreorderLedger {
     }
 
     /** 행을 잠근 채 읽은 상태를 조건으로 하므로 늘 1행이다. 0 이면 잠금 규칙이 깨진 것이다. */
-    private static void requireOneRow(int updated, Long preorderId) {
+    private void requireOneRow(int updated, Long preorderId) {
         if (updated != 1) {
             throw new IllegalStateException("잠근 예약의 상태가 바뀌었다: preorderId=" + preorderId);
         }

@@ -32,7 +32,7 @@ class SqsMessageTransport implements MessageTransport {
                         "eventId", text(message.eventId()))));
     }
 
-    private static MessageAttributeValue text(String value) {
+    private MessageAttributeValue text(String value) {
         return MessageAttributeValue.builder().dataType("String").stringValue(value).build();
     }
 }

@@ -12,9 +12,4 @@ public record PreorderHistoryEntry(
         String reason,
         Instant createdAt
 ) {
-
-    static PreorderHistoryEntry of(PreorderEvent event) {
-        return new PreorderHistoryEntry(event.getPreorderId(), event.getEventSequence(), event.getFromStatus(),
-                event.getToStatus(), event.getActor(), event.getReason(), event.getCreatedAt());
-    }
 }

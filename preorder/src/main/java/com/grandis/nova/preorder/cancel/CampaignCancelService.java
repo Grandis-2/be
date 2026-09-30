@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.cancel;
 
 import com.grandis.nova.preorder.campaign.Campaigns;
+import com.grandis.nova.preorder.cancel.application.CancelStarter;
 import com.grandis.nova.preorder.integration.catalog.CatalogReader;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
@@ -63,7 +64,7 @@ public class CampaignCancelService {
     }
 
     /** 관리자 전이라 사유가 필요하다. 비었으면 기본 문구, 길면 이력 칸 길이로 자른다. */
-    private static String eventReason(String reason) {
+    private String eventReason(String reason) {
         if (reason == null || reason.isBlank()) {
             return DEFAULT_REASON;
         }

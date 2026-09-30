@@ -7,7 +7,6 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.web.client.InternalCallFailures;
 import com.grandis.nova.preorder.integration.Dependencies;
 import com.grandis.nova.preorder.integration.DependencyGuard;
-import com.grandis.nova.preorder.integration.DependencyUnavailableException;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
@@ -96,7 +95,7 @@ public class CatalogReader {
             if (cause instanceof RestClientException restError && InternalCallFailures.isUnreadableResponse(restError)) {
                 throw InternalCallFailures.unreadableResponse(DEPENDENCY, "productId=" + productId, restError);
             }
-            throw DependencyUnavailableException.callFailed(DEPENDENCY, "productId=" + productId, e);
+            throw dependencyGuard.callFailed(DEPENDENCY, "productId=" + productId, e);
         }
     }
 

@@ -2,13 +2,13 @@ package com.grandis.nova.preorder.deadletter;
 
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.common.testing.Concurrently;
-import com.grandis.nova.preorder.accept.AcceptResult;
-import com.grandis.nova.preorder.accept.PreorderAcceptService;
+import com.grandis.nova.preorder.accept.application.AcceptResult;
+import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
-import com.grandis.nova.preorder.support.RecordingDeadLetterRedriver;
 import com.grandis.nova.preorder.support.RecordingDeadLetterRedriver.Sent;
+import com.grandis.nova.preorder.support.RecordingDeadLetterRedriver;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

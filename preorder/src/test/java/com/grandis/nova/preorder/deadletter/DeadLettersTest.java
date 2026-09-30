@@ -2,8 +2,12 @@ package com.grandis.nova.preorder.deadletter;
 
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.common.testing.Concurrently;
-import com.grandis.nova.preorder.accept.AcceptResult;
-import com.grandis.nova.preorder.accept.PreorderAcceptService;
+import com.grandis.nova.preorder.accept.application.AcceptResult;
+import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterEvent;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterEventRepository;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterStatus;
+import com.grandis.nova.preorder.deadletter.domain.FailureReason;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
@@ -169,7 +173,7 @@ class DeadLettersTest {
         Long stale = claimed(ShopFixtures.unique());
         jdbcTemplate.update("UPDATE dead_letter_events SET redrive_started_at = redrive_started_at - INTERVAL 2 MINUTE"
                 + " WHERE id = ?", stale);
-        Instant staleBefore = Instant.now().minus(DeadLetterRedrives.STALE_REDRIVE);
+        Instant staleBefore = Instant.now().minus(DeadLetterStatus.STALE_REDRIVE);
 
         List<Long> waiting = events.findWaitingIds(null, FailureReason.UNREADABLE_BODY, staleBefore, Integer.MAX_VALUE);
 

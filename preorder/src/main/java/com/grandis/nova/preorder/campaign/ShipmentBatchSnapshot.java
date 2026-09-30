@@ -11,9 +11,4 @@ public record ShipmentBatchSnapshot(
         LocalDate estimatedShipStart,
         LocalDate estimatedShipEnd
 ) {
-
-    static ShipmentBatchSnapshot of(ShipmentBatch batch) {
-        return new ShipmentBatchSnapshot(batch.getId(), batch.getBatchNumber(), batch.getPositionFrom(),
-                batch.getPositionTo(), batch.getEstimatedShipStart(), batch.getEstimatedShipEnd());
-    }
 }

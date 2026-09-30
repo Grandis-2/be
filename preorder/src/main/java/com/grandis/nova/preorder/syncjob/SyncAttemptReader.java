@@ -1,5 +1,7 @@
 package com.grandis.nova.preorder.syncjob;
 
+import com.grandis.nova.preorder.syncjob.domain.ErrorGroup;
+import com.grandis.nova.preorder.syncjob.domain.SyncJobFilter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Component;
@@ -29,13 +31,13 @@ public class SyncAttemptReader {
              ORDER BY sync_job_id, attempt_number
             """;
 
-    private static final RowMapper<SyncAttempt> ATTEMPT = (rs, rowNum) -> new SyncAttempt(
+    private final RowMapper<SyncAttempt> attemptMapper = (rs, rowNum) -> new SyncAttempt(
             rs.getLong(1), rs.getInt(2), rs.getString(3), rs.getString(4),
             rs.getObject(5, Integer.class), rs.getString(6), rs.getString(7),
             rs.getTimestamp(8).toInstant(), instantOrNull(rs.getTimestamp(9)));
 
     /** 작업(j)에 마지막 시도(a) 하나를 붙이는 조인. 시도가 없는 작업은 a 가 NULL 이다. 재처리 후보도 같은 정의를 쓴다. */
-    static final String LATEST_ATTEMPT_JOIN = """
+    public static final String LATEST_ATTEMPT_JOIN = """
               LEFT JOIN preorder_sync_attempts a ON a.sync_job_id = j.id
                    AND a.attempt_number = (SELECT MAX(b.attempt_number) FROM preorder_sync_attempts b
                                             WHERE b.sync_job_id = j.id)
@@ -58,7 +60,7 @@ public class SyncAttemptReader {
             return Map.of();
         }
         String placeholders = syncJobIds.stream().map(id -> "?").collect(Collectors.joining(", "));
-        return jdbcTemplate.query(FIND_BY_JOBS.formatted(placeholders), ATTEMPT, syncJobIds.toArray()).stream()
+        return jdbcTemplate.query(FIND_BY_JOBS.formatted(placeholders), attemptMapper, syncJobIds.toArray()).stream()
                 .collect(Collectors.groupingBy(SyncAttempt::syncJobId));
     }
 
@@ -84,7 +86,7 @@ public class SyncAttemptReader {
         return jdbcTemplate.query(sql, (rs, rowNum) -> new ErrorGroup(rs.getString(1), rs.getLong(2)), args.toArray());
     }
 
-    private static Instant instantOrNull(Timestamp timestamp) {
+    private Instant instantOrNull(Timestamp timestamp) {
         return timestamp == null ? null : timestamp.toInstant();
     }
 }

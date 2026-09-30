@@ -6,6 +6,8 @@ import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 import com.grandis.nova.preorder.support.ShopFixtures;
+import com.grandis.nova.preorder.syncjob.domain.PreorderSyncJob;
+import com.grandis.nova.preorder.syncjob.domain.PreorderSyncJobRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

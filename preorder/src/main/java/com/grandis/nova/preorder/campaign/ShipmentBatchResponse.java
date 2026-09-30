@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.campaign;
 
+import com.grandis.nova.preorder.campaign.domain.ShipmentBatch;
 
 import java.time.LocalDate;
 
@@ -17,7 +18,7 @@ public record ShipmentBatchResponse(
                 batch.estimatedShipStart(), batch.estimatedShipEnd());
     }
 
-    static ShipmentBatchResponse from(ShipmentBatch batch) {
-        return from(ShipmentBatchSnapshot.of(batch));
+    public static ShipmentBatchResponse from(ShipmentBatch batch) {
+        return from(batch.toSnapshot());
     }
 }

@@ -37,6 +37,16 @@ public class DependencyGuard {
         this.bulkheads = bulkheads;
     }
 
+    /**
+     * 호출이 일시 장애(타임아웃 · 연결 실패 · 5xx)로 실패했다. 공통 InternalCallFailures.unavailable 과 같지만 Retry-After 를 싣는다.
+     *
+     * @param target 로그에 남길 대상(공개 식별자만 — 인증 토큰 · 개인정보를 넣지 않는다)
+     */
+    public DependencyUnavailableException callFailed(String dependency, String target, Throwable cause) {
+        log.warn("{} 호출 실패 {}", dependency, target, cause);
+        return new DependencyUnavailableException(SHORT_RETRY_AFTER);
+    }
+
     /** @throws DependencyUnavailableException 회로가 열렸거나 동시 호출 상한이 찼다 */
     public <T> T call(String dependency, Supplier<T> call) {
         CircuitBreaker circuitBreaker = circuitBreakers.circuitBreaker(dependency);

@@ -42,7 +42,7 @@ class OpenApiConfig {
         }));
     }
 
-    private static ApiResponse failure(CommonErrorCode code, String description) {
+    private ApiResponse failure(CommonErrorCode code, String description) {
         Map<String, Object> error = new LinkedHashMap<>();
         error.put("code", code.name());
         error.put("message", code.defaultMessage());

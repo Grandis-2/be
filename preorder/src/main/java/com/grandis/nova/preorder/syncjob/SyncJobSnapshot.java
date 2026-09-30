@@ -14,10 +14,4 @@ public record SyncJobSnapshot(
         Instant createdAt,
         Instant updatedAt
 ) {
-
-    static SyncJobSnapshot of(PreorderSyncJob job) {
-        return new SyncJobSnapshot(job.getId(), job.getPreorderId(), job.getJobType(), job.getStatus(),
-                job.getRequestPayload(), job.getLeaseExpiresAt(), job.getDeadLetteredAt(), job.getCreatedAt(),
-                job.getUpdatedAt());
-    }
 }

@@ -4,5 +4,12 @@ package com.grandis.nova.preorder.preorder;
 public enum EventActor {
     USER,
     ADMIN,
-    SYSTEM
+    SYSTEM;
+
+    /** 관리자 전이는 사유가 필요하다(DB CHECK ck_preorder_event_admin_reason 과 같은 규칙). */
+    public void requireReason(String reason) {
+        if (this == ADMIN && (reason == null || reason.isBlank())) {
+            throw new IllegalArgumentException("관리자 전이는 사유가 필요하다");
+        }
+    }
 }
