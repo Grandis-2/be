@@ -405,6 +405,48 @@ class RefreshTokenDbStoreTest {
     }
 
     @Test
+    @DisplayName("revokeAllOf: 탐지 창이 지난 행은 건드리지도 기다리지도 않는다 — 정리가 그 행을 잡고 있어도 바로 끝나고, 창 안의 행은 폐기된다")
+    void revokeAllOfSkipsPastWindowRowsWithoutWaiting() throws Exception {
+        long customerId = newCustomer();
+        login(customerId, UUID.randomUUID());   // 창 안(살아 있음)
+        String justExpired = expiring(customerId, nowSeconds().minus(java.time.Duration.ofMinutes(10)));   // 만료됐지만 창(30분) 안 — 폐기 대상
+        String old = expiring(customerId, nowSeconds().minus(java.time.Duration.ofMinutes(41)));   // 창 밖(정리 대상)
+
+        java.util.concurrent.CountDownLatch locked = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<?> cleanup = pool.submit(() -> transactions.executeWithoutResult(status -> {
+                assertThat(rows.findByTokenHashForUpdate(RefreshTokens.hash(old))).isPresent();
+                locked.countDown();
+                try {
+                    release.await(60, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+            assertThat(locked.await(30, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+
+            long started = System.nanoTime();
+            store.revokeAllOf(String.valueOf(customerId));
+            assertThat(java.time.Duration.ofNanos(System.nanoTime() - started))
+                    .as("창 밖 행까지 UPDATE 했다면 잠긴 행을 기다린다").isLessThan(java.time.Duration.ofSeconds(5));
+
+            release.countDown();
+            cleanup.get(30, java.util.concurrent.TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE customer_id = ? AND revoked_at IS NULL AND expires_at > UTC_TIMESTAMP()",
+                Integer.class, customerId)).as("창 안의 행은 폐기됐다").isZero();
+        assertThat(jdbc.queryForObject("SELECT revoked_at IS NULL FROM refresh_tokens WHERE token_hash = ?", Boolean.class, RefreshTokens.hash(old)))
+                .as("창 밖 행은 그대로").isTrue();
+        assertThat(jdbc.queryForObject("SELECT revoked_at IS NULL FROM refresh_tokens WHERE token_hash = ?", Boolean.class, RefreshTokens.hash(justExpired)))
+                .as("만료 10분 — 탐지 창 안이라 폐기된다(그 사이 나간 액세스 토큰이 아직 살아 있다)").isFalse();
+    }
+
+    @Test
     @DisplayName("revokeAllOf: 회원 번호가 아닌 subject(관리자)면 아무 행도 건드리지 않는다 — 관리자 세션은 이 표에 없다")
     void revokeAllOfIgnoresNonNumericSubject() {
         long customerId = newCustomer();

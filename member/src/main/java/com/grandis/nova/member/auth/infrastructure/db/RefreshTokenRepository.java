@@ -52,8 +52,15 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     @Query("delete from RefreshToken t where t.id in :ids and t.expiresAt <= :cutoff")
     int deleteExpired(@Param("ids") List<Long> ids, @Param("cutoff") Instant cutoff);
 
-    /** 회원 전체 폐기(제재·탈퇴). */
+    /**
+     * 회원 전체 폐기(제재 · 탈퇴)의 대상 — 그 회원의 폐기 안 된 행 중 탐지 창(만료 + 액세스 유효기간) 안의 id. 잠그지 않는 읽기다. 창이 지난 행은 막을
+     * 액세스 토큰이 없고 정리가 지우는 중일 수 있어 뺀다. UPDATE 에 조건만 붙이면 MySQL 이 잠긴 행을 기다린 뒤 조건을 봐서 정리와 맞물린다(실측).
+     */
+    @Query("select t.id from RefreshToken t where t.customerId = :customerId and t.revokedAt is null and t.expiresAt > :windowStart")
+    List<Long> findLiveIdsOf(@Param("customerId") long customerId, @Param("windowStart") Instant windowStart);
+
+    /** 고른 행만 폐기한다(기본키). 이미 폐기된 행은 시각을 덮지 않는다. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query("update RefreshToken t set t.revokedAt = :now where t.customerId = :customerId and t.revokedAt is null")
-    int revokeAllOf(@Param("customerId") long customerId, @Param("now") Instant now);
+    @Query("update RefreshToken t set t.revokedAt = :now where t.id in :ids and t.revokedAt is null")
+    int revokeByIds(@Param("ids") List<Long> ids, @Param("now") Instant now);
 }
