@@ -23,6 +23,7 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
         Map<String, Object> defaults = new LinkedHashMap<>();
         // 문서 그룹(/v3/api-docs/preorder) · 로그가 이 이름을 쓴다
         defaults.put("spring.application.name", "preorder");
+        revocationFailClosedPaths(defaults);
         dependencyTimeouts(defaults);
         dependencyResilience(defaults);
         environment.getPropertySources().addLast(new MapPropertySource(SOURCE_NAME, defaults));
@@ -32,6 +33,14 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
     @Override
     public int getOrder() {
         return Ordered.LOWEST_PRECEDENCE;
+    }
+
+    /**
+     * 토큰 폐기 확인(Redis)이 실패할 때 막는 경로. 목록 밖은 통과시키고 경고 · 카운터만 남긴다 —
+     * 오픈 순간의 접수 · 조회는 Redis 장애에도 받고, 되돌릴 수 없는 취소와 관리자 기능만 막는다.
+     */
+    private static void revocationFailClosedPaths(Map<String, Object> defaults) {
+        defaults.put("auth.revocation-check.fail-closed-paths", "/api/v1/admin/**,/api/v1/preorders/*/cancel");
     }
 
     /** 내부 호출의 연결 · 읽기 시간 상한. 없으면 HTTP 클라이언트가 응답을 끝없이 기다려 동시 호출 상한을 붙잡는다. */

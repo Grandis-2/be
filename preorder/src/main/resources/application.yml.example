@@ -150,7 +150,7 @@ jwt:
   access-token-validity: 30m
   refresh-token-validity: 14d
 
-# 토큰 폐기 확인(Redis)이 실패할 때 막는 경로. 기본값(관리자 · 예약 취소)은 jar 의 preorder-defaults.properties 에 있다.
+# 토큰 폐기 확인(Redis)이 실패할 때 막는 경로. 기본값(관리자 · 예약 취소)은 코드(PreorderDefaults)에 있다.
 # 바꿀 때만 여기서 덮는다
 # auth:
 #   revocation-check:

@@ -13,7 +13,7 @@ import org.springframework.security.web.SecurityFilterChain;
 /**
  * 경로별 권한. 토큰 검증 · 401/403 봉투는 common:security 가 맡는다. 적지 않은 경로는 거부한다.
  * 관리 엔드포인트는 앱과 다른 포트라 외부에서 닿지 않으므로 health · prometheus 는 인증 없이 연다.
- * 폐기 확인 실패 시 막는 경로는 preorder-defaults.properties 에 있다.
+ * 폐기 확인 실패 시 막는 경로의 기본값은 PreorderDefaults 에 있다.
  */
 @Configuration(proxyBeanMethods = false)
 class SecurityConfig {

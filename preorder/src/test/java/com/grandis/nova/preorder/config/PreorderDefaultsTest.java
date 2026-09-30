@@ -21,6 +21,8 @@ class PreorderDefaultsTest {
         assertThat(environment.getProperty("spring.http.serviceclient.catalog.read-timeout")).isEqualTo("1s");
         assertThat(environment.getProperty("spring.http.serviceclient.order.connect-timeout")).isEqualTo("300ms");
         assertThat(environment.getProperty("spring.application.name")).isEqualTo("preorder");
+        assertThat(environment.getProperty("auth.revocation-check.fail-closed-paths"))
+                .isEqualTo("/api/v1/admin/**,/api/v1/preorders/*/cancel");
     }
 
     @Test
