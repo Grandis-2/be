@@ -30,7 +30,7 @@ public record ShipmentBatchPlan(List<Line> lines) {
 
     public List<ShipmentBatch> toBatches(Long productId) {
         return lines.stream()
-                .map(line -> ShipmentBatch.of(productId, line.batchNumber(), line.positionFrom(), line.positionTo(),
+                .map(line -> new ShipmentBatch(productId, line.batchNumber(), line.positionFrom(), line.positionTo(),
                         line.estimatedShipStart(), line.estimatedShipEnd()))
                 .toList();
     }

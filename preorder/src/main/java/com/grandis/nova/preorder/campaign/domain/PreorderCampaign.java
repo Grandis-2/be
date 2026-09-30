@@ -43,16 +43,20 @@ public class PreorderCampaign extends BaseEntity {
     protected PreorderCampaign() {
     }
 
-    private PreorderCampaign(Long productId, Instant opensAt, Instant closesAt) {
+    /** 사전예약 상품에 회차를 연다. 순번은 1번부터 시작한다. */
+    public PreorderCampaign(Long productId, Instant opensAt, Instant closesAt) {
         this.productId = productId;
         this.opensAt = opensAt;
         this.closesAt = closesAt;
         this.nextQueuePosition = FIRST_QUEUE_POSITION;
     }
 
-    /** 사전예약 상품에 회차를 연다. 순번은 1번부터 시작한다. */
-    public static PreorderCampaign of(Long productId, Instant opensAt, Instant closesAt) {
-        return new PreorderCampaign(productId, opensAt, closesAt);
+    /** 지금 판매 상태. */
+    public PreorderSaleStatus saleStatus(Instant now) {
+        if (now.isBefore(opensAt)) {
+            return PreorderSaleStatus.BEFORE_OPEN;
+        }
+        return isAccepting(now) ? PreorderSaleStatus.OPEN : PreorderSaleStatus.CLOSED;
     }
 
     /** 일정 변경. 오픈 뒤에는 부르지 않는다 — 판정은 호출하는 쪽이 회차 행을 잠근 채 한다. */

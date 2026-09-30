@@ -23,7 +23,7 @@ import java.util.Map;
  * 두 관리자가 동시에 눌러도 한 번만 보낸다. 보내기 실패는 실제로 갔는지 알 수 없어 REDRIVING 에 두고, 멈춘 기준(STALE_REDRIVE) 뒤 다시 선점한다.
  */
 @Component
-public class DeadLetterRedrives {
+class DeadLetterRedrives {
 
 
     private static final Logger log = LoggerFactory.getLogger(DeadLetterRedrives.class);

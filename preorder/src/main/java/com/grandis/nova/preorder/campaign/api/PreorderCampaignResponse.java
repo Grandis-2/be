@@ -22,6 +22,6 @@ record PreorderCampaignResponse(
 
     public static PreorderCampaignResponse from(PreorderCampaign campaign, Instant now) {
         return new PreorderCampaignResponse(campaign.getProductId(), campaign.getOpensAt(), campaign.getClosesAt(),
-                PreorderSaleStatus.of(campaign, now), campaign.issuedCount(), campaign.getOpenNotifiedAt());
+                campaign.saleStatus(now), campaign.issuedCount(), campaign.getOpenNotifiedAt());
     }
 }

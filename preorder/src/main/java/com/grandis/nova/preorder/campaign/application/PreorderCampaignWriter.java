@@ -44,7 +44,7 @@ class PreorderCampaignWriter {
 
     private PreorderCampaign create(Long productId, Instant opensAt, Instant closesAt) {
         requireFutureOpen(opensAt);
-        return campaigns.save(PreorderCampaign.of(productId, opensAt, closesAt));
+        return campaigns.save(new PreorderCampaign(productId, opensAt, closesAt));
     }
 
     /** 오픈 전 전체 교체. 순번이 나간 뒤에 구간을 바꾸면 그 순번의 배송 차수가 달라진다. */
