@@ -3,7 +3,9 @@ package com.grandis.nova.payment;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.payment.domain.enums.TransactionStatus;
+import com.grandis.nova.payment.domain.enums.TransactionType;
 import com.grandis.nova.payment.domain.exception.ActiveTransactionExistsException;
+import com.grandis.nova.payment.domain.model.Outcome.Confirmed;
 import com.grandis.nova.payment.domain.model.PaymentTransaction;
 import com.grandis.nova.payment.domain.repository.PaymentTransactionReader;
 import com.grandis.nova.payment.support.PaymentFixtures;
@@ -17,6 +19,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -91,6 +94,28 @@ class PaymentLedgerConcurrencyTest {
                 .singleElement().satisfies(o -> assertThat(o.error()).isInstanceOf(ActiveTransactionExistsException.class));
         assertThat(transactions.findTransactionsByTarget(target)).extracting(PaymentTransaction::status)
                 .containsExactlyInAnyOrder(TransactionStatus.PROCESSING, TransactionStatus.PENDING);
+    }
+
+    /*
+     * 같은 대상의 환불 요청이 동시에 온다(환불 요청은 최소 1회 전달이라 재전송이 겹칠 수 있다). 모두 결제를 읽고 "아직 환불 안 됨" 을
+     * 본 뒤 INSERT 하므로 읽기로는 막지 못한다 — uq_payment_tx_active 가 REFUND 행을 하나만 남긴다.
+     * 먼저 넣은 쪽이 커밋하므로 기다리던 쪽은 모두 중복 키(교착 아님)를 받는다.
+     */
+    @Test
+    void concurrentRefundOpensOfSameTargetLeaveOneRefund() throws Exception {
+        PaymentTransaction pending = transactionTemplate.execute(s -> ledger.openCapture(target, AMOUNT));
+        ClaimedTransaction started = transactionTemplate.execute(s -> ledger.start(pending, target, providerPayment,
+                AMOUNT)).orElseThrow();
+        transactionTemplate.executeWithoutResult(s -> ledger.resolve(started, new Confirmed(Instant.now())));
+
+        List<Outcome<PaymentTransaction>> outcomes = Concurrently.run(WORKERS, i -> () ->
+                transactionTemplate.execute(s -> ledger.openRefund(target)));
+
+        assertThat(outcomes.stream().filter(Outcome::succeeded)).hasSize(1);
+        assertThat(outcomes.stream().filter(o -> !o.succeeded())).hasSize(WORKERS - 1)
+                .allSatisfy(o -> assertThat(o.error()).isInstanceOf(ActiveTransactionExistsException.class));
+        assertThat(transactions.findTransactionsByTarget(target)).filteredOn(t -> t.type() == TransactionType.REFUND)
+                .hasSize(1);
     }
 
     private void assertOneHolder(List<Outcome<Optional<ClaimedTransaction>>> outcomes, Long id) {
