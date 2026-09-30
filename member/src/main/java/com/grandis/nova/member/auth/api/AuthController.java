@@ -15,6 +15,7 @@ import com.grandis.nova.member.auth.application.ClientInfo;
 import com.grandis.nova.member.auth.application.KakaoLoginService;
 import com.grandis.nova.member.auth.application.TokenService;
 import com.grandis.nova.member.customer.CustomerRepository;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -83,6 +84,7 @@ public class AuthController {
     public record AdminLoginRequest(@NotBlank String username, @NotBlank String password) {
     }
 
+    @SecurityRequirements   // 공개 — 문서의 Bearer 요구를 뺀다(보안 체인의 permitAll 과 같은 목록)
     @PostMapping("/auth/kakao/callback")
     public ResponseEntity<ApiResponse<LoginResponse>> kakaoCallback(@Valid @RequestBody KakaoCallbackRequest request,
                                                                      HttpServletRequest servletRequest) {
@@ -91,6 +93,7 @@ public class AuthController {
                 new LoginResponse(result.tokens().accessToken(), result.displayName(), result.role(), result.profileComplete()));
     }
 
+    @SecurityRequirements   // 공개 — 리프레시 쿠키로 식별한다
     @PostMapping("/session/refresh")
     public ResponseEntity<ApiResponse<LoginResponse>> refresh(HttpServletRequest request) {
         refreshOrigins.require(request);
@@ -118,6 +121,8 @@ public class AuthController {
         return ApiResponse.ok(new SessionInfoResponse(owner.displayName(), principal.role(), owner.profileComplete()));
     }
 
+    @SecurityRequirements   // 공개 — 만료된 액세스로도 로그아웃이 되어야 한다
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "204", description = "로그아웃 — 본문 없음, 두 역할의 리프레시 쿠키 만료")
     @DeleteMapping("/session")
     public ResponseEntity<ApiResponse<Void>> logout(HttpServletRequest request) {
         // 액세스 토큰은 필터와 같은 추출기로 — 잘 갖춘 Bearer 헤더가 아니면 없는 것으로(로그아웃은 그래도 된다)
@@ -171,6 +176,7 @@ public class AuthController {
         return response.build();
     }
 
+    @SecurityRequirements   // 공개 — 관리자 로그인
     @PostMapping("/admin/session")
     public ResponseEntity<ApiResponse<AdminSessionResponse>> adminSession(@Valid @RequestBody AdminLoginRequest request,
                                                                           HttpServletRequest servletRequest) {
@@ -178,6 +184,7 @@ public class AuthController {
         return withRefreshCookie(issued, Role.ADMIN, new AdminSessionResponse(issued.accessToken(), Role.ADMIN));
     }
 
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "204", description = "관리자 세션 전부 폐기 — 본문 없음")
     @DeleteMapping("/admin/sessions")
     public ResponseEntity<ApiResponse<Void>> revokeAllAdminSessions() {
         try {

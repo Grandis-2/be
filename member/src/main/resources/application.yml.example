@@ -36,6 +36,19 @@ spring:
 server:
   port: 8080
 
+# OpenAPI 문서. 기본은 꺼져 있고 값이 정확히 true 일 때만 켜진다(빈 값 · no · 오타는 꺼짐). 운영에는 적지 않는다.
+# api-docs 가 주 스위치다 — UI 만 꺼도 스펙은 열린다.
+# member 는 문서 허브다 — hub-services 를 주면 Swagger UI 드롭다운에 서비스별 문서(/v3/api-docs/{서비스})가 나온다.
+# 첫 화면은 목록의 첫 서비스. 모든 서비스 문서는 한 출처 뒤(dev: ALB, 로컬: docker/openapi-hub)에서만 열린다.
+# springdoc:
+#   api-docs:
+#     enabled: true
+#   swagger-ui:
+#     enabled: true
+# nova:
+#   openapi:
+#     hub-services: member,catalog,preorder,order
+
 # 프론트 주도 코드 교환: 프론트가 카카오에서 받은 code 를 POST /api/v1/auth/kakao/callback 으로 보내면 우리가 카카오에 code 를 낸다.
 # spring.security.oauth2.client 는 쓰지 않는다. client-secret 은 서버에만 있다(Secrets Manager 주입).
 # allowed-redirect-uris: 프론트가 보낸 redirectUri 가 이 목록에 정확히 있어야 한다. 아무 값이나 받으면 code 가 다른 사이트로 샌다.
