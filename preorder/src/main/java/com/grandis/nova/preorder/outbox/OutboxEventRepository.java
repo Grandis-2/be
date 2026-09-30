@@ -53,13 +53,16 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
     @Query("update OutboxEvent e set e.leaseUntil = :until where e.id in :ids")
     int lease(@Param("ids") Collection<Long> ids, @Param("until") Instant until);
 
-    /** 리스 안에 보내지 못한 행을 돌려놓는다. 그 사이 발행됐거나 다른 인스턴스가 새로 가져간 행은 건드리지 않는다. */
+    /**
+     * 보내기 직전에 리스를 연장한다. 아직 내 리스(lease)이고 미발행일 때만 바꾼다 —
+     * 0 이면 리스가 끝나 다른 인스턴스가 가져갔거나 이미 발행된 행이라 보내지 않는다.
+     */
     @Transactional
     @Modifying
     @Query("""
-            update OutboxEvent e set e.leaseUntil = null
-             where e.id in :ids and e.leaseUntil = :lease and e.publishedAt is null""")
-    int releaseLease(@Param("ids") Collection<Long> ids, @Param("lease") Instant lease);
+            update OutboxEvent e set e.leaseUntil = :renewed
+             where e.id = :id and e.leaseUntil = :lease and e.publishedAt is null""")
+    int renewLease(@Param("id") Long id, @Param("lease") Instant lease, @Param("renewed") Instant renewed);
 
     /** 아직 보내지 못한 행 수. 늘어나면 전송이 막힌 것이다. */
     @Query(value = "SELECT COUNT(*) FROM outbox_events WHERE published_at IS NULL AND event_type IN (:eventTypes)",

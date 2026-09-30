@@ -233,11 +233,11 @@ class OutboxPublishTest {
     }
 
     @Test
-    void 리스가_끝날_때까지_못_보낸_행은_보내지_않고_돌려놓는다() {
+    void 보내기_전에_리스가_끝나_다른_인스턴스가_가져간_행은_보내지_않는다() {
         Long id = insertUnpublished("CANCEL_JOB_READY");
-        // 가져간 직후부터 리스 시간이 다 지난 것으로 보이는 시계
-        Clock expiring = new Clock() {
-            private boolean claimed;
+        // 가져간 뒤 보내기 직전(두 번째로 시각을 읽을 때), 다른 인스턴스가 리스를 새로 건 것으로 만든다
+        Clock takenOver = new Clock() {
+            private int reads;
 
             @Override
             public ZoneId getZone() {
@@ -251,31 +251,30 @@ class OutboxPublishTest {
 
             @Override
             public Instant instant() {
-                Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
-                if (claimed) {
-                    return now.plus(properties.relayLease());
+                if (++reads == 2) {
+                    jdbcTemplate.update("UPDATE outbox_events SET lease_until = UTC_TIMESTAMP(6) + INTERVAL 5 MINUTE"
+                            + " WHERE id = ?", id);
                 }
-                claimed = true;
-                return now;
+                return Instant.now().truncatedTo(ChronoUnit.MICROS);
             }
         };
 
-        new OutboxRelay(outboxEvents, publisher, properties, transactionTemplate, expiring).relay();
+        new OutboxRelay(outboxEvents, publisher, properties, transactionTemplate, takenOver).relay();
 
         assertThat(sentOf(eventIdOf(id))).isEmpty();
-        assertThat(leaseUntil(id)).as("다음 주기에 곧바로 다시 가져간다").isNull();
+        assertThat(publishedAt(id)).isNull();
     }
 
     @Test
-    void 리스가_끝나_다른_인스턴스가_가져간_행의_리스는_늦게_실패한_쪽이_풀지_않는다() {
+    void 남의_리스는_연장하지도_늦게_실패한_쪽이_풀지도_않는다() {
         Long id = insertUnpublished("CANCEL_JOB_READY");
         Instant mine = Instant.parse("2026-01-01T00:00:00Z");
         jdbcTemplate.update(
                 "UPDATE outbox_events SET lease_until = UTC_TIMESTAMP(6) + INTERVAL 5 MINUTE WHERE id = ?", id);
         Object theirs = leaseUntil(id);
 
+        assertThat(outboxEvents.renewLease(id, mine, Instant.now())).isZero();
         outboxEvents.recordFailure(id, mine);
-        outboxEvents.releaseLease(List.of(id), mine);
 
         assertThat(leaseUntil(id)).isEqualTo(theirs);
         assertThat(attempts(id)).as("실패 횟수는 센다").isEqualTo(1);

@@ -10,7 +10,7 @@ import java.util.Map;
 /**
  * @param endpoint       로컬 에뮬레이터(Floci) 주소. 비우면 AWS 기본 주소와 기본 자격 증명을 쓴다
  * @param queues         논리 목적지 → 실제 큐 이름. 없으면 논리 이름을 그대로 쓴다
- * @param apiCallTimeout SQS 호출 한 번의 제한 시간. 릴레이 한 묶음(relay-batch × 이 값)이 리스(relay-lease) 안에 끝나게 짧게 둔다
+ * @param apiCallTimeout SQS 호출 한 번의 제한 시간. 릴레이 리스(nova.outbox.relay-lease)보다 짧아야 한다
  */
 @ConfigurationProperties("nova.sqs")
 record SqsProperties(

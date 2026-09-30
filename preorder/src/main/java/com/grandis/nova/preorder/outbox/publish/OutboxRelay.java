@@ -45,32 +45,37 @@ class OutboxRelay {
             initialDelayString = "${nova.outbox.relay-interval:10s}")
     public int relay() {
         Instant now = clock.instant();
-        Instant leaseUntil = now.plus(properties.relayLease());
-        List<OutboxEvent> events = transactionTemplate.execute(status -> claim(now, leaseUntil));
+        Instant lease = now.plus(properties.relayLease());
+        List<OutboxEvent> events = transactionTemplate.execute(status -> claim(now, lease));
         int published = 0;
-        for (int i = 0; i < events.size(); i++) {
-            // 리스가 끝나면 다른 인스턴스가 같은 행을 가져갈 수 있다. 남은 행은 돌려놓고 다음 주기에 맡긴다
-            if (!clock.instant().isBefore(leaseUntil)) {
-                List<Long> rest = events.subList(i, events.size()).stream().map(OutboxEvent::getId).toList();
-                outboxEvents.releaseLease(rest, leaseUntil);
-                log.warn("아웃박스 재발행이 리스 안에 끝나지 않아 {}건을 돌려놓는다", rest.size());
-                break;
+        int skipped = 0;
+        for (OutboxEvent event : events) {
+            // 보내기 직전에 내 리스인지 확인하며 연장한다. 연장한 리스 동안은 다른 인스턴스가 이 행을 가져가지 못한다
+            Instant renewed = clock.instant().plus(properties.relayLease());
+            if (outboxEvents.renewLease(event.getId(), lease, renewed) != 1) {
+                skipped++;
+                continue;
             }
-            if (publisher.publish(events.get(i), leaseUntil)) {
+            if (publisher.publish(event, renewed)) {
                 published++;
             }
         }
         if (!events.isEmpty()) {
-            log.info("아웃박스 재발행 대상={} 성공={}", events.size(), published);
+            log.info("아웃박스 재발행 대상={} 성공={} 리스를 잃어 건너뜀={}", events.size(), published, skipped);
         }
         return published;
     }
 
-    private List<OutboxEvent> claim(Instant now, Instant leaseUntil) {
+    private List<OutboxEvent> claim(Instant now, Instant lease) {
         List<OutboxEvent> events = outboxEvents.lockClaimable(
                 now.minus(properties.relayAfter()), now, OWN_EVENT_TYPES, properties.relayBatch());
-        if (!events.isEmpty()) {
-            outboxEvents.lease(events.stream().map(OutboxEvent::getId).toList(), leaseUntil);
+        if (events.isEmpty()) {
+            return events;
+        }
+        int leased = outboxEvents.lease(events.stream().map(OutboxEvent::getId).toList(), lease);
+        if (leased != events.size()) {
+            // 잠근 행이라 어긋날 수 없다. 어긋나면 되돌리고 다음 주기에 다시 가져간다
+            throw new IllegalStateException("잠근 아웃박스 행 " + events.size() + "건 중 " + leased + "건에만 리스를 걸었다");
         }
         return events;
     }
