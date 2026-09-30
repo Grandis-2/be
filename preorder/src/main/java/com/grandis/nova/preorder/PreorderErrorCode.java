@@ -16,6 +16,7 @@ public enum PreorderErrorCode implements ErrorCode {
     PRODUCT_NOT_FOUND(404, "상품을 찾을 수 없습니다."),
     PRODUCT_OPTION_NOT_FOUND(404, "옵션을 찾을 수 없습니다."),
     SYNC_JOB_NOT_FOUND(404, "동기화 작업을 찾을 수 없습니다."),
+    DEAD_LETTER_NOT_FOUND(404, "DLQ 메시지를 찾을 수 없습니다."),
     SALE_NOT_OPEN(409, "아직 예약 오픈 전입니다."),
     SALE_CLOSED(409, "사전예약이 마감되었습니다."),
     ACTIVE_PREORDER_EXISTS(409, "이미 접수된 예약이 있습니다."),
@@ -23,6 +24,8 @@ public enum PreorderErrorCode implements ErrorCode {
     PREORDER_NOT_CANCELABLE(409, "배송이 시작되어 취소할 수 없습니다."),
     PRODUCT_ALREADY_OPEN(409, "사전예약이 이미 오픈되어 바꿀 수 없습니다."),
     SYNC_JOB_NOT_REPROCESSABLE(409, "재처리할 수 없는 작업입니다."),
+    DEAD_LETTER_NOT_REDRIVABLE(409, "되돌릴 수 없는 메시지입니다."),
+    DEAD_LETTER_NOT_DISCARDABLE(409, "버릴 수 없는 메시지입니다."),
     PREORDER_FIELD_IMMUTABLE(409, "내부 메모 외에는 바꿀 수 없습니다."),
     KEY_PAYLOAD_MISMATCH(422, "이전 요청과 내용이 다릅니다. 새 신청으로 다시 시도해 주세요.");
 

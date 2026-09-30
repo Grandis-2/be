@@ -11,6 +11,7 @@ import java.util.Map;
  * @param endpoint       로컬 에뮬레이터(Floci) 주소. 비우면 AWS 기본 주소와 기본 자격 증명을 쓴다
  * @param queues         논리 목적지 → 실제 큐 이름. 없으면 논리 이름을 그대로 쓴다
  * @param apiCallTimeout SQS 호출 한 번의 제한 시간. 릴레이 리스(nova.outbox.relay-lease)보다 짧아야 한다
+ * @param deadLetter     소비 큐(consumer.queue)의 DLQ 를 DB 로 옮기는 소비기
  */
 @ConfigurationProperties("nova.sqs")
 record SqsProperties(
@@ -20,7 +21,8 @@ record SqsProperties(
         @DefaultValue("test") String secretKey,
         @DefaultValue Map<String, String> queues,
         @DefaultValue("3s") Duration apiCallTimeout,
-        @DefaultValue Consumer consumer
+        @DefaultValue Consumer consumer,
+        @DefaultValue DeadLetter deadLetter
 ) {
 
     public String queueName(String destination) {
@@ -52,6 +54,25 @@ record SqsProperties(
                     || backoffMax.compareTo(MAX_VISIBILITY) > 0) {
                 throw new IllegalArgumentException("nova.sqs.consumer: concurrency >= 1, max-messages 1~10, "
                         + "wait-seconds 0~20, visibility 1s~12h, 0 < backoff-base <= backoff-max <= 12h 여야 한다");
+            }
+        }
+    }
+
+    /**
+     * @param queue      DLQ 이름. 소비 큐와 짝이다
+     * @param visibility 받은 메시지를 숨기는 시간. 적재가 실패하면 이 시간 뒤 다시 받는다
+     */
+    public record DeadLetter(
+            @DefaultValue("false") boolean enabled,
+            @DefaultValue("preorder-events-dlq") String queue,
+            @DefaultValue("20") int waitSeconds,
+            @DefaultValue("1m") Duration visibility
+    ) {
+
+        public DeadLetter {
+            if (waitSeconds < 0 || waitSeconds > 20 || visibility.compareTo(Duration.ofSeconds(1)) < 0
+                    || visibility.compareTo(Consumer.MAX_VISIBILITY) > 0) {
+                throw new IllegalArgumentException("nova.sqs.dead-letter: wait-seconds 0~20, visibility 1s~12h 여야 한다");
             }
         }
     }

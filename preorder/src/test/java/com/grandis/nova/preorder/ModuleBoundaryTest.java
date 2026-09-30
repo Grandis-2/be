@@ -29,7 +29,7 @@ class ModuleBoundaryTest {
 
     static final String ROOT = "com.grandis.nova.preorder";
 
-    private static final String[] USE_CASES = modules("accept", "cancel", "query", "payability", "event");
+    private static final String[] USE_CASES = modules("accept", "cancel", "query", "payability", "event", "deadletter");
     private static final String[] WIRING = modules("config", "metrics");
 
     @ArchTest
@@ -80,7 +80,8 @@ class ModuleBoundaryTest {
     @ArchTest
     static final ArchRule 컨트롤러는_기능_모듈에만_둔다 = classes()
             .that().areAnnotatedWith(RestController.class)
-            .should().resideInAnyPackage(modules("accept", "cancel", "query", "payability", "campaign", "syncjob"));
+            .should().resideInAnyPackage(modules("accept", "cancel", "query", "payability", "campaign", "syncjob",
+                    "deadletter"));
 
     @ArchTest
     static final ArchRule 컨트롤러는_리포지토리를_직접_부르지_않는다 = noClasses()

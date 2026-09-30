@@ -154,6 +154,12 @@ class ObservabilityTest {
                                            publish_attempts, created_at)
                 VALUES (?, 'PREORDER_SYNC_JOB', 1, 'CANCEL_JOB_READY', '{}', 7, UTC_TIMESTAMP(6))
                 """, ShopFixtures.unique());
+        jdbcTemplate.update("""
+                INSERT INTO dead_letter_events (source_queue, message_id, body, failure_reason, receive_count, status,
+                                                created_at, updated_at)
+                VALUES ('preorder-events', ?, 'not-json', 'UNREADABLE_BODY', 5, 'OPEN',
+                        UTC_TIMESTAMP(6) - INTERVAL 1 HOUR, UTC_TIMESTAMP(6))
+                """, ShopFixtures.unique());
 
         stateGauges.refresh();
 
@@ -161,6 +167,9 @@ class ObservabilityTest {
         assertThat(registry.get("preorder.outbox.unpublished").gauge().value()).isPositive();
         assertThat(registry.get("preorder.outbox.unpublished.max.attempts").gauge().value())
                 .isGreaterThanOrEqualTo(7);
+        assertThat(registry.get("preorder.dlq.waiting").gauge().value()).isPositive();
+        assertThat(registry.get("preorder.dlq.waiting.oldest.age").gauge().value()).as("초")
+                .isGreaterThanOrEqualTo(3600);
     }
 
     @Test
