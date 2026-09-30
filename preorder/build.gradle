@@ -14,6 +14,8 @@ dependencies {
     implementation project(':common:message')
     // 액세스 토큰 검증(JWKS) · 인증 주체. 폐기 확인에 Redis 를 쓴다(common:redis)
     implementation project(':common:security')
+    // 저장 해상도(마이크로초) 시계 storageClock(@Primary) · JPA Auditing 을 자동설정으로 켠다. @EnableJpaAuditing 을 따로 켜지 않는다.
+    implementation project(':common:jpa')
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     // 다른 서비스 내부 API 는 HTTP Interface(@HttpExchange) + RestClient 로 부른다.
