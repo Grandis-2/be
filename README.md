@@ -45,11 +45,21 @@ be/
 | 서비스 | ECS desired | 스케일 기준 | 소유 테이블 |
 | --- | --- | --- | --- |
 | `member` | 2~4 | CPU | `customers` · `refresh_tokens` |
-| `catalog` | 2~6 | 요청 수 | `categories` · `products` · `product_options` |
+| `catalog` | 2~6 | 요청 수 | `categories` · `products` · `product_options`<br>`product_option_axes` · `product_option_values` · `product_option_selections` · `product_images` · `product_registrations` |
 | **`preorder`** | **6~12** | **요청 수** | `preorders` · `preorder_events`<br>`preorder_campaigns` · `shipment_batches` · `product_reviews` |
 | `order` | 2~8 | CPU | `orders` · `order_items` · `order_events`<br>`cart_items` · `payments` · `payment_transactions` · `option_inventories` |
 | `worker` | 1~20 | Backlog per Task · SPOT | `preorder_sync_jobs` · `preorder_sync_attempts` |
 | `batch` | **1 고정** | — | (읽기) |
+
+교차 읽기는 셋뿐이다. 나머지는 소유 서비스의 API 로 묻는다.
+
+| 읽는 쪽 → 표 | 왜 |
+| --- | --- |
+| `preorder` → `products` · `product_options` · `categories` | 접수 시점 값을 복사한다 |
+| `order` → `products` · `product_options` | 금액 확인 |
+| `catalog` → `preorder_campaigns`(`opens_at` · `closes_at`) · `option_inventories` | 목록·검색의 노출 조건(오픈 예정 · 마감 · 마감+120시간 숨김 · 품절)이 **페이징 조건**이라 쿼리 안에 있어야 한다. 상세의 회차 시각 · 옵션별 가용 수량도 같은 곳에서 읽는다. 읽기 전용 저장소 한 곳에서만 읽고 쓰지 않는다 |
+
+preorder 는 catalog 를 API(`GET /internal/products/{id}/options`)로 묻고 catalog 는 preorder 표를 SQL 로 읽는 비대칭은 이유가 다르기 때문이다. 앞은 값을 복사하고, 뒤는 조건으로 거른다.
 
 별도 저장소로 도는 것이 둘 더 있다.
 

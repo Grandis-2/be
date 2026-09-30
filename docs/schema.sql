@@ -35,13 +35,16 @@ CREATE TABLE `cart_items` (
 /*!50503 SET character_set_client = utf8mb4 */;
 CREATE TABLE `categories` (
   `id` bigint NOT NULL AUTO_INCREMENT,
+  `parent_id` bigint DEFAULT NULL,
   `code` varchar(40) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   `name` varchar(60) NOT NULL,
   `option_filter_definitions` json DEFAULT NULL,
   `created_at` datetime(6) NOT NULL,
   `updated_at` datetime(6) NOT NULL,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uq_category_code` (`code`)
+  UNIQUE KEY `uq_category_code` (`code`),
+  KEY `ix_category_parent` (`parent_id`),
+  CONSTRAINT `fk_category_parent` FOREIGN KEY (`parent_id`) REFERENCES `categories` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -354,23 +357,123 @@ CREATE TABLE `preorders` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `product_images` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `product_id` bigint NOT NULL,
+  `kind` varchar(20) NOT NULL,
+  `bundle_key` varchar(60) NOT NULL DEFAULT '',
+  `position` int NOT NULL,
+  `url` varchar(1000) NOT NULL,
+  `is_primary` tinyint(1) NOT NULL DEFAULT '0',
+  `primary_marker` tinyint GENERATED ALWAYS AS ((case when `is_primary` then 1 else NULL end)) STORED,
+  `created_at` datetime(6) NOT NULL,
+  `updated_at` datetime(6) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_product_image_position` (`product_id`,`kind`,`bundle_key`,`position`),
+  UNIQUE KEY `uq_product_image_primary` (`product_id`,`kind`,`bundle_key`,`primary_marker`),
+  CONSTRAINT `fk_product_image_product` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`),
+  CONSTRAINT `ck_product_image_kind` CHECK ((`kind` in (_utf8mb4'GALLERY',_utf8mb4'DETAIL'))),
+  CONSTRAINT `ck_product_image_position` CHECK ((`position` >= 0))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `product_option_axes` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `product_id` bigint NOT NULL,
+  `axis_key` varchar(40) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  `label` varchar(60) NOT NULL,
+  `position` int NOT NULL,
+  `created_at` datetime(6) NOT NULL,
+  `updated_at` datetime(6) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_option_axis_key` (`product_id`,`axis_key`),
+  UNIQUE KEY `uq_option_axis_product` (`product_id`,`id`),
+  CONSTRAINT `fk_option_axis_product` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`),
+  CONSTRAINT `ck_option_axis_position` CHECK ((`position` >= 0))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `product_option_selections` (
+  `product_id` bigint NOT NULL,
+  `option_id` bigint NOT NULL,
+  `axis_id` bigint NOT NULL,
+  `value_id` bigint NOT NULL,
+  PRIMARY KEY (`option_id`,`axis_id`),
+  KEY `ix_option_selection_value` (`value_id`,`option_id`),
+  KEY `fk_option_selection_option` (`product_id`,`option_id`),
+  KEY `fk_option_selection_axis` (`product_id`,`axis_id`),
+  KEY `fk_option_selection_value` (`axis_id`,`value_id`),
+  CONSTRAINT `fk_option_selection_axis` FOREIGN KEY (`product_id`, `axis_id`) REFERENCES `product_option_axes` (`product_id`, `id`),
+  CONSTRAINT `fk_option_selection_option` FOREIGN KEY (`product_id`, `option_id`) REFERENCES `product_options` (`product_id`, `id`),
+  CONSTRAINT `fk_option_selection_value` FOREIGN KEY (`axis_id`, `value_id`) REFERENCES `product_option_values` (`axis_id`, `id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `product_option_values` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `axis_id` bigint NOT NULL,
+  `value` varchar(60) NOT NULL,
+  `normalized_value` varchar(60) NOT NULL,
+  `surcharge` decimal(12,0) NOT NULL DEFAULT '0',
+  `position` int NOT NULL,
+  `created_at` datetime(6) NOT NULL,
+  `updated_at` datetime(6) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_option_value` (`axis_id`,`normalized_value`),
+  UNIQUE KEY `uq_option_value_axis` (`axis_id`,`id`),
+  CONSTRAINT `fk_option_value_axis` FOREIGN KEY (`axis_id`) REFERENCES `product_option_axes` (`id`),
+  CONSTRAINT `ck_option_value_position` CHECK ((`position` >= 0)),
+  CONSTRAINT `ck_option_value_surcharge` CHECK ((`surcharge` >= 0))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
 CREATE TABLE `product_options` (
   `id` bigint NOT NULL AUTO_INCREMENT,
   `product_id` bigint NOT NULL,
   `sku` varchar(80) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   `title` varchar(120) NOT NULL,
   `price` decimal(12,0) NOT NULL,
+  `price_overridden` tinyint(1) NOT NULL DEFAULT '0',
   `filter_attributes` json DEFAULT NULL,
   `display_attributes` json DEFAULT NULL,
+  `combination_key` varchar(200) DEFAULT NULL,
   `status` varchar(20) NOT NULL,
   `created_at` datetime(6) NOT NULL,
   `updated_at` datetime(6) NOT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_option_sku` (`product_id`,`sku`),
   UNIQUE KEY `uq_option_product` (`product_id`,`id`),
+  UNIQUE KEY `uq_option_combination` (`product_id`,`combination_key`),
   CONSTRAINT `fk_option_product` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`),
   CONSTRAINT `ck_option_price` CHECK ((`price` >= 0)),
   CONSTRAINT `ck_option_status` CHECK ((`status` in (_utf8mb4'ACTIVE',_utf8mb4'PAUSED')))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `product_registrations` (
+  `product_id` bigint NOT NULL,
+  `idempotency_key` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  `requested_visible` tinyint(1) NOT NULL,
+  `campaign_set_at` datetime(6) DEFAULT NULL,
+  `batches_set_at` datetime(6) DEFAULT NULL,
+  `stock_set_at` datetime(6) DEFAULT NULL,
+  `completed_at` datetime(6) DEFAULT NULL,
+  `blocked_reason` varchar(100) DEFAULT NULL,
+  `last_error` varchar(500) DEFAULT NULL,
+  `lease_token` varchar(64) DEFAULT NULL,
+  `lease_expires_at` datetime(6) DEFAULT NULL,
+  `created_at` datetime(6) NOT NULL,
+  `updated_at` datetime(6) NOT NULL,
+  PRIMARY KEY (`product_id`),
+  UNIQUE KEY `uq_registration_key` (`idempotency_key`),
+  CONSTRAINT `fk_registration_product` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`),
+  CONSTRAINT `ck_registration_lease` CHECK (((`lease_token` is null) = (`lease_expires_at` is null))),
+  CONSTRAINT `ck_registration_outcome` CHECK (((`blocked_reason` is null) or (`completed_at` is null)))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -404,18 +507,24 @@ CREATE TABLE `products` (
   `category_id` bigint NOT NULL,
   `sale_mode` varchar(20) NOT NULL,
   `title` varchar(100) NOT NULL,
+  `base_price` decimal(12,0) NOT NULL DEFAULT '0',
   `description` text,
   `image_url` varchar(1000) DEFAULT NULL,
   `tags` varchar(500) DEFAULT NULL,
   `status` varchar(20) NOT NULL,
+  `visible` tinyint(1) NOT NULL DEFAULT '1',
+  `warranty_offered` tinyint(1) NOT NULL DEFAULT '0',
+  `warranty_surcharge` decimal(12,0) NOT NULL DEFAULT '0',
   `created_at` datetime(6) NOT NULL,
   `updated_at` datetime(6) NOT NULL,
   PRIMARY KEY (`id`),
   KEY `ix_product_sale_mode` (`sale_mode`,`status`),
   KEY `ix_product_category` (`category_id`,`status`,`sale_mode`),
   CONSTRAINT `fk_product_category` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`),
+  CONSTRAINT `ck_product_base_price` CHECK ((`base_price` >= 0)),
   CONSTRAINT `ck_product_sale_mode` CHECK ((`sale_mode` in (_utf8mb4'PREORDER',_utf8mb4'IN_STOCK'))),
-  CONSTRAINT `ck_product_status` CHECK ((`status` in (_utf8mb4'ACTIVE',_utf8mb4'PAUSED')))
+  CONSTRAINT `ck_product_status` CHECK ((`status` in (_utf8mb4'ACTIVE',_utf8mb4'PAUSED'))),
+  CONSTRAINT `ck_product_warranty_surcharge` CHECK ((`warranty_surcharge` >= 0))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
