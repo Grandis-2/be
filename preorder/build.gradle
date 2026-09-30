@@ -43,6 +43,8 @@ dependencies {
     testImplementation 'org.testcontainers:testcontainers-mysql'
     // SQS 연계는 로컬 AWS 에뮬레이터 Floci 로 검증한다.
     testImplementation "io.floci:testcontainers-floci:${flociTestcontainersVersion}"
+    // 동시성 테스트 도우미(Concurrently)
+    testImplementation project(':common:testing')
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     // 테스트는 기본적으로 지표 내보내기를 끈다. Prometheus 엔드포인트를 확인하는 테스트만 켠다(@AutoConfigureMetrics).
     testImplementation 'org.springframework.boot:spring-boot-micrometer-metrics-test'

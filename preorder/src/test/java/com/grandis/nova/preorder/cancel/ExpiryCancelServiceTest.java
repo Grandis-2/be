@@ -1,5 +1,7 @@
 package com.grandis.nova.preorder.cancel;
 
+import com.grandis.nova.common.testing.Concurrently.Outcome;
+import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.preorder.accept.AcceptResult;
 import com.grandis.nova.preorder.accept.PreorderAcceptService;
 import com.grandis.nova.preorder.event.ExternalJobSucceeded;
@@ -9,8 +11,6 @@ import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.support.AcceptFixtures;
-import com.grandis.nova.preorder.support.Concurrently.Outcome;
-import com.grandis.nova.preorder.support.Concurrently;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import org.junit.jupiter.api.BeforeEach;

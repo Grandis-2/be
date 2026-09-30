@@ -2,10 +2,10 @@ package com.grandis.nova.preorder.integration.catalog;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.testing.Concurrently.Outcome;
+import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.support.CatalogStubs;
-import com.grandis.nova.preorder.support.Concurrently.Outcome;
-import com.grandis.nova.preorder.support.Concurrently;
 import com.grandis.nova.preorder.support.DependencyGuards;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpInputMessage;

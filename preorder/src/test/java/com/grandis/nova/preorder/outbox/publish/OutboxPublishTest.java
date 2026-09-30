@@ -1,10 +1,10 @@
 package com.grandis.nova.preorder.outbox.publish;
 
+import com.grandis.nova.common.testing.Concurrently.Outcome;
+import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.preorder.accept.RegisterJobReady;
 import com.grandis.nova.preorder.outbox.OutboxEvent;
 import com.grandis.nova.preorder.outbox.OutboxWriter;
-import com.grandis.nova.preorder.support.Concurrently.Outcome;
-import com.grandis.nova.preorder.support.Concurrently;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import org.junit.jupiter.api.BeforeEach;

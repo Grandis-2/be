@@ -1,6 +1,8 @@
 package com.grandis.nova.preorder.cancel;
 
 import com.grandis.nova.common.security.BearerTokens;
+import com.grandis.nova.common.testing.Concurrently.Outcome;
+import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.accept.AcceptResult;
 import com.grandis.nova.preorder.accept.PreorderAcceptService;
@@ -9,8 +11,6 @@ import com.grandis.nova.preorder.integration.order.Cancelability;
 import com.grandis.nova.preorder.integration.order.OrderClient;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.AccessTokens;
-import com.grandis.nova.preorder.support.Concurrently.Outcome;
-import com.grandis.nova.preorder.support.Concurrently;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import org.junit.jupiter.api.BeforeEach;
