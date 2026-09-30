@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.config;
 
 import com.grandis.nova.common.security.SecurityFilterChainSupport;
+import com.grandis.nova.common.web.OpenApiPaths;
 import jakarta.servlet.DispatcherType;
 import org.springframework.boot.security.autoconfigure.actuate.web.servlet.EndpointRequest;
 import org.springframework.context.annotation.Bean;
@@ -23,8 +24,8 @@ class SecurityConfig {
                 .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                 .requestMatchers(EndpointRequest.to("health", "prometheus")).permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/v1/products/*/shipment-batches").permitAll()
-                // API 문서. dev 프로파일에서만 켜지고, 꺼진 환경에는 경로가 없어 404 다
-                .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
+                // API 문서. 켠 환경에서만 있고, 꺼진 환경에는 경로가 없어 404 다
+                .requestMatchers(HttpMethod.GET, OpenApiPaths.docs()).permitAll()
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/preorders/**", "/internal/**").authenticated()
                 .anyRequest().denyAll());

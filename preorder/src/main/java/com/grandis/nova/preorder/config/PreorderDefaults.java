@@ -21,6 +21,8 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
         Map<String, Object> defaults = new LinkedHashMap<>();
+        // 문서 그룹(/v3/api-docs/preorder) · 로그가 이 이름을 쓴다
+        defaults.put("spring.application.name", "preorder");
         dependencyTimeouts(defaults);
         dependencyResilience(defaults);
         environment.getPropertySources().addLast(new MapPropertySource(SOURCE_NAME, defaults));

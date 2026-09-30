@@ -55,6 +55,14 @@ spring:
 server:
   port: 8083
 
+# OpenAPI 문서. 기본은 꺼져 있고 값이 정확히 true 일 때만 켜진다(빈 값 · no · 오타는 꺼짐). 운영에는 적지 않는다.
+# 문서는 /v3/api-docs/preorder, /internal/** 은 nova.openapi.include-internal: true 일 때만 실린다.
+# springdoc:
+#   api-docs:
+#     enabled: true
+#   swagger-ui:
+#     enabled: true
+
 # 관측. 관리 엔드포인트는 앱과 다른 포트로 분리한다 — ALB 대상 그룹은 앱 포트만, 수집기만 관리 포트에 접근한다.
 # 부하 시험의 p99 를 보려고 요청 지연은 히스토그램으로 낸다
 management:
