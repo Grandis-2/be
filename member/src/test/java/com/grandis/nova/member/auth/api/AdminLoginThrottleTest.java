@@ -53,7 +53,7 @@ class AdminLoginThrottleTest {
     MockMvc mockMvc;
     String viewer;   // 이 시험의 실제 클라이언트 IP — 시험끼리 수가 섞이지 않게 매번 새로
 
-    /** 합계 키는 시험끼리 공유한다 — 심은 값을 남기지 않는다. */
+    /** 합계 키는 시험끼리 공유한다 — 심은 값을 남기지 않는다(시작 때도 비운다, setUp). */
     @org.junit.jupiter.api.AfterEach
     void clearTotal() {
         org.mockito.Mockito.reset(redis);   // 시험이 심은 실패 흉내(삭제 예외)를 먼저 걷는다
@@ -62,6 +62,8 @@ class AdminLoginThrottleTest {
 
     @BeforeEach
     void setUp() {
+        // 다른 시험 클래스의 관리자 로그인 실패도 같은 합계 키에 쌓인다 — 시작할 때도 비워 실행 순서에 기대지 않는다
+        redis.delete(AuthRedisKeys.ADMIN_LOGIN_ATTEMPTS_TOTAL);
         mockMvc = MockMvcBuilders.webAppContextSetup(context).addFilters(requestIdFilter, springSecurityFilterChain).build();
         viewer = randomIp();
     }
