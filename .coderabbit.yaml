@@ -9,7 +9,7 @@
 # 소유 경계(README 기준)
 #   member    customers · refresh_tokens
 #   catalog   categories · products · product_variants(재고 칼럼 제외)
-#   preorder  preorders · preorder_events · preorder_campaigns · shipment_batches
+#   preorder  preorders · preorder_events · preorder_campaigns · shipment_batches · dead_letter_events
 #   order     orders · order_items · order_events · cart_items · payments · payment_transactions
 #             product_variants 의 재고 칼럼(stock_total · stock_reserved · stock_sold)
 #   worker    preorder_sync_jobs · preorder_sync_attempts (실행 주체. 행 생성은 preorder)
