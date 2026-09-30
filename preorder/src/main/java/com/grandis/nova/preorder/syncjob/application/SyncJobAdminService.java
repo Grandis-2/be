@@ -1,10 +1,19 @@
-package com.grandis.nova.preorder.syncjob;
+package com.grandis.nova.preorder.syncjob.application;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.Preorders;
+import com.grandis.nova.preorder.syncjob.SyncAttempt;
+import com.grandis.nova.preorder.syncjob.SyncAttemptReader;
+import com.grandis.nova.preorder.syncjob.SyncJobStatus;
+import com.grandis.nova.preorder.syncjob.SyncJobType;
+import com.grandis.nova.preorder.syncjob.domain.PreorderSyncJob;
+import com.grandis.nova.preorder.syncjob.domain.PreorderSyncJobRepository;
+import com.grandis.nova.preorder.syncjob.domain.ReprocessCandidate;
+import com.grandis.nova.preorder.syncjob.domain.ReprocessCandidateReader;
+import com.grandis.nova.preorder.syncjob.domain.SyncJobFilter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -23,7 +32,7 @@ import java.util.Optional;
 
 /** 관리자 동기화 작업 조회 · 재처리. */
 @Service
-class SyncJobAdminService {
+public class SyncJobAdminService {
 
     /** 일괄 재처리 한 번의 최대 건수. 후보를 모두 메모리에 올리지 않는다. */
     public static final int MAX_BATCH_SIZE = 1000;

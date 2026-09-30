@@ -1,4 +1,4 @@
-package com.grandis.nova.preorder.syncjob;
+package com.grandis.nova.preorder.syncjob.application;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

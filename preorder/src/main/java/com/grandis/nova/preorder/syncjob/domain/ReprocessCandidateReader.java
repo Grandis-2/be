@@ -1,6 +1,9 @@
-package com.grandis.nova.preorder.syncjob;
+package com.grandis.nova.preorder.syncjob.domain;
 
 import com.grandis.nova.preorder.preorder.PreorderStatus;
+import com.grandis.nova.preorder.syncjob.SyncAttemptReader;
+import com.grandis.nova.preorder.syncjob.SyncJobStatus;
+import com.grandis.nova.preorder.syncjob.SyncJobType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Component;
@@ -12,7 +15,7 @@ import java.util.stream.Collectors;
 
 /** 일괄 재처리 후보를 id 와 판정 값만으로 읽는다. 작업 · 예약 · 마지막 시도를 한 쿼리로 붙이고 건수를 제한한다. */
 @Component
-class ReprocessCandidateReader {
+public class ReprocessCandidateReader {
 
     private static final String SELECT = """
             SELECT j.id, j.job_type, j.status, p.status, a.error_code

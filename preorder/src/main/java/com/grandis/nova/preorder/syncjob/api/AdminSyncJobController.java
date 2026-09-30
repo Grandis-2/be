@@ -1,6 +1,12 @@
-package com.grandis.nova.preorder.syncjob;
+package com.grandis.nova.preorder.syncjob.api;
 
 import com.grandis.nova.common.web.ApiResponse;
+import com.grandis.nova.preorder.syncjob.SyncJobResponse;
+import com.grandis.nova.preorder.syncjob.SyncJobStatus;
+import com.grandis.nova.preorder.syncjob.SyncJobType;
+import com.grandis.nova.preorder.syncjob.application.BatchReprocess;
+import com.grandis.nova.preorder.syncjob.application.SyncJobAdminService;
+import com.grandis.nova.preorder.syncjob.application.SyncJobView;
 import com.grandis.nova.preorder.web.PageSizes;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;

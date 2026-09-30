@@ -1,5 +1,7 @@
 package com.grandis.nova.preorder.syncjob;
 
+import com.grandis.nova.preorder.syncjob.application.ErrorGroup;
+import com.grandis.nova.preorder.syncjob.domain.SyncJobFilter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Component;
@@ -35,7 +37,7 @@ public class SyncAttemptReader {
             rs.getTimestamp(8).toInstant(), instantOrNull(rs.getTimestamp(9)));
 
     /** 작업(j)에 마지막 시도(a) 하나를 붙이는 조인. 시도가 없는 작업은 a 가 NULL 이다. 재처리 후보도 같은 정의를 쓴다. */
-    static final String LATEST_ATTEMPT_JOIN = """
+    public static final String LATEST_ATTEMPT_JOIN = """
               LEFT JOIN preorder_sync_attempts a ON a.sync_job_id = j.id
                    AND a.attempt_number = (SELECT MAX(b.attempt_number) FROM preorder_sync_attempts b
                                             WHERE b.sync_job_id = j.id)

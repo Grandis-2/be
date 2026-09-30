@@ -1,5 +1,7 @@
 package com.grandis.nova.preorder.syncjob;
 
+import com.grandis.nova.preorder.syncjob.domain.PreorderSyncJob;
+import com.grandis.nova.preorder.syncjob.domain.PreorderSyncJobRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;

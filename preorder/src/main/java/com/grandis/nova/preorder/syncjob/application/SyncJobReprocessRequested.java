@@ -1,4 +1,4 @@
-package com.grandis.nova.preorder.syncjob;
+package com.grandis.nova.preorder.syncjob.application;
 
 import com.grandis.nova.preorder.outbox.AggregateType;
 import com.grandis.nova.preorder.outbox.OutboundEventType;

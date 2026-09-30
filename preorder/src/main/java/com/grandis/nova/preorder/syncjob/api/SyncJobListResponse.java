@@ -1,7 +1,9 @@
-package com.grandis.nova.preorder.syncjob;
+package com.grandis.nova.preorder.syncjob.api;
 
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import com.grandis.nova.common.OffsetPage;
+import com.grandis.nova.preorder.syncjob.application.ErrorGroup;
+import com.grandis.nova.preorder.syncjob.application.SyncJobPage;
 
 import java.util.List;
 

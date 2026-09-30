@@ -1,6 +1,8 @@
-package com.grandis.nova.preorder.syncjob;
+package com.grandis.nova.preorder.syncjob.domain;
 
 import com.grandis.nova.common.BaseEntity;
+import com.grandis.nova.preorder.syncjob.SyncJobStatus;
+import com.grandis.nova.preorder.syncjob.SyncJobType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -23,7 +25,7 @@ import java.time.Instant;
  */
 @Entity
 @Table(name = "preorder_sync_jobs")
-class PreorderSyncJob extends BaseEntity {
+public class PreorderSyncJob extends BaseEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

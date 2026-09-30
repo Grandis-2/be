@@ -1,5 +1,10 @@
-package com.grandis.nova.preorder.syncjob;
+package com.grandis.nova.preorder.syncjob.api;
 
+
+import com.grandis.nova.preorder.syncjob.SyncJobStatus;
+import com.grandis.nova.preorder.syncjob.SyncJobType;
+import com.grandis.nova.preorder.syncjob.application.SyncJobView;
+import com.grandis.nova.preorder.syncjob.domain.PreorderSyncJob;
 
 import java.time.Instant;
 

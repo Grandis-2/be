@@ -1,5 +1,6 @@
-package com.grandis.nova.preorder.syncjob;
+package com.grandis.nova.preorder.syncjob.api;
 
+import com.grandis.nova.preorder.syncjob.application.SyncJobAdminService;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;

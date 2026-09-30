@@ -1,10 +1,13 @@
-package com.grandis.nova.preorder.syncjob;
+package com.grandis.nova.preorder.syncjob.application;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.outbox.OutboxWriter;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
+import com.grandis.nova.preorder.syncjob.domain.PreorderSyncJob;
+import com.grandis.nova.preorder.syncjob.domain.PreorderSyncJobRepository;
+import com.grandis.nova.preorder.syncjob.domain.ReprocessCandidate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 

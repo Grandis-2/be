@@ -1,5 +1,7 @@
-package com.grandis.nova.preorder.syncjob;
+package com.grandis.nova.preorder.syncjob.domain;
 
+import com.grandis.nova.preorder.syncjob.SyncJobStatus;
+import com.grandis.nova.preorder.syncjob.SyncJobType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Modifying;
@@ -11,7 +13,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
-interface PreorderSyncJobRepository extends JpaRepository<PreorderSyncJob, Long>,
+public interface PreorderSyncJobRepository extends JpaRepository<PreorderSyncJob, Long>,
         JpaSpecificationExecutor<PreorderSyncJob> {
 
     /** 끝난 REGISTER 작업. 무효화하지 않는다. */
