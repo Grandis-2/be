@@ -167,8 +167,9 @@ class ObservabilityTest {
         assertThat(registry.get("preorder.outbox.unpublished").gauge().value()).isPositive();
         assertThat(registry.get("preorder.outbox.unpublished.max.attempts").gauge().value())
                 .isGreaterThanOrEqualTo(7);
-        assertThat(registry.get("preorder.dlq.open").gauge().value()).isPositive();
-        assertThat(registry.get("preorder.dlq.open.oldest.age").gauge().value()).as("초").isGreaterThanOrEqualTo(3600);
+        assertThat(registry.get("preorder.dlq.waiting").gauge().value()).isPositive();
+        assertThat(registry.get("preorder.dlq.waiting.oldest.age").gauge().value()).as("초")
+                .isGreaterThanOrEqualTo(3600);
     }
 
     @Test

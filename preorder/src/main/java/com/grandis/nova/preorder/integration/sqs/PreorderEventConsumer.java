@@ -59,7 +59,7 @@ class PreorderEventConsumer extends QueuePoller {
         }
     }
 
-    /** 결과 기록이 실패해도 처리는 끝났으므로 메시지는 지운다. 그 행은 REDRIVEN 으로 남는다. */
+    /** 결과 기록이 실패해도 처리는 끝났으므로 메시지는 지운다. 그 행은 결과 없이 남는다(REDRIVING 이면 1분 뒤 다시 되돌릴 수 있다). */
     private void recordRedriveSucceeded(Long deadLetterId) {
         try {
             deadLetters.markRedriveSucceeded(deadLetterId);
@@ -84,7 +84,7 @@ class PreorderEventConsumer extends QueuePoller {
     }
 
     /** SQS 는 초 단위다. 1초 미만은 올려 곧바로 다시 보이지 않게 한다. */
-    private static int seconds(Duration delay) {
+    private int seconds(Duration delay) {
         return (int) Math.max(1, (delay.toMillis() + 999) / 1000);
     }
 }

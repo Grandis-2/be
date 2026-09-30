@@ -20,7 +20,15 @@ record DeadLetterSummaryResponse(
         Instant updatedAt
 ) {
 
-    static DeadLetterSummaryResponse from(DeadLetterView view) {
+    public static DeadLetterSummaryResponse from(DeadLetterListItem item) {
+        DeadLetterSummary summary = item.summary();
+        return new DeadLetterSummaryResponse(summary.getId(), summary.getMessageId(), summary.getEventId(),
+                summary.getEventType(), item.preorderToken(), summary.getCustomerId(), summary.getFailureReason(),
+                summary.getReceiveCount(), summary.getStatus(), item.redrivable(), summary.getRedrivenFromId(),
+                summary.getSentAt(), summary.getCreatedAt(), summary.getUpdatedAt());
+    }
+
+    public static DeadLetterSummaryResponse from(DeadLetterView view) {
         DeadLetterEvent event = view.event();
         return new DeadLetterSummaryResponse(event.getId(), event.getMessageId(), event.getEventId(),
                 event.getEventType(), view.preorderToken(), event.getCustomerId(), event.getFailureReason(),

@@ -6,7 +6,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
 import java.util.Optional;
@@ -19,13 +18,13 @@ public class DeadLetters {
 
     private final DeadLetterEventRepository events;
     private final Preorders preorders;
-    private final JsonMapper jsonMapper;
+    private final DeadLetterBodyParser bodyParser;
     private final Clock clock;
 
-    DeadLetters(DeadLetterEventRepository events, Preorders preorders, JsonMapper jsonMapper, Clock clock) {
+    DeadLetters(DeadLetterEventRepository events, Preorders preorders, DeadLetterBodyParser bodyParser, Clock clock) {
         this.events = events;
         this.preorders = preorders;
-        this.jsonMapper = jsonMapper;
+        this.bodyParser = bodyParser;
         this.clock = clock;
     }
 
@@ -40,7 +39,7 @@ public class DeadLetters {
         if (events.existsBySourceQueueAndMessageId(incoming.sourceQueue(), incoming.messageId())) {
             return false;
         }
-        DeadLetterBody parsed = DeadLetterBody.parse(jsonMapper, incoming.body());
+        DeadLetterBody parsed = bodyParser.parse(incoming.body());
         Optional<PreorderSnapshot> preorder = Optional.ofNullable(parsed.preorderToken())
                 .flatMap(preorders::findByToken);
         IncomingDeadLetter linked = linkPrevious(incoming);
@@ -65,16 +64,11 @@ public class DeadLetters {
         }
         if (!events.existsById(previous)) {
             log.warn("되돌린 메시지의 앞선 행이 없다 — 잇지 않고 쌓는다 deadLetterId={}", previous);
-            return withPrevious(incoming, null);
+            return incoming.withoutPrevious();
         }
         if (events.markOutcome(previous, DeadLetterStatus.REDRIVE_FAILED, clock.instant()) != 1) {
             log.info("앞선 행의 결과를 바꾸지 않았다(이미 결과가 있음) deadLetterId={}", previous);
         }
         return incoming;
-    }
-
-    private static IncomingDeadLetter withPrevious(IncomingDeadLetter incoming, Long previous) {
-        return new IncomingDeadLetter(incoming.sourceQueue(), incoming.messageId(), incoming.body(),
-                incoming.receiveCount(), incoming.sentAt(), previous);
     }
 }

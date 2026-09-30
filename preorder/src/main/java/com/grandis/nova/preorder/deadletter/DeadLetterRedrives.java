@@ -8,7 +8,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
-import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -30,15 +29,15 @@ class DeadLetterRedrives {
     private final DeadLetterEventRepository events;
     private final ObjectProvider<DeadLetterRedriver> redriver;
     private final TransactionTemplate transactionTemplate;
-    private final JsonMapper jsonMapper;
+    private final DeadLetterBodyParser bodyParser;
     private final Clock clock;
 
     DeadLetterRedrives(DeadLetterEventRepository events, ObjectProvider<DeadLetterRedriver> redriver,
-                       TransactionTemplate transactionTemplate, JsonMapper jsonMapper, Clock clock) {
+                       TransactionTemplate transactionTemplate, DeadLetterBodyParser bodyParser, Clock clock) {
         this.events = events;
         this.redriver = redriver;
         this.transactionTemplate = transactionTemplate;
-        this.jsonMapper = jsonMapper;
+        this.bodyParser = bodyParser;
         this.clock = clock;
     }
 
@@ -49,7 +48,7 @@ class DeadLetterRedrives {
     DeadLetterEvent redrive(Long id, String requestedBy) {
         DeadLetterEvent event = events.findById(id)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.DEAD_LETTER_NOT_FOUND));
-        DeadLetterBody parsed = DeadLetterBody.parse(jsonMapper, event.getBody());
+        DeadLetterBody parsed = bodyParser.parse(event.getBody());
         if (!parsed.redrivable()) {
             throw notRedrivable("failureReason=" + parsed.failureReason());
         }
@@ -77,11 +76,12 @@ class DeadLetterRedrives {
         return events.findById(id).orElseThrow();
     }
 
+    /** 원문까지 올리지 않도록 상태만 읽는다. */
     private DeadLetterStatus currentStatus(Long id) {
-        return events.findById(id).map(DeadLetterEvent::getStatus).orElse(null);
+        return events.findStatusById(id).orElse(null);
     }
 
-    private static BusinessException notRedrivable(String reason) {
+    private BusinessException notRedrivable(String reason) {
         return new BusinessException(PreorderErrorCode.DEAD_LETTER_NOT_REDRIVABLE, Map.of("reason", reason));
     }
 }

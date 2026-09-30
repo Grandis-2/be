@@ -7,6 +7,8 @@ import com.grandis.nova.preorder.accept.PreorderAcceptService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
+import com.grandis.nova.preorder.support.RecordingDeadLetterRedriver;
+import com.grandis.nova.preorder.support.RecordingDeadLetterRedriver.Sent;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,21 +28,12 @@ import static com.grandis.nova.preorder.support.AccessTokens.customer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.hamcrest.Matchers.contains;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.BDDMockito.willDoNothing;
-import static org.mockito.BDDMockito.willThrow;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** DB 를 테스트끼리 공유하므로 목록 단정은 이 테스트가 만든 예약으로만 한다. 큐로 보내기는 대역이다. */
+/** DB 를 테스트끼리 공유하므로 목록 단정은 이 테스트가 만든 예약으로만 한다. 큐로 보내기는 행 id 별로 기록하는 대역이다. */
 @PreorderIntegrationTest
 @AutoConfigureMockMvc
 class AdminDeadLetterApiTest {
@@ -62,8 +55,8 @@ class AdminDeadLetterApiTest {
     @MockitoBean
     CatalogClient catalogClient;
 
-    @MockitoBean
-    DeadLetterRedriver redriver;
+    @Autowired
+    RecordingDeadLetterRedriver redriver;
 
     ShopFixtures fixtures;
     Long customerId;
@@ -120,7 +113,7 @@ class AdminDeadLetterApiTest {
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.status").value("REDRIVEN"));
 
-        verify(redriver).redrive(QUEUE, body, id);
+        assertThat(redriver.sentFor(id)).containsExactly(new Sent(QUEUE, body));
         Map<String, Object> row = row(id);
         assertThat(row.get("redriven_at")).isNotNull();
         assertThat(row.get("redrive_requested_by")).isNotNull();
@@ -134,13 +127,13 @@ class AdminDeadLetterApiTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("DEAD_LETTER_NOT_REDRIVABLE"));
 
-        verify(redriver, never()).redrive(anyString(), anyString(), anyLong());
+        assertThat(redriver.sentFor(id)).isEmpty();
     }
 
     @Test
     void 보내지_못하면_503_이고_갔는지_모르니_REDRIVING_에_두었다가_1분_뒤_다시_되돌린다() throws Exception {
         Long id = record(event("EXTERNAL_JOB_SUCCEEDED"));
-        willThrow(new IllegalStateException("timeout")).given(redriver).redrive(anyString(), anyString(), eq(id));
+        redriver.failFor(id);
 
         mockMvc.perform(post("/api/v1/admin/event-dlq/{id}/redrive", id).with(admin()))
                 .andExpect(status().isServiceUnavailable());
@@ -152,14 +145,14 @@ class AdminDeadLetterApiTest {
 
         jdbcTemplate.update("UPDATE dead_letter_events SET redrive_started_at = redrive_started_at - INTERVAL 2 MINUTE"
                 + " WHERE id = ?", id);
-        willDoNothing().given(redriver).redrive(anyString(), anyString(), eq(id));
+        redriver.recover(id);
 
         mockMvc.perform(get("/api/v1/admin/event-dlq/{id}", id).with(admin()))
                 .andExpect(jsonPath("$.data.redrivable").value(true));
         mockMvc.perform(post("/api/v1/admin/event-dlq/{id}/redrive", id).with(admin()))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.status").value("REDRIVEN"));
-        verify(redriver, times(2)).redrive(anyString(), anyString(), eq(id));
+        assertThat(redriver.sentFor(id)).hasSize(1);
     }
 
     @Test
@@ -172,7 +165,7 @@ class AdminDeadLetterApiTest {
 
         assertThat(outcomes).allMatch(Outcome::succeeded);
         assertThat(outcomes.stream().map(Outcome::value).filter(code -> code == 202)).hasSize(1);
-        verify(redriver, times(1)).redrive(anyString(), anyString(), eq(id));
+        assertThat(redriver.sentFor(id)).hasSize(1);
     }
 
     @Test
@@ -208,11 +201,9 @@ class AdminDeadLetterApiTest {
                 .andExpect(jsonPath("$.data.targetCount").value(2))
                 .andExpect(jsonPath("$.data.skippedCount").value(2));
 
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-            verify(redriver).redrive(eq(QUEUE), anyString(), eq(first));
-            verify(redriver).redrive(eq(QUEUE), anyString(), eq(second));
-        });
-        verify(redriver, never()).redrive(any(), any(), eq(unknown));
+        await().atMost(Duration.ofSeconds(5))
+                .until(() -> !redriver.sentFor(first).isEmpty() && !redriver.sentFor(second).isEmpty());
+        assertThat(redriver.sentFor(unknown)).isEmpty();
     }
 
     @Test
@@ -230,9 +221,8 @@ class AdminDeadLetterApiTest {
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.targetCount").value(0));
 
-        await().atMost(Duration.ofSeconds(10))
-                .untilAsserted(() -> verify(redriver).redrive(eq(QUEUE), anyString(), eq(expiry)));
-        verify(redriver, never()).redrive(any(), any(), eq(settled));
+        await().atMost(Duration.ofSeconds(10)).until(() -> !redriver.sentFor(expiry).isEmpty());
+        assertThat(redriver.sentFor(settled)).isEmpty();
     }
 
     @Test
@@ -244,9 +234,8 @@ class AdminDeadLetterApiTest {
                         .contentType(MediaType.APPLICATION_JSON).content("{\"ratePerSecond\":200}"))
                 .andExpect(status().isAccepted());
 
-        await().atMost(Duration.ofSeconds(20))
-                .untilAsserted(() -> verify(redriver).redrive(eq(QUEUE), anyString(), eq(failed)));
-        verify(redriver, never()).redrive(any(), any(), eq(unknown));
+        await().atMost(Duration.ofSeconds(20)).until(() -> !redriver.sentFor(failed).isEmpty());
+        assertThat(redriver.sentFor(unknown)).isEmpty();
     }
 
     @Test

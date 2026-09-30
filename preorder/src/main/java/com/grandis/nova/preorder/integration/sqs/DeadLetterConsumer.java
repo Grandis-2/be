@@ -57,7 +57,7 @@ class DeadLetterConsumer extends QueuePoller {
     }
 
     /** SQS 가 처음 받은 시각(epoch 밀리초). 읽을 수 없으면 null. */
-    private static Instant sentAt(Message message) {
+    private Instant sentAt(Message message) {
         String value = message.attributes().get(MessageSystemAttributeName.SENT_TIMESTAMP);
         if (value == null) {
             return null;

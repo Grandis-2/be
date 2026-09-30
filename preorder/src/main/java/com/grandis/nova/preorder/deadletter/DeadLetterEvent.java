@@ -111,8 +111,7 @@ class DeadLetterEvent extends BaseEntity {
 
     /** 되돌리기를 기다리는가 — OPEN 이거나, 보내다 멈춰 staleBefore 전부터 REDRIVING 이다. */
     boolean waitingForRedrive(Instant staleBefore) {
-        return status == DeadLetterStatus.OPEN
-                || (status == DeadLetterStatus.REDRIVING && redriveStartedAt.isBefore(staleBefore));
+        return status.waitingForRedrive(redriveStartedAt, staleBefore);
     }
 
     public Long getId() {

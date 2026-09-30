@@ -1,5 +1,7 @@
 package com.grandis.nova.preorder.deadletter;
 
+import java.time.Instant;
+
 /** DLQ 에서 옮겨 온 메시지의 처리 상태. 전이는 모두 현재 상태를 조건으로 한 UPDATE 로만 한다. */
 enum DeadLetterStatus {
 
@@ -14,5 +16,10 @@ enum DeadLetterStatus {
     /** 되돌린 메시지가 또 DLQ 로 왔다. 새 행이 이 행을 가리킨다. */
     REDRIVE_FAILED,
     /** 버림(사유 필수). */
-    DISCARDED
+    DISCARDED;
+
+    /** 되돌리기를 기다리는가 — OPEN 이거나, 보내다 멈춰 staleBefore 전부터 REDRIVING 이다. */
+    boolean waitingForRedrive(Instant redriveStartedAt, Instant staleBefore) {
+        return this == OPEN || (this == REDRIVING && redriveStartedAt.isBefore(staleBefore));
+    }
 }

@@ -89,7 +89,7 @@ abstract class QueuePoller implements SmartLifecycle {
     }
 
     /** 되돌린 메시지에 실린 DLQ 행 id. 없거나 읽을 수 없으면 비어 있다. */
-    protected static Optional<Long> deadLetterId(Message message) {
+    protected Optional<Long> deadLetterId(Message message) {
         return Optional.ofNullable(message.messageAttributes().get(DeadLetterRedriver.DEAD_LETTER_ID_ATTRIBUTE))
                 .map(MessageAttributeValue::stringValue)
                 .flatMap(value -> {
@@ -102,7 +102,7 @@ abstract class QueuePoller implements SmartLifecycle {
     }
 
     /** 받은 횟수. int 를 넘으면 상한으로, 읽을 수 없으면 1 로 본다 — 흐름을 끊지 않는다. */
-    protected static int receiveCount(Message message) {
+    protected int receiveCount(Message message) {
         try {
             long count = Long.parseLong(
                     message.attributes().getOrDefault(MessageSystemAttributeName.APPROXIMATE_RECEIVE_COUNT, "1"));
@@ -141,7 +141,7 @@ abstract class QueuePoller implements SmartLifecycle {
     }
 
     /** @return 인터럽트되면 false — 그 뒤의 대기 · 호출이 모두 곧바로 실패하므로 이 작업 스레드를 끝낸다 */
-    private static boolean pause(Duration duration) {
+    private boolean pause(Duration duration) {
         try {
             Thread.sleep(duration);
             return true;

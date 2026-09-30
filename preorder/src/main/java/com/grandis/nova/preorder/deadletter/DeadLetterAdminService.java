@@ -14,7 +14,6 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -38,24 +37,24 @@ class DeadLetterAdminService {
     private final DeadLetterEventRepository events;
     private final DeadLetterRedrives redrives;
     private final Preorders preorders;
-    private final JsonMapper jsonMapper;
+    private final DeadLetterBodyParser bodyParser;
     private final TaskExecutor redriveExecutor;
     private final Clock clock;
 
     DeadLetterAdminService(DeadLetterEventRepository events, DeadLetterRedrives redrives, Preorders preorders,
-                           JsonMapper jsonMapper,
+                           DeadLetterBodyParser bodyParser,
                            @Qualifier(DeadLetterConfig.REDRIVE_EXECUTOR) TaskExecutor redriveExecutor, Clock clock) {
         this.events = events;
         this.redrives = redrives;
         this.preorders = preorders;
-        this.jsonMapper = jsonMapper;
+        this.bodyParser = bodyParser;
         this.redriveExecutor = redriveExecutor;
         this.clock = clock;
     }
 
     /** 없는 예약 id 로 거르면 빈 목록이다. */
     @Transactional(readOnly = true)
-    public OffsetPage<DeadLetterView> find(DeadLetterStatus status, String eventType, FailureReason failureReason,
+    public OffsetPage<DeadLetterListItem> find(DeadLetterStatus status, String eventType, FailureReason failureReason,
                                           String preorderToken, Long customerId, Instant from, Instant to,
                                           int page, int size) {
         Optional<Long> preorderId = Optional.empty();
@@ -65,20 +64,19 @@ class DeadLetterAdminService {
                 return OffsetPage.of(List.of(), page, size, 0);
             }
         }
-        DeadLetterFilter filter = new DeadLetterFilter(status, eventType, failureReason, preorderId.orElse(null),
-                customerId, from, to);
-        Page<DeadLetterEvent> found = events.findAll(filter.toSpecification(),
-                PageRequest.of(page, size, NEWEST_FIRST));
-        return OffsetPage.of(views(found.getContent()), page, size, found.getTotalElements());
+        Page<DeadLetterSummary> found = events.search(status, eventType, failureReason, preorderId.orElse(null),
+                customerId, from, to, PageRequest.of(page, size, NEWEST_FIRST));
+        return OffsetPage.of(listItems(found.getContent()), page, size, found.getTotalElements());
     }
 
+    /** 한 행이라 원문을 다시 읽어 지금 코드로 되돌릴 수 있는지 정확히 가른다. */
     @Transactional(readOnly = true)
     public DeadLetterView findOne(Long id) {
-        return views(List.of(find(id))).getFirst();
+        return view(find(id));
     }
 
     public DeadLetterView redrive(Long id, String requestedBy) {
-        return views(List.of(redrives.redrive(id, requestedBy))).getFirst();
+        return view(redrives.redrive(id, requestedBy));
     }
 
     /** @throws BusinessException DEAD_LETTER_NOT_FOUND · DEAD_LETTER_NOT_DISCARDABLE(OPEN 이 아님) */
@@ -89,13 +87,13 @@ class DeadLetterAdminService {
             throw new BusinessException(PreorderErrorCode.DEAD_LETTER_NOT_DISCARDABLE,
                     Map.of("reason", "status=" + event.getStatus()));
         }
-        return views(List.of(find(id))).getFirst();
+        return view(find(id));
     }
 
     /**
      * 대상을 골라 바로 돌려주고, 이 인스턴스가 초당 ratePerSecond 건씩 되돌린다(한 번에 최대 MAX_BATCH_SIZE).
      * 조건으로 고를 때 failureReason 을 비우면 PROCESSING_FAILED 만 — 되돌려도 같은 결과인 행이 앞을 막지 않게.
-     * 되돌리기를 기다리지 않거나 지금 코드로도 되돌릴 수 없는 원문, 없는 id 는 건너뛴 수로 센다.
+     * 되돌리기를 기다리지 않거나 저장된 분류로 되돌릴 수 없는 행, 없는 id 는 건너뛴 수로 센다. 원문은 보낼 때 한 건씩 다시 읽는다.
      */
     public BatchRedrive redriveBatch(List<Long> ids, String eventType, FailureReason failureReason, int ratePerSecond,
                                      String requestedBy) {
@@ -110,10 +108,9 @@ class DeadLetterAdminService {
             }
         }
         Instant staleBefore = staleBefore();
-        List<Long> targets = events.findAllById(candidates).stream()
-                .filter(event -> event.waitingForRedrive(staleBefore))
-                .filter(event -> DeadLetterBody.parse(jsonMapper, event.getBody()).redrivable())
-                .map(DeadLetterEvent::getId)
+        List<Long> targets = events.findSummaries(candidates).stream()
+                .filter(summary -> redrivable(summary, staleBefore))
+                .map(DeadLetterSummary::getId)
                 .sorted()
                 .toList();
         if (!targets.isEmpty()) {
@@ -152,15 +149,29 @@ class DeadLetterAdminService {
         return clock.instant().minus(DeadLetterRedrives.STALE_REDRIVE);
     }
 
-    private List<DeadLetterView> views(List<DeadLetterEvent> found) {
+    private boolean redrivable(DeadLetterSummary summary, Instant staleBefore) {
+        return summary.getStatus().waitingForRedrive(summary.getRedriveStartedAt(), staleBefore)
+                && summary.getFailureReason().redrivableFor(summary.getEventType());
+    }
+
+    private List<DeadLetterListItem> listItems(List<DeadLetterSummary> found) {
         Instant staleBefore = staleBefore();
         Map<Long, PreorderSnapshot> owners = preorders.findAllById(found.stream()
-                .map(DeadLetterEvent::getPreorderId).filter(Objects::nonNull).distinct().toList());
+                .map(DeadLetterSummary::getPreorderId).filter(Objects::nonNull).distinct().toList());
         return found.stream()
-                .map(event -> new DeadLetterView(event,
-                        event.getPreorderId() == null ? null : owners.get(event.getPreorderId()).preorderToken(),
-                        event.waitingForRedrive(staleBefore)
-                                && DeadLetterBody.parse(jsonMapper, event.getBody()).redrivable()))
+                .map(summary -> new DeadLetterListItem(summary, tokenOf(summary.getPreorderId(), owners),
+                        redrivable(summary, staleBefore)))
                 .toList();
+    }
+
+    private DeadLetterView view(DeadLetterEvent event) {
+        Map<Long, PreorderSnapshot> owners = event.getPreorderId() == null ? Map.of()
+                : preorders.findAllById(List.of(event.getPreorderId()));
+        return new DeadLetterView(event, tokenOf(event.getPreorderId(), owners),
+                event.waitingForRedrive(staleBefore()) && bodyParser.parse(event.getBody()).redrivable());
+    }
+
+    private String tokenOf(Long preorderId, Map<Long, PreorderSnapshot> owners) {
+        return preorderId == null ? null : owners.get(preorderId).preorderToken();
     }
 }

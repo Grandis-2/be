@@ -1,8 +1,9 @@
 package com.grandis.nova.preorder.deadletter;
 
 import org.springframework.data.domain.Limit;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -17,10 +18,42 @@ import static com.grandis.nova.preorder.deadletter.DeadLetterStatus.REDRIVEN;
 import static com.grandis.nova.preorder.deadletter.DeadLetterStatus.REDRIVING;
 
 /** 상태 전이는 모두 현재 상태를 조건으로 한 UPDATE 다. 영향 행이 0 이면 그 사이 다른 쪽이 바꾼 것이다. */
-interface DeadLetterEventRepository extends JpaRepository<DeadLetterEvent, Long>,
-        JpaSpecificationExecutor<DeadLetterEvent> {
+interface DeadLetterEventRepository extends JpaRepository<DeadLetterEvent, Long> {
+
+    /** 요약 칸. 원문(body)은 빼고 읽는다. */
+    String SUMMARY_COLUMNS = """
+            d.id as id, d.messageId as messageId, d.eventId as eventId, d.eventType as eventType,
+            d.preorderId as preorderId, d.customerId as customerId, d.failureReason as failureReason,
+            d.receiveCount as receiveCount, d.status as status, d.redriveStartedAt as redriveStartedAt,
+            d.redrivenFromId as redrivenFromId, d.sentAt as sentAt, d.createdAt as createdAt, d.updatedAt as updatedAt
+            """;
+
+    /** 요약 조건. 비운 조건은 거르지 않는다. 기간은 쌓인 시각 [from, to). */
+    String SEARCH_CONDITIONS = """
+             where (:status is null or d.status = :status)
+               and (:eventType is null or d.eventType = :eventType)
+               and (:failureReason is null or d.failureReason = :failureReason)
+               and (:preorderId is null or d.preorderId = :preorderId)
+               and (:customerId is null or d.customerId = :customerId)
+               and (:from is null or d.createdAt >= :from)
+               and (:to is null or d.createdAt < :to)
+            """;
 
     boolean existsBySourceQueueAndMessageId(String sourceQueue, String messageId);
+
+    /** 관리자 목록. 정렬은 pageable 로 준다. */
+    @Query(value = "select " + SUMMARY_COLUMNS + " from DeadLetterEvent d" + SEARCH_CONDITIONS,
+            countQuery = "select count(d) from DeadLetterEvent d" + SEARCH_CONDITIONS)
+    Page<DeadLetterSummary> search(@Param("status") DeadLetterStatus status, @Param("eventType") String eventType,
+                                   @Param("failureReason") FailureReason failureReason,
+                                   @Param("preorderId") Long preorderId, @Param("customerId") Long customerId,
+                                   @Param("from") Instant from, @Param("to") Instant to, Pageable pageable);
+
+    @Query("select " + SUMMARY_COLUMNS + " from DeadLetterEvent d where d.id in :ids")
+    List<DeadLetterSummary> findSummaries(@Param("ids") Collection<Long> ids);
+
+    @Query("select d.status from DeadLetterEvent d where d.id = :id")
+    Optional<DeadLetterStatus> findStatusById(@Param("id") Long id);
 
     /** 되돌리기 선점. OPEN 이거나, 보내다 죽어 staleBefore 전부터 REDRIVING 인 행만. */
     default int claimRedrive(Long id, String by, Instant now, Instant staleBefore) {

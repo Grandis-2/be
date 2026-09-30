@@ -14,7 +14,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * DB 에서 세야 하는 상태 지표 — 예약 상태별 수, 미발행 아웃박스 수와 그 최대 실패 횟수, 처리 안 한 DLQ 수와 가장 오래된 나이. 수집할 때마다 DB 를 묻지 않도록
+ * DB 에서 세야 하는 상태 지표 — 예약 상태별 수, 미발행 아웃박스 수와 그 최대 실패 횟수, 되돌리기를 기다리는 DLQ 수와 가장 오래된 나이. 수집할 때마다 DB 를 묻지 않도록
  * 주기적으로 세어 두고 게이지는 그 값을 읽는다. 여러 인스턴스가 같은 값을 내므로 대시보드에서는 한 인스턴스 값만 본다.
  */
 @Component
@@ -26,8 +26,8 @@ class StateGauges {
     private final AtomicLong unpublished = new AtomicLong();
     private final AtomicLong maxUnpublishedAttempts = new AtomicLong();
     private final DeadLetterBacklog deadLetterBacklog;
-    private final AtomicLong openDeadLetters = new AtomicLong();
-    private final AtomicLong oldestOpenDeadLetterSeconds = new AtomicLong();
+    private final AtomicLong waitingDeadLetters = new AtomicLong();
+    private final AtomicLong oldestWaitingDeadLetterSeconds = new AtomicLong();
 
     StateGauges(Preorders preorders, OutboxBacklog outboxBacklog, DeadLetterBacklog deadLetterBacklog,
                 MeterRegistry meterRegistry) {
@@ -45,8 +45,8 @@ class StateGauges {
         Gauge.builder("preorder.outbox.unpublished.max.attempts", maxUnpublishedAttempts, AtomicLong::get)
                 .register(meterRegistry);
         // 오래 방치된 DLQ 를 경보로 드러낸다
-        Gauge.builder("preorder.dlq.open", openDeadLetters, AtomicLong::get).register(meterRegistry);
-        Gauge.builder("preorder.dlq.open.oldest.age", oldestOpenDeadLetterSeconds, AtomicLong::get)
+        Gauge.builder("preorder.dlq.waiting", waitingDeadLetters, AtomicLong::get).register(meterRegistry);
+        Gauge.builder("preorder.dlq.waiting.oldest.age", oldestWaitingDeadLetterSeconds, AtomicLong::get)
                 .baseUnit("seconds").register(meterRegistry);
     }
 
@@ -58,7 +58,7 @@ class StateGauges {
         statusCounts.forEach((status, count) -> count.set(counts.getOrDefault(status, 0L)));
         unpublished.set(outboxBacklog.unpublishedCount());
         maxUnpublishedAttempts.set(outboxBacklog.maxUnpublishedAttempts());
-        openDeadLetters.set(deadLetterBacklog.waitingCount());
-        oldestOpenDeadLetterSeconds.set(deadLetterBacklog.oldestWaitingAge().toSeconds());
+        waitingDeadLetters.set(deadLetterBacklog.waitingCount());
+        oldestWaitingDeadLetterSeconds.set(deadLetterBacklog.oldestWaitingAge().toSeconds());
     }
 }

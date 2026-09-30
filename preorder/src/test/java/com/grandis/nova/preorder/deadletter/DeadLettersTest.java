@@ -14,6 +14,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -139,6 +140,37 @@ class DeadLettersTest {
         assertThat(events.findById(id).orElseThrow().getStatus()).isEqualTo(DeadLetterStatus.OPEN);
     }
 
+    @Test
+    void 보내다_멈춘_REDRIVING_은_1분이_지나야_되돌리기_대기로_센다() {
+        Long recent = claimed(ShopFixtures.unique());
+        Long stale = claimed(ShopFixtures.unique());
+        jdbcTemplate.update("UPDATE dead_letter_events SET redrive_started_at = redrive_started_at - INTERVAL 2 MINUTE"
+                + " WHERE id = ?", stale);
+        Instant staleBefore = Instant.now().minus(DeadLetterRedrives.STALE_REDRIVE);
+
+        List<Long> waiting = events.findWaitingIds(null, FailureReason.UNREADABLE_BODY, staleBefore, Integer.MAX_VALUE);
+
+        assertThat(waiting).contains(stale).doesNotContain(recent);
+        assertThat(events.findById(stale).orElseThrow().waitingForRedrive(staleBefore)).isTrue();
+        assertThat(events.findById(recent).orElseThrow().waitingForRedrive(staleBefore)).isFalse();
+        long before = events.countWaiting(staleBefore);
+        jdbcTemplate.update("UPDATE dead_letter_events SET redrive_started_at = redrive_started_at - INTERVAL 2 MINUTE"
+                + " WHERE id = ?", recent);
+        assertThat(events.countWaiting(staleBefore)).isEqualTo(before + 1);
+    }
+
+    @Test
+    void 보냄_기록_전에_또_DLQ_로_와도_앞선_행은_REDRIVE_FAILED_다() {
+        Long stillSending = claimed(ShopFixtures.unique());
+        String messageId = ShopFixtures.unique();
+
+        deadLetters.record(new IncomingDeadLetter(QUEUE, messageId, "not-json", 5, null, stillSending));
+
+        DeadLetterEvent failed = events.findById(stillSending).orElseThrow();
+        assertThat(failed.getStatus()).isEqualTo(DeadLetterStatus.REDRIVE_FAILED);
+        assertThat(failed.getRedrivenAt()).isNotNull();
+    }
+
     /** OPEN 으로 쌓고 선점(REDRIVING)까지 한 행. */
     private Long claimed(String messageId) {
         deadLetters.record(new IncomingDeadLetter(QUEUE, messageId, "not-json", 5, null, null));
@@ -162,7 +194,7 @@ class DeadLettersTest {
         return events.findById(id).orElseThrow();
     }
 
-    private static String externalJobSucceeded(String token) {
+    private String externalJobSucceeded(String token) {
         return """
                 {"eventId":"%s","eventType":"EXTERNAL_JOB_SUCCEEDED","aggregateType":"PREORDER_SYNC_JOB",
                  "aggregateId":1,"occurredAt":"2026-09-03T01:00:03.470Z",

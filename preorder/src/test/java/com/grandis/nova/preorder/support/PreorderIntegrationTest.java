@@ -17,7 +17,7 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 @SpringBootTest(properties = "nova.admission-ticket.secret=" + PreorderIntegrationTest.ADMISSION_TICKET_SECRET)
 @ActiveProfiles("test")
-@Import({MySqlTestConfig.class, SecurityTestConfig.class})
+@Import({MySqlTestConfig.class, SecurityTestConfig.class, DeadLetterTestConfig.class})
 public @interface PreorderIntegrationTest {
 
     /** 테스트 전용 입장권 비밀. 테스트 발급기(AdmissionTickets)가 같은 값으로 서명한다. */

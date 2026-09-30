@@ -35,7 +35,7 @@ record DeadLetterResponse(
         Instant updatedAt
 ) {
 
-    static DeadLetterResponse from(DeadLetterView view) {
+    public static DeadLetterResponse from(DeadLetterView view) {
         DeadLetterEvent event = view.event();
         return new DeadLetterResponse(event.getId(), event.getSourceQueue(), event.getMessageId(), event.getEventId(),
                 event.getEventType(), event.getAggregateType(), event.getAggregateId(), view.preorderToken(),

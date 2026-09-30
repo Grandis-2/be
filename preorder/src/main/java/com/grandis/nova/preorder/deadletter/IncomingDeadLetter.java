@@ -16,4 +16,9 @@ public record IncomingDeadLetter(
         Instant sentAt,
         Long redrivenFromId
 ) {
+
+    /** 앞선 행을 잇지 않는다(속성이 가리키는 행이 없을 때). */
+    IncomingDeadLetter withoutPrevious() {
+        return new IncomingDeadLetter(sourceQueue, messageId, body, receiveCount, sentAt, null);
+    }
 }
