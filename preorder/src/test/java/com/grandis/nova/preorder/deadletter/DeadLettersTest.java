@@ -11,6 +11,7 @@ import com.grandis.nova.preorder.support.ShopFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -106,6 +107,13 @@ class DeadLettersTest {
         assertThat(fixtures.count("SELECT COUNT(*) FROM dead_letter_events WHERE message_id = ?", messageId))
                 .isEqualTo(1);
         assertThat(outcomes.stream().filter(outcome -> outcome.succeeded() && outcome.value())).hasSize(1);
+        assertThat(outcomes).as("진 쪽은 이미 쌓임(false)이거나 UNIQUE 충돌이다 — 다른 예외는 안 된다")
+                .allSatisfy(outcome -> {
+                    if (!outcome.succeeded()) {
+                        assertThat(outcome.error()).isInstanceOf(DataIntegrityViolationException.class)
+                                .hasStackTraceContaining("uq_dead_letter_message");
+                    }
+                });
     }
 
     @Test
