@@ -2,18 +2,11 @@ package com.grandis.nova.preorder.config;
 
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.security.CurrentCustomerId;
-import com.grandis.nova.preorder.web.CurrentViewer;
-import io.swagger.v3.oas.models.Components;
-import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.examples.Example;
-import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.media.Content;
 import io.swagger.v3.oas.models.media.MediaType;
 import io.swagger.v3.oas.models.responses.ApiResponse;
-import io.swagger.v3.oas.models.security.SecurityRequirement;
-import io.swagger.v3.oas.models.security.SecurityScheme;
 import org.springdoc.core.customizers.GlobalOpenApiCustomizer;
-import org.springdoc.core.models.GroupedOpenApi;
 import org.springdoc.core.utils.SpringDocUtils;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty;
 import org.springframework.context.annotation.Bean;
@@ -23,47 +16,15 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * API 문서(dev 프로파일에서만 켜진다). 인증은 세션 토큰 헤더 하나로, Swagger UI 의 Authorize 에 토큰을 넣고 호출한다.
- * 문서는 사용자 · 관리자 · 서비스 간 셋으로 나눈다.
+ * preorder 전용 문서 보강. 스킴 · 그룹(/v3/api-docs/preorder) · 실패 봉투 · 켜고 끄기는 common:web 이 맡는다.
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnBooleanProperty("springdoc.api-docs.enabled")
 class OpenApiConfig {
 
-    private static final String BEARER_AUTH = "bearerAuth";
-
     static {
-        // 인증 주체는 토큰에서 채운다. 요청 파라미터로 문서에 나오지 않게 한다
-        SpringDocUtils.getConfig().addAnnotationsToIgnore(CurrentCustomerId.class, CurrentViewer.class);
-    }
-
-    @Bean
-    OpenAPI preorderOpenApi() {
-        return new OpenAPI()
-                .info(new Info().title("preorder API").version("v1")
-                        .description("사전예약 접수 · 조회 · 취소, 모집 일정 관리, 동기화 작업 재처리"))
-                .components(new Components().addSecuritySchemes(BEARER_AUTH, new SecurityScheme()
-                        .type(SecurityScheme.Type.HTTP)
-                        .scheme("bearer")
-                        .bearerFormat("JWT")
-                        .description("member 가 발급한 액세스 토큰(Bearer 접두 없이 입력)")))
-                .addSecurityItem(new SecurityRequirement().addList(BEARER_AUTH));
-    }
-
-    @Bean
-    GroupedOpenApi publicApi() {
-        return GroupedOpenApi.builder().group("public").displayName("사용자")
-                .pathsToMatch("/api/v1/**").pathsToExclude("/api/v1/admin/**").build();
-    }
-
-    @Bean
-    GroupedOpenApi adminApi() {
-        return GroupedOpenApi.builder().group("admin").displayName("관리자").pathsToMatch("/api/v1/admin/**").build();
-    }
-
-    @Bean
-    GroupedOpenApi internalApi() {
-        return GroupedOpenApi.builder().group("internal").displayName("서비스 간").pathsToMatch("/internal/**").build();
+        // 인증 주체는 토큰에서 채운다. common:security 의 애너테이션이라 여기서 문서 파라미터에서 뺀다
+        SpringDocUtils.getConfig().addAnnotationsToIgnore(CurrentCustomerId.class);
     }
 
     /** 인증이 필요한 요청 전부에 401 · 403 과 오류 봉투 예시를 붙인다. 공개 경로(보안 요구가 빈 것)는 제외. */

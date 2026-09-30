@@ -2,16 +2,19 @@ package com.grandis.nova.preorder.integration.catalog;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.testing.Concurrently.Outcome;
+import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.support.CatalogStubs;
-import com.grandis.nova.preorder.support.Concurrently.Outcome;
-import com.grandis.nova.preorder.support.Concurrently;
 import com.grandis.nova.preorder.support.DependencyGuards;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpInputMessage;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClientException;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -103,6 +106,16 @@ class CatalogReaderTest {
     }
 
     @Test
+    void 읽을_수_없는_응답은_재시도_안내가_아니라_연동_오류다() {
+        FakeCatalogClient client = new FakeCatalogClient();
+        client.unreadable = true;
+
+        assertThatThrownBy(() -> new CatalogReader(client, DependencyGuards.passThrough()).findOption(PRODUCT_ID, OPTION_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .isNotInstanceOf(BusinessException.class);
+    }
+
+    @Test
     void 비우면_다음_조회에서_다시_받는다() {
         FakeCatalogClient client = new FakeCatalogClient();
         CatalogReader reader = new CatalogReader(client, DependencyGuards.passThrough());
@@ -132,6 +145,7 @@ class CatalogReaderTest {
         volatile long delayMillis;
         volatile boolean notFound;
         volatile boolean unavailable;
+        volatile boolean unreadable;
         volatile HttpStatus errorStatus;
         volatile String optionStatus = "ACTIVE";
 
@@ -140,6 +154,10 @@ class CatalogReaderTest {
             calls.incrementAndGet();
             if (unavailable) {
                 throw new ResourceAccessException("connection refused");
+            }
+            if (unreadable) {
+                throw new RestClientException("본문 변환 실패",
+                        new HttpMessageNotReadableException("계약과 다른 본문", (HttpInputMessage) null));
             }
             if (errorStatus != null) {
                 throw errorStatus.is4xxClientError()

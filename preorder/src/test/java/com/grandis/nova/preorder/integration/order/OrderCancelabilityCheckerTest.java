@@ -7,7 +7,9 @@ import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.support.DependencyGuards;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpInputMessage;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
@@ -67,6 +69,16 @@ class OrderCancelabilityCheckerTest {
     @Test
     void 그_밖의_4xx_는_재시도_안내가_아니라_연동_오류다() {
         FakeOrderClient client = FakeOrderClient.failing(clientError(HttpStatus.BAD_REQUEST));
+
+        assertThatThrownBy(() -> new OrderCancelabilityChecker(client, DependencyGuards.passThrough()).requireCancelable(TOKEN, ACCESS_TOKEN))
+                .isInstanceOf(IllegalStateException.class)
+                .isNotInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void 읽을_수_없는_응답은_재시도_안내가_아니라_연동_오류다() {
+        FakeOrderClient client = FakeOrderClient.failing(new RestClientException("본문 변환 실패",
+                new HttpMessageNotReadableException("계약과 다른 본문", (HttpInputMessage) null)));
 
         assertThatThrownBy(() -> new OrderCancelabilityChecker(client, DependencyGuards.passThrough()).requireCancelable(TOKEN, ACCESS_TOKEN))
                 .isInstanceOf(IllegalStateException.class)

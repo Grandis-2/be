@@ -4,9 +4,10 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.LoadingCache;
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.web.client.InternalCallFailures;
 import com.grandis.nova.preorder.integration.Dependencies;
 import com.grandis.nova.preorder.integration.DependencyGuard;
-import com.grandis.nova.preorder.integration.InternalCallFailures;
+import com.grandis.nova.preorder.integration.DependencyUnavailableException;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
@@ -80,7 +81,7 @@ public class CatalogReader {
 
     /**
      * 실패는 둘로 가른다.
-     * - 404 외의 4xx: 다시 불러도 같은 결과인 연동 오류(계약 불일치 등)다. 사용자 잘못이 아니므로
+     * - 404 외의 4xx · 읽을 수 없는 응답: 다시 불러도 같은 결과인 연동 오류(계약 불일치 등)다. 사용자 잘못이 아니므로
      *   catalog 의 상태를 그대로 돌려주지 않고 500 으로 둔다(응답 문구는 공통 처리기가 숨긴다).
      * - 그 밖(타임아웃 · 연결 실패 · 5xx): 일시 장애라 503 으로 다시 시도를 안내한다.
      */
@@ -92,7 +93,10 @@ public class CatalogReader {
             if (cause instanceof HttpClientErrorException clientError) {
                 throw InternalCallFailures.integrationError(DEPENDENCY, "productId=" + productId, clientError);
             }
-            throw InternalCallFailures.unavailable(DEPENDENCY, "productId=" + productId, e);
+            if (cause instanceof RestClientException restError && InternalCallFailures.isUnreadableResponse(restError)) {
+                throw InternalCallFailures.unreadableResponse(DEPENDENCY, "productId=" + productId, restError);
+            }
+            throw DependencyUnavailableException.callFailed(DEPENDENCY, "productId=" + productId, e);
         }
     }
 

@@ -3,10 +3,11 @@ package com.grandis.nova.preorder.integration.order;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.security.BearerTokens;
+import com.grandis.nova.common.web.client.InternalCallFailures;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.integration.Dependencies;
 import com.grandis.nova.preorder.integration.DependencyGuard;
-import com.grandis.nova.preorder.integration.InternalCallFailures;
+import com.grandis.nova.preorder.integration.DependencyUnavailableException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
@@ -19,7 +20,7 @@ import java.util.Map;
  *
  * - 401: 사용자 토큰 문제라 사용자에게도 401
  * - 403: 토큰 주인이 주문 회원이 아니다. 남의 것은 존재를 숨기므로 404
- * - 그 밖의 4xx: 다시 불러도 같은 결과인 연동 오류 — 500(문구는 공통 처리기가 숨긴다)
+ * - 그 밖의 4xx · 읽을 수 없는 응답: 다시 불러도 같은 결과인 연동 오류 — 500(문구는 공통 처리기가 숨긴다)
  * - 타임아웃 · 연결 실패 · 5xx: 일시 장애 — 503, 예약 상태는 바뀌지 않는다
  */
 @Component
@@ -59,7 +60,10 @@ public class OrderCancelabilityChecker {
             }
             throw InternalCallFailures.integrationError(DEPENDENCY, "preorderId=" + preorderToken, e);
         } catch (RestClientException e) {
-            throw InternalCallFailures.unavailable(DEPENDENCY, "preorderId=" + preorderToken, e);
+            if (InternalCallFailures.isUnreadableResponse(e)) {
+                throw InternalCallFailures.unreadableResponse(DEPENDENCY, "preorderId=" + preorderToken, e);
+            }
+            throw DependencyUnavailableException.callFailed(DEPENDENCY, "preorderId=" + preorderToken, e);
         }
         if (answer == null) {
             throw new IllegalStateException("order 가 취소 가능 판정 없이 응답했다: preorderId=" + preorderToken);

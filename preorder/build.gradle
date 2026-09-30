@@ -4,7 +4,6 @@ apply plugin: 'org.springframework.boot'
 ext {
     awsSdkVersion = '2.55.6'
     flociTestcontainersVersion = '2.16.1'
-    springdocVersion = '3.1.1'
     archunitVersion = '1.5.1'
     resilience4jVersion = '2.4.0'
 }
@@ -15,12 +14,14 @@ dependencies {
     implementation project(':common:message')
     // 액세스 토큰 검증(JWKS) · 인증 주체. 폐기 확인에 Redis 를 쓴다(common:redis)
     implementation project(':common:security')
+    // 저장 해상도(마이크로초) 시계 storageClock(@Primary) · JPA Auditing 을 자동설정으로 켠다. @EnableJpaAuditing 을 따로 켜지 않는다.
+    implementation project(':common:jpa')
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     // 다른 서비스 내부 API 는 HTTP Interface(@HttpExchange) + RestClient 로 부른다.
     implementation 'org.springframework.boot:spring-boot-starter-restclient'
-    // API 문서(OpenAPI · Swagger UI). 기본은 꺼 두고 dev 프로파일에서만 켠다
-    implementation "org.springdoc:springdoc-openapi-starter-webmvc-ui:${springdocVersion}"
+    // API 문서 공통 설정 · 노출 정책은 common:web 이 맡는다. 여기서는 401 · 403 예시 커스터마이저만 쓴다(버전은 common:web 의 BOM)
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui'
     // 내부 호출(catalog · order) 장애 대응: 재시도 · 서킷 브레이커 · 동시 호출 상한. 설정 · 지표는 스타터가 맡는다
     implementation "io.github.resilience4j:resilience4j-spring-boot4:${resilience4jVersion}"
     implementation 'com.github.ben-manes.caffeine:caffeine'
@@ -42,6 +43,8 @@ dependencies {
     testImplementation 'org.testcontainers:testcontainers-mysql'
     // SQS 연계는 로컬 AWS 에뮬레이터 Floci 로 검증한다.
     testImplementation "io.floci:testcontainers-floci:${flociTestcontainersVersion}"
+    // 동시성 테스트 도우미(Concurrently)
+    testImplementation project(':common:testing')
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     // 테스트는 기본적으로 지표 내보내기를 끈다. Prometheus 엔드포인트를 확인하는 테스트만 켠다(@AutoConfigureMetrics).
     testImplementation 'org.springframework.boot:spring-boot-micrometer-metrics-test'
