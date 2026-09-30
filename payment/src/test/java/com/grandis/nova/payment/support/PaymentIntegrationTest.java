@@ -23,7 +23,14 @@ import java.lang.annotation.Target;
         "spring.flyway.schemas=shop",
         "spring.flyway.create-schemas=false",
         "spring.flyway.clean-disabled=true",
-        "spring.flyway.validate-migration-naming=true"
+        "spring.flyway.validate-migration-naming=true",
+        // 토스 가맹점 자격 증명 · 주소 · 시간 예산은 필수라(없으면 기동 실패) 운영 값으로 채운다.
+        // 통합 테스트는 토스를 부르지 않는다(client.toss 테스트가 따로 본다)
+        "nova.payment.toss.secret-key=integration-test-unused",
+        "spring.http.serviceclient.toss.base-url=https://api.tosspayments.com",
+        "spring.http.serviceclient.toss.connect-timeout=3s",
+        "spring.http.serviceclient.toss.read-timeout=60s",
+        "spring.http.serviceclient.toss.redirects=dont-follow"
 })
 @Import(MySqlContainerConfig.class)
 public @interface PaymentIntegrationTest {
