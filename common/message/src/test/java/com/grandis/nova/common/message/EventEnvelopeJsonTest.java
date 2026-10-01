@@ -1,12 +1,14 @@
 package com.grandis.nova.common.message;
 
 import org.junit.jupiter.api.Test;
+import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 봉투의 JSON 모양을 고정한다. preorder · order · 대기열(별도 저장소)이 이 모양을 읽는다 —
@@ -42,5 +44,22 @@ class EventEnvelopeJsonTest {
         assertThat(envelope.aggregateId()).isEqualTo(7L);
         assertThat(envelope.occurredAt()).isEqualTo(Instant.parse("2026-10-01T01:02:03.123456Z"));
         assertThat(envelope.payload().get("cancelSequence").asLong()).isEqualTo(3L);
+    }
+
+    /** 깨진 본문은 예외로 올라간다 — 소비기가 지우지 않아 재수신 한도를 넘으면 DLQ 로 간다. 조용히 빈 봉투가 되면 안 된다. */
+    @Test
+    void 잘린_본문은_풀지_않는다() {
+        String truncated = "{\"eventId\":\"e-1\",\"eventType\":\"PREORDER_CANCEL_REQUESTED\",\"aggregateId\":7,";
+
+        assertThatThrownBy(() -> mapper.readValue(truncated, EventEnvelope.class)).isInstanceOf(JacksonException.class);
+    }
+
+    @Test
+    void 시각이_ISO_형식이_아니면_풀지_않는다() {
+        String body = """
+                {"eventId":"e-1","eventType":"PREORDER_CANCEL_REQUESTED","aggregateType":"PREORDER","aggregateId":7,
+                 "occurredAt":"2026-10-01 01:02:03","payload":{}}""";
+
+        assertThatThrownBy(() -> mapper.readValue(body, EventEnvelope.class)).isInstanceOf(JacksonException.class);
     }
 }

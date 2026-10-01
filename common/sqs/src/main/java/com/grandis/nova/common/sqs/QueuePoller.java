@@ -54,8 +54,12 @@ public abstract class QueuePoller implements SmartLifecycle {
     /** 메시지 하나를 끝낸다(지우기 · 다시 보이기 · 적재 등). 새는 예외 · Error 는 남기고 같은 묶음의 다음 메시지로 넘어간다. */
     protected abstract void handle(String queueUrl, Message message);
 
+    /** 이미 돌고 있으면 그대로 둔다 — 컨텍스트 재시작 등으로 다시 불려도 작업이 concurrency 보다 늘지 않게. */
     @Override
-    public void start() {
+    public synchronized void start() {
+        if (running) {
+            return;
+        }
         running = true;
         for (int i = 0; i < settings.concurrency(); i++) {
             liveWorkers.incrementAndGet();
@@ -68,7 +72,7 @@ public abstract class QueuePoller implements SmartLifecycle {
      * 먼저 멈춘다. 시간 안에 끝나지 않으면 남기고 인터럽트한다 — 못 지운 메시지는 가시성 시간 뒤 다시 받는다.
      */
     @Override
-    public void stop() {
+    public synchronized void stop() {
         running = false;
         for (Thread worker : workers) {
             try {

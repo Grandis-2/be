@@ -22,7 +22,8 @@ public record QueuePollerSettings(
     private static final Duration MAX_VISIBILITY = Duration.ofHours(12);
 
     public QueuePollerSettings {
-        if (queue == null || queue.isBlank() || concurrency < 1 || maxMessages < 1 || maxMessages > 10
+        if (queue == null || queue.isBlank() || visibility == null || backoffBase == null || backoffMax == null
+                || concurrency < 1 || maxMessages < 1 || maxMessages > 10
                 || waitSeconds < 0 || waitSeconds > 20
                 || visibility.compareTo(Duration.ofSeconds(1)) < 0 || visibility.compareTo(MAX_VISIBILITY) > 0
                 || !backoffBase.isPositive() || backoffBase.compareTo(backoffMax) > 0

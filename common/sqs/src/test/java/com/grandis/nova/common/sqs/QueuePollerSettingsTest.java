@@ -34,6 +34,20 @@ class QueuePollerSettingsTest {
                 Duration.ofSeconds(5), Duration.ofMinutes(5))).isInstanceOf(IllegalArgumentException.class);
     }
 
+    /** 직접 만드는 서비스도 NPE 대신 범위 설명이 담긴 오류를 받는다. */
+    @Test
+    void 대기_시간이_없으면_같은_진단_메시지로_막는다() {
+        assertThatThrownBy(() -> new QueuePollerSettings("order-events", 1, 20, 10, null,
+                Duration.ofSeconds(5), Duration.ofMinutes(5)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("visibility");
+        assertThatThrownBy(() -> new QueuePollerSettings("order-events", 1, 20, 10, Duration.ofMinutes(5),
+                null, Duration.ofMinutes(5)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("backoff-base");
+        assertThatThrownBy(() -> new QueuePollerSettings("order-events", 1, 20, 10, Duration.ofMinutes(5),
+                Duration.ofSeconds(5), null))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("backoff-max");
+    }
+
     private static QueuePollerSettings settings(int maxMessages, int waitSeconds, Duration visibility) {
         return new QueuePollerSettings("order-events", 1, waitSeconds, maxMessages, visibility,
                 Duration.ofSeconds(5), Duration.ofMinutes(5));
