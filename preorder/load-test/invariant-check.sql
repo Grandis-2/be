@@ -12,7 +12,7 @@ SELECT
     COALESCE(MAX(p.queue_position), 0) - COUNT(*)         AS position_gaps,
     (SELECT c.next_queue_position - 1 FROM preorder_campaigns c WHERE c.product_id = @product_id)
         - COUNT(*)                                        AS issued_position_mismatch,
-    COUNT(*) - COUNT(DISTINCT p.admission_ticket_id)      AS duplicate_tickets,
+    COUNT(p.admission_ticket_id) - COUNT(DISTINCT p.admission_ticket_id) AS duplicate_tickets,
     (SELECT COUNT(*) FROM preorder_sync_jobs j JOIN preorders q ON q.id = j.preorder_id
       WHERE q.product_id = @product_id AND j.job_type = 'REGISTER') - COUNT(*)
                                                           AS register_job_mismatch,
