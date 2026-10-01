@@ -163,6 +163,25 @@ CREATE TABLE `order_items` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `order_outbox_events` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `event_id` char(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  `aggregate_type` varchar(30) NOT NULL,
+  `aggregate_id` bigint NOT NULL,
+  `event_type` varchar(50) NOT NULL,
+  `payload` json NOT NULL,
+  `publish_attempts` int NOT NULL DEFAULT '0',
+  `lease_until` datetime(6) DEFAULT NULL,
+  `created_at` datetime(6) NOT NULL,
+  `published_at` datetime(6) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_order_outbox_event_id` (`event_id`),
+  KEY `ix_order_outbox_unpublished` (`published_at`,`publish_attempts`,`id`),
+  CONSTRAINT `ck_order_outbox_attempts` CHECK ((`publish_attempts` >= 0))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
 CREATE TABLE `orders` (
   `id` bigint NOT NULL AUTO_INCREMENT,
   `order_token` char(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
