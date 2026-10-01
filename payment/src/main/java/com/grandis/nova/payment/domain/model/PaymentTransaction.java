@@ -119,15 +119,16 @@ public record PaymentTransaction(
      *
      * @param expectedTarget 호출자가 말한 대상. 승인 요청의 결제창 번호가 그 대상의 것인지 여기서 대조한다 —
      *                       호출자(order · draw)마다 기억하게 두면 한 곳만 빠뜨려도 남의 결제창으로 승인된다
+     * @param expectedAmount 호출자의 저장 금액(주문 총액 · 응모비). 결제창을 열 때의 금액은 호출자가 주장한 값이라 여기서 다시 대조한다
      * @throws PaymentTargetMismatchException 다른 대상의 거래다. 상태 · 금액보다 먼저 본다(남의 거래를 떠볼 수 없게)
-     * @throws PaymentAmountMismatchException 시작할 수 있는데 금액이 결제창을 열 때와 다르다
+     * @throws PaymentAmountMismatchException 시작할 수 있는데 결제창을 열 때의 금액이 호출자의 저장 금액과 다르다
      */
-    public Optional<TransactionStatus> start(PaymentTarget expectedTarget, Money requestedAmount) {
+    public Optional<TransactionStatus> start(PaymentTarget expectedTarget, Money expectedAmount) {
         if (!target.equals(expectedTarget)) {
             throw new PaymentTargetMismatchException(id);
         }
         Optional<TransactionStatus> next = status.start(type);
-        if (next.isPresent() && !amount.equals(requestedAmount)) {
+        if (next.isPresent() && !amount.equals(expectedAmount)) {
             throw new PaymentAmountMismatchException(id);
         }
         return next;

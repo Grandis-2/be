@@ -10,6 +10,9 @@ import java.lang.annotation.Target;
 
 /**
  * MySQL 8.4 + Flyway 마이그레이션 위에서 도는 통합 테스트. application.yml 은 커밋하지 않으므로 운영과 같아야 하는 값을 여기서 준다.
+ *
+ * 인증: JWT 서명 키는 {@link TestJwt} 가 실행마다 만든다. Redis 는 띄우지 않는다 — 토큰을 싣는 테스트는 RevocationChecker 를
+ * 대역으로 바꾼다. 닫는 경로 목록은 application.yml.example 과 같다.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
@@ -30,8 +33,15 @@ import java.lang.annotation.Target;
         "spring.http.serviceclient.toss.base-url=https://api.tosspayments.com",
         "spring.http.serviceclient.toss.connect-timeout=3s",
         "spring.http.serviceclient.toss.read-timeout=60s",
-        "spring.http.serviceclient.toss.redirects=dont-follow"
+        "spring.http.serviceclient.toss.redirects=dont-follow",
+        "jwt.issuer=nova-test",
+        "jwt.access-token-validity=30m",
+        "jwt.refresh-token-validity=14d",
+        "auth.revocation-check.fail-closed-paths[0]=/api/v1/admin/**",
+        "auth.revocation-check.fail-closed-paths[1]=/api/v1/session/refresh",
+        "auth.revocation-check.fail-closed-paths[2]=/api/v1/me/**",
+        "auth.revocation-check.fail-closed-paths[3]=/internal/**"
 })
-@Import(MySqlContainerConfig.class)
+@Import({MySqlContainerConfig.class, TestJwt.class})
 public @interface PaymentIntegrationTest {
 }
