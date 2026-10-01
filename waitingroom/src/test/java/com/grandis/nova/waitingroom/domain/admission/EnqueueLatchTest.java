@@ -102,7 +102,11 @@ class EnqueueLatchTest {
         void 상한을_넘겨_동시에_찍어도_크기는_상한_근처로_묶이고_예외가_없다() throws Exception {
             EnqueueLatch latch = EnqueueLatch.covering(4, Duration.ofSeconds(5));
 
-            concurrently(i -> latch.mark("p" + i, 100));
+            // 라운드마다 새 키를 넣어 128개 — 비우는 처리가 없으면 크기가 128 이 되어 단언이 깨진다
+            for (int round = 0; round < 4; round++) {
+                int offset = round * THREADS;
+                concurrently(i -> latch.mark("p" + (offset + i), 100));
+            }
 
             assertThat(latch.size()).isLessThanOrEqualTo(4 + THREADS);
             latch.mark("last", 100);
