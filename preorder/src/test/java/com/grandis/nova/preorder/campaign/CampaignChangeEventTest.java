@@ -1,5 +1,8 @@
 package com.grandis.nova.preorder.campaign;
 
+import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.testing.Concurrently;
+import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.preorder.campaign.application.PreorderCampaignAdminService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.support.CatalogStubs;
@@ -7,15 +10,19 @@ import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -76,6 +83,38 @@ class CampaignChangeEventTest {
         assertThat(scheduleVersion(soon.productId())).isZero();
     }
 
+    @RepeatedTest(3)
+    void 일정_변경과_판매_중지가_동시에_와도_번호는_1씩_오르고_이벤트마다_그때의_일정이_적힌다() throws Exception {
+        Instant opensAt = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.SECONDS);
+        PreorderProduct product = fixtures.preorderProduct(opensAt, opensAt.plusSeconds(3600));
+        Long productId = product.productId();
+        CatalogStubs.stubPreorderProduct(catalogClient, productId, CatalogStubs.activeOption(product.optionId()));
+        Instant closedAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
+
+        List<Outcome<Object>> outcomes = Concurrently.run(5, i -> () -> {
+            if (i == 0) {
+                campaigns.closeNow(productId, closedAt);
+                return null;
+            }
+            Instant changed = opensAt.plusSeconds(600L * i);
+            return service.upsertCampaign(productId, changed, changed.plusSeconds(3600));
+        });
+
+        // 판매 중지 뒤에 잠금을 얻은 일정 변경은 오픈 뒤 변경 금지(409)로 실패한다
+        assertThat(outcomes.getFirst().succeeded()).isTrue();
+        assertThat(outcomes).filteredOn(outcome -> !outcome.succeeded())
+                .allMatch(outcome -> outcome.error() instanceof BusinessException);
+        long changes = outcomes.stream().filter(Outcome::succeeded).count();
+        List<Map<String, Object>> events = events(productId);
+        assertThat(events).extracting(event -> event.get("version"))
+                .containsExactlyElementsOf(LongStream.rangeClosed(1, changes).boxed().toList());
+        assertThat(events).extracting(event -> event.get("change")).containsOnlyOnce("CLOSED");
+        assertThat(scheduleVersion(productId)).isEqualTo(changes);
+        Map<String, Object> last = events.getLast();
+        assertThat(last.get("opensAt")).isEqualTo(utc(productId, "opens_at").toString());
+        assertThat(last.get("closesAt")).isEqualTo(utc(productId, "closes_at").toString());
+    }
+
     @Test
     void 판매_중지는_실제로_닫았을_때만_적는다() {
         Instant now = Instant.now();
@@ -124,6 +163,12 @@ class CampaignChangeEventTest {
                    AND aggregate_id = ?
                  ORDER BY id
                 """, productId);
+    }
+
+    /** DB 는 UTC 벽시계 시각을 담는다. */
+    private Instant utc(Long productId, String column) {
+        return jdbcTemplate.queryForObject("SELECT " + column + " FROM preorder_campaigns WHERE product_id = ?",
+                LocalDateTime.class, productId).toInstant(ZoneOffset.UTC);
     }
 
     private long scheduleVersion(Long productId) {
