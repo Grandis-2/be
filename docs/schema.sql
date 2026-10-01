@@ -68,6 +68,51 @@ CREATE TABLE `customers` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `dead_letter_events` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `source_queue` varchar(80) NOT NULL,
+  `message_id` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  `event_id` char(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL,
+  `event_type` varchar(50) DEFAULT NULL,
+  `aggregate_type` varchar(30) DEFAULT NULL,
+  `aggregate_id` bigint DEFAULT NULL,
+  `preorder_id` bigint DEFAULT NULL,
+  `customer_id` bigint DEFAULT NULL,
+  `body` mediumtext NOT NULL,
+  `failure_reason` varchar(30) NOT NULL,
+  `receive_count` int NOT NULL,
+  `sent_at` datetime(6) DEFAULT NULL,
+  `redriven_from_id` bigint DEFAULT NULL,
+  `status` varchar(20) NOT NULL,
+  `redrive_requested_by` varchar(64) DEFAULT NULL,
+  `redrive_started_at` datetime(6) DEFAULT NULL,
+  `redriven_at` datetime(6) DEFAULT NULL,
+  `outcome_at` datetime(6) DEFAULT NULL,
+  `discarded_by` varchar(64) DEFAULT NULL,
+  `discarded_at` datetime(6) DEFAULT NULL,
+  `discard_note` varchar(500) DEFAULT NULL,
+  `created_at` datetime(6) NOT NULL,
+  `updated_at` datetime(6) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_dead_letter_message` (`source_queue`,`message_id`),
+  KEY `ix_dead_letter_status` (`status`,`created_at`),
+  KEY `ix_dead_letter_type` (`event_type`,`created_at`),
+  KEY `ix_dead_letter_preorder` (`preorder_id`),
+  KEY `ix_dead_letter_customer` (`customer_id`),
+  KEY `fk_dead_letter_redriven_from` (`redriven_from_id`),
+  CONSTRAINT `fk_dead_letter_preorder` FOREIGN KEY (`preorder_id`) REFERENCES `preorders` (`id`),
+  CONSTRAINT `fk_dead_letter_redriven_from` FOREIGN KEY (`redriven_from_id`) REFERENCES `dead_letter_events` (`id`),
+  CONSTRAINT `ck_dead_letter_discarded` CHECK (((`status` = _utf8mb4'DISCARDED') = ((`discarded_at` is not null) and (`discarded_by` is not null) and (`discard_note` is not null)))),
+  CONSTRAINT `ck_dead_letter_outcome` CHECK (((`status` in (_utf8mb4'SUCCEEDED',_utf8mb4'REDRIVE_FAILED')) = (`outcome_at` is not null))),
+  CONSTRAINT `ck_dead_letter_reason` CHECK ((`failure_reason` in (_utf8mb4'UNREADABLE_BODY',_utf8mb4'UNKNOWN_EVENT_TYPE',_utf8mb4'PROCESSING_FAILED'))),
+  CONSTRAINT `ck_dead_letter_receive_count` CHECK ((`receive_count` >= 0)),
+  CONSTRAINT `ck_dead_letter_redrive_started` CHECK (((`status` in (_utf8mb4'REDRIVING',_utf8mb4'REDRIVEN',_utf8mb4'SUCCEEDED',_utf8mb4'REDRIVE_FAILED')) = ((`redrive_started_at` is not null) and (`redrive_requested_by` is not null)))),
+  CONSTRAINT `ck_dead_letter_redriven` CHECK (((`status` not in (_utf8mb4'REDRIVEN',_utf8mb4'SUCCEEDED',_utf8mb4'REDRIVE_FAILED')) or (`redriven_at` is not null))),
+  CONSTRAINT `ck_dead_letter_status` CHECK ((`status` in (_utf8mb4'OPEN',_utf8mb4'REDRIVING',_utf8mb4'REDRIVEN',_utf8mb4'SUCCEEDED',_utf8mb4'REDRIVE_FAILED',_utf8mb4'DISCARDED')))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
 CREATE TABLE `option_inventories` (
   `option_id` bigint NOT NULL,
   `stock_total` int NOT NULL DEFAULT '0',
@@ -167,6 +212,7 @@ CREATE TABLE `outbox_events` (
   `event_type` varchar(50) NOT NULL,
   `payload` json NOT NULL,
   `publish_attempts` int NOT NULL DEFAULT '0',
+  `lease_until` datetime(6) DEFAULT NULL,
   `created_at` datetime(6) NOT NULL,
   `published_at` datetime(6) DEFAULT NULL,
   PRIMARY KEY (`id`),
@@ -237,6 +283,7 @@ CREATE TABLE `preorder_campaigns` (
   `product_id` bigint NOT NULL,
   `opens_at` datetime(6) NOT NULL,
   `closes_at` datetime(6) NOT NULL,
+  `schedule_version` bigint NOT NULL DEFAULT '0',
   `next_queue_position` bigint NOT NULL DEFAULT '1',
   `open_notified_at` datetime(6) DEFAULT NULL,
   `created_at` datetime(6) NOT NULL,
