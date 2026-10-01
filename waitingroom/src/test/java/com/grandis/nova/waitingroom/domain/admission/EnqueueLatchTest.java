@@ -1,8 +1,17 @@
 package com.grandis.nova.waitingroom.domain.admission;
 
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.function.IntConsumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -57,6 +66,70 @@ class EnqueueLatchTest {
         latch.mark("c", 100);
         assertThat(latch.size()).isEqualTo(1);
         assertThat(latch.latched("c", 100)).isTrue();
+    }
+
+    @Nested
+    class 동시_호출 {
+
+        static final int THREADS = 32;
+
+        @Test
+        void 같은_모델을_동시에_찍어도_걸리고_뒤에_찍은_것이_수명을_늘리지_않는다() throws Exception {
+            EnqueueLatch latch = EnqueueLatch.covering(10, Duration.ofSeconds(5));
+
+            concurrently(i -> latch.mark("p1", 100 + i % 3));
+
+            assertThat(latch.latched("p1", 102)).isTrue();
+            assertThat(latch.latched("p1", 108)).as("처음 찍힌 시각(100~102) + 수명 6초면 풀린다").isFalse();
+        }
+
+        @Test
+        void 상한_안에서는_동시에_찍은_모든_모델이_걸리고_조회와_섞여도_풀리지_않는다() throws Exception {
+            EnqueueLatch latch = EnqueueLatch.covering(THREADS, Duration.ofSeconds(5));
+
+            concurrently(i -> {
+                latch.mark("p" + i, 100);
+                latch.latched("p" + ((i + 1) % THREADS), 101);
+            });
+
+            for (int i = 0; i < THREADS; i++) {
+                assertThat(latch.latched("p" + i, 101)).as("p" + i).isTrue();
+            }
+        }
+
+        /** 넘치면 통째로 비우는 설계라 다른 스레드가 비운 키는 남지 않을 수 있다. 크기가 묶이고 깨지지 않는 것만 본다. */
+        @Test
+        void 상한을_넘겨_동시에_찍어도_크기는_상한_근처로_묶이고_예외가_없다() throws Exception {
+            EnqueueLatch latch = EnqueueLatch.covering(4, Duration.ofSeconds(5));
+
+            concurrently(i -> latch.mark("p" + i, 100));
+
+            assertThat(latch.size()).isLessThanOrEqualTo(4 + THREADS);
+            latch.mark("last", 100);
+            assertThat(latch.latched("last", 100)).isTrue();
+        }
+
+        private void concurrently(IntConsumer task) throws Exception {
+            CountDownLatch start = new CountDownLatch(1);
+            ExecutorService pool = Executors.newFixedThreadPool(THREADS);
+            try {
+                List<Future<?>> results = new ArrayList<>();
+                for (int i = 0; i < THREADS; i++) {
+                    int index = i;
+                    results.add(pool.submit(() -> {
+                        start.await();
+                        task.accept(index);
+                        return null;
+                    }));
+                }
+                start.countDown();
+                for (Future<?> result : results) {
+                    result.get(5, TimeUnit.SECONDS);
+                }
+            } finally {
+                pool.shutdownNow();
+            }
+        }
     }
 
     @Test
