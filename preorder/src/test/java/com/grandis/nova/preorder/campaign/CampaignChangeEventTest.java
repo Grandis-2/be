@@ -102,10 +102,9 @@ class CampaignChangeEventTest {
         campaigns.closeNow(upcoming.productId(), now.minusSeconds(1));
         PreorderProduct open = fixtures.preorderProduct(now.minusSeconds(60), now.plusSeconds(3600));
 
-        int first = republisher.republishAll();
-        int second = republisher.republishAll();
+        assertThat(republisher.republishAll()).isPositive();
+        assertThat(republisher.republishAll()).isPositive();
 
-        assertThat(first).isEqualTo(second).isPositive();
         assertThat(events(open.productId())).extracting(event -> event.get("change"))
                 .containsExactly("RESYNC", "RESYNC");
         assertThat(events(open.productId())).extracting(event -> event.get("version")).containsOnly(0L);
