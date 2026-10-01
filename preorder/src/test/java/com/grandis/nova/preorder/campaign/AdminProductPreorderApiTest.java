@@ -22,8 +22,10 @@ import java.time.LocalDateTime;
 import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -224,6 +226,18 @@ class AdminProductPreorderApiTest {
                         .with(admin()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
+    }
+
+    @Test
+    void 전체_재발행은_관리자만_202_와_건수() throws Exception {
+        Instant opensAt = Instant.now().plusSeconds(3600);
+        fixtures.preorderProduct(opensAt, opensAt.plusSeconds(3600));
+
+        mockMvc.perform(post("/api/v1/admin/preorders/campaigns/republish").with(admin()))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.data.published").value(greaterThanOrEqualTo(1)));
+        mockMvc.perform(post("/api/v1/admin/preorders/campaigns/republish").with(customer(1024L)))
+                .andExpect(status().isForbidden());
     }
 
     @Test

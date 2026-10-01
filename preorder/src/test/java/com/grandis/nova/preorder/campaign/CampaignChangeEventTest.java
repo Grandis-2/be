@@ -30,6 +30,9 @@ class CampaignChangeEventTest {
     Campaigns campaigns;
 
     @Autowired
+    CampaignRepublisher republisher;
+
+    @Autowired
     JdbcTemplate jdbcTemplate;
 
     @MockitoBean
@@ -77,6 +80,26 @@ class CampaignChangeEventTest {
         assertThat(events.getFirst().get("version")).as("번호를 매기기 전 회차(0)에서 오른다").isEqualTo(1L);
         assertThat(events(ended.productId())).isEmpty();
         assertThat(scheduleVersion(ended.productId())).isZero();
+    }
+
+    @Test
+    void 전체_재발행은_마감_전_회차마다_지금_일정과_번호를_다시_적는다() {
+        Instant now = Instant.now();
+        PreorderProduct upcoming = fixtures.preorderProduct(now.plusSeconds(3600), now.plusSeconds(7200));
+        PreorderProduct ended = fixtures.preorderProduct(now.minusSeconds(7200), now.minusSeconds(3600));
+        campaigns.closeNow(upcoming.productId(), now.minusSeconds(1));
+        PreorderProduct open = fixtures.preorderProduct(now.minusSeconds(60), now.plusSeconds(3600));
+
+        int first = republisher.republishAll();
+        int second = republisher.republishAll();
+
+        assertThat(first).isEqualTo(second).isPositive();
+        assertThat(events(open.productId())).extracting(event -> event.get("change"))
+                .containsExactly("RESYNC", "RESYNC");
+        assertThat(events(open.productId())).extracting(event -> event.get("version")).containsOnly(0L);
+        assertThat(events(upcoming.productId())).as("닫힌 회차는 다시 보내지 않는다")
+                .extracting(event -> event.get("change")).containsExactly("CLOSED");
+        assertThat(events(ended.productId())).isEmpty();
     }
 
     private List<Map<String, Object>> events(Long productId) {
