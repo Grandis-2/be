@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
@@ -26,11 +27,14 @@ class PreorderCampaignWriter {
 
     private final PreorderCampaignRepository campaigns;
     private final ShipmentBatchRepository batches;
+    private final CampaignProperties properties;
     private final Clock clock;
 
-    PreorderCampaignWriter(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches, Clock clock) {
+    PreorderCampaignWriter(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
+                           CampaignProperties properties, Clock clock) {
         this.campaigns = campaigns;
         this.batches = batches;
+        this.properties = properties;
         this.clock = clock;
     }
 
@@ -43,7 +47,7 @@ class PreorderCampaignWriter {
     }
 
     private PreorderCampaign create(Long productId, Instant opensAt, Instant closesAt) {
-        requireFutureOpen(opensAt);
+        requireLeadTime(opensAt);
         return campaigns.save(new PreorderCampaign(productId, opensAt, closesAt));
     }
 
@@ -60,18 +64,19 @@ class PreorderCampaignWriter {
 
     private PreorderCampaign reschedule(PreorderCampaign campaign, Instant opensAt, Instant closesAt) {
         requireBeforeOpen(campaign);
-        requireFutureOpen(opensAt);
+        requireLeadTime(opensAt);
         campaign.reschedule(opensAt, closesAt);
         return campaign;
     }
 
     /**
-     * 오픈 시각은 앞으로여야 한다. 지난 시각으로 열면 회차는 바로 접수를 받는데
-     * 배송 차수는 "오픈 뒤 변경 금지" 에 걸려 더 넣을 수 없다 — 접수가 배정할 차수를 못 찾는다.
+     * 오픈 시각은 최소 준비 시간 뒤여야 한다. 지난 시각으로 열면 배송 차수를 더 넣을 수 없고(오픈 뒤 변경 금지),
+     * 너무 가까우면 대기열이 일정 이벤트를 받기 전에 열릴 수 있다.
      */
-    private void requireFutureOpen(Instant opensAt) {
-        if (!opensAt.isAfter(clock.instant())) {
-            throw ValidationFailures.of("opensAt", "현재 시각보다 뒤여야 합니다.");
+    private void requireLeadTime(Instant opensAt) {
+        Duration minLeadTime = properties.minLeadTime();
+        if (opensAt.isBefore(clock.instant().plus(minLeadTime))) {
+            throw ValidationFailures.of("opensAt", "현재 시각부터 %d분 뒤 이후여야 합니다.".formatted(minLeadTime.toMinutes()));
         }
     }
 

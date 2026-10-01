@@ -15,6 +15,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 
@@ -106,6 +107,20 @@ class AdminProductPreorderApiTest {
                 .andExpect(jsonPath("$.error.details.violations[0].field").value("opensAt"));
         assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_campaigns WHERE product_id = ?", productId))
                 .isZero();
+    }
+
+    @Test
+    void 오픈까지_최소_준비_시간보다_가까우면_400() throws Exception {
+        Long productId = preorderProduct();
+        Instant tooSoon = Instant.now().plus(Duration.ofMinutes(9));
+
+        putCampaign(productId, tooSoon, tooSoon.plusSeconds(7200))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.error.details.violations[0].field").value("opensAt"));
+
+        Instant enough = Instant.now().plus(Duration.ofMinutes(11));
+        putCampaign(productId, enough, enough.plusSeconds(7200)).andExpect(status().isOk());
     }
 
     @Test
