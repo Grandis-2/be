@@ -1,7 +1,7 @@
 package com.grandis.nova.order.event;
 
+import com.grandis.nova.common.message.EventEnvelope;
 import com.grandis.nova.order.order.cancel.SettlePreorderCancelService;
-import com.grandis.nova.order.outbox.EventEnvelope;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
 

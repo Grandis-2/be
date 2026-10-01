@@ -5,4 +5,6 @@ apply plugin: 'java-library'
 dependencies {
     api project(':common:types')
     api 'com.fasterxml.jackson.core:jackson-annotations'
+    // 봉투의 payload 칸이 JsonNode(Jackson 3)다. 버전은 Boot BOM
+    api 'tools.jackson.core:jackson-databind'
 }

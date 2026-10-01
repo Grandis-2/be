@@ -1,5 +1,6 @@
 package com.grandis.nova.order.outbox;
 
+import com.grandis.nova.common.message.EventEnvelope;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
