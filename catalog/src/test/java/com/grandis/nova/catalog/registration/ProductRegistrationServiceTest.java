@@ -115,7 +115,8 @@ class ProductRegistrationServiceTest {
                 List.of(new ProductRegistrationRequest.ShipmentBatch(1, 1L, null, LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 7))));
         RegistrationOutcome preorderCreated = service.register("k-" + ShopFixtures.unique(), preorder);
         assertThat(preorderCreated.plan().stockByOptionId()).isEmpty();
-        assertThat(preorderCreated.plan().campaign().opensAt()).isEqualTo(opensAt);
+        // 계획은 마이크로초로 자른다. Instant.now() 는 Linux 에서 나노초, macOS 에서 마이크로초라(JDK 25 실측) 자른 값과 비교한다
+        assertThat(preorderCreated.plan().campaign().opensAt()).isEqualTo(opensAt.truncatedTo(ChronoUnit.MICROS));
         assertThat(preorderCreated.plan().shipmentBatches()).singleElement()
                 .satisfies(batch -> {
                     assertThat(batch.batchNumber()).isEqualTo(1);
@@ -145,7 +146,7 @@ class ProductRegistrationServiceTest {
         RegistrationOutcome resumed = service.register(key, different);
         assertThat(resumed.kind()).isEqualTo(RegistrationOutcome.Kind.IN_PROGRESS);
         assertThat(resumed.plan()).isEqualTo(created.plan());
-        assertThat(resumed.plan().campaign().opensAt()).isEqualTo(opensAt);
+        assertThat(resumed.plan().campaign().opensAt()).isEqualTo(opensAt.truncatedTo(ChronoUnit.MICROS));
         assertThat(resumed.plan().shipmentBatches()).hasSize(2);
 
         // 일반 상품: 재고가 다른 본문으로 다시 와도 옵션 id 별 재고는 첫 등록 그대로다
