@@ -1,0 +1,32 @@
+// SQS 클라이언트 · 큐 URL · 아웃박스 SQS 전송 · 큐 소비 폴러. 자동설정으로 켠다(nova.sqs.region 이 있을 때만 클라이언트).
+// common:outbox 는 compileOnly 다 — SQS 로 보내기만 하는 서비스(batch)가 아웃박스 자동설정을 끌어오지 않게 한다.
+// 아웃박스 전송은 common:outbox 가 클래스패스에 있을 때만 켜진다.
+apply plugin: 'java-library'
+// Floci 컨테이너 · 큐 도우미를 서비스 시험과 한 벌로 나눈다
+apply plugin: 'java-test-fixtures'
+
+// Spring Boot BOM 이 관리하지 않는 라이브러리 버전. 올릴 때 여기만 바꾼다.
+ext {
+    awsSdkVersion = '2.55.6'
+    flociTestcontainersVersion = '2.16.1'
+}
+
+dependencies {
+    // 서비스가 SqsClient · Message 형을 직접 쓴다. HTTP 는 가벼운 URLConnection 구현 하나만 둔다
+    api platform("software.amazon.awssdk:bom:${awsSdkVersion}")
+    api('software.amazon.awssdk:sqs') {
+        exclude group: 'software.amazon.awssdk', module: 'apache-client'
+        exclude group: 'software.amazon.awssdk', module: 'netty-nio-client'
+    }
+    implementation 'software.amazon.awssdk:url-connection-client'
+    implementation 'org.springframework.boot:spring-boot-autoconfigure'
+    compileOnly project(':common:outbox')
+
+    testImplementation project(':common:outbox')
+
+    // SQS 연계는 로컬 AWS 에뮬레이터 Floci 로 검증한다
+    testFixturesApi "io.floci:testcontainers-floci:${flociTestcontainersVersion}"
+    testFixturesImplementation 'software.amazon.awssdk:url-connection-client'
+    testFixturesImplementation 'org.springframework.boot:spring-boot-test'
+    testFixturesImplementation 'org.springframework:spring-test'
+}
