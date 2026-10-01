@@ -105,8 +105,8 @@ class SecurityRulesTest {
     // ── 폐기 조회 실패(NV-138): 닫는 경로는 401 retryable, 나머지는 통과 ────────────────────
 
     /*
-     * 결제 · 취소 · 배송지 변경은 아직 엔드포인트가 없다. 닫힌 경로면 컨트롤러에 닿기 전에 401 retryable 이고,
-     * 열린 경로였다면 매핑이 없어 404 였을 것이다(아래 lookupSucceeds... 가 그 대조군).
+     * 닫힌 경로면 컨트롤러에 닿기 전에 401 retryable 이다. 열린 경로였다면 컨트롤러가 404(없는 주문 · 매핑 없음)로 답했을
+     * 것이다(아래 lookupSucceeds... 가 그 대조군). 결제 승인 · 취소 · 배송지 변경은 아직 엔드포인트가 없다(결제 준비는 아래 따로 본다).
      */
     @ParameterizedTest
     @CsvSource({
@@ -132,6 +132,14 @@ class SecurityRulesTest {
     })
     void lookupSucceedsSamePathsReachMvc(String method, String path) throws Exception {
         perform(request(HttpMethod.valueOf(method), path), user).andExpect(status().isNotFound());
+    }
+
+    // 결제 준비는 엔드포인트가 있다 — 매핑 없는 404(NOT_FOUND)가 아니라 컨트롤러의 404(ORDER_NOT_FOUND)여야 MVC 에 닿은 것이다.
+    @Test
+    void lookupSucceedsPaymentAttemptReachesController() throws Exception {
+        perform(post("/api/v1/orders/o-1/payment-attempts"), user)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("ORDER_NOT_FOUND"));
     }
 
     // 조회(GET)는 같은 접두라도 닫지 않는다 — 메서드를 붙인 항목이라서.
