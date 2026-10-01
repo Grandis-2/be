@@ -1,0 +1,14 @@
+server:
+  port: 8085
+
+# issuer · audience 는 member 와 같은 값이어야 검증이 통과한다.
+jwt:
+  issuer: nova
+  audience: nova-api
+  jwk-set-uri: https://member.example.com/.well-known/jwks.json
+  # jwk-set-allow-http: true    # VPC 안 Cloud Map 주소(http://member.ureca.local:8080/…)를 쓰는 동안만 명시
+  # public-keys:                # JWKS 대신 정적 공개키(kid → X.509 PEM). 부하 시험 · 로컬용
+  #   local-1: |
+  #     -----BEGIN PUBLIC KEY-----
+  #     ...
+  #     -----END PUBLIC KEY-----
