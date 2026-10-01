@@ -1,10 +1,13 @@
 package com.grandis.nova.preorder.event;
 
+import com.grandis.nova.preorder.campaign.CampaignRepublisher;
 import com.grandis.nova.preorder.cancel.CampaignCancelService;
 import com.grandis.nova.preorder.cancel.ExpiryCancelService;
 import com.grandis.nova.preorder.outbox.EventEnvelope;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -23,20 +26,23 @@ public class PreorderEventDispatcher {
     static final String HANDLE_METRIC = "preorder.events.handle";
     static final String LAG_METRIC = "preorder.events.lag";
     private static final String UNKNOWN = "UNKNOWN";
+    private static final Logger log = LoggerFactory.getLogger(PreorderEventDispatcher.class);
 
     private final PreorderEventHandler handler;
     private final ExpiryCancelService expiryCancelService;
     private final CampaignCancelService campaignCancelService;
+    private final CampaignRepublisher campaignRepublisher;
     private final JsonMapper jsonMapper;
     private final MeterRegistry meterRegistry;
     private final Clock clock;
 
     public PreorderEventDispatcher(PreorderEventHandler handler, ExpiryCancelService expiryCancelService,
-                                   CampaignCancelService campaignCancelService, JsonMapper jsonMapper,
-                                   MeterRegistry meterRegistry, Clock clock) {
+                                   CampaignCancelService campaignCancelService, CampaignRepublisher campaignRepublisher,
+                                   JsonMapper jsonMapper, MeterRegistry meterRegistry, Clock clock) {
         this.handler = handler;
         this.expiryCancelService = expiryCancelService;
         this.campaignCancelService = campaignCancelService;
+        this.campaignRepublisher = campaignRepublisher;
         this.jsonMapper = jsonMapper;
         this.meterRegistry = meterRegistry;
         this.clock = clock;
@@ -84,6 +90,12 @@ public class PreorderEventDispatcher {
                 PreorderCampaignCanceled canceled =
                         jsonMapper.treeToValue(envelope.payload(), PreorderCampaignCanceled.class);
                 campaignCancelService.cancel(canceled.productId(), canceled.reason());
+            }
+            case CAMPAIGN_RESYNC_REQUESTED -> {
+                CampaignResyncRequested requested =
+                        jsonMapper.treeToValue(envelope.payload(), CampaignResyncRequested.class);
+                log.info("회차 일정 전체 재발행 요청: requestedBy={}, reason={}", requested.requestedBy(), requested.reason());
+                campaignRepublisher.republishAll();
             }
         }
     }

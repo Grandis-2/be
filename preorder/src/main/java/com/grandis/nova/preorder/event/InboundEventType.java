@@ -15,7 +15,9 @@ public enum InboundEventType {
     /** batch: 결제 기한 만료. */
     PREORDER_EXPIRY_REQUESTED,
     /** catalog: 회차 판매 중지. */
-    PREORDER_CAMPAIGN_CANCELED;
+    PREORDER_CAMPAIGN_CANCELED,
+    /** waitingroom: 회차 일정 전체 재발행 요청. */
+    CAMPAIGN_RESYNC_REQUESTED;
 
     /** 이 이름의 이벤트를 받는가. DLQ 적재 · 되돌리기 전 검사가 쓴다. */
     public static boolean isKnown(String eventType) {
