@@ -37,8 +37,12 @@ class OutboxRelayScheduler implements SmartLifecycle {
         this.stopTimeout = stopTimeout;
     }
 
+    /** 이미 돌고 있으면 그대로 둔다 — 다시 불려 실행기를 새로 만들면 앞 실행기가 버려진 채 릴레이가 둘 돈다. */
     @Override
     public synchronized void start() {
+        if (executor != null) {
+            return;
+        }
         relay.resume();
         executor = Executors.newScheduledThreadPool(2, Thread.ofPlatform().name("outbox-relay-", 0).daemon().factory());
         long millis = interval.toMillis();

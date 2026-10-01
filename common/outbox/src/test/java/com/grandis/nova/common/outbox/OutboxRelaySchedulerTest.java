@@ -38,6 +38,30 @@ class OutboxRelaySchedulerTest {
         assertThat(scheduler.isRunning()).isFalse();
     }
 
+    @Test
+    void 다시_시작해도_릴레이는_하나만_돈다() throws Exception {
+        OutboxRelay relay = mock(OutboxRelay.class);
+        AtomicInteger running = new AtomicInteger();
+        AtomicInteger maxRunning = new AtomicInteger();
+        willAnswer(invocation -> {
+            maxRunning.accumulateAndGet(running.incrementAndGet(), Math::max);
+            Thread.sleep(50);
+            running.decrementAndGet();
+            return 0;
+        }).given(relay).relay();
+        OutboxRelayScheduler scheduler = new OutboxRelayScheduler(relay, OutboxMetrics.NONE, Duration.ofMillis(1), MINUTE);
+
+        scheduler.start();
+        scheduler.start();
+        try {
+            Thread.sleep(500);
+        } finally {
+            scheduler.stop();
+        }
+        assertThat(maxRunning.get()).isEqualTo(1);
+        assertThat(scheduler.isRunning()).isFalse();
+    }
+
     /**
      * 종료는 진행 중인 릴레이에 멈추라고 알리고 보내던 한 건만 기다린다. 넘기면 인터럽트하고 곧 돌아간다 —
      * 리스 길이(1분)만큼 종료 단계를 붙잡아 웹 서버 종료 · DB 풀 닫기가 밀리지 않게.
