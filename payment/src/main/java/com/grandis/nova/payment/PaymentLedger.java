@@ -89,15 +89,20 @@ public class PaymentLedger {
     /**
      * 사용자 승인 요청으로 CAPTURE 를 시작한다: PENDING → PROCESSING, 결제 키를 적고 리스를 잡는다.
      *
+     * 거래의 금액은 결제창을 열 때 호출자가 주장한 값이라 믿을 수 없다(내부 API 는 주인 · 금액을 확인하지 않는다).
+     * 그래서 여기서 호출자의 저장 금액과 다시 대조한다 — 사용자가 승인 요청에 실어 보낸 금액을 넘기면 결제창 금액을 바꿔치기한
+     * 승인이 통과한다.
+     *
      * @param expectedTarget 호출자가 말한 대상. 거래가 그 대상의 것인지 대조한다
+     * @param expectedAmount 호출자의 저장 금액(주문 총액 · 응모비). 사용자 입력을 넘기지 않는다
      * @return 리스를 쥔 거래. 시작할 수 없는 상태였거나 그사이 누가 먼저 시작했으면 empty
      * @throws PaymentTargetMismatchException   다른 대상의 거래다
-     * @throws PaymentAmountMismatchException   금액이 결제창을 열 때와 다르다
+     * @throws PaymentAmountMismatchException   결제창을 열 때의 금액이 호출자의 저장 금액과 다르다
      * @throws ActiveTransactionExistsException 그 대상에 진행 중 · 성공한 CAPTURE 가 이미 있다(이미 결제 중 · 결제됨)
      */
     public Optional<ClaimedTransaction> start(PaymentTransaction seen, PaymentTarget expectedTarget,
-                                              ProviderPaymentKey paymentKey, Money requestedAmount) {
-        if (seen.start(expectedTarget, requestedAmount).isEmpty()) {
+                                              ProviderPaymentKey paymentKey, Money expectedAmount) {
+        if (seen.start(expectedTarget, expectedAmount).isEmpty()) {
             return Optional.empty();
         }
         int updated = writer.start(seen, paymentKey, LeaseToken.issue(), PaymentTransaction.LEASE,

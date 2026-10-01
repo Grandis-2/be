@@ -21,6 +21,13 @@ spring:
         jdbc:
           time_zone: UTC
     open-in-view: false
+  data:
+    redis:
+      # 폐기 표식(로그아웃 · 제재) 조회. member 와 같은 Redis. 응답이 늦으면 모든 인증 요청이 늦어지므로 짧게 끊는다
+      host: localhost
+      port: 6379
+      timeout: 300ms
+      connect-timeout: 200ms
   http:
     serviceclient:
       # 토스페이먼츠 결제 승인 · 취소 · 조회. 읽기 60초는 토스 권장값, 연결 3초는 SYN 재전송 1회 여유(D9).
@@ -49,3 +56,26 @@ nova:
 # 내부 전용. 사용자 트래픽은 order(8084) · draw 를 거쳐 들어온다.
 server:
   port: 8085
+
+auth:
+  # 폐기 표식 조회가 실패(Redis 장애)했을 때 401 로 닫는 경로. 목록 밖은 열린다(통과 + 경고 + 카운터).
+  # 목록을 주면 공통 기본값을 **대체**한다 — 그래서 공통 기본 셋(관리자 · 재발급 · 내 정보)도 다시 적는다.
+  # 내부 API 는 닫는다: 결제 흐름은 호출자(order)가 이미 닫으므로 잃는 것이 없고, 호출자가 닫기를 빠뜨려도 여기서 막는다.
+  revocation-check:
+    fail-closed-paths:
+      - /api/v1/admin/**
+      - /api/v1/session/refresh
+      - /api/v1/me/**
+      - /internal/**
+
+# 검증만 한다(개인키 없음). 공개키는 member 가 게시하는 JWKS(GET /.well-known/jwks.json)에서 받아 kid 로 고른다 —
+# 기동 직후와 5분마다 백그라운드로 받고, 요청 스레드는 캐시만 읽는다. 키를 바꿀 때 이 서비스는 재배포하지 않는다.
+# issuer·audience 는 member 와 같은 값이어야 검증이 통과한다.
+jwt:
+  issuer: nova
+  audience: nova-api
+  jwk-set-uri: https://member.example.com/.well-known/jwks.json
+  # 필수(없으면 기동 실패 — JwtProperties @NotNull). 검증만 하는 서비스에서는 쓰이지 않지만 member 와 같은 값을 둔다
+  access-token-validity: 30m
+  refresh-token-validity: 14d
+  # jwk-set-allow-http: true    # VPC 안 Cloud Map 주소(http://member.ureca.local:8080/…)를 쓰는 동안만 명시. 서비스 간 TLS 가 붙으면 지운다
