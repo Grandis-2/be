@@ -28,6 +28,6 @@ class ModuleBoundaryTest {
     @ArchTest
     static final ArchRule 도메인은_JDK_와_자기_도메인에만_기댄다 = classes()
             .that().resideInAPackage("..waitingroom.domain..")
-            .should().onlyDependOnClassesThat().resideInAnyPackage("java..", "..waitingroom.domain..")
+            .should().onlyDependOnClassesThat().resideInAnyPackage("java..", "javax.crypto..", "..waitingroom.domain..")
             .allowEmptyShould(true);
 }
