@@ -27,7 +27,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** 원장이 PK 중복으로 알린 동시 생성을 서비스가 새 트랜잭션에서 다시 해 성공시킨다. 각 요청이 커밋한다. */
+/** 원장이 PK 중복으로 알린 동시 생성을 서비스가 새 트랜잭션에서 다시 해 성공시킨다. 설정 · 초기화 모두. 각 요청이 커밋한다. */
 @OrderIntegrationTest
 class AdminStockServiceConcurrencyTest {
 
@@ -67,7 +67,7 @@ class AdminStockServiceConcurrencyTest {
         Long option = product.optionIds().getFirst();
         RacingWriter racing = new RacingWriter(writer, () -> transactionTemplate.executeWithoutResult(
                 status -> writer.insert(option, 99, clock.instant())));
-        AdminStockService service = new AdminStockService(new StockLedger(racing, clock), reader, catalog,
+        AdminStockService service = new AdminStockService(new StockLedger(racing, reader, clock), reader, catalog,
                 transactionManager);
 
         StockResult result = service.set(product.productId(), List.of(new StockSetting(option, 10)));
@@ -77,7 +77,27 @@ class AdminStockServiceConcurrencyTest {
         assertThat(result.levels()).containsExactly(new StockLevel(option, 10, 0, 0));
     }
 
-    /** 확률적이다 — 경합이 안 나도 통과한다. 다시 하기의 증명은 위 시험이다. */
+    /**
+     * 초기화의 다시 하기와 덮어쓰지 않음을 함께 본다. 첫 시도가 "없음" 을 읽은 직후 다른 트랜잭션이 99 로 만들어 커밋하면,
+     * 첫 시도는 PK 중복으로 지고 둘째 시도는 그 행을 있는 행으로 보고 건드리지 않는다 — 요청의 10 이 아니라 99 가 남는다.
+     */
+    @Test
+    void initializeLosingTheCreationRaceKeepsTheWinnersValue() {
+        StockProduct product = new OrderFixtures(jdbcTemplate).inStockProduct(1);
+        Long option = product.optionIds().getFirst();
+        RacingReader racing = new RacingReader(reader, () -> transactionTemplate.executeWithoutResult(
+                status -> writer.insert(option, 99, clock.instant())));
+        AdminStockService service = new AdminStockService(new StockLedger(writer, racing, clock), reader, catalog,
+                transactionManager);
+
+        StockResult result = service.initialize(product.productId(), List.of(new StockSetting(option, 10)));
+
+        assertThat(racing.reads).hasValue(2);
+        assertThat(result.created()).isEmpty();
+        assertThat(result.levels()).containsExactly(new StockLevel(option, 99, 0, 0));
+    }
+
+    /** 확률적이다 — 경합이 안 나도 통과한다. 다시 하기의 증명은 위 두 시험이다. */
     @Test
     void concurrentFirstPutsAllSucceedAndCreateEachRowOnce() throws Exception {
         StockProduct product = new OrderFixtures(jdbcTemplate).inStockProduct(2);
@@ -92,6 +112,23 @@ class AdminStockServiceConcurrencyTest {
         List<StockLevel> levels = reader.findByOptionIds(options);
         assertThat(levels).hasSize(options.size());
         assertThat(levels).extracting(StockLevel::total).containsOnly(levels.getFirst().total());
+    }
+
+    // 초기화는 덮어쓰지 않으므로 남는 값은 행을 만든 요청의 값이다. 확률적이다 — 다시 하기의 증명은 위 시험이다.
+    @Test
+    void concurrentFirstInitializationsCreateOnceAndKeepTheCreatorsValue() throws Exception {
+        StockProduct product = new OrderFixtures(jdbcTemplate).inStockProduct(2);
+        List<Long> options = product.optionIds();
+
+        List<Outcome<StockResult>> outcomes = Concurrently.run(REQUESTS, i -> () -> service.initialize(
+                product.productId(), options.stream().map(option -> new StockSetting(option, 10 + i)).toList()));
+
+        assertThat(outcomes).allSatisfy(o -> assertThat(o.error()).isNull());
+        List<StockResult> creators = outcomes.stream().map(Outcome::value).filter(r -> !r.created().isEmpty()).toList();
+        assertThat(creators).hasSize(1);
+        assertThat(creators.getFirst().created()).containsExactlyInAnyOrderElementsOf(options);
+        assertThat(reader.findByOptionIds(options)).isEqualTo(creators.getFirst().levels());
+        assertThat(outcomes).allSatisfy(o -> assertThat(o.value().levels()).isEqualTo(creators.getFirst().levels()));
     }
 
     /** 첫 잠금 읽기 직후에 한 번 race 를 실행하는 쓰기 포트. 나머지는 그대로 넘긴다. */
@@ -124,6 +161,28 @@ class AdminStockServiceConcurrencyTest {
         @Override
         public void insert(Long optionId, int total, Instant now) {
             delegate.insert(optionId, total, now);
+        }
+    }
+
+    /** 첫 읽기 직후에 한 번 race 를 실행하는 읽기 포트(원장의 초기화가 쓰는 쪽). */
+    static final class RacingReader implements StockReader {
+
+        final StockReader delegate;
+        final Runnable race;
+        final AtomicInteger reads = new AtomicInteger();
+
+        RacingReader(StockReader delegate, Runnable race) {
+            this.delegate = delegate;
+            this.race = race;
+        }
+
+        @Override
+        public List<StockLevel> findByOptionIds(Collection<Long> optionIds) {
+            List<StockLevel> levels = delegate.findByOptionIds(optionIds);
+            if (reads.incrementAndGet() == 1) {
+                CompletableFuture.runAsync(race).orTimeout(10, TimeUnit.SECONDS).join();
+            }
+            return levels;
         }
     }
 }

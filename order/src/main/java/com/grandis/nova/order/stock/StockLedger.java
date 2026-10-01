@@ -4,6 +4,7 @@ import com.grandis.nova.order.stock.domain.exception.StockAlreadyCreatedExceptio
 import com.grandis.nova.order.stock.domain.exception.StockBelowCommittedException;
 import com.grandis.nova.order.stock.domain.model.StockLevel;
 import com.grandis.nova.order.stock.domain.model.StockSetting;
+import com.grandis.nova.order.stock.domain.repository.StockReader;
 import com.grandis.nova.order.stock.domain.repository.StockWriter;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
@@ -24,7 +25,12 @@ import java.util.stream.Collectors;
  * 재고 표를 바꾸는 유일한 길. 쓰기 포트({@link StockWriter})는 여기서만 쓴다(StockArchitectureTest 가 강제).
  * 모든 변경은 조건부 UPDATE 이고 영향 행으로 판정한다.
  *
- * 여러 옵션의 처리: 있는 행을 option_id 오름차순으로 잠가 읽기 → 옵션마다(오름차순) 있으면 조건부 UPDATE, 없으면 INSERT.
+ * 여러 옵션의 처리(option_id 오름차순):
+ * <ul>
+ *   <li>설정({@link #set}): 있는 행을 잠가 읽기 → 있으면 조건부 UPDATE, 없으면 INSERT.</li>
+ *   <li>초기화({@link #initialize}): 있는 행을 잠그지 않고 읽기 → 없는 것만 INSERT. 있는 행은 건드리지 않으므로 잠그지 않는다 —
+ *       재고 행은 주문의 확보 · 반환이 드나드는 자리라 쓰지 않을 행을 붙잡지 않는다.</li>
+ * </ul>
  * 잠금 순서가 요청 순서와 무관해, 옵션 순서가 다른 요청끼리 서로 기다리며 교착하지 않는다. 동시 삽입이 부르는 잠금
  * (PK 중복 확인의 S 잠금, FK 검사의 product_options 부모 S 잠금)은 이 순서 밖이라 드물게 교착할 수 있고, 그건 호출하는
  * 쪽의 다시 하기가 흡수한다.
@@ -42,10 +48,12 @@ import java.util.stream.Collectors;
 public class StockLedger {
 
     private final StockWriter writer;
+    private final StockReader reader;
     private final Clock clock;
 
-    public StockLedger(StockWriter writer, Clock clock) {
+    public StockLedger(StockWriter writer, StockReader reader, Clock clock) {
         this.writer = writer;
+        this.reader = reader;
         this.clock = clock;
     }
 
@@ -58,8 +66,23 @@ public class StockLedger {
      */
     public Set<Long> set(List<StockSetting> settings) {
         List<StockSetting> sorted = ascending(settings);
-        Map<Long, StockLevel> existing = lockExisting(sorted);
-        // 잠금을 얻은 뒤의 시각이어야 기다린 다른 쓰기보다 앞선 시각이 남지 않는다
+        return apply(sorted, byOptionId(writer.lockByOptionIds(optionIds(sorted))), true);
+    }
+
+    /**
+     * 행이 없는 옵션만 만든다. 있는 행은 값이 달라도 건드리지 않는다 — 상품 등록의 재개가 그사이 관리자가 고친 재고를
+     * 등록 때의 초기값으로 덮지 않게 하려는 것이다.
+     *
+     * @return 이번에 새로 만든 행의 옵션 id
+     * @throws IllegalArgumentException 같은 옵션이 두 번 있다 — 호출하는 코드의 잘못이다
+     */
+    public Set<Long> initialize(List<StockSetting> settings) {
+        List<StockSetting> sorted = ascending(settings);
+        return apply(sorted, byOptionId(reader.findByOptionIds(optionIds(sorted))), false);
+    }
+
+    /** @param existing 이미 읽은(설정이면 잠근) 행. 그 뒤의 시각을 찍어야 기다린 다른 쓰기보다 앞선 시각이 남지 않는다 */
+    private Set<Long> apply(List<StockSetting> sorted, Map<Long, StockLevel> existing, boolean overwrite) {
         Instant now = clock.instant();
         Set<Long> created = new HashSet<>();
         List<StockBelowCommittedException.Shortfall> shortfalls = new ArrayList<>();
@@ -68,7 +91,7 @@ public class StockLedger {
             if (current == null) {
                 writer.insert(setting.optionId(), setting.total(), now);
                 created.add(setting.optionId());
-            } else if (writer.changeTotal(setting.optionId(), setting.total(), now) != 1) {
+            } else if (overwrite && writer.changeTotal(setting.optionId(), setting.total(), now) != 1) {
                 // 행을 잠근 채 판정하므로 0 이면 원인은 감소 한계뿐이다. 잠근 값과 어긋나면 잠금 규칙이 깨진 것이다.
                 if (current.committed() <= setting.total()) {
                     throw new IllegalStateException("잠근 재고 행이 바뀌었다: optionId=" + setting.optionId());
@@ -82,9 +105,12 @@ public class StockLedger {
         return created;
     }
 
-    private Map<Long, StockLevel> lockExisting(List<StockSetting> sorted) {
-        return writer.lockByOptionIds(sorted.stream().map(StockSetting::optionId).toList()).stream()
-                .collect(Collectors.toMap(StockLevel::optionId, Function.identity()));
+    private static List<Long> optionIds(List<StockSetting> sorted) {
+        return sorted.stream().map(StockSetting::optionId).toList();
+    }
+
+    private static Map<Long, StockLevel> byOptionId(List<StockLevel> levels) {
+        return levels.stream().collect(Collectors.toMap(StockLevel::optionId, Function.identity()));
     }
 
     private static List<StockSetting> ascending(List<StockSetting> settings) {

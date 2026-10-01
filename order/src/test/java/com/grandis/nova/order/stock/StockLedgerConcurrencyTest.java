@@ -21,6 +21,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -117,10 +119,43 @@ class StockLedgerConcurrencyTest {
         assertThat(reader.findByOptionIds(options)).hasSize(options.size());
     }
 
+    /** 초기화는 있는 행을 건드리지 않으므로 잠그지도 않는다. 다른 트랜잭션이 그 행을 잡고 있어도 기다리지 않는다. */
+    @Test
+    void initializeDoesNotWaitForRowsItLeavesAlone() throws Exception {
+        Long held = options.getFirst();
+        fixtures.stock(held, 10, 0, 0);
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CompletableFuture<Void> holder = CompletableFuture.runAsync(() -> transactionTemplate.executeWithoutResult(status -> {
+            writer.lockByOptionIds(List.of(held));
+            locked.countDown();
+            awaitQuietly(release);
+        }));
+        try {
+            assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+
+            assertThat(CompletableFuture.supplyAsync(() -> transactionTemplate.execute(
+                    status -> ledger.initialize(settings(options, 5)))))
+                    .succeedsWithin(Duration.ofSeconds(5))
+                    .isEqualTo(Set.copyOf(options.subList(1, options.size())));
+        } finally {
+            release.countDown();
+            holder.get(10, TimeUnit.SECONDS);
+        }
+    }
+
     @Test
     void refusesToRunWithoutTransaction() {
         assertThatThrownBy(() -> ledger.set(settings(options, 1)))
                 .isInstanceOf(IllegalTransactionStateException.class);
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static List<StockSetting> settings(List<Long> optionIds, int total) {

@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** 관리자 재고 설정(PUT). 요청마다 커밋하므로 "아무것도 안 바뀜" 을 DB 에서 본다. */
+/** 관리자 재고 설정(PUT) · 초기화(POST). 요청마다 커밋하므로 "아무것도 안 바뀜" 을 DB 에서 본다. */
 @OrderIntegrationTest
 @AutoConfigureMockMvc
 class AdminStockApiTest {
@@ -89,6 +89,51 @@ class AdminStockApiTest {
                 .andExpect(jsonPath("$.error.details.options[0].committed").value(5));
 
         assertThat(reader.findByOptionIds(List.of(first, second))).containsExactly(new StockLevel(first, 10, 3, 2));
+    }
+
+    /**
+     * 등록 재개 시나리오: 첫 재고 호출이 응답 없이 커밋됐고, 그사이 관리자가 고쳤고, 등록이 같은 초기값으로 다시 부른다.
+     * 초기화는 관리자 값을 덮지 않고, 처음 보는 옵션만 만든다.
+     */
+    @Test
+    void postDoesNotOverwriteAdminChangesMadeBeforeRegistrationResumes() throws Exception {
+        post(product.productId(), body(first, 5)).andExpect(status().isOk());
+        put(product.productId(), body(first, 10), TestAuth.admin()).andExpect(status().isOk());
+
+        post(product.productId(), """
+                {"items":[{"optionId":%d,"stockTotal":5},{"optionId":%d,"stockTotal":3}]}
+                """.formatted(first, second))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].optionId").value(first))
+                .andExpect(jsonPath("$.data.items[0].stockTotal").value(10))
+                .andExpect(jsonPath("$.data.items[0].created").value(false))
+                .andExpect(jsonPath("$.data.items[1].optionId").value(second))
+                .andExpect(jsonPath("$.data.items[1].stockTotal").value(3))
+                .andExpect(jsonPath("$.data.items[1].created").value(true));
+
+        assertThat(reader.findByOptionIds(List.of(first, second)))
+                .containsExactly(new StockLevel(first, 10, 0, 0), new StockLevel(second, 3, 0, 0));
+    }
+
+    @Test
+    void postChecksProductLikePut() throws Exception {
+        OrderFixtures.PreorderProduct preorder = fixtures.preorderProduct();
+        Long foreign = fixtures.inStockProduct(1).optionIds().get(0);
+
+        post(preorder.productId(), body(preorder.optionId(), 1))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("STOCK_NOT_TRACKED"));
+        post(product.productId(), body(foreign, 1))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.details.violations[0].field").value("items[0].optionId"));
+        post(Long.MAX_VALUE, body(first, 1))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
+        mockMvc.perform(MockMvcRequestBuilders.post("/api/v1/admin/products/{productId}/stock", product.productId())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"items\":[]}").with(TestAuth.admin()))
+                .andExpect(status().isBadRequest());
+
+        assertThat(reader.findByOptionIds(List.of(preorder.optionId(), foreign, first))).isEmpty();
     }
 
     @Test
@@ -209,6 +254,11 @@ class AdminStockApiTest {
     private ResultActions put(Long productId, String body, RequestPostProcessor who) throws Exception {
         return mockMvc.perform(MockMvcRequestBuilders.put("/api/v1/admin/products/{productId}/stock", productId)
                 .contentType(MediaType.APPLICATION_JSON).content(body).with(who));
+    }
+
+    private ResultActions post(Long productId, String body) throws Exception {
+        return mockMvc.perform(MockMvcRequestBuilders.post("/api/v1/admin/products/{productId}/stock", productId)
+                .contentType(MediaType.APPLICATION_JSON).content(body).with(TestAuth.admin()));
     }
 
     private static String body(Long optionId, int total) {

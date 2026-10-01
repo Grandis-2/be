@@ -68,6 +68,18 @@ class AdminStockServiceTest {
     }
 
     @Test
+    void initializeUsesLedgerInitializeWithTheSameRetry() {
+        given(ledger.initialize(SETTINGS))
+                .willThrow(new StockAlreadyCreatedException(11L, null))
+                .willReturn(Set.of());
+
+        service.initialize(PRODUCT_ID, SETTINGS);
+
+        verify(ledger, times(2)).initialize(SETTINGS);
+        verify(ledger, never()).set(anyList());
+    }
+
+    @Test
     void repeatedCreationRaceGivesUpAfterMaxAttempts() {
         given(ledger.set(SETTINGS)).willThrow(new StockAlreadyCreatedException(11L, null));
 

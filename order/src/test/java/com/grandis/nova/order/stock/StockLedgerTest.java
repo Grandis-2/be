@@ -86,7 +86,7 @@ class StockLedgerTest {
         assertThat(writer.changeTotal(first, 10, FIXED)).isEqualTo(1);
         assertThat(writer.changeTotal(first, 10, FIXED)).isEqualTo(1);
 
-        StockLedger fixedClockLedger = new StockLedger(writer, Clock.fixed(FIXED, ZoneOffset.UTC));
+        StockLedger fixedClockLedger = new StockLedger(writer, reader, Clock.fixed(FIXED, ZoneOffset.UTC));
         fixedClockLedger.set(List.of(new StockSetting(first, 10)));
         assertThat(reader.findByOptionIds(List.of(first))).containsExactly(new StockLevel(first, 10, 3, 2));
     }
@@ -110,6 +110,17 @@ class StockLedgerTest {
                 new StockSetting(second, 3), new StockSetting(third, 1), new StockSetting(first, 4))))
                 .isInstanceOfSatisfying(StockBelowCommittedException.class, e -> assertThat(e.shortfalls())
                         .containsExactly(new Shortfall(first, 5), new Shortfall(second, 4)));
+    }
+
+    @Test
+    void initializeCreatesMissingAndLeavesExistingUntouched() {
+        fixtures.stock(first, 10, 3, 2);
+
+        assertThat(ledger.initialize(List.of(new StockSetting(first, 1), new StockSetting(second, 7))))
+                .containsExactly(second);
+
+        assertThat(reader.findByOptionIds(List.of(first, second)))
+                .containsExactly(new StockLevel(first, 10, 3, 2), new StockLevel(second, 7, 0, 0));
     }
 
     @Test

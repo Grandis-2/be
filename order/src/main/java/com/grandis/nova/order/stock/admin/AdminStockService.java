@@ -28,7 +28,7 @@ import java.util.Set;
 import java.util.function.Supplier;
 
 /**
- * 관리자 재고 변경(order 의 유스케이스). 대상은 일반 판매 상품의 옵션이고, 요청 하나의 옵션은 모두 되거나 모두 안 된다.
+ * 관리자 재고 설정 · 초기화(order 의 유스케이스). 대상은 일반 판매 상품의 옵션이고, 요청 하나의 옵션은 모두 되거나 모두 안 된다.
  *
  * 한 트랜잭션: 상품 판매 방식 확인 → 옵션 소속 확인 → 원장 반영 → 결과 재조회.
  * 상품 · 옵션은 catalog 표를 잠그지 않고 읽는다({@link CatalogOptions} 의 전제).
@@ -71,6 +71,17 @@ public class AdminStockService {
      */
     public StockResult set(Long productId, List<StockSetting> settings) {
         return write(productId, settings, () -> ledger.set(settings));
+    }
+
+    /**
+     * 행이 없는 옵션만 만든다. 있는 옵션은 값이 달라도 그대로 두고 결과에 현재 값을 싣는다(created=false).
+     * 상품 등록의 재고 단계가 부른다 — 응답을 못 받고 재개해도 그사이 관리자가 고친 값을 덮지 않는다.
+     *
+     * @throws BusinessException PRODUCT_NOT_FOUND · STOCK_NOT_TRACKED · VALIDATION_FAILED(그 상품의 옵션이 아님) ·
+     *                           DEPENDENCY_UNAVAILABLE(경합이 이어짐)
+     */
+    public StockResult initialize(Long productId, List<StockSetting> settings) {
+        return write(productId, settings, () -> ledger.initialize(settings));
     }
 
     private StockResult write(Long productId, List<StockSetting> settings, Supplier<Set<Long>> change) {
