@@ -3,6 +3,7 @@ package com.grandis.nova.order.stock.domain.repository;
 import com.grandis.nova.order.stock.domain.enums.SaleMode;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -15,6 +16,9 @@ import java.util.Set;
 public interface CatalogOptions {
 
     Optional<SaleMode> findSaleMode(Long productId);
+
+    /** 그 상품의 옵션 전부(판매 중지 포함), id 오름차순. */
+    List<Long> findOptionIds(Long productId);
 
     /** optionIds 중 그 상품의 옵션인 것. */
     Set<Long> findOwnedOptionIds(Long productId, Collection<Long> optionIds);

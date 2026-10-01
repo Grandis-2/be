@@ -8,6 +8,7 @@ import org.springframework.stereotype.Repository;
 
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -38,6 +39,12 @@ class JdbcCatalogOptions implements CatalogOptions {
         } catch (IllegalArgumentException e) {
             throw new IllegalStateException("알 수 없는 판매 방식: productId=" + productId + ", sale_mode=" + value, e);
         }
+    }
+
+    @Override
+    public List<Long> findOptionIds(Long productId) {
+        return jdbc.queryForList("SELECT id FROM product_options WHERE product_id = :productId ORDER BY id",
+                new MapSqlParameterSource("productId", productId), Long.class);
     }
 
     @Override

@@ -28,7 +28,7 @@ import java.util.Set;
 import java.util.function.Supplier;
 
 /**
- * 관리자 재고 설정 · 초기화(order 의 유스케이스). 대상은 일반 판매 상품의 옵션이고, 요청 하나의 옵션은 모두 되거나 모두 안 된다.
+ * 관리자 재고 조회 · 설정 · 초기화(order 의 유스케이스). 대상은 일반 판매 상품의 옵션이고, 요청 하나의 옵션은 모두 되거나 모두 안 된다.
  *
  * 한 트랜잭션: 상품 판매 방식 확인 → 옵션 소속 확인 → 원장 반영 → 결과 재조회.
  * 상품 · 옵션은 catalog 표를 잠그지 않고 읽는다({@link CatalogOptions} 의 전제).
@@ -53,6 +53,7 @@ public class AdminStockService {
     private final StockReader stockReader;
     private final CatalogOptions catalog;
     private final TransactionTemplate writeTransaction;
+    private final TransactionTemplate readTransaction;
 
     public AdminStockService(StockLedger ledger, StockReader stockReader, CatalogOptions catalog,
                              PlatformTransactionManager transactionManager) {
@@ -60,6 +61,26 @@ public class AdminStockService {
         this.stockReader = stockReader;
         this.catalog = catalog;
         this.writeTransaction = new TransactionTemplate(transactionManager);
+        this.readTransaction = new TransactionTemplate(transactionManager);
+        this.readTransaction.setReadOnly(true);
+    }
+
+    /**
+     * 그 상품 옵션 전부의 재고, option_id 오름차순. 재고 행이 없는 옵션(아직 넣지 않음 — 구매 화면에서는 품절)도 싣는다.
+     * 사전예약 상품은 거절하지 않고 "재고를 세지 않음" 과 빈 목록으로 답한다 — 관리자 화면이 상품마다 이 탭을 부른다.
+     *
+     * @throws BusinessException PRODUCT_NOT_FOUND
+     */
+    public StockOverview find(Long productId) {
+        return readTransaction.execute(status -> {
+            SaleMode saleMode = catalog.findSaleMode(productId)
+                    .orElseThrow(() -> new BusinessException(OrderErrorCode.PRODUCT_NOT_FOUND));
+            if (saleMode != SaleMode.IN_STOCK) {
+                return StockOverview.untracked(productId);
+            }
+            List<Long> optionIds = catalog.findOptionIds(productId);
+            return StockOverview.of(productId, optionIds, stockReader.findByOptionIds(optionIds));
+        });
     }
 
     /**

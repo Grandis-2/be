@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** 관리자 재고 설정(PUT) · 초기화(POST). 요청마다 커밋하므로 "아무것도 안 바뀜" 을 DB 에서 본다. */
+/** 관리자 재고 조회(GET) · 설정(PUT) · 초기화(POST). 요청마다 커밋하므로 "아무것도 안 바뀜" 을 DB 에서 본다. */
 @OrderIntegrationTest
 @AutoConfigureMockMvc
 class AdminStockApiTest {
@@ -134,6 +134,48 @@ class AdminStockApiTest {
                 .andExpect(status().isBadRequest());
 
         assertThat(reader.findByOptionIds(List.of(preorder.optionId(), foreign, first))).isEmpty();
+    }
+
+    // 재고를 넣지 않은 first 도 registered=false 와 0 으로 싣는다.
+    @Test
+    void getListsEveryOptionInOrderMarkingUnregistered() throws Exception {
+        fixtures.stock(second, 8, 1, 2);
+
+        get(product.productId())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.productId").value(product.productId()))
+                .andExpect(jsonPath("$.data.tracked").value(true))
+                .andExpect(jsonPath("$.data.items.length()").value(2))
+                .andExpect(jsonPath("$.data.items[0].optionId").value(first))
+                .andExpect(jsonPath("$.data.items[0].registered").value(false))
+                .andExpect(jsonPath("$.data.items[0].stockTotal").value(0))
+                .andExpect(jsonPath("$.data.items[0].available").value(0))
+                .andExpect(jsonPath("$.data.items[1].optionId").value(second))
+                .andExpect(jsonPath("$.data.items[1].registered").value(true))
+                .andExpect(jsonPath("$.data.items[1].stockTotal").value(8))
+                .andExpect(jsonPath("$.data.items[1].stockReserved").value(1))
+                .andExpect(jsonPath("$.data.items[1].stockSold").value(2))
+                .andExpect(jsonPath("$.data.items[1].available").value(5))
+                .andExpect(jsonPath("$.data.items[1].created").doesNotExist());
+    }
+
+    // 관리자 화면이 상품마다 이 탭을 부른다. 사전예약은 거절하지 않고 "세지 않음" 으로 답한다(쓰기는 409).
+    @Test
+    void getOnPreorderProductIsUntrackedAndEmpty() throws Exception {
+        get(fixtures.preorderProduct().productId())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.tracked").value(false))
+                .andExpect(jsonPath("$.data.items.length()").value(0));
+    }
+
+    @Test
+    void getUnknownProductIs404AndCustomerIsForbidden() throws Exception {
+        get(Long.MAX_VALUE)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
+        mockMvc.perform(MockMvcRequestBuilders.get("/api/v1/admin/products/{productId}/stock", product.productId())
+                        .with(TestAuth.customer(1L)))
+                .andExpect(status().isForbidden());
     }
 
     @Test
@@ -254,6 +296,11 @@ class AdminStockApiTest {
     private ResultActions put(Long productId, String body, RequestPostProcessor who) throws Exception {
         return mockMvc.perform(MockMvcRequestBuilders.put("/api/v1/admin/products/{productId}/stock", productId)
                 .contentType(MediaType.APPLICATION_JSON).content(body).with(who));
+    }
+
+    private ResultActions get(Long productId) throws Exception {
+        return mockMvc.perform(MockMvcRequestBuilders.get("/api/v1/admin/products/{productId}/stock", productId)
+                .with(TestAuth.admin()));
     }
 
     private ResultActions post(Long productId, String body) throws Exception {

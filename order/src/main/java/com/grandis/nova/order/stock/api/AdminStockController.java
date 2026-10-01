@@ -3,6 +3,7 @@ package com.grandis.nova.order.stock.api;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.order.stock.admin.AdminStockService;
 import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -25,6 +26,12 @@ public class AdminStockController {
 
     public AdminStockController(AdminStockService service) {
         this.service = service;
+    }
+
+    /** 그 상품 옵션 전부의 재고. 재고를 넣지 않은 옵션은 registered=false, 사전예약 상품은 tracked=false 와 빈 목록. */
+    @GetMapping
+    public ApiResponse<StockOverviewResponse> find(@PathVariable Long productId) {
+        return ApiResponse.ok(StockOverviewResponse.from(service.find(productId)));
     }
 
     /** 총량 설정. 행이 없는 옵션은 만들고(확보 · 판매 0), 목록에 없는 옵션은 건드리지 않는다. */
