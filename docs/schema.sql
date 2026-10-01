@@ -283,6 +283,7 @@ CREATE TABLE `preorder_campaigns` (
   `product_id` bigint NOT NULL,
   `opens_at` datetime(6) NOT NULL,
   `closes_at` datetime(6) NOT NULL,
+  `schedule_version` bigint NOT NULL DEFAULT '0',
   `next_queue_position` bigint NOT NULL DEFAULT '1',
   `open_notified_at` datetime(6) DEFAULT NULL,
   `created_at` datetime(6) NOT NULL,
