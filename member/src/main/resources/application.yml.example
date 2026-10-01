@@ -35,6 +35,22 @@ spring:
           max-wait: 100ms
 server:
   port: 8080
+  # 켜지 않는다 — 관리자 로그인 시도 제한이 X-Forwarded-For 를 받은 그대로 센다(auth.admin-login-limit.trusted-proxy-hops).
+  # 비워 두면 Spring Boot 가 AWS ECS 를 감지해 스스로 켜고(RemoteIpValve), 헤더를 고쳐 써서 IP 판정이 틀어진다. 켜진 채로 hops > 0 이면 기동 실패
+  forward-headers-strategy: none
+
+# OpenAPI 문서. 기본은 꺼져 있고 값이 정확히 true 일 때만 켜진다(빈 값 · no · 오타는 꺼짐). 운영에는 적지 않는다.
+# api-docs 가 주 스위치다 — UI 만 꺼도 스펙은 열린다.
+# member 는 문서 허브다 — hub-services 를 주면 Swagger UI 드롭다운에 서비스별 문서(/v3/api-docs/{서비스})가 나온다.
+# 첫 화면은 목록의 첫 서비스. 모든 서비스 문서는 한 출처 뒤(dev: ALB, 로컬: docker/openapi-hub)에서만 열린다.
+# springdoc:
+#   api-docs:
+#     enabled: true
+#   swagger-ui:
+#     enabled: true
+# nova:
+#   openapi:
+#     hub-services: member,catalog,preorder,order
 
 # 프론트 주도 코드 교환: 프론트가 카카오에서 받은 code 를 POST /api/v1/auth/kakao/callback 으로 보내면 우리가 카카오에 code 를 낸다.
 # spring.security.oauth2.client 는 쓰지 않는다. client-secret 은 서버에만 있다(Secrets Manager 주입).
@@ -65,6 +81,17 @@ member:
     max-batches-per-run: 100
 
 auth:
+  # 관리자 로그인 시도 제한(IP 별). 창 안에서 max-attempts 를 넘으면 bcrypt 비교 없이 429 + Retry-After. 성공하면 그 IP 의 수를 지운다.
+  # trusted-proxy-hops: X-Forwarded-For 에서 믿는 프록시 수. 운영은 CloudFront → ALB 라 2 — 오른쪽에서 두 번째 칸(CloudFront 가 붙인 실제 IP)을 쓴다.
+  #   실제보다 크게 잡으면 클라이언트가 위조한 칸을 읽어 제한이 무력해지고, 작게 잡으면 CloudFront 엣지 IP 로 세어 여러 사용자가 한 수를 나눠 쓴다.
+  #   프록시 없이 직접 받는 로컬은 0 도 된다.
+  # 셀 수 없으면(Redis 장애) 503 retryable 로 거절한다 — Redis 가 죽으면 관리자 토큰 발급도 어차피 실패한다.
+  # max-total-attempts: 모든 IP 를 합친 시도 수(IP 별 제한을 통과한 것만). IP 를 바꿔 가며 오는 공격에도 bcrypt 부하에 천장을 둔다. 성공하면 0.
+  admin-login-limit:
+    max-attempts: 5
+    max-total-attempts: 60
+    window: 1m
+    trusted-proxy-hops: 2
   # 리프레시 쿠키. 로컬 http 에서는 false 로.
   cookie:
     secure: true
@@ -100,4 +127,4 @@ jwt:
   # jwk-set-uri: https://…/.well-known/jwks.json   # 검증 서비스(catalog·preorder·order)만. member 는 비운다. https 가 아니면 기동 실패. 5분마다 백그라운드로 다시 받고, 모르는 kid 는 그 요청을 401 로 보낸 뒤 비동기로 다시 받는다(요청 스레드는 기다리지 않는다)
   # jwk-set-allow-http: true                         # VPC 안 Cloud Map 주소(http://member.ureca.local:8080/…)를 쓰는 동안만 명시. TLS 가 붙으면 지운다
   access-token-validity: 30m    # 폐기 표식을 못 읽는 동안(fail-open) 로그아웃·제재된 토큰이 살아남는 상한. 재발급은 쿠키로 자동이라 30분이면 사용자는 못 느낀다
-  refresh-token-validity: 14d   # 0 이나 음수는 기동 실패
+  refresh-token-validity: 14d   # 0 이나 음수, 액세스보다 짧으면 기동 실패

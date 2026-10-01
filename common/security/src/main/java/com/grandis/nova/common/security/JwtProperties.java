@@ -69,6 +69,11 @@ public record JwtProperties(
         }
         requirePositive(accessTokenValidity, "jwt.access-token-validity");
         requirePositive(refreshTokenValidity, "jwt.refresh-token-validity");
+        if (accessTokenValidity != null && refreshTokenValidity != null && refreshTokenValidity.compareTo(accessTokenValidity) < 0) {
+            // 전체 폐기 표식(not-before)은 리프레시 수명만큼 산다. 액세스가 더 길면 표식이 먼저 사라져 이미 끊은 액세스 토큰이 다시 통과한다
+            throw new IllegalArgumentException("jwt.refresh-token-validity must be >= jwt.access-token-validity, was "
+                    + refreshTokenValidity + " < " + accessTokenValidity);
+        }
     }
 
     /** 이 서비스가 토큰을 발급하는가(개인키가 있는가). */

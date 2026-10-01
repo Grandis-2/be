@@ -47,6 +47,7 @@ class RefreshTokenDbStoreTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired RefreshTokenRepository rows;
     @Autowired TransactionTemplate transactions;
+    @Autowired com.grandis.nova.common.security.JwtProperties jwt;
 
     private long newCustomer() {
         String kakaoId = "k-" + UUID.randomUUID();
@@ -197,6 +198,133 @@ class RefreshTokenDbStoreTest {
     }
 
     /** 만료 시각을 지정한 행 하나. ck_refresh_expiry 가 생성 < 만료를 강제하므로 생성은 하루 전으로 둔다. */
+    @Test
+    @DisplayName("탐지 창(만료 + 액세스 유효기간)이 지난 교체 토큰이 다시 오면 체인을 건드리지 않고 만료로 거절한다")
+    void reuseAfterDetectionWindowIsExpiredWithoutTouchingTheChain() {
+        long customerId = newCustomer();
+        String first = login(customerId, UUID.randomUUID());
+        assertThat(store.rotate(first, RefreshTokens.newToken(), CLIENT).status()).isEqualTo(Rotation.Status.ROTATED);
+        pullChainExpiry(customerId, jwt.accessTokenValidity().plusMinutes(1));
+
+        assertThat(store.rotate(first, RefreshTokens.newToken(), CLIENT).status()).isEqualTo(Rotation.Status.EXPIRED);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE customer_id = ? AND revoked_at IS NOT NULL", Long.class, customerId))
+                .as("체인 폐기 없음").isZero();
+    }
+
+    @Test
+    @DisplayName("탐지 창이 지난 재사용은 체인의 다른 행 잠금을 기다리지 않는다 — 정리가 그 행을 지우는 중이어도 교착 없이 만료로 끝난다")
+    void pastWindowReuseDoesNotWaitOnChainLocks() throws Exception {
+        long customerId = newCustomer();
+        String first = login(customerId, UUID.randomUUID());
+        String second = RefreshTokens.newToken();
+        assertThat(store.rotate(first, second, CLIENT).status()).isEqualTo(Rotation.Status.ROTATED);
+        pullChainExpiry(customerId, jwt.accessTokenValidity().plusMinutes(1));
+
+        java.util.concurrent.CountDownLatch locked = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            // 정리가 같은 체인의 다른 행(second)을 지우는 중인 것처럼 그 행을 X 로 잠그고 붙잡는다
+            java.util.concurrent.Future<?> cleanup = pool.submit(() -> transactions.executeWithoutResult(status -> {
+                assertThat(rows.findByTokenHashForUpdate(RefreshTokens.hash(second))).isPresent();
+                locked.countDown();
+                try {
+                    release.await(60, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+            assertThat(locked.await(30, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+
+            long started = System.nanoTime();
+            Rotation rotation = store.rotate(first, RefreshTokens.newToken(), CLIENT);
+            assertThat(java.time.Duration.ofNanos(System.nanoTime() - started))
+                    .as("체인 폐기를 했다면 잠긴 행을 기다린다(innodb_lock_wait_timeout)").isLessThan(java.time.Duration.ofSeconds(5));
+            assertThat(rotation.status()).isEqualTo(Rotation.Status.EXPIRED);
+
+            release.countDown();
+            cleanup.get(30, java.util.concurrent.TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("탐지 창 경계는 만료 + 30분이다 — 그 순간의 교체 토큰은 만료, 1초 전이면 아직 재사용으로 체인을 끊는다")
+    void detectionWindowBoundary() {
+        assertThat(jwt.accessTokenValidity()).isEqualTo(java.time.Duration.ofMinutes(30));
+        long customerId = newCustomer();
+        Instant at = nowSeconds();
+        String atBoundary = rotatedExpiring(customerId, at.minus(java.time.Duration.ofMinutes(30)));
+        String oneSecondInside = rotatedExpiring(customerId, at.minus(java.time.Duration.ofMinutes(30)).plusSeconds(1));
+
+        assertThat(rotateAt(at, atBoundary).status()).isEqualTo(Rotation.Status.EXPIRED);
+        assertThat(rotateAt(at, oneSecondInside).status()).isEqualTo(Rotation.Status.REUSED);
+    }
+
+    @Test
+    @DisplayName("탐지 창이 지난 체인의 로그아웃은 그 체인 행의 잠금을 기다리지 않는다 — 정리가 지우는 중이어도 바로 끝난다. 창 안이면 폐기된다")
+    void logoutOfPastWindowChainDoesNotWait() throws Exception {
+        long customerId = newCustomer();
+        UUID sessionId = UUID.randomUUID();
+        String first = login(customerId, sessionId);
+        String second = RefreshTokens.newToken();
+        assertThat(store.rotate(first, second, CLIENT).status()).isEqualTo(Rotation.Status.ROTATED);
+        pullChainExpiry(customerId, java.time.Duration.ofMinutes(41));
+
+        java.util.concurrent.CountDownLatch locked = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<?> cleanup = pool.submit(() -> transactions.executeWithoutResult(status -> {
+                assertThat(rows.findByTokenHashForUpdate(RefreshTokens.hash(second))).isPresent();
+                locked.countDown();
+                try {
+                    release.await(60, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+            assertThat(locked.await(30, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+
+            long started = System.nanoTime();
+            store.revokeSession(sessionId);
+            assertThat(java.time.Duration.ofNanos(System.nanoTime() - started))
+                    .as("창 밖 행까지 폐기하려 했다면 잠긴 행을 기다린다").isLessThan(java.time.Duration.ofSeconds(5));
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE customer_id = ? AND revoked_at IS NOT NULL", Long.class, customerId))
+                    .as("창이 지난 체인은 폐기하지 않는다 — 잠금을 우회해 UPDATE 한 것도 아니다").isZero();
+
+            release.countDown();
+            cleanup.get(30, java.util.concurrent.TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+
+        // 대조군: 창 안의 체인은 로그아웃이 폐기한다
+        long other = newCustomer();
+        UUID live = UUID.randomUUID();
+        login(other, live);
+        store.revokeSession(live);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE customer_id = ? AND revoked_at IS NULL", Long.class, other)).isZero();
+    }
+
+    /** 이미 교체된(rotated_at 이 있는) 행 하나. 만료 시각을 지정한다. */
+    private String rotatedExpiring(long customerId, Instant expiresAt) {
+        String raw = expiring(customerId, expiresAt);
+        jdbc.update("UPDATE refresh_tokens SET rotated_at = created_at WHERE token_hash = ?", RefreshTokens.hash(raw));
+        return raw;
+    }
+
+    /** 이 회원의 모든 행을 "지금 − ago" 에 만료된 것으로 당긴다(발급 시각도 같이 — ck_refresh_expiry). */
+    private void pullChainExpiry(long customerId, java.time.Duration ago) {
+        Instant expiresAt = nowSeconds().minus(ago);
+        jdbc.update("UPDATE refresh_tokens SET created_at = ?, expires_at = ? WHERE customer_id = ?",
+                LocalDateTime.ofInstant(expiresAt.minus(1, ChronoUnit.DAYS), ZoneOffset.UTC),
+                LocalDateTime.ofInstant(expiresAt, ZoneOffset.UTC), customerId);
+    }
+
     private String expiring(long customerId, Instant expiresAt) {
         String raw = RefreshTokens.newToken();
         jdbc.update("INSERT INTO refresh_tokens(customer_id, family_id, token_hash, expires_at, created_at) VALUES (?,?,?,?,?)",
@@ -208,7 +336,7 @@ class RefreshTokenDbStoreTest {
 
     /** 시계를 고정한 저장소로 회전한다. 직접 만든 객체라 @Transactional 이 안 붙으므로 트랜잭션을 밖에서 연다. */
     private Rotation rotateAt(Instant at, String presented) {
-        DbRefreshTokenStore fixed = new DbRefreshTokenStore(rows, Clock.fixed(at, ZoneOffset.UTC));
+        DbRefreshTokenStore fixed = new DbRefreshTokenStore(rows, Clock.fixed(at, ZoneOffset.UTC), jwt);
         return transactions.execute(status -> fixed.rotate(presented, RefreshTokens.newToken(), CLIENT));
     }
 
@@ -274,6 +402,48 @@ class RefreshTokenDbStoreTest {
                 Integer.class, target)).isZero();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE customer_id = ? AND revoked_at IS NULL",
                 Integer.class, bystander)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("revokeAllOf: 탐지 창이 지난 행은 건드리지도 기다리지도 않는다 — 정리가 그 행을 잡고 있어도 바로 끝나고, 창 안의 행은 폐기된다")
+    void revokeAllOfSkipsPastWindowRowsWithoutWaiting() throws Exception {
+        long customerId = newCustomer();
+        login(customerId, UUID.randomUUID());   // 창 안(살아 있음)
+        String justExpired = expiring(customerId, nowSeconds().minus(java.time.Duration.ofMinutes(10)));   // 만료됐지만 창(30분) 안 — 폐기 대상
+        String old = expiring(customerId, nowSeconds().minus(java.time.Duration.ofMinutes(41)));   // 창 밖(정리 대상)
+
+        java.util.concurrent.CountDownLatch locked = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<?> cleanup = pool.submit(() -> transactions.executeWithoutResult(status -> {
+                assertThat(rows.findByTokenHashForUpdate(RefreshTokens.hash(old))).isPresent();
+                locked.countDown();
+                try {
+                    release.await(60, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+            assertThat(locked.await(30, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+
+            long started = System.nanoTime();
+            store.revokeAllOf(String.valueOf(customerId));
+            assertThat(java.time.Duration.ofNanos(System.nanoTime() - started))
+                    .as("창 밖 행까지 UPDATE 했다면 잠긴 행을 기다린다").isLessThan(java.time.Duration.ofSeconds(5));
+
+            release.countDown();
+            cleanup.get(30, java.util.concurrent.TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE customer_id = ? AND revoked_at IS NULL AND expires_at > UTC_TIMESTAMP()",
+                Integer.class, customerId)).as("창 안의 행은 폐기됐다").isZero();
+        assertThat(jdbc.queryForObject("SELECT revoked_at IS NULL FROM refresh_tokens WHERE token_hash = ?", Boolean.class, RefreshTokens.hash(old)))
+                .as("창 밖 행은 그대로").isTrue();
+        assertThat(jdbc.queryForObject("SELECT revoked_at IS NULL FROM refresh_tokens WHERE token_hash = ?", Boolean.class, RefreshTokens.hash(justExpired)))
+                .as("만료 10분 — 탐지 창 안이라 폐기된다(그 사이 나간 액세스 토큰이 아직 살아 있다)").isFalse();
     }
 
     @Test
