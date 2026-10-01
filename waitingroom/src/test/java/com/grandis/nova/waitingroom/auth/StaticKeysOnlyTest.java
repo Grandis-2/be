@@ -16,7 +16,7 @@ import java.time.Instant;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** jwk-set-uri 없이 정적 공개키만 쓰는 구성(부하 시험 · 로컬). JWKS 캐시를 만들지 않고 readiness 는 UP 이다. */
-@SpringBootTest(properties = "jwt.jwk-set-uri=")
+@SpringBootTest(properties = {"jwt.jwk-set-uri=", "waitingroom.control.enabled=false"})
 class StaticKeysOnlyTest {
 
     @DynamicPropertySource
