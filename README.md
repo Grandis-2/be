@@ -38,6 +38,7 @@ be/
 ├── catalog/             상품 · 옵션 · 관리자 등록/편집
 ├── preorder/            접수 · 순번 · 회차 · 배송 차수 · 예약 취소
 ├── order/               주문 · 결제기록 · 재고 · 장바구니
+├── waitingroom/         입장 대기열 — 진입 판정 · 순서 · 입장권, 접수를 preorder 로 전달
 ├── worker/              SQS 소비 — 외부 예약 등록 · 알림
 └── batch/               만료 스캔 · 정합성 검사
 ```
@@ -47,15 +48,15 @@ be/
 | `member` | 2~4 | CPU | `customers` · `refresh_tokens` |
 | `catalog` | 2~6 | 요청 수 | `categories` · `products` · `product_options` |
 | **`preorder`** | **6~12** | **요청 수** | `preorders` · `preorder_events`<br>`preorder_campaigns` · `shipment_batches` · `product_reviews` |
+| `waitingroom` | 2~12 | 요청 수 · 오픈 전 예약 확장 | (없음 — 대기열은 전용 Redis) |
 | `order` | 2~8 | CPU | `orders` · `order_items` · `order_events`<br>`cart_items` · `payments` · `payment_transactions` · `option_inventories` |
 | `worker` | 1~20 | Backlog per Task · SPOT | `preorder_sync_jobs` · `preorder_sync_attempts` |
 | `batch` | **1 고정** | — | (읽기) |
 
-별도 저장소로 도는 것이 둘 더 있다.
+별도 저장소로 도는 것이 하나 더 있다.
 
 | | 역할 |
 | --- | --- |
-| **queue-gateway** | 대기열 진입 판정 · 프록시. 통과 트래픽을 `preorder` 로 보낸다 |
 | **mock-external** | 외부 예약 Mock + 결제 Mock. 우리와 **HTTP 로만** 통신한다 |
 
 ### 왜 이렇게 나눴나
@@ -121,7 +122,7 @@ batch    시간이 되면 깨어남.   1 로 고정돼야 함 (늘면 같은 스
 | 접수 후 변경 | 해당 모델의 배송 기준과 기존 배정 변경 금지 |
 | 오픈·마감 | 모델별로 따로 설정. 마감은 당일 자정 |
 | 사용자 취소 | 포함. 배송 중부터 불가 (예약됨 → 배송 준비 중 → 배송 중 → 배송 완료) |
-| 입장 대기열 | 포함. 별도 저장소에 구현됨 |
+| 입장 대기열 | 포함. `waitingroom` 모듈 |
 | 로그인 | 소셜 로그인만. 카카오 |
 | 인증 | JWT + 리프레시 토큰 (ElastiCache Redis) |
 | 결제 | 사전예약 후 결제 기한을 주는 방식 |

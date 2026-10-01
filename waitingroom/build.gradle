@@ -1,0 +1,26 @@
+apply plugin: 'org.springframework.boot'
+
+// 입장 대기열. 판정 · 줄 서기는 WebFlux 이벤트 루프에서 Redis 스냅샷으로 한다.
+// common:web · common:security 는 servlet 전용이라 의존하지 않는다 — 서블릿 필터 · MVC 설정이 리액티브 앱에서 동작하지 않는다.
+
+// Spring Boot BOM 이 관리하지 않는 라이브러리 버전. 올릴 때 여기만 바꾼다(preorder 와 같은 값).
+ext {
+    archunitVersion = '1.5.1'
+}
+
+dependencies {
+    implementation project(':common:types')
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+    // 액세스 토큰 검증(RS256 · JWKS). 발급은 member 가 한다
+    implementation 'org.springframework.boot:spring-boot-starter-security-oauth2-resource-server'
+    // member JWKS 를 받는 WebClient(자동설정 빌더 — 지표 · 코덱 설정을 같이 받는다)
+    implementation 'org.springframework.boot:spring-boot-starter-webclient'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
+    // Reactor 컨텍스트의 traceId 를 로그 MDC 로 옮긴다
+    implementation 'io.micrometer:context-propagation'
+
+    testImplementation 'io.projectreactor:reactor-test'
+    // 모듈 경계 규칙(ModuleBoundaryTest)
+    testImplementation "com.tngtech.archunit:archunit-junit5:${archunitVersion}"
+}
