@@ -24,6 +24,7 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
         // 문서 그룹(/v3/api-docs/preorder) · 로그가 이 이름을 쓴다
         defaults.put("spring.application.name", "preorder");
         revocationFailClosedPaths(defaults);
+        databasePool(defaults);
         dependencyTimeouts(defaults);
         dependencyResilience(defaults);
         environment.getPropertySources().addLast(new MapPropertySource(SOURCE_NAME, defaults));
@@ -41,6 +42,14 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
      */
     private void revocationFailClosedPaths(Map<String, Object> defaults) {
         defaults.put("auth.revocation-check.fail-closed-paths", "/api/v1/admin/**,/api/v1/preorders/*/cancel");
+    }
+
+    /**
+     * 커넥션을 기다리는 상한(ms). 가상 스레드라 요청이 풀 앞에 줄을 서는데, 기본 30초면 과부하 때 요청을 오래 붙잡는다.
+     * 빨리 실패시켜 503 + Retry-After 로 돌려보낸다.
+     */
+    private void databasePool(Map<String, Object> defaults) {
+        defaults.put("spring.datasource.hikari.connection-timeout", 2000);
     }
 
     /** 내부 호출의 연결 · 읽기 시간 상한. 없으면 HTTP 클라이언트가 응답을 끝없이 기다려 동시 호출 상한을 붙잡는다. */
