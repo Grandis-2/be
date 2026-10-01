@@ -35,6 +35,10 @@ public class PreorderCampaign extends BaseEntity {
     @Column(nullable = false)
     private Instant closesAt;
 
+    /** 일정이 바뀔 때마다 오르는 번호. 순번 발급으로는 오르지 않아 @Version 으로 두지 않는다. */
+    @Column(nullable = false)
+    private long scheduleVersion;
+
     @Column(nullable = false)
     private long nextQueuePosition;
 
@@ -116,6 +120,10 @@ public class PreorderCampaign extends BaseEntity {
 
     public Instant getClosesAt() {
         return closesAt;
+    }
+
+    public long getScheduleVersion() {
+        return scheduleVersion;
     }
 
     public long getNextQueuePosition() {
