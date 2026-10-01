@@ -1,7 +1,6 @@
 package com.grandis.nova.waitingroom.web;
 
 import com.grandis.nova.common.ErrorCode;
-import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpResponse;
@@ -41,7 +40,8 @@ public class ErrorResponses {
         response.getHeaders().setContentType(MediaType.APPLICATION_JSON);
         ApiResponse<Void> body = ApiResponse.failure(code, message, details, clock.instant(),
                 RequestIdFilter.traceId(exchange));
-        DataBuffer buffer = response.bufferFactory().wrap(jsonMapper.writeValueAsBytes(body));
-        return response.writeWith(Mono.just(buffer));
+        // 직렬화 실패도 Mono 의 오류로 흘려 호출자의 오류 처리를 탄다
+        return response.writeWith(Mono.fromCallable(
+                () -> response.bufferFactory().wrap(jsonMapper.writeValueAsBytes(body))));
     }
 }

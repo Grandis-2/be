@@ -22,6 +22,11 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -133,6 +138,31 @@ class JwkSetCacheTest {
             elapse(Duration.ofSeconds(1));
             kids("unknown-3");
             assertThat(fetches).hasValue(3);
+        }
+
+        @Test
+        void 모르는_kid_가_동시에_몰려도_다시_받기는_한_번이다() throws Exception {
+            loaded("k1");
+            int threads = 32;
+            CountDownLatch start = new CountDownLatch(1);
+            ExecutorService pool = Executors.newFixedThreadPool(threads);
+            try {
+                List<Future<List<String>>> results = new ArrayList<>();
+                for (int i = 0; i < threads; i++) {
+                    String kid = "forged-" + i;
+                    results.add(pool.submit(() -> {
+                        start.await();
+                        return kids(kid);
+                    }));
+                }
+                start.countDown();
+                for (Future<List<String>> result : results) {
+                    assertThat(result.get(5, TimeUnit.SECONDS)).containsExactly("k1");
+                }
+            } finally {
+                pool.shutdownNow();
+            }
+            assertThat(fetches).as("기동 한 번 + 몰린 요청 중 한 번").hasValue(2);
         }
 
         @Test

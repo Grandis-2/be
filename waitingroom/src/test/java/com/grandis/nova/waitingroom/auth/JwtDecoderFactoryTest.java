@@ -154,6 +154,14 @@ class JwtDecoderFactoryTest {
         }
 
         @Test
+        void role_이나_type_이_없으면_예외가_아니라_검증_실패로_거절한다() {
+            for (String claim : new String[]{"role", "type", "sub"}) {
+                assertThatThrownBy(() -> decode(TestJwts.builder("1024", NOW).omit(claim).sign()))
+                        .as(claim).isInstanceOf(JwtValidationException.class);
+            }
+        }
+
+        @Test
         void 모르는_role_이나_빈_sub_는_거절한다() {
             assertThatThrownBy(() -> decode(TestJwts.builder("1024", NOW).role("ROOT").sign()))
                     .isInstanceOf(JwtValidationException.class);
