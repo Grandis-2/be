@@ -11,6 +11,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntConsumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -97,18 +98,23 @@ class EnqueueLatchTest {
             }
         }
 
-        /** 넘치면 통째로 비우는 설계라 다른 스레드가 비운 키는 남지 않을 수 있다. 크기가 묶이고 깨지지 않는 것만 본다. */
+        /** 넘치면 통째로 비우는 설계라 다른 스레드가 비운 키는 남지 않을 수 있다. 크기가 상한을 넘지 않는 것을 본다. */
         @Test
-        void 상한을_넘겨_동시에_찍어도_크기는_상한_근처로_묶이고_예외가_없다() throws Exception {
+        void 상한을_넘겨_동시에_찍어도_크기는_어느_순간에도_상한을_넘지_않는다() throws Exception {
             EnqueueLatch latch = EnqueueLatch.covering(4, Duration.ofSeconds(5));
 
             // 라운드마다 새 키를 넣어 128개 — 비우는 처리가 없으면 크기가 128 이 되어 단언이 깨진다
+            AtomicInteger largest = new AtomicInteger();
             for (int round = 0; round < 4; round++) {
                 int offset = round * THREADS;
-                concurrently(i -> latch.mark("p" + (offset + i), 100));
+                concurrently(i -> {
+                    latch.mark("p" + (offset + i), 100);
+                    largest.accumulateAndGet(latch.size(), Math::max);
+                });
             }
 
-            assertThat(latch.size()).isLessThanOrEqualTo(4 + THREADS);
+            assertThat(largest.get()).isLessThanOrEqualTo(4);
+            assertThat(latch.size()).isLessThanOrEqualTo(4);
             latch.mark("last", 100);
             assertThat(latch.latched("last", 100)).isTrue();
         }
