@@ -65,12 +65,13 @@ class CatalogRepositoryWriteTest {
     void secondStartOnSameProductIsRejected() {
         Long productId = fixtures.product("PREORDER", "ACTIVE");
         String firstKey = ShopFixtures.unique();
-        registrations.saveAndFlush(ProductRegistration.start(productId, firstKey, true));
+        registrations.saveAndFlush(ProductRegistration.start(productId, firstKey, true, ShopFixtures.preorderPlan(productId)));
         jdbcTemplate.update("UPDATE product_registrations SET completed_at = UTC_TIMESTAMP(6), campaign_set_at = UTC_TIMESTAMP(6) "
                 + "WHERE product_id = ?", productId);
 
         assertThatThrownBy(() -> registrations.saveAndFlush(
-                ProductRegistration.start(productId, ShopFixtures.unique(), false)))
+                ProductRegistration.start(productId, ShopFixtures.unique(), false,
+                        ShopFixtures.preorderPlan(productId))))
                 .isInstanceOf(DataIntegrityViolationException.class);
 
         Map<String, Object> row = jdbcTemplate.queryForMap(

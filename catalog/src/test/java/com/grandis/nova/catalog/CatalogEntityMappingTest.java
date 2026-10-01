@@ -28,7 +28,9 @@ import org.junit.jupiter.api.Test;
 import jakarta.persistence.EntityManager;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -40,12 +42,14 @@ import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * 엔티티가 마이그레이션 스키마와 맞는지. 컨텍스트가 뜨는 것(ddl-auto: validate)이 절반이고,
- * 나머지 절반은 JDBC 타입 변환이 값을 보존하는지다 — boolean ↔ tinyint(1) · byte[] ↔ binary(32) · 문자열 ↔ json 은
+ * 나머지 절반은 JDBC 타입 변환이 값을 보존하는지다 — boolean ↔ tinyint(1) · 문자열 ↔ json 은
  * validate 를 지나도 값이 깨질 수 있어 저장한 값을 SQL 로 다시 읽어 대조한다.
  */
 @CatalogIntegrationTest
 @Transactional
 class CatalogEntityMappingTest {
+
+    private static final JsonMapper JSON = JsonMapper.builder().build();
 
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired EntityManager entityManager;
@@ -147,7 +151,8 @@ class CatalogEntityMappingTest {
         assertThat(visibleInDb(product.getId())).isFalse();
 
         ProductRegistration incomplete = registrations.saveAndFlush(
-                ProductRegistration.start(product.getId(), ShopFixtures.unique(), true));
+                ProductRegistration.start(product.getId(), ShopFixtures.unique(), true,
+                        ShopFixtures.inStockPlanWithoutOptions(product.getId())));
         assertThatThrownBy(() -> product.publish(incomplete)).isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(() -> product.publish(null)).isInstanceOf(IllegalArgumentException.class);
 
@@ -171,7 +176,8 @@ class CatalogEntityMappingTest {
         Product product = products.saveAndFlush(Product.register(fixtures.category(), SaleMode.PREORDER,
                 "Nova 1", BigDecimal.ZERO, null, null, false, BigDecimal.ZERO));
         String key = ShopFixtures.unique();
-        registrations.saveAndFlush(ProductRegistration.start(product.getId(), key, true));
+        registrations.saveAndFlush(ProductRegistration.start(product.getId(), key, true,
+                ShopFixtures.preorderPlan(product.getId())));
         jdbcTemplate.update("UPDATE product_registrations SET blocked_reason = 'OPENED_BEFORE_COMPLETE' WHERE product_id = ?",
                 product.getId());
         entityManager.clear();
@@ -282,24 +288,49 @@ class CatalogEntityMappingTest {
     }
 
     @Test
-    @DisplayName("등록 기록의 공개 요청 · 빈 단계 시각이 그대로 남는다")
+    @DisplayName("등록 기록의 공개 요청 · 계획 · 빈 단계 시각이 그대로 남는다 — 계획은 JSON 객체로 저장된다")
     void registrationRoundTrip() {
-        Long productId = fixtures.product("PREORDER", "ACTIVE");
+        Long productId = fixtures.product("IN_STOCK", "ACTIVE");
         String key = ShopFixtures.unique();
-        registrations.saveAndFlush(ProductRegistration.start(productId, key, true));
+        String plan = ShopFixtures.inStockPlanWithoutOptions(productId);
+        registrations.saveAndFlush(ProductRegistration.start(productId, key, true, plan));
 
         Map<String, Object> row = jdbcTemplate.queryForMap(
-                "SELECT requested_visible, completed_at, lease_token FROM product_registrations "
+                "SELECT requested_visible, completed_at, lease_token, JSON_TYPE(plan_payload) AS plan_type, "
+                        + "JSON_EXTRACT(plan_payload, '$.productId') AS plan_product FROM product_registrations "
                         + "WHERE product_id = ?", productId);
         assertThat(row.get("requested_visible")).isEqualTo(true);
         assertThat(row.get("completed_at")).isNull();
         assertThat(row.get("lease_token")).isNull();
+        assertThat(row.get("plan_type")).as("문자열이 아니라 JSON 객체로 들어간다").isEqualTo("OBJECT");
+        assertThat(row.get("plan_product")).isEqualTo(String.valueOf(productId));
 
         ProductRegistration reloaded = registrations.findByIdempotencyKey(key).orElseThrow();
         assertThat(reloaded.getProductId()).isEqualTo(productId);
         assertThat(reloaded.getIdempotencyKey()).isEqualTo(key);
         assertThat(reloaded.isRequestedVisible()).isTrue();
+        assertThat(JSON.readTree(reloaded.getPlanPayload())).isEqualTo(JSON.readTree(plan));
         assertThat(reloaded.isCompleted()).isFalse();
         assertThat(reloaded.isBlocked()).isFalse();
+    }
+
+    @Test
+    @DisplayName("계획 칸은 JPA 로 바꿔도 DB 에 반영되지 않는다(updatable = false) — 대조군: 같은 flush 에서 lastError 는 반영된다")
+    void planPayloadIsNotUpdatedThroughJpa() {
+        Long productId = fixtures.product("IN_STOCK", "ACTIVE");
+        String key = ShopFixtures.unique();
+        String plan = ShopFixtures.inStockPlanWithoutOptions(productId);
+        registrations.saveAndFlush(ProductRegistration.start(productId, key, true, plan));
+        entityManager.clear();
+
+        ProductRegistration loaded = registrations.findByIdempotencyKey(key).orElseThrow();
+        ReflectionTestUtils.setField(loaded, "planPayload", ShopFixtures.preorderPlan(productId));
+        ReflectionTestUtils.setField(loaded, "lastError", "probe");
+        registrations.flush();
+
+        Map<String, Object> row = jdbcTemplate.queryForMap(
+                "SELECT plan_payload, last_error FROM product_registrations WHERE product_id = ?", productId);
+        assertThat(JSON.readTree((String) row.get("plan_payload"))).isEqualTo(JSON.readTree(plan));
+        assertThat(row.get("last_error")).isEqualTo("probe");
     }
 }

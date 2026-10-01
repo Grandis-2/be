@@ -8,6 +8,8 @@ import jakarta.persistence.PostLoad;
 import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
 import jakarta.persistence.Transient;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import org.springframework.data.domain.Persistable;
 
 import java.time.Instant;
@@ -18,6 +20,7 @@ import java.time.Instant;
  * 등록은 catalog 저장 → preorder(회차 · 차수) 또는 order(재고) 호출 → 완료의 여러 단계다.
  * 단계마다 완료 시각을 두고 FAILED 같은 상태값은 두지 않는다 — 실패는 "완료 시각이 비어 있고 lastError 가 있다" 로 읽고
  * 같은 Idempotency-Key 로 재개한다. 같은 키로 다시 오면 본문 내용은 대조하지 않는다 — 다른 본문이 오는 것은 프론트 버그일 때뿐이다(2026-09-30 결정).
+ * ② 에 넘길 계획은 ① 에서 planPayload 로 고정하고, 재개는 그것만 쓴다(2026-10-01 결정).
  * completedAt 이 있어야 노출 · 거래 조건의 앞 조건이 참이 된다. blockedReason 이 있으면 자동 재개가 없다.
  * 리스(leaseToken · leaseExpiresAt)는 동시 재개 제어다 — 단계 기록은 자기 리스일 때만 반영한다. 둘은 같이 있거나 같이 없다(DB CHECK).
  * lastError 는 500자다. 쓰는 쪽이 코드포인트 기준으로 자른다 — 넘기면 오류를 기록하는 UPDATE 가 실패해 오류가 사라진다.
@@ -45,6 +48,16 @@ public class ProductRegistration extends BaseEntity implements Persistable<Long>
     @Column(nullable = false, updatable = false)
     private boolean requestedVisible;
 
+    /**
+     * ② 에 넘길 계획({@link RegistrationPlan} 의 JSON). ① 에서 고정하고 바꾸지 않는다 — 재개는 이것만 쓰고 같은 키로 다시 온 본문은 보지 않는다.
+     * preorder 가 외부 등록 본문을 접수 때 preorder_sync_jobs.request_payload 에 고정하는 것과 같은 관례다.
+     * 이 칸이 생기기 전의 행은 JSON null 이다(MySQL 8.4.11 실측: NOT NULL JSON 칸을 더하면 기존 행은 SQL NULL 이 아니라 JSON null) —
+     * 그런 미완료 등록은 재개하지 않고 막힘(PLAN_UNAVAILABLE)으로 돌려준다.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(nullable = false, updatable = false)
+    private String planPayload;
+
     private Instant campaignSetAt;
 
     private Instant batchesSetAt;
@@ -67,15 +80,16 @@ public class ProductRegistration extends BaseEntity implements Persistable<Long>
     protected ProductRegistration() {
     }
 
-    private ProductRegistration(Long productId, String idempotencyKey, boolean requestedVisible) {
+    private ProductRegistration(Long productId, String idempotencyKey, boolean requestedVisible, String planPayload) {
         this.productId = productId;
         this.idempotencyKey = idempotencyKey;
         this.requestedVisible = requestedVisible;
+        this.planPayload = planPayload;
     }
 
     /** catalog 저장 단계가 끝난 직후의 기록. 나머지 단계 시각은 비어 있다. */
-    public static ProductRegistration start(Long productId, String idempotencyKey, boolean requestedVisible) {
-        return new ProductRegistration(productId, idempotencyKey, requestedVisible);
+    public static ProductRegistration start(Long productId, String idempotencyKey, boolean requestedVisible, String planPayload) {
+        return new ProductRegistration(productId, idempotencyKey, requestedVisible, planPayload);
     }
 
     public boolean isCompleted() {
@@ -112,6 +126,10 @@ public class ProductRegistration extends BaseEntity implements Persistable<Long>
 
     public boolean isRequestedVisible() {
         return requestedVisible;
+    }
+
+    public String getPlanPayload() {
+        return planPayload;
     }
 
     public Instant getCampaignSetAt() {

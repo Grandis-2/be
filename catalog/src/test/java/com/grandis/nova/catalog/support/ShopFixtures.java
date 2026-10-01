@@ -7,14 +7,18 @@ import org.springframework.jdbc.support.KeyHolder;
 import java.math.BigDecimal;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 /**
  * 테스트 데이터. 마이그레이션 이전 칼럼만으로 INSERT 한다 — 다른 모듈(preorder · order)의 픽스처가 그렇게 넣으므로
  * 새 칼럼의 DEFAULT 가 그 행들을 유효하게 지키는지도 이 픽스처가 같이 검증한다.
+ * 예외: {@link #registration} 은 plan_payload(NOT NULL, DEFAULT 없음)를 넣는다. 이 표는 catalog 만 쓴다.
  *
  * 매번 새 행을 만들고 지우지 않는다. 유일 칸은 UUID 로 채워 테스트끼리 겹치지 않으므로
  * 커밋하는 테스트와 롤백하는 테스트가 같은 컨테이너를 순서 상관없이 쓸 수 있다.
@@ -172,11 +176,49 @@ public class ShopFixtures {
                 """, productId, kind, bundleKey, position, url, primary);
     }
 
+    /**
+     * 등록 기록. 계획은 상품의 판매 방식에 맞춘다 — 사전예약이면 하루 뒤 오픈 회차와 상한 없는 차수 하나,
+     * 일반이면 이 시점에 있는 옵션마다 재고 0. 옵션을 아직 안 넣은 상품이면 재고가 비는데, 실제 등록은 옵션 없이 만들어지지 않으므로
+     * 그 경우의 계획은 실제로 나올 수 없는 모양이다 — 계획을 읽는 시험은 옵션을 먼저 넣고 부른다.
+     * 판매 방식은 스칼라 부질의로 읽는다 — INSERT … SELECT 로 바꾸면 없는 상품에서 0행으로 조용히 끝나 FK 시험의 뜻이 바뀐다.
+     */
     public void registration(Long productId, String idempotencyKey) {
         jdbcTemplate.update("""
-                INSERT INTO product_registrations (product_id, idempotency_key, requested_visible, created_at, updated_at)
-                VALUES (?, ?, 1, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, productId, idempotencyKey);
+                INSERT INTO product_registrations (product_id, idempotency_key, requested_visible, plan_payload, created_at, updated_at)
+                VALUES (?, ?, 1,
+                        CASE (SELECT sale_mode FROM products WHERE id = ?)
+                            WHEN 'PREORDER' THEN JSON_OBJECT('productId', ?, 'stockByOptionId', JSON_OBJECT(),
+                                'campaign', JSON_OBJECT(
+                                    'opensAt', DATE_FORMAT(UTC_TIMESTAMP() + INTERVAL 1 DAY, '%Y-%m-%dT%H:%i:%sZ'),
+                                    'closesAt', DATE_FORMAT(UTC_TIMESTAMP() + INTERVAL 2 DAY, '%Y-%m-%dT%H:%i:%sZ')),
+                                'shipmentBatches', JSON_ARRAY(JSON_OBJECT('batchNumber', 1, 'positionFrom', 1, 'positionTo', NULL,
+                                    'estimatedShipStart', DATE_FORMAT(UTC_DATE() + INTERVAL 10 DAY, '%Y-%m-%d'),
+                                    'estimatedShipEnd', DATE_FORMAT(UTC_DATE() + INTERVAL 14 DAY, '%Y-%m-%d'))))
+                            ELSE JSON_OBJECT('productId', ?,
+                                'stockByOptionId', COALESCE((SELECT JSON_OBJECTAGG(id, 0) FROM product_options WHERE product_id = ?),
+                                    JSON_OBJECT()),
+                                'campaign', NULL, 'shipmentBatches', JSON_ARRAY())
+                        END,
+                        UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """, productId, idempotencyKey, productId, productId, productId, productId);
+    }
+
+    /**
+     * 엔티티로 등록 기록을 만드는 시험의 일반 상품 계획. 옵션 없는 상품에 쓰므로 재고가 비어 있다 — 실제 등록은 재고를 하나 이상 담으므로
+     * 실제로 나올 수 없는 모양이다. 계획 칸의 저장 · 매핑만 보는 시험에 쓰고, 계획을 읽는 규칙의 시험에는 쓰지 않는다.
+     */
+    public static String inStockPlanWithoutOptions(Long productId) {
+        return """
+                {"productId":%d,"stockByOptionId":{},"campaign":null,"shipmentBatches":[]}""".formatted(productId);
+    }
+
+    /** 엔티티로 등록 기록을 만드는 시험의 사전예약 상품 계획 — 하루 뒤 오픈 회차와 상한 없는 차수 하나. 실제 등록이 만들 수 있는 모양이다. */
+    public static String preorderPlan(Long productId) {
+        Instant opensAt = Instant.now().plus(Duration.ofDays(1)).truncatedTo(ChronoUnit.MICROS);
+        LocalDate shipStart = LocalDate.now(ZoneOffset.UTC).plusDays(10);
+        return """
+                {"productId":%d,"stockByOptionId":{},"campaign":{"opensAt":"%s","closesAt":"%s"},                "shipmentBatches":[{"batchNumber":1,"positionFrom":1,"positionTo":null,"estimatedShipStart":"%s","estimatedShipEnd":"%s"}]}"""
+                .formatted(productId, opensAt, opensAt.plus(Duration.ofDays(1)), shipStart, shipStart.plusDays(4));
     }
 
     public static String unique() {

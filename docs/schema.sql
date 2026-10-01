@@ -459,6 +459,7 @@ CREATE TABLE `product_registrations` (
   `product_id` bigint NOT NULL,
   `idempotency_key` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   `requested_visible` tinyint(1) NOT NULL,
+  `plan_payload` json NOT NULL,
   `campaign_set_at` datetime(6) DEFAULT NULL,
   `batches_set_at` datetime(6) DEFAULT NULL,
   `stock_set_at` datetime(6) DEFAULT NULL,
