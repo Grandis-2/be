@@ -45,7 +45,7 @@ class AdmissionTicketVerifierTest {
         @Test
         void waiting_이_발급한_입장권을_받고_ID_는_토큰의_SHA256_이다() {
             assertThat(verifierAt(ISSUED_AT).verify(VECTOR_CURRENT, PRODUCT_ID, CUSTOMER_ID))
-                    .contains(new AdmissionTicket(VECTOR_CURRENT_ID));
+                    .contains(new AdmissionTicket(VECTOR_CURRENT_ID, false));
         }
 
         @Test
@@ -75,15 +75,15 @@ class AdmissionTicketVerifierTest {
     class 만료 {
 
         @Test
-        void 만료_뒤에도_서버_시각_오차_30초_안이면_받는다() {
+        void 만료_뒤에도_서버_시각_오차_30초_안이면_유효하다() {
             assertThat(verifierAt(EXPIRES_AT.plusSeconds(29)).verify(VECTOR_CURRENT, PRODUCT_ID, CUSTOMER_ID))
-                    .isPresent();
+                    .contains(new AdmissionTicket(VECTOR_CURRENT_ID, false));
         }
 
         @Test
-        void 오차를_넘으면_거절한다() {
+        void 오차를_넘으면_만료로_알린다() {
             assertThat(verifierAt(EXPIRES_AT.plusSeconds(30)).verify(VECTOR_CURRENT, PRODUCT_ID, CUSTOMER_ID))
-                    .isEmpty();
+                    .contains(new AdmissionTicket(VECTOR_CURRENT_ID, true));
         }
     }
 

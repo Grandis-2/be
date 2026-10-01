@@ -117,6 +117,22 @@ class AcceptPreorderApiTest {
     }
 
     @Test
+    void 입장권이_만료된_뒤에도_같은_키의_재전송은_기존_예약을_돌려주고_새_접수는_403() throws Exception {
+        String first = body(accept(customerId, product.productId(), product.optionId(), "key-expired-replay",
+                ticket(product.productId(), customerId)));
+        String expired = AdmissionTickets.issue(product.productId(), customerId, Instant.now().minusSeconds(600));
+
+        accept(customerId, product.productId(), product.optionId(), "key-expired-replay", expired)
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.data.preorderId").value(first))
+                .andExpect(jsonPath("$.data.replayed").value(true));
+        accept(customerId, product.productId(), product.optionId(), "key-expired-new", expired)
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("ADMISSION_TICKET_INVALID"));
+        assertThat(fixtures.count("SELECT COUNT(*) FROM preorders WHERE customer_id = ?", customerId)).isEqualTo(1);
+    }
+
+    @Test
     void 같은_키에_다른_옵션이면_422_와_다른_필드를_알린다() throws Exception {
         Long otherOption = fixtures.option(product.productId(), "ACTIVE");
         catalogReturnsTwoOptions(product.productId(), product.optionId(), otherOption);

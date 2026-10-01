@@ -13,6 +13,7 @@ import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -68,9 +69,10 @@ public class AdmissionTicketVerifier {
     }
 
     /**
-     * 이 상품 · 이 회원의 유효한 입장권인가.
+     * 이 상품 · 이 회원에게 게이트웨이가 낸 입장권인가. 만료는 거절하지 않고 칸으로 알린다 —
+     * 만료 뒤의 같은 접수 키 재전송에도 기존 예약을 돌려줘야 해서다.
      *
-     * @return 통과하면 입장권(ID 포함). 하나라도 어긋나면 비어 있다
+     * @return 통과하면 입장권(ID · 만료 여부). 서명 · 상품 · 회원 · 모양이 하나라도 어긋나면 비어 있다
      */
     public Optional<AdmissionTicket> verify(String token, Long productId, Long customerId) {
         if (token == null || !token.startsWith(PREFIX)) {
@@ -93,11 +95,14 @@ public class AdmissionTicketVerifier {
         String[] parts = new String(claims, StandardCharsets.UTF_8).split(FIELD, -1);
         if (parts.length != 3
                 || !parts[0].equals(String.valueOf(productId))
-                || !parts[1].equals(String.valueOf(customerId))
-                || !notExpired(parts[2], now)) {
+                || !parts[1].equals(String.valueOf(customerId))) {
             return Optional.empty();
         }
-        return Optional.of(new AdmissionTicket(sha256Hex(token)));
+        OptionalLong expiresAt = epochSecond(parts[2]);
+        if (expiresAt.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(new AdmissionTicket(sha256Hex(token), isExpired(expiresAt.getAsLong(), now)));
     }
 
     private boolean signatureMatches(String payload, byte[] presented, Instant now) {
@@ -115,13 +120,17 @@ public class AdmissionTicketVerifier {
         return matched || byPrevious;
     }
 
-    /** 만료 시각 그 순간은 지난 것이다. 서버 시각 오차만큼만 더 받아 준다. */
-    private boolean notExpired(String exp, Instant now) {
+    private OptionalLong epochSecond(String exp) {
         try {
-            return Long.parseLong(exp) + clockSkewSeconds > now.getEpochSecond();
+            return OptionalLong.of(Long.parseLong(exp));
         } catch (NumberFormatException e) {
-            return false;
+            return OptionalLong.empty();
         }
+    }
+
+    /** 만료 시각 그 순간은 지난 것이다. 서버 시각 오차만큼만 더 받아 준다. */
+    private boolean isExpired(long expiresAt, Instant now) {
+        return expiresAt + clockSkewSeconds <= now.getEpochSecond();
     }
 
     private Duration max(Duration a, Duration b) {

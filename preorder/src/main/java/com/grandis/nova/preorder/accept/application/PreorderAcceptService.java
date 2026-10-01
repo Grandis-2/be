@@ -80,8 +80,14 @@ public class PreorderAcceptService {
         }
         AdmissionTicket ticket = ticketVerifier.verify(admissionTicket, productId, customerId)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.ADMISSION_TICKET_INVALID));
-        return accept(new AcceptCommand(customerId, productId, optionId, idempotencyKey, ticket.id(),
-                EventActor.USER, null, null));
+        AcceptCommand command = new AcceptCommand(customerId, productId, optionId, idempotencyKey, ticket.id(),
+                EventActor.USER, null, null);
+        if (ticket.expired()) {
+            // 만료된 입장권으로는 새로 접수하지 않는다. 같은 접수 키의 재전송이면 기존 예약을 돌려준다
+            return transaction.findReplay(command)
+                    .orElseThrow(() -> new BusinessException(PreorderErrorCode.ADMISSION_TICKET_INVALID));
+        }
+        return accept(command);
     }
 
     /** 결과 태그는 accepted · replayed · 오류 코드(유한한 값)이고, 그 밖의 예외는 error 로 센다. */
