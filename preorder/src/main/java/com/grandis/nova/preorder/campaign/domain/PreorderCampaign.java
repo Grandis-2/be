@@ -23,6 +23,9 @@ public class PreorderCampaign extends BaseEntity {
 
     private static final Duration CLOSED_BEFORE_OPEN = Duration.ofMillis(1);
 
+    /** 새 회차의 일정 번호. 0 은 번호를 매기기 전에 만든 회차다. */
+    static final long FIRST_SCHEDULE_VERSION = 1;
+
     /** 첫 예약이 받는 순번. */
     static final long FIRST_QUEUE_POSITION = 1;
 
@@ -52,6 +55,7 @@ public class PreorderCampaign extends BaseEntity {
         this.productId = productId;
         this.opensAt = opensAt;
         this.closesAt = closesAt;
+        this.scheduleVersion = FIRST_SCHEDULE_VERSION;
         this.nextQueuePosition = FIRST_QUEUE_POSITION;
     }
 
@@ -63,10 +67,19 @@ public class PreorderCampaign extends BaseEntity {
         return isAccepting(now) ? PreorderSaleStatus.OPEN : PreorderSaleStatus.CLOSED;
     }
 
-    /** 일정 변경. 오픈 뒤에는 부르지 않는다 — 판정은 호출하는 쪽이 회차 행을 잠근 채 한다. */
-    public void reschedule(Instant opensAt, Instant closesAt) {
+    /**
+     * 일정 변경. 오픈 뒤에는 부르지 않는다 — 판정은 호출하는 쪽이 회차 행을 잠근 채 한다.
+     *
+     * @return 일정이 바뀌었으면 true(일정 번호도 오른다). 같은 일정이면 false
+     */
+    public boolean reschedule(Instant opensAt, Instant closesAt) {
+        if (this.opensAt.equals(opensAt) && this.closesAt.equals(closesAt)) {
+            return false;
+        }
         this.opensAt = opensAt;
         this.closesAt = closesAt;
+        this.scheduleVersion++;
+        return true;
     }
 
     /** 지금까지 발급한 순번 수(취소 행 포함). */
@@ -74,15 +87,21 @@ public class PreorderCampaign extends BaseEntity {
         return nextQueuePosition - FIRST_QUEUE_POSITION;
     }
 
-    /** 판매 중지로 지금 마감한다. 오픈 전이면 마감 > 오픈 제약을 지키려고 기간 전체를 지난 것으로 둔다. */
-    public void closeNow(Instant now) {
+    /**
+     * 판매 중지로 지금 마감한다. 오픈 전이면 마감 > 오픈 제약을 지키려고 기간 전체를 지난 것으로 둔다.
+     *
+     * @return 마감했으면 true(일정 번호도 오른다). 이미 마감이 지났으면 false
+     */
+    public boolean closeNow(Instant now) {
         if (!now.isBefore(closesAt)) {
-            return;
+            return false;
         }
         if (!now.isAfter(opensAt)) {
             this.opensAt = now.minus(CLOSED_BEFORE_OPEN);
         }
         this.closesAt = now;
+        this.scheduleVersion++;
+        return true;
     }
 
     /** 오픈 시각 이상, 마감 시각 미만일 때 접수를 받는다. */

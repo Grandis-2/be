@@ -1,0 +1,99 @@
+package com.grandis.nova.preorder.campaign;
+
+import com.grandis.nova.preorder.campaign.application.PreorderCampaignAdminService;
+import com.grandis.nova.preorder.integration.catalog.CatalogClient;
+import com.grandis.nova.preorder.support.CatalogStubs;
+import com.grandis.nova.preorder.support.PreorderIntegrationTest;
+import com.grandis.nova.preorder.support.ShopFixtures;
+import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/** 회차 일정이 바뀔 때마다 같은 트랜잭션에서 대기열용 회차 변경 이벤트가 적힌다. */
+@PreorderIntegrationTest
+class CampaignChangeEventTest {
+
+    @Autowired
+    PreorderCampaignAdminService service;
+
+    @Autowired
+    Campaigns campaigns;
+
+    @Autowired
+    JdbcTemplate jdbcTemplate;
+
+    @MockitoBean
+    CatalogClient catalogClient;
+
+    ShopFixtures fixtures;
+
+    @BeforeEach
+    void setUp() {
+        fixtures = new ShopFixtures(jdbcTemplate);
+    }
+
+    @Test
+    void 생성은_번호_1_로_변경은_번호를_올려_적고_같은_일정은_적지_않는다() {
+        Long productId = fixtures.product("PREORDER", "ACTIVE");
+        CatalogStubs.stubPreorderProduct(catalogClient, productId, CatalogStubs.activeOption(1L));
+        Instant opensAt = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.MICROS);
+
+        service.upsertCampaign(productId, opensAt, opensAt.plusSeconds(3600));
+        service.upsertCampaign(productId, opensAt, opensAt.plusSeconds(3600));
+        Instant changed = opensAt.plusSeconds(600);
+        service.upsertCampaign(productId, changed, changed.plusSeconds(3600));
+
+        List<Map<String, Object>> events = events(productId);
+        assertThat(events).extracting(event -> event.get("change")).containsExactly("CREATED", "RESCHEDULED");
+        assertThat(events).extracting(event -> event.get("version")).containsExactly(1L, 2L);
+        assertThat(events.get(1).get("opensAt")).isEqualTo(changed.toString());
+        assertThat(events.get(1).get("closesAt")).isEqualTo(changed.plusSeconds(3600).toString());
+        assertThat(scheduleVersion(productId)).isEqualTo(2);
+    }
+
+    @Test
+    void 판매_중지는_실제로_닫았을_때만_적는다() {
+        Instant now = Instant.now();
+        PreorderProduct upcoming = fixtures.preorderProduct(now.plusSeconds(3600), now.plusSeconds(7200));
+        PreorderProduct ended = fixtures.preorderProduct(now.minusSeconds(7200), now.minusSeconds(3600));
+
+        campaigns.closeNow(upcoming.productId(), now);
+        campaigns.closeNow(upcoming.productId(), now.plusSeconds(1));
+        campaigns.closeNow(ended.productId(), now);
+        campaigns.closeNow(Long.MAX_VALUE, now);
+
+        List<Map<String, Object>> events = events(upcoming.productId());
+        assertThat(events).extracting(event -> event.get("change")).containsExactly("CLOSED");
+        assertThat(events.getFirst().get("version")).as("번호를 매기기 전 회차(0)에서 오른다").isEqualTo(1L);
+        assertThat(events(ended.productId())).isEmpty();
+        assertThat(scheduleVersion(ended.productId())).isZero();
+    }
+
+    private List<Map<String, Object>> events(Long productId) {
+        return jdbcTemplate.queryForList("""
+                SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.change')) AS `change`,
+                       CAST(JSON_EXTRACT(payload, '$.scheduleVersion') AS SIGNED) AS version,
+                       JSON_UNQUOTE(JSON_EXTRACT(payload, '$.opensAt')) AS opensAt,
+                       JSON_UNQUOTE(JSON_EXTRACT(payload, '$.closesAt')) AS closesAt
+                  FROM outbox_events
+                 WHERE event_type = 'PREORDER_CAMPAIGN_CHANGED' AND aggregate_type = 'PREORDER_CAMPAIGN'
+                   AND aggregate_id = ?
+                 ORDER BY id
+                """, productId);
+    }
+
+    private long scheduleVersion(Long productId) {
+        return jdbcTemplate.queryForObject(
+                "SELECT schedule_version FROM preorder_campaigns WHERE product_id = ?", Long.class, productId);
+    }
+}

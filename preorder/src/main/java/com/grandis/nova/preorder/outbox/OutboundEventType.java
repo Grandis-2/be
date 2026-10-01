@@ -9,7 +9,8 @@ public enum OutboundEventType {
     REGISTER_JOB_READY("preorder-register"),
     SYNC_JOB_REPROCESS_REQUESTED("preorder-register"),
     CANCEL_JOB_READY("preorder-cancel"),
-    PREORDER_CANCEL_REQUESTED("order-events");
+    PREORDER_CANCEL_REQUESTED("order-events"),
+    PREORDER_CAMPAIGN_CHANGED("waitingroom-events");
 
     private final String destination;
 

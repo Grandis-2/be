@@ -18,7 +18,7 @@ import java.util.List;
 
 /**
  * 회차 · 차수를 바꾸는 트랜잭션. 모두 회차 행을 잠근 채 한다 —
- * 접수도 같은 행을 잠그므로 "오픈 전인가" 판정과 접수가 경합하지 않는다.
+ * 접수도 같은 행을 잠그므로 "오픈 전인가" 판정과 접수가 경합하지 않는다. 일정이 바뀌면 같은 트랜잭션에서 회차 변경 이벤트를 적는다.
  *
  * 외부 호출(catalog)은 여기 없다. 상품 확인은 트랜잭션 밖에서 끝내고 들어온다.
  */
@@ -27,13 +27,15 @@ class PreorderCampaignWriter {
 
     private final PreorderCampaignRepository campaigns;
     private final ShipmentBatchRepository batches;
+    private final CampaignChangePublisher changePublisher;
     private final CampaignProperties properties;
     private final Clock clock;
 
     PreorderCampaignWriter(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
-                           CampaignProperties properties, Clock clock) {
+                           CampaignChangePublisher changePublisher, CampaignProperties properties, Clock clock) {
         this.campaigns = campaigns;
         this.batches = batches;
+        this.changePublisher = changePublisher;
         this.properties = properties;
         this.clock = clock;
     }
@@ -48,7 +50,9 @@ class PreorderCampaignWriter {
 
     private PreorderCampaign create(Long productId, Instant opensAt, Instant closesAt) {
         requireLeadTime(opensAt);
-        return campaigns.save(new PreorderCampaign(productId, opensAt, closesAt));
+        PreorderCampaign campaign = campaigns.save(new PreorderCampaign(productId, opensAt, closesAt));
+        changePublisher.publish(campaign, CampaignChange.CREATED);
+        return campaign;
     }
 
     /** 오픈 전 전체 교체. 순번이 나간 뒤에 구간을 바꾸면 그 순번의 배송 차수가 달라진다. */
@@ -65,7 +69,9 @@ class PreorderCampaignWriter {
     private PreorderCampaign reschedule(PreorderCampaign campaign, Instant opensAt, Instant closesAt) {
         requireBeforeOpen(campaign);
         requireLeadTime(opensAt);
-        campaign.reschedule(opensAt, closesAt);
+        if (campaign.reschedule(opensAt, closesAt)) {
+            changePublisher.publish(campaign, CampaignChange.RESCHEDULED);
+        }
         return campaign;
     }
 

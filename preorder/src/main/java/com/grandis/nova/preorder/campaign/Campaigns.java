@@ -1,5 +1,7 @@
 package com.grandis.nova.preorder.campaign;
 
+import com.grandis.nova.preorder.campaign.application.CampaignChange;
+import com.grandis.nova.preorder.campaign.application.CampaignChangePublisher;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatch;
@@ -23,10 +25,13 @@ public class Campaigns {
 
     private final PreorderCampaignRepository campaigns;
     private final ShipmentBatchRepository batches;
+    private final CampaignChangePublisher changePublisher;
 
-    Campaigns(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches) {
+    Campaigns(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
+              CampaignChangePublisher changePublisher) {
         this.campaigns = campaigns;
         this.batches = batches;
+        this.changePublisher = changePublisher;
     }
 
     /** 회차 행을 잠그고 일정을 읽는다. 잠금은 호출한 트랜잭션이 끝날 때까지다. 회차가 없으면 비어 있다. */
@@ -65,9 +70,11 @@ public class Campaigns {
                 .collect(Collectors.toMap(ShipmentBatch::getId, ShipmentBatch::toSnapshot));
     }
 
-    /** 판매 중지: 회차를 지금 시각으로 닫는다. 회차가 없으면 아무것도 하지 않는다. */
+    /** 판매 중지: 회차를 지금 시각으로 닫는다. 실제로 닫았을 때만 회차 변경 이벤트를 적는다(없거나 이미 지났으면 그대로). */
     @Transactional
     public void closeNow(Long productId, Instant now) {
-        campaigns.findForUpdate(productId).ifPresent(campaign -> campaign.closeNow(now));
+        campaigns.findForUpdate(productId)
+                .filter(campaign -> campaign.closeNow(now))
+                .ifPresent(campaign -> changePublisher.publish(campaign, CampaignChange.CLOSED));
     }
 }
