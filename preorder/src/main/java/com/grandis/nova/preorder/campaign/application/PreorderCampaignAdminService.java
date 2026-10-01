@@ -10,6 +10,8 @@ import com.grandis.nova.preorder.campaign.domain.ShipmentBatchRepository;
 import com.grandis.nova.preorder.integration.catalog.CatalogReader;
 import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
 import com.grandis.nova.preorder.web.ValidationFailures;
+import org.hibernate.exception.ConstraintViolationException;
+import org.hibernate.exception.ConstraintViolationException.ConstraintKind;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -49,7 +51,7 @@ public class PreorderCampaignAdminService {
      * 없으면 만들고 있으면 바꾼다. 회차 행의 주인은 preorder 다 — catalog 는 상품 · 옵션만 만든다.
      *
      * 둘이 동시에 처음 만들면 한쪽이 PK 충돌로 롤백된다. 실패한 트랜잭션은 이어 쓸 수 없으므로
-     * 새 트랜잭션에서 한 번 더 한다 — 그때는 행이 있으니 일정 변경으로 끝난다.
+     * 새 트랜잭션에서 한 번 더 한다 — 그때는 행이 있으니 일정 변경으로 끝난다. 다른 제약 위반은 다시 하지 않는다.
      */
     public PreorderCampaign upsertCampaign(Long productId, Instant opensAt, Instant closesAt) {
         requirePeriod(opensAt, closesAt);
@@ -57,6 +59,9 @@ public class PreorderCampaignAdminService {
         try {
             return writer.upsert(productId, opensAt, closesAt);
         } catch (DataIntegrityViolationException e) {
+            if (!isDuplicateKey(e)) {
+                throw e;
+            }
             return writer.upsert(productId, opensAt, closesAt);
         }
     }
@@ -69,6 +74,16 @@ public class PreorderCampaignAdminService {
 
     public List<ShipmentBatch> replaceBatches(Long productId, ShipmentBatchPlan plan) {
         return writer.replaceBatches(productId, plan);
+    }
+
+    /** 회차 행의 유일 제약은 PK 하나라, 유일 제약 위반이면 동시 생성이다. */
+    private boolean isDuplicateKey(DataIntegrityViolationException e) {
+        for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ConstraintViolationException violation) {
+                return violation.getKind() == ConstraintKind.UNIQUE;
+            }
+        }
+        return false;
     }
 
     private void requirePeriod(Instant opensAt, Instant closesAt) {
