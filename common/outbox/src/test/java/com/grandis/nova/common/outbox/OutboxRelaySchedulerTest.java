@@ -41,9 +41,11 @@ class OutboxRelaySchedulerTest {
     @Test
     void 다시_시작해도_릴레이는_하나만_돈다() throws Exception {
         OutboxRelay relay = mock(OutboxRelay.class);
+        AtomicInteger calls = new AtomicInteger();
         AtomicInteger running = new AtomicInteger();
         AtomicInteger maxRunning = new AtomicInteger();
         willAnswer(invocation -> {
+            calls.incrementAndGet();
             maxRunning.accumulateAndGet(running.incrementAndGet(), Math::max);
             Thread.sleep(50);
             running.decrementAndGet();
@@ -54,7 +56,8 @@ class OutboxRelaySchedulerTest {
         scheduler.start();
         scheduler.start();
         try {
-            Thread.sleep(500);
+            // 실행기가 둘이면 겹치는 실행이 생길 만큼 여러 번 돌 때까지 기다린다
+            await().atMost(Duration.ofSeconds(5)).until(() -> calls.get() >= 5);
         } finally {
             scheduler.stop();
         }
