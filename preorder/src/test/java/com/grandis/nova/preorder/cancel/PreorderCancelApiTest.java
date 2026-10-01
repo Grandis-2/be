@@ -86,7 +86,7 @@ class PreorderCancelApiTest {
                 .andExpect(jsonPath("$.data.status").value("CANCELING"))
                 .andExpect(jsonPath("$.data.version").value(2));
 
-        verify(orderClient).getCancelability(token, BearerTokens.value(accessToken));
+        verify(orderClient).getCancelability(accepted.preorder().id(), BearerTokens.value(accessToken));
         assertThat(jobStatus("REGISTER")).isEqualTo("CANCELED");
         Map<String, Object> outbox = jdbcTemplate.queryForMap("""
                 SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.reason')) AS reason,
@@ -106,7 +106,7 @@ class PreorderCancelApiTest {
                 .andExpect(jsonPath("$.data.status").value("CANCELING"))
                 .andExpect(jsonPath("$.data.version").value(2));
 
-        verify(orderClient).getCancelability(eq(token), any());
+        verify(orderClient).getCancelability(eq(accepted.preorder().id()), any());
         assertThat(fixtures.count("""
                 SELECT COUNT(*) FROM outbox_events WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
                 """, accepted.preorder().id())).isEqualTo(1);
@@ -154,7 +154,7 @@ class PreorderCancelApiTest {
                 .andExpect(header().string(HttpHeaders.RETRY_AFTER, "1"))
                 .andExpect(jsonPath("$.error.code").value("DEPENDENCY_UNAVAILABLE"));
 
-        verify(orderClient, times(2)).getCancelability(eq(token), any());
+        verify(orderClient, times(2)).getCancelability(eq(accepted.preorder().id()), any());
         assertThat(preorderStatus()).isEqualTo("PENDING_SYNC");
     }
 
@@ -202,8 +202,8 @@ class PreorderCancelApiTest {
     }
 
     private void orderAnswers(boolean cancelable, String orderStatus) {
-        given(orderClient.getCancelability(eq(token), any())).willReturn(
-                ApiResponse.ok(new Cancelability(token, orderStatus, cancelable, orderStatus)));
+        given(orderClient.getCancelability(eq(accepted.preorder().id()), any())).willReturn(
+                ApiResponse.ok(new Cancelability(orderStatus, cancelable, orderStatus)));
     }
 
     private String preorderStatus() {

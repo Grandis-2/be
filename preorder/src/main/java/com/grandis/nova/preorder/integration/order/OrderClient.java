@@ -14,9 +14,12 @@ import org.springframework.web.service.annotation.HttpExchange;
 @HttpExchange("/internal/orders")
 public interface OrderClient {
 
-    /** 취소를 시작하기 전에 "배송을 시작했나" 를 묻는다. 주문이 없으면 cancelable = true, orderStatus = null. */
-    @GetExchange("/by-preorder/{preorderId}/cancelability")
-    ApiResponse<Cancelability> getCancelability(@PathVariable String preorderId,
+    /**
+     * 취소를 시작하기 전에 "배송을 시작했나" 를 묻는다. 주문이 없으면 cancelable = true, orderStatus = null.
+     * 경로는 예약 내부 id(orders.preorder_id 와 같은 값)다 — 공개 UUID 가 아니다.
+     */
+    @GetExchange("/by-preorder/{preorderInternalId}/cancelability")
+    ApiResponse<Cancelability> getCancelability(@PathVariable Long preorderInternalId,
                                                 @RequestHeader(value = BearerTokens.HEADER, required = false)
                                                 String authorization);
 }

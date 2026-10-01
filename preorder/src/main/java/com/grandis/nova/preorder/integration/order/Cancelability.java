@@ -5,5 +5,5 @@ package com.grandis.nova.preorder.integration.order;
  *
  * @param orderStatus 주문이 없으면 null
  */
-public record Cancelability(String preorderId, String orderStatus, boolean cancelable, String reason) {
+public record Cancelability(String orderStatus, boolean cancelable, String reason) {
 }

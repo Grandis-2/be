@@ -36,19 +36,19 @@ public class OrderCancelabilityChecker {
     }
 
     /** @throws BusinessException 배송이 시작됐으면 PREORDER_NOT_CANCELABLE */
-    public void requireCancelable(String preorderToken, String accessToken) {
-        Cancelability cancelability = fetch(preorderToken, accessToken);
+    public void requireCancelable(Long preorderInternalId, String accessToken) {
+        Cancelability cancelability = fetch(preorderInternalId, accessToken);
         if (!cancelability.cancelable()) {
             throw new BusinessException(PreorderErrorCode.PREORDER_NOT_CANCELABLE,
                     Map.of("reason", "orderStatus=" + cancelability.orderStatus()));
         }
     }
 
-    private Cancelability fetch(String preorderToken, String accessToken) {
+    private Cancelability fetch(Long preorderInternalId, String accessToken) {
         Cancelability answer;
         try {
             String authorization = accessToken == null ? null : BearerTokens.value(accessToken);
-            answer = dependencyGuard.call(DEPENDENCY, () -> orderClient.getCancelability(preorderToken, authorization))
+            answer = dependencyGuard.call(DEPENDENCY, () -> orderClient.getCancelability(preorderInternalId, authorization))
                     .data();
         } catch (HttpClientErrorException e) {
             if (e.getStatusCode().isSameCodeAs(HttpStatus.UNAUTHORIZED)) {
@@ -57,15 +57,15 @@ public class OrderCancelabilityChecker {
             if (e.getStatusCode().isSameCodeAs(HttpStatus.FORBIDDEN)) {
                 throw new BusinessException(PreorderErrorCode.PREORDER_NOT_FOUND);
             }
-            throw InternalCallFailures.integrationError(DEPENDENCY, "preorderId=" + preorderToken, e);
+            throw InternalCallFailures.integrationError(DEPENDENCY, "preorderInternalId=" + preorderInternalId, e);
         } catch (RestClientException e) {
             if (InternalCallFailures.isUnreadableResponse(e)) {
-                throw InternalCallFailures.unreadableResponse(DEPENDENCY, "preorderId=" + preorderToken, e);
+                throw InternalCallFailures.unreadableResponse(DEPENDENCY, "preorderInternalId=" + preorderInternalId, e);
             }
-            throw dependencyGuard.callFailed(DEPENDENCY, "preorderId=" + preorderToken, e);
+            throw dependencyGuard.callFailed(DEPENDENCY, "preorderInternalId=" + preorderInternalId, e);
         }
         if (answer == null) {
-            throw new IllegalStateException("order 가 취소 가능 판정 없이 응답했다: preorderId=" + preorderToken);
+            throw new IllegalStateException("order 가 취소 가능 판정 없이 응답했다: preorderInternalId=" + preorderInternalId);
         }
         return answer;
     }

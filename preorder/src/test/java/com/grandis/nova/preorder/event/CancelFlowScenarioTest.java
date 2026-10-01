@@ -66,7 +66,7 @@ class CancelFlowScenarioTest {
         preorderId = accepted.preorder().id();
         token = AcceptFixtures.tokenOf(accepted);
         given(orderClient.getCancelability(any(), any()))
-                .willReturn(ApiResponse.ok(new Cancelability(token, null, true, null)));
+                .willReturn(ApiResponse.ok(new Cancelability(null, true, null)));
         externalNumber = "R-" + ShopFixtures.unique();
         handler.onExternalJobSucceeded(new ExternalJobSucceeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
                 token, "REGISTER", externalNumber));

@@ -46,7 +46,7 @@ public class PreorderCancelService {
     private CancelResult cancel(PreorderSnapshot preorder, EventActor actor, String reason, CancelReason cancelReason,
                                 String accessToken) {
         if (preorder.isCancelable()) {
-            cancelabilityChecker.requireCancelable(preorder.preorderToken(), accessToken);
+            cancelabilityChecker.requireCancelable(preorder.id(), accessToken);
             cancelStarter.start(preorder, actor, reason, cancelReason);
         }
         PreorderSnapshot current = preorders.getByToken(preorder.preorderToken());
