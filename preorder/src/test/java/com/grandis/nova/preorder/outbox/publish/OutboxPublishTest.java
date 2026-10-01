@@ -233,6 +233,21 @@ class OutboxPublishTest {
     }
 
     @Test
+    void 늘_실패하는_행이_앞에_쌓여도_실패가_적은_행을_먼저_가져간다() {
+        // 다른 시험의 행과 섞이지 않게 이 시험만 쓰는 종류로 적고 그 종류만 가져간다
+        String eventType = "RELAY_ORDER_" + aggregateId;
+        Long failing = insertUnpublished(eventType);
+        jdbcTemplate.update("UPDATE outbox_events SET publish_attempts = 7 WHERE id = ?", failing);
+        Long fresh = insertUnpublished(eventType);
+
+        List<Long> claimed = transactionTemplate.execute(status -> outboxEvents
+                .lockClaimable(Instant.now(), Instant.now(), List.of(eventType), 1).stream()
+                .map(OutboxEvent::getId).toList());
+
+        assertThat(claimed).containsExactly(fresh);
+    }
+
+    @Test
     void 보내기_전에_리스가_끝나_다른_인스턴스가_가져간_행은_보내지_않는다() {
         Long id = insertUnpublished("CANCEL_JOB_READY");
         // 가져간 뒤 보내기 직전(두 번째로 시각을 읽을 때), 다른 인스턴스가 리스를 새로 건 것으로 만든다

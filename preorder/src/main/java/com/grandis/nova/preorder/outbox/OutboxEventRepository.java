@@ -34,13 +34,14 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
     /**
      * 릴레이가 가져갈 행을 잠근다. 리스가 없거나 끝난 행만, 다른 인스턴스가 잠근 행은 건너뛴다(SKIP LOCKED).
      * 잠금은 같은 트랜잭션에서 {@link #lease} 로 리스를 건 뒤 커밋하면서 바로 푼다.
+     * 실패가 적은 행부터 가져간다 — 늘 실패하는 행(없는 큐 등)이 묶음 앞자리를 차지해 다른 행을 막지 않게.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     @Query(value = """
             SELECT * FROM outbox_events
              WHERE published_at IS NULL AND created_at <= :createdBefore AND event_type IN (:eventTypes)
                AND (lease_until IS NULL OR lease_until <= :now)
-             ORDER BY id
+             ORDER BY publish_attempts, id
              LIMIT :limit
                FOR UPDATE SKIP LOCKED
             """, nativeQuery = true)

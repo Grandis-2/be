@@ -16,7 +16,7 @@ import java.util.List;
 /**
  * 커밋 직후 발행이 실패했거나 그 사이 죽어 남은 행을 다시 보낸다.
  * 짧은 트랜잭션에서 오래된 자기 종류 행에 리스를 걸어 가져가고, 트랜잭션 밖에서 보낸다(잠금 · 커넥션을 쥐지 않는다).
- * 늘 실패하는 행이 relayBatch 건 넘게 쌓이면 뒤 행이 밀린다 — publish_attempts 로 드러난다.
+ * 늘 실패하는 행은 실패가 적은 행 뒤로 가 다른 행을 막지 않는다. 그런 행은 publish_attempts 로 드러난다.
  */
 @Component
 class OutboxRelay {
