@@ -113,6 +113,22 @@ class PreorderEventDispatcherTest {
     }
 
     @Test
+    void 재발행_요청은_대상_id_없이_받아_전체_재발행으로_보내고_두_번_받아도_된다() {
+        Long productId = preorders.findById(preorderId).orElseThrow().productId();
+        String body = envelope("CAMPAIGN_RESYNC_REQUESTED", "PREORDER_CAMPAIGN", null,
+                payload().put("requestedBy", "waitingroom").put("reason", "REDIS_EMPTY"));
+
+        dispatcher.dispatch(body);
+        dispatcher.dispatch(body);
+
+        assertThat(fixtures.count("""
+                SELECT COUNT(*) FROM outbox_events
+                 WHERE event_type = 'PREORDER_CAMPAIGN_CHANGED' AND aggregate_id = ?
+                   AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.change')) = 'RESYNC'
+                """, productId)).isEqualTo(2);
+    }
+
+    @Test
     void 받지_않는_이벤트_종류는_조용히_버리지_않고_예외로_올린다() {
         String body = envelope("SOMETHING_ELSE", "PREORDER", preorderId, payload());
 
