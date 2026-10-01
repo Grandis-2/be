@@ -1,0 +1,29 @@
+// 트랜잭셔널 아웃박스 메커니즘. 기록 · 커밋 직후 발행 · 리스 릴레이 · 미발행 현황을 자동설정으로 켠다.
+// 표는 서비스가 소유한다 — 표 이름과 이벤트 종류는 서비스가 OutboxDefinition 빈으로 준다. AWS 의존은 없다(SQS 전송은 common:sqs).
+apply plugin: 'java-library'
+
+dependencies {
+    // 봉투(EventEnvelope)와 Jackson 3 JsonMapper
+    api project(':common:message')
+    // 표 이름을 모르는 공통 코드라 엔티티 대신 JDBC 로 쓴다. 업무 트랜잭션(JPA)의 커넥션을 그대로 쓴다
+    implementation 'org.springframework:spring-jdbc'
+    implementation 'org.springframework.boot:spring-boot-autoconfigure'
+    // @DependsOnDatabaseInitialization 만 쓴다. DB 초기화를 쓰는 앱(JPA · JDBC 스타터)에는 늘 있고, 없으면 애너테이션이 무시된다
+    compileOnly 'org.springframework.boot:spring-boot-sql'
+    // 지표는 레지스트리가 있는 서비스에서만 기록한다. 없는 서비스(order)에 micrometer 를 끌어오지 않는다
+    compileOnly 'io.micrometer:micrometer-core'
+
+    testImplementation project(':common:testing')
+    testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    testImplementation 'org.springframework.boot:spring-boot-starter-jackson'
+    testImplementation 'io.micrometer:micrometer-core'
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    testImplementation 'org.testcontainers:testcontainers-mysql'
+    testRuntimeOnly 'com.mysql:mysql-connector-j'
+}
+
+tasks.named('test') {
+    // 시각을 JDBC URL · JVM 시간대와 상관없이 UTC 로 적는지 본다. UTC 머신(CI)에서도 어긋남이 드러나게 시간대를 바꿔 둔다
+    systemProperty 'user.timezone', 'Asia/Seoul'
+}
