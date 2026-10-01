@@ -111,6 +111,7 @@ class SecurityRulesTest {
     @ParameterizedTest
     @CsvSource({
             "GET,   /api/v1/admin/orders,                         admin",
+            "PUT,   /api/v1/admin/products/1/stock,               admin",
             "POST,  /api/v1/orders/o-1/payment-attempts,          user",
             "POST,  /api/v1/orders/o-1/payment-attempts/t-1/confirm, user",
             "POST,  /api/v1/orders/o-1/cancel,                    user",
