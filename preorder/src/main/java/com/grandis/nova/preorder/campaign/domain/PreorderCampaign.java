@@ -67,19 +67,16 @@ public class PreorderCampaign extends BaseEntity {
         return isAccepting(now) ? PreorderSaleStatus.OPEN : PreorderSaleStatus.CLOSED;
     }
 
-    /**
-     * 일정 변경. 오픈 뒤에는 부르지 않는다 — 판정은 호출하는 쪽이 회차 행을 잠근 채 한다.
-     *
-     * @return 일정이 바뀌었으면 true(일정 번호도 오른다). 같은 일정이면 false
-     */
-    public boolean reschedule(Instant opensAt, Instant closesAt) {
-        if (this.opensAt.equals(opensAt) && this.closesAt.equals(closesAt)) {
-            return false;
-        }
+    /** 지금 일정이 이것과 같은가. */
+    public boolean hasSchedule(Instant opensAt, Instant closesAt) {
+        return this.opensAt.equals(opensAt) && this.closesAt.equals(closesAt);
+    }
+
+    /** 일정 변경(일정 번호가 오른다). 오픈 뒤에는 부르지 않는다 — 판정은 호출하는 쪽이 회차 행을 잠근 채 한다. */
+    public void reschedule(Instant opensAt, Instant closesAt) {
         this.opensAt = opensAt;
         this.closesAt = closesAt;
         this.scheduleVersion++;
-        return true;
     }
 
     /** 지금까지 발급한 순번 수(취소 행 포함). */

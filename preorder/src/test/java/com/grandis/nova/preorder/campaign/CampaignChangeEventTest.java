@@ -65,6 +65,18 @@ class CampaignChangeEventTest {
     }
 
     @Test
+    void 오픈_10분_안이라도_같은_일정으로_다시_저장하면_그대로_통과하고_적지_않는다() {
+        Instant opensAt = Instant.now().plusSeconds(300).truncatedTo(ChronoUnit.SECONDS);
+        PreorderProduct soon = fixtures.preorderProduct(opensAt, opensAt.plusSeconds(3600));
+        CatalogStubs.stubPreorderProduct(catalogClient, soon.productId(), CatalogStubs.activeOption(soon.optionId()));
+
+        service.upsertCampaign(soon.productId(), opensAt, opensAt.plusSeconds(3600));
+
+        assertThat(events(soon.productId())).isEmpty();
+        assertThat(scheduleVersion(soon.productId())).isZero();
+    }
+
+    @Test
     void 판매_중지는_실제로_닫았을_때만_적는다() {
         Instant now = Instant.now();
         PreorderProduct upcoming = fixtures.preorderProduct(now.plusSeconds(3600), now.plusSeconds(7200));

@@ -68,10 +68,13 @@ class PreorderCampaignWriter {
 
     private PreorderCampaign reschedule(PreorderCampaign campaign, Instant opensAt, Instant closesAt) {
         requireBeforeOpen(campaign);
-        requireLeadTime(opensAt);
-        if (campaign.reschedule(opensAt, closesAt)) {
-            changePublisher.publish(campaign, CampaignChange.RESCHEDULED);
+        // 같은 일정으로 다시 저장하면 바뀐 것이 없으므로 준비 시간 검사도 이벤트도 없다
+        if (campaign.hasSchedule(opensAt, closesAt)) {
+            return campaign;
         }
+        requireLeadTime(opensAt);
+        campaign.reschedule(opensAt, closesAt);
+        changePublisher.publish(campaign, CampaignChange.RESCHEDULED);
         return campaign;
     }
 
