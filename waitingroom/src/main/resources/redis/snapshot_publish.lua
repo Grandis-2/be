@@ -30,9 +30,12 @@ local keep = {}
 for i = 1, #ARGV, 2 do
     keep[ARGV[i]] = true
 end
-redis.call('HSET', KEYS[1], unpack(ARGV))
-
+-- 나눠 쓴다 — Lua 5.1 의 unpack 은 결과 수 한도(약 8000)가 있어 모델이 많으면 통째로는 실패한다
 local CHUNK = 512
+for i = 1, #ARGV, CHUNK * 2 do
+    redis.call('HSET', KEYS[1], unpack(ARGV, i, math.min(i + CHUNK * 2 - 1, #ARGV)))
+end
+
 local stale = 0
 local chunk = {}
 for _, field in ipairs(redis.call('HKEYS', KEYS[1])) do

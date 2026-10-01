@@ -15,6 +15,8 @@ import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -154,6 +156,15 @@ class ControlStoreTest {
             ControlStore.TimedEntries read = control.readSnapshot().block(WAIT);
             assertThat(read.entries()).containsExactly(Map.entry("p:1", "z"));
             assertThat(read.redisNowMillis()).isCloseTo(System.currentTimeMillis(), Offset.offset(5_000L));
+        }
+
+        @Test
+        void 모델이_많아도_한_번에_발행한다() {
+            Map<String, String> fields = IntStream.range(0, 5_000).boxed()
+                    .collect(Collectors.toMap(i -> "p:" + i, String::valueOf));
+
+            assertThat(control.publishSnapshot(5, FENCE_TTL, fields).block(WAIT)).isTrue();
+            assertThat(control.readSnapshot().block(WAIT).entries()).hasSize(5_000);
         }
     }
 

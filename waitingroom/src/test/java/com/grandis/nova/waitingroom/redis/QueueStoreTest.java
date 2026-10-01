@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import reactor.core.publisher.Flux;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -66,6 +67,17 @@ class QueueStoreTest {
             assertThat(second.score()).isGreaterThan(first.score());
             assertThat(again.alreadyQueued()).isTrue();
             assertThat(again.score()).isEqualTo(first.score());
+        }
+
+        @Test
+        void 같은_고객이_동시에_여러_번_서도_한_자리만_잡는다() {
+            List<QueueEntry> entries = Flux.range(0, 32)
+                    .flatMap(i -> queue.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, now).map(QueueStatus::entry), 32)
+                    .collectList().block(WAIT);
+
+            assertThat(redis.opsForZSet().size("wr:queue:{" + PRODUCT + "}").block(WAIT)).isEqualTo(1);
+            assertThat(entries).extracting(QueueEntry::score).containsOnly(entries.get(0).score());
+            assertThat(entries).filteredOn(entry -> !entry.alreadyQueued()).hasSize(1);
         }
 
         @Test

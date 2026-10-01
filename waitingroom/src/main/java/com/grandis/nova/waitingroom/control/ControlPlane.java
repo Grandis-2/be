@@ -140,6 +140,7 @@ class ControlPlane implements SmartLifecycle {
 
     private Disposable every(Duration period, LongFunction<Mono<Void>> task, AtomicBoolean failing,
                              String name) {
+        // 미리 받기 0 — 실행 중에 온 틱은 쌓이지 않고 버려져, 늦은 작업 뒤에 회차가 몰려 돌지 않는다
         return Flux.interval(Duration.ZERO, period)
                 .onBackpressureDrop()
                 .concatMap(count -> task.apply(count)
@@ -155,7 +156,7 @@ class ControlPlane implements SmartLifecycle {
                                 log.warn("{} 실패 — 다음 주기에 다시 한다: {}", name, e.toString());
                             }
                             return Mono.empty();
-                        }))
+                        }), 0)
                 .subscribe();
     }
 }
