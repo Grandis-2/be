@@ -13,7 +13,7 @@ spring:
       transaction-isolation: TRANSACTION_READ_COMMITTED
       maximum-pool-size: 10
   jpa:
-    # 정본은 flyway-project/migrations. docs/schema.sql은 생성된 최신 구조다.
+    # 정본은 flyway-project/migrations. 최신 구조 덤프는 bash flyway-project/verify.sh 의 build/flyway/schema.sql.
     hibernate:
       ddl-auto: validate
     properties:

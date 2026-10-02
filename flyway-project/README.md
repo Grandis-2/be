@@ -5,9 +5,8 @@ MySQL 8.4.11과 Flyway 11.20.0으로 검증하며, 유료 비교/생성 기능�
 
 ## 관리 범위
 
-- `migrations/`: 실제 적용의 정본. 최초 파일은 도입 당시 `docs/schema.sql`의 shop 정의와 설계 주석을 보존한다.
+- `migrations/`: 실제 적용의 정본이자 유일한 shop 정의. 최초 파일은 도입 당시 shop 정의와 설계 주석을 보존한다.
 - `flyway.toml`: SQL 경로, shop 스키마, 검증 및 실행 규칙. 접속 비밀값은 넣지 않는다.
-- `../docs/schema.sql`: 빈 MySQL에 전체 마이그레이션을 적용한 뒤 추출하는 최신 shop 정의.
 - `../docs/external-mock-schema.sql`: 도입 당시 Mock 정의를 보존한 참고 자료. 최신 정의는 Mock 저장소에서 관리한다.
 
 두 스키마가 같은 RDS에 있어도 이 프로젝트는 `shop.flyway_schema_history`만 관리한다.
@@ -25,17 +24,16 @@ python3 flyway-project/migrations.py new add_customer_column
 
 `Asia/Seoul` 기준 `VyyyyMMddHHmm__설명.sql`을 생성한다. 동일 분의 버전이 있으면
 다음 분에 다시 생성한다. 파일 생성 시간 규칙은 DB/JDBC의 UTC 저장 설정과 별개다.
-SQL을 작성한 뒤 다음 명령으로 검증하고 최신 문서를 갱신한다.
+SQL을 작성한 뒤 다음 명령으로 검증한다.
 
 ```sh
-bash flyway-project/verify.sh --write-schema
-git diff -- docs/schema.sql
+bash flyway-project/verify.sh
 ```
 
 이 명령은 전용 임시 MySQL 컨테이너를 생성하고 종료 시 제거한다. 호스트 포트와
 영속 볼륨을 사용하지 않으며 기존 로컬 DB나 RDS에는 접속하지 않는다.
-문서를 수정하지 않고 확인만 하려면 `bash flyway-project/verify.sh`를 실행한다.
-산출물은 `build/flyway/schema.sql`에도 남는다. 덤프는 Flyway 이력과 데이터를 제외한다.
+전체 적용 뒤의 최신 shop 정의는 `build/flyway/schema.sql`로 남는다(저장소에는 두지 않는다. CI에서는 database 잡의
+`shop-schema` 산출물). 덤프는 Flyway 이력과 데이터를 제외한다.
 설계 설명은 마이그레이션의 SQL 주석에 기록한다. 덤프에는 SQL 주석이 보존되지 않는다.
 
 하나의 변경 목적에 필요한 여러 테이블/FK 변경은 한 마이그레이션에 묶을 수 있다.
@@ -50,7 +48,7 @@ git diff -- docs/schema.sql
   버전을 바꿨다면 해당 임시 DB를 새로 구성한다.
 - CI는 버전 형식·중복·기존 파일 불변성·신규 버전 순서를 검사한다.
 - 이어서 빈 MySQL 8.4에 전체 적용, Flyway validate, 재실행 시 이력 불변,
-  external_mock 미생성, docs/schema.sql과 덤프 일치를 확인한다.
+  external_mock 미생성을 확인하고 최신 shop 정의 덤프를 산출물로 올린다.
 - CI는 운영 DB의 실제 상태나 업무 의미의 충돌까지 판별하지 않는다.
 
 ## RDS 초기 준비 및 실행

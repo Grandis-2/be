@@ -13,7 +13,7 @@ spring:
       transaction-isolation: TRANSACTION_READ_COMMITTED
       maximum-pool-size: 10
   jpa:
-    # 정본은 flyway-project/migrations. docs/schema.sql은 생성된 최신 구조다.
+    # 정본은 flyway-project/migrations. 최신 구조 덤프는 bash flyway-project/verify.sh 의 build/flyway/schema.sql.
     hibernate:
       ddl-auto: validate
     properties:
@@ -76,9 +76,10 @@ nova:
   outbox:
     transport: sqs
     concurrency: 32        # 커밋 직후 발행 동시 실행 상한(가상 스레드). 넘치면 릴레이가 보낸다
-    relay-interval: 10s    # 릴레이 주기
+    relay-interval: 10s    # 릴레이 주기(전용 스레드에서 돈다)
     relay-after: 1m        # 만든 지 이만큼 지난 미발행 행만 재발행
     relay-batch: 100
+    relay-lease: 1m        # 릴레이가 가져간 행을 다른 인스턴스가 건드리지 않는 시간. 전송 한 번(sqs.api-call-timeout 의 두 배)보다 길어야 한다(아니면 기동 실패)
 
 auth:
   # 폐기 표식 조회가 실패(Redis 장애)했을 때 401 로 닫는 경로. 목록 밖은 열린다(통과 + 경고 + 카운터).

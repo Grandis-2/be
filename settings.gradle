@@ -7,6 +7,8 @@ include 'common:message'    // preorder · order · worker
 include 'common:redis'      // member · catalog · preorder · order · payment
 include 'common:security'   // HTTP 서비스 4개 · payment — JWT 검증
 include 'common:jpa'        // order — 저장 해상도 시계 · JPA Auditing (자동설정)
+include 'common:outbox'     // order — 트랜잭셔널 아웃박스 기록 · 발행 · 릴레이 (자동설정)
+include 'common:sqs'        // order — SQS 클라이언트 · 아웃박스 SQS 전송 · 큐 소비 폴러 (자동설정)
 include 'common:testing'    // order — 테스트 지원 (testImplementation 으로만)
 
 // HTTP 진입점 — ECS 서비스

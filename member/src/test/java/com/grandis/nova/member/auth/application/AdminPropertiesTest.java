@@ -76,16 +76,17 @@ class AdminPropertiesTest {
         assertThat(weak).startsWith("$2a$04$");
         runner.withPropertyValues("admin.password-hash=" + weak).run(ctx -> {
             assertThat(ctx).hasFailed();
-            assertThat(rootMessage(ctx.getStartupFailure())).contains("cost 12..31");
+            assertThat(rootMessage(ctx.getStartupFailure())).contains("cost 12..14");
         });
     }
 
     @Test
-    @DisplayName("bcrypt cost 는 31 이 상한이다: 32 는 형식상 숫자 두 자리여도 기동 거부, 31 은 통과")
+    @DisplayName("bcrypt cost 는 14 가 상한이다 — 15 · 31 은 기동 거부(cost 1 마다 비교 시간 두 배), 14 는 통과")
     void costUpperBound() {
         String body = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0";   // 53자
-        runner.withPropertyValues("admin.password-hash=$2a$32$" + body).run(ctx -> assertThat(ctx).hasFailed());
-        runner.withPropertyValues("admin.password-hash=$2a$31$" + body).run(ctx -> assertThat(ctx).hasNotFailed());
+        runner.withPropertyValues("admin.password-hash=$2a$14$" + body).run(ctx -> assertThat(ctx).hasNotFailed());
+        runner.withPropertyValues("admin.password-hash=$2a$15$" + body).run(ctx -> assertThat(ctx).hasFailed());
+        runner.withPropertyValues("admin.password-hash=$2a$31$" + body).run(ctx -> assertThat(ctx).hasFailed());   // 한 번 비교에 약 36시간
     }
 
     @Test
