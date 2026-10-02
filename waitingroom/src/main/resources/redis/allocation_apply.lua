@@ -2,7 +2,7 @@
 -- 같은 임기에서 이미 적용한 회차(또는 그 앞 회차)는 다시 올리지 않는다 — 재시도해도 한 회차 몫만 나간다.
 -- KEYS  1 queue  2 admitted  3 applyfence  4 applyround
 -- ARGV  1 들일 인원(0 이상)  2 임기(펜스, 0 이면 리더 아님)  3 울타리 수명(ms)  4 이 리더가 본 커서 최댓값(모르면 -1)
---       5 회차(Redis 시각 초)  6 회차 기록 수명(초)
+--       5 회차(리더의 틱 번호, 임기 안에서 늘기만 한다)  6 회차 기록 수명(초)
 -- 반환  {커서, 들인 인원, 되살린 폭, 적용함(1/0)} · 울타리에 막히면 {'-1', -1, 막은 임기, 0}
 
 local MAX_ADMIT = 9007199254740992
@@ -63,7 +63,7 @@ if admit == 0 then
     return {string.format('%.0f', current), 0, healedFrom, 0}
 end
 
--- 회차 기록은 "임기|회차". 같은 임기에서 이 회차 이하는 이미 나갔다. 새 임기는 Redis 시계가 뒤여도 막지 않는다
+-- 회차 기록은 "임기|회차". 같은 임기에서 이 회차 이하는 이미 나갔다. 새 임기는 회차가 작아도 막지 않는다
 local applied = redis.call('GET', KEYS[4])
 if applied then
     local sep = string.find(applied, '|', 1, true)
@@ -73,7 +73,10 @@ if applied then
         return {string.format('%.0f', current), 0, healedFrom, 0}
     end
 end
-redis.call('SET', KEYS[4], string.format('%.0f', fence) .. '|' .. string.format('%.0f', round), 'EX', roundTtl)
+-- 줄 조회가 실패하면(스크립트 오류는 앞선 쓰기를 되돌리지 않는다) 회차를 쓴 것으로 남기지 않게, 기록은 조회 뒤에 한다
+local function markApplied()
+    redis.call('SET', KEYS[4], string.format('%.0f', fence) .. '|' .. string.format('%.0f', round), 'EX', roundTtl)
+end
 
 -- 커서 위에서 admit 번째 사람의 순서 값이 새 커서다. 줄이 더 짧으면 맨 뒤 사람까지(이후 도착자는 커서 위에 선다)
 local from = current >= 0 and '(' .. string.format('%.0f', current) or '-inf'
@@ -84,14 +87,17 @@ if #picked > 0 then
 else
     local last = redis.call('ZRANGE', KEYS[1], -1, -1, 'WITHSCORES')
     if #last == 0 then
+        markApplied()
         return {string.format('%.0f', current), 0, healedFrom, 1}
     end
     threshold = tonumber(last[2])
 end
 if threshold <= current then
+    markApplied()
     return {string.format('%.0f', current), 0, healedFrom, 1}
 end
 local exact = string.format('%.0f', threshold)
 local entering = redis.call('ZCOUNT', KEYS[1], from, exact)
+markApplied()
 redis.call('SET', KEYS[2], exact)
 return {exact, entering, healedFrom, 1}

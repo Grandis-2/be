@@ -58,9 +58,9 @@ public class ControlStore {
                 .map(reply -> new QueueDepth(LuaScripts.number(reply, 0), Long.parseLong(LuaScripts.text(reply, 1))));
     }
 
-    /** @param writtenMax 이 리더가 이 모델에서 본 커서 최댓값. 사라진 커서를 되살리는 데 쓴다(모르면 -1) */
     /**
-     * @param round 회차(Redis 시각 초). 같은 임기에서 이미 적용한 회차 이하는 커서를 올리지 않고 applied=false 로 답한다
+     * @param writtenMax 이 리더가 이 모델에서 본 커서 최댓값. 사라진 커서를 되살리는 데 쓴다(모르면 -1)
+     * @param round      회차(리더의 틱 번호). 같은 임기에서 이미 적용한 회차 이하는 커서를 올리지 않고 applied=false 로 답한다
      */
     public Mono<ApplyResult> apply(String productKey, long admit, long fence, long fenceTtlMillis, long writtenMax,
                                    long round) {

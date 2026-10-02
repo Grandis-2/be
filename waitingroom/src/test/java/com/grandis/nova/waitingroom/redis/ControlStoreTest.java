@@ -11,9 +11,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import reactor.core.publisher.Flux;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -132,7 +134,7 @@ class ControlStoreTest {
         }
 
         @Test
-        void 같은_임기에서_이미_적용한_회차는_재시도해도_다시_올리지_않고_새_임기는_시계가_뒤여도_막지_않는다() {
+        void 같은_임기에서_이미_적용한_회차는_재시도해도_다시_올리지_않고_새_임기는_회차가_작아도_막지_않는다() {
             enqueue("a", "b", "c", "d");
             ApplyResult first = control.apply(PRODUCT, 1, 10, FENCE_TTL, -1, 500).block(WAIT);
 
@@ -146,8 +148,32 @@ class ControlStoreTest {
 
             assertThat(control.apply(PRODUCT, 1, 10, FENCE_TTL, -1, 501).block(WAIT).entered()).isEqualTo(1);
             assertThat(control.apply(PRODUCT, 1, 11, FENCE_TTL, -1, 400).block(WAIT).entered())
-                    .as("새 임기는 Redis 시계가 뒤로 가도 들인다").isEqualTo(1);
+                    .as("새 임기는 회차가 작아도 들인다").isEqualTo(1);
             assertThat(queue.status(PRODUCT, "d", now).block(WAIT).entry().state()).isEqualTo(QueueState.WAITING);
+        }
+
+        @Test
+        void 같은_회차를_동시에_여러_번_보내도_한_번만_올린다() {
+            enqueue("a", "b", "c");
+
+            List<ApplyResult> results = Flux.range(0, 16)
+                    .flatMap(i -> control.apply(PRODUCT, 1, 10, FENCE_TTL, -1, 600), 16)
+                    .collectList().block(WAIT);
+
+            assertThat(results).filteredOn(ApplyResult::applied).hasSize(1);
+            assertThat(results).extracting(ApplyResult::entered).containsOnly(0L, 1L);
+            assertThat(queue.status(PRODUCT, "a", now).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);
+            assertThat(queue.status(PRODUCT, "b", now).block(WAIT).entry().state()).isEqualTo(QueueState.WAITING);
+        }
+
+        @Test
+        void 줄_조회가_실패하면_회차를_쓴_것으로_남기지_않아_고친_뒤_같은_회차로_다시_들인다() {
+            redis.opsForValue().set("wr:queue:{" + PRODUCT + "}", "broken").block(WAIT);
+            assertThatThrownBy(() -> control.apply(PRODUCT, 1, 10, FENCE_TTL, -1, 700).block(WAIT));
+
+            redis.delete("wr:queue:{" + PRODUCT + "}").block(WAIT);
+            enqueue("a");
+            assertThat(control.apply(PRODUCT, 1, 10, FENCE_TTL, -1, 700).block(WAIT).entered()).isEqualTo(1);
         }
 
         @Test

@@ -95,7 +95,7 @@ class AllocationRound {
                 .collect(Collectors.toMap(Grant::productKey, Grant::credit));
 
         return Flux.fromIterable(rows)
-                .concatMap(row -> admit(fence, row, grants.getOrDefault(row.key(), 0L), nowMillis / 1000)
+                .concatMap(row -> admit(fence, row, grants.getOrDefault(row.key(), 0L), tick)
                         .map(entered -> state(row, settings, grants.getOrDefault(row.key(), 0L), entered, now)))
                 .collectMap(Map.Entry::getKey, Map.Entry::getValue)
                 .flatMap(states -> {
@@ -108,7 +108,7 @@ class AllocationRound {
     }
 
     /**
-     * 몫만큼 입장 커서를 올린다(회차는 Redis 초 — 같은 초를 재시도해도 한 번만 나간다). 몫이 0 이어도 Redis 커서가
+     * 몫만큼 입장 커서를 올린다(회차는 틱 번호 — 같은 틱을 재시도해도 한 번만 나간다). 몫이 0 이어도 Redis 커서가
      * 이 리더가 본 값보다 뒤면 부른다 — 되살리지 않으면 입장한 사람이 대기로 돌아간다. 옛 임기로 막히면 회차를 멈춘다.
      */
     private Mono<Long> admit(long fence, Row row, long credit, long round) {
