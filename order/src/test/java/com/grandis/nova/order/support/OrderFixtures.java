@@ -113,8 +113,18 @@ public class OrderFixtures {
     }
 
     /** 원장이 아직 만들지 않는 전이(배송 등)를 거친 주문을 흉내 낸다. */
+    /** 승인 중(AUTHORIZING)으로 바꾸면 임의의 결제창 번호를 함께 적는다(ck_order_authorizing_attempt). */
     public void forceStatus(Long orderId, String status) {
-        jdbcTemplate.update("UPDATE orders SET status = ? WHERE id = ?", status, orderId);
+        forceStatus(orderId, status, "AUTHORIZING".equals(status) ? unique() : null);
+    }
+
+    public void forceAuthorizing(Long orderId, String providerOrderId) {
+        forceStatus(orderId, "AUTHORIZING", providerOrderId);
+    }
+
+    private void forceStatus(Long orderId, String status, String authorizingProviderOrderId) {
+        jdbcTemplate.update("UPDATE orders SET status = ?, authorizing_provider_order_id = ? WHERE id = ?",
+                status, authorizingProviderOrderId, orderId);
     }
 
     public static String unique() {

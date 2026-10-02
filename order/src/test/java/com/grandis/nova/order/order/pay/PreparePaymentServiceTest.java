@@ -17,8 +17,9 @@ class PreparePaymentServiceTest {
     final OrderReader orderReader = mock(OrderReader.class);
     final PreorderReader preorderReader = mock(PreorderReader.class);
     final PaymentPreparer paymentPreparer = mock(PaymentPreparer.class);
-    final PreparePaymentService service = new PreparePaymentService(orderReader, mock(OrderLedger.class),
-            preorderReader, paymentPreparer, mock(PlatformTransactionManager.class));
+    final PreparePaymentService service = new PreparePaymentService(orderReader,
+            new PayabilityGate(preorderReader, mock(OrderLedger.class), mock(PlatformTransactionManager.class)),
+            paymentPreparer, mock(PlatformTransactionManager.class));
 
     // 바깥 트랜잭션 안에서 부르면 preorder · payment 응답을 기다리는 동안 그 트랜잭션의 잠금을 쥔다.
     @Test

@@ -37,11 +37,15 @@ public interface OrderWriter {
     Optional<OrderStatus> lockStatus(Long orderId);
 
     /**
-     * 상태가 from 일 때만 to 로 바꾸고 이력 번호를 1 올린다.
+     * 상태가 from 일 때만 to 로 바꾸고 이력 번호를 1 올린다. 승인 중 결제창 번호도 함께 바꾼다 —
+     * AUTHORIZING 으로 갈 때만 값이 있고 나머지는 지운다(ck_order_authorizing_attempt).
      *
      * @return 바뀐 행 수(0 또는 1)
      */
-    int changeStatus(Long orderId, OrderStatus from, OrderStatus to, Instant now);
+    int changeStatus(Long orderId, OrderStatus from, OrderStatus to, String authorizingProviderOrderId, Instant now);
+
+    /** 승인 중 결제창 번호. 승인 중이 아니면 비어 있다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다. */
+    Optional<String> authorizingProviderOrderId(Long orderId);
 
     /** 방금 올린 이력 번호. 같은 트랜잭션의 UPDATE 가 행을 잠그고 있어 다른 트랜잭션이 끼어들 수 없다. */
     long eventSequence(Long orderId);
