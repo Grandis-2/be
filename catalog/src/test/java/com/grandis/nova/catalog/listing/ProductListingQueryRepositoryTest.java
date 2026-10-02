@@ -46,7 +46,7 @@ class ProductListingQueryRepositoryTest {
     void hideBoundaryIsExactlyOneHundredTwentyHours() {
         Instant closesAt = Instant.parse("2026-10-01T00:00:00Z");
         Long productId = fixtures.product(fixtures.category(), "PREORDER", "ACTIVE", "경계", tag);
-        fixtures.completeRegistration(productId);
+        fixtures.registration(productId);
         fixtures.campaign(productId, closesAt.minusSeconds(3600), closesAt);
         // 상수를 참조하면 상수가 틀려도 시험이 같이 움직인다 — 확정값 120시간을 여기 박는다
         Instant boundary = closesAt.plus(Duration.ofHours(120));
@@ -62,7 +62,7 @@ class ProductListingQueryRepositoryTest {
     @DisplayName("목록 · 검색은 다른 서비스의 표(preorder_campaigns · option_inventories)를 읽기만 한다")
     void readsButNeverWritesForeignTables() throws Exception {
         Long productId = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "읽기만", tag);
-        fixtures.completeRegistration(productId);
+        fixtures.registration(productId);
         Long axis = fixtures.axis(productId, "color", 0);
         Long black = fixtures.value(axis, "블랙", 0);
         Long option = fixtures.option(productId, "ACTIVE", new java.math.BigDecimal("1000"));

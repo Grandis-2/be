@@ -46,7 +46,7 @@ class AdminProductDetailApiTest {
     }
 
     @Test
-    @DisplayName("등록한 상품의 관리자 상세 — 회원 상세와 같은 상품 모양(visible 실제 값) + tags + 등록 기록(막힘 사유 포함)")
+    @DisplayName("등록한 상품의 관리자 상세 — 회원 상세와 같은 상품 모양(visible 실제 값) + tags + 등록 상태(준비는 회차 행이 생겨야)")
     void registeredProductDetail() throws Exception {
         Instant opensAt = Instant.now().plus(HOUR.multipliedBy(2));
         String key = "k-" + ShopFixtures.unique();
@@ -66,40 +66,37 @@ class AdminProductDetailApiTest {
         JsonNode detail = data(admin(productId).andExpect(status().isOk())
                 .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store"))));
         assertThat(detail.get("product")).as("201 의 미리보기와 같은 모양").isEqualTo(createdData.get("product"));
-        assertThat(detail.get("product").get("visible").asBoolean()).as("등록 미완료라 아직 비공개").isFalse();
+        assertThat(detail.get("product").get("visible").asBoolean()).as("고른 공개 여부 그대로 — 회원 노출은 준비가 정한다").isTrue();
         assertThat(detail.get("product").get("variants")).hasSize(1);
         assertThat(detail.get("product").get("images").get("gallery").get(0).get("bundleKey").asString()).isEqualTo("블랙");
         assertThat(detail.get("tags").asString()).isEqualTo("nova,신제품");
         JsonNode registration = detail.get("registration");
         assertThat(registration.get("productId").asLong()).isEqualTo(productId);
         assertThat(registration.get("idempotencyKey").asString()).isEqualTo(key);
-        assertThat(registration.get("completed").asBoolean()).isFalse();
-        assertThat(registration.get("blockedReason").isNull()).isTrue();
+        assertThat(registration.get("completed").asBoolean()).as("회차 행 전").isFalse();
+        assertThat(registration.size()).as("등록 상태는 productId · idempotencyKey · completed 셋뿐").isEqualTo(3);
 
-        // 단계 시각 세 칸에 서로 다른 값 — 같은 타입의 칸 순서가 바뀌면 진행 상태가 조용히 틀린 이름으로 나간다
-        jdbcTemplate.update("UPDATE product_registrations SET blocked_reason = 'OPENED_BEFORE_COMPLETE', last_error = 'preorder 409', "
-                + "campaign_set_at = '2026-10-01 01:00:00', batches_set_at = '2026-10-01 02:00:00', stock_set_at = '2026-10-01 03:00:00' "
-                + "WHERE product_id = ?", productId);
-        JsonNode blocked = data(admin(productId).andExpect(status().isOk())).get("registration");
-        assertThat(blocked.get("blockedReason").asString()).isEqualTo("OPENED_BEFORE_COMPLETE");
-        assertThat(blocked.get("lastError").asString()).isEqualTo("preorder 409");
-        assertThat(blocked.get("campaignSetAt").asString()).isEqualTo("2026-10-01T01:00:00Z");
-        assertThat(blocked.get("batchesSetAt").asString()).isEqualTo("2026-10-01T02:00:00Z");
-        assertThat(blocked.get("stockSetAt").asString()).isEqualTo("2026-10-01T03:00:00Z");
-        assertThat(blocked.get("completedAt").isNull()).isTrue();
+        // preorder 가 등록 이벤트를 처리해 회차 행을 만들면 준비가 끝난다
+        fixtures.campaign(productId, opensAt, opensAt.plus(Duration.ofDays(3)));
+        assertThat(data(admin(productId).andExpect(status().isOk())).get("registration").get("completed").asBoolean()).isTrue();
     }
 
     @Test
-    @DisplayName("노출 규칙이 없다 — 등록 기록 없음(registration null) · 비공개 · 판매 중지 · 오래된 마감도 200, 없는 상품만 404 NOT_FOUND")
+    @DisplayName("노출 규칙이 없다 — 등록 기록 없음(idempotencyKey null, 준비는 그대로 실림) · 비공개 · 판매 중지 · 오래된 마감도 200, 없는 상품만 404 NOT_FOUND")
     void noExposureRule() throws Exception {
         Long noRegistration = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "등록 없음", "legacy");
         JsonNode legacy = data(admin(noRegistration).andExpect(status().isOk()));
-        assertThat(legacy.get("registration").isNull()).isTrue();
+        assertThat(legacy.get("registration").get("idempotencyKey").isNull()).as("등록 기록이 없다").isTrue();
+        assertThat(legacy.get("registration").get("completed").asBoolean()).as("준비 전 — 관리자 목록과 같은 판정").isFalse();
+        fixtures.stockReady(noRegistration);
+        assertThat(data(admin(noRegistration).andExpect(status().isOk())).get("registration").get("completed").asBoolean())
+                .as("기록이 없어도 재고 행이 생기면 준비").isTrue();
         assertThat(legacy.get("tags").asString()).isEqualTo("legacy");
-        assertThat(legacy.get("product").get("visible").asBoolean()).as("관리자 상세의 visible 은 칸 그대로(기본값 1). 회원 노출은 등록 완료도 필요하다").isTrue();
+        assertThat(legacy.get("product").get("visible").asBoolean()).as("관리자 상세의 visible 은 칸 그대로(기본값 1). 회원 노출은 판매 방식별 준비도 필요하다").isTrue();
 
         Long hidden = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "비공개", null);
-        fixtures.completeRegistration(hidden);
+        fixtures.registration(hidden);
+        fixtures.stockReady(hidden);
         jdbcTemplate.update("UPDATE products SET visible = 0, status = 'PAUSED' WHERE id = ?", hidden);
         JsonNode hiddenDetail = data(admin(hidden).andExpect(status().isOk()));
         assertThat(hiddenDetail.get("product").get("visible").asBoolean()).isFalse();
@@ -108,7 +105,7 @@ class AdminProductDetailApiTest {
 
         Instant now = Instant.now();
         Long longClosed = fixtures.product(categoryId, "PREORDER", "ACTIVE", "오래 전 마감", null);
-        fixtures.completeRegistration(longClosed);
+        fixtures.registration(longClosed);
         fixtures.campaign(longClosed, now.minus(HOUR.multipliedBy(200)), now.minus(HOUR.multipliedBy(190)));
         assertThat(data(admin(longClosed).andExpect(status().isOk())).get("product").get("campaign").get("status").asString())
                 .isEqualTo("CLOSED");

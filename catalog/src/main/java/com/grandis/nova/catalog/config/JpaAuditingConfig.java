@@ -14,7 +14,7 @@ import java.util.Optional;
  * common:types 의 BaseEntity 가 created_at · updated_at 을 채우려면 Auditing 이 켜져 있어야 한다.
  * 안 켜면 값이 null 로 들어가고 NOT NULL 제약에 걸려서야 드러난다.
  *
- * Auditing 시각도 {@link Clock} 에서 가져온다. 등록 단계 완료 시각 · 리스 만료처럼 코드가 직접 찍는 시각과
+ * Auditing 시각도 {@link Clock} 에서 가져온다. 아웃박스 리스 기한처럼 코드가 직접 찍는 시각과
  * 같은 시계를 써야 한 트랜잭션 안의 시각들이 서로 어긋나지 않는다.
  *
  * common:security 의 JwtConfiguration 도 조건 없이 {@code clock} 이라는 이름의 빈을 둔다(실측: 같은 이름이면 기동 실패). 그래서 이 시계는

@@ -3,6 +3,7 @@ package com.grandis.nova.catalog.detail;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.catalog.support.SqlHookInspector;
+import com.grandis.nova.common.BusinessException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -12,11 +13,13 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 
 import java.math.BigDecimal;
-import java.util.List;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 상세는 여러 문장을 읽는다. 첫 문장 뒤에 다른 커넥션이 가격과 재고를 바꿔 커밋해도 응답은 전부 이전 값이어야 한다 —
@@ -47,7 +50,7 @@ class ProductDetailServiceTest {
     @DisplayName("상세를 읽는 도중 커밋된 가격 · 재고 변경은 이번 응답에 섞이지 않는다")
     void detailReadsOneSnapshot() {
         Long productId = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "스냅샷", null);
-        fixtures.completeRegistration(productId);
+        fixtures.registration(productId);
         Long option = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
         fixtures.inventory(option, 5, 0, 0);
         boolean[] hookRan = {false};
@@ -88,21 +91,47 @@ class ProductDetailServiceTest {
     }
 
     @Test
-    @DisplayName("관리자 상세도 공개 여부와 등록 기록을 한 문장(JOIN)으로 읽는다 — 따로 읽으면 visible 과 completed 의 스냅샷이 갈린다")
-    void adminDetailReadsProductAndRegistrationInOneStatement() {
+    @DisplayName("관리자 상세의 등록 완료는 판매 방식별 준비다 — 사전예약은 회차 행이 생기면 true, visible 은 칸 그대로")
+    void adminDetailCompletionFollowsReadiness() {
         Long productId = fixtures.product("PREORDER", "ACTIVE");
-        fixtures.registration(productId, ShopFixtures.unique());
-        SqlHookInspector.reset();
+        String key = ShopFixtures.unique();
+        fixtures.registration(productId, key);
 
-        AdminProductDetail detail = service.findAdminProduct(productId);
+        AdminProductDetail before = service.findAdminProduct(productId);
+        assertThat(before.registrationKey()).isEqualTo(key);
+        assertThat(before.registrationCompleted()).as("회차 행 전").isFalse();
+        assertThat(before.product().visible()).as("관리자 상세의 visible 은 칸 그대로(픽스처 기본값 1) — 준비 여부와 섞지 않는다").isTrue();
 
-        List<String> registrationReads = SqlHookInspector.executed.stream()
-                .filter(sql -> sql.contains("product_registrations")).toList();
-        assertThat(registrationReads).as("등록 기록을 읽는 문장은 하나").hasSize(1);
-        assertThat(registrationReads.getFirst()).as("그 문장이 products 도 읽는다").contains("products");
-        assertThat(detail.registration()).isNotNull();
-        assertThat(detail.registration().isCompleted()).isFalse();
-        assertThat(detail.product().visible()).as("관리자 상세의 visible 은 칸 그대로(픽스처 기본값 1) — 완료 여부와 섞지 않는다").isTrue();
+        fixtures.campaign(productId, Instant.now().plus(Duration.ofDays(1)), Instant.now().plus(Duration.ofDays(2)));
+        assertThat(service.findAdminProduct(productId).registrationCompleted()).as("회차 행 뒤").isTrue();
+    }
+
+    @Test
+    @DisplayName("일반 상품은 그 상품 옵션의 재고 행이 생겨야 준비다 — 다른 상품의 재고 행은 세지 않는다")
+    void inStockReadinessCountsOnlyItsOwnOptions() {
+        Long productId = fixtures.product("IN_STOCK", "ACTIVE");
+        Long option = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
+        Long other = fixtures.product("IN_STOCK", "ACTIVE");
+        fixtures.inventory(fixtures.option(other, "ACTIVE", new BigDecimal("1000")), 3, 0, 0);
+        fixtures.registration(productId);
+        assertThat(service.findAdminProduct(productId).registrationCompleted()).isFalse();
+
+        fixtures.inventory(option, 0, 0, 0);
+        assertThat(service.findAdminProduct(productId).registrationCompleted()).as("재고 0 이어도 행이 있으면 준비").isTrue();
+    }
+
+    @Test
+    @DisplayName("회원 상세 · 옵션 상세는 공개여도 준비 전이면 404 다")
+    void memberDetailHidesProductsNotReady() {
+        Long productId = fixtures.product("IN_STOCK", "ACTIVE");
+        Long option = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
+        fixtures.registration(productId);
+        assertThatThrownBy(() -> service.findProduct(productId)).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.findVariant(productId, option)).isInstanceOf(BusinessException.class);
+
+        fixtures.inventory(option, 1, 0, 0);
+        assertThat(service.findProduct(productId).productId()).isEqualTo(productId);
+        assertThat(service.findVariant(productId, option).variantId()).isEqualTo(option);
     }
 
     private void commitOnAnotherConnection(String sql) {

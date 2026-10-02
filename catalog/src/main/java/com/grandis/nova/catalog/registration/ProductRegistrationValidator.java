@@ -122,8 +122,8 @@ public class ProductRegistrationValidator {
 
     /**
      * 배송 차수의 모양 — preorder 가 차수를 받을 때 거는 규칙(api-spec "배송 차수 처리 규칙": 번호 · 시작 순번 양의 정수,
-     * 번호 · 시작 유일, 종료 ≥ 시작 또는 마지막만 null, 배송 종료 ≥ 시작)을 ① 전에 같은 기준으로 먼저 거른다.
-     * 여기서 안 거르면 ① 은 저장되고 ② 가 거절해 미완료 등록만 남는다. 최종 판정은 preorder 다.
+     * 번호 · 시작 유일, 종료 ≥ 시작 또는 마지막만 null, 배송 종료 ≥ 시작)을 저장 전에 같은 기준으로 먼저 거른다.
+     * 여기서 안 거르면 상품은 저장되고 preorder 가 등록 이벤트를 거절해(DLQ) 준비 전 상품만 남는다. 최종 판정은 preorder 다.
      */
     private static void requireBatchShape(List<ProductRegistrationRequest.ShipmentBatch> batches) {
         Set<Integer> numbers = new HashSet<>();

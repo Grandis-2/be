@@ -38,9 +38,9 @@ class AmountsTest {
     @Test
     @DisplayName("상품 · 옵션 팩토리가 같은 규칙을 쓴다")
     void factoriesUseTheRule() {
-        assertThatThrownBy(() -> Product.register(1L, SaleMode.IN_STOCK, "x", new BigDecimal("1000.5"), null, null,
+        assertThatThrownBy(() -> Product.register(1L, SaleMode.IN_STOCK, "x", new BigDecimal("1000.5"), null, null, false,
                 false, BigDecimal.ZERO)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("basePrice");
-        assertThatThrownBy(() -> Product.register(1L, SaleMode.IN_STOCK, "x", BigDecimal.ZERO, null, null,
+        assertThatThrownBy(() -> Product.register(1L, SaleMode.IN_STOCK, "x", BigDecimal.ZERO, null, null, false,
                 true, new BigDecimal("0.5"))).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("warrantySurcharge");
         assertThatThrownBy(() -> ProductOption.of("sku", new BigDecimal("10.5"), false, OptionCombination.none(1L, "x")))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("price");

@@ -38,11 +38,14 @@ class ProductDetailApiTest {
 
     ShopFixtures fixtures;
     Long categoryId;
+    /** visibleInStock 으로 만든 일반 상품. 요청 직전에 준비(재고 행)를 넣는다 — 시험이 옵션을 다 넣은 뒤여야 해서. */
+    List<Long> inStockProducts;
 
     @BeforeEach
     void setUp() {
         fixtures = new ShopFixtures(jdbcTemplate);
         categoryId = fixtures.category();
+        inStockProducts = new ArrayList<>();
     }
 
     @Nested
@@ -55,7 +58,7 @@ class ProductDetailApiTest {
             Instant now = Instant.now();
             Long productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", "Nova 1", null);
             jdbcTemplate.update("UPDATE products SET description = '설명', base_price = 1000000, warranty_offered = 1, warranty_surcharge = 150000 WHERE id = ?", productId);
-            fixtures.completeRegistration(productId);
+            fixtures.registration(productId);
             fixtures.campaign(productId, now.minus(HOUR), now.plus(HOUR));
             Long storage = fixtures.axis(productId, "storage", 1);
             Long color = fixtures.axis(productId, "color", 0);
@@ -186,6 +189,7 @@ class ProductDetailApiTest {
             fixtures.option(preorderPausedOnly, "PAUSED", new BigDecimal("1"));
             ids.addAll(List.of(stocked, depleted, noRow, pausedOnly, noOptions, preorderActive, preorderPausedOnly));
 
+            inStockProducts.forEach(fixtures::stockReady);
             JsonNode items = JSON.readTree(mockMvc.perform(get("/api/v1/products").param("q", tag).param("size", "100"))
                     .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).at("/data/items");
             assertThat(items).hasSize(ids.size());
@@ -206,11 +210,12 @@ class ProductDetailApiTest {
     class Visibility {
 
         @Test
-        @DisplayName("비공개 · 미완료는 누구에게나 404 NOT_FOUND — 관리자도. 미리보기는 관리자 상세로(2026-09-29 결정)")
+        @DisplayName("비공개 · 준비 전(재고 행 없음)은 누구에게나 404 NOT_FOUND — 관리자도. 미리보기는 관리자 상세로(2026-09-29 결정)")
         void hiddenIsNotFoundForEveryone() throws Exception {
             Long hidden = visibleInStock();
             jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", hidden);
-            Long incomplete = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "미완료", null);
+            Long incomplete = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "준비 전", null);
+            fixtures.option(incomplete, "ACTIVE");
             fixtures.registration(incomplete, ShopFixtures.unique());
 
             for (Long productId : List.of(hidden, incomplete)) {
@@ -232,7 +237,7 @@ class ProductDetailApiTest {
 
             Instant now = Instant.now();
             Long longClosed = fixtures.product(categoryId, "PREORDER", "ACTIVE", "오래 전 마감", null);
-            fixtures.completeRegistration(longClosed);
+            fixtures.registration(longClosed);
             fixtures.campaign(longClosed, now.minus(HOUR.multipliedBy(200)), now.minus(HOUR.multipliedBy(190)));
             JsonNode data = data(anonymous(longClosed).andExpect(status().isOk()));
             assertThat(data.get("campaign").get("status").asString()).isEqualTo("CLOSED");
@@ -289,18 +294,20 @@ class ProductDetailApiTest {
 
     private Long visibleInStock(String tags) {
         Long productId = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "Nova Book", tags);
-        fixtures.completeRegistration(productId);
+        fixtures.registration(productId);
+        inStockProducts.add(productId);
         return productId;
     }
 
     private Long visiblePreorder(String tags, Instant opensAt, Instant closesAt) {
         Long productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", "Nova 1", tags);
-        fixtures.completeRegistration(productId);
+        fixtures.registration(productId);
         fixtures.campaign(productId, opensAt, closesAt);
         return productId;
     }
 
     private ResultActions anonymous(Long productId) throws Exception {
+        inStockProducts.forEach(fixtures::stockReady);
         return mockMvc.perform(get("/api/v1/products/{id}", productId));
     }
 

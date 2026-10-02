@@ -23,7 +23,6 @@ import com.grandis.nova.catalog.product.Product;
 import com.grandis.nova.catalog.product.ProductOption;
 import com.grandis.nova.catalog.product.ProductOptionRepository;
 import com.grandis.nova.catalog.product.ProductRepository;
-import com.grandis.nova.catalog.product.ProductWithRegistration;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.common.BusinessException;
@@ -82,7 +81,7 @@ public class ProductDetailService {
     }
 
     /**
-     * 회원 상세. 등록 완료 AND 공개인 상품만 — 아니면 누구에게나 404(관리자도). 관리자 미리보기는 없다(2026-09-29 결정) —
+     * 회원 상세. 판매 방식별 준비(회차 · 재고 행)가 끝났고 공개인 상품만 — 아니면 누구에게나 404(관리자도). 관리자 미리보기는 없다(2026-09-29 결정) —
      * 관리자는 관리자 상세({@link #findAdminProduct})로 본다. 공개 경로는 폐기 조회 실패에 열리는 경로라 관리자 토큰을 여기서 더 믿지 않는다.
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
@@ -91,22 +90,19 @@ public class ProductDetailService {
     }
 
     /**
-     * 관리자 상세 — 노출 규칙 없이 어떤 상품이든(비공개 · 미완료 · 판매 중지 · 오래된 마감) 상세와 등록 기록을 준다.
-     * 등록 기록은 상품과 같은 문장에서 온 것이라 visible 과 completed 가 한 스냅샷이다. 없는 상품만 404.
+     * 관리자 상세 — 노출 규칙 없이 어떤 상품이든(비공개 · 미완료 · 판매 중지 · 오래된 마감) 상세와 등록 상태를 준다. 없는 상품만 404.
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public AdminProductDetail findAdminProduct(Long productId) {
-        ProductWithRegistration found = products.findWithRegistration(productId)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
-        // 관리자 목록 · 상세의 visible 은 products.visible 칸 그대로 — 등록 완료는 registration 이 따로 말한다
-        return new AdminProductDetail(assemble(found, found.product().isVisible()), found.product().getTags(),
-                found.registration().orElse(null));
+        Product product = products.findById(productId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
+        // 관리자 목록 · 상세의 visible 은 products.visible 칸 그대로 — 판매 방식별 준비는 registrationCompleted 가 따로 말한다
+        return new AdminProductDetail(assemble(product, product.isVisible()), product.getTags(),
+                products.findRegistrationKey(productId).orElse(null), crossReads.isReady(productId));
     }
 
     /** @param visible 응답에 실을 visible — 회원 상세는 노출 규칙을 지났으니 늘 true, 관리자 상세는 칸 그대로 */
-    private ProductDetailView assemble(ProductWithRegistration found, boolean visible) {
-        Long productId = found.product().getId();
-        Product product = found.product();
+    private ProductDetailView assemble(Product product, boolean visible) {
+        Long productId = product.getId();
         Instant now = clock.instant();
 
         List<ProductOptionAxis> productAxes = axes.findByProductIdOrderByPosition(productId);
@@ -163,13 +159,13 @@ public class ProductDetailService {
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
     }
 
-    private ProductWithRegistration requireViewable(Long productId) {
-        ProductWithRegistration found = products.findWithRegistration(productId)
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
-        if (!(found.isRegistrationCompleted() && found.product().isVisible())) {
+    /** 공개이고 판매 방식별 준비가 끝난 상품만. 아니면 404 — 준비 전에는 회차 · 재고가 없어 상세를 그릴 수 없다. */
+    private Product requireViewable(Long productId) {
+        Product product = products.findById(productId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
+        if (!(product.isVisible() && crossReads.isReady(productId))) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
-        return found;
+        return product;
     }
 
     private static Variant toVariant(ProductOption option, SaleMode saleMode,

@@ -10,7 +10,7 @@
 
 | 언제 | 누가 | 실린 JWT | 목적 |
 | --- | --- | --- | --- |
-| 관리자 등록 흐름 ② (`PUT /admin/products/{id}/preorder-campaign` 등) | preorder `PreorderCampaignAdminService.requirePreorderProduct` | 관리자(ADMIN) | 회차를 붙일 상품이 사전예약 상품인지 확인 |
+| 관리자 회차 · 차수 수정(`PUT /admin/products/{id}/preorder-campaign` 등, 등록 뒤 오픈 전) | preorder `PreorderCampaignAdminService.requirePreorderProduct` | 관리자(ADMIN) | 회차를 붙일 상품이 사전예약 상품인지 확인 |
 | 사용자 접수 (`PreorderAcceptTransaction`) | preorder `CatalogReader`(캐시 경유) | 회원(USER) | 접수 가능 여부 판정과 옵션 스냅샷 복사 |
 
 **인증.** 호출자의 JWT(`Authorization: Bearer {accessToken}`, 2026-09-28 — 이전 `X-Session-Token`)를 그대로 전달한다. catalog 는 `common:security` 필터로 서명·만료·`aud`·역할·폐기를 검증하고(NV-139 채택) **이 읽기 엔드포인트는 USER·ADMIN 둘 다 허용**한다(앞으로 생길 `/internal/**` 쓰기 엔드포인트는 ADMIN 만). 업무 판정(접수 가능한가)은 catalog 가 아니라 preorder 가 한다. TLS는 전송 암호화 역할이며 호출 서비스의 접근 제한은 위 노출 조건으로 검증한다. preorder 쪽은 `CatalogClient` 호출에 헤더를 전파하는 인터셉터가 필요하다(지금은 없다).
@@ -46,10 +46,10 @@
 | `title` | string | 상품명. 스냅샷 원본 |
 | `saleMode` | `PREORDER` \| `IN_STOCK` | `products.sale_mode` |
 | `status` | `ACTIVE` \| `PAUSED` | `products.status`. PAUSED 는 일반이면 판매 중지, 사전예약 오픈 후면 회차 취소 |
-| `visible` | boolean | 공개 여부(신규 칸). catalog 등록 경로로 만든 상품은 완료 전 false 다. DB 가 막지는 않으므로(칼럼 DEFAULT 1, 다른 경로로 넣은 행은 true 일 수 있다) 소비자는 visible 로 완료를 추론하지 말고 **두 칸을 모두 본다** |
-| `registrationCompleted` | boolean | 한 번 등록의 모든 단계가 끝났는가(`product_registrations.completed_at IS NOT NULL`). 신규 칸 |
+| `visible` | boolean | 공개 여부 — 관리자가 등록 때 고른 값이 그대로 들어간다(2026-10-02 이벤트 방식 전환부터). 준비 전 상품도 true 일 수 있으므로 소비자는 visible 로 준비를 추론하지 말고 **두 칸을 모두 본다** |
+| `registrationCompleted` | boolean | 판매 방식별 준비 — 등록 이벤트를 받은 서비스가 행을 만들었는가. 사전예약은 `preorder_campaigns` 에 그 상품 행이 있다, 일반은 `option_inventories` 에 그 상품 옵션의 행이 있다(contracts/catalog-events.md) |
 
-`visible` 과 `registrationCompleted` 는 **한 SELECT(LEFT JOIN)** 로 읽어 같은 스냅샷에서 나온다. 따로 읽으면 READ COMMITTED 가 문장마다 스냅샷을 새로 잡아 완료 커밋이 사이에 끼면 한순간도 없던 조합이 나온다(실측). 응답 한 건 안에서 두 칸은 커밋 전 조합이거나 커밋 후 조합이다.
+`visible` · `status` · `registrationCompleted` 는 **한 문장**으로 읽어 같은 스냅샷에서 나온다(`ProductListingQueryRepository.findExposure`). 둘은 서로 다른 트랜잭션(관리자 공개 전환 · preorder/order 의 등록 이벤트 처리)이 바꾸지만, READ COMMITTED 에서 따로 읽으면 두 문장 사이에 둘 다 커밋돼 한순간도 없던 조합(공개 · 준비)이 나온다. 접수가 이 셋으로 판정하므로 한 문장이어야 한다.
 | `options[].optionId` | number | `product_options.id` |
 | `options[].sku` | string | 모델 안 유일 |
 | `options[].title` | string | 옵션 표시명. 스냅샷 원본 |
@@ -73,7 +73,7 @@
 
 | 목적 | 조건 |
 | --- | --- |
-| 회차·차수 설정 | `saleMode = PREORDER`. **`status`·`visible`·`registrationCompleted` 는 보지 않는다** — 등록 중 상품은 미완료가 정상 |
+| 회차·차수 수정 | `saleMode = PREORDER`. **`status`·`visible`·`registrationCompleted` 는 보지 않는다** — 회차 행이 아직 없는 상품(등록 이벤트를 DLQ 에서 고치는 경우)도 설정할 수 있어야 한다. 등록 때의 회차 · 차수는 이 API 가 아니라 `PREORDER_PRODUCT_REGISTERED` 이벤트로 만든다 |
 | 사용자 접수 | `saleMode = PREORDER AND status = ACTIVE AND visible AND registrationCompleted`, 그리고 선택한 `optionId` 가 이 상품의 `options` 에 있고 `options[].status = ACTIVE` |
 
 지금 NV-29 는 두 목적 모두 `ProductCatalog.isOnPreorderSale()`(PREORDER && ACTIVE) 하나를 쓴다. **판정 메서드를 둘로 갈라야 한다.** catalog 가 칸을 먼저 더해도 preorder 의 `ProductCatalog` 레코드가 다섯 칸만 받으므로, DTO 를 넓히지 않으면 안전장치가 생기지 않는다.
@@ -82,7 +82,7 @@
 
 **하위 호환과 배포 순서.** 지금 접수 경로가 깨지지 않게 이 순서로 간다.
 
-1. catalog: 응답에 `visible`·`registrationCompleted` 추가(기존 칸 불변). 기존 preorder 는 모르는 칸을 무시한다.
+1. catalog: 응답에 `visible`·`registrationCompleted` 추가(기존 칸 불변). 기존 preorder 는 모르는 칸을 무시한다. `registrationCompleted` 는 판매 방식별 준비다(위 칸 정의).
 2. preorder: `ProductCatalog` DTO에 두 필수 boolean을 추가한다. 누락·null은 계약 오류로 처리하고 접수를 허용하지 않는다. `true` 기본값으로 안전 조건을 우회하지 않는다. 실측(2026-09-25, Boot 자동구성 Jackson 3.1.5, `FAIL_ON_NULL_FOR_PRIMITIVES=true`): 레코드 칸을 **primitive `boolean`** 으로 두면 칸이 빠진 응답은 `MismatchedInputException` 으로 역직렬화가 실패하고, **`Boolean` 래퍼**면 `null` 로 조용히 들어온다. 그러므로 primitive 로 선언한다. 실패는 `RestClientException` 으로 올라오는 것까지 실측했고, `CatalogReader` 가 그것을 일시 장애(503)로 분류하는 부분은 코드 읽기다(preorder 쪽 티켓에서 한 번 태워 닫는다) — 접수는 막히고 오류가 "상품 없음" 으로 캐시되지는 않는다.
 3. preorder: 판정 메서드 분리 — 설정용은 `saleMode` 만, 접수용은 네 조건 + 옵션 조건.
 4. preorder: 캐시 무효화 방식 적용.

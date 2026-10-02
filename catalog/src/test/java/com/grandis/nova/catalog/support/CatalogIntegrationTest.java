@@ -40,7 +40,11 @@ import java.lang.annotation.Target;
         "jwt.refresh-token-validity=14d",
         // Redis 가 죽은 갈래를 시험할 때 기본값(60s)이면 시험이 멈춰 선다. 예시 설정과 같은 값
         "spring.data.redis.timeout=300ms",
-        "spring.data.redis.connect-timeout=200ms"
+        "spring.data.redis.connect-timeout=200ms",
+        // 아웃박스는 로그로 보낸다(큐 없이 흐름이 끝까지 돈다). SQS 로 보내는 시험은 OutboxSqsFlowTest 가 따로 켠다.
+        // 릴레이는 시험 도중 스스로 돌지 않게 주기를 길게 둔다 — 릴레이를 보는 시험은 relay() 를 직접 부른다
+        "nova.outbox.transport=log",
+        "nova.outbox.relay-interval=1h"
 })
 @Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class})
 public @interface CatalogIntegrationTest {

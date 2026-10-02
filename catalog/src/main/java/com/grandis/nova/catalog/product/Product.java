@@ -1,6 +1,5 @@
 package com.grandis.nova.catalog.product;
 
-import com.grandis.nova.catalog.registration.ProductRegistration;
 import com.grandis.nova.common.BaseEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -12,15 +11,14 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import java.math.BigDecimal;
-import java.util.Objects;
 
 /**
  * 상품(모델). 옵션은 {@link ProductOption} 이 product id 로 잇는다.
  *
- * 노출은 세 칸이 따로 정한다 — 등록 완료(product_registrations.completed_at) · visible · status.
- * visible 은 등록 중에는 늘 false 다. 관리자가 고른 값은 등록 기록(requested_visible)이 들고 있다가
- * 완료 때 {@link #publish} 로 한 번 옮긴다 — 같은 사실을 두 곳이 들고 있지 않게. 공개는 완료된 등록 기록을 들고 와야
- * 열리고(미완료 · 막힘 · 다른 상품의 기록이면 거절), 비공개는 조건 없이 된다.
+ * 노출은 세 가지가 함께 정한다 — visible · status · 판매 방식별 준비(사전예약은 preorder 회차 행, 일반은 order 재고 행).
+ * 준비는 다른 서비스가 등록 이벤트를 받아 만든 행이라 catalog 가 칸으로 들고 있지 않고, 노출을 읽는 쿼리가 함께 본다
+ * ({@link com.grandis.nova.catalog.listing.ProductListingQueryRepository}). 그래서 visible 은 관리자가 고른 값을 등록 때 바로 담는다 —
+ * 준비가 안 된 상품은 visible 이어도 회원에게 보이지 않는다.
  * 가격은 basePrice 가 기준이고 옵션의 price 가 최종가다(기본가 + 값별 추가금, 관리자가 직접 고칠 수 있다).
  * 예약 · 주문은 접수 시점 값을 복사하므로 여기를 고쳐도 과거 거래에 소급되지 않는다.
  * image_url 은 product_images 의 GALLERY 대표로 대체돼 폐기 예정이라 매핑하지 않는다.
@@ -74,7 +72,7 @@ public class Product extends BaseEntity {
     }
 
     private Product(Long categoryId, SaleMode saleMode, String title, BigDecimal basePrice, String description,
-                    String tags, boolean warrantyOffered, BigDecimal warrantySurcharge) {
+                    String tags, boolean visible, boolean warrantyOffered, BigDecimal warrantySurcharge) {
         this.categoryId = categoryId;
         this.saleMode = saleMode;
         this.title = title;
@@ -82,33 +80,24 @@ public class Product extends BaseEntity {
         this.description = description;
         this.tags = tags;
         this.status = SaleStatus.ACTIVE;
-        this.visible = false;
+        this.visible = visible;
         this.warrantyOffered = warrantyOffered;
         this.warrantySurcharge = Amounts.requireWholeWon(warrantySurcharge, "warrantySurcharge");
     }
 
     /**
-     * 새 상품. 판매 상태는 ACTIVE, 공개 여부는 false 로 시작한다 — 등록이 끝나기 전에는 공개하지 않는다.
+     * 새 상품. 판매 상태는 ACTIVE, 공개 여부는 관리자가 고른 값이다 — 판매 방식별 준비가 끝나기 전에는 visible 이어도 노출되지 않는다.
      * 보증을 제공하지 않으면 추가금은 0 이다.
      */
     public static Product register(Long categoryId, SaleMode saleMode, String title, BigDecimal basePrice,
-                                   String description, String tags,
+                                   String description, String tags, boolean visible,
                                    boolean warrantyOffered, BigDecimal warrantySurcharge) {
-        return new Product(categoryId, saleMode, title, basePrice, description, tags,
+        return new Product(categoryId, saleMode, title, basePrice, description, tags, visible,
                 warrantyOffered, warrantyOffered ? warrantySurcharge : BigDecimal.ZERO);
     }
 
-    /**
-     * 공개. 등록 완료 때 requested_visible 을 옮기는 곳과 관리자 전환이 부른다. 이 상품의 완료된 등록 기록이 있어야 한다 —
-     * 노출 쿼리가 completed_at 을 따로 거르더라도 "등록 중에는 visible 이 false" 라는 칸의 불변식은 여기서 지킨다.
-     */
-    public void publish(ProductRegistration registration) {
-        if (registration == null || !Objects.equals(registration.getProductId(), id)) {
-            throw new IllegalArgumentException("registration does not belong to product " + id);
-        }
-        if (!registration.isCompleted() || registration.isBlocked()) {
-            throw new IllegalStateException("product " + id + " is not registered completely");
-        }
+    /** 공개. 조건 없다 — 준비가 안 된 상품은 공개여도 노출 쿼리가 거른다. */
+    public void publish() {
         this.visible = true;
     }
 

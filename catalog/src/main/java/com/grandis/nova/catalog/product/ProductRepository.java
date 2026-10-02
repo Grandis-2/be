@@ -10,18 +10,9 @@ import java.util.Optional;
 
 public interface ProductRepository extends JpaRepository<Product, Long> {
 
-    /**
-     * 상품과 등록 기록의 상태 칸 전부를 한 문장으로 읽는다. (visible, registrationCompleted) 를 같은 스냅샷에서 가져오기 위해서다 —
-     * 따로 읽으면 완료 커밋이 사이에 끼어 계약에 없는 조합이 나온다. 둘을 갈라 읽는 쪽으로 바꾸지 않는다.
-     */
-    @Query("""
-            select new com.grandis.nova.catalog.product.ProductWithRegistration(p, r.idempotencyKey, r.campaignSetAt,
-                       r.batchesSetAt, r.stockSetAt, r.completedAt, r.blockedReason, r.lastError)
-              from Product p
-              left join ProductRegistration r on r.productId = p.id
-             where p.id = :productId
-            """)
-    Optional<ProductWithRegistration> findWithRegistration(@Param("productId") Long productId);
+    /** 그 상품의 등록 기록의 멱등 키. 등록 API 이전에 들어온 상품은 비어 있다. 관리자 상세가 등록 상태를 실을 때 쓴다. */
+    @Query("select r.idempotencyKey from ProductRegistration r where r.productId = :productId")
+    Optional<String> findRegistrationKey(@Param("productId") Long productId);
 
     /**
      * 상품 행을 SELECT … FOR UPDATE 로 읽는다. 관리자 수정은 전부 이것부터 잡아 한 상품에 대한 수정을 줄 세운다 — 안 잡으면 기본가 수정과

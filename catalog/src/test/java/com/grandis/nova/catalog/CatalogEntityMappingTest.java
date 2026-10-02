@@ -90,7 +90,7 @@ class CatalogEntityMappingTest {
     void productAndOptionRoundTrip() {
         Long categoryId = fixtures.childCategory(fixtures.category(), "Apple");
         Product product = products.saveAndFlush(Product.register(categoryId, SaleMode.PREORDER, "Nova 1",
-                new BigDecimal("1200000"), "설명", "nova,phone", true, new BigDecimal("199000")));
+                new BigDecimal("1200000"), "설명", "nova,phone", false, true, new BigDecimal("199000")));
         OptionCombination none = OptionCombination.none(product.getId(), " Nova  1 ");
         assertThat(none.isStandalone()).isTrue();
         assertThat(none.title()).isEqualTo("Nova 1");
@@ -135,50 +135,27 @@ class CatalogEntityMappingTest {
     @DisplayName("보증을 제공하지 않으면 추가금은 0 으로 저장한다")
     void warrantySurchargeIgnoredWhenNotOffered() {
         Product product = products.saveAndFlush(Product.register(fixtures.category(), SaleMode.IN_STOCK,
-                "Nova Book", BigDecimal.ZERO, null, null, false, new BigDecimal("50000")));
+                "Nova Book", BigDecimal.ZERO, null, null, false, false, new BigDecimal("50000")));
         assertThat(product.getWarrantySurcharge()).isEqualByComparingTo("0");
     }
 
     @Test
-    @DisplayName("상품은 비공개로 시작하고, 이 상품의 완료된 등록 기록이 있어야 공개된다")
-    void productStartsHiddenUntilPublished() {
-        Product product = products.saveAndFlush(Product.register(fixtures.category(), SaleMode.IN_STOCK,
-                "Nova Book", BigDecimal.ZERO, null, null, false, BigDecimal.ZERO));
-        assertThat(visibleInDb(product.getId())).isFalse();
+    @DisplayName("상품은 등록 때 고른 공개 여부로 시작하고, 공개 · 비공개 전환은 조건 없이 된다 — 노출은 판매 방식별 준비를 함께 본다")
+    void productStartsWithChosenVisibility() {
+        Product hidden = products.saveAndFlush(Product.register(fixtures.category(), SaleMode.IN_STOCK,
+                "Nova Book", BigDecimal.ZERO, null, null, false, false, BigDecimal.ZERO));
+        assertThat(visibleInDb(hidden.getId())).isFalse();
+        Product shown = products.saveAndFlush(Product.register(fixtures.category(), SaleMode.IN_STOCK,
+                "Nova Book", BigDecimal.ZERO, null, null, true, false, BigDecimal.ZERO));
+        assertThat(visibleInDb(shown.getId())).isTrue();
 
-        ProductRegistration incomplete = registrations.saveAndFlush(
-                ProductRegistration.start(product.getId(), ShopFixtures.unique(), true));
-        assertThatThrownBy(() -> product.publish(incomplete)).isInstanceOf(IllegalStateException.class);
-        assertThatThrownBy(() -> product.publish(null)).isInstanceOf(IllegalArgumentException.class);
+        hidden.publish();
+        products.saveAndFlush(hidden);
+        assertThat(visibleInDb(hidden.getId())).isTrue();
 
-        Product other = products.saveAndFlush(Product.register(fixtures.category(), SaleMode.IN_STOCK,
-                "Other", BigDecimal.ZERO, null, null, false, BigDecimal.ZERO));
-        ProductRegistration completed = completeRegistration(product.getId(), incomplete.getIdempotencyKey());
-        assertThatThrownBy(() -> other.publish(completed)).isInstanceOf(IllegalArgumentException.class);
-
-        product.publish(completed);
-        products.saveAndFlush(product);
-        assertThat(visibleInDb(product.getId())).isTrue();
-
-        product.hide();
-        products.saveAndFlush(product);
-        assertThat(visibleInDb(product.getId())).isFalse();
-    }
-
-    @Test
-    @DisplayName("막힌 등록으로는 공개할 수 없다")
-    void blockedRegistrationCannotPublish() {
-        Product product = products.saveAndFlush(Product.register(fixtures.category(), SaleMode.PREORDER,
-                "Nova 1", BigDecimal.ZERO, null, null, false, BigDecimal.ZERO));
-        String key = ShopFixtures.unique();
-        registrations.saveAndFlush(ProductRegistration.start(product.getId(), key, true));
-        jdbcTemplate.update("UPDATE product_registrations SET blocked_reason = 'OPENED_BEFORE_COMPLETE' WHERE product_id = ?",
-                product.getId());
-        entityManager.clear();
-        ProductRegistration blocked = registrations.findByIdempotencyKey(key).orElseThrow();
-        assertThat(blocked.isBlocked()).isTrue();
-        assertThatThrownBy(() -> products.findById(product.getId()).orElseThrow().publish(blocked))
-                .isInstanceOf(IllegalStateException.class);
+        hidden.hide();
+        products.saveAndFlush(hidden);
+        assertThat(visibleInDb(hidden.getId())).isFalse();
     }
 
     private boolean visibleInDb(Long productId) {
@@ -186,12 +163,6 @@ class CatalogEntityMappingTest {
     }
 
     /** 완료 시각은 다음 티켓의 서비스가 찍는다. 여기서는 SQL 로 찍고 다시 읽는다. */
-    private ProductRegistration completeRegistration(Long productId, String key) {
-        jdbcTemplate.update("UPDATE product_registrations SET completed_at = UTC_TIMESTAMP(6) WHERE product_id = ?", productId);
-        entityManager.clear();
-        return registrations.findByIdempotencyKey(key).orElseThrow();
-    }
-
     @Test
     @DisplayName("옵션 축 · 값 · 선택을 저장하고 상품 단위로 다시 읽는다")
     void optionStructureRoundTrip() {
@@ -282,24 +253,19 @@ class CatalogEntityMappingTest {
     }
 
     @Test
-    @DisplayName("등록 기록의 공개 요청 · 빈 단계 시각이 그대로 남는다")
+    @DisplayName("등록 기록은 멱등 키와 상품의 대응만 남는다 — 단계 · 완료 · 리스 칸이 없다")
     void registrationRoundTrip() {
         Long productId = fixtures.product("PREORDER", "ACTIVE");
         String key = ShopFixtures.unique();
-        registrations.saveAndFlush(ProductRegistration.start(productId, key, true));
+        registrations.saveAndFlush(ProductRegistration.start(productId, key));
 
-        Map<String, Object> row = jdbcTemplate.queryForMap(
-                "SELECT requested_visible, completed_at, lease_token FROM product_registrations "
-                        + "WHERE product_id = ?", productId);
-        assertThat(row.get("requested_visible")).isEqualTo(true);
-        assertThat(row.get("completed_at")).isNull();
-        assertThat(row.get("lease_token")).isNull();
+        List<String> columns = jdbcTemplate.queryForList("""
+                SELECT column_name FROM information_schema.columns
+                 WHERE table_schema = DATABASE() AND table_name = 'product_registrations' ORDER BY ordinal_position""", String.class);
+        assertThat(columns).containsExactly("product_id", "idempotency_key", "created_at", "updated_at");
 
         ProductRegistration reloaded = registrations.findByIdempotencyKey(key).orElseThrow();
         assertThat(reloaded.getProductId()).isEqualTo(productId);
         assertThat(reloaded.getIdempotencyKey()).isEqualTo(key);
-        assertThat(reloaded.isRequestedVisible()).isTrue();
-        assertThat(reloaded.isCompleted()).isFalse();
-        assertThat(reloaded.isBlocked()).isFalse();
     }
 }

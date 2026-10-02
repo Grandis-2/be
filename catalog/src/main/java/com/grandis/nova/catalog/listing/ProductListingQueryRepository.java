@@ -20,7 +20,9 @@ import java.util.Optional;
 
 /**
  * 상품 목록 · 검색 · 상세 · 관리자 목록의 읽기 전용 저장소. **catalog 가 다른 서비스의 표를 읽는 유일한 자리**다 —
- * preorder 소유 preorder_campaigns(opens_at · closes_at)와 order 소유 option_inventories(재고 집계)를 여기서만, SELECT 로만 읽는다.
+ * preorder 소유 preorder_campaigns(opens_at · closes_at · 행의 유무)와 order 소유 option_inventories(재고 집계 · 행의 유무)를
+ * 여기서만, SELECT 로만 읽는다.
+ * 판매 방식별 준비({@link #READY})도 여기서 판정한다 — 등록 이벤트를 받은 preorder · order 가 자기 표에 행을 만들어야 노출된다.
  * 노출 조건(오픈 예정 · 마감 · 마감 + 120시간 숨김 · 품절)이 페이징 조건이라 쿼리 안에 있어야 한다. HTTP 로 받아 거르면 페이지가 깨진다.
  * 판매 중(ACTIVE) 옵션이 하나도 없는 상품(옵션 없음 · 전부 판매 중지)은 목록에 남기고 sellable=false 로 알린다 — 화면이 "판매 중지" 를 그린다
  * (사용자 결정 2026-09-27). 숨기지 않는다.
@@ -34,14 +36,23 @@ public class ProductListingQueryRepository {
     /** 마감 뒤 이 시간이 지나면 목록에서 숨긴다(확정 5일). */
     static final Duration HIDE_AFTER_CLOSE = Duration.ofHours(120);
 
+    /**
+     * 판매 방식별 준비 — 등록 이벤트를 받은 서비스가 자기 표에 행을 만들었는가. 사전예약은 preorder 회차 행, 일반은 그 상품 옵션의
+     * order 재고 행(초기화는 한 상품의 옵션을 한 트랜잭션에서 모두 만들므로 하나라도 있으면 등록분은 다 있다). products 를 p 로 둔 문장에 넣는다.
+     */
+    static final String READY = """
+            (CASE WHEN p.sale_mode = 'PREORDER'
+                  THEN EXISTS (SELECT 1 FROM preorder_campaigns rc WHERE rc.product_id = p.id)
+                  ELSE EXISTS (SELECT 1 FROM product_options ro JOIN option_inventories ri ON ri.option_id = ro.id
+                                WHERE ro.product_id = p.id) END)""";
+
     private static final String FROM_VISIBLE = """
               FROM products p
-              JOIN product_registrations r ON r.product_id = p.id AND r.completed_at IS NOT NULL
               LEFT JOIN preorder_campaigns c ON c.product_id = p.id
              WHERE p.visible = 1
                AND p.status = 'ACTIVE'
                AND (p.sale_mode = 'IN_STOCK' OR (c.closes_at IS NOT NULL AND c.closes_at > :hideBefore))
-            """;
+               AND\s""" + READY + "\n";
 
     private static final String SELECT_ITEMS = """
             SELECT p.id, p.sale_mode, p.title, p.status, c.opens_at, c.closes_at,
@@ -60,21 +71,20 @@ public class ProductListingQueryRepository {
                         THEN 1 ELSE 0 END AS sold_out
             """;
 
-    /** 관리자 목록 — 노출 규칙 없이 전부. 등록 기록은 없을 수 있어 LEFT JOIN. */
+    /** 관리자 목록 — 노출 규칙 없이 전부. */
     private static final String FROM_ALL = """
               FROM products p
-              LEFT JOIN product_registrations r ON r.product_id = p.id
               LEFT JOIN preorder_campaigns c ON c.product_id = p.id
              WHERE 1 = 1
             """;
 
     private static final String ADMIN_COLUMNS = """
             ,
-                   p.visible, r.completed_at, r.blocked_reason,
+                   p.visible, %s AS ready,
                    (SELECT COUNT(*) FROM product_options oc WHERE oc.product_id = p.id) AS option_count
-            """;
+            """.formatted(READY);
 
-    /** 건수는 products 와 필터만 본다 — 회차 · 등록 기록은 건수에 영향이 없다(둘 다 product_id 가 PRIMARY KEY 라 행이 안 는다). */
+    /** 건수는 products 와 필터만 본다 — 회차는 건수에 영향이 없다(product_id 가 PRIMARY KEY 라 행이 안 는다). */
     private static final String COUNT_FROM = """
               FROM products p
              WHERE 1 = 1
@@ -111,7 +121,7 @@ public class ProductListingQueryRepository {
         return count == null ? 0 : count;
     }
 
-    /** 회원 목록과 같은 열(최저가 · 대표 사진 · 판매 가능 · 품절 · 회차)에 공개 여부 · 등록 완료 · 막힘 사유를 더해 읽는다. */
+    /** 회원 목록과 같은 열(최저가 · 대표 사진 · 판매 가능 · 품절 · 회차)에 공개 여부 · 판매 방식별 준비 · 옵션 수를 더해 읽는다. */
     public List<AdminProductListItem> findForAdmin(AdminProductListFilter filter, Instant now, int page, int size) {
         StringBuilder sql = new StringBuilder(SELECT_ITEMS.stripTrailing()).append(ADMIN_COLUMNS).append(FROM_ALL);
         MapSqlParameterSource params = new MapSqlParameterSource();
@@ -119,8 +129,7 @@ public class ProductListingQueryRepository {
         sql.append(" ORDER BY p.id DESC LIMIT :limit OFFSET :offset");
         params.addValue("limit", size).addValue("offset", (long) page * size);
         return jdbc.query(sql.toString(), params, (rs, rowNum) -> AdminProductListItem.of(toItem(rs, now),
-                rs.getBoolean("visible"), rs.getObject("completed_at", LocalDateTime.class) != null, rs.getString("blocked_reason"),
-                rs.getInt("option_count")));
+                rs.getBoolean("visible"), rs.getBoolean("ready"), rs.getInt("option_count")));
     }
 
     private static void appendAdminFilters(StringBuilder sql, MapSqlParameterSource params, AdminProductListFilter filter) {
@@ -176,6 +185,32 @@ public class ProductListingQueryRepository {
                 .append(" WHERE s.option_id = o.id AND a.axis_key = :").append(axisKey).append("Axis")
                 .append(" AND v.normalized_value IN (:").append(axisKey).append("Values))");
         params.addValue(axisKey + "Axis", axisKey).addValue(axisKey + "Values", values);
+    }
+
+    /**
+     * 그 상품의 판매 방식별 준비({@link #READY}). 상품이 없으면 false.
+     * 공개 여부와 함께 판정하는 자리에서 이것을 따로 부르려면 REPEATABLE READ 트랜잭션 안이어야 한다(회원 · 관리자 상세) — READ COMMITTED 는
+     * 문장마다 스냅샷을 새로 잡아, 두 문장 사이에 공개 전환과 회차 생성이 커밋되면 한순간도 없던 조합이 나온다. 그 밖에서는 {@link #findExposure} 를 쓴다.
+     */
+    public boolean isReady(Long productId) {
+        List<Boolean> rows = jdbc.query("SELECT " + READY + " AS ready FROM products p WHERE p.id = :productId",
+                new MapSqlParameterSource("productId", productId), (rs, rowNum) -> rs.getBoolean("ready"));
+        return !rows.isEmpty() && rows.getFirst();
+    }
+
+    /**
+     * 공개 여부 · 판매 상태 · 판매 방식별 준비를 한 문장으로 읽는다. 사전예약 접수가 이 셋을 함께 보고 판정하므로(내부 조회 API)
+     * 같은 스냅샷이어야 한다. 상품이 없으면 비어 있다.
+     */
+    public Optional<Exposure> findExposure(Long productId) {
+        List<Exposure> rows = jdbc.query("SELECT p.visible, p.status, " + READY + " AS ready FROM products p WHERE p.id = :productId",
+                new MapSqlParameterSource("productId", productId),
+                (rs, rowNum) -> new Exposure(rs.getBoolean("visible"), SaleStatus.valueOf(rs.getString("status")), rs.getBoolean("ready")));
+        return rows.stream().findFirst();
+    }
+
+    /** 한 문장으로 읽은 노출 판정 재료. */
+    public record Exposure(boolean visible, SaleStatus status, boolean ready) {
     }
 
     /** 사전예약 회차 시각. 회차가 없으면 비어 있다. */

@@ -38,7 +38,8 @@ class TokenAuthenticationRedisDownTest {
     void setUp() {
         ShopFixtures fixtures = new ShopFixtures(jdbcTemplate);
         productId = fixtures.product("IN_STOCK", "ACTIVE");
-        fixtures.completeRegistration(productId);
+        fixtures.registration(productId);
+        fixtures.stockReady(productId);   // 공개 상세가 200 이려면 판매 방식별 준비(재고 행)가 있어야 한다
         when(checker.isRevoked(any())).thenThrow(new RevocationCheckFailedException(new RuntimeException("redis down")));
     }
 

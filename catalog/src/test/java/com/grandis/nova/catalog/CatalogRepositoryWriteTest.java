@@ -61,25 +61,17 @@ class CatalogRepositoryWriteTest {
     }
 
     @Test
-    @DisplayName("완료된 등록 위에 같은 상품으로 다시 시작하면 거절되고 원본이 남는다")
+    @DisplayName("있는 등록 위에 같은 상품으로 다시 시작하면 거절되고 원본이 남는다 — save() 가 merge 로 덮지 않는다(Persistable)")
     void secondStartOnSameProductIsRejected() {
         Long productId = fixtures.product("PREORDER", "ACTIVE");
         String firstKey = ShopFixtures.unique();
-        registrations.saveAndFlush(ProductRegistration.start(productId, firstKey, true));
-        jdbcTemplate.update("UPDATE product_registrations SET completed_at = UTC_TIMESTAMP(6), campaign_set_at = UTC_TIMESTAMP(6) "
-                + "WHERE product_id = ?", productId);
+        registrations.saveAndFlush(ProductRegistration.start(productId, firstKey));
 
-        assertThatThrownBy(() -> registrations.saveAndFlush(
-                ProductRegistration.start(productId, ShopFixtures.unique(), false)))
+        assertThatThrownBy(() -> registrations.saveAndFlush(ProductRegistration.start(productId, ShopFixtures.unique())))
                 .isInstanceOf(DataIntegrityViolationException.class);
 
-        Map<String, Object> row = jdbcTemplate.queryForMap(
-                "SELECT idempotency_key, completed_at, campaign_set_at, requested_visible "
-                        + "FROM product_registrations WHERE product_id = ?", productId);
-        assertThat(row.get("idempotency_key")).isEqualTo(firstKey);
-        assertThat(row.get("completed_at")).isNotNull();
-        assertThat(row.get("campaign_set_at")).isNotNull();
-        assertThat(row.get("requested_visible")).isEqualTo(true);
+        assertThat(jdbcTemplate.queryForObject("SELECT idempotency_key FROM product_registrations WHERE product_id = ?",
+                String.class, productId)).isEqualTo(firstKey);
     }
 
     @Test

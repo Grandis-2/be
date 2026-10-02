@@ -63,7 +63,7 @@ class InternalProductApiTest {
     }
 
     @Test
-    @DisplayName("비공개 · 미완료 상품도 200 으로 돌려주고 두 칸이 그 상태를 말한다 — 숨김 판정은 호출자 몫")
+    @DisplayName("비공개 · 준비 전 상품도 200 으로 돌려주고 두 칸이 그 상태를 말한다 — 숨김 판정은 호출자 몫. 사전예약의 준비는 회차 행")
     void hiddenAndIncompleteProductsAreStillReturned() throws Exception {
         Long productId = fixtures.product("PREORDER", "ACTIVE");
         jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", productId);
@@ -74,7 +74,7 @@ class InternalProductApiTest {
                 .andExpect(jsonPath("$.data.visible").value(false))
                 .andExpect(jsonPath("$.data.registrationCompleted").value(false));
 
-        jdbcTemplate.update("UPDATE product_registrations SET completed_at = UTC_TIMESTAMP(6) WHERE product_id = ?", productId);
+        fixtures.campaign(productId, java.time.Instant.now().plusSeconds(3600), java.time.Instant.now().plusSeconds(7200));
         asUser(productId)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.registrationCompleted").value(true));

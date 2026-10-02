@@ -6,6 +6,7 @@ import com.grandis.nova.catalog.detail.ProductDetailService;
 import com.grandis.nova.catalog.detail.ProductDetailView;
 import com.grandis.nova.catalog.image.ProductImage;
 import com.grandis.nova.catalog.image.ProductImageRepository;
+import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
 import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.catalog.option.OptionCombination.Pick;
 import com.grandis.nova.catalog.option.ProductOptionAxis;
@@ -13,6 +14,7 @@ import com.grandis.nova.catalog.option.ProductOptionAxisRepository;
 import com.grandis.nova.catalog.option.ProductOptionSelectionRepository;
 import com.grandis.nova.catalog.option.ProductOptionValue;
 import com.grandis.nova.catalog.option.ProductOptionValueRepository;
+import com.grandis.nova.catalog.outbox.OutboxWriter;
 import com.grandis.nova.catalog.product.Product;
 import com.grandis.nova.catalog.product.ProductOption;
 import com.grandis.nova.catalog.product.ProductOptionRepository;
@@ -39,11 +41,13 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * 관리자 등록의 ① — catalog 트랜잭션. 상품(비공개) · 축 · 값 · 조합 · 선택 · 사진 · 등록 기록을 한 번에 저장한다.
- * ②(preorder · order 호출)와 ③(완료 · 공개 전환)은 등록 조율 티켓이 {@link RegistrationOutcome#plan} 으로 이어 간다.
+ * 관리자 등록 — catalog 트랜잭션 하나. 상품(관리자가 고른 공개 여부) · 축 · 값 · 조합 · 선택 · 사진 · 등록 기록과
+ * 판매 방식별 등록 이벤트(아웃박스)를 한 번에 저장한다. 사전예약은 preorder 가 회차 · 차수를, 일반은 order 가 초기 재고를
+ * 이벤트를 받아 자기 표에 만든다(2026-10-02 이벤트 방식 전환). 그 행이 생기기 전에는 노출되지 않는다(판매 방식별 준비).
  *
- * 같은 Idempotency-Key 가 다시 오면 본문 내용은 대조하지 않고 첫 등록을 돌려준다 — 완료됐으면 같은 결과, 미완료면 재개 대상. 응답이 유실된 클라이언트는
- * 같은 키로 다시 보내고 productId 를 받는다. 새 키 둘이 동시에 오면 등록 기록의 UNIQUE 가 하나를 거절하고 그 트랜잭션은 통째로 돌아간다.
+ * 같은 Idempotency-Key 가 다시 오면 본문 내용은 대조하지 않고 첫 등록을 돌려준다 — 준비가 끝났으면 200, 아직이면 202. 응답이 유실된 클라이언트는
+ * 같은 키로 다시 보내고 productId 를 받는다. 이벤트는 다시 적지 않는다 — 아웃박스가 보낼 때까지 다시 보낸다.
+ * 새 키 둘이 동시에 오면 등록 기록의 UNIQUE 가 하나를 거절하고 그 트랜잭션(상품 · 이벤트 포함)은 통째로 돌아간다.
  */
 @Service
 public class ProductRegistrationService {
@@ -58,6 +62,8 @@ public class ProductRegistrationService {
     private final ProductRegistrationRepository registrations;
     private final ProductRegistrationValidator validator;
     private final ProductDetailService detailService;
+    private final ProductListingQueryRepository crossReads;
+    private final OutboxWriter outbox;
     private final Clock clock;
     private final Duration minOpenLead;
 
@@ -65,7 +71,8 @@ public class ProductRegistrationService {
                                       ProductOptionValueRepository values, ProductOptionRepository options,
                                       ProductOptionSelectionRepository selections, ProductImageRepository images,
                                       ProductRegistrationRepository registrations, ProductRegistrationValidator validator,
-                                      ProductDetailService detailService, Clock clock,
+                                      ProductDetailService detailService, ProductListingQueryRepository crossReads,
+                                      OutboxWriter outbox, Clock clock,
                                       @org.springframework.beans.factory.annotation.Value("${catalog.registration.min-open-lead:PT30M}")
                                       Duration minOpenLead) {
         this.categories = categories;
@@ -78,6 +85,8 @@ public class ProductRegistrationService {
         this.registrations = registrations;
         this.validator = validator;
         this.detailService = detailService;
+        this.crossReads = crossReads;
+        this.outbox = outbox;
         this.clock = clock;
         this.minOpenLead = minOpenLead;
     }
@@ -85,10 +94,10 @@ public class ProductRegistrationService {
     /**
      * @param idempotencyKey 앞뒤를 트림해서 쓴다 — 칼럼(utf8mb4_bin, PAD SPACE)은 뒤 공백만 같게 보고 앞 공백은 다른 키로 보므로(MySQL 8.4.11 실측)
      *                       앱이 양쪽을 잘라 하나의 규칙으로 만든다
-     * @return CREATED 면 ② 계획을 담고, REPLAYED · IN_PROGRESS 면 등록 상태(고정 필드)만 담는다. 같은 키로 다시 오면 본문 내용은
+     * @return CREATED 면 등록 상태와 미리보기를, REPLAYED(준비 끝) · IN_PROGRESS(준비 전) 면 등록 상태만 담는다. 같은 키로 다시 오면 본문 내용은
      *         대조하지 않고 첫 등록의 상태를 돌려준다. 형식 검사(모르는 칸 · 필수 칸)는 요청 경계에서 먼저 돌고, 오픈 시각 · 카테고리 검사는
      *         재전송 판정 뒤에 돈다 — 응답을 잃고 늦게 다시 보내도 productId 를 받는다. 같은 키에 다른 본문은 프론트 버그일 때뿐이다(2026-09-30 결정)
-     * @throws BusinessException REGISTRATION_BLOCKED(자동 재개 불가) · REGISTRATION_IN_PROGRESS(동시 새 키)
+     * @throws BusinessException REGISTRATION_IN_PROGRESS(같은 새 키가 동시에 와서 다른 요청이 먼저 저장했다)
      */
     @Transactional
     public RegistrationOutcome register(String idempotencyKey, ProductRegistrationRequest request) {
@@ -99,13 +108,9 @@ public class ProductRegistrationService {
         Optional<ProductRegistration> existing = registrations.findByIdempotencyKey(key);
         if (existing.isPresent()) {
             ProductRegistration registration = existing.get();
-            if (registration.isBlocked()) {
-                throw new BusinessException(CatalogErrorCode.REGISTRATION_BLOCKED,
-                        Map.of("productId", registration.getProductId(), "blockedReason", registration.getBlockedReason()));
-            }
-            RegistrationOutcome.Kind kind = registration.isCompleted()
-                    ? RegistrationOutcome.Kind.REPLAYED : RegistrationOutcome.Kind.IN_PROGRESS;
-            return new RegistrationOutcome(kind, RegistrationStatusView.from(registration), null, null);
+            boolean ready = crossReads.isReady(registration.getProductId());
+            RegistrationOutcome.Kind kind = ready ? RegistrationOutcome.Kind.REPLAYED : RegistrationOutcome.Kind.IN_PROGRESS;
+            return new RegistrationOutcome(kind, RegistrationStatusView.of(registration, ready), null);
         }
 
         if (!categories.existsById(request.categoryId())) {
@@ -114,7 +119,7 @@ public class ProductRegistrationService {
         Instant now = clock.instant();
         Draft draft = validator.validate(request, now, minOpenLead);
         Product product = products.save(Product.register(request.categoryId(), request.saleMode(), request.title(),
-                request.basePrice(), request.description(), request.tags(), request.warranty().offered(),
+                request.basePrice(), request.description(), request.tags(), request.visible(), request.warranty().offered(),
                 request.warranty().surcharge()));
         Long productId = product.getId();
 
@@ -136,13 +141,13 @@ public class ProductRegistrationService {
             savedValues.put(axis.key(), byNormalized);
         }
 
-        Map<Long, Integer> stockByOptionId = new LinkedHashMap<>();
+        List<InStockProductRegistered.Item> initialStock = new ArrayList<>();
         for (Combo combo : draft.combos()) {
             OptionCombination combination = toCombination(productId, request.title(), combo, draft, savedAxes, savedValues);
             ProductOption option = saveOption(combo, combination);
             selections.saveAll(combination.selections(option.getId()));
             if (combo.stock() != null) {
-                stockByOptionId.put(option.getId(), combo.stock());
+                initialStock.add(new InStockProductRegistered.Item(option.getId(), combo.stock()));
             }
         }
 
@@ -166,22 +171,21 @@ public class ProductRegistrationService {
             }, "uq_product_image_", "images.detail[%d].section".formatted(i), "같은 영역이 두 번 왔습니다.");
         }
 
-        ProductRegistration registration = saveRegistration(productId, key, request.visible());
-        RegistrationPlan plan = new RegistrationPlan(productId, stockByOptionId,
-                request.campaign() == null ? null
-                        : new RegistrationPlan.Campaign(request.campaign().opensAt(), request.campaign().closesAt()),
-                request.shipmentBatches().stream().map(batch -> new RegistrationPlan.ShipmentBatch(batch.batchNumber(),
-                        batch.positionFrom(), batch.positionTo(), batch.estimatedShipStart(), batch.estimatedShipEnd())).toList());
-        // 미리보기는 커밋 전에 같은 트랜잭션에서 읽는다. 커밋 뒤 따로 읽으면 그 사이에 완료 · 공개 전환(③)이 끼어
-        // completed=false · visible=true 라는 있은 적 없는 조합을 실을 수 있다. 커밋 전엔 남이 이 상품을 못 건드린다
+        ProductRegistration registration = saveRegistration(productId, key);
+        // 다른 서비스가 만들 값은 같은 트랜잭션의 아웃박스로 보낸다. 롤백되면 이벤트도 없다
+        outbox.append(request.saleMode() == SaleMode.PREORDER
+                ? PreorderProductRegistered.of(productId, request.campaign(), request.shipmentBatches())
+                : new InStockProductRegistered(productId, initialStock));
+        // 미리보기는 커밋 전에 같은 트랜잭션에서 읽는다 — 커밋 전엔 남이 이 상품을 못 건드려 저장한 그대로가 실린다.
+        // 준비는 아직이다: 이벤트는 커밋 뒤에 나가므로 회차 · 재고 행이 이 시점에 있을 수 없다
         ProductDetailView preview = detailService.findAdminProduct(productId).product();
-        return new RegistrationOutcome(RegistrationOutcome.Kind.CREATED, RegistrationStatusView.from(registration), plan, preview);
+        return new RegistrationOutcome(RegistrationOutcome.Kind.CREATED, RegistrationStatusView.of(registration, false), preview);
     }
 
     @Transactional(readOnly = true)
     public RegistrationStatusView status(String idempotencyKey) {
         return registrations.findByIdempotencyKey(idempotencyKey == null ? "" : idempotencyKey.strip())
-                .map(RegistrationStatusView::from)
+                .map(registration -> RegistrationStatusView.of(registration, crossReads.isReady(registration.getProductId())))
                 .orElseThrow(() -> new BusinessException(CatalogErrorCode.REGISTRATION_NOT_FOUND));
     }
 
@@ -204,9 +208,9 @@ public class ProductRegistrationService {
         return options.saveAndFlush(ProductOption.of(combo.sku(), combo.price(), combo.priceOverridden(), combination));
     }
 
-    private ProductRegistration saveRegistration(Long productId, String idempotencyKey, boolean visible) {
+    private ProductRegistration saveRegistration(Long productId, String idempotencyKey) {
         try {
-            return registrations.saveAndFlush(ProductRegistration.start(productId, idempotencyKey, visible));
+            return registrations.saveAndFlush(ProductRegistration.start(productId, idempotencyKey));
         } catch (DataIntegrityViolationException e) {
             // 같은 새 키가 동시에 들어왔다 — 먼저 커밋한 쪽이 이긴다. 이 트랜잭션(상품 포함)은 통째로 돌아간다
             if (ConstraintViolations.mentions(e, "uq_registration_key")) {

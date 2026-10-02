@@ -9,7 +9,7 @@
 # 소유 경계(README 기준)
 #   member    customers · refresh_tokens
 #   catalog   categories · products · product_options · product_option_axes · product_option_values
-#             product_option_selections · product_images · product_registrations
+#             product_option_selections · product_images · product_registrations · catalog_outbox_events
 #   preorder  preorders · preorder_events · preorder_campaigns · shipment_batches
 #   order     orders · order_items · order_events · cart_items · payments · payment_transactions
 #             option_inventories(재고 칼럼 stock_total · stock_reserved · stock_sold)
@@ -219,9 +219,10 @@ reviews:
     # ─────────────────────────────────────────────────────────────
     - path: "catalog/**/*.java"
       instructions: |
-        - 비소유 표 읽기는 둘만 허용한다: preorder_campaigns(opens_at · closes_at) · option_inventories(재고 칼럼 집계).
+        - 비소유 표 읽기는 둘만 허용한다: preorder_campaigns(opens_at · closes_at · 행의 유무) · option_inventories(재고 칼럼 집계 · 행의 유무).
           목록·검색의 노출 조건(오픈 예정 · 마감 · 마감+120시간 숨김 · 품절)과 상세의 회차 시각 · 옵션별 가용 수량,
-          관리자 목록의 같은 칸, 관리자 수정의 오픈 판정(회차 opens_at — 사전예약 오픈 뒤 수정 금지)에 쓰며 읽기 전용 저장소 한 곳에서만 읽는다.
+          관리자 목록의 같은 칸, 관리자 수정의 오픈 판정(회차 opens_at — 사전예약 오픈 뒤 수정 금지),
+          판매 방식별 준비(등록 이벤트를 받은 서비스가 회차 행 · 재고 행을 만들었는가)에 쓰며 읽기 전용 저장소 한 곳에서만 읽는다.
           그 두 표에 INSERT · UPDATE · DELETE 가 있으면 지적한다. 다른 클래스가 같은 표를 읽어도 지적한다.
           src/test 의 시험 코드가 시험 데이터로 그 표에 INSERT · UPDATE 하는 것은 예외다 — 운영 코드 경계가 아니라 시험 준비 · 경쟁 재현이다.
         - shipment_batches 는 읽지 않는다. 상세의 배송 안내는 preorder 의 공개 API(GET /api/v1/products/{id}/shipment-batches)를 프론트가 부른다.
@@ -231,12 +232,15 @@ reviews:
         - 모집 오픈 이후 모집 일정 · 배송 기준을 바꾸는 경로는 지적한다.
         - 가격 · 이름 변경이 과거 예약에 소급되는 구조라면 지적한다. 예약은 접수 시점 값을 복사해 쓴다.
         - 카테고리 parent_id 를 쓰는 경로가 순환(자기 자신 포함) · 3단계를 검사하지 않으면 지적한다. DB 는 못 막는다.
-        - products.visible 을 true 로 바꾸는 경로가 product_registrations.completed_at 을 확인하지 않으면 지적한다.
+        - 회원에게 상품을 노출하는 판정(목록 · 상세)이 products.visible 만 보고 판매 방식별 준비(ProductListingQueryRepository.READY)를 함께 보지 않으면 지적한다.
+          visible 은 관리자가 고른 값이라 준비 전에도 true 일 수 있다.
         - product_images 의 GALLERY bundle_key 가 그 상품 color 축의 정규화값(또는 '')인지 검사하지 않으면 지적한다.
         - product_options 의 combination_key · filter_attributes · title 과 product_option_selections 를 OptionCombination 밖에서 따로 만들면 지적한다.
         - product_images.position 을 한 UPDATE 로 교환하거나, 이동 UPDATE 에 방향에 맞는 ORDER BY 가 없으면 지적한다(UNIQUE 는 행마다 검사된다).
-        - 응답 한 건에 products.visible 과 product_registrations.completed_at 을 함께 실으면서 두 표를 따로 SELECT 하면 지적한다.
-          READ COMMITTED 는 문장마다 스냅샷을 새로 잡아 완료 커밋이 사이에 끼면 없던 조합이 나온다. 한 문장(JOIN)으로 읽는다.
+        - 다른 서비스가 만들 값(사전예약 회차 · 차수, 일반 상품 초기 재고)을 그 서비스의 API 를 동기로 불러 넣거나 그 표에 직접 쓰면 지적한다.
+          같은 트랜잭션에서 OutboxWriter 로 이벤트를 적는다(contracts/catalog-events.md).
+        - catalog_outbox_events 를 OutboxWriter 밖에서 INSERT 하거나, 업무 트랜잭션과 다른 트랜잭션에서 append 하면 지적한다(MANDATORY).
+          이벤트 payload 에 상품 id 를 다시 넣으면 지적한다 — 봉투의 aggregateId 로만 싣는다.
         - /internal/** 은 USER · ADMIN 만 허용하고 비공개 · 미완료 상품도 200 으로 준다. 여기서 먼저 숨기면 지적한다 — 숨김 판정은 호출자다.
 
     # ─────────────────────────────────────────────────────────────
@@ -361,7 +365,7 @@ reviews:
           허용된 읽기 — 이것만 실패가 아니다.
           - preorder → products · product_options · categories (접수 시점 값 복사)
           - order → products · product_options (금액 · 재고 확인)
-          - catalog → preorder_campaigns(opens_at · closes_at) · option_inventories (목록 · 검색의 노출 조건, 상세의 회차 시각 · 옵션별 가용 수량, 관리자 목록의 같은 칸, 관리자 수정의 오픈 판정. 읽기 전용 저장소 한 곳)
+          - catalog → preorder_campaigns(opens_at · closes_at · 행의 유무) · option_inventories(재고 집계 · 행의 유무) (목록 · 검색의 노출 조건, 상세의 회차 시각 · 옵션별 가용 수량, 관리자 목록의 같은 칸, 관리자 수정의 오픈 판정, 판매 방식별 준비. 읽기 전용 저장소 한 곳)
           - worker → preorders (처리 대상 확인)
           - batch → 전부 (읽기 전용 모듈)
 

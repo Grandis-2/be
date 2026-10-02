@@ -73,10 +73,9 @@ public class ShopFixtures {
                 """, categoryId, saleMode, title, tags, status);
     }
 
-    /** 등록이 끝난 상품 — 노출 규칙의 앞 조건. */
-    public void completeRegistration(Long productId) {
+    /** 등록 API 로 들어온 상품의 등록 기록. 노출은 이것이 아니라 판매 방식별 준비(회차 · 재고 행)가 정한다 — {@link #campaign} · {@link #inventory}. */
+    public void registration(Long productId) {
         registration(productId, unique());
-        jdbcTemplate.update("UPDATE product_registrations SET completed_at = UTC_TIMESTAMP(6) WHERE product_id = ?", productId);
     }
 
     /** preorder 소유 표. catalog 코드는 쓰지 않고 시험 데이터로만 넣는다. */
@@ -119,6 +118,25 @@ public class ShopFixtures {
     /** DB 는 UTC 벽시계 시각을 담는다. Timestamp 로 넘기면 JVM 시간대로 바뀌어 들어간다. */
     private static LocalDateTime utc(Instant instant) {
         return LocalDateTime.ofInstant(instant, ZoneOffset.UTC);
+    }
+
+    /**
+     * 일반 상품의 판매 방식별 준비 — order 가 등록 이벤트로 만드는 초기 재고 행을, 아직 행이 없는 옵션마다 재고 0 으로 넣는다.
+     * 재고 0 행은 재고 행이 없을 때와 품절 판정이 같다(가용 0). 옵션이 하나도 없는 상품은 판매 중지 옵션 하나를 더해 넣는다 —
+     * 실제 등록은 옵션 없이 만들어지지 않으므로 옵션 없는 픽스처를 노출하려는 시험만 그 갈래를 탄다(판매 중지 옵션은 최저가 · 판매 가능 · 품절에 안 센다).
+     * 여러 번 불러도 된다 — 그사이 더한 옵션에만 행을 넣는다.
+     */
+    public void stockReady(Long productId) {
+        Integer optionCount = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM product_options WHERE product_id = ?",
+                Integer.class, productId);
+        if (optionCount == null || optionCount == 0) {
+            option(productId, "PAUSED");
+        }
+        jdbcTemplate.update("""
+                INSERT INTO option_inventories (option_id, stock_total, stock_reserved, stock_sold, updated_at)
+                SELECT o.id, 0, 0, 0, UTC_TIMESTAMP(6) FROM product_options o
+                 WHERE o.product_id = ? AND NOT EXISTS (SELECT 1 FROM option_inventories i WHERE i.option_id = o.id)
+                """, productId);
     }
 
     public Long option(Long productId, String status) {
@@ -174,8 +192,8 @@ public class ShopFixtures {
 
     public void registration(Long productId, String idempotencyKey) {
         jdbcTemplate.update("""
-                INSERT INTO product_registrations (product_id, idempotency_key, requested_visible, created_at, updated_at)
-                VALUES (?, ?, 1, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                INSERT INTO product_registrations (product_id, idempotency_key, created_at, updated_at)
+                VALUES (?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
                 """, productId, idempotencyKey);
     }
 

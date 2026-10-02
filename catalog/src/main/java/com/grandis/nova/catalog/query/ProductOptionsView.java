@@ -13,7 +13,7 @@ import java.util.List;
  * 접수는 status · visible · registrationCompleted 까지 보게 된다(지금 preorder 는 두 곳 모두 saleMode·status 만 본다).
  * 여기서 먼저 숨기면 관리자 등록 흐름이 자기 상품을 못 본다. visible 로 완료를 추론하지 않는다 — 두 칸을 모두 본다.
  *
- * @param registrationCompleted 한 번 등록의 모든 단계가 끝났는가(product_registrations.completed_at). 등록 기록이 없는 행은 false
+ * @param registrationCompleted 판매 방식별 준비 — 사전예약은 preorder 회차 행, 일반은 order 재고 행이 있다(등록 이벤트가 처리됐다)
  */
 public record ProductOptionsView(
         Long productId,
