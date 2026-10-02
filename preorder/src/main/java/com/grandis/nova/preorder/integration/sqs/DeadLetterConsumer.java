@@ -1,6 +1,8 @@
 package com.grandis.nova.preorder.integration.sqs;
 
+import com.grandis.nova.common.sqs.QueuePoller;
 import com.grandis.nova.common.sqs.SqsQueueUrls;
+import com.grandis.nova.preorder.deadletter.DeadLetterRedriver;
 import com.grandis.nova.preorder.deadletter.DeadLetters;
 import com.grandis.nova.preorder.deadletter.IncomingDeadLetter;
 import org.slf4j.Logger;
@@ -12,26 +14,27 @@ import software.amazon.awssdk.services.sqs.model.Message;
 import software.amazon.awssdk.services.sqs.model.MessageSystemAttributeName;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * 소비 큐의 DLQ 를 받아 DB(dead_letter_events)로 옮긴다. 적재가 커밋된 뒤에만 DLQ 에서 지운다 —
  * 적재가 실패하면 가시성 시간 뒤 다시 받고, 지우기 전에 죽어 다시 받으면 이미 쌓인 메시지라 지우기만 한다.
+ * 되돌린 메시지가 또 DLQ 로 오면 새 행이 앞선 행을 가리키도록 되돌리기 표식(deadLetterId) 속성을 함께 받는다.
  */
 @Component
 @ConditionalOnProperty(prefix = "nova.sqs.dead-letter", name = "enabled", havingValue = "true")
 class DeadLetterConsumer extends QueuePoller {
 
     private static final Logger log = LoggerFactory.getLogger(DeadLetterConsumer.class);
-    private static final int MAX_MESSAGES = 10;
 
     private final DeadLetters deadLetters;
     private final String sourceQueue;
 
-    DeadLetterConsumer(SqsClient sqs, SqsQueueUrls queueUrls, DeadLetters deadLetters, SqsProperties properties) {
-        super(sqs, queueUrls, properties.deadLetter().queue(), 1, properties.deadLetter().waitSeconds(),
-                MAX_MESSAGES, properties.deadLetter().visibility());
+    DeadLetterConsumer(SqsClient sqs, SqsQueueUrls queueUrls, DeadLetters deadLetters,
+                       DeadLetterConsumerProperties properties, PreorderEventConsumerProperties consumer) {
+        super(sqs, queueUrls, properties.toSettings(), List.of(DeadLetterRedriver.DEAD_LETTER_ID_ATTRIBUTE));
         this.deadLetters = deadLetters;
-        this.sourceQueue = properties.consumer().queue();
+        this.sourceQueue = consumer.queue();
     }
 
     @Override
@@ -54,7 +57,7 @@ class DeadLetterConsumer extends QueuePoller {
 
     private IncomingDeadLetter toIncoming(Message message) {
         return new IncomingDeadLetter(sourceQueue, message.messageId(), message.body(), receiveCount(message),
-                sentAt(message), deadLetterId(message).orElse(null));
+                sentAt(message), DeadLetterIds.of(message).orElse(null));
     }
 
     /** SQS 가 처음 받은 시각(epoch 밀리초). 읽을 수 없으면 null. */
