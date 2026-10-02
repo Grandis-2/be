@@ -48,6 +48,8 @@ class AllocationRound {
     /** 이 리더가 모델별로 본 커서 최댓값. Redis 가 커서를 잃으면 되살리는 데 쓴다(값은 늘기만 한다). */
     private final Map<String, Long> writtenMax = new ConcurrentHashMap<>();
     private final Map<String, String> sweepCursors = new ConcurrentHashMap<>();
+    /** 이 리더가 줄을 지운 것을 확인한 모델. 시각만으로 은퇴시키면 정리가 실패한 줄이 영영 남는다. */
+    private final Set<String> cleaned = ConcurrentHashMap.newKeySet();
     /** 같은 깨진 일정을 틱마다 다시 남기지 않는다. */
     private final Set<String> reportedBroken = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean tidyFailing = new AtomicBoolean();
@@ -70,9 +72,10 @@ class AllocationRound {
                     Map<String, Schedule> schedules = schedules(products.entries());
                     writtenMax.keySet().retainAll(schedules.keySet());
                     sweepCursors.keySet().retainAll(schedules.keySet());
+                    cleaned.retainAll(schedules.keySet());
                     Instant readAt = Instant.ofEpochMilli(products.redisNowMillis());
                     return Flux.fromIterable(schedules.keySet())
-                            .concatMap(key -> retired(schedules.get(key), readAt)
+                            .concatMap(key -> retired(key, schedules.get(key), readAt)
                                     ? Mono.just(new Row(key, schedules.get(key), RETIRED))
                                     : store.depth(key).map(depth -> new Row(key, schedules.get(key), depth)))
                             .collectList()
@@ -191,7 +194,13 @@ class AllocationRound {
             return Mono.empty();
         }
         long deletableAt = closesAt.plus(properties.closeGrace()).getEpochSecond();
-        return store.closeQueue(row.key(), fence, true, properties.fenceTtl().toMillis(), deletableAt).then();
+        return store.closeQueue(row.key(), fence, true, properties.fenceTtl().toMillis(), deletableAt)
+                .doOnNext(result -> {
+                    if (result == CLOSED) {
+                        cleaned.add(row.key());
+                    }
+                })
+                .then();
     }
 
     /** 깨진 일정과 모양이 틀린 모델 키는 빼고(처음 볼 때 한 번만 남긴다), 나머지는 키 순서로 고정한다. */
@@ -210,16 +219,17 @@ class AllocationRound {
     }
 
     /**
-     * 마감 정리와 이탈 기록 보관까지 끝난 모델. Redis 를 치지 않고 마감 상태만 발행한다 — 누적된 모델 수만큼
-     * 틱 비용이 늘지 않게. 마감 상태로는 계속 남겨 진입이 404 가 아니라 마감으로 답한다.
+     * 이탈 기록 보관까지 지났고 줄을 지운 것도 확인한 모델. Redis 를 치지 않고 마감 상태만 발행한다 — 누적된 모델
+     * 수만큼 틱 비용이 늘지 않게. 마감 상태로는 계속 남겨 진입이 404 가 아니라 마감으로 답한다.
      */
-    private boolean retired(Schedule schedule, Instant now) {
+    private boolean retired(String key, Schedule schedule, Instant now) {
         Instant done = schedule.window().closesAt().plus(properties.closeGrace()).plusSeconds(GraceRetention.SECONDS * 2);
-        return !now.isBefore(done);
+        return cleaned.contains(key) && !now.isBefore(done);
     }
 
     private static final QueueDepth RETIRED = new QueueDepth(0, -1);
     private static final String APPLY_FAILED = "apply:";
+    private static final long CLOSED = 1;
 
     private record Row(String key, Schedule schedule, QueueDepth depth) {
     }

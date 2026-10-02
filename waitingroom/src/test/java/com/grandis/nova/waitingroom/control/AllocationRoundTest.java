@@ -150,15 +150,20 @@ class AllocationRoundTest {
     }
 
     @Test
-    void 정리까지_끝난_오래된_모델은_Redis_를_치지_않고_마감으로만_발행한다() {
+    void 오래된_모델도_줄을_지운_것을_확인한_뒤에야_Redis_를_치지_않고_마감으로만_발행한다() {
         schedule("101", now.minus(Duration.ofDays(2)), now.minus(Duration.ofDays(1)));
         line("101", 3);
 
-        GatewaySnapshot snapshot = run(7, 0);
+        assertThat(run(7, 0).product("101").orElseThrow().waiting()).as("첫 회차는 표만 세워 아직 읽는다").isEqualTo(3);
+        assertThat(redis.hasKey("wr:queue:{101}").block(WAIT)).as("시각이 지났다고 정리를 건너뛰지 않는다").isTrue();
+        run(7, 0);
+        assertThat(redis.hasKey("wr:queue:{101}").block(WAIT)).isFalse();
 
+        line("101", 2);
+        GatewaySnapshot snapshot = run(7, 0);
         assertThat(snapshot.product("101").orElseThrow().runtime()).isEqualTo(RuntimeState.CLOSED);
-        assertThat(snapshot.product("101").orElseThrow().waiting()).as("줄 길이를 읽지 않았다").isZero();
-        assertThat(redis.hasKey("wr:queue:{101}").block(WAIT)).as("정리도 하지 않았다").isTrue();
+        assertThat(snapshot.product("101").orElseThrow().waiting()).as("은퇴 뒤에는 줄 길이를 읽지 않는다").isZero();
+        assertThat(redis.hasKey("wr:queue:{101}").block(WAIT)).as("정리도 하지 않는다").isTrue();
     }
 
     @Test
