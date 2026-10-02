@@ -1,7 +1,9 @@
 -- 배분 적용. 이번 회차 인원만큼 입장 커서를 올린다. 커서는 뒤로 가지 않고, 옛 임기의 리더는 올리지 못한다.
--- KEYS  1 queue  2 admitted  3 applyfence
+-- 같은 임기에서 이미 적용한 회차(또는 그 앞 회차)는 다시 올리지 않는다 — 재시도해도 한 회차 몫만 나간다.
+-- KEYS  1 queue  2 admitted  3 applyfence  4 applyround
 -- ARGV  1 들일 인원(0 이상)  2 임기(펜스, 0 이면 리더 아님)  3 울타리 수명(ms)  4 이 리더가 본 커서 최댓값(모르면 -1)
--- 반환  {커서, 들인 인원, 되살린 폭} · 울타리에 막히면 {'-1', -1, 막은 임기}
+--       5 회차(Redis 시각 초)  6 회차 기록 수명(초)
+-- 반환  {커서, 들인 인원, 되살린 폭, 적용함(1/0)} · 울타리에 막히면 {'-1', -1, 막은 임기, 0}
 
 local MAX_ADMIT = 9007199254740992
 local admit = tonumber(ARGV[1])
@@ -16,13 +18,21 @@ local fenceTtl = tonumber(ARGV[3])
 if fenceTtl == nil or fenceTtl ~= fenceTtl or fenceTtl < 1 or fenceTtl ~= math.floor(fenceTtl) then
     return redis.error_reply('울타리 수명은 1 이상 정수여야 한다: ' .. tostring(ARGV[3]))
 end
+local round = tonumber(ARGV[5])
+if round == nil or round ~= round or round < 0 or round ~= math.floor(round) then
+    return redis.error_reply('회차는 0 이상 정수여야 한다: ' .. tostring(ARGV[5]))
+end
+local roundTtl = tonumber(ARGV[6])
+if roundTtl == nil or roundTtl < 1 or roundTtl ~= math.floor(roundTtl) then
+    return redis.error_reply('회차 기록 수명은 양의 정수여야 한다: ' .. tostring(ARGV[6]))
+end
 if fence <= 0 then
-    return {'-1', -1, '0'}
+    return {'-1', -1, '0', 0}
 end
 -- 옛 임기는 안 들인다 — 승계 뒤 깨어난 옛 리더가 제 몫을 밀면 같은 초에 두 리더의 몫이 다 나간다
 local seenFence = tonumber(redis.call('GET', KEYS[3]))
 if seenFence ~= nil and seenFence == seenFence and fence < seenFence then
-    return {'-1', -1, string.format('%.0f', seenFence)}
+    return {'-1', -1, string.format('%.0f', seenFence), 0}
 end
 
 -- 없는 커서와 깨진 커서를 가른다. 깨진 것을 -1 로 접으면 줄 머리부터 다시 세어 이미 들인 사람이 대기로 돌아간다
@@ -50,8 +60,20 @@ if admit > 0 or healed then
     redis.call('SET', KEYS[3], string.format('%.0f', fence), 'PX', fenceTtl)
 end
 if admit == 0 then
-    return {string.format('%.0f', current), 0, healedFrom}
+    return {string.format('%.0f', current), 0, healedFrom, 0}
 end
+
+-- 회차 기록은 "임기|회차". 같은 임기에서 이 회차 이하는 이미 나갔다. 새 임기는 Redis 시계가 뒤여도 막지 않는다
+local applied = redis.call('GET', KEYS[4])
+if applied then
+    local sep = string.find(applied, '|', 1, true)
+    local appliedFence = sep and tonumber(string.sub(applied, 1, sep - 1))
+    local appliedRound = sep and tonumber(string.sub(applied, sep + 1))
+    if appliedFence == fence and appliedRound ~= nil and round <= appliedRound then
+        return {string.format('%.0f', current), 0, healedFrom, 0}
+    end
+end
+redis.call('SET', KEYS[4], string.format('%.0f', fence) .. '|' .. string.format('%.0f', round), 'EX', roundTtl)
 
 -- 커서 위에서 admit 번째 사람의 순서 값이 새 커서다. 줄이 더 짧으면 맨 뒤 사람까지(이후 도착자는 커서 위에 선다)
 local from = current >= 0 and '(' .. string.format('%.0f', current) or '-inf'
@@ -62,14 +84,14 @@ if #picked > 0 then
 else
     local last = redis.call('ZRANGE', KEYS[1], -1, -1, 'WITHSCORES')
     if #last == 0 then
-        return {string.format('%.0f', current), 0, healedFrom}
+        return {string.format('%.0f', current), 0, healedFrom, 1}
     end
     threshold = tonumber(last[2])
 end
 if threshold <= current then
-    return {string.format('%.0f', current), 0, healedFrom}
+    return {string.format('%.0f', current), 0, healedFrom, 1}
 end
 local exact = string.format('%.0f', threshold)
 local entering = redis.call('ZCOUNT', KEYS[1], from, exact)
 redis.call('SET', KEYS[2], exact)
-return {exact, entering, healedFrom}
+return {exact, entering, healedFrom, 1}

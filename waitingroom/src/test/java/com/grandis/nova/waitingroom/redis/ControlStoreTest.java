@@ -103,8 +103,8 @@ class ControlStoreTest {
         void 몫만큼_올리고_뒤로_가지_않는다() {
             enqueue("a", "b", "c");
 
-            ApplyResult first = control.apply(PRODUCT, 2, 10, FENCE_TTL, -1).block(WAIT);
-            ApplyResult none = control.apply(PRODUCT, 0, 10, FENCE_TTL, -1).block(WAIT);
+            ApplyResult first = control.apply(PRODUCT, 2, 10, FENCE_TTL, -1, 1).block(WAIT);
+            ApplyResult none = control.apply(PRODUCT, 0, 10, FENCE_TTL, -1, 2).block(WAIT);
 
             assertThat(first.entered()).isEqualTo(2);
             assertThat(none.cursor()).isEqualTo(first.cursor());
@@ -115,7 +115,7 @@ class ControlStoreTest {
         @Test
         void 줄보다_큰_몫이어도_맨_뒤_사람까지만이고_뒤에_온_사람은_커서_위에_선다() {
             enqueue("a");
-            control.apply(PRODUCT, 100, 10, FENCE_TTL, -1).block(WAIT);
+            control.apply(PRODUCT, 100, 10, FENCE_TTL, -1, 3).block(WAIT);
             enqueue("late");
 
             assertThat(queue.status(PRODUCT, "late", now).block(WAIT).entry().state()).isEqualTo(QueueState.WAITING);
@@ -124,20 +124,39 @@ class ControlStoreTest {
         @Test
         void 옛_임기의_리더는_커서를_올리지_못한다() {
             enqueue("a", "b");
-            control.apply(PRODUCT, 1, 20, FENCE_TTL, -1).block(WAIT);
+            control.apply(PRODUCT, 1, 20, FENCE_TTL, -1, 4).block(WAIT);
 
-            assertThat(control.apply(PRODUCT, 1, 19, FENCE_TTL, -1).block(WAIT).fenced()).isTrue();
-            assertThat(control.apply(PRODUCT, 1, 0, FENCE_TTL, -1).block(WAIT).fenced()).as("리더가 아니다").isTrue();
+            assertThat(control.apply(PRODUCT, 1, 19, FENCE_TTL, -1, 5).block(WAIT).fenced()).isTrue();
+            assertThat(control.apply(PRODUCT, 1, 0, FENCE_TTL, -1, 6).block(WAIT).fenced()).as("리더가 아니다").isTrue();
             assertThat(queue.status(PRODUCT, "b", now).block(WAIT).entry().state()).isEqualTo(QueueState.WAITING);
+        }
+
+        @Test
+        void 같은_임기에서_이미_적용한_회차는_재시도해도_다시_올리지_않고_새_임기는_시계가_뒤여도_막지_않는다() {
+            enqueue("a", "b", "c", "d");
+            ApplyResult first = control.apply(PRODUCT, 1, 10, FENCE_TTL, -1, 500).block(WAIT);
+
+            ApplyResult retried = control.apply(PRODUCT, 1, 10, FENCE_TTL, -1, 500).block(WAIT);
+            ApplyResult older = control.apply(PRODUCT, 1, 10, FENCE_TTL, -1, 499).block(WAIT);
+            assertThat(first.applied()).isTrue();
+            assertThat(retried.applied()).isFalse();
+            assertThat(retried.entered()).isZero();
+            assertThat(retried.cursor()).isEqualTo(first.cursor());
+            assertThat(older.applied()).as("앞 회차는 거부").isFalse();
+
+            assertThat(control.apply(PRODUCT, 1, 10, FENCE_TTL, -1, 501).block(WAIT).entered()).isEqualTo(1);
+            assertThat(control.apply(PRODUCT, 1, 11, FENCE_TTL, -1, 400).block(WAIT).entered())
+                    .as("새 임기는 Redis 시계가 뒤로 가도 들인다").isEqualTo(1);
+            assertThat(queue.status(PRODUCT, "d", now).block(WAIT).entry().state()).isEqualTo(QueueState.WAITING);
         }
 
         @Test
         void 커서가_사라지면_이_리더가_본_값으로_되살려_들인_사람이_대기로_돌아가지_않는다() {
             enqueue("a", "b");
-            ApplyResult applied = control.apply(PRODUCT, 1, 10, FENCE_TTL, -1).block(WAIT);
+            ApplyResult applied = control.apply(PRODUCT, 1, 10, FENCE_TTL, -1, 7).block(WAIT);
             redis.delete("wr:admitted:{" + PRODUCT + "}").block(WAIT);
 
-            ApplyResult healed = control.apply(PRODUCT, 0, 10, FENCE_TTL, applied.cursor()).block(WAIT);
+            ApplyResult healed = control.apply(PRODUCT, 0, 10, FENCE_TTL, applied.cursor(), 8).block(WAIT);
 
             assertThat(healed.cursor()).isEqualTo(applied.cursor());
             assertThat(queue.status(PRODUCT, "a", now).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);

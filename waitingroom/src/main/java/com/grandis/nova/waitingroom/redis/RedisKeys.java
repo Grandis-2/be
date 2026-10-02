@@ -43,7 +43,7 @@ public final class RedisKeys {
     }
 
     public static List<String> apply(String productKey) {
-        return List.of(queue(productKey), admitted(productKey), applyFence(productKey));
+        return List.of(queue(productKey), admitted(productKey), applyFence(productKey), tagged("applyround", productKey));
     }
 
     public static List<String> depth(String productKey) {

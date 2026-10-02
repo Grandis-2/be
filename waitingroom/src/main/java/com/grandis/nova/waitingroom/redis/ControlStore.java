@@ -59,13 +59,19 @@ public class ControlStore {
     }
 
     /** @param writtenMax 이 리더가 이 모델에서 본 커서 최댓값. 사라진 커서를 되살리는 데 쓴다(모르면 -1) */
-    public Mono<ApplyResult> apply(String productKey, long admit, long fence, long fenceTtlMillis, long writtenMax) {
+    /**
+     * @param round 회차(Redis 시각 초). 같은 임기에서 이미 적용한 회차 이하는 커서를 올리지 않고 applied=false 로 답한다
+     */
+    public Mono<ApplyResult> apply(String productKey, long admit, long fence, long fenceTtlMillis, long writtenMax,
+                                   long round) {
         return scripts.list(scripts.apply, RedisKeys.apply(productKey), List.of(String.valueOf(admit),
-                        String.valueOf(fence), String.valueOf(fenceTtlMillis), String.valueOf(writtenMax)))
+                        String.valueOf(fence), String.valueOf(fenceTtlMillis), String.valueOf(writtenMax),
+                        String.valueOf(round), String.valueOf(QueueStore.MAX_SCORE_TTL_SEC)))
                 .map(reply -> {
                     long entered = LuaScripts.number(reply, 1);
                     return entered < 0 ? ApplyResult.FENCED
-                            : new ApplyResult(Long.parseLong(LuaScripts.text(reply, 0)), entered, false);
+                            : new ApplyResult(Long.parseLong(LuaScripts.text(reply, 0)), entered,
+                            LuaScripts.number(reply, 3) == 1, false);
                 });
     }
 
@@ -126,9 +132,9 @@ public class ControlStore {
     public record QueueDepth(long waiting, long cursor) {
     }
 
-    public record ApplyResult(long cursor, long entered, boolean fenced) {
+    public record ApplyResult(long cursor, long entered, boolean applied, boolean fenced) {
 
-        static final ApplyResult FENCED = new ApplyResult(-1, 0, true);
+        static final ApplyResult FENCED = new ApplyResult(-1, 0, false, true);
     }
 
     public record SweepResult(long swept, String nextCursor, boolean fenced, long reaped) {

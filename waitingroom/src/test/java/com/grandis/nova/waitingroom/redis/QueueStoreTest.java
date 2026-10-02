@@ -49,8 +49,10 @@ class QueueStoreTest {
         return queue.status(PRODUCT, customer, now).block(WAIT);
     }
 
+    private long round;
+
     private void admit(long count) {
-        control.apply(PRODUCT, count, 1, 60_000, -1).block(WAIT);
+        control.apply(PRODUCT, count, 1, 60_000, -1, ++round).block(WAIT);
     }
 
     @Nested
