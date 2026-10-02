@@ -182,6 +182,16 @@ class PaymentTransactionTest {
                 .isInstanceOf(PaymentTargetMismatchException.class);
     }
 
+    /*
+     * 판정 순서는 대상 → 상태 → 금액이다(D17). 이미 시작된 거래는 금액이 달라도 예외 없이 "시작할 수 없음"이다 — 금액 불일치가
+     * 상태보다 앞서면 시작된 거래에 409 PAYMENT_AMOUNT_MISMATCH 가 나가고, 호출자는 그것을 "앞으로도 시작될 수 없다" 로 읽어
+     * 대상을 되돌린다(돈은 나갔는데 미결제).
+     */
+    @Test
+    void startedCaptureIsNotStartableWhateverTheAmount() {
+        assertThat(processing(CAPTURE).start(TARGET, Money.won(1))).isEmpty();
+    }
+
     @Test
     void refundIsNotStartedByUserRequest() {
         assertThat(PaymentTransaction.openRefund(SUCCEEDED_PAYMENT, NOW).start(TARGET, AMOUNT)).isEmpty();
