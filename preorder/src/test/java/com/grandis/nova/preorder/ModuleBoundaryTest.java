@@ -150,7 +150,7 @@ class ModuleBoundaryTest {
         };
     }
 
-    /** 모듈은 최상위 패키지다(outbox.publish 는 outbox 모듈). */
+    /** 모듈은 최상위 패키지다(deadletter.application 은 deadletter 모듈). */
     private static String moduleOf(JavaClass javaClass) {
         String relative = javaClass.getPackageName().substring(ROOT.length());
         return relative.isEmpty() ? "" : relative.substring(1).split("\\.")[0];

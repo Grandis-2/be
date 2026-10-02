@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.deadletter;
 
+import com.grandis.nova.common.sqs.testing.TestQueues;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.deadletter.application.DeadLetterAdminService;
@@ -8,7 +9,6 @@ import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import com.grandis.nova.preorder.support.SqsIntegrationTest;
-import com.grandis.nova.preorder.support.TestQueues;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

@@ -24,6 +24,7 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
         // 문서 그룹(/v3/api-docs/preorder) · 로그가 이 이름을 쓴다
         defaults.put("spring.application.name", "preorder");
         revocationFailClosedPaths(defaults);
+        outboxMetrics(defaults);
         databasePool(defaults);
         dependencyTimeouts(defaults);
         dependencyResilience(defaults);
@@ -42,6 +43,14 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
      */
     private void revocationFailClosedPaths(Map<String, Object> defaults) {
         defaults.put("auth.revocation-check.fail-closed-paths", "/api/v1/admin/**,/api/v1/preorders/*/cancel");
+    }
+
+    /**
+     * 아웃박스 지표 이름(preorder.outbox.publish · unpublished · unpublished.max.attempts). 대시보드 · 경보가 이 이름을 본다 —
+     * 운영 설정에서 빠져도 공통 기본값(outbox.*)으로 조용히 바뀌지 않게 코드에 둔다.
+     */
+    private void outboxMetrics(Map<String, Object> defaults) {
+        defaults.put("nova.outbox.metrics-prefix", "preorder.outbox");
     }
 
     /**

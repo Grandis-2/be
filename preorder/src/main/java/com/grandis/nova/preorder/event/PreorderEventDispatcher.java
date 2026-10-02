@@ -1,9 +1,9 @@
 package com.grandis.nova.preorder.event;
 
+import com.grandis.nova.common.message.EventEnvelope;
 import com.grandis.nova.preorder.campaign.CampaignRepublisher;
 import com.grandis.nova.preorder.cancel.CampaignCancelService;
 import com.grandis.nova.preorder.cancel.ExpiryCancelService;
-import com.grandis.nova.preorder.outbox.EventEnvelope;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;

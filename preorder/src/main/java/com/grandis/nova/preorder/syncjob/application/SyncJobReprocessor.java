@@ -1,8 +1,8 @@
 package com.grandis.nova.preorder.syncjob.application;
 
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.PreorderErrorCode;
-import com.grandis.nova.preorder.outbox.OutboxWriter;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.syncjob.domain.PreorderSyncJob;

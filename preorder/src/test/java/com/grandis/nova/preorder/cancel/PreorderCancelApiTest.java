@@ -91,7 +91,7 @@ class PreorderCancelApiTest {
         Map<String, Object> outbox = jdbcTemplate.queryForMap("""
                 SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.reason')) AS reason,
                        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.preorderId')) AS preorder_id
-                  FROM outbox_events WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
+                  FROM preorder_outbox_events WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
                 """, accepted.preorder().id());
         assertThat(outbox).containsEntry("reason", "USER").containsEntry("preorder_id", token);
     }
@@ -108,7 +108,7 @@ class PreorderCancelApiTest {
 
         verify(orderClient).getCancelability(eq(accepted.preorder().id()), any());
         assertThat(fixtures.count("""
-                SELECT COUNT(*) FROM outbox_events WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
+                SELECT COUNT(*) FROM preorder_outbox_events WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
                 """, accepted.preorder().id())).isEqualTo(1);
     }
 
@@ -126,7 +126,7 @@ class PreorderCancelApiTest {
         assertThat(outcomes).allMatch(Outcome::succeeded);
         Long preorderId = accepted.preorder().id();
         assertThat(fixtures.count("""
-                SELECT COUNT(*) FROM outbox_events WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
+                SELECT COUNT(*) FROM preorder_outbox_events WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
                 """, preorderId)).isEqualTo(1);
         assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_events WHERE preorder_id = ? AND to_status = 'CANCELING'",
                 preorderId)).isEqualTo(1);

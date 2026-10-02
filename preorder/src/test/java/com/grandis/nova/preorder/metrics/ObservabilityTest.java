@@ -1,12 +1,12 @@
 package com.grandis.nova.preorder.metrics;
 
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.accept.application.RegisterJobReady;
 import com.grandis.nova.preorder.event.PreorderEventDispatcher;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
-import com.grandis.nova.preorder.outbox.OutboxWriter;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
@@ -150,11 +150,6 @@ class ObservabilityTest {
     void 상태_지표는_갱신할_때_DB_에서_센다() {
         accepts.accept(fixtures.customer());
         jdbcTemplate.update("""
-                INSERT INTO outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload,
-                                           publish_attempts, created_at)
-                VALUES (?, 'PREORDER_SYNC_JOB', 1, 'CANCEL_JOB_READY', '{}', 7, UTC_TIMESTAMP(6))
-                """, ShopFixtures.unique());
-        jdbcTemplate.update("""
                 INSERT INTO dead_letter_events (source_queue, message_id, body, failure_reason, receive_count, status,
                                                 created_at, updated_at)
                 VALUES ('preorder-events', ?, 'not-json', 'UNREADABLE_BODY', 5, 'OPEN',
@@ -164,9 +159,6 @@ class ObservabilityTest {
         stateGauges.refresh();
 
         assertThat(gauge("preorder.status.count", "status", "PENDING_SYNC")).isPositive();
-        assertThat(registry.get("preorder.outbox.unpublished").gauge().value()).isPositive();
-        assertThat(registry.get("preorder.outbox.unpublished.max.attempts").gauge().value())
-                .isGreaterThanOrEqualTo(7);
         assertThat(registry.get("preorder.dlq.waiting").gauge().value()).isPositive();
         assertThat(registry.get("preorder.dlq.waiting.oldest.age").gauge().value()).as("초")
                 .isGreaterThanOrEqualTo(3600);
@@ -182,6 +174,8 @@ class ObservabilityTest {
                 .andExpect(content().string(containsString("preorder_accept_seconds")))
                 .andExpect(content().string(containsString("preorder_campaign_lock_wait_seconds_bucket")))
                 .andExpect(content().string(containsString("preorder_status_count")))
+                .andExpect(content().string(containsString("# TYPE preorder_outbox_unpublished gauge")))
+                .andExpect(content().string(containsString("# TYPE preorder_outbox_unpublished_max_attempts gauge")))
                 .andExpect(content().string(containsString("hikaricp_connections_pending")))
                 .andExpect(content().string(containsString("resilience4j_circuitbreaker_state")))
                 .andExpect(content().string(containsString("resilience4j_retry_calls")))

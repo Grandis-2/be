@@ -115,7 +115,7 @@ public class ShopFixtures {
      */
     public Long cancelSequence(Long preorderId) {
         return jdbcTemplate.queryForObject("""
-                SELECT JSON_EXTRACT(payload, '$.cancelSequence') FROM outbox_events
+                SELECT JSON_EXTRACT(payload, '$.cancelSequence') FROM preorder_outbox_events
                  WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
                  ORDER BY id DESC LIMIT 1
                 """, Long.class, preorderId);

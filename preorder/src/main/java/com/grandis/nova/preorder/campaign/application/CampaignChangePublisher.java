@@ -1,7 +1,7 @@
 package com.grandis.nova.preorder.campaign.application;
 
+import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
-import com.grandis.nova.preorder.outbox.OutboxWriter;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
