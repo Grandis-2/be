@@ -33,6 +33,25 @@ CREATE TABLE `cart_items` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `catalog_outbox_events` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `event_id` char(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  `aggregate_type` varchar(30) NOT NULL,
+  `aggregate_id` bigint NOT NULL,
+  `event_type` varchar(50) NOT NULL,
+  `payload` json NOT NULL,
+  `publish_attempts` int NOT NULL DEFAULT '0',
+  `lease_until` datetime(6) DEFAULT NULL,
+  `created_at` datetime(6) NOT NULL,
+  `published_at` datetime(6) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_catalog_outbox_event_id` (`event_id`),
+  KEY `ix_catalog_outbox_unpublished` (`published_at`,`id`),
+  CONSTRAINT `ck_catalog_outbox_attempts` CHECK ((`publish_attempts` >= 0))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
 CREATE TABLE `categories` (
   `id` bigint NOT NULL AUTO_INCREMENT,
   `parent_id` bigint DEFAULT NULL,
@@ -458,22 +477,11 @@ CREATE TABLE `product_options` (
 CREATE TABLE `product_registrations` (
   `product_id` bigint NOT NULL,
   `idempotency_key` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
-  `requested_visible` tinyint(1) NOT NULL,
-  `campaign_set_at` datetime(6) DEFAULT NULL,
-  `batches_set_at` datetime(6) DEFAULT NULL,
-  `stock_set_at` datetime(6) DEFAULT NULL,
-  `completed_at` datetime(6) DEFAULT NULL,
-  `blocked_reason` varchar(100) DEFAULT NULL,
-  `last_error` varchar(500) DEFAULT NULL,
-  `lease_token` varchar(64) DEFAULT NULL,
-  `lease_expires_at` datetime(6) DEFAULT NULL,
   `created_at` datetime(6) NOT NULL,
   `updated_at` datetime(6) NOT NULL,
   PRIMARY KEY (`product_id`),
   UNIQUE KEY `uq_registration_key` (`idempotency_key`),
-  CONSTRAINT `fk_registration_product` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`),
-  CONSTRAINT `ck_registration_lease` CHECK (((`lease_token` is null) = (`lease_expires_at` is null))),
-  CONSTRAINT `ck_registration_outcome` CHECK (((`blocked_reason` is null) or (`completed_at` is null)))
+  CONSTRAINT `fk_registration_product` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;

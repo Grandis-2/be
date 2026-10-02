@@ -45,7 +45,7 @@ be/
 | 서비스 | ECS desired | 스케일 기준 | 소유 테이블 |
 | --- | --- | --- | --- |
 | `member` | 2~4 | CPU | `customers` · `refresh_tokens` |
-| `catalog` | 2~6 | 요청 수 | `categories` · `products` · `product_options`<br>`product_option_axes` · `product_option_values` · `product_option_selections` · `product_images` · `product_registrations` |
+| `catalog` | 2~6 | 요청 수 | `categories` · `products` · `product_options`<br>`product_option_axes` · `product_option_values` · `product_option_selections` · `product_images` · `product_registrations`<br>`catalog_outbox_events` |
 | **`preorder`** | **6~12** | **요청 수** | `preorders` · `preorder_events`<br>`preorder_campaigns` · `shipment_batches` · `product_reviews` |
 | `order` | 2~8 | CPU | `orders` · `order_items` · `order_events`<br>`cart_items` · `payments` · `payment_transactions` · `option_inventories` |
 | `worker` | 1~20 | Backlog per Task · SPOT | `preorder_sync_jobs` · `preorder_sync_attempts` |
@@ -57,7 +57,7 @@ be/
 | --- | --- |
 | `preorder` → `products` · `product_options` · `categories` | 접수 시점 값을 복사한다 |
 | `order` → `products` · `product_options` | 금액 확인 |
-| `catalog` → `preorder_campaigns`(`opens_at` · `closes_at`) · `option_inventories` | 목록·검색의 노출 조건(오픈 예정 · 마감 · 마감+120시간 숨김 · 품절)이 **페이징 조건**이라 쿼리 안에 있어야 한다. 상세의 회차 시각 · 옵션별 가용 수량도 같은 곳에서 읽는다. 읽기 전용 저장소 한 곳에서만 읽고 쓰지 않는다 |
+| `catalog` → `preorder_campaigns`(`opens_at` · `closes_at` · 행의 유무) · `option_inventories` | 목록·검색의 노출 조건(오픈 예정 · 마감 · 마감+120시간 숨김 · 품절)이 **페이징 조건**이라 쿼리 안에 있어야 한다. 상세의 회차 시각 · 옵션별 가용 수량, 판매 방식별 준비(등록 이벤트로 회차 행 · 재고 행이 생겼는가)도 같은 곳에서 읽는다. 읽기 전용 저장소 한 곳에서만 읽고 쓰지 않는다 |
 
 preorder 는 catalog 를 API(`GET /internal/products/{id}/options`)로 묻고 catalog 는 preorder 표를 SQL 로 읽는 비대칭은 이유가 다르기 때문이다. 앞은 값을 복사하고, 뒤는 조건으로 거른다.
 
@@ -89,11 +89,12 @@ batch    시간이 되면 깨어남.   1 로 고정돼야 함 (늘면 같은 스
 **결제·알림은 서비스로 두지 않았다.** 실 PG 를 붙이지 않으므로 결제 Mock 은 `mock-external` 로 나가고,
 결제 기록은 `order` 가 소유한다. 알림은 Mock 기록이라 `worker` 가 SQS 로 처리한다.
 
-### 서비스 간 연결점 둘
+### 서비스 간 연결점 셋
 
 ```
 결제 시작    order → preorder   "이 예약 결제 가능한가?"           동기 조회
 예약 취소    preorder → order → preorder                        SQS 이벤트
+상품 등록    catalog → preorder(회차 · 차수) / order(초기 재고)    SQS 이벤트 (contracts/catalog-events.md)
 ```
 
 두 번째는 원래부터 단계적이었다. ERD 가 *"예약은 주문 CANCELED 와 Mock 취소 SUCCEEDED 가

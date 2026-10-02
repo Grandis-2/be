@@ -266,39 +266,25 @@ class CatalogSchemaTest {
         }
 
         @Test
-        @DisplayName("리스 토큰과 만료 시각은 같이 있거나 같이 없다")
-        void leaseColumnsComeTogether() {
-            Long productId = fixtures.product("PREORDER", "ACTIVE");
-            fixtures.registration(productId, ShopFixtures.unique());
-            assertThatThrownBy(() -> jdbcTemplate.update(
-                    "UPDATE product_registrations SET lease_token = 'x' WHERE product_id = ?", productId))
-                    .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_registration_lease");
-            assertThatThrownBy(() -> jdbcTemplate.update(
-                    "UPDATE product_registrations SET lease_expires_at = UTC_TIMESTAMP(6) WHERE product_id = ?", productId))
-                    .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_registration_lease");
-            assertThat(jdbcTemplate.update(
-                    "UPDATE product_registrations SET lease_token = 'x', lease_expires_at = UTC_TIMESTAMP(6) WHERE product_id = ?",
-                    productId)).isEqualTo(1);
+        @DisplayName("등록 기록에는 CHECK 가 남지 않는다 — 단계 · 리스 칸을 지우면서 그 제약도 지웠다")
+        void registrationHasNoChecksLeft() {
+            assertThat(jdbcTemplate.queryForList("""
+                    SELECT constraint_name FROM information_schema.table_constraints
+                     WHERE table_schema = DATABASE() AND table_name = 'product_registrations' AND constraint_type = 'CHECK'
+                    """, String.class)).isEmpty();
         }
 
         @Test
-        @DisplayName("막힌 등록은 완료될 수 없고 완료된 등록은 막힐 수 없다")
-        void blockedAndCompletedAreExclusive() {
-            Long productId = fixtures.product("PREORDER", "ACTIVE");
-            fixtures.registration(productId, ShopFixtures.unique());
-            assertThat(jdbcTemplate.update(
-                    "UPDATE product_registrations SET blocked_reason = 'OPENED_BEFORE_COMPLETE' WHERE product_id = ?", productId))
-                    .isEqualTo(1);
-            assertThatThrownBy(() -> jdbcTemplate.update(
-                    "UPDATE product_registrations SET completed_at = UTC_TIMESTAMP(6) WHERE product_id = ?", productId))
-                    .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_registration_outcome");
-
-            Long completed = fixtures.product("PREORDER", "ACTIVE");
-            fixtures.registration(completed, ShopFixtures.unique());
-            jdbcTemplate.update("UPDATE product_registrations SET completed_at = UTC_TIMESTAMP(6) WHERE product_id = ?", completed);
-            assertThatThrownBy(() -> jdbcTemplate.update(
-                    "UPDATE product_registrations SET blocked_reason = 'x' WHERE product_id = ?", completed))
-                    .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_registration_outcome");
+        @DisplayName("catalog 아웃박스의 event_id 는 유일하고 발행 실패 횟수는 음수가 될 수 없다")
+        void outboxEventIdUniqueAndAttemptsNonNegative() {
+            String eventId = java.util.UUID.randomUUID().toString();
+            String insert = """
+                    INSERT INTO catalog_outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, publish_attempts, created_at)
+                    VALUES (?, 'PRODUCT', 1, 'IN_STOCK_PRODUCT_REGISTERED', JSON_OBJECT(), ?, UTC_TIMESTAMP(6))""";
+            jdbcTemplate.update(insert, eventId, 0);
+            assertThatThrownBy(() -> jdbcTemplate.update(insert, eventId, 0)).isInstanceOf(DuplicateKeyException.class);
+            assertThatThrownBy(() -> jdbcTemplate.update(insert, java.util.UUID.randomUUID().toString(), -1))
+                    .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_catalog_outbox_attempts");
         }
     }
 }

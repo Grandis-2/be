@@ -45,12 +45,15 @@ class ProductListApiTest {
     ShopFixtures fixtures;
     String tag;
     Long categoryId;
+    /** visibleInStock 으로 만든 일반 상품. 목록을 부르기 직전에 준비(재고 행)를 넣는다 — 시험이 옵션을 다 넣은 뒤여야 해서. */
+    List<Long> inStockProducts;
 
     @BeforeEach
     void setUp() {
         fixtures = new ShopFixtures(jdbcTemplate);
         tag = "t" + ShopFixtures.unique().replace("-", "");
         categoryId = fixtures.category();
+        inStockProducts = new ArrayList<>();
     }
 
     // ── 노출 규칙 ───────────────────────────────────────────────────────────
@@ -60,11 +63,13 @@ class ProductListApiTest {
     class Visibility {
 
         @Test
-        @DisplayName("등록 완료 · 공개 · 판매 중인 상품만 나온다")
-        void onlyCompletedVisibleActiveProducts() throws Exception {
+        @DisplayName("판매 방식별 준비(재고 행) · 공개 · 판매 중인 상품만 나온다 — 등록 기록만으로는 나오지 않는다")
+        void onlyReadyVisibleActiveProducts() throws Exception {
             Long shown = visibleInStock("보임");
             Long noRegistration = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "등록 없음", tag);
-            Long incomplete = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "미완료", tag);
+            fixtures.option(noRegistration, "ACTIVE");
+            Long incomplete = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "재고 행 전", tag);
+            fixtures.option(incomplete, "ACTIVE");
             fixtures.registration(incomplete, ShopFixtures.unique());
             Long hidden = visibleInStock("비공개");
             jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", hidden);
@@ -75,12 +80,13 @@ class ProductListApiTest {
         }
 
         @Test
-        @DisplayName("판매 중 옵션이 하나도 없는 상품(옵션 없음 · 전부 판매 중지)은 목록에 남고 sellable=false 로 알린다 — 화면이 판매 중지를 그린다")
+        @DisplayName("판매 중 옵션이 하나도 없는 상품(전부 판매 중지)은 목록에 남고 sellable=false 로 알린다 — 옵션이 아예 없는 일반 상품은 준비될 수 없어 나오지 않는다")
         void productsWithoutActiveOptionStayListedAsNotSellable() throws Exception {
             Long shown = visibleInStock("판매 중 옵션 있음");
             fixtures.option(shown, "ACTIVE", new BigDecimal("1000"));
-            fixtures.option(shown, "PAUSED", new BigDecimal("900"));
-            Long noOptions = visibleInStock("옵션 없음");
+            // 옵션이 없는 일반 상품 — 등록 API 로는 생기지 않는다(조합 0 은 400). 재고 행을 만들 옵션이 없어 준비될 수 없다
+            Long noOptions = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "옵션 없음", tag);
+            fixtures.registration(noOptions);
             Long allPaused = visibleInStock("전부 판매 중지");
             fixtures.option(allPaused, "PAUSED", new BigDecimal("1000"));
             Instant now = Instant.now();
@@ -88,10 +94,10 @@ class ProductListApiTest {
             fixtures.option(preorderAllPaused, "PAUSED", new BigDecimal("1000"));
 
             JsonNode items = list();
-            assertThat(ids(items)).containsExactlyInAnyOrder(shown, noOptions, allPaused, preorderAllPaused);
+            assertThat(ids(items)).containsExactlyInAnyOrder(shown, allPaused, preorderAllPaused).doesNotContain(noOptions);
             assertThat(find(items, shown).get("sellable").asBoolean()).isTrue();
             assertThat(find(items, shown).get("minPrice").decimalValue()).isEqualByComparingTo("1000");
-            for (Long notSellable : List.of(noOptions, allPaused, preorderAllPaused)) {
+            for (Long notSellable : List.of(allPaused, preorderAllPaused)) {
                 JsonNode item = find(items, notSellable);
                 assertThat(item.get("sellable").asBoolean()).as("product %d", notSellable).isFalse();
                 assertThat(item.get("minPrice").isNull()).isTrue();
@@ -112,7 +118,7 @@ class ProductListApiTest {
             Long closedRecently = visiblePreorder("마감 119h", now.minus(HOUR.multipliedBy(120)), now.minus(HOUR.multipliedBy(119)));
             Long closedLongAgo = visiblePreorder("마감 121h", now.minus(HOUR.multipliedBy(122)), now.minus(HOUR.multipliedBy(121)));
             Long noCampaign = fixtures.product(categoryId, "PREORDER", "ACTIVE", "회차 없음", tag);
-            fixtures.completeRegistration(noCampaign);
+            fixtures.registration(noCampaign);
 
             JsonNode items = list();
             assertThat(ids(items)).containsExactly(closedRecently, open, beforeOpen).doesNotContain(closedLongAgo, noCampaign);
@@ -201,7 +207,9 @@ class ProductListApiTest {
             // q 를 바꾸면 tag 로 못 좁히므로 제목 · tags 에 tag 를 넣어 자기 상품만 잡히게 한다
             Long byTitle = visibleInStock("Galaxy Fold " + tag);
             Long byTags = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "다른 이름", "fold " + tag);
-            fixtures.completeRegistration(byTags);
+            fixtures.registration(byTags);
+            fixtures.option(byTags, "PAUSED");
+            inStockProducts.add(byTags);
             Long underscore = visibleInStock("a_b " + tag);
             Long axb = visibleInStock("axb " + tag);                 // _ 가 와일드카드면 여기도 걸린다
             Long backslash = visibleInStock("a\\b " + tag);          // 제목에 \ 한 글자
@@ -225,9 +233,13 @@ class ProductListApiTest {
             Long otherRoot = fixtures.category();
             Long inParent = visibleInStock("상위 직접");
             Long inChild = fixtures.product(child, "IN_STOCK", "ACTIVE", "하위", tag);
-            fixtures.completeRegistration(inChild);
+            fixtures.registration(inChild);
+            fixtures.option(inChild, "PAUSED");
+            inStockProducts.add(inChild);
             Long elsewhere = fixtures.product(otherRoot, "IN_STOCK", "ACTIVE", "다른 상위", tag);
-            fixtures.completeRegistration(elsewhere);
+            fixtures.registration(elsewhere);
+            fixtures.option(elsewhere, "PAUSED");
+            inStockProducts.add(elsewhere);
             Instant now = Instant.now();
             Long preorder = visiblePreorder("사전예약", now.minus(HOUR), now.plus(HOUR));
 
@@ -301,11 +313,13 @@ class ProductListApiTest {
         @Test
         @DisplayName("size 를 안 주면 20 이다")
         void defaultSizeIsTwenty() throws Exception {
-            visibleInStock("기본 크기");
+            Long productId = visibleInStock("기본 크기");
+            fixtures.stockReady(productId);   // size 를 안 주려고 perform() 을 거치지 않으니 준비를 직접 넣는다
             JsonNode page = JSON.readTree(mockMvc.perform(get("/api/v1/products").param("q", tag))
                     .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).get("data");
             assertThat(page.get("size").asInt()).isEqualTo(20);
             assertThat(page.get("page").asInt()).isEqualTo(0);
+            assertThat(ids(page.get("items"))).as("빈 목록이 아니라 실제로 상품이 실린 첫 쪽").containsExactly(productId);
         }
 
         @Test
@@ -323,15 +337,21 @@ class ProductListApiTest {
 
     // ── 도우미 ──────────────────────────────────────────────────────────────
 
+    /**
+     * 등록된 일반 상품. 실제 등록은 조합이 하나 이상이라 판매 중지 옵션 하나로 시작한다 — 판매 중지 옵션은 최저가 · 판매 가능 · 품절 · 필터에
+     * 들어가지 않아 시험이 넣는 옵션의 판정을 바꾸지 않는다. 재고 행은 목록을 부르기 직전에 넣는다(시험이 재고를 직접 넣었으면 그대로).
+     */
     private Long visibleInStock(String title) {
         Long productId = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", title, tag);
-        fixtures.completeRegistration(productId);
+        fixtures.registration(productId);
+        fixtures.option(productId, "PAUSED");
+        inStockProducts.add(productId);
         return productId;
     }
 
     private Long visiblePreorder(String title, Instant opensAt, Instant closesAt) {
         Long productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", title, tag);
-        fixtures.completeRegistration(productId);
+        fixtures.registration(productId);
         fixtures.campaign(productId, opensAt, closesAt);
         return productId;
     }
@@ -343,6 +363,7 @@ class ProductListApiTest {
 
     /** 기본은 q=tag · size=100. 같은 이름을 넘기면 기본을 덮어쓴다(색상처럼 반복된 이름은 전부 싣는다). */
     private ResultActions perform(String... params) throws Exception {
+        inStockProducts.forEach(fixtures::stockReady);
         LinkedMultiValueMap<String, String> query = new LinkedMultiValueMap<>();
         for (int i = 0; i < params.length; i += 2) {
             query.add(params[i], params[i + 1]);

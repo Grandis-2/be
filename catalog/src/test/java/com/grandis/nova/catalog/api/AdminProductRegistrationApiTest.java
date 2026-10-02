@@ -63,7 +63,7 @@ class AdminProductRegistrationApiTest {
     class Register {
 
         @Test
-        @DisplayName("사전예약 상품 — 조합 자동 생성 · 제외 · 가격 계산과 수동 지정 · 사진 묶음 · 보증 · 비공개 · 등록 기록")
+        @DisplayName("사전예약 상품 — 조합 자동 생성 · 제외 · 가격 계산과 수동 지정 · 사진 묶음 · 보증 · 고른 공개 여부 · 등록 기록 · 회차 이벤트")
         void registersPreorderProduct() throws Exception {
             String body = preorderBody("""
                     "combinations": [
@@ -81,11 +81,11 @@ class AdminProductRegistrationApiTest {
 
             JsonNode data = data(register("k-" + ShopFixtures.unique(), body).andExpect(status().isCreated()));
             Long productId = data.get("registration").get("productId").asLong();
-            assertThat(data.get("registration").get("completed").asBoolean()).isFalse();
-            assertThat(data.get("registration").get("blockedReason").isNull()).isTrue();
+            assertThat(data.get("registration").get("completed").asBoolean()).as("회차 이벤트는 커밋 뒤에 나간다 — 아직 준비 전").isFalse();
+            assertThat(data.get("registration").has("blockedReason")).as("막힘 · 단계 칸은 없다").isFalse();
 
             JsonNode product = data.get("product");
-            assertThat(product.get("visible").asBoolean()).as("등록 중에는 비공개").isFalse();
+            assertThat(product.get("visible").asBoolean()).as("관리자가 고른 공개 여부가 바로 담긴다 — 노출은 준비가 정한다").isTrue();
             assertThat(product.get("status").asString()).isEqualTo("ACTIVE");
             assertThat(product.get("basePrice").decimalValue()).isEqualByComparingTo("1000000");
             assertThat(product.get("warranty").get("surcharge").decimalValue()).isEqualByComparingTo("150000");
@@ -117,22 +117,22 @@ class AdminProductRegistrationApiTest {
             assertThat(detail.get("items").get(0).get("primary").asBoolean()).isFalse();
             assertThat(product.get("imageUrl").asString()).as("기본 묶음이 없으니 사전순 첫 묶음(블랙)의 대표").isEqualTo("https://img/b1.jpg");
 
-            // DB: 비공개 · 수동 가격 표식 · 조합 키 · 등록 기록
-            assertThat(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, productId)).isFalse();
+            // DB: 고른 공개 여부 · 수동 가격 표식 · 조합 키 · 등록 기록 · 회차 이벤트
+            assertThat(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, productId)).isTrue();
             assertThat(jdbcTemplate.queryForObject(
                     "SELECT price_overridden FROM product_options WHERE product_id = ? AND sku = 'BLK-256'", Boolean.class, productId)).isTrue();
             assertThat(jdbcTemplate.queryForObject(
                     "SELECT COUNT(*) FROM product_options WHERE product_id = ? AND combination_key IS NOT NULL", Long.class, productId)).isEqualTo(3L);
             assertThat(jdbcTemplate.queryForObject(
                     "SELECT COUNT(*) FROM product_option_selections WHERE product_id = ?", Long.class, productId)).isEqualTo(6L);
-            Map<String, Object> registration = jdbcTemplate.queryForMap(
-                    "SELECT requested_visible, completed_at FROM product_registrations WHERE product_id = ?", productId);
-            assertThat(registration.get("requested_visible")).isEqualTo(true);
-            assertThat(registration.get("completed_at")).isNull();
+            assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM product_registrations WHERE product_id = ?",
+                    Long.class, productId)).isEqualTo(1L);
+            assertThat(jdbcTemplate.queryForList("SELECT event_type FROM catalog_outbox_events WHERE aggregate_id = ?",
+                    String.class, productId)).containsExactly("PREORDER_PRODUCT_REGISTERED");
         }
 
         @Test
-        @DisplayName("일반 상품 — 축 없이 옵션 하나, 초기 재고는 ② 에 넘길 계획에만 있고 catalog 는 재고 표를 쓰지 않는다")
+        @DisplayName("일반 상품 — 축 없이 옵션 하나, 초기 재고는 order 로 가는 이벤트에만 있고 catalog 는 재고 표를 쓰지 않는다")
         void registersInStockProductWithoutAxes() throws Exception {
             String body = """
                     {
@@ -153,8 +153,14 @@ class AdminProductRegistrationApiTest {
             assertThat(jdbcTemplate.queryForObject(
                     "SELECT COUNT(*) FROM option_inventories inv JOIN product_options o ON o.id = inv.option_id WHERE o.product_id = ?",
                     Long.class, productId)).as("catalog 는 option_inventories 를 쓰지 않는다").isZero();
-            assertThat(jdbcTemplate.queryForObject("SELECT requested_visible FROM product_registrations WHERE product_id = ?",
-                    Boolean.class, productId)).isFalse();
+            assertThat(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, productId)).isFalse();
+            Map<String, Object> event = jdbcTemplate.queryForMap(
+                    "SELECT event_type, JSON_EXTRACT(payload, '$.items[0].stockTotal') AS stock, "
+                            + "JSON_EXTRACT(payload, '$.items[0].optionId') AS option_id FROM catalog_outbox_events WHERE aggregate_id = ?",
+                    productId);
+            assertThat(event.get("event_type")).isEqualTo("IN_STOCK_PRODUCT_REGISTERED");
+            assertThat(event.get("stock")).isEqualTo("7");
+            assertThat(event.get("option_id")).isEqualTo(String.valueOf(variant.get("variantId").asLong()));
         }
     }
 
@@ -178,7 +184,7 @@ class AdminProductRegistrationApiTest {
                     .replace("\"basePrice\": 1000000", "\"basePrice\": 2000000");
             assertThat(different).contains("Nova 2").contains("2000000");
             ResultActions replay = register(key, different);
-            // 미완료 등록이라 재개 대상(202). 완료 뒤에는 200
+            // 준비 전(회차 행 없음)이라 202. 준비 뒤에는 200
             replay.andExpect(status().isAccepted());
             assertThat(productIdOf(replay)).isEqualTo(first);
             assertThat(data(replay).get("product").isNull()).as("200 · 202 는 고정 필드만").isTrue();
@@ -188,7 +194,8 @@ class AdminProductRegistrationApiTest {
                     .containsEntry("title", "Nova 1")
                     .hasEntrySatisfying("base_price", price -> assertThat(((Number) price).longValue()).isEqualTo(1000000L));
 
-            jdbcTemplate.update("UPDATE product_registrations SET completed_at = UTC_TIMESTAMP(6) WHERE product_id = ?", first);
+            // preorder 가 등록 이벤트를 처리해 회차 행을 만들면 준비가 끝난다 — 그 뒤 재전송은 200
+            fixtures.campaign(first, Instant.now().plus(Duration.ofHours(2)), Instant.now().plus(Duration.ofDays(3)));
             ResultActions completed = register(key, original).andExpect(status().isOk());
             assertThat(productIdOf(completed)).isEqualTo(first);
             assertThat(data(completed).get("registration").get("completed").asBoolean()).isTrue();
@@ -213,19 +220,6 @@ class AdminProductRegistrationApiTest {
 
             // 대조군: 같은 본문을 새 키로 보내면 검사에 걸린다
             expectValidation(register("k-" + ShopFixtures.unique(), late), "campaign.opensAt");
-        }
-
-        @Test
-        @DisplayName("막힌 등록은 재개 대상이 아니라 409 REGISTRATION_BLOCKED")
-        void blockedRegistrationIsConflict() throws Exception {
-            String key = "k-" + ShopFixtures.unique();
-            Long productId = productIdOf(register(key, preorderBody("")).andExpect(status().isCreated()));
-            jdbcTemplate.update("UPDATE product_registrations SET blocked_reason = 'OPENED_BEFORE_COMPLETE' WHERE product_id = ?", productId);
-
-            register(key, preorderBody(""))
-                    .andExpect(status().isConflict())
-                    .andExpect(jsonPath("$.error.code").value("REGISTRATION_BLOCKED"))
-                    .andExpect(jsonPath("$.error.details.blockedReason").value("OPENED_BEFORE_COMPLETE"));
         }
 
         @Test

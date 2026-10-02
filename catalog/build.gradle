@@ -1,5 +1,11 @@
 apply plugin: 'org.springframework.boot'
 
+// Spring Boot BOM 이 관리하지 않는 라이브러리 버전. preorder · order 와 같은 값을 쓴다.
+ext {
+    awsSdkVersion = '2.55.6'
+    flociTestcontainersVersion = '2.16.1'
+}
+
 dependencies {
     implementation project(':common:types')
     implementation project(':common:web')
@@ -8,12 +14,21 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-security'
+    // 다른 서비스로 가는 이벤트는 아웃박스에 적고 SQS 로 보낸다. AWS SDK v2 SqsClient 를 직접 쓰고, HTTP 는 URLConnection 구현 하나만 둔다(preorder · order 와 같다).
+    implementation platform("software.amazon.awssdk:bom:${awsSdkVersion}")
+    implementation('software.amazon.awssdk:sqs') {
+        exclude group: 'software.amazon.awssdk', module: 'apache-client'
+        exclude group: 'software.amazon.awssdk', module: 'netty-nio-client'
+    }
+    implementation 'software.amazon.awssdk:url-connection-client'
     runtimeOnly 'com.mysql:mysql-connector-j'
 
     // DB 동작(UNIQUE · 복합 FK · 생성 칼럼 · CHECK)은 MySQL 로만 검증한다. H2 는 쓰지 않는다.
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
     testImplementation 'org.testcontainers:testcontainers-mysql'
+    // SQS 발행은 로컬 AWS 에뮬레이터 Floci 로 검증한다(preorder · order 와 같다).
+    testImplementation "io.floci:testcontainers-floci:${flociTestcontainersVersion}"
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     testImplementation 'org.springframework.security:spring-security-test'
     // 테스트 DB 는 Flyway 마이그레이션(스키마 정본)으로 만든다. 서비스는 Flyway 를 실행하지 않으므로 테스트 의존으로만 둔다.
