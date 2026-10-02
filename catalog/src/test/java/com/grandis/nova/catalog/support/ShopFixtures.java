@@ -121,22 +121,25 @@ public class ShopFixtures {
     }
 
     /**
-     * 일반 상품의 판매 방식별 준비 — order 가 등록 이벤트로 만드는 초기 재고 행을, 아직 행이 없는 옵션마다 재고 0 으로 넣는다.
-     * 재고 0 행은 재고 행이 없을 때와 품절 판정이 같다(가용 0). 옵션이 하나도 없는 상품은 판매 중지 옵션 하나를 더해 넣는다 —
-     * 실제 등록은 옵션 없이 만들어지지 않으므로 옵션 없는 픽스처를 노출하려는 시험만 그 갈래를 탄다(판매 중지 옵션은 최저가 · 판매 가능 · 품절에 안 센다).
-     * 여러 번 불러도 된다 — 그사이 더한 옵션에만 행을 넣는다.
+     * 일반 상품의 판매 방식별 준비 — order 가 등록 이벤트로 만드는 초기 재고 행을 옵션마다 재고 0 으로 넣는다.
+     * 이미 재고 행이 하나라도 있으면(시험이 재고를 직접 넣었으면) 이미 준비된 것이라 아무것도 하지 않는다 — 시험이 일부러 비워 둔 옵션의
+     * "재고 행 없음" 을 지키기 위해서다. 재고 0 행은 재고 행이 없을 때와 품절 판정이 같다(가용 0).
+     * 옵션이 없는 상품은 준비될 수 없다 — 실제 등록은 조합이 하나도 없으면 400 이라 그런 상품이 생기지 않는다. 그래서 오류로 알린다.
      */
     public void stockReady(Long productId) {
-        Integer optionCount = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM product_options WHERE product_id = ?",
-                Integer.class, productId);
-        if (optionCount == null || optionCount == 0) {
-            option(productId, "PAUSED");
+        Integer inventoryRows = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM option_inventories i JOIN product_options o ON o.id = i.option_id WHERE o.product_id = ?
+                """, Integer.class, productId);
+        if (inventoryRows != null && inventoryRows > 0) {
+            return;
         }
-        jdbcTemplate.update("""
+        int inserted = jdbcTemplate.update("""
                 INSERT INTO option_inventories (option_id, stock_total, stock_reserved, stock_sold, updated_at)
-                SELECT o.id, 0, 0, 0, UTC_TIMESTAMP(6) FROM product_options o
-                 WHERE o.product_id = ? AND NOT EXISTS (SELECT 1 FROM option_inventories i WHERE i.option_id = o.id)
+                SELECT o.id, 0, 0, 0, UTC_TIMESTAMP(6) FROM product_options o WHERE o.product_id = ?
                 """, productId);
+        if (inserted == 0) {
+            throw new IllegalStateException("옵션 없는 일반 상품 " + productId + " 은 준비될 수 없다 — 시험이 옵션을 먼저 넣는다");
+        }
     }
 
     public Long option(Long productId, String status) {

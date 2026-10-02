@@ -133,6 +133,7 @@ class ProductDetailApiTest {
         @DisplayName("기본 묶음 대표가 없으면 사전순 첫 색상 묶음의 대표가 대표 사진이다")
         void representativeFallsBackToFirstColorBundle() throws Exception {
             Long productId = visibleInStock();
+            fixtures.option(productId, "PAUSED");
             fixtures.image(productId, "GALLERY", "화이트", 0, true, "https://img/white.jpg");
             fixtures.image(productId, "GALLERY", "블랙", 0, true, "https://img/black.jpg");
 
@@ -177,22 +178,27 @@ class ProductDetailApiTest {
             fixtures.inventory(fixtures.option(stocked, "ACTIVE", new BigDecimal("1")), 1, 0, 0);
             Long depleted = visibleInStock(tag);
             fixtures.inventory(fixtures.option(depleted, "ACTIVE", new BigDecimal("1")), 1, 1, 0);
+            // 판매 중 옵션은 재고 행이 없고, 판매 중지 옵션의 재고 행이 상품을 준비 상태로 만든다 — "재고 행 없음 = 판매 불가" 를 상품이 노출된 채로 본다
             Long noRow = visibleInStock(tag);
             fixtures.option(noRow, "ACTIVE", new BigDecimal("1"));
+            fixtures.inventory(fixtures.option(noRow, "PAUSED", new BigDecimal("1")), 0, 0, 0);
             Long pausedOnly = visibleInStock(tag);
             fixtures.inventory(fixtures.option(pausedOnly, "PAUSED", new BigDecimal("1")), 5, 0, 0);
-            Long noOptions = visibleInStock(tag);
+            // 옵션이 없는 일반 상품은 준비될 수 없어 목록에 없다(등록 API 로는 생기지 않는다 — 조합 0 은 400)
+            Long noOptions = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "Nova Book", tag);
+            fixtures.registration(noOptions);
             Instant now = Instant.now();
             Long preorderActive = visiblePreorder(tag, now.minus(HOUR), now.plus(HOUR));
             fixtures.option(preorderActive, "ACTIVE", new BigDecimal("1"));
             Long preorderPausedOnly = visiblePreorder(tag, now.minus(HOUR), now.plus(HOUR));
             fixtures.option(preorderPausedOnly, "PAUSED", new BigDecimal("1"));
-            ids.addAll(List.of(stocked, depleted, noRow, pausedOnly, noOptions, preorderActive, preorderPausedOnly));
+            ids.addAll(List.of(stocked, depleted, noRow, pausedOnly, preorderActive, preorderPausedOnly));
 
             inStockProducts.forEach(fixtures::stockReady);
             JsonNode items = JSON.readTree(mockMvc.perform(get("/api/v1/products").param("q", tag).param("size", "100"))
                     .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).at("/data/items");
             assertThat(items).hasSize(ids.size());
+            assertThat(texts(items, "productId")).doesNotContain(String.valueOf(noOptions));
             for (JsonNode item : items) {
                 Long productId = item.get("productId").asLong();
                 JsonNode detail = data(anonymous(productId).andExpect(status().isOk()));
@@ -213,6 +219,7 @@ class ProductDetailApiTest {
         @DisplayName("비공개 · 준비 전(재고 행 없음)은 누구에게나 404 NOT_FOUND — 관리자도. 미리보기는 관리자 상세로(2026-09-29 결정)")
         void hiddenIsNotFoundForEveryone() throws Exception {
             Long hidden = visibleInStock();
+            fixtures.option(hidden, "ACTIVE");
             jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", hidden);
             Long incomplete = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "준비 전", null);
             fixtures.option(incomplete, "ACTIVE");
@@ -232,6 +239,7 @@ class ProductDetailApiTest {
         @DisplayName("판매 중지는 200 에 상태 그대로, 마감 뒤 120시간이 지난 사전예약도 직접 링크로는 보인다")
         void pausedAndLongClosedAreStillViewable() throws Exception {
             Long paused = visibleInStock();
+            fixtures.option(paused, "ACTIVE");
             jdbcTemplate.update("UPDATE products SET status = 'PAUSED' WHERE id = ?", paused);
             assertThat(data(anonymous(paused).andExpect(status().isOk())).get("status").asString()).isEqualTo("PAUSED");
 

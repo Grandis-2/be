@@ -80,12 +80,13 @@ class ProductListApiTest {
         }
 
         @Test
-        @DisplayName("판매 중 옵션이 하나도 없는 상품(옵션 없음 · 전부 판매 중지)은 목록에 남고 sellable=false 로 알린다 — 화면이 판매 중지를 그린다")
+        @DisplayName("판매 중 옵션이 하나도 없는 상품(전부 판매 중지)은 목록에 남고 sellable=false 로 알린다 — 옵션이 아예 없는 일반 상품은 준비될 수 없어 나오지 않는다")
         void productsWithoutActiveOptionStayListedAsNotSellable() throws Exception {
             Long shown = visibleInStock("판매 중 옵션 있음");
             fixtures.option(shown, "ACTIVE", new BigDecimal("1000"));
-            fixtures.option(shown, "PAUSED", new BigDecimal("900"));
-            Long noOptions = visibleInStock("옵션 없음");
+            // 옵션이 없는 일반 상품 — 등록 API 로는 생기지 않는다(조합 0 은 400). 재고 행을 만들 옵션이 없어 준비될 수 없다
+            Long noOptions = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "옵션 없음", tag);
+            fixtures.registration(noOptions);
             Long allPaused = visibleInStock("전부 판매 중지");
             fixtures.option(allPaused, "PAUSED", new BigDecimal("1000"));
             Instant now = Instant.now();
@@ -93,10 +94,10 @@ class ProductListApiTest {
             fixtures.option(preorderAllPaused, "PAUSED", new BigDecimal("1000"));
 
             JsonNode items = list();
-            assertThat(ids(items)).containsExactlyInAnyOrder(shown, noOptions, allPaused, preorderAllPaused);
+            assertThat(ids(items)).containsExactlyInAnyOrder(shown, allPaused, preorderAllPaused).doesNotContain(noOptions);
             assertThat(find(items, shown).get("sellable").asBoolean()).isTrue();
             assertThat(find(items, shown).get("minPrice").decimalValue()).isEqualByComparingTo("1000");
-            for (Long notSellable : List.of(noOptions, allPaused, preorderAllPaused)) {
+            for (Long notSellable : List.of(allPaused, preorderAllPaused)) {
                 JsonNode item = find(items, notSellable);
                 assertThat(item.get("sellable").asBoolean()).as("product %d", notSellable).isFalse();
                 assertThat(item.get("minPrice").isNull()).isTrue();
@@ -207,6 +208,7 @@ class ProductListApiTest {
             Long byTitle = visibleInStock("Galaxy Fold " + tag);
             Long byTags = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "다른 이름", "fold " + tag);
             fixtures.registration(byTags);
+            fixtures.option(byTags, "PAUSED");
             inStockProducts.add(byTags);
             Long underscore = visibleInStock("a_b " + tag);
             Long axb = visibleInStock("axb " + tag);                 // _ 가 와일드카드면 여기도 걸린다
@@ -232,9 +234,11 @@ class ProductListApiTest {
             Long inParent = visibleInStock("상위 직접");
             Long inChild = fixtures.product(child, "IN_STOCK", "ACTIVE", "하위", tag);
             fixtures.registration(inChild);
+            fixtures.option(inChild, "PAUSED");
             inStockProducts.add(inChild);
             Long elsewhere = fixtures.product(otherRoot, "IN_STOCK", "ACTIVE", "다른 상위", tag);
             fixtures.registration(elsewhere);
+            fixtures.option(elsewhere, "PAUSED");
             inStockProducts.add(elsewhere);
             Instant now = Instant.now();
             Long preorder = visiblePreorder("사전예약", now.minus(HOUR), now.plus(HOUR));
@@ -331,9 +335,14 @@ class ProductListApiTest {
 
     // ── 도우미 ──────────────────────────────────────────────────────────────
 
+    /**
+     * 등록된 일반 상품. 실제 등록은 조합이 하나 이상이라 판매 중지 옵션 하나로 시작한다 — 판매 중지 옵션은 최저가 · 판매 가능 · 품절 · 필터에
+     * 들어가지 않아 시험이 넣는 옵션의 판정을 바꾸지 않는다. 재고 행은 목록을 부르기 직전에 넣는다(시험이 재고를 직접 넣었으면 그대로).
+     */
     private Long visibleInStock(String title) {
         Long productId = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", title, tag);
         fixtures.registration(productId);
+        fixtures.option(productId, "PAUSED");
         inStockProducts.add(productId);
         return productId;
     }

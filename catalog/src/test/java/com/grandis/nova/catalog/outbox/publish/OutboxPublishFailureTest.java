@@ -11,11 +11,13 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 
@@ -31,12 +33,14 @@ class OutboxPublishFailureTest {
 
     @Test
     @DisplayName("커밋 직후 발행이 실패하면 업무는 커밋된 채 행이 미발행으로 남고 실패 횟수만 오른다")
-    void afterCommitFailureLeavesRowForRelay() throws Exception {
+    void afterCommitFailureLeavesRowForRelay() {
         doThrow(new IllegalStateException("queue down")).when(transport).send(any());
         new TransactionTemplate(transactionManager).executeWithoutResult(status ->
                 writer.append(new InStockProductRegistered(-301L, List.of(new InStockProductRegistered.Item(1L, 1)))));
 
-        Map<String, Object> row = waitUntilAttempted(-301L);
+        Map<String, Object> row = await().atMost(Duration.ofSeconds(5)).until(() -> jdbcTemplate.queryForMap(
+                "SELECT published_at, publish_attempts FROM catalog_outbox_events WHERE aggregate_id = ?", -301L),
+                attempted -> ((Number) attempted.get("publish_attempts")).intValue() > 0);
         assertThat(row.get("published_at")).isNull();
         assertThat(((Number) row.get("publish_attempts")).intValue()).isEqualTo(1);
     }
@@ -58,17 +62,5 @@ class OutboxPublishFailureTest {
         assertThat(row.get("published_at")).isNull();
         assertThat(((Number) row.get("publish_attempts")).intValue()).isEqualTo(1);
         assertThat(row.get("lease_until")).as("리스를 풀었다 — 1분을 기다리지 않고 다음 주기에 다시 가져간다").isNull();
-    }
-
-    private Map<String, Object> waitUntilAttempted(Long aggregateId) throws InterruptedException {
-        for (int i = 0; i < 50; i++) {
-            Map<String, Object> row = jdbcTemplate.queryForMap(
-                    "SELECT published_at, publish_attempts FROM catalog_outbox_events WHERE aggregate_id = ?", aggregateId);
-            if (((Number) row.get("publish_attempts")).intValue() > 0) {
-                return row;
-            }
-            Thread.sleep(100);
-        }
-        throw new AssertionError("발행 시도가 기록되지 않았다");
     }
 }

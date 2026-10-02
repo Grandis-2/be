@@ -88,6 +88,7 @@ class AdminProductDetailApiTest {
         JsonNode legacy = data(admin(noRegistration).andExpect(status().isOk()));
         assertThat(legacy.get("registration").get("idempotencyKey").isNull()).as("등록 기록이 없다").isTrue();
         assertThat(legacy.get("registration").get("completed").asBoolean()).as("준비 전 — 관리자 목록과 같은 판정").isFalse();
+        fixtures.option(noRegistration, "ACTIVE");
         fixtures.stockReady(noRegistration);
         assertThat(data(admin(noRegistration).andExpect(status().isOk())).get("registration").get("completed").asBoolean())
                 .as("기록이 없어도 재고 행이 생기면 준비").isTrue();
@@ -96,6 +97,7 @@ class AdminProductDetailApiTest {
 
         Long hidden = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "비공개", null);
         fixtures.registration(hidden);
+        fixtures.option(hidden, "ACTIVE");
         fixtures.stockReady(hidden);
         jdbcTemplate.update("UPDATE products SET visible = 0, status = 'PAUSED' WHERE id = ?", hidden);
         JsonNode hiddenDetail = data(admin(hidden).andExpect(status().isOk()));

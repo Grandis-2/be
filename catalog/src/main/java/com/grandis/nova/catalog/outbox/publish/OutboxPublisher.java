@@ -54,7 +54,14 @@ class OutboxPublisher {
             log.warn("아웃박스 발행 실패 — 릴레이가 다시 보낸다 outboxEventId={} eventType={}", event.getId(), event.getEventType(), e);
             return false;
         }
-        return outboxEvents.markPublished(event.getId(), clock.instant()) == 1;
+        try {
+            return outboxEvents.markPublished(event.getId(), clock.instant()) == 1;
+        } catch (RuntimeException e) {
+            // 보냈는데 표시만 못 했다 — 행이 미발행으로 남아 다시 보내진다(최소 한 번이라 허용, 받는 쪽은 eventId 로 중복을 안다).
+            // 받는 쪽에서 중복이 보이면 이 로그로 원인을 찾는다. 예외를 삼켜 릴레이가 같은 묶음의 다음 행을 계속 보내게 한다
+            log.warn("전송은 됐으나 발행 완료 표시 실패 — 다시 보내질 수 있다 outboxEventId={} eventId={}", event.getId(), event.getEventId(), e);
+            return false;
+        }
     }
 
     private OutboundMessage toMessage(OutboxEvent event) {

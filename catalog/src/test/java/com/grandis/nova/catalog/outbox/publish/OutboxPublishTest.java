@@ -12,11 +12,13 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /** 로그 전송(nova.outbox.transport=log) 위에서 발행 흐름 — 커밋 직후 발행과 릴레이. 큐까지 가는 것은 OutboxSqsFlowTest 가 본다. */
 @CatalogIntegrationTest
@@ -30,11 +32,12 @@ class OutboxPublishTest {
 
     @Test
     @DisplayName("커밋 직후 발행기가 보내고 발행 완료로 표시한다 — 릴레이를 기다리지 않는다")
-    void publishesRightAfterCommit() throws Exception {
+    void publishesRightAfterCommit() {
         new TransactionTemplate(transactionManager).executeWithoutResult(status ->
                 writer.append(new InStockProductRegistered(-201L, List.of(new InStockProductRegistered.Item(1L, 1)))));
 
-        assertThat(waitUntilPublished(-201L)).as("발행 실행기가 커밋 뒤 따로 보낸다").isTrue();
+        // 발행 실행기가 커밋 뒤 따로 보낸다
+        await().atMost(Duration.ofSeconds(5)).until(() -> publishedAt(-201L) != null);
     }
 
     @Test
@@ -110,13 +113,4 @@ class OutboxPublishTest {
         return jdbcTemplate.queryForObject("SELECT published_at FROM catalog_outbox_events WHERE aggregate_id = ?", Object.class, aggregateId);
     }
 
-    private boolean waitUntilPublished(Long aggregateId) throws InterruptedException {
-        for (int i = 0; i < 50; i++) {
-            if (publishedAt(aggregateId) != null) {
-                return true;
-            }
-            Thread.sleep(100);
-        }
-        return false;
-    }
 }

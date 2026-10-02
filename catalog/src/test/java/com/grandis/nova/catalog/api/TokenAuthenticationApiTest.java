@@ -42,6 +42,7 @@ class TokenAuthenticationApiTest {
         ShopFixtures fixtures = new ShopFixtures(jdbcTemplate);
         productId = fixtures.product("IN_STOCK", "ACTIVE");
         fixtures.registration(productId);
+        fixtures.option(productId, "ACTIVE");
         fixtures.stockReady(productId);   // 공개 상세가 200 이려면 판매 방식별 준비(재고 행)가 있어야 한다
     }
 

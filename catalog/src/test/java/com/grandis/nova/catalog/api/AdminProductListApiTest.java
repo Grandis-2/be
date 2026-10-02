@@ -91,7 +91,7 @@ class AdminProductListApiTest {
             assertThat(find(items, shown).get("visible").asBoolean()).isTrue();
             assertThat(find(items, shown).get("registrationCompleted").asBoolean()).isTrue();
             assertThat(find(items, shown).has("blockedReason")).as("막힘 칸은 없다").isFalse();
-            assertThat(find(items, shown).get("optionCount").asInt()).as("판매 중지 옵션도 센다").isEqualTo(2);
+            assertThat(find(items, shown).get("optionCount").asInt()).as("판매 중지 옵션도 센다(도우미의 판매 중지 1 + 시험의 판매 중 1 · 판매 중지 1)").isEqualTo(3);
             assertThat(find(items, noRegistration).get("optionCount").asInt()).isZero();
             // visible 은 칸 그대로다 — 등록 없는 행은 visible=true 이면서 registrationCompleted=false. 상세의 product.visible 과 같은 정의
             assertThat(find(items, noRegistration).get("visible").asBoolean()).isTrue();
@@ -216,11 +216,15 @@ class AdminProductListApiTest {
         mockMvc.perform(get(PATH).with(user("657").roles("USER"))).andExpect(status().isForbidden());
     }
 
-    /** 등록하고 준비까지 끝난 상품. 일반은 목록을 부르기 직전에 재고 행을 넣고, 사전예약은 시험이 회차를 넣는다. */
+    /**
+     * 등록하고 준비까지 끝난 상품. 일반은 실제 등록처럼 옵션 하나로 시작하고(판매 중지 — 최저가 · 판매 가능 · 품절에 안 센다)
+     * 목록을 부르기 직전에 재고 행을 넣는다. 사전예약은 시험이 회차를 넣는다.
+     */
     private Long completed(String title, String saleMode) {
         Long productId = fixtures.product(categoryId, saleMode, "ACTIVE", title, tag);
         fixtures.registration(productId);
         if ("IN_STOCK".equals(saleMode)) {
+            fixtures.option(productId, "PAUSED");
             inStockProducts.add(productId);
         }
         return productId;
