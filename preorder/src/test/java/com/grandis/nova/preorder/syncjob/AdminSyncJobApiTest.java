@@ -361,7 +361,7 @@ class AdminSyncJobApiTest {
         return jdbcTemplate.queryForList("""
                 SELECT CAST(JSON_EXTRACT(payload, '$.syncJobId') AS UNSIGNED) AS syncJobId,
                        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.requestedBy')) AS requestedBy
-                  FROM outbox_events WHERE event_type = 'SYNC_JOB_REPROCESS_REQUESTED' AND aggregate_id = ?
+                  FROM preorder_outbox_events WHERE event_type = 'SYNC_JOB_REPROCESS_REQUESTED' AND aggregate_id = ?
                 """, syncJobId).stream()
                 .map(row -> Map.<String, Object>of("syncJobId", ((Number) row.get("syncJobId")).longValue(),
                         "requestedBy", row.get("requestedBy")))

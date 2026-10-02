@@ -158,7 +158,7 @@ class CampaignChangeEventTest {
                        CAST(JSON_EXTRACT(payload, '$.scheduleVersion') AS SIGNED) AS version,
                        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.opensAt')) AS opensAt,
                        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.closesAt')) AS closesAt
-                  FROM outbox_events
+                  FROM preorder_outbox_events
                  WHERE event_type = 'PREORDER_CAMPAIGN_CHANGED' AND aggregate_type = 'PREORDER_CAMPAIGN'
                    AND aggregate_id = ?
                  ORDER BY id

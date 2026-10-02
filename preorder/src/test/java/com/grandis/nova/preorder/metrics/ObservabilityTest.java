@@ -150,7 +150,7 @@ class ObservabilityTest {
     void 상태_지표는_갱신할_때_DB_에서_센다() {
         accepts.accept(fixtures.customer());
         jdbcTemplate.update("""
-                INSERT INTO outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload,
+                INSERT INTO preorder_outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload,
                                            publish_attempts, created_at)
                 VALUES (?, 'PREORDER_SYNC_JOB', 1, 'CANCEL_JOB_READY', '{}', 7, UTC_TIMESTAMP(6))
                 """, ShopFixtures.unique());

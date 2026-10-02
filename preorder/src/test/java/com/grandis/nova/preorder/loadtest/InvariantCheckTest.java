@@ -83,13 +83,13 @@ class InvariantCheckTest {
         accepts.accept(fixtures.customer(), product);
 
         jdbcTemplate.update("""
-                DELETE o FROM outbox_events o JOIN preorder_sync_jobs j ON j.id = o.aggregate_id
+                DELETE o FROM preorder_outbox_events o JOIN preorder_sync_jobs j ON j.id = o.aggregate_id
                  WHERE j.preorder_id = ? AND o.event_type = 'REGISTER_JOB_READY'
                 """, missing);
         jdbcTemplate.update("""
-                INSERT INTO outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, created_at)
+                INSERT INTO preorder_outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, created_at)
                 SELECT UUID(), o.aggregate_type, o.aggregate_id, o.event_type, o.payload, o.created_at
-                  FROM outbox_events o JOIN preorder_sync_jobs j ON j.id = o.aggregate_id
+                  FROM preorder_outbox_events o JOIN preorder_sync_jobs j ON j.id = o.aggregate_id
                  WHERE j.preorder_id = ? AND o.event_type = 'REGISTER_JOB_READY'
                 """, duplicated);
 

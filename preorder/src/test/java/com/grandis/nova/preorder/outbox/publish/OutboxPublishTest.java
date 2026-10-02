@@ -190,7 +190,7 @@ class OutboxPublishTest {
         assertThat(sending.await(ASYNC_TIMEOUT.toSeconds(), TimeUnit.SECONDS)).isTrue();
 
         Long locked = transactionTemplate.execute(status -> jdbcTemplate.queryForObject(
-                "SELECT id FROM outbox_events WHERE id = ? FOR UPDATE NOWAIT", Long.class, id));
+                "SELECT id FROM preorder_outbox_events WHERE id = ? FOR UPDATE NOWAIT", Long.class, id));
         assertThat(locked).as("다른 트랜잭션이 기다리지 않고 잠근다").isEqualTo(id);
         assertThat(leaseUntil(id)).isNotNull();
 
@@ -203,13 +203,13 @@ class OutboxPublishTest {
     void 리스_중인_행은_건너뛰고_리스가_끝나면_다시_가져간다() {
         Long id = insertUnpublished("CANCEL_JOB_READY");
         jdbcTemplate.update(
-                "UPDATE outbox_events SET lease_until = UTC_TIMESTAMP(6) + INTERVAL 5 MINUTE WHERE id = ?", id);
+                "UPDATE preorder_outbox_events SET lease_until = UTC_TIMESTAMP(6) + INTERVAL 5 MINUTE WHERE id = ?", id);
 
         relay.relay();
         assertThat(sentOf(eventIdOf(id))).as("다른 인스턴스가 보내는 중").isEmpty();
 
         jdbcTemplate.update(
-                "UPDATE outbox_events SET lease_until = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ?", id);
+                "UPDATE preorder_outbox_events SET lease_until = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ?", id);
         relay.relay();
 
         assertThat(publishedAt(id)).as("보내던 인스턴스가 죽어 리스가 끝났다").isNotNull();
@@ -237,7 +237,7 @@ class OutboxPublishTest {
         // 다른 시험의 행과 섞이지 않게 이 시험만 쓰는 종류로 적고 그 종류만 가져간다
         String eventType = "RELAY_ORDER_" + aggregateId;
         Long failing = insertUnpublished(eventType);
-        jdbcTemplate.update("UPDATE outbox_events SET publish_attempts = 7 WHERE id = ?", failing);
+        jdbcTemplate.update("UPDATE preorder_outbox_events SET publish_attempts = 7 WHERE id = ?", failing);
         Long fresh = insertUnpublished(eventType);
 
         List<Long> claimed = transactionTemplate.execute(status -> outboxEvents
@@ -267,7 +267,7 @@ class OutboxPublishTest {
             @Override
             public Instant instant() {
                 if (++reads == 2) {
-                    jdbcTemplate.update("UPDATE outbox_events SET lease_until = UTC_TIMESTAMP(6) + INTERVAL 5 MINUTE"
+                    jdbcTemplate.update("UPDATE preorder_outbox_events SET lease_until = UTC_TIMESTAMP(6) + INTERVAL 5 MINUTE"
                             + " WHERE id = ?", id);
                 }
                 return Instant.now().truncatedTo(ChronoUnit.MICROS);
@@ -285,7 +285,7 @@ class OutboxPublishTest {
         Long id = insertUnpublished("CANCEL_JOB_READY");
         Instant mine = Instant.parse("2026-01-01T00:00:00Z");
         jdbcTemplate.update(
-                "UPDATE outbox_events SET lease_until = UTC_TIMESTAMP(6) + INTERVAL 5 MINUTE WHERE id = ?", id);
+                "UPDATE preorder_outbox_events SET lease_until = UTC_TIMESTAMP(6) + INTERVAL 5 MINUTE WHERE id = ?", id);
         Object theirs = leaseUntil(id);
 
         assertThat(outboxEvents.renewLease(id, mine, Instant.now())).isZero();
@@ -299,14 +299,14 @@ class OutboxPublishTest {
     private Long insertUnpublished(String eventType) {
         String eventId = ShopFixtures.unique();
         jdbcTemplate.update("""
-                INSERT INTO outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, created_at)
+                INSERT INTO preorder_outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, created_at)
                 VALUES (?, 'PREORDER_SYNC_JOB', ?, ?, '{}', UTC_TIMESTAMP(6) - INTERVAL 2 MINUTE)
                 """, eventId, aggregateId, eventType);
-        return jdbcTemplate.queryForObject("SELECT id FROM outbox_events WHERE event_id = ?", Long.class, eventId);
+        return jdbcTemplate.queryForObject("SELECT id FROM preorder_outbox_events WHERE event_id = ?", Long.class, eventId);
     }
 
     private void age(Long id) {
-        jdbcTemplate.update("UPDATE outbox_events SET created_at = created_at - INTERVAL 2 MINUTE WHERE id = ?", id);
+        jdbcTemplate.update("UPDATE preorder_outbox_events SET created_at = created_at - INTERVAL 2 MINUTE WHERE id = ?", id);
     }
 
     private Object publishedAt(Long id) {
@@ -327,7 +327,7 @@ class OutboxPublishTest {
 
     private Map<String, Object> row(Long id) {
         return jdbcTemplate.queryForMap(
-                "SELECT event_id, publish_attempts, lease_until, published_at FROM outbox_events WHERE id = ?", id);
+                "SELECT event_id, publish_attempts, lease_until, published_at FROM preorder_outbox_events WHERE id = ?", id);
     }
 
     private List<OutboundMessage> sentOf(String eventId) {

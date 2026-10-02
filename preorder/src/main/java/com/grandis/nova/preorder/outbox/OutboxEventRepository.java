@@ -38,7 +38,7 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
      */
     @Transactional(propagation = Propagation.MANDATORY)
     @Query(value = """
-            SELECT * FROM outbox_events
+            SELECT * FROM preorder_outbox_events
              WHERE published_at IS NULL AND created_at <= :createdBefore AND event_type IN (:eventTypes)
                AND (lease_until IS NULL OR lease_until <= :now)
              ORDER BY publish_attempts, id
@@ -66,13 +66,13 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
     int renewLease(@Param("id") Long id, @Param("lease") Instant lease, @Param("renewed") Instant renewed);
 
     /** 아직 보내지 못한 행 수. 늘어나면 전송이 막힌 것이다. */
-    @Query(value = "SELECT COUNT(*) FROM outbox_events WHERE published_at IS NULL AND event_type IN (:eventTypes)",
+    @Query(value = "SELECT COUNT(*) FROM preorder_outbox_events WHERE published_at IS NULL AND event_type IN (:eventTypes)",
             nativeQuery = true)
     long countUnpublished(@Param("eventTypes") Collection<String> eventTypes);
 
     /** 미발행 행 가운데 가장 많이 실패한 횟수. 한 행만 계속 실패하는 것(독이 든 메시지)을 드러낸다. */
     @Query(value = """
-            SELECT COALESCE(MAX(publish_attempts), 0) FROM outbox_events
+            SELECT COALESCE(MAX(publish_attempts), 0) FROM preorder_outbox_events
              WHERE published_at IS NULL AND event_type IN (:eventTypes)
             """, nativeQuery = true)
     int maxUnpublishedAttempts(@Param("eventTypes") Collection<String> eventTypes);

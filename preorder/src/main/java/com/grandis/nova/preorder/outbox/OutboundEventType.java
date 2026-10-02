@@ -22,7 +22,7 @@ public enum OutboundEventType {
         return destination;
     }
 
-    /** outbox_events.event_type 에 적힌 값들. preorder 가 발행 · 재발행하는 행을 가를 때 쓴다. */
+    /** preorder_outbox_events.event_type 에 적힌 값들. preorder 가 발행 · 재발행하는 행을 가를 때 쓴다. */
     public static List<String> names() {
         return Arrays.stream(values()).map(Enum::name).toList();
     }

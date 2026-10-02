@@ -64,7 +64,7 @@ class OutboxWriterTest {
                        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.preorderId')) AS preorder_id,
                        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.jobType')) AS job_type,
                        JSON_EXTRACT(payload, '$.syncJobId') AS sync_job_id
-                  FROM outbox_events WHERE id = ?
+                  FROM preorder_outbox_events WHERE id = ?
                 """, id);
 
         assertThat(row)
@@ -86,7 +86,7 @@ class OutboxWriterTest {
 
         assertThat(jdbcTemplate.queryForMap("""
                 SELECT event_type, JSON_UNQUOTE(JSON_EXTRACT(payload, '$.jobType')) AS job_type
-                  FROM outbox_events WHERE id = ?
+                  FROM preorder_outbox_events WHERE id = ?
                 """, id))
                 .containsEntry("event_type", "CANCEL_JOB_READY")
                 .containsEntry("job_type", "CANCEL");
@@ -100,7 +100,7 @@ class OutboxWriterTest {
         Map<String, Object> row = jdbcTemplate.queryForMap("""
                 SELECT aggregate_type, aggregate_id, JSON_KEYS(payload) AS payload_keys,
                        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.reason')) AS reason
-                  FROM outbox_events WHERE id = ?
+                  FROM preorder_outbox_events WHERE id = ?
                 """, id);
 
         assertThat(row).containsEntry("aggregate_type", "PREORDER")
@@ -127,7 +127,7 @@ class OutboxWriterTest {
         });
 
         assertThat(jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM outbox_events WHERE aggregate_id = ?", Integer.class, aggregateId)).isZero();
+                "SELECT COUNT(*) FROM preorder_outbox_events WHERE aggregate_id = ?", Integer.class, aggregateId)).isZero();
         assertThat(committedEvents.received).isEmpty();
     }
 

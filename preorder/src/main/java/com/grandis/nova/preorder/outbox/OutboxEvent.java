@@ -22,7 +22,7 @@ import java.time.Instant;
  * updated_at 이 없는 표라 BaseEntity 를 쓰지 않는다.
  */
 @Entity
-@Table(name = "outbox_events")
+@Table(name = "preorder_outbox_events")
 @EntityListeners(AuditingEntityListener.class)
 public class OutboxEvent {
 

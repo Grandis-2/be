@@ -255,7 +255,7 @@ class CampaignCancelServiceTest {
 
     private List<String> outboxReasons(Long preorderId) {
         return jdbcTemplate.queryForList("""
-                SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.reason')) FROM outbox_events
+                SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.reason')) FROM preorder_outbox_events
                  WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
                 """, String.class, preorderId);
     }

@@ -112,8 +112,8 @@ class OrderOutboxWiringTest {
                 .containsEntry("aggregate_type", "PREORDER")
                 .containsEntry("aggregate_id", preorderId);
         assertThat(Instant.parse((String) row.get("created_at_utc"))).isBetween(before, after);
-        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM outbox_events WHERE aggregate_id = ?",
-                Integer.class, preorderId)).as("공유 표에는 적지 않는다").isZero();
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM preorder_outbox_events WHERE aggregate_id = ?",
+                Integer.class, preorderId)).as("preorder 표에는 적지 않는다").isZero();
     }
 
     /** 커밋 직후 발행이 order 의 종류 → 목적지(preorder-events)로 봉투를 보낸다. */
