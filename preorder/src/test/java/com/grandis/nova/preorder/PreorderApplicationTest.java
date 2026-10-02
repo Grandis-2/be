@@ -3,7 +3,9 @@ package com.grandis.nova.preorder;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
 
 import java.util.List;
 
@@ -14,6 +16,9 @@ class PreorderApplicationTest {
 
     @Autowired
     JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    ApplicationContext context;
 
     @Test
     void 컨텍스트가_뜨고_세션_격리_수준이_READ_COMMITTED() {
@@ -55,5 +60,11 @@ class PreorderApplicationTest {
         assertThat(unpublished).containsExactly("published_at", "publish_attempts", "id");
         assertThat(uniques).containsExactlyInAnyOrder("PRIMARY", "uq_preorder_outbox_event_id");
         assertThat(checks).containsExactly("ck_preorder_outbox_attempts");
+    }
+
+    /** 꺼지면 기동은 되고 @Scheduled 작업(상태 지표 갱신 등)만 조용히 멈춘다. */
+    @Test
+    void 스케줄링이_켜져_있다() {
+        assertThat(context.getBeansOfType(ScheduledAnnotationBeanPostProcessor.class)).isNotEmpty();
     }
 }

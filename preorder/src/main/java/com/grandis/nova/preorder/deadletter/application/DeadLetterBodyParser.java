@@ -1,9 +1,9 @@
 package com.grandis.nova.preorder.deadletter.application;
 
+import com.grandis.nova.common.message.EventEnvelope;
 import com.grandis.nova.preorder.deadletter.domain.DeadLetterBody;
 import com.grandis.nova.preorder.deadletter.domain.FailureReason;
 import com.grandis.nova.preorder.event.InboundEventType;
-import com.grandis.nova.preorder.outbox.EventEnvelope;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;

@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.integration.sqs;
 
+import com.grandis.nova.common.sqs.SqsQueueUrls;
 import com.grandis.nova.preorder.deadletter.DeadLetterRedriver;
 import com.grandis.nova.preorder.deadletter.DeadLetters;
 import com.grandis.nova.preorder.event.PreorderEventDispatcher;
@@ -31,8 +32,7 @@ class QueueConsumersTest {
     final SqsClient sqs = mock(SqsClient.class);
     final DeadLetters deadLetters = mock(DeadLetters.class);
     final PreorderEventDispatcher dispatcher = mock(PreorderEventDispatcher.class);
-    final SqsProperties properties = new SqsProperties("ap-northeast-2", null, "test", "test", Map.of(),
-            Duration.ofSeconds(3),
+    final SqsProperties properties = new SqsProperties("ap-northeast-2", null, "test", "test", Duration.ofSeconds(3),
             new SqsProperties.Consumer(true, "preorder-events", 1, 1, 10, Duration.ofSeconds(5), Duration.ofSeconds(1),
                     Duration.ofSeconds(1)),
             new SqsProperties.DeadLetter(true, "preorder-events-dlq", 1, Duration.ofSeconds(5)));
@@ -42,7 +42,7 @@ class QueueConsumersTest {
 
     @BeforeEach
     void setUp() {
-        SqsQueueUrls queueUrls = new SqsQueueUrls(sqs, properties);
+        SqsQueueUrls queueUrls = mock(SqsQueueUrls.class);
         deadLetterConsumer = new DeadLetterConsumer(sqs, queueUrls, deadLetters, properties);
         eventConsumer = new PreorderEventConsumer(sqs, queueUrls, dispatcher, deadLetters, properties);
     }

@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.integration.sqs;
 
+import com.grandis.nova.common.sqs.SqsQueueUrls;
 import com.grandis.nova.preorder.deadletter.DeadLetterRedriver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

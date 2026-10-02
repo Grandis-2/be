@@ -1,12 +1,12 @@
 package com.grandis.nova.preorder.integration.sqs;
 
+import com.grandis.nova.common.outbox.MessageTransport;
+import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.accept.application.RegisterJobReady;
 import com.grandis.nova.preorder.event.PreorderEventDispatcher;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
-import com.grandis.nova.preorder.outbox.OutboxEvent;
-import com.grandis.nova.preorder.outbox.OutboxWriter;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import com.grandis.nova.preorder.support.SqsIntegrationTest;
@@ -16,12 +16,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
+import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.Message;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -67,6 +69,9 @@ class SqsMessagingTest {
     @Autowired
     JsonMapper jsonMapper;
 
+    @Autowired
+    ApplicationContext context;
+
     @MockitoBean
     CatalogClient catalogClient;
 
@@ -82,14 +87,22 @@ class SqsMessagingTest {
         }).when(dispatcher).dispatch(anyString());
     }
 
+    /** SQS 클라이언트는 하나뿐이고, 아웃박스는 common:sqs 의 전송으로 보낸다. */
+    @Test
+    void 아웃박스_전송은_common_sqs_의_SQS_전송이다() {
+        assertThat(context.getBeansOfType(SqsClient.class)).hasSize(1);
+        assertThat(context.getBean(MessageTransport.class).getClass().getName())
+                .isEqualTo("com.grandis.nova.common.sqs.SqsMessageTransport");
+    }
+
     @Test
     void 커밋되면_목적지_큐로_봉투를_보낸다() {
         long syncJobId = ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE);
-        OutboxEvent event = transactionTemplate.execute(status ->
-                writer.append(new RegisterJobReady(syncJobId, "9f1c2d3e")));
+        Long id = transactionTemplate.execute(status -> writer.append(new RegisterJobReady(syncJobId, "9f1c2d3e")));
+        String eventId = jdbcTemplate.queryForObject(
+                "SELECT event_id FROM preorder_outbox_events WHERE id = ?", String.class, id);
 
-        Message message = queues.receive("preorder-register", m -> m.body().contains(event.getEventId()), TIMEOUT)
-                .orElseThrow();
+        Message message = queues.receive("preorder-register", m -> m.body().contains(eventId), TIMEOUT).orElseThrow();
 
         JsonNode body = jsonMapper.readTree(message.body());
         assertThat(body.get("eventType").asString()).isEqualTo("REGISTER_JOB_READY");
