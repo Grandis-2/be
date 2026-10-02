@@ -25,7 +25,10 @@ class WaitingroomDefaults implements EnvironmentPostProcessor, Ordered {
             // 지표 · 헬스는 서비스 포트(ALB)와 나눈 관리 포트로만 내놓는다. ALB 헬스 체크는 이 포트의 readiness 를 본다
             "management.server.port", "9085",
             "management.endpoints.web.exposure.include", "health,prometheus",
-            "management.endpoint.health.group.readiness.include", "readinessState,jwks");
+            "management.endpoint.health.group.readiness.include", "readinessState,jwks",
+            // 명령 하나가 틱(1초)을, 연결이 리더 리스(2초)를 넘겨 붙들지 않게
+            "spring.data.redis.timeout", "500ms",
+            "spring.data.redis.connect-timeout", "1s");
 
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {

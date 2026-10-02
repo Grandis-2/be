@@ -22,7 +22,7 @@ import java.time.Instant;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** 앱이 뜨면 JWKS 를 뒤에서 받아 readiness 가 UP 이 되고, 정적 공개키 없이 JWKS 키로 검증한다. */
-@SpringBootTest
+@SpringBootTest(properties = "waitingroom.control.enabled=false")
 class JwksLoadingTest {
 
     static final DisposableServer MEMBER = HttpServer.create()

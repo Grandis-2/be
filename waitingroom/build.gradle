@@ -15,12 +15,17 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-security-oauth2-resource-server'
     // member JWKS 를 받는 WebClient(자동설정 빌더 — 지표 · 코덱 설정을 같이 받는다)
     implementation 'org.springframework.boot:spring-boot-starter-webclient'
+    // 대기열 · 판정 재료. 요청 경로와 제어 루프 모두 리액티브로 쓴다
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis-reactive'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
     // Reactor 컨텍스트의 traceId 를 로그 MDC 로 옮긴다
     implementation 'io.micrometer:context-propagation'
 
     testImplementation 'io.projectreactor:reactor-test'
+    // Lua · 제어 평면은 실제 Redis 로만 검증한다(CI 와 같은 redis:8)
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
     // 모듈 경계 규칙(ModuleBoundaryTest)
     testImplementation "com.tngtech.archunit:archunit-junit5:${archunitVersion}"
 }

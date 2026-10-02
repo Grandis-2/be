@@ -32,7 +32,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** 기동 · 인증 · 봉투 · 요청 ID 를 실제 필터 체인으로 확인한다. */
-@SpringBootTest
+@SpringBootTest(properties = "waitingroom.control.enabled=false")
 @Import(WaitingroomApiTest.ProbeController.class)
 class WaitingroomApiTest {
 
