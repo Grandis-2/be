@@ -23,6 +23,8 @@ public final class TestJwts {
     public static final String KID = "test-1";
     public static final String ISSUER = "nova";
     public static final String AUDIENCE = "nova-api";
+    /** 입장권 · 대기 토큰 서명 키(시험용). */
+    public static final String TOKEN_SECRET = "test-token-secret-0123456789";
 
     private static final RSAKey KEY = generate(KID);
 

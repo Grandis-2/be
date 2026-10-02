@@ -14,6 +14,8 @@ import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebExceptionHandler;
 import reactor.core.publisher.Mono;
 
+import java.net.ConnectException;
+
 /**
  * 처리하지 못한 예외를 nova 봉투로 바꾼다. Boot 기본 처리기(-1)보다 먼저 선다.
  * 5xx 의 원문은 응답에 싣지 않고 로그에만 남긴다 — 다른 서비스의 처리기와 같은 규칙이다.
@@ -52,12 +54,20 @@ class GlobalErrorHandler implements WebExceptionHandler {
         }
         if (ex instanceof ResponseStatusException status) {
             HttpStatusCode statusCode = status.getStatusCode();
-            if (statusCode.is5xxServerError()) {
+            // 전달 대상이 느리거나 못 받는 것(503 · 504)은 우리 결함이 아니고 몰리면 요청마다 쌓인다 — 한 줄로 남긴다
+            if (statusCode.value() == 503 || statusCode.value() == 504) {
+                log.warn("전달 대상 응답 실패: {}", ex.toString());
+            } else if (statusCode.is5xxServerError()) {
                 log.error("요청 처리 중 서버 오류", ex);
             }
             exchange.getResponse().getHeaders().putAll(status.getHeaders());
             ErrorCode code = codeOf(statusCode);
             return errorResponses.write(exchange, statusCode, code, code.defaultMessage(), null);
+        }
+        // 접수 전달 대상(preorder)에 붙지 못했다. 요청은 전달되지 않았으므로 다시 보내도 된다
+        if (hasCause(ex, ConnectException.class)) {
+            log.warn("전달 대상에 연결하지 못했다: {}", ex.toString());
+            return errorResponses.write(exchange, CommonErrorCode.DEPENDENCY_UNAVAILABLE);
         }
         log.error("처리하지 못한 오류", ex);
         return errorResponses.write(exchange, CommonErrorCode.INTERNAL_ERROR);
@@ -73,5 +83,14 @@ class GlobalErrorHandler implements WebExceptionHandler {
             case 503 -> CommonErrorCode.DEPENDENCY_UNAVAILABLE;
             default -> status.is4xxClientError() ? CommonErrorCode.VALIDATION_FAILED : CommonErrorCode.INTERNAL_ERROR;
         };
+    }
+
+    private static boolean hasCause(Throwable ex, Class<? extends Throwable> type) {
+        for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
+            if (type.isInstance(cause)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

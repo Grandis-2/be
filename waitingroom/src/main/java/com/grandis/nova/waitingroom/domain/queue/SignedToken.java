@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -95,6 +96,14 @@ public final class SignedToken {
      * 어느 칸이 틀렸는지 알려 주면 맞추는 데 쓰인다.
      */
     public Optional<String> verify(String token, String productKey, Instant now) {
+        return authenticate(token, productKey, now).filter(holder -> !holder.expired(now)).map(Holder::customerId);
+    }
+
+    /**
+     * 서명과 모델이 맞으면 회원과 만료 시각을 돌려준다. 만료를 거절과 나눠 알려 준다 — 만료된 입장권으로 같은 접수를
+     * 다시 보낸 것인지는 받는 쪽(preorder)이 판단한다.
+     */
+    public Optional<Holder> authenticate(String token, String productKey, Instant now) {
         if (token == null || token.length() > MAX_TOKEN_LENGTH || !token.startsWith(prefix)) {
             return Optional.empty();
         }
@@ -108,13 +117,23 @@ public final class SignedToken {
             return Optional.empty();
         }
         String[] parts = fields(payload);
-        if (parts.length != 3 || !parts[0].equals(productKey) || !notExpired(parts[2], now)) {
+        if (parts.length != 3 || !parts[0].equals(productKey)) {
             return Optional.empty();
         }
-        if (match == Match.PREVIOUS) {
+        OptionalLong exp = epochSecond(parts[2]);
+        if (exp.isEmpty()) {
+            return Optional.empty();
+        }
+        Holder holder = new Holder(parts[1], Instant.ofEpochSecond(exp.getAsLong()));
+        if (match == Match.PREVIOUS && !holder.expired(now)) {
             acceptedByPrevious.incrementAndGet();
         }
-        return Optional.of(parts[1]);
+        return Optional.of(holder);
+    }
+
+    /** 이 시각에 낸 토큰이 만료되는 때. 같은 창에서 낸 토큰은 모두 같다. */
+    public Instant expiresAt(Instant issuedAt) {
+        return Instant.ofEpochSecond(expiry(issuedAt));
     }
 
     /** 옛 키로 받아 준 누적 횟수. 더 안 오르는 때가 옛 키를 빼도 되는 때다. */
@@ -168,13 +187,21 @@ public final class SignedToken {
         }
     }
 
-    private static boolean notExpired(String exp, Instant now) {
+    private static OptionalLong epochSecond(String exp) {
         try {
-            return Long.parseLong(exp) > now.getEpochSecond();
+            return OptionalLong.of(Long.parseLong(exp));
         } catch (NumberFormatException e) {
-            return false;
+            return OptionalLong.empty();
         }
     }
 
     private enum Match { NONE, CURRENT, PREVIOUS }
+
+    /** 서명과 모델이 맞은 토큰의 회원과 만료 시각. */
+    public record Holder(String customerId, Instant expiresAt) {
+
+        public boolean expired(Instant now) {
+            return !now.isBefore(expiresAt);
+        }
+    }
 }

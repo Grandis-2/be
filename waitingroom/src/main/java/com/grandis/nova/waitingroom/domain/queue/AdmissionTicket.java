@@ -34,6 +34,16 @@ public final class AdmissionTicket {
         return signer.verify(ticket, productKey, now);
     }
 
+    /** 서명 · 모델이 맞으면 회원과 만료 시각. 만료돼도 같은 접수의 재전송일 수 있어 거절과 나눈다. */
+    public Optional<SignedToken.Holder> authenticate(String ticket, String productKey, Instant now) {
+        return signer.authenticate(ticket, productKey, now);
+    }
+
+    /** 이 시각에 낸 입장권이 만료되는 때. */
+    public Instant expiresAt(Instant issuedAt) {
+        return signer.expiresAt(issuedAt);
+    }
+
     public long acceptedByPrevious() {
         return signer.acceptedByPrevious();
     }

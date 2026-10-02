@@ -12,6 +12,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongFunction;
@@ -44,6 +45,10 @@ class ControlPlane implements SmartLifecycle {
     private final AtomicBoolean tickFailing = new AtomicBoolean();
     private final AtomicBoolean snapshotFailing = new AtomicBoolean();
     private volatile Disposable loops;
+    /** 루프마다 마지막으로 한 바퀴를 끝낸 때. 성공 · 실패를 가리지 않는다 — Redis 장애로 실패해도 루프는 살아 있다. */
+    private final AtomicLong leaderBeat = new AtomicLong();
+    private final AtomicLong tickBeat = new AtomicLong();
+    private final AtomicLong snapshotBeat = new AtomicLong();
 
     ControlPlane(ControlStore store, Leadership leadership, AllocationRound round, SnapshotHolder holder,
                  RedisClock redisClock, IdlePassCounter idlePasses, ControlPlaneProperties properties,
@@ -60,10 +65,13 @@ class ControlPlane implements SmartLifecycle {
 
     @Override
     public void start() {
+        long started = System.nanoTime();
+        List.of(leaderBeat, tickBeat, snapshotBeat).forEach(beat -> beat.set(started));
         loops = Disposables.composite(
-                every(properties.leaderRenew(), count -> renewLeadership(), leaderFailing, "리더 리스"),
-                every(ControlPlaneProperties.TICK, count -> tick(), tickFailing, "틱(하트비트 · 배분)"),
-                every(properties.snapshotRefresh(), count -> refreshSnapshot(), snapshotFailing, "판정 재료 받기"));
+                every(properties.leaderRenew(), count -> renewLeadership(), leaderFailing, leaderBeat, "리더 리스"),
+                every(ControlPlaneProperties.TICK, count -> tick(), tickFailing, tickBeat, "틱(하트비트 · 배분)"),
+                every(properties.snapshotRefresh(), count -> refreshSnapshot(), snapshotFailing, snapshotBeat,
+                        "판정 재료 받기"));
     }
 
     @Override
@@ -80,6 +88,13 @@ class ControlPlane implements SmartLifecycle {
                     return Mono.empty();
                 })
                 .block();
+    }
+
+    /** 가장 오래 멈춘 루프가 마지막 바퀴를 끝낸 뒤 지난 시간. 하나라도 멈추면 그만큼 늘어난다. */
+    Duration sinceLastBeat() {
+        long now = System.nanoTime();
+        long oldest = Math.max(now - leaderBeat.get(), Math.max(now - tickBeat.get(), now - snapshotBeat.get()));
+        return Duration.ofNanos(oldest);
     }
 
     @Override
@@ -142,12 +157,13 @@ class ControlPlane implements SmartLifecycle {
                 .then();
     }
 
-    private Disposable every(Duration period, LongFunction<Mono<Void>> task, AtomicBoolean failing,
+    private Disposable every(Duration period, LongFunction<Mono<Void>> task, AtomicBoolean failing, AtomicLong beat,
                              String name) {
         // 미리 받기 0 — 실행 중에 온 틱은 쌓이지 않고 버려져, 늦은 작업 뒤에 회차가 몰려 돌지 않는다
         return Flux.interval(Duration.ZERO, period)
                 .onBackpressureDrop()
-                .concatMap(count -> task.apply(count)
+                // defer — 작업이 Mono 를 만들다 던져도 이 주기의 실패로 끝나고 루프는 이어진다
+                .concatMap(count -> Mono.defer(() -> task.apply(count))
                         .timeout(period.multipliedBy(3))
                         .doOnSuccess(done -> {
                             if (failing.compareAndSet(true, false)) {
@@ -160,7 +176,8 @@ class ControlPlane implements SmartLifecycle {
                                 log.warn("{} 실패 — 다음 주기에 다시 한다: {}", name, e.toString());
                             }
                             return Mono.empty();
-                        }), 0)
+                        })
+                        .doFinally(signal -> beat.set(System.nanoTime())), 0)
                 .subscribe();
     }
 }

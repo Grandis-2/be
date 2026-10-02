@@ -21,8 +21,8 @@ import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** 앱이 뜨면 JWKS 를 뒤에서 받아 readiness 가 UP 이 되고, 정적 공개키 없이 JWKS 키로 검증한다. */
-@SpringBootTest(properties = "waitingroom.control.enabled=false")
+/** 앱이 뜨면 JWKS 를 뒤에서 받아 jwks 지표가 UP 이 되고, 정적 공개키 없이 JWKS 키로 검증한다. */
+@SpringBootTest(properties = {"waitingroom.control.enabled=false", "waitingroom.token.secret=" + TestJwts.TOKEN_SECRET})
 class JwksLoadingTest {
 
     static final DisposableServer MEMBER = HttpServer.create()
@@ -51,7 +51,7 @@ class JwksLoadingTest {
     ReactiveJwtDecoder decoder;
 
     @Test
-    void 기동하면_JWKS_를_받아_readiness_가_UP_이_되고_그_키로_검증한다() {
+    void 기동하면_JWKS_를_받아_jwks_지표가_UP_이_되고_그_키로_검증한다() {
         StepVerifier.create(Flux.interval(Duration.ofMillis(20)).map(tick -> jwksHealth.health().getStatus())
                         .filter(Status.UP::equals).next())
                 .expectNext(Status.UP)
