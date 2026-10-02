@@ -18,6 +18,7 @@ import com.grandis.nova.payment.support.PaymentFixtures;
 import com.grandis.nova.payment.support.PaymentIntegrationTest;
 import com.grandis.nova.payment.vo.Money;
 import com.grandis.nova.payment.vo.PaymentTarget;
+import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -36,9 +37,15 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -275,6 +282,49 @@ class PaymentConfirmApiTest {
 
         verify(toss, times(1)).confirm(any(), any());
         assertThat(settledEvents()).isOne();
+    }
+
+    /*
+     * 같은 결제창으로 승인 두 건이 동시에 온다(더블 클릭 · 두 인스턴스). 한쪽만 시작해 토스를 부르고, 다른 쪽은 토스를 부르지 않고
+     * PENDING 이다. 토스는 진 쪽 응답이 끝난 뒤에 답하게 해 겹침을 확실히 만든다. 같은 행을 동시에 시작하는 원장 수준의 경합은
+     * PaymentLedgerConcurrencyTest 가 본다.
+     */
+    @Test
+    void concurrentConfirmsOfSameAttemptCallTossOnce() throws Exception {
+        CountDownLatch go = new CountDownLatch(1);
+        CountDownLatch loserDone = new CountDownLatch(1);
+        given(toss.confirm(any(), any())).willAnswer(invocation -> {
+            loserDone.await(10, TimeUnit.SECONDS);
+            return done(AMOUNT);
+        });
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<String>> results = new ArrayList<>();
+            for (int i = 0; i < 2; i++) {
+                results.add(pool.submit(() -> {
+                    go.await();
+                    String body = confirm(opened, target, AMOUNT).andExpect(status().isOk())
+                            .andReturn().getResponse().getContentAsString();
+                    if (JsonPath.<String>read(body, "$.data.result").equals("PENDING")) {
+                        loserDone.countDown();
+                    }
+                    return JsonPath.read(body, "$.data.result");
+                }));
+            }
+            go.countDown();
+
+            List<String> answers = new ArrayList<>();
+            for (Future<String> result : results) {
+                answers.add(result.get(20, TimeUnit.SECONDS));
+            }
+
+            assertThat(answers).containsExactlyInAnyOrder("APPROVED", "PENDING");
+        } finally {
+            pool.shutdownNow();
+        }
+        verify(toss, times(1)).confirm(any(), any());
+        assertThat(settledEvents()).isOne();
+        assertThat(paymentsOfTarget()).isOne();
     }
 
     @Test
