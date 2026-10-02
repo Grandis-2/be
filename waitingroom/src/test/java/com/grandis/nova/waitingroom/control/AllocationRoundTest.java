@@ -41,10 +41,15 @@ class AllocationRoundTest {
         LuaScripts scripts = new LuaScripts(redis);
         queue = new QueueStore(scripts);
         control = new ControlStore(scripts, redis);
-        round = new AllocationRound(control, new AdmissionProperties(10L, 0.7), PROPERTIES,
+        round = newRound();
+        now = Instant.now();
+    }
+
+    /** 리더가 바뀌면 새 노드는 빈 기억으로 시작한다. */
+    private AllocationRound newRound() {
+        return new AllocationRound(control, new AdmissionProperties(10L, 0.7), PROPERTIES,
                 new ControlMetrics(new SimpleMeterRegistry(), leadership, new SnapshotHolder(new RedisClock(Clock.systemUTC()), PROPERTIES)),
                 leadership);
-        now = Instant.now();
     }
 
     private void schedule(String product, Instant opensAt, Instant closesAt) {
@@ -164,6 +169,41 @@ class AllocationRoundTest {
         assertThat(snapshot.product("101").orElseThrow().runtime()).isEqualTo(RuntimeState.CLOSED);
         assertThat(snapshot.product("101").orElseThrow().waiting()).as("은퇴 뒤에는 줄 길이를 읽지 않는다").isZero();
         assertThat(redis.hasKey("wr:queue:{101}").block(WAIT)).as("정리도 하지 않는다").isTrue();
+    }
+
+    @Test
+    void 줄_정리가_막히면_은퇴하지_않고_다음_회차에_줄_길이를_다시_읽고_정리를_다시_한다() {
+        schedule("101", now.minus(Duration.ofDays(2)), now.minus(Duration.ofDays(1)));
+        line("101", 3);
+        redis.opsForValue().set("wr:closefence:{101}", "100").block(WAIT);
+
+        run(7, 0);
+        run(7, 0);
+        assertThat(redis.hasKey("wr:queue:{101}").block(WAIT)).as("더 큰 임기의 표에 막혔다").isTrue();
+        assertThat(run(7, 0).product("101").orElseThrow().waiting()).as("은퇴하지 않고 다시 읽는다").isEqualTo(3);
+
+        redis.delete("wr:closefence:{101}").block(WAIT);
+        run(7, 0);
+        run(7, 0);
+        assertThat(redis.hasKey("wr:queue:{101}").block(WAIT)).as("막힘이 풀리면 다시 정리한다").isFalse();
+    }
+
+    @Test
+    void 리더가_바뀌면_새_리더는_은퇴_시각이_지났어도_줄을_지운_것을_스스로_확인한_뒤에야_은퇴시킨다() {
+        schedule("101", now.minus(Duration.ofDays(2)), now.minus(Duration.ofDays(1)));
+        line("101", 3);
+        run(7, 0);
+        run(7, 0);
+        line("101", 2);
+        assertThat(run(7, 0).product("101").orElseThrow().waiting()).as("옛 리더는 은퇴시켰다").isZero();
+
+        round = newRound();
+
+        assertThat(run(8, 0).product("101").orElseThrow().waiting()).as("새 리더는 다시 읽는다").isEqualTo(2);
+        run(8, 0);
+        assertThat(redis.hasKey("wr:queue:{101}").block(WAIT)).isFalse();
+        line("101", 1);
+        assertThat(run(8, 0).product("101").orElseThrow().waiting()).as("확인한 뒤에야 은퇴").isZero();
     }
 
     @Test
