@@ -19,6 +19,11 @@ class RelayMetrics {
         Counter.builder("waitingroom.relay.tickets").tag("outcome", outcome).register(registry).increment();
     }
 
+    /** 입장 기록을 지우지 못했다(Redis 장애 · 시한). 남은 기록은 입장권 수명이 지나면 끝난 것으로 본다. */
+    void forgetFailed() {
+        Counter.builder("waitingroom.relay.forget.failures").register(registry).increment();
+    }
+
     /** 접수 응답에서 보고 따른 것. SALE_CLOSED · ADMISSION_TICKET_STALE · ADMISSION_TICKET_USED. */
     void observed(String code) {
         Counter.builder("waitingroom.relay.observed").tag("code", code).register(registry).increment();

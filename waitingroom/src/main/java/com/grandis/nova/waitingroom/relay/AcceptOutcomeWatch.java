@@ -24,6 +24,7 @@ import tools.jackson.databind.json.JsonMapper;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 접수 응답에서 대기열이 따를 것을 본다. 409 SALE_CLOSED 면 이 노드가 그 모델 진입을 바로 닫고, 입장권을 더 못 쓴다는
@@ -49,6 +50,8 @@ class AcceptOutcomeWatch implements GatewayFilter {
     private final QueueStore queue;
     private final JsonMapper jsonMapper;
     private final RelayMetrics metrics;
+    /** 장애 동안 요청마다 쌓이지 않게 상태가 바뀔 때만 로그를 남긴다. */
+    private final AtomicBoolean forgetFailing = new AtomicBoolean();
 
     AcceptOutcomeWatch(SnapshotHolder snapshots, RedisClock clock, ProductClosures closures, QueueStore queue,
                        JsonMapper jsonMapper, RelayMetrics metrics) {
@@ -99,11 +102,19 @@ class AcceptOutcomeWatch implements GatewayFilter {
                             .set(HttpHeaders.RETRY_AFTER, String.valueOf(retryAfterSeconds(clock.now()))))
                     .then(queue.forgetAdmission(productKey, customerId, ticketExpiresAt))
                     .timeout(FORGET_TIMEOUT)
+                    .doOnNext(removed -> {
+                        if (forgetFailing.compareAndSet(true, false)) {
+                            log.info("입장 기록 지우기 회복");
+                        }
+                    })
                     .filter(Boolean::booleanValue)
                     .doOnNext(removed -> metrics.observed(code))
                     // 지우지 못해도 응답은 돌려준다. 남은 입장 기록은 입장권 수명이 지나면 끝난 것으로 본다
                     .onErrorResume(e -> {
-                        log.debug("입장 기록을 지우지 못했다: {}", e.toString());
+                        metrics.forgetFailed();
+                        if (forgetFailing.compareAndSet(false, true)) {
+                            log.warn("입장 기록을 지우지 못했다 — 입장권 수명이 지나면 풀린다: {}", e.toString());
+                        }
                         return Mono.empty();
                     })
                     .then();

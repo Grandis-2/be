@@ -25,13 +25,16 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.netty.DisposableServer;
 import reactor.netty.http.server.HttpServer;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -187,6 +190,21 @@ class QueueFlowTest {
             enter("1").expectStatus().isAccepted().expectBody()
                     .jsonPath("$.data.position").isEqualTo(1)
                     .jsonPath("$.data.rejoined").isEqualTo(true);
+        }
+
+        @Test
+        void 같은_회원이_동시에_여러_번_진입해도_한_자리만_잡고_같은_순서와_대기_토큰을_받는다() {
+            snapshot(crowded());
+
+            List<Map<?, ?>> views = Flux.range(0, 8)
+                    .flatMap(i -> Mono.<Map<?, ?>>fromCallable(() -> data(enter("1").expectStatus().isAccepted()))
+                            .subscribeOn(Schedulers.boundedElastic()), 8)
+                    .collectList().block(WAIT);
+            String token = (String) views.getFirst().get("queueToken");
+
+            assertThat(views.stream().<Object>map(view -> view.get("position")).distinct().toList()).containsExactly(1);
+            assertThat(views.stream().<Object>map(view -> view.get("queueToken")).distinct().toList()).containsExactly(token);
+            status("1", token).expectBody().jsonPath("$.data.totalWaiting").isEqualTo(1);
         }
 
         @Test
