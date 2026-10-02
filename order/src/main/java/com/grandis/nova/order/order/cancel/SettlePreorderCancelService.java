@@ -1,5 +1,6 @@
 package com.grandis.nova.order.order.cancel;
 
+import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.enums.OrderTrigger;
@@ -7,7 +8,6 @@ import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderTransition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
-import com.grandis.nova.order.outbox.OutboxWriter;
 import com.grandis.nova.order.outbox.PreorderOrderSettled;
 import com.grandis.nova.order.outbox.PreorderOrderSettled.RejectReason;
 import org.springframework.stereotype.Service;

@@ -240,7 +240,7 @@ class SettlePreorderCancelServiceTest {
     private List<Map<String, Object>> outboxRows(Long preorderId) {
         return jdbcTemplate.queryForList("""
                 SELECT event_type, aggregate_type, aggregate_id, payload
-                  FROM outbox_events WHERE aggregate_type = 'PREORDER' AND aggregate_id = ? ORDER BY id
+                  FROM order_outbox_events WHERE aggregate_type = 'PREORDER' AND aggregate_id = ? ORDER BY id
                 """, preorderId);
     }
 
