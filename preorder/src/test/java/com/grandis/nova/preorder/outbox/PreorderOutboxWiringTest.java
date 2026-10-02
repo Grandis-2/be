@@ -110,13 +110,18 @@ class PreorderOutboxWiringTest {
 
     @Test
     void 업무가_롤백되면_행도_메시지도_남지_않는다() {
-        transactionTemplate.executeWithoutResult(status -> {
-            idOf(new RegisterJobReady(aggregateId, "9f1c2d3e"));
+        String eventId = transactionTemplate.execute(status -> {
+            Long id = idOf(new RegisterJobReady(aggregateId, "9f1c2d3e"));
             status.setRollbackOnly();
+            return jdbcTemplate.queryForObject(
+                    "SELECT event_id FROM preorder_outbox_events WHERE id = ?", String.class, id);
         });
 
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM preorder_outbox_events WHERE aggregate_id = ?",
                 Integer.class, aggregateId)).isZero();
+        // 발행은 비동기라 바로 보면 늘 비어 있다 — 커밋 직후 발행이 끝날 만한 시간 동안 보내지 않는지 본다
+        await().during(Duration.ofSeconds(1)).atMost(TIMEOUT)
+                .until(() -> sent.stream().noneMatch(message -> message.eventId().equals(eventId)));
     }
 
     @Test
