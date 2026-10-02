@@ -68,8 +68,24 @@ class AllocationRoundTest {
     }
 
     private GatewaySnapshot run(long fence, long idlePasses) {
+        return run(fence, idlePasses, 0);
+    }
+
+    private GatewaySnapshot run(long fence, long idlePasses, long tick) {
         leadership.hold(fence, leadership.nanoTime(), Duration.ofHours(1));
-        return round.run(fence, new ClusterView(2, idlePasses), 0).block(WAIT);
+        return round.run(fence, new ClusterView(2, idlePasses), tick).block(WAIT);
+    }
+
+    @Test
+    void 같은_회차를_다시_돌려도_한_번만_들이고_다음_회차는_다시_들인다() {
+        schedule("101", now.minusSeconds(60), now.plusSeconds(3_600));
+        line("101", 30);
+
+        run(7, 0, 1);
+        run(7, 0, 1);
+        assertThat(admitted("101", 30)).as("같은 회차 재시도").isEqualTo(10);
+        run(7, 0, 2);
+        assertThat(admitted("101", 30)).isEqualTo(20);
     }
 
     @Test

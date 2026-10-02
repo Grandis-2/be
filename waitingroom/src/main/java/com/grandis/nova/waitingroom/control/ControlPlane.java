@@ -13,6 +13,7 @@ import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongFunction;
 
 /**
@@ -25,6 +26,9 @@ class ControlPlane implements SmartLifecycle {
 
     /** 웹 서버(우아한 종료 포함)보다 먼저 시작하고 나중에 멈춘다 — 남은 요청을 비우는 동안에도 판정 재료가 신선하다. */
     static final int PHASE = SmartLifecycle.DEFAULT_PHASE - 4096;
+
+    /** 배분 회차 번호. 재시작해도 이어 세어, 같은 임기를 다시 받았을 때 이미 쓴 회차와 겹치지 않는다. */
+    private final AtomicLong rounds = new AtomicLong();
 
     private static final Logger log = LoggerFactory.getLogger(ControlPlane.class);
 
@@ -58,7 +62,7 @@ class ControlPlane implements SmartLifecycle {
     public void start() {
         loops = Disposables.composite(
                 every(properties.leaderRenew(), count -> renewLeadership(), leaderFailing, "리더 리스"),
-                every(ControlPlaneProperties.TICK, this::tick, tickFailing, "틱(하트비트 · 배분)"),
+                every(ControlPlaneProperties.TICK, count -> tick(), tickFailing, "틱(하트비트 · 배분)"),
                 every(properties.snapshotRefresh(), count -> refreshSnapshot(), snapshotFailing, "판정 재료 받기"));
     }
 
@@ -107,7 +111,7 @@ class ControlPlane implements SmartLifecycle {
                 .then();
     }
 
-    Mono<Void> tick(long tickCount) {
+    Mono<Void> tick() {
         long passes = idlePasses.lastSecond(redisClock.now().getEpochSecond());
         long reapAfter = properties.gatewayReapAfter().toSeconds();
         long fresh = ControlPlaneProperties.TICK.multipliedBy(2).toSeconds();
@@ -117,7 +121,7 @@ class ControlPlane implements SmartLifecycle {
                     if (fence <= 0) {
                         return Mono.empty();
                     }
-                    return round.run(fence, view, tickCount)
+                    return round.run(fence, view, rounds.incrementAndGet())
                             .doOnNext(holder::replace)
                             .onErrorResume(AllocationRound.LostLeadershipException.class, e -> {
                                 log.info("임기 {} 의 배분이 거절됐다 — 그 임기를 내려놓는다", fence);

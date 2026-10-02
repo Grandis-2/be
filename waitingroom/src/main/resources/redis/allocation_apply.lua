@@ -23,7 +23,7 @@ if round == nil or round ~= round or round < 0 or round ~= math.floor(round) the
     return redis.error_reply('회차는 0 이상 정수여야 한다: ' .. tostring(ARGV[5]))
 end
 local roundTtl = tonumber(ARGV[6])
-if roundTtl == nil or roundTtl < 1 or roundTtl ~= math.floor(roundTtl) then
+if roundTtl == nil or roundTtl ~= roundTtl or roundTtl == math.huge or roundTtl < 1 or roundTtl ~= math.floor(roundTtl) then
     return redis.error_reply('회차 기록 수명은 양의 정수여야 한다: ' .. tostring(ARGV[6]))
 end
 if fence <= 0 then

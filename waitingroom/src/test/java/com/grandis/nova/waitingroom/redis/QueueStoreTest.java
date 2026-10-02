@@ -31,6 +31,7 @@ class QueueStoreTest {
     private QueueStore queue;
     private ControlStore control;
     private Instant now;
+    private long round;
 
     @BeforeEach
     void setUp() {
@@ -48,8 +49,6 @@ class QueueStoreTest {
     private QueueStatus status(String customer) {
         return queue.status(PRODUCT, customer, now).block(WAIT);
     }
-
-    private long round;
 
     private void admit(long count) {
         control.apply(PRODUCT, count, 1, 60_000, -1, ++round).block(WAIT);

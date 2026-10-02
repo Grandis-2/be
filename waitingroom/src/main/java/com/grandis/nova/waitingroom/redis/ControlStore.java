@@ -14,6 +14,9 @@ import java.util.Map;
 @Component
 public class ControlStore {
 
+    /** 적용한 회차 기록의 수명. 한 임기가 이보다 길게 이어져도 회차는 늘기만 해 다시 막지 않는다. */
+    static final long ROUND_TTL_SEC = 86_400;
+
     private final LuaScripts scripts;
     private final ReactiveStringRedisTemplate redis;
 
@@ -66,7 +69,7 @@ public class ControlStore {
                                    long round) {
         return scripts.list(scripts.apply, RedisKeys.apply(productKey), List.of(String.valueOf(admit),
                         String.valueOf(fence), String.valueOf(fenceTtlMillis), String.valueOf(writtenMax),
-                        String.valueOf(round), String.valueOf(QueueStore.MAX_SCORE_TTL_SEC)))
+                        String.valueOf(round), String.valueOf(ROUND_TTL_SEC)))
                 .map(reply -> {
                     long entered = LuaScripts.number(reply, 1);
                     return entered < 0 ? ApplyResult.FENCED
