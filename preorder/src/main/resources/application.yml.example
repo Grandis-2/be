@@ -19,7 +19,7 @@ spring:
       # 가상 스레드라 요청이 풀 앞에서 기다린다. 기본 30s 대신 빨리 실패시킨다(ms)
       connection-timeout: 2000
   jpa:
-    # 정본은 flyway-project/migrations. docs/schema.sql은 생성된 최신 구조다.
+    # 정본은 flyway-project/migrations. 최신 구조 덤프는 bash flyway-project/verify.sh 의 build/flyway/schema.sql.
     hibernate:
       ddl-auto: validate
     properties:

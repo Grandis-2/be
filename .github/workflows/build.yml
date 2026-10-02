@@ -102,10 +102,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 스키마는 docs/schema.sql(shop · external_mock). 테스트 계정 nova/nova-local 은 여기서 만든다.
+      # 스키마는 정본(flyway-project/migrations)을 버전 순으로 그대로 적용한다. 파일 이름의 버전이 12자리 고정이라 이름순이 곧 적용 순서다.
+      # Flyway 이력 · 검증은 database 워크플로가 한다 — 여기서는 모듈 잡마다 Flyway 이미지를 받지 않으려고 mysql 로 바로 넣는다.
+      # 연결 문자셋을 utf8mb4 로 못 박는다. 클라이언트 기본이 latin1 이면 CHECK 의 문자열 상수가 _latin1 로 저장돼 Flyway 결과와 달라진다.
+      # 테스트 계정 nova/nova-local 은 여기서 만든다.
       - name: apply schema
         run: |
-          mysql -h 127.0.0.1 -uroot -proot < docs/schema.sql
+          mysql -h 127.0.0.1 -uroot -proot -e "CREATE DATABASE shop DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
+          for migration in $(ls flyway-project/migrations/V*.sql | sort); do
+            mysql -h 127.0.0.1 -uroot -proot --default-character-set=utf8mb4 shop < "$migration"
+          done
           mysql -h 127.0.0.1 -uroot -proot -e "CREATE USER 'nova'@'%' IDENTIFIED BY 'nova-local'; GRANT ALL ON shop.* TO 'nova'@'%'; GRANT ALL ON external_mock.* TO 'nova'@'%';"
 
       - uses: actions/setup-java@v4

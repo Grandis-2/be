@@ -14,7 +14,10 @@ public final class ValidationFailures {
     }
 
     public static BusinessException of(String field, String message) {
-        return new BusinessException(CommonErrorCode.VALIDATION_FAILED,
-                Map.of("violations", List.of(new ApiError.Violation(field, message))));
+        return of(List.of(new ApiError.Violation(field, message)));
+    }
+
+    public static BusinessException of(List<ApiError.Violation> violations) {
+        return new BusinessException(CommonErrorCode.VALIDATION_FAILED, Map.of("violations", violations));
     }
 }
