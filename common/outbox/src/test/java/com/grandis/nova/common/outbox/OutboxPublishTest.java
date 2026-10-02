@@ -7,6 +7,7 @@ import com.grandis.nova.common.testing.Concurrently.Outcome;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
@@ -35,10 +36,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.willAnswer;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.mockingDetails;
+import static org.mockito.Mockito.spy;
 
 /**
  * 커밋 직후 발행 · 실패 시 리스 릴레이 재발행. 전송 구현은 받은 메시지를 모으는 대역이다.
@@ -68,6 +73,12 @@ class OutboxPublishTest {
 
     @Autowired
     OutboxProperties properties;
+
+    @Autowired
+    OutboxDefinition definition;
+
+    @Autowired
+    Clock clock;
 
     @Autowired
     TransactionTemplate transactionTemplate;
@@ -402,6 +413,27 @@ class OutboxPublishTest {
         });
         assertThat(relay.relay()).as("다시 돌리면 남은 행을 보낸다").isGreaterThanOrEqualTo(2);
         assertThat(rest).allSatisfy(id -> assertThat(publishedAt(id)).isNotNull());
+    }
+
+    /** 한 행에서 DB 오류가 나 묶음이 끝나도, 남은 행은 리스가 끝날 때까지 묶이지 않고 다음 릴레이가 곧바로 가져간다. */
+    @Test
+    void 한_행의_DB_오류로_멈추면_남은_행의_리스를_푼다() {
+        Long failing = insertUnpublished("ITEM_SETTLED", false);
+        List<Long> rest = List.of(insertUnpublished("ITEM_SETTLED", false), insertUnpublished("ITEM_SETTLED", false));
+        OutboxStore failingStore = spy(store);
+        willThrow(new DataAccessResourceFailureException("db down")).given(failingStore).markPublished(eq(failing), any());
+        OutboxPublisher failingPublisher = new OutboxPublisher(failingStore, definition, transport, jsonMapper, clock,
+                OutboxMetrics.NONE);
+
+        assertThatThrownBy(() -> new OutboxRelay(failingStore, failingPublisher, properties, transactionTemplate, clock)
+                .relay()).isInstanceOf(DataAccessResourceFailureException.class);
+
+        assertThat(leaseUntil(failing)).as("보낸 행은 연장한 리스가 남아 그 사이 다시 보내지 않는다").isNotNull();
+        assertThat(rest).allSatisfy(id -> {
+            assertThat(sentOf(eventIdOf(id))).isEmpty();
+            assertThat(leaseUntil(id)).as("남은 행은 바로 다시 가져갈 수 있다").isNull();
+        });
+        jdbcTemplate.update("UPDATE it_outbox_events SET published_at = UTC_TIMESTAMP(6) WHERE id = ?", failing);
     }
 
     /** 종료 시간을 넘겨 남은 실행은 그 사이 다시 시작해도(resume) 되살아나지 않는다 — 새 실행과 나란히 돌지 않게. */

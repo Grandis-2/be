@@ -63,25 +63,43 @@ class OutboxRelay {
         int skipped = 0;
         for (int i = 0; i < rows.size(); i++) {
             if (stopping || generation.get() != started) {
-                List<Long> rest = rows.subList(i, rows.size()).stream().map(OutboxRow::id).toList();
-                log.info("아웃박스 릴레이를 멈춘다 — 보내지 않은 {}건의 리스를 푼다", store.releaseLeases(rest, lease));
+                log.info("아웃박스 릴레이를 멈춘다 — 보내지 않은 {}건의 리스를 푼다", releaseFrom(rows, i, lease));
                 break;
             }
             OutboxRow row = rows.get(i);
-            // 보내기 직전에 내 리스인지 확인하며 연장한다. 연장한 리스 동안은 다른 인스턴스가 이 행을 가져가지 못한다
-            Instant renewed = clock.instant().plus(properties.relayLease());
-            if (store.renewLease(row.id(), lease, renewed) != 1) {
-                skipped++;
-                continue;
-            }
-            if (publisher.publish(row, renewed)) {
-                published++;
+            try {
+                // 보내기 직전에 내 리스인지 확인하며 연장한다. 연장한 리스 동안은 다른 인스턴스가 이 행을 가져가지 못한다
+                Instant renewed = clock.instant().plus(properties.relayLease());
+                if (store.renewLease(row.id(), lease, renewed) != 1) {
+                    skipped++;
+                    continue;
+                }
+                if (publisher.publish(row, renewed)) {
+                    published++;
+                }
+            } catch (RuntimeException e) {
+                // DB 오류로 이 묶음을 끝낸다. 남은 행이 리스가 끝날 때까지 묶이지 않게 바로 푼다
+                try {
+                    releaseFrom(rows, i, lease);
+                } catch (RuntimeException suppressed) {
+                    e.addSuppressed(suppressed);
+                }
+                throw e;
             }
         }
         if (!rows.isEmpty()) {
             log.info("아웃박스 재발행 대상={} 성공={} 리스를 잃어 건너뜀={}", rows.size(), published, skipped);
         }
         return published;
+    }
+
+    /**
+     * i 번째부터 남은 행의 리스를 푼다. 가져갈 때 건 리스로 푸므로, 이미 연장한 행(i 번째일 수 있다)은 리스 값이 달라 그대로 남는다.
+     *
+     * @return 푼 행 수
+     */
+    private int releaseFrom(List<OutboxRow> rows, int i, Instant lease) {
+        return store.releaseLeases(rows.subList(i, rows.size()).stream().map(OutboxRow::id).toList(), lease);
     }
 
     private List<OutboxRow> claim(Instant now, Instant lease) {
