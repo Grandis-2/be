@@ -8,12 +8,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
 
 /** 보냈는데 발행 완료 표시만 실패할 때 — 그 행은 미발행으로 남아 다시 보내지고, 릴레이는 같은 묶음의 다음 행을 계속 보낸다. */
 @CatalogIntegrationTest
@@ -32,7 +34,12 @@ class OutboxMarkPublishedFailureTest {
 
         relay.relay();
 
-        assertThat(publishedAt(-401L)).as("보냈지만 표시 못 한 행 — 다시 보내질 수 있게 미발행으로 남는다").isNull();
+        verify(outboxEvents).markPublished(eq(failing), any());   // 표시 실패 경로를 실제로 탔다(보내지 않아서 남은 것이 아니다)
+        Map<String, Object> row = jdbcTemplate.queryForMap(
+                "SELECT published_at, publish_attempts, lease_until FROM catalog_outbox_events WHERE aggregate_id = -401");
+        assertThat(row.get("published_at")).as("보냈지만 표시 못 한 행 — 다시 보내질 수 있게 미발행으로 남는다").isNull();
+        assertThat(((Number) row.get("publish_attempts")).intValue()).as("실패로 기록").isEqualTo(1);
+        assertThat(row.get("lease_until")).as("자기 리스를 풀어 다음 주기에 다시 가져간다").isNull();
         assertThat(publishedAt(-402L)).as("같은 묶음의 다음 행").isNotNull();
     }
 

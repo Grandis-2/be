@@ -313,11 +313,13 @@ class ProductListApiTest {
         @Test
         @DisplayName("size 를 안 주면 20 이다")
         void defaultSizeIsTwenty() throws Exception {
-            visibleInStock("기본 크기");
+            Long productId = visibleInStock("기본 크기");
+            fixtures.stockReady(productId);   // size 를 안 주려고 perform() 을 거치지 않으니 준비를 직접 넣는다
             JsonNode page = JSON.readTree(mockMvc.perform(get("/api/v1/products").param("q", tag))
                     .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).get("data");
             assertThat(page.get("size").asInt()).isEqualTo(20);
             assertThat(page.get("page").asInt()).isEqualTo(0);
+            assertThat(ids(page.get("items"))).as("빈 목록이 아니라 실제로 상품이 실린 첫 쪽").containsExactly(productId);
         }
 
         @Test
