@@ -46,6 +46,7 @@ public class InternalPaymentAttemptController {
     public ApiResponse<ConfirmResponse> confirm(@PathVariable @Pattern(regexp = "[A-Za-z0-9_-]{6,64}") String providerOrderId,
                                                 @Valid @RequestBody ConfirmRequest request) {
         return ApiResponse.ok(ConfirmResponse.from(confirmService.confirm(new ProviderOrderId(providerOrderId),
-                request.target(), request.providerPaymentKey(), request.money(), request.startAllowed())));
+                request.target(), request.providerPaymentKey(), request.money(), request.startAllowed(),
+                request.reserves())));
     }
 }

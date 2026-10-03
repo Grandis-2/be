@@ -96,12 +96,13 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
 
     /*
      * 만료 후보 · 만료. PENDING 은 결제창을 연 행만이고 만료로 계속 빠지므로 ix_payment_tx_recoverable 의 앞부분(status)으로 찾아 거른다.
-     * created_at 은 앱 시계(UTC)다 — DB 시각과 비교하면 서버 시계 차만큼 어긋나지만, 기준(분 단위) 안의 차이다.
+     * 기준 시각은 확보 시각(reserved_at, DB 시각)이 있으면 그것, 없으면 연 시각(created_at, 앱 시계 UTC — 서버 시계 차만큼 어긋나지만
+     * 기준(분 단위) 안의 차이다).
      */
     @Query(value = """
             SELECT * FROM payment_transactions
              WHERE status = 'PENDING' AND transaction_type = 'CAPTURE'
-               AND created_at <= UTC_TIMESTAMP(6) - INTERVAL :openedMicros MICROSECOND
+               AND COALESCE(reserved_at, created_at) <= UTC_TIMESTAMP(6) - INTERVAL :openedMicros MICROSECOND
              ORDER BY id
              LIMIT :limit
             """, nativeQuery = true)
@@ -113,9 +114,18 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
             UPDATE payment_transactions
                SET status = 'EXPIRED', finished_at = :now
              WHERE id = :id AND transaction_type = 'CAPTURE' AND status = 'PENDING' AND lease_token IS NULL
-               AND created_at <= UTC_TIMESTAMP(6) - INTERVAL :openedMicros MICROSECOND
+               AND COALESCE(reserved_at, created_at) <= UTC_TIMESTAMP(6) - INTERVAL :openedMicros MICROSECOND
             """, nativeQuery = true)
     int expire(@Param("id") Long id, @Param("openedMicros") long openedMicros, @Param("now") Instant now);
+
+    /* 확보: 만료와 같은 PENDING 조건이라 둘이 겹치면 한쪽만 1행이다(행 잠금 뒤 조건을 다시 본다). */
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+            UPDATE payment_transactions
+               SET reserved_at = UTC_TIMESTAMP(6)
+             WHERE id = :id AND transaction_type = 'CAPTURE' AND status = 'PENDING' AND lease_token IS NULL
+            """, nativeQuery = true)
+    int reserve(@Param("id") Long id);
 
     /*
      * 복구 후보. 준비 조건마다 그 조건의 인덱스(ix_payment_tx_next_retry · ix_payment_tx_recoverable)를 타도록 따로 묻는다 — OR 로

@@ -142,9 +142,9 @@ class PaymentConfirmApiTest {
         // 대상 · 금액은 주문의 저장값이다(D15). 결제창 번호는 경로로, 사용자 토큰은 그대로 전달한다.
         // 승인 중으로 바꾸기 전에 결제창을 확인(시작 금지)하고, 그다음 시작한다
         InOrder calls = inOrder(paymentClient);
-        calls.verify(paymentClient).confirm(attempt, new ConfirmRequest("ORDER", order.id(), PAYMENT, TOTAL, false),
+        calls.verify(paymentClient).confirm(attempt, new ConfirmRequest("ORDER", order.id(), PAYMENT, TOTAL, false, true),
                 BearerTokens.value(SESSION));
-        calls.verify(paymentClient).confirm(attempt, new ConfirmRequest("ORDER", order.id(), PAYMENT, TOTAL, true),
+        calls.verify(paymentClient).confirm(attempt, new ConfirmRequest("ORDER", order.id(), PAYMENT, TOTAL, true, false),
                 BearerTokens.value(SESSION));
         assertThat(orderRow()).containsEntry("status", "AWAITING_CONFIRMATION")
                 .containsEntry("authorizing_provider_order_id", null);
@@ -416,7 +416,7 @@ class PaymentConfirmApiTest {
                 .andExpect(jsonPath("$.data.result").value("APPROVED"))
                 .andExpect(jsonPath("$.data.orderStatus").value("AWAITING_CONFIRMATION"));
 
-        verify(paymentClient).confirm(eq(attempt), eq(new ConfirmRequest("ORDER", order.id(), PAYMENT, TOTAL, true)),
+        verify(paymentClient).confirm(eq(attempt), eq(new ConfirmRequest("ORDER", order.id(), PAYMENT, TOTAL, true, false)),
                 any());
     }
 
@@ -433,7 +433,7 @@ class PaymentConfirmApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.result").value("PENDING"));
 
-        verify(paymentClient).confirm(eq(attempt), eq(new ConfirmRequest("ORDER", order.id(), PAYMENT, TOTAL, false)),
+        verify(paymentClient).confirm(eq(attempt), eq(new ConfirmRequest("ORDER", order.id(), PAYMENT, TOTAL, false, false)),
                 any());
         assertThat(orderRow()).containsEntry("status", "AUTHORIZING").containsEntry("authorizing_provider_order_id", attempt);
     }
@@ -456,7 +456,7 @@ class PaymentConfirmApiTest {
         confirm(attempt, TOTAL).andExpect(jsonPath("$.data.result").value("PENDING"));
 
         verify(paymentClient, times(2)).confirm(eq(attempt),
-                eq(new ConfirmRequest("ORDER", order.id(), PAYMENT, TOTAL, false)), any());
+                eq(new ConfirmRequest("ORDER", order.id(), PAYMENT, TOTAL, false, false)), any());
         assertThat(orderRow()).containsEntry("status", "AUTHORIZING").containsEntry("authorizing_provider_order_id", attempt);
     }
 
@@ -622,7 +622,7 @@ class PaymentConfirmApiTest {
     }
 
     /**
-     * payment 대역. 결제 대기 주문의 결제창 확인(시작 금지 호출)에는 "시작 전"(PENDING)으로 답하고 — payment 가 아는 결제창이다 —
+     * payment 대역. 결제창 확인(시작 금지 + 확보)에는 "시작 전"(PENDING)으로 답하고 — payment 가 아는 결제창이다 —
      * 그 밖의 호출(시작 · 승인 중 결과 회수)은 answer 대로 답한다. 결제창 확인 자체를 보는 테스트는 직접 스텁한다.
      */
     private void paymentDoes(Answer<?> answer) {
@@ -632,9 +632,9 @@ class PaymentConfirmApiTest {
     }
 
     /** request 가 null 이면 다시 스텁하는 중이다(given(mock.confirm(any()…)) 이 앞 Answer 를 null 인자로 부른다). */
-    private boolean isCheck(InvocationOnMock call) {
+    private static boolean isCheck(InvocationOnMock call) {
         ConfirmRequest request = call.getArgument(1);
-        return request != null && !request.startAllowed() && "AWAITING_PAYMENT".equals(orderRow().get("status"));
+        return request != null && request.reserve();
     }
 
     private HttpClientErrorException rejection(HttpStatus status, String code) {

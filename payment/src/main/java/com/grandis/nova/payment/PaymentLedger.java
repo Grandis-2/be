@@ -172,6 +172,19 @@ public class PaymentLedger {
     }
 
     /**
+     * 호출자가 대상을 승인 중으로 바꾸기 전에 결제창을 확보한다 — 만료 기준을 지금부터 다시 잰다. 만료와 원자적으로 겨룬다: 만료가 먼저면
+     * 0행이고 그 거래는 이미 EXPIRED 다(호출자는 지금 결과로 그것을 본다). 아무것도 결제사에 보내지 않는다.
+     *
+     * @return 확보했으면 true. 시작 전 CAPTURE 가 아니거나 그사이 시작 · 만료됐으면 false
+     */
+    public boolean reserve(PaymentTransaction seen) {
+        if (seen.expire().isEmpty()) {
+            return false;
+        }
+        return writer.reserve(seen.id()) == 1;
+    }
+
+    /**
      * 복구가 스스로 끝낼 수 없다고 멈춘다(반복 불명 상한 · 자동 확정 금지 상태). 상태는 그대로다 — 실패로 굳히지 않고 사람이 본다.
      *
      * @throws LeaseLostException 리스를 잃었다(0행)

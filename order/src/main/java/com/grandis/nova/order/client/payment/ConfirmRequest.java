@@ -11,18 +11,25 @@ import java.math.BigDecimal;
  *
  * @param amount       주문의 저장된 총액(orders.total_amount)
  * @param startAllowed false 면 payment 는 아직 시작하지 않은 결제창을 시작하지 않고 지금 결과만 돌려준다
+ * @param reserve      결제창 확인(시작 금지)과 함께 아직 시작 전인 결제창을 확보한다 — 승인 중으로 바꾸기 직전의 확인에서만
  */
 public record ConfirmRequest(String targetType, Long targetId, String paymentKey, BigDecimal amount,
-                             boolean startAllowed) {
+                             boolean startAllowed, boolean reserve) {
 
     public static ConfirmRequest of(Order order, String paymentKey, boolean startAllowed) {
         return new ConfirmRequest(CaptureRequest.ORDER, order.id(), paymentKey, order.totalAmount().amount(),
-                startAllowed);
+                startAllowed, false);
+    }
+
+    /** 승인 중으로 바꾸기 직전의 결제창 확인: 시작하지 않고 확보한다(payment 의 만료가 그 전환 사이에 끼지 않게). */
+    public static ConfirmRequest check(Order order, String paymentKey) {
+        return new ConfirmRequest(CaptureRequest.ORDER, order.id(), paymentKey, order.totalAmount().amount(),
+                false, true);
     }
 
     @Override
     public String toString() {
         return "ConfirmRequest[targetType=" + targetType + ", targetId=" + targetId + ", paymentKey=***, amount="
-                + amount + ", startAllowed=" + startAllowed + "]";
+                + amount + ", startAllowed=" + startAllowed + ", reserve=" + reserve + "]";
     }
 }

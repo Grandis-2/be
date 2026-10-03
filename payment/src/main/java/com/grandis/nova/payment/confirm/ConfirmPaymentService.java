@@ -80,6 +80,16 @@ public class ConfirmPaymentService {
      */
     public ConfirmResult confirm(ProviderOrderId providerOrderId, PaymentTarget target, ProviderPaymentKey paymentKey,
                                  Money amount, boolean startAllowed) {
+        return confirm(providerOrderId, target, paymentKey, amount, startAllowed, false);
+    }
+
+    /**
+     * @param reserve startAllowed=false 일 때만: 아직 시작 전인 결제창을 확보한다(만료 기준을 지금부터). 호출자가 대상을 승인 중으로
+     *                바꾸기 직전의 확인이다 — 확인과 그 전환 사이에 만료가 끼어 만료 결과를 대상이 먼저 받아 버리는 경합을 막는다.
+     *                확보와 만료는 같은 조건부 UPDATE 라 만료가 이겼으면 지금 결과가 그것(DECLINED · PAYMENT_EXPIRED)이다
+     */
+    public ConfirmResult confirm(ProviderOrderId providerOrderId, PaymentTarget target, ProviderPaymentKey paymentKey,
+                                 Money amount, boolean startAllowed, boolean reserve) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("결제 승인은 트랜잭션 밖에서 불러야 한다 — 결제사 호출 동안 잠금을 쥐지 않게");
         }
@@ -92,6 +102,9 @@ public class ConfirmPaymentService {
         if (!startAllowed) {
             if (!seen.target().equals(target)) {
                 throw new BusinessException(PaymentErrorCode.PAYMENT_ATTEMPT_NOT_FOUND);
+            }
+            if (reserve) {
+                writeTransaction.execute(status -> ledger.reserve(seen));
             }
             return current(seen.id());
         }

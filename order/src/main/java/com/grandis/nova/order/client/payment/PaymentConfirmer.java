@@ -79,8 +79,10 @@ public class PaymentConfirmer {
     }
 
     /**
-     * 주문을 승인 중으로 바꾸기 전에, payment 가 이 결제창을 이 주문의 것으로 아는지 묻는다(시작 금지로 부르므로 아무것도 시작하지 않는다).
-     * 승인 중 주문의 결제창 번호를 payment 가 모르면, 응답을 잃었을 때 payment 의 만료 · 복구가 그 주문을 풀지 못해 승인 중에 갇힌다.
+     * 주문을 승인 중으로 바꾸기 전에, payment 가 이 결제창을 이 주문의 것으로 아는지 묻고 결제창을 확보한다(시작 금지 + 확보 — 아무것도
+     * 시작하지 않는다). 승인 중 주문의 결제창 번호를 payment 가 모르면, 응답을 잃었을 때 payment 의 만료 · 복구가 그 주문을 풀지 못해
+     * 승인 중에 갇힌다. 확보는 payment 의 만료를 지금부터 다시 재게 해, 이 확인과 승인 중 전환 사이에 만료가 끼어 그 결과(이벤트)가
+     * 주문이 승인 중이 되기 전에 도착해 버려지는 경합을 막는다 — 만료가 먼저였으면 이 확인이 거절(만료)로 본다.
      *
      * 확인이 시작하지 않으므로 답을 받지 못한 경우(연결 실패 · 읽기 기한 · 5xx · 계약과 다른 200)는 모두 "이번 요청 실패"다 —
      * {@link #confirm} 과 달리 확인 중(Pending)으로 두지 않는다.
@@ -90,7 +92,7 @@ public class PaymentConfirmer {
     public PaymentConfirmation check(Order order, String providerOrderId, String paymentKey, String sessionToken) {
         ApiResponse<ConfirmReply> body;
         try {
-            body = client.confirm(providerOrderId, ConfirmRequest.of(order, paymentKey, false), authorization(sessionToken));
+            body = client.confirm(providerOrderId, ConfirmRequest.check(order, paymentKey), authorization(sessionToken));
         } catch (HttpClientErrorException.Unauthorized e) {
             log.error("{} {} 전달 토큰 거절(401) — payment 의 JWKS · jwt 설정 · 폐기 조회 확인 orderId={}",
                     DEPENDENCY, CHECK, order.id());

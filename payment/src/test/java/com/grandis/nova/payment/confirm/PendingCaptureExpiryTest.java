@@ -151,6 +151,24 @@ class PendingCaptureExpiryTest {
         assertThat(settledEvents(target)).isEqualTo(expired ? 1 : 0);
     }
 
+    // 확보와 만료가 겹치면 한쪽만 된다. 확보가 이기면 만료되지 않고(기준을 다시 잰다), 만료가 이기면 확보는 0행이다
+    @RepeatedTest(5)
+    void reserveAndExpireRacingLeaveOneOutcome() throws Exception {
+        PaymentTransaction pending = open(target);
+        age(pending, PAST_DUE);
+
+        List<Concurrently.Outcome<Object>> outcomes = Concurrently.run(2, i -> () -> i == 0
+                ? transactionTemplate.execute(s -> ledger.reserve(pending))
+                : settlement.expire(pending, PendingCaptureExpiry.OPENED_FOR));
+
+        assertThat(outcomes).allSatisfy(o -> assertThat(o.error()).isNull());
+        boolean reserved = (Boolean) outcomes.get(0).value();
+        boolean expired = ((Optional<?>) outcomes.get(1).value()).isPresent();
+        assertThat(reserved).isNotEqualTo(expired);
+        assertThat(transactions.findById(pending.id()).orElseThrow().status())
+                .isEqualTo(reserved ? TransactionStatus.PENDING : TransactionStatus.EXPIRED);
+    }
+
     private PaymentTransaction open(PaymentTarget of) {
         return transactionTemplate.execute(s -> ledger.openCapture(of, AMOUNT));
     }

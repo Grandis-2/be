@@ -37,6 +37,7 @@ import org.springframework.test.web.servlet.ResultActions;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -424,6 +425,54 @@ class PaymentConfirmApiTest {
         assertThat(statusOf(opened)).isEqualTo("EXPIRED");
     }
 
+    /*
+     * 동시성: 호출자가 승인 중으로 바꾸기 직전의 확인(reserve)은 결제창을 확보해 만료를 뒤로 민다 — 확인과 그 전환 사이에 만료가 끼어
+     * 만료 결과가 대상에 먼저 도착해 버려지는 경합을 막는다. 만료가 먼저였으면 확인이 그것을 본다.
+     */
+    @Test
+    void reservingCheckPostponesExpiry() throws Exception {
+        ageCreatedAt(PendingCaptureExpiry.OPENED_FOR.plusMinutes(1));
+
+        reserveCheck(opened, target)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.result").value("PENDING"));
+        expiry.expireDue();
+
+        assertThat(statusOf(opened)).isEqualTo("PENDING");
+        assertThat(settledEvents()).isZero();
+    }
+
+    @Test
+    void reservingCheckAfterExpirySeesExpired() throws Exception {
+        ageCreatedAt(PendingCaptureExpiry.OPENED_FOR.plusMinutes(1));
+        expiry.expireDue();
+
+        reserveCheck(opened, target)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.result").value("DECLINED"))
+                .andExpect(jsonPath("$.data.declineReason").value("PAYMENT_EXPIRED"));
+    }
+
+    // 결과 회수(reserve 없음)는 결제창을 확보하지 않는다 — 결제할 수 없게 된 주문의 재요청이 만료를 미루지 않게
+    @Test
+    void recoverOnlyDoesNotPostponeExpiry() throws Exception {
+        ageCreatedAt(PendingCaptureExpiry.OPENED_FOR.plusMinutes(1));
+
+        recoverOnly(opened, target).andExpect(jsonPath("$.data.result").value("PENDING"));
+        expiry.expireDue();
+
+        assertThat(statusOf(opened)).isEqualTo("EXPIRED");
+    }
+
+    @Test
+    void reserveWithStartAllowedIsRejected() throws Exception {
+        perform(opened.providerOrderId().value(), jsonMapper.writeValueAsString(Map.of("targetType", "ORDER",
+                "targetId", target.id(), "paymentKey", paymentKey, "amount", AMOUNT, "startAllowed", true,
+                "reserve", true)))
+                .andExpect(status().isBadRequest());
+        assertNotStarted();
+    }
+
     @Test
     void recoverOnlyForOtherTargetIsNotFound() throws Exception {
         recoverOnly(opened, PaymentFixtures.newOrderTarget())
@@ -466,6 +515,17 @@ class PaymentConfirmApiTest {
 
     private ResultActions recoverOnly(PaymentTransaction attempt, PaymentTarget as) throws Exception {
         return perform(attempt.providerOrderId().value(), body(as.type().name(), as.id(), paymentKey, AMOUNT, false));
+    }
+
+    private ResultActions reserveCheck(PaymentTransaction attempt, PaymentTarget as) throws Exception {
+        return perform(attempt.providerOrderId().value(), jsonMapper.writeValueAsString(Map.of("targetType",
+                as.type().name(), "targetId", as.id(), "paymentKey", paymentKey, "amount", AMOUNT, "startAllowed", false,
+                "reserve", true)));
+    }
+
+    private void ageCreatedAt(Duration age) {
+        jdbcTemplate.update("UPDATE payment_transactions SET created_at = UTC_TIMESTAMP(6) - INTERVAL ? SECOND WHERE id = ?",
+                age.toSeconds(), opened.id());
     }
 
     private ResultActions perform(String providerOrderId, String json) throws Exception {

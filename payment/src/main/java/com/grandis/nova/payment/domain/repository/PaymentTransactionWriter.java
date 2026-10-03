@@ -61,10 +61,17 @@ public interface PaymentTransactionWriter {
     int recordError(Long transactionId, LeaseToken lease, ProviderError error);
 
     /**
-     * 만료: 한 번도 보내지 않은 CAPTURE(PENDING · 리스 없음)이고 연 지 openedFor 가 지났을 때만(DB 시각) EXPIRED 로, 끝난 시각을 적는다.
+     * 만료: 한 번도 보내지 않은 CAPTURE(PENDING · 리스 없음)이고 연(확보한) 지 openedFor 가 지났을 때만(DB 시각) EXPIRED 로, 끝난
+     * 시각을 적는다.
      * 시작(start)과 같은 PENDING 조건이라 둘이 겹치면 한쪽만 1행이다.
      */
     int expire(Long transactionId, Duration openedFor, Instant now);
+
+    /**
+     * 확보: 한 번도 보내지 않은 CAPTURE(PENDING · 리스 없음)에 확보 시각(DB 시각)을 적는다 — 만료 기준이 그 시각부터 다시 잰다.
+     * 만료와 같은 PENDING 조건이라 겹치면 한쪽만 1행이다.
+     */
+    int reserve(Long transactionId);
 
     /**
      * 에스컬레이션: 리스를 쥔 작업자가 스스로 끝낼 수 없다고 판단했다. 상태 · 리스는 그대로 두고 시각 · 마지막 오류를 적는다 —

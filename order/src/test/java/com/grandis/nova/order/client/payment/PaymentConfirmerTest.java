@@ -83,7 +83,7 @@ class PaymentConfirmerTest {
                 .andExpect(request -> assertThat(BearerTokens.parse(request.getHeaders().getFirst(BearerTokens.HEADER)))
                         .contains(SESSION))
                 .andExpect(content().json("""
-                        {"targetType":"ORDER","targetId":81,"paymentKey":"%s","amount":1250000,"startAllowed":true}
+                        {"targetType":"ORDER","targetId":81,"paymentKey":"%s","amount":1250000,"startAllowed":true,"reserve":false}
                         """.formatted(PAYMENT), JsonCompareMode.STRICT))
                 .andRespond(reply("APPROVED", null));
 
@@ -105,7 +105,7 @@ class PaymentConfirmerTest {
     @Test
     void recoverOnlySendsStartNotAllowed() {
         server.expect(requestTo(CONFIRM_URL))
-                .andExpect(content().json("{\"startAllowed\":false}", JsonCompareMode.LENIENT))
+                .andExpect(content().json("{\"startAllowed\":false,\"reserve\":false}", JsonCompareMode.LENIENT))
                 .andRespond(reply("PENDING", null));
 
         assertThat(confirmer.confirm(ORDER, PROVIDER_ORDER_ID, PAYMENT, SESSION, false))
@@ -214,10 +214,11 @@ class PaymentConfirmerTest {
 
     // ── 결제창 확인(승인 중으로 바꾸기 전): 시작하지 않으므로 답이 없으면 늘 "이번 요청 실패" ───────────────
 
+    // 확인은 시작 금지 + 결제창 확보다 — payment 의 만료가 확인과 승인 중 전환 사이에 끼지 않게
     @Test
     void checkSendsStartNotAllowedAndReadsState() {
         server.expect(requestTo(CONFIRM_URL))
-                .andExpect(content().json("{\"startAllowed\":false}", JsonCompareMode.LENIENT))
+                .andExpect(content().json("{\"startAllowed\":false,\"reserve\":true}", JsonCompareMode.LENIENT))
                 .andRespond(reply("PENDING", null));
         server.expect(requestTo(CONFIRM_URL)).andRespond(reply("DECLINED", "PAYMENT_EXPIRED"));
 

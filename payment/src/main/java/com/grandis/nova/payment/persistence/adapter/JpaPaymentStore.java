@@ -112,6 +112,11 @@ class JpaPaymentStore implements PaymentTransactionReader, PaymentTransactionWri
     }
 
     @Override
+    public int reserve(Long transactionId) {
+        return detachAfter(transactionId, transactions.reserve(transactionId));
+    }
+
+    @Override
     public int escalate(Long transactionId, LeaseToken lease, ProviderError error, Instant now) {
         return detachAfter(transactionId, transactions.escalate(transactionId, lease.value(), error.code(),
                 error.message(), now));
