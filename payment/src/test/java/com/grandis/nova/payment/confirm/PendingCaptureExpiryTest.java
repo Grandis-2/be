@@ -151,6 +151,23 @@ class PendingCaptureExpiryTest {
         assertThat(settledEvents(target)).isEqualTo(expired ? 1 : 0);
     }
 
+    // 확보는 만료를 미룰 뿐 없애지 않는다 — 확보한 결제창도 확보 시각부터 기준이 지나면 만료되고 거절이 한 번 간다
+    @Test
+    void reservedCaptureStillExpiresAfterReservation() {
+        PaymentTransaction pending = open(target);
+        Boolean reserved = transactionTemplate.execute(s -> ledger.reserve(pending));
+        assertThat(reserved).isTrue();
+        expiry.expireDue();
+        assertThat(transactions.findById(pending.id()).orElseThrow().status()).isEqualTo(TransactionStatus.PENDING);
+
+        jdbcTemplate.update("UPDATE payment_transactions SET reserved_at = UTC_TIMESTAMP(6) - INTERVAL ? SECOND WHERE id = ?",
+                PAST_DUE.toSeconds(), pending.id());
+        expiry.expireDue();
+
+        assertThat(transactions.findById(pending.id()).orElseThrow().status()).isEqualTo(TransactionStatus.EXPIRED);
+        assertThat(settledEvents(target)).isEqualTo(1);
+    }
+
     // 확보와 만료가 겹치면 한쪽만 된다. 확보가 이기면 만료되지 않고(기준을 다시 잰다), 만료가 이기면 확보는 0행이다
     @RepeatedTest(5)
     void reserveAndExpireRacingLeaveOneOutcome() throws Exception {

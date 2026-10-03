@@ -13,6 +13,7 @@
 -- reserved_at: 호출자(order)가 승인 중으로 바꾸기 전에 결제창을 확인하며 확보한 시각(DB 시각). 만료 기준은
 --     COALESCE(reserved_at, created_at) 이다. 확보와 만료는 같은 PENDING 조건부 UPDATE 라 한쪽만 이긴다 — 만료가 이기면 확인이
 --     만료를 보고 호출자는 승인 중으로 가지 않고, 확보가 이기면 그 뒤 만료(이벤트)는 호출자가 승인 중이 된 뒤에야 온다.
+--     만료가 있는 CAPTURE 에만 있다(ck_payment_tx_reserved).
 -- 기존 행: 모두 이 규칙을 이미 만족한다(새 상태 · 새 칸이 없으므로). 배포: CHECK 교체 · 추가는 기존 행을 검사하므로
 --     ALGORITHM=COPY 다(표 복사 · 그동안 쓰기 막힘). 지금 크기면 짧다 — 큰 표가 된 뒤라면 쓰기가 적은 때에 돌린다.
 
@@ -28,4 +29,6 @@ ALTER TABLE shop.payment_transactions
     ADD CONSTRAINT ck_payment_tx_started_key
         CHECK (status IN ('PENDING','EXPIRED') OR provider_payment_key IS NOT NULL),
     ADD CONSTRAINT ck_payment_tx_escalated
-        CHECK (escalated_at IS NULL OR status NOT IN ('PENDING','EXPIRED'));
+        CHECK (escalated_at IS NULL OR status NOT IN ('PENDING','EXPIRED')),
+    ADD CONSTRAINT ck_payment_tx_reserved
+        CHECK (reserved_at IS NULL OR transaction_type = 'CAPTURE');
