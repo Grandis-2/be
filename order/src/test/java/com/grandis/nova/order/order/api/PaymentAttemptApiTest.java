@@ -194,7 +194,7 @@ class PaymentAttemptApiTest {
                 .containsEntry("to_status", "CANCELED")
                 .containsEntry("actor", "SYSTEM")
                 .containsEntry("reason", "PREORDER_CANCELED");
-        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM outbox_events WHERE aggregate_id = ?",
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM order_outbox_events WHERE aggregate_id = ?",
                 Integer.class, preorderId)).isZero();
         verifyNoInteractions(paymentClient);
     }

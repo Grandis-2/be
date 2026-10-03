@@ -1,5 +1,6 @@
 package com.grandis.nova.payment.config;
 
+import com.grandis.nova.payment.domain.model.PaymentTransaction;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -26,12 +27,16 @@ class TossHttpSettingsVerifierTest {
         assertThatCode(() -> TossHttpSettingsVerifier.verify(valid())).doesNotThrowAnyException();
     }
 
-    // 리스(70s)와 딱 맞는 합은 통과한다
+    // 예산은 결제 원장의 리스 하나를 따른다(D12) — 딱 맞으면 통과, 1초 넘으면 실패
     @Test
-    void sumEqualToLeasePasses() {
-        MockEnvironment environment = valid().withProperty("spring.http.serviceclient.toss.read-timeout", "67s");
+    void budgetFollowsLedgerLease() {
+        long read = PaymentTransaction.LEASE.toSeconds() - 3;
+        MockEnvironment fits = valid().withProperty("spring.http.serviceclient.toss.read-timeout", read + "s");
+        MockEnvironment over = valid().withProperty("spring.http.serviceclient.toss.read-timeout", (read + 1) + "s");
 
-        assertThatCode(() -> TossHttpSettingsVerifier.verify(environment)).doesNotThrowAnyException();
+        assertThatCode(() -> TossHttpSettingsVerifier.verify(fits)).doesNotThrowAnyException();
+        assertThatThrownBy(() -> TossHttpSettingsVerifier.verify(over))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("리스");
     }
 
     @Test

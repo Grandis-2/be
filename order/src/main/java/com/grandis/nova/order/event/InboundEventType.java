@@ -7,5 +7,7 @@ package com.grandis.nova.order.event;
 public enum InboundEventType {
 
     /** preorder: 예약 취소를 시작했다. 주문을 정리하고 결과를 돌려준다. */
-    PREORDER_CANCEL_REQUESTED
+    PREORDER_CANCEL_REQUESTED,
+    /** payment: 주문 결제가 확정됐다(승인 · 거절). 승인 API 의 동기 응답과 같은 전이를 멱등으로 반영한다. */
+    ORDER_PAYMENT_SETTLED
 }

@@ -103,12 +103,18 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     @Override
-    public int changeStatus(Long orderId, OrderStatus from, OrderStatus to, Instant now) {
-        int updated = orders.changeStatus(orderId, from, to, now);
+    public int changeStatus(Long orderId, OrderStatus from, OrderStatus to, String authorizingProviderOrderId,
+                            Instant now) {
+        int updated = orders.changeStatus(orderId, from, to, authorizingProviderOrderId, now);
         // 이 주문을 이미 읽어 두었다면 옛 상태를 들고 있다. 그 하나만 떼어내 다음 조회가 DB 에서 읽게 한다.
         // getReference 는 관리 중인 엔티티가 있으면 그것을, 없으면 프록시를 돌려줄 뿐 SELECT 하지 않는다.
         entityManager.detach(entityManager.getReference(OrderJpaEntity.class, orderId));
         return updated;
+    }
+
+    @Override
+    public Optional<String> authorizingProviderOrderId(Long orderId) {
+        return orders.findAuthorizingProviderOrderId(orderId);
     }
 
     @Override

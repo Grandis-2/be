@@ -63,6 +63,7 @@ public record PaymentTransaction(
     /**
      * 선점 한 번의 길이(D12): 연결 3초 + 읽기 60초 + 여유 7초. 짧아도 정확성은 안전하다 — 같은 멱등 키 재전송과
      * 리스 조건부 반영이 막는다. 대가는 중복 호출뿐이다. 길면 서버가 죽었을 때 복구가 늦다.
+     * 토스 호출 시간 예산(연결 + 읽기)은 기동 때 이 값 이하인지 확인한다(config.TossHttpSettingsVerifier).
      */
     public static final Duration LEASE = Duration.ofSeconds(70);
 

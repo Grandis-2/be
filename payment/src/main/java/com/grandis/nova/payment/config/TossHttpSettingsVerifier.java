@@ -1,6 +1,7 @@
 package com.grandis.nova.payment.config;
 
 import com.grandis.nova.payment.client.toss.TossAuthorization;
+import com.grandis.nova.payment.domain.model.PaymentTransaction;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.http.client.HttpRedirects;
 import org.springframework.boot.http.client.autoconfigure.HttpClientProperties;
@@ -25,11 +26,8 @@ import java.time.Duration;
 final class TossHttpSettingsVerifier {
 
     static final String PREFIX = "spring.http.serviceclient." + TossAuthorization.GROUP;
-    /**
-     * 결제 시도 리스(D12, 70초). 호출 한 번이 이보다 길면 리스가 끝난 뒤 복구 워커가 같은 요청을 또 보낸다.
-     * 리스 값의 주인은 결제 원장(NV-99)이다 — 클라이언트 설정이 원장을 모르게 여기 따로 두고, 둘이 어긋나면 NV-101 이 맞춘다.
-     */
-    static final Duration LEASE = Duration.ofSeconds(70);
+    /** 결제 거래 리스(D12). 호출 한 번이 이보다 길면 리스가 끝난 뒤 복구 워커가 같은 요청을 또 보낸다. */
+    private static final Duration LEASE = PaymentTransaction.LEASE;
 
     private TossHttpSettingsVerifier() {
     }

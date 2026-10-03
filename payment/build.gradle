@@ -11,6 +11,9 @@ dependencies {
     // 주인 확인은 호출자가 한다. 폐기 표식 조회(Redis)로 common:redis 가 따라온다 — application.yml 에 spring.data.redis 가 필요하다.
     implementation project(':common:security')
     implementation project(':common:redis')
+    // 결제 결과를 대상 서비스에 이벤트로 알린다(NV-101). 표 · 종류는 PaymentOutboxConfig 가 준다. 전송은 SQS(common:sqs).
+    implementation project(':common:outbox')
+    implementation project(':common:sqs')
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     // 토스 결제 API 는 HTTP Interface(@HttpExchange) + RestClient 로 부른다(NV-98).

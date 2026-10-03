@@ -16,6 +16,10 @@ public enum OrderErrorCode implements ErrorCode {
     ORDER_NOT_PAYABLE(409, "결제할 수 있는 주문이 아닙니다."),
     PREORDER_NOT_PAYABLE(409, "결제할 수 있는 예약이 아닙니다."),
     PAYMENT_WINDOW_EXPIRED(409, "결제 기한이 지났습니다."),
+    /** 승인 요청의 금액이 주문 총액과 다르다 · 결제창이 다른 금액으로 열렸다. 사용자 금액은 기대값이 아니라 대조 대상이다(D15). */
+    PAYMENT_AMOUNT_MISMATCH(409, "결제 금액이 주문 금액과 다릅니다."),
+    /** 없는 결제창 · 다른 주문의 결제창. */
+    PAYMENT_ATTEMPT_NOT_FOUND(404, "결제 시도를 찾을 수 없습니다."),
     /** 예약당 주문은 평생 하나라(uq_order_preorder) 취소된 주문이 있으면 다시 주문할 수 없다. */
     ORDER_ALREADY_CANCELED(409, "이미 취소된 주문이 있어 다시 주문할 수 없습니다."),
     PRODUCT_NOT_FOUND(404, "상품을 찾을 수 없습니다."),

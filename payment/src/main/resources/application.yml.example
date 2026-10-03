@@ -52,6 +52,24 @@ nova:
     toss:
       # 필수(없으면 기동 실패). 환경 변수 · 비밀 저장소로만 준다 — 이 파일 · 저장소에 값을 적지 않는다
       secret-key: ${TOSS_SECRET_KEY}
+  # SQS(AWS SDK v2). 결제 결과 이벤트를 대상 서비스 큐(order-events)로 보낸다. 로컬은 Floci(docker/floci),
+  # 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다. 이 서비스는 큐를 받지 않는다(소비기 없음)
+  sqs:
+    region: ap-northeast-2
+    endpoint: http://localhost:4566
+    api-call-timeout: 3s
+    # 논리 목적지 → 실제 큐 이름(환경마다 접두어를 붙일 때만)
+    # queues:
+    #   order-events: dev-order-events
+  # 아웃박스 발행(payment_outbox_events). transport 는 필수(없으면 기동 실패)이고 운영 값은 sqs 다.
+  # log 는 로컬 · 테스트 전용 전송이라 log-transport-allowed: true 를 함께 적어야 뜬다 — 그 줄은 이 예시에 적지 않는다
+  outbox:
+    transport: sqs
+    concurrency: 32        # 커밋 직후 발행 동시 실행 상한(가상 스레드). 넘치면 릴레이가 보낸다
+    relay-interval: 10s    # 릴레이 주기(전용 스레드에서 돈다 — @EnableScheduling 이 필요 없다)
+    relay-after: 1m        # 만든 지 이만큼 지난 미발행 행만 재발행
+    relay-batch: 100
+    relay-lease: 1m        # 전송 한 번(sqs.api-call-timeout 의 두 배)보다 길어야 한다(아니면 기동 실패)
 
 # 내부 전용. 사용자 트래픽은 order(8084) · draw 를 거쳐 들어온다.
 server:
