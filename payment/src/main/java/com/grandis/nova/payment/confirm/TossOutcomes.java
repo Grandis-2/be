@@ -2,6 +2,7 @@ package com.grandis.nova.payment.confirm;
 
 import com.grandis.nova.payment.client.toss.TossCommandResult;
 import com.grandis.nova.payment.client.toss.TossPayment;
+import com.grandis.nova.payment.client.toss.TossPaymentStatus;
 import com.grandis.nova.payment.client.toss.TossRejectionKind;
 import com.grandis.nova.payment.client.toss.UnknownReason;
 import com.grandis.nova.payment.domain.enums.DeclineReason;
@@ -17,7 +18,8 @@ import java.time.Duration;
  * 토스 승인 결과 → 결제 도메인 사건. 결제 도메인이 토스를 모르게 둘을 잇는 곳은 여기 하나다(에픽 계획서 §4).
  *
  * 결과 불명은 코드 칸에 토스 코드(없으면 우리가 붙인 코드), 문구 칸에 늘 불명 사유({@link UnknownReason}) 이름을 적는다 —
- * 복구(NV-102)가 사유로 푸는 방법(같은 키 재전송 · 조회)을 고른다. 성공 응답의 금액 · 승인 시각 이상도 조회로 푼다.
+ * 복구({@link CaptureRecovery})가 {@link #resolutionOf} 로 푸는 방법(같은 키 재전송 · 조회)을 고른다.
+ * 복구가 조회로 확정한 실패는 코드 칸에 {@code LOOKUP_<토스 상태>} 를 적는다 — 토스 코드가 아니라 조회 결과다.
  */
 final class TossOutcomes {
 
@@ -29,6 +31,8 @@ final class TossOutcomes {
     static final String AMOUNT_MISMATCH = "AMOUNT_MISMATCH";
     /** 승인 응답에 승인 시각이 없다 — 계약 위반. */
     static final String MISSING_APPROVED_AT = "MISSING_APPROVED_AT";
+    /** 조회로 알게 된 결과의 코드 접두어. 뒤에 토스 결제 상태(READY · ABORTED …)나 NOT_FOUND · 조회 오류가 붙는다. */
+    static final String LOOKUP = "LOOKUP_";
 
     private TossOutcomes() {
     }
@@ -47,6 +51,10 @@ final class TossOutcomes {
     }
 
     static DeclineReason declineReasonOf(String code) {
+        if (code.startsWith(LOOKUP)) {
+            // 조회로 확정한 실패: 승인이 실패(ABORTED)했거나, 승인 창이 지나도록 처리되지 않았다(인증 만료)
+            return code.equals(LOOKUP + TossPaymentStatus.ABORTED) ? DeclineReason.FAILED : DeclineReason.PAYMENT_EXPIRED;
+        }
         return switch (TossRejectionKind.ofConfirm(code)) {
             case BUYER -> DeclineReason.CARD_REJECTED;
             case PAYMENT_SESSION_EXPIRED -> DeclineReason.PAYMENT_EXPIRED;
@@ -54,8 +62,29 @@ final class TossOutcomes {
         };
     }
 
+    /**
+     * 마지막 결과에 적힌 불명 사유로 푸는 방법. 사유가 없으면(결과를 남기기 전에 멈췄다 — 응답을 받지 못했을 수 있다) 같은 키 재전송,
+     * 불명 사유가 아닌 기록(일시 오류 · 조회 오류 · 우리가 붙인 코드)은 조회다.
+     */
+    static UnknownReason.Resolution resolutionOf(ProviderError lastError) {
+        if (lastError == null) {
+            return UnknownReason.Resolution.RESEND;
+        }
+        for (UnknownReason reason : UnknownReason.values()) {
+            if (reason.name().equals(lastError.message())) {
+                return reason.resolution();
+            }
+        }
+        return UnknownReason.Resolution.LOOKUP;
+    }
+
+    /** 조회로 확정한 실패. */
+    static Outcome.Rejected lookedUpFailure(String what) {
+        return new Outcome.Rejected(new ProviderError(LOOKUP + what, "조회 결과로 실패 확정: " + what));
+    }
+
     /** 성공 응답도 금액 · 승인 시각이 맞아야 승인이다. 아니면 결과 불명으로 두고 사람이 본다(ERROR). */
-    private static Outcome approved(TossPayment payment, PaymentTransaction held) {
+    static Outcome approved(TossPayment payment, PaymentTransaction held) {
         if (payment.totalAmount() != held.amount().amount().longValueExact()) {
             log.error("토스 승인 금액이 거래 금액과 다르다 — 결과 불명으로 둔다 transactionId={} orderId={} totalAmount={} amount={}",
                     held.id(), held.providerOrderId().value(), payment.totalAmount(), held.amount().amount());

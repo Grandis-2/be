@@ -42,11 +42,12 @@ public record ConfirmResult(Result result, DeclineReason declineReason) {
         };
     }
 
-    /** 이미 시작된 거래의 지금 결과. 실패 확정만 사유를 싣는다(마지막 오류 코드로). */
+    /** 이미 시작됐거나 끝난 거래의 지금 결과. 실패 확정은 마지막 오류 코드로, 만료는 결제창 만료로 사유를 싣는다. */
     static ConfirmResult ofStatus(TransactionStatus status, String lastErrorCode) {
         return switch (status) {
             case SUCCEEDED -> approved();
             case FAILED -> declined(TossOutcomes.declineReasonOf(lastErrorCode));
+            case EXPIRED -> declined(DeclineReason.PAYMENT_EXPIRED);
             case PENDING, PROCESSING, RETRY_SCHEDULED -> pending();
         };
     }

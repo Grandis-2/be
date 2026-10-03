@@ -38,7 +38,7 @@ public final class PaymentMapper {
                 entity.getNextRetryAt(), valueOf(entity.getLeaseToken(), LeaseToken::new), entity.getLeaseExpiresAt(),
                 entity.getLastErrorCode() == null ? null
                         : new ProviderError(entity.getLastErrorCode(), entity.getLastErrorMessage()),
-                entity.getRequestedAt(), entity.getFinishedAt(), entity.getCreatedAt());
+                entity.getRequestedAt(), entity.getFinishedAt(), entity.getCreatedAt(), entity.getEscalatedAt());
     }
 
     public static PaymentJpaEntity toEntity(Payment payment) {

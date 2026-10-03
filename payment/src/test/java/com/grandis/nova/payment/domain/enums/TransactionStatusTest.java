@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Stream;
 
+import static com.grandis.nova.payment.domain.enums.TransactionStatus.EXPIRED;
 import static com.grandis.nova.payment.domain.enums.TransactionStatus.FAILED;
 import static com.grandis.nova.payment.domain.enums.TransactionStatus.PENDING;
 import static com.grandis.nova.payment.domain.enums.TransactionStatus.PROCESSING;
@@ -50,6 +51,12 @@ class TransactionStatusTest {
             PENDING, Map.of(REFUND, PROCESSING),
             RETRY_SCHEDULED, Map.of(CAPTURE, PROCESSING, REFUND, PROCESSING),
             PROCESSING, Map.of(CAPTURE, PROCESSING, REFUND, PROCESSING));
+
+    /**
+     * 만료. 한 번도 보내지 않은 CAPTURE 만 닫는다 — 보낸 적이 있으면 결제사가 처리했을 수 있다. REFUND PENDING 은 워커가 곧 보낸다.
+     */
+    static final Map<TransactionStatus, Map<TransactionType, TransactionStatus>> EXPIRE = Map.of(
+            PENDING, Map.of(CAPTURE, EXPIRED));
 
     /** 반영은 PROCESSING 에서만. 유형과 상관없이 같다. */
     static final Map<Class<? extends Outcome>, TransactionStatus> RESOLVE_FROM_PROCESSING = Map.of(
@@ -90,6 +97,12 @@ class TransactionStatusTest {
         assertThat(from.claim(type)).isEqualTo(expected(CLAIM, from, type));
     }
 
+    @ParameterizedTest(name = "expire {0} {1}")
+    @MethodSource("statusAndType")
+    void expire(TransactionStatus from, TransactionType type) {
+        assertThat(from.expire(type)).isEqualTo(expected(EXPIRE, from, type));
+    }
+
     @ParameterizedTest(name = "resolve {0} {1}")
     @MethodSource("statusAndOutcome")
     void resolve(TransactionStatus from, Outcome outcome) {
@@ -110,11 +123,12 @@ class TransactionStatusTest {
     @Test
     void finishedStatusesAreTerminal() {
         assertThat(TransactionStatus.values()).filteredOn(TransactionStatus::isFinished)
-                .containsExactlyInAnyOrder(SUCCEEDED, FAILED);
-        for (TransactionStatus finished : List.of(SUCCEEDED, FAILED)) {
+                .containsExactlyInAnyOrder(SUCCEEDED, FAILED, EXPIRED);
+        for (TransactionStatus finished : List.of(SUCCEEDED, FAILED, EXPIRED)) {
             for (TransactionType type : TransactionType.values()) {
                 assertThat(finished.start(type)).isEmpty();
                 assertThat(finished.claim(type)).isEmpty();
+                assertThat(finished.expire(type)).isEmpty();
             }
             OUTCOMES.forEach(o -> assertThat(finished.resolve(o)).isEmpty());
         }

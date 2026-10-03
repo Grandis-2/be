@@ -2,6 +2,7 @@ package com.grandis.nova.payment.persistence.adapter;
 
 import com.grandis.nova.payment.domain.enums.PaymentStatus;
 import com.grandis.nova.payment.domain.enums.TransactionStatus;
+import com.grandis.nova.payment.domain.enums.TransactionType;
 import com.grandis.nova.payment.domain.model.Payment;
 import com.grandis.nova.payment.domain.model.PaymentTransaction;
 import com.grandis.nova.payment.domain.repository.PaymentReader;
@@ -12,6 +13,7 @@ import com.grandis.nova.payment.persistence.entity.PaymentTransactionJpaEntity;
 import com.grandis.nova.payment.persistence.mapper.PaymentMapper;
 import com.grandis.nova.payment.persistence.repository.PaymentJpaRepository;
 import com.grandis.nova.payment.persistence.repository.PaymentTransactionJpaRepository;
+import com.grandis.nova.payment.vo.IdempotencyKey;
 import com.grandis.nova.payment.vo.LeaseToken;
 import com.grandis.nova.payment.vo.PaymentTarget;
 import com.grandis.nova.payment.vo.ProviderError;
@@ -102,6 +104,42 @@ class JpaPaymentStore implements PaymentTransactionReader, PaymentTransactionWri
     public int recordError(Long transactionId, LeaseToken lease, ProviderError error) {
         return detachAfter(transactionId, transactions.recordError(transactionId, lease.value(), error.code(),
                 error.message()));
+    }
+
+    @Override
+    public int expire(Long transactionId, Duration openedFor, Instant now) {
+        return detachAfter(transactionId, transactions.expire(transactionId, micros(openedFor), now));
+    }
+
+    @Override
+    public int reserve(Long transactionId) {
+        return detachAfter(transactionId, transactions.reserve(transactionId));
+    }
+
+    @Override
+    public int escalate(Long transactionId, LeaseToken lease, ProviderError error, Instant now) {
+        return detachAfter(transactionId, transactions.escalate(transactionId, lease.value(), error.code(),
+                error.message(), now));
+    }
+
+    @Override
+    public int rotateIdempotencyKey(Long transactionId, LeaseToken lease, IdempotencyKey key, Duration leaseFor) {
+        return detachAfter(transactionId, transactions.rotateIdempotencyKey(transactionId, lease.value(), key.value(),
+                micros(leaseFor)));
+    }
+
+    @Override
+    public List<PaymentTransaction> findExpirableCaptures(Duration openedFor, int limit) {
+        return transactions.findExpirableCaptures(micros(openedFor), limit).stream()
+                .map(PaymentMapper::toDomain).toList();
+    }
+
+    @Override
+    public Optional<PaymentTransaction> lockNextRecoverable(TransactionType type) {
+        Optional<PaymentTransactionJpaEntity> next = transactions.lockNextRetryDue(type.name())
+                .or(() -> transactions.lockNextLeaseExpired(type.name()))
+                .or(() -> type == TransactionType.REFUND ? transactions.lockNextPendingRefund() : Optional.empty());
+        return next.map(PaymentMapper::toDomain);
     }
 
     @Override

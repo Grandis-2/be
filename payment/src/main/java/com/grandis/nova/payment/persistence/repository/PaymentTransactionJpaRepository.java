@@ -48,7 +48,7 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
                SET status = 'PROCESSING', next_retry_at = NULL, requested_at = COALESCE(requested_at, :now),
                    attempt_count = attempt_count + 1,
                    lease_token = :lease, lease_expires_at = UTC_TIMESTAMP(6) + INTERVAL :leaseMicros MICROSECOND
-             WHERE id = :id AND status = :seenStatus AND lease_token <=> :seenLease
+             WHERE id = :id AND status = :seenStatus AND lease_token <=> :seenLease AND escalated_at IS NULL
                AND (   (status = 'PENDING' AND transaction_type = 'REFUND')
                     OR (status = 'RETRY_SCHEDULED' AND next_retry_at <= UTC_TIMESTAMP(6))
                     OR (status = 'PROCESSING' AND lease_expires_at <= UTC_TIMESTAMP(6)))
@@ -93,4 +93,97 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
             """, nativeQuery = true)
     int recordError(@Param("id") Long id, @Param("lease") String lease, @Param("errorCode") String errorCode,
                     @Param("errorMessage") String errorMessage);
+
+    /*
+     * 만료 후보 · 만료. PENDING 은 결제창을 연 행만이고 만료로 계속 빠지므로 ix_payment_tx_recoverable 의 앞부분(status)으로 찾아 거른다.
+     * 기준 시각은 확보 시각(reserved_at, DB 시각)이 있으면 그것, 없으면 연 시각(created_at, 앱 시계 UTC — 서버 시계 차만큼 어긋나지만
+     * 기준(분 단위) 안의 차이다).
+     */
+    @Query(value = """
+            SELECT * FROM payment_transactions
+             WHERE status = 'PENDING' AND transaction_type = 'CAPTURE'
+               AND COALESCE(reserved_at, created_at) <= UTC_TIMESTAMP(6) - INTERVAL :openedMicros MICROSECOND
+             ORDER BY id
+             LIMIT :limit
+            """, nativeQuery = true)
+    List<PaymentTransactionJpaEntity> findExpirableCaptures(@Param("openedMicros") long openedMicros,
+                                                            @Param("limit") int limit);
+
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+            UPDATE payment_transactions
+               SET status = 'EXPIRED', finished_at = :now
+             WHERE id = :id AND transaction_type = 'CAPTURE' AND status = 'PENDING' AND lease_token IS NULL
+               AND COALESCE(reserved_at, created_at) <= UTC_TIMESTAMP(6) - INTERVAL :openedMicros MICROSECOND
+            """, nativeQuery = true)
+    int expire(@Param("id") Long id, @Param("openedMicros") long openedMicros, @Param("now") Instant now);
+
+    /* 확보: 만료와 같은 PENDING 조건이라 둘이 겹치면 한쪽만 1행이다(행 잠금 뒤 조건을 다시 본다). */
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+            UPDATE payment_transactions
+               SET reserved_at = UTC_TIMESTAMP(6)
+             WHERE id = :id AND transaction_type = 'CAPTURE' AND status = 'PENDING' AND lease_token IS NULL
+            """, nativeQuery = true)
+    int reserve(@Param("id") Long id);
+
+    /*
+     * 복구 후보. 준비 조건마다 그 조건의 인덱스(ix_payment_tx_next_retry · ix_payment_tx_recoverable)를 타도록 따로 묻는다 — OR 로
+     * 묶으면 표 전체를 훑는다. 에스컬레이션은 PROCESSING 에서만 일어나므로 리스 만료 쪽 인덱스가 escalated_at 을 품어, 에스컬레이션된
+     * 행을 범위 밖에 둔다.
+     */
+    @Query(value = """
+            SELECT * FROM payment_transactions
+             WHERE status = 'RETRY_SCHEDULED' AND next_retry_at <= UTC_TIMESTAMP(6)
+               AND transaction_type = :type AND escalated_at IS NULL
+             ORDER BY next_retry_at
+             LIMIT 1
+               FOR UPDATE SKIP LOCKED
+            """, nativeQuery = true)
+    Optional<PaymentTransactionJpaEntity> lockNextRetryDue(@Param("type") String type);
+
+    @Query(value = """
+            SELECT * FROM payment_transactions
+             WHERE status = 'PROCESSING' AND escalated_at IS NULL AND lease_expires_at <= UTC_TIMESTAMP(6)
+               AND transaction_type = :type
+             ORDER BY lease_expires_at
+             LIMIT 1
+               FOR UPDATE SKIP LOCKED
+            """, nativeQuery = true)
+    Optional<PaymentTransactionJpaEntity> lockNextLeaseExpired(@Param("type") String type);
+
+    @Query(value = """
+            SELECT * FROM payment_transactions
+             WHERE status = 'PENDING' AND transaction_type = 'REFUND'
+             ORDER BY id
+             LIMIT 1
+               FOR UPDATE SKIP LOCKED
+            """, nativeQuery = true)
+    Optional<PaymentTransactionJpaEntity> lockNextPendingRefund();
+
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+            UPDATE payment_transactions
+               SET escalated_at = :now, last_error_code = :errorCode, last_error_message = :errorMessage
+             WHERE id = :id AND status = 'PROCESSING' AND lease_token = :lease
+               AND lease_expires_at > UTC_TIMESTAMP(6)
+            """, nativeQuery = true)
+    int escalate(@Param("id") Long id, @Param("lease") String lease, @Param("errorCode") String errorCode,
+                 @Param("errorMessage") String errorMessage, @Param("now") Instant now);
+
+    /*
+     * 키 교체는 곧 새 키로 보낸다는 뜻이다. 리스를 새로 잡아 그 전송 하나가 리스 안에 들게 하고(조회에 쓴 시간 때문에 다른 작업자가 집지
+     * 않게), 마지막 오류를 지워 교체 뒤 멈추면 다음 작업자가 "응답 못 받음 → 같은(새) 키 재전송"으로 이어 가게 한다 — 옛 오류가 남으면
+     * 조회 → 또 교체로 가서 아직 진행 중일 수 있는 새 키 요청과 겹친다.
+     */
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+            UPDATE payment_transactions
+               SET idempotency_key = :idempotencyKey, last_error_code = NULL, last_error_message = NULL,
+                   lease_expires_at = UTC_TIMESTAMP(6) + INTERVAL :leaseMicros MICROSECOND
+             WHERE id = :id AND transaction_type = 'CAPTURE' AND status = 'PROCESSING' AND lease_token = :lease
+               AND lease_expires_at > UTC_TIMESTAMP(6)
+            """, nativeQuery = true)
+    int rotateIdempotencyKey(@Param("id") Long id, @Param("lease") String lease,
+                             @Param("idempotencyKey") String idempotencyKey, @Param("leaseMicros") long leaseMicros);
 }

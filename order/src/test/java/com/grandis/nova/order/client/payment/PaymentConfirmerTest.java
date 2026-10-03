@@ -83,7 +83,7 @@ class PaymentConfirmerTest {
                 .andExpect(request -> assertThat(BearerTokens.parse(request.getHeaders().getFirst(BearerTokens.HEADER)))
                         .contains(SESSION))
                 .andExpect(content().json("""
-                        {"targetType":"ORDER","targetId":81,"paymentKey":"%s","amount":1250000,"startAllowed":true}
+                        {"targetType":"ORDER","targetId":81,"paymentKey":"%s","amount":1250000,"startAllowed":true,"reserve":false}
                         """.formatted(PAYMENT), JsonCompareMode.STRICT))
                 .andRespond(reply("APPROVED", null));
 
@@ -105,7 +105,7 @@ class PaymentConfirmerTest {
     @Test
     void recoverOnlySendsStartNotAllowed() {
         server.expect(requestTo(CONFIRM_URL))
-                .andExpect(content().json("{\"startAllowed\":false}", JsonCompareMode.LENIENT))
+                .andExpect(content().json("{\"startAllowed\":false,\"reserve\":false}", JsonCompareMode.LENIENT))
                 .andRespond(reply("PENDING", null));
 
         assertThat(confirmer.confirm(ORDER, PROVIDER_ORDER_ID, PAYMENT, SESSION, false))
@@ -212,6 +212,51 @@ class PaymentConfirmerTest {
         assertThat(output.getAll()).contains("계약과 다른 응답");
     }
 
+    // ── 결제창 확인(승인 중으로 바꾸기 전): 시작하지 않으므로 답이 없으면 늘 "이번 요청 실패" ───────────────
+
+    // 확인은 시작 금지 + 결제창 확보다 — payment 의 만료가 확인과 승인 중 전환 사이에 끼지 않게
+    @Test
+    void checkSendsStartNotAllowedAndReadsState() {
+        server.expect(requestTo(CONFIRM_URL))
+                .andExpect(content().json("{\"startAllowed\":false,\"reserve\":true}", JsonCompareMode.LENIENT))
+                .andRespond(reply("PENDING", null));
+        server.expect(requestTo(CONFIRM_URL)).andRespond(reply("DECLINED", "PAYMENT_EXPIRED"));
+
+        assertThat(check()).isEqualTo(new PaymentConfirmation.Pending());
+        assertThat(check()).isEqualTo(new PaymentConfirmation.Declined(DeclineReason.PAYMENT_EXPIRED));
+        server.verify();
+    }
+
+    @Test
+    void checkOfUnknownAttemptIsNotStartable() {
+        server.expect(requestTo(CONFIRM_URL)).andRespond(rejected(HttpStatus.NOT_FOUND, "PAYMENT_ATTEMPT_NOT_FOUND"));
+
+        assertNotStartable(check(), OrderErrorCode.PAYMENT_ATTEMPT_NOT_FOUND);
+    }
+
+    // 시작 호출에서는 읽기 기한 · 5xx 가 "확인 중"이지만, 확인에서는 그렇게 두면 모르는 번호로 승인 중이 될 수 있다
+    @Test
+    void checkWithoutAnswerIsUnanswered() {
+        server.expect(requestTo(CONFIRM_URL)).andRespond(withException(new SocketTimeoutException("Read timed out")));
+        server.expect(requestTo(CONFIRM_URL)).andRespond(withException(new ConnectException("Connection refused")));
+        server.expect(requestTo(CONFIRM_URL)).andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+        server.expect(requestTo(CONFIRM_URL)).andRespond(withStatus(HttpStatus.UNAUTHORIZED));
+
+        assertUnanswered(check(), CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+        assertUnanswered(check(), CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+        assertUnanswered(check(), CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+        assertUnanswered(check(), CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+    }
+
+    @Test
+    void malformedCheckAnswerIsUnansweredIntegrationError(CapturedOutput output) {
+        server.expect(requestTo(CONFIRM_URL)).andRespond(reply("DECLINED", null));
+
+        assertThat(check()).isInstanceOfSatisfying(PaymentConfirmation.Unanswered.class, unanswered ->
+                assertThat(unanswered.failure()).isInstanceOf(IllegalStateException.class));
+        assertThat(output.getAll()).contains("계약과 다른 응답");
+    }
+
     @Test
     void requestToStringMasksPaymentKey() {
         assertThat(ConfirmRequest.of(ORDER, PAYMENT, true).toString()).doesNotContain(PAYMENT).contains("1250000");
@@ -219,6 +264,10 @@ class PaymentConfirmerTest {
 
     private PaymentConfirmation confirm() {
         return confirmer.confirm(ORDER, PROVIDER_ORDER_ID, PAYMENT, SESSION, true);
+    }
+
+    private PaymentConfirmation check() {
+        return confirmer.check(ORDER, PROVIDER_ORDER_ID, PAYMENT, SESSION);
     }
 
     private static ResponseCreator reply(String result, String declineReason) {

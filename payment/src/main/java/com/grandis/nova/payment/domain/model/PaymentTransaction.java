@@ -38,8 +38,9 @@ import java.util.Optional;
  * @param leaseToken       PROCESSING 에만
  * @param leaseExpiresAt   PROCESSING 에만
  * @param lastError        FAILED 는 반드시, 나머지는 마지막 오류가 있으면
- * @param requestedAt      처음 보낸 시각. PENDING 이면 없다
- * @param finishedAt       SUCCEEDED · FAILED 에만
+ * @param requestedAt      처음 보낸 시각. 보낸 적 없으면(PENDING · EXPIRED) 없다
+ * @param finishedAt       끝난 거래(SUCCEEDED · FAILED · EXPIRED)에만
+ * @param escalatedAt      복구가 스스로 끝낼 수 없다고 멈춘 시각. 보낸 적 있는 거래에만. 상태는 그대로다 — 사람이 본다
  */
 public record PaymentTransaction(
         Long id,
@@ -57,7 +58,8 @@ public record PaymentTransaction(
         ProviderError lastError,
         Instant requestedAt,
         Instant finishedAt,
-        Instant createdAt
+        Instant createdAt,
+        Instant escalatedAt
 ) {
 
     /**
@@ -78,14 +80,17 @@ public record PaymentTransaction(
         require((type == TransactionType.CAPTURE) == (providerOrderId != null), "결제사 주문 번호는 CAPTURE 에만 있다");
         // ck_payment_tx_refund_key
         require(type != TransactionType.REFUND || providerPaymentKey != null, "REFUND 는 결제 키가 있어야 한다");
+        boolean unsent = status == TransactionStatus.PENDING || status == TransactionStatus.EXPIRED;
         // ck_payment_tx_started_key
-        require(status == TransactionStatus.PENDING || providerPaymentKey != null, "시작한 거래는 결제 키가 있어야 한다");
+        require(unsent || providerPaymentKey != null, "시작한 거래는 결제 키가 있어야 한다");
         // ck_payment_tx_numbers (금액은 Money 가 막는다)
         require(attemptCount >= 0, "보낸 횟수는 0 이상이다");
+        // ck_payment_tx_escalated
+        require(escalatedAt == null || !unsent, "보낸 적 있는 거래만 에스컬레이션한다");
         // 여기부터는 DB 가 허용하지만 상태 머신이 만들지 않는 조합이다.
-        boolean pending = status == TransactionStatus.PENDING;
-        require(pending == (attemptCount == 0), "PENDING 만 한 번도 보내지 않았다");
-        require(pending == (requestedAt == null), "PENDING 만 보낸 시각이 없다");
+        require(unsent == (attemptCount == 0), "PENDING · EXPIRED 만 한 번도 보내지 않았다");
+        require(unsent == (requestedAt == null), "PENDING · EXPIRED 만 보낸 시각이 없다");
+        require(status != TransactionStatus.EXPIRED || type == TransactionType.CAPTURE, "CAPTURE 만 만료한다");
         require((leaseToken == null) == (leaseExpiresAt == null), "리스 표식과 만료 시각은 짝이다");
         require((status == TransactionStatus.PROCESSING) == (leaseToken != null), "PROCESSING 만 리스를 쥔다");
         require((status == TransactionStatus.RETRY_SCHEDULED) == (nextRetryAt != null),
@@ -97,7 +102,7 @@ public record PaymentTransaction(
     /** 결제창을 열 때의 새 CAPTURE. 결제사 주문 번호 · 멱등 키를 새로 발급한다(D11). */
     public static PaymentTransaction openCapture(PaymentTarget target, Money amount, Instant now) {
         return new PaymentTransaction(null, target, TransactionType.CAPTURE, ProviderOrderId.issue(), null, amount,
-                IdempotencyKey.issue(), TransactionStatus.PENDING, 0, null, null, null, null, null, null, now);
+                IdempotencyKey.issue(), TransactionStatus.PENDING, 0, null, null, null, null, null, null, now, null);
     }
 
     /**
@@ -112,7 +117,7 @@ public record PaymentTransaction(
         }
         return new PaymentTransaction(null, payment.target(), TransactionType.REFUND, null,
                 payment.providerPaymentKey(), payment.amount(), IdempotencyKey.issue(), TransactionStatus.PENDING, 0,
-                null, null, null, null, null, null, now);
+                null, null, null, null, null, null, now, null);
     }
 
     /**
@@ -133,6 +138,16 @@ public record PaymentTransaction(
             throw new PaymentAmountMismatchException(id);
         }
         return next;
+    }
+
+    /** 만료할 수 있으면 다음 상태. 기한(결제창 인증 기한)은 저장소가 DB 시각으로 본다. */
+    public Optional<TransactionStatus> expire() {
+        return status.expire(type);
+    }
+
+    /** 복구가 멈춘 거래인가. 복구 후보에서 빠지고 사람이 해소한다. */
+    public boolean isEscalated() {
+        return escalatedAt != null;
     }
 
     /** 워커가 선점할 수 있으면 다음 상태. 시각 조건(리스 만료 · 재시도 시각)은 저장소가 DB 시각으로 본다. */

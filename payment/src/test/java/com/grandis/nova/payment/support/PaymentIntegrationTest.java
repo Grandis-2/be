@@ -30,6 +30,8 @@ import java.lang.annotation.Target;
         "nova.outbox.transport=log",
         "nova.outbox.log-transport-allowed=true",
         "nova.outbox.relay-interval=1h",
+        // 주기 작업(복구 · 만료)은 끈다 — 커밋된 행을 공유하는 다른 테스트의 거래를 집어 간다. 테스트가 작업을 직접 부른다
+        "nova.payment.jobs.enabled=false",
         // 토스 가맹점 자격 증명 · 주소 · 시간 예산은 필수라(없으면 기동 실패) 운영 값으로 채운다.
         // 통합 테스트는 토스를 부르지 않는다(client.toss 테스트가 따로 본다)
         "nova.payment.toss.secret-key=integration-test-unused",

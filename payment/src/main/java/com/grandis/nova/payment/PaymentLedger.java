@@ -15,15 +15,18 @@ import com.grandis.nova.payment.domain.repository.PaymentReader;
 import com.grandis.nova.payment.domain.repository.PaymentTransactionReader;
 import com.grandis.nova.payment.domain.repository.PaymentTransactionWriter;
 import com.grandis.nova.payment.domain.repository.PaymentWriter;
+import com.grandis.nova.payment.vo.IdempotencyKey;
 import com.grandis.nova.payment.vo.LeaseToken;
 import com.grandis.nova.payment.vo.Money;
 import com.grandis.nova.payment.vo.PaymentTarget;
+import com.grandis.nova.payment.vo.ProviderError;
 import com.grandis.nova.payment.vo.ProviderPaymentKey;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 
@@ -150,6 +153,66 @@ public class PaymentLedger {
         if (outcome instanceof Outcome.Confirmed confirmed) {
             record(held, confirmed, now);
         }
+    }
+
+    /**
+     * 한 번도 보내지 않은 CAPTURE 를 만료로 닫는다(결제창 인증 기한이 지났다). 돈은 움직이지 않았다 — 결제사에 보낸 적이 없다.
+     *
+     * @param openedFor 연 지 이만큼 지났을 때만(DB 시각). 저장소가 같은 조건으로 다시 본다
+     * @return 만료한 거래. 만료할 수 없거나 아직 때가 아니거나 그사이 시작됐으면 empty
+     */
+    public Optional<PaymentTransaction> expire(PaymentTransaction seen, Duration openedFor) {
+        if (seen.expire().isEmpty()) {
+            return Optional.empty();
+        }
+        if (writer.expire(seen.id(), openedFor, clock.instant()) != 1) {
+            return Optional.empty();
+        }
+        return reader.findById(seen.id());
+    }
+
+    /**
+     * 호출자가 대상을 승인 중으로 바꾸기 전에 결제창을 확보한다 — 만료 기준을 지금부터 다시 잰다. 만료와 원자적으로 겨룬다: 만료가 먼저면
+     * 0행이고 그 거래는 이미 EXPIRED 다(호출자는 지금 결과로 그것을 본다). 아무것도 결제사에 보내지 않는다.
+     *
+     * @return 확보했으면 true. 시작 전 CAPTURE 가 아니거나 그사이 시작 · 만료됐으면 false
+     */
+    public boolean reserve(PaymentTransaction seen) {
+        if (seen.expire().isEmpty()) {
+            return false;
+        }
+        return writer.reserve(seen.id()) == 1;
+    }
+
+    /**
+     * 복구가 스스로 끝낼 수 없다고 멈춘다(반복 불명 상한 · 자동 확정 금지 상태). 상태는 그대로다 — 실패로 굳히지 않고 사람이 본다.
+     *
+     * @throws LeaseLostException 리스를 잃었다(0행)
+     */
+    public void escalate(ClaimedTransaction claimed, ProviderError error) {
+        PaymentTransaction held = claimed.transaction();
+        if (writer.escalate(held.id(), held.leaseToken(), error, clock.instant()) != 1) {
+            throw new LeaseLostException(held.id());
+        }
+    }
+
+    /**
+     * 같은 행에서 멱등 키를 바꾼다 — CAPTURE 만. 결제사가 같은 키의 재요청에 첫 응답(오류 포함)을 돌려주므로, 조회로 처리 안 됨을
+     * 확인한 뒤 다시 보낼 때 쓴다. 리스를 새로 잡고 마지막 오류를 지운다(저장소 rotateIdempotencyKey). 환불의 키 교체는 아직 정하지
+     * 않았다(NV-103).
+     *
+     * @return 새 키를 든 거래(같은 리스 표식, 새 만료 시각)
+     * @throws IllegalArgumentException CAPTURE 가 아니다
+     * @throws LeaseLostException       리스를 잃었다(0행)
+     */
+    public ClaimedTransaction rotateIdempotencyKey(ClaimedTransaction claimed) {
+        PaymentTransaction held = claimed.transaction();
+        if (held.type() != TransactionType.CAPTURE) {
+            throw new IllegalArgumentException("CAPTURE 만 멱등 키를 바꾼다: " + held);
+        }
+        int updated = writer.rotateIdempotencyKey(held.id(), held.leaseToken(), IdempotencyKey.issue(),
+                PaymentTransaction.LEASE);
+        return claimed(held.id(), updated).orElseThrow(() -> new LeaseLostException(held.id()));
     }
 
     private Optional<ClaimedTransaction> claimed(Long transactionId, int updated) {

@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.time.Instant;
 
+import static com.grandis.nova.payment.domain.enums.TransactionStatus.EXPIRED;
 import static com.grandis.nova.payment.domain.enums.TransactionStatus.FAILED;
 import static com.grandis.nova.payment.domain.enums.TransactionStatus.PENDING;
 import static com.grandis.nova.payment.domain.enums.TransactionStatus.PROCESSING;
@@ -89,14 +90,14 @@ class PaymentTransactionTest {
     @Test
     void startedTransactionHasPaymentKey() { // ck_payment_tx_started_key
         assertThatThrownBy(() -> new PaymentTransaction(1L, TARGET, CAPTURE, ProviderOrderId.issue(), null, AMOUNT,
-                IdempotencyKey.issue(), RETRY_SCHEDULED, 1, NOW, null, null, ERROR, NOW, null, NOW))
+                IdempotencyKey.issue(), RETRY_SCHEDULED, 1, NOW, null, null, ERROR, NOW, null, NOW, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void attemptCountIsNotNegative() { // ck_payment_tx_numbers
         assertThatThrownBy(() -> new PaymentTransaction(1L, TARGET, CAPTURE, ProviderOrderId.issue(), null, AMOUNT,
-                IdempotencyKey.issue(), PENDING, -1, null, null, null, null, null, null, NOW))
+                IdempotencyKey.issue(), PENDING, -1, null, null, null, null, null, null, NOW, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -105,58 +106,94 @@ class PaymentTransactionTest {
     @Test
     void processingAndOnlyProcessingHoldsLease() {
         assertThatThrownBy(() -> new PaymentTransaction(1L, TARGET, CAPTURE, ProviderOrderId.issue(), PAYMENT, AMOUNT,
-                IdempotencyKey.issue(), PROCESSING, 1, null, null, null, null, NOW, null, NOW))
+                IdempotencyKey.issue(), PROCESSING, 1, null, null, null, null, NOW, null, NOW, null))
                 .as("리스 없는 PROCESSING 은 누구도 반영하지 못한다").isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new PaymentTransaction(1L, TARGET, CAPTURE, ProviderOrderId.issue(), PAYMENT, AMOUNT,
-                IdempotencyKey.issue(), SUCCEEDED, 1, null, LeaseToken.issue(), NOW, null, NOW, NOW, NOW))
+                IdempotencyKey.issue(), SUCCEEDED, 1, null, LeaseToken.issue(), NOW, null, NOW, NOW, NOW, null))
                 .as("끝난 행에 리스가 남으면 늦은 반영을 받는다").isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new PaymentTransaction(1L, TARGET, CAPTURE, ProviderOrderId.issue(), PAYMENT, AMOUNT,
-                IdempotencyKey.issue(), PROCESSING, 1, null, LeaseToken.issue(), null, null, NOW, null, NOW))
+                IdempotencyKey.issue(), PROCESSING, 1, null, LeaseToken.issue(), null, null, NOW, null, NOW, null))
                 .as("리스 토큰과 만료 시각은 짝").isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void retryScheduledAndOnlyRetryScheduledHasNextRetryAt() {
         assertThatThrownBy(() -> new PaymentTransaction(1L, TARGET, CAPTURE, ProviderOrderId.issue(), PAYMENT, AMOUNT,
-                IdempotencyKey.issue(), RETRY_SCHEDULED, 1, null, null, null, ERROR, NOW, null, NOW))
+                IdempotencyKey.issue(), RETRY_SCHEDULED, 1, null, null, null, ERROR, NOW, null, NOW, null))
                 .as("재시도 시각 없는 RETRY_SCHEDULED 는 워커가 영영 집지 않는다")
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new PaymentTransaction(1L, TARGET, CAPTURE, ProviderOrderId.issue(), PAYMENT, AMOUNT,
-                IdempotencyKey.issue(), PROCESSING, 1, NOW, LeaseToken.issue(), NOW, null, NOW, null, NOW))
+                IdempotencyKey.issue(), PROCESSING, 1, NOW, LeaseToken.issue(), NOW, null, NOW, null, NOW, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void finishedAndOnlyFinishedHasFinishedAt() {
         assertThatThrownBy(() -> new PaymentTransaction(1L, TARGET, CAPTURE, ProviderOrderId.issue(), PAYMENT, AMOUNT,
-                IdempotencyKey.issue(), SUCCEEDED, 1, null, null, null, null, NOW, null, NOW))
+                IdempotencyKey.issue(), SUCCEEDED, 1, null, null, null, null, NOW, null, NOW, null))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new PaymentTransaction(1L, TARGET, CAPTURE, ProviderOrderId.issue(), PAYMENT, AMOUNT,
-                IdempotencyKey.issue(), RETRY_SCHEDULED, 1, NOW, null, null, ERROR, NOW, NOW, NOW))
+                IdempotencyKey.issue(), RETRY_SCHEDULED, 1, NOW, null, null, ERROR, NOW, NOW, NOW, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void failedCarriesTheConfirmedError() {
         assertThatThrownBy(() -> new PaymentTransaction(1L, TARGET, CAPTURE, ProviderOrderId.issue(), PAYMENT, AMOUNT,
-                IdempotencyKey.issue(), FAILED, 1, null, null, null, null, NOW, NOW, NOW))
+                IdempotencyKey.issue(), FAILED, 1, null, null, null, null, NOW, NOW, NOW, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void pendingHasNeverBeenSentAndStartedHasBeen() {
         assertThatThrownBy(() -> new PaymentTransaction(1L, TARGET, REFUND, null, PAYMENT, AMOUNT,
-                IdempotencyKey.issue(), PENDING, 1, null, null, null, null, null, null, NOW))
+                IdempotencyKey.issue(), PENDING, 1, null, null, null, null, null, null, NOW, null))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new PaymentTransaction(1L, TARGET, REFUND, null, PAYMENT, AMOUNT,
-                IdempotencyKey.issue(), PENDING, 0, null, null, null, null, NOW, null, NOW))
+                IdempotencyKey.issue(), PENDING, 0, null, null, null, null, NOW, null, NOW, null))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new PaymentTransaction(1L, TARGET, CAPTURE, ProviderOrderId.issue(), PAYMENT, AMOUNT,
-                IdempotencyKey.issue(), PROCESSING, 0, null, LeaseToken.issue(), NOW, null, NOW, null, NOW))
+                IdempotencyKey.issue(), PROCESSING, 0, null, LeaseToken.issue(), NOW, null, NOW, null, NOW, null))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new PaymentTransaction(1L, TARGET, CAPTURE, ProviderOrderId.issue(), PAYMENT, AMOUNT,
-                IdempotencyKey.issue(), PROCESSING, 1, null, LeaseToken.issue(), NOW, null, null, null, NOW))
+                IdempotencyKey.issue(), PROCESSING, 1, null, LeaseToken.issue(), NOW, null, null, null, NOW, null))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    // 만료는 보낸 적 없는 CAPTURE 의 종결이다 — 결제 키 · 시도 · 오류 없이 허용되고(ck_payment_tx_started_key), 끝난 시각이 있다
+    @Test
+    void expiredCaptureHasNeverBeenSent() {
+        PaymentTransaction expired = new PaymentTransaction(1L, TARGET, CAPTURE, ProviderOrderId.issue(), null, AMOUNT,
+                IdempotencyKey.issue(), EXPIRED, 0, null, null, null, null, null, NOW, NOW, null);
+
+        assertThat(expired.status().isFinished()).isTrue();
+        assertThatThrownBy(() -> new PaymentTransaction(1L, TARGET, CAPTURE, ProviderOrderId.issue(), PAYMENT, AMOUNT,
+                IdempotencyKey.issue(), EXPIRED, 1, null, null, null, null, NOW, NOW, NOW, null))
+                .as("보낸 적 있는 거래는 결제사가 처리했을 수 있어 만료로 닫지 않는다")
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PaymentTransaction(1L, TARGET, REFUND, null, PAYMENT, AMOUNT,
+                IdempotencyKey.issue(), EXPIRED, 0, null, null, null, null, null, NOW, NOW, null))
+                .as("REFUND 는 만료하지 않는다").isInstanceOf(IllegalArgumentException.class);
+    }
+
+    // 에스컬레이션은 복구가 끝내지 못한 거래의 표시다 — 보낸 적 없는 행(PENDING · EXPIRED)에는 없다(ck_payment_tx_escalated)
+    @Test
+    void onlySentTransactionIsEscalated() {
+        PaymentTransaction escalated = new PaymentTransaction(1L, TARGET, CAPTURE, ProviderOrderId.issue(), PAYMENT,
+                AMOUNT, IdempotencyKey.issue(), PROCESSING, 20, null, LeaseToken.issue(), NOW, ERROR, NOW, null, NOW, NOW);
+
+        assertThat(escalated.isEscalated()).isTrue();
+        assertThat(processing(CAPTURE).isEscalated()).isFalse();
+        assertThatThrownBy(() -> new PaymentTransaction(1L, TARGET, CAPTURE, ProviderOrderId.issue(), null, AMOUNT,
+                IdempotencyKey.issue(), PENDING, 0, null, null, null, null, null, null, NOW, NOW))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void onlyUnsentCaptureExpires() {
+        assertThat(PaymentTransaction.openCapture(TARGET, AMOUNT, NOW).expire()).contains(EXPIRED);
+        assertThat(PaymentTransaction.openRefund(SUCCEEDED_PAYMENT, NOW).expire()).isEmpty();
+        assertThat(processing(CAPTURE).expire()).isEmpty();
     }
 
     // ---- 시작 · 선점 · 반영 판정 ----
@@ -234,12 +271,12 @@ class PaymentTransactionTest {
     static PaymentTransaction processing(TransactionType type) {
         return new PaymentTransaction(1L, TARGET, type, type == CAPTURE ? ProviderOrderId.issue() : null, PAYMENT, AMOUNT,
                 IdempotencyKey.issue(), PROCESSING, 1, null, LeaseToken.issue(), NOW.plusSeconds(70), null, NOW, null,
-                NOW);
+                NOW, null);
     }
 
     private static PaymentTransaction tx(TransactionType type, ProviderOrderId providerOrderId,
                                          ProviderPaymentKey paymentKey, TransactionStatus status) {
         return new PaymentTransaction(null, TARGET, type, providerOrderId, paymentKey, AMOUNT, IdempotencyKey.issue(),
-                status, 0, null, null, null, null, null, null, NOW);
+                status, 0, null, null, null, null, null, null, NOW, null);
     }
 }
