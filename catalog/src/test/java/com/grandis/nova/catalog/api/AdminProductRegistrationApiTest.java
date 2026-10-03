@@ -407,7 +407,7 @@ class AdminProductRegistrationApiTest {
         }
 
         @Test
-        @DisplayName("배송 차수의 모양은 ① 전에 거른다 — 번호 · 시작 순번 양의 정수와 유일, 종료 ≥ 시작 또는 마지막만 null, 배송 종료 ≥ 시작")
+        @DisplayName("배송 차수의 모양은 저장 전에 거른다 — 번호 · 시작 순번 양의 정수와 유일, 종료 ≥ 시작 또는 마지막만 null, 배송 종료 ≥ 시작")
         void shipmentBatchRules() throws Exception {
             String two = """
                     "shipmentBatches": [ { "batchNumber": %s, "positionFrom": %s, "positionTo": %s, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "%s" },
@@ -422,6 +422,33 @@ class AdminProductRegistrationApiTest {
             expectValidation(register("k-" + ShopFixtures.unique(), withBatches(two.formatted(1, 1, "null", "2026-11-07", 2, 101, 200))), "shipmentBatches[0].positionTo");
             expectValidation(register("k-" + ShopFixtures.unique(), withBatches(two.formatted(1, 50, 49, "2026-11-07", 2, 101, 200))), "shipmentBatches[0].positionTo");
             expectValidation(register("k-" + ShopFixtures.unique(), withBatches(two.formatted(1, 1, 100, "2026-10-31", 2, 101, 200))), "shipmentBatches[0].estimatedShipEnd");
+        }
+
+        /**
+         * preorder 가 등록 이벤트를 받아 차수를 만들 때 거는 규칙(ShipmentBatchPlan)과 같아야 한다 — 여기서 통과한 차수를 preorder 가 거절하면
+         * 상품은 저장되고 이벤트는 DLQ 로 가 준비 전 상품만 남는다. 아래는 이전 등록 검증이 통과시키던 모양들이다.
+         */
+        @Test
+        @DisplayName("배송 차수는 preorder 의 차수 규칙과 같다 — 번호는 순서대로 1 부터, 첫 차수는 순번 1 부터, 앞 차수 끝 + 1 로 이어짐(빈틈 · 겹침 400), 상한 없는 차수는 마지막 하나")
+        void shipmentBatchesMatchPreorderPlan() throws Exception {
+            String two = """
+                    "shipmentBatches": [ { "batchNumber": %s, "positionFrom": %s, "positionTo": 100, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "2026-11-07" },
+                                         { "batchNumber": %s, "positionFrom": %s, "positionTo": null, "estimatedShipStart": "2026-11-08", "estimatedShipEnd": "2026-11-14" } ]
+                    """;
+            register("k-" + ShopFixtures.unique(), withBatches("""
+                    "shipmentBatches": [ { "batchNumber": 1, "positionFrom": 1, "positionTo": 100, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "2026-11-07" },
+                                         { "batchNumber": 2, "positionFrom": 101, "positionTo": 250, "estimatedShipStart": "2026-11-08", "estimatedShipEnd": "2026-11-14" },
+                                         { "batchNumber": 3, "positionFrom": 251, "positionTo": null, "estimatedShipStart": "2026-11-15", "estimatedShipEnd": "2026-11-21" } ]
+                    """)).andExpect(status().isCreated());
+
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches(two.formatted(1, 2, 2, 101))), "shipmentBatches[0].positionFrom");
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches(two.formatted(1, 1, 2, 150))), "shipmentBatches[1].positionFrom");
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches(two.formatted(1, 1, 2, 50))), "shipmentBatches[1].positionFrom");
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches(two.formatted(2, 1, 1, 101))), "shipmentBatches[0].batchNumber");
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches(two.formatted(1, 1, 3, 101))), "shipmentBatches[1].batchNumber");
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches("""
+                    "shipmentBatches": [ { "batchNumber": 1, "positionFrom": 1, "positionTo": 100, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "2026-11-07" } ]
+                    """)), "shipmentBatches[0].positionTo");
         }
 
         private String withBatches(String batches) {

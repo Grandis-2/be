@@ -61,7 +61,7 @@ preorder · order 의 `EventEnvelope` 와 같은 모양이다.
 1. 회차와 차수를 **한 트랜잭션에** 만든다. 따로 커밋하면 회차만 있고 차수가 없는 순간에 그 상품이 노출된다(catalog 는 회차 행으로 준비를 판정하고 `shipment_batches` 는 읽지 않는다).
 2. **이미 회차가 있으면 아무것도 바꾸지 않는다(생성 전용).** 같은 이벤트를 두 번 받거나, 그사이 관리자가 회차 API(`PUT …/preorder-campaign` · `…/shipment-batches`)로 고친 값을 덮지 않기 위해서다.
 3. catalog 내부 API 로 상품을 다시 확인하지 않는다. 이 이벤트는 catalog 가 사전예약 상품에만 보낸다. 큐 스레드에는 넘길 토큰도 없다.
-4. 차수 규칙(`ShipmentBatchPlan`: 1번부터 연속 · 첫 시작 1 · 이어짐 · 상한 없는 차수 하나)이나 "오픈은 미래" 에 어긋나면 처리를 실패시킨다 — 재시도 뒤 DLQ 로 간다. catalog 는 등록 때 같은 규칙으로 먼저 거른다(차수 규칙 맞춤은 catalog 후속 작업). DLQ 로 간 상품은 회원에게 보이지 않고, 관리자가 회차 API 로 직접 넣으면 보인다(회차 API 는 회차 · 차수를 따로 저장하므로 둘 다 넣는다).
+4. 차수 규칙(`ShipmentBatchPlan`: 1번부터 연속 · 첫 시작 1 · 이어짐 · 상한 없는 차수 하나)이나 "오픈은 미래" 에 어긋나면 처리를 실패시킨다 — 재시도 뒤 DLQ 로 간다. catalog 는 등록 때 같은 차수 규칙으로 먼저 걸러 400 을 돌려준다(`ProductRegistrationValidator`) — 그래서 차수 때문에 DLQ 로 가는 것은 두 규칙이 어긋났을 때뿐이다. 오픈 시각은 catalog 가 더 엄격하다(지금 + `catalog.registration.min-open-lead` 뒤, 기본 30분). DLQ 로 간 상품은 회원에게 보이지 않고, 관리자가 회차 API 로 직접 넣으면 보인다(회차 API 는 회차 · 차수를 따로 저장하므로 둘 다 넣는다).
 
 ## `IN_STOCK_PRODUCT_REGISTERED` → order
 
