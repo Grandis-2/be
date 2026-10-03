@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -18,6 +19,8 @@ class ScheduleResync {
 
     static final Duration FIRST_QUIET = Duration.ofMinutes(5);
     static final Duration MAX_QUIET = Duration.ofHours(1);
+    /** 선점한 노드가 보내다 죽어도 이 뒤에는 다른 노드가 다시 요청한다. SQS 호출 시한보다 넉넉하다. */
+    static final Duration CLAIM_TTL = Duration.ofMinutes(1);
     static final String EMPTY_REASON = "SCHEDULE_EMPTY";
     private static final Logger log = LoggerFactory.getLogger(ScheduleResync.class);
 
@@ -46,11 +49,14 @@ class ScheduleResync {
             return;
         }
         attemptsOutstanding.set(true);
-        store.resyncRequestedRecently()
-                .flatMap(recent -> recent ? Mono.<Long>empty() : store.nextResyncAttempt()
-                        .flatMap(attempt -> requester.request(EMPTY_REASON)
-                                .then(store.markResyncRequested(quietAfter(attempt)))
-                                .thenReturn(attempt)))
+        String token = UUID.randomUUID().toString();
+        store.claimResync(token, CLAIM_TTL)
+                .flatMap(claimed -> !claimed ? Mono.<Long>empty() : requester.request(EMPTY_REASON)
+                        // 못 보냈으면 내 선점만 풀어 다음 회차에 다시 요청한다. 보낸 뒤의 실패는 선점 시한이 대신 막는다
+                        .onErrorResume(e -> store.releaseResyncClaim(token).onErrorResume(ignored -> Mono.empty())
+                                .then(Mono.error(e)))
+                        .then(store.nextResyncAttempt())
+                        .flatMap(attempt -> store.markResyncRequested(quietAfter(attempt)).thenReturn(attempt)))
                 .doOnNext(attempt -> {
                     metrics.resyncRequested();
                     // 정말 회차가 없으면 계속 비어 있다 — 처음 한 번만 INFO 로 남긴다

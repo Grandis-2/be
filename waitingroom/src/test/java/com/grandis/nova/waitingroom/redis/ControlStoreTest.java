@@ -241,6 +241,29 @@ class ControlStoreTest {
         }
 
         @Test
+        void 같은_번호가_동시에_여러_번_와도_한_번만_쓰고_섞여_와도_가장_큰_번호가_남는다() {
+            List<Boolean> same = Flux.range(0, 8)
+                    .flatMap(i -> control.applySchedule(PRODUCT, window, 3), 8)
+                    .collectList().block(WAIT);
+            assertThat(same).filteredOn(Boolean::booleanValue).hasSize(1);
+
+            Flux.just(5L, 4L, 5L, 2L, 4L, 5L)
+                    .flatMap(version -> control.applySchedule(PRODUCT, moved, version), 6)
+                    .collectList().block(WAIT);
+            assertThat(products()).isEqualTo(ProductSchedules.format(moved, 5));
+        }
+
+        @Test
+        void 재발행_선점은_한_노드만_잡고_남의_선점은_풀지_않는다() {
+            assertThat(control.claimResync("a", Duration.ofSeconds(60)).block(WAIT)).isTrue();
+            assertThat(control.claimResync("b", Duration.ofSeconds(60)).block(WAIT)).isFalse();
+
+            assertThat(control.releaseResyncClaim("b").block(WAIT)).isFalse();
+            assertThat(control.releaseResyncClaim("a").block(WAIT)).isTrue();
+            assertThat(control.claimResync("b", Duration.ofSeconds(60)).block(WAIT)).isTrue();
+        }
+
+        @Test
         void 일정_번호_0_은_계약_위반이라_거절한다() {
             assertThatThrownBy(() -> control.applySchedule(PRODUCT, window, 0).block(WAIT)).rootCause()
                     .hasMessageContaining("1 이상");
@@ -248,10 +271,10 @@ class ControlStoreTest {
 
         @Test
         void 재발행_요청_표식은_보낸_뒤에_세우고_기간이_지나면_사라진다() {
-            assertThat(control.resyncRequestedRecently().block(WAIT)).isFalse();
+            assertThat(redis.hasKey(RedisKeys.RESYNC_REQUESTED).block(WAIT)).isFalse();
             control.markResyncRequested(Duration.ofSeconds(60)).block(WAIT);
 
-            assertThat(control.resyncRequestedRecently().block(WAIT)).isTrue();
+            assertThat(redis.hasKey(RedisKeys.RESYNC_REQUESTED).block(WAIT)).isTrue();
             assertThat(redis.getExpire(RedisKeys.RESYNC_REQUESTED).block(WAIT)).isPositive();
         }
 

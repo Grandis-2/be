@@ -23,6 +23,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.stream.IntStream;
 
@@ -39,8 +40,9 @@ class AllocationRoundTest {
     private ControlStore control;
     private AllocationRound round;
     private final Leadership leadership = new Leadership();
-    /** 재발행 요청을 받은 순서대로 남긴다. */
+    /** 재발행 요청을 받은 순서대로 남긴다. failNextResync 가 켜져 있으면 한 번 실패한다. */
     private final List<String> resyncReasons = new CopyOnWriteArrayList<>();
+    private final AtomicBoolean failNextResync = new AtomicBoolean();
     private Instant now;
 
     @BeforeEach
@@ -58,7 +60,9 @@ class AllocationRoundTest {
         ControlMetrics metrics = new ControlMetrics(new SimpleMeterRegistry(), leadership,
                 new SnapshotHolder(new RedisClock(Clock.systemUTC()), PROPERTIES));
         return new AllocationRound(control, new AdmissionProperties(10L, 0.7), PROPERTIES, metrics, leadership,
-                new ScheduleResync(control, reason -> Mono.fromRunnable(() -> resyncReasons.add(reason)), metrics));
+                new ScheduleResync(control, reason -> failNextResync.compareAndSet(true, false)
+                        ? Mono.error(new IllegalStateException("sqs down"))
+                        : Mono.fromRunnable(() -> resyncReasons.add(reason)), metrics));
     }
 
     private void schedule(String product, Instant opensAt, Instant closesAt) {
@@ -247,6 +251,20 @@ class AllocationRoundTest {
     }
 
     @Test
+    void 재발행_요청을_보내지_못하면_선점을_풀어_다음_회차에_다시_요청한다() {
+        failNextResync.set(true);
+
+        run(7, 0);
+        await(() -> !failNextResync.get() && !Boolean.TRUE.equals(redis.hasKey(RedisKeys.RESYNC_REQUESTED).toFuture().join()));
+        assertThat(resyncReasons).isEmpty();
+        assertThat(redis.hasKey(RedisKeys.RESYNC_ATTEMPTS).block(WAIT)).as("보내지 못한 요청은 세지 않는다").isFalse();
+
+        run(7, 0);
+        await(() -> "1".equals(redis.opsForValue().get(RedisKeys.RESYNC_ATTEMPTS).toFuture().join()));
+        assertThat(resyncReasons).containsExactly("SCHEDULE_EMPTY");
+    }
+
+    @Test
     void 연달아_비어_있으면_요청_간격을_두_배씩_상한까지_늘린다() {
         assertThat(ScheduleResync.quietAfter(1)).isEqualTo(Duration.ofMinutes(5));
         assertThat(ScheduleResync.quietAfter(2)).isEqualTo(Duration.ofMinutes(10));
@@ -271,7 +289,7 @@ class AllocationRoundTest {
 
         run(7, 0);
 
-        assertThat(control.resyncRequestedRecently().block(WAIT)).isFalse();
+        assertThat(redis.hasKey(RedisKeys.RESYNC_REQUESTED).block(WAIT)).isFalse();
         assertThat(resyncReasons).isEmpty();
     }
 

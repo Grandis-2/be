@@ -32,6 +32,7 @@ public class LuaScripts {
     final RedisScript<Long> applySchedule = RedisScript.of(new ClassPathResource("redis/schedule_apply.lua"), Long.class);
     final RedisScript<Long> retireSchedule = RedisScript.of(new ClassPathResource("redis/schedule_retire.lua"), Long.class);
     final RedisScript<Long> dropSchedule = RedisScript.of(new ClassPathResource("redis/schedule_drop.lua"), Long.class);
+    final RedisScript<Long> releaseResync = RedisScript.of(new ClassPathResource("redis/resync_release.lua"), Long.class);
 
     private final ReactiveStringRedisTemplate redis;
 

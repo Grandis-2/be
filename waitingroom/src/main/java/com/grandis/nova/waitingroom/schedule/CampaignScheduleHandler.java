@@ -46,9 +46,14 @@ class CampaignScheduleHandler implements QueueMessageHandler {
                 throw new IllegalArgumentException("받지 않는 이벤트다: " + envelope.eventType());
             }
             CampaignChanged changed = jsonMapper.treeToValue(envelope.payload(), CampaignChanged.class);
-            boolean written = Boolean.TRUE.equals(store.applySchedule(String.valueOf(changed.productId()),
+            Boolean applied = store.applySchedule(String.valueOf(changed.productId()),
                     new SalesWindow(changed.opensAt(), changed.closesAt()), changed.scheduleVersion())
-                    .block(APPLY_TIMEOUT));
+                    .block(APPLY_TIMEOUT);
+            // 답이 없으면 반영됐는지 모른다 — 옛 번호로 단정해 지우지 않고 다시 받는다
+            if (applied == null) {
+                throw new IllegalStateException("일정 반영 결과를 받지 못했다: productId=" + changed.productId());
+            }
+            boolean written = applied;
             outcome = written ? "APPLIED" : "STALE";
             log.info("회차 일정 {} productId={} scheduleVersion={} change={}", written ? "반영" : "무시(옛 번호)",
                     changed.productId(), changed.scheduleVersion(), changed.change());

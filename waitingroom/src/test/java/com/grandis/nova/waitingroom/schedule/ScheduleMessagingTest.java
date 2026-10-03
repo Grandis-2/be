@@ -84,6 +84,16 @@ class ScheduleMessagingTest {
     }
 
     @Test
+    void 읽을_수_없는_메시지는_지우지_않고_다시_받는다() {
+        double failedBefore = failedEvents();
+        queues.send("waitingroom-events", "{not json");
+
+        // 처음 받아 실패하고, 백오프 뒤 다시 보여 한 번 더 받는다
+        StepVerifier.create(Flux.interval(Duration.ofMillis(100)).filter(tick -> failedEvents() >= failedBefore + 2).next())
+                .expectNextCount(1).expectComplete().verify(Duration.ofSeconds(30));
+    }
+
+    @Test
     void 재발행_요청은_preorder_소비_큐에_봉투와_속성을_실어_보낸다() {
         resyncRequester.request("SCHEDULE_EMPTY").block(WAIT);
 
@@ -105,6 +115,11 @@ class ScheduleMessagingTest {
                 "changedAt", Instant.now().toString(), "change", "RESCHEDULED");
         return jsonMapper.writeValueAsString(new EventEnvelope(UUID.randomUUID().toString(), "PREORDER_CAMPAIGN_CHANGED",
                 "PREORDER_CAMPAIGN", productId, Instant.now(), jsonMapper.valueToTree(payload)));
+    }
+
+    private double failedEvents() {
+        Counter failed = registry.find("waitingroom.schedule.events").tag("outcome", "FAILED").counter();
+        return failed == null ? 0 : failed.count();
     }
 
     private double staleEvents() {

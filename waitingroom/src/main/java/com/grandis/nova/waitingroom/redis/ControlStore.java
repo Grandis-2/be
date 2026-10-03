@@ -74,9 +74,15 @@ public class ControlStore {
                 .map(removed -> removed == 1);
     }
 
-    /** 최근에 재발행을 요청했는가. 표식이 살아 있는 동안은 다시 요청하지 않는다. */
-    public Mono<Boolean> resyncRequestedRecently() {
-        return redis.hasKey(RedisKeys.RESYNC_REQUESTED);
+    /** 재발행 요청을 선점한다. 표식이 없을 때만 세워, 리더가 바뀌는 순간에도 한 노드만 보낸다. @return 선점했으면 true */
+    public Mono<Boolean> claimResync(String token, Duration claimTtl) {
+        return redis.opsForValue().setIfAbsent(RedisKeys.RESYNC_REQUESTED, token, claimTtl);
+    }
+
+    /** 보내지 못했을 때 내 선점만 푼다 — 다음 회차에 다시 요청하게. */
+    public Mono<Boolean> releaseResyncClaim(String token) {
+        return scripts.single(scripts.releaseResync, List.of(RedisKeys.RESYNC_REQUESTED), List.of(token))
+                .map(released -> released == 1);
     }
 
     /** 연달아 요청한 횟수를 하나 올려 돌려준다. 하루 동안 요청이 없으면 처음부터 센다. */
@@ -90,7 +96,7 @@ public class ControlStore {
         return redis.delete(RedisKeys.RESYNC_ATTEMPTS).map(deleted -> deleted > 0);
     }
 
-    /** 요청을 보낸 뒤에 세운다 — 보내기 전에 세우면 실패한 요청이 그 기간 동안 다시 나가지 않는다. */
+    /** 보낸 뒤 선점 표식을 조용한 기간 표식으로 바꾼다. */
     public Mono<Boolean> markResyncRequested(Duration quietPeriod) {
         return redis.opsForValue().set(RedisKeys.RESYNC_REQUESTED, "1", quietPeriod);
     }

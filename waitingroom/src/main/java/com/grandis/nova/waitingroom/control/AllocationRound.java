@@ -55,6 +55,8 @@ class AllocationRound {
     /** 같은 깨진 일정을 틱마다 다시 남기지 않는다. */
     private final Set<String> reportedBroken = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean tidyFailing = new AtomicBoolean();
+    private final AtomicBoolean retireFailing = new AtomicBoolean();
+    private final AtomicBoolean tombstoneFailing = new AtomicBoolean();
 
     AllocationRound(ControlStore store, AdmissionProperties admission, ControlPlaneProperties properties,
                     ControlMetrics metrics, Leadership leadership, ScheduleResync resync) {
@@ -127,11 +129,9 @@ class AllocationRound {
                 .concatMap(row -> store.retireSchedule(row.key(),
                         ProductSchedules.format(row.schedule().window(), row.schedule().scheduleVersion()),
                         row.schedule().scheduleVersion(), now))
-                .onErrorResume(e -> {
-                    metrics.loopFailed("retire");
-                    return Mono.empty();
-                })
-                .then();
+                .then()
+                .doOnSuccess(done -> recovered(retireFailing, "끝난 모델 은퇴"))
+                .onErrorResume(e -> failed(retireFailing, "끝난 모델 은퇴", e));
     }
 
     /** 은퇴 표식은 큐가 옛 메시지를 다시 줄 수 있는 동안만 둔다. 그 뒤에는 막을 재전달이 없다. */
@@ -140,11 +140,24 @@ class AllocationRound {
                 .filter(entry -> ProductSchedules.retiredAt(entry.getValue())
                         .filter(at -> !now.isBefore(at.plus(TOMBSTONE_TTL))).isPresent())
                 .concatMap(entry -> store.dropSchedule(entry.getKey(), entry.getValue()))
-                .onErrorResume(e -> {
-                    metrics.loopFailed("retire");
-                    return Mono.empty();
-                })
-                .then();
+                .then()
+                .doOnSuccess(done -> recovered(tombstoneFailing, "은퇴 표식 정리"))
+                .onErrorResume(e -> failed(tombstoneFailing, "은퇴 표식 정리", e));
+    }
+
+    /** 다음 회차에 다시 하므로 배분을 막지 않는다. 작업마다 상태가 바뀔 때만 원인을 남긴다. */
+    private Mono<Void> failed(AtomicBoolean failing, String work, Throwable e) {
+        metrics.loopFailed("retire");
+        if (failing.compareAndSet(false, true)) {
+            log.warn("{} 실패 — 다음 회차에 다시 한다: {}", work, e.toString());
+        }
+        return Mono.empty();
+    }
+
+    private static void recovered(AtomicBoolean failing, String work) {
+        if (failing.compareAndSet(true, false)) {
+            log.info("{} 회복", work);
+        }
     }
 
     /**
