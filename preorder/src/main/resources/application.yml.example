@@ -1,6 +1,10 @@
 spring:
   application:
     name: preorder
+  # 요청 처리 · 스케줄러를 가상 스레드로. DB 동시성은 커넥션 풀(maximum-pool-size)이 막는다
+  threads:
+    virtual:
+      enabled: true
   datasource:
     url: jdbc:mysql://localhost:3306/shop?serverTimezone=UTC&characterEncoding=UTF-8
     username: nova
@@ -12,8 +16,10 @@ spring:
       # 빠뜨려도 오류가 나지 않는다. 부하가 걸릴 때까지 아무도 모른다.
       transaction-isolation: TRANSACTION_READ_COMMITTED
       maximum-pool-size: 10
+      # 가상 스레드라 요청이 풀 앞에서 기다린다. 기본 30s 대신 빨리 실패시킨다(ms)
+      connection-timeout: 2000
   jpa:
-    # 정본은 flyway-project/migrations. docs/schema.sql은 생성된 최신 구조다.
+    # 정본은 flyway-project/migrations. 최신 구조 덤프는 bash flyway-project/verify.sh 의 build/flyway/schema.sql.
     hibernate:
       ddl-auto: validate
     properties:
@@ -21,6 +27,18 @@ spring:
         jdbc:
           time_zone: UTC
     open-in-view: false
+  http:
+    serviceclient:
+      # 캐시가 비었을 때만 부른다(CatalogReader). 타임아웃: 연결 300ms · 읽기 1s.
+      catalog:
+        base-url: http://localhost:8082
+        connect-timeout: 300ms
+        read-timeout: 1s
+      # 취소 사전 확인. 답이 없으면 취소를 시작하지 않고 503 이다.
+      order:
+        base-url: http://localhost:8084
+        connect-timeout: 300ms
+        read-timeout: 1s
   data:
     redis:
       host: localhost
@@ -37,19 +55,91 @@ spring:
 server:
   port: 8083
 
-# 로컬은 LocalStack 을 쓴다. 배포 환경에서는 endpoint 를 비우고 IAM 역할을 쓴다.
-spring.cloud.aws:
-  region:
-    static: ap-northeast-2
-  credentials:
-    access-key: test
-    secret-key: test
-  sqs:
-    endpoint: http://localhost:4566
+# OpenAPI 문서. 기본은 꺼져 있고 값이 정확히 true 일 때만 켜진다(빈 값 · no · 오타는 꺼짐). 운영에는 적지 않는다.
+# 문서는 /v3/api-docs/preorder, /internal/** 은 nova.openapi.include-internal: true 일 때만 실린다.
+# springdoc:
+#   api-docs:
+#     enabled: true
+#   swagger-ui:
+#     enabled: true
+
+# 관측. 관리 엔드포인트는 앱과 다른 포트로 분리한다 — ALB 대상 그룹은 앱 포트만, 수집기만 관리 포트에 접근한다.
+# 부하 시험의 p99 를 보려고 요청 지연은 히스토그램으로 낸다
+management:
+  server:
+    port: 9083
+  endpoints:
+    web:
+      exposure:
+        include: health, prometheus
+  endpoint:
+    health:
+      # 헬스 체크는 /actuator/health/readiness 로 한다. 전체(/actuator/health)는 Redis · DB 상태를 포함해
+      # Redis 장애만으로 모든 인스턴스가 빠진다(폐기 확인은 Redis 장애에도 접수를 통과시키는 정책)
+      probes:
+        enabled: true
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        preorder.accept: true
+        preorder.events.handle: true
+        preorder.events.lag: true
 
 nova:
+  # 대기열 입장권. 게이트웨이와 같은 비밀(Secrets Manager). 형식: gateway-auth-tokens.md 5절
+  admission-ticket:
+    secret: ${WAITING_TOKEN_SECRET}
+    previous: ${WAITING_TOKEN_PREVIOUS:}
+    rollout-ends-at: ${WAITING_TOKEN_ROLLOUT_ENDS_AT:}
+  # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다
   sqs:
-    preorder-queue: nova-preorder
+    region: ap-northeast-2
+    endpoint: http://localhost:4566
+    api-call-timeout: 3s
+    # 논리 목적지 → 실제 큐 이름(환경마다 접두어를 붙일 때만)
+    # queues:
+    #   preorder-register: dev-preorder-register
+    consumer:
+      enabled: true
+      queue: preorder-events
+      concurrency: 1
+      wait-seconds: 20
+      visibility: 5m       # 처리 한 건(회차 취소 포함)보다 길게
+      backoff-base: 5s
+      backoff-max: 5m
+    # 소비 큐의 DLQ 를 DB(dead_letter_events)로 옮긴다. 관리자 API(/api/v1/admin/event-dlq)로 조회 · 되돌리기 · 버리기
+    dead-letter:
+      enabled: true
+      queue: preorder-events-dlq
+  # 아웃박스 발행(common:outbox). transport 는 필수(없으면 기동 실패)다. 배포 환경은 sqs 다(log 는 로컬 · 시험 전용)
+  # 지표 이름 접두어(metrics-prefix: preorder.outbox)는 코드(PreorderDefaults)에 기본값이 있다
+  outbox:
+    transport: sqs
+    concurrency: 32        # 커밋 직후 발행 동시 실행 상한(가상 스레드). 넘치면 릴레이가 보낸다
+    relay-interval: 10s    # 릴레이 주기. 미발행 현황 지표(preorder.outbox.unpublished*)도 이 주기로 센다
+    relay-after: 1m        # 만든 지 이만큼 지난 미발행 행만 재발행
+    relay-batch: 100
+    # 가져간 행을 다른 인스턴스가 건너뛰는 시간. 행마다 보내기 직전에 연장한다.
+    # 전송 한 번은 sqs.api-call-timeout × 2(큐 URL 조회 + 전송)이고, 리스는 그것 + 5s 보다 길어야 한다(아니면 기동 실패)
+    relay-lease: 1m
+  # DB 에서 세는 상태 지표(예약 상태별 수 · DLQ) 갱신 주기
+  metrics:
+    refresh-interval: 30s
+  # 외부 예약 Mock 등록 요청의 scope(시험 실행 범위). 접수 때 request_payload 에 고정된다
+  external-mock:
+    scope: preorder
+
+# 내부 호출(catalog · order) 장애 대응. 기본값은 코드(PreorderDefaults)에 있고, 바꿀 때만 여기서 덮는다
+# resilience4j:
+#   circuitbreaker:
+#     instances:
+#       order:
+#         wait-duration-in-open-state: 30s
+#   bulkhead:
+#     configs:
+#       default:
+#         max-concurrent-calls: 40
 
 # 외부 예약 Mock (별도 레포)
 external:
@@ -64,3 +154,14 @@ jwt:
   audience: nova-api
   jwk-set-uri: https://member.example.com/.well-known/jwks.json
   # jwk-set-allow-http: true    # VPC 안 Cloud Map 주소(http://member.ureca.local:8080/…)를 쓰는 동안만 명시. 서비스 간 TLS 가 붙으면 지운다
+  # 발급하지 않지만 필수 값이다(없으면 기동 실패). member 와 같게 둔다
+  access-token-validity: 30m
+  refresh-token-validity: 14d
+
+# 토큰 폐기 확인(Redis)이 실패할 때 막는 경로. 기본값(관리자 · 예약 취소)은 코드(PreorderDefaults)에 있다.
+# 바꿀 때만 여기서 덮는다
+# auth:
+#   revocation-check:
+#     fail-closed-paths:
+#       - /api/v1/admin/**
+#       - /api/v1/preorders/*/cancel

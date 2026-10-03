@@ -15,7 +15,12 @@ public enum OrderErrorCode implements ErrorCode {
     PREORDER_NOT_PAYABLE(409, "결제할 수 있는 예약이 아닙니다."),
     PAYMENT_WINDOW_EXPIRED(409, "결제 기한이 지났습니다."),
     /** 예약당 주문은 평생 하나라(uq_order_preorder) 취소된 주문이 있으면 다시 주문할 수 없다. */
-    ORDER_ALREADY_CANCELED(409, "이미 취소된 주문이 있어 다시 주문할 수 없습니다.");
+    ORDER_ALREADY_CANCELED(409, "이미 취소된 주문이 있어 다시 주문할 수 없습니다."),
+    PRODUCT_NOT_FOUND(404, "상품을 찾을 수 없습니다."),
+    /** 사전예약은 선점이 없어 재고 행을 두지 않는다. */
+    STOCK_NOT_TRACKED(409, "사전예약 상품은 재고를 두지 않습니다."),
+    /** details.options 에 걸린 옵션과 줄일 수 있는 하한(committed)을 모두 싣는다. */
+    STOCK_BELOW_COMMITTED(409, "확보 · 판매된 수량보다 적게 줄일 수 없습니다.");
 
     private final int status;
     private final String message;
