@@ -407,7 +407,7 @@ class AdminProductRegistrationApiTest {
         }
 
         @Test
-        @DisplayName("배송 차수의 모양은 저장 전에 거른다 — 번호 · 시작 순번 양의 정수와 유일, 종료 ≥ 시작 또는 마지막만 null, 배송 종료 ≥ 시작")
+        @DisplayName("배송 차수의 모양은 저장 전에 거른다 — 번호 0 · 번호 중복 · 시작 0 · 시작 중복 · 상한 없는 차수 뒤의 차수 · 종료 < 시작 · 배송 종료 < 시작은 400")
         void shipmentBatchRules() throws Exception {
             String two = """
                     "shipmentBatches": [ { "batchNumber": %s, "positionFrom": %s, "positionTo": %s, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "%s" },
@@ -449,6 +449,21 @@ class AdminProductRegistrationApiTest {
             expectValidation(register("k-" + ShopFixtures.unique(), withBatches("""
                     "shipmentBatches": [ { "batchNumber": 1, "positionFrom": 1, "positionTo": 100, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "2026-11-07" } ]
                     """)), "shipmentBatches[0].positionTo");
+            // 상한 없는 차수가 없으면 마지막 차수의 종료 순번을 가리킨다
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches("""
+                    "shipmentBatches": [ { "batchNumber": 1, "positionFrom": 1, "positionTo": 100, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "2026-11-07" },
+                                         { "batchNumber": 2, "positionFrom": 101, "positionTo": 200, "estimatedShipStart": "2026-11-08", "estimatedShipEnd": "2026-11-14" } ]
+                    """)), "shipmentBatches[1].positionTo");
+            // 앞 차수가 순번 끝(Long 최댓값)이면 다음 차수가 이어질 수 없다 — "끝 + 1" 이 넘쳐 음수 시작을 받지 않는다
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches("""
+                    "shipmentBatches": [ { "batchNumber": 1, "positionFrom": 1, "positionTo": 9223372036854775807, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "2026-11-07" },
+                                         { "batchNumber": 2, "positionFrom": -9223372036854775808, "positionTo": null, "estimatedShipStart": "2026-11-08", "estimatedShipEnd": "2026-11-14" } ]
+                    """)), "shipmentBatches[1].positionFrom");
+            // preorder 보다 엄격하지 않다 — 한 자리짜리 차수(시작 = 종료)도 받는다
+            register("k-" + ShopFixtures.unique(), withBatches("""
+                    "shipmentBatches": [ { "batchNumber": 1, "positionFrom": 1, "positionTo": 1, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "2026-11-07" },
+                                         { "batchNumber": 2, "positionFrom": 2, "positionTo": null, "estimatedShipStart": "2026-11-08", "estimatedShipEnd": "2026-11-08" } ]
+                    """)).andExpect(status().isCreated());
         }
 
         private String withBatches(String batches) {
