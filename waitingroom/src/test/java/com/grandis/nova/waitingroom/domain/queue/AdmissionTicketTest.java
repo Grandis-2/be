@@ -50,6 +50,28 @@ class AdmissionTicketTest {
     }
 
     @Nested
+    class 만료_구분 {
+
+        @Test
+        void 서명_모델이_맞으면_만료돼도_회원과_만료를_알려_주고_만료_시각을_발급식대로_낸다() {
+            Instant expiresAt = Instant.ofEpochSecond(1790816520);
+
+            SignedToken.Holder holder = ticket.authenticate(VECTOR_CURRENT, "101", expiresAt.plusSeconds(3_600)).orElseThrow();
+
+            assertThat(holder).isEqualTo(new SignedToken.Holder("1024", expiresAt));
+            assertThat(holder.expired(expiresAt.minusSeconds(1))).isFalse();
+            assertThat(holder.expired(expiresAt)).isTrue();
+            assertThat(ticket.expiresAt(ISSUED_AT)).isEqualTo(expiresAt);
+        }
+
+        @Test
+        void 서명이나_모델이_어긋나면_만료와_상관없이_거절한다() {
+            assertThat(ticket.authenticate(VECTOR_OTHER_PRODUCT, "101", ISSUED_AT)).isEmpty();
+            assertThat(ticket.authenticate(VECTOR_SIGNED_BY_PREVIOUS, "101", ISSUED_AT)).isEmpty();
+        }
+    }
+
+    @Nested
     class 거절 {
 
         @Test

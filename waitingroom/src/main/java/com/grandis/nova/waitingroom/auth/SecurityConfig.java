@@ -94,6 +94,8 @@ class SecurityConfig {
                 .authorizeExchange(exchanges -> exchanges
                         .matchers(managementPort(serverPort, managementPort)).permitAll()
                         .pathMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                        // 진입 · 조회 · 접수는 회원만 — 입장권이 회원(sub)에 묶인다
+                        .pathMatchers("/api/v1/preorders", "/api/v1/preorders/**").hasRole("USER")
                         .pathMatchers("/api/**").authenticated()
                         .anyExchange().denyAll())
                 .oauth2ResourceServer(resourceServer -> resourceServer

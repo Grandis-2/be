@@ -4,6 +4,8 @@ import com.grandis.nova.waitingroom.domain.queue.PollIntervalPolicy;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * 제어 평면 주기와 수명. 서로의 관계(리스 > 연장 간격, 낡음 > 갱신 간격 등)를 생성자가 지킨다 —
@@ -42,6 +44,11 @@ public record ControlPlaneProperties(
         }
         if (gatewayReapAfter.compareTo(TICK.multipliedBy(2)) <= 0) {
             throw new IllegalArgumentException("gateway-reap-after 는 2초보다 길어야 한다");
+        }
+        // 한 바퀴는 시한(주기의 세 배) 뒤 다음 주기에 다시 돈다 — 박동 간격이 liveness 시한을 넘으면 멀쩡한 태스크가 재시작된다
+        Duration slowest = Collections.max(List.of(TICK, leaderRenew, snapshotRefresh));
+        if (slowest.multipliedBy(4).compareTo(ControlLoopHealthIndicator.STALL) >= 0) {
+            throw new IllegalArgumentException("가장 긴 주기의 네 배가 " + ControlLoopHealthIndicator.STALL + " 보다 짧아야 한다");
         }
         if (closeGrace.compareTo(PollIntervalPolicy.aliveTtl()) <= 0) {
             throw new IllegalArgumentException("close-grace 는 생존 신호 수명(" + PollIntervalPolicy.aliveTtl() + ")보다 길어야 한다");

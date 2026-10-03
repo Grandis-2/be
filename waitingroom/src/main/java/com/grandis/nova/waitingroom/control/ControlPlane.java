@@ -12,6 +12,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongFunction;
@@ -27,10 +28,14 @@ class ControlPlane implements SmartLifecycle {
     /** 웹 서버(우아한 종료 포함)보다 먼저 시작하고 나중에 멈춘다 — 남은 요청을 비우는 동안에도 판정 재료가 신선하다. */
     static final int PHASE = SmartLifecycle.DEFAULT_PHASE - 4096;
 
+    private static final Logger log = LoggerFactory.getLogger(ControlPlane.class);
+
+    private static final String LEADER_LOOP = "리더 리스";
+    private static final String TICK_LOOP = "틱(하트비트 · 배분)";
+    private static final String SNAPSHOT_LOOP = "판정 재료 받기";
+
     /** 배분 회차 번호. 재시작해도 이어 세어, 같은 임기를 다시 받았을 때 이미 쓴 회차와 겹치지 않는다. */
     private final AtomicLong rounds = new AtomicLong();
-
-    private static final Logger log = LoggerFactory.getLogger(ControlPlane.class);
 
     private final ControlStore store;
     private final Leadership leadership;
@@ -43,11 +48,12 @@ class ControlPlane implements SmartLifecycle {
     private final AtomicBoolean leaderFailing = new AtomicBoolean();
     private final AtomicBoolean tickFailing = new AtomicBoolean();
     private final AtomicBoolean snapshotFailing = new AtomicBoolean();
+    private final LoopBeats beats;
     private volatile Disposable loops;
 
     ControlPlane(ControlStore store, Leadership leadership, AllocationRound round, SnapshotHolder holder,
                  RedisClock redisClock, IdlePassCounter idlePasses, ControlPlaneProperties properties,
-                 ControlMetrics metrics) {
+                 ControlMetrics metrics, LoopBeats beats) {
         this.store = store;
         this.leadership = leadership;
         this.round = round;
@@ -56,14 +62,16 @@ class ControlPlane implements SmartLifecycle {
         this.idlePasses = idlePasses;
         this.properties = properties;
         this.metrics = metrics;
+        this.beats = beats;
     }
 
     @Override
     public void start() {
+        beats.start(List.of(LEADER_LOOP, TICK_LOOP, SNAPSHOT_LOOP));
         loops = Disposables.composite(
-                every(properties.leaderRenew(), count -> renewLeadership(), leaderFailing, "리더 리스"),
-                every(ControlPlaneProperties.TICK, count -> tick(), tickFailing, "틱(하트비트 · 배분)"),
-                every(properties.snapshotRefresh(), count -> refreshSnapshot(), snapshotFailing, "판정 재료 받기"));
+                every(properties.leaderRenew(), count -> renewLeadership(), leaderFailing, LEADER_LOOP),
+                every(ControlPlaneProperties.TICK, count -> tick(), tickFailing, TICK_LOOP),
+                every(properties.snapshotRefresh(), count -> refreshSnapshot(), snapshotFailing, SNAPSHOT_LOOP));
     }
 
     @Override
@@ -72,6 +80,7 @@ class ControlPlane implements SmartLifecycle {
         if (running != null) {
             running.dispose();
         }
+        beats.stop();
         leadership.lose();
         Mono.when(store.releaseLeader(leadership.nodeId()), store.leave(leadership.nodeId()))
                 .timeout(Duration.ofSeconds(2))
@@ -142,12 +151,12 @@ class ControlPlane implements SmartLifecycle {
                 .then();
     }
 
-    private Disposable every(Duration period, LongFunction<Mono<Void>> task, AtomicBoolean failing,
-                             String name) {
+    private Disposable every(Duration period, LongFunction<Mono<Void>> task, AtomicBoolean failing, String name) {
         // 미리 받기 0 — 실행 중에 온 틱은 쌓이지 않고 버려져, 늦은 작업 뒤에 회차가 몰려 돌지 않는다
         return Flux.interval(Duration.ZERO, period)
                 .onBackpressureDrop()
-                .concatMap(count -> task.apply(count)
+                // defer — 작업이 Mono 를 만들다 던져도 이 주기의 실패로 끝나고 루프는 이어진다
+                .concatMap(count -> Mono.defer(() -> task.apply(count))
                         .timeout(period.multipliedBy(3))
                         .doOnSuccess(done -> {
                             if (failing.compareAndSet(true, false)) {
@@ -160,7 +169,8 @@ class ControlPlane implements SmartLifecycle {
                                 log.warn("{} 실패 — 다음 주기에 다시 한다: {}", name, e.toString());
                             }
                             return Mono.empty();
-                        }), 0)
+                        })
+                        .doFinally(signal -> beats.beat(name)), 0)
                 .subscribe();
     }
 }

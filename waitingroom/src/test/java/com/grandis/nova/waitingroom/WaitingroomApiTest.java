@@ -32,7 +32,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** 기동 · 인증 · 봉투 · 요청 ID 를 실제 필터 체인으로 확인한다. */
-@SpringBootTest(properties = "waitingroom.control.enabled=false")
+@SpringBootTest(properties = {"waitingroom.control.enabled=false", "waitingroom.token.secret=" + TestJwts.TOKEN_SECRET})
 @Import(WaitingroomApiTest.ProbeController.class)
 class WaitingroomApiTest {
 
@@ -106,7 +106,7 @@ class WaitingroomApiTest {
         }
 
         @Test
-        void JWKS_를_받기_전에는_readiness_가_DOWN_이다() {
+        void JWKS_를_받기_전에는_jwks_지표가_DOWN_이다() {
             assertThat(jwksHealthIndicator.health().getStatus()).isEqualTo(Status.DOWN);
         }
 

@@ -12,3 +12,13 @@ jwt:
   #     -----BEGIN PUBLIC KEY-----
   #     ...
   #     -----END PUBLIC KEY-----
+
+# 입장권 · 대기 토큰 서명 키. preorder 의 nova.admission-ticket 과 같은 값이어야 접수가 통과한다.
+waitingroom:
+  token:
+    secret: ${WAITING_TOKEN_SECRET}
+    previous: ${WAITING_TOKEN_PREVIOUS:}
+    rollout-ends-at: ${WAITING_TOKEN_ROLLOUT_ENDS_AT:}
+  relay:
+    # preorder 주소(VPC 안 Cloud Map). 접수 POST 만 이리로 전달한다
+    preorder-uri: http://preorder.ureca.local:8083

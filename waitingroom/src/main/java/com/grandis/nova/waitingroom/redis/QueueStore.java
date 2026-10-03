@@ -11,7 +11,9 @@ import reactor.core.publisher.Mono;
 import java.time.Instant;
 import java.util.List;
 
-/** 요청 경로가 Redis 를 치는 두 곳 — 줄 서기와 순서 조회. 나머지 판정은 스냅샷으로만 한다. */
+/**
+ * 요청 경로가 Redis 를 치는 곳 — 줄 서기와 순서 조회(그리고 드문 입장 기록 삭제). 나머지 판정은 스냅샷으로만 한다.
+ */
 @Component
 public class QueueStore {
 
@@ -72,6 +74,19 @@ public class QueueStore {
                     };
                     return new QueueStatus(entry, admittedAt < 0 ? null : Instant.ofEpochSecond(admittedAt));
                 });
+    }
+
+    /**
+     * 그 입장권을 낸 입장 기록을 지운다. 다음 진입이 새로 판정된다.
+     *
+     * @param ticketExpiresAt 접수가 거절한 입장권의 만료 시각. 지금 입장 기록에서 나온 것일 때만 지운다
+     * @return 지웠으면 true
+     */
+    public Mono<Boolean> forgetAdmission(String productKey, String customerId, Instant ticketExpiresAt) {
+        return scripts.single(scripts.forgetAdmission, RedisKeys.forget(productKey), List.of(customerId,
+                        String.valueOf(ticketExpiresAt.getEpochSecond()), String.valueOf(AdmissionTicket.WINDOW_SEC),
+                        String.valueOf(AdmissionTicket.TTL_SEC)))
+                .map(removed -> removed == 1);
     }
 
     /** @param admittedAt 입장했을 때만 있다 */

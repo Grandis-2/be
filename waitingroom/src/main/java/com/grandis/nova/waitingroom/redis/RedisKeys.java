@@ -37,6 +37,11 @@ public final class RedisKeys {
         return List.of(queue(productKey), maxScore(productKey), alive(productKey), admitted(productKey), grace(productKey));
     }
 
+    /** admission_forget.lua 의 KEYS 순서. */
+    public static List<String> forget(String productKey) {
+        return List.of(grace(productKey));
+    }
+
     /** queue_status.lua 의 KEYS 순서. */
     public static List<String> status(String productKey) {
         return List.of(queue(productKey), admitted(productKey), alive(productKey), grace(productKey));

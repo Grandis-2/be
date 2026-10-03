@@ -181,5 +181,7 @@ class ControlPartsTest {
                 null, null, null, null)).hasMessageContaining("snapshot-stale-after");
         assertThatThrownBy(() -> new ControlPlaneProperties(null, null, null, null, null, Duration.ofSeconds(90),
                 null, null)).hasMessageContaining("close-grace");
+        assertThatThrownBy(() -> new ControlPlaneProperties(Duration.ofSeconds(30), Duration.ofSeconds(10), null,
+                Duration.ofSeconds(20), null, null, null, null)).hasMessageContaining("네 배");
     }
 }

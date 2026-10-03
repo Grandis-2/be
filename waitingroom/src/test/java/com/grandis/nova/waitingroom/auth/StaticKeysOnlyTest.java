@@ -15,8 +15,9 @@ import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** jwk-set-uri 없이 정적 공개키만 쓰는 구성(부하 시험 · 로컬). JWKS 캐시를 만들지 않고 readiness 는 UP 이다. */
-@SpringBootTest(properties = {"jwt.jwk-set-uri=", "waitingroom.control.enabled=false"})
+/** jwk-set-uri 없이 정적 공개키만 쓰는 구성(부하 시험 · 로컬). JWKS 캐시를 만들지 않고 jwks 지표는 UP 이다. */
+@SpringBootTest(properties = {"jwt.jwk-set-uri=", "waitingroom.control.enabled=false",
+        "waitingroom.token.secret=" + TestJwts.TOKEN_SECRET})
 class StaticKeysOnlyTest {
 
     @DynamicPropertySource
@@ -35,7 +36,7 @@ class StaticKeysOnlyTest {
     JwksHealthIndicator jwksHealth;
 
     @Test
-    void JWKS_캐시_없이_정적_공개키로_검증하고_readiness_는_UP_이다() {
+    void JWKS_캐시_없이_정적_공개키로_검증하고_jwks_지표는_UP_이다() {
         assertThat(context.getBeanNamesForType(JwkSetCache.class)).isEmpty();
         assertThat(decoder.decode(TestJwts.user("1024", Instant.now())).block(Duration.ofSeconds(5)).getSubject())
                 .isEqualTo("1024");

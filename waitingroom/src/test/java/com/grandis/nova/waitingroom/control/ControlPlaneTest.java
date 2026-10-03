@@ -111,7 +111,7 @@ class ControlPlaneTest {
             holder = new SnapshotHolder(clock, FAST);
             metrics = new ControlMetrics(registry, leadership, holder);
             plane = new ControlPlane(store, leadership, new AllocationRound(store, new AdmissionProperties(10L, 0.7), FAST, metrics, leadership),
-                    holder, clock, new IdlePassCounter(), FAST, metrics);
+                    holder, clock, new IdlePassCounter(), FAST, metrics, new LoopBeats());
         }
     }
 }
