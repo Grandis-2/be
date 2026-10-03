@@ -120,7 +120,7 @@ class PlaceOrderServiceTest {
     void existingOrderOfAnotherCustomerIsHidden() {
         payable();
         Order foreign = new Order(100L, OrderToken.issue(), 999L, OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID,
-                OrderStatus.AWAITING_PAYMENT, Money.won(1_250_000), null, null,
+                OrderStatus.AWAITING_PAYMENT, null, Money.won(1_250_000), null, null,
                 new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), null, 1, NOW, NOW);
         given(orderReader.findByPreorderId(PREORDER_ID)).willReturn(Optional.of(foreign));
 
@@ -163,7 +163,7 @@ class PlaceOrderServiceTest {
     void existingOrderWithAnotherPreorderTokenIsNotReturned(boolean foundAfterDuplicateKey) {
         payable();
         Order mismatched = new Order(100L, OrderToken.issue(), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID,
-                "1c9e2b7d-3f4a-4b5c-8d6e-7f8091a2b3c4", OrderStatus.AWAITING_PAYMENT, Money.won(1_250_000), null, null,
+                "1c9e2b7d-3f4a-4b5c-8d6e-7f8091a2b3c4", OrderStatus.AWAITING_PAYMENT, null, Money.won(1_250_000), null, null,
                 new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), null, 1, NOW, NOW);
         if (foundAfterDuplicateKey) {
             given(orderReader.findByPreorderId(PREORDER_ID)).willReturn(Optional.empty(), Optional.of(mismatched));
@@ -255,7 +255,7 @@ class PlaceOrderServiceTest {
     }
 
     private static Order order(OrderStatus status) {
-        return new Order(100L, OrderToken.issue(), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID, status,
+        return new Order(100L, OrderToken.issue(), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID, status, null,
                 Money.won(1_250_000), null, null,
                 new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), null, 1, NOW, NOW);
     }

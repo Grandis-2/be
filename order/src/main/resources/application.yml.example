@@ -35,6 +35,19 @@ spring:
         base-url: http://localhost:8083
         connect-timeout: 300ms
         read-timeout: 1s
+      # 결제 준비 때 결제창을 열 거래 생성(POST /internal/payment-attempts). 토스를 부르지 않는 짧은 호출이라 preorder 와 같은 수준이다.
+      # 답이 없으면 503 이고, payment 가 이미 만든 거래는 버려진 PENDING 으로 남는다(사용자가 다시 부른다)
+      payment:
+        base-url: http://localhost:8085
+        connect-timeout: 300ms
+        read-timeout: 1s
+      # 결제 승인(POST /internal/payment-attempts/{id}/confirm). payment 가 토스를 최대 63초(연결 3 + 읽기 60) 기다리므로
+      # 읽기는 결제 거래 리스(70s)에 맞춘다. 넘으면 실패가 아니라 "결제 확인 중"이다(결과 이벤트 · 재요청으로 받는다).
+      # 앞단 ALB 유휴 타임아웃(기본 60s)이 이보다 짧으면 프론트가 504 를 먼저 받는다 — 프론트는 504 를 "확인 중"으로 다룬다
+      payment-confirm:
+        base-url: http://localhost:8085
+        connect-timeout: 300ms
+        read-timeout: 70s
 
 server:
   port: 8084
@@ -48,6 +61,10 @@ server:
 #     enabled: true
 
 nova:
+  # 결제 승인 동시 상한(인스턴스당). payment 응답을 최대 70s 기다리는 승인이 이만큼 차면 다음 승인은 상태를 바꾸기 전에 503 이다 —
+  # 토스가 느려져도 결제와 무관한 주문 API 의 요청 스레드(Tomcat 200)가 남는다
+  payment-confirm:
+    max-concurrency: 50
   # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다
   sqs:
     region: ap-northeast-2

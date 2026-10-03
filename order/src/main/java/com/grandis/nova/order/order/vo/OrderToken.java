@@ -1,6 +1,7 @@
 package com.grandis.nova.order.order.vo;
 
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -18,6 +19,11 @@ public record OrderToken(String value) {
 
     public static OrderToken issue() {
         return new OrderToken(UUID.randomUUID().toString());
+    }
+
+    /** 경로로 받은 토큰. 형식이 틀리면 없는 주문과 같다 — 400 으로 나눠 봐야 호출자가 얻는 정보가 없다(404). */
+    public static Optional<OrderToken> parse(String value) {
+        return value != null && isCanonicalUuid(value) ? Optional.of(new OrderToken(value)) : Optional.empty();
     }
 
     private static boolean isCanonicalUuid(String value) {

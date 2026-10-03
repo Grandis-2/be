@@ -49,6 +49,10 @@ public class OrderJpaEntity extends BaseEntity {
     @Column(nullable = false, updatable = false, length = 30)
     private OrderStatus status;
 
+    /** 상태와 함께 원장의 벌크 UPDATE 로만 바뀐다(ck_order_authorizing_attempt). 새 주문은 늘 비어 있다. */
+    @Column(updatable = false, length = 64)
+    private String authorizingProviderOrderId;
+
     @Column(nullable = false, updatable = false, precision = 12, scale = 0)
     private BigDecimal totalAmount;
 
@@ -130,6 +134,10 @@ public class OrderJpaEntity extends BaseEntity {
 
     public OrderStatus getStatus() {
         return status;
+    }
+
+    public String getAuthorizingProviderOrderId() {
+        return authorizingProviderOrderId;
     }
 
     public BigDecimal getTotalAmount() {

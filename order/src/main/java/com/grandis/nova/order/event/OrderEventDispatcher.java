@@ -2,6 +2,7 @@ package com.grandis.nova.order.event;
 
 import com.grandis.nova.common.message.EventEnvelope;
 import com.grandis.nova.order.order.cancel.SettlePreorderCancelService;
+import com.grandis.nova.order.order.pay.PaymentResults;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -15,12 +16,17 @@ public class OrderEventDispatcher {
 
     /** 예약 이벤트의 aggregate. aggregateId 가 예약 내부 id 라는 뜻이다. */
     static final String PREORDER_AGGREGATE = "PREORDER";
+    /** 결제 결과의 aggregate. aggregateId 가 주문 id 라는 뜻이다. */
+    static final String ORDER_AGGREGATE = "ORDER";
 
     private final SettlePreorderCancelService cancelSettlement;
+    private final PaymentResults paymentResults;
     private final JsonMapper jsonMapper;
 
-    public OrderEventDispatcher(SettlePreorderCancelService cancelSettlement, JsonMapper jsonMapper) {
+    public OrderEventDispatcher(SettlePreorderCancelService cancelSettlement, PaymentResults paymentResults,
+                                JsonMapper jsonMapper) {
         this.cancelSettlement = cancelSettlement;
+        this.paymentResults = paymentResults;
         this.jsonMapper = jsonMapper;
     }
 
@@ -30,15 +36,18 @@ public class OrderEventDispatcher {
         switch (InboundEventType.valueOf(envelope.eventType())) {
             case PREORDER_CANCEL_REQUESTED -> cancelSettlement.settle(
                     jsonMapper.treeToValue(envelope.payload(), PreorderCancelRequested.class)
-                            .toCancel(preorderInternalId(envelope)));
+                            .toCancel(aggregateId(envelope, PREORDER_AGGREGATE)));
+            case ORDER_PAYMENT_SETTLED -> paymentResults.settle(
+                    jsonMapper.treeToValue(envelope.payload(), OrderPaymentSettled.class)
+                            .toSettlement(aggregateId(envelope, ORDER_AGGREGATE)));
         }
     }
 
-    /** 주문은 봉투의 aggregateId 로 찾는다. 다른 aggregate 의 id 로 엉뚱한 주문을 정리하지 않게 종류를 확인한다. */
-    private static Long preorderInternalId(EventEnvelope envelope) {
-        if (!PREORDER_AGGREGATE.equals(envelope.aggregateType()) || envelope.aggregateId() == null) {
-            throw new IllegalArgumentException("예약 이벤트가 아니다: eventId=%s, aggregateType=%s, aggregateId=%s"
-                    .formatted(envelope.eventId(), envelope.aggregateType(), envelope.aggregateId()));
+    /** 대상은 봉투의 aggregateId 로 찾는다. 다른 aggregate 의 id 로 엉뚱한 주문을 바꾸지 않게 종류를 확인한다. */
+    private static Long aggregateId(EventEnvelope envelope, String expectedType) {
+        if (!expectedType.equals(envelope.aggregateType()) || envelope.aggregateId() == null) {
+            throw new IllegalArgumentException("%s 이벤트가 아니다: eventId=%s, aggregateType=%s, aggregateId=%s"
+                    .formatted(expectedType, envelope.eventId(), envelope.aggregateType(), envelope.aggregateId()));
         }
         return envelope.aggregateId();
     }

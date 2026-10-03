@@ -24,6 +24,8 @@ import java.util.Objects;
  *
  * @param id              저장 전이면 null
  * @param preorderToken   사전예약 주문이 가리키는 예약의 공개 UUID. 결제 때 preorder 에 다시 물을 때 쓴다. 아니면 null
+ * @param authorizingProviderOrderId 승인을 기다리는 결제창(결제사 주문 번호). AUTHORIZING 일 때만 있다 — 거절 · 되돌림은 이 결제창의
+ *                        것일 때만 반영한다(늦게 온 이전 결제창의 거절이 새 결제창의 승인 중에 주문을 되돌리지 않게)
  * @param paymentDueAt    일반 주문의 10분 기한. 사전예약 주문은 예약의 24시간 기한을 따르므로 늘 null
  * @param stockReleasedAt 일반 판매의 재고 반환 표식. 사전예약 주문은 늘 null
  * @param createdAt       저장 전이면 null
@@ -37,6 +39,7 @@ public record Order(
         Long preorderId,
         String preorderToken,
         OrderStatus status,
+        String authorizingProviderOrderId,
         Money totalAmount,
         Instant paymentDueAt,
         Instant stockReleasedAt,
@@ -68,6 +71,10 @@ public record Order(
         if (stockReleasedAt != null && (preorder || status != OrderStatus.CANCELED)) {
             throw new IllegalArgumentException("재고 반환 표식은 취소된 일반 주문에만 있다");
         }
+        // ck_order_authorizing_attempt
+        if ((status == OrderStatus.AUTHORIZING) != (authorizingProviderOrderId != null)) {
+            throw new IllegalArgumentException("승인 중인 주문만 결제창 번호를 가진다: status=" + status);
+        }
         if (eventSequence < OrderEvent.FIRST_SEQUENCE) {
             throw new IllegalArgumentException("이력 번호는 1 이상이다: " + eventSequence);
         }
@@ -87,7 +94,7 @@ public record Order(
             throw new IllegalArgumentException("사전예약 주문은 옵션 하나 · 수량 1이다");
         }
         return new Order(null, orderToken, draft.customerId(), draft.source(), draft.preorderId(),
-                draft.preorderToken(), OrderStatus.AWAITING_PAYMENT, draft.totalAmount(), null, null, draft.shipTo(), null,
+                draft.preorderToken(), OrderStatus.AWAITING_PAYMENT, null, draft.totalAmount(), null, null, draft.shipTo(), null,
                 OrderEvent.FIRST_SEQUENCE, null, null);
     }
 

@@ -1,0 +1,38 @@
+apply plugin: 'org.springframework.boot'
+
+// 결제 서비스. 사용자 요청을 직접 받지 않는 내부 서비스다 — order · draw 가 결제 준비 · 승인을 부른다.
+// 토스 연동 · 결제 원장(payments · payment_transactions) · 결과 불명 복구 · 환불이 여기서 닫힌다.
+dependencies {
+    implementation project(':common:types')
+    implementation project(':common:web')
+    // 저장 해상도(마이크로초) 시계 storageClock(@Primary) · JPA Auditing 을 자동설정으로 켠다. @EnableJpaAuditing 을 따로 켜지 않는다.
+    implementation project(':common:jpa')
+    // 내부 API 인증: 호출자(order · draw)가 받은 사용자 액세스 토큰을 Authorization: Bearer 로 그대로 싣고 여기서 다시 검증한다.
+    // 주인 확인은 호출자가 한다. 폐기 표식 조회(Redis)로 common:redis 가 따라온다 — application.yml 에 spring.data.redis 가 필요하다.
+    implementation project(':common:security')
+    implementation project(':common:redis')
+    // 결제 결과를 대상 서비스에 이벤트로 알린다(NV-101). 표 · 종류는 PaymentOutboxConfig 가 준다. 전송은 SQS(common:sqs).
+    implementation project(':common:outbox')
+    implementation project(':common:sqs')
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    // 토스 결제 API 는 HTTP Interface(@HttpExchange) + RestClient 로 부른다(NV-98).
+    implementation 'org.springframework.boot:spring-boot-starter-restclient'
+    runtimeOnly 'com.mysql:mysql-connector-j'
+
+    // DB 동작은 MySQL 로만 검증한다(H2 없음).
+    testImplementation project(':common:testing')
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    testImplementation 'org.testcontainers:testcontainers-mysql'
+    testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+    // 계층 · 경계 규칙을 테스트로 강제한다(NV-98 · NV-99). 스프링 BOM 에 없어 버전을 적는다(order 와 같은 값).
+    testImplementation 'com.tngtech.archunit:archunit-junit5:1.4.1'
+    // 테스트 스키마 생성용. 서비스는 Flyway 를 실행하지 않는다.
+    testImplementation 'org.springframework.boot:spring-boot-starter-flyway'
+    testRuntimeOnly 'org.flywaydb:flyway-mysql'
+}
+
+tasks.named('test') {
+    systemProperty 'nova.migrations-path', rootProject.file('flyway-project/migrations').absolutePath
+}

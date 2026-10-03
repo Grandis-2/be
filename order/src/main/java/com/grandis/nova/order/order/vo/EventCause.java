@@ -15,7 +15,7 @@ import java.util.Objects;
  */
 public record EventCause(EventActor actor, String reason) {
 
-    static final int MAX_REASON_LENGTH = 500;
+    public static final int MAX_REASON_LENGTH = 500;
 
     public EventCause {
         Objects.requireNonNull(actor, "actor");

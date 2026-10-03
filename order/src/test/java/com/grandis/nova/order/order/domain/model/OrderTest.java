@@ -79,7 +79,7 @@ class OrderTest {
     // 되살린 행에도 ck_order_preorder_token 규칙을 건다.
     @Test
     void constructorRejectsPreorderOrderWithoutPreorderToken() {
-        assertThatThrownBy(() -> new Order(1L, TOKEN, 1L, OrderSource.PREORDER, 7L, null, OrderStatus.AWAITING_PAYMENT,
+        assertThatThrownBy(() -> new Order(1L, TOKEN, 1L, OrderSource.PREORDER, 7L, null, OrderStatus.AWAITING_PAYMENT, null,
                 Money.won(1000), null, null, SHIP_TO, null, 1, Instant.EPOCH, Instant.EPOCH))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("preorderToken");
@@ -94,7 +94,7 @@ class OrderTest {
     // 배송지 · 관리자 메모에는 개인정보가 들어갈 수 있다. 로그 · 예외 메시지로 새지 않게 식별 · 상태만 싣는다.
     @Test
     void toStringCarriesNoPersonalData() {
-        Order order = new Order(1L, TOKEN, 1L, OrderSource.PREORDER, 7L, PREORDER_UUID, OrderStatus.AWAITING_PAYMENT,
+        Order order = new Order(1L, TOKEN, 1L, OrderSource.PREORDER, 7L, PREORDER_UUID, OrderStatus.AWAITING_PAYMENT, null,
                 Money.won(1000), null, null, SHIP_TO, "고객 요청: 010-9999-8888 로 연락", 1, Instant.EPOCH, Instant.EPOCH);
 
         assertThat(order.toString())
@@ -113,12 +113,25 @@ class OrderTest {
         assertThat(before.id()).isEqualTo(after.id());
     }
 
+    // ck_order_authorizing_attempt: 승인 중일 때만 결제창 번호가 있다
+    @Test
+    void onlyAuthorizingOrderCarriesAttempt() {
+        assertThatThrownBy(() -> order(OrderSource.PREORDER, 7L, OrderStatus.AUTHORIZING, null, null, 2))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new Order(1L, TOKEN, 1L, OrderSource.PREORDER, 7L, PREORDER_UUID,
+                OrderStatus.AWAITING_PAYMENT, "attempt-0001", Money.won(1000), null, null, SHIP_TO, null, 1,
+                Instant.EPOCH, Instant.EPOCH)).isInstanceOf(IllegalArgumentException.class);
+        assertThat(new Order(1L, TOKEN, 1L, OrderSource.PREORDER, 7L, PREORDER_UUID, OrderStatus.AUTHORIZING,
+                "attempt-0001", Money.won(1000), null, null, SHIP_TO, null, 2, Instant.EPOCH, Instant.EPOCH)
+                .authorizingProviderOrderId()).isEqualTo("attempt-0001");
+    }
+
     private static final OrderToken TOKEN = OrderToken.issue();
 
     private static Order order(OrderSource source, Long preorderId, OrderStatus status, Instant paymentDueAt,
                                Instant stockReleasedAt, long eventSequence) {
         String preorderToken = source == OrderSource.PREORDER ? PREORDER_UUID : null;
-        return new Order(1L, TOKEN, 1L, source, preorderId, preorderToken, status, Money.won(1000), paymentDueAt, stockReleasedAt,
+        return new Order(1L, TOKEN, 1L, source, preorderId, preorderToken, status, null, Money.won(1000), paymentDueAt, stockReleasedAt,
                 SHIP_TO, null, eventSequence, Instant.EPOCH, Instant.EPOCH);
     }
 }

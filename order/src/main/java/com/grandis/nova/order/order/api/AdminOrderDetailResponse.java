@@ -19,6 +19,6 @@ public record AdminOrderDetailResponse(
     public static AdminOrderDetailResponse from(OrderView.Detail view) {
         return new AdminOrderDetailResponse(OrderResponse.of(view.order(), view.items()),
                 view.order().customerId(), view.order().internalNote(),
-                view.events().stream().map(OrderEventResponse::from).toList());
+                view.events().stream().map(OrderEventResponse::forAdmin).toList());
     }
 }
