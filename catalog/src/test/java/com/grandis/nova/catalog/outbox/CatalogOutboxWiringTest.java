@@ -11,6 +11,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
@@ -23,7 +25,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,8 +41,12 @@ import static org.mockito.BDDMockito.willAnswer;
  *
  * payload 기준 문자열은 공통 모듈로 옮기기 전 catalog 의 전용 매퍼(JsonMapper.builder().build())가 낸 값이다(실측).
  * 옮긴 뒤에는 앱의 JsonMapper 빈이 쓴다 — 받는 쪽 계약이라 글자까지 같아야 한다.
+ *
+ * 릴레이는 전용 실행기가 짧은 주기로 돌게 한다(배선까지 본다). 다른 시험이 이 주기를 물려받지 않게 끝나면 컨텍스트를 닫는다.
  */
 @CatalogIntegrationTest
+@TestPropertySource(properties = "nova.outbox.relay-interval=200ms")
+@DirtiesContext
 class CatalogOutboxWiringTest {
 
     static final Duration TIMEOUT = Duration.ofSeconds(10);
@@ -116,6 +124,39 @@ class CatalogOutboxWiringTest {
         await().atMost(TIMEOUT).until(() -> jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM catalog_outbox_events WHERE event_id IN (?, ?) AND published_at IS NOT NULL",
                 Integer.class, preorderEvent, inStockEvent) == 2);
+    }
+
+    /**
+     * 공통 모듈의 실패 · 재전송 시험은 시험용 표에서 돈다. catalog 표는 그 표와 칸 · 형 · 인덱스가 같고
+     * 실패 횟수 CHECK(publish_attempts >= 0)만 더 있다 — 실패 기록(UPDATE)이 그 제약을 지나 다시 보내지는지 catalog 표에서 본다.
+     * 커밋 직후 발행을 놓친 행(만든 지 2분)이라 릴레이가 집는다.
+     */
+    @Test
+    @DisplayName("전송이 실패하면 catalog 표의 그 행은 실패 횟수가 오른 채 미발행으로 남고, 릴레이가 다시 보내 발행 완료가 된다")
+    void failedSendIsRetriedFromCatalogTable() {
+        String eventId = UUID.randomUUID().toString();
+        AtomicInteger calls = new AtomicInteger();
+        willAnswer(invocation -> {
+            OutboundMessage message = invocation.getArgument(0);
+            if (message.eventId().equals(eventId) && calls.incrementAndGet() == 1) {
+                throw new IllegalStateException("첫 전송 실패(큐 장애 흉내)");
+            }
+            sent.add(message);
+            return null;
+        }).given(transport).send(any());
+        jdbcTemplate.update("""
+                INSERT INTO catalog_outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, created_at)
+                VALUES (?, 'PRODUCT', ?, 'IN_STOCK_PRODUCT_REGISTERED', ?, UTC_TIMESTAMP(6) - INTERVAL 2 MINUTE)
+                """, eventId, NEXT_PRODUCT.incrementAndGet(), IN_STOCK_PAYLOAD);
+
+        await().atMost(TIMEOUT).until(() -> sentOf(eventId).isPresent());
+        await().atMost(TIMEOUT).until(() -> jdbcTemplate.queryForObject(
+                "SELECT published_at IS NOT NULL FROM catalog_outbox_events WHERE event_id = ?", Boolean.class, eventId));
+
+        assertThat(calls).as("한 번 실패하고 한 번 더 보냈다").hasValue(2);
+        assertThat(sentOf(eventId).orElseThrow().destination()).isEqualTo("order-events");
+        assertThat(jdbcTemplate.queryForObject("SELECT publish_attempts FROM catalog_outbox_events WHERE event_id = ?",
+                Integer.class, eventId)).as("실패 한 번이 표에 남는다").isEqualTo(1);
     }
 
     private static PreorderProductRegistered preorder(Long productId) {
