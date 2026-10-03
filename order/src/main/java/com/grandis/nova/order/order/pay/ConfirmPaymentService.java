@@ -26,8 +26,8 @@ import java.util.concurrent.Semaphore;
 /**
  * 결제 승인: 결제창 인증을 마친 결제를 payment 에 승인시키고 결과를 주문에 반영한다. 돈이 실제로 움직이는 단계다.
  *
- * 순서: 주문 확인(본인) → 금액 대조 → 동시 상한 → 결제 가능 재확인(트랜잭션 밖) → [tx] 승인 중 + 결제창 번호
- * → payment 승인(트랜잭션 밖) → [tx] 결과 반영({@link PaymentResults}).
+ * 순서: 주문 확인(본인) → 금액 대조 → 동시 상한 → 결제 가능 재확인(트랜잭션 밖) → 결제창 확인(payment, 시작 금지)
+ * → [tx] 승인 중 + 결제창 번호 → payment 승인(트랜잭션 밖) → [tx] 결과 반영({@link PaymentResults}).
  *
  * - 사용자가 보낸 금액은 기대값이 아니라 대조 대상이다(D15). 다르면 아무것도 바꾸지 않고 거절한다. payment 에는 주문의
  *   저장 총액이 간다(ConfirmRequest.of(order, …) — 금액을 따로 넘길 길이 없다).
@@ -35,8 +35,9 @@ import java.util.concurrent.Semaphore;
  *   닿지 못했거나 거절됐으면 주문은 그대로 두고 오류로 답한다 — 앞선 요청이 같은 결제창을 이미 시작했을 수 있다.
  * - 승인 중인 주문에 같은 결제창으로 다시 오면 payment 에 다시 물어 결과를 회수한다. 결제창이 아직 시작 전이면 이 요청이 시작하므로
  *   결제 가능을 다시 확인하고, 결제할 수 없거나 확인하지 못하면 "시작 금지" 로 물어 결과만 받는다. 다른 결제창이면 확인 중이다.
- * - 시작 전에 멈춘 결제창의 주문은 확인 중에 남는다. 푸는 것은 NV-102 의 미시작 결제창 만료(EXPIRED — 스키마 · 상태 머신 ·
- *   도메인 불변식 변경 필요)다 — NV-102 없이 운영에 노출하지 않는다.
+ * - 승인 중으로 바꾸는 결제창은 payment 가 이 주문의 것으로 아는 번호뿐이다(결제창 확인). 그래서 승인 중인 주문은 payment 가 반드시
+ *   결과를 낸다 — 시작 전에 멈춘 결제창은 payment 의 만료가 "결제창 만료" 거절을, 시작된 결제창은 복구가 확정 결과를 이벤트로 보낸다.
+ *   확인에 답을 받지 못하면 아무것도 바꾸지 않고 오류로 답한다(모르는 번호로 승인 중이 되면 아무도 풀지 못한다).
  * - 이미 결제된 주문이면 APPROVED 로 답한다(주문당 성공 결제는 하나).
  * - 승인 호출은 payment 응답을 최대 70초 기다린다. 동시 상한을 넘으면 상태를 바꾸기 전에 503 으로 거절한다 — 토스가 느려져도
  *   결제와 무관한 주문 API 의 요청 스레드가 남는다.
@@ -128,6 +129,19 @@ public class ConfirmPaymentService {
 
     private ConfirmedPayment start(Order order, String sessionToken, String providerOrderId, String paymentKey) {
         payability.require(order, sessionToken);
+        switch (confirmer.check(order, providerOrderId, paymentKey, sessionToken)) {
+            case PaymentConfirmation.Pending pending -> {
+            }
+            case PaymentConfirmation.Approved approved -> {
+                // 이 결제창이 이미 승인됐다(앞선 응답 · 이벤트를 잃었다). 승인 중을 거쳐 아래 승인 호출이 그 결과를 반영한다
+            }
+            case PaymentConfirmation.Declined declined -> {
+                // 이미 끝난 결제창(거절 · 만료)이다. 승인 중으로 바꾸지 않고 거절로 답한다 — 결제 준비부터 다시
+                return new ConfirmedPayment(ConfirmedPayment.Result.DECLINED, order.status(), declined.reason());
+            }
+            case PaymentConfirmation.NotStartable notStartable -> throw notStartable.failure();
+            case PaymentConfirmation.Unanswered unanswered -> throw unanswered.failure();
+        }
         OrderTransition requested = writeTransaction.execute(status ->
                 ledger.requestPayment(order.id(), providerOrderId, EventCause.user()));
         if (!requested.applied()) {

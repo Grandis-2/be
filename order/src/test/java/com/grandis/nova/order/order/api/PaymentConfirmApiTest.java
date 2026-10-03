@@ -21,6 +21,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.InOrder;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
@@ -45,12 +48,16 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -132,8 +139,12 @@ class PaymentConfirmApiTest {
                 .andExpect(jsonPath("$.data.orderStatus").value("AWAITING_CONFIRMATION"))
                 .andExpect(jsonPath("$.data.declineReason").doesNotExist());
 
-        // 대상 · 금액은 주문의 저장값이다(D15). 결제창 번호는 경로로, 사용자 토큰은 그대로 전달한다
-        verify(paymentClient).confirm(attempt, new ConfirmRequest("ORDER", order.id(), PAYMENT, TOTAL, true),
+        // 대상 · 금액은 주문의 저장값이다(D15). 결제창 번호는 경로로, 사용자 토큰은 그대로 전달한다.
+        // 승인 중으로 바꾸기 전에 결제창을 확인(시작 금지)하고, 그다음 시작한다
+        InOrder calls = inOrder(paymentClient);
+        calls.verify(paymentClient).confirm(attempt, new ConfirmRequest("ORDER", order.id(), PAYMENT, TOTAL, false),
+                BearerTokens.value(SESSION));
+        calls.verify(paymentClient).confirm(attempt, new ConfirmRequest("ORDER", order.id(), PAYMENT, TOTAL, true),
                 BearerTokens.value(SESSION));
         assertThat(orderRow()).containsEntry("status", "AWAITING_CONFIRMATION")
                 .containsEntry("authorizing_provider_order_id", null);
@@ -174,7 +185,9 @@ class PaymentConfirmApiTest {
     // payment 가 토스를 기다리는 사이 order 의 읽기 기한이 지났다 — 시작했을 수 있어 되돌리지 않는다
     @Test
     void paymentTimeoutKeepsOrderAuthorizing() throws Exception {
-        given(paymentClient.confirm(any(), any(), any())).willThrow(new ResourceAccessException("Read timed out"));
+        paymentDoes(call -> {
+            throw new ResourceAccessException("Read timed out");
+        });
 
         confirm(attempt, TOTAL)
                 .andExpect(status().isOk())
@@ -214,8 +227,9 @@ class PaymentConfirmApiTest {
 
     @Test
     void unreachablePaymentKeepsOrderAuthorizing() throws Exception {
-        given(paymentClient.confirm(any(), any(), any()))
-                .willThrow(new ResourceAccessException("Connection refused", new ConnectException("Connection refused")));
+        paymentDoes(call -> {
+            throw new ResourceAccessException("Connection refused", new ConnectException("Connection refused"));
+        });
 
         confirm(attempt, TOTAL).andExpect(status().isServiceUnavailable());
 
@@ -241,6 +255,74 @@ class PaymentConfirmApiTest {
 
         assertThat(orderRow()).containsEntry("status", "AUTHORIZING").containsEntry("authorizing_provider_order_id", attempt);
         assertThat(history()).hasSize(1);
+    }
+
+    // ── 결제창 확인: payment 가 이 주문의 것으로 아는 결제창만 승인 중이 된다 ─────────────────────
+
+    /*
+     * 변조 · 남의 결제창 번호. 승인 중으로 바꾼 뒤에 알게 되면, 그 응답을 잃었을 때 payment 는 그 번호를 몰라 만료 · 복구 어느 것도
+     * 주문을 풀지 못한다(승인 중에 갇힘). 바꾸기 전에 거절한다.
+     */
+    @Test
+    void unknownAttemptIsRejectedBeforeAuthorizing() throws Exception {
+        given(paymentClient.confirm(any(), any(), any()))
+                .willThrow(rejection(HttpStatus.NOT_FOUND, "PAYMENT_ATTEMPT_NOT_FOUND"));
+
+        confirm(attempt, TOTAL)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PAYMENT_ATTEMPT_NOT_FOUND"));
+
+        assertThat(orderRow()).containsEntry("status", "AWAITING_PAYMENT")
+                .containsEntry("authorizing_provider_order_id", null);
+        assertThat(history()).hasSize(1);
+        verify(paymentClient, never()).confirm(any(), argThat(ConfirmRequest::startAllowed), any());
+    }
+
+    // 확인은 아무것도 시작하지 않는다 — 답을 받지 못하면(시작 호출과 달리 읽기 기한 · 5xx 도) 이번 요청 실패로 답하고 주문은 그대로
+    @Test
+    void checkWithoutAnswerChangesNothing() throws Exception {
+        given(paymentClient.confirm(any(), any(), any()))
+                .willThrow(new ResourceAccessException("Connection refused", new ConnectException("Connection refused")))
+                .willThrow(new ResourceAccessException("Read timed out"))
+                .willThrow(HttpServerErrorException.create(HttpStatus.SERVICE_UNAVAILABLE, "Service Unavailable", null,
+                        null, null))
+                .willReturn(ApiResponse.ok(new ConfirmReply(ConfirmReply.Result.DECLINED, null)));
+
+        confirm(attempt, TOTAL).andExpect(status().isServiceUnavailable());
+        confirm(attempt, TOTAL).andExpect(status().isServiceUnavailable());
+        confirm(attempt, TOTAL).andExpect(status().isServiceUnavailable());
+        confirm(attempt, TOTAL).andExpect(status().isInternalServerError());
+
+        assertThat(orderRow()).containsEntry("status", "AWAITING_PAYMENT");
+        assertThat(history()).hasSize(1);
+        verify(paymentClient, never()).confirm(any(), argThat(ConfirmRequest::startAllowed), any());
+    }
+
+    // 이미 끝난 결제창(거절 · 만료): 승인 중을 거치지 않고 거절로 답한다
+    @Test
+    void finishedAttemptIsDeclinedWithoutAuthorizing() throws Exception {
+        paymentAnswersEverything(reply(ConfirmReply.Result.DECLINED, DeclineReason.PAYMENT_EXPIRED));
+
+        confirm(attempt, TOTAL)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.result").value("DECLINED"))
+                .andExpect(jsonPath("$.data.orderStatus").value("AWAITING_PAYMENT"))
+                .andExpect(jsonPath("$.data.declineReason").value("PAYMENT_EXPIRED"));
+
+        assertThat(history()).hasSize(1);
+        verify(paymentClient, never()).confirm(any(), argThat(ConfirmRequest::startAllowed), any());
+    }
+
+    // 이미 승인된 결제창(앞선 응답 · 이벤트를 잃었다): 승인 중을 거쳐 승인을 반영한다
+    @Test
+    void approvedAttemptFoundByCheckIsApplied() throws Exception {
+        paymentAnswersEverything(reply(ConfirmReply.Result.APPROVED, null));
+
+        confirm(attempt, TOTAL)
+                .andExpect(jsonPath("$.data.result").value("APPROVED"))
+                .andExpect(jsonPath("$.data.orderStatus").value("AWAITING_CONFIRMATION"));
+
+        assertThat(history()).hasSize(3);
     }
 
     // ── 승인 전 검사: 아무것도 바꾸지 않는다 ───────────────────────────────────
@@ -407,17 +489,19 @@ class PaymentConfirmApiTest {
     @Test
     void doubleClickSecondRequestSeesPending() throws Exception {
         AtomicReference<String> second = new AtomicReference<>();
-        given(paymentClient.confirm(any(), any(), any()))
-                .willAnswer(invocation -> {
-                    second.set(confirm(attempt, TOTAL).andReturn().getResponse().getContentAsString());
-                    return reply(ConfirmReply.Result.APPROVED, null);
-                })
-                .willReturn(reply(ConfirmReply.Result.PENDING, null));
+        AtomicBoolean firstStarted = new AtomicBoolean();
+        paymentDoes(call -> {
+            if (firstStarted.getAndSet(true)) {
+                return reply(ConfirmReply.Result.PENDING, null);
+            }
+            second.set(confirm(attempt, TOTAL).andReturn().getResponse().getContentAsString());
+            return reply(ConfirmReply.Result.APPROVED, null);
+        });
 
         confirm(attempt, TOTAL).andExpect(jsonPath("$.data.result").value("APPROVED"));
 
         assertThat(jsonMapper.readTree(second.get()).get("data").get("result").asString()).isEqualTo("PENDING");
-        verify(paymentClient, times(2)).confirm(eq(attempt), any(), any());
+        verify(paymentClient, times(2)).confirm(eq(attempt), argThat(ConfirmRequest::startAllowed), any());
         assertThat(history()).hasSize(3);
     }
 
@@ -437,7 +521,7 @@ class PaymentConfirmApiTest {
 
     @Test
     void eventBeforeSyncResultIsAppliedOnce(CapturedOutput output) throws Exception {
-        given(paymentClient.confirm(any(), any(), any())).willAnswer(invocation -> {
+        paymentDoes(call -> {
             dispatcher.dispatch(settled(attempt, "APPROVED", null));
             return reply(ConfirmReply.Result.APPROVED, null);
         });
@@ -452,7 +536,7 @@ class PaymentConfirmApiTest {
 
     @Test
     void declineEventBeforeSyncResultIsAppliedOnce() throws Exception {
-        given(paymentClient.confirm(any(), any(), any())).willAnswer(invocation -> {
+        paymentDoes(call -> {
             dispatcher.dispatch(settled(attempt, "DECLINED", "CARD_REJECTED"));
             return reply(ConfirmReply.Result.DECLINED, DeclineReason.CARD_REJECTED);
         });
@@ -522,10 +606,38 @@ class PaymentConfirmApiTest {
     }
 
     private void paymentAnswers(ApiResponse<ConfirmReply> reply) {
+        paymentDoes(call -> reply);
+    }
+
+    /** 결제창 확인까지 같은 답 — 결제창 확인 자체를 보는 테스트용. */
+    private void paymentAnswersEverything(ApiResponse<ConfirmReply> reply) {
         given(paymentClient.confirm(any(), any(), any())).willReturn(reply);
     }
 
     private void paymentRejects(HttpStatus status, String code) {
+        HttpClientErrorException rejected = rejection(status, code);
+        paymentDoes(call -> {
+            throw rejected;
+        });
+    }
+
+    /**
+     * payment 대역. 결제 대기 주문의 결제창 확인(시작 금지 호출)에는 "시작 전"(PENDING)으로 답하고 — payment 가 아는 결제창이다 —
+     * 그 밖의 호출(시작 · 승인 중 결과 회수)은 answer 대로 답한다. 결제창 확인 자체를 보는 테스트는 직접 스텁한다.
+     */
+    private void paymentDoes(Answer<?> answer) {
+        given(paymentClient.confirm(any(), any(), any())).willAnswer(call -> isCheck(call)
+                ? reply(ConfirmReply.Result.PENDING, null)
+                : answer.answer(call));
+    }
+
+    /** request 가 null 이면 다시 스텁하는 중이다(given(mock.confirm(any()…)) 이 앞 Answer 를 null 인자로 부른다). */
+    private boolean isCheck(InvocationOnMock call) {
+        ConfirmRequest request = call.getArgument(1);
+        return request != null && !request.startAllowed() && "AWAITING_PAYMENT".equals(orderRow().get("status"));
+    }
+
+    private HttpClientErrorException rejection(HttpStatus status, String code) {
         String body = """
                 {"success":false,"data":null,"error":{"code":"%s","message":"m","details":null}}
                 """.formatted(code);
@@ -533,7 +645,7 @@ class PaymentConfirmApiTest {
                 body.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8);
         // RestClient 가 붙이는 본문 변환을 흉내 낸다(직접 만든 예외에는 없다)
         rejected.setBodyConvertFunction(type -> jsonMapper.readValue(body, jsonMapper.constructType(type.getType())));
-        given(paymentClient.confirm(any(), any(), any())).willThrow(rejected);
+        return rejected;
     }
 
     private static ApiResponse<ConfirmReply> reply(ConfirmReply.Result result, DeclineReason reason) {

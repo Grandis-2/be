@@ -36,6 +36,7 @@ public class PaymentConfirmer {
 
     static final String DEPENDENCY = "payment";
     static final String OPERATION = "confirm";
+    static final String CHECK = "confirm-check";
 
     private final PaymentConfirmClient client;
 
@@ -77,10 +78,45 @@ public class PaymentConfirmer {
         return read(order, providerOrderId, body == null ? null : body.data());
     }
 
+    /**
+     * 주문을 승인 중으로 바꾸기 전에, payment 가 이 결제창을 이 주문의 것으로 아는지 묻는다(시작 금지로 부르므로 아무것도 시작하지 않는다).
+     * 승인 중 주문의 결제창 번호를 payment 가 모르면, 응답을 잃었을 때 payment 의 만료 · 복구가 그 주문을 풀지 못해 승인 중에 갇힌다.
+     *
+     * 확인이 시작하지 않으므로 답을 받지 못한 경우(연결 실패 · 읽기 기한 · 5xx · 계약과 다른 200)는 모두 "이번 요청 실패"다 —
+     * {@link #confirm} 과 달리 확인 중(Pending)으로 두지 않는다.
+     *
+     * @return Pending(아직 시작 전 · 진행 중) · Approved · Declined(끝난 결제창) · NotStartable(번호 없음 · 다른 주문) · Unanswered
+     */
+    public PaymentConfirmation check(Order order, String providerOrderId, String paymentKey, String sessionToken) {
+        ApiResponse<ConfirmReply> body;
+        try {
+            body = client.confirm(providerOrderId, ConfirmRequest.of(order, paymentKey, false), authorization(sessionToken));
+        } catch (HttpClientErrorException.Unauthorized e) {
+            log.error("{} {} 전달 토큰 거절(401) — payment 의 JWKS · jwt 설정 · 폐기 조회 확인 orderId={}",
+                    DEPENDENCY, CHECK, order.id());
+            return new PaymentConfirmation.Unanswered(new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
+        } catch (HttpClientErrorException e) {
+            return rejected(order, providerOrderId, e);
+        } catch (RestClientException e) {
+            if (InternalCallFailures.isUnreadableResponse(e)) {
+                return new PaymentConfirmation.Unanswered(InternalCallFailures.unreadableResponse(DEPENDENCY,
+                        CHECK + " orderId=" + order.id(), e));
+            }
+            return new PaymentConfirmation.Unanswered(InternalCallFailures.unavailable(DEPENDENCY,
+                    CHECK + " 응답 없음 orderId=" + order.id(), e));
+        }
+        ConfirmReply reply = body == null ? null : body.data();
+        if (!conforms(reply)) {
+            log.error("{} 연동 오류 {} 계약과 다른 응답 orderId={} providerOrderId={} reply={}",
+                    DEPENDENCY, CHECK, order.id(), providerOrderId, reply);
+            return new PaymentConfirmation.Unanswered(new IllegalStateException(DEPENDENCY + " 연동 오류: " + CHECK));
+        }
+        return read(order, providerOrderId, reply);
+    }
+
     /** 200 인데 모양이 계약과 다르면 시작했을 수 있어 Pending 이다. 다시 불러도 같으니 ERROR 로 남긴다. */
     private static PaymentConfirmation read(Order order, String providerOrderId, ConfirmReply reply) {
-        if (reply == null || reply.result() == null
-                || (reply.result() == ConfirmReply.Result.DECLINED) != (reply.declineReason() != null)) {
+        if (!conforms(reply)) {
             log.error("{} 연동 오류 {} 계약과 다른 응답 — 결과 모름으로 둔다 orderId={} providerOrderId={} reply={}",
                     DEPENDENCY, OPERATION, order.id(), providerOrderId, reply);
             return new PaymentConfirmation.Pending();
@@ -90,6 +126,11 @@ public class PaymentConfirmer {
             case DECLINED -> new PaymentConfirmation.Declined(reply.declineReason());
             case PENDING -> new PaymentConfirmation.Pending();
         };
+    }
+
+    private static boolean conforms(ConfirmReply reply) {
+        return reply != null && reply.result() != null
+                && (reply.result() == ConfirmReply.Result.DECLINED) == (reply.declineReason() != null);
     }
 
     /**
