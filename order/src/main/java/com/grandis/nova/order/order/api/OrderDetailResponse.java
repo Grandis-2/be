@@ -16,6 +16,6 @@ public record OrderDetailResponse(
 
     public static OrderDetailResponse from(OrderView.Detail view) {
         return new OrderDetailResponse(OrderResponse.of(view.order(), view.items()),
-                view.events().stream().map(OrderEventResponse::from).toList());
+                view.events().stream().map(OrderEventResponse::forCustomer).toList());
     }
 }

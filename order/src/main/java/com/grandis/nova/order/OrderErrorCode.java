@@ -22,6 +22,8 @@ public enum OrderErrorCode implements ErrorCode {
     PAYMENT_ATTEMPT_NOT_FOUND(404, "결제 시도를 찾을 수 없습니다."),
     /** 예약당 주문은 평생 하나라(uq_order_preorder) 취소된 주문이 있으면 다시 주문할 수 없다. */
     ORDER_ALREADY_CANCELED(409, "이미 취소된 주문이 있어 다시 주문할 수 없습니다."),
+    /** 지금 상태에서 그 배송 단계로 옮길 수 없다(앞 단계 건너뛰기 · 미결제 · 취소 중 등). details.status 에 지금 상태. */
+    ORDER_STEP_NOT_ALLOWED(409, "지금 상태에서 그 배송 단계로 옮길 수 없습니다."),
     PRODUCT_NOT_FOUND(404, "상품을 찾을 수 없습니다."),
     /** 사전예약은 선점이 없어 재고 행을 두지 않는다. */
     STOCK_NOT_TRACKED(409, "사전예약 상품은 재고를 두지 않습니다."),

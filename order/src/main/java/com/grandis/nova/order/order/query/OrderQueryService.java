@@ -67,15 +67,8 @@ public class OrderQueryService {
         return detail(find(orderToken).orElseThrow(OrderQueryService::notFound));
     }
 
-    /** 형식이 틀린 토큰도 "그런 주문 없음" 이다 — 400 으로 나눠 봐야 호출자가 얻는 정보가 없다. */
     private Optional<Order> find(String orderToken) {
-        OrderToken token;
-        try {
-            token = new OrderToken(orderToken);
-        } catch (IllegalArgumentException e) {
-            return Optional.empty();
-        }
-        return reader.findByOrderToken(token);
+        return OrderToken.parse(orderToken).flatMap(reader::findByOrderToken);
     }
 
     /** 이력은 읽은 주문의 번호까지만 — 그 뒤에 커밋된 전이가 섞이면 상태와 이력의 마지막이 어긋난다. */

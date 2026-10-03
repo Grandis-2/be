@@ -8,6 +8,7 @@ import com.grandis.nova.order.order.vo.EventCause;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.EnumSet;
+import java.util.UUID;
 
 /**
  * 조회 테스트용 주문. 원장으로 만들고 바꾼다 — 조회가 보는 행 · 이력이 운영과 같은 길로 생긴다.
@@ -31,6 +32,14 @@ public class PlacedOrders {
         Long preorderId = fixtures.payablePreorder(customerId, product, 1);
         return transactionTemplate.execute(status -> ledger.place(
                 OrderFixtures.preorderCommand(customerId, preorderId, product).toDraft(), EventCause.user()));
+    }
+
+    /** 결제 요청 · 승인과 같은 전이(미결제 → 승인 중 → 판매자 확인 대기). */
+    public void pay(Long orderId) {
+        transactionTemplate.executeWithoutResult(status -> {
+            ledger.requestPayment(orderId, UUID.randomUUID().toString(), EventCause.user());
+            ledger.settlePayment(orderId, OrderTrigger.PAYMENT_APPROVED, null, EventCause.system("PAYMENT_APPROVED"));
+        });
     }
 
     /** 예약 취소 수신과 같은 전이(미결제 → 취소). */

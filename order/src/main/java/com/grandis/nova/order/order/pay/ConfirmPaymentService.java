@@ -11,6 +11,7 @@ import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderTransition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
+import com.grandis.nova.order.order.vo.OrderToken;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -178,7 +179,7 @@ public class ConfirmPaymentService {
 
     /** 본인 주문. 남의 주문은 존재를 숨긴다. */
     private Order findOwn(Long customerId, String orderToken) {
-        Order order = readTransaction.execute(status -> OrderTokens.parse(orderToken)
+        Order order = readTransaction.execute(status -> OrderToken.parse(orderToken)
                         .flatMap(orderReader::findByOrderToken)
                         .filter(found -> found.customerId().equals(customerId)))
                 .orElseThrow(() -> new BusinessException(OrderErrorCode.ORDER_NOT_FOUND));

@@ -111,6 +111,7 @@ class SecurityRulesTest {
     @ParameterizedTest
     @CsvSource({
             "GET,   /api/v1/admin/orders,                         admin",
+            "POST,  /api/v1/admin/orders/o-1/shipping-steps,      admin",
             "GET,   /api/v1/admin/products/1/stock,               admin",
             "PUT,   /api/v1/admin/products/1/stock,               admin",
             "POST,  /api/v1/admin/products/1/stock,               admin",
@@ -188,6 +189,9 @@ class SecurityRulesTest {
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
         perform(get("/api/v1/admin/orders"), admin).andExpect(status().isOk());
+        perform(post("/api/v1/admin/orders/o-1/shipping-steps"), user)
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
     }
 
     private ResultActions perform(MockHttpServletRequestBuilder request, String accessToken) throws Exception {
