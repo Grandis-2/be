@@ -1,5 +1,6 @@
 package com.grandis.nova.waitingroom.redis;
 
+import com.grandis.nova.waitingroom.domain.product.SalesWindow;
 import com.grandis.nova.waitingroom.domain.queue.QueueEntry;
 import com.grandis.nova.waitingroom.domain.queue.QueueState;
 import com.grandis.nova.waitingroom.redis.ControlStore.ApplyResult;
@@ -186,6 +187,76 @@ class ControlStoreTest {
 
             assertThat(healed.cursor()).isEqualTo(applied.cursor());
             assertThat(queue.status(PRODUCT, "a", now).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);
+        }
+    }
+
+    @Nested
+    class 회차_일정 {
+
+        private final SalesWindow window = new SalesWindow(Instant.parse("2026-10-10T01:00:00Z"),
+                Instant.parse("2026-10-10T02:00:00Z"));
+        private final SalesWindow moved = new SalesWindow(Instant.parse("2026-10-11T01:00:00Z"),
+                Instant.parse("2026-10-11T02:00:00Z"));
+
+        @Test
+        void 일정_번호가_클_때만_쓰고_같거나_옛_번호는_버린다() {
+            assertThat(control.applySchedule(PRODUCT, window, 2).block(WAIT)).isTrue();
+            assertThat(control.applySchedule(PRODUCT, moved, 2).block(WAIT)).as("재전송").isFalse();
+            assertThat(control.applySchedule(PRODUCT, moved, 1).block(WAIT)).as("늦게 온 옛 일정").isFalse();
+            assertThat(products()).isEqualTo(ProductSchedules.format(window, 2));
+
+            assertThat(control.applySchedule(PRODUCT, moved, 3).block(WAIT)).isTrue();
+            assertThat(products()).isEqualTo(ProductSchedules.format(moved, 3));
+        }
+
+        @Test
+        void 번호를_읽을_수_없는_값은_새_일정으로_덮는다() {
+            redis.opsForHash().put(RedisKeys.PRODUCTS, PRODUCT, "broken").block(WAIT);
+
+            assertThat(control.applySchedule(PRODUCT, window, 1).block(WAIT)).isTrue();
+        }
+
+        @Test
+        void 은퇴_표식은_일정_번호를_남겨_재전달된_옛_일정이_끝난_회차를_다시_열지_못한다() {
+            control.applySchedule(PRODUCT, window, 2).block(WAIT);
+            String seen = products();
+
+            assertThat(control.retireSchedule(PRODUCT, seen, 2, Instant.ofEpochMilli(1_000)).block(WAIT)).isTrue();
+            assertThat(products()).isEqualTo("retired|2|1000");
+            assertThat(control.applySchedule(PRODUCT, moved, 1).block(WAIT)).as("옛 번호").isFalse();
+            assertThat(control.applySchedule(PRODUCT, moved, 2).block(WAIT)).as("같은 번호").isFalse();
+            assertThat(control.applySchedule(PRODUCT, moved, 3).block(WAIT)).as("새 일정은 받는다").isTrue();
+        }
+
+        @Test
+        void 읽은_뒤_새_일정이_왔으면_은퇴시키지도_지우지도_않는다() {
+            control.applySchedule(PRODUCT, window, 1).block(WAIT);
+            String seen = products();
+            control.applySchedule(PRODUCT, moved, 2).block(WAIT);
+
+            assertThat(control.retireSchedule(PRODUCT, seen, 1, Instant.now()).block(WAIT)).isFalse();
+            assertThat(control.dropSchedule(PRODUCT, seen).block(WAIT)).isFalse();
+            assertThat(control.dropSchedule(PRODUCT, products()).block(WAIT)).isTrue();
+            assertThat(products()).isNull();
+        }
+
+        @Test
+        void 일정_번호_0_은_계약_위반이라_거절한다() {
+            assertThatThrownBy(() -> control.applySchedule(PRODUCT, window, 0).block(WAIT)).rootCause()
+                    .hasMessageContaining("1 이상");
+        }
+
+        @Test
+        void 재발행_요청_표식은_보낸_뒤에_세우고_기간이_지나면_사라진다() {
+            assertThat(control.resyncRequestedRecently().block(WAIT)).isFalse();
+            control.markResyncRequested(Duration.ofSeconds(60)).block(WAIT);
+
+            assertThat(control.resyncRequestedRecently().block(WAIT)).isTrue();
+            assertThat(redis.getExpire(RedisKeys.RESYNC_REQUESTED).block(WAIT)).isPositive();
+        }
+
+        private String products() {
+            return (String) redis.opsForHash().get(RedisKeys.PRODUCTS, PRODUCT).block(WAIT);
         }
     }
 

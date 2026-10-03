@@ -14,10 +14,16 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.BooleanSupplier;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -33,6 +39,8 @@ class AllocationRoundTest {
     private ControlStore control;
     private AllocationRound round;
     private final Leadership leadership = new Leadership();
+    /** 재발행 요청을 받은 순서대로 남긴다. */
+    private final List<String> resyncReasons = new CopyOnWriteArrayList<>();
     private Instant now;
 
     @BeforeEach
@@ -47,9 +55,10 @@ class AllocationRoundTest {
 
     /** 리더가 바뀌면 새 노드는 빈 기억으로 시작한다. */
     private AllocationRound newRound() {
-        return new AllocationRound(control, new AdmissionProperties(10L, 0.7), PROPERTIES,
-                new ControlMetrics(new SimpleMeterRegistry(), leadership, new SnapshotHolder(new RedisClock(Clock.systemUTC()), PROPERTIES)),
-                leadership);
+        ControlMetrics metrics = new ControlMetrics(new SimpleMeterRegistry(), leadership,
+                new SnapshotHolder(new RedisClock(Clock.systemUTC()), PROPERTIES));
+        return new AllocationRound(control, new AdmissionProperties(10L, 0.7), PROPERTIES, metrics, leadership,
+                new ScheduleResync(control, reason -> Mono.fromRunnable(() -> resyncReasons.add(reason)), metrics));
     }
 
     private void schedule(String product, Instant opensAt, Instant closesAt) {
@@ -220,6 +229,87 @@ class AllocationRoundTest {
         assertThat(redis.hasKey("wr:queue:{101}").block(WAIT)).isFalse();
         line("101", 1);
         assertThat(run(8, 0).product("101").orElseThrow().waiting()).as("확인한 뒤에야 은퇴").isZero();
+    }
+
+    @Test
+    void 일정을_하나도_모르면_재발행을_요청하고_조용한_기간_안에는_다시_요청하지_않는다() {
+        run(7, 0);
+        await(() -> Boolean.TRUE.equals(redis.hasKey(RedisKeys.RESYNC_REQUESTED).toFuture().join()));
+
+        run(7, 0);
+        round = newRound();
+        run(8, 0);
+        // 다시 보냈다면 표식을 다시 세우기 전 요청부터 남는다 — 요청 기록과 횟수로 본다
+        await(() -> "1".equals(redis.opsForValue().get(RedisKeys.RESYNC_ATTEMPTS).toFuture().join()));
+
+        assertThat(resyncReasons).as("리더가 바뀌어도 표식이 있으면 다시 요청하지 않는다").containsExactly("SCHEDULE_EMPTY");
+        assertThat(redis.getExpire(RedisKeys.RESYNC_REQUESTED).block(WAIT)).isLessThanOrEqualTo(ScheduleResync.FIRST_QUIET);
+    }
+
+    @Test
+    void 연달아_비어_있으면_요청_간격을_두_배씩_상한까지_늘린다() {
+        assertThat(ScheduleResync.quietAfter(1)).isEqualTo(Duration.ofMinutes(5));
+        assertThat(ScheduleResync.quietAfter(2)).isEqualTo(Duration.ofMinutes(10));
+        assertThat(ScheduleResync.quietAfter(4)).isEqualTo(Duration.ofMinutes(40));
+        assertThat(ScheduleResync.quietAfter(5)).isEqualTo(ScheduleResync.MAX_QUIET);
+        assertThat(ScheduleResync.quietAfter(100)).isEqualTo(ScheduleResync.MAX_QUIET);
+    }
+
+    @Test
+    void 일정을_알게_되면_연속_횟수를_지워_다음에는_처음_간격부터_요청한다() {
+        redis.opsForValue().set(RedisKeys.RESYNC_ATTEMPTS, "4").block(WAIT);
+        schedule("101", now.minusSeconds(60), now.plusSeconds(3_600));
+
+        run(7, 0);
+
+        await(() -> !Boolean.TRUE.equals(redis.hasKey(RedisKeys.RESYNC_ATTEMPTS).toFuture().join()));
+    }
+
+    @Test
+    void 일정을_아는_동안은_재발행을_요청하지_않는다() {
+        schedule("101", now.minusSeconds(60), now.plusSeconds(3_600));
+
+        run(7, 0);
+
+        assertThat(control.resyncRequestedRecently().block(WAIT)).isFalse();
+        assertThat(resyncReasons).isEmpty();
+    }
+
+    @Test
+    void 마감_뒤_오래된_모델은_정리를_확인한_뒤_은퇴_표식으로_바꿔_배분과_판정_재료에서_뺀다() {
+        schedule("101", now.minus(Duration.ofDays(9)), now.minus(AllocationRound.FORGET_AFTER).minusSeconds(1));
+        schedule("202", now.minus(Duration.ofDays(3)), now.minus(Duration.ofDays(2)));
+
+        run(7, 0);
+        run(7, 0);
+        assertThat(product("101")).as("정리를 확인한 회차까지는 일정 그대로다").doesNotStartWith("retired|");
+        run(7, 0);
+
+        assertThat(product("101")).startsWith("retired|");
+        assertThat(run(7, 0).products()).as("은퇴한 모델은 발행하지 않는다").doesNotContainKey("101").containsKey("202");
+        assertThat(product("202")).as("7일 전이면 마감으로 남긴다").doesNotStartWith("retired|");
+    }
+
+    @Test
+    void 은퇴_표식은_재전달을_막을_기간이_지나면_지운다() {
+        schedule("101", now.minus(Duration.ofDays(1)), now.plusSeconds(3_600));
+        redis.opsForHash().put(RedisKeys.PRODUCTS, "202",
+                "retired|3|" + now.minus(AllocationRound.TOMBSTONE_TTL).minusSeconds(1).toEpochMilli()).block(WAIT);
+        redis.opsForHash().put(RedisKeys.PRODUCTS, "303", "retired|1|" + now.toEpochMilli()).block(WAIT);
+
+        run(7, 0);
+
+        assertThat(product("202")).isNull();
+        assertThat(product("303")).as("아직 막아야 한다").startsWith("retired|");
+    }
+
+    private String product(String key) {
+        return (String) redis.opsForHash().get(RedisKeys.PRODUCTS, key).block(WAIT);
+    }
+
+    private static void await(BooleanSupplier condition) {
+        StepVerifier.create(Flux.interval(Duration.ofMillis(20)).filter(tick -> condition.getAsBoolean()).next())
+                .expectNextCount(1).expectComplete().verify(WAIT);
     }
 
     @Test

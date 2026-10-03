@@ -29,6 +29,9 @@ public class LuaScripts {
     final RedisScript<List> sweep = load("sweep");
     final RedisScript<Long> closeQueue = RedisScript.of(new ClassPathResource("redis/close_queue.lua"), Long.class);
     final RedisScript<Long> forgetAdmission = RedisScript.of(new ClassPathResource("redis/admission_forget.lua"), Long.class);
+    final RedisScript<Long> applySchedule = RedisScript.of(new ClassPathResource("redis/schedule_apply.lua"), Long.class);
+    final RedisScript<Long> retireSchedule = RedisScript.of(new ClassPathResource("redis/schedule_retire.lua"), Long.class);
+    final RedisScript<Long> dropSchedule = RedisScript.of(new ClassPathResource("redis/schedule_drop.lua"), Long.class);
 
     private final ReactiveStringRedisTemplate redis;
 

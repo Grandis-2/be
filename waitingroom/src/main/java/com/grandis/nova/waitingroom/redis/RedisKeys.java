@@ -21,6 +21,10 @@ public final class RedisKeys {
     public static final String PRODUCTS = "wr:products";
     /** 운영값(초당 입장 인원 · 모델별 상한 · 최대 대기 시간). 관리자 API 가 쓴다. */
     public static final String SETTINGS = "wr:settings";
+    /** 일정 전체 재발행을 요청한 표식. 있으면 다시 요청하지 않는다(리더가 바뀌어도). */
+    public static final String RESYNC_REQUESTED = "wr:resync-requested";
+    /** 일정을 모른 채 연달아 요청한 횟수. 늘수록 다음 요청까지 오래 기다린다. */
+    public static final String RESYNC_ATTEMPTS = "wr:resync-attempts";
 
     private static final Pattern PRODUCT_KEY = Pattern.compile("[1-9][0-9]{0,18}");
 
@@ -94,6 +98,11 @@ public final class RedisKeys {
 
     private static String tagged(String name, String productKey) {
         return "wr:" + name + ":{" + checked(productKey) + "}";
+    }
+
+    /** 모양이 틀린 모델 키면 던진다 — 해시 태그가 깨진 키나 이상한 필드를 쓰지 않게. */
+    public static String requireProductKey(String productKey) {
+        return checked(productKey);
     }
 
     private static String checked(String productKey) {

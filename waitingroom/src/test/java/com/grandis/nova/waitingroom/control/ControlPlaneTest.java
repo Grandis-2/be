@@ -12,6 +12,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.time.Clock;
@@ -110,7 +111,9 @@ class ControlPlaneTest {
             RedisClock clock = new RedisClock(Clock.systemUTC());
             holder = new SnapshotHolder(clock, FAST);
             metrics = new ControlMetrics(registry, leadership, holder);
-            plane = new ControlPlane(store, leadership, new AllocationRound(store, new AdmissionProperties(10L, 0.7), FAST, metrics, leadership),
+            ScheduleResync resync = new ScheduleResync(store, reason -> Mono.empty(), metrics);
+            plane = new ControlPlane(store, leadership, new AllocationRound(store, new AdmissionProperties(10L, 0.7), FAST,
+                    metrics, leadership, resync),
                     holder, clock, new IdlePassCounter(), FAST, metrics, new LoopBeats());
         }
     }
