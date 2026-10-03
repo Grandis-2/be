@@ -132,12 +132,12 @@ class PreorderEventDispatcherTest {
     }
 
     @Test
-    void 상품_등록_메시지를_회차_생성으로_보내고_상품_id_가_없으면_예외() {
+    void 상품_등록_메시지를_회차_생성으로_보내고_모르는_칸은_넘기며_상품_id_가_없으면_예외() {
         Long productId = fixtures.product("PREORDER", "ACTIVE");
         String opensAt = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.MICROS).toString();
         String closesAt = Instant.now().plusSeconds(90_000).truncatedTo(ChronoUnit.MICROS).toString();
         ObjectNode payload = (ObjectNode) jsonMapper.readTree("""
-                {"campaign":{"opensAt":"%s","closesAt":"%s"},
+                {"campaign":{"opensAt":"%s","closesAt":"%s","timezone":"Asia/Seoul"},
                  "shipmentBatches":[{"batchNumber":1,"positionFrom":1,"positionTo":null,
                    "estimatedShipStart":"2026-11-01","estimatedShipEnd":"2026-11-07"}]}
                 """.formatted(opensAt, closesAt));
