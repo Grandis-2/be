@@ -9,6 +9,7 @@ import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderItem;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
+import com.grandis.nova.order.order.vo.OrderToken;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -71,7 +72,7 @@ public class PreparePaymentService {
 
     /** 본인의 결제 대기 주문. 남의 주문은 존재를 숨긴다. */
     private OrderWithItems findPayable(Long customerId, String orderToken) {
-        OrderWithItems found = readTransaction.execute(status -> OrderTokens.parse(orderToken)
+        OrderWithItems found = readTransaction.execute(status -> OrderToken.parse(orderToken)
                 .flatMap(orderReader::findByOrderToken)
                 .filter(order -> order.customerId().equals(customerId))
                 .map(order -> new OrderWithItems(order, orderReader.findItems(order.id()))))

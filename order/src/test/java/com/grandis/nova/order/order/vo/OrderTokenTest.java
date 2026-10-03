@@ -19,4 +19,13 @@ class OrderTokenTest {
         assertThatThrownBy(() -> new OrderToken("3F2504E0-4F89-11D3-9A0C-0305E82C3301"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void parseTreatsMalformedAsAbsent() {
+        assertThat(OrderToken.parse("3f2504e0-4f89-11d3-9a0c-0305e82c3301"))
+                .contains(new OrderToken("3f2504e0-4f89-11d3-9a0c-0305e82c3301"));
+        assertThat(OrderToken.parse("not-a-uuid")).isEmpty();
+        assertThat(OrderToken.parse("3F2504E0-4F89-11D3-9A0C-0305E82C3301")).isEmpty();
+        assertThat(OrderToken.parse(null)).isEmpty();
+    }
 }
