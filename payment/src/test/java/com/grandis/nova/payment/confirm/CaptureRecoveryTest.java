@@ -460,6 +460,27 @@ class CaptureRecoveryTest {
         assertThat(settledPayload().get("declineReason").asString()).isEqualTo("CARD_REJECTED");
     }
 
+    // 거절을 확인하는 조회가 불명이어도 받은 거절 표시는 남는다 — 다음 회차가 키를 또 바꾸지 않는다
+    @Test
+    void unknownLookupAfterRejectionKeepsRejection() {
+        PaymentTransaction retry = startedThenRetryDue(PROVIDER_ERROR);
+        given(toss.findByPaymentKey(paymentKey.value()))
+                .willReturn(found(retry, TossPaymentStatus.IN_PROGRESS, AMOUNT))
+                .willReturn(new TossLookupResult.Unknown(UnknownReason.TIMEOUT, null))
+                .willReturn(found(retry, TossPaymentStatus.IN_PROGRESS, AMOUNT));
+        given(toss.confirm(any(), any())).willReturn(new TossCommandResult.Rejected("REJECT_CARD_PAYMENT", "한도 초과"));
+
+        worker.recoverDue();
+        assertThat(transactions.findById(retry.id()).orElseThrow().lastError().code()).isEqualTo("REJECT_CARD_PAYMENT");
+        String keyAfterFirst = keyOf(retry);
+        expireLease(retry.id());
+        worker.recoverDue();
+
+        verify(toss, times(1)).confirm(any(), any());
+        assertThat(keyOf(retry)).isEqualTo(keyAfterFirst);
+        assertThat(statusOf(retry)).isEqualTo(TransactionStatus.RETRY_SCHEDULED);
+    }
+
     @Test
     void rejectionWhileSettlingWithNotFoundIsRechecked() {
         PaymentTransaction timedOut = startedThenLeaseExpired(TIMEOUT);

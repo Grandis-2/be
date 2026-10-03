@@ -163,6 +163,22 @@ class CaptureRecovery implements RecoveryHandler {
         boolean mayRotate() {
             return keepError == null && rejection == null;
         }
+
+        /**
+         * 행에 남길 오류. 표시(교체 금지 · 받은 거절)가 있으면 그 코드를 코드 칸에 남기고 문구에 이번 조회 결과를 적는다 — 다음 회차가
+         * 표시를 이어 받는다. 표시를 남기는 곳은 여기 하나다(다시 조회 · 조회 불명이 함께 쓴다).
+         *
+         * @return 표시가 없으면 null
+         */
+        ProviderError carry(String looked) {
+            if (keepError != null) {
+                return new ProviderError(keepError.code(), looked);
+            }
+            if (rejection != null) {
+                return new ProviderError(rejection.error().code(), looked);
+            }
+            return null;
+        }
     }
 
     private void lookup(ClaimedTransaction claimed, Check check) {
@@ -170,7 +186,7 @@ class CaptureRecovery implements RecoveryHandler {
         switch (toss.findByPaymentKey(held.providerPaymentKey().value())) {
             case TossLookupResult.Found found -> found(claimed, found.payment(), check);
             case TossLookupResult.NotFound notFound -> unprocessed(claimed, check, "NOT_FOUND");
-            case TossLookupResult.Unknown unknown -> settle(claimed, lookupUnknown(unknown, check.keepError()), "조회");
+            case TossLookupResult.Unknown unknown -> settle(claimed, lookupUnknown(unknown, check), "조회");
         }
     }
 
@@ -206,17 +222,10 @@ class CaptureRecovery implements RecoveryHandler {
         resend(settlement.rotateIdempotencyKey(claimed), check.phase());
     }
 
-    /** 표시(교체 금지 · 받은 거절)는 코드 칸에 남기고, 문구에 조회 결과를 적는다 — 다음 회차가 표시를 이어 받는다. */
     private void recheck(ClaimedTransaction claimed, Check check, String what) {
         String looked = TossOutcomes.LOOKUP + what;
-        ProviderError error;
-        if (check.keepError() != null) {
-            error = check.keepError();
-        } else if (check.rejection() != null) {
-            error = new ProviderError(check.rejection().error().code(), looked);
-        } else {
-            error = new ProviderError(looked, "조회 결과 미처리 — 다시 조회");
-        }
+        ProviderError carried = check.carry(looked);
+        ProviderError error = carried != null ? carried : new ProviderError(looked, "조회 결과 미처리 — 다시 조회");
         settle(claimed, new Outcome.InProgress(error, RECHECK_AFTER), "조회");
     }
 
@@ -231,12 +240,13 @@ class CaptureRecovery implements RecoveryHandler {
 
     /**
      * 조회도 불명이다. 그대로 두고(리스가 끝나면) 다시 조회한다 — 문구가 불명 사유가 아니라 재전송으로 바뀌지 않는다.
-     * 키 교체 금지 표시(keepError)가 있으면 그 코드를 남긴다 — 조회 불명 한 번에 표시가 사라지면 다음 회차가 키를 바꾼다.
+     * 표시(교체 금지 · 받은 거절)는 남긴다 — 조회 불명 한 번에 표시가 사라지면 다음 회차가 키를 바꾸고, 닫힘에서 원래 사유를 잃는다.
      */
-    private static Outcome.Unknown lookupUnknown(TossLookupResult.Unknown unknown, ProviderError keepError) {
+    private static Outcome.Unknown lookupUnknown(TossLookupResult.Unknown unknown, Check check) {
         String reason = TossOutcomes.LOOKUP + unknown.reason().name();
-        if (keepError != null) {
-            return new Outcome.Unknown(new ProviderError(keepError.code(), reason));
+        ProviderError carried = check.carry(reason);
+        if (carried != null) {
+            return new Outcome.Unknown(carried);
         }
         return new Outcome.Unknown(new ProviderError(
                 TossOutcomes.LOOKUP + (unknown.code() == null ? unknown.reason().name() : unknown.code()), reason));
