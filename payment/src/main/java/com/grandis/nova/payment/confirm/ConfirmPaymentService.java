@@ -1,7 +1,6 @@
 package com.grandis.nova.payment.confirm;
 
 import com.grandis.nova.common.BusinessException;
-import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.payment.ClaimedTransaction;
 import com.grandis.nova.payment.PaymentErrorCode;
 import com.grandis.nova.payment.PaymentLedger;
@@ -18,8 +17,6 @@ import com.grandis.nova.payment.domain.model.Outcome;
 import com.grandis.nova.payment.domain.model.PaymentTransaction;
 import com.grandis.nova.payment.domain.repository.PaymentReader;
 import com.grandis.nova.payment.domain.repository.PaymentTransactionReader;
-import com.grandis.nova.payment.outbox.OrderPaymentSettled;
-import com.grandis.nova.payment.outbox.OutboxMessage;
 import com.grandis.nova.payment.vo.Money;
 import com.grandis.nova.payment.vo.PaymentTarget;
 import com.grandis.nova.payment.vo.ProviderOrderId;
@@ -35,7 +32,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.util.Optional;
 
 /**
- * 결제 승인: 거래를 시작하고(리스) 토스 승인을 부른 뒤 결과 · 결제 기록 · 결과 이벤트를 한 트랜잭션으로 남긴다.
+ * 결제 승인: 거래를 시작하고(리스) 토스 승인을 부른 뒤 결과 · 결제 기록 · 결과 이벤트를 한 트랜잭션으로 남긴다({@link CaptureSettlement}).
  *
  * 순서: [tx] 시작(대상 · 금액 대조, 대상당 하나 — D13 · D15) → 토스 승인(트랜잭션 밖, 거래의 멱등 키) → [tx] 반영 + 결과 이벤트.
  * 거래 하나 = 트랜잭션 하나(원장 계약)이고 원장 예외는 트랜잭션 경계 밖에서 잡는다.
@@ -44,7 +41,7 @@ import java.util.Optional;
  * - 시작 전 업무 오류(PaymentErrorCode)는 4xx 다. 그중 결제창 번호 없음 · 금액 불일치 · 미지원 대상은 "이 결제창은 앞으로도 시작될 수
  *   없다" 는 확언이다 — 결제창의 대상 · 금액은 바뀌지 않는다.
  * - 시작한 뒤에는 업무 오류를 내지 않는다. 결과는 늘 200(불명 · 처리 중은 PENDING)이고, 예상 밖 실패는 5xx 다.
- *   확정하지 못한 거래는 리스가 끝나면 복구(NV-102)가 이어 받는다.
+ *   확정하지 못한 거래는 리스가 끝나면 복구({@link CaptureRecovery})가 이어 받는다.
  *
  * 같은 결제창 번호로 다시 부르면 토스를 부르지 않고 그 거래의 지금 결과를 돌려준다. startAllowed=false 면 아직 시작하지 않은 거래도
  * 시작하지 않는다 — 호출자가 결제할 수 없다고 판정한 대상의 결과만 회수하는 길이다.
@@ -59,17 +56,17 @@ public class ConfirmPaymentService {
     private final PaymentReader paymentReader;
     private final PaymentLedger ledger;
     private final TossPaymentClient toss;
-    private final OutboxWriter outbox;
+    private final CaptureSettlement settlement;
     private final TransactionTemplate writeTransaction;
 
     public ConfirmPaymentService(PaymentTransactionReader reader, PaymentReader paymentReader, PaymentLedger ledger,
-                                 TossPaymentClient toss, OutboxWriter outbox,
+                                 TossPaymentClient toss, CaptureSettlement settlement,
                                  PlatformTransactionManager transactionManager) {
         this.reader = reader;
         this.paymentReader = paymentReader;
         this.ledger = ledger;
         this.toss = toss;
-        this.outbox = outbox;
+        this.settlement = settlement;
         this.writeTransaction = new TransactionTemplate(transactionManager);
     }
 
@@ -130,10 +127,7 @@ public class ConfirmPaymentService {
         TossCommandResult result = toss.confirm(request, new TossIdempotencyKey(held.idempotencyKey().value()));
         Outcome outcome = TossOutcomes.of(result, held);
         try {
-            writeTransaction.executeWithoutResult(status -> {
-                ledger.resolve(claimed, outcome);
-                notice(held, outcome).ifPresent(outbox::append);
-            });
+            settlement.settle(claimed, outcome);
         } catch (LeaseLostException e) {
             // 리스가 끝나 복구가 집어 갔다. 결과는 리스를 쥔 쪽이 확정하고 이벤트로 알린다
             log.warn("결제 승인 결과 반영 실패 — 리스를 잃음 transactionId={} outcome={}", held.id(),
@@ -192,16 +186,5 @@ public class ConfirmPaymentService {
             }
             case DRAW_ENTRY -> throw new BusinessException(PaymentErrorCode.PAYMENT_TARGET_UNSUPPORTED);
         }
-    }
-
-    /** 확정 결과(승인 · 거절)만 알린다. 불명 · 처리 중은 대상이 이미 결제 확인 중이다. */
-    private static Optional<OutboxMessage> notice(PaymentTransaction held, Outcome outcome) {
-        return switch (outcome) {
-            case Outcome.Confirmed confirmed -> Optional.of(OrderPaymentSettled.approved(held, confirmed.at()));
-            case Outcome.Rejected rejected -> Optional.of(OrderPaymentSettled.declined(held,
-                    TossOutcomes.declineReasonOf(rejected.error().code())));
-            case Outcome.InProgress inProgress -> Optional.empty();
-            case Outcome.Unknown unknown -> Optional.empty();
-        };
     }
 }

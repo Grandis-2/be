@@ -1,7 +1,6 @@
 package com.grandis.nova.payment.confirm;
 
 import com.grandis.nova.common.BusinessException;
-import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.payment.PaymentErrorCode;
 import com.grandis.nova.payment.PaymentLedger;
 import com.grandis.nova.payment.client.toss.TossPaymentClient;
@@ -43,7 +42,7 @@ class ConfirmPaymentServiceTest {
     PaymentReader paymentReader = mock(PaymentReader.class);
     PaymentLedger ledger = mock(PaymentLedger.class);
     TossPaymentClient toss = mock(TossPaymentClient.class);
-    OutboxWriter outbox = mock(OutboxWriter.class);
+    CaptureSettlement settlement = mock(CaptureSettlement.class);
     PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
     ConfirmPaymentService service;
     PaymentTransaction seen;
@@ -51,7 +50,7 @@ class ConfirmPaymentServiceTest {
     @BeforeEach
     void setUp() {
         given(transactionManager.getTransaction(any())).willReturn(new SimpleTransactionStatus());
-        service = new ConfirmPaymentService(reader, paymentReader, ledger, toss, outbox, transactionManager);
+        service = new ConfirmPaymentService(reader, paymentReader, ledger, toss, settlement, transactionManager);
         seen = PaymentTransaction.openCapture(TARGET, AMOUNT, Instant.parse("2026-10-02T00:00:00Z"));
         given(reader.findByProviderOrderId(seen.providerOrderId())).willReturn(Optional.of(seen));
     }

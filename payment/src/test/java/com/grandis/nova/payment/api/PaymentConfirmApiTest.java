@@ -12,6 +12,7 @@ import com.grandis.nova.payment.client.toss.TossPayment;
 import com.grandis.nova.payment.client.toss.TossPaymentClient;
 import com.grandis.nova.payment.client.toss.TossPaymentStatus;
 import com.grandis.nova.payment.client.toss.UnknownReason;
+import com.grandis.nova.payment.confirm.PendingCaptureExpiry;
 import com.grandis.nova.payment.domain.model.PaymentTransaction;
 import com.grandis.nova.payment.prepare.PreparePaymentService;
 import com.grandis.nova.payment.support.PaymentFixtures;
@@ -86,6 +87,9 @@ class PaymentConfirmApiTest {
 
     @Autowired
     PreparePaymentService prepareService;
+
+    @Autowired
+    PendingCaptureExpiry expiry;
 
     @MockitoBean
     RevocationChecker revocationChecker;
@@ -400,6 +404,24 @@ class PaymentConfirmApiTest {
                 .andExpect(jsonPath("$.data.declineReason").value("CARD_REJECTED"));
 
         verify(toss, times(1)).confirm(any(), any());
+    }
+
+    // 만료된 결제창: 토스를 부르지 않고 "결제창 만료" 거절. 결과 회수(startAllowed=false)도 같다 — 승인 중인 주문을 되돌리는 답이다
+    @Test
+    void expiredAttemptIsDeclinedAsExpiredWithoutCallingToss() throws Exception {
+        jdbcTemplate.update("UPDATE payment_transactions SET created_at = UTC_TIMESTAMP(6) - INTERVAL ? SECOND WHERE id = ?",
+                PendingCaptureExpiry.OPENED_FOR.plusMinutes(1).toSeconds(), opened.id());
+        expiry.expireDue();
+
+        confirm(opened, target, AMOUNT)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.result").value("DECLINED"))
+                .andExpect(jsonPath("$.data.declineReason").value("PAYMENT_EXPIRED"));
+        recoverOnly(opened, target)
+                .andExpect(jsonPath("$.data.result").value("DECLINED"))
+                .andExpect(jsonPath("$.data.declineReason").value("PAYMENT_EXPIRED"));
+        verify(toss, never()).confirm(any(), any());
+        assertThat(statusOf(opened)).isEqualTo("EXPIRED");
     }
 
     @Test

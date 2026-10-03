@@ -1,6 +1,7 @@
 package com.grandis.nova.payment.confirm;
 
 import com.grandis.nova.payment.client.toss.TossCommandResult;
+import com.grandis.nova.payment.client.toss.TossConfirmCodes;
 import com.grandis.nova.payment.client.toss.TossPayment;
 import com.grandis.nova.payment.client.toss.TossPaymentStatus;
 import com.grandis.nova.payment.client.toss.UnknownReason;
@@ -78,5 +79,45 @@ class TossOutcomesTest {
     private static TossCommandResult succeeded(long totalAmount, Instant approvedAt) {
         return new TossCommandResult.Succeeded(new TossPayment("tgen_outcome", HELD.providerOrderId().value(),
                 TossPaymentStatus.DONE, totalAmount, totalAmount, "카드", approvedAt, "txkey"));
+    }
+
+    // 복구가 푸는 방법은 마지막 결과에 적힌 불명 사유로 고른다. 적힌 게 없으면(반영 전에 멈춤) 응답을 못 받았을 수 있어 재전송
+    @ParameterizedTest
+    @EnumSource(UnknownReason.class)
+    void resolutionIsReadBackFromRecordedReason(UnknownReason reason) {
+        ProviderError recorded = ((Outcome.Unknown) TossOutcomes.of(
+                new TossCommandResult.Unknown(reason, null), HELD)).error();
+
+        assertThat(TossOutcomes.resolutionOf(recorded)).isEqualTo(reason.resolution());
+    }
+
+    @Test
+    void resolutionWithoutReasonIsResendAndOtherRecordsAreLookedUp() {
+        assertThat(TossOutcomes.resolutionOf(null)).isEqualTo(UnknownReason.Resolution.RESEND);
+        assertThat(TossOutcomes.resolutionOf(new ProviderError("PROVIDER_ERROR", "일시 오류")))
+                .isEqualTo(UnknownReason.Resolution.LOOKUP);
+        assertThat(TossOutcomes.resolutionOf(new ProviderError("LOOKUP_TIMEOUT", "LOOKUP_TIMEOUT")))
+                .as("조회 오류는 다시 조회한다 — 재전송으로 바뀌지 않는다").isEqualTo(UnknownReason.Resolution.LOOKUP);
+    }
+
+    // 조회로 확정한 실패: ABORTED 는 승인 실패, 나머지(창이 지나도록 미처리 · 토스 만료 · 결제 없음)는 결제창 만료
+    @Test
+    void lookedUpFailureDeclineReason() {
+        assertThat(TossOutcomes.declineReasonOf(TossOutcomes.lookedUpFailure("ABORTED").error().code()))
+                .isEqualTo(DeclineReason.FAILED);
+        for (String what : new String[]{"EXPIRED", "READY", "IN_PROGRESS", "NOT_FOUND"}) {
+            assertThat(TossOutcomes.declineReasonOf(TossOutcomes.lookedUpFailure(what).error().code()))
+                    .isEqualTo(DeclineReason.PAYMENT_EXPIRED);
+        }
+    }
+
+    // 같은 키 재전송은 키 단위 처리 중(409)뿐이다. 결제 단위 처리 중은 이 키에 캐시돼 같은 키로는 끝나지 않는다
+    @Test
+    void onlyKeyLevelProcessingIsResentWithSameKey() {
+        assertThat(TossConfirmCodes.isSameKeyInFlight("IDEMPOTENT_REQUEST_PROCESSING")).isTrue();
+        assertThat(TossConfirmCodes.isSameKeyInFlight("ALREADY_PROCESSING_REQUEST")).isFalse();
+        assertThat(TossConfirmCodes.isOtherRequestInFlight("ALREADY_PROCESSING_REQUEST")).isTrue();
+        assertThat(TossConfirmCodes.isOtherRequestInFlight("PROVIDER_ERROR")).isFalse();
+        assertThat(TossConfirmCodes.isSameKeyInFlight("PROVIDER_ERROR")).isFalse();
     }
 }
