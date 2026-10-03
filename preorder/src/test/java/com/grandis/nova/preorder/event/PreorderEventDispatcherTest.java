@@ -132,7 +132,7 @@ class PreorderEventDispatcherTest {
     }
 
     @Test
-    void 상품_등록_메시지를_회차_생성으로_보내고_모르는_칸은_넘기며_상품_id_가_없으면_예외() {
+    void 상품_등록_메시지를_회차_생성으로_보내고_모르는_칸은_넘기며_상품_id_나_필수_칸이_없으면_예외() {
         Long productId = fixtures.product("PREORDER", "ACTIVE");
         String opensAt = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.MICROS).toString();
         String closesAt = Instant.now().plusSeconds(90_000).truncatedTo(ChronoUnit.MICROS).toString();
@@ -157,6 +157,12 @@ class PreorderEventDispatcherTest {
                 .containsExactly("1|1|3000|2026-11-01|2026-11-07", "2|3001|NULL|2026-12-01|2026-12-07");
         assertThatThrownBy(() -> dispatcher.dispatch(envelope("PREORDER_PRODUCT_REGISTERED", "PRODUCT", null,
                 payload))).isInstanceOf(IllegalArgumentException.class);
+        Long another = fixtures.product("PREORDER", "ACTIVE");
+        ObjectNode noOpensAt = payload.deepCopy();
+        ((ObjectNode) noOpensAt.get("campaign")).remove("opensAt");
+        assertThatThrownBy(() -> dispatcher.dispatch(envelope("PREORDER_PRODUCT_REGISTERED", "PRODUCT", another,
+                noOpensAt))).isInstanceOf(NullPointerException.class).hasMessage("opensAt");
+        assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_campaigns WHERE product_id = ?", another)).isZero();
     }
 
     @Test
