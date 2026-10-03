@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.integration.sqs;
 
+import com.grandis.nova.common.sqs.SqsQueueUrls;
 import com.grandis.nova.preorder.deadletter.DeadLetterRedriver;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;

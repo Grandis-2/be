@@ -75,7 +75,7 @@ class ExpiryCancelServiceTest {
                 """, preorderId);
         assertThat(event).containsEntry("actor", "SYSTEM").containsEntry("reason", null);
         assertThat(jdbcTemplate.queryForList("""
-                SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.reason')) FROM outbox_events
+                SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.reason')) FROM preorder_outbox_events
                  WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
                 """, String.class, preorderId)).containsExactly("EXPIRY");
     }
@@ -147,7 +147,7 @@ class ExpiryCancelServiceTest {
                 SELECT COUNT(*) FROM preorder_events WHERE preorder_id = ? AND to_status = 'CANCELING'
                 """, preorderId)).isEqualTo(1);
         assertThat(fixtures.count("""
-                SELECT COUNT(*) FROM outbox_events WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
+                SELECT COUNT(*) FROM preorder_outbox_events WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
                 """, preorderId)).isEqualTo(1);
     }
 

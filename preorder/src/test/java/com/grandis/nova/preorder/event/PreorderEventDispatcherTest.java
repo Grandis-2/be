@@ -122,7 +122,7 @@ class PreorderEventDispatcherTest {
         dispatcher.dispatch(body);
 
         assertThat(fixtures.count("""
-                SELECT COUNT(*) FROM outbox_events
+                SELECT COUNT(*) FROM preorder_outbox_events
                  WHERE event_type = 'PREORDER_CAMPAIGN_CHANGED' AND aggregate_id = ?
                    AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.change')) = 'RESYNC'
                 """, productId)).isEqualTo(2);

@@ -1,5 +1,7 @@
 package com.grandis.nova.preorder.support;
 
+import com.grandis.nova.common.sqs.testing.SqsTestConfig;
+import com.grandis.nova.common.sqs.testing.TestQueues;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
@@ -11,7 +13,7 @@ import java.lang.annotation.Target;
 
 /**
  * {@link PreorderIntegrationTest} 에 실제 SQS 프로토콜(Floci)을 더한 통합 테스트. 발행은 SQS 로 하고 소비기를 켠다
- * (application-sqs-test.properties). 큐는 {@link TestQueues} 로 넣고 꺼내 본다.
+ * (application-sqs-test.properties). 큐는 common:sqs 의 테스트 픽스처 {@link TestQueues} 로 넣고 꺼내 본다.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)

@@ -24,6 +24,7 @@ class PreorderDefaultsTest {
         assertThat(environment.getProperty("spring.datasource.hikari.connection-timeout")).isEqualTo("2000");
         assertThat(environment.getProperty("auth.revocation-check.fail-closed-paths"))
                 .isEqualTo("/api/v1/admin/**,/api/v1/preorders/*/cancel");
+        assertThat(environment.getProperty("nova.outbox.metrics-prefix")).isEqualTo("preorder.outbox");
     }
 
     @Test

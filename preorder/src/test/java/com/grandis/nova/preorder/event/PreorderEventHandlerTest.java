@@ -107,7 +107,7 @@ class PreorderEventHandlerTest {
         assertThat(job).containsEntry("status", "PENDING").containsEntry("external_key", token)
                 .containsEntry("reason", "USER_CANCEL");
         assertThat(fixtures.count("""
-                SELECT COUNT(*) FROM outbox_events WHERE event_type = 'CANCEL_JOB_READY' AND aggregate_id = ?
+                SELECT COUNT(*) FROM preorder_outbox_events WHERE event_type = 'CANCEL_JOB_READY' AND aggregate_id = ?
                 """, job.get("id"))).isEqualTo(1);
     }
 

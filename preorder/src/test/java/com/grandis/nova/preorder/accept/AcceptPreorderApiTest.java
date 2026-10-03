@@ -97,7 +97,7 @@ class AcceptPreorderApiTest {
                 .containsEntry("reservation_id", preorderId)
                 .containsEntry("option_code", "SKU-" + product.optionId());
         assertThat(jdbcTemplate.queryForObject("""
-                SELECT event_type FROM outbox_events WHERE aggregate_type = 'PREORDER_SYNC_JOB' AND aggregate_id = ?
+                SELECT event_type FROM preorder_outbox_events WHERE aggregate_type = 'PREORDER_SYNC_JOB' AND aggregate_id = ?
                 """, String.class, job.get("id"))).isEqualTo("REGISTER_JOB_READY");
     }
 

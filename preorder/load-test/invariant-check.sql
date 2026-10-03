@@ -20,12 +20,12 @@ SELECT
     (SELECT COUNT(*) FROM (
         SELECT q.id FROM preorders q
           LEFT JOIN preorder_sync_jobs j ON j.preorder_id = q.id AND j.job_type = 'REGISTER'
-          LEFT JOIN outbox_events o ON o.aggregate_id = j.id AND o.aggregate_type = 'PREORDER_SYNC_JOB'
+          LEFT JOIN preorder_outbox_events o ON o.aggregate_id = j.id AND o.aggregate_type = 'PREORDER_SYNC_JOB'
                                    AND o.event_type = 'REGISTER_JOB_READY'
          WHERE q.product_id = @product_id
          GROUP BY q.id
         HAVING COUNT(o.id) <> 1) mismatched)              AS register_event_mismatch,
-    (SELECT COUNT(*) FROM outbox_events o JOIN preorder_sync_jobs j ON j.id = o.aggregate_id
+    (SELECT COUNT(*) FROM preorder_outbox_events o JOIN preorder_sync_jobs j ON j.id = o.aggregate_id
                                           JOIN preorders q ON q.id = j.preorder_id
       WHERE q.product_id = @product_id AND o.event_type = 'REGISTER_JOB_READY' AND o.published_at IS NULL)
                                                           AS unpublished_events
