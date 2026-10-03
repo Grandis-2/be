@@ -121,39 +121,45 @@ public class ProductRegistrationValidator {
     }
 
     /**
-     * 배송 차수의 모양 — preorder 가 차수를 받을 때 거는 규칙(api-spec "배송 차수 처리 규칙": 번호 · 시작 순번 양의 정수,
-     * 번호 · 시작 유일, 종료 ≥ 시작 또는 마지막만 null, 배송 종료 ≥ 시작)을 저장 전에 같은 기준으로 먼저 거른다.
-     * 여기서 안 거르면 상품은 저장되고 preorder 가 등록 이벤트를 거절해(DLQ) 준비 전 상품만 남는다. 최종 판정은 preorder 다.
+     * 배송 차수의 모양 — preorder 가 차수를 받을 때 거는 규칙(preorder 의 ShipmentBatchPlan)과 같다. 그래야 어떤 순번이든 속할 차수가 정확히 하나다.
+     * <ul>
+     *   <li>차수 번호는 목록 순서대로 1, 2, 3 …</li>
+     *   <li>종료 순번이 있으면 시작 순번 이상</li>
+     *   <li>첫 차수는 순번 1 부터, 다음 차수는 앞 차수 종료 순번 + 1 부터(빈틈 · 겹침 없음). 상한 없는 차수 뒤에는 차수가 올 수 없다</li>
+     *   <li>배송 예정 종료일 ≥ 시작일</li>
+     *   <li>상한 없는 차수(종료 순번 null)는 정확히 하나 — 앞의 규칙과 합치면 마지막 차수다</li>
+     * </ul>
+     * 여기서 안 거르면 상품은 저장되고 preorder 가 등록 이벤트를 거절해(DLQ) 준비 전 상품만 남는다. 더 엄격하게 두지도 않는다 —
+     * preorder 의 차수 수정 API 로는 되는 설정이 등록에서만 막히게 된다. 최종 판정은 preorder 다.
      */
     private static void requireBatchShape(List<ProductRegistrationRequest.ShipmentBatch> batches) {
-        Set<Integer> numbers = new HashSet<>();
-        Set<Long> starts = new HashSet<>();
-        long lastStart = batches.stream().mapToLong(ProductRegistrationRequest.ShipmentBatch::positionFrom).max().orElse(0);
+        ProductRegistrationRequest.ShipmentBatch previous = null;
         for (int i = 0; i < batches.size(); i++) {
             var batch = batches.get(i);
             String field = "shipmentBatches[%d]".formatted(i);
-            if (batch.batchNumber() < 1) {
-                throw ValidationFailures.of(field + ".batchNumber", "차수 번호는 1 이상입니다.");
+            if (batch.batchNumber() != i + 1) {
+                throw ValidationFailures.of(field + ".batchNumber", "차수 번호는 1 부터 순서대로여야 합니다(%d 번째 차수는 %d 번).".formatted(i + 1, i + 1));
             }
-            if (!numbers.add(batch.batchNumber())) {
-                throw ValidationFailures.of(field + ".batchNumber", "같은 차수 번호가 두 번 왔습니다.");
-            }
-            if (batch.positionFrom() < 1) {
-                throw ValidationFailures.of(field + ".positionFrom", "시작 순번은 1 이상입니다.");
-            }
-            if (!starts.add(batch.positionFrom())) {
-                throw ValidationFailures.of(field + ".positionFrom", "같은 시작 순번이 두 번 왔습니다.");
-            }
-            if (batch.positionTo() == null) {
-                if (batch.positionFrom() != lastStart) {
-                    throw ValidationFailures.of(field + ".positionTo", "종료 순번은 마지막 차수만 비울 수 있습니다.");
-                }
-            } else if (batch.positionTo() < batch.positionFrom()) {
+            if (batch.positionTo() != null && batch.positionTo() < batch.positionFrom()) {
                 throw ValidationFailures.of(field + ".positionTo", "종료 순번은 시작 순번 이상입니다.");
+            }
+            if (previous == null) {
+                if (batch.positionFrom() != 1) {
+                    throw ValidationFailures.of(field + ".positionFrom", "첫 차수는 순번 1 부터 시작합니다.");
+                }
+            } else if (previous.positionTo() == null) {
+                throw ValidationFailures.of("shipmentBatches[%d].positionTo".formatted(i - 1), "종료 순번은 마지막 차수만 비울 수 있습니다.");
+            } else if (previous.positionTo() == Long.MAX_VALUE || batch.positionFrom() != previous.positionTo() + 1) {
+                throw ValidationFailures.of(field + ".positionFrom", "앞 차수 종료 순번 + 1 부터 시작해야 합니다(빈틈 · 겹침 없음).");
             }
             if (batch.estimatedShipEnd().isBefore(batch.estimatedShipStart())) {
                 throw ValidationFailures.of(field + ".estimatedShipEnd", "배송 종료는 시작 이후여야 합니다.");
             }
+            previous = batch;
+        }
+        if (previous != null && previous.positionTo() != null) {
+            throw ValidationFailures.of("shipmentBatches[%d].positionTo".formatted(batches.size() - 1),
+                    "마지막 차수는 종료 순번을 비워야 합니다(상한 없는 차수가 정확히 하나).");
         }
     }
 
