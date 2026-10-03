@@ -22,6 +22,7 @@ import com.grandis.nova.payment.vo.ProviderPaymentKey;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -47,6 +48,7 @@ class PaymentLedgerTest {
     static final ProviderError TIMEOUT = new ProviderError("READ_TIMEOUT", null);
     static final ProviderError REJECT = new ProviderError("REJECT_CARD_PAYMENT", "한도 초과");
     static final Instant APPROVED_AT = Instant.parse("2026-09-29T02:00:00.123456Z");
+    static final Duration OPENED_FOR = Duration.ofMinutes(35);
 
     @Autowired
     PaymentLedger ledger;
@@ -404,6 +406,137 @@ class PaymentLedgerTest {
                 .contains(second.id());
     }
 
+    // ---- 만료 ----
+
+    @Test
+    void expireClosesUnsentCaptureOnlyAfterItWasOpenedLongEnough() {
+        PaymentTransaction pending = inTx(() -> ledger.openCapture(target, AMOUNT));
+
+        assertThat(inTx(() -> ledger.expire(pending, OPENED_FOR))).as("아직 기한 전").isEmpty();
+        ageCreatedAt(pending.id(), OPENED_FOR.plusSeconds(1));
+        PaymentTransaction expired = inTx(() -> ledger.expire(pending, OPENED_FOR)).orElseThrow();
+
+        assertThat(expired.status()).isEqualTo(TransactionStatus.EXPIRED);
+        assertThat(expired.finishedAt()).isNotNull();
+        assertThat(expired.attemptCount()).isZero();
+        assertThat(expired.providerPaymentKey()).isNull();
+        assertThat(inTx(() -> ledger.start(pending, target, providerPayment, AMOUNT)))
+                .as("만료된 결제창은 시작되지 않는다").isEmpty();
+    }
+
+    // 시작과 만료는 같은 PENDING 조건이다 — 시작이 먼저면 만료는 0행(보낸 적 있는 거래는 결제사가 처리했을 수 있다)
+    @Test
+    void startedCaptureIsNotExpired() {
+        PaymentTransaction pending = inTx(() -> ledger.openCapture(target, AMOUNT));
+        ageCreatedAt(pending.id(), OPENED_FOR.plusSeconds(1));
+        inTx(() -> ledger.start(pending, target, providerPayment, AMOUNT)).orElseThrow();
+
+        assertThat(inTx(() -> ledger.expire(pending, OPENED_FOR))).isEmpty();
+        assertThat(transactions.findById(pending.id()).orElseThrow().status()).isEqualTo(TransactionStatus.PROCESSING);
+    }
+
+    // 만료 뒤 같은 대상에 새 결제창을 열고 시작할 수 있다 — EXPIRED 는 대상당 진행 중 거래로 세지 않는다(active_marker)
+    @Test
+    void expiredCaptureDoesNotBlockTarget() {
+        PaymentTransaction pending = inTx(() -> ledger.openCapture(target, AMOUNT));
+        ageCreatedAt(pending.id(), OPENED_FOR.plusSeconds(1));
+        inTx(() -> ledger.expire(pending, OPENED_FOR)).orElseThrow();
+
+        PaymentTransaction next = inTx(() -> ledger.openCapture(target, AMOUNT));
+        assertThat(inTx(() -> ledger.start(next, target, providerPayment, AMOUNT))).isPresent();
+    }
+
+    @Test
+    void expirableCapturesAreOldUnsentCapturesOnly() {
+        PaymentTransaction old = inTx(() -> ledger.openCapture(target, AMOUNT));
+        PaymentTransaction fresh = inTx(() -> ledger.openCapture(PaymentFixtures.newOrderTarget(), AMOUNT));
+        ageCreatedAt(old.id(), OPENED_FOR.plusSeconds(1));
+
+        assertThat(transactions.findExpirableCaptures(OPENED_FOR, 1000)).extracting(PaymentTransaction::id)
+                .contains(old.id()).doesNotContain(fresh.id());
+    }
+
+    // ---- 에스컬레이션 · 키 교체 · 복구 후보 ----
+
+    @Test
+    void escalatedTransactionKeepsStatusAndLeavesRecoveryCandidates() {
+        ClaimedTransaction started = started();
+        parkOtherRecoverables();
+
+        inTxRun(() -> ledger.escalate(started, TIMEOUT));
+        expireLease(id(started));
+
+        PaymentTransaction escalated = transactions.findById(id(started)).orElseThrow();
+        assertThat(escalated.status()).isEqualTo(TransactionStatus.PROCESSING);
+        assertThat(escalated.isEscalated()).isTrue();
+        assertThat(escalated.lastError()).isEqualTo(TIMEOUT);
+        assertThat(inTx(() -> transactions.lockNextRecoverable(TransactionType.CAPTURE))).isEmpty();
+    }
+
+    // 다중 방어: 후보 조회가 빼도, 같은 스냅샷으로 claim 해도 에스컬레이션된 거래는 집히지 않는다
+    @Test
+    void escalatedTransactionIsNotClaimed() {
+        ClaimedTransaction started = started();
+        inTxRun(() -> ledger.escalate(started, TIMEOUT));
+        expireLease(id(started));
+        PaymentTransaction seen = transactions.findById(id(started)).orElseThrow();
+
+        assertThat(inTx(() -> ledger.claim(seen))).isEmpty();
+    }
+
+    @Test
+    void databaseRejectsEscalationOfUnsentTransaction() { // ck_payment_tx_escalated
+        PaymentTransaction pending = inTx(() -> ledger.openCapture(target, AMOUNT));
+
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                "UPDATE payment_transactions SET escalated_at = UTC_TIMESTAMP(6) WHERE id = ?", pending.id()))
+                .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_payment_tx_escalated");
+    }
+
+    @Test
+    void escalateNeedsTheLease() {
+        ClaimedTransaction started = started();
+        expireLease(id(started));
+
+        assertThatThrownBy(() -> inTxRun(() -> ledger.escalate(started, TIMEOUT)))
+                .isInstanceOf(LeaseLostException.class);
+        assertThat(transactions.findById(id(started)).orElseThrow().isEscalated()).isFalse();
+    }
+
+    // 키 교체는 곧 새 키로 보낸다 — 리스를 새로 잡고(전송이 리스 안에 들게) 마지막 오류를 지운다(멈추면 같은 키로 이어 가게)
+    @Test
+    void rotatedKeyIsNewWithRenewedLeaseAndNoLastError() {
+        ClaimedTransaction started = started();
+        inTxRun(() -> ledger.resolve(started, new Outcome.Unknown(TIMEOUT)));
+        jdbcTemplate.update("UPDATE payment_transactions SET lease_expires_at = UTC_TIMESTAMP(6) + INTERVAL 5 SECOND "
+                + "WHERE id = ?", id(started));
+
+        ClaimedTransaction rotated = inTx(() -> ledger.rotateIdempotencyKey(started));
+
+        assertThat(rotated.transaction().idempotencyKey()).isNotEqualTo(started.transaction().idempotencyKey());
+        assertThat(rotated.transaction().leaseToken()).isEqualTo(started.transaction().leaseToken());
+        assertThat(rotated.transaction().lastError()).isNull();
+        assertThat(leaseSecondsLeft(id(started))).isBetween(PaymentTransaction.LEASE.toSeconds() - 5,
+                PaymentTransaction.LEASE.toSeconds());
+        expireLease(id(started));
+        assertThatThrownBy(() -> inTx(() -> ledger.rotateIdempotencyKey(rotated)))
+                .isInstanceOf(LeaseLostException.class);
+    }
+
+    @Test
+    void recoverableCandidatesFollowClaimReadiness() {
+        parkOtherRecoverables();
+        ClaimedTransaction inFlight = started();
+        assertThat(inTx(() -> transactions.lockNextRecoverable(TransactionType.CAPTURE)))
+                .as("리스가 살아 있는 PROCESSING").isEmpty();
+
+        expireLease(id(inFlight));
+
+        assertThat(inTx(() -> transactions.lockNextRecoverable(TransactionType.CAPTURE)))
+                .map(PaymentTransaction::id).contains(id(inFlight));
+        assertThat(inTx(() -> transactions.lockNextRecoverable(TransactionType.REFUND))).isEmpty();
+    }
+
     private ClaimedTransaction started() {
         PaymentTransaction pending = inTx(() -> ledger.openCapture(target, AMOUNT));
         return inTx(() -> ledger.start(pending, target, providerPayment, AMOUNT)).orElseThrow();
@@ -441,5 +574,20 @@ class PaymentLedgerTest {
     private void makeRetryDue(Long id) {
         jdbcTemplate.update("UPDATE payment_transactions SET next_retry_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND "
                 + "WHERE id = ?", id);
+    }
+
+    private void ageCreatedAt(Long id, Duration age) {
+        jdbcTemplate.update("UPDATE payment_transactions SET created_at = UTC_TIMESTAMP(6) - INTERVAL ? SECOND WHERE id = ?",
+                age.toSeconds(), id);
+    }
+
+    /** 통합 테스트는 커밋된 행을 공유한다. 다른 테스트가 남긴 복구 후보를 에스컬레이션해 이 테스트의 후보만 남긴다. */
+    private void parkOtherRecoverables() {
+        jdbcTemplate.update("""
+                UPDATE payment_transactions SET escalated_at = UTC_TIMESTAMP(6)
+                 WHERE escalated_at IS NULL AND status IN ('PROCESSING', 'RETRY_SCHEDULED')
+                """);
+        jdbcTemplate.update("UPDATE payment_transactions SET status = 'FAILED', finished_at = UTC_TIMESTAMP(6), "
+                + "last_error_code = 'TEST_PARKED' WHERE status = 'PENDING' AND transaction_type = 'REFUND'");
     }
 }

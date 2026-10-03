@@ -3,6 +3,7 @@ package com.grandis.nova.payment.domain.repository;
 import com.grandis.nova.payment.domain.enums.TransactionStatus;
 import com.grandis.nova.payment.domain.exception.ActiveTransactionExistsException;
 import com.grandis.nova.payment.domain.model.PaymentTransaction;
+import com.grandis.nova.payment.vo.IdempotencyKey;
 import com.grandis.nova.payment.vo.LeaseToken;
 import com.grandis.nova.payment.vo.ProviderError;
 import com.grandis.nova.payment.vo.ProviderPaymentKey;
@@ -58,4 +59,23 @@ public interface PaymentTransactionWriter {
 
     /** 상태 · 리스는 그대로 두고 마지막 오류만 적는다(결과 불명). */
     int recordError(Long transactionId, LeaseToken lease, ProviderError error);
+
+    /**
+     * 만료: 한 번도 보내지 않은 CAPTURE(PENDING · 리스 없음)이고 연 지 openedFor 가 지났을 때만(DB 시각) EXPIRED 로, 끝난 시각을 적는다.
+     * 시작(start)과 같은 PENDING 조건이라 둘이 겹치면 한쪽만 1행이다.
+     */
+    int expire(Long transactionId, Duration openedFor, Instant now);
+
+    /**
+     * 에스컬레이션: 리스를 쥔 작업자가 스스로 끝낼 수 없다고 판단했다. 상태 · 리스는 그대로 두고 시각 · 마지막 오류를 적는다 —
+     * 복구 후보에서 빠지고, 실패로 굳지 않는다.
+     */
+    int escalate(Long transactionId, LeaseToken lease, ProviderError error, Instant now);
+
+    /**
+     * 멱등 키 교체: 리스를 쥔 CAPTURE 에만. 토스는 같은 키의 재요청에 첫 응답(오류 포함)을 돌려주므로, 조회로 "처리 안 됨"을 확인한 뒤
+     * 다시 보낼 때만 쓴다. 승인은 결제창 인증 때의 결제사 주문 번호 · 결제 키 짝으로만 되므로 새 행이 아니라 같은 행에서 바꾼다.
+     * 리스를 leaseFor 로 새로 잡고 마지막 오류를 지운다 — 새 키 전송이 리스 안에 들고, 교체 뒤 멈추면 다음 작업자가 같은 키로 이어 간다.
+     */
+    int rotateIdempotencyKey(Long transactionId, LeaseToken lease, IdempotencyKey key, Duration leaseFor);
 }

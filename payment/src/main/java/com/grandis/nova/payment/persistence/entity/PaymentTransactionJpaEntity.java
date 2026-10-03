@@ -84,6 +84,9 @@ public class PaymentTransactionJpaEntity {
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 
+    @Column(updatable = false)
+    private Instant escalatedAt;
+
     protected PaymentTransactionJpaEntity() {
     }
 
@@ -172,5 +175,9 @@ public class PaymentTransactionJpaEntity {
 
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    public Instant getEscalatedAt() {
+        return escalatedAt;
     }
 }
