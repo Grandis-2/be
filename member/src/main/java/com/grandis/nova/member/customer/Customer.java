@@ -10,7 +10,7 @@ import jakarta.persistence.Table;
 import org.hibernate.annotations.DynamicUpdate;
 
 /**
- * shop.customers (docs/schema.sql, 팀 SQL 그대로). 칸 이름·길이는 DDL 그대로이고 ddl-auto=validate 라 어긋나면 기동이 실패한다.
+ * shop.customers (flyway-project/migrations, 팀 SQL 그대로). 칸 이름·길이는 DDL 그대로이고 ddl-auto=validate 라 어긋나면 기동이 실패한다.
  * 카카오에서 받는 것은 kakao_id·display_name 뿐이다(닉네임 밖의 항목은 카카오 검수가 필요하다). 이름·이메일·연락처와 기본 배송지는 회원이 직접 입력한다.
  *
  * `@DynamicUpdate` 를 붙인 이유: 이 행에는 서로 다른 자원 둘(내 정보 · 기본 배송지)이 같이 산다. 기본 UPDATE 는 모든 칼럼을 쓰므로

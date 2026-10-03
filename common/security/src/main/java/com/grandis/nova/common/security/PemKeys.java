@@ -4,6 +4,7 @@ import java.math.BigInteger;
 import java.security.KeyFactory;
 import java.security.PrivateKey;
 import java.security.PublicKey;
+import java.security.interfaces.RSAKey;
 import java.security.interfaces.RSAPrivateCrtKey;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
@@ -34,13 +35,28 @@ public final class PemKeys {
         return "-----END " + label + "-----";
     }
 
+    /** RS256 에 쓸 RSA 키의 최소 길이. JJWT 도 이보다 짧으면 서명 · 검증 때 거부한다 — 그 거부가 첫 로그인의 500 이 되지 않게 기동에서 먼저 막는다. */
+    public static final int MIN_RSA_BITS = 2048;
+
+    /** 모듈러스가 {@link #MIN_RSA_BITS} 이상인가. 키 값은 메시지에 넣지 않는다. */
+    public static boolean strongEnough(RSAKey key) {
+        return key.getModulus().bitLength() >= MIN_RSA_BITS;
+    }
+
+    private static <T extends RSAKey> T requireStrong(T key, String name) {
+        if (!strongEnough(key)) {
+            throw new IllegalArgumentException(name + " must be an RSA key of at least " + MIN_RSA_BITS + " bits, was " + key.getModulus().bitLength());
+        }
+        return key;
+    }
+
     public static RSAPrivateKey parsePrivate(String pem) {
         try {
             PrivateKey key = KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(decode(pem, PRIVATE_LABEL)));
             if (!(key instanceof RSAPrivateKey rsa)) {
                 throw new IllegalArgumentException("jwt.private-key is not an RSA key");
             }
-            return rsa;
+            return requireStrong(rsa, "jwt.private-key");
         } catch (java.security.GeneralSecurityException e) {
             throw new IllegalArgumentException("jwt.private-key is not a PKCS#8 RSA private key: " + e.getMessage(), e);
         }
@@ -52,7 +68,7 @@ public final class PemKeys {
             if (!(key instanceof RSAPublicKey rsa)) {
                 throw new IllegalArgumentException("public key is not an RSA key");
             }
-            return rsa;
+            return requireStrong(rsa, "public key");
         } catch (java.security.GeneralSecurityException e) {
             throw new IllegalArgumentException("not an X.509 RSA public key: " + e.getMessage(), e);
         }

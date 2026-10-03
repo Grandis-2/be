@@ -71,7 +71,7 @@ class RefreshTokenCleanupTest {
     }
 
     @Test
-    @DisplayName("만료된 뒤 액세스 유효기간(30분)이 지난 행만 지운다 — 유예 안의 만료 행 · 유효 행은 남는다")
+    @DisplayName("만료된 뒤 액세스 유효기간 + 10분(40분)이 지난 행만 지운다 — 유예 안의 만료 행 · 유효 행은 남는다")
     void deletesOnlyRowsPastTheGrace() {
         Instant fixedNow = base.plus(Duration.ofDays(1));
         long longExpired = row(fixedNow.minus(Duration.ofHours(1)));
@@ -86,10 +86,10 @@ class RefreshTokenCleanupTest {
     }
 
     @Test
-    @DisplayName("경계는 정확히 만료 + 액세스 유효기간이다 — 그 순간 만료분까지 지우고 1초 늦은 것은 남긴다")
+    @DisplayName("경계는 정확히 만료 + 액세스 유효기간 + 10분이다 — 그 순간 만료분까지 지우고 1초 늦은 것은 남긴다")
     void graceBoundaryIsExact() {
         Instant fixedNow = base.plus(Duration.ofDays(1));
-        Instant boundary = fixedNow.minus(jwt.accessTokenValidity());
+        Instant boundary = fixedNow.minus(jwt.accessTokenValidity()).minus(RefreshTokenCleanup.MARGIN_AFTER_DETECTION);
         long atBoundary = row(boundary);
         long oneSecondLater = row(boundary.plusSeconds(1));
 
@@ -97,6 +97,20 @@ class RefreshTokenCleanupTest {
 
         assertThat(exists(atBoundary)).isFalse();
         assertThat(exists(oneSecondLater)).isTrue();
+    }
+
+    @Test
+    @DisplayName("보존은 만료 뒤 40분이다(액세스 30분 + 여유 10분) — 상수가 아니라 숫자로 못 박는다: 40분 된 행은 지우고 39분 59초 된 행은 남긴다")
+    void retentionIsFortyMinutesAfterExpiry() {
+        assertThat(jwt.accessTokenValidity()).as("시험 설정의 액세스 유효기간").isEqualTo(Duration.ofMinutes(30));
+        Instant fixedNow = base.plus(Duration.ofDays(1));
+        long fortyMinutes = row(fixedNow.minus(Duration.ofMinutes(40)));
+        long justUnder = row(fixedNow.minus(Duration.ofMinutes(40)).plusSeconds(1));
+
+        cleanupAt(fixedNow, 1000, 1000).run();
+
+        assertThat(exists(fortyMinutes)).isFalse();
+        assertThat(exists(justUnder)).as("회전의 탐지 창(30분) + 10분 안 — 재사용 탐지가 끝나기 전에 지우면 안 된다").isTrue();
     }
 
     @Test
@@ -122,7 +136,7 @@ class RefreshTokenCleanupTest {
         for (int i = 0; i < 5; i++) {
             row(base.plusSeconds(i));
         }
-        Instant fixedNow = base.plus(Duration.ofHours(1)).plus(jwt.accessTokenValidity());   // cutoff = base + 1시간 — 이 시험의 다섯 행만
+        Instant fixedNow = base.plus(Duration.ofHours(1)).plus(jwt.accessTokenValidity()).plus(RefreshTokenCleanup.MARGIN_AFTER_DETECTION);   // cutoff = base + 1시간 — 이 시험의 다섯 행만
 
         assertThat(cleanupAt(fixedNow, 2, 2).run()).as("2 × 2").isEqualTo(4);
         assertThat(cleanupAt(fixedNow, 2, 2).run()).as("나머지").isEqualTo(1);

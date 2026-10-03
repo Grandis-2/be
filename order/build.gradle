@@ -1,12 +1,5 @@
 apply plugin: 'org.springframework.boot'
 
-// Spring Boot BOM 이 관리하지 않는 라이브러리 버전. 올릴 때 여기만 바꾼다(preorder 와 같은 값).
-// common:outbox 이전 시: SQS 의존과 이 버전은 공통 모듈로 옮기고 여기서 지운다.
-ext {
-    awsSdkVersion = '2.55.6'
-    flociTestcontainersVersion = '2.16.1'
-}
-
 dependencies {
     implementation project(':common:types')
     implementation project(':common:web')
@@ -16,18 +9,15 @@ dependencies {
     implementation project(':common:redis')
     // 저장 해상도(마이크로초) 시계 storageClock(@Primary) · JPA Auditing 을 자동설정으로 켠다. @EnableJpaAuditing 을 따로 켜지 않는다.
     implementation project(':common:jpa')
+    // 트랜잭셔널 아웃박스(기록 · 커밋 직후 발행 · 리스 릴레이)를 자동설정으로 켠다. 표 · 종류는 OrderOutboxConfig 가 준다.
+    implementation project(':common:outbox')
+    // SQS 클라이언트 · 아웃박스 SQS 전송 · order-events 소비 폴러. AWS SDK 와 그 버전도 여기서 온다.
+    implementation project(':common:sqs')
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-security'
     // 다른 서비스 내부 API 는 HTTP Interface(@HttpExchange) + RestClient 로 부른다.
     implementation 'org.springframework.boot:spring-boot-starter-restclient'
-    // 이벤트 소비(와 NV-79 의 발행)는 AWS SDK v2 SqsClient 를 직접 쓴다. HTTP 는 가벼운 URLConnection 구현 하나만 둔다.
-    implementation platform("software.amazon.awssdk:bom:${awsSdkVersion}")
-    implementation('software.amazon.awssdk:sqs') {
-        exclude group: 'software.amazon.awssdk', module: 'apache-client'
-        exclude group: 'software.amazon.awssdk', module: 'netty-nio-client'
-    }
-    implementation 'software.amazon.awssdk:url-connection-client'
     runtimeOnly 'com.mysql:mysql-connector-j'
 
     // DB 동작은 MySQL 로만 검증한다(H2 없음).
@@ -35,8 +25,8 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
     testImplementation 'org.testcontainers:testcontainers-mysql'
-    // SQS 연계는 로컬 AWS 에뮬레이터 Floci 로 검증한다.
-    testImplementation "io.floci:testcontainers-floci:${flociTestcontainersVersion}"
+    // SQS 연계는 로컬 AWS 에뮬레이터 Floci 로 검증한다. 컨테이너 · 큐 도우미는 common:sqs 와 한 벌이다.
+    testImplementation testFixtures(project(':common:sqs'))
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     testImplementation 'org.springframework.security:spring-security-test'
     // 계층 규칙(원장만 쓰기 포트 사용 · 영속 계층 캡슐화)을 테스트로 강제한다. 스프링 BOM 에 없어 버전을 적는다.
