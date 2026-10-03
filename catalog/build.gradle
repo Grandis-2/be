@@ -10,6 +10,7 @@ dependencies {
     // 트랜잭셔널 아웃박스(기록 · 커밋 직후 발행 · 리스 릴레이)를 자동설정으로 켠다. 표 · 종류는 CatalogOutboxConfig 가 준다.
     implementation project(':common:outbox')
     // SQS 클라이언트 · 아웃박스 SQS 전송. AWS SDK 와 그 버전도 여기서 온다.
+    // 운영 클래스패스에 필요하다 — 시험은 아래 testFixtures 가 같은 모듈을 들여와 이 줄이 빠져도 통과하고, 운영에서만 transport=sqs 기동이 실패한다.
     implementation project(':common:sqs')
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
