@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.event;
 
 import com.grandis.nova.common.message.EventEnvelope;
+import com.grandis.nova.preorder.campaign.CampaignRegistrar;
 import com.grandis.nova.preorder.campaign.CampaignRepublisher;
 import com.grandis.nova.preorder.cancel.CampaignCancelService;
 import com.grandis.nova.preorder.cancel.ExpiryCancelService;
@@ -32,17 +33,20 @@ public class PreorderEventDispatcher {
     private final ExpiryCancelService expiryCancelService;
     private final CampaignCancelService campaignCancelService;
     private final CampaignRepublisher campaignRepublisher;
+    private final CampaignRegistrar campaignRegistrar;
     private final JsonMapper jsonMapper;
     private final MeterRegistry meterRegistry;
     private final Clock clock;
 
     public PreorderEventDispatcher(PreorderEventHandler handler, ExpiryCancelService expiryCancelService,
                                    CampaignCancelService campaignCancelService, CampaignRepublisher campaignRepublisher,
-                                   JsonMapper jsonMapper, MeterRegistry meterRegistry, Clock clock) {
+                                   CampaignRegistrar campaignRegistrar, JsonMapper jsonMapper,
+                                   MeterRegistry meterRegistry, Clock clock) {
         this.handler = handler;
         this.expiryCancelService = expiryCancelService;
         this.campaignCancelService = campaignCancelService;
         this.campaignRepublisher = campaignRepublisher;
+        this.campaignRegistrar = campaignRegistrar;
         this.jsonMapper = jsonMapper;
         this.meterRegistry = meterRegistry;
         this.clock = clock;
@@ -96,6 +100,13 @@ public class PreorderEventDispatcher {
                         jsonMapper.treeToValue(envelope.payload(), CampaignResyncRequested.class);
                 log.info("회차 일정 전체 재발행 요청: requestedBy={}, reason={}", requested.requestedBy(), requested.reason());
                 campaignRepublisher.republishAll();
+            }
+            case PREORDER_PRODUCT_REGISTERED -> {
+                if (envelope.aggregateId() == null) {
+                    throw new IllegalArgumentException("상품 id(aggregateId)가 없는 상품 등록 이벤트");
+                }
+                campaignRegistrar.register(envelope.aggregateId(),
+                        jsonMapper.treeToValue(envelope.payload(), PreorderProductRegistered.class).toRegistration());
             }
         }
     }
