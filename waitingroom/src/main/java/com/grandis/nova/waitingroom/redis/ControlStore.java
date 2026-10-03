@@ -1,10 +1,13 @@
 package com.grandis.nova.waitingroom.redis;
 
+import com.grandis.nova.waitingroom.domain.product.SalesWindow;
 import com.grandis.nova.waitingroom.domain.queue.GraceRetention;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -49,6 +52,53 @@ public class ControlStore {
     /** 배분 대상 모델과 그것을 읽은 Redis 시각. */
     public Mono<TimedEntries> readProducts() {
         return scripts.list(scripts.readProducts, List.of(RedisKeys.PRODUCTS), List.of()).map(ControlStore::timed);
+    }
+
+    /** @return 일정 번호가 더 커서 썼으면 true. 같거나 옛 번호면 false */
+    public Mono<Boolean> applySchedule(String productKey, SalesWindow window, long scheduleVersion) {
+        return scripts.single(scripts.applySchedule, List.of(RedisKeys.PRODUCTS), List.of(RedisKeys.requireProductKey(productKey),
+                        ProductSchedules.format(window, scheduleVersion), String.valueOf(scheduleVersion)))
+                .map(written -> written == 1);
+    }
+
+    /** 읽었던 값 그대로일 때만 은퇴 표식(일정 번호를 남긴다)으로 바꾼다. @return 바꿨으면 true */
+    public Mono<Boolean> retireSchedule(String productKey, String seenValue, long scheduleVersion, Instant now) {
+        return scripts.single(scripts.retireSchedule, List.of(RedisKeys.PRODUCTS), List.of(productKey, seenValue,
+                        String.valueOf(scheduleVersion), String.valueOf(now.toEpochMilli())))
+                .map(retired -> retired == 1);
+    }
+
+    /** 읽었던 값 그대로일 때만 일정 목록에서 지운다. @return 지웠으면 true */
+    public Mono<Boolean> dropSchedule(String productKey, String seenValue) {
+        return scripts.single(scripts.dropSchedule, List.of(RedisKeys.PRODUCTS), List.of(productKey, seenValue))
+                .map(removed -> removed == 1);
+    }
+
+    /** 재발행 요청을 선점한다. 표식이 없을 때만 세워, 리더가 바뀌는 순간에도 한 노드만 보낸다. @return 선점했으면 true */
+    public Mono<Boolean> claimResync(String token, Duration claimTtl) {
+        return redis.opsForValue().setIfAbsent(RedisKeys.RESYNC_REQUESTED, token, claimTtl);
+    }
+
+    /** 보내지 못했을 때 내 선점만 푼다 — 다음 회차에 다시 요청하게. */
+    public Mono<Boolean> releaseResyncClaim(String token) {
+        return scripts.single(scripts.releaseResync, List.of(RedisKeys.RESYNC_REQUESTED), List.of(token))
+                .map(released -> released == 1);
+    }
+
+    /** 연달아 요청한 횟수를 하나 올려 돌려준다. 하루 동안 요청이 없으면 처음부터 센다. */
+    public Mono<Long> nextResyncAttempt() {
+        return redis.opsForValue().increment(RedisKeys.RESYNC_ATTEMPTS)
+                .flatMap(attempt -> redis.expire(RedisKeys.RESYNC_ATTEMPTS, Duration.ofDays(1)).thenReturn(attempt));
+    }
+
+    /** 일정을 알게 됐으니 다음 요청은 처음 간격부터 한다. */
+    public Mono<Boolean> clearResyncAttempts() {
+        return redis.delete(RedisKeys.RESYNC_ATTEMPTS).map(deleted -> deleted > 0);
+    }
+
+    /** 보낸 뒤 선점 표식을 조용한 기간 표식으로 바꾼다. */
+    public Mono<Boolean> markResyncRequested(Duration quietPeriod) {
+        return redis.opsForValue().set(RedisKeys.RESYNC_REQUESTED, "1", quietPeriod);
     }
 
     public Mono<Map<String, String>> readSettings() {

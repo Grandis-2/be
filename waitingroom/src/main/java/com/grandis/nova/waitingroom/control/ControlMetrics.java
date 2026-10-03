@@ -46,6 +46,10 @@ public class ControlMetrics {
         }
     }
 
+    void resyncRequested() {
+        Counter.builder("waitingroom.schedule.resync.requests").register(registry).increment();
+    }
+
     void loopFailed(String loop) {
         Counter.builder("waitingroom.control.failures").tag("loop", loop).register(registry).increment();
     }
