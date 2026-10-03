@@ -60,11 +60,15 @@ jwt:
 # 다른 서비스로 가는 이벤트(상품 등록 → preorder 회차 · 차수, order 초기 재고)는 아웃박스(catalog_outbox_events)에 적고 커밋 뒤 보낸다.
 # transport 는 필수다(없으면 기동 실패 — 보내지 않고 발행 완료로 표시되는 것을 막는다): sqs, 또는 보내지 않고 로그로만 남기는 log
 nova:
+  # 아웃박스 발행(common:outbox). transport 는 필수(없으면 기동 실패)이고 운영 값은 sqs 다.
+  # log 는 보내지 않고 행을 발행 완료로 표시하는 로컬 · 테스트 전용 전송이라, log-transport-allowed: true 를 함께 적어야 뜬다.
+  # 그 허용 줄은 이 예시에 적지 않는다 — 여기서 만든 운영 설정이 실수로 log 로 뜨지 않게
   outbox:
     transport: sqs
     # relay-interval: 10s   # 커밋 직후 발행이 실패했거나 그 사이 죽어 남은 행을 다시 보내는 주기
     # relay-after: 1m       # 만든 지 이만큼 지난 미발행 행만 릴레이가 가져간다
-    # relay-lease: 1m       # 가져간 행을 다른 인스턴스가 건너뛰는 시간. 행마다 보내기 직전에 연장한다 — SQS 제한 시간(3s)보다 길게
+    # relay-lease: 1m       # 가져간 행을 다른 인스턴스가 건너뛰는 시간. 행마다 보내기 직전에 연장한다
+    #                       # 전송 한 번은 sqs.api-call-timeout × 2(큐 URL 조회 + 전송)이고, 리스는 그것 + 5s 보다 길어야 한다(아니면 기동 실패)
   # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다 — preorder-events · order-events 에 보내기 권한이 필요하다
   sqs:
     region: ap-northeast-2
