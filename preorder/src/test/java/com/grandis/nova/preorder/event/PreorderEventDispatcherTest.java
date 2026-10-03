@@ -19,6 +19,9 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -126,6 +129,25 @@ class PreorderEventDispatcherTest {
                  WHERE event_type = 'PREORDER_CAMPAIGN_CHANGED' AND aggregate_id = ?
                    AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.change')) = 'RESYNC'
                 """, productId)).isEqualTo(2);
+    }
+
+    @Test
+    void 상품_등록_메시지를_회차_생성으로_보내고_상품_id_가_없으면_예외() {
+        Long productId = fixtures.product("PREORDER", "ACTIVE");
+        String opensAt = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.MICROS).toString();
+        String closesAt = Instant.now().plusSeconds(90_000).truncatedTo(ChronoUnit.MICROS).toString();
+        ObjectNode payload = (ObjectNode) jsonMapper.readTree("""
+                {"campaign":{"opensAt":"%s","closesAt":"%s"},
+                 "shipmentBatches":[{"batchNumber":1,"positionFrom":1,"positionTo":null,
+                   "estimatedShipStart":"2026-11-01","estimatedShipEnd":"2026-11-07"}]}
+                """.formatted(opensAt, closesAt));
+
+        dispatcher.dispatch(envelope("PREORDER_PRODUCT_REGISTERED", "PRODUCT", productId, payload));
+
+        assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_campaigns WHERE product_id = ?", productId))
+                .isEqualTo(1);
+        assertThatThrownBy(() -> dispatcher.dispatch(envelope("PREORDER_PRODUCT_REGISTERED", "PRODUCT", null,
+                payload))).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
