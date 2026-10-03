@@ -4,12 +4,15 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.waitingroom.WaitingroomErrorCode;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
+import org.springframework.web.server.ResponseStatusException;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.net.ConnectException;
 import java.time.Clock;
+import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -27,6 +30,25 @@ class GlobalErrorHandlerTest {
         assertThat(exchange.getResponse().getStatusCode().value()).isEqualTo(503);
         assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("2");
         assertThat(exchange.getResponse().getBodyAsString().block()).contains("DEPENDENCY_UNAVAILABLE");
+    }
+
+    @Test
+    void 빈_연결을_기다리다_시한이_지나면_보내지_않은_것이라_503_이다() {
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.post("/api/v1/preorders"));
+
+        handler.handle(exchange, new IllegalStateException("relay", new TimeoutException("pool"))).block();
+
+        assertThat(exchange.getResponse().getStatusCode().value()).isEqualTo(503);
+    }
+
+    @Test
+    void 보낸_뒤_응답_시한이_지나면_결과를_모르므로_503_이_아니라_504_다() {
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.post("/api/v1/preorders"));
+
+        handler.handle(exchange, new ResponseStatusException(HttpStatus.GATEWAY_TIMEOUT, "응답 시한",
+                new TimeoutException("response"))).block();
+
+        assertThat(exchange.getResponse().getStatusCode().value()).isEqualTo(504);
     }
 
     @Test

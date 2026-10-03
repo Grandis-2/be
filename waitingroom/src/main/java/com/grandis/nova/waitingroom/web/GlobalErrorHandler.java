@@ -15,6 +15,7 @@ import org.springframework.web.server.WebExceptionHandler;
 import reactor.core.publisher.Mono;
 
 import java.net.ConnectException;
+import java.util.concurrent.TimeoutException;
 
 /**
  * 처리하지 못한 예외를 nova 봉투로 바꾼다. Boot 기본 처리기(-1)보다 먼저 선다.
@@ -64,8 +65,8 @@ class GlobalErrorHandler implements WebExceptionHandler {
             ErrorCode code = codeOf(statusCode);
             return errorResponses.write(exchange, statusCode, code, code.defaultMessage(), null);
         }
-        // 접수 전달 대상(preorder)에 붙지 못했다. 요청은 전달되지 않았으므로 다시 보내도 된다
-        if (hasCause(ex, ConnectException.class)) {
+        // 접수 전달 대상(preorder)에 붙지 못했거나 빈 연결을 기다리다 시한이 지났다. 보내지 않았으므로 다시 보내도 된다
+        if (hasCause(ex, ConnectException.class) || hasCause(ex, TimeoutException.class)) {
             log.warn("전달 대상에 연결하지 못했다: {}", ex.toString());
             return errorResponses.write(exchange, CommonErrorCode.DEPENDENCY_UNAVAILABLE);
         }

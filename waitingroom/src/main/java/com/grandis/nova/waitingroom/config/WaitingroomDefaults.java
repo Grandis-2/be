@@ -39,7 +39,12 @@ class WaitingroomDefaults implements EnvironmentPostProcessor, Ordered {
             Map.entry("spring.cloud.gateway.server.webflux.httpclient.connect-timeout", "1000"),
             Map.entry("spring.cloud.gateway.server.webflux.httpclient.response-timeout", "10s"),
             // preorder(Tomcat)가 먼저 닫은 연결을 다시 쓰면 보낸 뒤 끊겨 결과를 모른다 — 그쪽 유휴 시한보다 먼저 버린다
-            Map.entry("spring.cloud.gateway.server.webflux.httpclient.pool.max-idle-time", "15s"));
+            Map.entry("spring.cloud.gateway.server.webflux.httpclient.pool.max-idle-time", "15s"),
+            // 접수는 대략 배분 속도(전역 초당 입장)로 온다. 연결 수를 묶어 preorder 가 느려져도 쌓이지 않게 하고,
+            // 빈 연결을 기다리다 시한이 지나면 보내지 않은 것이라 503 으로 다시 오게 한다
+            Map.entry("spring.cloud.gateway.server.webflux.httpclient.pool.type", "fixed"),
+            Map.entry("spring.cloud.gateway.server.webflux.httpclient.pool.max-connections", "100"),
+            Map.entry("spring.cloud.gateway.server.webflux.httpclient.pool.acquire-timeout", "2000"));
 
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
