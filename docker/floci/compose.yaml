@@ -1,0 +1,19 @@
+# 로컬 AWS 에뮬레이터(Floci)와 SQS 큐. 실행: docker compose -f docker/floci/compose.yaml up -d
+services:
+  floci:
+    image: floci/floci:2.1.0
+    ports:
+      - "4566:4566"
+
+  # 큐를 한 번 만들고 끝난다. 이미 있으면 그대로 둔다
+  floci-init:
+    image: amazon/aws-cli:2.37.4
+    depends_on:
+      - floci
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: ap-northeast-2
+    entrypoint: ["sh", "/init/create-queues.sh"]
+    volumes:
+      - ./create-queues.sh:/init/create-queues.sh:ro

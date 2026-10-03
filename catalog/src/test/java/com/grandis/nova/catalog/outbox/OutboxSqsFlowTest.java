@@ -4,22 +4,17 @@ import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.registration.ProductRegistrationRequest;
 import com.grandis.nova.catalog.registration.ProductRegistrationService;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
-import com.grandis.nova.catalog.support.FlociQueues;
 import com.grandis.nova.catalog.support.ShopFixtures;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
+import com.grandis.nova.common.sqs.testing.FlociTestContainer;
+import com.grandis.nova.common.sqs.testing.SqsTestConfig;
+import com.grandis.nova.common.sqs.testing.TestQueues;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.DynamicPropertyRegistrar;
 import org.springframework.test.context.TestPropertySource;
-import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.Message;
-import software.amazon.awssdk.services.sqs.model.MessageSystemAttributeName;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -37,25 +32,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 기본 시험 설정(전송 = 로그)을 SQS 로 덮는다 — 덮이지 않으면 큐에 아무것도 안 들어와 시험이 실패한다.
  */
 @CatalogIntegrationTest
-@TestPropertySource(properties = {"nova.outbox.transport=sqs", "nova.sqs.region=" + FlociQueues.REGION})
-@Import(OutboxSqsFlowTest.FlociProperties.class)
+@TestPropertySource(properties = {"nova.outbox.transport=sqs", "nova.sqs.region=" + FlociTestContainer.REGION})
+@Import(SqsTestConfig.class)
 class OutboxSqsFlowTest {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
-    private static SqsClient queues;
+    private static final Duration TIMEOUT = Duration.ofSeconds(20);
 
     @Autowired ProductRegistrationService registrations;
     @Autowired JdbcTemplate jdbcTemplate;
-
-    @BeforeAll
-    static void openClient() {
-        queues = FlociQueues.client();
-    }
-
-    @AfterAll
-    static void closeClient() {
-        queues.close();
-    }
+    @Autowired TestQueues queues;
 
     @Test
     @DisplayName("일반 상품 등록은 order-events 로, 사전예약 등록은 preorder-events 로 봉투 하나씩 간다")
@@ -92,33 +78,9 @@ class OutboxSqsFlowTest {
                 Object.class, inStock, preorder)).as("둘 다 발행 완료로 표시").hasSize(2).doesNotContainNull();
     }
 
-    /** 그 상품의 메시지가 올 때까지 받는다. 다른 시험이 남긴 메시지는 건너뛰고 지운다. */
-    private static Message receiveFor(String queue, Long productId) {
-        String url = queues.getQueueUrl(request -> request.queueName(queue)).queueUrl();
-        long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
-        while (System.nanoTime() < deadline) {
-            List<Message> messages = queues.receiveMessage(request -> request.queueUrl(url).waitTimeSeconds(2).maxNumberOfMessages(10)
-                    .messageAttributeNames("All").messageSystemAttributeNames(MessageSystemAttributeName.ALL)).messages();
-            for (Message message : messages) {
-                queues.deleteMessage(request -> request.queueUrl(url).receiptHandle(message.receiptHandle()));
-                if (JSON.readTree(message.body()).get("aggregateId").asLong() == productId) {
-                    return message;
-                }
-            }
-        }
-        throw new AssertionError(queue + " 에 상품 " + productId + " 의 메시지가 오지 않았다");
-    }
-
-    @TestConfiguration(proxyBeanMethods = false)
-    static class FlociProperties {
-
-        @Bean
-        DynamicPropertyRegistrar flociEndpoint() {
-            return registry -> {
-                registry.add("nova.sqs.endpoint", () -> FlociQueues.get().getEndpoint());
-                registry.add("nova.sqs.access-key", () -> FlociQueues.get().getAccessKey());
-                registry.add("nova.sqs.secret-key", () -> FlociQueues.get().getSecretKey());
-            };
-        }
+    /** 그 상품의 메시지만 받아 지운다. 큐를 시험끼리 공유하므로 다른 메시지는 건드리지 않는다. */
+    private Message receiveFor(String queue, Long productId) {
+        return queues.receive(queue, message -> JSON.readTree(message.body()).get("aggregateId").asLong() == productId, TIMEOUT)
+                .orElseThrow(() -> new AssertionError(queue + " 에 상품 " + productId + " 의 메시지가 오지 않았다"));
     }
 }

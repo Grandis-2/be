@@ -1,5 +1,7 @@
 package com.grandis.nova.order.support;
 
+import com.grandis.nova.common.sqs.testing.SqsTestConfig;
+import com.grandis.nova.common.sqs.testing.TestQueues;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
@@ -16,9 +18,7 @@ import java.lang.annotation.Target;
  * 아웃박스 전송을 SQS 로 바꾼다(transport=sqs). {@link OrderIntegrationTest} 의 인라인 transport=log 를 이겨야 하고
  * 전송 구현은 조건부 빈이라 컨텍스트를 올리기 전에 정해져야 한다 — 프로필 파일은 인라인 값에 지고,
  * DynamicPropertyRegistrar 빈은 빈 조건을 판정한 뒤에 값을 넣어 둘 다 쓸 수 없다.
- *
- * common:outbox 이전 시: preorder support.SqsIntegrationTest 와 같은 역할이다. 이 모듈은 DB 설정을 OrderIntegrationTest 에
- * 두므로 그것을 메타 애너테이션으로 잇는다.
+ * Floci 컨테이너 · 큐 도우미는 common:sqs 의 테스트 픽스처다.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)

@@ -1,17 +1,14 @@
 package com.grandis.nova.order.event;
 
+import com.grandis.nova.common.message.EventEnvelope;
 import com.grandis.nova.order.order.cancel.SettlePreorderCancelService;
-import com.grandis.nova.order.outbox.EventEnvelope;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * 받은 메시지를 이벤트 종류별 처리로 보낸다. 큐 소비기는 본문을 그대로 여기에 넘긴다.
+ * 받은 메시지를 이벤트 종류별 처리로 보낸다. 큐 소비기(common:sqs)는 본문을 그대로 여기에 넘긴다.
  *
  * 모르는 종류 · 깨진 본문은 예외로 올린다. 소비기는 메시지를 지우지 않고, 재수신 한도를 넘으면 DLQ 로 간다.
- *
- * common:outbox 이전 시: preorder event.PreorderEventDispatcher 와 같은 모양이다. 종류별 처리는 모듈마다 달라 모듈에 남기고,
- * 공통 소비기는 dispatch(String) 하나만 부른다.
  */
 @Component
 public class OrderEventDispatcher {
