@@ -86,7 +86,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         SecurityContextHolder.getContext().setAuthentication(
-                new NovaAuthentication(new AuthenticatedPrincipal(claims.subject(), claims.role())));
+                new NovaAuthentication(new AuthenticatedPrincipal(claims.subject(), claims.role()), token));
         MDC.put(MDC_SUBJECT, claims.subject());
         try {
             chain.doFilter(request, response);
