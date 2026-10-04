@@ -371,8 +371,11 @@ class AdminProductEditApiTest {
             long opened = registerPreorder();
             fixtures.campaign(opened, now.minus(HOUR), now.plus(HOUR));
             for (long productId : new long[] {frozen, opened}) {
-                saleStatus(productId, "PAUSED").andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"));
+                saleStatus(productId, "PAUSED").andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"))
+                        .andExpect(jsonPath("$.error.message").value("사전예약 오픈 3분 전부터는 판매 상태를 바꿀 수 없습니다."));
                 assertThat(statusOf(productId)).isEqualTo("ACTIVE");
+                // 잠금 판정이 먼저다 — 지금과 같은 상태를 보내도 409(오픈 뒤 판매 중지의 반복 요청은 회차 취소 쪽 규칙이다)
+                saleStatus(productId, "ACTIVE").andExpect(status().isConflict());
             }
         }
 
@@ -383,6 +386,10 @@ class AdminProductEditApiTest {
             expectValidation(saleStatusBody(productId, "{}"), "status");
             expectValidation(saleStatusBody(productId, "{ \"status\": \"STOPPED\" }"), "status");
             expectValidation(saleStatusBody(productId, "{ \"status\": \"PAUSED\", \"reason\": \"x\" }"), "reason");
+            // 숫자 · 숫자 문자열을 enum 순번으로 읽지 않는다 — 1 이 조용히 PAUSED 가 되면 안 된다
+            expectValidation(saleStatusBody(productId, "{ \"status\": 1 }"), "status");
+            expectValidation(saleStatusBody(productId, "{ \"status\": \"1\" }"), "status");
+            assertThat(statusOf(productId)).isEqualTo("ACTIVE");
             saleStatus(999_999_999L, "PAUSED").andExpect(status().isNotFound()).andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
         }
 
@@ -408,6 +415,10 @@ class AdminProductEditApiTest {
             assertThat(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, opened)).isFalse();
 
             expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/visibility", productId)).content("{}")), "visible");
+            // boolean 칸은 true · false 만 — 문자열 · 숫자를 바꿔 읽지 않는다
+            for (String body : new String[] {"{ \"visible\": \"false\" }", "{ \"visible\": 0 }", "{ \"visible\": 1 }"}) {
+                expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/visibility", productId)).content(body)), "visible");
+            }
             visibility(999_999_999L, false).andExpect(status().isNotFound());
         }
 

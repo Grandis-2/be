@@ -11,9 +11,13 @@ import java.util.Map;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.cfg.CoercionAction;
+import tools.jackson.databind.cfg.CoercionInputShape;
+import tools.jackson.databind.cfg.EnumFeature;
 import tools.jackson.databind.exc.MismatchedInputException;
 import tools.jackson.databind.exc.UnrecognizedPropertyException;
 import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.type.LogicalType;
 
 /**
  * 관리자 쓰기 본문은 **모르는 칸을 거절**한다. 앱 공통 매퍼는 모르는 칸을 버리는데(FAIL_ON_UNKNOWN_PROPERTIES=false), 관리자 본문에서는
@@ -27,6 +31,12 @@ public class StrictBodies {
             .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
             // 같은 키가 두 번 오면 뒤의 것이 조용히 이기는 대신 400(body) — {"color":"블랙","color":"레드"}
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            // 숫자를 enum 순번으로 읽지 않는다 — {"status":1} 이 조용히 PAUSED 가 되지 않게(문자열 "1" 도 같다)
+            .enable(EnumFeature.FAIL_ON_NUMBERS_FOR_ENUMS)
+            // boolean 칸은 true · false 만 — "false" · 0 · 1 을 바꿔 읽지 않는다
+            .withCoercionConfig(LogicalType.Boolean, config -> config
+                    .setCoercion(CoercionInputShape.Integer, CoercionAction.Fail)
+                    .setCoercion(CoercionInputShape.String, CoercionAction.Fail))
             .build();
 
     private final Validator validator;

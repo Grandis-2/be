@@ -108,7 +108,8 @@ public class Product extends BaseEntity {
     }
 
     /**
-     * 판매 시작 · 중지(ACTIVE ↔ PAUSED). 판매 중지는 목록에서 숨기고 신규 거래를 막는다 — 기존 예약 · 주문에는 손대지 않는다.
+     * 판매 시작 · 중지(ACTIVE ↔ PAUSED). 판매 중지는 회원 목록에서 빠지고 상세에는 판매 중지로 보인다. 신규 접수 · 주문은 이 상태를 읽는
+     * 쪽(preorder 접수 · order 주문)이 막는다 — catalog 는 상태만 바꾸고 기존 예약 · 주문에는 손대지 않는다.
      * 사전예약은 오픈 3분 전부터 못 바꾼다는 규칙은 서비스가 지킨다(회차는 preorder 표).
      */
     public void changeStatus(SaleStatus status) {

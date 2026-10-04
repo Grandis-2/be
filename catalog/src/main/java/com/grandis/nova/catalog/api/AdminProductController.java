@@ -145,7 +145,8 @@ public class AdminProductController {
     }
 
     /**
-     * 상품 판매 시작 · 중지(ACTIVE ↔ PAUSED). 판매 중지는 목록에서 숨기고 신규 거래를 막는다 — 기존 예약 · 주문은 그대로.
+     * 상품 판매 시작 · 중지(ACTIVE ↔ PAUSED). 판매 중지는 회원 목록에서 빠지고 상세에는 판매 중지로 보인다 — 신규 접수 · 주문은
+     * preorder · order 가 이 상태를 보고 막고, 기존 예약 · 주문은 그대로.
      * 사전예약은 오픈 3분 전부터 409. 오픈 뒤 판매 중지(회차 취소)는 아직 이 경로에 없다.
      */
     @PatchMapping("/{productId}/sale-status")
