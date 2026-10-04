@@ -1,10 +1,13 @@
 package com.grandis.nova.waitingroom.control;
 
+import com.grandis.nova.waitingroom.domain.product.MaxWait;
 import com.grandis.nova.waitingroom.domain.product.RuntimeState;
+import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
 import com.grandis.nova.waitingroom.domain.product.SalesWindow;
 import com.grandis.nova.waitingroom.domain.queue.QueueState;
 import com.grandis.nova.waitingroom.redis.ControlStore;
 import com.grandis.nova.waitingroom.redis.ControlStore.ClusterView;
+import com.grandis.nova.waitingroom.redis.ControlStore.RelayOutcome;
 import com.grandis.nova.waitingroom.redis.LuaScripts;
 import com.grandis.nova.waitingroom.redis.ProductSchedules;
 import com.grandis.nova.waitingroom.redis.QueueStore;
@@ -22,6 +25,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
@@ -33,6 +37,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class AllocationRoundTest {
 
     static final Duration WAIT = Duration.ofSeconds(5);
+    /** 같은 Redis 시각에 회차를 이어 돌리므로 유지 기간을 두지 않는다. */
+    static final BrakeProperties NO_HOLD = new BrakeProperties(null, null, null, null, null, null, null, null,
+            Duration.ZERO, null, null, null);
     static final ControlPlaneProperties PROPERTIES = new ControlPlaneProperties(null, null, null, null, null, null, null, null);
 
     private ReactiveStringRedisTemplate redis;
@@ -62,7 +69,8 @@ class AllocationRoundTest {
         return new AllocationRound(control, new AdmissionProperties(10L, 0.7), PROPERTIES, metrics, leadership,
                 new ScheduleResync(control, reason -> failNextResync.compareAndSet(true, false)
                         ? Mono.error(new IllegalStateException("sqs down"))
-                        : Mono.fromRunnable(() -> resyncReasons.add(reason)), metrics));
+                        : Mono.fromRunnable(() -> resyncReasons.add(reason)), metrics),
+                new Brake(NO_HOLD, metrics));
     }
 
     private void schedule(String product, Instant opensAt, Instant closesAt) {
@@ -358,6 +366,30 @@ class AllocationRoundTest {
     private static void await(BooleanSupplier condition) {
         StepVerifier.create(Flux.interval(Duration.ofMillis(20)).filter(tick -> condition.getAsBoolean()).next())
                 .expectNextCount(1).expectComplete().verify(WAIT);
+    }
+
+    @Test
+    void 노드들이_본_전달_결과가_나쁘면_줄인_전역_속도와_배율을_발행한다() {
+        schedule("101", now.minusSeconds(60), now.plusSeconds(3_600));
+        leadership.hold(7, leadership.nanoTime(), Duration.ofHours(1));
+        round.run(7, new ClusterView(1, 0, Map.of("a", new RelayOutcome(0, 0))), 0).block(WAIT);
+
+        GatewaySnapshot snapshot = round.run(7, new ClusterView(1, 0, Map.of("a", new RelayOutcome(30, 15))), 1)
+                .block(WAIT);
+
+        assertThat(snapshot.brakeFactor()).isEqualTo(0.5);
+        assertThat(snapshot.meta().globalCredit()).as("운영값(기본 10) × 0.5").isEqualTo(5);
+        assertThat(SnapshotCodec.decode(control.readSnapshot().block(WAIT).entries()).orElseThrow().brakeFactor())
+                .as("다음 리더가 이어 받도록 판정 재료에 싣는다").isEqualTo(0.5);
+    }
+
+    @Test
+    void 새_리더는_이_노드가_재료를_받기_전이어도_Redis_에_발행된_배율에서_이어_간다() {
+        schedule("101", now.minusSeconds(60), now.plusSeconds(3_600));
+        control.publishSnapshot(6, PROPERTIES.fenceTtl().toMillis(), SnapshotCodec.encode(new GatewaySnapshot(Map.of(),
+                new SnapshotMeta(5, 1, MaxWait.unlimited()), now.toEpochMilli(), 0.5))).block(WAIT);
+
+        assertThat(run(7, 0).brakeFactor()).isEqualTo(0.5);
     }
 
     @Test

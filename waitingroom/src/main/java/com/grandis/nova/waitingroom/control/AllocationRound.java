@@ -47,6 +47,7 @@ class AllocationRound {
     private final ControlMetrics metrics;
     private final Leadership leadership;
     private final ScheduleResync resync;
+    private final Brake brake;
     /** 이 리더가 모델별로 본 커서 최댓값. Redis 가 커서를 잃으면 되살리는 데 쓴다(값은 늘기만 한다). */
     private final Map<String, Long> writtenMax = new ConcurrentHashMap<>();
     private final Map<String, String> sweepCursors = new ConcurrentHashMap<>();
@@ -59,7 +60,8 @@ class AllocationRound {
     private final AtomicBoolean tombstoneFailing = new AtomicBoolean();
 
     AllocationRound(ControlStore store, AdmissionProperties admission, ControlPlaneProperties properties,
-                    ControlMetrics metrics, Leadership leadership, ScheduleResync resync) {
+                    ControlMetrics metrics, Leadership leadership, ScheduleResync resync, Brake brake) {
+        this.brake = brake;
         this.resync = resync;
         this.store = store;
         this.admission = admission;
@@ -98,11 +100,29 @@ class AllocationRound {
     private Mono<GatewaySnapshot> allocate(long fence, ClusterView cluster, long tick, long nowMillis,
                                            OperationalSettings settings, List<Row> rows) {
         Instant now = Instant.ofEpochMilli(nowMillis);
+        return brakeFactor(fence, cluster, now)
+                .flatMap(factor -> allocate(fence, cluster, tick, nowMillis, settings, rows, factor));
+    }
+
+    /** 새 임기면 Redis 에 발행된 판정 재료의 배율에서 이어 간다 — 이 노드가 아직 재료를 못 받았어도 풀지 않게. */
+    private Mono<Double> brakeFactor(long fence, ClusterView cluster, Instant now) {
+        Mono<Void> adopted = !brake.needsAdopt(fence) ? Mono.empty() : store.readSnapshot()
+                .map(read -> SnapshotCodec.decode(read.entries()).map(GatewaySnapshot::brakeFactor).orElse(1.0))
+                .doOnNext(factor -> brake.adopt(fence, factor, now))
+                .then();
+        return adopted.then(Mono.fromCallable(() -> brake.next(cluster.relayTotals(), now)));
+    }
+
+    private Mono<GatewaySnapshot> allocate(long fence, ClusterView cluster, long tick, long nowMillis,
+                                           OperationalSettings settings, List<Row> rows, double brakeFactor) {
+        Instant now = Instant.ofEpochMilli(nowMillis);
         List<ProductDemand> demands = rows.stream()
                 .map(row -> new ProductDemand(row.key(), row.depth().waiting(), settings.capOf(row.key()),
                         row.schedule().window().phaseAt(now) == SalesPhase.OPEN))
                 .toList();
-        long pool = Math.max(0, settings.globalCredit() - cluster.idlePassSum());
+        // 브레이크는 운영값을 줄이기만 한다. 노드들이 쓰는 전역 속도(meta)도 줄인 값이다
+        long globalCredit = Brake.apply(settings.globalCredit(), brakeFactor);
+        long pool = Math.max(0, globalCredit - cluster.idlePassSum());
         Map<String, Long> grants = allocator.allocate(pool, demands, tick).stream()
                 .collect(Collectors.toMap(Grant::productKey, Grant::credit));
 
@@ -112,7 +132,7 @@ class AllocationRound {
                 .collectMap(Map.Entry::getKey, Map.Entry::getValue)
                 .flatMap(states -> {
                     GatewaySnapshot snapshot = new GatewaySnapshot(states,
-                            new SnapshotMeta(settings.globalCredit(), cluster.aliveGateways(), settings.maxWait()), nowMillis);
+                            new SnapshotMeta(globalCredit, cluster.aliveGateways(), settings.maxWait()), nowMillis, brakeFactor);
                     return store.publishSnapshot(fence, properties.fenceTtl().toMillis(), SnapshotCodec.encode(snapshot))
                             .flatMap(published -> published ? Mono.just(snapshot) : Mono.error(new LostLeadershipException()));
                 })

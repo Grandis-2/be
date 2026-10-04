@@ -101,6 +101,7 @@ class OperationalSettingsAdmin {
                             snapshot.map(current -> snapshots.ageMillis() / 1000).orElse(null),
                             snapshot.map(current -> current.meta().gatewayCount()).orElse(null),
                             snapshot.map(current -> current.meta().globalCredit()).orElse(null),
+                            snapshot.map(GatewaySnapshot::brakeFactor).orElse(null),
                             snapshot.map(current -> current.meta().maxWait().duration()).map(Duration::toSeconds).orElse(null),
                             snapshot.map(this::products).orElse(List.of()));
                 });

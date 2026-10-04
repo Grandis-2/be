@@ -19,13 +19,16 @@ class AcceptRoute {
     /** 응답 꾸미기는 응답을 쓰는 필터보다 앞서 걸어야 본문을 본다. */
     private static final int WATCH_ORDER = NettyWriteResponseFilter.WRITE_RESPONSE_FILTER_ORDER - 1;
     private static final int CHECK_ORDER = 0;
+    /** 전달 결과 세기는 가장 바깥에서 — 응답 쓰기와 오류까지 지켜본다. */
+    private static final int HEALTH_ORDER = WATCH_ORDER - 1;
 
     @Bean
     RouteLocator acceptRoutes(RouteLocatorBuilder routes, RelayProperties properties, AdmissionTicketCheck check,
-                              AcceptOutcomeWatch watch) {
+                              AcceptOutcomeWatch watch, RelayHealthWatch health) {
         return routes.routes()
                 .route("preorder-accept", route -> route.method(HttpMethod.POST).and().path(ACCEPT_PATH)
                         .filters(filters -> filters
+                                .filter(health, HEALTH_ORDER)
                                 .filter(watch, WATCH_ORDER)
                                 .filter(check, CHECK_ORDER)
                                 .removeRequestHeader(QUEUE_TOKEN))

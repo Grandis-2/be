@@ -6,4 +6,4 @@
 if ARGV[1] == nil or ARGV[1] == '' or string.sub(ARGV[1], 1, 1) == '#' then
     return redis.error_reply('노드 ID 가 비었거나 # 로 시작한다')
 end
-return redis.call('HDEL', KEYS[1], ARGV[1], '#p:' .. ARGV[1])
+return redis.call('HDEL', KEYS[1], ARGV[1], '#p:' .. ARGV[1], '#r:' .. ARGV[1])

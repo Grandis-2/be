@@ -19,6 +19,10 @@ public final class TestSnapshots {
     }
 
     public static void put(SnapshotHolder holder, Map<String, ProductState> products, SnapshotMeta meta) {
-        holder.replace(new GatewaySnapshot(products, meta, System.currentTimeMillis()));
+        put(holder, products, meta, 1.0);
+    }
+
+    public static void put(SnapshotHolder holder, Map<String, ProductState> products, SnapshotMeta meta, double brakeFactor) {
+        holder.replace(new GatewaySnapshot(products, meta, System.currentTimeMillis(), brakeFactor));
     }
 }

@@ -6,6 +6,7 @@ import com.grandis.nova.waitingroom.domain.queue.QueueState;
 import com.grandis.nova.waitingroom.redis.ControlStore.ApplyResult;
 import com.grandis.nova.waitingroom.redis.ControlStore.ClusterView;
 import com.grandis.nova.waitingroom.redis.ControlStore.LeaderLease;
+import com.grandis.nova.waitingroom.redis.ControlStore.RelayOutcome;
 import com.grandis.nova.waitingroom.support.RedisContainer;
 import org.assertj.core.data.Offset;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,6 +26,7 @@ import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 
 class ControlStoreTest {
 
@@ -342,17 +344,28 @@ class ControlStoreTest {
     class 하트비트 {
 
         @Test
-        void 살아_있는_노드와_한산_통과_합을_세고_죽은_노드는_지운다() {
-            control.heartbeat("a", 5, 2, 3).block(WAIT);
+        void 살아_있는_노드와_한산_통과_합_노드별_전달_누적을_돌려주고_죽은_노드는_지운다() {
+            control.heartbeat("a", 5, 2, 3, new RelayOutcome(10, 2)).block(WAIT);
             redis.opsForHash().put(RedisKeys.GATEWAYS, "dead", "1").block(WAIT);
-            ClusterView view = control.heartbeat("b", 5, 2, 4).block(WAIT);
+            redis.opsForHash().put(RedisKeys.GATEWAYS, "#r:dead", "99|99").block(WAIT);
+            ClusterView view = control.heartbeat("b", 5, 2, 4, new RelayOutcome(9_000_000_000_000_000L, 1)).block(WAIT);
 
             assertThat(view.aliveGateways()).isEqualTo(2);
             assertThat(view.idlePassSum()).isEqualTo(7);
+            assertThat(view.relayTotals()).as("큰 누적도 지수 표기 없이 그대로")
+                    .containsOnly(entry("a", new RelayOutcome(10, 2)), entry("b", new RelayOutcome(9_000_000_000_000_000L, 1)));
             assertThat(redis.opsForHash().hasKey(RedisKeys.GATEWAYS, "dead").block(WAIT)).isFalse();
+            assertThat(redis.opsForHash().hasKey(RedisKeys.GATEWAYS, "#r:dead").block(WAIT)).isFalse();
 
             control.leave("a").block(WAIT);
-            assertThat(control.heartbeat("b", 5, 2, 0).block(WAIT).aliveGateways()).isEqualTo(1);
+            assertThat(redis.opsForHash().hasKey(RedisKeys.GATEWAYS, "#r:a").block(WAIT)).isFalse();
+            assertThat(control.heartbeat("b", 5, 2, 0, RelayOutcome.NONE).block(WAIT).aliveGateways()).isEqualTo(1);
+        }
+
+        @Test
+        void 나쁜_응답이_전달보다_많으면_계약_위반이라_거절한다() {
+            assertThatThrownBy(() -> control.heartbeat("a", 5, 2, 0, new RelayOutcome(1, 2)).block(WAIT)).rootCause()
+                    .hasMessageContaining("나쁨");
         }
     }
 

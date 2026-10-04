@@ -113,8 +113,8 @@ class ControlPlaneTest {
             metrics = new ControlMetrics(registry, leadership, holder);
             ScheduleResync resync = new ScheduleResync(store, reason -> Mono.empty(), metrics);
             plane = new ControlPlane(store, leadership, new AllocationRound(store, new AdmissionProperties(10L, 0.7), FAST,
-                    metrics, leadership, resync),
-                    holder, clock, new IdlePassCounter(), FAST, metrics, new LoopBeats());
+                    metrics, leadership, resync, new Brake(BrakeTest.DEFAULTS, metrics)),
+                    holder, clock, new IdlePassCounter(), new RelayOutcomeCounter(), FAST, metrics, new LoopBeats());
         }
     }
 }

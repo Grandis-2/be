@@ -188,7 +188,7 @@ class WaitingroomAdminApiTest {
     void 현황은_받은_판정_재료의_모델별_상태와_리더를_보여_준다() {
         SalesWindow window = new SalesWindow(now.minusSeconds(60), now.plusSeconds(3_600));
         TestSnapshots.put(snapshots, Map.of("101", ProductState.withQueue(5, 10, window, 7)),
-                new SnapshotMeta(80, 2, MaxWait.of(Duration.ofSeconds(120))));
+                new SnapshotMeta(80, 2, MaxWait.of(Duration.ofSeconds(120))), 0.5);
         redis.opsForValue().set(RedisKeys.LEADER, "9|node-a").block(WAIT);
 
         get("/status").expectStatus().isOk().expectBody()
@@ -196,6 +196,7 @@ class WaitingroomAdminApiTest {
                 .jsonPath("$.data.nodeId").isNotEmpty()
                 .jsonPath("$.data.gateways").isEqualTo(2)
                 .jsonPath("$.data.globalCredit").isEqualTo(80)
+                .jsonPath("$.data.brakeFactor").isEqualTo(0.5)
                 .jsonPath("$.data.maxWaitSeconds").isEqualTo(120)
                 .jsonPath("$.data.products[0].productId").isEqualTo("101")
                 .jsonPath("$.data.products[0].phase").isEqualTo("OPEN")
