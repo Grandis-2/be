@@ -58,6 +58,7 @@ public class AdmissionTicketVerifier {
      */
     private final Instant acceptPreviousUntil;
     private final long clockSkewSeconds;
+    private final Duration ttl;
     private final Clock clock;
 
     public AdmissionTicketVerifier(AdmissionTicketProperties properties, Clock clock) {
@@ -68,6 +69,7 @@ public class AdmissionTicketVerifier {
                 : properties.rolloutEndsAt().plus(properties.ttl())
                         .plus(max(properties.window(), properties.clockSkew()));
         this.clockSkewSeconds = properties.clockSkew().toSeconds();
+        this.ttl = properties.ttl();
         this.clock = clock;
     }
 
@@ -105,7 +107,8 @@ public class AdmissionTicketVerifier {
         if (expiresAt.isEmpty()) {
             return Optional.empty();
         }
-        return Optional.of(new AdmissionTicket(sha256Hex(token), isExpired(expiresAt.getAsLong(), now)));
+        return Optional.of(new AdmissionTicket(sha256Hex(token), isExpired(expiresAt.getAsLong(), now),
+                Instant.ofEpochSecond(expiresAt.getAsLong()).minus(ttl).minusSeconds(clockSkewSeconds)));
     }
 
     /** @param presented 받은 서명 표기의 바이트 */

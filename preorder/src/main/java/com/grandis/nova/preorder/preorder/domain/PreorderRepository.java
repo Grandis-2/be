@@ -80,6 +80,10 @@ public interface PreorderRepository extends JpaRepository<Preorder, Long>, JpaSp
     /** 같은 접수 키의 기존 예약(재전송 판정). */
     Optional<Preorder> findByCustomerIdAndIdempotencyKey(Long customerId, String idempotencyKey);
 
+    /** 회원의 그 모델 마지막 접수 시각(상태 무관). uq_preorder_active 의 앞부분(customer_id, product_id)으로 찾는다. */
+    @Query("select max(p.createdAt) from Preorder p where p.customerId = :customerId and p.productId = :productId")
+    Optional<Instant> findLastAcceptedAt(@Param("customerId") Long customerId, @Param("productId") Long productId);
+
     /** 같은 모델의 진행 중 예약(취소 완료 제외). 활성 예약 UNIQUE 충돌 때 기존 예약을 알려 주려고 쓴다. */
     Optional<Preorder> findFirstByCustomerIdAndProductIdAndStatusNot(Long customerId, Long productId,
                                                                     PreorderStatus status);

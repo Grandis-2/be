@@ -258,8 +258,8 @@ class AcceptPreorderApiTest {
     void 같은_모델에_진행_중_예약이_있으면_409_와_기존_예약을_알린다() throws Exception {
         String first = body(accept(customerId, product.productId(), product.optionId(), "key-active-1",
                 ticket(product.productId(), customerId)));
-        // 다른 창(30초 전)에 발급된 다른 입장권 — 입장권 UNIQUE 가 아니라 활성 예약 UNIQUE 에 걸리게 한다
-        String otherTicket = AdmissionTickets.issue(product.productId(), customerId, Instant.now().minusSeconds(30));
+        // 다시 진입해 받은 나중 입장권 — 입장권 UNIQUE 가 아니라 활성 예약 UNIQUE 에 걸리게 한다
+        String otherTicket = AdmissionTickets.issue(product.productId(), customerId, laterWindow());
 
         accept(customerId, product.productId(), product.optionId(), "key-active-2", otherTicket)
                 .andExpect(status().isConflict())
@@ -283,15 +283,22 @@ class AcceptPreorderApiTest {
     }
 
     @Test
-    void 이미_쓴_입장권이면_409_ADMISSION_TICKET_USED() throws Exception {
+    void 취소_뒤_같은_입장의_입장권으로_재접수하면_403_STALE_이고_다시_진입해_받은_입장권은_받는다() throws Exception {
         String ticket = ticket(product.productId(), customerId);
-        String first = body(accept(customerId, product.productId(), product.optionId(), "key-used-1", ticket));
-        // 활성 예약 UNIQUE 를 비켜 입장권 UNIQUE 만 남긴다
+        String first = body(accept(customerId, product.productId(), product.optionId(), "key-stale-1", ticket));
         cancels.complete(preorderIdOf(first));
+        String sameAdmission = AdmissionTickets.issue(product.productId(), customerId,
+                Instant.now().minusSeconds(AdmissionTickets.WINDOW_SECONDS));
 
-        accept(customerId, product.productId(), product.optionId(), "key-used-2", ticket)
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.code").value("ADMISSION_TICKET_USED"));
+        accept(customerId, product.productId(), product.optionId(), "key-stale-2", ticket)
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("ADMISSION_TICKET_STALE"));
+        accept(customerId, product.productId(), product.optionId(), "key-stale-3", sameAdmission)
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("ADMISSION_TICKET_STALE"));
+        accept(customerId, product.productId(), product.optionId(), "key-stale-4",
+                AdmissionTickets.issue(product.productId(), customerId, laterWindow()))
+                .andExpect(status().isAccepted());
     }
 
     @Test
@@ -345,6 +352,11 @@ class AcceptPreorderApiTest {
         mockMvc.perform(adminRequest(customerId, "key-admin-0003", "전화 접수")
                         .with(customer(customerId)))
                 .andExpect(status().isForbidden());
+    }
+
+    /** 지금 접수보다 나중에 발급된 것으로 보이는 입장권의 발급 시각(다시 진입해 새로 받은 입장권). */
+    private Instant laterWindow() {
+        return Instant.now().plusSeconds(3 * AdmissionTickets.WINDOW_SECONDS);
     }
 
     private ResultActions accept(Long customer, Long productId, Long optionId, String key, String ticket)

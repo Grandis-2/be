@@ -29,6 +29,9 @@ class AdmissionTicketVerifierTest {
      * 공통 테스트 벡터 — waiting SignedToken("et_", ttl 120, window 30)으로 만든 값이다.
      * 게이트웨이 이식 뒤에도 양쪽 테스트가 이 값을 같이 쓴다(gateway-auth-tokens.md 5절).
      */
+    /** 만료 − 수명(120초) − 시각 오차(30초). 이보다 앞서 발급됐을 수 없다. */
+    static final Instant ISSUED_NO_EARLIER_THAN = EXPIRES_AT.minusSeconds(150);
+
     static final String VECTOR_CURRENT =
             "et_MTAxHzEwMjQfMTc5MDgxNjUyMA.eLyT_jlZvbtd8xkwWxcyH2fvoyaZs0cXeXQbA8E-OKo";
     static final String VECTOR_CURRENT_ID = "0fa344e6a5944743178270c54bd9534f35024cc04e20f20968965a9a992418f5";
@@ -45,7 +48,7 @@ class AdmissionTicketVerifierTest {
         @Test
         void waiting_이_발급한_입장권을_받고_ID_는_토큰의_SHA256_이다() {
             assertThat(verifierAt(ISSUED_AT).verify(VECTOR_CURRENT, PRODUCT_ID, CUSTOMER_ID))
-                    .contains(new AdmissionTicket(VECTOR_CURRENT_ID, false));
+                    .contains(new AdmissionTicket(VECTOR_CURRENT_ID, false, ISSUED_NO_EARLIER_THAN));
         }
 
         @Test
@@ -77,13 +80,13 @@ class AdmissionTicketVerifierTest {
         @Test
         void 만료_뒤에도_서버_시각_오차_30초_안이면_유효하다() {
             assertThat(verifierAt(EXPIRES_AT.plusSeconds(29)).verify(VECTOR_CURRENT, PRODUCT_ID, CUSTOMER_ID))
-                    .contains(new AdmissionTicket(VECTOR_CURRENT_ID, false));
+                    .contains(new AdmissionTicket(VECTOR_CURRENT_ID, false, ISSUED_NO_EARLIER_THAN));
         }
 
         @Test
         void 오차를_넘으면_만료로_알린다() {
             assertThat(verifierAt(EXPIRES_AT.plusSeconds(30)).verify(VECTOR_CURRENT, PRODUCT_ID, CUSTOMER_ID))
-                    .contains(new AdmissionTicket(VECTOR_CURRENT_ID, true));
+                    .contains(new AdmissionTicket(VECTOR_CURRENT_ID, true, ISSUED_NO_EARLIER_THAN));
         }
     }
 
