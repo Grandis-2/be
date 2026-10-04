@@ -37,11 +37,16 @@ class CatalogClientConfig {
     static final List<Duration> EVICT_RETRY_DELAYS = List.of(Duration.ofSeconds(1), Duration.ofSeconds(2),
             Duration.ofSeconds(4));
 
+    /** Redis 장애 중 재시도가 쌓여 자원을 잡지 않게 한다. 넘치면 기다리지 않고 거절한다 — 실패로 세고 1분 갱신에 맡긴다. */
+    static final int EVICT_RETRY_CONCURRENCY = 16;
+
     @Bean
     CatalogCacheInvalidation catalogCacheInvalidation(CatalogReader catalogReader, StringRedisTemplate redis,
                                                       MeterRegistry meterRegistry) {
         SimpleAsyncTaskExecutor retryExecutor = new SimpleAsyncTaskExecutor("catalog-evict-retry-");
         retryExecutor.setVirtualThreads(true);
+        retryExecutor.setConcurrencyLimit(EVICT_RETRY_CONCURRENCY);
+        retryExecutor.setRejectTasksWhenLimitReached(true);
         return new CatalogCacheInvalidation(catalogReader, redis, retryExecutor, EVICT_RETRY_DELAYS, meterRegistry);
     }
 

@@ -4,6 +4,7 @@ import com.grandis.nova.preorder.support.CatalogStubs;
 import com.grandis.nova.preorder.support.DependencyGuards;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
@@ -55,6 +56,21 @@ class CatalogCacheInvalidationRetryTest {
 
         assertThat(reader.cache().getIfPresent(PRODUCT_ID)).isNull();
         verify(redis, times(4)).convertAndSend(CatalogCacheInvalidation.CHANNEL, PRODUCT_ID.toString());
+        assertThat(failures()).isEqualTo(1);
+    }
+
+    @Test
+    void 재시도가_가득_차_거절되면_실패로_세고_예외는_올리지_않는다() {
+        cache();
+        willThrow(new RedisConnectionFailureException("down")).given(redis).convertAndSend(any(), any());
+        CatalogCacheInvalidation full = new CatalogCacheInvalidation(reader, redis, task -> {
+            throw new TaskRejectedException("가득 참");
+        }, List.of(Duration.ZERO), meterRegistry);
+
+        full.evictEverywhere(PRODUCT_ID);
+
+        assertThat(reader.cache().getIfPresent(PRODUCT_ID)).isNull();
+        verify(redis, times(1)).convertAndSend(CatalogCacheInvalidation.CHANNEL, PRODUCT_ID.toString());
         assertThat(failures()).isEqualTo(1);
     }
 
