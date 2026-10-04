@@ -2,7 +2,7 @@ package com.grandis.nova.preorder.preorder;
 
 /**
  * 예약 상태를 움직이는 사건과 그 사건이 원장에 남길 값. 사건마다 필요한 값을 타입이 함께 갖는다 —
- * 외부 번호 없는 등록 확인처럼 값이 빠진 사건을 만들 수 없다. 다음 상태는 {@link PreorderStatus#next} 가 정한다.
+ * 등록 확인에 외부 번호를 빠뜨리는 것 같은 호출을 컴파일러가 잡는다. 다음 상태는 {@link PreorderStatus#next} 가 정한다.
  */
 public sealed interface PreorderFact {
 
