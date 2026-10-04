@@ -3,12 +3,12 @@ package com.grandis.nova.preorder.cancel.application;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
+import com.grandis.nova.preorder.preorder.PreorderFact;
 import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.preorder.PreorderTransition;
-import com.grandis.nova.preorder.preorder.PreorderTrigger;
 import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.syncjob.SyncJobs;
 import org.springframework.stereotype.Component;
@@ -44,7 +44,7 @@ public class CancelStarter {
     /** 이미 취소 중 · 취소 완료면 아무것도 만들지 않고 지금 상태를 돌려준다. */
     @Transactional
     public PreorderTransition start(PreorderSnapshot preorder, EventActor actor, String reason, CancelReason cancelReason) {
-        PreorderTransition transition = ledger.fire(preorder.id(), PreorderTrigger.CANCEL_REQUESTED, actor, reason);
+        PreorderTransition transition = ledger.fire(preorder.id(), new PreorderFact.CancelRequested(actor, reason));
         if (transition.applied()) {
             syncJobs.cancelRegister(preorder.id(), clock.instant());
             outboxWriter.append(new PreorderCancelRequested(preorder.id(), preorder.preorderToken(),

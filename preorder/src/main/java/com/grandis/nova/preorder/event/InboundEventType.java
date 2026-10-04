@@ -17,7 +17,9 @@ public enum InboundEventType {
     /** catalog: 회차 판매 중지. */
     PREORDER_CAMPAIGN_CANCELED,
     /** waitingroom: 회차 일정 전체 재발행 요청. */
-    CAMPAIGN_RESYNC_REQUESTED;
+    CAMPAIGN_RESYNC_REQUESTED,
+    /** catalog: 사전예약 상품 등록 — 회차 · 배송 차수 생성. */
+    PREORDER_PRODUCT_REGISTERED;
 
     /** 이 이름의 이벤트를 받는가. DLQ 적재 · 되돌리기 전 검사가 쓴다. */
     public static boolean isKnown(String eventType) {

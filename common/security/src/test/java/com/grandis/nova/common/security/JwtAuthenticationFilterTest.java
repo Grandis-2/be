@@ -139,6 +139,18 @@ class JwtAuthenticationFilterTest {
     }
 
     @Test
+    @DisplayName("검증한 원본 토큰을 credentials 로 들고, 문자열로 찍을 때는 가린다")
+    void authenticationCarriesTokenWithoutPrintingIt() throws Exception {
+        when(checker.isRevoked(any())).thenReturn(false);
+        String token = access("101", Role.USER);
+
+        NovaAuthentication auth = (NovaAuthentication) run(request("/api/v1/preorders", token));
+
+        assertThat(auth.getCredentials()).isEqualTo(token);
+        assertThat(auth.toString()).doesNotContain(token);
+    }
+
+    @Test
     @DisplayName("ADMIN 토큰은 ROLE_ADMIN 이고 subject 는 admin 이다")
     void adminTokenAuthenticates() throws Exception {
         when(checker.isRevoked(any())).thenReturn(false);
