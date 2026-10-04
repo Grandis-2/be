@@ -16,8 +16,10 @@ import reactor.core.publisher.Flux;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -280,6 +282,35 @@ class ControlStoreTest {
 
         private String products() {
             return (String) redis.opsForHash().get(RedisKeys.PRODUCTS, PRODUCT).block(WAIT);
+        }
+    }
+
+    @Nested
+    class 운영값 {
+
+        @Test
+        void 동시에_바꿔도_돌려받은_전_값들이_한_줄로_이어져_감사_로그가_빠짐없다() {
+            List<String> values = IntStream.rangeClosed(1, 16).mapToObj(String::valueOf).toList();
+
+            List<Optional<String>> befores = Flux.fromIterable(values)
+                    .flatMap(value -> control.writeSetting("global-credit", value), values.size())
+                    .collectList().block(WAIT);
+            String last = (String) redis.opsForHash().get(RedisKeys.SETTINGS, "global-credit").block(WAIT);
+
+            // 원자적으로 바꿨다면 전 값은 "없음" 하나와 서로 다른 값들이고, 그 값들과 최종 값을 합치면 보낸 값 전부다
+            assertThat(befores).filteredOn(Optional::isEmpty).hasSize(1);
+            List<String> seen = new ArrayList<>(befores.stream().flatMap(Optional::stream).toList());
+            assertThat(seen).doesNotHaveDuplicates().doesNotContain(last);
+            seen.add(last);
+            assertThat(seen).containsExactlyInAnyOrderElementsOf(values);
+        }
+
+        @Test
+        void 지우면_지운_값을_돌려주고_없던_칸은_빈_값이다() {
+            control.writeSetting("max-wait-sec", "60").block(WAIT);
+
+            assertThat(control.clearSetting("max-wait-sec").block(WAIT)).contains("60");
+            assertThat(control.clearSetting("max-wait-sec").block(WAIT)).isEmpty();
         }
     }
 
