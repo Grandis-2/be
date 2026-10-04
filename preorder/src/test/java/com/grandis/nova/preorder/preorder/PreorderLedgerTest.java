@@ -28,8 +28,8 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static com.grandis.nova.preorder.preorder.PreorderStatus.CANCELING;
-import static com.grandis.nova.preorder.preorder.PreorderStatus.PAYABLE;
 import static com.grandis.nova.preorder.preorder.PreorderStatus.PENDING_SYNC;
+import static com.grandis.nova.preorder.preorder.PreorderStatus.REGISTERED;
 import static com.grandis.nova.preorder.preorder.PreorderStatus.RESERVED;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -109,17 +109,17 @@ class PreorderLedgerTest {
         Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
         String externalReference = "EXT-" + ShopFixtures.unique();
 
-        assertThat(ledger.fire(id, new RegisterConfirmed(externalReference))).isEqualTo(new PreorderTransition(true, PAYABLE));
+        assertThat(ledger.fire(id, new RegisterConfirmed(externalReference))).isEqualTo(new PreorderTransition(true, REGISTERED));
         Object payableFrom = row(id).get("payable_from");
         assertThat(ledger.fire(id, new RegisterConfirmed("EXT-" + ShopFixtures.unique())))
-                .isEqualTo(new PreorderTransition(false, PAYABLE));
+                .isEqualTo(new PreorderTransition(false, REGISTERED));
 
         assertThat(payableFrom).isNotNull();
         assertThat(row(id))
-                .containsEntry("status", "PAYABLE")
+                .containsEntry("status", "REGISTERED")
                 .containsEntry("external_reference", externalReference)
                 .containsEntry("payable_from", payableFrom);
-        assertThat(history(id)).containsExactly("1:null>PENDING_SYNC:USER", "2:PENDING_SYNC>PAYABLE:SYSTEM");
+        assertThat(history(id)).containsExactly("1:null>PENDING_SYNC:USER", "2:PENDING_SYNC>REGISTERED:SYSTEM");
     }
 
     @Test
@@ -133,15 +133,15 @@ class PreorderLedgerTest {
     }
 
     @Test
-    void PAYABLE_에서_시작한_취소가_거절되면_PAYABLE_로_되돌린다() {
+    void REGISTERED_에서_시작한_취소가_거절되면_REGISTERED_로_되돌린다() {
         Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
         ledger.fire(id, new RegisterConfirmed("EXT-" + ShopFixtures.unique()));
         ledger.fire(id, new CancelRequested(EventActor.USER, null));
 
         PreorderTransition result = ledger.fire(id, new CancelRejected("SHIPPING_STARTED", null));
 
-        assertThat(result).isEqualTo(new PreorderTransition(true, PAYABLE));
-        assertThat(history(id)).last().isEqualTo("4:CANCELING>PAYABLE:SYSTEM");
+        assertThat(result).isEqualTo(new PreorderTransition(true, REGISTERED));
+        assertThat(history(id)).last().isEqualTo("4:CANCELING>REGISTERED:SYSTEM");
         assertThat(reasons(id)).as("사건이 실어 온 사유가 이력에 남는다").last().isEqualTo("SHIPPING_STARTED");
     }
 
@@ -207,10 +207,10 @@ class PreorderLedgerTest {
         Long id = payable();
         Instant first = Instant.parse("2026-10-04T01:00:00Z");
 
-        assertThat(ledger.fire(id, new PaymentStarted(first))).isEqualTo(new PreorderTransition(true, PAYABLE));
+        assertThat(ledger.fire(id, new PaymentStarted(first))).isEqualTo(new PreorderTransition(true, REGISTERED));
         ledger.fire(id, new PaymentStarted(first.plusSeconds(60)));
 
-        assertThat(row(id)).containsEntry("status", "PAYABLE").containsEntry("event_sequence", 2L);
+        assertThat(row(id)).containsEntry("status", "REGISTERED").containsEntry("event_sequence", 2L);
         assertThat(utc(row(id).get("payment_started_at"))).isEqualTo(first);
         assertThat(history(id)).hasSize(2);
     }
@@ -226,7 +226,7 @@ class PreorderLedgerTest {
 
         assertThat(row(id)).containsEntry("status", "RESERVED");
         assertThat(utc(row(id).get("reserved_at"))).isEqualTo(paidAt);
-        assertThat(history(id)).last().isEqualTo("3:PAYABLE>RESERVED:SYSTEM");
+        assertThat(history(id)).last().isEqualTo("3:REGISTERED>RESERVED:SYSTEM");
     }
 
     @Test

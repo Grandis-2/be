@@ -50,8 +50,8 @@ public interface PreorderRepository extends JpaRepository<Preorder, Long>, JpaSp
                      @Param("now") Instant now);
 
     /**
-     * 주문 쪽 취소 거절 → PAYABLE 또는 RESERVED 로 되돌림. 결제 가능한 적이 있는(payable_from 이 있는) 예약만 되돌린다 —
-     * PENDING_SYNC 에서 시작한 취소를 되돌리면 결제 기한 기준 시각이 없는 PAYABLE 이 생긴다(ck_preorder_payable_from).
+     * 주문 쪽 취소 거절 → REGISTERED 또는 RESERVED 로 되돌림. 결제 가능한 적이 있는(payable_from 이 있는) 예약만 되돌린다 —
+     * PENDING_SYNC 에서 시작한 취소를 되돌리면 결제 기한 기준 시각이 없는 REGISTERED 이 생긴다(ck_preorder_payable_from).
      */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("""
@@ -101,16 +101,16 @@ public interface PreorderRepository extends JpaRepository<Preorder, Long>, JpaSp
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("""
             update Preorder p
-               set p.status = :payable,
+               set p.status = :registered,
                    p.payableFrom = coalesce(p.payableFrom, :now),
                    p.externalReference = :externalReference,
                    p.eventSequence = p.eventSequence + 1,
                    p.updatedAt = :now
              where p.id = :id and p.status = :from
             """)
-    int markPayable(@Param("id") Long id, @Param("externalReference") String externalReference,
+    int markRegistered(@Param("id") Long id, @Param("externalReference") String externalReference,
                     @Param("now") Instant now,
-                    @Param("from") PreorderStatus from, @Param("payable") PreorderStatus payable);
+                    @Param("from") PreorderStatus from, @Param("registered") PreorderStatus registered);
 
     /** 같은 접수 키의 기존 예약(재전송 판정). */
     Optional<Preorder> findByCustomerIdAndIdempotencyKey(Long customerId, String idempotencyKey);

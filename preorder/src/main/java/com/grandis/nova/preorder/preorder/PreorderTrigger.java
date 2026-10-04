@@ -14,7 +14,7 @@ public enum PreorderTrigger {
     PAYMENT_CONFIRMED,
     /** 사용자 · 관리자 · 만료 · 회차 취소로 취소를 시작한다. */
     CANCEL_REQUESTED,
-    /** 주문 쪽이 취소를 거절했다(배송 시작). PAYABLE 에서 시작한 취소에만 온다. */
+    /** 주문 쪽이 취소를 거절했다(배송 시작). REGISTERED 에서 시작한 취소에만 온다. */
     CANCEL_REJECTED,
     /** 외부 취소와 (있으면) 주문 취소가 모두 끝났다. */
     CANCEL_COMPLETED
