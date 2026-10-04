@@ -303,6 +303,17 @@ class AllocationRoundTest {
     }
 
     @Test
+    void 깨진_값이나_은퇴_표식만_남아도_쓸_수_있는_일정이_없으니_재발행을_요청한다() {
+        redis.opsForHash().put(RedisKeys.PRODUCTS, "101", "broken").block(WAIT);
+        redis.opsForHash().put(RedisKeys.PRODUCTS, "202", "retired|3|" + now.toEpochMilli()).block(WAIT);
+
+        run(7, 0);
+
+        await(() -> "1".equals(redis.opsForValue().get(RedisKeys.RESYNC_ATTEMPTS).toFuture().join()));
+        assertThat(resyncReasons).containsExactly("SCHEDULE_EMPTY");
+    }
+
+    @Test
     void 일정을_아는_동안은_재발행을_요청하지_않는다() {
         schedule("101", now.minusSeconds(60), now.plusSeconds(3_600));
 

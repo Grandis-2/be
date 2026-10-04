@@ -73,13 +73,13 @@ class AllocationRound {
         return Mono.zip(store.readProducts(), store.readSettings())
                 .flatMap(read -> {
                     TimedEntries products = read.getT1();
-                    if (products.entries().isEmpty()) {
-                        resync.requestIfQuiet();
-                    }
                     Instant readAt = Instant.ofEpochMilli(products.redisNowMillis());
                     OperationalSettings settings = OperationalSettings.from(read.getT2(), admission.globalCredit());
                     Map<String, Schedule> schedules = schedules(products.entries());
-                    if (!schedules.isEmpty()) {
+                    // 쓸 수 있는 일정이 하나도 없으면(비었거나 깨진 값 · 은퇴 표식만) 놓친 회차가 있을 수 있다
+                    if (schedules.isEmpty()) {
+                        resync.requestIfQuiet();
+                    } else {
                         resync.known();
                     }
                     writtenMax.keySet().retainAll(schedules.keySet());
