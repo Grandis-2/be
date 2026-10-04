@@ -81,6 +81,30 @@ class PreorderEventDispatcherTest {
     }
 
     @Test
+    void 결제_시작_확인_메시지를_예약_확정으로_보내고_거절에_실린_결제_시각도_읽는다() {
+        Long jobId = fixtures.workerSucceeds(preorderId, "REGISTER");
+        dispatcher.dispatch(envelope("EXTERNAL_JOB_SUCCEEDED", "PREORDER_SYNC_JOB", jobId, payload()
+                .put("syncJobId", jobId).put("preorderId", token).put("jobType", "REGISTER")
+                .put("externalNumber", "R-" + ShopFixtures.unique())));
+
+        dispatcher.dispatch(envelope("PREORDER_PAYMENT_STARTED", "PREORDER", preorderId, payload()
+                .put("preorderId", token).put("orderId", "o-1").put("startedAt", "2026-10-04T01:00:00Z")));
+        assertThat(status()).isEqualTo("PAYABLE");
+        dispatcher.dispatch(envelope("PREORDER_PAYMENT_CONFIRMED", "PREORDER", preorderId, payload()
+                .put("preorderId", token).put("orderId", "o-1").put("paidAt", "2026-10-04T01:02:00Z")));
+        assertThat(status()).isEqualTo("RESERVED");
+
+        cancelStarter.start(preorders.findById(preorderId).orElseThrow(), EventActor.USER, null, CancelReason.USER);
+        dispatcher.dispatch(envelope("PREORDER_ORDER_SETTLED", "PREORDER", preorderId,
+                settled("REJECTED").put("reason", "SHIPPED").put("paidAt", "2026-10-04T01:02:00Z")
+                        .put("cancelSequence", fixtures.cancelSequence(preorderId))));
+        assertThat(status()).isEqualTo("RESERVED");
+        assertThat(jdbcTemplate.queryForList(
+                "SELECT CONCAT(payment_started_at, '|', reserved_at) FROM preorders WHERE id = ?", String.class,
+                preorderId)).containsExactly("2026-10-04 01:00:00.000000|2026-10-04 01:02:00.000000");
+    }
+
+    @Test
     void 주문_정리_메시지를_정리_결과_처리로_보낸다() {
         cancelStarter.start(preorders.findById(preorderId).orElseThrow(), EventActor.USER, null, CancelReason.USER);
 

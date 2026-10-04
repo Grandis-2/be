@@ -88,6 +88,10 @@ public class PreorderEventDispatcher {
                     jsonMapper.treeToValue(envelope.payload(), ExternalJobSucceeded.class));
             case PREORDER_ORDER_SETTLED -> handler.onOrderSettled(
                     jsonMapper.treeToValue(envelope.payload(), PreorderOrderSettled.class));
+            case PREORDER_PAYMENT_STARTED -> handler.onPaymentStarted(
+                    jsonMapper.treeToValue(envelope.payload(), PreorderPaymentStarted.class));
+            case PREORDER_PAYMENT_CONFIRMED -> handler.onPaymentConfirmed(
+                    jsonMapper.treeToValue(envelope.payload(), PreorderPaymentConfirmed.class));
             case PREORDER_EXPIRY_REQUESTED -> expiryCancelService.expire(
                     jsonMapper.treeToValue(envelope.payload(), PreorderExpiryRequested.class).preorderId());
             case PREORDER_CAMPAIGN_CANCELED -> {

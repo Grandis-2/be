@@ -23,7 +23,9 @@ public class CampaignCancelService {
 
     static final int BATCH_SIZE = 100;
 
-    private static final List<PreorderStatus> ACTIVE = List.of(PreorderStatus.PENDING_SYNC, PreorderStatus.PAYABLE);
+    /** 결제된(확정된) 예약도 취소한다 — order 가 환불한다. 배송이 시작된 건은 order 가 거절해 되돌아간다. */
+    private static final List<PreorderStatus> ACTIVE =
+            List.of(PreorderStatus.PENDING_SYNC, PreorderStatus.PAYABLE, PreorderStatus.RESERVED);
     private static final String DEFAULT_REASON = "사전예약 회차 판매 중지";
     private static final int REASON_MAX_LENGTH = 500;
 

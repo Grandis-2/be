@@ -3,6 +3,8 @@ package com.grandis.nova.preorder.preorder;
 import com.grandis.nova.preorder.preorder.PreorderFact.CancelCompleted;
 import com.grandis.nova.preorder.preorder.PreorderFact.CancelRejected;
 import com.grandis.nova.preorder.preorder.PreorderFact.CancelRequested;
+import com.grandis.nova.preorder.preorder.PreorderFact.PaymentConfirmed;
+import com.grandis.nova.preorder.preorder.PreorderFact.PaymentStarted;
 import com.grandis.nova.preorder.preorder.PreorderFact.RegisterConfirmed;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
@@ -18,6 +20,9 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
@@ -25,6 +30,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import static com.grandis.nova.preorder.preorder.PreorderStatus.CANCELING;
 import static com.grandis.nova.preorder.preorder.PreorderStatus.PAYABLE;
 import static com.grandis.nova.preorder.preorder.PreorderStatus.PENDING_SYNC;
+import static com.grandis.nova.preorder.preorder.PreorderStatus.RESERVED;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -132,7 +138,7 @@ class PreorderLedgerTest {
         ledger.fire(id, new RegisterConfirmed("EXT-" + ShopFixtures.unique()));
         ledger.fire(id, new CancelRequested(EventActor.USER, null));
 
-        PreorderTransition result = ledger.fire(id, new CancelRejected("SHIPPING_STARTED"));
+        PreorderTransition result = ledger.fire(id, new CancelRejected("SHIPPING_STARTED", null));
 
         assertThat(result).isEqualTo(new PreorderTransition(true, PAYABLE));
         assertThat(history(id)).last().isEqualTo("4:CANCELING>PAYABLE:SYSTEM");
@@ -154,7 +160,7 @@ class PreorderLedgerTest {
         Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
         ledger.fire(id, new CancelRequested(EventActor.USER, null));
 
-        assertThatThrownBy(() -> ledger.fire(id, new CancelRejected("SHIPPING_STARTED")))
+        assertThatThrownBy(() -> ledger.fire(id, new CancelRejected("SHIPPING_STARTED", null)))
                 .isInstanceOf(IllegalStateException.class);
         assertThat(row(id)).containsEntry("status", "CANCELING").containsEntry("payable_from", null);
     }
@@ -197,6 +203,76 @@ class PreorderLedgerTest {
     }
 
     @Test
+    void 결제_시작은_상태와_이력을_그대로_두고_처음_시각만_남긴다() {
+        Long id = payable();
+        Instant first = Instant.parse("2026-10-04T01:00:00Z");
+
+        assertThat(ledger.fire(id, new PaymentStarted(first))).isEqualTo(new PreorderTransition(true, PAYABLE));
+        ledger.fire(id, new PaymentStarted(first.plusSeconds(60)));
+
+        assertThat(row(id)).containsEntry("status", "PAYABLE").containsEntry("event_sequence", 2L);
+        assertThat(utc(row(id).get("payment_started_at"))).isEqualTo(first);
+        assertThat(history(id)).hasSize(2);
+    }
+
+    @Test
+    void 결제_확인은_예약_확정이고_다시_와도_그대로다() {
+        Long id = payable();
+        Instant paidAt = Instant.parse("2026-10-04T01:00:00Z");
+
+        assertThat(ledger.fire(id, new PaymentConfirmed(paidAt))).isEqualTo(new PreorderTransition(true, RESERVED));
+        assertThat(ledger.fire(id, new PaymentConfirmed(paidAt.plusSeconds(60))))
+                .isEqualTo(new PreorderTransition(false, RESERVED));
+
+        assertThat(row(id)).containsEntry("status", "RESERVED");
+        assertThat(utc(row(id).get("reserved_at"))).isEqualTo(paidAt);
+        assertThat(history(id)).last().isEqualTo("3:PAYABLE>RESERVED:SYSTEM");
+    }
+
+    @Test
+    void 확정된_예약의_취소가_거절되면_RESERVED_로_돌아간다() {
+        Long id = payable();
+        ledger.fire(id, new PaymentConfirmed(Instant.parse("2026-10-04T01:00:00Z")));
+        ledger.fire(id, new CancelRequested(EventActor.USER, null));
+
+        assertThat(ledger.fire(id, new CancelRejected("SHIPPED", null))).isEqualTo(new PreorderTransition(true, RESERVED));
+        assertThat(history(id)).last().isEqualTo("5:CANCELING>RESERVED:SYSTEM");
+    }
+
+    @Test
+    void 결제_확인보다_거절이_먼저_와도_결제_시각이_실려_오면_RESERVED_로_돌아간다() {
+        Long id = payable();
+        ledger.fire(id, new CancelRequested(EventActor.SYSTEM, null));
+        Instant paidAt = Instant.parse("2026-10-04T01:00:00Z");
+
+        assertThat(ledger.fire(id, new CancelRejected("PAID", paidAt))).isEqualTo(new PreorderTransition(true, RESERVED));
+        assertThat(utc(row(id).get("reserved_at"))).isEqualTo(paidAt);
+        assertThat(ledger.fire(id, new PaymentConfirmed(paidAt))).as("늦게 온 결제 확인은 무시")
+                .isEqualTo(new PreorderTransition(false, RESERVED));
+    }
+
+    @Test
+    void 취소_중_결제_확인은_시각만_남기고_거절되면_RESERVED_로_돌아간다() {
+        Long id = payable();
+        ledger.fire(id, new CancelRequested(EventActor.USER, null));
+
+        assertThat(ledger.fire(id, new PaymentConfirmed(Instant.parse("2026-10-04T01:00:00Z"))))
+                .isEqualTo(new PreorderTransition(true, CANCELING));
+        assertThat(history(id)).as("상태가 그대로라 이력은 남기지 않는다").hasSize(3);
+
+        assertThat(ledger.fire(id, new CancelRejected("SHIPPED", null))).isEqualTo(new PreorderTransition(true, RESERVED));
+    }
+
+    @Test
+    void 등록_전_예약의_결제_사건은_무시한다() {
+        Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
+
+        assertThat(ledger.fire(id, new PaymentConfirmed(Instant.now()))).isEqualTo(new PreorderTransition(false, PENDING_SYNC));
+        assertThat(ledger.fire(id, new PaymentStarted(Instant.now()))).isEqualTo(new PreorderTransition(false, PENDING_SYNC));
+        assertThat(row(id)).containsEntry("reserved_at", null).containsEntry("payment_started_at", null);
+    }
+
+    @Test
     void 관리자_전이는_사유가_없으면_거부하고_상태를_바꾸지_않는다() {
         Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
 
@@ -232,10 +308,22 @@ class PreorderLedgerTest {
     }
 
     /** 이력은 커밋할 때 flush 된다. JDBC 로 읽기 전에 밀어 넣는다. */
+    private Long payable() {
+        Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
+        ledger.fire(id, new RegisterConfirmed("EXT-" + ShopFixtures.unique()));
+        return id;
+    }
+
+    /** DB 는 UTC 벽시계 시각을 담는다. */
+    private Instant utc(Object value) {
+        return ((LocalDateTime) value).toInstant(ZoneOffset.UTC);
+    }
+
     private Map<String, Object> row(Long id) {
         entityManager.flush();
         return jdbcTemplate.queryForMap("""
-                SELECT status, event_sequence, active_marker, payable_from, external_reference, admission_ticket_id
+                SELECT status, event_sequence, active_marker, payable_from, external_reference, admission_ticket_id,
+                       payment_started_at, reserved_at
                   FROM preorders WHERE id = ?
                 """, id);
     }

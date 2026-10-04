@@ -12,9 +12,12 @@ import static com.grandis.nova.preorder.preorder.PreorderStatus.CANCELED;
 import static com.grandis.nova.preorder.preorder.PreorderStatus.CANCELING;
 import static com.grandis.nova.preorder.preorder.PreorderStatus.PAYABLE;
 import static com.grandis.nova.preorder.preorder.PreorderStatus.PENDING_SYNC;
+import static com.grandis.nova.preorder.preorder.PreorderStatus.RESERVED;
 import static com.grandis.nova.preorder.preorder.PreorderTrigger.CANCEL_COMPLETED;
 import static com.grandis.nova.preorder.preorder.PreorderTrigger.CANCEL_REJECTED;
 import static com.grandis.nova.preorder.preorder.PreorderTrigger.CANCEL_REQUESTED;
+import static com.grandis.nova.preorder.preorder.PreorderTrigger.PAYMENT_CONFIRMED;
+import static com.grandis.nova.preorder.preorder.PreorderTrigger.PAYMENT_STARTED;
 import static com.grandis.nova.preorder.preorder.PreorderTrigger.REGISTER_CONFIRMED;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -23,8 +26,9 @@ class PreorderStatusTest {
 
     static final Map<PreorderStatus, Map<PreorderTrigger, PreorderStatus>> ALLOWED = Map.of(
             PENDING_SYNC, Map.of(REGISTER_CONFIRMED, PAYABLE, CANCEL_REQUESTED, CANCELING),
-            PAYABLE, Map.of(CANCEL_REQUESTED, CANCELING),
-            CANCELING, Map.of(CANCEL_COMPLETED, CANCELED, CANCEL_REJECTED, PAYABLE),
+            PAYABLE, Map.of(PAYMENT_STARTED, PAYABLE, PAYMENT_CONFIRMED, RESERVED, CANCEL_REQUESTED, CANCELING),
+            RESERVED, Map.of(CANCEL_REQUESTED, CANCELING),
+            CANCELING, Map.of(PAYMENT_CONFIRMED, CANCELING, CANCEL_COMPLETED, CANCELED, CANCEL_REJECTED, PAYABLE),
             CANCELED, Map.of());
 
     static Stream<Arguments> 모든_조합() {

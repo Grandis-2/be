@@ -19,7 +19,11 @@ public enum InboundEventType {
     /** waitingroom: 회차 일정 전체 재발행 요청. */
     CAMPAIGN_RESYNC_REQUESTED,
     /** catalog: 사전예약 상품 등록 — 회차 · 배송 차수 생성. */
-    PREORDER_PRODUCT_REGISTERED;
+    PREORDER_PRODUCT_REGISTERED,
+    /** order: 사전예약 주문 생성(결제 시작). */
+    PREORDER_PAYMENT_STARTED,
+    /** order: 사전예약 주문 결제 승인(예약 확정). */
+    PREORDER_PAYMENT_CONFIRMED;
 
     /** 이 이름의 이벤트를 받는가. DLQ 적재 · 되돌리기 전 검사가 쓴다. */
     public static boolean isKnown(String eventType) {
