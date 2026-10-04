@@ -32,6 +32,10 @@ class ScheduleResync {
     private final AtomicBoolean attemptsOutstanding = new AtomicBoolean(true);
 
     ScheduleResync(ControlStore store, ScheduleResyncRequester requester, ControlMetrics metrics) {
+        if (requester.maxRequestTime().compareTo(CLAIM_TTL) >= 0) {
+            throw new IllegalArgumentException("재발행 요청 최대 시간(" + requester.maxRequestTime() + ")이 선점 시한("
+                    + CLAIM_TTL + ")보다 짧아야 한다 — nova.sqs.api-call-timeout 을 줄인다");
+        }
         this.store = store;
         this.requester = requester;
         this.metrics = metrics;

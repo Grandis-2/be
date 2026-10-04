@@ -265,6 +265,25 @@ class AllocationRoundTest {
     }
 
     @Test
+    void 요청_한_번이_선점_시한보다_오래_걸릴_수_있는_설정이면_기동을_막는다() {
+        ScheduleResyncRequester slow = new ScheduleResyncRequester() {
+            @Override
+            public Mono<Void> request(String reason) {
+                return Mono.empty();
+            }
+
+            @Override
+            public Duration maxRequestTime() {
+                return ScheduleResync.CLAIM_TTL;
+            }
+        };
+
+        assertThatThrownBy(() -> new ScheduleResync(control, slow,
+                new ControlMetrics(new SimpleMeterRegistry(), leadership, TestSnapshots.emptyHolder())))
+                .hasMessageContaining("선점 시한");
+    }
+
+    @Test
     void 연달아_비어_있으면_요청_간격을_두_배씩_상한까지_늘린다() {
         assertThat(ScheduleResync.quietAfter(1)).isEqualTo(Duration.ofMinutes(5));
         assertThat(ScheduleResync.quietAfter(2)).isEqualTo(Duration.ofMinutes(10));

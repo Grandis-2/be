@@ -107,6 +107,7 @@ class ScheduleMessagingTest {
         assertThat(envelope.eventId()).isEqualTo(message.messageAttributes().get("eventId").stringValue());
         assertThat(envelope.payload().path("requestedBy").asString()).isEqualTo("waitingroom");
         assertThat(envelope.payload().path("reason").asString()).isEqualTo("SCHEDULE_EMPTY");
+        assertThat(resyncRequester.maxRequestTime()).as("주소 조회 + 전송, 호출마다 기본 시한 3초").isEqualTo(Duration.ofSeconds(6));
     }
 
     private String changed(long productId, long version, SalesWindow window) {

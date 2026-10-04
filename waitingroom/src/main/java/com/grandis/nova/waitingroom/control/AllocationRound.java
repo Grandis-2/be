@@ -127,8 +127,9 @@ class AllocationRound {
         return Flux.fromIterable(rows)
                 .filter(row -> row.depth() == RETIRED && !now.isBefore(row.schedule().window().closesAt().plus(FORGET_AFTER)))
                 .concatMap(row -> store.retireSchedule(row.key(),
-                        ProductSchedules.format(row.schedule().window(), row.schedule().scheduleVersion()),
-                        row.schedule().scheduleVersion(), now))
+                                ProductSchedules.format(row.schedule().window(), row.schedule().scheduleVersion()),
+                                row.schedule().scheduleVersion(), now)
+                        .doOnNext(retired -> changed("retire", row.key(), retired)))
                 .then()
                 .doOnSuccess(done -> recovered(retireFailing, "끝난 모델 은퇴"))
                 .onErrorResume(e -> failed(retireFailing, "끝난 모델 은퇴", e));
@@ -139,10 +140,22 @@ class AllocationRound {
         return Flux.fromIterable(raw.entrySet())
                 .filter(entry -> ProductSchedules.retiredAt(entry.getValue())
                         .filter(at -> !now.isBefore(at.plus(TOMBSTONE_TTL))).isPresent())
-                .concatMap(entry -> store.dropSchedule(entry.getKey(), entry.getValue()))
+                .concatMap(entry -> store.dropSchedule(entry.getKey(), entry.getValue())
+                        .doOnNext(dropped -> changed("drop", entry.getKey(), dropped)))
                 .then()
                 .doOnSuccess(done -> recovered(tombstoneFailing, "은퇴 표식 정리"))
                 .onErrorResume(e -> failed(tombstoneFailing, "은퇴 표식 정리", e));
+    }
+
+    /**
+     * 조건부 변경의 결과. 바꿨으면 센다. 못 바꿨으면 읽은 뒤 새 일정이 왔거나 이미 없는 것이라 바꾸지 않는 것이
+     * 맞다 — 성공으로 세지 않고 충돌로 남기며, 다음 회차가 최신 값으로 다시 판단한다.
+     */
+    private void changed(String work, String productKey, boolean applied) {
+        metrics.scheduleCleanup(work, applied);
+        if (!applied) {
+            log.debug("{} 건너뜀 — 읽은 뒤 일정이 바뀌었다 productId={}", work, productKey);
+        }
     }
 
     /** 다음 회차에 다시 하므로 배분을 막지 않는다. 작업마다 상태가 바뀔 때만 원인을 남긴다. */

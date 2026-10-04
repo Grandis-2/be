@@ -10,6 +10,7 @@ import software.amazon.awssdk.services.sqs.model.MessageAttributeValue;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
 
@@ -28,8 +29,11 @@ class SqsScheduleResyncRequester implements ScheduleResyncRequester {
     private final String queue;
     private final JsonMapper jsonMapper;
     private final Clock clock;
+    private final Duration apiCallTimeout;
 
-    SqsScheduleResyncRequester(SqsClient sqs, SqsQueueUrls queueUrls, String queue, JsonMapper jsonMapper, Clock clock) {
+    SqsScheduleResyncRequester(SqsClient sqs, SqsQueueUrls queueUrls, String queue, JsonMapper jsonMapper, Clock clock,
+                               Duration apiCallTimeout) {
+        this.apiCallTimeout = apiCallTimeout;
         this.sqs = sqs;
         this.queueUrls = queueUrls;
         this.queue = queue;
@@ -48,6 +52,12 @@ class SqsScheduleResyncRequester implements ScheduleResyncRequester {
                     .messageBody(jsonMapper.writeValueAsString(envelope))
                     .messageAttributes(Map.of("eventType", text(EVENT_TYPE), "eventId", text(eventId))));
         }).subscribeOn(Schedulers.boundedElastic()).then();
+    }
+
+    /** 큐 주소를 아직 모르면 주소 조회와 전송, 두 번 부르고 호출마다 SQS 클라이언트 시한이 걸린다. */
+    @Override
+    public Duration maxRequestTime() {
+        return apiCallTimeout.multipliedBy(2);
     }
 
     private static MessageAttributeValue text(String value) {

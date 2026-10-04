@@ -6,6 +6,7 @@ import com.grandis.nova.waitingroom.control.ScheduleResyncRequester;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -14,6 +15,7 @@ import software.amazon.awssdk.services.sqs.SqsClient;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
+import java.time.Duration;
 
 /**
  * SQS 가 있으면(nova.sqs.region) 일정 이벤트를 받고 재발행을 요청한다. 없으면(로컬) 받지 않고, 재발행 요청은
@@ -33,11 +35,13 @@ class ScheduleMessagingConfig {
 
     @Bean
     ScheduleResyncRequester scheduleResyncRequester(ObjectProvider<SqsClient> sqs, ObjectProvider<SqsQueueUrls> queueUrls,
-                                                    ScheduleProperties properties, JsonMapper jsonMapper, Clock clock) {
+                                                    ScheduleProperties properties, JsonMapper jsonMapper, Clock clock,
+                                                    @Value("${nova.sqs.api-call-timeout:3s}") Duration apiCallTimeout) {
         SqsClient client = sqs.getIfAvailable();
         if (client == null) {
             return reason -> Mono.fromRunnable(() -> log.warn("SQS 가 없어 회차 일정 재발행을 요청하지 못한다 — 일정을 직접 넣어야 한다"));
         }
-        return new SqsScheduleResyncRequester(client, queueUrls.getObject(), properties.resyncQueue(), jsonMapper, clock);
+        return new SqsScheduleResyncRequester(client, queueUrls.getObject(), properties.resyncQueue(), jsonMapper, clock,
+                apiCallTimeout);
     }
 }
