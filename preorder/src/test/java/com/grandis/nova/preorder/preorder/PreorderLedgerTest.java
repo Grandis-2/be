@@ -136,6 +136,17 @@ class PreorderLedgerTest {
 
         assertThat(result).isEqualTo(new PreorderTransition(true, PAYABLE));
         assertThat(history(id)).last().isEqualTo("4:CANCELING>PAYABLE:SYSTEM");
+        assertThat(reasons(id)).as("사건이 실어 온 사유가 이력에 남는다").last().isEqualTo("SHIPPING_STARTED");
+    }
+
+    @Test
+    void 관리자_취소는_주체와_사유가_이력에_남는다() {
+        Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
+
+        ledger.fire(id, new CancelRequested(EventActor.ADMIN, "고객 전화 요청"));
+
+        assertThat(history(id)).last().isEqualTo("2:PENDING_SYNC>CANCELING:ADMIN");
+        assertThat(reasons(id)).last().isEqualTo("고객 전화 요청");
     }
 
     @Test
@@ -230,7 +241,13 @@ class PreorderLedgerTest {
     }
 
     /** "번호:from>to:actor" 목록. 번호 순. */
-    private List<String> history(Long id) {
+    private List<String> reasons(Long id) {
+        entityManager.flush();
+        return jdbcTemplate.queryForList(
+                "SELECT reason FROM preorder_events WHERE preorder_id = ? ORDER BY event_sequence", String.class, id);
+    }
+
+        private List<String> history(Long id) {
         entityManager.flush();
         return jdbcTemplate.query("""
                 SELECT event_sequence, from_status, to_status, actor
