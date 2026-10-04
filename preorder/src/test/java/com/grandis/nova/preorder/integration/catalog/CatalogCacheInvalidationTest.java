@@ -39,7 +39,7 @@ class CatalogCacheInvalidationTest {
     }
 
     @Test
-    void 비우기는_이_인스턴스를_바로_비우고_채널로_알린다() {
+    void 비우기는_이_인스턴스의_그_상품만_바로_비운다() {
         Long productId = cachedProduct();
         Long other = cachedProduct();
 
