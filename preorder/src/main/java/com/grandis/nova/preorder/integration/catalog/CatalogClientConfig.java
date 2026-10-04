@@ -3,7 +3,12 @@ package com.grandis.nova.preorder.integration.catalog;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.SimpleAsyncTaskExecutor;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.listener.ChannelTopic;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.web.service.registry.ImportHttpServices;
+
+import java.nio.charset.StandardCharsets;
 
 /** catalog 내부 API 클라이언트. 주소 · 타임아웃은 spring.http.serviceclient.catalog 설정으로 준다. */
 @Configuration(proxyBeanMethods = false)
@@ -22,5 +27,17 @@ class CatalogClientConfig {
         executor.setRejectTasksWhenLimitReached(true);
         executor.setCancelRemainingTasksOnClose(true);
         return executor;
+    }
+
+    /** 상품 캐시 비우기 알림을 구독한다. 모든 인스턴스가 같은 채널을 듣는다. */
+    @Bean
+    RedisMessageListenerContainer catalogEvictListener(RedisConnectionFactory connectionFactory,
+                                                       CatalogCacheInvalidation invalidation) {
+        RedisMessageListenerContainer container = new RedisMessageListenerContainer();
+        container.setConnectionFactory(connectionFactory);
+        container.addMessageListener((message, pattern) ->
+                        invalidation.onMessage(new String(message.getBody(), StandardCharsets.UTF_8)),
+                new ChannelTopic(CatalogCacheInvalidation.CHANNEL));
+        return container;
     }
 }
