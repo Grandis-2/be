@@ -13,7 +13,9 @@ UPDATE shop.preorders SET status = 'REGISTERED' WHERE status = 'PAYABLE';
 UPDATE shop.preorder_events SET from_status = 'REGISTERED' WHERE from_status = 'PAYABLE';
 UPDATE shop.preorder_events SET to_status = 'REGISTERED' WHERE to_status = 'PAYABLE';
 
+-- 옛 이름 PAYABLE 도 CHECK 에 남긴다 — 다른 서비스(order 시험 데이터 등)가 아직 옛 값으로 행을 넣는다. preorder 는 쓰지 않는다.
 ALTER TABLE shop.preorders
     ADD CONSTRAINT ck_preorder_status
-        CHECK (status IN ('PENDING_SYNC', 'REGISTERED', 'RESERVED', 'CANCELING', 'CANCELED')),
-    ADD CONSTRAINT ck_preorder_payable_from CHECK (status <> 'REGISTERED' OR payable_from IS NOT NULL);
+        CHECK (status IN ('PENDING_SYNC', 'PAYABLE', 'REGISTERED', 'RESERVED', 'CANCELING', 'CANCELED')),
+    ADD CONSTRAINT ck_preorder_payable_from
+        CHECK (status NOT IN ('PAYABLE', 'REGISTERED') OR payable_from IS NOT NULL);
