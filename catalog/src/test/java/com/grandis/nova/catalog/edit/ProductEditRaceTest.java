@@ -79,6 +79,7 @@ class ProductEditRaceTest {
     void setUp() {
         fixtures = new ShopFixtures(jdbcTemplate);
         categoryId = fixtures.category();
+        CLOCK.owner = Thread.currentThread();
     }
 
     @AfterEach
@@ -548,11 +549,17 @@ class ProductEditRaceTest {
 
         private final Clock system = StorageClock.atStorageResolution(Clock.systemUTC());
         volatile Supplier<Instant> next;
+        /**
+         * next 를 받는 스레드(시험 스레드). 앱의 다른 스레드 — 커밋 직후 아웃박스 발행(outbox-publish-*) 등 — 도 같은 시계를 읽는데,
+         * 앞 시험이 남긴 발행이 다음 시험의 "첫 읽기" 를 먼저 가져가면 판정 순서가 틀어진다(실측: 회차 취소 뒤 시계를 읽은 것은 outbox-publish-2).
+         * 그래서 next 는 이 스레드에만 주고 나머지는 실제 시계를 읽는다.
+         */
+        volatile Thread owner;
 
         @Override
         public Instant instant() {
             Supplier<Instant> supplier = next;
-            return supplier == null ? system.instant() : supplier.get();
+            return supplier == null || Thread.currentThread() != owner ? system.instant() : supplier.get();
         }
 
         @Override

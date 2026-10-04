@@ -465,6 +465,8 @@ class AdminProductEditApiTest {
             fixtures.campaign(opened, Instant.now().minus(HOUR), Instant.now().plus(HOUR));
             expectValidation(saleStatusBody(opened, "{ \"status\": \"PAUSED\", \"reason\": \"   \" }"), "reason");
             expectValidation(saleStatusBody(opened, "{ \"status\": \"PAUSED\", \"reason\": \"" + "가".repeat(501) + "\" }"), "reason");
+            // 길이는 UTF-16 단위 — 이모지 300 개(600)는 preorder 가 자르게 되므로 받지 않는다
+            expectValidation(saleStatusBody(opened, "{ \"status\": \"PAUSED\", \"reason\": \"" + "😀".repeat(300) + "\" }"), "reason");
             assertThat(cancelEvents(opened)).isEmpty();
             assertThat(statusOf(opened)).isEqualTo("ACTIVE");
         }

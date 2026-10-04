@@ -72,7 +72,10 @@ public class ProductEditService {
 
     private static final String EDIT_FROZEN = "사전예약 오픈 3분 전부터는 상품 정보 · 옵션 · 가격을 바꿀 수 없습니다.";
     private static final String STATUS_FROZEN = "사전예약 오픈 3분 전부터는 판매 상태를 바꿀 수 없습니다.";
-    /** 회차 취소 사유의 최대 길이(문자 수, 앞뒤 공백 제외). preorder 가 예약 이력에 같은 길이로 남긴다. */
+    /**
+     * 회차 취소 사유의 최대 길이 — 앞뒤 공백을 뺀 Java 문자열 길이(UTF-16 단위). preorder 는 받은 사유를 같은 단위 500 으로 잘라 이력에 남기므로
+     * 이 길이를 넘지 않게 받으면 preorder 가 자를 일이 없다(코드 포인트로 세면 이모지가 섞인 사유를 preorder 가 서로게이트 쌍 가운데서 자를 수 있다).
+     */
     private static final int REASON_MAX_LENGTH = 500;
 
     private final ProductRepository products;
@@ -342,7 +345,7 @@ public class ProductEditService {
         if (reason == null) {
             throw ValidationFailures.of("reason", "오픈 뒤 판매 중지는 회차 취소라 사유가 필요합니다.");
         }
-        if (reason.codePointCount(0, reason.length()) > REASON_MAX_LENGTH) {
+        if (reason.length() > REASON_MAX_LENGTH) {
             throw ValidationFailures.of("reason", "사유는 앞뒤 공백을 뺀 %d자 이하입니다.".formatted(REASON_MAX_LENGTH));
         }
         if (product.cancelCampaign(clock.instant())) {
