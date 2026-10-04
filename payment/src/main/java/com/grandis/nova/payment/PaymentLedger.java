@@ -76,7 +76,8 @@ public class PaymentLedger {
     /**
      * 대상의 결제를 환불할 때: 저장된 성공 결제를 읽어 그 대상 · 결제 키 · 금액으로 새 REFUND(PENDING, 새 멱등 키)를 연다.
      * 워커가 선점해 보낸다. 결제를 호출자에게서 받지 않는다 — 받으면 조작된 키 · 금액으로 열 수 있다.
-     * 결제 행을 잠그고 판정한다 — REFUND 결과 반영({@link #resolve})도 같은 행을 먼저 잠가, 판정과 INSERT 사이에 실패 확정이 끼지 않는다.
+     * 결제 행을 잠그고 판정한다 — REFUND 결과 반영({@link #resolve})도 같은 행을 먼저 잠가(결제 행 → 거래 행), 판정과 INSERT 사이에
+     * 실패 확정이 끼지 않는다.
      *
      * @throws IllegalStateException            대상에 결제가 없다(호출 쪽 잘못)
      * @throws PaymentAlreadyRefundedException  이미 환불됐다(재전송이면 성공으로 다룰 수 있다)
@@ -134,9 +135,9 @@ public class PaymentLedger {
     }
 
     /**
-     * 결제사 결과를 반영한다. 리스가 살아 있고 표식이 같을 때만 된다. CAPTURE 확정은 payments 를 만들고, REFUND 확정은
-     * 그 결제를 환불로 표시한다 — 거래 행과 같은 트랜잭션이다. REFUND 는 대상의 결제 행을 먼저 잠근다({@link #openRefund} 와 줄 세우기,
-     * 잠금 순서는 결제 행 → 거래 행).
+     * 결제사 결과를 반영한다. 리스가 살아 있고 표식이 같을 때만 된다. 확정은 거래 행과 같은 트랜잭션에서 결제 기록도 바꾼다 —
+     * CAPTURE 는 payments 를 새로 만들고(거래 행 → 결제 행, 그 결제 행은 아직 없어 누구와도 겹치지 않는다), REFUND 는 대상의 결제
+     * 행을 먼저 잠근 뒤 거래 행을 바꾸고 환불로 표시한다(결제 행 → 거래 행, {@link #openRefund} 와 같은 순서로 줄 선다).
      *
      * @throws LeaseLostException    리스를 잃었다(0행). 아무것도 반영하지 않았고 호출자의 트랜잭션은 rollback-only 다
      * @throws IllegalStateException REFUND 를 확정했는데 그 결제 키의 성공 결제가 없다

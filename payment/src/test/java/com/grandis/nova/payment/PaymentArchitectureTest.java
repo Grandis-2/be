@@ -1,7 +1,9 @@
 package com.grandis.nova.payment;
 
+import com.grandis.nova.payment.domain.repository.PaymentReader;
 import com.grandis.nova.payment.domain.repository.PaymentTransactionWriter;
 import com.grandis.nova.payment.domain.repository.PaymentWriter;
+import com.grandis.nova.payment.vo.PaymentTarget;
 import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.AccessTarget;
 import com.tngtech.archunit.core.domain.JavaAccess;
@@ -39,6 +41,17 @@ class PaymentArchitectureTest {
             .should().dependOnClassesThat(assignableTo(PaymentTransactionWriter.class)
                     .or(assignableTo(PaymentWriter.class)))
             .because("결제 거래 · 결제 기록은 PaymentLedger 만 바꾼다");
+
+    /**
+     * 결제 행 잠금은 원장만 건다. REFUND 경로는 결제 행 → 거래 행 순서로 잠그는데, 원장 밖에서 거래 행을 바꾼 뒤 결제 행을 잠그면
+     * 순서가 뒤집혀 교착이 열린다.
+     */
+    @ArchTest
+    static final ArchRule onlyLedgerLocksPayments = noClasses()
+            .that().doNotHaveFullyQualifiedName(PaymentLedger.class.getName())
+            .and().resideOutsideOfPackage(PERSISTENCE)
+            .should().callMethod(PaymentReader.class, "lockPaymentByTarget", PaymentTarget.class)
+            .because("결제 행 잠금 순서(결제 행 → 거래 행)는 PaymentLedger 한 곳에서 지킨다");
 
     @ArchTest
     static final ArchRule persistenceIsEncapsulated = noClasses()
