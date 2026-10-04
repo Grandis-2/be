@@ -12,6 +12,8 @@ import com.grandis.nova.preorder.support.CatalogStubs;
 import com.grandis.nova.preorder.support.DependencyGuards;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpInputMessage;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -35,6 +37,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.mock;
 
 class CatalogReaderTest {
 
@@ -229,6 +234,19 @@ class CatalogReaderTest {
 
         reader.evict(PRODUCT_ID);
         refreshes.poll().run();
+
+        assertThat(reader.cache().getIfPresent(PRODUCT_ID)).isNull();
+    }
+
+    @Test
+    void Redis_로_알리지_못해도_이_인스턴스는_비우고_예외를_올리지_않는다() {
+        FakeCatalogClient client = new FakeCatalogClient();
+        CatalogReader reader = reader(client);
+        reader.findOption(PRODUCT_ID, OPTION_ID);
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        willThrow(new RedisConnectionFailureException("down")).given(redis).convertAndSend(any(), any());
+
+        new CatalogCacheInvalidation(reader, redis).evictEverywhere(PRODUCT_ID);
 
         assertThat(reader.cache().getIfPresent(PRODUCT_ID)).isNull();
     }
