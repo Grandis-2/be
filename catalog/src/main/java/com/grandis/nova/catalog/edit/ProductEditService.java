@@ -56,7 +56,8 @@ import org.springframework.transaction.annotation.Transactional;
  * 판매 중지한다. 옛 옵션에 주문 이력이 있는지는 catalog 가 볼 수 없다(주문 표를 읽지 않는다) — 그래서 지우지 않고 상태로 숨긴다.
  *
  * <p><b>한 상품의 수정은 줄 선다.</b> 수정은 모두 상품 행을 잠그고(SELECT … FOR UPDATE) 시작한다. 오픈 판정은 시작 때 한 번, 커밋
- * 직전에 한 번 더 한다(잠금 대기 · 재계산 중에 오픈 시각이 지날 수 있다).
+ * 직전에 한 번 더 한다(잠금 대기 · 재계산 중에 오픈 시각이 지날 수 있다). 회차 취소 갈래는 이미 오픈 뒤라 다시 보지 않는다.
+ * 회차가 취소된 상품(campaign_canceled_at)은 공개 여부 말고는 아무것도 못 바꾼다 — 회차 시각과 상관없이 409.
  *
  * <p>일반 상품의 새 옵션 재고는 여기서 받지 않는다 — 재고는 order 의 `PUT /admin/products/{id}/stock` 이 정본이다. 재고 행이 없는 동안 그 옵션은 품절로 보인다.
  */
@@ -71,6 +72,8 @@ public class ProductEditService {
 
     private static final String EDIT_FROZEN = "사전예약 오픈 3분 전부터는 상품 정보 · 옵션 · 가격을 바꿀 수 없습니다.";
     private static final String STATUS_FROZEN = "사전예약 오픈 3분 전부터는 판매 상태를 바꿀 수 없습니다.";
+    /** 회차 취소 사유의 최대 길이(문자 수, 앞뒤 공백 제외). preorder 가 예약 이력에 같은 길이로 남긴다. */
+    private static final int REASON_MAX_LENGTH = 500;
 
     private final ProductRepository products;
     private final ProductOptionAxisRepository axes;
@@ -310,14 +313,16 @@ public class ProductEditService {
     @Transactional
     public SaleStatusView changeSaleStatus(Long productId, SaleStatusChangeRequest request) {
         Product product = lockProduct(productId);
-        String reason = request.reason() == null ? null : request.reason().strip();
-        if (product.getSaleMode() == SaleMode.PREORDER && opened(product)) {
+        // 빈 사유는 보내지 않은 것으로 본다 — 화면이 늘 칸을 채워 보내도 일반 전환이 막히지 않게. 회차 취소에서는 필수다
+        String reason = request.reason() == null || request.reason().isBlank() ? null : request.reason().strip();
+        // 이미 회차가 취소된 상품은 취소 갈래로만 — 취소 뒤 preorder 가 오픈을 미래로 옮겨도 되돌리기 · 일반 전환이 되지 않는다
+        if (product.getSaleMode() == SaleMode.PREORDER && (product.getCampaignCanceledAt() != null || opened(product))) {
             return cancelCampaign(product, request.status(), reason);
         }
+        requireNotOpened(product, STATUS_FROZEN);   // 잠금 판정이 먼저다 — 오픈 3분 전 구간에서는 사유가 와도 409
         if (reason != null) {
             throw ValidationFailures.of("reason", "사유는 사전예약 오픈 뒤 판매 중지(회차 취소)에만 받습니다.");
         }
-        requireNotOpened(product, STATUS_FROZEN);
         product.changeStatus(request.status());
         products.flush();
         requireNotOpened(product, STATUS_FROZEN);   // 커밋 직전 — 잠금 대기 중에 오픈 3분 전을 넘겼을 수 있다
@@ -332,13 +337,16 @@ public class ProductEditService {
      */
     private SaleStatusView cancelCampaign(Product product, SaleStatus requested, String reason) {
         if (requested != SaleStatus.PAUSED) {
-            throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "사전예약 오픈 뒤에는 판매를 다시 시작할 수 없습니다.");
+            throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "오픈했거나 회차가 취소된 사전예약은 판매를 다시 시작할 수 없습니다.");
         }
-        if (reason == null || reason.isEmpty()) {
+        if (reason == null) {
             throw ValidationFailures.of("reason", "오픈 뒤 판매 중지는 회차 취소라 사유가 필요합니다.");
         }
+        if (reason.codePointCount(0, reason.length()) > REASON_MAX_LENGTH) {
+            throw ValidationFailures.of("reason", "사유는 앞뒤 공백을 뺀 %d자 이하입니다.".formatted(REASON_MAX_LENGTH));
+        }
         if (product.cancelCampaign(clock.instant())) {
-            products.flush();
+            products.flush();   // 표식 UPDATE 를 먼저 내려 제약(CHECK) 위반이 이벤트를 적기 전에 이 자리에서 드러나게 한다
             outbox.append(new PreorderCampaignCanceled(product.getId(), reason));
         }
         return new SaleStatusView(product.getId(), product.getStatus(), true);
@@ -386,6 +394,10 @@ public class ProductEditService {
     private void requireNotOpened(Product product, String message) {
         if (product.getSaleMode() != SaleMode.PREORDER) {
             return;
+        }
+        if (product.getCampaignCanceledAt() != null) {
+            // 회차가 취소된 상품은 더 바꿀 것이 없다 — 회차 시각과 상관없이(취소 뒤 오픈이 미래로 옮겨져도) 409
+            throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "회차가 취소된 상품은 바꿀 수 없습니다.");
         }
         boolean frozen = crossReads.findCampaign(product.getId())
                 .map(window -> !clock.instant().isBefore(window.opensAt().minus(FREEZE_BEFORE_OPEN)))

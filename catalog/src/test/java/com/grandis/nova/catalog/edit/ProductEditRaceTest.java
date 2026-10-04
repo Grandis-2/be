@@ -349,6 +349,22 @@ class ProductEditRaceTest {
     }
 
     @Test
+    @DisplayName("오픈 그 순간(지금 == opens_at)부터 회차 취소다 — 사유와 함께 판매 중지를 보내면 취소 접수. 1마이크로초 전은 잠금 구간이라 409")
+    void campaignCancelStartsAtOpensAt() throws Exception {
+        long productId = registerPreorder();
+        Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.MICROS);
+        fixtures.campaign(productId, opensAt, opensAt.plus(Duration.ofDays(1)));
+
+        CLOCK.next = () -> opensAt.minus(1, ChronoUnit.MICROS);
+        assertStateConflict(() -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED, "직전")));
+        CLOCK.next = () -> opensAt;
+        assertThat(editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED, "그 순간")).campaignCancellationRequested())
+                .isTrue();
+        assertThat(jdbcTemplate.queryForObject("SELECT campaign_canceled_at IS NOT NULL FROM products WHERE id = ?", Boolean.class, productId))
+                .isTrue();
+    }
+
+    @Test
     @DisplayName("오픈 뒤 회차 취소가 동시에 두 번 들어와도 취소 이벤트는 하나다 — 뒤의 것은 앞의 취소가 커밋된 뒤 취소 표식을 본다")
     void concurrentCampaignCancelsWriteOneEvent() throws Exception {
         long productId = registerPreorder();
