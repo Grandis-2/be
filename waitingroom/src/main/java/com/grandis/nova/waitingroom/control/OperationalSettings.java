@@ -12,12 +12,18 @@ import java.util.Map;
  * 운영값(Redis SETTINGS 해시) — global-credit · max-wait-sec · cap:{모델}. 없거나 깨진 값은 기본값으로 둔다 —
  * 운영값 하나가 깨졌다고 배분 전체가 멈추면 안 된다. 관리자 API 가 쓸 때 검증한다.
  */
-public record OperationalSettings(long globalCredit, MaxWait maxWait, Map<String, Long> caps) {
+/** @param defaultCap 상한 운영값이 없는 모델의 상한 */
+public record OperationalSettings(long globalCredit, MaxWait maxWait, Map<String, Long> caps, long defaultCap) {
 
     public static final String GLOBAL_CREDIT = "global-credit";
     public static final String MAX_WAIT_SEC = "max-wait-sec";
 
+    /** 모델별 상한 기본값 없이(제한 없음) 읽는다. */
     public static OperationalSettings from(Map<String, String> raw, long defaultGlobalCredit) {
+        return from(raw, defaultGlobalCredit, ProductState.UNLIMITED_CAP);
+    }
+
+    public static OperationalSettings from(Map<String, String> raw, long defaultGlobalCredit, long defaultCap) {
         long globalCredit = positiveOr(raw.get(GLOBAL_CREDIT), defaultGlobalCredit, true);
         long maxWaitSec = positiveOr(raw.get(MAX_WAIT_SEC), -1, false);
         Map<String, Long> caps = new HashMap<>();
@@ -31,7 +37,8 @@ public record OperationalSettings(long globalCredit, MaxWait maxWait, Map<String
             }
         });
         return new OperationalSettings(globalCredit,
-                maxWaitSec > 0 ? MaxWait.of(Duration.ofSeconds(maxWaitSec)) : MaxWait.unlimited(), Map.copyOf(caps));
+                maxWaitSec > 0 ? MaxWait.of(Duration.ofSeconds(maxWaitSec)) : MaxWait.unlimited(), Map.copyOf(caps),
+                defaultCap);
     }
 
     /** 리더가 이 전역 속도 값을 받아들이는가(0 포함). 아니면 기본값을 쓴다. */
@@ -45,7 +52,7 @@ public record OperationalSettings(long globalCredit, MaxWait maxWait, Map<String
     }
 
     public long capOf(String productKey) {
-        return caps.getOrDefault(productKey, ProductState.UNLIMITED_CAP);
+        return caps.getOrDefault(productKey, defaultCap);
     }
 
     private static long positiveOr(String value, long fallback, boolean allowZero) {

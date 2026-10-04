@@ -132,7 +132,7 @@ class OperationalSettingsAdmin {
     }
 
     private AdmissionRateView view(Map<String, String> raw) {
-        OperationalSettings settings = OperationalSettings.from(raw, defaults.globalCredit());
+        OperationalSettings settings = OperationalSettings.from(raw, defaults.globalCredit(), defaults.productCap());
         // 출처는 리더가 실제로 받아들인 값인지로 정한다 — 깨진 값이 저장돼 있으면 리더는 기본값을 쓴다
         Setting globalCredit = new Setting(settings.globalCredit(),
                 OperationalSettings.acceptsGlobalCredit(raw.get(OperationalSettings.GLOBAL_CREDIT)) ? Source.OPERATIONAL : Source.DEFAULT);
@@ -149,8 +149,9 @@ class OperationalSettingsAdmin {
     }
 
     private static Setting cap(OperationalSettings settings, String productId) {
-        Long cap = settings.caps().get(productId);
-        return new Setting(cap, cap == null ? Source.DEFAULT : Source.OPERATIONAL);
+        long cap = settings.capOf(productId);
+        return new Setting(cap == ProductState.UNLIMITED_CAP ? null : cap,
+                settings.caps().containsKey(productId) ? Source.OPERATIONAL : Source.DEFAULT);
     }
 
     /** 진입 판정과 같은 식 — 속도를 모르면(0 · 판정 재료에 아직 없음) 가장 낮은 속도를 가정한다. 제한 없음이면 null. */

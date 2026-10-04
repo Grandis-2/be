@@ -100,26 +100,26 @@ public class AdmissionGate {
             if (decision == AdmissionDecision.REJECT_QUEUE_FULL) {
                 // 새로 오는 사람만 막는다. 이미 줄에 섰거나 입장한 사람은 상한 0 으로 물어 자리 · 입장권을 그대로 받는다
                 full.mark(productKey, second);
-                return placeIn(productKey, customerId, state, now, second, 0);
+                return placeIn(productKey, customerId, state, snapshot.meta(), now, second, 0);
             }
             if (decision.isReject()) {
                 throw rejection(decision, state);
             }
             enqueued.mark(productKey, second);
-            return placeIn(productKey, customerId, state, now, second, maxLength(state, snapshot.meta()));
+            return placeIn(productKey, customerId, state, snapshot.meta(), now, second, maxLength(state, snapshot.meta()));
         }).doOnNext(view -> metrics.entry(view.status()))
                 .doOnError(BusinessException.class, e -> metrics.entry(e.errorCode().name()));
     }
 
-    private Mono<QueueView> placeIn(String productKey, String customerId, ProductState state, Instant now, long second,
-                                    long maxLength) {
+    private Mono<QueueView> placeIn(String productKey, String customerId, ProductState state, SnapshotMeta meta,
+                                    Instant now, long second, long maxLength) {
         return queue.enqueue(productKey, customerId, maxLength, now)
                 .onErrorMap(AdmissionGate::storeFailure, AdmissionGate::unavailable)
-                .map(placed -> placed(productKey, customerId, state, now, second, placed));
+                .map(placed -> placed(productKey, customerId, state, meta, now, second, placed));
     }
 
-    private QueueView placed(String productKey, String customerId, ProductState state, Instant now, long second,
-                             QueueStatus placed) {
+    private QueueView placed(String productKey, String customerId, ProductState state, SnapshotMeta meta, Instant now,
+                             long second, QueueStatus placed) {
         if (placed.admittedAt() != null) {
             return admitted(productKey, customerId, placed.admittedAt(), now);
         }
@@ -128,7 +128,7 @@ public class AdmissionGate {
             full.mark(productKey, second);
             throw rejected(WaitingroomErrorCode.QUEUE_FULL);
         }
-        double eta = EtaPolicy.etaSec(entry.rank(), state.credit());
+        double eta = EtaPolicy.etaSec(entry.rank(), EtaCredit.of(state, meta));
         return new QueueView.Waiting(queueTokens.issue(productKey, customerId, now), entry.rank() + 1,
                 EtaPolicy.reportSec(eta), null, null, entry.alreadyQueued(),
                 polls.intervalSec(eta, ThreadLocalRandom.current()::nextDouble));
