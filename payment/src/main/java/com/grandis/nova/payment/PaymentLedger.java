@@ -8,6 +8,7 @@ import com.grandis.nova.payment.domain.exception.LeaseLostException;
 import com.grandis.nova.payment.domain.exception.PaymentAlreadyRefundedException;
 import com.grandis.nova.payment.domain.exception.PaymentAmountMismatchException;
 import com.grandis.nova.payment.domain.exception.PaymentTargetMismatchException;
+import com.grandis.nova.payment.domain.exception.RefundFailedException;
 import com.grandis.nova.payment.domain.model.Outcome;
 import com.grandis.nova.payment.domain.model.Payment;
 import com.grandis.nova.payment.domain.model.PaymentTransaction;
@@ -78,6 +79,7 @@ public class PaymentLedger {
      *
      * @throws IllegalStateException            대상에 결제가 없다(호출 쪽 잘못)
      * @throws PaymentAlreadyRefundedException  이미 환불됐다(재전송이면 성공으로 다룰 수 있다)
+     * @throws RefundFailedException            마지막 환불이 확정 실패했다 — 자동으로 다시 열지 않는다(결정 33)
      * @throws ActiveTransactionExistsException 그 대상에 진행 중인 REFUND 가 이미 있다
      */
     public PaymentTransaction openRefund(PaymentTarget target) {
@@ -85,6 +87,9 @@ public class PaymentLedger {
                 .orElseThrow(() -> new IllegalStateException("환불할 결제가 없다: " + target));
         if (payment.status() == PaymentStatus.REFUNDED) {
             throw new PaymentAlreadyRefundedException(target);
+        }
+        if (lastRefundFailed(target)) {
+            throw new RefundFailedException(target);
         }
         return writer.insert(PaymentTransaction.openRefund(payment, clock.instant()));
     }
@@ -197,22 +202,27 @@ public class PaymentLedger {
     }
 
     /**
-     * 같은 행에서 멱등 키를 바꾼다 — CAPTURE 만. 결제사가 같은 키의 재요청에 첫 응답(오류 포함)을 돌려주므로, 조회로 처리 안 됨을
-     * 확인한 뒤 다시 보낼 때 쓴다. 리스를 새로 잡고 마지막 오류를 지운다(저장소 rotateIdempotencyKey). 환불의 키 교체는 아직 정하지
-     * 않았다(NV-103).
+     * 같은 행에서 멱등 키를 바꾼다. 결제사가 같은 키의 재요청에 첫 응답(오류 포함)을 돌려주므로, 조회로 처리 안 됨을 확인한 뒤 다시
+     * 보낼 때 쓴다. 리스를 새로 잡고 마지막 오류를 지운다(저장소 rotateIdempotencyKey). 언제 바꿔도 되는지는 유형마다 다르다 —
+     * 승인은 진행 중인 요청이 없을 때만(CaptureRecovery), 전액 취소는 결제사가 두 번 하지 않으므로 미처리를 확인하면(RefundRecovery).
      *
      * @return 새 키를 든 거래(같은 리스 표식, 새 만료 시각)
-     * @throws IllegalArgumentException CAPTURE 가 아니다
-     * @throws LeaseLostException       리스를 잃었다(0행)
+     * @throws LeaseLostException 리스를 잃었다(0행)
      */
     public ClaimedTransaction rotateIdempotencyKey(ClaimedTransaction claimed) {
         PaymentTransaction held = claimed.transaction();
-        if (held.type() != TransactionType.CAPTURE) {
-            throw new IllegalArgumentException("CAPTURE 만 멱등 키를 바꾼다: " + held);
-        }
         int updated = writer.rotateIdempotencyKey(held.id(), held.leaseToken(), IdempotencyKey.issue(),
                 PaymentTransaction.LEASE);
         return claimed(held.id(), updated).orElseThrow(() -> new LeaseLostException(held.id()));
+    }
+
+    /** 대상의 마지막 REFUND(id 순)가 FAILED 인가. 대상별 거래는 몇 행이라 다 읽는다. */
+    private boolean lastRefundFailed(PaymentTarget target) {
+        return reader.findTransactionsByTarget(target).stream()
+                .filter(transaction -> transaction.type() == TransactionType.REFUND)
+                .reduce((earlier, later) -> later)
+                .map(last -> last.status() == TransactionStatus.FAILED)
+                .orElse(false);
     }
 
     private Optional<ClaimedTransaction> claimed(Long transactionId, int updated) {

@@ -181,7 +181,7 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
             UPDATE payment_transactions
                SET idempotency_key = :idempotencyKey, last_error_code = NULL, last_error_message = NULL,
                    lease_expires_at = UTC_TIMESTAMP(6) + INTERVAL :leaseMicros MICROSECOND
-             WHERE id = :id AND transaction_type = 'CAPTURE' AND status = 'PROCESSING' AND lease_token = :lease
+             WHERE id = :id AND status = 'PROCESSING' AND lease_token = :lease
                AND lease_expires_at > UTC_TIMESTAMP(6)
             """, nativeQuery = true)
     int rotateIdempotencyKey(@Param("id") Long id, @Param("lease") String lease,
