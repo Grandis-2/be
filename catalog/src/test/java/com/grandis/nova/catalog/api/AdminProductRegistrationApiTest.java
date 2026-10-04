@@ -501,6 +501,91 @@ class AdminProductRegistrationApiTest {
             expectValidation(register("k-" + ShopFixtures.unique(), sameMicrosecond), "campaign.closesAt");
         }
 
+        @Test
+        @DisplayName("조합 선택의 축 키는 대소문자를 가리지 않는다 — Color 와 color 가 같이 오면 뒤의 것이 이기지 않고 그 조합의 400")
+        void duplicateAxisKeyInSelectionsRejected() throws Exception {
+            expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("""
+                    "combinations": [ { "selections": { "Color": "블랙", "color": "화이트", "storage": "256GB" } } ],
+                    """)), "combinations[0].selections");
+            register("k-" + ShopFixtures.unique(), preorderBody("""
+                    "combinations": [ { "selections": { "COLOR": "블랙", "storage": "256GB" }, "sku": "B1" } ],
+                    """)).andExpect(status().isCreated());   // 대조군 — 한 번이면 대소문자와 상관없이 받는다
+        }
+
+        @Test
+        @DisplayName("정규화로 늘어난 글자도 칼럼을 넘으면 그 칸의 400(500 이 아니다) — NFC 의 옵션 값 · 상세 영역 이름 60자, 소문자로 접은 축 키 40자")
+        void normalizedTextMustFitColumns() throws Exception {
+            String expands = "\u0958".repeat(60);   // 받은 글자는 60자지만 NFC 는 한 글자를 두 글자(U+0915 U+093C)로 푼다 — 120자
+            String fits = "\u0958".repeat(30);
+            expectValidation(register("k-" + ShopFixtures.unique(), singleAxisBody("color", expands)), "optionAxes[0].values[0].value");
+            register("k-" + ShopFixtures.unique(), singleAxisBody("color", fits)).andExpect(status().isCreated());   // 대조군 — 정규화해서 60자
+            expectValidation(register("k-" + ShopFixtures.unique(), detailSectionBody(expands)), "images.detail[0].section");
+            register("k-" + ShopFixtures.unique(), detailSectionBody(fits)).andExpect(status().isCreated());
+            // 축 키는 소문자로 접어 저장한다 — İ(U+0130)는 접으면 두 글자(i + U+0307)라 40자가 80자가 된다
+            expectValidation(register("k-" + ShopFixtures.unique(), singleAxisBody("\u0130".repeat(40), "블랙")), "optionAxes[0].key");
+            register("k-" + ShopFixtures.unique(), singleAxisBody("I".repeat(40), "블랙")).andExpect(status().isCreated());   // 대조군 — 접어도 40자
+        }
+
+        @Test
+        @DisplayName("정수 칸은 소수를 받지 않는다 — 재고 1.9 · 1.0 · 차수 번호 1.7 · 시작 순번 1.2 는 그 칸의 400(잘라서 1 로 저장하지 않는다)")
+        void integerFieldsRejectFractions() throws Exception {
+            expectValidation(register("k-" + ShopFixtures.unique(), inStockBody("9000", "1.9")), "combinations[0].stock");
+            expectValidation(register("k-" + ShopFixtures.unique(), inStockBody("9000", "1.0")), "combinations[0].stock");   // 값이 정수여도 소수 표기면 400
+            register("k-" + ShopFixtures.unique(), inStockBody("9000", "2")).andExpect(status().isCreated());   // 대조군
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches("""
+                    "shipmentBatches": [ { "batchNumber": 1.7, "positionFrom": 1, "positionTo": null, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "2026-11-07" } ]
+                    """)), "shipmentBatches[0].batchNumber");
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches("""
+                    "shipmentBatches": [ { "batchNumber": 1, "positionFrom": 1.2, "positionTo": null, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "2026-11-07" } ]
+                    """)), "shipmentBatches[0].positionFrom");
+        }
+
+        @Test
+        @DisplayName("금액은 decimal(12,0) 안 — 기본가 · 추가금 · 보증 추가금 · 수동 가격이 999,999,999,999 를 넘거나 기본가 + 추가금이 넘으면 그 칸의 400(500 이 아니다)")
+        void amountsAboveColumnLimitAreFieldErrors() throws Exception {
+            String max = "999999999999";
+            register("k-" + ShopFixtures.unique(), inStockBody(max, "3")).andExpect(status().isCreated());   // 경계는 들어간다
+            expectValidation(register("k-" + ShopFixtures.unique(), inStockBody("1000000000000", "3")), "basePrice");
+            expectValidation(register("k-" + ShopFixtures.unique(), inStockBody("9000", "3")
+                    .replace("\"stock\": 3", "\"stock\": 3, \"price\": 1000000000000")), "combinations[].price");
+            expectValidation(register("k-" + ShopFixtures.unique(), inStockBody("9000", "3")
+                    .replace("\"visible\": true,", "\"visible\": true, \"warranty\": { \"offered\": true, \"surcharge\": 1000000000000 },")), "warranty.surcharge");
+
+            String withStorage = inStockBody(max, "3")
+                    .replace("\"visible\": true,", "\"visible\": true, \"optionAxes\": [ { \"key\": \"storage\", \"label\": \"용량\", \"values\": [ { \"value\": \"512GB\", \"surcharge\": %s } ] } ],")
+                    .replace("\"selections\": {}", "\"selections\": { \"storage\": \"512GB\" }");
+            expectValidation(register("k-" + ShopFixtures.unique(), withStorage.formatted("1")), "combinations[storage=512GB]");
+            expectValidation(register("k-" + ShopFixtures.unique(), withStorage.formatted("1000000000000")), "optionAxes[0].values[0].surcharge");
+            // 계산 가격이 넘어도 수동 가격을 주면 계산 가격은 저장하지 않는다 — 들어간다
+            register("k-" + ShopFixtures.unique(), withStorage.formatted("1").replace("\"stock\": 3", "\"stock\": 3, \"price\": 5000"))
+                    .andExpect(status().isCreated());
+        }
+
+        /** 축 없는 일반 상품 하나(조합 하나). 조합 칸 경로는 선택 키로 만든다 — 축이 없으면 combinations[], storage 축이면 combinations[storage=512GB]. */
+        private String inStockBody(String basePrice, String stock) {
+            return """
+                    { "categoryId": %d, "saleMode": "IN_STOCK", "title": "Limit", "visible": true, "basePrice": %s,
+                      "combinations": [ { "selections": {}, "stock": %s } ] }
+                    """.formatted(categoryId, basePrice, stock);
+        }
+
+        /** 축 하나(값 하나)의 일반 상품. 표시명이 값 그대로라 표시명 상한(120)보다 값 칼럼(60)이 먼저 걸린다. */
+        private String singleAxisBody(String key, String value) {
+            return """
+                    { "categoryId": %d, "saleMode": "IN_STOCK", "title": "Limit", "visible": true, "basePrice": 1000,
+                      "optionAxes": [ { "key": "%s", "label": "축", "values": [ { "value": "%s" } ] } ],
+                      "combinations": [ { "selections": { "%s": "%s" }, "sku": "C1", "stock": 1 } ] }
+                    """.formatted(categoryId, key, value, key, value);
+        }
+
+        private String detailSectionBody(String section) {
+            return """
+                    { "categoryId": %d, "saleMode": "IN_STOCK", "title": "Limit", "visible": true, "basePrice": 1000,
+                      "images": { "detail": [ { "section": "%s", "items": [ { "url": "https://img/1.jpg" } ] } ] },
+                      "combinations": [ { "selections": {}, "stock": 1 } ] }
+                    """.formatted(categoryId, section);
+        }
+
         /** 1 번부터 이어지는 한 자리 차수 n 개(마지막은 상한 없음). 배송 예정일은 모두 같은 날. */
         private String batches(int count, String shipDate) {
             StringBuilder json = new StringBuilder("\"shipmentBatches\": [ ");

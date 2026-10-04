@@ -13,7 +13,11 @@ public enum CatalogErrorCode implements ErrorCode {
     PRODUCT_NOT_FOUND(404, "상품을 찾을 수 없습니다."),
     REGISTRATION_NOT_FOUND(404, "등록 기록을 찾을 수 없습니다."),
     REGISTRATION_IN_PROGRESS(409, "같은 등록이 처리 중입니다. 잠시 후 같은 키로 다시 시도해 주세요."),
-    /** 사전예약 오픈 뒤의 상품 정보 · 옵션 · 가격 수정(설계 §2.1). 공개 전환 · 옵션 판매 중지는 이 코드가 아니다. */
+    /**
+     * 지금 상태에서 못 하는 수정. 사전예약 오픈 3분 전부터의 수정(공개 여부 말고 전부 — 옵션 · 상품 판매 상태 포함), 회차가 취소된 상품의 수정,
+     * 오픈 뒤 · 회차 취소 뒤의 판매 재개, DB 잠금 실패(교착 등)로 처리하지 못한 수정(details.retryable). 공개 여부 전환은 오픈 판정으로는
+     * 이 코드가 나지 않는다(잠금 실패의 retryable 409 는 난다).
+     */
     STATE_CONFLICT(409, "현재 상태에서는 처리할 수 없습니다. 최신 상태를 조회해 주세요.");
 
     private final int status;

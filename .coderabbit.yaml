@@ -379,7 +379,7 @@ reviews:
           흉내(외래키 잠금 · 회차 시각 변경 같은 경쟁 재현)라 판정에서 제외한다. 운영 코드(src/main)만 판정한다.
 
           허용된 읽기 — 이것만 실패가 아니다.
-          - order → products · product_options (재고 대상 옵션의 소속 · 판매 방식 · 가격 확인)
+          - order → products · product_options (재고 대상 옵션의 소속 · 판매 방식 확인)
           - catalog → preorder_campaigns(opens_at · closes_at · 행의 유무) · option_inventories(재고 집계 · 행의 유무) (목록 · 검색의 노출 조건, 상세의 회차 시각 · 옵션별 가용 수량, 관리자 목록의 같은 칸, 관리자 수정의 오픈 판정, 판매 방식별 준비. 읽기 전용 저장소 한 곳)
           - worker → preorders (처리 대상 확인)
           - preorder → preorder_sync_jobs · preorder_sync_attempts (행 생성 · 취소 시 무효화 · 관리자 조회 · 재처리 판정)
