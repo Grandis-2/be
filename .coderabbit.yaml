@@ -253,7 +253,8 @@ reviews:
         - 다른 서비스가 만들 값(사전예약 회차 · 차수, 일반 상품 초기 재고)을 그 서비스의 API 를 동기로 불러 넣거나 그 표에 직접 쓰면 지적한다.
           같은 트랜잭션에서 OutboxWriter 로 이벤트를 적는다(contracts/catalog-events.md).
         - catalog_outbox_events 를 OutboxWriter 밖에서 INSERT 하거나, 업무 트랜잭션과 다른 트랜잭션에서 append 하면 지적한다(MANDATORY).
-          이벤트 payload 에 상품 id 를 다시 넣으면 지적한다 — 봉투의 aggregateId 로만 싣는다.
+          이벤트 payload 에 상품 id 를 다시 넣으면 지적한다 — 봉투의 aggregateId 로만 싣는다. 예외는 PREORDER_CAMPAIGN_CANCELED 하나다
+          (preorder 가 먼저 정의한 레코드가 payload 의 productId 로 읽는다 — 이 이벤트에서 productId 를 빼면 지적한다).
         - /internal/** 은 USER · ADMIN 만 허용하고 비공개 · 미완료 상품도 200 으로 준다. 여기서 먼저 숨기면 지적한다 — 숨김 판정은 호출자다.
 
     # ─────────────────────────────────────────────────────────────

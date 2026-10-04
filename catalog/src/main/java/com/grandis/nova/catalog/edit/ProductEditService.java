@@ -20,11 +20,13 @@ import com.grandis.nova.catalog.product.ProductOption;
 import com.grandis.nova.catalog.product.ProductOptionRepository;
 import com.grandis.nova.catalog.product.ProductRepository;
 import com.grandis.nova.catalog.product.SaleMode;
+import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.catalog.registration.ProductRegistrationValidator;
 import com.grandis.nova.catalog.web.ConstraintViolations;
 import com.grandis.nova.catalog.web.ValidationFailures;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.outbox.OutboxWriter;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
@@ -78,12 +80,13 @@ public class ProductEditService {
     private final ProductListingQueryRepository crossReads;
     private final ProductImageRepository images;
     private final ProductDetailService detailService;
+    private final OutboxWriter outbox;
     private final Clock clock;
 
     public ProductEditService(ProductRepository products, ProductOptionAxisRepository axes, ProductOptionValueRepository values,
                               ProductOptionRepository options, ProductOptionSelectionRepository selections,
                               ProductListingQueryRepository crossReads, ProductImageRepository images,
-                              ProductDetailService detailService, Clock clock) {
+                              ProductDetailService detailService, OutboxWriter outbox, Clock clock) {
         this.products = products;
         this.axes = axes;
         this.values = values;
@@ -92,6 +95,7 @@ public class ProductEditService {
         this.crossReads = crossReads;
         this.images = images;
         this.detailService = detailService;
+        this.outbox = outbox;
         this.clock = clock;
     }
 
@@ -300,15 +304,51 @@ public class ProductEditService {
      * 상품 판매 시작 · 중지(ACTIVE ↔ PAUSED). 같은 상태면 바꾸지 않고 그대로 답한다. 사전예약은 다른 수정처럼 오픈 3분 전부터 409 다
      * (2026-10-04 결정 — preorder 의 접수용 상품 사본이 1분마다 갱신돼 오픈 뒤 전환은 접수에 늦게 닿는다). 오픈 전에 PAUSED 로 둔 채
      * 오픈을 넘긴 상품은 그대로 판매 중지다 — 회차 취소로 보지 않고 이벤트도 없다(같은 날 결정).
+     *
+     * <p>사전예약 <b>오픈 뒤</b>(회차 opens_at ≤ 지금)의 PAUSED 는 회차 취소다 — {@link #cancelCampaign}. 사유는 그때만 받는다.
      */
     @Transactional
     public SaleStatusView changeSaleStatus(Long productId, SaleStatusChangeRequest request) {
         Product product = lockProduct(productId);
+        String reason = request.reason() == null ? null : request.reason().strip();
+        if (product.getSaleMode() == SaleMode.PREORDER && opened(product)) {
+            return cancelCampaign(product, request.status(), reason);
+        }
+        if (reason != null) {
+            throw ValidationFailures.of("reason", "사유는 사전예약 오픈 뒤 판매 중지(회차 취소)에만 받습니다.");
+        }
         requireNotOpened(product, STATUS_FROZEN);
         product.changeStatus(request.status());
         products.flush();
         requireNotOpened(product, STATUS_FROZEN);   // 커밋 직전 — 잠금 대기 중에 오픈 3분 전을 넘겼을 수 있다
         return new SaleStatusView(productId, product.getStatus(), false);
+    }
+
+    /**
+     * 사전예약 오픈 뒤 판매 중지 = 회차 취소. 판매 중지로 두고 취소 시각을 남기고, 같은 트랜잭션에서 PREORDER_CAMPAIGN_CANCELED 를 아웃박스에 적는다.
+     * preorder 가 받아 회차를 지금 마감하고 진행 중 예약의 취소를 시작한다. 되돌릴 수 없다 — 오픈 뒤 ACTIVE 는 409.
+     * 이미 취소된 상품에 다시 보내면 이벤트를 다시 적지 않고 같은 답(접수됨)을 준다. 오픈 판정은 상품 행 잠금 아래에서 했다 — 같은 상품의 취소는 줄 서므로
+     * 이벤트는 한 번만 적힌다.
+     */
+    private SaleStatusView cancelCampaign(Product product, SaleStatus requested, String reason) {
+        if (requested != SaleStatus.PAUSED) {
+            throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "사전예약 오픈 뒤에는 판매를 다시 시작할 수 없습니다.");
+        }
+        if (reason == null || reason.isEmpty()) {
+            throw ValidationFailures.of("reason", "오픈 뒤 판매 중지는 회차 취소라 사유가 필요합니다.");
+        }
+        if (product.cancelCampaign(clock.instant())) {
+            products.flush();
+            outbox.append(new PreorderCampaignCanceled(product.getId(), reason));
+        }
+        return new SaleStatusView(product.getId(), product.getStatus(), true);
+    }
+
+    /** 사전예약 회차가 열렸는가(opens_at ≤ 지금). 회차가 없으면(등록 이벤트 처리 전) 열리지 않았다. */
+    private boolean opened(Product product) {
+        return crossReads.findCampaign(product.getId())
+                .map(window -> !clock.instant().isBefore(window.opensAt()))
+                .orElse(false);
     }
 
     /** 공개 ↔ 비공개. 언제든 바꾼다 — 오픈 판정을 하지 않는다. 다른 수정과 줄 서도록 상품 행은 잠근다. */

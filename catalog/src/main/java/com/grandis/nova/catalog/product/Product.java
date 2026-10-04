@@ -11,6 +11,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.Objects;
 
 /**
@@ -63,6 +64,9 @@ public class Product extends BaseEntity {
     @Column(nullable = false)
     private boolean visible;
 
+    /** 사전예약 회차 취소를 접수한 시각. null 이면 취소 아님 — 오픈 전에 판매 중지로 둔 채 오픈을 넘긴 상품도 null 이다(2026-10-04 결정). */
+    private Instant campaignCanceledAt;
+
     @Column(nullable = false)
     private boolean warrantyOffered;
 
@@ -114,6 +118,24 @@ public class Product extends BaseEntity {
      */
     public void changeStatus(SaleStatus status) {
         this.status = Objects.requireNonNull(status, "status");
+    }
+
+    /**
+     * 사전예약 회차 취소 — 판매 중지로 두고 취소 시각을 남긴다. 되돌릴 수 없다(DB CHECK 가 취소 표식이 있는 행의 ACTIVE 를 막는다).
+     * 오픈 뒤인지는 서비스가 본다(회차는 preorder 표).
+     *
+     * @return 이번에 새로 취소했으면 true. 이미 취소된 상품이면 false — 취소 이벤트를 다시 적지 않는다
+     */
+    public boolean cancelCampaign(Instant now) {
+        if (saleMode != SaleMode.PREORDER) {
+            throw new IllegalStateException("회차 취소는 사전예약 상품만: " + id);
+        }
+        if (campaignCanceledAt != null) {
+            return false;
+        }
+        this.status = SaleStatus.PAUSED;
+        this.campaignCanceledAt = Objects.requireNonNull(now, "now");
+        return true;
     }
 
     /** 표시 정보 수정. null 은 "보내지 않음" 이라 그대로 둔다. 사전예약 오픈 뒤 금지는 서비스가 지킨다(회차는 preorder 표). */
@@ -175,6 +197,10 @@ public class Product extends BaseEntity {
 
     public SaleStatus getStatus() {
         return status;
+    }
+
+    public Instant getCampaignCanceledAt() {
+        return campaignCanceledAt;
     }
 
     public boolean isVisible() {

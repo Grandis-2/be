@@ -348,6 +348,20 @@ class ProductEditRaceTest {
         assertThat(jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, productId)).isEqualTo("ACTIVE");
     }
 
+    @Test
+    @DisplayName("오픈 뒤 회차 취소가 동시에 두 번 들어와도 취소 이벤트는 하나다 — 뒤의 것은 앞의 취소가 커밋된 뒤 취소 표식을 본다")
+    void concurrentCampaignCancelsWriteOneEvent() throws Exception {
+        long productId = registerPreorder();
+        Instant now = Instant.now();
+        fixtures.campaign(productId, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
+        interleave(() -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED, "첫 취소")),
+                () -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED, "겹친 취소")));
+
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM catalog_outbox_events WHERE aggregate_id = ? AND event_type = 'PREORDER_CAMPAIGN_CANCELED'
+                """, Integer.class, productId)).as("잠그지 않고 읽으면 둘 다 취소 전으로 보고 이벤트를 둘 적는다").isEqualTo(1);
+    }
+
     // ── 도우미 ─────────────────────────────────────────────────────────────
 
     /**

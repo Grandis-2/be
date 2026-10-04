@@ -147,11 +147,13 @@ public class AdminProductController {
     /**
      * 상품 판매 시작 · 중지(ACTIVE ↔ PAUSED). 판매 중지는 회원 목록에서 빠지고 상세에는 판매 중지로 보인다 — 신규 접수 · 주문은
      * preorder · order 가 이 상태를 보고 막고, 기존 예약 · 주문은 그대로.
-     * 사전예약은 오픈 3분 전부터 409. 오픈 뒤 판매 중지(회차 취소)는 아직 이 경로에 없다.
+     * 사전예약은 오픈 3분 전부터 409. 오픈 뒤 PAUSED(사유 필수)는 회차 취소 접수로 202 — 되돌릴 수 없고, 오픈 뒤 ACTIVE 는 409.
      */
     @PatchMapping("/{productId}/sale-status")
-    public ApiResponse<SaleStatusView> changeSaleStatus(@PathVariable Long productId, @RequestBody String body) {
-        return ApiResponse.ok(serialized(() -> editService.changeSaleStatus(productId, bodies.parse(body, SaleStatusChangeRequest.class))));
+    public ResponseEntity<ApiResponse<SaleStatusView>> changeSaleStatus(@PathVariable Long productId, @RequestBody String body) {
+        SaleStatusView view = serialized(() -> editService.changeSaleStatus(productId, bodies.parse(body, SaleStatusChangeRequest.class)));
+        // 회차 취소는 preorder 가 이벤트를 받아 예약 취소를 진행한다 — 끝난 것이 아니라 접수된 것이라 202
+        return ResponseEntity.status(view.campaignCancellationRequested() ? HttpStatus.ACCEPTED : HttpStatus.OK).body(ApiResponse.ok(view));
     }
 
     /** 공개 ↔ 비공개. 언제든 바꾼다 — 기존 예약 · 주문은 그대로. 회원 노출은 판매 방식별 준비 · 판매 상태와 함께 정해진다. */
