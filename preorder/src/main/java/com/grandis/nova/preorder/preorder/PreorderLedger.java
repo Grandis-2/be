@@ -13,7 +13,7 @@ import java.time.Instant;
 import java.util.Optional;
 
 /**
- * 예약 상태를 바꾸는 유일한 길. 호출하는 쪽은 사건({@link PreorderTrigger})만 알리고,
+ * 예약 상태를 바꾸는 유일한 길. 호출하는 쪽은 사건({@link PreorderFact})만 알리고,
  * 다음 상태는 상태 머신({@link PreorderStatus#next})이 정한다.
  *
  * 사건 하나의 처리:
@@ -63,45 +63,32 @@ public class PreorderLedger {
     /**
      * 사건을 적용한다. 지금 상태에서 의미 없는 사건이면(중복 · 늦은 도착) 아무것도 바꾸지 않고
      * applied = false 와 지금 상태를 돌려준다 — 같은 메시지를 두 번 받아도 결과가 같다.
-     * 외부 등록 확인은 외부 예약 번호가 필요하므로 {@link #confirmRegister} 를 쓴다.
      *
      * @throws IllegalArgumentException 예약이 없다 — 호출하는 쪽이 먼저 확인한다
      * @throws IllegalStateException    주문 쪽 취소 거절인데 결제 가능한 적이 없는 예약이다
      */
-    public PreorderTransition fire(Long preorderId, PreorderTrigger trigger, EventActor actor, String reason) {
-        if (trigger == PreorderTrigger.REGISTER_CONFIRMED) {
-            throw new IllegalArgumentException("등록 확인은 confirmRegister 를 쓴다");
-        }
-        actor.requireReason(reason);
+    public PreorderTransition fire(Long preorderId, PreorderFact fact) {
+        fact.actor().requireReason(fact.reason());
         PreorderStatus from = lockStatus(preorderId);
-        PreorderStatus to = from.next(trigger).orElse(null);
+        PreorderStatus to = from.next(fact.trigger()).orElse(null);
         if (to == null) {
             return new PreorderTransition(false, from);
         }
         Instant now = clock.instant();
-        if (trigger == PreorderTrigger.CANCEL_REJECTED) {
-            revertToPayable(preorderId, from, to, now);
-        } else {
-            requireOneRow(preorders.changeStatus(preorderId, from, to, now), preorderId);
-        }
-        record(preorderId, from, to, actor, reason, now);
+        apply(preorderId, fact, from, to, now);
+        record(preorderId, from, to, fact.actor(), fact.reason(), now);
         return new PreorderTransition(true, to);
     }
 
-    /**
-     * 외부 등록 확인 → PAYABLE. payable_from 과 외부 예약 번호를 함께 채운다.
-     * 이미 반영됐거나 취소 중이면 바꾸지 않는다 — 늦게 도착한 등록 성공이 취소된 예약을 되살리지 않는다.
-     */
-    public PreorderTransition confirmRegister(Long preorderId, String externalReference) {
-        PreorderStatus from = lockStatus(preorderId);
-        PreorderStatus to = from.next(PreorderTrigger.REGISTER_CONFIRMED).orElse(null);
-        if (to == null) {
-            return new PreorderTransition(false, from);
+    /** 사건마다 예약 행에 남기는 값이 다르다. 사건이 늘면 컴파일러가 빠진 곳을 알린다. */
+    private void apply(Long preorderId, PreorderFact fact, PreorderStatus from, PreorderStatus to, Instant now) {
+        switch (fact) {
+            case PreorderFact.RegisterConfirmed confirmed -> requireOneRow(
+                    preorders.markPayable(preorderId, confirmed.externalReference(), now, from, to), preorderId);
+            case PreorderFact.CancelRejected _ -> revertToPayable(preorderId, from, to, now);
+            case PreorderFact.CancelRequested _, PreorderFact.CancelCompleted _ ->
+                    requireOneRow(preorders.changeStatus(preorderId, from, to, now), preorderId);
         }
-        Instant now = clock.instant();
-        requireOneRow(preorders.markPayable(preorderId, externalReference, now, from, to), preorderId);
-        record(preorderId, from, to, EventActor.SYSTEM, null, now);
-        return new PreorderTransition(true, to);
     }
 
     /**

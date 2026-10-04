@@ -3,6 +3,7 @@ package com.grandis.nova.preorder.query;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
+import com.grandis.nova.preorder.preorder.PreorderFact;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderCancels;
@@ -133,7 +134,7 @@ class PreorderQueryApiTest {
         AcceptResult accepted = accepts.accept(customerId);
         String externalReference = "EXT-" + ShopFixtures.unique();
         transactionTemplate.executeWithoutResult(status ->
-                ledger.confirmRegister(accepted.preorder().id(), externalReference));
+                ledger.fire(accepted.preorder().id(), new PreorderFact.RegisterConfirmed(externalReference)));
 
         mockMvc.perform(get("/api/v1/preorders/" + AcceptFixtures.tokenOf(accepted))
                         .with(customer(customerId)))
