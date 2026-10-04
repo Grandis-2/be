@@ -1,7 +1,10 @@
 package com.grandis.nova.order.order.cancel;
 
 import com.grandis.nova.order.order.OrderLedger;
+import com.grandis.nova.order.order.domain.enums.OrderStatus;
+import com.grandis.nova.order.order.domain.enums.OrderTrigger;
 import com.grandis.nova.order.order.domain.model.Order;
+import com.grandis.nova.order.order.vo.EventCause;
 import com.grandis.nova.order.outbox.PreorderOrderSettled.RejectReason;
 import com.grandis.nova.order.outbox.PreorderOrderSettled.Result;
 import com.grandis.nova.common.testing.Concurrently;
@@ -19,6 +22,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 
@@ -120,7 +124,7 @@ class SettlePreorderCancelServiceTest {
         Order order = placedOrders.place(customerId);
         SettlePreorderCancelCommand cancel = cancel(order, CancelReason.USER);
 
-        List<Outcome<Result>> outcomes = Concurrently.run(REQUESTS, i -> () -> settlement.settle(cancel).result());
+        List<Outcome<Result>> outcomes = Concurrently.run(REQUESTS, i -> () -> resultOf(settlement.settle(cancel)));
 
         assertThat(outcomes).allSatisfy(outcome -> {
             assertThat(outcome.error()).isNull();
@@ -160,18 +164,84 @@ class SettlePreorderCancelServiceTest {
         });
     }
 
-    /** 결제됨 + 만료 외 · 승인 결과 대기 · 환불 중: 결과를 적지 않고 예외로 되돌린다 — 메시지는 지워지지 않는다. */
+    /** 결제됨 + 만료 외: 취소 중으로 바꾸고 같은 트랜잭션에서 환불을 요청한다. 결과는 환불이 끝난 뒤 다시 받은 메시지가 적는다. */
     @ParameterizedTest
-    @ValueSource(strings = {"AWAITING_CONFIRMATION", "AUTHORIZING", "CANCELING"})
-    void 결과를_정할_수_없으면_아무것도_적지_않고_실패한다(String status) {
+    @ValueSource(strings = {"AWAITING_CONFIRMATION", "PREPARING_ITEMS", "READY_TO_SHIP"})
+    void 결제된_주문은_취소_중으로_바꾸고_환불을_요청하며_결과는_미룬다(String status) {
         Order order = placedOrders.place(customerId);
         fixtures.forceStatus(order.id(), status);
 
-        assertThatThrownBy(() -> settlement.settle(cancel(order, CancelReason.USER)))
-                .isInstanceOf(SettlementDeferredException.class);
+        CancelSettlement result = settlement.settle(cancel(order, CancelReason.USER));
 
+        assertThat(result).isEqualTo(new CancelSettlement.Deferred(OrderStatus.CANCELING));
+        assertThat(statusOf(order)).isEqualTo("CANCELING");
+        assertThat(eventCount(order)).isEqualTo(2);
+        assertThat(refundRequests(order)).singleElement().satisfies(payload ->
+                assertThat(payload.get("amount").decimalValue()).isEqualByComparingTo(order.totalAmount().amount()));
+        assertThat(outboxRows(order.preorderId())).isEmpty();
+    }
+
+    /** 같은 취소를 다시 받으면(지연 재발행 · 중복 수신) 환불을 또 요청하지 않는다. */
+    @Test
+    void 취소_중에_같은_요청을_다시_받으면_환불을_다시_요청하지_않는다() {
+        Order order = placedOrders.place(customerId);
+        fixtures.forceStatus(order.id(), "AWAITING_CONFIRMATION");
+        SettlePreorderCancelCommand cancel = cancel(order, CancelReason.USER);
+
+        settlement.settle(cancel);
+        CancelSettlement again = settlement.settle(cancel);
+
+        assertThat(again).isEqualTo(new CancelSettlement.Deferred(OrderStatus.CANCELING));
+        assertThat(eventCount(order)).isEqualTo(2);
+        assertThat(refundRequests(order)).hasSize(1);
+        assertThat(outboxRows(order.preorderId())).isEmpty();
+    }
+
+    /** 환불이 끝나 취소되면 다시 받은 메시지가 CANCELED 를 적는다. */
+    @Test
+    void 환불이_끝난_뒤_다시_받으면_CANCELED_를_적는다() {
+        Order order = placedOrders.place(customerId);
+        fixtures.forceStatus(order.id(), "AWAITING_CONFIRMATION");
+        SettlePreorderCancelCommand cancel = cancel(order, CancelReason.USER);
+        settlement.settle(cancel);
+        transactionTemplate.executeWithoutResult(s -> ledger.fire(order.id(), OrderTrigger.REFUND_COMPLETED,
+                EnumSet.of(OrderStatus.CANCELING), EventCause.system("REFUND_COMPLETED")));
+
+        CancelSettlement result = settlement.settle(cancel);
+
+        assertThat(resultOf(result)).isEqualTo(Result.CANCELED);
+        assertThat(results(order)).containsExactly("CANCELED");
+        assertThat(refundRequests(order)).hasSize(1);
+    }
+
+    /** 승인 결과 대기 · 환불 중: 결과를 적지 않고 보류한다 — 상태도 그대로다. */
+    @ParameterizedTest
+    @ValueSource(strings = {"AUTHORIZING", "CANCELING"})
+    void 결과를_정할_수_없으면_아무것도_적지_않고_보류한다(String status) {
+        Order order = placedOrders.place(customerId);
+        fixtures.forceStatus(order.id(), status);
+
+        CancelSettlement result = settlement.settle(cancel(order, CancelReason.USER));
+
+        assertThat(result).isEqualTo(new CancelSettlement.Deferred(OrderStatus.valueOf(status)));
         assertThat(statusOf(order)).isEqualTo(status);
         assertThat(eventCount(order)).isEqualTo(1);
+        assertThat(refundRequests(order)).isEmpty();
+        assertThat(outboxRows(order.preorderId())).isEmpty();
+    }
+
+    /** 환불이 확정 실패해도 결과를 적지 않고 보류한다 — preorder 에 실패를 돌려주지 않고, 사람이 해소해 취소되면 그때 적는다(U1). */
+    @Test
+    void 환불이_실패한_취소_중이면_아무것도_적지_않고_보류한다() {
+        Order order = placedOrders.place(customerId);
+        fixtures.forceStatus(order.id(), "CANCELING");
+        transactionTemplate.executeWithoutResult(s -> ledger.noteRefundFailed(order.id()));
+
+        assertThat(settlement.settle(cancel(order, CancelReason.USER)))
+                .isEqualTo(new CancelSettlement.Deferred(OrderStatus.CANCELING));
+
+        assertThat(statusOf(order)).isEqualTo("CANCELING");
+        assertThat(refundRequests(order)).isEmpty();
         assertThat(outboxRows(order.preorderId())).isEmpty();
     }
 
@@ -242,6 +312,18 @@ class SettlePreorderCancelServiceTest {
                 SELECT event_type, aggregate_type, aggregate_id, payload
                   FROM order_outbox_events WHERE aggregate_type = 'PREORDER' AND aggregate_id = ? ORDER BY id
                 """, preorderId);
+    }
+
+    private List<JsonNode> refundRequests(Order order) {
+        return jdbcTemplate.queryForList("""
+                SELECT payload FROM order_outbox_events
+                 WHERE event_type = 'ORDER_REFUND_REQUESTED' AND aggregate_type = 'ORDER' AND aggregate_id = ? ORDER BY id
+                """, String.class, order.id()).stream().map(jsonMapper::readTree).toList();
+    }
+
+    private static Result resultOf(CancelSettlement settlement) {
+        assertThat(settlement).isInstanceOf(CancelSettlement.Settled.class);
+        return ((CancelSettlement.Settled) settlement).result().result();
     }
 
     private List<String> results(Order order) {

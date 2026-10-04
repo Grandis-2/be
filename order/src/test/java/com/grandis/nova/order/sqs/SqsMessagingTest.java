@@ -2,10 +2,13 @@ package com.grandis.nova.order.sqs;
 
 import com.grandis.nova.common.outbox.MessageTransport;
 import com.grandis.nova.common.sqs.RetryingQueueConsumer;
-import com.grandis.nova.common.sqs.testing.FlociTestContainer;
+import com.grandis.nova.common.sqs.SqsQueueUrls;
 import com.grandis.nova.common.sqs.testing.TestQueues;
 import com.grandis.nova.order.order.OrderLedger;
+import com.grandis.nova.order.order.domain.enums.OrderStatus;
+import com.grandis.nova.order.order.domain.enums.OrderTrigger;
 import com.grandis.nova.order.order.domain.model.Order;
+import com.grandis.nova.order.order.vo.EventCause;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.PlacedOrders;
 import com.grandis.nova.order.support.SqsIntegrationTest;
@@ -15,11 +18,16 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
+import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.Message;
+import software.amazon.awssdk.services.sqs.model.MessageAttributeValue;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.util.EnumSet;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -51,6 +59,12 @@ class SqsMessagingTest {
 
     @Autowired
     JsonMapper jsonMapper;
+
+    @Autowired
+    SqsClient sqs;
+
+    @Autowired
+    SqsQueueUrls queueUrls;
 
     OrderFixtures fixtures;
     PlacedOrders placedOrders;
@@ -96,20 +110,72 @@ class SqsMessagingTest {
                 "SELECT published_at IS NOT NULL FROM order_outbox_events WHERE event_id = ?", Boolean.class, eventId));
     }
 
-    /** 결제된 주문의 사용자 취소는 환불(결제 작업)이 필요하다. 결과를 적지 않고, 지우지 않아 DLQ 로 간다. */
+    /**
+     * 결제된 주문의 사용자 취소: 취소 중 + 환불 요청이 payment-events 로 나가고, 취소 메시지는 늦춰 다시 받는다(재수신 한도에 걸리지
+     * 않는다). 환불 결과가 오면 취소되고, 다시 받은 취소 메시지가 정리 결과(CANCELED)를 preorder-events 로 보낸다.
+     */
     @Test
-    void 결과를_정할_수_없는_요청은_지우지_않아_DLQ_로_간다() {
+    void 결제된_주문의_취소는_환불이_끝날_때까지_늦춰_다시_받고_끝나면_CANCELED_를_보낸다() {
         Order order = placedOrders.place(customerId);
         fixtures.forceStatus(order.id(), "AWAITING_CONFIRMATION");
+        String preorderUuid = preorderUuidOf(order);
+
+        queues.send(QUEUE, cancelRequested(order, "USER"));
+
+        Message refundRequest = queues.receive("payment-events",
+                m -> m.body().contains("ORDER_REFUND_REQUESTED") && m.body().contains("\"aggregateId\":" + order.id()),
+                TIMEOUT).orElseThrow();
+        assertThat(jsonMapper.readTree(refundRequest.body()).get("aggregateType").asString()).isEqualTo("ORDER");
+        assertThat(statusOf(order)).isEqualTo("CANCELING");
+        // 재수신 한도(2회)의 몇 배를 기다려도 DLQ 로 가지 않는다 — 실패로 늦춘 것이 아니라 새로 보냈다
+        assertThat(queues.receive(QUEUE + "-dlq", m -> m.body().contains(preorderUuid), Duration.ofSeconds(8)))
+                .isEmpty();
+        assertThat(settledRows(order)).isZero();
+
+        queues.send(QUEUE, refundSettled(order, "REFUNDED"));
+
+        Message settled = queues.receive("preorder-events", m -> m.body().contains(preorderUuid), TIMEOUT)
+                .orElseThrow();
+        assertThat(jsonMapper.readTree(settled.body()).get("payload").get("result").asString()).isEqualTo("CANCELED");
+        assertThat(statusOf(order)).isEqualTo("CANCELED");
+    }
+
+    /**
+     * 환불이 확정 실패해도, 오래 보류됐어도 메시지를 버리지 않는다 — 사람이 해소해 취소되면 다시 받은 메시지가 CANCELED 를 보낸다(U1).
+     * 경보 기준이 지난 메시지로 보낸다(속성 firstDeferredAt 을 2시간 전으로).
+     */
+    @Test
+    void 환불이_실패해_오래_보류된_취소도_버리지_않고_해소되면_CANCELED_를_보낸다() {
+        Order order = placedOrders.place(customerId);
+        fixtures.forceStatus(order.id(), "CANCELING");
+        transactionTemplate.executeWithoutResult(s -> ledger.noteRefundFailed(order.id()));
+        String preorderUuid = preorderUuidOf(order);
         String body = cancelRequested(order, "USER");
 
-        queues.send(QUEUE, body);
+        sqs.sendMessage(request -> request.queueUrl(queueUrls.of(QUEUE)).messageBody(body).messageAttributes(Map.of(
+                "deferCount", MessageAttributeValue.builder().dataType("Number").stringValue("90").build(),
+                "firstDeferredAt", MessageAttributeValue.builder().dataType("String")
+                        .stringValue(Instant.now().minus(Duration.ofHours(2)).toString()).build())));
 
-        assertThat(queues.receive(QUEUE + "-dlq", m -> m.body().equals(body), Duration.ofSeconds(30)))
-                .as("%d 번 받고도 처리하지 못하면 DLQ", FlociTestContainer.MAX_RECEIVE_COUNT)
-                .isPresent();
-        assertThat(statusOf(order)).isEqualTo("AWAITING_CONFIRMATION");
+        assertThat(queues.receive(QUEUE + "-dlq", m -> m.body().equals(body), Duration.ofSeconds(8))).isEmpty();
         assertThat(settledRows(order)).isZero();
+
+        // 사람이 환불을 해소해 취소로 끝낸다(관리자 경로는 후속 — 여기서는 원장으로 흉내 낸다)
+        transactionTemplate.executeWithoutResult(s -> ledger.fire(order.id(), OrderTrigger.REFUND_COMPLETED,
+                EnumSet.of(OrderStatus.CANCELING), EventCause.system("REFUND_COMPLETED")));
+
+        Message settled = queues.receive("preorder-events", m -> m.body().contains(preorderUuid), TIMEOUT)
+                .orElseThrow();
+        assertThat(jsonMapper.readTree(settled.body()).get("payload").get("result").asString()).isEqualTo("CANCELED");
+    }
+
+    /** payment 가 보내는 모양 그대로(aggregateId = 주문 id, 결제 키 없음). */
+    private String refundSettled(Order order, String result) {
+        return """
+                {"eventId":"%s","eventType":"ORDER_REFUND_SETTLED","aggregateType":"ORDER",
+                 "aggregateId":%d,"occurredAt":"2026-10-04T01:20:31Z",
+                 "payload":{"result":"%s","amount":%s,"refundedAt":"2026-10-04T01:20:30Z"}}
+                """.formatted(OrderFixtures.unique(), order.id(), result, order.totalAmount().amount().toPlainString());
     }
 
     /** preorder 가 보내는 모양 그대로(aggregateId = 예약 내부 id, payload 에는 공개 UUID). */

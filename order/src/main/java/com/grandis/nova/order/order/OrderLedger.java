@@ -142,6 +142,29 @@ public class OrderLedger {
         return transition(orderId, from, result, null, cause);
     }
 
+    /**
+     * 취소 중 환불이 확정 실패했다고 이력에 남긴다 — 상태는 그대로다(from = to = CANCELING). 환불이 끝나지 않았으니 취소로 끝낼 수 없고,
+     * 다시 여는 것은 사람의 판단이다(U1). 이력 번호는 전이처럼 1 올린다.
+     * 취소 중일 때만, 마지막 이력이 이미 환불 실패가 아닐 때만 남긴다 — 같은 알림을 다시 받아도 한 줄이다.
+     *
+     * @return 남겼으면 true. 취소 중이 아니거나 이미 남겼으면 false
+     * @throws IllegalArgumentException 주문이 없다
+     */
+    public boolean noteRefundFailed(Long orderId) {
+        OrderStatus from = lock(orderId);
+        if (from != OrderStatus.CANCELING
+                || writer.lastEventCause(orderId).filter(EventCause::isRefundFailure).isPresent()) {
+            return false;
+        }
+        Instant now = clock.instant();
+        if (writer.changeStatus(orderId, from, from, null, now) != 1) {
+            throw new IllegalStateException("잠근 주문의 상태가 바뀌었다: orderId=" + orderId);
+        }
+        writer.appendEvent(new OrderEvent(orderId, writer.eventSequence(orderId), from, from, EventCause.refundFailed(),
+                now));
+        return true;
+    }
+
     private OrderStatus lock(Long orderId) {
         return writer.lockStatus(orderId).orElseThrow(() -> new IllegalArgumentException("주문이 없다: " + orderId));
     }

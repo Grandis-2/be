@@ -81,6 +81,12 @@ nova:
       visibility: 5m       # 처리 한 건보다 길게
       backoff-base: 5s
       backoff-max: 5m
+      # 결과를 정할 수 없는 예약 취소(승인 확인 중 · 환불 중 · 환불 실패로 사람 대기)는 같은 큐에 지연을 두고 다시 보낸다.
+      # 보류할 때마다 두 배, 최대 15분(SQS 상한). 포기하지 않는다 — 처음 보류한 뒤 alert-after 가 지나면 ERROR 를 한 번 남긴다.
+      # 다시 보내려면 order 역할에 order-events 의 sqs:SendMessage 권한이 있어야 한다
+      defer-first-delay: 60s
+      defer-max-delay: 15m
+      defer-alert-after: 24h
   # 아웃박스 발행. transport 는 필수(없으면 기동 실패)이고 운영 값은 sqs 다.
   # log 는 보내지 않고 행을 발행 완료로 표시하는 로컬 · 테스트 전용 전송이라, log-transport-allowed: true 를 함께 적어야 뜬다.
   # 그 허용 줄은 이 예시에 적지 않는다 — 여기서 만든 운영 설정이 실수로 log 로 뜨지 않게

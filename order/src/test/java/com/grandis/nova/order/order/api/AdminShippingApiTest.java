@@ -4,6 +4,7 @@ import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.cancel.CancelReason;
+import com.grandis.nova.order.order.cancel.CancelSettlement;
 import com.grandis.nova.order.order.cancel.SettlePreorderCancelCommand;
 import com.grandis.nova.order.order.cancel.SettlePreorderCancelService;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
@@ -270,9 +271,51 @@ class AdminShippingApiTest {
         advance(order, "PACKED", "포장").andExpect(status().isOk());
         advance(order, "SHIPPED", "출고").andExpect(status().isOk());
 
-        PreorderOrderSettled settled = cancelSettlement.settle(new SettlePreorderCancelCommand(order.preorderId(),
+        CancelSettlement settlement = cancelSettlement.settle(new SettlePreorderCancelCommand(order.preorderId(),
                 order.preorderToken(), customerId, CancelReason.USER, 1L));
 
+        assertThat(settlement).isInstanceOf(CancelSettlement.Settled.class);
+        PreorderOrderSettled settled = ((CancelSettlement.Settled) settlement).result();
+        assertThat(settled.result()).isEqualTo(Result.REJECTED);
+        assertThat(settled.reason()).isEqualTo(RejectReason.SHIPPED);
+        assertThat(statusOf(order)).isEqualTo("SHIPPED");
+    }
+
+    // D20: 결제된 주문의 예약 취소가 먼저 오면 취소 중으로 잠근다 — 그 뒤의 관리자 배송 전이는 409 다
+    @Test
+    void preorderCancelOfPaidOrderLocksShippingSteps() throws Exception {
+        Order order = paidOrder();
+
+        CancelSettlement settlement = cancelSettlement.settle(new SettlePreorderCancelCommand(order.preorderId(),
+                order.preorderToken(), customerId, CancelReason.USER, 1L));
+
+        assertThat(settlement).isEqualTo(new CancelSettlement.Deferred(OrderStatus.CANCELING));
+        advance(order, "PREPARATION_STARTED", "준비")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.details.status").value("CANCELING"));
+        assertThat(statusOf(order)).isEqualTo("CANCELING");
+    }
+
+    // D20: 승인 중이라 보류된 예약 취소가 다시 오기 전에 관리자가 출고하면, 다시 받은 취소는 REJECTED(SHIPPED) 다
+    @Test
+    void cancelDeferredWhileAuthorizingThenShippedIsRejectedAsShipped() throws Exception {
+        Order order = orders.place(customerId);
+        transactionTemplate.executeWithoutResult(status ->
+                ledger.requestPayment(order.id(), "toss-" + order.id(), EventCause.user()));
+        SettlePreorderCancelCommand cancel = new SettlePreorderCancelCommand(order.preorderId(), order.preorderToken(),
+                customerId, CancelReason.USER, 1L);
+
+        assertThat(cancelSettlement.settle(cancel)).isEqualTo(new CancelSettlement.Deferred(OrderStatus.AUTHORIZING));
+        transactionTemplate.executeWithoutResult(status -> ledger.settlePayment(order.id(),
+                OrderTrigger.PAYMENT_APPROVED, null, EventCause.system("PAYMENT_APPROVED")));
+        advance(order, "PREPARATION_STARTED", "준비").andExpect(status().isOk());
+        advance(order, "PACKED", "포장").andExpect(status().isOk());
+        advance(order, "SHIPPED", "출고").andExpect(status().isOk());
+
+        CancelSettlement again = cancelSettlement.settle(cancel);
+
+        assertThat(again).isInstanceOf(CancelSettlement.Settled.class);
+        PreorderOrderSettled settled = ((CancelSettlement.Settled) again).result();
         assertThat(settled.result()).isEqualTo(Result.REJECTED);
         assertThat(settled.reason()).isEqualTo(RejectReason.SHIPPED);
         assertThat(statusOf(order)).isEqualTo("SHIPPED");

@@ -25,9 +25,10 @@ import java.util.Set;
  *
  * 승인이 반영되지 못했는데 주문이 결제되지 않은 상태(결제 대기 · 취소됨)면 돈이 나간 채 주문이 받지 못한 것이다. 상태 머신으로는
  * 갈 수 없는 경우다 — 승인 중에는 취소를 받지 않고, 되돌림은 그 결제창의 거절 · "앞으로도 시작될 수 없다" 확언으로만 일어난다.
- * 버그 · 수동 수정의 신호라 ERROR 로 경보하고 예외로 올리지 않는다(다시 받아도 같고 DLQ 만 채운다).
- * 영속 기록은 payment 쪽에 있다: 그 주문의 payments(SUCCEEDED, 대상당 하나)와 payment_outbox_events(지우지 않는다). 환불(NV-103) ·
- * 운영 대조는 "SUCCEEDED 결제가 있는데 결제되지 않은 주문" 을 거기서 찾는다 — 이 계약을 NV-103 이 받는다.
+ * 버그 · 수동 수정의 신호라 ERROR 로 경보하고 예외로 올리지 않는다(다시 받아도 같고 DLQ 만 채운다). 예외는 환불로 끝난 취소다 —
+ * 이력에 취소 중 → 취소가 있으면 결제 · 환불을 이미 거친 주문이라 늦게 온 승인은 중복이다(D17).
+ * 영속 기록은 payment 쪽에 있다: 그 주문의 payments 와 payment_outbox_events(지우지 않는다). 운영 대조는 "SUCCEEDED 결제가 있는데
+ * 결제되지 않은 주문" 을 거기서 찾는다(D18 — 자동 환불하지 않는다).
  */
 @Service
 public class PaymentResults {
@@ -67,6 +68,10 @@ public class PaymentResults {
         OrderTransition transition = apply(orderId, OrderTrigger.PAYMENT_APPROVED, providerOrderId,
                 EventCause.system("PAYMENT_APPROVED"));
         if (!transition.applied() && !PAID.contains(transition.status())) {
+            if (transition.status() == OrderStatus.CANCELED && refunded(orderId)) {
+                log.info("환불로 끝난 주문에 늦게 온 승인 — 중복으로 무시 orderId={} providerOrderId={}", orderId, providerOrderId);
+                return transition;
+            }
             log.error("결제가 승인됐는데 주문이 받지 못했다 — 환불 확인 필요 orderId={} providerOrderId={} status={}",
                     orderId, providerOrderId, transition.status());
         }
@@ -76,6 +81,12 @@ public class PaymentResults {
     OrderTransition declined(Long orderId, String providerOrderId, DeclineReason reason) {
         return apply(orderId, OrderTrigger.PAYMENT_DECLINED, providerOrderId,
                 EventCause.system("PAYMENT_DECLINED:" + reason));
+    }
+
+    /** 환불을 거쳐 취소됐는가(이력에 취소 중 → 취소). 취소 중은 결제된 주문만 들어간다. */
+    private boolean refunded(Long orderId) {
+        return orderReader.findEvents(orderId, Long.MAX_VALUE).stream().anyMatch(event ->
+                event.fromStatus() == OrderStatus.CANCELING && event.toStatus() == OrderStatus.CANCELED);
     }
 
     /** payment 가 이 결제창은 앞으로도 시작될 수 없다고 확언했다 — 결제 대기로 되돌린다. 이력에서 거절과 가른다. */
