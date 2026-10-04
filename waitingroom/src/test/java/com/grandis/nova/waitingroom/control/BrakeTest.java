@@ -55,6 +55,18 @@ class BrakeTest {
     }
 
     @Test
+    void 회차가_밀려도_창은_최근_5초만_본다() {
+        now = now.plusSeconds(3);
+        total = new RelayOutcome(total.relayed() + 10, total.bad() + 10);
+        brake.next(Map.of("a", total), now);
+        // 6초 뒤 회차 — 회차 수로 세면 앞 10건이 창에 남아 20건 · 나쁨 50% 로 줄이지만, 시간으로는 이미 지났다
+        now = now.plusSeconds(6);
+        total = new RelayOutcome(total.relayed() + 10, total.bad());
+
+        assertThat(brake.next(Map.of("a", total), now)).isEqualTo(1.0);
+    }
+
+    @Test
     void 표본이_적으면_나빠도_줄이지_않는다() {
         for (int i = 0; i < 10; i++) {
             assertThat(tick(new RelayOutcome(2, 2))).isEqualTo(1.0);

@@ -24,7 +24,8 @@ class Brake {
 
     private final BrakeProperties properties;
     private final ControlMetrics metrics;
-    private final Deque<RelayOutcome> window = new ArrayDeque<>();
+    /** 최근 window 동안의 회차별 차이. 회차가 밀려도 시간으로 자른다 — 회차 수로 자르면 창이 늘어 판정이 늦다. */
+    private final Deque<Sample> window = new ArrayDeque<>();
     private final Map<String, RelayOutcome> lastTotals = new HashMap<>();
     /** 응답에서 잠깐 빠진 노드의 마지막 누적을 몇 회차 남겨 둔다 — 돌아왔을 때 빠진 동안의 결과를 잃지 않게. */
     private final Map<String, Integer> missingRounds = new HashMap<>();
@@ -64,12 +65,13 @@ class Brake {
         if (!properties.enabled()) {
             return 1.0;
         }
-        window.addLast(delta(totals));
-        while (window.size() > properties.window().toSeconds()) {
+        window.addLast(new Sample(now, delta(totals)));
+        Instant since = now.minus(properties.window());
+        while (!window.isEmpty() && !window.peekFirst().at().isAfter(since)) {
             window.removeFirst();
         }
-        long relayed = window.stream().mapToLong(RelayOutcome::relayed).sum();
-        long bad = window.stream().mapToLong(RelayOutcome::bad).sum();
+        long relayed = window.stream().mapToLong(sample -> sample.outcome().relayed()).sum();
+        long bad = window.stream().mapToLong(sample -> sample.outcome().bad()).sum();
         double ratio = relayed == 0 ? 0 : (double) bad / relayed;
         if (relayed >= properties.minSamples() && ratio >= properties.badRatio()) {
             healthySince = null;
@@ -127,5 +129,8 @@ class Brake {
             return 0;
         }
         return Math.max(1, (long) Math.floor(operationalCredit * factor));
+    }
+
+    private record Sample(Instant at, RelayOutcome outcome) {
     }
 }
