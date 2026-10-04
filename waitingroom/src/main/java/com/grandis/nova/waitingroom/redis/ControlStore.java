@@ -40,10 +40,20 @@ public class ControlStore {
         return scripts.single(scripts.releaseLeader, List.of(RedisKeys.LEADER), List.of(ownerId)).map(deleted -> deleted == 1);
     }
 
-    public Mono<ClusterView> heartbeat(String nodeId, long reapAfterSec, long freshSec, long idlePasses) {
+    /** @param relayTotals 이 노드가 뜬 뒤 preorder 로 전달한 접수와 그중 나쁜 응답의 누적 */
+    public Mono<ClusterView> heartbeat(String nodeId, long reapAfterSec, long freshSec, long idlePasses,
+                                       RelayOutcome relayTotals) {
         return scripts.list(scripts.heartbeat, List.of(RedisKeys.GATEWAYS), List.of(nodeId, String.valueOf(reapAfterSec),
-                        String.valueOf(freshSec), String.valueOf(idlePasses)))
-                .map(reply -> new ClusterView((int) LuaScripts.number(reply, 0), LuaScripts.number(reply, 2)));
+                        String.valueOf(freshSec), String.valueOf(idlePasses), String.valueOf(relayTotals.relayed()),
+                        String.valueOf(relayTotals.bad())))
+                .map(reply -> {
+                    Map<String, RelayOutcome> totals = new LinkedHashMap<>();
+                    for (int i = 3; i + 2 < reply.size(); i += 3) {
+                        totals.put(LuaScripts.text(reply, i), new RelayOutcome(Long.parseLong(LuaScripts.text(reply, i + 1)),
+                                Long.parseLong(LuaScripts.text(reply, i + 2))));
+                    }
+                    return new ClusterView((int) LuaScripts.number(reply, 0), LuaScripts.number(reply, 2), totals);
+                });
     }
 
     public Mono<Long> leave(String nodeId) {
@@ -197,8 +207,25 @@ public class ControlStore {
     public record LeaderLease(boolean acquired, String owner, long fence) {
     }
 
-    /** @param idlePassSum 신선한 노드들이 직전 1초에 한산 통과시킨 합 */
-    public record ClusterView(int aliveGateways, long idlePassSum) {
+    /**
+     * @param idlePassSum 신선한 노드들이 직전 1초에 한산 통과시킨 합
+     * @param relayTotals 살아 있는 노드별 접수 전달 · 나쁜 응답 누적. 리더가 노드별 차이로 센다
+     */
+    public record ClusterView(int aliveGateways, long idlePassSum, Map<String, RelayOutcome> relayTotals) {
+
+        public ClusterView {
+            relayTotals = Map.copyOf(relayTotals);
+        }
+
+        public ClusterView(int aliveGateways, long idlePassSum) {
+            this(aliveGateways, idlePassSum, Map.of());
+        }
+    }
+
+    /** 접수 전달 수와 그중 나쁜 응답(5xx · 전달 실패 · 느림) 수(누적이거나 차이). */
+    public record RelayOutcome(long relayed, long bad) {
+
+        public static final RelayOutcome NONE = new RelayOutcome(0, 0);
     }
 
     public record TimedEntries(long redisNowMillis, Map<String, String> entries) {

@@ -36,6 +36,9 @@ public class ControlMetrics {
                                 : (double) snapshot.meta().maxWait().duration().toSeconds())
                         .orElse(Double.NaN))
                 .description("적용된 최대 대기 시간. -1 은 제한 없음, 재료가 없으면 NaN").register(registry);
+        Gauge.builder("waitingroom.brake.factor", holder,
+                        current -> current.current().map(GatewaySnapshot::brakeFactor).orElse(Double.NaN))
+                .description("운영값에 곱한 브레이크 배율. 1 은 걸리지 않음, 재료가 없으면 NaN").register(registry);
         waiting = MultiGauge.builder("waitingroom.queue.waiting").description("모델별 대기 인원").register(registry);
         credit = MultiGauge.builder("waitingroom.queue.credit").description("모델별 초당 입장 몫").register(registry);
     }
@@ -59,6 +62,11 @@ public class ControlMetrics {
     void scheduleCleanup(String work, boolean applied) {
         Counter.builder("waitingroom.schedule.cleanup").tag("work", work).tag("outcome", applied ? "APPLIED" : "CONFLICT")
                 .register(registry).increment();
+    }
+
+    /** 브레이크가 배율을 바꿨다. CUT · RECOVER. */
+    void brakeChanged(String direction) {
+        Counter.builder("waitingroom.brake.changes").tag("direction", direction).register(registry).increment();
     }
 
     void resyncRequested() {

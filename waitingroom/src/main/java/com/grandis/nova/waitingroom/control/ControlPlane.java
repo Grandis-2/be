@@ -1,6 +1,7 @@
 package com.grandis.nova.waitingroom.control;
 
 import com.grandis.nova.waitingroom.redis.ControlStore;
+import com.grandis.nova.waitingroom.redis.ControlStore.RelayOutcome;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -43,6 +44,7 @@ class ControlPlane implements SmartLifecycle {
     private final SnapshotHolder holder;
     private final RedisClock redisClock;
     private final IdlePassCounter idlePasses;
+    private final RelayOutcomeCounter relayOutcomes;
     private final ControlPlaneProperties properties;
     private final ControlMetrics metrics;
     private final AtomicBoolean leaderFailing = new AtomicBoolean();
@@ -52,7 +54,8 @@ class ControlPlane implements SmartLifecycle {
     private volatile Disposable loops;
 
     ControlPlane(ControlStore store, Leadership leadership, AllocationRound round, SnapshotHolder holder,
-                 RedisClock redisClock, IdlePassCounter idlePasses, ControlPlaneProperties properties,
+                 RedisClock redisClock, IdlePassCounter idlePasses, RelayOutcomeCounter relayOutcomes,
+                 ControlPlaneProperties properties,
                  ControlMetrics metrics, LoopBeats beats) {
         this.store = store;
         this.leadership = leadership;
@@ -60,6 +63,7 @@ class ControlPlane implements SmartLifecycle {
         this.holder = holder;
         this.redisClock = redisClock;
         this.idlePasses = idlePasses;
+        this.relayOutcomes = relayOutcomes;
         this.properties = properties;
         this.metrics = metrics;
         this.beats = beats;
@@ -124,7 +128,8 @@ class ControlPlane implements SmartLifecycle {
         long passes = idlePasses.lastSecond(redisClock.now().getEpochSecond());
         long reapAfter = properties.gatewayReapAfter().toSeconds();
         long fresh = ControlPlaneProperties.TICK.multipliedBy(2).toSeconds();
-        return store.heartbeat(leadership.nodeId(), reapAfter, Math.min(fresh, reapAfter), passes)
+        RelayOutcome relayed = relayOutcomes.totals();
+        return store.heartbeat(leadership.nodeId(), reapAfter, Math.min(fresh, reapAfter), passes, relayed)
                 .flatMap(view -> {
                     long fence = leadership.fence();
                     if (fence <= 0) {

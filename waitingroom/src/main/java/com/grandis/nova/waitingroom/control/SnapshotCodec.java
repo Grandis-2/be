@@ -27,6 +27,7 @@ final class SnapshotCodec {
     static final String GATEWAYS = "#gateways";
     static final String MAX_WAIT = "#max-wait-sec";
     static final String PUBLISHED_AT = "#at";
+    static final String BRAKE = "#brake";
 
     private SnapshotCodec() {
     }
@@ -42,6 +43,7 @@ final class SnapshotCodec {
         fields.put(GATEWAYS, String.valueOf(meta.gatewayCount()));
         fields.put(MAX_WAIT, meta.maxWait().duration() == null ? "-1" : String.valueOf(meta.maxWait().duration().toSeconds()));
         fields.put(PUBLISHED_AT, String.valueOf(snapshot.publishedAtMillis()));
+        fields.put(BRAKE, String.valueOf(snapshot.brakeFactor()));
         return fields;
     }
 
@@ -60,7 +62,8 @@ final class SnapshotCodec {
                             () -> log.debug("판정 재료의 모델 필드를 읽지 못해 뺀다: {}", field));
                 }
             });
-            return Optional.of(new GatewaySnapshot(products, new SnapshotMeta(globalCredit, gateways, maxWait), publishedAt));
+            return Optional.of(new GatewaySnapshot(products, new SnapshotMeta(globalCredit, gateways, maxWait), publishedAt,
+                    brakeFactor(fields.get(BRAKE))));
         } catch (RuntimeException e) {
             return Optional.empty();
         }
@@ -78,6 +81,16 @@ final class SnapshotCodec {
                     Long.parseLong(parts[2]), Long.parseLong(parts[3]), window));
         } catch (IllegalArgumentException e) {
             return Optional.empty();
+        }
+    }
+
+    /** 없거나 깨졌으면 걸리지 않은 것으로 읽는다 — 브레이크는 속도를 줄이기만 하므로 모를 때 줄이지 않는다. */
+    private static double brakeFactor(String value) {
+        try {
+            double factor = value == null ? 1.0 : Double.parseDouble(value);
+            return factor > 0 && factor <= 1 ? factor : 1.0;
+        } catch (NumberFormatException e) {
+            return 1.0;
         }
     }
 }

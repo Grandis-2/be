@@ -61,6 +61,16 @@ class AcceptOutcomeWatchTest {
                 new RelayMetrics(registry));
 
         @Test
+        void 응답을_쓰기_시작하면_preorder_가_답한_시각을_남긴다() {
+            replies.add(() -> Mono.just(true));
+            MockServerWebExchange exchange = rejectedAccept();
+
+            watch.filter(exchange, AcceptOutcomeWatchTest::preorderSaysUsed).block(Duration.ofSeconds(5));
+
+            assertThat(exchange.<Long>getAttribute(AcceptOutcomeWatch.UPSTREAM_ANSWERED_AT)).isNotNull();
+        }
+
+        @Test
         void Redis_오류여도_응답과_Retry_After_는_그대로_나가고_실패를_센다() {
             replies.add(() -> Mono.error(new RedisConnectionFailureException("down")));
             MockServerWebExchange exchange = rejectedAccept();

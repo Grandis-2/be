@@ -38,6 +38,8 @@ class AcceptOutcomeWatch implements GatewayFilter {
     static final String SALE_CLOSED = "SALE_CLOSED";
     static final String TICKET_STALE = "ADMISSION_TICKET_STALE";
     static final String TICKET_USED = "ADMISSION_TICKET_USED";
+    /** preorder 응답을 쓰기 시작한 때(nanoTime). 전달 지연을 잴 때 쓴다. */
+    static final String UPSTREAM_ANSWERED_AT = AcceptOutcomeWatch.class.getName() + ".answeredAt";
     /** 본문을 읽는 것은 이 상태들뿐이다. 나머지 응답은 버퍼에 담지 않고 흘려보낸다. */
     private static final Set<Integer> WATCHED = Set.of(403, 409);
     /** 오류 본문은 수백 바이트다. 길이를 밝힌 본문이 이보다 크면 읽지 않고 그대로 흘려보낸다. */
@@ -68,6 +70,8 @@ class AcceptOutcomeWatch implements GatewayFilter {
         ServerHttpResponseDecorator watched = new ServerHttpResponseDecorator(exchange.getResponse()) {
             @Override
             public Mono<Void> writeWith(Publisher<? extends DataBuffer> body) {
+                // preorder 가 답한 때 — 아래 본문 읽기 · 입장 기록 지우기(대기열 Redis)는 preorder 지연이 아니다
+                exchange.getAttributes().putIfAbsent(UPSTREAM_ANSWERED_AT, System.nanoTime());
                 HttpStatusCode status = getStatusCode();
                 if (status == null || !WATCHED.contains(status.value())
                         || getHeaders().containsHeader(HttpHeaders.CONTENT_ENCODING)

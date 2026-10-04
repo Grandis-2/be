@@ -4,6 +4,7 @@ import com.grandis.nova.waitingroom.domain.product.MaxWait;
 import com.grandis.nova.waitingroom.domain.product.ProductState;
 import com.grandis.nova.waitingroom.domain.product.SalesWindow;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
+import com.grandis.nova.waitingroom.redis.ControlStore.RelayOutcome;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
@@ -11,8 +12,14 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -63,6 +70,42 @@ class ControlPartsTest {
         @Test
         void 전역_속도_0_은_입장을_멈추는_운영값이라_받는다() {
             assertThat(OperationalSettings.from(Map.of(OperationalSettings.GLOBAL_CREDIT, "0"), 100).globalCredit()).isZero();
+        }
+    }
+
+    @Nested
+    class 전달_결과_집계 {
+
+        @Test
+        void 여러_스레드가_동시에_기록해도_회원마다_1초에_한_번씩_빠짐없이_센다() throws Exception {
+            RelayOutcomeCounter counter = new RelayOutcomeCounter();
+            try (ExecutorService pool = Executors.newFixedThreadPool(8)) {
+                List<Callable<Void>> calls = new ArrayList<>();
+                for (int customer = 0; customer < 200; customer++) {
+                    String id = String.valueOf(customer);
+                    for (int repeat = 0; repeat < 5; repeat++) {
+                        calls.add(() -> {
+                            counter.record(100, id, id.endsWith("0"));
+                            return null;
+                        });
+                    }
+                }
+                for (Future<Void> done : pool.invokeAll(calls)) {
+                    done.get();
+                }
+            }
+
+            assertThat(counter.totals()).as("회원 200명, 그중 0 으로 끝나는 20명은 나쁨").isEqualTo(new RelayOutcome(200, 20));
+        }
+
+        @Test
+        void 초가_바뀌면_같은_회원을_다시_센다() {
+            RelayOutcomeCounter counter = new RelayOutcomeCounter();
+            counter.record(100, "1", false);
+            counter.record(100, "1", true);
+            counter.record(101, "1", true);
+
+            assertThat(counter.totals()).isEqualTo(new RelayOutcome(2, 1));
         }
     }
 
