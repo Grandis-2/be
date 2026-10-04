@@ -88,6 +88,25 @@ class AdmissionTicketVerifierTest {
     }
 
     @Nested
+    class 서명_표기 {
+
+        /** 표기만 다른 같은 서명은 토큰 해시(1회 소비 ID)가 달라 한 입장권을 여러 번 쓰게 된다. */
+        @Test
+        void 패딩을_붙인_표기는_거절한다() {
+            assertThat(verifierAt(ISSUED_AT).verify(VECTOR_CURRENT + "=", PRODUCT_ID, CUSTOMER_ID)).isEmpty();
+        }
+
+        @Test
+        void 마지막_글자의_안_쓰는_비트를_바꾼_표기는_거절한다() {
+            String base = VECTOR_CURRENT.substring(0, VECTOR_CURRENT.length() - 1);
+
+            assertThat(verifierAt(ISSUED_AT).verify(base + "p", PRODUCT_ID, CUSTOMER_ID)).isEmpty();
+            assertThat(verifierAt(ISSUED_AT).verify(base + "q", PRODUCT_ID, CUSTOMER_ID)).isEmpty();
+            assertThat(verifierAt(ISSUED_AT).verify(VECTOR_CURRENT, PRODUCT_ID, CUSTOMER_ID)).isPresent();
+        }
+    }
+
+    @Nested
     class 위조 {
 
         @Test

@@ -29,6 +29,8 @@ import javax.crypto.spec.SecretKeySpec;
  * </pre>
  *
  * - 서명을 먼저 본다. 서명이 맞기 전의 페이로드는 해석하지 않는다.
+ * - 서명은 디코드하지 않고 우리가 만드는 표기(base64url, 패딩 없음) 그대로 비교한다 — 관대한 디코더가 패딩 · 안 쓰는 비트가
+ *   다른 표기를 같은 값으로 읽으면, 토큰 해시(1회 소비 ID)만 달라져 한 입장권을 여러 번 쓸 수 있다.
  * - 비교는 상수 시간(MessageDigest.isEqual). 이전 키를 받는 동안에는 맞은 키에서 멈추지 않고 모두 계산한다 —
  *   걸린 시간으로 어느 키인지 드러나지 않게.
  * - 실패 사유를 나누지 않는다. 어느 칸이 틀렸는지 알려 주면 맞추는 데 쓰인다.
@@ -45,6 +47,7 @@ public class AdmissionTicketVerifier {
     private static final char SEPARATOR = '.';
     private static final String FIELD = String.valueOf((char) 0x1f);
     private static final Base64.Decoder DECODER = Base64.getUrlDecoder();
+    private static final Base64.Encoder ENCODER = Base64.getUrlEncoder().withoutPadding();
 
     private final byte[] secret;
     private final List<byte[]> previous;
@@ -84,7 +87,7 @@ public class AdmissionTicketVerifier {
         }
         String payload = token.substring(PREFIX.length(), mark);
         Instant now = clock.instant();
-        if (!signatureMatches(payload, decode(token.substring(mark + 1)), now)) {
+        if (!signatureMatches(payload, token.substring(mark + 1).getBytes(StandardCharsets.US_ASCII), now)) {
             return Optional.empty();
         }
         // 서명이 맞으므로 여기서부터는 게이트웨이가 만든 문자열이다. 그래도 모양은 본다.
@@ -105,17 +108,15 @@ public class AdmissionTicketVerifier {
         return Optional.of(new AdmissionTicket(sha256Hex(token), isExpired(expiresAt.getAsLong(), now)));
     }
 
+    /** @param presented 받은 서명 표기의 바이트 */
     private boolean signatureMatches(String payload, byte[] presented, Instant now) {
-        if (presented == null) {
-            return false;
-        }
-        boolean matched = MessageDigest.isEqual(sign(secret, payload), presented);
+        boolean matched = MessageDigest.isEqual(ENCODER.encode(sign(secret, payload)), presented);
         if (acceptPreviousUntil == null || !now.isBefore(acceptPreviousUntil)) {
             return matched;
         }
         boolean byPrevious = false;
         for (byte[] key : previous) {
-            byPrevious |= MessageDigest.isEqual(sign(key, payload), presented);
+            byPrevious |= MessageDigest.isEqual(ENCODER.encode(sign(key, payload)), presented);
         }
         return matched || byPrevious;
     }
