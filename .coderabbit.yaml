@@ -366,7 +366,7 @@ reviews:
           소유 경계는 파일 상단 주석을 따른다.
 
           다음이면 실패로 표시한다.
-          - 서비스 모듈이 자기 소유가 아닌 테이블에 쓰기를 한다
+          - 서비스 모듈이 자기 소유가 아닌 테이블에 쓰기를 한다(아래 "허용된 쓰기" 는 제외)
           - order 밖의 모듈이 option_inventories 를 변경한다
           - order 가 products · product_options 를 변경한다
           - build.gradle 에 서비스 모듈끼리의 project 의존이 추가됐다
@@ -382,8 +382,11 @@ reviews:
           - order → products · product_options (재고 대상 옵션의 소속 · 판매 방식 확인)
           - catalog → preorder_campaigns(opens_at · closes_at · 행의 유무) · option_inventories(재고 집계 · 행의 유무) (목록 · 검색의 노출 조건, 상세의 회차 시각 · 옵션별 가용 수량, 관리자 목록의 같은 칸, 관리자 수정의 오픈 판정, 판매 방식별 준비. 읽기 전용 저장소 한 곳)
           - worker → preorders (처리 대상 확인)
-          - preorder → preorder_sync_jobs · preorder_sync_attempts (행 생성 · 취소 시 무효화 · 관리자 조회 · 재처리 판정)
+          - preorder → preorder_sync_jobs · preorder_sync_attempts (관리자 조회 · 재처리 판정 · 취소 작업 유무 확인)
           - batch → 전부 (읽기 전용 모듈)
+
+          허용된 쓰기 — 소유가 아닌 테이블에 쓰는 것 중 이것만 실패가 아니다.
+          - preorder → preorder_sync_jobs (접수 · 취소와 같은 트랜잭션에서 작업 행 생성, 예약 취소 때 아직 끝나지 않은 작업 무효화)
 
           위 조건에 해당하지 않으면 통과로 표시한다.
       - name: "동시성 안전"

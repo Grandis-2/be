@@ -60,6 +60,9 @@ catalog 표에 걸린 교차 읽기는 둘이다. 나머지는 소유 서비스�
 
 preorder 는 catalog 를 API(`GET /internal/products/{id}/options`)로 묻고 catalog 는 preorder 표를 SQL 로 읽는 비대칭은 이유가 다르기 때문이다. 앞은 접수 때 상태를 확인하고 그 시점 값을 복사하고, 뒤는 목록의 페이징 조건으로 거른다.
 
+`preorder_sync_jobs` · `preorder_sync_attempts` 는 `worker` 소유지만 `preorder` 도 작업 행에 쓴다. 접수 · 취소와 같은 트랜잭션에서 작업 행을 만들고,
+예약이 취소되면 아직 끝나지 않은 작업을 무효화한다. 시도 기록(`preorder_sync_attempts`)은 `worker` 가 쓸 표이고 `preorder` 는 관리자 화면에서 읽기만 한다.
+
 별도 저장소로 도는 것이 둘 더 있다.
 
 | | 역할 |
