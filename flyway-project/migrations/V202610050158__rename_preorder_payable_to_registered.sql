@@ -13,7 +13,9 @@ UPDATE shop.preorders SET status = 'REGISTERED' WHERE status = 'PAYABLE';
 UPDATE shop.preorder_events SET from_status = 'REGISTERED' WHERE from_status = 'PAYABLE';
 UPDATE shop.preorder_events SET to_status = 'REGISTERED' WHERE to_status = 'PAYABLE';
 
--- 옛 이름 PAYABLE 도 CHECK 에 남긴다 — 다른 서비스(order 시험 데이터 등)가 아직 옛 값으로 행을 넣는다. preorder 는 쓰지 않는다.
+-- 옛 이름 PAYABLE 은 CHECK 에 임시로 남긴다 — order 시험 픽스처가 아직 옛 값으로 예약 행을 넣는다(시험 DB 전용).
+-- preorders 에 쓰는 것은 주인인 preorder 뿐이고 preorder 는 REGISTERED 만 쓰므로, 운영에서 PAYABLE 행이 생길 경로는 없다.
+-- order 픽스처가 REGISTERED 로 바뀌면 다음 마이그레이션에서 PAYABLE 을 CHECK 에서 뺀다.
 ALTER TABLE shop.preorders
     ADD CONSTRAINT ck_preorder_status
         CHECK (status IN ('PENDING_SYNC', 'PAYABLE', 'REGISTERED', 'RESERVED', 'CANCELING', 'CANCELED')),
