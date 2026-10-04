@@ -1,6 +1,6 @@
-# 서비스 6개가 같이 쓴다. 다른 건 어느 모듈의 jar 를 넣느냐뿐이다.
+# 서비스 7개가 같이 쓴다. 다른 건 어느 모듈의 jar 를 넣느냐뿐이다.
 # jar 는 CI 가 이미 ./gradlew :<module>:bootJar 로 만들어 둔 것을 받는다.
-# 여기서 gradle 을 다시 돌리지 않는다 — 6번 반복되면 빌드 시간이 6배가 된다.
+# 여기서 gradle 을 다시 돌리지 않는다 — 7번 반복되면 빌드 시간이 7배가 된다.
 ARG JAVA_VERSION=25
 
 FROM eclipse-temurin:${JAVA_VERSION}-jre
