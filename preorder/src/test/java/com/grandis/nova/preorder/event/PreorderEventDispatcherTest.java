@@ -4,6 +4,7 @@ import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.cancel.application.CancelStarter;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
+import com.grandis.nova.preorder.integration.catalog.CatalogReader;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.Preorders;
@@ -24,6 +25,9 @@ import java.time.temporal.ChronoUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /** 큐 메시지 본문(계약 2.0 공통 봉투)을 종류별 처리로 보내는지. 본문은 계약 예시 모양 그대로다. */
 @PreorderIntegrationTest
@@ -52,6 +56,9 @@ class PreorderEventDispatcherTest {
 
     @MockitoBean
     CatalogClient catalogClient;
+
+    @Autowired
+    CatalogReader catalogReader;
 
     ShopFixtures fixtures;
     Long preorderId;
@@ -187,6 +194,21 @@ class PreorderEventDispatcherTest {
         assertThatThrownBy(() -> dispatcher.dispatch(envelope("PREORDER_PRODUCT_REGISTERED", "PRODUCT", another,
                 noOpensAt))).isInstanceOf(NullPointerException.class).hasMessage("opensAt");
         assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_campaigns WHERE product_id = ?", another)).isZero();
+    }
+
+    @Test
+    void 상품_변경_메시지를_받을_때마다_캐시를_비워_다음_조회가_catalog_에서_다시_받는다() {
+        Long productId = preorders.findById(preorderId).orElseThrow().productId();
+        catalogReader.findProduct(productId);
+        clearInvocations(catalogClient);
+
+        String changed = envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", productId, payload());
+        dispatcher.dispatch(changed);
+        catalogReader.findProduct(productId);
+        dispatcher.dispatch(changed);
+        catalogReader.findProduct(productId);
+
+        verify(catalogClient, times(2)).getProduct(productId);
     }
 
     @Test

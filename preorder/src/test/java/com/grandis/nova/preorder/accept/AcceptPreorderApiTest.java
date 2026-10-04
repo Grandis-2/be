@@ -255,6 +255,24 @@ class AcceptPreorderApiTest {
     }
 
     @Test
+    void 공개_전이거나_등록이_끝나지_않은_상품은_없는_상품으로_404() throws Exception {
+        CatalogStubs.stubPreorderProduct(catalogClient, product.productId(), false, true,
+                CatalogStubs.activeOption(product.optionId()));
+        accept(customerId, product.productId(), product.optionId(), "key-hidden",
+                ticket(product.productId(), customerId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
+
+        PreorderProduct other = fixtures.openPreorderProduct();
+        CatalogStubs.stubPreorderProduct(catalogClient, other.productId(), true, false,
+                CatalogStubs.activeOption(other.optionId()));
+        accept(customerId, other.productId(), other.optionId(), "key-incomplete", ticket(other.productId(), customerId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
+        assertThat(fixtures.count("SELECT COUNT(*) FROM preorders WHERE customer_id = ?", customerId)).isZero();
+    }
+
+    @Test
     void 같은_모델에_진행_중_예약이_있으면_409_와_기존_예약을_알린다() throws Exception {
         String first = body(accept(customerId, product.productId(), product.optionId(), "key-active-1",
                 ticket(product.productId(), customerId)));

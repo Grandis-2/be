@@ -2,7 +2,7 @@ package com.grandis.nova.preorder.cancel;
 
 import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.cancel.application.CancelStarter;
-import com.grandis.nova.preorder.integration.catalog.CatalogReader;
+import com.grandis.nova.preorder.integration.catalog.CatalogCacheInvalidation;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
@@ -32,24 +32,24 @@ public class CampaignCancelService {
     private final Campaigns campaigns;
     private final Preorders preorders;
     private final CancelStarter cancelStarter;
-    private final CatalogReader catalogReader;
+    private final CatalogCacheInvalidation catalogCache;
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
 
     public CampaignCancelService(Campaigns campaigns, Preorders preorders,
-                                 CancelStarter cancelStarter, CatalogReader catalogReader,
+                                 CancelStarter cancelStarter, CatalogCacheInvalidation catalogCache,
                                  TransactionTemplate transactionTemplate, Clock clock) {
         this.campaigns = campaigns;
         this.preorders = preorders;
         this.cancelStarter = cancelStarter;
-        this.catalogReader = catalogReader;
+        this.catalogCache = catalogCache;
         this.transactionTemplate = transactionTemplate;
         this.clock = clock;
     }
 
     public void cancel(Long productId, String reason) {
         campaigns.closeNow(productId, clock.instant());
-        catalogReader.evict(productId);
+        catalogCache.evictEverywhere(productId);
         String eventReason = eventReason(reason);
         boolean more = true;
         while (more) {
