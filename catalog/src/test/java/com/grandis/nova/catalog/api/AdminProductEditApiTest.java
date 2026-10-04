@@ -134,6 +134,62 @@ class AdminProductEditApiTest {
             assertThat(data(adminDetail(productId)).get("product").get("title").asString()).isEqualTo("Nova 1");
         }
 
+        /**
+         * 금액 칸은 decimal(12,0) — 넘으면 저장에서 500 이던 것을 원인 칸의 400 으로. 기본가 · 추가금을 바꿔 재계산한 옵션 가격도 같다
+         * (수동 가격 옵션은 재계산하지 않으므로 검사에서 빠진다).
+         */
+        @Test
+        @DisplayName("금액 상한(999,999,999,999)을 넘는 수정은 원인 칸의 400 이고 아무것도 바뀌지 않는다 — 기본가 · 추가금 재계산 · 옵션 가격 · 가격 되돌리기 · 옵션 추가")
+        void amountsAboveColumnLimitAreFieldErrors() throws Exception {
+            long productId = registerInStock();
+            String max = "999999999999";
+            expectValidation(edit(productId, "{ \"basePrice\": 1000000000000 }"), "basePrice");
+            // 기본가 최댓값이면 화이트/512GB(수동 가격 아님)가 최댓값 + 200,000 이 된다
+            expectValidation(edit(productId, "{ \"basePrice\": " + max + " }"), "basePrice");
+            long storage512 = valueIdOf(productId, "storage", "512GB");
+            expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"surcharge\": " + max + " }")), "surcharge");
+            long white256 = variantIdOf(productId, "화이트 / 256GB");
+            expectValidation(editVariant(productId, white256, "{ \"price\": 1000000000000 }"), "price");
+            editVariant(productId, white256, "{ \"price\": " + max + " }").andExpect(status().isOk());   // 대조군 — 경계는 들어간다
+            assertThat(prices(productId)).containsEntry("블랙 / 256GB", "1000000").containsEntry("화이트 / 512GB", "1200000")
+                    .containsEntry("블랙 / 512GB", "1270000");
+
+            // 512GB 를 고른 두 옵션을 모두 수동 가격으로 두고 기본가를 올리면 재계산은 256GB 들만 — 그 뒤 수동 가격을 풀면 최댓값 + 200,000 이다
+            editVariant(productId, variantIdOf(productId, "화이트 / 512GB"), "{ \"price\": 1 }").andExpect(status().isOk());
+            edit(productId, "{ \"basePrice\": " + max + " }").andExpect(status().isOk());
+            expectValidation(editVariant(productId, variantIdOf(productId, "블랙 / 512GB"), "{ \"resetPrice\": true }"), "resetPrice");
+            assertThat(prices(productId)).containsEntry("블랙 / 512GB", "1270000");
+
+            // 큰 추가금 값을 더한 뒤 그 값으로 옵션을 만들면 계산 가격이 넘는다
+            mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"storage\", \"value\": \"1TB\", \"surcharge\": 1 }"))
+                    .andExpect(status().isCreated());
+            expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/variants", productId))
+                    .content("{ \"selections\": { \"color\": \"블랙\", \"storage\": \"1TB\" } }")), "selections");
+            // 수동 가격을 주면 계산 가격은 저장하지 않는다 — 계산 가격이 넘어도 들어간다
+            mockMvc.perform(admin(post(PATH + "/{id}/variants", productId))
+                    .content("{ \"selections\": { \"color\": \"블랙\", \"storage\": \"1TB\" }, \"price\": 5 }")).andExpect(status().isCreated());
+            assertThat(prices(productId)).containsEntry("블랙 / 1TB", "5");
+            expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId))
+                    .content("{ \"axisKey\": \"color\", \"value\": \"레드\", \"surcharge\": 1000000000000 }")), "surcharge");
+        }
+
+        @Test
+        @DisplayName("정수 원 금액은 받은 표기와 상관없이 소수점 없는 숫자로 저장 · 응답한다 — 1e3 · 2000.0 · 1.5e3 · 7.00e3 은 1000 · 2000 · 1500 · 7000")
+        void wholeWonIsNormalizedToPlainInteger() throws Exception {
+            long productId = registerInStock();
+            JsonNode product = data(edit(productId, "{ \"basePrice\": 1e3, \"warranty\": { \"offered\": true, \"surcharge\": 2000.0 } }")
+                    .andExpect(status().isOk())).get("product");
+            assertThat(product.get("basePrice").toString()).isEqualTo("1000");
+            assertThat(product.get("warranty").get("surcharge").toString()).isEqualTo("2000");
+
+            JsonNode added = data(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId))
+                    .content("{ \"axisKey\": \"color\", \"value\": \"레드\", \"surcharge\": 1.5e3 }")).andExpect(status().isCreated()));
+            assertThat(added.get("product").get("optionAxes").get(0).get("values").get(2).get("surcharge").toString()).isEqualTo("1500");
+
+            JsonNode variant = data(editVariant(productId, variantIdOf(productId, "화이트 / 256GB"), "{ \"price\": 7.00e3 }").andExpect(status().isOk()));
+            assertThat(variant.get("price").toString()).isEqualTo("7000");
+        }
+
         @Test
         @DisplayName("사전예약은 오픈 전에는 고칠 수 있고 오픈 뒤(회차 opens_at ≤ 지금)에는 409 STATE_CONFLICT — 회차가 없으면 오픈 전이다")
         void preorderIsFrozenAfterOpen() throws Exception {
@@ -231,6 +287,34 @@ class AdminProductEditApiTest {
             expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage256)).content("{ \"value\": \"256 GB\" }")), "value");
             assertThat(titles(data(adminDetail(productId)))).as("거절된 문구 수정은 표시명을 남기지 않는다")
                     .contains(finish + " / " + size + " / 256GB");
+        }
+
+        @Test
+        @DisplayName("정규화(NFC)로 늘어난 글자도 칼럼을 넘으면 그 칸의 400(500 이 아니다) — 값 추가 · 값 이름 60자, 축 없는 상품의 제목이 만드는 옵션 표시명 120자")
+        void normalizedTextMustFitColumns() throws Exception {
+            String expands = "\u0958".repeat(60);   // 받은 글자는 60자지만 NFC 는 한 글자를 두 글자(U+0915 U+093C)로 푼다 — 120자
+            long productId = registerInStock();
+            expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId))
+                    .content("{ \"axisKey\": \"color\", \"value\": \"%s\" }".formatted(expands))), "value");
+            mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId))
+                    .content("{ \"axisKey\": \"color\", \"value\": \"%s\" }".formatted("\u0958".repeat(30))))
+                    .andExpect(status().isCreated());   // 대조군 — 정규화해서 60자는 들어간다
+            long black = valueIdOf(productId, "color", "블랙");
+            expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, black))
+                    .content("{ \"value\": \"%s\" }".formatted(expands))), "value");
+            // 용량은 비교 키를 대문자로 접어 표시값보다 길어질 수 있다(ß → SS) — 그런 값은 형식 검사가 400 으로 막는다
+            expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId))
+                    .content("{ \"axisKey\": \"storage\", \"value\": \"%s\" }".formatted("ß".repeat(60)))), "value");
+
+            long solo = registerRaw("""
+                    { "categoryId": %d, "saleMode": "IN_STOCK", "title": "Solo", "visible": false, "basePrice": 9000,
+                      "combinations": [ { "selections": {}, "stock": 1 } ] }
+                    """.formatted(categoryId));
+            expectValidation(edit(solo, "{ \"title\": \"%s\" }".formatted("\u0958".repeat(100))), "title");
+            assertThat(jdbcTemplate.queryForObject("SELECT title FROM products WHERE id = ?", String.class, solo)).isEqualTo("Solo");
+            edit(solo, "{ \"title\": \"%s\" }".formatted(expands)).andExpect(status().isOk());   // 대조군 — 표시명 120자는 들어간다
+            assertThat(jdbcTemplate.queryForObject("SELECT CHAR_LENGTH(title) FROM product_options WHERE product_id = ?", Integer.class, solo))
+                    .isEqualTo(120);
         }
 
         @Test

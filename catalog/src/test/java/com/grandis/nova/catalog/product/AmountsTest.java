@@ -15,10 +15,12 @@ class AmountsTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"0", "1000", "1000.0", "1000.00", "1.2E+3"})
-    @DisplayName("정수 원 금액은 표기가 달라도 통과한다")
+    @DisplayName("정수 원 금액은 표기가 달라도 통과하고, 소수점 없는 표기(scale 0)로 돌아온다")
     void wholeWonPasses(String amount) {
         BigDecimal given = new BigDecimal(amount);
-        assertThat(Amounts.requireWholeWon(given, "x")).isSameAs(given);
+        BigDecimal passed = Amounts.requireWholeWon(given, "x");
+        assertThat(passed).isEqualByComparingTo(given);
+        assertThat(passed.scale()).isZero();
     }
 
     @ParameterizedTest
@@ -27,6 +29,14 @@ class AmountsTest {
     void fractionsAndNegativesRejected(String amount) {
         assertThatThrownBy(() -> Amounts.requireWholeWon(new BigDecimal(amount), "x"))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("x");
+    }
+
+    @Test
+    @DisplayName("decimal(12,0) 이 담는 999,999,999,999 까지 통과하고 그 위는 거절한다 — API 앞단이 먼저 막는 엔티티 안전장치")
+    void upperBoundIsTheColumnLimit() {
+        assertThat(Amounts.requireWholeWon(new BigDecimal("999999999999"), "x")).isEqualByComparingTo("999999999999");
+        assertThatThrownBy(() -> Amounts.requireWholeWon(new BigDecimal("1000000000000"), "x"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("exceeds");
     }
 
     @Test

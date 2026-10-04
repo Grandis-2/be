@@ -44,15 +44,17 @@ import org.springframework.transaction.annotation.Transactional;
  * 관리자 상품 수정 — 표시 정보 · 기본 가격 · 보증, 옵션 값 추가 · 수정, 옵션(조합) 추가 · 수정, 상품 판매 상태 · 공개 여부.
  *
  * <p><b>사전예약은 오픈 3분 전부터 공개 여부 말고는 아무것도 못 바꾼다.</b> 표시 정보 · 가격 · 추가금 · 값 · 조합 추가 · 가격 되돌리기 · 옵션 판매 상태 · 상품 판매 상태 전부
- * 409 STATE_CONFLICT(2026-09-29 결정 — 판매 상태도 막는다. preorder 는 접수용 상품 사본을 1분마다 새로 받아, 오픈 뒤 판매 중지는 접수에
- * 늦게 닿는다. 3분 전에 막으면 오픈 때 preorder 사본은 이미 최종 상태다 — preorder 의 1분 새로 받기가 성공할 때다. 새로 받기가 실패하면 preorder 는
- * 가진 값을 만료(30분)까지 쓴다(preorder CatalogReader). 그 틈은 catalog 가 닫을 수 없다 — preorder 캐시를 비울 경로가 없다). 판정은 preorder 의 회차(opens_at − 3분 ≤ 지금)로 하고, 회차가 없으면
+ * 409 STATE_CONFLICT(2026-09-29 결정 — 판매 상태도 막는다. preorder 는 접수용 상품 사본을 캐시해 두고 가진 값으로 바로 판정한다. 1분이
+ * 지났으면 그 조회가 뒤에서 새로 받기를 시작할 뿐이라, 사본은 최대 30분(캐시 만료) 묵을 수 있다 — contracts/preorder-internal.md "캐시".
+ * 그래서 오픈 뒤의 판매 중지는 접수에 늦게 닿는다. 3분 전부터 막아 오픈 뒤 값이 바뀌는 일은 없애지만, 그 전의 수정도 preorder 사본에
+ * 늦게 닿을 수 있고 그 틈은 catalog 가 닫을 수 없다 — 일반 수정에는 preorder 캐시를 비울 경로가 없다. preorder 가 캐시를 비우는 것은 회차 취소
+ * 이벤트를 받은 인스턴스뿐이다). 판정은 preorder 의 회차(opens_at − 3분 ≤ 지금)로 하고, 회차가 없으면
  * (preorder 가 등록 이벤트를 처리하기 전) 아직 잠기지 않았다.
  *
  * <p><b>재계산.</b> 기본 가격 · 추가금이 바뀌면 그 값을 고른 옵션 중 수동 가격이 아닌 것만 `기본가 + Σ추가금` 으로 다시 계산한다. 관리자가 직접 고친
  * 가격(priceOverridden)은 그대로 둔다.
  *
- * <p><b>구성은 바꾸지 않는다.</b> 값의 정규화값 · 옵션의 조합 · sku 는 불변이다. 실제 색상 · 용량 구성이 바뀌면 값을 더하고 새 조합을 만들고 옛 옵션을
+ * <p><b>구성은 바꾸지 않는다.</b> 옵션의 조합 · sku 는 불변이다(값 이름 수정은 정규화값도 바꾸지만 조합은 값 id 로 묶여 그대로다). 실제 색상 · 용량 구성이 바뀌면 값을 더하고 새 조합을 만들고 옛 옵션을
  * 판매 중지한다. 옛 옵션에 주문 이력이 있는지는 catalog 가 볼 수 없다(주문 표를 읽지 않는다) — 그래서 지우지 않고 상태로 숨긴다.
  *
  * <p><b>한 상품의 수정은 줄 선다.</b> 수정은 모두 상품 행을 잠그고(SELECT … FOR UPDATE) 시작한다. 오픈 판정은 시작 때 한 번, 커밋
@@ -134,7 +136,7 @@ public class ProductEditService {
             product.setWarranty(warranty.offered(), warranty.surcharge() == null ? product.getWarrantySurcharge() : warranty.surcharge());
         }
         if (request.basePrice() != null && product.reprice(request.basePrice())) {
-            recomputePrices(product, null);
+            recomputePrices(product, null, "basePrice");
         }
         products.flush();
         AdminProductDetail edited = detailService.findAdminProduct(productId);
@@ -156,6 +158,7 @@ public class ProductEditService {
         if (ProductOptionAxis.STORAGE.equals(axisKey) && !ProductRegistrationValidator.STORAGE.matcher(normalized).matches()) {
             throw ValidationFailures.of("value", "용량은 숫자 + MB/GB/TB 로 적습니다.");
         }
+        requireStorableValue(request.value());
         String key = ProductRegistrationValidator.collationKey(normalized);
         if (existing.stream().anyMatch(v -> ProductRegistrationValidator.collationKey(v.getNormalizedValue()).equals(key))) {
             throw ValidationFailures.of("value", "같은 값이 이미 있습니다.");
@@ -194,7 +197,7 @@ public class ProductEditService {
         }
         if (request.surcharge() != null) {
             value.reprice(request.surcharge());
-            recomputePrices(product, value.getId());
+            recomputePrices(product, value.getId(), "surcharge");
         }
         values.flush();
         AdminProductDetail edited = detailService.findAdminProduct(productId);
@@ -253,7 +256,8 @@ public class ProductEditService {
         if (combination.title().length() > ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH) {
             throw ValidationFailures.of("selections", "옵션 표시명이 %d자를 넘습니다.".formatted(ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH));
         }
-        BigDecimal price = overridden ? request.price() : computedPrice(product, picked);
+        BigDecimal price = overridden ? request.price()
+                : ProductRegistrationValidator.requireStorablePrice(computedPrice(product, picked), "selections");
         ProductOption option;
         try {
             option = options.saveAndFlush(ProductOption.of(sku, price, overridden, combination));
@@ -295,7 +299,8 @@ public class ProductEditService {
         if (request.resets()) {
             List<Long> valueIds = selectionsByOption(productId).getOrDefault(variantId, List.of());
             Map<Long, ProductOptionValue> valueById = valuesOf(productId);
-            option.resetToComputed(computedPrice(product, valueIds.stream().map(valueById::get).toList()));
+            option.resetToComputed(ProductRegistrationValidator.requireStorablePrice(
+                    computedPrice(product, valueIds.stream().map(valueById::get).toList()), "resetPrice"));
         }
         if (request.status() != null) {
             option.changeStatus(request.status());
@@ -308,7 +313,7 @@ public class ProductEditService {
 
     /**
      * 상품 판매 시작 · 중지(ACTIVE ↔ PAUSED). 같은 상태면 바꾸지 않고 그대로 답한다. 사전예약은 다른 수정처럼 오픈 3분 전부터 409 다
-     * (2026-10-04 결정 — preorder 의 접수용 상품 사본이 1분마다 갱신돼 오픈 뒤 전환은 접수에 늦게 닿는다). 오픈 전에 PAUSED 로 둔 채
+     * (2026-10-04 결정 — preorder 의 접수용 상품 사본은 최대 30분 묵을 수 있어 오픈 뒤 전환은 접수에 늦게 닿는다). 오픈 전에 PAUSED 로 둔 채
      * 오픈을 넘긴 상품은 그대로 판매 중지다 — 회차 취소로 보지 않고 이벤트도 없다(같은 날 결정).
      *
      * <p>사전예약 <b>오픈 뒤</b>(회차 opens_at ≤ 지금)의 PAUSED 는 회차 취소다 — {@link #cancelCampaign}. 사유는 그때만 받는다.
@@ -419,7 +424,7 @@ public class ProductEditService {
     }
 
     /** 수동 가격이 아닌 옵션을 `기본가 + Σ추가금` 으로. valueId 를 주면 그 값을 고른 옵션만, null 이면 전부. */
-    private void recomputePrices(Product product, Long valueId) {
+    private void recomputePrices(Product product, Long valueId, String cause) {
         Map<Long, List<Long>> valueIdsByOption = selectionsByOption(product.getId());
         Map<Long, ProductOptionValue> valueById = valuesOf(product.getId());
         for (ProductOption option : options.findByProductIdOrderById(product.getId())) {
@@ -427,11 +432,14 @@ public class ProductEditService {
             if (valueId != null && !valueIds.contains(valueId)) {
                 continue;
             }
+            if (option.isPriceOverridden()) {
+                continue;   // 수동 가격은 재계산하지 않는다(엔티티도 무시한다) — 상한 검사도 하지 않는다
+            }
             BigDecimal computed = product.getBasePrice();
             for (Long id : valueIds) {
                 computed = computed.add(valueById.get(id).getSurcharge());
             }
-            option.recomputePrice(computed);
+            option.recomputePrice(ProductRegistrationValidator.requireStorablePrice(computed, cause));
         }
     }
 
@@ -445,6 +453,7 @@ public class ProductEditService {
         if (ProductOptionAxis.STORAGE.equals(axisKey) && !ProductRegistrationValidator.STORAGE.matcher(normalized).matches()) {
             throw ValidationFailures.of("value", "용량은 숫자 + MB/GB/TB 로 적습니다.");
         }
+        requireStorableValue(raw);
         String key = ProductRegistrationValidator.collationKey(normalized);
         boolean taken = values.findByAxisIdInOrderByAxisIdAscPositionAsc(List.of(value.getAxisId())).stream()
                 .filter(other -> !other.getId().equals(value.getId()))
@@ -496,12 +505,19 @@ public class ProductEditService {
         }
     }
 
-    /** 선택이 없는 옵션(축 없는 상품)의 표시명은 상품 제목이다 — 제목이 바뀌면 따라간다. 제목은 100자라 표시명 상한(120)을 넘지 않는다. */
+    /**
+     * 선택이 없는 옵션(축 없는 상품)의 표시명은 상품 제목의 정규화값이다 — 제목이 바뀌면 따라간다. 제목은 100자지만 NFC 가 글자를 늘릴 수
+     * 있어(U+0958 한 글자 → 두 글자) 표시명 상한(120)을 넘으면 title 의 400 이다(등록과 같은 판정).
+     */
     private void retitleStandaloneOptions(Product product) {
         Map<Long, List<Long>> valueIdsByOption = selectionsByOption(product.getId());
         for (ProductOption option : options.findByProductIdOrderById(product.getId())) {
             if (valueIdsByOption.getOrDefault(option.getId(), List.of()).isEmpty()) {
-                option.retitle(OptionCombination.titleOf(List.of(), product.getTitle()));
+                String title = OptionCombination.titleOf(List.of(), product.getTitle());
+                if (title.length() > ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH) {
+                    throw ValidationFailures.of("title", "옵션 표시명이 %d자를 넘습니다: %s".formatted(ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH, title));
+                }
+                option.retitle(title);
             }
         }
     }
@@ -513,6 +529,14 @@ public class ProductEditService {
         } catch (IllegalArgumentException e) {
             throw ValidationFailures.of(field, "값이 비었습니다.");
         }
+    }
+
+    /**
+     * 저장하는 값(값 추가 · 이름 수정)의 정규화한 표시값이 칼럼(60자)에 담기는가 — NFC 가 글자를 늘린다. 형식 검사 뒤에 부른다: 비교 키가 표시값보다
+     * 길어지는 것은 용량을 대문자로 접을 때뿐인데(ß → SS) 그런 값은 형식 검사(숫자 + MB/GB/TB)에서 이미 400 이다. 조회에만 쓰는 선택 값에는 걸지 않는다.
+     */
+    private static void requireStorableValue(String raw) {
+        ProductRegistrationValidator.requireStorableText(ProductOptionValue.normalize(raw), ProductRegistrationValidator.MAX_OPTION_VALUE_LENGTH, "value");
     }
 
     private BigDecimal computedPrice(Product product, List<ProductOptionValue> picked) {

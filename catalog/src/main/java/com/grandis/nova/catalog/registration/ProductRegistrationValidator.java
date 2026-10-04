@@ -3,6 +3,7 @@ package com.grandis.nova.catalog.registration;
 import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.catalog.option.ProductOptionAxis;
 import com.grandis.nova.catalog.option.ProductOptionValue;
+import com.grandis.nova.catalog.product.Amounts;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.registration.ProductRegistrationRequest.Combination;
 import com.grandis.nova.catalog.registration.ProductRegistrationRequest.GalleryBundle;
@@ -50,6 +51,10 @@ public class ProductRegistrationValidator {
     static final Instant DB_INSTANT_MAX = Instant.parse("9999-12-31T23:59:59.999999Z");
     public static final int MAX_SKU_LENGTH = 80;
     public static final int MAX_OPTION_TITLE_LENGTH = 120;
+    /** 옵션 값(value · normalized_value) · 사진 묶음 키(bundle_key) 칼럼 길이. */
+    public static final int MAX_OPTION_VALUE_LENGTH = 60;
+    /** 축 키(axis_key) 칼럼 길이. */
+    static final int MAX_AXIS_KEY_LENGTH = 40;
     public static final String STANDALONE_SKU = "STD";
     public static final Pattern STORAGE = Pattern.compile("\\d+(MB|GB|TB)");
     private static final Pattern COMBINING_MARKS = Pattern.compile("\\p{M}+");
@@ -201,7 +206,8 @@ public class ProductRegistrationValidator {
         Set<String> keys = new HashSet<>();
         for (int i = 0; i < requested.size(); i++) {
             OptionAxis axis = requested.get(i);
-            String key = axis.key().strip().toLowerCase(Locale.ROOT);
+            // 소문자로 접으면 늘어나는 글자가 있다(İ → i + U+0307) — 접은 키를 칼럼 길이로 잰다
+            String key = requireStorableText(axis.key().strip().toLowerCase(Locale.ROOT), MAX_AXIS_KEY_LENGTH, "optionAxes[%d].key".formatted(i));
             if (!keys.add(key)) {
                 throw ValidationFailures.of("optionAxes[%d].key".formatted(i), "축 키가 중복입니다: " + key);
             }
@@ -217,8 +223,11 @@ public class ProductRegistrationValidator {
                 if (!seen.add(collationKey(normalized))) {
                     throw ValidationFailures.of(field + ".value", "같은 축에 같은 값이 있습니다(대소문자 · 악센트 · 전각은 같은 값): " + value.value());
                 }
+                String display = ProductOptionValue.normalize(value.value());
+                // 비교 키(normalized)는 표시값보다 길지 않다 — 용량만 다르게 접는데, 위 형식 검사를 지난 용량은 ASCII 라 공백을 지우면 짧아질 뿐이다
+                requireStorableText(display, MAX_OPTION_VALUE_LENGTH, field + ".value");
                 requireWholeWon(value.surcharge(), field + ".surcharge");
-                values.add(new Value(ProductOptionValue.normalize(value.value()), normalized, value.surcharge()));
+                values.add(new Value(display, normalized, value.surcharge()));
             }
             axes.add(new Axis(key, axis.label().strip(), values));
         }
@@ -261,7 +270,7 @@ public class ProductRegistrationValidator {
                 computed = computed.add(axis.value(selections.get(axis.key())).surcharge());
             }
             boolean overridden = setting != null && setting.price() != null;
-            BigDecimal price = overridden ? requireWholeWon(setting.price(), field + ".price") : computed;
+            BigDecimal price = overridden ? requireWholeWon(setting.price(), field + ".price") : requireStorablePrice(computed, field);
             Integer stock = setting == null ? null : setting.stock();
             if (request.saleMode() == SaleMode.IN_STOCK) {
                 if (stock == null) {
@@ -288,7 +297,13 @@ public class ProductRegistrationValidator {
             Combination combination = request.combinations().get(i);
             String field = "combinations[%d].selections".formatted(i);
             Map<String, String> given = new LinkedHashMap<>();
-            combination.selections().forEach((key, value) -> given.put(key == null ? "" : key.strip().toLowerCase(Locale.ROOT), value));
+            for (Map.Entry<String, String> entry : combination.selections().entrySet()) {
+                String key = entry.getKey() == null ? "" : entry.getKey().strip().toLowerCase(Locale.ROOT);
+                if (given.put(key, entry.getValue()) != null) {
+                    // "Color" 와 "color" 가 같이 오면 뒤의 것이 조용히 이기지 않게
+                    throw ValidationFailures.of(field, "같은 축이 두 번 왔습니다(키는 대소문자를 가리지 않습니다): " + key);
+                }
+            }
             if (given.size() != axes.size()) {
                 throw ValidationFailures.of(field, "조합은 축 %d개를 모두 골라야 합니다.".formatted(axes.size()));
             }
@@ -385,6 +400,7 @@ public class ProductRegistrationValidator {
             var bundle = request.images().detail().get(i);
             String field = "images.detail[%d]".formatted(i);
             String section = ProductOptionValue.normalize(bundle.section());
+            requireStorableText(section, MAX_OPTION_VALUE_LENGTH, field + ".section");
             if (!names.add(collationKey(section))) {
                 throw ValidationFailures.of(field + ".section", "같은 영역이 두 번 왔습니다.");
             }
@@ -413,9 +429,29 @@ public class ProductRegistrationValidator {
 
     /** 0 이상의 정수 원 — 아니면 그 칸의 400. 소수는 decimal(12,0) 칼럼이 조용히 반올림하므로 여기서 거절한다. 수정 API 도 같은 판정을 쓴다. */
     public static BigDecimal requireWholeWon(BigDecimal amount, String field) {
-        if (amount == null || amount.signum() < 0 || amount.stripTrailingZeros().scale() > 0) {
-            throw ValidationFailures.of(field, "0 이상의 정수 원이어야 합니다.");
+        if (amount == null || amount.signum() < 0 || amount.stripTrailingZeros().scale() > 0 || amount.compareTo(Amounts.MAX_WON) > 0) {
+            throw ValidationFailures.of(field, "0 이상 999,999,999,999 이하의 정수 원이어야 합니다.");
         }
         return amount;
+    }
+
+    /** 기본가 + 추가금으로 계산한 옵션 가격이 칼럼에 담기는가. 넘으면 원인 칸(field)의 400 — 안 막으면 저장에서 500 이다. */
+    public static BigDecimal requireStorablePrice(BigDecimal computed, String field) {
+        if (computed.compareTo(Amounts.MAX_WON) > 0) {
+            throw ValidationFailures.of(field, "옵션 가격(기본가 + 추가금 %s)이 999,999,999,999 를 넘습니다.".formatted(computed.toPlainString()));
+        }
+        return computed;
+    }
+
+    /**
+     * 정규화(NFC · 트림 · 공백 접기 · 소문자 접기)한 글자 수가 칼럼 길이 이하인가. 넘으면 그 칸의 400 — 길이 제한(@Size)은 받은 글자를 재는데
+     * 정규화는 글자를 늘릴 수 있어(NFC: U+0958 한 글자 → 두 글자, 소문자: İ → 두 글자) 그대로 두면 저장에서 500 이다(실측: 60자 값이 120자가 됐다).
+     * 글자 수는 @Size 와 같은 UTF-16 단위로 잰다. varchar 는 코드포인트로 세므로 이모지 같은 보충 문자는 칼럼보다 엄격하게 걸린다(500 은 아니다).
+     */
+    public static String requireStorableText(String normalized, int max, String field) {
+        if (normalized.length() > max) {
+            throw ValidationFailures.of(field, "정규화한 값이 %d자를 넘습니다(%d자).".formatted(max, normalized.length()));
+        }
+        return normalized;
     }
 }
