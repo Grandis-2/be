@@ -54,8 +54,8 @@ preorder · order 의 `EventEnvelope` 와 같은 모양이다.
 
 | 칸 | 뜻 |
 | --- | --- |
-| `campaign.opensAt` · `closesAt` | 회차 시각(UTC ISO-8601). **마이크로초로 잘라 싣는다** — preorder 는 `datetime(6)` 에 저장한다 |
-| `shipmentBatches` | 배송 차수 전체, 관리자 요청 순서 그대로. `positionTo` 가 `null` 이면 상한 없는 마지막 차수. 날짜는 `yyyy-MM-dd` |
+| `campaign.opensAt` · `closesAt` | 회차 시각(UTC ISO-8601). **마이크로초로 잘라 싣는다** — preorder 는 `datetime(6)` 에 저장한다. 마감은 9999-12-31 을 넘지 않고, 잘린 값으로도 마감 > 오픈이다(catalog 가 등록 때 막는다 — 같은 마이크로초 안의 두 시각은 잘리면 같아진다) |
+| `shipmentBatches` | 배송 차수 전체, 관리자 요청 순서 그대로. `positionTo` 가 `null` 이면 상한 없는 마지막 차수. 날짜는 `yyyy-MM-dd`, 1000-01-01 ~ 9999-12-31(MySQL 문서의 date 지원 범위). **최대 100개** — catalog 가 등록 때 막는다(SQS 한 메시지에 담기게, 2026-10-04 결정) |
 
 **받는 쪽이 할 일.**
 

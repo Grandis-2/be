@@ -16,6 +16,8 @@ import java.math.BigDecimal;
 import java.text.Normalizer;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -40,6 +42,12 @@ import java.util.regex.Pattern;
 public class ProductRegistrationValidator {
 
     static final int MAX_GALLERY_IMAGES_PER_BUNDLE = 10;
+    /** 사전예약 배송 차수 최대 개수(2026-10-04 결정). 등록 이벤트 한 통에 싣는다. */
+    public static final int MAX_SHIPMENT_BATCHES = 100;
+    /** MySQL 문서의 date · datetime 지원 범위. 상한을 넘는 값은 preorder 가 저장하지 못한다(9999-12-31 23:59:59.999999 까지 들어간다 — 실측). */
+    static final LocalDate DB_DATE_MIN = LocalDate.of(1000, 1, 1);
+    static final LocalDate DB_DATE_MAX = LocalDate.of(9999, 12, 31);
+    static final Instant DB_INSTANT_MAX = Instant.parse("9999-12-31T23:59:59.999999Z");
     public static final int MAX_SKU_LENGTH = 80;
     public static final int MAX_OPTION_TITLE_LENGTH = 120;
     public static final String STANDALONE_SKU = "STD";
@@ -97,8 +105,14 @@ public class ProductRegistrationValidator {
                 throw ValidationFailures.of("shipmentBatches", "사전예약은 배송 차수가 필요합니다.");
             }
             Instant opensAt = request.campaign().opensAt();
-            if (!request.campaign().closesAt().isAfter(opensAt)) {
+            // 이벤트에는 마이크로초로 잘라 싣는다 — 자른 값으로 비교해야 한다. 같은 마이크로초 안에서 나노초만 다른 두 시각은 잘리면 같아져
+            // preorder 의 "마감 > 오픈" 검사 · CHECK 에 걸려 이벤트가 DLQ 로 간다
+            if (!request.campaign().closesAt().truncatedTo(ChronoUnit.MICROS).isAfter(opensAt.truncatedTo(ChronoUnit.MICROS))) {
                 throw ValidationFailures.of("campaign.closesAt", "마감은 오픈 뒤여야 합니다.");
+            }
+            if (request.campaign().closesAt().isAfter(DB_INSTANT_MAX)) {
+                // preorder 가 datetime(6) 에 담지 못해 등록 이벤트가 DLQ 로 간다 — 등록에서 막는다(2026-10-04 결정)
+                throw ValidationFailures.of("campaign.closesAt", "마감은 9999-12-31 까지입니다.");
             }
             if (opensAt.isBefore(now.plus(minOpenLead))) {
                 throw ValidationFailures.of("campaign.opensAt",
@@ -129,10 +143,21 @@ public class ProductRegistrationValidator {
      *   <li>배송 예정 종료일 ≥ 시작일</li>
      *   <li>상한 없는 차수(종료 순번 null)는 정확히 하나 — 앞의 규칙과 합치면 마지막 차수다</li>
      * </ul>
-     * 여기서 안 거르면 상품은 저장되고 preorder 가 등록 이벤트를 거절해(DLQ) 준비 전 상품만 남는다. 더 엄격하게 두지도 않는다 —
-     * preorder 의 차수 수정 API 로는 되는 설정이 등록에서만 막히게 된다. 최종 판정은 preorder 다.
+     * 여기서 안 거르면 상품은 저장되고 preorder 가 등록 이벤트를 거절해(DLQ) 준비 전 상품만 남는다. 최종 판정은 preorder 다.
+     *
+     * <p>preorder 보다 엄격한 규칙은 둘만 둔다(2026-10-04 결정) — 등록 이벤트 경로에서만 문제가 되는 것들이다.
+     * <ul>
+     *   <li>차수는 최대 {@value #MAX_SHIPMENT_BATCHES}개 — 이벤트 한 통에 싣는다. 너무 많으면 SQS 한 메시지 크기 한도를 넘어 아웃박스가 끝없이 다시
+     *       보낸다. 100개일 때 가장 큰 봉투는 약 15.6KB 다(위치값 10^18 자리 · 날짜 9999 · 마감 최댓값, 2026-10-04 실측). preorder 차수 수정 API 는
+     *       SQS 를 거치지 않아 상한이 없다</li>
+     *   <li>배송 예정일은 MySQL 문서의 date 지원 범위(1000-01-01 ~ 9999-12-31) — 9999-12-31 을 넘으면 preorder 가 저장하다 실패해 이벤트가 DLQ 로 간다.
+     *       1000 년 전은 strict 모드에서도 들어가지만 지원 범위 밖이라 받지 않는다(preorder 수정 API 보다 엄격한 쪽)</li>
+     * </ul>
      */
     private static void requireBatchShape(List<ProductRegistrationRequest.ShipmentBatch> batches) {
+        if (batches.size() > MAX_SHIPMENT_BATCHES) {
+            throw ValidationFailures.of("shipmentBatches", "배송 차수는 최대 %d개입니다.".formatted(MAX_SHIPMENT_BATCHES));
+        }
         ProductRegistrationRequest.ShipmentBatch previous = null;
         for (int i = 0; i < batches.size(); i++) {
             var batch = batches.get(i);
@@ -152,6 +177,8 @@ public class ProductRegistrationValidator {
             } else if (previous.positionTo() == Long.MAX_VALUE || batch.positionFrom() != previous.positionTo() + 1) {
                 throw ValidationFailures.of(field + ".positionFrom", "앞 차수 종료 순번 + 1 부터 시작해야 합니다(빈틈 · 겹침 없음).");
             }
+            requireStorableDate(batch.estimatedShipStart(), field + ".estimatedShipStart");
+            requireStorableDate(batch.estimatedShipEnd(), field + ".estimatedShipEnd");
             if (batch.estimatedShipEnd().isBefore(batch.estimatedShipStart())) {
                 throw ValidationFailures.of(field + ".estimatedShipEnd", "배송 종료는 시작 이후여야 합니다.");
             }
@@ -160,6 +187,12 @@ public class ProductRegistrationValidator {
         if (previous != null && previous.positionTo() != null) {
             throw ValidationFailures.of("shipmentBatches[%d].positionTo".formatted(batches.size() - 1),
                     "마지막 차수는 종료 순번을 비워야 합니다(상한 없는 차수가 정확히 하나).");
+        }
+    }
+
+    private static void requireStorableDate(LocalDate date, String field) {
+        if (date.isBefore(DB_DATE_MIN) || date.isAfter(DB_DATE_MAX)) {
+            throw ValidationFailures.of(field, "날짜는 1000-01-01 ~ 9999-12-31 사이여야 합니다.");
         }
     }
 

@@ -466,6 +466,52 @@ class AdminProductRegistrationApiTest {
                     """)).andExpect(status().isCreated());
         }
 
+        /**
+         * 등록 이벤트 경로에서만 문제가 되는 두 가지는 preorder 보다 엄격하게 막는다(2026-10-04 결정) — 차수가 너무 많으면 이벤트가 SQS 한 메시지를
+         * 넘고, DB 가 담지 못하는 날짜 · 시각이면 preorder 가 저장하다 실패해 이벤트가 DLQ 로 간다.
+         */
+        @Test
+        @DisplayName("배송 차수는 최대 100개, 배송 예정일은 1000-01-01 ~ 9999-12-31, 회차 마감은 9999-12-31 까지 — 넘으면 그 칸의 400, 경계는 201. 같은 마이크로초 안의 오픈 · 마감도 400")
+        void eventPathLimits() throws Exception {
+            register("k-" + ShopFixtures.unique(), withBatches(batches(100, "2026-11-01"))).andExpect(status().isCreated());
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches(batches(101, "2026-11-01"))), "shipmentBatches");
+
+            register("k-" + ShopFixtures.unique(), withBatches(batches(1, "9999-12-31"))).andExpect(status().isCreated());
+            register("k-" + ShopFixtures.unique(), withBatches(batches(1, "1000-01-01"))).andExpect(status().isCreated());
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches(batches(1, "+10000-01-01"))), "shipmentBatches[0].estimatedShipStart");
+            // 범위 검사가 "종료 ≥ 시작" 보다 먼저다 — 시작이 범위 밖이면 그 칸을 가리킨다
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches("""
+                    "shipmentBatches": [ { "batchNumber": 1, "positionFrom": 1, "positionTo": null, "estimatedShipStart": "+10000-01-01", "estimatedShipEnd": "2026-11-01" } ]
+                    """)), "shipmentBatches[0].estimatedShipStart");
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches(batches(1, "0999-12-31"))), "shipmentBatches[0].estimatedShipStart");
+            expectValidation(register("k-" + ShopFixtures.unique(), withBatches("""
+                    "shipmentBatches": [ { "batchNumber": 1, "positionFrom": 1, "positionTo": null, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "+10000-01-01" } ]
+                    """)), "shipmentBatches[0].estimatedShipEnd");
+
+            String farClose = preorderBody("").replace(opensAt.plus(Duration.ofDays(3)).toString(), "+10000-01-01T00:00:00Z");
+            expectValidation(register("k-" + ShopFixtures.unique(), farClose), "campaign.closesAt");
+            register("k-" + ShopFixtures.unique(), preorderBody("").replace(opensAt.plus(Duration.ofDays(3)).toString(), "9999-12-31T23:59:59.999999Z"))
+                    .andExpect(status().isCreated());
+
+            // 같은 마이크로초 안에서 나노초만 다른 오픈 · 마감 — 이벤트에는 마이크로초로 잘려 같은 값이 되므로 preorder 가 거절한다. 등록에서 400
+            Instant microsecond = opensAt.truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+            String sameMicrosecond = preorderBody("")
+                    .replace(opensAt.plus(Duration.ofDays(3)).toString(), microsecond.plusNanos(200).toString())
+                    .replace(opensAt.toString(), microsecond.plusNanos(100).toString());
+            expectValidation(register("k-" + ShopFixtures.unique(), sameMicrosecond), "campaign.closesAt");
+        }
+
+        /** 1 번부터 이어지는 한 자리 차수 n 개(마지막은 상한 없음). 배송 예정일은 모두 같은 날. */
+        private String batches(int count, String shipDate) {
+            StringBuilder json = new StringBuilder("\"shipmentBatches\": [ ");
+            for (int i = 1; i <= count; i++) {
+                json.append(i > 1 ? ", " : "")
+                        .append("{ \"batchNumber\": %d, \"positionFrom\": %d, \"positionTo\": %s, \"estimatedShipStart\": \"%s\", \"estimatedShipEnd\": \"%s\" }"
+                                .formatted(i, i, i == count ? "null" : String.valueOf(i), shipDate, shipDate));
+            }
+            return json.append(" ]\n").toString();
+        }
+
         private String withBatches(String batches) {
             int from = preorderBody("").indexOf("\"shipmentBatches\"");
             return preorderBody("").substring(0, from) + batches + "}";
