@@ -426,6 +426,7 @@ class AdminProductEditApiTest {
         @DisplayName("관리자만 — 회원 403, 익명 401")
         void adminOnly() throws Exception {
             long productId = registerInStock();
+            assertThat(visibleOf(productId)).isTrue();
             for (String path : new String[] {"/{id}/sale-status", "/{id}/visibility"}) {
                 String body = path.endsWith("sale-status") ? "{ \"status\": \"PAUSED\" }" : "{ \"visible\": false }";
                 mockMvc.perform(patch(PATH + path, productId).contentType(MediaType.APPLICATION_JSON).content(body)
@@ -434,6 +435,7 @@ class AdminProductEditApiTest {
                         .andExpect(status().isUnauthorized());
             }
             assertThat(statusOf(productId)).isEqualTo("ACTIVE");
+            assertThat(visibleOf(productId)).as("거절된 공개 전환은 공개 여부를 바꾸지 않는다").isTrue();
         }
 
         /** 공개 · 판매 중 · 재고 행이 있는(준비된) 일반 상품. 회원 목록에서 이 상품만 고르도록 고유 태그를 붙인다. */
@@ -462,6 +464,10 @@ class AdminProductEditApiTest {
 
         private String statusOf(long productId) {
             return jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, productId);
+        }
+
+        private boolean visibleOf(long productId) {
+            return Boolean.TRUE.equals(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, productId));
         }
 
         private ResultActions saleStatus(long productId, String status) throws Exception {

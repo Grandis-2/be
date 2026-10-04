@@ -43,7 +43,8 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p><b>사전예약은 오픈 3분 전부터 공개 여부 말고는 아무것도 못 바꾼다.</b> 표시 정보 · 가격 · 추가금 · 값 · 조합 추가 · 가격 되돌리기 · 옵션 판매 상태 · 상품 판매 상태 전부
  * 409 STATE_CONFLICT(2026-09-29 결정 — 판매 상태도 막는다. preorder 는 접수용 상품 사본을 1분마다 새로 받아, 오픈 뒤 판매 중지는 접수에
- * 늦게 닿는다. 3분 전에 막으면 오픈 때 preorder 사본은 이미 최종 상태다). 판정은 preorder 의 회차(opens_at − 3분 ≤ 지금)로 하고, 회차가 없으면
+ * 늦게 닿는다. 3분 전에 막으면 오픈 때 preorder 사본은 이미 최종 상태다 — preorder 의 1분 새로 받기가 성공할 때다. 새로 받기가 실패하면 preorder 는
+ * 가진 값을 만료(30분)까지 쓴다(preorder CatalogReader). 그 틈은 catalog 가 닫을 수 없다 — preorder 캐시를 비울 경로가 없다). 판정은 preorder 의 회차(opens_at − 3분 ≤ 지금)로 하고, 회차가 없으면
  * (preorder 가 등록 이벤트를 처리하기 전) 아직 잠기지 않았다.
  *
  * <p><b>재계산.</b> 기본 가격 · 추가금이 바뀌면 그 값을 고른 옵션 중 수동 가격이 아닌 것만 `기본가 + Σ추가금` 으로 다시 계산한다. 관리자가 직접 고친
