@@ -110,7 +110,7 @@ class WaitingroomAdminApiTest {
         redis.opsForHash().put(RedisKeys.SETTINGS, "max-wait-sec", "0").block(WAIT);
 
         get("/admission-rate").expectStatus().isOk().expectBody()
-                .jsonPath("$.data.globalCredit.value").isEqualTo(100)
+                .jsonPath("$.data.globalCredit.value").isEqualTo(150)
                 .jsonPath("$.data.globalCredit.source").isEqualTo("DEFAULT")
                 .jsonPath("$.data.maxWaitSeconds.value").isEmpty()
                 .jsonPath("$.data.maxWaitSeconds.source").isEqualTo("DEFAULT");
@@ -119,7 +119,7 @@ class WaitingroomAdminApiTest {
     @Test
     void 운영값이_없으면_코드_기본값과_출처를_보여_준다() {
         get("/admission-rate").expectStatus().isOk().expectBody()
-                .jsonPath("$.data.globalCredit.value").isEqualTo(100)
+                .jsonPath("$.data.globalCredit.value").isEqualTo(150)
                 .jsonPath("$.data.globalCredit.source").isEqualTo("DEFAULT")
                 .jsonPath("$.data.maxWaitSeconds.value").isEmpty()
                 .jsonPath("$.data.maxWaitSeconds.source").isEqualTo("DEFAULT");
@@ -133,7 +133,7 @@ class WaitingroomAdminApiTest {
         assertThat(setting("global-credit")).isEqualTo("0");
 
         delete("/admission-rate").expectStatus().isOk().expectBody()
-                .jsonPath("$.data.globalCredit.value").isEqualTo(100)
+                .jsonPath("$.data.globalCredit.value").isEqualTo(150)
                 .jsonPath("$.data.globalCredit.source").isEqualTo("DEFAULT");
         assertThat(setting("global-credit")).isNull();
     }
@@ -169,7 +169,8 @@ class WaitingroomAdminApiTest {
                 .jsonPath("$.data.products[0].cap.source").isEqualTo("OPERATIONAL")
                 .jsonPath("$.data.products[0].queueLimit").isEqualTo(300)
                 .jsonPath("$.data.products[1].productId").isEqualTo("202")
-                .jsonPath("$.data.products[1].cap.value").isEmpty()
+                .jsonPath("$.data.products[1].cap.value").isEqualTo(150)
+                .jsonPath("$.data.products[1].cap.source").isEqualTo("DEFAULT")
                 .jsonPath("$.data.products[1].queueLimit").isEqualTo(60)
                 .jsonPath("$.data.products[2].productId").isEqualTo("303")
                 // 판정 재료에 아직 없는 모델은 가장 낮은 속도로 잰다

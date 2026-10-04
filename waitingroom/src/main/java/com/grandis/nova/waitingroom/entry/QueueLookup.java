@@ -8,6 +8,7 @@ import com.grandis.nova.waitingroom.control.RedisClock;
 import com.grandis.nova.waitingroom.control.SnapshotHolder;
 import com.grandis.nova.waitingroom.domain.product.ProductState;
 import com.grandis.nova.waitingroom.domain.product.SalesPhase;
+import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
 import com.grandis.nova.waitingroom.domain.queue.EtaPolicy;
 import com.grandis.nova.waitingroom.domain.queue.PollIntervalPolicy;
 import com.grandis.nova.waitingroom.domain.queue.QueueEntry;
@@ -63,17 +64,18 @@ public class QueueLookup {
             }
             return queue.status(productKey, customerId, now)
                     .onErrorMap(AdmissionGate::storeFailure, AdmissionGate::unavailable)
-                    .map(found -> view(productKey, customerId, state, now, found));
+                    .map(found -> view(productKey, customerId, state, snapshot.meta(), now, found));
         }).doOnNext(view -> metrics.status(view instanceof QueueView.Closed closed ? closed.reason().name() : view.status()))
                 .doOnError(BusinessException.class, e -> metrics.status(e.errorCode().name()));
     }
 
-    private QueueView view(String productKey, String customerId, ProductState state, Instant now, QueueStatus found) {
+    private QueueView view(String productKey, String customerId, ProductState state, SnapshotMeta meta, Instant now,
+                           QueueStatus found) {
         QueueEntry entry = found.entry();
         return switch (entry.state()) {
             case ADMITTED -> gate.admitted(productKey, customerId, found.admittedAt(), now);
             case WAITING -> {
-                double eta = EtaPolicy.etaSec(entry.rank(), state.credit());
+                double eta = EtaPolicy.etaSec(entry.rank(), EtaCredit.of(state, meta));
                 long behind = entry.behind();
                 yield new QueueView.Waiting(null, entry.rank() + 1, EtaPolicy.reportSec(eta),
                         entry.total() == QueueEntry.UNKNOWN_TOTAL ? null : entry.total(),
