@@ -329,6 +329,143 @@ class AdminProductEditApiTest {
         }
     }
 
+    @Nested
+    @DisplayName("상품 판매 상태 · 공개 여부")
+    class SaleStatusAndVisibility {
+
+        @Test
+        @DisplayName("일반 상품 판매 중지는 회원 목록에서 빠지고 상세는 200 에 PAUSED 다. 같은 상태를 다시 보내도 200, 재개하면 목록에 돌아온다")
+        void inStockPauseAndResume() throws Exception {
+            long productId = readyInStock();
+            String tag = tagOf(productId);
+            assertThat(memberListIds(tag)).containsExactly(productId);
+
+            JsonNode paused = data(saleStatus(productId, "PAUSED").andExpect(status().isOk()));
+            assertThat(paused.get("productId").asLong()).isEqualTo(productId);
+            assertThat(paused.get("status").asString()).isEqualTo("PAUSED");
+            assertThat(paused.get("campaignCancellationRequested").asBoolean()).isFalse();
+            assertThat(memberListIds(tag)).as("판매 중지는 목록에서 숨긴다").isEmpty();
+            assertThat(data(memberDetail(productId).andExpect(status().isOk())).get("status").asString()).as("직접 상세는 판매 중지로 보인다")
+                    .isEqualTo("PAUSED");
+            assertThat(data(adminDetail(productId)).get("product").get("status").asString()).isEqualTo("PAUSED");
+
+            saleStatus(productId, "PAUSED").andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("PAUSED"));
+            saleStatus(productId, "ACTIVE").andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("ACTIVE"));
+            assertThat(memberListIds(tag)).containsExactly(productId);
+        }
+
+        @Test
+        @DisplayName("사전예약 판매 상태는 오픈 3분 전까지만 바꾼다 — 오픈 5분 전 · 회차 없음은 200, 오픈 2분 전 · 오픈 뒤는 409 이고 상태는 그대로")
+        void preorderStatusFreezesThreeMinutesBeforeOpen() throws Exception {
+            Instant now = Instant.now();
+            long noCampaign = registerPreorder();
+            saleStatus(noCampaign, "PAUSED").andExpect(status().isOk());
+
+            long beforeFreeze = registerPreorder();
+            fixtures.campaign(beforeFreeze, now.plus(Duration.ofMinutes(5)), now.plus(HOUR));
+            saleStatus(beforeFreeze, "PAUSED").andExpect(status().isOk());
+            saleStatus(beforeFreeze, "ACTIVE").andExpect(status().isOk());
+
+            long frozen = registerPreorder();
+            fixtures.campaign(frozen, now.plus(Duration.ofMinutes(2)), now.plus(HOUR));
+            long opened = registerPreorder();
+            fixtures.campaign(opened, now.minus(HOUR), now.plus(HOUR));
+            for (long productId : new long[] {frozen, opened}) {
+                saleStatus(productId, "PAUSED").andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"));
+                assertThat(statusOf(productId)).isEqualTo("ACTIVE");
+            }
+        }
+
+        @Test
+        @DisplayName("판매 상태 입력이 틀리면 그 칸의 400 — 빈 본문 · 모르는 상태 · 모르는 칸. 없는 상품은 404")
+        void saleStatusInputErrors() throws Exception {
+            long productId = registerInStock();
+            expectValidation(saleStatusBody(productId, "{}"), "status");
+            expectValidation(saleStatusBody(productId, "{ \"status\": \"STOPPED\" }"), "status");
+            expectValidation(saleStatusBody(productId, "{ \"status\": \"PAUSED\", \"reason\": \"x\" }"), "reason");
+            saleStatus(999_999_999L, "PAUSED").andExpect(status().isNotFound()).andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
+        }
+
+        @Test
+        @DisplayName("비공개로 바꾸면 회원 목록 · 상세에서 사라지고(상세 404) 다시 공개하면 돌아온다. 사전예약 오픈 뒤에도 바꿀 수 있다")
+        void visibilityToggle() throws Exception {
+            long productId = readyInStock();
+            String tag = tagOf(productId);
+
+            JsonNode hidden = data(visibility(productId, false).andExpect(status().isOk()));
+            assertThat(hidden.get("productId").asLong()).isEqualTo(productId);
+            assertThat(hidden.get("visible").asBoolean()).isFalse();
+            assertThat(memberListIds(tag)).isEmpty();
+            memberDetail(productId).andExpect(status().isNotFound());
+
+            visibility(productId, true).andExpect(status().isOk()).andExpect(jsonPath("$.data.visible").value(true));
+            assertThat(memberListIds(tag)).containsExactly(productId);
+            memberDetail(productId).andExpect(status().isOk());
+
+            long opened = registerPreorder();
+            fixtures.campaign(opened, Instant.now().minus(HOUR), Instant.now().plus(HOUR));
+            visibility(opened, false).andExpect(status().isOk());
+            assertThat(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, opened)).isFalse();
+
+            expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/visibility", productId)).content("{}")), "visible");
+            visibility(999_999_999L, false).andExpect(status().isNotFound());
+        }
+
+        @Test
+        @DisplayName("관리자만 — 회원 403, 익명 401")
+        void adminOnly() throws Exception {
+            long productId = registerInStock();
+            for (String path : new String[] {"/{id}/sale-status", "/{id}/visibility"}) {
+                String body = path.endsWith("sale-status") ? "{ \"status\": \"PAUSED\" }" : "{ \"visible\": false }";
+                mockMvc.perform(patch(PATH + path, productId).contentType(MediaType.APPLICATION_JSON).content(body)
+                        .with(user("657").roles("USER"))).andExpect(status().isForbidden());
+                mockMvc.perform(patch(PATH + path, productId).contentType(MediaType.APPLICATION_JSON).content(body))
+                        .andExpect(status().isUnauthorized());
+            }
+            assertThat(statusOf(productId)).isEqualTo("ACTIVE");
+        }
+
+        /** 공개 · 판매 중 · 재고 행이 있는(준비된) 일반 상품. 회원 목록에서 이 상품만 고르도록 고유 태그를 붙인다. */
+        private long readyInStock() throws Exception {
+            long productId = registerInStock();
+            fixtures.stockReady(productId);
+            edit(productId, "{ \"tags\": \"" + tagOf(productId) + "\" }").andExpect(status().isOk());
+            return productId;
+        }
+
+        private String tagOf(long productId) {
+            return "status-" + productId;
+        }
+
+        private List<Long> memberListIds(String tag) throws Exception {
+            JsonNode items = JSON.readTree(mockMvc.perform(get("/api/v1/products").param("q", tag).param("size", "100"))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).at("/data/items");
+            List<Long> ids = new ArrayList<>();
+            items.forEach(item -> ids.add(item.get("productId").asLong()));
+            return ids;
+        }
+
+        private ResultActions memberDetail(long productId) throws Exception {
+            return mockMvc.perform(get("/api/v1/products/{id}", productId));
+        }
+
+        private String statusOf(long productId) {
+            return jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, productId);
+        }
+
+        private ResultActions saleStatus(long productId, String status) throws Exception {
+            return saleStatusBody(productId, "{ \"status\": \"" + status + "\" }");
+        }
+
+        private ResultActions saleStatusBody(long productId, String body) throws Exception {
+            return mockMvc.perform(admin(patch(PATH + "/{id}/sale-status", productId)).content(body));
+        }
+
+        private ResultActions visibility(long productId, boolean visible) throws Exception {
+            return mockMvc.perform(admin(patch(PATH + "/{id}/visibility", productId)).content("{ \"visible\": " + visible + " }"));
+        }
+    }
+
     @Test
     @DisplayName("관리자만 — 회원 403, 익명 401")
     void adminOnly() throws Exception {
