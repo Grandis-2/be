@@ -180,6 +180,11 @@ class JpaPaymentStore implements PaymentTransactionReader, PaymentTransactionWri
         return payments.findByTargetTypeAndTargetId(target.type(), target.id()).map(PaymentMapper::toDomain);
     }
 
+    @Override
+    public Optional<Payment> lockPaymentByTarget(PaymentTarget target) {
+        return payments.lockByTarget(target.type(), target.id()).map(PaymentMapper::toDomain);
+    }
+
     private int detachAfter(Long transactionId, int updated) {
         detach(PaymentTransactionJpaEntity.class, transactionId);
         return updated;

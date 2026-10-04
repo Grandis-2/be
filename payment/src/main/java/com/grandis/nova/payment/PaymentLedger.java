@@ -76,6 +76,7 @@ public class PaymentLedger {
     /**
      * 대상의 결제를 환불할 때: 저장된 성공 결제를 읽어 그 대상 · 결제 키 · 금액으로 새 REFUND(PENDING, 새 멱등 키)를 연다.
      * 워커가 선점해 보낸다. 결제를 호출자에게서 받지 않는다 — 받으면 조작된 키 · 금액으로 열 수 있다.
+     * 결제 행을 잠그고 판정한다 — REFUND 결과 반영({@link #resolve})도 같은 행을 먼저 잠가, 판정과 INSERT 사이에 실패 확정이 끼지 않는다.
      *
      * @throws IllegalStateException            대상에 결제가 없다(호출 쪽 잘못)
      * @throws PaymentAlreadyRefundedException  이미 환불됐다(재전송이면 성공으로 다룰 수 있다)
@@ -83,7 +84,7 @@ public class PaymentLedger {
      * @throws ActiveTransactionExistsException 그 대상에 진행 중인 REFUND 가 이미 있다
      */
     public PaymentTransaction openRefund(PaymentTarget target) {
-        Payment payment = paymentReader.findPaymentByTarget(target)
+        Payment payment = paymentReader.lockPaymentByTarget(target)
                 .orElseThrow(() -> new IllegalStateException("환불할 결제가 없다: " + target));
         if (payment.status() == PaymentStatus.REFUNDED) {
             throw new PaymentAlreadyRefundedException(target);
@@ -134,7 +135,8 @@ public class PaymentLedger {
 
     /**
      * 결제사 결과를 반영한다. 리스가 살아 있고 표식이 같을 때만 된다. CAPTURE 확정은 payments 를 만들고, REFUND 확정은
-     * 그 결제를 환불로 표시한다 — 거래 행과 같은 트랜잭션이다.
+     * 그 결제를 환불로 표시한다 — 거래 행과 같은 트랜잭션이다. REFUND 는 대상의 결제 행을 먼저 잠근다({@link #openRefund} 와 줄 세우기,
+     * 잠금 순서는 결제 행 → 거래 행).
      *
      * @throws LeaseLostException    리스를 잃었다(0행). 아무것도 반영하지 않았고 호출자의 트랜잭션은 rollback-only 다
      * @throws IllegalStateException REFUND 를 확정했는데 그 결제 키의 성공 결제가 없다
@@ -142,6 +144,9 @@ public class PaymentLedger {
     public void resolve(ClaimedTransaction claimed, Outcome outcome) {
         PaymentTransaction held = claimed.transaction();
         TransactionStatus to = held.resolve(outcome);
+        if (held.type() == TransactionType.REFUND) {
+            paymentReader.lockPaymentByTarget(held.target());
+        }
         Long id = held.id();
         LeaseToken lease = held.leaseToken();
         Instant now = clock.instant();

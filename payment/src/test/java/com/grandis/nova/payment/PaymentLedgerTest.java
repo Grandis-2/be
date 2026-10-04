@@ -33,10 +33,17 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * 원장 → 조건부 UPDATE → MySQL. 단계마다 트랜잭션을 따로 열고 커밋한다 — 선점과 반영은 운영에서도 다른 트랜잭션이고,
@@ -368,6 +375,40 @@ class PaymentLedgerTest {
                 .hasSize(1);
     }
 
+    // 결정 33 의 틈: 앞 환불의 실패 확정이 커밋되기 전에 같은 대상의 환불 요청이 오면, 실패 확정을 기다렸다가 "실패했다" 로 판정해야
+    // 한다. 결제 행 잠금이 없으면 요청이 진행 중으로 읽고, 실패 확정이 커밋되며 진행 중 표시가 풀린 뒤 새 REFUND 가 들어간다
+    @Test
+    void refundRequestDuringFailureResolutionWaitsAndIsNotReopened() throws Exception {
+        inTxRun(() -> ledger.resolve(started(), new Outcome.Confirmed(APPROVED_AT)));
+        PaymentTransaction refund = inTx(() -> ledger.openRefund(target));
+        ClaimedTransaction claimed = inTx(() -> ledger.claim(refund)).orElseThrow();
+        CountDownLatch resolved = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> failing = executor.submit(() -> inTxRun(() -> {
+                ledger.resolve(claimed, new Outcome.Rejected(new ProviderError("EXCEED_MAX_REFUND_DUE", "기한")));
+                resolved.countDown();
+                await(commit);
+            }));
+            assertThat(resolved.await(10, TimeUnit.SECONDS)).isTrue();
+            Future<PaymentTransaction> reopening = executor.submit(() -> inTx(() -> ledger.openRefund(target)));
+
+            assertThat(catchThrowable(() -> reopening.get(1, TimeUnit.SECONDS)))
+                    .as("실패 확정이 커밋될 때까지 기다린다").isInstanceOf(TimeoutException.class);
+            commit.countDown();
+            failing.get(10, TimeUnit.SECONDS);
+
+            assertThat(catchThrowable(() -> reopening.get(10, TimeUnit.SECONDS)))
+                    .hasCauseInstanceOf(RefundFailedException.class);
+        } finally {
+            commit.countDown();
+            executor.shutdownNow();
+        }
+        assertThat(transactions.findTransactionsByTarget(target)).filteredOn(t -> t.type() == TransactionType.REFUND)
+                .singleElement().satisfies(only -> assertThat(only.status()).isEqualTo(TransactionStatus.FAILED));
+    }
+
     // 전액 취소는 토스가 두 번 하지 않는다(ALREADY_CANCELED_PAYMENT) — 환불도 같은 행에서 키를 바꿔 다시 보낼 수 있다
     @Test
     void refundKeyIsRotatedOnTheSameRow() {
@@ -574,6 +615,17 @@ class PaymentLedgerTest {
 
     private static Long id(ClaimedTransaction claimed) {
         return claimed.transaction().id();
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("기다리던 신호가 오지 않았다");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     private <T> T inTx(Supplier<T> work) {
