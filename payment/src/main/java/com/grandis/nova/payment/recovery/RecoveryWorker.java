@@ -58,21 +58,37 @@ public class RecoveryWorker {
         this.writeTransaction = new TransactionTemplate(transactionManager);
     }
 
-    /** @return 처리기에 넘긴 건수 */
-    public int recoverDue() {
+    /**
+     * 한 유형의 후보를 처리한다. 주기 작업은 유형마다 따로 부른다 — 서두를 이유가 없는 환불 적체가 승인 창(10분)이 걸린 승인 복구를
+     * 같은 실행 안에서 밀어내지 않게.
+     *
+     * @return 처리기에 넘긴 건수. 처리기가 없는 유형이면 0
+     */
+    public int recoverDue(TransactionType type) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("복구는 트랜잭션 밖에서 돌려야 한다 — 결제사 호출 동안 잠금을 쥐지 않게");
         }
+        RecoveryHandler handler = handlers.get(type);
+        if (handler == null) {
+            return 0;
+        }
         int handled = 0;
-        for (RecoveryHandler handler : handlers.values()) {
-            for (int i = 0; i < BATCH && !stopping; i++) {
-                Optional<Claim> next = claimNext(handler.type());
-                if (next.isEmpty()) {
-                    break;
-                }
-                recover(handler, next.get());
-                handled++;
+        for (int i = 0; i < BATCH && !stopping; i++) {
+            Optional<Claim> next = claimNext(type);
+            if (next.isEmpty()) {
+                break;
             }
+            recover(handler, next.get());
+            handled++;
+        }
+        return handled;
+    }
+
+    /** 모든 유형을 차례로 처리한다(시험 · 수동 실행용). @return 처리기에 넘긴 건수 */
+    public int recoverDue() {
+        int handled = 0;
+        for (TransactionType type : handlers.keySet()) {
+            handled += recoverDue(type);
         }
         return handled;
     }

@@ -5,7 +5,7 @@ package com.grandis.nova.payment.outbox;
  *
  * record 의 칸이 곧 payload 다. payload 에는 받는 쪽 계약에 있는 칸만 담는다 — 결제 키는 넣지 않는다.
  */
-public sealed interface OutboxMessage extends com.grandis.nova.common.outbox.OutboxMessage permits OrderPaymentSettled {
+public sealed interface OutboxMessage extends com.grandis.nova.common.outbox.OutboxMessage permits OrderPaymentSettled, OrderRefundSettled {
 
     @Override
     OutboundEventType eventType();

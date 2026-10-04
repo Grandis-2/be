@@ -70,8 +70,21 @@ final class TossStubs {
                 """.formatted(paymentKey, orderId, status, totalAmount, balanceAmount);
     }
 
+    /** 전액 취소된 Payment 객체(취소 내역 한 건, 문서 예시 모양). */
+    static String canceledPayment(String paymentKey, String orderId, long amount) {
+        String payment = payment(paymentKey, orderId, "CANCELED", amount, 0);
+        return payment.substring(0, payment.lastIndexOf('}')) + """
+                ,"cancels":[{"transactionKey":"txn-cancel-0001","cancelReason":"%s","taxExemptionAmount":0,
+                 "canceledAt":"2026-10-04T10:20:30+09:00","transferDiscountAmount":0,"easyPayDiscountAmount":0,
+                 "receiptKey":null,"cancelAmount":%d,"taxFreeAmount":0,"refundableAmount":0,"cancelStatus":"DONE",
+                 "cancelRequestId":null}]}
+                """.formatted(CANCEL_REASON, amount);
+    }
+
     static ResponseCreator paymentResponse(String status) {
-        long balance = status.equals("CANCELED") ? 0 : AMOUNT;
-        return withSuccess(payment(PAYMENT_REF, ORDER_REF, status, AMOUNT, balance), MediaType.APPLICATION_JSON);
+        String body = status.equals("CANCELED")
+                ? canceledPayment(PAYMENT_REF, ORDER_REF, AMOUNT)
+                : payment(PAYMENT_REF, ORDER_REF, status, AMOUNT, AMOUNT);
+        return withSuccess(body, MediaType.APPLICATION_JSON);
     }
 }

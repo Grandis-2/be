@@ -506,7 +506,7 @@ class PaymentConfirmApiTest {
 
     private TossCommandResult done(long totalAmount) {
         return new TossCommandResult.Succeeded(new TossPayment(paymentKey, opened.providerOrderId().value(),
-                TossPaymentStatus.DONE, totalAmount, totalAmount, "카드", APPROVED_AT, "txkey"));
+                TossPaymentStatus.DONE, totalAmount, totalAmount, "카드", APPROVED_AT, "txkey", null));
     }
 
     private ResultActions confirm(PaymentTransaction attempt, PaymentTarget as, long amount) throws Exception {

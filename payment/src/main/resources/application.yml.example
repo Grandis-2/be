@@ -23,10 +23,10 @@ spring:
     open-in-view: false
   task:
     scheduling:
-      # 주기 작업(결과 불명 복구 · 결제창 만료, config.PaymentJobs) 실행기. 둘이 서로 밀리지 않게 2.
+      # 주기 작업(승인 복구 · 환불 · 결제창 만료, config.PaymentJobs) 실행기. 셋이 서로 밀리지 않게 3(빠뜨려도 코드가 3 이상으로 둔다).
       # 종료 때 진행 중인 복구 한 건(토스 호출 최대 63초)을 기다린다 — 끊겨도 리스가 끝나면 다른 인스턴스가 같은 키로 이어 받는다
       pool:
-        size: 2
+        size: 3
       shutdown:
         await-termination: true
         await-termination-period: 75s
@@ -61,15 +61,17 @@ nova:
     toss:
       # 필수(없으면 기동 실패). 환경 변수 · 비밀 저장소로만 준다 — 이 파일 · 저장소에 값을 적지 않는다
       secret-key: ${TOSS_SECRET_KEY}
-    # 주기 작업. 끄면(jobs.enabled: false) 결과 불명 거래 · 시작 안 된 결제창이 영영 남는다 — 운영에서 끄지 않는다
+    # 주기 작업. 끄면(jobs.enabled: false) 결과 불명 거래 · 환불 · 시작 안 된 결제창이 영영 남는다 — 운영에서 끄지 않는다
     jobs:
       enabled: true
     recovery:
-      interval: 5s     # 복구 실행 간격(앞 실행이 끝난 뒤부터)
+      interval: 5s     # 승인 복구 실행 간격(앞 실행이 끝난 뒤부터)
+    refund:
+      interval: 5s     # 환불 실행 · 복구 간격. 승인 복구와 따로 돈다
     expiry:
       interval: 60s    # 결제창 만료 실행 간격. 만료 기준(35분)은 코드 상수다
-  # SQS(AWS SDK v2). 결제 결과 이벤트를 대상 서비스 큐(order-events)로 보낸다. 로컬은 Floci(docker/floci),
-  # 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다. 이 서비스는 큐를 받지 않는다(소비기 없음)
+  # SQS(AWS SDK v2). 결제 · 환불 결과 이벤트를 대상 서비스 큐(order-events)로 보내고, 환불 요청을 payment-events 에서 받는다.
+  # 로컬은 Floci(docker/floci), 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다
   sqs:
     region: ap-northeast-2
     endpoint: http://localhost:4566
@@ -77,6 +79,16 @@ nova:
     # 논리 목적지 → 실제 큐 이름(환경마다 접두어를 붙일 때만)
     # queues:
     #   order-events: dev-order-events
+    #   payment-events: dev-payment-events
+    # 환불 요청 소비기. 끄면 환불 요청이 큐에 쌓이기만 한다 — 운영에서 끄지 않는다
+    consumer:
+      enabled: true
+      queue: payment-events
+      concurrency: 1
+      wait-seconds: 20
+      visibility: 5m       # 처리 한 건보다 길게
+      backoff-base: 30s    # 실패는 대개 DB 장애 — 재수신 5회(DLQ 전)가 장애 조치보다 길게(약 7분)
+      backoff-max: 5m
   # 아웃박스 발행(payment_outbox_events). transport 는 필수(없으면 기동 실패)이고 운영 값은 sqs 다.
   # log 는 로컬 · 테스트 전용 전송이라 log-transport-allowed: true 를 함께 적어야 뜬다 — 그 줄은 이 예시에 적지 않는다
   outbox:

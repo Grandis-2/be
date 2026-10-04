@@ -15,13 +15,14 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 
 /**
- * 토스 승인 결과 → 결제 도메인 사건. 결제 도메인이 토스를 모르게 둘을 잇는 곳은 여기 하나다(에픽 계획서 §4).
+ * 토스 승인 · 취소 결과 → 결제 도메인 사건. 결제 도메인이 토스를 모르게 둘을 잇는 곳은 여기 하나다(에픽 계획서 §4).
+ * 성공 응답의 대조(금액 · 시각)는 명령마다 달라 승인은 여기({@link #approved}), 환불은 RefundRecovery 가 한다.
  *
  * 결과 불명은 코드 칸에 토스 코드(없으면 우리가 붙인 코드), 문구 칸에 늘 불명 사유({@link UnknownReason}) 이름을 적는다 —
- * 복구({@link CaptureRecovery})가 {@link #resolutionOf} 로 푸는 방법(같은 키 재전송 · 조회)을 고른다.
+ * 복구(CaptureRecovery · RefundRecovery)가 {@link #resolutionOf} 로 푸는 방법(같은 키 재전송 · 조회)을 고른다.
  * 복구가 조회로 확정한 실패는 코드 칸에 {@code LOOKUP_<토스 상태>} 를 적는다 — 토스 코드가 아니라 조회 결과다.
  */
-final class TossOutcomes {
+public final class TossOutcomes {
 
     private static final Logger log = LoggerFactory.getLogger(TossOutcomes.class);
 
@@ -32,14 +33,27 @@ final class TossOutcomes {
     /** 승인 응답에 승인 시각이 없다 — 계약 위반. */
     static final String MISSING_APPROVED_AT = "MISSING_APPROVED_AT";
     /** 조회로 알게 된 결과의 코드 접두어. 뒤에 토스 결제 상태(READY · ABORTED …)나 NOT_FOUND · 조회 오류가 붙는다. */
-    static final String LOOKUP = "LOOKUP_";
+    public static final String LOOKUP = "LOOKUP_";
 
     private TossOutcomes() {
     }
 
     static Outcome of(TossCommandResult result, PaymentTransaction held) {
+        if (result instanceof TossCommandResult.Succeeded succeeded) {
+            return approved(succeeded.payment(), held);
+        }
+        return notSucceeded(result);
+    }
+
+    /**
+     * 성공이 아닌 응답(거절 · 일시 오류 · 처리 중 · 불명)의 사건. 승인 · 취소가 같은 규칙이다.
+     *
+     * @throws IllegalArgumentException 성공 응답이다 — 명령마다 대조가 달라 부르는 쪽이 한다
+     */
+    public static Outcome notSucceeded(TossCommandResult result) {
         return switch (result) {
-            case TossCommandResult.Succeeded succeeded -> approved(succeeded.payment(), held);
+            case TossCommandResult.Succeeded succeeded ->
+                    throw new IllegalArgumentException("성공 응답은 명령마다 대조한다: " + succeeded.payment().status());
             case TossCommandResult.Rejected rejected -> new Outcome.Rejected(new ProviderError(rejected.code(), rejected.message()));
             case TossCommandResult.Transient transientError ->
                     new Outcome.InProgress(new ProviderError(transientError.code(), transientError.message()), RETRY_AFTER);
@@ -66,7 +80,7 @@ final class TossOutcomes {
      * 마지막 결과에 적힌 불명 사유로 푸는 방법. 사유가 없으면(결과를 남기기 전에 멈췄다 — 응답을 받지 못했을 수 있다) 같은 키 재전송,
      * 불명 사유가 아닌 기록(일시 오류 · 조회 오류 · 우리가 붙인 코드)은 조회다.
      */
-    static UnknownReason.Resolution resolutionOf(ProviderError lastError) {
+    public static UnknownReason.Resolution resolutionOf(ProviderError lastError) {
         if (lastError == null) {
             return UnknownReason.Resolution.RESEND;
         }
