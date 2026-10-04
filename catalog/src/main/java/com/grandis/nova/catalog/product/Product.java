@@ -23,7 +23,6 @@ import java.util.Objects;
  * 준비가 안 된 상품은 visible 이어도 회원에게 보이지 않는다.
  * 가격은 basePrice 가 기준이고 옵션의 price 가 최종가다(기본가 + 값별 추가금, 관리자가 직접 고칠 수 있다).
  * 예약 · 주문은 접수 시점 값을 복사하므로 여기를 고쳐도 과거 거래에 소급되지 않는다.
- * image_url 은 product_images 의 GALLERY 대표로 대체돼 폐기 예정이라 매핑하지 않는다.
  *
  * <p><b>이미 있는 상품을 고치는 경로는 전부 {@link ProductRepository#findForUpdate} 로 잠그고 읽는다</b>(공개 전환 · 판매 상태 포함).
  * Hibernate 는 전 칼럼을 UPDATE 하므로 잠그지 않고 읽은 쓰기는 그사이 커밋된 관리자 수정(제목 · 기본가)을 옛 값으로 되돌리고, 재계산된

@@ -154,7 +154,7 @@ class ProductEditRaceTest {
                     org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch("/api/v1/admin/products/{id}", productId)
                             .contentType(MediaType.APPLICATION_JSON).with(user("admin").roles("ADMIN"))
                             .content("{ \"basePrice\": 1100000 }")).andReturn());
-            awaitBlockedOrDone(edit);
+            awaitOptionUpdateBlockedOrDone(edit);   // 수정이 A 를 잡고 B 에서 기다릴 때까지 — 그 전에 놓으면 장바구니가 A 를 먼저 넣고 교착 없이 지나갈 수 있다
             insertA.countDown();   // 장바구니가 A 를 기다린다 → 교착
             String body = edit.get(60, TimeUnit.SECONDS).getResponse().getContentAsString();
             int statusCode = edit.get().getResponse().getStatus();
@@ -450,8 +450,8 @@ class ProductEditRaceTest {
 
     /**
      * 둘째 작업이 DB 에서 잠금을 기다리는 중이거나 이미 끝났을 때까지 기다린다. 같은 사용자의 스레드는 PROCESS 권한 없이 PROCESSLIST 에 보이고,
-     * 쉬는 커넥션은 COMMAND=Sleep 이다. 다른 커넥션의 Query 가 하나라도 보이면 기다리는 것으로 본다(다른 이유로 걸려도 거짓 통과는 아니다 —
-     * 결과 단언이 따로 가른다).
+     * 쉬는 커넥션은 COMMAND=Sleep 이다. 다른 커넥션의 Query 가 하나라도 보이면 기다리는 것으로 본다 — 둘째 작업이 아직 잠금에 닿기 전에
+     * 다른 쿼리(둘째 작업의 앞쪽 조회 · 앞 시험이 남긴 커밋 직후 아웃박스 발행 등)를 보고 넘어갈 수 있어, 드물게 잠금 결함을 놓친다(거짓 통과).
      */
     private void awaitBlockedOrDone(Future<?> second) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
@@ -469,6 +469,33 @@ class ProductEditRaceTest {
             Thread.sleep(20);
         }
         throw new AssertionError("둘째 작업이 30초 안에 기다리지도 끝나지도 않았다");
+    }
+
+    /**
+     * 수정이 옵션 행 UPDATE 에서 기다릴 때까지(id 순으로 A 를 잡고 B 를 기다리는 중) 또는 끝날 때까지 기다린다.
+     * {@link #awaitBlockedOrDone} 처럼 "다른 연결의 아무 실행 중 쿼리" 를 보면 수정이 아직 상품 행 잠금 · 앞쪽 조회에 있을 때도 넘어가,
+     * 장바구니가 A 를 먼저 넣고 교착 없이 지나갈 수 있다 — 교착 시험이 가끔 실패하던 가능한 원인이다(실측: 다른 트랜잭션이 상품 행을 1초 잡아
+     * 수정을 그 단계에 붙잡아 두면 매번 그렇게 실패한다. 자연 조건에서는 재현되지 않았고, 처음 기록된 실패의 메시지는 남아 있지 않다).
+     * 옵션 UPDATE 가 두 번 연속(약 20ms 간격) 보일 때 넘어간다 — A 의 대기와 B 의 대기를 가르지는 못하지만, 이 시험에서는 A 를 잡는 다른 트랜잭션이 없다.
+     */
+    private void awaitOptionUpdateBlockedOrDone(Future<?> edit) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        int seen = 0;
+        while (System.nanoTime() < deadline) {
+            if (edit.isDone()) {
+                return;
+            }
+            Long blocked = jdbcTemplate.queryForObject("""
+                    SELECT COUNT(*) FROM information_schema.PROCESSLIST
+                     WHERE COMMAND = 'Query' AND ID <> CONNECTION_ID() AND LOWER(INFO) LIKE 'update product_options%'
+                    """, Long.class);
+            seen = blocked != null && blocked > 0 ? seen + 1 : 0;
+            if (seen >= 2) {
+                return;
+            }
+            Thread.sleep(20);
+        }
+        throw new AssertionError("수정이 30초 안에 옵션 UPDATE 에서 기다리지도 끝나지도 않았다");
     }
 
     /** 다른 커넥션(자동 커밋)에서 실행하고 끝날 때까지 기다린다 — 다른 모듈의 쓰기를 흉내 낸다. */
