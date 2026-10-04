@@ -34,6 +34,16 @@ public record OperationalSettings(long globalCredit, MaxWait maxWait, Map<String
                 maxWaitSec > 0 ? MaxWait.of(Duration.ofSeconds(maxWaitSec)) : MaxWait.unlimited(), Map.copyOf(caps));
     }
 
+    /** 리더가 이 전역 속도 값을 받아들이는가(0 포함). 아니면 기본값을 쓴다. */
+    public static boolean acceptsGlobalCredit(String value) {
+        return value != null && positiveOr(value, -1, true) >= 0;
+    }
+
+    /** 리더가 이 최대 대기 시간 값을 받아들이는가. 아니면 제한 없음이다. */
+    public static boolean acceptsMaxWait(String value) {
+        return value != null && positiveOr(value, -1, false) > 0;
+    }
+
     public long capOf(String productKey) {
         return caps.getOrDefault(productKey, ProductState.UNLIMITED_CAP);
     }

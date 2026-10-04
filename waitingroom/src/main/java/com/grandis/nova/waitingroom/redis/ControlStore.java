@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /** 제어 평면(리더 · 하트비트 · 배분 · 스냅샷 · 청소)이 쓰는 Redis 연산. 요청 경로는 쓰지 않는다. */
 @Component
@@ -99,6 +100,28 @@ public class ControlStore {
     /** 보낸 뒤 선점 표식을 조용한 기간 표식으로 바꾼다. */
     public Mono<Boolean> markResyncRequested(Duration quietPeriod) {
         return redis.opsForValue().set(RedisKeys.RESYNC_REQUESTED, "1", quietPeriod);
+    }
+
+    /** 운영값 한 칸을 쓴다. 리더가 다음 회차에 읽는다. @return 쓰기 전 값(감사 로그용) */
+    public Mono<Optional<String>> writeSetting(String field, String value) {
+        return swapSetting(field, "set", value);
+    }
+
+    /** 운영값 한 칸을 지워 기본값으로 돌린다. @return 지운 값(감사 로그용) */
+    public Mono<Optional<String>> clearSetting(String field) {
+        return swapSetting(field, "clear", "");
+    }
+
+    /** 바꾸기와 전 값 읽기를 한 번에 — 동시에 바꿔도 감사 로그의 전 값이 맞다. */
+    private Mono<Optional<String>> swapSetting(String field, String mode, String value) {
+        return redis.execute(scripts.swapSetting, List.of(RedisKeys.SETTINGS), List.of(field, mode, value))
+                .next().map(Optional::of).defaultIfEmpty(Optional.empty());
+    }
+
+    /** 지금 리더의 노드 ID. 없으면 빈 값. */
+    public Mono<String> readLeaderOwner() {
+        return redis.opsForValue().get(RedisKeys.LEADER)
+                .map(value -> value.substring(value.indexOf('|') + 1));
     }
 
     public Mono<Map<String, String>> readSettings() {

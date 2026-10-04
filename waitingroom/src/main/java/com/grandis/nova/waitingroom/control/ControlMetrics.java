@@ -27,6 +27,15 @@ public class ControlMetrics {
         Gauge.builder("waitingroom.gateways", holder,
                         current -> current.current().map(snapshot -> snapshot.meta().gatewayCount()).orElse(0))
                 .description("판정 재료가 본 살아 있는 게이트웨이 수").register(registry);
+        // 운영값은 리더가 판정 재료에 실어 보낸 값(적용된 값)이다
+        Gauge.builder("waitingroom.settings.global.credit", holder,
+                current -> current.current().map(snapshot -> (double) snapshot.meta().globalCredit()).orElse(Double.NaN))
+                .description("적용된 전역 초당 입장 인원. 0 은 입장 일시 정지, 재료가 없으면 NaN").register(registry);
+        Gauge.builder("waitingroom.settings.max.wait.seconds", holder, current -> current.current()
+                        .map(snapshot -> snapshot.meta().maxWait().duration() == null ? -1.0
+                                : (double) snapshot.meta().maxWait().duration().toSeconds())
+                        .orElse(Double.NaN))
+                .description("적용된 최대 대기 시간. -1 은 제한 없음, 재료가 없으면 NaN").register(registry);
         waiting = MultiGauge.builder("waitingroom.queue.waiting").description("모델별 대기 인원").register(registry);
         credit = MultiGauge.builder("waitingroom.queue.credit").description("모델별 초당 입장 몫").register(registry);
     }
