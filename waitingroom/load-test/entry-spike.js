@@ -53,6 +53,8 @@ export const options = {
   },
   thresholds: {
     position_regressions: ['count==0'],
+    // 최대 대기 시간을 정하지 않은 이 시나리오에서는 줄이 차서 거절(429)될 일이 없다 — 하나라도 있으면 실패다
+    rejected: ['count==0'],
     'checks{name:entry}': ['rate>0.99'],
     dropped_iterations: ['count==0'],
   },
@@ -88,7 +90,7 @@ export default function () {
   const entry = http.post(`${base}/api/v1/preorders/queue?productId=${PRODUCT_ID}`, null,
       { headers: auth, tags: { name: 'entry' } });
   const entered = data(entry);
-  check(entry, { 'entry answered': (r) => r.status === 200 || r.status === 202 || r.status === 429 }, { name: 'entry' });
+  check(entry, { 'entry answered': (r) => r.status === 200 || r.status === 202 }, { name: 'entry' });
   if (entry.status === 200 && entered && entered.status === 'ADMITTED') {
     admittedAtEntry.add(1);
     timeToAdmission.add(0);

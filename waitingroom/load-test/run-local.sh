@@ -27,8 +27,18 @@ start() {
       --logging.level.root=WARN > "build/node-$i.log" 2>&1 &
     echo $! > "build/node-$i.pid"
   done
+  # 노드가 죽었거나 60초 안에 뜨지 않으면 로그 위치를 알리고 끝낸다(경로 · 자바 버전이 틀리면 바로 죽는다)
   for i in $(seq 0 $((nodes - 1))); do
-    until curl -sf "http://localhost:$((9085 + i))/actuator/health/liveness" >/dev/null; do sleep 1; done
+    local waited=0
+    until curl -sf "http://localhost:$((9085 + i))/actuator/health/liveness" >/dev/null; do
+      if ! kill -0 "$(cat "build/node-$i.pid")" 2>/dev/null || [ "$waited" -ge 60 ]; then
+        echo "노드 $i 가 뜨지 않았다 — build/node-$i.log 를 본다" >&2
+        stop
+        exit 1
+      fi
+      sleep 1
+      waited=$((waited + 1))
+    done
   done
   echo "Redis :$REDIS_PORT, 노드 $nodes 대(:8085~, 관리 :9085~)"
 }

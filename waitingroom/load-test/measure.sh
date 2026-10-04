@@ -7,10 +7,18 @@ PRODUCT=$1
 RATE=$2
 NAME=$3
 
+# 노드마다 지표를 받아 더한다. 받지 못하면 0 으로 적지 않고 멈춘다 — 0 은 "아무도 안 들였다" 와 구별되지 않는다
 admitted() {
+  local total=0 metrics count
   for port in 9085 9086; do
-    curl -s "http://localhost:$port/actuator/prometheus" | rg "^waitingroom_admitted_total\{product=\"$PRODUCT\"" | awk '{print $2}'
-  done | awk '{s+=$1} END {print s+0}'
+    if ! metrics=$(curl -sf "http://localhost:$port/actuator/prometheus"); then
+      echo "노드 :$port 지표를 받지 못했다" >&2
+      exit 1
+    fi
+    count=$(printf '%s\n' "$metrics" | grep -E "^waitingroom_admitted_total\{product=\"$PRODUCT\"" | awk '{s+=$2} END {print s+0}')
+    total=$(awk -v a="$total" -v b="$count" 'BEGIN {print a + b}')
+  done
+  echo "$total"
 }
 
 ./run-local.sh seed "$PRODUCT"
