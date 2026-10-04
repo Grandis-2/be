@@ -79,6 +79,7 @@ class ProductEditRaceTest {
     void setUp() {
         fixtures = new ShopFixtures(jdbcTemplate);
         categoryId = fixtures.category();
+        CLOCK.owner = Thread.currentThread();
     }
 
     @AfterEach
@@ -348,6 +349,36 @@ class ProductEditRaceTest {
         assertThat(jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, productId)).isEqualTo("ACTIVE");
     }
 
+    @Test
+    @DisplayName("오픈 그 순간(지금 == opens_at)부터 회차 취소다 — 사유와 함께 판매 중지를 보내면 취소 접수. 1마이크로초 전은 잠금 구간이라 409")
+    void campaignCancelStartsAtOpensAt() throws Exception {
+        long productId = registerPreorder();
+        Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.MICROS);
+        fixtures.campaign(productId, opensAt, opensAt.plus(Duration.ofDays(1)));
+
+        CLOCK.next = () -> opensAt.minus(1, ChronoUnit.MICROS);
+        assertStateConflict(() -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED, "직전")));
+        CLOCK.next = () -> opensAt;
+        assertThat(editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED, "그 순간")).campaignCancellationRequested())
+                .isTrue();
+        assertThat(jdbcTemplate.queryForObject("SELECT campaign_canceled_at IS NOT NULL FROM products WHERE id = ?", Boolean.class, productId))
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("오픈 뒤 회차 취소가 동시에 두 번 들어와도 취소 이벤트는 하나다 — 뒤의 것은 앞의 취소가 커밋된 뒤 취소 표식을 본다")
+    void concurrentCampaignCancelsWriteOneEvent() throws Exception {
+        long productId = registerPreorder();
+        Instant now = Instant.now();
+        fixtures.campaign(productId, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
+        interleave(() -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED, "첫 취소")),
+                () -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED, "겹친 취소")));
+
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM catalog_outbox_events WHERE aggregate_id = ? AND event_type = 'PREORDER_CAMPAIGN_CANCELED'
+                """, Integer.class, productId)).as("잠그지 않고 읽으면 둘 다 취소 전으로 보고 이벤트를 둘 적는다").isEqualTo(1);
+    }
+
     // ── 도우미 ─────────────────────────────────────────────────────────────
 
     /**
@@ -518,11 +549,17 @@ class ProductEditRaceTest {
 
         private final Clock system = StorageClock.atStorageResolution(Clock.systemUTC());
         volatile Supplier<Instant> next;
+        /**
+         * next 를 받는 스레드(시험 스레드). 앱의 다른 스레드 — 커밋 직후 아웃박스 발행(outbox-publish-*) 등 — 도 같은 시계를 읽는데,
+         * 앞 시험이 남긴 발행이 다음 시험의 "첫 읽기" 를 먼저 가져가면 판정 순서가 틀어진다(실측: 회차 취소 뒤 시계를 읽은 것은 outbox-publish-2).
+         * 그래서 next 는 이 스레드에만 주고 나머지는 실제 시계를 읽는다.
+         */
+        volatile Thread owner;
 
         @Override
         public Instant instant() {
             Supplier<Instant> supplier = next;
-            return supplier == null ? system.instant() : supplier.get();
+            return supplier == null || Thread.currentThread() != owner ? system.instant() : supplier.get();
         }
 
         @Override

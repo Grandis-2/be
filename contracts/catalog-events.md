@@ -10,9 +10,10 @@
 | --- | --- | --- |
 | `PREORDER_PRODUCT_REGISTERED` | `preorder-events` | preorder — 회차 · 배송 차수를 만든다 |
 | `IN_STOCK_PRODUCT_REGISTERED` | `order-events` | order — 옵션별 초기 재고를 만든다 |
+| `PREORDER_CAMPAIGN_CANCELED` | `preorder-events` | preorder — 회차를 지금 마감하고 진행 중 예약의 취소를 시작한다 |
 
 - **최소 한 번.** 커밋 직후 한 번 보내고, 못 보냈으면 릴레이가 다시 보낸다. 같은 메시지가 두 번 갈 수 있다 — 받는 쪽은 두 번 받아도 결과가 같아야 한다.
-- **순서 보장 없음.** 한 상품에 등록 이벤트는 하나뿐이라 순서가 문제 되지 않는다.
+- **순서 보장 없음.** 한 상품의 이벤트는 등록 하나와 회차 취소 하나뿐이다. 회차 취소는 회차 행(등록 이벤트를 preorder 가 처리한 결과)이 있어야 보내므로 둘의 순서가 뒤집히지 않는다.
 - **메시지 속성.** `eventType` · `eventId`(문자열). preorder · order 가 보내는 메시지와 같다.
 
 ## 봉투
@@ -34,10 +35,10 @@ preorder · order 의 `EventEnvelope` 와 같은 모양이다.
 | --- | --- |
 | `eventId` | UUID. 같은 메시지가 두 번 오면 같은 값이다 |
 | `aggregateType` | `"PRODUCT"` (대문자 — preorder 의 `"PREORDER"` 와 같은 표기) |
-| `aggregateId` | 상품 id. **payload 에는 상품 id 를 다시 넣지 않는다** — 둘이 어긋날 수 있다 |
+| `aggregateId` | 상품 id. **payload 에는 상품 id 를 다시 넣지 않는다** — 둘이 어긋날 수 있다. 예외는 `PREORDER_CAMPAIGN_CANCELED` 하나(아래) |
 | `occurredAt` | catalog 가 아웃박스에 적은 시각(UTC) |
 
-**payload 에 값을 싣는 이유.** preorder · order 의 다른 이벤트는 식별자만 싣고 받는 쪽이 원장을 다시 읽는다. 이 두 이벤트는 그렇게 할 수 없다 — 회차 · 차수 · 초기 재고는 catalog 표 어디에도 없고(받는 쪽 표에 들어갈 값이다), 큐를 받는 스레드에는 catalog 내부 API 를 부를 사용자 토큰도 없다. 그래서 값을 payload 에 싣고, catalog 는 아웃박스 행을 바꾸지 않는다(같은 내용을 다시 보낸다).
+**payload 에 값을 싣는 이유.** preorder · order 의 다른 이벤트는 식별자만 싣고 받는 쪽이 원장을 다시 읽는다. 등록 이벤트 둘은 그렇게 할 수 없다 — 회차 · 차수 · 초기 재고는 catalog 표 어디에도 없고(받는 쪽 표에 들어갈 값이다), 큐를 받는 스레드에는 catalog 내부 API 를 부를 사용자 토큰도 없다. 그래서 값을 payload 에 싣고, catalog 는 아웃박스 행을 바꾸지 않는다(같은 내용을 다시 보낸다).
 
 ## `PREORDER_PRODUCT_REGISTERED` → preorder
 
@@ -80,6 +81,25 @@ preorder · order 의 `EventEnvelope` 와 같은 모양이다.
 1. 재고 초기화와 같은 규칙으로 처리한다 — `AdminStockService.initialize` 를 그대로 부르면 쓰는 길이 하나로 끝난다. 한 트랜잭션에서 모두 되거나 모두 안 된다.
 2. **행이 없는 옵션만 만들고 있는 옵션은 그대로 둔다(생성 전용).** 같은 이벤트를 두 번 받거나, 그사이 관리자가 재고 API 로 고친 값을 덮지 않는다.
 3. 옵션이 그 상품의 것인지, 상품이 일반 판매인지 확인한다. catalog 에는 옵션 삭제 경로가 없으므로(판매 상태만 바뀐다) 그 상품의 옵션이 아닌 값은 계약 오류다 — 건너뛰지 말고 실패시켜 DLQ 로 보낸다.
+
+## `PREORDER_CAMPAIGN_CANCELED` → preorder
+
+관리자가 사전예약 **오픈 뒤**(회차 `opens_at` ≤ 지금) `PATCH /api/v1/admin/products/{id}/sale-status` 에 `{ "status": "PAUSED", "reason": "…" }` 를 보내면 회차 취소로 접수한다(202). catalog 는 같은 트랜잭션에서 상품을 판매 중지로 두고 취소 시각(`products.campaign_canceled_at`)을 남기고 이 이벤트를 적는다. 되돌릴 수 없다.
+
+```json
+"payload": { "productId": 42, "reason": "회차 운영 취소" }
+```
+
+| 칸 | 뜻 |
+| --- | --- |
+| `productId` | 상품 id — **이 이벤트만 payload 에 싣는다.** preorder 가 이 이벤트를 먼저 정의하고 payload 의 `productId` 로 읽는다. 봉투의 `aggregateId` 와 같은 값이다 |
+| `reason` | 관리자가 적은 취소 사유 — 앞뒤 공백을 뺀 값, 500자 이하(Java 문자열 길이 · UTF-16 단위 — 이모지는 2), 비지 않음. 빈 문자열 · 공백뿐이면 사유가 없는 것으로 보고 400. preorder 가 같은 단위 500 으로 자르므로 이 길이 안이면 잘리지 않는다 |
+
+- **한 번만 보낸다.** 이미 취소된 상품에 다시 보내면 catalog 는 202 를 주되 이벤트를 다시 적지 않는다(취소 시각으로 판정, 상품 행 잠금으로 줄 선다). 전달은 최소 한 번이라 같은 메시지가 두 번 갈 수는 있다.
+- **회차 행이 있을 때만 보낸다.** 오픈 판정이 회차 행으로 하므로, 등록 이벤트를 처리하기 전에 취소가 먼저 가는 일은 없다.
+- 오픈 전에 판매 중지로 둔 채 오픈을 넘긴 상품은 이 이벤트를 보내지 않는다 — 회차 취소가 아니다(2026-10-04 결정). 관리자가 오픈 뒤 사유와 함께 판매 중지를 보내면 그때 보낸다.
+
+**받는 쪽이 할 일**(preorder 에 이미 있다 — `CampaignCancelService`): 회차를 지금 마감하고, 진행 중 예약을 작은 트랜잭션 단위로 취소 시작한다. 같은 이벤트를 다시 받으면 남은 예약만 이어서 처리한다.
 
 ## 판매 방식별 준비 — catalog 가 읽는 결과
 

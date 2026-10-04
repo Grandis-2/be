@@ -20,11 +20,13 @@ import com.grandis.nova.catalog.product.ProductOption;
 import com.grandis.nova.catalog.product.ProductOptionRepository;
 import com.grandis.nova.catalog.product.ProductRepository;
 import com.grandis.nova.catalog.product.SaleMode;
+import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.catalog.registration.ProductRegistrationValidator;
 import com.grandis.nova.catalog.web.ConstraintViolations;
 import com.grandis.nova.catalog.web.ValidationFailures;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.outbox.OutboxWriter;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
@@ -54,7 +56,8 @@ import org.springframework.transaction.annotation.Transactional;
  * 판매 중지한다. 옛 옵션에 주문 이력이 있는지는 catalog 가 볼 수 없다(주문 표를 읽지 않는다) — 그래서 지우지 않고 상태로 숨긴다.
  *
  * <p><b>한 상품의 수정은 줄 선다.</b> 수정은 모두 상품 행을 잠그고(SELECT … FOR UPDATE) 시작한다. 오픈 판정은 시작 때 한 번, 커밋
- * 직전에 한 번 더 한다(잠금 대기 · 재계산 중에 오픈 시각이 지날 수 있다).
+ * 직전에 한 번 더 한다(잠금 대기 · 재계산 중에 오픈 시각이 지날 수 있다). 회차 취소 갈래는 이미 오픈 뒤라 다시 보지 않는다.
+ * 회차가 취소된 상품(campaign_canceled_at)은 공개 여부 말고는 아무것도 못 바꾼다 — 회차 시각과 상관없이 409.
  *
  * <p>일반 상품의 새 옵션 재고는 여기서 받지 않는다 — 재고는 order 의 `PUT /admin/products/{id}/stock` 이 정본이다. 재고 행이 없는 동안 그 옵션은 품절로 보인다.
  */
@@ -69,6 +72,11 @@ public class ProductEditService {
 
     private static final String EDIT_FROZEN = "사전예약 오픈 3분 전부터는 상품 정보 · 옵션 · 가격을 바꿀 수 없습니다.";
     private static final String STATUS_FROZEN = "사전예약 오픈 3분 전부터는 판매 상태를 바꿀 수 없습니다.";
+    /**
+     * 회차 취소 사유의 최대 길이 — 앞뒤 공백을 뺀 Java 문자열 길이(UTF-16 단위). preorder 는 받은 사유를 같은 단위 500 으로 잘라 이력에 남기므로
+     * 이 길이를 넘지 않게 받으면 preorder 가 자를 일이 없다(코드 포인트로 세면 이모지가 섞인 사유를 preorder 가 서로게이트 쌍 가운데서 자를 수 있다).
+     */
+    private static final int REASON_MAX_LENGTH = 500;
 
     private final ProductRepository products;
     private final ProductOptionAxisRepository axes;
@@ -78,12 +86,13 @@ public class ProductEditService {
     private final ProductListingQueryRepository crossReads;
     private final ProductImageRepository images;
     private final ProductDetailService detailService;
+    private final OutboxWriter outbox;
     private final Clock clock;
 
     public ProductEditService(ProductRepository products, ProductOptionAxisRepository axes, ProductOptionValueRepository values,
                               ProductOptionRepository options, ProductOptionSelectionRepository selections,
                               ProductListingQueryRepository crossReads, ProductImageRepository images,
-                              ProductDetailService detailService, Clock clock) {
+                              ProductDetailService detailService, OutboxWriter outbox, Clock clock) {
         this.products = products;
         this.axes = axes;
         this.values = values;
@@ -92,6 +101,7 @@ public class ProductEditService {
         this.crossReads = crossReads;
         this.images = images;
         this.detailService = detailService;
+        this.outbox = outbox;
         this.clock = clock;
     }
 
@@ -300,15 +310,56 @@ public class ProductEditService {
      * 상품 판매 시작 · 중지(ACTIVE ↔ PAUSED). 같은 상태면 바꾸지 않고 그대로 답한다. 사전예약은 다른 수정처럼 오픈 3분 전부터 409 다
      * (2026-10-04 결정 — preorder 의 접수용 상품 사본이 1분마다 갱신돼 오픈 뒤 전환은 접수에 늦게 닿는다). 오픈 전에 PAUSED 로 둔 채
      * 오픈을 넘긴 상품은 그대로 판매 중지다 — 회차 취소로 보지 않고 이벤트도 없다(같은 날 결정).
+     *
+     * <p>사전예약 <b>오픈 뒤</b>(회차 opens_at ≤ 지금)의 PAUSED 는 회차 취소다 — {@link #cancelCampaign}. 사유는 그때만 받는다.
      */
     @Transactional
     public SaleStatusView changeSaleStatus(Long productId, SaleStatusChangeRequest request) {
         Product product = lockProduct(productId);
-        requireNotOpened(product, STATUS_FROZEN);
+        // 빈 사유는 보내지 않은 것으로 본다 — 화면이 늘 칸을 채워 보내도 일반 전환이 막히지 않게. 회차 취소에서는 필수다
+        String reason = request.reason() == null || request.reason().isBlank() ? null : request.reason().strip();
+        // 이미 회차가 취소된 상품은 취소 갈래로만 — 취소 뒤 preorder 가 오픈을 미래로 옮겨도 되돌리기 · 일반 전환이 되지 않는다
+        if (product.getSaleMode() == SaleMode.PREORDER && (product.getCampaignCanceledAt() != null || opened(product))) {
+            return cancelCampaign(product, request.status(), reason);
+        }
+        requireNotOpened(product, STATUS_FROZEN);   // 잠금 판정이 먼저다 — 오픈 3분 전 구간에서는 사유가 와도 409
+        if (reason != null) {
+            throw ValidationFailures.of("reason", "사유는 사전예약 오픈 뒤 판매 중지(회차 취소)에만 받습니다.");
+        }
         product.changeStatus(request.status());
         products.flush();
         requireNotOpened(product, STATUS_FROZEN);   // 커밋 직전 — 잠금 대기 중에 오픈 3분 전을 넘겼을 수 있다
         return new SaleStatusView(productId, product.getStatus(), false);
+    }
+
+    /**
+     * 사전예약 오픈 뒤 판매 중지 = 회차 취소. 판매 중지로 두고 취소 시각을 남기고, 같은 트랜잭션에서 PREORDER_CAMPAIGN_CANCELED 를 아웃박스에 적는다.
+     * preorder 가 받아 회차를 지금 마감하고 진행 중 예약의 취소를 시작한다. 되돌릴 수 없다 — 오픈 뒤 ACTIVE 는 409.
+     * 이미 취소된 상품에 다시 보내면 이벤트를 다시 적지 않고 같은 답(접수됨)을 준다. 오픈 판정은 상품 행 잠금 아래에서 했다 — 같은 상품의 취소는 줄 서므로
+     * 이벤트는 한 번만 적힌다.
+     */
+    private SaleStatusView cancelCampaign(Product product, SaleStatus requested, String reason) {
+        if (requested != SaleStatus.PAUSED) {
+            throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "오픈했거나 회차가 취소된 사전예약은 판매를 다시 시작할 수 없습니다.");
+        }
+        if (reason == null) {
+            throw ValidationFailures.of("reason", "오픈 뒤 판매 중지는 회차 취소라 사유가 필요합니다.");
+        }
+        if (reason.length() > REASON_MAX_LENGTH) {
+            throw ValidationFailures.of("reason", "사유는 앞뒤 공백을 뺀 %d자 이하입니다.".formatted(REASON_MAX_LENGTH));
+        }
+        if (product.cancelCampaign(clock.instant())) {
+            products.flush();   // 표식 UPDATE 를 먼저 내려 제약(CHECK) 위반이 이벤트를 적기 전에 이 자리에서 드러나게 한다
+            outbox.append(new PreorderCampaignCanceled(product.getId(), reason));
+        }
+        return new SaleStatusView(product.getId(), product.getStatus(), true);
+    }
+
+    /** 사전예약 회차가 열렸는가(opens_at ≤ 지금). 회차가 없으면(등록 이벤트 처리 전) 열리지 않았다. */
+    private boolean opened(Product product) {
+        return crossReads.findCampaign(product.getId())
+                .map(window -> !clock.instant().isBefore(window.opensAt()))
+                .orElse(false);
     }
 
     /** 공개 ↔ 비공개. 언제든 바꾼다 — 오픈 판정을 하지 않는다. 다른 수정과 줄 서도록 상품 행은 잠근다. */
@@ -346,6 +397,10 @@ public class ProductEditService {
     private void requireNotOpened(Product product, String message) {
         if (product.getSaleMode() != SaleMode.PREORDER) {
             return;
+        }
+        if (product.getCampaignCanceledAt() != null) {
+            // 회차가 취소된 상품은 더 바꿀 것이 없다 — 회차 시각과 상관없이(취소 뒤 오픈이 미래로 옮겨져도) 409
+            throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "회차가 취소된 상품은 바꿀 수 없습니다.");
         }
         boolean frozen = crossReads.findCampaign(product.getId())
                 .map(window -> !clock.instant().isBefore(window.opensAt().minus(FREEZE_BEFORE_OPEN)))

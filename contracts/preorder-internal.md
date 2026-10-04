@@ -45,7 +45,7 @@
 | `productId` | number | `products.id` |
 | `title` | string | 상품명. 스냅샷 원본 |
 | `saleMode` | `PREORDER` \| `IN_STOCK` | `products.sale_mode` |
-| `status` | `ACTIVE` \| `PAUSED` | `products.status`. PAUSED 는 판매 중지 — 소비자는 신규 접수 · 주문을 막는다. 사전예약 상품은 오픈 3분 전부터 이 칸이 바뀌지 않는다(2026-10-04 결정). 오픈 전에 PAUSED 로 둔 채 오픈을 넘긴 상품도 판매 중지일 뿐 회차 취소가 아니다 — 회차 취소는 이 칸으로 알리지 않고 `PREORDER_CAMPAIGN_CANCELED` 이벤트로 따로 알린다(catalog 쪽 발행은 후속 작업) |
+| `status` | `ACTIVE` \| `PAUSED` | `products.status`. PAUSED 는 판매 중지 — 소비자는 신규 접수 · 주문을 막는다. 사전예약 상품은 오픈 3분 전부터 이 칸이 바뀌지 않는다(2026-10-04 결정). 오픈 전에 PAUSED 로 둔 채 오픈을 넘긴 상품도 판매 중지일 뿐 회차 취소가 아니다 — 회차 취소는 이 칸으로 알리지 않고 `PREORDER_CAMPAIGN_CANCELED` 이벤트로 따로 알린다(contracts/catalog-events.md — 오픈 뒤 관리자 판매 중지 · 사유) |
 | `visible` | boolean | 공개 여부 — 관리자가 등록 때 고른 값이 그대로 들어간다(2026-10-02 이벤트 방식 전환부터). 준비 전 상품도 true 일 수 있으므로 소비자는 visible 로 준비를 추론하지 말고 **두 칸을 모두 본다** |
 | `registrationCompleted` | boolean | 판매 방식별 준비 — 등록 이벤트를 받은 서비스가 행을 만들었는가. 사전예약은 `preorder_campaigns` 에 그 상품 행이 있다, 일반은 `option_inventories` 에 그 상품 옵션의 행이 있다(contracts/catalog-events.md) |
 

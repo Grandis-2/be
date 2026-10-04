@@ -355,7 +355,7 @@ class AdminProductEditApiTest {
         }
 
         @Test
-        @DisplayName("사전예약 판매 상태는 오픈 3분 전까지만 바꾼다 — 오픈 5분 전 · 회차 없음은 200, 오픈 2분 전 · 오픈 뒤는 409 이고 상태는 그대로")
+        @DisplayName("사전예약 판매 상태는 오픈 3분 전까지만 바꾼다 — 오픈 5분 전 · 회차 없음은 200, 오픈 2분 전은 409 · 오픈 뒤 ACTIVE 는 409 이고 상태는 그대로")
         void preorderStatusFreezesThreeMinutesBeforeOpen() throws Exception {
             Instant now = Instant.now();
             long noCampaign = registerPreorder();
@@ -368,15 +368,107 @@ class AdminProductEditApiTest {
 
             long frozen = registerPreorder();
             fixtures.campaign(frozen, now.plus(Duration.ofMinutes(2)), now.plus(HOUR));
+            saleStatus(frozen, "PAUSED").andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"))
+                    .andExpect(jsonPath("$.error.message").value("사전예약 오픈 3분 전부터는 판매 상태를 바꿀 수 없습니다."));
+            // 잠금 판정이 먼저다 — 지금과 같은 상태를 보내도, 사유를 실어 보내도 409
+            saleStatus(frozen, "ACTIVE").andExpect(status().isConflict());
+            saleStatusBody(frozen, "{ \"status\": \"PAUSED\", \"reason\": \"x\" }").andExpect(status().isConflict());
+            assertThat(statusOf(frozen)).isEqualTo("ACTIVE");
+
+            // 오픈 뒤 PAUSED 는 회차 취소라 사유가 필요하고(아래 시험), ACTIVE 는 되돌리기라 409
             long opened = registerPreorder();
             fixtures.campaign(opened, now.minus(HOUR), now.plus(HOUR));
-            for (long productId : new long[] {frozen, opened}) {
-                saleStatus(productId, "PAUSED").andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"))
-                        .andExpect(jsonPath("$.error.message").value("사전예약 오픈 3분 전부터는 판매 상태를 바꿀 수 없습니다."));
-                assertThat(statusOf(productId)).isEqualTo("ACTIVE");
-                // 잠금 판정이 먼저다 — 지금과 같은 상태를 보내도 409(오픈 뒤 판매 중지의 반복 요청은 회차 취소 쪽 규칙이다)
-                saleStatus(productId, "ACTIVE").andExpect(status().isConflict());
-            }
+            saleStatus(opened, "ACTIVE").andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"));
+            expectValidation(saleStatus(opened, "PAUSED"), "reason");
+            assertThat(statusOf(opened)).isEqualTo("ACTIVE");
+        }
+
+        @Test
+        @DisplayName("사전예약 오픈 뒤 판매 중지(사유)는 회차 취소 접수 — 202 · PAUSED · 취소 시각, preorder-events 로 갈 이벤트 하나. 다시 보내도 202 이고 이벤트는 하나, 되돌리기는 409")
+        void cancelCampaignAfterOpen() throws Exception {
+            long productId = registerPreorder();
+            fixtures.campaign(productId, Instant.now().minus(HOUR), Instant.now().plus(HOUR));
+
+            JsonNode accepted = data(saleStatusBody(productId, "{ \"status\": \"PAUSED\", \"reason\": \"  공급 중단  \" }")
+                    .andExpect(status().isAccepted()));
+            assertThat(accepted.get("status").asString()).isEqualTo("PAUSED");
+            assertThat(accepted.get("campaignCancellationRequested").asBoolean()).isTrue();
+            assertThat(statusOf(productId)).isEqualTo("PAUSED");
+            assertThat(jdbcTemplate.queryForObject("SELECT campaign_canceled_at IS NOT NULL FROM products WHERE id = ?", Boolean.class, productId))
+                    .isTrue();
+            List<java.util.Map<String, Object>> events = cancelEvents(productId);
+            assertThat(events).hasSize(1);
+            JsonNode payload = JSON.readTree((String) events.get(0).get("payload"));
+            assertThat(payload.get("productId").asLong()).as("preorder 가 payload 의 productId 로 읽는다").isEqualTo(productId);
+            assertThat(payload.get("reason").asString()).as("앞뒤 공백을 걷는다").isEqualTo("공급 중단");
+            assertThat(events.get(0)).containsEntry("aggregate_type", "PRODUCT").containsEntry("aggregate_id", productId);
+
+            saleStatusBody(productId, "{ \"status\": \"PAUSED\", \"reason\": \"다시\" }").andExpect(status().isAccepted())
+                    .andExpect(jsonPath("$.data.campaignCancellationRequested").value(true));
+            assertThat(cancelEvents(productId)).as("이미 취소된 상품 — 이벤트를 다시 적지 않는다").hasSize(1);
+            saleStatus(productId, "ACTIVE").andExpect(status().isConflict());
+            assertThat(statusOf(productId)).isEqualTo("PAUSED");
+            // DB 도 막는다 — 취소 표식이 있는 행은 ACTIVE 가 될 수 없고, 일반 상품에는 표식이 붙을 수 없다(CHECK)
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbcTemplate.update("UPDATE products SET status = 'ACTIVE' WHERE id = ?", productId))
+                    .hasMessageContaining("ck_product_campaign_canceled");
+            long inStock = registerInStock();
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbcTemplate.update(
+                            "UPDATE products SET status = 'PAUSED', campaign_canceled_at = UTC_TIMESTAMP(6) WHERE id = ?", inStock))
+                    .hasMessageContaining("ck_product_campaign_canceled");
+        }
+
+        @Test
+        @DisplayName("회차가 취소된 상품은 취소 뒤 오픈이 미래로 옮겨져도 그대로 취소다 — 되돌리기 · 정보 수정은 409, 취소 재요청은 202 이고 이벤트는 하나")
+        void canceledProductStaysCanceledWhenOpenMovesLater() throws Exception {
+            long productId = registerPreorder();
+            fixtures.campaign(productId, Instant.now().minus(HOUR), Instant.now().plus(HOUR));
+            saleStatusBody(productId, "{ \"status\": \"PAUSED\", \"reason\": \"공급 중단\" }").andExpect(status().isAccepted());
+            fixtures.moveCampaignOpensAt(productId, Instant.now().plus(Duration.ofMinutes(30)));
+
+            saleStatus(productId, "ACTIVE").andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"));
+            edit(productId, "{ \"title\": \"취소된 상품\" }").andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.error.message").value("회차가 취소된 상품은 바꿀 수 없습니다."));
+            saleStatusBody(productId, "{ \"status\": \"PAUSED\", \"reason\": \"다시\" }").andExpect(status().isAccepted());
+            assertThat(statusOf(productId)).isEqualTo("PAUSED");
+            assertThat(cancelEvents(productId)).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("오픈 전에 판매 중지로 둔 채 오픈을 넘긴 상품은 회차 취소가 아니다 — 취소 시각 · 이벤트 없음. 관리자가 사유와 함께 판매 중지를 보내면 그때 취소된다")
+        void pausedBeforeOpenIsNotACancellationUntilExplicit() throws Exception {
+            long productId = registerPreorder();
+            fixtures.campaign(productId, Instant.now().plus(Duration.ofMinutes(10)), Instant.now().plus(HOUR));
+            saleStatus(productId, "PAUSED").andExpect(status().isOk()).andExpect(jsonPath("$.data.campaignCancellationRequested").value(false));
+            fixtures.moveCampaignOpensAt(productId, Instant.now().minus(Duration.ofMinutes(1)));
+
+            assertThat(jdbcTemplate.queryForObject("SELECT campaign_canceled_at IS NULL FROM products WHERE id = ?", Boolean.class, productId))
+                    .isTrue();
+            assertThat(cancelEvents(productId)).isEmpty();
+
+            saleStatusBody(productId, "{ \"status\": \"PAUSED\", \"reason\": \"회차 운영 취소\" }").andExpect(status().isAccepted());
+            assertThat(cancelEvents(productId)).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("사유는 사전예약 오픈 뒤 판매 중지에만 — 일반 상품 · 오픈 전 사전예약은 400(빈 사유는 보내지 않은 것), 오픈 뒤 빈 사유 · 501자는 400, 앞뒤 공백을 뺀 500자는 202")
+        void reasonRules() throws Exception {
+            long inStock = registerInStock();
+            expectValidation(saleStatusBody(inStock, "{ \"status\": \"PAUSED\", \"reason\": \"x\" }"), "reason");
+            saleStatusBody(inStock, "{ \"status\": \"PAUSED\", \"reason\": \"\" }").andExpect(status().isOk());
+            long fullLength = registerPreorder();
+            fixtures.campaign(fullLength, Instant.now().minus(HOUR), Instant.now().plus(HOUR));
+            saleStatusBody(fullLength, "{ \"status\": \"PAUSED\", \"reason\": \"  " + "가".repeat(500) + "  \" }").andExpect(status().isAccepted());
+            long notOpened = registerPreorder();
+            fixtures.campaign(notOpened, Instant.now().plus(HOUR), Instant.now().plus(HOUR.multipliedBy(2)));
+            expectValidation(saleStatusBody(notOpened, "{ \"status\": \"PAUSED\", \"reason\": \"x\" }"), "reason");
+            long opened = registerPreorder();
+            fixtures.campaign(opened, Instant.now().minus(HOUR), Instant.now().plus(HOUR));
+            expectValidation(saleStatusBody(opened, "{ \"status\": \"PAUSED\", \"reason\": \"   \" }"), "reason");
+            expectValidation(saleStatusBody(opened, "{ \"status\": \"PAUSED\", \"reason\": \"" + "가".repeat(501) + "\" }"), "reason");
+            // 길이는 UTF-16 단위 — 이모지 300 개(600)는 preorder 가 자르게 되므로 받지 않는다
+            expectValidation(saleStatusBody(opened, "{ \"status\": \"PAUSED\", \"reason\": \"" + "😀".repeat(300) + "\" }"), "reason");
+            assertThat(cancelEvents(opened)).isEmpty();
+            assertThat(statusOf(opened)).isEqualTo("ACTIVE");
         }
 
         @Test
@@ -464,6 +556,13 @@ class AdminProductEditApiTest {
 
         private String statusOf(long productId) {
             return jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, productId);
+        }
+
+        private List<java.util.Map<String, Object>> cancelEvents(long productId) {
+            return jdbcTemplate.queryForList("""
+                    SELECT aggregate_type, aggregate_id, payload FROM catalog_outbox_events
+                     WHERE aggregate_id = ? AND event_type = 'PREORDER_CAMPAIGN_CANCELED'
+                    """, productId);
         }
 
         private boolean visibleOf(long productId) {
