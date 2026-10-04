@@ -12,6 +12,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.grandis.nova.catalog.CatalogErrorCode;
+import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.common.BusinessException;
@@ -287,6 +288,64 @@ class ProductEditRaceTest {
         assertStateConflict(() -> editService.editProduct(productId, titleOnly("회차가 옮겨진 수정")));
         assertThat(reads.get()).as("첫 판정은 옮기기 전 회차로 통과했다").isGreaterThanOrEqualTo(2);
         assertThat(title(productId)).isEqualTo("Race");
+    }
+
+    @Test
+    @DisplayName("정보 수정이 커밋되기 전에 판매 상태 전환이 들어오면 기다렸다가 새 정보 위에 적는다 — 제목도 상태도 남는다")
+    void saleStatusChangeSerializesWithEdit() throws Exception {
+        long productId = registerInStock();
+        interleave(() -> editService.editProduct(productId, titleOnly("먼저 고친 제목")),
+                () -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED)));
+
+        assertThat(title(productId)).as("잠그지 않고 읽은 상태 전환이 옛 제목을 다시 쓰면 Race").isEqualTo("먼저 고친 제목");
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, productId)).isEqualTo("PAUSED");
+    }
+
+    @Test
+    @DisplayName("기본가 수정이 커밋되기 전에 공개 전환이 들어오면 기다렸다가 새 기본가 위에 적는다 — 기본가 · 옵션 가격 · 공개 여부가 모두 새 값")
+    void visibilityChangeSerializesWithEdit() throws Exception {
+        long productId = registerInStock();
+        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)),
+                () -> editService.changeVisibility(productId, new VisibilityChangeRequest(true)));
+
+        assertThat(jdbcTemplate.queryForObject("SELECT base_price FROM products WHERE id = ?", BigDecimal.class, productId))
+                .as("옛 기본가로 덮이면 옵션 가격(새 기본가로 계산)과 어긋난다").isEqualByComparingTo("1100000");
+        assertThat(price(productId, "256GB")).isEqualByComparingTo("1100000");
+        assertThat(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, productId)).isTrue();
+    }
+
+    @Test
+    @DisplayName("판매 상태 전환 중에 잠금 시각(오픈 3분 전)이 지나면 커밋하지 않는다 — 409, 상태 그대로")
+    void openingDuringTheSaleStatusChangeRejectsTheCommit() throws Exception {
+        long productId = registerPreorder();
+        Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.MICROS);
+        fixtures.campaign(productId, opensAt, opensAt.plus(Duration.ofDays(1)));
+
+        AtomicInteger reads = new AtomicInteger();
+        Instant freezesAt = opensAt.minus(ProductEditService.FREEZE_BEFORE_OPEN);
+        CLOCK.next = () -> reads.getAndIncrement() == 0 ? freezesAt.minusMillis(1) : freezesAt;
+        assertStateConflict(() -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED)));
+        assertThat(reads.get()).as("첫 판정은 통과했다").isGreaterThanOrEqualTo(2);
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, productId)).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    @DisplayName("판매 상태 전환 중에 preorder 가 회차 오픈을 앞당겨 잠금 시각이 지났으면 커밋하지 않는다 — 409, 상태 그대로")
+    void campaignMovedEarlierDuringTheSaleStatusChangeRejectsTheCommit() throws Exception {
+        long productId = registerPreorder();
+        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
+        fixtures.campaign(productId, now.plus(Duration.ofHours(1)), now.plus(Duration.ofDays(1)));
+
+        AtomicInteger reads = new AtomicInteger();
+        CLOCK.next = () -> {
+            if (reads.getAndIncrement() == 0) {
+                onAnotherConnection(() -> fixtures.moveCampaignOpensAt(productId, now.minus(Duration.ofMinutes(1))));
+            }
+            return now;
+        };
+        assertStateConflict(() -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED)));
+        assertThat(reads.get()).as("첫 판정은 옮기기 전 회차로 통과했다").isGreaterThanOrEqualTo(2);
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, productId)).isEqualTo("ACTIVE");
     }
 
     // ── 도우미 ─────────────────────────────────────────────────────────────

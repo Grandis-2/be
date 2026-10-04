@@ -11,6 +11,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import java.math.BigDecimal;
+import java.util.Objects;
 
 /**
  * 상품(모델). 옵션은 {@link ProductOption} 이 product id 로 잇는다.
@@ -104,6 +105,15 @@ public class Product extends BaseEntity {
     /** 비공개. 조건 없다. 기존 예약 · 주문에는 손대지 않는다. */
     public void hide() {
         this.visible = false;
+    }
+
+    /**
+     * 판매 시작 · 중지(ACTIVE ↔ PAUSED). 판매 중지는 회원 목록에서 빠지고 상세에는 판매 중지로 보인다. 신규 접수 · 주문은 이 상태를 읽는
+     * 쪽(preorder 접수 · order 주문)이 막는다 — catalog 는 상태만 바꾸고 기존 예약 · 주문에는 손대지 않는다.
+     * 사전예약은 오픈 3분 전부터 못 바꾼다는 규칙은 서비스가 지킨다(회차는 preorder 표).
+     */
+    public void changeStatus(SaleStatus status) {
+        this.status = Objects.requireNonNull(status, "status");
     }
 
     /** 표시 정보 수정. null 은 "보내지 않음" 이라 그대로 둔다. 사전예약 오픈 뒤 금지는 서비스가 지킨다(회차는 preorder 표). */

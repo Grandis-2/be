@@ -39,11 +39,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 관리자 상품 수정 — 표시 정보 · 기본 가격 · 보증, 옵션 값 추가 · 수정, 옵션(조합) 추가 · 수정. 설계 §2.1 · §2.1.1.
+ * 관리자 상품 수정 — 표시 정보 · 기본 가격 · 보증, 옵션 값 추가 · 수정, 옵션(조합) 추가 · 수정, 상품 판매 상태 · 공개 여부.
  *
- * <p><b>사전예약은 오픈 3분 전부터 아무것도 못 바꾼다.</b> 표시 정보 · 가격 · 추가금 · 값 · 조합 추가 · 가격 되돌리기 · 옵션 판매 상태 전부
+ * <p><b>사전예약은 오픈 3분 전부터 공개 여부 말고는 아무것도 못 바꾼다.</b> 표시 정보 · 가격 · 추가금 · 값 · 조합 추가 · 가격 되돌리기 · 옵션 판매 상태 · 상품 판매 상태 전부
  * 409 STATE_CONFLICT(2026-09-29 결정 — 판매 상태도 막는다. preorder 는 접수용 상품 사본을 1분마다 새로 받아, 오픈 뒤 판매 중지는 접수에
- * 늦게 닿는다. 3분 전에 막으면 오픈 때 preorder 사본은 이미 최종 상태다). 판정은 preorder 의 회차(opens_at − 3분 ≤ 지금)로 하고, 회차가 없으면
+ * 늦게 닿는다. 3분 전에 막으면 오픈 때 preorder 사본은 이미 최종 상태다 — preorder 의 1분 새로 받기가 성공할 때다. 새로 받기가 실패하면 preorder 는
+ * 가진 값을 만료(30분)까지 쓴다(preorder CatalogReader). 그 틈은 catalog 가 닫을 수 없다 — preorder 캐시를 비울 경로가 없다). 판정은 preorder 의 회차(opens_at − 3분 ≤ 지금)로 하고, 회차가 없으면
  * (preorder 가 등록 이벤트를 처리하기 전) 아직 잠기지 않았다.
  *
  * <p><b>재계산.</b> 기본 가격 · 추가금이 바뀌면 그 값을 고른 옵션 중 수동 가격이 아닌 것만 `기본가 + Σ추가금` 으로 다시 계산한다. 관리자가 직접 고친
@@ -52,7 +53,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p><b>구성은 바꾸지 않는다.</b> 값의 정규화값 · 옵션의 조합 · sku 는 불변이다. 실제 색상 · 용량 구성이 바뀌면 값을 더하고 새 조합을 만들고 옛 옵션을
  * 판매 중지한다. 옛 옵션에 주문 이력이 있는지는 catalog 가 볼 수 없다(주문 표를 읽지 않는다) — 그래서 지우지 않고 상태로 숨긴다.
  *
- * <p><b>한 상품의 수정은 줄 선다.</b> 다섯 수정 모두 상품 행을 잠그고(SELECT … FOR UPDATE) 시작한다. 오픈 판정은 시작 때 한 번, 커밋
+ * <p><b>한 상품의 수정은 줄 선다.</b> 수정은 모두 상품 행을 잠그고(SELECT … FOR UPDATE) 시작한다. 오픈 판정은 시작 때 한 번, 커밋
  * 직전에 한 번 더 한다(잠금 대기 · 재계산 중에 오픈 시각이 지날 수 있다).
  *
  * <p>일반 상품의 새 옵션 재고는 여기서 받지 않는다 — 재고는 order 의 `PUT /admin/products/{id}/stock` 이 정본이다. 재고 행이 없는 동안 그 옵션은 품절로 보인다.
@@ -65,6 +66,9 @@ public class ProductEditService {
      * 틈으로 남는다 — 여유를 두어 그 틈에서 오픈이 일어날 수 없게 한다. 시작 판정과 커밋 직전 판정이 같은 기준을 쓴다(requireNotOpened 하나).
      */
     public static final Duration FREEZE_BEFORE_OPEN = Duration.ofMinutes(3);
+
+    private static final String EDIT_FROZEN = "사전예약 오픈 3분 전부터는 상품 정보 · 옵션 · 가격을 바꿀 수 없습니다.";
+    private static final String STATUS_FROZEN = "사전예약 오픈 3분 전부터는 판매 상태를 바꿀 수 없습니다.";
 
     private final ProductRepository products;
     private final ProductOptionAxisRepository axes;
@@ -293,6 +297,34 @@ public class ProductEditService {
     }
 
     /**
+     * 상품 판매 시작 · 중지(ACTIVE ↔ PAUSED). 같은 상태면 바꾸지 않고 그대로 답한다. 사전예약은 다른 수정처럼 오픈 3분 전부터 409 다
+     * (2026-10-04 결정 — preorder 의 접수용 상품 사본이 1분마다 갱신돼 오픈 뒤 전환은 접수에 늦게 닿는다). 오픈 전에 PAUSED 로 둔 채
+     * 오픈을 넘긴 상품은 그대로 판매 중지다 — 회차 취소로 보지 않고 이벤트도 없다(같은 날 결정).
+     */
+    @Transactional
+    public SaleStatusView changeSaleStatus(Long productId, SaleStatusChangeRequest request) {
+        Product product = lockProduct(productId);
+        requireNotOpened(product, STATUS_FROZEN);
+        product.changeStatus(request.status());
+        products.flush();
+        requireNotOpened(product, STATUS_FROZEN);   // 커밋 직전 — 잠금 대기 중에 오픈 3분 전을 넘겼을 수 있다
+        return new SaleStatusView(productId, product.getStatus(), false);
+    }
+
+    /** 공개 ↔ 비공개. 언제든 바꾼다 — 오픈 판정을 하지 않는다. 다른 수정과 줄 서도록 상품 행은 잠근다. */
+    @Transactional
+    public VisibilityView changeVisibility(Long productId, VisibilityChangeRequest request) {
+        Product product = lockProduct(productId);
+        if (request.visible()) {
+            product.publish();
+        } else {
+            product.hide();
+        }
+        products.flush();
+        return new VisibilityView(productId, product.isVisible());
+    }
+
+    /**
      * 상품 행을 잠그고 읽는다 — 한 상품에 대한 수정을 줄 세운다. 이 뒤의 읽기(기본가 · 추가금 · 선택)는 앞 수정이 커밋한 값을 본다.
      * 잠그지 않으면 겹친 두 수정이 서로의 커밋 전 값으로 옵션 가격을 계산해 덮는다(ProductRepository#findForUpdate).
      */
@@ -308,6 +340,10 @@ public class ProductEditService {
     }
 
     private void requireNotOpened(Product product) {
+        requireNotOpened(product, EDIT_FROZEN);
+    }
+
+    private void requireNotOpened(Product product, String message) {
         if (product.getSaleMode() != SaleMode.PREORDER) {
             return;
         }
@@ -315,7 +351,7 @@ public class ProductEditService {
                 .map(window -> !clock.instant().isBefore(window.opensAt().minus(FREEZE_BEFORE_OPEN)))
                 .orElse(false);
         if (frozen) {
-            throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "사전예약 오픈 3분 전부터는 상품 정보 · 옵션 · 가격을 바꿀 수 없습니다.");
+            throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, message);
         }
     }
 

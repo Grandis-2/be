@@ -6,8 +6,12 @@ import com.grandis.nova.catalog.edit.OptionValueAddRequest;
 import com.grandis.nova.catalog.edit.OptionValueEditRequest;
 import com.grandis.nova.catalog.edit.ProductEditRequest;
 import com.grandis.nova.catalog.edit.ProductEditService;
+import com.grandis.nova.catalog.edit.SaleStatusChangeRequest;
+import com.grandis.nova.catalog.edit.SaleStatusView;
 import com.grandis.nova.catalog.edit.VariantAddRequest;
 import com.grandis.nova.catalog.edit.VariantEditRequest;
+import com.grandis.nova.catalog.edit.VisibilityChangeRequest;
+import com.grandis.nova.catalog.edit.VisibilityView;
 import com.grandis.nova.catalog.web.StrictBodies;
 import com.grandis.nova.catalog.listing.AdminProductListFilter;
 import com.grandis.nova.catalog.listing.AdminProductListItem;
@@ -138,6 +142,22 @@ public class AdminProductController {
     public ApiResponse<ProductDetailView.Variant> editVariant(@PathVariable Long productId, @PathVariable Long variantId,
                                                              @RequestBody String body) {
         return ApiResponse.ok(serialized(() -> editService.editVariant(productId, variantId, bodies.parse(body, VariantEditRequest.class))));
+    }
+
+    /**
+     * 상품 판매 시작 · 중지(ACTIVE ↔ PAUSED). 판매 중지는 회원 목록에서 빠지고 상세에는 판매 중지로 보인다 — 신규 접수 · 주문은
+     * preorder · order 가 이 상태를 보고 막고, 기존 예약 · 주문은 그대로.
+     * 사전예약은 오픈 3분 전부터 409. 오픈 뒤 판매 중지(회차 취소)는 아직 이 경로에 없다.
+     */
+    @PatchMapping("/{productId}/sale-status")
+    public ApiResponse<SaleStatusView> changeSaleStatus(@PathVariable Long productId, @RequestBody String body) {
+        return ApiResponse.ok(serialized(() -> editService.changeSaleStatus(productId, bodies.parse(body, SaleStatusChangeRequest.class))));
+    }
+
+    /** 공개 ↔ 비공개. 언제든 바꾼다 — 기존 예약 · 주문은 그대로. 회원 노출은 판매 방식별 준비 · 판매 상태와 함께 정해진다. */
+    @PatchMapping("/{productId}/visibility")
+    public ApiResponse<VisibilityView> changeVisibility(@PathVariable Long productId, @RequestBody String body) {
+        return ApiResponse.ok(serialized(() -> editService.changeVisibility(productId, bodies.parse(body, VisibilityChangeRequest.class))));
     }
 
     /** 키로 상태만 묻는다. 응답이 유실된 클라이언트가 productId 와 진행 상태를 되찾는 데 쓴다. */
