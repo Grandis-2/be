@@ -10,11 +10,14 @@ import com.grandis.nova.common.security.JwtTokenProvider;
 import com.grandis.nova.common.security.Role;
 import com.grandis.nova.common.security.TokenClaims;
 import com.grandis.nova.common.web.ApiResponse;
+import com.grandis.nova.member.auth.AuthErrorCode;
 import com.grandis.nova.member.auth.application.AdminLoginService;
 import com.grandis.nova.member.auth.application.ClientInfo;
 import com.grandis.nova.member.auth.application.KakaoLoginService;
 import com.grandis.nova.member.auth.application.TokenService;
+import com.grandis.nova.member.auth.infrastructure.redis.AdminLoginThrottle;
 import com.grandis.nova.member.customer.CustomerRepository;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -29,6 +32,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -65,9 +69,12 @@ public class AuthController {
     private final CustomerRepository customers;
     private final AuthCookies cookies;
     private final RefreshOriginPolicy refreshOrigins;
+    private final AdminLoginThrottle adminThrottle;
+    private final ClientIps clientIps;
 
     public AuthController(KakaoLoginService kakaoLogin, AdminLoginService adminLogin, TokenService tokens,
-                          JwtTokenProvider provider, CustomerRepository customers, AuthCookies cookies, RefreshOriginPolicy refreshOrigins) {
+                          JwtTokenProvider provider, CustomerRepository customers, AuthCookies cookies, RefreshOriginPolicy refreshOrigins,
+                          AdminLoginThrottle adminThrottle, ClientIps clientIps) {
         this.kakaoLogin = kakaoLogin;
         this.adminLogin = adminLogin;
         this.tokens = tokens;
@@ -75,6 +82,8 @@ public class AuthController {
         this.customers = customers;
         this.cookies = cookies;
         this.refreshOrigins = refreshOrigins;
+        this.adminThrottle = adminThrottle;
+        this.clientIps = clientIps;
     }
 
     public record KakaoCallbackRequest(@NotBlank String code, @NotBlank String redirectUri) {
@@ -83,6 +92,7 @@ public class AuthController {
     public record AdminLoginRequest(@NotBlank String username, @NotBlank String password) {
     }
 
+    @SecurityRequirements   // 공개 — 문서의 Bearer 요구를 뺀다(보안 체인의 permitAll 과 같은 목록)
     @PostMapping("/auth/kakao/callback")
     public ResponseEntity<ApiResponse<LoginResponse>> kakaoCallback(@Valid @RequestBody KakaoCallbackRequest request,
                                                                      HttpServletRequest servletRequest) {
@@ -91,6 +101,7 @@ public class AuthController {
                 new LoginResponse(result.tokens().accessToken(), result.displayName(), result.role(), result.profileComplete()));
     }
 
+    @SecurityRequirements   // 공개 — 리프레시 쿠키로 식별한다
     @PostMapping("/session/refresh")
     public ResponseEntity<ApiResponse<LoginResponse>> refresh(HttpServletRequest request) {
         refreshOrigins.require(request);
@@ -118,6 +129,8 @@ public class AuthController {
         return ApiResponse.ok(new SessionInfoResponse(owner.displayName(), principal.role(), owner.profileComplete()));
     }
 
+    @SecurityRequirements   // 공개 — 만료된 액세스로도 로그아웃이 되어야 한다
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "204", description = "로그아웃 — 본문 없음, 두 역할의 리프레시 쿠키 만료")
     @DeleteMapping("/session")
     public ResponseEntity<ApiResponse<Void>> logout(HttpServletRequest request) {
         // 액세스 토큰은 필터와 같은 추출기로 — 잘 갖춘 Bearer 헤더가 아니면 없는 것으로(로그아웃은 그래도 된다)
@@ -171,13 +184,53 @@ public class AuthController {
         return response.build();
     }
 
+    @SecurityRequirements   // 공개 — 관리자 로그인
     @PostMapping("/admin/session")
     public ResponseEntity<ApiResponse<AdminSessionResponse>> adminSession(@Valid @RequestBody AdminLoginRequest request,
                                                                           HttpServletRequest servletRequest) {
+        // 무차별 대입 방어 — bcrypt 비교 전에 IP 별 시도를 센다. 한도를 넘으면 비교 없이 429(계정 존재와 무관하게 같은 응답), 셀 수 없으면 503
+        String clientIp = clientIps.of(servletRequest);
+        adminThrottle.acquire(clientIp).ifPresent(retryAfter -> {
+            throw new AdminLoginThrottledException(retryAfter);
+        });
         TokenService.IssuedTokens issued = adminLogin.login(request.username(), request.password(), clientOf(servletRequest));
+        adminThrottle.reset(clientIp);
         return withRefreshCookie(issued, Role.ADMIN, new AdminSessionResponse(issued.accessToken(), Role.ADMIN));
     }
 
+    /** 관리자 로그인 시도 제한 초과. 다시 시도해도 되는 때까지의 시간을 `Retry-After`(초, 올림)와 본문에 싣는다. */
+    @ExceptionHandler(AdminLoginThrottledException.class)
+    ResponseEntity<ApiResponse<Void>> adminLoginThrottled(AdminLoginThrottledException e) {
+        long seconds = Math.max(1, (e.retryAfter().toMillis() + 999) / 1000);
+        AuthErrorCode code = AuthErrorCode.TOO_MANY_LOGIN_ATTEMPTS;
+        return ResponseEntity.status(code.status())
+                .header(HttpHeaders.RETRY_AFTER, String.valueOf(seconds))
+                .body(ApiResponse.fail(code, code.defaultMessage(), java.util.Map.of("retryAfterSeconds", seconds)));
+    }
+
+    /** 시도 수를 셀 수 없다(Redis 장애) — 503 retryable. 제한 없이 받지 않는다(AdminLoginThrottle 문서). */
+    @ExceptionHandler(AdminLoginThrottle.Unavailable.class)
+    ResponseEntity<ApiResponse<Void>> adminLoginThrottleUnavailable() {
+        CommonErrorCode code = CommonErrorCode.DEPENDENCY_UNAVAILABLE;
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(ApiResponse.fail(code, code.defaultMessage(), JsonAuthFailureHandlers.RETRYABLE_DETAILS));
+    }
+
+    static final class AdminLoginThrottledException extends RuntimeException {
+
+        private final java.time.Duration retryAfter;
+
+        AdminLoginThrottledException(java.time.Duration retryAfter) {
+            super(null, null, false, false);   // 스택을 만들지 않는다 — 제어 흐름용
+            this.retryAfter = retryAfter;
+        }
+
+        java.time.Duration retryAfter() {
+            return retryAfter;
+        }
+    }
+
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "204", description = "관리자 세션 전부 폐기 — 본문 없음")
     @DeleteMapping("/admin/sessions")
     public ResponseEntity<ApiResponse<Void>> revokeAllAdminSessions() {
         try {
@@ -201,7 +254,8 @@ public class AuthController {
 
     /**
      * 리프레시 행에 남길 요청 흔적. 인증 판정에는 쓰지 않는다 — "로그인된 기기" 표시와 사고 조사용이다.
-     * 프록시 뒤에서 remoteAddr 은 로드밸런서 주소다. 실제 클라이언트 IP 를 남기려면 `server.forward-headers-strategy` 가 켜져 있어야 한다.
+     * 프록시 뒤에서 remoteAddr 은 로드밸런서 주소다. `server.forward-headers-strategy` 는 켜지 않는다(none) — 켜면 관리자 로그인 시도 제한의
+     * IP 판정(ClientIps)이 고쳐 쓴 헤더를 다시 세어 틀어진다(ClientIpsConfiguration 이 기동에서 막는다).
      */
     private static ClientInfo clientOf(HttpServletRequest request) {
         return new ClientInfo(request.getRemoteAddr(), request.getHeader(HttpHeaders.USER_AGENT));

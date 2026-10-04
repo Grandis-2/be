@@ -1,6 +1,6 @@
 # catalog → preorder · order 이벤트 계약
 
-양쪽 구현의 기준이다. catalog 가 보내고(`OutboxWriter` · `OutboxPublisher` · `OutboxRelay`), preorder 와 order 가 받는다. 문서와 어긋나는 쪽이 고친다.
+양쪽 구현의 기준이다. catalog 가 보내고(공통 모듈 `common:outbox` · `common:sqs` — 표와 이벤트 종류는 `CatalogOutboxConfig`), preorder 와 order 가 받는다. 문서와 어긋나는 쪽이 고친다.
 
 관리자 상품 등록(`POST /api/v1/admin/products`)은 catalog 트랜잭션 하나에서 끝난다. 다른 서비스가 자기 표에 만들 값(사전예약 회차 · 배송 차수, 일반 상품의 초기 재고)은 같은 트랜잭션에서 catalog 아웃박스(`catalog_outbox_events`)에 적고, 커밋 뒤 SQS 로 보낸다. 받는 쪽이 자기 표에 행을 만들어야 그 상품이 회원에게 보인다(판매 방식별 준비, 아래).
 
@@ -93,12 +93,12 @@ catalog 는 완료 이벤트를 돌려받지 않는다. 받는 쪽이 만든 행
 이 판정이 관리자 목록 · 상세 · 등록 상태 조회(`registration.completed`)와 내부 조회 API 의 `registrationCompleted` 다.
 
 **준비가 안 될 때 원인은 둘이다.** catalog 가 아직 보내지 못했거나, 받는 쪽이 거절했다(DLQ).
-- catalog 쪽: `catalog_outbox_events.published_at IS NULL` 인 행이 남는다. 릴레이가 주기마다 `catalog 아웃박스 미발행 N건 · 최다 실패 M회` 경고 로그를 낸다(catalog 에는 지표 수집이 없어 로그로 낸다). 큐 보내기 권한(IAM)이 빠졌거나 큐가 없으면 모든 등록이 여기서 멈춘다.
+- catalog 쪽: `catalog_outbox_events.published_at IS NULL` 인 행이 남는다. 보낼 때마다 실패하면 `아웃박스 발행 실패 — 릴레이가 다시 보낸다 outboxEventId=… eventType=…` 경고 로그가 남는다(커밋 직후 발행 · 릴레이 모두 — catalog 에는 지표 수집이 없어 미발행 건수 지표는 없다). 큐 보내기 권한(IAM)이 빠졌거나 큐가 없으면 모든 등록이 여기서 멈춘다.
 - 받는 쪽: 발행은 됐는데(`published_at` 있음) 행이 없다 — 그 서비스의 DLQ 를 본다.
 
 ## 보관
 
-발행된 행을 지우는 규칙은 아직 없다. 릴레이 · 미발행 집계는 `published_at` 이 맨 앞인 인덱스로 미발행 행만 본다(같은 조건의 릴레이 질의: 발행 20만 · 미발행 300 에서 미발행 300 만 읽음, 2026-10-02 실측). 보관 기간은 운영 전에 정한다.
+발행된 행을 지우는 규칙은 아직 없다. 릴레이는 `(published_at, publish_attempts, id)` 인덱스로 미발행 행만, 정렬 없이 가져갈 만큼만 읽는다(발행 20만 · 미발행 300 · 한 번에 100건에서 인덱스로 100행만 읽고 정렬 없음, MySQL 8.4.11 · 2026-10-03 실측 — 같은 데이터에서 `(published_at, id)` 는 미발행 300행을 모두 읽어 정렬했다). 보관 기간은 운영 전에 정한다.
 
 ## 바꿀 때
 

@@ -12,10 +12,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.grandis.nova.catalog.CatalogErrorCode;
-import com.grandis.nova.catalog.config.JpaAuditingConfig;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.jpa.StorageClock;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
@@ -457,7 +457,7 @@ class ProductEditRaceTest {
     /** 평소엔 앱과 같은 시계(마이크로초 해상도의 UTC). 시험이 next 를 채우면 그 값을 낸다. */
     static final class ControllableClock extends Clock {
 
-        private final Clock system = JpaAuditingConfig.atStorageResolution(Clock.systemUTC());
+        private final Clock system = StorageClock.atStorageResolution(Clock.systemUTC());
         volatile Supplier<Instant> next;
 
         @Override

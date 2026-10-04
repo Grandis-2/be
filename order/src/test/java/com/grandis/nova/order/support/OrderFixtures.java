@@ -10,11 +10,12 @@ import java.math.BigDecimal;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * 테스트 데이터. 주문이 참조하는 다른 모듈 소유 행(회원 · 카테고리 · 상품 · 옵션 · 배송 차수 · 예약)을 SQL 로 바로 넣는다.
+ * 테스트 데이터. 주문 · 재고가 참조하는 다른 모듈 소유 행(회원 · 카테고리 · 상품 · 옵션 · 배송 차수 · 예약)을 SQL 로 바로 넣는다.
  * 운영 코드의 모듈 경계와 무관하다 — 테스트 픽스처만 남의 테이블에 쓴다.
  *
  * 매번 새 행을 만들고 지우지 않는다. 유일 칸은 UUID 로 채워 테스트끼리 겹치지 않으므로
@@ -43,18 +44,8 @@ public class OrderFixtures {
 
     /** 사전예약 상품 하나(옵션 하나, 차수 하나). */
     public PreorderProduct preorderProduct() {
-        Long categoryId = insert("""
-                INSERT INTO categories (code, name, created_at, updated_at)
-                VALUES (?, '스마트폰', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, unique());
-        Long productId = insert("""
-                INSERT INTO products (category_id, sale_mode, title, status, created_at, updated_at)
-                VALUES (?, 'PREORDER', ?, 'ACTIVE', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, categoryId, PRODUCT_TITLE);
-        Long optionId = insert("""
-                INSERT INTO product_options (product_id, sku, title, price, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 'ACTIVE', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, productId, unique(), OPTION_TITLE, UNIT_PRICE);
+        Long productId = product("PREORDER");
+        Long optionId = option(productId);
         LocalDate shipStart = LocalDate.of(2026, 11, 1);
         Long batchId = insert("""
                 INSERT INTO shipment_batches (product_id, batch_number, position_from, position_to,
@@ -103,6 +94,24 @@ public class OrderFixtures {
                         PRODUCT_TITLE, OPTION_TITLE)));
     }
 
+    /** 일반 판매 상품 하나와 옵션 optionCount 개. 재고 행은 만들지 않는다. option_id 오름차순. */
+    public StockProduct inStockProduct(int optionCount) {
+        Long productId = product("IN_STOCK");
+        List<Long> optionIds = new ArrayList<>();
+        for (int i = 0; i < optionCount; i++) {
+            optionIds.add(option(productId));
+        }
+        return new StockProduct(productId, List.copyOf(optionIds));
+    }
+
+    /** 재고 행을 바로 넣는다. 확보 · 판매는 아직 그 코드가 없어 이렇게 심는다. */
+    public void stock(Long optionId, int total, int reserved, int sold) {
+        jdbcTemplate.update("""
+                INSERT INTO option_inventories (option_id, stock_total, stock_reserved, stock_sold, updated_at)
+                VALUES (?, ?, ?, ?, UTC_TIMESTAMP(6))
+                """, optionId, total, reserved, sold);
+    }
+
     /** 원장이 아직 만들지 않는 전이(배송 등)를 거친 주문을 흉내 낸다. */
     public void forceStatus(Long orderId, String status) {
         jdbcTemplate.update("UPDATE orders SET status = ? WHERE id = ?", status, orderId);
@@ -110,6 +119,24 @@ public class OrderFixtures {
 
     public static String unique() {
         return UUID.randomUUID().toString();
+    }
+
+    private Long product(String saleMode) {
+        Long categoryId = insert("""
+                INSERT INTO categories (code, name, created_at, updated_at)
+                VALUES (?, '스마트폰', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """, unique());
+        return insert("""
+                INSERT INTO products (category_id, sale_mode, title, status, created_at, updated_at)
+                VALUES (?, ?, ?, 'ACTIVE', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """, categoryId, saleMode, PRODUCT_TITLE);
+    }
+
+    private Long option(Long productId) {
+        return insert("""
+                INSERT INTO product_options (product_id, sku, title, price, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'ACTIVE', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """, productId, unique(), OPTION_TITLE, UNIT_PRICE);
     }
 
     private Long insert(String sql, Object... args) {
@@ -125,5 +152,8 @@ public class OrderFixtures {
     }
 
     public record PreorderProduct(Long productId, Long optionId, Long batchId) {
+    }
+
+    public record StockProduct(Long productId, List<Long> optionIds) {
     }
 }

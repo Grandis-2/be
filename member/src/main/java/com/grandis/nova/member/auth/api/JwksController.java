@@ -1,6 +1,7 @@
 package com.grandis.nova.member.auth.api;
 
 import com.grandis.nova.common.security.JwtKeyRing;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -24,6 +25,7 @@ public class JwksController {
         this.keys = keys;
     }
 
+    @SecurityRequirements   // 공개 — 검증 서비스가 공개키를 받는다
     @GetMapping("/.well-known/jwks.json")
     public Map<String, Object> jwks() {
         return keys.jwks();

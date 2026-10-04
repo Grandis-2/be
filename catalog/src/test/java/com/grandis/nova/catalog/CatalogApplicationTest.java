@@ -1,7 +1,7 @@
 package com.grandis.nova.catalog;
 
-import com.grandis.nova.catalog.config.JpaAuditingConfig;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
+import com.grandis.nova.common.jpa.StorageClock;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,6 +23,6 @@ class CatalogApplicationTest {
     @Test
     @DisplayName("앱 시계는 저장 해상도(마이크로초)로 내린 UTC 시계다")
     void applicationClockIsAtStorageResolution() {
-        assertThat(clock).isEqualTo(JpaAuditingConfig.atStorageResolution(Clock.systemUTC()));
+        assertThat(clock).isEqualTo(StorageClock.atStorageResolution(Clock.systemUTC()));
     }
 }

@@ -4,6 +4,7 @@ import com.grandis.nova.common.security.SecurityFilterChainSupport;
 import com.grandis.nova.common.web.OpenApiPaths;
 import com.grandis.nova.member.auth.api.AuthCookies;
 import com.grandis.nova.member.auth.api.RefreshOriginPolicy;
+import com.grandis.nova.member.auth.application.AdminLoginLimit;
 import com.grandis.nova.member.auth.application.AdminProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -19,7 +20,7 @@ import org.springframework.security.web.SecurityFilterChain;
  * PasswordEncoder 는 관리자 비밀번호 검증용 하나. 회원 비밀번호는 없다.
  */
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties({AdminProperties.class, AuthCookies.Settings.class, RefreshOriginPolicy.Settings.class})
+@EnableConfigurationProperties({AdminProperties.class, AdminLoginLimit.class, AuthCookies.Settings.class, RefreshOriginPolicy.Settings.class})
 public class MemberSecurityConfig {
 
     @Bean

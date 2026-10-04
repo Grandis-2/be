@@ -54,7 +54,7 @@ class OrderApplicationTest {
                 "SELECT COUNT(*) FROM flyway_schema_history WHERE success = 0", Integer.class);
 
         assertThat(tables).contains("orders", "order_items", "order_events", "payments", "payment_transactions",
-                "cart_items", "option_inventories", "outbox_events", "flyway_schema_history");
+                "cart_items", "option_inventories", "order_outbox_events", "flyway_schema_history");
         assertThat(failed).isZero();
     }
 }

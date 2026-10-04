@@ -42,8 +42,9 @@ import java.lang.annotation.Target;
         "spring.data.redis.timeout=300ms",
         "spring.data.redis.connect-timeout=200ms",
         // 아웃박스는 로그로 보낸다(큐 없이 흐름이 끝까지 돈다). SQS 로 보내는 시험은 OutboxSqsFlowTest 가 따로 켠다.
-        // 릴레이는 시험 도중 스스로 돌지 않게 주기를 길게 둔다 — 릴레이를 보는 시험은 relay() 를 직접 부른다
+        // 릴레이는 시험 도중 스스로 돌지 않게 주기를 길게 둔다 — 릴레이 동작은 common:outbox 시험이 본다
         "nova.outbox.transport=log",
+        "nova.outbox.log-transport-allowed=true",
         "nova.outbox.relay-interval=1h"
 })
 @Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class})
