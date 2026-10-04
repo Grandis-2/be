@@ -26,17 +26,9 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 접수에 쓸 상품 · 옵션 값. catalog 내부 API 로 상품 단위로 받아 메모리에 둔다.
- *
- * 접수 경로가 catalog 를 부르지 않게 하려는 캐시다. 오픈 직후 몰리는 접수(10초 5,000건)가
- * catalog 의 지연 · 장애에 묶이지 않고, catalog 가 preorder 만큼 늘어날 필요도 없다.
- * 사전예약 상품은 오픈 뒤 기준 정보가 동결되므로(ERD 결정 19 · 29 · 30) 캐시가 낡을 걱정이 작다.
- *
- * - catalog 는 로그인 토큰을 요구한다. 조회한 요청의 토큰으로 받는다(토큰 릴레이) — 서비스 간 토큰은 없다.
- * - 같은 상품을 동시에 처음 찾으면 한 번만 부른다(Caffeine 의 키별 단일 로딩). 오픈 순간의 몰림이 catalog 로 번지지 않는다.
- * - {@link #REFRESH_AFTER} 가 지난 값을 조회하면 가진 값을 돌려주고, 그 요청의 보안 맥락을 넘겨 뒤에서 한 번 다시 받는다.
- *   다시 받기가 실패하면 가진 값을 유지하고, {@link #EXPIRE_AFTER} 가 지나면 버린다.
- * - 판매 중지처럼 동결 뒤에도 바뀌는 것은 이벤트를 받아 {@link #evict} 한다.
+ * 접수에 쓸 상품 · 옵션 값을 상품 단위로 캐시한다 — 오픈 순간의 몰림이 catalog 로 번지지 않게(같은 상품의 첫 조회는 한 번만 부른다).
+ * 1분 지난 값은 그대로 돌려주고, 조회한 요청의 보안 맥락(토큰)으로 뒤에서 한 번 다시 받는다. 실패하면 가진 값, 30분 뒤 버린다.
+ * 판매 중지처럼 동결 뒤에도 바뀌는 것은 이벤트로 {@link #evict} 한다.
  */
 @Component
 public class CatalogReader {
@@ -105,13 +97,7 @@ public class CatalogReader {
         products.invalidate(productId);
     }
 
-    /**
-     * 실패는 셋으로 가른다.
-     * - 401: 사용자 토큰 문제라 사용자에게도 401
-     * - 404 외의 4xx · 읽을 수 없는 응답: 다시 불러도 같은 결과인 연동 오류(계약 불일치 등)다. 사용자 잘못이 아니므로
-     *   catalog 의 상태를 그대로 돌려주지 않고 500 으로 둔다(응답 문구는 공통 처리기가 숨긴다).
-     * - 그 밖(타임아웃 · 연결 실패 · 5xx): 일시 장애라 503 으로 다시 시도를 안내한다.
-     */
+    /** 401 은 사용자 토큰 문제라 401, 404 외 4xx · 읽을 수 없는 응답은 연동 오류(500), 그 밖은 일시 장애(503). */
     private Loaded get(Long productId) {
         try {
             return products.get(productId, this::load);
