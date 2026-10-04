@@ -13,7 +13,7 @@ public sealed interface PreorderFact {
     /** 이력에 남길 사유. 없으면 null. */
     String reason();
 
-    /** worker 가 외부 등록을 마쳤다. */
+    /** worker 가 외부 등록을 마쳤다. 취소 중에 늦게 도착하면 무시된다 — 취소된 예약을 되살리지 않는다(외부는 CANCEL 작업이 정리). */
     record RegisterConfirmed(String externalReference) implements PreorderFact {
 
         @Override
