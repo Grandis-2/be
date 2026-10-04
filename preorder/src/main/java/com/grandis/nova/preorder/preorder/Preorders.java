@@ -70,6 +70,11 @@ public class Preorders {
                 .map(Preorder::toSnapshot);
     }
 
+    /** 회원의 그 모델 마지막 접수 시각(취소된 예약 포함). 접수한 적이 없으면 비어 있다. */
+    public Optional<Instant> findLastAcceptedAt(Long customerId, Long productId) {
+        return preorders.findLastAcceptedAt(customerId, productId);
+    }
+
     /** 상품의 그 상태 예약을 순번 순으로 최대 limit 건. */
     public List<PreorderSnapshot> findByProduct(Long productId, Collection<PreorderStatus> statuses, int limit) {
         return preorders.findByProductIdAndStatusInOrderByQueuePosition(productId, statuses, Limit.of(limit)).stream()

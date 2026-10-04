@@ -89,9 +89,10 @@ class PreorderAcceptConcurrencyTest {
     void 같은_모델을_옵션을_바꿔_동시에_접수해도_한_건만_남는다() throws Exception {
         Long customerId = fixtures.customer();
         // 입장권은 30초 창마다 달라진다. 서로 다른 입장권 4장으로 입장권 UNIQUE 가 아니라 활성 예약 UNIQUE 를 겨룬다.
+        // 접수보다 나중에 발급된 입장권이라 "마지막 접수 이전 발급" 검사는 통과한다(진행 중 예약이 있는 회원의 재진입)
         List<String> tickets = LongStream.range(0, 4)
                 .mapToObj(i -> AdmissionTickets.issue(product.productId(), customerId,
-                        Instant.now().minusSeconds(i * AdmissionTickets.WINDOW_SECONDS)))
+                        laterWindow().plusSeconds(i * AdmissionTickets.WINDOW_SECONDS)))
                 .toList();
 
         List<Outcome> outcomes = concurrently(tickets.size(), i -> () -> acceptService.acceptByCustomer(customerId,
@@ -149,25 +150,26 @@ class PreorderAcceptConcurrencyTest {
     void 성공과_실패가_섞여도_커밋된_순번에는_빈틈이_없다() throws Exception {
         int members = 10;
         List<Long> customers = LongStream.range(0, members).mapToObj(i -> fixtures.customer()).toList();
-        // 짝수 회원은 같은 모델을 두 번(다른 키 · 다른 창의 입장권) 보낸다 — 한 번은 활성 예약 UNIQUE 로 실패한다.
+        // 짝수 회원은 같은 모델을 두 번(다른 키 · 나중 창의 입장권) 보낸다 — 한 번은 활성 예약 UNIQUE 로 실패한다.
         List<Callable<AcceptResult>> calls = new ArrayList<>();
         for (int i = 0; i < members; i++) {
             Long customer = customers.get(i);
             calls.add(() -> acceptByCustomer(customer, "mixed-key-a"));
             if (i % 2 == 0) {
-                String olderTicket = AdmissionTickets.issue(product.productId(), customer,
-                        Instant.now().minusSeconds(AdmissionTickets.WINDOW_SECONDS));
+                String laterTicket = AdmissionTickets.issue(product.productId(), customer, laterWindow());
                 calls.add(() -> acceptService.acceptByCustomer(customer, product.productId(), product.productId(),
-                        product.optionId(), "mixed-key-b", olderTicket));
+                        product.optionId(), "mixed-key-b", laterTicket));
             }
         }
 
         List<Outcome> outcomes = concurrently(calls.size(), calls::get);
 
         assertThat(outcomes.stream().filter(Outcome::accepted)).hasSize(members);
+        // 먼저 커밋된 쪽에 따라 남은 쪽은 활성 예약 UNIQUE(지금 입장권이 이김) 또는 이전 발급 입장권(나중 입장권이 이김)으로 막힌다
         assertThat(outcomes.stream().filter(o -> !o.accepted()))
                 .hasSize(members / 2)
-                .allMatch(o -> o.error() == PreorderErrorCode.ACTIVE_PREORDER_EXISTS);
+                .allMatch(o -> o.error() == PreorderErrorCode.ACTIVE_PREORDER_EXISTS
+                        || o.error() == PreorderErrorCode.ADMISSION_TICKET_STALE);
         assertThat(committedPositions())
                 .containsExactlyElementsOf(LongStream.rangeClosed(1, members).boxed().toList());
         assertThat(nextQueuePosition()).isEqualTo(members + 1);
@@ -197,14 +199,35 @@ class PreorderAcceptConcurrencyTest {
         Long customerId = fixtures.customer();
         AcceptResult first = acceptByCustomer(customerId, "reapply-key-1");
         new PreorderCancels(ledger, transactionTemplate).complete(first.preorder().id());
-        String laterTicket = AdmissionTickets.issue(product.productId(), customerId,
-                Instant.now().minusSeconds(AdmissionTickets.WINDOW_SECONDS));
+        String laterTicket = AdmissionTickets.issue(product.productId(), customerId, laterWindow());
 
         AcceptResult again = acceptService.acceptByCustomer(customerId, product.productId(), product.productId(),
                 product.optionId(), "reapply-key-2", laterTicket);
 
         assertThat(again.preorder().queuePosition()).isEqualTo(first.preorder().queuePosition() + 1);
         assertThat(again.replayed()).isFalse();
+    }
+
+    @RepeatedTest(3)
+    void 같은_입장에서_받은_입장권_두_장을_동시에_보내면_하나만_받고_나머지는_STALE() throws Exception {
+        Long customerId = fixtures.customer();
+        List<String> tickets = List.of(
+                AdmissionTickets.issue(product.productId(), customerId, Instant.now()),
+                AdmissionTickets.issue(product.productId(), customerId,
+                        Instant.now().minusSeconds(AdmissionTickets.WINDOW_SECONDS)));
+
+        List<Outcome> outcomes = concurrently(tickets.size(), i -> () -> acceptService.acceptByCustomer(customerId,
+                product.productId(), product.productId(), product.optionId(), "same-admission-" + i, tickets.get(i)));
+
+        assertThat(outcomes.stream().filter(Outcome::accepted)).hasSize(1);
+        assertThat(outcomes.stream().filter(o -> !o.accepted()))
+                .singleElement().extracting(Outcome::error).isEqualTo(PreorderErrorCode.ADMISSION_TICKET_STALE);
+        assertThat(committedPositions()).containsExactly(1L);
+    }
+
+    /** 지금 접수보다 나중에 발급된 것으로 보이는 입장권의 발급 시각(다시 진입해 새로 받은 입장권). */
+    private Instant laterWindow() {
+        return Instant.now().plusSeconds(3 * AdmissionTickets.WINDOW_SECONDS);
     }
 
     private AcceptResult acceptByCustomer(Long customerId, String key) {

@@ -80,7 +80,7 @@ public class PreorderAcceptService {
         }
         AdmissionTicket ticket = ticketVerifier.verify(admissionTicket, productId, customerId)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.ADMISSION_TICKET_INVALID));
-        AcceptCommand command = new AcceptCommand(customerId, productId, optionId, idempotencyKey, ticket.id(),
+        AcceptCommand command = new AcceptCommand(customerId, productId, optionId, idempotencyKey, ticket,
                 EventActor.USER, null, null);
         if (ticket.expired()) {
             // 만료된 입장권으로는 새로 접수하지 않는다. 같은 접수 키의 재전송이면 기존 예약을 돌려준다

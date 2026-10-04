@@ -21,7 +21,7 @@ public final class CatalogStubs {
 
     public static ApiResponse<ProductCatalog> product(Long productId, String saleMode, String status,
                                                       ProductCatalog.Option... options) {
-        return ApiResponse.ok(new ProductCatalog(productId, "Nova 1", saleMode, status, List.of(options)));
+        return ApiResponse.ok(new ProductCatalog(productId, "Nova 1", saleMode, status, true, true, List.of(options)));
     }
 
     /** 판매 중인 사전예약 상품. */
@@ -45,6 +45,13 @@ public final class CatalogStubs {
     public static void stubProduct(CatalogClient client, Long productId, String saleMode, String status,
                                    ProductCatalog.Option... options) {
         given(client.getProduct(productId)).willReturn(product(productId, saleMode, status, options));
+    }
+
+    /** 판매 중인 사전예약 상품이지만 공개 여부 · 등록 완료가 주어진 값이다. */
+    public static void stubPreorderProduct(CatalogClient client, Long productId, boolean visible,
+                                           boolean registrationCompleted, ProductCatalog.Option... options) {
+        given(client.getProduct(productId)).willReturn(ApiResponse.ok(new ProductCatalog(productId, "Nova 1",
+                "PREORDER", "ACTIVE", visible, registrationCompleted, List.of(options))));
     }
 
     /** catalog 대역이 없는 상품으로 답하게 한다. */
