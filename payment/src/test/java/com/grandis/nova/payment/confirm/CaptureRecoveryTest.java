@@ -19,6 +19,7 @@ import com.grandis.nova.payment.domain.repository.PaymentTransactionReader;
 import com.grandis.nova.payment.recovery.RecoveryWorker;
 import com.grandis.nova.payment.support.PaymentFixtures;
 import com.grandis.nova.payment.support.PaymentIntegrationTest;
+import com.grandis.nova.payment.support.RecoveryCandidates;
 import com.grandis.nova.payment.vo.Money;
 import com.grandis.nova.payment.vo.PaymentTarget;
 import com.grandis.nova.payment.vo.ProviderError;
@@ -105,7 +106,7 @@ class CaptureRecoveryTest {
     void setUp() {
         target = PaymentFixtures.newOrderTarget();
         paymentKey = PaymentFixtures.newProviderPayment();
-        parkOtherRecoverables();
+        RecoveryCandidates.parkOthers(jdbcTemplate);
     }
 
     // ---- 1단계: 같은 키 재전송 ----
@@ -342,7 +343,7 @@ class CaptureRecoveryTest {
     void lookedUpPaymentOfAnotherOrderIsEscalated() {
         PaymentTransaction unknown = startedThenLeaseExpired(UNLISTED);
         given(toss.findByPaymentKey(paymentKey.value())).willReturn(new TossLookupResult.Found(new TossPayment(
-                paymentKey.value(), "another-order-id", TossPaymentStatus.DONE, 15000, 15000, "카드", APPROVED_AT, "tx")));
+                paymentKey.value(), "another-order-id", TossPaymentStatus.DONE, 15000, 15000, "카드", APPROVED_AT, "tx", null)));
 
         worker.recoverDue();
 
@@ -641,7 +642,7 @@ class CaptureRecoveryTest {
             TossConfirmRequest request = invocation.getArgument(0);
             sent.computeIfAbsent(request.orderId(), k -> new AtomicInteger()).incrementAndGet();
             return new TossCommandResult.Succeeded(new TossPayment(request.paymentKey(), request.orderId(),
-                    TossPaymentStatus.DONE, request.amount(), request.amount(), "카드", APPROVED_AT, "tx"));
+                    TossPaymentStatus.DONE, request.amount(), request.amount(), "카드", APPROVED_AT, "tx", null));
         });
 
         List<Concurrently.Outcome<Integer>> outcomes = Concurrently.run(2, i -> () -> worker.recoverDue());
@@ -682,13 +683,13 @@ class CaptureRecoveryTest {
     private TossCommandResult done(PaymentTransaction transaction, Money amount) {
         return new TossCommandResult.Succeeded(new TossPayment(paymentKey.value(), transaction.providerOrderId().value(),
                 TossPaymentStatus.DONE, amount.amount().longValueExact(), amount.amount().longValueExact(), "카드",
-                APPROVED_AT, "tx"));
+                APPROVED_AT, "tx", null));
     }
 
     private TossLookupResult found(PaymentTransaction transaction, TossPaymentStatus status, Money amount) {
         Instant approvedAt = status == TossPaymentStatus.DONE ? APPROVED_AT : null;
         return new TossLookupResult.Found(new TossPayment(paymentKey.value(), transaction.providerOrderId().value(),
-                status, amount.amount().longValueExact(), amount.amount().longValueExact(), "카드", approvedAt, "tx"));
+                status, amount.amount().longValueExact(), amount.amount().longValueExact(), "카드", approvedAt, "tx", null));
     }
 
     // ---- 확인 ----
@@ -745,13 +746,5 @@ class CaptureRecoveryTest {
     private void ageRequestedAt(Long id, Duration age) {
         jdbcTemplate.update("UPDATE payment_transactions SET requested_at = requested_at - INTERVAL ? SECOND WHERE id = ?",
                 age.toSeconds(), id);
-    }
-
-    /** 다른 테스트가 남긴 복구 후보를 에스컬레이션해 이 테스트의 후보만 남긴다. */
-    private void parkOtherRecoverables() {
-        jdbcTemplate.update("""
-                UPDATE payment_transactions SET escalated_at = UTC_TIMESTAMP(6)
-                 WHERE escalated_at IS NULL AND status IN ('PROCESSING', 'RETRY_SCHEDULED')
-                """);
     }
 }

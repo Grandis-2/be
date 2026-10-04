@@ -11,9 +11,11 @@ dependencies {
     // 주인 확인은 호출자가 한다. 폐기 표식 조회(Redis)로 common:redis 가 따라온다 — application.yml 에 spring.data.redis 가 필요하다.
     implementation project(':common:security')
     implementation project(':common:redis')
-    // 결제 결과를 대상 서비스에 이벤트로 알린다(NV-101). 표 · 종류는 PaymentOutboxConfig 가 준다. 전송은 SQS(common:sqs).
+    // 결제 · 환불 결과를 대상 서비스에 이벤트로 알린다(NV-101 · NV-103). 표 · 종류는 PaymentOutboxConfig 가 준다. 전송은 SQS(common:sqs).
     implementation project(':common:outbox')
     implementation project(':common:sqs')
+    // 환불 요청(ORDER_REFUND_REQUESTED)을 payment-events 큐에서 받는다(NV-103). 봉투 모양은 common:message 와 한 벌이다.
+    implementation project(':common:message')
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     // 토스 결제 API 는 HTTP Interface(@HttpExchange) + RestClient 로 부른다(NV-98).
@@ -22,6 +24,8 @@ dependencies {
 
     // DB 동작은 MySQL 로만 검증한다(H2 없음).
     testImplementation project(':common:testing')
+    // SQS 연계는 로컬 AWS 에뮬레이터 Floci 로 검증한다. 컨테이너 · 큐 도우미는 common:sqs 와 한 벌이다.
+    testImplementation testFixtures(project(':common:sqs'))
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
     testImplementation 'org.testcontainers:testcontainers-mysql'

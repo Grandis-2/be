@@ -17,6 +17,7 @@ import com.grandis.nova.order.order.persistence.repository.OrderEventJpaReposito
 import com.grandis.nova.order.order.persistence.repository.OrderItemJpaRepository;
 import com.grandis.nova.order.order.persistence.repository.OrderJpaRepository;
 import com.grandis.nova.order.order.persistence.repository.OrderSpecifications;
+import com.grandis.nova.order.order.vo.EventCause;
 import com.grandis.nova.order.order.vo.OrderToken;
 import jakarta.persistence.EntityManager;
 import org.hibernate.exception.ConstraintViolationException;
@@ -120,6 +121,13 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     @Override
     public long eventSequence(Long orderId) {
         return orders.findEventSequence(orderId);
+    }
+
+    @Override
+    public Optional<EventCause> lastEventCause(Long orderId) {
+        return events.findFirstByOrderIdOrderByEventSequenceDesc(orderId)
+                .map(OrderMapper::toDomain)
+                .map(OrderEvent::cause);
     }
 
     @Override

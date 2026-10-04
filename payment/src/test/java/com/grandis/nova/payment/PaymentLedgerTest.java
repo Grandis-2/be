@@ -6,6 +6,7 @@ import com.grandis.nova.payment.domain.enums.TransactionType;
 import com.grandis.nova.payment.domain.exception.ActiveTransactionExistsException;
 import com.grandis.nova.payment.domain.exception.LeaseLostException;
 import com.grandis.nova.payment.domain.exception.PaymentAlreadyRefundedException;
+import com.grandis.nova.payment.domain.exception.RefundFailedException;
 import com.grandis.nova.payment.domain.exception.PaymentAmountMismatchException;
 import com.grandis.nova.payment.domain.exception.PaymentTargetMismatchException;
 import com.grandis.nova.payment.domain.model.Outcome;
@@ -15,6 +16,7 @@ import com.grandis.nova.payment.domain.repository.PaymentReader;
 import com.grandis.nova.payment.domain.repository.PaymentTransactionReader;
 import com.grandis.nova.payment.support.PaymentFixtures;
 import com.grandis.nova.payment.support.PaymentIntegrationTest;
+import com.grandis.nova.payment.support.RecoveryCandidates;
 import com.grandis.nova.payment.vo.Money;
 import com.grandis.nova.payment.vo.PaymentTarget;
 import com.grandis.nova.payment.vo.ProviderError;
@@ -31,10 +33,17 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * 원장 → 조건부 UPDATE → MySQL. 단계마다 트랜잭션을 따로 열고 커밋한다 — 선점과 반영은 운영에서도 다른 트랜잭션이고,
@@ -352,6 +361,68 @@ class PaymentLedgerTest {
                 .hasSize(1);
     }
 
+    // 결정 33: 환불이 확정 실패하면 같은 요청을 다시 받아도 새 REFUND 를 열지 않는다 — DB 는 허용하지만 다시 여는 것은 사람의 판단이다
+    @Test
+    void refundIsNotReopenedAfterItFailed() {
+        inTxRun(() -> ledger.resolve(started(), new Outcome.Confirmed(APPROVED_AT)));
+        PaymentTransaction refund = inTx(() -> ledger.openRefund(target));
+        ClaimedTransaction claimed = inTx(() -> ledger.claim(refund)).orElseThrow();
+        inTxRun(() -> ledger.resolve(claimed, new Outcome.Rejected(new ProviderError("EXCEED_MAX_REFUND_DUE", "기한"))));
+
+        assertThatThrownBy(() -> inTx(() -> ledger.openRefund(target)))
+                .isInstanceOf(RefundFailedException.class);
+        assertThat(transactions.findTransactionsByTarget(target)).filteredOn(t -> t.type() == TransactionType.REFUND)
+                .hasSize(1);
+    }
+
+    // 결정 33 의 틈: 앞 환불의 실패 확정이 커밋되기 전에 같은 대상의 환불 요청이 오면, 실패 확정을 기다렸다가 "실패했다" 로 판정해야
+    // 한다. 결제 행 잠금이 없으면 요청이 진행 중으로 읽고, 실패 확정이 커밋되며 진행 중 표시가 풀린 뒤 새 REFUND 가 들어간다
+    @Test
+    void refundRequestDuringFailureResolutionWaitsAndIsNotReopened() throws Exception {
+        inTxRun(() -> ledger.resolve(started(), new Outcome.Confirmed(APPROVED_AT)));
+        PaymentTransaction refund = inTx(() -> ledger.openRefund(target));
+        ClaimedTransaction claimed = inTx(() -> ledger.claim(refund)).orElseThrow();
+        CountDownLatch resolved = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> failing = executor.submit(() -> inTxRun(() -> {
+                ledger.resolve(claimed, new Outcome.Rejected(new ProviderError("EXCEED_MAX_REFUND_DUE", "기한")));
+                resolved.countDown();
+                await(commit);
+            }));
+            assertThat(resolved.await(10, TimeUnit.SECONDS)).isTrue();
+            Future<PaymentTransaction> reopening = executor.submit(() -> inTx(() -> ledger.openRefund(target)));
+
+            assertThat(catchThrowable(() -> reopening.get(1, TimeUnit.SECONDS)))
+                    .as("실패 확정이 커밋될 때까지 기다린다").isInstanceOf(TimeoutException.class);
+            commit.countDown();
+            failing.get(10, TimeUnit.SECONDS);
+
+            assertThat(catchThrowable(() -> reopening.get(10, TimeUnit.SECONDS)))
+                    .hasCauseInstanceOf(RefundFailedException.class);
+        } finally {
+            commit.countDown();
+            executor.shutdownNow();
+        }
+        assertThat(transactions.findTransactionsByTarget(target)).filteredOn(t -> t.type() == TransactionType.REFUND)
+                .singleElement().satisfies(only -> assertThat(only.status()).isEqualTo(TransactionStatus.FAILED));
+    }
+
+    // 전액 취소는 토스가 두 번 하지 않는다(ALREADY_CANCELED_PAYMENT) — 환불도 같은 행에서 키를 바꿔 다시 보낼 수 있다
+    @Test
+    void refundKeyIsRotatedOnTheSameRow() {
+        inTxRun(() -> ledger.resolve(started(), new Outcome.Confirmed(APPROVED_AT)));
+        PaymentTransaction refund = inTx(() -> ledger.openRefund(target));
+        ClaimedTransaction claimed = inTx(() -> ledger.claim(refund)).orElseThrow();
+
+        ClaimedTransaction rotated = inTx(() -> ledger.rotateIdempotencyKey(claimed));
+
+        assertThat(rotated.transaction().id()).isEqualTo(refund.id());
+        assertThat(rotated.transaction().idempotencyKey()).isNotEqualTo(refund.idempotencyKey());
+        assertThat(rotated.transaction().leaseToken()).isEqualTo(claimed.transaction().leaseToken());
+    }
+
     // ---- 대상당 진행 중 · 성공 CAPTURE 1건 ----
 
     // 결제창을 두 번 열어 둘 다 인증한 경우. 두 번째를 결제사에 보내면 이중 청구다 — 기록 단계(uq_payment_target)에서는 늦다.
@@ -461,7 +532,7 @@ class PaymentLedgerTest {
     @Test
     void escalatedTransactionKeepsStatusAndLeavesRecoveryCandidates() {
         ClaimedTransaction started = started();
-        parkOtherRecoverables();
+        RecoveryCandidates.parkOthers(jdbcTemplate);
 
         inTxRun(() -> ledger.escalate(started, TIMEOUT));
         expireLease(id(started));
@@ -525,7 +596,7 @@ class PaymentLedgerTest {
 
     @Test
     void recoverableCandidatesFollowClaimReadiness() {
-        parkOtherRecoverables();
+        RecoveryCandidates.parkOthers(jdbcTemplate);
         ClaimedTransaction inFlight = started();
         assertThat(inTx(() -> transactions.lockNextRecoverable(TransactionType.CAPTURE)))
                 .as("리스가 살아 있는 PROCESSING").isEmpty();
@@ -544,6 +615,17 @@ class PaymentLedgerTest {
 
     private static Long id(ClaimedTransaction claimed) {
         return claimed.transaction().id();
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("기다리던 신호가 오지 않았다");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     private <T> T inTx(Supplier<T> work) {
@@ -579,15 +661,5 @@ class PaymentLedgerTest {
     private void ageCreatedAt(Long id, Duration age) {
         jdbcTemplate.update("UPDATE payment_transactions SET created_at = UTC_TIMESTAMP(6) - INTERVAL ? SECOND WHERE id = ?",
                 age.toSeconds(), id);
-    }
-
-    /** 통합 테스트는 커밋된 행을 공유한다. 다른 테스트가 남긴 복구 후보를 에스컬레이션해 이 테스트의 후보만 남긴다. */
-    private void parkOtherRecoverables() {
-        jdbcTemplate.update("""
-                UPDATE payment_transactions SET escalated_at = UTC_TIMESTAMP(6)
-                 WHERE escalated_at IS NULL AND status IN ('PROCESSING', 'RETRY_SCHEDULED')
-                """);
-        jdbcTemplate.update("UPDATE payment_transactions SET status = 'FAILED', finished_at = UTC_TIMESTAMP(6), "
-                + "last_error_code = 'TEST_PARKED' WHERE status = 'PENDING' AND transaction_type = 'REFUND'");
     }
 }

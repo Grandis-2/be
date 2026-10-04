@@ -19,8 +19,10 @@ import java.io.IOException;
 import java.net.ConnectException;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.Base64;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
@@ -110,7 +112,7 @@ class TossPaymentClientTest {
         assertThat(result).isInstanceOfSatisfying(TossCommandResult.Succeeded.class, succeeded ->
                 assertThat(succeeded.payment()).isEqualTo(new TossPayment(TossStubs.PAYMENT_REF, TossStubs.ORDER_REF,
                         TossPaymentStatus.DONE, TossStubs.AMOUNT, TossStubs.AMOUNT, "카드",
-                        OffsetDateTime.parse("2026-09-29T15:31:12+09:00").toInstant(), "txn-approve-0001")));
+                        OffsetDateTime.parse("2026-09-29T15:31:12+09:00").toInstant(), "txn-approve-0001", List.of())));
     }
 
     // 가상계좌는 끈다(D7). 그래도 오면 승인됐다고 볼 수 없다 — 결과 불명으로 조회 · 알림에 맡긴다.
@@ -135,6 +137,31 @@ class TossPaymentClientTest {
 
         assertThat(result).isInstanceOfSatisfying(TossCommandResult.Succeeded.class,
                 succeeded -> assertThat(succeeded.payment().status()).isEqualTo(TossPaymentStatus.CANCELED));
+    }
+
+    // 환불 완료 시각 · 금액은 취소 내역에서 읽는다(payments.refunded_at · 전액 대조)
+    @Test
+    void canceledPaymentCarriesCancelHistory() {
+        TossStubs.expectCancel(server).andRespond(TossStubs.paymentResponse("CANCELED"));
+
+        TossCommandResult result = client.cancel(TossStubs.cancelRequest(), TossStubs.idempotencyKey());
+
+        assertThat(result).isInstanceOfSatisfying(TossCommandResult.Succeeded.class, succeeded -> {
+            assertThat(succeeded.payment().cancels()).containsExactly(new TossPayment.Cancel(
+                    Instant.parse("2026-10-04T01:20:30Z"), TossStubs.AMOUNT));
+            assertThat(succeeded.payment().balanceAmount()).isZero();
+        });
+    }
+
+    // 승인 응답에는 취소 내역이 없다(null) — 빈 목록으로 읽는다
+    @Test
+    void paymentWithoutCancelHistoryHasNoCancels() {
+        TossStubs.expectLookupByPaymentKey(server).andRespond(TossStubs.paymentResponse("DONE"));
+
+        TossLookupResult result = client.findByPaymentKey(TossStubs.PAYMENT_REF);
+
+        assertThat(result).isInstanceOfSatisfying(TossLookupResult.Found.class,
+                found -> assertThat(found.payment().cancels()).isEmpty());
     }
 
     // 전액 취소만 보낸다. 부분 취소 · 아직 승인 상태로 오면 환불 완료라고 볼 수 없다.
@@ -170,7 +197,7 @@ class TossPaymentClientTest {
 
         assertThat(client.findByPaymentKey(TossStubs.PAYMENT_REF)).isInstanceOfSatisfying(TossLookupResult.Found.class,
                 found -> assertThat(found.payment().status()).isEqualTo(TossPaymentStatus.UNRECOGNIZED));
-        assertThat(new TossPayment(TossStubs.PAYMENT_REF, TossStubs.ORDER_REF, null, 1, 1, null, null, null).status())
+        assertThat(new TossPayment(TossStubs.PAYMENT_REF, TossStubs.ORDER_REF, null, 1, 1, null, null, null, null).status())
                 .isEqualTo(TossPaymentStatus.UNRECOGNIZED);
     }
 

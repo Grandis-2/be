@@ -78,7 +78,7 @@ class TossOutcomesTest {
 
     private static TossCommandResult succeeded(long totalAmount, Instant approvedAt) {
         return new TossCommandResult.Succeeded(new TossPayment("tgen_outcome", HELD.providerOrderId().value(),
-                TossPaymentStatus.DONE, totalAmount, totalAmount, "카드", approvedAt, "txkey"));
+                TossPaymentStatus.DONE, totalAmount, totalAmount, "카드", approvedAt, "txkey", null));
     }
 
     // 복구가 푸는 방법은 마지막 결과에 적힌 불명 사유로 고른다. 적힌 게 없으면(반영 전에 멈춤) 응답을 못 받았을 수 있어 재전송

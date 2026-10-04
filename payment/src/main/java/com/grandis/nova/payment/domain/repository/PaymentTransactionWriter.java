@@ -80,8 +80,9 @@ public interface PaymentTransactionWriter {
     int escalate(Long transactionId, LeaseToken lease, ProviderError error, Instant now);
 
     /**
-     * 멱등 키 교체: 리스를 쥔 CAPTURE 에만. 토스는 같은 키의 재요청에 첫 응답(오류 포함)을 돌려주므로, 조회로 "처리 안 됨"을 확인한 뒤
-     * 다시 보낼 때만 쓴다. 승인은 결제창 인증 때의 결제사 주문 번호 · 결제 키 짝으로만 되므로 새 행이 아니라 같은 행에서 바꾼다.
+     * 멱등 키 교체: 리스를 쥔 거래에만. 토스는 같은 키의 재요청에 첫 응답(오류 포함)을 돌려주므로, 조회로 "처리 안 됨"을 확인한 뒤
+     * 다시 보낼 때만 쓴다. 같은 행에서 바꾼다 — 승인은 결제창 인증 때의 결제사 주문 번호 · 결제 키 짝으로만 되고, 환불은 그 행이
+     * 대상당 진행 중 하나(uq_payment_tx_active)라 새 행을 열 수 없다.
      * 리스를 leaseFor 로 새로 잡고 마지막 오류를 지운다 — 새 키 전송이 리스 안에 들고, 교체 뒤 멈추면 다음 작업자가 같은 키로 이어 간다.
      */
     int rotateIdempotencyKey(Long transactionId, LeaseToken lease, IdempotencyKey key, Duration leaseFor);

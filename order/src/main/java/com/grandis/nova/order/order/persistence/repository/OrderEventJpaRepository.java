@@ -4,6 +4,7 @@ import com.grandis.nova.order.order.persistence.entity.OrderEventJpaEntity;
 import org.springframework.data.repository.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 이력 읽기 전용. 이력은 추가 전용이고 쓰기는 원장이 어댑터의 appendEvent(EntityManager.persist)로만 한다 —
@@ -14,4 +15,7 @@ public interface OrderEventJpaRepository extends Repository<OrderEventJpaEntity,
     /** PK (order_id, event_sequence) 범위로 읽는다. */
     List<OrderEventJpaEntity> findByOrderIdAndEventSequenceLessThanEqualOrderByEventSequence(Long orderId,
                                                                                            Long upToSequence);
+
+    /** 마지막 이력. PK 앞부분(order_id)으로 찾고 번호 역순 첫 행이다. */
+    Optional<OrderEventJpaEntity> findFirstByOrderIdOrderByEventSequenceDesc(Long orderId);
 }
