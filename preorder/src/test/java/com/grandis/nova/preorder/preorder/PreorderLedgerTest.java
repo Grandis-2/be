@@ -1,5 +1,9 @@
 package com.grandis.nova.preorder.preorder;
 
+import com.grandis.nova.preorder.preorder.PreorderFact.CancelCompleted;
+import com.grandis.nova.preorder.preorder.PreorderFact.CancelRejected;
+import com.grandis.nova.preorder.preorder.PreorderFact.CancelRequested;
+import com.grandis.nova.preorder.preorder.PreorderFact.RegisterConfirmed;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 import com.grandis.nova.preorder.support.ShopFixtures;
@@ -21,10 +25,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import static com.grandis.nova.preorder.preorder.PreorderStatus.CANCELING;
 import static com.grandis.nova.preorder.preorder.PreorderStatus.PAYABLE;
 import static com.grandis.nova.preorder.preorder.PreorderStatus.PENDING_SYNC;
-import static com.grandis.nova.preorder.preorder.PreorderTrigger.CANCEL_COMPLETED;
-import static com.grandis.nova.preorder.preorder.PreorderTrigger.CANCEL_REJECTED;
-import static com.grandis.nova.preorder.preorder.PreorderTrigger.CANCEL_REQUESTED;
-import static com.grandis.nova.preorder.preorder.PreorderTrigger.REGISTER_CONFIRMED;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -69,7 +69,7 @@ class PreorderLedgerTest {
     void 사건이_적용되면_이력_번호가_하나_오르고_이력이_남는다() {
         Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
 
-        PreorderTransition result = ledger.fire(id, CANCEL_REQUESTED, EventActor.USER, null);
+        PreorderTransition result = ledger.fire(id, new CancelRequested(EventActor.USER, null));
 
         assertThat(result).isEqualTo(new PreorderTransition(true, CANCELING));
         assertThat(row(id)).containsEntry("status", "CANCELING").containsEntry("event_sequence", 2L);
@@ -80,7 +80,7 @@ class PreorderLedgerTest {
     void 지금_상태에서_의미_없는_사건이면_아무것도_바꾸지_않는다() {
         Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
 
-        PreorderTransition result = ledger.fire(id, CANCEL_COMPLETED, EventActor.SYSTEM, null);
+        PreorderTransition result = ledger.fire(id, new CancelCompleted());
 
         assertThat(result).isEqualTo(new PreorderTransition(false, PENDING_SYNC));
         assertThat(row(id)).containsEntry("status", "PENDING_SYNC").containsEntry("event_sequence", 1L);
@@ -90,22 +90,12 @@ class PreorderLedgerTest {
     @Test
     void 취소를_두_번_요청해도_한_번만_반영된다() {
         Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
-        ledger.fire(id, CANCEL_REQUESTED, EventActor.USER, null);
+        ledger.fire(id, new CancelRequested(EventActor.USER, null));
 
-        PreorderTransition again = ledger.fire(id, CANCEL_REQUESTED, EventActor.USER, null);
+        PreorderTransition again = ledger.fire(id, new CancelRequested(EventActor.USER, null));
 
         assertThat(again).isEqualTo(new PreorderTransition(false, CANCELING));
         assertThat(history(id)).hasSize(2);
-    }
-
-    @Test
-    void 등록_확인은_전용_메서드로만_반영한다() {
-        Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
-
-        assertThatThrownBy(() -> ledger.fire(id, REGISTER_CONFIRMED, EventActor.SYSTEM, null))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("confirmRegister");
-        assertThat(row(id)).containsEntry("status", "PENDING_SYNC");
     }
 
     @Test
@@ -113,9 +103,9 @@ class PreorderLedgerTest {
         Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
         String externalReference = "EXT-" + ShopFixtures.unique();
 
-        assertThat(ledger.confirmRegister(id, externalReference)).isEqualTo(new PreorderTransition(true, PAYABLE));
+        assertThat(ledger.fire(id, new RegisterConfirmed(externalReference))).isEqualTo(new PreorderTransition(true, PAYABLE));
         Object payableFrom = row(id).get("payable_from");
-        assertThat(ledger.confirmRegister(id, "EXT-" + ShopFixtures.unique()))
+        assertThat(ledger.fire(id, new RegisterConfirmed("EXT-" + ShopFixtures.unique())))
                 .isEqualTo(new PreorderTransition(false, PAYABLE));
 
         assertThat(payableFrom).isNotNull();
@@ -129,9 +119,9 @@ class PreorderLedgerTest {
     @Test
     void 취소_중인_예약에_늦게_온_등록_확인은_반영하지_않는다() {
         Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
-        ledger.fire(id, CANCEL_REQUESTED, EventActor.USER, null);
+        ledger.fire(id, new CancelRequested(EventActor.USER, null));
 
-        assertThat(ledger.confirmRegister(id, "EXT-LATE")).isEqualTo(new PreorderTransition(false, CANCELING));
+        assertThat(ledger.fire(id, new RegisterConfirmed("EXT-LATE"))).isEqualTo(new PreorderTransition(false, CANCELING));
 
         assertThat(row(id)).containsEntry("status", "CANCELING").containsEntry("payable_from", null);
     }
@@ -139,10 +129,10 @@ class PreorderLedgerTest {
     @Test
     void PAYABLE_에서_시작한_취소가_거절되면_PAYABLE_로_되돌린다() {
         Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
-        ledger.confirmRegister(id, "EXT-" + ShopFixtures.unique());
-        ledger.fire(id, CANCEL_REQUESTED, EventActor.USER, null);
+        ledger.fire(id, new RegisterConfirmed("EXT-" + ShopFixtures.unique()));
+        ledger.fire(id, new CancelRequested(EventActor.USER, null));
 
-        PreorderTransition result = ledger.fire(id, CANCEL_REJECTED, EventActor.SYSTEM, "SHIPPING_STARTED");
+        PreorderTransition result = ledger.fire(id, new CancelRejected("SHIPPING_STARTED"));
 
         assertThat(result).isEqualTo(new PreorderTransition(true, PAYABLE));
         assertThat(history(id)).last().isEqualTo("4:CANCELING>PAYABLE:SYSTEM");
@@ -151,16 +141,16 @@ class PreorderLedgerTest {
     @Test
     void 결제_가능한_적이_없는_예약의_취소는_거절될_수_없다() {
         Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
-        ledger.fire(id, CANCEL_REQUESTED, EventActor.USER, null);
+        ledger.fire(id, new CancelRequested(EventActor.USER, null));
 
-        assertThatThrownBy(() -> ledger.fire(id, CANCEL_REJECTED, EventActor.SYSTEM, "SHIPPING_STARTED"))
+        assertThatThrownBy(() -> ledger.fire(id, new CancelRejected("SHIPPING_STARTED")))
                 .isInstanceOf(IllegalStateException.class);
         assertThat(row(id)).containsEntry("status", "CANCELING").containsEntry("payable_from", null);
     }
 
     @Test
     void 없는_예약에는_사건을_적용할_수_없다() {
-        assertThatThrownBy(() -> ledger.fire(Long.MAX_VALUE, CANCEL_REQUESTED, EventActor.USER, null))
+        assertThatThrownBy(() -> ledger.fire(Long.MAX_VALUE, new CancelRequested(EventActor.USER, null)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -176,8 +166,8 @@ class PreorderLedgerTest {
     @Test
     void 취소가_끝나면_활성_표식이_사라져_같은_모델을_다시_신청할_수_있다() {
         Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
-        ledger.fire(id, CANCEL_REQUESTED, EventActor.USER, null);
-        ledger.fire(id, CANCEL_COMPLETED, EventActor.SYSTEM, null);
+        ledger.fire(id, new CancelRequested(EventActor.USER, null));
+        ledger.fire(id, new CancelCompleted());
 
         PreorderSnapshot again = ledger.accept(draft(customerId), EventActor.USER, null);
 
@@ -199,7 +189,7 @@ class PreorderLedgerTest {
     void 관리자_전이는_사유가_없으면_거부하고_상태를_바꾸지_않는다() {
         Long id = ledger.accept(draft(customerId), EventActor.USER, null).id();
 
-        assertThatThrownBy(() -> ledger.fire(id, CANCEL_REQUESTED, EventActor.ADMIN, " "))
+        assertThatThrownBy(() -> ledger.fire(id, new CancelRequested(EventActor.ADMIN, " ")))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(row(id)).containsEntry("status", "PENDING_SYNC");
     }
@@ -215,7 +205,7 @@ class PreorderLedgerTest {
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void 트랜잭션_밖에서는_상태를_바꿀_수_없다() {
-        assertThatThrownBy(() -> ledger.fire(1L, CANCEL_REQUESTED, EventActor.USER, null))
+        assertThatThrownBy(() -> ledger.fire(1L, new CancelRequested(EventActor.USER, null)))
                 .isInstanceOf(IllegalTransactionStateException.class);
     }
 

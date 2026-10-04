@@ -3,11 +3,11 @@ package com.grandis.nova.preorder.event;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.cancel.CancelRequestPayload;
 import com.grandis.nova.preorder.preorder.EventActor;
+import com.grandis.nova.preorder.preorder.PreorderFact;
 import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
-import com.grandis.nova.preorder.preorder.PreorderTrigger;
 import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.syncjob.SyncJobSnapshot;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
@@ -71,9 +71,9 @@ public class PreorderEventHandler {
         }
         Long preorderId = job.get().preorderId();
         if (job.get().jobType() == SyncJobType.REGISTER) {
-            ledger.confirmRegister(preorderId, message.externalNumber());
+            ledger.fire(preorderId, new PreorderFact.RegisterConfirmed(message.externalNumber()));
         } else {
-            ledger.fire(preorderId, PreorderTrigger.CANCEL_COMPLETED, EventActor.SYSTEM, null);
+            ledger.fire(preorderId, new PreorderFact.CancelCompleted());
         }
     }
 
@@ -95,8 +95,8 @@ public class PreorderEventHandler {
         }
         switch (message.result()) {
             case NO_ORDER, CANCELED -> requestExternalCancel(preorder);
-            case REJECTED -> ledger.fire(preorder.id(), PreorderTrigger.CANCEL_REJECTED,
-                    EventActor.SYSTEM, rejectionReason(message.reason()));
+            case REJECTED -> ledger.fire(preorder.id(),
+                    new PreorderFact.CancelRejected(rejectionReason(message.reason())));
         }
     }
 
