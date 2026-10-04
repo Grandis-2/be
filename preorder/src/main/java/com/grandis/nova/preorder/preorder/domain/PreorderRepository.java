@@ -50,17 +50,52 @@ public interface PreorderRepository extends JpaRepository<Preorder, Long>, JpaSp
                      @Param("now") Instant now);
 
     /**
-     * 주문 쪽 취소 거절 → PAYABLE 로 되돌림. 결제 가능한 적이 있는(payable_from 이 있는) 예약만 되돌린다 —
+     * 주문 쪽 취소 거절 → PAYABLE 또는 RESERVED 로 되돌림. 결제 가능한 적이 있는(payable_from 이 있는) 예약만 되돌린다 —
      * PENDING_SYNC 에서 시작한 취소를 되돌리면 결제 기한 기준 시각이 없는 PAYABLE 이 생긴다(ck_preorder_payable_from).
      */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("""
             update Preorder p
-               set p.status = :payable, p.eventSequence = p.eventSequence + 1, p.updatedAt = :now
+               set p.status = :to, p.eventSequence = p.eventSequence + 1, p.updatedAt = :now
              where p.id = :id and p.status = :from and p.payableFrom is not null
             """)
-    int revertToPayable(@Param("id") Long id, @Param("now") Instant now,
-                        @Param("from") PreorderStatus from, @Param("payable") PreorderStatus payable);
+    int revertCancel(@Param("id") Long id, @Param("now") Instant now,
+                     @Param("from") PreorderStatus from, @Param("to") PreorderStatus to);
+
+    /** 결제 시작 시각. 처음 한 번만 찍는다. 상태 · 이력 번호는 그대로다. */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("""
+            update Preorder p
+               set p.paymentStartedAt = coalesce(p.paymentStartedAt, :startedAt), p.updatedAt = :now
+             where p.id = :id and p.status = :from
+            """)
+    int markPaymentStarted(@Param("id") Long id, @Param("startedAt") Instant startedAt, @Param("now") Instant now,
+                           @Param("from") PreorderStatus from);
+
+    /** 결제 확인 → 예약 확정. 결제 시각은 처음 한 번만 찍는다. */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("""
+            update Preorder p
+               set p.status = :reserved, p.reservedAt = coalesce(p.reservedAt, :paidAt),
+                   p.eventSequence = p.eventSequence + 1, p.updatedAt = :now
+             where p.id = :id and p.status = :from
+            """)
+    int markReserved(@Param("id") Long id, @Param("paidAt") Instant paidAt, @Param("now") Instant now,
+                     @Param("from") PreorderStatus from, @Param("reserved") PreorderStatus reserved);
+
+    /** 상태는 그대로 두고 결제 시각만 남긴다(취소 중 결제 확인 · 결제된 주문의 거절). 처음 한 번만 찍는다. */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("""
+            update Preorder p
+               set p.reservedAt = coalesce(p.reservedAt, :paidAt), p.updatedAt = :now
+             where p.id = :id and p.status = :from
+            """)
+    int recordPaid(@Param("id") Long id, @Param("paidAt") Instant paidAt, @Param("now") Instant now,
+                   @Param("from") PreorderStatus from);
+
+    /** 결제 확인 시각(취소 거절 때 어디로 돌아갈지 가른다). 행을 잠근 트랜잭션에서 부른다. */
+    @Query("select p.reservedAt from Preorder p where p.id = :id")
+    Optional<Instant> findReservedAt(@Param("id") Long id);
 
     /** 등록 확인 반영. payable_from 은 처음 한 번만 찍는다(여기서 24시간이 결제 기한). */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
