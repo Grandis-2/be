@@ -28,7 +28,10 @@ if [ -n "${4:-}" ]; then
 fi
 sleep 2
 start=$(date +%s)
+# 임계값을 어기면 k6 가 실패로 끝난다. 로그와 리더 지표를 남긴 뒤 그 상태로 끝내 실패한 측정이 성공처럼 보이지 않게
+k6_status=0
 k6 run --quiet -e BASE_URLS=http://localhost:8085,http://localhost:8086 -e PRODUCT_ID="$PRODUCT" \
-  -e TOKENS_FILE=build/tokens.csv --summary-export "build/$NAME.json" entry-spike.js > "build/$NAME.txt" 2>&1 || true
+  -e TOKENS_FILE=build/tokens.csv --summary-export "build/$NAME.json" entry-spike.js > "build/$NAME.txt" 2>&1 || k6_status=$?
 end=$(date +%s)
-echo "$NAME: 리더가 들인 인원 $(admitted) 명 / k6 $((end - start))초" | tee -a "build/$NAME.txt"
+echo "$NAME: 리더가 들인 인원 $(admitted) 명 / k6 $((end - start))초 / k6 종료 코드 $k6_status" | tee -a "build/$NAME.txt"
+exit "$k6_status"

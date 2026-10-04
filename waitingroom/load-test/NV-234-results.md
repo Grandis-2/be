@@ -52,7 +52,7 @@ preorder 를 늘리면 전역 속도만 관리자 API(`PUT /api/v1/admin/waiting
 cd waitingroom/load-test
 python3 make-tokens.py --count 5000 --out build      # 회원 토큰 · 관리자 토큰 · 공개키
 ./run-local.sh start 2                                # Redis + 대기열 2대
-./measure.sh 200 150 warmup                           # 예열(버림)
+./measure.sh 200 150 warmup || true                   # 예열(실패해도 버린다)
 ./measure.sh 201 150 default-run1                     # 기본값
 ./measure.sh 203 500 rate500-run1 500                 # 속도 500 · 모델 상한 500
 ./run-local.sh stop
