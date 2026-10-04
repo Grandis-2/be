@@ -20,6 +20,7 @@ import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -45,6 +46,7 @@ class AllocationRound {
     private final ControlPlaneProperties properties;
     private final ControlMetrics metrics;
     private final Leadership leadership;
+    private final ScheduleResync resync;
     /** 이 리더가 모델별로 본 커서 최댓값. Redis 가 커서를 잃으면 되살리는 데 쓴다(값은 늘기만 한다). */
     private final Map<String, Long> writtenMax = new ConcurrentHashMap<>();
     private final Map<String, String> sweepCursors = new ConcurrentHashMap<>();
@@ -53,9 +55,12 @@ class AllocationRound {
     /** 같은 깨진 일정을 틱마다 다시 남기지 않는다. */
     private final Set<String> reportedBroken = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean tidyFailing = new AtomicBoolean();
+    private final AtomicBoolean retireFailing = new AtomicBoolean();
+    private final AtomicBoolean tombstoneFailing = new AtomicBoolean();
 
     AllocationRound(ControlStore store, AdmissionProperties admission, ControlPlaneProperties properties,
-                    ControlMetrics metrics, Leadership leadership) {
+                    ControlMetrics metrics, Leadership leadership, ScheduleResync resync) {
+        this.resync = resync;
         this.store = store;
         this.admission = admission;
         this.properties = properties;
@@ -68,18 +73,25 @@ class AllocationRound {
         return Mono.zip(store.readProducts(), store.readSettings())
                 .flatMap(read -> {
                     TimedEntries products = read.getT1();
+                    Instant readAt = Instant.ofEpochMilli(products.redisNowMillis());
                     OperationalSettings settings = OperationalSettings.from(read.getT2(), admission.globalCredit());
                     Map<String, Schedule> schedules = schedules(products.entries());
+                    // 쓸 수 있는 일정이 하나도 없으면(비었거나 깨진 값 · 은퇴 표식만) 놓친 회차가 있을 수 있다
+                    if (schedules.isEmpty()) {
+                        resync.requestIfQuiet();
+                    } else {
+                        resync.known();
+                    }
                     writtenMax.keySet().retainAll(schedules.keySet());
                     sweepCursors.keySet().retainAll(schedules.keySet());
                     cleaned.retainAll(schedules.keySet());
-                    Instant readAt = Instant.ofEpochMilli(products.redisNowMillis());
                     return Flux.fromIterable(schedules.keySet())
                             .concatMap(key -> retired(key, schedules.get(key), readAt)
                                     ? Mono.just(new Row(key, schedules.get(key), RETIRED))
                                     : store.depth(key).map(depth -> new Row(key, schedules.get(key), depth)))
                             .collectList()
-                            .flatMap(rows -> allocate(fence, cluster, tick, products.redisNowMillis(), settings, rows));
+                            .flatMap(rows -> allocate(fence, cluster, tick, products.redisNowMillis(), settings, rows))
+                            .flatMap(snapshot -> dropOldTombstones(products.entries(), readAt).thenReturn(snapshot));
                 });
     }
 
@@ -104,7 +116,61 @@ class AllocationRound {
                     return store.publishSnapshot(fence, properties.fenceTtl().toMillis(), SnapshotCodec.encode(snapshot))
                             .flatMap(published -> published ? Mono.just(snapshot) : Mono.error(new LostLeadershipException()));
                 })
-                .flatMap(snapshot -> tidy(fence, rows, now).thenReturn(snapshot));
+                .flatMap(snapshot -> tidy(fence, rows, now).then(retireFinished(rows, now)).thenReturn(snapshot));
+    }
+
+    /**
+     * 끝난 지 오래된 모델을 배분에서 빼 은퇴 표식(일정 번호만)으로 바꾼다 — 일정 목록과 판정 재료가 커지기만 하지 않게.
+     * 그 전까지는 진입에 404 가 아니라 마감으로 답한다. 실패해도 다음 회차에 다시 한다.
+     */
+    private Mono<Void> retireFinished(List<Row> rows, Instant now) {
+        return Flux.fromIterable(rows)
+                .filter(row -> row.depth() == RETIRED && !now.isBefore(row.schedule().window().closesAt().plus(FORGET_AFTER)))
+                .concatMap(row -> store.retireSchedule(row.key(),
+                                ProductSchedules.format(row.schedule().window(), row.schedule().scheduleVersion()),
+                                row.schedule().scheduleVersion(), now)
+                        .doOnNext(retired -> changed("retire", row.key(), retired)))
+                .then()
+                .doOnSuccess(done -> recovered(retireFailing, "끝난 모델 은퇴"))
+                .onErrorResume(e -> failed(retireFailing, "끝난 모델 은퇴", e));
+    }
+
+    /** 은퇴 표식은 큐가 옛 메시지를 다시 줄 수 있는 동안만 둔다. 그 뒤에는 막을 재전달이 없다. */
+    private Mono<Void> dropOldTombstones(Map<String, String> raw, Instant now) {
+        return Flux.fromIterable(raw.entrySet())
+                .filter(entry -> ProductSchedules.retiredAt(entry.getValue())
+                        .filter(at -> !now.isBefore(at.plus(TOMBSTONE_TTL))).isPresent())
+                .concatMap(entry -> store.dropSchedule(entry.getKey(), entry.getValue())
+                        .doOnNext(dropped -> changed("drop", entry.getKey(), dropped)))
+                .then()
+                .doOnSuccess(done -> recovered(tombstoneFailing, "은퇴 표식 정리"))
+                .onErrorResume(e -> failed(tombstoneFailing, "은퇴 표식 정리", e));
+    }
+
+    /**
+     * 조건부 변경의 결과. 바꿨으면 센다. 못 바꿨으면 읽은 뒤 새 일정이 왔거나 이미 없는 것이라 바꾸지 않는 것이
+     * 맞다 — 성공으로 세지 않고 충돌로 남기며, 다음 회차가 최신 값으로 다시 판단한다.
+     */
+    private void changed(String work, String productKey, boolean applied) {
+        metrics.scheduleCleanup(work, applied);
+        if (!applied) {
+            log.debug("{} 건너뜀 — 읽은 뒤 일정이 바뀌었다 productId={}", work, productKey);
+        }
+    }
+
+    /** 다음 회차에 다시 하므로 배분을 막지 않는다. 작업마다 상태가 바뀔 때만 원인을 남긴다. */
+    private Mono<Void> failed(AtomicBoolean failing, String work, Throwable e) {
+        metrics.loopFailed("retire");
+        if (failing.compareAndSet(false, true)) {
+            log.warn("{} 실패 — 다음 회차에 다시 한다: {}", work, e.toString());
+        }
+        return Mono.empty();
+    }
+
+    private static void recovered(AtomicBoolean failing, String work) {
+        if (failing.compareAndSet(true, false)) {
+            log.info("{} 회복", work);
+        }
     }
 
     /**
@@ -208,6 +274,9 @@ class AllocationRound {
     private Map<String, Schedule> schedules(Map<String, String> raw) {
         Map<String, Schedule> schedules = new TreeMap<>();
         raw.forEach((key, value) -> {
+            if (ProductSchedules.isRetired(value)) {
+                return;
+            }
             Optional<Schedule> parsed = RedisKeys.validProductKey(key) ? ProductSchedules.parse(value) : Optional.empty();
             if (parsed.isPresent()) {
                 schedules.put(key, parsed.get());
@@ -229,6 +298,10 @@ class AllocationRound {
     }
 
     private static final QueueDepth RETIRED = new QueueDepth(0, -1);
+    /** 마감 뒤 이만큼 지나면 배분에서 빼 은퇴 표식만 남긴다. */
+    static final Duration FORGET_AFTER = Duration.ofDays(7);
+    /** 은퇴 표식을 두는 기간. SQS 가 메시지를 붙들 수 있는 최대 기간(14일)과 같다. */
+    static final Duration TOMBSTONE_TTL = Duration.ofDays(14);
     private static final String APPLY_FAILED = "apply:";
     private static final long CLOSED = 1;
 

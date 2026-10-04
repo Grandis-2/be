@@ -18,6 +18,9 @@ dependencyManagement {
 
 dependencies {
     implementation project(':common:types')
+    // 회차 일정 수신(waitingroom-events) · 재발행 요청(preorder-events). 봉투 모양은 서비스들과 같은 계약이다
+    implementation project(':common:sqs')
+    implementation project(':common:message')
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
     // 접수 POST 를 입장권 확인 뒤 preorder 로 그대로 전달한다
     implementation 'org.springframework.cloud:spring-cloud-starter-gateway-server-webflux'
@@ -33,6 +36,8 @@ dependencies {
     implementation 'io.micrometer:context-propagation'
 
     testImplementation 'io.projectreactor:reactor-test'
+    // SQS 연계는 로컬 AWS 에뮬레이터 Floci 로 검증한다(서비스들과 같은 픽스처)
+    testImplementation testFixtures(project(':common:sqs'))
     // Lua · 제어 평면은 실제 Redis 로만 검증한다(CI 와 같은 redis:8)
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.testcontainers:testcontainers-junit-jupiter'

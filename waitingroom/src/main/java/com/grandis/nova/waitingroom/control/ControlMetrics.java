@@ -46,6 +46,16 @@ public class ControlMetrics {
         }
     }
 
+    /** 끝난 모델 정리(retire · drop)의 결과. applied=false 는 읽은 뒤 값이 바뀌어 건너뛴 것이다. */
+    void scheduleCleanup(String work, boolean applied) {
+        Counter.builder("waitingroom.schedule.cleanup").tag("work", work).tag("outcome", applied ? "APPLIED" : "CONFLICT")
+                .register(registry).increment();
+    }
+
+    void resyncRequested() {
+        Counter.builder("waitingroom.schedule.resync.requests").register(registry).increment();
+    }
+
     void loopFailed(String loop) {
         Counter.builder("waitingroom.control.failures").tag("loop", loop).register(registry).increment();
     }
