@@ -316,6 +316,19 @@ class ProductEditRaceTest {
     }
 
     @Test
+    @DisplayName("같은 판매 중지 · 같은 공개 전환이 겹쳐 와도 PREORDER_PRODUCT_CHANGED 는 하나씩 — 뒤의 것은 잠금을 기다렸다가 이미 바뀐 값을 보고 적지 않는다")
+    void identicalConcurrentTransitionsNotifyOnce() throws Exception {
+        long productId = registerPreorder();
+        interleave(() -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED)),
+                () -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED)));
+        assertThat(changedEvents(productId)).isEqualTo(1);
+
+        interleave(() -> editService.changeVisibility(productId, new VisibilityChangeRequest(true)),   // 등록 때 비공개
+                () -> editService.changeVisibility(productId, new VisibilityChangeRequest(true)));
+        assertThat(changedEvents(productId)).isEqualTo(2);
+    }
+
+    @Test
     @DisplayName("판매 상태 전환 중에 잠금 시각(오픈 3분 전)이 지나면 커밋하지 않는다 — 409, 상태 그대로")
     void openingDuringTheSaleStatusChangeRejectsTheCommit() throws Exception {
         long productId = registerPreorder();
@@ -542,6 +555,11 @@ class ProductEditRaceTest {
 
     private String title(long productId) {
         return jdbcTemplate.queryForObject("SELECT title FROM products WHERE id = ?", String.class, productId);
+    }
+
+    private long changedEvents(long productId) {
+        return jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM catalog_outbox_events WHERE aggregate_id = ? AND event_type = 'PREORDER_PRODUCT_CHANGED'", Long.class, productId);
     }
 
     /** 축 storage 하나(256GB +0 · 512GB +200,000), 기본가 1,000,000, 수동 가격 없음. */
