@@ -91,12 +91,13 @@ batch    시간이 되면 깨어남.   1 로 고정돼야 함 (늘면 같은 스
 **결제·알림은 서비스로 두지 않았다.** 실 PG 를 붙이지 않으므로 결제 Mock 은 `mock-external` 로 나가고,
 결제 기록은 `order` 가 소유한다. 알림은 Mock 기록이라 `worker` 가 SQS 로 처리한다.
 
-### 서비스 간 연결점 셋
+### 서비스 간 연결점 넷
 
 ```
 결제 시작    order → preorder   "이 예약 결제 가능한가?"           동기 조회
 예약 취소    preorder → order → preorder                        SQS 이벤트
 상품 등록    catalog → preorder(회차 · 차수) / order(초기 재고)    SQS 이벤트 (contracts/catalog-events.md)
+상품 수정    catalog → preorder(캐시 비우기 · 회차 취소)             SQS 이벤트 (contracts/catalog-events.md)
 ```
 
 두 번째는 원래부터 단계적이었다. ERD 가 *"예약은 주문 CANCELED 와 Mock 취소 SUCCEEDED 가

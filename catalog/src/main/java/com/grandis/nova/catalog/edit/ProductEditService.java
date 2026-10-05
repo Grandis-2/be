@@ -44,11 +44,10 @@ import org.springframework.transaction.annotation.Transactional;
  * 관리자 상품 수정 — 표시 정보 · 기본 가격 · 보증, 옵션 값 추가 · 수정, 옵션(조합) 추가 · 수정, 상품 판매 상태 · 공개 여부.
  *
  * <p><b>사전예약은 오픈 3분 전부터 공개 여부 말고는 아무것도 못 바꾼다.</b> 표시 정보 · 가격 · 추가금 · 값 · 조합 추가 · 가격 되돌리기 · 옵션 판매 상태 · 상품 판매 상태 전부
- * 409 STATE_CONFLICT(2026-09-29 결정 — 판매 상태도 막는다. preorder 는 접수용 상품 사본을 캐시해 두고 가진 값으로 바로 판정한다. 1분이
- * 지났으면 그 조회가 뒤에서 새로 받기를 시작할 뿐이라, 사본은 최대 30분(캐시 만료) 묵을 수 있다 — contracts/preorder-internal.md "캐시".
- * 그래서 오픈 뒤의 판매 중지는 접수에 늦게 닿는다. 3분 전부터 막아 오픈 뒤 값이 바뀌는 일은 없애지만, 그 전의 수정도 preorder 사본에
- * 늦게 닿을 수 있고 그 틈은 catalog 가 닫을 수 없다 — 일반 수정에는 preorder 캐시를 비울 경로가 없다. preorder 가 캐시를 비우는 것은 회차 취소
- * 이벤트를 받은 인스턴스뿐이다). 판정은 preorder 의 회차(opens_at − 3분 ≤ 지금)로 하고, 회차가 없으면
+ * 409 STATE_CONFLICT(2026-09-29 결정 — 판매 상태도 막는다. preorder 는 접수용 상품 사본을 캐시해 두고 그 값으로 판정한다. 사전예약 상품을
+ * 고치면 PREORDER_PRODUCT_CHANGED 로 알려 preorder 가 모든 인스턴스의 사본을 비우지만, 비우기는 아웃박스 릴레이 · SQS 전달만큼 늦고
+ * preorder 의 인스턴스 간 알림이 실패하면 사본은 최대 30분(캐시 만료) 묵을 수 있다 — contracts/preorder-internal.md "캐시". 그래서 오픈
+ * 직전 · 뒤의 변경은 접수에 늦게 닿을 수 있어 3분 전부터 막는다). 판정은 preorder 의 회차(opens_at − 3분 ≤ 지금)로 하고, 회차가 없으면
  * (preorder 가 등록 이벤트를 처리하기 전) 아직 잠기지 않았다.
  *
  * <p><b>재계산.</b> 기본 가격 · 추가금이 바뀌면 그 값을 고른 옵션 중 수동 가격이 아닌 것만 `기본가 + Σ추가금` 으로 다시 계산한다. 관리자가 직접 고친
@@ -141,6 +140,7 @@ public class ProductEditService {
         products.flush();
         AdminProductDetail edited = detailService.findAdminProduct(productId);
         requireNotOpenedAtCommit(product);
+        notifyPreorder(product);
         return edited;
     }
 
@@ -175,6 +175,7 @@ public class ProductEditService {
         }
         AdminProductDetail edited = detailService.findAdminProduct(product.getId());
         requireNotOpenedAtCommit(product);
+        notifyPreorder(product);
         return edited;
     }
 
@@ -202,6 +203,7 @@ public class ProductEditService {
         values.flush();
         AdminProductDetail edited = detailService.findAdminProduct(productId);
         requireNotOpenedAtCommit(product);
+        notifyPreorder(product);
         return edited;
     }
 
@@ -275,6 +277,7 @@ public class ProductEditService {
         selections.flush();
         ProductDetailView.Variant added = variantOf(productId, option.getId());
         requireNotOpenedAtCommit(product);
+        notifyPreorder(product);
         return added;
     }
 
@@ -308,12 +311,13 @@ public class ProductEditService {
         options.flush();
         ProductDetailView.Variant edited = variantOf(productId, variantId);
         requireNotOpenedAtCommit(product);
+        notifyPreorder(product);
         return edited;
     }
 
     /**
      * 상품 판매 시작 · 중지(ACTIVE ↔ PAUSED). 같은 상태면 바꾸지 않고 그대로 답한다. 사전예약은 다른 수정처럼 오픈 3분 전부터 409 다
-     * (2026-10-04 결정 — preorder 의 접수용 상품 사본은 최대 30분 묵을 수 있어 오픈 뒤 전환은 접수에 늦게 닿는다). 오픈 전에 PAUSED 로 둔 채
+     * (2026-10-04 결정 — 변경 알림이 preorder 접수에 닿기까지 늦을 수 있어 오픈 뒤 전환은 접수에 늦게 닿는다). 바뀌었으면 PREORDER_PRODUCT_CHANGED 를 적는다. 오픈 전에 PAUSED 로 둔 채
      * 오픈을 넘긴 상품은 그대로 판매 중지다 — 회차 취소로 보지 않고 이벤트도 없다(같은 날 결정).
      *
      * <p>사전예약 <b>오픈 뒤</b>(회차 opens_at ≤ 지금)의 PAUSED 는 회차 취소다 — {@link #cancelCampaign}. 사유는 그때만 받는다.
@@ -331,9 +335,13 @@ public class ProductEditService {
         if (reason != null) {
             throw ValidationFailures.of("reason", "사유는 사전예약 오픈 뒤 판매 중지(회차 취소)에만 받습니다.");
         }
+        SaleStatus before = product.getStatus();
         product.changeStatus(request.status());
         products.flush();
         requireNotOpened(product, STATUS_FROZEN);   // 커밋 직전 — 잠금 대기 중에 오픈 3분 전을 넘겼을 수 있다
+        if (product.getStatus() != before) {
+            notifyPreorder(product);
+        }
         return new SaleStatusView(productId, product.getStatus(), false);
     }
 
@@ -367,16 +375,20 @@ public class ProductEditService {
                 .orElse(false);
     }
 
-    /** 공개 ↔ 비공개. 언제든 바꾼다 — 오픈 판정을 하지 않는다. 다른 수정과 줄 서도록 상품 행은 잠근다. */
+    /** 공개 ↔ 비공개. 언제든 바꾼다 — 오픈 판정을 하지 않는다. 다른 수정과 줄 서도록 상품 행은 잠근다. 바뀌었으면 PREORDER_PRODUCT_CHANGED 를 적는다. */
     @Transactional
     public VisibilityView changeVisibility(Long productId, VisibilityChangeRequest request) {
         Product product = lockProduct(productId);
+        boolean before = product.isVisible();
         if (request.visible()) {
             product.publish();
         } else {
             product.hide();
         }
         products.flush();
+        if (product.isVisible() != before) {
+            notifyPreorder(product);
+        }
         return new VisibilityView(productId, product.isVisible());
     }
 
@@ -412,6 +424,17 @@ public class ProductEditService {
                 .orElse(false);
         if (frozen) {
             throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, message);
+        }
+    }
+
+    /**
+     * 사전예약 상품이면 PREORDER_PRODUCT_CHANGED 를 같은 트랜잭션의 아웃박스에 적는다 — preorder 가 모든 인스턴스의 접수용 상품 사본(캐시)을 비워
+     * 다음 접수가 바뀐 값으로 판정하게 한다. 수정이 되돌려지면 이벤트도 남지 않는다. 일반 상품은 preorder 가 읽지 않으므로 적지 않는다.
+     * 회차 취소는 자기 이벤트(PREORDER_CAMPAIGN_CANCELED)로 preorder 가 비우므로 여기를 거치지 않는다.
+     */
+    private void notifyPreorder(Product product) {
+        if (product.getSaleMode() == SaleMode.PREORDER) {
+            outbox.append(new PreorderProductChanged(product.getId()));
         }
     }
 
