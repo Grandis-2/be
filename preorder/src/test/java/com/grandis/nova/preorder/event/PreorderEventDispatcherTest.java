@@ -4,6 +4,7 @@ import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.cancel.application.CancelStarter;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
+import com.grandis.nova.preorder.integration.catalog.CatalogReader;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.Preorders;
@@ -19,8 +20,14 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /** 큐 메시지 본문(계약 2.0 공통 봉투)을 종류별 처리로 보내는지. 본문은 계약 예시 모양 그대로다. */
 @PreorderIntegrationTest
@@ -50,6 +57,9 @@ class PreorderEventDispatcherTest {
     @MockitoBean
     CatalogClient catalogClient;
 
+    @Autowired
+    CatalogReader catalogReader;
+
     ShopFixtures fixtures;
     Long preorderId;
     String token;
@@ -75,6 +85,30 @@ class PreorderEventDispatcherTest {
 
         assertThat(jdbcTemplate.queryForObject("SELECT external_reference FROM preorders WHERE id = ?",
                 String.class, preorderId)).isEqualTo(externalNumber);
+    }
+
+    @Test
+    void 결제_시작_확인_메시지를_예약_확정으로_보내고_거절에_실린_결제_시각도_읽는다() {
+        Long jobId = fixtures.workerSucceeds(preorderId, "REGISTER");
+        dispatcher.dispatch(envelope("EXTERNAL_JOB_SUCCEEDED", "PREORDER_SYNC_JOB", jobId, payload()
+                .put("syncJobId", jobId).put("preorderId", token).put("jobType", "REGISTER")
+                .put("externalNumber", "R-" + ShopFixtures.unique())));
+
+        dispatcher.dispatch(envelope("PREORDER_PAYMENT_STARTED", "PREORDER", preorderId, payload()
+                .put("preorderId", token).put("orderId", "o-1").put("startedAt", "2026-10-04T01:00:00Z")));
+        assertThat(status()).isEqualTo("PAYABLE");
+        dispatcher.dispatch(envelope("PREORDER_PAYMENT_CONFIRMED", "PREORDER", preorderId, payload()
+                .put("preorderId", token).put("orderId", "o-1").put("paidAt", "2026-10-04T01:02:00Z")));
+        assertThat(status()).isEqualTo("RESERVED");
+
+        cancelStarter.start(preorders.findById(preorderId).orElseThrow(), EventActor.USER, null, CancelReason.USER);
+        dispatcher.dispatch(envelope("PREORDER_ORDER_SETTLED", "PREORDER", preorderId,
+                settled("REJECTED").put("reason", "SHIPPED").put("paidAt", "2026-10-04T01:02:00Z")
+                        .put("cancelSequence", fixtures.cancelSequence(preorderId))));
+        assertThat(status()).isEqualTo("RESERVED");
+        assertThat(jdbcTemplate.queryForList(
+                "SELECT CONCAT(payment_started_at, '|', reserved_at) FROM preorders WHERE id = ?", String.class,
+                preorderId)).containsExactly("2026-10-04 01:00:00.000000|2026-10-04 01:02:00.000000");
     }
 
     @Test
@@ -126,6 +160,55 @@ class PreorderEventDispatcherTest {
                  WHERE event_type = 'PREORDER_CAMPAIGN_CHANGED' AND aggregate_id = ?
                    AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.change')) = 'RESYNC'
                 """, productId)).isEqualTo(2);
+    }
+
+    @Test
+    void 상품_등록_메시지를_회차_생성으로_보내고_모르는_칸은_넘기며_상품_id_나_필수_칸이_없으면_예외() {
+        Long productId = fixtures.product("PREORDER", "ACTIVE");
+        String opensAt = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.MICROS).toString();
+        String closesAt = Instant.now().plusSeconds(90_000).truncatedTo(ChronoUnit.MICROS).toString();
+        ObjectNode payload = (ObjectNode) jsonMapper.readTree("""
+                {"campaign":{"opensAt":"%s","closesAt":"%s","timezone":"Asia/Seoul"},
+                 "shipmentBatches":[
+                   {"batchNumber":1,"positionFrom":1,"positionTo":3000,
+                    "estimatedShipStart":"2026-11-01","estimatedShipEnd":"2026-11-07"},
+                   {"batchNumber":2,"positionFrom":3001,"positionTo":null,
+                    "estimatedShipStart":"2026-12-01","estimatedShipEnd":"2026-12-07"}]}
+                """.formatted(opensAt, closesAt));
+
+        dispatcher.dispatch(envelope("PREORDER_PRODUCT_REGISTERED", "PRODUCT", productId, payload));
+
+        assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_campaigns WHERE product_id = ?", productId))
+                .isEqualTo(1);
+        assertThat(jdbcTemplate.queryForList("""
+                SELECT CONCAT_WS('|', batch_number, position_from, COALESCE(position_to, 'NULL'),
+                                 estimated_ship_start, estimated_ship_end)
+                  FROM shipment_batches WHERE product_id = ? ORDER BY batch_number
+                """, String.class, productId))
+                .containsExactly("1|1|3000|2026-11-01|2026-11-07", "2|3001|NULL|2026-12-01|2026-12-07");
+        assertThatThrownBy(() -> dispatcher.dispatch(envelope("PREORDER_PRODUCT_REGISTERED", "PRODUCT", null,
+                payload))).isInstanceOf(IllegalArgumentException.class);
+        Long another = fixtures.product("PREORDER", "ACTIVE");
+        ObjectNode noOpensAt = payload.deepCopy();
+        ((ObjectNode) noOpensAt.get("campaign")).remove("opensAt");
+        assertThatThrownBy(() -> dispatcher.dispatch(envelope("PREORDER_PRODUCT_REGISTERED", "PRODUCT", another,
+                noOpensAt))).isInstanceOf(NullPointerException.class).hasMessage("opensAt");
+        assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_campaigns WHERE product_id = ?", another)).isZero();
+    }
+
+    @Test
+    void 상품_변경_메시지를_받을_때마다_캐시를_비워_다음_조회가_catalog_에서_다시_받는다() {
+        Long productId = preorders.findById(preorderId).orElseThrow().productId();
+        catalogReader.findProduct(productId);
+        clearInvocations(catalogClient);
+
+        String changed = envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", productId, payload());
+        dispatcher.dispatch(changed);
+        catalogReader.findProduct(productId);
+        dispatcher.dispatch(changed);
+        catalogReader.findProduct(productId);
+
+        verify(catalogClient, times(2)).getProduct(productId);
     }
 
     @Test

@@ -16,15 +16,18 @@ public final class PreorderView {
     private PreorderView() {
     }
 
-    public record Summary(PreorderSnapshot preorder, ShipmentBatchSnapshot shipmentBatch) {
+    public record Summary(PreorderSnapshot preorder, ShipmentBatchSnapshot shipmentBatch,
+                          PreorderDisplayStatus displayStatus) {
     }
 
     /** 관리자 목록. 외부 등록 작업 상태가 더 붙는다(DEAD_LETTER 면 재처리 대기). */
-    public record AdminSummary(PreorderSnapshot preorder, ShipmentBatchSnapshot shipmentBatch, SyncJobStatus registerJobStatus) {
+    public record AdminSummary(PreorderSnapshot preorder, ShipmentBatchSnapshot shipmentBatch, SyncJobStatus registerJobStatus,
+                               PreorderDisplayStatus displayStatus) {
     }
 
     /** 관리자 상세. 작업 · 시도 · 이력까지 한 번에 본다. */
     public record AdminDetail(PreorderSnapshot preorder, ShipmentBatchSnapshot shipmentBatch, List<SyncJobSnapshot> syncJobs,
-                              Map<Long, List<SyncAttempt>> attempts, List<PreorderHistoryEntry> events) {
+                              Map<Long, List<SyncAttempt>> attempts, List<PreorderHistoryEntry> events,
+                              PreorderDisplayStatus displayStatus) {
     }
 }

@@ -3,6 +3,7 @@ package com.grandis.nova.preorder.query;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
+import com.grandis.nova.preorder.preorder.PreorderFact;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderCancels;
@@ -19,6 +20,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 
@@ -133,7 +135,7 @@ class PreorderQueryApiTest {
         AcceptResult accepted = accepts.accept(customerId);
         String externalReference = "EXT-" + ShopFixtures.unique();
         transactionTemplate.executeWithoutResult(status ->
-                ledger.confirmRegister(accepted.preorder().id(), externalReference));
+                ledger.fire(accepted.preorder().id(), new PreorderFact.RegisterConfirmed(externalReference)));
 
         mockMvc.perform(get("/api/v1/preorders/" + AcceptFixtures.tokenOf(accepted))
                         .with(customer(customerId)))
@@ -144,6 +146,49 @@ class PreorderQueryApiTest {
                 .andExpect(jsonPath("$.data.paymentDueAt").exists())
                 .andExpect(jsonPath("$.data.version").value(2))
                 .andExpect(jsonPath("$.data.shipmentBatch.batchNumber").value(1));
+    }
+
+    @Test
+    void 화면_단계는_접수_결제_가능_결제_진행_중_예약_확정_순이고_확정되면_결제_기한이_사라진다() throws Exception {
+        AcceptResult accepted = accepts.accept(customerId);
+        Long id = accepted.preorder().id();
+        String path = "/api/v1/preorders/" + AcceptFixtures.tokenOf(accepted);
+        mockMvc.perform(get(path).with(customer(customerId)))
+                .andExpect(jsonPath("$.data.status").value("PENDING_SYNC"))
+                .andExpect(jsonPath("$.data.displayStatus").value("RECEIVED"));
+
+        fire(id, new PreorderFact.RegisterConfirmed("EXT-" + ShopFixtures.unique()));
+        mockMvc.perform(get(path).with(customer(customerId)))
+                .andExpect(jsonPath("$.data.displayStatus").value("PAYABLE"));
+
+        fire(id, new PreorderFact.PaymentStarted(Instant.now()));
+        mockMvc.perform(get(path).with(customer(customerId)))
+                .andExpect(jsonPath("$.data.status").value("PAYABLE"))
+                .andExpect(jsonPath("$.data.displayStatus").value("PAYMENT_IN_PROGRESS"));
+
+        fire(id, new PreorderFact.PaymentConfirmed(Instant.parse("2026-10-04T01:00:00Z")));
+        mockMvc.perform(get(path).with(customer(customerId)))
+                .andExpect(jsonPath("$.data.status").value("RESERVED"))
+                .andExpect(jsonPath("$.data.displayStatus").value("RESERVED"))
+                .andExpect(jsonPath("$.data.reservedAt").value("2026-10-04T01:00:00Z"))
+                .andExpect(jsonPath("$.data.paymentDueAt").doesNotExist())
+                .andExpect(jsonPath("$.data.cancelable").value(true));
+    }
+
+    @Test
+    void 외부_등록을_시도하기_시작하면_처리_중이고_기한이_지나면_결제_기한_지남이다() throws Exception {
+        AcceptResult accepted = accepts.accept(customerId);
+        Long id = accepted.preorder().id();
+        String path = "/api/v1/preorders/" + AcceptFixtures.tokenOf(accepted);
+        jdbcTemplate.update("UPDATE preorder_sync_jobs SET status = 'RETRY_SCHEDULED' WHERE preorder_id = ?", id);
+        mockMvc.perform(get(path).with(customer(customerId)))
+                .andExpect(jsonPath("$.data.displayStatus").value("PROCESSING"));
+
+        fire(id, new PreorderFact.RegisterConfirmed("EXT-" + ShopFixtures.unique()));
+        jdbcTemplate.update("UPDATE preorders SET payable_from = payable_from - INTERVAL 25 HOUR WHERE id = ?", id);
+        mockMvc.perform(get(path).with(customer(customerId)))
+                .andExpect(jsonPath("$.data.status").value("PAYABLE"))
+                .andExpect(jsonPath("$.data.displayStatus").value("PAYMENT_EXPIRED"));
     }
 
     @Test
@@ -195,4 +240,7 @@ class PreorderQueryApiTest {
                 .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
     }
 
+    private void fire(Long preorderId, PreorderFact fact) {
+        transactionTemplate.executeWithoutResult(status -> ledger.fire(preorderId, fact));
+    }
 }

@@ -95,7 +95,7 @@ public class PreorderCampaignAdminService {
     /** 사전예약 상품에만 회차가 있다. 일반 상품 · 없는 상품이면 404 다. */
     private void requirePreorderProduct(Long productId) {
         catalogReader.findProduct(productId)
-                .filter(ProductCatalog::isOnPreorderSale)
+                .filter(ProductCatalog::isPreorderProduct)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND));
     }
 }

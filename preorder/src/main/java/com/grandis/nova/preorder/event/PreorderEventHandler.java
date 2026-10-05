@@ -3,11 +3,11 @@ package com.grandis.nova.preorder.event;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.cancel.CancelRequestPayload;
 import com.grandis.nova.preorder.preorder.EventActor;
+import com.grandis.nova.preorder.preorder.PreorderFact;
 import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
-import com.grandis.nova.preorder.preorder.PreorderTrigger;
 import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.syncjob.SyncJobSnapshot;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
@@ -71,14 +71,27 @@ public class PreorderEventHandler {
         }
         Long preorderId = job.get().preorderId();
         if (job.get().jobType() == SyncJobType.REGISTER) {
-            ledger.confirmRegister(preorderId, message.externalNumber());
+            ledger.fire(preorderId, new PreorderFact.RegisterConfirmed(message.externalNumber()));
         } else {
-            ledger.fire(preorderId, PreorderTrigger.CANCEL_COMPLETED, EventActor.SYSTEM, null);
+            ledger.fire(preorderId, new PreorderFact.CancelCompleted());
         }
     }
 
+    /** 결제 시작. 화면의 "결제 진행 중" 표시용 시각만 남긴다 — 결제 가능 상태가 아니면 무시된다. */
+    @Transactional
+    public void onPaymentStarted(PreorderPaymentStarted message) {
+        ledger.fire(requirePreorder(message.preorderId()).id(),
+                new PreorderFact.PaymentStarted(message.startedAt()));
+    }
+
+    /** 결제 확인 → 예약 확정. 취소 중이면 시각만 남겨 거절됐을 때 확정으로 돌아갈 근거로 둔다. */
+    @Transactional
+    public void onPaymentConfirmed(PreorderPaymentConfirmed message) {
+        ledger.fire(requirePreorder(message.preorderId()).id(), new PreorderFact.PaymentConfirmed(message.paidAt()));
+    }
+
     /**
-     * 주문 정리 결과. 주문이 없거나 취소됐으면 외부 취소 작업을 만들고, 거절이면 PAYABLE 로 되돌린다.
+     * 주문 정리 결과. 주문이 없거나 취소됐으면 외부 취소 작업을 만들고, 거절이면 PAYABLE · RESERVED 로 되돌린다.
      * 외부 취소는 주문 정리가 끝난 뒤에만 한다 — 주문이 거절되면(배송 시작) 외부 취소를 되돌릴 수 없다.
      *
      * 한 예약이 취소 → 거절 → 다시 취소를 거칠 수 있으므로, 지금 취소 시도의 결과일 때만 반영한다.
@@ -86,8 +99,7 @@ public class PreorderEventHandler {
      */
     @Transactional
     public void onOrderSettled(PreorderOrderSettled message) {
-        PreorderSnapshot preorder = preorders.findByToken(message.preorderId())
-                .orElseThrow(() -> new IllegalArgumentException("예약이 없다: " + message.preorderId()));
+        PreorderSnapshot preorder = requirePreorder(message.preorderId());
         if (!isCurrentCancel(preorder.id(), message.cancelSequence())) {
             log.warn("지금 취소 시도의 결과가 아니라 무시한다 preorderId={} cancelSequence={}",
                     message.preorderId(), message.cancelSequence());
@@ -95,9 +107,14 @@ public class PreorderEventHandler {
         }
         switch (message.result()) {
             case NO_ORDER, CANCELED -> requestExternalCancel(preorder);
-            case REJECTED -> ledger.fire(preorder.id(), PreorderTrigger.CANCEL_REJECTED,
-                    EventActor.SYSTEM, rejectionReason(message.reason()));
+            case REJECTED -> ledger.fire(preorder.id(),
+                    new PreorderFact.CancelRejected(rejectionReason(message.reason()), message.paidAt()));
         }
+    }
+
+    private PreorderSnapshot requirePreorder(String preorderToken) {
+        return preorders.findByToken(preorderToken)
+                .orElseThrow(() -> new IllegalArgumentException("예약이 없다: " + preorderToken));
     }
 
     /**

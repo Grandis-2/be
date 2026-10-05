@@ -2,7 +2,7 @@ package com.grandis.nova.preorder.support;
 
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
-import com.grandis.nova.preorder.preorder.PreorderTrigger;
+import com.grandis.nova.preorder.preorder.PreorderFact;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
@@ -22,8 +22,8 @@ public class PreorderCancels {
     /** 취소 요청 → 취소 완료. 상태 머신을 그대로 거친다. */
     public void complete(Long preorderId) {
         transactionTemplate.executeWithoutResult(status -> {
-            ledger.fire(preorderId, PreorderTrigger.CANCEL_REQUESTED, EventActor.USER, null);
-            ledger.fire(preorderId, PreorderTrigger.CANCEL_COMPLETED, EventActor.SYSTEM, null);
+            ledger.fire(preorderId, new PreorderFact.CancelRequested(EventActor.USER, null));
+            ledger.fire(preorderId, new PreorderFact.CancelCompleted());
         });
     }
 }

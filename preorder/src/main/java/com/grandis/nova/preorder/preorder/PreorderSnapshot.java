@@ -23,6 +23,8 @@ public record PreorderSnapshot(
         BigDecimal unitPrice,
         PreorderStatus status,
         Instant payableFrom,
+        Instant paymentStartedAt,
+        Instant reservedAt,
         String externalReference,
         String internalNote,
         long eventSequence,
@@ -42,13 +44,15 @@ public record PreorderSnapshot(
         return switch (status) {
             case PENDING_SYNC -> PayabilityBlocker.NOT_YET_REGISTERED;
             case PAYABLE -> now.isBefore(paymentDueAt()) ? null : PayabilityBlocker.DUE_PASSED;
+            case RESERVED -> PayabilityBlocker.ALREADY_RESERVED;
             case CANCELING -> PayabilityBlocker.CANCELING;
             case CANCELED -> PayabilityBlocker.CANCELED;
         };
     }
 
-    /** 취소 버튼을 보일지. 배송 시작 여부는 취소 요청 때 order 에 다시 묻는다. */
+    /** 취소 버튼을 보일지. 결제된 예약도 취소(환불)할 수 있다 — 배송 시작 여부는 취소 요청 때 order 에 다시 묻는다. */
     public boolean isCancelable() {
-        return status == PreorderStatus.PENDING_SYNC || status == PreorderStatus.PAYABLE;
+        return status == PreorderStatus.PENDING_SYNC || status == PreorderStatus.PAYABLE
+                || status == PreorderStatus.RESERVED;
     }
 }

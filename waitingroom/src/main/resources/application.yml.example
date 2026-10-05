@@ -1,0 +1,33 @@
+server:
+  port: 8085
+
+# issuer · audience 는 member 와 같은 값이어야 검증이 통과한다.
+jwt:
+  issuer: nova
+  audience: nova-api
+  jwk-set-uri: https://member.example.com/.well-known/jwks.json
+  # jwk-set-allow-http: true    # VPC 안 Cloud Map 주소(http://member.ureca.local:8080/…)를 쓰는 동안만 명시
+  # public-keys:                # JWKS 대신 정적 공개키(kid → X.509 PEM). 부하 시험 · 로컬용
+  #   local-1: |
+  #     -----BEGIN PUBLIC KEY-----
+  #     ...
+  #     -----END PUBLIC KEY-----
+
+# 입장권 · 대기 토큰 서명 키. preorder 의 nova.admission-ticket 과 같은 값이어야 접수가 통과한다.
+waitingroom:
+  token:
+    secret: ${WAITING_TOKEN_SECRET}
+    previous: ${WAITING_TOKEN_PREVIOUS:}
+    rollout-ends-at: ${WAITING_TOKEN_ROLLOUT_ENDS_AT:}
+  relay:
+    # preorder 주소(VPC 안 Cloud Map). 접수 POST 만 이리로 전달한다
+    preorder-uri: http://preorder.ureca.local:8083
+  schedule:
+    # 기본값: 일정 이벤트 waitingroom-events, 재발행 요청 preorder-events
+    queue: waitingroom-events
+
+# SQS(회차 일정 수신 · 재발행 요청). 지역이 없으면 일정을 받지 않는다(로컬은 Redis 에 직접 넣는다)
+nova:
+  sqs:
+    region: ap-northeast-2
+    # endpoint: http://localhost:4566   # 로컬 Floci 일 때만. 배포 환경은 비워 IAM 역할을 쓴다
