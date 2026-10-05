@@ -9,7 +9,9 @@ public enum OutboundEventType implements OutboxEventType {
     /** 일반 판매 상품을 등록했다 — order 가 옵션별 초기 재고를 만든다. */
     IN_STOCK_PRODUCT_REGISTERED("order-events"),
     /** 사전예약 오픈 뒤 판매 중지(회차 취소)를 접수했다 — preorder 가 회차를 마감하고 진행 중 예약의 취소를 시작한다. */
-    PREORDER_CAMPAIGN_CANCELED("preorder-events");
+    PREORDER_CAMPAIGN_CANCELED("preorder-events"),
+    /** 사전예약 상품을 관리자가 고쳤다 — preorder 가 모든 인스턴스의 접수용 상품 사본(캐시)을 비운다. */
+    PREORDER_PRODUCT_CHANGED("preorder-events");
 
     private final String destination;
 

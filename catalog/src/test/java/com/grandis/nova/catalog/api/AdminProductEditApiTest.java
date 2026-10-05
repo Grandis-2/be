@@ -614,6 +614,66 @@ class AdminProductEditApiTest {
             assertThat(visibleOf(productId)).as("거절된 공개 전환은 공개 여부를 바꾸지 않는다").isTrue();
         }
 
+        @Test
+        @DisplayName("사전예약 상품을 고치면 수정마다 PREORDER_PRODUCT_CHANGED 하나(빈 payload · aggregateId 상품 id) — 같은 상태 · 같은 공개 여부 · 400 · 오픈 3분 전의 409 는 없고, 그때도 공개 전환은 보낸다")
+        void preorderEditsNotifyPreorder() throws Exception {
+            long productId = registerPreorder();
+            assertThat(changedEvents(productId)).as("등록은 이 이벤트가 아니다").isEmpty();
+
+            edit(productId, "{ \"title\": \"Nova 1 Pro\" }").andExpect(status().isOk());
+            List<java.util.Map<String, Object>> events = changedEvents(productId);
+            assertThat(events).hasSize(1);
+            assertThat(events.get(0)).containsEntry("aggregate_type", "PRODUCT").containsEntry("aggregate_id", productId);
+            assertThat(JSON.readTree((String) events.get(0).get("payload")).isEmpty()).as("payload 는 빈 객체 — 상품 id 는 봉투에만").isTrue();
+
+            mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"color\", \"value\": \"레드\" }"))
+                    .andExpect(status().isCreated());
+            assertThat(changedEvents(productId)).hasSize(2);
+            long storage512 = valueIdOf(productId, "storage", "512GB");
+            mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"surcharge\": 300000 }"))
+                    .andExpect(status().isOk());
+            assertThat(changedEvents(productId)).hasSize(3);
+            mockMvc.perform(admin(post(PATH + "/{id}/variants", productId)).content("{ \"selections\": { \"color\": \"화이트\", \"storage\": \"256GB\" } }"))
+                    .andExpect(status().isCreated());
+            assertThat(changedEvents(productId)).hasSize(4);
+            editVariant(productId, variantIdOf(productId, "블랙 / 256GB"), "{ \"price\": 990000 }").andExpect(status().isOk());
+            assertThat(changedEvents(productId)).hasSize(5);
+
+            saleStatus(productId, "PAUSED").andExpect(status().isOk());
+            saleStatus(productId, "PAUSED").andExpect(status().isOk());
+            assertThat(changedEvents(productId)).as("같은 상태를 다시 보내면 바뀐 것이 없다").hasSize(6);
+            saleStatus(productId, "ACTIVE").andExpect(status().isOk());
+            visibility(productId, false).andExpect(status().isOk());
+            visibility(productId, false).andExpect(status().isOk());
+            assertThat(changedEvents(productId)).as("같은 공개 여부를 다시 보내면 바뀐 것이 없다").hasSize(8);
+
+            // 재계산이 상한을 넘어 400 — 실패한 수정은 이벤트를 남기지 않는다
+            expectValidation(edit(productId, "{ \"basePrice\": 999999999999 }"), "basePrice");
+            assertThat(changedEvents(productId)).hasSize(8);
+
+            fixtures.campaign(productId, Instant.now().plus(Duration.ofMinutes(2)), Instant.now().plus(HOUR));
+            edit(productId, "{ \"title\": \"Nova 1 Max\" }").andExpect(status().isConflict());
+            assertThat(changedEvents(productId)).hasSize(8);
+            visibility(productId, true).andExpect(status().isOk());
+            assertThat(changedEvents(productId)).as("오픈 3분 전에도 공개 전환은 바로 알린다").hasSize(9);
+        }
+
+        @Test
+        @DisplayName("일반 상품 수정과 사전예약 회차 취소는 PREORDER_PRODUCT_CHANGED 를 적지 않는다 — 회차 취소는 자기 이벤트로 preorder 가 캐시를 비운다")
+        void inStockEditsAndCampaignCancelDoNotNotifyChange() throws Exception {
+            long inStock = registerInStock();
+            edit(inStock, "{ \"title\": \"Nova 1 Pro\" }").andExpect(status().isOk());
+            saleStatus(inStock, "PAUSED").andExpect(status().isOk());
+            visibility(inStock, false).andExpect(status().isOk());
+            assertThat(changedEvents(inStock)).isEmpty();
+
+            long canceled = registerPreorder();
+            fixtures.campaign(canceled, Instant.now().minus(HOUR), Instant.now().plus(HOUR));
+            saleStatusBody(canceled, "{ \"status\": \"PAUSED\", \"reason\": \"공급 중단\" }").andExpect(status().isAccepted());
+            assertThat(cancelEvents(canceled)).hasSize(1);
+            assertThat(changedEvents(canceled)).isEmpty();
+        }
+
         /** 공개 · 판매 중 · 재고 행이 있는(준비된) 일반 상품. 회원 목록에서 이 상품만 고르도록 고유 태그를 붙인다. */
         private long readyInStock() throws Exception {
             long productId = registerInStock();
@@ -646,6 +706,13 @@ class AdminProductEditApiTest {
             return jdbcTemplate.queryForList("""
                     SELECT aggregate_type, aggregate_id, payload FROM catalog_outbox_events
                      WHERE aggregate_id = ? AND event_type = 'PREORDER_CAMPAIGN_CANCELED'
+                    """, productId);
+        }
+
+        private List<java.util.Map<String, Object>> changedEvents(long productId) {
+            return jdbcTemplate.queryForList("""
+                    SELECT aggregate_type, aggregate_id, payload FROM catalog_outbox_events
+                     WHERE aggregate_id = ? AND event_type = 'PREORDER_PRODUCT_CHANGED' ORDER BY id
                     """, productId);
         }
 

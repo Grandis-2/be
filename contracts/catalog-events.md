@@ -11,10 +11,12 @@
 | `PREORDER_PRODUCT_REGISTERED` | `preorder-events` | preorder — 회차 · 배송 차수를 만든다 |
 | `IN_STOCK_PRODUCT_REGISTERED` | `order-events` | order — 옵션별 초기 재고를 만든다 |
 | `PREORDER_CAMPAIGN_CANCELED` | `preorder-events` | preorder — 회차를 지금 마감하고 진행 중 예약의 취소를 시작한다 |
+| `PREORDER_PRODUCT_CHANGED` | `preorder-events` | preorder — 모든 인스턴스의 접수용 상품 사본(캐시)을 비운다 |
 
 - **최소 한 번.** 커밋 직후 한 번 보내고, 못 보냈으면 릴레이가 다시 보낸다. 같은 메시지가 두 번 갈 수 있다 — 받는 쪽은 두 번 받아도 결과가 같아야 한다.
-- **순서 보장 없음.** 한 상품의 이벤트는 등록 하나와 회차 취소 하나뿐이다. 회차 취소는 회차 행(등록 이벤트를 preorder 가 처리한 결과)이 있어야 보내므로 둘의 순서가 뒤집히지 않는다.
+- **순서 보장 없음.** 회차 취소는 회차 행(등록 이벤트를 preorder 가 처리한 결과)이 있어야 보내므로 등록과 순서가 뒤집히지 않는다. 상품 변경은 여러 번 갈 수 있고 등록보다 먼저 닿을 수도 있지만, 받는 쪽은 캐시를 비우기만 하므로 순서와 상관없이 결과가 같다.
 - **메시지 속성.** `eventType` · `eventId`(문자열). preorder · order 가 보내는 메시지와 같다.
+- **배포 순서.** 받는 쪽이 모르는 종류는 처리에 실패해 재시도 뒤 DLQ 로 간다. 그래서 받는 쪽이 먼저 나간다 — `PREORDER_PRODUCT_CHANGED` 는 preorder NV-281 뒤의 catalog 가 보낸다.
 
 ## 봉투
 
@@ -100,6 +102,33 @@ preorder · order 의 `EventEnvelope` 와 같은 모양이다.
 - 오픈 전에 판매 중지로 둔 채 오픈을 넘긴 상품은 이 이벤트를 보내지 않는다 — 회차 취소가 아니다(2026-10-04 결정). 관리자가 오픈 뒤 사유와 함께 판매 중지를 보내면 그때 보낸다.
 
 **받는 쪽이 할 일**(preorder 에 이미 있다 — `CampaignCancelService`): 회차를 지금 마감하고, 진행 중 예약을 작은 트랜잭션 단위로 취소 시작한다. 같은 이벤트를 다시 받으면 남은 예약만 이어서 처리한다.
+
+## `PREORDER_PRODUCT_CHANGED` → preorder
+
+관리자가 **사전예약 상품**을 고치면 catalog 는 그 수정과 같은 트랜잭션에서 이 이벤트를 적는다. 수정이 되돌려지면(400 · 409) 이벤트도 남지 않는다.
+
+```json
+"payload": { }
+```
+
+payload 는 빈 객체다. 무엇이 바뀌었는지는 싣지 않는다 — preorder 는 캐시를 비우고 다음 조회에서 내부 조회 API(`GET /internal/products/{id}/options`)로 다시 받는다. 상품 id 는 봉투의 `aggregateId` 다.
+
+보내는 수정(`/api/v1/admin/products/{id}` 아래):
+
+| 수정 | 보내는가 |
+| --- | --- |
+| `PATCH` 상품 정보 · 기본 가격 · 보증 | 수정이 성공하면 보낸다 |
+| `POST option-values` · `PATCH option-values/{valueId}` | 수정이 성공하면 보낸다 |
+| `POST variants` · `PATCH variants/{variantId}` | 수정이 성공하면 보낸다 |
+| `PATCH sale-status` (오픈 전) | 상태가 바뀌었을 때만 — 같은 상태를 다시 보내면 보내지 않는다 |
+| `PATCH visibility` | 공개 여부가 바뀌었을 때만 |
+| `PATCH sale-status` (오픈 뒤 판매 중지 = 회차 취소) | 보내지 않는다 — `PREORDER_CAMPAIGN_CANCELED` 를 받은 preorder 가 캐시를 비운다 |
+
+- 일반 판매 상품은 보내지 않는다 — preorder 가 읽지 않는다.
+- 내부 조회 API 의 응답이 실제로 달라졌는지는 따지지 않는다(설명 · 태그 · 보증만 고쳐도 보낸다). 받는 쪽은 비우기만 하므로 더 보내도 다시 받는 조회 한 번이 늘 뿐이다.
+- 사전예약은 오픈 3분 전부터 공개 여부 말고는 못 고치므로(409), 그때부터 이 이벤트를 보내는 수정은 공개 여부 전환뿐이다.
+
+**받는 쪽이 할 일**(preorder 에 이미 있다 — `PreorderEventDispatcher` → `CatalogCacheInvalidation.evictEverywhere`): 받은 인스턴스가 자기 캐시를 비우고 Redis 채널로 다른 인스턴스에 알린다. 같은 이벤트를 두 번 받아도 결과가 같다.
 
 ## 판매 방식별 준비 — catalog 가 읽는 결과
 

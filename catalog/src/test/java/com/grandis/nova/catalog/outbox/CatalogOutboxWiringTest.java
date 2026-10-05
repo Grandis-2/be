@@ -1,6 +1,7 @@
 package com.grandis.nova.catalog.outbox;
 
 import com.grandis.nova.catalog.edit.PreorderCampaignCanceled;
+import com.grandis.nova.catalog.edit.PreorderProductChanged;
 import com.grandis.nova.catalog.registration.InStockProductRegistered;
 import com.grandis.nova.catalog.registration.PreorderProductRegistered;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
@@ -93,6 +94,22 @@ class CatalogOutboxWiringTest {
         assertThat(message.eventType()).isEqualTo("PREORDER_CAMPAIGN_CANCELED");
         assertThat(jsonMapper.readTree(message.body()).get("payload"))
                 .isEqualTo(jsonMapper.readTree("{\"productId\":" + productId + ",\"reason\":\"회차 운영 취소\"}"));
+    }
+
+    @Test
+    @DisplayName("사전예약 상품 변경은 preorder-events 로 가고 payload 는 빈 객체, 상품 id 는 봉투의 aggregateId 다")
+    void productChangeGoesToPreorderWithEmptyPayload() {
+        Long productId = NEXT_PRODUCT.incrementAndGet();
+        String eventId = eventIdOf(transactionTemplate.execute(status -> writer.append(new PreorderProductChanged(productId))));
+
+        await().atMost(TIMEOUT).until(() -> sentOf(eventId).isPresent());
+        OutboundMessage message = sentOf(eventId).orElseThrow();
+        assertThat(message.destination()).isEqualTo("preorder-events");
+        assertThat(message.eventType()).isEqualTo("PREORDER_PRODUCT_CHANGED");
+        JsonNode envelope = jsonMapper.readTree(message.body());
+        assertThat(envelope.get("payload")).isEqualTo(jsonMapper.readTree("{}"));
+        assertThat(envelope.get("aggregateType").asString()).isEqualTo("PRODUCT");
+        assertThat(envelope.get("aggregateId").asLong()).isEqualTo(productId);
     }
 
     @Test
