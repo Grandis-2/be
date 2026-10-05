@@ -235,6 +235,24 @@ class PreorderAcceptConcurrencyTest {
     }
 
     @RepeatedTest(3)
+    void 취소_직후_같은_새_키로_동시에_재신청해도_예약_하나_순번_하나() throws Exception {
+        Long customerId = fixtures.customer();
+        AcceptResult first = acceptByCustomer(customerId, "recancel-key-0");
+        new PreorderCancels(ledger, transactionTemplate).complete(first.preorder().id());
+        String ticket = AdmissionTickets.issue(product.productId(), customerId, laterWindow());
+        int requests = 10;
+
+        List<Outcome> outcomes = concurrently(requests, i -> () -> acceptService.acceptByCustomer(customerId,
+                product.productId(), product.productId(), product.optionId(), "recancel-key-1", ticket));
+
+        assertThat(outcomes).allMatch(Outcome::accepted);
+        assertThat(outcomes.stream().map(o -> o.result().preorder().preorderToken()).distinct()).hasSize(1);
+        assertThat(outcomes.stream().filter(o -> !o.result().replayed())).hasSize(1);
+        assertThat(committedPositions()).containsExactly(1L, 2L);
+        assertThat(nextQueuePosition()).isEqualTo(3);
+    }
+
+    @RepeatedTest(3)
     void 같은_입장에서_받은_입장권_두_장을_동시에_보내면_하나만_받고_나머지는_STALE() throws Exception {
         Long customerId = fixtures.customer();
         List<String> tickets = List.of(
