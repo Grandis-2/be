@@ -3,7 +3,7 @@
 --   단계 시각(campaign_set_at · batches_set_at · stock_set_at) · 완료(completed_at) · 막힘(blocked_reason · last_error) · 리스(lease_token · lease_expires_at)
 --   requested_visible: 관리자가 고른 공개 여부는 등록 때 products.visible 에 바로 쓴다. 노출은 판매 방식별 준비(회차 · 재고 행)를 함께 본다.
 -- CHECK 가 칸을 쓰고 있으면 칸을 지울 수 없다(MySQL 8.4.11 실측: 3959, ALTER 전체가 거절된다). 같은 ALTER 에서 제약을 먼저 지운다.
--- 기존 미완료 등록은 이관하지 않는다 — 이 칸들은 catalog 에픽에만 있었고(V202610032020) 배포된 데이터가 없다. 미완료 행이 있었다면 공개 여부는 0 으로 남고 이벤트도 없다.
+-- 기존 미완료 등록은 이관하지 않는다 — 이 칸들은 catalog 에픽에만 있었고(V202610052320) 배포된 데이터가 없다. 미완료 행이 있었다면 공개 여부는 0 으로 남고 이벤트도 없다.
 ALTER TABLE shop.product_registrations
     DROP CHECK ck_registration_lease,
     DROP CHECK ck_registration_outcome,

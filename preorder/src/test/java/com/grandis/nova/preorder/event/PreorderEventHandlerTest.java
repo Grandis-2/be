@@ -113,7 +113,7 @@ class PreorderEventHandlerTest {
 
     @Test
     void 취소_중이_아니면_주문_정리_결과로_작업을_만들지_않는다() {
-        handler.onOrderSettled(new PreorderOrderSettled(token, PreorderOrderSettled.Result.CANCELED, null, 1L));
+        handler.onOrderSettled(new PreorderOrderSettled(token, PreorderOrderSettled.Result.CANCELED, null, 1L, null));
 
         assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'CANCEL'",
                 preorderId)).isZero();
@@ -173,7 +173,7 @@ class PreorderEventHandlerTest {
 
     /** order 가 지금 취소 시도에 답한 것처럼 만든다. */
     private PreorderOrderSettled settled(PreorderOrderSettled.Result result, String reason) {
-        return new PreorderOrderSettled(token, result, reason, fixtures.cancelSequence(preorderId));
+        return new PreorderOrderSettled(token, result, reason, fixtures.cancelSequence(preorderId), null);
     }
 
     private Map<String, Object> row() {

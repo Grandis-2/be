@@ -7,6 +7,7 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.retry.RetryConfig;
 import io.github.resilience4j.retry.RetryRegistry;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,6 +15,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.service.registry.HttpServiceProxyRegistry;
 
 import java.time.Duration;
 
@@ -31,6 +33,15 @@ class ResilienceSettingsTest {
 
     @Autowired
     BulkheadRegistry bulkheads;
+
+    @Autowired
+    HttpServiceProxyRegistry httpServices;
+
+    /** 토큰 릴레이 · 장애 대응 설정은 그룹 이름으로 붙는다. 이름이 어긋나면 아무 클라이언트에도 붙지 않고 조용히 빠진다. */
+    @Test
+    void 의존_서비스_이름이_실제_HTTP_클라이언트_그룹_이름과_같다() {
+        assertThat(httpServices.getGroupNames()).containsAll(Dependencies.ALL);
+    }
 
     @ParameterizedTest
     @ValueSource(strings = {Dependencies.CATALOG, Dependencies.ORDER})

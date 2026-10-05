@@ -15,11 +15,14 @@ import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.syncjob.SyncAttemptReader;
 import com.grandis.nova.preorder.syncjob.SyncJobSnapshot;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
+import com.grandis.nova.preorder.syncjob.SyncJobType;
 import com.grandis.nova.preorder.syncjob.SyncJobs;
 import com.grandis.nova.preorder.web.Viewer;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -39,13 +42,15 @@ public class PreorderQueryService {
     private final Campaigns campaigns;
     private final SyncJobs syncJobs;
     private final SyncAttemptReader syncAttempts;
+    private final Clock clock;
 
     PreorderQueryService(Preorders preorders, Campaigns campaigns, SyncJobs syncJobs,
-                         SyncAttemptReader syncAttempts) {
+                         SyncAttemptReader syncAttempts, Clock clock) {
         this.preorders = preorders;
         this.campaigns = campaigns;
         this.syncJobs = syncJobs;
         this.syncAttempts = syncAttempts;
+        this.clock = clock;
     }
 
     /** 내 예약 목록(최신순). 한 건 더 읽어 다음 페이지가 있는지 본다. */
@@ -58,7 +63,10 @@ public class PreorderQueryService {
         if (hasNext) {
             found.removeLast();
         }
-        List<PreorderView.Summary> items = withBatches(found, PreorderView.Summary::new);
+        Map<Long, SyncJobStatus> registerStatuses = registerJobStatuses(found);
+        Instant now = clock.instant();
+        List<PreorderView.Summary> items = withBatches(found, (preorder, batch) -> new PreorderView.Summary(
+                preorder, batch, displayStatus(preorder, registerStatuses.get(preorder.id()), now)));
         if (!hasNext) {
             return CursorPage.last(items);
         }
@@ -69,7 +77,9 @@ public class PreorderQueryService {
     /** 예약 하나. 본인과 관리자만 볼 수 있고, 남의 예약은 존재를 알리지 않는다(404). */
     public PreorderView.Summary findOne(Viewer viewer, String preorderToken) {
         PreorderSnapshot preorder = require(viewer, preorderToken);
-        return new PreorderView.Summary(preorder, campaigns.getBatch(preorder.shipmentBatchId()));
+        SyncJobStatus registerStatus = registerJobStatuses(List.of(preorder)).get(preorder.id());
+        return new PreorderView.Summary(preorder, campaigns.getBatch(preorder.shipmentBatchId()),
+                displayStatus(preorder, registerStatus, clock.instant()));
     }
 
     /** 상태 전이 이력(번호 순). 접근 규칙은 상세와 같다. */
@@ -83,8 +93,10 @@ public class PreorderQueryService {
                 filter.customerId(), filter.productId(), filter.from(), filter.to(),
                 jobStatus == null ? null : jobStatus.name()), page, size);
         Map<Long, SyncJobStatus> registerStatuses = registerJobStatuses(found.items());
+        Instant now = clock.instant();
         List<PreorderView.AdminSummary> items = withBatches(found.items(), (preorder, batch) ->
-                new PreorderView.AdminSummary(preorder, batch, registerStatuses.get(preorder.id())));
+                new PreorderView.AdminSummary(preorder, batch, registerStatuses.get(preorder.id()),
+                        displayStatus(preorder, registerStatuses.get(preorder.id()), now)));
         return OffsetPage.of(items, page, size, found.total());
     }
 
@@ -92,9 +104,32 @@ public class PreorderQueryService {
     public PreorderView.AdminDetail findOneForAdmin(String preorderToken) {
         PreorderSnapshot preorder = preorders.getByToken(preorderToken);
         List<SyncJobSnapshot> jobs = syncJobs.findByPreorder(preorder.id());
+        SyncJobStatus registerStatus = jobs.stream().filter(job -> job.jobType() == SyncJobType.REGISTER)
+                .map(SyncJobSnapshot::status).findFirst().orElse(null);
         return new PreorderView.AdminDetail(preorder, campaigns.getBatch(preorder.shipmentBatchId()), jobs,
                 syncAttempts.findByJobIds(jobs.stream().map(SyncJobSnapshot::id).toList()),
-                preorders.history(preorder.id()));
+                preorders.history(preorder.id()), displayStatus(preorder, registerStatus, clock.instant()));
+    }
+
+    /**
+     * 화면 단계. 등록 작업이 아직 시도 전(PENDING · 없음)이면 접수, 그 밖이면 처리 중이다.
+     * 결제 진행 중 · 기한 지남은 표시일 뿐 판단에 쓰지 않는다.
+     */
+    private PreorderDisplayStatus displayStatus(PreorderSnapshot preorder, SyncJobStatus registerStatus, Instant now) {
+        return switch (preorder.status()) {
+            case PENDING_SYNC -> registerStatus == null || registerStatus == SyncJobStatus.PENDING
+                    ? PreorderDisplayStatus.RECEIVED : PreorderDisplayStatus.PROCESSING;
+            case PAYABLE -> {
+                if (!now.isBefore(preorder.paymentDueAt())) {
+                    yield PreorderDisplayStatus.PAYMENT_EXPIRED;
+                }
+                yield preorder.paymentStartedAt() == null
+                        ? PreorderDisplayStatus.PAYABLE : PreorderDisplayStatus.PAYMENT_IN_PROGRESS;
+            }
+            case RESERVED -> PreorderDisplayStatus.RESERVED;
+            case CANCELING -> PreorderDisplayStatus.CANCELING;
+            case CANCELED -> PreorderDisplayStatus.CANCELED;
+        };
     }
 
     private PreorderSnapshot require(Viewer viewer, String preorderToken) {

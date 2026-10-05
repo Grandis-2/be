@@ -21,7 +21,7 @@ record AdminPreorderDetailResponse(
 
     public static AdminPreorderDetailResponse from(PreorderView.AdminDetail view) {
         PreorderSnapshot preorder = view.preorder();
-        PreorderView.Summary summary = new PreorderView.Summary(preorder, view.shipmentBatch());
+        PreorderView.Summary summary = new PreorderView.Summary(preorder, view.shipmentBatch(), view.displayStatus());
         Map<Long, List<SyncAttempt>> attempts = view.attempts();
         return new AdminPreorderDetailResponse(PreorderDetailResponse.from(summary), preorder.customerId(),
                 preorder.admissionTicketId(), preorder.internalNote(),

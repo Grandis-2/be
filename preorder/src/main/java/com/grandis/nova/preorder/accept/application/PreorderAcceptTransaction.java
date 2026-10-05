@@ -3,6 +3,7 @@ package com.grandis.nova.preorder.accept.application;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.PreorderErrorCode;
+import com.grandis.nova.preorder.admission.AdmissionTicket;
 import com.grandis.nova.preorder.campaign.CampaignSchedule;
 import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.campaign.IssuedPosition;
@@ -87,6 +88,7 @@ class PreorderAcceptTransaction {
             return replay(existing.get(), command);
         }
 
+        requireTicketAfterLastAccept(command);
         OptionSnapshot option = requireOnSale(command, product);
         requireAccepting(campaign);
         IssuedPosition issued = campaigns.issuePosition(command.productId());
@@ -136,6 +138,22 @@ class PreorderAcceptTransaction {
         return found.snapshot(command.optionId())
                 .filter(OptionSnapshot::isOnSale)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_OPTION_NOT_FOUND));
+    }
+
+    /**
+     * 입장권은 그 회원 · 그 모델의 마지막 접수 뒤에 발급된 것만 받는다 — 같은 입장에서 받은 다른 창의 입장권으로
+     * 취소 뒤 줄을 다시 서지 않고 재접수하지 못하게. 회차 잠금 뒤라 동시 접수도 서로의 접수를 본다.
+     */
+    private void requireTicketAfterLastAccept(AcceptCommand command) {
+        AdmissionTicket ticket = command.admissionTicket();
+        if (ticket == null) {
+            return;
+        }
+        preorders.findLastAcceptedAt(command.customerId(), command.productId())
+                .filter(lastAcceptedAt -> !lastAcceptedAt.isBefore(ticket.issuedNoEarlierThan()))
+                .ifPresent(lastAcceptedAt -> {
+                    throw new BusinessException(PreorderErrorCode.ADMISSION_TICKET_STALE);
+                });
     }
 
     /** 회차가 없는 사전예약 상품은 아직 열리지 않은 것으로 본다. */

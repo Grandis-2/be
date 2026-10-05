@@ -8,6 +8,10 @@ public enum PreorderTrigger {
 
     /** 외부 등록이 확인됐다(worker 의 EXTERNAL_JOB_SUCCEEDED, REGISTER). */
     REGISTER_CONFIRMED,
+    /** order 가 사전예약 주문을 만들었다(결제 시작). 상태는 그대로 두고 시각만 남긴다. */
+    PAYMENT_STARTED,
+    /** order 가 결제를 승인했다. */
+    PAYMENT_CONFIRMED,
     /** 사용자 · 관리자 · 만료 · 회차 취소로 취소를 시작한다. */
     CANCEL_REQUESTED,
     /** 주문 쪽이 취소를 거절했다(배송 시작). PAYABLE 에서 시작한 취소에만 온다. */
