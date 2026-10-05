@@ -119,7 +119,7 @@ public class PreorderQueryService {
         return switch (preorder.status()) {
             case PENDING_SYNC -> registerStatus == null || registerStatus == SyncJobStatus.PENDING
                     ? PreorderDisplayStatus.RECEIVED : PreorderDisplayStatus.PROCESSING;
-            case PAYABLE -> {
+            case REGISTERED -> {
                 if (!now.isBefore(preorder.paymentDueAt())) {
                     yield PreorderDisplayStatus.PAYMENT_EXPIRED;
                 }

@@ -13,7 +13,7 @@ import org.springframework.stereotype.Service;
  * 사용자 · 관리자 취소 요청. 사전 확인(order 호출)은 트랜잭션 밖에서 하고, 상태 변경은 {@link CancelStarter} 가 한다.
  *
  * 이미 취소 중 · 취소 완료면 order 에 묻지 않고 지금 상태를 돌려준다(같은 요청을 다시 보내도 결과가 같다).
- * 확인과 취소 시작 사이에 배송이 시작되는 드문 경합은 order 가 REJECTED 로 돌려보내 PAYABLE 로 되돌아간다.
+ * 확인과 취소 시작 사이에 배송이 시작되는 드문 경합은 order 가 REJECTED 로 돌려보내 REGISTERED 로 되돌아간다.
  */
 @Service
 public class PreorderCancelService {

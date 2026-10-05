@@ -35,7 +35,7 @@ public class ExpiryCancelService {
         PreorderSnapshot preorder = ledger.lockByToken(preorderToken)
                 .orElseThrow(() -> new IllegalArgumentException("예약이 없다: " + preorderToken));
         Instant dueAt = preorder.paymentDueAt();
-        if (preorder.status() != PreorderStatus.PAYABLE || clock.instant().isBefore(dueAt)) {
+        if (preorder.status() != PreorderStatus.REGISTERED || clock.instant().isBefore(dueAt)) {
             log.info("만료 대상이 아니라 무시한다 preorderId={} status={}", preorderToken, preorder.status());
             return;
         }

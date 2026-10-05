@@ -88,7 +88,7 @@ public class PreorderLedger {
                                  Instant now) {
         switch (fact) {
             case PreorderFact.RegisterConfirmed confirmed -> requireOneRow(
-                    preorders.markPayable(preorderId, confirmed.externalReference(), now, from, to), preorderId);
+                    preorders.markRegistered(preorderId, confirmed.externalReference(), now, from, to), preorderId);
             case PreorderFact.PaymentStarted started -> requireOneRow(
                     preorders.markPaymentStarted(preorderId, started.startedAt(), now, from), preorderId);
             case PreorderFact.PaymentConfirmed paid when to == from -> requireOneRow(
@@ -115,16 +115,16 @@ public class PreorderLedger {
     }
 
     /**
-     * 취소 거절 → 결제 확인된 예약이면 RESERVED, 아니면 PAYABLE 로 되돌린다. 거절에 결제 시각이 실려 오면 먼저 남긴다 —
+     * 취소 거절 → 결제 확인된 예약이면 RESERVED, 아니면 REGISTERED 로 되돌린다. 거절에 결제 시각이 실려 오면 먼저 남긴다 —
      * 결제 확인 이벤트보다 먼저 와도 확정으로 돌아가 만료 대상이 되지 않게.
-     * 거절은 주문이 있을 때만 오고 주문은 PAYABLE 이후에만 생기므로, 결제 가능한 적이 없는 예약이 거절되면 어딘가 잘못된 것이다.
+     * 거절은 주문이 있을 때만 오고 주문은 REGISTERED 이후에만 생기므로, 결제 가능한 적이 없는 예약이 거절되면 어딘가 잘못된 것이다.
      */
     private PreorderStatus revertCancel(Long preorderId, Instant paidAt, PreorderStatus from, Instant now) {
         if (paidAt != null) {
             requireOneRow(preorders.recordPaid(preorderId, paidAt, now, from), preorderId);
         }
         PreorderStatus back = preorders.findReservedAt(preorderId).isPresent()
-                ? PreorderStatus.RESERVED : PreorderStatus.PAYABLE;
+                ? PreorderStatus.RESERVED : PreorderStatus.REGISTERED;
         if (preorders.revertCancel(preorderId, now, from, back) != 1) {
             throw new IllegalStateException(
                     "결제 가능한 적이 없는 예약의 취소는 거절될 수 없다: preorderId=" + preorderId);

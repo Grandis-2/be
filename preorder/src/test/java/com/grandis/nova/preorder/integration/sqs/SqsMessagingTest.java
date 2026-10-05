@@ -137,7 +137,7 @@ class SqsMessagingTest {
 
         queues.send("preorder-events", body);
 
-        await().atMost(TIMEOUT).until(() -> "PAYABLE".equals(status(preorderId)));
+        await().atMost(TIMEOUT).until(() -> "REGISTERED".equals(status(preorderId)));
         assertThat(jdbcTemplate.queryForObject("SELECT external_reference FROM preorders WHERE id = ?",
                 String.class, preorderId)).isEqualTo(externalNumber);
         // 지우지 못했다면 가시성 시간(2s) 뒤 다시 보여 한 번 더 처리된다 — 그 몇 배를 기다려도 한 번이어야 한다
@@ -162,9 +162,9 @@ class SqsMessagingTest {
         // 받은 횟수는 처리 도중에도 오르므로, 두 번째 처리가 끝난 뒤에 확인한다
         await().alias("두 메시지를 모두 끝까지 처리한다").atMost(TIMEOUT)
                 .until(() -> handled.getOrDefault(body, 0) == 2);
-        assertThat(status(preorderId)).isEqualTo("PAYABLE");
+        assertThat(status(preorderId)).isEqualTo("REGISTERED");
         assertThat(fixtures.count("""
-                SELECT COUNT(*) FROM preorder_events WHERE preorder_id = ? AND to_status = 'PAYABLE'
+                SELECT COUNT(*) FROM preorder_events WHERE preorder_id = ? AND to_status = 'REGISTERED'
                 """, preorderId)).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject("SELECT external_reference FROM preorders WHERE id = ?",
                 String.class, preorderId)).isEqualTo(externalNumber);
@@ -211,7 +211,7 @@ class SqsMessagingTest {
         queues.send("preorder-events",
                 externalJobSucceeded(ShopFixtures.unique(), syncJobId, token, "R-" + ShopFixtures.unique()));
 
-        await().atMost(TIMEOUT).until(() -> "PAYABLE".equals(status(preorderId)));
+        await().atMost(TIMEOUT).until(() -> "REGISTERED".equals(status(preorderId)));
     }
 
     private String externalJobSucceeded(String eventId, Long syncJobId, String token, String externalNumber) {

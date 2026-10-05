@@ -96,7 +96,7 @@ class PreorderEventDispatcherTest {
 
         dispatcher.dispatch(envelope("PREORDER_PAYMENT_STARTED", "PREORDER", preorderId, payload()
                 .put("preorderId", token).put("orderId", "o-1").put("startedAt", "2026-10-04T01:00:00Z")));
-        assertThat(status()).isEqualTo("PAYABLE");
+        assertThat(status()).isEqualTo("REGISTERED");
         dispatcher.dispatch(envelope("PREORDER_PAYMENT_CONFIRMED", "PREORDER", preorderId, payload()
                 .put("preorderId", token).put("orderId", "o-1").put("paidAt", "2026-10-04T01:02:00Z")));
         assertThat(status()).isEqualTo("RESERVED");

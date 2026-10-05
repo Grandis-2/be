@@ -77,7 +77,7 @@ class PayabilityApiTest {
                 .andExpect(jsonPath("$.data.preorderInternalId").value(preorderId))
                 .andExpect(jsonPath("$.data.customerId").value(customerId))
                 .andExpect(jsonPath("$.data.unitPrice").exists())
-                .andExpect(jsonPath("$.data.status").value("PAYABLE"))
+                .andExpect(jsonPath("$.data.status").value("REGISTERED"))
                 .andExpect(jsonPath("$.data.paymentDueAt").exists())
                 .andExpect(jsonPath("$.data.payable").value(true))
                 .andExpect(jsonPath("$.data.reason").value(nullValue()));
