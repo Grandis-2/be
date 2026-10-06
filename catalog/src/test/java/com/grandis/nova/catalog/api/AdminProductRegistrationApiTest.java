@@ -63,12 +63,12 @@ class AdminProductRegistrationApiTest {
     class Register {
 
         @Test
-        @DisplayName("사전예약 상품 — 조합 자동 생성 · 제외 · 가격 계산과 수동 지정 · 사진 묶음 · 보증 · 고른 공개 여부 · 등록 기록 · 회차 이벤트")
+        @DisplayName("사전예약 상품 — 조합 자동 생성 · 제외 · 가격 계산(기본가 + 추가금) · 사진 묶음 · 보증 · 고른 공개 여부 · 등록 기록 · 회차 이벤트")
         void registersPreorderProduct() throws Exception {
             String body = preorderBody("""
                     "combinations": [
                       { "selections": { "color": "화이트", "storage": "512 gb" }, "excluded": true },
-                      { "selections": { "color": " 블랙 ", "storage": "256GB" }, "sku": "BLK-256", "price": 1250000 }
+                      { "selections": { "color": " 블랙 ", "storage": "256GB" }, "sku": "BLK-256" }
                     ],
                     "images": {
                       "gallery": [
@@ -96,7 +96,7 @@ class AdminProductRegistrationApiTest {
             Map<String, JsonNode> bySku = new java.util.HashMap<>();
             variants.forEach(v -> bySku.put(v.get("sku").asString(), v));
             assertThat(bySku.keySet()).containsExactlyInAnyOrder("BLK-256", "블랙-512GB", "화이트-256GB");
-            assertThat(bySku.get("BLK-256").get("price").decimalValue()).as("수동 지정").isEqualByComparingTo("1250000");
+            assertThat(bySku.get("BLK-256").get("price").decimalValue()).as("SKU 만 지정해도 가격은 기본가 + 256GB 추가금").isEqualByComparingTo("1200000");
             assertThat(bySku.get("블랙-512GB").get("price").decimalValue()).as("기본가 + 512GB 추가금").isEqualByComparingTo("1400000");
             assertThat(bySku.get("화이트-256GB").get("price").decimalValue()).as("기본가 + 256GB 추가금").isEqualByComparingTo("1200000");
             assertThat(bySku.get("BLK-256").get("title").asString()).isEqualTo("블랙 / 256 GB");
@@ -117,10 +117,8 @@ class AdminProductRegistrationApiTest {
             assertThat(detail.get("items").get(0).get("primary").asBoolean()).isFalse();
             assertThat(product.get("imageUrl").asString()).as("기본 묶음이 없으니 사전순 첫 묶음(블랙)의 대표").isEqualTo("https://img/b1.jpg");
 
-            // DB: 고른 공개 여부 · 수동 가격 표식 · 조합 키 · 등록 기록 · 회차 이벤트
+            // DB: 고른 공개 여부 · 조합 키 · 등록 기록 · 회차 이벤트
             assertThat(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, productId)).isTrue();
-            assertThat(jdbcTemplate.queryForObject(
-                    "SELECT price_overridden FROM product_options WHERE product_id = ? AND sku = 'BLK-256'", Boolean.class, productId)).isTrue();
             assertThat(jdbcTemplate.queryForObject(
                     "SELECT COUNT(*) FROM product_options WHERE product_id = ? AND combination_key IS NOT NULL", Long.class, productId)).isEqualTo(3L);
             assertThat(jdbcTemplate.queryForObject(
@@ -541,13 +539,14 @@ class AdminProductRegistrationApiTest {
         }
 
         @Test
-        @DisplayName("금액은 decimal(12,0) 안 — 기본가 · 추가금 · 보증 추가금 · 수동 가격이 999,999,999,999 를 넘거나 기본가 + 추가금이 넘으면 그 칸의 400(500 이 아니다)")
+        @DisplayName("금액은 decimal(12,0) 안 — 기본가 · 추가금 · 보증 추가금이 999,999,999,999 를 넘거나 기본가 + 추가금이 넘으면 그 칸의 400(500 이 아니다). 조합 가격은 받지 않는다")
         void amountsAboveColumnLimitAreFieldErrors() throws Exception {
             String max = "999999999999";
             register("k-" + ShopFixtures.unique(), inStockBody(max, "3")).andExpect(status().isCreated());   // 경계는 들어간다
             expectValidation(register("k-" + ShopFixtures.unique(), inStockBody("1000000000000", "3")), "basePrice");
+            // 조합 가격은 기본가 + 추가금이라 받지 않는다(2026-10-06) — 모르는 칸 400
             expectValidation(register("k-" + ShopFixtures.unique(), inStockBody("9000", "3")
-                    .replace("\"stock\": 3", "\"stock\": 3, \"price\": 1000000000000")), "combinations[].price");
+                    .replace("\"stock\": 3", "\"stock\": 3, \"price\": 5000")), "combinations[0].price");
             expectValidation(register("k-" + ShopFixtures.unique(), inStockBody("9000", "3")
                     .replace("\"visible\": true,", "\"visible\": true, \"warranty\": { \"offered\": true, \"surcharge\": 1000000000000 },")), "warranty.surcharge");
 
@@ -556,9 +555,6 @@ class AdminProductRegistrationApiTest {
                     .replace("\"selections\": {}", "\"selections\": { \"storage\": \"512GB\" }");
             expectValidation(register("k-" + ShopFixtures.unique(), withStorage.formatted("1")), "combinations[storage=512GB]");
             expectValidation(register("k-" + ShopFixtures.unique(), withStorage.formatted("1000000000000")), "optionAxes[0].values[0].surcharge");
-            // 계산 가격이 넘어도 수동 가격을 주면 계산 가격은 저장하지 않는다 — 들어간다
-            register("k-" + ShopFixtures.unique(), withStorage.formatted("1").replace("\"stock\": 3", "\"stock\": 3, \"price\": 5000"))
-                    .andExpect(status().isCreated());
         }
 
         /** 축 없는 일반 상품 하나(조합 하나). 조합 칸 경로는 선택 키로 만든다 — 축이 없으면 combinations[], storage 축이면 combinations[storage=512GB]. */

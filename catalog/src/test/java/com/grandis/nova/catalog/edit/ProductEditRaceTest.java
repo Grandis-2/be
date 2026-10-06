@@ -105,16 +105,28 @@ class ProductEditRaceTest {
     }
 
     @Test
-    @DisplayName("옵션 수동 가격이 커밋되기 전에 기본가 수정이 들어와도 수동 가격은 남는다 — 재계산은 수동 표시가 커밋된 뒤의 옵션을 읽는다")
-    void manualPriceSurvivesAConcurrentRecompute() throws Exception {
+    @DisplayName("기본가 수정이 커밋 전에 옵션 상태 수정이 들어오면 뒤의 것은 기다렸다가 새 가격 위에 상태만 바꾼다 — 재계산된 가격을 옛 값으로 덮지 않는다")
+    void variantEditAfterRecomputeKeepsTheNewPrice() throws Exception {
         long productId = registerInStock();
         long option512 = optionId(productId, "512GB");
-        interleave(() -> editService.editVariant(productId, option512, new VariantEditRequest(new BigDecimal("1270000"), null, null)),
+        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)),
+                () -> editService.editVariant(productId, option512, new VariantEditRequest(SaleStatus.PAUSED)));
+
+        assertThat(optionStatus(option512)).isEqualTo("PAUSED");
+        assertThat(price(productId, "512GB")).as("새 기본가 1,100,000 + 추가금 200,000 — 옛 가격을 읽어 두고 쓰면 1,200,000")
+                .isEqualByComparingTo("1300000");
+    }
+
+    @Test
+    @DisplayName("옵션 상태 수정이 커밋 전에 기본가 수정이 들어오면 뒤의 것은 기다렸다가 바뀐 상태를 지킨 채 가격만 다시 계산한다")
+    void recomputeAfterVariantEditKeepsTheNewStatus() throws Exception {
+        long productId = registerInStock();
+        long option512 = optionId(productId, "512GB");
+        interleave(() -> editService.editVariant(productId, option512, new VariantEditRequest(SaleStatus.PAUSED)),
                 () -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)));
 
-        assertThat(price(productId, "512GB")).as("수동 가격 — 옛 상태(수동 아님)로 읽은 재계산이 덮으면 1,300,000").isEqualByComparingTo("1270000");
-        assertThat(jdbcTemplate.queryForObject("SELECT price_overridden FROM product_options WHERE id = ?", Boolean.class, option512)).isTrue();
-        assertThat(price(productId, "256GB")).isEqualByComparingTo("1100000");
+        assertThat(optionStatus(option512)).as("옛 상태를 읽어 두고 쓰면 ACTIVE 로 되돌아간다").isEqualTo("PAUSED");
+        assertThat(price(productId, "512GB")).isEqualByComparingTo("1300000");
     }
 
     @Test
@@ -254,20 +266,20 @@ class ProductEditRaceTest {
     }
 
     @Test
-    @DisplayName("가격 되돌리기 중에 잠금 시각이 지나도 커밋하지 않는다 — 되돌리기도 가격 변경이라 커밋 직전에 다시 본다")
-    void openingDuringThePriceResetRejectsTheCommit() throws Exception {
+    @DisplayName("옵션 판매 상태를 바꾸는 중에 잠금 시각이 지나도 커밋하지 않는다 — 커밋 직전에 다시 본다")
+    void openingDuringTheOptionStatusChangeRejectsTheCommit() throws Exception {
         long productId = registerPreorder();
         long optionId = optionId(productId, "256GB");
-        jdbcTemplate.update("UPDATE product_options SET price = 1270000, price_overridden = 1 WHERE id = ?", optionId);
         Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.MICROS);
         fixtures.campaign(productId, opensAt, opensAt.plus(Duration.ofDays(1)));
 
         AtomicInteger reads = new AtomicInteger();
         Instant freezesAt = opensAt.minus(ProductEditService.FREEZE_BEFORE_OPEN);
         CLOCK.next = () -> reads.getAndIncrement() == 0 ? freezesAt.minusMillis(1) : freezesAt;
-        assertStateConflict(() -> editService.editVariant(productId, optionId, new VariantEditRequest(null, null, true)));
+        assertStateConflict(() -> editService.editVariant(productId, optionId, new VariantEditRequest(SaleStatus.PAUSED)));
         assertThat(reads.get()).as("첫 판정은 통과했다").isGreaterThanOrEqualTo(2);
-        assertThat(price(productId, "256GB")).as("수동 가격 그대로").isEqualByComparingTo("1270000");
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM product_options WHERE id = ?", String.class, optionId))
+                .as("상태 그대로").isEqualTo("ACTIVE");
     }
 
     @Test
@@ -462,31 +474,34 @@ class ProductEditRaceTest {
     }
 
     /**
-     * 둘째 작업이 DB 에서 잠금을 기다리는 중이거나 이미 끝났을 때까지 기다린다. 같은 사용자의 스레드는 PROCESS 권한 없이 PROCESSLIST 에 보이고,
-     * 쉬는 커넥션은 COMMAND=Sleep 이다. 다른 커넥션의 Query 가 하나라도 보이면 기다리는 것으로 본다 — 둘째 작업이 아직 잠금에 닿기 전에
-     * 다른 쿼리(둘째 작업의 앞쪽 조회 · 앞 시험이 남긴 커밋 직후 아웃박스 발행 등)를 보고 넘어갈 수 있어, 드물게 잠금 결함을 놓친다(거짓 통과).
+     * 둘째 작업이 상품 행 잠금(products … FOR UPDATE)에서 기다리는 중이거나 이미 끝났을 때까지 기다린다. 같은 사용자의 스레드는 PROCESS 권한 없이
+     * PROCESSLIST 에 보이고(performance_schema 의 잠금 대기 표는 시험 계정으로 못 읽는다 — 실측), 쉬는 커넥션은 COMMAND=Sleep 이다.
+     * 그 잠금 조회가 두 번 연속(약 20ms 간격) 보일 때 넘어간다 — 아무 실행 중 쿼리나 보고 넘어가면 둘째 작업이 잠금에 닿기 전에 첫째를 풀어
+     * 직렬 실행이 되고, 직렬로도 통과하는 단언이 잠금 결함을 놓친다.
      */
     private void awaitBlockedOrDone(Future<?> second) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        int seen = 0;
         while (System.nanoTime() < deadline) {
             if (second.isDone()) {
                 return;
             }
-            Long running = jdbcTemplate.queryForObject("""
+            Long blocked = jdbcTemplate.queryForObject("""
                     SELECT COUNT(*) FROM information_schema.PROCESSLIST
-                     WHERE COMMAND = 'Query' AND ID <> CONNECTION_ID() AND INFO IS NOT NULL
+                     WHERE COMMAND = 'Query' AND ID <> CONNECTION_ID() AND LOWER(INFO) LIKE '%from products %for update%'
                     """, Long.class);
-            if (running != null && running > 0) {
+            seen = blocked != null && blocked > 0 ? seen + 1 : 0;
+            if (seen >= 2) {
                 return;
             }
             Thread.sleep(20);
         }
-        throw new AssertionError("둘째 작업이 30초 안에 기다리지도 끝나지도 않았다");
+        throw new AssertionError("둘째 작업이 30초 안에 상품 행 잠금에서 기다리지도 끝나지도 않았다");
     }
 
     /**
      * 수정이 옵션 행 UPDATE 에서 기다릴 때까지(id 순으로 A 를 잡고 B 를 기다리는 중) 또는 끝날 때까지 기다린다.
-     * {@link #awaitBlockedOrDone} 처럼 "다른 연결의 아무 실행 중 쿼리" 를 보면 수정이 아직 상품 행 잠금 · 앞쪽 조회에 있을 때도 넘어가,
+     * "다른 연결의 아무 실행 중 쿼리" 를 신호로 삼으면 수정이 아직 상품 행 잠금 · 앞쪽 조회에 있을 때도 넘어가,
      * 장바구니가 A 를 먼저 넣고 교착 없이 지나갈 수 있다 — 교착 시험이 가끔 실패하던 가능한 원인이다(실측: 다른 트랜잭션이 상품 행을 1초 잡아
      * 수정을 그 단계에 붙잡아 두면 매번 그렇게 실패한다. 자연 조건에서는 재현되지 않았고, 처음 기록된 실패의 메시지는 남아 있지 않다).
      * 옵션 UPDATE 가 두 번 연속(약 20ms 간격) 보일 때 넘어간다 — A 의 대기와 B 의 대기를 가르지는 못하지만, 이 시험에서는 A 를 잡는 다른 트랜잭션이 없다.
@@ -553,6 +568,10 @@ class ProductEditRaceTest {
                 BigDecimal.class, productId, storage);
     }
 
+    private String optionStatus(long optionId) {
+        return jdbcTemplate.queryForObject("SELECT status FROM product_options WHERE id = ?", String.class, optionId);
+    }
+
     private String title(long productId) {
         return jdbcTemplate.queryForObject("SELECT title FROM products WHERE id = ?", String.class, productId);
     }
@@ -562,7 +581,7 @@ class ProductEditRaceTest {
                 "SELECT COUNT(*) FROM catalog_outbox_events WHERE aggregate_id = ? AND event_type = 'PREORDER_PRODUCT_CHANGED'", Long.class, productId);
     }
 
-    /** 축 storage 하나(256GB +0 · 512GB +200,000), 기본가 1,000,000, 수동 가격 없음. */
+    /** 축 storage 하나(256GB +0 · 512GB +200,000), 기본가 1,000,000. */
     private long registerInStock() throws Exception {
         return register("""
                 { "categoryId": %d, "saleMode": "IN_STOCK", "title": "Race", "visible": false, "basePrice": 1000000,

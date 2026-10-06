@@ -14,7 +14,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class AmountsTest {
 
     @ParameterizedTest
-    @ValueSource(strings = {"0", "1000", "1000.0", "1000.00", "1.2E+3"})
+    @ValueSource(strings = {"0", "1000", "1000.0", "1000.00", "1.2E+3", "7.00E+3"})
     @DisplayName("정수 원 금액은 표기가 달라도 통과하고, 소수점 없는 표기(scale 0)로 돌아온다")
     void wholeWonPasses(String amount) {
         BigDecimal given = new BigDecimal(amount);
@@ -52,7 +52,7 @@ class AmountsTest {
                 false, BigDecimal.ZERO)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("basePrice");
         assertThatThrownBy(() -> Product.register(1L, SaleMode.IN_STOCK, "x", BigDecimal.ZERO, null, null, false,
                 true, new BigDecimal("0.5"))).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("warrantySurcharge");
-        assertThatThrownBy(() -> ProductOption.of("sku", new BigDecimal("10.5"), false, OptionCombination.none(1L, "x")))
+        assertThatThrownBy(() -> ProductOption.of("sku", new BigDecimal("10.5"), OptionCombination.none(1L, "x")))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("price");
     }
 }

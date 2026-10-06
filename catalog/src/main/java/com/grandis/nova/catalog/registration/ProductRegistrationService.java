@@ -205,7 +205,7 @@ public class ProductRegistrationService {
 
     /** SKU 중복은 검증기가 요청 안에서 먼저 거른다 — 새 상품이라 DB 에 다른 SKU 가 있을 수 없다. */
     private ProductOption saveOption(Combo combo, OptionCombination combination) {
-        return options.saveAndFlush(ProductOption.of(combo.sku(), combo.price(), combo.priceOverridden(), combination));
+        return options.saveAndFlush(ProductOption.of(combo.sku(), combo.price(), combination));
     }
 
     private ProductRegistration saveRegistration(Long productId, String idempotencyKey) {

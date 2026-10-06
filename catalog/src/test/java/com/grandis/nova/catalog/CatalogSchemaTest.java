@@ -76,7 +76,7 @@ class CatalogSchemaTest {
     class LegacyInserts {
 
         @Test
-        @DisplayName("상품은 공개 · 기본가 0 · 보증 없음으로, 옵션은 수동 가격 아님으로 들어간다")
+        @DisplayName("상품은 공개 · 기본가 0 · 보증 없음으로, 옵션에는 수동 가격 표시 칼럼이 없다")
         void defaultsKeepOtherModulesFixturesValid() {
             Long productId = fixtures.product("IN_STOCK", "ACTIVE");
             Long optionId = fixtures.option(productId, "ACTIVE");
@@ -88,9 +88,12 @@ class CatalogSchemaTest {
             assertThat(product.get("warranty_offered")).isEqualTo(false);
             assertThat((BigDecimal) product.get("warranty_surcharge")).isEqualByComparingTo("0");
 
-            Object overridden = jdbcTemplate.queryForObject(
-                    "SELECT price_overridden FROM product_options WHERE id = ?", Object.class, optionId);
-            assertThat(overridden).isEqualTo(false);
+            assertThat(jdbcTemplate.queryForObject("SELECT price FROM product_options WHERE id = ?", BigDecimal.class, optionId)).isNotNull();
+            // 수동 가격 표시는 없앴다(2026-10-06) — 다시 생기면 재계산이 건너뛰는 옵션이 생긴다
+            assertThat(jdbcTemplate.queryForObject("""
+                    SELECT COUNT(*) FROM information_schema.columns
+                     WHERE table_schema = DATABASE() AND table_name = 'product_options' AND column_name = 'price_overridden'
+                    """, Long.class)).isZero();
         }
 
         @Test

@@ -19,7 +19,7 @@ import java.util.Objects;
 /**
  * 옵션 = 축마다 값 하나를 고른 조합(예: 블랙 / 256GB). 어느 값을 골랐는지는 product_option_selections 가 갖는다.
  *
- * price 는 최종가다. priceOverridden 이 true 면 관리자가 직접 고친 값이라 기본가 · 추가금 재계산에서 건너뛴다.
+ * price 는 최종가 = 기본가 + Σ(고른 값의 추가금)이다. 직접 고치는 경로는 없다 — 기본가 · 추가금이 바뀌면 다시 계산된다.
  * filterAttributes(color · storage 의 JSON) · title · combinationKey 와 선택 행은 한 {@link OptionCombination} 에서 함께 나온다 —
  * 따로 만들면 어긋날 자리가 열리고 DB 는 못 막는다. preorder 가 접수 때 filterAttributes 를 복사한다.
  * combinationKey 는 고른 값 id 를 오름차순으로 '-' 로 이은 것이라 키를 채운 옵션끼리는 같은 조합을 DB UNIQUE 가 막는다.
@@ -47,9 +47,6 @@ public class ProductOption extends BaseEntity {
     @Column(nullable = false)
     private BigDecimal price;
 
-    @Column(nullable = false)
-    private boolean priceOverridden;
-
     @JdbcTypeCode(SqlTypes.JSON)
     private String filterAttributes;
 
@@ -66,13 +63,12 @@ public class ProductOption extends BaseEntity {
     protected ProductOption() {
     }
 
-    private ProductOption(Long productId, String sku, String title, BigDecimal price, boolean priceOverridden,
+    private ProductOption(Long productId, String sku, String title, BigDecimal price,
                           String filterAttributes, String displayAttributes, String combinationKey) {
         this.productId = productId;
         this.sku = sku;
         this.title = title;
         this.price = Amounts.requireWholeWon(price, "price");
-        this.priceOverridden = priceOverridden;
         this.filterAttributes = filterAttributes;
         this.displayAttributes = displayAttributes;
         this.combinationKey = combinationKey;
@@ -83,28 +79,14 @@ public class ProductOption extends BaseEntity {
      * 옵션 하나. 표시명 · 조합 키 · JSON 두 칸을 전부 조합에서 받는다(축이 없는 상품은 {@link OptionCombination#none}).
      * 판매 상태는 ACTIVE 로 시작한다. 선택 행은 저장 뒤 {@link OptionCombination#selections} 로 같은 트랜잭션에서 만든다.
      */
-    public static ProductOption of(String sku, BigDecimal price, boolean priceOverridden, OptionCombination combination) {
-        return new ProductOption(combination.getProductId(), sku, combination.title(), price, priceOverridden,
+    public static ProductOption of(String sku, BigDecimal price, OptionCombination combination) {
+        return new ProductOption(combination.getProductId(), sku, combination.title(), price,
                 combination.filterAttributes(), combination.displayAttributes(), combination.combinationKey());
     }
 
-    /** 관리자가 직접 고친 가격. 이후 기본 가격 · 추가금이 바뀌어도 재계산에서 빠진다(설계 §2.1). */
-    public void overridePrice(BigDecimal price) {
-        this.price = Amounts.requireWholeWon(price, "price");
-        this.priceOverridden = true;
-    }
-
-    /** 재계산 결과. 수동 가격이면 무시한다 — 호출자가 가르지 않아도 여기서 지킨다. */
+    /** 기본가 · 추가금이 바뀌어 다시 계산한 가격. */
     public void recomputePrice(BigDecimal computed) {
-        if (!priceOverridden) {
-            this.price = Amounts.requireWholeWon(computed, "price");
-        }
-    }
-
-    /** 수동 가격을 풀고 계산 가격으로 돌아간다. 이후 기본 가격 · 추가금이 바뀌면 다시 재계산에 들어간다. */
-    public void resetToComputed(BigDecimal computed) {
         this.price = Amounts.requireWholeWon(computed, "price");
-        this.priceOverridden = false;
     }
 
     /** 판매 중지 · 재개. 옵션 단위 상태라 상품 상태와 별개다. 기존 주문에는 손대지 않는다. */
@@ -142,10 +124,6 @@ public class ProductOption extends BaseEntity {
 
     public BigDecimal getPrice() {
         return price;
-    }
-
-    public boolean isPriceOverridden() {
-        return priceOverridden;
     }
 
     public String getFilterAttributes() {

@@ -84,7 +84,7 @@ class ProductRegistrationServiceTest {
 
     private ProductRegistrationRequest inStockRequest() {
         return new ProductRegistrationRequest(categoryId, SaleMode.IN_STOCK, "케이블", null, null, true, new BigDecimal("9000"), null,
-                null, List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, null, 3)), null, null, null);
+                null, List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, 3)), null, null, null);
     }
 
     @Test
@@ -94,8 +94,8 @@ class ProductRegistrationServiceTest {
                 true, new BigDecimal("10000"), null,
                 List.of(new ProductRegistrationRequest.OptionAxis("color", "색상",
                         List.of(new ProductRegistrationRequest.OptionValue("블랙", null), new ProductRegistrationRequest.OptionValue("화이트", null)))),
-                List.of(new ProductRegistrationRequest.Combination(Map.of("color", "블랙"), false, null, null, 5),
-                        new ProductRegistrationRequest.Combination(Map.of("color", "화이트"), false, null, null, 0)),
+                List.of(new ProductRegistrationRequest.Combination(Map.of("color", "블랙"), false, null, 5),
+                        new ProductRegistrationRequest.Combination(Map.of("color", "화이트"), false, null, 0)),
                 null, null, null);
         RegistrationOutcome created = service.register("k-" + ShopFixtures.unique(), inStock);
         Long productId = created.registration().productId();
@@ -164,7 +164,7 @@ class ProductRegistrationServiceTest {
 
     private ProductRegistrationRequest preorderRequest(Instant opensAt) {
         return new ProductRegistrationRequest(categoryId, SaleMode.PREORDER, "Nova", null, null,
-                false, new BigDecimal("1000"), null, null, List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, null, null)),
+                false, new BigDecimal("1000"), null, null, List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, null)),
                 null, new ProductRegistrationRequest.Campaign(opensAt, opensAt.plus(Duration.ofDays(1))),
                 List.of(new ProductRegistrationRequest.ShipmentBatch(1, 1L, 100L, LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 7)),
                         new ProductRegistrationRequest.ShipmentBatch(2, 101L, null, LocalDate.of(2026, 11, 8), LocalDate.of(2026, 11, 14))));

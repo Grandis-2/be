@@ -108,7 +108,7 @@ public class AdminProductController {
         return ApiResponse.ok(AdminProductResponse.from(detailService.findAdminProduct(productId)));
     }
 
-    /** 표시 정보 · 기본 가격 · 보증 수정. 보낸 칸만 바꾸고, 사전예약 오픈 뒤면 409. 기본 가격이 바뀌면 수동 가격이 아닌 옵션을 재계산한다. */
+    /** 표시 정보 · 기본 가격 · 보증 수정. 보낸 칸만 바꾸고, 사전예약 오픈 뒤면 409. 기본 가격이 바뀌면 모든 옵션 가격을 재계산한다. */
     @PatchMapping("/{productId}")
     public ApiResponse<AdminProductResponse> edit(@PathVariable Long productId, @RequestBody String body) {
         return ApiResponse.ok(AdminProductResponse.from(serialized(() -> editService.editProduct(productId, bodies.parse(body, ProductEditRequest.class)))));
@@ -137,7 +137,7 @@ public class AdminProductController {
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(variant));
     }
 
-    /** 옵션의 수동 가격 · 가격 되돌리기 · 판매 상태. 사전예약은 오픈 3분 전부터 전부 409. */
+    /** 옵션의 판매 상태. 사전예약은 오픈 3분 전부터 409. */
     @PatchMapping("/{productId}/variants/{variantId}")
     public ApiResponse<ProductDetailView.Variant> editVariant(@PathVariable Long productId, @PathVariable Long variantId,
                                                              @RequestBody String body) {

@@ -29,7 +29,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * 관리자 수정 API — 등록 API 로 만든 상품(축 color · storage, 조합 4개, 하나는 수동 가격)을 고친다.
+ * 관리자 수정 API — 등록 API 로 만든 상품(축 color · storage, 조합 4개, 옵션 가격은 기본가 + 추가금)을 고친다.
  * 등록 직후 상품은 비공개 · 미완료라 회원 상세에는 안 나오지만 관리자 상세로 결과를 본다.
  */
 @CatalogIntegrationTest
@@ -76,10 +76,10 @@ class AdminProductEditApiTest {
         }
 
         @Test
-        @DisplayName("기본 가격이 바뀌면 수동 가격이 아닌 옵션만 기본가 + 추가금으로 재계산된다. 보증도 함께 고칠 수 있다")
-        void basePriceChangeRecomputesNonOverriddenOptions() throws Exception {
+        @DisplayName("기본 가격이 바뀌면 모든 옵션이 기본가 + 추가금으로 재계산된다. 보증도 함께 고칠 수 있다")
+        void basePriceChangeRecomputesEveryOption() throws Exception {
             long productId = registerInStock();
-            assertThat(prices(productId)).containsEntry("블랙 / 256GB", "1000000").containsEntry("블랙 / 512GB", "1270000")
+            assertThat(prices(productId)).containsEntry("블랙 / 256GB", "1000000").containsEntry("블랙 / 512GB", "1200000")
                     .containsEntry("화이트 / 256GB", "1000000").containsEntry("화이트 / 512GB", "1200000");
 
             JsonNode edited = data(edit(productId, """
@@ -87,8 +87,8 @@ class AdminProductEditApiTest {
                     """).andExpect(status().isOk()));
             assertThat(edited.get("product").get("basePrice").decimalValue()).isEqualByComparingTo("1100000");
             assertThat(edited.get("product").get("warranty").get("surcharge").decimalValue()).isEqualByComparingTo("90000");
-            assertThat(prices(productId)).as("수동 가격(블랙 / 512GB)은 그대로, 나머지는 재계산")
-                    .containsEntry("블랙 / 256GB", "1100000").containsEntry("블랙 / 512GB", "1270000")
+            assertThat(prices(productId)).as("모든 옵션이 새 기본가 + 추가금")
+                    .containsEntry("블랙 / 256GB", "1100000").containsEntry("블랙 / 512GB", "1300000")
                     .containsEntry("화이트 / 256GB", "1100000").containsEntry("화이트 / 512GB", "1300000");
 
             JsonNode offeredOnly = data(edit(productId, "{ \"warranty\": { \"offered\": true } }").andExpect(status().isOk()));
@@ -96,6 +96,26 @@ class AdminProductEditApiTest {
                     .isEqualByComparingTo("90000");
             JsonNode withdrawn = data(edit(productId, "{ \"warranty\": { \"offered\": false } }").andExpect(status().isOk()));
             assertThat(withdrawn.get("product").get("warranty").get("surcharge").decimalValue()).as("제공하지 않으면 0").isZero();
+        }
+
+        @Test
+        @DisplayName("기본가 · 추가금을 같은 값으로 다시 보내면 옵션 가격을 다시 계산하지 않는다 — 값이 실제로 바뀔 때만 계산값으로 맞춘다")
+        void sameAmountDoesNotRecompute() throws Exception {
+            long productId = registerInStock();
+            long black512 = variantIdOf(productId, "블랙 / 512GB");
+            long storage512 = valueIdOf(productId, "storage", "512GB");
+            // 수동 가격 칼럼을 지우기 전에 직접 고쳐 둔 가격 — 공식(1,000,000 + 200,000)과 다르게 남아 있다
+            jdbcTemplate.update("UPDATE product_options SET price = 1150000 WHERE id = ?", black512);
+
+            edit(productId, "{ \"basePrice\": 1000000 }").andExpect(status().isOk());
+            mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"surcharge\": 200000 }"))
+                    .andExpect(status().isOk());
+            assertThat(prices(productId)).as("같은 값 — 남아 있던 가격 그대로").containsEntry("블랙 / 512GB", "1150000");
+
+            mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"surcharge\": 250000 }"))
+                    .andExpect(status().isOk());
+            assertThat(prices(productId)).as("추가금이 바뀌면 계산값").containsEntry("블랙 / 512GB", "1250000")
+                    .containsEntry("화이트 / 512GB", "1250000");
         }
 
         @Test
@@ -122,7 +142,6 @@ class AdminProductEditApiTest {
             edit(productId, "{ \"basePrice\": 1000000.00 }").andExpect(status().isOk());   // 대조군 — 끝자리 0 은 정수 원
 
             long variantId = variantIdOf(productId, "블랙 / 256GB");
-            expectValidation(editVariant(productId, variantId, "{ \"price\": 0.5 }"), "price");
             expectValidation(editVariant(productId, variantId, "{ \"status\": \"NOPE\" }"), "status");
             long storage512 = valueIdOf(productId, "storage", "512GB");
             expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"surcharge\": 0.5 }")), "surcharge");
@@ -130,51 +149,35 @@ class AdminProductEditApiTest {
             expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"color\", \"value\": \"레드\", \"surcharge\": 0.5 }")), "surcharge");
             expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"color\", \"value\": \"\u3000\" }")), "value");
             expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/variants", productId)).content("{ \"selections\": { \"color\": \"  \", \"storage\": \"256GB\" } }")), "selections.color");
-            expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/variants", productId)).content("{ \"selections\": { \"color\": \"블랙\", \"storage\": \"256GB\" }, \"price\": 0.5 }")), "price");
             assertThat(data(adminDetail(productId)).get("product").get("title").asString()).isEqualTo("Nova 1");
         }
 
-        /**
-         * 금액 칸은 decimal(12,0) — 넘으면 저장에서 500 이던 것을 원인 칸의 400 으로. 기본가 · 추가금을 바꿔 재계산한 옵션 가격도 같다
-         * (수동 가격 옵션은 재계산하지 않으므로 검사에서 빠진다).
-         */
+        /** 금액 칸은 decimal(12,0) — 넘으면 저장에서 500 이던 것을 원인 칸의 400 으로. 기본가 · 추가금을 바꿔 재계산한 옵션 가격도 같다. */
         @Test
-        @DisplayName("금액 상한(999,999,999,999)을 넘는 수정은 원인 칸의 400 이고 아무것도 바뀌지 않는다 — 기본가 · 추가금 재계산 · 옵션 가격 · 가격 되돌리기 · 옵션 추가")
+        @DisplayName("금액 상한(999,999,999,999)을 넘는 수정은 원인 칸의 400 이고 아무것도 바뀌지 않는다 — 기본가 · 추가금 재계산 · 옵션 추가")
         void amountsAboveColumnLimitAreFieldErrors() throws Exception {
             long productId = registerInStock();
             String max = "999999999999";
             expectValidation(edit(productId, "{ \"basePrice\": 1000000000000 }"), "basePrice");
-            // 기본가 최댓값이면 화이트/512GB(수동 가격 아님)가 최댓값 + 200,000 이 된다
+            // 기본가 최댓값이면 512GB 옵션이 최댓값 + 200,000 이 된다
             expectValidation(edit(productId, "{ \"basePrice\": " + max + " }"), "basePrice");
             long storage512 = valueIdOf(productId, "storage", "512GB");
             expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"surcharge\": " + max + " }")), "surcharge");
-            long white256 = variantIdOf(productId, "화이트 / 256GB");
-            expectValidation(editVariant(productId, white256, "{ \"price\": 1000000000000 }"), "price");
-            editVariant(productId, white256, "{ \"price\": " + max + " }").andExpect(status().isOk());   // 대조군 — 경계는 들어간다
-            assertThat(prices(productId)).containsEntry("블랙 / 256GB", "1000000").containsEntry("화이트 / 512GB", "1200000")
-                    .containsEntry("블랙 / 512GB", "1270000");
+            assertThat(prices(productId)).as("거절된 수정은 아무것도 바꾸지 않는다")
+                    .containsEntry("블랙 / 256GB", "1000000").containsEntry("화이트 / 512GB", "1200000");
 
-            // 512GB 를 고른 두 옵션을 모두 수동 가격으로 두고 기본가를 올리면 재계산은 256GB 들만 — 그 뒤 수동 가격을 풀면 최댓값 + 200,000 이다
-            editVariant(productId, variantIdOf(productId, "화이트 / 512GB"), "{ \"price\": 1 }").andExpect(status().isOk());
-            edit(productId, "{ \"basePrice\": " + max + " }").andExpect(status().isOk());
-            expectValidation(editVariant(productId, variantIdOf(productId, "블랙 / 512GB"), "{ \"resetPrice\": true }"), "resetPrice");
-            assertThat(prices(productId)).containsEntry("블랙 / 512GB", "1270000");
-
-            // 큰 추가금 값을 더한 뒤 그 값으로 옵션을 만들면 계산 가격이 넘는다
-            mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"storage\", \"value\": \"1TB\", \"surcharge\": 1 }"))
+            // 값만 더하는 것은 옵션을 만들지 않아 상한까지 받는다 — 그 값으로 옵션을 만들면 계산 가격이 넘는다
+            mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"storage\", \"value\": \"1TB\", \"surcharge\": " + max + " }"))
                     .andExpect(status().isCreated());
             expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/variants", productId))
                     .content("{ \"selections\": { \"color\": \"블랙\", \"storage\": \"1TB\" } }")), "selections");
-            // 수동 가격을 주면 계산 가격은 저장하지 않는다 — 계산 가격이 넘어도 들어간다
-            mockMvc.perform(admin(post(PATH + "/{id}/variants", productId))
-                    .content("{ \"selections\": { \"color\": \"블랙\", \"storage\": \"1TB\" }, \"price\": 5 }")).andExpect(status().isCreated());
-            assertThat(prices(productId)).containsEntry("블랙 / 1TB", "5");
+            assertThat(prices(productId)).doesNotContainKey("블랙 / 1TB");
             expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId))
                     .content("{ \"axisKey\": \"color\", \"value\": \"레드\", \"surcharge\": 1000000000000 }")), "surcharge");
         }
 
         @Test
-        @DisplayName("정수 원 금액은 받은 표기와 상관없이 소수점 없는 숫자로 저장 · 응답한다 — 1e3 · 2000.0 · 1.5e3 · 7.00e3 은 1000 · 2000 · 1500 · 7000")
+        @DisplayName("정수 원 금액은 받은 표기와 상관없이 소수점 없는 숫자로 저장 · 응답한다 — 1e3 · 2000.0 · 1.5e3 은 1000 · 2000 · 1500, 재계산한 옵션 가격도")
         void wholeWonIsNormalizedToPlainInteger() throws Exception {
             long productId = registerInStock();
             JsonNode product = data(edit(productId, "{ \"basePrice\": 1e3, \"warranty\": { \"offered\": true, \"surcharge\": 2000.0 } }")
@@ -186,8 +189,9 @@ class AdminProductEditApiTest {
                     .content("{ \"axisKey\": \"color\", \"value\": \"레드\", \"surcharge\": 1.5e3 }")).andExpect(status().isCreated()));
             assertThat(added.get("product").get("optionAxes").get(0).get("values").get(2).get("surcharge").toString()).isEqualTo("1500");
 
-            JsonNode variant = data(editVariant(productId, variantIdOf(productId, "화이트 / 256GB"), "{ \"price\": 7.00e3 }").andExpect(status().isOk()));
-            assertThat(variant.get("price").toString()).isEqualTo("7000");
+            JsonNode detail = data(adminDetail(productId)).get("product");
+            detail.get("variants").forEach(variant -> assertThat(variant.get("price").toString()).as("기본가 1e3 로 재계산한 옵션 가격")
+                    .doesNotContain("E").doesNotContain("."));
         }
 
         @Test
@@ -250,13 +254,16 @@ class AdminProductEditApiTest {
             expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/variants", productId)).content("{ \"selections\": { \"color\": \"레드\", \"storage\": \"256GB\", \"size\": \"L\" } }")), "selections");
             expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/variants", productId)).content("{ \"selections\": { \"color\": \"레드\", \"storage\": \"256GB\" }, \"sku\": \"레드-512GB\" }")), "sku");
 
-            JsonNode manual = data(mockMvc.perform(admin(post(PATH + "/{id}/variants", productId))
-                            .content("{ \"selections\": { \"color\": \"레드\", \"storage\": \"256GB\" }, \"price\": 999000, \"sku\": \"RED-256\" }"))
+            // 가격은 받지 않는다 — 기본가 + 추가금이다(모르는 칸 400)
+            expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/variants", productId))
+                    .content("{ \"selections\": { \"color\": \"레드\", \"storage\": \"256GB\" }, \"price\": 999000 }")), "price");
+            JsonNode custom = data(mockMvc.perform(admin(post(PATH + "/{id}/variants", productId))
+                            .content("{ \"selections\": { \"color\": \"레드\", \"storage\": \"256GB\" }, \"sku\": \"RED-256\" }"))
                     .andExpect(status().isCreated()));
-            assertThat(manual.get("price").decimalValue()).isEqualByComparingTo("999000");
+            assertThat(custom.get("price").decimalValue()).as("기본가 + 256GB 추가금(0)").isEqualByComparingTo("1000000");
             edit(productId, "{ \"basePrice\": 1050000 }").andExpect(status().isOk());
-            assertThat(prices(productId)).as("수동 가격은 재계산에서 빠지고 계산 가격은 따라간다")
-                    .containsEntry("레드 / 256GB", "999000").containsEntry("레드 / 512GB", "1250000");
+            assertThat(prices(productId)).as("추가한 옵션도 기본가를 따라간다")
+                    .containsEntry("레드 / 256GB", "1050000").containsEntry("레드 / 512GB", "1250000");
 
             expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/variants", productId))
                     .content("{ \"selections\": { \"Color\": \"화이트\", \"color\": \"퍼플\", \"storage\": \"256GB\" } }")), "selections");
@@ -318,25 +325,14 @@ class AdminProductEditApiTest {
         }
 
         @Test
-        @DisplayName("옵션 수정 — 가격은 수동 고정, 상태는 판매 중지 · 재개. 다른 상품의 옵션 404, 빈 본문 400. 사전예약은 오픈 3분 전부터 가격 · 되돌리기 · 판매 상태 전부 409")
-        void editVariantPriceAndStatus() throws Exception {
+        @DisplayName("옵션 수정은 판매 상태(판매 중지 · 재개)만 — 가격 · 가격 되돌리기는 모르는 칸 400. 다른 상품의 옵션 404, 빈 본문 400. 사전예약은 오픈 3분 전부터 409")
+        void editVariantStatusOnly() throws Exception {
             long productId = registerInStock();
             long variantId = variantIdOf(productId, "블랙 / 256GB");
-            JsonNode priced = data(editVariant(productId, variantId, "{ \"price\": 1234000 }").andExpect(status().isOk()));
-            assertThat(priced.get("price").decimalValue()).isEqualByComparingTo("1234000");
-            edit(productId, "{ \"basePrice\": 900000 }").andExpect(status().isOk());
-            assertThat(prices(productId)).containsEntry("블랙 / 256GB", "1234000").containsEntry("화이트 / 256GB", "900000");
-
-            // 자동 계산으로 되돌리기 — 지금 기본가 + 추가금이 되고, 이후 기본가를 따라 움직인다
-            JsonNode reset = data(editVariant(productId, variantId, "{ \"resetPrice\": true }").andExpect(status().isOk()));
-            assertThat(reset.get("price").decimalValue()).isEqualByComparingTo("900000");
-            edit(productId, "{ \"basePrice\": 950000 }").andExpect(status().isOk());
-            assertThat(prices(productId)).as("되돌린 옵션은 다시 재계산에 들어간다").containsEntry("블랙 / 256GB", "950000");
-            long manual512 = variantIdOf(productId, "블랙 / 512GB");
-            JsonNode reset512 = data(editVariant(productId, manual512, "{ \"resetPrice\": true }").andExpect(status().isOk()));
-            assertThat(reset512.get("price").decimalValue()).as("기본가 950,000 + 512GB 추가금 200,000").isEqualByComparingTo("1150000");
-            expectValidation(editVariant(productId, variantId, "{ \"price\": 1, \"resetPrice\": true }"), "resetPrice");
-            expectValidation(editVariant(productId, variantId, "{ \"resetPrice\": false }"), "body");
+            // 옵션 가격은 늘 기본가 + 추가금이다 — 직접 고치거나 되돌리는 칸은 없다(2026-10-06 결정)
+            expectValidation(editVariant(productId, variantId, "{ \"price\": 1234000 }"), "price");
+            expectValidation(editVariant(productId, variantId, "{ \"resetPrice\": true }"), "resetPrice");
+            assertThat(prices(productId)).containsEntry("블랙 / 256GB", "1000000");
 
             JsonNode paused = data(editVariant(productId, variantId, "{ \"status\": \"PAUSED\" }").andExpect(status().isOk()));
             assertThat(paused.get("status").asString()).isEqualTo("PAUSED");
@@ -349,8 +345,6 @@ class AdminProductEditApiTest {
             long preorderVariant = variantIdOf(preorder, "블랙 / 256GB");
             Instant now = Instant.now();
             fixtures.campaign(preorder, now.minus(HOUR), now.plus(HOUR));
-            editVariant(preorder, preorderVariant, "{ \"price\": 1 }").andExpect(status().isConflict());
-            editVariant(preorder, preorderVariant, "{ \"resetPrice\": true }").andExpect(status().isConflict());
             editVariant(preorder, preorderVariant, "{ \"status\": \"PAUSED\" }")
                     .andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"));
             assertThat(jdbcTemplate.queryForObject("SELECT status FROM product_options WHERE id = ?", String.class, preorderVariant))
@@ -376,7 +370,7 @@ class AdminProductEditApiTest {
         }
 
         @Test
-        @DisplayName("값 수정 — 이름은 오타까지 고칠 수 있고 옵션 표시명 · 필터 속성 · 사진 묶음이 따라간다. 같은 축의 같은 값 · 용량 형식은 400. 추가금은 그 값을 고른 옵션만 재계산(수동 제외)")
+        @DisplayName("값 수정 — 이름은 오타까지 고칠 수 있고 옵션 표시명 · 필터 속성 · 사진 묶음이 따라간다. 같은 축의 같은 값 · 용량 형식은 400. 추가금은 그 값을 고른 옵션만 재계산")
         void editOptionValue() throws Exception {
             long productId = registerInStock();
             long storage512 = valueIdOf(productId, "storage", "512GB");
@@ -404,8 +398,8 @@ class AdminProductEditApiTest {
             expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, white)).content("{ \"value\": \"블랙\" }")), "value");
 
             mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"surcharge\": 300000 }")).andExpect(status().isOk());
-            assertThat(prices(productId)).as("512GB 를 고른 옵션만, 수동(블랙 / 512 GB)은 제외")
-                    .containsEntry("블랙 / 512 GB", "1270000").containsEntry("WHITE / 512 GB", "1300000")
+            assertThat(prices(productId)).as("512GB 를 고른 옵션만 기본가 + 새 추가금")
+                    .containsEntry("블랙 / 512 GB", "1300000").containsEntry("WHITE / 512 GB", "1300000")
                     .containsEntry("블랙 / 256GB", "1000000").containsEntry("WHITE / 256GB", "1000000");
 
             long other = registerInStock();
@@ -636,7 +630,7 @@ class AdminProductEditApiTest {
             mockMvc.perform(admin(post(PATH + "/{id}/variants", productId)).content("{ \"selections\": { \"color\": \"화이트\", \"storage\": \"256GB\" } }"))
                     .andExpect(status().isCreated());
             assertThat(changedEvents(productId)).hasSize(4);
-            editVariant(productId, variantIdOf(productId, "블랙 / 256GB"), "{ \"price\": 990000 }").andExpect(status().isOk());
+            editVariant(productId, variantIdOf(productId, "블랙 / 256GB"), "{ \"status\": \"PAUSED\" }").andExpect(status().isOk());
             assertThat(changedEvents(productId)).hasSize(5);
 
             saleStatus(productId, "PAUSED").andExpect(status().isOk());
@@ -745,23 +739,22 @@ class AdminProductEditApiTest {
 
     // ── 도우미 ─────────────────────────────────────────────────────────────
 
-    /** 축 color(블랙 · 화이트) · storage(256GB +0 · 512GB +200000), 기본가 1,000,000, 블랙/512GB 만 수동 1,270,000(어떤 재계산 결과와도 겹치지 않는 값 — 겹치면 수동 보호가 빠져도 시험이 못 가른다). 재고 각 3. */
+    /** 축 color(블랙 · 화이트) · storage(256GB +0 · 512GB +200000), 기본가 1,000,000 — 256GB 는 1,000,000, 512GB 는 1,200,000. 재고 각 3. */
     private long registerInStock() throws Exception {
         return register("IN_STOCK", """
                 "combinations": [
                   { "selections": { "color": "블랙", "storage": "256GB" }, "stock": 3 },
-                  { "selections": { "color": "블랙", "storage": "512GB" }, "stock": 3, "price": 1270000 },
+                  { "selections": { "color": "블랙", "storage": "512GB" }, "stock": 3 },
                   { "selections": { "color": "화이트", "storage": "256GB" }, "stock": 3 },
                   { "selections": { "color": "화이트", "storage": "512GB" }, "stock": 3 } ],
                 """);
     }
 
-    /** 같은 축 · 기본가, 블랙/512GB 만 수동 1,300,000, 화이트/256GB 는 만들지 않는다(조합 추가 시험용). 회차는 2시간 뒤. */
+    /** 같은 축 · 기본가, 화이트/256GB 는 만들지 않는다(조합 추가 시험용). 회차는 2시간 뒤. */
     private long registerPreorder() throws Exception {
         Instant opensAt = Instant.now().plus(HOUR.multipliedBy(2));
         return register("PREORDER", """
-                "combinations": [ { "selections": { "color": "블랙", "storage": "512GB" }, "price": 1300000 },
-                                  { "selections": { "color": "화이트", "storage": "256GB" }, "excluded": true } ],
+                "combinations": [ { "selections": { "color": "화이트", "storage": "256GB" }, "excluded": true } ],
                 "campaign": { "opensAt": "%s", "closesAt": "%s" },
                 "shipmentBatches": [ { "batchNumber": 1, "positionFrom": 1, "positionTo": null, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "2026-11-07" } ],
                 """.formatted(opensAt, opensAt.plus(Duration.ofDays(3))));

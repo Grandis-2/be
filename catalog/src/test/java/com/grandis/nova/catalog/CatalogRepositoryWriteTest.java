@@ -98,9 +98,9 @@ class CatalogRepositoryWriteTest {
     @DisplayName("축이 없는 상품의 옵션은 두 번째 저장을 DB 가 거절한다 — 조회 뒤 INSERT 경합에 기대지 않는다")
     void secondStandaloneOptionIsRejected() {
         Long productId = fixtures.product("IN_STOCK", "ACTIVE");
-        options.saveAndFlush(ProductOption.of("ONLY-1", new BigDecimal("1000"), false, OptionCombination.none(productId, "Nova 1")));
+        options.saveAndFlush(ProductOption.of("ONLY-1", new BigDecimal("1000"), OptionCombination.none(productId, "Nova 1")));
         assertThatThrownBy(() -> options.saveAndFlush(
-                ProductOption.of("ONLY-2", new BigDecimal("1000"), false, OptionCombination.none(productId, "Nova 1"))))
+                ProductOption.of("ONLY-2", new BigDecimal("1000"), OptionCombination.none(productId, "Nova 1"))))
                 .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("uq_option_combination");
         // catalog 밖에서 키 없이 넣은 행은 계속 여럿이어도 된다
         fixtures.option(productId, "ACTIVE");
