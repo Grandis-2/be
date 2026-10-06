@@ -42,6 +42,14 @@ public class PreorderCampaign extends BaseEntity {
     @Column(nullable = false)
     private long scheduleVersion;
 
+    /** 회원에게 공개한 상품인가. 원장은 catalog 이고, 대기열이 비공개 회차의 줄을 멈추도록 회차 이벤트에 싣는다. */
+    @Column(nullable = false)
+    private boolean visible;
+
+    /** catalog 가 공개 여부를 바꿀 때마다 올리는 번호. 이보다 큰 번호의 값만 반영한다(0 = catalog 값을 받기 전). */
+    @Column(nullable = false)
+    private long visibilityVersion;
+
     @Column(nullable = false)
     private long nextQueuePosition;
 
@@ -51,10 +59,13 @@ public class PreorderCampaign extends BaseEntity {
     }
 
     /** 사전예약 상품에 회차를 연다. 순번은 1번부터 시작한다. */
-    public PreorderCampaign(Long productId, Instant opensAt, Instant closesAt) {
+    public PreorderCampaign(Long productId, Instant opensAt, Instant closesAt, boolean visible,
+                            long visibilityVersion) {
         this.productId = productId;
         this.opensAt = opensAt;
         this.closesAt = closesAt;
+        this.visible = visible;
+        this.visibilityVersion = visibilityVersion;
         this.scheduleVersion = FIRST_SCHEDULE_VERSION;
         this.nextQueuePosition = FIRST_QUEUE_POSITION;
     }
@@ -77,6 +88,25 @@ public class PreorderCampaign extends BaseEntity {
         this.opensAt = opensAt;
         this.closesAt = closesAt;
         this.scheduleVersion++;
+    }
+
+    /**
+     * catalog 의 공개 여부를 반영한다. 번호가 지금보다 클 때만 쓰고, 값이 실제로 바뀌면 일정 번호도 올린다 —
+     * 대기열은 일정 번호로 새 값을 판정한다. 반드시 잠근 행에서 부른다.
+     *
+     * @return 공개 여부가 바뀌었으면 true(회차 변경 이벤트를 낼 것)
+     */
+    public boolean applyVisibility(boolean visible, long visibilityVersion) {
+        if (visibilityVersion <= this.visibilityVersion) {
+            return false;
+        }
+        this.visibilityVersion = visibilityVersion;
+        if (this.visible == visible) {
+            return false;
+        }
+        this.visible = visible;
+        this.scheduleVersion++;
+        return true;
     }
 
     /** 지금까지 발급한 순번 수(취소 행 포함). */
@@ -140,6 +170,14 @@ public class PreorderCampaign extends BaseEntity {
 
     public long getScheduleVersion() {
         return scheduleVersion;
+    }
+
+    public boolean isVisible() {
+        return visible;
+    }
+
+    public long getVisibilityVersion() {
+        return visibilityVersion;
     }
 
     public long getNextQueuePosition() {

@@ -22,6 +22,7 @@ import tools.jackson.databind.node.ObjectNode;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -169,6 +170,7 @@ class PreorderEventDispatcherTest {
         String closesAt = Instant.now().plusSeconds(90_000).truncatedTo(ChronoUnit.MICROS).toString();
         ObjectNode payload = (ObjectNode) jsonMapper.readTree("""
                 {"campaign":{"opensAt":"%s","closesAt":"%s","timezone":"Asia/Seoul"},
+                 "visible":false,"visibilityVersion":1,
                  "shipmentBatches":[
                    {"batchNumber":1,"positionFrom":1,"positionTo":3000,
                     "estimatedShipStart":"2026-11-01","estimatedShipEnd":"2026-11-07"},
@@ -178,8 +180,7 @@ class PreorderEventDispatcherTest {
 
         dispatcher.dispatch(envelope("PREORDER_PRODUCT_REGISTERED", "PRODUCT", productId, payload));
 
-        assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_campaigns WHERE product_id = ?", productId))
-                .isEqualTo(1);
+        assertThat(visibility(productId)).isEqualTo("0|1");
         assertThat(jdbcTemplate.queryForList("""
                 SELECT CONCAT_WS('|', batch_number, position_from, COALESCE(position_to, 'NULL'),
                                  estimated_ship_start, estimated_ship_end)
@@ -194,6 +195,10 @@ class PreorderEventDispatcherTest {
         assertThatThrownBy(() -> dispatcher.dispatch(envelope("PREORDER_PRODUCT_REGISTERED", "PRODUCT", another,
                 noOpensAt))).isInstanceOf(NullPointerException.class).hasMessage("opensAt");
         assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_campaigns WHERE product_id = ?", another)).isZero();
+        ObjectNode legacy = payload.deepCopy();
+        legacy.remove(List.of("visible", "visibilityVersion"));
+        dispatcher.dispatch(envelope("PREORDER_PRODUCT_REGISTERED", "PRODUCT", another, legacy));
+        assertThat(visibility(another)).as("공개 여부 칸을 모르는 catalog 는 공개 · 번호 0").isEqualTo("1|0");
     }
 
     @Test
@@ -209,6 +214,27 @@ class PreorderEventDispatcherTest {
         catalogReader.findProduct(productId);
 
         verify(catalogClient, times(2)).getProduct(productId);
+    }
+
+    @Test
+    void 상품_변경에_공개_여부가_있으면_회차에_반영하고_회차가_아직_없으면_예외로_다시_받는다() {
+        Long productId = preorders.findById(preorderId).orElseThrow().productId();
+
+        dispatcher.dispatch(envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", productId, payload()
+                .put("visible", false)
+                .put("visibilityVersion", 1)));
+
+        assertThat(visibility(productId)).isEqualTo("0|1");
+        assertThat(fixtures.count("""
+                SELECT COUNT(*) FROM preorder_outbox_events
+                 WHERE event_type = 'PREORDER_CAMPAIGN_CHANGED' AND aggregate_id = ?
+                   AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.change')) = 'VISIBILITY'
+                """, productId)).isEqualTo(1);
+        Long notRegistered = fixtures.product("PREORDER", "ACTIVE");
+        assertThatThrownBy(() -> dispatcher.dispatch(envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", notRegistered,
+                payload().put("visible", true).put("visibilityVersion", 1))))
+                .isInstanceOf(IllegalStateException.class);
+        dispatcher.dispatch(envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", notRegistered, payload()));
     }
 
     @Test
@@ -246,6 +272,13 @@ class PreorderEventDispatcherTest {
 
     private String status() {
         return jdbcTemplate.queryForObject("SELECT status FROM preorders WHERE id = ?", String.class, preorderId);
+    }
+
+    /** 공개 여부 | 공개 여부 번호 */
+    private String visibility(Long productId) {
+        return jdbcTemplate.queryForObject("""
+                SELECT CONCAT_WS('|', visible, visibility_version) FROM preorder_campaigns WHERE product_id = ?
+                """, String.class, productId);
     }
 
     private ObjectNode payload() {
