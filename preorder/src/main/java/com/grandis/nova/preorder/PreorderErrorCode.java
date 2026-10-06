@@ -11,6 +11,8 @@ public enum PreorderErrorCode implements ErrorCode {
     ADMISSION_TICKET_REQUIRED(400, "대기열 입장권이 필요합니다."),
     SHIPMENT_BATCH_INVALID(400, "차수 구간이 겹치거나 비어 있습니다."),
     ADMISSION_TICKET_INVALID(403, "대기열에 다시 입장해 주세요."),
+    /** 그 회원 · 그 모델의 마지막 접수보다 먼저 발급된 입장권. 재접수는 진입부터 다시 한다. */
+    ADMISSION_TICKET_STALE(403, "대기열에 다시 입장해 주세요."),
     MEMBER_NOT_FOUND(404, "회원을 찾을 수 없습니다."),
     PREORDER_NOT_FOUND(404, "예약을 찾을 수 없습니다."),
     PRODUCT_NOT_FOUND(404, "상품을 찾을 수 없습니다."),

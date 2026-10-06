@@ -50,3 +50,30 @@ jwt:
   audience: nova-api
   jwk-set-uri: https://member.example.com/.well-known/jwks.json
   # jwk-set-allow-http: true    # VPC 안 Cloud Map 주소(http://member.ureca.local:8080/…)를 쓰는 동안만 명시. 서비스 간 TLS 가 붙으면 지운다
+  # 발급하지 않지만 필수 값이다(없으면 기동 실패 — 실측: 없으면 @NotNull 에서 바인딩 거부). member 와 같게 둔다
+  access-token-validity: 30m
+  refresh-token-validity: 14d
+
+# 폐기 조회 실패 때 닫는 경로는 공통 기본값(/api/v1/admin/** · /api/v1/session/refresh · /api/v1/me/**)을 쓴다 — catalog 의 보호 경로는 관리자뿐이다.
+# auth.revocation-check.fail-closed-paths 를 여기 적으면 그 목록이 기본값을 대체한다(빈 목록은 기본값).
+
+# 다른 서비스로 가는 이벤트(상품 등록 → preorder 회차 · 차수, order 초기 재고)는 아웃박스(catalog_outbox_events)에 적고 커밋 뒤 보낸다.
+nova:
+  # 아웃박스 발행(common:outbox). transport 는 필수(없으면 기동 실패)이고 운영 값은 sqs 다.
+  # log 는 보내지 않고 행을 발행 완료로 표시하는 로컬 · 테스트 전용 전송이라, log-transport-allowed: true 를 함께 적어야 뜬다.
+  # 그 허용 줄은 이 예시에 적지 않는다 — 여기서 만든 운영 설정이 실수로 log 로 뜨지 않게
+  # payload 는 앱의 JsonMapper 가 쓴다. 운영 설정에 spring.jackson.* 을 두지 않는다 — 다른 서비스와의 계약인 payload 가 조용히 바뀐다
+  # (실측: default-property-inclusion=non_null 이면 상한 없는 차수의 "positionTo": null 이 빠진다)
+  outbox:
+    transport: sqs
+    # relay-interval: 10s   # 커밋 직후 발행이 실패했거나 그 사이 죽어 남은 행을 다시 보내는 주기
+    # relay-after: 1m       # 만든 지 이만큼 지난 미발행 행만 릴레이가 가져간다
+    # relay-lease: 1m       # 가져간 행을 다른 인스턴스가 건너뛰는 시간. 행마다 보내기 직전에 연장한다
+    #                       # 전송 한 번은 sqs.api-call-timeout × 2(큐 URL 조회 + 전송)이고, 리스는 그것 + 5s 보다 길어야 한다(아니면 기동 실패)
+  # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다 — preorder-events · order-events 에 보내기 권한이 필요하다
+  sqs:
+    region: ap-northeast-2
+    endpoint: http://localhost:4566
+    # queues:               # 논리 목적지 → 실제 큐 이름. 없으면 논리 이름(preorder-events · order-events)을 그대로 쓴다
+    #   preorder-events: preorder-events
+    #   order-events: order-events

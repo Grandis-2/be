@@ -76,6 +76,12 @@ public class Preorder extends BaseEntity {
     @Column(updatable = false)
     private Instant payableFrom;
 
+    @Column(updatable = false)
+    private Instant paymentStartedAt;
+
+    @Column(updatable = false)
+    private Instant reservedAt;
+
     @Column(updatable = false, length = 100)
     private String externalReference;
 
@@ -117,7 +123,7 @@ public class Preorder extends BaseEntity {
                 getProductId(), getOptionId(), getShipmentBatchId(),
                 getQueuePosition(), getAdmissionTicketId(), getIdempotencyKey(),
                 getProductTitleSnapshot(), getOptionTitleSnapshot(),
-                getUnitPriceSnapshot(), getStatus(), getPayableFrom(),
+                getUnitPriceSnapshot(), getStatus(), getPayableFrom(), getPaymentStartedAt(), getReservedAt(),
                 getExternalReference(), getInternalNote(), getEventSequence(),
                 getCreatedAt(), getUpdatedAt());
     }
@@ -176,6 +182,14 @@ public class Preorder extends BaseEntity {
 
     public Instant getPayableFrom() {
         return payableFrom;
+    }
+
+    public Instant getPaymentStartedAt() {
+        return paymentStartedAt;
+    }
+
+    public Instant getReservedAt() {
+        return reservedAt;
     }
 
     public String getExternalReference() {

@@ -1,0 +1,155 @@
+# catalog → preorder · order 이벤트 계약
+
+양쪽 구현의 기준이다. catalog 가 보내고(공통 모듈 `common:outbox` · `common:sqs` — 표와 이벤트 종류는 `CatalogOutboxConfig`), preorder 와 order 가 받는다. 문서와 어긋나는 쪽이 고친다.
+
+관리자 상품 등록(`POST /api/v1/admin/products`)은 catalog 트랜잭션 하나에서 끝난다. 다른 서비스가 자기 표에 만들 값(사전예약 회차 · 배송 차수, 일반 상품의 초기 재고)은 같은 트랜잭션에서 catalog 아웃박스(`catalog_outbox_events`)에 적고, 커밋 뒤 SQS 로 보낸다. 받는 쪽이 자기 표에 행을 만들어야 그 상품이 회원에게 보인다(판매 방식별 준비, 아래).
+
+## 전달
+
+| 이벤트 | 큐 | 받는 쪽 |
+| --- | --- | --- |
+| `PREORDER_PRODUCT_REGISTERED` | `preorder-events` | preorder — 회차 · 배송 차수를 만든다 |
+| `IN_STOCK_PRODUCT_REGISTERED` | `order-events` | order — 옵션별 초기 재고를 만든다 |
+| `PREORDER_CAMPAIGN_CANCELED` | `preorder-events` | preorder — 회차를 지금 마감하고 진행 중 예약의 취소를 시작한다 |
+| `PREORDER_PRODUCT_CHANGED` | `preorder-events` | preorder — 모든 인스턴스의 접수용 상품 사본(캐시)을 비운다 |
+
+- **최소 한 번.** 커밋 직후 한 번 보내고, 못 보냈으면 릴레이가 다시 보낸다. 같은 메시지가 두 번 갈 수 있다 — 받는 쪽은 두 번 받아도 결과가 같아야 한다.
+- **순서 보장 없음.** 회차 취소는 회차 행(등록 이벤트를 preorder 가 처리한 결과)이 있어야 보내므로 등록과 순서가 뒤집히지 않는다. 상품 변경은 여러 번 갈 수 있고 등록보다 먼저 닿을 수도 있다. 받는 쪽은 캐시를 비우기만 하므로 이 이벤트의 처리 결과는 순서와 상관없다. 다만 등록 처리 전에 누가 그 상품을 조회하면 preorder 는 `registrationCompleted=false` 를 캐시하고, 등록 이벤트로 회차 행을 만든 뒤에도 그 값을 비우지 않는다(`CampaignRegistrar`) — 상품 변경이 등록보다 먼저 와서 비운 뒤의 조회도 마찬가지다. 그 값은 다음 상품 변경 이벤트나 캐시 갱신(최대 30분)으로만 바뀐다(`contracts/preorder-internal.md` "캐시").
+- **메시지 속성.** `eventType` · `eventId`(문자열). preorder · order 가 보내는 메시지와 같다.
+- **배포 순서.** 받는 쪽이 모르는 종류는 처리에 실패해 재시도 뒤 DLQ 로 간다. 그래서 받는 쪽이 먼저 나간다 — `PREORDER_PRODUCT_CHANGED` 는 preorder NV-281 뒤의 catalog 가 보낸다.
+
+## 봉투
+
+preorder · order 의 `EventEnvelope` 와 같은 모양이다.
+
+```json
+{
+  "eventId": "6f1c2a7e-0d3b-4c8f-9a51-2b7d8e4f0c19",
+  "eventType": "IN_STOCK_PRODUCT_REGISTERED",
+  "aggregateType": "PRODUCT",
+  "aggregateId": 42,
+  "occurredAt": "2026-10-02T03:00:00.123456Z",
+  "payload": { }
+}
+```
+
+| 칸 | 뜻 |
+| --- | --- |
+| `eventId` | UUID. 같은 메시지가 두 번 오면 같은 값이다 |
+| `aggregateType` | `"PRODUCT"` (대문자 — preorder 의 `"PREORDER"` 와 같은 표기) |
+| `aggregateId` | 상품 id. **payload 에는 상품 id 를 다시 넣지 않는다** — 둘이 어긋날 수 있다. 예외는 `PREORDER_CAMPAIGN_CANCELED` 하나(아래) |
+| `occurredAt` | catalog 가 아웃박스에 적은 시각(UTC) |
+
+**payload 에 값을 싣는 이유.** preorder · order 의 다른 이벤트는 식별자만 싣고 받는 쪽이 원장을 다시 읽는다. 등록 이벤트 둘은 그렇게 할 수 없다 — 회차 · 차수 · 초기 재고는 catalog 표 어디에도 없고(받는 쪽 표에 들어갈 값이다), 큐를 받는 스레드에는 catalog 내부 API 를 부를 사용자 토큰도 없다. 그래서 값을 payload 에 싣고, catalog 는 아웃박스 행을 바꾸지 않는다(같은 내용을 다시 보낸다).
+
+## `PREORDER_PRODUCT_REGISTERED` → preorder
+
+```json
+"payload": {
+  "campaign": { "opensAt": "2026-10-03T03:00:00.123456Z", "closesAt": "2026-10-06T03:00:00Z" },
+  "shipmentBatches": [
+    { "batchNumber": 1, "positionFrom": 1, "positionTo": 100, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "2026-11-07" },
+    { "batchNumber": 2, "positionFrom": 101, "positionTo": null, "estimatedShipStart": "2026-11-08", "estimatedShipEnd": "2026-11-14" }
+  ]
+}
+```
+
+| 칸 | 뜻 |
+| --- | --- |
+| `campaign.opensAt` · `closesAt` | 회차 시각(UTC ISO-8601). **마이크로초로 잘라 싣는다** — preorder 는 `datetime(6)` 에 저장한다. 마감은 9999-12-31 을 넘지 않고, 잘린 값으로도 마감 > 오픈이다(catalog 가 등록 때 막는다 — 같은 마이크로초 안의 두 시각은 잘리면 같아진다) |
+| `shipmentBatches` | 배송 차수 전체, 관리자 요청 순서 그대로. `positionTo` 가 `null` 이면 상한 없는 마지막 차수. 날짜는 `yyyy-MM-dd`, 1000-01-01 ~ 9999-12-31(MySQL 문서의 date 지원 범위). **최대 100개** — catalog 가 등록 때 막는다(SQS 한 메시지에 담기게, 2026-10-04 결정) |
+
+**받는 쪽이 할 일.**
+
+1. 회차와 차수를 **한 트랜잭션에** 만든다. 따로 커밋하면 회차만 있고 차수가 없는 순간에 그 상품이 노출된다(catalog 는 회차 행으로 준비를 판정하고 `shipment_batches` 는 읽지 않는다).
+2. **이미 회차가 있으면 아무것도 바꾸지 않는다(생성 전용).** 같은 이벤트를 두 번 받거나, 그사이 관리자가 회차 API(`PUT …/preorder-campaign` · `…/shipment-batches`)로 고친 값을 덮지 않기 위해서다.
+3. catalog 내부 API 로 상품을 다시 확인하지 않는다. 이 이벤트는 catalog 가 사전예약 상품에만 보낸다. 큐 스레드에는 넘길 토큰도 없다.
+4. 차수 규칙(`ShipmentBatchPlan`: 1번부터 연속 · 첫 시작 1 · 이어짐 · 상한 없는 차수 하나)이나 "오픈은 미래" 에 어긋나면 처리를 실패시킨다 — 재시도 뒤 DLQ 로 간다. catalog 는 등록 때 같은 차수 규칙으로 먼저 걸러 400 을 돌려준다(`ProductRegistrationValidator`) — 그래서 차수 규칙(`ShipmentBatchPlan`) 위반으로 DLQ 로 가는 것은 두 규칙이 어긋났을 때뿐이다(DB 저장 오류처럼 규칙 밖의 이유는 여기 들지 않는다). 오픈 시각은 catalog 가 더 엄격하다(지금 + `catalog.registration.min-open-lead` 뒤, 기본 30분). DLQ 로 간 상품은 회원에게 보이지 않고, 관리자가 회차 API 로 직접 넣으면 보인다(회차 API 는 회차 · 차수를 따로 저장하므로 둘 다 넣는다).
+
+## `IN_STOCK_PRODUCT_REGISTERED` → order
+
+```json
+"payload": {
+  "items": [ { "optionId": 101, "stockTotal": 5 }, { "optionId": 102, "stockTotal": 0 } ]
+}
+```
+
+| 칸 | 뜻 |
+| --- | --- |
+| `items` | 등록한 옵션 전부의 초기 재고(일반 상품은 옵션마다 필수, 0 허용). order 의 재고 초기화 API(`POST /api/v1/admin/products/{id}/stock`) 본문의 `items` 와 같은 모양 |
+
+**받는 쪽이 할 일.**
+
+1. 재고 초기화와 같은 규칙으로 처리한다 — `AdminStockService.initialize` 를 그대로 부르면 쓰는 길이 하나로 끝난다. 한 트랜잭션에서 모두 되거나 모두 안 된다.
+2. **행이 없는 옵션만 만들고 있는 옵션은 그대로 둔다(생성 전용).** 같은 이벤트를 두 번 받거나, 그사이 관리자가 재고 API 로 고친 값을 덮지 않는다.
+3. 옵션이 그 상품의 것인지, 상품이 일반 판매인지 확인한다. catalog 에는 옵션 삭제 경로가 없으므로(판매 상태만 바뀐다) 그 상품의 옵션이 아닌 값은 계약 오류다 — 건너뛰지 말고 실패시켜 DLQ 로 보낸다.
+
+## `PREORDER_CAMPAIGN_CANCELED` → preorder
+
+관리자가 사전예약 **오픈 뒤**(회차 `opens_at` ≤ 지금) `PATCH /api/v1/admin/products/{id}/sale-status` 에 `{ "status": "PAUSED", "reason": "…" }` 를 보내면 회차 취소로 접수한다(202). catalog 는 같은 트랜잭션에서 상품을 판매 중지로 두고 취소 시각(`products.campaign_canceled_at`)을 남기고 이 이벤트를 적는다. 되돌릴 수 없다.
+
+```json
+"payload": { "productId": 42, "reason": "회차 운영 취소" }
+```
+
+| 칸 | 뜻 |
+| --- | --- |
+| `productId` | 상품 id — **이 이벤트만 payload 에 싣는다.** preorder 가 이 이벤트를 먼저 정의하고 payload 의 `productId` 로 읽는다. 봉투의 `aggregateId` 와 같은 값이다 |
+| `reason` | 관리자가 적은 취소 사유 — 앞뒤 공백을 뺀 값, 500자 이하(Java 문자열 길이 · UTF-16 단위 — 이모지는 2), 비지 않음. 빈 문자열 · 공백뿐이면 사유가 없는 것으로 보고 400. preorder 가 같은 단위 500 으로 자르므로 이 길이 안이면 잘리지 않는다 |
+
+- **한 번만 보낸다.** 이미 취소된 상품에 다시 보내면 catalog 는 202 를 주되 이벤트를 다시 적지 않는다(취소 시각으로 판정, 상품 행 잠금으로 줄 선다). 전달은 최소 한 번이라 같은 메시지가 두 번 갈 수는 있다.
+- **회차 행이 있을 때만 보낸다.** 오픈 판정이 회차 행으로 하므로, 등록 이벤트를 처리하기 전에 취소가 먼저 가는 일은 없다.
+- 오픈 전에 판매 중지로 둔 채 오픈을 넘긴 상품은 이 이벤트를 보내지 않는다 — 회차 취소가 아니다(2026-10-04 결정). 관리자가 오픈 뒤 사유와 함께 판매 중지를 보내면 그때 보낸다.
+
+**받는 쪽이 할 일**(preorder 에 이미 있다 — `CampaignCancelService`): 회차를 지금 마감하고, 진행 중 예약을 작은 트랜잭션 단위로 취소 시작한다. 같은 이벤트를 다시 받으면 남은 예약만 이어서 처리한다.
+
+## `PREORDER_PRODUCT_CHANGED` → preorder
+
+관리자가 **사전예약 상품**을 고치면 catalog 는 그 수정과 같은 트랜잭션에서 이 이벤트를 적는다. 수정이 되돌려지면(400 · 409) 이벤트도 남지 않는다.
+
+```json
+"payload": { }
+```
+
+payload 는 빈 객체다. 무엇이 바뀌었는지는 싣지 않는다 — preorder 는 캐시를 비우고 다음 조회에서 내부 조회 API(`GET /internal/products/{id}/options`)로 다시 받는다. 상품 id 는 봉투의 `aggregateId` 다.
+
+보내는 수정(`/api/v1/admin/products/{id}` 아래):
+
+| 수정 | 보내는가 |
+| --- | --- |
+| `PATCH` 상품 정보 · 기본 가격 · 보증 | 수정이 성공하면 보낸다 |
+| `POST option-values` · `PATCH option-values/{valueId}` | 수정이 성공하면 보낸다 |
+| `POST variants` · `PATCH variants/{variantId}` | 수정이 성공하면 보낸다 |
+| `PATCH sale-status` (오픈 전) | 상태가 바뀌었을 때만 — 같은 상태를 다시 보내면 보내지 않는다 |
+| `PATCH visibility` | 공개 여부가 바뀌었을 때만 |
+| `PATCH sale-status` (오픈 뒤 판매 중지 = 회차 취소) | 보내지 않는다 — `PREORDER_CAMPAIGN_CANCELED` 를 받은 preorder 가 캐시를 비운다 |
+
+- 일반 판매 상품은 보내지 않는다 — preorder 가 읽지 않는다.
+- 내부 조회 API 의 응답이 실제로 달라졌는지는 따지지 않는다(설명 · 태그 · 보증만 고쳐도 보낸다). 받는 쪽은 비우기만 하므로 더 보내도 다시 받는 조회 한 번이 늘 뿐이다.
+- 사전예약은 오픈 3분 전부터 공개 여부 말고는 못 고치므로(409), 그때부터 이 이벤트를 보내는 수정은 공개 여부 전환뿐이다.
+
+**받는 쪽이 할 일**(preorder 에 이미 있다 — `PreorderEventDispatcher` → `CatalogCacheInvalidation.evictEverywhere`): 받은 인스턴스가 자기 캐시를 비우고 Redis 채널로 다른 인스턴스에 알린다. 같은 이벤트를 두 번 받아도 결과가 같다.
+
+## 판매 방식별 준비 — catalog 가 읽는 결과
+
+catalog 는 완료 이벤트를 돌려받지 않는다. 받는 쪽이 만든 행을 읽어 등록이 끝났는지 판정한다(`ProductListingQueryRepository.isReady` — catalog 가 다른 서비스 표를 읽는 유일한 자리).
+
+| 판매 방식 | 준비 | 회원 노출 |
+| --- | --- | --- |
+| 사전예약 | `preorder_campaigns` 에 그 상품 행이 있다 | 준비 · 공개 · 판매 중일 때만 목록 · 상세에 보인다 |
+| 일반 | `option_inventories` 에 그 상품 옵션의 행이 하나라도 있다(초기화는 옵션 전부를 한 트랜잭션에 만든다) | 같음. 재고 0 행은 품절로 보인다 |
+
+이 판정이 관리자 목록 · 상세 · 등록 상태 조회(`registration.completed`)와 내부 조회 API 의 `registrationCompleted` 다.
+
+**준비가 안 될 때 원인은 둘이다.** catalog 가 아직 보내지 못했거나, 받는 쪽이 거절했다(DLQ).
+- catalog 쪽: `catalog_outbox_events.published_at IS NULL` 인 행이 남는다. 보낼 때마다 실패하면 `아웃박스 발행 실패 — 릴레이가 다시 보낸다 outboxEventId=… eventType=…` 경고 로그가 남는다(커밋 직후 발행 · 릴레이 모두 — catalog 에는 지표 수집이 없어 미발행 건수 지표는 없다). 큐 보내기 권한(IAM)이 빠졌거나 큐가 없으면 모든 등록이 여기서 멈춘다.
+- 받는 쪽: 발행은 됐는데(`published_at` 있음) 행이 없다 — 그 서비스의 DLQ 를 본다.
+
+## 보관
+
+발행된 행을 지우는 규칙은 아직 없다. 릴레이는 `(published_at, publish_attempts, id)` 인덱스로 미발행 행만, 정렬 없이 가져갈 만큼만 읽는다(발행 20만 · 미발행 300 · 한 번에 100건에서 인덱스로 100행만 읽고 정렬 없음, MySQL 8.4.11 · 2026-10-03 실측 — 같은 데이터에서 `(published_at, id)` 는 미발행 300행을 모두 읽어 정렬했다). 보관 기간은 운영 전에 정한다.
+
+## 바꿀 때
+
+- payload 칸을 더하는 것은 받는 쪽이 모르는 칸을 무시하는 한 호환된다. 이름을 바꾸거나 빼는 것은 받는 쪽과 함께 바꾼다.
+- 이벤트 종류 이름 · 큐 이름은 `OutboundEventType` 이 정본이다.

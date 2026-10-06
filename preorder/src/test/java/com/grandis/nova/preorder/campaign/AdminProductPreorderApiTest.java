@@ -241,6 +241,24 @@ class AdminProductPreorderApiTest {
     }
 
     @Test
+    void 판매_중지_상품에도_일정을_잡을_수_있다() throws Exception {
+        Long productId = fixtures.product("PREORDER", "PAUSED");
+        CatalogStubs.stubProduct(catalogClient, productId, "PREORDER", "PAUSED", CatalogStubs.activeOption(1L));
+        Instant opensAt = Instant.now().plusSeconds(3600);
+
+        putCampaign(productId, opensAt, opensAt.plusSeconds(3600)).andExpect(status().isOk());
+    }
+
+    @Test
+    void 공개_전이고_등록이_끝나지_않은_상품에도_일정을_잡을_수_있다() throws Exception {
+        Long productId = fixtures.product("PREORDER", "ACTIVE");
+        CatalogStubs.stubPreorderProduct(catalogClient, productId, false, false, CatalogStubs.activeOption(1L));
+        Instant opensAt = Instant.now().plusSeconds(3600);
+
+        putCampaign(productId, opensAt, opensAt.plusSeconds(3600)).andExpect(status().isOk());
+    }
+
+    @Test
     void 사용자_토큰은_403_로그인_없으면_401() throws Exception {
         Long productId = preorderProduct();
 

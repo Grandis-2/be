@@ -1,6 +1,5 @@
 package com.grandis.nova.preorder.cancel;
 
-import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.common.web.ApiResponse;
@@ -32,7 +31,6 @@ import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -86,7 +84,7 @@ class PreorderCancelApiTest {
                 .andExpect(jsonPath("$.data.status").value("CANCELING"))
                 .andExpect(jsonPath("$.data.version").value(2));
 
-        verify(orderClient).getCancelability(accepted.preorder().id(), BearerTokens.value(accessToken));
+        verify(orderClient).getCancelability(accepted.preorder().id());
         assertThat(jobStatus("REGISTER")).isEqualTo("CANCELED");
         Map<String, Object> outbox = jdbcTemplate.queryForMap("""
                 SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.reason')) AS reason,
@@ -106,7 +104,7 @@ class PreorderCancelApiTest {
                 .andExpect(jsonPath("$.data.status").value("CANCELING"))
                 .andExpect(jsonPath("$.data.version").value(2));
 
-        verify(orderClient).getCancelability(eq(accepted.preorder().id()), any());
+        verify(orderClient).getCancelability(accepted.preorder().id());
         assertThat(fixtures.count("""
                 SELECT COUNT(*) FROM preorder_outbox_events WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
                 """, accepted.preorder().id())).isEqualTo(1);
@@ -147,14 +145,14 @@ class PreorderCancelApiTest {
 
     @Test
     void order_가_답하지_않으면_한_번_다시_묻고_503_과_Retry_After_이며_상태는_그대로다() throws Exception {
-        given(orderClient.getCancelability(any(), any())).willThrow(new ResourceAccessException("timeout"));
+        given(orderClient.getCancelability(any())).willThrow(new ResourceAccessException("timeout"));
 
         cancel(customerId)
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(header().string(HttpHeaders.RETRY_AFTER, "1"))
                 .andExpect(jsonPath("$.error.code").value("DEPENDENCY_UNAVAILABLE"));
 
-        verify(orderClient, times(2)).getCancelability(eq(accepted.preorder().id()), any());
+        verify(orderClient, times(2)).getCancelability(accepted.preorder().id());
         assertThat(preorderStatus()).isEqualTo("PENDING_SYNC");
     }
 
@@ -164,7 +162,7 @@ class PreorderCancelApiTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("PREORDER_NOT_FOUND"));
 
-        verify(orderClient, never()).getCancelability(any(), any());
+        verify(orderClient, never()).getCancelability(any());
     }
 
     @Test
@@ -202,7 +200,7 @@ class PreorderCancelApiTest {
     }
 
     private void orderAnswers(boolean cancelable, String orderStatus) {
-        given(orderClient.getCancelability(eq(accepted.preorder().id()), any())).willReturn(
+        given(orderClient.getCancelability(accepted.preorder().id())).willReturn(
                 ApiResponse.ok(new Cancelability(orderStatus, cancelable, orderStatus)));
     }
 

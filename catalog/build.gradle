@@ -3,8 +3,39 @@ apply plugin: 'org.springframework.boot'
 dependencies {
     implementation project(':common:types')
     implementation project(':common:web')
+    // 액세스 토큰 검증(JWKS · Bearer) · 401/403 봉투 · 폐기 조회(common:redis 가 따라온다)
+    implementation project(':common:security')
+    // 저장 해상도(마이크로초) 시계 storageClock(@Primary) · JPA Auditing 을 자동설정으로 켠다. @EnableJpaAuditing 을 따로 켜지 않는다.
+    implementation project(':common:jpa')
+    // 트랜잭셔널 아웃박스(기록 · 커밋 직후 발행 · 리스 릴레이)를 자동설정으로 켠다. 표 · 종류는 CatalogOutboxConfig 가 준다.
+    implementation project(':common:outbox')
+    // SQS 클라이언트 · 아웃박스 SQS 전송. AWS SDK 와 그 버전도 여기서 온다.
+    // 운영 클래스패스에 필요하다 — 시험은 아래 testFixtures 가 같은 모듈을 들여와 이 줄이 빠져도 통과하고, 운영에서만 transport=sqs 기동이 실패한다.
+    implementation project(':common:sqs')
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-security'
     runtimeOnly 'com.mysql:mysql-connector-j'
+
+    // DB 동작(UNIQUE · 복합 FK · 생성 칼럼 · CHECK)은 MySQL 로만 검증한다. H2 는 쓰지 않는다.
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    testImplementation 'org.testcontainers:testcontainers-mysql'
+    // SQS 발행은 로컬 AWS 에뮬레이터 Floci 로 검증한다. 컨테이너 · 큐 도우미는 common:sqs 와 한 벌이다.
+    testImplementation testFixtures(project(':common:sqs'))
+    testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+    testImplementation 'org.springframework.security:spring-security-test'
+    // 테스트 DB 는 Flyway 마이그레이션(스키마 정본)으로 만든다. 서비스는 Flyway 를 실행하지 않으므로 테스트 의존으로만 둔다.
+    testImplementation 'org.springframework.boot:spring-boot-starter-flyway'
+    testRuntimeOnly 'org.flywaydb:flyway-mysql'
+}
+
+tasks.named('test') {
+    // 마이그레이션 디렉터리를 테스트 입력으로 선언한다. 선언하지 않으면 SQL 만 바뀐 뒤 test 가 UP-TO-DATE 로 건너뛴다.
+    def migrations = rootProject.file('flyway-project/migrations')
+    inputs.dir(migrations).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName('migrations')
+    // 모듈 작업 디렉터리에 기대지 않고 절대 경로로 넘긴다.
+    jvmArgumentProviders.add({ ["-Dnova.migrations-path=${migrations.absolutePath}".toString()] } as CommandLineArgumentProvider)
+    // UTC 가 아닌 시간대로 고정한다. CI(ubuntu, UTC)에서는 Timestamp 로 시각을 넘기는 실수가 변환 없이 통과해 안 드러난다(실측).
+    systemProperty 'user.timezone', 'Asia/Seoul'
 }

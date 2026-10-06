@@ -13,7 +13,8 @@ record AdminPreorderSummaryResponse(
 
     public static AdminPreorderSummaryResponse from(PreorderView.AdminSummary view) {
         return new AdminPreorderSummaryResponse(
-                PreorderSummaryResponse.from(new PreorderView.Summary(view.preorder(), view.shipmentBatch())),
+                PreorderSummaryResponse.from(
+                        new PreorderView.Summary(view.preorder(), view.shipmentBatch(), view.displayStatus())),
                 view.preorder().customerId(), view.registerJobStatus());
     }
 }
