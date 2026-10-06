@@ -1,5 +1,7 @@
 package com.grandis.nova.order.event;
 
+import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.client.payment.DeclineReason;
 import com.grandis.nova.order.event.OrderEventDispatcher.Handling;
 import com.grandis.nova.order.order.cancel.CancelReason;
@@ -12,13 +14,25 @@ import com.grandis.nova.order.order.pay.PaymentResults;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.pay.PaymentSettlement;
 import com.grandis.nova.order.outbox.PreorderOrderSettled;
+import com.grandis.nova.order.stock.admin.AdminStockService;
+import com.grandis.nova.order.stock.api.StockRequest;
+import com.grandis.nova.order.stock.domain.model.StockSetting;
+import jakarta.validation.Validation;
+import jakarta.validation.Validator;
+import jakarta.validation.ValidatorFactory;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.math.BigDecimal;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -28,18 +42,23 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
-/** 큐 메시지 본문(공통 봉투)을 종류별 처리로 보내는지. 본문은 preorder · payment 가 보내는 모양 그대로다. */
+/** 큐 메시지 본문(공통 봉투)을 종류별 처리로 보내는지. 본문은 preorder · payment · catalog 가 보내는 모양 그대로다. */
 class OrderEventDispatcherTest {
 
     static final long PREORDER_INTERNAL_ID = 50231L;
     static final String PREORDER_UUID = "9f1c2d3e-0000-4000-8000-000000000001";
     static final long ORDER_ID = 7702L;
     static final String PROVIDER_ORDER_ID = "5a1b2c3d-0000-4000-8000-000000000003";
+    static final long PRODUCT_ID = 42L;
+
+    static final ValidatorFactory VALIDATORS = Validation.buildDefaultValidatorFactory();
 
     final JsonMapper jsonMapper = JsonMapper.builder().build();
+    final Validator validator = VALIDATORS.getValidator();
     SettlePreorderCancelService settlement;
     PaymentResults paymentResults;
     RefundResults refundResults;
+    AdminStockService stockService;
     OrderEventDispatcher dispatcher;
 
     @BeforeEach
@@ -47,7 +66,14 @@ class OrderEventDispatcherTest {
         settlement = mock(SettlePreorderCancelService.class);
         paymentResults = mock(PaymentResults.class);
         refundResults = mock(RefundResults.class);
-        dispatcher = new OrderEventDispatcher(settlement, paymentResults, refundResults, jsonMapper);
+        stockService = mock(AdminStockService.class);
+        dispatcher = new OrderEventDispatcher(settlement, paymentResults, refundResults, stockService, jsonMapper,
+                validator);
+    }
+
+    @AfterAll
+    static void closeValidators() {
+        VALIDATORS.close();
     }
 
     @Test
@@ -106,7 +132,7 @@ class OrderEventDispatcherTest {
         String body = envelope("SOMETHING_ELSE", "PREORDER", PREORDER_INTERNAL_ID, cancelRequested());
 
         assertThatThrownBy(() -> dispatcher.dispatch(body)).isInstanceOf(IllegalArgumentException.class);
-        verifyNoInteractions(settlement);
+        verifyNoInteractions(settlement, stockService);
     }
 
     /** 다른 aggregate 의 id 를 예약 내부 id 로 믿으면 엉뚱한 주문을 정리한다. */
@@ -159,6 +185,112 @@ class OrderEventDispatcherTest {
         assertThatThrownBy(() -> dispatcher.dispatch(envelope("ORDER_PAYMENT_SETTLED", "ORDER", ORDER_ID, noAttempt)))
                 .isInstanceOf(JacksonException.class);
         verifyNoInteractions(paymentResults);
+    }
+
+    // ── IN_STOCK_PRODUCT_REGISTERED ──
+    // payload 는 손으로 노드를 만들지 않고 원문 JSON 으로 넣는다. 실제 메시지처럼 문자열 → 봉투 → JsonNode → StockRequest 를
+    // 거쳐야, 12.5 · 1e3 이 어떤 노드로 들어와 정수 전용 칸을 만나는지까지 시험된다.
+
+    @Test
+    void 등록_이벤트는_봉투의_aggregateId_상품에_옵션별_초기_재고를_만든다() {
+        Handling handling = dispatcher.dispatch(registered("PRODUCT", "42", """
+                {"items":[{"optionId":101,"stockTotal":5},{"optionId":102,"stockTotal":0}]}"""));
+
+        verify(stockService).initialize(PRODUCT_ID, List.of(new StockSetting(101L, 5), new StockSetting(102L, 0)));
+        assertThat(handling).isEqualTo(Handling.DONE);
+    }
+
+    /** 재고 초기화의 실패는 지연 재발행(DEFER)으로 바뀌지 않는다 — 영구 실패가 늦춰 다시 받기로 끝없이 돌지 않고 DLQ 로 간다. */
+    @Test
+    void 재고_초기화가_실패하면_DEFER_가_아니라_예외로_올린다() {
+        given(stockService.initialize(any(), any())).willThrow(new BusinessException(OrderErrorCode.PRODUCT_NOT_FOUND));
+
+        assertThatThrownBy(() -> dispatcher.dispatch(registered("PRODUCT", "42", """
+                {"items":[{"optionId":101,"stockTotal":5}]}"""))).isInstanceOf(BusinessException.class);
+    }
+
+    /** 다른 aggregate 의 id 를 상품 id 로 믿으면 엉뚱한 상품에 재고를 만든다. */
+    @ParameterizedTest
+    @ValueSource(strings = {"\"PREORDER\",42", "\"product\",42", "null,42", "\"PRODUCT\",null"})
+    void 상품이_아닌_aggregate_이거나_aggregateId_가_없으면_예외로_올린다(String typeAndId) {
+        String[] parts = typeAndId.split(",");
+        String body = """
+                {"eventId":"0b6f3c9e-0000-4000-8000-000000000003","eventType":"IN_STOCK_PRODUCT_REGISTERED",
+                 "aggregateType":%s,"aggregateId":%s,"occurredAt":"2026-10-02T03:00:00.123456Z",
+                 "payload":{"items":[{"optionId":101,"stockTotal":5}]}}""".formatted(parts[0], parts[1]);
+
+        assertThatThrownBy(() -> dispatcher.dispatch(body)).isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(stockService);
+    }
+
+    /** 정수 칸에 정수 토큰이 아닌 것. 12.5 가 12 번 옵션으로 잘려 들어가던 NV-217 버그가 이 경로로 되살아나지 않는다. */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "{\"optionId\":12.5,\"stockTotal\":5}",
+            "{\"optionId\":12.0,\"stockTotal\":5}",
+            "{\"optionId\":1e3,\"stockTotal\":5}",
+            "{\"optionId\":\"12\",\"stockTotal\":5}",
+            "{\"optionId\":true,\"stockTotal\":5}",
+            "{\"optionId\":12,\"stockTotal\":10.7}",
+            "{\"optionId\":12,\"stockTotal\":1e3}",
+            "{\"optionId\":12,\"stockTotal\":\"5\"}",
+            "{\"optionId\":12,\"stockTotal\":true}",
+            "{\"optionId\":12,\"stockTotal\":2147483648}"
+    })
+    void 정수_칸에_정수가_아닌_값이_오면_잘라_넣지_않고_예외로_올린다(String item) {
+        String body = registered("PRODUCT", "42", "{\"items\":[" + item + "]}");
+
+        assertThatThrownBy(() -> dispatcher.dispatch(body)).isInstanceOf(JacksonException.class);
+        verifyNoInteractions(stockService);
+    }
+
+    /** 재고 API 와 같은 검증(StockRequest)이 이벤트에도 걸린다. */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "{}",
+            "{\"items\":null}",
+            "{\"items\":[]}",
+            "{\"items\":[null]}",
+            "{\"items\":[{\"optionId\":null,\"stockTotal\":5}]}",
+            "{\"items\":[{\"optionId\":12,\"stockTotal\":null}]}",
+            "{\"items\":[{\"stockTotal\":5}]}",
+            "{\"items\":[{\"optionId\":12}]}",
+            "{\"items\":[{\"optionId\":0,\"stockTotal\":5}]}",
+            "{\"items\":[{\"optionId\":-12,\"stockTotal\":5}]}",
+            "{\"items\":[{\"optionId\":12,\"stockTotal\":-1}]}"
+    })
+    void 재고_API_와_같은_검증에_걸리면_예외로_올린다(String payload) {
+        String body = registered("PRODUCT", "42", payload);
+
+        assertThatThrownBy(() -> dispatcher.dispatch(body)).isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(stockService);
+    }
+
+    @Test
+    void 옵션이_상한보다_많거나_payload_가_없으면_예외로_올린다() {
+        String tooMany = IntStream.rangeClosed(1, StockRequest.MAX_ITEMS + 1)
+                .mapToObj(id -> "{\"optionId\":%d,\"stockTotal\":1}".formatted(id))
+                .collect(Collectors.joining(",", "{\"items\":[", "]}"));
+
+        assertThatThrownBy(() -> dispatcher.dispatch(registered("PRODUCT", "42", tooMany)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> dispatcher.dispatch(registered("PRODUCT", "42", "null")))
+                .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(stockService);
+    }
+
+    @Test
+    void payload_키가_없거나_객체가_아니면_예외로_올린다() {
+        String withoutPayload = """
+                {"eventId":"0b6f3c9e-0000-4000-8000-000000000003","eventType":"IN_STOCK_PRODUCT_REGISTERED",
+                 "aggregateType":"PRODUCT","aggregateId":42,"occurredAt":"2026-10-02T03:00:00.123456Z"}""";
+
+        assertThatThrownBy(() -> dispatcher.dispatch(withoutPayload)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> dispatcher.dispatch(registered("PRODUCT", "42",
+                "[{\"optionId\":101,\"stockTotal\":5}]"))).isInstanceOf(JacksonException.class);
+        assertThatThrownBy(() -> dispatcher.dispatch(registered("PRODUCT", "42", "\"items\"")))
+                .isInstanceOf(JacksonException.class);
+        verifyNoInteractions(stockService);
     }
 
     /**
@@ -216,5 +348,13 @@ class OrderEventDispatcherTest {
                 .put("customerId", 1024L)
                 .put("reason", "USER")
                 .put("cancelSequence", 3L);
+    }
+
+    /** catalog 가 보내는 모양 그대로. payload 는 원문 JSON 이다. */
+    private static String registered(String aggregateType, String aggregateId, String payload) {
+        return """
+                {"eventId":"0b6f3c9e-0000-4000-8000-000000000003","eventType":"IN_STOCK_PRODUCT_REGISTERED",
+                 "aggregateType":"%s","aggregateId":%s,"occurredAt":"2026-10-02T03:00:00.123456Z",
+                 "payload":%s}""".formatted(aggregateType, aggregateId, payload);
     }
 }

@@ -2,6 +2,7 @@ package com.grandis.nova.order.stock.admin;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.web.ApiError;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.stock.StockLedger;
 import com.grandis.nova.order.stock.domain.enums.SaleMode;
@@ -157,6 +158,24 @@ class AdminStockServiceTest {
                 .isInstanceOfSatisfying(BusinessException.class,
                         e -> assertThat(e.errorCode()).isEqualTo(OrderErrorCode.PRODUCT_NOT_FOUND));
 
+        verify(ledger, never()).set(anyList());
+    }
+
+    // 원장까지 가면 PK 중복이 동시 생성으로 오인돼 다시 하다 503 이 된다. 트랜잭션을 열기 전에 400 으로 끊는다.
+    @Test
+    void sameOptionTwiceIsRejectedBeforeAnyTransaction() {
+        List<StockSetting> twice = List.of(new StockSetting(11L, 5), new StockSetting(12L, 1), new StockSetting(11L, 3));
+
+        assertThatThrownBy(() -> service.initialize(PRODUCT_ID, twice))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(CommonErrorCode.VALIDATION_FAILED);
+                    assertThat(e.details()).isEqualTo(Map.of("violations",
+                            List.of(new ApiError.Violation("items[2].optionId", "같은 옵션이 두 번 있습니다."))));
+                });
+        assertThatThrownBy(() -> service.set(PRODUCT_ID, twice)).isInstanceOf(BusinessException.class);
+
+        verify(transactionManager, never()).getTransaction(any());
+        verify(ledger, never()).initialize(anyList());
         verify(ledger, never()).set(anyList());
     }
 

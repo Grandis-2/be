@@ -1,6 +1,6 @@
 package com.grandis.nova.order.stock.domain.model;
 
-/** 옵션 하나에 줄 총량. 관리자 입력은 HTTP 경계에서 먼저 400 으로 거른다 — 여기서 나는 예외는 호출 코드의 잘못이다. */
+/** 옵션 하나에 줄 총량. 입력은 받는 쪽(관리자 API · 등록 이벤트)이 먼저 거른다 — 여기서 나는 예외는 호출 코드의 잘못이다. */
 public record StockSetting(Long optionId, int total) {
 
     public StockSetting {
