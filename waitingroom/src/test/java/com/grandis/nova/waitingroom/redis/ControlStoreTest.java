@@ -204,39 +204,51 @@ class ControlStoreTest {
 
         @Test
         void 일정_번호가_클_때만_쓰고_같거나_옛_번호는_버린다() {
-            assertThat(control.applySchedule(PRODUCT, window, 2).block(WAIT)).isTrue();
-            assertThat(control.applySchedule(PRODUCT, moved, 2).block(WAIT)).as("재전송").isFalse();
-            assertThat(control.applySchedule(PRODUCT, moved, 1).block(WAIT)).as("늦게 온 옛 일정").isFalse();
-            assertThat(products()).isEqualTo(ProductSchedules.format(window, 2));
+            assertThat(control.applySchedule(PRODUCT, window, 2, true).block(WAIT)).isTrue();
+            assertThat(control.applySchedule(PRODUCT, moved, 2, true).block(WAIT)).as("재전송").isFalse();
+            assertThat(control.applySchedule(PRODUCT, moved, 1, true).block(WAIT)).as("늦게 온 옛 일정").isFalse();
+            assertThat(products()).isEqualTo(ProductSchedules.format(window, 2, true));
 
-            assertThat(control.applySchedule(PRODUCT, moved, 3).block(WAIT)).isTrue();
-            assertThat(products()).isEqualTo(ProductSchedules.format(moved, 3));
+            assertThat(control.applySchedule(PRODUCT, moved, 3, true).block(WAIT)).isTrue();
+            assertThat(products()).isEqualTo(ProductSchedules.format(moved, 3, true));
+        }
+
+        @Test
+        void 비공개_일정도_번호를_마지막_칸에_두어_같은_순서_판정을_받는다() {
+            assertThat(control.applySchedule(PRODUCT, window, 2, false).block(WAIT)).isTrue();
+            assertThat(products()).isEqualTo(window.opensAt().toEpochMilli() + "|" + window.closesAt().toEpochMilli()
+                    + "|hidden|2");
+            assertThat(ProductSchedules.parse(products())).hasValue(new ProductSchedules.Schedule(window, 2, false));
+
+            assertThat(control.applySchedule(PRODUCT, window, 1, true).block(WAIT)).as("늦게 온 옛 공개").isFalse();
+            assertThat(control.applySchedule(PRODUCT, window, 3, true).block(WAIT)).isTrue();
+            assertThat(ProductSchedules.parse(products())).hasValue(new ProductSchedules.Schedule(window, 3, true));
         }
 
         @Test
         void 번호를_읽을_수_없는_값은_새_일정으로_덮는다() {
             redis.opsForHash().put(RedisKeys.PRODUCTS, PRODUCT, "broken").block(WAIT);
 
-            assertThat(control.applySchedule(PRODUCT, window, 1).block(WAIT)).isTrue();
+            assertThat(control.applySchedule(PRODUCT, window, 1, true).block(WAIT)).isTrue();
         }
 
         @Test
         void 은퇴_표식은_일정_번호를_남겨_재전달된_옛_일정이_끝난_회차를_다시_열지_못한다() {
-            control.applySchedule(PRODUCT, window, 2).block(WAIT);
+            control.applySchedule(PRODUCT, window, 2, true).block(WAIT);
             String seen = products();
 
             assertThat(control.retireSchedule(PRODUCT, seen, 2, Instant.ofEpochMilli(1_000)).block(WAIT)).isTrue();
             assertThat(products()).isEqualTo("retired|2|1000");
-            assertThat(control.applySchedule(PRODUCT, moved, 1).block(WAIT)).as("옛 번호").isFalse();
-            assertThat(control.applySchedule(PRODUCT, moved, 2).block(WAIT)).as("같은 번호").isFalse();
-            assertThat(control.applySchedule(PRODUCT, moved, 3).block(WAIT)).as("새 일정은 받는다").isTrue();
+            assertThat(control.applySchedule(PRODUCT, moved, 1, true).block(WAIT)).as("옛 번호").isFalse();
+            assertThat(control.applySchedule(PRODUCT, moved, 2, true).block(WAIT)).as("같은 번호").isFalse();
+            assertThat(control.applySchedule(PRODUCT, moved, 3, true).block(WAIT)).as("새 일정은 받는다").isTrue();
         }
 
         @Test
         void 읽은_뒤_새_일정이_왔으면_은퇴시키지도_지우지도_않는다() {
-            control.applySchedule(PRODUCT, window, 1).block(WAIT);
+            control.applySchedule(PRODUCT, window, 1, true).block(WAIT);
             String seen = products();
-            control.applySchedule(PRODUCT, moved, 2).block(WAIT);
+            control.applySchedule(PRODUCT, moved, 2, true).block(WAIT);
 
             assertThat(control.retireSchedule(PRODUCT, seen, 1, Instant.now()).block(WAIT)).isFalse();
             assertThat(control.dropSchedule(PRODUCT, seen).block(WAIT)).isFalse();
@@ -247,14 +259,14 @@ class ControlStoreTest {
         @Test
         void 같은_번호가_동시에_여러_번_와도_한_번만_쓰고_섞여_와도_가장_큰_번호가_남는다() {
             List<Boolean> same = Flux.range(0, 8)
-                    .flatMap(i -> control.applySchedule(PRODUCT, window, 3), 8)
+                    .flatMap(i -> control.applySchedule(PRODUCT, window, 3, true), 8)
                     .collectList().block(WAIT);
             assertThat(same).filteredOn(Boolean::booleanValue).hasSize(1);
 
             Flux.just(5L, 4L, 5L, 2L, 4L, 5L)
-                    .flatMap(version -> control.applySchedule(PRODUCT, moved, version), 6)
+                    .flatMap(version -> control.applySchedule(PRODUCT, moved, version, true), 6)
                     .collectList().block(WAIT);
-            assertThat(products()).isEqualTo(ProductSchedules.format(moved, 5));
+            assertThat(products()).isEqualTo(ProductSchedules.format(moved, 5, true));
         }
 
         @Test
@@ -269,7 +281,7 @@ class ControlStoreTest {
 
         @Test
         void 일정_번호_0_은_계약_위반이라_거절한다() {
-            assertThatThrownBy(() -> control.applySchedule(PRODUCT, window, 0).block(WAIT)).rootCause()
+            assertThatThrownBy(() -> control.applySchedule(PRODUCT, window, 0, true).block(WAIT)).rootCause()
                     .hasMessageContaining("1 이상");
         }
 

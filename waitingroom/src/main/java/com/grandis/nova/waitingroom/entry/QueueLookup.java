@@ -7,6 +7,7 @@ import com.grandis.nova.waitingroom.control.GatewaySnapshot;
 import com.grandis.nova.waitingroom.control.RedisClock;
 import com.grandis.nova.waitingroom.control.SnapshotHolder;
 import com.grandis.nova.waitingroom.domain.product.ProductState;
+import com.grandis.nova.waitingroom.domain.product.RuntimeState;
 import com.grandis.nova.waitingroom.domain.product.SalesPhase;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
 import com.grandis.nova.waitingroom.domain.queue.EtaPolicy;
@@ -59,6 +60,10 @@ public class QueueLookup {
                 return Mono.just(closed(QueueView.Closed.Reason.SALE_CLOSED));
             }
             boolean owner = queueTokens.verify(queueToken, productKey, now).filter(customerId::equals).isPresent();
+            // 비공개 상품은 줄에 선 사람에게만 드러낸다
+            if (!owner && state.runtime() == RuntimeState.HIDDEN) {
+                throw AdmissionGate.rejected(WaitingroomErrorCode.PRODUCT_NOT_FOUND);
+            }
             if (!owner) {
                 return Mono.just(closed(QueueView.Closed.Reason.NOT_IN_QUEUE));
             }
@@ -75,7 +80,7 @@ public class QueueLookup {
         return switch (entry.state()) {
             case ADMITTED -> gate.admitted(productKey, customerId, found.admittedAt(), now);
             case WAITING -> {
-                double eta = EtaPolicy.etaSec(entry.rank(), EtaCredit.of(state, meta));
+                double eta = EtaCredit.etaSec(entry.rank(), state, meta);
                 long behind = entry.behind();
                 yield new QueueView.Waiting(null, entry.rank() + 1, EtaPolicy.reportSec(eta),
                         entry.total() == QueueEntry.UNKNOWN_TOTAL ? null : entry.total(),

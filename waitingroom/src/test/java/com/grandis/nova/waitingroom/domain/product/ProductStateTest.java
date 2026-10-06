@@ -19,6 +19,14 @@ class ProductStateTest {
     class 불변식 {
 
         @Test
+        void 비공개_모델은_몫이_없고_선_줄은_그대로_센다() {
+            assertThat(ProductState.hidden(0, WINDOW, NO_CAP).runtime()).isEqualTo(RuntimeState.HIDDEN);
+            assertThat(ProductState.hidden(30, WINDOW, NO_CAP).waiting()).isEqualTo(30);
+            assertThatThrownBy(() -> new ProductState(RuntimeState.HIDDEN, 1, 30, NO_CAP, WINDOW))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
         void IDLE_은_배분도_줄도_없다() {
             assertThatThrownBy(() -> new ProductState(RuntimeState.IDLE, 5, 0, NO_CAP, WINDOW)).hasMessageContaining("IDLE 이면");
             assertThatThrownBy(() -> new ProductState(RuntimeState.IDLE, 0, 3, NO_CAP, WINDOW)).hasMessageContaining("IDLE 이면");

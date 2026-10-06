@@ -1,6 +1,7 @@
 package com.grandis.nova.waitingroom.control;
 
 import com.grandis.nova.waitingroom.domain.product.MaxWait;
+import com.grandis.nova.waitingroom.domain.product.ProductState;
 import com.grandis.nova.waitingroom.domain.product.RuntimeState;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
 import com.grandis.nova.waitingroom.domain.product.SalesWindow;
@@ -75,7 +76,7 @@ class AllocationRoundTest {
 
     private void schedule(String product, Instant opensAt, Instant closesAt) {
         redis.opsForHash().put(RedisKeys.PRODUCTS, product,
-                ProductSchedules.format(new SalesWindow(opensAt, closesAt), 1)).block(WAIT);
+                ProductSchedules.format(new SalesWindow(opensAt, closesAt), 1, true)).block(WAIT);
     }
 
     private void line(String product, int count) {
@@ -127,6 +128,28 @@ class AllocationRoundTest {
     }
 
     @Test
+    void 비공개_모델은_들이지_않고_줄을_그대로_두며_다시_공개되면_같은_순서로_이어_간다() {
+        SalesWindow window = new SalesWindow(now.minusSeconds(60), now.plusSeconds(3_600));
+        control.applySchedule("101", window, 1, false).block(WAIT);
+        line("101", 20);
+
+        GatewaySnapshot snapshot = run(7, 0, 1);
+
+        assertThat(admitted("101", 20)).isZero();
+        ProductState hidden = snapshot.product("101").orElseThrow();
+        assertThat(hidden.runtime()).isEqualTo(RuntimeState.HIDDEN);
+        assertThat(hidden.credit()).isZero();
+        assertThat(hidden.waiting()).isEqualTo(20);
+        assertThat(SnapshotCodec.decode(control.readSnapshot().block(WAIT).entries())).contains(snapshot);
+        assertThat(queue.status("101", "101-5", now).block(WAIT).entry().rank()).as("자리는 그대로").isEqualTo(5);
+
+        control.applySchedule("101", window, 2, true).block(WAIT);
+        run(7, 0, 2);
+        assertThat(queue.status("101", "101-0", now).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);
+        assertThat(admitted("101", 20)).isEqualTo(10);
+    }
+
+    @Test
     void 직전_1초_한산_통과만큼_줄_배분을_줄인다() {
         schedule("101", now.minusSeconds(60), now.plusSeconds(3_600));
         line("101", 20);
@@ -161,6 +184,18 @@ class AllocationRoundTest {
         assertThat(admitted("202", 5)).isZero();
         assertThat(snapshot.product("202").orElseThrow().runtime()).isEqualTo(RuntimeState.CLOSED);
         assertThat(snapshot.product("101").orElseThrow().runtime()).isEqualTo(RuntimeState.IDLE);
+    }
+
+    @Test
+    void 비공개여도_마감되면_마감으로_발행하고_줄을_정리한다() {
+        control.applySchedule("101", new SalesWindow(now.minus(Duration.ofHours(1)),
+                now.minus(PROPERTIES.closeGrace()).minusSeconds(1)), 1, false).block(WAIT);
+        line("101", 3);
+
+        assertThat(run(7, 0).product("101").orElseThrow().runtime()).isEqualTo(RuntimeState.CLOSED);
+        run(7, 0);
+
+        assertThat(redis.hasKey("wr:queue:{101}").block(WAIT)).isFalse();
     }
 
     @Test
@@ -344,6 +379,18 @@ class AllocationRoundTest {
         assertThat(product("101")).startsWith("retired|");
         assertThat(run(7, 0).products()).as("은퇴한 모델은 발행하지 않는다").doesNotContainKey("101").containsKey("202");
         assertThat(product("202")).as("7일 전이면 마감으로 남긴다").doesNotStartWith("retired|");
+    }
+
+    @Test
+    void 비공개_일정도_같은_값으로_읽어_은퇴시킨다() {
+        control.applySchedule("101", new SalesWindow(now.minus(Duration.ofDays(9)),
+                now.minus(AllocationRound.FORGET_AFTER).minusSeconds(1)), 4, false).block(WAIT);
+
+        run(7, 0);
+        run(7, 0);
+        run(7, 0);
+
+        assertThat(product("101")).startsWith("retired|4|");
     }
 
     @Test

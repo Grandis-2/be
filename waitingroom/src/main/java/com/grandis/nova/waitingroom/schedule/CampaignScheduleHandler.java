@@ -47,7 +47,7 @@ class CampaignScheduleHandler implements QueueMessageHandler {
             }
             CampaignChanged changed = jsonMapper.treeToValue(envelope.payload(), CampaignChanged.class);
             Boolean applied = store.applySchedule(String.valueOf(changed.productId()),
-                    new SalesWindow(changed.opensAt(), changed.closesAt()), changed.scheduleVersion())
+                    new SalesWindow(changed.opensAt(), changed.closesAt()), changed.scheduleVersion(), changed.isVisible())
                     .block(APPLY_TIMEOUT);
             // 답이 없으면 반영됐는지 모른다 — 옛 번호로 단정해 지우지 않고 다시 받는다
             if (applied == null) {
@@ -55,15 +55,22 @@ class CampaignScheduleHandler implements QueueMessageHandler {
             }
             boolean written = applied;
             outcome = written ? "APPLIED" : "STALE";
-            log.info("회차 일정 {} productId={} scheduleVersion={} change={}", written ? "반영" : "무시(옛 번호)",
-                    changed.productId(), changed.scheduleVersion(), changed.change());
+            log.info("회차 일정 {} productId={} scheduleVersion={} visible={} change={}", written ? "반영" : "무시(옛 번호)",
+                    changed.productId(), changed.scheduleVersion(), changed.isVisible(), changed.change());
         } finally {
             Counter.builder("waitingroom.schedule.events").tag("outcome", outcome).register(registry).increment();
         }
     }
 
-    /** preorder 의 PREORDER_CAMPAIGN_CHANGED payload. change 는 로그용이고 판정은 일정 번호로 한다. */
+    /**
+     * preorder 의 PREORDER_CAMPAIGN_CHANGED payload. change 는 로그용이고 판정은 일정 번호로 한다.
+     * visible 이 없으면(이 칸을 모르는 preorder) 공개로 본다.
+     */
     record CampaignChanged(Long productId, long scheduleVersion, Instant opensAt, Instant closesAt,
-                           Instant changedAt, String change) {
+                           Instant changedAt, String change, Boolean visible) {
+
+        boolean isVisible() {
+            return !Boolean.FALSE.equals(visible);
+        }
     }
 }

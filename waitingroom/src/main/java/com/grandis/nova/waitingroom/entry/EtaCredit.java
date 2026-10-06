@@ -1,12 +1,19 @@
 package com.grandis.nova.waitingroom.entry;
 
 import com.grandis.nova.waitingroom.domain.product.ProductState;
+import com.grandis.nova.waitingroom.domain.product.RuntimeState;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
+import com.grandis.nova.waitingroom.domain.queue.EtaPolicy;
 
 /** 예상 대기 시간을 잴 입장 속도. */
 final class EtaCredit {
 
     private EtaCredit() {
+    }
+
+    /** 앞선 rank 명이 빠지는 데 걸릴 시간. 비공개로 멈춘 줄은 맨 앞이어도 모름이다 — 곧 입장처럼 보이면 안 된다. */
+    static double etaSec(long rank, ProductState state, SnapshotMeta meta) {
+        return state.runtime() == RuntimeState.HIDDEN ? EtaPolicy.UNKNOWN : EtaPolicy.etaSec(rank, of(state, meta));
     }
 
     /**
