@@ -66,9 +66,9 @@ public class ControlStore {
     }
 
     /** @return 일정 번호가 더 커서 썼으면 true. 같거나 옛 번호면 false */
-    public Mono<Boolean> applySchedule(String productKey, SalesWindow window, long scheduleVersion) {
+    public Mono<Boolean> applySchedule(String productKey, SalesWindow window, long scheduleVersion, boolean visible) {
         return scripts.single(scripts.applySchedule, List.of(RedisKeys.PRODUCTS), List.of(RedisKeys.requireProductKey(productKey),
-                        ProductSchedules.format(window, scheduleVersion), String.valueOf(scheduleVersion)))
+                        ProductSchedules.format(window, scheduleVersion, visible), String.valueOf(scheduleVersion)))
                 .map(written -> written == 1);
     }
 

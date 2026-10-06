@@ -12,6 +12,9 @@ public enum RuntimeState {
     /** 이번 틱 몫이 대기자 이상이다(credit >= waiting). 유입이 이어지면 다시 QUEUEING 이 된다. */
     DRAINING,
 
+    /** 비공개 상품이다. 진입을 받지 않고 선 줄은 지우지 않고 멈춘다 — 다시 공개되면 같은 순서로 이어 간다. */
+    HIDDEN,
+
     /** 마감됐다. 배분 대상에서 빠진다. */
     CLOSED
 }

@@ -27,6 +27,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -73,14 +74,23 @@ class ScheduleMessagingTest {
     @Test
     void 일정_이벤트를_받아_반영하고_늦게_온_옛_일정은_버린다() {
         queues.send("waitingroom-events", changed(501, 3, MOVED));
-        awaitSchedule("501", ProductSchedules.format(MOVED, 3));
+        awaitSchedule("501", ProductSchedules.format(MOVED, 3, true));
 
         double staleBefore = staleEvents();
         queues.send("waitingroom-events", changed(501, 2, WINDOW));
         StepVerifier.create(Flux.interval(Duration.ofMillis(100)).filter(tick -> staleEvents() > staleBefore).next())
                 .expectNextCount(1).expectComplete().verify(WAIT);
 
-        assertThat(schedule("501")).as("옛 번호는 받고 버린다").isEqualTo(ProductSchedules.format(MOVED, 3));
+        assertThat(schedule("501")).as("옛 번호는 받고 버린다").isEqualTo(ProductSchedules.format(MOVED, 3, true));
+    }
+
+    @Test
+    void 비공개_일정을_받으면_비공개로_반영하고_칸이_없으면_공개로_본다() {
+        queues.send("waitingroom-events", changed(502, 1, WINDOW, false));
+        awaitSchedule("502", ProductSchedules.format(WINDOW, 1, false));
+
+        queues.send("waitingroom-events", changed(502, 2, WINDOW));
+        awaitSchedule("502", ProductSchedules.format(WINDOW, 2, true));
     }
 
     @Test
@@ -111,9 +121,16 @@ class ScheduleMessagingTest {
     }
 
     private String changed(long productId, long version, SalesWindow window) {
-        Map<String, Object> payload = Map.of("productId", productId, "scheduleVersion", version,
+        return changed(productId, version, window, null);
+    }
+
+    private String changed(long productId, long version, SalesWindow window, Boolean visible) {
+        Map<String, Object> payload = new HashMap<>(Map.of("productId", productId, "scheduleVersion", version,
                 "opensAt", window.opensAt().toString(), "closesAt", window.closesAt().toString(),
-                "changedAt", Instant.now().toString(), "change", "RESCHEDULED");
+                "changedAt", Instant.now().toString(), "change", visible == null ? "RESCHEDULED" : "VISIBILITY"));
+        if (visible != null) {
+            payload.put("visible", visible);
+        }
         return jsonMapper.writeValueAsString(new EventEnvelope(UUID.randomUUID().toString(), "PREORDER_CAMPAIGN_CHANGED",
                 "PREORDER_CAMPAIGN", productId, Instant.now(), jsonMapper.valueToTree(payload)));
     }

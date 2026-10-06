@@ -28,12 +28,12 @@ public record ProductState(RuntimeState runtime, long credit, long waiting, long
             throw new IllegalArgumentException("IDLE 이면 credit · waiting 이 0 이어야 한다: credit=%d, waiting=%d"
                     .formatted(credit, waiting));
         }
-        if (runtime == RuntimeState.CLOSED && credit != 0) {
-            throw new IllegalArgumentException("CLOSED 면 credit 이 0 이어야 한다: credit=%d".formatted(credit));
+        if ((runtime == RuntimeState.CLOSED || runtime == RuntimeState.HIDDEN) && credit != 0) {
+            throw new IllegalArgumentException("%s 면 credit 이 0 이어야 한다: credit=%d".formatted(runtime, credit));
         }
         // 줄이 비었는데 대기열 상태라면 유령이다
-        if (waiting == 0 && runtime != RuntimeState.IDLE && runtime != RuntimeState.CLOSED) {
-            throw new IllegalArgumentException("waiting 이 0 이면 IDLE 또는 CLOSED 여야 한다: runtime=" + runtime);
+        if (waiting == 0 && (runtime == RuntimeState.QUEUEING || runtime == RuntimeState.DRAINING)) {
+            throw new IllegalArgumentException("waiting 이 0 이면 IDLE · HIDDEN · CLOSED 여야 한다: runtime=" + runtime);
         }
         if (runtime == RuntimeState.DRAINING && credit < waiting) {
             throw new IllegalArgumentException("DRAINING 이면 credit >= waiting 이어야 한다: credit=%d, waiting=%d"
@@ -57,6 +57,11 @@ public record ProductState(RuntimeState runtime, long credit, long waiting, long
         }
         RuntimeState runtime = credit >= waiting ? RuntimeState.DRAINING : RuntimeState.QUEUEING;
         return new ProductState(runtime, credit, waiting, cap, window);
+    }
+
+    /** 비공개 모델. 배분을 받지 않고, 선 줄은 그대로 센다. */
+    public static ProductState hidden(long waiting, SalesWindow window, long cap) {
+        return new ProductState(RuntimeState.HIDDEN, 0, waiting, cap, window);
     }
 
     /** 마감된 모델. 남은 줄은 정리될 때까지 그대로 센다. */
