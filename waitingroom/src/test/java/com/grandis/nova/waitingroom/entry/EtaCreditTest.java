@@ -26,6 +26,13 @@ class EtaCreditTest {
     }
 
     @Test
+    void 비공개로_멈춘_줄은_맨_앞이어도_모름이다() {
+        assertThat(EtaCredit.etaSec(0, ProductState.hidden(10, WINDOW, 150), meta(500))).isNaN();
+        assertThat(EtaCredit.etaSec(5, ProductState.hidden(10, WINDOW, 150), meta(500))).isNaN();
+        assertThat(EtaCredit.etaSec(0, ProductState.withQueue(40, 10, WINDOW, 150), meta(500))).isZero();
+    }
+
+    @Test
     void 입장을_멈췄으면_모름_그대로다() {
         assertThat(EtaCredit.of(ProductState.withQueue(0, 10, WINDOW, 150), meta(0))).isZero();
     }

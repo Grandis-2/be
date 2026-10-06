@@ -119,7 +119,7 @@ class AllocationRound {
         Instant now = Instant.ofEpochMilli(nowMillis);
         List<ProductDemand> demands = rows.stream()
                 .map(row -> new ProductDemand(row.key(), row.depth().waiting(), settings.capOf(row.key()),
-                        row.schedule().window().phaseAt(now) == SalesPhase.OPEN))
+                        row.schedule().visible() && row.schedule().window().phaseAt(now) == SalesPhase.OPEN))
                 .toList();
         // 브레이크는 운영값을 줄이기만 한다. 노드들이 쓰는 전역 속도(meta)도 줄인 값이다
         long globalCredit = Brake.apply(settings.globalCredit(), brakeFactor);
@@ -147,8 +147,7 @@ class AllocationRound {
     private Mono<Void> retireFinished(List<Row> rows, Instant now) {
         return Flux.fromIterable(rows)
                 .filter(row -> row.depth() == RETIRED && !now.isBefore(row.schedule().window().closesAt().plus(FORGET_AFTER)))
-                .concatMap(row -> store.retireSchedule(row.key(),
-                                ProductSchedules.format(row.schedule().window(), row.schedule().scheduleVersion()),
+                .concatMap(row -> store.retireSchedule(row.key(), row.schedule().format(),
                                 row.schedule().scheduleVersion(), now)
                         .doOnNext(retired -> changed("retire", row.key(), retired)))
                 .then()
@@ -237,6 +236,8 @@ class AllocationRound {
         ProductState state;
         if (row.schedule().window().phaseAt(now) == SalesPhase.CLOSED) {
             state = ProductState.closed(waiting, row.schedule().window(), cap);
+        } else if (!row.schedule().visible()) {
+            state = ProductState.hidden(waiting, row.schedule().window(), cap);
         } else if (waiting > 0) {
             state = ProductState.withQueue(credit, waiting, row.schedule().window(), cap);
         } else {

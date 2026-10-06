@@ -7,6 +7,7 @@ import com.grandis.nova.waitingroom.domain.product.ProductState;
 import com.grandis.nova.waitingroom.domain.product.SalesWindow;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
 import com.grandis.nova.waitingroom.domain.queue.AdmissionTicket;
+import com.grandis.nova.waitingroom.domain.queue.EtaPolicy;
 import com.grandis.nova.waitingroom.redis.ControlStore;
 import com.grandis.nova.waitingroom.redis.LuaScripts;
 import com.grandis.nova.waitingroom.support.RedisContainer;
@@ -96,10 +97,12 @@ class QueueFlowTest {
     Instant now;
     long round;
 
+    ReactiveStringRedisTemplate redis;
+
     @BeforeEach
     void setUp() {
         client = WebTestClient.bindToServer().baseUrl("http://localhost:" + port).build();
-        ReactiveStringRedisTemplate redis = RedisContainer.fresh();
+        redis = RedisContainer.fresh();
         control = new ControlStore(new LuaScripts(redis), redis);
         now = Instant.now();
         NEXT.set(new FakeReply(202, "{\"success\":true}"));
@@ -267,6 +270,33 @@ class QueueFlowTest {
         }
 
         @Test
+        void 비공개면_새로_온_사람은_없는_상품으로_거절하고_이미_선_사람과_입장한_사람은_그대로_받는다() {
+            snapshot(crowded());
+            String token = queueToken("1");
+            queueToken("2");
+            admit(1);
+            String ticket = ticketOf(status("1", token));
+            snapshot(ProductState.hidden(1, open(), ProductState.UNLIMITED_CAP));
+
+            enter("3").expectStatus().isNotFound().expectBody().jsonPath("$.error.code").isEqualTo("PRODUCT_NOT_FOUND");
+            assertThat(ticketOf(enter("1"))).isEqualTo(ticket);
+            enter("2").expectStatus().isAccepted().expectBody()
+                    .jsonPath("$.data.position").isEqualTo(1)
+                    .jsonPath("$.data.etaSeconds").isEqualTo(EtaPolicy.reportSec(EtaPolicy.UNKNOWN))
+                    .jsonPath("$.data.rejoined").isEqualTo(true);
+            assertThat(redis.opsForZSet().size("wr:queue:{" + PRODUCT + "}").block(WAIT)).as("거절된 사람은 서지 않는다")
+                    .isEqualTo(1);
+        }
+
+        @Test
+        void 오픈_전_비공개도_없는_상품으로_거절한다() {
+            snapshot(ProductState.hidden(0, new SalesWindow(now.plusSeconds(600), now.plusSeconds(3_600)),
+                    ProductState.UNLIMITED_CAP));
+
+            enter("1").expectStatus().isNotFound().expectBody().jsonPath("$.error.code").isEqualTo("PRODUCT_NOT_FOUND");
+        }
+
+        @Test
         void 관리자_토큰으로는_진입하지_못한다() {
             snapshot(ProductState.idle(open(), ProductState.UNLIMITED_CAP));
 
@@ -318,6 +348,27 @@ class QueueFlowTest {
             status("2", token).expectStatus().isOk().expectBody()
                     .jsonPath("$.data.status").isEqualTo("CLOSED")
                     .jsonPath("$.data.reason").isEqualTo("NOT_IN_QUEUE");
+        }
+
+        @Test
+        void 비공개로_멈춘_줄은_대기_그대로_예상_시간은_모름으로_답한다() {
+            snapshot(crowded());
+            String first = queueToken("1");
+            String token = queueToken("2");
+            snapshot(ProductState.hidden(2, open(), ProductState.UNLIMITED_CAP));
+
+            status("2", token).expectStatus().isOk()
+                    .expectHeader().exists(HttpHeaders.RETRY_AFTER)
+                    .expectBody()
+                    .jsonPath("$.data.status").isEqualTo("WAITING")
+                    .jsonPath("$.data.position").isEqualTo(2)
+                    .jsonPath("$.data.etaSeconds").isEqualTo(EtaPolicy.reportSec(EtaPolicy.UNKNOWN));
+            // 맨 앞이어도 곧 입장이 아니다
+            status("1", first).expectStatus().isOk().expectBody()
+                    .jsonPath("$.data.position").isEqualTo(1)
+                    .jsonPath("$.data.etaSeconds").isEqualTo(EtaPolicy.reportSec(EtaPolicy.UNKNOWN));
+            status("9", first).expectStatus().isNotFound().expectBody()
+                    .jsonPath("$.error.code").isEqualTo("PRODUCT_NOT_FOUND");
         }
 
         @Test

@@ -16,6 +16,7 @@ import com.grandis.nova.waitingroom.domain.admission.AdmissionRequest;
 import com.grandis.nova.waitingroom.domain.admission.EnqueueLatch;
 import com.grandis.nova.waitingroom.domain.admission.SecondWindowLimiter;
 import com.grandis.nova.waitingroom.domain.product.ProductState;
+import com.grandis.nova.waitingroom.domain.product.RuntimeState;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
 import com.grandis.nova.waitingroom.domain.queue.AdmissionTicket;
 import com.grandis.nova.waitingroom.domain.queue.EtaPolicy;
@@ -84,11 +85,14 @@ public class AdmissionGate {
             GatewaySnapshot snapshot = snapshots.current().orElseThrow(() -> rejected(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
             ProductState state = snapshot.product(productKey)
                     .orElseThrow(() -> rejected(WaitingroomErrorCode.PRODUCT_NOT_FOUND));
+            Instant now = clock.now();
+            long second = now.getEpochSecond();
+            if (state.runtime() == RuntimeState.HIDDEN) {
+                return rejoinHidden(productKey, customerId, state, snapshot.meta(), now, second);
+            }
             if (closures.closed(productKey, state.window())) {
                 throw rejected(WaitingroomErrorCode.SALE_CLOSED);
             }
-            Instant now = clock.now();
-            long second = now.getEpochSecond();
             AdmissionDecision decision = decider.decide(new AdmissionRequest(productKey, state, snapshot.meta(), now,
                     snapshots.stale(), enqueued.latched(productKey, second), full.latched(productKey, second)));
             metrics.decision(decision);
@@ -111,6 +115,22 @@ public class AdmissionGate {
                 .doOnError(BusinessException.class, e -> metrics.entry(e.errorCode().name()));
     }
 
+    /**
+     * 비공개 상품은 없는 상품처럼 답한다. 다만 이미 선 사람 · 입장한 사람은 상한 0 으로 물어 자리 · 입장권을 그대로 준다 —
+     * 새로 고침한 사람이 자리를 잃지 않게.
+     */
+    private Mono<QueueView> rejoinHidden(String productKey, String customerId, ProductState state, SnapshotMeta meta,
+                                         Instant now, long second) {
+        return queue.enqueue(productKey, customerId, 0, now)
+                .onErrorMap(AdmissionGate::storeFailure, AdmissionGate::unavailable)
+                .map(placed -> {
+                    if (placed.admittedAt() == null && !placed.entry().accepted()) {
+                        throw rejected(WaitingroomErrorCode.PRODUCT_NOT_FOUND);
+                    }
+                    return placed(productKey, customerId, state, meta, now, second, placed);
+                });
+    }
+
     private Mono<QueueView> placeIn(String productKey, String customerId, ProductState state, SnapshotMeta meta,
                                     Instant now, long second, long maxLength) {
         return queue.enqueue(productKey, customerId, maxLength, now)
@@ -128,7 +148,7 @@ public class AdmissionGate {
             full.mark(productKey, second);
             throw rejected(WaitingroomErrorCode.QUEUE_FULL);
         }
-        double eta = EtaPolicy.etaSec(entry.rank(), EtaCredit.of(state, meta));
+        double eta = EtaCredit.etaSec(entry.rank(), state, meta);
         return new QueueView.Waiting(queueTokens.issue(productKey, customerId, now), entry.rank() + 1,
                 EtaPolicy.reportSec(eta), null, null, entry.alreadyQueued(),
                 polls.intervalSec(eta, ThreadLocalRandom.current()::nextDouble));

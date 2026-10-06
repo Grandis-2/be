@@ -37,7 +37,7 @@ class ControlPlaneTest {
         redis = RedisContainer.fresh();
         Instant now = Instant.now();
         redis.opsForHash().put(RedisKeys.PRODUCTS, "101",
-                ProductSchedules.format(new SalesWindow(now.minusSeconds(60), now.plusSeconds(3_600)), 1)).block();
+                ProductSchedules.format(new SalesWindow(now.minusSeconds(60), now.plusSeconds(3_600)), 1, true)).block();
         first = new Node(redis);
         second = new Node(redis);
     }
