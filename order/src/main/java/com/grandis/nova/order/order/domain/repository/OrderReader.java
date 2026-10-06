@@ -26,6 +26,9 @@ public interface OrderReader {
     /** 예약의 주문. 예약당 주문은 평생 하나라(uq_order_preorder) 0~1건이다. */
     Optional<Order> findByPreorderId(Long preorderId);
 
+    /** 주문상품 하나. 주인 확인은 부르는 쪽이 그 주문으로 한다. */
+    Optional<OrderItem> findItem(Long orderItemId);
+
     List<OrderItem> findItems(Long orderId);
 
     /**
