@@ -13,6 +13,10 @@ public final class OrderView {
     private OrderView() {
     }
 
+    /** 주문상품 하나와 그 주문. */
+    public record Item(Order order, OrderItem item) {
+    }
+
     /** 목록 한 줄. */
     public record Summary(Order order, List<OrderItem> items) {
     }

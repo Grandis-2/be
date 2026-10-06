@@ -58,6 +58,15 @@ public class OrderQueryService {
         return detail(order);
     }
 
+    /** 내 주문상품 하나와 그 주문. 남의 것은 존재를 알리지 않는다(404). catalog 가 리뷰를 쓸 때 묻는다 — 판정은 catalog 가 한다. */
+    public OrderView.Item findItem(Long customerId, Long orderItemId) {
+        OrderItem item = reader.findItem(orderItemId).orElseThrow(OrderQueryService::itemNotFound);
+        Order order = reader.findById(item.orderId())
+                .filter(found -> found.customerId().equals(customerId))
+                .orElseThrow(OrderQueryService::itemNotFound);
+        return new OrderView.Item(order, item);
+    }
+
     public OffsetPage<OrderView.Summary> findForAdmin(AdminOrderFilter filter, int page, int size) {
         OffsetPage<Order> found = reader.findForAdmin(filter, page, size);
         return OffsetPage.of(withItems(found.items()), found.page(), found.size(), found.total());
@@ -87,5 +96,9 @@ public class OrderQueryService {
 
     private static BusinessException notFound() {
         return new BusinessException(OrderErrorCode.ORDER_NOT_FOUND);
+    }
+
+    private static BusinessException itemNotFound() {
+        return new BusinessException(OrderErrorCode.ORDER_ITEM_NOT_FOUND);
     }
 }

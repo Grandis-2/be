@@ -41,7 +41,8 @@ class OpenApiInternalExclusionTest {
 
         assertThat(doc.path("paths").propertyNames()).noneMatch(OpenApiInternalExclusionTest::isInternal);
         assertThat(doc.path("components").path("schemas").propertyNames())
-                .doesNotContain("CancelabilityResponse", "ApiResponseCancelabilityResponse");   // 응답 본체와 그 봉투
+                .doesNotContain("CancelabilityResponse", "ApiResponseCancelabilityResponse",   // 응답 본체와 그 봉투
+                        "InternalOrderItemResponse", "ApiResponseInternalOrderItemResponse");
         assertThat(doc.path("paths").has("/api/v1/orders/{orderId}")).isTrue();
     }
 
@@ -58,6 +59,7 @@ class OpenApiInternalExclusionTest {
             JsonNode doc = getJson(port, path);
 
             assertThat(doc.path("paths").has("/internal/orders/by-preorder/{preorderInternalId}/cancelability")).isTrue();
+            assertThat(doc.path("paths").has("/internal/order-items/{orderItemId}")).isTrue();
             assertThat(doc.path("components").path("schemas").has("ApiResponseCancelabilityResponse")).isTrue();
         }
     }

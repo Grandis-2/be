@@ -146,6 +146,11 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     @Override
+    public Optional<OrderItem> findItem(Long orderItemId) {
+        return items.findById(orderItemId).map(OrderMapper::toDomain);
+    }
+
+    @Override
     public List<OrderItem> findItems(Long orderId) {
         return items.findByOrderIdOrderById(orderId).stream().map(OrderMapper::toDomain).toList();
     }

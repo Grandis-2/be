@@ -12,6 +12,8 @@ public enum OrderErrorCode implements ErrorCode {
     PREORDER_NOT_FOUND(404, "예약을 찾을 수 없습니다."),
     /** 없는 주문 · 남의 주문. */
     ORDER_NOT_FOUND(404, "주문을 찾을 수 없습니다."),
+    /** 없는 주문상품 · 남의 주문상품. 남의 것도 존재를 숨기려고 같은 코드로 답한다. */
+    ORDER_ITEM_NOT_FOUND(404, "주문상품을 찾을 수 없습니다."),
     /** 결제 대기가 아닌 주문(결제 확인 중 · 결제됨 · 취소 중 · 취소됨 등) · 0원 주문. 지금 상태는 주문 조회로 본다. */
     ORDER_NOT_PAYABLE(409, "결제할 수 있는 주문이 아닙니다."),
     PREORDER_NOT_PAYABLE(409, "결제할 수 있는 예약이 아닙니다."),
