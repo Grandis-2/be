@@ -55,14 +55,14 @@ public class PreorderCampaignAdminService {
      */
     public PreorderCampaign upsertCampaign(Long productId, Instant opensAt, Instant closesAt) {
         requirePeriod(opensAt, closesAt);
-        requirePreorderProduct(productId);
+        boolean visible = requirePreorderProduct(productId).isVisible();
         try {
-            return writer.upsert(productId, opensAt, closesAt);
+            return writer.upsert(productId, opensAt, closesAt, visible);
         } catch (DataIntegrityViolationException e) {
             if (!isDuplicateKey(e)) {
                 throw e;
             }
-            return writer.upsert(productId, opensAt, closesAt);
+            return writer.upsert(productId, opensAt, closesAt, visible);
         }
     }
 
@@ -93,8 +93,8 @@ public class PreorderCampaignAdminService {
     }
 
     /** 사전예약 상품에만 회차가 있다. 일반 상품 · 없는 상품이면 404 다. */
-    private void requirePreorderProduct(Long productId) {
-        catalogReader.findProduct(productId)
+    private ProductCatalog requirePreorderProduct(Long productId) {
+        return catalogReader.findProduct(productId)
                 .filter(ProductCatalog::isPreorderProduct)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND));
     }

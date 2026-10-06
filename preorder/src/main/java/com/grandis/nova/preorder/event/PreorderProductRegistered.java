@@ -8,9 +8,10 @@ import java.util.List;
 
 /**
  * catalog 가 사전예약 상품을 등록했다. 회차 · 차수 값의 원장이 catalog 에 없어 payload 에 실려 온다.
- * 상품 id 는 봉투의 aggregateId 다.
+ * 상품 id 는 봉투의 aggregateId 다. 공개 여부 칸이 없으면(이 칸을 모르는 catalog) 공개 · 번호 0 으로 본다.
  */
-record PreorderProductRegistered(Campaign campaign, List<ShipmentBatch> shipmentBatches) {
+record PreorderProductRegistered(Campaign campaign, List<ShipmentBatch> shipmentBatches, Boolean visible,
+                                 Long visibilityVersion) {
 
     CampaignRegistration toRegistration() {
         if (campaign == null || shipmentBatches == null) {
@@ -19,7 +20,7 @@ record PreorderProductRegistered(Campaign campaign, List<ShipmentBatch> shipment
         return new CampaignRegistration(campaign.opensAt(), campaign.closesAt(), shipmentBatches.stream()
                 .map(batch -> new CampaignRegistration.Batch(batch.batchNumber(), batch.positionFrom(),
                         batch.positionTo(), batch.estimatedShipStart(), batch.estimatedShipEnd()))
-                .toList());
+                .toList(), !Boolean.FALSE.equals(visible), visibilityVersion == null ? 0 : visibilityVersion);
     }
 
     record Campaign(Instant opensAt, Instant closesAt) {

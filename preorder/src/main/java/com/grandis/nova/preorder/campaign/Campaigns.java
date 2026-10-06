@@ -77,4 +77,18 @@ public class Campaigns {
                 .filter(campaign -> campaign.closeNow(now))
                 .ifPresent(campaign -> changePublisher.publish(campaign, CampaignChange.CLOSED));
     }
+
+    /**
+     * catalog 의 상품 공개 여부를 회차에 반영한다. 번호가 지금보다 클 때만 쓰고, 값이 바뀌었을 때만 회차 변경 이벤트를 적는다.
+     *
+     * @throws IllegalStateException 회차가 아직 없다 — 등록 이벤트보다 먼저 왔으므로 다시 받는다(버리면 늦게 온 등록의 옛 값이 굳는다)
+     */
+    @Transactional
+    public void applyVisibility(Long productId, boolean visible, long visibilityVersion) {
+        PreorderCampaign campaign = campaigns.findForUpdate(productId)
+                .orElseThrow(() -> new IllegalStateException("공개 여부를 반영할 회차가 아직 없다: productId=" + productId));
+        if (campaign.applyVisibility(visible, visibilityVersion)) {
+            changePublisher.publish(campaign, CampaignChange.VISIBILITY);
+        }
+    }
 }

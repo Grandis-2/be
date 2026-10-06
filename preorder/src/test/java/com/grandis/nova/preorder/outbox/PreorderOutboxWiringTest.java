@@ -178,7 +178,7 @@ class PreorderOutboxWiringTest {
     @Test
     void 회차_변경은_waitingroom_events_로_일정을_ISO_시각으로_보낸다() {
         String eventId = append(new PreorderCampaignChanged(aggregateId, 4L, Instant.parse("2026-10-10T01:00:00Z"),
-                Instant.parse("2026-10-11T01:00:00Z"), Instant.parse("2026-10-02T02:03:04.123456Z"),
+                Instant.parse("2026-10-11T01:00:00Z"), false, Instant.parse("2026-10-02T02:03:04.123456Z"),
                 CampaignChange.RESCHEDULED));
 
         OutboundMessage message = sentFor(eventId);
@@ -186,8 +186,8 @@ class PreorderOutboxWiringTest {
         assertThat(message.destination()).isEqualTo("waitingroom-events");
         assertThat(jsonMapper.readTree(message.body()).get("payload")).isEqualTo(json(
                 "{\"productId\":" + aggregateId + ",\"scheduleVersion\":4,\"opensAt\":\"2026-10-10T01:00:00Z\","
-                        + "\"closesAt\":\"2026-10-11T01:00:00Z\",\"changedAt\":\"2026-10-02T02:03:04.123456Z\","
-                        + "\"change\":\"RESCHEDULED\"}"));
+                        + "\"closesAt\":\"2026-10-11T01:00:00Z\",\"visible\":false,"
+                        + "\"changedAt\":\"2026-10-02T02:03:04.123456Z\",\"change\":\"RESCHEDULED\"}"));
     }
 
     /** 커밋 직후 발행을 놓친 행(오래된 미발행)을 릴레이가 종류의 목적지로 보낸다. 종류 다섯 모두. */

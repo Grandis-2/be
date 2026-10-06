@@ -94,6 +94,25 @@ class CampaignRegistrarTest {
         assertThat(count("SELECT COUNT(*) FROM shipment_batches WHERE product_id = ?")).isZero();
     }
 
+    @Test
+    void 관리자가_비공개_상품에_먼저_만든_회차는_catalog_응답대로_비공개이고_등록_이벤트의_공개_여부만_반영한다() {
+        CatalogStubs.stubPreorderProduct(catalogClient, productId, false, true, CatalogStubs.activeOption(1L));
+        Instant adminOpensAt = opensAt.plusSeconds(1800);
+        adminService.upsertCampaign(productId, adminOpensAt, adminOpensAt.plusSeconds(3600));
+
+        assertThat(visibility()).isEqualTo("0|0|1");
+        assertThat(registrar.register(productId, registration(opensAt))).isFalse();
+
+        assertThat(visibility()).as("공개 · 번호 1 · 일정 번호 +1").isEqualTo("1|1|2");
+        assertThat(opensAtInDb()).isEqualTo(adminOpensAt);
+        assertThat(jdbcTemplate.queryForList("""
+                SELECT CONCAT_WS('|', JSON_UNQUOTE(JSON_EXTRACT(payload, '$.change')),
+                                 JSON_EXTRACT(payload, '$.visible'))
+                  FROM preorder_outbox_events
+                 WHERE event_type = 'PREORDER_CAMPAIGN_CHANGED' AND aggregate_id = ? ORDER BY id
+                """, String.class, productId)).containsExactly("CREATED|false", "VISIBILITY|true");
+    }
+
     @RepeatedTest(3)
     void 같은_메시지가_동시에_와도_하나만_만든다() throws Exception {
         List<Outcome<Boolean>> outcomes = Concurrently.run(4, i -> () ->
@@ -113,18 +132,26 @@ class CampaignRegistrarTest {
         Instant past = Instant.now().minusSeconds(60);
 
         assertThatThrownBy(() -> registrar.register(productId, new CampaignRegistration(opensAt,
-                opensAt.plusSeconds(3600), gap))).isInstanceOf(BusinessException.class);
+                opensAt.plusSeconds(3600), gap, true, 1))).isInstanceOf(BusinessException.class);
         assertThatThrownBy(() -> registrar.register(productId, registration(past)))
                 .isInstanceOf(BusinessException.class);
         assertThatThrownBy(() -> registrar.register(productId, new CampaignRegistration(opensAt, opensAt,
-                TWO_BATCHES))).isInstanceOf(BusinessException.class);
+                TWO_BATCHES, true, 1))).isInstanceOf(BusinessException.class);
 
         assertThat(count("SELECT COUNT(*) FROM preorder_campaigns WHERE product_id = ?")).isZero();
         assertThat(count("SELECT COUNT(*) FROM shipment_batches WHERE product_id = ?")).isZero();
     }
 
     private CampaignRegistration registration(Instant opens) {
-        return new CampaignRegistration(opens, opens.plusSeconds(86_400), TWO_BATCHES);
+        return new CampaignRegistration(opens, opens.plusSeconds(86_400), TWO_BATCHES, true, 1);
+    }
+
+    /** 공개 여부 | 공개 여부 번호 | 일정 번호 */
+    private String visibility() {
+        return jdbcTemplate.queryForObject("""
+                SELECT CONCAT_WS('|', visible, visibility_version, schedule_version)
+                  FROM preorder_campaigns WHERE product_id = ?
+                """, String.class, productId);
     }
 
     private int count(String sql) {

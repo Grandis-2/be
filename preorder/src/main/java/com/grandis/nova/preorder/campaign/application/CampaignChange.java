@@ -5,6 +5,8 @@ public enum CampaignChange {
     CREATED,
     RESCHEDULED,
     CLOSED,
+    /** catalog 에서 상품 공개 여부가 바뀌었다. */
+    VISIBILITY,
     /** 바뀐 것 없이 현재 일정을 다시 보낸다(전체 재발행). */
     RESYNC
 }

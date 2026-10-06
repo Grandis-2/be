@@ -152,12 +152,37 @@ class CampaignChangeEventTest {
         assertThat(events(ended.productId())).isEmpty();
     }
 
+    @Test
+    void 공개_여부는_더_큰_번호만_반영하고_값이_바뀔_때만_일정_번호를_올려_적으며_재발행에도_실린다() {
+        Instant now = Instant.now();
+        PreorderProduct product = fixtures.preorderProduct(now.plusSeconds(3600), now.plusSeconds(7200));
+        Long productId = product.productId();
+
+        campaigns.applyVisibility(productId, false, 2);
+        campaigns.applyVisibility(productId, true, 1);
+        campaigns.applyVisibility(productId, true, 2);
+        campaigns.applyVisibility(productId, false, 3);
+        republisher.republishAll();
+        campaigns.applyVisibility(productId, true, 4);
+
+        List<Map<String, Object>> events = events(productId);
+        assertThat(events).extracting(event -> event.get("change"))
+                .as("옛 번호 · 같은 번호 · 같은 값은 적지 않는다").containsExactly("VISIBILITY", "RESYNC", "VISIBILITY");
+        assertThat(events).extracting(event -> event.get("visible")).containsExactly("false", "false", "true");
+        assertThat(events).extracting(event -> event.get("version")).containsExactly(1L, 1L, 2L);
+        assertThat(scheduleVersion(productId)).isEqualTo(2);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT visibility_version FROM preorder_campaigns WHERE product_id = ?", Long.class, productId))
+                .isEqualTo(4);
+    }
+
     private List<Map<String, Object>> events(Long productId) {
         return jdbcTemplate.queryForList("""
                 SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.change')) AS `change`,
                        CAST(JSON_EXTRACT(payload, '$.scheduleVersion') AS SIGNED) AS version,
                        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.opensAt')) AS opensAt,
-                       JSON_UNQUOTE(JSON_EXTRACT(payload, '$.closesAt')) AS closesAt
+                       JSON_UNQUOTE(JSON_EXTRACT(payload, '$.closesAt')) AS closesAt,
+                       JSON_UNQUOTE(JSON_EXTRACT(payload, '$.visible')) AS visible
                   FROM preorder_outbox_events
                  WHERE event_type = 'PREORDER_CAMPAIGN_CHANGED' AND aggregate_type = 'PREORDER_CAMPAIGN'
                    AND aggregate_id = ?

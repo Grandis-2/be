@@ -20,6 +20,6 @@ public class CampaignChangePublisher {
 
     public void publish(PreorderCampaign campaign, CampaignChange change) {
         outboxWriter.append(new PreorderCampaignChanged(campaign.getProductId(), campaign.getScheduleVersion(),
-                campaign.getOpensAt(), campaign.getClosesAt(), clock.instant(), change));
+                campaign.getOpensAt(), campaign.getClosesAt(), campaign.isVisible(), clock.instant(), change));
     }
 }
