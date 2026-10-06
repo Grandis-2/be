@@ -117,7 +117,7 @@ class ExpiryCancelServiceTest {
 
         expiryCancelService.expire(token);
 
-        assertThat(status()).isEqualTo("PAYABLE");
+        assertThat(status()).isEqualTo("REGISTERED");
     }
 
     @Test
