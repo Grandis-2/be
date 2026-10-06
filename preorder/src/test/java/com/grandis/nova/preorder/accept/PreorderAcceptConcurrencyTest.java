@@ -208,6 +208,50 @@ class PreorderAcceptConcurrencyTest {
         assertThat(again.replayed()).isFalse();
     }
 
+    @Test
+    void 취소_뒤_재신청은_횟수_제한_없이_매번_새_예약과_새_순번을_받는다() throws Exception {
+        Long customerId = fixtures.customer();
+        AcceptResult first = acceptByCustomer(customerId, "repeat-key-0");
+        PreorderCancels cancels = new PreorderCancels(ledger, transactionTemplate);
+        cancels.complete(first.preorder().id());
+        long lastPosition = first.preorder().queuePosition();
+
+        for (int i = 1; i <= 3; i++) {
+            // 재신청마다 다시 진입해 받은 입장권 — 직전 접수보다 나중 창이고 서로 다르다
+            String ticket = AdmissionTickets.issue(product.productId(), customerId,
+                    laterWindow().plusSeconds((long) i * AdmissionTickets.WINDOW_SECONDS));
+            AcceptResult again = acceptService.acceptByCustomer(customerId, product.productId(), product.productId(),
+                    product.optionId(), "repeat-key-" + i, ticket);
+
+            assertThat(again.replayed()).isFalse();
+            assertThat(again.preorder().queuePosition()).isEqualTo(lastPosition + 1);
+            lastPosition = again.preorder().queuePosition();
+            cancels.complete(again.preorder().id());
+        }
+
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM preorders WHERE customer_id = ? AND status = 'CANCELED' AND active_marker IS NULL
+                """, Integer.class, customerId)).isEqualTo(4);
+    }
+
+    @RepeatedTest(3)
+    void 취소_직후_같은_새_키로_동시에_재신청해도_예약_하나_순번_하나() throws Exception {
+        Long customerId = fixtures.customer();
+        AcceptResult first = acceptByCustomer(customerId, "recancel-key-0");
+        new PreorderCancels(ledger, transactionTemplate).complete(first.preorder().id());
+        String ticket = AdmissionTickets.issue(product.productId(), customerId, laterWindow());
+        int requests = 10;
+
+        List<Outcome> outcomes = concurrently(requests, i -> () -> acceptService.acceptByCustomer(customerId,
+                product.productId(), product.productId(), product.optionId(), "recancel-key-1", ticket));
+
+        assertThat(outcomes).allMatch(Outcome::accepted);
+        assertThat(outcomes.stream().map(o -> o.result().preorder().preorderToken()).distinct()).hasSize(1);
+        assertThat(outcomes.stream().filter(o -> !o.result().replayed())).hasSize(1);
+        assertThat(committedPositions()).containsExactly(1L, 2L);
+        assertThat(nextQueuePosition()).isEqualTo(3);
+    }
+
     @RepeatedTest(3)
     void 같은_입장에서_받은_입장권_두_장을_동시에_보내면_하나만_받고_나머지는_STALE() throws Exception {
         Long customerId = fixtures.customer();
