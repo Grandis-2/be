@@ -34,16 +34,16 @@ public record PreorderSnapshot(
 
     public static final Duration PAYMENT_WINDOW = Duration.ofHours(24);
 
-    /** 결제 기한 — 결제 가능해진 시각부터 24시간. 연장은 없다. PAYABLE 이 아니면 없다. */
+    /** 결제 기한 — 결제 가능해진 시각부터 24시간. 연장은 없다. REGISTERED 이 아니면 없다. */
     public Instant paymentDueAt() {
-        return status == PreorderStatus.PAYABLE && payableFrom != null ? payableFrom.plus(PAYMENT_WINDOW) : null;
+        return status == PreorderStatus.REGISTERED && payableFrom != null ? payableFrom.plus(PAYMENT_WINDOW) : null;
     }
 
     /** 지금 결제할 수 없으면 그 까닭, 결제할 수 있으면 null. 기한이 지났는데 아직 만료 처리 전이면 DUE_PASSED 다. */
     public PayabilityBlocker payabilityBlocker(Instant now) {
         return switch (status) {
             case PENDING_SYNC -> PayabilityBlocker.NOT_YET_REGISTERED;
-            case PAYABLE -> now.isBefore(paymentDueAt()) ? null : PayabilityBlocker.DUE_PASSED;
+            case REGISTERED -> now.isBefore(paymentDueAt()) ? null : PayabilityBlocker.DUE_PASSED;
             case RESERVED -> PayabilityBlocker.ALREADY_RESERVED;
             case CANCELING -> PayabilityBlocker.CANCELING;
             case CANCELED -> PayabilityBlocker.CANCELED;
@@ -52,7 +52,7 @@ public record PreorderSnapshot(
 
     /** 취소 버튼을 보일지. 결제된 예약도 취소(환불)할 수 있다 — 배송 시작 여부는 취소 요청 때 order 에 다시 묻는다. */
     public boolean isCancelable() {
-        return status == PreorderStatus.PENDING_SYNC || status == PreorderStatus.PAYABLE
+        return status == PreorderStatus.PENDING_SYNC || status == PreorderStatus.REGISTERED
                 || status == PreorderStatus.RESERVED;
     }
 }

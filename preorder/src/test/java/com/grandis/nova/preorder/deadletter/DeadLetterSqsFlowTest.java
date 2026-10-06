@@ -92,7 +92,7 @@ class DeadLetterSqsFlowTest {
 
         await().atMost(TIMEOUT).until(() -> "SUCCEEDED".equals(status(id)));
         assertThat(jdbcTemplate.queryForObject("SELECT status FROM preorders WHERE id = ?", String.class, preorderId))
-                .isEqualTo("PAYABLE");
+                .isEqualTo("REGISTERED");
     }
 
     @Test

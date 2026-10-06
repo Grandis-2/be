@@ -4,7 +4,7 @@
 SELECT
     COUNT(*)                                              AS total_accepted,
     SUM(p.status = 'PENDING_SYNC')                        AS pending_sync,
-    SUM(p.status = 'PAYABLE')                             AS payable,
+    SUM(p.status = 'REGISTERED')                          AS registered,
     SUM(p.status = 'CANCELING')                           AS canceling,
     SUM(p.status = 'CANCELED')                            AS canceled,
     SUM(p.status IN ('PENDING_SYNC', 'CANCELING'))        AS not_final,

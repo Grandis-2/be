@@ -82,7 +82,7 @@ class CancelFlowScenarioTest {
         handler.onExternalJobSucceeded(new ExternalJobSucceeded(cancelJobId, token, "CANCEL", null));
 
         assertThat(history()).containsExactly(
-                "null>PENDING_SYNC", "PENDING_SYNC>PAYABLE", "PAYABLE>CANCELING", "CANCELING>CANCELED");
+                "null>PENDING_SYNC", "PENDING_SYNC>REGISTERED", "REGISTERED>CANCELING", "CANCELING>CANCELED");
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT JSON_UNQUOTE(JSON_EXTRACT(request_payload, '$.reservationNo')) FROM preorder_sync_jobs"
                         + " WHERE id = ?", String.class, cancelJobId)).isEqualTo(externalNumber);
@@ -95,7 +95,7 @@ class CancelFlowScenarioTest {
                 fixtures.cancelSequence(preorderId), null));
 
         assertThat(history()).containsExactly(
-                "null>PENDING_SYNC", "PENDING_SYNC>PAYABLE", "PAYABLE>CANCELING", "CANCELING>PAYABLE");
+                "null>PENDING_SYNC", "PENDING_SYNC>REGISTERED", "REGISTERED>CANCELING", "CANCELING>REGISTERED");
         assertThat(fixtures.count(
                 "SELECT COUNT(*) FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'CANCEL'", preorderId))
                 .isZero();

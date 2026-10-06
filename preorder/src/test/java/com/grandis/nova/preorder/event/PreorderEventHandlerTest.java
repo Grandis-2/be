@@ -66,7 +66,7 @@ class PreorderEventHandlerTest {
         handler.onExternalJobSucceeded(message);
         handler.onExternalJobSucceeded(message);
 
-        assertThat(row()).containsEntry("status", "PAYABLE").containsEntry("external_reference", externalNumber);
+        assertThat(row()).containsEntry("status", "REGISTERED").containsEntry("external_reference", externalNumber);
         assertThat(eventCount()).isEqualTo(2);
     }
 
@@ -127,7 +127,7 @@ class PreorderEventHandlerTest {
 
         handler.onOrderSettled(settled(PreorderOrderSettled.Result.REJECTED, "SHIPPED"));
 
-        assertThat(row()).containsEntry("status", "PAYABLE");
+        assertThat(row()).containsEntry("status", "REGISTERED");
         assertThat(jdbcTemplate.queryForObject("""
                 SELECT reason FROM preorder_events WHERE preorder_id = ? ORDER BY event_sequence DESC LIMIT 1
                 """, String.class, preorderId)).isEqualTo("ORDER_REJECTED:SHIPPED");

@@ -140,7 +140,7 @@ class PreorderQueryApiTest {
         mockMvc.perform(get("/api/v1/preorders/" + AcceptFixtures.tokenOf(accepted))
                         .with(customer(customerId)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.status").value("PAYABLE"))
+                .andExpect(jsonPath("$.data.status").value("REGISTERED"))
                 .andExpect(jsonPath("$.data.externalReference").value(externalReference))
                 .andExpect(jsonPath("$.data.cancelable").value(true))
                 .andExpect(jsonPath("$.data.paymentDueAt").exists())
@@ -163,7 +163,7 @@ class PreorderQueryApiTest {
 
         fire(id, new PreorderFact.PaymentStarted(Instant.now()));
         mockMvc.perform(get(path).with(customer(customerId)))
-                .andExpect(jsonPath("$.data.status").value("PAYABLE"))
+                .andExpect(jsonPath("$.data.status").value("REGISTERED"))
                 .andExpect(jsonPath("$.data.displayStatus").value("PAYMENT_IN_PROGRESS"));
 
         fire(id, new PreorderFact.PaymentConfirmed(Instant.parse("2026-10-04T01:00:00Z")));
@@ -187,7 +187,7 @@ class PreorderQueryApiTest {
         fire(id, new PreorderFact.RegisterConfirmed("EXT-" + ShopFixtures.unique()));
         jdbcTemplate.update("UPDATE preorders SET payable_from = payable_from - INTERVAL 25 HOUR WHERE id = ?", id);
         mockMvc.perform(get(path).with(customer(customerId)))
-                .andExpect(jsonPath("$.data.status").value("PAYABLE"))
+                .andExpect(jsonPath("$.data.status").value("REGISTERED"))
                 .andExpect(jsonPath("$.data.displayStatus").value("PAYMENT_EXPIRED"));
     }
 
