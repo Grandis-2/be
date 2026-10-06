@@ -22,6 +22,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -86,8 +87,7 @@ public class AdminStockService {
     /**
      * 총량을 설정한다. 행이 없는 옵션은 만든다. 목록에 없는 옵션은 건드리지 않는다.
      *
-     * @param settings 같은 옵션이 두 번 오지 않는다(HTTP 경계가 400 으로 거른다)
-     * @throws BusinessException PRODUCT_NOT_FOUND · STOCK_NOT_TRACKED · VALIDATION_FAILED(그 상품의 옵션이 아님) ·
+     * @throws BusinessException PRODUCT_NOT_FOUND · STOCK_NOT_TRACKED · VALIDATION_FAILED(같은 옵션이 두 번 · 그 상품의 옵션이 아님) ·
      *                           STOCK_BELOW_COMMITTED · DEPENDENCY_UNAVAILABLE(경합이 이어짐)
      */
     public StockResult set(Long productId, List<StockSetting> settings) {
@@ -98,7 +98,7 @@ public class AdminStockService {
      * 행이 없는 옵션만 만든다. 있는 옵션은 값이 달라도 그대로 두고 결과에 현재 값을 싣는다(created=false).
      * 상품 등록의 재고 단계가 부른다 — 응답을 못 받고 재개해도 그사이 관리자가 고친 값을 덮지 않는다.
      *
-     * @throws BusinessException PRODUCT_NOT_FOUND · STOCK_NOT_TRACKED · VALIDATION_FAILED(그 상품의 옵션이 아님) ·
+     * @throws BusinessException PRODUCT_NOT_FOUND · STOCK_NOT_TRACKED · VALIDATION_FAILED(같은 옵션이 두 번 · 그 상품의 옵션이 아님) ·
      *                           DEPENDENCY_UNAVAILABLE(경합이 이어짐)
      */
     public StockResult initialize(Long productId, List<StockSetting> settings) {
@@ -110,6 +110,7 @@ public class AdminStockService {
             throw new IllegalStateException("재고 변경은 트랜잭션 밖에서 불러야 한다 — 다시 하기가 새 트랜잭션이어야 한다");
         }
         List<Long> optionIds = settings.stream().map(StockSetting::optionId).toList();
+        requireDistinctOptions(optionIds);
         for (int attempt = 1; ; attempt++) {
             try {
                 return writeTransaction.execute(status -> {
@@ -160,6 +161,19 @@ public class AdminStockService {
                 .orElseThrow(() -> new BusinessException(OrderErrorCode.PRODUCT_NOT_FOUND));
         if (saleMode != SaleMode.IN_STOCK) {
             throw new BusinessException(OrderErrorCode.STOCK_NOT_TRACKED);
+        }
+    }
+
+    /**
+     * 같은 옵션이 두 번 오면 어느 값을 쓸지 모르므로 400 이다. 어느 경로로 불리든 여기서 막는다 — 원장까지 가면
+     * 같은 행을 두 번 INSERT 해 PK 중복이 나고, 동시 생성으로 오인해 다시 하다 503 이 된다.
+     */
+    private static void requireDistinctOptions(List<Long> optionIds) {
+        Set<Long> seen = new HashSet<>();
+        for (int i = 0; i < optionIds.size(); i++) {
+            if (!seen.add(optionIds.get(i))) {
+                throw ValidationFailures.of("items[%d].optionId".formatted(i), "같은 옵션이 두 번 있습니다.");
+            }
         }
     }
 

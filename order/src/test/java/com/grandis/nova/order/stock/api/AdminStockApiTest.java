@@ -211,6 +211,25 @@ class AdminStockApiTest {
         assertThat(reader.findByOptionIds(List.of(first, foreign))).isEmpty();
     }
 
+    // 그 상품의 옵션으로 보낸다. 남의 옵션이면 소속 검사로도 400 이라 중복 검사를 증명하지 못한다.
+    @Test
+    void sameOptionTwiceIs400AtSecondPositionOnPutAndPost() throws Exception {
+        String twice = """
+                {"items":[{"optionId":%d,"stockTotal":1},{"optionId":%d,"stockTotal":2}]}
+                """.formatted(first, first);
+
+        put(product.productId(), twice, TestAuth.admin())
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.error.details.violations[0].field").value("items[1].optionId"));
+        post(product.productId(), twice)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.error.details.violations[0].field").value("items[1].optionId"));
+
+        assertThat(reader.findByOptionIds(List.of(first))).isEmpty();
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {
             "{}",
@@ -219,8 +238,7 @@ class AdminStockApiTest {
             "{\"items\":[{\"stockTotal\":1}]}",
             "{\"items\":[{\"optionId\":0,\"stockTotal\":1}]}",
             "{\"items\":[{\"optionId\":1,\"stockTotal\":-1}]}",
-            "{\"items\":[{\"optionId\":1}]}",
-            "{\"items\":[{\"optionId\":1,\"stockTotal\":1},{\"optionId\":1,\"stockTotal\":2}]}"
+            "{\"items\":[{\"optionId\":1}]}"
     })
     void malformedRequestIs400(String body) throws Exception {
         put(product.productId(), body, TestAuth.admin())

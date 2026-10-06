@@ -1,7 +1,6 @@
 package com.grandis.nova.order.stock.api;
 
 import com.grandis.nova.order.stock.domain.model.StockSetting;
-import com.grandis.nova.order.web.ValidationFailures;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
@@ -13,13 +12,11 @@ import tools.jackson.databind.DeserializationContext;
 import tools.jackson.databind.ValueDeserializer;
 import tools.jackson.databind.annotation.JsonDeserialize;
 
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * 한 상품의 여러 옵션 재고. 상한은 catalog 의 상품당 조합 상한(MAX_COMBINATIONS)과 같다.
- * 같은 옵션이 두 번 오면 어느 값을 쓸지 모르므로 400 이다.
+ * 같은 옵션이 두 번 오는 것은 서비스가 거른다(AdminStockService).
  *
  * 두 칸은 JSON 정수만 받는다. Jackson 기본값(ACCEPT_FLOAT_AS_INT)은 12.5 를 12 로 잘라 다른 옵션 · 다른 수량이
  * 조용히 들어가므로, 전역 설정을 건드리지 않고 이 칸에서만 소수를 400 으로 거절한다.
@@ -31,12 +28,6 @@ public record StockRequest(
     static final int MAX_ITEMS = 500;
 
     List<StockSetting> toSettings() {
-        Set<Long> seen = new HashSet<>();
-        for (int i = 0; i < items.size(); i++) {
-            if (!seen.add(items.get(i).optionId())) {
-                throw ValidationFailures.of("items[%d].optionId".formatted(i), "같은 옵션이 두 번 있습니다.");
-            }
-        }
         return items.stream().map(item -> new StockSetting(item.optionId(), item.stockTotal())).toList();
     }
 
