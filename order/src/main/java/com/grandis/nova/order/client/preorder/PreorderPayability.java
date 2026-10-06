@@ -32,6 +32,7 @@ public record PreorderPayability(
 ) {
 
     static final String DUE_PASSED = "DUE_PASSED";
+    static final String CANCELED = "CANCELED";
 
     public boolean isOwnedBy(Long customerId) {
         return this.customerId.equals(customerId);
@@ -40,5 +41,10 @@ public record PreorderPayability(
     /** 결제 기한이 지나 결제할 수 없다. 그 밖의 사유(등록 전 · 취소 중 · 취소됨 · 모르는 값)는 모두 "결제할 수 없는 예약" 이다. */
     public boolean isDuePassed() {
         return !payable && DUE_PASSED.equals(reason);
+    }
+
+    /** 예약이 취소를 마쳤다. 취소 중(CANCELING)은 아니다 — 그건 아직 취소 요청 메시지가 주문을 정리하는 중이다. */
+    public boolean isCanceled() {
+        return !payable && CANCELED.equals(reason);
     }
 }

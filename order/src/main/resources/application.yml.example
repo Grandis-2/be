@@ -35,6 +35,19 @@ spring:
         base-url: http://localhost:8083
         connect-timeout: 300ms
         read-timeout: 1s
+      # 결제 준비 때 결제창을 열 거래 생성(POST /internal/payment-attempts). 토스를 부르지 않는 짧은 호출이라 preorder 와 같은 수준이다.
+      # 답이 없으면 503 이고, payment 가 이미 만든 거래는 버려진 PENDING 으로 남는다(사용자가 다시 부른다)
+      payment:
+        base-url: http://localhost:8085
+        connect-timeout: 300ms
+        read-timeout: 1s
+      # 결제 승인(POST /internal/payment-attempts/{id}/confirm). payment 가 토스를 최대 63초(연결 3 + 읽기 60) 기다리므로
+      # 읽기는 결제 거래 리스(70s)에 맞춘다. 넘으면 실패가 아니라 "결제 확인 중"이다(결과 이벤트 · 재요청으로 받는다).
+      # 앞단 ALB 유휴 타임아웃(기본 60s)이 이보다 짧으면 프론트가 504 를 먼저 받는다 — 프론트는 504 를 "확인 중"으로 다룬다
+      payment-confirm:
+        base-url: http://localhost:8085
+        connect-timeout: 300ms
+        read-timeout: 70s
 
 server:
   port: 8084
@@ -48,6 +61,10 @@ server:
 #     enabled: true
 
 nova:
+  # 결제 승인 동시 상한(인스턴스당). payment 응답을 최대 70s 기다리는 승인이 이만큼 차면 다음 승인은 상태를 바꾸기 전에 503 이다 —
+  # 토스가 느려져도 결제와 무관한 주문 API 의 요청 스레드(Tomcat 200)가 남는다
+  payment-confirm:
+    max-concurrency: 50
   # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다
   sqs:
     region: ap-northeast-2
@@ -64,6 +81,12 @@ nova:
       visibility: 5m       # 처리 한 건보다 길게
       backoff-base: 5s
       backoff-max: 5m
+      # 결과를 정할 수 없는 예약 취소(승인 확인 중 · 환불 중 · 환불 실패로 사람 대기)는 같은 큐에 지연을 두고 다시 보낸다.
+      # 보류할 때마다 두 배, 최대 15분(SQS 상한). 포기하지 않는다 — 처음 보류한 뒤 alert-after 가 지나면 ERROR 를 한 번 남긴다.
+      # 다시 보내려면 order 역할에 order-events 의 sqs:SendMessage 권한이 있어야 한다
+      defer-first-delay: 60s
+      defer-max-delay: 15m
+      defer-alert-after: 24h
   # 아웃박스 발행. transport 는 필수(없으면 기동 실패)이고 운영 값은 sqs 다.
   # log 는 보내지 않고 행을 발행 완료로 표시하는 로컬 · 테스트 전용 전송이라, log-transport-allowed: true 를 함께 적어야 뜬다.
   # 그 허용 줄은 이 예시에 적지 않는다 — 여기서 만든 운영 설정이 실수로 log 로 뜨지 않게

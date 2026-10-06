@@ -27,11 +27,16 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, Long>,
     @Modifying(flushAutomatically = true)
     @Query("""
             update OrderJpaEntity o
-               set o.status = :to, o.eventSequence = o.eventSequence + 1, o.updatedAt = :now
+               set o.status = :to, o.authorizingProviderOrderId = :attempt, o.eventSequence = o.eventSequence + 1,
+                   o.updatedAt = :now
              where o.id = :id and o.status = :from
             """)
     int changeStatus(@Param("id") Long id, @Param("from") OrderStatus from, @Param("to") OrderStatus to,
-                     @Param("now") Instant now);
+                     @Param("attempt") String authorizingProviderOrderId, @Param("now") Instant now);
+
+    /** 스칼라 조회라 영속성 컨텍스트의 엔티티가 아니라 DB 값을 읽는다. 행을 잠근 트랜잭션에서 부른다. */
+    @Query("select o.authorizingProviderOrderId from OrderJpaEntity o where o.id = :id")
+    Optional<String> findAuthorizingProviderOrderId(@Param("id") Long id);
 
     @Query(value = "SELECT status FROM orders WHERE id = :id FOR UPDATE", nativeQuery = true)
     Optional<OrderStatus> findStatusForUpdate(@Param("id") Long id);

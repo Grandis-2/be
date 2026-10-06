@@ -91,7 +91,7 @@ class JpaOrderStoreTest {
     void insertAcceptsOnlyNewAwaitingPaymentOrders() {
         Order placed = Order.place(preorderCommand(customerId, preorderId, product).toDraft(), OrderToken.issue());
         Order delivered = new Order(null, placed.orderToken(), customerId, OrderSource.PREORDER, preorderId,
-                placed.preorderToken(), OrderStatus.DELIVERED, placed.totalAmount(), null, null, placed.shipTo(), null, 5, null, null);
+                placed.preorderToken(), OrderStatus.DELIVERED, null, placed.totalAmount(), null, null, placed.shipTo(), null, 5, null, null);
         Order stored = writer.insert(placed);
 
         assertThatThrownBy(() -> writer.insert(delivered))
@@ -116,7 +116,7 @@ class JpaOrderStoreTest {
         assertThat(reader.findById(stored.id())).get().extracting(Order::status).isEqualTo(OrderStatus.AWAITING_PAYMENT);
         OrderItemJpaEntity otherManaged = items.findByOrderIdOrderById(stored.id()).getFirst();
 
-        writer.changeStatus(stored.id(), OrderStatus.AWAITING_PAYMENT, OrderStatus.CANCELED, Instant.now());
+        writer.changeStatus(stored.id(), OrderStatus.AWAITING_PAYMENT, OrderStatus.CANCELED, null, Instant.now());
 
         assertThat(entityManager.contains(otherManaged)).isTrue();
         assertThat(reader.findById(stored.id())).get().extracting(Order::status).isEqualTo(OrderStatus.CANCELED);

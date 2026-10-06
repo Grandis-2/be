@@ -2,6 +2,7 @@ package com.grandis.nova.order.order;
 
 import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
+import com.grandis.nova.order.order.domain.enums.OrderTrigger;
 import com.grandis.nova.order.order.domain.exception.OrderAlreadyPlacedException;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderDraft;
@@ -28,11 +29,15 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static com.grandis.nova.order.order.domain.enums.OrderStatus.AUTHORIZING;
 import static com.grandis.nova.order.order.domain.enums.OrderStatus.AWAITING_CONFIRMATION;
 import static com.grandis.nova.order.order.domain.enums.OrderStatus.AWAITING_PAYMENT;
 import static com.grandis.nova.order.order.domain.enums.OrderStatus.CANCELED;
 import static com.grandis.nova.order.order.domain.enums.OrderStatus.SHIPPED;
 import static com.grandis.nova.order.order.domain.enums.OrderTrigger.CANCEL_REQUESTED;
+import static com.grandis.nova.order.order.domain.enums.OrderTrigger.PAYMENT_APPROVED;
+import static com.grandis.nova.order.order.domain.enums.OrderTrigger.PAYMENT_DECLINED;
+import static com.grandis.nova.order.order.domain.enums.OrderTrigger.PAYMENT_REQUESTED;
 import static com.grandis.nova.order.support.OrderFixtures.UNIT_PRICE;
 import static com.grandis.nova.order.support.OrderFixtures.preorderCommand;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -270,6 +275,99 @@ class OrderLedgerTest {
 
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM orders WHERE preorder_id = ?", Integer.class, preorderId)).isZero();
+    }
+
+    // ── 결제 사건: 결제창 번호를 함께 다룬다 ─────────────────────────────────────
+
+    static final String ATTEMPT = "attempt-current-0001";
+    static final String EARLIER_ATTEMPT = "attempt-earlier-0001";
+
+    @Test
+    void paymentRequestRecordsAttemptAndPaymentResultClearsIt() {
+        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+
+        assertThat(ledger.requestPayment(id, ATTEMPT, EventCause.user()))
+                .isEqualTo(new OrderTransition(true, AUTHORIZING));
+        assertThat(attemptOf(id)).isEqualTo(ATTEMPT);
+
+        assertThat(ledger.settlePayment(id, PAYMENT_APPROVED, ATTEMPT, EventCause.system("PAYMENT_APPROVED")))
+                .isEqualTo(new OrderTransition(true, AWAITING_CONFIRMATION));
+        assertThat(attemptOf(id)).isNull();
+        assertThat(history(id)).containsExactly("1:null>AWAITING_PAYMENT:USER", "2:AWAITING_PAYMENT>AUTHORIZING:USER",
+                "3:AUTHORIZING>AWAITING_CONFIRMATION:SYSTEM");
+    }
+
+    @Test
+    void paymentRequestOnlyFromAwaitingPayment() {
+        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+        ledger.requestPayment(id, ATTEMPT, EventCause.user());
+
+        assertThat(ledger.requestPayment(id, "attempt-second-0001", EventCause.user()))
+                .isEqualTo(new OrderTransition(false, AUTHORIZING));
+        assertThat(attemptOf(id)).isEqualTo(ATTEMPT);
+    }
+
+    // 늦게 온 이전 결제창의 거절은 지금 결제창의 승인 중에 주문을 되돌리지 않는다
+    @Test
+    void declineOfEarlierAttemptIsIgnored() {
+        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+        ledger.requestPayment(id, ATTEMPT, EventCause.user());
+
+        OrderTransition stale = ledger.settlePayment(id, PAYMENT_DECLINED, EARLIER_ATTEMPT, EventCause.system("late"));
+
+        assertThat(stale).isEqualTo(new OrderTransition(false, AUTHORIZING));
+        assertThat(attemptOf(id)).isEqualTo(ATTEMPT);
+        assertThat(ledger.settlePayment(id, PAYMENT_DECLINED, ATTEMPT, EventCause.system("now")))
+                .isEqualTo(new OrderTransition(true, AWAITING_PAYMENT));
+        assertThat(attemptOf(id)).isNull();
+    }
+
+    // 승인은 결제창을 대조하지 않는다 — 대상당 성공 결제는 하나다
+    @Test
+    void approvalIsAppliedWhicheverAttemptReportsIt() {
+        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+        ledger.requestPayment(id, ATTEMPT, EventCause.user());
+
+        assertThat(ledger.settlePayment(id, PAYMENT_APPROVED, EARLIER_ATTEMPT, EventCause.system("x")))
+                .isEqualTo(new OrderTransition(true, AWAITING_CONFIRMATION));
+    }
+
+    @Test
+    void paymentResultOutsideAuthorizingChangesNothing() {
+        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+
+        assertThat(ledger.settlePayment(id, PAYMENT_APPROVED, ATTEMPT, EventCause.system("x")))
+                .isEqualTo(new OrderTransition(false, AWAITING_PAYMENT));
+        assertThat(history(id)).hasSize(1);
+    }
+
+    @Test
+    void paymentTriggersAreRejectedByGenericFire() {
+        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+
+        for (OrderTrigger trigger : EnumSet.of(PAYMENT_REQUESTED, PAYMENT_APPROVED, PAYMENT_DECLINED)) {
+            assertThatThrownBy(() -> ledger.fire(id, trigger, ANY, EventCause.user()))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+        assertThatThrownBy(() -> ledger.settlePayment(id, CANCEL_REQUESTED, ATTEMPT, EventCause.user()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    // 승인 중일 때만 결제창 번호가 있다 — 원장을 거치지 않은 쓰기도 DB 가 막는다
+    @Test
+    void authorizingWithoutAttemptIsRejectedByDatabase() {
+        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+
+        assertThatThrownBy(() -> jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING' WHERE id = ?", id))
+                .hasMessageContaining("ck_order_authorizing_attempt");
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                "UPDATE orders SET authorizing_provider_order_id = 'x' WHERE id = ?", id))
+                .hasMessageContaining("ck_order_authorizing_attempt");
+    }
+
+    private String attemptOf(Long id) {
+        return jdbcTemplate.queryForObject("SELECT authorizing_provider_order_id FROM orders WHERE id = ?",
+                String.class, id);
     }
 
     private Long preorder() {
