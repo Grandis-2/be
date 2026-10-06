@@ -46,8 +46,8 @@ be/
 | 서비스 | ECS desired | 스케일 기준 | 소유 테이블 |
 | --- | --- | --- | --- |
 | `member` | 2~4 | CPU | `customers` · `refresh_tokens` |
-| `catalog` | 2~6 | 요청 수 | `categories` · `products` · `product_options`<br>`product_option_axes` · `product_option_values` · `product_option_selections` · `product_images` · `product_registrations`<br>`catalog_outbox_events` |
-| **`preorder`** | **6~12** | **요청 수** | `preorders` · `preorder_events`<br>`preorder_campaigns` · `shipment_batches` · `product_reviews` |
+| `catalog` | 2~6 | 요청 수 | `categories` · `products` · `product_options`<br>`product_option_axes` · `product_option_values` · `product_option_selections` · `product_images` · `product_registrations`<br>`product_reviews` · `catalog_outbox_events` |
+| **`preorder`** | **6~12** | **요청 수** | `preorders` · `preorder_events`<br>`preorder_campaigns` · `shipment_batches` |
 | `waitingroom` | 2~12 | 요청 수 · 오픈 전 예약 확장 | (없음 — 대기열은 전용 Redis) |
 | `order` | 2~8 | CPU | `orders` · `order_items` · `order_events`<br>`cart_items` · `payments` · `payment_transactions` · `option_inventories` |
 | `worker` | 1~20 | Backlog per Task · SPOT | `preorder_sync_jobs` · `preorder_sync_attempts` |
@@ -92,13 +92,14 @@ batch    시간이 되면 깨어남.   1 로 고정돼야 함 (늘면 같은 스
 **결제·알림은 서비스로 두지 않았다.** 실 PG 를 붙이지 않으므로 결제 Mock 은 `mock-external` 로 나가고,
 결제 기록은 `order` 가 소유한다. 알림은 Mock 기록이라 `worker` 가 SQS 로 처리한다.
 
-### 서비스 간 연결점 넷
+### 서비스 간 연결점 다섯
 
 ```
 결제 시작    order → preorder   "이 예약 결제 가능한가?"           동기 조회
 예약 취소    preorder → order → preorder                        SQS 이벤트
 상품 등록    catalog → preorder(회차 · 차수) / order(초기 재고)    SQS 이벤트 (contracts/catalog-events.md)
 상품 수정    catalog → preorder(캐시 비우기 · 회차 취소)             SQS 이벤트 (contracts/catalog-events.md)
+리뷰 작성    catalog → order(내 주문상품) · member(표시명)          동기 조회 (contracts/order-internal.md · member-internal.md)
 ```
 
 두 번째는 원래부터 단계적이었다. ERD 가 *"예약은 주문 CANCELED 와 Mock 취소 SUCCEEDED 가
