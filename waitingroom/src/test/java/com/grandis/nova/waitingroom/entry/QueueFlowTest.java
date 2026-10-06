@@ -289,6 +289,16 @@ class QueueFlowTest {
         }
 
         @Test
+        void 비공개여도_마감됐으면_이미_선_사람에게도_마감으로_답한다() {
+            snapshot(crowded());
+            queueToken("1");
+            snapshot(ProductState.hidden(1, new SalesWindow(now.minusSeconds(600), now.minusSeconds(1)),
+                    ProductState.UNLIMITED_CAP));
+
+            enter("1").expectStatus().isEqualTo(409).expectBody().jsonPath("$.error.code").isEqualTo("SALE_CLOSED");
+        }
+
+        @Test
         void 오픈_전_비공개도_없는_상품으로_거절한다() {
             snapshot(ProductState.hidden(0, new SalesWindow(now.plusSeconds(600), now.plusSeconds(3_600)),
                     ProductState.UNLIMITED_CAP));

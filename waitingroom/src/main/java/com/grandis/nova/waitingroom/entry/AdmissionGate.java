@@ -17,6 +17,7 @@ import com.grandis.nova.waitingroom.domain.admission.EnqueueLatch;
 import com.grandis.nova.waitingroom.domain.admission.SecondWindowLimiter;
 import com.grandis.nova.waitingroom.domain.product.ProductState;
 import com.grandis.nova.waitingroom.domain.product.RuntimeState;
+import com.grandis.nova.waitingroom.domain.product.SalesPhase;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
 import com.grandis.nova.waitingroom.domain.queue.AdmissionTicket;
 import com.grandis.nova.waitingroom.domain.queue.EtaPolicy;
@@ -85,13 +86,17 @@ public class AdmissionGate {
             GatewaySnapshot snapshot = snapshots.current().orElseThrow(() -> rejected(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
             ProductState state = snapshot.product(productKey)
                     .orElseThrow(() -> rejected(WaitingroomErrorCode.PRODUCT_NOT_FOUND));
+            if (closures.closed(productKey, state.window())) {
+                throw rejected(WaitingroomErrorCode.SALE_CLOSED);
+            }
             Instant now = clock.now();
             long second = now.getEpochSecond();
             if (state.runtime() == RuntimeState.HIDDEN) {
+                // 판정 재료는 한 틱 늦다 — 그사이 마감됐으면 숨김보다 마감이 앞이다
+                if (state.phaseAt(now) == SalesPhase.CLOSED) {
+                    throw rejection(AdmissionDecision.REJECT_CLOSED, state);
+                }
                 return rejoinHidden(productKey, customerId, state, snapshot.meta(), now, second);
-            }
-            if (closures.closed(productKey, state.window())) {
-                throw rejected(WaitingroomErrorCode.SALE_CLOSED);
             }
             AdmissionDecision decision = decider.decide(new AdmissionRequest(productKey, state, snapshot.meta(), now,
                     snapshots.stale(), enqueued.latched(productKey, second), full.latched(productKey, second)));
