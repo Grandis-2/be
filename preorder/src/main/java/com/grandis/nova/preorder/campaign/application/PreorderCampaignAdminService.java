@@ -55,7 +55,7 @@ public class PreorderCampaignAdminService {
      */
     public PreorderCampaign upsertCampaign(Long productId, Instant opensAt, Instant closesAt) {
         requirePeriod(opensAt, closesAt);
-        boolean visible = isVisible(requirePreorderProduct(productId));
+        boolean visible = requirePreorderProduct(productId).isVisible();
         try {
             return writer.upsert(productId, opensAt, closesAt, visible);
         } catch (DataIntegrityViolationException e) {
@@ -97,10 +97,5 @@ public class PreorderCampaignAdminService {
         return catalogReader.findProduct(productId)
                 .filter(ProductCatalog::isPreorderProduct)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND));
-    }
-
-    /** 칸이 없으면(이 칸을 모르는 catalog) 공개로 본다. */
-    private boolean isVisible(ProductCatalog product) {
-        return !Boolean.FALSE.equals(product.visible());
     }
 }

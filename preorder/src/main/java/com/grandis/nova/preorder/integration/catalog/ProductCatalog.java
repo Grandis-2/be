@@ -36,7 +36,12 @@ public record ProductCatalog(
      */
     public boolean isOnPreorderSale() {
         return isPreorderProduct() && OptionSnapshot.ACTIVE.equals(status)
-                && !Boolean.FALSE.equals(visible) && !Boolean.FALSE.equals(registrationCompleted);
+                && isVisible() && !Boolean.FALSE.equals(registrationCompleted);
+    }
+
+    /** 회원에게 공개했는가. 칸이 없으면(이 칸을 모르는 catalog) 숨기지 않는다. */
+    public boolean isVisible() {
+        return !Boolean.FALSE.equals(visible);
     }
 
     /** 이 상품의 옵션이 아니면 비어 있다(다른 상품의 옵션 id 를 섞어 보내는 요청). */
