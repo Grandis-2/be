@@ -7,11 +7,12 @@ on:
   workflow_dispatch:
     inputs:
       services:
-        description: '강제로 빌드할 서비스 (쉼표 구분, 비우면 전부)'
+        description: 'jar 가 같아도 다시 올릴 서비스 (쉼표 구분, all 은 전부). 베이스 이미지를 갱신할 때 쓴다'
         required: false
         default: ''
 
-# 같은 브랜치의 이전 릴리스는 취소하지 않는다 — 푸시된 커밋마다 이미지가 하나씩 남아야 한다.
+# 한 번에 하나만 돈다. 겹쳐 돌면 latest 를 누가 마지막에 옮기는지 정해지지 않는다.
+# 대기는 하나만 남으므로 연달아 푸시하면 중간 커밋은 sha 태그 없이 건너뛴다. latest 는 마지막 내용을 따라간다.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -24,18 +25,17 @@ permissions:
   id-token: write   # OIDC 로 IAM 역할을 assume 한다
 
 jobs:
-  # ── 1단계: 무엇을 다시 빌드할지 정한다 ────────────────────────────────
-  # 의존 관계를 여기 적지 않는다. build.gradle 에서 그래프를 뽑아 쓴다.
-  # 모듈을 추가하거나 의존을 바꿔도 이 워크플로는 그대로다.
-  detect:
+  # ── 1단계: jar 를 전부 만들고, 내용이 바뀐 서비스만 고른다 ─────────────
+  # 바뀐 파일로 짐작하지 않는다. jar 와 Dockerfile 의 해시(내용 키)가 ECR 에 이미 있으면
+  # 그 이미지에 태그만 옮기고, 없으면 2단계에서 이미지를 만든다. jar 는 재현 가능하게 만들어진다.
+  # 이미지에 들어가는 것이 이 둘뿐이라는 전제다. Dockerfile 이 다른 파일을 COPY 하면 그 파일도 키에 넣는다.
+  package:
     runs-on: ubuntu-latest
     outputs:
-      services: ${{ steps.pick.outputs.services }}
-      any: ${{ steps.pick.outputs.any }}
+      publish: ${{ steps.plan.outputs.publish }}
+      any: ${{ steps.plan.outputs.any }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # 이전 커밋과 비교해야 한다
 
       - uses: actions/setup-java@v4
         with:
@@ -44,106 +44,150 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: 의존 그래프 추출
-        run: ./gradlew serviceGraph -q --no-daemon > /dev/null
-
-      - name: 변경 파일 → 서비스
-        id: pick
-        env:
-          FORCED: ${{ inputs.services }}
-          BEFORE: ${{ github.event.before }}
+      # 여기서 빨간불이면 코드 문제다. 테스트는 PR 에서 build.yml 이 이미 돌렸다.
+      - name: jar 만들기
         run: |
           set -euo pipefail
+          ./gradlew serviceGraph -q --no-daemon > /dev/null
+          jq -r '.services[] | ":" + . + ":bootJar"' build/service-graph.json | xargs -r ./gradlew --no-daemon
 
-          if [ -n "$FORCED" ]; then
-            list=$(echo "$FORCED" | tr ',' '\n' | tr -d ' ' | grep -v '^$' | jq -R . | jq -sc .)
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            list=$(jq -c '.services | keys' build/service-graph.json)
-          else
-            # 비교 기준이 없거나(첫 푸시) 강제 푸시로 유효하지 않으면 전부 빌드한다.
-            # 애매할 때 많이 빌드하는 쪽이 누락보다 안전하다.
-            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
-               || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-              echo "::notice::비교 기준을 찾을 수 없다. 전체를 빌드한다."
-              list=$(jq -c '.services | keys' build/service-graph.json)
-            else
-              git diff --name-only "$BEFORE" "${{ github.sha }}" > changed.txt
-              list=$(python3 .github/scripts/affected.py build/service-graph.json changed.txt)
-            fi
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ECR 을 읽기만 한다. 태그가 없다는 답(ImageNotFound)만 "새 내용"이고,
+      # 저장소가 없거나 권한이 없는 오류는 그대로 실패한다 — 전부 다시 올리는 쪽으로 넘기지 않는다.
+      # 찾은 이미지의 매니페스트는 다음 스텝이 태그를 옮길 때 그대로 쓴다. 형식을 바꿔 받지 않도록 받을 형식을 모두 적는다.
+      - name: 내용 키 판정
+        id: plan
+        env:
+          FORCED: ${{ inputs.services }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          graph=build/service-graph.json
+
+          forced=$(echo "$FORCED" | tr ',' '\n' | tr -d ' ' | grep -v '^$' || true)
+          if [ "$forced" = "all" ]; then
+            forced=$(jq -r '.services[]' "$graph")
           fi
+          for s in $forced; do
+            jq -e --arg s "$s" '.services | index($s) != null' "$graph" > /dev/null \
+              || { echo "::error::없는 서비스다: $s"; exit 1; }
+          done
 
-          echo "services=$list" >> "$GITHUB_OUTPUT"
-          [ "$(echo "$list" | jq 'length')" -gt 0 ] \
+          dockerfile=$(sha256sum docker/Dockerfile | cut -d' ' -f1)
+          echo '[]' > plan.json
+          for s in $(jq -r '.services[]' "$graph"); do
+            jars=()
+            for f in "$s"/build/libs/*.jar; do [[ $f == *-plain.jar ]] || jars+=("$f"); done
+            [ "${#jars[@]}" -eq 1 ] || { echo "::error::$s 의 jar 가 하나가 아니다: ${jars[*]}"; exit 1; }
+            jar=${jars[0]}
+            key=$(printf '%s%s' "$(sha256sum "$jar" | cut -d' ' -f1)" "$dockerfile" | sha256sum | cut -d' ' -f1)
+
+            image=null
+            if grep -qxF -- "$s" <<< "$forced"; then
+              action=publish
+            else
+              found=$(aws ecr batch-get-image --repository-name "nova-$s" \
+                --image-ids "imageTag=content-$key" \
+                --accepted-media-types \
+                  application/vnd.docker.distribution.manifest.v2+json \
+                  application/vnd.docker.distribution.manifest.list.v2+json \
+                  application/vnd.oci.image.manifest.v1+json \
+                  application/vnd.oci.image.index.v1+json \
+                --output json)
+              if [ "$(echo "$found" | jq '.images | length')" -gt 0 ]; then
+                action=move
+                image=$(echo "$found" | jq -c '.images[0]')
+              elif echo "$found" | jq -e '[.failures[].failureCode] == ["ImageNotFound"]' > /dev/null; then
+                action=publish
+              else
+                echo "::error::nova-$s 조회 실패: $(echo "$found" | jq -c '.failures')"
+                exit 1
+              fi
+            fi
+
+            if [ "$action" = publish ]; then
+              mkdir -p "dist/$s" && cp "$jar" "dist/$s/app.jar"
+            fi
+            jq --arg s "$s" --arg k "$key" --arg a "$action" --argjson i "$image" \
+              '. + [{service: $s, key: $k, action: $a, image: $i}]' plan.json > plan.tmp && mv plan.tmp plan.json
+          done
+
+          publish=$(jq -c '[.[] | select(.action == "publish") | {service, key}]' plan.json)
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          [ "$(echo "$publish" | jq 'length')" -gt 0 ] \
             && echo "any=true" >> "$GITHUB_OUTPUT" \
             || echo "any=false" >> "$GITHUB_OUTPUT"
 
           {
-            echo "## 빌드 대상"
-            echo '```'
-            echo "$list" | jq -r '.[]' || true
-            echo '```'
+            echo "## 판정"
+            echo "| 서비스 | 판정 | 내용 키 |"
+            echo "|---|---|---|"
+            jq -r '.[] | "| \(.service) | \(if .action == "move" then "그대로 (태그만 옮김)" else "새로 올림" end) | `\(.key[:12])` |"' plan.json
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # ── 2단계: jar 를 만든다 ──────────────────────────────────────────────
-  # 여기서 빨간불이면 코드 문제다.
-  # 테스트는 PR 에서 build.yml 이 이미 돌렸다.
-  package:
-    needs: detect
-    if: needs.detect.outputs.any == 'true'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        service: ${{ fromJSON(needs.detect.outputs.services) }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '25'
-
-      - uses: gradle/actions/setup-gradle@v4
-
-      - run: ./gradlew :${{ matrix.service }}:bootJar --no-daemon
-
-      - name: jar 추려내기
+      # 건너뛰는 서비스도 sha · latest 를 지금 내용의 이미지로 옮긴다. 되돌림 커밋으로 예전 내용이 되면
+      # latest 가 직전 이미지에 남아 있기 때문이다. 매니페스트에 태그만 붙이므로 레이어는 오가지 않는다.
+      # 다이제스트를 함께 넘겨, 매니페스트가 원본과 다르면 새 이미지를 만들지 않고 실패한다.
+      - name: 태그 옮기기
+        env:
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          jar=$(ls ${{ matrix.service }}/build/libs/*.jar | grep -v -- '-plain.jar$' | head -1)
-          test -n "$jar"
-          mkdir -p dist && cp "$jar" dist/app.jar
+          jq -c '.[] | select(.action == "move")' plan.json | while read -r row; do
+            s=$(echo "$row" | jq -r .service)
+            key=$(echo "$row" | jq -r .key)
+            image=$(echo "$row" | jq -c .image)
+            for tag in "$SHA" latest; do
+              # 이미 같은 이미지에 붙어 있으면 ImageAlreadyExistsException 이다. 할 일이 없으니 넘어간다.
+              if ! out=$(aws ecr put-image --repository-name "nova-$s" --image-tag "$tag" \
+                    --image-manifest "$(echo "$image" | jq -r .imageManifest)" \
+                    --image-manifest-media-type "$(echo "$image" | jq -r .imageManifestMediaType)" \
+                    --image-digest "$(echo "$image" | jq -r .imageId.imageDigest)" 2>&1 < /dev/null); then
+                grep -qF ImageAlreadyExistsException <<< "$out" || { echo "$out"; exit 1; }
+              fi
+            done
+            echo "nova-$s: content-${key:0:12} → $SHA, latest"
+          done
 
-      # 뒤 단계들이 같은 jar 를 쓰도록 넘긴다. gradle 을 다시 돌리지 않는다.
+      # 2단계가 같은 jar 를 쓰도록 넘긴다. gradle 을 다시 돌리지 않는다.
       - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.any == 'true'
         with:
-          name: jar-${{ matrix.service }}
-          path: dist/app.jar
+          name: jars
+          path: dist/
+          compression-level: 0   # jar 는 이미 압축돼 있다
           retention-days: 1
 
-  # ── 3단계: 취약점을 본다 ─────────────────────────────────────────────
-  # 여기서 빨간불이면 보안 문제다. 지금은 경고만 하므로 빨간불이 뜨지 않는다.
-  scan:
-    needs: [detect, package]
-    if: needs.detect.outputs.any == 'true'
+  # ── 2단계: 이미지를 한 번 만들어 훑고, 훑은 그 이미지를 올린다 ──────────
+  # 빨간불의 의미는 스텝 이름으로 구분한다. 이미지 만들기 = Dockerfile, trivy = 보안, 올리기 = 권한·네트워크.
+  publish:
+    needs: package
+    if: needs.package.outputs.any == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        service: ${{ fromJSON(needs.detect.outputs.services) }}
+        include: ${{ fromJSON(needs.package.outputs.publish) }}
+    name: publish ${{ matrix.service }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
         with:
-          name: jar-${{ matrix.service }}
+          name: jars
           path: dist
 
       - name: 이미지 만들기
         run: |
+          set -euo pipefail
+          mv "dist/${{ matrix.service }}/app.jar" dist/app.jar
           docker build --file docker/Dockerfile \
             --build-arg JAR_FILE=dist/app.jar \
-            --tag scan-target:${{ matrix.service }} .
+            --tag release:${{ matrix.service }} .
 
       # 베이스 이미지의 OS 패키지와 안에 든 jar 를 함께 훑는다.
       # ECR 의 scanOnPush 는 올라간 뒤에 보므로, 막을 수 있는 건 여기뿐이다.
@@ -151,7 +195,7 @@ jobs:
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
-          image-ref: scan-target:${{ matrix.service }}
+          image-ref: release:${{ matrix.service }}
           scanners: vuln
           severity: CRITICAL,HIGH
           ignore-unfixed: true
@@ -159,24 +203,6 @@ jobs:
           exit-code: '0'   # 경고만. 차단은 기준이 잡힌 뒤에.
         env:
           TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db:2
-
-  # ── 4단계: ECR 로 올린다 ─────────────────────────────────────────────
-  # 여기서 빨간불이면 권한·네트워크 문제다. 코드와 무관하다.
-  publish:
-    needs: [detect, package, scan]
-    if: needs.detect.outputs.any == 'true'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        service: ${{ fromJSON(needs.detect.outputs.services) }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: jar-${{ matrix.service }}
-          path: dist
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -186,18 +212,18 @@ jobs:
       - uses: aws-actions/amazon-ecr-login@v2
         id: ecr
 
-      - name: build & push
+      # content 태그를 마지막에 붙인다. 이 태그가 있으면 1단계가 이 이미지를 다시 쓴다.
+      - name: 올리기
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           REPO: nova-${{ matrix.service }}
           SHA: ${{ github.sha }}
+          KEY: ${{ matrix.key }}
         run: |
           set -euo pipefail
-          docker build --file docker/Dockerfile \
-            --build-arg JAR_FILE=dist/app.jar \
-            --tag "$REGISTRY/$REPO:$SHA" \
-            --tag "$REGISTRY/$REPO:latest" .
-          docker push "$REGISTRY/$REPO:$SHA"
-          docker push "$REGISTRY/$REPO:latest"
+          for tag in "$SHA" latest "content-$KEY"; do
+            docker tag release:${{ matrix.service }} "$REGISTRY/$REPO:$tag"
+            docker push "$REGISTRY/$REPO:$tag"
+          done
           echo "### $REPO" >> "$GITHUB_STEP_SUMMARY"
           echo '`'"$REGISTRY/$REPO:$SHA"'`' >> "$GITHUB_STEP_SUMMARY"
