@@ -91,7 +91,8 @@ class MemberOpenApiDocumentTest {
     private boolean anonymousIsGranted(String operation) {
         String[] parts = operation.split(" ", 2);
         String path = parts[1].replaceAll("\\{[^}]+}", "1");
-        MockHttpServletRequest request = new MockHttpServletRequest(parts[0], path);
+        // 앱의 서블릿 컨텍스트를 붙인다 — 헬스 매처(EndpointRequest)는 요청에서 애플리케이션 컨텍스트를 찾아 관리 포트인지 가른다
+        MockHttpServletRequest request = new MockHttpServletRequest(context.getServletContext(), parts[0], path);
         request.setServletPath(path);
         Authentication anonymous = new AnonymousAuthenticationToken("key", "anonymousUser",
                 AuthorityUtils.createAuthorityList("ROLE_ANONYMOUS"));

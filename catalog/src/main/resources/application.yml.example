@@ -37,6 +37,10 @@ spring:
 server:
   port: 8082
 
+# 헬스 체크(ALB 대상 그룹): 관리 포트 9082 의 GET /actuator/health/readiness — 토큰 없이 200 {"status":"UP"}. 서비스 포트(8082)로는 actuator 가 나가지 않는다.
+# 관리 포트 · 노출(health 만) · probes · readiness 구성(앱 준비 상태만, DB · Redis 제외)은 CatalogDefaults 가 코드 기본값으로 준다.
+# 여기 management.* 를 적으면 그 값이 이긴다 — 포트를 바꾸면 대상 그룹의 헬스 체크 포트도 같이 바꾼다.
+
 # 상품 정보는 캐시하고 재고는 캐시하지 않는다 — stale 재고로 초과 판매가 난다.
 cache:
   product-ttl: 10m

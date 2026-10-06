@@ -44,7 +44,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
         "spring.data.redis.connect-timeout=200ms",
         "member.refresh-cleanup.cron=-",
         "AWS_EXECUTION_ENV=AWS_ECS_FARGATE",
-        "server.forward-headers-strategy=none"
+        "server.forward-headers-strategy=none",
+        // 실제 서버를 띄우므로 관리 포트(기본 9080, MemberDefaults)도 열린다 — 고정 포트가 이미 쓰이고 있으면 기동이 실패하니 빈 포트로
+        "management.server.port=0"
 })
 @Import(MemberTestContext.class)
 @DisplayName("ECS 의 실제 Tomcat — X-Forwarded-For 를 받은 그대로 세어 실제 접속 IP 로 센다")
