@@ -3,10 +3,10 @@ set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd "$project_dir/.." && pwd)"
-case "${1:-}" in
-  ''|--write-schema) ;;
-  *) echo '사용법: bash flyway-project/verify.sh [--write-schema]' >&2; exit 1 ;;
-esac
+if [[ $# -gt 0 ]]; then
+  echo '사용법: bash flyway-project/verify.sh' >&2
+  exit 1
+fi
 python3 "$project_dir/migrations.py" check
 mkdir -p "$repo_dir/build/flyway"
 
@@ -49,11 +49,11 @@ history_after="$(mysql_query 'SELECT installed_rank, version, checksum, success 
 [[ "$history_before" == "$history_after" ]]
 [[ "$(mysql_query "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = 'external_mock'")" == 0 ]]
 
-# 시간・데이터・Flyway 이력을 제외하여 재현 가능한 최신 shop 정의를 생성한다.
+# 시간・데이터・Flyway 이력을 제외한 최신 shop 정의를 덤프한다. 저장소에는 두지 않고 산출물로만 남긴다(CI: shop-schema).
 snapshot="$repo_dir/build/flyway/schema.sql"
 {
   printf '%s\n' \
-    '-- 자동 생성: bash flyway-project/verify.sh --write-schema' \
+    '-- 자동 생성: bash flyway-project/verify.sh' \
     '-- 정본: flyway-project/migrations/*.sql (이 파일은 직접 수정하지 않는다.)' \
     '-- MySQL 8.4 / shop 전용. external_mock은 Mock 저장소가 관리한다.' \
     'CREATE DATABASE IF NOT EXISTS shop DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;' \
@@ -63,10 +63,4 @@ snapshot="$repo_dir/build/flyway/schema.sql"
     --set-gtid-purged=OFF --no-tablespaces --skip-add-drop-table \
     --skip-lock-tables --ignore-table=shop.flyway_schema_history shop | sed '${/^$/d;}'
 } > "$snapshot"
-
-if [[ "${1:-}" == --write-schema ]]; then
-  cp "$snapshot" "$repo_dir/docs/schema.sql"
-else
-  diff -u "$repo_dir/docs/schema.sql" "$snapshot"
-fi
-echo '신규 DB 적용 · validate · 재실행 이력 불변 · Mock 미생성 · 스키마 문서 일치 검사 통과'
+echo '신규 DB 적용 · validate · 재실행 이력 불변 · Mock 미생성 검사 통과. 최신 shop 정의: build/flyway/schema.sql'

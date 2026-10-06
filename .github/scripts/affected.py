@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""바뀐 파일 목록에서 다시 빌드해야 할 서비스를 고른다.
+"""바뀐 파일 목록에서 다시 테스트해야 할 모듈을 고른다.
 
 의존 관계는 여기에 적지 않는다. `./gradlew serviceGraph` 가 build.gradle 에서
 뽑아낸 그래프를 읽을 뿐이다. 모듈을 추가하거나 의존을 바꿔도 이 파일은 그대로다.
@@ -7,16 +7,17 @@
 사용:
     affected.py <graph.json> <changed-files.txt>
 
-출력(stdout): 서비스 이름의 JSON 배열. 예) ["member","catalog"]
+출력: 모듈 경로의 JSON 배열. 예) [":common:web",":member"]
+애매하면 전부 고른다 — 과잉 실행은 낭비로 끝나지만 누락은 깨진 코드를 통과시킨다.
 """
 
 import fnmatch
 import json
 import sys
 
-# 빌드 산출물에 영향이 없는 경로. 여기 걸리면 아무것도 빌드하지 않는다.
+# 빌드 결과에 영향이 없는 경로. 여기 걸리면 아무것도 테스트하지 않는다.
 # 의존 관계가 아니라 "빌드와 무관한 파일" 목록이라 잘 변하지 않고,
-# 틀려도 과잉 빌드로 끝난다 — 빌드를 거르는 방향으로는 틀리지 않는다.
+# 틀려도 과잉 테스트로 끝난다 — 테스트를 거르는 방향으로는 틀리지 않는다.
 IGNORED = [
     "docs/*",
     "*.md",
@@ -52,12 +53,13 @@ def main() -> int:
     changed = [ln.strip() for ln in open(sys.argv[2]) if ln.strip()]
 
     project_dirs: dict = graph["projects"]
-    services: dict = graph["services"]
-    all_services = sorted(services)
+    # 모듈 → 그 모듈이 닿는 전이 의존 목록(자기 자신 포함).
+    targets: dict = graph["closures"]
+    all_targets = sorted(targets)
 
-    # 어느 서비스도 의존하지 않는 모듈(예: src 없는 컨테이너 프로젝트)이 바뀌면
-    # 판단할 근거가 없다. 그럴 땐 전부 빌드한다 — 거르는 것보다 안전하다.
-    depended_on = {p for closure in services.values() for p in closure}
+    # 어느 모듈도 의존하지 않는 모듈(예: src 없는 컨테이너 프로젝트)이 바뀌면
+    # 판단할 근거가 없다. 그럴 땐 전부 고른다 — 거르는 것보다 안전하다.
+    depended_on = {p for closure in targets.values() for p in closure}
 
     touched: set = set()
     global_change = False
@@ -75,16 +77,16 @@ def main() -> int:
             reasons.append(f"  - {path}  → 전역")
         elif owner not in depended_on:
             global_change = True
-            reasons.append(f"  - {path}  → {owner} (의존하는 서비스 없음 · 전역 처리)")
+            reasons.append(f"  - {path}  → {owner} (의존하는 모듈 없음 · 전역 처리)")
         else:
             touched.add(owner)
             reasons.append(f"  - {path}  → {owner}")
 
     if global_change:
-        picked = all_services
+        picked = all_targets
     else:
         picked = sorted(
-            name for name, closure in services.items() if touched & set(closure)
+            name for name, closure in targets.items() if touched & set(closure)
         )
 
     print("변경 파일 분류:", file=sys.stderr)

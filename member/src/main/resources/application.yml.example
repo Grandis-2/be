@@ -13,7 +13,7 @@ spring:
       transaction-isolation: TRANSACTION_READ_COMMITTED
       maximum-pool-size: 10
   jpa:
-    # 정본은 flyway-project/migrations. docs/schema.sql은 생성된 최신 구조다.
+    # 정본은 flyway-project/migrations. 최신 구조 덤프는 bash flyway-project/verify.sh 의 build/flyway/schema.sql.
     hibernate:
       ddl-auto: validate
     properties:
@@ -33,38 +33,102 @@ spring:
         pool:
           max-active: 16
           max-wait: 100ms
-  security:
-    oauth2:
-      client:
-        registration:
-          kakao:
-            client-id: CHANGE_ME
-            client-secret: CHANGE_ME
-            redirect-uri: http://localhost:8080/login/oauth2/code/kakao
-            authorization-grant-type: authorization_code
-            client-authentication-method: client_secret_post
-            scope: profile_nickname
-        provider:
-          kakao:
-            authorization-uri: https://kauth.kakao.com/oauth/authorize
-            token-uri: https://kauth.kakao.com/oauth/token
-            user-info-uri: https://kapi.kakao.com/v2/user/me
-            user-name-attribute: id
-
 server:
   port: 8080
+  # 켜지 않는다 — 관리자 로그인 시도 제한이 X-Forwarded-For 를 받은 그대로 센다(auth.admin-login-limit.trusted-proxy-hops).
+  # 비워 두면 Spring Boot 가 AWS ECS 를 감지해 스스로 켜고(RemoteIpValve), 헤더를 고쳐 써서 IP 판정이 틀어진다. 켜진 채로 hops > 0 이면 기동 실패
+  forward-headers-strategy: none
 
-# RS256. member 만 개인키를 갖는다 — 발급자가 하나여야 하기 때문이다.
-# 나머지 서비스와 대기열은 공개키만 받으므로, 공개키가 유출돼도 토큰을 위조할 수 없다.
-#
-#   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out keys/jwt-private.pem
-#   openssl rsa -pubout -in keys/jwt-private.pem -out keys/jwt-public.pem
-#
-# keys/ 는 .gitignore 에 있다. 개인키를 커밋하지 않는다.
+# 헬스 체크(ALB 대상 그룹): 관리 포트 9080 의 GET /actuator/health/readiness — 토큰 없이 200 {"status":"UP"}. 서비스 포트(8080)로는 actuator 가 나가지 않는다.
+# 관리 포트 · 노출(health 만) · probes · readiness 구성(앱 준비 상태만, DB · Redis 제외)은 MemberDefaults 가 코드 기본값으로 준다.
+# 여기 management.* 를 적으면 그 값이 이긴다 — 포트를 바꾸면 대상 그룹의 헬스 체크 포트도 같이 바꾼다.
+
+# OpenAPI 문서. 기본은 꺼져 있고 값이 정확히 true 일 때만 켜진다(빈 값 · no · 오타는 꺼짐). 운영에는 적지 않는다.
+# api-docs 가 주 스위치다 — UI 만 꺼도 스펙은 열린다.
+# member 는 문서 허브다 — hub-services 를 주면 Swagger UI 드롭다운에 서비스별 문서(/v3/api-docs/{서비스})가 나온다.
+# 첫 화면은 목록의 첫 서비스. 모든 서비스 문서는 한 출처 뒤(dev: ALB, 로컬: docker/openapi-hub)에서만 열린다.
+# springdoc:
+#   api-docs:
+#     enabled: true
+#   swagger-ui:
+#     enabled: true
+# nova:
+#   openapi:
+#     hub-services: member,catalog,preorder,order
+
+# 프론트 주도 코드 교환: 프론트가 카카오에서 받은 code 를 POST /api/v1/auth/kakao/callback 으로 보내면 우리가 카카오에 code 를 낸다.
+# spring.security.oauth2.client 는 쓰지 않는다. client-secret 은 서버에만 있다(Secrets Manager 주입).
+# allowed-redirect-uris: 프론트가 보낸 redirectUri 가 이 목록에 정확히 있어야 한다. 아무 값이나 받으면 code 가 다른 사이트로 샌다.
+kakao:
+  client-id: CHANGE_ME
+  client-secret: CHANGE_ME
+  token-uri: https://kauth.kakao.com/oauth/token
+  user-info-uri: https://kapi.kakao.com/v2/user/me
+  allowed-redirect-uris:
+    - http://localhost:3000/login/kakao/callback
+  connect-timeout: 2s
+  read-timeout: 5s
+
+# 관리자는 회원 밖 단일 계정. password-hash 는 bcrypt 만 받는다(평문이면 기동 실패).
+#   htpasswd -nBC 12 "" | tr -d ':\n'
+admin:
+  username: admin
+  password-hash: CHANGE_ME_TO_BCRYPT_HASH
+  # 자격증명을 바꾼 뒤에는 배포 완료 후 관리자 토큰으로 DELETE /api/v1/admin/sessions 를 한 번 부른다 — 이전 관리자 세션 전부 폐기(D-16)
+
+# 만료된 회원 리프레시 행 정리. 회전마다 행이 하나 늘어 지우지 않으면 표가 끝없이 커진다.
+# 만료 행만 묶음씩 지운다(인스턴스가 여럿이어도 된다). cron 을 "-" 로 두면 끈다.
+member:
+  refresh-cleanup:
+    cron: "0 */10 * * * *"
+    batch-size: 1000
+    max-batches-per-run: 100
+
+auth:
+  # 관리자 로그인 시도 제한(IP 별). 창 안에서 max-attempts 를 넘으면 bcrypt 비교 없이 429 + Retry-After. 성공하면 그 IP 의 수를 지운다.
+  # trusted-proxy-hops: X-Forwarded-For 에서 믿는 프록시 수. 운영은 CloudFront → ALB 라 2 — 오른쪽에서 두 번째 칸(CloudFront 가 붙인 실제 IP)을 쓴다.
+  #   실제보다 크게 잡으면 클라이언트가 위조한 칸을 읽어 제한이 무력해지고, 작게 잡으면 CloudFront 엣지 IP 로 세어 여러 사용자가 한 수를 나눠 쓴다.
+  #   프록시 없이 직접 받는 로컬은 0 도 된다.
+  # 셀 수 없으면(Redis 장애) 503 retryable 로 거절한다 — Redis 가 죽으면 관리자 토큰 발급도 어차피 실패한다.
+  # max-total-attempts: 모든 IP 를 합친 시도 수(IP 별 제한을 통과한 것만). IP 를 바꿔 가며 오는 공격에도 bcrypt 부하에 천장을 둔다. 성공하면 0.
+  admin-login-limit:
+    max-attempts: 5
+    max-total-attempts: 60
+    window: 1m
+    trusted-proxy-hops: 2
+  # 리프레시 쿠키. 로컬 http 에서는 false 로.
+  cookie:
+    secure: true
+  # 재발급(POST /session/refresh)은 쿠키만으로 도는 유일한 상태 변경 경로라 브라우저의 Origin 헤더를 이 목록과 대조한다(정확 일치).
+  # 프론트 오리진(scheme://host[:port]). 없거나 목록 밖이면 403.
+  refresh:
+    allowed-origins:
+      - http://localhost:3000
+  # 폐기 표식 조회가 실패했을 때 401 로 닫는 경로. 목록 밖은 열린다(통과 + 경고 + 카운터).
+  # 비우면 공통 기본값(아래 셋 — 인증이 소유하는 경로)이 쓰인다. member 는 인증 경로만 서비스하므로 그 셋이 전부다.
+  # 사전예약 취소 · 주문 취소 · 결제 · 배송지 변경 같은 도메인 경로는 그 경로를 서비스하는 모듈(preorder · order)이 자기 설정에 적는다.
+  # 항목 앞에 HTTP 메서드를 붙이면 그 메서드만 닫는다(없으면 전부). 모양이 틀린 항목(모르는 메서드 · 소문자 · '/' 로 시작 안 함)은 기동 실패다.
+  revocation-check:
+    fail-closed-paths:
+      - /api/v1/admin/**
+      - /api/v1/session/refresh
+      - /api/v1/me/**
+
+# 서명은 RS256. member 만 개인키를 갖고 서명한다. 다른 서비스는 jwk-set-uri 로 공개키를 받아 검증만 한다.
+#   개인키 생성: openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out jwt.pem   (PKCS#8, "BEGIN PRIVATE KEY")
+#   운영은 Secrets Manager 에 두고 ECS secrets 로 주입. CHANGE_ME 면 기동이 실패한다.
+# 키 교체 순서: ① 새 키쌍 생성 ② 검증 서비스가 새 공개키를 받을 시간을 둔다(주기 갱신 5분 — public-keys 로 미리 넣거나 JWKS 게시 뒤 5분 이상 대기) ③ member 의 private-key·key-id 를 새 키로, public-keys 를 **옛** 공개키로 바꿔 배포(새 공개키를 남겨 두면 옛 kid 가 사라져 살아 있는 리프레시가 전부 죽는다) ④ 리프레시 만료(14일) 뒤 public-keys 에서 옛 키 제거
 jwt:
-  private-key: file:${JWT_PRIVATE_KEY_PATH:./keys/jwt-private.pem}
-  public-key:  file:${JWT_PUBLIC_KEY_PATH:./keys/jwt-public.pem}
-  # 짧게 둔다. 로그아웃 즉시 무효화(블랙리스트)를 쓰지 않는 대신,
-  # 리프레시 토큰을 Redis 에서 지우면 이 시간 뒤 완전히 끊긴다.
-  access-token-validity: 30m
-  refresh-token-validity: 14d
+  issuer: nova
+  audience: nova-api            # RFC 8725 §3.9. 검증하는 서비스 넷이 같은 값. 비우면 nova-api
+  key-id: 2026-09-k1            # 토큰 헤더 kid. 키를 바꿀 때마다 새 이름
+  private-key: CHANGE_ME
+  # public-keys:                # 교체 중인 이전 공개키(kid → X.509 PEM). 검증 서비스에서는 jwk-set-uri 대신 쓸 수도 있다
+  #   2026-06-k0: |
+  #     -----BEGIN PUBLIC KEY-----
+  #     ...
+  #     -----END PUBLIC KEY-----
+  # jwk-set-uri: https://…/.well-known/jwks.json   # 검증 서비스(catalog·preorder·order)만. member 는 비운다. https 가 아니면 기동 실패. 5분마다 백그라운드로 다시 받고, 모르는 kid 는 그 요청을 401 로 보낸 뒤 비동기로 다시 받는다(요청 스레드는 기다리지 않는다)
+  # jwk-set-allow-http: true                         # VPC 안 Cloud Map 주소(http://member.ureca.local:8080/…)를 쓰는 동안만 명시. TLS 가 붙으면 지운다
+  access-token-validity: 30m    # 폐기 표식을 못 읽는 동안(fail-open) 로그아웃·제재된 토큰이 살아남는 상한. 재발급은 쿠키로 자동이라 30분이면 사용자는 못 느낀다
+  refresh-token-validity: 14d   # 0 이나 음수, 액세스보다 짧으면 기동 실패

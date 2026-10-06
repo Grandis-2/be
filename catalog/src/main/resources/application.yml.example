@@ -13,7 +13,7 @@ spring:
       transaction-isolation: TRANSACTION_READ_COMMITTED
       maximum-pool-size: 10
   jpa:
-    # 정본은 flyway-project/migrations. docs/schema.sql은 생성된 최신 구조다.
+    # 정본은 flyway-project/migrations. 최신 구조 덤프는 bash flyway-project/verify.sh 의 build/flyway/schema.sql.
     hibernate:
       ddl-auto: validate
     properties:
@@ -21,6 +21,14 @@ spring:
         jdbc:
           time_zone: UTC
     open-in-view: false
+  http:
+    serviceclient:
+      # 리뷰 작성 때만 부른다(조회 · 수정 · 삭제는 부르지 않는다). 회원 토큰을 그대로 싣는다.
+      # 타임아웃(연결 300ms · 읽기 1s)은 CatalogDefaults 가 준다. 주소가 없으면 리뷰 작성이 500 이다.
+      order:      # 내 주문상품(GET /internal/order-items/{id}) — contracts/order-internal.md
+        base-url: http://localhost:8084
+      member:     # 작성자 표시명(GET /internal/customers/me) — contracts/member-internal.md
+        base-url: http://localhost:8080
   data:
     redis:
       host: localhost
@@ -37,11 +45,48 @@ spring:
 server:
   port: 8082
 
+# 헬스 체크(ALB 대상 그룹): 관리 포트 9082 의 GET /actuator/health/readiness — 토큰 없이 200 {"status":"UP"}. 서비스 포트(8082)로는 actuator 가 나가지 않는다.
+# 관리 포트 · 노출(health 만) · probes · readiness 구성(앱 준비 상태만, DB · Redis 제외)은 CatalogDefaults 가 코드 기본값으로 준다.
+# 여기 management.* 를 적으면 그 값이 이긴다 — 포트를 바꾸면 대상 그룹의 헬스 체크 포트도 같이 바꾼다.
+
 # 상품 정보는 캐시하고 재고는 캐시하지 않는다 — stale 재고로 초과 판매가 난다.
 cache:
   product-ttl: 10m
   price-ttl: 1m
 
-# 검증만 한다. 공개키 하나면 되고 member 를 호출하지 않는다.
+# 검증만 한다(개인키 없음). 공개키는 member 가 게시하는 JWKS(GET /.well-known/jwks.json)에서 받아 kid 로 고른다 —
+# 기동 직후와 5분마다 백그라운드로 받고, 요청 스레드는 캐시만 읽는다. 키를 바꿀 때 이 서비스는 재배포하지 않는다.
+# issuer·audience 는 member 와 같은 값이어야 검증이 통과한다.
 jwt:
-  public-key: file:${JWT_PUBLIC_KEY_PATH:./keys/jwt-public.pem}
+  issuer: nova
+  audience: nova-api
+  jwk-set-uri: https://member.example.com/.well-known/jwks.json
+  # jwk-set-allow-http: true    # VPC 안 Cloud Map 주소(http://member.ureca.local:8080/…)를 쓰는 동안만 명시. 서비스 간 TLS 가 붙으면 지운다
+  # 발급하지 않지만 필수 값이다(없으면 기동 실패 — 실측: 없으면 @NotNull 에서 바인딩 거부). member 와 같게 둔다
+  access-token-validity: 30m
+  refresh-token-validity: 14d
+
+# 폐기 조회 실패 때 닫는 경로는 공통 기본값(/api/v1/admin/** · /api/v1/session/refresh · /api/v1/me/**)에 리뷰 쓰기(POST /api/v1/reviews · PATCH · DELETE /api/v1/reviews/*)를 더한 목록이다 — CatalogDefaults.
+# auth.revocation-check.fail-closed-paths 를 여기 적으면 그 목록이 위 목록 전체를 대체한다 — 적으려면 여섯 개를 다 적는다.
+# 빈 목록([] · "")은 공통 기본값 셋으로 돌아가 리뷰 쓰기가 빠진다(경고 로그 한 줄뿐 — 리뷰 쓰기가 조용히 열린다).
+
+# 다른 서비스로 가는 이벤트(상품 등록 → preorder 회차 · 차수, order 초기 재고)는 아웃박스(catalog_outbox_events)에 적고 커밋 뒤 보낸다.
+nova:
+  # 아웃박스 발행(common:outbox). transport 는 필수(없으면 기동 실패)이고 운영 값은 sqs 다.
+  # log 는 보내지 않고 행을 발행 완료로 표시하는 로컬 · 테스트 전용 전송이라, log-transport-allowed: true 를 함께 적어야 뜬다.
+  # 그 허용 줄은 이 예시에 적지 않는다 — 여기서 만든 운영 설정이 실수로 log 로 뜨지 않게
+  # payload 는 앱의 JsonMapper 가 쓴다. 운영 설정에 spring.jackson.* 을 두지 않는다 — 다른 서비스와의 계약인 payload 가 조용히 바뀐다
+  # (실측: default-property-inclusion=non_null 이면 상한 없는 차수의 "positionTo": null 이 빠진다)
+  outbox:
+    transport: sqs
+    # relay-interval: 10s   # 커밋 직후 발행이 실패했거나 그 사이 죽어 남은 행을 다시 보내는 주기
+    # relay-after: 1m       # 만든 지 이만큼 지난 미발행 행만 릴레이가 가져간다
+    # relay-lease: 1m       # 가져간 행을 다른 인스턴스가 건너뛰는 시간. 행마다 보내기 직전에 연장한다
+    #                       # 전송 한 번은 sqs.api-call-timeout × 2(큐 URL 조회 + 전송)이고, 리스는 그것 + 5s 보다 길어야 한다(아니면 기동 실패)
+  # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다 — preorder-events · order-events 에 보내기 권한이 필요하다
+  sqs:
+    region: ap-northeast-2
+    endpoint: http://localhost:4566
+    # queues:               # 논리 목적지 → 실제 큐 이름. 없으면 논리 이름(preorder-events · order-events)을 그대로 쓴다
+    #   preorder-events: preorder-events
+    #   order-events: order-events

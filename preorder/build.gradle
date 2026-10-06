@@ -1,11 +1,57 @@
 apply plugin: 'org.springframework.boot'
 
+// Spring Boot BOM 이 관리하지 않는 라이브러리 버전. 올릴 때 여기만 바꾼다.
+ext {
+    archunitVersion = '1.5.1'
+    resilience4jVersion = '2.4.0'
+}
+
 dependencies {
     implementation project(':common:types')
     implementation project(':common:web')
     implementation project(':common:message')
+    // 액세스 토큰 검증(JWKS) · 인증 주체. 폐기 확인에 Redis 를 쓴다(common:redis)
+    implementation project(':common:security')
+    // 저장 해상도(마이크로초) 시계 storageClock(@Primary) · JPA Auditing 을 자동설정으로 켠다. @EnableJpaAuditing 을 따로 켜지 않는다.
+    implementation project(':common:jpa')
+    // 트랜잭셔널 아웃박스(기록 · 커밋 직후 발행 · 리스 릴레이 · 미발행 현황)를 자동설정으로 켠다. 표 · 종류는 PreorderOutboxConfig 가 준다.
+    implementation project(':common:outbox')
+    // SQS 클라이언트 · 아웃박스 SQS 전송 · 큐 소비 폴러. AWS SDK 와 그 버전도 여기서 온다.
+    implementation project(':common:sqs')
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
-    implementation 'org.springframework.boot:spring-boot-starter-security'
+    // 다른 서비스 내부 API 는 HTTP Interface(@HttpExchange) + RestClient 로 부른다.
+    implementation 'org.springframework.boot:spring-boot-starter-restclient'
+    // API 문서 공통 설정 · 노출 정책은 common:web 이 맡는다. 여기서는 401 · 403 예시 커스터마이저만 쓴다(버전은 common:web 의 BOM)
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui'
+    // 내부 호출(catalog · order) 장애 대응: 재시도 · 서킷 브레이커 · 동시 호출 상한. 설정 · 지표는 스타터가 맡는다
+    implementation "io.github.resilience4j:resilience4j-spring-boot4:${resilience4jVersion}"
+    implementation 'com.github.ben-manes.caffeine:caffeine'
+    // 관측: actuator 지표를 Prometheus 형식(/actuator/prometheus)으로 내놓는다. 수집은 CloudWatch 에이전트 · KEDA 가 한다.
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
     runtimeOnly 'com.mysql:mysql-connector-j'
+
+    // DB 동작(조건부 UPDATE 영향 행 · UNIQUE 충돌 · 잠금)은 MySQL 로만 검증한다. H2 는 쓰지 않는다.
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    testImplementation 'org.testcontainers:testcontainers-mysql'
+    // SQS 연계는 로컬 AWS 에뮬레이터 Floci 로 검증한다. 컨테이너 · 큐 도우미는 common:sqs 와 한 벌이다.
+    testImplementation testFixtures(project(':common:sqs'))
+    // 동시성 테스트 도우미(Concurrently)
+    testImplementation project(':common:testing')
+    testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+    // 테스트는 기본적으로 지표 내보내기를 끈다. Prometheus 엔드포인트를 확인하는 테스트만 켠다(@AutoConfigureMetrics).
+    testImplementation 'org.springframework.boot:spring-boot-micrometer-metrics-test'
+    testImplementation 'org.springframework.security:spring-security-test'
+    // 모듈 경계 규칙(ModuleBoundaryTest)
+    testImplementation "com.tngtech.archunit:archunit-junit5:${archunitVersion}"
+    // 테스트 DB 는 Flyway 마이그레이션(스키마 정본)으로 만든다. 서비스는 Flyway 를 실행하지 않으므로 테스트 의존으로만 둔다.
+    testImplementation 'org.springframework.boot:spring-boot-starter-flyway'
+    testRuntimeOnly 'org.flywaydb:flyway-mysql'
+}
+
+tasks.named('test') {
+    // 모듈 작업 디렉터리에 기대지 않고 절대 경로로 넘긴다.
+    systemProperty 'nova.migrations-path', rootProject.file('flyway-project/migrations').absolutePath
 }

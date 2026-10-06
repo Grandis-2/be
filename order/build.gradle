@@ -4,8 +4,38 @@ dependencies {
     implementation project(':common:types')
     implementation project(':common:web')
     implementation project(':common:message')
+    // 액세스 토큰 검증 · 인증 주체. 폐기 표식 조회(Redis)로 common:redis 가 따라온다 — application.yml 에 spring.data.redis 가 필요하다.
+    implementation project(':common:security')
+    implementation project(':common:redis')
+    // 저장 해상도(마이크로초) 시계 storageClock(@Primary) · JPA Auditing 을 자동설정으로 켠다. @EnableJpaAuditing 을 따로 켜지 않는다.
+    implementation project(':common:jpa')
+    // 트랜잭셔널 아웃박스(기록 · 커밋 직후 발행 · 리스 릴레이)를 자동설정으로 켠다. 표 · 종류는 OrderOutboxConfig 가 준다.
+    implementation project(':common:outbox')
+    // SQS 클라이언트 · 아웃박스 SQS 전송 · order-events 소비 폴러. AWS SDK 와 그 버전도 여기서 온다.
+    implementation project(':common:sqs')
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-security'
+    // 다른 서비스 내부 API 는 HTTP Interface(@HttpExchange) + RestClient 로 부른다.
+    implementation 'org.springframework.boot:spring-boot-starter-restclient'
     runtimeOnly 'com.mysql:mysql-connector-j'
+
+    // DB 동작은 MySQL 로만 검증한다(H2 없음).
+    testImplementation project(':common:testing')
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    testImplementation 'org.testcontainers:testcontainers-mysql'
+    // SQS 연계는 로컬 AWS 에뮬레이터 Floci 로 검증한다. 컨테이너 · 큐 도우미는 common:sqs 와 한 벌이다.
+    testImplementation testFixtures(project(':common:sqs'))
+    testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+    testImplementation 'org.springframework.security:spring-security-test'
+    // 계층 규칙(원장만 쓰기 포트 사용 · 영속 계층 캡슐화)을 테스트로 강제한다. 스프링 BOM 에 없어 버전을 적는다.
+    testImplementation 'com.tngtech.archunit:archunit-junit5:1.4.1'
+    // 테스트 스키마 생성용. 서비스는 Flyway 를 실행하지 않는다.
+    testImplementation 'org.springframework.boot:spring-boot-starter-flyway'
+    testRuntimeOnly 'org.flywaydb:flyway-mysql'
+}
+
+tasks.named('test') {
+    systemProperty 'nova.migrations-path', rootProject.file('flyway-project/migrations').absolutePath
 }

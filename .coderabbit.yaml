@@ -7,11 +7,12 @@
 # 스타일 · 포맷은 리뷰 대상이 아니다. 정확성과 경계 위반만 본다.
 #
 # 소유 경계(README 기준)
-#   member    customers
-#   catalog   categories · products · product_variants(재고 칼럼 제외)
-#   preorder  preorders · preorder_events · preorder_campaigns · shipment_batches
+#   member    customers · refresh_tokens
+#   catalog   categories · products · product_options · product_option_axes · product_option_values
+#             product_option_selections · product_images · product_registrations · product_reviews · catalog_outbox_events
+#   preorder  preorders · preorder_events · preorder_campaigns · shipment_batches · dead_letter_events
 #   order     orders · order_items · order_events · cart_items · payments · payment_transactions
-#             product_variants 의 재고 칼럼(stock_total · stock_reserved · stock_sold)
+#             option_inventories (재고. 옵션당 1행, 일반 판매 옵션만)
 #   worker    preorder_sync_jobs · preorder_sync_attempts (실행 주체. 행 생성은 preorder)
 #   batch     읽기 전용
 #
@@ -26,7 +27,7 @@ tone_instructions: |
 
 reviews:
   profile: "assertive"          # 정확성 위주. 지적이 많다고 느끼면 chill 로 낮춘다
-  request_changes_workflow: true # 지적이 있으면 변경 요청, 모두 해결되면 승인 — 머지 규칙의 승인 1건으로 쓴다
+  request_changes_workflow: true   # 지적이 남아 있으면 Request changes 로 머지를 막는다
   high_level_summary: true
   review_status: true
   collapse_walkthrough: true
@@ -80,6 +81,10 @@ reviews:
         # 반드시 지적할 것 (정확성)
         - 사용자 요청을 처리하는 경로(@RestController → @Service)에서 외부 HTTP 호출을 기다리는 코드.
           외부 호출은 워커가 한다.
+          예외(내부 서비스 동기 호출): catalog 상품 조회(캐시 미스일 때만) · order 취소 사전 확인.
+          둘 다 타임아웃 · 서킷 브레이커 · 동시 호출 상한(DependencyGuard)을 거쳐야 하고, 거치지 않으면 지적한다.
+          예외(타임아웃만): catalog 리뷰 작성의 order 주문상품 조회 · member 표시명 조회 — 드문 쓰기라 서킷 브레이커 · 동시 상한은
+          두지 않는다(2026-10-06 결정). 타임아웃(spring.http.serviceclient.order · member)이 없으면 지적한다.
         - @Transactional 범위 안의 HTTP 호출 · SQS 전송 · Thread.sleep · 외부 락 대기.
           DB 잠금을 외부 응답 시간만큼 붙잡는다.
         - 조건부 UPDATE 의 결과(영향 행 수)를 확인하지 않고 성공으로 간주하는 코드.
@@ -133,8 +138,12 @@ reviews:
         # 경계
         - orders · order_items · payments · payment_transactions · cart_items 는 읽기도 지적한다.
           결제 가능 여부는 order 의 API 로 답하고, 결과는 이벤트로 받는다.
-        - product_variants 는 읽기만 허용한다. 쓰기(INSERT · UPDATE · DELETE)면 지적한다.
+        - products · product_options · categories 를 직접 읽거나 쓰면 지적한다. 상품 · 옵션 값은 catalog 내부 API
+          (GET /internal/products/{productId}/options)로 묻고 캐시한다.
+        - option_inventories 는 읽기도 지적한다. 사전예약 옵션에는 재고 행이 없다.
         - 접수 시 상품명 · 옵션명 · 가격은 예약 행에 복사한다. 매번 카탈로그를 조회해 표시하면 지적한다.
+        - /internal/** (서비스 간 호출) 와 /actuator/** (지표 수집)는 공개 경로가 아니다(ALB 규칙에 넣지 않는다).
+          여기에 사용자용 기능을 두거나, /internal/** 이 전달받은 사용자 토큰의 주인 확인 없이 응답하면 지적한다.
 
         # 정해진 것(ERD v13)
         - 사전예약은 재고를 선점하지 않는다(결정 3). 사전예약 옵션의 재고를 차감 · 확보하면 지적한다.
@@ -150,8 +159,8 @@ reviews:
         # 경계
         - preorders · preorder_events 를 쓰기(UPDATE · INSERT)하면 지적한다.
           예약 상태를 바꾸는 주체는 preorder 다. 결제 결과는 이벤트로 알린다.
-        - product_variants 는 재고 칼럼(stock_total · stock_reserved · stock_sold)만 변경할 수 있다.
-          그 외 칼럼(title · price · status)을 변경하면 지적한다.
+        - option_inventories 를 쓰는 주체는 order 뿐이다.
+          products · product_options 는 읽기만 허용한다. 쓰기(INSERT · UPDATE · DELETE)면 지적한다.
 
         # 결제
         - 승인 · 환불 요청에 멱등 키가 없으면 지적한다. 재시도는 같은 키로 한다.
@@ -161,9 +170,13 @@ reviews:
 
         # 재고
         - 차감은 조건부 UPDATE 한 번으로 한다.
-          예: UPDATE ... SET stock_reserved = stock_reserved + ?
-              WHERE id = ? AND stock_total - stock_reserved - stock_sold >= ?
+          예: UPDATE option_inventories SET stock_reserved = stock_reserved + ?
+              WHERE option_id = ? AND stock_total - stock_reserved - stock_sold >= ?
           영향 행 0 을 품절로 처리한다. SELECT 로 읽어 계산한 뒤 UPDATE 하면 지적한다.
+          예외는 관리자 재고 설정 · 초기화(AdminStockService — 관리자 API 와 catalog 등록 이벤트가 같이 거친다) 하나다 —
+          같은 트랜잭션에서 PK 로 있는 행을 FOR UPDATE 로 읽고, 불변식을 WHERE 에 다시 적은 조건부 UPDATE 의 영향 행으로
+          판정하는 경우만. 없는 행을 확인한 뒤의 INSERT 는 유일 제약과 중복 시 다시 하기가 함께 있어야 한다.
+          확보 · 차감 · 반환(주문 · 결제 경로)에는 이 예외를 적용하지 않는다.
         - 반환은 한 번만 일어나야 한다(stock_released_at 이 비어 있을 때만).
           중복 반환을 막는 조건이 없으면 지적한다.
 
@@ -220,19 +233,41 @@ reviews:
     # ─────────────────────────────────────────────────────────────
     - path: "catalog/**/*.java"
       instructions: |
-        - 재고 칼럼(stock_total · stock_reserved · stock_sold)은 읽기만 허용한다. 변경하면 지적한다.
-        - preorders · orders · payments 는 읽기도 지적한다.
+        - 비소유 표 읽기는 둘만 허용한다: preorder_campaigns(opens_at · closes_at · 행의 유무) · option_inventories(재고 칼럼 집계 · 행의 유무).
+          목록·검색의 노출 조건(오픈 예정 · 마감 · 마감+120시간 숨김 · 품절)과 상세의 회차 시각 · 옵션별 가용 수량,
+          관리자 목록의 같은 칸, 관리자 수정의 오픈 판정(회차 opens_at — 사전예약 오픈 뒤 수정 금지),
+          판매 방식별 준비(등록 이벤트를 받은 서비스가 회차 행 · 재고 행을 만들었는가)에 쓰며 읽기 전용 저장소 한 곳에서만 읽는다.
+          그 두 표에 INSERT · UPDATE · DELETE 가 있으면 지적한다. 다른 클래스가 같은 표를 읽어도 지적한다.
+          src/test 의 시험 코드가 시험 데이터로 그 표에 INSERT · UPDATE 하는 것은 예외다 — 운영 코드 경계가 아니라 시험 준비 · 경쟁 재현이다.
+        - shipment_batches 는 읽지 않는다. 상세의 배송 안내는 preorder 의 공개 API(GET /api/v1/products/{id}/shipment-batches)를 프론트가 부른다.
+        - products.sale_mode 는 등록 뒤 바꾸지 않는다. order 의 재고 검증(일반 판매 상품에만 재고 행)이 이 계약에 기댄다.
+          바꾸는 경로가 생기면 지적한다.
+        - preorders · orders · payments · cart_items 는 읽기도 지적한다.
+          리뷰를 쓸 자격(내 주문상품 · 배송 완료 · 일반 주문)과 작성자 표시명은 order · member 내부 API 로 묻는다(contracts/order-internal.md ·
+          member-internal.md). orders · order_items · customers 를 읽어 판정하면 지적한다.
         - sku 는 모델 안에서 유일하다. 중복 검사를 애플리케이션 조회로만 하면 UNIQUE 제약을 함께 쓰도록 제안한다.
         - 상품 · 옵션의 물리 삭제는 지적한다. 신청 이력이 있으므로 상태로 숨긴다.
         - 모집 오픈 이후 모집 일정 · 배송 기준을 바꾸는 경로는 지적한다.
         - 가격 · 이름 변경이 과거 예약에 소급되는 구조라면 지적한다. 예약은 접수 시점 값을 복사해 쓴다.
+        - 카테고리 parent_id 를 쓰는 경로가 순환(자기 자신 포함) · 3단계를 검사하지 않으면 지적한다. DB 는 못 막는다.
+        - 회원에게 상품을 노출하는 판정(목록 · 상세)이 products.visible 만 보고 판매 방식별 준비(ProductListingQueryRepository.READY)를 함께 보지 않으면 지적한다.
+          visible 은 관리자가 고른 값이라 준비 전에도 true 일 수 있다.
+        - product_images 의 GALLERY bundle_key 가 그 상품 color 축의 정규화값(또는 '')인지 검사하지 않으면 지적한다.
+        - product_options 의 combination_key · filter_attributes · title 과 product_option_selections 를 OptionCombination 밖에서 따로 만들면 지적한다.
+        - product_images.position 을 한 UPDATE 로 교환하거나, 이동 UPDATE 에 방향에 맞는 ORDER BY 가 없으면 지적한다(UNIQUE 는 행마다 검사된다).
+        - 다른 서비스가 만들 값(사전예약 회차 · 차수, 일반 상품 초기 재고)을 그 서비스의 API 를 동기로 불러 넣거나 그 표에 직접 쓰면 지적한다.
+          같은 트랜잭션에서 OutboxWriter 로 이벤트를 적는다(contracts/catalog-events.md).
+        - catalog_outbox_events 를 OutboxWriter 밖에서 INSERT 하거나, 업무 트랜잭션과 다른 트랜잭션에서 append 하면 지적한다(MANDATORY).
+          이벤트 payload 에 상품 id 를 다시 넣으면 지적한다 — 봉투의 aggregateId 로만 싣는다. 예외는 PREORDER_CAMPAIGN_CANCELED 하나다
+          (preorder 가 먼저 정의한 레코드가 payload 의 productId 로 읽는다 — 이 이벤트에서 productId 를 빼면 지적한다).
+        - /internal/** 은 USER · ADMIN 만 허용하고 비공개 · 미완료 상품도 200 으로 준다. 여기서 먼저 숨기면 지적한다 — 숨김 판정은 호출자다.
 
     # ─────────────────────────────────────────────────────────────
     # 6. member — 로그인 · 토큰 · 회원
     # ─────────────────────────────────────────────────────────────
     - path: "member/**/*.java"
       instructions: |
-        - customers 외 테이블은 읽기도 지적한다.
+        - customers · refresh_tokens 외 테이블은 읽기도 지적한다. 이 둘은 member 소유다(README 의 소유 테이블 표).
         - 리프레시 토큰을 원문으로 저장하면 지적한다. 해시만 저장한다.
         - 리프레시 회전 시 이전 토큰을 무효화하지 않으면 지적한다. 재사용 감지 시 같은 체인 전체를 폐기한다.
         - 서명 키 · 카카오 시크릿이 코드나 기본 설정값에 들어 있으면 지적한다.
@@ -311,52 +346,62 @@ reviews:
       instructions: "모듈이 자기 소유가 아닌 테이블을 읽거나 쓰는 변경이면 제안한다"
   auto_apply_labels: false
 
-  # 머지 전 점검. 지금은 경고로만 두고, 팀이 익숙해지면 error 로 올린다
+  # 머지 전 점검. 실패하면 머지를 막는다.
+  # 오탐으로 막히면 skip-review 라벨 또는 관리자 우회로 푼다.
   pre_merge_checks:
     title:
-      mode: "warning"
+      mode: "error"
       requirements: |
         형식은 <type>(<이슈 키>): <요약> 이다. 예: feat(NV-7): 사전예약 접수 API 추가
         type 은 feat · fix · refactor · test · docs · chore 중 하나.
         요약은 한국어이고 마침표로 끝내지 않는다.
         에픽 → main PR 은 이슈 키 대신 에픽 키를 쓴다.
     description:
-      mode: "warning"
+      mode: "error"
     issue_assessment:
-      mode: "warning"
+      mode: "error"
+    # 주석은 핵심만 다는 방침이라 함수별 문서 주석 비율은 보지 않는다
+    docstrings:
+      mode: "off"
     custom_checks:
       - name: "모듈 경계"
-        mode: "warning"
+        mode: "error"
         instructions: |
           쓰기(INSERT · UPDATE · DELETE)와 읽기(SELECT)를 나눠서 판정한다.
           소유 경계는 파일 상단 주석을 따른다.
 
           다음이면 실패로 표시한다.
-          - 서비스 모듈이 자기 소유가 아닌 테이블에 쓰기를 한다
-          - preorder 또는 catalog 가 product_variants 의 재고 칼럼
-            (stock_total · stock_reserved · stock_sold)을 변경한다
-          - order 가 product_variants 의 재고 칼럼 외(title · price · status 등)를 변경한다
+          - 서비스 모듈이 자기 소유가 아닌 테이블에 쓰기를 한다(아래 "허용된 쓰기" 는 제외)
+          - order 밖의 모듈이 option_inventories 를 변경한다
+          - order 가 products · product_options 를 변경한다
           - build.gradle 에 서비스 모듈끼리의 project 의존이 추가됐다
 
           - 아래 "허용된 읽기"에 없는 비소유 테이블을 읽는다
             (모듈별 지시문이 금지한 읽기가 우선한다. 예: preorder 의 payments 조회,
-             catalog 의 preorders 조회, member 의 customers 외 테이블 조회)
+             catalog 의 preorders 조회, member 의 customers · refresh_tokens 외 테이블 조회)
+
+          src/test 아래 시험 코드가 비소유 표에 하는 쓰기(INSERT · UPDATE)와 그 행을 다시 읽는 것은 시험 데이터 준비 · 다른 모듈의 쓰기
+          흉내(외래키 잠금 · 회차 시각 변경 같은 경쟁 재현)라 판정에서 제외한다. 운영 코드(src/main)만 판정한다.
 
           허용된 읽기 — 이것만 실패가 아니다.
-          - preorder → products · product_variants · categories (접수 시점 값 복사)
-          - order → products · product_variants (금액 · 재고 확인)
+          - order → products · product_options (재고 대상 옵션의 소속 · 판매 방식 확인)
+          - catalog → preorder_campaigns(opens_at · closes_at · 행의 유무) · option_inventories(재고 집계 · 행의 유무) (목록 · 검색의 노출 조건, 상세의 회차 시각 · 옵션별 가용 수량, 관리자 목록의 같은 칸, 관리자 수정의 오픈 판정, 판매 방식별 준비. 읽기 전용 저장소 한 곳)
           - worker → preorders (처리 대상 확인)
+          - preorder → preorder_sync_jobs · preorder_sync_attempts (관리자 조회 · 재처리 판정 · 취소 작업 유무 확인)
           - batch → 전부 (읽기 전용 모듈)
 
-          허용된 쓰기 예외 — 실패가 아니다.
-          - order 가 product_variants 의 재고 칼럼만 조건부 UPDATE 로 변경한다
+          허용된 쓰기 — 소유가 아닌 테이블에 쓰는 것 중 이것만 실패가 아니다.
+          - preorder → preorder_sync_jobs (접수 · 취소와 같은 트랜잭션에서 작업 행 생성, 예약 취소 때 아직 끝나지 않은 작업 무효화)
 
           위 조건에 해당하지 않으면 통과로 표시한다.
       - name: "동시성 안전"
-        mode: "warning"
+        mode: "error"
         instructions: |
           접수 · 재고 차감 · 작업 선점 · 결제 반영 코드가 바뀐 PR 에서 다음이면 실패로 표시한다.
           - 조회 후 변경(check-then-act) 으로 동시성을 막고 있다
+            (예외: 같은 트랜잭션에서 PK 로 있는 행을 FOR UPDATE 로 읽고 불변식을 WHERE 에 다시 적은 조건부 UPDATE 의
+             영향 행으로 판정하는 관리자 재고 설정. 없는 행 확인 뒤 INSERT 는 유일 제약 + 중복 시 다시 하기가 있어야 하고,
+             재고 확보 · 차감 · 반환에는 적용하지 않는다)
           - 조건부 UPDATE 의 영향 행 수를 확인하지 않는다
           - 재시도 · 중복 수신에서 업무 효과가 두 번 일어날 수 있다
           해당 코드가 바뀌지 않았으면 통과로 표시한다.

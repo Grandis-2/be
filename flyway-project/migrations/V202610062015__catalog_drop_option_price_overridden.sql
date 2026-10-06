@@ -1,0 +1,16 @@
+-- 옵션 수동 가격을 없앤다(2026-10-06 결정 — 조합 하나만 다른 가격은 받지 않는다). 옵션 가격은 늘 기본가 + Σ(고른 값의 추가금)이다.
+-- price_overridden 은 "관리자가 직접 고친 가격이라 재계산에서 건너뛴다" 는 표시였다. 직접 고치는 경로가 없어져 쓰는 곳이 없다.
+-- 이 칸에 걸린 CHECK · 인덱스는 없다.
+--
+-- 적용 순서: 새 catalog 배포 → 구버전 catalog 종료 → 이 마이그레이션. 구버전은 이 칸을 매핑해 옵션을 읽고 쓰므로 먼저 지우면 깨지고,
+-- 새 버전은 이 칸을 모르지만 DEFAULT 0 이라 남아 있어도 옵션을 넣을 수 있다(호환되지 않는 정리는 구버전 종료 뒤 — flyway-project/README 배포 순서).
+--
+-- 이미 1 로 표시된 옵션은 지금 가격을 그대로 두고, 다음 재계산(기본가 · 추가금이 실제로 바뀔 때)부터 계산값을 따른다. 그래서
+--   · 칸을 지우면 어느 옵션이 공식과 다른지 화면에 안 보이고, 같은 기본가를 다시 보내면 재계산하지 않는다(축 없는 옵션은 추가금 경로도 없다).
+--   · 오픈 3분 전부터 수정이 막힌 사전예약 상품은 다시 계산되지 않는다 — 기본가 · 추가금 수정 자체가 409 다.
+-- 적용 직전에 SELECT COUNT(*) FROM shop.product_options WHERE price_overridden = 1 로 0 인지 센다. 지운 뒤에는 공식 대조로 찾는다:
+--   SELECT o.id, o.product_id, o.price, p.base_price + COALESCE(SUM(v.surcharge), 0) AS computed
+--     FROM shop.product_options o JOIN shop.products p ON p.id = o.product_id
+--     LEFT JOIN shop.product_option_selections s ON s.option_id = o.id LEFT JOIN shop.product_option_values v ON v.id = s.value_id
+--    GROUP BY o.id, o.product_id, o.price, p.base_price HAVING o.price <> computed;
+ALTER TABLE shop.product_options DROP COLUMN price_overridden;

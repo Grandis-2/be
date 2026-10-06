@@ -1,0 +1,33 @@
+package com.grandis.nova.order.order.query;
+
+import com.grandis.nova.order.order.domain.enums.OrderStatus;
+import com.grandis.nova.order.order.domain.model.Order;
+import com.grandis.nova.order.order.domain.model.OrderEvent;
+import com.grandis.nova.order.order.domain.model.OrderItem;
+
+import java.util.List;
+
+/** 조회 결과. 주문은 항목 · 이력을 들고 있지 않아(id 로 잇는다) 화면이 필요로 하는 것을 여기서 묶는다. */
+public final class OrderView {
+
+    private OrderView() {
+    }
+
+    /** 주문상품 하나와 그 주문. */
+    public record Item(Order order, OrderItem item) {
+    }
+
+    /** 목록 한 줄. */
+    public record Summary(Order order, List<OrderItem> items) {
+    }
+
+    /** 상세. 이력은 번호순이고 주문을 읽은 시점의 번호까지다. */
+    public record Detail(Order order, List<OrderItem> items, List<OrderEvent> events) {
+
+        /** 취소 중인데 환불이 확정 실패했다(마지막 이력이 환불 실패). 사용자에겐 실패 사실만 보인다(U1). */
+        public boolean refundFailed() {
+            return order.status() == OrderStatus.CANCELING && !events.isEmpty()
+                    && events.getLast().cause().isRefundFailure();
+        }
+    }
+}
