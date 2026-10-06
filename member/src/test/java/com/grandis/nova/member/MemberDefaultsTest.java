@@ -5,6 +5,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.EnvironmentPostProcessor;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.WebApplicationType;
+import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.io.support.SpringFactoriesLoader;
 import org.springframework.mock.env.MockEnvironment;
@@ -58,6 +61,19 @@ class MemberDefaultsTest {
         new MemberDefaults().postProcessEnvironment(disabled, nonWeb);
         assertThat(disabled.getProperty("management.server.port")).isEqualTo("-1");
         assertThat(apply(Map.of("server.port", "8080")).getProperty("management.server.port")).isEqualTo("9080");
+    }
+
+    @Test
+    @DisplayName("설정으로 웹 서버를 끈 기동(spring.main.web-application-type=none)은 관리 포트를 꺼 둬도 뜬다 — 실제 부팅으로 확인")
+    void nonWebBootConfiguredByPropertyIsNotRefused() {
+        try (ConfigurableApplicationContext context = new SpringApplicationBuilder(Empty.class)
+                .run("--spring.main.web-application-type=none", "--management.server.port=-1")) {
+            assertThat(context.getEnvironment().getPropertySources().contains(MemberDefaults.SOURCE_NAME)).as("후처리기가 돌았다").isTrue();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class Empty {
     }
 
     private static MockEnvironment apply(Map<String, Object> deployed) {

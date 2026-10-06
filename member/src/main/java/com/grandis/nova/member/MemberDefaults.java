@@ -4,6 +4,7 @@ import org.springframework.boot.EnvironmentPostProcessor;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.actuate.autoconfigure.web.server.ManagementPortType;
+import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.core.Ordered;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
@@ -32,8 +33,11 @@ class MemberDefaults implements EnvironmentPostProcessor, Ordered {
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
         environment.getPropertySources().addLast(new MapPropertySource(SOURCE_NAME, DEFAULTS));
-        // 웹 서버를 띄우지 않는 기동(배치 · 도구)에는 포트가 없다 — 관리 포트를 꺼 둔 채(-1) 띄워도 막지 않는다
-        if (application.getWebApplicationType() != WebApplicationType.NONE) {
+        // 웹 서버를 띄우지 않는 기동(배치 · 도구)에는 포트가 없다 — 관리 포트를 꺼 둔 채(-1) 띄워도 막지 않는다.
+        // spring.main.web-application-type 은 이 후처리기가 돈 뒤에야 SpringApplication 에 들어가므로 환경에서 먼저 읽는다(실측: 안 읽으면 막혔다)
+        WebApplicationType webType = Binder.get(environment).bind("spring.main.web-application-type", WebApplicationType.class)
+                .orElse(application.getWebApplicationType());
+        if (webType != WebApplicationType.NONE) {
             requireSeparateManagementPort(environment);
         }
     }
