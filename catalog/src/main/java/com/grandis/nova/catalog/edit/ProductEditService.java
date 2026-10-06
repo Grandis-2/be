@@ -43,15 +43,15 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 관리자 상품 수정 — 표시 정보 · 기본 가격 · 보증, 옵션 값 추가 · 수정, 옵션(조합) 추가 · 수정, 상품 판매 상태 · 공개 여부.
  *
- * <p><b>사전예약은 오픈 3분 전부터 공개 여부 말고는 아무것도 못 바꾼다.</b> 표시 정보 · 가격 · 추가금 · 값 · 조합 추가 · 가격 되돌리기 · 옵션 판매 상태 · 상품 판매 상태 전부
+ * <p><b>사전예약은 오픈 3분 전부터 공개 여부 말고는 아무것도 못 바꾼다.</b> 표시 정보 · 가격 · 추가금 · 값 · 조합 추가 · 옵션 판매 상태 · 상품 판매 상태 전부
  * 409 STATE_CONFLICT(2026-09-29 결정 — 판매 상태도 막는다. preorder 는 접수용 상품 사본을 캐시해 두고 그 값으로 판정한다. 사전예약 상품을
  * 고치면 PREORDER_PRODUCT_CHANGED 로 알려 preorder 가 모든 인스턴스의 사본을 비우지만, 비우기는 아웃박스 릴레이 · SQS 전달만큼 늦고
  * preorder 의 인스턴스 간 알림이 실패하면 사본은 최대 30분(캐시 만료) 묵을 수 있다 — contracts/preorder-internal.md "캐시". 그래서 오픈
  * 직전 · 뒤의 변경은 접수에 늦게 닿을 수 있어 3분 전부터 막는다). 판정은 preorder 의 회차(opens_at − 3분 ≤ 지금)로 하고, 회차가 없으면
  * (preorder 가 등록 이벤트를 처리하기 전) 아직 잠기지 않았다.
  *
- * <p><b>재계산.</b> 기본 가격 · 추가금이 바뀌면 그 값을 고른 옵션 중 수동 가격이 아닌 것만 `기본가 + Σ추가금` 으로 다시 계산한다. 관리자가 직접 고친
- * 가격(priceOverridden)은 그대로 둔다.
+ * <p><b>재계산.</b> 옵션 가격은 늘 `기본가 + Σ추가금` 이다. 기본 가격이 바뀌면 모든 옵션을, 추가금이 바뀌면 그 값을 고른 옵션을 다시 계산한다.
+ * 옵션 가격을 직접 고치는 경로는 없다(2026-10-06 결정 — 조합 하나만 다른 가격은 받지 않는다).
  *
  * <p><b>구성은 바꾸지 않는다.</b> 옵션의 조합 · sku 는 불변이다(값 이름 수정은 정규화값도 바꾸지만 조합은 값 id 로 묶여 그대로다). 실제 색상 · 용량 구성이 바뀌면 값을 더하고 새 조합을 만들고 옛 옵션을
  * 판매 중지한다. 옛 옵션에 주문 이력이 있는지는 catalog 가 볼 수 없다(주문 표를 읽지 않는다) — 그래서 지우지 않고 상태로 숨긴다.
@@ -196,8 +196,7 @@ public class ProductEditService {
         if (request.value() != null) {
             renameValue(product, axisKey, value, request.value());
         }
-        if (request.surcharge() != null) {
-            value.reprice(request.surcharge());
+        if (request.surcharge() != null && value.reprice(request.surcharge())) {
             recomputePrices(product, value.getId(), "surcharge");
         }
         values.flush();
@@ -209,10 +208,6 @@ public class ProductEditService {
 
     @Transactional
     public ProductDetailView.Variant addVariant(Long productId, VariantAddRequest request) {
-        boolean overridden = request.price() != null;
-        if (overridden) {
-            ProductRegistrationValidator.requireWholeWon(request.price(), "price");
-        }
         Map<String, String> given = new LinkedHashMap<>();
         for (Map.Entry<String, String> entry : request.selections().entrySet()) {
             String axisKey = entry.getKey() == null ? "" : entry.getKey().strip().toLowerCase(Locale.ROOT);
@@ -258,11 +253,10 @@ public class ProductEditService {
         if (combination.title().length() > ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH) {
             throw ValidationFailures.of("selections", "옵션 표시명이 %d자를 넘습니다.".formatted(ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH));
         }
-        BigDecimal price = overridden ? request.price()
-                : ProductRegistrationValidator.requireStorablePrice(computedPrice(product, picked), "selections");
+        BigDecimal price = ProductRegistrationValidator.requireStorablePrice(computedPrice(product, picked), "selections");
         ProductOption option;
         try {
-            option = options.saveAndFlush(ProductOption.of(sku, price, overridden, combination));
+            option = options.saveAndFlush(ProductOption.of(sku, price, combination));
         } catch (DataIntegrityViolationException e) {
             // 위 검사를 지나 DB 에서 난 UNIQUE 위반 — 같은 상품 수정은 상품 행 잠금으로 줄 서므로 남는 것은 잠금 밖의 쓰기뿐이다
             if (ConstraintViolations.mentionsKey(e, "uq_option_combination")) {
@@ -286,28 +280,11 @@ public class ProductEditService {
         if (request.isEmpty()) {
             throw ValidationFailures.of("body", "바꿀 칸이 하나도 없습니다.");
         }
-        if (request.price() != null) {
-            ProductRegistrationValidator.requireWholeWon(request.price(), "price");
-            if (request.resets()) {
-                throw ValidationFailures.of("resetPrice", "수동 가격 지정과 자동 계산 되돌리기는 함께 보낼 수 없습니다.");
-            }
-        }
         Product product = requireEditable(productId);   // 판매 상태도 사전예약 오픈 3분 전부터는 못 바꾼다
         ProductOption option = options.findById(variantId)
                 .filter(o -> o.getProductId().equals(productId))
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
-        if (request.price() != null) {
-            option.overridePrice(request.price());
-        }
-        if (request.resets()) {
-            List<Long> valueIds = selectionsByOption(productId).getOrDefault(variantId, List.of());
-            Map<Long, ProductOptionValue> valueById = valuesOf(productId);
-            option.resetToComputed(ProductRegistrationValidator.requireStorablePrice(
-                    computedPrice(product, valueIds.stream().map(valueById::get).toList()), "resetPrice"));
-        }
-        if (request.status() != null) {
-            option.changeStatus(request.status());
-        }
+        option.changeStatus(request.status());
         options.flush();
         ProductDetailView.Variant edited = variantOf(productId, variantId);
         requireNotOpenedAtCommit(product);
@@ -446,7 +423,7 @@ public class ProductEditService {
         requireNotOpened(product);
     }
 
-    /** 수동 가격이 아닌 옵션을 `기본가 + Σ추가금` 으로. valueId 를 주면 그 값을 고른 옵션만, null 이면 전부. */
+    /** 옵션 가격을 `기본가 + Σ추가금` 으로 다시 계산한다. valueId 를 주면 그 값을 고른 옵션만, null 이면 전부. */
     private void recomputePrices(Product product, Long valueId, String cause) {
         Map<Long, List<Long>> valueIdsByOption = selectionsByOption(product.getId());
         Map<Long, ProductOptionValue> valueById = valuesOf(product.getId());
@@ -454,9 +431,6 @@ public class ProductEditService {
             List<Long> valueIds = valueIdsByOption.getOrDefault(option.getId(), List.of());
             if (valueId != null && !valueIds.contains(valueId)) {
                 continue;
-            }
-            if (option.isPriceOverridden()) {
-                continue;   // 수동 가격은 재계산하지 않는다(엔티티도 무시한다) — 상한 검사도 하지 않는다
             }
             BigDecimal computed = product.getBasePrice();
             for (Long id : valueIds) {

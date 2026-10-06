@@ -150,7 +150,7 @@ public class Product extends BaseEntity {
         }
     }
 
-    /** 기본 가격. 바뀌었으면 true — 호출자가 수동 가격이 아닌 옵션을 재계산한다(설계 §2.1 재계산). */
+    /** 기본 가격. 바뀌었으면 true — 호출자가 모든 옵션 가격을 재계산한다. */
     public boolean reprice(BigDecimal basePrice) {
         BigDecimal next = Amounts.requireWholeWon(basePrice, "basePrice");
         if (this.basePrice.compareTo(next) == 0) {

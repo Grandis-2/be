@@ -94,9 +94,14 @@ public class ProductOptionValue extends BaseEntity {
         this.normalizedValue = normalize(normalizedValue);
     }
 
-    /** 추가금 수정. 호출자가 이 값을 고른 옵션의 가격을 재계산한다(수동 가격 제외). */
-    public void reprice(BigDecimal surcharge) {
-        this.surcharge = Amounts.requireWholeWon(surcharge, "surcharge");
+    /** 추가금 수정. 바뀌었으면 true — 호출자가 이 값을 고른 옵션의 가격을 재계산한다. */
+    public boolean reprice(BigDecimal surcharge) {
+        BigDecimal next = Amounts.requireWholeWon(surcharge, "surcharge");
+        if (this.surcharge.compareTo(next) == 0) {
+            return false;
+        }
+        this.surcharge = next;
+        return true;
     }
 
     public Long getId() {

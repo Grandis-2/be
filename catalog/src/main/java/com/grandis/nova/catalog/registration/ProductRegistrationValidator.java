@@ -35,7 +35,7 @@ import java.util.regex.Pattern;
  * 규칙(설계 §2.1 · §2.1.1 · §2.3 · 제안서 §2·§6):
  * 축 키는 소문자로 접고 유일 · 값은 저장 규칙으로 정규화하고 DB 콜레이션(대소문자 · 악센트 · 전각 무시)과 같은 기준으로 축 안에서 유일 ·
  * 용량은 숫자+단위 · 조합은 축 전부를 덮고 값이 그 축에 있어야 하며 같은 조합 둘 금지 · 조합 상한 · SKU 는 상품 안 유일(비면 값을 '-' 로 잇는다) ·
- * 표시명 120자 · 가격은 정수 원 · 재고는 일반 상품에서 조합마다 필수이고 사전예약은 받지 않는다 · 수동 가격은 보낸 조합만(사용자 결정 2026-09-28) ·
+ * 표시명 120자 · 가격은 정수 원 · 재고는 일반 상품에서 조합마다 필수이고 사전예약은 받지 않는다 · 가격은 기본가 + 추가금 합만(수동 가격 없음, 2026-10-06 결정) ·
  * 사진 묶음은 color 축이 있으면 색상별만(사용자 결정 2026-09-28), 없으면 기본 묶음 하나 · GALLERY 묶음당 10장 · 대표는 하나(없으면 첫 장) ·
  * DETAIL 은 상한과 대표 자동 지정이 없다 · 사전예약은 회차 + 차수 필수이고 오픈은 지금 + 여유 이후 · 일반은 회차 · 차수를 받지 않는다.
  */
@@ -70,7 +70,7 @@ public class ProductRegistrationValidator {
     }
 
     /** 만들 조합 하나. selections 는 축 키 → 정규화값(축 순). stock 은 일반 상품만, 사전예약은 null. */
-    public record Combo(Map<String, String> selections, String sku, BigDecimal price, boolean priceOverridden, Integer stock) {
+    public record Combo(Map<String, String> selections, String sku, BigDecimal price, Integer stock) {
     }
 
     public record GalleryDraft(String bundleKey, List<Image> items) {
@@ -269,8 +269,7 @@ public class ProductRegistrationValidator {
             for (Axis axis : axes) {
                 computed = computed.add(axis.value(selections.get(axis.key())).surcharge());
             }
-            boolean overridden = setting != null && setting.price() != null;
-            BigDecimal price = overridden ? requireWholeWon(setting.price(), field + ".price") : requireStorablePrice(computed, field);
+            BigDecimal price = requireStorablePrice(computed, field);
             Integer stock = setting == null ? null : setting.stock();
             if (request.saleMode() == SaleMode.IN_STOCK) {
                 if (stock == null) {
@@ -282,7 +281,7 @@ public class ProductRegistrationValidator {
             } else if (stock != null) {
                 throw ValidationFailures.of(field + ".stock", "사전예약에는 재고를 넣지 않습니다.");
             }
-            combos.add(new Combo(selections, sku, price, overridden, stock));
+            combos.add(new Combo(selections, sku, price, stock));
         }
         if (combos.isEmpty()) {
             throw ValidationFailures.of("combinations", "판매할 조합이 하나도 없습니다.");

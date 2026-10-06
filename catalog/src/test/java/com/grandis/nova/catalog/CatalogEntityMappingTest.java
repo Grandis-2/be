@@ -95,7 +95,7 @@ class CatalogEntityMappingTest {
         assertThat(none.isStandalone()).isTrue();
         assertThat(none.title()).isEqualTo("Nova 1");
         assertThat(none.selections(1L)).isEmpty();
-        ProductOption option = options.saveAndFlush(ProductOption.of("ONLY", new BigDecimal("1450000"), false, none));
+        ProductOption option = options.saveAndFlush(ProductOption.of("ONLY", new BigDecimal("1450000"), none));
         assertThat(option.getTitle()).isEqualTo("Nova 1");
 
         Map<String, Object> row = jdbcTemplate.queryForMap(
@@ -111,10 +111,9 @@ class CatalogEntityMappingTest {
         assertThat(row.get("updated_at")).isNotNull();
 
         Map<String, Object> optionRow = jdbcTemplate.queryForMap(
-                "SELECT price, price_overridden, status, filter_attributes, display_attributes, combination_key "
+                "SELECT price, status, filter_attributes, display_attributes, combination_key "
                         + "FROM product_options WHERE id = ?", option.getId());
         assertThat((BigDecimal) optionRow.get("price")).isEqualByComparingTo("1450000");
-        assertThat(optionRow.get("price_overridden")).isEqualTo(false);
         assertThat(optionRow.get("status")).isEqualTo("ACTIVE");
         assertThat(optionRow.get("filter_attributes")).isNull();
         assertThat(optionRow.get("display_attributes")).isNull();
@@ -125,10 +124,7 @@ class CatalogEntityMappingTest {
         assertThat(reloaded.isWarrantyOffered()).isTrue();
         assertThat(reloaded.getStatus()).isEqualTo(SaleStatus.ACTIVE);
         assertThat(options.findByProductIdOrderById(product.getId())).singleElement()
-                .satisfies(o -> {
-                    assertThat(o.isPriceOverridden()).isFalse();
-                    assertThat(o.getCombinationKey()).isEqualTo(OptionCombination.STANDALONE_KEY);
-                });
+                .satisfies(o -> assertThat(o.getCombinationKey()).isEqualTo(OptionCombination.STANDALONE_KEY));
     }
 
     @Test
@@ -174,7 +170,7 @@ class CatalogEntityMappingTest {
         // 길이 축을 먼저 넘겨도 표시명은 축 position 순, 키는 값 id 순이다
         OptionCombination combination = OptionCombination.of(productId,
                 List.of(new OptionCombination.Pick(length, twoMeters), new OptionCombination.Pick(color, black)));
-        ProductOption option = options.saveAndFlush(ProductOption.of("BLACK-2M", new BigDecimal("13000"), false, combination));
+        ProductOption option = options.saveAndFlush(ProductOption.of("BLACK-2M", new BigDecimal("13000"), combination));
         selections.saveAllAndFlush(combination.selections(option.getId()));
 
         assertThat(option.getTitle()).isEqualTo("블랙 / 2m");

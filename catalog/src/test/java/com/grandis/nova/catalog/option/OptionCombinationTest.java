@@ -92,7 +92,7 @@ class OptionCombinationTest {
             OptionCombination combination = OptionCombination.of(productId,
                     List.of(new Pick(color, chosenColor), new Pick(storage, gb256), new Pick(length, twoMeters)));
             ProductOption option = options.saveAndFlush(ProductOption.of(
-                    "SKU-" + chosenColor.getId(), new BigDecimal("1200000"), false, combination));
+                    "SKU-" + chosenColor.getId(), new BigDecimal("1200000"), combination));
             selections.saveAllAndFlush(combination.selections(option.getId()));
         }
 

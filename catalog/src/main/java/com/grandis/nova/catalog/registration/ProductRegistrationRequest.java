@@ -83,11 +83,10 @@ public record ProductRegistrationRequest(
      *
      * @param excluded 이 조합은 판매하지 않는다(행을 만들지 않는다)
      * @param sku      비면 값의 정규화값을 '-' 로 이어 만든다
-     * @param price    주면 수동 수정 가격(재계산에서 건너뛴다). 비면 기본가 + 추가금 합
      * @param stock    일반 상품의 초기 재고. 일반은 제외하지 않은 조합마다 필수(0 허용 — 품절로 공개), 사전예약은 보내지 않는다
      */
     public record Combination(@NotNull Map<String, String> selections, Boolean excluded, @Size(max = 80) String sku,
-                              @DecimalMin("0") BigDecimal price, Integer stock) {
+                              Integer stock) {
         public Combination {
             excluded = excluded != null && excluded;
         }
