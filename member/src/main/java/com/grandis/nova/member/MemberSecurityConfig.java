@@ -7,6 +7,7 @@ import com.grandis.nova.member.auth.api.RefreshOriginPolicy;
 import com.grandis.nova.member.auth.application.AdminLoginLimit;
 import com.grandis.nova.member.auth.application.AdminProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.security.autoconfigure.actuate.web.servlet.EndpointRequest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -26,7 +27,7 @@ public class MemberSecurityConfig {
     @Bean
     SecurityFilterChain memberChain(HttpSecurity http, SecurityFilterChainSupport support) throws Exception {
         return support.build(http, a -> a
-                .requestMatchers("/health/**").permitAll()
+                .requestMatchers(EndpointRequest.to("health")).permitAll()                       // 헬스 체크(관리 포트의 readiness · liveness)
                 .requestMatchers(HttpMethod.GET, "/.well-known/jwks.json").permitAll()          // 공개키 게시(RFC 7517). 검증 서비스가 받아 간다
                 .requestMatchers(HttpMethod.POST, "/api/v1/auth/kakao/callback").permitAll()   // 로그인(프론트 주도 코드 교환)
                 .requestMatchers(HttpMethod.POST, "/api/v1/admin/session").permitAll()          // 관리자 로그인

@@ -39,6 +39,10 @@ server:
   # 비워 두면 Spring Boot 가 AWS ECS 를 감지해 스스로 켜고(RemoteIpValve), 헤더를 고쳐 써서 IP 판정이 틀어진다. 켜진 채로 hops > 0 이면 기동 실패
   forward-headers-strategy: none
 
+# 헬스 체크(ALB 대상 그룹): 관리 포트 9080 의 GET /actuator/health/readiness — 토큰 없이 200 {"status":"UP"}. 서비스 포트(8080)로는 actuator 가 나가지 않는다.
+# 관리 포트 · 노출(health 만) · probes · readiness 구성(앱 준비 상태만, DB · Redis 제외)은 MemberDefaults 가 코드 기본값으로 준다.
+# 여기 management.* 를 적으면 그 값이 이긴다 — 포트를 바꾸면 대상 그룹의 헬스 체크 포트도 같이 바꾼다.
+
 # OpenAPI 문서. 기본은 꺼져 있고 값이 정확히 true 일 때만 켜진다(빈 값 · no · 오타는 꺼짐). 운영에는 적지 않는다.
 # api-docs 가 주 스위치다 — UI 만 꺼도 스펙은 열린다.
 # member 는 문서 허브다 — hub-services 를 주면 Swagger UI 드롭다운에 서비스별 문서(/v3/api-docs/{서비스})가 나온다.
