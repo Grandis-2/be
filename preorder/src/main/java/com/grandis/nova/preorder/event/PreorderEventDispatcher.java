@@ -3,6 +3,7 @@ package com.grandis.nova.preorder.event;
 import com.grandis.nova.common.message.EventEnvelope;
 import com.grandis.nova.preorder.campaign.CampaignRegistrar;
 import com.grandis.nova.preorder.campaign.CampaignRepublisher;
+import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.cancel.CampaignCancelService;
 import com.grandis.nova.preorder.cancel.ExpiryCancelService;
 import com.grandis.nova.preorder.integration.catalog.CatalogCacheInvalidation;
@@ -35,6 +36,7 @@ public class PreorderEventDispatcher {
     private final CampaignCancelService campaignCancelService;
     private final CampaignRepublisher campaignRepublisher;
     private final CampaignRegistrar campaignRegistrar;
+    private final Campaigns campaigns;
     private final CatalogCacheInvalidation catalogCache;
     private final JsonMapper jsonMapper;
     private final MeterRegistry meterRegistry;
@@ -42,13 +44,15 @@ public class PreorderEventDispatcher {
 
     public PreorderEventDispatcher(PreorderEventHandler handler, ExpiryCancelService expiryCancelService,
                                    CampaignCancelService campaignCancelService, CampaignRepublisher campaignRepublisher,
-                                   CampaignRegistrar campaignRegistrar, CatalogCacheInvalidation catalogCache,
-                                   JsonMapper jsonMapper, MeterRegistry meterRegistry, Clock clock) {
+                                   CampaignRegistrar campaignRegistrar, Campaigns campaigns,
+                                   CatalogCacheInvalidation catalogCache, JsonMapper jsonMapper,
+                                   MeterRegistry meterRegistry, Clock clock) {
         this.handler = handler;
         this.expiryCancelService = expiryCancelService;
         this.campaignCancelService = campaignCancelService;
         this.campaignRepublisher = campaignRepublisher;
         this.campaignRegistrar = campaignRegistrar;
+        this.campaigns = campaigns;
         this.catalogCache = catalogCache;
         this.jsonMapper = jsonMapper;
         this.meterRegistry = meterRegistry;
@@ -108,12 +112,23 @@ public class PreorderEventDispatcher {
                 log.info("회차 일정 전체 재발행 요청: requestedBy={}, reason={}", requested.requestedBy(), requested.reason());
                 campaignRepublisher.republishAll();
             }
-            // 오픈 직전 가격 변경이 캐시 갱신(1분)을 기다리지 않고 모든 인스턴스의 접수에 바로 반영되게 한다
-            case PREORDER_PRODUCT_CHANGED -> catalogCache.evictEverywhere(requireProductId(envelope));
+            case PREORDER_PRODUCT_CHANGED -> onProductChanged(requireProductId(envelope),
+                    jsonMapper.treeToValue(envelope.payload(), PreorderProductChanged.class));
             case PREORDER_PRODUCT_REGISTERED -> {
                 campaignRegistrar.register(requireProductId(envelope),
                         jsonMapper.treeToValue(envelope.payload(), PreorderProductRegistered.class).toRegistration());
             }
+        }
+    }
+
+    /**
+     * 오픈 직전 가격 변경이 캐시 갱신(1분)을 기다리지 않고 모든 인스턴스의 접수에 바로 반영되게 캐시를 먼저 비운다.
+     * 공개 여부가 실려 있으면 회차에 반영한다 — 회차가 아직 없으면 예외로 다시 받는다.
+     */
+    private void onProductChanged(Long productId, PreorderProductChanged changed) {
+        catalogCache.evictEverywhere(productId);
+        if (changed != null && changed.hasVisibility()) {
+            campaigns.applyVisibility(productId, changed.visible(), changed.visibilityVersion());
         }
     }
 

@@ -25,6 +25,9 @@ import java.util.List;
 @Component
 class PreorderCampaignWriter {
 
+    /** catalog 이벤트를 받기 전 번호. catalog 의 첫 번호(1)부터 이긴다. */
+    private static final long NO_VISIBILITY_VERSION = 0;
+
     private final PreorderCampaignRepository campaigns;
     private final ShipmentBatchRepository batches;
     private final CampaignChangePublisher changePublisher;
@@ -40,17 +43,22 @@ class PreorderCampaignWriter {
         this.clock = clock;
     }
 
-    /** 없으면 만들고 있으면 바꾼다. 오픈 뒤에는 바꾸지 않는다. */
+    /**
+     * 없으면 만들고 있으면 바꾼다. 오픈 뒤에는 바꾸지 않는다.
+     *
+     * @param visible 새로 만들 때만 쓰는 catalog 의 공개 여부. 번호는 0 으로 두어 catalog 이벤트가 이긴다
+     */
     @Transactional
-    PreorderCampaign upsert(Long productId, Instant opensAt, Instant closesAt) {
+    PreorderCampaign upsert(Long productId, Instant opensAt, Instant closesAt, boolean visible) {
         return campaigns.findForUpdate(productId)
                 .map(campaign -> reschedule(campaign, opensAt, closesAt))
-                .orElseGet(() -> create(productId, opensAt, closesAt));
+                .orElseGet(() -> create(productId, opensAt, closesAt, visible));
     }
 
-    private PreorderCampaign create(Long productId, Instant opensAt, Instant closesAt) {
+    private PreorderCampaign create(Long productId, Instant opensAt, Instant closesAt, boolean visible) {
         requireLeadTime(opensAt);
-        PreorderCampaign campaign = campaigns.save(new PreorderCampaign(productId, opensAt, closesAt));
+        PreorderCampaign campaign = campaigns.save(
+                new PreorderCampaign(productId, opensAt, closesAt, visible, NO_VISIBILITY_VERSION));
         changePublisher.publish(campaign, CampaignChange.CREATED);
         return campaign;
     }
