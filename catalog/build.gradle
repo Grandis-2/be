@@ -13,6 +13,8 @@ dependencies {
     // 운영 클래스패스에 필요하다 — 시험은 아래 testFixtures 가 같은 모듈을 들여와 이 줄이 빠져도 통과하고, 운영에서만 transport=sqs 기동이 실패한다.
     implementation project(':common:sqs')
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    // 리뷰 작성 때 order(주문상품) · member(표시명) 내부 API 를 부른다. 호출자 토큰은 common:security 의 릴레이 인터셉터가 싣는다
+    implementation 'org.springframework.boot:spring-boot-starter-restclient'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-security'
     // 헬스 체크(ALB). 앱 포트와 나눈 관리 포트의 readiness 만 내놓는다 — CatalogDefaults

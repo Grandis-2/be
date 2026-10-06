@@ -1,5 +1,7 @@
 package com.grandis.nova.catalog.config;
 
+import com.grandis.nova.catalog.integration.Dependencies;
+import com.grandis.nova.common.security.RevocationCheckProperties;
 import org.springframework.boot.EnvironmentPostProcessor;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.WebApplicationType;
@@ -9,6 +11,9 @@ import org.springframework.core.Ordered;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -19,16 +24,39 @@ class CatalogDefaults implements EnvironmentPostProcessor, Ordered {
 
     static final String SOURCE_NAME = "catalogDefaults";
 
-    static final Map<String, Object> DEFAULTS = Map.of(
+    /** 리뷰 쓰기 — 회원이 쓰는 공개 글이라 로그아웃 · 제재된 토큰으로 써지면 안 된다. 조회(GET)는 닫지 않는다. */
+    static final List<String> REVIEW_WRITES = List.of("POST /api/v1/reviews", "PATCH /api/v1/reviews/*", "DELETE /api/v1/reviews/*");
+
+    static final Map<String, Object> DEFAULTS = withFailClosedPaths(Map.ofEntries(
             // 헬스는 서비스 포트(ALB 가 요청을 보내는 8082)와 나눈 관리 포트로만 내놓는다. ALB 헬스 체크는 이 포트의 readiness 를 본다
-            "management.server.port", "9082",
-            "management.endpoints.web.exposure.include", "health",
+            Map.entry("management.server.port", "9082"),
+            Map.entry("management.endpoints.web.exposure.include", "health"),
             // 헬스 체크가 보는 /actuator/health/readiness · liveness. Boot 4.1 은 기본으로 켜지만(실측: 이 줄 없이도 200) 버전이 바뀌어도
             // 경로가 사라지지 않게 고정한다
-            "management.endpoint.health.probes.enabled", "true",
+            Map.entry("management.endpoint.health.probes.enabled", "true"),
             // readiness 는 앱의 준비 상태만 본다(Boot 기본 구성과 같지만 고정한다). DB · Redis 를 넣으면 공용 의존성 장애 한 번에 모든 태스크가
             // 비정상이 돼 ECS 가 태스크를 갈아 끼운다
-            "management.endpoint.health.group.readiness.include", "readinessState");
+            Map.entry("management.endpoint.health.group.readiness.include", "readinessState"),
+            // 리뷰 작성 때 부르는 내부 API(order 주문상품 · member 표시명)의 시간 상한. 없으면 응답을 끝없이 기다려 요청 스레드를 붙잡는다.
+            // 주소(base-url)는 환경마다 달라 여기 두지 않는다 — application.yml.example 의 spring.http.serviceclient
+            Map.entry("spring.http.serviceclient." + Dependencies.ORDER + ".connect-timeout", "300ms"),
+            Map.entry("spring.http.serviceclient." + Dependencies.ORDER + ".read-timeout", "1s"),
+            Map.entry("spring.http.serviceclient." + Dependencies.MEMBER + ".connect-timeout", "300ms"),
+            Map.entry("spring.http.serviceclient." + Dependencies.MEMBER + ".read-timeout", "1s")));
+
+    /**
+     * 폐기 조회가 실패하면 닫는 경로. 목록을 적으면 공통 기본값(관리자 · 재발급 · 내 정보)을 대체하므로, 공통 목록을 그대로 가져와
+     * 리뷰 쓰기를 더한다 — 손으로 베끼면 공통 목록이 늘어날 때 catalog 만 조용히 빠진다.
+     */
+    private static Map<String, Object> withFailClosedPaths(Map<String, Object> base) {
+        Map<String, Object> defaults = new LinkedHashMap<>(base);
+        List<String> closed = new ArrayList<>(RevocationCheckProperties.DEFAULT_FAIL_CLOSED_PATHS);
+        closed.addAll(REVIEW_WRITES);
+        for (int i = 0; i < closed.size(); i++) {
+            defaults.put("auth.revocation-check.fail-closed-paths[" + i + "]", closed.get(i));
+        }
+        return Map.copyOf(defaults);
+    }
 
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {

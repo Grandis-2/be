@@ -21,6 +21,14 @@ spring:
         jdbc:
           time_zone: UTC
     open-in-view: false
+  http:
+    serviceclient:
+      # 리뷰 작성 때만 부른다(조회 · 수정 · 삭제는 부르지 않는다). 회원 토큰을 그대로 싣는다.
+      # 타임아웃(연결 300ms · 읽기 1s)은 CatalogDefaults 가 준다. 주소가 없으면 리뷰 작성이 500 이다.
+      order:      # 내 주문상품(GET /internal/order-items/{id}) — contracts/order-internal.md
+        base-url: http://localhost:8084
+      member:     # 작성자 표시명(GET /internal/customers/me) — contracts/member-internal.md
+        base-url: http://localhost:8080
   data:
     redis:
       host: localhost
@@ -58,8 +66,9 @@ jwt:
   access-token-validity: 30m
   refresh-token-validity: 14d
 
-# 폐기 조회 실패 때 닫는 경로는 공통 기본값(/api/v1/admin/** · /api/v1/session/refresh · /api/v1/me/**)을 쓴다 — catalog 의 보호 경로는 관리자뿐이다.
-# auth.revocation-check.fail-closed-paths 를 여기 적으면 그 목록이 기본값을 대체한다(빈 목록은 기본값).
+# 폐기 조회 실패 때 닫는 경로는 공통 기본값(/api/v1/admin/** · /api/v1/session/refresh · /api/v1/me/**)에 리뷰 쓰기(POST /api/v1/reviews · PATCH · DELETE /api/v1/reviews/*)를 더한 목록이다 — CatalogDefaults.
+# auth.revocation-check.fail-closed-paths 를 여기 적으면 그 목록이 위 목록 전체를 대체한다 — 적으려면 여섯 개를 다 적는다.
+# 빈 목록([] · "")은 공통 기본값 셋으로 돌아가 리뷰 쓰기가 빠진다(경고 로그 한 줄뿐 — 리뷰 쓰기가 조용히 열린다).
 
 # 다른 서비스로 가는 이벤트(상품 등록 → preorder 회차 · 차수, order 초기 재고)는 아웃박스(catalog_outbox_events)에 적고 커밋 뒤 보낸다.
 nova:

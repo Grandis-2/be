@@ -18,7 +18,11 @@ public enum CatalogErrorCode implements ErrorCode {
      * 오픈 뒤 · 회차 취소 뒤의 판매 재개, DB 잠금 실패(교착 등)로 처리하지 못한 수정(details.retryable). 공개 여부 전환은 오픈 판정으로는
      * 이 코드가 나지 않는다(잠금 실패의 retryable 409 는 난다).
      */
-    STATE_CONFLICT(409, "현재 상태에서는 처리할 수 없습니다. 최신 상태를 조회해 주세요.");
+    STATE_CONFLICT(409, "현재 상태에서는 처리할 수 없습니다. 최신 상태를 조회해 주세요."),
+    /** 리뷰를 쓸 수 없는 주문상품 — 배송 완료 전이거나 사전예약 주문 · 상품이다. 문구가 이유를 말한다. */
+    REVIEW_NOT_ALLOWED(409, "이 주문상품에는 리뷰를 쓸 수 없습니다."),
+    /** 그 주문상품에 이미 리뷰가 있다(주문상품 1건당 1개). 고치려면 수정 API 를 쓴다. */
+    REVIEW_ALREADY_WRITTEN(409, "이미 리뷰를 쓴 주문상품입니다.");
 
     private final int status;
     private final String message;
