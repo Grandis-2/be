@@ -50,7 +50,7 @@ jobs:
             list=$(jq -c '.modules' build/service-graph.json)
           else
             git diff --name-only "$BASE" "${{ github.sha }}" > changed.txt
-            list=$(python3 .github/scripts/affected.py --modules build/service-graph.json changed.txt)
+            list=$(python3 .github/scripts/affected.py build/service-graph.json changed.txt)
           fi
 
           echo "modules=$list" >> "$GITHUB_OUTPUT"
