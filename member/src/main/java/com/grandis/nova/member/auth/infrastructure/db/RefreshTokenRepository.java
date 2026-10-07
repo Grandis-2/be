@@ -4,6 +4,7 @@ import jakarta.persistence.LockModeType;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
@@ -11,7 +12,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
-public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long> {
+public interface RefreshTokenRepository extends JpaRepository<RefreshToken, UUID> {
 
     /** 식별만. 판정하려면 아래 잠금 조회를 쓴다. */
     @Query("select t from RefreshToken t where t.tokenHash = :hash")
@@ -38,8 +39,8 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     Instant expiryOfFamily(@Param("familyId") String familyId);
 
     /** cutoff 이하에 만료된 행의 id 를 만료 순으로 최대 limit 개. 잠그지 않는 읽기라 진행 중인 회전을 기다리지 않는다. cutoff 는 RefreshTokenCleanup 이 정한다. */
-    @Query(value = "SELECT id FROM refresh_tokens WHERE expires_at <= :cutoff ORDER BY expires_at LIMIT :limit", nativeQuery = true)
-    List<Long> findExpiredIds(@Param("cutoff") Instant cutoff, @Param("limit") int limit);
+    @Query("select t.id from RefreshToken t where t.expiresAt <= :cutoff order by t.expiresAt limit :limit")
+    List<UUID> findExpiredIds(@Param("cutoff") Instant cutoff, @Param("limit") int limit);
 
     /**
      * 고른 id 만 지운다. 만료 조건을 다시 거는 것은 방어일 뿐이다 — 만료 시각은 바뀌지 않는 칸이라 고른 id 는 이미 조건을 만족한다. 여러 인스턴스가
@@ -50,17 +51,17 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     @Modifying
     @Transactional
     @Query("delete from RefreshToken t where t.id in :ids and t.expiresAt <= :cutoff")
-    int deleteExpired(@Param("ids") List<Long> ids, @Param("cutoff") Instant cutoff);
+    int deleteExpired(@Param("ids") List<UUID> ids, @Param("cutoff") Instant cutoff);
 
     /**
      * 회원 전체 폐기(제재 · 탈퇴)의 대상 — 그 회원의 폐기 안 된 행 중 탐지 창(만료 + 액세스 유효기간) 안의 id. 잠그지 않는 읽기다. 창이 지난 행은 막을
      * 액세스 토큰이 없고 정리가 지우는 중일 수 있어 뺀다. UPDATE 에 조건만 붙이면 MySQL 이 잠긴 행을 기다린 뒤 조건을 봐서 정리와 맞물린다(실측).
      */
     @Query("select t.id from RefreshToken t where t.customerId = :customerId and t.revokedAt is null and t.expiresAt > :windowStart")
-    List<Long> findLiveIdsOf(@Param("customerId") long customerId, @Param("windowStart") Instant windowStart);
+    List<UUID> findLiveIdsOf(@Param("customerId") UUID customerId, @Param("windowStart") Instant windowStart);
 
     /** 고른 행만 폐기한다(기본키). 이미 폐기된 행은 시각을 덮지 않는다. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("update RefreshToken t set t.revokedAt = :now where t.id in :ids and t.revokedAt is null")
-    int revokeByIds(@Param("ids") List<Long> ids, @Param("now") Instant now);
+    int revokeByIds(@Param("ids") List<UUID> ids, @Param("now") Instant now);
 }

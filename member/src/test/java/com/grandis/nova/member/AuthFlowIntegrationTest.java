@@ -135,7 +135,7 @@ class AuthFlowIntegrationTest {
     void secondLoginReusesRow() throws Exception {
         login();
         long before = customers.count();
-        Long id = customers.findByKakaoId(kakaoId).orElseThrow().getId();
+        UUID id = customers.findByKakaoId(kakaoId).orElseThrow().getId();
 
         login();
 

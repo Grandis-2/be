@@ -3,9 +3,6 @@ package com.grandis.nova.member.customer;
 import com.grandis.nova.common.BaseEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import org.hibernate.annotations.DynamicUpdate;
 
@@ -22,10 +19,6 @@ import org.hibernate.annotations.DynamicUpdate;
 @Table(name = "customers")
 @DynamicUpdate
 public class Customer extends BaseEntity {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
 
     @Column(name = "kakao_id", nullable = false, length = 64, updatable = false)
     private String kakaoId;
@@ -122,9 +115,6 @@ public class Customer extends BaseEntity {
         this.defaultShipToLine2 = address.line2();
     }
 
-    public Long getId() {
-        return id;
-    }
 
     public String getKakaoId() {
         return kakaoId;

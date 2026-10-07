@@ -271,12 +271,12 @@ public class AuthController {
         if (principal.role() != Role.USER) {
             return new SessionOwner(null, true);
         }
-        long customerId;
+        UUID customerId;
         try {
             customerId = principal.customerId();
-        } catch (NumberFormatException e) {
-            // CurrentCustomerIdArgumentResolver 와 같은 처리: USER 의 sub 는 발급기가 customers.id 로만 만든다. 십진수가 아니면 500 이 아니라 401.
-            throw new InvalidTokenException("non-numeric subject for USER");
+        } catch (IllegalArgumentException e) {
+            // CurrentCustomerIdArgumentResolver 와 같은 처리: USER 의 sub 는 발급기가 customers.id 로만 만든다. UUID 가 아니면 500 이 아니라 401.
+            throw new InvalidTokenException("non-uuid subject for USER");
         }
         // 행이 없으면 401 — CustomerService 와 같은 규칙. 탈퇴가 없어 지금은 도달하지 않는 갈래다.
         return customers.findById(customerId)

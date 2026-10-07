@@ -54,8 +54,8 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
     @Override
     @Transactional
     public void save(UUID sessionId, String subject, String rawToken, Instant expiresAt) {
-        long customerId = customerIdOf(subject).orElseThrow(() ->
-                new IllegalStateException("회원 리프레시 저장소에 회원 번호가 아닌 subject 가 왔다: " + subject));
+        UUID customerId = customerIdOf(subject).orElseThrow(() ->
+                new IllegalStateException("회원 리프레시 저장소에 회원 id 가 아닌 subject 가 왔다: " + subject));
         rows.save(RefreshToken.issue(customerId, sessionId, RefreshTokens.hash(rawToken),
                 now(), expiresAt));
     }
@@ -122,7 +122,7 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
         // 탐지 창 안의 행만 잠그지 않고 골라 기본키로 폐기한다 — 창이 지난 행은 정리가 지우는 중일 수 있고, 폐기해도 막을 액세스 토큰이 없다
         customerIdOf(subject).ifPresent(customerId -> {
             Instant now = now();
-            List<Long> live = rows.findLiveIdsOf(customerId, now.minus(detectionWindow));
+            List<UUID> live = rows.findLiveIdsOf(customerId, now.minus(detectionWindow));
             if (!live.isEmpty()) {
                 // 고른 뒤 다른 폐기(로그아웃 · 재사용 탐지)가 먼저 끊었으면 그 행은 0 으로 센다 — 이미 끊긴 것이라 실패가 아니다
                 int revoked = rows.revokeByIds(live, now);
@@ -135,10 +135,10 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
         return clock.instant().truncatedTo(ChronoUnit.SECONDS);
     }
 
-    private static Optional<Long> customerIdOf(String subject) {
+    private static Optional<UUID> customerIdOf(String subject) {
         try {
-            return Optional.of(Long.parseLong(subject));
-        } catch (NumberFormatException e) {
+            return Optional.of(UUID.fromString(subject));
+        } catch (IllegalArgumentException e) {
             return Optional.empty();
         }
     }

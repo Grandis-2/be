@@ -47,7 +47,7 @@ class InternalCustomerApiTest {
         String bearer = BearerTokens.value(token(customer.getId().toString(), Role.USER));
         mvc.perform(get(PATH).header(BearerTokens.HEADER, bearer))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.customerId").value(customer.getId()))
+                .andExpect(jsonPath("$.data.customerId").value(customer.getId().toString()))
                 .andExpect(jsonPath("$.data.displayName").value("철수랑"))
                 .andExpect(jsonPath("$.data.name").value(org.hamcrest.Matchers.nullValue()));
 

@@ -2,13 +2,14 @@ package com.grandis.nova.member.customer;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
-public interface CustomerRepository extends JpaRepository<Customer, Long> {
+public interface CustomerRepository extends JpaRepository<Customer, UUID> {
 
     Optional<Customer> findByKakaoId(String kakaoId);
 
@@ -20,5 +21,5 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     @Transactional
     @Modifying(clearAutomatically = true)
     @Query("update Customer c set c.displayName = :displayName, c.updatedAt = :now where c.id = :id")
-    int refreshDisplayName(@Param("id") Long id, @Param("displayName") String displayName, @Param("now") Instant now);
+    int refreshDisplayName(@Param("id") UUID id, @Param("displayName") String displayName, @Param("now") Instant now);
 }
