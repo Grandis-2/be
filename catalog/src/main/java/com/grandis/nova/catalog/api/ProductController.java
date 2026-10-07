@@ -7,6 +7,9 @@ import com.grandis.nova.catalog.listing.ProductListItem;
 import com.grandis.nova.catalog.listing.ProductListingService;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.common.web.ApiResponse;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -20,6 +23,7 @@ import java.util.List;
  * color · storage 는 같은 이름을 반복해 여러 값을 준다(?color=블랙&color=화이트). 정렬은 productId 내림차순 고정.
  * 상세는 비공개 · 미완료 상품이면 누구에게나 404 — 관리자 미리보기는 없다(관리자는 /api/v1/admin/products/{id}).
  */
+@Tag(name = "상품")
 @RestController
 @RequestMapping("/api/v1/products")
 public class ProductController {
@@ -32,16 +36,22 @@ public class ProductController {
         this.detailService = detailService;
     }
 
+    @Operation(summary = "상품 상세(로그인 없이)")
+    @SecurityRequirements
     @GetMapping("/{productId}")
     public ApiResponse<ProductDetailView> product(@PathVariable Long productId) {
         return ApiResponse.ok(detailService.findProduct(productId));
     }
 
+    @Operation(summary = "옵션(조합) 상세(로그인 없이)")
+    @SecurityRequirements
     @GetMapping("/{productId}/variants/{variantId}")
     public ApiResponse<ProductDetailView.Variant> variant(@PathVariable Long productId, @PathVariable Long variantId) {
         return ApiResponse.ok(detailService.findVariant(productId, variantId));
     }
 
+    @Operation(summary = "상품 목록 · 검색(로그인 없이)")
+    @SecurityRequirements
     @GetMapping
     public ApiResponse<ProductPageResponse<ProductListItem>> list(
             @RequestParam(required = false) String q,

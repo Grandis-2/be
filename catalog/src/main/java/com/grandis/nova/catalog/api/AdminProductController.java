@@ -26,6 +26,10 @@ import com.grandis.nova.catalog.registration.RegistrationStatusView;
 import com.grandis.nova.catalog.CatalogErrorCode;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.web.ApiResponse;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import java.util.Map;
 import java.util.function.Supplier;
 import org.springframework.dao.PessimisticLockingFailureException;
@@ -54,6 +58,7 @@ import org.springframework.web.bind.annotation.RestController;
  * 같은 키로 다시 보내도 이벤트를 다시 적지 않는다(아웃박스가 보낼 때까지 보낸다). 준비 전 상품은 공개로 골랐어도 회원에게 보이지 않는다.
  * 본문은 모르는 칸을 거절한다({@link RegistrationRequestParser}).
  */
+@Tag(name = "관리자 상품")
 @RestController
 @RequestMapping("/api/v1/admin/products")
 public class AdminProductController {
@@ -76,10 +81,11 @@ public class AdminProductController {
         this.parser = parser;
     }
 
+    @Operation(summary = "상품 등록", description = "201 새로 저장(미리보기 포함) · 200 준비가 끝난 등록의 재생 · 202 아직 준비 전인 등록의 재생. 같은 Idempotency-Key 는 첫 등록을 돌려준다. 일반 상품은 제외하지 않은 조합마다 stock(0 이상)이 필요하고 campaign · shipmentBatches 는 받지 않는다. 사전예약은 campaign · shipmentBatches 가 필요하고 stock 은 받지 않는다. 모르는 칸은 400")
     @PostMapping
     public ResponseEntity<ApiResponse<ProductRegistrationResponse>> register(
             @RequestHeader("Idempotency-Key") String idempotencyKey,
-            @RequestBody String body) {
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ProductRegistrationRequest.class))) @RequestBody String body) {
         ProductRegistrationRequest request = parser.parse(body);
         RegistrationOutcome outcome = registrationService.register(idempotencyKey, request);
         return switch (outcome.kind()) {
@@ -91,6 +97,7 @@ public class AdminProductController {
         };
     }
 
+    @Operation(summary = "상품 목록", description = "노출 규칙 없이 비공개 · 준비 전 · 판매 중지 · 마감도 전부")
     @GetMapping
     public ApiResponse<ProductPageResponse<AdminProductListItem>> list(
             @RequestParam(required = false) String q,
@@ -103,44 +110,50 @@ public class AdminProductController {
                 listingService.listForAdmin(filter, PageSizes.requirePage(page), PageSizes.require(size))));
     }
 
+    @Operation(summary = "상품 상세")
     @GetMapping("/{productId}")
     public ApiResponse<AdminProductResponse> product(@PathVariable Long productId) {
         return ApiResponse.ok(AdminProductResponse.from(detailService.findAdminProduct(productId)));
     }
 
     /** 표시 정보 · 기본 가격 · 보증 수정. 보낸 칸만 바꾸고, 사전예약 오픈 뒤면 409. 기본 가격이 바뀌면 모든 옵션 가격을 재계산한다. */
+    @Operation(summary = "표시 정보 · 기본 가격 · 보증 수정", description = "보낸 칸만 바꾼다 — 하나도 없으면 400. 사전예약은 오픈 3분 전부터 409")
     @PatchMapping("/{productId}")
-    public ApiResponse<AdminProductResponse> edit(@PathVariable Long productId, @RequestBody String body) {
+    public ApiResponse<AdminProductResponse> edit(@PathVariable Long productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ProductEditRequest.class))) @RequestBody String body) {
         return ApiResponse.ok(AdminProductResponse.from(serialized(() -> editService.editProduct(productId, bodies.parse(body, ProductEditRequest.class)))));
     }
 
     /** 축에 값 추가(새 색상 · 용량). 옵션은 만들지 않는다 — 조합은 아래 variants 로. */
+    @Operation(summary = "옵션 값 추가")
     @PostMapping("/{productId}/option-values")
-    public ResponseEntity<ApiResponse<AdminProductResponse>> addOptionValue(@PathVariable Long productId, @RequestBody String body) {
+    public ResponseEntity<ApiResponse<AdminProductResponse>> addOptionValue(@PathVariable Long productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = OptionValueAddRequest.class))) @RequestBody String body) {
         AdminProductResponse response = AdminProductResponse.from(
                 serialized(() -> editService.addOptionValue(productId, bodies.parse(body, OptionValueAddRequest.class))));
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response));
     }
 
     /** 값의 표시 문구(정규화값 불변) · 추가금 수정. 추가금이 바뀌면 그 값을 고른 옵션을 재계산한다. */
+    @Operation(summary = "옵션 값 표시 문구 · 추가금 수정", description = "보낸 칸만 바꾼다 — 하나도 없으면 400")
     @PatchMapping("/{productId}/option-values/{valueId}")
     public ApiResponse<AdminProductResponse> editOptionValue(@PathVariable Long productId, @PathVariable Long valueId,
-                                                             @RequestBody String body) {
+                                                             @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = OptionValueEditRequest.class))) @RequestBody String body) {
         return ApiResponse.ok(AdminProductResponse.from(
                 serialized(() -> editService.editOptionValue(productId, valueId, bodies.parse(body, OptionValueEditRequest.class)))));
     }
 
     /** 아직 없는 조합을 옵션으로. 바로 판매 중(ACTIVE). 일반 상품의 재고는 order 의 재고 API 로 따로 넣는다. */
+    @Operation(summary = "옵션(조합) 추가")
     @PostMapping("/{productId}/variants")
-    public ResponseEntity<ApiResponse<ProductDetailView.Variant>> addVariant(@PathVariable Long productId, @RequestBody String body) {
+    public ResponseEntity<ApiResponse<ProductDetailView.Variant>> addVariant(@PathVariable Long productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = VariantAddRequest.class))) @RequestBody String body) {
         ProductDetailView.Variant variant = serialized(() -> editService.addVariant(productId, bodies.parse(body, VariantAddRequest.class)));
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(variant));
     }
 
     /** 옵션의 판매 상태. 사전예약은 오픈 3분 전부터 409. */
+    @Operation(summary = "옵션(조합) 판매 상태 수정", description = "status 가 필요하다 — 없으면 400")
     @PatchMapping("/{productId}/variants/{variantId}")
     public ApiResponse<ProductDetailView.Variant> editVariant(@PathVariable Long productId, @PathVariable Long variantId,
-                                                             @RequestBody String body) {
+                                                             @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = VariantEditRequest.class))) @RequestBody String body) {
         return ApiResponse.ok(serialized(() -> editService.editVariant(productId, variantId, bodies.parse(body, VariantEditRequest.class))));
     }
 
@@ -149,20 +162,23 @@ public class AdminProductController {
      * preorder · order 가 이 상태를 보고 막고, 기존 예약 · 주문은 그대로.
      * 사전예약은 오픈 3분 전부터 409. 오픈 뒤 PAUSED(사유 필수)는 회차 취소 접수로 202 — 되돌릴 수 없고, 오픈 뒤 ACTIVE 는 409.
      */
+    @Operation(summary = "상품 판매 시작 · 중지", description = "사전예약 오픈 뒤 PAUSED 는 회차 취소 접수로 202. reason(500자 이하)은 이때만 필요하고, 그 밖에 보내면 400")
     @PatchMapping("/{productId}/sale-status")
-    public ResponseEntity<ApiResponse<SaleStatusView>> changeSaleStatus(@PathVariable Long productId, @RequestBody String body) {
+    public ResponseEntity<ApiResponse<SaleStatusView>> changeSaleStatus(@PathVariable Long productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = SaleStatusChangeRequest.class))) @RequestBody String body) {
         SaleStatusView view = serialized(() -> editService.changeSaleStatus(productId, bodies.parse(body, SaleStatusChangeRequest.class)));
         // 회차 취소는 preorder 가 이벤트를 받아 예약 취소를 진행한다 — 끝난 것이 아니라 접수된 것이라 202
         return ResponseEntity.status(view.campaignCancellationRequested() ? HttpStatus.ACCEPTED : HttpStatus.OK).body(ApiResponse.ok(view));
     }
 
     /** 공개 ↔ 비공개. 언제든 바꾼다 — 기존 예약 · 주문은 그대로. 회원 노출은 판매 방식별 준비 · 판매 상태와 함께 정해진다. */
+    @Operation(summary = "공개 · 비공개 전환")
     @PatchMapping("/{productId}/visibility")
-    public ApiResponse<VisibilityView> changeVisibility(@PathVariable Long productId, @RequestBody String body) {
+    public ApiResponse<VisibilityView> changeVisibility(@PathVariable Long productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = VisibilityChangeRequest.class))) @RequestBody String body) {
         return ApiResponse.ok(serialized(() -> editService.changeVisibility(productId, bodies.parse(body, VisibilityChangeRequest.class))));
     }
 
     /** 키로 상태만 묻는다. 응답이 유실된 클라이언트가 productId 와 진행 상태를 되찾는 데 쓴다. */
+    @Operation(summary = "등록 상태 조회(Idempotency-Key)")
     @GetMapping("/registrations/{idempotencyKey}")
     public ApiResponse<RegistrationStatusView> registration(@PathVariable String idempotencyKey) {
         return ApiResponse.ok(registrationService.status(idempotencyKey));
