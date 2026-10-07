@@ -99,6 +99,41 @@ class AdminProductEditApiTest {
         }
 
         @Test
+        @DisplayName("같은 보증을 다시 보내면 옵션 문서를 다시 쓰지 않는다 — 상품 행의 updated_at 이 그대로다")
+        void sameWarrantyDoesNotRewriteTheDocument() throws Exception {
+            long productId = registerInStock();
+            edit(productId, "{ \"warranty\": { \"offered\": true, \"surcharge\": 90000 } }").andExpect(status().isOk());
+            Object before = jdbcTemplate.queryForObject("SELECT updated_at FROM products WHERE id = ?", Object.class, productId);
+            Thread.sleep(5);
+
+            edit(productId, "{ \"warranty\": { \"offered\": true, \"surcharge\": 90000 } }").andExpect(status().isOk());
+
+            assertThat(jdbcTemplate.queryForObject("SELECT updated_at FROM products WHERE id = ?", Object.class, productId)).isEqualTo(before);
+        }
+
+        @Test
+        @DisplayName("보증은 옵션 문서 안에 있다 — 값 추가 · 값 이름 · 추가금 수정이 문서를 다시 써도 보증이 남고, 보증 수정은 축 · 값을 건드리지 않는다")
+        void optionEditsKeepWarrantyAndWarrantyEditKeepsOptions() throws Exception {
+            long productId = registerInStock();
+            edit(productId, "{ \"warranty\": { \"offered\": true, \"surcharge\": 90000 } }").andExpect(status().isOk());
+
+            mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId))
+                    .content("{ \"axisKey\": \"color\", \"value\": \"블루\" }")).andExpect(status().isCreated());
+            String white = valueIdOf(productId, "color", "화이트");
+            mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, white))
+                    .content("{ \"value\": \"White\", \"surcharge\": 1000 }")).andExpect(status().isOk());
+
+            JsonNode afterOptionEdits = data(adminDetail(productId)).get("product");
+            assertThat(afterOptionEdits.get("warranty").get("offered").asBoolean()).isTrue();
+            assertThat(afterOptionEdits.get("warranty").get("surcharge").decimalValue()).isEqualByComparingTo("90000");
+
+            JsonNode afterWarrantyEdit = data(edit(productId, "{ \"warranty\": { \"offered\": true, \"surcharge\": 120000 } }")
+                    .andExpect(status().isOk())).get("product");
+            assertThat(afterWarrantyEdit.get("warranty").get("surcharge").decimalValue()).isEqualByComparingTo("120000");
+            assertThat(afterWarrantyEdit.get("optionAxes")).as("보증 수정은 축 · 값을 그대로 둔다").isEqualTo(afterOptionEdits.get("optionAxes"));
+        }
+
+        @Test
         @DisplayName("기본가 · 추가금을 같은 값으로 다시 보내면 옵션 가격을 다시 계산하지 않는다 — 값이 실제로 바뀔 때만 계산값으로 맞춘다")
         void sameAmountDoesNotRecompute() throws Exception {
             long productId = registerInStock();

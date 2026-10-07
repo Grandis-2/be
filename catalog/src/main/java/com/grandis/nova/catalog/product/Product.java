@@ -25,7 +25,7 @@ import java.util.Objects;
  * ({@link com.grandis.nova.catalog.listing.ProductListingQueryRepository}). 그래서 visible 은 관리자가 고른 값을 등록 때 바로 담는다 —
  * 준비가 안 된 상품은 visible 이어도 회원에게 보이지 않는다.
  * 가격은 basePrice 가 기준이고 옵션의 price 가 최종가다(기본가 + 고른 값의 추가금 합 — 조합별 수동 가격은 없다).
- * 옵션 축 · 값 · 사진은 {@link #getOptions() options}(JSON) 한 칸이다({@link ProductOptions}). 썸네일은 그 문서에서 계산해 같이 저장한다.
+ * 옵션 축 · 값 · 사진 · 보증은 {@link #getOptions() options}(JSON) 한 칸이다({@link ProductOptions}). 썸네일은 그 문서에서 계산해 같이 저장한다.
  * 예약 · 주문은 접수 시점 값을 복사하므로 여기를 고쳐도 과거 거래에 소급되지 않는다.
  *
  * <p><b>이미 있는 상품을 고치는 경로는 전부 {@link ProductRepository#findForUpdate} 로 잠그고 읽는다</b>(공개 전환 · 판매 상태 포함).
@@ -57,7 +57,7 @@ public class Product extends BaseEntity {
     @Column(nullable = false)
     private BigDecimal basePrice;
 
-    /** 옵션 축 · 값 · 추가금 · 색상 hex · 사진({@link ProductOptions}). 비면 "{}". */
+    /** 옵션 축 · 값 · 추가금 · 색상 hex · 사진 · 보증({@link ProductOptions}). 비면 "{}". */
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(nullable = false)
     private String options;
@@ -83,18 +83,11 @@ public class Product extends BaseEntity {
     /** 사전예약 회차 취소를 접수한 시각. null 이면 취소 아님 — 오픈 전에 판매 중지로 둔 채 오픈을 넘긴 상품도 null 이다(2026-10-04 결정). */
     private Instant campaignCanceledAt;
 
-    @Column(nullable = false)
-    private boolean warrantyOffered;
-
-    @Column(nullable = false)
-    private BigDecimal warrantySurcharge;
-
     protected Product() {
     }
 
     private Product(String idempotencyKey, Long categoryId, SaleMode saleMode, String title, BigDecimal basePrice,
-                    String description, String tags, boolean visible, boolean warrantyOffered, BigDecimal warrantySurcharge,
-                    ProductOptions options) {
+                    String description, String tags, boolean visible, ProductOptions options) {
         this.idempotencyKey = idempotencyKey;
         this.categoryId = categoryId;
         this.saleMode = saleMode;
@@ -104,8 +97,6 @@ public class Product extends BaseEntity {
         this.tags = tags;
         this.status = SaleStatus.ACTIVE;
         this.visible = visible;
-        this.warrantyOffered = warrantyOffered;
-        this.warrantySurcharge = Amounts.requireWholeWon(warrantySurcharge, "warrantySurcharge");
         replaceOptions(options);
     }
 
@@ -117,7 +108,7 @@ public class Product extends BaseEntity {
                                    String description, String tags, boolean visible,
                                    boolean warrantyOffered, BigDecimal warrantySurcharge, ProductOptions options) {
         return new Product(idempotencyKey, categoryId, saleMode, title, basePrice, description, tags, visible,
-                warrantyOffered, warrantyOffered ? warrantySurcharge : BigDecimal.ZERO, options);
+                Objects.requireNonNull(options, "options").withWarranty(warrantyOf(warrantyOffered, warrantySurcharge, "warrantySurcharge")));
     }
 
     /** 옵션 문서를 바꾼다. 썸네일도 같은 문서에서 다시 계산한다 — 따로 쓰면 둘이 어긋난다. */
@@ -199,10 +190,18 @@ public class Product extends BaseEntity {
         return true;
     }
 
-    /** 보증 설정. 제공하지 않으면 추가금은 0 이다(등록과 같은 규칙). */
+    /** 보증 설정 — 옵션 문서의 warranty 를 바꾼다. 제공하지 않으면 추가금은 0 이다(등록과 같은 규칙). */
     public void setWarranty(boolean offered, BigDecimal surcharge) {
-        this.warrantyOffered = offered;
-        this.warrantySurcharge = offered ? Amounts.requireWholeWon(surcharge, "warranty.surcharge") : BigDecimal.ZERO;
+        ProductOptions document = getOptions();
+        ProductOptions.Warranty next = warrantyOf(offered, surcharge, "warranty.surcharge");
+        if (!next.equals(document.warranty())) {   // 같은 값을 다시 보내면 문서를 다시 쓰지 않는다(UPDATE · updated_at 이 안 난다)
+            replaceOptions(document.withWarranty(next));
+        }
+    }
+
+    /** 제공하면 추가금을 정수 원으로 검사하고, 제공하지 않으면 추가금을 보지 않는다(0). */
+    private static ProductOptions.Warranty warrantyOf(boolean offered, BigDecimal surcharge, String name) {
+        return offered ? new ProductOptions.Warranty(true, Amounts.requireWholeWon(surcharge, name)) : ProductOptions.Warranty.NONE;
     }
 
     public Long getId() {
@@ -246,10 +245,10 @@ public class Product extends BaseEntity {
     }
 
     public boolean isWarrantyOffered() {
-        return warrantyOffered;
+        return getOptions().warranty().offered();
     }
 
     public BigDecimal getWarrantySurcharge() {
-        return warrantySurcharge;
+        return getOptions().warranty().surcharge();
     }
 }

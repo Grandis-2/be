@@ -88,14 +88,16 @@ class CatalogEntityMappingTest {
         assertThat(option.getTitle()).isEqualTo("Nova 1");
 
         Map<String, Object> row = jdbcTemplate.queryForMap(
-                "SELECT sale_mode, status, visible, base_price, warranty_offered, warranty_surcharge, created_at, updated_at "
+                "SELECT sale_mode, status, visible, base_price, options->'$.warranty.offered' AS warranty_offered, "
+                        + "JSON_TYPE(options->'$.warranty.surcharge') AS surcharge_type, options->>'$.warranty.surcharge' AS warranty_surcharge, created_at, updated_at "
                         + "FROM products WHERE id = ?", product.getId());
         assertThat(row.get("sale_mode")).isEqualTo("PREORDER");
         assertThat(row.get("status")).isEqualTo("ACTIVE");
         assertThat(row.get("visible")).isEqualTo(false);
         assertThat((BigDecimal) row.get("base_price")).isEqualByComparingTo("1200000");
-        assertThat(row.get("warranty_offered")).isEqualTo(true);
-        assertThat((BigDecimal) row.get("warranty_surcharge")).isEqualByComparingTo("199000");
+        assertThat(row.get("warranty_offered")).as("보증은 옵션 문서의 warranty").isEqualTo("true");
+        assertThat(row.get("surcharge_type")).as("정수 원 — 실수(1.99E+5)로 들어가지 않는다").isEqualTo("INTEGER");
+        assertThat(new BigDecimal((String) row.get("warranty_surcharge"))).isEqualByComparingTo("199000");
         assertThat(row.get("created_at")).isNotNull();
         assertThat(row.get("updated_at")).isNotNull();
 
@@ -110,17 +112,33 @@ class CatalogEntityMappingTest {
         Product reloaded = products.findById(product.getId()).orElseThrow();
         assertThat(reloaded.isVisible()).isFalse();
         assertThat(reloaded.isWarrantyOffered()).isTrue();
+        assertThat(reloaded.getWarrantySurcharge()).isEqualByComparingTo("199000");
         assertThat(reloaded.getStatus()).isEqualTo(SaleStatus.ACTIVE);
         assertThat(options.findByProductIdOrderById(product.getId())).singleElement()
                 .satisfies(o -> assertThat(o.getCombinationKey()).isEqualTo(OptionCombination.STANDALONE_KEY));
     }
 
     @Test
-    @DisplayName("보증을 제공하지 않으면 추가금은 0 으로 저장한다")
+    @DisplayName("보증을 제공하지 않으면 추가금은 0 으로 저장하고, 보증을 바꿔도 옵션 문서의 다른 내용 · 썸네일은 그대로다")
     void warrantySurchargeIgnoredWhenNotOffered() {
+        ProductOptions document = new ProductOptions(List.of(new Axis(OptionText.COLOR, "색상", List.of(
+                new Value("1", "블랙", "블랙", null, BigDecimal.ZERO, List.of(new Image("https://img/b.jpg", false)))))), List.of(), List.of(), ProductOptions.Warranty.NONE);
         Product product = products.saveAndFlush(Product.register(null, fixtures.category(), SaleMode.IN_STOCK,
-                "Nova Book", BigDecimal.ZERO, null, null, false, false, new BigDecimal("50000"), ProductOptions.EMPTY));
+                "Nova Book", BigDecimal.ZERO, null, null, false, false, new BigDecimal("50000"), document));
         assertThat(product.getWarrantySurcharge()).isEqualByComparingTo("0");
+        assertThat(product.isWarrantyOffered()).isFalse();
+
+        product.setWarranty(true, new BigDecimal("1.5e3"));
+        products.saveAndFlush(product);
+        entityManager.clear();
+        Product reloaded = products.findById(product.getId()).orElseThrow();
+        assertThat(reloaded.isWarrantyOffered()).isTrue();
+        assertThat(reloaded.getWarrantySurcharge().toPlainString()).isEqualTo("1500");
+        assertThat(reloaded.getOptions().axes()).isEqualTo(document.axes());
+        assertThat(reloaded.getThumbnailUrl()).isEqualTo("https://img/b.jpg");
+
+        reloaded.setWarranty(false, new BigDecimal("99"));
+        assertThat(reloaded.getWarrantySurcharge()).as("제공하지 않으면 추가금은 보지 않는다").isEqualByComparingTo("0");
     }
 
     @Test
@@ -155,7 +173,7 @@ class CatalogEntityMappingTest {
         Axis color = new Axis(OptionText.COLOR, "색상", List.of(black));
         Axis length = new Axis("length", "길이", List.of(twoMeters));
         ProductOptions document = new ProductOptions(List.of(color, length), List.of(),
-                List.of(new Section("제품 사양", List.of(new Image("https://img/spec.jpg", false)))));
+                List.of(new Section("제품 사양", List.of(new Image("https://img/spec.jpg", false)))), ProductOptions.Warranty.NONE);
         Product product = products.saveAndFlush(Product.register(null, fixtures.category(), SaleMode.IN_STOCK, "Nova Cable",
                 new BigDecimal("10000"), null, null, false, false, BigDecimal.ZERO, document));
         entityManager.clear();
@@ -212,13 +230,13 @@ class CatalogEntityMappingTest {
         Value blue = new Value("3", "블루", "블루", null, BigDecimal.ZERO, List.of(new Image("https://img/u1.jpg", true)));
         List<Image> defaults = List.of(new Image("https://img/d1.jpg", false), new Image("https://img/d2.jpg", true));
 
-        assertThat(new ProductOptions(List.of(new Axis(OptionText.COLOR, "색상", List.of(black, white, blue))), List.of(), List.of())
+        assertThat(new ProductOptions(List.of(new Axis(OptionText.COLOR, "색상", List.of(black, white, blue))), List.of(), List.of(), ProductOptions.Warranty.NONE)
                 .thumbnailUrl()).as("첫 색상 블랙에 사진이 없다 — 화이트로 넘어가지 않는다").isNull();
-        assertThat(new ProductOptions(List.of(new Axis(OptionText.COLOR, "색상", List.of(blue, white))), List.of(), List.of())
+        assertThat(new ProductOptions(List.of(new Axis(OptionText.COLOR, "색상", List.of(blue, white))), List.of(), List.of(), ProductOptions.Warranty.NONE)
                 .thumbnailUrl()).isEqualTo("https://img/u1.jpg");
-        assertThat(new ProductOptions(List.of(new Axis(OptionText.COLOR, "색상", List.of(white, blue))), defaults, List.of())
+        assertThat(new ProductOptions(List.of(new Axis(OptionText.COLOR, "색상", List.of(white, blue))), defaults, List.of(), ProductOptions.Warranty.NONE)
                 .thumbnailUrl()).as("색상 축이 있으면 기본 묶음은 안 본다").isEqualTo("https://img/w1.jpg");
-        assertThat(new ProductOptions(List.of(new Axis("length", "길이", List.of(black))), defaults, List.of()).thumbnailUrl())
+        assertThat(new ProductOptions(List.of(new Axis("length", "길이", List.of(black))), defaults, List.of(), ProductOptions.Warranty.NONE).thumbnailUrl())
                 .as("대표(d2)가 아니라 첫 장").isEqualTo("https://img/d1.jpg");
         assertThat(ProductOptions.EMPTY.thumbnailUrl()).isNull();
     }
