@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog.edit;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
@@ -12,6 +13,7 @@ import java.math.BigDecimal;
  */
 public record OptionValueEditRequest(@Size(min = 1, max = 60) String value, @DecimalMin("0") BigDecimal surcharge) {
 
+    @Schema(hidden = true)   // 문서 전용 — 없으면 swagger 가 getter 꼴 메서드를 empty 칸으로 그린다
     public boolean isEmpty() {
         return value == null && surcharge == null;
     }

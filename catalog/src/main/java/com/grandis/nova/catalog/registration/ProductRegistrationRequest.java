@@ -1,6 +1,7 @@
 package com.grandis.nova.catalog.registration;
 
 import com.grandis.nova.catalog.product.SaleMode;
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
@@ -58,6 +59,7 @@ public record ProductRegistrationRequest(
         return list == null ? List.of() : Collections.unmodifiableList(new ArrayList<>(list));
     }
 
+    @Schema(name = "RegistrationWarranty")
     public record Warranty(@NotNull Boolean offered, @DecimalMin("0") BigDecimal surcharge) {
         public Warranty {
             surcharge = surcharge == null ? BigDecimal.ZERO : surcharge;
@@ -65,6 +67,7 @@ public record ProductRegistrationRequest(
     }
 
     /** @param key color · storage 또는 관리자 입력 키(소문자로 접는다) */
+    @Schema(name = "RegistrationOptionAxis")
     public record OptionAxis(@NotBlank @Size(max = 40) String key, @NotBlank @Size(max = 60) String label,
                              @NotEmpty @Size(max = MAX_VALUES_PER_AXIS) List<@NotNull @Valid OptionValue> values) {
         public OptionAxis {
@@ -72,6 +75,7 @@ public record ProductRegistrationRequest(
         }
     }
 
+    @Schema(name = "RegistrationOptionValue")
     public record OptionValue(@NotBlank @Size(max = 60) String value, @DecimalMin("0") BigDecimal surcharge) {
         public OptionValue {
             surcharge = surcharge == null ? BigDecimal.ZERO : surcharge;
@@ -85,6 +89,7 @@ public record ProductRegistrationRequest(
      * @param sku      비면 값의 정규화값을 '-' 로 이어 만든다
      * @param stock    일반 상품의 초기 재고. 일반은 제외하지 않은 조합마다 필수(0 허용 — 품절로 공개), 사전예약은 보내지 않는다
      */
+    @Schema(name = "RegistrationCombination")
     public record Combination(@NotNull Map<String, String> selections, Boolean excluded, @Size(max = 80) String sku,
                               Integer stock) {
         public Combination {
@@ -96,6 +101,7 @@ public record ProductRegistrationRequest(
      * @param gallery color 축이 있으면 색상 묶음만(묶음마다 color 필수), 없으면 기본 묶음(color null) 하나. 묶음당 최대 10장, 첫 장이 대표(primary 로 바꿀 수 있다)
      * @param detail  상세 영역별 이미지. 장수 상한과 대표 자동 지정이 없다(설계 §2.3 — 상세 콘텐츠에는 같은 제한을 정하지 않았다)
      */
+    @Schema(name = "RegistrationImages")
     public record Images(List<@NotNull @Valid GalleryBundle> gallery, List<@NotNull @Valid DetailBundle> detail) {
         public Images {
             gallery = frozen(gallery);
@@ -103,27 +109,32 @@ public record ProductRegistrationRequest(
         }
     }
 
+    @Schema(name = "RegistrationGalleryBundle")
     public record GalleryBundle(@Size(max = 60) String color, @NotEmpty List<@NotNull @Valid Image> items) {
         public GalleryBundle {
             items = frozen(items);
         }
     }
 
+    @Schema(name = "RegistrationDetailBundle")
     public record DetailBundle(@NotBlank @Size(max = 60) String section, @NotEmpty List<@NotNull @Valid Image> items) {
         public DetailBundle {
             items = frozen(items);
         }
     }
 
+    @Schema(name = "RegistrationImage")
     public record Image(@NotBlank @Size(max = 1000) String url, Boolean primary) {
         public Image {
             primary = primary != null && primary;
         }
     }
 
+    @Schema(name = "RegistrationCampaign")
     public record Campaign(@NotNull Instant opensAt, @NotNull Instant closesAt) {
     }
 
+    @Schema(name = "RegistrationShipmentBatch")
     public record ShipmentBatch(@NotNull Integer batchNumber, @NotNull Long positionFrom, Long positionTo,
                                 @NotNull LocalDate estimatedShipStart, @NotNull LocalDate estimatedShipEnd) {
     }
