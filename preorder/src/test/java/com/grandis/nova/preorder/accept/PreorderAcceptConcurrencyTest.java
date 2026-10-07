@@ -2,6 +2,7 @@ package com.grandis.nova.preorder.accept;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.ErrorCode;
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
@@ -25,6 +26,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.function.IntFunction;
 import java.util.stream.LongStream;
@@ -58,7 +60,7 @@ class PreorderAcceptConcurrencyTest {
 
     ShopFixtures fixtures;
     PreorderProduct product;
-    Long otherOptionId;
+    UUID otherOptionId;
 
     @BeforeEach
     void setUp() {
@@ -71,7 +73,7 @@ class PreorderAcceptConcurrencyTest {
 
     @RepeatedTest(3)
     void 같은_키를_동시에_여러_번_보내도_예약_하나_순번_하나() throws Exception {
-        Long customerId = fixtures.customer();
+        UUID customerId = fixtures.customer();
         String ticket = AdmissionTickets.issue(product.productId(), customerId, Instant.now());
         int requests = 10;
 
@@ -87,7 +89,7 @@ class PreorderAcceptConcurrencyTest {
 
     @RepeatedTest(3)
     void 같은_모델을_옵션을_바꿔_동시에_접수해도_한_건만_남는다() throws Exception {
-        Long customerId = fixtures.customer();
+        UUID customerId = fixtures.customer();
         // 입장권은 30초 창마다 달라진다. 서로 다른 입장권 4장으로 입장권 UNIQUE 가 아니라 활성 예약 UNIQUE 를 겨룬다.
         // 접수보다 나중에 발급된 입장권이라 "마지막 접수 이전 발급" 검사는 통과한다(진행 중 예약이 있는 회원의 재진입)
         List<String> tickets = LongStream.range(0, 4)
@@ -114,7 +116,7 @@ class PreorderAcceptConcurrencyTest {
         PreorderProduct other = fixtures.openPreorderProduct();
         given(catalogClient.getProduct(other.productId())).willReturn(
                 CatalogStubs.preorderProduct(other.productId(), CatalogStubs.activeOption(other.optionId())));
-        Long customerId = fixtures.customer();
+        UUID customerId = fixtures.customer();
         List<PreorderProduct> targets = List.of(product, other);
 
         List<Outcome> outcomes = concurrently(targets.size(), i -> {
@@ -130,13 +132,13 @@ class PreorderAcceptConcurrencyTest {
                 .extracting(Outcome::error).isEqualTo(PreorderErrorCode.KEY_PAYLOAD_MISMATCH);
         assertThat(jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM preorders WHERE customer_id = ? AND idempotency_key = 'shared-key-01'
-                """, Integer.class, customerId)).isEqualTo(1);
+                """, Integer.class, (Object) UuidBinary.toBytes(customerId))).isEqualTo(1);
     }
 
     @RepeatedTest(3)
     void 다른_회원이_동시에_접수하면_순번이_빈틈_중복_없이_1부터_이어진다() throws Exception {
         int requests = 20;
-        List<Long> customers = LongStream.range(0, requests).mapToObj(i -> fixtures.customer()).toList();
+        List<UUID> customers = LongStream.range(0, requests).mapToObj(i -> fixtures.customer()).toList();
 
         List<Outcome> outcomes = concurrently(requests, i -> () -> acceptByCustomer(customers.get(i), "member-key-01"));
 
@@ -149,11 +151,11 @@ class PreorderAcceptConcurrencyTest {
     @Test
     void 성공과_실패가_섞여도_커밋된_순번에는_빈틈이_없다() throws Exception {
         int members = 10;
-        List<Long> customers = LongStream.range(0, members).mapToObj(i -> fixtures.customer()).toList();
+        List<UUID> customers = LongStream.range(0, members).mapToObj(i -> fixtures.customer()).toList();
         // 짝수 회원은 같은 모델을 두 번(다른 키 · 나중 창의 입장권) 보낸다 — 한 번은 활성 예약 UNIQUE 로 실패한다.
         List<Callable<AcceptResult>> calls = new ArrayList<>();
         for (int i = 0; i < members; i++) {
-            Long customer = customers.get(i);
+            UUID customer = customers.get(i);
             calls.add(() -> acceptByCustomer(customer, "mixed-key-a"));
             if (i % 2 == 0) {
                 String laterTicket = AdmissionTickets.issue(product.productId(), customer, laterWindow());
@@ -179,9 +181,9 @@ class PreorderAcceptConcurrencyTest {
     void 차수_경계를_넘는_순번은_동시에_들어와도_구간대로_배정된다() throws Exception {
         long start = ShopFixtures.FIRST_BATCH_LAST_POSITION - 1;
         jdbcTemplate.update("UPDATE preorder_campaigns SET next_queue_position = ? WHERE product_id = ?",
-                start, product.productId());
+                start, UuidBinary.toBytes(product.productId()));
         int requests = 4;
-        List<Long> customers = LongStream.range(0, requests).mapToObj(i -> fixtures.customer()).toList();
+        List<UUID> customers = LongStream.range(0, requests).mapToObj(i -> fixtures.customer()).toList();
 
         List<Outcome> outcomes = concurrently(requests, i -> () -> acceptByCustomer(customers.get(i), "boundary-key"));
 
@@ -190,13 +192,13 @@ class PreorderAcceptConcurrencyTest {
                 SELECT CONCAT(p.queue_position, ':', b.batch_number)
                   FROM preorders p JOIN shipment_batches b ON b.id = p.shipment_batch_id
                  WHERE p.product_id = ? ORDER BY p.queue_position
-                """, String.class, product.productId()))
+                """, String.class, (Object) UuidBinary.toBytes(product.productId())))
                 .containsExactly(start + ":1", (start + 1) + ":1", (start + 2) + ":2", (start + 3) + ":2");
     }
 
     @Test
     void 취소가_끝난_뒤_다시_신청하면_새_순번을_받는다() throws Exception {
-        Long customerId = fixtures.customer();
+        UUID customerId = fixtures.customer();
         AcceptResult first = acceptByCustomer(customerId, "reapply-key-1");
         new PreorderCancels(ledger, transactionTemplate).complete(first.preorder().id());
         String laterTicket = AdmissionTickets.issue(product.productId(), customerId, laterWindow());
@@ -210,7 +212,7 @@ class PreorderAcceptConcurrencyTest {
 
     @Test
     void 취소_뒤_재신청은_횟수_제한_없이_매번_새_예약과_새_순번을_받는다() throws Exception {
-        Long customerId = fixtures.customer();
+        UUID customerId = fixtures.customer();
         AcceptResult first = acceptByCustomer(customerId, "repeat-key-0");
         PreorderCancels cancels = new PreorderCancels(ledger, transactionTemplate);
         cancels.complete(first.preorder().id());
@@ -231,12 +233,12 @@ class PreorderAcceptConcurrencyTest {
 
         assertThat(jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM preorders WHERE customer_id = ? AND status = 'CANCELED' AND active_marker IS NULL
-                """, Integer.class, customerId)).isEqualTo(4);
+                """, Integer.class, (Object) UuidBinary.toBytes(customerId))).isEqualTo(4);
     }
 
     @RepeatedTest(3)
     void 취소_직후_같은_새_키로_동시에_재신청해도_예약_하나_순번_하나() throws Exception {
-        Long customerId = fixtures.customer();
+        UUID customerId = fixtures.customer();
         AcceptResult first = acceptByCustomer(customerId, "recancel-key-0");
         new PreorderCancels(ledger, transactionTemplate).complete(first.preorder().id());
         String ticket = AdmissionTickets.issue(product.productId(), customerId, laterWindow());
@@ -254,7 +256,7 @@ class PreorderAcceptConcurrencyTest {
 
     @RepeatedTest(3)
     void 같은_입장에서_받은_입장권_두_장을_동시에_보내면_하나만_받고_나머지는_STALE() throws Exception {
-        Long customerId = fixtures.customer();
+        UUID customerId = fixtures.customer();
         List<String> tickets = List.of(
                 AdmissionTickets.issue(product.productId(), customerId, Instant.now()),
                 AdmissionTickets.issue(product.productId(), customerId,
@@ -274,7 +276,7 @@ class PreorderAcceptConcurrencyTest {
         return Instant.now().plusSeconds(3 * AdmissionTickets.WINDOW_SECONDS);
     }
 
-    private AcceptResult acceptByCustomer(Long customerId, String key) {
+    private AcceptResult acceptByCustomer(UUID customerId, String key) {
         return acceptService.acceptByCustomer(customerId, product.productId(), product.productId(),
                 product.optionId(), key, AdmissionTickets.issue(product.productId(), customerId, Instant.now()));
     }
@@ -288,7 +290,7 @@ class PreorderAcceptConcurrencyTest {
     private List<Long> committedPositions() {
         return jdbcTemplate.queryForList(
                 "SELECT queue_position FROM preorders WHERE product_id = ? ORDER BY queue_position",
-                Long.class, product.productId());
+                Long.class, (Object) UuidBinary.toBytes(product.productId()));
     }
 
     private long nextQueuePosition() {

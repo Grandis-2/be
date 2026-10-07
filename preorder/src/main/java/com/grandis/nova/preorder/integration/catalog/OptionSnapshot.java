@@ -1,17 +1,18 @@
 package com.grandis.nova.preorder.integration.catalog;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
 /**
  * 접수 시점의 상품 · 옵션 값. 예약 행에 복사해 두므로 이후 카탈로그가 바뀌어도 예약은 그대로다.
  * 상태 문자열은 catalog 소유라 enum 으로 옮기지 않는다 — 값이 늘어도 이 모듈이 깨지지 않게.
  */
 public record OptionSnapshot(
-        Long productId,
+        UUID productId,
         String productTitle,
         String saleMode,
         String productStatus,
-        Long optionId,
+        UUID optionId,
         String sku,
         String optionTitle,
         BigDecimal price,

@@ -6,6 +6,8 @@ import com.grandis.nova.preorder.outbox.OutboundEventType;
 import com.grandis.nova.preorder.outbox.OutboxMessage;
 import com.grandis.nova.preorder.preorder.CancelReason;
 
+import java.util.UUID;
+
 /**
  * 취소 시작 트랜잭션. order 가 주문을 정리하고 PREORDER_ORDER_SETTLED 로 답한다.
  *
@@ -14,7 +16,7 @@ import com.grandis.nova.preorder.preorder.CancelReason;
  * @param cancelSequence     이 취소 시도의 CANCELING 진입 이력 event_sequence. order 가 PREORDER_ORDER_SETTLED 에
  *                           그대로 돌려주고, preorder 는 지금 시도의 결과인지 이것으로 가린다
  */
-public record PreorderCancelRequested(@JsonIgnore Long preorderInternalId, String preorderId, Long customerId,
+public record PreorderCancelRequested(@JsonIgnore UUID preorderInternalId, String preorderId, UUID customerId,
                                       CancelReason reason, Long cancelSequence) implements OutboxMessage {
 
     @Override
@@ -28,7 +30,7 @@ public record PreorderCancelRequested(@JsonIgnore Long preorderInternalId, Strin
     }
 
     @Override
-    public Long aggregateId() {
+    public UUID aggregateId() {
         return preorderInternalId;
     }
 }

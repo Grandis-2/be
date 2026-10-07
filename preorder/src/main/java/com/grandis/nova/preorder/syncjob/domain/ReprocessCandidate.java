@@ -5,9 +5,10 @@ import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 import com.grandis.nova.preorder.syncjob.SyncJobType;
 
 import java.util.Optional;
+import java.util.UUID;
 
 /** 일괄 재처리 후보 한 줄. 재처리 판정에 필요한 값만 읽는다. */
-public record ReprocessCandidate(Long syncJobId, SyncJobType jobType, SyncJobStatus status,
+public record ReprocessCandidate(UUID syncJobId, SyncJobType jobType, SyncJobStatus status,
                                  PreorderStatus preorderStatus, String lastErrorCode) {
 
     public boolean reprocessable() {

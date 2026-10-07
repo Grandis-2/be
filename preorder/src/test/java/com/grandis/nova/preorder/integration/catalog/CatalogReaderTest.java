@@ -30,6 +30,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Queue;
+import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -38,8 +39,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CatalogReaderTest {
 
-    static final Long PRODUCT_ID = 7L;
-    static final Long OPTION_ID = 70L;
+    static final UUID PRODUCT_ID = UUID.fromString("00000000-0000-7000-8000-000000000007");
+    static final UUID OPTION_ID = UUID.fromString("00000000-0000-7000-8000-000000000070");
     static final String TOKEN = "member-token";
 
     final MovableClock clock = new MovableClock();
@@ -77,7 +78,7 @@ class CatalogReaderTest {
     void 그_상품의_옵션이_아니면_비어_있다() {
         CatalogReader reader = reader(new FakeCatalogClient());
 
-        assertThat(reader.findOption(PRODUCT_ID, 999L)).isEmpty();
+        assertThat(reader.findOption(PRODUCT_ID, UUID.randomUUID())).isEmpty();
     }
 
     @Test
@@ -241,7 +242,8 @@ class CatalogReaderTest {
     /** 요청마다 보안 맥락이 새로 생기는 것처럼 새 맥락을 둔다. */
     private void signIn(String token) {
         SecurityContextHolder.setContext(new SecurityContextImpl(
-                new NovaAuthentication(new AuthenticatedPrincipal("101", Role.USER), token)));
+                new NovaAuthentication(new AuthenticatedPrincipal("00000000-0000-7000-8000-000000000101", Role.USER),
+                        token)));
     }
 
     private static String currentToken() {
@@ -291,7 +293,7 @@ class CatalogReaderTest {
         volatile String optionStatus = "ACTIVE";
 
         @Override
-        public ApiResponse<ProductCatalog> getProduct(Long productId) {
+        public ApiResponse<ProductCatalog> getProduct(UUID productId) {
             calls.incrementAndGet();
             tokens.add(currentToken());
             if (unavailable) {

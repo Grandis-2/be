@@ -19,6 +19,7 @@ import org.springframework.web.service.registry.HttpServiceGroupConfigurer;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -45,12 +46,14 @@ class TokenRelayConfigTest {
         CatalogClient client = HttpServiceProxyFactory.builderFor(RestClientAdapter.create(builder.build())).build()
                 .createClient(CatalogClient.class);
         SecurityContextHolder.getContext().setAuthentication(
-                new NovaAuthentication(new AuthenticatedPrincipal("101", Role.USER), "member-token"));
-        server.expect(requestTo("http://catalog/internal/products/7/options"))
+                new NovaAuthentication(new AuthenticatedPrincipal("00000000-0000-7000-8000-000000000101", Role.USER),
+                        "member-token"));
+        UUID productId = UUID.randomUUID();
+        server.expect(requestTo("http://catalog/internal/products/" + productId + "/options"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer member-token"))
                 .andRespond(withSuccess("{\"success\":true,\"data\":null}", MediaType.APPLICATION_JSON));
 
-        client.getProduct(7L);
+        client.getProduct(productId);
 
         assertThat(groups.names).containsExactlyInAnyOrder(Dependencies.CATALOG, Dependencies.ORDER);
         server.verify();

@@ -23,10 +23,12 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 
 /** 관리자 DLQ 조회 · 되돌리기 · 버리기. */
 @Service
@@ -60,9 +62,9 @@ public class DeadLetterAdminService {
     /** 없는 예약 id 로 거르면 빈 목록이다. */
     @Transactional(readOnly = true)
     public OffsetPage<DeadLetterListItem> find(DeadLetterStatus status, String eventType, FailureReason failureReason,
-                                          String preorderToken, Long customerId, Instant from, Instant to,
+                                          String preorderToken, UUID customerId, Instant from, Instant to,
                                           int page, int size) {
-        Optional<Long> preorderId = Optional.empty();
+        Optional<UUID> preorderId = Optional.empty();
         if (preorderToken != null) {
             preorderId = preorders.findByToken(preorderToken).map(PreorderSnapshot::id);
             if (preorderId.isEmpty()) {
@@ -76,17 +78,17 @@ public class DeadLetterAdminService {
 
     /** 한 행이라 원문을 다시 읽어 지금 코드로 되돌릴 수 있는지 정확히 가른다. */
     @Transactional(readOnly = true)
-    public DeadLetterView findOne(Long id) {
+    public DeadLetterView findOne(UUID id) {
         return view(find(id));
     }
 
-    public DeadLetterView redrive(Long id, String requestedBy) {
+    public DeadLetterView redrive(UUID id, String requestedBy) {
         return view(redrives.redrive(id, requestedBy));
     }
 
     /** @throws BusinessException DEAD_LETTER_NOT_FOUND · DEAD_LETTER_NOT_DISCARDABLE(OPEN 이 아님) */
     @Transactional
-    public DeadLetterView discard(Long id, String discardedBy, String note) {
+    public DeadLetterView discard(UUID id, String discardedBy, String note) {
         DeadLetterEvent event = find(id);
         if (events.discard(id, discardedBy, note, clock.instant()) != 1) {
             throw new BusinessException(PreorderErrorCode.DEAD_LETTER_NOT_DISCARDABLE,
@@ -100,9 +102,9 @@ public class DeadLetterAdminService {
      * 조건으로 고를 때 failureReason 을 비우면 PROCESSING_FAILED 만 — 되돌려도 같은 결과인 행이 앞을 막지 않게.
      * 되돌리기를 기다리지 않거나 저장된 분류로 되돌릴 수 없는 행, 없는 id 는 건너뛴 수로 센다. 원문은 보낼 때 한 건씩 다시 읽는다.
      */
-    public BatchRedrive redriveBatch(List<Long> ids, String eventType, FailureReason failureReason, int ratePerSecond,
+    public BatchRedrive redriveBatch(List<UUID> ids, String eventType, FailureReason failureReason, int ratePerSecond,
                                      String requestedBy) {
-        List<Long> candidates;
+        List<UUID> candidates;
         if (ids == null || ids.isEmpty()) {
             FailureReason reason = failureReason == null ? FailureReason.PROCESSING_FAILED : failureReason;
             candidates = events.findWaitingIds(eventType, reason, staleBefore(), MAX_BATCH_SIZE);
@@ -113,10 +115,10 @@ public class DeadLetterAdminService {
             }
         }
         Instant staleBefore = staleBefore();
-        List<Long> targets = events.findSummaries(candidates).stream()
+        List<UUID> targets = events.findSummaries(candidates).stream()
                 .filter(summary -> redrivable(summary, staleBefore))
+                .sorted(Comparator.comparing(DeadLetterSummary::getCreatedAt).thenComparing(DeadLetterSummary::getId))
                 .map(DeadLetterSummary::getId)
-                .sorted()
                 .toList();
         if (!targets.isEmpty()) {
             redriveExecutor.execute(() -> redrivePaced(targets, ratePerSecond, requestedBy));
@@ -125,9 +127,9 @@ public class DeadLetterAdminService {
                 (targets.size() + ratePerSecond - 1L) / ratePerSecond);
     }
 
-    private void redrivePaced(List<Long> targets, int ratePerSecond, String requestedBy) {
+    private void redrivePaced(List<UUID> targets, int ratePerSecond, String requestedBy) {
         Duration interval = Duration.ofNanos(Duration.ofSeconds(1).toNanos() / ratePerSecond);
-        for (Long id : targets) {
+        for (UUID id : targets) {
             try {
                 redrives.redrive(id, requestedBy);
             } catch (BusinessException e) {
@@ -146,7 +148,7 @@ public class DeadLetterAdminService {
         }
     }
 
-    private DeadLetterEvent find(Long id) {
+    private DeadLetterEvent find(UUID id) {
         return events.findById(id).orElseThrow(() -> new BusinessException(PreorderErrorCode.DEAD_LETTER_NOT_FOUND));
     }
 
@@ -161,7 +163,7 @@ public class DeadLetterAdminService {
 
     private List<DeadLetterListItem> listItems(List<DeadLetterSummary> found) {
         Instant staleBefore = staleBefore();
-        Map<Long, PreorderSnapshot> owners = preorders.findAllById(found.stream()
+        Map<UUID, PreorderSnapshot> owners = preorders.findAllById(found.stream()
                 .map(DeadLetterSummary::getPreorderId).filter(Objects::nonNull).distinct().toList());
         return found.stream()
                 .map(summary -> new DeadLetterListItem(summary, tokenOf(summary.getPreorderId(), owners),
@@ -170,13 +172,13 @@ public class DeadLetterAdminService {
     }
 
     private DeadLetterView view(DeadLetterEvent event) {
-        Map<Long, PreorderSnapshot> owners = event.getPreorderId() == null ? Map.of()
+        Map<UUID, PreorderSnapshot> owners = event.getPreorderId() == null ? Map.of()
                 : preorders.findAllById(List.of(event.getPreorderId()));
         return new DeadLetterView(event, tokenOf(event.getPreorderId(), owners),
                 event.waitingForRedrive(staleBefore()) && bodyParser.parse(event.getBody()).redrivable());
     }
 
-    private String tokenOf(Long preorderId, Map<Long, PreorderSnapshot> owners) {
+    private String tokenOf(UUID preorderId, Map<UUID, PreorderSnapshot> owners) {
         return preorderId == null ? null : owners.get(preorderId).preorderToken();
     }
 }

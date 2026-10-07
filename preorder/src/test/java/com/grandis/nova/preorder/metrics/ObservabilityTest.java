@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.metrics;
 
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
@@ -25,7 +26,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -98,14 +99,14 @@ class ObservabilityTest {
     @Test
     void 이벤트는_종류별_처리_결과와_소비_지연을_남긴다() {
         AcceptResult result = accepts.accept(fixtures.customer());
-        Long jobId = fixtures.workerSucceeds(result.preorder().id(), "REGISTER");
+        UUID jobId = fixtures.workerSucceeds(result.preorder().id(), "REGISTER");
         long succeeded = timerCount("preorder.events.handle", "eventType", "EXTERNAL_JOB_SUCCEEDED");
         long unknown = timerCount("preorder.events.handle", "eventType", "UNKNOWN");
 
         dispatcher.dispatch("""
                 {"eventId":"%s","eventType":"EXTERNAL_JOB_SUCCEEDED","aggregateType":"PREORDER_SYNC_JOB",
-                 "aggregateId":%d,"occurredAt":"2026-09-03T01:00:03.470Z",
-                 "payload":{"syncJobId":%d,"preorderId":"%s","jobType":"REGISTER","externalNumber":"R-%s"}}
+                 "aggregateId":"%s","occurredAt":"2026-09-03T01:00:03.470Z",
+                 "payload":{"syncJobId":"%s","preorderId":"%s","jobType":"REGISTER","externalNumber":"R-%s"}}
                 """.formatted(ShopFixtures.unique(), jobId, jobId, AcceptFixtures.tokenOf(result),
                 ShopFixtures.unique()));
         assertThatThrownBy(() -> dispatcher.dispatch("not-json")).isInstanceOf(RuntimeException.class);
@@ -120,15 +121,15 @@ class ObservabilityTest {
     @Test
     void 발생_시각이_미래면_소비_지연을_0_으로_남긴다() {
         AcceptResult result = accepts.accept(fixtures.customer());
-        Long jobId = fixtures.workerSucceeds(result.preorder().id(), "REGISTER");
+        UUID jobId = fixtures.workerSucceeds(result.preorder().id(), "REGISTER");
         Timer lag = registry.timer("preorder.events.lag", "eventType", "EXTERNAL_JOB_SUCCEEDED");
         long count = lag.count();
         double total = lag.totalTime(TimeUnit.NANOSECONDS);
 
         dispatcher.dispatch("""
                 {"eventId":"%s","eventType":"EXTERNAL_JOB_SUCCEEDED","aggregateType":"PREORDER_SYNC_JOB",
-                 "aggregateId":%d,"occurredAt":"2099-01-01T00:00:00Z",
-                 "payload":{"syncJobId":%d,"preorderId":"%s","jobType":"REGISTER","externalNumber":"R-%s"}}
+                 "aggregateId":"%s","occurredAt":"2099-01-01T00:00:00Z",
+                 "payload":{"syncJobId":"%s","preorderId":"%s","jobType":"REGISTER","externalNumber":"R-%s"}}
                 """.formatted(ShopFixtures.unique(), jobId, jobId, AcceptFixtures.tokenOf(result),
                 ShopFixtures.unique()));
 
@@ -141,7 +142,7 @@ class ObservabilityTest {
         double published = publishCount();
 
         transactionTemplate.executeWithoutResult(status -> outboxWriter.append(
-                new RegisterJobReady(ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE), ShopFixtures.unique())));
+                new RegisterJobReady(UUID.randomUUID(), ShopFixtures.unique())));
 
         await().atMost(Duration.ofSeconds(5)).until(() -> publishCount() == published + 1);
     }
@@ -150,11 +151,11 @@ class ObservabilityTest {
     void 상태_지표는_갱신할_때_DB_에서_센다() {
         accepts.accept(fixtures.customer());
         jdbcTemplate.update("""
-                INSERT INTO dead_letter_events (source_queue, message_id, body, failure_reason, receive_count, status,
-                                                created_at, updated_at)
-                VALUES ('preorder-events', ?, 'not-json', 'UNREADABLE_BODY', 5, 'OPEN',
+                INSERT INTO dead_letter_events (id, source_queue, message_id, body, failure_reason, receive_count,
+                                                status, created_at, updated_at)
+                VALUES (?, 'preorder-events', ?, 'not-json', 'UNREADABLE_BODY', 5, 'OPEN',
                         UTC_TIMESTAMP(6) - INTERVAL 1 HOUR, UTC_TIMESTAMP(6))
-                """, ShopFixtures.unique());
+                """, UuidBinary.toBytes(UUID.randomUUID()), ShopFixtures.unique());
 
         stateGauges.refresh();
 

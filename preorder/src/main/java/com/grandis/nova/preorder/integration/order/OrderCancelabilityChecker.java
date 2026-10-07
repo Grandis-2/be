@@ -12,6 +12,7 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
 
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * 취소 사전 확인. order 가 답하지 못하면 취소를 시작하지 않는다 — "불가" 로 단정하지도, 확인 없이 진행하지도 않는다.
@@ -35,7 +36,7 @@ public class OrderCancelabilityChecker {
     }
 
     /** @throws BusinessException 배송이 시작됐으면 PREORDER_NOT_CANCELABLE */
-    public void requireCancelable(Long preorderInternalId) {
+    public void requireCancelable(UUID preorderInternalId) {
         Cancelability cancelability = fetch(preorderInternalId);
         if (!cancelability.cancelable()) {
             throw new BusinessException(PreorderErrorCode.PREORDER_NOT_CANCELABLE,
@@ -43,7 +44,7 @@ public class OrderCancelabilityChecker {
         }
     }
 
-    private Cancelability fetch(Long preorderInternalId) {
+    private Cancelability fetch(UUID preorderInternalId) {
         Cancelability answer;
         try {
             answer = dependencyGuard.call(DEPENDENCY, () -> orderClient.getCancelability(preorderInternalId))

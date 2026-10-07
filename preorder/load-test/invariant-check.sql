@@ -1,5 +1,5 @@
 -- 부하 시험 뒤 한 상품의 접수 결과가 유실 · 중복 없이 맞는지 본다. 모든 *_mismatch · duplicate · gap 열이 0 이어야 한다.
--- 실행: mysql shop -e "SET @product_id = 101; SOURCE invariant-check.sql"
+-- 실행: mysql shop -e "SET @product_id = UUID_TO_BIN('<상품 UUID>'); SOURCE invariant-check.sql"
 -- not_final 은 worker 가 외부 등록 · 취소를 마친 뒤(적체가 빠진 뒤) 0 이어야 한다.
 SELECT
     COUNT(*)                                              AS total_accepted,

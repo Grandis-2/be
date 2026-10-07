@@ -1,5 +1,7 @@
 package com.grandis.nova.preorder.deadletter.domain;
 
+import java.util.UUID;
+
 /**
  * 원문을 지금 코드로 읽은 결과(파서는 application 의 DeadLetterBodyParser). 적재 때 분류와 검색 칸을 채우고,
  * 되돌리기 전에 다시 읽어 되돌려도 되는지 가른다.
@@ -10,7 +12,7 @@ public record DeadLetterBody(
         String eventId,
         String eventType,
         String aggregateType,
-        Long aggregateId,
+        UUID aggregateId,
         String preorderToken,
         FailureReason failureReason
 ) {

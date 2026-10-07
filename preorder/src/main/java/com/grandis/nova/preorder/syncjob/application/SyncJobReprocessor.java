@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * DEAD_LETTER 인 REGISTER 작업의 재처리 요청을 남긴다. 작업을 되돌리는 것은 worker 다(조건부라 여러 번 와도 한 번).
@@ -34,8 +35,8 @@ class SyncJobReprocessor {
 
     /** @return 요청 시점의 작업 */
     @Transactional
-    public PreorderSyncJob reprocess(Long syncJobId, String requestedBy) {
-        Long preorderId = syncJobs.findPreorderId(syncJobId)
+    public PreorderSyncJob reprocess(UUID syncJobId, String requestedBy) {
+        UUID preorderId = syncJobs.findPreorderId(syncJobId)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.SYNC_JOB_NOT_FOUND));
         PreorderStatus preorderStatus = ledger.lockStatus(preorderId);
         // 잠근 뒤 처음 읽어야 그 사이 취소가 바꾼 작업 상태를 본다

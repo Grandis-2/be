@@ -7,10 +7,11 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 import java.util.List;
+import java.util.UUID;
 
 /** @param syncJobIds 비우면 DEAD_LETTER 인 REGISTER 전체 */
 record ReprocessBatchRequest(
-        @Size(max = SyncJobAdminService.MAX_BATCH_SIZE) List<@NotNull Long> syncJobIds,
+        @Size(max = SyncJobAdminService.MAX_BATCH_SIZE) List<@NotNull UUID> syncJobIds,
         String errorCodeFilter,
         @Min(1) @Max(200) Integer ratePerSecond
 ) {

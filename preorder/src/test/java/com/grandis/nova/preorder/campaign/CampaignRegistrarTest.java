@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.campaign;
 
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.preorder.campaign.CampaignRegistration.Batch;
@@ -22,6 +23,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -47,7 +49,7 @@ class CampaignRegistrarTest {
     CatalogClient catalogClient;
 
     ShopFixtures fixtures;
-    Long productId;
+    UUID productId;
     Instant opensAt;
 
     @BeforeEach
@@ -66,7 +68,7 @@ class CampaignRegistrarTest {
                 .isEqualTo(1);
         assertThat(jdbcTemplate.queryForList(
                 "SELECT batch_number FROM shipment_batches WHERE product_id = ? ORDER BY batch_number",
-                Integer.class, productId)).containsExactly(1, 2);
+                Integer.class, (Object) UuidBinary.toBytes(productId))).containsExactly(1, 2);
         assertThat(campaignEvents()).isEqualTo(1);
     }
 
@@ -84,7 +86,7 @@ class CampaignRegistrarTest {
 
     @Test
     void 관리자가_먼저_만든_회차는_덮지_않는다() {
-        CatalogStubs.stubPreorderProduct(catalogClient, productId, CatalogStubs.activeOption(1L));
+        CatalogStubs.stubPreorderProduct(catalogClient, productId, CatalogStubs.activeOption(UUID.randomUUID()));
         Instant adminOpensAt = opensAt.plusSeconds(1800);
         adminService.upsertCampaign(productId, adminOpensAt, adminOpensAt.plusSeconds(3600));
 
@@ -96,7 +98,8 @@ class CampaignRegistrarTest {
 
     @Test
     void 관리자가_비공개_상품에_먼저_만든_회차는_catalog_응답대로_비공개이고_등록_이벤트의_공개_여부만_반영한다() {
-        CatalogStubs.stubPreorderProduct(catalogClient, productId, false, true, CatalogStubs.activeOption(1L));
+        CatalogStubs.stubPreorderProduct(catalogClient, productId, false, true,
+                CatalogStubs.activeOption(UUID.randomUUID()));
         Instant adminOpensAt = opensAt.plusSeconds(1800);
         adminService.upsertCampaign(productId, adminOpensAt, adminOpensAt.plusSeconds(3600));
 
@@ -110,7 +113,7 @@ class CampaignRegistrarTest {
                                  JSON_EXTRACT(payload, '$.visible'))
                   FROM preorder_outbox_events
                  WHERE event_type = 'PREORDER_CAMPAIGN_CHANGED' AND aggregate_id = ? ORDER BY id
-                """, String.class, productId)).containsExactly("CREATED|false", "VISIBILITY|true");
+                """, String.class, (Object) UuidBinary.toBytes(productId))).containsExactly("CREATED|false", "VISIBILITY|true");
     }
 
     @RepeatedTest(3)
@@ -151,11 +154,11 @@ class CampaignRegistrarTest {
         return jdbcTemplate.queryForObject("""
                 SELECT CONCAT_WS('|', visible, visibility_version, schedule_version)
                   FROM preorder_campaigns WHERE product_id = ?
-                """, String.class, productId);
+                """, String.class, (Object) UuidBinary.toBytes(productId));
     }
 
     private int count(String sql) {
-        return fixtures.count(sql, productId);
+        return fixtures.count(sql, (Object) UuidBinary.toBytes(productId));
     }
 
     private int campaignEvents() {
@@ -168,6 +171,6 @@ class CampaignRegistrarTest {
 
     private Instant opensAtInDb() {
         return jdbcTemplate.queryForObject("SELECT opens_at FROM preorder_campaigns WHERE product_id = ?",
-                LocalDateTime.class, productId).toInstant(ZoneOffset.UTC);
+                LocalDateTime.class, (Object) UuidBinary.toBytes(productId)).toInstant(ZoneOffset.UTC);
     }
 }

@@ -1,6 +1,6 @@
 package com.grandis.nova.preorder.campaign.domain;
 
-import com.grandis.nova.common.BaseEntity;
+import com.grandis.nova.common.BaseTimeEntity;
 import com.grandis.nova.preorder.campaign.CampaignSchedule;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -9,9 +9,10 @@ import jakarta.persistence.Table;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
- * 사전예약 회차. 사전예약 상품당 1행이고 상품 id 가 곧 PK 다.
+ * 사전예약 회차. 사전예약 상품당 1행이고 상품 id 가 곧 PK 다(자기 id 를 만들지 않는다).
  *
  * 접수는 이 행을 잠근다({@link PreorderCampaignRepository#findForUpdate}).
  * 순번 카운터가 모집 일정과 같은 행에 있어서 접수 트랜잭션이 한 번만 잠그면 되고,
@@ -19,7 +20,7 @@ import java.time.Instant;
  */
 @Entity
 @Table(name = "preorder_campaigns")
-public class PreorderCampaign extends BaseEntity {
+public class PreorderCampaign extends BaseTimeEntity {
 
     private static final Duration CLOSED_BEFORE_OPEN = Duration.ofMillis(1);
 
@@ -30,7 +31,7 @@ public class PreorderCampaign extends BaseEntity {
     static final long FIRST_QUEUE_POSITION = 1;
 
     @Id
-    private Long productId;
+    private UUID productId;
 
     @Column(nullable = false)
     private Instant opensAt;
@@ -59,7 +60,7 @@ public class PreorderCampaign extends BaseEntity {
     }
 
     /** 사전예약 상품에 회차를 연다. 순번은 1번부터 시작한다. */
-    public PreorderCampaign(Long productId, Instant opensAt, Instant closesAt, boolean visible,
+    public PreorderCampaign(UUID productId, Instant opensAt, Instant closesAt, boolean visible,
                             long visibilityVersion) {
         this.productId = productId;
         this.opensAt = opensAt;
@@ -156,7 +157,7 @@ public class PreorderCampaign extends BaseEntity {
         return new CampaignSchedule(getProductId(), getOpensAt(), getClosesAt());
     }
 
-    public Long getProductId() {
+    public UUID getProductId() {
         return productId;
     }
 

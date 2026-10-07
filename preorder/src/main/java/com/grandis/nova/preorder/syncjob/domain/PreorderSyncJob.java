@@ -8,14 +8,12 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 외부 등록 · 취소 작업의 원장. 행은 preorder 가 만들고 실행은 worker 가 한다.
@@ -28,12 +26,8 @@ import java.time.Instant;
 @Table(name = "preorder_sync_jobs")
 public class PreorderSyncJob extends BaseEntity {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
     @Column(nullable = false, updatable = false)
-    private Long preorderId;
+    private UUID preorderId;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, updatable = false, length = 10)
@@ -60,7 +54,7 @@ public class PreorderSyncJob extends BaseEntity {
     protected PreorderSyncJob() {
     }
 
-    private PreorderSyncJob(Long preorderId, SyncJobType jobType, String requestPayload) {
+    private PreorderSyncJob(UUID preorderId, SyncJobType jobType, String requestPayload) {
         this.preorderId = preorderId;
         this.jobType = jobType;
         this.requestPayload = requestPayload;
@@ -68,12 +62,12 @@ public class PreorderSyncJob extends BaseEntity {
     }
 
     /** 접수 트랜잭션에서 만든다. */
-    public static PreorderSyncJob register(Long preorderId, String requestPayload) {
+    public static PreorderSyncJob register(UUID preorderId, String requestPayload) {
         return new PreorderSyncJob(preorderId, SyncJobType.REGISTER, requestPayload);
     }
 
     /** 주문 정리가 끝난 뒤(PREORDER_ORDER_SETTLED) 만든다. */
-    public static PreorderSyncJob cancel(Long preorderId, String requestPayload) {
+    public static PreorderSyncJob cancel(UUID preorderId, String requestPayload) {
         return new PreorderSyncJob(preorderId, SyncJobType.CANCEL, requestPayload);
     }
 
@@ -84,11 +78,7 @@ public class PreorderSyncJob extends BaseEntity {
                 getUpdatedAt());
     }
 
-    public Long getId() {
-        return id;
-    }
-
-    public Long getPreorderId() {
+    public UUID getPreorderId() {
         return preorderId;
     }
 

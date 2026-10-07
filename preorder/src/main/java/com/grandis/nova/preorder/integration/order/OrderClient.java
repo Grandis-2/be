@@ -5,6 +5,8 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.service.annotation.GetExchange;
 import org.springframework.web.service.annotation.HttpExchange;
 
+import java.util.UUID;
+
 /**
  * order 내부 API. 계약: contracts/preorder-internal.md 1.2.
  * 요청한 사용자의 토큰은 토큰 릴레이 인터셉터가 싣는다 — order 가 토큰 주인과 주문 회원이 같은지 확인한다.
@@ -17,5 +19,5 @@ public interface OrderClient {
      * 경로는 예약 내부 id(orders.preorder_id 와 같은 값)다 — 공개 UUID 가 아니다.
      */
     @GetExchange("/by-preorder/{preorderInternalId}/cancelability")
-    ApiResponse<Cancelability> getCancelability(@PathVariable Long preorderInternalId);
+    ApiResponse<Cancelability> getCancelability(@PathVariable UUID preorderInternalId);
 }

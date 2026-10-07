@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -36,7 +37,7 @@ public class Campaigns {
 
     /** 회차 행을 잠그고 일정을 읽는다. 잠금은 호출한 트랜잭션이 끝날 때까지다. 회차가 없으면 비어 있다. */
     @Transactional(propagation = Propagation.MANDATORY)
-    public Optional<CampaignSchedule> lockForAccept(Long productId) {
+    public Optional<CampaignSchedule> lockForAccept(UUID productId) {
         return campaigns.findForUpdate(productId).map(PreorderCampaign::toSchedule);
     }
 
@@ -46,7 +47,7 @@ public class Campaigns {
      * @throws IllegalStateException 잠근 회차가 없거나 순번이 속한 차수가 없다(오픈 전 검사를 지나친 데이터)
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    public IssuedPosition issuePosition(Long productId) {
+    public IssuedPosition issuePosition(UUID productId) {
         // 잠근 회차는 영속성 컨텍스트에 있어 다시 조회하지 않는다
         PreorderCampaign campaign = campaigns.findById(productId)
                 .orElseThrow(() -> new IllegalStateException("잠근 회차가 없다: productId=" + productId));
@@ -59,20 +60,20 @@ public class Campaigns {
 
     /** 예약에 배정된 차수. 없으면 IllegalStateException(오픈 전 검사를 지나친 데이터). */
     @Transactional(readOnly = true)
-    public ShipmentBatchSnapshot getBatch(Long shipmentBatchId) {
+    public ShipmentBatchSnapshot getBatch(UUID shipmentBatchId) {
         return batches.getAssigned(shipmentBatchId).toSnapshot();
     }
 
     /** id → 차수. 없는 id 는 빠진다. */
     @Transactional(readOnly = true)
-    public Map<Long, ShipmentBatchSnapshot> findBatches(Collection<Long> shipmentBatchIds) {
+    public Map<UUID, ShipmentBatchSnapshot> findBatches(Collection<UUID> shipmentBatchIds) {
         return batches.findAllById(shipmentBatchIds).stream()
                 .collect(Collectors.toMap(ShipmentBatch::getId, ShipmentBatch::toSnapshot));
     }
 
     /** 판매 중지: 회차를 지금 시각으로 닫는다. 실제로 닫았을 때만 회차 변경 이벤트를 적는다(없거나 이미 지났으면 그대로). */
     @Transactional
-    public void closeNow(Long productId, Instant now) {
+    public void closeNow(UUID productId, Instant now) {
         campaigns.findForUpdate(productId)
                 .filter(campaign -> campaign.closeNow(now))
                 .ifPresent(campaign -> changePublisher.publish(campaign, CampaignChange.CLOSED));
@@ -84,7 +85,7 @@ public class Campaigns {
      * @throws IllegalStateException 회차가 아직 없다 — 등록 이벤트보다 먼저 왔으므로 다시 받는다(버리면 늦게 온 등록의 옛 값이 굳는다)
      */
     @Transactional
-    public void applyVisibility(Long productId, boolean visible, long visibilityVersion) {
+    public void applyVisibility(UUID productId, boolean visible, long visibilityVersion) {
         PreorderCampaign campaign = campaigns.findForUpdate(productId)
                 .orElseThrow(() -> new IllegalStateException("공개 여부를 반영할 회차가 아직 없다: productId=" + productId));
         if (campaign.applyVisibility(visible, visibilityVersion)) {

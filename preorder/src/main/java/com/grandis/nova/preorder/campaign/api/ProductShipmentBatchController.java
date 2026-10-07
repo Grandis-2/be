@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 배송 차수 공개 조회. "몇 번째 순번까지 1차 배송" 안내에 쓴다.
@@ -32,7 +33,7 @@ class ProductShipmentBatchController {
     @Operation(summary = "배송 차수 공개 조회(로그인 없이)")
     @SecurityRequirements
     @GetMapping
-    public ApiResponse<Items<ShipmentBatchResponse>> list(@PathVariable Long productId) {
+    public ApiResponse<Items<ShipmentBatchResponse>> list(@PathVariable UUID productId) {
         List<ShipmentBatchResponse> items = queryService.findPublished(productId).stream()
                 .map(ShipmentBatchResponse::from)
                 .toList();

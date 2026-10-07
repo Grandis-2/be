@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.deadletter;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
@@ -22,6 +23,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -58,7 +60,7 @@ class DeadLettersTest {
 
     @Test
     void 봉투를_읽어_예약과_회원을_붙여_OPEN_으로_쌓는다() {
-        Long customerId = fixtures.customer();
+        UUID customerId = fixtures.customer();
         AcceptResult accepted = new AcceptFixtures(acceptService, fixtures, catalogClient).accept(customerId);
         String messageId = ShopFixtures.unique();
         Instant sentAt = Instant.parse("2026-09-30T01:00:00Z");
@@ -122,7 +124,7 @@ class DeadLettersTest {
 
     @Test
     void 되돌린_메시지가_또_오면_앞선_행을_REDRIVE_FAILED_로_바꾸고_새_행이_가리킨다() {
-        Long previous = redriven(ShopFixtures.unique());
+        UUID previous = redriven(ShopFixtures.unique());
         String messageId = ShopFixtures.unique();
 
         deadLetters.record(new IncomingDeadLetter(QUEUE, messageId, "not-json", 5, null, previous));
@@ -137,15 +139,15 @@ class DeadLettersTest {
     void 앞선_행이_없는_속성이면_잇지_않고_쌓는다() {
         String messageId = ShopFixtures.unique();
 
-        deadLetters.record(new IncomingDeadLetter(QUEUE, messageId, "not-json", 5, null, Long.MAX_VALUE));
+        deadLetters.record(new IncomingDeadLetter(QUEUE, messageId, "not-json", 5, null, UUID.randomUUID()));
 
         assertThat(find(messageId).getRedrivenFromId()).isNull();
     }
 
     @Test
     void 되돌린_메시지가_처리되면_SUCCEEDED_이고_보냄_기록보다_먼저여도_남는다() {
-        Long redriven = redriven(ShopFixtures.unique());
-        Long stillSending = claimed(ShopFixtures.unique());
+        UUID redriven = redriven(ShopFixtures.unique());
+        UUID stillSending = claimed(ShopFixtures.unique());
 
         deadLetters.markRedriveSucceeded(redriven);
         deadLetters.markRedriveSucceeded(stillSending);
@@ -160,7 +162,7 @@ class DeadLettersTest {
     void 되돌리지_않은_행에는_처리_결과를_남기지_않는다() {
         String messageId = ShopFixtures.unique();
         deadLetters.record(new IncomingDeadLetter(QUEUE, messageId, "not-json", 5, null, null));
-        Long id = find(messageId).getId();
+        UUID id = find(messageId).getId();
 
         deadLetters.markRedriveSucceeded(id);
 
@@ -169,26 +171,26 @@ class DeadLettersTest {
 
     @Test
     void 보내다_멈춘_REDRIVING_은_1분이_지나야_되돌리기_대기로_센다() {
-        Long recent = claimed(ShopFixtures.unique());
-        Long stale = claimed(ShopFixtures.unique());
+        UUID recent = claimed(ShopFixtures.unique());
+        UUID stale = claimed(ShopFixtures.unique());
         jdbcTemplate.update("UPDATE dead_letter_events SET redrive_started_at = redrive_started_at - INTERVAL 2 MINUTE"
-                + " WHERE id = ?", stale);
+                + " WHERE id = ?", (Object) UuidBinary.toBytes(stale));
         Instant staleBefore = Instant.now().minus(DeadLetterStatus.STALE_REDRIVE);
 
-        List<Long> waiting = events.findWaitingIds(null, FailureReason.UNREADABLE_BODY, staleBefore, Integer.MAX_VALUE);
+        List<UUID> waiting = events.findWaitingIds(null, FailureReason.UNREADABLE_BODY, staleBefore, Integer.MAX_VALUE);
 
         assertThat(waiting).contains(stale).doesNotContain(recent);
         assertThat(events.findById(stale).orElseThrow().waitingForRedrive(staleBefore)).isTrue();
         assertThat(events.findById(recent).orElseThrow().waitingForRedrive(staleBefore)).isFalse();
         long before = events.countWaiting(staleBefore);
         jdbcTemplate.update("UPDATE dead_letter_events SET redrive_started_at = redrive_started_at - INTERVAL 2 MINUTE"
-                + " WHERE id = ?", recent);
+                + " WHERE id = ?", (Object) UuidBinary.toBytes(recent));
         assertThat(events.countWaiting(staleBefore)).isEqualTo(before + 1);
     }
 
     @Test
     void 보냄_기록_전에_또_DLQ_로_와도_앞선_행은_REDRIVE_FAILED_다() {
-        Long stillSending = claimed(ShopFixtures.unique());
+        UUID stillSending = claimed(ShopFixtures.unique());
         String messageId = ShopFixtures.unique();
 
         deadLetters.record(new IncomingDeadLetter(QUEUE, messageId, "not-json", 5, null, stillSending));
@@ -199,33 +201,34 @@ class DeadLettersTest {
     }
 
     /** OPEN 으로 쌓고 선점(REDRIVING)까지 한 행. */
-    private Long claimed(String messageId) {
+    private UUID claimed(String messageId) {
         deadLetters.record(new IncomingDeadLetter(QUEUE, messageId, "not-json", 5, null, null));
-        Long id = find(messageId).getId();
+        UUID id = find(messageId).getId();
         Instant now = Instant.now();
         transactionTemplate.execute(status -> events.claimRedrive(id, "admin", now, now.minusSeconds(60)));
         return id;
     }
 
     /** 선점하고 보냄(REDRIVEN)까지 기록한 행. */
-    private Long redriven(String messageId) {
-        Long id = claimed(messageId);
+    private UUID redriven(String messageId) {
+        UUID id = claimed(messageId);
         Instant startedAt = events.findById(id).orElseThrow().getRedriveStartedAt();
         transactionTemplate.execute(status -> events.markRedriven(id, startedAt, Instant.now()));
         return id;
     }
 
     private DeadLetterEvent find(String messageId) {
-        Long id = jdbcTemplate.queryForObject("SELECT id FROM dead_letter_events WHERE message_id = ?", Long.class,
-                messageId);
+        UUID id = jdbcTemplate.queryForObject("SELECT id FROM dead_letter_events WHERE message_id = ?",
+                (rs, rowNum) -> UuidBinary.fromBytes(rs.getBytes(1)), messageId);
         return events.findById(id).orElseThrow();
     }
 
     private String externalJobSucceeded(String token) {
         return """
                 {"eventId":"%s","eventType":"EXTERNAL_JOB_SUCCEEDED","aggregateType":"PREORDER_SYNC_JOB",
-                 "aggregateId":1,"occurredAt":"2026-09-03T01:00:03.470Z",
-                 "payload":{"syncJobId":1,"preorderId":"%s","jobType":"REGISTER","externalNumber":"R-1"}}
+                 "aggregateId":"00000000-0000-7000-8000-000000000001","occurredAt":"2026-09-03T01:00:03.470Z",
+                 "payload":{"syncJobId":"00000000-0000-7000-8000-000000000001",
+                            "preorderId":"%s","jobType":"REGISTER","externalNumber":"R-1"}}
                 """.formatted(ShopFixtures.unique(), token);
     }
 }

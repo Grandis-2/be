@@ -21,6 +21,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * preorder 가 받는 이벤트의 처리. 메시지 하나 = 트랜잭션 하나다.
@@ -69,7 +70,7 @@ public class PreorderEventHandler {
             log.warn("성공하지 않은 작업의 성공 이벤트를 무시한다 syncJobId={}", message.syncJobId());
             return;
         }
-        Long preorderId = job.get().preorderId();
+        UUID preorderId = job.get().preorderId();
         if (job.get().jobType() == SyncJobType.REGISTER) {
             ledger.fire(preorderId, new PreorderFact.RegisterConfirmed(message.externalNumber()));
         } else {
@@ -121,7 +122,7 @@ public class PreorderEventHandler {
      * 예약 행을 잠근 채 취소 중인지, 결과의 시도 순번이 마지막 CANCELING 진입 이력과 같은지 본다.
      * 잠금은 이 트랜잭션 끝까지 유지되므로 뒤이은 판단 사이에 새 취소가 끼어들지 못한다.
      */
-    private boolean isCurrentCancel(Long preorderId, Long cancelSequence) {
+    private boolean isCurrentCancel(UUID preorderId, Long cancelSequence) {
         PreorderStatus status = ledger.lockStatus(preorderId);
         return status == PreorderStatus.CANCELING
                 && preorders.lastTransitionTo(preorderId, PreorderStatus.CANCELING)
@@ -137,7 +138,7 @@ public class PreorderEventHandler {
         }
         String payload = jsonMapper.writeValueAsString(new CancelRequestPayload(preorder.preorderToken(),
                 preorder.externalReference(), mockCancelReason(preorder.id())));
-        Long jobId = syncJobs.createCancel(preorder.id(), payload);
+        UUID jobId = syncJobs.createCancel(preorder.id(), payload);
         outboxWriter.append(new CancelJobReady(jobId, preorder.preorderToken()));
     }
 
@@ -147,7 +148,7 @@ public class PreorderEventHandler {
     }
 
     /** 취소를 시작한 이력의 주체로 Mock 감사 사유를 정한다. */
-    private String mockCancelReason(Long preorderId) {
+    private String mockCancelReason(UUID preorderId) {
         return preorders.lastTransitionTo(preorderId, PreorderStatus.CANCELING)
                 .map(PreorderHistoryEntry::actor)
                 .map(MOCK_CANCEL_REASONS::get)

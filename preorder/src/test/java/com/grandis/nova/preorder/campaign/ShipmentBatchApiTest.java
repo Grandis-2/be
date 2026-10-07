@@ -10,6 +10,8 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.UUID;
+
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -49,7 +51,7 @@ class ShipmentBatchApiTest {
 
     @Test
     void 차수가_없는_상품은_404() throws Exception {
-        Long productId = fixtures.product("IN_STOCK", "ACTIVE");
+        UUID productId = fixtures.product("IN_STOCK", "ACTIVE");
 
         mockMvc.perform(get("/api/v1/products/{productId}/shipment-batches", productId))
                 .andExpect(status().isNotFound())

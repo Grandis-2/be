@@ -9,6 +9,7 @@ import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /** 조회 결과. 예약과 함께 화면이 필요로 하는 것(배송 차수 등)을 담는다. */
 public final class PreorderView {
@@ -27,7 +28,7 @@ public final class PreorderView {
 
     /** 관리자 상세. 작업 · 시도 · 이력까지 한 번에 본다. */
     public record AdminDetail(PreorderSnapshot preorder, ShipmentBatchSnapshot shipmentBatch, List<SyncJobSnapshot> syncJobs,
-                              Map<Long, List<SyncAttempt>> attempts, List<PreorderHistoryEntry> events,
+                              Map<UUID, List<SyncAttempt>> attempts, List<PreorderHistoryEntry> events,
                               PreorderDisplayStatus displayStatus) {
     }
 }

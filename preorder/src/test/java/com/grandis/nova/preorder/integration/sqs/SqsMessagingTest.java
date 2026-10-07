@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.integration.sqs;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.outbox.MessageTransport;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.common.sqs.testing.FlociTestContainer;
@@ -32,8 +33,8 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ThreadLocalRandom;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -112,7 +113,7 @@ class SqsMessagingTest {
 
     @Test
     void 커밋되면_목적지_큐로_봉투를_보낸다() {
-        long syncJobId = ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE);
+        UUID syncJobId = UUID.randomUUID();
         Long id = transactionTemplate.execute(status -> writer.append(new RegisterJobReady(syncJobId, "9f1c2d3e")));
         String eventId = jdbcTemplate.queryForObject(
                 "SELECT event_id FROM preorder_outbox_events WHERE id = ?", String.class, id);
@@ -121,14 +122,14 @@ class SqsMessagingTest {
 
         JsonNode body = jsonMapper.readTree(message.body());
         assertThat(body.get("eventType").asString()).isEqualTo("REGISTER_JOB_READY");
-        assertThat(body.get("payload").get("syncJobId").asLong()).isEqualTo(syncJobId);
+        assertThat(body.get("payload").get("syncJobId").asString()).isEqualTo(syncJobId.toString());
         assertThat(message.messageAttributes().get("eventType").stringValue()).isEqualTo("REGISTER_JOB_READY");
     }
 
     @Test
     void 받은_이벤트를_처리하면_그_메시지를_큐에서_지운다() {
         AcceptResult accepted = new AcceptFixtures(acceptService, fixtures, catalogClient).accept(fixtures.customer());
-        Long preorderId = accepted.preorder().id();
+        UUID preorderId = accepted.preorder().id();
         String eventId = ShopFixtures.unique();
         String externalNumber = "R-" + ShopFixtures.unique();
 
@@ -139,7 +140,7 @@ class SqsMessagingTest {
 
         await().atMost(TIMEOUT).until(() -> "REGISTERED".equals(status(preorderId)));
         assertThat(jdbcTemplate.queryForObject("SELECT external_reference FROM preorders WHERE id = ?",
-                String.class, preorderId)).isEqualTo(externalNumber);
+                String.class, (Object) UuidBinary.toBytes(preorderId))).isEqualTo(externalNumber);
         // 지우지 못했다면 가시성 시간(2s) 뒤 다시 보여 한 번 더 처리된다 — 그 몇 배를 기다려도 한 번이어야 한다
         await().alias("처리한 메시지는 지워져 다시 처리되지 않는다")
                 .during(Duration.ofSeconds(8)).atMost(TIMEOUT)
@@ -151,7 +152,7 @@ class SqsMessagingTest {
     @Test
     void 같은_이벤트가_두_번_와도_한_번만_반영된다() {
         AcceptResult accepted = new AcceptFixtures(acceptService, fixtures, catalogClient).accept(fixtures.customer());
-        Long preorderId = accepted.preorder().id();
+        UUID preorderId = accepted.preorder().id();
         String externalNumber = "R-" + ShopFixtures.unique();
         String body = externalJobSucceeded(ShopFixtures.unique(), fixtures.workerSucceeds(preorderId, "REGISTER"),
                 AcceptFixtures.tokenOf(accepted), externalNumber);
@@ -165,9 +166,9 @@ class SqsMessagingTest {
         assertThat(status(preorderId)).isEqualTo("REGISTERED");
         assertThat(fixtures.count("""
                 SELECT COUNT(*) FROM preorder_events WHERE preorder_id = ? AND to_status = 'REGISTERED'
-                """, preorderId)).isEqualTo(1);
+                """, (Object) UuidBinary.toBytes(preorderId))).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject("SELECT external_reference FROM preorders WHERE id = ?",
-                String.class, preorderId)).isEqualTo(externalNumber);
+                String.class, (Object) UuidBinary.toBytes(preorderId))).isEqualTo(externalNumber);
     }
 
     @Test
@@ -200,12 +201,13 @@ class SqsMessagingTest {
     @Test
     void 접수부터_외부_등록_성공까지_SQS_로_이어져_결제_가능이_된다() {
         AcceptResult accepted = new AcceptFixtures(acceptService, fixtures, catalogClient).accept(fixtures.customer());
-        Long preorderId = accepted.preorder().id();
+        UUID preorderId = accepted.preorder().id();
         String token = AcceptFixtures.tokenOf(accepted);
 
         Message registerJobReady = queues.receive("preorder-register", m -> m.body().contains(token), TIMEOUT)
                 .orElseThrow();
-        long syncJobId = jsonMapper.readTree(registerJobReady.body()).get("payload").get("syncJobId").asLong();
+        UUID syncJobId = UUID.fromString(
+                jsonMapper.readTree(registerJobReady.body()).get("payload").get("syncJobId").asString());
         assertThat(syncJobId).isEqualTo(fixtures.workerSucceeds(preorderId, "REGISTER"));
 
         queues.send("preorder-events",
@@ -214,11 +216,11 @@ class SqsMessagingTest {
         await().atMost(TIMEOUT).until(() -> "REGISTERED".equals(status(preorderId)));
     }
 
-    private String externalJobSucceeded(String eventId, Long syncJobId, String token, String externalNumber) {
+    private String externalJobSucceeded(String eventId, UUID syncJobId, String token, String externalNumber) {
         return """
                 {"eventId":"%s","eventType":"EXTERNAL_JOB_SUCCEEDED","aggregateType":"PREORDER_SYNC_JOB",
-                 "aggregateId":%d,"occurredAt":"2026-09-03T01:00:03.470Z",
-                 "payload":{"syncJobId":%d,"preorderId":"%s","jobType":"REGISTER","externalNumber":"%s"}}
+                 "aggregateId":"%s","occurredAt":"2026-09-03T01:00:03.470Z",
+                 "payload":{"syncJobId":"%s","preorderId":"%s","jobType":"REGISTER","externalNumber":"%s"}}
                 """.formatted(eventId, syncJobId, syncJobId, token, externalNumber);
     }
 
@@ -230,7 +232,8 @@ class SqsMessagingTest {
                 .count();
     }
 
-    private String status(Long preorderId) {
-        return jdbcTemplate.queryForObject("SELECT status FROM preorders WHERE id = ?", String.class, preorderId);
+    private String status(UUID preorderId) {
+        return jdbcTemplate.queryForObject("SELECT status FROM preorders WHERE id = ?", String.class,
+                (Object) UuidBinary.toBytes(preorderId));
     }
 }

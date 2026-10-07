@@ -13,6 +13,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 회차 판매 중지. 회차를 잠가 지금 마감한 뒤, 진행 중 예약을 작은 트랜잭션 단위로 나눠 취소를 시작한다.
@@ -47,7 +48,7 @@ public class CampaignCancelService {
         this.clock = clock;
     }
 
-    public void cancel(Long productId, String reason) {
+    public void cancel(UUID productId, String reason) {
         campaigns.closeNow(productId, clock.instant());
         catalogCache.evictEverywhere(productId);
         String eventReason = eventReason(reason);
@@ -58,7 +59,7 @@ public class CampaignCancelService {
     }
 
     /** @return 한 묶음을 가득 채웠으면 true — 남은 예약이 더 있을 수 있다 */
-    private boolean cancelBatch(Long productId, String reason) {
+    private boolean cancelBatch(UUID productId, String reason) {
         List<PreorderSnapshot> batch = preorders.findByProduct(productId, ACTIVE, BATCH_SIZE);
         batch.forEach(preorder -> cancelStarter.start(preorder, EventActor.ADMIN, reason,
                 CancelReason.CAMPAIGN_CANCELED));

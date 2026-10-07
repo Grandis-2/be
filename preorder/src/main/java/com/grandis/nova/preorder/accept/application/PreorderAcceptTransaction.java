@@ -101,7 +101,7 @@ class PreorderAcceptTransaction {
 
         String payload = jsonMapper.writeValueAsString(RegisterRequestPayload.of(preorderToken,
                 command.customerId(), command.productId(), option.sku(), externalScope));
-        Long jobId = syncJobs.createRegister(preorder.id(), payload);
+        UUID jobId = syncJobs.createRegister(preorder.id(), payload);
         outboxWriter.append(new RegisterJobReady(jobId, preorderToken));
 
         return new AcceptResult(preorder, issued.batch(), false);

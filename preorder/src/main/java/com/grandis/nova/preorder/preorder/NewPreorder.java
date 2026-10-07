@@ -2,6 +2,7 @@ package com.grandis.nova.preorder.preorder;
 
 import java.math.BigDecimal;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * 접수 트랜잭션이 정한 새 예약의 내용. 순번 · 차수는 회차를 잠근 뒤 정해진 값이어야 한다.
@@ -11,10 +12,10 @@ import java.util.Objects;
  */
 public record NewPreorder(
         String preorderToken,
-        Long customerId,
-        Long productId,
-        Long optionId,
-        Long shipmentBatchId,
+        UUID customerId,
+        UUID productId,
+        UUID optionId,
+        UUID shipmentBatchId,
         long queuePosition,
         String admissionTicketId,
         String idempotencyKey,
@@ -40,7 +41,7 @@ public record NewPreorder(
     }
 
     /** 메모 없는 접수. */
-    public NewPreorder(String preorderToken, Long customerId, Long productId, Long optionId, Long shipmentBatchId,
+    public NewPreorder(String preorderToken, UUID customerId, UUID productId, UUID optionId, UUID shipmentBatchId,
                        long queuePosition, String admissionTicketId, String idempotencyKey, String productTitleSnapshot,
                        String optionTitleSnapshot, BigDecimal unitPriceSnapshot) {
         this(preorderToken, customerId, productId, optionId, shipmentBatchId, queuePosition, admissionTicketId,

@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.query;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
@@ -16,6 +17,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
+import java.util.UUID;
 
 import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
@@ -45,7 +47,7 @@ class AdminPreorderQueryApiTest {
 
     ShopFixtures fixtures;
     AcceptFixtures accepts;
-    Long customerId;
+    UUID customerId;
 
     @BeforeEach
     void setUp() {
@@ -71,7 +73,7 @@ class AdminPreorderQueryApiTest {
                         .with(admin()))
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(mine)))
-                .andExpect(jsonPath("$.data.items[0].customerId").value(customerId))
+                .andExpect(jsonPath("$.data.items[0].customerId").value(customerId.toString()))
                 .andExpect(jsonPath("$.data.items[0].registerJobStatus").value("PENDING"));
     }
 
@@ -82,7 +84,7 @@ class AdminPreorderQueryApiTest {
         jdbcTemplate.update("""
                 UPDATE preorder_sync_jobs SET status = 'DEAD_LETTER', dead_lettered_at = UTC_TIMESTAMP(6)
                  WHERE preorder_id = ?
-                """, deadLettered.preorder().id());
+                """, (Object) UuidBinary.toBytes(deadLettered.preorder().id()));
 
         mockMvc.perform(get("/api/v1/admin/preorders").param("registerJobStatus", "DEAD_LETTER")
                         .with(admin()))
@@ -100,7 +102,7 @@ class AdminPreorderQueryApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.total", greaterThanOrEqualTo(1)))
                 .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(accepted)))
-                .andExpect(jsonPath("$.data.items[0].customerId").value(customerId));
+                .andExpect(jsonPath("$.data.items[0].customerId").value(customerId.toString()));
     }
 
     @Test
@@ -117,14 +119,15 @@ class AdminPreorderQueryApiTest {
     @Test
     void 상세는_작업과_시도와_이력을_함께_준다() throws Exception {
         AcceptResult accepted = accepts.accept(customerId);
-        Long jobId = jdbcTemplate.queryForObject("SELECT id FROM preorder_sync_jobs WHERE preorder_id = ?",
-                Long.class, accepted.preorder().id());
+        UUID jobId = jdbcTemplate.queryForObject("SELECT id FROM preorder_sync_jobs WHERE preorder_id = ?",
+                (rs, rowNum) -> UuidBinary.fromBytes(rs.getBytes(1)),
+                        (Object) UuidBinary.toBytes(accepted.preorder().id()));
         fixtures.syncAttempt(jobId, 1, "TRANSIENT_FAILURE", 503, "UPSTREAM_UNAVAILABLE");
         fixtures.syncAttempt(jobId, 2, null, null, null);
 
         mockMvc.perform(get("/api/v1/admin/preorders/" + AcceptFixtures.tokenOf(accepted)).with(admin()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.customerId").value(customerId))
+                .andExpect(jsonPath("$.data.customerId").value(customerId.toString()))
                 .andExpect(jsonPath("$.data.admissionTicketId").exists())
                 .andExpect(jsonPath("$.data.syncJobs", hasSize(1)))
                 .andExpect(jsonPath("$.data.syncJobs[0].jobType").value("REGISTER"))

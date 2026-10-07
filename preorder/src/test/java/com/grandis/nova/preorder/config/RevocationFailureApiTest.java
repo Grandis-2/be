@@ -19,6 +19,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
+import java.util.UUID;
 
 import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
@@ -46,7 +47,7 @@ class RevocationFailureApiTest {
     CatalogClient catalogClient;
 
     ShopFixtures fixtures;
-    Long customerId;
+    UUID customerId;
 
     @BeforeEach
     void setUp() {
@@ -74,7 +75,7 @@ class RevocationFailureApiTest {
                         .header("X-Admission-Ticket",
                                 AdmissionTickets.issue(product.productId(), customerId, Instant.now()))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"productId\":%d,\"optionId\":%d}".formatted(product.productId(),
+                        .content("{\"productId\":\"%s\",\"optionId\":\"%s\"}".formatted(product.productId(),
                                 product.optionId()))
                         .with(customer(customerId)))
                 .andExpect(status().isAccepted());

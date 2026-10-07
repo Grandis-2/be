@@ -22,6 +22,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.UUID;
+
 /** 외부 동기화 작업 조회와 DEAD_LETTER 재처리. 재처리는 요청만 남기고 작업을 되돌리는 것은 worker 다. */
 @Tag(name = "관리자 · 동기화 작업")
 @RestController
@@ -49,13 +51,13 @@ class AdminSyncJobController {
 
     @Operation(summary = "동기화 작업 상세")
     @GetMapping("/{syncJobId}")
-    public ApiResponse<SyncJobResponse> get(@PathVariable Long syncJobId) {
+    public ApiResponse<SyncJobResponse> get(@PathVariable UUID syncJobId) {
         return ApiResponse.ok(detail(syncJobAdminService.findOne(syncJobId)));
     }
 
     @Operation(summary = "DEAD_LETTER 작업 재처리 요청")
     @PostMapping("/{syncJobId}/reprocess")
-    public ResponseEntity<ApiResponse<SyncJobSummaryResponse>> reprocess(@PathVariable Long syncJobId,
+    public ResponseEntity<ApiResponse<SyncJobSummaryResponse>> reprocess(@PathVariable UUID syncJobId,
                                                                          Authentication admin) {
         return accepted(SyncJobSummaryResponse.from(syncJobAdminService.reprocess(syncJobId, admin.getName())));
     }

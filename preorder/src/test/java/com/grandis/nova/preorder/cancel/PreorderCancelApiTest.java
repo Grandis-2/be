@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.cancel;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.common.web.ApiResponse;
@@ -26,6 +27,7 @@ import org.springframework.web.client.ResourceAccessException;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
@@ -60,7 +62,7 @@ class PreorderCancelApiTest {
     OrderClient orderClient;
 
     ShopFixtures fixtures;
-    Long customerId;
+    UUID customerId;
     AcceptResult accepted;
     String token;
 
@@ -90,7 +92,7 @@ class PreorderCancelApiTest {
                 SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.reason')) AS reason,
                        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.preorderId')) AS preorder_id
                   FROM preorder_outbox_events WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
-                """, accepted.preorder().id());
+                """, (Object) UuidBinary.toBytes(accepted.preorder().id()));
         assertThat(outbox).containsEntry("reason", "USER").containsEntry("preorder_id", token);
     }
 
@@ -107,7 +109,7 @@ class PreorderCancelApiTest {
         verify(orderClient).getCancelability(accepted.preorder().id());
         assertThat(fixtures.count("""
                 SELECT COUNT(*) FROM preorder_outbox_events WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
-                """, accepted.preorder().id())).isEqualTo(1);
+                """, (Object) UuidBinary.toBytes(accepted.preorder().id()))).isEqualTo(1);
     }
 
     /** 두 요청이 모두 취소 가능 판정을 받고 시작 트랜잭션에 겹쳐 들어와도 예약 행 잠금으로 한 번만 시작한다. */
@@ -122,12 +124,12 @@ class PreorderCancelApiTest {
                 .andReturn().getResponse().getContentAsString());
 
         assertThat(outcomes).allMatch(Outcome::succeeded);
-        Long preorderId = accepted.preorder().id();
+        UUID preorderId = accepted.preorder().id();
         assertThat(fixtures.count("""
                 SELECT COUNT(*) FROM preorder_outbox_events WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
-                """, preorderId)).isEqualTo(1);
+                """, (Object) UuidBinary.toBytes(preorderId))).isEqualTo(1);
         assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_events WHERE preorder_id = ? AND to_status = 'CANCELING'",
-                preorderId)).isEqualTo(1);
+                (Object) UuidBinary.toBytes(preorderId))).isEqualTo(1);
     }
 
     @Test
@@ -177,7 +179,7 @@ class PreorderCancelApiTest {
 
         assertThat(jdbcTemplate.queryForMap("""
                 SELECT actor, reason FROM preorder_events WHERE preorder_id = ? AND to_status = 'CANCELING'
-                """, accepted.preorder().id()))
+                """, (Object) UuidBinary.toBytes(accepted.preorder().id())))
                 .containsEntry("actor", "ADMIN").containsEntry("reason", "매크로 의심 접수");
     }
 
@@ -194,7 +196,7 @@ class PreorderCancelApiTest {
                 .andExpect(status().isForbidden());
     }
 
-    private ResultActions cancel(Long customer) throws Exception {
+    private ResultActions cancel(UUID customer) throws Exception {
         return mockMvc.perform(post("/api/v1/preorders/{id}/cancel", token)
                 .with(customer(customer)));
     }
@@ -206,12 +208,12 @@ class PreorderCancelApiTest {
 
     private String preorderStatus() {
         return jdbcTemplate.queryForObject("SELECT status FROM preorders WHERE id = ?", String.class,
-                accepted.preorder().id());
+                (Object) UuidBinary.toBytes(accepted.preorder().id()));
     }
 
     private String jobStatus(String jobType) {
         return jdbcTemplate.queryForObject(
                 "SELECT status FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = ?", String.class,
-                accepted.preorder().id(), jobType);
+                UuidBinary.toBytes(accepted.preorder().id()), jobType);
     }
 }

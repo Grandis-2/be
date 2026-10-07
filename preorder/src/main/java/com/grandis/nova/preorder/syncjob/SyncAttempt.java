@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.syncjob;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 외부 호출 한 번의 기록(preorder_sync_attempts). worker 가 쓰고 preorder 는 관리자 화면에서 읽기만 한다.
@@ -9,7 +10,7 @@ import java.time.Instant;
  * result 가 UNKNOWN 이면 호출은 갔는데 응답을 못 받은 시도다.
  */
 public record SyncAttempt(
-        Long syncJobId,
+        UUID syncJobId,
         int attemptNumber,
         String actor,
         String result,
