@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog;
 
+import com.grandis.nova.catalog.option.ProductOptions;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import org.junit.jupiter.api.BeforeEach;
@@ -102,7 +103,7 @@ class CatalogSchemaTest {
             assertThat(jdbcTemplate.queryForObject("SELECT price FROM product_options WHERE id = ?", BigDecimal.class, optionId)).isNotNull();
             // 수동 가격 표시는 없앴다(2026-10-06) — 다시 생기면 재계산이 건너뛰는 옵션이 생긴다
             assertThat(columnExists("product_options", "price_overridden")).isFalse();
-            // 표시 속성은 없앴다(2026-10-07) — 축 → 값은 선택 표 하나가 정본이다
+            // 표시 속성은 없앴다(2026-10-07) — 축 → 값은 조합 키(값 id)와 상품의 옵션 문서가 정본이다
             assertThat(columnExists("product_options", "display_attributes")).isFalse();
         }
 
@@ -119,83 +120,30 @@ class CatalogSchemaTest {
     }
 
     @Nested
-    @DisplayName("옵션 축 · 값 · 선택")
+    @DisplayName("옵션 문서 · 조합")
     class Options {
 
-        Long productId;
-        Long colorAxis;
-        Long storageAxis;
-        Long black;
-        Long gb256;
-
-        @BeforeEach
-        void setUp() {
-            productId = fixtures.product("IN_STOCK", "ACTIVE");
-            colorAxis = fixtures.axis(productId, "color", 0);
-            storageAxis = fixtures.axis(productId, "storage", 1);
-            black = fixtures.value(colorAxis, "블랙", 0);
-            gb256 = fixtures.value(storageAxis, "256GB", 0);
-        }
-
         @Test
-        @DisplayName("한 옵션이 같은 축에 값 둘을 가질 수 없다")
-        void oneValuePerAxis() {
-            Long optionId = fixtures.option(productId, "ACTIVE");
-            Long white = fixtures.value(colorAxis, "화이트", 1);
-            fixtures.selection(productId, optionId, colorAxis, black);
-            assertThatThrownBy(() -> fixtures.selection(productId, optionId, colorAxis, white))
-                    .isInstanceOf(DuplicateKeyException.class);
-        }
+        @DisplayName("옵션 칸을 안 넣은 행(다른 모듈 픽스처)은 빈 문서 {} 로, 썸네일 · 멱등 키는 NULL 로 들어간다. NULL 문서는 거절한다")
+        void legacyInsertGetsEmptyDocument() {
+            Long productId = fixtures.product("IN_STOCK", "ACTIVE");
 
-        @Test
-        @DisplayName("다른 축의 값을 이 축에 걸 수 없다")
-        void valueMustBelongToAxis() {
-            Long optionId = fixtures.option(productId, "ACTIVE");
-            assertThatThrownBy(() -> fixtures.selection(productId, optionId, colorAxis, gb256))
-                    .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("fk_option_selection_value");
-        }
-
-        @Test
-        @DisplayName("다른 상품의 축이나 옵션을 섞을 수 없다")
-        void optionAndAxisMustShareProduct() {
-            Long otherProduct = fixtures.product("IN_STOCK", "ACTIVE");
-            Long otherOption = fixtures.option(otherProduct, "ACTIVE");
-            Long otherAxis = fixtures.axis(otherProduct, "color", 0);
-            Long otherBlack = fixtures.value(otherAxis, "블랙", 0);
-            Long optionId = fixtures.option(productId, "ACTIVE");
-
-            // 옵션은 이 상품, 축은 다른 상품
-            assertThatThrownBy(() -> fixtures.selection(productId, optionId, otherAxis, otherBlack))
-                    .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("fk_option_selection_axis");
-            // 축은 이 상품, 옵션은 다른 상품
-            assertThatThrownBy(() -> fixtures.selection(productId, otherOption, colorAxis, black))
-                    .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("fk_option_selection_option");
-            // 둘 다 맞으면 들어간다
-            fixtures.selection(productId, optionId, colorAxis, black);
-            fixtures.selection(productId, optionId, storageAxis, gb256);
-        }
-
-        @Test
-        @DisplayName("같은 축의 값은 정규화값 기준 · 대소문자 무시로 유일하다")
-        void normalizedValueUniquePerAxisIgnoringCase() {
-            assertThatThrownBy(() -> fixtures.value(storageAxis, "256gb", 1))
-                    .isInstanceOf(DuplicateKeyException.class);
-            // 다른 축이면 같은 값이라도 된다
-            Long otherAxis = fixtures.axis(productId, "length", 2);
-            fixtures.value(otherAxis, "256GB", 0);
-        }
-
-        @Test
-        @DisplayName("한 상품에 같은 축 키는 하나다")
-        void axisKeyUniquePerProduct() {
-            assertThatThrownBy(() -> fixtures.axis(productId, "color", 5))
-                    .isInstanceOf(DuplicateKeyException.class);
+            Map<String, Object> row = jdbcTemplate.queryForMap(
+                    "SELECT JSON_TYPE(options) AS type, JSON_LENGTH(options) AS length, thumbnail_url, idempotency_key FROM products WHERE id = ?",
+                    productId);
+            assertThat(row.get("type")).isEqualTo("OBJECT");
+            assertThat(row.get("length")).isEqualTo(0L);
+            assertThat(row.get("thumbnail_url")).isNull();
+            assertThat(row.get("idempotency_key")).isNull();
+            assertThatThrownBy(() -> jdbcTemplate.update("UPDATE products SET options = NULL WHERE id = ?", productId))
+                    .isInstanceOf(DataIntegrityViolationException.class);
         }
 
         @Test
         @DisplayName("같은 조합의 옵션은 둘일 수 없고, 조합 키가 없는 옵션은 여럿이어도 된다")
         void combinationKeyUniquePerProduct() {
-            String key = black + "-" + gb256;
+            Long productId = fixtures.product("IN_STOCK", "ACTIVE");
+            String key = "12-" + ProductOptions.newValueId();
             fixtures.optionWithCombination(productId, key);
             assertThatThrownBy(() -> fixtures.optionWithCombination(productId, key))
                     .isInstanceOf(DuplicateKeyException.class).hasMessageContaining("uq_option_combination");
@@ -205,86 +153,34 @@ class CatalogSchemaTest {
             fixtures.option(productId, "ACTIVE");
             fixtures.option(productId, "ACTIVE");
         }
-    }
-
-    @Nested
-    @DisplayName("사진")
-    class Images {
-
-        Long productId;
-
-        @BeforeEach
-        void setUp() {
-            productId = fixtures.product("IN_STOCK", "ACTIVE");
-        }
 
         @Test
-        @DisplayName("묶음마다 대표는 하나, 대표 아닌 사진은 여러 장")
-        void onePrimaryPerBundle() {
-            fixtures.image(productId, "GALLERY", "black", 0, true);
-            fixtures.image(productId, "GALLERY", "black", 1, false);
-            fixtures.image(productId, "GALLERY", "black", 2, false);
-            assertThatThrownBy(() -> fixtures.image(productId, "GALLERY", "black", 3, true))
-                    .isInstanceOf(DuplicateKeyException.class);
-            // 다른 묶음 · 다른 종류는 각자 대표를 갖는다
-            fixtures.image(productId, "GALLERY", "white", 0, true);
-            fixtures.image(productId, "GALLERY", "", 0, true);
-            fixtures.image(productId, "DETAIL", "spec", 0, true);
-        }
-
-        @Test
-        @DisplayName("묶음 안에서 순서는 겹치지 않는다")
-        void positionUniquePerBundle() {
-            fixtures.image(productId, "GALLERY", "", 0, false);
-            assertThatThrownBy(() -> fixtures.image(productId, "GALLERY", "", 0, false))
-                    .isInstanceOf(DuplicateKeyException.class);
-            fixtures.image(productId, "DETAIL", "", 0, false);
-        }
-
-        @Test
-        @DisplayName("대표 표식은 DB 가 계산하고 앱은 쓸 수 없다")
-        void primaryMarkerIsGenerated() {
-            Long imageId = fixtures.image(productId, "GALLERY", "", 0, true);
-            assertThat(jdbcTemplate.queryForObject(
-                    "SELECT primary_marker FROM product_images WHERE id = ?", Integer.class, imageId)).isEqualTo(1);
-            assertThatThrownBy(() -> jdbcTemplate.update(
-                    "UPDATE product_images SET primary_marker = NULL WHERE id = ?", imageId))
-                    .isInstanceOf(DataAccessException.class).hasMessageContaining("primary_marker");
-        }
-
-        @Test
-        @DisplayName("종류는 GALLERY · DETAIL 만 받는다")
-        void kindIsChecked() {
-            assertThatThrownBy(() -> fixtures.image(productId, "BANNER", "", 0, false))
-                    .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_product_image_kind");
+        @DisplayName("옵션 축 · 값 · 선택 · 사진 · 등록 기록 표는 없다 — 문서 한 칸과 상품 칸으로 옮겼다")
+        void optionTablesAreGone() {
+            assertThat(jdbcTemplate.queryForList("""
+                    SELECT table_name FROM information_schema.tables
+                     WHERE table_schema = DATABASE() AND table_name IN
+                           ('product_option_axes', 'product_option_values', 'product_option_selections', 'product_images', 'product_registrations')
+                    """, String.class)).isEmpty();
         }
     }
 
     @Nested
-    @DisplayName("등록 기록")
+    @DisplayName("등록 · 아웃박스")
     class Registrations {
 
         @Test
-        @DisplayName("멱등 키는 전체에서 유일하고 상품당 한 행이다")
-        void idempotencyKeyAndProductUnique() {
+        @DisplayName("멱등 키는 전체에서 유일하고, 키가 없는 상품은 여럿이어도 된다")
+        void idempotencyKeyUnique() {
             Long productId = fixtures.product("PREORDER", "ACTIVE");
             String key = ShopFixtures.unique();
             fixtures.registration(productId, key);
 
             Long otherProduct = fixtures.product("PREORDER", "ACTIVE");
             assertThatThrownBy(() -> fixtures.registration(otherProduct, key))
-                    .isInstanceOf(DuplicateKeyException.class);
-            assertThatThrownBy(() -> fixtures.registration(productId, ShopFixtures.unique()))
-                    .isInstanceOf(DuplicateKeyException.class);
-        }
-
-        @Test
-        @DisplayName("등록 기록에는 CHECK 가 남지 않는다 — 단계 · 리스 칸을 지우면서 그 제약도 지웠다")
-        void registrationHasNoChecksLeft() {
-            assertThat(jdbcTemplate.queryForList("""
-                    SELECT constraint_name FROM information_schema.table_constraints
-                     WHERE table_schema = DATABASE() AND table_name = 'product_registrations' AND constraint_type = 'CHECK'
-                    """, String.class)).isEmpty();
+                    .isInstanceOf(DuplicateKeyException.class).hasMessageContaining("uq_product_idempotency");
+            assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM products WHERE id IN (?, ?) AND idempotency_key IS NULL",
+                    Long.class, otherProduct, fixtures.product("PREORDER", "ACTIVE"))).isEqualTo(2L);
         }
 
         @Test

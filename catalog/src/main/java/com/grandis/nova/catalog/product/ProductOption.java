@@ -17,12 +17,12 @@ import java.math.BigDecimal;
 import java.util.Objects;
 
 /**
- * 옵션 = 축마다 값 하나를 고른 조합(예: 블랙 / 256GB). 어느 값을 골랐는지는 product_option_selections 가 갖는다.
+ * 옵션 = 축마다 값 하나를 고른 조합(예: 블랙 / 256GB). 어느 값을 골랐는지는 combinationKey(값 id) 와 filterAttributes(필터 축의 정규화값)가 갖는다.
  *
  * price 는 최종가 = 기본가 + Σ(고른 값의 추가금)이다. 직접 고치는 경로는 없다 — 기본가 · 추가금이 바뀌면 다시 계산된다.
- * filterAttributes(color · storage 의 JSON) · title · combinationKey 와 선택 행은 한 {@link OptionCombination} 에서 함께 나온다 —
- * 따로 만들면 어긋날 자리가 열리고 DB 는 못 막는다. preorder 가 접수 때 filterAttributes 를 복사한다.
- * combinationKey 는 고른 값 id 를 오름차순으로 '-' 로 이은 것이라 키를 채운 옵션끼리는 같은 조합을 DB UNIQUE 가 막는다.
+ * filterAttributes(color · storage 의 JSON) · title · combinationKey 는 한 {@link OptionCombination} 에서 함께 나온다 —
+ * 따로 만들면 어긋날 자리가 열리고 DB 는 못 막는다. 목록의 색상 · 용량 필터가 filterAttributes 를 읽는다.
+ * combinationKey 는 고른 값 id 를 짧은 것 먼저 · 같으면 문자열 순으로 '-' 로 이은 것이라 키를 채운 옵션끼리는 같은 조합을 DB UNIQUE 가 막는다.
  * 축이 없는 상품의 옵션({@link OptionCombination#none})은 키가 {@link OptionCombination#STANDALONE_KEY}('')라 같은 UNIQUE 가
  * 상품당 하나를 지킨다 — NULL 은 catalog 밖(다른 모듈 픽스처)에서 넣은 행에만 있고 NULL 끼리는 UNIQUE 가 안 걸린다.
  * 재고는 여기 없다(order 소유 option_inventories). 사전예약 옵션에는 재고 행이 없다.
@@ -73,7 +73,7 @@ public class ProductOption extends BaseEntity {
 
     /**
      * 옵션 하나. 표시명 · 조합 키 · 필터 JSON 을 전부 조합에서 받는다(축이 없는 상품은 {@link OptionCombination#none}).
-     * 판매 상태는 ACTIVE 로 시작한다. 선택 행은 저장 뒤 {@link OptionCombination#selections} 로 같은 트랜잭션에서 만든다.
+     * 판매 상태는 ACTIVE 로 시작한다.
      */
     public static ProductOption of(String sku, BigDecimal price, OptionCombination combination) {
         return new ProductOption(combination.getProductId(), sku, combination.title(), price,

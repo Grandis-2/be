@@ -103,7 +103,7 @@ class AdminProductEditApiTest {
         void sameAmountDoesNotRecompute() throws Exception {
             long productId = registerInStock();
             long black512 = variantIdOf(productId, "블랙 / 512GB");
-            long storage512 = valueIdOf(productId, "storage", "512GB");
+            String storage512 = valueIdOf(productId, "storage", "512GB");
             // 수동 가격 칼럼을 지우기 전에 직접 고쳐 둔 가격 — 공식(1,000,000 + 200,000)과 다르게 남아 있다
             jdbcTemplate.update("UPDATE product_options SET price = 1150000 WHERE id = ?", black512);
 
@@ -143,7 +143,7 @@ class AdminProductEditApiTest {
 
             long variantId = variantIdOf(productId, "블랙 / 256GB");
             expectValidation(editVariant(productId, variantId, "{ \"status\": \"NOPE\" }"), "status");
-            long storage512 = valueIdOf(productId, "storage", "512GB");
+            String storage512 = valueIdOf(productId, "storage", "512GB");
             expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"surcharge\": 0.5 }")), "surcharge");
             expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"value\": \"   \" }")), "value");
             expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"color\", \"value\": \"레드\", \"surcharge\": 0.5 }")), "surcharge");
@@ -161,7 +161,7 @@ class AdminProductEditApiTest {
             expectValidation(edit(productId, "{ \"basePrice\": 1000000000000 }"), "basePrice");
             // 기본가 최댓값이면 512GB 옵션이 최댓값 + 200,000 이 된다
             expectValidation(edit(productId, "{ \"basePrice\": " + max + " }"), "basePrice");
-            long storage512 = valueIdOf(productId, "storage", "512GB");
+            String storage512 = valueIdOf(productId, "storage", "512GB");
             expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"surcharge\": " + max + " }")), "surcharge");
             assertThat(prices(productId)).as("거절된 수정은 아무것도 바꾸지 않는다")
                     .containsEntry("블랙 / 256GB", "1000000").containsEntry("화이트 / 512GB", "1200000");
@@ -233,7 +233,7 @@ class AdminProductEditApiTest {
             expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"color\", \"value\": \"Rose\" }")), "value");
             expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"size\", \"value\": \"L\" }")), "axisKey");
             expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"storage\", \"value\": \"big\" }")), "value");
-            // 앱의 콜레이션 흉내가 못 잡는 같은 값(ß = ss)은 DB UNIQUE(uq_option_value)가 잡고 같은 400 이 된다
+            // 앱의 콜레이션 흉내가 못 잡는 같은 값(ß = ss)은 같은 콜레이션의 DB 판정 질의가 잡고 같은 400 이 된다
             mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"color\", \"value\": \"Strasse\" }"))
                     .andExpect(status().isCreated());
             expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"color\", \"value\": \"Straße\" }")), "value");
@@ -290,7 +290,7 @@ class AdminProductEditApiTest {
             mockMvc.perform(admin(post(PATH + "/{id}/variants", productId)).content("{ \"selections\": " + selections + ", \"sku\": \"L2\" }"))
                     .andExpect(status().isCreated());   // 대조군 — 같은 조합에 짧은 SKU
 
-            long storage256 = valueIdOf(productId, "storage", "256GB");
+            String storage256 = valueIdOf(productId, "storage", "256GB");
             expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage256)).content("{ \"value\": \"256 GB\" }")), "value");
             assertThat(titles(data(adminDetail(productId)))).as("거절된 문구 수정은 표시명을 남기지 않는다")
                     .contains(finish + " / " + size + " / 256GB");
@@ -306,7 +306,7 @@ class AdminProductEditApiTest {
             mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId))
                     .content("{ \"axisKey\": \"color\", \"value\": \"%s\" }".formatted("\u0958".repeat(30))))
                     .andExpect(status().isCreated());   // 대조군 — 정규화해서 60자는 들어간다
-            long black = valueIdOf(productId, "color", "블랙");
+            String black = valueIdOf(productId, "color", "블랙");
             expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, black))
                     .content("{ \"value\": \"%s\" }".formatted(expands))), "value");
             // 용량은 비교 키를 대문자로 접어 표시값보다 길어질 수 있다(ß → SS) — 그런 값은 형식 검사가 400 으로 막는다
@@ -355,7 +355,7 @@ class AdminProductEditApiTest {
             editVariant(notOpened, notOpenedVariant, "{ \"status\": \"PAUSED\" }").andExpect(status().isOk());   // 대조군 — 잠금 전에는 된다
             mockMvc.perform(admin(post(PATH + "/{id}/option-values", preorder)).content("{ \"axisKey\": \"color\", \"value\": \"레드\" }"))
                     .andExpect(status().isConflict());
-            long storage512 = valueIdOf(preorder, "storage", "512GB");
+            String storage512 = valueIdOf(preorder, "storage", "512GB");
             mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", preorder, storage512)).content("{ \"surcharge\": 1 }"))
                     .andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"));
             mockMvc.perform(admin(post(PATH + "/{id}/variants", preorder)).content("{ \"selections\": { \"color\": \"화이트\", \"storage\": \"256GB\" } }"))
@@ -373,7 +373,7 @@ class AdminProductEditApiTest {
         @DisplayName("값 수정 — 이름은 오타까지 고칠 수 있고 옵션 표시명 · 필터 속성 · 사진 묶음이 따라간다. 같은 축의 같은 값 · 용량 형식은 400. 추가금은 그 값을 고른 옵션만 재계산")
         void editOptionValue() throws Exception {
             long productId = registerInStock();
-            long storage512 = valueIdOf(productId, "storage", "512GB");
+            String storage512 = valueIdOf(productId, "storage", "512GB");
             JsonNode renamed = data(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512))
                             .content("{ \"value\": \"512 GB\" }")).andExpect(status().isOk()));
             assertThat(titles(renamed)).contains("블랙 / 512 GB", "화이트 / 512 GB", "블랙 / 256GB");
@@ -382,8 +382,8 @@ class AdminProductEditApiTest {
             expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"value\": \"big\" }")), "value");
             expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{}")), "body");
 
-            // 색상 오타 수정: 화이트 → Whtie → White. 표시명 · 필터 속성(preorder 가 복사하는 JSON) · 사진 묶음 키가 따라간다
-            long white = valueIdOf(productId, "color", "화이트");
+            // 색상 오타 수정: 화이트 → Whtie → White. 표시명 · 필터 속성(목록 필터가 읽는 JSON) · 사진 묶음 키가 따라간다
+            String white = valueIdOf(productId, "color", "화이트");
             mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, white)).content("{ \"value\": \"Whtie\" }")).andExpect(status().isOk());
             JsonNode fixed = data(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, white)).content("{ \"value\": \"White\" }"))
                     .andExpect(status().isOk()));
@@ -404,6 +404,34 @@ class AdminProductEditApiTest {
 
             long other = registerInStock();
             mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", other, storage512)).content("{ \"surcharge\": 1 }")).andExpect(status().isNotFound());
+        }
+
+        @Test
+        @DisplayName("색상 hex — 값 추가 · 수정으로 넣고 바꾸며 대문자로 저장한다. 수정에서 빈 문자열은 지운다. 색상 축이 아니거나 #RRGGBB 가 아니면 hex 400, 없는 값 id 는 404")
+        void colorHex() throws Exception {
+            long productId = registerInStock();
+            JsonNode added = data(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId))
+                    .content("{ \"axisKey\": \"color\", \"value\": \"블루\", \"hex\": \"#aabbcc\" }")).andExpect(status().isCreated()));
+            assertThat(hexOf(added, "블루")).isEqualTo("#AABBCC");
+            String blue = valueIdOf(productId, "color", "블루");
+            assertThat(blue).as("새 값 id 는 32자 16진수").matches("[0-9a-f]{32}");
+
+            JsonNode edited = data(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, blue))
+                    .content("{ \"hex\": \"#112233\" }")).andExpect(status().isOk()));
+            assertThat(hexOf(edited, "블루")).isEqualTo("#112233");
+            assertThat(hexOf(edited, "블랙")).as("다른 값은 그대로").isNull();
+            JsonNode surchargeOnly = data(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, blue))
+                    .content("{ \"surcharge\": 1000 }")).andExpect(status().isOk()));
+            assertThat(hexOf(surchargeOnly, "블루")).as("hex 를 안 보내면 그대로").isEqualTo("#112233");
+            JsonNode cleared = data(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, blue))
+                    .content("{ \"hex\": \"\" }")).andExpect(status().isOk()));
+            assertThat(hexOf(cleared, "블루")).as("빈 문자열은 지운다").isNull();
+
+            expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId))
+                    .content("{ \"axisKey\": \"storage\", \"value\": \"1TB\", \"hex\": \"#000000\" }")), "hex");
+            expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, blue)).content("{ \"hex\": \"red\" }")), "hex");
+            mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, "0".repeat(32))).content("{ \"hex\": \"#000000\" }"))
+                    .andExpect(status().isNotFound());
         }
     }
 
@@ -623,7 +651,7 @@ class AdminProductEditApiTest {
             mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"color\", \"value\": \"레드\" }"))
                     .andExpect(status().isCreated());
             assertThat(changedEvents(productId)).hasSize(2);
-            long storage512 = valueIdOf(productId, "storage", "512GB");
+            String storage512 = valueIdOf(productId, "storage", "512GB");
             mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"surcharge\": 300000 }"))
                     .andExpect(status().isOk());
             assertThat(changedEvents(productId)).hasSize(3);
@@ -822,11 +850,19 @@ class AdminProductEditApiTest {
         throw new AssertionError("no variant " + title);
     }
 
-    private long valueIdOf(long productId, String axisKey, String normalized) {
-        return jdbcTemplate.queryForObject("""
-                SELECT v.id FROM product_option_values v JOIN product_option_axes a ON a.id = v.axis_id
-                 WHERE a.product_id = ? AND a.axis_key = ? AND v.normalized_value = ?
-                """, Long.class, productId, axisKey, normalized);
+    private static String hexOf(JsonNode detail, String normalized) {
+        for (JsonNode axis : detail.get("product").get("optionAxes")) {
+            for (JsonNode value : axis.get("values")) {
+                if (value.get("normalizedValue").asString().equals(normalized)) {
+                    return value.get("hex").isNull() ? null : value.get("hex").asString();
+                }
+            }
+        }
+        throw new AssertionError("no value " + normalized);
+    }
+
+    private String valueIdOf(long productId, String axisKey, String normalized) {
+        return fixtures.valueId(productId, axisKey, normalized);
     }
 
     private static void expectValidation(ResultActions actions, String field) throws Exception {

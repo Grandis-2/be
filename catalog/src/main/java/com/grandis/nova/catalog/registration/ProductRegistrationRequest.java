@@ -7,6 +7,7 @@ import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
@@ -40,6 +41,9 @@ public record ProductRegistrationRequest(
         @Valid Campaign campaign,
         List<@NotNull @Valid ShipmentBatch> shipmentBatches
 ) {
+
+    /** 색상 hex 형식. 등록 · 값 추가 · 값 수정이 같이 쓴다. */
+    public static final String HEX_PATTERN = "#[0-9A-Fa-f]{6}";
 
     /** 축 5개 · 축당 값 20개 · 조합 500개. 조합은 곱이라 상한이 없으면 수백만 행을 만들 수 있다. */
     public static final int MAX_AXES = 5;
@@ -75,8 +79,10 @@ public record ProductRegistrationRequest(
         }
     }
 
+    /** @param hex 색상 스와치(#RRGGBB). color 축의 값만 받고 다른 축이면 400. 없으면 null */
     @Schema(name = "RegistrationOptionValue")
-    public record OptionValue(@NotBlank @Size(max = 60) String value, @DecimalMin("0") BigDecimal surcharge) {
+    public record OptionValue(@NotBlank @Size(max = 60) String value, @DecimalMin("0") BigDecimal surcharge,
+                              @Pattern(regexp = HEX_PATTERN, message = "#RRGGBB 형식이어야 합니다.") String hex) {
         public OptionValue {
             surcharge = surcharge == null ? BigDecimal.ZERO : surcharge;
         }

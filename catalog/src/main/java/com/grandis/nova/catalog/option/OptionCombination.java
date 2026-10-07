@@ -1,46 +1,39 @@
 package com.grandis.nova.catalog.option;
 
-import tools.jackson.databind.json.JsonMapper;
-
+import com.grandis.nova.catalog.option.ProductOptions.Pick;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
- * 옵션 하나가 축마다 고른 값의 묶음. 조합 키 · 표시명 · 필터 JSON · 선택 행이 전부 여기서 나온다 —
- * 호출자가 셋을 따로 넘기면 서로 어긋날 자리가 열리고, DB 는 그 어긋남을 못 막는다(NULL 키끼리는 UNIQUE 가 안 걸린다).
- * 목록 필터는 선택 행을 조인하고 상세 응답은 filter_attributes 를 싣는다 — 둘이 어긋나면 필터에 걸린 옵션과 화면이 보이는 값이 다르다.
+ * 옵션 하나가 축마다 고른 값의 묶음. 조합 키 · 표시명 · 필터 JSON 이 전부 여기서 나온다 — 호출자가 따로 만들면 서로 어긋날 자리가 열린다.
+ * 목록 필터는 filter_attributes 를 읽고 상세 응답은 조합 키로 고른 값을 찾는다 — 둘이 어긋나면 필터에 걸린 옵션과 화면이 보이는 값이 다르다.
  *
- * 검사: 축은 모두 같은 상품 · 축 중복 없음 · 값은 그 축의 값. 완전성(모든 축에 값이 있는가)은 상품의 축 목록을 아는
- * 서비스가 {@link #covers} 로 확인한다.
- * 축이 없는 상품은 {@link #none} — 선택이 없으니 표시명은 받은 그대로고 키는 {@link #STANDALONE_KEY} 다. 옵션의 title · key · JSON 이
- * 나오는 곳은 어느 경우든 여기 하나다.
+ * 고른 값은 상품의 옵션 문서({@link ProductOptions})의 축 순서로 받는다(호출자가 문서의 축을 차례로 돌며 만든다 — {@link ProductOptions#picksOf}).
+ * 축이 없는 상품은 {@link #none} — 선택이 없으니 표시명은 받은 그대로고 키는 {@link #STANDALONE_KEY} 다.
  */
 public final class OptionCombination {
 
-    /** 축이 없는 상품의 옵션이 갖는 조합 키. 값 id 로 만든 키는 늘 숫자와 '-' 라 겹치지 않는다. */
+    /** 축이 없는 상품의 옵션이 갖는 조합 키. 값 id 로 만든 키는 비지 않아 겹치지 않는다. */
     public static final String STANDALONE_KEY = "";
+    static final String KEY_SEPARATOR = "-";
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final String TITLE_SEPARATOR = " / ";
-    private static final String KEY_SEPARATOR = "-";
-
-    /** 축 하나에 고른 값 하나. */
-    public record Pick(ProductOptionAxis axis, ProductOptionValue value) {
-        public Pick {
-            Objects.requireNonNull(axis, "axis");
-            Objects.requireNonNull(value, "value");
-        }
-    }
+    /**
+     * 값 id 의 키 순서 — 짧은 것 먼저, 같으면 문자열 순. 앞자리 0 이 없는 숫자 문자열(표에서 옮겨 온 옛 id)은 숫자 순과 같아 옛 키("9-12")가
+     * 그대로 맞고, 새 32자 id 는 문자열 순이다.
+     */
+    private static final Comparator<String> KEY_ORDER = Comparator.comparingInt(String::length).thenComparing(Comparator.naturalOrder());
 
     private final Long productId;
-    /** 축 position 순. 축이 없는 상품이면 비어 있다. */
+    /** 축 순. 축이 없는 상품이면 비어 있다. */
     private final List<Pick> picks;
     /** 축이 없는 상품의 표시명. 선택이 있으면 null 이고 값에서 만든다. */
     private final String standaloneTitle;
@@ -62,31 +55,34 @@ public final class OptionCombination {
      */
     public static String titleOf(List<String> displayValues, String productTitle) {
         if (displayValues.isEmpty()) {
-            return ProductOptionValue.normalize(productTitle);
+            return OptionText.normalize(productTitle);
         }
         return String.join(TITLE_SEPARATOR, displayValues);
     }
 
+    /** @param picks 축 순서. 같은 축이 두 번이면 거절한다 */
     public static OptionCombination of(Long productId, List<Pick> picks) {
         if (picks == null || picks.isEmpty()) {
             throw new IllegalArgumentException("a combination needs at least one pick");
         }
-        Set<Long> axisIds = new HashSet<>();
+        Set<String> axisKeys = new HashSet<>();
         for (Pick pick : picks) {
-            ProductOptionAxis axis = pick.axis();
-            if (!Objects.equals(axis.getProductId(), productId)) {
-                throw new IllegalArgumentException("axis " + axis.getId() + " belongs to another product");
+            if (!axisKeys.add(pick.axis().key())) {
+                throw new IllegalArgumentException("axis " + pick.axis().key() + " picked twice");
             }
-            if (!axisIds.add(axis.getId())) {
-                throw new IllegalArgumentException("axis " + axis.getId() + " picked twice");
-            }
-            if (!Objects.equals(pick.value().getAxisId(), axis.getId())) {
-                throw new IllegalArgumentException("value " + pick.value().getId() + " is not a value of axis " + axis.getId());
+            if (pick.axis().valueById(pick.value().id()).isEmpty()) {
+                throw new IllegalArgumentException("value " + pick.value().id() + " is not a value of axis " + pick.axis().key());
             }
         }
-        List<Pick> ordered = new ArrayList<>(picks);
-        ordered.sort(Comparator.comparingInt(pick -> pick.axis().getPosition()));
-        return new OptionCombination(productId, ordered, null);
+        return new OptionCombination(productId, picks, null);
+    }
+
+    /** 저장된 조합 키를 값 id 로 되돌린다. 축 없는 옵션('')과 키가 없는 행(다른 모듈 픽스처)은 빈 목록이다. */
+    public static List<String> valueIdsOf(String combinationKey) {
+        if (combinationKey == null || combinationKey.isEmpty()) {
+            return List.of();
+        }
+        return List.of(combinationKey.split(KEY_SEPARATOR));
     }
 
     public boolean isStandalone() {
@@ -102,18 +98,19 @@ public final class OptionCombination {
     }
 
     /** 이 조합이 상품의 축 전부에 값을 갖는가. 축이 나중에 더해지면 기존 옵션은 여기서 거짓이 된다. */
-    public boolean covers(List<ProductOptionAxis> productAxes) {
-        Set<Long> picked = picks.stream().map(pick -> pick.axis().getId()).collect(Collectors.toSet());
-        return productAxes.stream().map(ProductOptionAxis::getId).allMatch(picked::contains);
+    public boolean covers(List<ProductOptions.Axis> productAxes) {
+        Set<String> picked = picks.stream().map(pick -> pick.axis().key()).collect(Collectors.toSet());
+        return productAxes.stream().map(ProductOptions.Axis::key).allMatch(picked::contains);
     }
 
-    /** 값 id 오름차순을 '-' 로 잇는다. 같은 값 집합이면 순서와 무관하게 같은 키다. DB 가 (product_id, key) UNIQUE 로 같은 조합을 막는다. */
+    /** 값 id 를 {@link #KEY_ORDER} 로 정렬해 '-' 로 잇는다. 같은 값 집합이면 같은 키다. DB 가 (product_id, key) UNIQUE 로 같은 조합을 막는다. */
     public String combinationKey() {
         if (isStandalone()) {
             return STANDALONE_KEY;
         }
-        return picks.stream().map(pick -> pick.value().getId()).sorted().map(String::valueOf)
-                .collect(Collectors.joining(KEY_SEPARATOR));
+        List<String> ids = new ArrayList<>(picks.stream().map(pick -> pick.value().id()).toList());
+        ids.sort(KEY_ORDER);
+        return String.join(KEY_SEPARATOR, ids);
     }
 
     /** 축 순서대로 값 표시명을 " / " 로 잇는다(블랙 / 256GB). 축이 없는 상품이면 받은 표시명이다. */
@@ -121,7 +118,7 @@ public final class OptionCombination {
         if (isStandalone()) {
             return standaloneTitle;
         }
-        return titleOf(picks.stream().map(pick -> pick.value().getValue()).toList(), null);
+        return titleOf(picks.stream().map(pick -> pick.value().value()).toList(), null);
     }
 
     /** 목록 필터 축(color · storage)의 정규화값 JSON. 없으면 null. 옵션 상세 응답의 filterAttributes 다. */
@@ -129,16 +126,9 @@ public final class OptionCombination {
         Map<String, String> attributes = new LinkedHashMap<>();
         for (Pick pick : picks) {
             if (pick.axis().isFilterAxis()) {
-                attributes.put(pick.axis().getAxisKey(), pick.value().getNormalizedValue());
+                attributes.put(pick.axis().key(), pick.value().normalized());
             }
         }
         return attributes.isEmpty() ? null : JSON.writeValueAsString(attributes);
-    }
-
-    /** 저장된 옵션 id 로 선택 행을 만든다. 옵션 저장 뒤 같은 트랜잭션에서 저장한다. */
-    public List<ProductOptionSelection> selections(Long optionId) {
-        return picks.stream()
-                .map(pick -> ProductOptionSelection.of(productId, optionId, pick.axis().getId(), pick.value().getId()))
-                .toList();
     }
 }

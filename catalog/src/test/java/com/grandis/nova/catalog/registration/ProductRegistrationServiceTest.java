@@ -58,8 +58,8 @@ class ProductRegistrationServiceTest {
     void previewIsReadInsideTheRegistrationTransaction() {
         String key = "k-" + ShopFixtures.unique();
         Integer[] committedRowsAtPreview = {null};
-        // 미리보기가 등록 기록의 키를 읽는 문장 직전에, 다른 커넥션에서 등록 행이 보이는지 센다
-        SqlHookInspector.before("idempotency_key from product_registrations", () -> committedRowsAtPreview[0] = countOnAnotherConnection(key));
+        // 미리보기가 옵션을 읽는 문장 직전에, 다른 커넥션에서 등록한 상품 행이 보이는지 센다 — 등록은 옵션을 쓰기만 하고 읽지 않는다
+        SqlHookInspector.before("from product_options", () -> committedRowsAtPreview[0] = countOnAnotherConnection(key));
 
         RegistrationOutcome created = service.register(key, inStockRequest());
 
@@ -74,7 +74,7 @@ class ProductRegistrationServiceTest {
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
             return executor.submit(() -> jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM product_registrations WHERE idempotency_key = ?", Integer.class, key)).get();
+                    "SELECT COUNT(*) FROM products WHERE idempotency_key = ?", Integer.class, key)).get();
         } catch (Exception e) {
             throw new IllegalStateException(e);
         } finally {
@@ -93,7 +93,7 @@ class ProductRegistrationServiceTest {
         ProductRegistrationRequest inStock = new ProductRegistrationRequest(categoryId, SaleMode.IN_STOCK, "케이스", null, null,
                 true, new BigDecimal("10000"), null,
                 List.of(new ProductRegistrationRequest.OptionAxis("color", "색상",
-                        List.of(new ProductRegistrationRequest.OptionValue("블랙", null), new ProductRegistrationRequest.OptionValue("화이트", null)))),
+                        List.of(new ProductRegistrationRequest.OptionValue("블랙", null, null), new ProductRegistrationRequest.OptionValue("화이트", null, null)))),
                 List.of(new ProductRegistrationRequest.Combination(Map.of("color", "블랙"), false, null, 5),
                         new ProductRegistrationRequest.Combination(Map.of("color", "화이트"), false, null, 0)),
                 null, null, null);

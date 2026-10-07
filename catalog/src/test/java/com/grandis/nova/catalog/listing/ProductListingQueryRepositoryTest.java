@@ -63,8 +63,8 @@ class ProductListingQueryRepositoryTest {
     void readsButNeverWritesForeignTables() throws Exception {
         Long productId = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "읽기만", tag);
         fixtures.registration(productId);
-        Long axis = fixtures.axis(productId, "color", 0);
-        Long black = fixtures.value(axis, "블랙", 0);
+        ShopFixtures.AxisRef axis = fixtures.axis(productId, "color", 0);
+        String black = fixtures.value(axis, "블랙", 0);
         Long option = fixtures.option(productId, "ACTIVE", new java.math.BigDecimal("1000"));
         fixtures.selection(productId, option, axis, black);
         fixtures.inventory(option, 1, 0, 0);

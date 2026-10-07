@@ -1,16 +1,10 @@
 package com.grandis.nova.catalog.option;
 
-import com.grandis.nova.catalog.option.OptionCombination.Pick;
-import com.grandis.nova.catalog.product.ProductOption;
-import com.grandis.nova.catalog.product.ProductOptionRepository;
-import com.grandis.nova.catalog.support.CatalogIntegrationTest;
-import com.grandis.nova.catalog.support.ShopFixtures;
-import org.junit.jupiter.api.BeforeEach;
+import com.grandis.nova.catalog.option.ProductOptions.Axis;
+import com.grandis.nova.catalog.option.ProductOptions.Pick;
+import com.grandis.nova.catalog.option.ProductOptions.Value;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -19,92 +13,72 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 조합 하나에서 키 · 표시명 · JSON · 선택 행이 같은 재료로 나오는지. id 가 DB 에서 나오므로 통합 시험이다.
+ * 조합 하나에서 키 · 표시명 · 필터 JSON 이 같은 재료로 나오는지. 값 id 는 옵션 문서 안에 있어 DB 없이 판정한다.
  */
-@CatalogIntegrationTest
-@Transactional
 class OptionCombinationTest {
 
-    @Autowired JdbcTemplate jdbcTemplate;
-    @Autowired ProductOptionAxisRepository axes;
-    @Autowired ProductOptionValueRepository values;
-    @Autowired ProductOptionRepository options;
-    @Autowired ProductOptionSelectionRepository selections;
+    static final Long PRODUCT_ID = 1L;
 
-    ShopFixtures fixtures;
-    Long productId;
-    ProductOptionAxis color;
-    ProductOptionAxis storage;
-    ProductOptionAxis length;
-    ProductOptionValue black;
-    ProductOptionValue white;
-    ProductOptionValue gb256;
-    ProductOptionValue twoMeters;
-
-    @BeforeEach
-    void setUp() {
-        fixtures = new ShopFixtures(jdbcTemplate);
-        productId = fixtures.product("IN_STOCK", "ACTIVE");
-        storage = axes.saveAndFlush(ProductOptionAxis.of(productId, "storage", "용량", 1));
-        color = axes.saveAndFlush(ProductOptionAxis.of(productId, "Color", "색상", 0));
-        length = axes.saveAndFlush(ProductOptionAxis.of(productId, "length", "길이", 2));
-        black = values.saveAndFlush(ProductOptionValue.of(color.getId(), "블랙", "블랙", BigDecimal.ZERO, 0));
-        white = values.saveAndFlush(ProductOptionValue.of(color.getId(), "화이트", "화이트", BigDecimal.ZERO, 1));
-        gb256 = values.saveAndFlush(ProductOptionValue.of(storage.getId(), "256GB", "256GB", new BigDecimal("200000"), 0));
-        twoMeters = values.saveAndFlush(ProductOptionValue.of(length.getId(), "2m", "2m", BigDecimal.ZERO, 0));
-    }
+    final Value black = value("12", "블랙");
+    final Value white = value("9", "화이트");
+    final Value gb256 = new Value("0f8c3a1d4b2e4f6a8c9d0e1f2a3b4c5d", "256GB", "256GB", null, new BigDecimal("200000"), List.of());
+    final Value twoMeters = value("3", "2m");
+    final Axis color = new Axis("color", "색상", List.of(black, white));
+    final Axis storage = new Axis("storage", "용량", List.of(gb256));
+    final Axis length = new Axis("length", "길이", List.of(twoMeters));
+    final ProductOptions document = new ProductOptions(List.of(color, storage, length), List.of(), List.of());
 
     @Test
     @DisplayName("표시명은 축 순서, 키는 값 id 순서, 필터 JSON 은 color · storage 만")
     void derivedFieldsComeFromOneSource() {
-        OptionCombination combination = OptionCombination.of(productId, List.of(
-                new Pick(length, twoMeters), new Pick(storage, gb256), new Pick(color, black)));
+        OptionCombination combination = OptionCombination.of(PRODUCT_ID, List.of(
+                new Pick(color, black), new Pick(storage, gb256), new Pick(length, twoMeters)));
 
         assertThat(combination.title()).isEqualTo("블랙 / 256GB / 2m");
-        assertThat(combination.combinationKey()).isEqualTo(sortedKey(black.getId(), gb256.getId(), twoMeters.getId()));
+        assertThat(combination.combinationKey()).isEqualTo("3-12-0f8c3a1d4b2e4f6a8c9d0e1f2a3b4c5d");
         assertThat(combination.filterAttributes()).isEqualTo("{\"color\":\"블랙\",\"storage\":\"256GB\"}");
-        assertThat(combination.covers(axes.findByProductIdOrderByPosition(productId))).isTrue();
+        assertThat(combination.covers(document.axes())).isTrue();
 
-        OptionCombination filterOnly = OptionCombination.of(productId, List.of(new Pick(color, white)));
+        OptionCombination filterOnly = OptionCombination.of(PRODUCT_ID, List.of(new Pick(color, white)));
         assertThat(filterOnly.filterAttributes()).isEqualTo("{\"color\":\"화이트\"}");
-        assertThat(filterOnly.covers(axes.findByProductIdOrderByPosition(productId))).isFalse();
+        assertThat(filterOnly.covers(document.axes())).isFalse();
     }
 
     @Test
-    @DisplayName("같은 축 두 번 · 다른 축의 값 · 다른 상품의 축 · 빈 조합은 거절한다")
+    @DisplayName("옮겨 온 숫자 id 는 숫자 순으로 이어 표 시절 키(9-12)와 같다 — 문자열 순이면 12-9 가 된다")
+    void numericIdsKeepTheOldKeyOrder() {
+        OptionCombination combination = OptionCombination.of(PRODUCT_ID, List.of(
+                new Pick(color, black), new Pick(new Axis("size", "크기", List.of(white)), white)));
+
+        assertThat(combination.combinationKey()).isEqualTo("9-12");
+    }
+
+    @Test
+    @DisplayName("키를 값 id 로 되돌려 문서에서 고르면 축 순서의 같은 조합이 나온다 — 상세 · 재계산이 기대는 왕복")
+    void keyRoundTripsThroughTheDocument() {
+        OptionCombination combination = OptionCombination.of(PRODUCT_ID, List.of(
+                new Pick(color, white), new Pick(storage, gb256), new Pick(length, twoMeters)));
+
+        List<Pick> picks = document.picksOf(OptionCombination.valueIdsOf(combination.combinationKey()));
+
+        assertThat(picks).extracting(pick -> pick.axis().key()).containsExactly("color", "storage", "length");
+        assertThat(OptionCombination.of(PRODUCT_ID, picks).combinationKey()).isEqualTo(combination.combinationKey());
+        assertThat(OptionCombination.valueIdsOf(OptionCombination.STANDALONE_KEY)).isEmpty();
+        assertThat(OptionCombination.valueIdsOf(null)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("같은 축 두 번 · 다른 축의 값 · 빈 조합은 거절한다")
     void invalidCombinationsRejected() {
-        assertThatThrownBy(() -> OptionCombination.of(productId, List.of(new Pick(color, black), new Pick(color, white))))
+        assertThatThrownBy(() -> OptionCombination.of(PRODUCT_ID, List.of(new Pick(color, black), new Pick(color, white))))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("twice");
-        assertThatThrownBy(() -> OptionCombination.of(productId, List.of(new Pick(color, gb256))))
+        assertThatThrownBy(() -> OptionCombination.of(PRODUCT_ID, List.of(new Pick(color, gb256))))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("not a value of axis");
-        Long otherProduct = fixtures.product("IN_STOCK", "ACTIVE");
-        assertThatThrownBy(() -> OptionCombination.of(otherProduct, List.of(new Pick(color, black))))
-                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("another product");
-        assertThatThrownBy(() -> OptionCombination.of(productId, List.of()))
+        assertThatThrownBy(() -> OptionCombination.of(PRODUCT_ID, List.of()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    @Test
-    @DisplayName("저장된 옵션마다 선택 행을 이은 값이 조합 키와 같다 — 셋이 같은 재료에서 나왔다는 불변식")
-    void storedKeyMatchesStoredSelections() {
-        for (ProductOptionValue chosenColor : List.of(black, white)) {
-            OptionCombination combination = OptionCombination.of(productId,
-                    List.of(new Pick(color, chosenColor), new Pick(storage, gb256), new Pick(length, twoMeters)));
-            ProductOption option = options.saveAndFlush(ProductOption.of(
-                    "SKU-" + chosenColor.getId(), new BigDecimal("1200000"), combination));
-            selections.saveAllAndFlush(combination.selections(option.getId()));
-        }
-
-        List<Boolean> consistent = jdbcTemplate.queryForList("""
-                SELECT o.combination_key = GROUP_CONCAT(s.value_id ORDER BY s.value_id SEPARATOR '-') AS same
-                  FROM product_options o JOIN product_option_selections s ON s.option_id = o.id
-                 WHERE o.product_id = ?
-                 GROUP BY o.id
-                """, Boolean.class, productId);
-        assertThat(consistent).hasSize(2).containsOnly(true);
-    }
-
-    private static String sortedKey(Long... ids) {
-        return java.util.Arrays.stream(ids).sorted().map(String::valueOf).collect(java.util.stream.Collectors.joining("-"));
+    private static Value value(String id, String text) {
+        return new Value(id, text, text, null, BigDecimal.ZERO, List.of());
     }
 }

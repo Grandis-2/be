@@ -1,5 +1,12 @@
 package com.grandis.nova.catalog.support;
 
+import com.grandis.nova.catalog.option.OptionCombination;
+import com.grandis.nova.catalog.option.OptionText;
+import com.grandis.nova.catalog.option.ProductOptions;
+import com.grandis.nova.catalog.option.ProductOptions.Axis;
+import com.grandis.nova.catalog.option.ProductOptions.Image;
+import com.grandis.nova.catalog.option.ProductOptions.Section;
+import com.grandis.nova.catalog.option.ProductOptions.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
@@ -10,6 +17,8 @@ import java.sql.Statement;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -76,7 +85,7 @@ public class ShopFixtures {
                 """, categoryId, saleMode, title, tags, status);
     }
 
-    /** 등록 API 로 들어온 상품의 등록 기록. 노출은 이것이 아니라 판매 방식별 준비(회차 · 재고 행)가 정한다 — {@link #campaign} · {@link #inventory}. */
+    /** 등록 API 로 들어온 상품의 멱등 키. 노출은 이것이 아니라 판매 방식별 준비(회차 · 재고 행)가 정한다 — {@link #campaign} · {@link #inventory}. */
     public void registration(Long productId) {
         registration(productId, unique());
     }
@@ -158,48 +167,137 @@ public class ShopFixtures {
                 """, productId, unique(), OPTION_PRICE, combinationKey);
     }
 
-    public Long axis(Long productId, String axisKey, int position) {
-        return insert("""
-                INSERT INTO product_option_axes (product_id, axis_key, label, position, created_at, updated_at)
-                VALUES (?, ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, productId, axisKey, axisKey, position);
+    /** 상품 옵션 문서의 축 하나를 가리킨다 — 축은 문서 안에 있어 행 id 가 없다. */
+    public record AxisRef(Long productId, String key) {
     }
 
-    public Long value(Long axisId, String normalizedValue, int position) {
-        return value(axisId, normalizedValue, normalizedValue, position);
+    /** 축을 position 자리에 끼운다(문서 배열 순서가 곧 표시 순서). 라벨은 키와 같게. */
+    public AxisRef axis(Long productId, String axisKey, int position) {
+        return axis(productId, axisKey, axisKey, position);
+    }
+
+    public AxisRef axis(Long productId, String axisKey, String label, int position) {
+        ProductOptions document = options(productId);
+        List<Axis> axes = new ArrayList<>(document.axes());
+        axes.add(Math.min(position, axes.size()), new Axis(axisKey, label, List.of()));
+        write(productId, new ProductOptions(axes, document.defaultImages(), document.detailImages()));
+        return new AxisRef(productId, axisKey);
+    }
+
+    public String value(AxisRef axis, String normalizedValue, int position) {
+        return value(axis, normalizedValue, normalizedValue, position);
     }
 
     /** 표시값과 정규화값을 갈라 넣는다 — 둘을 같게 넣으면 어느 칸으로 비교하는지 시험이 못 가른다. */
-    public Long value(Long axisId, String displayValue, String normalizedValue, int position) {
-        return insert("""
-                INSERT INTO product_option_values (axis_id, value, normalized_value, surcharge, position, created_at, updated_at)
-                VALUES (?, ?, ?, 0, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, axisId, displayValue, normalizedValue, position);
+    public String value(AxisRef axis, String displayValue, String normalizedValue, int position) {
+        return value(axis, displayValue, normalizedValue, BigDecimal.ZERO, position);
     }
 
-    public void selection(Long productId, Long optionId, Long axisId, Long valueId) {
-        jdbcTemplate.update("""
-                INSERT INTO product_option_selections (product_id, option_id, axis_id, value_id)
-                VALUES (?, ?, ?, ?)
-                """, productId, optionId, axisId, valueId);
+    /** 값을 position 자리에 끼우고 새 값 id 를 돌려준다. */
+    public String value(AxisRef axis, String displayValue, String normalizedValue, BigDecimal surcharge, int position) {
+        String id = ProductOptions.newValueId();
+        ProductOptions document = options(axis.productId());
+        Axis target = document.axis(axis.key()).orElseThrow();
+        List<Value> values = new ArrayList<>(target.values());
+        values.add(Math.min(position, values.size()), new Value(id, displayValue, normalizedValue, null, surcharge, List.of()));
+        write(axis.productId(), document.withAxis(new Axis(target.key(), target.label(), values)));
+        return id;
     }
 
-    public Long image(Long productId, String kind, String bundleKey, int position, boolean primary) {
-        return image(productId, kind, bundleKey, position, primary, "https://img.example/x.jpg");
+    /**
+     * 옵션이 그 값을 골랐다 — 조합 키에 값 id 를 더하고, 필터 축(color · storage)이면 필터 JSON 에 정규화값을 넣는다. 앱이 같은 조합에서 둘을
+     * 같이 쓰는 것과 같은 모양이다(목록 필터는 필터 JSON, 상세는 조합 키를 읽는다).
+     */
+    public void selection(Long productId, Long optionId, AxisRef axis, String valueId) {
+        ProductOptions document = options(productId);
+        Value value = document.axis(axis.key()).flatMap(a -> a.valueById(valueId)).orElseThrow();
+        String key = jdbcTemplate.queryForObject("SELECT combination_key FROM product_options WHERE id = ?", String.class, optionId);
+        List<String> ids = new ArrayList<>(OptionCombination.valueIdsOf(key));
+        ids.add(valueId);
+        // 키 규칙은 앱의 것 그대로 — 문서에서 고른 값으로 조합을 만들어 키를 받는다
+        jdbcTemplate.update("UPDATE product_options SET combination_key = ? WHERE id = ?",
+                OptionCombination.of(productId, document.picksOf(ids)).combinationKey(), optionId);
+        if (OptionText.isFilterAxis(axis.key())) {
+            jdbcTemplate.update("""
+                    UPDATE product_options SET filter_attributes = JSON_SET(COALESCE(filter_attributes, JSON_OBJECT()), CONCAT('$.', ?), ?)
+                     WHERE id = ?""", axis.key(), value.normalized(), optionId);
+        }
     }
 
-    public Long image(Long productId, String kind, String bundleKey, int position, boolean primary, String url) {
-        return insert("""
-                INSERT INTO product_images (product_id, kind, bundle_key, position, url, is_primary, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, productId, kind, bundleKey, position, url, primary);
+    public void image(Long productId, String kind, String bundleKey, int position, boolean primary) {
+        image(productId, kind, bundleKey, position, primary, "https://img.example/x.jpg");
     }
 
+    /**
+     * 사진 한 장을 position 자리에. GALLERY 의 묶음 키가 ''이면 기본 묶음, 아니면 그 정규화값의 색상 값 아래, DETAIL 은 그 영역 아래.
+     * 사진은 색상 값 아래에 살므로 color 축 · 그 값이 없으면 끝에 만든다(넣은 순서가 곧 색상 순서다). 썸네일 칸도 앱과 같은 규칙으로 다시 쓴다.
+     */
+    public void image(Long productId, String kind, String bundleKey, int position, boolean primary, String url) {
+        ProductOptions document = options(productId);
+        Image image = new Image(url, primary);
+        if ("DETAIL".equals(kind)) {
+            List<Section> sections = new ArrayList<>(document.detailImages());
+            int at = indexOfSection(sections, bundleKey);
+            List<Image> images = new ArrayList<>(at < 0 ? List.of() : sections.get(at).images());
+            images.add(Math.min(position, images.size()), image);
+            if (at < 0) {
+                sections.add(new Section(bundleKey, images));
+            } else {
+                sections.set(at, new Section(bundleKey, images));
+            }
+            write(productId, new ProductOptions(document.axes(), document.defaultImages(), sections));
+        } else if (bundleKey.isEmpty()) {
+            List<Image> images = new ArrayList<>(document.defaultImages());
+            images.add(Math.min(position, images.size()), image);
+            write(productId, new ProductOptions(document.axes(), images, document.detailImages()));
+        } else {
+            if (document.axis(OptionText.COLOR).isEmpty()) {
+                axis(productId, OptionText.COLOR, Integer.MAX_VALUE);
+                document = options(productId);
+            }
+            if (document.axis(OptionText.COLOR).flatMap(a -> a.valueByNormalized(bundleKey)).isEmpty()) {
+                value(new AxisRef(productId, OptionText.COLOR), bundleKey, Integer.MAX_VALUE);
+                document = options(productId);
+            }
+            Axis color = document.axis(OptionText.COLOR).orElseThrow();
+            List<Value> values = color.values().stream().map(v -> {
+                if (!v.normalized().equals(bundleKey)) {
+                    return v;
+                }
+                List<Image> images = new ArrayList<>(v.images());
+                images.add(Math.min(position, images.size()), image);
+                return new Value(v.id(), v.value(), v.normalized(), v.hex(), v.surcharge(), images);
+            }).toList();
+            write(productId, document.withAxis(new Axis(color.key(), color.label(), values)));
+        }
+    }
+
+    /** 등록 API 로 들어온 상품의 멱등 키. */
     public void registration(Long productId, String idempotencyKey) {
-        jdbcTemplate.update("""
-                INSERT INTO product_registrations (product_id, idempotency_key, created_at, updated_at)
-                VALUES (?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, productId, idempotencyKey);
+        jdbcTemplate.update("UPDATE products SET idempotency_key = ? WHERE id = ?", idempotencyKey, productId);
+    }
+
+    /** 그 축에서 정규화값으로 값 id 를 찾는다. */
+    public String valueId(Long productId, String axisKey, String normalized) {
+        return options(productId).axis(axisKey).flatMap(axis -> axis.valueByNormalized(normalized)).orElseThrow().id();
+    }
+
+    public ProductOptions options(Long productId) {
+        return ProductOptions.parse(jdbcTemplate.queryForObject("SELECT options FROM products WHERE id = ?", String.class, productId));
+    }
+
+    private void write(Long productId, ProductOptions document) {
+        jdbcTemplate.update("UPDATE products SET options = ?, thumbnail_url = ? WHERE id = ?",
+                document.toJson(), document.thumbnailUrl(), productId);
+    }
+
+    private static int indexOfSection(List<Section> sections, String section) {
+        for (int i = 0; i < sections.size(); i++) {
+            if (sections.get(i).section().equals(section)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     public static String unique() {
