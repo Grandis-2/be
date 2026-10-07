@@ -26,7 +26,7 @@ class OptionCombinationTest {
     final Axis color = new Axis("color", "색상", List.of(black, white));
     final Axis storage = new Axis("storage", "용량", List.of(gb256));
     final Axis length = new Axis("length", "길이", List.of(twoMeters));
-    final ProductOptions document = new ProductOptions(List.of(color, storage, length), List.of(), List.of());
+    final ProductOptions document = new ProductOptions(List.of(color, storage, length), List.of(), List.of(), ProductOptions.Warranty.NONE);
 
     @Test
     @DisplayName("표시명은 축 순서, 키는 값 id 순서, 필터 JSON 은 color · storage 만")

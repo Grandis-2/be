@@ -88,17 +88,19 @@ class CatalogSchemaTest {
     class LegacyInserts {
 
         @Test
-        @DisplayName("상품은 공개 · 기본가 0 · 보증 없음으로, 옵션에는 수동 가격 표시 · 표시 속성 칼럼이 없다")
+        @DisplayName("상품은 공개 · 기본가 0 · 보증 키 없는 문서로, 보증 · 수동 가격 표시 · 표시 속성 칼럼이 없다")
         void defaultsKeepOtherModulesFixturesValid() {
             Long productId = fixtures.product("IN_STOCK", "ACTIVE");
             Long optionId = fixtures.option(productId, "ACTIVE");
 
             Map<String, Object> product = jdbcTemplate.queryForMap(
-                    "SELECT visible, base_price, warranty_offered, warranty_surcharge FROM products WHERE id = ?", productId);
+                    "SELECT visible, base_price, JSON_CONTAINS_PATH(options, 'one', '$.warranty') AS has_warranty FROM products WHERE id = ?", productId);
             assertThat(product.get("visible")).isEqualTo(true);
             assertThat((BigDecimal) product.get("base_price")).isEqualByComparingTo("0");
-            assertThat(product.get("warranty_offered")).isEqualTo(false);
-            assertThat((BigDecimal) product.get("warranty_surcharge")).isEqualByComparingTo("0");
+            assertThat(product.get("has_warranty")).as("옵션 문서에 보증 키가 없다 — 앱은 보증 없음으로 읽는다").isEqualTo(0L);
+            // 보증은 옵션 문서로 옮겼다(2026-10-08)
+            assertThat(columnExists("products", "warranty_offered")).isFalse();
+            assertThat(columnExists("products", "warranty_surcharge")).isFalse();
 
             assertThat(jdbcTemplate.queryForObject("SELECT price FROM product_options WHERE id = ?", BigDecimal.class, optionId)).isNotNull();
             // 수동 가격 표시는 없앴다(2026-10-06) — 다시 생기면 재계산이 건너뛰는 옵션이 생긴다
@@ -108,14 +110,12 @@ class CatalogSchemaTest {
         }
 
         @Test
-        @DisplayName("기본가 · 보증 추가금은 음수를 거부한다")
+        @DisplayName("기본가는 음수를 거부한다")
         void negativeAmountsRejected() {
             Long productId = fixtures.product("IN_STOCK", "ACTIVE");
             // MySQL 의 CHECK 위반(3819)은 Spring 이 분류하지 않아 Uncategorized 로 온다. 제약 이름으로 단언한다.
             assertThatThrownBy(() -> jdbcTemplate.update("UPDATE products SET base_price = -1 WHERE id = ?", productId))
                     .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_product_base_price");
-            assertThatThrownBy(() -> jdbcTemplate.update("UPDATE products SET warranty_surcharge = -1 WHERE id = ?", productId))
-                    .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_product_warranty_surcharge");
         }
     }
 
