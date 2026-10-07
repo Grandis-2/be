@@ -10,6 +10,8 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.UUID;
+
 /**
  * 서비스 간 내부 조회. preorder 의 CatalogClient 가 회차 설정과 접수 때 부른다. 계약: contracts/preorder-internal.md.
  *
@@ -30,7 +32,7 @@ public class InternalProductController {
 
     @Operation(summary = "상품 옵션 · 가격 조회(preorder 가 부른다)")
     @GetMapping("/{productId}/options")
-    public ApiResponse<ProductOptionsView> productOptions(@PathVariable Long productId) {
+    public ApiResponse<ProductOptionsView> productOptions(@PathVariable UUID productId) {
         return ApiResponse.ok(queryService.findProductOptions(productId));
     }
 }

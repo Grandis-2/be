@@ -8,6 +8,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * 상품 상세. 배송 차수는 싣지 않는다 — preorder 의 공개 API 를 프론트가 부른다(catalog 는 shipment_batches 를 읽지 않는다).
@@ -20,8 +21,8 @@ import java.util.Map;
  * @param variants       옵션 전체. 판매 중지 옵션도 상태 그대로 싣는다 — 화면이 선택을 막는다
  */
 public record ProductDetailView(
-        Long productId,
-        Long categoryId,
+        UUID productId,
+        UUID categoryId,
         SaleMode saleMode,
         String title,
         String description,
@@ -60,7 +61,7 @@ public record ProductDetailView(
      * @param availableQuantity 일반 상품의 가용 수량(총량 − 선점 − 판매, 재고 행이 없으면 0). 사전예약은 null(무제한 접수)
      */
     public record Variant(
-            Long variantId,
+            UUID variantId,
             String sku,
             String title,
             BigDecimal price,

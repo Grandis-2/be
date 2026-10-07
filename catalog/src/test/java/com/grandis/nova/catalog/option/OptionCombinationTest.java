@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -17,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class OptionCombinationTest {
 
-    static final Long PRODUCT_ID = 1L;
+    static final UUID PRODUCT_ID = UUID.fromString("00000000-0000-7000-8000-000000000001");
 
     final Value black = value("12", "블랙");
     final Value white = value("9", "화이트");

@@ -10,10 +10,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
+import com.grandis.nova.common.UuidBinary;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -44,7 +46,7 @@ class AdminProductEditApiTest {
     @Autowired JdbcTemplate jdbcTemplate;
 
     ShopFixtures fixtures;
-    Long categoryId;
+    UUID categoryId;
 
     @BeforeEach
     void setUp() {
@@ -59,7 +61,7 @@ class AdminProductEditApiTest {
         @Test
         @DisplayName("보낸 칸만 바뀐다 — 제목만 보내면 설명 · 태그는 그대로. 빈 본문 · 모르는 칸 · 긴 제목은 400")
         void partialUpdate() throws Exception {
-            long productId = registerInStock();
+            UUID productId = registerInStock();
 
             JsonNode edited = data(edit(productId, """
                     { "title": "Nova 1 Pro" }
@@ -72,13 +74,13 @@ class AdminProductEditApiTest {
             expectValidation(edit(productId, "{ \"titel\": \"x\" }"), "titel");
             expectValidation(edit(productId, "{ \"title\": \"" + "가".repeat(101) + "\" }"), "title");
             expectValidation(edit(productId, "{ \"warranty\": { \"offered\": false, \"surcharge\": 1000 } }"), "warranty.surcharge");
-            edit(999_999_999L, "{ \"title\": \"x\" }").andExpect(status().isNotFound()).andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
+            edit(UUID.randomUUID(), "{ \"title\": \"x\" }").andExpect(status().isNotFound()).andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
         }
 
         @Test
         @DisplayName("기본 가격이 바뀌면 모든 옵션이 기본가 + 추가금으로 재계산된다. 보증도 함께 고칠 수 있다")
         void basePriceChangeRecomputesEveryOption() throws Exception {
-            long productId = registerInStock();
+            UUID productId = registerInStock();
             assertThat(prices(productId)).containsEntry("블랙 / 256GB", "1000000").containsEntry("블랙 / 512GB", "1200000")
                     .containsEntry("화이트 / 256GB", "1000000").containsEntry("화이트 / 512GB", "1200000");
 
@@ -101,11 +103,11 @@ class AdminProductEditApiTest {
         @Test
         @DisplayName("기본가 · 추가금을 같은 값으로 다시 보내면 옵션 가격을 다시 계산하지 않는다 — 값이 실제로 바뀔 때만 계산값으로 맞춘다")
         void sameAmountDoesNotRecompute() throws Exception {
-            long productId = registerInStock();
-            long black512 = variantIdOf(productId, "블랙 / 512GB");
+            UUID productId = registerInStock();
+            UUID black512 = variantIdOf(productId, "블랙 / 512GB");
             String storage512 = valueIdOf(productId, "storage", "512GB");
             // 수동 가격 칼럼을 지우기 전에 직접 고쳐 둔 가격 — 공식(1,000,000 + 200,000)과 다르게 남아 있다
-            jdbcTemplate.update("UPDATE product_options SET price = 1150000 WHERE id = ?", black512);
+            jdbcTemplate.update("UPDATE product_options SET price = 1150000 WHERE id = ?", UuidBinary.toBytes(black512));
 
             edit(productId, "{ \"basePrice\": 1000000 }").andExpect(status().isOk());
             mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"surcharge\": 200000 }"))
@@ -121,27 +123,27 @@ class AdminProductEditApiTest {
         @Test
         @DisplayName("축 없는 상품은 옵션 표시명이 상품 제목이다 — 제목을 고치면 옵션 표시명도 따라간다(preorder 가 읽는 내부 옵션 조회도 같은 값)")
         void standaloneOptionFollowsProductTitle() throws Exception {
-            long productId = registerRaw("""
-                    { "categoryId": %d, "saleMode": "IN_STOCK", "title": "Solo Case", "visible": false, "basePrice": 9000,
+            UUID productId = registerRaw("""
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Solo Case", "visible": false, "basePrice": 9000,
                       "combinations": [ { "selections": {}, "stock": 7 } ] }
                     """.formatted(categoryId));
             edit(productId, "{ \"title\": \"Solo Case Pro\" }").andExpect(status().isOk());
             assertThat(titles(data(adminDetail(productId)))).containsExactly("Solo Case Pro");
-            assertThat(jdbcTemplate.queryForObject("SELECT title FROM product_options WHERE product_id = ?", String.class, productId))
+            assertThat(jdbcTemplate.queryForObject("SELECT title FROM product_options WHERE product_id = ?", String.class, UuidBinary.toBytes(productId)))
                     .isEqualTo("Solo Case Pro");
         }
 
         @Test
         @DisplayName("입력이 틀리면 그 칸의 400 이다(500 이 아니다) — 소수 금액 · 공백뿐인 제목 · 모르는 enum · 숫자 자리의 문자열")
         void malformedInputIsFieldError() throws Exception {
-            long productId = registerInStock();
+            UUID productId = registerInStock();
             expectValidation(edit(productId, "{ \"basePrice\": 1000.5 }"), "basePrice");
             expectValidation(edit(productId, "{ \"warranty\": { \"offered\": true, \"surcharge\": 0.5 } }"), "warranty.surcharge");
             expectValidation(edit(productId, "{ \"title\": \"   \" }"), "title");
             expectValidation(edit(productId, "{ \"basePrice\": \"abc\" }"), "basePrice");
             edit(productId, "{ \"basePrice\": 1000000.00 }").andExpect(status().isOk());   // 대조군 — 끝자리 0 은 정수 원
 
-            long variantId = variantIdOf(productId, "블랙 / 256GB");
+            UUID variantId = variantIdOf(productId, "블랙 / 256GB");
             expectValidation(editVariant(productId, variantId, "{ \"status\": \"NOPE\" }"), "status");
             String storage512 = valueIdOf(productId, "storage", "512GB");
             expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512)).content("{ \"surcharge\": 0.5 }")), "surcharge");
@@ -156,7 +158,7 @@ class AdminProductEditApiTest {
         @Test
         @DisplayName("금액 상한(999,999,999,999)을 넘는 수정은 원인 칸의 400 이고 아무것도 바뀌지 않는다 — 기본가 · 추가금 재계산 · 옵션 추가")
         void amountsAboveColumnLimitAreFieldErrors() throws Exception {
-            long productId = registerInStock();
+            UUID productId = registerInStock();
             String max = "999999999999";
             expectValidation(edit(productId, "{ \"basePrice\": 1000000000000 }"), "basePrice");
             // 기본가 최댓값이면 512GB 옵션이 최댓값 + 200,000 이 된다
@@ -179,7 +181,7 @@ class AdminProductEditApiTest {
         @Test
         @DisplayName("정수 원 금액은 받은 표기와 상관없이 소수점 없는 숫자로 저장 · 응답한다 — 1e3 · 2000.0 · 1.5e3 은 1000 · 2000 · 1500, 재계산한 옵션 가격도")
         void wholeWonIsNormalizedToPlainInteger() throws Exception {
-            long productId = registerInStock();
+            UUID productId = registerInStock();
             JsonNode product = data(edit(productId, "{ \"basePrice\": 1e3, \"warranty\": { \"offered\": true, \"surcharge\": 2000.0 } }")
                     .andExpect(status().isOk())).get("product");
             assertThat(product.get("basePrice").toString()).isEqualTo("1000");
@@ -197,13 +199,13 @@ class AdminProductEditApiTest {
         @Test
         @DisplayName("사전예약은 오픈 전에는 고칠 수 있고 오픈 뒤(회차 opens_at ≤ 지금)에는 409 STATE_CONFLICT — 회차가 없으면 오픈 전이다")
         void preorderIsFrozenAfterOpen() throws Exception {
-            long productId = registerPreorder();
+            UUID productId = registerPreorder();
             edit(productId, "{ \"title\": \"회차 없음\" }").andExpect(status().isOk());
             Instant now = Instant.now();
             fixtures.campaign(productId, now.plus(HOUR), now.plus(HOUR.multipliedBy(2)));
             edit(productId, "{ \"title\": \"오픈 전\" }").andExpect(status().isOk());
 
-            long opened = registerPreorder();
+            UUID opened = registerPreorder();
             fixtures.campaign(opened, now.minus(HOUR), now.plus(HOUR));
             for (String body : new String[] {"{ \"title\": \"오픈 뒤\" }", "{ \"basePrice\": 1 }", "{ \"description\": \"x\" }"}) {
                 edit(opened, body).andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"));
@@ -220,7 +222,7 @@ class AdminProductEditApiTest {
         @Test
         @DisplayName("값 추가는 옵션을 만들지 않고, 그 값으로 조합을 추가하면 바로 판매 중 · 기본 SKU · 계산 가격이다. 중복 · 없는 축 · 용량 형식 · 없는 값 · 축 누락 · 같은 조합은 400")
         void addValueThenVariant() throws Exception {
-            long productId = registerInStock();
+            UUID productId = registerInStock();
             JsonNode afterValue = data(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId))
                             .content("{ \"axisKey\": \"Color\", \"value\": \"레드\" }"))
                     .andExpect(status().isCreated()));
@@ -274,8 +276,8 @@ class AdminProductEditApiTest {
         void derivedLengthsAreBounded() throws Exception {
             String finish = "가".repeat(60);
             String size = "나".repeat(49);   // 60 + " / " + 49 + " / " + "256GB" = 120 — 상한 그대로
-            long productId = registerRaw("""
-                    { "categoryId": %d, "saleMode": "IN_STOCK", "title": "Long", "visible": false, "basePrice": 1000,
+            UUID productId = registerRaw("""
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "UUID", "visible": false, "basePrice": 1000,
                       "optionAxes": [
                         { "key": "finish", "label": "마감", "values": [ { "value": "%s" } ] },
                         { "key": "size", "label": "크기", "values": [ { "value": "%s" } ] },
@@ -300,7 +302,7 @@ class AdminProductEditApiTest {
         @DisplayName("정규화(NFC)로 늘어난 글자도 칼럼을 넘으면 그 칸의 400(500 이 아니다) — 값 추가 · 값 이름 60자, 축 없는 상품의 제목이 만드는 옵션 표시명 120자")
         void normalizedTextMustFitColumns() throws Exception {
             String expands = "\u0958".repeat(60);   // 받은 글자는 60자지만 NFC 는 한 글자를 두 글자(U+0915 U+093C)로 푼다 — 120자
-            long productId = registerInStock();
+            UUID productId = registerInStock();
             expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId))
                     .content("{ \"axisKey\": \"color\", \"value\": \"%s\" }".formatted(expands))), "value");
             mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId))
@@ -313,22 +315,22 @@ class AdminProductEditApiTest {
             expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId))
                     .content("{ \"axisKey\": \"storage\", \"value\": \"%s\" }".formatted("ß".repeat(60)))), "value");
 
-            long solo = registerRaw("""
-                    { "categoryId": %d, "saleMode": "IN_STOCK", "title": "Solo", "visible": false, "basePrice": 9000,
+            UUID solo = registerRaw("""
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Solo", "visible": false, "basePrice": 9000,
                       "combinations": [ { "selections": {}, "stock": 1 } ] }
                     """.formatted(categoryId));
             expectValidation(edit(solo, "{ \"title\": \"%s\" }".formatted("\u0958".repeat(100))), "title");
-            assertThat(jdbcTemplate.queryForObject("SELECT title FROM products WHERE id = ?", String.class, solo)).isEqualTo("Solo");
+            assertThat(jdbcTemplate.queryForObject("SELECT title FROM products WHERE id = ?", String.class, UuidBinary.toBytes(solo))).isEqualTo("Solo");
             edit(solo, "{ \"title\": \"%s\" }".formatted(expands)).andExpect(status().isOk());   // 대조군 — 표시명 120자는 들어간다
-            assertThat(jdbcTemplate.queryForObject("SELECT CHAR_LENGTH(title) FROM product_options WHERE product_id = ?", Integer.class, solo))
+            assertThat(jdbcTemplate.queryForObject("SELECT CHAR_LENGTH(title) FROM product_options WHERE product_id = ?", Integer.class, UuidBinary.toBytes(solo)))
                     .isEqualTo(120);
         }
 
         @Test
         @DisplayName("옵션 수정은 판매 상태(판매 중지 · 재개)만 — 가격 · 가격 되돌리기는 모르는 칸 400. 다른 상품의 옵션 404, 빈 본문 400. 사전예약은 오픈 3분 전부터 409")
         void editVariantStatusOnly() throws Exception {
-            long productId = registerInStock();
-            long variantId = variantIdOf(productId, "블랙 / 256GB");
+            UUID productId = registerInStock();
+            UUID variantId = variantIdOf(productId, "블랙 / 256GB");
             // 옵션 가격은 늘 기본가 + 추가금이다 — 직접 고치거나 되돌리는 칸은 없다(2026-10-06 결정)
             expectValidation(editVariant(productId, variantId, "{ \"price\": 1234000 }"), "price");
             expectValidation(editVariant(productId, variantId, "{ \"resetPrice\": true }"), "resetPrice");
@@ -338,19 +340,19 @@ class AdminProductEditApiTest {
             assertThat(paused.get("status").asString()).isEqualTo("PAUSED");
             expectValidation(editVariant(productId, variantId, "{}"), "body");
             expectValidation(editVariant(productId, variantId, "{ \"sku\": \"NEW\" }"), "sku");
-            long other = registerInStock();
+            UUID other = registerInStock();
             editVariant(other, variantId, "{ \"status\": \"ACTIVE\" }").andExpect(status().isNotFound());
 
-            long preorder = registerPreorder();
-            long preorderVariant = variantIdOf(preorder, "블랙 / 256GB");
+            UUID preorder = registerPreorder();
+            UUID preorderVariant = variantIdOf(preorder, "블랙 / 256GB");
             Instant now = Instant.now();
             fixtures.campaign(preorder, now.minus(HOUR), now.plus(HOUR));
             editVariant(preorder, preorderVariant, "{ \"status\": \"PAUSED\" }")
                     .andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"));
-            assertThat(jdbcTemplate.queryForObject("SELECT status FROM product_options WHERE id = ?", String.class, preorderVariant))
+            assertThat(jdbcTemplate.queryForObject("SELECT status FROM product_options WHERE id = ?", String.class, UuidBinary.toBytes(preorderVariant)))
                     .as("오픈 뒤 판매 중지는 막혀 판매 상태 그대로").isEqualTo("ACTIVE");
-            long notOpened = registerPreorder();
-            long notOpenedVariant = variantIdOf(notOpened, "블랙 / 256GB");
+            UUID notOpened = registerPreorder();
+            UUID notOpenedVariant = variantIdOf(notOpened, "블랙 / 256GB");
             fixtures.campaign(notOpened, now.plus(HOUR), now.plus(HOUR.multipliedBy(2)));
             editVariant(notOpened, notOpenedVariant, "{ \"status\": \"PAUSED\" }").andExpect(status().isOk());   // 대조군 — 잠금 전에는 된다
             mockMvc.perform(admin(post(PATH + "/{id}/option-values", preorder)).content("{ \"axisKey\": \"color\", \"value\": \"레드\" }"))
@@ -372,7 +374,7 @@ class AdminProductEditApiTest {
         @Test
         @DisplayName("값 수정 — 이름은 오타까지 고칠 수 있고 옵션 표시명 · 필터 속성 · 사진 묶음이 따라간다. 같은 축의 같은 값 · 용량 형식은 400. 추가금은 그 값을 고른 옵션만 재계산")
         void editOptionValue() throws Exception {
-            long productId = registerInStock();
+            UUID productId = registerInStock();
             String storage512 = valueIdOf(productId, "storage", "512GB");
             JsonNode renamed = data(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, storage512))
                             .content("{ \"value\": \"512 GB\" }")).andExpect(status().isOk()));
@@ -389,7 +391,7 @@ class AdminProductEditApiTest {
                     .andExpect(status().isOk()));
             assertThat(titles(fixed)).contains("White / 256GB", "White / 512 GB").doesNotContain("화이트 / 256GB");
             assertThat(jdbcTemplate.queryForList("SELECT JSON_UNQUOTE(JSON_EXTRACT(filter_attributes, '$.color')) FROM product_options WHERE product_id = ? AND title LIKE 'White%'",
-                    String.class, productId)).containsExactly("White", "White");
+                    String.class, UuidBinary.toBytes(productId))).containsExactly("White", "White");
             List<String> bundles = new ArrayList<>();
             fixed.get("product").get("images").get("gallery").forEach(b -> bundles.add(b.get("bundleKey").asString()));
             assertThat(bundles).as("사진 묶음 키가 새 이름을 따라간다 — 옛 이름으로 남으면 사진이 어느 색상에도 안 붙는다").containsExactlyInAnyOrder("블랙", "White");
@@ -402,14 +404,14 @@ class AdminProductEditApiTest {
                     .containsEntry("블랙 / 512 GB", "1300000").containsEntry("WHITE / 512 GB", "1300000")
                     .containsEntry("블랙 / 256GB", "1000000").containsEntry("WHITE / 256GB", "1000000");
 
-            long other = registerInStock();
+            UUID other = registerInStock();
             mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", other, storage512)).content("{ \"surcharge\": 1 }")).andExpect(status().isNotFound());
         }
 
         @Test
         @DisplayName("색상 hex — 값 추가 · 수정으로 넣고 바꾸며 대문자로 저장한다. 수정에서 빈 문자열은 지운다. 색상 축이 아니거나 #RRGGBB 가 아니면 hex 400, 없는 값 id 는 404")
         void colorHex() throws Exception {
-            long productId = registerInStock();
+            UUID productId = registerInStock();
             JsonNode added = data(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId))
                     .content("{ \"axisKey\": \"color\", \"value\": \"블루\", \"hex\": \"#aabbcc\" }")).andExpect(status().isCreated()));
             assertThat(hexOf(added, "블루")).isEqualTo("#AABBCC");
@@ -442,12 +444,12 @@ class AdminProductEditApiTest {
         @Test
         @DisplayName("일반 상품 판매 중지는 회원 목록에서 빠지고 상세는 200 에 PAUSED 다. 같은 상태를 다시 보내도 200, 재개하면 목록에 돌아온다")
         void inStockPauseAndResume() throws Exception {
-            long productId = readyInStock();
+            UUID productId = readyInStock();
             String tag = tagOf(productId);
             assertThat(memberListIds(tag)).containsExactly(productId);
 
             JsonNode paused = data(saleStatus(productId, "PAUSED").andExpect(status().isOk()));
-            assertThat(paused.get("productId").asLong()).isEqualTo(productId);
+            assertThat(paused.get("productId").asString()).isEqualTo(productId.toString());
             assertThat(paused.get("status").asString()).isEqualTo("PAUSED");
             assertThat(paused.get("campaignCancellationRequested").asBoolean()).isFalse();
             assertThat(memberListIds(tag)).as("판매 중지는 목록에서 숨긴다").isEmpty();
@@ -464,15 +466,15 @@ class AdminProductEditApiTest {
         @DisplayName("사전예약 판매 상태는 오픈 3분 전까지만 바꾼다 — 오픈 5분 전 · 회차 없음은 200, 오픈 2분 전은 409 · 오픈 뒤 ACTIVE 는 409 이고 상태는 그대로")
         void preorderStatusFreezesThreeMinutesBeforeOpen() throws Exception {
             Instant now = Instant.now();
-            long noCampaign = registerPreorder();
+            UUID noCampaign = registerPreorder();
             saleStatus(noCampaign, "PAUSED").andExpect(status().isOk());
 
-            long beforeFreeze = registerPreorder();
+            UUID beforeFreeze = registerPreorder();
             fixtures.campaign(beforeFreeze, now.plus(Duration.ofMinutes(5)), now.plus(HOUR));
             saleStatus(beforeFreeze, "PAUSED").andExpect(status().isOk());
             saleStatus(beforeFreeze, "ACTIVE").andExpect(status().isOk());
 
-            long frozen = registerPreorder();
+            UUID frozen = registerPreorder();
             fixtures.campaign(frozen, now.plus(Duration.ofMinutes(2)), now.plus(HOUR));
             saleStatus(frozen, "PAUSED").andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"))
                     .andExpect(jsonPath("$.error.message").value("사전예약 오픈 3분 전부터는 판매 상태를 바꿀 수 없습니다."));
@@ -482,7 +484,7 @@ class AdminProductEditApiTest {
             assertThat(statusOf(frozen)).isEqualTo("ACTIVE");
 
             // 오픈 뒤 PAUSED 는 회차 취소라 사유가 필요하고(아래 시험), ACTIVE 는 되돌리기라 409
-            long opened = registerPreorder();
+            UUID opened = registerPreorder();
             fixtures.campaign(opened, now.minus(HOUR), now.plus(HOUR));
             saleStatus(opened, "ACTIVE").andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"));
             expectValidation(saleStatus(opened, "PAUSED"), "reason");
@@ -492,7 +494,7 @@ class AdminProductEditApiTest {
         @Test
         @DisplayName("사전예약 오픈 뒤 판매 중지(사유)는 회차 취소 접수 — 202 · PAUSED · 취소 시각, preorder-events 로 갈 이벤트 하나. 다시 보내도 202 이고 이벤트는 하나, 되돌리기는 409")
         void cancelCampaignAfterOpen() throws Exception {
-            long productId = registerPreorder();
+            UUID productId = registerPreorder();
             fixtures.campaign(productId, Instant.now().minus(HOUR), Instant.now().plus(HOUR));
 
             JsonNode accepted = data(saleStatusBody(productId, "{ \"status\": \"PAUSED\", \"reason\": \"  공급 중단  \" }")
@@ -500,14 +502,14 @@ class AdminProductEditApiTest {
             assertThat(accepted.get("status").asString()).isEqualTo("PAUSED");
             assertThat(accepted.get("campaignCancellationRequested").asBoolean()).isTrue();
             assertThat(statusOf(productId)).isEqualTo("PAUSED");
-            assertThat(jdbcTemplate.queryForObject("SELECT campaign_canceled_at IS NOT NULL FROM products WHERE id = ?", Boolean.class, productId))
+            assertThat(jdbcTemplate.queryForObject("SELECT campaign_canceled_at IS NOT NULL FROM products WHERE id = ?", Boolean.class, UuidBinary.toBytes(productId)))
                     .isTrue();
             List<java.util.Map<String, Object>> events = cancelEvents(productId);
             assertThat(events).hasSize(1);
             JsonNode payload = JSON.readTree((String) events.get(0).get("payload"));
-            assertThat(payload.get("productId").asLong()).as("preorder 가 payload 의 productId 로 읽는다").isEqualTo(productId);
+            assertThat(payload.get("productId").asString()).as("preorder 가 payload 의 productId 로 읽는다").isEqualTo(productId.toString());
             assertThat(payload.get("reason").asString()).as("앞뒤 공백을 걷는다").isEqualTo("공급 중단");
-            assertThat(events.get(0)).containsEntry("aggregate_type", "PRODUCT").containsEntry("aggregate_id", productId);
+            assertThat(events.get(0)).containsEntry("aggregate_type", "PRODUCT").containsEntry("aggregate_id", productId.toString());
 
             saleStatusBody(productId, "{ \"status\": \"PAUSED\", \"reason\": \"다시\" }").andExpect(status().isAccepted())
                     .andExpect(jsonPath("$.data.campaignCancellationRequested").value(true));
@@ -515,18 +517,18 @@ class AdminProductEditApiTest {
             saleStatus(productId, "ACTIVE").andExpect(status().isConflict());
             assertThat(statusOf(productId)).isEqualTo("PAUSED");
             // DB 도 막는다 — 취소 표식이 있는 행은 ACTIVE 가 될 수 없고, 일반 상품에는 표식이 붙을 수 없다(CHECK)
-            org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbcTemplate.update("UPDATE products SET status = 'ACTIVE' WHERE id = ?", productId))
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbcTemplate.update("UPDATE products SET status = 'ACTIVE' WHERE id = ?", UuidBinary.toBytes(productId)))
                     .hasMessageContaining("ck_product_campaign_canceled");
-            long inStock = registerInStock();
+            UUID inStock = registerInStock();
             org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbcTemplate.update(
-                            "UPDATE products SET status = 'PAUSED', campaign_canceled_at = UTC_TIMESTAMP(6) WHERE id = ?", inStock))
+                            "UPDATE products SET status = 'PAUSED', campaign_canceled_at = UTC_TIMESTAMP(6) WHERE id = ?", UuidBinary.toBytes(inStock)))
                     .hasMessageContaining("ck_product_campaign_canceled");
         }
 
         @Test
         @DisplayName("회차가 취소된 상품은 취소 뒤 오픈이 미래로 옮겨져도 그대로 취소다 — 되돌리기 · 정보 수정은 409, 취소 재요청은 202 이고 이벤트는 하나")
         void canceledProductStaysCanceledWhenOpenMovesLater() throws Exception {
-            long productId = registerPreorder();
+            UUID productId = registerPreorder();
             fixtures.campaign(productId, Instant.now().minus(HOUR), Instant.now().plus(HOUR));
             saleStatusBody(productId, "{ \"status\": \"PAUSED\", \"reason\": \"공급 중단\" }").andExpect(status().isAccepted());
             fixtures.moveCampaignOpensAt(productId, Instant.now().plus(Duration.ofMinutes(30)));
@@ -542,12 +544,12 @@ class AdminProductEditApiTest {
         @Test
         @DisplayName("오픈 전에 판매 중지로 둔 채 오픈을 넘긴 상품은 회차 취소가 아니다 — 취소 시각 · 이벤트 없음. 관리자가 사유와 함께 판매 중지를 보내면 그때 취소된다")
         void pausedBeforeOpenIsNotACancellationUntilExplicit() throws Exception {
-            long productId = registerPreorder();
+            UUID productId = registerPreorder();
             fixtures.campaign(productId, Instant.now().plus(Duration.ofMinutes(10)), Instant.now().plus(HOUR));
             saleStatus(productId, "PAUSED").andExpect(status().isOk()).andExpect(jsonPath("$.data.campaignCancellationRequested").value(false));
             fixtures.moveCampaignOpensAt(productId, Instant.now().minus(Duration.ofMinutes(1)));
 
-            assertThat(jdbcTemplate.queryForObject("SELECT campaign_canceled_at IS NULL FROM products WHERE id = ?", Boolean.class, productId))
+            assertThat(jdbcTemplate.queryForObject("SELECT campaign_canceled_at IS NULL FROM products WHERE id = ?", Boolean.class, UuidBinary.toBytes(productId)))
                     .isTrue();
             assertThat(cancelEvents(productId)).isEmpty();
 
@@ -558,16 +560,16 @@ class AdminProductEditApiTest {
         @Test
         @DisplayName("사유는 사전예약 오픈 뒤 판매 중지에만 — 일반 상품 · 오픈 전 사전예약은 400(빈 사유는 보내지 않은 것), 오픈 뒤 빈 사유 · 501자는 400, 앞뒤 공백을 뺀 500자는 202")
         void reasonRules() throws Exception {
-            long inStock = registerInStock();
+            UUID inStock = registerInStock();
             expectValidation(saleStatusBody(inStock, "{ \"status\": \"PAUSED\", \"reason\": \"x\" }"), "reason");
             saleStatusBody(inStock, "{ \"status\": \"PAUSED\", \"reason\": \"\" }").andExpect(status().isOk());
-            long fullLength = registerPreorder();
+            UUID fullLength = registerPreorder();
             fixtures.campaign(fullLength, Instant.now().minus(HOUR), Instant.now().plus(HOUR));
             saleStatusBody(fullLength, "{ \"status\": \"PAUSED\", \"reason\": \"  " + "가".repeat(500) + "  \" }").andExpect(status().isAccepted());
-            long notOpened = registerPreorder();
+            UUID notOpened = registerPreorder();
             fixtures.campaign(notOpened, Instant.now().plus(HOUR), Instant.now().plus(HOUR.multipliedBy(2)));
             expectValidation(saleStatusBody(notOpened, "{ \"status\": \"PAUSED\", \"reason\": \"x\" }"), "reason");
-            long opened = registerPreorder();
+            UUID opened = registerPreorder();
             fixtures.campaign(opened, Instant.now().minus(HOUR), Instant.now().plus(HOUR));
             expectValidation(saleStatusBody(opened, "{ \"status\": \"PAUSED\", \"reason\": \"   \" }"), "reason");
             expectValidation(saleStatusBody(opened, "{ \"status\": \"PAUSED\", \"reason\": \"" + "가".repeat(501) + "\" }"), "reason");
@@ -580,7 +582,7 @@ class AdminProductEditApiTest {
         @Test
         @DisplayName("판매 상태 입력이 틀리면 그 칸의 400 — 빈 본문 · 모르는 상태 · 모르는 칸. 없는 상품은 404")
         void saleStatusInputErrors() throws Exception {
-            long productId = registerInStock();
+            UUID productId = registerInStock();
             expectValidation(saleStatusBody(productId, "{}"), "status");
             expectValidation(saleStatusBody(productId, "{ \"status\": \"STOPPED\" }"), "status");
             expectValidation(saleStatusBody(productId, "{ \"status\": \"PAUSED\", \"reason\": \"x\" }"), "reason");
@@ -588,17 +590,17 @@ class AdminProductEditApiTest {
             expectValidation(saleStatusBody(productId, "{ \"status\": 1 }"), "status");
             expectValidation(saleStatusBody(productId, "{ \"status\": \"1\" }"), "status");
             assertThat(statusOf(productId)).isEqualTo("ACTIVE");
-            saleStatus(999_999_999L, "PAUSED").andExpect(status().isNotFound()).andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
+            saleStatus(UUID.randomUUID(), "PAUSED").andExpect(status().isNotFound()).andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
         }
 
         @Test
         @DisplayName("비공개로 바꾸면 회원 목록 · 상세에서 사라지고(상세 404) 다시 공개하면 돌아온다. 사전예약 오픈 뒤에도 바꿀 수 있다")
         void visibilityToggle() throws Exception {
-            long productId = readyInStock();
+            UUID productId = readyInStock();
             String tag = tagOf(productId);
 
             JsonNode hidden = data(visibility(productId, false).andExpect(status().isOk()));
-            assertThat(hidden.get("productId").asLong()).isEqualTo(productId);
+            assertThat(hidden.get("productId").asString()).isEqualTo(productId.toString());
             assertThat(hidden.get("visible").asBoolean()).isFalse();
             assertThat(memberListIds(tag)).isEmpty();
             memberDetail(productId).andExpect(status().isNotFound());
@@ -607,23 +609,23 @@ class AdminProductEditApiTest {
             assertThat(memberListIds(tag)).containsExactly(productId);
             memberDetail(productId).andExpect(status().isOk());
 
-            long opened = registerPreorder();
+            UUID opened = registerPreorder();
             fixtures.campaign(opened, Instant.now().minus(HOUR), Instant.now().plus(HOUR));
             visibility(opened, false).andExpect(status().isOk());
-            assertThat(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, opened)).isFalse();
+            assertThat(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, UuidBinary.toBytes(opened))).isFalse();
 
             expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/visibility", productId)).content("{}")), "visible");
             // boolean 칸은 true · false 만 — 문자열 · 숫자를 바꿔 읽지 않는다
             for (String body : new String[] {"{ \"visible\": \"false\" }", "{ \"visible\": 0 }", "{ \"visible\": 1 }"}) {
                 expectValidation(mockMvc.perform(admin(patch(PATH + "/{id}/visibility", productId)).content(body)), "visible");
             }
-            visibility(999_999_999L, false).andExpect(status().isNotFound());
+            visibility(UUID.randomUUID(), false).andExpect(status().isNotFound());
         }
 
         @Test
         @DisplayName("관리자만 — 회원 403, 익명 401")
         void adminOnly() throws Exception {
-            long productId = registerInStock();
+            UUID productId = registerInStock();
             assertThat(visibleOf(productId)).isTrue();
             for (String path : new String[] {"/{id}/sale-status", "/{id}/visibility"}) {
                 String body = path.endsWith("sale-status") ? "{ \"status\": \"PAUSED\" }" : "{ \"visible\": false }";
@@ -639,13 +641,13 @@ class AdminProductEditApiTest {
         @Test
         @DisplayName("사전예약 상품을 고치면 수정마다 PREORDER_PRODUCT_CHANGED 하나(빈 payload · aggregateId 상품 id) — 같은 상태 · 같은 공개 여부 · 400 · 오픈 3분 전의 409 는 없고, 그때도 공개 전환은 보낸다")
         void preorderEditsNotifyPreorder() throws Exception {
-            long productId = registerPreorder();
+            UUID productId = registerPreorder();
             assertThat(changedEvents(productId)).as("등록은 이 이벤트가 아니다").isEmpty();
 
             edit(productId, "{ \"title\": \"Nova 1 Pro\" }").andExpect(status().isOk());
             List<java.util.Map<String, Object>> events = changedEvents(productId);
             assertThat(events).hasSize(1);
-            assertThat(events.get(0)).containsEntry("aggregate_type", "PRODUCT").containsEntry("aggregate_id", productId);
+            assertThat(events.get(0)).containsEntry("aggregate_type", "PRODUCT").containsEntry("aggregate_id", productId.toString());
             assertThat(JSON.readTree((String) events.get(0).get("payload")).isEmpty()).as("payload 는 빈 객체 — 상품 id 는 봉투에만").isTrue();
 
             mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"color\", \"value\": \"레드\" }"))
@@ -683,13 +685,13 @@ class AdminProductEditApiTest {
         @Test
         @DisplayName("일반 상품 수정과 사전예약 회차 취소는 PREORDER_PRODUCT_CHANGED 를 적지 않는다 — 회차 취소는 자기 이벤트로 preorder 가 캐시를 비운다")
         void inStockEditsAndCampaignCancelDoNotNotifyChange() throws Exception {
-            long inStock = registerInStock();
+            UUID inStock = registerInStock();
             edit(inStock, "{ \"title\": \"Nova 1 Pro\" }").andExpect(status().isOk());
             saleStatus(inStock, "PAUSED").andExpect(status().isOk());
             visibility(inStock, false).andExpect(status().isOk());
             assertThat(changedEvents(inStock)).isEmpty();
 
-            long canceled = registerPreorder();
+            UUID canceled = registerPreorder();
             fixtures.campaign(canceled, Instant.now().minus(HOUR), Instant.now().plus(HOUR));
             saleStatusBody(canceled, "{ \"status\": \"PAUSED\", \"reason\": \"공급 중단\" }").andExpect(status().isAccepted());
             assertThat(cancelEvents(canceled)).hasSize(1);
@@ -697,60 +699,60 @@ class AdminProductEditApiTest {
         }
 
         /** 공개 · 판매 중 · 재고 행이 있는(준비된) 일반 상품. 회원 목록에서 이 상품만 고르도록 고유 태그를 붙인다. */
-        private long readyInStock() throws Exception {
-            long productId = registerInStock();
+        private UUID readyInStock() throws Exception {
+            UUID productId = registerInStock();
             fixtures.stockReady(productId);
             edit(productId, "{ \"tags\": \"" + tagOf(productId) + "\" }").andExpect(status().isOk());
             return productId;
         }
 
-        private String tagOf(long productId) {
+        private String tagOf(UUID productId) {
             return "status-" + productId;
         }
 
-        private List<Long> memberListIds(String tag) throws Exception {
+        private List<UUID> memberListIds(String tag) throws Exception {
             JsonNode items = JSON.readTree(mockMvc.perform(get("/api/v1/products").param("q", tag).param("size", "100"))
                     .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).at("/data/items");
-            List<Long> ids = new ArrayList<>();
-            items.forEach(item -> ids.add(item.get("productId").asLong()));
+            List<UUID> ids = new ArrayList<>();
+            items.forEach(item -> ids.add(UUID.fromString(item.get("productId").asString())));
             return ids;
         }
 
-        private ResultActions memberDetail(long productId) throws Exception {
+        private ResultActions memberDetail(UUID productId) throws Exception {
             return mockMvc.perform(get("/api/v1/products/{id}", productId));
         }
 
-        private String statusOf(long productId) {
-            return jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, productId);
+        private String statusOf(UUID productId) {
+            return jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, UuidBinary.toBytes(productId));
         }
 
-        private List<java.util.Map<String, Object>> cancelEvents(long productId) {
+        private List<java.util.Map<String, Object>> cancelEvents(UUID productId) {
             return jdbcTemplate.queryForList("""
-                    SELECT aggregate_type, aggregate_id, payload FROM catalog_outbox_events
+                    SELECT aggregate_type, BIN_TO_UUID(aggregate_id) AS aggregate_id, payload FROM catalog_outbox_events
                      WHERE aggregate_id = ? AND event_type = 'PREORDER_CAMPAIGN_CANCELED'
-                    """, productId);
+                    """, UuidBinary.toBytes(productId));
         }
 
-        private List<java.util.Map<String, Object>> changedEvents(long productId) {
+        private List<java.util.Map<String, Object>> changedEvents(UUID productId) {
             return jdbcTemplate.queryForList("""
-                    SELECT aggregate_type, aggregate_id, payload FROM catalog_outbox_events
+                    SELECT aggregate_type, BIN_TO_UUID(aggregate_id) AS aggregate_id, payload FROM catalog_outbox_events
                      WHERE aggregate_id = ? AND event_type = 'PREORDER_PRODUCT_CHANGED' ORDER BY id
-                    """, productId);
+                    """, UuidBinary.toBytes(productId));
         }
 
-        private boolean visibleOf(long productId) {
-            return Boolean.TRUE.equals(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, productId));
+        private boolean visibleOf(UUID productId) {
+            return Boolean.TRUE.equals(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, UuidBinary.toBytes(productId)));
         }
 
-        private ResultActions saleStatus(long productId, String status) throws Exception {
+        private ResultActions saleStatus(UUID productId, String status) throws Exception {
             return saleStatusBody(productId, "{ \"status\": \"" + status + "\" }");
         }
 
-        private ResultActions saleStatusBody(long productId, String body) throws Exception {
+        private ResultActions saleStatusBody(UUID productId, String body) throws Exception {
             return mockMvc.perform(admin(patch(PATH + "/{id}/sale-status", productId)).content(body));
         }
 
-        private ResultActions visibility(long productId, boolean visible) throws Exception {
+        private ResultActions visibility(UUID productId, boolean visible) throws Exception {
             return mockMvc.perform(admin(patch(PATH + "/{id}/visibility", productId)).content("{ \"visible\": " + visible + " }"));
         }
     }
@@ -758,7 +760,7 @@ class AdminProductEditApiTest {
     @Test
     @DisplayName("관리자만 — 회원 403, 익명 401")
     void adminOnly() throws Exception {
-        long productId = registerInStock();
+        UUID productId = registerInStock();
         mockMvc.perform(patch(PATH + "/{id}", productId).contentType(MediaType.APPLICATION_JSON).content("{ \"title\": \"x\" }")
                 .with(user("657").roles("USER"))).andExpect(status().isForbidden());
         mockMvc.perform(patch(PATH + "/{id}", productId).contentType(MediaType.APPLICATION_JSON).content("{ \"title\": \"x\" }"))
@@ -768,7 +770,7 @@ class AdminProductEditApiTest {
     // ── 도우미 ─────────────────────────────────────────────────────────────
 
     /** 축 color(블랙 · 화이트) · storage(256GB +0 · 512GB +200000), 기본가 1,000,000 — 256GB 는 1,000,000, 512GB 는 1,200,000. 재고 각 3. */
-    private long registerInStock() throws Exception {
+    private UUID registerInStock() throws Exception {
         return register("IN_STOCK", """
                 "combinations": [
                   { "selections": { "color": "블랙", "storage": "256GB" }, "stock": 3 },
@@ -779,7 +781,7 @@ class AdminProductEditApiTest {
     }
 
     /** 같은 축 · 기본가, 화이트/256GB 는 만들지 않는다(조합 추가 시험용). 회차는 2시간 뒤. */
-    private long registerPreorder() throws Exception {
+    private UUID registerPreorder() throws Exception {
         Instant opensAt = Instant.now().plus(HOUR.multipliedBy(2));
         return register("PREORDER", """
                 "combinations": [ { "selections": { "color": "화이트", "storage": "256GB" }, "excluded": true } ],
@@ -788,10 +790,10 @@ class AdminProductEditApiTest {
                 """.formatted(opensAt, opensAt.plus(Duration.ofDays(3))));
     }
 
-    private long register(String saleMode, String extra) throws Exception {
+    private UUID register(String saleMode, String extra) throws Exception {
         String body = """
                 {
-                  "categoryId": %d, "saleMode": "%s", "title": "Nova 1", "description": "설명", "tags": "nova", "visible": true,
+                  "categoryId": "%s", "saleMode": "%s", "title": "Nova 1", "description": "설명", "tags": "nova", "visible": true,
                   "basePrice": 1000000,
                   "optionAxes": [
                     { "key": "color", "label": "색상", "values": [ { "value": "블랙" }, { "value": "화이트" } ] },
@@ -802,32 +804,32 @@ class AdminProductEditApiTest {
                 """.formatted(categoryId, saleMode, extra);
         ResultActions created = mockMvc.perform(admin(post(PATH)).header("Idempotency-Key", "k-" + ShopFixtures.unique()).content(body))
                 .andExpect(status().isCreated());
-        return data(created).get("registration").get("productId").asLong();
+        return UUID.fromString(data(created).get("registration").get("productId").asString());
     }
 
-    private long registerRaw(String body) throws Exception {
+    private UUID registerRaw(String body) throws Exception {
         ResultActions created = mockMvc.perform(admin(post(PATH)).header("Idempotency-Key", "k-" + ShopFixtures.unique()).content(body))
                 .andExpect(status().isCreated());
-        return data(created).get("registration").get("productId").asLong();
+        return UUID.fromString(data(created).get("registration").get("productId").asString());
     }
 
     private static MockHttpServletRequestBuilder admin(MockHttpServletRequestBuilder builder) {
         return builder.contentType(MediaType.APPLICATION_JSON).with(user("admin").roles("ADMIN"));
     }
 
-    private ResultActions edit(long productId, String body) throws Exception {
+    private ResultActions edit(UUID productId, String body) throws Exception {
         return mockMvc.perform(admin(patch(PATH + "/{id}", productId)).content(body));
     }
 
-    private ResultActions editVariant(long productId, long variantId, String body) throws Exception {
+    private ResultActions editVariant(UUID productId, UUID variantId, String body) throws Exception {
         return mockMvc.perform(admin(patch(PATH + "/{id}/variants/{v}", productId, variantId)).content(body));
     }
 
-    private ResultActions adminDetail(long productId) throws Exception {
+    private ResultActions adminDetail(UUID productId) throws Exception {
         return mockMvc.perform(get(PATH + "/{id}", productId).with(user("admin").roles("ADMIN"))).andExpect(status().isOk());
     }
 
-    private java.util.Map<String, String> prices(long productId) throws Exception {
+    private java.util.Map<String, String> prices(UUID productId) throws Exception {
         java.util.Map<String, String> byTitle = new java.util.LinkedHashMap<>();
         for (JsonNode variant : data(adminDetail(productId)).get("product").get("variants")) {
             byTitle.put(variant.get("title").asString(), variant.get("price").decimalValue().toPlainString());
@@ -841,10 +843,10 @@ class AdminProductEditApiTest {
         return titles;
     }
 
-    private long variantIdOf(long productId, String title) throws Exception {
+    private UUID variantIdOf(UUID productId, String title) throws Exception {
         for (JsonNode variant : data(adminDetail(productId)).get("product").get("variants")) {
             if (variant.get("title").asString().equals(title)) {
-                return variant.get("variantId").asLong();
+                return UUID.fromString(variant.get("variantId").asString());
             }
         }
         throw new AssertionError("no variant " + title);
@@ -861,7 +863,7 @@ class AdminProductEditApiTest {
         throw new AssertionError("no value " + normalized);
     }
 
-    private String valueIdOf(long productId, String axisKey, String normalized) {
+    private String valueIdOf(UUID productId, String axisKey, String normalized) {
         return fixtures.valueId(productId, axisKey, normalized);
     }
 

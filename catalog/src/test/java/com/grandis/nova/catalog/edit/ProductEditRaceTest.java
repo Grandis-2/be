@@ -3,7 +3,6 @@ package com.grandis.nova.catalog.edit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doThrow;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -13,6 +12,7 @@ import com.grandis.nova.catalog.CatalogErrorCode;
 import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.jpa.StorageClock;
 import java.math.BigDecimal;
@@ -22,6 +22,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -66,7 +67,7 @@ class ProductEditRaceTest {
     @Autowired PlatformTransactionManager transactionManager;
 
     ShopFixtures fixtures;
-    Long categoryId;
+    UUID categoryId;
 
     static Clock controllableClock() {
         return CLOCK;
@@ -87,7 +88,7 @@ class ProductEditRaceTest {
     @Test
     @DisplayName("기본가 수정이 커밋 전에 추가금 수정이 들어오면 뒤의 것은 기다렸다가 새 기본가로 계산한다 — 계산 가격 = 기본가 + Σ추가금")
     void concurrentEditsSerializeOnTheProductRow() throws Exception {
-        long productId = registerInStock();
+        UUID productId = registerInStock();
         String storage512 = fixtures.valueId(productId, "storage", "512GB");
         // 첫 수정: 기본가 1,000,000 → 1,100,000. 둘째 수정: 512GB 추가금 200,000 → 300,000 — 첫 수정이 커밋되기 전에 시작한다
         interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)),
@@ -101,8 +102,8 @@ class ProductEditRaceTest {
     @Test
     @DisplayName("기본가 수정이 커밋 전에 옵션 상태 수정이 들어오면 뒤의 것은 기다렸다가 새 가격 위에 상태만 바꾼다 — 재계산된 가격을 옛 값으로 덮지 않는다")
     void variantEditAfterRecomputeKeepsTheNewPrice() throws Exception {
-        long productId = registerInStock();
-        long option512 = optionId(productId, "512GB");
+        UUID productId = registerInStock();
+        UUID option512 = optionId(productId, "512GB");
         interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)),
                 () -> editService.editVariant(productId, option512, new VariantEditRequest(SaleStatus.PAUSED)));
 
@@ -114,8 +115,8 @@ class ProductEditRaceTest {
     @Test
     @DisplayName("옵션 상태 수정이 커밋 전에 기본가 수정이 들어오면 뒤의 것은 기다렸다가 바뀐 상태를 지킨 채 가격만 다시 계산한다")
     void recomputeAfterVariantEditKeepsTheNewStatus() throws Exception {
-        long productId = registerInStock();
-        long option512 = optionId(productId, "512GB");
+        UUID productId = registerInStock();
+        UUID option512 = optionId(productId, "512GB");
         interleave(() -> editService.editVariant(productId, option512, new VariantEditRequest(SaleStatus.PAUSED)),
                 () -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)));
 
@@ -126,7 +127,7 @@ class ProductEditRaceTest {
     @Test
     @DisplayName("같은 축에 값 둘이 동시에 더해져도 둘 다 남는다 — 문서를 통째로 다시 쓰지만 뒤의 것은 앞의 값이 커밋된 문서를 읽는다")
     void concurrentValueAddsBothSurvive() throws Exception {
-        long productId = registerInStock();
+        UUID productId = registerInStock();
         interleave(() -> editService.addOptionValue(productId, new OptionValueAddRequest("storage", "1TB", null, null)),
                 () -> editService.addOptionValue(productId, new OptionValueAddRequest("storage", "2TB", null, null)));
 
@@ -135,21 +136,21 @@ class ProductEditRaceTest {
                        JSON_TABLE(p.options, '$.axes[*]' COLUMNS (k VARCHAR(40) PATH '$.key',
                            NESTED PATH '$.values[*]' COLUMNS (v VARCHAR(60) PATH '$.normalized'))) j
                  WHERE p.id = ? AND j.k = 'storage'
-                """, String.class, productId)).containsExactlyInAnyOrder("256GB", "512GB", "1TB", "2TB");
+                """, String.class, UuidBinary.toBytes(productId))).containsExactlyInAnyOrder("256GB", "512GB", "1TB", "2TB");
     }
 
     @Test
     @DisplayName("다른 모듈의 외래키 확인과 교착해 수정이 희생되면 409 STATE_CONFLICT · retryable — 500 이 아니고 수정은 통째로 되돌려진다")
     void deadlockVictimIsRetryableConflict() throws Exception {
-        long productId = registerInStock();
-        long optionA = optionId(productId, "256GB");
-        long optionB = optionId(productId, "512GB");
-        long customerId = customer();
+        UUID productId = registerInStock();
+        UUID optionA = optionId(productId, "256GB");
+        UUID optionB = optionId(productId, "512GB");
+        UUID customerId = customer();
         CountDownLatch cartHoldsB = new CountDownLatch(1);
         CountDownLatch insertA = new CountDownLatch(1);
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
-            // 장바구니(다른 모듈): B 를 먼저, A 를 나중에 담는다 — 외래키 확인이 옵션 행에 공유 잠금을 id 역순으로 건다
+            // 장바구니(다른 모듈): B 를 먼저, A 를 나중에 담는다 — 외래키 확인이 옵션 행에 공유 잠금을 수정과 반대 순서로 건다
             Future<?> cart = pool.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
                 cartItem(customerId, optionB);
                 cartHoldsB.countDown();
@@ -157,7 +158,7 @@ class ProductEditRaceTest {
                 cartItem(customerId, optionA);
             }));
             assertThat(cartHoldsB.await(30, TimeUnit.SECONDS)).isTrue();
-            // 기본가 수정: 옵션을 id 순(A → B)으로 고친다. A 를 잡고 B 에서 기다린다
+            // 기본가 수정: 옵션을 생성 순(A → B)으로 고친다. A 를 잡고 B 에서 기다린다
             Future<org.springframework.test.web.servlet.MvcResult> edit = pool.submit(() -> mockMvc.perform(
                     org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch("/api/v1/admin/products/{id}", productId)
                             .contentType(MediaType.APPLICATION_JSON).with(user("admin").roles("ADMIN"))
@@ -196,9 +197,9 @@ class ProductEditRaceTest {
     @Test
     @DisplayName("수정이 잠금 실패(교착 희생 · 잠금 대기 초과)로 끝나면 409 STATE_CONFLICT · retryable — 희생자 선택과 무관하게 매핑만 본다")
     void mappingOfLockFailure() throws Exception {
-        long productId = registerInStock();
+        UUID productId = registerInStock();
         doThrow(new CannotAcquireLockException("Deadlock found when trying to get lock"))
-                .when(editService).editProduct(anyLong(), any());
+                .when(editService).editProduct(any(), any());
 
         String body = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch("/api/v1/admin/products/{id}", productId)
                         .contentType(MediaType.APPLICATION_JSON).with(user("admin").roles("ADMIN")).content("{ \"basePrice\": 1100000 }"))
@@ -211,7 +212,7 @@ class ProductEditRaceTest {
     @Test
     @DisplayName("오픈 3분 전 그 순간(지금 == opens_at − 3분)부터 잠긴다 — 409. 1마이크로초 전은 고칠 수 있다")
     void freezeBoundaryIsInclusive() throws Exception {
-        long productId = registerPreorder();
+        UUID productId = registerPreorder();
         Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.MICROS);
         fixtures.campaign(productId, opensAt, opensAt.plus(Duration.ofDays(1)));
         Instant freezesAt = opensAt.minus(ProductEditService.FREEZE_BEFORE_OPEN);
@@ -229,7 +230,7 @@ class ProductEditRaceTest {
     @Test
     @DisplayName("시작 때는 잠금 전이었는데 수정 중에 잠금 시각(오픈 3분 전)이 지나면 커밋하지 않는다 — 409, 아무것도 안 남는다")
     void openingDuringTheEditRejectsTheCommit() throws Exception {
-        long productId = registerPreorder();
+        UUID productId = registerPreorder();
         Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.MICROS);
         fixtures.campaign(productId, opensAt, opensAt.plus(Duration.ofDays(1)));
 
@@ -244,8 +245,8 @@ class ProductEditRaceTest {
     @Test
     @DisplayName("옵션 판매 상태를 바꾸는 중에 잠금 시각이 지나도 커밋하지 않는다 — 커밋 직전에 다시 본다")
     void openingDuringTheOptionStatusChangeRejectsTheCommit() throws Exception {
-        long productId = registerPreorder();
-        long optionId = optionId(productId, "256GB");
+        UUID productId = registerPreorder();
+        UUID optionId = optionId(productId, "256GB");
         Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.MICROS);
         fixtures.campaign(productId, opensAt, opensAt.plus(Duration.ofDays(1)));
 
@@ -254,14 +255,14 @@ class ProductEditRaceTest {
         CLOCK.next = () -> reads.getAndIncrement() == 0 ? freezesAt.minusMillis(1) : freezesAt;
         assertStateConflict(() -> editService.editVariant(productId, optionId, new VariantEditRequest(SaleStatus.PAUSED)));
         assertThat(reads.get()).as("첫 판정은 통과했다").isGreaterThanOrEqualTo(2);
-        assertThat(jdbcTemplate.queryForObject("SELECT status FROM product_options WHERE id = ?", String.class, optionId))
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM product_options WHERE id = ?", String.class, UuidBinary.toBytes(optionId)))
                 .as("상태 그대로").isEqualTo("ACTIVE");
     }
 
     @Test
     @DisplayName("수정 중에 preorder 가 회차 오픈을 앞당겨 이미 잠금 시각이 지났으면 커밋하지 않는다 — 커밋 직전 판정은 그때까지 커밋된 회차를 본다")
     void campaignMovedEarlierDuringTheEditRejectsTheCommit() throws Exception {
-        long productId = registerPreorder();
+        UUID productId = registerPreorder();
         Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
         fixtures.campaign(productId, now.plus(Duration.ofHours(1)), now.plus(Duration.ofDays(1)));
 
@@ -282,31 +283,31 @@ class ProductEditRaceTest {
     @Test
     @DisplayName("정보 수정이 커밋되기 전에 판매 상태 전환이 들어오면 기다렸다가 새 정보 위에 적는다 — 제목도 상태도 남는다")
     void saleStatusChangeSerializesWithEdit() throws Exception {
-        long productId = registerInStock();
+        UUID productId = registerInStock();
         interleave(() -> editService.editProduct(productId, titleOnly("먼저 고친 제목")),
                 () -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED)));
 
         assertThat(title(productId)).as("잠그지 않고 읽은 상태 전환이 옛 제목을 다시 쓰면 Race").isEqualTo("먼저 고친 제목");
-        assertThat(jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, productId)).isEqualTo("PAUSED");
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, UuidBinary.toBytes(productId))).isEqualTo("PAUSED");
     }
 
     @Test
     @DisplayName("기본가 수정이 커밋되기 전에 공개 전환이 들어오면 기다렸다가 새 기본가 위에 적는다 — 기본가 · 옵션 가격 · 공개 여부가 모두 새 값")
     void visibilityChangeSerializesWithEdit() throws Exception {
-        long productId = registerInStock();
+        UUID productId = registerInStock();
         interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)),
                 () -> editService.changeVisibility(productId, new VisibilityChangeRequest(true)));
 
-        assertThat(jdbcTemplate.queryForObject("SELECT base_price FROM products WHERE id = ?", BigDecimal.class, productId))
+        assertThat(jdbcTemplate.queryForObject("SELECT base_price FROM products WHERE id = ?", BigDecimal.class, UuidBinary.toBytes(productId)))
                 .as("옛 기본가로 덮이면 옵션 가격(새 기본가로 계산)과 어긋난다").isEqualByComparingTo("1100000");
         assertThat(price(productId, "256GB")).isEqualByComparingTo("1100000");
-        assertThat(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, productId)).isTrue();
+        assertThat(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, UuidBinary.toBytes(productId))).isTrue();
     }
 
     @Test
     @DisplayName("같은 판매 중지 · 같은 공개 전환이 겹쳐 와도 PREORDER_PRODUCT_CHANGED 는 하나씩 — 뒤의 것은 잠금을 기다렸다가 이미 바뀐 값을 보고 적지 않는다")
     void identicalConcurrentTransitionsNotifyOnce() throws Exception {
-        long productId = registerPreorder();
+        UUID productId = registerPreorder();
         interleave(() -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED)),
                 () -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED)));
         assertThat(changedEvents(productId)).isEqualTo(1);
@@ -319,7 +320,7 @@ class ProductEditRaceTest {
     @Test
     @DisplayName("판매 상태 전환 중에 잠금 시각(오픈 3분 전)이 지나면 커밋하지 않는다 — 409, 상태 그대로")
     void openingDuringTheSaleStatusChangeRejectsTheCommit() throws Exception {
-        long productId = registerPreorder();
+        UUID productId = registerPreorder();
         Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.MICROS);
         fixtures.campaign(productId, opensAt, opensAt.plus(Duration.ofDays(1)));
 
@@ -328,13 +329,13 @@ class ProductEditRaceTest {
         CLOCK.next = () -> reads.getAndIncrement() == 0 ? freezesAt.minusMillis(1) : freezesAt;
         assertStateConflict(() -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED)));
         assertThat(reads.get()).as("첫 판정은 통과했다").isGreaterThanOrEqualTo(2);
-        assertThat(jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, productId)).isEqualTo("ACTIVE");
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, UuidBinary.toBytes(productId))).isEqualTo("ACTIVE");
     }
 
     @Test
     @DisplayName("판매 상태 전환 중에 preorder 가 회차 오픈을 앞당겨 잠금 시각이 지났으면 커밋하지 않는다 — 409, 상태 그대로")
     void campaignMovedEarlierDuringTheSaleStatusChangeRejectsTheCommit() throws Exception {
-        long productId = registerPreorder();
+        UUID productId = registerPreorder();
         Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
         fixtures.campaign(productId, now.plus(Duration.ofHours(1)), now.plus(Duration.ofDays(1)));
 
@@ -347,13 +348,13 @@ class ProductEditRaceTest {
         };
         assertStateConflict(() -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED)));
         assertThat(reads.get()).as("첫 판정은 옮기기 전 회차로 통과했다").isGreaterThanOrEqualTo(2);
-        assertThat(jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, productId)).isEqualTo("ACTIVE");
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, UuidBinary.toBytes(productId))).isEqualTo("ACTIVE");
     }
 
     @Test
     @DisplayName("오픈 그 순간(지금 == opens_at)부터 회차 취소다 — 사유와 함께 판매 중지를 보내면 취소 접수. 1마이크로초 전은 잠금 구간이라 409")
     void campaignCancelStartsAtOpensAt() throws Exception {
-        long productId = registerPreorder();
+        UUID productId = registerPreorder();
         Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.MICROS);
         fixtures.campaign(productId, opensAt, opensAt.plus(Duration.ofDays(1)));
 
@@ -362,14 +363,14 @@ class ProductEditRaceTest {
         CLOCK.next = () -> opensAt;
         assertThat(editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED, "그 순간")).campaignCancellationRequested())
                 .isTrue();
-        assertThat(jdbcTemplate.queryForObject("SELECT campaign_canceled_at IS NOT NULL FROM products WHERE id = ?", Boolean.class, productId))
+        assertThat(jdbcTemplate.queryForObject("SELECT campaign_canceled_at IS NOT NULL FROM products WHERE id = ?", Boolean.class, UuidBinary.toBytes(productId)))
                 .isTrue();
     }
 
     @Test
     @DisplayName("오픈 뒤 회차 취소가 동시에 두 번 들어와도 취소 이벤트는 하나다 — 뒤의 것은 앞의 취소가 커밋된 뒤 취소 표식을 본다")
     void concurrentCampaignCancelsWriteOneEvent() throws Exception {
-        long productId = registerPreorder();
+        UUID productId = registerPreorder();
         Instant now = Instant.now();
         fixtures.campaign(productId, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
         interleave(() -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED, "첫 취소")),
@@ -377,7 +378,7 @@ class ProductEditRaceTest {
 
         assertThat(jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM catalog_outbox_events WHERE aggregate_id = ? AND event_type = 'PREORDER_CAMPAIGN_CANCELED'
-                """, Integer.class, productId)).as("잠그지 않고 읽으면 둘 다 취소 전으로 보고 이벤트를 둘 적는다").isEqualTo(1);
+                """, Integer.class, UuidBinary.toBytes(productId))).as("잠그지 않고 읽으면 둘 다 취소 전으로 보고 이벤트를 둘 적는다").isEqualTo(1);
     }
 
     // ── 도우미 ─────────────────────────────────────────────────────────────
@@ -417,27 +418,23 @@ class ProductEditRaceTest {
         return String.valueOf(root.getMessage());
     }
 
-    private long optionId(long productId, String title) {
-        return jdbcTemplate.queryForObject("SELECT id FROM product_options WHERE product_id = ? AND title = ?", Long.class, productId, title);
+    private UUID optionId(UUID productId, String title) {
+        return UuidBinary.fromBytes(jdbcTemplate.queryForObject("SELECT id FROM product_options WHERE product_id = ? AND title = ?",
+                byte[].class, UuidBinary.toBytes(productId), title));
     }
 
     /** member 소유 표 — 장바구니 외래키를 채우려고 시험 데이터로만 넣는다. */
-    private long customer() {
-        org.springframework.jdbc.support.GeneratedKeyHolder key = new org.springframework.jdbc.support.GeneratedKeyHolder();
-        jdbcTemplate.update(connection -> {
-            var insert = connection.prepareStatement(
-                    "INSERT INTO customers (kakao_id, display_name, created_at, updated_at) VALUES (?, 'race', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))",
-                    java.sql.Statement.RETURN_GENERATED_KEYS);
-            insert.setString(1, "k-" + ShopFixtures.unique());
-            return insert;
-        }, key);
-        return key.getKey().longValue();   // 넣은 행의 키 — member 표를 SELECT 하지 않는다
+    private UUID customer() {
+        UUID id = UUID.randomUUID();
+        jdbcTemplate.update("INSERT INTO customers (id, kakao_id, display_name, created_at, updated_at) VALUES (?, ?, 'race', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))",
+                UuidBinary.toBytes(id), "k-" + ShopFixtures.unique());
+        return id;
     }
 
     /** order 소유 표 — 다른 모듈의 쓰기를 흉내 낸다(외래키 확인이 옵션 행에 공유 잠금). */
-    private void cartItem(long customerId, long optionId) {
-        jdbcTemplate.update("INSERT INTO cart_items (customer_id, option_id, quantity, created_at, updated_at) VALUES (?, ?, 1, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))",
-                customerId, optionId);
+    private void cartItem(UUID customerId, UUID optionId) {
+        jdbcTemplate.update("INSERT INTO cart_items (id, customer_id, option_id, quantity, created_at, updated_at) VALUES (?, ?, ?, 1, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))",
+                UuidBinary.toBytes(UUID.randomUUID()), UuidBinary.toBytes(customerId), UuidBinary.toBytes(optionId));
     }
 
     private static ProductEditRequest titleOnly(String title) {
@@ -476,7 +473,7 @@ class ProductEditRaceTest {
     }
 
     /**
-     * 수정이 옵션 행 UPDATE 에서 기다릴 때까지(id 순으로 A 를 잡고 B 를 기다리는 중) 또는 끝날 때까지 기다린다.
+     * 수정이 옵션 행 UPDATE 에서 기다릴 때까지(생성 순으로 A 를 잡고 B 를 기다리는 중) 또는 끝날 때까지 기다린다.
      * "다른 연결의 아무 실행 중 쿼리" 를 신호로 삼으면 수정이 아직 상품 행 잠금 · 앞쪽 조회에 있을 때도 넘어가,
      * 장바구니가 A 를 먼저 넣고 교착 없이 지나갈 수 있다 — 교착 시험이 가끔 실패하던 가능한 원인이다(실측: 다른 트랜잭션이 상품 행을 1초 잡아
      * 수정을 그 단계에 붙잡아 두면 매번 그렇게 실패한다. 자연 조건에서는 재현되지 않았고, 처음 기록된 실패의 메시지는 남아 있지 않다).
@@ -539,37 +536,37 @@ class ProductEditRaceTest {
         }
     }
 
-    private BigDecimal price(long productId, String storage) {
+    private BigDecimal price(UUID productId, String storage) {
         return jdbcTemplate.queryForObject("SELECT price FROM product_options WHERE product_id = ? AND title = ?",
-                BigDecimal.class, productId, storage);
+                BigDecimal.class, UuidBinary.toBytes(productId), storage);
     }
 
-    private String optionStatus(long optionId) {
-        return jdbcTemplate.queryForObject("SELECT status FROM product_options WHERE id = ?", String.class, optionId);
+    private String optionStatus(UUID optionId) {
+        return jdbcTemplate.queryForObject("SELECT status FROM product_options WHERE id = ?", String.class, UuidBinary.toBytes(optionId));
     }
 
-    private String title(long productId) {
-        return jdbcTemplate.queryForObject("SELECT title FROM products WHERE id = ?", String.class, productId);
+    private String title(UUID productId) {
+        return jdbcTemplate.queryForObject("SELECT title FROM products WHERE id = ?", String.class, UuidBinary.toBytes(productId));
     }
 
-    private long changedEvents(long productId) {
+    private long changedEvents(UUID productId) {
         return jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM catalog_outbox_events WHERE aggregate_id = ? AND event_type = 'PREORDER_PRODUCT_CHANGED'", Long.class, productId);
+                "SELECT COUNT(*) FROM catalog_outbox_events WHERE aggregate_id = ? AND event_type = 'PREORDER_PRODUCT_CHANGED'", Long.class, UuidBinary.toBytes(productId));
     }
 
     /** 축 storage 하나(256GB +0 · 512GB +200,000), 기본가 1,000,000. */
-    private long registerInStock() throws Exception {
+    private UUID registerInStock() throws Exception {
         return register("""
-                { "categoryId": %d, "saleMode": "IN_STOCK", "title": "Race", "visible": false, "basePrice": 1000000,
+                { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Race", "visible": false, "basePrice": 1000000,
                   "optionAxes": [ { "key": "storage", "label": "용량", "values": [ { "value": "256GB" }, { "value": "512GB", "surcharge": 200000 } ] } ],
                   "combinations": [ { "selections": { "storage": "256GB" }, "stock": 1 }, { "selections": { "storage": "512GB" }, "stock": 1 } ] }
                 """.formatted(categoryId));
     }
 
-    private long registerPreorder() throws Exception {
+    private UUID registerPreorder() throws Exception {
         Instant opensAt = Instant.now().plus(Duration.ofHours(2));
         return register("""
-                { "categoryId": %d, "saleMode": "PREORDER", "title": "Race", "visible": false, "basePrice": 1000000,
+                { "categoryId": "%s", "saleMode": "PREORDER", "title": "Race", "visible": false, "basePrice": 1000000,
                   "optionAxes": [ { "key": "storage", "label": "용량", "values": [ { "value": "256GB" } ] } ],
                   "combinations": [ { "selections": { "storage": "256GB" } } ],
                   "campaign": { "opensAt": "%s", "closesAt": "%s" },
@@ -577,11 +574,11 @@ class ProductEditRaceTest {
                 """.formatted(categoryId, opensAt, opensAt.plus(Duration.ofDays(3))));
     }
 
-    private long register(String body) throws Exception {
+    private UUID register(String body) throws Exception {
         String response = mockMvc.perform(post("/api/v1/admin/products").contentType(MediaType.APPLICATION_JSON)
                         .with(user("admin").roles("ADMIN")).header("Idempotency-Key", "k-" + ShopFixtures.unique()).content(body))
                 .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
-        return JSON.readTree(response).get("data").get("registration").get("productId").asLong();
+        return UUID.fromString(JSON.readTree(response).get("data").get("registration").get("productId").asString());
     }
 
     /** 평소엔 앱과 같은 시계(마이크로초 해상도의 UTC). 시험이 next 를 채우면 그 값을 낸다. */

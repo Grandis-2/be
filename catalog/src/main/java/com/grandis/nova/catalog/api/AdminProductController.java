@@ -31,6 +31,7 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Supplier;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
@@ -112,21 +113,21 @@ public class AdminProductController {
 
     @Operation(summary = "상품 상세")
     @GetMapping("/{productId}")
-    public ApiResponse<AdminProductResponse> product(@PathVariable Long productId) {
+    public ApiResponse<AdminProductResponse> product(@PathVariable UUID productId) {
         return ApiResponse.ok(AdminProductResponse.from(detailService.findAdminProduct(productId)));
     }
 
     /** 표시 정보 · 기본 가격 · 보증 수정. 보낸 칸만 바꾸고, 사전예약 오픈 뒤면 409. 기본 가격이 바뀌면 모든 옵션 가격을 재계산한다. */
     @Operation(summary = "표시 정보 · 기본 가격 · 보증 수정", description = "보낸 칸만 바꾼다 — 하나도 없으면 400. 사전예약은 오픈 3분 전부터 409")
     @PatchMapping("/{productId}")
-    public ApiResponse<AdminProductResponse> edit(@PathVariable Long productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ProductEditRequest.class))) @RequestBody String body) {
+    public ApiResponse<AdminProductResponse> edit(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ProductEditRequest.class))) @RequestBody String body) {
         return ApiResponse.ok(AdminProductResponse.from(serialized(() -> editService.editProduct(productId, bodies.parse(body, ProductEditRequest.class)))));
     }
 
     /** 축에 값 추가(새 색상 · 용량). 옵션은 만들지 않는다 — 조합은 아래 variants 로. */
     @Operation(summary = "옵션 값 추가")
     @PostMapping("/{productId}/option-values")
-    public ResponseEntity<ApiResponse<AdminProductResponse>> addOptionValue(@PathVariable Long productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = OptionValueAddRequest.class))) @RequestBody String body) {
+    public ResponseEntity<ApiResponse<AdminProductResponse>> addOptionValue(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = OptionValueAddRequest.class))) @RequestBody String body) {
         AdminProductResponse response = AdminProductResponse.from(
                 serialized(() -> editService.addOptionValue(productId, bodies.parse(body, OptionValueAddRequest.class))));
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response));
@@ -135,7 +136,7 @@ public class AdminProductController {
     /** 값의 이름(오타 · 표시 문구) · 색상 hex · 추가금 수정. 이름을 바꾸면 정규화값도 따라 바뀌고, 그 값을 고른 옵션의 표시명 · 필터 속성을 같이 고친다. 사진은 값 아래에 있어 따라간다. 추가금이 바뀌면 재계산한다. */
     @Operation(summary = "옵션 값 표시 문구 · 색상 hex · 추가금 수정", description = "보낸 칸만 바꾼다 — 하나도 없으면 400")
     @PatchMapping("/{productId}/option-values/{valueId}")
-    public ApiResponse<AdminProductResponse> editOptionValue(@PathVariable Long productId, @PathVariable String valueId,
+    public ApiResponse<AdminProductResponse> editOptionValue(@PathVariable UUID productId, @PathVariable String valueId,
                                                              @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = OptionValueEditRequest.class))) @RequestBody String body) {
         return ApiResponse.ok(AdminProductResponse.from(
                 serialized(() -> editService.editOptionValue(productId, valueId, bodies.parse(body, OptionValueEditRequest.class)))));
@@ -144,7 +145,7 @@ public class AdminProductController {
     /** 아직 없는 조합을 옵션으로. 바로 판매 중(ACTIVE). 일반 상품의 재고는 order 의 재고 API 로 따로 넣는다. */
     @Operation(summary = "옵션(조합) 추가")
     @PostMapping("/{productId}/variants")
-    public ResponseEntity<ApiResponse<ProductDetailView.Variant>> addVariant(@PathVariable Long productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = VariantAddRequest.class))) @RequestBody String body) {
+    public ResponseEntity<ApiResponse<ProductDetailView.Variant>> addVariant(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = VariantAddRequest.class))) @RequestBody String body) {
         ProductDetailView.Variant variant = serialized(() -> editService.addVariant(productId, bodies.parse(body, VariantAddRequest.class)));
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(variant));
     }
@@ -152,7 +153,7 @@ public class AdminProductController {
     /** 옵션의 판매 상태. 사전예약은 오픈 3분 전부터 409. */
     @Operation(summary = "옵션(조합) 판매 상태 수정", description = "status 가 필요하다 — 없으면 400")
     @PatchMapping("/{productId}/variants/{variantId}")
-    public ApiResponse<ProductDetailView.Variant> editVariant(@PathVariable Long productId, @PathVariable Long variantId,
+    public ApiResponse<ProductDetailView.Variant> editVariant(@PathVariable UUID productId, @PathVariable UUID variantId,
                                                              @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = VariantEditRequest.class))) @RequestBody String body) {
         return ApiResponse.ok(serialized(() -> editService.editVariant(productId, variantId, bodies.parse(body, VariantEditRequest.class))));
     }
@@ -164,7 +165,7 @@ public class AdminProductController {
      */
     @Operation(summary = "상품 판매 시작 · 중지", description = "사전예약 오픈 뒤 PAUSED 는 회차 취소 접수로 202. reason(500자 이하)은 이때만 필요하고, 그 밖에 보내면 400")
     @PatchMapping("/{productId}/sale-status")
-    public ResponseEntity<ApiResponse<SaleStatusView>> changeSaleStatus(@PathVariable Long productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = SaleStatusChangeRequest.class))) @RequestBody String body) {
+    public ResponseEntity<ApiResponse<SaleStatusView>> changeSaleStatus(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = SaleStatusChangeRequest.class))) @RequestBody String body) {
         SaleStatusView view = serialized(() -> editService.changeSaleStatus(productId, bodies.parse(body, SaleStatusChangeRequest.class)));
         // 회차 취소는 preorder 가 이벤트를 받아 예약 취소를 진행한다 — 끝난 것이 아니라 접수된 것이라 202
         return ResponseEntity.status(view.campaignCancellationRequested() ? HttpStatus.ACCEPTED : HttpStatus.OK).body(ApiResponse.ok(view));
@@ -173,7 +174,7 @@ public class AdminProductController {
     /** 공개 ↔ 비공개. 언제든 바꾼다 — 기존 예약 · 주문은 그대로. 회원 노출은 판매 방식별 준비 · 판매 상태와 함께 정해진다. */
     @Operation(summary = "공개 · 비공개 전환")
     @PatchMapping("/{productId}/visibility")
-    public ApiResponse<VisibilityView> changeVisibility(@PathVariable Long productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = VisibilityChangeRequest.class))) @RequestBody String body) {
+    public ApiResponse<VisibilityView> changeVisibility(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = VisibilityChangeRequest.class))) @RequestBody String body) {
         return ApiResponse.ok(serialized(() -> editService.changeVisibility(productId, bodies.parse(body, VisibilityChangeRequest.class))));
     }
 
@@ -185,7 +186,7 @@ public class AdminProductController {
     }
 
     /**
-     * 수정 트랜잭션이 DB 교착의 희생자가 되면 409 STATE_CONFLICT + `details.retryable=true`. 수정은 옵션 행을 id 순으로 잠그는데, 다른 모듈의
+     * 수정 트랜잭션이 DB 교착의 희생자가 되면 409 STATE_CONFLICT + `details.retryable=true`. 수정은 옵션 행을 생성 순으로 잠그는데, 다른 모듈의
      * 외래키 확인(장바구니 · 주문 · 예약 행 INSERT 가 옵션 행에 거는 공유 잠금)은 순서를 catalog 가 정하지 못한다(실측: 역순 INSERT 와 교착 →
      * 500). 수정은 통째로 되돌려졌으니 같은 요청을 다시 보내면 된다. 한 상품의 수정끼리는 상품 행 잠금으로 줄 서므로 교착하지 않는다.
      */

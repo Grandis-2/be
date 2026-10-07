@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 사전예약 상품을 등록했다 — preorder 가 회차와 배송 차수를 만든다(preorder-events). 계약: contracts/catalog-events.md.
@@ -20,7 +21,7 @@ import java.util.List;
  * @param shipmentBatches 배송 차수 전체. 요청 순서 그대로
  */
 public record PreorderProductRegistered(
-        @JsonIgnore Long productId,
+        @JsonIgnore UUID productId,
         Campaign campaign,
         List<ShipmentBatch> shipmentBatches
 ) implements OutboxMessage {
@@ -29,7 +30,7 @@ public record PreorderProductRegistered(
         shipmentBatches = List.copyOf(shipmentBatches);
     }
 
-    static PreorderProductRegistered of(Long productId, ProductRegistrationRequest.Campaign campaign,
+    static PreorderProductRegistered of(UUID productId, ProductRegistrationRequest.Campaign campaign,
                                         List<ProductRegistrationRequest.ShipmentBatch> batches) {
         return new PreorderProductRegistered(productId,
                 new Campaign(campaign.opensAt().truncatedTo(ChronoUnit.MICROS), campaign.closesAt().truncatedTo(ChronoUnit.MICROS)),
@@ -48,7 +49,7 @@ public record PreorderProductRegistered(
     }
 
     @Override
-    public Long aggregateId() {
+    public UUID aggregateId() {
         return productId;
     }
 

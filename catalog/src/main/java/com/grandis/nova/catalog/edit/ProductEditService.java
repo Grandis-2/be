@@ -32,6 +32,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -96,7 +97,7 @@ public class ProductEditService {
     }
 
     @Transactional
-    public AdminProductDetail editProduct(Long productId, ProductEditRequest request) {
+    public AdminProductDetail editProduct(UUID productId, ProductEditRequest request) {
         if (request.isEmpty()) {
             throw ValidationFailures.of("body", "바꿀 칸이 하나도 없습니다.");
         }
@@ -134,7 +135,7 @@ public class ProductEditService {
     }
 
     @Transactional
-    public AdminProductDetail addOptionValue(Long productId, OptionValueAddRequest request) {
+    public AdminProductDetail addOptionValue(UUID productId, OptionValueAddRequest request) {
         BigDecimal surcharge = request.surcharge() == null ? BigDecimal.ZERO
                 : ProductRegistrationValidator.requireWholeWon(request.surcharge(), "surcharge");
         Product product = requireEditable(productId);
@@ -161,7 +162,7 @@ public class ProductEditService {
     }
 
     @Transactional
-    public AdminProductDetail editOptionValue(Long productId, String valueId, OptionValueEditRequest request) {
+    public AdminProductDetail editOptionValue(UUID productId, String valueId, OptionValueEditRequest request) {
         if (request.isEmpty()) {
             throw ValidationFailures.of("body", "바꿀 칸이 하나도 없습니다.");
         }
@@ -207,7 +208,7 @@ public class ProductEditService {
     }
 
     @Transactional
-    public ProductDetailView.Variant addVariant(Long productId, VariantAddRequest request) {
+    public ProductDetailView.Variant addVariant(UUID productId, VariantAddRequest request) {
         Map<String, String> given = new LinkedHashMap<>();
         for (Map.Entry<String, String> entry : request.selections().entrySet()) {
             String axisKey = entry.getKey() == null ? "" : entry.getKey().strip().toLowerCase(Locale.ROOT);
@@ -235,7 +236,7 @@ public class ProductEditService {
         }
         OptionCombination combination = picks.isEmpty()
                 ? OptionCombination.none(productId, product.getTitle()) : OptionCombination.of(productId, picks);
-        List<ProductOption> existing = options.findByProductIdOrderById(productId);
+        List<ProductOption> existing = options.findByProductIdOrderByCreatedAtAscIdAsc(productId);
         if (existing.stream().anyMatch(o -> combination.combinationKey().equals(o.getCombinationKey()))) {
             throw ValidationFailures.of("selections", "이 조합의 옵션이 이미 있습니다.");
         }
@@ -271,7 +272,7 @@ public class ProductEditService {
     }
 
     @Transactional
-    public ProductDetailView.Variant editVariant(Long productId, Long variantId, VariantEditRequest request) {
+    public ProductDetailView.Variant editVariant(UUID productId, UUID variantId, VariantEditRequest request) {
         if (request.isEmpty()) {
             throw ValidationFailures.of("body", "바꿀 칸이 하나도 없습니다.");
         }
@@ -295,7 +296,7 @@ public class ProductEditService {
      * <p>사전예약 <b>오픈 뒤</b>(회차 opens_at ≤ 지금)의 PAUSED 는 회차 취소다 — {@link #cancelCampaign}. 사유는 그때만 받는다.
      */
     @Transactional
-    public SaleStatusView changeSaleStatus(Long productId, SaleStatusChangeRequest request) {
+    public SaleStatusView changeSaleStatus(UUID productId, SaleStatusChangeRequest request) {
         Product product = lockProduct(productId);
         // 빈 사유는 보내지 않은 것으로 본다 — 화면이 늘 칸을 채워 보내도 일반 전환이 막히지 않게. 회차 취소에서는 필수다
         String reason = request.reason() == null || request.reason().isBlank() ? null : request.reason().strip();
@@ -349,7 +350,7 @@ public class ProductEditService {
 
     /** 공개 ↔ 비공개. 언제든 바꾼다 — 오픈 판정을 하지 않는다. 다른 수정과 줄 서도록 상품 행은 잠근다. 바뀌었으면 PREORDER_PRODUCT_CHANGED 를 적는다. */
     @Transactional
-    public VisibilityView changeVisibility(Long productId, VisibilityChangeRequest request) {
+    public VisibilityView changeVisibility(UUID productId, VisibilityChangeRequest request) {
         Product product = lockProduct(productId);
         boolean before = product.isVisible();
         if (request.visible()) {
@@ -368,12 +369,12 @@ public class ProductEditService {
      * 상품 행을 잠그고 읽는다 — 한 상품에 대한 수정을 줄 세운다. 이 뒤의 읽기(기본가 · 추가금 · 선택)는 앞 수정이 커밋한 값을 본다.
      * 잠그지 않으면 겹친 두 수정이 서로의 커밋 전 값으로 옵션 가격을 계산해 덮는다(ProductRepository#findForUpdate).
      */
-    private Product lockProduct(Long productId) {
+    private Product lockProduct(UUID productId) {
         return products.findForUpdate(productId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
     }
 
     /** 상품이 있고 지금 고칠 수 있는 상태인가 — 사전예약 오픈 뒤면 409. */
-    private Product requireEditable(Long productId) {
+    private Product requireEditable(UUID productId) {
         Product product = lockProduct(productId);
         requireNotOpened(product);
         return product;
@@ -420,7 +421,7 @@ public class ProductEditService {
 
     /** 옵션 가격을 `기본가 + Σ추가금` 으로 다시 계산한다. valueId 를 주면 그 값을 고른 옵션만, null 이면 전부. */
     private void recomputePrices(Product product, ProductOptions document, String valueId, String cause) {
-        for (ProductOption option : options.findByProductIdOrderById(product.getId())) {
+        for (ProductOption option : options.findByProductIdOrderByCreatedAtAscIdAsc(product.getId())) {
             List<String> valueIds = OptionCombination.valueIdsOf(option.getCombinationKey());
             if (valueId != null && !valueIds.contains(valueId)) {
                 continue;
@@ -467,7 +468,7 @@ public class ProductEditService {
 
     /** 그 값을 고른 옵션의 표시명 · 필터 속성을 축 순서의 조합에서 다시 만든다. 표시명이 상한을 넘으면 400(DB 1406 → 500 이 되지 않게). */
     private void reattributeOptionsUsing(Product product, ProductOptions document, String valueId) {
-        for (ProductOption option : options.findByProductIdOrderById(product.getId())) {
+        for (ProductOption option : options.findByProductIdOrderByCreatedAtAscIdAsc(product.getId())) {
             List<String> valueIds = OptionCombination.valueIdsOf(option.getCombinationKey());
             if (!valueIds.contains(valueId)) {
                 continue;
@@ -486,7 +487,7 @@ public class ProductEditService {
      * 있어(U+0958 한 글자 → 두 글자) 표시명 상한(120)을 넘으면 title 의 400 이다(등록과 같은 판정).
      */
     private void retitleStandaloneOptions(Product product) {
-        for (ProductOption option : options.findByProductIdOrderById(product.getId())) {
+        for (ProductOption option : options.findByProductIdOrderByCreatedAtAscIdAsc(product.getId())) {
             if (OptionCombination.valueIdsOf(option.getCombinationKey()).isEmpty()) {
                 String title = OptionCombination.titleOf(List.of(), product.getTitle());
                 if (title.length() > ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH) {
@@ -529,7 +530,7 @@ public class ProductEditService {
         return String.join("-", picks.stream().map(pick -> pick.value().normalized()).toList());
     }
 
-    private ProductDetailView.Variant variantOf(Long productId, Long variantId) {
+    private ProductDetailView.Variant variantOf(UUID productId, UUID variantId) {
         return detailService.findAdminProduct(productId).product().variants().stream()
                 .filter(v -> v.variantId().equals(variantId)).findFirst()
                 .orElseThrow(() -> new IllegalStateException("variant " + variantId + " vanished"));

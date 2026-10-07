@@ -4,6 +4,7 @@ import com.grandis.nova.catalog.option.OptionText;
 import com.grandis.nova.catalog.product.SaleMode;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 목록 · 검색 조건. 색상 · 용량은 축 안에서 OR, 축 사이는 AND 이고 **같은 옵션**이 두 조건을 함께 만족해야 한다
@@ -14,7 +15,7 @@ import java.util.List;
  * @param q          상품명 · 관리자 tags 부분 일치(대소문자 무시). 비면 null
  * @param categoryId 상위면 하위에 배정된 상품까지 포함
  */
-public record ProductListFilter(String q, Long categoryId, SaleMode saleMode, List<String> colors, List<String> storages) {
+public record ProductListFilter(String q, UUID categoryId, SaleMode saleMode, List<String> colors, List<String> storages) {
 
     public ProductListFilter {
         q = q == null || q.isBlank() ? null : OptionText.normalize(q);

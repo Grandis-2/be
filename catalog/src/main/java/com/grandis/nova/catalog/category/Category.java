@@ -3,10 +3,9 @@ package com.grandis.nova.catalog.category;
 import com.grandis.nova.common.BaseEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+
+import java.util.UUID;
 
 /**
  * 카테고리. 2단계 — 상위 아래 하위 하나까지. 행은 마이그레이션이 넣고 관리자 CRUD 는 없다(이름은 프론트와 맞춘 뒤 넣는다).
@@ -17,17 +16,13 @@ import jakarta.persistence.Table;
 @Table(name = "categories")
 public class Category extends BaseEntity {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
     /** 상위 카테고리. null 이면 상위다. */
-    private Long parentId;
+    private UUID parentId;
 
     @Column(nullable = false, length = 60)
     private String name;
 
-    /** 표시 순서. 작을수록 앞. 같으면 id 순이다. */
+    /** 표시 순서. 작을수록 앞. 같으면 생성 순(created_at, 같으면 id)이다. */
     @Column(nullable = false)
     private int sortOrder;
 
@@ -38,11 +33,7 @@ public class Category extends BaseEntity {
         return parentId == null;
     }
 
-    public Long getId() {
-        return id;
-    }
-
-    public Long getParentId() {
+    public UUID getParentId() {
         return parentId;
     }
 

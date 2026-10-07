@@ -3,12 +3,11 @@ package com.grandis.nova.catalog.review;
 import com.grandis.nova.common.BaseEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
+
+import java.util.UUID;
 
 /**
  * 상품 리뷰 — 배송 완료된 일반 판매 주문상품 1건당 1개(UNIQUE order_item_id). 글과 별점만 받는다.
@@ -24,18 +23,14 @@ public class ProductReview extends BaseEntity {
     /** body 칼럼(varchar(2000)) — 앞뒤 공백을 뺀 글자 수. */
     public static final int MAX_BODY_LENGTH = 2000;
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    @Column(nullable = false, updatable = false)
+    private UUID productId;
 
     @Column(nullable = false, updatable = false)
-    private Long productId;
+    private UUID customerId;
 
     @Column(nullable = false, updatable = false)
-    private Long customerId;
-
-    @Column(nullable = false, updatable = false)
-    private Long orderItemId;
+    private UUID orderItemId;
 
     @JdbcTypeCode(SqlTypes.TINYINT)
     @Column(nullable = false)
@@ -53,7 +48,7 @@ public class ProductReview extends BaseEntity {
     protected ProductReview() {
     }
 
-    private ProductReview(Long productId, Long customerId, Long orderItemId, int rating, String body,
+    private ProductReview(UUID productId, UUID customerId, UUID orderItemId, int rating, String body,
                           String optionTitleSnapshot, String authorName) {
         this.productId = productId;
         this.customerId = customerId;
@@ -64,7 +59,7 @@ public class ProductReview extends BaseEntity {
         this.authorName = authorName;
     }
 
-    public static ProductReview write(Long productId, Long customerId, Long orderItemId, int rating, String body,
+    public static ProductReview write(UUID productId, UUID customerId, UUID orderItemId, int rating, String body,
                                       String optionTitleSnapshot, String authorName) {
         return new ProductReview(productId, customerId, orderItemId, rating, body, optionTitleSnapshot, authorName);
     }
@@ -94,15 +89,11 @@ public class ProductReview extends BaseEntity {
         return stripped;
     }
 
-    public Long getId() {
-        return id;
-    }
-
-    public Long getProductId() {
+    public UUID getProductId() {
         return productId;
     }
 
-    public Long getOrderItemId() {
+    public UUID getOrderItemId() {
         return orderItemId;
     }
 }

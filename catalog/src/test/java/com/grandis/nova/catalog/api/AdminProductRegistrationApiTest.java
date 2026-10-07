@@ -3,6 +3,7 @@ package com.grandis.nova.catalog.api;
 import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
+import com.grandis.nova.common.UuidBinary;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -23,6 +24,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -47,7 +49,7 @@ class AdminProductRegistrationApiTest {
     @Autowired JdbcTemplate jdbcTemplate;
 
     ShopFixtures fixtures;
-    Long categoryId;
+    UUID categoryId;
     Instant opensAt;
 
     @BeforeEach
@@ -81,7 +83,7 @@ class AdminProductRegistrationApiTest {
                     """);
 
             JsonNode data = data(register("k-" + ShopFixtures.unique(), body).andExpect(status().isCreated()));
-            Long productId = data.get("registration").get("productId").asLong();
+            UUID productId = UUID.fromString(data.get("registration").get("productId").asString());
             assertThat(data.get("registration").get("completed").asBoolean()).as("회차 이벤트는 커밋 뒤에 나간다 — 아직 준비 전").isFalse();
             assertThat(data.get("registration").has("blockedReason")).as("막힘 · 단계 칸은 없다").isFalse();
 
@@ -119,16 +121,16 @@ class AdminProductRegistrationApiTest {
             assertThat(product.get("imageUrl").asString()).as("첫 색상(블랙)의 첫 장 — 대표 표시(b1)가 아니다").isEqualTo("https://img/b0.jpg");
 
             // DB: 고른 공개 여부 · 조합 키 · 등록 기록 · 회차 이벤트
-            assertThat(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, productId)).isTrue();
+            assertThat(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, UuidBinary.toBytes(productId))).isTrue();
             assertThat(jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM product_options WHERE product_id = ? AND combination_key IS NOT NULL", Long.class, productId)).isEqualTo(3L);
+                    "SELECT COUNT(*) FROM product_options WHERE product_id = ? AND combination_key IS NOT NULL", Long.class, UuidBinary.toBytes(productId))).isEqualTo(3L);
             assertThat(jdbcTemplate.queryForList(
-                    "SELECT combination_key FROM product_options WHERE product_id = ?", String.class, productId))
+                    "SELECT combination_key FROM product_options WHERE product_id = ?", String.class, UuidBinary.toBytes(productId)))
                     .as("조합마다 축 둘의 값 id").allSatisfy(key -> assertThat(OptionCombination.valueIdsOf(key)).hasSize(2));
             assertThat(jdbcTemplate.queryForObject("SELECT idempotency_key IS NOT NULL FROM products WHERE id = ?",
-                    Boolean.class, productId)).isTrue();
+                    Boolean.class, UuidBinary.toBytes(productId))).isTrue();
             assertThat(jdbcTemplate.queryForList("SELECT event_type FROM catalog_outbox_events WHERE aggregate_id = ?",
-                    String.class, productId)).containsExactly("PREORDER_PRODUCT_REGISTERED");
+                    String.class, UuidBinary.toBytes(productId))).containsExactly("PREORDER_PRODUCT_REGISTERED");
         }
 
         @Test
@@ -136,7 +138,7 @@ class AdminProductRegistrationApiTest {
         void registersInStockProductWithoutAxes() throws Exception {
             String body = """
                     {
-                      "categoryId": %d, "saleMode": "IN_STOCK", "title": "케이블", "visible": false, "basePrice": 9000,
+                      "categoryId": "%s", "saleMode": "IN_STOCK", "title": "케이블", "visible": false, "basePrice": 9000,
                       "combinations": [ { "selections": {}, "stock": 7 } ]
                     }
                     """.formatted(categoryId);
@@ -149,18 +151,18 @@ class AdminProductRegistrationApiTest {
             assertThat(variant.get("title").asString()).isEqualTo("케이블");
             assertThat(variant.get("price").decimalValue()).isEqualByComparingTo("9000");
             assertThat(variant.get("availableQuantity").asInt()).as("order 가 재고를 넣기 전이라 0").isEqualTo(0);
-            Long productId = data.get("registration").get("productId").asLong();
+            UUID productId = UUID.fromString(data.get("registration").get("productId").asString());
             assertThat(jdbcTemplate.queryForObject(
                     "SELECT COUNT(*) FROM option_inventories inv JOIN product_options o ON o.id = inv.option_id WHERE o.product_id = ?",
-                    Long.class, productId)).as("catalog 는 option_inventories 를 쓰지 않는다").isZero();
-            assertThat(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, productId)).isFalse();
+                    Long.class, UuidBinary.toBytes(productId))).as("catalog 는 option_inventories 를 쓰지 않는다").isZero();
+            assertThat(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, UuidBinary.toBytes(productId))).isFalse();
             Map<String, Object> event = jdbcTemplate.queryForMap(
                     "SELECT event_type, JSON_EXTRACT(payload, '$.items[0].stockTotal') AS stock, "
-                            + "JSON_EXTRACT(payload, '$.items[0].optionId') AS option_id FROM catalog_outbox_events WHERE aggregate_id = ?",
-                    productId);
+                            + "JSON_UNQUOTE(JSON_EXTRACT(payload, '$.items[0].optionId')) AS option_id FROM catalog_outbox_events WHERE aggregate_id = ?",
+                    UuidBinary.toBytes(productId));
             assertThat(event.get("event_type")).isEqualTo("IN_STOCK_PRODUCT_REGISTERED");
             assertThat(event.get("stock")).isEqualTo("7");
-            assertThat(event.get("option_id")).isEqualTo(String.valueOf(variant.get("variantId").asLong()));
+            assertThat(event.get("option_id")).isEqualTo(variant.get("variantId").asString());
         }
 
         @Test
@@ -168,11 +170,11 @@ class AdminProductRegistrationApiTest {
         void optionValueSurchargeIsStoredAsPlainInteger() throws Exception {
             JsonNode data = data(register("k-" + ShopFixtures.unique(), preorderBody("").replace("\"surcharge\": 200000", "\"surcharge\": 1.5e3"))
                     .andExpect(status().isCreated()));
-            Long productId = data.get("registration").get("productId").asLong();
+            UUID productId = UUID.fromString(data.get("registration").get("productId").asString());
 
             assertThat(data.get("product").get("optionAxes").get(1).get("values").get(0).get("surcharge").toString()).isEqualTo("1500");
             assertThat(jdbcTemplate.queryForObject("SELECT JSON_TYPE(JSON_EXTRACT(options, '$.axes[1].values[0].surcharge')) FROM products WHERE id = ?",
-                    String.class, productId)).isEqualTo("INTEGER");
+                    String.class, UuidBinary.toBytes(productId))).isEqualTo("INTEGER");
         }
     }
 
@@ -189,7 +191,7 @@ class AdminProductRegistrationApiTest {
             String original = preorderBody("""
                     "combinations": [ { "selections": { "color": "블랙", "storage": "256GB" }, "sku": "BLK-256" } ],
                     """);
-            Long first = productIdOf(register(key, original).andExpect(status().isCreated()));
+            UUID first = productIdOf(register(key, original).andExpect(status().isCreated()));
             long before = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM products", Long.class);
 
             String different = original.replace("\"title\": \"Nova 1\"", "\"title\": \"Nova 2\"")
@@ -202,7 +204,7 @@ class AdminProductRegistrationApiTest {
             assertThat(data(replay).get("product").isNull()).as("200 · 202 는 고정 필드만").isTrue();
             assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM products", Long.class)).isEqualTo(before);
             // 두 번째 본문은 어디에도 반영되지 않는다 — 첫 등록의 제목 · 가격이 그대로다
-            assertThat(jdbcTemplate.queryForMap("SELECT title, base_price FROM products WHERE id = ?", first))
+            assertThat(jdbcTemplate.queryForMap("SELECT title, base_price FROM products WHERE id = ?", UuidBinary.toBytes(first)))
                     .containsEntry("title", "Nova 1")
                     .hasEntrySatisfying("base_price", price -> assertThat(((Number) price).longValue()).isEqualTo(1000000L));
 
@@ -222,7 +224,7 @@ class AdminProductRegistrationApiTest {
         @DisplayName("응답을 잃고 오픈 30분 전이 지난 뒤 다시 보내도 같은 키면 202 와 같은 productId — 새 키로는 400")
         void lateResendStillReplays() throws Exception {
             String key = "k-" + ShopFixtures.unique();
-            Long first = productIdOf(register(key, preorderBody("")).andExpect(status().isCreated()));
+            UUID first = productIdOf(register(key, preorderBody("")).andExpect(status().isCreated()));
 
             // 오픈 시각이 이미 지난 본문 — 최초 등록이면 opensAt 검사에 걸린다
             String late = preorderBody("").replace(opensAt.toString(), Instant.now().minus(Duration.ofMinutes(1)).toString());
@@ -264,11 +266,11 @@ class AdminProductRegistrationApiTest {
         @DisplayName("키로 상태를 묻는다 — 없으면 404")
         void statusByKey() throws Exception {
             String key = "k-" + ShopFixtures.unique();
-            Long productId = productIdOf(register(key, preorderBody("")).andExpect(status().isCreated()));
+            UUID productId = productIdOf(register(key, preorderBody("")).andExpect(status().isCreated()));
 
             mockMvc.perform(get(PATH + "/registrations/{key}", key).with(user("admin").roles("ADMIN")))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.data.productId").value(productId))
+                    .andExpect(jsonPath("$.data.productId").value(productId.toString()))
                     .andExpect(jsonPath("$.data.completed").value(false))
                     .andExpect(jsonPath("$.data.campaignSetAt").doesNotExist());
             mockMvc.perform(get(PATH + "/registrations/{key}", "nope-" + key).with(user("admin").roles("ADMIN")))
@@ -335,7 +337,7 @@ class AdminProductRegistrationApiTest {
                     "combinations": [ { "selections": { "color": "블랙", "storage": "256GB" }, "stock": 0 } ],
                     """)), "combinations[color=블랙, storage=256GB].stock");
             String inStock = """
-                    { "categoryId": %d, "saleMode": "IN_STOCK", "title": "케이스", "visible": true, "basePrice": 10000,
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "케이스", "visible": true, "basePrice": 10000,
                       "optionAxes": [ { "key": "color", "label": "색상", "values": [ { "value": "블랙" }, { "value": "화이트" } ] } ],
                       "combinations": [ { "selections": { "color": "블랙" }, "stock": 5 } %s ] }
                     """;
@@ -366,7 +368,7 @@ class AdminProductRegistrationApiTest {
                     "images": { "detail": [ { "section": "Spec", "items": [ { "url": "https://img/1.jpg" } ] }, { "section": "spec", "items": [ { "url": "https://img/2.jpg" } ] } ] },
                     """)), "images.detail[1].section");
             String noColorAxis = """
-                    { "categoryId": %d, "saleMode": "IN_STOCK", "title": "케이블", "visible": true, "basePrice": 9000,
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "케이블", "visible": true, "basePrice": 9000,
                       "combinations": [ { "selections": {}, "stock": 1 } ],
                       "images": { "gallery": [ { "color": "블랙", "items": [ { "url": "https://img/1.jpg" } ] } ] } }
                     """.formatted(categoryId);
@@ -399,7 +401,7 @@ class AdminProductRegistrationApiTest {
                     "images": { "detail": [ { "section": "Straße", "items": [ { "url": "https://img/1.jpg" } ] }, { "section": "Strasse", "items": [ { "url": "https://img/2.jpg" } ] } ] },
                     """)), "images.detail[1].section");
             assertThat(productsInCategory()).as("400 뒤에 상품 행이 남지 않는다").isEqualTo(productsBefore);
-            expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("").replace("\"categoryId\": " + categoryId, "\"categoryId\": 999999999")),
+            expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("").replace(categoryId.toString(), UUID.randomUUID().toString())),
                     "categoryId");
             // 표시명(값을 " / " 로 이은 것) 122자 — SKU 는 직접 줘서 SKU 길이 규칙에 먼저 안 걸리게
             String longColor = "화".repeat(60);
@@ -466,7 +468,7 @@ class AdminProductRegistrationApiTest {
                     "shipmentBatches": [ { "batchNumber": 1, "positionFrom": 1, "positionTo": 100, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "2026-11-07" },
                                          { "batchNumber": 2, "positionFrom": 101, "positionTo": 200, "estimatedShipStart": "2026-11-08", "estimatedShipEnd": "2026-11-14" } ]
                     """)), "shipmentBatches[1].positionTo");
-            // 앞 차수가 순번 끝(Long 최댓값)이면 다음 차수가 이어질 수 없다 — "끝 + 1" 이 넘쳐 음수 시작을 받지 않는다
+            // 앞 차수가 순번 끝(UUID 최댓값)이면 다음 차수가 이어질 수 없다 — "끝 + 1" 이 넘쳐 음수 시작을 받지 않는다
             expectValidation(register("k-" + ShopFixtures.unique(), withBatches("""
                     "shipmentBatches": [ { "batchNumber": 1, "positionFrom": 1, "positionTo": 9223372036854775807, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "2026-11-07" },
                                          { "batchNumber": 2, "positionFrom": -9223372036854775808, "positionTo": null, "estimatedShipStart": "2026-11-08", "estimatedShipEnd": "2026-11-14" } ]
@@ -574,7 +576,7 @@ class AdminProductRegistrationApiTest {
         /** 축 없는 일반 상품 하나(조합 하나). 조합 칸 경로는 선택 키로 만든다 — 축이 없으면 combinations[], storage 축이면 combinations[storage=512GB]. */
         private String inStockBody(String basePrice, String stock) {
             return """
-                    { "categoryId": %d, "saleMode": "IN_STOCK", "title": "Limit", "visible": true, "basePrice": %s,
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Limit", "visible": true, "basePrice": %s,
                       "combinations": [ { "selections": {}, "stock": %s } ] }
                     """.formatted(categoryId, basePrice, stock);
         }
@@ -582,7 +584,7 @@ class AdminProductRegistrationApiTest {
         /** 축 하나(값 하나)의 일반 상품. 표시명이 값 그대로라 표시명 상한(120)보다 값 칼럼(60)이 먼저 걸린다. */
         private String singleAxisBody(String key, String value) {
             return """
-                    { "categoryId": %d, "saleMode": "IN_STOCK", "title": "Limit", "visible": true, "basePrice": 1000,
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Limit", "visible": true, "basePrice": 1000,
                       "optionAxes": [ { "key": "%s", "label": "축", "values": [ { "value": "%s" } ] } ],
                       "combinations": [ { "selections": { "%s": "%s" }, "sku": "C1", "stock": 1 } ] }
                     """.formatted(categoryId, key, value, key, value);
@@ -590,7 +592,7 @@ class AdminProductRegistrationApiTest {
 
         private String detailSectionBody(String section) {
             return """
-                    { "categoryId": %d, "saleMode": "IN_STOCK", "title": "Limit", "visible": true, "basePrice": 1000,
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Limit", "visible": true, "basePrice": 1000,
                       "images": { "detail": [ { "section": "%s", "items": [ { "url": "https://img/1.jpg" } ] } ] },
                       "combinations": [ { "selections": {}, "stock": 1 } ] }
                     """.formatted(categoryId, section);
@@ -663,7 +665,7 @@ class AdminProductRegistrationApiTest {
     private String preorderBody(String extra) {
         return """
                 {
-                  "categoryId": %d,
+                  "categoryId": "%s",
                   "saleMode": "PREORDER",
                   "title": "Nova 1", "description": "설명", "tags": "nova",
                   "visible": true,
@@ -687,7 +689,7 @@ class AdminProductRegistrationApiTest {
     }
 
     private int productsInCategory() {
-        return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM products WHERE category_id = ?", Integer.class, categoryId);
+        return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM products WHERE category_id = ?", Integer.class, UuidBinary.toBytes(categoryId));
     }
 
     private static void expectValidation(ResultActions actions, String field) throws Exception {
@@ -700,8 +702,8 @@ class AdminProductRegistrationApiTest {
         return JSON.readTree(actions.andReturn().getResponse().getContentAsString()).get("data");
     }
 
-    private static Long productIdOf(ResultActions actions) throws Exception {
-        return data(actions).get("registration").get("productId").asLong();
+    private static UUID productIdOf(ResultActions actions) throws Exception {
+        return UUID.fromString(data(actions).get("registration").get("productId").asString());
     }
 
     private static List<JsonNode> list(JsonNode array) {

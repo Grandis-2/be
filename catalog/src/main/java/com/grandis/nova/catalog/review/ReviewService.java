@@ -19,6 +19,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.UUID;
+
 /**
  * 상품 리뷰 — 일반 판매 상품의 배송 완료된 주문상품 1건당 1개, 작성자만 수정 · 삭제, 조회는 비로그인도(2026-10-06 결정).
  *
@@ -57,7 +59,7 @@ public class ReviewService {
     }
 
     /** @throws BusinessException NOT_FOUND(내 주문상품이 아님) · REVIEW_NOT_ALLOWED · REVIEW_ALREADY_WRITTEN · VALIDATION_FAILED */
-    public ReviewView write(Long customerId, ReviewCreateRequest request) {
+    public ReviewView write(UUID customerId, ReviewCreateRequest request) {
         String body = requireBody(request.body());
         OrderClient.OrderItem item = requireContract(request.orderItemId(), InternalCalls.call(Dependencies.ORDER,
                 () -> orders.getOrderItem(request.orderItemId()), ORDER_ITEM_NOT_FOUND,
@@ -92,7 +94,7 @@ public class ReviewService {
 
     /** 작성자 본인만. 남의 리뷰 · 없는 리뷰는 404. */
     @Transactional
-    public ReviewView revise(Long customerId, Long reviewId, ReviewUpdateRequest request) {
+    public ReviewView revise(UUID customerId, UUID reviewId, ReviewUpdateRequest request) {
         if (request.isEmpty()) {
             throw ValidationFailures.of("body", "바꿀 칸이 하나도 없습니다.");
         }
@@ -103,13 +105,13 @@ public class ReviewService {
     }
 
     @Transactional
-    public void delete(Long customerId, Long reviewId) {
+    public void delete(UUID customerId, UUID reviewId) {
         reviews.delete(requireMine(customerId, reviewId));
     }
 
     /** 상품 상세의 후기 탭. 상품을 보여 주지 않는 경우(없음 · 비공개 · 준비 전)는 상품 상세처럼 404. */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public OffsetPage<ReviewView> productReviews(Long productId, int page, int size) {
+    public OffsetPage<ReviewView> productReviews(UUID productId, int page, int size) {
         Product product = products.findById(productId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
         if (!(product.isVisible() && crossReads.isReady(productId))) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
@@ -119,29 +121,29 @@ public class ReviewService {
 
     /** 모아보기. 비공개 상품의 리뷰는 빠진다. */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public OffsetPage<ReviewView> visibleReviews(Long categoryId, int page, int size) {
+    public OffsetPage<ReviewView> visibleReviews(UUID categoryId, int page, int size) {
         return new OffsetPage<>(queries.findVisible(categoryId, page, size), page, size, queries.countVisible(categoryId));
     }
 
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public OffsetPage<ReviewView> myReviews(Long customerId, Long orderItemId, int page, int size) {
+    public OffsetPage<ReviewView> myReviews(UUID customerId, UUID orderItemId, int page, int size) {
         return new OffsetPage<>(queries.findMine(customerId, orderItemId, page, size), page, size,
                 queries.countMine(customerId, orderItemId));
     }
 
-    private ProductReview requireMine(Long customerId, Long reviewId) {
+    private ProductReview requireMine(UUID customerId, UUID reviewId) {
         return reviews.findByIdAndCustomerId(reviewId, customerId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND, "리뷰를 찾을 수 없습니다."));
     }
 
     /** 방금 쓰거나 고친 내 리뷰. 그 사이 지워졌으면(같은 회원의 동시 삭제) 404. */
-    private ReviewView mine(Long customerId, Long orderItemId) {
+    private ReviewView mine(UUID customerId, UUID orderItemId) {
         return queries.findMine(customerId, orderItemId, 0, 1).stream().findFirst()
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND, "리뷰를 찾을 수 없습니다."));
     }
 
     /** order 응답이 물은 주문상품이고 필수 칸이 있는가. */
-    private static OrderClient.OrderItem requireContract(Long requested, OrderClient.OrderItem item) {
+    private static OrderClient.OrderItem requireContract(UUID requested, OrderClient.OrderItem item) {
         if (!requested.equals(item.orderItemId())) {
             throw InternalCalls.contractViolation(Dependencies.ORDER, "물은 주문상품과 다른 응답");
         }

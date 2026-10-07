@@ -18,6 +18,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -45,7 +46,7 @@ class ProductListingQueryRepositoryTest {
     @DisplayName("마감 + 120시간 직전에는 보이고, 그 시각부터는 숨는다")
     void hideBoundaryIsExactlyOneHundredTwentyHours() {
         Instant closesAt = Instant.parse("2026-10-01T00:00:00Z");
-        Long productId = fixtures.product(fixtures.category(), "PREORDER", "ACTIVE", "경계", tag);
+        UUID productId = fixtures.product(fixtures.category(), "PREORDER", "ACTIVE", "경계", tag);
         fixtures.registration(productId);
         fixtures.campaign(productId, closesAt.minusSeconds(3600), closesAt);
         // 상수를 참조하면 상수가 틀려도 시험이 같이 움직인다 — 확정값 120시간을 여기 박는다
@@ -61,11 +62,11 @@ class ProductListingQueryRepositoryTest {
     @Test
     @DisplayName("목록 · 검색은 다른 서비스의 표(preorder_campaigns · option_inventories)를 읽기만 한다")
     void readsButNeverWritesForeignTables() throws Exception {
-        Long productId = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "읽기만", tag);
+        UUID productId = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "읽기만", tag);
         fixtures.registration(productId);
         ShopFixtures.AxisRef axis = fixtures.axis(productId, "color", 0);
         String black = fixtures.value(axis, "블랙", 0);
-        Long option = fixtures.option(productId, "ACTIVE", new java.math.BigDecimal("1000"));
+        UUID option = fixtures.option(productId, "ACTIVE", new java.math.BigDecimal("1000"));
         fixtures.selection(productId, option, axis, black);
         fixtures.inventory(option, 1, 0, 0);
         ProductListFilter filter = new ProductListFilter(tag, null, null, List.of("블랙"), List.of());
@@ -106,7 +107,7 @@ class ProductListingQueryRepositoryTest {
         return DriverManager.getConnection(mysql.getJdbcUrl(), "root", mysql.getPassword());
     }
 
-    private static List<Long> ids(List<ProductListItem> items) {
+    private static List<UUID> ids(List<ProductListItem> items) {
         return items.stream().map(ProductListItem::productId).toList();
     }
 }
