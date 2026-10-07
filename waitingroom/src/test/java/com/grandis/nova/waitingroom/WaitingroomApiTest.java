@@ -29,6 +29,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Map;
 
+import static com.grandis.nova.waitingroom.support.TestIds.customerId;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** 기동 · 인증 · 봉투 · 요청 ID 를 실제 필터 체인으로 확인한다. */
@@ -76,7 +77,7 @@ class WaitingroomApiTest {
         @Test
         void 무효한_토큰은_401_invalid_token_이다() {
             client.get().uri("/api/v1/probe/me")
-                    .headers(headers -> headers.setBearerAuth(TestJwts.builder("1024", NOW).audience("other").sign()))
+                    .headers(headers -> headers.setBearerAuth(TestJwts.builder(customerId(1024), NOW).audience("other").sign()))
                     .exchange()
                     .expectStatus().isUnauthorized()
                     .expectHeader().valueEquals(HttpHeaders.WWW_AUTHENTICATE, "Bearer error=\"invalid_token\"")
@@ -86,16 +87,16 @@ class WaitingroomApiTest {
         @Test
         void 회원은_sub_로_식별한다() {
             client.get().uri("/api/v1/probe/me")
-                    .headers(headers -> headers.setBearerAuth(TestJwts.user("1024", NOW)))
+                    .headers(headers -> headers.setBearerAuth(TestJwts.user(customerId(1024), NOW)))
                     .exchange()
                     .expectStatus().isOk()
-                    .expectBody().jsonPath("$.subject").isEqualTo("1024");
+                    .expectBody().jsonPath("$.subject").isEqualTo(customerId(1024));
         }
 
         @Test
         void 관리자_경로는_ADMIN_만_들어온다() {
             client.get().uri("/api/v1/admin/probe")
-                    .headers(headers -> headers.setBearerAuth(TestJwts.user("1024", NOW)))
+                    .headers(headers -> headers.setBearerAuth(TestJwts.user(customerId(1024), NOW)))
                     .exchange()
                     .expectStatus().isForbidden()
                     .expectBody().jsonPath("$.error.code").isEqualTo("FORBIDDEN");
@@ -112,7 +113,7 @@ class WaitingroomApiTest {
 
         @Test
         void 키를_받지_못하면_토큰_탓이_아니므로_503_이다() {
-            String unknownKid = TestJwts.builder("1024", NOW).signingKey(TestJwts.generate("rotated")).sign();
+            String unknownKid = TestJwts.builder(customerId(1024), NOW).signingKey(TestJwts.generate("rotated")).sign();
 
             client.get().uri("/api/v1/probe/me")
                     .headers(headers -> headers.setBearerAuth(unknownKid))
@@ -129,7 +130,7 @@ class WaitingroomApiTest {
         void 받은_ID_를_이어_써서_응답_헤더_봉투_로그에_같은_값을_쓴다() {
             client.get().uri("/api/v1/probe/trace")
                     .header(RequestIdFilter.HEADER, "front-abc.1")
-                    .headers(headers -> headers.setBearerAuth(TestJwts.user("1024", NOW)))
+                    .headers(headers -> headers.setBearerAuth(TestJwts.user(customerId(1024), NOW)))
                     .exchange()
                     .expectStatus().isOk()
                     .expectHeader().valueEquals(RequestIdFilter.HEADER, "front-abc.1")
@@ -160,7 +161,7 @@ class WaitingroomApiTest {
         void 예상하지_못한_오류는_원문_없이_500_봉투이고_traceId_를_싣는다() {
             client.get().uri("/api/v1/probe/boom")
                     .header(RequestIdFilter.HEADER, "boom-1")
-                    .headers(headers -> headers.setBearerAuth(TestJwts.user("1024", NOW)))
+                    .headers(headers -> headers.setBearerAuth(TestJwts.user(customerId(1024), NOW)))
                     .exchange()
                     .expectStatus().isEqualTo(500)
                     .expectBody()
@@ -172,7 +173,7 @@ class WaitingroomApiTest {
         @Test
         void 없는_경로는_404_봉투다() {
             client.get().uri("/api/v1/probe/missing")
-                    .headers(headers -> headers.setBearerAuth(TestJwts.user("1024", NOW)))
+                    .headers(headers -> headers.setBearerAuth(TestJwts.user(customerId(1024), NOW)))
                     .exchange()
                     .expectStatus().isNotFound()
                     .expectBody().jsonPath("$.error.code").isEqualTo("NOT_FOUND");

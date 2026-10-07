@@ -14,6 +14,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 회차 일정 이벤트를 Redis 일정 목록에 반영한다. 일정 번호가 더 클 때만 쓰므로 순서가 뒤집히거나 두 번 와도 된다.
@@ -66,7 +67,7 @@ class CampaignScheduleHandler implements QueueMessageHandler {
      * preorder 의 PREORDER_CAMPAIGN_CHANGED payload. change 는 로그용이고 판정은 일정 번호로 한다.
      * visible 이 없으면(이 칸을 모르는 preorder) 공개로 본다.
      */
-    record CampaignChanged(Long productId, long scheduleVersion, Instant opensAt, Instant closesAt,
+    record CampaignChanged(UUID productId, long scheduleVersion, Instant opensAt, Instant closesAt,
                            Instant changedAt, String change, Boolean visible) {
 
         boolean isVisible() {

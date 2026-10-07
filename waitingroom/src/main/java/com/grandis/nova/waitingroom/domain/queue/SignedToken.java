@@ -24,7 +24,7 @@ public final class SignedToken {
     /** 인증 없는 요청 하나가 키 수만큼 HMAC 을 돌리므로 옛 키 수를 묶는다. */
     private static final int MAX_PREVIOUS = 2;
     private static final char SEPARATOR = '.';
-    /** 정상 토큰은 수십 자다. 인증 없는 요청이 긴 입력으로 HMAC 을 여러 번 돌리지 못하게 먼저 자른다. */
+    /** 정상 토큰은 200자 안쪽이다(UUID 두 개 + 만료). 인증 없는 요청이 긴 입력으로 HMAC 을 여러 번 돌리지 못하게 먼저 자른다. */
     private static final int MAX_TOKEN_LENGTH = 512;
     /** 필드 구분자(U+001F). 식별자에 들어갈 수 없는 글자라 경계가 옮겨지지 않는다. */
     private static final char FIELD = (char) 0x1f;
