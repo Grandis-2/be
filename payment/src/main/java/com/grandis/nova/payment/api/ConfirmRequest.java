@@ -13,6 +13,7 @@ import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
 /**
  * 승인 요청. 대상 · 금액은 호출자가 자기 저장값(주문 id · 주문 총액)으로 준다 — 사용자가 승인 요청에 실은 금액이 아니다(D15).
@@ -29,7 +30,7 @@ import java.math.BigDecimal;
  */
 public record ConfirmRequest(
         @NotNull TargetType targetType,
-        @NotNull @Positive Long targetId,
+        @NotNull UUID targetId,
         @NotBlank @Size(max = ProviderPaymentKey.MAX_LENGTH)
         @Pattern(regexp = "^(?!\\.{1,2}$)[^\\u0000-\\u001F\\u007F-\\u009F]+$") String paymentKey,
         @NotNull @Positive @Digits(integer = 12, fraction = 0) BigDecimal amount,

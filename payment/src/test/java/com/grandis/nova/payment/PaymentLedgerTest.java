@@ -1,5 +1,6 @@
 package com.grandis.nova.payment;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.payment.domain.enums.PaymentStatus;
 import com.grandis.nova.payment.domain.enums.TransactionStatus;
 import com.grandis.nova.payment.domain.enums.TransactionType;
@@ -33,6 +34,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -136,7 +138,7 @@ class PaymentLedgerTest {
         assertThat(jdbcTemplate.update("""
                 UPDATE payment_transactions SET status = 'PROCESSING'
                  WHERE id = ? AND status = 'PENDING' AND transaction_type = 'REFUND'
-                """, pending.id())).isZero();
+                """, UuidBinary.toBytes(pending.id()))).isZero();
     }
 
     // ---- 반영 ----
@@ -464,15 +466,15 @@ class PaymentLedgerTest {
     }
 
     @Test
-    void transactionsOfTargetAreListedInIdOrder() {
+    void transactionsOfTargetAreListedInCreationOrder() {
         PaymentTransaction first = inTx(() -> ledger.openCapture(target, AMOUNT));
         PaymentTransaction second = inTx(() -> ledger.openCapture(target, AMOUNT));
-        // 앱 시계가 서버마다 달라 created_at 이 거꾸로 찍혀도 순서는 id 다.
+        // 만든 순은 created_at 이다. id 는 같은 시각일 때만 가른다.
         jdbcTemplate.update("UPDATE payment_transactions SET created_at = created_at - INTERVAL 1 HOUR WHERE id = ?",
-                second.id());
+                UuidBinary.toBytes(second.id()));
 
         assertThat(transactions.findTransactionsByTarget(target)).extracting(PaymentTransaction::id)
-                .containsExactly(first.id(), second.id());
+                .containsExactly(second.id(), first.id());
         assertThat(transactions.findByProviderOrderId(second.providerOrderId())).map(PaymentTransaction::id)
                 .contains(second.id());
     }
@@ -560,7 +562,7 @@ class PaymentLedgerTest {
         PaymentTransaction pending = inTx(() -> ledger.openCapture(target, AMOUNT));
 
         assertThatThrownBy(() -> jdbcTemplate.update(
-                "UPDATE payment_transactions SET escalated_at = UTC_TIMESTAMP(6) WHERE id = ?", pending.id()))
+                "UPDATE payment_transactions SET escalated_at = UTC_TIMESTAMP(6) WHERE id = ?", UuidBinary.toBytes(pending.id())))
                 .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_payment_tx_escalated");
     }
 
@@ -613,7 +615,7 @@ class PaymentLedgerTest {
         return inTx(() -> ledger.start(pending, target, providerPayment, AMOUNT)).orElseThrow();
     }
 
-    private static Long id(ClaimedTransaction claimed) {
+    private static UUID id(ClaimedTransaction claimed) {
         return claimed.transaction().id();
     }
 
@@ -636,30 +638,30 @@ class PaymentLedgerTest {
         transactionTemplate.executeWithoutResult(status -> work.run());
     }
 
-    private long leaseSecondsLeft(Long id) {
+    private long leaseSecondsLeft(UUID id) {
         return jdbcTemplate.queryForObject(
                 "SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(6), lease_expires_at) FROM payment_transactions WHERE id = ?",
-                Long.class, id);
+                Long.class, UuidBinary.toBytes(id));
     }
 
-    private long secondsUntilRetry(Long id) {
+    private long secondsUntilRetry(UUID id) {
         return jdbcTemplate.queryForObject(
                 "SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(6), next_retry_at) FROM payment_transactions WHERE id = ?",
-                Long.class, id);
+                Long.class, UuidBinary.toBytes(id));
     }
 
-    private void expireLease(Long id) {
+    private void expireLease(UUID id) {
         jdbcTemplate.update("UPDATE payment_transactions SET lease_expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND "
-                + "WHERE id = ?", id);
+                + "WHERE id = ?", UuidBinary.toBytes(id));
     }
 
-    private void makeRetryDue(Long id) {
+    private void makeRetryDue(UUID id) {
         jdbcTemplate.update("UPDATE payment_transactions SET next_retry_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND "
-                + "WHERE id = ?", id);
+                + "WHERE id = ?", UuidBinary.toBytes(id));
     }
 
-    private void ageCreatedAt(Long id, Duration age) {
+    private void ageCreatedAt(UUID id, Duration age) {
         jdbcTemplate.update("UPDATE payment_transactions SET created_at = UTC_TIMESTAMP(6) - INTERVAL ? SECOND WHERE id = ?",
-                age.toSeconds(), id);
+                age.toSeconds(), UuidBinary.toBytes(id));
     }
 }

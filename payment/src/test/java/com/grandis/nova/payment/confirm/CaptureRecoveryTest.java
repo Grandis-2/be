@@ -1,5 +1,6 @@
 package com.grandis.nova.payment.confirm;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.security.RevocationChecker;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.payment.ClaimedTransaction;
@@ -44,6 +45,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -525,7 +527,7 @@ class CaptureRecoveryTest {
 
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(6), next_retry_at) FROM payment_transactions WHERE id = ?",
-                Long.class, lost.id())).isBetween(CaptureRecovery.RECHECK_AFTER.toSeconds() - 5,
+                Long.class, UuidBinary.toBytes(lost.id()))).isBetween(CaptureRecovery.RECHECK_AFTER.toSeconds() - 5,
                 CaptureRecovery.RECHECK_AFTER.toSeconds());
     }
 
@@ -547,7 +549,7 @@ class CaptureRecoveryTest {
     @Test
     void manyAttemptsInsideWindowAreNotEscalated() {
         PaymentTransaction retry = startedThenRetryDue(PROVIDER_ERROR);
-        jdbcTemplate.update("UPDATE payment_transactions SET attempt_count = 40 WHERE id = ?", retry.id());
+        jdbcTemplate.update("UPDATE payment_transactions SET attempt_count = 40 WHERE id = ?", UuidBinary.toBytes(retry.id()));
         given(toss.findByPaymentKey(paymentKey.value())).willReturn(found(retry, TossPaymentStatus.IN_PROGRESS, AMOUNT));
         given(toss.confirm(any(), any())).willReturn(new TossCommandResult.Transient("PROVIDER_ERROR", "일시 오류"));
 
@@ -711,21 +713,21 @@ class CaptureRecoveryTest {
 
     private int paymentsOfTarget() {
         return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM payments WHERE target_type = 'ORDER' AND target_id = ?",
-                Integer.class, target.id());
+                Integer.class, UuidBinary.toBytes(target.id()));
     }
 
     private int settledEvents() {
         return jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM payment_outbox_events
                  WHERE aggregate_type = 'ORDER' AND aggregate_id = ? AND event_type = 'ORDER_PAYMENT_SETTLED'
-                """, Integer.class, target.id());
+                """, Integer.class, UuidBinary.toBytes(target.id()));
     }
 
     private JsonNode settledPayload() {
         List<String> payloads = jdbcTemplate.queryForList("""
                 SELECT payload FROM payment_outbox_events
                  WHERE aggregate_type = 'ORDER' AND aggregate_id = ? AND event_type = 'ORDER_PAYMENT_SETTLED'
-                """, String.class, target.id());
+                """, String.class, UuidBinary.toBytes(target.id()));
         assertThat(payloads).hasSize(1);
         assertThat(payloads.getFirst()).doesNotContain(paymentKey.value());
         return jsonMapper.readTree(payloads.getFirst());
@@ -733,18 +735,18 @@ class CaptureRecoveryTest {
 
     // ---- 시각 당기기 ----
 
-    private void expireLease(Long id) {
+    private void expireLease(UUID id) {
         jdbcTemplate.update("UPDATE payment_transactions SET lease_expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND "
-                + "WHERE id = ?", id);
+                + "WHERE id = ?", UuidBinary.toBytes(id));
     }
 
-    private void makeRetryDue(Long id) {
+    private void makeRetryDue(UUID id) {
         jdbcTemplate.update("UPDATE payment_transactions SET next_retry_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND "
-                + "WHERE id = ?", id);
+                + "WHERE id = ?", UuidBinary.toBytes(id));
     }
 
-    private void ageRequestedAt(Long id, Duration age) {
+    private void ageRequestedAt(UUID id, Duration age) {
         jdbcTemplate.update("UPDATE payment_transactions SET requested_at = requested_at - INTERVAL ? SECOND WHERE id = ?",
-                age.toSeconds(), id);
+                age.toSeconds(), UuidBinary.toBytes(id));
     }
 }

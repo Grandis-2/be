@@ -29,6 +29,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 결제 읽기 · 쓰기 포트의 JPA 구현. 엔티티는 여기서 만들고 여기서 도메인으로 바꿔 내보낸다.
@@ -79,14 +80,14 @@ class JpaPaymentStore implements PaymentTransactionReader, PaymentTransactionWri
     }
 
     @Override
-    public int claim(Long transactionId, TransactionStatus seenStatus, LeaseToken seenLease, LeaseToken lease,
+    public int claim(UUID transactionId, TransactionStatus seenStatus, LeaseToken seenLease, LeaseToken lease,
                      Duration leaseFor, Instant now) {
         return detachAfter(transactionId, transactions.claim(transactionId, seenStatus.name(),
                 seenLease == null ? null : seenLease.value(), lease.value(), micros(leaseFor), now));
     }
 
     @Override
-    public int finish(Long transactionId, LeaseToken lease, TransactionStatus to, ProviderError error, Instant now) {
+    public int finish(UUID transactionId, LeaseToken lease, TransactionStatus to, ProviderError error, Instant now) {
         if (!to.isFinished()) {
             throw new IllegalArgumentException("끝내는 상태가 아니다: " + to);
         }
@@ -95,35 +96,35 @@ class JpaPaymentStore implements PaymentTransactionReader, PaymentTransactionWri
     }
 
     @Override
-    public int reschedule(Long transactionId, LeaseToken lease, ProviderError error, Duration delay) {
+    public int reschedule(UUID transactionId, LeaseToken lease, ProviderError error, Duration delay) {
         return detachAfter(transactionId, transactions.reschedule(transactionId, lease.value(), error.code(),
                 error.message(), micros(delay)));
     }
 
     @Override
-    public int recordError(Long transactionId, LeaseToken lease, ProviderError error) {
+    public int recordError(UUID transactionId, LeaseToken lease, ProviderError error) {
         return detachAfter(transactionId, transactions.recordError(transactionId, lease.value(), error.code(),
                 error.message()));
     }
 
     @Override
-    public int expire(Long transactionId, Duration openedFor, Instant now) {
+    public int expire(UUID transactionId, Duration openedFor, Instant now) {
         return detachAfter(transactionId, transactions.expire(transactionId, micros(openedFor), now));
     }
 
     @Override
-    public int reserve(Long transactionId) {
+    public int reserve(UUID transactionId) {
         return detachAfter(transactionId, transactions.reserve(transactionId));
     }
 
     @Override
-    public int escalate(Long transactionId, LeaseToken lease, ProviderError error, Instant now) {
+    public int escalate(UUID transactionId, LeaseToken lease, ProviderError error, Instant now) {
         return detachAfter(transactionId, transactions.escalate(transactionId, lease.value(), error.code(),
                 error.message(), now));
     }
 
     @Override
-    public int rotateIdempotencyKey(Long transactionId, LeaseToken lease, IdempotencyKey key, Duration leaseFor) {
+    public int rotateIdempotencyKey(UUID transactionId, LeaseToken lease, IdempotencyKey key, Duration leaseFor) {
         return detachAfter(transactionId, transactions.rotateIdempotencyKey(transactionId, lease.value(), key.value(),
                 micros(leaseFor)));
     }
@@ -143,7 +144,7 @@ class JpaPaymentStore implements PaymentTransactionReader, PaymentTransactionWri
     }
 
     @Override
-    public Optional<PaymentTransaction> findById(Long transactionId) {
+    public Optional<PaymentTransaction> findById(UUID transactionId) {
         return transactions.findById(transactionId).map(PaymentMapper::toDomain);
     }
 
@@ -154,7 +155,7 @@ class JpaPaymentStore implements PaymentTransactionReader, PaymentTransactionWri
 
     @Override
     public List<PaymentTransaction> findTransactionsByTarget(PaymentTarget target) {
-        return transactions.findByTargetTypeAndTargetIdOrderByIdAsc(target.type(), target.id()).stream()
+        return transactions.findByTargetTypeAndTargetIdOrderByCreatedAtAscIdAsc(target.type(), target.id()).stream()
                 .map(PaymentMapper::toDomain).toList();
     }
 
@@ -185,13 +186,13 @@ class JpaPaymentStore implements PaymentTransactionReader, PaymentTransactionWri
         return payments.lockByTarget(target.type(), target.id()).map(PaymentMapper::toDomain);
     }
 
-    private int detachAfter(Long transactionId, int updated) {
+    private int detachAfter(UUID transactionId, int updated) {
         detach(PaymentTransactionJpaEntity.class, transactionId);
         return updated;
     }
 
     /** getReference 는 관리 중인 엔티티가 있으면 그것을, 없으면 프록시를 돌려줄 뿐 SELECT 하지 않는다. */
-    private void detach(Class<?> type, Long id) {
+    private void detach(Class<?> type, UUID id) {
         entityManager.detach(entityManager.getReference(type, id));
     }
 

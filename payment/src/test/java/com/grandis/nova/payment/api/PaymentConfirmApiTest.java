@@ -1,5 +1,6 @@
 package com.grandis.nova.payment.api;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.security.JwtTokenProvider;
 import com.grandis.nova.common.security.RevocationChecker;
@@ -123,7 +124,7 @@ class PaymentConfirmApiTest {
         assertThat(transaction()).containsEntry("status", "SUCCEEDED").containsEntry("attempt_count", 1);
         assertThat(jdbcTemplate.queryForObject("""
                 SELECT status FROM payments WHERE target_type = 'ORDER' AND target_id = ?
-                """, String.class, target.id())).isEqualTo("SUCCEEDED");
+                """, String.class, UuidBinary.toBytes(target.id()))).isEqualTo("SUCCEEDED");
         JsonNode payload = settledPayload();
         assertThat(payload.propertyNames()).containsExactlyInAnyOrder(
                 "providerOrderId", "result", "amount", "approvedAt", "declineReason");
@@ -357,7 +358,7 @@ class PaymentConfirmApiTest {
     void lostLeaseLeavesResultToHolder() throws Exception {
         given(toss.confirm(any(), any())).willAnswer(invocation -> {
             jdbcTemplate.update("UPDATE payment_transactions SET lease_token = ? WHERE id = ?",
-                    UUID.randomUUID().toString(), opened.id());
+                    UUID.randomUUID().toString(), UuidBinary.toBytes(opened.id()));
             return done(AMOUNT);
         });
 
@@ -411,7 +412,7 @@ class PaymentConfirmApiTest {
     @Test
     void expiredAttemptIsDeclinedAsExpiredWithoutCallingToss() throws Exception {
         jdbcTemplate.update("UPDATE payment_transactions SET created_at = UTC_TIMESTAMP(6) - INTERVAL ? SECOND WHERE id = ?",
-                PendingCaptureExpiry.OPENED_FOR.plusMinutes(1).toSeconds(), opened.id());
+                PendingCaptureExpiry.OPENED_FOR.plusMinutes(1).toSeconds(), UuidBinary.toBytes(opened.id()));
         expiry.expireDue();
 
         confirm(opened, target, AMOUNT)
@@ -525,7 +526,7 @@ class PaymentConfirmApiTest {
 
     private void ageCreatedAt(Duration age) {
         jdbcTemplate.update("UPDATE payment_transactions SET created_at = UTC_TIMESTAMP(6) - INTERVAL ? SECOND WHERE id = ?",
-                age.toSeconds(), opened.id());
+                age.toSeconds(), UuidBinary.toBytes(opened.id()));
     }
 
     private ResultActions perform(String providerOrderId, String json) throws Exception {
@@ -535,11 +536,11 @@ class PaymentConfirmApiTest {
                 .content(json));
     }
 
-    private String body(String targetType, Long targetId, String key, long amount) {
+    private String body(String targetType, UUID targetId, String key, long amount) {
         return body(targetType, targetId, key, amount, true);
     }
 
-    private String body(String targetType, Long targetId, String key, long amount, boolean startAllowed) {
+    private String body(String targetType, UUID targetId, String key, long amount, boolean startAllowed) {
         return jsonMapper.writeValueAsString(Map.of("targetType", targetType, "targetId", targetId,
                 "paymentKey", key, "amount", amount, "startAllowed", startAllowed));
     }
@@ -553,32 +554,32 @@ class PaymentConfirmApiTest {
     private Map<String, Object> transaction() {
         return jdbcTemplate.queryForMap("""
                 SELECT status, attempt_count, last_error_code FROM payment_transactions WHERE id = ?
-                """, opened.id());
+                """, UuidBinary.toBytes(opened.id()));
     }
 
     private String statusOf(PaymentTransaction attempt) {
         return jdbcTemplate.queryForObject("SELECT status FROM payment_transactions WHERE id = ?", String.class,
-                attempt.id());
+                UuidBinary.toBytes(attempt.id()));
     }
 
     private int paymentsOfTarget() {
         return jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM payments WHERE target_type = 'ORDER' AND target_id = ?
-                """, Integer.class, target.id());
+                """, Integer.class, UuidBinary.toBytes(target.id()));
     }
 
     private int settledEvents() {
         return jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM payment_outbox_events
                  WHERE aggregate_type = 'ORDER' AND aggregate_id = ? AND event_type = 'ORDER_PAYMENT_SETTLED'
-                """, Integer.class, target.id());
+                """, Integer.class, UuidBinary.toBytes(target.id()));
     }
 
     private JsonNode settledPayload() {
         List<String> payloads = jdbcTemplate.queryForList("""
                 SELECT payload FROM payment_outbox_events
                  WHERE aggregate_type = 'ORDER' AND aggregate_id = ? AND event_type = 'ORDER_PAYMENT_SETTLED'
-                """, String.class, target.id());
+                """, String.class, UuidBinary.toBytes(target.id()));
         assertThat(payloads).hasSize(1);
         assertThat(payloads.getFirst()).doesNotContain(paymentKey);
         return jsonMapper.readTree(payloads.getFirst());
