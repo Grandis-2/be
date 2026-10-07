@@ -2,24 +2,20 @@ package com.grandis.nova.catalog;
 
 import com.grandis.nova.catalog.category.Category;
 import com.grandis.nova.catalog.category.CategoryRepository;
-import com.grandis.nova.catalog.image.ProductImage;
-import com.grandis.nova.catalog.image.ProductImageRepository;
 import com.grandis.nova.catalog.option.OptionCombination;
-import com.grandis.nova.catalog.option.ProductOptionAxis;
-import com.grandis.nova.catalog.option.ProductOptionAxisRepository;
-import com.grandis.nova.catalog.option.ProductOptionSelection;
-import com.grandis.nova.catalog.option.ProductOptionSelectionId;
-import com.grandis.nova.catalog.option.ProductOptionSelectionRepository;
-import com.grandis.nova.catalog.option.ProductOptionValue;
-import com.grandis.nova.catalog.option.ProductOptionValueRepository;
+import com.grandis.nova.catalog.option.OptionText;
+import com.grandis.nova.catalog.option.ProductOptions;
+import com.grandis.nova.catalog.option.ProductOptions.Axis;
+import com.grandis.nova.catalog.option.ProductOptions.Image;
+import com.grandis.nova.catalog.option.ProductOptions.Pick;
+import com.grandis.nova.catalog.option.ProductOptions.Section;
+import com.grandis.nova.catalog.option.ProductOptions.Value;
 import com.grandis.nova.catalog.product.Product;
 import com.grandis.nova.catalog.product.ProductOption;
 import com.grandis.nova.catalog.product.ProductOptionRepository;
 import com.grandis.nova.catalog.product.ProductRepository;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
-import com.grandis.nova.catalog.registration.ProductRegistration;
-import com.grandis.nova.catalog.registration.ProductRegistrationRepository;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,7 +32,6 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * 엔티티가 마이그레이션 스키마와 맞는지. 컨텍스트가 뜨는 것(ddl-auto: validate)이 절반이고,
@@ -52,11 +47,6 @@ class CatalogEntityMappingTest {
     @Autowired CategoryRepository categories;
     @Autowired ProductRepository products;
     @Autowired ProductOptionRepository options;
-    @Autowired ProductOptionAxisRepository axes;
-    @Autowired ProductOptionValueRepository values;
-    @Autowired ProductOptionSelectionRepository selections;
-    @Autowired ProductImageRepository images;
-    @Autowired ProductRegistrationRepository registrations;
 
     ShopFixtures fixtures;
 
@@ -88,12 +78,12 @@ class CatalogEntityMappingTest {
     @DisplayName("상품 · 옵션은 저장한 값 그대로 DB 에 남는다")
     void productAndOptionRoundTrip() {
         Long categoryId = fixtures.childCategory(fixtures.category(), "Apple");
-        Product product = products.saveAndFlush(Product.register(categoryId, SaleMode.PREORDER, "Nova 1",
-                new BigDecimal("1200000"), "설명", "nova,phone", false, true, new BigDecimal("199000")));
+        Product product = products.saveAndFlush(Product.register(null, categoryId, SaleMode.PREORDER, "Nova 1",
+                new BigDecimal("1200000"), "설명", "nova,phone", false, true, new BigDecimal("199000"), ProductOptions.EMPTY));
         OptionCombination none = OptionCombination.none(product.getId(), " Nova  1 ");
         assertThat(none.isStandalone()).isTrue();
         assertThat(none.title()).isEqualTo("Nova 1");
-        assertThat(none.selections(1L)).isEmpty();
+        assertThat(none.getPicks()).isEmpty();
         ProductOption option = options.saveAndFlush(ProductOption.of("ONLY", new BigDecimal("1450000"), none));
         assertThat(option.getTitle()).isEqualTo("Nova 1");
 
@@ -128,19 +118,19 @@ class CatalogEntityMappingTest {
     @Test
     @DisplayName("보증을 제공하지 않으면 추가금은 0 으로 저장한다")
     void warrantySurchargeIgnoredWhenNotOffered() {
-        Product product = products.saveAndFlush(Product.register(fixtures.category(), SaleMode.IN_STOCK,
-                "Nova Book", BigDecimal.ZERO, null, null, false, false, new BigDecimal("50000")));
+        Product product = products.saveAndFlush(Product.register(null, fixtures.category(), SaleMode.IN_STOCK,
+                "Nova Book", BigDecimal.ZERO, null, null, false, false, new BigDecimal("50000"), ProductOptions.EMPTY));
         assertThat(product.getWarrantySurcharge()).isEqualByComparingTo("0");
     }
 
     @Test
     @DisplayName("상품은 등록 때 고른 공개 여부로 시작하고, 공개 · 비공개 전환은 조건 없이 된다 — 노출은 판매 방식별 준비를 함께 본다")
     void productStartsWithChosenVisibility() {
-        Product hidden = products.saveAndFlush(Product.register(fixtures.category(), SaleMode.IN_STOCK,
-                "Nova Book", BigDecimal.ZERO, null, null, false, false, BigDecimal.ZERO));
+        Product hidden = products.saveAndFlush(Product.register(null, fixtures.category(), SaleMode.IN_STOCK,
+                "Nova Book", BigDecimal.ZERO, null, null, false, false, BigDecimal.ZERO, ProductOptions.EMPTY));
         assertThat(visibleInDb(hidden.getId())).isFalse();
-        Product shown = products.saveAndFlush(Product.register(fixtures.category(), SaleMode.IN_STOCK,
-                "Nova Book", BigDecimal.ZERO, null, null, true, false, BigDecimal.ZERO));
+        Product shown = products.saveAndFlush(Product.register(null, fixtures.category(), SaleMode.IN_STOCK,
+                "Nova Book", BigDecimal.ZERO, null, null, true, false, BigDecimal.ZERO, ProductOptions.EMPTY));
         assertThat(visibleInDb(shown.getId())).isTrue();
 
         hidden.publish();
@@ -156,109 +146,97 @@ class CatalogEntityMappingTest {
         return jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, productId);
     }
 
-    /** 완료 시각은 다음 티켓의 서비스가 찍는다. 여기서는 SQL 로 찍고 다시 읽는다. */
     @Test
-    @DisplayName("옵션 축 · 값 · 선택을 저장하고 상품 단위로 다시 읽는다")
-    void optionStructureRoundTrip() {
+    @DisplayName("옵션 문서는 축 · 값 · 추가금 · hex · 사진 순서를 그대로 JSON 에 남기고 다시 읽는다")
+    void optionDocumentRoundTrip() {
+        Value black = new Value(ProductOptions.newValueId(), "블랙", "블랙", "#2E2E32", BigDecimal.ZERO,
+                List.of(new Image("https://img/b2.jpg", false), new Image("https://img/b1.jpg", true)));
+        Value twoMeters = new Value(ProductOptions.newValueId(), "2m", "2m", null, new BigDecimal("3000"), List.of());
+        Axis color = new Axis(OptionText.COLOR, "색상", List.of(black));
+        Axis length = new Axis("length", "길이", List.of(twoMeters));
+        ProductOptions document = new ProductOptions(List.of(color, length), List.of(),
+                List.of(new Section("제품 사양", List.of(new Image("https://img/spec.jpg", false)))));
+        Product product = products.saveAndFlush(Product.register(null, fixtures.category(), SaleMode.IN_STOCK, "Nova Cable",
+                new BigDecimal("10000"), null, null, false, false, BigDecimal.ZERO, document));
+        entityManager.clear();
+
+        Map<String, Object> row = jdbcTemplate.queryForMap("""
+                SELECT options->>'$.axes[0].key' AS first_axis, options->>'$.axes[0].values[0].hex' AS hex,
+                       options->>'$.axes[0].values[0].images[1].url' AS second_image,
+                       JSON_EXTRACT(options, '$.axes[1].values[0].surcharge') AS surcharge,
+                       options->>'$.detailImages[0].section' AS section, thumbnail_url
+                  FROM products WHERE id = ?""", product.getId());
+        assertThat(row.get("first_axis")).isEqualTo("color");
+        assertThat(row.get("hex")).isEqualTo("#2E2E32");
+        assertThat(row.get("second_image")).isEqualTo("https://img/b1.jpg");
+        assertThat(new BigDecimal(row.get("surcharge").toString())).isEqualByComparingTo("3000");
+        assertThat(row.get("section")).isEqualTo("제품 사양");
+        assertThat(row.get("thumbnail_url")).as("첫 색상의 첫 장 — 대표 표시가 둘째 장에 있어도 첫 장").isEqualTo("https://img/b2.jpg");
+        assertThat(jdbcTemplate.queryForObject("SELECT JSON_KEYS(options, '$.axes[0]') FROM products WHERE id = ?", String.class, product.getId()))
+                .as("파생 값(filterAxis)은 문서에 쓰지 않는다 — 문서 모양은 백필과 같다").isEqualTo("[\"key\", \"label\", \"values\"]");
+
+        Product reloaded = products.findById(product.getId()).orElseThrow();
+        assertThat(reloaded.getOptions()).isEqualTo(document);
+        assertThat(reloaded.getThumbnailUrl()).isEqualTo("https://img/b2.jpg");
+    }
+
+    @Test
+    @DisplayName("옵션 조합은 문서의 값 id 로 키를 만들고, 필터 JSON 은 color · storage 만 담는다")
+    void optionCombinationFromDocument() {
+        Value black = new Value(ProductOptions.newValueId(), "블랙", "블랙", null, BigDecimal.ZERO, List.of());
+        Value twoMeters = new Value(ProductOptions.newValueId(), "2m", "2m", null, new BigDecimal("3000"), List.of());
+        Axis color = new Axis(OptionText.COLOR, "색상", List.of(black));
+        Axis length = new Axis("length", "길이", List.of(twoMeters));
         Long productId = fixtures.product("IN_STOCK", "ACTIVE");
-        ProductOptionAxis color = axes.saveAndFlush(ProductOptionAxis.of(productId, ProductOptionAxis.COLOR, "색상", 0));
-        ProductOptionAxis length = axes.saveAndFlush(ProductOptionAxis.of(productId, "length", "길이", 1));
-        ProductOptionValue black = values.saveAndFlush(ProductOptionValue.of(color.getId(), "블랙", "블랙", BigDecimal.ZERO, 0));
-        ProductOptionValue twoMeters = values.saveAndFlush(ProductOptionValue.of(length.getId(), "2m", "2m", new BigDecimal("3000"), 0));
-        // 길이 축을 먼저 넘겨도 표시명은 축 position 순, 키는 값 id 순이다
-        OptionCombination combination = OptionCombination.of(productId,
-                List.of(new OptionCombination.Pick(length, twoMeters), new OptionCombination.Pick(color, black)));
+        OptionCombination combination = OptionCombination.of(productId, List.of(new Pick(color, black), new Pick(length, twoMeters)));
         ProductOption option = options.saveAndFlush(ProductOption.of("BLACK-2M", new BigDecimal("13000"), combination));
-        selections.saveAllAndFlush(combination.selections(option.getId()));
 
         assertThat(option.getTitle()).isEqualTo("블랙 / 2m");
-        assertThat(option.getCombinationKey()).isEqualTo(Math.min(black.getId(), twoMeters.getId()) + "-"
-                + Math.max(black.getId(), twoMeters.getId()));
         Map<String, Object> row = jdbcTemplate.queryForMap(
                 "SELECT combination_key, JSON_EXTRACT(filter_attributes, '$.color') AS color, "
                         + "JSON_LENGTH(filter_attributes) AS filters "
                         + "FROM product_options WHERE id = ?", option.getId());
-        assertThat(row.get("combination_key")).isEqualTo(option.getCombinationKey());
+        assertThat(OptionCombination.valueIdsOf((String) row.get("combination_key"))).containsExactlyInAnyOrder(black.id(), twoMeters.id());
         assertThat(row.get("color")).isEqualTo("\"블랙\"");
         assertThat(row.get("filters")).isEqualTo(1L);
-        assertThat(combination.covers(axes.findByProductIdOrderByPosition(productId))).isTrue();
-
         assertThat(color.isFilterAxis()).isTrue();
         assertThat(length.isFilterAxis()).isFalse();
-        assertThat(axes.findByProductIdOrderByPosition(productId)).extracting(ProductOptionAxis::getAxisKey)
-                .containsExactly("color", "length");
-        assertThat(values.findByAxisIdInOrderByAxisIdAscPositionAsc(List.of(color.getId(), length.getId())))
-                .extracting(ProductOptionValue::getSurcharge)
-                .usingElementComparator(BigDecimal::compareTo)
-                .containsExactly(BigDecimal.ZERO, new BigDecimal("3000"));
-        List<ProductOptionSelection> selected = selections.findByProductId(productId);
-        assertThat(selected).hasSize(2);
-        assertThat(selections.findById(new ProductOptionSelectionId(option.getId(), length.getId())))
-                .get().extracting(ProductOptionSelection::getValueId).isEqualTo(twoMeters.getId());
     }
 
     @Test
-    @DisplayName("사진은 묶음 · 순서 · 대표를 보존하고 대표 표식은 DB 가 채운다")
-    void imageRoundTrip() {
-        Long productId = fixtures.product("IN_STOCK", "ACTIVE");
-        ProductOptionAxis color = axes.saveAndFlush(ProductOptionAxis.of(productId, ProductOptionAxis.COLOR, "색상", 0));
-        ProductOptionValue black = values.saveAndFlush(ProductOptionValue.of(color.getId(), "블랙", "블랙", BigDecimal.ZERO, 0));
-        ProductImage first = images.saveAndFlush(ProductImage.gallery(productId, color, black, 0, "https://img/1.jpg", true));
-        images.saveAndFlush(ProductImage.gallery(productId, color, black, 1, "https://img/2.jpg", false));
-        images.saveAndFlush(ProductImage.gallery(productId, null, null, 0, "https://img/0.jpg", true));
-        images.saveAndFlush(ProductImage.detail(productId, "  제품  사양 ", 0, "https://img/3.jpg", true));
+    @DisplayName("썸네일은 첫 색상의 첫 장(대표 표시는 안 본다), 첫 색상에 사진이 없으면 null(다음 색상으로 안 넘어간다), 색상 축이 없으면 기본 묶음의 첫 장")
+    void thumbnailRule() {
+        Value black = new Value("1", "블랙", "블랙", null, BigDecimal.ZERO, List.of());
+        Value white = new Value("2", "화이트", "화이트", null, BigDecimal.ZERO,
+                List.of(new Image("https://img/w1.jpg", false), new Image("https://img/w2.jpg", false)));
+        Value blue = new Value("3", "블루", "블루", null, BigDecimal.ZERO, List.of(new Image("https://img/u1.jpg", true)));
+        List<Image> defaults = List.of(new Image("https://img/d1.jpg", false), new Image("https://img/d2.jpg", true));
 
-        assertThat(images.findByProductIdOrderByKindAscBundleKeyAscPositionAsc(productId))
-                .extracting(ProductImage::getBundleKey, ProductImage::getUrl)
-                .containsExactly(
-                        tuple("제품 사양", "https://img/3.jpg"),
-                        tuple("", "https://img/0.jpg"),
-                        tuple("블랙", "https://img/1.jpg"),
-                        tuple("블랙", "https://img/2.jpg"));
-        assertThat(jdbcTemplate.queryForObject(
-                "SELECT primary_marker FROM product_images WHERE id = ?", Integer.class, first.getId())).isEqualTo(1);
+        assertThat(new ProductOptions(List.of(new Axis(OptionText.COLOR, "색상", List.of(black, white, blue))), List.of(), List.of())
+                .thumbnailUrl()).as("첫 색상 블랙에 사진이 없다 — 화이트로 넘어가지 않는다").isNull();
+        assertThat(new ProductOptions(List.of(new Axis(OptionText.COLOR, "색상", List.of(blue, white))), List.of(), List.of())
+                .thumbnailUrl()).isEqualTo("https://img/u1.jpg");
+        assertThat(new ProductOptions(List.of(new Axis(OptionText.COLOR, "색상", List.of(white, blue))), defaults, List.of())
+                .thumbnailUrl()).as("색상 축이 있으면 기본 묶음은 안 본다").isEqualTo("https://img/w1.jpg");
+        assertThat(new ProductOptions(List.of(new Axis("length", "길이", List.of(black))), defaults, List.of()).thumbnailUrl())
+                .as("대표(d2)가 아니라 첫 장").isEqualTo("https://img/d1.jpg");
+        assertThat(ProductOptions.EMPTY.thumbnailUrl()).isNull();
     }
 
     @Test
-    @DisplayName("GALLERY 묶음은 이 상품 color 축의 값이어야 한다")
-    void galleryBundleMustBeColorValueOfProduct() {
-        Long productId = fixtures.product("IN_STOCK", "ACTIVE");
-        ProductOptionAxis color = axes.saveAndFlush(ProductOptionAxis.of(productId, ProductOptionAxis.COLOR, "색상", 0));
-        ProductOptionAxis storage = axes.saveAndFlush(ProductOptionAxis.of(productId, ProductOptionAxis.STORAGE, "용량", 1));
-        ProductOptionValue black = values.saveAndFlush(ProductOptionValue.of(color.getId(), "블랙", "블랙", BigDecimal.ZERO, 0));
-        ProductOptionValue gb256 = values.saveAndFlush(ProductOptionValue.of(storage.getId(), "256GB", "256GB", BigDecimal.ZERO, 0));
-        Long otherProduct = fixtures.product("IN_STOCK", "ACTIVE");
-        ProductOptionAxis otherColor = axes.saveAndFlush(ProductOptionAxis.of(otherProduct, ProductOptionAxis.COLOR, "색상", 0));
-
-        // 값은 있는데 축이 없음 · 축이 color 가 아님 · 다른 상품의 축 · 값이 그 축의 값이 아님
-        assertThatThrownBy(() -> ProductImage.gallery(productId, null, black, 0, "https://img/x.jpg", false))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> ProductImage.gallery(productId, storage, gb256, 0, "https://img/x.jpg", false))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> ProductImage.gallery(productId, otherColor, black, 0, "https://img/x.jpg", false))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> ProductImage.gallery(productId, color, gb256, 0, "https://img/x.jpg", false))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> ProductImage.detail(productId, "  ", 0, "https://img/x.jpg", false))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> ProductImage.detail(productId, "spec", 0, " ", false))
-                .isInstanceOf(IllegalArgumentException.class);
-    }
-
-    @Test
-    @DisplayName("등록 기록은 멱등 키와 상품의 대응만 남는다 — 단계 · 완료 · 리스 칸이 없다")
-    void registrationRoundTrip() {
-        Long productId = fixtures.product("PREORDER", "ACTIVE");
+    @DisplayName("멱등 키는 상품 칸에 남아 키로 다시 찾는다 — 키 없는 행(다른 모듈 픽스처)은 여럿이어도 된다")
+    void idempotencyKeyRoundTrip() {
         String key = ShopFixtures.unique();
-        registrations.saveAndFlush(ProductRegistration.start(productId, key));
+        Long categoryId = fixtures.category();
+        Product product = products.saveAndFlush(Product.register(key, categoryId, SaleMode.PREORDER, "Nova 1",
+                BigDecimal.ONE, null, null, false, false, BigDecimal.ZERO, ProductOptions.EMPTY));
+        products.saveAndFlush(Product.register(null, categoryId, SaleMode.IN_STOCK, "A", BigDecimal.ONE, null, null, false, false,
+                BigDecimal.ZERO, ProductOptions.EMPTY));
+        products.saveAndFlush(Product.register(null, categoryId, SaleMode.IN_STOCK, "B", BigDecimal.ONE, null, null, false, false,
+                BigDecimal.ZERO, ProductOptions.EMPTY));
 
-        List<String> columns = jdbcTemplate.queryForList("""
-                SELECT column_name FROM information_schema.columns
-                 WHERE table_schema = DATABASE() AND table_name = 'product_registrations' ORDER BY ordinal_position""", String.class);
-        assertThat(columns).containsExactly("product_id", "idempotency_key", "created_at", "updated_at");
-
-        ProductRegistration reloaded = registrations.findByIdempotencyKey(key).orElseThrow();
-        assertThat(reloaded.getProductId()).isEqualTo(productId);
-        assertThat(reloaded.getIdempotencyKey()).isEqualTo(key);
+        assertThat(products.findByIdempotencyKey(key)).get().extracting(Product::getId).isEqualTo(product.getId());
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM products WHERE category_id = ? AND idempotency_key IS NULL",
+                Long.class, categoryId)).isEqualTo(2L);
     }
 }

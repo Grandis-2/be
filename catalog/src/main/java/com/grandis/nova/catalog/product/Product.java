@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog.product;
 
+import com.grandis.nova.catalog.option.ProductOptions;
 import com.grandis.nova.common.BaseEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -9,6 +10,8 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -21,7 +24,8 @@ import java.util.Objects;
  * 준비는 다른 서비스가 등록 이벤트를 받아 만든 행이라 catalog 가 칸으로 들고 있지 않고, 노출을 읽는 쿼리가 함께 본다
  * ({@link com.grandis.nova.catalog.listing.ProductListingQueryRepository}). 그래서 visible 은 관리자가 고른 값을 등록 때 바로 담는다 —
  * 준비가 안 된 상품은 visible 이어도 회원에게 보이지 않는다.
- * 가격은 basePrice 가 기준이고 옵션의 price 가 최종가다(기본가 + 값별 추가금, 관리자가 직접 고칠 수 있다).
+ * 가격은 basePrice 가 기준이고 옵션의 price 가 최종가다(기본가 + 고른 값의 추가금 합 — 조합별 수동 가격은 없다).
+ * 옵션 축 · 값 · 사진은 {@link #getOptions() options}(JSON) 한 칸이다({@link ProductOptions}). 썸네일은 그 문서에서 계산해 같이 저장한다.
  * 예약 · 주문은 접수 시점 값을 복사하므로 여기를 고쳐도 과거 거래에 소급되지 않는다.
  *
  * <p><b>이미 있는 상품을 고치는 경로는 전부 {@link ProductRepository#findForUpdate} 로 잠그고 읽는다</b>(공개 전환 · 판매 상태 포함).
@@ -36,6 +40,10 @@ public class Product extends BaseEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    /** 관리자 등록의 Idempotency-Key. 같은 키로 다시 오면 이 상품을 돌려준다. 등록 API 밖에서 들어온 행(다른 모듈 픽스처)은 null. */
+    @Column(updatable = false, length = 100)
+    private String idempotencyKey;
+
     @Column(nullable = false)
     private Long categoryId;
 
@@ -48,6 +56,15 @@ public class Product extends BaseEntity {
 
     @Column(nullable = false)
     private BigDecimal basePrice;
+
+    /** 옵션 축 · 값 · 추가금 · 색상 hex · 사진({@link ProductOptions}). 비면 "{}". */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(nullable = false)
+    private String options;
+
+    /** 목록 · 카드 썸네일 — {@link ProductOptions#thumbnailUrl()} 를 options 와 같이 쓴다. 사진이 없으면 null. */
+    @Column(length = 1000)
+    private String thumbnailUrl;
 
     @Column(columnDefinition = "text")
     private String description;
@@ -75,8 +92,10 @@ public class Product extends BaseEntity {
     protected Product() {
     }
 
-    private Product(Long categoryId, SaleMode saleMode, String title, BigDecimal basePrice, String description,
-                    String tags, boolean visible, boolean warrantyOffered, BigDecimal warrantySurcharge) {
+    private Product(String idempotencyKey, Long categoryId, SaleMode saleMode, String title, BigDecimal basePrice,
+                    String description, String tags, boolean visible, boolean warrantyOffered, BigDecimal warrantySurcharge,
+                    ProductOptions options) {
+        this.idempotencyKey = idempotencyKey;
         this.categoryId = categoryId;
         this.saleMode = saleMode;
         this.title = title;
@@ -87,17 +106,37 @@ public class Product extends BaseEntity {
         this.visible = visible;
         this.warrantyOffered = warrantyOffered;
         this.warrantySurcharge = Amounts.requireWholeWon(warrantySurcharge, "warrantySurcharge");
+        replaceOptions(options);
     }
 
     /**
      * 새 상품. 판매 상태는 ACTIVE, 공개 여부는 관리자가 고른 값이다 — 판매 방식별 준비가 끝나기 전에는 visible 이어도 노출되지 않는다.
      * 보증을 제공하지 않으면 추가금은 0 이다.
      */
-    public static Product register(Long categoryId, SaleMode saleMode, String title, BigDecimal basePrice,
+    public static Product register(String idempotencyKey, Long categoryId, SaleMode saleMode, String title, BigDecimal basePrice,
                                    String description, String tags, boolean visible,
-                                   boolean warrantyOffered, BigDecimal warrantySurcharge) {
-        return new Product(categoryId, saleMode, title, basePrice, description, tags, visible,
-                warrantyOffered, warrantyOffered ? warrantySurcharge : BigDecimal.ZERO);
+                                   boolean warrantyOffered, BigDecimal warrantySurcharge, ProductOptions options) {
+        return new Product(idempotencyKey, categoryId, saleMode, title, basePrice, description, tags, visible,
+                warrantyOffered, warrantyOffered ? warrantySurcharge : BigDecimal.ZERO, options);
+    }
+
+    /** 옵션 문서를 바꾼다. 썸네일도 같은 문서에서 다시 계산한다 — 따로 쓰면 둘이 어긋난다. */
+    public void replaceOptions(ProductOptions next) {
+        ProductOptions document = Objects.requireNonNull(next, "options");
+        this.options = document.toJson();
+        this.thumbnailUrl = document.thumbnailUrl();
+    }
+
+    public ProductOptions getOptions() {
+        return ProductOptions.parse(options);
+    }
+
+    public String getThumbnailUrl() {
+        return thumbnailUrl;
+    }
+
+    public String getIdempotencyKey() {
+        return idempotencyKey;
     }
 
     /** 공개. 조건 없다 — 준비가 안 된 상품은 공개여도 노출 쿼리가 거른다. */

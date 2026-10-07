@@ -60,14 +60,12 @@ class ProductDetailApiTest {
             jdbcTemplate.update("UPDATE products SET description = '설명', base_price = 1000000, warranty_offered = 1, warranty_surcharge = 150000 WHERE id = ?", productId);
             fixtures.registration(productId);
             fixtures.campaign(productId, now.minus(HOUR), now.plus(HOUR));
-            Long storage = fixtures.axis(productId, "storage", 1);
-            Long color = fixtures.axis(productId, "color", 0);
-            jdbcTemplate.update("UPDATE product_option_axes SET label = '색상' WHERE id = ?", color);
-            // 값은 position 역순으로 넣어 id 순과 갈라 놓는다 — 응답은 position 순이어야 한다
-            Long white = fixtures.value(color, "화이트", 1);
-            Long black = fixtures.value(color, "블랙", 0);
-            Long gb256 = fixtures.value(storage, "256 GB", "256GB", 0);
-            jdbcTemplate.update("UPDATE product_option_values SET surcharge = 200000 WHERE id = ?", gb256);
+            ShopFixtures.AxisRef storage = fixtures.axis(productId, "storage", 1);
+            ShopFixtures.AxisRef color = fixtures.axis(productId, "color", "색상", 0);
+            // 값은 자리 역순으로 넣어 넣은 순과 갈라 놓는다 — 응답은 문서 배열 순이어야 한다
+            String white = fixtures.value(color, "화이트", 1);
+            String black = fixtures.value(color, "블랙", 0);
+            String gb256 = fixtures.value(storage, "256 GB", "256GB", new BigDecimal("200000"), 0);
             Long black256 = fixtures.optionWithAttributes(productId, "ACTIVE", new BigDecimal("1200000"), "블랙 / 256GB",
                     "{\"color\":\"블랙\",\"storage\":\"256GB\"}");
             fixtures.selection(productId, black256, color, black);
@@ -78,8 +76,6 @@ class ProductDetailApiTest {
             fixtures.image(productId, "GALLERY", "블랙", 1, true, "https://img/black-primary.jpg");
             fixtures.image(productId, "GALLERY", "블랙", 0, false, "https://img/black-0.jpg");
             fixtures.image(productId, "DETAIL", "제품사양", 0, true, "https://img/spec.jpg");
-            // 기본 묶음('')의 대표가 있으면 색상 묶음 대표보다 먼저 — 색상 묶음을 먼저 넣어 순서로 통과하지 않게
-            fixtures.image(productId, "GALLERY", "", 0, true, "https://img/default-primary.jpg");
 
             JsonNode data = data(anonymous(productId).andExpect(status().isOk()));
             assertThat(data.get("productId").asLong()).isEqualTo(productId);
@@ -97,8 +93,8 @@ class ProductDetailApiTest {
             assertThat(data.get("campaign").get("status").asString()).isEqualTo("OPEN");
             assertThat(data.get("campaign").get("opensAt").asString()).isNotBlank();
             assertThat(data.has("shipmentBatches")).isFalse();
-            // 대표 사진: 기본 묶음의 대표
-            assertThat(data.get("imageUrl").asString()).isEqualTo("https://img/default-primary.jpg");
+            // 썸네일: 첫 색상(블랙)의 첫 장 — 대표 표시(black-primary)가 아니다
+            assertThat(data.get("imageUrl").asString()).isEqualTo("https://img/black-0.jpg");
 
             JsonNode axes = data.get("optionAxes");
             assertThat(texts(axes, "key")).containsExactly("color", "storage");
@@ -119,26 +115,28 @@ class ProductDetailApiTest {
             assertThat(first.get("selections").get("storage").asString()).isEqualTo("256GB");
             assertThat(first.get("availableQuantity").isNull()).as("사전예약은 무제한 접수").isTrue();
             assertThat(variants.get(1).get("status").asString()).isEqualTo("PAUSED");
-            assertThat(variants.get(1).get("filterAttributes").isEmpty()).isTrue();
+            assertThat(variants.get(1).get("filterAttributes").get("color").asString()).isEqualTo("화이트");
+            assertThat(variants.get(1).get("selections").get("color").asString()).isEqualTo("화이트");
 
             JsonNode gallery = data.get("images").get("gallery");
-            assertThat(texts(gallery, "bundleKey")).containsExactly("", "블랙", "화이트");
-            assertThat(texts(gallery.get(1).get("items"), "url")).containsExactly("https://img/black-0.jpg", "https://img/black-primary.jpg");
-            assertThat(gallery.get(1).get("items").get(1).get("primary").asBoolean()).isTrue();
+            assertThat(texts(gallery, "bundleKey")).containsExactly("블랙", "화이트");
+            assertThat(texts(gallery.get(0).get("items"), "url")).containsExactly("https://img/black-0.jpg", "https://img/black-primary.jpg");
+            assertThat(gallery.get(0).get("items").get(1).get("primary").asBoolean()).isTrue();
             JsonNode detail = data.get("images").get("detail");
             assertThat(texts(detail, "bundleKey")).containsExactly("제품사양");
         }
 
         @Test
-        @DisplayName("기본 묶음 대표가 없으면 사전순 첫 색상 묶음의 대표가 대표 사진이다")
-        void representativeFallsBackToFirstColorBundle() throws Exception {
+        @DisplayName("썸네일 · 사진 묶음은 관리자가 넣은 색상 순서를 따른다 — 사전순(블랙 < 화이트)이 아니다")
+        void thumbnailFollowsColorOrderNotAlphabet() throws Exception {
             Long productId = visibleInStock();
             fixtures.option(productId, "PAUSED");
             fixtures.image(productId, "GALLERY", "화이트", 0, true, "https://img/white.jpg");
             fixtures.image(productId, "GALLERY", "블랙", 0, true, "https://img/black.jpg");
 
-            assertThat(data(anonymous(productId).andExpect(status().isOk())).get("imageUrl").asString())
-                    .isEqualTo("https://img/black.jpg");
+            JsonNode data = data(anonymous(productId).andExpect(status().isOk()));
+            assertThat(data.get("imageUrl").asString()).isEqualTo("https://img/white.jpg");
+            assertThat(texts(data.get("images").get("gallery"), "bundleKey")).containsExactly("화이트", "블랙");
         }
 
         @Test
@@ -266,8 +264,8 @@ class ProductDetailApiTest {
         @DisplayName("상품 소속 옵션만 200, 다른 상품의 옵션 · 비공개 상품의 옵션은 404")
         void variantMustBelongToViewableProduct() throws Exception {
             Long productId = visibleInStock();
-            Long axis = fixtures.axis(productId, "color", 0);
-            Long black = fixtures.value(axis, "블랙", 0);
+            ShopFixtures.AxisRef axis = fixtures.axis(productId, "color", 0);
+            String black = fixtures.value(axis, "블랙", 0);
             Long option = fixtures.optionWithAttributes(productId, "ACTIVE", new BigDecimal("777"), "블랙",
                     "{\"color\":\"블랙\"}");
             fixtures.selection(productId, option, axis, black);

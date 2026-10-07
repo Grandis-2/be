@@ -8,8 +8,7 @@
 #
 # 소유 경계(README 기준)
 #   member    customers · refresh_tokens
-#   catalog   categories · products · product_options · product_option_axes · product_option_values
-#             product_option_selections · product_images · product_registrations · product_reviews · catalog_outbox_events
+#   catalog   categories · products · product_options · product_reviews · catalog_outbox_events
 #   preorder  preorders · preorder_events · preorder_campaigns · shipment_batches · dead_letter_events
 #   order     orders · order_items · order_events · cart_items · payments · payment_transactions
 #             option_inventories (재고. 옵션당 1행, 일반 판매 옵션만)
@@ -252,9 +251,11 @@ reviews:
         - 카테고리 parent_id 를 쓰는 경로가 순환(자기 자신 포함) · 3단계를 검사하지 않으면 지적한다. DB 는 못 막는다.
         - 회원에게 상품을 노출하는 판정(목록 · 상세)이 products.visible 만 보고 판매 방식별 준비(ProductListingQueryRepository.READY)를 함께 보지 않으면 지적한다.
           visible 은 관리자가 고른 값이라 준비 전에도 true 일 수 있다.
-        - product_images 의 GALLERY bundle_key 가 그 상품 color 축의 정규화값(또는 '')인지 검사하지 않으면 지적한다.
-        - product_options 의 combination_key · filter_attributes · title 과 product_option_selections 를 OptionCombination 밖에서 따로 만들면 지적한다.
-        - product_images.position 을 한 UPDATE 로 교환하거나, 이동 UPDATE 에 방향에 맞는 ORDER BY 가 없으면 지적한다(UNIQUE 는 행마다 검사된다).
+        - 옵션 축 · 값 · 사진은 products.options(JSON) 한 칸이다(ProductOptions). 색상 사진을 color 축 값 밖(다른 축 · 없는 값)에 두면 지적한다.
+        - products.options 를 Product.replaceOptions 밖에서 쓰면 지적한다 — 썸네일(thumbnail_url)이 같이 바뀌지 않는다. 고치는 경로가 상품 행 잠금
+          (ProductRepository.findForUpdate) 없이 문서를 읽고 다시 쓰면 지적한다(동시 수정이 서로 덮는다).
+        - 같은 축의 같은 값 검사를 앱의 근사(collationKey)로만 하고 CollationDuplicates(DB 콜레이션 판정)를 거치지 않으면 지적한다.
+        - product_options 의 combination_key · filter_attributes · title 을 OptionCombination 밖에서 따로 만들면 지적한다.
         - 다른 서비스가 만들 값(사전예약 회차 · 차수, 일반 상품 초기 재고)을 그 서비스의 API 를 동기로 불러 넣거나 그 표에 직접 쓰면 지적한다.
           같은 트랜잭션에서 OutboxWriter 로 이벤트를 적는다(contracts/catalog-events.md).
         - catalog_outbox_events 를 OutboxWriter 밖에서 INSERT 하거나, 업무 트랜잭션과 다른 트랜잭션에서 append 하면 지적한다(MANDATORY).

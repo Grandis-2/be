@@ -61,9 +61,7 @@ public class ProductListingQueryRepository {
                      WHERE o.product_id = p.id AND o.status = 'ACTIVE') AS min_price,
                    EXISTS (SELECT 1 FROM product_options po
                             WHERE po.product_id = p.id AND po.status = 'ACTIVE') AS sellable,
-                   (SELECT i.url FROM product_images i
-                     WHERE i.product_id = p.id AND i.kind = 'GALLERY' AND i.is_primary = 1
-                     ORDER BY (i.bundle_key <> ''), i.bundle_key LIMIT 1) AS image_url,
+                   p.thumbnail_url AS image_url,
                    CASE WHEN p.sale_mode = 'IN_STOCK' AND NOT EXISTS (
                             SELECT 1 FROM product_options o
                               JOIN option_inventories inv ON inv.option_id = o.id
@@ -180,12 +178,10 @@ public class ProductListingQueryRepository {
         if (values.isEmpty()) {
             return;
         }
-        sql.append(" AND EXISTS (SELECT 1 FROM product_option_selections s")
-                .append(" JOIN product_option_axes a ON a.id = s.axis_id")
-                .append(" JOIN product_option_values v ON v.id = s.value_id")
-                .append(" WHERE s.option_id = o.id AND a.axis_key = :").append(axisKey).append("Axis")
-                .append(" AND v.normalized_value IN (:").append(axisKey).append("Values))");
-        params.addValue(axisKey + "Axis", axisKey).addValue(axisKey + "Values", values);
+        // ->> 의 결과는 utf8mb4_bin 이라 그대로 비교하면 대소문자 · 악센트를 가린다(black 으로 Black 이 안 걸린다) — 표 시절 값 칸과 같은 콜레이션(같은 축의 중복 판정과도 같다)으로 맞춘다
+        sql.append(" AND (o.filter_attributes->>'$.").append(axisKey).append("') COLLATE utf8mb4_0900_ai_ci IN (:")
+                .append(axisKey).append("Values)");
+        params.addValue(axisKey + "Values", values);
     }
 
     /**

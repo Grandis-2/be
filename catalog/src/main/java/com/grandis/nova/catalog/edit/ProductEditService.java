@@ -4,17 +4,13 @@ import com.grandis.nova.catalog.CatalogErrorCode;
 import com.grandis.nova.catalog.detail.AdminProductDetail;
 import com.grandis.nova.catalog.detail.ProductDetailService;
 import com.grandis.nova.catalog.detail.ProductDetailView;
-import com.grandis.nova.catalog.image.ImageKind;
-import com.grandis.nova.catalog.image.ProductImageRepository;
 import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
+import com.grandis.nova.catalog.option.CollationDuplicates;
 import com.grandis.nova.catalog.option.OptionCombination;
-import com.grandis.nova.catalog.option.OptionCombination.Pick;
-import com.grandis.nova.catalog.option.ProductOptionAxis;
-import com.grandis.nova.catalog.option.ProductOptionAxisRepository;
-import com.grandis.nova.catalog.option.ProductOptionSelection;
-import com.grandis.nova.catalog.option.ProductOptionSelectionRepository;
-import com.grandis.nova.catalog.option.ProductOptionValue;
-import com.grandis.nova.catalog.option.ProductOptionValueRepository;
+import com.grandis.nova.catalog.option.OptionText;
+import com.grandis.nova.catalog.option.ProductOptions;
+import com.grandis.nova.catalog.option.ProductOptions.Pick;
+import com.grandis.nova.catalog.product.Amounts;
 import com.grandis.nova.catalog.product.Product;
 import com.grandis.nova.catalog.product.ProductOption;
 import com.grandis.nova.catalog.product.ProductOptionRepository;
@@ -80,27 +76,20 @@ public class ProductEditService {
     private static final int REASON_MAX_LENGTH = 500;
 
     private final ProductRepository products;
-    private final ProductOptionAxisRepository axes;
-    private final ProductOptionValueRepository values;
     private final ProductOptionRepository options;
-    private final ProductOptionSelectionRepository selections;
     private final ProductListingQueryRepository crossReads;
-    private final ProductImageRepository images;
+    private final CollationDuplicates duplicates;
     private final ProductDetailService detailService;
     private final OutboxWriter outbox;
     private final Clock clock;
 
-    public ProductEditService(ProductRepository products, ProductOptionAxisRepository axes, ProductOptionValueRepository values,
-                              ProductOptionRepository options, ProductOptionSelectionRepository selections,
-                              ProductListingQueryRepository crossReads, ProductImageRepository images,
+    public ProductEditService(ProductRepository products, ProductOptionRepository options,
+                              ProductListingQueryRepository crossReads, CollationDuplicates duplicates,
                               ProductDetailService detailService, OutboxWriter outbox, Clock clock) {
         this.products = products;
-        this.axes = axes;
-        this.values = values;
         this.options = options;
-        this.selections = selections;
         this.crossReads = crossReads;
-        this.images = images;
+        this.duplicates = duplicates;
         this.detailService = detailService;
         this.outbox = outbox;
         this.clock = clock;
@@ -135,7 +124,7 @@ public class ProductEditService {
             product.setWarranty(warranty.offered(), warranty.surcharge() == null ? product.getWarrantySurcharge() : warranty.surcharge());
         }
         if (request.basePrice() != null && product.reprice(request.basePrice())) {
-            recomputePrices(product, null, "basePrice");
+            recomputePrices(product, product.getOptions(), null, "basePrice");
         }
         products.flush();
         AdminProductDetail edited = detailService.findAdminProduct(productId);
@@ -149,30 +138,22 @@ public class ProductEditService {
         BigDecimal surcharge = request.surcharge() == null ? BigDecimal.ZERO
                 : ProductRegistrationValidator.requireWholeWon(request.surcharge(), "surcharge");
         Product product = requireEditable(productId);
+        ProductOptions document = product.getOptions();
         String axisKey = request.axisKey().strip().toLowerCase(Locale.ROOT);
-        ProductOptionAxis axis = axes.findByProductIdOrderByPosition(productId).stream()
-                .filter(a -> a.getAxisKey().equals(axisKey)).findFirst()
+        ProductOptions.Axis axis = document.axis(axisKey)
                 .orElseThrow(() -> ValidationFailures.of("axisKey", "이 상품에 없는 축입니다: " + request.axisKey()));
-        List<ProductOptionValue> existing = values.findByAxisIdInOrderByAxisIdAscPositionAsc(List.of(axis.getId()));
         String normalized = normalized(axisKey, request.value(), "value");
-        if (ProductOptionAxis.STORAGE.equals(axisKey) && !ProductRegistrationValidator.STORAGE.matcher(normalized).matches()) {
+        if (OptionText.STORAGE.equals(axisKey) && !ProductRegistrationValidator.STORAGE.matcher(normalized).matches()) {
             throw ValidationFailures.of("value", "용량은 숫자 + MB/GB/TB 로 적습니다.");
         }
         requireStorableValue(request.value());
-        String key = ProductRegistrationValidator.collationKey(normalized);
-        if (existing.stream().anyMatch(v -> ProductRegistrationValidator.collationKey(v.getNormalizedValue()).equals(key))) {
-            throw ValidationFailures.of("value", "같은 값이 이미 있습니다.");
-        }
-        int position = existing.stream().mapToInt(ProductOptionValue::getPosition).max().orElse(-1) + 1;
-        try {
-            values.saveAndFlush(ProductOptionValue.of(axis.getId(), request.value(), normalized, surcharge, position));
-        } catch (DataIntegrityViolationException e) {
-            // 콜레이션 흉내가 못 잡는 확장 문자(ß=ss …)는 DB UNIQUE 가 최종 판정한다. 다른 제약 위반은 그대로 올린다
-            if (ConstraintViolations.mentionsKey(e, "uq_option_value")) {
-                throw ValidationFailures.of("value", "같은 값이 이미 있습니다.");
-            }
-            throw e;
-        }
+        requireUniqueValue(axis, null, normalized);
+        String hex = ProductRegistrationValidator.hexOf(axisKey, request.hex(), "hex");
+        List<ProductOptions.Value> values = new ArrayList<>(axis.values());
+        values.add(new ProductOptions.Value(ProductOptions.newValueId(), OptionText.normalize(request.value()), normalized, hex,
+                Amounts.requireWholeWon(surcharge, "surcharge"), List.of()));
+        product.replaceOptions(document.withAxis(new ProductOptions.Axis(axis.key(), axis.label(), values)));
+        products.flush();
         AdminProductDetail edited = detailService.findAdminProduct(product.getId());
         requireNotOpenedAtCommit(product);
         notifyPreorder(product);
@@ -180,7 +161,7 @@ public class ProductEditService {
     }
 
     @Transactional
-    public AdminProductDetail editOptionValue(Long productId, Long valueId, OptionValueEditRequest request) {
+    public AdminProductDetail editOptionValue(Long productId, String valueId, OptionValueEditRequest request) {
         if (request.isEmpty()) {
             throw ValidationFailures.of("body", "바꿀 칸이 하나도 없습니다.");
         }
@@ -188,22 +169,41 @@ public class ProductEditService {
             ProductRegistrationValidator.requireWholeWon(request.surcharge(), "surcharge");
         }
         Product product = requireEditable(productId);
-        Map<Long, ProductOptionAxis> axisById = axesOf(productId);
-        ProductOptionValue value = values.findById(valueId)
-                .filter(v -> axisById.containsKey(v.getAxisId()))
-                .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
-        String axisKey = axisById.get(value.getAxisId()).getAxisKey();
+        ProductOptions document = product.getOptions();
+        Pick located = document.pickOf(valueId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
+        ProductOptions.Axis axis = located.axis();
+        ProductOptions.Value value = located.value();
+        boolean renamed = false;
         if (request.value() != null) {
-            renameValue(product, axisKey, value, request.value());
+            String normalized = renamedValue(axis, value, request.value());
+            renamed = true;
+            value = new ProductOptions.Value(value.id(), OptionText.normalize(request.value()), normalized, value.hex(), value.surcharge(),
+                    value.images());
         }
-        if (request.surcharge() != null && value.reprice(request.surcharge())) {
-            recomputePrices(product, value.getId(), "surcharge");
+        if (request.hex() != null) {
+            value = new ProductOptions.Value(value.id(), value.value(), value.normalized(),
+                    ProductRegistrationValidator.hexOf(axis.key(), request.hex(), "hex"), value.surcharge(), value.images());
         }
-        values.flush();
-        AdminProductDetail edited = detailService.findAdminProduct(productId);
+        boolean repriced = request.surcharge() != null && value.surcharge().compareTo(request.surcharge()) != 0;
+        if (repriced) {
+            value = new ProductOptions.Value(value.id(), value.value(), value.normalized(), value.hex(),
+                    Amounts.requireWholeWon(request.surcharge(), "surcharge"), value.images());
+        }
+        ProductOptions.Value edited = value;
+        List<ProductOptions.Value> values = axis.values().stream().map(v -> v.id().equals(edited.id()) ? edited : v).toList();
+        ProductOptions next = document.withAxis(new ProductOptions.Axis(axis.key(), axis.label(), values));
+        product.replaceOptions(next);
+        if (renamed) {
+            reattributeOptionsUsing(product, next, valueId);
+        }
+        if (repriced) {
+            recomputePrices(product, next, valueId, "surcharge");
+        }
+        products.flush();
+        AdminProductDetail result = detailService.findAdminProduct(productId);
         requireNotOpenedAtCommit(product);
         notifyPreorder(product);
-        return edited;
+        return result;
     }
 
     @Transactional
@@ -217,21 +217,18 @@ public class ProductEditService {
             }
         }
         Product product = requireEditable(productId);
-        List<ProductOptionAxis> productAxes = axes.findByProductIdOrderByPosition(productId);
+        ProductOptions document = product.getOptions();
         List<Pick> picks = new ArrayList<>();
-        List<ProductOptionValue> picked = new ArrayList<>();
-        for (ProductOptionAxis axis : productAxes) {
-            if (!given.containsKey(axis.getAxisKey())) {
-                throw ValidationFailures.of("selections", "축 " + axis.getAxisKey() + " 의 값이 없습니다.");
+        for (ProductOptions.Axis axis : document.axes()) {
+            if (!given.containsKey(axis.key())) {
+                throw ValidationFailures.of("selections", "축 " + axis.key() + " 의 값이 없습니다.");
             }
-            String raw = given.remove(axis.getAxisKey());
-            String field = "selections." + axis.getAxisKey();
-            String normalized = normalized(axis.getAxisKey(), raw, field);
-            ProductOptionValue value = values.findByAxisIdInOrderByAxisIdAscPositionAsc(List.of(axis.getId())).stream()
-                    .filter(v -> v.getNormalizedValue().equals(normalized)).findFirst()
+            String raw = given.remove(axis.key());
+            String field = "selections." + axis.key();
+            String normalized = normalized(axis.key(), raw, field);
+            ProductOptions.Value value = axis.valueByNormalized(normalized)
                     .orElseThrow(() -> ValidationFailures.of(field, "축에 없는 값입니다: " + raw + " (값을 먼저 더하세요: POST …/option-values)"));
             picks.add(new Pick(axis, value));
-            picked.add(value);
         }
         if (!given.isEmpty()) {
             throw ValidationFailures.of("selections", "이 상품에 없는 축입니다: " + given.keySet());
@@ -242,7 +239,7 @@ public class ProductEditService {
         if (existing.stream().anyMatch(o -> combination.combinationKey().equals(o.getCombinationKey()))) {
             throw ValidationFailures.of("selections", "이 조합의 옵션이 이미 있습니다.");
         }
-        String sku = request.sku() == null || request.sku().isBlank() ? defaultSku(picked) : request.sku().strip();
+        String sku = request.sku() == null || request.sku().isBlank() ? defaultSku(picks) : request.sku().strip();
         if (sku.length() > ProductRegistrationValidator.MAX_SKU_LENGTH) {
             // 기본값(정규화값을 '-' 로 이은 것)도 길 수 있다 — 직접 주는 SKU 는 @Size 가 먼저 막는다
             throw ValidationFailures.of("sku", "SKU 는 %d자 이하입니다: %s".formatted(ProductRegistrationValidator.MAX_SKU_LENGTH, sku));
@@ -253,7 +250,7 @@ public class ProductEditService {
         if (combination.title().length() > ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH) {
             throw ValidationFailures.of("selections", "옵션 표시명이 %d자를 넘습니다.".formatted(ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH));
         }
-        BigDecimal price = ProductRegistrationValidator.requireStorablePrice(computedPrice(product, picked), "selections");
+        BigDecimal price = ProductRegistrationValidator.requireStorablePrice(computedPrice(product, picks), "selections");
         ProductOption option;
         try {
             option = options.saveAndFlush(ProductOption.of(sku, price, combination));
@@ -267,8 +264,6 @@ public class ProductEditService {
             }
             throw e;
         }
-        selections.saveAll(combination.selections(option.getId()));
-        selections.flush();
         ProductDetailView.Variant added = variantOf(productId, option.getId());
         requireNotOpenedAtCommit(product);
         notifyPreorder(product);
@@ -424,76 +419,60 @@ public class ProductEditService {
     }
 
     /** 옵션 가격을 `기본가 + Σ추가금` 으로 다시 계산한다. valueId 를 주면 그 값을 고른 옵션만, null 이면 전부. */
-    private void recomputePrices(Product product, Long valueId, String cause) {
-        Map<Long, List<Long>> valueIdsByOption = selectionsByOption(product.getId());
-        Map<Long, ProductOptionValue> valueById = valuesOf(product.getId());
+    private void recomputePrices(Product product, ProductOptions document, String valueId, String cause) {
         for (ProductOption option : options.findByProductIdOrderById(product.getId())) {
-            List<Long> valueIds = valueIdsByOption.getOrDefault(option.getId(), List.of());
+            List<String> valueIds = OptionCombination.valueIdsOf(option.getCombinationKey());
             if (valueId != null && !valueIds.contains(valueId)) {
                 continue;
             }
-            BigDecimal computed = product.getBasePrice();
-            for (Long id : valueIds) {
-                computed = computed.add(valueById.get(id).getSurcharge());
-            }
-            option.recomputePrice(ProductRegistrationValidator.requireStorablePrice(computed, cause));
+            option.recomputePrice(ProductRegistrationValidator.requireStorablePrice(
+                    computedPrice(product, document.picksOf(valueIds)), cause));
         }
     }
 
     /**
-     * 값 이름 수정 — 오타 · 표시 문구 모두(설계 §2.1 "옵션 변경"). 같은 축에 같다고 보는 값(대소문자 · 악센트 · 전각)이 있으면 400, 용량은 형식을
-     * 지켜야 한다. 이름을 복사해 둔 곳을 같은 트랜잭션에서 고친다: 그 값을 고른 옵션의 표시명 · 필터 속성, 색상이면 사진 묶음 키.
+     * 값 이름 수정 — 오타 · 표시 문구 모두. 같은 축에 같다고 보는 값(대소문자 · 악센트 · 전각 · 확장 문자)이 있으면 400, 용량은
+     * 형식을 지켜야 한다. 사진은 그 값 아래에 있어 따라간다. 이름을 복사해 둔 옵션의 표시명 · 필터 속성은 호출자가 같은 트랜잭션에서 고친다.
      * 이미 접수된 예약 · 주문은 자기 스냅샷을 가지므로 바뀌지 않는다. 뜻이 바뀌는 수정(블랙 → 화이트)도 막지 않는다 — 관리자의 판단이다.
+     *
+     * @return 새 정규화값
      */
-    private void renameValue(Product product, String axisKey, ProductOptionValue value, String raw) {
-        String normalized = normalized(axisKey, raw, "value");
-        if (ProductOptionAxis.STORAGE.equals(axisKey) && !ProductRegistrationValidator.STORAGE.matcher(normalized).matches()) {
+    private String renamedValue(ProductOptions.Axis axis, ProductOptions.Value value, String raw) {
+        String normalized = normalized(axis.key(), raw, "value");
+        if (OptionText.STORAGE.equals(axis.key()) && !ProductRegistrationValidator.STORAGE.matcher(normalized).matches()) {
             throw ValidationFailures.of("value", "용량은 숫자 + MB/GB/TB 로 적습니다.");
         }
         requireStorableValue(raw);
+        requireUniqueValue(axis, value.id(), normalized);
+        return normalized;
+    }
+
+    /**
+     * 같은 축에 같다고 보는 값이 없는가 — 앱의 콜레이션 흉내로 먼저 거르고, 흉내가 못 잡는 확장 문자(ß = ss …)는 같은 콜레이션의 DB 질의로 판정한다.
+     *
+     * @param exceptId 이름을 고치는 값 자신(새 값이면 null)
+     */
+    private void requireUniqueValue(ProductOptions.Axis axis, String exceptId, String normalized) {
         String key = ProductRegistrationValidator.collationKey(normalized);
-        boolean taken = values.findByAxisIdInOrderByAxisIdAscPositionAsc(List.of(value.getAxisId())).stream()
-                .filter(other -> !other.getId().equals(value.getId()))
-                .anyMatch(other -> ProductRegistrationValidator.collationKey(other.getNormalizedValue()).equals(key));
-        if (taken) {
+        List<String> others = axis.values().stream().filter(v -> !v.id().equals(exceptId)).map(ProductOptions.Value::normalized).toList();
+        if (others.stream().anyMatch(other -> ProductRegistrationValidator.collationKey(other).equals(key))) {
             throw ValidationFailures.of("value", "같은 값이 이미 있습니다.");
         }
-        String before = value.getNormalizedValue();
-        value.rename(raw, normalized);
-        try {
-            values.flush();
-        } catch (DataIntegrityViolationException e) {
-            // 콜레이션 흉내가 못 잡는 같은 값(ß = ss …)은 DB UNIQUE 가 최종 판정한다
-            if (ConstraintViolations.mentionsKey(e, "uq_option_value")) {
-                throw ValidationFailures.of("value", "같은 값이 이미 있습니다.");
-            }
-            throw e;
+        List<String> all = new ArrayList<>(others);
+        all.add(normalized);
+        if (duplicates.any(all)) {
+            throw ValidationFailures.of("value", "같은 값이 이미 있습니다.");
         }
-        if (ProductOptionAxis.COLOR.equals(axisKey) && !before.equals(normalized)) {
-            int moved = images.renameGalleryBundle(product.getId(), before, normalized);
-            // 조건부 UPDATE 의 결과를 본다. 0 행은 그 색상에 사진이 없을 때만 정상이다 — 옛 키로 남은 사진이 있으면 이름만 바뀌고 사진이
-            // 어느 색상에도 안 붙은 채 커밋되므로 트랜잭션을 실패시킨다. 상품 행 잠금 안이라 새 사진이 끼어들 수 없다
-            if (moved == 0 && images.countByProductIdAndKindAndBundleKey(product.getId(), ImageKind.GALLERY, before) > 0) {
-                throw new IllegalStateException("gallery bundle " + before + " was not moved to " + normalized);
-            }
-        }
-        reattributeOptionsUsing(product, value.getId());
     }
 
     /** 그 값을 고른 옵션의 표시명 · 필터 속성을 축 순서의 조합에서 다시 만든다. 표시명이 상한을 넘으면 400(DB 1406 → 500 이 되지 않게). */
-    private void reattributeOptionsUsing(Product product, Long valueId) {
-        Map<Long, List<Long>> valueIdsByOption = selectionsByOption(product.getId());
-        Map<Long, ProductOptionValue> valueById = valuesOf(product.getId());
-        Map<Long, ProductOptionAxis> axisById = axesOf(product.getId());
+    private void reattributeOptionsUsing(Product product, ProductOptions document, String valueId) {
         for (ProductOption option : options.findByProductIdOrderById(product.getId())) {
-            List<Long> valueIds = valueIdsByOption.getOrDefault(option.getId(), List.of());
+            List<String> valueIds = OptionCombination.valueIdsOf(option.getCombinationKey());
             if (!valueIds.contains(valueId)) {
                 continue;
             }
-            List<Pick> picks = new ArrayList<>(valueIds.stream()
-                    .map(id -> new Pick(axisById.get(valueById.get(id).getAxisId()), valueById.get(id))).toList());
-            picks.sort(Comparator.comparingInt(pick -> pick.axis().getPosition()));
-            OptionCombination combination = OptionCombination.of(product.getId(), picks);
+            OptionCombination combination = OptionCombination.of(product.getId(), document.picksOf(valueIds));
             if (combination.title().length() > ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH) {
                 throw ValidationFailures.of("value",
                         "옵션 표시명이 %d자를 넘습니다: %s".formatted(ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH, combination.title()));
@@ -507,9 +486,8 @@ public class ProductEditService {
      * 있어(U+0958 한 글자 → 두 글자) 표시명 상한(120)을 넘으면 title 의 400 이다(등록과 같은 판정).
      */
     private void retitleStandaloneOptions(Product product) {
-        Map<Long, List<Long>> valueIdsByOption = selectionsByOption(product.getId());
         for (ProductOption option : options.findByProductIdOrderById(product.getId())) {
-            if (valueIdsByOption.getOrDefault(option.getId(), List.of()).isEmpty()) {
+            if (OptionCombination.valueIdsOf(option.getCombinationKey()).isEmpty()) {
                 String title = OptionCombination.titleOf(List.of(), product.getTitle());
                 if (title.length() > ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH) {
                     throw ValidationFailures.of("title", "옵션 표시명이 %d자를 넘습니다: %s".formatted(ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH, title));
@@ -522,53 +500,33 @@ public class ProductEditService {
     /** 저장 규칙의 정규화. 비었으면(공백뿐 · 전각 공백 포함) 그 칸의 400 — 정규화가 던지는 IllegalArgumentException 이 500 으로 새지 않게. */
     private static String normalized(String axisKey, String raw, String field) {
         try {
-            return ProductOptionValue.normalizeFor(axisKey, raw);
+            return OptionText.normalizeFor(axisKey, raw);
         } catch (IllegalArgumentException e) {
             throw ValidationFailures.of(field, "값이 비었습니다.");
         }
     }
 
     /**
-     * 저장하는 값(값 추가 · 이름 수정)의 정규화한 표시값이 칼럼(60자)에 담기는가 — NFC 가 글자를 늘린다. 형식 검사 뒤에 부른다: 비교 키가 표시값보다
+     * 저장하는 값(값 추가 · 이름 수정)의 정규화한 표시값이 칸(60자)에 담기는가 — NFC 가 글자를 늘린다. 형식 검사 뒤에 부른다: 비교 키가 표시값보다
      * 길어지는 것은 용량을 대문자로 접을 때뿐인데(ß → SS) 그런 값은 형식 검사(숫자 + MB/GB/TB)에서 이미 400 이다. 조회에만 쓰는 선택 값에는 걸지 않는다.
      */
     private static void requireStorableValue(String raw) {
-        ProductRegistrationValidator.requireStorableText(ProductOptionValue.normalize(raw), ProductRegistrationValidator.MAX_OPTION_VALUE_LENGTH, "value");
+        ProductRegistrationValidator.requireStorableText(OptionText.normalize(raw), ProductRegistrationValidator.MAX_OPTION_VALUE_LENGTH, "value");
     }
 
-    private BigDecimal computedPrice(Product product, List<ProductOptionValue> picked) {
+    private static BigDecimal computedPrice(Product product, List<Pick> picks) {
         BigDecimal price = product.getBasePrice();
-        for (ProductOptionValue value : picked) {
-            price = price.add(value.getSurcharge());
+        for (Pick pick : picks) {
+            price = price.add(pick.value().surcharge());
         }
         return price;
     }
 
-    private static String defaultSku(List<ProductOptionValue> picked) {
-        if (picked.isEmpty()) {
+    private static String defaultSku(List<Pick> picks) {
+        if (picks.isEmpty()) {
             return ProductRegistrationValidator.STANDALONE_SKU;
         }
-        return String.join("-", picked.stream().map(ProductOptionValue::getNormalizedValue).toList());
-    }
-
-    private Map<Long, ProductOptionAxis> axesOf(Long productId) {
-        Map<Long, ProductOptionAxis> byId = new LinkedHashMap<>();
-        axes.findByProductIdOrderByPosition(productId).forEach(a -> byId.put(a.getId(), a));
-        return byId;
-    }
-
-    private Map<Long, ProductOptionValue> valuesOf(Long productId) {
-        Map<Long, ProductOptionValue> byId = new LinkedHashMap<>();
-        values.findByAxisIdInOrderByAxisIdAscPositionAsc(axesOf(productId).keySet()).forEach(v -> byId.put(v.getId(), v));
-        return byId;
-    }
-
-    private Map<Long, List<Long>> selectionsByOption(Long productId) {
-        Map<Long, List<Long>> byOption = new LinkedHashMap<>();
-        for (ProductOptionSelection selection : selections.findByProductId(productId)) {
-            byOption.computeIfAbsent(selection.getId().getOptionId(), id -> new ArrayList<>()).add(selection.getValueId());
-        }
-        return byOption;
+        return String.join("-", picks.stream().map(pick -> pick.value().normalized()).toList());
     }
 
     private ProductDetailView.Variant variantOf(Long productId, Long variantId) {

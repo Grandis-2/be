@@ -174,23 +174,28 @@ class ProductListApiTest {
         }
 
         @Test
-        @DisplayName("대표 사진은 기본 묶음의 대표를 먼저, 없으면 첫 색상 묶음의 대표를, 사진이 없으면 null")
+        @DisplayName("썸네일은 첫 색상(넣은 순서)의 첫 장, 색상 축이 없으면 기본 묶음의 첫 장 — 대표 표시는 안 보고, 첫 색상에 사진이 없으면 null")
         void representativeImage() throws Exception {
-            // 대표가 늘 첫 칸이면 "대표" 와 "첫 칸" 이 갈리지 않는다 — 비대표를 먼저(작은 id · position 0), 대표를 position 1 에
+            // 대표가 늘 첫 칸이면 "대표" 와 "첫 칸" 이 갈리지 않는다 — 비대표를 position 0 에, 대표를 position 1 에
             Long withDefault = visibleInStock("기본 묶음");
-            fixtures.image(withDefault, "GALLERY", "화이트", 0, true, "https://img/white-primary.jpg");
             fixtures.image(withDefault, "GALLERY", "", 0, false, "https://img/default-first.jpg");
             fixtures.image(withDefault, "GALLERY", "", 1, true, "https://img/default-primary.jpg");
+            // 화이트를 먼저 넣고 사전순으로 앞서는 블루를 다음에 — 사전순이면 블루가 이긴다
             Long colorOnly = visibleInStock("색상 묶음만");
-            fixtures.image(colorOnly, "GALLERY", "화이트", 0, true, "https://img/white.jpg");
-            fixtures.image(colorOnly, "GALLERY", "블랙", 0, false, "https://img/black-first.jpg");
-            fixtures.image(colorOnly, "GALLERY", "블랙", 1, true, "https://img/black-primary.jpg");
+            fixtures.image(colorOnly, "GALLERY", "화이트", 0, false, "https://img/white-first.jpg");
+            fixtures.image(colorOnly, "GALLERY", "화이트", 1, true, "https://img/white-primary.jpg");
+            fixtures.image(colorOnly, "GALLERY", "블루", 0, true, "https://img/blue.jpg");
             fixtures.image(colorOnly, "DETAIL", "spec", 0, true, "https://img/detail.jpg");
+            // 첫 색상(블랙)에 사진이 없으면 다음 색상(화이트)으로 넘어가지 않는다
+            Long firstColorBare = visibleInStock("첫 색상 사진 없음");
+            fixtures.value(fixtures.axis(firstColorBare, "color", 0), "블랙", 0);
+            fixtures.image(firstColorBare, "GALLERY", "화이트", 0, true, "https://img/later-white.jpg");
             Long none = visibleInStock("사진 없음");
 
             JsonNode items = list();
-            assertThat(find(items, withDefault).get("imageUrl").asString()).isEqualTo("https://img/default-primary.jpg");
-            assertThat(find(items, colorOnly).get("imageUrl").asString()).isEqualTo("https://img/black-primary.jpg");
+            assertThat(find(items, withDefault).get("imageUrl").asString()).isEqualTo("https://img/default-first.jpg");
+            assertThat(find(items, colorOnly).get("imageUrl").asString()).isEqualTo("https://img/white-first.jpg");
+            assertThat(find(items, firstColorBare).get("imageUrl").isNull()).isTrue();
             assertThat(find(items, none).get("imageUrl").isNull()).isTrue();
         }
     }
@@ -253,12 +258,12 @@ class ProductListApiTest {
         @DisplayName("색상 · 용량은 축 안에서 OR, 축 사이는 AND 이고 같은 판매 중 옵션이 함께 만족해야 한다")
         void colorAndStorageMatchSameOption() throws Exception {
             Long productId = visibleInStock("옵션 조합");
-            Long color = fixtures.axis(productId, "color", 0);
-            Long storage = fixtures.axis(productId, "storage", 1);
-            Long black = fixtures.value(color, "블랙", 0);
-            Long white = fixtures.value(color, "화이트", 1);
-            Long gb256 = fixtures.value(storage, "256 GB", "256GB", 0);   // 표시값과 정규화값을 갈라 어느 칸으로 비교하는지 가른다
-            Long gb512 = fixtures.value(storage, "512 GB", "512GB", 1);
+            ShopFixtures.AxisRef color = fixtures.axis(productId, "color", 0);
+            ShopFixtures.AxisRef storage = fixtures.axis(productId, "storage", 1);
+            String black = fixtures.value(color, "블랙", 0);
+            String white = fixtures.value(color, "화이트", 1);
+            String gb256 = fixtures.value(storage, "256 GB", "256GB", 0);   // 표시값과 정규화값을 갈라 어느 칸으로 비교하는지 가른다
+            String gb512 = fixtures.value(storage, "512 GB", "512GB", 1);
             // 판매 중: 블랙 256 · 화이트 512. 판매 중지: 화이트 256 — 축마다 따로 만족하면 안 되고 같은 옵션이어야 한다
             Long black256 = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
             fixtures.selection(productId, black256, color, black);
@@ -282,6 +287,24 @@ class ProductListApiTest {
             assertThat(ids(list("color", "  블랙  "))).containsExactly(productId);
             assertThat(ids(list("color", Normalizer.normalize("블랙", Normalizer.Form.NFD)))).containsExactly(productId);
             assertThat(ids(list("color", "블랙 ", "storage", "256 GB"))).containsExactly(productId);
+        }
+
+        @Test
+        @DisplayName("색상 필터는 대소문자 · 악센트를 가리지 않는다 — 같은 축의 중복 판정과 같은 콜레이션이라 Space Gray 로 넣고 space gray 로 찾는다")
+        void colorFilterFoldsCaseAndAccents() throws Exception {
+            Long productId = visibleInStock("콜레이션");
+            ShopFixtures.AxisRef color = fixtures.axis(productId, "color", 0);
+            String gray = fixtures.value(color, "Space Gray", 0);
+            String rose = fixtures.value(color, "Rosé", 1);
+            Long grayOption = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
+            fixtures.selection(productId, grayOption, color, gray);
+            Long roseOption = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
+            fixtures.selection(productId, roseOption, color, rose);
+
+            assertThat(ids(list("color", "space gray"))).containsExactly(productId);
+            assertThat(ids(list("color", "SPACE GRAY"))).containsExactly(productId);
+            assertThat(ids(list("color", "Rose"))).containsExactly(productId);
+            assertThat(ids(list("color", "Space Grey"))).as("철자가 다르면 안 걸린다").isEmpty();
         }
     }
 

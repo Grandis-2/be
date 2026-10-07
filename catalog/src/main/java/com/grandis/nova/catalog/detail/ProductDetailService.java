@@ -8,17 +8,11 @@ import com.grandis.nova.catalog.detail.ProductDetailView.OptionAxis;
 import com.grandis.nova.catalog.detail.ProductDetailView.OptionValue;
 import com.grandis.nova.catalog.detail.ProductDetailView.Variant;
 import com.grandis.nova.catalog.detail.ProductDetailView.Warranty;
-import com.grandis.nova.catalog.image.ImageKind;
-import com.grandis.nova.catalog.image.ProductImage;
-import com.grandis.nova.catalog.image.ProductImageRepository;
 import com.grandis.nova.catalog.listing.CampaignWindow;
 import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
-import com.grandis.nova.catalog.option.ProductOptionAxis;
-import com.grandis.nova.catalog.option.ProductOptionAxisRepository;
-import com.grandis.nova.catalog.option.ProductOptionSelection;
-import com.grandis.nova.catalog.option.ProductOptionSelectionRepository;
-import com.grandis.nova.catalog.option.ProductOptionValue;
-import com.grandis.nova.catalog.option.ProductOptionValueRepository;
+import com.grandis.nova.catalog.option.OptionCombination;
+import com.grandis.nova.catalog.option.OptionText;
+import com.grandis.nova.catalog.option.ProductOptions;
 import com.grandis.nova.catalog.product.Product;
 import com.grandis.nova.catalog.product.ProductOption;
 import com.grandis.nova.catalog.product.ProductOptionRepository;
@@ -59,23 +53,13 @@ public class ProductDetailService {
 
     private final ProductRepository products;
     private final ProductOptionRepository options;
-    private final ProductOptionAxisRepository axes;
-    private final ProductOptionValueRepository values;
-    private final ProductOptionSelectionRepository selections;
-    private final ProductImageRepository images;
     private final ProductListingQueryRepository crossReads;
     private final Clock clock;
 
     public ProductDetailService(ProductRepository products, ProductOptionRepository options,
-                                ProductOptionAxisRepository axes, ProductOptionValueRepository values,
-                                ProductOptionSelectionRepository selections, ProductImageRepository images,
                                 ProductListingQueryRepository crossReads, Clock clock) {
         this.products = products;
         this.options = options;
-        this.axes = axes;
-        this.values = values;
-        this.selections = selections;
-        this.images = images;
         this.crossReads = crossReads;
         this.clock = clock;
     }
@@ -97,30 +81,14 @@ public class ProductDetailService {
         Product product = products.findById(productId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
         // 관리자 목록 · 상세의 visible 은 products.visible 칸 그대로 — 판매 방식별 준비는 registrationCompleted 가 따로 말한다
         return new AdminProductDetail(assemble(product, product.isVisible()), product.getTags(),
-                products.findRegistrationKey(productId).orElse(null), crossReads.isReady(productId));
+                product.getIdempotencyKey(), crossReads.isReady(productId));
     }
 
     /** @param visible 응답에 실을 visible — 회원 상세는 노출 규칙을 지났으니 늘 true, 관리자 상세는 칸 그대로 */
     private ProductDetailView assemble(Product product, boolean visible) {
         Long productId = product.getId();
         Instant now = clock.instant();
-
-        List<ProductOptionAxis> productAxes = axes.findByProductIdOrderByPosition(productId);
-        Map<Long, ProductOptionAxis> axisById = new LinkedHashMap<>();
-        productAxes.forEach(axis -> axisById.put(axis.getId(), axis));
-        List<ProductOptionValue> axisValues = values.findByAxisIdInOrderByAxisIdAscPositionAsc(axisById.keySet());
-        Map<Long, ProductOptionValue> valueById = new LinkedHashMap<>();
-        axisValues.forEach(value -> valueById.put(value.getId(), value));
-
-        Map<Long, Map<String, String>> selectionsByOption = new LinkedHashMap<>();
-        for (ProductOptionSelection selection : selections.findByProductId(productId)) {
-            ProductOptionAxis axis = axisById.get(selection.getId().getAxisId());
-            ProductOptionValue value = valueById.get(selection.getValueId());
-            if (axis != null && value != null) {
-                selectionsByOption.computeIfAbsent(selection.getId().getOptionId(), id -> new TreeMap<>())
-                        .put(axis.getAxisKey(), value.getNormalizedValue());
-            }
-        }
+        ProductOptions document = product.getOptions();
 
         Map<Long, Integer> available = product.getSaleMode() == SaleMode.IN_STOCK
                 ? crossReads.findAvailableQuantities(productId) : Map.of();
@@ -128,7 +96,7 @@ public class ProductDetailService {
         boolean sellable = false;
         boolean purchasable = false;
         for (ProductOption option : options.findByProductIdOrderById(productId)) {
-            Variant variant = toVariant(option, product.getSaleMode(), selectionsByOption, available);
+            Variant variant = toVariant(option, product.getSaleMode(), document, available);
             variants.add(variant);
             boolean active = option.getStatus() == SaleStatus.ACTIVE;
             sellable |= active;
@@ -142,12 +110,12 @@ public class ProductDetailService {
                         .map(window -> new Campaign(window.opensAt(), window.closesAt(), window.statusAt(now)))
                         .orElse(null)
                 : null;
-        Images productImages = groupImages(images.findByProductIdOrderByKindAscBundleKeyAscPositionAsc(productId));
+        Images productImages = imagesOf(document);
 
         return new ProductDetailView(product.getId(), product.getCategoryId(), product.getSaleMode(), product.getTitle(),
-                product.getDescription(), representativeUrl(productImages), product.getStatus(), visible,
+                product.getDescription(), product.getThumbnailUrl(), product.getStatus(), visible,
                 product.getBasePrice(), new Warranty(product.isWarrantyOffered(), product.getWarrantySurcharge()),
-                sellable, soldOut, campaign, toAxes(productAxes, axisValues), variants, productImages);
+                sellable, soldOut, campaign, toAxes(document), variants, productImages);
     }
 
     /** 옵션이 그 상품 소속이 아니면 404. 상품의 노출 규칙을 먼저 적용한다. */
@@ -168,57 +136,53 @@ public class ProductDetailService {
         return product;
     }
 
-    private static Variant toVariant(ProductOption option, SaleMode saleMode,
-                                     Map<Long, Map<String, String>> selectionsByOption, Map<Long, Integer> available) {
+    private static Variant toVariant(ProductOption option, SaleMode saleMode, ProductOptions document, Map<Long, Integer> available) {
         Integer availableQuantity = saleMode == SaleMode.IN_STOCK
                 ? Math.max(0, available.getOrDefault(option.getId(), 0)) : null;
+        // 고른 값은 조합 키(값 id)로 문서에서 찾는다 — 축 키 → 정규화값
+        Map<String, String> selections = new TreeMap<>();
+        for (ProductOptions.Pick pick : document.picksOf(OptionCombination.valueIdsOf(option.getCombinationKey()))) {
+            selections.put(pick.axis().key(), pick.value().normalized());
+        }
         return new Variant(option.getId(), option.getSku(), option.getTitle(), option.getPrice(),
-                attributes(option.getFilterAttributes()),
-                selectionsByOption.getOrDefault(option.getId(), Map.of()), option.getStatus(), availableQuantity);
+                attributes(option.getFilterAttributes()), selections, option.getStatus(), availableQuantity);
     }
 
     private static Map<String, String> attributes(String json) {
         return json == null ? Map.of() : JSON.readValue(json, ATTRIBUTES);
     }
 
-    private static List<OptionAxis> toAxes(List<ProductOptionAxis> productAxes, List<ProductOptionValue> axisValues) {
-        List<OptionAxis> result = new ArrayList<>();
-        for (ProductOptionAxis axis : productAxes) {
-            List<OptionValue> valuesOfAxis = axisValues.stream()
-                    .filter(value -> value.getAxisId().equals(axis.getId()))
-                    .map(value -> new OptionValue(value.getValue(), value.getNormalizedValue(), value.getSurcharge()))
-                    .toList();
-            result.add(new OptionAxis(axis.getAxisKey(), axis.getLabel(), valuesOfAxis));
+    private static List<OptionAxis> toAxes(ProductOptions document) {
+        return document.axes().stream()
+                .map(axis -> new OptionAxis(axis.key(), axis.label(), axis.values().stream()
+                        .map(value -> new OptionValue(value.id(), value.value(), value.normalized(), value.hex(), value.surcharge()))
+                        .toList()))
+                .toList();
+    }
+
+    /** 색상 축이 있으면 사진이 있는 색상 값마다 묶음 하나(bundleKey = 정규화값, 값 순), 없으면 기본 묶음 하나(bundleKey ""). 상세는 영역 순. */
+    private static Images imagesOf(ProductOptions document) {
+        List<ImageBundle> gallery = new ArrayList<>();
+        document.axis(OptionText.COLOR).ifPresentOrElse(
+                color -> color.values().stream()
+                        .filter(value -> !value.images().isEmpty())
+                        .forEach(value -> gallery.add(new ImageBundle(value.normalized(), items(value.images())))),
+                () -> {
+                    if (!document.defaultImages().isEmpty()) {
+                        gallery.add(new ImageBundle("", items(document.defaultImages())));
+                    }
+                });
+        List<ImageBundle> detail = document.detailImages().stream()
+                .map(section -> new ImageBundle(section.section(), items(section.images())))
+                .toList();
+        return new Images(gallery, detail);
+    }
+
+    private static List<Image> items(List<ProductOptions.Image> images) {
+        List<Image> items = new ArrayList<>();
+        for (int position = 0; position < images.size(); position++) {
+            items.add(new Image(images.get(position).url(), position, images.get(position).primary()));
         }
-        return result;
-    }
-
-    /** 저장소가 kind · bundle_key · position 순으로 주므로 묶음 경계에서 잘라 담는다. */
-    private static Images groupImages(List<ProductImage> all) {
-        Map<String, List<Image>> gallery = new LinkedHashMap<>();
-        Map<String, List<Image>> detail = new LinkedHashMap<>();
-        for (ProductImage image : all) {
-            Map<String, List<Image>> target = image.getKind() == ImageKind.GALLERY ? gallery : detail;
-            target.computeIfAbsent(image.getBundleKey(), key -> new ArrayList<>())
-                    .add(new Image(image.getUrl(), image.getPosition(), image.isPrimary()));
-        }
-        return new Images(toBundles(gallery), toBundles(detail));
-    }
-
-    private static List<ImageBundle> toBundles(Map<String, List<Image>> byBundle) {
-        return byBundle.entrySet().stream().map(entry -> new ImageBundle(entry.getKey(), entry.getValue())).toList();
-    }
-
-    /** 목록과 같은 규칙 — 기본 묶음의 대표, 없으면 사전순 첫 묶음의 대표. */
-    private static String representativeUrl(Images images) {
-        Optional<Image> defaultPrimary = images.gallery().stream()
-                .filter(bundle -> ProductImage.DEFAULT_BUNDLE.equals(bundle.bundleKey()))
-                .flatMap(bundle -> bundle.items().stream())
-                .filter(Image::primary)
-                .findFirst();
-        return defaultPrimary
-                .or(() -> images.gallery().stream().flatMap(bundle -> bundle.items().stream()).filter(Image::primary).findFirst())
-                .map(Image::url)
-                .orElse(null);
+        return items;
     }
 }

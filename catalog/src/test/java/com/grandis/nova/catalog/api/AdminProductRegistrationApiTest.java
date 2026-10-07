@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog.api;
 
+import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import org.junit.jupiter.api.BeforeEach;
@@ -115,16 +116,17 @@ class AdminProductRegistrationApiTest {
             JsonNode detail = product.get("images").get("detail").get(0);
             assertThat(detail.get("bundleKey").asString()).isEqualTo("제품 사양");
             assertThat(detail.get("items").get(0).get("primary").asBoolean()).isFalse();
-            assertThat(product.get("imageUrl").asString()).as("기본 묶음이 없으니 사전순 첫 묶음(블랙)의 대표").isEqualTo("https://img/b1.jpg");
+            assertThat(product.get("imageUrl").asString()).as("첫 색상(블랙)의 첫 장 — 대표 표시(b1)가 아니다").isEqualTo("https://img/b0.jpg");
 
             // DB: 고른 공개 여부 · 조합 키 · 등록 기록 · 회차 이벤트
             assertThat(jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, productId)).isTrue();
             assertThat(jdbcTemplate.queryForObject(
                     "SELECT COUNT(*) FROM product_options WHERE product_id = ? AND combination_key IS NOT NULL", Long.class, productId)).isEqualTo(3L);
-            assertThat(jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM product_option_selections WHERE product_id = ?", Long.class, productId)).isEqualTo(6L);
-            assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM product_registrations WHERE product_id = ?",
-                    Long.class, productId)).isEqualTo(1L);
+            assertThat(jdbcTemplate.queryForList(
+                    "SELECT combination_key FROM product_options WHERE product_id = ?", String.class, productId))
+                    .as("조합마다 축 둘의 값 id").allSatisfy(key -> assertThat(OptionCombination.valueIdsOf(key)).hasSize(2));
+            assertThat(jdbcTemplate.queryForObject("SELECT idempotency_key IS NOT NULL FROM products WHERE id = ?",
+                    Boolean.class, productId)).isTrue();
             assertThat(jdbcTemplate.queryForList("SELECT event_type FROM catalog_outbox_events WHERE aggregate_id = ?",
                     String.class, productId)).containsExactly("PREORDER_PRODUCT_REGISTERED");
         }
@@ -159,6 +161,18 @@ class AdminProductRegistrationApiTest {
             assertThat(event.get("event_type")).isEqualTo("IN_STOCK_PRODUCT_REGISTERED");
             assertThat(event.get("stock")).isEqualTo("7");
             assertThat(event.get("option_id")).isEqualTo(String.valueOf(variant.get("variantId").asLong()));
+        }
+
+        @Test
+        @DisplayName("값 추가금은 받은 표기와 상관없이 정수로 문서에 담긴다 — 1.5e3 은 응답 · 저장 모두 1500(JSON 실수 1500.0 이 아니다)")
+        void optionValueSurchargeIsStoredAsPlainInteger() throws Exception {
+            JsonNode data = data(register("k-" + ShopFixtures.unique(), preorderBody("").replace("\"surcharge\": 200000", "\"surcharge\": 1.5e3"))
+                    .andExpect(status().isCreated()));
+            Long productId = data.get("registration").get("productId").asLong();
+
+            assertThat(data.get("product").get("optionAxes").get(1).get("values").get(0).get("surcharge").toString()).isEqualTo("1500");
+            assertThat(jdbcTemplate.queryForObject("SELECT JSON_TYPE(JSON_EXTRACT(options, '$.axes[1].values[0].surcharge')) FROM products WHERE id = ?",
+                    String.class, productId)).isEqualTo("INTEGER");
         }
     }
 
@@ -242,7 +256,7 @@ class AdminProductRegistrationApiTest {
             assertThat(statuses).containsAnyOf(409, 202).containsOnlyOnce(201);
             assertThat(statuses).allSatisfy(s -> assertThat(s).isIn(201, 202, 409));
             assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM products", Long.class)).isEqualTo(before + 1);
-            assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM product_registrations WHERE idempotency_key = ?",
+            assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM products WHERE idempotency_key = ?",
                     Long.class, key)).isEqualTo(1L);
         }
 

@@ -12,7 +12,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 /**
- * 리뷰 목록 읽기. catalog 표(product_reviews · products · product_images · categories)만 읽는다.
+ * 리뷰 목록 읽기. catalog 표(product_reviews · products · categories)만 읽는다.
  * 정렬은 최신순(작성 시각 내림차순, 같으면 id 내림차순) 고정, 오프셋 페이징이다. 인덱스 ix_review_product · ix_review_customer
  * ((상품 · 회원, created_at) + PK)의 순서와 같아 따로 정렬하지 않는다(실측 EXPLAIN: id 만으로 정렬하면 Using filesort, 이 순서면
  * Backward index scan). 상품별 · 내 리뷰가 그렇고, 모아보기(공개 상품 전체 · 카테고리)는 정렬한다 — 상품 조건이 리뷰 표 밖에 있다.
@@ -24,9 +24,7 @@ public class ReviewQueryRepository {
     private static final String SELECT = """
             SELECT r.id, r.product_id, p.title, r.option_title_snapshot, r.rating, r.body, r.author_name,
                    r.created_at, r.updated_at, r.order_item_id,
-                   (SELECT i.url FROM product_images i
-                     WHERE i.product_id = p.id AND i.kind = 'GALLERY' AND i.is_primary = 1
-                     ORDER BY (i.bundle_key <> ''), i.bundle_key LIMIT 1) AS image_url
+                   p.thumbnail_url AS image_url
               FROM product_reviews r
               JOIN products p ON p.id = r.product_id
             """;

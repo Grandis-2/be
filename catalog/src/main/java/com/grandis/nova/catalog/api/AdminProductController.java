@@ -132,10 +132,10 @@ public class AdminProductController {
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response));
     }
 
-    /** 값의 이름(오타 · 표시 문구) · 추가금 수정. 이름을 바꾸면 정규화값도 따라 바뀌고, 그 값을 고른 옵션의 표시명 · 필터 속성 · 사진 묶음 키를 같이 고친다. 추가금이 바뀌면 재계산한다. */
-    @Operation(summary = "옵션 값 표시 문구 · 추가금 수정", description = "보낸 칸만 바꾼다 — 하나도 없으면 400")
+    /** 값의 이름(오타 · 표시 문구) · 색상 hex · 추가금 수정. 이름을 바꾸면 정규화값도 따라 바뀌고, 그 값을 고른 옵션의 표시명 · 필터 속성을 같이 고친다. 사진은 값 아래에 있어 따라간다. 추가금이 바뀌면 재계산한다. */
+    @Operation(summary = "옵션 값 표시 문구 · 색상 hex · 추가금 수정", description = "보낸 칸만 바꾼다 — 하나도 없으면 400")
     @PatchMapping("/{productId}/option-values/{valueId}")
-    public ApiResponse<AdminProductResponse> editOptionValue(@PathVariable Long productId, @PathVariable Long valueId,
+    public ApiResponse<AdminProductResponse> editOptionValue(@PathVariable Long productId, @PathVariable String valueId,
                                                              @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = OptionValueEditRequest.class))) @RequestBody String body) {
         return ApiResponse.ok(AdminProductResponse.from(
                 serialized(() -> editService.editOptionValue(productId, valueId, bodies.parse(body, OptionValueEditRequest.class)))));
