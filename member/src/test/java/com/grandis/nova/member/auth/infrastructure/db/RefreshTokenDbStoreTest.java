@@ -6,7 +6,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.grandis.nova.member.MemberApplication;
 import com.grandis.nova.member.TestKeys;
-import com.grandis.nova.member.auth.application.ClientInfo;
 import com.grandis.nova.member.auth.application.RefreshTokenStore;
 import com.grandis.nova.member.auth.application.RefreshTokenStore.Rotation;
 import com.grandis.nova.member.auth.application.RefreshTokens;
@@ -40,7 +39,6 @@ class RefreshTokenDbStoreTest {
 
 
 
-    private static final ClientInfo CLIENT = new ClientInfo("203.0.113.9", "JUnit");
     private static final java.time.Duration FOURTEEN_DAYS = java.time.Duration.ofDays(14);
 
     @Autowired RefreshTokenStore store;
@@ -63,7 +61,7 @@ class RefreshTokenDbStoreTest {
     /** 세션 하나를 만들고 첫 원문을 돌려준다. */
     private String login(long customerId, UUID sessionId) {
         String raw = RefreshTokens.newToken();
-        store.save(sessionId, String.valueOf(customerId), raw, nowSeconds().plus(FOURTEEN_DAYS), CLIENT);
+        store.save(sessionId, String.valueOf(customerId), raw, nowSeconds().plus(FOURTEEN_DAYS));
         return raw;
     }
 
@@ -83,13 +81,12 @@ class RefreshTokenDbStoreTest {
         Instant expiresAt = nowSeconds().plus(FOURTEEN_DAYS);
 
         String raw = RefreshTokens.newToken();
-        store.save(sessionId, String.valueOf(customerId), raw, expiresAt, CLIENT);
+        store.save(sessionId, String.valueOf(customerId), raw, expiresAt);
 
         var row = jdbc.queryForMap("SELECT * FROM refresh_tokens WHERE family_id = ?", sessionId.toString());
         assertThat((byte[]) row.get("token_hash")).hasSize(32).isEqualTo(RefreshTokens.hash(raw));
         assertThat(row.get("customer_id")).isEqualTo(customerId);
-        assertThat(row.get("client_ip")).isEqualTo("203.0.113.9");
-        assertThat(row.get("user_agent")).isEqualTo("JUnit");
+        assertThat(row).as("접속 IP · 브라우저 칸은 없앴다").doesNotContainKeys("client_ip", "user_agent");
         assertThat(row.get("rotated_at")).isNull();
         assertThat(row.get("revoked_at")).isNull();
         assertThat((LocalDateTime) row.get("expires_at")).isEqualTo(LocalDateTime.ofInstant(expiresAt, ZoneOffset.UTC));
@@ -124,7 +121,7 @@ class RefreshTokenDbStoreTest {
 
         for (int i = 0; i < 3; i++) {
             String next = RefreshTokens.newToken();
-            Rotation rotation = store.rotate(raw, next, CLIENT);
+            Rotation rotation = store.rotate(raw, next);
             assertThat(rotation.status()).isEqualTo(Rotation.Status.ROTATED);
             assertThat(rotation.sessionId()).isEqualTo(sessionId);
             assertThat(rotation.subject()).isEqualTo(String.valueOf(customerId));
@@ -146,9 +143,9 @@ class RefreshTokenDbStoreTest {
         UUID sessionId = UUID.randomUUID();
         String first = login(customerId, sessionId);
         String second = RefreshTokens.newToken();
-        assertThat(store.rotate(first, second, CLIENT).status()).isEqualTo(Rotation.Status.ROTATED);
+        assertThat(store.rotate(first, second).status()).isEqualTo(Rotation.Status.ROTATED);
 
-        Rotation reuse = store.rotate(first, RefreshTokens.newToken(), CLIENT);
+        Rotation reuse = store.rotate(first, RefreshTokens.newToken());
 
         assertThat(reuse.status()).isEqualTo(Rotation.Status.REUSED);
         assertThat(reuse.sessionId()).isEqualTo(sessionId);
@@ -156,20 +153,20 @@ class RefreshTokenDbStoreTest {
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE family_id = ? AND revoked_at IS NULL",
                 Integer.class, sessionId.toString())).isZero();
         // 살아남은 토큰이 없다 — 탈취자도 원 소유자도 더 못 쓴다
-        assertThat(store.rotate(second, RefreshTokens.newToken(), CLIENT).status()).isEqualTo(Rotation.Status.REVOKED);
+        assertThat(store.rotate(second, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.REVOKED);
     }
 
     @Test
     @DisplayName("rotate: 모르는 원문 · 폐기된 토큰 · 만료된 토큰은 각각 다른 사유로 거절된다")
     void rejectionsAreDistinguished() {
         long customerId = newCustomer();
-        assertThat(store.rotate(RefreshTokens.newToken(), RefreshTokens.newToken(), CLIENT).status())
+        assertThat(store.rotate(RefreshTokens.newToken(), RefreshTokens.newToken()).status())
                 .isEqualTo(Rotation.Status.NOT_FOUND);
 
         UUID revokedSession = UUID.randomUUID();
         String revoked = login(customerId, revokedSession);
         store.revokeSession(revokedSession);
-        assertThat(store.rotate(revoked, RefreshTokens.newToken(), CLIENT).status()).isEqualTo(Rotation.Status.REVOKED);
+        assertThat(store.rotate(revoked, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.REVOKED);
 
         // 만료된 행은 직접 넣는다. ck_refresh_expiry 가 생성 < 만료를 강제하므로 생성 시각도 과거로 둔다.
         UUID expiredSession = UUID.randomUUID();
@@ -179,7 +176,7 @@ class RefreshTokenDbStoreTest {
                 customerId, expiredSession.toString(), RefreshTokens.hash(expired),
                 LocalDateTime.ofInstant(now.minus(1, ChronoUnit.HOURS), ZoneOffset.UTC),
                 LocalDateTime.ofInstant(now.minus(15, ChronoUnit.DAYS), ZoneOffset.UTC));
-        assertThat(store.rotate(expired, RefreshTokens.newToken(), CLIENT).status()).isEqualTo(Rotation.Status.EXPIRED);
+        assertThat(store.rotate(expired, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.EXPIRED);
     }
 
     @Test
@@ -203,10 +200,10 @@ class RefreshTokenDbStoreTest {
     void reuseAfterDetectionWindowIsExpiredWithoutTouchingTheChain() {
         long customerId = newCustomer();
         String first = login(customerId, UUID.randomUUID());
-        assertThat(store.rotate(first, RefreshTokens.newToken(), CLIENT).status()).isEqualTo(Rotation.Status.ROTATED);
+        assertThat(store.rotate(first, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.ROTATED);
         pullChainExpiry(customerId, jwt.accessTokenValidity().plusMinutes(1));
 
-        assertThat(store.rotate(first, RefreshTokens.newToken(), CLIENT).status()).isEqualTo(Rotation.Status.EXPIRED);
+        assertThat(store.rotate(first, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.EXPIRED);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE customer_id = ? AND revoked_at IS NOT NULL", Long.class, customerId))
                 .as("체인 폐기 없음").isZero();
     }
@@ -217,7 +214,7 @@ class RefreshTokenDbStoreTest {
         long customerId = newCustomer();
         String first = login(customerId, UUID.randomUUID());
         String second = RefreshTokens.newToken();
-        assertThat(store.rotate(first, second, CLIENT).status()).isEqualTo(Rotation.Status.ROTATED);
+        assertThat(store.rotate(first, second).status()).isEqualTo(Rotation.Status.ROTATED);
         pullChainExpiry(customerId, jwt.accessTokenValidity().plusMinutes(1));
 
         java.util.concurrent.CountDownLatch locked = new java.util.concurrent.CountDownLatch(1);
@@ -237,7 +234,7 @@ class RefreshTokenDbStoreTest {
             assertThat(locked.await(30, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
 
             long started = System.nanoTime();
-            Rotation rotation = store.rotate(first, RefreshTokens.newToken(), CLIENT);
+            Rotation rotation = store.rotate(first, RefreshTokens.newToken());
             assertThat(java.time.Duration.ofNanos(System.nanoTime() - started))
                     .as("체인 폐기를 했다면 잠긴 행을 기다린다(innodb_lock_wait_timeout)").isLessThan(java.time.Duration.ofSeconds(5));
             assertThat(rotation.status()).isEqualTo(Rotation.Status.EXPIRED);
@@ -270,7 +267,7 @@ class RefreshTokenDbStoreTest {
         UUID sessionId = UUID.randomUUID();
         String first = login(customerId, sessionId);
         String second = RefreshTokens.newToken();
-        assertThat(store.rotate(first, second, CLIENT).status()).isEqualTo(Rotation.Status.ROTATED);
+        assertThat(store.rotate(first, second).status()).isEqualTo(Rotation.Status.ROTATED);
         pullChainExpiry(customerId, java.time.Duration.ofMinutes(41));
 
         java.util.concurrent.CountDownLatch locked = new java.util.concurrent.CountDownLatch(1);
@@ -337,7 +334,7 @@ class RefreshTokenDbStoreTest {
     /** 시계를 고정한 저장소로 회전한다. 직접 만든 객체라 @Transactional 이 안 붙으므로 트랜잭션을 밖에서 연다. */
     private Rotation rotateAt(Instant at, String presented) {
         DbRefreshTokenStore fixed = new DbRefreshTokenStore(rows, Clock.fixed(at, ZoneOffset.UTC), jwt);
-        return transactions.execute(status -> fixed.rotate(presented, RefreshTokens.newToken(), CLIENT));
+        return transactions.execute(status -> fixed.rotate(presented, RefreshTokens.newToken()));
     }
 
     @Test
@@ -348,7 +345,7 @@ class RefreshTokenDbStoreTest {
         String raw = login(customerId, sessionId);
         int n = 8;
         List<Concurrently.Outcome<Rotation>> results =
-                Concurrently.run(n, i -> () -> store.rotate(raw, RefreshTokens.newToken(), CLIENT));
+                Concurrently.run(n, i -> () -> store.rotate(raw, RefreshTokens.newToken()));
 
         assertThat(results).allSatisfy(r -> assertThat(r.error()).isNull());
         List<Rotation.Status> outcomes = results.stream().map(r -> r.value().status()).toList();
@@ -371,7 +368,7 @@ class RefreshTokenDbStoreTest {
         long customerId = newCustomer();
         UUID sessionId = UUID.randomUUID();
         String raw = login(customerId, sessionId);
-        store.rotate(raw, RefreshTokens.newToken(), CLIENT);
+        store.rotate(raw, RefreshTokens.newToken());
 
         store.revokeSession(sessionId);
         LocalDateTime firstRevokedAt = jdbc.queryForObject(

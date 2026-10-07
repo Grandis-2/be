@@ -292,7 +292,7 @@ class ProductListApiTest {
     class Paging {
 
         @Test
-        @DisplayName("productId 내림차순 고정, page · size · total · hasNext")
+        @DisplayName("기본(최신순)은 productId 내림차순, page · size · total · hasNext")
         void orderedAndPaged() throws Exception {
             Long first = visibleInStock("1");
             Long second = visibleInStock("2");
@@ -332,6 +332,60 @@ class ProductListApiTest {
                         .andExpect(jsonPath("$.error.details.violations[0].field").value(bad[0]));
             }
             perform(new String[] {"saleMode", "RENTAL"}).andExpect(status().isBadRequest());
+        }
+    }
+
+    @Nested
+    @DisplayName("정렬 — 최신순(기본) · 낮은 가격순 · 높은 가격순")
+    class Sorting {
+
+        @Test
+        @DisplayName("가격순은 판매 중 옵션의 최저가로, 같으면 최신순, 판매 중 옵션이 없는 상품은 두 가격순 모두 맨 뒤다")
+        void sortsByMinPriceThenNewest() throws Exception {
+            // 생성(id) 순 A · B · C · D. 최저가 A 3000(판매 중지 100 은 빼고) · B 1000(최고 5000) · C 1000 · D 없음(판매 중 옵션 없음)
+            Long a = visibleInStock("A");
+            fixtures.option(a, "PAUSED", new BigDecimal("100"));
+            fixtures.option(a, "ACTIVE", new BigDecimal("3000"));
+            Long b = visibleInStock("B");
+            fixtures.option(b, "ACTIVE", new BigDecimal("1000"));
+            fixtures.option(b, "ACTIVE", new BigDecimal("5000"));
+            Long c = visibleInStock("C");
+            fixtures.option(c, "ACTIVE", new BigDecimal("1000"));
+            Long d = visibleInStock("D");
+
+            assertThat(ids(list())).as("기본은 최신순").containsExactly(d, c, b, a);
+            assertThat(ids(list("sort", "NEWEST"))).containsExactly(d, c, b, a);
+            // 같은 1000 은 최신(C)이 먼저 — 동률을 id 오름으로 잇거나 최저가가 없는 D 를 앞에 두면 다르게 나온다
+            assertThat(ids(list("sort", "PRICE_ASC"))).containsExactly(c, b, a, d);
+            // 최고가로 세우면 B(5000)가 맨 앞이다 — 카드에 보이는 최저가 기준이라 A(3000)가 먼저
+            assertThat(ids(list("sort", "PRICE_DESC"))).containsExactly(a, c, b, d);
+        }
+
+        @Test
+        @DisplayName("정렬한 채로 쪽을 나눈다 — 건수는 정렬과 무관")
+        void pagesInSortedOrder() throws Exception {
+            Long cheap = visibleInStock("싼");
+            fixtures.option(cheap, "ACTIVE", new BigDecimal("1000"));
+            Long middle = visibleInStock("중간");
+            fixtures.option(middle, "ACTIVE", new BigDecimal("2000"));
+            Long expensive = visibleInStock("비싼");
+            fixtures.option(expensive, "ACTIVE", new BigDecimal("3000"));
+
+            JsonNode page0 = data(perform("sort", "PRICE_ASC", "size", "2"));
+            assertThat(page0.get("total").asLong()).isEqualTo(3);
+            assertThat(ids(page0.get("items"))).containsExactly(cheap, middle);
+            assertThat(ids(data(perform("sort", "PRICE_ASC", "size", "2", "page", "1")).get("items"))).containsExactly(expensive);
+        }
+
+        @Test
+        @DisplayName("셋이 아닌 정렬 값(추천순 · 별점순 · 소문자)은 400 VALIDATION_FAILED, 칸은 sort")
+        void rejectsOtherSorts() throws Exception {
+            for (String bad : new String[] {"RECOMMENDED", "RATING_DESC", "price_asc"}) {
+                perform("sort", bad)
+                        .andExpect(status().isBadRequest())
+                        .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+                        .andExpect(jsonPath("$.error.details.violations[0].field").value("sort"));
+            }
         }
     }
 

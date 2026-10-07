@@ -132,7 +132,7 @@ public class AdminProductController {
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response));
     }
 
-    /** 값의 표시 문구(정규화값 불변) · 추가금 수정. 추가금이 바뀌면 그 값을 고른 옵션을 재계산한다. */
+    /** 값의 이름(오타 · 표시 문구) · 추가금 수정. 이름을 바꾸면 정규화값도 따라 바뀌고, 그 값을 고른 옵션의 표시명 · 필터 속성 · 사진 묶음 키를 같이 고친다. 추가금이 바뀌면 재계산한다. */
     @Operation(summary = "옵션 값 표시 문구 · 추가금 수정", description = "보낸 칸만 바꾼다 — 하나도 없으면 400")
     @PatchMapping("/{productId}/option-values/{valueId}")
     public ApiResponse<AdminProductResponse> editOptionValue(@PathVariable Long productId, @PathVariable Long valueId,

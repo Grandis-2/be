@@ -69,7 +69,7 @@ class ProductDetailApiTest {
             Long gb256 = fixtures.value(storage, "256 GB", "256GB", 0);
             jdbcTemplate.update("UPDATE product_option_values SET surcharge = 200000 WHERE id = ?", gb256);
             Long black256 = fixtures.optionWithAttributes(productId, "ACTIVE", new BigDecimal("1200000"), "블랙 / 256GB",
-                    "{\"color\":\"블랙\",\"storage\":\"256GB\"}", "{\"length\":\"2m\"}");
+                    "{\"color\":\"블랙\",\"storage\":\"256GB\"}");
             fixtures.selection(productId, black256, color, black);
             fixtures.selection(productId, black256, storage, gb256);
             Long whitePaused = fixtures.option(productId, "PAUSED", new BigDecimal("1300000"));
@@ -114,7 +114,7 @@ class ProductDetailApiTest {
             assertThat(first.get("title").asString()).isEqualTo("블랙 / 256GB");
             assertThat(first.get("price").decimalValue()).isEqualByComparingTo("1200000");
             assertThat(first.get("filterAttributes").get("storage").asString()).isEqualTo("256GB");
-            assertThat(first.get("displayAttributes").get("length").asString()).isEqualTo("2m");
+            assertThat(first.has("displayAttributes")).as("표시 속성 칸은 없앴다 — 축 → 값은 selections").isFalse();
             assertThat(first.get("selections").get("color").asString()).isEqualTo("블랙");
             assertThat(first.get("selections").get("storage").asString()).isEqualTo("256GB");
             assertThat(first.get("availableQuantity").isNull()).as("사전예약은 무제한 접수").isTrue();
@@ -269,7 +269,7 @@ class ProductDetailApiTest {
             Long axis = fixtures.axis(productId, "color", 0);
             Long black = fixtures.value(axis, "블랙", 0);
             Long option = fixtures.optionWithAttributes(productId, "ACTIVE", new BigDecimal("777"), "블랙",
-                    "{\"color\":\"블랙\"}", null);
+                    "{\"color\":\"블랙\"}");
             fixtures.selection(productId, option, axis, black);
             fixtures.inventory(option, 3, 1, 0);
             Long other = visibleInStock();
@@ -285,7 +285,7 @@ class ProductDetailApiTest {
             assertThat(data.get("availableQuantity").asInt()).isEqualTo(2);
             assertThat(data.get("selections").get("color").asString()).isEqualTo("블랙");
             assertThat(data.get("filterAttributes").get("color").asString()).isEqualTo("블랙");
-            assertThat(data.get("displayAttributes").isEmpty()).isTrue();
+            assertThat(data.has("displayAttributes")).isFalse();
 
             mockMvc.perform(get("/api/v1/products/{p}/variants/{v}", productId, otherOption))
                     .andExpect(status().isNotFound()).andExpect(jsonPath("$.error.code").value("NOT_FOUND"));

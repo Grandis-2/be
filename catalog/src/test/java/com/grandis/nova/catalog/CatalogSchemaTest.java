@@ -64,10 +64,21 @@ class CatalogSchemaTest {
         @DisplayName("없는 상위를 가리키는 카테고리는 넣을 수 없다")
         void parentMustExist() {
             assertThatThrownBy(() -> jdbcTemplate.update("""
-                    INSERT INTO categories (code, name, parent_id, created_at, updated_at)
-                    VALUES (?, 'x', 999999999, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                    """, ShopFixtures.unique()))
+                    INSERT INTO categories (name, parent_id, created_at, updated_at)
+                    VALUES ('x', 999999999, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                    """))
                     .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("fk_category_parent");
+        }
+
+        @Test
+        @DisplayName("표시 순서는 넣지 않으면 0, 음수는 거절한다. code 칸은 없다")
+        void sortOrderDefaultsToZeroAndCodeIsGone() {
+            Long id = new ShopFixtures(jdbcTemplate).category();
+            assertThat(jdbcTemplate.queryForObject("SELECT sort_order FROM categories WHERE id = ?", Integer.class, id)).isZero();
+            assertThatThrownBy(() -> jdbcTemplate.update("UPDATE categories SET sort_order = -1 WHERE id = ?", id))
+                    .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_category_sort_order");   // CHECK(3819)는 무결성 예외로 분류되지 않는다(실측)
+            jdbcTemplate.update("UPDATE categories SET sort_order = 0 WHERE id = ?", id);   // 대조군 — 경계는 들어간다
+            assertThat(columnExists("categories", "code")).isFalse();
         }
     }
 
@@ -76,7 +87,7 @@ class CatalogSchemaTest {
     class LegacyInserts {
 
         @Test
-        @DisplayName("상품은 공개 · 기본가 0 · 보증 없음으로, 옵션에는 수동 가격 표시 칼럼이 없다")
+        @DisplayName("상품은 공개 · 기본가 0 · 보증 없음으로, 옵션에는 수동 가격 표시 · 표시 속성 칼럼이 없다")
         void defaultsKeepOtherModulesFixturesValid() {
             Long productId = fixtures.product("IN_STOCK", "ACTIVE");
             Long optionId = fixtures.option(productId, "ACTIVE");
@@ -90,10 +101,9 @@ class CatalogSchemaTest {
 
             assertThat(jdbcTemplate.queryForObject("SELECT price FROM product_options WHERE id = ?", BigDecimal.class, optionId)).isNotNull();
             // 수동 가격 표시는 없앴다(2026-10-06) — 다시 생기면 재계산이 건너뛰는 옵션이 생긴다
-            assertThat(jdbcTemplate.queryForObject("""
-                    SELECT COUNT(*) FROM information_schema.columns
-                     WHERE table_schema = DATABASE() AND table_name = 'product_options' AND column_name = 'price_overridden'
-                    """, Long.class)).isZero();
+            assertThat(columnExists("product_options", "price_overridden")).isFalse();
+            // 표시 속성은 없앴다(2026-10-07) — 축 → 값은 선택 표 하나가 정본이다
+            assertThat(columnExists("product_options", "display_attributes")).isFalse();
         }
 
         @Test
@@ -289,5 +299,12 @@ class CatalogSchemaTest {
             assertThatThrownBy(() -> jdbcTemplate.update(insert, java.util.UUID.randomUUID().toString(), -1))
                     .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_catalog_outbox_attempts");
         }
+    }
+
+    private boolean columnExists(String table, String column) {
+        return jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.columns
+                 WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?
+                """, Long.class, table, column) > 0;
     }
 }

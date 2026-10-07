@@ -3,7 +3,6 @@ package com.grandis.nova.member.auth.infrastructure.db;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.grandis.nova.common.security.JwtProperties;
-import com.grandis.nova.member.auth.application.ClientInfo;
 import com.grandis.nova.member.auth.application.RefreshTokenStore.Rotation;
 import com.grandis.nova.member.auth.application.RefreshTokens;
 import com.grandis.nova.member.support.MemberIntegrationTest;
@@ -118,15 +117,15 @@ class RefreshTokenCleanupTest {
     void reuseIsStillDetectedJustAfterExpiry() {
         String first = RefreshTokens.newToken();
         String second = RefreshTokens.newToken();
-        store.save(UUID.randomUUID(), String.valueOf(customerId), first, now.plus(Duration.ofDays(14)), ClientInfo.UNKNOWN);
-        assertThat(store.rotate(first, second, ClientInfo.UNKNOWN).status()).isEqualTo(Rotation.Status.ROTATED);
+        store.save(UUID.randomUUID(), String.valueOf(customerId), first, now.plus(Duration.ofDays(14)));
+        assertThat(store.rotate(first, second).status()).isEqualTo(Rotation.Status.ROTATED);
         // 체인이 5초 전에 만료됐다(created_at 도 같이 당겨 ck_refresh_expiry 를 지킨다)
         jdbc.update("UPDATE refresh_tokens SET created_at = ?, expires_at = ? WHERE customer_id = ?",
                 utc(now.minus(Duration.ofDays(1))), utc(now.minusSeconds(5)), customerId);
 
         cleanup.run();
 
-        assertThat(store.rotate(first, RefreshTokens.newToken(), ClientInfo.UNKNOWN).status())
+        assertThat(store.rotate(first, RefreshTokens.newToken()).status())
                 .as("만료 즉시 지웠다면 NOT_FOUND — 재사용이 조용히 지나간다").isEqualTo(Rotation.Status.REUSED);
     }
 
@@ -147,12 +146,12 @@ class RefreshTokenCleanupTest {
     @DisplayName("정리 뒤에도 유효한 토큰의 회전은 그대로 된다 — 만료된 체인만 사라졌다")
     void rotationStillWorksAfterCleanup() {
         String raw = RefreshTokens.newToken();
-        store.save(UUID.randomUUID(), String.valueOf(customerId), raw, now.plus(Duration.ofDays(14)), ClientInfo.UNKNOWN);
+        store.save(UUID.randomUUID(), String.valueOf(customerId), raw, now.plus(Duration.ofDays(14)));
         row(now.minus(Duration.ofDays(1)));
 
         cleanup.run();
 
-        Rotation rotation = store.rotate(raw, RefreshTokens.newToken(), ClientInfo.UNKNOWN);
+        Rotation rotation = store.rotate(raw, RefreshTokens.newToken());
         assertThat(rotation.status()).isEqualTo(Rotation.Status.ROTATED);
     }
 
@@ -160,7 +159,7 @@ class RefreshTokenCleanupTest {
     @DisplayName("진행 중인 회전(유효 행 잠금)을 기다리지도 건드리지도 않는다 — 한 문장 DELETE 는 이 잠금을 50초 기다렸다(실측), 그래서 고른 만료 id 만 지운다")
     void doesNotWaitForAnInFlightRotation() throws Exception {
         String raw = RefreshTokens.newToken();
-        store.save(UUID.randomUUID(), String.valueOf(customerId), raw, now.plus(Duration.ofDays(14)), ClientInfo.UNKNOWN);
+        store.save(UUID.randomUUID(), String.valueOf(customerId), raw, now.plus(Duration.ofDays(14)));
         long expired = row(now.minus(Duration.ofDays(2)));
         CountDownLatch locked = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
@@ -186,7 +185,7 @@ class RefreshTokenCleanupTest {
             release.countDown();
             pool.shutdownNow();
         }
-        assertThat(store.rotate(raw, RefreshTokens.newToken(), ClientInfo.UNKNOWN).status()).isEqualTo(Rotation.Status.ROTATED);
+        assertThat(store.rotate(raw, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.ROTATED);
     }
 
     // ── 도우미 ─────────────────────────────────────────────────────────────

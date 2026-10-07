@@ -1,6 +1,5 @@
 package com.grandis.nova.member.auth.infrastructure.db;
 
-import com.grandis.nova.member.auth.application.ClientInfo;
 import com.grandis.nova.member.auth.application.RefreshTokenStore;
 import com.grandis.nova.member.auth.application.RefreshTokens;
 import com.grandis.nova.common.security.JwtProperties;
@@ -54,11 +53,11 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
 
     @Override
     @Transactional
-    public void save(UUID sessionId, String subject, String rawToken, Instant expiresAt, ClientInfo client) {
+    public void save(UUID sessionId, String subject, String rawToken, Instant expiresAt) {
         long customerId = customerIdOf(subject).orElseThrow(() ->
                 new IllegalStateException("회원 리프레시 저장소에 회원 번호가 아닌 subject 가 왔다: " + subject));
         rows.save(RefreshToken.issue(customerId, sessionId, RefreshTokens.hash(rawToken),
-                now(), expiresAt, client.ip(), client.userAgent()));
+                now(), expiresAt));
     }
 
     @Override
@@ -71,7 +70,7 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
 
     @Override
     @Transactional
-    public Rotation rotate(String presentedRawToken, String newRawToken, ClientInfo client) {
+    public Rotation rotate(String presentedRawToken, String newRawToken) {
         Instant now = now();
         Optional<RefreshToken> found = rows.findByTokenHashForUpdate(RefreshTokens.hash(presentedRawToken));
         if (found.isEmpty()) {
@@ -99,7 +98,7 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
         }
         row.markRotated(now);
         rows.save(RefreshToken.issue(row.getCustomerId(), sessionId, RefreshTokens.hash(newRawToken),
-                now, row.getExpiresAt(), client.ip(), client.userAgent()));
+                now, row.getExpiresAt()));
         return new Rotation(Rotation.Status.ROTATED, sessionId, subject, row.getExpiresAt());
     }
 

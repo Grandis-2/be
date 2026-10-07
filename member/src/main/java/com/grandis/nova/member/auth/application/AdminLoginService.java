@@ -27,12 +27,12 @@ public class AdminLoginService {
         this.tokens = tokens;
     }
 
-    public TokenService.IssuedTokens login(String username, String password, ClientInfo client) {
+    public TokenService.IssuedTokens login(String username, String password) {
         boolean passwordOk = encoder.matches(password == null ? "" : password, properties.passwordHash());
         boolean usernameOk = properties.username().equals(username);
         if (!(usernameOk && passwordOk)) {
             throw new BusinessException(AuthErrorCode.INVALID_CREDENTIALS);
         }
-        return tokens.issue(ADMIN_SUBJECT, Role.ADMIN, client);
+        return tokens.issue(ADMIN_SUBJECT, Role.ADMIN);
     }
 }

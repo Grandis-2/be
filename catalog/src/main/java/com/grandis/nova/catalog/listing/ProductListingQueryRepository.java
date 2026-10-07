@@ -29,7 +29,7 @@ import java.util.Optional;
  * (사용자 결정 2026-09-27). 숨기지 않는다.
  *
  * 시각은 datetime(6) UTC 벽시계다. Instant 를 UTC LocalDateTime 으로 바꿔 넘기고 같은 방식으로 읽는다 — Timestamp 로 넘기면 JVM 시간대로 바뀐다.
- * 정렬은 계약대로 productId 내림차순 고정이다.
+ * 회원 목록의 정렬은 {@link ProductSort}(최신순 · 가격순), 관리자 목록은 productId 내림차순 고정이다.
  */
 @Repository
 public class ProductListingQueryRepository {
@@ -105,11 +105,11 @@ public class ProductListingQueryRepository {
         return count == null ? 0 : count;
     }
 
-    public List<ProductListItem> find(ProductListFilter filter, Instant now, int page, int size) {
+    public List<ProductListItem> find(ProductListFilter filter, ProductSort sort, Instant now, int page, int size) {
         StringBuilder sql = new StringBuilder(SELECT_ITEMS).append(FROM_VISIBLE);
         MapSqlParameterSource params = baseParams(now);
         appendFilters(sql, params, filter);
-        sql.append(" ORDER BY p.id DESC LIMIT :limit OFFSET :offset");
+        sql.append(sort.orderBy()).append(" LIMIT :limit OFFSET :offset");
         params.addValue("limit", size).addValue("offset", (long) page * size);
         return jdbc.query(sql.toString(), params, (rs, rowNum) -> toItem(rs, now));
     }

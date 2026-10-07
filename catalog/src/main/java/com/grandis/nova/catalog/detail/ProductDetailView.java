@@ -61,7 +61,6 @@ public record ProductDetailView(
             String title,
             BigDecimal price,
             Map<String, String> filterAttributes,
-            Map<String, String> displayAttributes,
             Map<String, String> selections,
             SaleStatus status,
             Integer availableQuantity

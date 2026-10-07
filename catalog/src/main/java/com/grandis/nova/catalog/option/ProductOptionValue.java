@@ -86,7 +86,7 @@ public class ProductOptionValue extends BaseEntity {
 
     /**
      * 값 이름 수정(오타 · 표시 문구, 설계 §2.1 "옵션 변경"). 정규화값도 같이 바뀐다 — 축 키에 맞는 정규화 · 같은 축 중복 확인은 축을 아는
-     * 서비스가 하고, 이 값을 복사해 둔 곳(옵션 표시명 · 필터 · 표시 속성, 색상 사진 묶음 키)도 서비스가 같은 트랜잭션에서 고친다.
+     * 서비스가 하고, 이 값을 복사해 둔 곳(옵션 표시명 · 필터 속성, 색상 사진 묶음 키)도 서비스가 같은 트랜잭션에서 고친다.
      * 옵션 조합 키는 값 id 로 만들어 이름과 무관하다.
      */
     public void rename(String value, String normalizedValue) {

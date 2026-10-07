@@ -1,5 +1,7 @@
 package com.grandis.nova.member.auth.application;
 
+import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.security.Role;
 import com.grandis.nova.member.auth.infrastructure.kakao.KakaoOAuthClient;
 import com.grandis.nova.member.auth.infrastructure.kakao.KakaoUserInfo;
@@ -10,8 +12,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
+
 /**
- * 로그인 흐름. 카카오 호출 두 번은 트랜잭션 밖(외부 HTTP 가 커넥션을 5초씩 잡지 않게), 회원 INSERT 만 저장소 트랜잭션 안.
+ * 로그인 흐름. 카카오 호출 두 번은 트랜잭션 밖(외부 HTTP 가 커넥션을 5초씩 잡지 않게), 회원 INSERT 와 표시명 UPDATE 만 저장소 트랜잭션 안.
  *
  * 첫 로그인이 곧 가입이다. 같은 카카오 회원이 동시에 첫 로그인하면 둘 다 "없음" 을 보고 INSERT 를 시도하고 하나는
  * uq_customer_kakao(1062)에 걸린다. 그건 정상 분기다 — 진 쪽은 다시 조회해 이긴 쪽 행을 쓴다(ERD 의 "UNIQUE 최종 방어, 1062 정상 분기").
@@ -28,22 +32,43 @@ public class KakaoLoginService {
     private final KakaoOAuthClient kakao;
     private final CustomerRepository customers;
     private final TokenService tokens;
+    private final Clock clock;
 
-    public KakaoLoginService(KakaoOAuthClient kakao, CustomerRepository customers, TokenService tokens) {
+    public KakaoLoginService(KakaoOAuthClient kakao, CustomerRepository customers, TokenService tokens, Clock clock) {
         this.kakao = kakao;
         this.customers = customers;
         this.tokens = tokens;
+        this.clock = clock;
     }
 
-    public LoginResult login(String code, String redirectUri, ClientInfo client) {
+    public LoginResult login(String code, String redirectUri) {
         String kakaoAccessToken = kakao.exchangeCode(code, redirectUri);
         KakaoUserInfo user = kakao.fetchUser(kakaoAccessToken);
 
         Customer customer = findOrCreate(user);
+        String displayName = refreshDisplayName(customer, user.nickname());
 
         // 제재 칸이 생기기 전까지 로그인은 막지 않는다. nbf 확인은 필터가 한다. 여기서는 발급만.
-        TokenService.IssuedTokens issued = tokens.issue(String.valueOf(customer.getId()), Role.USER, client);
-        return new LoginResult(issued, customer.getDisplayName(), Role.USER, customer.profile().isComplete());
+        TokenService.IssuedTokens issued = tokens.issue(String.valueOf(customer.getId()), Role.USER);
+        return new LoginResult(issued, displayName, Role.USER, customer.profile().isComplete());
+    }
+
+    /**
+     * 카카오 닉네임이 바뀌었으면 표시명을 따라 바꾼다(2026-10-07 결정). 동의를 철회해 닉네임이 없으면 기존 값을 둔다 — "카카오 회원" 으로
+     * 되돌리지 않는다. 가입 직후(방금 만든 행)는 같은 값이라 바뀌지 않는다.
+     */
+    private String refreshDisplayName(Customer customer, String nickname) {
+        return Customer.displayNameFrom(nickname)
+                .map(fresh -> {
+                    if (!fresh.equals(customer.getDisplayName())
+                            && customers.refreshDisplayName(customer.getId(), fresh, clock.instant()) != 1) {
+                        // 방금 읽은 회원 행이 그사이 사라졌다 — 없는 회원에게 토큰을 내주지 않는다. 행이 없으면 401(CustomerService 와 같은 규칙).
+                        // 지금은 회원 행을 지우는 경로가 없어 도달하지 않는다 — 탈퇴가 생기면 살아난다.
+                        throw new BusinessException(CommonErrorCode.UNAUTHENTICATED);
+                    }
+                    return fresh;
+                })
+                .orElse(customer.getDisplayName());
     }
 
     private Customer findOrCreate(KakaoUserInfo user) {

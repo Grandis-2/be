@@ -58,8 +58,7 @@ class RefreshDbFailureTest {
     void dbFailureBeforeRotationKeepsRefreshUsable() throws Exception {
         MockMvc mvc = MockMvcBuilders.webAppContextSetup(context).addFilters(requestIdFilter, springSecurityFilterChain).build();
         long customerId = newCustomer();
-        TokenService.IssuedTokens issued = tokens.issue(String.valueOf(customerId), Role.USER,
-                com.grandis.nova.member.auth.application.ClientInfo.UNKNOWN);
+        TokenService.IssuedTokens issued = tokens.issue(String.valueOf(customerId), Role.USER);
         Cookie refresh = new Cookie(AuthCookies.REFRESH_TOKEN, issued.refreshToken());
         when(customers.findById(customerId))
                 .thenThrow(new DataAccessResourceFailureException("db down"))

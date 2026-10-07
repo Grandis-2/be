@@ -5,6 +5,7 @@ import com.grandis.nova.catalog.detail.ProductDetailView;
 import com.grandis.nova.catalog.listing.ProductListFilter;
 import com.grandis.nova.catalog.listing.ProductListItem;
 import com.grandis.nova.catalog.listing.ProductListingService;
+import com.grandis.nova.catalog.listing.ProductSort;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.common.web.ApiResponse;
 import io.swagger.v3.oas.annotations.Operation;
@@ -20,7 +21,7 @@ import java.util.List;
 
 /**
  * 상품 목록 · 검색 · 상세 공개 조회. 로그인 없이 볼 수 있다.
- * color · storage 는 같은 이름을 반복해 여러 값을 준다(?color=블랙&color=화이트). 정렬은 productId 내림차순 고정.
+ * color · storage 는 같은 이름을 반복해 여러 값을 준다(?color=블랙&color=화이트). 정렬은 sort 셋 중 하나 — 최신순(기본) · 낮은 · 높은 가격순({@link ProductSort}).
  * 상세는 비공개 · 미완료 상품이면 누구에게나 404 — 관리자 미리보기는 없다(관리자는 /api/v1/admin/products/{id}).
  */
 @Tag(name = "상품")
@@ -50,7 +51,7 @@ public class ProductController {
         return ApiResponse.ok(detailService.findVariant(productId, variantId));
     }
 
-    @Operation(summary = "상품 목록 · 검색(로그인 없이)")
+    @Operation(summary = "상품 목록 · 검색(로그인 없이)", description = "sort: NEWEST(최신순, 기본) · PRICE_ASC(낮은 가격순) · PRICE_DESC(높은 가격순). 가격은 판매 중인 옵션의 최저가이고 판매 중인 옵션이 없는 상품은 가격순에서 맨 뒤")
     @SecurityRequirements
     @GetMapping
     public ApiResponse<ProductPageResponse<ProductListItem>> list(
@@ -59,10 +60,11 @@ public class ProductController {
             @RequestParam(required = false) SaleMode saleMode,
             @RequestParam(required = false) List<String> color,
             @RequestParam(required = false) List<String> storage,
+            @RequestParam(defaultValue = "NEWEST") ProductSort sort,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         ProductListFilter filter = new ProductListFilter(q, categoryId, saleMode, color, storage);
         return ApiResponse.ok(ProductPageResponse.from(
-                listingService.list(filter, PageSizes.requirePage(page), PageSizes.require(size))));
+                listingService.list(filter, sort, PageSizes.requirePage(page), PageSizes.require(size))));
     }
 }

@@ -75,14 +75,13 @@ class CatalogEntityMappingTest {
         Category parent = categories.findById(parentId).orElseThrow();
         assertThat(parent.isTopLevel()).isTrue();
         assertThat(parent.getCreatedAt()).isNotNull();
-        assertThat(categories.findByCode(parent.getCode())).get().extracting(Category::getId).isEqualTo(parentId);
+        assertThat(parent.getSortOrder()).as("순서 칸을 안 넣은 행(다른 모듈 픽스처)은 0").isZero();
 
-        List<Category> children = categories.findByParentIdOrderById(parentId);
+        List<Category> children = categories.findAllByOrderBySortOrderAscIdAsc().stream()
+                .filter(c -> parentId.equals(c.getParentId())).toList();
         assertThat(children).extracting(Category::getId).containsExactly(samsungId, appleId);
         assertThat(children).extracting(Category::getName).containsExactly("삼성", "Apple");
         assertThat(children).allMatch(c -> !c.isTopLevel());
-        assertThat(categories.findByParentIdIsNullOrderById()).extracting(Category::getId).contains(parentId)
-                .doesNotContain(samsungId, appleId);
     }
 
     @Test
@@ -111,12 +110,11 @@ class CatalogEntityMappingTest {
         assertThat(row.get("updated_at")).isNotNull();
 
         Map<String, Object> optionRow = jdbcTemplate.queryForMap(
-                "SELECT price, status, filter_attributes, display_attributes, combination_key "
+                "SELECT price, status, filter_attributes, combination_key "
                         + "FROM product_options WHERE id = ?", option.getId());
         assertThat((BigDecimal) optionRow.get("price")).isEqualByComparingTo("1450000");
         assertThat(optionRow.get("status")).isEqualTo("ACTIVE");
         assertThat(optionRow.get("filter_attributes")).isNull();
-        assertThat(optionRow.get("display_attributes")).isNull();
         assertThat(optionRow.get("combination_key")).isEqualTo("");
 
         Product reloaded = products.findById(product.getId()).orElseThrow();
@@ -178,11 +176,10 @@ class CatalogEntityMappingTest {
                 + Math.max(black.getId(), twoMeters.getId()));
         Map<String, Object> row = jdbcTemplate.queryForMap(
                 "SELECT combination_key, JSON_EXTRACT(filter_attributes, '$.color') AS color, "
-                        + "JSON_EXTRACT(display_attributes, '$.length') AS length, JSON_LENGTH(filter_attributes) AS filters "
+                        + "JSON_LENGTH(filter_attributes) AS filters "
                         + "FROM product_options WHERE id = ?", option.getId());
         assertThat(row.get("combination_key")).isEqualTo(option.getCombinationKey());
         assertThat(row.get("color")).isEqualTo("\"블랙\"");
-        assertThat(row.get("length")).isEqualTo("\"2m\"");
         assertThat(row.get("filters")).isEqualTo(1L);
         assertThat(combination.covers(axes.findByProductIdOrderByPosition(productId))).isTrue();
 

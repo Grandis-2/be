@@ -66,7 +66,7 @@ class ReviewApiTest {
         fixtures = new ShopFixtures(jdbcTemplate);
         customerId = IDS.incrementAndGet();
         productId = readyInStock(fixtures.category());
-        given(members.getMe()).willReturn(ApiResponse.ok(new MemberClient.Customer(customerId, "김철수")));
+        given(members.getMe()).willReturn(ApiResponse.ok(new MemberClient.Customer(customerId, "철수랑", "김철수")));
     }
 
     @Test
@@ -85,6 +85,22 @@ class ReviewApiTest {
         assertThat(review.get("orderItemId").asLong()).as("내 리뷰라 주문상품 id 를 싣는다").isEqualTo(orderItemId);
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM product_reviews WHERE order_item_id = ?", Long.class, orderItemId))
                 .isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("작성자명은 실명을 가린 값이고, 실명을 안 채운 회원은 카카오 닉네임을 가린다")
+    void authorNamePrefersRealName() throws Exception {
+        given(members.getMe()).willReturn(ApiResponse.ok(new MemberClient.Customer(customerId, "철수랑", null)));
+        JsonNode byNickname = data(write(customerId, deliveredItem(productId), 5, "닉네임으로").andExpect(status().isCreated()));
+        assertThat(byNickname.get("authorName").asString()).isEqualTo("철**");
+
+        given(members.getMe()).willReturn(ApiResponse.ok(new MemberClient.Customer(customerId, "철수랑", "  ")));
+        JsonNode blankName = data(write(customerId, deliveredItem(productId), 5, "빈 실명").andExpect(status().isCreated()));
+        assertThat(blankName.get("authorName").asString()).as("공백뿐인 실명은 없는 것으로 본다").isEqualTo("철**");
+
+        given(members.getMe()).willReturn(ApiResponse.ok(new MemberClient.Customer(customerId, "철수랑", "김철수")));
+        JsonNode byName = data(write(customerId, deliveredItem(productId), 5, "실명으로").andExpect(status().isCreated()));
+        assertThat(byName.get("authorName").asString()).isEqualTo("김**");
     }
 
     @Test
@@ -171,7 +187,7 @@ class ReviewApiTest {
         expectError(write(customerId, unknownProduct, 5, "x"), HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR");
 
         long delivered = deliveredItem(productId);
-        given(members.getMe()).willReturn(ApiResponse.ok(new MemberClient.Customer(customerId + 1, "김철수")));
+        given(members.getMe()).willReturn(ApiResponse.ok(new MemberClient.Customer(customerId + 1, "철수랑", "김철수")));
         expectError(write(customerId, delivered, 5, "x"), HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR");
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM product_reviews WHERE customer_id = ?", Long.class, customerId))
                 .isZero();

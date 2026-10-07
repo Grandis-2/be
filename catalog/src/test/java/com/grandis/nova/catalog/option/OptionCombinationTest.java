@@ -55,7 +55,7 @@ class OptionCombinationTest {
     }
 
     @Test
-    @DisplayName("표시명은 축 순서, 키는 값 id 순서, 필터 JSON 은 color · storage 만, 나머지는 표시 JSON")
+    @DisplayName("표시명은 축 순서, 키는 값 id 순서, 필터 JSON 은 color · storage 만")
     void derivedFieldsComeFromOneSource() {
         OptionCombination combination = OptionCombination.of(productId, List.of(
                 new Pick(length, twoMeters), new Pick(storage, gb256), new Pick(color, black)));
@@ -63,11 +63,10 @@ class OptionCombinationTest {
         assertThat(combination.title()).isEqualTo("블랙 / 256GB / 2m");
         assertThat(combination.combinationKey()).isEqualTo(sortedKey(black.getId(), gb256.getId(), twoMeters.getId()));
         assertThat(combination.filterAttributes()).isEqualTo("{\"color\":\"블랙\",\"storage\":\"256GB\"}");
-        assertThat(combination.displayAttributes()).isEqualTo("{\"length\":\"2m\"}");
         assertThat(combination.covers(axes.findByProductIdOrderByPosition(productId))).isTrue();
 
         OptionCombination filterOnly = OptionCombination.of(productId, List.of(new Pick(color, white)));
-        assertThat(filterOnly.displayAttributes()).isNull();
+        assertThat(filterOnly.filterAttributes()).isEqualTo("{\"color\":\"화이트\"}");
         assertThat(filterOnly.covers(axes.findByProductIdOrderByPosition(productId))).isFalse();
     }
 

@@ -50,9 +50,6 @@ public class ProductOption extends BaseEntity {
     @JdbcTypeCode(SqlTypes.JSON)
     private String filterAttributes;
 
-    @JdbcTypeCode(SqlTypes.JSON)
-    private String displayAttributes;
-
     @Column(length = 200)
     private String combinationKey;
 
@@ -64,24 +61,23 @@ public class ProductOption extends BaseEntity {
     }
 
     private ProductOption(Long productId, String sku, String title, BigDecimal price,
-                          String filterAttributes, String displayAttributes, String combinationKey) {
+                          String filterAttributes, String combinationKey) {
         this.productId = productId;
         this.sku = sku;
         this.title = title;
         this.price = Amounts.requireWholeWon(price, "price");
         this.filterAttributes = filterAttributes;
-        this.displayAttributes = displayAttributes;
         this.combinationKey = combinationKey;
         this.status = SaleStatus.ACTIVE;
     }
 
     /**
-     * 옵션 하나. 표시명 · 조합 키 · JSON 두 칸을 전부 조합에서 받는다(축이 없는 상품은 {@link OptionCombination#none}).
+     * 옵션 하나. 표시명 · 조합 키 · 필터 JSON 을 전부 조합에서 받는다(축이 없는 상품은 {@link OptionCombination#none}).
      * 판매 상태는 ACTIVE 로 시작한다. 선택 행은 저장 뒤 {@link OptionCombination#selections} 로 같은 트랜잭션에서 만든다.
      */
     public static ProductOption of(String sku, BigDecimal price, OptionCombination combination) {
         return new ProductOption(combination.getProductId(), sku, combination.title(), price,
-                combination.filterAttributes(), combination.displayAttributes(), combination.combinationKey());
+                combination.filterAttributes(), combination.combinationKey());
     }
 
     /** 기본가 · 추가금이 바뀌어 다시 계산한 가격. */
@@ -99,11 +95,10 @@ public class ProductOption extends BaseEntity {
         this.title = Objects.requireNonNull(title, "title");
     }
 
-    /** 값 이름이 바뀌었을 때 — 표시명 · 필터 속성 · 표시 속성을 같은 조합에서 다시 만든다(따로 고치면 어긋난다). sku · 조합 키는 그대로. */
+    /** 값 이름이 바뀌었을 때 — 표시명 · 필터 속성을 같은 조합에서 다시 만든다(따로 고치면 어긋난다). sku · 조합 키는 그대로. */
     public void reattribute(OptionCombination combination) {
         this.title = combination.title();
         this.filterAttributes = combination.filterAttributes();
-        this.displayAttributes = combination.displayAttributes();
     }
 
     public Long getId() {
@@ -128,10 +123,6 @@ public class ProductOption extends BaseEntity {
 
     public String getFilterAttributes() {
         return filterAttributes;
-    }
-
-    public String getDisplayAttributes() {
-        return displayAttributes;
     }
 
     public String getCombinationKey() {
