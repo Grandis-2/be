@@ -15,7 +15,7 @@
 ```json
 {
   "success": true,
-  "data": { "customerId": 7, "displayName": "철수랑", "name": "김철수" }
+  "data": { "customerId": "0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d", "displayName": "철수랑", "name": "김철수" }
 }
 ```
 

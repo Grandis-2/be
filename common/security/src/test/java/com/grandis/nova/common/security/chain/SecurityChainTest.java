@@ -51,6 +51,8 @@ import org.springframework.web.context.WebApplicationContext;
 @DisplayName("SecurityFilterChain (인가 규칙 · 폐기 조회 실패 정책 · 응답 봉투)")
 class SecurityChainTest {
 
+    private static final String CUSTOMER_ID = "0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d";
+
     @org.springframework.test.context.DynamicPropertySource
     static void keys(org.springframework.test.context.DynamicPropertyRegistry registry) {
         com.grandis.nova.common.security.TestKeys.register(registry);
@@ -72,7 +74,7 @@ class SecurityChainTest {
                 .addFilters(requestIdFilter, springSecurityFilterChain)   // 서블릿 필터 순서 그대로: traceId → 보안 체인
                 .build();
         UUID sid = UUID.randomUUID();
-        user = provider.create("101", Role.USER, sid, TokenType.ACCESS);
+        user = provider.create(CUSTOMER_ID, Role.USER, sid, TokenType.ACCESS);
         admin = provider.create("admin", Role.ADMIN, UUID.randomUUID(), TokenType.ACCESS);
         when(checker.isRevoked(any())).thenReturn(false);
     }
@@ -118,11 +120,11 @@ class SecurityChainTest {
     }
 
     @Test
-    @DisplayName("USER 토큰으로 /me 는 200 이고 @CurrentCustomerId 가 101")
+    @DisplayName("USER 토큰으로 /me 는 200 이고 @CurrentCustomerId 가 토큰의 회원 id")
     void userMe() throws Exception {
         mvc.perform(get("/api/v1/me").header(H, BearerTokens.value(user)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.customerId").value(101));
+                .andExpect(jsonPath("$.data.customerId").value(CUSTOMER_ID));
     }
 
     @Test
@@ -135,8 +137,8 @@ class SecurityChainTest {
     }
 
     @Test
-    @DisplayName("USER 토큰인데 sub 가 십진수가 아니면 /me 는 500 이 아니라 401")
-    void userTokenWithNonNumericSubject() throws Exception {
+    @DisplayName("USER 토큰인데 sub 가 UUID 가 아니면 /me 는 500 이 아니라 401")
+    void userTokenWithNonUuidSubject() throws Exception {
         String odd = provider.create("abc", Role.USER, UUID.randomUUID(), TokenType.ACCESS);
         mvc.perform(get("/api/v1/me").header(H, BearerTokens.value(odd)))
                 .andExpect(status().isUnauthorized())

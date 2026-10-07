@@ -1,5 +1,6 @@
 package com.grandis.nova.common.outbox;
 
+import com.grandis.nova.common.UuidBinary;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.RowMapper;
@@ -17,6 +18,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 서비스 아웃박스 표의 읽기 · 쓰기. 표 이름을 모르는 공통 코드라 엔티티 대신 JDBC 로 쓴다.
@@ -50,7 +52,7 @@ class OutboxStore implements InitializingBean {
         }
     }
 
-    Long insert(String eventId, String aggregateType, Long aggregateId, String eventType, String payload,
+    Long insert(String eventId, String aggregateType, UUID aggregateId, String eventType, String payload,
                 Instant createdAt) {
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.sql("INSERT INTO " + table
@@ -58,7 +60,7 @@ class OutboxStore implements InitializingBean {
                         + " VALUES (:eventId, :aggregateType, :aggregateId, :eventType, :payload, :createdAt)")
                 .param("eventId", eventId)
                 .param("aggregateType", aggregateType)
-                .param("aggregateId", aggregateId)
+                .param("aggregateId", UuidBinary.toBytes(aggregateId))
                 .param("eventType", eventType)
                 .param("payload", payload)
                 .param("createdAt", utc(createdAt))
@@ -163,7 +165,7 @@ class OutboxStore implements InitializingBean {
 
     private static OutboxRow toRow(ResultSet rs, int rowNum) throws SQLException {
         return new OutboxRow(rs.getLong("id"), rs.getString("event_id"), rs.getString("aggregate_type"),
-                rs.getLong("aggregate_id"), rs.getString("event_type"), rs.getString("payload"),
+                UuidBinary.fromBytes(rs.getBytes("aggregate_id")), rs.getString("event_type"), rs.getString("payload"),
                 rs.getInt("publish_attempts"), instant(rs, "created_at"), instant(rs, "published_at"));
     }
 }
