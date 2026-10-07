@@ -15,6 +15,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.EnumSet;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * 환불 결과를 주문에 반영한다. 완료면 취소 중 → 취소, 확정 실패면 취소 중에 둔 채 환불 실패를 이력에 남긴다(U1 — 사용자에겐 실패 사실만,
@@ -55,7 +56,7 @@ public class RefundResults {
         }
     }
 
-    private void refunded(Long orderId) {
+    private void refunded(UUID orderId) {
         OrderTransition transition = writeTransaction.execute(status ->
                 ledger.fire(orderId, OrderTrigger.REFUND_COMPLETED, CANCELING, REFUND_COMPLETED));
         if (!transition.applied() && transition.status() != OrderStatus.CANCELED) {
@@ -66,7 +67,7 @@ public class RefundResults {
                 transition.status());
     }
 
-    private void failed(Long orderId) {
+    private void failed(UUID orderId) {
         if (Boolean.TRUE.equals(writeTransaction.execute(status -> ledger.noteRefundFailed(orderId)))) {
             log.warn("환불 결과 반영 — 환불 확정 실패, 주문은 취소 중에 남는다 orderId={}", orderId);
             return;

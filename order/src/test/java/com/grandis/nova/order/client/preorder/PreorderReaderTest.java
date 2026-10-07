@@ -5,6 +5,7 @@ import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.order.support.PreorderStubs;
+import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
@@ -34,8 +35,9 @@ class PreorderReaderTest {
     @Test
     void returnsPayabilityAndForwardsSessionToken() {
         Instant payableFrom = Instant.now();
-        PreorderPayability payability = new PreorderPayability(PREORDER_UUID, 1L, 7L, 3L, 30L, "Nova 1", "블랙",
-                new BigDecimal("1000"), "PAYABLE", payableFrom, payableFrom.plus(Duration.ofHours(24)), true, null);
+        PreorderPayability payability = new PreorderPayability(PREORDER_UUID, TestIds.id(1), TestIds.id(7),
+                TestIds.id(3), TestIds.id(30), "Nova 1", "블랙", new BigDecimal("1000"), "PAYABLE", payableFrom,
+                payableFrom.plus(Duration.ofHours(24)), true, null);
         given(client.getPayability(PREORDER_UUID, AUTHORIZATION)).willReturn(ApiResponse.ok(payability));
 
         assertThat(reader.find(PREORDER_UUID, SESSION)).contains(payability);
@@ -45,8 +47,8 @@ class PreorderReaderTest {
     @Test
     void responseForAnotherPreorderIsIntegrationError() {
         Instant payableFrom = Instant.now();
-        PreorderPayability another = new PreorderPayability("1c9e2b7d-3f4a-4b5c-8d6e-7f8091a2b3c4", 2L, 7L, 3L, 30L,
-                "Nova 1", "블랙", new BigDecimal("1000"), "PAYABLE", payableFrom, payableFrom.plus(Duration.ofHours(24)),
+        PreorderPayability another = new PreorderPayability("1c9e2b7d-3f4a-4b5c-8d6e-7f8091a2b3c4", TestIds.id(2),
+                TestIds.id(7), TestIds.id(3), TestIds.id(30), "Nova 1", "블랙", new BigDecimal("1000"), "PAYABLE", payableFrom, payableFrom.plus(Duration.ofHours(24)),
                 true, null);
         given(client.getPayability(PREORDER_UUID, AUTHORIZATION)).willReturn(ApiResponse.ok(another));
 
@@ -59,8 +61,8 @@ class PreorderReaderTest {
     @Test
     void responseUuidMustMatchExactlyIncludingCase() {
         Instant payableFrom = Instant.now();
-        PreorderPayability upper = new PreorderPayability(PREORDER_UUID.toUpperCase(), 1L, 7L, 3L, 30L, "Nova 1",
-                "블랙", new BigDecimal("1000"), "PAYABLE", payableFrom, payableFrom.plus(Duration.ofHours(24)), true, null);
+        PreorderPayability upper = new PreorderPayability(PREORDER_UUID.toUpperCase(), TestIds.id(1), TestIds.id(7),
+                TestIds.id(3), TestIds.id(30), "Nova 1", "블랙", new BigDecimal("1000"), "PAYABLE", payableFrom, payableFrom.plus(Duration.ofHours(24)), true, null);
         given(client.getPayability(PREORDER_UUID, AUTHORIZATION)).willReturn(ApiResponse.ok(upper));
 
         assertThatThrownBy(() -> reader.find(PREORDER_UUID, SESSION)).isInstanceOf(IllegalStateException.class);

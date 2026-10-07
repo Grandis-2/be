@@ -12,6 +12,7 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
 /**
  * 주문의 결제창을 열 거래를 payment 에 만든다. 트랜잭션 밖에서 부른다(DB 잠금을 payment 응답 시간만큼 붙잡지 않게).
@@ -45,7 +46,7 @@ public class PaymentPreparer {
      * @throws BusinessException     DEPENDENCY_UNAVAILABLE — 타임아웃 · 연결 실패 · 5xx · payment 가 토큰을 거절(401)
      * @throws IllegalStateException 연동 오류(500) — 그 밖의 4xx, 읽을 수 없는 응답, 보낸 금액과 다른 응답
      */
-    public PaymentAttempt openCapture(Long orderId, BigDecimal amount, String sessionToken) {
+    public PaymentAttempt openCapture(UUID orderId, BigDecimal amount, String sessionToken) {
         PaymentAttempt attempt = call(CaptureRequest.order(orderId, amount), sessionToken);
         requireOpenedFor(orderId, amount, attempt);
         return attempt;
@@ -55,7 +56,7 @@ public class PaymentPreparer {
      * 결제창에 띄울 값이 보낸 주문 총액 그대로인가. 다른 금액을 프론트에 넘기면 사용자가 그 금액으로 결제창을 연다.
      * 다시 불러도 같으므로 연동 오류(500)다.
      */
-    private static void requireOpenedFor(Long orderId, BigDecimal amount, PaymentAttempt attempt) {
+    private static void requireOpenedFor(UUID orderId, BigDecimal amount, PaymentAttempt attempt) {
         if (attempt == null || attempt.providerOrderId() == null || attempt.amount() == null
                 || attempt.amount().compareTo(amount) != 0) {
             log.error("{} 연동 오류 {} 요청과 다른 응답 orderId={} amount={} returned={}",

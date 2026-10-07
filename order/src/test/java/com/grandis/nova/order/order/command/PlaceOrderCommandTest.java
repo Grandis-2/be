@@ -4,6 +4,7 @@ import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.model.OrderDraft;
 import com.grandis.nova.order.order.vo.Money;
 import com.grandis.nova.order.order.vo.Quantity;
+import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -20,8 +21,8 @@ class PlaceOrderCommandTest {
 
     @Test
     void convertsToDraftWithValueObjects() {
-        PlaceOrderCommand command = new PlaceOrderCommand(1L, OrderSource.PREORDER, 7L, PREORDER_UUID, ADDRESS, List.of(
-                new PlaceOrderCommand.Line(100L, 10L, 1, new BigDecimal("1250000"), "Nova 1", "블랙 / 256GB")));
+        PlaceOrderCommand command = new PlaceOrderCommand(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, ADDRESS, List.of(
+                new PlaceOrderCommand.Line(TestIds.id(100), TestIds.id(10), 1, new BigDecimal("1250000"), "Nova 1", "블랙 / 256GB")));
 
         OrderDraft draft = command.toDraft();
 
@@ -32,8 +33,8 @@ class PlaceOrderCommandTest {
 
     @Test
     void toStringHidesShippingAddress() {
-        PlaceOrderCommand command = new PlaceOrderCommand(1L, OrderSource.PREORDER, 7L, PREORDER_UUID, ADDRESS, List.of(
-                new PlaceOrderCommand.Line(100L, 10L, 1, new BigDecimal("1250000"), "Nova 1", "블랙 / 256GB")));
+        PlaceOrderCommand command = new PlaceOrderCommand(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, ADDRESS, List.of(
+                new PlaceOrderCommand.Line(TestIds.id(100), TestIds.id(10), 1, new BigDecimal("1250000"), "Nova 1", "블랙 / 256GB")));
 
         assertThat(command.toString()).doesNotContain("홍길동", "010-0000-0000", "04524", "세종대로");
     }
@@ -41,8 +42,8 @@ class PlaceOrderCommandTest {
     // 명령은 값만 옮긴다. 규칙 위반은 도메인으로 바꿀 때 드러난다.
     @Test
     void invalidValuesFailOnConversion() {
-        PlaceOrderCommand negativePrice = new PlaceOrderCommand(1L, OrderSource.PREORDER, 7L, PREORDER_UUID, ADDRESS, List.of(
-                new PlaceOrderCommand.Line(100L, 10L, 1, new BigDecimal("-1"), "Nova 1", "블랙 / 256GB")));
+        PlaceOrderCommand negativePrice = new PlaceOrderCommand(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, ADDRESS, List.of(
+                new PlaceOrderCommand.Line(TestIds.id(100), TestIds.id(10), 1, new BigDecimal("-1"), "Nova 1", "블랙 / 256GB")));
 
         assertThatThrownBy(negativePrice::toDraft).isInstanceOf(IllegalArgumentException.class);
     }

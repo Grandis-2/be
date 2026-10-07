@@ -16,6 +16,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.EnumSet;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * 결제 결과를 주문에 반영한다 — 승인 API 의 동기 응답과 결과 이벤트 소비가 같은 길을 쓴다. 둘 다 오거나 순서가 바뀌어도
@@ -64,7 +65,7 @@ public class PaymentResults {
         };
     }
 
-    OrderTransition approved(Long orderId, String providerOrderId) {
+    OrderTransition approved(UUID orderId, String providerOrderId) {
         OrderTransition transition = apply(orderId, OrderTrigger.PAYMENT_APPROVED, providerOrderId,
                 EventCause.system("PAYMENT_APPROVED"));
         if (!transition.applied() && !PAID.contains(transition.status())) {
@@ -78,23 +79,23 @@ public class PaymentResults {
         return transition;
     }
 
-    OrderTransition declined(Long orderId, String providerOrderId, DeclineReason reason) {
+    OrderTransition declined(UUID orderId, String providerOrderId, DeclineReason reason) {
         return apply(orderId, OrderTrigger.PAYMENT_DECLINED, providerOrderId,
                 EventCause.system("PAYMENT_DECLINED:" + reason));
     }
 
     /** 환불을 거쳐 취소됐는가(이력에 취소 중 → 취소). 취소 중은 결제된 주문만 들어간다. */
-    private boolean refunded(Long orderId) {
+    private boolean refunded(UUID orderId) {
         return orderReader.findEvents(orderId, Long.MAX_VALUE).stream().anyMatch(event ->
                 event.fromStatus() == OrderStatus.CANCELING && event.toStatus() == OrderStatus.CANCELED);
     }
 
     /** payment 가 이 결제창은 앞으로도 시작될 수 없다고 확언했다 — 결제 대기로 되돌린다. 이력에서 거절과 가른다. */
-    OrderTransition notStarted(Long orderId, String providerOrderId) {
+    OrderTransition notStarted(UUID orderId, String providerOrderId) {
         return apply(orderId, OrderTrigger.PAYMENT_DECLINED, providerOrderId, EventCause.system("PAYMENT_NOT_STARTED"));
     }
 
-    private OrderTransition apply(Long orderId, OrderTrigger result, String providerOrderId, EventCause cause) {
+    private OrderTransition apply(UUID orderId, OrderTrigger result, String providerOrderId, EventCause cause) {
         OrderTransition transition = writeTransaction.execute(status ->
                 ledger.settlePayment(orderId, result, providerOrderId, cause));
         log.info("결제 결과 반영 orderId={} providerOrderId={} result={} applied={} status={}",

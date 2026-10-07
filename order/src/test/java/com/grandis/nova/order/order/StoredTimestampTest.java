@@ -22,7 +22,9 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.UUID;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static com.grandis.nova.order.support.OrderFixtures.preorderCommand;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -64,8 +66,8 @@ class StoredTimestampTest {
     void timestampsReturnedByLedgerEqualWhatDatabaseStored() {
         OrderFixtures fixtures = new OrderFixtures(jdbcTemplate);
         PreorderProduct product = fixtures.preorderProduct();
-        Long customerId = fixtures.customer();
-        Long preorderId = fixtures.payablePreorder(customerId, product, 1);
+        UUID customerId = fixtures.customer();
+        UUID preorderId = fixtures.payablePreorder(customerId, product, 1);
 
         Order placed = ledger.place(preorderCommand(customerId, preorderId, product).toDraft(), EventCause.user());
         ledger.fire(placed.id(), OrderTrigger.CANCEL_REQUESTED, EnumSet.of(OrderStatus.AWAITING_PAYMENT),
@@ -77,7 +79,7 @@ class StoredTimestampTest {
         List<Instant> eventTimes = jdbcTemplate.query(
                 "SELECT created_at FROM order_events WHERE order_id = ? ORDER BY event_sequence",
                 // DB 는 UTC 벽시계 시각을 담는다. getTimestamp 는 JVM 시간대로 읽으므로 쓰지 않는다
-                (rs, n) -> rs.getObject(1, LocalDateTime.class).toInstant(ZoneOffset.UTC), placed.id());
+                (rs, n) -> rs.getObject(1, LocalDateTime.class).toInstant(ZoneOffset.UTC), bytes(placed.id()));
         // 생성 · 취소 두 이력이 번호 순으로, 둘 다 같은 시각(고정 시계)
         assertThat(eventTimes).containsExactly(placed.createdAt(), placed.createdAt());
         assertThat(loaded.status()).isEqualTo(OrderStatus.CANCELED);

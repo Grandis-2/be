@@ -22,7 +22,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.UUID;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static com.grandis.nova.order.support.OrderFixtures.preorderCommand;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -48,8 +50,8 @@ class JpaOrderStoreTest {
 
     OrderFixtures fixtures;
     PreorderProduct product;
-    Long customerId;
-    Long preorderId;
+    UUID customerId;
+    UUID preorderId;
 
     @BeforeEach
     void setUp() {
@@ -100,7 +102,7 @@ class JpaOrderStoreTest {
                 .hasMessageNotContaining("홍길동");
         assertThatThrownBy(() -> writer.insert(stored)).hasRootCauseInstanceOf(IllegalArgumentException.class);
         assertThat(jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM orders WHERE customer_id = ?", Integer.class, customerId)).isEqualTo(1);
+                "SELECT COUNT(*) FROM orders WHERE customer_id = ?", Integer.class, bytes(customerId))).isEqualTo(1);
     }
 
     /*
@@ -124,9 +126,9 @@ class JpaOrderStoreTest {
 
     @Test
     void missingOrderIsEmpty() {
-        assertThat(reader.findById(Long.MAX_VALUE)).isEmpty();
+        assertThat(reader.findById(UUID.randomUUID())).isEmpty();
         assertThat(reader.findByOrderToken(OrderToken.issue())).isEmpty();
-        assertThat(reader.findByPreorderId(Long.MAX_VALUE)).isEmpty();
-        assertThat(writer.lockStatus(Long.MAX_VALUE)).isEmpty();
+        assertThat(reader.findByPreorderId(UUID.randomUUID())).isEmpty();
+        assertThat(writer.lockStatus(UUID.randomUUID())).isEmpty();
     }
 }

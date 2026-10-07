@@ -21,6 +21,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -64,7 +65,7 @@ class AdminStockServiceConcurrencyTest {
     @Test
     void firstAttemptLosingTheCreationRaceIsRetriedAndSucceeds() {
         StockProduct product = new OrderFixtures(jdbcTemplate).inStockProduct(1);
-        Long option = product.optionIds().getFirst();
+        UUID option = product.optionIds().getFirst();
         RacingWriter racing = new RacingWriter(writer, () -> transactionTemplate.executeWithoutResult(
                 status -> writer.insert(option, 99, clock.instant())));
         AdminStockService service = new AdminStockService(new StockLedger(racing, reader, clock), reader, catalog,
@@ -84,7 +85,7 @@ class AdminStockServiceConcurrencyTest {
     @Test
     void initializeLosingTheCreationRaceKeepsTheWinnersValue() {
         StockProduct product = new OrderFixtures(jdbcTemplate).inStockProduct(1);
-        Long option = product.optionIds().getFirst();
+        UUID option = product.optionIds().getFirst();
         RacingReader racing = new RacingReader(reader, () -> transactionTemplate.executeWithoutResult(
                 status -> writer.insert(option, 99, clock.instant())));
         AdminStockService service = new AdminStockService(new StockLedger(writer, racing, clock), reader, catalog,
@@ -101,7 +102,7 @@ class AdminStockServiceConcurrencyTest {
     @Test
     void concurrentFirstPutsAllSucceedAndCreateEachRowOnce() throws Exception {
         StockProduct product = new OrderFixtures(jdbcTemplate).inStockProduct(2);
-        List<Long> options = product.optionIds();
+        List<UUID> options = product.optionIds();
 
         List<Outcome<StockResult>> outcomes = Concurrently.run(REQUESTS, i -> () -> service.set(product.productId(),
                 options.stream().map(option -> new StockSetting(option, 10 + i)).toList()));
@@ -118,7 +119,7 @@ class AdminStockServiceConcurrencyTest {
     @Test
     void concurrentFirstInitializationsCreateOnceAndKeepTheCreatorsValue() throws Exception {
         StockProduct product = new OrderFixtures(jdbcTemplate).inStockProduct(2);
-        List<Long> options = product.optionIds();
+        List<UUID> options = product.optionIds();
 
         List<Outcome<StockResult>> outcomes = Concurrently.run(REQUESTS, i -> () -> service.initialize(
                 product.productId(), options.stream().map(option -> new StockSetting(option, 10 + i)).toList()));
@@ -144,7 +145,7 @@ class AdminStockServiceConcurrencyTest {
         }
 
         @Override
-        public List<StockLevel> lockByOptionIds(Collection<Long> optionIds) {
+        public List<StockLevel> lockByOptionIds(Collection<UUID> optionIds) {
             List<StockLevel> levels = delegate.lockByOptionIds(optionIds);
             if (lockReads.incrementAndGet() == 1) {
                 // 다른 스레드 · 트랜잭션에서 커밋한다. 갭 잠금이 없으므로 기다리지 않는다.
@@ -154,12 +155,12 @@ class AdminStockServiceConcurrencyTest {
         }
 
         @Override
-        public int changeTotal(Long optionId, int total, Instant now) {
+        public int changeTotal(UUID optionId, int total, Instant now) {
             return delegate.changeTotal(optionId, total, now);
         }
 
         @Override
-        public void insert(Long optionId, int total, Instant now) {
+        public void insert(UUID optionId, int total, Instant now) {
             delegate.insert(optionId, total, now);
         }
     }
@@ -177,7 +178,7 @@ class AdminStockServiceConcurrencyTest {
         }
 
         @Override
-        public List<StockLevel> findByOptionIds(Collection<Long> optionIds) {
+        public List<StockLevel> findByOptionIds(Collection<UUID> optionIds) {
             List<StockLevel> levels = delegate.findByOptionIds(optionIds);
             if (reads.incrementAndGet() == 1) {
                 CompletableFuture.runAsync(race).orTimeout(10, TimeUnit.SECONDS).join();

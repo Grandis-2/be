@@ -13,11 +13,13 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
@@ -38,8 +40,8 @@ class LockFailureClassificationTest {
     @Autowired
     JdbcTemplate jdbcTemplate;
 
-    List<Long> options;
-    List<Long> unstocked;
+    List<UUID> options;
+    List<UUID> unstocked;
 
     @BeforeEach
     void setUp() {
@@ -84,11 +86,11 @@ class LockFailureClassificationTest {
     /** INSERT 의 FK 검사는 product_options 부모 행에 S 잠금을 잡는다. 그 행을 다른 트랜잭션이 X 로 쥐고 있으면 기다리다 1205 다. */
     @Test
     void insertWaitingOnParentRowTimesOutAsNonDeadlock() throws Exception {
-        Long option = unstocked.getFirst();
+        UUID option = unstocked.getFirst();
         CountDownLatch locked = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         CompletableFuture<Void> holder = CompletableFuture.runAsync(() -> transactionTemplate.executeWithoutResult(status -> {
-            jdbcTemplate.queryForList("SELECT id FROM product_options WHERE id = ? FOR UPDATE", option);
+            jdbcTemplate.queryForList("SELECT id FROM product_options WHERE id = ? FOR UPDATE", bytes(option));
             locked.countDown();
             await(release);
         }));
@@ -150,7 +152,7 @@ class LockFailureClassificationTest {
     }
 
     /** first 를 잠그고, 상대도 잠근 뒤 second 를 잠근다. 진 쪽의 예외를 돌려준다. */
-    private CompletableFuture<Throwable> crossLock(Long first, Long second, CyclicBarrier bothLockedFirst) {
+    private CompletableFuture<Throwable> crossLock(UUID first, UUID second, CyclicBarrier bothLockedFirst) {
         return CompletableFuture.supplyAsync(() -> catchThrowable(() -> transactionTemplate.executeWithoutResult(status -> {
             writer.lockByOptionIds(List.of(first));
             await(bothLockedFirst);
@@ -158,7 +160,7 @@ class LockFailureClassificationTest {
         })));
     }
 
-    private CompletableFuture<Throwable> crossInsert(Long first, Long second, CyclicBarrier bothInsertedFirst) {
+    private CompletableFuture<Throwable> crossInsert(UUID first, UUID second, CyclicBarrier bothInsertedFirst) {
         return CompletableFuture.supplyAsync(() -> catchThrowable(() -> transactionTemplate.executeWithoutResult(status -> {
             writer.insert(first, 1, Instant.now());
             await(bothInsertedFirst);

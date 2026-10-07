@@ -16,6 +16,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 결제 준비: 결제창을 열 값(결제사 주문 번호 · 금액 · 주문명)을 돌려준다. 돈은 오가지 않고 결제사를 부르지 않는다.
@@ -53,7 +54,7 @@ public class PreparePaymentService {
      *                           PREORDER_NOT_PAYABLE · PAYMENT_WINDOW_EXPIRED · UNAUTHENTICATED · DEPENDENCY_UNAVAILABLE
      * @throws IllegalStateException 주문의 예약이 보이지 않거나 다른 예약 · 회원이다(데이터 어긋남), payment 연동 오류
      */
-    public PreparedPayment prepare(Long customerId, String sessionToken, String orderToken) {
+    public PreparedPayment prepare(UUID customerId, String sessionToken, String orderToken) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("결제 준비는 트랜잭션 밖에서 불러야 한다 — 외부 호출 동안 잠금을 쥐지 않게");
         }
@@ -71,7 +72,7 @@ public class PreparePaymentService {
     }
 
     /** 본인의 결제 대기 주문. 남의 주문은 존재를 숨긴다. */
-    private OrderWithItems findPayable(Long customerId, String orderToken) {
+    private OrderWithItems findPayable(UUID customerId, String orderToken) {
         OrderWithItems found = readTransaction.execute(status -> OrderToken.parse(orderToken)
                 .flatMap(orderReader::findByOrderToken)
                 .filter(order -> order.customerId().equals(customerId))

@@ -25,7 +25,9 @@ import tools.jackson.databind.json.JsonMapper;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -56,7 +58,7 @@ class SettlePreorderCancelServiceTest {
 
     OrderFixtures fixtures;
     PlacedOrders placedOrders;
-    Long customerId;
+    UUID customerId;
 
     @BeforeEach
     void setUp() {
@@ -67,7 +69,7 @@ class SettlePreorderCancelServiceTest {
 
     @Test
     void 주문이_없으면_NO_ORDER_를_받은_시도_순번과_함께_적는다() {
-        Long preorderId = fixtures.payablePreorder(customerId, fixtures.preorderProduct(), 1);
+        UUID preorderId = fixtures.payablePreorder(customerId, fixtures.preorderProduct(), 1);
         String preorderUuid = uuidOf(preorderId);
 
         settlement.settle(cancel(preorderId, preorderUuid, CancelReason.USER));
@@ -76,7 +78,7 @@ class SettlePreorderCancelServiceTest {
         assertThat(rows).singleElement().satisfies(row -> assertThat(row)
                 .containsEntry("event_type", "PREORDER_ORDER_SETTLED")
                 .containsEntry("aggregate_type", "PREORDER")
-                .containsEntry("aggregate_id", preorderId));
+                .containsEntry("aggregate_id", preorderId.toString()));
         JsonNode payload = payloadOf(rows.getFirst());
         assertThat(payload.propertyNames()).containsExactlyInAnyOrder("preorderId", "result", "reason", "cancelSequence");
         assertThat(payload.get("preorderId").asString()).isEqualTo(preorderUuid);
@@ -95,7 +97,7 @@ class SettlePreorderCancelServiceTest {
         assertThat(jdbcTemplate.queryForMap("""
                 SELECT event_sequence, from_status, to_status, actor, reason
                   FROM order_events WHERE order_id = ? ORDER BY event_sequence DESC LIMIT 1
-                """, order.id()))
+                """, bytes(order.id())))
                 .containsEntry("event_sequence", 2L)
                 .containsEntry("from_status", "AWAITING_PAYMENT")
                 .containsEntry("to_status", "CANCELED")
@@ -289,36 +291,36 @@ class SettlePreorderCancelServiceTest {
         return cancel(order.preorderId(), uuidOf(order.preorderId()), reason);
     }
 
-    private SettlePreorderCancelCommand cancel(Long preorderId, String preorderUuid, CancelReason reason) {
+    private SettlePreorderCancelCommand cancel(UUID preorderId, String preorderUuid, CancelReason reason) {
         return new SettlePreorderCancelCommand(preorderId, preorderUuid, customerId, reason, CANCEL_SEQUENCE);
     }
 
-    private String uuidOf(Long preorderId) {
+    private String uuidOf(UUID preorderId) {
         return jdbcTemplate.queryForObject("SELECT preorder_token FROM preorders WHERE id = ?", String.class,
-                preorderId);
+                bytes(preorderId));
     }
 
     private String statusOf(Order order) {
-        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, order.id());
+        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, bytes(order.id()));
     }
 
     private int eventCount(Order order) {
         return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM order_events WHERE order_id = ?", Integer.class,
-                order.id());
+                bytes(order.id()));
     }
 
-    private List<Map<String, Object>> outboxRows(Long preorderId) {
+    private List<Map<String, Object>> outboxRows(UUID preorderId) {
         return jdbcTemplate.queryForList("""
-                SELECT event_type, aggregate_type, aggregate_id, payload
+                SELECT event_type, aggregate_type, BIN_TO_UUID(aggregate_id) AS aggregate_id, payload
                   FROM order_outbox_events WHERE aggregate_type = 'PREORDER' AND aggregate_id = ? ORDER BY id
-                """, preorderId);
+                """, bytes(preorderId));
     }
 
     private List<JsonNode> refundRequests(Order order) {
         return jdbcTemplate.queryForList("""
                 SELECT payload FROM order_outbox_events
                  WHERE event_type = 'ORDER_REFUND_REQUESTED' AND aggregate_type = 'ORDER' AND aggregate_id = ? ORDER BY id
-                """, String.class, order.id()).stream().map(jsonMapper::readTree).toList();
+                """, String.class, bytes(order.id())).stream().map(jsonMapper::readTree).toList();
     }
 
     private static Result resultOf(CancelSettlement settlement) {

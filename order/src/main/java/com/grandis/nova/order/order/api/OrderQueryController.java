@@ -10,6 +10,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.UUID;
+
 /**
  * 내 주문 조회. 본인 것만 본다. 관리자는 회원 id 가 없어 "내 주문" 이 성립하지 않는다 —
  * {@link CurrentCustomerId} 가 ADMIN 을 403 으로 막는다. 관리자는 /api/v1/admin/orders 를 쓴다.
@@ -28,7 +30,7 @@ public class OrderQueryController {
 
     @GetMapping
     public ApiResponse<CursorPage<OrderResponse>> list(
-            @CurrentCustomerId Long customerId,
+            @CurrentCustomerId UUID customerId,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         return ApiResponse.ok(queryService.findMine(customerId, cursor, PageSizes.require(size))
@@ -36,7 +38,7 @@ public class OrderQueryController {
     }
 
     @GetMapping("/{orderId}")
-    public ApiResponse<OrderDetailResponse> get(@CurrentCustomerId Long customerId, @PathVariable String orderId) {
+    public ApiResponse<OrderDetailResponse> get(@CurrentCustomerId UUID customerId, @PathVariable String orderId) {
         return ApiResponse.ok(OrderDetailResponse.from(queryService.findOne(customerId, orderId)));
     }
 }

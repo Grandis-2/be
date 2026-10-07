@@ -8,6 +8,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * 아직 저장하지 않은 주문. 금액 칸이 없다 — 받은 금액을 믿지 않도록 {@link #totalAmount()} 로만 계산한다.
@@ -19,9 +20,9 @@ import java.util.Set;
  * @param preorderToken 사전예약 주문이면 그 예약의 공개 UUID(preorder_id 와 같은 예약), 아니면 null
  */
 public record OrderDraft(
-        Long customerId,
+        UUID customerId,
         OrderSource source,
-        Long preorderId,
+        UUID preorderId,
         String preorderToken,
         ShipTo shipTo,
         List<OrderLine> lines
@@ -40,7 +41,7 @@ public record OrderDraft(
         if (lines.isEmpty()) {
             throw new IllegalArgumentException("주문상품이 없다");
         }
-        Set<Long> optionIds = new HashSet<>();
+        Set<UUID> optionIds = new HashSet<>();
         for (OrderLine line : lines) {
             if (!optionIds.add(line.optionId())) {
                 throw new IllegalArgumentException("같은 옵션이 두 번 들어 있다: optionId=" + line.optionId());

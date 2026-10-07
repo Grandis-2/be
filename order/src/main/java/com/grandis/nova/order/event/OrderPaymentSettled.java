@@ -5,6 +5,7 @@ import com.grandis.nova.order.order.pay.PaymentSettlement;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * ORDER_PAYMENT_SETTLED 의 payload(payment outbox.OrderPaymentSettled 가 보낸다). 주문 id 는 payload 에 없고 봉투의 aggregateId 로만 온다.
@@ -27,7 +28,7 @@ public record OrderPaymentSettled(String providerOrderId, PaymentSettlement.Resu
         }
     }
 
-    PaymentSettlement toSettlement(Long orderId) {
+    PaymentSettlement toSettlement(UUID orderId) {
         return new PaymentSettlement(orderId, providerOrderId, result, amount, declineReason);
     }
 }

@@ -51,6 +51,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -109,8 +110,8 @@ class PaymentConfirmApiTest {
 
     OrderFixtures fixtures;
     PreorderProduct product;
-    Long customerId;
-    Long preorderId;
+    UUID customerId;
+    UUID preorderId;
     Order order;
     String attempt;
 
@@ -122,7 +123,7 @@ class PaymentConfirmApiTest {
         preorderId = fixtures.payablePreorder(customerId, product, 1);
         order = new TransactionTemplate(transactionManager).execute(status -> ledger.place(
                 OrderFixtures.preorderCommand(customerId, preorderId, product).toDraft(), EventCause.user()));
-        jdbcTemplate.update("UPDATE orders SET total_amount = ? WHERE id = ?", TOTAL, order.id());
+        jdbcTemplate.update("UPDATE orders SET total_amount = ? WHERE id = ?", TOTAL, bytes(order.id()));
         attempt = UUID.randomUUID().toString();
         PreorderStubs.stub(preorderClient, PreorderStubs.payable(preorderId, order.preorderToken(), customerId, product));
     }
@@ -448,7 +449,7 @@ class PaymentConfirmApiTest {
         given(preorderClient.getPayability(eq(order.preorderToken()), any()))
                 .willThrow(HttpServerErrorException.create(HttpStatus.SERVICE_UNAVAILABLE, "Service Unavailable", null,
                         null, null))
-                .willReturn(ApiResponse.ok(PreorderStubs.payable(preorderId + 1_000_000, order.preorderToken(),
+                .willReturn(ApiResponse.ok(PreorderStubs.payable(UUID.randomUUID(), order.preorderToken(),
                         customerId, product)));
         paymentAnswers(reply(ConfirmReply.Result.PENDING, null));
 
@@ -656,7 +657,7 @@ class PaymentConfirmApiTest {
         return perform(customerId, order.orderToken().value(), tossOrderId, body(PAYMENT, amount));
     }
 
-    private ResultActions perform(Long customer, String orderToken, String tossOrderId, String json) throws Exception {
+    private ResultActions perform(UUID customer, String orderToken, String tossOrderId, String json) throws Exception {
         return mockMvc.perform(post("/api/v1/orders/{orderToken}/payment-attempts/{tossOrderId}/confirm",
                 orderToken, tossOrderId)
                 .with(TestAuth.customer(customer))
@@ -692,7 +693,7 @@ class PaymentConfirmApiTest {
                 .put("eventId", UUID.randomUUID().toString())
                 .put("eventType", "ORDER_PAYMENT_SETTLED")
                 .put("aggregateType", "ORDER")
-                .put("aggregateId", order.id())
+                .put("aggregateId", order.id().toString())
                 .put("occurredAt", "2026-10-02T03:04:06Z");
         envelope.set("payload", payload);
         return jsonMapper.writeValueAsString(envelope);
@@ -700,7 +701,7 @@ class PaymentConfirmApiTest {
 
     private Map<String, Object> orderRow() {
         return jdbcTemplate.queryForMap("SELECT status, authorizing_provider_order_id FROM orders WHERE id = ?",
-                order.id());
+                bytes(order.id()));
     }
 
     /** "번호:from>to:actor:reason" 목록. 번호 순. */
@@ -709,6 +710,6 @@ class PaymentConfirmApiTest {
                 SELECT event_sequence, from_status, to_status, actor, reason
                   FROM order_events WHERE order_id = ? ORDER BY event_sequence
                 """, (rs, n) -> rs.getLong(1) + ":" + rs.getString(2) + ">" + rs.getString(3) + ":"
-                + rs.getString(4) + ":" + rs.getString(5), order.id());
+                + rs.getString(4) + ":" + rs.getString(5), bytes(order.id()));
     }
 }

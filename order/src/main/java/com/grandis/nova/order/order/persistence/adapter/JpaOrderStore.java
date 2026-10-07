@@ -31,6 +31,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * 주문 읽기 · 쓰기 포트의 JPA 구현. 엔티티는 여기서 만들고 여기서 도메인으로 바꿔 내보낸다.
@@ -87,7 +88,7 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     @Override
-    public void insertItems(Long orderId, List<OrderLine> lines) {
+    public void insertItems(UUID orderId, List<OrderLine> lines) {
         lines.forEach(line -> entityManager.persist(OrderMapper.toEntity(orderId, line)));
         entityManager.flush();
     }
@@ -99,12 +100,12 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     @Override
-    public Optional<OrderStatus> lockStatus(Long orderId) {
+    public Optional<OrderStatus> lockStatus(UUID orderId) {
         return orders.findStatusForUpdate(orderId);
     }
 
     @Override
-    public int changeStatus(Long orderId, OrderStatus from, OrderStatus to, String authorizingProviderOrderId,
+    public int changeStatus(UUID orderId, OrderStatus from, OrderStatus to, String authorizingProviderOrderId,
                             Instant now) {
         int updated = orders.changeStatus(orderId, from, to, authorizingProviderOrderId, now);
         // 이 주문을 이미 읽어 두었다면 옛 상태를 들고 있다. 그 하나만 떼어내 다음 조회가 DB 에서 읽게 한다.
@@ -114,24 +115,24 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     @Override
-    public Optional<String> authorizingProviderOrderId(Long orderId) {
+    public Optional<String> authorizingProviderOrderId(UUID orderId) {
         return orders.findAuthorizingProviderOrderId(orderId);
     }
 
     @Override
-    public long eventSequence(Long orderId) {
+    public long eventSequence(UUID orderId) {
         return orders.findEventSequence(orderId);
     }
 
     @Override
-    public Optional<EventCause> lastEventCause(Long orderId) {
+    public Optional<EventCause> lastEventCause(UUID orderId) {
         return events.findFirstByOrderIdOrderByEventSequenceDesc(orderId)
                 .map(OrderMapper::toDomain)
                 .map(OrderEvent::cause);
     }
 
     @Override
-    public Optional<Order> findById(Long orderId) {
+    public Optional<Order> findById(UUID orderId) {
         return orders.findById(orderId).map(OrderMapper::toDomain);
     }
 
@@ -141,22 +142,22 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     @Override
-    public Optional<Order> findByPreorderId(Long preorderId) {
+    public Optional<Order> findByPreorderId(UUID preorderId) {
         return orders.findByPreorderId(preorderId).map(OrderMapper::toDomain);
     }
 
     @Override
-    public Optional<OrderItem> findItem(Long orderItemId) {
+    public Optional<OrderItem> findItem(UUID orderItemId) {
         return items.findById(orderItemId).map(OrderMapper::toDomain);
     }
 
     @Override
-    public List<OrderItem> findItems(Long orderId) {
+    public List<OrderItem> findItems(UUID orderId) {
         return items.findByOrderIdOrderById(orderId).stream().map(OrderMapper::toDomain).toList();
     }
 
     @Override
-    public List<OrderItem> findItemsByOrderIds(Collection<Long> orderIds) {
+    public List<OrderItem> findItemsByOrderIds(Collection<UUID> orderIds) {
         if (orderIds.isEmpty()) {
             return List.of();
         }
@@ -165,7 +166,7 @@ class JpaOrderStore implements OrderReader, OrderWriter {
 
     /** 총계를 세지 않는다. findAll(Specification, Pageable) 은 쓰지 않는 COUNT 까지 돌린다. */
     @Override
-    public List<Order> findByCustomer(Long customerId, OrderPosition after, int limit) {
+    public List<Order> findByCustomer(UUID customerId, OrderPosition after, int limit) {
         return orders.findBy(OrderSpecifications.allOf(
                                 OrderSpecifications.customer(customerId),
                                 OrderSpecifications.after(after)),
@@ -184,7 +185,7 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     @Override
-    public List<OrderEvent> findEvents(Long orderId, long upToSequence) {
+    public List<OrderEvent> findEvents(UUID orderId, long upToSequence) {
         return events.findByOrderIdAndEventSequenceLessThanEqualOrderByEventSequence(orderId, upToSequence).stream()
                 .map(OrderMapper::toDomain).toList();
     }

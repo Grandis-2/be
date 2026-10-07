@@ -2,6 +2,7 @@ package com.grandis.nova.order.order.domain.model;
 
 import com.grandis.nova.order.order.vo.Money;
 import com.grandis.nova.order.order.vo.Quantity;
+import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -18,6 +19,6 @@ class OrderLineTest {
     }
 
     private static OrderLine line(String productTitle, String optionTitle) {
-        return new OrderLine(1L, 2L, Quantity.ONE, Money.won(1000), productTitle, optionTitle);
+        return new OrderLine(TestIds.id(1), TestIds.id(2), Quantity.ONE, Money.won(1000), productTitle, optionTitle);
     }
 }

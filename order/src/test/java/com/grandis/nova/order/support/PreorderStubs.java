@@ -16,6 +16,7 @@ import tools.jackson.databind.json.JsonMapper;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -39,7 +40,7 @@ public final class PreorderStubs {
      *
      * @param preorderInternalId 픽스처로 넣은 preorders.id — 주문의 복합 FK(preorder_id, customer_id)가 실제 행을 가리켜야 한다
      */
-    public static PreorderPayability payable(Long preorderInternalId, String preorderId, Long customerId,
+    public static PreorderPayability payable(UUID preorderInternalId, String preorderId, UUID customerId,
                                              PreorderProduct product) {
         return payability(preorderInternalId, preorderId, customerId, product, "PAYABLE", true, null);
     }
@@ -49,7 +50,7 @@ public final class PreorderStubs {
      *
      * @param reason NOT_YET_REGISTERED · DUE_PASSED · CANCELING · CANCELED
      */
-    public static PreorderPayability blocked(Long preorderInternalId, String preorderId, Long customerId,
+    public static PreorderPayability blocked(UUID preorderInternalId, String preorderId, UUID customerId,
                                              PreorderProduct product, String reason) {
         String status = switch (reason) {
             case "NOT_YET_REGISTERED" -> "PENDING_SYNC";
@@ -59,7 +60,7 @@ public final class PreorderStubs {
         return payability(preorderInternalId, preorderId, customerId, product, status, false, reason);
     }
 
-    private static PreorderPayability payability(Long preorderInternalId, String preorderId, Long customerId,
+    private static PreorderPayability payability(UUID preorderInternalId, String preorderId, UUID customerId,
                                                  PreorderProduct product, String status, boolean payable,
                                                  String reason) {
         Instant payableFrom = "PENDING_SYNC".equals(status) ? null

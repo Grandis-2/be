@@ -25,8 +25,10 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -64,8 +66,8 @@ class PlaceOrderApiTest {
 
     OrderFixtures fixtures;
     PreorderProduct product;
-    Long customerId;
-    Long preorderId;
+    UUID customerId;
+    UUID preorderId;
     String token;
 
     @BeforeEach
@@ -88,7 +90,7 @@ class PlaceOrderApiTest {
                 .andExpect(jsonPath("$.data.source").value("PREORDER"))
                 .andExpect(jsonPath("$.data.totalAmount").value(1250000))
                 .andExpect(jsonPath("$.data.items.length()").value(1))
-                .andExpect(jsonPath("$.data.items[0].optionId").value(product.optionId()))
+                .andExpect(jsonPath("$.data.items[0].optionId").value(product.optionId().toString()))
                 .andExpect(jsonPath("$.data.items[0].productTitle").value(OrderFixtures.PRODUCT_TITLE))
                 .andExpect(jsonPath("$.data.items[0].unitPrice").value(1250000))
                 .andExpect(jsonPath("$.data.items[0].quantity").value(1))
@@ -99,15 +101,16 @@ class PlaceOrderApiTest {
 
         String orderId = orderIdOf(result);
         assertThat(result.getResponse().getHeader("Location")).isEqualTo("/api/v1/orders/" + orderId);
-        assertThat(count("SELECT COUNT(*) FROM orders WHERE preorder_id = ? AND order_token = ?", preorderId, orderId))
+        assertThat(count("SELECT COUNT(*) FROM orders WHERE preorder_id = ? AND order_token = ?",
+                bytes(preorderId), orderId))
                 .isEqualTo(1);
         assertThat(count("""
                 SELECT COUNT(*) FROM order_items i JOIN orders o ON o.id = i.order_id WHERE o.preorder_id = ?
-                """, preorderId)).isEqualTo(1);
+                """, bytes(preorderId))).isEqualTo(1);
         assertThat(count("""
                 SELECT COUNT(*) FROM order_events e JOIN orders o ON o.id = e.order_id
                 WHERE o.preorder_id = ? AND e.actor = 'USER' AND e.from_status IS NULL
-                """, preorderId)).isEqualTo(1);
+                """, bytes(preorderId))).isEqualTo(1);
     }
 
     @Test
@@ -206,7 +209,7 @@ class PlaceOrderApiTest {
     @Test
     void someoneElsesPreorderIsNotFound() throws Exception {
         stubPayable();
-        Long stranger = fixtures.customer();
+        UUID stranger = fixtures.customer();
 
         place(stranger, token)
                 .andExpect(status().isNotFound())
@@ -223,7 +226,7 @@ class PlaceOrderApiTest {
     void someoneElsesPreorderIsNotFoundEvenAfterOrdered() throws Exception {
         stubPayable();
         place(customerId, token).andExpect(status().isCreated());
-        Long stranger = fixtures.customer();
+        UUID stranger = fixtures.customer();
 
         place(stranger, token)
                 .andExpect(status().isNotFound())
@@ -282,8 +285,8 @@ class PlaceOrderApiTest {
     void canceledOrderCannotBePlacedAgain() throws Exception {
         stubPayable();
         String orderId = orderIdOf(place(customerId, token).andExpect(status().isCreated()).andReturn());
-        fixtures.forceStatus(jdbcTemplate.queryForObject(
-                "SELECT id FROM orders WHERE order_token = ?", Long.class, orderId), "CANCELED");
+        fixtures.forceStatus(UUID.fromString(jdbcTemplate.queryForObject(
+                "SELECT BIN_TO_UUID(id) FROM orders WHERE order_token = ?", String.class, orderId)), "CANCELED");
 
         place(customerId, token)
                 .andExpect(status().isConflict())
@@ -384,11 +387,11 @@ class PlaceOrderApiTest {
         PreorderStubs.stub(preorderClient, PreorderStubs.blocked(preorderId, token, customerId, product, reason));
     }
 
-    private ResultActions place(Long customer, String preorderToken) throws Exception {
+    private ResultActions place(UUID customer, String preorderToken) throws Exception {
         return perform(customer, body("PREORDER", preorderToken));
     }
 
-    private ResultActions perform(Long customer, String json) throws Exception {
+    private ResultActions perform(UUID customer, String json) throws Exception {
         return mockMvc.perform(post("/api/v1/orders").contentType(MediaType.APPLICATION_JSON).content(json)
                 .header(BearerTokens.HEADER, BearerTokens.value(SESSION))
                 .with(TestAuth.customer(customer)));
@@ -409,7 +412,7 @@ class PlaceOrderApiTest {
     }
 
     private int orderCount() {
-        return count("SELECT COUNT(*) FROM orders WHERE preorder_id = ?", preorderId);
+        return count("SELECT COUNT(*) FROM orders WHERE preorder_id = ?", bytes(preorderId));
     }
 
     private int count(String sql, Object... args) {

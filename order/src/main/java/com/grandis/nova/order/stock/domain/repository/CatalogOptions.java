@@ -6,6 +6,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * catalog 소유 표(products · product_options)를 읽는 유일한 포트. 쓰지 않는다.
@@ -15,11 +16,11 @@ import java.util.Set;
  */
 public interface CatalogOptions {
 
-    Optional<SaleMode> findSaleMode(Long productId);
+    Optional<SaleMode> findSaleMode(UUID productId);
 
     /** 그 상품의 옵션 전부(판매 중지 포함), id 오름차순. */
-    List<Long> findOptionIds(Long productId);
+    List<UUID> findOptionIds(UUID productId);
 
     /** optionIds 중 그 상품의 옵션인 것. */
-    Set<Long> findOwnedOptionIds(Long productId, Collection<Long> optionIds);
+    Set<UUID> findOwnedOptionIds(UUID productId, Collection<UUID> optionIds);
 }

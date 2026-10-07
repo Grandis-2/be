@@ -30,7 +30,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumSet;
 import java.util.Map;
+import java.util.UUID;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -71,7 +73,7 @@ class SqsMessagingTest {
 
     OrderFixtures fixtures;
     PlacedOrders placedOrders;
-    Long customerId;
+    UUID customerId;
 
     @BeforeEach
     void setUp() {
@@ -101,7 +103,7 @@ class SqsMessagingTest {
         JsonNode body = jsonMapper.readTree(settled.body());
         assertThat(body.get("eventType").asString()).isEqualTo("PREORDER_ORDER_SETTLED");
         assertThat(body.get("aggregateType").asString()).isEqualTo("PREORDER");
-        assertThat(body.get("aggregateId").asLong()).isEqualTo(order.preorderId());
+        assertThat(body.get("aggregateId").asString()).isEqualTo(order.preorderId().toString());
         assertThat(body.get("payload").get("preorderId").asString()).isEqualTo(preorderUuid);
         assertThat(body.get("payload").get("result").asString()).isEqualTo("CANCELED");
         assertThat(body.get("payload").get("cancelSequence").asLong()).isEqualTo(1L);
@@ -126,7 +128,7 @@ class SqsMessagingTest {
         queues.send(QUEUE, cancelRequested(order, "USER"));
 
         Message refundRequest = queues.receive("payment-events",
-                m -> m.body().contains("ORDER_REFUND_REQUESTED") && m.body().contains("\"aggregateId\":" + order.id()),
+                m -> m.body().contains("ORDER_REFUND_REQUESTED") && m.body().contains("\"aggregateId\":\"" + order.id() + "\""),
                 TIMEOUT).orElseThrow();
         assertThat(jsonMapper.readTree(refundRequest.body()).get("aggregateType").asString()).isEqualTo("ORDER");
         assertThat(statusOf(order)).isEqualTo("CANCELING");
@@ -176,7 +178,7 @@ class SqsMessagingTest {
     private String refundSettled(Order order, String result) {
         return """
                 {"eventId":"%s","eventType":"ORDER_REFUND_SETTLED","aggregateType":"ORDER",
-                 "aggregateId":%d,"occurredAt":"2026-10-04T01:20:31Z",
+                 "aggregateId":"%s","occurredAt":"2026-10-04T01:20:31Z",
                  "payload":{"result":"%s","amount":%s,"refundedAt":"2026-10-04T01:20:30Z"}}
                 """.formatted(OrderFixtures.unique(), order.id(), result, order.totalAmount().amount().toPlainString());
     }
@@ -184,8 +186,8 @@ class SqsMessagingTest {
     @Test
     void 일반_상품_등록_이벤트로_옵션별_초기_재고_행이_생긴다() {
         StockProduct product = fixtures.inStockProduct(2);
-        Long first = product.optionIds().get(0);
-        Long second = product.optionIds().get(1);
+        UUID first = product.optionIds().get(0);
+        UUID second = product.optionIds().get(1);
 
         queues.send(QUEUE, stockRegistered(product.productId(), first, 5, second, 0));
 
@@ -201,13 +203,13 @@ class SqsMessagingTest {
     @Test
     void 같은_등록_이벤트를_다시_받아도_관리자가_고친_값을_덮지_않는다() {
         StockProduct product = fixtures.inStockProduct(2);
-        Long first = product.optionIds().get(0);
-        Long second = product.optionIds().get(1);
+        UUID first = product.optionIds().get(0);
+        UUID second = product.optionIds().get(1);
         String body = stockRegistered(product.productId(), first, 5, second, 3);
 
         queues.send(QUEUE, body);
         await().atMost(TIMEOUT).until(() -> stockTotalOf(second) != null);
-        jdbcTemplate.update("UPDATE option_inventories SET stock_total = 10 WHERE option_id = ?", first);
+        jdbcTemplate.update("UPDATE option_inventories SET stock_total = 10 WHERE option_id = ?", bytes(first));
 
         queues.send(QUEUE, body);
         await().atMost(Duration.ofSeconds(30)).until(() -> queues.messagesIn(QUEUE) == 0);
@@ -221,8 +223,8 @@ class SqsMessagingTest {
     @Test
     void 그_상품의_옵션이_아닌_재고는_만들지_않고_DLQ_로_간다() {
         StockProduct product = fixtures.inStockProduct(1);
-        Long own = product.optionIds().get(0);
-        Long foreign = fixtures.inStockProduct(1).optionIds().get(0);
+        UUID own = product.optionIds().get(0);
+        UUID foreign = fixtures.inStockProduct(1).optionIds().get(0);
         String body = stockRegistered(product.productId(), own, 5, foreign, 5);
 
         queues.send(QUEUE, body);
@@ -234,16 +236,16 @@ class SqsMessagingTest {
         assertThat(stockTotalOf(foreign)).isNull();
     }
 
-    /** 앱의 실제 매퍼로도 소수 optionId 는 잘리지 않는다. 12.5 가 12 번 옵션으로 들어가던 NV-217 버그가 이 경로로 되살아나지 않는다. */
+    /** 앱의 실제 매퍼로도 UUID 문자열이 아닌 optionId 는 받지 않는다. 숫자를 어떤 옵션으로 바꿔 넣지 않고 DLQ 로 보낸다. */
     @Test
-    void 소수_optionId_는_잘라_넣지_않고_DLQ_로_간다() {
+    void UUID_가_아닌_optionId_는_DLQ_로_간다() {
         StockProduct product = fixtures.inStockProduct(1);
-        Long option = product.optionIds().get(0);
+        UUID option = product.optionIds().get(0);
         String body = """
                 {"eventId":"%s","eventType":"IN_STOCK_PRODUCT_REGISTERED","aggregateType":"PRODUCT",
-                 "aggregateId":%d,"occurredAt":"2026-10-02T03:00:00.123456Z",
-                 "payload":{"items":[{"optionId":%d.5,"stockTotal":5}]}}
-                """.formatted(OrderFixtures.unique(), product.productId(), option);
+                 "aggregateId":"%s","occurredAt":"2026-10-02T03:00:00.123456Z",
+                 "payload":{"items":[{"optionId":12.5,"stockTotal":5}]}}
+                """.formatted(OrderFixtures.unique(), product.productId());
 
         queues.send(QUEUE, body);
 
@@ -254,18 +256,18 @@ class SqsMessagingTest {
     }
 
     /** catalog 가 보내는 모양 그대로(aggregateId = 상품 id, payload 에는 상품 id 가 없다). */
-    private static String stockRegistered(Long productId, Long firstOption, int firstTotal, Long secondOption,
+    private static String stockRegistered(UUID productId, UUID firstOption, int firstTotal, UUID secondOption,
                                           int secondTotal) {
         return """
                 {"eventId":"%s","eventType":"IN_STOCK_PRODUCT_REGISTERED","aggregateType":"PRODUCT",
-                 "aggregateId":%d,"occurredAt":"2026-10-02T03:00:00.123456Z",
-                 "payload":{"items":[{"optionId":%d,"stockTotal":%d},{"optionId":%d,"stockTotal":%d}]}}
+                 "aggregateId":"%s","occurredAt":"2026-10-02T03:00:00.123456Z",
+                 "payload":{"items":[{"optionId":"%s","stockTotal":%d},{"optionId":"%s","stockTotal":%d}]}}
                 """.formatted(OrderFixtures.unique(), productId, firstOption, firstTotal, secondOption, secondTotal);
     }
 
-    private Integer stockTotalOf(Long optionId) {
+    private Integer stockTotalOf(UUID optionId) {
         return jdbcTemplate.query("SELECT stock_total FROM option_inventories WHERE option_id = ?",
-                rs -> rs.next() ? rs.getInt(1) : null, optionId);
+                rs -> rs.next() ? rs.getInt(1) : null, bytes(optionId));
     }
 
     /** preorder 가 보내는 모양 그대로(aggregateId = 예약 내부 id, payload 에는 공개 UUID). */
@@ -273,24 +275,24 @@ class SqsMessagingTest {
         String preorderUuid = preorderUuidOf(order);
         return """
                 {"eventId":"%s","eventType":"PREORDER_CANCEL_REQUESTED","aggregateType":"PREORDER",
-                 "aggregateId":%d,"occurredAt":"2026-09-03T01:00:03.470Z",
-                 "payload":{"preorderId":"%s","customerId":%d,"reason":"%s","cancelSequence":1}}
+                 "aggregateId":"%s","occurredAt":"2026-09-03T01:00:03.470Z",
+                 "payload":{"preorderId":"%s","customerId":"%s","reason":"%s","cancelSequence":1}}
                 """.formatted(OrderFixtures.unique(), order.preorderId(), preorderUuid, order.customerId(), reason);
     }
 
     private String preorderUuidOf(Order order) {
         return jdbcTemplate.queryForObject("SELECT preorder_token FROM preorders WHERE id = ?",
-                String.class, order.preorderId());
+                String.class, bytes(order.preorderId()));
     }
 
     private String statusOf(Order order) {
-        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, order.id());
+        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, bytes(order.id()));
     }
 
     private int settledRows(Order order) {
         return jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM order_outbox_events
                  WHERE aggregate_type = 'PREORDER' AND aggregate_id = ? AND event_type = 'PREORDER_ORDER_SETTLED'
-                """, Integer.class, order.preorderId());
+                """, Integer.class, bytes(order.preorderId()));
     }
 }

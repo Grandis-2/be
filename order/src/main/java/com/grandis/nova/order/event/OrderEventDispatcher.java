@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 받은 메시지를 이벤트 종류별 처리로 보낸다. 큐 소비기(common:sqs)는 본문을 그대로 여기에 넘긴다.
@@ -87,7 +88,7 @@ public class OrderEventDispatcher {
     }
 
     /** 대상은 봉투의 aggregateId 로 찾는다. 다른 aggregate 의 id 로 엉뚱한 대상을 바꾸지 않게 종류를 확인한다. */
-    private static Long aggregateId(EventEnvelope envelope, String expectedType) {
+    private static UUID aggregateId(EventEnvelope envelope, String expectedType) {
         if (!expectedType.equals(envelope.aggregateType()) || envelope.aggregateId() == null) {
             throw new IllegalArgumentException("%s 이벤트가 아니다: eventId=%s, aggregateType=%s, aggregateId=%s"
                     .formatted(expectedType, envelope.eventId(), envelope.aggregateType(), envelope.aggregateId()));
@@ -96,7 +97,7 @@ public class OrderEventDispatcher {
     }
 
     /**
-     * 계약상 재고 초기화 API 본문과 같은 모양이라 같은 타입 · 같은 검증으로 푼다. 정수 칸에 소수(12.5)가 오면 12 번 옵션으로
+     * 계약상 재고 초기화 API 본문과 같은 모양이라 같은 타입 · 같은 검증으로 푼다. 수량에 소수(12.5)가 오면 12 로
      * 잘리지 않고 여기서 실패한다. 같은 옵션이 두 번 오는 것은 서비스가 거른다.
      */
     private List<StockSetting> stockSettings(EventEnvelope envelope) {

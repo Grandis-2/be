@@ -1,5 +1,6 @@
 package com.grandis.nova.order.stock;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.order.stock.domain.exception.StockAlreadyCreatedException;
 import com.grandis.nova.order.stock.domain.exception.StockBelowCommittedException;
 import com.grandis.nova.order.stock.domain.model.StockLevel;
@@ -18,6 +19,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -64,7 +66,7 @@ public class StockLedger {
      * @throws StockBelowCommittedException 확보 + 판매보다 작게 줄이려 한 옵션이 있다. 아무것도 반영하지 않아야 한다(롤백)
      * @throws IllegalArgumentException     같은 옵션이 두 번 있다 — 호출하는 코드의 잘못이다
      */
-    public Set<Long> set(List<StockSetting> settings) {
+    public Set<UUID> set(List<StockSetting> settings) {
         List<StockSetting> sorted = ascending(settings);
         return apply(sorted, byOptionId(writer.lockByOptionIds(optionIds(sorted))), true);
     }
@@ -76,15 +78,15 @@ public class StockLedger {
      * @return 이번에 새로 만든 행의 옵션 id
      * @throws IllegalArgumentException 같은 옵션이 두 번 있다 — 호출하는 코드의 잘못이다
      */
-    public Set<Long> initialize(List<StockSetting> settings) {
+    public Set<UUID> initialize(List<StockSetting> settings) {
         List<StockSetting> sorted = ascending(settings);
         return apply(sorted, byOptionId(reader.findByOptionIds(optionIds(sorted))), false);
     }
 
     /** @param existing 이미 읽은(설정이면 잠근) 행. 그 뒤의 시각을 찍어야 기다린 다른 쓰기보다 앞선 시각이 남지 않는다 */
-    private Set<Long> apply(List<StockSetting> sorted, Map<Long, StockLevel> existing, boolean overwrite) {
+    private Set<UUID> apply(List<StockSetting> sorted, Map<UUID, StockLevel> existing, boolean overwrite) {
         Instant now = clock.instant();
-        Set<Long> created = new HashSet<>();
+        Set<UUID> created = new HashSet<>();
         List<StockBelowCommittedException.Shortfall> shortfalls = new ArrayList<>();
         for (StockSetting setting : sorted) {
             StockLevel current = existing.get(setting.optionId());
@@ -105,11 +107,11 @@ public class StockLedger {
         return created;
     }
 
-    private static List<Long> optionIds(List<StockSetting> sorted) {
+    private static List<UUID> optionIds(List<StockSetting> sorted) {
         return sorted.stream().map(StockSetting::optionId).toList();
     }
 
-    private static Map<Long, StockLevel> byOptionId(List<StockLevel> levels) {
+    private static Map<UUID, StockLevel> byOptionId(List<StockLevel> levels) {
         return levels.stream().collect(Collectors.toMap(StockLevel::optionId, Function.identity()));
     }
 
@@ -117,6 +119,8 @@ public class StockLedger {
         if (settings.stream().map(StockSetting::optionId).distinct().count() != settings.size()) {
             throw new IllegalArgumentException("같은 옵션이 두 번 있다: " + settings);
         }
-        return settings.stream().sorted(Comparator.comparing(StockSetting::optionId)).toList();
+        return settings.stream()
+                .sorted(Comparator.comparing(StockSetting::optionId, UuidBinary.BYTE_ORDER))
+                .toList();
     }
 }

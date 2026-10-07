@@ -1,5 +1,6 @@
 package com.grandis.nova.order.order.persistence.adapter;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderEvent;
@@ -17,7 +18,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
+import java.util.stream.Stream;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** 조회용 읽기 포트. 원장이 만든 행을 운영과 같은 쿼리로 읽는다. */
@@ -37,7 +41,7 @@ class OrderReaderQueryTest {
     TransactionTemplate transactionTemplate;
 
     PlacedOrders orders;
-    Long customerId;
+    UUID customerId;
 
     @BeforeEach
     void setUp() {
@@ -56,7 +60,7 @@ class OrderReaderQueryTest {
         jdbcTemplate.update("""
                 INSERT INTO order_events (order_id, event_sequence, from_status, to_status, actor, reason, created_at)
                 VALUES (?, 2, 'AWAITING_PAYMENT', 'CANCELED', 'SYSTEM', 'LATER', UTC_TIMESTAMP(6))
-                """, order.id());
+                """, bytes(order.id()));
 
         List<OrderEvent> events = reader.findEvents(order.id(), order.eventSequence());
 
@@ -69,9 +73,10 @@ class OrderReaderQueryTest {
         Order first = orders.place(customerId);
         Order second = orders.place(customerId);
 
+        // 주문 id 순이다. id 는 만든 순서를 보장하지 않으므로 기대 순서도 id 로 정한다
         assertThat(reader.findItemsByOrderIds(List.of(second.id(), first.id())))
                 .extracting(item -> item.orderId())
-                .containsExactly(first.id(), second.id());
+                .containsExactlyElementsOf(Stream.of(first.id(), second.id()).sorted(UuidBinary.BYTE_ORDER).toList());
     }
 
     /*
@@ -80,13 +85,13 @@ class OrderReaderQueryTest {
      */
     @Test
     void customerOrdersPageThroughSameCreatedAtWithoutGapOrOverlap() {
-        List<Long> ids = List.of(orders.place(customerId).id(), orders.place(customerId).id(),
+        List<UUID> ids = List.of(orders.place(customerId).id(), orders.place(customerId).id(),
                 orders.place(customerId).id());
         Instant sameInstant = Instant.parse("2020-01-01T00:00:00.123456Z");
         ids.forEach(id -> jdbcTemplate.update("UPDATE orders SET created_at = ? WHERE id = ?",
-                Timestamp.from(sameInstant), id));
+                Timestamp.from(sameInstant), bytes(id)));
 
-        List<Long> seen = new java.util.ArrayList<>();
+        List<UUID> seen = new java.util.ArrayList<>();
         OrderPosition after = null;
         for (int page = 0; page < ids.size() + 1; page++) {
             List<Order> found = reader.findByCustomer(customerId, after, 1);
@@ -98,7 +103,7 @@ class OrderReaderQueryTest {
             after = new OrderPosition(last.createdAt(), last.id());
         }
 
-        assertThat(seen).containsExactlyElementsOf(ids.reversed());
+        assertThat(seen).containsExactlyElementsOf(ids.stream().sorted(UuidBinary.BYTE_ORDER.reversed()).toList());
     }
 
     /* 회원 조건은 권한 범위다. 빠지면 전 회원의 주문이 아니라 실패여야 한다. */

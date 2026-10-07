@@ -18,6 +18,8 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.UUID;
+
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -40,7 +42,7 @@ class OrderCancelabilityApiTest {
 
     OrderFixtures fixtures;
     PlacedOrders orders;
-    Long customerId;
+    UUID customerId;
 
     @BeforeEach
     void setUp() {
@@ -52,7 +54,7 @@ class OrderCancelabilityApiTest {
     /* 결제 전 예약은 주문이 없다. 정리할 주문이 없으니 취소해도 된다. */
     @Test
     void noOrderIsCancelable() throws Exception {
-        Long preorderId = fixtures.payablePreorder(customerId, fixtures.preorderProduct(), 1);
+        UUID preorderId = fixtures.payablePreorder(customerId, fixtures.preorderProduct(), 1);
 
         mockMvc.perform(cancelability(preorderId).with(me()))
                 .andExpect(status().isOk())
@@ -168,7 +170,7 @@ class OrderCancelabilityApiTest {
         mockMvc.perform(get("/api/v1/admin/orders").with(TestAuth.admin())).andExpect(status().isOk());
     }
 
-    private static MockHttpServletRequestBuilder cancelability(Long preorderId) {
+    private static MockHttpServletRequestBuilder cancelability(UUID preorderId) {
         return get("/internal/orders/by-preorder/{preorderInternalId}/cancelability", preorderId);
     }
 

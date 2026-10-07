@@ -26,6 +26,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
@@ -72,14 +73,14 @@ public class AdminStockService {
      *
      * @throws BusinessException PRODUCT_NOT_FOUND
      */
-    public StockOverview find(Long productId) {
+    public StockOverview find(UUID productId) {
         return readTransaction.execute(status -> {
             SaleMode saleMode = catalog.findSaleMode(productId)
                     .orElseThrow(() -> new BusinessException(OrderErrorCode.PRODUCT_NOT_FOUND));
             if (saleMode != SaleMode.IN_STOCK) {
                 return StockOverview.untracked(productId);
             }
-            List<Long> optionIds = catalog.findOptionIds(productId);
+            List<UUID> optionIds = catalog.findOptionIds(productId);
             return StockOverview.of(productId, optionIds, stockReader.findByOptionIds(optionIds));
         });
     }
@@ -90,7 +91,7 @@ public class AdminStockService {
      * @throws BusinessException PRODUCT_NOT_FOUND · STOCK_NOT_TRACKED · VALIDATION_FAILED(같은 옵션이 두 번 · 그 상품의 옵션이 아님) ·
      *                           STOCK_BELOW_COMMITTED · DEPENDENCY_UNAVAILABLE(경합이 이어짐)
      */
-    public StockResult set(Long productId, List<StockSetting> settings) {
+    public StockResult set(UUID productId, List<StockSetting> settings) {
         return write(productId, settings, () -> ledger.set(settings));
     }
 
@@ -101,22 +102,22 @@ public class AdminStockService {
      * @throws BusinessException PRODUCT_NOT_FOUND · STOCK_NOT_TRACKED · VALIDATION_FAILED(같은 옵션이 두 번 · 그 상품의 옵션이 아님) ·
      *                           DEPENDENCY_UNAVAILABLE(경합이 이어짐)
      */
-    public StockResult initialize(Long productId, List<StockSetting> settings) {
+    public StockResult initialize(UUID productId, List<StockSetting> settings) {
         return write(productId, settings, () -> ledger.initialize(settings));
     }
 
-    private StockResult write(Long productId, List<StockSetting> settings, Supplier<Set<Long>> change) {
+    private StockResult write(UUID productId, List<StockSetting> settings, Supplier<Set<UUID>> change) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("재고 변경은 트랜잭션 밖에서 불러야 한다 — 다시 하기가 새 트랜잭션이어야 한다");
         }
-        List<Long> optionIds = settings.stream().map(StockSetting::optionId).toList();
+        List<UUID> optionIds = settings.stream().map(StockSetting::optionId).toList();
         requireDistinctOptions(optionIds);
         for (int attempt = 1; ; attempt++) {
             try {
                 return writeTransaction.execute(status -> {
                     requireStockedProduct(productId);
                     requireOwnedOptions(productId, optionIds);
-                    Set<Long> created = change.get();
+                    Set<UUID> created = change.get();
                     return new StockResult(productId, stockReader.findByOptionIds(optionIds), created);
                 });
             } catch (StockBelowCommittedException e) {
@@ -156,7 +157,7 @@ public class AdminStockService {
         return false;
     }
 
-    private void requireStockedProduct(Long productId) {
+    private void requireStockedProduct(UUID productId) {
         SaleMode saleMode = catalog.findSaleMode(productId)
                 .orElseThrow(() -> new BusinessException(OrderErrorCode.PRODUCT_NOT_FOUND));
         if (saleMode != SaleMode.IN_STOCK) {
@@ -168,8 +169,8 @@ public class AdminStockService {
      * 같은 옵션이 두 번 오면 어느 값을 쓸지 모르므로 400 이다. 어느 경로로 불리든 여기서 막는다 — 원장까지 가면
      * 같은 행을 두 번 INSERT 해 PK 중복이 나고, 동시 생성으로 오인해 다시 하다 503 이 된다.
      */
-    private static void requireDistinctOptions(List<Long> optionIds) {
-        Set<Long> seen = new HashSet<>();
+    private static void requireDistinctOptions(List<UUID> optionIds) {
+        Set<UUID> seen = new HashSet<>();
         for (int i = 0; i < optionIds.size(); i++) {
             if (!seen.add(optionIds.get(i))) {
                 throw ValidationFailures.of("items[%d].optionId".formatted(i), "같은 옵션이 두 번 있습니다.");
@@ -178,8 +179,8 @@ public class AdminStockService {
     }
 
     /** 없는 옵션 · 다른 상품의 옵션은 계약 오류라 400 이다. 요청 순서의 위치(items[i])로 모두 알린다. */
-    private void requireOwnedOptions(Long productId, List<Long> optionIds) {
-        Set<Long> owned = catalog.findOwnedOptionIds(productId, optionIds);
+    private void requireOwnedOptions(UUID productId, List<UUID> optionIds) {
+        Set<UUID> owned = catalog.findOwnedOptionIds(productId, optionIds);
         List<ApiError.Violation> violations = new ArrayList<>();
         for (int i = 0; i < optionIds.size(); i++) {
             if (!owned.contains(optionIds.get(i))) {

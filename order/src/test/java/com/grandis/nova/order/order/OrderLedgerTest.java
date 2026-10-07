@@ -27,6 +27,7 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static com.grandis.nova.order.order.domain.enums.OrderStatus.AUTHORIZING;
@@ -39,6 +40,7 @@ import static com.grandis.nova.order.order.domain.enums.OrderTrigger.PAYMENT_APP
 import static com.grandis.nova.order.order.domain.enums.OrderTrigger.PAYMENT_DECLINED;
 import static com.grandis.nova.order.order.domain.enums.OrderTrigger.PAYMENT_REQUESTED;
 import static com.grandis.nova.order.support.OrderFixtures.UNIT_PRICE;
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static com.grandis.nova.order.support.OrderFixtures.preorderCommand;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -62,7 +64,7 @@ class OrderLedgerTest {
 
     OrderFixtures fixtures;
     PreorderProduct product;
-    Long customerId;
+    UUID customerId;
     final AtomicLong nextPosition = new AtomicLong(1);
 
     @BeforeEach
@@ -74,7 +76,7 @@ class OrderLedgerTest {
 
     @Test
     void placeWritesOrderItemAndFirstEvent() {
-        Long preorderId = preorder();
+        UUID preorderId = preorder();
 
         Order order = ledger.place(draft(preorderId), EventCause.user());
 
@@ -86,16 +88,18 @@ class OrderLedgerTest {
                 .containsEntry("status", "AWAITING_PAYMENT")
                 .containsEntry("event_sequence", 1L)
                 .containsEntry("source", "PREORDER")
-                .containsEntry("preorder_id", preorderId)
+                .containsEntry("preorder_id", preorderId.toString())
                 .containsEntry("payment_due_at", null)
                 .containsEntry("ship_to_name", "홍길동")
                 .containsEntry("ship_to_line2", null);
         assertThat((BigDecimal) row(order.id()).get("total_amount")).isEqualByComparingTo(UNIT_PRICE);
         assertThat(jdbcTemplate.queryForMap("""
-                SELECT product_id, option_id, quantity, option_title_snapshot FROM order_items WHERE order_id = ?
-                """, order.id()))
-                .containsEntry("product_id", product.productId())
-                .containsEntry("option_id", product.optionId())
+                SELECT BIN_TO_UUID(product_id) AS product_id, BIN_TO_UUID(option_id) AS option_id, quantity,
+                       option_title_snapshot
+                  FROM order_items WHERE order_id = ?
+                """, bytes(order.id())))
+                .containsEntry("product_id", product.productId().toString())
+                .containsEntry("option_id", product.optionId().toString())
                 .containsEntry("quantity", 1)
                 .containsEntry("option_title_snapshot", OrderFixtures.OPTION_TITLE);
         assertThat(history(order.id())).containsExactly("1:null>AWAITING_PAYMENT:USER");
@@ -104,7 +108,7 @@ class OrderLedgerTest {
     // 호출하는 쪽이 제약 이름 문자열에 기대지 않도록 저장소가 도메인 예외로 바꾼다.
     @Test
     void secondOrderForSamePreorderFailsWithDomainException() {
-        Long preorderId = preorder();
+        UUID preorderId = preorder();
         ledger.place(draft(preorderId), EventCause.user());
 
         assertThatThrownBy(() -> ledger.place(draft(preorderId), EventCause.user()))
@@ -119,11 +123,11 @@ class OrderLedgerTest {
      */
     @Test
     void preorderTokenOfAnotherPreorderIsRejectedAsPreorderKeyConflict() {
-        Long first = preorder();
+        UUID first = preorder();
         ledger.place(draft(first), EventCause.user());
         // 회원당 상품마다 진행 중인 예약은 하나라(uq_preorder_active) 다른 상품의 예약이다.
         PreorderProduct otherProduct = fixtures.preorderProduct();
-        Long second = fixtures.payablePreorder(customerId, otherProduct, 1);
+        UUID second = fixtures.payablePreorder(customerId, otherProduct, 1);
         OrderDraft borrowed = preorderCommand(customerId, second, otherProduct).toDraft();
         OrderDraft mismatched = new OrderDraft(borrowed.customerId(), borrowed.source(), second,
                 OrderFixtures.preorderToken(first), borrowed.shipTo(), borrowed.lines());
@@ -148,7 +152,7 @@ class OrderLedgerTest {
     // 저장소가 쓰기마다 flush 하므로 항목 제약 위반도 부른 자리에서 Spring 예외로 올라온다.
     @Test
     void itemConstraintViolationSurfacesAtCallSiteAsSpringException() {
-        OrderDraft missingOption = preorderCommand(customerId, preorder(), product, Long.MAX_VALUE, 1).toDraft();
+        OrderDraft missingOption = preorderCommand(customerId, preorder(), product, UUID.randomUUID(), 1).toDraft();
 
         assertThatThrownBy(() -> ledger.place(missingOption, EventCause.user()))
                 .isInstanceOf(DataIntegrityViolationException.class)
@@ -157,7 +161,8 @@ class OrderLedgerTest {
 
     @Test
     void nonPreorderSourceIsRejectedBeforeWriting() {
-        OrderDraft buyNow = new OrderDraft(customerId, OrderSource.BUY_NOW, null, null, draft(1L).shipTo(), draft(1L).lines());
+        OrderDraft preorder = draft(preorder());
+        OrderDraft buyNow = new OrderDraft(customerId, OrderSource.BUY_NOW, null, null, preorder.shipTo(), preorder.lines());
 
         assertThatThrownBy(() -> ledger.place(buyNow, EventCause.user()))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -166,7 +171,7 @@ class OrderLedgerTest {
 
     @Test
     void cancelRequestCancelsUnpaidOrderAndRecordsReason() {
-        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+        UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
 
         OrderTransition result = ledger.fire(id, CANCEL_REQUESTED, UNPAID, EventCause.system("EXPIRY"));
 
@@ -174,7 +179,7 @@ class OrderLedgerTest {
         assertThat(row(id)).containsEntry("status", "CANCELED").containsEntry("event_sequence", 2L);
         assertThat(history(id)).containsExactly("1:null>AWAITING_PAYMENT:USER", "2:AWAITING_PAYMENT>CANCELED:SYSTEM");
         assertThat(jdbcTemplate.queryForObject(
-                "SELECT reason FROM order_events WHERE order_id = ? AND event_sequence = 2", String.class, id))
+                "SELECT reason FROM order_events WHERE order_id = ? AND event_sequence = 2", String.class, bytes(id)))
                 .isEqualTo("EXPIRY");
     }
 
@@ -184,7 +189,7 @@ class OrderLedgerTest {
      */
     @Test
     void cancelIsNotAppliedWhenOrderWasPaidAfterCallerDecided() {
-        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+        UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
         fixtures.forceStatus(id, "AWAITING_CONFIRMATION");
 
         OrderTransition result = ledger.fire(id, CANCEL_REQUESTED, UNPAID, EventCause.system("EXPIRY"));
@@ -197,7 +202,7 @@ class OrderLedgerTest {
     // 전제를 넓히면 상태 머신이 정한 대로 간다. 전제는 호출하는 쪽의 선택이다.
     @Test
     void sameCancelOnPaidOrderStartsRefundWhenCallerExpectsPaidOrders() {
-        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+        UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
         fixtures.forceStatus(id, "AWAITING_CONFIRMATION");
 
         OrderTransition result = ledger.fire(id, CANCEL_REQUESTED, ANY, EventCause.system("USER"));
@@ -207,7 +212,7 @@ class OrderLedgerTest {
 
     @Test
     void sameCancelRequestTwiceIsAppliedOnce() {
-        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+        UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
         ledger.fire(id, CANCEL_REQUESTED, UNPAID, EventCause.system("USER"));
 
         OrderTransition again = ledger.fire(id, CANCEL_REQUESTED, UNPAID, EventCause.system("USER"));
@@ -220,7 +225,7 @@ class OrderLedgerTest {
     // 원장은 거절과 중복을 구분하지 않는다. 지금 상태를 돌려주고 판단은 호출하는 쪽이 한다.
     @Test
     void cancelRequestOnShippedOrderChangesNothingAndReportsCurrentStatus() {
-        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+        UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
         fixtures.forceStatus(id, "SHIPPED");
 
         OrderTransition result = ledger.fire(id, CANCEL_REQUESTED, ANY, EventCause.system("USER"));
@@ -232,16 +237,16 @@ class OrderLedgerTest {
 
     @Test
     void adminCauseIsRecordedWithReason() {
-        Long id = ledger.place(draft(preorder()), EventCause.admin("전화 주문")).id();
+        UUID id = ledger.place(draft(preorder()), EventCause.admin("전화 주문")).id();
 
         assertThat(history(id)).containsExactly("1:null>AWAITING_PAYMENT:ADMIN");
         assertThat(jdbcTemplate.queryForObject(
-                "SELECT reason FROM order_events WHERE order_id = ?", String.class, id)).isEqualTo("전화 주문");
+                "SELECT reason FROM order_events WHERE order_id = ?", String.class, bytes(id))).isEqualTo("전화 주문");
     }
 
     @Test
     void emptyExpectationIsRejected() {
-        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+        UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
 
         assertThatThrownBy(() -> ledger.fire(id, CANCEL_REQUESTED, Set.of(), EventCause.user()))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -249,14 +254,14 @@ class OrderLedgerTest {
 
     @Test
     void firingOnUnknownOrderFails() {
-        assertThatThrownBy(() -> ledger.fire(Long.MAX_VALUE, CANCEL_REQUESTED, ANY, EventCause.system(null)))
+        assertThatThrownBy(() -> ledger.fire(UUID.randomUUID(), CANCEL_REQUESTED, ANY, EventCause.system(null)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void ledgerRefusesToRunOutsideTransaction() {
-        assertThatThrownBy(() -> ledger.fire(1L, CANCEL_REQUESTED, ANY, EventCause.system(null)))
+        assertThatThrownBy(() -> ledger.fire(UUID.randomUUID(), CANCEL_REQUESTED, ANY, EventCause.system(null)))
                 .isInstanceOf(IllegalTransactionStateException.class);
         assertThatThrownBy(() -> ledger.place(draft(preorder()), EventCause.user()))
                 .isInstanceOf(IllegalTransactionStateException.class);
@@ -266,15 +271,15 @@ class OrderLedgerTest {
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void failedItemInsertLeavesNoOrderBehind() {
-        Long preorderId = preorder();
-        OrderDraft missingOption = preorderCommand(customerId, preorderId, product, Long.MAX_VALUE, 1).toDraft();
+        UUID preorderId = preorder();
+        OrderDraft missingOption = preorderCommand(customerId, preorderId, product, UUID.randomUUID(), 1).toDraft();
 
         assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status ->
                 ledger.place(missingOption, EventCause.user())))
                 .isInstanceOf(DataIntegrityViolationException.class);
 
         assertThat(jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM orders WHERE preorder_id = ?", Integer.class, preorderId)).isZero();
+                "SELECT COUNT(*) FROM orders WHERE preorder_id = ?", Integer.class, bytes(preorderId))).isZero();
     }
 
     // ── 결제 사건: 결제창 번호를 함께 다룬다 ─────────────────────────────────────
@@ -284,7 +289,7 @@ class OrderLedgerTest {
 
     @Test
     void paymentRequestRecordsAttemptAndPaymentResultClearsIt() {
-        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+        UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
 
         assertThat(ledger.requestPayment(id, ATTEMPT, EventCause.user()))
                 .isEqualTo(new OrderTransition(true, AUTHORIZING));
@@ -299,7 +304,7 @@ class OrderLedgerTest {
 
     @Test
     void paymentRequestOnlyFromAwaitingPayment() {
-        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+        UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
         ledger.requestPayment(id, ATTEMPT, EventCause.user());
 
         assertThat(ledger.requestPayment(id, "attempt-second-0001", EventCause.user()))
@@ -310,7 +315,7 @@ class OrderLedgerTest {
     // 늦게 온 이전 결제창의 거절은 지금 결제창의 승인 중에 주문을 되돌리지 않는다
     @Test
     void declineOfEarlierAttemptIsIgnored() {
-        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+        UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
         ledger.requestPayment(id, ATTEMPT, EventCause.user());
 
         OrderTransition stale = ledger.settlePayment(id, PAYMENT_DECLINED, EARLIER_ATTEMPT, EventCause.system("late"));
@@ -325,7 +330,7 @@ class OrderLedgerTest {
     // 승인은 결제창을 대조하지 않는다 — 대상당 성공 결제는 하나다
     @Test
     void approvalIsAppliedWhicheverAttemptReportsIt() {
-        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+        UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
         ledger.requestPayment(id, ATTEMPT, EventCause.user());
 
         assertThat(ledger.settlePayment(id, PAYMENT_APPROVED, EARLIER_ATTEMPT, EventCause.system("x")))
@@ -334,7 +339,7 @@ class OrderLedgerTest {
 
     @Test
     void paymentResultOutsideAuthorizingChangesNothing() {
-        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+        UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
 
         assertThat(ledger.settlePayment(id, PAYMENT_APPROVED, ATTEMPT, EventCause.system("x")))
                 .isEqualTo(new OrderTransition(false, AWAITING_PAYMENT));
@@ -343,7 +348,7 @@ class OrderLedgerTest {
 
     @Test
     void paymentTriggersAreRejectedByGenericFire() {
-        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+        UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
 
         for (OrderTrigger trigger : EnumSet.of(PAYMENT_REQUESTED, PAYMENT_APPROVED, PAYMENT_DECLINED)) {
             assertThatThrownBy(() -> ledger.fire(id, trigger, ANY, EventCause.user()))
@@ -356,46 +361,47 @@ class OrderLedgerTest {
     // 승인 중일 때만 결제창 번호가 있다 — 원장을 거치지 않은 쓰기도 DB 가 막는다
     @Test
     void authorizingWithoutAttemptIsRejectedByDatabase() {
-        Long id = ledger.place(draft(preorder()), EventCause.user()).id();
+        UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
 
-        assertThatThrownBy(() -> jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING' WHERE id = ?", id))
+        assertThatThrownBy(() -> jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING' WHERE id = ?", bytes(id)))
                 .hasMessageContaining("ck_order_authorizing_attempt");
         assertThatThrownBy(() -> jdbcTemplate.update(
-                "UPDATE orders SET authorizing_provider_order_id = 'x' WHERE id = ?", id))
+                "UPDATE orders SET authorizing_provider_order_id = 'x' WHERE id = ?", bytes(id)))
                 .hasMessageContaining("ck_order_authorizing_attempt");
     }
 
-    private String attemptOf(Long id) {
+    private String attemptOf(UUID id) {
         return jdbcTemplate.queryForObject("SELECT authorizing_provider_order_id FROM orders WHERE id = ?",
-                String.class, id);
+                String.class, bytes(id));
     }
 
-    private Long preorder() {
+    private UUID preorder() {
         return fixtures.payablePreorder(customerId, product, nextPosition.getAndIncrement());
     }
 
-    private OrderDraft draft(Long preorderId) {
+    private OrderDraft draft(UUID preorderId) {
         return preorderCommand(customerId, preorderId, product).toDraft();
     }
 
-    private int ordersOf(Long customer) {
-        return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM orders WHERE customer_id = ?", Integer.class, customer);
+    private int ordersOf(UUID customer) {
+        return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM orders WHERE customer_id = ?", Integer.class,
+                bytes(customer));
     }
 
-    private Map<String, Object> row(Long id) {
+    private Map<String, Object> row(UUID id) {
         return jdbcTemplate.queryForMap("""
-                SELECT order_token, status, event_sequence, source, preorder_id, total_amount, payment_due_at,
-                       ship_to_name, ship_to_line2
+                SELECT order_token, status, event_sequence, source, BIN_TO_UUID(preorder_id) AS preorder_id, total_amount,
+                       payment_due_at, ship_to_name, ship_to_line2
                   FROM orders WHERE id = ?
-                """, id);
+                """, bytes(id));
     }
 
     /** "번호:from>to:actor" 목록. 번호 순. */
-    private List<String> history(Long id) {
+    private List<String> history(UUID id) {
         return jdbcTemplate.query("""
                 SELECT event_sequence, from_status, to_status, actor
                   FROM order_events WHERE order_id = ? ORDER BY event_sequence
                 """, (rs, n) -> rs.getLong(1) + ":" + rs.getString(2) + ">" + rs.getString(3) + ":" + rs.getString(4),
-                id);
+                bytes(id));
     }
 }

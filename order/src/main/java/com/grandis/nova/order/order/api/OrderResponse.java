@@ -9,6 +9,7 @@ import com.grandis.nova.order.order.domain.model.OrderLine;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 주문 응답. 생성 · 조회가 함께 쓴다.
@@ -37,7 +38,7 @@ public record OrderResponse(
     }
 
     /** 주문상품. 이름 · 단가는 예약 접수 시점의 스냅샷이다. */
-    public record Item(Long productId, Long optionId, String productTitle, String optionTitle,
+    public record Item(UUID productId, UUID optionId, String productTitle, String optionTitle,
                        BigDecimal unitPrice, int quantity) {
 
         static Item of(OrderLine line) {

@@ -4,6 +4,7 @@ import com.grandis.nova.order.order.cancel.RefundSettlement;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * ORDER_REFUND_SETTLED 의 payload(payment outbox.OrderRefundSettled 가 보낸다). 주문 id 는 payload 에 없고 봉투의 aggregateId 로만 온다.
@@ -21,7 +22,7 @@ public record OrderRefundSettled(RefundSettlement.Result result, BigDecimal amou
         }
     }
 
-    RefundSettlement toSettlement(Long orderId) {
+    RefundSettlement toSettlement(UUID orderId) {
         return new RefundSettlement(orderId, result, amount);
     }
 }

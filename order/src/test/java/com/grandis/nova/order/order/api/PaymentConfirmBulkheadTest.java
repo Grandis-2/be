@@ -32,6 +32,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -112,8 +113,8 @@ class PaymentConfirmBulkheadTest {
     }
 
     private Order placedOrder(OrderFixtures fixtures, PreorderProduct product, long position) {
-        Long customerId = fixtures.customer();
-        Long preorderId = fixtures.payablePreorder(customerId, product, position);
+        UUID customerId = fixtures.customer();
+        UUID preorderId = fixtures.payablePreorder(customerId, product, position);
         Order order = new TransactionTemplate(transactionManager).execute(status -> ledger.place(
                 OrderFixtures.preorderCommand(customerId, preorderId, product).toDraft(), EventCause.user()));
         PreorderStubs.stub(preorderClient, PreorderStubs.payable(preorderId, order.preorderToken(), customerId, product));
@@ -130,6 +131,6 @@ class PaymentConfirmBulkheadTest {
     }
 
     private String statusOf(Order order) {
-        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, order.id());
+        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, bytes(order.id()));
     }
 }

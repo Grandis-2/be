@@ -11,6 +11,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.UUID;
+
 /**
  * 관리자 재고. 권한은 보안 설정이 경로로 막는다(ADMIN). 재고의 정본이다 — catalog 는 이 표를 읽기만 한다.
  * 요청 하나의 옵션은 한 트랜잭션에서 모두 되거나 모두 안 된다.
@@ -30,13 +32,13 @@ public class AdminStockController {
 
     /** 그 상품 옵션 전부의 재고. 재고를 넣지 않은 옵션은 registered=false, 사전예약 상품은 tracked=false 와 빈 목록. */
     @GetMapping
-    public ApiResponse<StockOverviewResponse> find(@PathVariable Long productId) {
+    public ApiResponse<StockOverviewResponse> find(@PathVariable UUID productId) {
         return ApiResponse.ok(StockOverviewResponse.from(service.find(productId)));
     }
 
     /** 총량 설정. 행이 없는 옵션은 만들고(확보 · 판매 0), 목록에 없는 옵션은 건드리지 않는다. */
     @PutMapping
-    public ApiResponse<StockResponse> set(@PathVariable Long productId, @Valid @RequestBody StockRequest request) {
+    public ApiResponse<StockResponse> set(@PathVariable UUID productId, @Valid @RequestBody StockRequest request) {
         return ApiResponse.ok(StockResponse.from(service.set(productId, request.toSettings())));
     }
 
@@ -45,7 +47,7 @@ public class AdminStockController {
      * 여러 행이라 가리킬 자원이 하나가 아니어서 201 · Location 없이 늘 200 이다.
      */
     @PostMapping
-    public ApiResponse<StockResponse> initialize(@PathVariable Long productId,
+    public ApiResponse<StockResponse> initialize(@PathVariable UUID productId,
                                                  @Valid @RequestBody StockRequest request) {
         return ApiResponse.ok(StockResponse.from(service.initialize(productId, request.toSettings())));
     }

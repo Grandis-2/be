@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.net.URI;
+import java.util.UUID;
 
 /**
  * 사용자 주문 생성. 조회(GET)는 같은 경로에 따로 둔다(NV-52).
@@ -40,7 +41,7 @@ public class OrderController {
      */
     @PostMapping
     public ResponseEntity<ApiResponse<OrderResponse>> place(
-            @CurrentCustomerId Long customerId,
+            @CurrentCustomerId UUID customerId,
             @Valid @RequestBody PlaceOrderRequest request,
             HttpServletRequest httpRequest) {
         String accessToken = BearerTokens.extract(httpRequest).orElse(null);
