@@ -52,9 +52,9 @@ class ProductListingQueryRepositoryTest {
         Instant boundary = closesAt.plus(Duration.ofHours(120));
         ProductListFilter filter = new ProductListFilter(tag, null, null, null, null);
 
-        assertThat(ids(repository.find(filter, boundary.minusNanos(1_000), 0, 10))).containsExactly(productId);
+        assertThat(ids(repository.find(filter, ProductSort.NEWEST, boundary.minusNanos(1_000), 0, 10))).containsExactly(productId);
         assertThat(repository.count(filter, boundary.minusNanos(1_000))).isEqualTo(1);
-        assertThat(ids(repository.find(filter, boundary, 0, 10))).isEmpty();
+        assertThat(ids(repository.find(filter, ProductSort.NEWEST, boundary, 0, 10))).isEmpty();
         assertThat(repository.count(filter, boundary)).isZero();
     }
 
@@ -77,7 +77,7 @@ class ProductListingQueryRepositoryTest {
             statement.execute("TRUNCATE TABLE mysql.general_log");
             try {
                 repository.count(filter, Instant.now());
-                repository.find(filter, Instant.now(), 0, 10);
+                repository.find(filter, ProductSort.NEWEST, Instant.now(), 0, 10);
             } finally {
                 statement.execute("SET GLOBAL general_log = 'OFF'");
             }

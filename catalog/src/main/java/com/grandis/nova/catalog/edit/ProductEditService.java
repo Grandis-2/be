@@ -442,7 +442,7 @@ public class ProductEditService {
 
     /**
      * 값 이름 수정 — 오타 · 표시 문구 모두(설계 §2.1 "옵션 변경"). 같은 축에 같다고 보는 값(대소문자 · 악센트 · 전각)이 있으면 400, 용량은 형식을
-     * 지켜야 한다. 이름을 복사해 둔 곳을 같은 트랜잭션에서 고친다: 그 값을 고른 옵션의 표시명 · 필터 속성 · 표시 속성, 색상이면 사진 묶음 키.
+     * 지켜야 한다. 이름을 복사해 둔 곳을 같은 트랜잭션에서 고친다: 그 값을 고른 옵션의 표시명 · 필터 속성, 색상이면 사진 묶음 키.
      * 이미 접수된 예약 · 주문은 자기 스냅샷을 가지므로 바뀌지 않는다. 뜻이 바뀌는 수정(블랙 → 화이트)도 막지 않는다 — 관리자의 판단이다.
      */
     private void renameValue(Product product, String axisKey, ProductOptionValue value, String raw) {
@@ -480,7 +480,7 @@ public class ProductEditService {
         reattributeOptionsUsing(product, value.getId());
     }
 
-    /** 그 값을 고른 옵션의 표시명 · 필터 속성 · 표시 속성을 축 순서의 조합에서 다시 만든다. 표시명이 상한을 넘으면 400(DB 1406 → 500 이 되지 않게). */
+    /** 그 값을 고른 옵션의 표시명 · 필터 속성을 축 순서의 조합에서 다시 만든다. 표시명이 상한을 넘으면 400(DB 1406 → 500 이 되지 않게). */
     private void reattributeOptionsUsing(Product product, Long valueId) {
         Map<Long, List<Long>> valueIdsByOption = selectionsByOption(product.getId());
         Map<Long, ProductOptionValue> valueById = valuesOf(product.getId());

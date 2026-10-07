@@ -12,7 +12,6 @@ import com.grandis.nova.common.security.TokenClaims;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.member.auth.AuthErrorCode;
 import com.grandis.nova.member.auth.application.AdminLoginService;
-import com.grandis.nova.member.auth.application.ClientInfo;
 import com.grandis.nova.member.auth.application.KakaoLoginService;
 import com.grandis.nova.member.auth.application.TokenService;
 import com.grandis.nova.member.auth.infrastructure.redis.AdminLoginThrottle;
@@ -94,9 +93,8 @@ public class AuthController {
 
     @SecurityRequirements   // 공개 — 문서의 Bearer 요구를 뺀다(보안 체인의 permitAll 과 같은 목록)
     @PostMapping("/auth/kakao/callback")
-    public ResponseEntity<ApiResponse<LoginResponse>> kakaoCallback(@Valid @RequestBody KakaoCallbackRequest request,
-                                                                     HttpServletRequest servletRequest) {
-        KakaoLoginService.LoginResult result = kakaoLogin.login(request.code(), request.redirectUri(), clientOf(servletRequest));
+    public ResponseEntity<ApiResponse<LoginResponse>> kakaoCallback(@Valid @RequestBody KakaoCallbackRequest request) {
+        KakaoLoginService.LoginResult result = kakaoLogin.login(request.code(), request.redirectUri());
         return withRefreshCookie(result.tokens(), Role.USER,
                 new LoginResponse(result.tokens().accessToken(), result.displayName(), result.role(), result.profileComplete()));
     }
@@ -118,7 +116,7 @@ public class AuthController {
         // 실패할 수 있는 DB 조회(회원 이름)를 회전 **앞**에 둔다. 여기서 던지면 리프레시가 아직 교체되지 않아 같은 쿠키로 다시 올 수 있다.
         String subject = tokens.subjectOf(refreshToken, role);
         SessionOwner owner = ownerOf(new AuthenticatedPrincipal(subject, role));
-        TokenService.Rotated rotated = tokens.rotate(refreshToken, role, clientOf(request));
+        TokenService.Rotated rotated = tokens.rotate(refreshToken, role);
         return withRefreshCookie(rotated.tokens(), role,
                 new LoginResponse(rotated.tokens().accessToken(), owner.displayName(), role, owner.profileComplete()));
     }
@@ -193,7 +191,7 @@ public class AuthController {
         adminThrottle.acquire(clientIp).ifPresent(retryAfter -> {
             throw new AdminLoginThrottledException(retryAfter);
         });
-        TokenService.IssuedTokens issued = adminLogin.login(request.username(), request.password(), clientOf(servletRequest));
+        TokenService.IssuedTokens issued = adminLogin.login(request.username(), request.password());
         adminThrottle.reset(clientIp);
         return withRefreshCookie(issued, Role.ADMIN, new AdminSessionResponse(issued.accessToken(), Role.ADMIN));
     }
@@ -250,15 +248,6 @@ public class AuthController {
 
     private static boolean present(String s) {
         return s != null && !s.isBlank();
-    }
-
-    /**
-     * 리프레시 행에 남길 요청 흔적. 인증 판정에는 쓰지 않는다 — "로그인된 기기" 표시와 사고 조사용이다.
-     * 프록시 뒤에서 remoteAddr 은 로드밸런서 주소다. `server.forward-headers-strategy` 는 켜지 않는다(none) — 켜면 관리자 로그인 시도 제한의
-     * IP 판정(ClientIps)이 고쳐 쓴 헤더를 다시 세어 틀어진다(ClientIpsConfiguration 이 기동에서 막는다).
-     */
-    private static ClientInfo clientOf(HttpServletRequest request) {
-        return new ClientInfo(request.getRemoteAddr(), request.getHeader(HttpHeaders.USER_AGENT));
     }
 
     /** 자기 역할의 리프레시 쿠키를 내리고 상대 역할의 쿠키는 만료시킨다 — 한 브라우저에는 한 역할. */

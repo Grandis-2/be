@@ -22,7 +22,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @MemberIntegrationTest
-@DisplayName("내부 조회 GET /internal/customers/me — 토큰 주인의 표시명(catalog 리뷰 작성자명)")
+@DisplayName("내부 조회 GET /internal/customers/me — 토큰 주인의 이름(catalog 리뷰 작성자명)")
 class InternalCustomerApiTest {
 
     private static final String PATH = "/internal/customers/me";
@@ -41,13 +41,22 @@ class InternalCustomerApiTest {
     }
 
     @Test
-    @DisplayName("회원 토큰이면 그 회원의 id · 표시명")
-    void returnsTheTokenOwnersDisplayName() throws Exception {
-        Customer customer = customers.saveAndFlush(Customer.fromKakao(kakaoId(), "김철수"));
-        mvc.perform(get(PATH).header(BearerTokens.HEADER, BearerTokens.value(token(customer.getId().toString(), Role.USER))))
+    @DisplayName("회원 토큰이면 그 회원의 id · 표시명 · 실명 — 실명은 프로필을 안 채웠으면 null")
+    void returnsTheTokenOwnersNames() throws Exception {
+        Customer customer = customers.saveAndFlush(Customer.fromKakao(kakaoId(), "철수랑"));
+        String bearer = BearerTokens.value(token(customer.getId().toString(), Role.USER));
+        mvc.perform(get(PATH).header(BearerTokens.HEADER, bearer))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.customerId").value(customer.getId()))
-                .andExpect(jsonPath("$.data.displayName").value("김철수"));
+                .andExpect(jsonPath("$.data.displayName").value("철수랑"))
+                .andExpect(jsonPath("$.data.name").value(org.hamcrest.Matchers.nullValue()));
+
+        customer.changeProfile(new Profile("김철수", null, null));
+        customers.saveAndFlush(customer);
+        mvc.perform(get(PATH).header(BearerTokens.HEADER, bearer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.displayName").value("철수랑"))
+                .andExpect(jsonPath("$.data.name").value("김철수"));
     }
 
     @Test

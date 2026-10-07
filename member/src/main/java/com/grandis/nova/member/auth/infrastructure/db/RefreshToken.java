@@ -49,12 +49,6 @@ public class RefreshToken {
     @Column(name = "revoked_at")
     private Instant revokedAt;
 
-    @Column(name = "client_ip", length = 45, updatable = false)
-    private String clientIp;
-
-    @Column(name = "user_agent", length = 255, updatable = false)
-    private String userAgent;
-
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -62,15 +56,13 @@ public class RefreshToken {
     }
 
     static RefreshToken issue(long customerId, UUID sessionId, byte[] tokenHash,
-                              Instant issuedAt, Instant expiresAt, String clientIp, String userAgent) {
+                              Instant issuedAt, Instant expiresAt) {
         RefreshToken token = new RefreshToken();
         token.customerId = customerId;
         token.familyId = sessionId.toString();
         token.tokenHash = tokenHash;
         token.createdAt = issuedAt;
         token.expiresAt = expiresAt;
-        token.clientIp = clientIp;
-        token.userAgent = userAgent;
         return token;
     }
 

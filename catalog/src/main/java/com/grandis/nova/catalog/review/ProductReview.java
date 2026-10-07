@@ -102,27 +102,7 @@ public class ProductReview extends BaseEntity {
         return productId;
     }
 
-    public Long getCustomerId() {
-        return customerId;
-    }
-
     public Long getOrderItemId() {
         return orderItemId;
-    }
-
-    public int getRating() {
-        return rating;
-    }
-
-    public String getBody() {
-        return body;
-    }
-
-    public String getOptionTitleSnapshot() {
-        return optionTitleSnapshot;
-    }
-
-    public String getAuthorName() {
-        return authorName;
     }
 }

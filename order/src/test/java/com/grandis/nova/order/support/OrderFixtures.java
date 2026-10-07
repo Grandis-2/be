@@ -133,9 +133,9 @@ public class OrderFixtures {
 
     private Long product(String saleMode) {
         Long categoryId = insert("""
-                INSERT INTO categories (code, name, created_at, updated_at)
-                VALUES (?, '스마트폰', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, unique());
+                INSERT INTO categories (name, created_at, updated_at)
+                VALUES ('스마트폰', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """);
         return insert("""
                 INSERT INTO products (category_id, sale_mode, title, status, created_at, updated_at)
                 VALUES (?, ?, ?, 'ACTIVE', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))

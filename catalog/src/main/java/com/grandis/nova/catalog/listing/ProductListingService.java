@@ -27,10 +27,10 @@ public class ProductListingService {
     }
 
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public OffsetPage<ProductListItem> list(ProductListFilter filter, int page, int size) {
+    public OffsetPage<ProductListItem> list(ProductListFilter filter, ProductSort sort, int page, int size) {
         Instant now = clock.instant();
         long total = repository.count(filter, now);
-        List<ProductListItem> items = total == 0 ? List.of() : repository.find(filter, now, page, size);
+        List<ProductListItem> items = total == 0 ? List.of() : repository.find(filter, sort, now, page, size);
         return OffsetPage.of(items, page, size, total);
     }
 

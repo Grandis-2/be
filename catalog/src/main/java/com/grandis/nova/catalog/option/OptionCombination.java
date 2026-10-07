@@ -15,7 +15,7 @@ import java.util.stream.Collectors;
 /**
  * 옵션 하나가 축마다 고른 값의 묶음. 조합 키 · 표시명 · 필터 JSON · 선택 행이 전부 여기서 나온다 —
  * 호출자가 셋을 따로 넘기면 서로 어긋날 자리가 열리고, DB 는 그 어긋남을 못 막는다(NULL 키끼리는 UNIQUE 가 안 걸린다).
- * preorder 가 filter_attributes 를 예약 스냅샷으로 복사하므로 한 번 어긋나면 되돌릴 수 없다.
+ * 목록 필터는 선택 행을 조인하고 상세 응답은 filter_attributes 를 싣는다 — 둘이 어긋나면 필터에 걸린 옵션과 화면이 보이는 값이 다르다.
  *
  * 검사: 축은 모두 같은 상품 · 축 중복 없음 · 값은 그 축의 값. 완전성(모든 축에 값이 있는가)은 상품의 축 목록을 아는
  * 서비스가 {@link #covers} 로 확인한다.
@@ -124,14 +124,15 @@ public final class OptionCombination {
         return titleOf(picks.stream().map(pick -> pick.value().getValue()).toList(), null);
     }
 
-    /** 목록 필터 축(color · storage)의 정규화값 JSON. 없으면 null. preorder 가 접수 때 이 JSON 을 복사한다. */
+    /** 목록 필터 축(color · storage)의 정규화값 JSON. 없으면 null. 옵션 상세 응답의 filterAttributes 다. */
     public String filterAttributes() {
-        return attributesJson(true, ProductOptionValue::getNormalizedValue);
-    }
-
-    /** 필터가 아닌 축의 표시값 JSON. 없으면 null. */
-    public String displayAttributes() {
-        return attributesJson(false, ProductOptionValue::getValue);
+        Map<String, String> attributes = new LinkedHashMap<>();
+        for (Pick pick : picks) {
+            if (pick.axis().isFilterAxis()) {
+                attributes.put(pick.axis().getAxisKey(), pick.value().getNormalizedValue());
+            }
+        }
+        return attributes.isEmpty() ? null : JSON.writeValueAsString(attributes);
     }
 
     /** 저장된 옵션 id 로 선택 행을 만든다. 옵션 저장 뒤 같은 트랜잭션에서 저장한다. */
@@ -139,15 +140,5 @@ public final class OptionCombination {
         return picks.stream()
                 .map(pick -> ProductOptionSelection.of(productId, optionId, pick.axis().getId(), pick.value().getId()))
                 .toList();
-    }
-
-    private String attributesJson(boolean filterAxes, java.util.function.Function<ProductOptionValue, String> text) {
-        Map<String, String> attributes = new LinkedHashMap<>();
-        for (Pick pick : picks) {
-            if (pick.axis().isFilterAxis() == filterAxes) {
-                attributes.put(pick.axis().getAxisKey(), text.apply(pick.value()));
-            }
-        }
-        return attributes.isEmpty() ? null : JSON.writeValueAsString(attributes);
     }
 }

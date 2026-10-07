@@ -78,7 +78,7 @@ public class ReviewService {
             throw InternalCalls.contractViolation(Dependencies.MEMBER, "토큰 주인이 아닌 회원의 응답");
         }
         ProductReview review = ProductReview.write(product.getId(), customerId, item.orderItemId(), request.rating(), body,
-                item.optionTitle(), mask(author.displayName()));
+                item.optionTitle(), mask(author.reviewerName()));
         try {
             reviews.saveAndFlush(review);
         } catch (DataIntegrityViolationException e) {
@@ -181,9 +181,9 @@ public class ReviewService {
     /** 글자(Lo) 범주지만 보이지 않는 것 — 한글 채움 문자(초성 · 중성 채움, 한글 채움, 반각 한글 채움), 점자 빈칸. */
     private static final java.util.Set<Integer> INVISIBLE_LETTERS = java.util.Set.of(0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800);
 
-    /** 첫 글자(코드포인트) + "**". 표시명이 비었으면 "***". */
-    static String mask(String displayName) {
-        String name = displayName == null ? "" : displayName.strip();
+    /** 첫 글자(코드포인트) + "**". 이름이 비었으면 "***". */
+    static String mask(String reviewerName) {
+        String name = reviewerName == null ? "" : reviewerName.strip();
         if (name.isEmpty()) {
             return "*" + MASK;
         }

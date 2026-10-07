@@ -16,7 +16,7 @@ import java.util.UUID;
 public interface RefreshTokenStore {
 
     /** 로그인. 발급한 원문의 지문으로 체인의 첫 행을 만든다. */
-    void save(UUID sessionId, String subject, String rawToken, Instant expiresAt, ClientInfo client);
+    void save(UUID sessionId, String subject, String rawToken, Instant expiresAt);
 
     /**
      * 제시된 원문이 가리키는 세션. 폐기·회전 여부와 무관하게 **식별만** 한다 — 회전 전 폐기 표식 조회와 로그아웃이 쓴다.
@@ -31,7 +31,7 @@ public interface RefreshTokenStore {
      * (탐지 창)도 지난 토큰은 재사용이어도 체인을 건드리지 않고 {@link Rotation.Status#EXPIRED} 다 — 막을 액세스 토큰이 없고, 정리와 잠금이 맞물린다.
      * **예외가 아니라 값으로 돌려주는 이유**: 예외로 빠져나가면 그 폐기가 롤백된다. 폐기는 커밋되어야 한다.
      */
-    Rotation rotate(String presentedRawToken, String newRawToken, ClientInfo client);
+    Rotation rotate(String presentedRawToken, String newRawToken);
 
     /** 세션 하나(체인 전체)를 폐기한다. 로그아웃·재사용 탐지. */
     void revokeSession(UUID sessionId);

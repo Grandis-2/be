@@ -26,7 +26,9 @@ import com.grandis.nova.member.auth.api.AuthCookies;
 import com.grandis.nova.member.auth.application.KakaoLoginService;
 import com.grandis.nova.member.auth.infrastructure.kakao.KakaoOAuthClient;
 import com.grandis.nova.member.auth.infrastructure.kakao.KakaoUserInfo;
+import com.grandis.nova.member.customer.Customer;
 import com.grandis.nova.member.customer.CustomerRepository;
+import com.grandis.nova.member.customer.Profile;
 import jakarta.servlet.http.Cookie;
 import java.util.List;
 import java.util.UUID;
@@ -142,6 +144,37 @@ class AuthFlowIntegrationTest {
     }
 
     @Test
+    @DisplayName("다시 로그인하면 표시명이 카카오 닉네임을 따라간다 — 닉네임이 없으면(동의 철회 · 빈 값) 그대로, 내 정보는 덮지 않는다")
+    void displayNameFollowsKakaoNickname() throws Exception {
+        login();
+        Customer first = customers.findByKakaoId(kakaoId).orElseThrow();
+        first.changeProfile(new Profile("김실명", null, null));
+        customers.saveAndFlush(first);
+
+        when(kakao.fetchUser("kakao-at")).thenReturn(new KakaoUserInfo(kakaoId, "길동이", null));
+        assertThat(json(login(), "/data/displayName")).isEqualTo("길동이");
+        Customer renamed = customers.findByKakaoId(kakaoId).orElseThrow();
+        assertThat(renamed.getDisplayName()).isEqualTo("길동이");
+        assertThat(renamed.profile().name()).as("표시명만 바꾸고 내 정보는 그대로").isEqualTo("김실명");
+
+        for (String missing : new String[] {null, "   "}) {
+            when(kakao.fetchUser("kakao-at")).thenReturn(new KakaoUserInfo(kakaoId, missing, null));
+            assertThat(json(login(), "/data/displayName")).as("닉네임 %s — 기존 값을 둔다", missing).isEqualTo("길동이");
+            assertThat(customers.findByKakaoId(kakaoId).orElseThrow().getDisplayName()).isEqualTo("길동이");
+        }
+
+        // 대소문자 · 악센트만 바뀐 닉네임도 저장한다 — 칼럼 콜레이션은 john = John, Jose = José 로 본다
+        for (String[] change : new String[][] {{"john", "John"}, {"Jose", "José"}}) {
+            when(kakao.fetchUser("kakao-at")).thenReturn(new KakaoUserInfo(kakaoId, change[0], null));
+            login();
+            when(kakao.fetchUser("kakao-at")).thenReturn(new KakaoUserInfo(kakaoId, change[1], null));
+            assertThat(json(login(), "/data/displayName")).isEqualTo(change[1]);
+            assertThat(customers.findByKakaoId(kakaoId).orElseThrow().getDisplayName()).as("%s → %s", change[0], change[1])
+                    .isEqualTo(change[1]);
+        }
+    }
+
+    @Test
     @DisplayName("실측: 같은 카카오 회원의 동시 첫 로그인 8개 → 행 1개, 전부 성공, 그리고 1062 재조회 분기에 실제로 들어갔다(로그 횟수 ≥ 1)")
     void concurrentFirstLoginCreatesOneRow(CapturedOutput output) throws Exception {
         int n = 8;
@@ -152,7 +185,7 @@ class AuthFlowIntegrationTest {
             return new KakaoUserInfo(kakaoId, "홍길동", null);
         });
         java.util.List<Concurrently.Outcome<KakaoLoginService.LoginResult>> results = Concurrently.run(n,
-                i -> () -> loginService.login("c", REDIRECT, com.grandis.nova.member.auth.application.ClientInfo.UNKNOWN));
+                i -> () -> loginService.login("c", REDIRECT));
 
         assertThat(results).allSatisfy(r -> {
             assertThat(r.error()).isNull();

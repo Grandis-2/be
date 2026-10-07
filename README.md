@@ -99,7 +99,7 @@ batch    시간이 되면 깨어남.   1 로 고정돼야 함 (늘면 같은 스
 예약 취소    preorder → order → preorder                        SQS 이벤트
 상품 등록    catalog → preorder(회차 · 차수) / order(초기 재고)    SQS 이벤트 (contracts/catalog-events.md)
 상품 수정    catalog → preorder(캐시 비우기 · 회차 취소)             SQS 이벤트 (contracts/catalog-events.md)
-리뷰 작성    catalog → order(내 주문상품) · member(표시명)          동기 조회 (contracts/order-internal.md · member-internal.md)
+리뷰 작성    catalog → order(내 주문상품) · member(작성자 이름)     동기 조회 (contracts/order-internal.md · member-internal.md)
 ```
 
 두 번째는 원래부터 단계적이었다. ERD 가 *"예약은 주문 CANCELED 와 Mock 취소 SUCCEEDED 가

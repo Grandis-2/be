@@ -31,27 +31,30 @@ public class ShopFixtures {
 
     /** 새 상위 카테고리. 다른 모듈 픽스처와 같은 모양(parent 없이). */
     public Long category() {
-        return category(unique(), "스마트폰");
+        return insert("""
+                INSERT INTO categories (name, created_at, updated_at)
+                VALUES ('스마트폰', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """);
     }
 
-    /** code 는 유일해야 한다 — 순서를 가르고 싶으면 접두사 + unique() 로 만든다. */
-    public Long category(String code, String name) {
+    /** 표시 순서를 정한 상위 카테고리. */
+    public Long category(String name, int sortOrder) {
         return insert("""
-                INSERT INTO categories (code, name, created_at, updated_at)
+                INSERT INTO categories (name, sort_order, created_at, updated_at)
                 VALUES (?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, code, name);
+                """, name, sortOrder);
     }
 
     /** 상위 아래 하위 카테고리. */
     public Long childCategory(Long parentId, String name) {
-        return childCategory(parentId, unique(), name);
+        return childCategory(parentId, name, 0);
     }
 
-    public Long childCategory(Long parentId, String code, String name) {
+    public Long childCategory(Long parentId, String name, int sortOrder) {
         return insert("""
-                INSERT INTO categories (code, name, parent_id, created_at, updated_at)
+                INSERT INTO categories (name, sort_order, parent_id, created_at, updated_at)
                 VALUES (?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, code, name, parentId);
+                """, name, sortOrder, parentId);
     }
 
     public Long product(String saleMode, String status) {
@@ -99,13 +102,12 @@ public class ShopFixtures {
                 """, optionId, total, reserved, sold);
     }
 
-    /** 필터 · 표시 JSON 까지 넣은 옵션. */
-    public Long optionWithAttributes(Long productId, String status, BigDecimal price, String title,
-                                     String filterJson, String displayJson) {
+    /** 필터 JSON 까지 넣은 옵션. */
+    public Long optionWithAttributes(Long productId, String status, BigDecimal price, String title, String filterJson) {
         return insert("""
-                INSERT INTO product_options (product_id, sku, title, price, filter_attributes, display_attributes, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, productId, unique(), title, price, filterJson, displayJson, status);
+                INSERT INTO product_options (product_id, sku, title, price, filter_attributes, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """, productId, unique(), title, price, filterJson, status);
     }
 
     public Long option(Long productId, String status, BigDecimal price) {

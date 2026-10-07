@@ -74,7 +74,7 @@ public class TokenService {
     }
 
     /** 로그인. 새 sid 하나에 액세스·리프레시 한 쌍. 회원은 DB 에 행을, 관리자는 Redis 에 jti 를 남긴다. */
-    public IssuedTokens issue(String subject, Role role, ClientInfo client) {
+    public IssuedTokens issue(String subject, Role role) {
         UUID sessionId = UUID.randomUUID();
         String access = provider.create(subject, role, sessionId, TokenType.ACCESS);
         Duration validity = properties.refreshTokenValidity();
@@ -84,7 +84,7 @@ public class TokenService {
             return new IssuedTokens(access, refresh, validity);
         }
         String refresh = RefreshTokens.newToken();
-        refreshTokens.save(sessionId, subject, refresh, now().plus(validity), client);
+        refreshTokens.save(sessionId, subject, refresh, now().plus(validity));
         return new IssuedTokens(access, refresh, validity);
     }
 
@@ -104,13 +104,13 @@ public class TokenService {
     }
 
     /** 재발급. 실패는 전부 401 이다. 재사용 탐지면 세션을 끊고 401, 폐기 조회 불가면 retryable 401. */
-    public Rotated rotate(String presentedRefreshToken, Role role, ClientInfo client) {
+    public Rotated rotate(String presentedRefreshToken, Role role) {
         return role == Role.ADMIN
                 ? rotateAdmin(presentedRefreshToken)
-                : rotateUser(presentedRefreshToken, client);
+                : rotateUser(presentedRefreshToken);
     }
 
-    private Rotated rotateUser(String presented, ClientInfo client) {
+    private Rotated rotateUser(String presented) {
         RefreshTokenStore.Session session = refreshTokens.find(presented)
                 .orElseThrow(() -> new InvalidTokenException("refresh token not found"));
         TokenClaims asClaims = claimsOf(session);
@@ -119,7 +119,7 @@ public class TokenService {
         }
 
         String newRefresh = RefreshTokens.newToken();
-        RefreshTokenStore.Rotation rotation = refreshTokens.rotate(presented, newRefresh, client);
+        RefreshTokenStore.Rotation rotation = refreshTokens.rotate(presented, newRefresh);
         if (rotation.status() == RefreshTokenStore.Rotation.Status.REUSED) {
             // 저장소가 체인을 이미 폐기하고 커밋했다. 남은 것은 액세스 토큰이고 그건 Redis 표식이 끊는다.
             revokeSessionBestEffort(rotation.sessionId(), "refresh reuse");

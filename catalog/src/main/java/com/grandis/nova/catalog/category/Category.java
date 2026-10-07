@@ -24,11 +24,12 @@ public class Category extends BaseEntity {
     /** 상위 카테고리. null 이면 상위다. */
     private Long parentId;
 
-    @Column(nullable = false, updatable = false, length = 40)
-    private String code;
-
     @Column(nullable = false, length = 60)
     private String name;
+
+    /** 표시 순서. 작을수록 앞. 같으면 id 순이다. */
+    @Column(nullable = false)
+    private int sortOrder;
 
     protected Category() {
     }
@@ -45,11 +46,11 @@ public class Category extends BaseEntity {
         return parentId;
     }
 
-    public String getCode() {
-        return code;
-    }
-
     public String getName() {
         return name;
+    }
+
+    public int getSortOrder() {
+        return sortOrder;
     }
 }

@@ -83,7 +83,7 @@ reviews:
           외부 호출은 워커가 한다.
           예외(내부 서비스 동기 호출): catalog 상품 조회(캐시 미스일 때만) · order 취소 사전 확인.
           둘 다 타임아웃 · 서킷 브레이커 · 동시 호출 상한(DependencyGuard)을 거쳐야 하고, 거치지 않으면 지적한다.
-          예외(타임아웃만): catalog 리뷰 작성의 order 주문상품 조회 · member 표시명 조회 — 드문 쓰기라 서킷 브레이커 · 동시 상한은
+          예외(타임아웃만): catalog 리뷰 작성의 order 주문상품 조회 · member 작성자 이름 조회 — 드문 쓰기라 서킷 브레이커 · 동시 상한은
           두지 않는다(2026-10-06 결정). 타임아웃(spring.http.serviceclient.order · member)이 없으면 지적한다.
         - @Transactional 범위 안의 HTTP 호출 · SQS 전송 · Thread.sleep · 외부 락 대기.
           DB 잠금을 외부 응답 시간만큼 붙잡는다.
@@ -243,7 +243,7 @@ reviews:
         - products.sale_mode 는 등록 뒤 바꾸지 않는다. order 의 재고 검증(일반 판매 상품에만 재고 행)이 이 계약에 기댄다.
           바꾸는 경로가 생기면 지적한다.
         - preorders · orders · payments · cart_items 는 읽기도 지적한다.
-          리뷰를 쓸 자격(내 주문상품 · 배송 완료 · 일반 주문)과 작성자 표시명은 order · member 내부 API 로 묻는다(contracts/order-internal.md ·
+          리뷰를 쓸 자격(내 주문상품 · 배송 완료 · 일반 주문)과 작성자 이름(실명 우선)은 order · member 내부 API 로 묻는다(contracts/order-internal.md ·
           member-internal.md). orders · order_items · customers 를 읽어 판정하면 지적한다.
         - sku 는 모델 안에서 유일하다. 중복 검사를 애플리케이션 조회로만 하면 UNIQUE 제약을 함께 쓰도록 제안한다.
         - 상품 · 옵션의 물리 삭제는 지적한다. 신청 이력이 있으므로 상태로 숨긴다.

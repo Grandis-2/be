@@ -173,7 +173,7 @@ public class ProductDetailService {
         Integer availableQuantity = saleMode == SaleMode.IN_STOCK
                 ? Math.max(0, available.getOrDefault(option.getId(), 0)) : null;
         return new Variant(option.getId(), option.getSku(), option.getTitle(), option.getPrice(),
-                attributes(option.getFilterAttributes()), attributes(option.getDisplayAttributes()),
+                attributes(option.getFilterAttributes()),
                 selectionsByOption.getOrDefault(option.getId(), Map.of()), option.getStatus(), availableQuantity);
     }
 

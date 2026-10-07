@@ -30,10 +30,10 @@ public class CategoryTreeService {
         this.categories = categories;
     }
 
-    /** 상위 목록(id 순). 각 상위의 children 에 하위가 id 순으로 온다. 상위 아래 하위까지 두 단계만 싣는다. */
+    /** 상위 목록(표시 순서). 각 상위의 children 에 하위가 같은 순서로 온다. 상위 아래 하위까지 두 단계만 싣는다. */
     @Transactional(readOnly = true)
     public List<CategoryNode> tree() {
-        List<Category> all = categories.findAllByOrderById();
+        List<Category> all = categories.findAllByOrderBySortOrderAscIdAsc();
         Set<Long> rootIds = new HashSet<>();
         for (Category category : all) {
             if (category.isTopLevel()) {
@@ -66,6 +66,6 @@ public class CategoryTreeService {
     }
 
     private static CategoryNode toNode(Category category, List<CategoryNode> children) {
-        return new CategoryNode(category.getId(), category.getCode(), category.getName(), category.getParentId(), children);
+        return new CategoryNode(category.getId(), category.getName(), category.getParentId(), children);
     }
 }

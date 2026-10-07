@@ -37,7 +37,7 @@ class CatalogDefaults implements EnvironmentPostProcessor, Ordered {
             // readiness 는 앱의 준비 상태만 본다(Boot 기본 구성과 같지만 고정한다). DB · Redis 를 넣으면 공용 의존성 장애 한 번에 모든 태스크가
             // 비정상이 돼 ECS 가 태스크를 갈아 끼운다
             Map.entry("management.endpoint.health.group.readiness.include", "readinessState"),
-            // 리뷰 작성 때 부르는 내부 API(order 주문상품 · member 표시명)의 시간 상한. 없으면 응답을 끝없이 기다려 요청 스레드를 붙잡는다.
+            // 리뷰 작성 때 부르는 내부 API(order 주문상품 · member 작성자 이름)의 시간 상한. 없으면 응답을 끝없이 기다려 요청 스레드를 붙잡는다.
             // 주소(base-url)는 환경마다 달라 여기 두지 않는다 — application.yml.example 의 spring.http.serviceclient
             Map.entry("spring.http.serviceclient." + Dependencies.ORDER + ".connect-timeout", "300ms"),
             Map.entry("spring.http.serviceclient." + Dependencies.ORDER + ".read-timeout", "1s"),
