@@ -58,7 +58,7 @@ public class OrderFixtures {
      * @param queuePosition 같은 상품 안에서 겹치지 않아야 한다(uq_preorder_position)
      */
     public UUID payablePreorder(UUID customerId, PreorderProduct product, long queuePosition) {
-        UUID preorderId = UUID.randomUUID();
+        UUID preorderId = TestIds.next();
         jdbcTemplate.update("""
                 INSERT INTO preorders (id, preorder_token, customer_id, product_id, option_id, shipment_batch_id,
                                        queue_position, idempotency_key, product_title_snapshot,
@@ -92,14 +92,13 @@ public class OrderFixtures {
                         PRODUCT_TITLE, OPTION_TITLE)));
     }
 
-    /** 일반 판매 상품 하나와 옵션 optionCount 개. 재고 행은 만들지 않는다. option_id 오름차순. */
+    /** 일반 판매 상품 하나와 옵션 optionCount 개. 재고 행은 만들지 않는다. 만든 순서 = option_id 오름차순. */
     public StockProduct inStockProduct(int optionCount) {
         UUID productId = product("IN_STOCK");
         List<UUID> optionIds = new ArrayList<>();
         for (int i = 0; i < optionCount; i++) {
             optionIds.add(option(productId));
         }
-        optionIds.sort(UuidBinary.BYTE_ORDER);
         return new StockProduct(productId, List.copyOf(optionIds));
     }
 
@@ -150,7 +149,7 @@ public class OrderFixtures {
 
     /** 첫 칸이 id 인 INSERT 에 새 id 를 붙여 실행하고 그 id 를 돌려준다. */
     private UUID insert(String sql, Object... args) {
-        UUID id = UUID.randomUUID();
+        UUID id = TestIds.next();
         Object[] withId = new Object[args.length + 1];
         withId[0] = bytes(id);
         System.arraycopy(args, 0, withId, 1, args.length);

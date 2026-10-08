@@ -1,6 +1,5 @@
 package com.grandis.nova.order.stock.admin;
 
-import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.order.stock.domain.model.StockLevel;
 
 import java.util.List;
@@ -25,7 +24,7 @@ public record StockOverview(UUID productId, boolean tracked, List<Line> lines) {
         Map<UUID, StockLevel> byOption = levels.stream()
                 .collect(Collectors.toMap(StockLevel::optionId, Function.identity()));
         return new StockOverview(productId, true,
-                optionIds.stream().sorted(UuidBinary.BYTE_ORDER).map(id -> new Line(id, byOption.get(id))).toList());
+                optionIds.stream().sorted().map(id -> new Line(id, byOption.get(id))).toList());
     }
 
     /** @param level 재고 행. 아직 넣지 않았으면 null */

@@ -1,6 +1,5 @@
 package com.grandis.nova.order.order.persistence.adapter;
 
-import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderEvent;
@@ -17,6 +16,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -76,7 +76,7 @@ class OrderReaderQueryTest {
         // 주문 id 순이다. id 는 만든 순서를 보장하지 않으므로 기대 순서도 id 로 정한다
         assertThat(reader.findItemsByOrderIds(List.of(second.id(), first.id())))
                 .extracting(item -> item.orderId())
-                .containsExactlyElementsOf(Stream.of(first.id(), second.id()).sorted(UuidBinary.BYTE_ORDER).toList());
+                .containsExactlyElementsOf(Stream.of(first.id(), second.id()).sorted().toList());
     }
 
     /*
@@ -103,7 +103,7 @@ class OrderReaderQueryTest {
             after = new OrderPosition(last.createdAt(), last.id());
         }
 
-        assertThat(seen).containsExactlyElementsOf(ids.stream().sorted(UuidBinary.BYTE_ORDER.reversed()).toList());
+        assertThat(seen).containsExactlyElementsOf(ids.stream().sorted(Comparator.reverseOrder()).toList());
     }
 
     /* 회원 조건은 권한 범위다. 빠지면 전 회원의 주문이 아니라 실패여야 한다. */

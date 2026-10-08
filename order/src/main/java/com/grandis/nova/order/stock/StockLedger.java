@@ -1,6 +1,5 @@
 package com.grandis.nova.order.stock;
 
-import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.order.stock.domain.exception.StockAlreadyCreatedException;
 import com.grandis.nova.order.stock.domain.exception.StockBelowCommittedException;
 import com.grandis.nova.order.stock.domain.model.StockLevel;
@@ -120,7 +119,7 @@ public class StockLedger {
             throw new IllegalArgumentException("같은 옵션이 두 번 있다: " + settings);
         }
         return settings.stream()
-                .sorted(Comparator.comparing(StockSetting::optionId, UuidBinary.BYTE_ORDER))
+                .sorted(Comparator.comparing(StockSetting::optionId))
                 .toList();
     }
 }

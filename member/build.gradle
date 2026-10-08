@@ -23,7 +23,6 @@ dependencies {
     // 시험 DB 는 Flyway 마이그레이션(스키마 정본)으로 만든다. 서비스는 Flyway 를 실행하지 않으므로 시험 의존으로만 둔다.
     testImplementation 'org.flywaydb:flyway-core'
     testRuntimeOnly 'org.flywaydb:flyway-mysql'
-    testImplementation project(':common:testing')
 }
 
 tasks.named('test') {

@@ -1,18 +1,22 @@
 package com.grandis.nova.preorder.campaign.domain;
 
-import com.grandis.nova.common.BaseTimeEntity;
 import com.grandis.nova.preorder.campaign.CampaignSchedule;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EntityListeners;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import org.springframework.data.annotation.CreatedDate;
+import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
 /**
- * 사전예약 회차. 사전예약 상품당 1행이고 상품 id 가 곧 PK 다(자기 id 를 만들지 않는다).
+ * 사전예약 회차. 사전예약 상품당 1행이고 상품 id 가 곧 PK 다(자기 id 를 만들지 않는다). 그래서 BaseEntity 대신
+ * 생성 · 변경 시각만 직접 둔다.
  *
  * 접수는 이 행을 잠근다({@link PreorderCampaignRepository#findForUpdate}).
  * 순번 카운터가 모집 일정과 같은 행에 있어서 접수 트랜잭션이 한 번만 잠그면 되고,
@@ -20,7 +24,8 @@ import java.util.UUID;
  */
 @Entity
 @Table(name = "preorder_campaigns")
-public class PreorderCampaign extends BaseTimeEntity {
+@EntityListeners(AuditingEntityListener.class)
+public class PreorderCampaign {
 
     private static final Duration CLOSED_BEFORE_OPEN = Duration.ofMillis(1);
 
@@ -32,6 +37,14 @@ public class PreorderCampaign extends BaseTimeEntity {
 
     @Id
     private UUID productId;
+
+    @CreatedDate
+    @Column(nullable = false, updatable = false)
+    private Instant createdAt;
+
+    @LastModifiedDate
+    @Column(nullable = false)
+    private Instant updatedAt;
 
     @Column(nullable = false)
     private Instant opensAt;
