@@ -15,14 +15,13 @@ import com.grandis.nova.preorder.support.ShopFixtures;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfigureMetrics;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
@@ -32,15 +31,10 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
-import static org.hamcrest.Matchers.containsString;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /** 부하 시험 · 운영에서 볼 지표가 실제로 기록되고 /actuator/prometheus 로 나가는지. 레지스트리를 공유하므로 증가분으로 본다. */
 @PreorderIntegrationTest
 @AutoConfigureMetrics
-@AutoConfigureMockMvc
 class ObservabilityTest {
 
     @Autowired
@@ -65,7 +59,7 @@ class ObservabilityTest {
     JdbcTemplate jdbcTemplate;
 
     @Autowired
-    MockMvc mockMvc;
+    PrometheusMeterRegistry prometheus;
 
     @MockitoBean
     CatalogClient catalogClient;
@@ -151,7 +145,7 @@ class ObservabilityTest {
     void 상태_지표는_갱신할_때_DB_에서_센다() {
         accepts.accept(fixtures.customer());
         jdbcTemplate.update("""
-                INSERT INTO dead_letter_events (id, source_queue, message_id, body, failure_reason, receive_count,
+                INSERT INTO preorder_dead_letter_events (id, source_queue, message_id, body, failure_reason, receive_count,
                                                 status, created_at, updated_at)
                 VALUES (?, 'preorder-events', ?, 'not-json', 'UNREADABLE_BODY', 5, 'OPEN',
                         UTC_TIMESTAMP(6) - INTERVAL 1 HOUR, UTC_TIMESTAMP(6))
@@ -170,17 +164,16 @@ class ObservabilityTest {
         accepts.accept(fixtures.customer());
 
         assertThat(registry.get("cache.gets").tag("cache", "catalog.products").functionCounters()).isNotEmpty();
-        mockMvc.perform(get("/actuator/prometheus"))
-                .andExpect(status().isOk())
-                .andExpect(content().string(containsString("preorder_accept_seconds")))
-                .andExpect(content().string(containsString("preorder_campaign_lock_wait_seconds_bucket")))
-                .andExpect(content().string(containsString("preorder_status_count")))
-                .andExpect(content().string(containsString("# TYPE preorder_outbox_unpublished gauge")))
-                .andExpect(content().string(containsString("# TYPE preorder_outbox_unpublished_max_attempts gauge")))
-                .andExpect(content().string(containsString("hikaricp_connections_pending")))
-                .andExpect(content().string(containsString("resilience4j_circuitbreaker_state")))
-                .andExpect(content().string(containsString("resilience4j_retry_calls")))
-                .andExpect(content().string(containsString("resilience4j_bulkhead_available_concurrent_calls")));
+        assertThat(prometheus.scrape()).contains(
+                "preorder_accept_seconds",
+                "preorder_campaign_lock_wait_seconds_bucket",
+                "preorder_status_count",
+                "# TYPE preorder_outbox_unpublished gauge",
+                "# TYPE preorder_outbox_unpublished_max_attempts gauge",
+                "hikaricp_connections_pending",
+                "resilience4j_circuitbreaker_state",
+                "resilience4j_retry_calls",
+                "resilience4j_bulkhead_available_concurrent_calls");
     }
 
     private long timerCount(String name, String tag, String value) {

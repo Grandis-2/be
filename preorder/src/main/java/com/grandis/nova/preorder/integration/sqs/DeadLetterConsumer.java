@@ -17,7 +17,7 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * 소비 큐의 DLQ 를 받아 DB(dead_letter_events)로 옮긴다. 적재가 커밋된 뒤에만 DLQ 에서 지운다 —
+ * 소비 큐의 DLQ 를 받아 DB(preorder_dead_letter_events)로 옮긴다. 적재가 커밋된 뒤에만 DLQ 에서 지운다 —
  * 적재가 실패하면 가시성 시간 뒤 다시 받고, 지우기 전에 죽어 다시 받으면 이미 쌓인 메시지라 지우기만 한다.
  * 되돌린 메시지가 또 DLQ 로 오면 새 행이 앞선 행을 가리키도록 되돌리기 표식(deadLetterId) 속성을 함께 받는다.
  */

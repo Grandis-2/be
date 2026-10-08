@@ -14,6 +14,8 @@ dependencies {
     // SQS 클라이언트 · 아웃박스 SQS 전송 · order-events 소비 폴러. AWS SDK 와 그 버전도 여기서 온다.
     implementation project(':common:sqs')
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    // 헬스 체크(관리 포트의 /actuator/health/readiness). 관리 포트 · 노출 범위는 OrderDefaults 에 있다
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-security'
     // 다른 서비스 내부 API 는 HTTP Interface(@HttpExchange) + RestClient 로 부른다.

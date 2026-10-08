@@ -181,7 +181,7 @@ class SqsMessagingTest {
                         .formatted(FlociTestContainer.MAX_RECEIVE_COUNT))
                 .atMost(Duration.ofSeconds(30))
                 .until(() -> fixtures.count("""
-                        SELECT COUNT(*) FROM dead_letter_events
+                        SELECT COUNT(*) FROM preorder_dead_letter_events
                          WHERE body = ? AND status = 'OPEN' AND failure_reason = 'UNREADABLE_BODY'
                         """, poison) == 1);
         assertThat(queues.receive("preorder-events-dlq", m -> m.body().equals(poison), Duration.ofSeconds(3)))
