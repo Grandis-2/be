@@ -34,18 +34,27 @@ class OutboxCleaner implements SmartLifecycle {
         this.clock = clock;
     }
 
-    /** @return 이번에 지운 행 수 */
+    /**
+     * 지운 수는 묶음마다 기록한다 — 중간 묶음이 실패해도 앞서 지운 행이 지표에 남는다.
+     *
+     * @return 이번에 지운 행 수
+     */
     int clean() {
         Instant cutoff = clock.instant().minus(properties.retention());
         int total = 0;
         int deleted;
-        do {
-            deleted = store.deletePublishedBefore(cutoff, properties.cleanupBatch());
-            total += deleted;
-        } while (deleted == properties.cleanupBatch() && !Thread.currentThread().isInterrupted());
-        if (total > 0) {
-            metrics.cleaned(total);
-            log.info("보존 기간이 지난 발행 완료 아웃박스 행을 지웠다 count={} cutoff={}", total, cutoff);
+        try {
+            do {
+                deleted = store.deletePublishedBefore(cutoff, properties.cleanupBatch());
+                if (deleted > 0) {
+                    metrics.cleaned(deleted);
+                    total += deleted;
+                }
+            } while (deleted == properties.cleanupBatch() && !Thread.currentThread().isInterrupted());
+        } finally {
+            if (total > 0) {
+                log.info("보존 기간이 지난 발행 완료 아웃박스 행을 지웠다 count={} cutoff={}", total, cutoff);
+            }
         }
         return total;
     }
@@ -82,11 +91,12 @@ class OutboxCleaner implements SmartLifecycle {
         return executor != null;
     }
 
-    /** 새는 예외는 남기고 삼킨다 — 밖으로 나가면 실행기가 다음 실행을 조용히 멈춘다. */
+    /** 새는 예외는 실패 지표 · 로그로 남기고 삼킨다 — 밖으로 나가면 실행기가 다음 실행을 조용히 멈춘다. */
     private void cleanQuietly() {
         try {
             clean();
         } catch (RuntimeException e) {
+            metrics.cleanupFailed();
             log.error("아웃박스 정리 실패 — 다음 주기에 다시 한다", e);
         }
     }
