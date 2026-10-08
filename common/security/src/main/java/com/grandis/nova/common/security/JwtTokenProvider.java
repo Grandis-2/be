@@ -49,8 +49,15 @@ public class JwtTokenProvider {
         this.clock = clock;
     }
 
-    /** 타입에 맞는 만료(설정값. 예시는 액세스 30m · 리프레시 14d)로 새 토큰을 만든다. jti 는 매번 새로 난다. */
+    /**
+     * 타입에 맞는 만료(설정값. 예시는 액세스 30m · 리프레시 14d)로 새 토큰을 만든다. jti 는 매번 새로 난다.
+     *
+     * @throws IllegalStateException 발급 서비스가 아니다(개인키 · 만료 설정이 없는 검증 전용 서비스)
+     */
     public String create(String subject, Role role, UUID sessionId, TokenType type) {
+        if (!properties.issues()) {
+            throw new IllegalStateException("이 서비스는 토큰을 발급하지 않는다 — jwt.private-key 가 없는 검증 전용 서비스");
+        }
         Instant now = clock.instant();
         Instant expiresAt = now.plus(type == TokenType.ACCESS
                 ? properties.accessTokenValidity()
