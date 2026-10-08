@@ -82,7 +82,7 @@ class AuthenticationApiTest {
     void 배송_차수_공개_조회는_토큰_없이_열린다() throws Exception {
         PreorderProduct product = fixtures.openPreorderProduct();
 
-        mockMvc.perform(get("/api/v1/products/{id}/shipment-batches", product.productId()))
+        mockMvc.perform(get("/api/v1/preorders/products/{id}/shipment-batches", product.productId()))
                 .andExpect(status().isOk());
     }
 }

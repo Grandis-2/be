@@ -49,7 +49,7 @@ class DatabaseUnavailableApiTest {
                 held.add(dataSource.getConnection());
             }
 
-            mockMvc.perform(get("/api/v1/admin/products/{id}/preorder-campaign", productId).with(admin()))
+            mockMvc.perform(get("/api/v1/admin/preorders/products/{id}/campaign", productId).with(admin()))
                     .andExpect(status().isServiceUnavailable())
                     .andExpect(header().string(HttpHeaders.RETRY_AFTER, "1"))
                     .andExpect(jsonPath("$.error.code").value("DEPENDENCY_UNAVAILABLE"));

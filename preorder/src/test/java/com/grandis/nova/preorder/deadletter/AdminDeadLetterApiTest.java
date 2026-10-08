@@ -77,7 +77,7 @@ class AdminDeadLetterApiTest {
         UUID processingFailed = record(event("EXTERNAL_JOB_SUCCEEDED"));
         UUID unknownType = record(event("SOMETHING_NEW"));
 
-        mockMvc.perform(get("/api/v1/admin/event-dlq").param("preorderId", token).with(admin()))
+        mockMvc.perform(get("/api/v1/admin/preorders/dead-letters").param("preorderId", token).with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items[*].deadLetterId").value(contains(
                         unknownType.toString(), processingFailed.toString())))
@@ -85,7 +85,7 @@ class AdminDeadLetterApiTest {
                 .andExpect(jsonPath("$.data.items[1].redrivable").value(true))
                 .andExpect(jsonPath("$.data.items[1].preorderId").value(token))
                 .andExpect(jsonPath("$.data.total").value(2));
-        mockMvc.perform(get("/api/v1/admin/event-dlq").param("customerId", customerId.toString())
+        mockMvc.perform(get("/api/v1/admin/preorders/dead-letters").param("customerId", customerId.toString())
                         .param("failureReason", "UNKNOWN_EVENT_TYPE").with(admin()))
                 .andExpect(jsonPath("$.data.items[*].deadLetterId").value(contains(unknownType.toString())));
     }
@@ -95,13 +95,13 @@ class AdminDeadLetterApiTest {
         String body = event("EXTERNAL_JOB_SUCCEEDED");
         UUID id = record(body);
 
-        mockMvc.perform(get("/api/v1/admin/event-dlq/{id}", id).with(admin()))
+        mockMvc.perform(get("/api/v1/admin/preorders/dead-letters/{id}", id).with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.body").value(body))
                 .andExpect(jsonPath("$.data.sourceQueue").value(QUEUE))
                 .andExpect(jsonPath("$.data.failureReason").value("PROCESSING_FAILED"))
                 .andExpect(jsonPath("$.data.status").value("OPEN"));
-        mockMvc.perform(get("/api/v1/admin/event-dlq/{id}", UUID.randomUUID()).with(admin()))
+        mockMvc.perform(get("/api/v1/admin/preorders/dead-letters/{id}", UUID.randomUUID()).with(admin()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("DEAD_LETTER_NOT_FOUND"));
     }
@@ -111,7 +111,7 @@ class AdminDeadLetterApiTest {
         String body = event("EXTERNAL_JOB_SUCCEEDED");
         UUID id = record(body);
 
-        mockMvc.perform(post("/api/v1/admin/event-dlq/{id}/redrive", id).with(admin()))
+        mockMvc.perform(post("/api/v1/admin/preorders/dead-letters/{id}/redrive", id).with(admin()))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.status").value("REDRIVEN"));
 
@@ -125,7 +125,7 @@ class AdminDeadLetterApiTest {
     void 지금_코드로도_읽지_못하는_원문은_되돌리지_않는다() throws Exception {
         UUID id = record(event("SOMETHING_NEW"));
 
-        mockMvc.perform(post("/api/v1/admin/event-dlq/{id}/redrive", id).with(admin()))
+        mockMvc.perform(post("/api/v1/admin/preorders/dead-letters/{id}/redrive", id).with(admin()))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("DEAD_LETTER_NOT_REDRIVABLE"));
 
@@ -137,21 +137,21 @@ class AdminDeadLetterApiTest {
         UUID id = record(event("EXTERNAL_JOB_SUCCEEDED"));
         redriver.failFor(id);
 
-        mockMvc.perform(post("/api/v1/admin/event-dlq/{id}/redrive", id).with(admin()))
+        mockMvc.perform(post("/api/v1/admin/preorders/dead-letters/{id}/redrive", id).with(admin()))
                 .andExpect(status().isServiceUnavailable());
         assertThat(row(id).get("status")).isEqualTo("REDRIVING");
-        mockMvc.perform(post("/api/v1/admin/event-dlq/{id}/redrive", id).with(admin()))
+        mockMvc.perform(post("/api/v1/admin/preorders/dead-letters/{id}/redrive", id).with(admin()))
                 .andExpect(status().isConflict());
-        mockMvc.perform(get("/api/v1/admin/event-dlq/{id}", id).with(admin()))
+        mockMvc.perform(get("/api/v1/admin/preorders/dead-letters/{id}", id).with(admin()))
                 .andExpect(jsonPath("$.data.redrivable").value(false));
 
         jdbcTemplate.update("UPDATE preorder_dead_letter_events SET redrive_started_at = redrive_started_at - INTERVAL 2 MINUTE"
                 + " WHERE id = ?", (Object) UuidBinary.toBytes(id));
         redriver.recover(id);
 
-        mockMvc.perform(get("/api/v1/admin/event-dlq/{id}", id).with(admin()))
+        mockMvc.perform(get("/api/v1/admin/preorders/dead-letters/{id}", id).with(admin()))
                 .andExpect(jsonPath("$.data.redrivable").value(true));
-        mockMvc.perform(post("/api/v1/admin/event-dlq/{id}/redrive", id).with(admin()))
+        mockMvc.perform(post("/api/v1/admin/preorders/dead-letters/{id}/redrive", id).with(admin()))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.status").value("REDRIVEN"));
         assertThat(redriver.sentFor(id)).hasSize(1);
@@ -162,7 +162,7 @@ class AdminDeadLetterApiTest {
         UUID id = record(event("EXTERNAL_JOB_SUCCEEDED"));
 
         List<Outcome<Integer>> outcomes = Concurrently.run(5, i -> () -> mockMvc
-                .perform(post("/api/v1/admin/event-dlq/{id}/redrive", id).with(admin()))
+                .perform(post("/api/v1/admin/preorders/dead-letters/{id}/redrive", id).with(admin()))
                 .andReturn().getResponse().getStatus());
 
         assertThat(outcomes).allMatch(Outcome::succeeded);
@@ -174,16 +174,16 @@ class AdminDeadLetterApiTest {
     void 버리려면_사유가_필요하고_버린_것은_되돌리거나_다시_버리지_못한다() throws Exception {
         UUID id = record(event("SOMETHING_NEW"));
 
-        mockMvc.perform(post("/api/v1/admin/event-dlq/{id}/discard", id).with(admin())
+        mockMvc.perform(post("/api/v1/admin/preorders/dead-letters/{id}/discard", id).with(admin())
                         .contentType(MediaType.APPLICATION_JSON).content("{\"note\":\" \"}"))
                 .andExpect(status().isBadRequest());
-        mockMvc.perform(post("/api/v1/admin/event-dlq/{id}/discard", id).with(admin())
+        mockMvc.perform(post("/api/v1/admin/preorders/dead-letters/{id}/discard", id).with(admin())
                         .contentType(MediaType.APPLICATION_JSON).content("{\"note\":\"보낸 쪽 계약 오류 — 재발행 요청\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("DISCARDED"))
                 .andExpect(jsonPath("$.data.discardNote").value("보낸 쪽 계약 오류 — 재발행 요청"));
 
-        mockMvc.perform(post("/api/v1/admin/event-dlq/{id}/discard", id).with(admin())
+        mockMvc.perform(post("/api/v1/admin/preorders/dead-letters/{id}/discard", id).with(admin())
                         .contentType(MediaType.APPLICATION_JSON).content("{\"note\":\"again\"}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("DEAD_LETTER_NOT_DISCARDABLE"));
@@ -195,7 +195,7 @@ class AdminDeadLetterApiTest {
         UUID second = record(event("PREORDER_ORDER_SETTLED"));
         UUID unknown = record(event("SOMETHING_NEW"));
 
-        mockMvc.perform(post("/api/v1/admin/event-dlq/redrive-batch").with(admin())
+        mockMvc.perform(post("/api/v1/admin/preorders/dead-letters/redrive-batch").with(admin())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"deadLetterIds\":[\"%s\",\"%s\",\"%s\",\"%s\"],\"ratePerSecond\":50}"
                                 .formatted(first, second, unknown, UUID.randomUUID())))
@@ -213,11 +213,11 @@ class AdminDeadLetterApiTest {
         UUID expiry = record(event("PREORDER_EXPIRY_REQUESTED"));
         UUID settled = record(event("PREORDER_ORDER_SETTLED"));
 
-        mockMvc.perform(post("/api/v1/admin/event-dlq/redrive-batch").with(admin())
+        mockMvc.perform(post("/api/v1/admin/preorders/dead-letters/redrive-batch").with(admin())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"eventType\":\"PREORDER_EXPIRY_REQUESTED\",\"ratePerSecond\":200}"))
                 .andExpect(status().isAccepted());
-        mockMvc.perform(post("/api/v1/admin/event-dlq/redrive-batch").with(admin())
+        mockMvc.perform(post("/api/v1/admin/preorders/dead-letters/redrive-batch").with(admin())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"failureReason\":\"UNKNOWN_EVENT_TYPE\",\"ratePerSecond\":200}"))
                 .andExpect(status().isAccepted())
@@ -232,7 +232,7 @@ class AdminDeadLetterApiTest {
         UUID unknown = record(event("SOMETHING_NEW"));
         UUID failed = record(event("PREORDER_CAMPAIGN_CANCELED"));
 
-        mockMvc.perform(post("/api/v1/admin/event-dlq/redrive-batch").with(admin())
+        mockMvc.perform(post("/api/v1/admin/preorders/dead-letters/redrive-batch").with(admin())
                         .contentType(MediaType.APPLICATION_JSON).content("{\"ratePerSecond\":200}"))
                 .andExpect(status().isAccepted());
 
@@ -242,7 +242,7 @@ class AdminDeadLetterApiTest {
 
     @Test
     void 회원_토큰으로는_볼_수_없다() throws Exception {
-        mockMvc.perform(get("/api/v1/admin/event-dlq").with(customer(customerId)))
+        mockMvc.perform(get("/api/v1/admin/preorders/dead-letters").with(customer(customerId)))
                 .andExpect(status().isForbidden());
     }
 
