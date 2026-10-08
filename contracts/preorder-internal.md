@@ -10,7 +10,7 @@
 
 | 언제 | 누가 | 실린 JWT | 목적 |
 | --- | --- | --- | --- |
-| 관리자 회차 · 차수 수정(`PUT /admin/products/{id}/preorder-campaign` 등, 등록 뒤 오픈 전) | preorder `PreorderCampaignAdminService.requirePreorderProduct` | 관리자(ADMIN) | 회차를 붙일 상품이 사전예약 상품인지 확인 |
+| 관리자 회차 · 차수 수정(`PUT /api/v1/admin/preorders/products/{id}/campaign` 등, 등록 뒤 오픈 전) | preorder `PreorderCampaignAdminService.requirePreorderProduct` | 관리자(ADMIN) | 회차를 붙일 상품이 사전예약 상품인지 확인 |
 | 사용자 접수 (`PreorderAcceptTransaction`) | preorder `CatalogReader`(캐시 경유) | 회원(USER) | 접수 가능 여부 판정과 옵션 스냅샷 복사 |
 
 **인증.** 호출자의 JWT(`Authorization: Bearer {accessToken}`, 2026-09-28 — 이전 `X-Session-Token`)를 그대로 전달한다. catalog 는 `common:security` 필터로 서명·만료·`aud`·역할·폐기를 검증하고(NV-139 채택) **이 읽기 엔드포인트는 USER·ADMIN 둘 다 허용**한다(앞으로 생길 `/internal/**` 쓰기 엔드포인트는 ADMIN 만). 업무 판정(접수 가능한가)은 catalog 가 아니라 preorder 가 한다. TLS는 전송 암호화 역할이며 호출 서비스의 접근 제한은 위 노출 조건으로 검증한다. preorder 쪽은 `CatalogClient` 호출에 헤더를 전파하는 인터셉터를 둔다(`TokenRelayConfig` · `common:security` 의 `BearerTokenRelayInterceptor`, NV-277).
