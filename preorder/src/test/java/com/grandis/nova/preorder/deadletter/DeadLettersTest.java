@@ -98,7 +98,7 @@ class DeadLettersTest {
         assertThat(deadLetters.record(incoming)).isTrue();
         assertThat(deadLetters.record(incoming)).isFalse();
 
-        assertThat(fixtures.count("SELECT COUNT(*) FROM dead_letter_events WHERE message_id = ?", messageId))
+        assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_dead_letter_events WHERE message_id = ?", messageId))
                 .isEqualTo(1);
     }
 
@@ -110,14 +110,14 @@ class DeadLettersTest {
 
         List<Outcome<Boolean>> outcomes = Concurrently.run(4, i -> () -> deadLetters.record(incoming));
 
-        assertThat(fixtures.count("SELECT COUNT(*) FROM dead_letter_events WHERE message_id = ?", messageId))
+        assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_dead_letter_events WHERE message_id = ?", messageId))
                 .isEqualTo(1);
         assertThat(outcomes.stream().filter(outcome -> outcome.succeeded() && outcome.value())).hasSize(1);
         assertThat(outcomes).as("진 쪽은 이미 쌓임(false)이거나 UNIQUE 충돌이다 — 다른 예외는 안 된다")
                 .allSatisfy(outcome -> {
                     if (!outcome.succeeded()) {
                         assertThat(outcome.error()).isInstanceOf(DataIntegrityViolationException.class)
-                                .hasStackTraceContaining("uq_dead_letter_message");
+                                .hasStackTraceContaining("uq_preorder_dead_letter_message");
                     }
                 });
     }
@@ -173,7 +173,7 @@ class DeadLettersTest {
     void 보내다_멈춘_REDRIVING_은_1분이_지나야_되돌리기_대기로_센다() {
         UUID recent = claimed(ShopFixtures.unique());
         UUID stale = claimed(ShopFixtures.unique());
-        jdbcTemplate.update("UPDATE dead_letter_events SET redrive_started_at = redrive_started_at - INTERVAL 2 MINUTE"
+        jdbcTemplate.update("UPDATE preorder_dead_letter_events SET redrive_started_at = redrive_started_at - INTERVAL 2 MINUTE"
                 + " WHERE id = ?", (Object) UuidBinary.toBytes(stale));
         Instant staleBefore = Instant.now().minus(DeadLetterStatus.STALE_REDRIVE);
 
@@ -183,7 +183,7 @@ class DeadLettersTest {
         assertThat(events.findById(stale).orElseThrow().waitingForRedrive(staleBefore)).isTrue();
         assertThat(events.findById(recent).orElseThrow().waitingForRedrive(staleBefore)).isFalse();
         long before = events.countWaiting(staleBefore);
-        jdbcTemplate.update("UPDATE dead_letter_events SET redrive_started_at = redrive_started_at - INTERVAL 2 MINUTE"
+        jdbcTemplate.update("UPDATE preorder_dead_letter_events SET redrive_started_at = redrive_started_at - INTERVAL 2 MINUTE"
                 + " WHERE id = ?", (Object) UuidBinary.toBytes(recent));
         assertThat(events.countWaiting(staleBefore)).isEqualTo(before + 1);
     }
@@ -218,7 +218,7 @@ class DeadLettersTest {
     }
 
     private DeadLetterEvent find(String messageId) {
-        UUID id = jdbcTemplate.queryForObject("SELECT id FROM dead_letter_events WHERE message_id = ?",
+        UUID id = jdbcTemplate.queryForObject("SELECT id FROM preorder_dead_letter_events WHERE message_id = ?",
                 (rs, rowNum) -> UuidBinary.fromBytes(rs.getBytes(1)), messageId);
         return events.findById(id).orElseThrow();
     }

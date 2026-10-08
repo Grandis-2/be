@@ -86,7 +86,7 @@ class DeadLetterSqsFlowTest {
         broken.add(body);
         queues.send("preorder-events", body);
         UUID id = awaitOpenRow();
-        assertThat(jdbcTemplate.queryForObject("SELECT BIN_TO_UUID(preorder_id) FROM dead_letter_events WHERE id = ?",
+        assertThat(jdbcTemplate.queryForObject("SELECT BIN_TO_UUID(preorder_id) FROM preorder_dead_letter_events WHERE id = ?",
                 String.class, (Object) UuidBinary.toBytes(id))).isEqualTo(preorderId.toString());
 
         broken.remove(body);
@@ -107,19 +107,19 @@ class DeadLetterSqsFlowTest {
 
         await().atMost(TIMEOUT).until(() -> "REDRIVE_FAILED".equals(status(id)));
         await().atMost(TIMEOUT).until(() -> fixtures.count(
-                "SELECT COUNT(*) FROM dead_letter_events WHERE redriven_from_id = ? AND status = 'OPEN'",
+                "SELECT COUNT(*) FROM preorder_dead_letter_events WHERE redriven_from_id = ? AND status = 'OPEN'",
                 (Object) UuidBinary.toBytes(id)) == 1);
     }
 
     private UUID awaitOpenRow() {
         await().alias("처리 실패 → DLQ → DB").atMost(TIMEOUT).until(() -> fixtures.count(
-                "SELECT COUNT(*) FROM dead_letter_events WHERE body = ? AND status = 'OPEN'", body) == 1);
-        return jdbcTemplate.queryForObject("SELECT id FROM dead_letter_events WHERE body = ? AND status = 'OPEN'",
+                "SELECT COUNT(*) FROM preorder_dead_letter_events WHERE body = ? AND status = 'OPEN'", body) == 1);
+        return jdbcTemplate.queryForObject("SELECT id FROM preorder_dead_letter_events WHERE body = ? AND status = 'OPEN'",
                 (rs, rowNum) -> UuidBinary.fromBytes(rs.getBytes(1)), body);
     }
 
     private String status(UUID id) {
-        return jdbcTemplate.queryForObject("SELECT status FROM dead_letter_events WHERE id = ?", String.class,
+        return jdbcTemplate.queryForObject("SELECT status FROM preorder_dead_letter_events WHERE id = ?", String.class,
                 (Object) UuidBinary.toBytes(id));
     }
 }
