@@ -36,7 +36,8 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
         management(defaults);
         environment.getPropertySources().addLast(new MapPropertySource(SOURCE_NAME, defaults));
         // 웹 서버를 띄우지 않는 기동(도구)에는 포트가 없다. web-application-type 은 이 후처리기 뒤에 들어가므로 환경에서 먼저 읽는다
-        WebApplicationType webType = Binder.get(environment).bind("spring.main.web-application-type", WebApplicationType.class)
+        WebApplicationType webType = Binder.get(environment)
+                .bind("spring.main.web-application-type", WebApplicationType.class)
                 .orElse(application.getWebApplicationType());
         if (webType != WebApplicationType.NONE) {
             requireSeparateManagementPort(environment);
