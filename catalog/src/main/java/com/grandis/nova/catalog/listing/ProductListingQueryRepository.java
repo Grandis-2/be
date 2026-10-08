@@ -123,7 +123,7 @@ public class ProductListingQueryRepository {
         return count == null ? 0 : count;
     }
 
-    /** 회원 목록과 같은 열(최저가 · 대표 사진 · 판매 가능 · 품절 · 회차)에 공개 여부 · 판매 방식별 준비 · 옵션 수를 더해 읽는다. */
+    /** 회원 목록과 같은 열(최저가 · 썸네일 · 판매 가능 · 품절 · 회차)에 공개 여부 · 판매 방식별 준비 · 옵션 수를 더해 읽는다. */
     public List<AdminProductListItem> findForAdmin(AdminProductListFilter filter, Instant now, int page, int size) {
         StringBuilder sql = new StringBuilder(SELECT_ITEMS.stripTrailing()).append(ADMIN_COLUMNS).append(FROM_ALL);
         MapSqlParameterSource params = new MapSqlParameterSource();

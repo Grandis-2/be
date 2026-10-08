@@ -8,7 +8,7 @@ import java.util.UUID;
  *
  * @param productTitle 지금의 상품명(catalog 표)
  * @param optionTitle  구매 당시 옵션명(작성 때 order 에서 받아 둔 값)
- * @param imageUrl     상품 대표 사진. 없으면 null
+ * @param imageUrl     상품 썸네일(목록과 같은 규칙 — 첫 색상의 첫 장). 없으면 null
  * @param authorName   가린 작성자명(예: 김**)
  * @param orderItemId  내 리뷰에서만 채운다. 공개 목록은 null — 남의 주문상품 id 를 내보내지 않는다
  */
