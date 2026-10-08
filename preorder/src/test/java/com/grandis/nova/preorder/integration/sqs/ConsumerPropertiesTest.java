@@ -45,6 +45,12 @@ class ConsumerPropertiesTest {
     }
 
     @Test
+    void 꺼_둔_환경에서도_보류_설정이_범위_밖이면_받지_않는다() {
+        runner.withPropertyValues("nova.sqs.consumer.defer-max-delay=16m").run(ctx ->
+                assertThat(ctx).getFailure().rootCause().hasMessageContaining("max"));
+    }
+
+    @Test
     void 꺼_둔_환경에서도_DLQ_소비기_설정이_범위_밖이면_받지_않는다() {
         runner.withPropertyValues("nova.sqs.dead-letter.wait-seconds=21").run(ctx ->
                 assertThat(ctx).getFailure().rootCause().hasMessageContaining("wait-seconds"));
