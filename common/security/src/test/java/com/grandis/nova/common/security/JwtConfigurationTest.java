@@ -132,6 +132,9 @@ class JwtConfigurationTest {
                             ctx.getBean(JwtKeyRing.class), Clock.systemUTC());
                     assertThatThrownBy(() -> provider.create("1", Role.USER, UUID.randomUUID(), TokenType.ACCESS))
                             .isInstanceOf(IllegalStateException.class).hasMessageContaining("발급하지 않는다");
+                    assertThatThrownBy(() -> provider.create("1", Role.USER, UUID.randomUUID(), TokenType.REFRESH,
+                            Instant.now().plusSeconds(60)))
+                            .isInstanceOf(IllegalStateException.class).hasMessageContaining("발급하지 않는다");
                 });
     }
 

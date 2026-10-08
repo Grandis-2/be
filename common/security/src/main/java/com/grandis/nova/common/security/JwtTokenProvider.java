@@ -55,9 +55,7 @@ public class JwtTokenProvider {
      * @throws IllegalStateException 발급 서비스가 아니다(개인키 · 만료 설정이 없는 검증 전용 서비스)
      */
     public String create(String subject, Role role, UUID sessionId, TokenType type) {
-        if (!properties.issues()) {
-            throw new IllegalStateException("이 서비스는 토큰을 발급하지 않는다 — jwt.private-key 가 없는 검증 전용 서비스");
-        }
+        requireIssuer();
         Instant now = clock.instant();
         Instant expiresAt = now.plus(type == TokenType.ACCESS
                 ? properties.accessTokenValidity()
@@ -70,11 +68,19 @@ public class JwtTokenProvider {
      * 호출자(TokenService)가 지킨다. 이 클래스는 지정한 만료가 이미 지났는지만 본다 — 만료된 세션은 다시 로그인해야 한다.
      */
     public String create(String subject, Role role, UUID sessionId, TokenType type, Instant expiresAt) {
+        requireIssuer();
         Instant now = clock.instant();
         if (!expiresAt.isAfter(now)) {
             throw new InvalidTokenException("expiresAt is not after now");
         }
         return create(subject, role, sessionId, type, now, expiresAt);
+    }
+
+    /** 검증 전용 서비스(개인키 · 만료 설정 없음)에서 발급을 부르면 원인이 드러나게 막는다. */
+    private void requireIssuer() {
+        if (!properties.issues()) {
+            throw new IllegalStateException("이 서비스는 토큰을 발급하지 않는다 — jwt.private-key 가 없는 검증 전용 서비스");
+        }
     }
 
     private String create(String subject, Role role, UUID sessionId, TokenType type, Instant now, Instant expiresAt) {
