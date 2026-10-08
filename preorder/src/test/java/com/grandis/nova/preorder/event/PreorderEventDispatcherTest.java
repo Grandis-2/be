@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.event;
 
 import com.grandis.nova.common.UuidBinary;
+import com.grandis.nova.common.sqs.MessageHandling;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.cancel.application.CancelStarter;
@@ -221,7 +222,7 @@ class PreorderEventDispatcherTest {
     }
 
     @Test
-    void 상품_변경에_공개_여부가_있으면_회차에_반영하고_회차가_아직_없으면_예외로_다시_받는다() {
+    void 상품_변경에_공개_여부가_있으면_회차에_반영하고_회차가_아직_없으면_보류해_늦춰_다시_받는다() {
         UUID productId = preorders.findById(preorderId).orElseThrow().productId();
 
         dispatcher.dispatch(envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", productId, payload()
@@ -235,10 +236,10 @@ class PreorderEventDispatcherTest {
                    AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.change')) = 'VISIBILITY'
                 """, (Object) UuidBinary.toBytes(productId))).isEqualTo(1);
         UUID notRegistered = fixtures.product("PREORDER", "ACTIVE");
-        assertThatThrownBy(() -> dispatcher.dispatch(envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", notRegistered,
-                payload().put("visible", true).put("visibilityVersion", 1))))
-                .isInstanceOf(IllegalStateException.class);
-        dispatcher.dispatch(envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", notRegistered, payload()));
+        assertThat(dispatcher.dispatch(envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", notRegistered,
+                payload().put("visible", true).put("visibilityVersion", 1)))).isEqualTo(MessageHandling.DEFER);
+        assertThat(dispatcher.dispatch(envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", notRegistered, payload())))
+                .as("공개 여부가 없으면 캐시만 비우고 끝낸다").isEqualTo(MessageHandling.DONE);
     }
 
     @Test

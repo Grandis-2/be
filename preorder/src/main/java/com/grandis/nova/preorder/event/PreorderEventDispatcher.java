@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.event;
 
 import com.grandis.nova.common.message.EventEnvelope;
+import com.grandis.nova.common.sqs.MessageHandling;
 import com.grandis.nova.preorder.campaign.CampaignRegistrar;
 import com.grandis.nova.preorder.campaign.CampaignRepublisher;
 import com.grandis.nova.preorder.campaign.Campaigns;
@@ -23,6 +24,7 @@ import java.util.UUID;
  * 받은 메시지를 이벤트 종류별 처리로 보낸다. 큐 소비기는 본문을 그대로 여기에 넘긴다.
  *
  * 모르는 종류 · 깨진 본문은 예외로 올린다. 소비기는 메시지를 지우지 않고, 재수신 한도를 넘으면 DLQ 로 간다.
+ * 앞선 이벤트를 기다려야 하는 메시지만 {@link MessageHandling#DEFER} 로 알린다 — 소비기가 재수신 횟수를 쓰지 않고 늦춰 다시 받는다.
  */
 @Component
 public class PreorderEventDispatcher {
@@ -64,9 +66,10 @@ public class PreorderEventDispatcher {
      * 처리 시간 · 결과를 종류별로 센다(읽을 수 없거나 모르는 종류는 UNKNOWN). 발생 시각부터 처리 시작까지를
      * 소비 지연으로 잰다 — 큐 적체 · 소비기 부족이 여기서 드러난다.
      *
+     * @return 처리했으면 DONE, 앞선 이벤트를 기다려야 하면 DEFER(늦춰 다시 받는다)
      * @throws IllegalArgumentException 받지 않는 이벤트 종류
      */
-    public void dispatch(String body) {
+    public MessageHandling dispatch(String body) {
         Timer.Sample sample = Timer.start(meterRegistry);
         String eventType = UNKNOWN;
         String outcome = "failure";
@@ -75,8 +78,9 @@ public class PreorderEventDispatcher {
             InboundEventType type = InboundEventType.valueOf(envelope.eventType());
             eventType = type.name();
             recordLag(eventType, envelope.occurredAt());
-            route(type, envelope);
-            outcome = "success";
+            MessageHandling handling = route(type, envelope);
+            outcome = handling == MessageHandling.DEFER ? "deferred" : "success";
+            return handling;
         } finally {
             sample.stop(meterRegistry.timer(HANDLE_METRIC, "eventType", eventType, "outcome", outcome));
         }
@@ -90,7 +94,7 @@ public class PreorderEventDispatcher {
         }
     }
 
-    private void route(InboundEventType type, EventEnvelope envelope) {
+    private MessageHandling route(InboundEventType type, EventEnvelope envelope) {
         switch (type) {
             case EXTERNAL_JOB_SUCCEEDED -> handler.onExternalJobSucceeded(
                     jsonMapper.treeToValue(envelope.payload(), ExternalJobSucceeded.class));
@@ -113,24 +117,29 @@ public class PreorderEventDispatcher {
                 log.info("회차 일정 전체 재발행 요청: requestedBy={}, reason={}", requested.requestedBy(), requested.reason());
                 campaignRepublisher.republishAll();
             }
-            case PREORDER_PRODUCT_CHANGED -> onProductChanged(requireProductId(envelope),
-                    jsonMapper.treeToValue(envelope.payload(), PreorderProductChanged.class));
+            case PREORDER_PRODUCT_CHANGED -> {
+                return onProductChanged(requireProductId(envelope),
+                        jsonMapper.treeToValue(envelope.payload(), PreorderProductChanged.class));
+            }
             case PREORDER_PRODUCT_REGISTERED -> {
                 campaignRegistrar.register(requireProductId(envelope),
                         jsonMapper.treeToValue(envelope.payload(), PreorderProductRegistered.class).toRegistration());
             }
         }
+        return MessageHandling.DONE;
     }
 
     /**
      * 오픈 직전 가격 변경이 캐시 갱신(1분)을 기다리지 않고 모든 인스턴스의 접수에 바로 반영되게 캐시를 먼저 비운다.
-     * 공개 여부가 실려 있으면 회차에 반영한다 — 회차가 아직 없으면 예외로 다시 받는다.
+     * 공개 여부가 실려 있으면 회차에 반영한다 — 회차가 아직 없으면(등록 이벤트보다 먼저 옴) 늦춰 다시 받는다.
      */
-    private void onProductChanged(UUID productId, PreorderProductChanged changed) {
+    private MessageHandling onProductChanged(UUID productId, PreorderProductChanged changed) {
         catalogCache.evictEverywhere(productId);
-        if (changed != null && changed.hasVisibility()) {
-            campaigns.applyVisibility(productId, changed.visible(), changed.visibilityVersion());
+        if (changed != null && changed.hasVisibility()
+                && !campaigns.applyVisibility(productId, changed.visible(), changed.visibilityVersion())) {
+            return MessageHandling.DEFER;
         }
+        return MessageHandling.DONE;
     }
 
     /** catalog 상품 이벤트는 상품 id 를 봉투의 aggregateId 로만 싣는다. */

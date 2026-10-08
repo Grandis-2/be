@@ -32,6 +32,9 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -93,9 +96,9 @@ class SqsMessagingTest {
         fixtures = new ShopFixtures(jdbcTemplate);
         doAnswer(invocation -> {
             threads.put(invocation.getArgument(0), Thread.currentThread().getName());
-            invocation.callRealMethod();
+            Object handling = invocation.callRealMethod();
             handled.merge(invocation.getArgument(0), 1, Integer::sum);
-            return null;
+            return handling;
         }).when(dispatcher).dispatch(anyString());
         doAnswer(invocation -> {
             threads.put(invocation.<IncomingDeadLetter>getArgument(0).body(), Thread.currentThread().getName());
@@ -189,6 +192,35 @@ class SqsMessagingTest {
         assertThat(threads.get(poison)).isEqualTo("preorder-events-dlq-0");
     }
 
+    /**
+     * 등록보다 먼저 온 공개 여부 변경은 실패가 아니라 보류다. 재수신 한도를 넘겨 받아도 DLQ 로 가지 않고, 회차가 생기면 반영된다.
+     */
+    @Test
+    void 회차보다_먼저_온_공개_여부_변경은_DLQ_로_가지_않고_늦춰_다시_받다가_회차가_생기면_반영된다() {
+        UUID productId = fixtures.product("PREORDER", "ACTIVE");
+        String changed = """
+                {"eventId":"%s","eventType":"PREORDER_PRODUCT_CHANGED","aggregateType":"PRODUCT",
+                 "aggregateId":"%s","occurredAt":"2026-10-08T01:00:00Z",
+                 "payload":{"visible":false,"visibilityVersion":1}}
+                """.formatted(ShopFixtures.unique(), productId);
+
+        queues.send("preorder-events", changed);
+        await().alias("재수신 한도보다 많이 받는다 — 보류한 사본은 받은 횟수가 새로 시작한다")
+                .atMost(Duration.ofSeconds(30))
+                .until(() -> dispatchCount(changed) > FlociTestContainer.MAX_RECEIVE_COUNT);
+        Instant opensAt = Instant.now().plus(Duration.ofDays(1));
+        jdbcTemplate.update("""
+                INSERT INTO preorder_campaigns (product_id, opens_at, closes_at, created_at, updated_at)
+                VALUES (?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """, UuidBinary.toBytes(productId), utc(opensAt), utc(opensAt.plus(Duration.ofDays(1))));
+
+        await().atMost(TIMEOUT).until(() -> "0|1".equals(jdbcTemplate.queryForObject(
+                "SELECT CONCAT_WS('|', visible, visibility_version) FROM preorder_campaigns WHERE product_id = ?",
+                String.class, (Object) UuidBinary.toBytes(productId))));
+        assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_dead_letter_events WHERE body = ?", changed))
+                .as("DLQ 로 가지 않았다").isZero();
+    }
+
     /** 빈 큐의 롱 폴링은 대기 시간만큼 걸린다. 클라이언트 기본 제한 시간에 걸려 받기가 실패하면 안 된다. */
     @Test
     @ExtendWith(OutputCaptureExtension.class)
@@ -230,6 +262,11 @@ class SqsMessagingTest {
                 .filter(invocation -> invocation.getMethod().getName().equals("dispatch"))
                 .filter(invocation -> body.equals(invocation.getArgument(0)))
                 .count();
+    }
+
+    /** DB 는 UTC 벽시계 시각을 담는다. */
+    private static LocalDateTime utc(Instant instant) {
+        return LocalDateTime.ofInstant(instant, ZoneOffset.UTC);
     }
 
     private String status(UUID preorderId) {

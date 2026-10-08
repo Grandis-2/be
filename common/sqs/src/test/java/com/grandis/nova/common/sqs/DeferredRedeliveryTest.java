@@ -1,6 +1,5 @@
-package com.grandis.nova.order.event;
+package com.grandis.nova.common.sqs;
 
-import com.grandis.nova.common.sqs.SqsQueueUrls;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -26,6 +25,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 /** 지연 재발행의 수치(에픽 U7: 60s → 최대 900s 두 배씩, 24h 뒤 경보 한 번 — 포기하지 않는다)와 이어 받는 속성. SQS 프로토콜은 SqsMessagingTest(Floci)가 본다. */
@@ -33,7 +33,7 @@ import static org.mockito.Mockito.verify;
 class DeferredRedeliveryTest {
 
     static final Instant NOW = Instant.parse("2026-10-04T03:00:00Z");
-    static final String QUEUE_URL = "http://floci/000000000000/order-events";
+    static final String QUEUE_URL = "http://floci/000000000000/test-events";
     static final DeferredRedelivery.Settings DEFAULTS =
             new DeferredRedelivery.Settings(Duration.ofSeconds(60), Duration.ofMinutes(15), Duration.ofHours(24));
 
@@ -44,8 +44,8 @@ class DeferredRedeliveryTest {
     void setUp() {
         sqs = mock(SqsClient.class);
         SqsQueueUrls queueUrls = mock(SqsQueueUrls.class);
-        given(queueUrls.of("order-events")).willReturn(QUEUE_URL);
-        redelivery = new DeferredRedelivery(sqs, queueUrls, "order-events", DEFAULTS, Clock.fixed(NOW, ZoneOffset.UTC));
+        given(queueUrls.of("test-events")).willReturn(QUEUE_URL);
+        redelivery = new DeferredRedelivery(sqs, queueUrls, "test-events", DEFAULTS, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     @Test
@@ -80,7 +80,7 @@ class DeferredRedeliveryTest {
 
         assertThat(sent.delaySeconds()).isEqualTo(900);
         assertThat(sent.messageAttributes().get("deferAlerted").stringValue()).isEqualTo("true");
-        assertThat(output.getAll()).containsOnlyOnce("예약 취소 보류가 길어진다 — 사람 확인 필요");
+        assertThat(output.getAll()).containsOnlyOnce("메시지 보류가 길어진다 — 사람 확인 필요");
     }
 
     @Test
@@ -91,7 +91,7 @@ class DeferredRedeliveryTest {
         SendMessageRequest sent = redeliver(message(attributes));
 
         assertThat(sent.messageAttributes().get("deferAlerted").stringValue()).isEqualTo("true");
-        assertThat(output.getAll()).doesNotContain("예약 취소 보류가 길어진다");
+        assertThat(output.getAll()).doesNotContain("메시지 보류가 길어진다");
     }
 
     // 권한 · 큐 설정 오류가 첫 건에서 보이게 ERROR 로 올리고, 원본을 다시 받도록 예외를 던진다
@@ -145,5 +145,21 @@ class DeferredRedeliveryTest {
 
     private static MessageAttributeValue text(String value) {
         return MessageAttributeValue.builder().dataType("String").stringValue(value).build();
+    }
+
+    @Test
+    void 처리기는_DEFER_면_늦춰_다시_보내고_DONE_이면_보내지_않으며_예외는_그대로_올린다() {
+        Message message = Message.builder().messageId("m-1").body("{}").build();
+
+        redelivery.handler(received -> MessageHandling.DONE).handle(message);
+        verify(sqs, never()).sendMessage(any(Consumer.class));
+
+        redelivery.handler(received -> MessageHandling.DEFER).handle(message);
+        verify(sqs).sendMessage(any(Consumer.class));
+
+        assertThatThrownBy(() -> redelivery.handler(received -> {
+            throw new IllegalArgumentException("깨진 본문");
+        }).handle(message)).isInstanceOf(IllegalArgumentException.class);
+        verify(sqs).sendMessage(any(Consumer.class));
     }
 }
