@@ -17,6 +17,8 @@ dependencies {
     // 환불 요청(ORDER_REFUND_REQUESTED)을 payment-events 큐에서 받는다(NV-103). 봉투 모양은 common:message 와 한 벌이다.
     implementation project(':common:message')
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    // 헬스 체크(관리 포트의 /actuator/health/readiness). 관리 포트 · 노출 범위는 PaymentDefaults 에 있다
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     // 토스 결제 API 는 HTTP Interface(@HttpExchange) + RestClient 로 부른다(NV-98).
     implementation 'org.springframework.boot:spring-boot-starter-restclient'
