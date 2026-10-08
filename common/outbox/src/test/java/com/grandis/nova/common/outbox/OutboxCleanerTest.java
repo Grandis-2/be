@@ -140,10 +140,12 @@ class OutboxCleanerTest {
         cleaner.stop();
         cleaner.start();
         release.countDown();
-        // 꽉 찬 묶음을 돌려받은 이전 실행이 되살아났다면 곧바로 다음 묶음을 부른다
-        await().pollDelay(Duration.ofMillis(300)).until(() -> true);
+        // 꽉 찬 묶음을 돌려받은 이전 실행이 되살아났다면 곧바로 다음 묶음을 부른다. 그 스레드가 끝난 뒤에 센다
+        Thread previous = previousRun.get();
+        previous.join(Duration.ofSeconds(10));
         cleaner.stop();
 
+        assertThat(previous.isAlive()).as("이전 실행 스레드가 끝났다").isFalse();
         assertThat(callsByPreviousRun.get()).isZero();
     }
 
@@ -172,18 +174,38 @@ class OutboxCleanerTest {
     }
 
     @Test
-    void 다시_시작해도_실행기는_하나이고_멈춘_뒤_다시_시작할_수_있다() {
-        OutboxCleaner cleaner = cleaner(store, 1000);
+    void 다시_시작해도_정리는_하나만_돌고_멈춘_뒤_다시_시작할_수_있다() {
+        OutboxStore counting = mock(OutboxStore.class);
+        AtomicInteger calls = new AtomicInteger();
+        AtomicInteger running = new AtomicInteger();
+        AtomicInteger maxRunning = new AtomicInteger();
+        given(counting.deletePublishedBefore(any(), anyInt())).willAnswer(invocation -> {
+            calls.incrementAndGet();
+            maxRunning.accumulateAndGet(running.incrementAndGet(), Math::max);
+            Thread.sleep(20);
+            running.decrementAndGet();
+            return 0;
+        });
+        OutboxCleaner cleaner = cleaner(counting, 1000, Duration.ofMillis(1));
 
         cleaner.start();
         cleaner.start();
-        assertThat(cleaner.isRunning()).isTrue();
-        cleaner.stop();
+        try {
+            // 실행기가 둘이면 겹치는 정리가 생길 만큼 여러 번 돌 때까지 기다린다
+            await().atMost(Duration.ofSeconds(5)).until(() -> calls.get() >= 5);
+        } finally {
+            cleaner.stop();
+        }
+        assertThat(maxRunning.get()).isEqualTo(1);
         assertThat(cleaner.isRunning()).isFalse();
 
+        int before = calls.get();
         cleaner.start();
-        assertThat(cleaner.isRunning()).isTrue();
-        cleaner.stop();
+        try {
+            await().atMost(Duration.ofSeconds(5)).until(() -> calls.get() > before);
+        } finally {
+            cleaner.stop();
+        }
         assertThat(cleaner.isRunning()).isFalse();
     }
 
@@ -201,11 +223,13 @@ class OutboxCleanerTest {
         cleaner.start();
         assertThat(deleting.await(5, TimeUnit.SECONDS)).isTrue();
 
-        CompletableFuture<Void> stopped = CompletableFuture.runAsync(cleaner::stop);
-        // 멈춤 요청이 들어간 뒤 지우던 묶음을 끝낸다 — 꽉 찬 묶음이라도 다음 묶음은 시작하지 않아야 한다
-        await().pollDelay(Duration.ofMillis(200)).until(() -> true);
+        Thread stopping = Thread.ofPlatform().start(cleaner::stop);
+        // 멈춤 표시를 켜고 종료를 기다리기 시작한 뒤 지우던 묶음을 끝낸다 — 꽉 찬 묶음이라도 다음 묶음은 시작하지 않아야 한다
+        await().atMost(Duration.ofSeconds(5)).until(() -> stopping.getState() == Thread.State.TIMED_WAITING);
         release.countDown();
-        stopped.get(10, TimeUnit.SECONDS);
+        stopping.join(Duration.ofSeconds(10));
+
+        assertThat(stopping.isAlive()).as("stop() 이 돌아왔다").isFalse();
 
         verify(slow, times(1)).deletePublishedBefore(any(), anyInt());
         assertThat(cleaned.get()).isEqualTo(2);
