@@ -42,4 +42,15 @@ class OutboxPropertiesTest {
         assertThatThrownBy(() -> new OutboxProperties(32, MINUTE, 100, MINUTE, MINUTE, "outbox", WEEK, HOUR, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void 주기는_밀리초로_예약하므로_1ms_미만은_거절한다() {
+        Duration underMillisecond = Duration.ofNanos(500_000);
+        assertThatThrownBy(() -> new OutboxProperties(32, MINUTE, 100, MINUTE, underMillisecond,
+                "outbox", WEEK, HOUR, 1000))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new OutboxProperties(32, MINUTE, 100, MINUTE, MINUTE,
+                "outbox", WEEK, underMillisecond, 1000))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }
