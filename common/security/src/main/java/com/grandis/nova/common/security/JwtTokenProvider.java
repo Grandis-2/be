@@ -66,6 +66,8 @@ public class JwtTokenProvider {
     /**
      * 만료 시각을 지정해 만든다. 리프레시 회전용이다. 회전은 원 토큰의 만료를 그대로 넘겨 부르므로 절대 만료가 늘지 않는 것은
      * 호출자(TokenService)가 지킨다. 이 클래스는 지정한 만료가 이미 지났는지만 본다 — 만료된 세션은 다시 로그인해야 한다.
+     *
+     * @throws IllegalStateException 발급 서비스가 아니다(개인키가 없는 검증 전용 서비스)
      */
     public String create(String subject, Role role, UUID sessionId, TokenType type, Instant expiresAt) {
         requireIssuer();
