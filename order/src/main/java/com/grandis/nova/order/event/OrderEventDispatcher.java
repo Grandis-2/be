@@ -1,6 +1,8 @@
 package com.grandis.nova.order.event;
 
 import com.grandis.nova.common.message.EventEnvelope;
+import com.grandis.nova.common.sqs.DeferredRedelivery;
+import com.grandis.nova.common.sqs.MessageHandling;
 import com.grandis.nova.order.order.cancel.CancelSettlement;
 import com.grandis.nova.order.order.cancel.RefundResults;
 import com.grandis.nova.order.order.cancel.SettlePreorderCancelService;
@@ -19,7 +21,7 @@ import java.util.UUID;
  * 받은 메시지를 이벤트 종류별 처리로 보낸다. 큐 소비기(common:sqs)는 본문을 그대로 여기에 넘긴다.
  *
  * 모르는 종류 · 깨진 본문 · 계약에 맞지 않는 값은 예외로 올린다. 건너뛰지 않는다 — 소비기는 메시지를 지우지 않고,
- * 재수신 한도를 넘으면 DLQ 로 간다. 지금 결과를 정할 수 없는 예약 취소만 {@link Handling#DEFER} 로 알린다 —
+ * 재수신 한도를 넘으면 DLQ 로 간다. 지금 결과를 정할 수 없는 예약 취소만 {@link MessageHandling#DEFER} 로 알린다 —
  * 소비기가 늦춰 다시 받는다({@link DeferredRedelivery}).
  *
  * 재고 초기화(catalog 등록 이벤트)에는 관리자 인증이 없다. /api/v1/admin/** 보안 규칙을 거치지 않고 order-events 에 쓸 수 있는
@@ -55,36 +57,28 @@ public class OrderEventDispatcher {
     }
 
     /** @throws IllegalArgumentException 받지 않는 이벤트 종류 · aggregate · 계약에 맞지 않는 payload */
-    public Handling dispatch(String body) {
+    public MessageHandling dispatch(String body) {
         EventEnvelope envelope = jsonMapper.readValue(body, EventEnvelope.class);
         return switch (InboundEventType.valueOf(envelope.eventType())) {
             case PREORDER_CANCEL_REQUESTED -> cancelSettlement.settle(
                     jsonMapper.treeToValue(envelope.payload(), PreorderCancelRequested.class)
                             .toCancel(aggregateId(envelope, PREORDER_AGGREGATE))) instanceof CancelSettlement.Deferred
-                    ? Handling.DEFER : Handling.DONE;
+                    ? MessageHandling.DEFER : MessageHandling.DONE;
             case ORDER_PAYMENT_SETTLED -> {
                 paymentResults.settle(jsonMapper.treeToValue(envelope.payload(), OrderPaymentSettled.class)
                         .toSettlement(aggregateId(envelope, ORDER_AGGREGATE)));
-                yield Handling.DONE;
+                yield MessageHandling.DONE;
             }
             case ORDER_REFUND_SETTLED -> {
                 refundResults.settle(jsonMapper.treeToValue(envelope.payload(), OrderRefundSettled.class)
                         .toSettlement(aggregateId(envelope, ORDER_AGGREGATE)));
-                yield Handling.DONE;
+                yield MessageHandling.DONE;
             }
             case IN_STOCK_PRODUCT_REGISTERED -> {
                 stockService.initialize(aggregateId(envelope, PRODUCT_AGGREGATE), stockSettings(envelope));
-                yield Handling.DONE;
+                yield MessageHandling.DONE;
             }
         };
-    }
-
-    /** 처리 결과. 실패는 예외로 올린다. */
-    public enum Handling {
-        /** 처리했다 — 메시지를 지운다. */
-        DONE,
-        /** 지금은 결과를 정할 수 없다 — 늦춰 다시 받는다. */
-        DEFER
     }
 
     /** 대상은 봉투의 aggregateId 로 찾는다. 다른 aggregate 의 id 로 엉뚱한 대상을 바꾸지 않게 종류를 확인한다. */

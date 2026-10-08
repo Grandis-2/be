@@ -1,6 +1,5 @@
-package com.grandis.nova.order.event;
+package com.grandis.nova.common.sqs;
 
-import com.grandis.nova.common.sqs.SqsQueueUrls;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.services.sqs.SqsClient;
@@ -14,18 +13,18 @@ import java.time.format.DateTimeParseException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
- * 지금 결과를 정할 수 없는 메시지(승인 결과 대기 · 환불 진행 중 · 환불 실패로 사람을 기다리는 예약 취소)를 늦춰 다시 받는다(에픽 D4 · B2).
+ * 지금 결과를 정할 수 없는 메시지(다른 서비스의 결과 · 앞선 이벤트를 기다리는 것)를 늦춰 다시 받는다.
  * 같은 본문을 같은 큐에 DelaySeconds 로 다시 보내고, 원본은 소비기가 정상 반환으로 지운다 — 실패로 늦추면 재수신 횟수가 쌓여 몇 분 만에
- * DLQ 로 가지만, 새로 보낸 메시지는 횟수가 새로 시작한다.
+ * DLQ 로 가지만, 새로 보낸 메시지는 횟수가 새로 시작한다. 받은 메시지 속성은 그대로 이어 보낸다.
  *
- * 포기하지 않는다. preorder 에 정리 결과를 돌려줄 재료는 이 메시지 하나뿐이라(order 는 취소 시도 순번을 저장하지 않는다), 버리면 환불이
- * 늦게 끝나거나 사람이 해소해도 예약이 취소 중에 남는다. 지연은 보류할 때마다 두 배(첫 지연부터 최대 지연까지, SQS 상한 15분)이고,
- * 처음 보류한 뒤 경보 기준이 지나면 ERROR 를 한 번만 남긴다(속성으로 이어 받는다).
+ * 포기하지 않는다. 지연은 보류할 때마다 두 배(첫 지연부터 최대 지연까지, SQS 상한 15분)이고,
+ * 처음 보류한 뒤 경보 기준이 지나면 ERROR 를 한 번만 남긴다(속성으로 이어 받는다). 끝내 풀리지 않는 메시지는 사람이 본다.
  *
  * 다시 보내기가 실패하면 ERROR 로 올리고 예외를 던진다 — 원본이 지워지지 않아 다시 받는다(권한 · 큐 설정 오류가 첫 건에서 보이게).
- * 다시 보낸 뒤 원본을 지우지 못하면 사본이 하나 더 돈다. 받는 쪽 처리가 멱등이라 무해하다.
+ * 다시 보낸 뒤 원본을 지우지 못하면 사본이 하나 더 돈다. 받는 쪽 처리는 멱등이어야 한다.
  */
 public class DeferredRedelivery {
 
@@ -52,6 +51,18 @@ public class DeferredRedelivery {
         this.clock = clock;
     }
 
+    /**
+     * 처리 함수를 소비기용 처리기로 감싼다. {@link MessageHandling#DEFER} 를 돌려주면 늦춰 다시 보내고, 원본은 소비기가 지운다.
+     * 처리 함수가 던지면 그대로 올린다(소비기가 늦춰 다시 받다가 한도를 넘으면 DLQ).
+     */
+    public QueueMessageHandler handler(Function<Message, MessageHandling> handling) {
+        return message -> {
+            if (handling.apply(message) == MessageHandling.DEFER) {
+                redeliver(message);
+            }
+        };
+    }
+
     /** @throws RuntimeException 다시 보내지 못했다(원본은 남는다) */
     public void redeliver(Message message) {
         Map<String, MessageAttributeValue> attributes = message.messageAttributes();
@@ -60,7 +71,7 @@ public class DeferredRedelivery {
         Instant firstDeferredAt = firstDeferredAtOf(attributes, now);
         Map<String, MessageAttributeValue> carried = new HashMap<>(attributes);
         if (!now.isBefore(firstDeferredAt.plus(settings.alertAfter())) && !attributes.containsKey(ALERTED)) {
-            log.error("예약 취소 보류가 길어진다 — 사람 확인 필요(계속 늦춰 다시 받는다) queue={} messageId={} firstDeferredAt={} "
+            log.error("메시지 보류가 길어진다 — 사람 확인 필요(계속 늦춰 다시 받는다) queue={} messageId={} firstDeferredAt={} "
                     + "deferCount={}", queue, message.messageId(), firstDeferredAt, deferCount);
             carried.put(ALERTED, text("true"));
         }

@@ -1,5 +1,6 @@
 package com.grandis.nova.order.event;
 
+import com.grandis.nova.common.sqs.DeferredRedelivery;
 import com.grandis.nova.common.sqs.RetryingQueueConsumer;
 import com.grandis.nova.common.sqs.SqsQueueUrls;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -26,10 +27,6 @@ class OrderEventConsumerConfig {
         DeferredRedelivery redelivery = new DeferredRedelivery(sqs, queueUrls, properties.queue(),
                 properties.toDeferSettings(), clock);
         return new RetryingQueueConsumer(sqs, queueUrls, properties.toSettings(), DeferredRedelivery.ATTRIBUTES,
-                message -> {
-                    if (dispatcher.dispatch(message.body()) == OrderEventDispatcher.Handling.DEFER) {
-                        redelivery.redeliver(message);
-                    }
-                });
+                redelivery.handler(message -> dispatcher.dispatch(message.body())));
     }
 }
