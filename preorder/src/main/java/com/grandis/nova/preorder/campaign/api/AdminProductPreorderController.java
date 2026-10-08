@@ -25,7 +25,7 @@ import java.util.UUID;
  */
 @Tag(name = "관리자 · 모집 일정")
 @RestController
-@RequestMapping("/api/v1/admin/products/{productId}")
+@RequestMapping("/api/v1/admin/preorders/products/{productId}")
 class AdminProductPreorderController {
 
     private final PreorderCampaignAdminService campaignService;
@@ -37,14 +37,14 @@ class AdminProductPreorderController {
     }
 
     @Operation(summary = "모집 일정 조회")
-    @GetMapping("/preorder-campaign")
+    @GetMapping("/campaign")
     public ApiResponse<PreorderCampaignResponse> getCampaign(@PathVariable UUID productId) {
         return ApiResponse.ok(PreorderCampaignResponse.from(campaignService.findCampaign(productId), clock.instant()));
     }
 
     /** 없으면 만들고 있으면 바꾼다. 오픈 뒤에는 409. */
     @Operation(summary = "모집 일정 생성 · 변경(오픈 뒤 409)")
-    @PutMapping("/preorder-campaign")
+    @PutMapping("/campaign")
     public ApiResponse<PreorderCampaignResponse> putCampaign(@PathVariable UUID productId,
                                                              @Valid @RequestBody PreorderCampaignRequest request) {
         return ApiResponse.ok(PreorderCampaignResponse.from(

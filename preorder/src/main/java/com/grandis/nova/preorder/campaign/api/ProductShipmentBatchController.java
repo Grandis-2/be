@@ -21,7 +21,7 @@ import java.util.UUID;
  */
 @Tag(name = "배송 차수")
 @RestController
-@RequestMapping("/api/v1/products/{productId}/shipment-batches")
+@RequestMapping("/api/v1/preorders/products/{productId}/shipment-batches")
 class ProductShipmentBatchController {
 
     private final ShipmentBatchQueryService queryService;

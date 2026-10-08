@@ -91,7 +91,7 @@ class AdminProductPreorderApiTest {
         putCampaign(product.productId(), later, later.plusSeconds(3600))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("PRODUCT_ALREADY_OPEN"));
-        mockMvc.perform(put("/api/v1/admin/products/{id}/shipment-batches", product.productId())
+        mockMvc.perform(put("/api/v1/admin/preorders/products/{id}/shipment-batches", product.productId())
                         .contentType(MediaType.APPLICATION_JSON).content(THREE_BATCHES)
                         .with(admin()))
                 .andExpect(status().isConflict())
@@ -135,7 +135,7 @@ class AdminProductPreorderApiTest {
         Instant opensAt = Instant.now().plusSeconds(3600);
         putCampaign(productId, opensAt, opensAt.plusSeconds(3600)).andExpect(status().isOk());
 
-        mockMvc.perform(put("/api/v1/admin/products/{id}/shipment-batches", productId)
+        mockMvc.perform(put("/api/v1/admin/preorders/products/{id}/shipment-batches", productId)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"batches\":[null]}")
                         .with(admin()))
                 .andExpect(status().isBadRequest())
@@ -168,7 +168,7 @@ class AdminProductPreorderApiTest {
         putCampaign(missing, opensAt, opensAt.plusSeconds(60))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
-        mockMvc.perform(get("/api/v1/admin/products/{id}/preorder-campaign", inStock)
+        mockMvc.perform(get("/api/v1/admin/preorders/products/{id}/campaign", inStock)
                         .with(admin()))
                 .andExpect(status().isNotFound());
     }
@@ -179,14 +179,14 @@ class AdminProductPreorderApiTest {
         Instant opensAt = Instant.now().plusSeconds(3600);
         putCampaign(productId, opensAt, opensAt.plusSeconds(3600)).andExpect(status().isOk());
 
-        mockMvc.perform(put("/api/v1/admin/products/{id}/shipment-batches", productId)
+        mockMvc.perform(put("/api/v1/admin/preorders/products/{id}/shipment-batches", productId)
                         .contentType(MediaType.APPLICATION_JSON).content(THREE_BATCHES)
                         .with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items", hasSize(3)))
                 .andExpect(jsonPath("$.data.items[2].positionTo").doesNotExist());
 
-        mockMvc.perform(put("/api/v1/admin/products/{id}/shipment-batches", productId)
+        mockMvc.perform(put("/api/v1/admin/preorders/products/{id}/shipment-batches", productId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"batches":[{"batchNumber":1,"positionFrom":1,"positionTo":null,
@@ -194,7 +194,7 @@ class AdminProductPreorderApiTest {
                         .with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items", hasSize(1)));
-        mockMvc.perform(get("/api/v1/admin/products/{id}/shipment-batches", productId)
+        mockMvc.perform(get("/api/v1/admin/preorders/products/{id}/shipment-batches", productId)
                         .with(admin()))
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.items[0].batchNumber").value(1));
@@ -208,7 +208,7 @@ class AdminProductPreorderApiTest {
         Instant opensAt = Instant.now().plusSeconds(3600);
         putCampaign(productId, opensAt, opensAt.plusSeconds(3600)).andExpect(status().isOk());
 
-        mockMvc.perform(put("/api/v1/admin/products/{id}/shipment-batches", productId)
+        mockMvc.perform(put("/api/v1/admin/preorders/products/{id}/shipment-batches", productId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"batches":[
@@ -228,7 +228,7 @@ class AdminProductPreorderApiTest {
     void 회차가_없으면_차수를_설정할_수_없다() throws Exception {
         UUID productId = preorderProduct();
 
-        mockMvc.perform(put("/api/v1/admin/products/{id}/shipment-batches", productId)
+        mockMvc.perform(put("/api/v1/admin/preorders/products/{id}/shipment-batches", productId)
                         .contentType(MediaType.APPLICATION_JSON).content(THREE_BATCHES)
                         .with(admin()))
                 .andExpect(status().isNotFound())
@@ -271,10 +271,10 @@ class AdminProductPreorderApiTest {
     void 사용자_토큰은_403_로그인_없으면_401() throws Exception {
         UUID productId = preorderProduct();
 
-        mockMvc.perform(get("/api/v1/admin/products/{id}/preorder-campaign", productId)
+        mockMvc.perform(get("/api/v1/admin/preorders/products/{id}/campaign", productId)
                         .with(customer(UUID.randomUUID())))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(get("/api/v1/admin/products/{id}/preorder-campaign", productId))
+        mockMvc.perform(get("/api/v1/admin/preorders/products/{id}/campaign", productId))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -291,7 +291,7 @@ class AdminProductPreorderApiTest {
     }
 
     private ResultActions putCampaign(UUID productId, Instant opensAt, Instant closesAt) throws Exception {
-        return mockMvc.perform(put("/api/v1/admin/products/{id}/preorder-campaign", productId)
+        return mockMvc.perform(put("/api/v1/admin/preorders/products/{id}/campaign", productId)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"opensAt\":\"%s\",\"closesAt\":\"%s\"}".formatted(opensAt, closesAt))
                 .with(admin()));
