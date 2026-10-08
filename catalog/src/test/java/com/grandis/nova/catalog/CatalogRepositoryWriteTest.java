@@ -9,6 +9,7 @@ import com.grandis.nova.catalog.product.ProductRepository;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
+import com.grandis.nova.common.UuidBinary;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -17,6 +18,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -43,7 +45,7 @@ class CatalogRepositoryWriteTest {
     @DisplayName("같은 멱등 키로 상품을 두 번 저장하면 DB 가 거절하고 처음 상품이 남는다")
     void secondProductWithSameIdempotencyKeyIsRejected() {
         String key = ShopFixtures.unique();
-        Long categoryId = fixtures.category();
+        UUID categoryId = fixtures.category();
         Product first = products.saveAndFlush(Product.register(key, categoryId, SaleMode.PREORDER, "First",
                 BigDecimal.ONE, null, null, false, false, BigDecimal.ZERO, ProductOptions.EMPTY));
 
@@ -59,7 +61,7 @@ class CatalogRepositoryWriteTest {
     @Test
     @DisplayName("축이 없는 상품의 옵션은 두 번째 저장을 DB 가 거절한다 — 조회 뒤 INSERT 경합에 기대지 않는다")
     void secondStandaloneOptionIsRejected() {
-        Long productId = fixtures.product("IN_STOCK", "ACTIVE");
+        UUID productId = fixtures.product("IN_STOCK", "ACTIVE");
         options.saveAndFlush(ProductOption.of("ONLY-1", new BigDecimal("1000"), OptionCombination.none(productId, "Nova 1")));
         assertThatThrownBy(() -> options.saveAndFlush(
                 ProductOption.of("ONLY-2", new BigDecimal("1000"), OptionCombination.none(productId, "Nova 1"))))
@@ -67,7 +69,7 @@ class CatalogRepositoryWriteTest {
         // catalog 밖에서 키 없이 넣은 행은 계속 여럿이어도 된다
         fixtures.option(productId, "ACTIVE");
         fixtures.option(productId, "ACTIVE");
-        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM product_options WHERE product_id = ?", Long.class, productId))
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM product_options WHERE product_id = ?", Long.class, UuidBinary.toBytes(productId)))
                 .isEqualTo(3L);
     }
 }

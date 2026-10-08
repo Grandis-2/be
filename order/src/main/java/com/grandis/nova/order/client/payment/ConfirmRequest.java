@@ -3,6 +3,7 @@ package com.grandis.nova.order.client.payment;
 import com.grandis.nova.order.order.domain.model.Order;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
 /**
  * payment ConfirmRequest 와 같은 모양. 대상 · 금액은 주문에서 읽는다 — 금액(BigDecimal)을 따로 받지 않는 것이 구조적 가드다(D15):
@@ -13,7 +14,7 @@ import java.math.BigDecimal;
  * @param startAllowed false 면 payment 는 아직 시작하지 않은 결제창을 시작하지 않고 지금 결과만 돌려준다
  * @param reserve      결제창 확인(시작 금지)과 함께 아직 시작 전인 결제창을 확보한다 — 승인 중으로 바꾸기 직전의 확인에서만
  */
-public record ConfirmRequest(String targetType, Long targetId, String paymentKey, BigDecimal amount,
+public record ConfirmRequest(String targetType, UUID targetId, String paymentKey, BigDecimal amount,
                              boolean startAllowed, boolean reserve) {
 
     public static ConfirmRequest of(Order order, String paymentKey, boolean startAllowed) {

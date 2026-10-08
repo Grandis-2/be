@@ -15,12 +15,12 @@ import software.amazon.awssdk.services.sqs.model.MessageAttributeValue;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.mock;
@@ -35,6 +35,7 @@ import static org.mockito.Mockito.verify;
 class QueueConsumersTest {
 
     static final String QUEUE_URL = "http://queue";
+    static final UUID DEAD_LETTER_ID = UUID.fromString("00000000-0000-7000-8000-000000000007");
 
     final SqsClient sqs = mock(SqsClient.class);
     final DeadLetters deadLetters = mock(DeadLetters.class);
@@ -56,7 +57,7 @@ class QueueConsumersTest {
     void DLQ_적재가_예외면_지우지_않는다_가시성_시간_뒤_다시_받는다() {
         given(deadLetters.record(any())).willThrow(new IllegalStateException("UNIQUE 충돌 또는 DB 장애"));
 
-        deadLetterConsumer.handle(QUEUE_URL, message("7"));
+        deadLetterConsumer.handle(QUEUE_URL, message(DEAD_LETTER_ID.toString()));
 
         verify(sqs, never()).deleteMessage(anyDelete());
     }
@@ -76,51 +77,53 @@ class QueueConsumersTest {
     void DLQ_메시지의_원래_큐와_앞선_DLQ_행_id_를_적는다() {
         given(deadLetters.record(any())).willReturn(true);
 
-        deadLetterConsumer.handle(QUEUE_URL, message("7"));
+        deadLetterConsumer.handle(QUEUE_URL, message(DEAD_LETTER_ID.toString()));
 
         ArgumentCaptor<IncomingDeadLetter> recorded = ArgumentCaptor.forClass(IncomingDeadLetter.class);
         verify(deadLetters).record(recorded.capture());
         assertThat(recorded.getValue().sourceQueue()).isEqualTo("preorder-events");
-        assertThat(recorded.getValue().redrivenFromId()).isEqualTo(7L);
+        assertThat(recorded.getValue().redrivenFromId()).isEqualTo(DEAD_LETTER_ID);
     }
 
     @Test
     void 되돌린_메시지의_결과를_남기지_못하면_던져_지우지_않고_다시_받게_한다() {
-        willThrow(new IllegalStateException("DB 장애")).given(deadLetters).markRedriveSucceeded(7L);
+        willThrow(new IllegalStateException("DB 장애")).given(deadLetters).markRedriveSucceeded(DEAD_LETTER_ID);
 
-        assertThatThrownBy(() -> eventHandler.handle(message("7"))).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> eventHandler.handle(message(DEAD_LETTER_ID.toString())))
+                .isInstanceOf(IllegalStateException.class);
         verify(dispatcher).dispatch("{}");
     }
 
     @Test
     void 되돌린_메시지를_처리하면_결과를_남긴다() {
-        eventHandler.handle(message("7"));
+        eventHandler.handle(message(DEAD_LETTER_ID.toString()));
 
-        verify(deadLetters).markRedriveSucceeded(7L);
+        verify(deadLetters).markRedriveSucceeded(DEAD_LETTER_ID);
     }
 
     @Test
     void 처리가_실패하면_되돌리기_결과를_남기지_않는다() {
         willThrow(new IllegalStateException("처리 실패")).given(dispatcher).dispatch("{}");
 
-        assertThatThrownBy(() -> eventHandler.handle(message("7"))).isInstanceOf(IllegalStateException.class);
-        verify(deadLetters, never()).markRedriveSucceeded(anyLong());
+        assertThatThrownBy(() -> eventHandler.handle(message(DEAD_LETTER_ID.toString())))
+                .isInstanceOf(IllegalStateException.class);
+        verify(deadLetters, never()).markRedriveSucceeded(any(UUID.class));
     }
 
     @Test
     void 되돌린_메시지가_아니거나_행_id_를_읽을_수_없으면_결과를_남기지_않는다() {
         eventHandler.handle(message(null));
-        eventHandler.handle(message("not-a-number"));
+        eventHandler.handle(message("not-a-uuid"));
 
         verify(dispatcher, times(2)).dispatch("{}");
-        verify(deadLetters, never()).markRedriveSucceeded(anyLong());
+        verify(deadLetters, never()).markRedriveSucceeded(any(UUID.class));
     }
 
     private Message message(String deadLetterId) {
         Message.Builder builder = Message.builder().messageId("m-1").receiptHandle("r-1").body("{}");
         if (deadLetterId != null) {
             builder.messageAttributes(Map.of(DeadLetterRedriver.DEAD_LETTER_ID_ATTRIBUTE,
-                    MessageAttributeValue.builder().dataType("Number").stringValue(deadLetterId).build()));
+                    MessageAttributeValue.builder().dataType("String").stringValue(deadLetterId).build()));
         }
         return builder.build();
     }

@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.accept;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.support.AdmissionTickets;
@@ -25,6 +26,7 @@ import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Map;
+import java.util.UUID;
 
 import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
@@ -56,7 +58,7 @@ class AcceptPreorderApiTest {
     ShopFixtures fixtures;
     PreorderCancels cancels;
     PreorderProduct product;
-    Long customerId;
+    UUID customerId;
 
     @BeforeEach
     void setUp() {
@@ -113,7 +115,8 @@ class AcceptPreorderApiTest {
                 .andExpect(jsonPath("$.data.replayed").value(true));
 
         assertThat(nextQueuePosition()).isEqualTo(2);
-        assertThat(fixtures.count("SELECT COUNT(*) FROM preorders WHERE customer_id = ?", customerId)).isEqualTo(1);
+        assertThat(fixtures.count("SELECT COUNT(*) FROM preorders WHERE customer_id = ?",
+                (Object) UuidBinary.toBytes(customerId))).isEqualTo(1);
     }
 
     @Test
@@ -129,12 +132,13 @@ class AcceptPreorderApiTest {
         accept(customerId, product.productId(), product.optionId(), "key-expired-new", expired)
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("ADMISSION_TICKET_INVALID"));
-        assertThat(fixtures.count("SELECT COUNT(*) FROM preorders WHERE customer_id = ?", customerId)).isEqualTo(1);
+        assertThat(fixtures.count("SELECT COUNT(*) FROM preorders WHERE customer_id = ?",
+                (Object) UuidBinary.toBytes(customerId))).isEqualTo(1);
     }
 
     @Test
     void 같은_키에_다른_옵션이면_422_와_다른_필드를_알린다() throws Exception {
-        Long otherOption = fixtures.option(product.productId(), "ACTIVE");
+        UUID otherOption = fixtures.option(product.productId(), "ACTIVE");
         catalogReturnsTwoOptions(product.productId(), product.optionId(), otherOption);
         String ticket = ticket(product.productId(), customerId);
         accept(customerId, product.productId(), product.optionId(), "key-mismatch", ticket);
@@ -165,7 +169,7 @@ class AcceptPreorderApiTest {
                         .header("Idempotency-Key", "key-no-option")
                         .header("X-Admission-Ticket", ticket(product.productId(), customerId))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"productId\":%d}".formatted(product.productId()))
+                        .content("{\"productId\":\"%s\"}".formatted(product.productId()))
                         .with(customer(customerId)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
@@ -174,7 +178,7 @@ class AcceptPreorderApiTest {
 
     @Test
     void 쿼리와_본문의_상품이_다르면_400() throws Exception {
-        mockMvc.perform(request(customerId, product.productId() + 1, product.productId(), product.optionId(),
+        mockMvc.perform(request(customerId, UUID.randomUUID(), product.productId(), product.optionId(),
                         "key-query-body", ticket(product.productId(), customerId)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
@@ -202,7 +206,8 @@ class AcceptPreorderApiTest {
         accept(customerId, product.productId(), product.optionId(), "k".repeat(65), ticket)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
-        assertThat(fixtures.count("SELECT COUNT(*) FROM preorders WHERE customer_id = ?", customerId)).isZero();
+        assertThat(fixtures.count("SELECT COUNT(*) FROM preorders WHERE customer_id = ?",
+                (Object) UuidBinary.toBytes(customerId))).isZero();
     }
 
     @Test
@@ -211,7 +216,7 @@ class AcceptPreorderApiTest {
                         .header("Idempotency-Key", "key-admin-noreason")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"productId":%d,"optionId":%d,"customerId":%d,"reason":" "}
+                                {"productId":"%s","optionId":"%s","customerId":"%s","reason":" "}
                                 """.formatted(product.productId(), product.optionId(), customerId))
                         .with(admin()))
                 .andExpect(status().isBadRequest())
@@ -236,9 +241,9 @@ class AcceptPreorderApiTest {
 
     @Test
     void 없는_상품_판매_중지_옵션_다른_상품의_옵션은_404() throws Exception {
-        Long missing = fixtures.product("PREORDER", "ACTIVE");
+        UUID missing = fixtures.product("PREORDER", "ACTIVE");
         CatalogStubs.stubNotFound(catalogClient, missing);
-        accept(customerId, missing, 1L, "key-missing", ticket(missing, customerId))
+        accept(customerId, missing, UUID.randomUUID(), "key-missing", ticket(missing, customerId))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
 
@@ -269,7 +274,8 @@ class AcceptPreorderApiTest {
         accept(customerId, other.productId(), other.optionId(), "key-incomplete", ticket(other.productId(), customerId))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
-        assertThat(fixtures.count("SELECT COUNT(*) FROM preorders WHERE customer_id = ?", customerId)).isZero();
+        assertThat(fixtures.count("SELECT COUNT(*) FROM preorders WHERE customer_id = ?",
+                (Object) UuidBinary.toBytes(customerId))).isZero();
     }
 
     @Test
@@ -322,7 +328,7 @@ class AcceptPreorderApiTest {
     @Test
     void 순번이_첫_차수를_넘으면_다음_차수에_배정된다() throws Exception {
         jdbcTemplate.update("UPDATE preorder_campaigns SET next_queue_position = ? WHERE product_id = ?",
-                ShopFixtures.FIRST_BATCH_LAST_POSITION + 1, product.productId());
+                ShopFixtures.FIRST_BATCH_LAST_POSITION + 1, UuidBinary.toBytes(product.productId()));
 
         accept(customerId, product.productId(), product.optionId(), "key-batch-2", ticket(product.productId(), customerId))
                 .andExpect(status().isAccepted())
@@ -364,7 +370,7 @@ class AcceptPreorderApiTest {
 
     @Test
     void 관리자_대신_접수에서_없는_회원이면_404_사용자는_403() throws Exception {
-        mockMvc.perform(adminRequest(Long.MAX_VALUE, "key-admin-0002", "전화 접수"))
+        mockMvc.perform(adminRequest(UUID.randomUUID(), "key-admin-0002", "전화 접수"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("MEMBER_NOT_FOUND"));
         mockMvc.perform(adminRequest(customerId, "key-admin-0003", "전화 접수")
@@ -377,12 +383,12 @@ class AcceptPreorderApiTest {
         return Instant.now().plusSeconds(3 * AdmissionTickets.WINDOW_SECONDS);
     }
 
-    private ResultActions accept(Long customer, Long productId, Long optionId, String key, String ticket)
+    private ResultActions accept(UUID customer, UUID productId, UUID optionId, String key, String ticket)
             throws Exception {
         return mockMvc.perform(request(customer, productId, productId, optionId, key, ticket));
     }
 
-    private MockHttpServletRequestBuilder request(Long customer, Long queryProductId, Long productId, Long optionId,
+    private MockHttpServletRequestBuilder request(UUID customer, UUID queryProductId, UUID productId, UUID optionId,
                                                   String key, String ticket) {
         MockHttpServletRequestBuilder builder = post("/api/v1/preorders")
                 .param("productId", queryProductId.toString())
@@ -393,18 +399,18 @@ class AcceptPreorderApiTest {
         return ticket == null ? builder : builder.header("X-Admission-Ticket", ticket);
     }
 
-    private MockHttpServletRequestBuilder adminRequest(Long customer, String key, String reason) {
+    private MockHttpServletRequestBuilder adminRequest(UUID customer, String key, String reason) {
         return post("/api/v1/admin/preorders")
                 .header("Idempotency-Key", key)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                        {"productId":%d,"optionId":%d,"customerId":%d,"reason":"%s","internalNote":"VIP"}
+                        {"productId":"%s","optionId":"%s","customerId":"%s","reason":"%s","internalNote":"VIP"}
                         """.formatted(product.productId(), product.optionId(), customer, reason))
                 .with(admin());
     }
 
-    private static String json(Long productId, Long optionId) {
-        return "{\"productId\":%d,\"optionId\":%d}".formatted(productId, optionId);
+    private static String json(UUID productId, UUID optionId) {
+        return "{\"productId\":\"%s\",\"optionId\":\"%s\"}".formatted(productId, optionId);
     }
 
     private static String body(ResultActions result) throws Exception {
@@ -412,23 +418,23 @@ class AcceptPreorderApiTest {
         return location.replace("/api/v1/preorders/", "");
     }
 
-    private static String ticket(Long productId, Long customer) {
+    private static String ticket(UUID productId, UUID customer) {
         return AdmissionTickets.issue(productId, customer, Instant.now());
     }
 
-    private void catalogReturns(Long productId, String saleMode, String status, Long optionId, String optionStatus) {
+    private void catalogReturns(UUID productId, String saleMode, String status, UUID optionId, String optionStatus) {
         CatalogStubs.stubProduct(catalogClient, productId, saleMode, status,
                 CatalogStubs.option(optionId, optionStatus));
     }
 
-    private void catalogReturnsTwoOptions(Long productId, Long optionId, Long otherOptionId) {
+    private void catalogReturnsTwoOptions(UUID productId, UUID optionId, UUID otherOptionId) {
         CatalogStubs.stubPreorderProduct(catalogClient, productId,
                 CatalogStubs.activeOption(optionId), CatalogStubs.activeOption(otherOptionId));
     }
 
-    private Long preorderIdOf(String preorderToken) {
+    private UUID preorderIdOf(String preorderToken) {
         return jdbcTemplate.queryForObject("SELECT id FROM preorders WHERE preorder_token = ?",
-                Long.class, preorderToken);
+                (rs, rowNum) -> UuidBinary.fromBytes(rs.getBytes(1)), preorderToken);
     }
 
     private long nextQueuePosition() {

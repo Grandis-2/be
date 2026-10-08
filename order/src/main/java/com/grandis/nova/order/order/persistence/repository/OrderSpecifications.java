@@ -8,6 +8,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 
 import java.util.Objects;
+import java.util.UUID;
 
 /** 목록 조회 조건. 값이 없는 조건은 아무것도 거르지 않는다(Specification.unrestricted). */
 public final class OrderSpecifications {
@@ -28,7 +29,7 @@ public final class OrderSpecifications {
      * 그 회원의 주문만. 다른 조건과 달리 null 을 "조건 없음" 으로 받지 않는다 — 권한 범위를 정하는 조건이라
      * 회원 id 가 빠지면 전 회원의 주문이 나간다. 닫힌 쪽으로 실패한다.
      */
-    public static Specification<OrderJpaEntity> customer(Long customerId) {
+    public static Specification<OrderJpaEntity> customer(UUID customerId) {
         Objects.requireNonNull(customerId, "customerId");
         return (root, query, builder) -> builder.equal(root.get("customerId"), customerId);
     }

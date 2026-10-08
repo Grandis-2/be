@@ -5,6 +5,8 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.service.annotation.GetExchange;
 import org.springframework.web.service.annotation.HttpExchange;
 
+import java.util.UUID;
+
 /**
  * order 내부 API — 리뷰를 쓸 자격 확인. 계약: contracts/order-internal.md.
  * 요청한 사용자의 토큰은 릴레이 인터셉터가 싣는다. order 가 토큰 주인의 주문상품인지 확인한다 — 없거나 남의 것이면 404 ORDER_ITEM_NOT_FOUND.
@@ -14,14 +16,14 @@ import org.springframework.web.service.annotation.HttpExchange;
 public interface OrderClient {
 
     @GetExchange("/{orderItemId}")
-    ApiResponse<OrderItem> getOrderItem(@PathVariable Long orderItemId);
+    ApiResponse<OrderItem> getOrderItem(@PathVariable UUID orderItemId);
 
     /**
      * @param optionTitle 주문 당시 옵션명(order_items.option_title_snapshot)
      * @param orderStatus 주문 상태 이름(DELIVERED 일 때만 리뷰를 쓴다)
      * @param orderSource 주문 경로 이름(PREORDER · BUY_NOW · CART)
      */
-    record OrderItem(Long orderItemId, Long orderId, Long productId, Long optionId, String optionTitle,
+    record OrderItem(UUID orderItemId, UUID orderId, UUID productId, UUID optionId, String optionTitle,
                      String orderStatus, String orderSource) {
     }
 }

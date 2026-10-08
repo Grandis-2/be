@@ -1,5 +1,6 @@
 package com.grandis.nova.member;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.member.support.MemberIntegrationTest;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -14,6 +15,7 @@ import com.grandis.nova.member.customer.Customer;
 import com.grandis.nova.member.customer.CustomerRepository;
 import jakarta.servlet.http.Cookie;
 import java.util.Optional;
+import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -46,18 +48,18 @@ class RefreshDbFailureTest {
     org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     /** 회원 행 하나를 진짜로 만든다. 저장소가 모킹이라 여기서 직접 넣는다. */
-    private long newCustomer() {
-        String kakaoId = "k-" + java.util.UUID.randomUUID();
-        jdbc.update("INSERT INTO customers(kakao_id, display_name, created_at, updated_at) VALUES (?, ?, NOW(6), NOW(6))",
-                kakaoId, "홍길동");
-        return jdbc.queryForObject("SELECT id FROM customers WHERE kakao_id = ?", Long.class, kakaoId);
+    private UUID newCustomer() {
+        UUID id = UUID.randomUUID();
+        jdbc.update("INSERT INTO customers(id, kakao_id, display_name, created_at, updated_at) VALUES (?, ?, ?, NOW(6), NOW(6))",
+                UuidBinary.toBytes(id), "k-" + UUID.randomUUID(), "홍길동");
+        return id;
     }
 
     @Test
     @DisplayName("이름 조회가 첫 재발급에서 던지면 500, 두 번째 재발급은 같은 쿠키로 200 (리프레시가 교체되지 않았다)")
     void dbFailureBeforeRotationKeepsRefreshUsable() throws Exception {
         MockMvc mvc = MockMvcBuilders.webAppContextSetup(context).addFilters(requestIdFilter, springSecurityFilterChain).build();
-        long customerId = newCustomer();
+        UUID customerId = newCustomer();
         TokenService.IssuedTokens issued = tokens.issue(String.valueOf(customerId), Role.USER);
         Cookie refresh = new Cookie(AuthCookies.REFRESH_TOKEN, issued.refreshToken());
         when(customers.findById(customerId))

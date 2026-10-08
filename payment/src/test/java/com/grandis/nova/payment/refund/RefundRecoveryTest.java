@@ -1,5 +1,6 @@
 package com.grandis.nova.payment.refund;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.security.RevocationChecker;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.payment.ClaimedTransaction;
@@ -46,6 +47,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -467,7 +469,7 @@ class RefundRecoveryTest {
     @Test
     void retryIntervalIsCapped() {
         PaymentTransaction refund = claim(refundOpened()).transaction();
-        jdbcTemplate.update("UPDATE payment_transactions SET attempt_count = 40 WHERE id = ?", refund.id());
+        jdbcTemplate.update("UPDATE payment_transactions SET attempt_count = 40 WHERE id = ?", UuidBinary.toBytes(refund.id()));
         PaymentTransaction many = transactions.findById(refund.id()).orElseThrow();
 
         assertThat(RefundRecovery.retryAfter(many)).isEqualTo(RefundRecovery.MAX_RETRY_AFTER);
@@ -587,39 +589,39 @@ class RefundRecoveryTest {
         return jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM payment_outbox_events
                  WHERE aggregate_type = 'ORDER' AND aggregate_id = ? AND event_type = 'ORDER_REFUND_SETTLED'
-                """, Integer.class, target.id());
+                """, Integer.class, UuidBinary.toBytes(target.id()));
     }
 
     private JsonNode settledPayload() {
         List<String> payloads = jdbcTemplate.queryForList("""
                 SELECT payload FROM payment_outbox_events
                  WHERE aggregate_type = 'ORDER' AND aggregate_id = ? AND event_type = 'ORDER_REFUND_SETTLED'
-                """, String.class, target.id());
+                """, String.class, UuidBinary.toBytes(target.id()));
         assertThat(payloads).hasSize(1);
         assertThat(payloads.getFirst()).doesNotContain(paymentKey.value());
         return jsonMapper.readTree(payloads.getFirst());
     }
 
-    private long secondsUntilRetry(Long id) {
+    private long secondsUntilRetry(UUID id) {
         return jdbcTemplate.queryForObject(
                 "SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(6), next_retry_at) FROM payment_transactions WHERE id = ?",
-                Long.class, id);
+                Long.class, UuidBinary.toBytes(id));
     }
 
     // ---- 시각 당기기 ----
 
-    private void expireLease(Long id) {
+    private void expireLease(UUID id) {
         jdbcTemplate.update("UPDATE payment_transactions SET lease_expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND "
-                + "WHERE id = ?", id);
+                + "WHERE id = ?", UuidBinary.toBytes(id));
     }
 
-    private void makeRetryDue(Long id) {
+    private void makeRetryDue(UUID id) {
         jdbcTemplate.update("UPDATE payment_transactions SET next_retry_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND "
-                + "WHERE id = ?", id);
+                + "WHERE id = ?", UuidBinary.toBytes(id));
     }
 
-    private void ageRequestedAt(Long id, Duration age) {
+    private void ageRequestedAt(UUID id, Duration age) {
         jdbcTemplate.update("UPDATE payment_transactions SET requested_at = requested_at - INTERVAL ? SECOND WHERE id = ?",
-                age.toSeconds(), id);
+                age.toSeconds(), UuidBinary.toBytes(id));
     }
 }

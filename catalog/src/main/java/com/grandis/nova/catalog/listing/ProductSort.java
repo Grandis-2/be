@@ -6,12 +6,12 @@ package com.grandis.nova.catalog.listing;
  */
 public enum ProductSort {
 
-    /** 최신순(기본). */
-    NEWEST(" ORDER BY p.id DESC"),
+    /** 최신순(기본) — 등록 시각 내림차순. id 는 생성 순서를 보장하지 않아 동점 깨기로만 쓴다. */
+    NEWEST(" ORDER BY p.created_at DESC, p.id DESC"),
     /** 낮은 가격순. */
-    PRICE_ASC(" ORDER BY (min_price IS NULL), min_price ASC, p.id DESC"),
+    PRICE_ASC(" ORDER BY (min_price IS NULL), min_price ASC, p.created_at DESC, p.id DESC"),
     /** 높은 가격순. */
-    PRICE_DESC(" ORDER BY (min_price IS NULL), min_price DESC, p.id DESC");
+    PRICE_DESC(" ORDER BY (min_price IS NULL), min_price DESC, p.created_at DESC, p.id DESC");
 
     private final String orderBy;
 

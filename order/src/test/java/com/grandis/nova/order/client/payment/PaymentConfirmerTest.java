@@ -11,6 +11,7 @@ import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.vo.Money;
 import com.grandis.nova.order.order.vo.OrderToken;
 import com.grandis.nova.order.order.vo.ShipTo;
+import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -57,8 +58,8 @@ class PaymentConfirmerTest {
     static final String PAYMENT = "tgen_confirmer_test_20261002";
     // 전달할 액세스 토큰 자리(접두어 없음). 실제 토큰 모양이 아니다.
     static final String SESSION = "payment-confirm-test-user-7";
-    static final Order ORDER = new Order(81L, OrderToken.issue(), 7L, OrderSource.PREORDER, 5L,
-            "9f1c2d3e-0000-4000-8000-000000000001", OrderStatus.AUTHORIZING, PROVIDER_ORDER_ID,
+    static final Order ORDER = new Order(TestIds.id(81), OrderToken.issue(), TestIds.id(7), OrderSource.PREORDER,
+            TestIds.id(5), "9f1c2d3e-0000-4000-8000-000000000001", OrderStatus.AUTHORIZING, PROVIDER_ORDER_ID,
             new Money(new BigDecimal("1250000")), null, null,
             new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), null, 2, Instant.EPOCH,
             Instant.EPOCH);
@@ -83,7 +84,8 @@ class PaymentConfirmerTest {
                 .andExpect(request -> assertThat(BearerTokens.parse(request.getHeaders().getFirst(BearerTokens.HEADER)))
                         .contains(SESSION))
                 .andExpect(content().json("""
-                        {"targetType":"ORDER","targetId":81,"paymentKey":"%s","amount":1250000,"startAllowed":true,"reserve":false}
+                        {"targetType":"ORDER","targetId":"00000000-0000-7000-8000-000000000081","paymentKey":"%s",
+                         "amount":1250000,"startAllowed":true,"reserve":false}
                         """.formatted(PAYMENT), JsonCompareMode.STRICT))
                 .andRespond(reply("APPROVED", null));
 

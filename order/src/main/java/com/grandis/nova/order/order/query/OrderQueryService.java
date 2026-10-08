@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -36,7 +37,7 @@ public class OrderQueryService {
     }
 
     /** 내 주문 목록(최신순). 한 건 더 읽어 다음 페이지가 있는지 본다. */
-    public CursorPage<OrderView.Summary> findMine(Long customerId, String cursor, int size) {
+    public CursorPage<OrderView.Summary> findMine(UUID customerId, String cursor, int size) {
         List<Order> found = new ArrayList<>(reader.findByCustomer(customerId, OrderCursor.decode(cursor), size + 1));
         boolean hasNext = found.size() > size;
         if (hasNext) {
@@ -51,7 +52,7 @@ public class OrderQueryService {
     }
 
     /** 내 주문 하나. 남의 주문은 존재를 알리지 않는다(404). */
-    public OrderView.Detail findOne(Long customerId, String orderToken) {
+    public OrderView.Detail findOne(UUID customerId, String orderToken) {
         Order order = find(orderToken)
                 .filter(found -> found.customerId().equals(customerId))
                 .orElseThrow(OrderQueryService::notFound);
@@ -59,7 +60,7 @@ public class OrderQueryService {
     }
 
     /** 내 주문상품 하나와 그 주문. 남의 것은 존재를 알리지 않는다(404). catalog 가 리뷰를 쓸 때 묻는다 — 판정은 catalog 가 한다. */
-    public OrderView.Item findItem(Long customerId, Long orderItemId) {
+    public OrderView.Item findItem(UUID customerId, UUID orderItemId) {
         OrderItem item = reader.findItem(orderItemId).orElseThrow(OrderQueryService::itemNotFound);
         Order order = reader.findById(item.orderId())
                 .filter(found -> found.customerId().equals(customerId))
@@ -87,7 +88,7 @@ public class OrderQueryService {
     }
 
     private List<OrderView.Summary> withItems(List<Order> found) {
-        Map<Long, List<OrderItem>> byOrder = reader.findItemsByOrderIds(found.stream().map(Order::id).toList()).stream()
+        Map<UUID, List<OrderItem>> byOrder = reader.findItemsByOrderIds(found.stream().map(Order::id).toList()).stream()
                 .collect(Collectors.groupingBy(OrderItem::orderId));
         return found.stream()
                 .map(order -> new OrderView.Summary(order, byOrder.getOrDefault(order.id(), List.of())))

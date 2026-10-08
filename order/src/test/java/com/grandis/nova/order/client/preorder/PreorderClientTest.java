@@ -2,6 +2,7 @@ package com.grandis.nova.order.client.preorder;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.security.BearerTokens;
+import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -83,8 +84,10 @@ class PreorderClientTest {
                 .andExpect(header(BearerTokens.HEADER, BearerTokens.value(SESSION)))
                 .andRespond(withSuccess("""
                         {"success":true,
-                         "data":{"preorderId":"%s","preorderInternalId":50231,"customerId":1024,
-                                 "productId":101,"optionId":1002,"productTitle":"갤럭시 G999","optionTitle":"256GB 블랙",
+                         "data":{"preorderId":"%s","preorderInternalId":"00000000-0000-7000-8000-000000050231",
+                                 "customerId":"00000000-0000-7000-8000-000000001024",
+                                 "productId":"00000000-0000-7000-8000-000000000101",
+                                 "optionId":"00000000-0000-7000-8000-000000001002","productTitle":"갤럭시 G999","optionTitle":"256GB 블랙",
                                  "unitPrice":1290000,"status":"PAYABLE",
                                  "payableFrom":"2026-09-03T01:00:03.470Z","paymentDueAt":"2026-09-04T01:00:03.470Z",
                                  "payable":true,"reason":null},
@@ -93,7 +96,8 @@ class PreorderClientTest {
 
         PreorderPayability payability = client.getPayability(PREORDER_UUID, BearerTokens.value(SESSION)).data();
 
-        assertThat(payability).isEqualTo(new PreorderPayability(PREORDER_UUID, 50231L, 1024L, 101L, 1002L,
+        assertThat(payability).isEqualTo(new PreorderPayability(PREORDER_UUID, TestIds.id(50231), TestIds.id(1024),
+                TestIds.id(101), TestIds.id(1002),
                 "갤럭시 G999", "256GB 블랙", new BigDecimal("1290000"), "PAYABLE",
                 Instant.parse("2026-09-03T01:00:03.470Z"), Instant.parse("2026-09-04T01:00:03.470Z"), true, null));
         server.verify();
@@ -105,8 +109,10 @@ class PreorderClientTest {
         server.expect(requestTo(PAYABILITY_URL))
                 .andRespond(withSuccess("""
                         {"success":true,
-                         "data":{"preorderId":"%s","preorderInternalId":50231,"customerId":1024,
-                                 "productId":101,"optionId":1002,"productTitle":"갤럭시 G999","optionTitle":"256GB 블랙",
+                         "data":{"preorderId":"%s","preorderInternalId":"00000000-0000-7000-8000-000000050231",
+                                 "customerId":"00000000-0000-7000-8000-000000001024",
+                                 "productId":"00000000-0000-7000-8000-000000000101",
+                                 "optionId":"00000000-0000-7000-8000-000000001002","productTitle":"갤럭시 G999","optionTitle":"256GB 블랙",
                                  "unitPrice":1290000,"status":"PENDING_SYNC",
                                  "payableFrom":null,"paymentDueAt":null,
                                  "payable":false,"reason":"NOT_YET_REGISTERED"},

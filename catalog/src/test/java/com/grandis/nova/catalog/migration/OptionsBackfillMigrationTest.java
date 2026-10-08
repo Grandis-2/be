@@ -19,6 +19,7 @@ import org.testcontainers.mysql.MySQLContainer;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -118,7 +119,7 @@ class OptionsBackfillMigrationTest {
         assertThat(jdbc.queryForObject("SELECT idempotency_key FROM products WHERE id = ?", String.class, phone)).isEqualTo("key-phone");
         // 옛 조합 키는 다시 쓰지 않는다 — 옮긴 값 id 로 앱이 만든 키가 저장된 키와 같아야 같은 조합 UNIQUE 가 계속 맞는다
         String storedKey = jdbc.queryForObject("SELECT combination_key FROM product_options WHERE product_id = ?", String.class, phone);
-        assertThat(OptionCombination.of(phone, phoneDoc.picksOf(OptionCombination.valueIdsOf(storedKey))).combinationKey()).isEqualTo(storedKey);
+        assertThat(OptionCombination.of(UUID.randomUUID(), phoneDoc.picksOf(OptionCombination.valueIdsOf(storedKey))).combinationKey()).isEqualTo(storedKey);
 
         ProductOptions cableDoc = options(cable);
         assertThat(cableDoc.axes()).isEmpty();

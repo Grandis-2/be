@@ -5,6 +5,7 @@ import org.springframework.data.repository.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 이력 읽기 전용. 이력은 추가 전용이고 쓰기는 원장이 어댑터의 appendEvent(EntityManager.persist)로만 한다 —
@@ -13,9 +14,9 @@ import java.util.Optional;
 public interface OrderEventJpaRepository extends Repository<OrderEventJpaEntity, OrderEventJpaEntity.Key> {
 
     /** PK (order_id, event_sequence) 범위로 읽는다. */
-    List<OrderEventJpaEntity> findByOrderIdAndEventSequenceLessThanEqualOrderByEventSequence(Long orderId,
+    List<OrderEventJpaEntity> findByOrderIdAndEventSequenceLessThanEqualOrderByEventSequence(UUID orderId,
                                                                                            Long upToSequence);
 
     /** 마지막 이력. PK 앞부분(order_id)으로 찾고 번호 역순 첫 행이다. */
-    Optional<OrderEventJpaEntity> findFirstByOrderIdOrderByEventSequenceDesc(Long orderId);
+    Optional<OrderEventJpaEntity> findFirstByOrderIdOrderByEventSequenceDesc(UUID orderId);
 }

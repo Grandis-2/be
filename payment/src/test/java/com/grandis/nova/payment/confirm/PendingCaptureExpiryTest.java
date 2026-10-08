@@ -1,5 +1,6 @@
 package com.grandis.nova.payment.confirm;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.security.RevocationChecker;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.payment.ClaimedTransaction;
@@ -128,7 +129,7 @@ class PendingCaptureExpiryTest {
 
         assertThat(transactions.findById(pending.id()).orElseThrow().status()).isEqualTo(TransactionStatus.EXPIRED);
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM payment_outbox_events WHERE aggregate_id = ?",
-                Integer.class, entry.id())).isZero();
+                Integer.class, UuidBinary.toBytes(entry.id()))).isZero();
     }
 
     // 시작과 만료가 겹치면 한쪽만 된다. 만료가 이기면 알림이 가고, 시작이 이기면 알림 없이 진행 중이다
@@ -161,7 +162,7 @@ class PendingCaptureExpiryTest {
         assertThat(transactions.findById(pending.id()).orElseThrow().status()).isEqualTo(TransactionStatus.PENDING);
 
         jdbcTemplate.update("UPDATE payment_transactions SET reserved_at = UTC_TIMESTAMP(6) - INTERVAL ? SECOND WHERE id = ?",
-                PAST_DUE.toSeconds(), pending.id());
+                PAST_DUE.toSeconds(), UuidBinary.toBytes(pending.id()));
         expiry.expireDue();
 
         assertThat(transactions.findById(pending.id()).orElseThrow().status()).isEqualTo(TransactionStatus.EXPIRED);
@@ -192,21 +193,21 @@ class PendingCaptureExpiryTest {
 
     private void age(PaymentTransaction transaction, Duration age) {
         jdbcTemplate.update("UPDATE payment_transactions SET created_at = UTC_TIMESTAMP(6) - INTERVAL ? SECOND WHERE id = ?",
-                age.toSeconds(), transaction.id());
+                age.toSeconds(), UuidBinary.toBytes(transaction.id()));
     }
 
     private int settledEvents(PaymentTarget of) {
         return jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM payment_outbox_events
                  WHERE aggregate_type = 'ORDER' AND aggregate_id = ? AND event_type = 'ORDER_PAYMENT_SETTLED'
-                """, Integer.class, of.id());
+                """, Integer.class, UuidBinary.toBytes(of.id()));
     }
 
     private JsonNode settledPayload(PaymentTarget of) {
         List<String> payloads = jdbcTemplate.queryForList("""
                 SELECT payload FROM payment_outbox_events
                  WHERE aggregate_type = 'ORDER' AND aggregate_id = ? AND event_type = 'ORDER_PAYMENT_SETTLED'
-                """, String.class, of.id());
+                """, String.class, UuidBinary.toBytes(of.id()));
         assertThat(payloads).hasSize(1);
         return jsonMapper.readTree(payloads.getFirst());
     }

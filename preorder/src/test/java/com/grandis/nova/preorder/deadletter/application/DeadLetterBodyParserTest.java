@@ -5,6 +5,8 @@ import com.grandis.nova.preorder.deadletter.domain.FailureReason;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.util.UUID;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class DeadLetterBodyParserTest {
@@ -19,7 +21,7 @@ class DeadLetterBodyParserTest {
         assertThat(body.redrivable()).isTrue();
         assertThat(body.eventId()).isEqualTo("0b6f3c9e-2d41-4c8a-9f7e-5a1d2c3b4e5f");
         assertThat(body.aggregateType()).isEqualTo("PREORDER_SYNC_JOB");
-        assertThat(body.aggregateId()).isEqualTo(7L);
+        assertThat(body.aggregateId()).isEqualTo(UUID.fromString("00000000-0000-7000-8000-000000000007"));
         assertThat(body.preorderToken()).isEqualTo("9f1c2d3e");
     }
 
@@ -53,7 +55,7 @@ class DeadLetterBodyParserTest {
     private String envelope(String eventType) {
         return """
                 {"eventId":"0b6f3c9e-2d41-4c8a-9f7e-5a1d2c3b4e5f","eventType":"%s","aggregateType":"PREORDER_SYNC_JOB",
-                 "aggregateId":7,"occurredAt":"2026-09-03T01:00:03.470Z","payload":{"preorderId":"9f1c2d3e"}}
+                 "aggregateId":"00000000-0000-7000-8000-000000000007","occurredAt":"2026-09-03T01:00:03.470Z","payload":{"preorderId":"9f1c2d3e"}}
                 """.formatted(eventType);
     }
 }

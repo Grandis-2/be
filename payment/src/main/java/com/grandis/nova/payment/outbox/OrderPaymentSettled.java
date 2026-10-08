@@ -8,6 +8,7 @@ import com.grandis.nova.payment.domain.model.PaymentTransaction;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * 주문 결제의 확정 결과(승인 · 거절). order 의 결과 소비기가 받아 주문을 전이한다 — 동기 응답을 잃어도 주문이 결과를 받는다.
@@ -22,7 +23,7 @@ import java.util.Objects;
  * @param approvedAt    승인일 때만. 결제사가 알린 승인 시각
  * @param declineReason 거절일 때만
  */
-public record OrderPaymentSettled(@JsonIgnore Long orderId, String providerOrderId, Result result, BigDecimal amount,
+public record OrderPaymentSettled(@JsonIgnore UUID orderId, String providerOrderId, Result result, BigDecimal amount,
                                   Instant approvedAt, DeclineReason declineReason) implements OutboxMessage {
 
     public OrderPaymentSettled {
@@ -59,11 +60,11 @@ public record OrderPaymentSettled(@JsonIgnore Long orderId, String providerOrder
     }
 
     @Override
-    public Long aggregateId() {
+    public UUID aggregateId() {
         return orderId;
     }
 
-    private static Long orderIdOf(PaymentTransaction transaction) {
+    private static UUID orderIdOf(PaymentTransaction transaction) {
         if (transaction.target().type() != TargetType.ORDER) {
             throw new IllegalArgumentException("주문 결제가 아니다: " + transaction);
         }

@@ -8,6 +8,7 @@ import com.grandis.nova.order.order.vo.ShipTo;
 
 import java.time.Instant;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * 주문의 한 시점 스냅샷. 불변이다 — 상태는 이 객체를 고쳐서 바꾸지 않고 {@link com.grandis.nova.order.order.OrderLedger} 가
@@ -32,11 +33,11 @@ import java.util.Objects;
  * @param updatedAt       저장 전이면 null
  */
 public record Order(
-        Long id,
+        UUID id,
         OrderToken orderToken,
-        Long customerId,
+        UUID customerId,
         OrderSource source,
-        Long preorderId,
+        UUID preorderId,
         String preorderToken,
         OrderStatus status,
         String authorizingProviderOrderId,

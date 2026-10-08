@@ -1,16 +1,20 @@
 package com.grandis.nova.order.stock.persistence.adapter;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.order.stock.domain.enums.SaleMode;
 import com.grandis.nova.order.stock.domain.repository.CatalogOptions;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * catalog 표를 필요한 칸만 SQL 로 읽는다. JPA 엔티티로 매핑하지 않는다 — 엔티티가 있으면 쓰기 길이 열리고,
@@ -26,14 +30,14 @@ class JdbcCatalogOptions implements CatalogOptions {
     }
 
     @Override
-    public Optional<SaleMode> findSaleMode(Long productId) {
+    public Optional<SaleMode> findSaleMode(UUID productId) {
         return jdbc.queryForList("SELECT sale_mode FROM products WHERE id = :id",
-                        new MapSqlParameterSource("id", productId), String.class)
+                        new MapSqlParameterSource("id", UuidBinary.toBytes(productId)), String.class)
                 .stream().findFirst().map(value -> toSaleMode(productId, value));
     }
 
     /** ck_product_sale_mode 가 두 값만 허용한다. 그 밖의 값은 스키마와 코드가 어긋난 것이라 원인을 밝혀 실패한다. */
-    private static SaleMode toSaleMode(Long productId, String value) {
+    private static SaleMode toSaleMode(UUID productId, String value) {
         try {
             return SaleMode.valueOf(value);
         } catch (IllegalArgumentException e) {
@@ -42,18 +46,24 @@ class JdbcCatalogOptions implements CatalogOptions {
     }
 
     @Override
-    public List<Long> findOptionIds(Long productId) {
-        return jdbc.queryForList("SELECT id FROM product_options WHERE product_id = :productId ORDER BY id",
-                new MapSqlParameterSource("productId", productId), Long.class);
+    public List<UUID> findOptionIds(UUID productId) {
+        return jdbc.query("SELECT id FROM product_options WHERE product_id = :productId ORDER BY id",
+                new MapSqlParameterSource("productId", UuidBinary.toBytes(productId)), JdbcCatalogOptions::id);
     }
 
     @Override
-    public Set<Long> findOwnedOptionIds(Long productId, Collection<Long> optionIds) {
+    public Set<UUID> findOwnedOptionIds(UUID productId, Collection<UUID> optionIds) {
         if (optionIds.isEmpty()) {
             return Set.of();
         }
-        return new HashSet<>(jdbc.queryForList(
+        return new HashSet<>(jdbc.query(
                 "SELECT id FROM product_options WHERE product_id = :productId AND id IN (:ids)",
-                new MapSqlParameterSource("productId", productId).addValue("ids", optionIds), Long.class));
+                new MapSqlParameterSource("productId", UuidBinary.toBytes(productId))
+                        .addValue("ids", optionIds.stream().map(UuidBinary::toBytes).toList()),
+                JdbcCatalogOptions::id));
+    }
+
+    private static UUID id(ResultSet rs, int rowNum) throws SQLException {
+        return UuidBinary.fromBytes(rs.getBytes("id"));
     }
 }

@@ -40,7 +40,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class SecurityRulesTest {
 
-    static final String CUSTOMER = "101";
+    static final String CUSTOMER = "00000000-0000-7000-8000-000000000101";
 
     @Autowired
     MockMvc mockMvc;
@@ -208,6 +208,6 @@ class SecurityRulesTest {
     }
 
     private static String cancelability() {
-        return "/internal/orders/by-preorder/987654321/cancelability";
+        return "/internal/orders/by-preorder/00000000-0000-7000-8000-000987654321/cancelability";
     }
 }

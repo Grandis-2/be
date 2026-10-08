@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Random;
 
+import static com.grandis.nova.waitingroom.support.TestIds.productKey;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -26,7 +27,7 @@ class AdmissionDeciderTest {
     private final AdmissionDecider decider = new AdmissionDecider(new SecondWindowLimiter(1_000), 0.7);
 
     private static AdmissionRequest request(ProductState state) {
-        return new AdmissionRequest("101", state, META, NOW, false, false, false);
+        return new AdmissionRequest(productKey(101), state, META, NOW, false, false, false);
     }
 
     @Nested
@@ -36,9 +37,9 @@ class AdmissionDeciderTest {
         void 오픈_전이나_마감_뒤면_다른_무엇보다_먼저_거절한다() {
             ProductState queued = ProductState.withQueue(5, 50, WINDOW, NO_CAP);
 
-            assertThat(decider.decide(new AdmissionRequest("101", queued, META, OPENS_AT.minusSeconds(1), true, true, true)))
+            assertThat(decider.decide(new AdmissionRequest(productKey(101), queued, META, OPENS_AT.minusSeconds(1), true, true, true)))
                     .isEqualTo(AdmissionDecision.REJECT_NOT_OPEN);
-            assertThat(decider.decide(new AdmissionRequest("101", queued, META, WINDOW.closesAt(), true, true, true)))
+            assertThat(decider.decide(new AdmissionRequest(productKey(101), queued, META, WINDOW.closesAt(), true, true, true)))
                     .isEqualTo(AdmissionDecision.REJECT_CLOSED);
         }
 
@@ -62,15 +63,15 @@ class AdmissionDeciderTest {
             SnapshotMeta limited = new SnapshotMeta(100, 1, MaxWait.of(Duration.ofSeconds(60)));
             ProductState full = ProductState.withQueue(10, 600, WINDOW, NO_CAP);
 
-            assertThat(decider.decide(new AdmissionRequest("101", full, limited, NOW, false, false, false)))
+            assertThat(decider.decide(new AdmissionRequest(productKey(101), full, limited, NOW, false, false, false)))
                     .isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
         }
 
         @Test
         void 낡았으면_이_노드가_방금_본_가득으로도_거절하고_신선하면_그_기억을_안_본다() {
-            assertThat(decider.decide(new AdmissionRequest("101", IDLE, META, NOW, true, false, true)))
+            assertThat(decider.decide(new AdmissionRequest(productKey(101), IDLE, META, NOW, true, false, true)))
                     .isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
-            assertThat(decider.decide(new AdmissionRequest("101", IDLE, META, NOW, false, false, true)))
+            assertThat(decider.decide(new AdmissionRequest(productKey(101), IDLE, META, NOW, false, false, true)))
                     .as("신선하면 가득 기억을 안 본다").isEqualTo(AdmissionDecision.PASS_UNDER_CAP);
         }
 
@@ -79,9 +80,9 @@ class AdmissionDeciderTest {
             SnapshotMeta limited = new SnapshotMeta(100, 1, MaxWait.of(Duration.ofSeconds(60)));
             ProductState starving = ProductState.withQueue(0, 1, WINDOW, NO_CAP);
 
-            assertThat(decider.decide(new AdmissionRequest("101", starving, limited, NOW, false, false, false)))
+            assertThat(decider.decide(new AdmissionRequest(productKey(101), starving, limited, NOW, false, false, false)))
                     .isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
-            assertThat(decider.decide(new AdmissionRequest("101", ProductState.withQueue(0, 60, WINDOW, NO_CAP), limited,
+            assertThat(decider.decide(new AdmissionRequest(productKey(101), ProductState.withQueue(0, 60, WINDOW, NO_CAP), limited,
                     NOW, false, false, false))).isEqualTo(AdmissionDecision.REJECT_QUEUE_FULL);
         }
 
@@ -100,7 +101,7 @@ class AdmissionDeciderTest {
 
         @Test
         void 재료가_낡았으면_비어_보여도_줄에_세운다() {
-            assertThat(decider.decide(new AdmissionRequest("101", IDLE, META, NOW, true, false, false)))
+            assertThat(decider.decide(new AdmissionRequest(productKey(101), IDLE, META, NOW, true, false, false)))
                     .isEqualTo(AdmissionDecision.ENQUEUE_STALE);
         }
 
@@ -108,7 +109,7 @@ class AdmissionDeciderTest {
         void 줄이_있거나_방금_줄에_세웠으면_뒤에_선다() {
             assertThat(decider.decide(request(ProductState.withQueue(50, 10, WINDOW, NO_CAP))))
                     .isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
-            assertThat(decider.decide(new AdmissionRequest("101", IDLE, META, NOW, false, true, false)))
+            assertThat(decider.decide(new AdmissionRequest(productKey(101), IDLE, META, NOW, false, true, false)))
                     .isEqualTo(AdmissionDecision.ENQUEUE_BACKLOG);
         }
 

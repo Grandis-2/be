@@ -17,6 +17,7 @@ import tools.jackson.databind.json.JsonMapper;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 받은 메시지를 이벤트 종류별 처리로 보낸다. 큐 소비기는 본문을 그대로 여기에 넘긴다.
@@ -125,7 +126,7 @@ public class PreorderEventDispatcher {
      * 오픈 직전 가격 변경이 캐시 갱신(1분)을 기다리지 않고 모든 인스턴스의 접수에 바로 반영되게 캐시를 먼저 비운다.
      * 공개 여부가 실려 있으면 회차에 반영한다 — 회차가 아직 없으면 예외로 다시 받는다.
      */
-    private void onProductChanged(Long productId, PreorderProductChanged changed) {
+    private void onProductChanged(UUID productId, PreorderProductChanged changed) {
         catalogCache.evictEverywhere(productId);
         if (changed != null && changed.hasVisibility()) {
             campaigns.applyVisibility(productId, changed.visible(), changed.visibilityVersion());
@@ -133,7 +134,7 @@ public class PreorderEventDispatcher {
     }
 
     /** catalog 상품 이벤트는 상품 id 를 봉투의 aggregateId 로만 싣는다. */
-    private Long requireProductId(EventEnvelope envelope) {
+    private UUID requireProductId(EventEnvelope envelope) {
         if (envelope.aggregateId() == null) {
             throw new IllegalArgumentException("상품 id(aggregateId)가 없는 상품 이벤트: " + envelope.eventType());
         }

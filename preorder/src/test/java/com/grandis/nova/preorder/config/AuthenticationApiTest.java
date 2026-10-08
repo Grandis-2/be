@@ -15,6 +15,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
 
 import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
@@ -37,7 +38,7 @@ class AuthenticationApiTest {
     StringRedisTemplate redis;
 
     ShopFixtures fixtures;
-    Long customerId;
+    UUID customerId;
 
     @BeforeEach
     void setUp() {

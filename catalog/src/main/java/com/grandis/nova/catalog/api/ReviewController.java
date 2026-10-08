@@ -23,6 +23,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.UUID;
+
 /**
  * 상품 리뷰. 쓰기(작성 · 수정 · 삭제)와 내 리뷰는 USER, 상품 리뷰 · 모아보기는 공개다(SecurityConfig).
  * 쓰기 본문은 관리자 API 와 같은 엄격한 매퍼로 읽는다 — 모르는 칸 · 같은 키 두 번 · 소수 별점은 그 칸의 400.
@@ -42,14 +44,14 @@ public class ReviewController {
     @Operation(summary = "리뷰 작성", description = "배송 완료된 내 일반 판매 주문상품에 하나. body 는 앞뒤 공백을 뺀 1~2,000자")
     @PostMapping("/api/v1/reviews")
     @ResponseStatus(HttpStatus.CREATED)
-    public ApiResponse<ReviewView> write(@CurrentCustomerId Long customerId,
+    public ApiResponse<ReviewView> write(@CurrentCustomerId UUID customerId,
             @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ReviewCreateRequest.class))) @RequestBody String body) {
         return ApiResponse.ok(reviews.write(customerId, bodies.parse(body, ReviewCreateRequest.class)));
     }
 
     @Operation(summary = "내 리뷰 수정", description = "보낸 칸만 바꾼다 — 하나도 없으면 400. body 는 앞뒤 공백을 뺀 1~2,000자")
     @PatchMapping("/api/v1/reviews/{reviewId}")
-    public ApiResponse<ReviewView> revise(@CurrentCustomerId Long customerId, @PathVariable Long reviewId,
+    public ApiResponse<ReviewView> revise(@CurrentCustomerId UUID customerId, @PathVariable UUID reviewId,
             @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ReviewUpdateRequest.class))) @RequestBody String body) {
         return ApiResponse.ok(reviews.revise(customerId, reviewId, bodies.parse(body, ReviewUpdateRequest.class)));
     }
@@ -57,7 +59,7 @@ public class ReviewController {
     @Operation(summary = "내 리뷰 삭제")
     @DeleteMapping("/api/v1/reviews/{reviewId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void delete(@CurrentCustomerId Long customerId, @PathVariable Long reviewId) {
+    public void delete(@CurrentCustomerId UUID customerId, @PathVariable UUID reviewId) {
         reviews.delete(customerId, reviewId);
     }
 
@@ -66,7 +68,7 @@ public class ReviewController {
     @SecurityRequirements
     @GetMapping("/api/v1/products/{productId}/reviews")
     public ApiResponse<ProductPageResponse<ReviewView>> productReviews(
-            @PathVariable Long productId,
+            @PathVariable UUID productId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         return ApiResponse.ok(ProductPageResponse.from(
@@ -78,7 +80,7 @@ public class ReviewController {
     @SecurityRequirements
     @GetMapping("/api/v1/reviews")
     public ApiResponse<ProductPageResponse<ReviewView>> visibleReviews(
-            @RequestParam(required = false) Long categoryId,
+            @RequestParam(required = false) UUID categoryId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         return ApiResponse.ok(ProductPageResponse.from(
@@ -89,8 +91,8 @@ public class ReviewController {
     @Operation(summary = "내 리뷰")
     @GetMapping("/api/v1/reviews/mine")
     public ApiResponse<ProductPageResponse<ReviewView>> myReviews(
-            @CurrentCustomerId Long customerId,
-            @RequestParam(required = false) Long orderItemId,
+            @CurrentCustomerId UUID customerId,
+            @RequestParam(required = false) UUID orderItemId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         return ApiResponse.ok(ProductPageResponse.from(

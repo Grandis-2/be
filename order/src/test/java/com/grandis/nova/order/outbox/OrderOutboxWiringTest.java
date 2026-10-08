@@ -32,9 +32,9 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static com.grandis.nova.order.support.OrderFixtures.preorderCommand;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -82,7 +82,7 @@ class OrderOutboxWiringTest {
 
     OrderFixtures fixtures;
     PreorderProduct product;
-    Long customerId;
+    UUID customerId;
     final AtomicLong nextPosition = new AtomicLong(1);
 
     @BeforeEach
@@ -95,14 +95,14 @@ class OrderOutboxWiringTest {
 
     @Test
     void order_가_쓴_행은_order_아웃박스에_미발행으로_UTC_시각과_함께_적힌다() {
-        Long preorderId = preorder();
+        UUID preorderId = preorder();
         Instant before = clock.instant();
         Long id = transactionTemplate.execute(status ->
                 writer.append(PreorderOrderSettled.canceled(preorderId, tokenOf(preorderId), 3L)));
         Instant after = clock.instant();
 
         Map<String, Object> row = jdbcTemplate.queryForMap("""
-                SELECT event_type, aggregate_type, aggregate_id,
+                SELECT event_type, aggregate_type, BIN_TO_UUID(aggregate_id) AS aggregate_id,
                        DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%s.%fZ') AS created_at_utc
                   FROM order_outbox_events WHERE id = ?
                 """, id);
@@ -110,16 +110,16 @@ class OrderOutboxWiringTest {
         assertThat(row)
                 .containsEntry("event_type", "PREORDER_ORDER_SETTLED")
                 .containsEntry("aggregate_type", "PREORDER")
-                .containsEntry("aggregate_id", preorderId);
+                .containsEntry("aggregate_id", preorderId.toString());
         assertThat(Instant.parse((String) row.get("created_at_utc"))).isBetween(before, after);
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM preorder_outbox_events WHERE aggregate_id = ?",
-                Integer.class, preorderId)).as("preorder 표에는 적지 않는다").isZero();
+                Integer.class, bytes(preorderId))).as("preorder 표에는 적지 않는다").isZero();
     }
 
     /** 커밋 직후 발행이 order 의 종류 → 목적지(preorder-events)로 봉투를 보낸다. */
     @Test
     void 커밋하면_preorder_events_로_정리_결과_봉투를_보낸다() {
-        Long preorderId = preorder();
+        UUID preorderId = preorder();
         String token = tokenOf(preorderId);
         Long id = transactionTemplate.execute(status ->
                 writer.append(PreorderOrderSettled.rejected(preorderId, token, RejectReason.SHIPPED, 7L)));
@@ -132,7 +132,7 @@ class OrderOutboxWiringTest {
         JsonNode body = jsonMapper.readTree(message.body());
         assertThat(body.get("eventType").asString()).isEqualTo("PREORDER_ORDER_SETTLED");
         assertThat(body.get("aggregateType").asString()).isEqualTo("PREORDER");
-        assertThat(body.get("aggregateId").asLong()).isEqualTo(preorderId);
+        assertThat(body.get("aggregateId").asString()).isEqualTo(preorderId.toString());
         assertThat(body.get("payload").get("preorderId").asString()).isEqualTo(token);
     }
 
@@ -143,7 +143,7 @@ class OrderOutboxWiringTest {
         jdbcTemplate.update("""
                 INSERT INTO order_outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, created_at)
                 VALUES (?, 'PREORDER', ?, 'PREORDER_ORDER_SETTLED', '{}', UTC_TIMESTAMP(6) - INTERVAL 2 MINUTE)
-                """, eventId, ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE));
+                """, eventId, bytes(UUID.randomUUID()));
 
         await().atMost(TIMEOUT).until(() -> sentOf(eventId).isPresent());
 
@@ -158,10 +158,10 @@ class OrderOutboxWiringTest {
      */
     @Test
     void payload_는_preorder_가_받는_계약과_같다() {
-        Long rejectedPreorder = preorder();
+        UUID rejectedPreorder = preorder();
         String rejectedToken = tokenOf(rejectedPreorder);
         // 한 회원은 한 상품에 활성 예약 하나(uq_preorder_active)라 두 번째 예약은 다른 회원으로 만든다.
-        Long noOrderPreorder = fixtures.payablePreorder(fixtures.customer(), product, nextPosition.getAndIncrement());
+        UUID noOrderPreorder = fixtures.payablePreorder(fixtures.customer(), product, nextPosition.getAndIncrement());
         String noOrderToken = tokenOf(noOrderPreorder);
 
         List<Long> ids = transactionTemplate.execute(status -> List.of(
@@ -179,9 +179,9 @@ class OrderOutboxWiringTest {
     /** 주문 전이 · 이력 · 아웃박스가 한 트랜잭션. 그 뒤 실패하면 셋 다 남지 않는다. */
     @Test
     void 업무가_실패하면_전이_이력_아웃박스가_모두_남지_않는다() {
-        Long preorderId = preorder();
+        UUID preorderId = preorder();
         String token = tokenOf(preorderId);
-        Long orderId = placeOrder(preorderId);
+        UUID orderId = placeOrder(preorderId);
 
         assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status -> {
             ledger.fire(orderId, OrderTrigger.CANCEL_REQUESTED, EnumSet.of(OrderStatus.AWAITING_PAYMENT),
@@ -198,9 +198,9 @@ class OrderOutboxWiringTest {
     /** 아웃박스를 먼저 적고 전이해도 함께 커밋된다 — 원장이 영속성 컨텍스트를 다뤄도 JDBC 로 적은 행과는 상관없다. */
     @Test
     void 전이와_아웃박스는_함께_커밋된다() {
-        Long preorderId = preorder();
+        UUID preorderId = preorder();
         String token = tokenOf(preorderId);
-        Long orderId = placeOrder(preorderId);
+        UUID orderId = placeOrder(preorderId);
 
         transactionTemplate.executeWithoutResult(status -> {
             writer.append(PreorderOrderSettled.canceled(preorderId, token, 5L));
@@ -213,35 +213,37 @@ class OrderOutboxWiringTest {
         assertThat(outboxRowsOf(preorderId)).isOne();
     }
 
-    private Long preorder() {
+    private UUID preorder() {
         return fixtures.payablePreorder(customerId, product, nextPosition.getAndIncrement());
     }
 
-    private Long placeOrder(Long preorderId) {
+    private UUID placeOrder(UUID preorderId) {
         return transactionTemplate.execute(status -> ledger.place(
                 preorderCommand(customerId, preorderId, product).toDraft(), EventCause.user()).id());
     }
 
-    private String tokenOf(Long preorderId) {
-        return jdbcTemplate.queryForObject("SELECT preorder_token FROM preorders WHERE id = ?", String.class, preorderId);
+    private String tokenOf(UUID preorderId) {
+        return jdbcTemplate.queryForObject("SELECT preorder_token FROM preorders WHERE id = ?", String.class,
+                bytes(preorderId));
     }
 
     private String eventIdOf(Long id) {
         return jdbcTemplate.queryForObject("SELECT event_id FROM order_outbox_events WHERE id = ?", String.class, id);
     }
 
-    private String orderStatus(Long orderId) {
-        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, orderId);
+    private String orderStatus(UUID orderId) {
+        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, bytes(orderId));
     }
 
-    private int eventsOf(Long orderId) {
-        return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM order_events WHERE order_id = ?", Integer.class, orderId);
+    private int eventsOf(UUID orderId) {
+        return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM order_events WHERE order_id = ?", Integer.class,
+                bytes(orderId));
     }
 
-    private int outboxRowsOf(Long preorderId) {
+    private int outboxRowsOf(UUID preorderId) {
         return jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM order_outbox_events WHERE aggregate_type = 'PREORDER' AND aggregate_id = ?
-                """, Integer.class, preorderId);
+                """, Integer.class, bytes(preorderId));
     }
 
     private String payload(Long id) {

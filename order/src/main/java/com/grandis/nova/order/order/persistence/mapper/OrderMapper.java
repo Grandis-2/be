@@ -13,6 +13,8 @@ import com.grandis.nova.order.order.vo.OrderToken;
 import com.grandis.nova.order.order.vo.Quantity;
 import com.grandis.nova.order.order.vo.ShipTo;
 
+import java.util.UUID;
+
 /** 도메인 ↔ JPA 엔티티 변환. 엔티티가 persistence 밖으로 새지 않게 어댑터({@code JpaOrderStore})만 쓴다. */
 public final class OrderMapper {
 
@@ -37,7 +39,7 @@ public final class OrderMapper {
                 entity.getInternalNote(), entity.getEventSequence(), entity.getCreatedAt(), entity.getUpdatedAt());
     }
 
-    public static OrderItemJpaEntity toEntity(Long orderId, OrderLine line) {
+    public static OrderItemJpaEntity toEntity(UUID orderId, OrderLine line) {
         return new OrderItemJpaEntity(orderId, line.productId(), line.optionId(), line.quantity().value(),
                 line.unitPrice().amount(), line.productTitle(), line.optionTitle());
     }

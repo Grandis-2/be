@@ -17,6 +17,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * 원문을 원래 큐로 되돌린다. 선점(OPEN → REDRIVING) → 트랜잭션 밖에서 보내기 → 보냄 기록(REDRIVEN) 순이라
@@ -47,7 +48,7 @@ class DeadLetterRedrives {
      * @throws BusinessException DEAD_LETTER_NOT_FOUND · DEAD_LETTER_NOT_REDRIVABLE(지금 코드로도 읽지 못하는 원문,
      *                           되돌리기를 기다리는 상태가 아님) · DEPENDENCY_UNAVAILABLE(보내지 못함 — STALE_REDRIVE 뒤 다시)
      */
-    DeadLetterEvent redrive(Long id, String requestedBy) {
+    DeadLetterEvent redrive(UUID id, String requestedBy) {
         DeadLetterEvent event = events.findById(id)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.DEAD_LETTER_NOT_FOUND));
         DeadLetterBody parsed = bodyParser.parse(event.getBody());
@@ -79,7 +80,7 @@ class DeadLetterRedrives {
     }
 
     /** 원문까지 올리지 않도록 상태만 읽는다. */
-    private DeadLetterStatus currentStatus(Long id) {
+    private DeadLetterStatus currentStatus(UUID id) {
         return events.findStatusById(id).orElse(null);
     }
 

@@ -10,6 +10,8 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
+import java.util.UUID;
+
 /** 토스 요청 · 응답 예시. 값은 문서 형식을 따른 가짜다. */
 final class TossStubs {
 

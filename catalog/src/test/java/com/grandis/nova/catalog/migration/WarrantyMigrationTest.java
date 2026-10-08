@@ -23,6 +23,8 @@ class WarrantyMigrationTest {
 
     static final String BEFORE = "202610072049";
     static final String MOVE = "202610080113";
+    /** 보증 칸을 지우는 버전. 최신까지 올리면 뒤의 마이그레이션(id 형 전환)이 표를 비워 남은 단정을 볼 수 없다. */
+    static final String DROP = "202610080114";
 
     MySQLContainer mysql;
     SingleConnectionDataSource dataSource;
@@ -71,7 +73,7 @@ class WarrantyMigrationTest {
         // 새 버전이 한 일: 문서의 보증을 바꿨다 — 칸은 그대로라 갈린다. 이건 덮지 않는다
         jdbc.update("UPDATE products SET options = JSON_SET(options, '$.warranty.surcharge', 120000) WHERE id = ?", offered);
 
-        migrate(null);
+        migrate(DROP);
 
         assertThat(warranty(notOffered)).as("키가 빠진 행은 칸에서 다시 채운다").isEqualTo(new ProductOptions.Warranty(true, new BigDecimal("50000")));
         assertThat(warranty(offered)).as("키가 있는 행은 문서가 정본 — 칸으로 되돌리지 않는다").isEqualTo(new ProductOptions.Warranty(true, new BigDecimal("120000")));

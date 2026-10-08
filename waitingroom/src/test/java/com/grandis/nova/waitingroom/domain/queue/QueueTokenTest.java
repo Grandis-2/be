@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 import java.time.Instant;
 import java.util.List;
 
+import static com.grandis.nova.waitingroom.support.TestIds.customerId;
+import static com.grandis.nova.waitingroom.support.TestIds.productKey;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class QueueTokenTest {
@@ -17,23 +19,23 @@ class QueueTokenTest {
 
     @Test
     void 대기_토큰은_발급받은_회원과_상품에만_유효하고_창_시작에서_한_시간_뒤에_만료된다() {
-        String token = queueToken.issue("101", "1024", NOW);
+        String token = queueToken.issue(productKey(101), customerId(1024), NOW);
         Instant expiresAt = Instant.ofEpochSecond(NOW.getEpochSecond() / QueueToken.WINDOW_SEC * QueueToken.WINDOW_SEC
                 + QueueToken.TTL_SEC);
 
-        assertThat(queueToken.verify(token, "101", NOW)).contains("1024");
-        assertThat(queueToken.verify(token, "202", NOW)).isEmpty();
-        assertThat(queueToken.verify(token, "101", expiresAt.minusSeconds(1))).contains("1024");
-        assertThat(queueToken.verify(token, "101", expiresAt)).isEmpty();
+        assertThat(queueToken.verify(token, productKey(101), NOW)).contains(customerId(1024));
+        assertThat(queueToken.verify(token, productKey(202), NOW)).isEmpty();
+        assertThat(queueToken.verify(token, productKey(101), expiresAt.minusSeconds(1))).contains(customerId(1024));
+        assertThat(queueToken.verify(token, productKey(101), expiresAt)).isEmpty();
     }
 
     @Test
     void 대기_토큰과_입장권은_같은_비밀이어도_서로_통하지_않는다() {
-        String queued = queueToken.issue("101", "1024", NOW);
-        String admitted = ticket.issue("101", "1024", NOW);
+        String queued = queueToken.issue(productKey(101), customerId(1024), NOW);
+        String admitted = ticket.issue(productKey(101), customerId(1024), NOW);
 
-        assertThat(ticket.verify(queued, "101", NOW)).isEmpty();
-        assertThat(queueToken.verify(admitted, "101", NOW)).isEmpty();
+        assertThat(ticket.verify(queued, productKey(101), NOW)).isEmpty();
+        assertThat(queueToken.verify(admitted, productKey(101), NOW)).isEmpty();
     }
 
     @Test

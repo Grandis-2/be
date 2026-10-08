@@ -10,6 +10,7 @@ import org.springframework.data.repository.query.Param;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 상태를 바꾸는 쿼리는 모두 조건부 네이티브 UPDATE 다. 네이티브인 것은 리스 만료 · 재시도 시각을 DB 시각
@@ -20,11 +21,11 @@ import java.util.Optional;
  * 벌크 UPDATE 는 영속성 컨텍스트를 거치지 않는다. 앞에서는 flush 하고, 뒤에서는 어댑터가 그 행의 엔티티만 떼어낸다
  * (컨텍스트 전체를 비우면 같은 트랜잭션의 다른 엔티티가 떼어져, 그 뒤의 변경이 변경 감지에 잡히지 않고 조용히 유실된다).
  */
-public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTransactionJpaEntity, Long> {
+public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTransactionJpaEntity, UUID> {
 
     Optional<PaymentTransactionJpaEntity> findByProviderOrderId(String providerOrderId);
 
-    List<PaymentTransactionJpaEntity> findByTargetTypeAndTargetIdOrderByIdAsc(TargetType targetType, Long targetId);
+    List<PaymentTransactionJpaEntity> findByTargetTypeAndTargetIdOrderByCreatedAtAscIdAsc(TargetType targetType, UUID targetId);
 
     @Modifying(flushAutomatically = true)
     @Query(value = """
@@ -34,7 +35,7 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
                    lease_token = :lease, lease_expires_at = UTC_TIMESTAMP(6) + INTERVAL :leaseMicros MICROSECOND
              WHERE id = :id AND transaction_type = 'CAPTURE' AND status = 'PENDING' AND lease_token IS NULL
             """, nativeQuery = true)
-    int start(@Param("id") Long id, @Param("paymentKey") String paymentKey, @Param("lease") String lease,
+    int start(@Param("id") UUID id, @Param("paymentKey") String paymentKey, @Param("lease") String lease,
               @Param("leaseMicros") long leaseMicros, @Param("now") Instant now);
 
     /*
@@ -53,7 +54,7 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
                     OR (status = 'RETRY_SCHEDULED' AND next_retry_at <= UTC_TIMESTAMP(6))
                     OR (status = 'PROCESSING' AND lease_expires_at <= UTC_TIMESTAMP(6)))
             """, nativeQuery = true)
-    int claim(@Param("id") Long id, @Param("seenStatus") String seenStatus, @Param("seenLease") String seenLease,
+    int claim(@Param("id") UUID id, @Param("seenStatus") String seenStatus, @Param("seenLease") String seenLease,
               @Param("lease") String lease, @Param("leaseMicros") long leaseMicros, @Param("now") Instant now);
 
     /*
@@ -68,7 +69,7 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
              WHERE id = :id AND status = 'PROCESSING' AND lease_token = :lease
                AND lease_expires_at > UTC_TIMESTAMP(6)
             """, nativeQuery = true)
-    int finish(@Param("id") Long id, @Param("lease") String lease, @Param("to") String to,
+    int finish(@Param("id") UUID id, @Param("lease") String lease, @Param("to") String to,
                @Param("errorCode") String errorCode, @Param("errorMessage") String errorMessage,
                @Param("now") Instant now);
 
@@ -81,7 +82,7 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
              WHERE id = :id AND status = 'PROCESSING' AND lease_token = :lease
                AND lease_expires_at > UTC_TIMESTAMP(6)
             """, nativeQuery = true)
-    int reschedule(@Param("id") Long id, @Param("lease") String lease, @Param("errorCode") String errorCode,
+    int reschedule(@Param("id") UUID id, @Param("lease") String lease, @Param("errorCode") String errorCode,
                    @Param("errorMessage") String errorMessage, @Param("delayMicros") long delayMicros);
 
     @Modifying(flushAutomatically = true)
@@ -91,7 +92,7 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
              WHERE id = :id AND status = 'PROCESSING' AND lease_token = :lease
                AND lease_expires_at > UTC_TIMESTAMP(6)
             """, nativeQuery = true)
-    int recordError(@Param("id") Long id, @Param("lease") String lease, @Param("errorCode") String errorCode,
+    int recordError(@Param("id") UUID id, @Param("lease") String lease, @Param("errorCode") String errorCode,
                     @Param("errorMessage") String errorMessage);
 
     /*
@@ -103,7 +104,7 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
             SELECT * FROM payment_transactions
              WHERE status = 'PENDING' AND transaction_type = 'CAPTURE'
                AND COALESCE(reserved_at, created_at) <= UTC_TIMESTAMP(6) - INTERVAL :openedMicros MICROSECOND
-             ORDER BY id
+             ORDER BY created_at, id
              LIMIT :limit
             """, nativeQuery = true)
     List<PaymentTransactionJpaEntity> findExpirableCaptures(@Param("openedMicros") long openedMicros,
@@ -116,7 +117,7 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
              WHERE id = :id AND transaction_type = 'CAPTURE' AND status = 'PENDING' AND lease_token IS NULL
                AND COALESCE(reserved_at, created_at) <= UTC_TIMESTAMP(6) - INTERVAL :openedMicros MICROSECOND
             """, nativeQuery = true)
-    int expire(@Param("id") Long id, @Param("openedMicros") long openedMicros, @Param("now") Instant now);
+    int expire(@Param("id") UUID id, @Param("openedMicros") long openedMicros, @Param("now") Instant now);
 
     /* 확보: 만료와 같은 PENDING 조건이라 둘이 겹치면 한쪽만 1행이다(행 잠금 뒤 조건을 다시 본다). */
     @Modifying(flushAutomatically = true)
@@ -125,7 +126,7 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
                SET reserved_at = UTC_TIMESTAMP(6)
              WHERE id = :id AND transaction_type = 'CAPTURE' AND status = 'PENDING' AND lease_token IS NULL
             """, nativeQuery = true)
-    int reserve(@Param("id") Long id);
+    int reserve(@Param("id") UUID id);
 
     /*
      * 복구 후보. 준비 조건마다 그 조건의 인덱스(ix_payment_tx_next_retry · ix_payment_tx_recoverable)를 타도록 따로 묻는다 — OR 로
@@ -155,7 +156,7 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
     @Query(value = """
             SELECT * FROM payment_transactions
              WHERE status = 'PENDING' AND transaction_type = 'REFUND'
-             ORDER BY id
+             ORDER BY created_at, id
              LIMIT 1
                FOR UPDATE SKIP LOCKED
             """, nativeQuery = true)
@@ -168,7 +169,7 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
              WHERE id = :id AND status = 'PROCESSING' AND lease_token = :lease
                AND lease_expires_at > UTC_TIMESTAMP(6)
             """, nativeQuery = true)
-    int escalate(@Param("id") Long id, @Param("lease") String lease, @Param("errorCode") String errorCode,
+    int escalate(@Param("id") UUID id, @Param("lease") String lease, @Param("errorCode") String errorCode,
                  @Param("errorMessage") String errorMessage, @Param("now") Instant now);
 
     /*
@@ -184,6 +185,6 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
              WHERE id = :id AND status = 'PROCESSING' AND lease_token = :lease
                AND lease_expires_at > UTC_TIMESTAMP(6)
             """, nativeQuery = true)
-    int rotateIdempotencyKey(@Param("id") Long id, @Param("lease") String lease,
+    int rotateIdempotencyKey(@Param("id") UUID id, @Param("lease") String lease,
                              @Param("idempotencyKey") String idempotencyKey, @Param("leaseMicros") long leaseMicros);
 }

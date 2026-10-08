@@ -27,15 +27,15 @@ public class PlacedOrders {
     }
 
     /** 그 회원의 새 예약으로 주문 하나. 회원은 상품마다 진행 중인 예약이 하나라(uq_preorder_active) 상품도 새로 만든다. */
-    public Order place(Long customerId) {
+    public Order place(UUID customerId) {
         OrderFixtures.PreorderProduct product = fixtures.preorderProduct();
-        Long preorderId = fixtures.payablePreorder(customerId, product, 1);
+        UUID preorderId = fixtures.payablePreorder(customerId, product, 1);
         return transactionTemplate.execute(status -> ledger.place(
                 OrderFixtures.preorderCommand(customerId, preorderId, product).toDraft(), EventCause.user()));
     }
 
     /** 결제 요청 · 승인과 같은 전이(미결제 → 승인 중 → 판매자 확인 대기). */
-    public void pay(Long orderId) {
+    public void pay(UUID orderId) {
         transactionTemplate.executeWithoutResult(status -> {
             ledger.requestPayment(orderId, UUID.randomUUID().toString(), EventCause.user());
             ledger.settlePayment(orderId, OrderTrigger.PAYMENT_APPROVED, null, EventCause.system("PAYMENT_APPROVED"));
@@ -43,7 +43,7 @@ public class PlacedOrders {
     }
 
     /** 예약 취소 수신과 같은 전이(미결제 → 취소). */
-    public void cancel(Long orderId, String reason) {
+    public void cancel(UUID orderId, String reason) {
         transactionTemplate.executeWithoutResult(status -> ledger.fire(orderId, OrderTrigger.CANCEL_REQUESTED,
                 EnumSet.of(OrderStatus.AWAITING_PAYMENT), EventCause.system(reason)));
     }

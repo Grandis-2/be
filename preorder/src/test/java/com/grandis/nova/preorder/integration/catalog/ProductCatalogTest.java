@@ -3,6 +3,7 @@ package com.grandis.nova.preorder.integration.catalog;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -30,6 +31,7 @@ class ProductCatalogTest {
     }
 
     private ProductCatalog product(String saleMode, String status, Boolean visible, Boolean registrationCompleted) {
-        return new ProductCatalog(7L, "Nova 1", saleMode, status, visible, registrationCompleted, List.of());
+        return new ProductCatalog(UUID.randomUUID(), "Nova 1", saleMode, status, visible, registrationCompleted,
+                List.of());
     }
 }

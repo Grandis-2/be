@@ -5,6 +5,7 @@ import com.grandis.nova.order.order.vo.EventCause;
 
 import java.time.Instant;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * 주문 이력 한 줄. 추가 전용이다. 순서는 시각이 아니라 eventSequence 로 판정한다 —
@@ -13,7 +14,7 @@ import java.util.Objects;
  * @param fromStatus 생성 이력이면 null
  */
 public record OrderEvent(
-        Long orderId,
+        UUID orderId,
         long eventSequence,
         OrderStatus fromStatus,
         OrderStatus toStatus,
@@ -32,7 +33,7 @@ public record OrderEvent(
     }
 
     /** 주문 생성 이력(번호 1, from 없음). */
-    public static OrderEvent placed(Long orderId, EventCause cause, Instant now) {
+    public static OrderEvent placed(UUID orderId, EventCause cause, Instant now) {
         return new OrderEvent(orderId, FIRST_SEQUENCE, null, OrderStatus.AWAITING_PAYMENT, cause, now);
     }
 }

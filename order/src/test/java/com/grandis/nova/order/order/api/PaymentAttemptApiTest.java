@@ -31,7 +31,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.ResourceAccessException;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -78,8 +80,8 @@ class PaymentAttemptApiTest {
 
     OrderFixtures fixtures;
     PreorderProduct product;
-    Long customerId;
-    Long preorderId;
+    UUID customerId;
+    UUID preorderId;
     Order order;
 
     @BeforeEach
@@ -94,7 +96,7 @@ class PaymentAttemptApiTest {
 
     @Test
     void returnsValuesToOpenPaymentWindow() throws Exception {
-        jdbcTemplate.update("UPDATE orders SET total_amount = ? WHERE id = ?", TOTAL, order.id());
+        jdbcTemplate.update("UPDATE orders SET total_amount = ? WHERE id = ?", TOTAL, bytes(order.id()));
         stubPreorder(PreorderStubs.payable(preorderId, order.preorderToken(), customerId, product));
         stubPaymentOpens(TOTAL);
 
@@ -149,7 +151,7 @@ class PaymentAttemptApiTest {
     // 0원 주문은 결제창을 열 수 없다. payment 에 보내면 400 → 늘 500 이 되므로 부르기 전에 거절한다.
     @Test
     void zeroAmountOrderIsNotPayable() throws Exception {
-        jdbcTemplate.update("UPDATE orders SET total_amount = 0 WHERE id = ?", order.id());
+        jdbcTemplate.update("UPDATE orders SET total_amount = 0 WHERE id = ?", bytes(order.id()));
         stubPreorder(PreorderStubs.payable(preorderId, order.preorderToken(), customerId, product));
 
         prepare(customerId, order.orderToken().value())
@@ -162,7 +164,7 @@ class PaymentAttemptApiTest {
     // 0원 거절은 예약 확인 뒤다 — 예약이 취소된 0원 주문도 남은 주문 정리(R1)를 거친다.
     @Test
     void zeroAmountOrderOfCanceledPreorderIsStillCanceled() throws Exception {
-        jdbcTemplate.update("UPDATE orders SET total_amount = 0 WHERE id = ?", order.id());
+        jdbcTemplate.update("UPDATE orders SET total_amount = 0 WHERE id = ?", bytes(order.id()));
         stubPreorder(PreorderStubs.blocked(preorderId, order.preorderToken(), customerId, product, "CANCELED"));
 
         prepare(customerId, order.orderToken().value())
@@ -189,13 +191,13 @@ class PaymentAttemptApiTest {
         assertThat(statusOf(order)).isEqualTo("CANCELED");
         assertThat(jdbcTemplate.queryForMap("""
                 SELECT from_status, to_status, actor, reason FROM order_events WHERE order_id = ? AND event_sequence = 2
-                """, order.id()))
+                """, bytes(order.id())))
                 .containsEntry("from_status", "AWAITING_PAYMENT")
                 .containsEntry("to_status", "CANCELED")
                 .containsEntry("actor", "SYSTEM")
                 .containsEntry("reason", "PREORDER_CANCELED");
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM order_outbox_events WHERE aggregate_id = ?",
-                Integer.class, preorderId)).isZero();
+                Integer.class, bytes(preorderId))).isZero();
         verifyNoInteractions(paymentClient);
     }
 
@@ -215,7 +217,7 @@ class PaymentAttemptApiTest {
 
         assertThat(statusOf(order)).isEqualTo("AUTHORIZING");
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM order_events WHERE order_id = ?",
-                Integer.class, order.id())).isEqualTo(1);
+                Integer.class, bytes(order.id()))).isEqualTo(1);
         verifyNoInteractions(paymentClient);
     }
 
@@ -269,7 +271,7 @@ class PaymentAttemptApiTest {
 
     @Test
     void responseForAnotherPreorderIdIsInternalError() throws Exception {
-        stubPreorder(PreorderStubs.payable(preorderId + 1_000_000, order.preorderToken(), customerId, product));
+        stubPreorder(PreorderStubs.payable(UUID.randomUUID(), order.preorderToken(), customerId, product));
 
         prepare(customerId, order.orderToken().value()).andExpect(status().isInternalServerError());
 
@@ -317,13 +319,13 @@ class PaymentAttemptApiTest {
                 .willReturn(ApiResponse.ok(new PaymentAttempt(PROVIDER_ORDER_ID, amount)));
     }
 
-    private ResultActions prepare(Long customer, String orderToken) throws Exception {
+    private ResultActions prepare(UUID customer, String orderToken) throws Exception {
         return mockMvc.perform(post("/api/v1/orders/{orderToken}/payment-attempts", orderToken)
                 .with(TestAuth.customer(customer))
                 .header(BearerTokens.HEADER, BearerTokens.value(SESSION)));
     }
 
     private String statusOf(Order placed) {
-        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, placed.id());
+        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, bytes(placed.id()));
     }
 }

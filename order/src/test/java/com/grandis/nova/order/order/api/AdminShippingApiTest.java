@@ -34,7 +34,9 @@ import tools.jackson.databind.json.JsonMapper;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -72,7 +74,7 @@ class AdminShippingApiTest {
 
     OrderFixtures fixtures;
     PlacedOrders orders;
-    Long customerId;
+    UUID customerId;
 
     @BeforeEach
     void setUp() {
@@ -102,7 +104,7 @@ class AdminShippingApiTest {
         assertThat(jdbcTemplate.queryForList("""
                 SELECT CONCAT(from_status, '>', to_status, '|', actor, '|', reason) FROM order_events
                  WHERE order_id = ? AND actor = 'ADMIN' ORDER BY event_sequence
-                """, String.class, order.id())).containsExactly(
+                """, String.class, bytes(order.id()))).containsExactly(
                 "AWAITING_CONFIRMATION>PREPARING_ITEMS|ADMIN|준비 시작",
                 "PREPARING_ITEMS>READY_TO_SHIP|ADMIN|포장 완료",
                 "READY_TO_SHIP>SHIPPED|ADMIN|출고",
@@ -186,7 +188,7 @@ class AdminShippingApiTest {
 
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT CHAR_LENGTH(reason) FROM order_events WHERE order_id = ? AND actor = 'ADMIN'",
-                Integer.class, order.id())).isEqualTo(500);
+                Integer.class, bytes(order.id()))).isEqualTo(500);
     }
 
     // 취소 · 환불 완료처럼 배송이 아닌 사건은 단계로 받지 않는다.
@@ -339,12 +341,12 @@ class AdminShippingApiTest {
     }
 
     private String statusOf(Order order) {
-        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, order.id());
+        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, bytes(order.id()));
     }
 
     private int eventCount(Order order) {
         return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM order_events WHERE order_id = ?", Integer.class,
-                order.id());
+                bytes(order.id()));
     }
 
     private static RequestPostProcessor admin() {

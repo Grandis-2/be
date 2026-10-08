@@ -4,6 +4,7 @@ import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.outbox.PreorderOrderSettled;
 import com.grandis.nova.order.outbox.PreorderOrderSettled.RejectReason;
 import com.grandis.nova.order.outbox.PreorderOrderSettled.Result;
+import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -31,7 +32,7 @@ class SettlementDecisionTest {
         assertThat(settled.result()).isEqualTo(Result.CANCELED);
         assertThat(settled.reason()).isNull();
         assertThat(settled.cancelSequence()).isEqualTo(3L);
-        assertThat(settled.preorderInternalId()).isEqualTo(50231L);
+        assertThat(settled.preorderInternalId()).isEqualTo(TestIds.id(50231));
         assertThat(settled.preorderId()).isEqualTo("9f1c-preorder");
     }
 
@@ -105,6 +106,6 @@ class SettlementDecisionTest {
     }
 
     private static SettlePreorderCancelCommand cancel(CancelReason reason) {
-        return new SettlePreorderCancelCommand(50231L, "9f1c-preorder", 1024L, reason, 3L);
+        return new SettlePreorderCancelCommand(TestIds.id(50231), "9f1c-preorder", TestIds.id(1024), reason, 3L);
     }
 }

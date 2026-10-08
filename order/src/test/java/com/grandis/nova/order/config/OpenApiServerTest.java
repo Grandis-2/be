@@ -93,8 +93,9 @@ class OpenApiServerTest {
     /** 컨버터를 거치는 응답이어야 한다 — 401 봉투는 ObjectMapper 로 직접 쓴다. 주문이 없는 예약이라 orderStatus · reason 이 null 이다. */
     @Test
     void responseSerializationStaysJackson3Shaped() throws Exception {
-        String user = tokens.create("101", Role.USER, UUID.randomUUID(), TokenType.ACCESS);
-        JsonNode body = json(send(request(port, "/internal/orders/by-preorder/987654321/cancelability")
+        String user = tokens.create("00000000-0000-7000-8000-000000000101", Role.USER, UUID.randomUUID(),
+                TokenType.ACCESS);
+        JsonNode body = json(send(request(port, "/internal/orders/by-preorder/00000000-0000-7000-8000-000987654321/cancelability")
                 .header(BearerTokens.HEADER, BearerTokens.value(user)).GET().build()));
 
         assertThat(body.path("timestamp").isString()).isTrue();

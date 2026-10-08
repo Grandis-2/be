@@ -19,6 +19,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -45,8 +46,8 @@ class StockLedgerTest {
 
     OrderFixtures fixtures;
     StockProduct product;
-    Long first;
-    Long second;
+    UUID first;
+    UUID second;
 
     @BeforeEach
     void setUp() {
@@ -102,7 +103,7 @@ class StockLedgerTest {
 
     @Test
     void everyOptionBelowCommittedIsReported() {
-        Long third = fixtures.inStockProduct(1).optionIds().get(0);
+        UUID third = fixtures.inStockProduct(1).optionIds().get(0);
         fixtures.stock(first, 10, 3, 2);
         fixtures.stock(second, 10, 0, 4);
 

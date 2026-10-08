@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 상품 목록 · 검색 · 상세 공개 조회. 로그인 없이 볼 수 있다.
@@ -40,14 +41,14 @@ public class ProductController {
     @Operation(summary = "상품 상세(로그인 없이)")
     @SecurityRequirements
     @GetMapping("/{productId}")
-    public ApiResponse<ProductDetailView> product(@PathVariable Long productId) {
+    public ApiResponse<ProductDetailView> product(@PathVariable UUID productId) {
         return ApiResponse.ok(detailService.findProduct(productId));
     }
 
     @Operation(summary = "옵션(조합) 상세(로그인 없이)")
     @SecurityRequirements
     @GetMapping("/{productId}/variants/{variantId}")
-    public ApiResponse<ProductDetailView.Variant> variant(@PathVariable Long productId, @PathVariable Long variantId) {
+    public ApiResponse<ProductDetailView.Variant> variant(@PathVariable UUID productId, @PathVariable UUID variantId) {
         return ApiResponse.ok(detailService.findVariant(productId, variantId));
     }
 
@@ -56,7 +57,7 @@ public class ProductController {
     @GetMapping
     public ApiResponse<ProductPageResponse<ProductListItem>> list(
             @RequestParam(required = false) String q,
-            @RequestParam(required = false) Long categoryId,
+            @RequestParam(required = false) UUID categoryId,
             @RequestParam(required = false) SaleMode saleMode,
             @RequestParam(required = false) List<String> color,
             @RequestParam(required = false) List<String> storage,

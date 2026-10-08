@@ -36,6 +36,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -111,7 +112,7 @@ public class ProductRegistrationService {
         Product product = saveProduct(Product.register(key, request.categoryId(), request.saleMode(), request.title(),
                 request.basePrice(), request.description(), request.tags(), request.visible(), request.warranty().offered(),
                 request.warranty().surcharge(), document));
-        Long productId = product.getId();
+        UUID productId = product.getId();
 
         List<InStockProductRegistered.Item> initialStock = new ArrayList<>();
         for (Combo combo : draft.combos()) {
@@ -187,7 +188,7 @@ public class ProductRegistrationService {
         return items.stream().map(item -> new ProductOptions.Image(item.url(), Boolean.TRUE.equals(item.primary()))).toList();
     }
 
-    private static OptionCombination toCombination(Long productId, String productTitle, Combo combo, ProductOptions document) {
+    private static OptionCombination toCombination(UUID productId, String productTitle, Combo combo, ProductOptions document) {
         if (combo.selections().isEmpty()) {
             return OptionCombination.none(productId, productTitle);
         }

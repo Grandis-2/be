@@ -5,6 +5,7 @@ import com.grandis.nova.catalog.product.SaleStatus;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 목록의 한 상품. 노출 규칙을 지난 상품만 여기 온다(판매 방식별 준비 · 공개 · 판매 중 · 사전예약이면 마감 + 120시간 전).
@@ -18,7 +19,7 @@ import java.time.Instant;
  * @param preorderStatus 사전예약의 접수 단계. 일반 상품은 null
  */
 public record ProductListItem(
-        Long productId,
+        UUID productId,
         SaleMode saleMode,
         String title,
         String imageUrl,

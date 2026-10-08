@@ -30,6 +30,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 결제 거래 · 결제 기록을 바꾸는 유일한 길. 쓰기 포트는 여기서만 쓴다(PaymentArchitectureTest).
@@ -147,7 +148,7 @@ public class PaymentLedger {
         if (held.type() == TransactionType.REFUND) {
             paymentReader.lockPaymentByTarget(held.target());
         }
-        Long id = held.id();
+        UUID id = held.id();
         LeaseToken lease = held.leaseToken();
         Instant now = clock.instant();
         int updated = switch (outcome) {
@@ -221,7 +222,7 @@ public class PaymentLedger {
         return claimed(held.id(), updated).orElseThrow(() -> new LeaseLostException(held.id()));
     }
 
-    /** 대상의 마지막 REFUND(id 순)가 FAILED 인가. 대상별 거래는 몇 행이라 다 읽는다. */
+    /** 대상의 마지막 REFUND(만든 순)가 FAILED 인가. 대상별 거래는 몇 행이라 다 읽는다. */
     private boolean lastRefundFailed(PaymentTarget target) {
         return reader.findTransactionsByTarget(target).stream()
                 .filter(transaction -> transaction.type() == TransactionType.REFUND)
@@ -230,7 +231,7 @@ public class PaymentLedger {
                 .orElse(false);
     }
 
-    private Optional<ClaimedTransaction> claimed(Long transactionId, int updated) {
+    private Optional<ClaimedTransaction> claimed(UUID transactionId, int updated) {
         return updated == 1 ? reader.findById(transactionId).map(ClaimedTransaction::new) : Optional.empty();
     }
 

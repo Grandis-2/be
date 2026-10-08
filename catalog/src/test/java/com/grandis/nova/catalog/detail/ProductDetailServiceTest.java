@@ -15,6 +15,7 @@ import org.springframework.test.context.TestPropertySource;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -49,14 +50,14 @@ class ProductDetailServiceTest {
     @Test
     @DisplayName("상세를 읽는 도중 커밋된 가격 · 재고 변경은 이번 응답에 섞이지 않는다")
     void detailReadsOneSnapshot() {
-        Long productId = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "스냅샷", null);
+        UUID productId = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "스냅샷", null);
         fixtures.registration(productId);
-        Long option = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
+        UUID option = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
         fixtures.inventory(option, 5, 0, 0);
         boolean[] hookRan = {false};
         SqlHookInspector.before("product_options", () -> {
-            commitOnAnotherConnection("UPDATE product_options SET price = 2000 WHERE id = " + option);
-            commitOnAnotherConnection("UPDATE option_inventories SET stock_sold = 5 WHERE option_id = " + option);
+            commitOnAnotherConnection("UPDATE product_options SET price = 2000 WHERE id = UUID_TO_BIN('" + option + "')");
+            commitOnAnotherConnection("UPDATE option_inventories SET stock_sold = 5 WHERE option_id = UUID_TO_BIN('" + option + "')");
             hookRan[0] = true;
         });
 
@@ -75,11 +76,11 @@ class ProductDetailServiceTest {
     @Test
     @DisplayName("관리자 상세를 읽는 도중 커밋된 가격 변경도 이번 응답에 섞이지 않는다 — 회원 상세와 같은 REPEATABLE READ")
     void adminDetailReadsOneSnapshot() {
-        Long productId = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "관리자 스냅샷", null);
-        Long option = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
+        UUID productId = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "관리자 스냅샷", null);
+        UUID option = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
         boolean[] hookRan = {false};
         SqlHookInspector.before("product_options", () -> {
-            commitOnAnotherConnection("UPDATE product_options SET price = 2000 WHERE id = " + option);
+            commitOnAnotherConnection("UPDATE product_options SET price = 2000 WHERE id = UUID_TO_BIN('" + option + "')");
             hookRan[0] = true;
         });
 
@@ -93,7 +94,7 @@ class ProductDetailServiceTest {
     @Test
     @DisplayName("관리자 상세의 등록 완료는 판매 방식별 준비다 — 사전예약은 회차 행이 생기면 true, visible 은 칸 그대로")
     void adminDetailCompletionFollowsReadiness() {
-        Long productId = fixtures.product("PREORDER", "ACTIVE");
+        UUID productId = fixtures.product("PREORDER", "ACTIVE");
         String key = ShopFixtures.unique();
         fixtures.registration(productId, key);
 
@@ -109,9 +110,9 @@ class ProductDetailServiceTest {
     @Test
     @DisplayName("일반 상품은 그 상품 옵션의 재고 행이 생겨야 준비다 — 다른 상품의 재고 행은 세지 않는다")
     void inStockReadinessCountsOnlyItsOwnOptions() {
-        Long productId = fixtures.product("IN_STOCK", "ACTIVE");
-        Long option = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
-        Long other = fixtures.product("IN_STOCK", "ACTIVE");
+        UUID productId = fixtures.product("IN_STOCK", "ACTIVE");
+        UUID option = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
+        UUID other = fixtures.product("IN_STOCK", "ACTIVE");
         fixtures.inventory(fixtures.option(other, "ACTIVE", new BigDecimal("1000")), 3, 0, 0);
         fixtures.registration(productId);
         assertThat(service.findAdminProduct(productId).registrationCompleted()).isFalse();
@@ -123,8 +124,8 @@ class ProductDetailServiceTest {
     @Test
     @DisplayName("회원 상세 · 옵션 상세는 공개여도 준비 전이면 404 다")
     void memberDetailHidesProductsNotReady() {
-        Long productId = fixtures.product("IN_STOCK", "ACTIVE");
-        Long option = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
+        UUID productId = fixtures.product("IN_STOCK", "ACTIVE");
+        UUID option = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
         fixtures.registration(productId);
         assertThatThrownBy(() -> service.findProduct(productId)).isInstanceOf(BusinessException.class);
         assertThatThrownBy(() -> service.findVariant(productId, option)).isInstanceOf(BusinessException.class);

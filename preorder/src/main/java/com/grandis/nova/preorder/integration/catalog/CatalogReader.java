@@ -22,6 +22,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -46,9 +47,9 @@ public class CatalogReader {
     private final DependencyGuard dependencyGuard;
     private final TaskExecutor refreshExecutor;
     private final Clock clock;
-    private final Cache<Long, Loaded> products;
+    private final Cache<UUID, Loaded> products;
     /** 다시 받는 중인 상품. 같은 상품을 동시에 여러 번 다시 받지 않는다. */
-    private final Set<Long> refreshing = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> refreshing = ConcurrentHashMap.newKeySet();
 
     public CatalogReader(CatalogClient catalogClient, DependencyGuard dependencyGuard,
                          @Qualifier(REFRESH_EXECUTOR) TaskExecutor refreshExecutor, Clock clock) {
@@ -65,7 +66,7 @@ public class CatalogReader {
     }
 
     /** 지표 등록용(CatalogCacheMetrics). */
-    Cache<Long, Loaded> cache() {
+    Cache<UUID, Loaded> cache() {
         return products;
     }
 
@@ -74,7 +75,7 @@ public class CatalogReader {
      *
      * @throws BusinessException DEPENDENCY_UNAVAILABLE — 캐시에 없는데 catalog 가 응답하지 않을 때
      */
-    public Optional<OptionSnapshot> findOption(Long productId, Long optionId) {
+    public Optional<OptionSnapshot> findOption(UUID productId, UUID optionId) {
         return findProduct(productId).flatMap(product -> product.snapshot(optionId));
     }
 
@@ -84,7 +85,7 @@ public class CatalogReader {
      * @throws BusinessException DEPENDENCY_UNAVAILABLE — 캐시에 없는데 catalog 가 응답하지 않을 때,
      *                           UNAUTHENTICATED — catalog 가 요청의 토큰을 받지 않을 때
      */
-    public Optional<ProductCatalog> findProduct(Long productId) {
+    public Optional<ProductCatalog> findProduct(UUID productId) {
         Loaded loaded = get(productId);
         if (loaded.isOlderThan(REFRESH_AFTER, clock.instant())) {
             refreshInBackground(productId, loaded);
@@ -93,12 +94,12 @@ public class CatalogReader {
     }
 
     /** 이벤트(판매 중지 등)로 값이 바뀐 상품을 비운다. 다음 조회가 catalog 에서 다시 받는다. */
-    public void evict(Long productId) {
+    public void evict(UUID productId) {
         products.invalidate(productId);
     }
 
     /** 401 은 사용자 토큰 문제라 401, 404 외 4xx · 읽을 수 없는 응답은 연동 오류(500), 그 밖은 일시 장애(503). */
-    private Loaded get(Long productId) {
+    private Loaded get(UUID productId) {
         try {
             return products.get(productId, this::load);
         } catch (CompletionException | RestClientException e) {
@@ -120,7 +121,7 @@ public class CatalogReader {
      * 뒤에서 다시 받는다. 받는 사이 비워졌거나 다른 값으로 바뀌었으면 덮지 않는다 —
      * 판매 중지로 비운 상품에 옛 값을 다시 넣지 않게.
      */
-    private void refreshInBackground(Long productId, Loaded stale) {
+    private void refreshInBackground(UUID productId, Loaded stale) {
         if (!refreshing.add(productId)) {
             return;
         }
@@ -139,7 +140,7 @@ public class CatalogReader {
         }
     }
 
-    private Loaded load(Long productId) {
+    private Loaded load(UUID productId) {
         Optional<ProductCatalog> product;
         try {
             product = Optional.ofNullable(dependencyGuard.call(DEPENDENCY,

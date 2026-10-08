@@ -4,12 +4,13 @@ import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /** 관리자 목록 조건. 값이 없으면 null 이고 그 조건은 걸지 않는다. */
 public record AdminPreorderFilter(
         PreorderStatus status,
-        Long customerId,
-        Long productId,
+        UUID customerId,
+        UUID productId,
         Instant from,
         Instant to,
         SyncJobStatus registerJobStatus

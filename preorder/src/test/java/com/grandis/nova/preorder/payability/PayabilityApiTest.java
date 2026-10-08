@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.payability;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.cancel.application.CancelStarter;
@@ -20,6 +21,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+
+import java.util.UUID;
 
 import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
@@ -54,8 +57,8 @@ class PayabilityApiTest {
     CatalogClient catalogClient;
 
     ShopFixtures fixtures;
-    Long customerId;
-    Long preorderId;
+    UUID customerId;
+    UUID preorderId;
     String token;
 
     @BeforeEach
@@ -74,8 +77,8 @@ class PayabilityApiTest {
         payability(customerId)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.preorderId").value(token))
-                .andExpect(jsonPath("$.data.preorderInternalId").value(preorderId))
-                .andExpect(jsonPath("$.data.customerId").value(customerId))
+                .andExpect(jsonPath("$.data.preorderInternalId").value(preorderId.toString()))
+                .andExpect(jsonPath("$.data.customerId").value(customerId.toString()))
                 .andExpect(jsonPath("$.data.unitPrice").exists())
                 .andExpect(jsonPath("$.data.status").value("REGISTERED"))
                 .andExpect(jsonPath("$.data.paymentDueAt").exists())
@@ -94,7 +97,7 @@ class PayabilityApiTest {
     void 기한이_지났는데_만료_처리_전이면_DUE_PASSED() throws Exception {
         makePayable();
         jdbcTemplate.update("UPDATE preorders SET payable_from = UTC_TIMESTAMP(6) - INTERVAL 25 HOUR WHERE id = ?",
-                preorderId);
+                (Object) UuidBinary.toBytes(preorderId));
 
         payability(customerId)
                 .andExpect(jsonPath("$.data.payable").value(false))
@@ -134,7 +137,7 @@ class PayabilityApiTest {
                 token, "REGISTER", "R-" + ShopFixtures.unique()));
     }
 
-    private ResultActions payability(Long customer) throws Exception {
+    private ResultActions payability(UUID customer) throws Exception {
         return mockMvc.perform(get("/internal/preorders/{id}/payability", token)
                 .with(customer(customer)));
     }

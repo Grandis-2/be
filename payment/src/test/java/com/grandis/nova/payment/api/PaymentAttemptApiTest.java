@@ -1,5 +1,6 @@
 package com.grandis.nova.payment.api;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.security.JwtTokenProvider;
 import com.grandis.nova.common.security.RevocationChecker;
@@ -71,7 +72,7 @@ class PaymentAttemptApiTest {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
                 SELECT transaction_type, status, amount, provider_order_id, attempt_count FROM payment_transactions
                 WHERE target_type = ? AND target_id = ?
-                """, target.type().name(), target.id());
+                """, target.type().name(), UuidBinary.toBytes(target.id()));
         assertThat(rows).singleElement().satisfies(row -> {
             assertThat(row.get("transaction_type")).isEqualTo("CAPTURE");
             assertThat(row.get("status")).isEqualTo("PENDING");
@@ -90,7 +91,7 @@ class PaymentAttemptApiTest {
         assertThat(second).isNotEqualTo(first);
         assertThat(jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM payment_transactions WHERE target_type = 'ORDER' AND target_id = ? AND status = 'PENDING'
-                """, Integer.class, target.id())).isEqualTo(2);
+                """, Integer.class, UuidBinary.toBytes(target.id()))).isEqualTo(2);
     }
 
     @Test
@@ -112,8 +113,8 @@ class PaymentAttemptApiTest {
     }
 
     @Test
-    void rejectsNonPositiveTargetId() throws Exception {
-        open("ORDER", 0L, "1000")
+    void rejectsNonUuidTargetId() throws Exception {
+        perform("{\"targetType\":\"ORDER\",\"targetId\":101,\"amount\":1000}")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
     }
@@ -128,13 +129,13 @@ class PaymentAttemptApiTest {
 
     @Test
     void rejectsUnknownTargetType() throws Exception {
-        perform("{\"targetType\":\"GIFT\",\"targetId\":%d,\"amount\":1000}".formatted(target.id()))
+        perform("{\"targetType\":\"GIFT\",\"targetId\":\"%s\",\"amount\":1000}".formatted(target.id()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
     }
 
-    private ResultActions open(String targetType, Long targetId, String amount) throws Exception {
-        return perform("{\"targetType\":\"%s\",\"targetId\":%d,\"amount\":%s}".formatted(targetType, targetId, amount));
+    private ResultActions open(String targetType, UUID targetId, String amount) throws Exception {
+        return perform("{\"targetType\":\"%s\",\"targetId\":\"%s\",\"amount\":%s}".formatted(targetType, targetId, amount));
     }
 
     private ResultActions perform(String json) throws Exception {
@@ -151,6 +152,6 @@ class PaymentAttemptApiTest {
     private int rowsFor(PaymentTarget target) {
         return jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM payment_transactions WHERE target_type = ? AND target_id = ?
-                """, Integer.class, target.type().name(), target.id());
+                """, Integer.class, target.type().name(), UuidBinary.toBytes(target.id()));
     }
 }

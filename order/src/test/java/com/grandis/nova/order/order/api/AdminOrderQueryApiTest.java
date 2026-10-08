@@ -22,6 +22,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
@@ -53,7 +54,7 @@ class AdminOrderQueryApiTest {
 
     OrderFixtures fixtures;
     PlacedOrders orders;
-    Long customerId;
+    UUID customerId;
 
     @BeforeEach
     void setUp() {
@@ -80,9 +81,9 @@ class AdminOrderQueryApiTest {
         List<String> createdAts = JsonPath.read(body, "$.data.items[*].createdAt");
         assertThat(createdAts.stream().map(Instant::parse).toList())
                 .isSortedAccordingTo(Comparator.reverseOrder());
-        assertThat(JsonPath.<List<Number>>read(body, "$.data.items[?(@.orderId == '%s')].customerId"
-                .formatted(mine.orderToken().value())).stream().map(Number::longValue).toList())
-                .containsExactly(customerId);
+        assertThat(JsonPath.<List<String>>read(body, "$.data.items[?(@.orderId == '%s')].customerId"
+                .formatted(mine.orderToken().value())))
+                .containsExactly(customerId.toString());
         assertThat(JsonPath.<List<String>>read(body, "$.data.items[?(@.orderId == '%s')].items[0].productTitle"
                 .formatted(mine.orderToken().value()))).containsExactly(OrderFixtures.PRODUCT_TITLE);
     }
@@ -138,12 +139,12 @@ class AdminOrderQueryApiTest {
     void detailAddsCustomerAndInternalNote() throws Exception {
         Order order = orders.place(customerId);
         // 관리자 메모 수정 API 는 이번 범위가 아니다. 칸이 실리는지만 본다.
-        jdbcTemplate.update("UPDATE orders SET internal_note = ? WHERE id = ?", "연락 요망", order.id());
+        jdbcTemplate.update("UPDATE orders SET internal_note = ? WHERE id = ?", "연락 요망", bytes(order.id()));
 
         mockMvc.perform(get("/api/v1/admin/orders/" + order.orderToken().value()).with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.orderId").value(order.orderToken().value()))
-                .andExpect(jsonPath("$.data.customerId").value(customerId))
+                .andExpect(jsonPath("$.data.customerId").value(customerId.toString()))
                 .andExpect(jsonPath("$.data.internalNote").value("연락 요망"))
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.events", hasSize(1)))

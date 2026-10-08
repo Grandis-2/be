@@ -10,6 +10,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 벌크 UPDATE 는 영속성 컨텍스트를 거치지 않는다. 앞에서는 flush 해서 쌓인 변경을 먼저 반영한다.
@@ -17,12 +18,12 @@ import java.util.Optional;
  * 어댑터가 그 주문만 떼어낸다(JpaOrderStore.changeStatus) — 전체를 비우면 같은 트랜잭션의 다른 엔티티(결제 · 재고)까지
  * 떼어져 그 뒤의 변경이 조용히 유실된다.
  */
-public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, Long>,
+public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
         JpaSpecificationExecutor<OrderJpaEntity> {
 
     Optional<OrderJpaEntity> findByOrderToken(String orderToken);
 
-    Optional<OrderJpaEntity> findByPreorderId(Long preorderId);
+    Optional<OrderJpaEntity> findByPreorderId(UUID preorderId);
 
     @Modifying(flushAutomatically = true)
     @Query("""
@@ -31,16 +32,16 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, Long>,
                    o.updatedAt = :now
              where o.id = :id and o.status = :from
             """)
-    int changeStatus(@Param("id") Long id, @Param("from") OrderStatus from, @Param("to") OrderStatus to,
+    int changeStatus(@Param("id") UUID id, @Param("from") OrderStatus from, @Param("to") OrderStatus to,
                      @Param("attempt") String authorizingProviderOrderId, @Param("now") Instant now);
 
     /** 스칼라 조회라 영속성 컨텍스트의 엔티티가 아니라 DB 값을 읽는다. 행을 잠근 트랜잭션에서 부른다. */
     @Query("select o.authorizingProviderOrderId from OrderJpaEntity o where o.id = :id")
-    Optional<String> findAuthorizingProviderOrderId(@Param("id") Long id);
+    Optional<String> findAuthorizingProviderOrderId(@Param("id") UUID id);
 
     @Query(value = "SELECT status FROM orders WHERE id = :id FOR UPDATE", nativeQuery = true)
-    Optional<OrderStatus> findStatusForUpdate(@Param("id") Long id);
+    Optional<OrderStatus> findStatusForUpdate(@Param("id") UUID id);
 
     @Query("select o.eventSequence from OrderJpaEntity o where o.id = :id")
-    long findEventSequence(@Param("id") Long id);
+    long findEventSequence(@Param("id") UUID id);
 }

@@ -16,6 +16,7 @@ import com.grandis.nova.order.order.vo.Money;
 import com.grandis.nova.order.order.vo.OrderToken;
 import com.grandis.nova.order.order.vo.ShipTo;
 import com.grandis.nova.order.support.OrderFixtures;
+import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -31,6 +32,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -46,8 +48,8 @@ class PlaceOrderServiceTest {
 
     static final Instant NOW = Instant.parse("2026-09-25T00:00:00Z");
     static final String PREORDER_UUID = "0b8f6a3e-5a8c-4d59-9a53-3c1f0e0f7a11";
-    static final Long CUSTOMER_ID = 7L;
-    static final Long PREORDER_ID = 11L;
+    static final UUID CUSTOMER_ID = TestIds.id(7);
+    static final UUID PREORDER_ID = TestIds.id(11);
     // 전달할 세션 토큰 자리. 실제 토큰 모양이 아니다.
     static final String SESSION = "service-test-user-7";
 
@@ -119,7 +121,7 @@ class PlaceOrderServiceTest {
     @Test
     void existingOrderOfAnotherCustomerIsHidden() {
         payable();
-        Order foreign = new Order(100L, OrderToken.issue(), 999L, OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID,
+        Order foreign = new Order(TestIds.id(100), OrderToken.issue(), TestIds.id(999), OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID,
                 OrderStatus.AWAITING_PAYMENT, null, Money.won(1_250_000), null, null,
                 new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), null, 1, NOW, NOW);
         given(orderReader.findByPreorderId(PREORDER_ID)).willReturn(Optional.of(foreign));
@@ -162,7 +164,7 @@ class PlaceOrderServiceTest {
     @ValueSource(booleans = {false, true})
     void existingOrderWithAnotherPreorderTokenIsNotReturned(boolean foundAfterDuplicateKey) {
         payable();
-        Order mismatched = new Order(100L, OrderToken.issue(), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID,
+        Order mismatched = new Order(TestIds.id(100), OrderToken.issue(), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID,
                 "1c9e2b7d-3f4a-4b5c-8d6e-7f8091a2b3c4", OrderStatus.AWAITING_PAYMENT, null, Money.won(1_250_000), null, null,
                 new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), null, 1, NOW, NOW);
         if (foundAfterDuplicateKey) {
@@ -226,7 +228,7 @@ class PlaceOrderServiceTest {
     void fractionalUnitPriceFromPreorderIsRejectedBeforeTransaction() {
         Instant payableFrom = NOW.minus(Duration.ofHours(1));
         given(preorderReader.find(PREORDER_UUID, SESSION)).willReturn(Optional.of(new PreorderPayability(PREORDER_UUID,
-                PREORDER_ID, CUSTOMER_ID, 3L, 30L, "Nova 1", "블랙 / 256GB", new BigDecimal("1250000.5"), "PAYABLE",
+                PREORDER_ID, CUSTOMER_ID, TestIds.id(3), TestIds.id(30), "Nova 1", "블랙 / 256GB", new BigDecimal("1250000.5"), "PAYABLE",
                 payableFrom, payableFrom.plus(Duration.ofHours(24)), true, null)));
 
         assertThatThrownBy(() -> service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS))
@@ -244,18 +246,18 @@ class PlaceOrderServiceTest {
 
     private void blocked(String status, String reason) {
         given(preorderReader.find(PREORDER_UUID, SESSION)).willReturn(Optional.of(new PreorderPayability(PREORDER_UUID,
-                PREORDER_ID, CUSTOMER_ID, 3L, 30L, "Nova 1", "블랙 / 256GB", new BigDecimal("1250000"), status,
+                PREORDER_ID, CUSTOMER_ID, TestIds.id(3), TestIds.id(30), "Nova 1", "블랙 / 256GB", new BigDecimal("1250000"), status,
                 NOW.minus(Duration.ofHours(25)), NOW.minus(Duration.ofHours(1)), false, reason)));
     }
 
     private static PreorderPayability payability(Instant payableFrom, Instant paymentDueAt, boolean payable,
                                                  String reason) {
-        return new PreorderPayability(PREORDER_UUID, PREORDER_ID, CUSTOMER_ID, 3L, 30L, "Nova 1", "블랙 / 256GB",
+        return new PreorderPayability(PREORDER_UUID, PREORDER_ID, CUSTOMER_ID, TestIds.id(3), TestIds.id(30), "Nova 1", "블랙 / 256GB",
                 new BigDecimal("1250000"), "PAYABLE", payableFrom, paymentDueAt, payable, reason);
     }
 
     private static Order order(OrderStatus status) {
-        return new Order(100L, OrderToken.issue(), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID, status, null,
+        return new Order(TestIds.id(100), OrderToken.issue(), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID, status, null,
                 Money.won(1_250_000), null, null,
                 new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), null, 1, NOW, NOW);
     }

@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.event;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
@@ -19,6 +20,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -52,8 +54,8 @@ class CancelFlowScenarioTest {
     OrderClient orderClient;
 
     ShopFixtures fixtures;
-    Long customerId;
-    Long preorderId;
+    UUID customerId;
+    UUID preorderId;
     String token;
     /** 외부 예약 번호는 UNIQUE 라 테스트마다 새로 만든다(DB 를 테스트끼리 공유한다). */
     String externalNumber;
@@ -78,14 +80,15 @@ class CancelFlowScenarioTest {
     void 주문이_정리되면_외부_취소를_거쳐_취소_완료가_된다(PreorderOrderSettled.Result result) {
         cancelService.cancelByCustomer(customerId, token, null);
         handler.onOrderSettled(new PreorderOrderSettled(token, result, null, fixtures.cancelSequence(preorderId), null));
-        Long cancelJobId = fixtures.workerSucceeds(preorderId, "CANCEL");
+        UUID cancelJobId = fixtures.workerSucceeds(preorderId, "CANCEL");
         handler.onExternalJobSucceeded(new ExternalJobSucceeded(cancelJobId, token, "CANCEL", null));
 
         assertThat(history()).containsExactly(
                 "null>PENDING_SYNC", "PENDING_SYNC>REGISTERED", "REGISTERED>CANCELING", "CANCELING>CANCELED");
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT JSON_UNQUOTE(JSON_EXTRACT(request_payload, '$.reservationNo')) FROM preorder_sync_jobs"
-                        + " WHERE id = ?", String.class, cancelJobId)).isEqualTo(externalNumber);
+                        + " WHERE id = ?", String.class,
+                        (Object) UuidBinary.toBytes(cancelJobId))).isEqualTo(externalNumber);
     }
 
     @Test
@@ -97,13 +100,14 @@ class CancelFlowScenarioTest {
         assertThat(history()).containsExactly(
                 "null>PENDING_SYNC", "PENDING_SYNC>REGISTERED", "REGISTERED>CANCELING", "CANCELING>REGISTERED");
         assertThat(fixtures.count(
-                "SELECT COUNT(*) FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'CANCEL'", preorderId))
+                "SELECT COUNT(*) FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'CANCEL'",
+                (Object) UuidBinary.toBytes(preorderId)))
                 .isZero();
     }
 
     private List<String> history() {
         return jdbcTemplate.query("""
                 SELECT from_status, to_status FROM preorder_events WHERE preorder_id = ? ORDER BY event_sequence
-                """, (rs, n) -> rs.getString(1) + ">" + rs.getString(2), preorderId);
+                """, (rs, n) -> rs.getString(1) + ">" + rs.getString(2), (Object) UuidBinary.toBytes(preorderId));
     }
 }

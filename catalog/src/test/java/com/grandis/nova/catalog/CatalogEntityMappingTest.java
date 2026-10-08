@@ -18,6 +18,7 @@ import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
+import com.grandis.nova.common.UuidBinary;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -29,6 +30,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -58,16 +60,16 @@ class CatalogEntityMappingTest {
     @Test
     @DisplayName("카테고리를 상위 · 하위로 읽는다")
     void categoryTree() {
-        Long parentId = fixtures.category();
-        Long samsungId = fixtures.childCategory(parentId, "삼성");
-        Long appleId = fixtures.childCategory(parentId, "Apple");
+        UUID parentId = fixtures.category();
+        UUID samsungId = fixtures.childCategory(parentId, "삼성");
+        UUID appleId = fixtures.childCategory(parentId, "Apple");
 
         Category parent = categories.findById(parentId).orElseThrow();
         assertThat(parent.isTopLevel()).isTrue();
         assertThat(parent.getCreatedAt()).isNotNull();
         assertThat(parent.getSortOrder()).as("순서 칸을 안 넣은 행(다른 모듈 픽스처)은 0").isZero();
 
-        List<Category> children = categories.findAllByOrderBySortOrderAscIdAsc().stream()
+        List<Category> children = categories.findAllByOrderBySortOrderAscCreatedAtAscIdAsc().stream()
                 .filter(c -> parentId.equals(c.getParentId())).toList();
         assertThat(children).extracting(Category::getId).containsExactly(samsungId, appleId);
         assertThat(children).extracting(Category::getName).containsExactly("삼성", "Apple");
@@ -77,7 +79,7 @@ class CatalogEntityMappingTest {
     @Test
     @DisplayName("상품 · 옵션은 저장한 값 그대로 DB 에 남는다")
     void productAndOptionRoundTrip() {
-        Long categoryId = fixtures.childCategory(fixtures.category(), "Apple");
+        UUID categoryId = fixtures.childCategory(fixtures.category(), "Apple");
         Product product = products.saveAndFlush(Product.register(null, categoryId, SaleMode.PREORDER, "Nova 1",
                 new BigDecimal("1200000"), "설명", "nova,phone", false, true, new BigDecimal("199000"), ProductOptions.EMPTY));
         OptionCombination none = OptionCombination.none(product.getId(), " Nova  1 ");
@@ -90,7 +92,7 @@ class CatalogEntityMappingTest {
         Map<String, Object> row = jdbcTemplate.queryForMap(
                 "SELECT sale_mode, status, visible, base_price, options->'$.warranty.offered' AS warranty_offered, "
                         + "JSON_TYPE(options->'$.warranty.surcharge') AS surcharge_type, options->>'$.warranty.surcharge' AS warranty_surcharge, created_at, updated_at "
-                        + "FROM products WHERE id = ?", product.getId());
+                        + "FROM products WHERE id = ?", UuidBinary.toBytes(product.getId()));
         assertThat(row.get("sale_mode")).isEqualTo("PREORDER");
         assertThat(row.get("status")).isEqualTo("ACTIVE");
         assertThat(row.get("visible")).isEqualTo(false);
@@ -103,7 +105,7 @@ class CatalogEntityMappingTest {
 
         Map<String, Object> optionRow = jdbcTemplate.queryForMap(
                 "SELECT price, status, filter_attributes, combination_key "
-                        + "FROM product_options WHERE id = ?", option.getId());
+                        + "FROM product_options WHERE id = ?", UuidBinary.toBytes(option.getId()));
         assertThat((BigDecimal) optionRow.get("price")).isEqualByComparingTo("1450000");
         assertThat(optionRow.get("status")).isEqualTo("ACTIVE");
         assertThat(optionRow.get("filter_attributes")).isNull();
@@ -114,7 +116,7 @@ class CatalogEntityMappingTest {
         assertThat(reloaded.isWarrantyOffered()).isTrue();
         assertThat(reloaded.getWarrantySurcharge()).isEqualByComparingTo("199000");
         assertThat(reloaded.getStatus()).isEqualTo(SaleStatus.ACTIVE);
-        assertThat(options.findByProductIdOrderById(product.getId())).singleElement()
+        assertThat(options.findByProductIdOrderByCreatedAtAscIdAsc(product.getId())).singleElement()
                 .satisfies(o -> assertThat(o.getCombinationKey()).isEqualTo(OptionCombination.STANDALONE_KEY));
     }
 
@@ -160,8 +162,8 @@ class CatalogEntityMappingTest {
         assertThat(visibleInDb(hidden.getId())).isFalse();
     }
 
-    private boolean visibleInDb(Long productId) {
-        return jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, productId);
+    private boolean visibleInDb(UUID productId) {
+        return jdbcTemplate.queryForObject("SELECT visible FROM products WHERE id = ?", Boolean.class, UuidBinary.toBytes(productId));
     }
 
     @Test
@@ -183,14 +185,14 @@ class CatalogEntityMappingTest {
                        options->>'$.axes[0].values[0].images[1].url' AS second_image,
                        JSON_EXTRACT(options, '$.axes[1].values[0].surcharge') AS surcharge,
                        options->>'$.detailImages[0].section' AS section, thumbnail_url
-                  FROM products WHERE id = ?""", product.getId());
+                  FROM products WHERE id = ?""", UuidBinary.toBytes(product.getId()));
         assertThat(row.get("first_axis")).isEqualTo("color");
         assertThat(row.get("hex")).isEqualTo("#2E2E32");
         assertThat(row.get("second_image")).isEqualTo("https://img/b1.jpg");
         assertThat(new BigDecimal(row.get("surcharge").toString())).isEqualByComparingTo("3000");
         assertThat(row.get("section")).isEqualTo("제품 사양");
         assertThat(row.get("thumbnail_url")).as("첫 색상의 첫 장 — 대표 표시가 둘째 장에 있어도 첫 장").isEqualTo("https://img/b2.jpg");
-        assertThat(jdbcTemplate.queryForObject("SELECT JSON_KEYS(options, '$.axes[0]') FROM products WHERE id = ?", String.class, product.getId()))
+        assertThat(jdbcTemplate.queryForObject("SELECT JSON_KEYS(options, '$.axes[0]') FROM products WHERE id = ?", String.class, UuidBinary.toBytes(product.getId())))
                 .as("파생 값(filterAxis)은 문서에 쓰지 않는다 — 문서 모양은 백필과 같다").isEqualTo("[\"key\", \"label\", \"values\"]");
 
         Product reloaded = products.findById(product.getId()).orElseThrow();
@@ -205,7 +207,7 @@ class CatalogEntityMappingTest {
         Value twoMeters = new Value(ProductOptions.newValueId(), "2m", "2m", null, new BigDecimal("3000"), List.of());
         Axis color = new Axis(OptionText.COLOR, "색상", List.of(black));
         Axis length = new Axis("length", "길이", List.of(twoMeters));
-        Long productId = fixtures.product("IN_STOCK", "ACTIVE");
+        UUID productId = fixtures.product("IN_STOCK", "ACTIVE");
         OptionCombination combination = OptionCombination.of(productId, List.of(new Pick(color, black), new Pick(length, twoMeters)));
         ProductOption option = options.saveAndFlush(ProductOption.of("BLACK-2M", new BigDecimal("13000"), combination));
 
@@ -213,7 +215,7 @@ class CatalogEntityMappingTest {
         Map<String, Object> row = jdbcTemplate.queryForMap(
                 "SELECT combination_key, JSON_EXTRACT(filter_attributes, '$.color') AS color, "
                         + "JSON_LENGTH(filter_attributes) AS filters "
-                        + "FROM product_options WHERE id = ?", option.getId());
+                        + "FROM product_options WHERE id = ?", UuidBinary.toBytes(option.getId()));
         assertThat(OptionCombination.valueIdsOf((String) row.get("combination_key"))).containsExactlyInAnyOrder(black.id(), twoMeters.id());
         assertThat(row.get("color")).isEqualTo("\"블랙\"");
         assertThat(row.get("filters")).isEqualTo(1L);
@@ -245,7 +247,7 @@ class CatalogEntityMappingTest {
     @DisplayName("멱등 키는 상품 칸에 남아 키로 다시 찾는다 — 키 없는 행(다른 모듈 픽스처)은 여럿이어도 된다")
     void idempotencyKeyRoundTrip() {
         String key = ShopFixtures.unique();
-        Long categoryId = fixtures.category();
+        UUID categoryId = fixtures.category();
         Product product = products.saveAndFlush(Product.register(key, categoryId, SaleMode.PREORDER, "Nova 1",
                 BigDecimal.ONE, null, null, false, false, BigDecimal.ZERO, ProductOptions.EMPTY));
         products.saveAndFlush(Product.register(null, categoryId, SaleMode.IN_STOCK, "A", BigDecimal.ONE, null, null, false, false,
@@ -255,6 +257,6 @@ class CatalogEntityMappingTest {
 
         assertThat(products.findByIdempotencyKey(key)).get().extracting(Product::getId).isEqualTo(product.getId());
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM products WHERE category_id = ? AND idempotency_key IS NULL",
-                Long.class, categoryId)).isEqualTo(2L);
+                Long.class, UuidBinary.toBytes(categoryId))).isEqualTo(2L);
     }
 }

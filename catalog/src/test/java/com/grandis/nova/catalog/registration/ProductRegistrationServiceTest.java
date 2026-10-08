@@ -4,6 +4,7 @@ import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.catalog.support.SqlHookInspector;
+import com.grandis.nova.common.UuidBinary;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -22,6 +23,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -39,7 +41,7 @@ class ProductRegistrationServiceTest {
     @Autowired ProductRegistrationService service;
 
     ShopFixtures fixtures;
-    Long categoryId;
+    UUID categoryId;
 
     @BeforeEach
     void setUp() {
@@ -98,17 +100,17 @@ class ProductRegistrationServiceTest {
                         new ProductRegistrationRequest.Combination(Map.of("color", "화이트"), false, null, 0)),
                 null, null, null);
         RegistrationOutcome created = service.register("k-" + ShopFixtures.unique(), inStock);
-        Long productId = created.registration().productId();
+        UUID productId = created.registration().productId();
 
         Map<String, Object> event = singleEventOf(productId);
         assertThat(event).containsEntry("aggregate_type", "PRODUCT").containsEntry("event_type", "IN_STOCK_PRODUCT_REGISTERED");
         JsonNode payload = JSON.readTree((String) event.get("payload"));
         assertThat(payload.has("productId")).as("상품 id 는 aggregateId 로만").isFalse();
-        Map<Long, Integer> stockByOption = new HashMap<>();
-        payload.get("items").forEach(item -> stockByOption.put(item.get("optionId").asLong(), item.get("stockTotal").asInt()));
-        Map<Long, String> skuByOption = new HashMap<>();
+        Map<UUID, Integer> stockByOption = new HashMap<>();
+        payload.get("items").forEach(item -> stockByOption.put(UUID.fromString(item.get("optionId").asString()), item.get("stockTotal").asInt()));
+        Map<UUID, String> skuByOption = new HashMap<>();
         jdbcTemplate.query("SELECT id, sku FROM product_options WHERE product_id = ?",
-                rs -> { skuByOption.put(rs.getLong("id"), rs.getString("sku")); }, productId);
+                rs -> { skuByOption.put(UuidBinary.fromBytes(rs.getBytes("id")), rs.getString("sku")); }, UuidBinary.toBytes(productId));
         assertThat(stockByOption).as("그 상품 옵션 전부").containsOnlyKeys(skuByOption.keySet()).containsValues(5, 0);
     }
 
@@ -117,7 +119,7 @@ class ProductRegistrationServiceTest {
     void preorderRegistrationAppendsCampaignEvent() {
         Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.SECONDS).plusNanos(123_456_789);
         RegistrationOutcome created = service.register("k-" + ShopFixtures.unique(), preorderRequest(opensAt));
-        Long productId = created.registration().productId();
+        UUID productId = created.registration().productId();
 
         Map<String, Object> event = singleEventOf(productId);
         assertThat(event).containsEntry("aggregate_type", "PRODUCT").containsEntry("event_type", "PREORDER_PRODUCT_REGISTERED");
@@ -139,7 +141,7 @@ class ProductRegistrationServiceTest {
     void replayDoesNotAppendAndFollowsReadiness() {
         String key = "k-" + ShopFixtures.unique();
         Instant opensAt = Instant.now().plus(Duration.ofHours(1));
-        Long productId = service.register(key, preorderRequest(opensAt)).registration().productId();
+        UUID productId = service.register(key, preorderRequest(opensAt)).registration().productId();
 
         RegistrationOutcome pending = service.register(key, preorderRequest(opensAt));
         assertThat(pending.kind()).isEqualTo(RegistrationOutcome.Kind.IN_PROGRESS);
@@ -152,12 +154,12 @@ class ProductRegistrationServiceTest {
         assertThat(service.status(key).completed()).as("상태 조회도 같은 판정").isTrue();
 
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM catalog_outbox_events WHERE aggregate_id = ?",
-                Integer.class, productId)).as("재전송은 이벤트를 다시 적지 않는다").isEqualTo(1);
+                Integer.class, UuidBinary.toBytes(productId))).as("재전송은 이벤트를 다시 적지 않는다").isEqualTo(1);
     }
 
-    private Map<String, Object> singleEventOf(Long productId) {
+    private Map<String, Object> singleEventOf(UUID productId) {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT aggregate_type, event_type, payload FROM catalog_outbox_events WHERE aggregate_id = ?", productId);
+                "SELECT aggregate_type, event_type, payload FROM catalog_outbox_events WHERE aggregate_id = ?", UuidBinary.toBytes(productId));
         assertThat(rows).hasSize(1);
         return rows.getFirst();
     }

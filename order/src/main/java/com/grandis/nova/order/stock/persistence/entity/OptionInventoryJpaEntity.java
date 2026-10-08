@@ -6,6 +6,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * option_inventories 행. 새 행을 넣을 때만 쓴다 — 읽기는 투영(OptionInventoryJpaRepository.InventoryRow), 변경은 조건부 UPDATE 다.
@@ -16,7 +17,7 @@ import java.time.Instant;
 public class OptionInventoryJpaEntity {
 
     @Id
-    private Long optionId;
+    private UUID optionId;
 
     @Column(nullable = false, updatable = false)
     private int stockTotal;
@@ -34,7 +35,7 @@ public class OptionInventoryJpaEntity {
     }
 
     /** 확보 · 판매 0 인 새 행. */
-    public OptionInventoryJpaEntity(Long optionId, int stockTotal, Instant updatedAt) {
+    public OptionInventoryJpaEntity(UUID optionId, int stockTotal, Instant updatedAt) {
         this.optionId = optionId;
         this.stockTotal = stockTotal;
         this.updatedAt = updatedAt;

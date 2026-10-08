@@ -1,6 +1,7 @@
 package com.grandis.nova.catalog.review;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 리뷰 한 건 — 상품 상세 후기 탭 · 모아보기 · 내 리뷰가 같은 모양을 쓴다.
@@ -12,8 +13,8 @@ import java.time.Instant;
  * @param orderItemId  내 리뷰에서만 채운다. 공개 목록은 null — 남의 주문상품 id 를 내보내지 않는다
  */
 public record ReviewView(
-        Long reviewId,
-        Long productId,
+        UUID reviewId,
+        UUID productId,
         String productTitle,
         String optionTitle,
         String imageUrl,
@@ -22,6 +23,6 @@ public record ReviewView(
         String authorName,
         Instant createdAt,
         Instant updatedAt,
-        Long orderItemId
+        UUID orderItemId
 ) {
 }

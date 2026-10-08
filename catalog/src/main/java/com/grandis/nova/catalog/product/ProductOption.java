@@ -6,15 +6,13 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * 옵션 = 축마다 값 하나를 고른 조합(예: 블랙 / 256GB). 어느 값을 골랐는지는 combinationKey(값 id) 와 filterAttributes(필터 축의 정규화값)가 갖는다.
@@ -31,12 +29,8 @@ import java.util.Objects;
 @Table(name = "product_options")
 public class ProductOption extends BaseEntity {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
     @Column(nullable = false, updatable = false)
-    private Long productId;
+    private UUID productId;
 
     @Column(nullable = false, updatable = false, length = 80)
     private String sku;
@@ -60,7 +54,7 @@ public class ProductOption extends BaseEntity {
     protected ProductOption() {
     }
 
-    private ProductOption(Long productId, String sku, String title, BigDecimal price,
+    private ProductOption(UUID productId, String sku, String title, BigDecimal price,
                           String filterAttributes, String combinationKey) {
         this.productId = productId;
         this.sku = sku;
@@ -101,11 +95,7 @@ public class ProductOption extends BaseEntity {
         this.filterAttributes = combination.filterAttributes();
     }
 
-    public Long getId() {
-        return id;
-    }
-
-    public Long getProductId() {
+    public UUID getProductId() {
         return productId;
     }
 

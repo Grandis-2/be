@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.event;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.cancel.application.CancelStarter;
@@ -18,6 +19,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -45,7 +47,7 @@ class PreorderEventHandlerTest {
 
     ShopFixtures fixtures;
     AcceptFixtures accepts;
-    Long preorderId;
+    UUID preorderId;
     String token;
 
     @BeforeEach
@@ -59,7 +61,7 @@ class PreorderEventHandlerTest {
 
     @Test
     void 등록_성공이면_결제_가능이_되고_두_번_받아도_한_번만_반영된다() {
-        Long jobId = fixtures.workerSucceeds(preorderId, "REGISTER");
+        UUID jobId = fixtures.workerSucceeds(preorderId, "REGISTER");
         String externalNumber = "R-" + ShopFixtures.unique();
         ExternalJobSucceeded message = new ExternalJobSucceeded(jobId, token, "REGISTER", externalNumber);
 
@@ -72,8 +74,8 @@ class PreorderEventHandlerTest {
 
     @Test
     void 작업이_성공하지_않았으면_payload_를_믿지_않고_무시한다() {
-        Long jobId = jdbcTemplate.queryForObject("SELECT id FROM preorder_sync_jobs WHERE preorder_id = ?",
-                Long.class, preorderId);
+        UUID jobId = jdbcTemplate.queryForObject("SELECT id FROM preorder_sync_jobs WHERE preorder_id = ?",
+                (rs, rowNum) -> UuidBinary.fromBytes(rs.getBytes(1)), (Object) UuidBinary.toBytes(preorderId));
 
         handler.onExternalJobSucceeded(new ExternalJobSucceeded(jobId, token, "REGISTER", "R-FAKE"));
 
@@ -83,7 +85,7 @@ class PreorderEventHandlerTest {
     @Test
     void 취소_중에_늦게_온_등록_성공은_반영하지_않는다() {
         startCancel(EventActor.USER);
-        Long jobId = fixtures.workerSucceeds(preorderId, "REGISTER");
+        UUID jobId = fixtures.workerSucceeds(preorderId, "REGISTER");
 
         handler.onExternalJobSucceeded(new ExternalJobSucceeded(jobId, token, "REGISTER", "R-LATE"));
 
@@ -103,7 +105,7 @@ class PreorderEventHandlerTest {
                        JSON_UNQUOTE(JSON_EXTRACT(request_payload, '$.externalKey')) AS external_key,
                        JSON_UNQUOTE(JSON_EXTRACT(request_payload, '$.reason')) AS reason
                   FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'CANCEL'
-                """, preorderId);
+                """, (Object) UuidBinary.toBytes(preorderId));
         assertThat(job).containsEntry("status", "PENDING").containsEntry("external_key", token)
                 .containsEntry("reason", "USER_CANCEL");
         assertThat(fixtures.count("""
@@ -116,7 +118,7 @@ class PreorderEventHandlerTest {
         handler.onOrderSettled(new PreorderOrderSettled(token, PreorderOrderSettled.Result.CANCELED, null, 1L, null));
 
         assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'CANCEL'",
-                preorderId)).isZero();
+                (Object) UuidBinary.toBytes(preorderId))).isZero();
     }
 
     @Test
@@ -130,14 +132,14 @@ class PreorderEventHandlerTest {
         assertThat(row()).containsEntry("status", "REGISTERED");
         assertThat(jdbcTemplate.queryForObject("""
                 SELECT reason FROM preorder_events WHERE preorder_id = ? ORDER BY event_sequence DESC LIMIT 1
-                """, String.class, preorderId)).isEqualTo("ORDER_REJECTED:SHIPPED");
+                """, String.class, (Object) UuidBinary.toBytes(preorderId))).isEqualTo("ORDER_REJECTED:SHIPPED");
     }
 
     @Test
     void 외부_취소가_성공하면_취소_완료가_되고_재신청할_수_있게_된다() {
         startCancel(EventActor.ADMIN);
         handler.onOrderSettled(settled(PreorderOrderSettled.Result.NO_ORDER, null));
-        Long cancelJobId = fixtures.workerSucceeds(preorderId, "CANCEL");
+        UUID cancelJobId = fixtures.workerSucceeds(preorderId, "CANCEL");
 
         handler.onExternalJobSucceeded(new ExternalJobSucceeded(cancelJobId, token, "CANCEL", null));
 
@@ -162,7 +164,7 @@ class PreorderEventHandlerTest {
 
         handler.onOrderSettled(settled(PreorderOrderSettled.Result.CANCELED, null));
         assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'CANCEL'",
-                preorderId)).isEqualTo(1);
+                (Object) UuidBinary.toBytes(preorderId))).isEqualTo(1);
     }
 
     private void startCancel(EventActor actor) {
@@ -178,10 +180,12 @@ class PreorderEventHandlerTest {
 
     private Map<String, Object> row() {
         return jdbcTemplate.queryForMap(
-                "SELECT status, external_reference, active_marker FROM preorders WHERE id = ?", preorderId);
+                "SELECT status, external_reference, active_marker FROM preorders WHERE id = ?",
+                (Object) UuidBinary.toBytes(preorderId));
     }
 
     private int eventCount() {
-        return fixtures.count("SELECT COUNT(*) FROM preorder_events WHERE preorder_id = ?", preorderId);
+        return fixtures.count("SELECT COUNT(*) FROM preorder_events WHERE preorder_id = ?",
+                (Object) UuidBinary.toBytes(preorderId));
     }
 }

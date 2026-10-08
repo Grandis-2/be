@@ -13,6 +13,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import java.time.Duration;
 import java.time.Instant;
 
+import static com.grandis.nova.waitingroom.support.TestIds.customerId;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** jwk-set-uri 없이 정적 공개키만 쓰는 구성(부하 시험 · 로컬). JWKS 캐시를 만들지 않고 jwks 지표는 UP 이다. */
@@ -38,8 +39,8 @@ class StaticKeysOnlyTest {
     @Test
     void JWKS_캐시_없이_정적_공개키로_검증하고_jwks_지표는_UP_이다() {
         assertThat(context.getBeanNamesForType(JwkSetCache.class)).isEmpty();
-        assertThat(decoder.decode(TestJwts.user("1024", Instant.now())).block(Duration.ofSeconds(5)).getSubject())
-                .isEqualTo("1024");
+        assertThat(decoder.decode(TestJwts.user(customerId(1024), Instant.now())).block(Duration.ofSeconds(5)).getSubject())
+                .isEqualTo(customerId(1024));
         assertThat(jwksHealth.health().getStatus()).isEqualTo(Status.UP);
     }
 }

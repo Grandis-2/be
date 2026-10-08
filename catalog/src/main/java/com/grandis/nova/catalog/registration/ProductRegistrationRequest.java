@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * 관리자의 "한 번 등록" 요청. 상품 · 옵션 축과 값 · 조합 설정 · 사진 · 보증 · 판매 유형별 설정을 한 본문에 담는다.
@@ -27,7 +28,7 @@ import java.util.Map;
  * 형식 검사(필수 · 길이 · 범위)는 여기 애너테이션이, 조합 · 축 · 사진 묶음 · 판매 유형 규칙은 {@link ProductRegistrationValidator} 가 한다.
  */
 public record ProductRegistrationRequest(
-        @NotNull Long categoryId,
+        @NotNull UUID categoryId,
         @NotNull SaleMode saleMode,
         @NotBlank @Size(max = 100) String title,
         @Size(max = 5000) String description,

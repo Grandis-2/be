@@ -5,6 +5,7 @@ import com.grandis.nova.preorder.deadletter.DeadLetterRedriver;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -14,26 +15,26 @@ import java.util.concurrent.CopyOnWriteArrayList;
  */
 public class RecordingDeadLetterRedriver implements DeadLetterRedriver {
 
-    private final Map<Long, List<Sent>> sent = new ConcurrentHashMap<>();
-    private final Set<Long> failing = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, List<Sent>> sent = new ConcurrentHashMap<>();
+    private final Set<UUID> failing = ConcurrentHashMap.newKeySet();
 
     @Override
-    public void redrive(String sourceQueue, String body, Long deadLetterId) {
+    public void redrive(String sourceQueue, String body, UUID deadLetterId) {
         if (failing.contains(deadLetterId)) {
             throw new IllegalStateException("큐로 보내지 못함(테스트)");
         }
         sent.computeIfAbsent(deadLetterId, id -> new CopyOnWriteArrayList<>()).add(new Sent(sourceQueue, body));
     }
 
-    public void failFor(Long deadLetterId) {
+    public void failFor(UUID deadLetterId) {
         failing.add(deadLetterId);
     }
 
-    public void recover(Long deadLetterId) {
+    public void recover(UUID deadLetterId) {
         failing.remove(deadLetterId);
     }
 
-    public List<Sent> sentFor(Long deadLetterId) {
+    public List<Sent> sentFor(UUID deadLetterId) {
         return List.copyOf(sent.getOrDefault(deadLetterId, List.of()));
     }
 

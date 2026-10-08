@@ -24,6 +24,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -50,7 +51,7 @@ class StockLedgerConcurrencyTest {
     JdbcTemplate jdbcTemplate;
 
     OrderFixtures fixtures;
-    List<Long> options;
+    List<UUID> options;
 
     @BeforeEach
     void setUp() {
@@ -67,7 +68,7 @@ class StockLedgerConcurrencyTest {
     void concurrentSetsInAnyRequestOrderSerializeWithoutDeadlock() throws Exception {
         options.forEach(option -> fixtures.stock(option, 100, 1, 1));
 
-        List<Outcome<Set<Long>>> outcomes = Concurrently.run(REQUESTS, i -> () -> transactionTemplate.execute(
+        List<Outcome<Set<UUID>>> outcomes = Concurrently.run(REQUESTS, i -> () -> transactionTemplate.execute(
                 status -> ledger.set(settings(i % 2 == 0 ? options : options.reversed(), 10 + i))));
 
         assertThat(outcomes).allSatisfy(o -> assertThat(o.error()).isNull());
@@ -84,7 +85,7 @@ class StockLedgerConcurrencyTest {
      */
     @Test
     void lockedReadOfMissingRowDoesNotBlockOthersAndLaterInsertIsDuplicate() {
-        Long option = options.getFirst();
+        UUID option = options.getFirst();
 
         transactionTemplate.executeWithoutResult(t2 -> {
             assertThat(writer.lockByOptionIds(List.of(option))).isEmpty();
@@ -108,7 +109,7 @@ class StockLedgerConcurrencyTest {
      */
     @Test
     void concurrentFirstCreationsSurfaceAsDuplicateKeyNotDeadlock() throws Exception {
-        List<Outcome<Set<Long>>> outcomes = Concurrently.run(REQUESTS, i -> () -> transactionTemplate.execute(
+        List<Outcome<Set<UUID>>> outcomes = Concurrently.run(REQUESTS, i -> () -> transactionTemplate.execute(
                 status -> ledger.set(settings(i % 2 == 0 ? options : options.reversed(), 10 + i))));
 
         assertThat(outcomes.stream().filter(Outcome::succeeded)).isNotEmpty();
@@ -122,7 +123,7 @@ class StockLedgerConcurrencyTest {
     /** 초기화는 있는 행을 건드리지 않으므로 잠그지도 않는다. 다른 트랜잭션이 그 행을 잡고 있어도 기다리지 않는다. */
     @Test
     void initializeDoesNotWaitForRowsItLeavesAlone() throws Exception {
-        Long held = options.getFirst();
+        UUID held = options.getFirst();
         fixtures.stock(held, 10, 0, 0);
         CountDownLatch locked = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
@@ -158,7 +159,7 @@ class StockLedgerConcurrencyTest {
         }
     }
 
-    private static List<StockSetting> settings(List<Long> optionIds, int total) {
+    private static List<StockSetting> settings(List<UUID> optionIds, int total) {
         return optionIds.stream().map(optionId -> new StockSetting(optionId, total)).toList();
     }
 }

@@ -2,10 +2,10 @@ package com.grandis.nova.member.auth.infrastructure.db;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.UuidGenerator;
+
 import java.time.Instant;
 import java.util.UUID;
 
@@ -25,11 +25,11 @@ import java.util.UUID;
 public class RefreshToken {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    @UuidGenerator(style = UuidGenerator.Style.VERSION_7)
+    private UUID id;
 
     @Column(name = "customer_id", nullable = false, updatable = false)
-    private Long customerId;
+    private UUID customerId;
 
     /** 회전 체인 = 로그인 세션(sid). 액세스 토큰의 sid 클레임과 같은 값이라 세션 단위 폐기가 두 곳에서 같은 것을 가리킨다. */
     @Column(name = "family_id", nullable = false, length = 36, updatable = false)
@@ -55,7 +55,7 @@ public class RefreshToken {
     protected RefreshToken() {
     }
 
-    static RefreshToken issue(long customerId, UUID sessionId, byte[] tokenHash,
+    static RefreshToken issue(UUID customerId, UUID sessionId, byte[] tokenHash,
                               Instant issuedAt, Instant expiresAt) {
         RefreshToken token = new RefreshToken();
         token.customerId = customerId;
@@ -71,11 +71,11 @@ public class RefreshToken {
         this.rotatedAt = when;
     }
 
-    Long getId() {
+    UUID getId() {
         return id;
     }
 
-    long getCustomerId() {
+    UUID getCustomerId() {
         return customerId;
     }
 

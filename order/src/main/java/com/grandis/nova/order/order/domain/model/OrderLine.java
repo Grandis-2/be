@@ -4,6 +4,7 @@ import com.grandis.nova.order.order.vo.Money;
 import com.grandis.nova.order.order.vo.Quantity;
 
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * 주문할 상품 한 줄. 가격 · 이름은 예약 접수 시점의 스냅샷이다 — 카탈로그를 다시 읽지 않는다.
@@ -13,8 +14,8 @@ import java.util.Objects;
  * 코드 포인트로 센다.
  */
 public record OrderLine(
-        Long productId,
-        Long optionId,
+        UUID productId,
+        UUID optionId,
         Quantity quantity,
         Money unitPrice,
         String productTitle,

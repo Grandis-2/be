@@ -19,6 +19,7 @@ import reactor.test.StepVerifier;
 import java.time.Duration;
 import java.time.Instant;
 
+import static com.grandis.nova.waitingroom.support.TestIds.customerId;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** 앱이 뜨면 JWKS 를 뒤에서 받아 jwks 지표가 UP 이 되고, 정적 공개키 없이 JWKS 키로 검증한다. */
@@ -58,7 +59,7 @@ class JwksLoadingTest {
                 .expectComplete()
                 .verify(Duration.ofSeconds(10));
 
-        assertThat(decoder.decode(TestJwts.user("1024", Instant.now())).block(Duration.ofSeconds(5)).getSubject())
-                .isEqualTo("1024");
+        assertThat(decoder.decode(TestJwts.user(customerId(1024), Instant.now())).block(Duration.ofSeconds(5)).getSubject())
+                .isEqualTo(customerId(1024));
     }
 }

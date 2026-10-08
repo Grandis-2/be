@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.syncjob;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
@@ -35,13 +36,14 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
-import java.util.stream.LongStream;
+import java.util.stream.Stream;
 
 import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
@@ -93,7 +95,7 @@ class AdminSyncJobApiTest {
 
     ShopFixtures fixtures;
     AcceptFixtures accepts;
-    Long preorderId;
+    UUID preorderId;
     String token;
 
     @BeforeEach
@@ -107,14 +109,14 @@ class AdminSyncJobApiTest {
 
     @Test
     void 목록은_상태_예약으로_거르고_시도_수와_마지막_오류_코드를_준다() throws Exception {
-        Long jobId = fixtures.deadLetter(preorderId);
+        UUID jobId = fixtures.deadLetter(preorderId);
         fixtures.syncAttempt(jobId, 1, "TRANSIENT_FAILURE", 503, "HTTP_503");
         fixtures.syncAttempt(jobId, 2, "REJECTED", 422, "MOCK_REJECTED");
 
         asAdmin(get("/api/v1/admin/sync-jobs").param("status", "DEAD_LETTER").param("preorderId", token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
-                .andExpect(jsonPath("$.data.items[0].syncJobId").value(jobId))
+                .andExpect(jsonPath("$.data.items[0].syncJobId").value(jobId.toString()))
                 .andExpect(jsonPath("$.data.items[0].preorderId").value(token))
                 .andExpect(jsonPath("$.data.items[0].jobType").value("REGISTER"))
                 .andExpect(jsonPath("$.data.items[0].attemptCount").value(2))
@@ -133,7 +135,7 @@ class AdminSyncJobApiTest {
     void groupByError_면_마지막_시도의_오류_코드로_묶은_건수를_준다() throws Exception {
         String code = "E-" + ShopFixtures.unique();
         for (int i = 0; i < 2; i++) {
-            Long jobId = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
+            UUID jobId = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
             fixtures.syncAttempt(jobId, 1, "TRANSIENT_FAILURE", 503, "HTTP_503");
             fixtures.syncAttempt(jobId, 2, "REJECTED", 422, code);
         }
@@ -145,27 +147,27 @@ class AdminSyncJobApiTest {
 
     @Test
     void 상세는_요청_본문을_객체로_시도_기록과_함께_준다() throws Exception {
-        Long jobId = fixtures.deadLetter(preorderId);
+        UUID jobId = fixtures.deadLetter(preorderId);
         fixtures.syncAttempt(jobId, 1, "REJECTED", 422, "MOCK_REJECTED");
 
         asAdmin(get("/api/v1/admin/sync-jobs/{id}", jobId))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.syncJobId").value(jobId))
+                .andExpect(jsonPath("$.data.syncJobId").value(jobId.toString()))
                 .andExpect(jsonPath("$.data.requestPayload.ourReservationId").value(token))
                 .andExpect(jsonPath("$.data.attempts", hasSize(1)))
                 .andExpect(jsonPath("$.data.attempts[0].errorCode").value("MOCK_REJECTED"));
-        asAdmin(get("/api/v1/admin/sync-jobs/{id}", Long.MAX_VALUE))
+        asAdmin(get("/api/v1/admin/sync-jobs/{id}", UUID.randomUUID()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("SYNC_JOB_NOT_FOUND"));
     }
 
     @Test
     void DEAD_LETTER_인_등록_작업은_202_로_재처리_요청을_남긴다() throws Exception {
-        Long jobId = fixtures.deadLetter(preorderId);
+        UUID jobId = fixtures.deadLetter(preorderId);
 
         asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId))
                 .andExpect(status().isAccepted())
-                .andExpect(jsonPath("$.data.syncJobId").value(jobId))
+                .andExpect(jsonPath("$.data.syncJobId").value(jobId.toString()))
                 .andExpect(jsonPath("$.data.status").value("DEAD_LETTER"));
 
         assertThat(reprocessRequests(jobId)).containsExactly(Map.of("syncJobId", jobId, "requestedBy", "admin"));
@@ -174,7 +176,7 @@ class AdminSyncJobApiTest {
     /** 요청을 받아들일 때마다 한 건씩 남긴다(중복 제거는 하지 않는다). worker 가 DEAD_LETTER 일 때만 되돌려 효과는 한 번이다. */
     @Test
     void 같은_작업을_연달아_재처리하면_받아들인_요청마다_한_건씩_남긴다() throws Exception {
-        Long jobId = fixtures.deadLetter(preorderId);
+        UUID jobId = fixtures.deadLetter(preorderId);
 
         asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId)).andExpect(status().isAccepted());
         asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId)).andExpect(status().isAccepted());
@@ -184,7 +186,7 @@ class AdminSyncJobApiTest {
 
     @Test
     void 같은_작업을_동시에_재처리해도_둘_다_받아들이고_한_건씩_남긴다() throws Exception {
-        Long jobId = fixtures.deadLetter(preorderId);
+        UUID jobId = fixtures.deadLetter(preorderId);
 
         List<Outcome<Integer>> outcomes = Concurrently.run(2, i -> () ->
                 asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId)).andReturn().getResponse().getStatus());
@@ -195,9 +197,7 @@ class AdminSyncJobApiTest {
 
     @Test
     void 재처리_조건_밖이면_409_와_사유() throws Exception {
-        Long jobId = jdbcTemplate.queryForObject(
-                "SELECT id FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'REGISTER'", Long.class,
-                preorderId);
+        UUID jobId = registerJobOf(preorderId);
 
         asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId))
                 .andExpect(status().isConflict())
@@ -216,7 +216,7 @@ class AdminSyncJobApiTest {
     /** 취소가 예약을 잠근 동안 재처리는 기다렸다가, 취소가 커밋된 뒤의 상태로 판정한다. */
     @Test
     void 취소_트랜잭션이_예약을_잠근_동안_재처리는_기다렸다가_409() throws Exception {
-        Long jobId = fixtures.deadLetter(preorderId);
+        UUID jobId = fixtures.deadLetter(preorderId);
         CountDownLatch cancelLocked = new CountDownLatch(1);
         CountDownLatch reprocessWaiting = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
@@ -259,22 +259,20 @@ class AdminSyncJobApiTest {
 
     @Test
     void 관리자가_아니면_403_토큰이_없으면_401() throws Exception {
-        mockMvc.perform(get("/api/v1/admin/sync-jobs").with(customer(1L)))
+        mockMvc.perform(get("/api/v1/admin/sync-jobs").with(customer(UUID.randomUUID())))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/api/v1/admin/sync-jobs/{id}/reprocess", 1L))
+        mockMvc.perform(post("/api/v1/admin/sync-jobs/{id}/reprocess", UUID.randomUUID()))
                 .andExpect(status().isUnauthorized());
     }
 
     @Test
     void 일괄_재처리는_대상과_건너뛴_수를_바로_주고_요청을_이어서_남긴다() throws Exception {
-        Long first = fixtures.deadLetter(preorderId);
-        Long second = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
-        Long pending = jdbcTemplate.queryForObject(
-                "SELECT id FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'REGISTER'", Long.class,
-                accepts.accept(fixtures.customer()).preorder().id());
+        UUID first = fixtures.deadLetter(preorderId);
+        UUID second = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
+        UUID pending = registerJobOf(accepts.accept(fixtures.customer()).preorder().id());
 
-        String body = "{\"syncJobIds\":[%d,%d,%d,%d],\"ratePerSecond\":200}"
-                .formatted(first, second, pending, Long.MAX_VALUE);
+        String body = "{\"syncJobIds\":[\"%s\",\"%s\",\"%s\",\"%s\"],\"ratePerSecond\":200}"
+                .formatted(first, second, pending, UUID.randomUUID());
         batch(body)
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.targetCount").value(2))
@@ -289,9 +287,9 @@ class AdminSyncJobApiTest {
     @Test
     void 일괄_재처리를_오류_코드로_거른다() throws Exception {
         String code = "E-" + ShopFixtures.unique();
-        Long matching = fixtures.deadLetter(preorderId);
+        UUID matching = fixtures.deadLetter(preorderId);
         fixtures.syncAttempt(matching, 1, "REJECTED", 422, code);
-        Long other = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
+        UUID other = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
         fixtures.syncAttempt(other, 1, "REJECTED", 422, "OTHER");
 
         batch("{\"errorCodeFilter\":\"%s\"}".formatted(code))
@@ -307,18 +305,18 @@ class AdminSyncJobApiTest {
     void 초당_건수는_1에서_200_사이이고_작업은_한_번에_최대_1000_건이다() throws Exception {
         batch("{\"ratePerSecond\":0}").andExpect(status().isBadRequest());
         batch("{\"ratePerSecond\":201}").andExpect(status().isBadRequest());
-        String tooMany = LongStream.rangeClosed(1, SyncJobAdminService.MAX_BATCH_SIZE + 1)
-                .mapToObj(String::valueOf)
+        String tooMany = Stream.generate(UUID::randomUUID).limit(SyncJobAdminService.MAX_BATCH_SIZE + 1)
+                .map(id -> "\"" + id + "\"")
                 .collect(Collectors.joining(",", "{\"syncJobIds\":[", "]}"));
         batch(tooMany).andExpect(status().isBadRequest());
     }
 
     @Test
-    void 전체_대상은_id_순으로_상한만큼만_읽는다() {
+    void 전체_대상은_만든_순으로_상한만큼만_읽는다() {
         String code = "E-" + ShopFixtures.unique();
-        Long first = fixtures.deadLetter(preorderId);
+        UUID first = fixtures.deadLetter(preorderId);
         fixtures.syncAttempt(first, 1, "REJECTED", 422, code);
-        Long second = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
+        UUID second = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
         fixtures.syncAttempt(second, 1, "REJECTED", 422, code);
 
         assertThat(candidateReader.findDeadLetters(code, 1))
@@ -330,14 +328,20 @@ class AdminSyncJobApiTest {
     void 전체_대상에서_취소_중인_예약의_작업은_상한을_차지하지_않는다() {
         String code = "E-" + ShopFixtures.unique();
         cancelStarter.start(preorders.findById(preorderId).orElseThrow(), EventActor.USER, null, CancelReason.USER);
-        Long canceling = fixtures.deadLetter(preorderId);
+        UUID canceling = fixtures.deadLetter(preorderId);
         fixtures.syncAttempt(canceling, 1, "REJECTED", 422, code);
-        Long reprocessable = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
+        UUID reprocessable = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
         fixtures.syncAttempt(reprocessable, 1, "REJECTED", 422, code);
 
         assertThat(candidateReader.findDeadLetters(code, 1))
                 .extracting(ReprocessCandidate::syncJobId)
                 .containsExactly(reprocessable);
+    }
+
+    private UUID registerJobOf(UUID preorderId) {
+        return jdbcTemplate.queryForObject(
+                "SELECT id FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'REGISTER'",
+                (rs, rowNum) -> UuidBinary.fromBytes(rs.getBytes(1)), (Object) UuidBinary.toBytes(preorderId));
     }
 
     private ResultActions batch(String body) throws Exception {
@@ -357,13 +361,13 @@ class AdminSyncJobApiTest {
         }
     }
 
-    private List<Map<String, Object>> reprocessRequests(Long syncJobId) {
+    private List<Map<String, Object>> reprocessRequests(UUID syncJobId) {
         return jdbcTemplate.queryForList("""
-                SELECT CAST(JSON_EXTRACT(payload, '$.syncJobId') AS UNSIGNED) AS syncJobId,
+                SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.syncJobId')) AS syncJobId,
                        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.requestedBy')) AS requestedBy
                   FROM preorder_outbox_events WHERE event_type = 'SYNC_JOB_REPROCESS_REQUESTED' AND aggregate_id = ?
-                """, syncJobId).stream()
-                .map(row -> Map.<String, Object>of("syncJobId", ((Number) row.get("syncJobId")).longValue(),
+                """, (Object) UuidBinary.toBytes(syncJobId)).stream()
+                .map(row -> Map.<String, Object>of("syncJobId", UUID.fromString((String) row.get("syncJobId")),
                         "requestedBy", row.get("requestedBy")))
                 .toList();
     }

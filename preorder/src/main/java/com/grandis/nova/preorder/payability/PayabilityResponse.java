@@ -6,14 +6,15 @@ import com.grandis.nova.preorder.preorder.PreorderStatus;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 /** @param preorderInternalId order 가 주문의 예약 FK 로 저장할 내부 id */
 record PayabilityResponse(
         String preorderId,
-        Long preorderInternalId,
-        Long customerId,
-        Long productId,
-        Long optionId,
+        UUID preorderInternalId,
+        UUID customerId,
+        UUID productId,
+        UUID optionId,
         String productTitle,
         String optionTitle,
         BigDecimal unitPrice,

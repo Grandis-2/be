@@ -19,6 +19,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -34,7 +35,7 @@ import static org.mockito.Mockito.verify;
  */
 class ConfirmPaymentServiceTest {
 
-    static final PaymentTarget TARGET = PaymentTarget.order(7L);
+    static final PaymentTarget TARGET = PaymentTarget.order(UUID.fromString("0199a3c4-0000-7000-8000-000000000007"));
     static final Money AMOUNT = Money.won(15000);
     static final ProviderPaymentKey PAYMENT = new ProviderPaymentKey("tgen_service_test");
 

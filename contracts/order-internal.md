@@ -14,7 +14,7 @@
 
 **인증.** 호출자가 받은 회원 토큰을 그대로 싣는다(`Authorization: Bearer {accessToken}`). order 는 `common:security` 필터로 검증하고 **USER 만** 받는다 — ADMIN 토큰은 회원 id 가 없어 403 이다(`@CurrentCustomerId`).
 
-**요청.** 본문 없음. `orderItemId` 는 `order_items.id`(숫자). 숫자가 아니면 400.
+**요청.** 본문 없음. `orderItemId` 는 `order_items.id`(UUID). UUID 가 아니면 400.
 
 **응답 200.** 봉투는 `common:web` 의 `ApiResponse` 그대로.
 
@@ -22,10 +22,10 @@
 {
   "success": true,
   "data": {
-    "orderItemId": 501,
-    "orderId": 77,
-    "productId": 12,
-    "optionId": 101,
+    "orderItemId": "0199a3f3-1b20-7d40-a051-6f7081920a1b",
+    "orderId": "0199a3f3-1b1f-7d3f-a050-6f7081920a1a",
+    "productId": "0199a3f2-8a10-7b21-9c32-4d5e6f708192",
+    "optionId": "0199a3f2-8a11-7c22-8d33-5e6f70819203",
     "optionTitle": "블랙 / 256GB",
     "orderStatus": "DELIVERED",
     "orderSource": "BUY_NOW"
@@ -38,10 +38,10 @@
 
 | 칸 | 타입 | 뜻 |
 | --- | --- | --- |
-| `orderItemId` | number | `order_items.id` |
-| `orderId` | number | `orders.id` — 주문 **내부** id. 공개 주문 번호(`order_token`, 주문 API 의 `orderId`)가 아니다 |
-| `productId` | number | `order_items.product_id` |
-| `optionId` | number | `order_items.option_id` |
+| `orderItemId` | string(UUID) | `order_items.id` |
+| `orderId` | string(UUID) | `orders.id` — 주문 **내부** id. 공개 주문 번호(`order_token`, 주문 API 의 `orderId`)가 아니다 |
+| `productId` | string(UUID) | `order_items.product_id` |
+| `optionId` | string(UUID) | `order_items.option_id` |
 | `optionTitle` | string | 주문 당시 옵션명(`order_items.option_title_snapshot`). 상품이 바뀌어도 그대로다 |
 | `orderStatus` | string | `orders.status` 이름 그대로(AWAITING_PAYMENT · AUTHORIZING · AWAITING_CONFIRMATION · PREPARING_ITEMS · READY_TO_SHIP · SHIPPED · DELIVERED · CANCELING · CANCELED) |
 | `orderSource` | string | `orders.source` 이름 그대로(PREORDER · BUY_NOW · CART) |
@@ -54,7 +54,7 @@
 
 | 상태 | 코드 | 언제 |
 | --- | --- | --- |
-| 400 | `VALIDATION_FAILED` | `orderItemId` 가 숫자가 아님 |
+| 400 | `VALIDATION_FAILED` | `orderItemId` 가 UUID 가 아님 |
 | 401 | `UNAUTHENTICATED` | 토큰 없음 · 헤더 모양 이상 · 만료 · 서명 · `aud` 불일치 · 폐기된 토큰 |
 | 403 | `FORBIDDEN` | USER 가 아닌 토큰(관리자) |
 | 404 | `ORDER_ITEM_NOT_FOUND` | 없는 주문상품 · **남의 주문상품** — 존재를 드러내지 않으려고 같은 코드로 답한다 |

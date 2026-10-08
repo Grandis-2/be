@@ -3,6 +3,7 @@ package com.grandis.nova.order.outbox;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * 예약 취소(PREORDER_CANCEL_REQUESTED)에 따른 주문 정리 결과. preorder 의 {@code event.PreorderOrderSettled} 가 받는다.
@@ -16,7 +17,7 @@ import java.util.Objects;
  * @param reason             REJECTED 일 때만 있다
  * @param cancelSequence     PREORDER_CANCEL_REQUESTED 에서 받은 값 그대로. order 는 저장하지 않는다
  */
-public record PreorderOrderSettled(@JsonIgnore Long preorderInternalId, String preorderId, Result result,
+public record PreorderOrderSettled(@JsonIgnore UUID preorderInternalId, String preorderId, Result result,
                                    RejectReason reason, Long cancelSequence) implements OutboxMessage {
 
     public PreorderOrderSettled {
@@ -34,17 +35,17 @@ public record PreorderOrderSettled(@JsonIgnore Long preorderInternalId, String p
     }
 
     /** 그 예약의 주문이 없다. */
-    public static PreorderOrderSettled noOrder(Long preorderInternalId, String preorderId, Long cancelSequence) {
+    public static PreorderOrderSettled noOrder(UUID preorderInternalId, String preorderId, Long cancelSequence) {
         return new PreorderOrderSettled(preorderInternalId, preorderId, Result.NO_ORDER, null, cancelSequence);
     }
 
     /** 주문이 취소됐다. 이번에 취소했든 이미 취소돼 있었든(중복 수신) 같다. */
-    public static PreorderOrderSettled canceled(Long preorderInternalId, String preorderId, Long cancelSequence) {
+    public static PreorderOrderSettled canceled(UUID preorderInternalId, String preorderId, Long cancelSequence) {
         return new PreorderOrderSettled(preorderInternalId, preorderId, Result.CANCELED, null, cancelSequence);
     }
 
     /** 주문을 정리할 수 없어 예약 취소를 거절한다. */
-    public static PreorderOrderSettled rejected(Long preorderInternalId, String preorderId, RejectReason reason,
+    public static PreorderOrderSettled rejected(UUID preorderInternalId, String preorderId, RejectReason reason,
                                                 Long cancelSequence) {
         return new PreorderOrderSettled(preorderInternalId, preorderId, Result.REJECTED,
                 Objects.requireNonNull(reason, "reason"), cancelSequence);
@@ -61,7 +62,7 @@ public record PreorderOrderSettled(@JsonIgnore Long preorderInternalId, String p
     }
 
     @Override
-    public Long aggregateId() {
+    public UUID aggregateId() {
         return preorderInternalId;
     }
 

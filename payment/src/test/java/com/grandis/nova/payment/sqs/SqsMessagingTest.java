@@ -117,7 +117,7 @@ class SqsMessagingTest {
         worker.recoverDue();
 
         Message settled = queues.receive("order-events",
-                m -> m.body().contains("ORDER_REFUND_SETTLED") && m.body().contains("\"aggregateId\":" + target.id()),
+                m -> m.body().contains("ORDER_REFUND_SETTLED") && m.body().contains("\"aggregateId\":\"" + target.id() + "\""),
                 TIMEOUT).orElseThrow();
         JsonNode body = jsonMapper.readTree(settled.body());
         assertThat(body.get("aggregateType").asString()).isEqualTo("ORDER");
@@ -149,9 +149,9 @@ class SqsMessagingTest {
                 .toList();
     }
 
-    private static String refundRequested(Long orderId) {
+    private static String refundRequested(UUID orderId) {
         return """
-                {"eventId":"%s","eventType":"ORDER_REFUND_REQUESTED","aggregateType":"ORDER","aggregateId":%d,\
+                {"eventId":"%s","eventType":"ORDER_REFUND_REQUESTED","aggregateType":"ORDER","aggregateId":"%s",\
                 "occurredAt":"2026-10-04T01:00:00Z","payload":{"amount":15000}}""".formatted(UUID.randomUUID(), orderId);
     }
 }

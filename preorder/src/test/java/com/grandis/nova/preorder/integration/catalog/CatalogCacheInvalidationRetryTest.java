@@ -11,6 +11,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -23,7 +24,7 @@ import static org.mockito.Mockito.verify;
 /** Redis 로 알리기에 실패하면 뒤에서 다시 알리고, 끝내 실패하면 지표를 남긴다. 이벤트 처리는 막지 않는다. */
 class CatalogCacheInvalidationRetryTest {
 
-    static final Long PRODUCT_ID = 7L;
+    static final UUID PRODUCT_ID = UUID.fromString("00000000-0000-7000-8000-000000000007");
 
     final StringRedisTemplate redis = mock(StringRedisTemplate.class);
     final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
@@ -76,7 +77,8 @@ class CatalogCacheInvalidationRetryTest {
 
     private void cache() {
         given(client.getProduct(PRODUCT_ID)).willReturn(
-                CatalogStubs.preorderProduct(PRODUCT_ID, CatalogStubs.activeOption(70L)));
+                CatalogStubs.preorderProduct(PRODUCT_ID,
+                        CatalogStubs.activeOption(UUID.fromString("00000000-0000-7000-8000-000000000070"))));
         reader.findProduct(PRODUCT_ID);
         assertThat(reader.cache().getIfPresent(PRODUCT_ID)).isNotNull();
     }

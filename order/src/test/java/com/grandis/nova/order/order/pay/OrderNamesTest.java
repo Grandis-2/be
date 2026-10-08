@@ -4,6 +4,7 @@ import com.grandis.nova.order.order.domain.model.OrderItem;
 import com.grandis.nova.order.order.domain.model.OrderLine;
 import com.grandis.nova.order.order.vo.Money;
 import com.grandis.nova.order.order.vo.Quantity;
+import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -61,6 +62,6 @@ class OrderNamesTest {
     }
 
     private static OrderItem item(String productTitle, String optionTitle) {
-        return new OrderItem(1L, 1L, new OrderLine(1L, 1L, Quantity.ONE, Money.won(1000), productTitle, optionTitle));
+        return new OrderItem(TestIds.id(1), TestIds.id(1), new OrderLine(TestIds.id(1), TestIds.id(1), Quantity.ONE, Money.won(1000), productTitle, optionTitle));
     }
 }

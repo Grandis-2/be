@@ -2,6 +2,7 @@ package com.grandis.nova.member.auth.infrastructure.db;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.security.JwtProperties;
 import com.grandis.nova.member.auth.application.RefreshTokenStore.Rotation;
 import com.grandis.nova.member.auth.application.RefreshTokens;
@@ -47,7 +48,7 @@ class RefreshTokenCleanupTest {
     @Autowired Clock clock;
     @Autowired JwtProperties jwt;
 
-    long customerId;
+    UUID customerId;
     Instant now;
     Instant base;   // 이 시험의 행을 두는 먼 과거 — 다른 시험의 행은 이보다 훨씬 최근이다
 
@@ -61,7 +62,7 @@ class RefreshTokenCleanupTest {
     /** 이 시험이 남긴 행을 지운다 — 먼 과거 행이 다음 시험의 고정 시계 범위에 걸려 개수 단언을 흔들지 않게. */
     @AfterEach
     void removeOwnRows() {
-        jdbc.update("DELETE FROM refresh_tokens WHERE customer_id = ?", customerId);
+        jdbc.update("DELETE FROM refresh_tokens WHERE customer_id = ?", (Object) UuidBinary.toBytes(customerId));
     }
 
     /** 고정 시계가 base + offset 을 가리키는 정리. cutoff 는 그 시각 − 액세스 유효기간이다. */
@@ -73,9 +74,9 @@ class RefreshTokenCleanupTest {
     @DisplayName("만료된 뒤 액세스 유효기간 + 10분(40분)이 지난 행만 지운다 — 유예 안의 만료 행 · 유효 행은 남는다")
     void deletesOnlyRowsPastTheGrace() {
         Instant fixedNow = base.plus(Duration.ofDays(1));
-        long longExpired = row(fixedNow.minus(Duration.ofHours(1)));
-        long justExpired = row(fixedNow.minusSeconds(1));
-        long valid = row(fixedNow.plus(Duration.ofDays(1)));
+        UUID longExpired = row(fixedNow.minus(Duration.ofHours(1)));
+        UUID justExpired = row(fixedNow.minusSeconds(1));
+        UUID valid = row(fixedNow.plus(Duration.ofDays(1)));
 
         assertThat(cleanupAt(fixedNow, 1000, 1000).run()).isEqualTo(1);
 
@@ -89,8 +90,8 @@ class RefreshTokenCleanupTest {
     void graceBoundaryIsExact() {
         Instant fixedNow = base.plus(Duration.ofDays(1));
         Instant boundary = fixedNow.minus(jwt.accessTokenValidity()).minus(RefreshTokenCleanup.MARGIN_AFTER_DETECTION);
-        long atBoundary = row(boundary);
-        long oneSecondLater = row(boundary.plusSeconds(1));
+        UUID atBoundary = row(boundary);
+        UUID oneSecondLater = row(boundary.plusSeconds(1));
 
         assertThat(cleanupAt(fixedNow, 1000, 1000).run()).isEqualTo(1);
 
@@ -103,8 +104,8 @@ class RefreshTokenCleanupTest {
     void retentionIsFortyMinutesAfterExpiry() {
         assertThat(jwt.accessTokenValidity()).as("시험 설정의 액세스 유효기간").isEqualTo(Duration.ofMinutes(30));
         Instant fixedNow = base.plus(Duration.ofDays(1));
-        long fortyMinutes = row(fixedNow.minus(Duration.ofMinutes(40)));
-        long justUnder = row(fixedNow.minus(Duration.ofMinutes(40)).plusSeconds(1));
+        UUID fortyMinutes = row(fixedNow.minus(Duration.ofMinutes(40)));
+        UUID justUnder = row(fixedNow.minus(Duration.ofMinutes(40)).plusSeconds(1));
 
         cleanupAt(fixedNow, 1000, 1000).run();
 
@@ -121,7 +122,7 @@ class RefreshTokenCleanupTest {
         assertThat(store.rotate(first, second).status()).isEqualTo(Rotation.Status.ROTATED);
         // 체인이 5초 전에 만료됐다(created_at 도 같이 당겨 ck_refresh_expiry 를 지킨다)
         jdbc.update("UPDATE refresh_tokens SET created_at = ?, expires_at = ? WHERE customer_id = ?",
-                utc(now.minus(Duration.ofDays(1))), utc(now.minusSeconds(5)), customerId);
+                utc(now.minus(Duration.ofDays(1))), utc(now.minusSeconds(5)), UuidBinary.toBytes(customerId));
 
         cleanup.run();
 
@@ -139,7 +140,8 @@ class RefreshTokenCleanupTest {
 
         assertThat(cleanupAt(fixedNow, 2, 2).run()).as("2 × 2").isEqualTo(4);
         assertThat(cleanupAt(fixedNow, 2, 2).run()).as("나머지").isEqualTo(1);
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE customer_id = ?", Long.class, customerId)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE customer_id = ?", Long.class,
+                UuidBinary.toBytes(customerId))).isZero();
     }
 
     @Test
@@ -160,7 +162,7 @@ class RefreshTokenCleanupTest {
     void doesNotWaitForAnInFlightRotation() throws Exception {
         String raw = RefreshTokens.newToken();
         store.save(UUID.randomUUID(), String.valueOf(customerId), raw, now.plus(Duration.ofDays(14)));
-        long expired = row(now.minus(Duration.ofDays(2)));
+        UUID expired = row(now.minus(Duration.ofDays(2)));
         CountDownLatch locked = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         ExecutorService pool = Executors.newSingleThreadExecutor();
@@ -190,38 +192,28 @@ class RefreshTokenCleanupTest {
 
     // ── 도우미 ─────────────────────────────────────────────────────────────
 
-    private long customer() {
-        GeneratedKeyHolder key = new GeneratedKeyHolder();
-        jdbc.update(connection -> {
-            var insert = connection.prepareStatement(
-                    "INSERT INTO customers (kakao_id, display_name, created_at, updated_at) VALUES (?, 'cleanup', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))",
-                    java.sql.Statement.RETURN_GENERATED_KEYS);
-            insert.setString(1, "c" + UUID.randomUUID().toString().replace("-", "").substring(0, 18));
-            return insert;
-        }, key);
-        return key.getKey().longValue();
+    private UUID customer() {
+        UUID id = UUID.randomUUID();
+        jdbc.update("INSERT INTO customers (id, kakao_id, display_name, created_at, updated_at)"
+                        + " VALUES (?, ?, 'cleanup', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))",
+                UuidBinary.toBytes(id), "c" + UUID.randomUUID().toString().replace("-", "").substring(0, 18));
+        return id;
     }
 
     /** 이 회원의 리프레시 행 하나. 만료 시각만 고른다(발급 시각은 그보다 하루 앞 — ck_refresh_expiry). */
-    private long row(Instant expiresAt) {
-        GeneratedKeyHolder key = new GeneratedKeyHolder();
-        jdbc.update(connection -> {
-            var insert = connection.prepareStatement("""
-                    INSERT INTO refresh_tokens (customer_id, family_id, token_hash, expires_at, created_at)
-                    VALUES (?, ?, ?, ?, ?)
-                    """, java.sql.Statement.RETURN_GENERATED_KEYS);
-            insert.setLong(1, customerId);
-            insert.setString(2, UUID.randomUUID().toString());
-            insert.setBytes(3, RefreshTokens.hash(RefreshTokens.newToken()));
-            insert.setObject(4, utc(expiresAt));
-            insert.setObject(5, utc(expiresAt.minus(Duration.ofDays(1))));
-            return insert;
-        }, key);
-        return key.getKey().longValue();
+    private UUID row(Instant expiresAt) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO refresh_tokens (id, customer_id, family_id, token_hash, expires_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """, UuidBinary.toBytes(id), UuidBinary.toBytes(customerId), UUID.randomUUID().toString(),
+                RefreshTokens.hash(RefreshTokens.newToken()), utc(expiresAt), utc(expiresAt.minus(Duration.ofDays(1))));
+        return id;
     }
 
-    private boolean exists(long id) {
-        return jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE id = ?", Long.class, id) == 1;
+    private boolean exists(UUID id) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE id = ?", Long.class,
+                (Object) UuidBinary.toBytes(id)) == 1;
     }
 
     private static LocalDateTime utc(Instant instant) {

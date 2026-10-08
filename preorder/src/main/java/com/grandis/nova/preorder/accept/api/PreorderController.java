@@ -15,6 +15,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.UUID;
+
 /** 사용자 사전예약. queue-gateway 를 거쳐 들어온다. */
 @Tag(name = "사전예약")
 @RestController
@@ -32,8 +34,8 @@ class PreorderController {
     @Operation(summary = "사전예약 접수 — 대기열 입장권 · 접수 키 필요")
     @PostMapping
     public ResponseEntity<ApiResponse<PreorderAcceptedResponse>> accept(
-            @CurrentCustomerId Long customerId,
-            @RequestParam Long productId,
+            @CurrentCustomerId UUID customerId,
+            @RequestParam UUID productId,
             @RequestHeader(IdempotencyKeys.HEADER) String idempotencyKey,
             @RequestHeader(value = ADMISSION_TICKET, required = false) String admissionTicket,
             @Valid @RequestBody PreorderRequest request) {

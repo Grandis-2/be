@@ -21,6 +21,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -45,7 +46,7 @@ class OrderQueryApiTest {
 
     OrderFixtures fixtures;
     PlacedOrders orders;
-    Long customerId;
+    UUID customerId;
 
     @BeforeEach
     void setUp() {
@@ -100,7 +101,7 @@ class OrderQueryApiTest {
     void stringCursorPagesThroughSameCreatedAt() throws Exception {
         List<Order> placed = List.of(orders.place(customerId), orders.place(customerId), orders.place(customerId));
         placed.forEach(order -> jdbcTemplate.update("UPDATE orders SET created_at = ? WHERE id = ?",
-                java.sql.Timestamp.from(java.time.Instant.parse("2020-01-01T00:00:00.5Z")), order.id()));
+                java.sql.Timestamp.from(java.time.Instant.parse("2020-01-01T00:00:00.5Z")), bytes(order.id())));
 
         List<String> seen = new java.util.ArrayList<>();
         String cursor = null;
@@ -116,7 +117,9 @@ class OrderQueryApiTest {
             cursor = JsonPath.read(body, "$.data.nextCursor");
         } while (cursor != null && seen.size() <= placed.size());
 
-        assertThat(seen).containsExactlyElementsOf(placed.reversed().stream()
+        // 같은 시각이면 id 내림차순이다. id 는 만든 순서를 보장하지 않으므로 기대 순서도 id 로 정한다
+        assertThat(seen).containsExactlyElementsOf(placed.stream()
+                .sorted(java.util.Comparator.comparing(Order::id).reversed())
                 .map(order -> order.orderToken().value()).toList());
     }
 
@@ -125,7 +128,7 @@ class OrderQueryApiTest {
     void subMicrosecondCursorNearUpperBoundIsNotServerError() throws Exception {
         orders.place(customerId);
 
-        mockMvc.perform(get("/api/v1/orders").param("cursor", encode("9999-12-31T23:59:59.9999995Z|1")).with(me()))
+        mockMvc.perform(get("/api/v1/orders").param("cursor", encode("9999-12-31T23:59:59.9999995Z|" + UUID.randomUUID())).with(me()))
                 .andExpect(status().isOk());
     }
 

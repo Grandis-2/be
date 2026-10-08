@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.deadletter;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.sqs.testing.TestQueues;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
@@ -18,6 +19,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import java.time.Duration;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -56,7 +58,7 @@ class DeadLetterSqsFlowTest {
     final Set<String> broken = ConcurrentHashMap.newKeySet();
 
     ShopFixtures fixtures;
-    Long preorderId;
+    UUID preorderId;
     String body;
 
     @BeforeEach
@@ -70,11 +72,11 @@ class DeadLetterSqsFlowTest {
         }).when(dispatcher).dispatch(anyString());
         AcceptResult accepted = new AcceptFixtures(acceptService, fixtures, catalogClient).accept(fixtures.customer());
         preorderId = accepted.preorder().id();
-        long syncJobId = fixtures.workerSucceeds(preorderId, "REGISTER");
+        UUID syncJobId = fixtures.workerSucceeds(preorderId, "REGISTER");
         body = """
                 {"eventId":"%s","eventType":"EXTERNAL_JOB_SUCCEEDED","aggregateType":"PREORDER_SYNC_JOB",
-                 "aggregateId":%d,"occurredAt":"2026-09-03T01:00:03.470Z",
-                 "payload":{"syncJobId":%d,"preorderId":"%s","jobType":"REGISTER","externalNumber":"R-%s"}}
+                 "aggregateId":"%s","occurredAt":"2026-09-03T01:00:03.470Z",
+                 "payload":{"syncJobId":"%s","preorderId":"%s","jobType":"REGISTER","externalNumber":"R-%s"}}
                 """.formatted(ShopFixtures.unique(), syncJobId, syncJobId, AcceptFixtures.tokenOf(accepted),
                 ShopFixtures.unique());
     }
@@ -83,39 +85,41 @@ class DeadLetterSqsFlowTest {
     void 고친_뒤_되돌리면_처리되고_DLQ_행은_SUCCEEDED_다() {
         broken.add(body);
         queues.send("preorder-events", body);
-        Long id = awaitOpenRow();
-        assertThat(jdbcTemplate.queryForObject("SELECT preorder_id FROM dead_letter_events WHERE id = ?", Long.class,
-                id)).isEqualTo(preorderId);
+        UUID id = awaitOpenRow();
+        assertThat(jdbcTemplate.queryForObject("SELECT BIN_TO_UUID(preorder_id) FROM dead_letter_events WHERE id = ?",
+                String.class, (Object) UuidBinary.toBytes(id))).isEqualTo(preorderId.toString());
 
         broken.remove(body);
         adminService.redrive(id, "admin");
 
         await().atMost(TIMEOUT).until(() -> "SUCCEEDED".equals(status(id)));
-        assertThat(jdbcTemplate.queryForObject("SELECT status FROM preorders WHERE id = ?", String.class, preorderId))
-                .isEqualTo("REGISTERED");
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM preorders WHERE id = ?", String.class,
+                (Object) UuidBinary.toBytes(preorderId))).isEqualTo("REGISTERED");
     }
 
     @Test
     void 고치지_않고_되돌리면_또_DLQ_로_와_새_행이_앞선_행을_가리킨다() {
         broken.add(body);
         queues.send("preorder-events", body);
-        Long id = awaitOpenRow();
+        UUID id = awaitOpenRow();
 
         adminService.redrive(id, "admin");
 
         await().atMost(TIMEOUT).until(() -> "REDRIVE_FAILED".equals(status(id)));
         await().atMost(TIMEOUT).until(() -> fixtures.count(
-                "SELECT COUNT(*) FROM dead_letter_events WHERE redriven_from_id = ? AND status = 'OPEN'", id) == 1);
+                "SELECT COUNT(*) FROM dead_letter_events WHERE redriven_from_id = ? AND status = 'OPEN'",
+                (Object) UuidBinary.toBytes(id)) == 1);
     }
 
-    private Long awaitOpenRow() {
+    private UUID awaitOpenRow() {
         await().alias("처리 실패 → DLQ → DB").atMost(TIMEOUT).until(() -> fixtures.count(
                 "SELECT COUNT(*) FROM dead_letter_events WHERE body = ? AND status = 'OPEN'", body) == 1);
         return jdbcTemplate.queryForObject("SELECT id FROM dead_letter_events WHERE body = ? AND status = 'OPEN'",
-                Long.class, body);
+                (rs, rowNum) -> UuidBinary.fromBytes(rs.getBytes(1)), body);
     }
 
-    private String status(Long id) {
-        return jdbcTemplate.queryForObject("SELECT status FROM dead_letter_events WHERE id = ?", String.class, id);
+    private String status(UUID id) {
+        return jdbcTemplate.queryForObject("SELECT status FROM dead_letter_events WHERE id = ?", String.class,
+                (Object) UuidBinary.toBytes(id));
     }
 }

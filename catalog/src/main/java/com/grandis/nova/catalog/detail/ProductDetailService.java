@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
+import java.util.UUID;
 
 /**
  * 상품 상세 · 옵션 상세. 노출 규칙(설계 §2.2)은 목록과 다르다 —
@@ -69,7 +70,7 @@ public class ProductDetailService {
      * 관리자는 관리자 상세({@link #findAdminProduct})로 본다. 공개 경로는 폐기 조회 실패에 열리는 경로라 관리자 토큰을 여기서 더 믿지 않는다.
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public ProductDetailView findProduct(Long productId) {
+    public ProductDetailView findProduct(UUID productId) {
         return assemble(requireViewable(productId), true);
     }
 
@@ -77,7 +78,7 @@ public class ProductDetailService {
      * 관리자 상세 — 노출 규칙 없이 어떤 상품이든(비공개 · 미완료 · 판매 중지 · 오래된 마감) 상세와 등록 상태를 준다. 없는 상품만 404.
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public AdminProductDetail findAdminProduct(Long productId) {
+    public AdminProductDetail findAdminProduct(UUID productId) {
         Product product = products.findById(productId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
         // 관리자 목록 · 상세의 visible 은 products.visible 칸 그대로 — 판매 방식별 준비는 registrationCompleted 가 따로 말한다
         return new AdminProductDetail(assemble(product, product.isVisible()), product.getTags(),
@@ -86,16 +87,16 @@ public class ProductDetailService {
 
     /** @param visible 응답에 실을 visible — 회원 상세는 노출 규칙을 지났으니 늘 true, 관리자 상세는 칸 그대로 */
     private ProductDetailView assemble(Product product, boolean visible) {
-        Long productId = product.getId();
+        UUID productId = product.getId();
         Instant now = clock.instant();
         ProductOptions document = product.getOptions();
 
-        Map<Long, Integer> available = product.getSaleMode() == SaleMode.IN_STOCK
+        Map<UUID, Integer> available = product.getSaleMode() == SaleMode.IN_STOCK
                 ? crossReads.findAvailableQuantities(productId) : Map.of();
         List<Variant> variants = new ArrayList<>();
         boolean sellable = false;
         boolean purchasable = false;
-        for (ProductOption option : options.findByProductIdOrderById(productId)) {
+        for (ProductOption option : options.findByProductIdOrderByCreatedAtAscIdAsc(productId)) {
             Variant variant = toVariant(option, product.getSaleMode(), document, available);
             variants.add(variant);
             boolean active = option.getStatus() == SaleStatus.ACTIVE;
@@ -120,7 +121,7 @@ public class ProductDetailService {
 
     /** 옵션이 그 상품 소속이 아니면 404. 상품의 노출 규칙을 먼저 적용한다. */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public Variant findVariant(Long productId, Long variantId) {
+    public Variant findVariant(UUID productId, UUID variantId) {
         return findProduct(productId).variants().stream()
                 .filter(variant -> variant.variantId().equals(variantId))
                 .findFirst()
@@ -128,7 +129,7 @@ public class ProductDetailService {
     }
 
     /** 공개이고 판매 방식별 준비가 끝난 상품만. 아니면 404 — 준비 전에는 회차 · 재고가 없어 상세를 그릴 수 없다. */
-    private Product requireViewable(Long productId) {
+    private Product requireViewable(UUID productId) {
         Product product = products.findById(productId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
         if (!(product.isVisible() && crossReads.isReady(productId))) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
@@ -136,7 +137,7 @@ public class ProductDetailService {
         return product;
     }
 
-    private static Variant toVariant(ProductOption option, SaleMode saleMode, ProductOptions document, Map<Long, Integer> available) {
+    private static Variant toVariant(ProductOption option, SaleMode saleMode, ProductOptions document, Map<UUID, Integer> available) {
         Integer availableQuantity = saleMode == SaleMode.IN_STOCK
                 ? Math.max(0, available.getOrDefault(option.getId(), 0)) : null;
         // 고른 값은 조합 키(값 id)로 문서에서 찾는다 — 축 키 → 정규화값

@@ -6,9 +6,6 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
@@ -16,6 +13,7 @@ import org.hibernate.type.SqlTypes;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * 상품(모델). 옵션은 {@link ProductOption} 이 product id 로 잇는다.
@@ -36,16 +34,12 @@ import java.util.Objects;
 @Table(name = "products")
 public class Product extends BaseEntity {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
     /** 관리자 등록의 Idempotency-Key. 같은 키로 다시 오면 이 상품을 돌려준다. 등록 API 밖에서 들어온 행(다른 모듈 픽스처)은 null. */
     @Column(updatable = false, length = 100)
     private String idempotencyKey;
 
     @Column(nullable = false)
-    private Long categoryId;
+    private UUID categoryId;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, updatable = false, length = 20)
@@ -86,7 +80,7 @@ public class Product extends BaseEntity {
     protected Product() {
     }
 
-    private Product(String idempotencyKey, Long categoryId, SaleMode saleMode, String title, BigDecimal basePrice,
+    private Product(String idempotencyKey, UUID categoryId, SaleMode saleMode, String title, BigDecimal basePrice,
                     String description, String tags, boolean visible, ProductOptions options) {
         this.idempotencyKey = idempotencyKey;
         this.categoryId = categoryId;
@@ -104,7 +98,7 @@ public class Product extends BaseEntity {
      * 새 상품. 판매 상태는 ACTIVE, 공개 여부는 관리자가 고른 값이다 — 판매 방식별 준비가 끝나기 전에는 visible 이어도 노출되지 않는다.
      * 보증을 제공하지 않으면 추가금은 0 이다.
      */
-    public static Product register(String idempotencyKey, Long categoryId, SaleMode saleMode, String title, BigDecimal basePrice,
+    public static Product register(String idempotencyKey, UUID categoryId, SaleMode saleMode, String title, BigDecimal basePrice,
                                    String description, String tags, boolean visible,
                                    boolean warrantyOffered, BigDecimal warrantySurcharge, ProductOptions options) {
         return new Product(idempotencyKey, categoryId, saleMode, title, basePrice, description, tags, visible,
@@ -157,7 +151,7 @@ public class Product extends BaseEntity {
      */
     public boolean cancelCampaign(Instant now) {
         if (saleMode != SaleMode.PREORDER) {
-            throw new IllegalStateException("회차 취소는 사전예약 상품만: " + id);
+            throw new IllegalStateException("회차 취소는 사전예약 상품만: " + getId());
         }
         if (campaignCanceledAt != null) {
             return false;
@@ -204,11 +198,7 @@ public class Product extends BaseEntity {
         return offered ? new ProductOptions.Warranty(true, Amounts.requireWholeWon(surcharge, name)) : ProductOptions.Warranty.NONE;
     }
 
-    public Long getId() {
-        return id;
-    }
-
-    public Long getCategoryId() {
+    public UUID getCategoryId() {
         return categoryId;
     }
 

@@ -18,6 +18,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.EnumSet;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * 주문 상태를 바꾸는 유일한 길. 쓰기 포트({@link OrderWriter})는 여기서만 쓴다(아키텍처 테스트가 강제).
@@ -88,7 +89,7 @@ public class OrderLedger {
      * @param expectedFrom 비어 있으면 안 된다
      * @throws IllegalArgumentException 주문이 없다 · 결제 사건이다 — 호출하는 쪽의 잘못이다
      */
-    public OrderTransition fire(Long orderId, OrderTrigger trigger, Set<OrderStatus> expectedFrom, EventCause cause) {
+    public OrderTransition fire(UUID orderId, OrderTrigger trigger, Set<OrderStatus> expectedFrom, EventCause cause) {
         if (PAYMENT_TRIGGERS.contains(trigger)) {
             throw new IllegalArgumentException("결제 사건은 requestPayment · settlePayment 로 알린다: " + trigger);
         }
@@ -107,7 +108,7 @@ public class OrderLedger {
      *
      * @param providerOrderId 승인할 결제창(결제사 주문 번호)
      */
-    public OrderTransition requestPayment(Long orderId, String providerOrderId, EventCause cause) {
+    public OrderTransition requestPayment(UUID orderId, String providerOrderId, EventCause cause) {
         if (providerOrderId == null || providerOrderId.isBlank()) {
             throw new IllegalArgumentException("결제창 번호가 없다");
         }
@@ -127,7 +128,7 @@ public class OrderLedger {
      *
      * @param result PAYMENT_APPROVED · PAYMENT_DECLINED
      */
-    public OrderTransition settlePayment(Long orderId, OrderTrigger result, String providerOrderId, EventCause cause) {
+    public OrderTransition settlePayment(UUID orderId, OrderTrigger result, String providerOrderId, EventCause cause) {
         if (result != OrderTrigger.PAYMENT_APPROVED && result != OrderTrigger.PAYMENT_DECLINED) {
             throw new IllegalArgumentException("결제 결과가 아니다: " + result);
         }
@@ -150,7 +151,7 @@ public class OrderLedger {
      * @return 남겼으면 true. 취소 중이 아니거나 이미 남겼으면 false
      * @throws IllegalArgumentException 주문이 없다
      */
-    public boolean noteRefundFailed(Long orderId) {
+    public boolean noteRefundFailed(UUID orderId) {
         OrderStatus from = lock(orderId);
         if (from != OrderStatus.CANCELING
                 || writer.lastEventCause(orderId).filter(EventCause::isRefundFailure).isPresent()) {
@@ -165,12 +166,12 @@ public class OrderLedger {
         return true;
     }
 
-    private OrderStatus lock(Long orderId) {
+    private OrderStatus lock(UUID orderId) {
         return writer.lockStatus(orderId).orElseThrow(() -> new IllegalArgumentException("주문이 없다: " + orderId));
     }
 
     /** 잠근 주문을 사건대로 바꾼다. 상태 머신이 받지 않는 사건이면 그대로 둔다. */
-    private OrderTransition transition(Long orderId, OrderStatus from, OrderTrigger trigger,
+    private OrderTransition transition(UUID orderId, OrderStatus from, OrderTrigger trigger,
                                        String authorizingProviderOrderId, EventCause cause) {
         OrderStatus to = from.next(trigger).orElse(null);
         if (to == null) {

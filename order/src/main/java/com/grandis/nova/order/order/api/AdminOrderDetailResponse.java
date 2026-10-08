@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import com.grandis.nova.order.order.query.OrderView;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 관리자 상세. 회원 · 내부 메모가 더 붙는다. 내부 메모는 이 응답에만 있다 —
@@ -13,7 +14,7 @@ import java.util.List;
  */
 public record AdminOrderDetailResponse(
         @JsonUnwrapped OrderResponse order,
-        Long customerId,
+        UUID customerId,
         String internalNote,
         List<OrderEventResponse> events,
         boolean refundFailed

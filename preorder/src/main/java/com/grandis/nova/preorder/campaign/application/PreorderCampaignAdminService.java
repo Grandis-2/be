@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 모집 일정과 배송 차수 관리(관리자). 상품 확인(catalog 호출)은 트랜잭션 밖에서 하고,
@@ -42,7 +43,7 @@ public class PreorderCampaignAdminService {
     }
 
     @Transactional(readOnly = true)
-    public PreorderCampaign findCampaign(Long productId) {
+    public PreorderCampaign findCampaign(UUID productId) {
         return campaigns.findById(productId)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND));
     }
@@ -53,7 +54,7 @@ public class PreorderCampaignAdminService {
      * 둘이 동시에 처음 만들면 한쪽이 PK 충돌로 롤백된다. 실패한 트랜잭션은 이어 쓸 수 없으므로
      * 새 트랜잭션에서 한 번 더 한다 — 그때는 행이 있으니 일정 변경으로 끝난다. 다른 제약 위반은 다시 하지 않는다.
      */
-    public PreorderCampaign upsertCampaign(Long productId, Instant opensAt, Instant closesAt) {
+    public PreorderCampaign upsertCampaign(UUID productId, Instant opensAt, Instant closesAt) {
         requirePeriod(opensAt, closesAt);
         boolean visible = requirePreorderProduct(productId).isVisible();
         try {
@@ -67,12 +68,12 @@ public class PreorderCampaignAdminService {
     }
 
     @Transactional(readOnly = true)
-    public List<ShipmentBatch> findBatches(Long productId) {
+    public List<ShipmentBatch> findBatches(UUID productId) {
         findCampaign(productId);
         return batches.findByProductIdOrderByBatchNumber(productId);
     }
 
-    public List<ShipmentBatch> replaceBatches(Long productId, ShipmentBatchPlan plan) {
+    public List<ShipmentBatch> replaceBatches(UUID productId, ShipmentBatchPlan plan) {
         return writer.replaceBatches(productId, plan);
     }
 
@@ -93,7 +94,7 @@ public class PreorderCampaignAdminService {
     }
 
     /** 사전예약 상품에만 회차가 있다. 일반 상품 · 없는 상품이면 404 다. */
-    private ProductCatalog requirePreorderProduct(Long productId) {
+    private ProductCatalog requirePreorderProduct(UUID productId) {
         return catalogReader.findProduct(productId)
                 .filter(ProductCatalog::isPreorderProduct)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND));

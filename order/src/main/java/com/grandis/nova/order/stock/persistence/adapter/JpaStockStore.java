@@ -1,5 +1,6 @@
 package com.grandis.nova.order.stock.persistence.adapter;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.order.stock.domain.exception.StockAlreadyCreatedException;
 import com.grandis.nova.order.stock.domain.model.StockLevel;
 import com.grandis.nova.order.stock.domain.repository.StockReader;
@@ -15,6 +16,7 @@ import org.springframework.stereotype.Repository;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 재고 읽기 · 쓰기 포트의 JPA 구현. 새 행은 넣자마자 flush 해 PK 중복을 커밋이 아니라 이 자리에서 잡는다.
@@ -39,7 +41,7 @@ class JpaStockStore implements StockReader, StockWriter {
     }
 
     @Override
-    public List<StockLevel> findByOptionIds(Collection<Long> optionIds) {
+    public List<StockLevel> findByOptionIds(Collection<UUID> optionIds) {
         if (optionIds.isEmpty()) {
             return List.of();
         }
@@ -47,7 +49,7 @@ class JpaStockStore implements StockReader, StockWriter {
     }
 
     @Override
-    public List<StockLevel> lockByOptionIds(Collection<Long> optionIds) {
+    public List<StockLevel> lockByOptionIds(Collection<UUID> optionIds) {
         if (optionIds.isEmpty()) {
             return List.of();
         }
@@ -55,12 +57,12 @@ class JpaStockStore implements StockReader, StockWriter {
     }
 
     @Override
-    public int changeTotal(Long optionId, int total, Instant now) {
+    public int changeTotal(UUID optionId, int total, Instant now) {
         return inventories.changeTotal(optionId, total, now);
     }
 
     @Override
-    public void insert(Long optionId, int total, Instant now) {
+    public void insert(UUID optionId, int total, Instant now) {
         try {
             entityManager.persist(new OptionInventoryJpaEntity(optionId, total, now));
             entityManager.flush();
@@ -73,7 +75,8 @@ class JpaStockStore implements StockReader, StockWriter {
     }
 
     private static StockLevel toLevel(InventoryRow row) {
-        return new StockLevel(row.getOptionId(), row.getStockTotal(), row.getStockReserved(), row.getStockSold());
+        return new StockLevel(UuidBinary.fromBytes(row.getOptionId()), row.getStockTotal(), row.getStockReserved(),
+                row.getStockSold());
     }
 
     /**

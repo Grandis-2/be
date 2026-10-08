@@ -21,6 +21,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 import java.util.concurrent.Semaphore;
 
 /**
@@ -88,7 +89,7 @@ public class ConfirmPaymentService {
      *                           DEPENDENCY_UNAVAILABLE(동시 상한 초과 포함)
      * @throws IllegalStateException 주문의 예약이 보이지 않거나 다른 예약 · 회원이다(데이터 어긋남), payment 연동 오류(500)
      */
-    public ConfirmedPayment confirm(Long customerId, String sessionToken, String orderToken, String providerOrderId,
+    public ConfirmedPayment confirm(UUID customerId, String sessionToken, String orderToken, String providerOrderId,
                                     String paymentKey, BigDecimal amount) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("결제 승인은 트랜잭션 밖에서 불러야 한다 — 외부 호출 동안 잠금을 쥐지 않게");
@@ -192,7 +193,7 @@ public class ConfirmPaymentService {
     }
 
     /** 본인 주문. 남의 주문은 존재를 숨긴다. */
-    private Order findOwn(Long customerId, String orderToken) {
+    private Order findOwn(UUID customerId, String orderToken) {
         Order order = readTransaction.execute(status -> OrderToken.parse(orderToken)
                         .flatMap(orderReader::findByOrderToken)
                         .filter(found -> found.customerId().equals(customerId)))
@@ -203,7 +204,7 @@ public class ConfirmPaymentService {
         return order;
     }
 
-    private Order reload(Long orderId) {
+    private Order reload(UUID orderId) {
         return readTransaction.execute(status -> orderReader.findById(orderId))
                 .orElseThrow(() -> new IllegalStateException("주문이 사라졌다: " + orderId));
     }

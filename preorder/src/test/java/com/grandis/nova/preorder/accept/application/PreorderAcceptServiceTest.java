@@ -14,6 +14,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 
 import java.sql.SQLException;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -27,8 +28,9 @@ import static org.mockito.Mockito.mock;
  */
 class PreorderAcceptServiceTest {
 
-    static final Long CUSTOMER_ID = 1024L;
-    static final Long PRODUCT_ID = 101L;
+    static final UUID CUSTOMER_ID = UUID.fromString("00000000-0000-7000-8000-000000001024");
+    static final UUID PRODUCT_ID = UUID.fromString("00000000-0000-7000-8000-000000000101");
+    static final UUID OPTION_ID = UUID.fromString("00000000-0000-7000-8000-000000001002");
 
     PreorderAcceptTransaction transaction;
     Preorders preorders;
@@ -103,7 +105,7 @@ class PreorderAcceptServiceTest {
     }
 
     private void acceptByAdmin() {
-        service.acceptByAdmin(CUSTOMER_ID, PRODUCT_ID, 1002L, "key-00000001", "전화 접수", null);
+        service.acceptByAdmin(CUSTOMER_ID, PRODUCT_ID, OPTION_ID, "key-00000001", "전화 접수", null);
     }
 
     /** 트랜잭션이 그 제약 위반으로 롤백된 것처럼 만든다. MySQL 처럼 표 이름 · 백틱이 붙어도 이름만 본다. */

@@ -6,6 +6,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -57,10 +58,9 @@ class PaymentValuesTest {
     }
 
     @Test
-    void paymentTargetNeedsTypeAndPositiveId() {
-        assertThat(PaymentTarget.order(1L).type()).isEqualTo(TargetType.ORDER);
-        assertThat(PaymentTarget.drawEntry(1L).type()).isEqualTo(TargetType.DRAW_ENTRY);
-        assertThatThrownBy(() -> PaymentTarget.order(0L)).isInstanceOf(IllegalArgumentException.class);
+    void paymentTargetNeedsTypeAndId() {
+        assertThat(PaymentTarget.order(UUID.randomUUID()).type()).isEqualTo(TargetType.ORDER);
+        assertThat(PaymentTarget.drawEntry(UUID.randomUUID()).type()).isEqualTo(TargetType.DRAW_ENTRY);
         assertThatThrownBy(() -> PaymentTarget.order(null)).isInstanceOf(NullPointerException.class);
     }
 

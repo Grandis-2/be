@@ -4,7 +4,6 @@ import com.grandis.nova.payment.vo.PaymentTarget;
 import com.grandis.nova.payment.vo.ProviderPaymentKey;
 
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 통합 테스트는 커밋된 행을 서로 공유한다. 대상(uq_payment_target) · 결제 키(uq_payment_key)는 유일해야 하므로
@@ -12,17 +11,15 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class PaymentFixtures {
 
-    private static final AtomicLong NEXT_TARGET_ID = new AtomicLong(System.currentTimeMillis());
-
     private PaymentFixtures() {
     }
 
     public static PaymentTarget newOrderTarget() {
-        return PaymentTarget.order(NEXT_TARGET_ID.incrementAndGet());
+        return PaymentTarget.order(UUID.randomUUID());
     }
 
     public static PaymentTarget newDrawEntryTarget() {
-        return PaymentTarget.drawEntry(NEXT_TARGET_ID.incrementAndGet());
+        return PaymentTarget.drawEntry(UUID.randomUUID());
     }
 
     public static ProviderPaymentKey newProviderPayment() {

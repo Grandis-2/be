@@ -1,5 +1,6 @@
 package com.grandis.nova.member;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.member.support.MemberIntegrationTest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -64,7 +65,7 @@ class ProfileIntegrationTest {
     }
 
     private Map<String, Object> row() {
-        return jdbc.queryForMap("SELECT name, email, phone_number FROM customers WHERE id = ?", customer.getId());
+        return jdbc.queryForMap("SELECT name, email, phone_number FROM customers WHERE id = ?", UuidBinary.toBytes(customer.getId()));
     }
 
     private static String body(String name, String email, String phone) {
@@ -101,7 +102,7 @@ class ProfileIntegrationTest {
                 .andExpect(jsonPath("$.data.email").value("hong@example.com"));
         assertThat(row()).containsEntry("name", "홍길동").containsEntry("email", "hong@example.com")
                 .containsEntry("phone_number", "010-1234-5678");
-        assertThat(jdbc.queryForObject("SELECT display_name FROM customers WHERE id = ?", String.class, customer.getId()))
+        assertThat(jdbc.queryForObject("SELECT display_name FROM customers WHERE id = ?", String.class, UuidBinary.toBytes(customer.getId())))
                 .isEqualTo("카카오닉네임");
     }
 
@@ -149,7 +150,7 @@ class ProfileIntegrationTest {
         mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
                         .content(body(emoji.repeat(50), null, null)))
                 .andExpect(status().isOk());
-        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(name) FROM customers WHERE id = ?", Integer.class, customer.getId()))
+        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(name) FROM customers WHERE id = ?", Integer.class, UuidBinary.toBytes(customer.getId())))
                 .isEqualTo(50);
 
         mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
@@ -164,7 +165,7 @@ class ProfileIntegrationTest {
                         .content(body(nfd, null, null)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.name").value(nfc));
-        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(name) FROM customers WHERE id = ?", Integer.class, customer.getId()))
+        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(name) FROM customers WHERE id = ?", Integer.class, UuidBinary.toBytes(customer.getId())))
                 .isEqualTo(50);
     }
 
@@ -179,7 +180,7 @@ class ProfileIntegrationTest {
         mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
                         .content(body(null, longest, "0".repeat(20))))
                 .andExpect(status().isOk());
-        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(email) FROM customers WHERE id = ?", Integer.class, customer.getId()))
+        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(email) FROM customers WHERE id = ?", Integer.class, UuidBinary.toBytes(customer.getId())))
                 .isEqualTo(255);
 
         // 한 글자만 더 붙인다. 형식은 그대로 유효하고 길이만 넘는다 — 거절하는 규칙이 크기 규칙임이 이 한 쌍으로 갈린다.
@@ -189,7 +190,7 @@ class ProfileIntegrationTest {
                         .content(body(null, tooLong, null)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.details.violations[?(@.field == 'email')]").exists());
-        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(email) FROM customers WHERE id = ?", Integer.class, customer.getId()))
+        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(email) FROM customers WHERE id = ?", Integer.class, UuidBinary.toBytes(customer.getId())))
                 .isEqualTo(255);   // 거절된 요청은 아무것도 안 바꾼다
 
         mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
@@ -264,7 +265,7 @@ class ProfileIntegrationTest {
                 .andExpect(status().isOk());
 
         // 두 트랜잭션이 **둘 다 읽은 뒤에** 각자 쓰게 만든다. 순서대로 돌면 늦게 커밋한 쪽이 이겨 버그가 안 드러난다.
-        long id = customer.getId();
+        UUID id = customer.getId();
         java.util.concurrent.CountDownLatch bothLoaded = new java.util.concurrent.CountDownLatch(2);
         java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(2);
         java.util.List<Throwable> failures = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
@@ -291,7 +292,7 @@ class ProfileIntegrationTest {
         assertThat(failures).as("두 저장 모두 예외 없이 끝난다").isEmpty();
 
         Map<String, Object> saved = jdbc.queryForMap(
-                "SELECT name, email, phone_number, default_ship_to_name, default_ship_to_line1 FROM customers WHERE id = ?", id);
+                "SELECT name, email, phone_number, default_ship_to_name, default_ship_to_line1 FROM customers WHERE id = ?", UuidBinary.toBytes(id));
         assertThat(saved).as("프로필 저장이 배송지를 되돌리지 않았다")
                 .containsEntry("default_ship_to_name", "김철수").containsEntry("default_ship_to_line1", "부산");
         assertThat(saved).as("배송지 저장이 프로필을 되돌리지 않았다")

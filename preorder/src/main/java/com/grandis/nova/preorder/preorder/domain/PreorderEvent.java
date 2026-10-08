@@ -15,6 +15,7 @@ import org.hibernate.annotations.Immutable;
 
 import java.io.Serializable;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 예약 이력. 추가 전용이라 {@link Immutable} 이다. 순서는 시각이 아니라 event_sequence 로 판정한다.
@@ -30,7 +31,7 @@ public class PreorderEvent {
     public static final long FIRST_SEQUENCE = 1;
 
     @Id
-    private Long preorderId;
+    private UUID preorderId;
 
     @Id
     private Long eventSequence;
@@ -56,7 +57,7 @@ public class PreorderEvent {
     protected PreorderEvent() {
     }
 
-    public PreorderEvent(Long preorderId, long eventSequence, PreorderStatus fromStatus, PreorderStatus toStatus,
+    public PreorderEvent(UUID preorderId, long eventSequence, PreorderStatus fromStatus, PreorderStatus toStatus,
                          EventActor actor, String reason, Instant createdAt) {
         actor.requireReason(reason);
         this.preorderId = preorderId;
@@ -74,7 +75,7 @@ public class PreorderEvent {
                 getToStatus(), getActor(), getReason(), getCreatedAt());
     }
 
-    public Long getPreorderId() {
+    public UUID getPreorderId() {
         return preorderId;
     }
 
@@ -104,6 +105,6 @@ public class PreorderEvent {
     }
 
     /** 복합 키 (preorder_id, event_sequence). */
-    public record Key(Long preorderId, Long eventSequence) implements Serializable {
+    public record Key(UUID preorderId, Long eventSequence) implements Serializable {
     }
 }

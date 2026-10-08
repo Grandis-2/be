@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -32,20 +33,20 @@ public final class OptionCombination {
      */
     private static final Comparator<String> KEY_ORDER = Comparator.comparingInt(String::length).thenComparing(Comparator.naturalOrder());
 
-    private final Long productId;
+    private final UUID productId;
     /** 축 순. 축이 없는 상품이면 비어 있다. */
     private final List<Pick> picks;
     /** 축이 없는 상품의 표시명. 선택이 있으면 null 이고 값에서 만든다. */
     private final String standaloneTitle;
 
-    private OptionCombination(Long productId, List<Pick> picks, String standaloneTitle) {
+    private OptionCombination(UUID productId, List<Pick> picks, String standaloneTitle) {
         this.productId = productId;
         this.picks = List.copyOf(picks);
         this.standaloneTitle = standaloneTitle;
     }
 
     /** 축이 없는 상품의 유일한 옵션. 상품당 하나는 DB UNIQUE(product_id, combination_key = '') 가 지킨다. */
-    public static OptionCombination none(Long productId, String title) {
+    public static OptionCombination none(UUID productId, String title) {
         return new OptionCombination(productId, List.of(), titleOf(List.of(), title));
     }
 
@@ -61,7 +62,7 @@ public final class OptionCombination {
     }
 
     /** @param picks 축 순서. 같은 축이 두 번이면 거절한다 */
-    public static OptionCombination of(Long productId, List<Pick> picks) {
+    public static OptionCombination of(UUID productId, List<Pick> picks) {
         if (picks == null || picks.isEmpty()) {
             throw new IllegalArgumentException("a combination needs at least one pick");
         }
@@ -89,7 +90,7 @@ public final class OptionCombination {
         return picks.isEmpty();
     }
 
-    public Long getProductId() {
+    public UUID getProductId() {
         return productId;
     }
 

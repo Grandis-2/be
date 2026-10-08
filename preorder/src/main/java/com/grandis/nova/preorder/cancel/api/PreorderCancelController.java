@@ -12,6 +12,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.UUID;
+
 /**
  * 예약 취소 시작. 받은 액세스 토큰(Authorization: Bearer)은 order 사전 확인에 그대로 싣는다.
  * Idempotency-Key 는 받지 않는다 — 취소는 상태 조건으로 이미 멱등하다(계약: 선택 헤더).
@@ -28,7 +30,7 @@ class PreorderCancelController {
     @Operation(summary = "예약 취소 시작 — order 에 취소 가능 여부를 먼저 확인", tags = "사전예약")
     @PostMapping("/api/v1/preorders/{preorderId}/cancel")
     public ResponseEntity<ApiResponse<CancelResult>> cancel(
-            @CurrentCustomerId Long customerId,
+            @CurrentCustomerId UUID customerId,
             @PathVariable String preorderId,
             @Valid @RequestBody(required = false) CancelRequest request) {
         String reason = request == null ? null : request.reason();

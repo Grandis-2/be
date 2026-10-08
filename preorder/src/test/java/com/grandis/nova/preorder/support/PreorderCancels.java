@@ -5,6 +5,8 @@ import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderFact;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.UUID;
+
 /**
  * 테스트에서 예약을 실제로 취소한다. 상태를 SQL 로 직접 바꾸지 않는다 —
  * 그러면 이력도 활성 표식 계산도 없는, 정상 경로로는 생길 수 없는 행이 만들어진다.
@@ -20,7 +22,7 @@ public class PreorderCancels {
     }
 
     /** 취소 요청 → 취소 완료. 상태 머신을 그대로 거친다. */
-    public void complete(Long preorderId) {
+    public void complete(UUID preorderId) {
         transactionTemplate.executeWithoutResult(status -> {
             ledger.fire(preorderId, new PreorderFact.CancelRequested(EventActor.USER, null));
             ledger.fire(preorderId, new PreorderFact.CancelCompleted());

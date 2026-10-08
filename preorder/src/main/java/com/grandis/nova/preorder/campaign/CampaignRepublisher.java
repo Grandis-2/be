@@ -13,6 +13,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 전체 재발행(모듈 공개 API). 대기열이 일정을 잃었을 때 마감 전 회차마다 지금 일정을 회차 변경 이벤트로 다시 보낸다.
@@ -22,6 +23,9 @@ import java.util.List;
 public class CampaignRepublisher {
 
     private static final int BATCH_SIZE = 100;
+
+    /** 첫 묶음의 커서. 모든 상품 id 보다 작다. */
+    private static final UUID BEFORE_FIRST = new UUID(0, 0);
 
     private static final Logger log = LoggerFactory.getLogger(CampaignRepublisher.class);
 
@@ -42,10 +46,10 @@ public class CampaignRepublisher {
     public int republishAll() {
         Instant now = clock.instant();
         int published = 0;
-        long afterProductId = 0;
-        List<Long> batch;
+        UUID afterProductId = BEFORE_FIRST;
+        List<UUID> batch;
         do {
-            long after = afterProductId;
+            UUID after = afterProductId;
             batch = transactionTemplate.execute(status -> republishBatch(now, after));
             published += batch.size();
             if (!batch.isEmpty()) {
@@ -56,7 +60,7 @@ public class CampaignRepublisher {
         return published;
     }
 
-    private List<Long> republishBatch(Instant now, long afterProductId) {
+    private List<UUID> republishBatch(Instant now, UUID afterProductId) {
         List<PreorderCampaign> batch = campaigns.findNotClosedAfter(now, afterProductId, Limit.of(BATCH_SIZE));
         batch.forEach(campaign -> changePublisher.publish(campaign, CampaignChange.RESYNC));
         return batch.stream().map(PreorderCampaign::getProductId).toList();

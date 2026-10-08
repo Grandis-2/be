@@ -26,7 +26,9 @@ import java.math.BigDecimal;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -61,7 +63,7 @@ class RefundResultsTest {
 
     OrderFixtures fixtures;
     PlacedOrders orders;
-    Long customerId;
+    UUID customerId;
 
     @BeforeEach
     void setUp() {
@@ -196,19 +198,19 @@ class RefundResultsTest {
     }
 
     private String statusOf(Order order) {
-        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, order.id());
+        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, bytes(order.id()));
     }
 
     private int eventCount(Order order) {
         return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM order_events WHERE order_id = ?", Integer.class,
-                order.id());
+                bytes(order.id()));
     }
 
     private Map<String, Object> lastEvent(Order order) {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
                 SELECT from_status, to_status, actor, reason FROM order_events
                  WHERE order_id = ? ORDER BY event_sequence DESC LIMIT 1
-                """, order.id());
+                """, bytes(order.id()));
         return rows.getFirst();
     }
 }

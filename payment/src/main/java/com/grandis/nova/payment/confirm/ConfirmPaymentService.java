@@ -30,6 +30,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 결제 승인: 거래를 시작하고(리스) 토스 승인을 부른 뒤 결과 · 결제 기록 · 결과 이벤트를 한 트랜잭션으로 남긴다({@link CaptureSettlement}).
@@ -186,7 +187,7 @@ public class ConfirmPaymentService {
     }
 
     /** 그 거래의 지금 결과. 시작 직전에 읽은 행이라 없을 수 없다. */
-    private ConfirmResult current(Long transactionId) {
+    private ConfirmResult current(UUID transactionId) {
         PaymentTransaction now = reader.findById(transactionId)
                 .orElseThrow(() -> new IllegalStateException("거래가 사라졌다: " + transactionId));
         return ConfirmResult.ofStatus(now.status(), now.lastError() == null ? null : now.lastError().code());

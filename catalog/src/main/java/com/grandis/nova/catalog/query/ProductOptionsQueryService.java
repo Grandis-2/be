@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 다른 서비스가 묻는 상품 · 옵션 읽기. catalog 소유 표 셋만 읽는다 — 회차 · 재고는 싣지 않는다(preorder · order 소유).
@@ -37,12 +38,12 @@ public class ProductOptionsQueryService {
 
     /** 없는 상품이면 PRODUCT_NOT_FOUND(404). 옵션이 없는 상품은 404 가 아니라 빈 목록이다. */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public ProductOptionsView findProductOptions(Long productId) {
+    public ProductOptionsView findProductOptions(UUID productId) {
         ProductListingQueryRepository.Exposure exposure = crossReads.findExposure(productId)
                 .orElseThrow(() -> new BusinessException(CatalogErrorCode.PRODUCT_NOT_FOUND));
         Product product = products.findById(productId)
                 .orElseThrow(() -> new BusinessException(CatalogErrorCode.PRODUCT_NOT_FOUND));
-        List<ProductOptionsView.Option> optionViews = options.findByProductIdOrderById(productId).stream()
+        List<ProductOptionsView.Option> optionViews = options.findByProductIdOrderByCreatedAtAscIdAsc(productId).stream()
                 .map(ProductOptionsQueryService::toView)
                 .toList();
         return new ProductOptionsView(product.getId(), product.getTitle(), product.getSaleMode(), exposure.status(),

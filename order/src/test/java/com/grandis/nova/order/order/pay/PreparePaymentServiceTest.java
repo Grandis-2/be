@@ -4,6 +4,7 @@ import com.grandis.nova.order.client.payment.PaymentPreparer;
 import com.grandis.nova.order.client.preorder.PreorderReader;
 import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
+import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -26,7 +27,7 @@ class PreparePaymentServiceTest {
     void refusesToRunInsideTransaction() {
         TransactionSynchronizationManager.setActualTransactionActive(true);
         try {
-            assertThatThrownBy(() -> service.prepare(1L, "prepare-guard-test", "6f1c2d3e-4b5a-4c7d-8e9f-0a1b2c3d4e5f"))
+            assertThatThrownBy(() -> service.prepare(TestIds.id(1), "prepare-guard-test", "6f1c2d3e-4b5a-4c7d-8e9f-0a1b2c3d4e5f"))
                     .isInstanceOf(IllegalStateException.class);
         } finally {
             TransactionSynchronizationManager.setActualTransactionActive(false);

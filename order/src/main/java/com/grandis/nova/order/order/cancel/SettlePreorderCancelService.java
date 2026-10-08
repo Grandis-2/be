@@ -68,12 +68,12 @@ public class SettlePreorderCancelService {
         } else {
             Order order = found.get();
             if (!order.customerId().equals(cancel.customerId())) {
-                throw new IllegalStateException("예약의 회원과 주문의 회원이 다르다: preorderInternalId=%d, orderId=%d"
+                throw new IllegalStateException("예약의 회원과 주문의 회원이 다르다: preorderInternalId=%s, orderId=%s"
                         .formatted(cancel.preorderInternalId(), order.id()));
             }
             if (!order.preorderToken().equals(cancel.preorderId())) {
                 throw new IllegalStateException(
-                        "봉투의 예약과 payload 의 예약 UUID 가 다르다: preorderInternalId=%d, orderId=%d, payload=%s, order=%s"
+                        "봉투의 예약과 payload 의 예약 UUID 가 다르다: preorderInternalId=%s, orderId=%s, payload=%s, order=%s"
                                 .formatted(cancel.preorderInternalId(), order.id(), cancel.preorderId(),
                                         order.preorderToken()));
             }

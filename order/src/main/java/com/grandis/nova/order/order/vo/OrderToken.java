@@ -5,7 +5,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * 주문의 공개 식별자(UUID). 밖에는 이것만 알린다 — 내부 id 는 순번이라 추측할 수 있다.
+ * 주문의 공개 식별자(UUID). 밖에는 이것만 알린다 — 내부 id(UUID v7)는 만든 시각이 드러난다.
  * DB 칸이 대소문자를 구별하므로(utf8mb4_bin) 소문자 표준형만 받는다.
  */
 public record OrderToken(String value) {

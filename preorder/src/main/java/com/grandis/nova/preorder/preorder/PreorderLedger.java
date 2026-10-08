@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 예약 상태를 바꾸는 유일한 길. 호출하는 쪽은 사건({@link PreorderFact})만 알리고,
@@ -68,7 +69,7 @@ public class PreorderLedger {
      * @throws IllegalArgumentException 예약이 없다 — 호출하는 쪽이 먼저 확인한다
      * @throws IllegalStateException    주문 쪽 취소 거절인데 결제 가능한 적이 없는 예약이다
      */
-    public PreorderTransition fire(Long preorderId, PreorderFact fact) {
+    public PreorderTransition fire(UUID preorderId, PreorderFact fact) {
         fact.actor().requireReason(fact.reason());
         PreorderStatus from = lockStatus(preorderId);
         PreorderStatus to = from.next(fact.trigger()).orElse(null);
@@ -84,7 +85,7 @@ public class PreorderLedger {
     }
 
     /** 사건마다 예약 행에 남기는 값이 다르다. 사건이 늘면 컴파일러가 빠진 곳을 알린다. @return 실제로 간 상태 */
-    private PreorderStatus apply(Long preorderId, PreorderFact fact, PreorderStatus from, PreorderStatus to,
+    private PreorderStatus apply(UUID preorderId, PreorderFact fact, PreorderStatus from, PreorderStatus to,
                                  Instant now) {
         switch (fact) {
             case PreorderFact.RegisterConfirmed confirmed -> requireOneRow(
@@ -109,7 +110,7 @@ public class PreorderLedger {
      *
      * @throws IllegalArgumentException 예약이 없다
      */
-    public PreorderStatus lockStatus(Long preorderId) {
+    public PreorderStatus lockStatus(UUID preorderId) {
         return preorders.findStatusForUpdate(preorderId)
                 .orElseThrow(() -> new IllegalArgumentException("예약이 없다: " + preorderId));
     }
@@ -119,7 +120,7 @@ public class PreorderLedger {
      * 결제 확인 이벤트보다 먼저 와도 확정으로 돌아가 만료 대상이 되지 않게.
      * 거절은 주문이 있을 때만 오고 주문은 REGISTERED 이후에만 생기므로, 결제 가능한 적이 없는 예약이 거절되면 어딘가 잘못된 것이다.
      */
-    private PreorderStatus revertCancel(Long preorderId, Instant paidAt, PreorderStatus from, Instant now) {
+    private PreorderStatus revertCancel(UUID preorderId, Instant paidAt, PreorderStatus from, Instant now) {
         if (paidAt != null) {
             requireOneRow(preorders.recordPaid(preorderId, paidAt, now, from), preorderId);
         }
@@ -133,13 +134,13 @@ public class PreorderLedger {
     }
 
     /** 행을 잠근 채 읽은 상태를 조건으로 하므로 늘 1행이다. 0 이면 잠금 규칙이 깨진 것이다. */
-    private void requireOneRow(int updated, Long preorderId) {
+    private void requireOneRow(int updated, UUID preorderId) {
         if (updated != 1) {
             throw new IllegalStateException("잠근 예약의 상태가 바뀌었다: preorderId=" + preorderId);
         }
     }
 
-    private void record(Long preorderId, PreorderStatus from, PreorderStatus to,
+    private void record(UUID preorderId, PreorderStatus from, PreorderStatus to,
                         EventActor actor, String reason, Instant now) {
         long sequence = preorders.findEventSequence(preorderId);
         entityManager.persist(new PreorderEvent(preorderId, sequence, from, to, actor, reason, now));

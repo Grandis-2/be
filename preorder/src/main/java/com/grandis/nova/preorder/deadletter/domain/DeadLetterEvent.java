@@ -6,12 +6,10 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * DLQ 에서 옮겨 온 메시지 하나. 원문을 그대로 두고, 봉투에서 읽은 칸은 검색용이다.
@@ -20,10 +18,6 @@ import java.time.Instant;
 @Entity
 @Table(name = "dead_letter_events")
 public class DeadLetterEvent extends BaseEntity {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
 
     @Column(nullable = false, updatable = false, length = 80)
     private String sourceQueue;
@@ -41,13 +35,13 @@ public class DeadLetterEvent extends BaseEntity {
     private String aggregateType;
 
     @Column(updatable = false)
-    private Long aggregateId;
+    private UUID aggregateId;
 
     @Column(updatable = false)
-    private Long preorderId;
+    private UUID preorderId;
 
     @Column(updatable = false)
-    private Long customerId;
+    private UUID customerId;
 
     @Column(nullable = false, updatable = false, columnDefinition = "mediumtext")
     private String body;
@@ -63,7 +57,7 @@ public class DeadLetterEvent extends BaseEntity {
     private Instant sentAt;
 
     @Column(updatable = false)
-    private Long redrivenFromId;
+    private UUID redrivenFromId;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, updatable = false, length = 20)
@@ -93,7 +87,7 @@ public class DeadLetterEvent extends BaseEntity {
     protected DeadLetterEvent() {
     }
 
-    public DeadLetterEvent(IncomingDeadLetter incoming, DeadLetterBody parsed, Long preorderId, Long customerId) {
+    public DeadLetterEvent(IncomingDeadLetter incoming, DeadLetterBody parsed, UUID preorderId, UUID customerId) {
         this.sourceQueue = incoming.sourceQueue();
         this.messageId = incoming.messageId();
         this.body = incoming.body();
@@ -113,10 +107,6 @@ public class DeadLetterEvent extends BaseEntity {
     /** 되돌리기를 기다리는가 — OPEN 이거나, 보내다 멈춰 staleBefore 전부터 REDRIVING 이다. */
     public boolean waitingForRedrive(Instant staleBefore) {
         return status.waitingForRedrive(redriveStartedAt, staleBefore);
-    }
-
-    public Long getId() {
-        return id;
     }
 
     public String getSourceQueue() {
@@ -139,15 +129,15 @@ public class DeadLetterEvent extends BaseEntity {
         return aggregateType;
     }
 
-    public Long getAggregateId() {
+    public UUID getAggregateId() {
         return aggregateId;
     }
 
-    public Long getPreorderId() {
+    public UUID getPreorderId() {
         return preorderId;
     }
 
-    public Long getCustomerId() {
+    public UUID getCustomerId() {
         return customerId;
     }
 
@@ -167,7 +157,7 @@ public class DeadLetterEvent extends BaseEntity {
         return sentAt;
     }
 
-    public Long getRedrivenFromId() {
+    public UUID getRedrivenFromId() {
         return redrivenFromId;
     }
 

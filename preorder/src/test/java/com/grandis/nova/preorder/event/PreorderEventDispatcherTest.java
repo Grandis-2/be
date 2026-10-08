@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.event;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.cancel.application.CancelStarter;
@@ -23,6 +24,7 @@ import tools.jackson.databind.node.ObjectNode;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -62,7 +64,7 @@ class PreorderEventDispatcherTest {
     CatalogReader catalogReader;
 
     ShopFixtures fixtures;
-    Long preorderId;
+    UUID preorderId;
     String token;
 
     @BeforeEach
@@ -75,24 +77,24 @@ class PreorderEventDispatcherTest {
 
     @Test
     void 외부_작업_성공_메시지를_등록_반영으로_보낸다() {
-        Long jobId = fixtures.workerSucceeds(preorderId, "REGISTER");
+        UUID jobId = fixtures.workerSucceeds(preorderId, "REGISTER");
         String externalNumber = "R-" + ShopFixtures.unique();
 
         dispatcher.dispatch(envelope("EXTERNAL_JOB_SUCCEEDED", "PREORDER_SYNC_JOB", jobId, payload()
-                .put("syncJobId", jobId)
+                .put("syncJobId", jobId.toString())
                 .put("preorderId", token)
                 .put("jobType", "REGISTER")
                 .put("externalNumber", externalNumber)));
 
         assertThat(jdbcTemplate.queryForObject("SELECT external_reference FROM preorders WHERE id = ?",
-                String.class, preorderId)).isEqualTo(externalNumber);
+                String.class, (Object) UuidBinary.toBytes(preorderId))).isEqualTo(externalNumber);
     }
 
     @Test
     void 결제_시작_확인_메시지를_예약_확정으로_보내고_거절에_실린_결제_시각도_읽는다() {
-        Long jobId = fixtures.workerSucceeds(preorderId, "REGISTER");
+        UUID jobId = fixtures.workerSucceeds(preorderId, "REGISTER");
         dispatcher.dispatch(envelope("EXTERNAL_JOB_SUCCEEDED", "PREORDER_SYNC_JOB", jobId, payload()
-                .put("syncJobId", jobId).put("preorderId", token).put("jobType", "REGISTER")
+                .put("syncJobId", jobId.toString()).put("preorderId", token).put("jobType", "REGISTER")
                 .put("externalNumber", "R-" + ShopFixtures.unique())));
 
         dispatcher.dispatch(envelope("PREORDER_PAYMENT_STARTED", "PREORDER", preorderId, payload()
@@ -109,7 +111,7 @@ class PreorderEventDispatcherTest {
         assertThat(status()).isEqualTo("RESERVED");
         assertThat(jdbcTemplate.queryForList(
                 "SELECT CONCAT(payment_started_at, '|', reserved_at) FROM preorders WHERE id = ?", String.class,
-                preorderId)).containsExactly("2026-10-04 01:00:00.000000|2026-10-04 01:02:00.000000");
+                (Object) UuidBinary.toBytes(preorderId))).containsExactly("2026-10-04 01:00:00.000000|2026-10-04 01:02:00.000000");
     }
 
     @Test
@@ -120,7 +122,8 @@ class PreorderEventDispatcherTest {
                 settled("NO_ORDER").put("cancelSequence", fixtures.cancelSequence(preorderId))));
 
         assertThat(fixtures.count(
-                "SELECT COUNT(*) FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'CANCEL'", preorderId))
+                "SELECT COUNT(*) FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'CANCEL'",
+                (Object) UuidBinary.toBytes(preorderId)))
                 .isEqualTo(1);
     }
 
@@ -129,7 +132,7 @@ class PreorderEventDispatcherTest {
         handler.onExternalJobSucceeded(new ExternalJobSucceeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
                 token, "REGISTER", "R-" + ShopFixtures.unique()));
         jdbcTemplate.update("UPDATE preorders SET payable_from = UTC_TIMESTAMP(6) - INTERVAL 25 HOUR WHERE id = ?",
-                preorderId);
+                (Object) UuidBinary.toBytes(preorderId));
 
         dispatcher.dispatch(envelope("PREORDER_EXPIRY_REQUESTED", "PREORDER", preorderId,
                 payload().put("preorderId", token)));
@@ -139,17 +142,17 @@ class PreorderEventDispatcherTest {
 
     @Test
     void 판매_중지_메시지를_회차_취소로_보낸다() {
-        Long productId = preorders.findById(preorderId).orElseThrow().productId();
+        UUID productId = preorders.findById(preorderId).orElseThrow().productId();
 
         dispatcher.dispatch(envelope("PREORDER_CAMPAIGN_CANCELED", "PRODUCT", productId,
-                payload().put("productId", productId).put("reason", "공급 차질")));
+                payload().put("productId", productId.toString()).put("reason", "공급 차질")));
 
         assertThat(status()).isEqualTo("CANCELING");
     }
 
     @Test
     void 재발행_요청은_대상_id_없이_받아_전체_재발행으로_보내고_두_번_받아도_된다() {
-        Long productId = preorders.findById(preorderId).orElseThrow().productId();
+        UUID productId = preorders.findById(preorderId).orElseThrow().productId();
         String body = envelope("CAMPAIGN_RESYNC_REQUESTED", "PREORDER_CAMPAIGN", null,
                 payload().put("requestedBy", "waitingroom").put("reason", "REDIS_EMPTY"));
 
@@ -160,12 +163,12 @@ class PreorderEventDispatcherTest {
                 SELECT COUNT(*) FROM preorder_outbox_events
                  WHERE event_type = 'PREORDER_CAMPAIGN_CHANGED' AND aggregate_id = ?
                    AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.change')) = 'RESYNC'
-                """, productId)).isEqualTo(2);
+                """, (Object) UuidBinary.toBytes(productId))).isEqualTo(2);
     }
 
     @Test
     void 상품_등록_메시지를_회차_생성으로_보내고_모르는_칸은_넘기며_상품_id_나_필수_칸이_없으면_예외() {
-        Long productId = fixtures.product("PREORDER", "ACTIVE");
+        UUID productId = fixtures.product("PREORDER", "ACTIVE");
         String opensAt = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.MICROS).toString();
         String closesAt = Instant.now().plusSeconds(90_000).truncatedTo(ChronoUnit.MICROS).toString();
         ObjectNode payload = (ObjectNode) jsonMapper.readTree("""
@@ -185,16 +188,17 @@ class PreorderEventDispatcherTest {
                 SELECT CONCAT_WS('|', batch_number, position_from, COALESCE(position_to, 'NULL'),
                                  estimated_ship_start, estimated_ship_end)
                   FROM shipment_batches WHERE product_id = ? ORDER BY batch_number
-                """, String.class, productId))
+                """, String.class, (Object) UuidBinary.toBytes(productId)))
                 .containsExactly("1|1|3000|2026-11-01|2026-11-07", "2|3001|NULL|2026-12-01|2026-12-07");
         assertThatThrownBy(() -> dispatcher.dispatch(envelope("PREORDER_PRODUCT_REGISTERED", "PRODUCT", null,
                 payload))).isInstanceOf(IllegalArgumentException.class);
-        Long another = fixtures.product("PREORDER", "ACTIVE");
+        UUID another = fixtures.product("PREORDER", "ACTIVE");
         ObjectNode noOpensAt = payload.deepCopy();
         ((ObjectNode) noOpensAt.get("campaign")).remove("opensAt");
         assertThatThrownBy(() -> dispatcher.dispatch(envelope("PREORDER_PRODUCT_REGISTERED", "PRODUCT", another,
                 noOpensAt))).isInstanceOf(NullPointerException.class).hasMessage("opensAt");
-        assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_campaigns WHERE product_id = ?", another)).isZero();
+        assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_campaigns WHERE product_id = ?",
+                (Object) UuidBinary.toBytes(another))).isZero();
         ObjectNode legacy = payload.deepCopy();
         legacy.remove(List.of("visible", "visibilityVersion"));
         dispatcher.dispatch(envelope("PREORDER_PRODUCT_REGISTERED", "PRODUCT", another, legacy));
@@ -203,7 +207,7 @@ class PreorderEventDispatcherTest {
 
     @Test
     void 상품_변경_메시지를_받을_때마다_캐시를_비워_다음_조회가_catalog_에서_다시_받는다() {
-        Long productId = preorders.findById(preorderId).orElseThrow().productId();
+        UUID productId = preorders.findById(preorderId).orElseThrow().productId();
         catalogReader.findProduct(productId);
         clearInvocations(catalogClient);
 
@@ -218,7 +222,7 @@ class PreorderEventDispatcherTest {
 
     @Test
     void 상품_변경에_공개_여부가_있으면_회차에_반영하고_회차가_아직_없으면_예외로_다시_받는다() {
-        Long productId = preorders.findById(preorderId).orElseThrow().productId();
+        UUID productId = preorders.findById(preorderId).orElseThrow().productId();
 
         dispatcher.dispatch(envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", productId, payload()
                 .put("visible", false)
@@ -229,8 +233,8 @@ class PreorderEventDispatcherTest {
                 SELECT COUNT(*) FROM preorder_outbox_events
                  WHERE event_type = 'PREORDER_CAMPAIGN_CHANGED' AND aggregate_id = ?
                    AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.change')) = 'VISIBILITY'
-                """, productId)).isEqualTo(1);
-        Long notRegistered = fixtures.product("PREORDER", "ACTIVE");
+                """, (Object) UuidBinary.toBytes(productId))).isEqualTo(1);
+        UUID notRegistered = fixtures.product("PREORDER", "ACTIVE");
         assertThatThrownBy(() -> dispatcher.dispatch(envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", notRegistered,
                 payload().put("visible", true).put("visibilityVersion", 1))))
                 .isInstanceOf(IllegalStateException.class);
@@ -259,26 +263,27 @@ class PreorderEventDispatcherTest {
      * 계약 2.0 공통 봉투. 키는 계약서 이름을 그대로 적는다 — 받는 쪽 레코드를 직렬화해 만들면 이름이 어긋나도
      * 양쪽이 같이 바뀌어 잡지 못하고, 필드가 빠진 · 잘못된 메시지도 만들 수 없다.
      */
-    private String envelope(String eventType, String aggregateType, Long aggregateId, ObjectNode payload) {
+    private String envelope(String eventType, String aggregateType, UUID aggregateId, ObjectNode payload) {
         ObjectNode envelope = jsonMapper.createObjectNode()
                 .put("eventId", ShopFixtures.unique())
                 .put("eventType", eventType)
                 .put("aggregateType", aggregateType)
-                .put("aggregateId", aggregateId)
+                .put("aggregateId", aggregateId == null ? null : aggregateId.toString())
                 .put("occurredAt", "2026-09-03T01:00:03.470Z");
         envelope.set("payload", payload);
         return jsonMapper.writeValueAsString(envelope);
     }
 
     private String status() {
-        return jdbcTemplate.queryForObject("SELECT status FROM preorders WHERE id = ?", String.class, preorderId);
+        return jdbcTemplate.queryForObject("SELECT status FROM preorders WHERE id = ?", String.class,
+                (Object) UuidBinary.toBytes(preorderId));
     }
 
     /** 공개 여부 | 공개 여부 번호 */
-    private String visibility(Long productId) {
+    private String visibility(UUID productId) {
         return jdbcTemplate.queryForObject("""
                 SELECT CONCAT_WS('|', visible, visibility_version) FROM preorder_campaigns WHERE product_id = ?
-                """, String.class, productId);
+                """, String.class, (Object) UuidBinary.toBytes(productId));
     }
 
     private ObjectNode payload() {

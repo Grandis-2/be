@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Clock;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 사전예약 상품의 모집 일정 · 배송 차수 관리. 권한은 보안 설정이 경로로 막는다(ADMIN).
@@ -37,14 +38,14 @@ class AdminProductPreorderController {
 
     @Operation(summary = "모집 일정 조회")
     @GetMapping("/preorder-campaign")
-    public ApiResponse<PreorderCampaignResponse> getCampaign(@PathVariable Long productId) {
+    public ApiResponse<PreorderCampaignResponse> getCampaign(@PathVariable UUID productId) {
         return ApiResponse.ok(PreorderCampaignResponse.from(campaignService.findCampaign(productId), clock.instant()));
     }
 
     /** 없으면 만들고 있으면 바꾼다. 오픈 뒤에는 409. */
     @Operation(summary = "모집 일정 생성 · 변경(오픈 뒤 409)")
     @PutMapping("/preorder-campaign")
-    public ApiResponse<PreorderCampaignResponse> putCampaign(@PathVariable Long productId,
+    public ApiResponse<PreorderCampaignResponse> putCampaign(@PathVariable UUID productId,
                                                              @Valid @RequestBody PreorderCampaignRequest request) {
         return ApiResponse.ok(PreorderCampaignResponse.from(
                 campaignService.upsertCampaign(productId, request.opensAt(), request.closesAt()), clock.instant()));
@@ -52,14 +53,14 @@ class AdminProductPreorderController {
 
     @Operation(summary = "배송 차수 조회")
     @GetMapping("/shipment-batches")
-    public ApiResponse<Items<ShipmentBatchResponse>> getBatches(@PathVariable Long productId) {
+    public ApiResponse<Items<ShipmentBatchResponse>> getBatches(@PathVariable UUID productId) {
         return ApiResponse.ok(new Items<>(toResponses(campaignService.findBatches(productId))));
     }
 
     /** 오픈 전 전체 교체. 오픈 뒤에는 409, 구간 규칙 위반이면 400. */
     @Operation(summary = "배송 차수 전체 교체(오픈 뒤 409)")
     @PutMapping("/shipment-batches")
-    public ApiResponse<Items<ShipmentBatchResponse>> putBatches(@PathVariable Long productId,
+    public ApiResponse<Items<ShipmentBatchResponse>> putBatches(@PathVariable UUID productId,
                                                                 @Valid @RequestBody ShipmentBatchesRequest request) {
         return ApiResponse.ok(new Items<>(
                 toResponses(campaignService.replaceBatches(productId, request.toPlan()))));

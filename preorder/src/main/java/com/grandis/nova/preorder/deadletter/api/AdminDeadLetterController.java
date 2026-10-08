@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /** 이벤트 큐 DLQ 에서 옮겨 온 메시지 조회 · 되돌리기 · 버리기. */
 @Tag(name = "관리자 · 이벤트 DLQ")
@@ -43,7 +44,7 @@ class AdminDeadLetterController {
             @RequestParam(required = false) String eventType,
             @RequestParam(required = false) FailureReason failureReason,
             @RequestParam(required = false) String preorderId,
-            @RequestParam(required = false) Long customerId,
+            @RequestParam(required = false) UUID customerId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
             @RequestParam(defaultValue = "0") int page,
@@ -54,13 +55,13 @@ class AdminDeadLetterController {
 
     @Operation(summary = "DLQ 메시지 상세 — 원문과 되돌리기 · 버리기 기록")
     @GetMapping("/{deadLetterId}")
-    public ApiResponse<DeadLetterResponse> get(@PathVariable Long deadLetterId) {
+    public ApiResponse<DeadLetterResponse> get(@PathVariable UUID deadLetterId) {
         return ApiResponse.ok(DeadLetterResponse.from(deadLetterAdminService.findOne(deadLetterId)));
     }
 
     @Operation(summary = "원래 큐로 되돌리기 — 처리 결과는 상태(SUCCEEDED · REDRIVE_FAILED)로 남는다")
     @PostMapping("/{deadLetterId}/redrive")
-    public ResponseEntity<ApiResponse<DeadLetterSummaryResponse>> redrive(@PathVariable Long deadLetterId,
+    public ResponseEntity<ApiResponse<DeadLetterSummaryResponse>> redrive(@PathVariable UUID deadLetterId,
                                                                           Authentication admin) {
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResponse.ok(
                 DeadLetterSummaryResponse.from(deadLetterAdminService.redrive(deadLetterId, admin.getName()))));
@@ -77,7 +78,7 @@ class AdminDeadLetterController {
 
     @Operation(summary = "버리기 — 사유 필수. 메시지가 틀린 것이면 보낸 쪽이 다시 발행한다")
     @PostMapping("/{deadLetterId}/discard")
-    public ApiResponse<DeadLetterResponse> discard(@PathVariable Long deadLetterId,
+    public ApiResponse<DeadLetterResponse> discard(@PathVariable UUID deadLetterId,
                                                    @Valid @RequestBody DiscardRequest request, Authentication admin) {
         return ApiResponse.ok(DeadLetterResponse.from(
                 deadLetterAdminService.discard(deadLetterId, admin.getName(), request.note())));

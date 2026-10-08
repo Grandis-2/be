@@ -7,13 +7,11 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * orders 행. persistence 밖으로 내보내지 않는다 — 밖에는 OrderMapper 가 도메인 주문으로 바꿔 내보낸다.
@@ -25,22 +23,18 @@ import java.time.Instant;
 @Table(name = "orders")
 public class OrderJpaEntity extends BaseEntity {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
     @Column(nullable = false, updatable = false, length = 36)
     private String orderToken;
 
     @Column(nullable = false, updatable = false)
-    private Long customerId;
+    private UUID customerId;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, updatable = false, length = 10)
     private OrderSource source;
 
     @Column(updatable = false)
-    private Long preorderId;
+    private UUID preorderId;
 
     @Column(updatable = false, length = 36)
     private String preorderToken;
@@ -86,7 +80,7 @@ public class OrderJpaEntity extends BaseEntity {
     protected OrderJpaEntity() {
     }
 
-    public OrderJpaEntity(String orderToken, Long customerId, OrderSource source, Long preorderId, String preorderToken,
+    public OrderJpaEntity(String orderToken, UUID customerId, OrderSource source, UUID preorderId, String preorderToken,
                           OrderStatus status, BigDecimal totalAmount, Instant paymentDueAt, Instant stockReleasedAt,
                           String shipToName, String shipToPhone, String shipToPostalCode, String shipToLine1,
                           String shipToLine2, String internalNote, long eventSequence) {
@@ -108,15 +102,11 @@ public class OrderJpaEntity extends BaseEntity {
         this.eventSequence = eventSequence;
     }
 
-    public Long getId() {
-        return id;
-    }
-
     public String getOrderToken() {
         return orderToken;
     }
 
-    public Long getCustomerId() {
+    public UUID getCustomerId() {
         return customerId;
     }
 
@@ -124,7 +114,7 @@ public class OrderJpaEntity extends BaseEntity {
         return source;
     }
 
-    public Long getPreorderId() {
+    public UUID getPreorderId() {
         return preorderId;
     }
 

@@ -11,6 +11,7 @@ import com.grandis.nova.waitingroom.domain.queue.EtaPolicy;
 import com.grandis.nova.waitingroom.redis.ControlStore;
 import com.grandis.nova.waitingroom.redis.LuaScripts;
 import com.grandis.nova.waitingroom.support.RedisContainer;
+import com.grandis.nova.waitingroom.support.TestIds;
 import com.grandis.nova.waitingroom.support.TestJwts;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,6 +40,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static com.grandis.nova.waitingroom.support.TestIds.customerId;
+import static com.grandis.nova.waitingroom.support.TestIds.productKey;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** 진입 · 조회 · 접수 전달을 실제 Redis 와 가짜 preorder 로 끝까지 확인한다. */
@@ -47,7 +50,7 @@ import static org.assertj.core.api.Assertions.assertThat;
                 "waitingroom.token.secret=" + TestJwts.TOKEN_SECRET})
 class QueueFlowTest {
 
-    static final String PRODUCT = "101";
+    static final String PRODUCT = productKey(101);
     static final Duration WAIT = Duration.ofSeconds(5);
 
     /** 가짜 preorder — 다음 응답을 정해 두고, 받은 요청 헤더를 남긴다. */
@@ -165,32 +168,32 @@ class QueueFlowTest {
         @Test
         void 한산하면_줄_없이_바로_입장권을_준다() {
             // 다른 시험이 방금 줄에 세운 모델은 이 노드가 몇 초간 줄로 보낸다(래치) — 아무도 줄 서지 않은 모델로 본다
-            String quiet = "301";
+            String quiet = productKey(301);
             TestSnapshots.put(snapshots, Map.of(quiet, ProductState.idle(open(), ProductState.UNLIMITED_CAP)),
                     new SnapshotMeta(100, 1, MaxWait.unlimited()));
 
             Map<?, ?> admitted = data(client.post().uri("/api/v1/preorders/queue?productId=" + quiet)
-                    .headers(headers -> headers.setBearerAuth(TestJwts.user("7", now))).exchange()
+                    .headers(headers -> headers.setBearerAuth(TestJwts.user(customerId(7), now))).exchange()
                     .expectStatus().isOk());
 
             assertThat(admitted.get("status")).isEqualTo("ADMITTED");
             assertThat((Integer) admitted.get("expiresIn")).isBetween(1, (int) AdmissionTicket.TTL_SEC);
-            assertThat(tickets.verify((String) admitted.get("admissionTicket"), quiet, now)).contains("7");
+            assertThat(tickets.verify((String) admitted.get("admissionTicket"), quiet, now)).contains(customerId(7));
         }
 
         @Test
         void 몰리면_줄에_세우고_202_대기_토큰과_순서와_다시_올_때를_준다() {
             snapshot(crowded());
 
-            enter("1").expectStatus().isAccepted()
+            enter(customerId(1)).expectStatus().isAccepted()
                     .expectHeader().exists(HttpHeaders.RETRY_AFTER)
                     .expectBody()
                     .jsonPath("$.data.status").isEqualTo("WAITING")
                     .jsonPath("$.data.position").isEqualTo(1)
                     .jsonPath("$.data.queueToken").isNotEmpty()
                     .jsonPath("$.data.rejoined").isEqualTo(false);
-            enter("2").expectStatus().isAccepted().expectBody().jsonPath("$.data.position").isEqualTo(2);
-            enter("1").expectStatus().isAccepted().expectBody()
+            enter(customerId(2)).expectStatus().isAccepted().expectBody().jsonPath("$.data.position").isEqualTo(2);
+            enter(customerId(1)).expectStatus().isAccepted().expectBody()
                     .jsonPath("$.data.position").isEqualTo(1)
                     .jsonPath("$.data.rejoined").isEqualTo(true);
         }
@@ -200,24 +203,24 @@ class QueueFlowTest {
             snapshot(crowded());
 
             List<Map<?, ?>> views = Flux.range(0, 8)
-                    .flatMap(i -> Mono.<Map<?, ?>>fromCallable(() -> data(enter("1").expectStatus().isAccepted()))
+                    .flatMap(i -> Mono.<Map<?, ?>>fromCallable(() -> data(enter(customerId(1)).expectStatus().isAccepted()))
                             .subscribeOn(Schedulers.boundedElastic()), 8)
                     .collectList().block(WAIT);
             String token = (String) views.getFirst().get("queueToken");
 
             assertThat(views.stream().<Object>map(view -> view.get("position")).distinct().toList()).containsExactly(1);
             assertThat(views.stream().<Object>map(view -> view.get("queueToken")).distinct().toList()).containsExactly(token);
-            status("1", token).expectBody().jsonPath("$.data.totalWaiting").isEqualTo(1);
+            status(customerId(1), token).expectBody().jsonPath("$.data.totalWaiting").isEqualTo(1);
         }
 
         @Test
         void 입장한_사람이_다시_진입하면_조회와_같은_입장권을_받는다() {
             snapshot(crowded());
-            String token = queueToken("1");
+            String token = queueToken(customerId(1));
             admit(1);
 
-            String fromStatus = ticketOf(status("1", token));
-            String fromEntry = ticketOf(enter("1"));
+            String fromStatus = ticketOf(status(customerId(1), token));
+            String fromEntry = ticketOf(enter(customerId(1)));
 
             assertThat(fromEntry).isEqualTo(fromStatus);
         }
@@ -226,29 +229,31 @@ class QueueFlowTest {
         void 오픈_전_마감_모르는_상품_잘못된_productId_는_각자의_코드로_거절한다() {
             snapshot(ProductState.idle(new SalesWindow(now.plusSeconds(600), now.plusSeconds(3_600)),
                     ProductState.UNLIMITED_CAP));
-            enter("1").expectStatus().isEqualTo(409).expectBody()
+            enter(customerId(1)).expectStatus().isEqualTo(409).expectBody()
                     .jsonPath("$.error.code").isEqualTo("SALE_NOT_OPEN")
                     .jsonPath("$.error.details.reason").value(reason -> assertThat((String) reason).startsWith("opensAt="));
 
             snapshot(ProductState.idle(new SalesWindow(now.minusSeconds(600), now.minusSeconds(1)),
                     ProductState.UNLIMITED_CAP));
-            enter("1").expectStatus().isEqualTo(409).expectBody()
+            enter(customerId(1)).expectStatus().isEqualTo(409).expectBody()
                     .jsonPath("$.error.code").isEqualTo("SALE_CLOSED")
                     .jsonPath("$.error.details.reason").value(reason -> assertThat((String) reason).startsWith("closesAt="));
 
-            client.post().uri("/api/v1/preorders/queue?productId=999")
-                    .headers(headers -> headers.setBearerAuth(TestJwts.user("1", now))).exchange()
+            client.post().uri("/api/v1/preorders/queue?productId=" + productKey(999))
+                    .headers(headers -> headers.setBearerAuth(TestJwts.user(customerId(1), now))).exchange()
                     .expectStatus().isNotFound().expectBody().jsonPath("$.error.code").isEqualTo("PRODUCT_NOT_FOUND");
-            client.post().uri("/api/v1/preorders/queue?productId={id}", "0101")
-                    .headers(headers -> headers.setBearerAuth(TestJwts.user("1", now))).exchange()
-                    .expectStatus().isBadRequest().expectBody().jsonPath("$.error.code").isEqualTo("VALIDATION_FAILED");
+            for (String malformed : List.of("101", "0199A3C4-0000-7000-8000-00000000ABCD")) {
+                client.post().uri("/api/v1/preorders/queue?productId={id}", malformed)
+                        .headers(headers -> headers.setBearerAuth(TestJwts.user(customerId(1), now))).exchange()
+                        .expectStatus().isBadRequest().expectBody().jsonPath("$.error.code").isEqualTo("VALIDATION_FAILED");
+            }
         }
 
         @Test
         void 줄이_받아_줄_길이를_넘으면_429_와_다시_올_때를_준다() {
             snapshot(ProductState.withQueue(1, 5, open(), ProductState.UNLIMITED_CAP), MaxWait.of(Duration.ofSeconds(5)));
 
-            enter("1").expectStatus().isEqualTo(429)
+            enter(customerId(1)).expectStatus().isEqualTo(429)
                     .expectHeader().valueEquals(HttpHeaders.RETRY_AFTER, "10")
                     .expectBody().jsonPath("$.error.code").isEqualTo("QUEUE_FULL");
         }
@@ -256,31 +261,31 @@ class QueueFlowTest {
         @Test
         void 줄이_찼어도_이미_줄에_선_사람과_입장한_사람은_자리와_입장권을_그대로_받는다() {
             snapshot(crowded());
-            String token = queueToken("1");
-            queueToken("2");
+            String token = queueToken(customerId(1));
+            queueToken(customerId(2));
             admit(1);
-            String ticket = ticketOf(status("1", token));
+            String ticket = ticketOf(status(customerId(1), token));
             snapshot(ProductState.withQueue(1, 5, open(), ProductState.UNLIMITED_CAP), MaxWait.of(Duration.ofSeconds(5)));
 
-            assertThat(ticketOf(enter("1"))).isEqualTo(ticket);
-            enter("2").expectStatus().isAccepted().expectBody()
+            assertThat(ticketOf(enter(customerId(1)))).isEqualTo(ticket);
+            enter(customerId(2)).expectStatus().isAccepted().expectBody()
                     .jsonPath("$.data.position").isEqualTo(1)
                     .jsonPath("$.data.rejoined").isEqualTo(true);
-            enter("3").expectStatus().isEqualTo(429);
+            enter(customerId(3)).expectStatus().isEqualTo(429);
         }
 
         @Test
         void 비공개면_새로_온_사람은_없는_상품으로_거절하고_이미_선_사람과_입장한_사람은_그대로_받는다() {
             snapshot(crowded());
-            String token = queueToken("1");
-            queueToken("2");
+            String token = queueToken(customerId(1));
+            queueToken(customerId(2));
             admit(1);
-            String ticket = ticketOf(status("1", token));
+            String ticket = ticketOf(status(customerId(1), token));
             snapshot(ProductState.hidden(1, open(), ProductState.UNLIMITED_CAP));
 
-            enter("3").expectStatus().isNotFound().expectBody().jsonPath("$.error.code").isEqualTo("PRODUCT_NOT_FOUND");
-            assertThat(ticketOf(enter("1"))).isEqualTo(ticket);
-            enter("2").expectStatus().isAccepted().expectBody()
+            enter(customerId(3)).expectStatus().isNotFound().expectBody().jsonPath("$.error.code").isEqualTo("PRODUCT_NOT_FOUND");
+            assertThat(ticketOf(enter(customerId(1)))).isEqualTo(ticket);
+            enter(customerId(2)).expectStatus().isAccepted().expectBody()
                     .jsonPath("$.data.position").isEqualTo(1)
                     .jsonPath("$.data.etaSeconds").isEqualTo(EtaPolicy.reportSec(EtaPolicy.UNKNOWN))
                     .jsonPath("$.data.rejoined").isEqualTo(true);
@@ -291,11 +296,11 @@ class QueueFlowTest {
         @Test
         void 비공개여도_마감됐으면_이미_선_사람에게도_마감으로_답한다() {
             snapshot(crowded());
-            queueToken("1");
+            queueToken(customerId(1));
             snapshot(ProductState.hidden(1, new SalesWindow(now.minusSeconds(600), now.minusSeconds(1)),
                     ProductState.UNLIMITED_CAP));
 
-            enter("1").expectStatus().isEqualTo(409).expectBody().jsonPath("$.error.code").isEqualTo("SALE_CLOSED");
+            enter(customerId(1)).expectStatus().isEqualTo(409).expectBody().jsonPath("$.error.code").isEqualTo("SALE_CLOSED");
         }
 
         @Test
@@ -303,7 +308,7 @@ class QueueFlowTest {
             snapshot(ProductState.hidden(0, new SalesWindow(now.plusSeconds(600), now.plusSeconds(3_600)),
                     ProductState.UNLIMITED_CAP));
 
-            enter("1").expectStatus().isNotFound().expectBody().jsonPath("$.error.code").isEqualTo("PRODUCT_NOT_FOUND");
+            enter(customerId(1)).expectStatus().isNotFound().expectBody().jsonPath("$.error.code").isEqualTo("PRODUCT_NOT_FOUND");
         }
 
         @Test
@@ -322,10 +327,10 @@ class QueueFlowTest {
         @Test
         void 줄_서는_중이면_순서_총원_뒤_인원과_다시_올_때를_준다() {
             snapshot(crowded());
-            String token = queueToken("1");
-            queueToken("2");
+            String token = queueToken(customerId(1));
+            queueToken(customerId(2));
 
-            status("1", token).expectStatus().isOk()
+            status(customerId(1), token).expectStatus().isOk()
                     .expectHeader().exists(HttpHeaders.RETRY_AFTER)
                     .expectBody()
                     .jsonPath("$.data.status").isEqualTo("WAITING")
@@ -338,24 +343,24 @@ class QueueFlowTest {
         @Test
         void 차례가_오면_입장권을_주고_다시_물어도_같은_입장권이다() {
             snapshot(crowded());
-            String token = queueToken("1");
+            String token = queueToken(customerId(1));
             admit(1);
 
-            String first = ticketOf(status("1", token));
-            String again = ticketOf(status("1", token));
+            String first = ticketOf(status(customerId(1), token));
+            String again = ticketOf(status(customerId(1), token));
 
             assertThat(first).isEqualTo(again);
-            assertThat(tickets.verify(first, PRODUCT, now)).contains("1");
+            assertThat(tickets.verify(first, PRODUCT, now)).contains(customerId(1));
         }
 
         @Test
         void 대기_토큰이_없으면_400_남의_것이면_줄에_없다고만_답한다() {
             snapshot(crowded());
-            String token = queueToken("1");
+            String token = queueToken(customerId(1));
 
-            status("1", null).expectStatus().isBadRequest().expectBody()
+            status(customerId(1), null).expectStatus().isBadRequest().expectBody()
                     .jsonPath("$.error.code").isEqualTo("VALIDATION_FAILED");
-            status("2", token).expectStatus().isOk().expectBody()
+            status(customerId(2), token).expectStatus().isOk().expectBody()
                     .jsonPath("$.data.status").isEqualTo("CLOSED")
                     .jsonPath("$.data.reason").isEqualTo("NOT_IN_QUEUE");
         }
@@ -363,32 +368,32 @@ class QueueFlowTest {
         @Test
         void 비공개로_멈춘_줄은_대기_그대로_예상_시간은_모름으로_답한다() {
             snapshot(crowded());
-            String first = queueToken("1");
-            String token = queueToken("2");
+            String first = queueToken(customerId(1));
+            String token = queueToken(customerId(2));
             snapshot(ProductState.hidden(2, open(), ProductState.UNLIMITED_CAP));
 
-            status("2", token).expectStatus().isOk()
+            status(customerId(2), token).expectStatus().isOk()
                     .expectHeader().exists(HttpHeaders.RETRY_AFTER)
                     .expectBody()
                     .jsonPath("$.data.status").isEqualTo("WAITING")
                     .jsonPath("$.data.position").isEqualTo(2)
                     .jsonPath("$.data.etaSeconds").isEqualTo(EtaPolicy.reportSec(EtaPolicy.UNKNOWN));
             // 맨 앞이어도 곧 입장이 아니다
-            status("1", first).expectStatus().isOk().expectBody()
+            status(customerId(1), first).expectStatus().isOk().expectBody()
                     .jsonPath("$.data.position").isEqualTo(1)
                     .jsonPath("$.data.etaSeconds").isEqualTo(EtaPolicy.reportSec(EtaPolicy.UNKNOWN));
-            status("9", first).expectStatus().isNotFound().expectBody()
+            status(customerId(9), first).expectStatus().isNotFound().expectBody()
                     .jsonPath("$.error.code").isEqualTo("PRODUCT_NOT_FOUND");
         }
 
         @Test
         void 마감되면_SALE_CLOSED_로_닫는다() {
             snapshot(crowded());
-            String token = queueToken("1");
+            String token = queueToken(customerId(1));
             snapshot(ProductState.closed(1, new SalesWindow(now.minusSeconds(600), now.minusSeconds(1)),
                     ProductState.UNLIMITED_CAP));
 
-            status("1", token).expectStatus().isOk().expectBody()
+            status(customerId(1), token).expectStatus().isOk().expectBody()
                     .jsonPath("$.data.status").isEqualTo("CLOSED")
                     .jsonPath("$.data.reason").isEqualTo("SALE_CLOSED");
         }
@@ -407,15 +412,15 @@ class QueueFlowTest {
                             headers.set("X-Admission-Ticket", ticket);
                         }
                     })
-                    .bodyValue(Map.of("productId", 101, "optionId", 1))
+                    .bodyValue(Map.of("productId", PRODUCT, "optionId", TestIds.uuid(1)))
                     .exchange();
         }
 
         @Test
         void 입장권이_맞으면_그대로_전달하고_대기_토큰만_뗀다() {
-            String ticket = tickets.issue(PRODUCT, "1", now);
+            String ticket = tickets.issue(PRODUCT, customerId(1), now);
 
-            accept("1", ticket).expectStatus().isAccepted().expectBody().jsonPath("$.success").isEqualTo(true);
+            accept(customerId(1), ticket).expectStatus().isAccepted().expectBody().jsonPath("$.success").isEqualTo(true);
 
             Map<String, String> received = RECEIVED.get();
             assertThat(received).containsEntry("x-admission-ticket", ticket)
@@ -427,18 +432,18 @@ class QueueFlowTest {
 
         @Test
         void 만료된_지_잠깐인_입장권은_전달해_같은_접수의_재전송을_preorder_가_판단하게_한다() {
-            String expired = tickets.issue(PRODUCT, "1", now.minusSeconds(600));
+            String expired = tickets.issue(PRODUCT, customerId(1), now.minusSeconds(600));
 
-            accept("1", expired).expectStatus().isAccepted();
+            accept(customerId(1), expired).expectStatus().isAccepted();
 
             assertThat(RECEIVED.get()).isNotNull();
         }
 
         @Test
         void 만료된_지_오래된_입장권은_전달하지_않는다() {
-            String old = tickets.issue(PRODUCT, "1", now.minus(Duration.ofHours(1)));
+            String old = tickets.issue(PRODUCT, customerId(1), now.minus(Duration.ofHours(1)));
 
-            accept("1", old).expectStatus().isForbidden().expectBody()
+            accept(customerId(1), old).expectStatus().isForbidden().expectBody()
                     .jsonPath("$.error.code").isEqualTo("ADMISSION_TICKET_INVALID");
 
             assertThat(RECEIVED.get()).isNull();
@@ -447,36 +452,36 @@ class QueueFlowTest {
         @Test
         void preorder_가_이미_쓴_입장권이라고_답해도_입장_기록을_지운다() {
             snapshot(crowded());
-            String token = queueToken("1");
+            String token = queueToken(customerId(1));
             admit(1);
-            String ticket = ticketOf(status("1", token));
+            String ticket = ticketOf(status(customerId(1), token));
             NEXT.set(new FakeReply(409, "{\"success\":false,\"error\":{\"code\":\"ADMISSION_TICKET_USED\"}}"));
 
-            accept("1", ticket).expectStatus().isEqualTo(409)
+            accept(customerId(1), ticket).expectStatus().isEqualTo(409)
                     .expectHeader().value(HttpHeaders.RETRY_AFTER, seconds -> assertThat(Long.parseLong(seconds)).isBetween(31L, 60L));
 
-            status("1", token).expectStatus().isOk().expectBody().jsonPath("$.data.reason").isEqualTo("NOT_IN_QUEUE");
+            status(customerId(1), token).expectStatus().isOk().expectBody().jsonPath("$.data.reason").isEqualTo("NOT_IN_QUEUE");
         }
 
         @Test
         void 다른_탭의_옛_입장권이_거절돼도_지금_입장은_지우지_않는다() {
             snapshot(crowded());
-            String token = queueToken("1");
+            String token = queueToken(customerId(1));
             admit(1);
-            String current = ticketOf(status("1", token));
-            String oldTab = tickets.issue(PRODUCT, "1", now.minusSeconds(300));
+            String current = ticketOf(status(customerId(1), token));
+            String oldTab = tickets.issue(PRODUCT, customerId(1), now.minusSeconds(300));
             NEXT.set(new FakeReply(403, "{\"success\":false,\"error\":{\"code\":\"ADMISSION_TICKET_STALE\"}}"));
 
-            accept("1", oldTab).expectStatus().isForbidden();
+            accept(customerId(1), oldTab).expectStatus().isForbidden();
 
-            assertThat(ticketOf(status("1", token))).isEqualTo(current);
+            assertThat(ticketOf(status(customerId(1), token))).isEqualTo(current);
         }
 
         @Test
         void 입장권이_없으면_400_남의_것이면_403_이고_전달하지_않는다() {
-            accept("1", null).expectStatus().isBadRequest().expectBody()
+            accept(customerId(1), null).expectStatus().isBadRequest().expectBody()
                     .jsonPath("$.error.code").isEqualTo("ADMISSION_TICKET_REQUIRED");
-            accept("2", tickets.issue(PRODUCT, "1", now)).expectStatus().isForbidden().expectBody()
+            accept(customerId(2), tickets.issue(PRODUCT, customerId(1), now)).expectStatus().isForbidden().expectBody()
                     .jsonPath("$.error.code").isEqualTo("ADMISSION_TICKET_INVALID");
 
             assertThat(RECEIVED.get()).isNull();
@@ -488,27 +493,27 @@ class QueueFlowTest {
             String body = "{\"success\":false,\"error\":{\"code\":\"SALE_CLOSED\",\"message\":\"마감\"}}";
             NEXT.set(new FakeReply(409, body));
 
-            String relayed = accept("1", tickets.issue(PRODUCT, "1", now)).expectStatus().isEqualTo(409)
+            String relayed = accept(customerId(1), tickets.issue(PRODUCT, customerId(1), now)).expectStatus().isEqualTo(409)
                     .expectBody(String.class).returnResult().getResponseBody();
 
             assertThat(relayed).isEqualTo(body);
-            enter("2").expectStatus().isEqualTo(409).expectBody().jsonPath("$.error.code").isEqualTo("SALE_CLOSED");
+            enter(customerId(2)).expectStatus().isEqualTo(409).expectBody().jsonPath("$.error.code").isEqualTo("SALE_CLOSED");
         }
 
         @Test
         void preorder_가_오래된_입장권이라고_답하면_입장_기록을_지워_다음_진입이_새로_판정된다() {
             snapshot(crowded());
-            String token = queueToken("1");
+            String token = queueToken(customerId(1));
             admit(1);
-            String ticket = ticketOf(status("1", token));
+            String ticket = ticketOf(status(customerId(1), token));
             NEXT.set(new FakeReply(403, "{\"success\":false,\"error\":{\"code\":\"ADMISSION_TICKET_STALE\"}}"));
 
-            accept("1", ticket).expectStatus().isForbidden();
+            accept(customerId(1), ticket).expectStatus().isForbidden();
 
-            status("1", token).expectStatus().isOk().expectBody()
+            status(customerId(1), token).expectStatus().isOk().expectBody()
                     .jsonPath("$.data.status").isEqualTo("CLOSED")
                     .jsonPath("$.data.reason").isEqualTo("NOT_IN_QUEUE");
-            enter("1").expectStatus().isAccepted().expectBody().jsonPath("$.data.status").isEqualTo("WAITING");
+            enter(customerId(1)).expectStatus().isAccepted().expectBody().jsonPath("$.data.status").isEqualTo("WAITING");
         }
     }
 

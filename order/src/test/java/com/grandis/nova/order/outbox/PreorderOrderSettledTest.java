@@ -2,14 +2,17 @@ package com.grandis.nova.order.outbox;
 
 import com.grandis.nova.order.outbox.PreorderOrderSettled.RejectReason;
 import com.grandis.nova.order.outbox.PreorderOrderSettled.Result;
+import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.Test;
+
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PreorderOrderSettledTest {
 
-    static final Long PREORDER_ID = 42L;
+    static final UUID PREORDER_ID = TestIds.id(42);
     static final String PREORDER_UUID = "9f1c2d3e-0000-0000-0000-000000000000";
 
     @Test

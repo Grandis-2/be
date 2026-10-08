@@ -16,6 +16,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.Instant;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -23,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TossOutcomesTest {
 
     static final Instant APPROVED_AT = Instant.parse("2026-10-02T01:02:03Z");
-    static final PaymentTransaction HELD = PaymentTransaction.openCapture(PaymentTarget.order(7L), Money.won(15000),
+    static final PaymentTransaction HELD = PaymentTransaction.openCapture(PaymentTarget.order(UUID.fromString("0199a3c4-0000-7000-8000-000000000007")), Money.won(15000),
             Instant.parse("2026-10-02T01:00:00Z"));
 
     @Test

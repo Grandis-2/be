@@ -4,6 +4,8 @@ import com.grandis.nova.catalog.outbox.AggregateType;
 import com.grandis.nova.catalog.outbox.OutboundEventType;
 import com.grandis.nova.catalog.outbox.OutboxMessage;
 
+import java.util.UUID;
+
 /**
  * 사전예약 오픈 뒤 판매 중지(회차 취소)를 접수했다 — preorder 가 회차를 지금 마감하고 진행 중 예약의 취소를 시작한다(preorder-events).
  * 계약: contracts/catalog-events.md.
@@ -13,7 +15,7 @@ import com.grandis.nova.catalog.outbox.OutboxMessage;
  *
  * @param reason 관리자가 적은 취소 사유(500자 이하). preorder 가 예약 이력에 남긴다
  */
-public record PreorderCampaignCanceled(Long productId, String reason) implements OutboxMessage {
+public record PreorderCampaignCanceled(UUID productId, String reason) implements OutboxMessage {
 
     @Override
     public OutboundEventType eventType() {
@@ -26,7 +28,7 @@ public record PreorderCampaignCanceled(Long productId, String reason) implements
     }
 
     @Override
-    public Long aggregateId() {
+    public UUID aggregateId() {
         return productId;
     }
 }

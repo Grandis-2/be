@@ -5,6 +5,7 @@ import com.grandis.nova.catalog.registration.ProductRegistrationRequest;
 import com.grandis.nova.catalog.registration.ProductRegistrationService;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.sqs.testing.FlociTestContainer;
 import com.grandis.nova.common.sqs.testing.SqsTestConfig;
 import com.grandis.nova.common.sqs.testing.TestQueues;
@@ -24,6 +25,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -46,13 +48,13 @@ class OutboxSqsFlowTest {
     @Test
     @DisplayName("일반 상품 등록은 order-events 로, 사전예약 등록은 preorder-events 로 봉투 하나씩 간다")
     void registrationEventsReachTheirQueues() {
-        Long categoryId = new ShopFixtures(jdbcTemplate).category();
-        Long inStock = registrations.register("k-" + ShopFixtures.unique(), new ProductRegistrationRequest(categoryId, SaleMode.IN_STOCK,
+        UUID categoryId = new ShopFixtures(jdbcTemplate).category();
+        UUID inStock = registrations.register("k-" + ShopFixtures.unique(), new ProductRegistrationRequest(categoryId, SaleMode.IN_STOCK,
                 "케이블", null, null, true, new BigDecimal("9000"), null, null,
                 List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, 3)), null, null, null))
                 .registration().productId();
         Instant opensAt = Instant.now().plus(Duration.ofHours(1));
-        Long preorder = registrations.register("k-" + ShopFixtures.unique(), new ProductRegistrationRequest(categoryId, SaleMode.PREORDER,
+        UUID preorder = registrations.register("k-" + ShopFixtures.unique(), new ProductRegistrationRequest(categoryId, SaleMode.PREORDER,
                 "Nova", null, null, false, new BigDecimal("1000"), null, null,
                 List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, null)), null,
                 new ProductRegistrationRequest.Campaign(opensAt, opensAt.plus(Duration.ofDays(1))),
@@ -75,12 +77,12 @@ class OutboxSqsFlowTest {
         assertThat(campaignEnvelope.get("payload").get("shipmentBatches")).hasSize(1);
 
         assertThat(jdbcTemplate.queryForList("SELECT published_at FROM catalog_outbox_events WHERE aggregate_id IN (?, ?)",
-                Object.class, inStock, preorder)).as("둘 다 발행 완료로 표시").hasSize(2).doesNotContainNull();
+                Object.class, UuidBinary.toBytes(inStock), UuidBinary.toBytes(preorder))).as("둘 다 발행 완료로 표시").hasSize(2).doesNotContainNull();
     }
 
     /** 그 상품의 메시지만 받아 지운다. 큐를 시험끼리 공유하므로 다른 메시지는 건드리지 않는다. */
-    private Message receiveFor(String queue, Long productId) {
-        return queues.receive(queue, message -> JSON.readTree(message.body()).get("aggregateId").asLong() == productId, TIMEOUT)
+    private Message receiveFor(String queue, UUID productId) {
+        return queues.receive(queue, message -> JSON.readTree(message.body()).get("aggregateId").asString().equals(productId.toString()), TIMEOUT)
                 .orElseThrow(() -> new AssertionError(queue + " 에 상품 " + productId + " 의 메시지가 오지 않았다"));
     }
 }
