@@ -136,9 +136,6 @@ jwt:
   audience: nova-api
   jwk-set-uri: https://member.example.com/.well-known/jwks.json
   # jwk-set-allow-http: true    # VPC 안 Cloud Map 주소(http://member.ureca.local:8080/…)를 쓰는 동안만 명시. 서비스 간 TLS 가 붙으면 지운다
-  # 발급하지 않지만 필수 값이다(없으면 기동 실패). member 와 같게 둔다
-  access-token-validity: 30m
-  refresh-token-validity: 14d
 
 # 토큰 폐기 확인(Redis)이 실패할 때 막는 경로. 기본값(관리자 · 예약 취소)은 코드(PreorderDefaults)에 있다.
 # 바꿀 때만 여기서 덮는다

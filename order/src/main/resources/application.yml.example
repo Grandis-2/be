@@ -122,7 +122,4 @@ jwt:
   issuer: nova
   audience: nova-api
   jwk-set-uri: https://member.example.com/.well-known/jwks.json
-  # 필수(없으면 기동 실패 — JwtProperties @NotNull). 검증만 하는 서비스에서는 쓰이지 않지만 member 와 같은 값을 둔다
-  access-token-validity: 30m
-  refresh-token-validity: 14d
   # jwk-set-allow-http: true    # VPC 안 Cloud Map 주소(http://member.ureca.local:8080/…)를 쓰는 동안만 명시. 서비스 간 TLS 가 붙으면 지운다

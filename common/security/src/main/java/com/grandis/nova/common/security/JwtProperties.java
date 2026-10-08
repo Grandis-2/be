@@ -1,7 +1,6 @@
 package com.grandis.nova.common.security;
 
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import java.time.Duration;
 import java.util.Map;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -25,15 +24,16 @@ import org.springframework.validation.annotation.Validated;
  * 생성자에서 던지는 예외에는 속성 값이 안 붙기 때문이다. 검사는 전부 이 생성자 안에서, 값을 메시지에 넣지 않고 한다.
  *
  * audience(aud)는 RFC 8725 §3.9 — 발급자 하나에 받는 서비스가 넷이라 "이 토큰이 우리 API 용" 을 토큰 안에 적고 검증한다. 기본 "nova-api".
- * 만료는 설정값이다(예시: 액세스 30m · 리프레시 14d). 0 이나 음수는 바인딩을 통과하면 "발급은 되는데 즉시 만료" 가 되어 로그인만 100% 실패하고
+ * 만료는 발급 서비스(개인키가 있을 때)만 필수인 설정값이다(예시: 액세스 30m · 리프레시 14d) — 검증 서비스는 토큰의 exp 로 판정한다.
+ * 0 이나 음수는 바인딩을 통과하면 "발급은 되는데 즉시 만료" 가 되어 로그인만 100% 실패하고
  * 부팅 로그에 단서가 없으므로 생성자에서 막는다. 예시 파일의 자리표시자(`CHANGE_ME…`)도 여기서 걸린다.
  */
 @Validated
 @ConfigurationProperties("jwt")
 public record JwtProperties(
         @NotBlank String issuer,
-        @NotNull Duration accessTokenValidity,
-        @NotNull Duration refreshTokenValidity,
+        Duration accessTokenValidity,
+        Duration refreshTokenValidity,
         String audience,
         String keyId,
         String privateKey,
@@ -54,6 +54,11 @@ public record JwtProperties(
         boolean issuerMode = privateKey != null && !privateKey.isBlank();
         if (issuerMode && privateKey.startsWith("CHANGE_ME")) {
             throw new IllegalArgumentException("jwt.private-key is still the example placeholder; generate one with `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048`");
+        }
+        if (issuerMode && (accessTokenValidity == null || refreshTokenValidity == null)) {
+            // 만료는 발급할 때만 쓴다 — 검증 서비스는 토큰의 exp 로 판정하므로 비워도 된다
+            throw new IllegalArgumentException(
+                    "jwt.access-token-validity and jwt.refresh-token-validity are required when jwt.private-key is set");
         }
         if (issuerMode && (keyId == null || keyId.isBlank())) {
             throw new IllegalArgumentException("jwt.key-id is required when jwt.private-key is set (the kid goes into every token header)");
