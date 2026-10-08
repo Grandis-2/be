@@ -28,6 +28,15 @@ class PreorderDefaultsTest {
     }
 
     @Test
+    void DLQ_소비기는_받기_소비기를_따라_켜지고_설정으로_끌_수_있다() {
+        assertThat(apply(new StandardEnvironment()).getProperty("nova.sqs.dead-letter.enabled")).isEqualTo("false");
+        assertThat(apply(with(Map.of("nova.sqs.consumer.enabled", "true")))
+                .getProperty("nova.sqs.dead-letter.enabled")).isEqualTo("true");
+        assertThat(apply(with(Map.of("nova.sqs.consumer.enabled", "true", "nova.sqs.dead-letter.enabled", "false")))
+                .getProperty("nova.sqs.dead-letter.enabled")).isEqualTo("false");
+    }
+
+    @Test
     void 설정_파일의_값이_기본값을_이긴다() {
         StandardEnvironment environment = new StandardEnvironment();
         environment.getPropertySources().addFirst(new MapPropertySource("application.yml",
@@ -37,6 +46,13 @@ class PreorderDefaultsTest {
                 .isEqualTo("5");
     }
 
+
+    private static StandardEnvironment with(Map<String, String> properties) {
+        StandardEnvironment environment = new StandardEnvironment();
+        environment.getPropertySources().addFirst(
+                new MapPropertySource("application.yml", Map.<String, Object>copyOf(properties)));
+        return environment;
+    }
 
     private static StandardEnvironment apply(StandardEnvironment environment) {
         new PreorderDefaults().postProcessEnvironment(environment, new SpringApplication());

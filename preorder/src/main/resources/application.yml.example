@@ -109,8 +109,8 @@ nova:
       backoff-base: 5s
       backoff-max: 5m
     # 소비 큐의 DLQ 를 DB(preorder_dead_letter_events)로 옮긴다. 관리자 API(/api/v1/admin/event-dlq)로 조회 · 되돌리기 · 버리기
+    # 켜기는 코드 기본값(PreorderDefaults)이 받기 소비기(consumer.enabled)를 따른다. 끄려면 enabled: false
     dead-letter:
-      enabled: true
       queue: preorder-events-dlq
   # 아웃박스 발행(common:outbox). transport 는 필수(없으면 기동 실패)다. 배포 환경은 sqs 다(log 는 로컬 · 시험 전용)
   # 지표 이름 접두어(metrics-prefix: preorder.outbox)는 코드(PreorderDefaults)에 기본값이 있다

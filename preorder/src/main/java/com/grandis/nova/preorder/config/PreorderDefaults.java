@@ -28,6 +28,7 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
         databasePool(defaults);
         dependencyTimeouts(defaults);
         dependencyResilience(defaults);
+        deadLetterConsumer(defaults);
         environment.getPropertySources().addLast(new MapPropertySource(SOURCE_NAME, defaults));
     }
 
@@ -59,6 +60,14 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
      */
     private void databasePool(Map<String, Object> defaults) {
         defaults.put("spring.datasource.hikari.connection-timeout", 2000);
+    }
+
+    /**
+     * DLQ 를 DB 로 옮기는 소비기는 받기 소비기를 따라 켠다 — 받기를 켠 배포에서 이 키가 빠져도 DLQ 메시지가 SQS 에만 쌓였다
+     * 보존 기간 뒤 사라지지 않게. 설정이 false 를 주면 끈다.
+     */
+    private void deadLetterConsumer(Map<String, Object> defaults) {
+        defaults.put("nova.sqs.dead-letter.enabled", "${nova.sqs.consumer.enabled:false}");
     }
 
     /** 내부 호출의 연결 · 읽기 시간 상한. 없으면 HTTP 클라이언트가 응답을 끝없이 기다려 동시 호출 상한을 붙잡는다. */
