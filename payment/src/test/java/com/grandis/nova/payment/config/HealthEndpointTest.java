@@ -4,8 +4,11 @@ import com.grandis.nova.payment.support.PaymentIntegrationTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.availability.AvailabilityChangeEvent;
+import org.springframework.boot.availability.ReadinessState;
 import org.springframework.boot.health.actuate.endpoint.HealthEndpointGroups;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+import org.springframework.context.ApplicationContext;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -32,6 +35,9 @@ class HealthEndpointTest {
     @Autowired
     HealthEndpointGroups groups;
 
+    @Autowired
+    ApplicationContext context;
+
     @Test
     void 관리_포트의_readiness_liveness_는_토큰_없이_200_UP() throws Exception {
         assertThat(managementPort).isNotEqualTo(port);
@@ -40,6 +46,19 @@ class HealthEndpointTest {
             assertThat(response.statusCode()).as(path).isEqualTo(200);
             assertThat(response.body()).as(path).isEqualTo("{\"status\":\"UP\"}");
         }
+    }
+
+    @Test
+    void 트래픽을_거부하는_동안_readiness_는_503_이고_liveness_는_200_이다() throws Exception {
+        AvailabilityChangeEvent.publish(context, ReadinessState.REFUSING_TRAFFIC);
+        try {
+            assertThat(get(managementPort, "/actuator/health/readiness").statusCode()).isEqualTo(503);
+            assertThat(get(managementPort, "/actuator/health/liveness").statusCode()).isEqualTo(200);
+        } finally {
+            // 컨텍스트를 다른 시험과 나눠 쓰므로 받는 상태로 되돌린다
+            AvailabilityChangeEvent.publish(context, ReadinessState.ACCEPTING_TRAFFIC);
+        }
+        assertThat(get(managementPort, "/actuator/health/readiness").statusCode()).isEqualTo(200);
     }
 
     @Test
