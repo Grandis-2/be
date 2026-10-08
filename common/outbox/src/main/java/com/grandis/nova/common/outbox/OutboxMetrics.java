@@ -20,4 +20,8 @@ interface OutboxMetrics {
 
     default void refreshBacklog() {
     }
+
+    /** 보존 기간이 지나 지운 발행 완료 행 수. */
+    default void cleaned(int count) {
+    }
 }

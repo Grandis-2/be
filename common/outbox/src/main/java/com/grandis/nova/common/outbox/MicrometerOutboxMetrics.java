@@ -15,6 +15,7 @@ class MicrometerOutboxMetrics implements OutboxMetrics {
     private final MeterRegistry registry;
     private final OutboxStore store;
     private final String publishMetric;
+    private final String cleanedMetric;
     private final AtomicLong unpublished = new AtomicLong();
     private final AtomicLong maxUnpublishedAttempts = new AtomicLong();
 
@@ -22,8 +23,14 @@ class MicrometerOutboxMetrics implements OutboxMetrics {
         this.registry = registry;
         this.store = store;
         this.publishMetric = prefix + ".publish";
+        this.cleanedMetric = prefix + ".cleaned";
         Gauge.builder(prefix + ".unpublished", unpublished, AtomicLong::get).register(registry);
         Gauge.builder(prefix + ".unpublished.max.attempts", maxUnpublishedAttempts, AtomicLong::get).register(registry);
+    }
+
+    @Override
+    public void cleaned(int count) {
+        registry.counter(cleanedMetric).increment(count);
     }
 
     @Override

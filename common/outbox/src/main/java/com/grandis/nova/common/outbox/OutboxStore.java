@@ -76,6 +76,21 @@ class OutboxStore implements InitializingBean {
     }
 
     /** 발행 완료 표시. 이미 채워졌으면 바꾸지 않는다. */
+    /**
+     * 발행이 끝나고 cutoff 보다 먼저 발행한 행을 limit 건까지 지운다. 미발행 행은 건드리지 않는다.
+     * 정렬을 미발행 인덱스(published_at, publish_attempts, id) 순서와 맞춰 그 범위만 읽는다 — id 순이면 기본 키를 훑어
+     * 지울 행이 적은 마지막 묶음이 표 전체를 읽는다. 한 번에 지우는 양을 묶어 잠금 · 복제 지연을 짧게 둔다.
+     *
+     * @return 지운 행 수. limit 보다 작으면 더 지울 행이 없다
+     */
+    int deletePublishedBefore(Instant cutoff, int limit) {
+        return jdbc.sql("DELETE FROM " + table + " WHERE published_at IS NOT NULL AND published_at < :cutoff"
+                        + " ORDER BY published_at, publish_attempts, id LIMIT :limit")
+                .param("cutoff", utc(cutoff))
+                .param("limit", limit)
+                .update();
+    }
+
     int markPublished(Long id, Instant now) {
         return jdbc.sql("UPDATE " + table + " SET published_at = :now WHERE id = :id AND published_at IS NULL")
                 .param("now", utc(now))
