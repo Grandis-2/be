@@ -208,11 +208,15 @@ class OutboxCleanerTest {
                 .formatted(String.join(",", ids.stream().map(String::valueOf).toList())), Long.class);
     }
 
+    /** 시간 안에 풀리지 않으면 실패시킨다 — 조용히 넘어가면 함께 출발한다는 전제가 깨진 채 통과한다. */
     private static void awaitLatch(CountDownLatch latch) {
         try {
-            latch.await(10, TimeUnit.SECONDS);
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("10초 안에 래치가 풀리지 않았다");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            throw new IllegalStateException("래치를 기다리다 인터럽트됐다", e);
         }
     }
 }
