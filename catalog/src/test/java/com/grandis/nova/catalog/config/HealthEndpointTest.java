@@ -38,8 +38,6 @@ import static org.assertj.core.api.Assertions.assertThat;
         "spring.threads.virtual.enabled=true",
         // 검증만 한다(개인키 없음). 발급자 · 유효기간은 member 와 같은 값 — 발급하지 않아도 필수 값이다
         "jwt.issuer=" + AccessTokens.ISSUER,
-        "jwt.access-token-validity=30m",
-        "jwt.refresh-token-validity=14d",
         // Redis 가 죽은 갈래를 시험할 때 기본값(60s)이면 시험이 멈춰 선다. 예시 설정과 같은 값
         "spring.data.redis.timeout=300ms",
         "spring.data.redis.connect-timeout=200ms",
