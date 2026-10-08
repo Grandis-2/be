@@ -41,6 +41,13 @@ subprojects {
         }
     }
 
+    // 운영 설정은 Parameter Store 에서 읽는다(jar 에 application.yml 이 없다). 서비스(부트 모듈)만 — common 라이브러리에는 붙이지 않는다
+    plugins.withId('org.springframework.boot') {
+        dependencies {
+            implementation project(':common:aws')
+        }
+    }
+
     dependencies {
         compileOnly 'org.projectlombok:lombok'
         annotationProcessor 'org.projectlombok:lombok'

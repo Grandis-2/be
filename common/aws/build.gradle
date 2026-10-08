@@ -1,0 +1,12 @@
+// 부트 서비스 전부가 의존한다(루트 build.gradle 이 붙인다). 운영 설정을 Parameter Store 에서 읽는다.
+apply plugin: 'java-library'
+
+dependencies {
+    // 기동할 때 한 번 읽는 동기 호출뿐이라 비동기 netty 는 빼고, SDK 기본 동기 구현(apache5)을 쓴다
+    api('io.awspring.cloud:spring-cloud-aws-starter-parameter-store') {
+        exclude group: 'software.amazon.awssdk', module: 'netty-nio-client'
+        exclude group: 'software.amazon.awssdk', module: 'apache-client'
+    }
+
+    testImplementation "io.floci:testcontainers-floci:${flociTestcontainersVersion}"
+}
