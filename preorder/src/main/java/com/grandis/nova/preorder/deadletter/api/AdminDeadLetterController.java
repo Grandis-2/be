@@ -28,7 +28,7 @@ import java.util.UUID;
 /** 이벤트 큐 DLQ 에서 옮겨 온 메시지 조회 · 되돌리기 · 버리기. */
 @Tag(name = "관리자 · 이벤트 DLQ")
 @RestController
-@RequestMapping("/api/v1/admin/event-dlq")
+@RequestMapping("/api/v1/admin/preorders/dead-letters")
 class AdminDeadLetterController {
 
     private final DeadLetterAdminService deadLetterAdminService;

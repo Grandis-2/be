@@ -1,9 +1,9 @@
 package com.grandis.nova.order.event;
 
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.sqs.MessageHandling;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.client.payment.DeclineReason;
-import com.grandis.nova.order.event.OrderEventDispatcher.Handling;
 import com.grandis.nova.order.order.cancel.CancelReason;
 import com.grandis.nova.order.order.cancel.CancelSettlement;
 import com.grandis.nova.order.order.cancel.RefundResults;
@@ -90,11 +90,11 @@ class OrderEventDispatcherTest {
         given(settlement.settle(cancel)).willReturn(new CancelSettlement.Settled(
                 PreorderOrderSettled.canceled(PREORDER_INTERNAL_ID, PREORDER_UUID, 3L)));
 
-        Handling handling = dispatcher.dispatch(
+        MessageHandling handling = dispatcher.dispatch(
                 envelope("PREORDER_CANCEL_REQUESTED", "PREORDER", PREORDER_INTERNAL_ID, cancelRequested()));
 
         verify(settlement).settle(cancel);
-        assertThat(handling).isEqualTo(Handling.DONE);
+        assertThat(handling).isEqualTo(MessageHandling.DONE);
     }
 
     /** 지금 정할 수 없는 취소는 소비기가 늦춰 다시 받도록 알린다(지연 재발행). */
@@ -102,10 +102,10 @@ class OrderEventDispatcherTest {
     void 결과를_정할_수_없는_취소는_늦춰_다시_받도록_알린다() {
         given(settlement.settle(any())).willReturn(new CancelSettlement.Deferred(OrderStatus.CANCELING));
 
-        Handling handling = dispatcher.dispatch(
+        MessageHandling handling = dispatcher.dispatch(
                 envelope("PREORDER_CANCEL_REQUESTED", "PREORDER", PREORDER_INTERNAL_ID, cancelRequested()));
 
-        assertThat(handling).isEqualTo(Handling.DEFER);
+        assertThat(handling).isEqualTo(MessageHandling.DEFER);
     }
 
     /** 환불 결과는 봉투의 aggregateId(주문 id)로 반영한다. 본문은 payment outbox.OrderRefundSettled 의 칸 이름 그대로다. */
@@ -200,13 +200,13 @@ class OrderEventDispatcherTest {
 
     @Test
     void 등록_이벤트는_봉투의_aggregateId_상품에_옵션별_초기_재고를_만든다() {
-        Handling handling = dispatcher.dispatch(registered("PRODUCT", PRODUCT, """
+        MessageHandling handling = dispatcher.dispatch(registered("PRODUCT", PRODUCT, """
                 {"items":[{"optionId":%s,"stockTotal":5},{"optionId":%s,"stockTotal":0}]}"""
                 .formatted(OPTION_1, OPTION_2)));
 
         verify(stockService).initialize(PRODUCT_ID,
                 List.of(new StockSetting(TestIds.id(101), 5), new StockSetting(TestIds.id(102), 0)));
-        assertThat(handling).isEqualTo(Handling.DONE);
+        assertThat(handling).isEqualTo(MessageHandling.DONE);
     }
 
     /** 재고 초기화의 실패는 지연 재발행(DEFER)으로 바뀌지 않는다 — 영구 실패가 늦춰 다시 받기로 끝없이 돌지 않고 DLQ 로 간다. */

@@ -113,7 +113,7 @@ class AdminSyncJobApiTest {
         fixtures.syncAttempt(jobId, 1, "TRANSIENT_FAILURE", 503, "HTTP_503");
         fixtures.syncAttempt(jobId, 2, "REJECTED", 422, "MOCK_REJECTED");
 
-        asAdmin(get("/api/v1/admin/sync-jobs").param("status", "DEAD_LETTER").param("preorderId", token))
+        asAdmin(get("/api/v1/admin/preorders/sync-jobs").param("status", "DEAD_LETTER").param("preorderId", token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.items[0].syncJobId").value(jobId.toString()))
@@ -124,9 +124,9 @@ class AdminSyncJobApiTest {
                 .andExpect(jsonPath("$.data.items[0].deadLetteredAt").exists())
                 .andExpect(jsonPath("$.data.total").value(1))
                 .andExpect(jsonPath("$.data.errorGroups").value(nullValue()));
-        asAdmin(get("/api/v1/admin/sync-jobs").param("status", "PENDING").param("preorderId", token))
+        asAdmin(get("/api/v1/admin/preorders/sync-jobs").param("status", "PENDING").param("preorderId", token))
                 .andExpect(jsonPath("$.data.items", hasSize(0)));
-        asAdmin(get("/api/v1/admin/sync-jobs").param("preorderId", ShopFixtures.unique()))
+        asAdmin(get("/api/v1/admin/preorders/sync-jobs").param("preorderId", ShopFixtures.unique()))
                 .andExpect(jsonPath("$.data.items", hasSize(0)))
                 .andExpect(jsonPath("$.data.total").value(0));
     }
@@ -140,7 +140,7 @@ class AdminSyncJobApiTest {
             fixtures.syncAttempt(jobId, 2, "REJECTED", 422, code);
         }
 
-        asAdmin(get("/api/v1/admin/sync-jobs").param("status", "DEAD_LETTER").param("groupByError", "true"))
+        asAdmin(get("/api/v1/admin/preorders/sync-jobs").param("status", "DEAD_LETTER").param("groupByError", "true"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.errorGroups[?(@.errorCode == '%s')].count".formatted(code), contains(2)));
     }
@@ -150,13 +150,13 @@ class AdminSyncJobApiTest {
         UUID jobId = fixtures.deadLetter(preorderId);
         fixtures.syncAttempt(jobId, 1, "REJECTED", 422, "MOCK_REJECTED");
 
-        asAdmin(get("/api/v1/admin/sync-jobs/{id}", jobId))
+        asAdmin(get("/api/v1/admin/preorders/sync-jobs/{id}", jobId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.syncJobId").value(jobId.toString()))
                 .andExpect(jsonPath("$.data.requestPayload.ourReservationId").value(token))
                 .andExpect(jsonPath("$.data.attempts", hasSize(1)))
                 .andExpect(jsonPath("$.data.attempts[0].errorCode").value("MOCK_REJECTED"));
-        asAdmin(get("/api/v1/admin/sync-jobs/{id}", UUID.randomUUID()))
+        asAdmin(get("/api/v1/admin/preorders/sync-jobs/{id}", UUID.randomUUID()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("SYNC_JOB_NOT_FOUND"));
     }
@@ -165,7 +165,7 @@ class AdminSyncJobApiTest {
     void DEAD_LETTER_인_등록_작업은_202_로_재처리_요청을_남긴다() throws Exception {
         UUID jobId = fixtures.deadLetter(preorderId);
 
-        asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId))
+        asAdmin(post("/api/v1/admin/preorders/sync-jobs/{id}/reprocess", jobId))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.syncJobId").value(jobId.toString()))
                 .andExpect(jsonPath("$.data.status").value("DEAD_LETTER"));
@@ -178,8 +178,8 @@ class AdminSyncJobApiTest {
     void 같은_작업을_연달아_재처리하면_받아들인_요청마다_한_건씩_남긴다() throws Exception {
         UUID jobId = fixtures.deadLetter(preorderId);
 
-        asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId)).andExpect(status().isAccepted());
-        asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId)).andExpect(status().isAccepted());
+        asAdmin(post("/api/v1/admin/preorders/sync-jobs/{id}/reprocess", jobId)).andExpect(status().isAccepted());
+        asAdmin(post("/api/v1/admin/preorders/sync-jobs/{id}/reprocess", jobId)).andExpect(status().isAccepted());
 
         assertThat(reprocessRequests(jobId)).hasSize(2);
     }
@@ -189,7 +189,7 @@ class AdminSyncJobApiTest {
         UUID jobId = fixtures.deadLetter(preorderId);
 
         List<Outcome<Integer>> outcomes = Concurrently.run(2, i -> () ->
-                asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId)).andReturn().getResponse().getStatus());
+                asAdmin(post("/api/v1/admin/preorders/sync-jobs/{id}/reprocess", jobId)).andReturn().getResponse().getStatus());
 
         assertThat(outcomes).allSatisfy(outcome -> assertThat(outcome.value()).isEqualTo(202));
         assertThat(reprocessRequests(jobId)).hasSize(2);
@@ -199,14 +199,14 @@ class AdminSyncJobApiTest {
     void 재처리_조건_밖이면_409_와_사유() throws Exception {
         UUID jobId = registerJobOf(preorderId);
 
-        asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId))
+        asAdmin(post("/api/v1/admin/preorders/sync-jobs/{id}/reprocess", jobId))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("SYNC_JOB_NOT_REPROCESSABLE"))
                 .andExpect(jsonPath("$.error.details.reason").value("jobType=REGISTER, status=PENDING"));
 
         cancelStarter.start(preorders.findById(preorderId).orElseThrow(), EventActor.USER, null, CancelReason.USER);
         fixtures.deadLetter(preorderId);
-        asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId))
+        asAdmin(post("/api/v1/admin/preorders/sync-jobs/{id}/reprocess", jobId))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.details.reason").value("preorderStatus=CANCELING"));
 
@@ -238,7 +238,7 @@ class AdminSyncJobApiTest {
                     reprocessWaiting.countDown();
                     return delegate.answer(invocation);
                 }).given(target).lockStatus(any());
-                reprocessing = executor.submit(() -> asAdmin(post("/api/v1/admin/sync-jobs/{id}/reprocess", jobId))
+                reprocessing = executor.submit(() -> asAdmin(post("/api/v1/admin/preorders/sync-jobs/{id}/reprocess", jobId))
                         .andReturn().getResponse());
                 assertThat(reprocessWaiting.await(10, TimeUnit.SECONDS)).isTrue();
                 await().alias("취소가 예약을 잠근 동안 재처리는 끝나지 않는다")
@@ -259,9 +259,9 @@ class AdminSyncJobApiTest {
 
     @Test
     void 관리자가_아니면_403_토큰이_없으면_401() throws Exception {
-        mockMvc.perform(get("/api/v1/admin/sync-jobs").with(customer(UUID.randomUUID())))
+        mockMvc.perform(get("/api/v1/admin/preorders/sync-jobs").with(customer(UUID.randomUUID())))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post("/api/v1/admin/sync-jobs/{id}/reprocess", UUID.randomUUID()))
+        mockMvc.perform(post("/api/v1/admin/preorders/sync-jobs/{id}/reprocess", UUID.randomUUID()))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -345,7 +345,7 @@ class AdminSyncJobApiTest {
     }
 
     private ResultActions batch(String body) throws Exception {
-        return asAdmin(post("/api/v1/admin/sync-jobs/reprocess-batch")
+        return asAdmin(post("/api/v1/admin/preorders/sync-jobs/reprocess-batch")
                 .contentType(MediaType.APPLICATION_JSON).content(body));
     }
 

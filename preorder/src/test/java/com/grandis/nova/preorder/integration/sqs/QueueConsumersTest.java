@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.integration.sqs;
 
+import com.grandis.nova.common.sqs.MessageHandling;
 import com.grandis.nova.common.sqs.SqsQueueUrls;
 import com.grandis.nova.preorder.deadletter.DeadLetterRedriver;
 import com.grandis.nova.preorder.deadletter.DeadLetters;
@@ -49,7 +50,8 @@ class QueueConsumersTest {
         deadLetterConsumer = new DeadLetterConsumer(sqs, mock(SqsQueueUrls.class), deadLetters,
                 new DeadLetterConsumerProperties(true, "preorder-events-dlq", 1, Duration.ofSeconds(5)),
                 new PreorderEventConsumerProperties(true, "preorder-events", 1, 1, 10, Duration.ofSeconds(5),
-                        Duration.ofSeconds(1), Duration.ofSeconds(1)));
+                        Duration.ofSeconds(1), Duration.ofSeconds(1), Duration.ofSeconds(10), Duration.ofMinutes(15),
+                        Duration.ofHours(1)));
         eventHandler = new PreorderEventMessageHandler(dispatcher, deadLetters);
     }
 
@@ -107,6 +109,15 @@ class QueueConsumersTest {
 
         assertThatThrownBy(() -> eventHandler.handle(message(DEAD_LETTER_ID.toString())))
                 .isInstanceOf(IllegalStateException.class);
+        verify(deadLetters, never()).markRedriveSucceeded(any(UUID.class));
+    }
+
+    @Test
+    void 보류한_메시지는_아직_처리하지_않았으므로_되돌리기_결과를_남기지_않는다() {
+        given(dispatcher.dispatch("{}")).willReturn(MessageHandling.DEFER);
+
+        assertThat(eventHandler.handle(message(DEAD_LETTER_ID.toString()))).isEqualTo(MessageHandling.DEFER);
+
         verify(deadLetters, never()).markRedriveSucceeded(any(UUID.class));
     }
 

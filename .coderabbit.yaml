@@ -238,7 +238,7 @@ reviews:
           판매 방식별 준비(등록 이벤트를 받은 서비스가 회차 행 · 재고 행을 만들었는가)에 쓰며 읽기 전용 저장소 한 곳에서만 읽는다.
           그 두 표에 INSERT · UPDATE · DELETE 가 있으면 지적한다. 다른 클래스가 같은 표를 읽어도 지적한다.
           src/test 의 시험 코드가 시험 데이터로 그 표에 INSERT · UPDATE 하는 것은 예외다 — 운영 코드 경계가 아니라 시험 준비 · 경쟁 재현이다.
-        - shipment_batches 는 읽지 않는다. 상세의 배송 안내는 preorder 의 공개 API(GET /api/v1/products/{id}/shipment-batches)를 프론트가 부른다.
+        - shipment_batches 는 읽지 않는다. 상세의 배송 안내는 preorder 의 공개 API(GET /api/v1/preorders/products/{id}/shipment-batches)를 프론트가 부른다.
         - products.sale_mode 는 등록 뒤 바꾸지 않는다. order 의 재고 검증(일반 판매 상품에만 재고 행)이 이 계약에 기댄다.
           바꾸는 경로가 생기면 지적한다.
         - preorders · orders · payments · cart_items 는 읽기도 지적한다.

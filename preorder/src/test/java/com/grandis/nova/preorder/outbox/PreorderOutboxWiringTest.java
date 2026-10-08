@@ -18,10 +18,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -36,8 +39,6 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.BDDMockito.willAnswer;
 
 /**
  * preorder 가 내보내는 메시지의 계약 — 봉투 칸 · 종류 → 목적지 · payload 모양. order · worker · 대기열(별도 저장소)이 읽으므로
@@ -46,6 +47,7 @@ import static org.mockito.BDDMockito.willAnswer;
  * 릴레이는 짧은 주기로 돌게 한다. 다른 시험이 이 주기를 물려받지 않게 끝나면 컨텍스트를 닫는다.
  */
 @PreorderIntegrationTest
+@Import(PreorderOutboxWiringTest.RecordingTransportConfig.class)
 @TestPropertySource(properties = "nova.outbox.relay-interval=200ms")
 @DirtiesContext
 class PreorderOutboxWiringTest {
@@ -70,18 +72,14 @@ class PreorderOutboxWiringTest {
     @Autowired
     MeterRegistry registry;
 
-    @MockitoBean
-    MessageTransport transport;
-
-    /** 전송 구현이 받은 메시지. */
-    final Queue<OutboundMessage> sent = new ConcurrentLinkedQueue<>();
+    @Autowired
+    RecordingTransport transport;
 
     UUID aggregateId;
 
     @BeforeEach
     void setUp() {
         aggregateId = UUID.randomUUID();
-        willAnswer(invocation -> sent.add(invocation.getArgument(0))).given(transport).send(any());
     }
 
     @Test
@@ -124,7 +122,7 @@ class PreorderOutboxWiringTest {
                 Integer.class, (Object) UuidBinary.toBytes(aggregateId))).isZero();
         // 발행은 비동기라 바로 보면 늘 비어 있다 — 커밋 직후 발행이 끝날 만한 시간 동안 보내지 않는지 본다
         await().during(Duration.ofSeconds(1)).atMost(TIMEOUT)
-                .until(() -> sent.stream().noneMatch(message -> message.eventId().equals(eventId)));
+                .until(() -> transport.sent.stream().noneMatch(message -> message.eventId().equals(eventId)));
     }
 
     @Test
@@ -249,7 +247,32 @@ class PreorderOutboxWiringTest {
 
     private OutboundMessage sentFor(String eventId) {
         return await().atMost(TIMEOUT).until(
-                () -> sent.stream().filter(message -> message.eventId().equals(eventId)).findFirst().orElse(null),
+                () -> transport.sent.stream().filter(message -> message.eventId().equals(eventId)).findFirst().orElse(null),
                 message -> message != null);
+    }
+
+    /**
+     * 받은 메시지를 기록만 하는 전송기. mock 을 쓰지 않는다 — 릴레이 · 커밋 직후 발행이 다른 스레드에서 보내는 동안
+     * 시험마다 다시 스텁하면 Mockito 가 미완성 스텁(UnfinishedStubbingException)으로 가끔 실패했다.
+     */
+    static class RecordingTransport implements MessageTransport {
+
+        final Queue<OutboundMessage> sent = new ConcurrentLinkedQueue<>();
+
+        @Override
+        public void send(OutboundMessage message) {
+            sent.add(message);
+        }
+    }
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class RecordingTransportConfig {
+
+        /** 시험 설정의 로그 전송기 대신 쓴다. */
+        @Bean
+        @Primary
+        RecordingTransport recordingTransport() {
+            return new RecordingTransport();
+        }
     }
 }
