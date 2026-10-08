@@ -108,7 +108,7 @@ nova:
       visibility: 5m       # 처리 한 건(회차 취소 포함)보다 길게
       backoff-base: 5s
       backoff-max: 5m
-    # 소비 큐의 DLQ 를 DB(dead_letter_events)로 옮긴다. 관리자 API(/api/v1/admin/event-dlq)로 조회 · 되돌리기 · 버리기
+    # 소비 큐의 DLQ 를 DB(preorder_dead_letter_events)로 옮긴다. 관리자 API(/api/v1/admin/event-dlq)로 조회 · 되돌리기 · 버리기
     dead-letter:
       enabled: true
       queue: preorder-events-dlq

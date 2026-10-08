@@ -16,7 +16,7 @@ import java.util.UUID;
  * 상태와 처리 기록은 변경 감지로 바꾸지 않는다 — 전이는 {@link DeadLetterEventRepository} 의 조건부 UPDATE 로만 한다.
  */
 @Entity
-@Table(name = "dead_letter_events")
+@Table(name = "preorder_dead_letter_events")
 public class DeadLetterEvent extends BaseEntity {
 
     @Column(nullable = false, updatable = false, length = 80)

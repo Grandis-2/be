@@ -145,7 +145,7 @@ class AdminDeadLetterApiTest {
         mockMvc.perform(get("/api/v1/admin/event-dlq/{id}", id).with(admin()))
                 .andExpect(jsonPath("$.data.redrivable").value(false));
 
-        jdbcTemplate.update("UPDATE dead_letter_events SET redrive_started_at = redrive_started_at - INTERVAL 2 MINUTE"
+        jdbcTemplate.update("UPDATE preorder_dead_letter_events SET redrive_started_at = redrive_started_at - INTERVAL 2 MINUTE"
                 + " WHERE id = ?", (Object) UuidBinary.toBytes(id));
         redriver.recover(id);
 
@@ -249,12 +249,12 @@ class AdminDeadLetterApiTest {
     private UUID record(String body) {
         String messageId = ShopFixtures.unique();
         deadLetters.record(new IncomingDeadLetter(QUEUE, messageId, body, 5, null, null));
-        return jdbcTemplate.queryForObject("SELECT id FROM dead_letter_events WHERE message_id = ?",
+        return jdbcTemplate.queryForObject("SELECT id FROM preorder_dead_letter_events WHERE message_id = ?",
                 (rs, rowNum) -> UuidBinary.fromBytes(rs.getBytes(1)), messageId);
     }
 
     private Map<String, Object> row(UUID id) {
-        return jdbcTemplate.queryForMap("SELECT * FROM dead_letter_events WHERE id = ?",
+        return jdbcTemplate.queryForMap("SELECT * FROM preorder_dead_letter_events WHERE id = ?",
                 (Object) UuidBinary.toBytes(id));
     }
 

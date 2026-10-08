@@ -151,7 +151,7 @@ class ObservabilityTest {
     void 상태_지표는_갱신할_때_DB_에서_센다() {
         accepts.accept(fixtures.customer());
         jdbcTemplate.update("""
-                INSERT INTO dead_letter_events (id, source_queue, message_id, body, failure_reason, receive_count,
+                INSERT INTO preorder_dead_letter_events (id, source_queue, message_id, body, failure_reason, receive_count,
                                                 status, created_at, updated_at)
                 VALUES (?, 'preorder-events', ?, 'not-json', 'UNREADABLE_BODY', 5, 'OPEN',
                         UTC_TIMESTAMP(6) - INTERVAL 1 HOUR, UTC_TIMESTAMP(6))
