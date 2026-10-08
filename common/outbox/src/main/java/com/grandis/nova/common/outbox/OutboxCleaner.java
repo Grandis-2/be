@@ -26,6 +26,8 @@ class OutboxCleaner implements SmartLifecycle {
     private final OutboxProperties properties;
     private final Clock clock;
     private ScheduledExecutorService executor;
+    /** 멈추라는 요청. 묶음 사이에서 보고 다음 묶음을 시작하지 않는다. */
+    private volatile boolean stopping;
 
     OutboxCleaner(OutboxStore store, OutboxMetrics metrics, OutboxProperties properties, Clock clock) {
         this.store = store;
@@ -50,7 +52,7 @@ class OutboxCleaner implements SmartLifecycle {
                     metrics.cleaned(deleted);
                     total += deleted;
                 }
-            } while (deleted == properties.cleanupBatch() && !Thread.currentThread().isInterrupted());
+            } while (deleted == properties.cleanupBatch() && !stopping && !Thread.currentThread().isInterrupted());
         } finally {
             if (total > 0) {
                 log.info("보존 기간이 지난 발행 완료 아웃박스 행을 지웠다 count={} cutoff={}", total, cutoff);
@@ -65,22 +67,31 @@ class OutboxCleaner implements SmartLifecycle {
         if (executor != null) {
             return;
         }
+        stopping = false;
         executor = Executors.newSingleThreadScheduledExecutor(
                 Thread.ofPlatform().name("outbox-cleanup").daemon().factory());
         long millis = properties.cleanupInterval().toMillis();
         executor.scheduleWithFixedDelay(this::cleanQuietly, millis, millis, TimeUnit.MILLISECONDS);
     }
 
-    /** 지우던 묶음 하나만 마치고 멈춘다. 남은 행은 다음 기동 때 지운다. */
+    /**
+     * 지우던 묶음 하나만 마치고 멈춘다. 남은 행은 다음 기동 때 지운다.
+     * 그 묶음이 종료 시간을 넘기면 인터럽트한다 — 종료 단계(DB 풀 닫기)를 오래 붙잡지 않게.
+     */
     @Override
     public synchronized void stop() {
         if (executor == null) {
             return;
         }
-        executor.shutdownNow();
+        stopping = true;
+        executor.shutdown();
         try {
-            executor.awaitTermination(STOP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            if (!executor.awaitTermination(STOP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                log.warn("아웃박스 정리가 종료 시간 안에 끝나지 않아 인터럽트한다");
+                executor.shutdownNow();
+            }
         } catch (InterruptedException e) {
+            executor.shutdownNow();
             Thread.currentThread().interrupt();
         }
         executor = null;
