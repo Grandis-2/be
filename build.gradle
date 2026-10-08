@@ -9,6 +9,13 @@ allprojects {
     version = '0.0.1-SNAPSHOT'
 }
 
+// Spring Boot BOM 이 관리하지 않는 라이브러리 버전. 올릴 때 여기만 바꾼다.
+// AWS SDK 는 Spring Cloud AWS BOM 이 고정한 SDK(더 낮다)를 뒤의 SDK BOM 이 덮는다
+ext {
+    awsSdkVersion = '2.55.6'
+    flociTestcontainersVersion = '2.16.1'
+}
+
 subprojects {
     // common 처럼 소스가 없는 중간 컨테이너는 건너뛴다. 붙이면 빈 jar 가 만들어진다.
     if (!file('src').isDirectory()) {
@@ -29,6 +36,8 @@ subprojects {
     dependencyManagement {
         imports {
             mavenBom org.springframework.boot.gradle.plugin.SpringBootPlugin.BOM_COORDINATES
+            mavenBom 'io.awspring.cloud:spring-cloud-aws-dependencies:4.2.0'
+            mavenBom "software.amazon.awssdk:bom:${awsSdkVersion}"
         }
     }
 

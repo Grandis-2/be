@@ -5,12 +5,6 @@ apply plugin: 'java-library'
 // Floci 컨테이너 · 큐 도우미를 서비스 시험과 한 벌로 나눈다
 apply plugin: 'java-test-fixtures'
 
-// Spring Boot BOM 이 관리하지 않는 라이브러리 버전. 올릴 때 여기만 바꾼다.
-ext {
-    awsSdkVersion = '2.55.6'
-    flociTestcontainersVersion = '2.16.1'
-}
-
 dependencies {
     // 서비스가 SqsClient · Message 형을 직접 쓴다. HTTP 는 가벼운 URLConnection 구현 하나만 둔다
     api platform("software.amazon.awssdk:bom:${awsSdkVersion}")
