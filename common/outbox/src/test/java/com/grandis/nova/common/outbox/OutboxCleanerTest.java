@@ -27,6 +27,7 @@ import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.BDDMockito.given;
@@ -96,14 +97,18 @@ class OutboxCleanerTest {
     void 두_인스턴스가_동시에_정리해도_같은_행을_두_번_지우지_않고_모두_지운다() throws Exception {
         List<Long> expired = insertExpired(20);
         Long recent = insert(now.minus(RETENTION).plus(Duration.ofHours(1)));
+        CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);
 
         List<CompletableFuture<Integer>> runs = IntStream.range(0, 2)
                 .mapToObj(i -> CompletableFuture.supplyAsync(() -> {
-                    await(start);
+                    ready.countDown();
+                    awaitLatch(start);
                     return cleaner(store, 3).clean();
                 }))
                 .toList();
+        // 두 작업이 모두 시작 신호를 기다릴 때 함께 출발시킨다
+        awaitLatch(ready);
         start.countDown();
         int deleted = runs.stream().mapToInt(run -> run.orTimeout(30, TimeUnit.SECONDS).join()).sum();
 
@@ -128,9 +133,38 @@ class OutboxCleanerTest {
         assertThat(cleaner.isRunning()).isFalse();
     }
 
+    @Test
+    void 멈출_때는_지우던_묶음만_마치고_다음_묶음을_시작하지_않는다() throws Exception {
+        OutboxStore slow = mock(OutboxStore.class);
+        CountDownLatch deleting = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        given(slow.deletePublishedBefore(any(), anyInt())).willAnswer(invocation -> {
+            deleting.countDown();
+            release.await(10, TimeUnit.SECONDS);
+            return 2;
+        });
+        OutboxCleaner cleaner = cleaner(slow, 2, Duration.ofMillis(10));
+        cleaner.start();
+        assertThat(deleting.await(5, TimeUnit.SECONDS)).isTrue();
+
+        CompletableFuture<Void> stopped = CompletableFuture.runAsync(cleaner::stop);
+        // 멈춤 요청이 들어간 뒤 지우던 묶음을 끝낸다 — 꽉 찬 묶음이라도 다음 묶음은 시작하지 않아야 한다
+        await().pollDelay(Duration.ofMillis(200)).until(() -> true);
+        release.countDown();
+        stopped.get(10, TimeUnit.SECONDS);
+
+        verify(slow, times(1)).deletePublishedBefore(any(), anyInt());
+        assertThat(cleaned.get()).isEqualTo(2);
+        assertThat(cleaner.isRunning()).isFalse();
+    }
+
     private OutboxCleaner cleaner(OutboxStore target, int batch) {
+        return cleaner(target, batch, Duration.ofHours(1));
+    }
+
+    private OutboxCleaner cleaner(OutboxStore target, int batch, Duration interval) {
         OutboxProperties properties = new OutboxProperties(32, MINUTE, 100, MINUTE, Duration.ofSeconds(10), "outbox",
-                RETENTION, Duration.ofHours(1), batch);
+                RETENTION, interval, batch);
         OutboxMetrics metrics = new OutboxMetrics() {
             @Override
             public void cleaned(int count) {
@@ -174,7 +208,7 @@ class OutboxCleanerTest {
                 .formatted(String.join(",", ids.stream().map(String::valueOf).toList())), Long.class);
     }
 
-    private static void await(CountDownLatch latch) {
+    private static void awaitLatch(CountDownLatch latch) {
         try {
             latch.await(10, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
