@@ -161,7 +161,10 @@ public class ProductRegistrationService {
         }
     }
 
-    /** 검증을 지난 축 · 값 · 사진으로 옵션 문서를 만든다. 값 id 는 여기서 새로 만든다. 색상 사진은 그 색상 값 아래, 색상 없는 상품은 기본 묶음. */
+    /**
+     * 검증을 지난 축 · 값 · 사진으로 옵션 문서를 만든다. 값 id 는 여기서 새로 만든다. 색상 사진은 그 색상 값 아래, 색상 없는 상품은 기본 묶음.
+     * 보증은 비워 두고 {@link Product#register} 가 요청의 보증을 붙여 저장한다.
+     */
     private static ProductOptions documentOf(Draft draft) {
         Map<String, List<ProductOptions.Image>> galleryByColor = draft.gallery().stream()
                 .collect(Collectors.toMap(GalleryDraft::bundleKey, bundle -> images(bundle.items())));
@@ -178,7 +181,7 @@ public class ProductRegistrationService {
         List<ProductOptions.Section> detail = draft.detail().stream()
                 .map(section -> new ProductOptions.Section(section.section(), images(section.items())))
                 .toList();
-        return new ProductOptions(axes, defaultImages, detail);
+        return new ProductOptions(axes, defaultImages, detail, ProductOptions.Warranty.NONE);
     }
 
     private static List<ProductOptions.Image> images(List<Image> items) {

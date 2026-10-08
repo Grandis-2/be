@@ -113,7 +113,7 @@ class OptionsBackfillMigrationTest {
                                         List.of(new Image("https://img/w0.jpg", false), new Image("https://img/w1.jpg", true)))))),
                 List.of(new Image("https://img/legacy-default.jpg", true)),
                 List.of(new Section("디자인", List.of(new Image("https://img/design0.jpg", false), new Image("https://img/design1.jpg", true))),
-                        new Section("유의사항", List.of(new Image("https://img/notice.jpg", false))))));
+                        new Section("유의사항", List.of(new Image("https://img/notice.jpg", false)))), ProductOptions.Warranty.NONE));
         assertThat(thumbnail(phone)).as("첫 색상 블랙에 사진이 없다 — 화이트 · 옛 기본 묶음으로 넘어가지 않는다").isNull();
         assertThat(phoneDoc.thumbnailUrl()).isNull();
         assertThat(jdbc.queryForObject("SELECT idempotency_key FROM products WHERE id = ?", String.class, phone)).isEqualTo("key-phone");

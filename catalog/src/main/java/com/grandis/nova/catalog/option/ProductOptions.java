@@ -13,7 +13,7 @@ import java.util.UUID;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * 상품의 옵션 정의 · 사진 — products.options(JSON) 한 칸. 축과 값 · 값별 추가금 · 색상 hex · 색상별 사진 · 기본 묶음 · 상세 영역이 여기 있다.
+ * 상품의 옵션 정의 · 사진 — products.options(JSON) 한 칸. 축과 값 · 값별 추가금 · 색상 hex · 색상별 사진 · 기본 묶음 · 상세 영역 · 보증이 여기 있다.
  * 배열 순서가 곧 표시 순서다(position 칸이 없다). 옵션(조합) 행은 {@code product_options} 에 그대로 있고, 고른 값은 조합 키(값 id)로 잇는다.
  *
  * <p>값 id 는 이름과 무관하게 고정이다 — 이름을 고쳐도 조합 키 · 사진 · 관리자 API 경로가 그대로다. 새 값은 32자 16진수({@link #newValueId}),
@@ -21,15 +21,34 @@ import tools.jackson.databind.json.JsonMapper;
  *
  * <p>한 상품의 수정은 상품 행 잠금으로 줄 서므로 문서를 통째로 다시 써도 서로 덮지 않는다. 같은 축의 같은 값 · 대표 사진 하나는 앱이 지킨다.
  */
-public record ProductOptions(List<Axis> axes, List<Image> defaultImages, List<Section> detailImages) {
+public record ProductOptions(List<Axis> axes, List<Image> defaultImages, List<Section> detailImages, Warranty warranty) {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
-    public static final ProductOptions EMPTY = new ProductOptions(List.of(), List.of(), List.of());
+    public static final ProductOptions EMPTY = new ProductOptions(List.of(), List.of(), List.of(), Warranty.NONE);
 
+    /*
+     * 생성자는 정식 하나뿐이다 — 보증을 빼먹는 짧은 생성자를 두면 기존 문서를 다시 만들 때 보증이 조용히 지워진다(시험 픽스처에서 실제로 밟았다).
+     * 기존 문서의 일부만 바꿀 때는 with* 를 쓴다.
+     */
     public ProductOptions {
         axes = axes == null ? List.of() : List.copyOf(axes);
         defaultImages = defaultImages == null ? List.of() : List.copyOf(defaultImages);
         detailImages = detailImages == null ? List.of() : List.copyOf(detailImages);
+        // 키가 없는 문서(보증을 옮기기 전에 쓴 것 · 다른 모듈 픽스처의 {})는 보증 없음이다
+        warranty = warranty == null ? Warranty.NONE : warranty;
+    }
+
+    /**
+     * 보증(애플케어 등) — 구매 때 옵션처럼 더해 고르는 것. 제공하지 않으면 추가금은 0 이다. 추가금은 소수점 없는 정수 원으로 맞춘다.
+     * 금액 범위 검사(0 이상 · 정수 · 상한)는 호출자가 먼저 한다. 문서에 warranty 가 있으면 offered 는 반드시 있어야 한다 — 빠지면 그 상품 문서를
+     * 읽지 못한다(실측: MismatchedInputException). 앱과 마이그레이션은 늘 둘 다 쓴다.
+     */
+    public record Warranty(boolean offered, BigDecimal surcharge) {
+        public static final Warranty NONE = new Warranty(false, BigDecimal.ZERO);
+
+        public Warranty {
+            surcharge = offered && surcharge != null ? surcharge.setScale(0, RoundingMode.UNNECESSARY) : BigDecimal.ZERO;
+        }
     }
 
     /** 축. key 는 소문자로 접은 키(color · storage · 관리자 입력). */
@@ -126,7 +145,12 @@ public record ProductOptions(List<Axis> axes, List<Image> defaultImages, List<Se
         for (Axis axis : axes) {
             next.add(axis.key().equals(replaced.key()) ? replaced : axis);
         }
-        return new ProductOptions(next, defaultImages, detailImages);
+        return new ProductOptions(next, defaultImages, detailImages, warranty);
+    }
+
+    /** 보증만 바꾼 문서. */
+    public ProductOptions withWarranty(Warranty replaced) {
+        return new ProductOptions(axes, defaultImages, detailImages, replaced);
     }
 
     /**

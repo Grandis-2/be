@@ -59,7 +59,7 @@ class ProductDetailApiTest {
         void preorderDetail() throws Exception {
             Instant now = Instant.now();
             UUID productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", "Nova 1", null);
-            jdbcTemplate.update("UPDATE products SET description = '설명', base_price = 1000000, warranty_offered = 1, warranty_surcharge = 150000 WHERE id = ?", UuidBinary.toBytes(productId));
+            jdbcTemplate.update("UPDATE products SET description = '설명', base_price = 1000000, options = JSON_SET(options, '$.warranty', JSON_OBJECT('offered', TRUE, 'surcharge', 150000)) WHERE id = ?", UuidBinary.toBytes(productId));
             fixtures.registration(productId);
             fixtures.campaign(productId, now.minus(HOUR), now.plus(HOUR));
             ShopFixtures.AxisRef storage = fixtures.axis(productId, "storage", 1);

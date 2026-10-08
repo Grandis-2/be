@@ -177,7 +177,7 @@ public class ShopFixtures {
         ProductOptions document = options(productId);
         List<Axis> axes = new ArrayList<>(document.axes());
         axes.add(Math.min(position, axes.size()), new Axis(axisKey, label, List.of()));
-        write(productId, new ProductOptions(axes, document.defaultImages(), document.detailImages()));
+        write(productId, new ProductOptions(axes, document.defaultImages(), document.detailImages(), document.warranty()));
         return new AxisRef(productId, axisKey);
     }
 
@@ -242,11 +242,11 @@ public class ShopFixtures {
             } else {
                 sections.set(at, new Section(bundleKey, images));
             }
-            write(productId, new ProductOptions(document.axes(), document.defaultImages(), sections));
+            write(productId, new ProductOptions(document.axes(), document.defaultImages(), sections, document.warranty()));
         } else if (bundleKey.isEmpty()) {
             List<Image> images = new ArrayList<>(document.defaultImages());
             images.add(Math.min(position, images.size()), image);
-            write(productId, new ProductOptions(document.axes(), images, document.detailImages()));
+            write(productId, new ProductOptions(document.axes(), images, document.detailImages(), document.warranty()));
         } else {
             if (document.axis(OptionText.COLOR).isEmpty()) {
                 axis(productId, OptionText.COLOR, Integer.MAX_VALUE);
