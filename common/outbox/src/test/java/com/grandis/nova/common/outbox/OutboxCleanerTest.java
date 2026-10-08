@@ -23,6 +23,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -52,6 +53,7 @@ class OutboxCleanerTest {
 
     final Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
     final AtomicInteger cleaned = new AtomicInteger();
+    final AtomicInteger cleanupFailed = new AtomicInteger();
 
     @BeforeEach
     void removeLeftovers() {
@@ -91,6 +93,58 @@ class OutboxCleanerTest {
 
         verify(failing, times(2)).deletePublishedBefore(any(), anyInt());
         assertThat(cleaned.get()).isEqualTo(2);
+    }
+
+    @Test
+    void 예약_실행의_정리가_실패하면_실패_지표를_남기고_다음_주기에_다시_돈다() {
+        OutboxStore failing = mock(OutboxStore.class);
+        given(failing.deletePublishedBefore(any(), anyInt())).willThrow(new IllegalStateException("db down"));
+        OutboxCleaner cleaner = cleaner(failing, 2, Duration.ofMillis(10));
+
+        cleaner.start();
+        try {
+            await().atMost(Duration.ofSeconds(5)).until(() -> cleanupFailed.get() >= 2);
+        } finally {
+            cleaner.stop();
+        }
+        assertThat(cleaned.get()).isZero();
+    }
+
+    /** 인터럽트로도 끝나지 않은 묶음(돌아오지 않는 DB 호출)이 있는 채로 다시 시작해도, 이전 실행은 그 묶음 뒤 멈춘다. */
+    @Test
+    void 끝나지_않은_이전_실행은_다시_시작한_뒤에도_되살아나지_않는다() throws Exception {
+        OutboxStore stuck = mock(OutboxStore.class);
+        CountDownLatch deleting = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicReference<Thread> previousRun = new AtomicReference<>();
+        AtomicInteger callsByPreviousRun = new AtomicInteger();
+        given(stuck.deletePublishedBefore(any(), anyInt())).willAnswer(invocation -> {
+            if (previousRun.compareAndSet(null, Thread.currentThread())) {
+                deleting.countDown();
+                while (release.getCount() > 0) {
+                    try {
+                        release.await();
+                    } catch (InterruptedException ignored) {
+                        // 인터럽트에 반응하지 않는 호출을 흉내 낸다
+                    }
+                }
+            } else if (Thread.currentThread() == previousRun.get()) {
+                callsByPreviousRun.incrementAndGet();
+            }
+            return 2;
+        });
+        OutboxCleaner cleaner = cleaner(stuck, 2, Duration.ofMillis(10));
+        cleaner.start();
+        assertThat(deleting.await(5, TimeUnit.SECONDS)).isTrue();
+
+        cleaner.stop();
+        cleaner.start();
+        release.countDown();
+        // 꽉 찬 묶음을 돌려받은 이전 실행이 되살아났다면 곧바로 다음 묶음을 부른다
+        await().pollDelay(Duration.ofMillis(300)).until(() -> true);
+        cleaner.stop();
+
+        assertThat(callsByPreviousRun.get()).isZero();
     }
 
     @Test
@@ -169,6 +223,11 @@ class OutboxCleanerTest {
             @Override
             public void cleaned(int count) {
                 cleaned.addAndGet(count);
+            }
+
+            @Override
+            public void cleanupFailed() {
+                cleanupFailed.incrementAndGet();
             }
         };
         return new OutboxCleaner(target, metrics, properties, Clock.fixed(now, ZoneOffset.UTC));
