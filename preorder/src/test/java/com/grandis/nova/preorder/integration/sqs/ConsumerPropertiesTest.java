@@ -27,6 +27,9 @@ class ConsumerPropertiesTest {
             assertThat(consumer.toSettings().queue()).isEqualTo("preorder-events");
             assertThat(consumer.toSettings().visibility()).isEqualTo(Duration.ofMinutes(5));
             assertThat(consumer.toSettings().backoffBase()).isEqualTo(Duration.ofSeconds(5));
+            assertThat(consumer.toDeferSettings().firstDelay()).isEqualTo(Duration.ofSeconds(10));
+            assertThat(consumer.toDeferSettings().maxDelay()).isEqualTo(Duration.ofMinutes(15));
+            assertThat(consumer.toDeferSettings().alertAfter()).isEqualTo(Duration.ofHours(1));
             assertThat(deadLetter.enabled()).isFalse();
             assertThat(deadLetter.toSettings().queue()).isEqualTo("preorder-events-dlq");
             assertThat(deadLetter.toSettings().concurrency()).isEqualTo(1);
