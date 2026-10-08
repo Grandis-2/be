@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 보존 기간이 지난 발행 완료 행을 지운다. 표가 끝없이 커지지 않게 한다 — 미발행 행은 릴레이 몫이라 건드리지 않는다.
@@ -26,8 +27,11 @@ class OutboxCleaner implements SmartLifecycle {
     private final OutboxProperties properties;
     private final Clock clock;
     private ScheduledExecutorService executor;
-    /** 멈추라는 요청. 묶음 사이에서 보고 다음 묶음을 시작하지 않는다. */
-    private volatile boolean stopping;
+    /**
+     * 지금 실행의 멈춤 표시. 실행마다 새로 만들어 그 실행에만 넘긴다 — 인터럽트로도 끝나지 않은 이전 실행이 다시 시작한 뒤의
+     * 표시를 보고 되살아나지 않게. 묶음 사이에서 보고 다음 묶음을 시작하지 않는다.
+     */
+    private AtomicBoolean stopRequested;
 
     OutboxCleaner(OutboxStore store, OutboxMetrics metrics, OutboxProperties properties, Clock clock) {
         this.store = store;
@@ -42,6 +46,10 @@ class OutboxCleaner implements SmartLifecycle {
      * @return 이번에 지운 행 수
      */
     int clean() {
+        return clean(new AtomicBoolean());
+    }
+
+    private int clean(AtomicBoolean stop) {
         Instant cutoff = clock.instant().minus(properties.retention());
         int total = 0;
         int deleted;
@@ -52,7 +60,7 @@ class OutboxCleaner implements SmartLifecycle {
                     metrics.cleaned(deleted);
                     total += deleted;
                 }
-            } while (deleted == properties.cleanupBatch() && !stopping && !Thread.currentThread().isInterrupted());
+            } while (deleted == properties.cleanupBatch() && !stop.get() && !Thread.currentThread().isInterrupted());
         } finally {
             if (total > 0) {
                 log.info("보존 기간이 지난 발행 완료 아웃박스 행을 지웠다 count={} cutoff={}", total, cutoff);
@@ -67,11 +75,12 @@ class OutboxCleaner implements SmartLifecycle {
         if (executor != null) {
             return;
         }
-        stopping = false;
+        AtomicBoolean stop = new AtomicBoolean();
+        stopRequested = stop;
         executor = Executors.newSingleThreadScheduledExecutor(
                 Thread.ofPlatform().name("outbox-cleanup").daemon().factory());
         long millis = properties.cleanupInterval().toMillis();
-        executor.scheduleWithFixedDelay(this::cleanQuietly, millis, millis, TimeUnit.MILLISECONDS);
+        executor.scheduleWithFixedDelay(() -> cleanQuietly(stop), millis, millis, TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -83,7 +92,7 @@ class OutboxCleaner implements SmartLifecycle {
         if (executor == null) {
             return;
         }
-        stopping = true;
+        stopRequested.set(true);
         executor.shutdown();
         try {
             if (!executor.awaitTermination(STOP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
@@ -103,9 +112,9 @@ class OutboxCleaner implements SmartLifecycle {
     }
 
     /** 새는 예외는 실패 지표 · 로그로 남기고 삼킨다 — 밖으로 나가면 실행기가 다음 실행을 조용히 멈춘다. */
-    private void cleanQuietly() {
+    private void cleanQuietly(AtomicBoolean stop) {
         try {
-            clean();
+            clean(stop);
         } catch (RuntimeException e) {
             metrics.cleanupFailed();
             log.error("아웃박스 정리 실패 — 다음 주기에 다시 한다", e);
