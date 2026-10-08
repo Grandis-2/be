@@ -79,11 +79,10 @@ class AuthenticationApiTest {
     }
 
     @Test
-    void 배송_차수_공개_조회와_관리_지표는_토큰_없이_열린다() throws Exception {
+    void 배송_차수_공개_조회는_토큰_없이_열린다() throws Exception {
         PreorderProduct product = fixtures.openPreorderProduct();
 
         mockMvc.perform(get("/api/v1/products/{id}/shipment-batches", product.productId()))
                 .andExpect(status().isOk());
-        mockMvc.perform(get("/actuator/health")).andExpect(status().isOk());
     }
 }

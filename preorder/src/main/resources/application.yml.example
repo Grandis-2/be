@@ -63,28 +63,8 @@ server:
 #   swagger-ui:
 #     enabled: true
 
-# 관측. 관리 엔드포인트는 앱과 다른 포트로 분리한다 — ALB 대상 그룹은 앱 포트만, 수집기만 관리 포트에 접근한다.
-# 부하 시험의 p99 를 보려고 요청 지연은 히스토그램으로 낸다
-management:
-  server:
-    port: 9083
-  endpoints:
-    web:
-      exposure:
-        include: health, prometheus
-  endpoint:
-    health:
-      # 헬스 체크는 /actuator/health/readiness 로 한다. 전체(/actuator/health)는 Redis · DB 상태를 포함해
-      # Redis 장애만으로 모든 인스턴스가 빠진다(폐기 확인은 Redis 장애에도 접수를 통과시키는 정책)
-      probes:
-        enabled: true
-  metrics:
-    distribution:
-      percentiles-histogram:
-        http.server.requests: true
-        preorder.accept: true
-        preorder.events.handle: true
-        preorder.events.lag: true
+# 관측(관리 포트 9083 · health · prometheus · readiness · 지연 히스토그램)은 코드 기본값(PreorderDefaults)에 있다.
+# 관리 포트를 서비스 포트와 같게 두거나 끄면 기동이 막힌다 — 헬스 체크는 관리 포트의 /actuator/health/readiness 로 한다
 
 nova:
   # 대기열 입장권. 게이트웨이와 같은 비밀(Secrets Manager). 형식: gateway-auth-tokens.md 5절
