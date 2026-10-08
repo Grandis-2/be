@@ -40,7 +40,8 @@ record OutboxProperties(
             throw new IllegalArgumentException("nova.outbox.relay-after · relay-lease · relay-interval 은 0 보다 커야 한다");
         }
         if (!retention.isPositive() || !cleanupInterval.isPositive() || cleanupBatch < 1) {
-            throw new IllegalArgumentException("nova.outbox.retention · cleanup-interval 은 0 보다 크고 cleanup-batch 는 1 이상이어야 한다");
+            throw new IllegalArgumentException(
+                    "nova.outbox.retention · cleanup-interval 은 0 보다 크고 cleanup-batch 는 1 이상이어야 한다");
         }
         if (metricsPrefix == null || metricsPrefix.isBlank()) {
             throw new IllegalArgumentException("nova.outbox.metrics-prefix 가 비어 있다");

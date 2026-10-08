@@ -18,11 +18,14 @@ class OutboxPropertiesTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new OutboxProperties(32, MINUTE, 0, MINUTE, MINUTE, "outbox", WEEK, HOUR, 1000))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new OutboxProperties(32, Duration.ZERO, 100, MINUTE, MINUTE, "outbox", WEEK, HOUR, 1000))
+        assertThatThrownBy(() -> new OutboxProperties(32, Duration.ZERO, 100, MINUTE, MINUTE,
+                "outbox", WEEK, HOUR, 1000))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new OutboxProperties(32, MINUTE, 100, Duration.ZERO, MINUTE, "outbox", WEEK, HOUR, 1000))
+        assertThatThrownBy(() -> new OutboxProperties(32, MINUTE, 100, Duration.ZERO, MINUTE,
+                "outbox", WEEK, HOUR, 1000))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new OutboxProperties(32, MINUTE, 100, MINUTE, Duration.ZERO, "outbox", WEEK, HOUR, 1000))
+        assertThatThrownBy(() -> new OutboxProperties(32, MINUTE, 100, MINUTE, Duration.ZERO,
+                "outbox", WEEK, HOUR, 1000))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new OutboxProperties(32, MINUTE, 100, MINUTE, MINUTE, " ", WEEK, HOUR, 1000))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -30,9 +33,11 @@ class OutboxPropertiesTest {
 
     @Test
     void 보존_기간_정리_주기는_0_보다_크고_정리_묶음은_1_이상이어야_한다() {
-        assertThatThrownBy(() -> new OutboxProperties(32, MINUTE, 100, MINUTE, MINUTE, "outbox", Duration.ZERO, HOUR, 1000))
+        assertThatThrownBy(() -> new OutboxProperties(32, MINUTE, 100, MINUTE, MINUTE,
+                "outbox", Duration.ZERO, HOUR, 1000))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new OutboxProperties(32, MINUTE, 100, MINUTE, MINUTE, "outbox", WEEK, Duration.ZERO, 1000))
+        assertThatThrownBy(() -> new OutboxProperties(32, MINUTE, 100, MINUTE, MINUTE,
+                "outbox", WEEK, Duration.ZERO, 1000))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new OutboxProperties(32, MINUTE, 100, MINUTE, MINUTE, "outbox", WEEK, HOUR, 0))
                 .isInstanceOf(IllegalArgumentException.class);
