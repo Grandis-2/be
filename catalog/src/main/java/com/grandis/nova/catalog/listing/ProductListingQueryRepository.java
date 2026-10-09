@@ -14,6 +14,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -207,6 +208,24 @@ public class ProductListingQueryRepository {
                 new MapSqlParameterSource("productId", UuidBinary.toBytes(productId)),
                 (rs, rowNum) -> new Exposure(rs.getBoolean("visible"), SaleStatus.valueOf(rs.getString("status")), rs.getBoolean("ready")));
         return rows.stream().findFirst();
+    }
+
+    /**
+     * 여러 상품의 공개 여부 · 판매 상태 · 판매 방식별 준비를 한 문장으로 읽는다({@link #findExposure} 의 일괄판). 없는 상품은 빠진다.
+     * 호출자가 옵션과 같은 스냅샷으로 읽도록 REPEATABLE READ 트랜잭션 안에서 부른다.
+     */
+    public Map<UUID, Exposure> findExposures(Collection<UUID> productIds) {
+        Map<UUID, Exposure> exposures = new HashMap<>();
+        if (productIds.isEmpty()) {
+            return exposures;
+        }
+        jdbc.query("SELECT p.id, p.visible, p.status, " + READY + " AS ready FROM products p WHERE p.id IN (:productIds)",
+                new MapSqlParameterSource("productIds", productIds.stream().map(UuidBinary::toBytes).toList()),
+                rs -> {
+                    exposures.put(UuidBinary.fromBytes(rs.getBytes("id")),
+                            new Exposure(rs.getBoolean("visible"), SaleStatus.valueOf(rs.getString("status")), rs.getBoolean("ready")));
+                });
+        return exposures;
     }
 
     /** 한 문장으로 읽은 노출 판정 재료. */

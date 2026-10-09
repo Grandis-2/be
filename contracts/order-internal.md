@@ -1,6 +1,9 @@
 # order ↔ catalog 내부 API 계약
 
-**catalog 가 부르는 order 내부 API 만** 담는다(preorder 가 부르는 예약 취소 가능 여부는 여기 없다). 양쪽 구현의 기준이다. order 가 응답을 만들고(`InternalOrderItemController` · `OrderQueryService.findItem`), catalog 의 리뷰 작성이 소비한다. 문서와 어긋나는 쪽이 고친다.
+order 와 catalog 가 서로 부르는 내부 API 를 담는다(preorder 가 부르는 예약 취소 가능 여부는 여기 없다). 양쪽 구현의 기준이고, 문서와 어긋나는 쪽이 고친다.
+
+- catalog → order: `GET /internal/order-items/{orderItemId}` — 리뷰 작성용 주문상품. order 가 응답을 만들고(`InternalOrderItemController` · `OrderQueryService.findItem`), catalog 의 리뷰 작성이 소비한다.
+- order → catalog: `GET /internal/options` — 장바구니용 옵션 일괄 조회. catalog 가 응답을 만들고(`InternalOptionController` · `ProductOptionsQueryService.findOptions`), order 의 장바구니가 소비한다.
 
 ## `GET /internal/order-items/{orderItemId}` — 리뷰 작성용 주문상품 (내부 전용)
 
@@ -64,3 +67,78 @@
 **폐기 조회 실패.** 이 경로는 order 의 `auth.revocation-check.fail-closed-paths` 에 없다 — Redis 장애로 폐기 여부를 못 보면 통과(경고 · 지표만)하고 retryable 401 은 나오지 않는다. 폐기된 토큰으로 볼 수 있는 것도 본인 주문상품의 사실뿐이다.
 
 5xx 나 응답 지연은 catalog 가 회원에게 "잠시 후 다시" 로 답한다(catalog 쪽 읽기 1초).
+
+## `GET /internal/options` — 장바구니용 옵션 일괄 조회 (내부 전용)
+
+**노출.** 위 주문상품 API 와 같은 조건이다 — `/internal/**` 는 공개 라우팅에 두지 않고, OpenAPI 문서에서도 기본으로 빠진다. 이 엔드포인트는 USER 토큰으로 **비공개 · 판매 중지 상품까지** 돌려주므로 공개 경로 차단은 운영 필수 조건이다.
+
+**호출 주체.**
+
+| 언제 | 누가 | 실린 JWT | 목적 |
+| --- | --- | --- | --- |
+| 장바구니 조회 · 담기 · 장바구니 주문 생성 | order 장바구니 | 회원(USER) | 줄마다 표시할 상품 · 옵션 정보와 "살 수 있는가" 를 가릴 사실, 주문 스냅샷(가격 · 이름 · 보증) |
+
+**인증.** 호출자가 받은 회원 토큰을 그대로 싣는다(`Authorization: Bearer {accessToken}`). catalog 는 `common:security` 필터로 검증하고 USER · ADMIN 을 받는다(`/internal/**` 규칙 — 그 밖의 역할은 403).
+
+**요청.** 본문 없음. `ids` 에 옵션 id(`product_options.id`, UUID)를 쉼표로 잇거나(`ids=a,b`) 파라미터를 반복한다(`ids=a&ids=b`) — 둘은 같다.
+- 같은 id 는 한 번으로 센다. 중복을 뺀 개수가 1~50 이어야 한다(장바구니 최대 줄 수 50). 비었거나 · 없거나 · 51개 이상 · UUID 가 아니거나 · 빈 원소(`ids=a,` 의 끝 쉼표)가 있으면 400(`field=ids`).
+
+**응답 200.** 봉투는 `common:web` 의 `ApiResponse` 그대로. 결과는 **요청 순서**(같은 id 는 처음 자리에 한 번)이고, **없는 옵션은 빠진다** — 호출자는 빠진 id 를 "판매 종료" 로 판정한다.
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "optionId": "0199a3f2-8a11-7c22-8d33-5e6f70819203",
+        "productId": "0199a3f2-8a10-7b21-9c32-4d5e6f708192",
+        "productTitle": "아이폰 17",
+        "optionTitle": "블랙 / 256GB",
+        "sku": "BLK-256",
+        "price": 1250000,
+        "optionStatus": "ACTIVE",
+        "saleMode": "IN_STOCK",
+        "productStatus": "ACTIVE",
+        "visible": true,
+        "registrationCompleted": true,
+        "warranty": { "offered": true, "surcharge": 199000 },
+        "imageUrl": "https://img.example/black-0.jpg"
+      }
+    ]
+  },
+  "error": null,
+  "timestamp": "2026-10-09T06:00:00Z",
+  "traceId": "…"
+}
+```
+
+| 칸 | 타입 | 뜻 |
+| --- | --- | --- |
+| `optionId` | string(UUID) | `product_options.id` |
+| `productId` | string(UUID) | 옵션의 상품 |
+| `productTitle` | string | 상품 이름(지금 값) |
+| `optionTitle` | string | 옵션 표시명(지금 값, 예: 블랙 / 256GB) |
+| `sku` | string | 옵션 SKU |
+| `price` | number | 옵션 최종가(정수 원) — 기본가 + 고른 값의 추가금 |
+| `optionStatus` | string | 옵션 판매 상태(ACTIVE · PAUSED) |
+| `saleMode` | string | 상품 판매 방식(IN_STOCK · PREORDER) |
+| `productStatus` | string | 상품 판매 상태(ACTIVE · PAUSED) |
+| `visible` | boolean | 상품 공개 여부. 늘 실린다 |
+| `registrationCompleted` | boolean | 판매 방식별 준비 — 일반은 order 재고 행, 사전예약은 preorder 회차 행이 있다. 늘 실린다 |
+| `warranty.offered` · `warranty.surcharge` | boolean · number | 상품의 보증 설정(옵션 문서의 `warranty`). 제공하지 않으면 `false` · `0` |
+| `imageUrl` | string \| null | 상품 썸네일(첫 색상의 첫 장, 색상이 없으면 기본 사진의 첫 장). 없으면 null |
+
+**판정은 order 가 한다.** 사전예약 제외 · 판매 중지 · 비공개 · 재고 · 보증 미제공 여부를 order 가 이 칸들로 가린다. catalog 는 비공개 · 판매 중지 · 사전예약 옵션도 200 으로 사실만 돌려준다.
+
+**한 스냅샷.** 옵션 · 상품 · 노출 칸(`visible` · `productStatus` · `registrationCompleted`)은 한 트랜잭션(REPEATABLE READ)에서 읽는다 — 따로 읽으면 사이에 커밋된 판매 중지 · 공개 전환이 섞여 한순간도 없던 조합이 나온다.
+
+**오류.** 공통 봉투 그대로.
+
+| 상태 | 코드 | 언제 |
+| --- | --- | --- |
+| 400 | `VALIDATION_FAILED` | `ids` 가 비었거나 · 없거나 · 중복을 뺀 개수가 50 을 넘거나 · UUID 가 아니거나 · 빈 원소가 있음(`field=ids`) |
+| 401 | `UNAUTHENTICATED` | 토큰 없음 · 만료 · 서명 · 폐기된 토큰 |
+| 403 | `FORBIDDEN` | USER · ADMIN 이 아닌 토큰 |
+
+**폐기 조회 실패.** 이 경로는 catalog 의 `auth.revocation-check.fail-closed-paths` 에 없다 — Redis 장애로 폐기 여부를 못 보면 통과(경고 · 지표만)한다. 읽기 전용이고, 폐기된 토큰으로 볼 수 있는 것도 상품 사실뿐이다.
