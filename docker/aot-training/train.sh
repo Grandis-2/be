@@ -243,10 +243,14 @@ fail_with_logs() {
   exit 1
 }
 
+# 캐시는 JVM 이 정상 종료할 때 쓰인다. 없으면 어떻게 끝났는지(종료 코드 · OOM)를 함께 남긴다 —
+# 137 은 캐시를 다 쓰기 전에 강제 종료된 것이다(메모리 부족 · stop 시간 초과)
 collect_cache() {
-  local s=$1 name=$2
-  docker cp "$name:/tmp/app.aot" "$DIST/$s/app.aot" > /dev/null 2>&1 \
-    || fail_with_logs "$s 의 AOT 캐시가 만들어지지 않았다" "$name"
+  local s=$1 name=$2 state
+  if ! docker cp "$name:/tmp/app.aot" "$DIST/$s/app.aot" > /dev/null 2>&1; then
+    state=$(docker inspect -f 'exit {{.State.ExitCode}}, OOMKilled={{.State.OOMKilled}}' "$name" 2>&1 || true)
+    fail_with_logs "$s 의 AOT 캐시가 만들어지지 않았다($state)" "$name"
+  fi
   docker rm "$name" > /dev/null
 }
 
@@ -337,8 +341,13 @@ train_workload() {
 
   # 정상 종료(SIGTERM)에서 캐시가 쓰인다. 종료 처리 · 캐시 조립에 시간이 걸려 넉넉히 기다린다
   docker rm -f "$PROJECT-toss" > /dev/null
-  for name in "${names[@]}"; do docker stop -t 180 "$name" > /dev/null & done
-  wait
+  local pids=() pid stopped=0
+  for name in "${names[@]}"; do
+    docker stop -t 180 "$name" > /dev/null &
+    pids+=("$!")
+  done
+  for pid in "${pids[@]}"; do wait "$pid" || stopped=1; done
+  [ "$stopped" = 0 ] || fail_with_logs "학습 컨테이너를 멈추지 못했다" "${names[@]}"
   for s in $WORKLOAD_SERVICES; do
     collect_cache "$s" "$PROJECT-train-$s"
   done

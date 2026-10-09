@@ -183,7 +183,10 @@ jobs:
     permissions:
       contents: read   # 학습 컨테이너를 여럿 띄운다 — AWS 자격(id-token)은 주지 않는다
     steps:
+      # train.sh 가 띄우는 컨테이너에 토큰이 닿지 않게 git 설정에 남기지 않는다
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/download-artifact@v4
         with:

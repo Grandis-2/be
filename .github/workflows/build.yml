@@ -189,7 +189,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
+      # PR 코드(gradlew · train.sh)를 실행한다 — 토큰을 git 설정에 남기지 않는다
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-java@v4
         with:
