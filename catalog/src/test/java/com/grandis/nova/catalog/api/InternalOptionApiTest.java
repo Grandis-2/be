@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog.api;
 
+import com.grandis.nova.catalog.product.ProductRepository;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.common.UuidBinary;
@@ -10,6 +11,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.test.web.servlet.ResultActions;
 
 import java.math.BigDecimal;
@@ -34,12 +37,16 @@ class InternalOptionApiTest {
 
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
+    @Autowired ProductRepository products;
+    @Autowired PlatformTransactionManager transactionManager;
 
     ShopFixtures fixtures;
+    TransactionTemplate transaction;
 
     @BeforeEach
     void setUp() {
         fixtures = new ShopFixtures(jdbcTemplate);
+        transaction = new TransactionTemplate(transactionManager);
     }
 
     @Test
@@ -47,8 +54,9 @@ class InternalOptionApiTest {
     void returnsFactsInRequestOrder() throws Exception {
         UUID phone = fixtures.product("IN_STOCK", "ACTIVE");
         fixtures.image(phone, "GALLERY", "블랙", 0, false, "https://img/black-0.jpg");
-        jdbcTemplate.update("UPDATE products SET options = JSON_SET(options, '$.warranty', JSON_OBJECT('offered', TRUE, 'surcharge', 199000)) WHERE id = ?",
-                (Object) UuidBinary.toBytes(phone));
+        // 보증은 앱과 같은 길(상품 행 잠금 → setWarranty → replaceOptions)로 넣는다 — 옵션 문서 · 썸네일을 함께 쓰는 경계를 우회하지 않는다
+        transaction.executeWithoutResult(status -> products.findForUpdate(phone).orElseThrow()
+                .setWarranty(true, new BigDecimal("199000")));
         UUID black = fixtures.option(phone, "ACTIVE", new BigDecimal("1250000"));
         fixtures.inventory(black, 5, 0, 0);
         UUID cable = fixtures.product("IN_STOCK", "ACTIVE");
