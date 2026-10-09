@@ -17,8 +17,11 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# ECR 저장소는 <네임스페이스>/<서비스> 다. 프로젝트 단위로 묶이고 IAM 은 repository/nova/* 하나로 건다.
+# 서비스가 늘어도 이름은 여기서만 정한다.
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_NAMESPACE: nova
 
 permissions:
   contents: read
@@ -96,7 +99,7 @@ jobs:
             if grep -qxF -- "$s" <<< "$forced"; then
               action=publish
             else
-              found=$(aws ecr batch-get-image --repository-name "nova-$s" \
+              found=$(aws ecr batch-get-image --repository-name "$ECR_NAMESPACE/$s" \
                 --image-ids "imageTag=content-$key" \
                 --accepted-media-types \
                   application/vnd.docker.distribution.manifest.v2+json \
@@ -110,7 +113,7 @@ jobs:
               elif echo "$found" | jq -e '[.failures[].failureCode] == ["ImageNotFound"]' > /dev/null; then
                 action=publish
               else
-                echo "::error::nova-$s 조회 실패: $(echo "$found" | jq -c '.failures')"
+                echo "::error::$ECR_NAMESPACE/$s 조회 실패: $(echo "$found" | jq -c '.failures')"
                 exit 1
               fi
             fi
@@ -151,14 +154,14 @@ jobs:
             image=$(echo "$row" | jq -c .image)
             for tag in "$SHA" latest; do
               # 이미 같은 이미지에 붙어 있으면 ImageAlreadyExistsException 이다. 할 일이 없으니 넘어간다.
-              if ! out=$(aws ecr put-image --repository-name "nova-$s" --image-tag "$tag" \
+              if ! out=$(aws ecr put-image --repository-name "$ECR_NAMESPACE/$s" --image-tag "$tag" \
                     --image-manifest "$(echo "$image" | jq -r .imageManifest)" \
                     --image-manifest-media-type "$(echo "$image" | jq -r .imageManifestMediaType)" \
                     --image-digest "$(echo "$image" | jq -r .imageId.imageDigest)" 2>&1 < /dev/null); then
                 grep -qF ImageAlreadyExistsException <<< "$out" || { echo "$out"; exit 1; }
               fi
             done
-            echo "nova-$s: content-${key:0:12} → $SHA, latest"
+            echo "$ECR_NAMESPACE/$s: content-${key:0:12} → $SHA, latest"
           done
 
       # 2단계가 같은 jar 를 쓰도록 넘긴다. gradle 을 다시 돌리지 않는다.
@@ -259,7 +262,7 @@ jobs:
       - name: 올리기
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
-          REPO: nova-${{ matrix.service }}
+          REPO: ${{ env.ECR_NAMESPACE }}/${{ matrix.service }}
           SHA: ${{ github.sha }}
           KEY: ${{ matrix.key }}
         run: |
