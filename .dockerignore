@@ -1,5 +1,6 @@
-# 컨텍스트는 jar 하나만 있으면 된다. 나머지를 보내면 빌드가 느려진다.
-# CI 는 dist/app.jar 로 넘기고, 로컬에서 직접 빌드할 땐 모듈의 build/libs 를 쓴다.
+# 컨텍스트는 jar(와 AOT 캐시)만 있으면 된다. 나머지를 보내면 빌드가 느려진다.
+# CI 는 dist/<서비스>/app.jar · app.aot 로 넘기고, 로컬에서 직접 빌드할 땐 모듈의 build/libs 를 쓴다.
 *
-!dist/app.jar
+!dist/*/app.jar
+!dist/*/app.aot
 !*/build/libs/*.jar

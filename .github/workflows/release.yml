@@ -26,9 +26,10 @@ permissions:
 
 jobs:
   # ── 1단계: jar 를 전부 만들고, 내용이 바뀐 서비스만 고른다 ─────────────
-  # 바뀐 파일로 짐작하지 않는다. jar 와 Dockerfile 의 해시(내용 키)가 ECR 에 이미 있으면
-  # 그 이미지에 태그만 옮기고, 없으면 2단계에서 이미지를 만든다. jar 는 재현 가능하게 만들어진다.
-  # 이미지에 들어가는 것이 이 둘뿐이라는 전제다. Dockerfile 이 다른 파일을 COPY 하면 그 파일도 키에 넣는다.
+  # 바뀐 파일로 짐작하지 않는다. 내용 키가 ECR 에 이미 있으면 그 이미지에 태그만 옮기고, 없으면 2단계에서 이미지를 만든다.
+  # 내용 키 = jar + 이미지를 만드는 입력(Dockerfile 둘 · AOT 학습 디렉터리 · 큐 스크립트). jar 는 재현 가능하게 만들어진다.
+  # AOT 캐시 자체는 키에 넣지 않는다 — 학습할 때마다 바이트가 달라지지만, 같은 입력에서 나온 캐시는 같은 일을 한다.
+  # 이미지에 들어가는 것이 이것뿐이라는 전제다. Dockerfile 이 다른 파일을 COPY 하면 그 파일도 키에 넣는다.
   package:
     runs-on: ubuntu-latest
     outputs:
@@ -77,14 +78,19 @@ jobs:
               || { echo "::error::없는 서비스다: $s"; exit 1; }
           done
 
-          dockerfile=$(sha256sum docker/Dockerfile | cut -d' ' -f1)
+          # git 이 아는 것(경로 · 실행 비트 · 내용 해시)만 본다 — 체크아웃 시각 · 파일 시스템 권한이 키를 흔들지 않게
+          image_inputs=$(git ls-files -s docker/Dockerfile docker/Dockerfile.aot docker/aot-training docker/floci/create-queues.sh \
+            | sha256sum | cut -d' ' -f1)
           echo '[]' > plan.json
           for s in $(jq -r '.services[]' "$graph"); do
             jars=()
             for f in "$s"/build/libs/*.jar; do [[ $f == *-plain.jar ]] || jars+=("$f"); done
             [ "${#jars[@]}" -eq 1 ] || { echo "::error::$s 의 jar 가 하나가 아니다: ${jars[*]}"; exit 1; }
             jar=${jars[0]}
-            key=$(printf '%s%s' "$(sha256sum "$jar" | cut -d' ' -f1)" "$dockerfile" | sha256sum | cut -d' ' -f1)
+            key=$(printf '%s%s' "$(sha256sum "$jar" | cut -d' ' -f1)" "$image_inputs" | sha256sum | cut -d' ' -f1)
+            # AOT 학습은 서비스 사이를 오가므로 올리지 않는 서비스의 jar 도 함께 넘긴다
+            mkdir -p "dist/$s"
+            cp "$jar" "dist/$s/app.jar"
 
             image=null
             if grep -qxF -- "$s" <<< "$forced"; then
@@ -109,12 +115,14 @@ jobs:
               fi
             fi
 
-            if [ "$action" = publish ]; then
-              mkdir -p "dist/$s" && cp "$jar" "dist/$s/app.jar"
-            fi
+            # && 로 잇지 않는다 — && 목록 앞쪽의 실패는 set -e 로 멈추지 않아, 판정이 빈 채로 초록이 된다
             jq --arg s "$s" --arg k "$key" --arg a "$action" --argjson i "$image" \
-              '. + [{service: $s, key: $k, action: $a, image: $i}]' plan.json > plan.tmp && mv plan.tmp plan.json
+              '. + [{service: $s, key: $k, action: $a, image: $i}]' plan.json > plan.tmp
+            mv plan.tmp plan.json
           done
+          # 서비스마다 판정이 하나씩 있어야 한다. 빠지면 그 서비스는 올라가지도 태그가 옮겨지지도 않은 채 초록이 된다
+          [ "$(jq length plan.json)" -eq "$(jq '.services | length' "$graph")" ] \
+            || { echo "::error::판정이 서비스 수와 다르다"; exit 1; }
 
           publish=$(jq -c '[.[] | select(.action == "publish") | {service, key}]' plan.json)
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
@@ -162,17 +170,18 @@ jobs:
           compression-level: 0   # jar 는 이미 압축돼 있다
           retention-days: 1
 
-  # ── 2단계: 이미지를 한 번 만들어 훑고, 훑은 그 이미지를 올린다 ──────────
-  # 빨간불의 의미는 스텝 이름으로 구분한다. 이미지 만들기 = Dockerfile, trivy = 보안, 올리기 = 권한·네트워크.
-  publish:
+  # ── 2단계: 이미지를 만들고 AOT 캐시를 학습해 얹는다 ──────────────────
+  # 기반 이미지 빌드 · 학습 · 캐시 얹기 · 검증을 한 job 에서 한다. 캐시는 학습한 그 이미지 위에만 얹어야 한다 — JVM 은 jar 가
+  # 학습 때와 같은지 보지 않아, 다시 빌드한 이미지와 짝지으면 옛 클래스가 돈다. 그래서 만든 이미지를 그대로 3단계로 넘긴다.
+  # 학습은 서비스 사이를 오가서 8개를 모두 띄우고, 올릴 서비스의 이미지만 넘긴다. 내용은 docker/aot-training/train.sh.
+  # 빨간불의 의미: 학습 = 학습 환경 · 시나리오, 검증 = 캐시가 받아지지 않음(JDK · 캐시 경로 어긋남).
+  image:
     needs: package
     if: needs.package.outputs.any == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.package.outputs.publish) }}
-    name: publish ${{ matrix.service }}
+    timeout-minutes: 40
+    permissions:
+      contents: read   # 학습 컨테이너를 여럿 띄운다 — AWS 자격(id-token)은 주지 않는다
     steps:
       - uses: actions/checkout@v4
 
@@ -181,13 +190,44 @@ jobs:
           name: jars
           path: dist
 
-      - name: 이미지 만들기
+      - name: 학습 · 검증
+        run: SUMMARY="$GITHUB_STEP_SUMMARY" docker/aot-training/train.sh
+
+      - name: 이미지 넘기기
+        env:
+          PUBLISH: ${{ needs.package.outputs.publish }}
         run: |
           set -euo pipefail
-          mv "dist/${{ matrix.service }}/app.jar" dist/app.jar
-          docker build --file docker/Dockerfile \
-            --build-arg JAR_FILE=dist/app.jar \
-            --tag release:${{ matrix.service }} .
+          mkdir -p images
+          for s in $(echo "$PUBLISH" | jq -r '.[].service'); do
+            docker save "release:$s" | gzip -1 > "images/$s.tar.gz"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: images
+          path: images/
+          compression-level: 0   # 이미 gzip 이다
+          retention-days: 1
+
+  # ── 3단계: 2단계가 만든 이미지를 훑고, 훑은 그 이미지를 올린다 ──────────
+  # 빨간불의 의미는 스텝 이름으로 구분한다. trivy = 보안, 올리기 = 권한·네트워크.
+  publish:
+    needs: [package, image]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.package.outputs.publish) }}
+    name: publish ${{ matrix.service }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: images
+          path: images
+
+      - name: 이미지 받기
+        run: docker load --quiet --input "images/${{ matrix.service }}.tar.gz"
 
       # 베이스 이미지의 OS 패키지와 안에 든 jar 를 함께 훑는다.
       # ECR 의 scanOnPush 는 올라간 뒤에 보므로, 막을 수 있는 건 여기뿐이다.
