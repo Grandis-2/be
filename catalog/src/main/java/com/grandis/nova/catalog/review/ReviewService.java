@@ -98,7 +98,8 @@ public class ReviewService {
         if (request.isEmpty()) {
             throw ValidationFailures.of("body", "바꿀 칸이 하나도 없습니다.");
         }
-        ProductReview review = requireMine(customerId, reviewId);
+        ProductReview review = reviews.findMineForUpdate(reviewId, customerId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND, "리뷰를 찾을 수 없습니다."));
         review.revise(request.rating(), request.body() == null ? null : requireBody(request.body()));
         reviews.flush();
         return mine(customerId, review.getOrderItemId());
