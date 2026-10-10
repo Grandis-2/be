@@ -161,8 +161,12 @@ class AdminDrawApiTest {
         Instant same = now.plusSeconds(120);
         expectViolation(create(body(option, 1, same, same)), "closesAt");
         expectViolation(create(body(option, 1, now, Instant.parse("+10000-01-01T00:00:00Z"))), "closesAt");
+        // 경계가 아니라 µs 로 자르면 같아지는 경우 — 자른 뒤 비교해야 400 이다(원본으로 비교하면 DB CHECK 위반 500)
         expectViolation(create(body(option, 1, Instant.parse("2030-01-01T00:00:00.000000100Z"), Instant.parse("2030-01-01T00:00:00.000000900Z"))),
                 "closesAt");
+        expectViolation(create(body(option, 1, Instant.parse("1969-12-31T23:59:59.999999Z"), now.plusSeconds(600))), "opensAt")
+                .andExpect(jsonPath("$.error.details.violations[0].message").value("1970-01-01 ~ 9999-12-31 사이 시각이어야 합니다."));
+        create(body(gift(10, true), 1, Instant.EPOCH, now.plusSeconds(600))).andExpect(status().isCreated()); // 하한 그 자체는 받는다
         expectViolation(create(raw(option, "\"\"", "100", 1, now, now.plusSeconds(600))), "title");
         expectViolation(create(raw(option, "\"t\"", "99", 1, now, now.plusSeconds(600))), "entryFee");
         expectViolation(create(raw(option, "\"t\"", "100.5", 1, now, now.plusSeconds(600))), "entryFee");
@@ -447,8 +451,8 @@ class AdminDrawApiTest {
         return JSON.readTree(actions.andReturn().getResponse().getContentAsString()).get("data");
     }
 
-    private static void expectViolation(ResultActions actions, String field) throws Exception {
-        actions.andExpect(status().isBadRequest())
+    private static ResultActions expectViolation(ResultActions actions, String field) throws Exception {
+        return actions.andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
                 .andExpect(jsonPath("$.error.details.violations[0].field").value(field));
     }

@@ -77,6 +77,26 @@ class AdminDrawRetryTest {
         assertThatThrownBy(() -> service.create(null, KEY, command())).isInstanceOfSatisfying(BusinessException.class,
                 e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
         verify(stock, times(AdminDrawService.MAX_ATTEMPTS)).reserve(anyMap());
+        verify(campaigns, times(2)).findByIdempotencyKey(KEY);
+    }
+
+    @Test
+    void deadlockOnInsertIsRetriedOnce() {
+        given(campaigns.insert(any())).willThrow(lockFailure(MySqlLockFailures.MYSQL_DEADLOCK)).willReturn(draw);
+
+        assertThat(service.create(null, KEY, command()).created()).isTrue();
+        verify(campaigns, times(2)).insert(any());
+    }
+
+    @Test
+    void exhaustedDeadlockReturnsTheDrawThatTookTheKeyMeanwhile() {
+        willThrow(lockFailure(MySqlLockFailures.MYSQL_DEADLOCK)).given(stock).reserve(anyMap());
+        given(campaigns.findByIdempotencyKey(KEY)).willReturn(Optional.empty(), Optional.of(draw));
+
+        AdminDrawService.Created created = service.create(null, KEY, command());
+
+        assertThat(created.created()).isFalse();
+        assertThat(created.campaign()).isEqualTo(draw);
     }
 
     @Test
@@ -86,6 +106,7 @@ class AdminDrawRetryTest {
         assertThatThrownBy(() -> service.create(null, KEY, command())).isInstanceOfSatisfying(BusinessException.class,
                 e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
         verify(stock, times(1)).reserve(anyMap());
+        verify(campaigns, times(2)).findByIdempotencyKey(KEY);
     }
 
     @Test
