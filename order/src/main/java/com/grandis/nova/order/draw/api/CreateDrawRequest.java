@@ -33,7 +33,7 @@ public record CreateDrawRequest(
         @NotNull Instant closesAt
 ) {
 
-    /** DB datetime(6) 이 담는 가장 늦은 시각. 넘으면 저장할 수 없다. */
+    /** DB datetime(6) 이 담는 가장 늦은 시각. 넘으면 저장할 수 없다. 아래쪽은 1970-01-01 부터만 받는다(DB 는 1000-01-01 까지 담지만 회차에 쓸 일이 없다). */
     static final Instant DB_INSTANT_MAX = Instant.parse("9999-12-31T23:59:59.999999Z");
 
     AdminDrawService.CreateDraw toCommand() {
@@ -48,7 +48,7 @@ public record CreateDrawRequest(
     private static Instant requireStorable(String field, Instant value) {
         Instant micros = value.truncatedTo(ChronoUnit.MICROS);
         if (micros.isAfter(DB_INSTANT_MAX) || micros.isBefore(Instant.EPOCH)) {
-            throw ValidationFailures.of(field, "저장할 수 없는 시각입니다.");
+            throw ValidationFailures.of(field, "1970-01-01 ~ 9999-12-31 사이 시각이어야 합니다.");
         }
         return micros;
     }

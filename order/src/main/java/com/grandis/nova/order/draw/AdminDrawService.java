@@ -35,7 +35,9 @@ import java.util.UUID;
  *
  * 만들기: 같은 Idempotency-Key 의 회차가 있으면 그것(본문은 대조하지 않는다 — 상품 등록과 같은 규칙) → 트랜잭션 밖에서 catalog 에 증정품 옵션을
  * 묻고(관리자 토큰 중계) → 트랜잭션에서 당첨 인원만큼 재고를 확보하고 회차를 넣는다. 같은 새 키가 동시에 오면 유일 키가 하나만 남기고, 진 쪽은
- * 롤백(확보도)한 뒤 먼저 들어간 회차를 돌려준다 — 응답을 잃고 다시 보내도 회차 · 확보가 둘이 되지 않는다.
+ * 롤백(확보도)한 뒤 먼저 들어간 회차를 돌려준다 — 응답을 잃고 다시 보내도 회차 · 확보가 둘이 되지 않는다. 진 쪽은 유일 키보다 먼저 재고 행에서
+ * 기다리므로, 재고가 회차 하나 몫뿐이면 키 충돌이 아니라 재고 부족으로 끝난다 — 그래서 재고 부족 · 잠금 실패에서도 그 키의 회차를 다시 보고,
+ * 있으면 그것을 돌려준다.
  * - 증정품은 일반 판매(IN_STOCK) · 상품 · 옵션 모두 판매 중(ACTIVE) · 재고 등록(준비 완료)인 옵션이어야 한다. **공개 여부는 보지 않는다** —
  *   매장에 안 파는 증정품은 catalog 에 비공개 상품으로 먼저 등록해 둔다.
  * - 재고는 조건부 UPDATE 로 확보한다({@link StockLedger#reserve}) — 모자라면 409 INSUFFICIENT_STOCK 이고 회차를 만들지 않는다.
@@ -109,10 +111,18 @@ public class AdminDrawService {
                 return new Created(findByKey(key).orElseThrow(() -> new IllegalStateException("키 충돌인데 그 키의 회차가 없다: " + key, e)),
                         false);
             } catch (StockShortageException e) {
+                Optional<DrawCampaign> winner = findByKey(key);
+                if (winner.isPresent()) {
+                    return new Created(winner.get(), false);
+                }
                 throw new BusinessException(OrderErrorCode.INSUFFICIENT_STOCK, "당첨 인원만큼 재고가 없습니다.", Map.of("variantIds", e.optionIds()));
             } catch (PessimisticLockingFailureException e) {
                 // 재고 원장의 계약 — 동시 삽입이 부르는 잠금(FK 부모 S 잠금)의 드문 교착은 호출하는 쪽이 한 번 더 한다(장바구니 주문과 같다)
                 if (!MySqlLockFailures.isDeadlock(e) || attempt >= MAX_ATTEMPTS) {
+                    Optional<DrawCampaign> winner = findByKey(key);
+                    if (winner.isPresent()) {
+                        return new Created(winner.get(), false);
+                    }
                     log.warn("드로우 회차 만들기 잠금 실패 optionId={} attempt={}", option.optionId(), attempt, e);
                     throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
                 }

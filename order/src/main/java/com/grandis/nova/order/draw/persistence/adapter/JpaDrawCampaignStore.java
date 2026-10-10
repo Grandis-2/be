@@ -68,7 +68,7 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
     }
 
     /** 같은 Idempotency-Key 가 이미 있는가 — 벤더 코드(1062)와 제약 이름으로 판정한다(장바구니 줄과 같은 방식). 다른 위반이면 그대로 던진다. */
-    private static boolean isKeyTaken(Throwable e) {
+    static boolean isKeyTaken(Throwable e) {
         for (Throwable t = e; t != null; t = t.getCause()) {
             if (t instanceof ConstraintViolationException violation) {
                 String name = violation.getConstraintName();

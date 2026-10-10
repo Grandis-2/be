@@ -5,6 +5,9 @@ import com.grandis.nova.order.cart.domain.repository.CartStore;
 import com.grandis.nova.order.client.catalog.CatalogClient;
 import com.grandis.nova.order.client.catalog.CatalogOption;
 import com.grandis.nova.order.client.catalog.CatalogOptions;
+import com.grandis.nova.order.draw.domain.model.NewDrawCampaign;
+import com.grandis.nova.order.draw.domain.repository.DrawCampaignStore;
+import com.grandis.nova.order.stock.StockLedger;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
@@ -18,6 +21,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -29,7 +33,6 @@ import tools.jackson.databind.json.JsonMapper;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HexFormat;
@@ -69,6 +72,8 @@ class AdminDrawApiTest {
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired PlatformTransactionManager transactionManager;
     @Autowired AdminDrawService service;
+    @Autowired StockLedger stockLedger;
+    @Autowired DrawCampaignStore campaignStore;
     @MockitoBean CatalogClient catalogClient;
     /** 쓰지 않지만 CartApiTest 와 같은 대역 구성으로 두어 Spring 컨텍스트를 함께 쓴다. */
     @MockitoSpyBean CartStore store;
@@ -156,6 +161,8 @@ class AdminDrawApiTest {
         Instant same = now.plusSeconds(120);
         expectViolation(create(body(option, 1, same, same)), "closesAt");
         expectViolation(create(body(option, 1, now, Instant.parse("+10000-01-01T00:00:00Z"))), "closesAt");
+        expectViolation(create(body(option, 1, Instant.parse("2030-01-01T00:00:00.000000100Z"), Instant.parse("2030-01-01T00:00:00.000000900Z"))),
+                "closesAt");
         expectViolation(create(raw(option, "\"\"", "100", 1, now, now.plusSeconds(600))), "title");
         expectViolation(create(raw(option, "\"t\"", "99", 1, now, now.plusSeconds(600))), "entryFee");
         expectViolation(create(raw(option, "\"t\"", "100.5", 1, now, now.plusSeconds(600))), "entryFee");
@@ -174,8 +181,10 @@ class AdminDrawApiTest {
 
         assertThat(Instant.parse(draw.get("opensAt").asString())).isEqualTo("2030-01-01T00:00:00.123456Z");
         assertThat(Instant.parse(draw.get("closesAt").asString())).isEqualTo("2030-01-02T00:00:00.999999Z");
-        assertThat(jdbcTemplate.queryForObject("SELECT DATE_FORMAT(closes_at, '%Y-%m-%d %T.%f') FROM draw_campaigns WHERE id = ?",
-                String.class, (Object) bytes(UUID.fromString(draw.get("drawId").asString())))).isEqualTo("2030-01-02 00:00:00.999999");
+        assertThat(storedClosesAt(draw)).isEqualTo("2030-01-02 00:00:00.999999");
+
+        JsonNode last = data(create(body(option, 1, opens, Instant.parse("9999-12-31T23:59:59.999999999Z"))).andExpect(status().isCreated()));
+        assertThat(storedClosesAt(last)).as("DB 가 담는 가장 늦은 시각까지 받는다").isEqualTo("9999-12-31 23:59:59.999999");
     }
 
     @Test
@@ -257,28 +266,66 @@ class AdminDrawApiTest {
         assertThat(drawsOf(option)).isEqualTo(1);
     }
 
+    /**
+     * 재고가 회차 하나 몫뿐일 때 같은 새 키가 겹치면, 늦은 쪽은 유일 키보다 먼저 재고 행에서 기다리고 앞선 쪽 커밋 뒤 재고가 모자라 확보에 실패한다
+     * — 그래도 그 키의 회차가 있으면 409 가 아니라 그 회차를 200 이다. 결정적으로 본다: 앞선 쪽이 운영 경로대로 확보 · 회차를 넣은 채 커밋하지 않고,
+     * 늦은 쪽이 재고 행 UPDATE 에서 기다리는 것을 확인한 뒤 커밋한다.
+     */
+    @Test
+    @DisplayName("재고가 한 회차 몫일 때 같은 새 키가 겹쳐도 늦은 쪽은 409 가 아니라 먼저 들어간 회차를 200")
+    void concurrentSameKeyWithOnlyOneDrawOfStock() throws Exception {
+        UUID option = gift(3, true);
+        CatalogOption gift = catalog.get(option);
+        String key = UUID.randomUUID().toString();
+        Instant closes = Instant.now().plus(Duration.ofDays(1));
+        CountDownLatch inserted = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        CompletableFuture<UUID> first = CompletableFuture.supplyAsync(() -> tx.execute(status -> {
+            stockLedger.reserve(Map.of(option, 3));
+            UUID id = campaignStore.insert(new NewDrawCampaign(key, gift.productId(), option, "먼저", gift.productTitle(), gift.optionTitle(),
+                    gift.imageUrl(), new BigDecimal("100"), 3, Instant.now(), closes)).id();
+            inserted.countDown();
+            await(commit);
+            return id;
+        }));
+        await(inserted);
+        CompletableFuture<MockHttpServletResponse> later = CompletableFuture.supplyAsync(() -> {
+            try {
+                return create(key, body(option, 3, Instant.now(), closes)).andReturn().getResponse();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        waitForQuery("update option_inventories%");
+        commit.countDown();
+        UUID earlier = first.get(20, TimeUnit.SECONDS);
+
+        MockHttpServletResponse response = later.get(20, TimeUnit.SECONDS);
+        assertThat(response.getStatus()).as(response.getContentAsString()).isEqualTo(200);
+        assertThat(JSON.readTree(response.getContentAsString()).get("data").get("drawId").asString()).isEqualTo(earlier.toString());
+        assertThat(reserved(option)).isEqualTo(3);
+        assertThat(drawsOf(option)).isEqualTo(1);
+    }
+
     @Test
     @DisplayName("만든 시각이 같으면 id 큰 쪽이 앞")
     void tiesOnCreatedAtOrderByIdDescending() throws Exception {
         String a = data(create(body(gift(10, true), 1, Instant.now(), Instant.now().plus(Duration.ofDays(1))))).get("drawId").asString();
         String b = data(create(body(gift(10, true), 1, Instant.now(), Instant.now().plus(Duration.ofDays(1))))).get("drawId").asString();
-        jdbcTemplate.update("UPDATE draw_campaigns SET created_at = '2001-01-01 00:00:00' WHERE id IN (?, ?)",
+        // 다른 회차보다 늦은 시각으로 옮겨 첫 쪽 맨 앞 둘로 고정한다. 목록 순서를 보는 다른 시험이 있어 끝나면 지운다
+        jdbcTemplate.update("UPDATE draw_campaigns SET created_at = '2100-01-01 00:00:00' WHERE id IN (?, ?)",
                 bytes(UUID.fromString(a)), bytes(UUID.fromString(b)));
-        Long total = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM draw_campaigns", Long.class);
-        assertThat(total).as("한 쪽에 다 담겨야 순서를 본다").isLessThanOrEqualTo(100);
-
-        JsonNode items = data(mockMvc.perform(get("/api/v1/admin/draws").param("size", "100").with(TestAuth.admin())).andExpect(status().isOk()))
-                .get("items");
-        List<String> ours = new ArrayList<>();
-        items.forEach(item -> {
-            String id = item.get("drawId").asString();
-            if (id.equals(a) || id.equals(b)) {
-                ours.add(id);
-            }
-        });
-        // binary(16) 은 부호 없는 바이트 순 — 16진 문자열의 사전 순과 같다
-        String bigger = HexFormat.of().formatHex(bytes(UUID.fromString(a))).compareTo(HexFormat.of().formatHex(bytes(UUID.fromString(b)))) > 0 ? a : b;
-        assertThat(ours).hasSize(2).first().isEqualTo(bigger);
+        try {
+            JsonNode items = data(mockMvc.perform(get("/api/v1/admin/draws").param("size", "2").with(TestAuth.admin())).andExpect(status().isOk()))
+                    .get("items");
+            // binary(16) 은 부호 없는 바이트 순 — 16진 문자열의 사전 순과 같다
+            boolean aFirst = HexFormat.of().formatHex(bytes(UUID.fromString(a))).compareTo(HexFormat.of().formatHex(bytes(UUID.fromString(b)))) > 0;
+            assertThat(List.of(items.get(0).get("drawId").asString(), items.get(1).get("drawId").asString()))
+                    .containsExactly(aFirst ? a : b, aFirst ? b : a);
+        } finally {
+            jdbcTemplate.update("DELETE FROM draw_campaigns WHERE id IN (?, ?)", bytes(UUID.fromString(a)), bytes(UUID.fromString(b)));
+        }
     }
 
     @Test
@@ -380,6 +427,11 @@ class AdminDrawApiTest {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);
         }
+    }
+
+    private String storedClosesAt(JsonNode draw) {
+        return jdbcTemplate.queryForObject("SELECT DATE_FORMAT(closes_at, '%Y-%m-%d %T.%f') FROM draw_campaigns WHERE id = ?", String.class,
+                (Object) bytes(UUID.fromString(draw.get("drawId").asString())));
     }
 
     private int reserved(UUID option) {
