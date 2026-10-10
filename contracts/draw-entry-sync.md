@@ -47,7 +47,7 @@ order 의 다른 이벤트와 같은 `EventEnvelope` 다.
 ## Mock 에 보낼 때
 
 - 멱등 키는 응모 id 다. 재시도마다 같은 키 · 같은 본문(응모 id · 회차 id · 회원 id)을 보낸다.
-- Mock 이 4xx(검증 실패 · 모르는 회차 등)로 거절하면 다시 보내도 같다 — worker 는 재시도하지 않고 경보와 함께 DLQ 로 보낸다. 5xx · 시간 초과는 재시도한다(가시성 지연).
+- 재시도해도 결과가 같은 거절(본문 검증 실패 등)만 DLQ 로 보낸다 — 공통 소비기(`RetryingQueueConsumer`)는 예외 종류와 상관없이 다시 받기라, 바로 보내려면 worker 가 `draw-register-dlq` 에 직접 보내고 원본을 지운다(그 큐의 SendMessage 권한 포함). 408 · 429 · 5xx · 시간 초과 · **모르는 회차**는 재시도한다(가시성 지연) — 회차 등록을 따로 두면 순서 보장이 없어 응모가 먼저 도착할 수 있다.
 - worker 는 처리 결과를 order 에 알리지 않는다 — order 는 넘긴 뒤 응모 상태를 바꾸지 않는다.
 
 **Mock 담당과 정할 것(열린 질문).**
@@ -68,7 +68,7 @@ order 의 다른 이벤트와 같은 `EventEnvelope` 다.
 
 order 가 이 이벤트를 쓰기 전에 아래가 있어야 한다. 빠져도 order 는 뜨고 결제도 되지만, 발행이 실패해 위 "아직 못 보냈다" 에서 조용히 쌓인다(큐 주소는 처음 보낼 때 찾는다).
 1. 운영 SQS 큐 `draw-register` 와 `draw-register-dlq`, 그 사이 redrive(최대 수신 횟수).
-2. order 실행 역할에 `draw-register` 의 `sqs:SendMessage` 권한.
+2. order 실행 역할에 `draw-register` 의 `sqs:GetQueueUrl` · `sqs:SendMessage` 권한(큐 주소를 이름으로 찾은 뒤 보낸다).
 3. 환경마다 큐 이름에 접두어를 붙이면 `nova.sqs.queues.draw-register` 매핑.
 
 **worker 가 먼저 나간다 — 첫 도입에도.** worker 가 없으면 메시지가 `draw-register` 에 쌓이기만 하고, 본 큐 보존 기간(로컬은 SQS 기본값 — DLQ 만 14일로 늘려 둠)이 지나면 DLQ 로 가지 않고 사라져 대조 때 흔적이 없다. 드로우를 열기 전에 worker 의 소비기가 떠 있어야 한다.

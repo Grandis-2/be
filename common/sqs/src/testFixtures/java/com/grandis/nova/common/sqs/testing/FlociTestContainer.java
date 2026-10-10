@@ -14,8 +14,8 @@ import java.util.Map;
 
 /**
  * JVM 에 하나뿐인 Floci(로컬 AWS 에뮬레이터). 시작하면서 큐와 DLQ 를 만든다. 테스트 컨텍스트가 닫혀도 멈추지 않는다.
- * 큐 구성은 docker/floci/create-queues.sh 와 같고(공통 모듈 시험 전용 큐 둘을 더한다), DLQ 로 옮기는 횟수만
- * 테스트가 빨리 끝나도록 작게 둔다.
+ * 큐 이름 · DLQ 짝은 docker/floci/create-queues.sh 와 같다(공통 모듈 시험 전용 큐 둘을 더한다). 다른 점: DLQ 로 옮기는 횟수를
+ * 테스트가 빨리 끝나도록 작게 두고, DLQ 보존 기간(스크립트는 14일)은 두지 않는다.
  */
 public final class FlociTestContainer {
 
