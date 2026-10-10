@@ -28,8 +28,7 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
 
     Optional<OrderJpaEntity> findByPreorderId(UUID preorderId);
 
-    List<OrderJpaEntity> findByCustomerIdAndSourceAndStatusInAndPaymentDueAtAfter(UUID customerId, OrderSource source,
-                                                                                Collection<OrderStatus> statuses, Instant after);
+    List<OrderJpaEntity> findByCustomerIdAndSourceAndStatusIn(UUID customerId, OrderSource source, Collection<OrderStatus> statuses);
 
     @Modifying(flushAutomatically = true)
     @Query("""

@@ -122,6 +122,19 @@ public record Order(
         return id == null;
     }
 
+    /**
+     * 일반 주문이 now 에 아직 결제 기한 안인가 — 기한 == now 는 지났다. 기한이 지난 주문을 고르는 쪽(만료 처리)은 이 반대(기한 <= now)를 써야
+     * 사이에 빠지는 주문이 없다. 사전예약 주문은 기한을 preorder 가 판정하므로 여기서 묻지 않는다.
+     *
+     * @throws IllegalStateException 사전예약 주문이다
+     */
+    public boolean acceptsPaymentAt(Instant now) {
+        if (paymentDueAt == null) {
+            throw new IllegalStateException("사전예약 주문의 기한은 preorder 가 판정한다: orderId=" + id);
+        }
+        return now.isBefore(paymentDueAt);
+    }
+
     /** 취소를 받아들일 수 있는가. 규칙은 {@link OrderStatus#isCancelable()} 에 있다. */
     public boolean isCancelable() {
         return status.isCancelable();

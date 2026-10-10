@@ -221,9 +221,12 @@ class CartConcurrencyTest {
             }
         }).given(store).lockByCustomer(customerId);
         try {
+            long started = System.nanoTime();
             assertThatThrownBy(() -> cart.add(customerId, "token", option, 1, false))
                     .isInstanceOfSatisfying(BusinessException.class,
                             e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
+            // 1초 설정이 담기의 연결에 걸렸다는 대조 — 안 걸렸으면 기본 50초를 기다린 뒤 똑같이 503 이다
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(10));
             verify(store, times(1)).lockByCustomer(customerId);
         } finally {
             release.countDown();

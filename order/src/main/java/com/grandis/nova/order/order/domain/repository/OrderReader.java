@@ -34,10 +34,10 @@ public interface OrderReader {
     List<OrderItem> findItems(UUID orderId);
 
     /**
-     * 그 회원의 아직 유효한 장바구니 주문 — 결제 대기 · 승인 중이고 기한이 now 뒤인 것. 같은 구성의 주문 생성 재요청이 새 주문 · 새 재고 확보
-     * 대신 그 주문을 돌려받는 데 쓴다.
+     * 그 회원의 결제 안 된 장바구니 주문 — 결제 대기 · 승인 중이면 기한과 상관없이 전부(기한이 지났어도 아직 확보를 쥐고 있다).
+     * 장바구니 주문 생성이 "회원당 하나" 를 지키는 데 쓴다 — 기한 판정({@link Order#acceptsPaymentAt})은 부르는 쪽이 한다.
      */
-    List<Order> findOpenCartOrders(UUID customerId, Instant now);
+    List<Order> findUnpaidCartOrders(UUID customerId);
 
     /**
      * 여러 주문의 항목을 한 번에(주문마다 다시 묻지 않는다). 주문 id · 항목 id 순이다.

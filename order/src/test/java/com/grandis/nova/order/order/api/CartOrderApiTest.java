@@ -30,11 +30,17 @@ import tools.jackson.databind.json.JsonMapper;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 
 import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -203,10 +209,10 @@ class CartOrderApiTest {
         UUID phone = sellable(10);
         cartLine(phone, false, 1);
         String first = data(place(item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
-        java.util.concurrent.CountDownLatch authorized = new java.util.concurrent.CountDownLatch(1);
-        java.util.concurrent.CountDownLatch commit = new java.util.concurrent.CountDownLatch(1);
+        CountDownLatch authorized = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
         TransactionTemplate tx = new TransactionTemplate(transactionManager);
-        java.util.concurrent.CompletableFuture<Void> payment = java.util.concurrent.CompletableFuture.runAsync(() -> tx.executeWithoutResult(s -> {
+        CompletableFuture<Void> payment = CompletableFuture.runAsync(() -> tx.executeWithoutResult(s -> {
             assertThat(jdbcTemplate.update("""
                     UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-race'
                      WHERE order_token = ? AND status = 'AWAITING_PAYMENT'""", first)).isEqualTo(1);
@@ -214,7 +220,7 @@ class CartOrderApiTest {
             await(commit);
         }));
         await(authorized);
-        java.util.concurrent.CompletableFuture<Integer> replace = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+        CompletableFuture<Integer> replace = CompletableFuture.supplyAsync(() -> {
             try {
                 return perform("""
                         {"source":"CART","items":[%s],"shipTo":%s}""".formatted(item(phone, 1, false), OTHER_SHIP_TO))
@@ -225,9 +231,9 @@ class CartOrderApiTest {
         });
         waitForQuery("SELECT status FROM orders WHERE id = %FOR UPDATE");
         commit.countDown();
-        payment.get(20, java.util.concurrent.TimeUnit.SECONDS);
+        payment.get(20, TimeUnit.SECONDS);
 
-        assertThat(replace.get(20, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo(409);
+        assertThat(replace.get(20, TimeUnit.SECONDS)).isEqualTo(409);
         assertThat(orderCount()).isEqualTo(1);
         assertThat(orderStatus(first)).isEqualTo("AUTHORIZING");
         assertThat(reserved(phone)).isEqualTo(1);
@@ -289,17 +295,91 @@ class CartOrderApiTest {
     }
 
     @Test
-    @DisplayName("기한이 지난 주문은 다시 쓰지 않는다 — 같은 구성이어도 새 주문")
-    void expiredOrderIsNotReused() throws Exception {
+    @DisplayName("기한이 지난 결제 대기 주문은 다시 쓰지 않고, 아직 확보를 쥐고 있으니 새 주문이 취소 · 반환한다 — 같은 구성이어도")
+    void expiredOrderIsNotReusedButReplaced() throws Exception {
         UUID phone = sellable(10);
         cartLine(phone, false, 1);
         String first = data(place(item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
-        // 저장은 UTC 다 — JVM 시간대(KST)로 바인딩되는 Timestamp 를 쓰지 않고 DB 의 UTC 로 기한을 지나게 한다
-        jdbcTemplate.update("UPDATE orders SET payment_due_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE order_token = ?", first);
+        expire(first);
 
         String second = data(place(item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
 
         assertThat(second).isNotEqualTo(first);
+        assertThat(orderStatus(first)).isEqualTo("CANCELED");
+        assertThat(reserved(phone)).isEqualTo(1);
+        assertThat(openOrderCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("기한이 지난 승인 중 주문도 결제가 진행 중이다 — 새 장바구니 주문은 409(승인 호출은 기한을 넘길 수 있다)")
+    void expiredAuthorizingOrderStillBlocks() throws Exception {
+        UUID phone = sellable(10);
+        cartLine(phone, false, 1);
+        String first = data(place(item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
+        jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-4' WHERE order_token = ?", first);
+        expire(first);
+
+        expectError(perform("""
+                {"source":"CART","items":[%s],"shipTo":%s}""".formatted(item(phone, 1, false), OTHER_SHIP_TO)), 409, "STATE_CONFLICT");
+        assertThat(orderCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("보증가 · 금액 칸 말고 보증 수량만 달라도 다른 구성 — 2개 중 보증 1 뒤에 보증 2 는 새 주문")
+    void warrantyQuantityIsPartOfComposition() throws Exception {
+        UUID phone = sellable(10);
+        cartLine(phone, false, 1);
+        cartLine(phone, true, 1);
+        String first = data(place(item(phone, 1, false), item(phone, 1, true)).andExpect(status().isCreated())).get("orderId").asString();
+
+        jdbcTemplate.update("DELETE FROM cart_items WHERE customer_id = ? AND warranty_selected = 0", (Object) bytes(customerId));
+        jdbcTemplate.update("UPDATE cart_items SET quantity = 2 WHERE customer_id = ?", (Object) bytes(customerId));
+        String second = data(place(item(phone, 2, true)).andExpect(status().isCreated())).get("orderId").asString();
+
+        assertThat(second).isNotEqualTo(first);
+        assertThat(orderStatus(first)).isEqualTo("CANCELED");
+        assertThat(orderTotal(second)).isEqualByComparingTo(PRICE.multiply(BigDecimal.valueOf(2)).add(WARRANTY.multiply(BigDecimal.valueOf(2))));
+    }
+
+    /**
+     * 앞 주문의 반환과 새 주문의 확보는 옵션별 증감 하나로 합쳐 잠금 순서대로 한다 — 결정적으로 본다.
+     * 앞 주문은 뒤 옵션(high)을, 재주문은 앞 옵션(low)을 잡는다. 다른 트랜잭션이 정상 순서로 low → high 를 확보하는 사이, low 에서 기다리는
+     * 재주문은 high 를 아직 쥐지 않아 교착이 없다. 반환(high)을 먼저 따로 하면 재주문이 high 를 쥔 채 low 를 기다려 교착(1213)이다.
+     */
+    @Test
+    void replacementAppliesReleaseAndReserveInOneLockOrder() throws Exception {
+        List<UUID> options = new ArrayList<>(List.of(sellable(10), sellable(10)));
+        options.sort((a, b) -> Arrays.compareUnsigned(bytes(a), bytes(b)));
+        UUID low = options.get(0);
+        UUID high = options.get(1);
+        cartLine(high, false, 1);
+        cartLine(low, false, 1);
+        String first = data(place(item(high, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
+        CountDownLatch reservedLow = new CountDownLatch(1);
+        CountDownLatch reorderWaiting = new CountDownLatch(1);
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        CompletableFuture<Void> other = CompletableFuture.runAsync(() -> tx.executeWithoutResult(status -> {
+            stock.reserve(Map.of(low, 1));
+            reservedLow.countDown();
+            await(reorderWaiting);
+            stock.reserve(Map.of(high, 1));
+        }));
+        await(reservedLow);
+        CompletableFuture<Integer> reorder = CompletableFuture.supplyAsync(() -> {
+            try {
+                return place(item(low, 1, false)).andReturn().getResponse().getStatus();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        waitForQuery("UPDATE option_inventories SET stock_reserved = stock_reserved %");
+        reorderWaiting.countDown();
+
+        assertThat(other).as("상관없는 확보는 교착에 끌려들지 않는다").succeedsWithin(Duration.ofSeconds(20));
+        assertThat(reorder.get(20, TimeUnit.SECONDS)).isEqualTo(201);
+        assertThat(orderStatus(first)).isEqualTo("CANCELED");
+        assertThat(reserved(low)).isEqualTo(2);
+        assertThat(reserved(high)).isEqualTo(1);
     }
 
     @Test
@@ -389,7 +469,7 @@ class CartOrderApiTest {
         expectViolation(place(String.format("""
                 {"variantId":"%s","quantity":1,"warranty":true,"expectedUnitPrice":1250000}""", phone)), "items.expectedWarrantyPrice");
         expectViolation(place(item(phone, 0, false)), "items[0].quantity");
-        expectViolation(place(java.util.stream.IntStream.range(0, 51).mapToObj(i -> item(UUID.randomUUID(), 1, false)).toArray(String[]::new)),
+        expectViolation(place(IntStream.range(0, 51).mapToObj(i -> item(UUID.randomUUID(), 1, false)).toArray(String[]::new)),
                 "items");
         expectViolation(perform("""
                 {"source":"BUY_NOW","items":[%s],"shipTo":%s}""".formatted(item(phone, 1, false), SHIP_TO)), "source");
@@ -459,23 +539,23 @@ class CartOrderApiTest {
      */
     @Test
     void reservationLocksOptionsInStorageOrderRegardlessOfRequestOrder() throws Exception {
-        List<UUID> options = new java.util.ArrayList<>(List.of(sellable(10), sellable(10)));
-        options.sort((a, b) -> java.util.Arrays.compareUnsigned(bytes(a), bytes(b)));
+        List<UUID> options = new ArrayList<>(List.of(sellable(10), sellable(10)));
+        options.sort((a, b) -> Arrays.compareUnsigned(bytes(a), bytes(b)));
         UUID first = options.get(0);
         UUID second = options.get(1);
         cartLine(second, false, 1);
         cartLine(first, false, 1);
-        java.util.concurrent.CountDownLatch reservedFirst = new java.util.concurrent.CountDownLatch(1);
-        java.util.concurrent.CountDownLatch requestWaiting = new java.util.concurrent.CountDownLatch(1);
+        CountDownLatch reservedFirst = new CountDownLatch(1);
+        CountDownLatch requestWaiting = new CountDownLatch(1);
         TransactionTemplate tx = new TransactionTemplate(transactionManager);
-        java.util.concurrent.CompletableFuture<Void> holder = java.util.concurrent.CompletableFuture.runAsync(() -> tx.executeWithoutResult(s -> {
+        CompletableFuture<Void> holder = CompletableFuture.runAsync(() -> tx.executeWithoutResult(s -> {
             stock.reserve(Map.of(first, 1));
             reservedFirst.countDown();
             await(requestWaiting);
             stock.reserve(Map.of(second, 1));
         }));
         await(reservedFirst);
-        java.util.concurrent.CompletableFuture<Integer> request = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+        CompletableFuture<Integer> request = CompletableFuture.supplyAsync(() -> {
             try {
                 return place(item(second, 1, false), item(first, 1, false)).andReturn().getResponse().getStatus();
             } catch (Exception e) {
@@ -486,7 +566,7 @@ class CartOrderApiTest {
         requestWaiting.countDown();
 
         assertThat(holder).as("교착 없이 커밋").succeedsWithin(Duration.ofSeconds(20));
-        assertThat(request.get(20, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo(201);
+        assertThat(request.get(20, TimeUnit.SECONDS)).isEqualTo(201);
         assertThat(reserved(first)).isEqualTo(2);
         assertThat(reserved(second)).isEqualTo(2);
     }
@@ -507,6 +587,11 @@ class CartOrderApiTest {
         return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.optionTitle(), o.sku(), o.price(), optionStatus,
                 o.saleMode(), productStatus, visible, true,
                 new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), o.imageUrl());
+    }
+
+    /** 저장은 UTC 다 — JVM 시간대(KST)로 바인딩되는 Timestamp 를 쓰지 않고 DB 의 UTC 로 기한을 지나게 한다. */
+    private void expire(String orderToken) {
+        jdbcTemplate.update("UPDATE orders SET payment_due_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE order_token = ?", orderToken);
     }
 
     private static CatalogOption copyPrice(CatalogOption o, BigDecimal price) {
@@ -545,9 +630,9 @@ class CartOrderApiTest {
         throw new AssertionError("잠금 대기가 생기지 않았다");
     }
 
-    private static void await(java.util.concurrent.CountDownLatch latch) {
+    private static void await(CountDownLatch latch) {
         try {
-            if (!latch.await(20, java.util.concurrent.TimeUnit.SECONDS)) {
+            if (!latch.await(20, TimeUnit.SECONDS)) {
                 throw new IllegalStateException("기다리다 시간 초과");
             }
         } catch (InterruptedException e) {

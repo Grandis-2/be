@@ -160,4 +160,20 @@ class OrderTest {
 
         assertThatThrownBy(() -> Order.place(withWarranty, OrderToken.issue(), Instant.EPOCH)).isInstanceOf(IllegalArgumentException.class);
     }
+
+    /** 기한 == now 는 지났다 — 기한이 지난 주문을 고르는 쪽(만료 처리)은 기한 <= now 를 써야 사이에 빠지는 주문이 없다(계약). */
+    @Test
+    void cartOrderAcceptsPaymentStrictlyBeforeDue() {
+        Instant now = Instant.parse("2026-10-10T06:00:00Z");
+        Order order = Order.place(new OrderDraft(TestIds.id(1), OrderSource.CART, null, null, SHIP_TO, List.of(line(TestIds.id(10), 1, 1000))),
+                OrderToken.issue(), now);
+        Instant due = now.plus(Order.PAYMENT_WINDOW);
+
+        assertThat(order.acceptsPaymentAt(due.minusNanos(1))).isTrue();
+        assertThat(order.acceptsPaymentAt(due)).isFalse();
+        assertThatThrownBy(() -> Order.place(new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, SHIP_TO,
+                List.of(line(TestIds.id(10), 1, 1000))), OrderToken.issue(), now).acceptsPaymentAt(now))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
 }

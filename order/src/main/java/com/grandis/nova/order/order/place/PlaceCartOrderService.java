@@ -33,6 +33,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -72,7 +73,7 @@ public class PlaceCartOrderService {
     private static final Logger log = LoggerFactory.getLogger(PlaceCartOrderService.class);
 
     static final int MAX_ATTEMPTS = 2;
-    /** 값이 다른 같은 구성의 새 주문이 앞 주문을 바꿀 때의 이력 사유. */
+    /** 새 장바구니 주문이 결제 안 된 앞 장바구니 주문을 취소할 때의 이력 사유(회원당 하나). */
     static final String REPLACED_REASON = "REPLACED_BY_NEW_ORDER";
     /** 주문의 재고 부족 문구(명세 POST /orders). 같은 코드의 기본 문구는 장바구니 담기의 것이다. */
     static final String SHORTAGE_MESSAGE = "주문 전체 수량을 확보할 수 없습니다.";
@@ -141,18 +142,21 @@ public class PlaceCartOrderService {
 
     private PlaceResult placeLocked(UUID customerId, List<CartSelection> selections, OrderDraft draft, EventCause cause) {
         requireInCart(selections, cart.lockByCustomer(customerId));
-        List<Order> open = orderReader.findOpenCartOrders(customerId, clock.instant());
-        Map<UUID, List<OrderItem>> itemsByOrder = orderReader.findItemsByOrderIds(open.stream().map(Order::id).toList()).stream()
+        List<Order> unpaid = orderReader.findUnpaidCartOrders(customerId);
+        Map<UUID, List<OrderItem>> itemsByOrder = orderReader.findItemsByOrderIds(unpaid.stream().map(Order::id).toList()).stream()
                 .collect(Collectors.groupingBy(OrderItem::orderId));
-        for (Order order : open) {
+        Instant now = clock.instant();
+        for (Order order : unpaid) {
             List<OrderItem> items = itemsByOrder.getOrDefault(order.id(), List.of());
-            if (sameComposition(items, draft.lines()) && sameValues(order, items, draft)) {
+            if (order.acceptsPaymentAt(now) && sameComposition(items, draft.lines()) && sameValues(order, items, draft)) {
                 return new PlaceResult(order, items, false);
             }
         }
-        for (Order order : open) {
-            // 승인 중이면(읽을 때 이미 그랬든, 읽은 뒤 잠그기 전에 결제 시작이 바꿨든 — 결제 시작은 주문 행만 잠가 장바구니 잠금으로 막히지 않는다)
-            // 바꾸지 않고 409 다. 판정은 잠근 뒤에만 한다. 만료로 이미 취소된 주문만 그냥 지나간다(반환도 이미 했다).
+        Map<UUID, Integer> released = new HashMap<>();
+        for (Order order : unpaid) {
+            // 결제 대기가 아니면(읽을 때 이미 승인 중이었든, 읽은 뒤 잠그기 전에 결제 시작이 바꿨든 — 결제 시작은 주문 행만 잠가 장바구니 잠금으로
+            // 막히지 않는다) 바꾸지 않고 409 다. 판정은 잠근 뒤에만 한다. 기한이 지났어도 같다(확보를 쥐고 있고, 승인 호출은 기한을 넘길 수 있다).
+            // 다른 취소(만료 처리 · 사용자 취소)가 먼저 취소했으면 그냥 지나간다 — 반환은 그쪽이 했다.
             OrderTransition canceled = ledger.cancelUnpaidReleasingStock(order.id(), EventCause.system(REPLACED_REASON));
             if (!canceled.applied()) {
                 if (canceled.status() != OrderStatus.CANCELED) {
@@ -160,13 +164,11 @@ public class PlaceCartOrderService {
                 }
                 continue;
             }
-            try {
-                stock.release(quantities(itemsByOrder.get(order.id()).stream().map(OrderItem::line).toList()));
-            } catch (IllegalStateException e) {
-                throw new IllegalStateException("바꾸는 앞 주문의 확보를 반환하지 못했다: orderId=" + order.id(), e);
-            }
+            itemsByOrder.getOrDefault(order.id(), List.of())
+                    .forEach(item -> released.merge(item.line().optionId(), item.line().quantity().value(), Integer::sum));
         }
-        stock.reserve(quantities(draft.lines()));
+        // 반환과 확보를 옵션별 증감 하나로 합쳐 잠금 순서대로 한 번에 — 따로 돌면 재고 행 잠금 순서가 깨진다
+        stock.releaseAndReserve(released, quantities(draft.lines()));
         Order order = ledger.place(draft, cause);
         return new PlaceResult(order, orderReader.findItems(order.id()), true);
     }

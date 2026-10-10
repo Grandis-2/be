@@ -155,9 +155,9 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     @Override
-    public List<Order> findOpenCartOrders(UUID customerId, Instant now) {
-        return orders.findByCustomerIdAndSourceAndStatusInAndPaymentDueAtAfter(customerId, OrderSource.CART,
-                List.of(OrderStatus.AWAITING_PAYMENT, OrderStatus.AUTHORIZING), now).stream().map(OrderMapper::toDomain).toList();
+    public List<Order> findUnpaidCartOrders(UUID customerId) {
+        return orders.findByCustomerIdAndSourceAndStatusIn(customerId, OrderSource.CART,
+                List.of(OrderStatus.AWAITING_PAYMENT, OrderStatus.AUTHORIZING)).stream().map(OrderMapper::toDomain).toList();
     }
 
     @Override

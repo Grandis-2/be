@@ -136,12 +136,9 @@ class JpaOrderStoreTest {
         assertThat(writer.lockStatus(UUID.randomUUID())).isEmpty();
     }
 
-    /**
-     * 보증 칸까지 왕복하고, 열린 장바구니 주문은 기한이 now 보다 뒤인 것만이다 — 기한 == now 는 지났다.
-     * 이 경계는 계약이다: 기한이 지난 주문을 고르는 쪽(만료 처리)은 이 반대(기한 <= now)를 골라야 사이에 빠지는 주문이 없다.
-     */
+    /** 보증 칸까지 왕복하고, 결제 안 된 장바구니 주문은 결제 대기 · 승인 중이면 기한과 상관없이 전부다(기한이 지나도 확보를 쥐고 있다). */
     @Test
-    void cartOrderRoundTripsWarrantyAndOpenMeansDueAfterNow() {
+    void cartOrderRoundTripsWarrantyAndUnpaidIgnoresDue() {
         Instant placedAt = Instant.parse("2026-10-10T06:00:00.123456Z");
         OrderFixtures.StockProduct stocked = fixtures.inStockProduct(1);
         UUID option = stocked.optionIds().getFirst();
@@ -156,14 +153,15 @@ class JpaOrderStoreTest {
         OrderLine line = reader.findItems(stored.id()).getFirst().line();
         assertThat(line.warrantyQuantity()).isEqualTo(2);
         assertThat(line.warrantyUnitPrice()).isEqualTo(Money.won(300));
-        Instant due = placedAt.plus(Order.PAYMENT_WINDOW);
-        assertThat(reader.findOpenCartOrders(customerId, due.minusNanos(1_000))).extracting(Order::id).containsExactly(stored.id());
-        assertThat(reader.findOpenCartOrders(customerId, due)).as("기한 == now 는 열린 주문이 아니다").isEmpty();
+        assertThat(reader.findUnpaidCartOrders(customerId)).as("기한(2026-10-10 06:10)이 오래전에 지났어도").extracting(Order::id)
+                .containsExactly(stored.id());
 
         fixtures.forceAuthorizing(stored.id(), "p-1");
-        assertThat(reader.findOpenCartOrders(customerId, placedAt)).as("승인 중도 열린 주문").hasSize(1);
+        assertThat(reader.findUnpaidCartOrders(customerId)).as("승인 중도").hasSize(1);
+        fixtures.forceStatus(stored.id(), "AWAITING_CONFIRMATION");
+        assertThat(reader.findUnpaidCartOrders(customerId)).as("결제됨은 아니다").isEmpty();
         fixtures.forceStatus(stored.id(), "CANCELED");
-        assertThat(reader.findOpenCartOrders(customerId, placedAt)).isEmpty();
+        assertThat(reader.findUnpaidCartOrders(customerId)).isEmpty();
     }
 
 }

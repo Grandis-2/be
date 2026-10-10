@@ -35,6 +35,8 @@ import java.util.stream.Collectors;
  *       재고 행은 주문의 확보 · 반환이 드나드는 자리라 쓰지 않을 행을 붙잡지 않는다.</li>
  *   <li>확보({@link #reserve}): 옵션마다 조건부 UPDATE 한 번(가용 ≥ 수량일 때만 확보 += 수량). 읽고 계산하지 않는다.</li>
  *   <li>반환({@link #release}): 옵션마다 조건부 UPDATE 한 번(확보 ≥ 수량일 때만 확보 −= 수량).</li>
+ *   <li>반환 + 확보({@link #releaseAndReserve}): 옵션마다 증감을 합쳐 한 번에 — 순증은 조건부 확보, 순감은 반환. 따로 정렬해 두 번 돌면
+ *       "반환 옵션들 → 확보 옵션들" 순서가 되어 전역 순서가 깨진다.</li>
  * </ul>
  * 잠금 순서가 요청 순서와 무관해, 옵션 순서가 다른 요청끼리 서로 기다리며 교착하지 않는다. 동시 삽입이 부르는 잠금
  * (PK 중복 확인의 S 잠금, FK 검사의 product_options 부모 S 잠금)은 이 순서 밖이라 드물게 교착할 수 있고, 그건 호출하는
@@ -111,6 +113,34 @@ public class StockLedger {
             }
             if (writer.reserve(entry.getKey(), entry.getValue(), now) != 1) {
                 shortages.add(entry.getKey());
+            }
+        }
+        if (!shortages.isEmpty()) {
+            throw new StockShortageException(shortages);
+        }
+    }
+
+    /**
+     * 앞 주문들의 반환과 새 주문의 확보를 한 트랜잭션에서 한 번에 — 옵션마다 (확보 − 반환)을 합쳐 {@link #LOCK_ORDER} 순서로 적용한다.
+     * 순증은 가용 재고가 있을 때만 확보하고(모자라면 모아 던진다), 순감은 반환한다(확보가 모자라면 데이터 어긋남), 0 은 건드리지 않는다.
+     *
+     * @param released 옵션 id → 되돌릴 수량(앞 주문들이 확보해 둔 것)
+     * @param reserved 옵션 id → 새로 확보할 수량
+     * @throws StockShortageException 순증을 확보할 가용 재고가 모자란 옵션이 있다. 호출자가 롤백한다(반환도 되돌아간다)
+     * @throws IllegalStateException  순감을 되돌릴 확보가 모자란다 — 데이터가 어긋난 것이다
+     */
+    public void releaseAndReserve(Map<UUID, Integer> released, Map<UUID, Integer> reserved) {
+        Map<UUID, Integer> net = new TreeMap<>(LOCK_ORDER);
+        reserved.forEach((option, quantity) -> net.merge(option, quantity, Integer::sum));
+        released.forEach((option, quantity) -> net.merge(option, -quantity, Integer::sum));
+        Instant now = clock.instant();
+        List<UUID> shortages = new ArrayList<>();
+        for (Map.Entry<UUID, Integer> entry : net.entrySet()) {
+            int delta = entry.getValue();
+            if (delta > 0 && writer.reserve(entry.getKey(), delta, now) != 1) {
+                shortages.add(entry.getKey());
+            } else if (delta < 0 && writer.release(entry.getKey(), -delta, now) != 1) {
+                throw new IllegalStateException("반환할 확보가 모자란다: optionId=" + entry.getKey() + ", quantity=" + -delta);
             }
         }
         if (!shortages.isEmpty()) {
