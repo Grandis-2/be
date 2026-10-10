@@ -2,7 +2,7 @@ package com.grandis.nova.order.order.cancel;
 
 import com.grandis.nova.order.MySqlLockFailures;
 import com.grandis.nova.order.order.domain.model.Order;
-import com.grandis.nova.order.order.domain.model.OrderTransition;
+import com.grandis.nova.order.order.domain.repository.ExpiredOrderPosition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
 import org.slf4j.Logger;
@@ -20,11 +20,12 @@ import java.util.List;
 /**
  * 결제 기한(10분)이 지난 결제 대기 장바구니 주문을 취소하고 재고를 돌려준다 — 결제창을 그냥 닫은 주문의 확보를 푼다(명세).
  *
- * 주기마다 기한 <= 지금인 결제 대기 주문을 기한 이른 순으로 {@link #BATCH} 개씩 고르고(잠그지 않음), 주문마다 트랜잭션 하나에서 잠근 뒤 다시
+ * 주기마다 기한 <= 지금인 결제 대기 주문을 (기한, id) 순으로 {@link #BATCH} 개씩 이어 읽어 끝까지 고르고(잠그지 않음), 주문마다 트랜잭션 하나에서 잠근 뒤 다시
  * 판정한다({@link UnpaidCartOrderRelease}) — 그 사이 결제를 시작했으면(승인 중) 건드리지 않는다. 승인 중은 결과를 받으므로 고르지도 않는다.
  * 인스턴스가 여럿이어도 같다 — 늦게 잠근 쪽은 이미 취소된 주문을 보고 지나간다(반환은 한 번).
  *
- * 한 주문의 실패(교착 · 잠금 대기 초과 · 데이터 어긋남)는 그 주문만 건너뛰고 다음 주기에 다시 고른다.
+ * 한 주문의 실패(교착 · 잠금 대기 초과 · 데이터 어긋남)는 그 주문만 건너뛰고 다음 주기에 다시 고른다 — 이어 읽기라 앞에 남은 실패 주문이
+ * 뒤 주문들을 막지 않는다. 데이터 어긋남은 반환 쪽이 "재고 어긋남" 경보를 남긴다({@link UnpaidCartOrderRelease}).
  */
 @Component
 public class CartOrderExpiry {
@@ -60,20 +61,37 @@ public class CartOrderExpiry {
      * @return 이번에 취소한 주문 수
      */
     int expireDue(Instant now) {
-        List<Order> due = orderReader.findExpiredCartOrders(now, BATCH);
+        return expireDue(now, BATCH);
+    }
+
+    /** @param batch 한 쪽의 크기 — 시험이 이어 읽기를 작은 쪽으로 태운다 */
+    int expireDue(Instant now, int batch) {
+        ExpiredOrderPosition after = ExpiredOrderPosition.START;
         int expired = 0;
-        for (Order order : due) {
-            try {
-                OrderTransition transition = writeTransaction.execute(status -> release.cancel(order.id(), EventCause.system(EXPIRED_REASON)));
-                if (transition.applied()) {
+        while (true) {
+            List<Order> page = orderReader.findExpiredCartOrders(now, after, batch);
+            for (Order order : page) {
+                if (expire(order)) {
                     expired++;
                 }
-            } catch (PessimisticLockingFailureException e) {
-                log.warn("결제 기한 만료 처리 잠금 실패(교착={}), 다음 주기에 다시 orderId={}", MySqlLockFailures.isDeadlock(e), order.id(), e);
-            } catch (RuntimeException e) {
-                log.error("결제 기한 만료 처리 실패, 다음 주기에 다시 orderId={}", order.id(), e);
             }
+            if (page.size() < batch) {
+                return expired;
+            }
+            Order last = page.getLast();
+            after = new ExpiredOrderPosition(last.paymentDueAt(), last.id());
         }
-        return expired;
+    }
+
+    /** 한 주문. 실패(교착 · 잠금 대기 초과 · 데이터 어긋남)는 그 주문만 건너뛴다 — 이어 읽기라 다음 주문들을 막지 않고, 다음 주기에 다시 고른다. */
+    private boolean expire(Order order) {
+        try {
+            return writeTransaction.execute(status -> release.cancel(order.id(), EventCause.system(EXPIRED_REASON))).applied();
+        } catch (PessimisticLockingFailureException e) {
+            log.warn("결제 기한 만료 처리 잠금 실패(교착={}), 다음 주기에 다시 orderId={}", MySqlLockFailures.isDeadlock(e), order.id(), e);
+        } catch (RuntimeException e) {
+            log.error("결제 기한 만료 처리 실패, 다음 주기에 다시 orderId={}", order.id(), e);
+        }
+        return false;
     }
 }

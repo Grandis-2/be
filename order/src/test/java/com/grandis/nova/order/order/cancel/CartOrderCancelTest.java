@@ -17,7 +17,11 @@ import com.grandis.nova.order.support.TestAuth;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -54,6 +58,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @OrderIntegrationTest
 @AutoConfigureMockMvc
+@ExtendWith(OutputCaptureExtension.class)
 class CartOrderCancelTest {
 
     static final JsonMapper JSON = JsonMapper.builder().build();
@@ -152,15 +157,16 @@ class CartOrderCancelTest {
         setDue(notYet, now.plusNanos(1_000));
         setDue(authorizing, now.minusSeconds(60));
 
-        assertThat(expiry.expireDue(now)).isEqualTo(1);
+        expiry.expireDue(now);
 
+        // 공유 DB 에 다른 시험이 남긴 기한 지난 주문이 있을 수 있어 반환값(취소 수) 대신 이 주문들의 상태로 본다
         assertThat(column(due, "status", String.class)).as("기한 == now 는 지났다").isEqualTo("CANCELED");
         assertThat(lastEvent(due)).containsEntry("actor", "SYSTEM").containsEntry("reason", "PAYMENT_EXPIRED");
         assertThat(column(notYet, "status", String.class)).isEqualTo("AWAITING_PAYMENT");
         assertThat(column(authorizing, "status", String.class)).as("승인 중은 결과를 기다린다").isEqualTo("AUTHORIZING");
         assertThat(reserved(phone)).isEqualTo(3 + 4);
-        assertThat(expiry.expireDue(now)).as("두 번 돌아도 다시 반환하지 않는다").isZero();
-        assertThat(reserved(phone)).isEqualTo(7);
+        expiry.expireDue(now);
+        assertThat(reserved(phone)).as("두 번 돌아도 다시 반환하지 않는다").isEqualTo(7);
     }
 
     @Test
@@ -175,6 +181,7 @@ class CartOrderCancelTest {
                 : expiry.expireDue(now));
 
         assertThat(outcomes).allSatisfy(o -> assertThat(o.error()).isNull());
+        assertThat(List.of(outcomes.get(0).value(), outcomes.get(2).value())).as("사용자 취소는 모두 200").containsOnly(200);
         assertThat(reserved(phone)).isZero();
         assertThat(column(order, "status", String.class)).isEqualTo("CANCELED");
         assertThat(jdbcTemplate.queryForObject("""
@@ -216,6 +223,74 @@ class CartOrderCancelTest {
         assertThat(replacing.get(20, TimeUnit.SECONDS)).isEqualTo(201);
         assertThat(reserved(phone)).as("앞 주문의 반환은 만료 쪽이 한 번").isZero();
         assertThat(reserved(watch)).isEqualTo(1);
+    }
+
+    /** 반환할 확보가 모자라면(재고 장부 어긋남) 취소하지 않고 "재고 어긋남" 경보 한 줄 — 주문 · 반환하려던 수량 · 그때의 확보를 싣는다. */
+    @Test
+    void releaseMismatchAlertsAndLeavesOrderUnpaid(CapturedOutput output) throws Exception {
+        UUID phone = sellable(10);
+        String order = placeCartOrder(phone, 3);
+        jdbcTemplate.update("UPDATE option_inventories SET stock_reserved = 1 WHERE option_id = ?", (Object) bytes(phone));
+
+        cancel(customerId, order).andExpect(status().isInternalServerError());
+
+        assertThat(column(order, "status", String.class)).isEqualTo("AWAITING_PAYMENT");
+        List<String> alerts = output.getAll().lines().filter(line -> line.contains("재고 어긋남")).toList();
+        assertThat(alerts).hasSize(1);
+        assertThat(alerts.getFirst()).contains("ERROR").contains(idOf(order).toString()).contains(phone + "=3").contains("reservedNow={" + phone + "=1}");
+    }
+
+    /** 만료는 (기한, id) 로 이어 읽는다 — 앞에서 늘 실패하는 주문(데이터 어긋남)이 있어도 뒤 주문들을 처리한다. 쪽 크기 1 로 쪽 넘김까지 태운다. */
+    @Test
+    @Timeout(value = 30, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)   // 이어 읽기가 고장 나면 같은 쪽을 끝없이 돈다 — 그래도 끝나게
+    void expirySkipsFailingOrderAndContinues() {
+        UUID phone = sellable(10);
+        UUID other = fixtures.customer();
+        String broken = placeCartOrder(phone, 3);
+        String healthy = placeCartOrderOf(other, phone, 2);
+        Instant now = dueAt(healthy);
+        setDue(broken, now.minusSeconds(1));
+        jdbcTemplate.update("UPDATE option_inventories SET stock_reserved = 2 WHERE option_id = ?", (Object) bytes(phone));
+
+        expiry.expireDue(now, 1);
+
+        assertThat(column(broken, "status", String.class)).as("어긋난 주문은 남는다").isEqualTo("AWAITING_PAYMENT");
+        assertThat(column(healthy, "status", String.class)).as("뒤 주문은 처리된다").isEqualTo("CANCELED");
+        assertThat(reserved(phone)).isZero();
+    }
+
+    /**
+     * 같은 구성 · 값으로 다시 주문하는데 그 주문을 다른 취소(사용자 취소 · 만료)가 먼저 취소하면 돌려주지 않는다 — 잠가 다시 본다. 결정적으로 본다:
+     * 취소 쪽 트랜잭션이 취소 · 반환한 채 커밋하지 않고, 재주문이 그 주문 행 잠금에서 기다리는 것을 확인한 뒤 커밋한다 → 새 주문(201).
+     */
+    @Test
+    void reuseCandidateCanceledMeanwhileIsNotReturned() throws Exception {
+        UUID phone = sellable(10);
+        String first = placeCartOrder(phone, 2);
+        CountDownLatch canceled = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        CompletableFuture<Void> canceling = CompletableFuture.runAsync(() -> tx.executeWithoutResult(status -> {
+            assertThat(release.cancel(idOf(first), EventCause.user()).applied()).isTrue();
+            canceled.countDown();
+            await(commit);
+        }));
+        await(canceled);
+        CompletableFuture<String> again = CompletableFuture.supplyAsync(() -> {
+            try {
+                return placeRequest(customerId, item(phone, 2)).andReturn().getResponse().getContentAsString();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        waitForQuery("SELECT status FROM orders WHERE id = %FOR UPDATE");
+        commit.countDown();
+        canceling.get(20, TimeUnit.SECONDS);
+
+        String body = again.get(20, TimeUnit.SECONDS);
+        assertThat(JSON.readTree(body).get("data").get("reused").asBoolean()).isFalse();
+        assertThat(JSON.readTree(body).get("data").get("orderId").asString()).isNotEqualTo(first);
+        assertThat(reserved(phone)).as("앞 주문 반환 한 번 + 새 확보").isEqualTo(2);
     }
 
     private UUID sellable(int stock) {

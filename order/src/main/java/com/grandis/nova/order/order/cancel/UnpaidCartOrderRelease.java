@@ -6,11 +6,15 @@ import com.grandis.nova.order.order.domain.model.OrderTransition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
 import com.grandis.nova.order.stock.StockLedger;
+import com.grandis.nova.order.stock.domain.repository.StockReader;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -27,12 +31,16 @@ public class UnpaidCartOrderRelease {
 
     private final OrderLedger ledger;
     private final OrderReader orderReader;
-    private final StockLedger stock;
+    private static final Logger log = LoggerFactory.getLogger(UnpaidCartOrderRelease.class);
 
-    public UnpaidCartOrderRelease(OrderLedger ledger, OrderReader orderReader, StockLedger stock) {
+    private final StockLedger stock;
+    private final StockReader stockReader;
+
+    public UnpaidCartOrderRelease(OrderLedger ledger, OrderReader orderReader, StockLedger stock, StockReader stockReader) {
         this.ledger = ledger;
         this.orderReader = orderReader;
         this.stock = stock;
+        this.stockReader = stockReader;
     }
 
     /** @throws IllegalStateException 반환할 확보가 모자란다 — 데이터 어긋남. 취소도 롤백된다 */
@@ -46,6 +54,11 @@ public class UnpaidCartOrderRelease {
             try {
                 stock.release(reserved);
             } catch (IllegalStateException e) {
+                // 경보 규칙이 이 문구("재고 어긋남")로 잡는다 — 결제 반영 · 장바구니 주문 생성의 같은 경보와 같은 문구다. 바꾸지 않는다
+                Map<UUID, Integer> reservedNow = new LinkedHashMap<>();
+                stockReader.findByOptionIds(reserved.keySet()).forEach(level -> reservedNow.put(level.optionId(), level.reserved()));
+                log.error("재고 어긋남 — 결제 안 된 장바구니 주문의 확보를 반환하지 못해 취소하지 않았다, 재고 장부 확인 필요 orderId={} released={} reservedNow={}",
+                        orderId, reserved, reservedNow, e);
                 throw new IllegalStateException("취소한 주문의 확보를 반환하지 못했다: orderId=" + orderId, e);
             }
         }

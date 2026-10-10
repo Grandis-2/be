@@ -31,9 +31,16 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
 
     List<OrderJpaEntity> findByCustomerIdAndSourceAndStatusIn(UUID customerId, OrderSource source, Collection<OrderStatus> statuses);
 
-    /** ix_order_due(status, payment_due_at) 를 탄다. */
-    List<OrderJpaEntity> findBySourceAndStatusAndPaymentDueAtLessThanEqualOrderByPaymentDueAtAsc(OrderSource source, OrderStatus status,
-                                                                                            Instant now, Limit limit);
+    /** (기한, id) 이어 읽기. 같은 기한은 id 로 가른다. */
+    @Query("""
+            select o from OrderJpaEntity o
+             where o.source = :source and o.status = :status and o.paymentDueAt <= :now
+               and (o.paymentDueAt > :afterDue or (o.paymentDueAt = :afterDue and o.id > :afterId))
+             order by o.paymentDueAt asc, o.id asc
+            """)
+    List<OrderJpaEntity> findExpiredAfter(@Param("source") OrderSource source, @Param("status") OrderStatus status,
+                                          @Param("now") Instant now, @Param("afterDue") Instant afterDue, @Param("afterId") UUID afterId,
+                                          Limit limit);
 
     @Modifying(flushAutomatically = true)
     @Query("""
