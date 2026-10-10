@@ -40,6 +40,12 @@ public interface OrderReader {
     List<Order> findUnpaidCartOrders(UUID customerId);
 
     /**
+     * 기한이 지난 결제 대기 장바구니 주문 — 기한 <= now({@link Order#acceptsPaymentAt} 의 반대, 사이에 빠지는 주문이 없다). 기한이 이른 순,
+     * 최대 limit 개. 잠그지 않는다 — 취소는 주문마다 잠근 뒤 다시 판정한다. 승인 중은 고르지 않는다(결과를 기다린다).
+     */
+    List<Order> findExpiredCartOrders(Instant now, int limit);
+
+    /**
      * 여러 주문의 항목을 한 번에(주문마다 다시 묻지 않는다). 주문 id · 항목 id 순이다.
      *
      * findItems(UUID) 의 오버로드로 두지 않는다 — 인자 타입만 다른 오버로드는 목 매처(any())나 null 과 만나면

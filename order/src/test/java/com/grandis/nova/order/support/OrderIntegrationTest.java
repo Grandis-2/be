@@ -34,6 +34,8 @@ import java.lang.annotation.Target;
         "nova.outbox.transport=log",
         "nova.outbox.log-transport-allowed=true",
         "nova.outbox.relay-interval=1h",
+        // 결제 기한 만료도 시험이 직접 부른다(CartOrderExpiry.expireDue) — 주기 실행이 다른 시험의 주문을 취소하지 않게
+        "nova.cart-order.expiry-interval=1h",
         // 관리 포트는 코드 기본값이 고정 포트라, 실제 포트로 띄우는 컨텍스트끼리 겹치지 않게 빈 포트로 둔다
         "management.server.port=0",
         "jwt.issuer=nova-test",

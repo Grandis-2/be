@@ -3,6 +3,7 @@ package com.grandis.nova.order.order.persistence.repository;
 import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.persistence.entity.OrderJpaEntity;
+import org.springframework.data.domain.Limit;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Modifying;
@@ -29,6 +30,10 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
     Optional<OrderJpaEntity> findByPreorderId(UUID preorderId);
 
     List<OrderJpaEntity> findByCustomerIdAndSourceAndStatusIn(UUID customerId, OrderSource source, Collection<OrderStatus> statuses);
+
+    /** ix_order_due(status, payment_due_at) 를 탄다. */
+    List<OrderJpaEntity> findBySourceAndStatusAndPaymentDueAtLessThanEqualOrderByPaymentDueAtAsc(OrderSource source, OrderStatus status,
+                                                                                            Instant now, Limit limit);
 
     @Modifying(flushAutomatically = true)
     @Query("""
