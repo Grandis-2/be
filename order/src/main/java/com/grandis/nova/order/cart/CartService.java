@@ -202,7 +202,6 @@ public class CartService {
                 option.imageUrl(), line.warranty(), line.quantity(), option.price(), warrantyPrice, lineAmount, available, reason);
     }
 
-    /** catalog 호출이 트랜잭션 안에 들어가면 그 응답 시간만큼 잠금을 쥔다 — 바깥 트랜잭션에서 부르지 않는다. */
     /**
      * 장바구니 쓰기 한 번 = 트랜잭션 하나. 겨루기에 지면 새 트랜잭션에서 다시 한다(요청 스레드라 시도 사이에 기다리지 않는다).
      * - 같은 줄 넣기가 겹쳐 유일 키에 걸림({@link CartSlotTakenException}) — 다시 하면 그 줄에 합산된다. 또 겹치면 409 STATE_CONFLICT.
@@ -233,6 +232,7 @@ public class CartService {
         }
     }
 
+    /** catalog 호출이 트랜잭션 안에 들어가면 그 응답 시간만큼 잠금을 쥔다 — 바깥 트랜잭션에서 부르지 않는다. */
     private static void requireNoTransaction() {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("장바구니 조회 · 쓰기는 트랜잭션 밖에서 불러야 한다 — catalog 호출 동안 잠금을 쥐지 않고, 다시 하기가 새 트랜잭션이게");

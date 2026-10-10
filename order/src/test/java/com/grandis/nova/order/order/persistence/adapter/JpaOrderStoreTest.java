@@ -136,7 +136,10 @@ class JpaOrderStoreTest {
         assertThat(writer.lockStatus(UUID.randomUUID())).isEmpty();
     }
 
-    /** 보증 칸까지 왕복하고, 열린 장바구니 주문은 기한이 now 보다 뒤인 것만이다 — 기한 == now 는 지났다(만료 처리는 기한 <= now 를 고른다). */
+    /**
+     * 보증 칸까지 왕복하고, 열린 장바구니 주문은 기한이 now 보다 뒤인 것만이다 — 기한 == now 는 지났다.
+     * 이 경계는 계약이다: 기한이 지난 주문을 고르는 쪽(만료 처리)은 이 반대(기한 <= now)를 골라야 사이에 빠지는 주문이 없다.
+     */
     @Test
     void cartOrderRoundTripsWarrantyAndOpenMeansDueAfterNow() {
         Instant placedAt = Instant.parse("2026-10-10T06:00:00.123456Z");

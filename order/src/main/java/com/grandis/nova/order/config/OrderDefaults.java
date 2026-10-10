@@ -37,7 +37,7 @@ class OrderDefaults implements EnvironmentPostProcessor, Ordered {
 
     /**
      * 장바구니의 catalog 호출 장애 대응(preorder 의 내부 호출과 같은 값). 서킷 브레이커(50건 중 실패 · 1초 넘는 호출이 절반이면 10초 열림)
-     * → 동시 호출 상한(20, 기다리지 않음). 4xx 와 상한 초과는 상대 장애가 아니라 회로의 실패로 세지 않는다. 재시도는 하지 않는다 —
+     * → 동시 호출 상한(20, 기다리지 않음). 4xx(429 포함 — preorder 와 같은 정책)와 상한 초과는 상대 장애가 아니라 회로의 실패로 세지 않는다. 재시도는 하지 않는다 —
      * 화면 조회라 사용자가 다시 부르고, 읽기 1초에 재시도가 붙으면 응답이 그만큼 늘어난다. 값은 부하 실측으로 확정한다.
      */
     private static void catalogResilience(Map<String, Object> defaults) {

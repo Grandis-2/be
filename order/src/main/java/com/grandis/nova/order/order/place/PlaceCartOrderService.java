@@ -16,6 +16,7 @@ import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderDraft;
 import com.grandis.nova.order.order.domain.model.OrderItem;
+import com.grandis.nova.order.order.domain.model.OrderTransition;
 import com.grandis.nova.order.order.domain.model.OrderLine;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
@@ -57,8 +58,8 @@ import java.util.stream.Collectors;
  *    새로 만들 때: 재고 확보({@link StockLedger#reserve}) → 주문 · 주문상품 · 첫 이력, 기한 = 지금 + 10분.
  *
  * - 같은 회원의 주문 생성끼리는 장바구니 줄 잠금으로 줄 선다 — 두 번 누른 요청은 뒤의 것이 앞의 주문을 돌려받는다.
- * - 잠금 순서: 장바구니 줄 → (바꿀 앞 주문 행) → 재고 행. 결제 성공은 주문 행 → 장바구니 줄 → 재고 행이라, 앞 주문이 승인 중으로 바뀌며
- *   결제 결과를 받는 순간과 겹치면 교착할 수 있다 — 그건 아래의 다시 하기가 흡수한다(다음 시도는 승인 중을 보고 409).
+ * - 잠금 순서: 장바구니 줄 → (바꿀 앞 주문 행) → 재고 행. 열린 주문은 잠그지 않고 읽으므로, 그 사이 결제 시작(주문 행만 잠근다)이
+ *   앞 주문을 승인 중으로 바꿀 수 있다 — 주문 행을 잠근 뒤 다시 보고 승인 중이면 409 다(새 주문 · 확보 없음, 시험으로 고정).
  * - 같은 옵션의 보증 포함 · 미포함 두 줄은 주문상품 한 줄로 합친다(수량 = 합, 보증 수량 = 보증 줄의 수량).
  * - 장바구니는 여기서 바꾸지 않는다 — 결제 성공 때 산 만큼 뺀다(명세).
  * - 교착(1213)은 새 트랜잭션에서 다시 하고(최대 {@link #MAX_ATTEMPTS}번), 끝내 교착이거나 잠금 대기 초과(1205)면 503 이다.
@@ -157,8 +158,19 @@ public class PlaceCartOrderService {
             replaced.add(order);
         }
         for (Order order : replaced) {
-            if (ledger.cancelUnpaidReleasingStock(order.id(), EventCause.system(REPLACED_REASON)).applied()) {
+            // 읽을 때는 결제 대기였어도 잠그고 보면 승인 중일 수 있다(결제 시작은 주문 행만 잠가 장바구니 잠금으로 막히지 않는다).
+            // 그러면 바꾸지 않고 409 — 만료로 이미 취소된 주문만 그냥 지나간다(반환도 이미 했다).
+            OrderTransition canceled = ledger.cancelUnpaidReleasingStock(order.id(), EventCause.system(REPLACED_REASON));
+            if (!canceled.applied()) {
+                if (canceled.status() != OrderStatus.CANCELED) {
+                    throw new BusinessException(OrderErrorCode.STATE_CONFLICT);
+                }
+                continue;
+            }
+            try {
                 stock.release(quantities(itemsByOrder.get(order.id()).stream().map(OrderItem::line).toList()));
+            } catch (IllegalStateException e) {
+                throw new IllegalStateException("바꾸는 앞 주문의 확보를 반환하지 못했다: orderId=" + order.id(), e);
             }
         }
         stock.reserve(quantities(draft.lines()));

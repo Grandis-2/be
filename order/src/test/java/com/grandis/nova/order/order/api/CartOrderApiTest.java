@@ -174,6 +174,66 @@ class CartOrderApiTest {
     }
 
     @Test
+    @DisplayName("보증가만 달라도 새 주문 · 앞 주문 취소 — 보증 줄의 값도 사용자가 확인한 그대로여야 한다")
+    void changedWarrantyPriceReplacesUnpaidOrder() throws Exception {
+        UUID phone = sellable(10);
+        cartLine(phone, true, 1);
+        String first = data(place(item(phone, 1, true)).andExpect(status().isCreated())).get("orderId").asString();
+
+        CatalogOption current = catalog.get(phone);
+        catalog.put(phone, new CatalogOption(current.optionId(), current.productId(), current.productTitle(), current.optionTitle(), current.sku(),
+                current.price(), current.optionStatus(), current.saleMode(), current.productStatus(), current.visible(),
+                current.registrationCompleted(), new CatalogOption.Warranty(true, new BigDecimal("149000")), current.imageUrl()));
+        String second = data(place("""
+                {"variantId":"%s","quantity":1,"warranty":true,"expectedUnitPrice":1250000,"expectedWarrantyPrice":149000}""".formatted(phone))
+                .andExpect(status().isCreated())).get("orderId").asString();
+
+        assertThat(second).isNotEqualTo(first);
+        assertThat(orderStatus(first)).isEqualTo("CANCELED");
+        assertThat(orderTotal(second)).isEqualByComparingTo("1399000");
+        assertThat(reserved(phone)).isEqualTo(1);
+    }
+
+    /**
+     * 열린 주문은 잠그지 않고 읽는다 — 읽은 뒤 잠그기 전에 결제 시작(주문 행만 잠근다)이 앞 주문을 승인 중으로 바꾸면, 잠근 뒤 다시 보고 409 다.
+     * 결정적으로 본다: 다른 트랜잭션이 앞 주문을 승인 중으로 바꾼 채 커밋하지 않고, 값이 다른 재주문이 그 행 잠금에서 기다리는 것을 확인한 뒤 커밋한다.
+     */
+    @Test
+    void orderTurningAuthorizingWhileReplacingIsConflict() throws Exception {
+        UUID phone = sellable(10);
+        cartLine(phone, false, 1);
+        String first = data(place(item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
+        java.util.concurrent.CountDownLatch authorized = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch commit = new java.util.concurrent.CountDownLatch(1);
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        java.util.concurrent.CompletableFuture<Void> payment = java.util.concurrent.CompletableFuture.runAsync(() -> tx.executeWithoutResult(s -> {
+            assertThat(jdbcTemplate.update("""
+                    UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-race'
+                     WHERE order_token = ? AND status = 'AWAITING_PAYMENT'""", first)).isEqualTo(1);
+            authorized.countDown();
+            await(commit);
+        }));
+        await(authorized);
+        java.util.concurrent.CompletableFuture<Integer> replace = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try {
+                return perform("""
+                        {"source":"CART","items":[%s],"shipTo":%s}""".formatted(item(phone, 1, false), OTHER_SHIP_TO))
+                        .andReturn().getResponse().getStatus();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        waitForQuery("SELECT status FROM orders WHERE id = %FOR UPDATE");
+        commit.countDown();
+        payment.get(20, java.util.concurrent.TimeUnit.SECONDS);
+
+        assertThat(replace.get(20, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo(409);
+        assertThat(orderCount()).isEqualTo(1);
+        assertThat(orderStatus(first)).isEqualTo("AUTHORIZING");
+        assertThat(reserved(phone)).isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("보증 수량이 다르면 다른 구성 — 새 주문이고 앞 주문은 그대로 둔다")
     void differentWarrantySplitIsAnotherComposition() throws Exception {
         UUID phone = sellable(10);
@@ -350,8 +410,14 @@ class CartOrderApiTest {
     }
 
     @Test
-    @DisplayName("주문 금액이 칸(12자리)을 넘으면 400 — 주문 · 확보 없음")
+    @DisplayName("주문 금액이 칸(12자리)을 넘으면 400 — 주문 · 확보 없음. 꼭 999,999,999,999 원은 된다")
     void totalOverLimitIsRejected() throws Exception {
+        UUID exact = sellable(5);
+        catalog.put(exact, copyPrice(catalog.get(exact), new BigDecimal("999999999999")));
+        cartLine(exact, false, 1);
+        place("""
+                {"variantId":"%s","quantity":1,"expectedUnitPrice":999999999999}""".formatted(exact)).andExpect(status().isCreated());
+
         UUID costly = sellable(100);
         catalog.put(costly, copyPrice(catalog.get(costly), new BigDecimal("999999999999")));
         cartLine(costly, false, 2);
@@ -421,6 +487,19 @@ class CartOrderApiTest {
     private static CatalogOption copyPrice(CatalogOption o, BigDecimal price) {
         return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.optionTitle(), o.sku(), price, o.optionStatus(),
                 o.saleMode(), o.productStatus(), o.visible(), o.registrationCompleted(), o.warranty(), o.imageUrl());
+    }
+
+    /** 그 모양의 문장이 실행 중일 때까지(최대 10초) — 같은 계정의 연결이 보이는 PROCESSLIST 로. 잠금이 없으면 바로 끝나는 문장만 쓴다. */
+    private void waitForQuery(String like) throws InterruptedException {
+        for (int i = 0; i < 100; i++) {
+            Long running = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE COMMAND = 'Query' AND INFO LIKE ?", Long.class, like);
+            if (running != null && running > 0) {
+                return;
+            }
+            Thread.sleep(100);
+        }
+        throw new AssertionError("그 문장이 기다리지 않았다: " + like);
     }
 
     /**
