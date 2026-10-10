@@ -7,6 +7,7 @@ import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.cart.CartCatalog;
 import com.grandis.nova.order.cart.domain.model.CartLine;
 import com.grandis.nova.order.cart.domain.model.CartOption;
+import com.grandis.nova.order.cart.domain.model.CartSlot;
 import com.grandis.nova.order.cart.domain.model.Unavailability;
 import com.grandis.nova.order.cart.domain.repository.CartStore;
 import com.grandis.nova.order.order.OrderLedger;
@@ -36,6 +37,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -206,9 +208,9 @@ public class PlaceCartOrderService {
 
     /** 같은 (옵션, 보증)을 두 번 고르면 어느 수량인지 모른다 — 400. */
     private static void requireDistinctSlots(List<CartSelection> selections) {
-        Set<String> seen = new LinkedHashSet<>();
+        Set<CartSlot> seen = new HashSet<>();
         for (CartSelection selection : selections) {
-            if (!seen.add(selection.optionId() + "/" + selection.warranty())) {
+            if (!seen.add(selection.slot())) {
                 throw ValidationFailures.of("items", "같은 옵션 · 보증 줄을 두 번 고를 수 없습니다.");
             }
         }
@@ -253,10 +255,10 @@ public class PlaceCartOrderService {
 
     /** 고른 줄마다 지금 장바구니에 (옵션, 보증, 수량)이 같은 줄이 있어야 한다. 장바구니의 다른 줄은 고르지 않아도 된다. */
     private static void requireInCart(List<CartSelection> selections, List<CartLine> lines) {
-        Map<String, Integer> current = new HashMap<>();
-        lines.forEach(line -> current.put(line.optionId() + "/" + line.warranty(), line.quantity()));
+        Map<CartSlot, Integer> current = new HashMap<>();
+        lines.forEach(line -> current.put(line.slot(), line.quantity()));
         for (CartSelection selection : selections) {
-            Integer quantity = current.get(selection.optionId() + "/" + selection.warranty());
+            Integer quantity = current.get(selection.slot());
             if (quantity == null || quantity != selection.quantity()) {
                 throw new BusinessException(OrderErrorCode.CART_CHANGED);
             }

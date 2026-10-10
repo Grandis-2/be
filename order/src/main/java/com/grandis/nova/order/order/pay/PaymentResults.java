@@ -22,7 +22,7 @@ import java.util.UUID;
  * 결제 결과를 주문에 반영한다 — 승인 API 의 동기 응답과 결과 이벤트 소비가 같은 길을 쓴다. 둘 다 오거나 순서가 바뀌어도
  * 원장 전제(승인 중)로 한 번만 반영된다. 거절 · 되돌림은 그 결제창의 승인 중일 때만 반영한다(OrderLedger#settlePayment).
  *
- * 결과 하나 = 트랜잭션 하나.
+ * 결과 하나 = 트랜잭션 하나. 장바구니 주문의 승인은 같은 트랜잭션에서 판매 확정 · 장바구니 차감까지 한다({@link CartOrderFulfillment}).
  *
  * 승인이 반영되지 못했는데 주문이 결제되지 않은 상태(결제 대기 · 취소됨)면 돈이 나간 채 주문이 받지 못한 것이다. 상태 머신으로는
  * 갈 수 없는 경우다 — 승인 중에는 취소를 받지 않고, 되돌림은 그 결제창의 거절 · "앞으로도 시작될 수 없다" 확언으로만 일어난다.
@@ -43,11 +43,14 @@ public class PaymentResults {
 
     private final OrderLedger ledger;
     private final OrderReader orderReader;
+    private final CartOrderFulfillment fulfillment;
     private final TransactionTemplate writeTransaction;
 
-    public PaymentResults(OrderLedger ledger, OrderReader orderReader, PlatformTransactionManager transactionManager) {
+    public PaymentResults(OrderLedger ledger, OrderReader orderReader, CartOrderFulfillment fulfillment,
+                          PlatformTransactionManager transactionManager) {
         this.ledger = ledger;
         this.orderReader = orderReader;
+        this.fulfillment = fulfillment;
         this.writeTransaction = new TransactionTemplate(transactionManager);
     }
 
@@ -96,8 +99,14 @@ public class PaymentResults {
     }
 
     private OrderTransition apply(UUID orderId, OrderTrigger result, String providerOrderId, EventCause cause) {
-        OrderTransition transition = writeTransaction.execute(status ->
-                ledger.settlePayment(orderId, result, providerOrderId, cause));
+        OrderTransition transition = writeTransaction.execute(status -> {
+            OrderTransition settled = ledger.settlePayment(orderId, result, providerOrderId, cause);
+            // 승인이 이번에 반영됐을 때만 — 같은 트랜잭션이라 판매 확정 · 장바구니 차감이 실패하면 승인 반영도 되돌아가 다시 받는다
+            if (settled.applied() && result == OrderTrigger.PAYMENT_APPROVED) {
+                fulfillment.onApproved(orderId);
+            }
+            return settled;
+        });
         log.info("결제 결과 반영 orderId={} providerOrderId={} result={} applied={} status={}",
                 orderId, providerOrderId, result, transition.applied(), transition.status());
         return transition;

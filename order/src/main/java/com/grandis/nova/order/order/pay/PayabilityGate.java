@@ -16,11 +16,17 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Clock;
 import java.util.EnumSet;
 import java.util.Set;
 
 /**
- * 결제 가능 재확인(B1) — 결제 준비 · 승인이 함께 쓴다. 기한 · 취소 판정은 preorder 한 곳이 한다(D3). 주문 생성 뒤 시간이 지났으므로
+ * 결제 가능 재확인(B1) — 결제 준비 · 승인이 함께 쓴다.
+ *
+ * 장바구니 주문은 주문의 기한(만든 때 + 10분)만 본다 — 기한이 지났으면 PAYMENT_WINDOW_EXPIRED. 기한이 지난 결제 대기 주문의 취소 · 재고 반환은
+ * 만료 처리가 한다. 승인 중이 된 뒤에는 기한을 넘겨도 결과를 받는다(만료 처리는 승인 중을 건드리지 않는다).
+ *
+ * 사전예약 주문의 기한 · 취소 판정은 preorder 한 곳이 한다(D3). 주문 생성 뒤 시간이 지났으므로
  * 결제 때 다시 묻는다. 트랜잭션 밖에서 부른다(preorder 응답을 기다리는 동안 잠금을 쥐지 않게).
  *
  * 예약이 취소를 마쳤는데 미결제 주문이 남아 있으면(주문 생성과 예약 취소가 엇갈려 취소가 NO_ORDER 로 정리된 경우, R1)
@@ -42,11 +48,13 @@ class PayabilityGate {
     private final PreorderReader preorderReader;
     private final OrderLedger ledger;
     private final TransactionTemplate writeTransaction;
+    private final Clock clock;
 
-    PayabilityGate(PreorderReader preorderReader, OrderLedger ledger, PlatformTransactionManager transactionManager) {
+    PayabilityGate(PreorderReader preorderReader, OrderLedger ledger, PlatformTransactionManager transactionManager, Clock clock) {
         this.preorderReader = preorderReader;
         this.ledger = ledger;
         this.writeTransaction = new TransactionTemplate(transactionManager);
+        this.clock = clock;
     }
 
     /**
@@ -55,6 +63,18 @@ class PayabilityGate {
      * @throws IllegalStateException 주문의 예약이 보이지 않거나 다른 예약 · 회원이다(데이터 어긋남)
      */
     void require(Order order, String sessionToken) {
+        switch (order.source()) {
+            case PREORDER -> requirePreorderPayable(order, sessionToken);
+            case CART -> {
+                if (!clock.instant().isBefore(order.paymentDueAt())) {
+                    throw new BusinessException(OrderErrorCode.PAYMENT_WINDOW_EXPIRED);
+                }
+            }
+            case BUY_NOW -> throw new IllegalStateException("바로 구매 주문은 아직 없다: orderId=" + order.id());
+        }
+    }
+
+    private void requirePreorderPayable(Order order, String sessionToken) {
         PreorderPayability preorder = preorderReader.find(order.preorderToken(), sessionToken)
                 .orElseThrow(() -> new IllegalStateException("주문의 예약이 보이지 않는다: orderId=" + order.id()));
         // 주문은 그 예약에서 만들었고 복합 FK(preorder_id, customer_id)로 묶여 있다 — 다르면 데이터가 어긋난 것이라 500 이다

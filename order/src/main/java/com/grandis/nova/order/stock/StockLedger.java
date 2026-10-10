@@ -37,6 +37,7 @@ import java.util.stream.Collectors;
  *   <li>반환({@link #release}): 옵션마다 조건부 UPDATE 한 번(확보 ≥ 수량일 때만 확보 −= 수량).</li>
  *   <li>반환 + 확보({@link #releaseAndReserve}): 옵션마다 증감을 합쳐 한 번에 — 순증은 조건부 확보, 순감은 반환. 따로 정렬해 두 번 돌면
  *       "반환 옵션들 → 확보 옵션들" 순서가 되어 전역 순서가 깨진다.</li>
+ *   <li>판매 확정({@link #sell}): 옵션마다 조건부 UPDATE 한 번(확보 ≥ 수량일 때만 확보 → 판매).</li>
  * </ul>
  * 잠금 순서가 요청 순서와 무관해, 옵션 순서가 다른 요청끼리 서로 기다리며 교착하지 않는다. 동시 삽입이 부르는 잠금
  * (PK 중복 확인의 S 잠금, FK 검사의 product_options 부모 S 잠금)은 이 순서 밖이라 드물게 교착할 수 있고, 그건 호출하는
@@ -155,6 +156,22 @@ public class StockLedger {
         for (Map.Entry<UUID, Integer> entry : ordered(quantities).entrySet()) {
             if (writer.release(entry.getKey(), entry.getValue(), now) != 1) {
                 throw new IllegalStateException("반환할 확보가 모자란다: optionId=" + entry.getKey() + ", quantity=" + entry.getValue());
+            }
+        }
+    }
+
+    /**
+     * 결제 성공의 판매 확정 — 주문이 확보해 둔 수량을 판매로 옮긴다. {@link #LOCK_ORDER} 순서.
+     *
+     * @param quantities 옵션 id → 그 주문이 확보한 수량
+     * @throws IllegalStateException 확보가 모자란 옵션이 있다 — 주문이 확보한 수량은 결제 대기 · 승인 중에는 반환되지 않으므로
+     *                               데이터가 어긋난 것이다. 결제 결과 반영 전체를 롤백한다
+     */
+    public void sell(Map<UUID, Integer> quantities) {
+        Instant now = clock.instant();
+        for (Map.Entry<UUID, Integer> entry : ordered(quantities).entrySet()) {
+            if (writer.sell(entry.getKey(), entry.getValue(), now) != 1) {
+                throw new IllegalStateException("판매로 옮길 확보가 모자란다: optionId=" + entry.getKey() + ", quantity=" + entry.getValue());
             }
         }
     }

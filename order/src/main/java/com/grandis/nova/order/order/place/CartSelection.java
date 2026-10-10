@@ -1,5 +1,7 @@
 package com.grandis.nova.order.order.place;
 
+import com.grandis.nova.order.cart.domain.model.CartSlot;
+
 import java.math.BigDecimal;
 import java.util.UUID;
 
@@ -11,4 +13,8 @@ import java.util.UUID;
  */
 public record CartSelection(UUID optionId, int quantity, boolean warranty, BigDecimal expectedUnitPrice,
                             BigDecimal expectedWarrantyPrice) {
+
+    public CartSlot slot() {
+        return new CartSlot(optionId, warranty);
+    }
 }

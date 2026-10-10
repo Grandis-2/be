@@ -9,6 +9,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.time.Clock;
+
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -19,7 +21,7 @@ class PreparePaymentServiceTest {
     final PreorderReader preorderReader = mock(PreorderReader.class);
     final PaymentPreparer paymentPreparer = mock(PaymentPreparer.class);
     final PreparePaymentService service = new PreparePaymentService(orderReader,
-            new PayabilityGate(preorderReader, mock(OrderLedger.class), mock(PlatformTransactionManager.class)),
+            new PayabilityGate(preorderReader, mock(OrderLedger.class), mock(PlatformTransactionManager.class), Clock.systemUTC()),
             paymentPreparer, mock(PlatformTransactionManager.class));
 
     // 바깥 트랜잭션 안에서 부르면 preorder · payment 응답을 기다리는 동안 그 트랜잭션의 잠금을 쥔다.

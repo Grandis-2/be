@@ -6,7 +6,6 @@ import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.client.payment.PaymentConfirmation;
 import com.grandis.nova.order.client.payment.PaymentConfirmer;
 import com.grandis.nova.order.order.OrderLedger;
-import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderTransition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
@@ -198,9 +197,6 @@ public class ConfirmPaymentService {
                         .flatMap(orderReader::findByOrderToken)
                         .filter(found -> found.customerId().equals(customerId)))
                 .orElseThrow(() -> new BusinessException(OrderErrorCode.ORDER_NOT_FOUND));
-        if (order.source() != OrderSource.PREORDER) {
-            throw new IllegalStateException("사전예약 주문만 결제할 수 있다: orderId=" + order.id());
-        }
         return order;
     }
 
