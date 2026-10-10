@@ -26,13 +26,21 @@ class PayabilityService {
         this.clock = clock;
     }
 
-    /** 공개 번호로 찾는다. @throws BusinessException PREORDER_NOT_FOUND · FORBIDDEN */
+    /**
+     * 공개 번호로 찾는다.
+     *
+     * @throws BusinessException PREORDER_NOT_FOUND · FORBIDDEN
+     */
     @Transactional(readOnly = true)
     public Payability check(Viewer viewer, String preorderToken) {
         return check(viewer, preorders.getByToken(preorderToken));
     }
 
-    /** 예약 내부 id 로 찾는다(order 가 주문에 저장한 id). @throws BusinessException PREORDER_NOT_FOUND · FORBIDDEN */
+    /**
+     * 예약 내부 id 로 찾는다(order 가 주문에 저장한 id).
+     *
+     * @throws BusinessException PREORDER_NOT_FOUND · FORBIDDEN
+     */
     @Transactional(readOnly = true)
     public Payability checkById(Viewer viewer, UUID preorderId) {
         return check(viewer, preorders.getById(preorderId));
