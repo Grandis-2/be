@@ -40,6 +40,8 @@ public enum OrderErrorCode implements ErrorCode {
     INSUFFICIENT_STOCK(409, "가용 재고보다 많이 담을 수 없습니다."),
     /** 지금 상태로는 할 수 없다 — 판매 중지 상품 담기 등. 이름 · 문구는 catalog 의 같은 코드와 같다. */
     STATE_CONFLICT(409, "현재 상태에서는 처리할 수 없습니다. 최신 상태를 조회해 주세요."),
+    /** 럭키 드로우 회차가 없다. */
+    DRAW_NOT_FOUND(404, "드로우를 찾을 수 없습니다."),
     /**
      * 결제 승인 결과를 기다리는 주문이 있어 지금은 할 수 없다(명세 — 주문 취소의 같은 코드). 장바구니 주문 생성은 details 에 막는 주문
      * (orderId · status)을 싣는다. 결과가 나면 다시 시도한다.
