@@ -1,5 +1,6 @@
 package com.grandis.nova.order.order.persistence.repository;
 
+import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.persistence.entity.OrderJpaEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -9,6 +10,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -24,6 +27,9 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
     Optional<OrderJpaEntity> findByOrderToken(String orderToken);
 
     Optional<OrderJpaEntity> findByPreorderId(UUID preorderId);
+
+    List<OrderJpaEntity> findByCustomerIdAndSourceAndStatusInAndPaymentDueAtAfter(UUID customerId, OrderSource source,
+                                                                                Collection<OrderStatus> statuses, Instant after);
 
     @Modifying(flushAutomatically = true)
     @Query("""

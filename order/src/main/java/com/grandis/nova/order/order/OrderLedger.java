@@ -36,8 +36,8 @@ import java.util.UUID;
  *       기존 주문 재조회 같은 후속 작업은 새 트랜잭션에서 한다. 그래서 사용자 입력 검증(OrderDraft · EventCause
  *       생성)은 원장을 부르기 전에 끝나 있어야 한다.</li>
  *   <li>원장 안에서 나는 IllegalArgumentException 은 모두 호출하는 코드의 잘못이다 — 없는 주문, 빈 기대 상태,
- *       그리고 지금 받지 않는 주문({@link Order#place} 의 수락 규칙: 사전예약 · 옵션 하나 · 수량 1). 수락 규칙은
- *       사용자 입력이 아니라 이 에픽이 만들 수 있는 주문의 범위라, 예약에서 초안을 만드는 생성 유스케이스는 어길 수 없다.</li>
+ *       그리고 지금 받지 않는 주문({@link Order#place} 의 수락 규칙: 사전예약은 옵션 하나 · 수량 1 · 보증 없음, 바로 구매는 아직
+ *       없음). 수락 규칙은 사용자 입력이 아니라 만들 수 있는 주문의 범위라, 초안을 만드는 생성 유스케이스는 어길 수 없다.</li>
  *   <li>같은 예약으로 동시에 생성하다 먼저 들어간 쪽이 롤백되면 기다리던 쪽끼리 교착할 수 있다(InnoDB 중복 키 S 잠금 →
  *       삽입 의도 잠금). 생성 유스케이스는 교착 예외를 재시도 대상으로 둔다.</li>
  * </ul>
@@ -67,7 +67,7 @@ public class OrderLedger {
      *                                     돌려줄지(200) 취소된 주문이라 거절할지(409)는 생성 유스케이스가 새 트랜잭션에서 조회해 판정한다
      */
     public Order place(OrderDraft draft, EventCause cause) {
-        Order order = writer.insert(Order.place(draft, OrderToken.issue()));
+        Order order = writer.insert(Order.place(draft, OrderToken.issue(), clock.instant()));
         writer.insertItems(order.id(), draft.lines());
         writer.appendEvent(OrderEvent.placed(order.id(), cause, clock.instant()));
         return order;

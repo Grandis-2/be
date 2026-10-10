@@ -15,15 +15,17 @@ import java.util.UUID;
  * 주문 응답. 생성 · 조회가 함께 쓴다.
  *
  * 밖에는 공개 토큰(orderId)만 알린다 — 내부 id · 예약 내부 id 는 싣지 않는다.
- * 결제 기한도 싣지 않는다. 사전예약 주문의 기한은 preorder 상세가 계산해 준다.
+ * 결제 기한은 장바구니 주문만 싣는다(만든 때 + 10분). 사전예약 주문은 null — 그 기한은 preorder 상세가 계산해 준다.
  *
- * @param orderId order_token
+ * @param orderId      order_token
+ * @param paymentDueAt 장바구니 주문의 결제 기한. 사전예약 주문은 null
  */
 public record OrderResponse(
         String orderId,
         OrderStatus status,
         OrderSource source,
         BigDecimal totalAmount,
+        Instant paymentDueAt,
         List<Item> items,
         ShipTo shipTo,
         Instant createdAt
@@ -32,18 +34,26 @@ public record OrderResponse(
     public static OrderResponse of(Order order, List<OrderItem> items) {
         com.grandis.nova.order.order.vo.ShipTo shipTo = order.shipTo();
         return new OrderResponse(order.orderToken().value(), order.status(), order.source(),
-                order.totalAmount().amount(), items.stream().map(item -> Item.of(item.line())).toList(),
+                order.totalAmount().amount(), order.paymentDueAt(), items.stream().map(item -> Item.of(item.line())).toList(),
                 new ShipTo(shipTo.name(), shipTo.phone(), shipTo.postalCode(), shipTo.line1(), shipTo.line2()),
                 order.createdAt());
     }
 
-    /** 주문상품. 이름 · 단가는 예약 접수 시점의 스냅샷이다. */
+    /**
+     * 주문상품. 이름 · 단가 · 보증가는 주문 시점의 스냅샷이다(사전예약은 예약 접수 때).
+     *
+     * @param warrantyQuantity  그중 보증을 산 수량(사전예약은 0)
+     * @param warrantyUnitPrice 보증 1개 가격(보증을 사지 않았으면 0)
+     * @param lineAmount        단가 × 수량 + 보증가 × 보증 수량
+     */
     public record Item(UUID productId, UUID optionId, String productTitle, String optionTitle,
-                       BigDecimal unitPrice, int quantity) {
+                       BigDecimal unitPrice, int quantity, int warrantyQuantity, BigDecimal warrantyUnitPrice,
+                       BigDecimal lineAmount) {
 
         static Item of(OrderLine line) {
             return new Item(line.productId(), line.optionId(), line.productTitle(), line.optionTitle(),
-                    line.unitPrice().amount(), line.quantity().value());
+                    line.unitPrice().amount(), line.quantity().value(), line.warrantyQuantity(),
+                    line.warrantyUnitPrice().amount(), line.subtotal().amount());
         }
     }
 

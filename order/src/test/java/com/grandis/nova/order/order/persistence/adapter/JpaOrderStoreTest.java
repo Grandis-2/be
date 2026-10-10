@@ -70,7 +70,7 @@ class JpaOrderStoreTest {
         OrderDraft draft = new OrderDraft(customerId, OrderSource.PREORDER, preorderId, OrderFixtures.preorderToken(preorderId),
                 new ShipTo("홍길동", "010-0000-0000", "04524", "세종대로 110", "3층"),
                 preorderCommand(customerId, preorderId, product).toDraft().lines());
-        Order placed = Order.place(draft, OrderToken.issue());
+        Order placed = Order.place(draft, OrderToken.issue(), Instant.EPOCH);
         Order stored = writer.insert(placed);
         writer.insertItems(stored.id(), draft.lines());
         entityManager.clear();
@@ -91,7 +91,7 @@ class JpaOrderStoreTest {
     // 저장된 주문을 다시 넣거나 결제 대기가 아닌 주문을 넣으면 상태 머신 · 이력을 거치지 않은 주문이 생긴다.
     @Test
     void insertAcceptsOnlyNewAwaitingPaymentOrders() {
-        Order placed = Order.place(preorderCommand(customerId, preorderId, product).toDraft(), OrderToken.issue());
+        Order placed = Order.place(preorderCommand(customerId, preorderId, product).toDraft(), OrderToken.issue(), Instant.EPOCH);
         Order delivered = new Order(null, placed.orderToken(), customerId, OrderSource.PREORDER, preorderId,
                 placed.preorderToken(), OrderStatus.DELIVERED, null, placed.totalAmount(), null, null, placed.shipTo(), null, 5, null, null);
         Order stored = writer.insert(placed);
@@ -112,7 +112,7 @@ class JpaOrderStoreTest {
     @Test
     void changeStatusDetachesOnlyTheChangedOrder() {
         OrderDraft draft = preorderCommand(customerId, preorderId, product).toDraft();
-        Order stored = writer.insert(Order.place(draft, OrderToken.issue()));
+        Order stored = writer.insert(Order.place(draft, OrderToken.issue(), Instant.EPOCH));
         writer.insertItems(stored.id(), draft.lines());
         entityManager.clear();
         assertThat(reader.findById(stored.id())).get().extracting(Order::status).isEqualTo(OrderStatus.AWAITING_PAYMENT);

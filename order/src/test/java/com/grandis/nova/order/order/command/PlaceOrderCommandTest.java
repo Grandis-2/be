@@ -22,7 +22,7 @@ class PlaceOrderCommandTest {
     @Test
     void convertsToDraftWithValueObjects() {
         PlaceOrderCommand command = new PlaceOrderCommand(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, ADDRESS, List.of(
-                new PlaceOrderCommand.Line(TestIds.id(100), TestIds.id(10), 1, new BigDecimal("1250000"), "Nova 1", "블랙 / 256GB")));
+                new PlaceOrderCommand.Line(TestIds.id(100), TestIds.id(10), 1, new BigDecimal("1250000"), 0, BigDecimal.ZERO, "Nova 1", "블랙 / 256GB")));
 
         OrderDraft draft = command.toDraft();
 
@@ -34,7 +34,7 @@ class PlaceOrderCommandTest {
     @Test
     void toStringHidesShippingAddress() {
         PlaceOrderCommand command = new PlaceOrderCommand(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, ADDRESS, List.of(
-                new PlaceOrderCommand.Line(TestIds.id(100), TestIds.id(10), 1, new BigDecimal("1250000"), "Nova 1", "블랙 / 256GB")));
+                new PlaceOrderCommand.Line(TestIds.id(100), TestIds.id(10), 1, new BigDecimal("1250000"), 0, BigDecimal.ZERO, "Nova 1", "블랙 / 256GB")));
 
         assertThat(command.toString()).doesNotContain("홍길동", "010-0000-0000", "04524", "세종대로");
     }
@@ -43,7 +43,7 @@ class PlaceOrderCommandTest {
     @Test
     void invalidValuesFailOnConversion() {
         PlaceOrderCommand negativePrice = new PlaceOrderCommand(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, ADDRESS, List.of(
-                new PlaceOrderCommand.Line(TestIds.id(100), TestIds.id(10), 1, new BigDecimal("-1"), "Nova 1", "블랙 / 256GB")));
+                new PlaceOrderCommand.Line(TestIds.id(100), TestIds.id(10), 1, new BigDecimal("-1"), 0, BigDecimal.ZERO, "Nova 1", "블랙 / 256GB")));
 
         assertThatThrownBy(negativePrice::toDraft).isInstanceOf(IllegalArgumentException.class);
     }

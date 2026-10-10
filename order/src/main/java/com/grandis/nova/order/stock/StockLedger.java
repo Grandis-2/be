@@ -2,6 +2,7 @@ package com.grandis.nova.order.stock;
 
 import com.grandis.nova.order.stock.domain.exception.StockAlreadyCreatedException;
 import com.grandis.nova.order.stock.domain.exception.StockBelowCommittedException;
+import com.grandis.nova.order.stock.domain.exception.StockShortageException;
 import com.grandis.nova.order.stock.domain.model.StockLevel;
 import com.grandis.nova.order.stock.domain.model.StockSetting;
 import com.grandis.nova.order.stock.domain.repository.StockReader;
@@ -18,6 +19,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -31,6 +33,7 @@ import java.util.stream.Collectors;
  *   <li>설정({@link #set}): 있는 행을 잠가 읽기 → 있으면 조건부 UPDATE, 없으면 INSERT.</li>
  *   <li>초기화({@link #initialize}): 있는 행을 잠그지 않고 읽기 → 없는 것만 INSERT. 있는 행은 건드리지 않으므로 잠그지 않는다 —
  *       재고 행은 주문의 확보 · 반환이 드나드는 자리라 쓰지 않을 행을 붙잡지 않는다.</li>
+ *   <li>확보({@link #reserve}): 옵션마다 조건부 UPDATE 한 번(가용 ≥ 수량일 때만 확보 += 수량). 읽고 계산하지 않는다.</li>
  * </ul>
  * 잠금 순서가 요청 순서와 무관해, 옵션 순서가 다른 요청끼리 서로 기다리며 교착하지 않는다. 동시 삽입이 부르는 잠금
  * (PK 중복 확인의 S 잠금, FK 검사의 product_options 부모 S 잠금)은 이 순서 밖이라 드물게 교착할 수 있고, 그건 호출하는
@@ -80,6 +83,29 @@ public class StockLedger {
     public Set<UUID> initialize(List<StockSetting> settings) {
         List<StockSetting> sorted = ascending(settings);
         return apply(sorted, byOptionId(reader.findByOptionIds(optionIds(sorted))), false);
+    }
+
+    /**
+     * 주문의 재고 확보. 옵션 id 오름차순으로 하나씩 조건부 UPDATE 하고, 하나라도 0행이면 걸린 옵션을 모두 모아 던진다 —
+     * 호출자가 롤백하므로 먼저 확보한 옵션도 되돌아간다(전량 확보 아니면 아무것도 확보하지 않음).
+     *
+     * @param quantities 옵션 id → 확보할 수량(1 이상)
+     * @throws StockShortageException 가용 재고가 모자란 옵션이 있다(재고 행이 없는 옵션 포함)
+     */
+    public void reserve(Map<UUID, Integer> quantities) {
+        Instant now = clock.instant();
+        List<UUID> shortages = new ArrayList<>();
+        for (Map.Entry<UUID, Integer> entry : new TreeMap<>(quantities).entrySet()) {
+            if (entry.getValue() < 1) {
+                throw new IllegalArgumentException("확보 수량은 1 이상이다: " + entry);
+            }
+            if (writer.reserve(entry.getKey(), entry.getValue(), now) != 1) {
+                shortages.add(entry.getKey());
+            }
+        }
+        if (!shortages.isEmpty()) {
+            throw new StockShortageException(shortages);
+        }
     }
 
     /** @param existing 이미 읽은(설정이면 잠근) 행. 그 뒤의 시각을 찍어야 기다린 다른 쓰기보다 앞선 시각이 남지 않는다 */

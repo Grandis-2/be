@@ -1,6 +1,7 @@
 package com.grandis.nova.order.order.persistence.adapter;
 
 import com.grandis.nova.common.OffsetPage;
+import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.exception.OrderAlreadyPlacedException;
 import com.grandis.nova.order.order.domain.model.Order;
@@ -144,6 +145,12 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     @Override
     public Optional<Order> findByPreorderId(UUID preorderId) {
         return orders.findByPreorderId(preorderId).map(OrderMapper::toDomain);
+    }
+
+    @Override
+    public List<Order> findOpenCartOrders(UUID customerId, Instant now) {
+        return orders.findByCustomerIdAndSourceAndStatusInAndPaymentDueAtAfter(customerId, OrderSource.CART,
+                List.of(OrderStatus.AWAITING_PAYMENT, OrderStatus.AUTHORIZING), now).stream().map(OrderMapper::toDomain).toList();
     }
 
     @Override

@@ -28,6 +28,13 @@ public interface StockWriter {
     int changeTotal(UUID optionId, int total, Instant now);
 
     /**
+     * 가용 재고(총량 − 확보 − 판매)가 quantity 이상일 때만 확보를 quantity 만큼 늘린다.
+     *
+     * @return 조건에 맞은 행 수(0 또는 1). 0 이면 부족하거나 재고 행이 없다
+     */
+    int reserve(UUID optionId, int quantity, Instant now);
+
+    /**
      * 확보 · 판매 0 인 새 행을 만든다.
      *
      * @throws StockAlreadyCreatedException 다른 트랜잭션이 같은 옵션의 행을 먼저 만들었다

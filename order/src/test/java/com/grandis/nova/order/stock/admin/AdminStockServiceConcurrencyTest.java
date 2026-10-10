@@ -160,6 +160,11 @@ class AdminStockServiceConcurrencyTest {
         }
 
         @Override
+        public int reserve(UUID optionId, int quantity, Instant now) {
+            return delegate.reserve(optionId, quantity, now);
+        }
+
+        @Override
         public void insert(UUID optionId, int total, Instant now) {
             delegate.insert(optionId, total, now);
         }

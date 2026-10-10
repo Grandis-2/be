@@ -13,7 +13,10 @@ public interface CartStore {
     /** 그 회원의 줄 전체, 만든 순서. 잠그지 않는다. */
     List<CartLine> findByCustomer(UUID customerId);
 
-    /** 그 회원의 줄 전체를 잠가 읽는다(FOR UPDATE) — 담기의 합산 · 줄 수 판정이 겹치지 않게. */
+    /**
+     * 그 회원의 줄 전체를 잠가 읽는다(FOR UPDATE) — 담기의 합산 · 줄 수 판정과 주문의 장바구니 대조가 겹치지 않게.
+     * 돌려준 목록은 잠금을 얻은 뒤의 최신이다: 앞선 쓰기가 기다리는 사이 기존 줄보다 앞(유일 키 순서)에 넣은 줄도 들어 있다.
+     */
     List<CartLine> lockByCustomer(UUID customerId);
 
     /** 그 회원의 그 줄을 잠가 읽는다. 남의 줄 · 없는 줄이면 비어 있다. */

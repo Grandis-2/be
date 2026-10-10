@@ -2,6 +2,7 @@ package com.grandis.nova.order.stock;
 
 import com.grandis.nova.order.stock.domain.exception.StockBelowCommittedException;
 import com.grandis.nova.order.stock.domain.exception.StockBelowCommittedException.Shortfall;
+import com.grandis.nova.order.stock.domain.exception.StockShortageException;
 import com.grandis.nova.order.stock.domain.model.StockLevel;
 import com.grandis.nova.order.stock.domain.model.StockSetting;
 import com.grandis.nova.order.stock.domain.repository.StockReader;
@@ -19,6 +20,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -129,4 +131,31 @@ class StockLedgerTest {
         assertThatThrownBy(() -> ledger.set(List.of(new StockSetting(first, 1), new StockSetting(first, 2))))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    /** 가용(총량 − 확보 − 판매)이 수량과 같아도 확보된다 — 경계에서 하나 모자라면 0행이다. */
+    @Test
+    void reserveAddsToReservedUpToExactlyAvailable() {
+        fixtures.stock(first, 10, 3, 2);
+        fixtures.stock(second, 4, 0, 0);
+
+        ledger.reserve(Map.of(first, 5, second, 1));
+
+        assertThat(reader.findByOptionIds(List.of(first, second)))
+                .containsExactly(new StockLevel(first, 10, 8, 2), new StockLevel(second, 4, 1, 0));
+        assertThatThrownBy(() -> ledger.reserve(Map.of(first, 1)))
+                .isInstanceOfSatisfying(StockShortageException.class, e -> assertThat(e.optionIds()).containsExactly(first));
+    }
+
+    /** 모자란 옵션 · 재고 행이 없는 옵션을 모두 담아 던진다. 되돌리는 것은 호출자의 롤백이다(주문 생성 시험이 커밋 경계로 본다). */
+    @Test
+    void shortageListsEveryOptionThatCouldNotBeReserved() {
+        UUID missing = fixtures.inStockProduct(1).optionIds().getFirst();
+        fixtures.stock(first, 1, 0, 0);
+        fixtures.stock(second, 5, 0, 0);
+
+        assertThatThrownBy(() -> ledger.reserve(Map.of(first, 2, second, 1, missing, 1)))
+                .isInstanceOfSatisfying(StockShortageException.class,
+                        e -> assertThat(e.optionIds()).containsExactlyInAnyOrder(first, missing));
+    }
+
 }

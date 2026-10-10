@@ -18,7 +18,29 @@ class OrderLineTest {
         assertThatThrownBy(() -> line("상품", "나".repeat(121))).isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void subtotalAddsWarrantyPriceTimesWarrantyQuantity() {
+        OrderLine line = new OrderLine(TestIds.id(1), TestIds.id(2), new Quantity(3), Money.won(1_250_000), 2, Money.won(199_000),
+                "상품", "옵션");
+
+        assertThat(line.subtotal()).isEqualTo(Money.won(3 * 1_250_000 + 2 * 199_000));
+        assertThat(line("상품", "옵션").subtotal()).isEqualTo(Money.won(1000));
+    }
+
+    // ck_order_item_warranty_quantity(0 ~ 수량) · 보증을 사지 않았으면 보증가 0
+    @Test
+    void warrantyQuantityStaysWithinQuantityAndUnboughtWarrantyIsFree() {
+        assertThatThrownBy(() -> new OrderLine(TestIds.id(1), TestIds.id(2), new Quantity(2), Money.won(1000), 3, Money.won(10), "상품", "옵션"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new OrderLine(TestIds.id(1), TestIds.id(2), new Quantity(2), Money.won(1000), -1, Money.won(10), "상품", "옵션"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new OrderLine(TestIds.id(1), TestIds.id(2), new Quantity(2), Money.won(1000), 0, Money.won(10), "상품", "옵션"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(new OrderLine(TestIds.id(1), TestIds.id(2), new Quantity(2), Money.won(1000), 2, Money.won(10), "상품", "옵션")
+                .warrantyQuantity()).isEqualTo(2);
+    }
+
     private static OrderLine line(String productTitle, String optionTitle) {
-        return new OrderLine(TestIds.id(1), TestIds.id(2), Quantity.ONE, Money.won(1000), productTitle, optionTitle);
+        return OrderLine.withoutWarranty(TestIds.id(1), TestIds.id(2), Quantity.ONE, Money.won(1000), productTitle, optionTitle);
     }
 }
