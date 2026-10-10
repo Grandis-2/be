@@ -62,6 +62,8 @@ class CartOrderFulfillment {
             // 지금은 오지 않는다(Order.place 가 바로 구매를 받지 않는다). 바로 구매가 생기면 여기서 판매 확정을 붙인다 — 이대로 두면 승인 반영이
             // 롤백돼 승인 중으로 굳는다
             case BUY_NOW -> throw new IllegalStateException("바로 구매 주문의 판매 확정은 아직 없다: orderId=" + orderId);
+            // 결제 대기를 거치지 않는다(결제 확인 대기로 생긴다). 판매 확정은 당첨 반영(DrawSettlement)이 한다
+            case DRAW -> throw new IllegalStateException("드로우 당첨 주문은 결제하지 않는다: orderId=" + orderId);
         }
         List<OrderItem> items = orderReader.findItems(orderId);
         Map<CartSlot, Integer> purchased = new HashMap<>();

@@ -5,6 +5,7 @@ import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.draw.domain.exception.DrawEntryTakenException;
 import com.grandis.nova.order.draw.domain.model.DrawCampaign;
 import com.grandis.nova.order.draw.domain.model.DrawEntry;
+import com.grandis.nova.order.draw.domain.model.DrawEntryResult;
 import com.grandis.nova.order.draw.domain.model.DrawPhase;
 import com.grandis.nova.order.draw.domain.model.NewDrawEntry;
 import com.grandis.nova.order.draw.domain.repository.DrawCampaignStore;
@@ -72,8 +73,24 @@ public class DrawEntryService {
         return find(drawId, customerId).orElseThrow(() -> new BusinessException(OrderErrorCode.DRAW_ENTRY_NOT_FOUND));
     }
 
+    /**
+     * 내 응모와 추첨 결과. 결과를 반영하기 전이면 결과가 없다(null) — 반영 뒤 당첨 주문이 이어져 있으면 당첨, 아니면 낙첨이다.
+     *
+     * @throws BusinessException 404 DRAW_ENTRY_NOT_FOUND
+     */
+    public MyEntry view(UUID customerId, UUID drawId) {
+        DrawEntry entry = mine(customerId, drawId);
+        boolean settled = readTransaction.execute(status -> campaigns.findProgress(drawId)).map(p -> p.settledAt() != null).orElse(false);
+        DrawEntryResult result = !settled ? null : entry.wonOrderId() != null ? DrawEntryResult.WON : DrawEntryResult.LOST;
+        return new MyEntry(entry, result);
+    }
+
     private Optional<DrawEntry> find(UUID drawId, UUID customerId) {
         return readTransaction.execute(status -> entries.findByCampaignAndCustomer(drawId, customerId));
+    }
+
+    /** @param result 결과 반영 전이면 null */
+    public record MyEntry(DrawEntry entry, DrawEntryResult result) {
     }
 
     /** @param created 이번 요청이 만들었으면 true, 이미 있던 응모면 false */

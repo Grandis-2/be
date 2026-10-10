@@ -15,6 +15,7 @@ import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -59,6 +60,16 @@ class JpaDrawEntryStore implements DrawEntryStore {
     @Override
     public Optional<DrawEntry> findByCampaignAndCustomer(UUID campaignId, UUID customerId) {
         return entries.findByCampaignIdAndCustomerId(campaignId, customerId).map(JpaDrawEntryStore::toDomain);
+    }
+
+    @Override
+    public List<DrawEntry> findPaid(UUID campaignId) {
+        return entries.findByCampaignIdAndStatusOrderById(campaignId, DrawEntryStatus.PAID).stream().map(JpaDrawEntryStore::toDomain).toList();
+    }
+
+    @Override
+    public boolean markWon(UUID campaignId, UUID entryId, UUID orderId, Instant now) {
+        return entries.markWon(campaignId, entryId, orderId, now) == 1;
     }
 
     @Override
@@ -108,6 +119,6 @@ class JpaDrawEntryStore implements DrawEntryStore {
     private static DrawEntry toDomain(DrawEntryJpaEntity e) {
         return new DrawEntry(e.getId(), e.getCampaignId(), e.getCustomerId(), e.getStatus(), e.getAuthorizingProviderOrderId(),
                 new ShipTo(e.getShipToName(), e.getShipToPhone(), e.getShipToPostalCode(), e.getShipToLine1(), e.getShipToLine2()),
-                e.getCreatedAt());
+                e.getCreatedAt(), e.getWonOrderId());
     }
 }

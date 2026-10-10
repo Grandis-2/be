@@ -4,6 +4,7 @@ import com.grandis.nova.common.message.EventEnvelope;
 import com.grandis.nova.common.sqs.DeferredRedelivery;
 import com.grandis.nova.common.sqs.MessageHandling;
 import com.grandis.nova.order.draw.DrawEntryPaymentResults;
+import com.grandis.nova.order.draw.DrawSettlement;
 import com.grandis.nova.order.order.cancel.CancelSettlement;
 import com.grandis.nova.order.order.cancel.RefundResults;
 import com.grandis.nova.order.order.cancel.SettlePreorderCancelService;
@@ -38,6 +39,8 @@ public class OrderEventDispatcher {
     static final String ORDER_AGGREGATE = "ORDER";
     /** 응모비 결제 결과의 aggregate. aggregateId 가 응모 id 라는 뜻이다. */
     static final String DRAW_ENTRY_AGGREGATE = "DRAW_ENTRY";
+    /** 추첨 결과의 aggregate. aggregateId 가 회차 id 라는 뜻이다. */
+    static final String DRAW_CAMPAIGN_AGGREGATE = "DRAW_CAMPAIGN";
     /** catalog 상품 이벤트의 aggregate. aggregateId 가 상품 id 라는 뜻이다. */
     static final String PRODUCT_AGGREGATE = "PRODUCT";
 
@@ -45,17 +48,19 @@ public class OrderEventDispatcher {
     private final PaymentResults paymentResults;
     private final RefundResults refundResults;
     private final DrawEntryPaymentResults entryPaymentResults;
+    private final DrawSettlement drawSettlement;
     private final AdminStockService stockService;
     private final JsonMapper jsonMapper;
     private final Validator validator;
 
     public OrderEventDispatcher(SettlePreorderCancelService cancelSettlement, PaymentResults paymentResults,
-                                RefundResults refundResults, DrawEntryPaymentResults entryPaymentResults,
+                                RefundResults refundResults, DrawEntryPaymentResults entryPaymentResults, DrawSettlement drawSettlement,
                                 AdminStockService stockService, JsonMapper jsonMapper, Validator validator) {
         this.cancelSettlement = cancelSettlement;
         this.paymentResults = paymentResults;
         this.refundResults = refundResults;
         this.entryPaymentResults = entryPaymentResults;
+        this.drawSettlement = drawSettlement;
         this.stockService = stockService;
         this.jsonMapper = jsonMapper;
         this.validator = validator;
@@ -82,6 +87,11 @@ public class OrderEventDispatcher {
             case DRAW_ENTRY_PAYMENT_SETTLED -> {
                 entryPaymentResults.settle(jsonMapper.treeToValue(envelope.payload(), DrawEntryPaymentSettled.class)
                         .toSettlement(aggregateId(envelope, DRAW_ENTRY_AGGREGATE)));
+                yield MessageHandling.DONE;
+            }
+            case DRAW_RESULT_READY -> {
+                drawSettlement.settle(aggregateId(envelope, DRAW_CAMPAIGN_AGGREGATE),
+                        jsonMapper.treeToValue(envelope.payload(), DrawResultReady.class).winnerEntryIds());
                 yield MessageHandling.DONE;
             }
             case IN_STOCK_PRODUCT_REGISTERED -> {

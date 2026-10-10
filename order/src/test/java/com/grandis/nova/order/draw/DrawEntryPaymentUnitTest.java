@@ -57,7 +57,7 @@ class DrawEntryPaymentUnitTest {
     static final DrawCampaign CAMPAIGN = new DrawCampaign(DRAW, TestIds.id(3), TestIds.id(4), "t", "p", "o", null, new BigDecimal("100"), 1,
             NOW.minusSeconds(60), NOW.plusSeconds(600), NOW);
     static final DrawEntry ENTRY = new DrawEntry(TestIds.id(5), DRAW, MEMBER, DrawEntryStatus.AWAITING_PAYMENT, null,
-            new ShipTo("홍길동", "010-0000-0000", "04524", "서울시", null), NOW);
+            new ShipTo("홍길동", "010-0000-0000", "04524", "서울시", null), NOW, null);
 
     final DrawEntryService entryService = mock(DrawEntryService.class);
     final DrawCampaignStore campaigns = mock(DrawCampaignStore.class);

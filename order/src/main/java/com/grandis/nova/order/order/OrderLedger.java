@@ -69,7 +69,7 @@ public class OrderLedger {
     public Order place(OrderDraft draft, EventCause cause) {
         Order order = writer.insert(Order.place(draft, OrderToken.issue(), clock.instant()));
         writer.insertItems(order.id(), draft.lines());
-        writer.appendEvent(OrderEvent.placed(order.id(), cause, clock.instant()));
+        writer.appendEvent(OrderEvent.placed(order.id(), order.status(), cause, clock.instant()));
         return order;
     }
 

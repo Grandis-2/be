@@ -77,9 +77,10 @@ public class DrawController {
     }
 
     @GetMapping("/{drawId}/entries/me")
-    @Operation(summary = "내 응모", description = "응모하지 않았으면 404 DRAW_ENTRY_NOT_FOUND")
+    @Operation(summary = "내 응모", description = "결과(result)는 추첨 반영 뒤 WON · LOST, 전에는 null. 응모하지 않았으면 404 DRAW_ENTRY_NOT_FOUND")
     public ApiResponse<DrawEntryResponse> mine(@CurrentCustomerId UUID customerId, @PathVariable UUID drawId) {
-        return ApiResponse.ok(DrawEntryResponse.of(entries.mine(customerId, drawId)));
+        DrawEntryService.MyEntry mine = entries.view(customerId, drawId);
+        return ApiResponse.ok(DrawEntryResponse.of(mine.entry(), mine.result()));
     }
 
     @PostMapping("/{drawId}/entries/me/payment-attempts")

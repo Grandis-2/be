@@ -1,6 +1,6 @@
-# order → worker 드로우 응모 전송 계약
+# order ↔ worker 드로우 계약
 
-order 가 보내고(공통 모듈 `common:outbox` · `common:sqs` — 표와 이벤트 종류는 `OrderOutboxConfig`), worker 가 받아 Mock(추첨)에 넘긴다. 문서와 어긋나는 쪽이 고친다.
+응모 · 추첨 요청은 order 가 보내고(공통 모듈 `common:outbox` · `common:sqs` — 표와 이벤트 종류는 `OrderOutboxConfig`) worker 가 받아 Mock(추첨)에 넘긴다. 추첨 결과는 worker 가 order 에 보낸다(`InboundEventType`). 문서와 어긋나는 쪽이 고친다.
 
 회원이 응모비를 결제하면 order 는 응모를 결제 완료(`PAID`)로 바꾸는 트랜잭션에서 아웃박스(`order_outbox_events`)에 `DRAW_ENTRY_PAID` 를 적고, 커밋 뒤 SQS 로 보낸다. 결제 완료한 응모만 추첨 대상이고, 아웃박스 행은 응모마다 하나다(결제 완료 반영이 응모마다 한 번뿐이다). 전달은 최소 한 번이라 같은 메시지가 두 번 갈 수는 있다(아래).
 
@@ -11,6 +11,8 @@ order 가 보내고(공통 모듈 `common:outbox` · `common:sqs` — 표와 이
 | 이벤트 | 큐 | 받는 쪽 |
 | --- | --- | --- |
 | `DRAW_ENTRY_PAID` | `draw-register` | worker — 응모를 Mock 에 넘긴다 |
+| `DRAW_REQUESTED` | `draw-register` | worker — Mock 이 받은 응모 수를 대조하고 추첨을 맡긴다(아래 "추첨") |
+| `DRAW_RESULT_READY` | `order-events` | order — 당첨 응모에 증정 주문을 만든다(worker 가 보낸다) |
 
 - **최소 한 번.** 커밋 직후 한 번 보내고, 못 보냈으면 릴레이가 다시 보낸다. 같은 메시지가 두 번 갈 수 있다 — Mock 에는 멱등 키(응모 id)로 보내 두 번 받아도 응모가 하나여야 한다.
 - **순서 보장 없음.** 응모끼리 순서는 없다. 추첨은 마감 뒤라 순서에 기대지 않는다.
@@ -48,21 +50,40 @@ order 의 다른 이벤트와 같은 `EventEnvelope` 다.
 
 - 멱등 키는 응모 id 다. 재시도마다 같은 키 · 같은 본문(응모 id · 회차 id · 회원 id)을 보낸다.
 - 재시도해도 결과가 같은 거절(본문 검증 실패 등)만 DLQ 로 보낸다 — 공통 소비기(`RetryingQueueConsumer`)는 예외 종류와 상관없이 다시 받기라, 바로 보내려면 worker 가 `draw-register-dlq` 에 직접 보내고 원본을 지운다(그 큐의 SendMessage 권한 포함). 408 · 429 · 5xx · 시간 초과 · **모르는 회차**는 재시도한다(가시성 지연) — 회차 등록을 따로 두면 순서 보장이 없어 응모가 먼저 도착할 수 있다.
-- worker 는 처리 결과를 order 에 알리지 않는다 — order 는 넘긴 뒤 응모 상태를 바꾸지 않는다.
+- worker 는 응모 하나하나의 처리 결과를 order 에 알리지 않는다 — order 는 넘긴 뒤 응모 상태를 바꾸지 않는다. order 가 받는 것은 회차의 추첨 결과(`DRAW_RESULT_READY`) 하나다.
 
 **Mock 담당과 정할 것(열린 질문).**
 - 응모 API 모양(경로 · 본문 칸 이름 · 응답). order 가 기대하는 것은 하나다: 같은 키로 다시 보내면 새 응모가 생기지 않고 처음 결과와 같다.
 - Mock 이 회차를 먼저 알아야 응모를 받는가. 회차는 order 가 만들고, 지금 Mock 에 회차를 등록하는 경로가 이 계약에 없다. 처음 보는 `drawId` 를 거절하면 모든 응모가 DLQ 로 간다 — 회차 등록 이벤트를 따로 둘지, 처음 보는 회차를 응모로 만들지 정한다.
-- Mock 이 받은 응모 수를 order 가 어떻게 아는가(아래 대조).
+- Mock 이 받은 응모 수를 worker 가 어떻게 아는가 · 추첨 API 모양(아래 "추첨").
 
-## 마감 대조
+## 추첨
 
-**추첨 전**, 마감 뒤 그 회차에 결제 확인 중(`AUTHORIZING`) 응모가 0건이 되면 order 는 "그 회차의 결제 완료 응모 수" 와 "Mock 이 받은 응모 수" 를 비교하고, **다르면 추첨하지 않는다**(NV-396). 추첨 뒤에는 빠진 응모를 되돌릴 수 없고 환불도 없다.
+order 는 마감 뒤 그 회차에 결제 확인 중(`AUTHORIZING`) 응모가 0건이 되면 추첨할 차례로 본다(주기 작업, 기본 30초). 마감 뒤에는 결제가 새로 시작되지 않으므로 이때의 결제 완료 응모가 추첨 대상 전부다.
+- 결제 완료가 당첨 인원 **이하**면 추첨하지 않고 전원 당첨으로 order 가 바로 반영한다. worker 에 아무것도 보내지 않는다.
+- **많으면** `DRAW_REQUESTED` 를 회차마다 한 번 보낸다.
 
-다를 때 원인은 셋이다 — 바로 DLQ 라고 보지 않는다. 기다렸다 다시 대조하되, 오래 맞지 않으면 아래를 본다.
+`DRAW_REQUESTED` — 봉투의 `aggregateType` 은 `"DRAW_CAMPAIGN"`, `aggregateId` 는 회차 id(payload 에 다시 넣지 않는다).
+
+| 칸 | 뜻 |
+| --- | --- |
+| `payload.paidEntries` | 그 회차의 결제 완료 응모 수(추첨 대상) |
+| `payload.winnerCount` | 당첨 인원(`paidEntries` 보다 작다) |
+
+worker 는 **추첨 전에** Mock 이 그 회차로 받은 응모 수를 `paidEntries` 와 대조하고, **다르면 추첨을 맡기지 않는다** — 추첨 뒤에는 빠진 응모를 되돌릴 수 없고 환불도 없다. 다를 때 원인은 셋이다 — 바로 DLQ 라고 보지 않는다. 메시지를 늦춰 다시 받으며(가시성 지연) 기다렸다 다시 대조하되, 오래 맞지 않으면 아래를 본다.
 - order 가 아직 못 보냈다: `order_outbox_events` 에 `event_type = 'DRAW_ENTRY_PAID'` 이고 `published_at IS NULL` 인 행이 남는다. 보낼 때마다 실패하면 `아웃박스 발행 실패 — 릴레이가 다시 보낸다` 경고 로그가 남는다.
 - 보냈는데 아직 재시도 중이다: `draw-register` 에 메시지가 남아 있다(가시성 지연).
 - worker · Mock 이 거절했다: `draw-register-dlq` 에 남는다. 원인을 고친 뒤 다시 흘린다 — 추첨 전에.
+
+같으면 Mock 에 `winnerCount` 명 추첨을 맡기고, 결과를 `DRAW_RESULT_READY` 로 `order-events` 에 보낸다. 같은 요청을 두 번 받아도 추첨은 한 번이어야 한다(회차 id 가 멱등 키).
+
+`DRAW_RESULT_READY` — 봉투의 `aggregateType` 은 `"DRAW_CAMPAIGN"`, `aggregateId` 는 회차 id.
+
+| 칸 | 뜻 |
+| --- | --- |
+| `payload.winnerEntryIds` | 당첨 응모 id 목록(UUID 문자열) — 정확히 `winnerCount` 개, 겹치지 않게, 그 회차의 결제 완료 응모 중에서 |
+
+order 는 받으면 한 트랜잭션에서 당첨 응모마다 응모 때 배송지로 0원 주문(`source = DRAW`, 결제 확인 대기로 생김)을 만들고, 당첨분 재고를 판매로 옮기고, 남은 확보는 반납한다. 같은 결과를 두 번 받아도 한 번이다. 요청하지 않은 회차 · 개수가 다름 · 같은 응모 두 번 · 그 회차의 결제 완료 응모가 아님은 계약 위반이라 반영하지 않는다(처리 실패 → 재시도 뒤 order-events DLQ).
 
 ## 배포 · 운영
 

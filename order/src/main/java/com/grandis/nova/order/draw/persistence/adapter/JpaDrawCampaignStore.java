@@ -1,8 +1,10 @@
 package com.grandis.nova.order.draw.persistence.adapter;
 
 import com.grandis.nova.common.OffsetPage;
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.order.draw.domain.exception.DrawKeyTakenException;
 import com.grandis.nova.order.draw.domain.model.DrawCampaign;
+import com.grandis.nova.order.draw.domain.model.DrawProgress;
 import com.grandis.nova.order.draw.domain.model.NewDrawCampaign;
 import com.grandis.nova.order.draw.domain.repository.DrawCampaignStore;
 import com.grandis.nova.order.draw.persistence.entity.DrawCampaignJpaEntity;
@@ -15,6 +17,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Repository;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -59,6 +63,32 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
     @Override
     public Optional<DrawCampaign> findByIdempotencyKey(String idempotencyKey) {
         return campaigns.findByIdempotencyKey(idempotencyKey).map(JpaDrawCampaignStore::toDomain);
+    }
+
+    @Override
+    public List<UUID> findDrawable(Instant now, int limit) {
+        return campaigns.findDrawable(now, limit).stream().map(UuidBinary::fromBytes).toList();
+    }
+
+    @Override
+    public void lock(UUID campaignId) {
+        campaigns.lockRow(campaignId).orElseThrow(() -> new IllegalArgumentException("회차가 없다: " + campaignId));
+    }
+
+    @Override
+    public boolean markDrawRequested(UUID campaignId, Instant now) {
+        return campaigns.markDrawRequested(campaignId, now) == 1;
+    }
+
+    @Override
+    public boolean markSettled(UUID campaignId, Instant now) {
+        return campaigns.markSettled(campaignId, now) == 1;
+    }
+
+    @Override
+    public Optional<DrawProgress> findProgress(UUID campaignId) {
+        return campaigns.findProgress(campaignId).map(row -> new DrawProgress(row.getPaidEntries(), row.getAuthorizingEntries(),
+                row.getAwaitingEntries(), row.getWinners(), row.getDrawRequestedAt(), row.getSettledAt()));
     }
 
     @Override

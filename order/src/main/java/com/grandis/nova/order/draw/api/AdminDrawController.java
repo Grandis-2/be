@@ -61,6 +61,12 @@ public class AdminDrawController {
         return ApiResponse.ok(queries.list(PageSizes.requirePage(page, checkedSize), checkedSize).map(c -> DrawResponse.of(c, now)));
     }
 
+    @GetMapping("/{drawId}/progress")
+    @Operation(summary = "응모 · 추첨 진행", description = "결제 완료 · 결제 확인 중 · 결제 대기 응모 수, 당첨 수, 추첨 요청 · 결과 반영 시각. 마감 뒤 결제 확인 중이 0 이 돼야 추첨한다")
+    public ApiResponse<DrawProgressResponse> progress(@PathVariable UUID drawId) {
+        return ApiResponse.ok(DrawProgressResponse.of(queries.progress(drawId)));
+    }
+
     @GetMapping("/{drawId}")
     @Operation(summary = "회차 상세")
     public ApiResponse<DrawResponse> get(@PathVariable UUID drawId) {

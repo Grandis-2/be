@@ -69,6 +69,7 @@ public class OrderController {
             case CART -> placeCartOrderService.place(customerId, accessToken, request.requireCartSelections(),
                     request.shipTo().toAddress());
             case BUY_NOW -> throw ValidationFailures.of("source", "바로 구매 주문은 아직 받지 않습니다.");
+            case DRAW -> throw ValidationFailures.of("source", "드로우 당첨 주문은 만들 수 없습니다.");
         };
         ApiResponse<PlaceOrderResponse> body = ApiResponse.ok(PlaceOrderResponse.of(result));
         if (!result.created()) {

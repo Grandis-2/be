@@ -71,14 +71,15 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     /**
-     * 새 주문만 받는다. 이미 저장된 주문이나 결제 대기가 아닌 주문을 넣으면 상태 머신 · 이력을 거치지 않은 주문이 생긴다.
+     * 새 주문만 받는다. 이미 저장된 주문이나 처음 상태({@link Order#initialStatus} — 드로우 당첨은 결제 확인 대기, 나머지는 결제 대기)가
+     * 아닌 주문을 넣으면 상태 머신 · 이력을 거치지 않은 주문이 생긴다.
      * 거부는 @Repository 예외 변환을 거쳐 InvalidDataAccessApiUsageException 으로 나간다(원인은 IllegalArgumentException).
      */
     @Override
     public Order insert(Order order) {
-        if (!order.isNew() || order.status() != OrderStatus.AWAITING_PAYMENT
+        if (!order.isNew() || order.status() != Order.initialStatus(order.source())
                 || order.eventSequence() != OrderEvent.FIRST_SEQUENCE) {
-            throw new IllegalArgumentException("새 주문(id 없음 · 결제 대기 · 이력 번호 1)만 저장할 수 있다: " + order);
+            throw new IllegalArgumentException("새 주문(id 없음 · 처음 상태 · 이력 번호 1)만 저장할 수 있다: " + order);
         }
         try {
             return OrderMapper.toDomain(orders.saveAndFlush(OrderMapper.toEntity(order)));

@@ -4,6 +4,7 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.draw.domain.model.DrawCampaign;
+import com.grandis.nova.order.draw.domain.model.DrawProgress;
 import com.grandis.nova.order.draw.domain.repository.DrawCampaignStore;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -36,6 +37,12 @@ public class DrawQueryService {
     /** @throws BusinessException 404 DRAW_NOT_FOUND */
     public DrawCampaign get(UUID drawId) {
         return readTransaction.execute(status -> campaigns.findById(drawId))
+                .orElseThrow(() -> new BusinessException(OrderErrorCode.DRAW_NOT_FOUND));
+    }
+
+    /** 응모 · 추첨 진행(관리자). @throws BusinessException 404 DRAW_NOT_FOUND */
+    public DrawProgress progress(UUID drawId) {
+        return readTransaction.execute(status -> campaigns.findProgress(drawId))
                 .orElseThrow(() -> new BusinessException(OrderErrorCode.DRAW_NOT_FOUND));
     }
 

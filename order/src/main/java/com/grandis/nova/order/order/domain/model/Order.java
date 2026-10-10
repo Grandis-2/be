@@ -65,9 +65,9 @@ public record Order(
             throw new IllegalArgumentException("사전예약 주문만 preorderId 를 가진다: source=" + source);
         }
         PreorderTokens.requireLinked(source, preorderToken);
-        // ck_order_due
-        if (preorder != (paymentDueAt == null)) {
-            throw new IllegalArgumentException("결제 기한은 일반 주문에만 있다: source=" + source);
+        // ck_order_due — 사전예약(예약의 기한을 따름) · 드로우 당첨(결제 없음)은 기한이 없다
+        if ((preorder || source == OrderSource.DRAW) != (paymentDueAt == null)) {
+            throw new IllegalArgumentException("결제 기한은 장바구니 · 바로 구매 주문에만 있다: source=" + source);
         }
         // ck_order_preorder_no_stock · ck_order_stock_released_canceled
         if (stockReleasedAt != null && (preorder || status != OrderStatus.CANCELED)) {
@@ -105,10 +105,21 @@ public record Order(
             }
             case CART -> now.plus(PAYMENT_WINDOW);
             case BUY_NOW -> throw new IllegalArgumentException("바로 구매 주문은 아직 만들 수 없다: source=" + draft.source());
+            case DRAW -> {
+                if (draft.totalAmount().amount().signum() != 0) {
+                    throw new IllegalArgumentException("드로우 당첨 주문은 0원이다");
+                }
+                yield null;
+            }
         };
         return new Order(null, orderToken, draft.customerId(), draft.source(), draft.preorderId(),
-                draft.preorderToken(), OrderStatus.AWAITING_PAYMENT, null, draft.totalAmount(), paymentDueAt, null, draft.shipTo(),
+                draft.preorderToken(), initialStatus(draft.source()), null, draft.totalAmount(), paymentDueAt, null, draft.shipTo(),
                 null, OrderEvent.FIRST_SEQUENCE, null, null);
+    }
+
+    /** 처음 상태. 드로우 당첨 주문은 결제가 없어(응모비로 이미 냈다) 결제 완료 — 결제 확인 대기로 생긴다. 나머지는 결제 대기다. */
+    public static OrderStatus initialStatus(OrderSource source) {
+        return source == OrderSource.DRAW ? OrderStatus.AWAITING_CONFIRMATION : OrderStatus.AWAITING_PAYMENT;
     }
 
     @Override
