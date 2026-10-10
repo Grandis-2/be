@@ -15,6 +15,10 @@ public record CartLine(UUID id, UUID customerId, UUID optionId, boolean warranty
         CartLimits.requireQuantity(quantity);
     }
 
+    public CartSlot slot() {
+        return new CartSlot(optionId, warranty);
+    }
+
     /** 같은 (옵션, 보증)의 줄인가 — 담기가 이 줄에 합산된다. */
     public boolean sameSlot(UUID otherOptionId, boolean otherWarranty) {
         return optionId.equals(otherOptionId) && warranty == otherWarranty;

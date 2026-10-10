@@ -4,7 +4,6 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.client.payment.PaymentAttempt;
 import com.grandis.nova.order.client.payment.PaymentPreparer;
-import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderItem;
@@ -23,6 +22,7 @@ import java.util.UUID;
  *
  * 순서: 주문 확인(본인 · 결제 대기) → 결제 가능 재확인({@link PayabilityGate}, 트랜잭션 밖) → payment 에 거래 생성(트랜잭션 밖).
  *
+ * - 사전예약 · 장바구니 주문을 받는다. 결제할 수 있는지는 출처마다 다르게 판정한다({@link PayabilityGate}).
  * - 금액은 주문의 저장된 총액이다. 사용자가 보낸 값을 받지 않는다.
  * - payment 는 주문 상태를 모른다. "결제 대기인가" 판정은 여기서 끝낸다. 이 판정과 payment 호출 사이에 주문이 바뀌어도
  *   버려진 PENDING 거래가 남을 뿐이다 — 승인 시작이 원장 전제(AWAITING_PAYMENT)로 다시 막는다.
@@ -80,9 +80,6 @@ public class PreparePaymentService {
                 .orElseThrow(() -> new BusinessException(OrderErrorCode.ORDER_NOT_FOUND));
         if (found.order().status() != OrderStatus.AWAITING_PAYMENT) {
             throw new BusinessException(OrderErrorCode.ORDER_NOT_PAYABLE);
-        }
-        if (found.order().source() != OrderSource.PREORDER) {
-            throw new IllegalStateException("사전예약 주문만 결제할 수 있다: orderId=" + found.order().id());
         }
         return found;
     }

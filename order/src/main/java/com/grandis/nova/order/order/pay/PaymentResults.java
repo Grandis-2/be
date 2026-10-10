@@ -1,5 +1,8 @@
 package com.grandis.nova.order.order.pay;
 
+import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.order.MySqlLockFailures;
 import com.grandis.nova.order.client.payment.DeclineReason;
 import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
@@ -10,8 +13,10 @@ import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.EnumSet;
@@ -22,7 +27,7 @@ import java.util.UUID;
  * 결제 결과를 주문에 반영한다 — 승인 API 의 동기 응답과 결과 이벤트 소비가 같은 길을 쓴다. 둘 다 오거나 순서가 바뀌어도
  * 원장 전제(승인 중)로 한 번만 반영된다. 거절 · 되돌림은 그 결제창의 승인 중일 때만 반영한다(OrderLedger#settlePayment).
  *
- * 결과 하나 = 트랜잭션 하나.
+ * 결과 하나 = 트랜잭션 하나. 장바구니 주문의 승인은 같은 트랜잭션에서 판매 확정 · 장바구니 차감까지 한다({@link CartOrderFulfillment}).
  *
  * 승인이 반영되지 못했는데 주문이 결제되지 않은 상태(결제 대기 · 취소됨)면 돈이 나간 채 주문이 받지 못한 것이다. 상태 머신으로는
  * 갈 수 없는 경우다 — 승인 중에는 취소를 받지 않고, 되돌림은 그 결제창의 거절 · "앞으로도 시작될 수 없다" 확언으로만 일어난다.
@@ -41,13 +46,18 @@ public class PaymentResults {
             OrderStatus.PREPARING_ITEMS, OrderStatus.READY_TO_SHIP, OrderStatus.SHIPPED, OrderStatus.DELIVERED,
             OrderStatus.CANCELING);
 
+    static final int MAX_ATTEMPTS = 3;
+
     private final OrderLedger ledger;
     private final OrderReader orderReader;
+    private final CartOrderFulfillment fulfillment;
     private final TransactionTemplate writeTransaction;
 
-    public PaymentResults(OrderLedger ledger, OrderReader orderReader, PlatformTransactionManager transactionManager) {
+    public PaymentResults(OrderLedger ledger, OrderReader orderReader, CartOrderFulfillment fulfillment,
+                          PlatformTransactionManager transactionManager) {
         this.ledger = ledger;
         this.orderReader = orderReader;
+        this.fulfillment = fulfillment;
         this.writeTransaction = new TransactionTemplate(transactionManager);
     }
 
@@ -95,9 +105,35 @@ public class PaymentResults {
         return apply(orderId, OrderTrigger.PAYMENT_DECLINED, providerOrderId, EventCause.system("PAYMENT_NOT_STARTED"));
     }
 
+    /**
+     * 교착(1213)이면 새 트랜잭션에서 다시 한다(최대 {@link #MAX_ATTEMPTS}번). 장바구니 주문의 승인은 주문 행 → 장바구니 줄 → 재고 행 순서로
+     * 잠그는데, 같은 회원의 장바구니 주문 생성은 장바구니 줄 → 앞 주문 행 순서라 결제 반영 순간 다시 주문하면 서로 기다릴 수 있다. 다시 하기는
+     * 원장의 승인 중 전제로 한 번만 반영된다. 바깥 트랜잭션 안에서 불리면 새 트랜잭션을 열 수 없으므로 다시 하지 않는다.
+     */
     private OrderTransition apply(UUID orderId, OrderTrigger result, String providerOrderId, EventCause cause) {
-        OrderTransition transition = writeTransaction.execute(status ->
-                ledger.settlePayment(orderId, result, providerOrderId, cause));
+        int attempts = TransactionSynchronizationManager.isActualTransactionActive() ? 1 : MAX_ATTEMPTS;
+        OrderTransition transition;
+        for (int attempt = 1; ; attempt++) {
+            try {
+                transition = writeTransaction.execute(status -> {
+                    OrderTransition settled = ledger.settlePayment(orderId, result, providerOrderId, cause);
+                    // 승인이 이번에 반영됐을 때만 — 같은 트랜잭션이다. 재고 장부 어긋남은 반영을 막지 않고 ERROR 로 알린다(돈을 따른다).
+                    // 장바구니 차감의 잠근 줄 갱신이 1행이 아니면(잠금 규칙이 깨짐) 승인 반영도 되돌아가 다시 받는다
+                    if (settled.applied() && result == OrderTrigger.PAYMENT_APPROVED) {
+                        fulfillment.onApproved(orderId, providerOrderId);
+                    }
+                    return settled;
+                });
+                break;
+            } catch (PessimisticLockingFailureException e) {
+                if (attempt >= attempts || !MySqlLockFailures.isDeadlock(e)) {
+                    // 잠금 대기 초과 · 다시 해도 교착 — 일시 장애다(503). 승인 응답 경로는 다시 부르고, 결과 이벤트는 다시 받는다
+                    log.warn("결제 결과 반영 잠금 실패, 포기 orderId={} attempt={}", orderId, attempt, e);
+                    throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+                }
+                log.info("결제 결과 반영 교착, 다시 시도 {}/{} orderId={}", attempt, attempts, orderId);
+            }
+        }
         log.info("결제 결과 반영 orderId={} providerOrderId={} result={} applied={} status={}",
                 orderId, providerOrderId, result, transition.applied(), transition.status());
         return transition;

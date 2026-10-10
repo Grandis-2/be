@@ -72,6 +72,11 @@ class JpaStockStore implements StockReader, StockWriter {
     }
 
     @Override
+    public int sell(UUID optionId, int quantity, Instant now) {
+        return inventories.sell(optionId, quantity, now);
+    }
+
+    @Override
     public void insert(UUID optionId, int total, Instant now) {
         try {
             entityManager.persist(new OptionInventoryJpaEntity(optionId, total, now));

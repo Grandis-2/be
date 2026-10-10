@@ -37,6 +37,8 @@ import java.util.stream.Collectors;
  *   <li>반환({@link #release}): 옵션마다 조건부 UPDATE 한 번(확보 ≥ 수량일 때만 확보 −= 수량).</li>
  *   <li>반환 + 확보({@link #releaseAndReserve}): 옵션마다 증감을 합쳐 한 번에 — 순증은 조건부 확보, 순감은 반환. 따로 정렬해 두 번 돌면
  *       "반환 옵션들 → 확보 옵션들" 순서가 되어 전역 순서가 깨진다.</li>
+ *   <li>판매 확정({@link #sell}): 옵션마다 조건부 UPDATE 한 번(확보 ≥ 수량일 때만 확보 → 판매). 모자란 옵션은 옮기지 않고 돌려준다 — 던지지
+ *       않으므로 아래 "모두 되거나 모두 안 된다" · "예외면 롤백" 의 예외다(돈이 나간 뒤라 결제 반영을 막지 않는다).</li>
  * </ul>
  * 잠금 순서가 요청 순서와 무관해, 옵션 순서가 다른 요청끼리 서로 기다리며 교착하지 않는다. 동시 삽입이 부르는 잠금
  * (PK 중복 확인의 S 잠금, FK 검사의 product_options 부모 S 잠금)은 이 순서 밖이라 드물게 교착할 수 있고, 그건 호출하는
@@ -157,6 +159,28 @@ public class StockLedger {
                 throw new IllegalStateException("반환할 확보가 모자란다: optionId=" + entry.getKey() + ", quantity=" + entry.getValue());
             }
         }
+    }
+
+    /**
+     * 결제 성공의 판매 확정 — 주문이 확보해 둔 수량을 판매로 옮긴다. {@link #LOCK_ORDER} 순서, 옵션마다 조건부 UPDATE(확보 ≥ 수량).
+     *
+     * 확보가 모자란 옵션은 옮기지 않고 돌려준다 — 던지지 않는다. 돈은 이미 나갔으므로 결제 반영은 그대로 하고 재고 어긋남만 따로 알린다
+     * (2026-10-10 결정). 결제 대기 · 승인 중에는 주문의 확보가 줄지 않으므로 수동 수정 · 다른 버그에서만 생긴다. 확보는 옵션 전체의 합이라
+     * 이 주문 몫이 빠졌어도 다른 주문의 확보가 남아 있으면 여기서는 드러나지 않는다.
+     *
+     * @param quantities 옵션 id → 그 주문이 확보한 수량
+     * @return 판매로 옮기지 못한 옵션(확보가 모자람). 정상이면 비어 있다
+     */
+    public List<UUID> sell(Map<UUID, Integer> quantities) {
+        requirePositive(quantities);
+        Instant now = clock.instant();
+        List<UUID> mismatched = new ArrayList<>();
+        for (Map.Entry<UUID, Integer> entry : ordered(quantities).entrySet()) {
+            if (writer.sell(entry.getKey(), entry.getValue(), now) != 1) {
+                mismatched.add(entry.getKey());
+            }
+        }
+        return mismatched;
     }
 
     /** @param existing 이미 읽은(설정이면 잠근) 행. 그 뒤의 시각을 찍어야 기다린 다른 쓰기보다 앞선 시각이 남지 않는다 */

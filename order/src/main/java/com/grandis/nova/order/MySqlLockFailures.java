@@ -2,7 +2,10 @@ package com.grandis.nova.order;
 
 import java.sql.SQLException;
 
-/** MySQL 잠금 실패 가르기. 재고 변경 · 장바구니 담기가 교착이면 새 트랜잭션에서 다시 하고, 잠금 대기 초과면 다시 하지 않는다. */
+/**
+ * MySQL 잠금 실패 가르기. 재고 변경 · 장바구니 쓰기 · 장바구니 주문 생성 · 결제 결과 반영이 교착이면 새 트랜잭션에서 다시 하고,
+ * 잠금 대기 초과면 다시 하지 않는다.
+ */
 public final class MySqlLockFailures {
 
     /** ER_LOCK_DEADLOCK */

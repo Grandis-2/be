@@ -42,6 +42,13 @@ public interface StockWriter {
     int release(UUID optionId, int quantity, Instant now);
 
     /**
+     * 확보가 quantity 이상일 때만 확보에서 판매로 quantity 만큼 옮긴다(결제 성공).
+     *
+     * @return 조건에 맞은 행 수(0 또는 1)
+     */
+    int sell(UUID optionId, int quantity, Instant now);
+
+    /**
      * 확보 · 판매 0 인 새 행을 만든다.
      *
      * @throws StockAlreadyCreatedException 다른 트랜잭션이 같은 옵션의 행을 먼저 만들었다
