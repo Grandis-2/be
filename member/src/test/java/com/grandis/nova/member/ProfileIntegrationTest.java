@@ -146,7 +146,8 @@ class ProfileIntegrationTest {
         org.awaitility.Awaitility.await("PUT 이 회원 행에서 기다리지 않았다").atMost(java.time.Duration.ofSeconds(10)).until(() ->
                 jdbc.queryForObject("""
                         SELECT COUNT(*) FROM information_schema.PROCESSLIST
-                         WHERE COMMAND = 'Query' AND INFO LIKE '%customers%' AND INFO NOT LIKE '%PROCESSLIST%'""", Long.class) > 0);
+                         WHERE COMMAND = 'Query' AND ID <> CONNECTION_ID()
+                           AND LOWER(INFO) LIKE '%from customers %for update%'""", Long.class) > 0);
         commit.countDown();
         holder.get(20, java.util.concurrent.TimeUnit.SECONDS);
         assertThat(putting.get(20, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo(200);
