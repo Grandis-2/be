@@ -24,7 +24,7 @@ import java.util.Set;
  * 결제 가능 재확인(B1) — 결제 준비 · 승인이 함께 쓴다.
  *
  * 장바구니 주문은 주문의 기한(만든 때 + 10분)만 본다 — 기한이 지났으면 PAYMENT_WINDOW_EXPIRED. 기한이 지난 결제 대기 주문의 취소 · 재고 반환은
- * 만료 처리가 한다. 승인 중이 된 뒤에는 기한을 넘겨도 결과를 받는다(만료 처리는 승인 중을 건드리지 않는다).
+ * 결제 기한 만료 처리(별도)가 한다. 승인 중이 된 뒤에는 기한을 넘겨도 결과를 받는다 — 만료 처리는 결제 대기만 고른다.
  *
  * 사전예약 주문의 기한 · 취소 판정은 preorder 한 곳이 한다(D3). 주문 생성 뒤 시간이 지났으므로
  * 결제 때 다시 묻는다. 트랜잭션 밖에서 부른다(preorder 응답을 기다리는 동안 잠금을 쥐지 않게).
@@ -60,7 +60,7 @@ class PayabilityGate {
     /**
      * @param sessionToken 사용자가 보낸 액세스 토큰. preorder 에 그대로 전달한다
      * @throws BusinessException     PREORDER_NOT_PAYABLE · PAYMENT_WINDOW_EXPIRED · UNAUTHENTICATED · DEPENDENCY_UNAVAILABLE
-     * @throws IllegalStateException 주문의 예약이 보이지 않거나 다른 예약 · 회원이다(데이터 어긋남)
+     * @throws IllegalStateException 주문의 예약이 보이지 않거나 다른 예약 · 회원이다(데이터 어긋남), 바로 구매 주문(아직 없음)
      */
     void require(Order order, String sessionToken) {
         switch (order.source()) {

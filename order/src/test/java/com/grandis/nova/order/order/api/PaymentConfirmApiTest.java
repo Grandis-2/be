@@ -120,6 +120,8 @@ class PaymentConfirmApiTest {
     UUID preorderId;
     Order order;
     String attempt;
+    /** 장바구니 주문 시험({@link #cartOrder})이 심은 옵션. */
+    UUID cartOption;
 
     @BeforeEach
     void setUp() {
@@ -648,7 +650,23 @@ class PaymentConfirmApiTest {
                 .isEqualTo("AWAITING_PAYMENT");
     }
 
-    UUID cartOption;
+    /** 승인 중 재요청인데 장바구니 주문의 기한이 지났다 — 시작하지 않고 결과만 회수한다(돈이 이미 나갔을 수 있어 주문은 그대로). */
+    @Test
+    void retryForExpiredCartOrderOnlyRecoversResult() throws Exception {
+        Order cart = cartOrder(1);
+        fixtures.forceAuthorizing(cart.id(), attempt);
+        jdbcTemplate.update("UPDATE orders SET payment_due_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ?", (Object) bytes(cart.id()));
+        paymentAnswers(reply(ConfirmReply.Result.PENDING, null));
+
+        perform(customerId, cart.orderToken().value(), attempt, body(PAYMENT, cart.totalAmount().amount()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.result").value("PENDING"));
+
+        verify(paymentClient).confirm(eq(attempt),
+                eq(new ConfirmRequest("ORDER", cart.id(), PAYMENT, cart.totalAmount().amount(), false, false)), any());
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, (Object) bytes(cart.id())))
+                .isEqualTo("AUTHORIZING");
+    }
 
     /** 같은 회원의 장바구니 주문 — 장바구니 줄(무보증, quantity) · 재고 5 를 심고 확보까지 한 결제 대기 주문. */
     private Order cartOrder(int quantity) {

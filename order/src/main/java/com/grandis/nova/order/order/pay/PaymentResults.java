@@ -1,5 +1,7 @@
 package com.grandis.nova.order.order.pay;
 
+import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.order.MySqlLockFailures;
 import com.grandis.nova.order.client.payment.DeclineReason;
 import com.grandis.nova.order.order.OrderLedger;
@@ -115,16 +117,19 @@ public class PaymentResults {
             try {
                 transition = writeTransaction.execute(status -> {
                     OrderTransition settled = ledger.settlePayment(orderId, result, providerOrderId, cause);
-                    // 승인이 이번에 반영됐을 때만 — 같은 트랜잭션이라 판매 확정 · 장바구니 차감이 실패하면 승인 반영도 되돌아가 다시 받는다
+                    // 승인이 이번에 반영됐을 때만 — 같은 트랜잭션이다. 재고 장부 어긋남은 반영을 막지 않고 ERROR 로 알린다(돈을 따른다).
+                    // 장바구니 차감의 잠근 줄 갱신이 1행이 아니면(잠금 규칙이 깨짐) 승인 반영도 되돌아가 다시 받는다
                     if (settled.applied() && result == OrderTrigger.PAYMENT_APPROVED) {
-                        fulfillment.onApproved(orderId);
+                        fulfillment.onApproved(orderId, providerOrderId);
                     }
                     return settled;
                 });
                 break;
             } catch (PessimisticLockingFailureException e) {
                 if (attempt >= attempts || !MySqlLockFailures.isDeadlock(e)) {
-                    throw e;
+                    // 잠금 대기 초과 · 다시 해도 교착 — 일시 장애다(503). 승인 응답 경로는 다시 부르고, 결과 이벤트는 다시 받는다
+                    log.warn("결제 결과 반영 잠금 실패, 포기 orderId={} attempt={}", orderId, attempt, e);
+                    throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
                 }
                 log.info("결제 결과 반영 교착, 다시 시도 {}/{} orderId={}", attempt, attempts, orderId);
             }

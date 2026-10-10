@@ -151,16 +151,18 @@ class CartOrderPaymentTest {
     }
 
     @Test
-    @DisplayName("판매 확정이 실패하면(확보가 모자람 — 데이터 어긋남) 승인 반영 · 장바구니 차감도 되돌아간다 — 다시 받으면 다시 한다")
-    void failedSaleRollsBackApprovalAndCartDeduction() {
+    @DisplayName("재고 장부가 어긋나 판매 확정을 못 해도(확보가 모자람) 돈은 나갔으니 주문은 결제됨 · 장바구니도 뺀다 — 어긋난 옵션만 옮기지 않고 전용 ERROR")
+    void mismatchedStockStillSettlesAndAlerts(CapturedOutput output) {
         fixtures.forceAuthorizing(order.id(), PROVIDER_ORDER_ID);
         jdbcTemplate.update("UPDATE option_inventories SET stock_reserved = 0 WHERE option_id = ?", (Object) bytes(watch));
 
-        assertThatThrownBy(() -> results.settle(approved())).isInstanceOf(IllegalStateException.class);
+        assertThat(results.settle(approved()).applied()).isTrue();
 
-        assertThat(statusOf()).isEqualTo("AUTHORIZING");
-        assertThat(cart()).hasSize(3);
-        assertThat(stockOf(phone)).containsExactly(10, 4, 0);
+        assertThat(statusOf()).isEqualTo("AWAITING_CONFIRMATION");
+        assertThat(cart()).containsExactlyInAnyOrderEntriesOf(Map.of(phone + "/false", 1));
+        assertThat(stockOf(phone)).as("어긋나지 않은 옵션은 판매로").containsExactly(10, 0, 4);
+        assertThat(stockOf(watch)).as("어긋난 옵션은 그대로").containsExactly(10, 0, 0);
+        assertThat(output).contains("재고 어긋남").contains(order.id().toString()).contains(PROVIDER_ORDER_ID).contains(watch.toString());
     }
 
     @Test
