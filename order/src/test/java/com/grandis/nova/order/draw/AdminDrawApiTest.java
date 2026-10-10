@@ -15,13 +15,15 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
-import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -367,6 +369,20 @@ class AdminDrawApiTest {
     void adminOnly() throws Exception {
         mockMvc.perform(get("/api/v1/admin/draws")).andExpect(status().isUnauthorized());
         mockMvc.perform(get("/api/v1/admin/draws").with(TestAuth.customer(UUID.randomUUID()))).andExpect(status().isForbidden());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"1.5", "\"2\"", "1e0"})
+    @DisplayName("당첨 인원이 정수가 아니면 400 — 잘라 받지 않는다")
+    void nonIntegerWinnerCountIs400(String token) throws Exception {
+        UUID option = gift(10, true);
+        Instant now = Instant.now();
+        String body = """
+                {"productId":"%s","optionId":"%s","title":"t","entryFee":100,"winnerCount":%s,"opensAt":"%s","closesAt":"%s"}"""
+                .formatted(catalog.get(option).productId(), option, token, now, now.plusSeconds(600));
+
+        create(body).andExpect(status().isBadRequest()).andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
+        assertThat(reserved(option)).isZero();
     }
 
     /** 일반 판매 · 판매 중 · 재고 등록 옵션. visible=false 면 매장에 안 보이는 증정품이다. */

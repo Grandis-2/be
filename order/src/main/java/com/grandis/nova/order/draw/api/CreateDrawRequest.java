@@ -2,12 +2,14 @@ package com.grandis.nova.order.draw.api;
 
 import com.grandis.nova.order.draw.AdminDrawService;
 import com.grandis.nova.order.web.ValidationFailures;
+import com.grandis.nova.order.web.WholeInteger;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import tools.jackson.databind.annotation.JsonDeserialize;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -28,7 +30,7 @@ public record CreateDrawRequest(
         @NotNull UUID optionId,
         @NotBlank @Size(max = 100) String title,
         @NotNull @DecimalMin("100") @Digits(integer = 12, fraction = 0) BigDecimal entryFee,
-        @NotNull @Min(1) Integer winnerCount,
+        @JsonDeserialize(using = WholeInteger.class) @NotNull @Min(1) Integer winnerCount,
         @NotNull Instant opensAt,
         @NotNull Instant closesAt
 ) {
