@@ -4,6 +4,7 @@ import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.order.draw.domain.exception.DrawKeyTakenException;
 import com.grandis.nova.order.draw.domain.model.DrawCampaign;
+import com.grandis.nova.order.draw.domain.model.DrawCloseState;
 import com.grandis.nova.order.draw.domain.model.DrawProgress;
 import com.grandis.nova.order.draw.domain.model.NewDrawCampaign;
 import com.grandis.nova.order.draw.domain.repository.DrawCampaignStore;
@@ -89,6 +90,16 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
     public Optional<DrawProgress> findProgress(UUID campaignId) {
         return campaigns.findProgress(campaignId).map(row -> new DrawProgress(row.getPaidEntries(), row.getAuthorizingEntries(),
                 row.getAwaitingEntries(), row.getWinners(), row.getDrawRequestedAt(), row.getSettledAt()));
+    }
+
+    @Override
+    public Optional<DrawCloseState> findCloseState(UUID campaignId) {
+        return campaigns.findCloseState(campaignId).map(row -> new DrawCloseState(row.getDrawRequestedAt(), row.getSettledAt()));
+    }
+
+    @Override
+    public List<UUID> findUnsettled(Instant closedBefore, int limit) {
+        return campaigns.findUnsettled(closedBefore, limit).stream().map(UuidBinary::fromBytes).toList();
     }
 
     @Override

@@ -6,6 +6,7 @@ import com.grandis.nova.order.draw.domain.model.EntryTransition;
 import com.grandis.nova.order.draw.domain.model.NewDrawEntry;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -30,8 +31,16 @@ public interface DrawEntryStore {
     /** 결제 대기 → 승인 중(그 결제창). */
     EntryTransition requestPayment(UUID entryId, String providerOrderId, Instant now);
 
-    /** 그 회차의 결제 완료 응모(추첨 대상). */
+    /** 그 회차의 결제 완료 응모(추첨 대상). 전원 당첨일 때만 읽는다(당첨 인원 이하). */
     List<DrawEntry> findPaid(UUID campaignId);
+
+    long countPaid(UUID campaignId);
+
+    /** ids 중 그 회차의 결제 완료 응모. */
+    List<DrawEntry> findPaidAmong(UUID campaignId, Collection<UUID> ids);
+
+    /** 그 회차의 당첨 응모 id(당첨 주문이 이어진 응모). */
+    List<UUID> findWinnerIds(UUID campaignId);
 
     /** @return 이번에 당첨 주문을 이었으면 true — 그 회차의 결제 완료 응모이고 아직 잇지 않았을 때만 */
     boolean markWon(UUID campaignId, UUID entryId, UUID orderId, Instant now);

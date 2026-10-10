@@ -23,6 +23,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -35,14 +36,16 @@ import java.util.stream.Collectors;
 /**
  * 회차의 추첨 요청과 결과 반영. 회차마다 한 번씩이다 — 회차 행을 잠그고 요청 · 반영 표식(전제를 건 UPDATE)으로 가른다.
  *
- * 추첨할 차례: 마감됐고 결제 확인 중(AUTHORIZING) 응모가 없다. 마감 뒤에는 결제가 새로 시작되지 않으므로(DrawEntryPaymentService — 승인 직전에
- * 기간을 다시 본다) 이때의 결제 완료 응모가 추첨 대상 전부다.
+ * 추첨할 차례: 마감 뒤 {@link #CLOSE_GRACE} 가 지났고 결제 확인 중(AUTHORIZING) 응모가 없다. 마감 뒤에는 결제가 새로 시작되지 않으므로
+ * (DrawEntryPaymentService — 승인 직전에 기간을 다시 본다) 이때의 결제 완료 응모가 추첨 대상 전부다 — 단, 인스턴스 사이 시계 차가 여유보다
+ * 작을 때 · payment 가 되돌린 결제창을 나중에 승인하지 않을 때 · 수동 수정이 없을 때다. 그 밖으로 추첨이 정해진 뒤 결제 완료가 되면
+ * 결과 반영 쪽이 "드로우 추첨 뒤 결제 완료" ERROR 를 남긴다(DrawEntryPaymentResults — 수동 환불 대상).
  * - 결제 완료 응모가 당첨 인원 이하면 추첨 없이 전원 당첨이다(2026-10-11 결정) — 바로 반영한다.
  * - 많으면 DRAW_REQUESTED 로 Mock 에 추첨을 맡기고(worker), DRAW_RESULT_READY 로 받은 당첨 응모를 반영한다.
  *
  * 반영(한 트랜잭션): 당첨 응모마다 응모 때 배송지로 0원 주문(결제 확인 대기로 생긴다 — 이 뒤로 일반 배송 단계), 당첨분 재고를 확보 → 판매로,
- * 남은 확보(당첨 인원 − 당첨 수)는 반납. 판매로 옮기지 못한 재고는 결제 반영과 같이 "재고 어긋남" ERROR 로 남기고 반영은 한다. 반납할 확보가
- * 모자라면(장부 어긋남) 반영 전체를 롤백한다 — 장바구니 주문 반환과 같다.
+ * 남은 확보(당첨 인원 − 당첨 수 — 전원 당첨일 때만 생긴다, Mock 결과는 늘 당첨 인원만큼이다)는 반납. 판매로 옮기지 못하면 "재고 어긋남" ERROR 를
+ * 남기고, 반납할 확보가 모자라면(장부 어긋남) 반영 전체를 롤백한다 — 전원 당첨에서 판매가 모자랐다면 반납도 모자라 결국 롤백된다.
  */
 @Service
 public class DrawSettlement {
@@ -50,6 +53,8 @@ public class DrawSettlement {
     private static final Logger log = LoggerFactory.getLogger(DrawSettlement.class);
 
     static final String WON_REASON = "DRAW_WON";
+    /** 마감 뒤 이만큼 기다린 뒤 추첨할 차례로 본다 — order 인스턴스 사이 시계 차(NTP)보다 넉넉하게. */
+    static final Duration CLOSE_GRACE = Duration.ofSeconds(30);
 
     private final DrawCampaignStore campaigns;
     private final DrawEntryStore entries;
@@ -73,23 +78,24 @@ public class DrawSettlement {
     /** 추첨할 차례인 회차 하나를 처리한다 — 전원 당첨이면 반영, 아니면 추첨 요청. @return 이번에 무언가 했으면 true */
     public boolean close(UUID campaignId) {
         return Boolean.TRUE.equals(writeTransaction.execute(status -> {
+            Instant now = clock.instant();
             campaigns.lock(campaignId);
             DrawCampaign campaign = campaigns.findById(campaignId).orElseThrow(() -> new IllegalStateException("회차가 없다: " + campaignId));
             DrawProgress progress = campaigns.findProgress(campaignId).orElseThrow();
-            Instant now = clock.instant();
             if (progress.drawRequestedAt() != null || progress.settledAt() != null || progress.authorizingEntries() > 0
-                    || now.isBefore(campaign.closesAt())) {
+                    || now.isBefore(campaign.closesAt().plus(CLOSE_GRACE))) {
                 return false;
             }
-            List<DrawEntry> paid = entries.findPaid(campaignId);
-            if (paid.size() <= campaign.winnerCount()) {
-                apply(campaign, paid, now);
-                log.info("드로우 전원 당첨 반영 drawId={} winners={} winnerCount={}", campaignId, paid.size(), campaign.winnerCount());
+            long paid = entries.countPaid(campaignId);
+            if (paid <= campaign.winnerCount()) {
+                List<DrawEntry> winners = entries.findPaid(campaignId);
+                apply(campaign, winners, now);
+                log.info("드로우 전원 당첨 반영 drawId={} winners={} winnerCount={}", campaignId, winners.size(), campaign.winnerCount());
                 return true;
             }
             campaigns.markDrawRequested(campaignId, now);
-            outbox.append(new DrawRequested(campaignId, paid.size(), campaign.winnerCount()));
-            log.info("드로우 추첨 요청 drawId={} paidEntries={} winnerCount={}", campaignId, paid.size(), campaign.winnerCount());
+            outbox.append(new DrawRequested(campaignId, paid, campaign.winnerCount()));
+            log.info("드로우 추첨 요청 drawId={} paidEntries={} winnerCount={}", campaignId, paid, campaign.winnerCount());
             return true;
         }));
     }
@@ -106,7 +112,12 @@ public class DrawSettlement {
             DrawCampaign campaign = campaigns.findById(campaignId).orElseThrow(() -> new IllegalArgumentException("회차가 없다: " + campaignId));
             DrawProgress progress = campaigns.findProgress(campaignId).orElseThrow();
             if (progress.settledAt() != null) {
-                log.info("이미 반영한 드로우 결과 — 다시 받기 drawId={}", campaignId);
+                if (new HashSet<>(entries.findWinnerIds(campaignId)).equals(new HashSet<>(winnerEntryIds))) {
+                    log.info("이미 반영한 드로우 결과 — 다시 받기 drawId={}", campaignId);
+                } else {
+                    log.error("이미 반영한 드로우에 다른 당첨 목록이 왔다 — 반영하지 않음, Mock · worker 확인 drawId={} received={}",
+                            campaignId, winnerEntryIds);
+                }
                 return;
             }
             if (progress.drawRequestedAt() == null) {
@@ -116,7 +127,7 @@ public class DrawSettlement {
                 throw new IllegalArgumentException("당첨 수가 당첨 인원과 다르거나 같은 응모가 두 번이다: drawId=%s, winners=%d, winnerCount=%d"
                         .formatted(campaignId, winnerEntryIds.size(), campaign.winnerCount()));
             }
-            Map<UUID, DrawEntry> paid = entries.findPaid(campaignId).stream()
+            Map<UUID, DrawEntry> paid = entries.findPaidAmong(campaignId, winnerEntryIds).stream()
                     .collect(Collectors.toMap(DrawEntry::id, Function.identity(), (a, b) -> a, LinkedHashMap::new));
             List<DrawEntry> winners = winnerEntryIds.stream().map(id -> {
                 DrawEntry entry = paid.get(id);

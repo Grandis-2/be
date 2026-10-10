@@ -24,6 +24,14 @@ public interface DrawCampaignJpaRepository extends JpaRepository<DrawCampaignJpa
              LIMIT :limit""", nativeQuery = true)
     List<byte[]> findDrawable(@Param("now") Instant now, @Param("limit") int limit);
 
+    @Query(value = "SELECT draw_requested_at AS drawRequestedAt, settled_at AS settledAt FROM draw_campaigns WHERE id = :id", nativeQuery = true)
+    Optional<CloseStateRow> findCloseState(@Param("id") UUID id);
+
+    @Query(value = """
+            SELECT id FROM draw_campaigns WHERE closes_at <= :closedBefore AND settled_at IS NULL ORDER BY closes_at, id LIMIT :limit""",
+            nativeQuery = true)
+    List<byte[]> findUnsettled(@Param("closedBefore") Instant closedBefore, @Param("limit") int limit);
+
     @Query(value = "SELECT id FROM draw_campaigns WHERE id = :id FOR UPDATE", nativeQuery = true)
     Optional<byte[]> lockRow(@Param("id") UUID id);
 
@@ -47,6 +55,12 @@ public interface DrawCampaignJpaRepository extends JpaRepository<DrawCampaignJpa
              WHERE c.id = :id
              GROUP BY c.id, c.draw_requested_at, c.settled_at""", nativeQuery = true)
     Optional<ProgressRow> findProgress(@Param("id") UUID id);
+
+    interface CloseStateRow {
+        Instant getDrawRequestedAt();
+
+        Instant getSettledAt();
+    }
 
     interface ProgressRow {
         Long getPaidEntries();

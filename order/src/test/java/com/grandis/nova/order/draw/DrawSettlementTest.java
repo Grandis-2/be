@@ -1,5 +1,6 @@
 package com.grandis.nova.order.draw;
 
+import com.grandis.nova.order.draw.domain.repository.DrawCampaignStore;
 import com.grandis.nova.order.event.OrderEventDispatcher;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
@@ -8,6 +9,9 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -41,6 +45,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @OrderIntegrationTest
 @AutoConfigureMockMvc
+@ExtendWith(OutputCaptureExtension.class)
 class DrawSettlementTest {
 
     static final JsonMapper JSON = JsonMapper.builder().build();
@@ -51,6 +56,7 @@ class DrawSettlementTest {
     @Autowired DrawSettlement settlement;
     @Autowired OrderEventDispatcher dispatcher;
     @Autowired MockMvc mockMvc;
+    @Autowired DrawCampaignStore campaignStore;
 
     OrderFixtures fixtures;
     UUID product;
@@ -97,6 +103,136 @@ class DrawSettlementTest {
         assertThat(campaign(draw).get("draw_requested_at")).isNull();
         assertThat(outboxCount(draw, "DRAW_REQUESTED")).isZero();
         assertThat(orderCount(draw)).isEqualTo(2);
+        assertThat(jdbcTemplate.queryForObject("SELECT to_status FROM order_events WHERE order_id = ? AND event_sequence = 1", String.class,
+                (Object) wonOrder(first))).as("첫 이력도 결제 확인 대기").isEqualTo("AWAITING_CONFIRMATION");
+    }
+
+    @Test
+    @DisplayName("당첨 주문은 장바구니 주문 취소로 취소할 수 없다 — 409")
+    void drawOrderCannotBeCanceledAsCartOrder() throws Exception {
+        UUID draw = closedDraw(1);
+        UUID winner = fixtures.customer();
+        UUID entry = entry(draw, winner, "PAID", null);
+        settlement.close(draw);
+        String token = jdbcTemplate.queryForObject("SELECT order_token FROM orders WHERE id = ?", String.class, (Object) wonOrder(entry));
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/v1/orders/{token}/cancel", token)
+                        .with(TestAuth.customer(winner)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.message").value("드로우 당첨 주문은 취소할 수 없습니다."));
+    }
+
+    @Test
+    @DisplayName("결제 완료가 0건이면 당첨 없이 반영 — 확보 전부 반납")
+    void noPaidEntriesReleaseAll() {
+        UUID draw = closedDraw(3);
+        entry(draw, "AWAITING_PAYMENT", null);
+
+        assertThat(settlement.close(draw)).isTrue();
+
+        assertThat(campaign(draw).get("settled_at")).isNotNull();
+        assertThat(orderCount(draw)).isZero();
+        assertThat(stock()).containsEntry("stock_reserved", 0).containsEntry("stock_sold", 0);
+    }
+
+    @Test
+    @DisplayName("마감 직후(시계 차 여유 30초 안)에는 처리하지 않는다")
+    void waitsForCloseGrace() {
+        UUID draw = draw(Instant.now().minus(Duration.ofHours(1)), Instant.now().minusSeconds(5), 1);
+        entry(draw, "PAID", null);
+
+        assertThat(settlement.close(draw)).isFalse();
+        assertThat(campaignStore.findDrawable(Instant.now().minus(DrawSettlement.CLOSE_GRACE), 1000)).doesNotContain(draw);
+    }
+
+    @Test
+    @DisplayName("차례 찾기는 마감 · 요청/반영 전 · 결제 확인 중 없음인 회차만 고른다")
+    void findDrawableSelectsOnlyDueDraws() {
+        UUID due = closedDraw(1);
+        entry(due, "PAID", null);
+        UUID authorizing = closedDraw(1);
+        entry(authorizing, "AUTHORIZING", "window_find_1");
+        UUID open = draw(Instant.now().minus(Duration.ofHours(1)), Instant.now().plus(Duration.ofHours(1)), 1);
+        UUID requested = closedDraw(1);
+        entry(requested, "PAID", null);
+        entry(requested, "PAID", null);
+        settlement.close(requested);
+        UUID settled = closedDraw(1);
+        settlement.close(settled);
+
+        List<UUID> found = campaignStore.findDrawable(Instant.now(), 1000);
+
+        assertThat(found).contains(due).doesNotContain(authorizing, open, requested, settled);
+        assertThat(campaignStore.findUnsettled(Instant.now(), 1000)).contains(due, authorizing, requested).doesNotContain(open, settled);
+    }
+
+    @Test
+    @DisplayName("판매로 옮기지 못하면 재고 어긋남 ERROR 를 남기고 반영은 한다 · 반납할 확보가 모자라면 반영 전체를 롤백한다")
+    void stockMismatchBranches(CapturedOutput output) {
+        UUID draw = closedDraw(1);
+        UUID a = entry(draw, "PAID", null);
+        entry(draw, "PAID", null);
+        settlement.close(draw);
+        jdbcTemplate.update("UPDATE option_inventories SET stock_reserved = 0 WHERE option_id = ?", (Object) bytes(option));
+
+        settlement.settle(draw, List.of(a));
+
+        assertThat(wonOrder(a)).isNotNull();
+        assertThat(output.getAll()).contains("재고 어긋남 — 드로우 당첨분을 판매로 옮기지 못했다");
+
+        UUID allWin = closedDraw(3);
+        UUID lone = entry(allWin, "PAID", null);
+        jdbcTemplate.update("UPDATE option_inventories SET stock_reserved = 1 WHERE option_id = ?", (Object) bytes(option));
+
+        assertThatThrownBy(() -> settlement.close(allWin)).isInstanceOf(RuntimeException.class);
+        assertThat(wonOrder(lone)).isNull();
+        assertThat(campaign(allWin).get("settled_at")).isNull();
+        assertThat(stock()).containsEntry("stock_reserved", 1).containsEntry("stock_sold", 0);
+    }
+
+    @Test
+    @DisplayName("추첨 요청 뒤에 결제 완료가 되면 ERROR — 추첨에 들어가지 않는다(수동 환불 대상)")
+    void paidAfterDrawIsAlarmed(CapturedOutput output) {
+        UUID draw = closedDraw(1);
+        entry(draw, "PAID", null);
+        entry(draw, "PAID", null);
+        UUID late = entry(draw, "AWAITING_PAYMENT", null);
+        settlement.close(draw);
+
+        dispatcher.dispatch("""
+                {"eventId":"%s","eventType":"DRAW_ENTRY_PAYMENT_SETTLED","aggregateType":"DRAW_ENTRY","aggregateId":"%s",
+                 "occurredAt":"2026-10-11T00:00:00Z","payload":{"providerOrderId":"late_window_1","result":"APPROVED","amount":100,
+                 "approvedAt":"2026-10-11T00:00:00Z","declineReason":null}}""".formatted(UUID.randomUUID(), late));
+
+        assertThat(output.getAll()).contains("드로우 추첨 뒤 결제 완료").contains(late.toString());
+    }
+
+    @Test
+    @DisplayName("이미 반영한 회차에 다른 당첨 목록이 오면 반영하지 않고 ERROR · 같은 목록이면 조용히 지나간다")
+    void differentResultAfterSettleIsAlarmed(CapturedOutput output) {
+        UUID draw = closedDraw(1);
+        UUID a = entry(draw, "PAID", null);
+        UUID b = entry(draw, "PAID", null);
+        settlement.close(draw);
+        settlement.settle(draw, List.of(a));
+
+        settlement.settle(draw, List.of(a));
+        assertThat(output.getAll()).doesNotContain("다른 당첨 목록이 왔다");
+        settlement.settle(draw, List.of(b));
+
+        assertThat(output.getAll()).contains("이미 반영한 드로우에 다른 당첨 목록이 왔다");
+        assertThat(wonOrder(b)).isNull();
+    }
+
+    @Test
+    @DisplayName("마감 뒤 1시간 넘게 반영하지 못한 회차는 ERROR 로 알린다")
+    void stalledDrawIsAlarmed(CapturedOutput output) {
+        UUID stalled = draw(Instant.now().minus(Duration.ofDays(2)), Instant.now().minus(Duration.ofHours(2)), 1);
+        entry(stalled, "AUTHORIZING", "window_stall_1");
+
+        closer.checkStalled();
+
+        assertThat(output.getAll()).contains("드로우 결과 반영 지연").contains(stalled.toString());
     }
 
     @Test

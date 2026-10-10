@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -18,6 +19,13 @@ public interface DrawEntryJpaRepository extends JpaRepository<DrawEntryJpaEntity
     Optional<DrawEntryJpaEntity> findByCampaignIdAndCustomerId(UUID campaignId, UUID customerId);
 
     List<DrawEntryJpaEntity> findByCampaignIdAndStatusOrderById(UUID campaignId, DrawEntryStatus status);
+
+    long countByCampaignIdAndStatus(UUID campaignId, DrawEntryStatus status);
+
+    List<DrawEntryJpaEntity> findByCampaignIdAndStatusAndIdIn(UUID campaignId, DrawEntryStatus status, Collection<UUID> ids);
+
+    @Query(value = "SELECT id FROM draw_entries WHERE campaign_id = :campaignId AND won_order_id IS NOT NULL", nativeQuery = true)
+    List<byte[]> findWinnerIds(@Param("campaignId") UUID campaignId);
 
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query(value = """

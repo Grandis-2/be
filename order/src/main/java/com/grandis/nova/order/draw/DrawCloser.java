@@ -10,6 +10,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
@@ -25,6 +26,8 @@ public class DrawCloser {
     private static final Logger log = LoggerFactory.getLogger(DrawCloser.class);
 
     static final int BATCH = 100;
+    /** 마감 뒤 이만큼 지나도 반영하지 못하면 경보 — 시작 금지로 남은 결제 확인 중이 풀리는 시간(결제창 만료 35분)보다 넉넉하게. */
+    static final Duration STALL_AFTER = Duration.ofHours(1);
 
     private final DrawCampaignStore campaigns;
     private final DrawSettlement settlement;
@@ -44,9 +47,22 @@ public class DrawCloser {
         }
     }
 
+    /**
+     * 마감 뒤 {@link #STALL_AFTER} 가 지나도 결과를 반영하지 못한 회차를 ERROR 로 알린다 — 추첨 요청이 DLQ 로 갔거나 worker 가 없으면 "요청됨 ·
+     * 미반영" 에, 결제가 끝나지 않으면(payment 에스컬레이션) "결제 확인 중" 에 머문다. 저절로 풀리지 않을 수 있어 사람이 본다.
+     */
+    @Scheduled(fixedDelayString = "${nova.draw.stall-check-interval:10m}", initialDelayString = "${nova.draw.stall-check-interval:10m}")
+    void checkStalled() {
+        for (UUID campaignId : campaigns.findUnsettled(clock.instant().minus(STALL_AFTER), BATCH)) {
+            campaigns.findProgress(campaignId).ifPresent(progress -> log.error(
+                    "드로우 결과 반영 지연 — 마감 뒤 {} 넘게 반영 못 함 drawId={} drawRequestedAt={} authorizingEntries={} paidEntries={}",
+                    STALL_AFTER, campaignId, progress.drawRequestedAt(), progress.authorizingEntries(), progress.paidEntries()));
+        }
+    }
+
     /** @return 이번에 처리한 회차 수 */
     int closeDue() {
-        List<UUID> due = campaigns.findDrawable(clock.instant(), BATCH);
+        List<UUID> due = campaigns.findDrawable(clock.instant().minus(DrawSettlement.CLOSE_GRACE), BATCH);
         int closed = 0;
         for (UUID campaignId : due) {
             if (close(campaignId)) {
@@ -63,7 +79,8 @@ public class DrawCloser {
             log.warn("드로우 회차 처리 잠금 실패(교착={}), 다음 주기에 다시 drawId={}", MySqlLockFailures.isDeadlock(e), campaignId, e);
         } catch (RuntimeException e) {
             if (e.getCause() instanceof StockReleaseMismatchException || e instanceof StockReleaseMismatchException) {
-                log.error("재고 어긋남 — 드로우 남은 확보를 반납하지 못해 반영을 미룬다, 다음 주기에 다시 drawId={}", campaignId);
+                // 장부를 고칠 때까지 주기마다 다시 실패한다 — 옵션 · 수량은 예외에 있다
+                log.error("재고 어긋남 — 드로우 남은 확보를 반납하지 못해 반영을 미룬다, 다음 주기에 다시 drawId={}", campaignId, e);
             } else {
                 log.error("드로우 회차 처리 실패, 다음 주기에 다시 drawId={}", campaignId, e);
             }

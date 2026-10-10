@@ -79,8 +79,10 @@ public class DrawEntryService {
      * @throws BusinessException 404 DRAW_ENTRY_NOT_FOUND
      */
     public MyEntry view(UUID customerId, UUID drawId) {
+        // 반영 표식을 먼저 읽는다 — 반영(당첨 주문 연결과 같은 커밋)이 보였으면 그 뒤에 읽는 응모에도 당첨이 보인다. 반대 순서면 그 사이 반영이
+        // 커밋될 때 당첨자에게 낙첨이 보인다
+        boolean settled = readTransaction.execute(status -> campaigns.findCloseState(drawId)).map(c -> c.settledAt() != null).orElse(false);
         DrawEntry entry = mine(customerId, drawId);
-        boolean settled = readTransaction.execute(status -> campaigns.findProgress(drawId)).map(p -> p.settledAt() != null).orElse(false);
         DrawEntryResult result = !settled ? null : entry.wonOrderId() != null ? DrawEntryResult.WON : DrawEntryResult.LOST;
         return new MyEntry(entry, result);
     }

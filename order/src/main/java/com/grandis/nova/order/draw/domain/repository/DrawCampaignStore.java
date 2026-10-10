@@ -2,6 +2,7 @@ package com.grandis.nova.order.draw.domain.repository;
 
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.order.draw.domain.model.DrawCampaign;
+import com.grandis.nova.order.draw.domain.model.DrawCloseState;
 import com.grandis.nova.order.draw.domain.model.DrawProgress;
 import com.grandis.nova.order.draw.domain.model.NewDrawCampaign;
 
@@ -43,4 +44,9 @@ public interface DrawCampaignStore {
     boolean markSettled(UUID campaignId, Instant now);
 
     Optional<DrawProgress> findProgress(UUID campaignId);
+
+    Optional<DrawCloseState> findCloseState(UUID campaignId);
+
+    /** 마감(closes_at ≤ closedBefore)했는데 아직 결과를 반영하지 못한 회차 — 오래 머물면 경보한다. */
+    List<UUID> findUnsettled(Instant closedBefore, int limit);
 }

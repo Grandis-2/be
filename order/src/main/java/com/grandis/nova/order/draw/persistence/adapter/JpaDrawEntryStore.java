@@ -1,5 +1,6 @@
 package com.grandis.nova.order.draw.persistence.adapter;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.order.draw.domain.exception.DrawEntryTakenException;
 import com.grandis.nova.order.draw.domain.model.DrawEntry;
 import com.grandis.nova.order.draw.domain.model.DrawEntryStatus;
@@ -15,6 +16,7 @@ import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -65,6 +67,21 @@ class JpaDrawEntryStore implements DrawEntryStore {
     @Override
     public List<DrawEntry> findPaid(UUID campaignId) {
         return entries.findByCampaignIdAndStatusOrderById(campaignId, DrawEntryStatus.PAID).stream().map(JpaDrawEntryStore::toDomain).toList();
+    }
+
+    @Override
+    public long countPaid(UUID campaignId) {
+        return entries.countByCampaignIdAndStatus(campaignId, DrawEntryStatus.PAID);
+    }
+
+    @Override
+    public List<DrawEntry> findPaidAmong(UUID campaignId, Collection<UUID> ids) {
+        return entries.findByCampaignIdAndStatusAndIdIn(campaignId, DrawEntryStatus.PAID, ids).stream().map(JpaDrawEntryStore::toDomain).toList();
+    }
+
+    @Override
+    public List<UUID> findWinnerIds(UUID campaignId) {
+        return entries.findWinnerIds(campaignId).stream().map(UuidBinary::fromBytes).toList();
     }
 
     @Override
