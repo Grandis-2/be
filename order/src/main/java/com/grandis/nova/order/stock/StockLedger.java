@@ -98,31 +98,21 @@ public class StockLedger {
     }
 
     /**
-     * 주문의 재고 확보. {@link #LOCK_ORDER} 순서로 하나씩 조건부 UPDATE 하고, 하나라도 0행이면 걸린 옵션을 모두 모아 던진다 —
-     * 호출자가 롤백하므로 먼저 확보한 옵션도 되돌아간다(전량 확보 아니면 아무것도 확보하지 않음).
+     * 새 확보만(반환 없음) — {@link #releaseAndReserve} 와 같은 길이다. 하나라도 모자라면 걸린 옵션을 모두 모아 던지고, 호출자가 롤백해 먼저 확보한
+     * 옵션도 되돌아간다(전량 확보 아니면 아무것도 확보하지 않음).
      *
      * @param quantities 옵션 id → 확보할 수량(1 이상)
      * @throws StockShortageException 가용 재고가 모자란 옵션이 있다(재고 행이 없는 옵션 포함)
      */
     public void reserve(Map<UUID, Integer> quantities) {
-        Instant now = clock.instant();
-        List<UUID> shortages = new ArrayList<>();
-        for (Map.Entry<UUID, Integer> entry : ordered(quantities).entrySet()) {
-            if (entry.getValue() < 1) {
-                throw new IllegalArgumentException("확보 수량은 1 이상이다: " + entry);
-            }
-            if (writer.reserve(entry.getKey(), entry.getValue(), now) != 1) {
-                shortages.add(entry.getKey());
-            }
-        }
-        if (!shortages.isEmpty()) {
-            throw new StockShortageException(shortages);
-        }
+        releaseAndReserve(Map.of(), quantities);
     }
 
     /**
      * 앞 주문들의 반환과 새 주문의 확보를 한 트랜잭션에서 한 번에 — 옵션마다 (확보 − 반환)을 합쳐 {@link #LOCK_ORDER} 순서로 적용한다.
      * 순증은 가용 재고가 있을 때만 확보하고(모자라면 모아 던진다), 순감은 반환한다(확보가 모자라면 데이터 어긋남), 0 은 건드리지 않는다.
+     * "반환 → 확보" 를 따로 한 것과 결과가 같다(순증 d = r − s 의 조건 가용 ≥ d ⇔ 가용 + s ≥ r). 다만 어긋남 검출은 약하다 — 순감 · 0 인
+     * 옵션은 앞 주문 몫이 실제 확보에 남아 있는지 따로 보지 않는다(확보는 옵션 전체의 합이라 원래도 주문 몫을 가르지 못한다).
      *
      * @param released 옵션 id → 되돌릴 수량(앞 주문들이 확보해 둔 것)
      * @param reserved 옵션 id → 새로 확보할 수량
@@ -130,6 +120,8 @@ public class StockLedger {
      * @throws IllegalStateException  순감을 되돌릴 확보가 모자란다 — 데이터가 어긋난 것이다
      */
     public void releaseAndReserve(Map<UUID, Integer> released, Map<UUID, Integer> reserved) {
+        requirePositive(released);
+        requirePositive(reserved);
         Map<UUID, Integer> net = new TreeMap<>(LOCK_ORDER);
         reserved.forEach((option, quantity) -> net.merge(option, quantity, Integer::sum));
         released.forEach((option, quantity) -> net.merge(option, -quantity, Integer::sum));
@@ -149,7 +141,9 @@ public class StockLedger {
     }
 
     /**
-     * 미결제 취소의 반환 — 주문이 확보해 둔 수량을 되돌린다. 한 번만 부른다(주문의 반환 표식, OrderLedger#cancelUnpaidReleasingStock).
+     * 미결제 취소의 반환 — 주문 하나가 확보해 둔 수량을 되돌린다. 주문의 반환 표식(OrderLedger#cancelUnpaidReleasingStock)이 이번에 적혔을
+     * 때만 불러 한 번이다. 장바구니 주문 생성의 앞 주문 반환은 새 확보와 합쳐 {@link #releaseAndReserve} 로 한다 — 이것은 주문 하나만 취소하는
+     * 쪽(사용자 취소 · 결제 기한 만료)이 쓴다.
      *
      * @param quantities 옵션 id → 그 주문이 확보한 수량
      * @throws IllegalStateException 확보가 모자란 옵션이 있다 — 데이터가 어긋난 것이다. 취소 전체를 롤백한다
@@ -193,6 +187,14 @@ public class StockLedger {
 
     private static Map<UUID, StockLevel> byOptionId(List<StockLevel> levels) {
         return levels.stream().collect(Collectors.toMap(StockLevel::optionId, Function.identity()));
+    }
+
+    private static void requirePositive(Map<UUID, Integer> quantities) {
+        quantities.forEach((option, quantity) -> {
+            if (quantity < 1) {
+                throw new IllegalArgumentException("수량은 1 이상이다: optionId=" + option + ", quantity=" + quantity);
+            }
+        });
     }
 
     private static Map<UUID, Integer> ordered(Map<UUID, Integer> quantities) {

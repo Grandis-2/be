@@ -40,6 +40,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
 
 import static com.grandis.nova.order.support.OrderFixtures.bytes;
@@ -206,6 +207,7 @@ class CartOrderApiTest {
      */
     @Test
     void orderTurningAuthorizingWhileReplacingIsConflict() throws Exception {
+        AtomicReference<String> lastReplaceBody = new AtomicReference<>();
         UUID phone = sellable(10);
         cartLine(phone, false, 1);
         String first = data(place(item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
@@ -222,9 +224,11 @@ class CartOrderApiTest {
         await(authorized);
         CompletableFuture<Integer> replace = CompletableFuture.supplyAsync(() -> {
             try {
-                return perform("""
+                var response = perform("""
                         {"source":"CART","items":[%s],"shipTo":%s}""".formatted(item(phone, 1, false), OTHER_SHIP_TO))
-                        .andReturn().getResponse().getStatus();
+                        .andReturn().getResponse();
+                lastReplaceBody.set(response.getContentAsString());
+                return response.getStatus();
             } catch (Exception e) {
                 throw new IllegalStateException(e);
             }
@@ -234,6 +238,7 @@ class CartOrderApiTest {
         payment.get(20, TimeUnit.SECONDS);
 
         assertThat(replace.get(20, TimeUnit.SECONDS)).isEqualTo(409);
+        assertThat(lastReplaceBody.get()).contains("PAYMENT_IN_PROGRESS").contains(first);
         assertThat(orderCount()).isEqualTo(1);
         assertThat(orderStatus(first)).isEqualTo("AUTHORIZING");
         assertThat(reserved(phone)).isEqualTo(1);
@@ -264,7 +269,7 @@ class CartOrderApiTest {
     }
 
     @Test
-    @DisplayName("결제 진행 중(승인 중)인 앞 주문이 있으면 구성이 달라도 새 장바구니 주문은 409 — 그 옆에 만들지 않는다")
+    @DisplayName("결제 진행 중(승인 중)인 앞 주문이 있으면 구성이 달라도 새 장바구니 주문은 409 PAYMENT_IN_PROGRESS 와 막는 주문 — 그 옆에 만들지 않는다")
     void authorizingOrderBlocksNewOrderOfAnyComposition() throws Exception {
         UUID phone = sellable(10);
         UUID watch = sellable(10);
@@ -273,22 +278,22 @@ class CartOrderApiTest {
         String first = data(place(item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
         jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-3' WHERE order_token = ?", first);
 
-        expectError(place(item(watch, 1, false)), 409, "STATE_CONFLICT");
+        expectBlockedBy(place(item(watch, 1, false)), first);
 
         assertThat(orderCount()).isEqualTo(1);
         assertThat(reserved(watch)).isZero();
     }
 
     @Test
-    @DisplayName("같은 구성의 승인 중 주문이 있는데 값이 다르면 409 STATE_CONFLICT — 결제가 진행 중인 주문은 바꾸지 않는다")
+    @DisplayName("같은 구성의 승인 중 주문이 있는데 값이 다르면 409 PAYMENT_IN_PROGRESS — 결제가 진행 중인 주문은 바꾸지 않는다")
     void authorizingOrderIsNotReplaced() throws Exception {
         UUID phone = sellable(10);
         cartLine(phone, false, 1);
         String first = data(place(item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
         jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-2' WHERE order_token = ?", first);
 
-        expectError(perform("""
-                {"source":"CART","items":[%s],"shipTo":%s}""".formatted(item(phone, 1, false), OTHER_SHIP_TO)), 409, "STATE_CONFLICT");
+        expectBlockedBy(perform("""
+                {"source":"CART","items":[%s],"shipTo":%s}""".formatted(item(phone, 1, false), OTHER_SHIP_TO)), first);
 
         assertThat(orderStatus(first)).isEqualTo("AUTHORIZING");
         assertThat(reserved(phone)).isEqualTo(1);
@@ -311,7 +316,7 @@ class CartOrderApiTest {
     }
 
     @Test
-    @DisplayName("기한이 지난 승인 중 주문도 결제가 진행 중이다 — 새 장바구니 주문은 409(승인 호출은 기한을 넘길 수 있다)")
+    @DisplayName("기한이 지난(결과를 못 받고 멈춘) 승인 중 주문도 결제가 진행 중이다 — 새 장바구니 주문은 409 와 막는 주문(돈이 나갔을 수 있다)")
     void expiredAuthorizingOrderStillBlocks() throws Exception {
         UUID phone = sellable(10);
         cartLine(phone, false, 1);
@@ -319,9 +324,11 @@ class CartOrderApiTest {
         jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-4' WHERE order_token = ?", first);
         expire(first);
 
-        expectError(perform("""
-                {"source":"CART","items":[%s],"shipTo":%s}""".formatted(item(phone, 1, false), OTHER_SHIP_TO)), 409, "STATE_CONFLICT");
+        expectBlockedBy(perform("""
+                {"source":"CART","items":[%s],"shipTo":%s}""".formatted(item(phone, 1, false), OTHER_SHIP_TO)), first);
         assertThat(orderCount()).isEqualTo(1);
+        assertThat(orderStatus(first)).isEqualTo("AUTHORIZING");
+        assertThat(reserved(phone)).isEqualTo(1);
     }
 
     @Test
@@ -339,6 +346,22 @@ class CartOrderApiTest {
         assertThat(second).isNotEqualTo(first);
         assertThat(orderStatus(first)).isEqualTo("CANCELED");
         assertThat(orderTotal(second)).isEqualByComparingTo(PRICE.multiply(BigDecimal.valueOf(2)).add(WARRANTY.multiply(BigDecimal.valueOf(2))));
+    }
+
+    @Test
+    @DisplayName("바꾸는 도중 새 주문의 재고가 모자라면 409 INSUFFICIENT_STOCK — 앞 주문의 취소 · 반환도 되돌아가 그대로 남는다")
+    void shortageWhileReplacingKeepsPreviousOrder() throws Exception {
+        UUID phone = sellable(4);
+        cartLine(phone, false, 1);
+        String first = data(place(item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
+        jdbcTemplate.update("UPDATE cart_items SET quantity = 5 WHERE customer_id = ?", (Object) bytes(customerId));
+
+        expectError(place(item(phone, 5, false)), 409, "INSUFFICIENT_STOCK");
+
+        assertThat(orderStatus(first)).isEqualTo("AWAITING_PAYMENT");
+        assertThat(stockReleased(first)).isFalse();
+        assertThat(reserved(phone)).isEqualTo(1);
+        assertThat(orderCount()).isEqualTo(1);
     }
 
     /**
@@ -587,6 +610,13 @@ class CartOrderApiTest {
         return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.optionTitle(), o.sku(), o.price(), optionStatus,
                 o.saleMode(), productStatus, visible, true,
                 new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), o.imageUrl());
+    }
+
+    private static void expectBlockedBy(ResultActions actions, String orderToken) throws Exception {
+        actions.andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("PAYMENT_IN_PROGRESS"))
+                .andExpect(jsonPath("$.error.details.orderId").value(orderToken))
+                .andExpect(jsonPath("$.error.details.status").value("AUTHORIZING"));
     }
 
     /** 저장은 UTC 다 — JVM 시간대(KST)로 바인딩되는 Timestamp 를 쓰지 않고 DB 의 UTC 로 기한을 지나게 한다. */

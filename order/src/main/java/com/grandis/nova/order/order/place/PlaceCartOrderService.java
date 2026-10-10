@@ -52,16 +52,18 @@ import java.util.stream.Collectors;
  * 1. 트랜잭션 밖: catalog 일괄 조회({@link CartCatalog}). 살 수 없는 줄이 있으면 409 STATE_CONFLICT(details.items 에 줄마다 이유),
  *    화면에서 본 단가 · 보증가가 지금 값과 다르면 409 PRICE_CHANGED(details.items 에 지금 값). 금액은 catalog 의 지금 값으로 계산한다.
  * 2. 트랜잭션: 그 회원의 장바구니 줄을 잠그고({@link CartStore#lockByCustomer}) 고른 줄이 모두 그대로 있는지 대조 → 아니면 409 CART_CHANGED.
- *    그 회원의 아직 유효한 장바구니 주문(결제 대기 · 승인 중, 기한 전)을 본다 — 결제 안 된 장바구니 주문은 회원당 하나다(2026-10-10 결정):
- *    - 구성(옵션마다 수량 · 보증 수량) · 단가 · 보증가 · 배송지가 모두 같은 주문이 있으면 그것을 돌려준다(200, reused — 기한 연장 없음).
- *      두 번 누른 요청이 여기로 온다.
- *    - 아니면 결제 대기인 앞 주문을 모두(구성이 달라도) 취소 · 재고 반환하고 새로 만든다 — 재고를 여러 주문으로 잡아 두지 못한다.
- *    - 승인 중인 앞 주문이 있으면 409 STATE_CONFLICT — 결제가 진행 중인 주문은 바꾸지 않고, 그 옆에 새 주문도 만들지 않는다.
- *    새로 만들 때: 재고 확보({@link StockLedger#reserve}) → 주문 · 주문상품 · 첫 이력, 기한 = 지금 + 10분.
+ *    그 회원의 결제 안 된 장바구니 주문(결제 대기 · 승인 중 — 기한과 상관없이 전부)을 본다. 결제 안 된 장바구니 주문은 회원당 하나다(2026-10-10 결정):
+ *    - 기한 안이고({@link Order#acceptsPaymentAt}) 구성(옵션마다 수량 · 보증 수량) · 단가 · 보증가 · 배송지가 모두 같은 주문이 있으면 그것을
+ *      돌려준다(200, reused — 기한 연장 없음). 두 번 누른 요청이 여기로 온다.
+ *    - 아니면 결제 대기인 앞 주문을 모두(구성 · 기한과 상관없이) 취소하고 새로 만든다 — 재고를 여러 주문으로 잡아 두지 못한다.
+ *    - 승인 중인 앞 주문이 있으면 409 PAYMENT_IN_PROGRESS(details.orderId · status — 막는 주문) — 결제가 진행 중인 주문은 바꾸지 않고, 그 옆에
+ *      새 주문도 만들지 않는다. 결과를 못 받고 멈춘 주문도 같다(돈이 나갔을 수 있다) — 결제 결과가 오거나 운영자가 풀 때까지다.
+ *    새로 만들 때: 앞 주문들의 반환과 새 주문의 확보를 한 번에({@link StockLedger#releaseAndReserve}) → 주문 · 주문상품 · 첫 이력,
+ *    기한 = 지금 + 10분.
  *
  * - 같은 회원의 주문 생성끼리는 장바구니 줄 잠금으로 줄 선다 — 두 번 누른 요청은 뒤의 것이 앞의 주문을 돌려받는다.
- * - 잠금 순서: 장바구니 줄 → (바꿀 앞 주문 행) → 재고 행. 열린 주문은 잠그지 않고 읽으므로, 그 사이 결제 시작(주문 행만 잠근다)이
- *   앞 주문을 승인 중으로 바꿀 수 있다 — 주문 행을 잠근 뒤 다시 보고 승인 중이면 409 다(새 주문 · 확보 없음, 시험으로 고정).
+ * - 잠금 순서: 장바구니 줄 → (바꿀 앞 주문 행) → 재고 행(반환 + 확보 한 번, 잠금 순서대로). 앞 주문은 잠그지 않고 읽으므로, 그 사이 결제
+ *   시작(주문 행만 잠근다)이 앞 주문을 승인 중으로 바꿀 수 있다 — 주문 행을 잠근 뒤 다시 보고 승인 중이면 409 다(새 주문 · 확보 없음, 시험으로 고정).
  * - 같은 옵션의 보증 포함 · 미포함 두 줄은 주문상품 한 줄로 합친다(수량 = 합, 보증 수량 = 보증 줄의 수량).
  * - 장바구니는 여기서 바꾸지 않는다 — 결제 성공 때 산 만큼 뺀다(명세).
  * - 교착(1213)은 새 트랜잭션에서 다시 하고(최대 {@link #MAX_ATTEMPTS}번), 끝내 교착이거나 잠금 대기 초과(1205)면 503 이다.
@@ -154,13 +156,15 @@ public class PlaceCartOrderService {
         }
         Map<UUID, Integer> released = new HashMap<>();
         for (Order order : unpaid) {
-            // 결제 대기가 아니면(읽을 때 이미 승인 중이었든, 읽은 뒤 잠그기 전에 결제 시작이 바꿨든 — 결제 시작은 주문 행만 잠가 장바구니 잠금으로
-            // 막히지 않는다) 바꾸지 않고 409 다. 판정은 잠근 뒤에만 한다. 기한이 지났어도 같다(확보를 쥐고 있고, 승인 호출은 기한을 넘길 수 있다).
-            // 다른 취소(만료 처리 · 사용자 취소)가 먼저 취소했으면 그냥 지나간다 — 반환은 그쪽이 했다.
+            // 판정은 잠근 뒤에만 한다. 승인 중이면(읽을 때 이미 그랬든, 읽은 뒤 잠그기 전에 결제 시작이 바꿨든 — 결제 시작은 주문 행만 잠가
+            // 장바구니 잠금으로 막히지 않는다) 바꾸지 않고 409 PAYMENT_IN_PROGRESS 와 막는 주문을 알린다. 기한이 지났어도 같다(돈이 나갔을 수 있고,
+            // 승인 호출은 기한을 넘길 수 있다 — 2026-10-10 결정). 그 사이 결제가 끝났거나(결제됨) 다른 취소가 먼저 취소했으면 결제 안 된 주문이
+            // 아니므로 그냥 지나간다(반환은 그쪽이 했다).
             OrderTransition canceled = ledger.cancelUnpaidReleasingStock(order.id(), EventCause.system(REPLACED_REASON));
             if (!canceled.applied()) {
-                if (canceled.status() != OrderStatus.CANCELED) {
-                    throw new BusinessException(OrderErrorCode.STATE_CONFLICT);
+                if (canceled.status() == OrderStatus.AUTHORIZING) {
+                    throw new BusinessException(OrderErrorCode.PAYMENT_IN_PROGRESS,
+                            Map.of("orderId", order.orderToken().value(), "status", canceled.status().name()));
                 }
                 continue;
             }
@@ -168,7 +172,12 @@ public class PlaceCartOrderService {
                     .forEach(item -> released.merge(item.line().optionId(), item.line().quantity().value(), Integer::sum));
         }
         // 반환과 확보를 옵션별 증감 하나로 합쳐 잠금 순서대로 한 번에 — 따로 돌면 재고 행 잠금 순서가 깨진다
-        stock.releaseAndReserve(released, quantities(draft.lines()));
+        try {
+            stock.releaseAndReserve(released, quantities(draft.lines()));
+        } catch (IllegalStateException e) {
+            throw new IllegalStateException("바꾸는 앞 주문의 확보를 반환하지 못했다: orderIds="
+                    + unpaid.stream().map(Order::id).toList(), e);
+        }
         Order order = ledger.place(draft, cause);
         return new PlaceResult(order, orderReader.findItems(order.id()), true);
     }

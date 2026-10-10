@@ -153,8 +153,17 @@ class JpaOrderStoreTest {
         OrderLine line = reader.findItems(stored.id()).getFirst().line();
         assertThat(line.warrantyQuantity()).isEqualTo(2);
         assertThat(line.warrantyUnitPrice()).isEqualTo(Money.won(300));
-        assertThat(reader.findUnpaidCartOrders(customerId)).as("기한(2026-10-10 06:10)이 오래전에 지났어도").extracting(Order::id)
-                .containsExactly(stored.id());
+        Order future = writer.insert(Order.place(draft, OrderToken.issue(), Instant.now().plusSeconds(3_600)));
+        writer.insertItems(future.id(), draft.lines());
+        UUID other = fixtures.customer();
+        Order othersOrder = writer.insert(Order.place(new OrderDraft(other, OrderSource.CART, null, null, draft.shipTo(), draft.lines()),
+                OrderToken.issue(), placedAt));
+        writer.insertItems(othersOrder.id(), draft.lines());
+        Order preorder = writer.insert(Order.place(preorderCommand(customerId, preorderId, product).toDraft(), OrderToken.issue(), placedAt));
+        writer.insertItems(preorder.id(), preorderCommand(customerId, preorderId, product).toDraft().lines());
+        assertThat(reader.findUnpaidCartOrders(customerId)).as("기한이 지났든(과거) 아직이든(미래), 이 회원의 장바구니 주문만 — 결제 대기인 사전예약 주문 · 다른 회원 주문은 빠진다")
+                .extracting(Order::id).containsExactlyInAnyOrder(stored.id(), future.id());
+        fixtures.forceStatus(future.id(), "CANCELED");
 
         fixtures.forceAuthorizing(stored.id(), "p-1");
         assertThat(reader.findUnpaidCartOrders(customerId)).as("승인 중도").hasSize(1);
