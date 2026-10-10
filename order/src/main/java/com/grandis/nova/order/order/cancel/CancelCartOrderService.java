@@ -62,12 +62,15 @@ public class CancelCartOrderService {
         Order order = readTransaction.execute(status -> OrderToken.parse(orderToken).flatMap(orderReader::findByOrderToken)
                         .filter(found -> found.customerId().equals(customerId)))
                 .orElseThrow(() -> new BusinessException(OrderErrorCode.ORDER_NOT_FOUND));
-        switch (order.source()) {
-            case CART -> {
-            }
-            case PREORDER -> throw new BusinessException(OrderErrorCode.STATE_CONFLICT, "사전예약 주문은 예약 취소로 취소합니다.");
-            case DRAW -> throw new BusinessException(OrderErrorCode.STATE_CONFLICT, "드로우 당첨 주문은 취소할 수 없습니다.");
-            case BUY_NOW -> throw new BusinessException(OrderErrorCode.STATE_CONFLICT);
+        // switch 식이라 출처가 늘면 컴파일러가 갈래를 요구한다(switch 문은 빠진 상수가 그대로 취소로 내려간다)
+        String refusal = switch (order.source()) {
+            case CART -> null;
+            case PREORDER -> "사전예약 주문은 예약 취소로 취소합니다.";
+            case DRAW -> "드로우 당첨 주문은 취소할 수 없습니다.";
+            case BUY_NOW -> "바로 구매 주문은 아직 취소할 수 없습니다.";
+        };
+        if (refusal != null) {
+            throw new BusinessException(OrderErrorCode.STATE_CONFLICT, refusal);
         }
         OrderTransition transition = cancelWithRetry(order.id());
         if (transition.applied() || transition.status() == OrderStatus.CANCELED) {

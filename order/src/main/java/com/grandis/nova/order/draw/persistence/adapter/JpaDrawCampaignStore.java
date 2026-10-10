@@ -98,8 +98,13 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
     }
 
     @Override
-    public List<UUID> findUnsettled(Instant closedBefore, int limit) {
-        return campaigns.findUnsettled(closedBefore, limit).stream().map(UuidBinary::fromBytes).toList();
+    public Optional<DrawCloseState> lockCloseState(UUID campaignId) {
+        return campaigns.lockCloseState(campaignId).map(row -> new DrawCloseState(row.getDrawRequestedAt(), row.getSettledAt()));
+    }
+
+    @Override
+    public List<UUID> findUnsettled(Instant closedAfter, Instant closedBefore, int limit) {
+        return campaigns.findUnsettled(closedAfter, closedBefore, limit).stream().map(UuidBinary::fromBytes).toList();
     }
 
     @Override

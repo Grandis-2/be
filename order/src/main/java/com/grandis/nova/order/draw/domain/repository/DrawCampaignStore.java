@@ -47,6 +47,12 @@ public interface DrawCampaignStore {
 
     Optional<DrawCloseState> findCloseState(UUID campaignId);
 
-    /** 마감(closes_at ≤ closedBefore)했는데 아직 결과를 반영하지 못한 회차 — 오래 머물면 경보한다. */
-    List<UUID> findUnsettled(Instant closedBefore, int limit);
+    /**
+     * 회차 표식을 공유 잠금으로 읽는다(SELECT … FOR SHARE) — 그 회차를 잠근 추첨 요청 · 반영이 진행 중이면 커밋을 기다렸다 그 결과를 본다.
+     * 트랜잭션 안에서만.
+     */
+    Optional<DrawCloseState> lockCloseState(UUID campaignId);
+
+    /** closedAfter < closes_at ≤ closedBefore 인데 아직 결과를 반영하지 못한 회차 — 오래 머물면 경보한다. */
+    List<UUID> findUnsettled(Instant closedAfter, Instant closedBefore, int limit);
 }

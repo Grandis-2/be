@@ -27,10 +27,15 @@ public interface DrawCampaignJpaRepository extends JpaRepository<DrawCampaignJpa
     @Query(value = "SELECT draw_requested_at AS drawRequestedAt, settled_at AS settledAt FROM draw_campaigns WHERE id = :id", nativeQuery = true)
     Optional<CloseStateRow> findCloseState(@Param("id") UUID id);
 
-    @Query(value = """
-            SELECT id FROM draw_campaigns WHERE closes_at <= :closedBefore AND settled_at IS NULL ORDER BY closes_at, id LIMIT :limit""",
+    @Query(value = "SELECT draw_requested_at AS drawRequestedAt, settled_at AS settledAt FROM draw_campaigns WHERE id = :id FOR SHARE",
             nativeQuery = true)
-    List<byte[]> findUnsettled(@Param("closedBefore") Instant closedBefore, @Param("limit") int limit);
+    Optional<CloseStateRow> lockCloseState(@Param("id") UUID id);
+
+    @Query(value = """
+            SELECT id FROM draw_campaigns
+             WHERE closes_at > :closedAfter AND closes_at <= :closedBefore AND settled_at IS NULL ORDER BY closes_at, id LIMIT :limit""",
+            nativeQuery = true)
+    List<byte[]> findUnsettled(@Param("closedAfter") Instant closedAfter, @Param("closedBefore") Instant closedBefore, @Param("limit") int limit);
 
     @Query(value = "SELECT id FROM draw_campaigns WHERE id = :id FOR UPDATE", nativeQuery = true)
     Optional<byte[]> lockRow(@Param("id") UUID id);

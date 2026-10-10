@@ -93,7 +93,9 @@ public class DrawSettlement {
                 log.info("드로우 전원 당첨 반영 drawId={} winners={} winnerCount={}", campaignId, winners.size(), campaign.winnerCount());
                 return true;
             }
-            campaigns.markDrawRequested(campaignId, now);
+            if (!campaigns.markDrawRequested(campaignId, now)) {
+                throw new IllegalStateException("잠근 회차의 추첨 요청 표식이 이미 있다: drawId=" + campaignId);
+            }
             outbox.append(new DrawRequested(campaignId, paid, campaign.winnerCount()));
             log.info("드로우 추첨 요청 drawId={} paidEntries={} winnerCount={}", campaignId, paid, campaign.winnerCount());
             return true;

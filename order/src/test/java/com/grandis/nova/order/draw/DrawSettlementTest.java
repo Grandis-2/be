@@ -80,8 +80,8 @@ class DrawSettlementTest {
         UUID second = entry(draw, "PAID", null);
         UUID unpaid = entry(draw, "AWAITING_PAYMENT", null);
 
-        assertThat(closer.closeDue()).isGreaterThanOrEqualTo(1);
-        closer.closeDue();
+        assertThat(settlement.close(draw)).isTrue();
+        assertThat(settlement.close(draw)).as("다시 돌아도 한 번").isFalse();
 
         assertThat(wonOrder(first)).isNotNull();
         assertThat(wonOrder(second)).isNotNull();
@@ -163,7 +163,8 @@ class DrawSettlementTest {
         List<UUID> found = campaignStore.findDrawable(Instant.now(), 1000);
 
         assertThat(found).contains(due).doesNotContain(authorizing, open, requested, settled);
-        assertThat(campaignStore.findUnsettled(Instant.now(), 1000)).contains(due, authorizing, requested).doesNotContain(open, settled);
+        assertThat(campaignStore.findUnsettled(Instant.now().minus(Duration.ofDays(30)), Instant.now(), 1000))
+                .contains(due, authorizing, requested).doesNotContain(open, settled);
     }
 
     @Test
@@ -199,10 +200,7 @@ class DrawSettlementTest {
         UUID late = entry(draw, "AWAITING_PAYMENT", null);
         settlement.close(draw);
 
-        dispatcher.dispatch("""
-                {"eventId":"%s","eventType":"DRAW_ENTRY_PAYMENT_SETTLED","aggregateType":"DRAW_ENTRY","aggregateId":"%s",
-                 "occurredAt":"2026-10-11T00:00:00Z","payload":{"providerOrderId":"late_window_1","result":"APPROVED","amount":100,
-                 "approvedAt":"2026-10-11T00:00:00Z","declineReason":null}}""".formatted(UUID.randomUUID(), late));
+        dispatcher.dispatch(approvedEvent(late));
 
         assertThat(output.getAll()).contains("드로우 추첨 뒤 결제 완료").contains(late.toString());
     }
@@ -224,15 +222,63 @@ class DrawSettlementTest {
         assertThat(wonOrder(b)).isNull();
     }
 
+    /**
+     * 추첨 처리와 늦은 결제 완료가 겹쳐도 경보를 놓치지 않는다. 결정적으로 본다: 추첨 처리가 회차를 잠그고(그 응모는 결제 대기라 세지 않음)
+     * 요청 표식을 적은 채 커밋하지 않고, 늦은 승인이 회차 표식을 읽으려 그 행에서 기다리는 것을 확인한 뒤 커밋한다.
+     */
     @Test
-    @DisplayName("마감 뒤 1시간 넘게 반영하지 못한 회차는 ERROR 로 알린다")
+    @DisplayName("추첨 처리 중에 결제 완료가 돼도 경보한다 — 회차 표식을 공유 잠금으로 읽어 추첨 커밋을 기다린다")
+    void paidDuringDrawIsAlarmed(CapturedOutput output) throws Exception {
+        UUID draw = closedDraw(1);
+        entry(draw, "PAID", null);
+        entry(draw, "PAID", null);
+        UUID late = entry(draw, "AWAITING_PAYMENT", null);
+        CountDownLatch requested = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
+        CompletableFuture<Void> closing = CompletableFuture.runAsync(() -> new TransactionTemplate(transactionManager).executeWithoutResult(s -> {
+            assertThat(settlement.close(draw)).isTrue();
+            requested.countDown();
+            await(commit);
+        }));
+        await(requested);
+        CompletableFuture<Void> approving = CompletableFuture.runAsync(() -> dispatcher.dispatch(approvedEvent(late)));
+        waitForQuery("SELECT draw_requested_at%FOR SHARE");
+        commit.countDown();
+        closing.get(20, TimeUnit.SECONDS);
+        approving.get(20, TimeUnit.SECONDS);
+
+        assertThat(output.getAll()).contains("드로우 추첨 뒤 결제 완료").contains(late.toString());
+    }
+
+    @Test
+    @DisplayName("전원 당첨으로 반영한 뒤 결제 완료가 돼도 경보한다")
+    void paidAfterAllWinIsAlarmed(CapturedOutput output) {
+        UUID draw = closedDraw(2);
+        entry(draw, "PAID", null);
+        UUID late = entry(draw, "AWAITING_PAYMENT", null);
+        settlement.close(draw);
+
+        dispatcher.dispatch(approvedEvent(late));
+
+        assertThat(output.getAll()).contains("드로우 추첨 뒤 결제 완료").contains(late.toString());
+    }
+
+    @Test
+    @DisplayName("마감 뒤 1시간 넘게 반영하지 못한 회차는 ERROR 로 알린다 — 막 마감한 회차 · 하루 지난 회차는 알리지 않는다")
     void stalledDrawIsAlarmed(CapturedOutput output) {
         UUID stalled = draw(Instant.now().minus(Duration.ofDays(2)), Instant.now().minus(Duration.ofHours(2)), 1);
         entry(stalled, "AUTHORIZING", "window_stall_1");
 
+        UUID recent = draw(Instant.now().minus(Duration.ofDays(1)), Instant.now().minus(Duration.ofMinutes(5)), 1);
+        entry(recent, "AUTHORIZING", "window_stall_2");
+        UUID old = draw(Instant.now().minus(Duration.ofDays(5)), Instant.now().minus(Duration.ofDays(2)), 1);
+        entry(old, "AUTHORIZING", "window_stall_3");
+
         closer.checkStalled();
 
         assertThat(output.getAll()).contains("드로우 결과 반영 지연").contains(stalled.toString());
+        assertThat(output.getAll()).as("막 마감한 회차는 아직 경보하지 않는다").doesNotContain(recent.toString());
+        assertThat(output.getAll()).as("마감 뒤 하루가 지나면 경보를 그친다").doesNotContain(old.toString());
     }
 
     @Test
@@ -281,7 +327,8 @@ class DrawSettlementTest {
         UUID open = draw(Instant.now().minus(Duration.ofHours(1)), Instant.now().plus(Duration.ofHours(1)), 1);
         entry(open, "PAID", null);
 
-        closer.closeDue();
+        assertThat(settlement.close(waiting)).isFalse();
+        assertThat(settlement.close(open)).isFalse();
 
         assertThat(campaign(waiting)).containsEntry("settled_at", null).containsEntry("draw_requested_at", null);
         assertThat(campaign(open)).containsEntry("settled_at", null).containsEntry("draw_requested_at", null);
@@ -295,8 +342,8 @@ class DrawSettlementTest {
         entry(draw, "PAID", null);
         entry(draw, "PAID", null);
 
-        closer.closeDue();
-        closer.closeDue();
+        assertThat(settlement.close(draw)).isTrue();
+        assertThat(settlement.close(draw)).as("다시 돌아도 한 번").isFalse();
 
         assertThat(campaign(draw).get("draw_requested_at")).isNotNull();
         assertThat(campaign(draw).get("settled_at")).isNull();
@@ -323,7 +370,7 @@ class DrawSettlementTest {
         UUID b = entry(draw, "PAID", null);
         UUID customerC = fixtures.customer();
         UUID c = entry(draw, customerC, "PAID", null);
-        closer.closeDue();
+        settlement.close(draw);
         mockMvc.perform(get("/api/v1/draws/{id}/entries/me", draw).with(TestAuth.customer(customerA)))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.result").doesNotExist());
 
@@ -361,7 +408,7 @@ class DrawSettlementTest {
         UUID b = entry(draw, "PAID", null);
         entry(draw, "PAID", null);
         UUID unpaid = entry(draw, "AWAITING_PAYMENT", null);
-        closer.closeDue();
+        settlement.close(draw);
 
         assertThatThrownBy(() -> settlement.settle(draw, List.of(a))).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> settlement.settle(draw, List.of(a, a))).isInstanceOf(IllegalArgumentException.class);
@@ -454,6 +501,13 @@ class DrawSettlementTest {
         return """
                 {"eventId":"%s","eventType":"DRAW_RESULT_READY","aggregateType":"DRAW_CAMPAIGN","aggregateId":"%s",
                  "occurredAt":"2026-10-11T00:00:00Z","payload":{"winnerEntryIds":[%s]}}""".formatted(UUID.randomUUID(), draw, ids);
+    }
+
+    private static String approvedEvent(UUID entry) {
+        return """
+                {"eventId":"%s","eventType":"DRAW_ENTRY_PAYMENT_SETTLED","aggregateType":"DRAW_ENTRY","aggregateId":"%s",
+                 "occurredAt":"2026-10-11T00:00:00Z","payload":{"providerOrderId":"late_window_1","result":"APPROVED","amount":100,
+                 "approvedAt":"2026-10-11T00:00:00Z","declineReason":null}}""".formatted(UUID.randomUUID(), entry);
     }
 
     private byte[] wonOrder(UUID entry) {
