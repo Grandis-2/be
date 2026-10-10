@@ -121,13 +121,16 @@ class CartAndOrderItemSchemaTest {
                 bytes(TestIds.next()), bytes(customerId), bytes(optionId), warranty, quantity);
     }
 
-    /** 결제 대기 장바구니 주문 하나 — 일반 주문은 결제 기한이 있어야 한다(ck_order_due). */
+    /**
+     * 결제 대기 장바구니 주문 하나 — 일반 주문은 결제 기한이 있어야 한다(ck_order_due). 앱이 만들 수 있는 행이어야 한다: 이력 번호는 1(첫 이력)이다 —
+     * DB 기본값 0 이면 시험 DB 를 함께 쓰는 다른 시험(관리자 주문 목록)이 이 행을 읽다 도메인 검사에 걸린다.
+     */
     private UUID cartOrder() {
         UUID orderId = TestIds.next();
         jdbcTemplate.update("""
                 INSERT INTO orders (id, order_token, customer_id, source, status, total_amount, payment_due_at,
-                                    ship_to_name, ship_to_phone, ship_to_postal_code, ship_to_line1, created_at, updated_at)
-                VALUES (?, ?, ?, 'CART', 'AWAITING_PAYMENT', 0, UTC_TIMESTAMP(6), 'a', '1', '1', 'x', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""",
+                                    ship_to_name, ship_to_phone, ship_to_postal_code, ship_to_line1, event_sequence, created_at, updated_at)
+                VALUES (?, ?, ?, 'CART', 'AWAITING_PAYMENT', 0, UTC_TIMESTAMP(6), 'a', '1', '1', 'x', 1, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""",
                 bytes(orderId), OrderFixtures.unique(), bytes(customerId));
         return orderId;
     }
