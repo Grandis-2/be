@@ -9,6 +9,7 @@ import com.grandis.nova.order.order.domain.model.OrderEvent;
 import com.grandis.nova.order.order.domain.model.OrderItem;
 import com.grandis.nova.order.order.domain.model.OrderLine;
 import com.grandis.nova.order.order.domain.repository.AdminOrderFilter;
+import com.grandis.nova.order.order.domain.repository.ExpiredOrderPosition;
 import com.grandis.nova.order.order.domain.repository.OrderPosition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.domain.repository.OrderWriter;
@@ -23,6 +24,7 @@ import com.grandis.nova.order.order.vo.OrderToken;
 import jakarta.persistence.EntityManager;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Limit;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
@@ -158,6 +160,12 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     public List<Order> findUnpaidCartOrders(UUID customerId) {
         return orders.findByCustomerIdAndSourceAndStatusIn(customerId, OrderSource.CART,
                 List.of(OrderStatus.AWAITING_PAYMENT, OrderStatus.AUTHORIZING)).stream().map(OrderMapper::toDomain).toList();
+    }
+
+    @Override
+    public List<Order> findExpiredCartOrders(Instant now, ExpiredOrderPosition after, int limit) {
+        return orders.findExpiredAfter(OrderSource.CART, OrderStatus.AWAITING_PAYMENT, now, after.paymentDueAt(), after.id(), Limit.of(limit))
+                .stream().map(OrderMapper::toDomain).toList();
     }
 
     @Override

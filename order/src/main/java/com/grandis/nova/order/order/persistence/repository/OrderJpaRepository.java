@@ -3,6 +3,7 @@ package com.grandis.nova.order.order.persistence.repository;
 import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.persistence.entity.OrderJpaEntity;
+import org.springframework.data.domain.Limit;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Modifying;
@@ -29,6 +30,20 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
     Optional<OrderJpaEntity> findByPreorderId(UUID preorderId);
 
     List<OrderJpaEntity> findByCustomerIdAndSourceAndStatusIn(UUID customerId, OrderSource source, Collection<OrderStatus> statuses);
+
+    /**
+     * (기한, id) 이어 읽기. 같은 기한은 id 로 가른다. ix_order_due(status, payment_due_at, + PK id) 범위로 읽고 정렬하지 않는다
+     * (orders 20,000행 · 기한 지난 1,603행 실측: 첫 쪽 · 중간 쪽 모두 type=range · filesort 없음 · LIMIT 100 에서 100행만 읽음).
+     */
+    @Query("""
+            select o from OrderJpaEntity o
+             where o.source = :source and o.status = :status and o.paymentDueAt <= :now
+               and (o.paymentDueAt > :afterDue or (o.paymentDueAt = :afterDue and o.id > :afterId))
+             order by o.paymentDueAt asc, o.id asc
+            """)
+    List<OrderJpaEntity> findExpiredAfter(@Param("source") OrderSource source, @Param("status") OrderStatus status,
+                                          @Param("now") Instant now, @Param("afterDue") Instant afterDue, @Param("afterId") UUID afterId,
+                                          Limit limit);
 
     @Modifying(flushAutomatically = true)
     @Query("""

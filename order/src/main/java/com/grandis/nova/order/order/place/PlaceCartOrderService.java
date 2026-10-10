@@ -153,7 +153,10 @@ public class PlaceCartOrderService {
         Instant now = clock.instant();
         for (Order order : unpaid) {
             List<OrderItem> items = itemsByOrder.getOrDefault(order.id(), List.of());
-            if (order.acceptsPaymentAt(now) && sameComposition(items, draft.lines()) && sameValues(order, items, draft)) {
+            // 잠그지 않고 읽었으므로 돌려주기 전에 잠가 다시 본다 — 읽은 상태 그대로일 때만 돌려준다(응답의 상태가 맞게). 그 사이 사용자 취소
+            // (장바구니 잠금을 잡지 않는다)가 취소했으면 새로 만들고, 결제 시작이 승인 중으로 바꿨으면 아래에서 409 PAYMENT_IN_PROGRESS 다
+            if (order.acceptsPaymentAt(now) && sameComposition(items, draft.lines()) && sameValues(order, items, draft)
+                    && ledger.lockedStatus(order.id()) == order.status()) {
                 return new PlaceResult(order, items, false);
             }
         }

@@ -189,6 +189,15 @@ public class OrderLedger {
         return new OrderTransition(true, to);
     }
 
+    /**
+     * 주문 행을 잠그고 지금 상태를 읽는다 — 잠그지 않고 읽어 둔 주문을 돌려주거나 판단하기 전에 다시 보는 데 쓴다. 바꾸지 않는다.
+     *
+     * @throws IllegalArgumentException 주문이 없다
+     */
+    public OrderStatus lockedStatus(UUID orderId) {
+        return lock(orderId);
+    }
+
     private OrderStatus lock(UUID orderId) {
         return writer.lockStatus(orderId).orElseThrow(() -> new IllegalArgumentException("주문이 없다: " + orderId));
     }

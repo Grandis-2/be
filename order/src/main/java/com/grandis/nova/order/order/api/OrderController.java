@@ -3,6 +3,7 @@ package com.grandis.nova.order.order.api;
 import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.security.CurrentCustomerId;
 import com.grandis.nova.common.web.ApiResponse;
+import com.grandis.nova.order.order.cancel.CancelCartOrderService;
 import com.grandis.nova.order.order.place.PlaceCartOrderService;
 import com.grandis.nova.order.order.place.PlaceResult;
 import com.grandis.nova.order.order.place.PlaceOrderService;
@@ -10,6 +11,7 @@ import com.grandis.nova.order.web.ValidationFailures;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -30,10 +32,22 @@ public class OrderController {
 
     private final PlaceOrderService placeOrderService;
     private final PlaceCartOrderService placeCartOrderService;
+    private final CancelCartOrderService cancelCartOrderService;
 
-    public OrderController(PlaceOrderService placeOrderService, PlaceCartOrderService placeCartOrderService) {
+    public OrderController(PlaceOrderService placeOrderService, PlaceCartOrderService placeCartOrderService,
+                           CancelCartOrderService cancelCartOrderService) {
         this.placeOrderService = placeOrderService;
         this.placeCartOrderService = placeCartOrderService;
+        this.cancelCartOrderService = cancelCartOrderService;
+    }
+
+    /**
+     * 미결제 장바구니 주문 취소(명세 POST /orders/{orderId}/cancel). 결제 대기면 그 자리에서 취소 · 재고 반환(200), 이미 취소됐으면 같은 200.
+     * 승인 중이면 409 PAYMENT_IN_PROGRESS, 결제된 주문 · 사전예약 주문은 409 STATE_CONFLICT. 남의 주문은 404.
+     */
+    @PostMapping("/{orderToken}/cancel")
+    public ApiResponse<CancelOrderResponse> cancel(@CurrentCustomerId UUID customerId, @PathVariable String orderToken) {
+        return ApiResponse.ok(CancelOrderResponse.of(cancelCartOrderService.cancel(customerId, orderToken)));
     }
 
     /**

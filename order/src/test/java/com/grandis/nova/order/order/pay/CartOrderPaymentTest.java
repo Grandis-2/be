@@ -15,6 +15,7 @@ import com.grandis.nova.order.stock.StockLedger;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -231,16 +232,12 @@ class CartOrderPaymentTest {
         assertThat(cart()).containsExactlyInAnyOrderEntriesOf(Map.of(phone + "/false", 1));
     }
 
-    private void waitForQuery(String like) throws InterruptedException {
-        for (int i = 0; i < 100; i++) {
+    private void waitForQuery(String like) {
+        Awaitility.await("그 문장이 기다리지 않았다: " + like).atMost(Duration.ofSeconds(10)).until(() -> {
             Long running = jdbcTemplate.queryForObject(
                     "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE COMMAND = 'Query' AND INFO LIKE ?", Long.class, like);
-            if (running != null && running > 0) {
-                return;
-            }
-            Thread.sleep(100);
-        }
-        throw new AssertionError("그 문장이 기다리지 않았다: " + like);
+            return running != null && running > 0;
+        });
     }
 
     private static void await(CountDownLatch latch) {

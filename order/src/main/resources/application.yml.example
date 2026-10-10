@@ -70,6 +70,9 @@ nova:
   # 토스가 느려져도 결제와 무관한 주문 API 의 요청 스레드(Tomcat 200)가 남는다
   payment-confirm:
     max-concurrency: 50
+  # 결제 기한(10분)이 지난 결제 대기 장바구니 주문을 취소 · 재고 반환하는 주기(앞 실행이 끝난 뒤부터 잰다). 기본 30s
+  # cart-order:
+  #   expiry-interval: 30s
   # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다
   sqs:
     region: ap-northeast-2
