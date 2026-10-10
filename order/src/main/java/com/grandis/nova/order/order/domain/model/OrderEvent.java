@@ -33,7 +33,7 @@ public record OrderEvent(
     }
 
     /** 주문 생성 이력(번호 1, from 없음). */
-    public static OrderEvent placed(UUID orderId, EventCause cause, Instant now) {
-        return new OrderEvent(orderId, FIRST_SEQUENCE, null, OrderStatus.AWAITING_PAYMENT, cause, now);
+    public static OrderEvent placed(UUID orderId, OrderStatus status, EventCause cause, Instant now) {
+        return new OrderEvent(orderId, FIRST_SEQUENCE, null, status, cause, now);
     }
 }

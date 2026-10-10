@@ -45,6 +45,10 @@ public class DrawEntryJpaEntity extends BaseEntity {
     @Column(updatable = false, length = 200)
     private String shipToLine2;
 
+    /** 당첨 반영(DrawSettlement)이 전제를 건 UPDATE 로만 쓴다. */
+    @Column(insertable = false, updatable = false)
+    private UUID wonOrderId;
+
     protected DrawEntryJpaEntity() {
     }
 
@@ -94,5 +98,9 @@ public class DrawEntryJpaEntity extends BaseEntity {
 
     public String getShipToLine2() {
         return shipToLine2;
+    }
+
+    public UUID getWonOrderId() {
+        return wonOrderId;
     }
 }

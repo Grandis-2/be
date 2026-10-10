@@ -4,5 +4,7 @@ package com.grandis.nova.order.order.domain.enums;
 public enum OrderSource {
     PREORDER,
     BUY_NOW,
-    CART
+    CART,
+    /** 럭키 드로우 당첨 증정(0원). 결제 없이 결제 완료(결제 확인 대기)로 생긴다 — 이 뒤로는 일반 주문과 같은 배송 단계를 탄다 */
+    DRAW
 }

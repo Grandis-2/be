@@ -49,7 +49,7 @@ be/
 | `catalog` | 2~6 | 요청 수 | `categories` · `products` · `product_options`<br>`product_reviews` · `catalog_outbox_events` |
 | **`preorder`** | **6~12** | **요청 수** | `preorders` · `preorder_events`<br>`preorder_campaigns` · `shipment_batches` |
 | `waitingroom` | 2~12 | 요청 수 · 오픈 전 예약 확장 | (없음 — 대기열은 전용 Redis) |
-| `order` | 2~8 | CPU | `orders` · `order_items` · `order_events`<br>`cart_items` · `payments` · `payment_transactions` · `option_inventories` |
+| `order` | 2~8 | CPU | `orders` · `order_items` · `order_events`<br>`cart_items` · `payments` · `payment_transactions` · `option_inventories`<br>`draw_campaigns` · `draw_entries` |
 | `worker` | 1~20 | Backlog per Task · SPOT | `preorder_sync_jobs` · `preorder_sync_attempts` |
 | `batch` | **1 고정** | — | (읽기) |
 

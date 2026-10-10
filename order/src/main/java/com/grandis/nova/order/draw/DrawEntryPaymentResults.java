@@ -4,6 +4,7 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.order.client.payment.DeclineReason;
+import com.grandis.nova.order.draw.domain.model.DrawCloseState;
 import com.grandis.nova.order.draw.domain.model.DrawEntry;
 import com.grandis.nova.order.draw.domain.model.DrawEntryStatus;
 import com.grandis.nova.order.draw.domain.model.EntryTransition;
@@ -87,6 +88,14 @@ public class DrawEntryPaymentResults {
                 // 결제 완료와 Mock 전송 이벤트는 한 트랜잭션이다 — 반영이 한 번뿐이라(전제를 건 UPDATE) 이벤트도 한 번 쓴다
                 DrawEntry entry = entries.findById(entryId).orElseThrow(() -> new IllegalStateException("응모가 사라졌다: " + entryId));
                 outbox.append(new DrawEntryPaid(entry.id(), entry.campaignId(), entry.customerId()));
+                // 회차 표식을 공유 잠금으로 읽는다 — 그 회차의 추첨 요청 · 반영이 진행 중이면 커밋을 기다린다. 잠그지 않고 읽으면 그 처리가 이 응모를
+                // 빼고 커밋하기 직전의 표식(비어 있음)을 봐 경보를 놓친다. 잠금 순서는 응모 행 → 회차 행(공유)이고, 추첨 쪽은 회차 행 → 결제 완료
+                // 응모뿐이라(이 응모는 그 스냅샷에 결제 완료로 없다) 서로 기다리지 않는다
+                if (campaigns.lockCloseState(entry.campaignId()).map(DrawCloseState::drawn).orElse(false)) {
+                    // 시계 차 · payment 의 모순 · 수동 수정에서만 생긴다(DrawSettlement) — 응모비를 받았는데 추첨에 들어가지 못했다
+                    log.error("드로우 추첨 뒤 결제 완료 — 추첨에 들어가지 않는다, 수동 환불 확인 drawId={} entryId={} providerOrderId={}",
+                            entry.campaignId(), entryId, providerOrderId);
+                }
             }
             return approved;
         });

@@ -5,6 +5,7 @@ import com.grandis.nova.common.sqs.MessageHandling;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.client.payment.DeclineReason;
 import com.grandis.nova.order.draw.DrawEntryPaymentResults;
+import com.grandis.nova.order.draw.DrawSettlement;
 import com.grandis.nova.order.draw.EntryPaymentSettlement;
 import com.grandis.nova.order.order.cancel.CancelReason;
 import com.grandis.nova.order.order.cancel.CancelSettlement;
@@ -69,6 +70,7 @@ class OrderEventDispatcherTest {
     PaymentResults paymentResults;
     RefundResults refundResults;
     DrawEntryPaymentResults entryPaymentResults;
+    DrawSettlement drawSettlement;
     AdminStockService stockService;
     OrderEventDispatcher dispatcher;
 
@@ -78,8 +80,9 @@ class OrderEventDispatcherTest {
         paymentResults = mock(PaymentResults.class);
         refundResults = mock(RefundResults.class);
         entryPaymentResults = mock(DrawEntryPaymentResults.class);
+        drawSettlement = mock(DrawSettlement.class);
         stockService = mock(AdminStockService.class);
-        dispatcher = new OrderEventDispatcher(settlement, paymentResults, refundResults, entryPaymentResults, stockService, jsonMapper,
+        dispatcher = new OrderEventDispatcher(settlement, paymentResults, refundResults, entryPaymentResults, drawSettlement, stockService, jsonMapper,
                 validator);
     }
 

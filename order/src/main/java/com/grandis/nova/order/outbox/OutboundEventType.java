@@ -8,7 +8,9 @@ public enum OutboundEventType implements OutboxEventType {
     PREORDER_ORDER_SETTLED("preorder-events"),
     ORDER_REFUND_REQUESTED("payment-events"),
     /** 응모비를 결제한 응모 — worker 가 받아 Mock(추첨)에 넘긴다(contracts/draw-entry-sync.md). */
-    DRAW_ENTRY_PAID("draw-register");
+    DRAW_ENTRY_PAID("draw-register"),
+    /** 회차의 추첨 요청 — worker 가 Mock 과 응모 수를 대조한 뒤 추첨을 맡긴다(contracts/draw-entry-sync.md). */
+    DRAW_REQUESTED("draw-register");
 
     private final String destination;
 

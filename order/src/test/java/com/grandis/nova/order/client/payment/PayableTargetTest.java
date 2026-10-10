@@ -33,6 +33,6 @@ class PayableTargetTest {
 
     private static DrawEntry entry(java.util.UUID campaignId) {
         return new DrawEntry(TestIds.id(5), campaignId, TestIds.id(6), DrawEntryStatus.AWAITING_PAYMENT, null,
-                new ShipTo("홍길동", "010-0000-0000", "04524", "서울시", null), AT);
+                new ShipTo("홍길동", "010-0000-0000", "04524", "서울시", null), AT, null);
     }
 }

@@ -71,6 +71,8 @@ class PayabilityGate {
                 }
             }
             case BUY_NOW -> throw new IllegalStateException("바로 구매 주문은 아직 없다: orderId=" + order.id());
+            // 결제 대기를 거치지 않아 결제 준비 · 승인이 여기까지 오지 않는다(결제 대기 확인에서 먼저 막힌다)
+            case DRAW -> throw new BusinessException(OrderErrorCode.ORDER_NOT_PAYABLE);
         }
     }
 

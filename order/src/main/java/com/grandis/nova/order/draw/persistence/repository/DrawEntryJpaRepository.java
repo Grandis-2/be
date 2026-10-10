@@ -1,5 +1,6 @@
 package com.grandis.nova.order.draw.persistence.repository;
 
+import com.grandis.nova.order.draw.domain.model.DrawEntryStatus;
 import com.grandis.nova.order.draw.persistence.entity.DrawEntryJpaEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -7,6 +8,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -14,6 +17,21 @@ import java.util.UUID;
 public interface DrawEntryJpaRepository extends JpaRepository<DrawEntryJpaEntity, UUID> {
 
     Optional<DrawEntryJpaEntity> findByCampaignIdAndCustomerId(UUID campaignId, UUID customerId);
+
+    List<DrawEntryJpaEntity> findByCampaignIdAndStatusOrderById(UUID campaignId, DrawEntryStatus status);
+
+    long countByCampaignIdAndStatus(UUID campaignId, DrawEntryStatus status);
+
+    List<DrawEntryJpaEntity> findByCampaignIdAndStatusAndIdIn(UUID campaignId, DrawEntryStatus status, Collection<UUID> ids);
+
+    @Query(value = "SELECT id FROM draw_entries WHERE campaign_id = :campaignId AND won_order_id IS NOT NULL", nativeQuery = true)
+    List<byte[]> findWinnerIds(@Param("campaignId") UUID campaignId);
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = """
+            UPDATE draw_entries SET won_order_id = :orderId, updated_at = :now
+             WHERE id = :id AND campaign_id = :campaignId AND status = 'PAID' AND won_order_id IS NULL""", nativeQuery = true)
+    int markWon(@Param("campaignId") UUID campaignId, @Param("id") UUID id, @Param("orderId") UUID orderId, @Param("now") Instant now);
 
     @Query(value = "SELECT status FROM draw_entries WHERE id = :id", nativeQuery = true)
     Optional<String> findStatus(@Param("id") UUID id);
