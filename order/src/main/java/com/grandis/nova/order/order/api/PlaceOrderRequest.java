@@ -4,6 +4,7 @@ import com.grandis.nova.order.order.command.PlaceOrderCommand;
 import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.place.CartSelection;
 import com.grandis.nova.order.web.ValidationFailures;
+import com.grandis.nova.order.web.WholeInteger;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -12,6 +13,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
+import tools.jackson.databind.annotation.JsonDeserialize;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -66,7 +68,7 @@ public record PlaceOrderRequest(
      */
     public record CartItem(
             @NotNull UUID variantId,
-            @NotNull @Min(1) @Max(99) Integer quantity,
+            @JsonDeserialize(using = WholeInteger.class) @NotNull @Min(1) @Max(99) Integer quantity,
             Boolean warranty,
             @NotNull @PositiveOrZero BigDecimal expectedUnitPrice,
             @PositiveOrZero BigDecimal expectedWarrantyPrice

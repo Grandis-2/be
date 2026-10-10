@@ -1,7 +1,7 @@
 package com.grandis.nova.order.order.api;
 
-import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.common.testing.Concurrently.Outcome;
+import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.order.cart.domain.repository.CartStore;
 import com.grandis.nova.order.client.catalog.CatalogClient;
@@ -15,6 +15,8 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
@@ -696,6 +698,19 @@ class CartOrderApiTest {
                 INSERT INTO cart_items (id, customer_id, option_id, warranty_selected, quantity, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
                 """, bytes(UUID.randomUUID()), bytes(customer), bytes(option), warranty, quantity);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"1.9", "\"2\"", "1e0"})
+    @DisplayName("장바구니 주문 줄의 수량이 정수가 아니면 400 — 잘라 주문하지 않는다")
+    void nonIntegerLineQuantityIs400(String token) throws Exception {
+        UUID phone = sellable(10);
+        cartLine(phone, false, 1);
+
+        place("""
+                {"variantId":"%s","quantity":%s,"expectedUnitPrice":1250000}""".formatted(phone, token))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
+        assertThat(reserved(phone)).isZero();
     }
 
     private static String item(UUID option, int quantity, boolean warranty) {
