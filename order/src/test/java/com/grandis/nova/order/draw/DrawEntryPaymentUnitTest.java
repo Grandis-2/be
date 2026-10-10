@@ -2,6 +2,7 @@ package com.grandis.nova.order.draw;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.client.payment.PaymentConfirmSlots;
 import com.grandis.nova.order.client.payment.PaymentConfirmation;
@@ -65,7 +66,7 @@ class DrawEntryPaymentUnitTest {
     final PaymentConfirmSlots slots = mock(PaymentConfirmSlots.class);
     final PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
     final Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
-    final DrawEntryPaymentResults results = new DrawEntryPaymentResults(campaigns, entries, transactions, clock);
+    final DrawEntryPaymentResults results = new DrawEntryPaymentResults(campaigns, entries, mock(OutboxWriter.class), transactions, clock);
     final DrawEntryPaymentService service = new DrawEntryPaymentService(entryService, campaigns, entries, mock(PaymentPreparer.class), confirmer,
             results, slots, transactions, clock);
 
@@ -74,6 +75,7 @@ class DrawEntryPaymentUnitTest {
         given(slots.tryAcquire()).willReturn(true);
         given(entryService.mine(MEMBER, DRAW)).willReturn(ENTRY);
         given(campaigns.findById(DRAW)).willReturn(Optional.of(CAMPAIGN));
+        given(entries.findById(any())).willReturn(Optional.of(ENTRY));
         given(confirmer.check(any(), anyString(), anyString(), any())).willReturn(new PaymentConfirmation.Pending());
     }
 

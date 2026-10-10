@@ -6,7 +6,9 @@ import com.grandis.nova.common.outbox.OutboxEventType;
 public enum OutboundEventType implements OutboxEventType {
 
     PREORDER_ORDER_SETTLED("preorder-events"),
-    ORDER_REFUND_REQUESTED("payment-events");
+    ORDER_REFUND_REQUESTED("payment-events"),
+    /** 응모비를 결제한 응모 — worker 가 받아 Mock(추첨)에 넘긴다(contracts/draw-entry-sync.md). */
+    DRAW_ENTRY_PAID("draw-register");
 
     private final String destination;
 
