@@ -14,6 +14,7 @@ import com.grandis.nova.order.order.vo.OrderToken;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -34,6 +35,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -450,16 +452,12 @@ class CartOrderCancelTest {
                  WHERE o.order_token = ? ORDER BY e.event_sequence DESC LIMIT 1""", orderToken);
     }
 
-    private void waitForQuery(String like) throws InterruptedException {
-        for (int i = 0; i < 100; i++) {
+    private void waitForQuery(String like) {
+        Awaitility.await("그 문장이 기다리지 않았다: " + like).atMost(Duration.ofSeconds(10)).until(() -> {
             Long running = jdbcTemplate.queryForObject(
                     "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE COMMAND = 'Query' AND INFO LIKE ?", Long.class, like);
-            if (running != null && running > 0) {
-                return;
-            }
-            Thread.sleep(100);
-        }
-        throw new AssertionError("그 문장이 기다리지 않았다: " + like);
+            return running != null && running > 0;
+        });
     }
 
     private static void await(CountDownLatch latch) {

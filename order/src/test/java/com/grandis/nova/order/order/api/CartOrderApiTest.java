@@ -11,6 +11,7 @@ import com.grandis.nova.order.stock.StockLedger;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -630,16 +631,12 @@ class CartOrderApiTest {
     }
 
     /** 그 모양의 문장이 실행 중일 때까지(최대 10초) — 같은 계정의 연결이 보이는 PROCESSLIST 로. 잠금이 없으면 바로 끝나는 문장만 쓴다. */
-    private void waitForQuery(String like) throws InterruptedException {
-        for (int i = 0; i < 100; i++) {
+    private void waitForQuery(String like) {
+        Awaitility.await("그 문장이 기다리지 않았다: " + like).atMost(Duration.ofSeconds(10)).until(() -> {
             Long running = jdbcTemplate.queryForObject(
                     "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE COMMAND = 'Query' AND INFO LIKE ?", Long.class, like);
-            if (running != null && running > 0) {
-                return;
-            }
-            Thread.sleep(100);
-        }
-        throw new AssertionError("그 문장이 기다리지 않았다: " + like);
+            return running != null && running > 0;
+        });
     }
 
     /**
@@ -647,17 +644,13 @@ class CartOrderApiTest {
      * 같은 계정의 연결은 볼 수 있는 PROCESSLIST 에서 "실행 중인 확보 UPDATE" 를 센다 — 잠금이 없으면 마이크로초에 끝나는 문장이라
      * 보인다면 기다리는 중이다. 계기가 0 을 내면 시험이 시간 초과로 실패한다.
      */
-    private void waitForLockWait() throws InterruptedException {
-        for (int i = 0; i < 100; i++) {
-            Long waits = jdbcTemplate.queryForObject("""
+    private void waitForLockWait() {
+        Awaitility.await("잠금 대기가 생기지 않았다").atMost(Duration.ofSeconds(10)).until(() -> {
+            Long running = jdbcTemplate.queryForObject("""
                     SELECT COUNT(*) FROM information_schema.PROCESSLIST
                      WHERE COMMAND = 'Query' AND INFO LIKE 'UPDATE option_inventories SET stock_reserved = stock_reserved +%'""", Long.class);
-            if (waits != null && waits > 0) {
-                return;
-            }
-            Thread.sleep(100);
-        }
-        throw new AssertionError("잠금 대기가 생기지 않았다");
+            return running != null && running > 0;
+        });
     }
 
     private static void await(CountDownLatch latch) {
