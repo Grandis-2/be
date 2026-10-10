@@ -19,6 +19,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
@@ -32,6 +34,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -126,11 +130,12 @@ class CartOrderPaymentTest {
 
     @Test
     @DisplayName("승인 반영은 판매 확정(확보 → 판매) · 장바구니 차감(0 이하면 삭제)을 같이 하고, 승인이 또 와도(응답 · 이벤트 겹침) 한 번뿐")
-    void approvalSellsStockAndDeductsCartOnce() {
+    void approvalSellsStockAndDeductsCartOnce(CapturedOutput output) {
         fixtures.forceAuthorizing(order.id(), PROVIDER_ORDER_ID);
 
         assertThat(results.settle(approved()).applied()).isTrue();
         assertThat(results.settle(approved()).applied()).as("중복 승인").isFalse();
+        assertThat(output).as("정상 승인에는 재고 어긋남 경보가 없다").doesNotContain("재고 어긋남");
 
         assertThat(stockOf(phone)).containsExactly(10, 0, 4);
         assertThat(stockOf(watch)).containsExactly(10, 0, 1);
@@ -150,19 +155,32 @@ class CartOrderPaymentTest {
         assertThat(statusOf()).isEqualTo("AWAITING_PAYMENT");
     }
 
-    @Test
-    @DisplayName("재고 장부가 어긋나 판매 확정을 못 해도(확보가 모자람) 돈은 나갔으니 주문은 결제됨 · 장바구니도 뺀다 — 어긋난 옵션만 옮기지 않고 전용 ERROR")
-    void mismatchedStockStillSettlesAndAlerts(CapturedOutput output) {
+    /**
+     * 재고 장부가 어긋나 판매 확정을 못 해도(확보가 모자람) 돈은 나갔으니 주문은 결제됨 · 장바구니도 뺀다 — 어긋난 옵션만 옮기지 않고 전용 ERROR.
+     * 잠금 순서의 앞 옵션 · 뒤 옵션이 어긋난 경우를 모두 본다 — 앞에서 어긋나도 뒤 옵션은 판매로 옮겨야 한다(첫 어긋남에서 멈추지 않는다).
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void mismatchedStockStillSettlesAndAlerts(boolean frontMismatched, CapturedOutput output) {
+        List<UUID> byLockOrder = new ArrayList<>(List.of(phone, watch));
+        byLockOrder.sort((a, b) -> Arrays.compareUnsigned(bytes(a), bytes(b)));
+        UUID broken = frontMismatched ? byLockOrder.get(0) : byLockOrder.get(1);
+        UUID healthy = frontMismatched ? byLockOrder.get(1) : byLockOrder.get(0);
+        int brokenQuantity = broken.equals(phone) ? 4 : 1;
+        int healthyQuantity = healthy.equals(phone) ? 4 : 1;
         fixtures.forceAuthorizing(order.id(), PROVIDER_ORDER_ID);
-        jdbcTemplate.update("UPDATE option_inventories SET stock_reserved = 0 WHERE option_id = ?", (Object) bytes(watch));
+        jdbcTemplate.update("UPDATE option_inventories SET stock_reserved = 0 WHERE option_id = ?", (Object) bytes(broken));
 
         assertThat(results.settle(approved()).applied()).isTrue();
 
         assertThat(statusOf()).isEqualTo("AWAITING_CONFIRMATION");
         assertThat(cart()).containsExactlyInAnyOrderEntriesOf(Map.of(phone + "/false", 1));
-        assertThat(stockOf(phone)).as("어긋나지 않은 옵션은 판매로").containsExactly(10, 0, 4);
-        assertThat(stockOf(watch)).as("어긋난 옵션은 그대로").containsExactly(10, 0, 0);
-        assertThat(output).contains("재고 어긋남").contains(order.id().toString()).contains(PROVIDER_ORDER_ID).contains(watch.toString());
+        assertThat(stockOf(healthy)).as("어긋나지 않은 옵션은 판매로").containsExactly(10, 0, healthyQuantity);
+        assertThat(stockOf(broken)).as("어긋난 옵션은 그대로").containsExactly(10, 0, 0);
+        List<String> alerts = output.getAll().lines().filter(line -> line.contains("재고 어긋남")).toList();
+        assertThat(alerts).hasSize(1);
+        assertThat(alerts.getFirst()).contains("ERROR").contains(order.id().toString()).contains(PROVIDER_ORDER_ID)
+                .contains(broken + "=" + brokenQuantity).doesNotContain(healthy.toString());
     }
 
     @Test

@@ -8,6 +8,7 @@ import com.grandis.nova.order.order.domain.model.OrderItem;
 import com.grandis.nova.order.order.domain.model.OrderLine;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.stock.StockLedger;
+import com.grandis.nova.order.stock.domain.repository.StockReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -15,6 +16,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -39,11 +41,13 @@ class CartOrderFulfillment {
     private final OrderReader orderReader;
     private final CartDeduction cart;
     private final StockLedger stock;
+    private final StockReader stockReader;
 
-    CartOrderFulfillment(OrderReader orderReader, CartDeduction cart, StockLedger stock) {
+    CartOrderFulfillment(OrderReader orderReader, CartDeduction cart, StockLedger stock, StockReader stockReader) {
         this.orderReader = orderReader;
         this.cart = cart;
         this.stock = stock;
+        this.stockReader = stockReader;
     }
 
     /** @param providerOrderId 승인된 결제창 — 재고 어긋남 경보에 싣는다(운영자가 결제와 맞춰 볼 수 있게) */
@@ -55,6 +59,8 @@ class CartOrderFulfillment {
             }
             case CART -> {
             }
+            // 지금은 오지 않는다(Order.place 가 바로 구매를 받지 않는다). 바로 구매가 생기면 여기서 판매 확정을 붙인다 — 이대로 두면 승인 반영이
+            // 롤백돼 승인 중으로 굳는다
             case BUY_NOW -> throw new IllegalStateException("바로 구매 주문의 판매 확정은 아직 없다: orderId=" + orderId);
         }
         List<OrderItem> items = orderReader.findItems(orderId);
@@ -74,8 +80,13 @@ class CartOrderFulfillment {
         cart.deduct(order.customerId(), purchased);
         List<UUID> mismatched = stock.sell(sold);
         if (!mismatched.isEmpty()) {
-            log.error("재고 어긋남 — 결제는 반영했지만 판매 확정을 못 했다, 재고 장부 확인 필요 orderId={} providerOrderId={} optionIds={}",
-                    orderId, providerOrderId, mismatched);
+            // 경보 규칙이 이 문구("재고 어긋남")로 잡는다 — 바꾸지 않는다. 복구에 필요한 것: 판매로 옮기지 못한 수량과 그때의 확보
+            Map<UUID, Integer> unsold = new LinkedHashMap<>();
+            mismatched.forEach(option -> unsold.put(option, sold.get(option)));
+            Map<UUID, Integer> reservedNow = new LinkedHashMap<>();
+            stockReader.findByOptionIds(mismatched).forEach(level -> reservedNow.put(level.optionId(), level.reserved()));
+            log.error("재고 어긋남 — 결제는 반영했지만 판매 확정을 못 했다, 재고 장부 확인 필요 orderId={} providerOrderId={} unsold={} reservedNow={}",
+                    orderId, providerOrderId, unsold, reservedNow);
         }
     }
 }
