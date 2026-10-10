@@ -83,6 +83,7 @@ class DrawEntryApiTest {
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired PlatformTransactionManager transactionManager;
     @Autowired OrderEventDispatcher dispatcher;
+    @Autowired DrawEntryPaymentResults paymentResults;
     @MockitoBean PaymentClient paymentClient;
     @MockitoBean PaymentConfirmClient confirmClient;
 
@@ -283,6 +284,35 @@ class DrawEntryApiTest {
         assertThat(payload.get("customerId").asString()).isEqualTo(customerId.toString());
         assertThat(payload.propertyNames()).containsExactlyInAnyOrder("drawId", "customerId");
         assertThat(OutboundEventType.DRAW_ENTRY_PAID.destination()).isEqualTo("draw-register");
+    }
+
+    /**
+     * 같은 응모의 승인이 겹치면(동기 응답과 결과 이벤트가 동시에) 결제 완료도 이벤트도 하나다. 결정적으로 본다: 앞선 승인이 응모 행을 잠그고
+     * 결제 완료 · 이벤트를 적은 채 커밋하지 않고, 늦은 승인이 그 행 잠금에서 기다리는 것을 확인한 뒤 커밋한다.
+     */
+    @Test
+    @DisplayName("같은 응모의 승인이 겹쳐도 결제 완료 · DRAW_ENTRY_PAID 는 하나 — 늦은 쪽은 결제 완료를 보고 지나간다")
+    void concurrentApprovalsOfOneEntryHandOverOnce() throws Exception {
+        UUID draw = openDraw();
+        UUID entry = insertEntry(draw, customerId, "AUTHORIZING", TOSS_ORDER_ID);
+        CountDownLatch approved = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
+        CompletableFuture<Void> first = CompletableFuture.runAsync(() -> new TransactionTemplate(transactionManager).executeWithoutResult(s -> {
+            assertThat(paymentResults.approved(entry, TOSS_ORDER_ID).applied()).isTrue();
+            approved.countDown();
+            await(commit);
+        }));
+        await(approved);
+        CompletableFuture<Void> later = CompletableFuture.runAsync(() -> dispatcher.dispatch(settled(entry, TOSS_ORDER_ID, "APPROVED", null)));
+        waitForQuery("SELECT status FROM draw_entries%FOR UPDATE");
+        commit.countDown();
+        first.get(20, TimeUnit.SECONDS);
+        later.get(20, TimeUnit.SECONDS);
+
+        assertThat(statusOf(entry)).isEqualTo("PAID");
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM order_outbox_events WHERE aggregate_type = 'DRAW_ENTRY' AND aggregate_id = ? AND event_type = 'DRAW_ENTRY_PAID'""",
+                Long.class, (Object) bytes(entry))).isEqualTo(1);
     }
 
     @Test
