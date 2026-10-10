@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.util.UUID;
 
 /**
  * order 가 결제를 시작하기 전에 묻는 결제 가능 여부. 읽기만 하고 잠그지 않는다.
@@ -25,9 +26,19 @@ class PayabilityService {
         this.clock = clock;
     }
 
+    /** 공개 번호로 찾는다. @throws BusinessException PREORDER_NOT_FOUND · FORBIDDEN */
     @Transactional(readOnly = true)
     public Payability check(Viewer viewer, String preorderToken) {
-        PreorderSnapshot preorder = preorders.getByToken(preorderToken);
+        return check(viewer, preorders.getByToken(preorderToken));
+    }
+
+    /** 예약 내부 id 로 찾는다(order 가 주문에 저장한 id). @throws BusinessException PREORDER_NOT_FOUND · FORBIDDEN */
+    @Transactional(readOnly = true)
+    public Payability checkById(Viewer viewer, UUID preorderId) {
+        return check(viewer, preorders.getById(preorderId));
+    }
+
+    private Payability check(Viewer viewer, PreorderSnapshot preorder) {
         if (!viewer.canSee(preorder.customerId())) {
             throw new BusinessException(CommonErrorCode.FORBIDDEN);
         }
