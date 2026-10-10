@@ -69,11 +69,14 @@ public class DrawEntryPaymentResults {
         Instant now = clock.instant();
         boolean[] fromAwaiting = {false};
         EntryTransition transition = write(entryId, () -> {
-            EntryTransition approved = entries.approve(entryId, now);
-            if (!approved.applied() && approved.status() == DrawEntryStatus.AWAITING_PAYMENT) {
-                approved = entries.approveAwaiting(entryId, now);
-                fromAwaiting[0] = approved.applied();
-            }
+            // 먼저 행을 잠그고 갈래를 고른다 — 두 UPDATE 사이에 다른 요청의 승인 중 전환이 끼면 어느 쪽에도 맞지 않아 승인을 놓친다
+            DrawEntryStatus before = entries.lockStatus(entryId);
+            EntryTransition approved = switch (before) {
+                case AUTHORIZING -> entries.approve(entryId, now);
+                case AWAITING_PAYMENT -> entries.approveAwaiting(entryId, now);
+                case PAID -> new EntryTransition(false, DrawEntryStatus.PAID);
+            };
+            fromAwaiting[0] = approved.applied() && before == DrawEntryStatus.AWAITING_PAYMENT;
             return approved;
         });
         if (fromAwaiting[0]) {

@@ -1,6 +1,7 @@
 package com.grandis.nova.order.draw.domain.repository;
 
 import com.grandis.nova.order.draw.domain.model.DrawEntry;
+import com.grandis.nova.order.draw.domain.model.DrawEntryStatus;
 import com.grandis.nova.order.draw.domain.model.EntryTransition;
 import com.grandis.nova.order.draw.domain.model.NewDrawEntry;
 
@@ -27,6 +28,9 @@ public interface DrawEntryStore {
 
     /** 결제 대기 → 승인 중(그 결제창). */
     EntryTransition requestPayment(UUID entryId, String providerOrderId, Instant now);
+
+    /** 응모 행을 잠그고 지금 상태를 읽는다(SELECT … FOR UPDATE). 트랜잭션 안에서만 — 같은 트랜잭션의 뒤 UPDATE 와 사이에 다른 전이가 끼지 않게. */
+    DrawEntryStatus lockStatus(UUID entryId);
 
     /** 승인 중 → 결제 완료. 결제창을 대조하지 않는다 — payment 는 대상당 성공 결제가 하나라 언제 와도 그 응모의 결제다. */
     EntryTransition approve(UUID entryId, Instant now);

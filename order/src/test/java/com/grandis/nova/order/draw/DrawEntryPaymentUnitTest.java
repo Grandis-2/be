@@ -99,6 +99,7 @@ class DrawEntryPaymentUnitTest {
         assertThatThrownBy(() -> service.confirm(MEMBER, null, DRAW, WINDOW, "key", new BigDecimal("100")))
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
         verify(confirmer, never()).confirm(any(), anyString(), anyString(), any(), anyBoolean());
+        verify(slots).release();
     }
 
     @Test
@@ -111,26 +112,31 @@ class DrawEntryPaymentUnitTest {
     }
 
     @Test
-    @DisplayName("결제 대기 응모에 온 승인은 결제 완료로 받되 ERROR 로 남긴다 — 승인 중에서 온 승인은 INFO")
+    @DisplayName("잠근 상태로 갈래를 고른다 — 승인 중이면 경보 없이, 결제 대기면 결제 완료로 받되 ERROR")
     void approvalForAwaitingEntryIsAlarmed(CapturedOutput output) {
-        given(entries.approve(any(), any())).willReturn(new EntryTransition(false, DrawEntryStatus.AWAITING_PAYMENT));
-        given(entries.approveAwaiting(any(), any())).willReturn(new EntryTransition(true, DrawEntryStatus.PAID));
+        UUID authorizing = TestIds.id(9);
+        given(entries.lockStatus(authorizing)).willReturn(DrawEntryStatus.AUTHORIZING);
+        given(entries.approve(authorizing, NOW)).willReturn(new EntryTransition(true, DrawEntryStatus.PAID));
+
+        assertThat(results.approved(authorizing, WINDOW).applied()).isTrue();
+        assertThat(output.getAll()).as("승인 중에서 온 승인은 경보가 아니다").doesNotContain("결제 대기 응모에 승인이 왔다");
+        verify(entries, never()).approveAwaiting(any(), any());
+
+        given(entries.lockStatus(ENTRY.id())).willReturn(DrawEntryStatus.AWAITING_PAYMENT);
+        given(entries.approveAwaiting(ENTRY.id(), NOW)).willReturn(new EntryTransition(true, DrawEntryStatus.PAID));
 
         assertThat(results.approved(ENTRY.id(), WINDOW).applied()).isTrue();
         assertThat(output.getAll()).contains("ERROR").contains("결제 대기 응모에 승인이 왔다");
-
-        given(entries.approve(any(), any())).willReturn(new EntryTransition(true, DrawEntryStatus.PAID));
-        UUID other = TestIds.id(9);
-        results.approved(other, WINDOW);
-        verify(entries, never()).approveAwaiting(other, NOW);
+        verify(entries, never()).approve(ENTRY.id(), NOW);
     }
 
     @Test
-    @DisplayName("이미 결제 완료면 결제 대기 승인 갈래를 타지 않는다")
+    @DisplayName("이미 결제 완료면 어느 승인 UPDATE 도 하지 않는다 — 중복")
     void approvalForPaidEntryIsDuplicate() {
-        given(entries.approve(any(), any())).willReturn(new EntryTransition(false, DrawEntryStatus.PAID));
+        given(entries.lockStatus(ENTRY.id())).willReturn(DrawEntryStatus.PAID);
 
         assertThat(results.approved(ENTRY.id(), WINDOW).applied()).isFalse();
+        verify(entries, never()).approve(any(), any());
         verify(entries, never()).approveAwaiting(any(), any());
     }
 

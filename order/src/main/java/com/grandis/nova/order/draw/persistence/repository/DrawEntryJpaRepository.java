@@ -18,6 +18,9 @@ public interface DrawEntryJpaRepository extends JpaRepository<DrawEntryJpaEntity
     @Query(value = "SELECT status FROM draw_entries WHERE id = :id", nativeQuery = true)
     Optional<String> findStatus(@Param("id") UUID id);
 
+    @Query(value = "SELECT status FROM draw_entries WHERE id = :id FOR UPDATE", nativeQuery = true)
+    Optional<String> lockStatus(@Param("id") UUID id);
+
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query(value = """
             UPDATE draw_entries SET status = 'AUTHORIZING', authorizing_provider_order_id = :providerOrderId, updated_at = :now

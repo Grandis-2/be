@@ -62,6 +62,12 @@ class JpaDrawEntryStore implements DrawEntryStore {
     }
 
     @Override
+    public DrawEntryStatus lockStatus(UUID entryId) {
+        return entries.lockStatus(entryId).map(DrawEntryStatus::valueOf)
+                .orElseThrow(() -> new IllegalArgumentException("응모가 없다: " + entryId));
+    }
+
+    @Override
     public EntryTransition requestPayment(UUID entryId, String providerOrderId, Instant now) {
         return transition(entryId, entries.requestPayment(entryId, providerOrderId, now));
     }
