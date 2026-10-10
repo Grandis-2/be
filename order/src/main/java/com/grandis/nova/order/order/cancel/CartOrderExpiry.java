@@ -5,6 +5,7 @@ import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.repository.ExpiredOrderPosition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
+import com.grandis.nova.order.stock.domain.exception.StockReleaseMismatchException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.PessimisticLockingFailureException;
@@ -90,7 +91,12 @@ public class CartOrderExpiry {
         } catch (PessimisticLockingFailureException e) {
             log.warn("결제 기한 만료 처리 잠금 실패(교착={}), 다음 주기에 다시 orderId={}", MySqlLockFailures.isDeadlock(e), order.id(), e);
         } catch (RuntimeException e) {
-            log.error("결제 기한 만료 처리 실패, 다음 주기에 다시 orderId={}", order.id(), e);
+            if (e.getCause() instanceof StockReleaseMismatchException) {
+                // 경보("재고 어긋남")는 반환 쪽이 이미 남겼다 — 장부를 고칠 때까지 주기마다 다시 실패하므로 여기서는 스택 없이 한 줄만
+                log.warn("결제 기한 만료 처리 건너뜀 — 재고 어긋남, 다음 주기에 다시 orderId={}", order.id());
+            } else {
+                log.error("결제 기한 만료 처리 실패, 다음 주기에 다시 orderId={}", order.id(), e);
+            }
         }
         return false;
     }

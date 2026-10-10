@@ -2,6 +2,7 @@ package com.grandis.nova.order.stock;
 
 import com.grandis.nova.order.stock.domain.exception.StockAlreadyCreatedException;
 import com.grandis.nova.order.stock.domain.exception.StockBelowCommittedException;
+import com.grandis.nova.order.stock.domain.exception.StockReleaseMismatchException;
 import com.grandis.nova.order.stock.domain.exception.StockShortageException;
 import com.grandis.nova.order.stock.domain.model.StockLevel;
 import com.grandis.nova.order.stock.domain.model.StockSetting;
@@ -150,13 +151,13 @@ public class StockLedger {
      * 쪽(사용자 취소 · 결제 기한 만료)이 쓴다.
      *
      * @param quantities 옵션 id → 그 주문이 확보한 수량
-     * @throws IllegalStateException 확보가 모자란 옵션이 있다 — 데이터가 어긋난 것이다. 취소 전체를 롤백한다
+     * @throws StockReleaseMismatchException 확보가 모자란 옵션이 있다(처음 걸린 하나) — 데이터가 어긋난 것이다. 취소 전체를 롤백한다
      */
     public void release(Map<UUID, Integer> quantities) {
         Instant now = clock.instant();
         for (Map.Entry<UUID, Integer> entry : ordered(quantities).entrySet()) {
             if (writer.release(entry.getKey(), entry.getValue(), now) != 1) {
-                throw new IllegalStateException("반환할 확보가 모자란다: optionId=" + entry.getKey() + ", quantity=" + entry.getValue());
+                throw new StockReleaseMismatchException(entry.getKey(), entry.getValue());
             }
         }
     }

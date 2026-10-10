@@ -37,7 +37,6 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -78,7 +77,6 @@ public class PlaceCartOrderService {
     private static final Logger log = LoggerFactory.getLogger(PlaceCartOrderService.class);
 
     static final int MAX_ATTEMPTS = 2;
-    private static final Set<OrderStatus> UNPAID = EnumSet.of(OrderStatus.AWAITING_PAYMENT, OrderStatus.AUTHORIZING);
     /** 새 장바구니 주문이 결제 안 된 앞 장바구니 주문을 취소할 때의 이력 사유(회원당 하나). */
     static final String REPLACED_REASON = "REPLACED_BY_NEW_ORDER";
     /** 주문의 재고 부족 문구(명세 POST /orders). 같은 코드의 기본 문구는 장바구니 담기의 것이다. */
@@ -155,9 +153,10 @@ public class PlaceCartOrderService {
         Instant now = clock.instant();
         for (Order order : unpaid) {
             List<OrderItem> items = itemsByOrder.getOrDefault(order.id(), List.of());
-            // 잠그지 않고 읽었으므로 돌려주기 전에 잠가 다시 본다 — 그 사이 사용자 취소(장바구니 잠금을 잡지 않는다)가 취소했으면 돌려주지 않는다
+            // 잠그지 않고 읽었으므로 돌려주기 전에 잠가 다시 본다 — 읽은 상태 그대로일 때만 돌려준다(응답의 상태가 맞게). 그 사이 사용자 취소
+            // (장바구니 잠금을 잡지 않는다)가 취소했으면 새로 만들고, 결제 시작이 승인 중으로 바꿨으면 아래에서 409 PAYMENT_IN_PROGRESS 다
             if (order.acceptsPaymentAt(now) && sameComposition(items, draft.lines()) && sameValues(order, items, draft)
-                    && UNPAID.contains(ledger.lockedStatus(order.id()))) {
+                    && ledger.lockedStatus(order.id()) == order.status()) {
                 return new PlaceResult(order, items, false);
             }
         }

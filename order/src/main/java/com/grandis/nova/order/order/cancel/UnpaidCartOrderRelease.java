@@ -6,6 +6,7 @@ import com.grandis.nova.order.order.domain.model.OrderTransition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
 import com.grandis.nova.order.stock.StockLedger;
+import com.grandis.nova.order.stock.domain.exception.StockReleaseMismatchException;
 import com.grandis.nova.order.stock.domain.repository.StockReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,7 +15,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashMap;
-import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -29,10 +30,10 @@ import java.util.UUID;
 @Transactional(propagation = Propagation.MANDATORY)
 public class UnpaidCartOrderRelease {
 
-    private final OrderLedger ledger;
-    private final OrderReader orderReader;
     private static final Logger log = LoggerFactory.getLogger(UnpaidCartOrderRelease.class);
 
+    private final OrderLedger ledger;
+    private final OrderReader orderReader;
     private final StockLedger stock;
     private final StockReader stockReader;
 
@@ -53,15 +54,23 @@ public class UnpaidCartOrderRelease {
             }
             try {
                 stock.release(reserved);
-            } catch (IllegalStateException e) {
-                // 경보 규칙이 이 문구("재고 어긋남")로 잡는다 — 결제 반영 · 장바구니 주문 생성의 같은 경보와 같은 문구다. 바꾸지 않는다
-                Map<UUID, Integer> reservedNow = new LinkedHashMap<>();
-                stockReader.findByOptionIds(reserved.keySet()).forEach(level -> reservedNow.put(level.optionId(), level.reserved()));
-                log.error("재고 어긋남 — 결제 안 된 장바구니 주문의 확보를 반환하지 못해 취소하지 않았다, 재고 장부 확인 필요 orderId={} released={} reservedNow={}",
-                        orderId, reserved, reservedNow, e);
+            } catch (StockReleaseMismatchException e) {
+                // 경보 규칙이 이 문구("재고 어긋남")로 잡는다 — 결제 반영 · 장바구니 주문 생성의 같은 경보와 같은 문구다. 바꾸지 않는다.
+                // 싣는 것은 걸린 옵션 하나뿐이다 — 앞 옵션들은 이미 뺐다가 롤백되므로 그 숫자는 복구에 쓸 수 없다. 걸린 옵션은 UPDATE 가 0행이라 바뀌지 않았다
+                log.error("재고 어긋남 — 결제 안 된 장바구니 주문의 확보를 반환하지 못해 취소하지 않았다, 재고 장부 확인 필요 orderId={} optionId={} quantity={} reservedNow={}",
+                        orderId, e.optionId(), e.quantity(), reservedOf(e.optionId()), e);
                 throw new IllegalStateException("취소한 주문의 확보를 반환하지 못했다: orderId=" + orderId, e);
             }
         }
         return canceled;
+    }
+
+    /** 경보에 싣는 그때의 확보. 읽다 실패해도 경보와 원래 예외를 잃지 않는다. */
+    private Object reservedOf(UUID optionId) {
+        try {
+            return stockReader.findByOptionIds(List.of(optionId)).stream().map(level -> (Object) level.reserved()).findFirst().orElse("재고 행 없음");
+        } catch (RuntimeException e) {
+            return "읽지 못함(" + e.getClass().getSimpleName() + ")";
+        }
     }
 }

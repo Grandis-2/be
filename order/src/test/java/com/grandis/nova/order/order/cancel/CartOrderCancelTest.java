@@ -35,6 +35,8 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -237,7 +239,33 @@ class CartOrderCancelTest {
         assertThat(column(order, "status", String.class)).isEqualTo("AWAITING_PAYMENT");
         List<String> alerts = output.getAll().lines().filter(line -> line.contains("재고 어긋남")).toList();
         assertThat(alerts).hasSize(1);
-        assertThat(alerts.getFirst()).contains("ERROR").contains(idOf(order).toString()).contains(phone + "=3").contains("reservedNow={" + phone + "=1}");
+        assertThat(alerts.getFirst()).contains("ERROR").contains(idOf(order).toString()).contains("optionId=" + phone).contains("quantity=3")
+                .contains("reservedNow=1");
+    }
+
+    /**
+     * 옵션 둘인 주문에서 잠금 순서 뒤 옵션의 반환이 모자라면, 경보는 그 옵션만 싣는다 — 앞 옵션은 이미 뺐다가 롤백되므로 그 숫자는 복구에 쓸 수 없다.
+     * 롤백 뒤 앞 옵션의 확보도 그대로다.
+     */
+    @Test
+    void releaseMismatchOnLaterOptionAlertsOnlyThatOption(CapturedOutput output) throws Exception {
+        List<UUID> options = new ArrayList<>(List.of(sellable(10), sellable(10)));
+        options.sort((a, b) -> Arrays.compareUnsigned(bytes(a), bytes(b)));
+        UUID front = options.get(0);
+        UUID back = options.get(1);
+        cartLine(customerId, front, 2);
+        cartLine(customerId, back, 3);
+        String body = placeRequest(customerId, item(front, 2) + "," + item(back, 3)).andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String order = JSON.readTree(body).get("data").get("orderId").asString();
+        jdbcTemplate.update("UPDATE option_inventories SET stock_reserved = 1 WHERE option_id = ?", (Object) bytes(back));
+
+        cancel(customerId, order).andExpect(status().isInternalServerError());
+
+        assertThat(reserved(front)).as("롤백 — 앞 옵션도 그대로").isEqualTo(2);
+        List<String> alerts = output.getAll().lines().filter(line -> line.contains("재고 어긋남")).toList();
+        assertThat(alerts).hasSize(1);
+        assertThat(alerts.getFirst()).contains("optionId=" + back).contains("quantity=3").contains("reservedNow=1").doesNotContain(front.toString());
     }
 
     /** 만료는 (기한, id) 로 이어 읽는다 — 앞에서 늘 실패하는 주문(데이터 어긋남)이 있어도 뒤 주문들을 처리한다. 쪽 크기 1 로 쪽 넘김까지 태운다. */
@@ -257,6 +285,61 @@ class CartOrderCancelTest {
         assertThat(column(broken, "status", String.class)).as("어긋난 주문은 남는다").isEqualTo("AWAITING_PAYMENT");
         assertThat(column(healthy, "status", String.class)).as("뒤 주문은 처리된다").isEqualTo("CANCELED");
         assertThat(reserved(phone)).isZero();
+    }
+
+    /** 같은 기한(µs 까지 같음)의 주문은 id 로 가른다 — 쪽 경계에 걸려도 빠지지 않는다. 앞(id 가 작은) 주문이 늘 실패해도 뒤 주문을 처리한다. */
+    @Test
+    @Timeout(value = 30, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+    void expiryOrdersSameDueById(CapturedOutput output) {
+        UUID phone = sellable(10);
+        String broken = placeCartOrder(phone, 3);
+        String healthy = placeCartOrderOf(fixtures.customer(), phone, 2);
+        assertThat(Arrays.compareUnsigned(bytes(idOf(broken)), bytes(idOf(healthy)))).as("broken 이 id 순으로 앞").isNegative();
+        Instant due = dueAt(healthy);
+        setDue(broken, due);
+        jdbcTemplate.update("UPDATE option_inventories SET stock_reserved = 2 WHERE option_id = ?", (Object) bytes(phone));
+
+        expiry.expireDue(due, 1);
+
+        assertThat(column(broken, "status", String.class)).isEqualTo("AWAITING_PAYMENT");
+        assertThat(column(healthy, "status", String.class)).isEqualTo("CANCELED");
+        assertThat(output).as("만료 쪽은 경보를 겹쳐 남기지 않는다 — 스택 없는 WARN 한 줄")
+                .contains("결제 기한 만료 처리 건너뜀 — 재고 어긋남").doesNotContain("결제 기한 만료 처리 실패");
+    }
+
+    /**
+     * 같은 구성 · 값으로 다시 주문하는데, 재사용 후보를 읽은 뒤 잠그기 전에 결제 시작이 그 주문을 승인 중으로 바꾸면 옛 상태로 돌려주지 않고
+     * 409 PAYMENT_IN_PROGRESS 다. 결정적으로 본다: 결제 쪽 트랜잭션이 승인 중으로 바꾼 채 미커밋, 재주문이 그 행 잠금에서 기다린 뒤 커밋.
+     */
+    @Test
+    void reuseCandidateTurningAuthorizingIsPaymentInProgress() throws Exception {
+        UUID phone = sellable(10);
+        String first = placeCartOrder(phone, 2);
+        CountDownLatch authorized = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        CompletableFuture<Void> paying = CompletableFuture.runAsync(() -> tx.executeWithoutResult(status -> {
+            jdbcTemplate.update("""
+                    UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-reuse'
+                     WHERE order_token = ? AND status = 'AWAITING_PAYMENT'""", first);
+            authorized.countDown();
+            await(commit);
+        }));
+        await(authorized);
+        CompletableFuture<String> again = CompletableFuture.supplyAsync(() -> {
+            try {
+                return placeRequest(customerId, item(phone, 2)).andReturn().getResponse().getContentAsString();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        waitForQuery("SELECT status FROM orders WHERE id = %FOR UPDATE");
+        commit.countDown();
+        paying.get(20, TimeUnit.SECONDS);
+
+        String body = again.get(20, TimeUnit.SECONDS);
+        assertThat(JSON.readTree(body).get("error").get("code").asString()).isEqualTo("PAYMENT_IN_PROGRESS");
+        assertThat(reserved(phone)).isEqualTo(2);
     }
 
     /**

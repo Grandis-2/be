@@ -31,7 +31,10 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
 
     List<OrderJpaEntity> findByCustomerIdAndSourceAndStatusIn(UUID customerId, OrderSource source, Collection<OrderStatus> statuses);
 
-    /** (기한, id) 이어 읽기. 같은 기한은 id 로 가른다. */
+    /**
+     * (기한, id) 이어 읽기. 같은 기한은 id 로 가른다. ix_order_due(status, payment_due_at, + PK id) 범위로 읽고 정렬하지 않는다
+     * (orders 20,000행 · 기한 지난 1,603행 실측: 첫 쪽 · 중간 쪽 모두 type=range · filesort 없음 · LIMIT 100 에서 100행만 읽음).
+     */
     @Query("""
             select o from OrderJpaEntity o
              where o.source = :source and o.status = :status and o.paymentDueAt <= :now
