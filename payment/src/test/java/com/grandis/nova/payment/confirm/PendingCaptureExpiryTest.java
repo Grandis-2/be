@@ -118,9 +118,9 @@ class PendingCaptureExpiryTest {
         assertThat(settledEvents(target)).isZero();
     }
 
-    // 드로우 응모는 결과 이벤트가 아직 없다 — 닫기만 하고 알리지 않는다
+    // 드로우 응모의 결제창도 만료를 알린다 — 응모 대상의 이벤트(DRAW_ENTRY_PAYMENT_SETTLED)로. 승인 중인 응모가 이걸로 결제 대기로 풀린다
     @Test
-    void drawEntryCaptureIsExpiredWithoutNotice() {
+    void drawEntryCaptureExpiryIsNotifiedAsDrawEntry() {
         PaymentTarget entry = PaymentFixtures.newDrawEntryTarget();
         PaymentTransaction pending = open(entry);
         age(pending, PAST_DUE);
@@ -128,8 +128,16 @@ class PendingCaptureExpiryTest {
         expiry.expireDue();
 
         assertThat(transactions.findById(pending.id()).orElseThrow().status()).isEqualTo(TransactionStatus.EXPIRED);
-        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM payment_outbox_events WHERE aggregate_id = ?",
-                Integer.class, UuidBinary.toBytes(entry.id()))).isZero();
+        List<String> payloads = jdbcTemplate.queryForList("""
+                SELECT payload FROM payment_outbox_events
+                 WHERE aggregate_type = 'DRAW_ENTRY' AND aggregate_id = ? AND event_type = 'DRAW_ENTRY_PAYMENT_SETTLED'
+                """, String.class, UuidBinary.toBytes(entry.id()));
+        assertThat(payloads).hasSize(1);
+        JsonNode payload = jsonMapper.readTree(payloads.getFirst());
+        assertThat(payload.get("result").asString()).isEqualTo("DECLINED");
+        assertThat(payload.get("declineReason").asString()).isEqualTo("PAYMENT_EXPIRED");
+        assertThat(payload.get("providerOrderId").asString()).isEqualTo(pending.providerOrderId().value());
+        assertThat(settledEvents(entry)).as("주문 이벤트로는 나가지 않는다").isZero();
     }
 
     // 시작과 만료가 겹치면 한쪽만 된다. 만료가 이기면 알림이 가고, 시작이 이기면 알림 없이 진행 중이다

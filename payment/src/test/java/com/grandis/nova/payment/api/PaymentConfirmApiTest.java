@@ -231,17 +231,90 @@ class PaymentConfirmApiTest {
         verify(toss, never()).confirm(any(), any());
     }
 
-    // 결과를 알릴 이벤트가 없는 대상은 시작하지 않는다
+    // 드로우 응모도 승인한다. 결과는 응모 대상의 이벤트(DRAW_ENTRY_PAYMENT_SETTLED)로 알린다 — 주문 이벤트로 나가면 order 가 없는 주문으로 읽는다
     @Test
-    void rejectsDrawEntryTarget() throws Exception {
+    void approvesDrawEntryAndNotifiesAsDrawEntry() throws Exception {
         PaymentTarget entry = PaymentFixtures.newDrawEntryTarget();
         PaymentTransaction entryAttempt = prepareService.open(entry, Money.won(1000));
+        given(toss.confirm(any(), any())).willReturn(new TossCommandResult.Succeeded(new TossPayment(paymentKey,
+                entryAttempt.providerOrderId().value(), TossPaymentStatus.DONE, 1000, 1000, "카드", APPROVED_AT, "txkey", null)));
 
         confirm(entryAttempt, entry, 1000)
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error.code").value("PAYMENT_TARGET_UNSUPPORTED"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.result").value("APPROVED"));
 
-        verify(toss, never()).confirm(any(), any());
+        List<String> payloads = jdbcTemplate.queryForList("""
+                SELECT payload FROM payment_outbox_events
+                 WHERE aggregate_type = 'DRAW_ENTRY' AND aggregate_id = ? AND event_type = 'DRAW_ENTRY_PAYMENT_SETTLED'
+                """, String.class, UuidBinary.toBytes(entry.id()));
+        assertThat(payloads).hasSize(1);
+        assertThat(payloads.getFirst()).doesNotContain(paymentKey);
+        JsonNode payload = jsonMapper.readTree(payloads.getFirst());
+        assertThat(payload.get("providerOrderId").asString()).isEqualTo(entryAttempt.providerOrderId().value());
+        assertThat(payload.get("result").asString()).isEqualTo("APPROVED");
+        assertThat(payload.get("amount").decimalValue()).isEqualByComparingTo("1000");
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM payment_outbox_events WHERE aggregate_id = ? AND event_type <> 'DRAW_ENTRY_PAYMENT_SETTLED'",
+                Integer.class, UuidBinary.toBytes(entry.id()))).as("다른 종류로는 나가지 않는다").isZero();
+    }
+
+    // 드로우 응모의 거절도 응모 대상의 이벤트로 알린다 — 승인 중인 응모가 이걸로 결제 대기로 돌아간다
+    @Test
+    void declinedDrawEntryIsNotifiedAsDrawEntry() throws Exception {
+        PaymentTarget entry = PaymentFixtures.newDrawEntryTarget();
+        PaymentTransaction entryAttempt = prepareService.open(entry, Money.won(1000));
+        tossAnswers(new TossCommandResult.Rejected("REJECT_CARD_PAYMENT", "한도초과"));
+
+        confirm(entryAttempt, entry, 1000)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.result").value("DECLINED"));
+
+        List<JsonNode> payloads = drawEntryEvents(entry);
+        assertThat(payloads).hasSize(1);
+        assertThat(payloads.getFirst().get("result").asString()).isEqualTo("DECLINED");
+        assertThat(payloads.getFirst().get("declineReason").asString()).isEqualTo("CARD_REJECTED");
+    }
+
+    // 같은 응모 결제창의 동시 승인도 토스를 한 번만 부르고, 결제 · 이벤트는 하나다
+    @Test
+    void concurrentConfirmsOfSameDrawEntryAttemptCallTossOnce() throws Exception {
+        PaymentTarget entry = PaymentFixtures.newDrawEntryTarget();
+        PaymentTransaction entryAttempt = prepareService.open(entry, Money.won(1000));
+        CountDownLatch go = new CountDownLatch(1);
+        CountDownLatch loserDone = new CountDownLatch(1);
+        given(toss.confirm(any(), any())).willAnswer(invocation -> {
+            loserDone.await(10, TimeUnit.SECONDS);
+            return new TossCommandResult.Succeeded(new TossPayment(paymentKey, entryAttempt.providerOrderId().value(), TossPaymentStatus.DONE,
+                    1000, 1000, "카드", APPROVED_AT, "txkey", null));
+        });
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<String>> results = new ArrayList<>();
+            for (int i = 0; i < 2; i++) {
+                results.add(pool.submit(() -> {
+                    go.await();
+                    String body = confirm(entryAttempt, entry, 1000).andExpect(status().isOk())
+                            .andReturn().getResponse().getContentAsString();
+                    if (JsonPath.<String>read(body, "$.data.result").equals("PENDING")) {
+                        loserDone.countDown();
+                    }
+                    return JsonPath.read(body, "$.data.result");
+                }));
+            }
+            go.countDown();
+
+            List<String> answers = new ArrayList<>();
+            for (Future<String> result : results) {
+                answers.add(result.get(20, TimeUnit.SECONDS));
+            }
+
+            assertThat(answers).containsExactlyInAnyOrder("APPROVED", "PENDING");
+        } finally {
+            pool.shutdownNow();
+        }
+        verify(toss, times(1)).confirm(any(), any());
+        assertThat(drawEntryEvents(entry)).hasSize(1);
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM payments WHERE target_type = 'DRAW_ENTRY' AND target_id = ?",
+                Integer.class, UuidBinary.toBytes(entry.id()))).isOne();
     }
 
     @ParameterizedTest
@@ -573,6 +646,13 @@ class PaymentConfirmApiTest {
                 SELECT COUNT(*) FROM payment_outbox_events
                  WHERE aggregate_type = 'ORDER' AND aggregate_id = ? AND event_type = 'ORDER_PAYMENT_SETTLED'
                 """, Integer.class, UuidBinary.toBytes(target.id()));
+    }
+
+    private List<JsonNode> drawEntryEvents(PaymentTarget entry) {
+        return jdbcTemplate.queryForList("""
+                SELECT payload FROM payment_outbox_events
+                 WHERE aggregate_type = 'DRAW_ENTRY' AND aggregate_id = ? AND event_type = 'DRAW_ENTRY_PAYMENT_SETTLED'
+                """, String.class, UuidBinary.toBytes(entry.id())).stream().map(jsonMapper::readTree).toList();
     }
 
     private JsonNode settledPayload() {

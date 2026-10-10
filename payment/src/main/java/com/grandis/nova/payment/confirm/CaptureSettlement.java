@@ -7,6 +7,7 @@ import com.grandis.nova.payment.domain.enums.DeclineReason;
 import com.grandis.nova.payment.domain.exception.LeaseLostException;
 import com.grandis.nova.payment.domain.model.Outcome;
 import com.grandis.nova.payment.domain.model.PaymentTransaction;
+import com.grandis.nova.payment.outbox.DrawEntryPaymentSettled;
 import com.grandis.nova.payment.outbox.OrderPaymentSettled;
 import com.grandis.nova.payment.outbox.OutboxMessage;
 import com.grandis.nova.payment.vo.ProviderError;
@@ -15,6 +16,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 
 /**
@@ -23,7 +25,7 @@ import java.util.Optional;
  * 밖으로 그대로 나간다.
  *
  * 알림은 확정 결과(승인 · 거절 · 만료)만이다. 불명 · 처리 중은 대상이 이미 결제 확인 중이다.
- * 드로우 응모(DRAW_ENTRY)는 결과 이벤트가 아직 없다 — 승인은 시작 전에 막히므로(ConfirmPaymentService) 만료만 여기 오고, 알리지 않는다.
+ * 대상마다 결과 이벤트가 다르다 — 주문은 ORDER_PAYMENT_SETTLED, 드로우 응모는 DRAW_ENTRY_PAYMENT_SETTLED(모양은 같다).
  */
 @Component
 public class CaptureSettlement {
@@ -67,28 +69,29 @@ public class CaptureSettlement {
     }
 
     private static Optional<OutboxMessage> notice(PaymentTransaction held, Outcome outcome) {
-        if (!notifiable(held)) {
-            return Optional.empty();
-        }
         return switch (outcome) {
-            case Outcome.Confirmed confirmed -> Optional.of(OrderPaymentSettled.approved(held, confirmed.at()));
-            case Outcome.Rejected rejected -> Optional.of(OrderPaymentSettled.declined(held,
-                    TossOutcomes.declineReasonOf(rejected.error().code())));
+            case Outcome.Confirmed confirmed -> Optional.of(approved(held, confirmed.at()));
+            case Outcome.Rejected rejected -> Optional.of(declined(held, TossOutcomes.declineReasonOf(rejected.error().code())));
             case Outcome.InProgress inProgress -> Optional.empty();
             case Outcome.Unknown unknown -> Optional.empty();
         };
     }
 
     private static Optional<OutboxMessage> expiredNotice(PaymentTransaction expired) {
-        return notifiable(expired)
-                ? Optional.of(OrderPaymentSettled.declined(expired, DeclineReason.PAYMENT_EXPIRED))
-                : Optional.empty();
+        return Optional.of(declined(expired, DeclineReason.PAYMENT_EXPIRED));
     }
 
-    private static boolean notifiable(PaymentTransaction transaction) {
+    private static OutboxMessage approved(PaymentTransaction transaction, Instant approvedAt) {
         return switch (transaction.target().type()) {
-            case ORDER -> true;
-            case DRAW_ENTRY -> false;
+            case ORDER -> OrderPaymentSettled.approved(transaction, approvedAt);
+            case DRAW_ENTRY -> DrawEntryPaymentSettled.approved(transaction, approvedAt);
+        };
+    }
+
+    private static OutboxMessage declined(PaymentTransaction transaction, DeclineReason reason) {
+        return switch (transaction.target().type()) {
+            case ORDER -> OrderPaymentSettled.declined(transaction, reason);
+            case DRAW_ENTRY -> DrawEntryPaymentSettled.declined(transaction, reason);
         };
     }
 }

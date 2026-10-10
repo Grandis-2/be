@@ -4,6 +4,8 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.sqs.MessageHandling;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.client.payment.DeclineReason;
+import com.grandis.nova.order.draw.DrawEntryPaymentResults;
+import com.grandis.nova.order.draw.EntryPaymentSettlement;
 import com.grandis.nova.order.order.cancel.CancelReason;
 import com.grandis.nova.order.order.cancel.CancelSettlement;
 import com.grandis.nova.order.order.cancel.RefundResults;
@@ -23,6 +25,7 @@ import jakarta.validation.Validator;
 import jakarta.validation.ValidatorFactory;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -65,6 +68,7 @@ class OrderEventDispatcherTest {
     SettlePreorderCancelService settlement;
     PaymentResults paymentResults;
     RefundResults refundResults;
+    DrawEntryPaymentResults entryPaymentResults;
     AdminStockService stockService;
     OrderEventDispatcher dispatcher;
 
@@ -73,8 +77,9 @@ class OrderEventDispatcherTest {
         settlement = mock(SettlePreorderCancelService.class);
         paymentResults = mock(PaymentResults.class);
         refundResults = mock(RefundResults.class);
+        entryPaymentResults = mock(DrawEntryPaymentResults.class);
         stockService = mock(AdminStockService.class);
-        dispatcher = new OrderEventDispatcher(settlement, paymentResults, refundResults, stockService, jsonMapper,
+        dispatcher = new OrderEventDispatcher(settlement, paymentResults, refundResults, entryPaymentResults, stockService, jsonMapper,
                 validator);
     }
 
@@ -192,6 +197,29 @@ class OrderEventDispatcherTest {
         assertThatThrownBy(() -> dispatcher.dispatch(envelope("ORDER_PAYMENT_SETTLED", "ORDER", ORDER_ID, noAttempt)))
                 .isInstanceOf(JacksonException.class);
         verifyNoInteractions(paymentResults);
+    }
+
+    @Test
+    @DisplayName("응모비 결제 결과는 봉투의 aggregateId(응모 id)로 응모 결과 반영에 넘긴다 — 주문 결과 반영으로 가지 않는다")
+    void drawEntryResultGoesToEntryResultsByEnvelopeAggregateId() {
+        dispatcher.dispatch(envelope("DRAW_ENTRY_PAYMENT_SETTLED", "DRAW_ENTRY", ORDER_ID, approved()));
+        dispatcher.dispatch(envelope("DRAW_ENTRY_PAYMENT_SETTLED", "DRAW_ENTRY", ORDER_ID, declined()));
+
+        verify(entryPaymentResults).settle(new EntryPaymentSettlement(ORDER_ID, PROVIDER_ORDER_ID,
+                PaymentSettlement.Result.APPROVED, new BigDecimal("15000"), null));
+        verify(entryPaymentResults).settle(new EntryPaymentSettlement(ORDER_ID, PROVIDER_ORDER_ID,
+                PaymentSettlement.Result.DECLINED, new BigDecimal("15000"), DeclineReason.CARD_REJECTED));
+        verifyNoInteractions(paymentResults);
+    }
+
+    @Test
+    @DisplayName("응모비 결과와 주문 결과는 aggregate 가 엇갈리면 예외 — 응모 id 로 주문을, 주문 id 로 응모를 바꾸지 않는다")
+    void paymentResultWithCrossedAggregateIsRejected() {
+        assertThatThrownBy(() -> dispatcher.dispatch(envelope("DRAW_ENTRY_PAYMENT_SETTLED", "ORDER", ORDER_ID, approved())))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> dispatcher.dispatch(envelope("ORDER_PAYMENT_SETTLED", "DRAW_ENTRY", ORDER_ID, approved())))
+                .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(paymentResults, entryPaymentResults);
     }
 
     // ── IN_STOCK_PRODUCT_REGISTERED ──

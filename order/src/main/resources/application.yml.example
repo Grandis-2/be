@@ -66,7 +66,7 @@ server:
 #     enabled: true
 
 nova:
-  # 결제 승인 동시 상한(인스턴스당). payment 응답을 최대 70s 기다리는 승인이 이만큼 차면 다음 승인은 상태를 바꾸기 전에 503 이다 —
+  # 결제 승인 동시 상한(인스턴스당, 주문 · 응모비 승인이 나눠 씀). payment 응답을 최대 70s 기다리는 승인이 이만큼 차면 다음 승인은 상태를 바꾸기 전에 503 이다 —
   # 토스가 느려져도 결제와 무관한 주문 API 의 요청 스레드(Tomcat 200)가 남는다
   payment-confirm:
     max-concurrency: 50
@@ -117,6 +117,7 @@ auth:
       - /api/v1/session/refresh
       - /api/v1/me/**
       - /api/v1/orders/*/payment-attempts/**
+      - /api/v1/draws/*/entries/me/payment-attempts/**
       - POST /api/v1/orders/*/cancel
       - PATCH /api/v1/orders/*/shipping-address
       # 주문 생성은 열어 둔다(2026-09-29 결정): 닫으면 Redis 장애 동안 전원 주문 불가. 결제 · 취소 · 배송지가 닫혀 있어

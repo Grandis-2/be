@@ -117,6 +117,8 @@ class SecurityRulesTest {
             "POST,  /api/v1/admin/products/1/stock,               admin",
             "GET,   /api/v1/admin/draws,                          admin",
             "POST,  /api/v1/admin/draws,                          admin",
+            "POST,  /api/v1/draws/d-1/entries/me/payment-attempts, user",
+            "POST,  /api/v1/draws/d-1/entries/me/payment-attempts/t-1/confirm, user",
             "POST,  /api/v1/orders/o-1/payment-attempts,          user",
             "POST,  /api/v1/orders/o-1/payment-attempts/t-1/confirm, user",
             "POST,  /api/v1/orders/o-1/cancel,                    user",
@@ -157,6 +159,26 @@ class SecurityRulesTest {
         perform(get("/api/v1/orders/o-1"), user)
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("ORDER_NOT_FOUND"));
+    }
+
+    // 응모는 주문 생성처럼 열어 둔다 — 결제가 닫혀 있어 폐기 세션의 응모로 할 수 있는 일이 없다. 필터를 지나 회차 조회까지 간다.
+    @Test
+    void drawEntryStaysOpenWhenLookupFails() throws Exception {
+        lookupFails();
+
+        perform(post("/api/v1/draws/{id}/entries", UUID.randomUUID()).contentType(MediaType.APPLICATION_JSON).content("""
+                {"shipTo":{"name":"홍길동","phone":"010-0000-0000","postalCode":"04524","line1":"서울시 중구 세종대로 110"}}
+                """), user)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("DRAW_NOT_FOUND"));
+    }
+
+    // 회차 조회는 토큰 없이도 컨트롤러에 닿는다(매핑 없는 404 가 아니라 DRAW_NOT_FOUND)
+    @Test
+    void drawsAreReadableAnonymously() throws Exception {
+        mockMvc.perform(get("/api/v1/draws/{id}", UUID.randomUUID()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("DRAW_NOT_FOUND"));
     }
 
     // 주문 생성은 열어 둔다(2026-09-29 결정). 필터를 지나 preorder 조회까지 간다.

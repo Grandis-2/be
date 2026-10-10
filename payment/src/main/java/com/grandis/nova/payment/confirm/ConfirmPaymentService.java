@@ -39,7 +39,7 @@ import java.util.UUID;
  * 거래 하나 = 트랜잭션 하나(원장 계약)이고 원장 예외는 트랜잭션 경계 밖에서 잡는다.
  *
  * 응답 약속(호출자가 대상을 결제 전으로 되돌려도 되는지가 여기 달렸다):
- * - 시작 전 업무 오류(PaymentErrorCode)는 4xx 다. 그중 결제창 번호 없음 · 금액 불일치 · 미지원 대상은 "이 결제창은 앞으로도 시작될 수
+ * - 시작 전 업무 오류(PaymentErrorCode)는 4xx 다. 그중 결제창 번호 없음 · 금액 불일치는 "이 결제창은 앞으로도 시작될 수
  *   없다" 는 확언이다 — 결제창의 대상 · 금액은 바뀌지 않는다.
  * - 시작한 뒤에는 업무 오류를 내지 않는다. 결과는 늘 200(불명 · 처리 중은 PENDING)이고, 예상 밖 실패는 5xx 다.
  *   확정하지 못한 거래는 리스가 끝나면 복구({@link CaptureRecovery})가 이어 받는다.
@@ -74,10 +74,9 @@ public class ConfirmPaymentService {
     /**
      * @param target     호출자가 말한 대상. 거래가 그 대상의 것인지 대조한다
      * @param paymentKey 결제창이 돌려준 결제 키
-     * @param amount       호출자의 저장 금액(주문 총액). 사용자 입력이 아니다
+     * @param amount       호출자의 저장 금액(주문 총액 · 응모비). 사용자 입력이 아니다
      * @param startAllowed false 면 시작하지 않고 지금 결과만 돌려준다(아직 시작 전이면 PENDING)
-     * @throws BusinessException 시작하지 않았다 — PAYMENT_ATTEMPT_NOT_FOUND · PAYMENT_AMOUNT_MISMATCH ·
-     *                           PAYMENT_TARGET_UNSUPPORTED · PAYMENT_START_CONFLICT
+     * @throws BusinessException 시작하지 않았다 — PAYMENT_ATTEMPT_NOT_FOUND · PAYMENT_AMOUNT_MISMATCH · PAYMENT_START_CONFLICT
      */
     public ConfirmResult confirm(ProviderOrderId providerOrderId, PaymentTarget target, ProviderPaymentKey paymentKey,
                                  Money amount, boolean startAllowed) {
@@ -94,7 +93,6 @@ public class ConfirmPaymentService {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("결제 승인은 트랜잭션 밖에서 불러야 한다 — 결제사 호출 동안 잠금을 쥐지 않게");
         }
-        requireNotifiable(target);
         // 토스 요청 규칙 위반은 시작 전에 드러나야 한다. 시작한 뒤 나면 거래가 리스를 쥔 채 남고 복구도 같은 위반을 되풀이한다
         TossConfirmRequest request = new TossConfirmRequest(paymentKey.value(), providerOrderId.value(),
                 amount.amount().longValueExact());
@@ -191,14 +189,5 @@ public class ConfirmPaymentService {
         PaymentTransaction now = reader.findById(transactionId)
                 .orElseThrow(() -> new IllegalStateException("거래가 사라졌다: " + transactionId));
         return ConfirmResult.ofStatus(now.status(), now.lastError() == null ? null : now.lastError().code());
-    }
-
-    /** 결과를 알릴 이벤트가 있는 대상만 승인한다 — 알릴 길 없이 승인하면 동기 응답을 잃었을 때 대상이 결과를 받지 못한다. */
-    private static void requireNotifiable(PaymentTarget target) {
-        switch (target.type()) {
-            case ORDER -> {
-            }
-            case DRAW_ENTRY -> throw new BusinessException(PaymentErrorCode.PAYMENT_TARGET_UNSUPPORTED);
-        }
     }
 }

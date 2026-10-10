@@ -2,6 +2,7 @@ package com.grandis.nova.order.config;
 
 import com.grandis.nova.order.client.payment.CaptureRequest;
 import com.grandis.nova.order.client.payment.ConfirmRequest;
+import com.grandis.nova.order.client.payment.PayableTarget;
 import com.grandis.nova.order.client.payment.PaymentClient;
 import com.grandis.nova.order.client.payment.PaymentConfirmClient;
 import com.grandis.nova.order.client.payment.PaymentConfirmation;
@@ -108,10 +109,10 @@ class HttpClientConfigTest {
             assertThat(context.getBean(ClientHttpRequestFactoryBuilder.class))
                     .isInstanceOf(JdkClientHttpRequestFactoryBuilder.class);
             assertThat(rootCause(catchThrowable(() -> context.getBean(PaymentConfirmClient.class)
-                    .confirm(PROVIDER_ORDER_ID, ConfirmRequest.of(ORDER, "tgen_wiring", true), null))))
+                    .confirm(PROVIDER_ORDER_ID, ConfirmRequest.of(PayableTarget.of(ORDER), "tgen_wiring", true), null))))
                     .isInstanceOf(HttpTimeoutException.class);
             assertThat(rootCause(catchThrowable(() -> context.getBean(PaymentClient.class)
-                    .openCapture(CaptureRequest.order(TestIds.id(81), BigDecimal.TEN), null))))
+                    .openCapture(CaptureRequest.of(PayableTarget.of(ORDER)), null))))
                     .isInstanceOf(HttpTimeoutException.class);
             assertThat(rootCause(catchThrowable(() -> context.getBean(PreorderClient.class)
                     .getPayability("9f1c2d3e-0000-4000-8000-000000000001", null))))
@@ -126,7 +127,7 @@ class HttpClientConfigTest {
             long started = System.nanoTime();
 
             PaymentConfirmation result = context.getBean(PaymentConfirmer.class)
-                    .confirm(ORDER, PROVIDER_ORDER_ID, "tgen_wiring", "wiring-session", true);
+                    .confirm(PayableTarget.of(ORDER), PROVIDER_ORDER_ID, "tgen_wiring", "wiring-session", true);
 
             assertThat(result).isEqualTo(new PaymentConfirmation.Pending());
             assertThat((System.nanoTime() - started) / 1_000_000).isLessThan(STALL_MILLIS);
@@ -142,7 +143,7 @@ class HttpClientConfigTest {
         }
         runner("http://127.0.0.1:" + closedPort).run(context ->
                 assertThat(context.getBean(PaymentConfirmer.class)
-                        .confirm(ORDER, PROVIDER_ORDER_ID, "tgen_wiring", "wiring-session", true))
+                        .confirm(PayableTarget.of(ORDER), PROVIDER_ORDER_ID, "tgen_wiring", "wiring-session", true))
                         .isInstanceOf(PaymentConfirmation.Unanswered.class));
     }
 

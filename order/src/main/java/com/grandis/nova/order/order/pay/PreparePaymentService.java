@@ -3,6 +3,7 @@ package com.grandis.nova.order.order.pay;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.client.payment.PaymentAttempt;
+import com.grandis.nova.order.client.payment.PayableTarget;
 import com.grandis.nova.order.client.payment.PaymentPreparer;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.model.Order;
@@ -67,7 +68,7 @@ public class PreparePaymentService {
             throw new BusinessException(OrderErrorCode.ORDER_NOT_PAYABLE);
         }
         String orderName = OrderNames.of(found.items());
-        PaymentAttempt attempt = paymentPreparer.openCapture(order.id(), order.totalAmount().amount(), sessionToken);
+        PaymentAttempt attempt = paymentPreparer.openCapture(PayableTarget.of(order), sessionToken);
         return new PreparedPayment(attempt.providerOrderId(), order.totalAmount(), orderName);
     }
 

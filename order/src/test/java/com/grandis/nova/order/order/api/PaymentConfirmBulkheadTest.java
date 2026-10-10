@@ -13,6 +13,7 @@ import com.grandis.nova.order.support.OrderFixtures.PreorderProduct;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.PreorderStubs;
 import com.grandis.nova.order.support.TestAuth;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -110,6 +111,69 @@ class PaymentConfirmBulkheadTest {
                 .willReturn(ApiResponse.ok(new ConfirmReply(ConfirmReply.Result.PENDING, null)));
         confirm(rejected).andExpect(status().isServiceUnavailable());
         confirm(placedOrder(fixtures, product, 3)).andExpect(status().isOk());
+    }
+
+    /** 응모비 승인은 주문 승인과 같은 상한을 나눠 쓴다 — 주문 승인이 자리를 다 쓰고 있으면 응모비 승인도 응모를 바꾸기 전에 503 이고, 끝나면 자리를 돌려준다. */
+    @Test
+    @DisplayName("응모비 승인도 같은 상한 — 주문 승인이 차 있으면 응모를 바꾸기 전에 503, 실패로 끝나도 자리를 돌려준다")
+    void drawEntryConfirmSharesTheLimit() throws Exception {
+        OrderFixtures fixtures = new OrderFixtures(jdbcTemplate);
+        Order waiting = placedOrder(fixtures, fixtures.preorderProduct(), 1);
+        UUID member = fixtures.customer();
+        UUID draw = openDraw(fixtures);
+        UUID entry = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO draw_entries (id, campaign_id, customer_id, status, ship_to_name, ship_to_phone, ship_to_postal_code, ship_to_line1,
+                                          created_at, updated_at)
+                VALUES (?, ?, ?, 'AWAITING_PAYMENT', '홍길동', '010-0000-0000', '04524', '서울시', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""",
+                bytes(entry), bytes(draw), bytes(member));
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        given(paymentClient.confirm(any(), any(), any())).willAnswer(invocation -> {
+            entered.countDown();
+            release.await(10, TimeUnit.SECONDS);
+            return ApiResponse.ok(new ConfirmReply(ConfirmReply.Result.PENDING, null));
+        });
+        CompletableFuture<Void> first = CompletableFuture.runAsync(() -> {
+            try {
+                confirm(waiting).andExpect(status().isOk());
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+
+        confirmEntry(member, draw).andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.error.code").value("DEPENDENCY_UNAVAILABLE"));
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM draw_entries WHERE id = ?", String.class, (Object) bytes(entry)))
+                .isEqualTo("AWAITING_PAYMENT");
+
+        release.countDown();
+        first.get(10, TimeUnit.SECONDS);
+        given(paymentClient.confirm(any(), any(), any()))
+                .willThrow(new ResourceAccessException("refused", new ConnectException("refused")))
+                .willReturn(ApiResponse.ok(new ConfirmReply(ConfirmReply.Result.PENDING, null)));
+        confirmEntry(member, draw).andExpect(status().isServiceUnavailable());
+        confirm(placedOrder(fixtures, fixtures.preorderProduct(), 1)).andExpect(status().isOk());
+    }
+
+    private UUID openDraw(OrderFixtures fixtures) {
+        OrderFixtures.StockProduct product = fixtures.inStockProduct(1);
+        UUID id = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO draw_campaigns (id, idempotency_key, product_id, option_id, title, product_title_snapshot, option_title_snapshot,
+                                            entry_fee, winner_count, opens_at, closes_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 't', 'p', 'o', 100, 1, UTC_TIMESTAMP(6) - INTERVAL 1 HOUR, UTC_TIMESTAMP(6) + INTERVAL 1 DAY,
+                        UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""",
+                bytes(id), id.toString(), bytes(product.productId()), bytes(product.optionIds().getFirst()));
+        return id;
+    }
+
+    private ResultActions confirmEntry(UUID member, UUID draw) throws Exception {
+        return mockMvc.perform(post("/api/v1/draws/{drawId}/entries/me/payment-attempts/{tossOrderId}/confirm", draw, "draw_bulkhead_1")
+                .with(TestAuth.customer(member))
+                .header(BearerTokens.HEADER, BearerTokens.value(SESSION))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"paymentKey\":\"%s\",\"amount\":100}".formatted(PAYMENT)));
     }
 
     private Order placedOrder(OrderFixtures fixtures, PreorderProduct product, long position) {
