@@ -124,6 +124,42 @@ class CartConcurrencyTest {
     }
 
     /**
+     * 빈 장바구니에서는 잠금 읽기가 줄을 세우지 못한다 — 잠글 줄이 없고 READ COMMITTED 는 빈 구간을 잠그지 않는다. 결정적으로 본다: 담기 하나가
+     * 빈 장바구니를 잠가 읽은 뒤 멈춘 사이 다른 담기 50번이 커밋되고, 멈춘 담기를 놓는다. 넣은 뒤 다시 세어 51줄이 되면 400 · 롤백이다.
+     */
+    @Test
+    void addFromEmptyCartCannotExceedLimitWhileOthersFillIt() throws Exception {
+        List<UUID> options = fixtures.inStockProduct(51).optionIds();
+        options.forEach(option -> fixtures.stock(option, 10, 0, 0));
+        CountDownLatch read = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicBoolean first = new AtomicBoolean(true);
+        willAnswer(invocation -> {
+            Object lines = invocation.callRealMethod();
+            if (first.getAndSet(false)) {
+                read.countDown();
+                awaitQuietly(release);
+            }
+            return lines;
+        }).given(store).lockByCustomer(customerId);
+        CompletableFuture<CartLine> paused = CompletableFuture.supplyAsync(() -> cart.add(customerId, "token", options.getLast(), 1, false));
+        assertThat(read.await(10, TimeUnit.SECONDS)).isTrue();
+        try {
+            options.subList(0, 50).forEach(option -> cart.add(customerId, "token", option, 1, false));
+            assertThat(lineCount()).isEqualTo(50);
+        } finally {
+            release.countDown();
+        }
+
+        assertThat(paused).failsWithin(Duration.ofSeconds(10)).withThrowableThat().havingRootCause()
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(CommonErrorCode.VALIDATION_FAILED);
+                    assertThat(e.details().toString()).contains("variantId");
+                });
+        assertThat(lineCount()).isEqualTo(50);
+    }
+
+    /**
      * 빈 장바구니에 같은 (옵션, 보증)이 겹친다: 담기가 "줄 없음" 을 읽은 뒤 넣기 직전에 다른 요청이 같은 줄을 넣고 커밋한다.
      * 넣기는 유일 키 충돌이고, 한 번 다시 해 그 줄에 합산한다.
      */
@@ -183,8 +219,10 @@ class CartConcurrencyTest {
         }).given(store).lockByCustomer(customerId);
         CartLine line = cart.add(customerId, "token", option, 1, false);
         assertThat(lineCount()).isEqualTo(1);
-        assertThat(transactions).hasSize(2).doesNotContainNull();
+        // 처음 잠금 읽기(교착) · 다시 하기의 잠금 읽기 · 넣은 뒤 다시 세기
+        assertThat(transactions).hasSize(3).doesNotContainNull();
         assertThat(transactions.get(0)).as("다시 하기는 새 트랜잭션").isNotSameAs(transactions.get(1));
+        assertThat(transactions.get(2)).as("다시 세기는 넣은 트랜잭션 안").isSameAs(transactions.get(1));
 
         willThrow(deadlock()).willCallRealMethod().given(store).lockLine(customerId, line.id());
         assertThat(cart.changeQuantity(customerId, line.id(), 3).quantity()).isEqualTo(3);

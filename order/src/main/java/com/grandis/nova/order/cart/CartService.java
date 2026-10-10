@@ -150,7 +150,13 @@ public class CartService {
             requireChanged(store.changeQuantity(line.id(), next, clock.instant()), line);
             return new CartLine(line.id(), customerId, optionId, warranty, next);
         }
-        return store.insert(customerId, optionId, warranty, quantity);
+        CartLine inserted = store.insert(customerId, optionId, warranty, quantity);
+        // 빈 장바구니는 앞의 잠금 읽기가 줄을 세우지 못한다 — 잠글 줄이 없고 READ COMMITTED 는 빈 구간을 잠그지 않는다. 그래서 넣은 뒤 다시 잠가
+        // 세고, 넘으면 넣은 줄까지 롤백한다(빈 장바구니를 읽고 멈춘 사이 다른 담기가 50줄을 채운 경우 — CartConcurrencyTest)
+        if (store.lockByCustomer(customerId).size() > CartLimits.MAX_LINES) {
+            throw ValidationFailures.of("variantId", "장바구니에는 최대 %d줄까지 담을 수 있습니다.".formatted(CartLimits.MAX_LINES));
+        }
+        return inserted;
     }
 
     /** 잠가 읽은 줄이라 늘 1행이다. 아니면 저장하지 않은 수량을 성공으로 돌려주게 되므로 롤백한다. */
