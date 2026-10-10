@@ -1,6 +1,7 @@
 package com.grandis.nova.order.cart;
 
 import com.grandis.nova.common.web.ApiResponse;
+import com.grandis.nova.order.cart.domain.repository.CartStore;
 import com.grandis.nova.order.client.catalog.CatalogClient;
 import com.grandis.nova.order.client.catalog.CatalogOption;
 import com.grandis.nova.order.client.catalog.CatalogOptions;
@@ -16,6 +17,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.web.client.HttpServerErrorException;
@@ -57,6 +59,8 @@ class CartApiTest {
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
     @MockitoBean CatalogClient catalogClient;
+    /** 쓰지 않지만 CartConcurrencyTest 와 같은 대역 구성으로 두어 Spring 컨텍스트(와 MySQL 컨테이너)를 하나로 함께 쓴다. */
+    @MockitoSpyBean CartStore store;
 
     OrderFixtures fixtures;
     UUID customerId;
@@ -155,12 +159,12 @@ class CartApiTest {
         }
         assertThat(lineCount()).isEqualTo(50);
         expectViolation(add(sellable(false, 5), 1, false), "variantId");
-        add(option, 1, true).andExpect(status().isBadRequest());
+        expectViolation(add(option, 1, true), "variantId");
         assertThat(lineCount()).as("50줄을 넘지 않는다").isEqualTo(50);
     }
 
     @Test
-    @DisplayName("조회는 살 수 없는 줄도 지우지 않고 이유를 하나 단다 — 판매 종료 · 숨김 · 판매 중지 · 보증 중단 · 품절 · 재고 부족")
+    @DisplayName("조회는 살 수 없는 줄도 지우지 않고 이유를 하나 단다 — 판매 종료 · 숨김 · 판매 중지 · 보증 중단 · 품절 · 재고 부족. 겹치면 앞의 것")
     void viewMarksUnavailableLines() throws Exception {
         UUID discontinued = sellable(true, 10);
         UUID hidden = sellable(true, 10);
@@ -168,10 +172,20 @@ class CartApiTest {
         UUID warrantyStopped = sellable(true, 10);
         UUID soldOut = sellable(true, 10);
         UUID scarce = sellable(true, 10);
-        for (UUID option : List.of(discontinued, hidden, paused, soldOut, scarce)) {
+        // 이유가 겹치는 줄 — 위에 있는 이유 하나만 보인다
+        UUID hiddenAndPaused = sellable(true, 10);
+        UUID nowPreorderAndPaused = sellable(true, 10);
+        UUID pausedAndSoldOut = sellable(true, 10);
+        UUID warrantyStoppedAndSoldOut = sellable(true, 10);
+        UUID pausedAndWarrantyStopped = sellable(true, 10);
+        UUID soldOutAndTooMany = sellable(true, 10);
+        for (UUID option : List.of(discontinued, hidden, paused, soldOut, scarce, hiddenAndPaused, nowPreorderAndPaused, pausedAndSoldOut,
+                soldOutAndTooMany)) {
             add(option, 3, false).andExpect(status().isOk());
         }
         add(warrantyStopped, 1, true).andExpect(status().isOk());
+        add(warrantyStoppedAndSoldOut, 1, true).andExpect(status().isOk());
+        add(pausedAndWarrantyStopped, 1, true).andExpect(status().isOk());
 
         catalog.remove(discontinued);
         catalog.put(hidden, copy(catalog.get(hidden), "IN_STOCK", "ACTIVE", "ACTIVE", false, true, true));
@@ -179,11 +193,19 @@ class CartApiTest {
         catalog.put(warrantyStopped, copy(catalog.get(warrantyStopped), "IN_STOCK", "ACTIVE", "ACTIVE", true, true, false));
         jdbcTemplate.update("UPDATE option_inventories SET stock_sold = stock_total WHERE option_id = ?", (Object) bytes(soldOut));
         jdbcTemplate.update("UPDATE option_inventories SET stock_reserved = 8 WHERE option_id = ?", (Object) bytes(scarce));
+        catalog.put(hiddenAndPaused, copy(catalog.get(hiddenAndPaused), "IN_STOCK", "PAUSED", "ACTIVE", false, true, true));
+        catalog.put(nowPreorderAndPaused, copy(catalog.get(nowPreorderAndPaused), "PREORDER", "ACTIVE", "PAUSED", true, true, true));
+        catalog.put(pausedAndSoldOut, copy(catalog.get(pausedAndSoldOut), "IN_STOCK", "ACTIVE", "PAUSED", true, true, true));
+        catalog.put(warrantyStoppedAndSoldOut, copy(catalog.get(warrantyStoppedAndSoldOut), "IN_STOCK", "ACTIVE", "ACTIVE", true, true, false));
+        catalog.put(pausedAndWarrantyStopped, copy(catalog.get(pausedAndWarrantyStopped), "IN_STOCK", "PAUSED", "ACTIVE", true, true, false));
+        for (UUID option : List.of(pausedAndSoldOut, warrantyStoppedAndSoldOut, soldOutAndTooMany)) {
+            jdbcTemplate.update("UPDATE option_inventories SET stock_sold = stock_total WHERE option_id = ?", (Object) bytes(option));
+        }
 
         Map<String, JsonNode> byVariant = new HashMap<>();
         data(asCustomer(get("/api/v1/cart")).andExpect(status().isOk())).get("items")
                 .forEach(item -> byVariant.put(item.get("variantId").asString(), item));
-        assertThat(byVariant).hasSize(6);
+        assertThat(byVariant).hasSize(12);
         expectReason(byVariant.get(discontinued.toString()), "DISCONTINUED");
         assertThat(byVariant.get(discontinued.toString()).get("productTitle").isNull()).as("없어진 옵션은 상품 칸이 비어 있다").isTrue();
         expectReason(byVariant.get(hidden.toString()), "HIDDEN");
@@ -192,6 +214,12 @@ class CartApiTest {
         expectReason(byVariant.get(soldOut.toString()), "OUT_OF_STOCK");
         expectReason(byVariant.get(scarce.toString()), "INSUFFICIENT_STOCK");
         assertThat(byVariant.get(scarce.toString()).get("availableQuantity").asInt()).isEqualTo(2);
+        expectReason(byVariant.get(hiddenAndPaused.toString()), "HIDDEN");
+        expectReason(byVariant.get(nowPreorderAndPaused.toString()), "HIDDEN");
+        expectReason(byVariant.get(pausedAndSoldOut.toString()), "PAUSED");
+        expectReason(byVariant.get(warrantyStoppedAndSoldOut.toString()), "WARRANTY_UNAVAILABLE");
+        expectReason(byVariant.get(pausedAndWarrantyStopped.toString()), "PAUSED");
+        expectReason(byVariant.get(soldOutAndTooMany.toString()), "OUT_OF_STOCK");
     }
 
     @Test
@@ -220,6 +248,12 @@ class CartApiTest {
     @DisplayName("회원만 — 익명 401, 관리자 403. catalog 가 답하지 않으면 503 이고 장바구니는 그대로")
     void authAndDependencyFailure() throws Exception {
         mockMvc.perform(get("/api/v1/cart")).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/v1/cart/count")).andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/api/v1/cart/items").contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"variantId\": \"%s\", \"quantity\": 1 }".formatted(UUID.randomUUID()))).andExpect(status().isUnauthorized());
+        mockMvc.perform(patch("/api/v1/cart/items/{id}", UUID.randomUUID()).contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"quantity\": 1 }")).andExpect(status().isUnauthorized());
+        mockMvc.perform(delete("/api/v1/cart/items/{id}", UUID.randomUUID())).andExpect(status().isUnauthorized());
         mockMvc.perform(get("/api/v1/cart").with(TestAuth.admin())).andExpect(status().isForbidden());
 
         UUID option = sellable(true, 5);

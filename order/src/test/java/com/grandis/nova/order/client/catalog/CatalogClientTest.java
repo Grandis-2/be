@@ -15,6 +15,7 @@ import org.springframework.web.client.support.RestClientAdapter;
 import org.springframework.web.service.invoker.HttpServiceProxyFactory;
 
 import java.math.BigDecimal;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -128,5 +129,45 @@ class CatalogClientTest {
 
         assertThatThrownBy(() -> reader.find(List.of(FIRST), SESSION))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("catalog 연동 오류");
+    }
+
+    @Test
+    @DisplayName("판정 · 금액 칸이 빠진 옵션 · 묻지 않은 옵션은 연동 오류(500) — 기본값으로 읽으면 가격 0 · 보증가 0 · 엉뚱한 거절 사유가 된다")
+    void incompleteOrUnrequestedOptionIsIntegrationError() {
+        Map<String, String> broken = new LinkedHashMap<>();
+        broken.put("price 없음", item(FIRST).replace("\"price\":1250000", "\"price\":null"));
+        broken.put("saleMode 없음", item(FIRST).replace("\"saleMode\":\"IN_STOCK\"", "\"saleMode\":null"));
+        broken.put("productStatus 없음", item(FIRST).replace("\"productStatus\":\"ACTIVE\"", "\"productStatus\":null"));
+        broken.put("visible 없음", item(FIRST).replace("\"visible\":true", "\"visible\":null"));
+        broken.put("warranty 없음", item(FIRST).replace("\"warranty\":{\"offered\":true,\"surcharge\":199000}", "\"warranty\":null"));
+        broken.put("보증 제공인데 추가금 없음", item(FIRST).replace("\"surcharge\":199000", "\"surcharge\":null"));
+        broken.put("묻지 않은 옵션", item(SECOND));
+        for (Map.Entry<String, String> entry : broken.entrySet()) {
+            server.reset();
+            server.expect(requestTo(org.hamcrest.Matchers.startsWith("http://catalog/internal/options")))
+                    .andRespond(withSuccess(envelope(entry.getValue()), MediaType.APPLICATION_JSON));
+
+            assertThatThrownBy(() -> reader.find(List.of(FIRST), SESSION)).as(entry.getKey())
+                    .isInstanceOf(IllegalStateException.class).hasMessageContaining("catalog 연동 오류");
+        }
+
+        server.reset();
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("http://catalog/internal/options")))
+                .andRespond(withSuccess(envelope(item(FIRST)), MediaType.APPLICATION_JSON));
+        assertThat(reader.find(List.of(FIRST), SESSION)).as("대조군 — 고치지 않은 같은 줄은 읽힌다").containsOnlyKeys(FIRST);
+    }
+
+    private static String item(UUID optionId) {
+        return """
+                {"optionId":"%s","productId":"0199a3f2-8a10-7b21-9c32-4d5e6f708192","productTitle":"아이폰 17",
+                 "optionTitle":"블랙 / 256GB","sku":"BLK-256","price":1250000,"optionStatus":"ACTIVE","saleMode":"IN_STOCK",
+                 "productStatus":"ACTIVE","visible":true,"registrationCompleted":true,
+                 "warranty":{"offered":true,"surcharge":199000},"imageUrl":null}""".formatted(optionId);
+    }
+
+    private static String envelope(String item) {
+        return """
+                {"success":true,"data":{"items":[%s]},"error":null,"timestamp":"2026-10-09T06:00:00Z","traceId":"t-1"}
+                """.formatted(item);
     }
 }

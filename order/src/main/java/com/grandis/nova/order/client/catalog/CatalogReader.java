@@ -4,6 +4,8 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.web.client.InternalCallFailures;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
@@ -22,6 +24,8 @@ import java.util.UUID;
 @Component
 public class CatalogReader {
 
+    private static final Logger log = LoggerFactory.getLogger(CatalogReader.class);
+
     static final String DEPENDENCY = "catalog";
     static final String OPERATION = "getOptions";
 
@@ -36,7 +40,7 @@ public class CatalogReader {
      *
      * @param sessionToken 사용자가 보낸 액세스 토큰 원문(접두어 없음). null 이면 싣지 않는다(catalog 가 401)
      * @throws BusinessException     UNAUTHENTICATED — catalog 가 토큰을 거절(401). DEPENDENCY_UNAVAILABLE — 타임아웃 · 연결 실패 · 5xx
-     * @throws IllegalStateException 연동 오류(500) — 그 밖의 4xx(경로 없음 · 계약 어긋남), 읽을 수 없는 응답
+     * @throws IllegalStateException 연동 오류(500) — 그 밖의 4xx(경로 없음 · 계약 어긋남), 읽을 수 없는 응답, 판정 칸이 빠진 옵션 · 묻지 않은 옵션
      */
     public Map<UUID, CatalogOption> find(Collection<UUID> optionIds, String sessionToken) {
         Map<UUID, CatalogOption> byId = new LinkedHashMap<>();
@@ -58,9 +62,27 @@ public class CatalogReader {
             throw InternalCallFailures.unavailable(DEPENDENCY, OPERATION, e);
         }
         if (options != null) {
-            options.items().forEach(option -> byId.put(option.optionId(), option));
+            options.items().forEach(option -> byId.put(requireReadable(optionIds, option), option));
         }
         return byId;
+    }
+
+    /**
+     * 판정 · 금액에 쓰는 칸이 다 있고, 물은 옵션인가. 빠진 칸을 기본값으로 읽으면 가격 0 · 보증가 0 · 잘못된 거절 사유가 되고,
+     * 묻지 않은 옵션을 받으면 물은 옵션이 판매 종료로 보인다. 다시 물어도 같으므로 연동 오류(500)다.
+     *
+     * @return 그 옵션의 id
+     */
+    private static UUID requireReadable(Collection<UUID> requested, CatalogOption option) {
+        boolean complete = option.optionId() != null && option.price() != null && option.saleMode() != null
+                && option.productStatus() != null && option.optionStatus() != null && option.visible() != null
+                && option.registrationCompleted() != null && option.warranty() != null
+                && (!option.warranty().offered() || option.warranty().surcharge() != null);
+        if (!complete || !requested.contains(option.optionId())) {
+            log.error("{} 연동 오류 {} 읽을 수 없는 옵션 optionId={} complete={}", DEPENDENCY, OPERATION, option.optionId(), complete);
+            throw new IllegalStateException(DEPENDENCY + " 연동 오류: 읽을 수 없는 옵션");
+        }
+        return option.optionId();
     }
 
     private static String authorization(String sessionToken) {

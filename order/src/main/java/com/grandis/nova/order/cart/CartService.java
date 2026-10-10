@@ -34,14 +34,16 @@ import java.util.UUID;
  * 장바구니(명세 F-U-07). 상품 정보는 catalog 에 묻고(트랜잭션 밖), 재고는 order 의 재고 표를 읽기만 한다 — 담기 · 수정은 가용 재고를 넘지 않는지
  * 확인할 뿐 확보하지 않는다. 가격은 저장하지 않고 조회 때 catalog 의 지금 값을 쓴다.
  *
- * 담기는 그 회원의 줄을 모두 잠근 뒤(FOR UPDATE) 합산 · 줄 수를 판정한다 — 겹친 담기가 51번째 줄 · 99 초과를 만들지 않는다(MySQL 8.4 · READ COMMITTED
- * 실측: 49줄에서 겹친 새 줄 담기 둘 중 뒤의 것은 앞의 커밋을 기다렸다가 50줄을 본다). 비어 있는 장바구니는 잠글 행이 없어 같은 옵션 담기가
- * 겹치면 유일 키가 잡고({@link CartSlotTakenException}), 새 트랜잭션에서 한 번 더 하면 그 줄에 합산된다.
+ * 담기는 그 회원의 줄을 잠가 읽고(FOR UPDATE) 합산 · 줄 수를 판정한다 — 겹친 담기가 51번째 줄 · 99 초과를 만들지 않는다.
+ * 잠금 읽기는 두 번 한다. 첫 번째는 앞선 담기의 커밋을 기다리는 줄서기다 — 기다리던 잠금 읽기는 그 자리부터 이어 읽어, 앞선 담기가 넣은 줄이
+ * 유일 키에서 기존 줄보다 앞(옵션 id 가 작음)이면 못 본다. 두 번째는 처음부터 다시 훑어 그 줄까지 본다(MySQL 8.4.11 · READ COMMITTED,
+ * 유일 키로 훑는 계획에서 실측: 한 번이면 51줄, 두 번이면 50줄 — CartConcurrencyTest).
+ * 비어 있는 장바구니에서 같은 옵션 담기가 겹치면 유일 키가 잡고({@link CartSlotTakenException}), 새 트랜잭션에서 한 번 더 하면 그 줄에 합산된다.
  */
 @Service
 public class CartService {
 
-    /** 겹친 첫 담기를 다시 하는 횟수. 두 번째 시도는 줄이 있으므로 잠금으로 줄 선다. */
+    /** 같은 줄 넣기가 겹쳐 유일 키에 걸렸을 때 시도하는 횟수. 두 번째 시도는 그 줄을 보고 합산한다. 그래도 겹치면 409 STATE_CONFLICT. */
     static final int ADD_ATTEMPTS = 2;
     static final String ACTIVE = "ACTIVE";
     static final String IN_STOCK = "IN_STOCK";
@@ -92,7 +94,8 @@ public class CartService {
      * 담기. 같은 (옵션, 보증)이 있으면 그 줄에 수량을 더한다.
      *
      * @throws BusinessException 404 NOT_FOUND — 없는 옵션 · 회원에게 보이지 않는 상품(비공개 · 준비 전).
-     *                           409 PREORDER_NOT_CARTABLE · STATE_CONFLICT(판매 중지) · INSUFFICIENT_STOCK(합산이 가용 재고 초과).
+     *                           409 PREORDER_NOT_CARTABLE · STATE_CONFLICT(판매 중지, 또는 같은 줄 넣기가 두 번 연달아 겹침) ·
+     *                           INSUFFICIENT_STOCK(합산이 가용 재고 초과).
      *                           400 VALIDATION_FAILED — 보증을 주지 않는 상품에 보증, 합산 99 초과, 51번째 줄
      */
     public CartLine add(UUID customerId, String sessionToken, UUID optionId, int quantity, boolean warranty) {
@@ -106,7 +109,7 @@ public class CartService {
                 return transaction.execute(status -> addLocked(customerId, optionId, quantity, warranty));
             } catch (CartSlotTakenException e) {
                 if (attempt >= ADD_ATTEMPTS) {
-                    throw e;
+                    throw new BusinessException(OrderErrorCode.STATE_CONFLICT);
                 }
             }
         }
@@ -136,6 +139,7 @@ public class CartService {
     }
 
     private CartLine addLocked(UUID customerId, UUID optionId, int quantity, boolean warranty) {
+        store.lockByCustomer(customerId);
         List<CartLine> lines = store.lockByCustomer(customerId);
         Optional<CartLine> existing = lines.stream().filter(line -> line.sameSlot(optionId, warranty)).findFirst();
         int next = existing.map(line -> line.quantity() + quantity).orElse(quantity);
