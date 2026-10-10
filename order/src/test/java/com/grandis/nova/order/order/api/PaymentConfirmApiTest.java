@@ -9,8 +9,11 @@ import com.grandis.nova.order.client.payment.PaymentConfirmClient;
 import com.grandis.nova.order.client.preorder.PreorderClient;
 import com.grandis.nova.order.event.OrderEventDispatcher;
 import com.grandis.nova.order.order.OrderLedger;
+import com.grandis.nova.order.order.command.PlaceOrderCommand;
+import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.vo.EventCause;
+import com.grandis.nova.order.stock.StockLedger;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderFixtures.PreorderProduct;
 import com.grandis.nova.order.support.OrderIntegrationTest;
@@ -101,6 +104,9 @@ class PaymentConfirmApiTest {
 
     @Autowired
     PlatformTransactionManager transactionManager;
+
+    @Autowired
+    StockLedger stock;
 
     @MockitoBean
     PreorderClient preorderClient;
@@ -604,6 +610,62 @@ class PaymentConfirmApiTest {
     /** 애플리케이션 로그 줄만. MockMvc 가 찍는 요청 덤프(본문 포함)는 시험 도구의 출력이라 뺀다. */
     private static List<String> applicationLogs(CapturedOutput output) {
         return output.getAll().lines().filter(line -> line.contains(" --- [order] ")).toList();
+    }
+
+    // ── 장바구니 주문 ───────────────────────────────────────────────────────
+
+    /** 승인 요청 경로(동기 응답)로도 판매 확정 · 장바구니 차감이 같은 트랜잭션에서 한 번 일어난다. preorder 에 묻지 않는다. */
+    @Test
+    void approvedCartOrderSellsStockAndDeductsCart() throws Exception {
+        Order cart = cartOrder(2);
+        paymentAnswers(reply(ConfirmReply.Result.APPROVED, null));
+
+        perform(customerId, cart.orderToken().value(), attempt, body(PAYMENT, cart.totalAmount().amount()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.result").value("APPROVED"))
+                .andExpect(jsonPath("$.data.orderStatus").value("AWAITING_CONFIRMATION"));
+
+        assertThat(jdbcTemplate.queryForList("SELECT stock_reserved, stock_sold FROM option_inventories WHERE option_id = ?",
+                (Object) bytes(cartOption))).containsExactly(Map.of("stock_reserved", 0, "stock_sold", 2));
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM cart_items WHERE customer_id = ?", Long.class,
+                (Object) bytes(customerId))).isZero();
+        verify(preorderClient, never()).getPayability(eq(cart.orderToken().value()), any());
+    }
+
+    /** 장바구니 주문은 주문의 기한(만든 때 + 10분)을 본다 — 지났으면 결제를 시작하지 않는다. */
+    @Test
+    void expiredCartOrderIsNotStarted() throws Exception {
+        Order cart = cartOrder(1);
+        // 저장은 UTC 다 — JVM 시간대로 바인딩되는 Timestamp 대신 DB 의 UTC 로 기한을 지나게 한다
+        jdbcTemplate.update("UPDATE orders SET payment_due_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ?", (Object) bytes(cart.id()));
+
+        perform(customerId, cart.orderToken().value(), attempt, body(PAYMENT, cart.totalAmount().amount()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("PAYMENT_WINDOW_EXPIRED"));
+
+        verifyNoInteractions(paymentClient);
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, (Object) bytes(cart.id())))
+                .isEqualTo("AWAITING_PAYMENT");
+    }
+
+    UUID cartOption;
+
+    /** 같은 회원의 장바구니 주문 — 장바구니 줄(무보증, quantity) · 재고 5 를 심고 확보까지 한 결제 대기 주문. */
+    private Order cartOrder(int quantity) {
+        OrderFixtures.StockProduct stocked = fixtures.inStockProduct(1);
+        cartOption = stocked.optionIds().getFirst();
+        fixtures.stock(cartOption, 5, 0, 0);
+        jdbcTemplate.update("""
+                INSERT INTO cart_items (id, customer_id, option_id, warranty_selected, quantity, created_at, updated_at)
+                VALUES (?, ?, ?, 0, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """, bytes(UUID.randomUUID()), bytes(customerId), bytes(cartOption), quantity);
+        PlaceOrderCommand command = new PlaceOrderCommand(customerId, OrderSource.CART, null, null, OrderFixtures.ADDRESS, List.of(
+                new PlaceOrderCommand.Line(stocked.productId(), cartOption, quantity, new BigDecimal("1250000"), 0, BigDecimal.ZERO,
+                        "아이폰 17", "블랙")));
+        return new TransactionTemplate(transactionManager).execute(status -> {
+            stock.reserve(Map.of(cartOption, quantity));
+            return ledger.place(command.toDraft(), EventCause.user());
+        });
     }
 
     private void paymentAnswers(ApiResponse<ConfirmReply> reply) {
