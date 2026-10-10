@@ -30,7 +30,7 @@ class DrawCampaignTest {
     // ck_draw_campaign_entry_fee · ck_draw_campaign_winner_count · ck_draw_campaign_period 와 같은 규칙
     @Test
     void rejectsWhatTheTableRejects() {
-        assertThatThrownBy(() -> draw(BigDecimal.ZERO, 1, OPENS, CLOSES)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> draw(new BigDecimal("99"), 1, OPENS, CLOSES)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> draw(new BigDecimal("100"), 0, OPENS, CLOSES)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> draw(new BigDecimal("100"), 1, CLOSES, CLOSES)).isInstanceOf(IllegalArgumentException.class);
     }

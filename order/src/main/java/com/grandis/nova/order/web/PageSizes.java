@@ -1,14 +1,13 @@
-package com.grandis.nova.order.order.api;
+package com.grandis.nova.order.web;
 
 import com.grandis.nova.common.BusinessException;
-import com.grandis.nova.order.web.ValidationFailures;
 
 /** 목록 크기 규칙(계약: 1~100). 사용자 · 관리자 목록(주문 · 럭키 드로우)이 같은 규칙을 쓴다. preorder 와 같다(모듈 간 공유 금지라 복사). */
 public final class PageSizes {
 
     public static final int DEFAULT = 20;
     static final int MIN = 1;
-    static final int MAX = 100;
+    public static final int MAX = 100;
 
     private PageSizes() {
     }

@@ -6,6 +6,7 @@ import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.PlacedOrders;
 import com.grandis.nova.order.support.TestAuth;
+import com.grandis.nova.order.web.PageSizes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

@@ -26,8 +26,14 @@ public record DrawCampaign(
         Instant createdAt
 ) {
 
+    /** 응모비 하한(원) — 토스가 너무 작은 금액을 거절할 수 있다(2026-10-10 결정, ck_draw_campaign_entry_fee). */
+    public static final BigDecimal MIN_ENTRY_FEE = new BigDecimal("100");
+
     public DrawCampaign {
         Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(productTitle, "productTitle");
+        Objects.requireNonNull(optionTitle, "optionTitle");
+        Objects.requireNonNull(createdAt, "createdAt");
         Objects.requireNonNull(productId, "productId");
         Objects.requireNonNull(optionId, "optionId");
         Objects.requireNonNull(title, "title");
@@ -35,8 +41,8 @@ public record DrawCampaign(
         Objects.requireNonNull(opensAt, "opensAt");
         Objects.requireNonNull(closesAt, "closesAt");
         // ck_draw_campaign_entry_fee · ck_draw_campaign_winner_count · ck_draw_campaign_period
-        if (entryFee.signum() <= 0 || winnerCount < 1 || !opensAt.isBefore(closesAt)) {
-            throw new IllegalArgumentException("응모비는 0 보다 크고 당첨 인원은 1 이상, 응모 시작은 마감 전이다");
+        if (entryFee.compareTo(MIN_ENTRY_FEE) < 0 || winnerCount < 1 || !opensAt.isBefore(closesAt)) {
+            throw new IllegalArgumentException("응모비는 " + MIN_ENTRY_FEE + "원 이상, 당첨 인원은 1 이상, 응모 시작은 마감 전이다");
         }
     }
 

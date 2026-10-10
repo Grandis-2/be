@@ -39,7 +39,7 @@ class DrawCampaignSchemaTest {
 
     @Test
     void feeWinnersPeriodAndOptionAreGuarded() {
-        assertThatThrownBy(() -> insert(product, option, "0", 1, "2026-10-11", "2026-10-12"))
+        assertThatThrownBy(() -> insert(product, option, "99", 1, "2026-10-11", "2026-10-12"))
                 .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_draw_campaign_entry_fee");
         assertThatThrownBy(() -> insert(product, option, "100", 0, "2026-10-11", "2026-10-12"))
                 .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_draw_campaign_winner_count");
@@ -49,11 +49,25 @@ class DrawCampaignSchemaTest {
                 .as("상품과 옵션의 짝").isInstanceOf(DataAccessException.class).hasMessageContaining("fk_draw_campaign_option");
     }
 
+    /** 키는 바이트로 가른다(utf8mb4_bin) — 대소문자만 다른 키는 다른 요청이다. */
+    @Test
+    void idempotencyKeyIsUniqueAndCaseSensitive() {
+        insert("key-a", product, option, "100", 1, "2026-10-11", "2026-10-12");
+
+        assertThatThrownBy(() -> insert("key-a", product, option, "100", 1, "2026-10-11", "2026-10-12"))
+                .isInstanceOf(DataAccessException.class).hasMessageContaining("uq_draw_campaign_idempotency");
+        assertThatCode(() -> insert("KEY-A", product, option, "100", 1, "2026-10-11", "2026-10-12")).doesNotThrowAnyException();
+    }
+
     private void insert(UUID productId, UUID optionId, String fee, int winners, String opens, String closes) {
+        insert(UUID.randomUUID().toString(), productId, optionId, fee, winners, opens, closes);
+    }
+
+    private void insert(String key, UUID productId, UUID optionId, String fee, int winners, String opens, String closes) {
         jdbcTemplate.update("""
-                INSERT INTO draw_campaigns (id, product_id, option_id, title, product_title_snapshot, option_title_snapshot, entry_fee,
-                                            winner_count, opens_at, closes_at, created_at, updated_at)
-                VALUES (?, ?, ?, 't', 'p', 'o', ?, ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""",
-                bytes(UUID.randomUUID()), bytes(productId), bytes(optionId), new java.math.BigDecimal(fee), winners, opens, closes);
+                INSERT INTO draw_campaigns (id, idempotency_key, product_id, option_id, title, product_title_snapshot, option_title_snapshot,
+                                            entry_fee, winner_count, opens_at, closes_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 't', 'p', 'o', ?, ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""",
+                bytes(UUID.randomUUID()), key, bytes(productId), bytes(optionId), new java.math.BigDecimal(fee), winners, opens, closes);
     }
 }

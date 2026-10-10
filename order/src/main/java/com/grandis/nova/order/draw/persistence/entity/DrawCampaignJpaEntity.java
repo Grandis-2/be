@@ -14,6 +14,9 @@ import java.util.UUID;
 @Table(name = "draw_campaigns")
 public class DrawCampaignJpaEntity extends BaseEntity {
 
+    @Column(nullable = false, updatable = false, length = 100)
+    private String idempotencyKey;
+
     @Column(nullable = false, updatable = false)
     private UUID productId;
 
@@ -47,8 +50,9 @@ public class DrawCampaignJpaEntity extends BaseEntity {
     protected DrawCampaignJpaEntity() {
     }
 
-    public DrawCampaignJpaEntity(UUID productId, UUID optionId, String title, String productTitleSnapshot, String optionTitleSnapshot,
+    public DrawCampaignJpaEntity(String idempotencyKey, UUID productId, UUID optionId, String title, String productTitleSnapshot, String optionTitleSnapshot,
                                  String imageUrlSnapshot, BigDecimal entryFee, int winnerCount, Instant opensAt, Instant closesAt) {
+        this.idempotencyKey = idempotencyKey;
         this.productId = productId;
         this.optionId = optionId;
         this.title = title;

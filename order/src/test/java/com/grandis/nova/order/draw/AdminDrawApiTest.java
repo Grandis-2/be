@@ -8,6 +8,7 @@ import com.grandis.nova.order.client.catalog.CatalogOptions;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,21 +20,35 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -52,6 +67,8 @@ class AdminDrawApiTest {
 
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
+    @Autowired PlatformTransactionManager transactionManager;
+    @Autowired AdminDrawService service;
     @MockitoBean CatalogClient catalogClient;
     /** 쓰지 않지만 CartApiTest 와 같은 대역 구성으로 두어 Spring 컨텍스트를 함께 쓴다. */
     @MockitoSpyBean CartStore store;
@@ -75,8 +92,10 @@ class AdminDrawApiTest {
         Instant opens = Instant.now().minusSeconds(60);
         Instant closes = Instant.now().plus(Duration.ofDays(3));
 
-        JsonNode draw = data(create(body(option, 3, opens, closes)).andExpect(status().isCreated())
-                .andExpect(header().string("Location", org.hamcrest.Matchers.startsWith("/api/v1/admin/draws/"))));
+        ResultActions created = create(UUID.randomUUID().toString(), body(option, 3, opens, closes), "admin-session").andExpect(status().isCreated());
+        JsonNode draw = data(created);
+        created.andExpect(header().string("Location", "/api/v1/admin/draws/" + draw.get("drawId").asString()));
+        verify(catalogClient).getOptions(any(), eq("Bearer admin-session"));
 
         assertThat(draw.get("title").asString()).isEqualTo("한정판 드로우");
         assertThat(draw.get("gift").get("variantId").asString()).isEqualTo(option.toString());
@@ -118,24 +137,160 @@ class AdminDrawApiTest {
         UUID paused = gift(10, true);
         catalog.put(paused, with(catalog.get(paused), "IN_STOCK", "ACTIVE", "PAUSED", true));
         expectViolation(create(body(paused, 1, Instant.now(), closes)), "optionId");
+        UUID pausedProduct = gift(10, true);
+        catalog.put(pausedProduct, with(catalog.get(pausedProduct), "IN_STOCK", "PAUSED", "ACTIVE", true));
+        expectViolation(create(body(pausedProduct, 1, Instant.now(), closes)), "optionId");
         UUID unregistered = gift(10, true);
         catalog.put(unregistered, with(catalog.get(unregistered), "IN_STOCK", "ACTIVE", "ACTIVE", false));
         expectViolation(create(body(unregistered, 1, Instant.now(), closes)), "optionId");
-        assertThat(reserved(preorder) + reserved(paused) + reserved(unregistered)).isZero();
+        assertThat(reserved(preorder) + reserved(paused) + reserved(pausedProduct) + reserved(unregistered)).isZero();
     }
 
     @Test
-    @DisplayName("입력 검증 — 마감이 지났거나 시작보다 앞 · 응모비 0 · 당첨 0명 · 제목 없음은 400")
+    @DisplayName("입력 검증 — 마감이 지났거나 시작보다 앞 · 시작과 같음 · 저장 못 하는 시각 · 응모비 100원 미만 · 당첨 0명 · 제목 없음은 400")
     void invalidInputIsRejected() throws Exception {
         UUID option = gift(10, true);
         Instant now = Instant.now();
         expectViolation(create(body(option, 1, now.minusSeconds(120), now.minusSeconds(60))), "closesAt");
         expectViolation(create(body(option, 1, now.plusSeconds(120), now.plusSeconds(60))), "closesAt");
+        Instant same = now.plusSeconds(120);
+        expectViolation(create(body(option, 1, same, same)), "closesAt");
+        expectViolation(create(body(option, 1, now, Instant.parse("+10000-01-01T00:00:00Z"))), "closesAt");
         expectViolation(create(raw(option, "\"\"", "100", 1, now, now.plusSeconds(600))), "title");
-        expectViolation(create(raw(option, "\"t\"", "0", 1, now, now.plusSeconds(600))), "entryFee");
+        expectViolation(create(raw(option, "\"t\"", "99", 1, now, now.plusSeconds(600))), "entryFee");
         expectViolation(create(raw(option, "\"t\"", "100.5", 1, now, now.plusSeconds(600))), "entryFee");
         expectViolation(create(raw(option, "\"t\"", "100", 0, now, now.plusSeconds(600))), "winnerCount");
         assertThat(reserved(option)).isZero();
+    }
+
+    @Test
+    @DisplayName("시각은 µs 로 잘라 저장 · 응답한다 — 응답과 저장값이 같다")
+    void timesAreTruncatedToMicros() throws Exception {
+        UUID option = gift(10, true);
+        Instant opens = Instant.parse("2030-01-01T00:00:00.123456789Z");
+        Instant closes = Instant.parse("2030-01-02T00:00:00.999999999Z");
+
+        JsonNode draw = data(create(body(option, 1, opens, closes)).andExpect(status().isCreated()));
+
+        assertThat(Instant.parse(draw.get("opensAt").asString())).isEqualTo("2030-01-01T00:00:00.123456Z");
+        assertThat(Instant.parse(draw.get("closesAt").asString())).isEqualTo("2030-01-02T00:00:00.999999Z");
+        assertThat(jdbcTemplate.queryForObject("SELECT DATE_FORMAT(closes_at, '%Y-%m-%d %T.%f') FROM draw_campaigns WHERE id = ?",
+                String.class, (Object) bytes(UUID.fromString(draw.get("drawId").asString())))).isEqualTo("2030-01-02 00:00:00.999999");
+    }
+
+    @Test
+    @DisplayName("같은 Idempotency-Key 로 다시 오면 처음 회차를 200 으로 — 본문 대조 · catalog 조회 · 마감 검증 없이, 회차 · 확보는 하나")
+    void sameKeyReturnsFirstDraw() throws Exception {
+        UUID option = gift(10, true);
+        String key = UUID.randomUUID().toString();
+        Instant closes = Instant.now().plus(Duration.ofDays(1));
+        String first = data(create(key, body(option, 3, Instant.now(), closes)).andExpect(status().isCreated())).get("drawId").asString();
+
+        catalog.put(option, with(catalog.get(option), "IN_STOCK", "PAUSED", "ACTIVE", true));
+        Instant past = Instant.now().minusSeconds(60);
+        JsonNode again = data(create(" " + key + " ", body(option, 5, past.minusSeconds(60), past))
+                .andExpect(status().isOk()).andExpect(header().doesNotExist("Location")));
+        verify(catalogClient, times(1)).getOptions(any(), any());
+
+        assertThat(again.get("drawId").asString()).isEqualTo(first);
+        assertThat(again.get("winnerCount").asInt()).isEqualTo(3);
+        assertThat(reserved(option)).isEqualTo(3);
+        assertThat(drawsOf(option)).isEqualTo(1);
+        UUID other = gift(10, true);
+        assertThat(data(create(key.toUpperCase(), body(other, 1, Instant.now(), closes)).andExpect(status().isCreated()))
+                .get("drawId").asString()).as("키는 대소문자를 가른다").isNotEqualTo(first);
+    }
+
+    @Test
+    @DisplayName("Idempotency-Key 가 없으면 IDEMPOTENCY_KEY_REQUIRED, 비었거나 100자를 넘으면 400(Idempotency-Key) — 회차 · 확보 없음")
+    void idempotencyKeyIsRequired() throws Exception {
+        UUID option = gift(10, true);
+        String body = body(option, 1, Instant.now(), Instant.now().plus(Duration.ofDays(1)));
+        mockMvc.perform(post("/api/v1/admin/draws").with(TestAuth.admin()).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error.code").value("IDEMPOTENCY_KEY_REQUIRED"));
+        expectViolation(create("  ", body), "Idempotency-Key");
+        expectViolation(create("k".repeat(101), body), "Idempotency-Key");
+        create("k".repeat(100), body).andExpect(status().isCreated());
+        assertThat(reserved(option)).isEqualTo(1);
+    }
+
+    /**
+     * 같은 새 키가 겹치면 늦은 쪽은 키 충돌로 확보까지 롤백하고 먼저 들어간 회차를 200 으로 돌려준다. 결정적으로 본다: 앞선 쪽이 그 키의 회차를
+     * 넣은 채 커밋하지 않고, 늦은 쪽이 확보한 뒤 그 키의 유일 키에서 기다리는 것을 확인한 뒤 커밋한다.
+     */
+    @Test
+    @DisplayName("같은 새 키가 겹치면 늦은 쪽은 확보를 되돌리고 먼저 들어간 회차를 200")
+    void concurrentSameKeyKeepsOneDraw() throws Exception {
+        UUID option = gift(10, true);
+        UUID product = catalog.get(option).productId();
+        String key = UUID.randomUUID().toString();
+        UUID earlier = UUID.randomUUID();
+        CountDownLatch inserted = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        CompletableFuture<Void> first = CompletableFuture.runAsync(() -> tx.executeWithoutResult(status -> {
+            jdbcTemplate.update("""
+                    INSERT INTO draw_campaigns (id, idempotency_key, product_id, option_id, title, product_title_snapshot, option_title_snapshot,
+                                                entry_fee, winner_count, opens_at, closes_at, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, '먼저', 'p', 'o', 100, 2, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6) + INTERVAL 1 DAY,
+                            UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""", bytes(earlier), key, bytes(product), bytes(option));
+            inserted.countDown();
+            await(commit);
+        }));
+        await(inserted);
+        CompletableFuture<String> later = CompletableFuture.supplyAsync(() -> {
+            try {
+                return create(key, body(option, 3, Instant.now(), Instant.now().plus(Duration.ofDays(1)))).andExpect(status().isOk())
+                        .andReturn().getResponse().getContentAsString();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        waitForQuery("insert into draw_campaigns%");
+        commit.countDown();
+        first.get(20, TimeUnit.SECONDS);
+
+        JsonNode draw = JSON.readTree(later.get(20, TimeUnit.SECONDS)).get("data");
+        assertThat(draw.get("drawId").asString()).isEqualTo(earlier.toString());
+        assertThat(draw.get("title").asString()).isEqualTo("먼저");
+        assertThat(reserved(option)).as("늦은 쪽의 확보는 롤백").isZero();
+        assertThat(drawsOf(option)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("만든 시각이 같으면 id 큰 쪽이 앞")
+    void tiesOnCreatedAtOrderByIdDescending() throws Exception {
+        String a = data(create(body(gift(10, true), 1, Instant.now(), Instant.now().plus(Duration.ofDays(1))))).get("drawId").asString();
+        String b = data(create(body(gift(10, true), 1, Instant.now(), Instant.now().plus(Duration.ofDays(1))))).get("drawId").asString();
+        jdbcTemplate.update("UPDATE draw_campaigns SET created_at = '2001-01-01 00:00:00' WHERE id IN (?, ?)",
+                bytes(UUID.fromString(a)), bytes(UUID.fromString(b)));
+        Long total = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM draw_campaigns", Long.class);
+        assertThat(total).as("한 쪽에 다 담겨야 순서를 본다").isLessThanOrEqualTo(100);
+
+        JsonNode items = data(mockMvc.perform(get("/api/v1/admin/draws").param("size", "100").with(TestAuth.admin())).andExpect(status().isOk()))
+                .get("items");
+        List<String> ours = new ArrayList<>();
+        items.forEach(item -> {
+            String id = item.get("drawId").asString();
+            if (id.equals(a) || id.equals(b)) {
+                ours.add(id);
+            }
+        });
+        // binary(16) 은 부호 없는 바이트 순 — 16진 문자열의 사전 순과 같다
+        String bigger = HexFormat.of().formatHex(bytes(UUID.fromString(a))).compareTo(HexFormat.of().formatHex(bytes(UUID.fromString(b)))) > 0 ? a : b;
+        assertThat(ours).hasSize(2).first().isEqualTo(bigger);
+    }
+
+    @Test
+    @DisplayName("트랜잭션 안에서 부르면 거절한다 — catalog 호출 동안 잠금을 쥐지 않게")
+    void createRefusesAnOuterTransaction() {
+        AdminDrawService.CreateDraw command = new AdminDrawService.CreateDraw(UUID.randomUUID(), UUID.randomUUID(), "t", new BigDecimal("100"), 1,
+                Instant.now(), Instant.now().plusSeconds(600));
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+
+        assertThatThrownBy(() -> tx.executeWithoutResult(status -> service.create(null, "k", command)))
+                .isInstanceOf(IllegalStateException.class);
+        verify(catalogClient, never()).getOptions(any(), any());
     }
 
     @Test
@@ -195,7 +350,36 @@ class AdminDrawApiTest {
     }
 
     private ResultActions create(String body) throws Exception {
-        return mockMvc.perform(post("/api/v1/admin/draws").with(TestAuth.admin()).contentType(MediaType.APPLICATION_JSON).content(body));
+        return create(UUID.randomUUID().toString(), body);
+    }
+
+    private ResultActions create(String key, String body) throws Exception {
+        return create(key, body, null);
+    }
+
+    private ResultActions create(String key, String body, String accessToken) throws Exception {
+        MockHttpServletRequestBuilder request = post("/api/v1/admin/draws").with(TestAuth.admin()).header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON).content(body);
+        return mockMvc.perform(accessToken == null ? request : request.header("Authorization", "Bearer " + accessToken));
+    }
+
+    private void waitForQuery(String like) {
+        Awaitility.await("그 문장이 기다리지 않았다: " + like).atMost(Duration.ofSeconds(10)).until(() -> {
+            Long running = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE COMMAND = 'Query' AND INFO LIKE ?", Long.class, like);
+            return running != null && running > 0;
+        });
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(20, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("기다리다 시간 초과");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     private int reserved(UUID option) {
