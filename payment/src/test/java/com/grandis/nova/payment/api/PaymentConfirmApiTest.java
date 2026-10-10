@@ -231,17 +231,30 @@ class PaymentConfirmApiTest {
         verify(toss, never()).confirm(any(), any());
     }
 
-    // 결과를 알릴 이벤트가 없는 대상은 시작하지 않는다
+    // 드로우 응모도 승인한다. 결과는 응모 대상의 이벤트(DRAW_ENTRY_PAYMENT_SETTLED)로 알린다 — 주문 이벤트로 나가면 order 가 없는 주문으로 읽는다
     @Test
-    void rejectsDrawEntryTarget() throws Exception {
+    void approvesDrawEntryAndNotifiesAsDrawEntry() throws Exception {
         PaymentTarget entry = PaymentFixtures.newDrawEntryTarget();
         PaymentTransaction entryAttempt = prepareService.open(entry, Money.won(1000));
+        given(toss.confirm(any(), any())).willReturn(new TossCommandResult.Succeeded(new TossPayment(paymentKey,
+                entryAttempt.providerOrderId().value(), TossPaymentStatus.DONE, 1000, 1000, "카드", APPROVED_AT, "txkey", null)));
 
         confirm(entryAttempt, entry, 1000)
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error.code").value("PAYMENT_TARGET_UNSUPPORTED"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.result").value("APPROVED"));
 
-        verify(toss, never()).confirm(any(), any());
+        List<String> payloads = jdbcTemplate.queryForList("""
+                SELECT payload FROM payment_outbox_events
+                 WHERE aggregate_type = 'DRAW_ENTRY' AND aggregate_id = ? AND event_type = 'DRAW_ENTRY_PAYMENT_SETTLED'
+                """, String.class, UuidBinary.toBytes(entry.id()));
+        assertThat(payloads).hasSize(1);
+        assertThat(payloads.getFirst()).doesNotContain(paymentKey);
+        JsonNode payload = jsonMapper.readTree(payloads.getFirst());
+        assertThat(payload.get("providerOrderId").asString()).isEqualTo(entryAttempt.providerOrderId().value());
+        assertThat(payload.get("result").asString()).isEqualTo("APPROVED");
+        assertThat(payload.get("amount").decimalValue()).isEqualByComparingTo("1000");
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM payment_outbox_events WHERE aggregate_id = ? AND event_type <> 'DRAW_ENTRY_PAYMENT_SETTLED'",
+                Integer.class, UuidBinary.toBytes(entry.id()))).as("다른 종류로는 나가지 않는다").isZero();
     }
 
     @ParameterizedTest

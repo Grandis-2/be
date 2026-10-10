@@ -1,0 +1,94 @@
+package com.grandis.nova.order.draw;
+
+import com.grandis.nova.order.client.payment.DeclineReason;
+import com.grandis.nova.order.draw.domain.model.DrawEntry;
+import com.grandis.nova.order.draw.domain.model.EntryTransition;
+import com.grandis.nova.order.draw.domain.repository.DrawCampaignStore;
+import com.grandis.nova.order.draw.domain.repository.DrawEntryStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Instant;
+import java.util.UUID;
+
+/**
+ * 응모비 결제 결과를 응모에 반영한다 — 승인 API 의 동기 응답과 결과 이벤트 소비가 같은 길을 쓴다. 둘 다 오거나 순서가 바뀌어도 전제를 건
+ * UPDATE 로 한 번만 반영된다({@link DrawEntryStore}). 결과 하나 = 트랜잭션 하나(행 하나만 바꾼다).
+ *
+ * - 승인은 결제창을 대조하지 않고 결제 완료로 바꾼다. 응모에는 취소가 없어, 결제 대기에서 오는 승인도 그 응모의 돈이다 — 놓치면 돈을 받고도
+ *   추첨에서 빠진다.
+ * - 거절 · 되돌림은 그 결제창의 승인 중일 때만 결제 대기로 돌린다.
+ */
+@Service
+public class DrawEntryPaymentResults {
+
+    private static final Logger log = LoggerFactory.getLogger(DrawEntryPaymentResults.class);
+
+    private final DrawCampaignStore campaigns;
+    private final DrawEntryStore entries;
+    private final TransactionTemplate writeTransaction;
+    private final TransactionTemplate readTransaction;
+    private final Clock clock;
+
+    public DrawEntryPaymentResults(DrawCampaignStore campaigns, DrawEntryStore entries, PlatformTransactionManager transactionManager, Clock clock) {
+        this.campaigns = campaigns;
+        this.entries = entries;
+        this.writeTransaction = new TransactionTemplate(transactionManager);
+        this.readTransaction = new TransactionTemplate(transactionManager);
+        this.readTransaction.setReadOnly(true);
+        this.clock = clock;
+    }
+
+    /** 결과 이벤트. 금액이 응모비와 다르면 ERROR 로 남기고 반영은 한다. */
+    public EntryTransition settle(EntryPaymentSettlement settlement) {
+        DrawEntry entry = readTransaction.execute(status -> entries.findById(settlement.entryId()))
+                .orElseThrow(() -> new IllegalArgumentException("응모가 없다: " + settlement.entryId()));
+        BigDecimal fee = readTransaction.execute(status -> campaigns.findById(entry.campaignId()))
+                .orElseThrow(() -> new IllegalStateException("응모의 회차가 없다: entryId=" + entry.id())).entryFee();
+        if (fee.compareTo(settlement.amount()) != 0) {
+            log.error("응모비 결제 결과의 금액이 응모비와 다르다 entryId={} providerOrderId={} amount={} fee={}",
+                    entry.id(), settlement.providerOrderId(), settlement.amount(), fee);
+        }
+        return switch (settlement.result()) {
+            case APPROVED -> approved(entry.id(), settlement.providerOrderId());
+            case DECLINED -> declined(entry.id(), settlement.providerOrderId(), settlement.declineReason());
+        };
+    }
+
+    EntryTransition approved(UUID entryId, String providerOrderId) {
+        Instant now = clock.instant();
+        EntryTransition transition = writeTransaction.execute(status -> entries.approve(entryId, now));
+        if (transition.applied()) {
+            log.info("응모비 결제 완료 entryId={} providerOrderId={}", entryId, providerOrderId);
+        }
+        return transition;
+    }
+
+    EntryTransition declined(UUID entryId, String providerOrderId, DeclineReason reason) {
+        EntryTransition transition = revert(entryId, providerOrderId);
+        if (transition.applied()) {
+            log.info("응모비 결제 거절 — 결제 대기로 entryId={} providerOrderId={} reason={}", entryId, providerOrderId, reason);
+        }
+        return transition;
+    }
+
+    /** payment 가 이 결제창은 앞으로도 시작될 수 없다고 확언했다 — 결제 대기로 되돌린다. */
+    EntryTransition notStarted(UUID entryId, String providerOrderId) {
+        EntryTransition transition = revert(entryId, providerOrderId);
+        if (transition.applied()) {
+            log.info("응모비 결제창 시작 불가 — 결제 대기로 entryId={} providerOrderId={}", entryId, providerOrderId);
+        }
+        return transition;
+    }
+
+    private EntryTransition revert(UUID entryId, String providerOrderId) {
+        Instant now = clock.instant();
+        // 반영되지 않았으면 다른 결제창의 늦은 결과다(다른 결제창이 승인 중 · 결제 완료) — 되돌리지 않는다
+        return writeTransaction.execute(status -> entries.revert(entryId, providerOrderId, now));
+    }
+}

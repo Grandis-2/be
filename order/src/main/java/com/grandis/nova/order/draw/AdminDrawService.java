@@ -2,7 +2,6 @@ package com.grandis.nova.order.draw;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
-import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.order.MySqlLockFailures;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.client.catalog.CatalogOption;
@@ -31,7 +30,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * 관리자 럭키 드로우 회차. 만들기 · 목록 · 상세.
+ * 관리자 럭키 드로우 회차 만들기. 목록 · 상세는 {@link DrawQueryService}.
  *
  * 만들기: 같은 Idempotency-Key 의 회차가 있으면 그것(본문은 대조하지 않는다 — 상품 등록과 같은 규칙) → 트랜잭션 밖에서 catalog 에 증정품 옵션을
  * 묻고(관리자 토큰 중계) → 트랜잭션에서 당첨 인원만큼 재고를 확보하고 회차를 넣는다. 같은 새 키가 동시에 오면 유일 키가 하나만 남기고, 진 쪽은
@@ -134,20 +133,6 @@ public class AdminDrawService {
 
     private Optional<DrawCampaign> findByKey(String key) {
         return readTransaction.execute(status -> campaigns.findByIdempotencyKey(key));
-    }
-
-    public OffsetPage<DrawCampaign> list(int page, int size) {
-        return readTransaction.execute(status -> campaigns.findNewestFirst(page, size));
-    }
-
-    /** @throws BusinessException 404 DRAW_NOT_FOUND */
-    public DrawCampaign get(UUID drawId) {
-        return readTransaction.execute(status -> campaigns.findById(drawId))
-                .orElseThrow(() -> new BusinessException(OrderErrorCode.DRAW_NOT_FOUND));
-    }
-
-    public Instant now() {
-        return clock.instant();
     }
 
     /** 증정품이 될 수 있는 옵션인가 — 일반 판매 · 판매 중 · 재고 등록. 공개 여부는 보지 않는다(비공개 증정품). */

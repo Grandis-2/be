@@ -76,8 +76,7 @@ public class ConfirmPaymentService {
      * @param paymentKey 결제창이 돌려준 결제 키
      * @param amount       호출자의 저장 금액(주문 총액). 사용자 입력이 아니다
      * @param startAllowed false 면 시작하지 않고 지금 결과만 돌려준다(아직 시작 전이면 PENDING)
-     * @throws BusinessException 시작하지 않았다 — PAYMENT_ATTEMPT_NOT_FOUND · PAYMENT_AMOUNT_MISMATCH ·
-     *                           PAYMENT_TARGET_UNSUPPORTED · PAYMENT_START_CONFLICT
+     * @throws BusinessException 시작하지 않았다 — PAYMENT_ATTEMPT_NOT_FOUND · PAYMENT_AMOUNT_MISMATCH · PAYMENT_START_CONFLICT
      */
     public ConfirmResult confirm(ProviderOrderId providerOrderId, PaymentTarget target, ProviderPaymentKey paymentKey,
                                  Money amount, boolean startAllowed) {
@@ -94,7 +93,6 @@ public class ConfirmPaymentService {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("결제 승인은 트랜잭션 밖에서 불러야 한다 — 결제사 호출 동안 잠금을 쥐지 않게");
         }
-        requireNotifiable(target);
         // 토스 요청 규칙 위반은 시작 전에 드러나야 한다. 시작한 뒤 나면 거래가 리스를 쥔 채 남고 복구도 같은 위반을 되풀이한다
         TossConfirmRequest request = new TossConfirmRequest(paymentKey.value(), providerOrderId.value(),
                 amount.amount().longValueExact());
@@ -191,14 +189,5 @@ public class ConfirmPaymentService {
         PaymentTransaction now = reader.findById(transactionId)
                 .orElseThrow(() -> new IllegalStateException("거래가 사라졌다: " + transactionId));
         return ConfirmResult.ofStatus(now.status(), now.lastError() == null ? null : now.lastError().code());
-    }
-
-    /** 결과를 알릴 이벤트가 있는 대상만 승인한다 — 알릴 길 없이 승인하면 동기 응답을 잃었을 때 대상이 결과를 받지 못한다. */
-    private static void requireNotifiable(PaymentTarget target) {
-        switch (target.type()) {
-            case ORDER -> {
-            }
-            case DRAW_ENTRY -> throw new BusinessException(PaymentErrorCode.PAYMENT_TARGET_UNSUPPORTED);
-        }
     }
 }

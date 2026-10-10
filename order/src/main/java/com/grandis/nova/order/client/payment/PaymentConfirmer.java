@@ -6,7 +6,6 @@ import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.common.web.client.InternalCallFailures;
 import com.grandis.nova.order.OrderErrorCode;
-import com.grandis.nova.order.order.domain.model.Order;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -18,12 +17,12 @@ import java.net.ConnectException;
 import java.net.http.HttpConnectTimeoutException;
 
 /**
- * 주문의 결제를 payment 에 승인시킨다. 트랜잭션 밖에서 부른다(payment 가 토스를 최대 60초 기다린다).
+ * 결제 대상(주문 · 응모)의 결제를 payment 에 승인시킨다. 트랜잭션 밖에서 부른다(payment 가 토스를 최대 60초 기다린다).
  *
  * 실패를 "주문을 결제 대기로 되돌려도 되는가" 로 가른다. 전송 계층 신호(4xx 계열 · 연결 실패)는 이번 요청에 대한 것일 뿐
  * 결제창의 상태가 아니다 — 앞선 요청이 같은 결제창을 이미 시작해 토스에 보냈을 수 있다. 그래서 되돌림은 payment 의 업무 코드가
  * "이 결제창은 앞으로도 시작될 수 없다" 고 확언할 때만 한다(D17).
- * - NotStartable: PAYMENT_ATTEMPT_NOT_FOUND · PAYMENT_AMOUNT_MISMATCH · PAYMENT_TARGET_UNSUPPORTED.
+ * - NotStartable: PAYMENT_ATTEMPT_NOT_FOUND · PAYMENT_AMOUNT_MISMATCH.
  * - Unanswered: 그 밖의 4xx(401 · 교착 · 계약 밖) · 연결을 맺지 못함. 주문은 그대로 두고 오류로 답한다(다시 부르면 회수된다).
  * - Pending: 읽기 기한 초과 · 5xx · 계약과 다른 200. 시작했을 수 있다 — "확인 중"으로 답하고 결과 이벤트를 기다린다.
  *
@@ -50,32 +49,32 @@ public class PaymentConfirmer {
      * @param sessionToken    사용자가 보낸 액세스 토큰 원문(접두어 없음). null 이면 싣지 않는다(payment 가 401)
      * @param startAllowed    false 면 payment 가 아직 시작하지 않은 결제창을 시작하지 않는다(결과 회수만)
      */
-    public PaymentConfirmation confirm(Order order, String providerOrderId, String paymentKey, String sessionToken,
+    public PaymentConfirmation confirm(PayableTarget target, String providerOrderId, String paymentKey, String sessionToken,
                                        boolean startAllowed) {
         ApiResponse<ConfirmReply> body;
         try {
-            body = client.confirm(providerOrderId, ConfirmRequest.of(order, paymentKey, startAllowed),
+            body = client.confirm(providerOrderId, ConfirmRequest.of(target, paymentKey, startAllowed),
                     authorization(sessionToken));
         } catch (HttpClientErrorException.Unauthorized e) {
-            log.error("{} {} 전달 토큰 거절(401) — payment 의 JWKS · jwt 설정 · 폐기 조회 확인 orderId={}",
-                    DEPENDENCY, OPERATION, order.id());
+            log.error("{} {} 전달 토큰 거절(401) — payment 의 JWKS · jwt 설정 · 폐기 조회 확인 target={}",
+                    DEPENDENCY, OPERATION, target);
             return new PaymentConfirmation.Unanswered(new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
         } catch (HttpClientErrorException e) {
-            return rejected(order, providerOrderId, e);
+            return rejected(target, providerOrderId, e);
         } catch (ResourceAccessException e) {
             if (isConnectFailure(e)) {
                 return new PaymentConfirmation.Unanswered(InternalCallFailures.unavailable(DEPENDENCY,
-                        OPERATION + " 연결 실패 orderId=" + order.id(), e));
+                        OPERATION + " 연결 실패 target=" + target, e));
             }
-            log.warn("{} {} 결과 모름 — 응답을 받지 못함 orderId={} providerOrderId={} cause={}", DEPENDENCY, OPERATION,
-                    order.id(), providerOrderId, rootCause(e).getClass().getName());
+            log.warn("{} {} 결과 모름 — 응답을 받지 못함 target={} providerOrderId={} cause={}", DEPENDENCY, OPERATION,
+                    target, providerOrderId, rootCause(e).getClass().getName());
             return new PaymentConfirmation.Pending();
         } catch (RestClientException e) {
-            log.warn("{} {} 결과 모름 — 5xx · 읽을 수 없는 응답 orderId={} providerOrderId={}", DEPENDENCY, OPERATION,
-                    order.id(), providerOrderId, e);
+            log.warn("{} {} 결과 모름 — 5xx · 읽을 수 없는 응답 target={} providerOrderId={}", DEPENDENCY, OPERATION,
+                    target, providerOrderId, e);
             return new PaymentConfirmation.Pending();
         }
-        return read(order, providerOrderId, body == null ? null : body.data());
+        return read(target, providerOrderId, body == null ? null : body.data());
     }
 
     /**
@@ -89,38 +88,38 @@ public class PaymentConfirmer {
      *
      * @return Pending(아직 시작 전 · 진행 중) · Approved · Declined(끝난 결제창) · NotStartable(번호 없음 · 다른 주문) · Unanswered
      */
-    public PaymentConfirmation check(Order order, String providerOrderId, String paymentKey, String sessionToken) {
+    public PaymentConfirmation check(PayableTarget target, String providerOrderId, String paymentKey, String sessionToken) {
         ApiResponse<ConfirmReply> body;
         try {
-            body = client.confirm(providerOrderId, ConfirmRequest.check(order, paymentKey), authorization(sessionToken));
+            body = client.confirm(providerOrderId, ConfirmRequest.check(target, paymentKey), authorization(sessionToken));
         } catch (HttpClientErrorException.Unauthorized e) {
-            log.error("{} {} 전달 토큰 거절(401) — payment 의 JWKS · jwt 설정 · 폐기 조회 확인 orderId={}",
-                    DEPENDENCY, CHECK, order.id());
+            log.error("{} {} 전달 토큰 거절(401) — payment 의 JWKS · jwt 설정 · 폐기 조회 확인 target={}",
+                    DEPENDENCY, CHECK, target);
             return new PaymentConfirmation.Unanswered(new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
         } catch (HttpClientErrorException e) {
-            return rejected(order, providerOrderId, e);
+            return rejected(target, providerOrderId, e);
         } catch (RestClientException e) {
             if (InternalCallFailures.isUnreadableResponse(e)) {
                 return new PaymentConfirmation.Unanswered(InternalCallFailures.unreadableResponse(DEPENDENCY,
-                        CHECK + " orderId=" + order.id(), e));
+                        CHECK + " target=" + target, e));
             }
             return new PaymentConfirmation.Unanswered(InternalCallFailures.unavailable(DEPENDENCY,
-                    CHECK + " 응답 없음 orderId=" + order.id(), e));
+                    CHECK + " 응답 없음 target=" + target, e));
         }
         ConfirmReply reply = body == null ? null : body.data();
         if (!conforms(reply)) {
-            log.error("{} 연동 오류 {} 계약과 다른 응답 orderId={} providerOrderId={} reply={}",
-                    DEPENDENCY, CHECK, order.id(), providerOrderId, reply);
+            log.error("{} 연동 오류 {} 계약과 다른 응답 target={} providerOrderId={} reply={}",
+                    DEPENDENCY, CHECK, target, providerOrderId, reply);
             return new PaymentConfirmation.Unanswered(new IllegalStateException(DEPENDENCY + " 연동 오류: " + CHECK));
         }
-        return read(order, providerOrderId, reply);
+        return read(target, providerOrderId, reply);
     }
 
     /** 200 인데 모양이 계약과 다르면 시작했을 수 있어 Pending 이다. 다시 불러도 같으니 ERROR 로 남긴다. */
-    private static PaymentConfirmation read(Order order, String providerOrderId, ConfirmReply reply) {
+    private static PaymentConfirmation read(PayableTarget target, String providerOrderId, ConfirmReply reply) {
         if (!conforms(reply)) {
-            log.error("{} 연동 오류 {} 계약과 다른 응답 — 결과 모름으로 둔다 orderId={} providerOrderId={} reply={}",
-                    DEPENDENCY, OPERATION, order.id(), providerOrderId, reply);
+            log.error("{} 연동 오류 {} 계약과 다른 응답 — 결과 모름으로 둔다 target={} providerOrderId={} reply={}",
+                    DEPENDENCY, OPERATION, target, providerOrderId, reply);
             return new PaymentConfirmation.Pending();
         }
         return switch (reply.result()) {
@@ -139,29 +138,25 @@ public class PaymentConfirmer {
      * payment 의 거절을 옮긴다. 되돌려도 되는 것은 결제창이 영영 시작될 수 없다는 업무 코드뿐이다 — 코드는 응답 본문에서 읽으므로
      * 프레임워크 · 앞단이 낸 4xx(401 · 403 · 라우팅 404 등 본문 없는 것)는 여기 들지 않는다.
      */
-    private static PaymentConfirmation rejected(Order order, String providerOrderId, HttpClientErrorException e) {
+    private static PaymentConfirmation rejected(PayableTarget target, String providerOrderId, HttpClientErrorException e) {
         String code = errorCode(e);
         if ("PAYMENT_ATTEMPT_NOT_FOUND".equals(code)) {
-            log.info("{} {} 결제창 없음 · 다른 주문의 결제창 orderId={} providerOrderId={}", DEPENDENCY, OPERATION,
-                    order.id(), providerOrderId);
+            log.info("{} {} 결제창 없음 · 다른 대상의 결제창 target={} providerOrderId={}", DEPENDENCY, OPERATION,
+                    target, providerOrderId);
             return new PaymentConfirmation.NotStartable(new BusinessException(OrderErrorCode.PAYMENT_ATTEMPT_NOT_FOUND));
         }
         if ("PAYMENT_AMOUNT_MISMATCH".equals(code)) {
-            // 결제창이 주문 총액과 다른 금액으로 열렸다. 준비 API 는 늘 총액으로 여므로 다른 경로로 연 결제창이다
-            log.error("{} {} 결제창 금액이 주문 총액과 다름 orderId={} providerOrderId={}", DEPENDENCY, OPERATION,
-                    order.id(), providerOrderId);
+            // 결제창이 저장 금액과 다른 금액으로 열렸다. 준비 API 는 늘 저장 금액으로 여므로 다른 경로로 연 결제창이다
+            log.error("{} {} 결제창 금액이 저장 금액과 다름 target={} providerOrderId={}", DEPENDENCY, OPERATION,
+                    target, providerOrderId);
             return new PaymentConfirmation.NotStartable(new BusinessException(OrderErrorCode.PAYMENT_AMOUNT_MISMATCH));
         }
-        if ("PAYMENT_TARGET_UNSUPPORTED".equals(code)) {
-            return new PaymentConfirmation.NotStartable(
-                    InternalCallFailures.integrationError(DEPENDENCY, OPERATION + " orderId=" + order.id(), e));
-        }
         if ("PAYMENT_START_CONFLICT".equals(code)) {
-            log.warn("{} {} 동시 시작과 교착 — 이번 요청은 시작하지 않음 orderId={}", DEPENDENCY, OPERATION, order.id());
+            log.warn("{} {} 동시 시작과 교착 — 이번 요청은 시작하지 않음 target={}", DEPENDENCY, OPERATION, target);
             return new PaymentConfirmation.Unanswered(new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
         }
         return new PaymentConfirmation.Unanswered(
-                InternalCallFailures.integrationError(DEPENDENCY, OPERATION + " orderId=" + order.id(), e));
+                InternalCallFailures.integrationError(DEPENDENCY, OPERATION + " target=" + target, e));
     }
 
     private static String errorCode(HttpClientErrorException e) {

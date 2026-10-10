@@ -46,7 +46,8 @@ import java.lang.annotation.Target;
         "auth.revocation-check.fail-closed-paths[2]=/api/v1/me/**",
         "auth.revocation-check.fail-closed-paths[3]=/api/v1/orders/*/payment-attempts/**",
         "auth.revocation-check.fail-closed-paths[4]=POST /api/v1/orders/*/cancel",
-        "auth.revocation-check.fail-closed-paths[5]=PATCH /api/v1/orders/*/shipping-address"
+        "auth.revocation-check.fail-closed-paths[5]=PATCH /api/v1/orders/*/shipping-address",
+        "auth.revocation-check.fail-closed-paths[6]=/api/v1/draws/*/entries/me/payment-attempts/**"
 })
 @Import({MySqlContainerConfig.class, TestJwt.class})
 public @interface OrderIntegrationTest {

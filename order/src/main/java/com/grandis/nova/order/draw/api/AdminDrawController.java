@@ -4,6 +4,7 @@ import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.order.draw.AdminDrawService;
+import com.grandis.nova.order.draw.DrawQueryService;
 import com.grandis.nova.order.web.PageSizes;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -32,9 +33,11 @@ public class AdminDrawController {
     static final String BASE_PATH = "/api/v1/admin/draws";
 
     private final AdminDrawService service;
+    private final DrawQueryService queries;
 
-    public AdminDrawController(AdminDrawService service) {
+    public AdminDrawController(AdminDrawService service, DrawQueryService queries) {
         this.service = service;
+        this.queries = queries;
     }
 
     @PostMapping
@@ -42,7 +45,7 @@ public class AdminDrawController {
     public ResponseEntity<ApiResponse<DrawResponse>> create(@RequestHeader("Idempotency-Key") String idempotencyKey,
                                                             @Valid @RequestBody CreateDrawRequest request, HttpServletRequest httpRequest) {
         AdminDrawService.Created result = service.create(BearerTokens.extract(httpRequest).orElse(null), idempotencyKey, request.toCommand());
-        ApiResponse<DrawResponse> body = ApiResponse.ok(DrawResponse.of(result.campaign(), service.now()));
+        ApiResponse<DrawResponse> body = ApiResponse.ok(DrawResponse.of(result.campaign(), queries.now()));
         if (!result.created()) {
             return ResponseEntity.ok(body);
         }
@@ -54,13 +57,13 @@ public class AdminDrawController {
     public ApiResponse<OffsetPage<DrawResponse>> list(@RequestParam(defaultValue = "0") int page,
                                                       @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         int checkedSize = PageSizes.require(size);
-        Instant now = service.now();
-        return ApiResponse.ok(service.list(PageSizes.requirePage(page, checkedSize), checkedSize).map(c -> DrawResponse.of(c, now)));
+        Instant now = queries.now();
+        return ApiResponse.ok(queries.list(PageSizes.requirePage(page, checkedSize), checkedSize).map(c -> DrawResponse.of(c, now)));
     }
 
     @GetMapping("/{drawId}")
     @Operation(summary = "회차 상세")
     public ApiResponse<DrawResponse> get(@PathVariable UUID drawId) {
-        return ApiResponse.ok(DrawResponse.of(service.get(drawId), service.now()));
+        return ApiResponse.ok(DrawResponse.of(queries.get(drawId), queries.now()));
     }
 }

@@ -12,6 +12,8 @@ public enum InboundEventType {
     ORDER_PAYMENT_SETTLED,
     /** payment: 취소 중인 주문의 환불이 확정됐다(완료 · 실패). */
     ORDER_REFUND_SETTLED,
+    /** payment: 응모비 결제가 확정됐다(승인 · 거절). 응모비 승인 API 의 동기 응답과 같은 전이를 멱등으로 반영한다. */
+    DRAW_ENTRY_PAYMENT_SETTLED,
     /** catalog: 일반 판매 상품을 등록했다. 옵션별 초기 재고를 만든다(contracts/catalog-events.md). */
     IN_STOCK_PRODUCT_REGISTERED
 }

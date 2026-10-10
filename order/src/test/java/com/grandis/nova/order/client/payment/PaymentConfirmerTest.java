@@ -110,7 +110,7 @@ class PaymentConfirmerTest {
                 .andExpect(content().json("{\"startAllowed\":false,\"reserve\":false}", JsonCompareMode.LENIENT))
                 .andRespond(reply("PENDING", null));
 
-        assertThat(confirmer.confirm(ORDER, PROVIDER_ORDER_ID, PAYMENT, SESSION, false))
+        assertThat(confirmer.confirm(PayableTarget.of(ORDER), PROVIDER_ORDER_ID, PAYMENT, SESSION, false))
                 .isEqualTo(new PaymentConfirmation.Pending());
         server.verify();
     }
@@ -130,14 +130,6 @@ class PaymentConfirmerTest {
 
         assertNotStartable(confirm(), OrderErrorCode.PAYMENT_AMOUNT_MISMATCH);
         assertThat(output.getAll()).contains("ERROR");
-    }
-
-    @Test
-    void unsupportedTargetIsNotStartableIntegrationError() {
-        server.expect(requestTo(CONFIRM_URL)).andRespond(rejected(HttpStatus.BAD_REQUEST, "PAYMENT_TARGET_UNSUPPORTED"));
-
-        assertThat(confirm()).isInstanceOfSatisfying(PaymentConfirmation.NotStartable.class, notStartable ->
-                assertThat(notStartable.failure()).isInstanceOf(IllegalStateException.class));
     }
 
     // ── 이번 요청만 거절 · 닿지 못함: 앞선 요청이 이미 시작했을 수 있어 되돌리지 않는다 ─────────────
@@ -261,15 +253,15 @@ class PaymentConfirmerTest {
 
     @Test
     void requestToStringMasksPaymentKey() {
-        assertThat(ConfirmRequest.of(ORDER, PAYMENT, true).toString()).doesNotContain(PAYMENT).contains("1250000");
+        assertThat(ConfirmRequest.of(PayableTarget.of(ORDER), PAYMENT, true).toString()).doesNotContain(PAYMENT).contains("1250000");
     }
 
     private PaymentConfirmation confirm() {
-        return confirmer.confirm(ORDER, PROVIDER_ORDER_ID, PAYMENT, SESSION, true);
+        return confirmer.confirm(PayableTarget.of(ORDER), PROVIDER_ORDER_ID, PAYMENT, SESSION, true);
     }
 
     private PaymentConfirmation check() {
-        return confirmer.check(ORDER, PROVIDER_ORDER_ID, PAYMENT, SESSION);
+        return confirmer.check(PayableTarget.of(ORDER), PROVIDER_ORDER_ID, PAYMENT, SESSION);
     }
 
     private static ResponseCreator reply(String result, String declineReason) {

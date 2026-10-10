@@ -11,8 +11,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
 
-import java.math.BigDecimal;
-import java.util.UUID;
 
 /**
  * 주문의 결제창을 열 거래를 payment 에 만든다. 트랜잭션 밖에서 부른다(DB 잠금을 payment 응답 시간만큼 붙잡지 않게).
@@ -41,26 +39,26 @@ public class PaymentPreparer {
     }
 
     /**
-     * @param amount       주문의 저장된 총액
+     * @param target       결제 대상과 그 저장 금액
      * @param sessionToken 사용자가 보낸 액세스 토큰 원문(접두어 없음). null 이면 싣지 않는다(payment 가 401)
      * @throws BusinessException     DEPENDENCY_UNAVAILABLE — 타임아웃 · 연결 실패 · 5xx · payment 가 토큰을 거절(401)
      * @throws IllegalStateException 연동 오류(500) — 그 밖의 4xx, 읽을 수 없는 응답, 보낸 금액과 다른 응답
      */
-    public PaymentAttempt openCapture(UUID orderId, BigDecimal amount, String sessionToken) {
-        PaymentAttempt attempt = call(CaptureRequest.order(orderId, amount), sessionToken);
-        requireOpenedFor(orderId, amount, attempt);
+    public PaymentAttempt openCapture(PayableTarget target, String sessionToken) {
+        PaymentAttempt attempt = call(CaptureRequest.of(target), sessionToken);
+        requireOpenedFor(target, attempt);
         return attempt;
     }
 
     /**
-     * 결제창에 띄울 값이 보낸 주문 총액 그대로인가. 다른 금액을 프론트에 넘기면 사용자가 그 금액으로 결제창을 연다.
+     * 결제창에 띄울 값이 보낸 저장 금액 그대로인가. 다른 금액을 프론트에 넘기면 사용자가 그 금액으로 결제창을 연다.
      * 다시 불러도 같으므로 연동 오류(500)다.
      */
-    private static void requireOpenedFor(UUID orderId, BigDecimal amount, PaymentAttempt attempt) {
+    private static void requireOpenedFor(PayableTarget target, PaymentAttempt attempt) {
         if (attempt == null || attempt.providerOrderId() == null || attempt.amount() == null
-                || attempt.amount().compareTo(amount) != 0) {
-            log.error("{} 연동 오류 {} 요청과 다른 응답 orderId={} amount={} returned={}",
-                    DEPENDENCY, OPERATION, orderId, amount, attempt);
+                || attempt.amount().compareTo(target.amount()) != 0) {
+            log.error("{} 연동 오류 {} 요청과 다른 응답 target={} amount={} returned={}",
+                    DEPENDENCY, OPERATION, target, target.amount(), attempt);
             throw new IllegalStateException(DEPENDENCY + " 연동 오류: 요청과 다른 응답");
         }
     }

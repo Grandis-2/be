@@ -4,6 +4,8 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.client.payment.PaymentConfirmation;
+import com.grandis.nova.order.client.payment.PayableTarget;
+import com.grandis.nova.order.client.payment.PaymentConfirmSlots;
 import com.grandis.nova.order.client.payment.PaymentConfirmer;
 import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.domain.model.Order;
@@ -13,7 +15,6 @@ import com.grandis.nova.order.order.vo.EventCause;
 import com.grandis.nova.order.order.vo.OrderToken;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -21,7 +22,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.util.UUID;
-import java.util.concurrent.Semaphore;
 
 /**
  * 결제 승인: 결제창 인증을 마친 결제를 payment 에 승인시키고 결과를 주문에 반영한다. 돈이 실제로 움직이는 단계다.
@@ -30,7 +30,7 @@ import java.util.concurrent.Semaphore;
  * → [tx] 승인 중 + 결제창 번호 → payment 승인(트랜잭션 밖) → [tx] 결과 반영({@link PaymentResults}).
  *
  * - 사용자가 보낸 금액은 기대값이 아니라 대조 대상이다(D15). 다르면 아무것도 바꾸지 않고 거절한다. payment 에는 주문의
- *   저장 총액이 간다(ConfirmRequest.of(order, …) — 금액을 따로 넘길 길이 없다).
+ *   저장 총액이 간다(PayableTarget.of(order) — 금액을 따로 넘길 길이 없다).
  * - 결제 대기로 되돌리는 것은 payment 가 "이 결제창은 앞으로도 시작될 수 없다" 고 확언할 때뿐이다(PaymentConfirmer). 이번 요청이
  *   닿지 못했거나 거절됐으면 주문은 그대로 두고 오류로 답한다 — 앞선 요청이 같은 결제창을 이미 시작했을 수 있다.
  * - 승인 중인 주문에 같은 결제창으로 다시 오면 payment 에 다시 물어 결과를 회수한다. 결제창이 아직 시작 전이면 이 요청이 시작하므로
@@ -39,7 +39,7 @@ import java.util.concurrent.Semaphore;
  *   결과를 낸다 — 시작 전에 멈춘 결제창은 payment 의 만료가 "결제창 만료" 거절을, 시작된 결제창은 복구가 확정 결과를 이벤트로 보낸다.
  *   확인에 답을 받지 못하면 아무것도 바꾸지 않고 오류로 답한다(모르는 번호로 승인 중이 되면 아무도 풀지 못한다).
  * - 이미 결제된 주문이면 APPROVED 로 답한다(주문당 성공 결제는 하나).
- * - 승인 호출은 payment 응답을 최대 70초 기다린다. 동시 상한을 넘으면 상태를 바꾸기 전에 503 으로 거절한다 — 토스가 느려져도
+ * - 승인 호출은 payment 응답을 최대 70초 기다린다. 동시 상한(응모비 승인과 나눠 씀 — {@link PaymentConfirmSlots})을 넘으면 상태를 바꾸기 전에 503 으로 거절한다 — 토스가 느려져도
  *   결제와 무관한 주문 API 의 요청 스레드가 남는다.
  * - 외부 호출 동안 잠금을 쥐지 않도록 트랜잭션은 짧게 연다. 바깥 트랜잭션 안에서 부르면 들어올 때 거절한다.
  *
@@ -57,17 +57,12 @@ public class ConfirmPaymentService {
     private final PaymentResults results;
     private final TransactionTemplate writeTransaction;
     private final TransactionTemplate readTransaction;
-    private final Semaphore inFlight;
+    private final PaymentConfirmSlots slots;
 
-    /** @param maxConcurrency 인스턴스당 동시에 payment 승인을 기다리는 요청 수 상한(Tomcat 요청 스레드 200 중 일부) */
     ConfirmPaymentService(OrderReader orderReader, OrderLedger ledger, PayabilityGate payability,
-                          PaymentConfirmer confirmer, PaymentResults results,
-                          PlatformTransactionManager transactionManager,
-                          @Value("${nova.payment-confirm.max-concurrency:50}") int maxConcurrency) {
-        if (maxConcurrency < 1) {
-            throw new IllegalArgumentException("nova.payment-confirm.max-concurrency 는 1 이상이어야 한다: " + maxConcurrency);
-        }
-        this.inFlight = new Semaphore(maxConcurrency);
+                          PaymentConfirmer confirmer, PaymentResults results, PaymentConfirmSlots slots,
+                          PlatformTransactionManager transactionManager) {
+        this.slots = slots;
         this.orderReader = orderReader;
         this.ledger = ledger;
         this.payability = payability;
@@ -97,14 +92,14 @@ public class ConfirmPaymentService {
         if (order.totalAmount().amount().compareTo(amount) != 0) {
             throw new BusinessException(OrderErrorCode.PAYMENT_AMOUNT_MISMATCH);
         }
-        if (!inFlight.tryAcquire()) {
+        if (!slots.tryAcquire()) {
             log.warn("결제 승인 동시 상한 초과 — 상태를 바꾸지 않고 거절 orderId={}", order.id());
             throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
         }
         try {
             return proceed(order, sessionToken, providerOrderId, paymentKey, true);
         } finally {
-            inFlight.release();
+            slots.release();
         }
     }
 
@@ -129,7 +124,7 @@ public class ConfirmPaymentService {
 
     private ConfirmedPayment start(Order order, String sessionToken, String providerOrderId, String paymentKey) {
         payability.require(order, sessionToken);
-        switch (confirmer.check(order, providerOrderId, paymentKey, sessionToken)) {
+        switch (confirmer.check(PayableTarget.of(order), providerOrderId, paymentKey, sessionToken)) {
             case PaymentConfirmation.Pending pending -> {
             }
             case PaymentConfirmation.Approved approved -> {
@@ -177,7 +172,7 @@ public class ConfirmPaymentService {
 
     private ConfirmedPayment call(Order order, String providerOrderId, String paymentKey, String sessionToken,
                                   boolean startAllowed) {
-        return switch (confirmer.confirm(order, providerOrderId, paymentKey, sessionToken, startAllowed)) {
+        return switch (confirmer.confirm(PayableTarget.of(order), providerOrderId, paymentKey, sessionToken, startAllowed)) {
             case PaymentConfirmation.Approved approved ->
                     ConfirmedPayment.approved(results.approved(order.id(), providerOrderId).status());
             case PaymentConfirmation.Declined declined -> new ConfirmedPayment(ConfirmedPayment.Result.DECLINED,
