@@ -1,5 +1,6 @@
 package com.grandis.nova.order.stock.admin;
 
+import com.grandis.nova.order.MySqlLockFailures;
 import com.grandis.nova.order.stock.domain.repository.StockWriter;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
@@ -24,7 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
- * 서비스가 다시 할지 가르는 기준({@link AdminStockService#isDeadlock})을 MySQL 의 진짜 오류로 본다.
+ * 서비스가 다시 할지 가르는 기준({@link MySqlLockFailures#isDeadlock})을 MySQL 의 진짜 오류로 본다.
  * 재고 쓰기의 두 경로 — 잠금 읽기 · 조건부 UPDATE(JPA 네이티브 쿼리)와 INSERT(persist + flush) — 에서 올라온 예외 모두
  * 교착(1213)과 잠금 대기 초과(1205)가 갈려야 한다.
  */
@@ -80,7 +81,7 @@ class LockFailureClassificationTest {
 
         assertThat(failure).isInstanceOf(PessimisticLockingFailureException.class);
         assertThat(vendorCode(failure)).isEqualTo(1205);
-        assertThat(AdminStockService.isDeadlock(failure)).isFalse();
+        assertThat(MySqlLockFailures.isDeadlock(failure)).isFalse();
     }
 
     /** INSERT 의 FK 검사는 product_options 부모 행에 S 잠금을 잡는다. 그 행을 다른 트랜잭션이 X 로 쥐고 있으면 기다리다 1205 다. */
@@ -115,7 +116,7 @@ class LockFailureClassificationTest {
 
         assertThat(failure).isInstanceOf(PessimisticLockingFailureException.class);
         assertThat(vendorCode(failure)).isEqualTo(1205);
-        assertThat(AdminStockService.isDeadlock(failure)).isFalse();
+        assertThat(MySqlLockFailures.isDeadlock(failure)).isFalse();
     }
 
     /** 서로 상대가 아직 커밋하지 않은 옵션을 삽입하면 PK 중복 확인끼리 기다려 교착한다. 진 쪽은 PK 중복이 아니라 1213 이다. */
@@ -132,7 +133,7 @@ class LockFailureClassificationTest {
         assertThat(failures).hasSize(1);
         assertThat(failures.getFirst()).isInstanceOf(PessimisticLockingFailureException.class);
         assertThat(vendorCode(failures.getFirst())).isEqualTo(1213);
-        assertThat(AdminStockService.isDeadlock(failures.getFirst())).isTrue();
+        assertThat(MySqlLockFailures.isDeadlock(failures.getFirst())).isTrue();
     }
 
     @Test
@@ -148,7 +149,7 @@ class LockFailureClassificationTest {
         assertThat(failures).hasSize(1);
         assertThat(failures.getFirst()).isInstanceOf(PessimisticLockingFailureException.class);
         assertThat(vendorCode(failures.getFirst())).isEqualTo(1213);
-        assertThat(AdminStockService.isDeadlock(failures.getFirst())).isTrue();
+        assertThat(MySqlLockFailures.isDeadlock(failures.getFirst())).isTrue();
     }
 
     /** first 를 잠그고, 상대도 잠근 뒤 second 를 잠근다. 진 쪽의 예외를 돌려준다. */

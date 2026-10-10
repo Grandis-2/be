@@ -3,6 +3,7 @@ package com.grandis.nova.order.stock.admin;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.web.ApiError;
+import com.grandis.nova.order.MySqlLockFailures;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.stock.StockLedger;
 import com.grandis.nova.order.stock.domain.enums.SaleMode;
@@ -20,7 +21,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -47,9 +47,6 @@ public class AdminStockService {
     private static final Logger log = LoggerFactory.getLogger(AdminStockService.class);
 
     static final int MAX_ATTEMPTS = 3;
-
-    /** ER_LOCK_DEADLOCK */
-    static final int MYSQL_DEADLOCK = 1213;
 
     private final StockLedger ledger;
     private final StockReader stockReader;
@@ -126,7 +123,7 @@ public class AdminStockService {
                                 .map(s -> Map.of("optionId", s.optionId(), "committed", s.committed()))
                                 .toList()));
             } catch (StockAlreadyCreatedException | PessimisticLockingFailureException e) {
-                if (e instanceof PessimisticLockingFailureException && !isDeadlock(e)) {
+                if (e instanceof PessimisticLockingFailureException && !MySqlLockFailures.isDeadlock(e)) {
                     log.warn("재고 변경 잠금 대기 초과, 다시 하지 않음 productId={}", productId, e);
                     throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
                 }
@@ -138,23 +135,6 @@ public class AdminStockService {
                         e.getClass().getSimpleName());
             }
         }
-    }
-
-    /**
-     * MySQL 교착(1213)인가. 원인 사슬의 벤더 코드로 가른다 — 재고 쓰기 경로에서 1213 과 1205 는 같은 Spring 예외
-     * (CannotAcquireLockException)와 같은 SQLState(40001)로 올라와 예외 클래스로도 SQLState 로도 못 가른다
-     * (LockFailureClassificationTest 가 진짜 오류로 확인).
-     */
-    static boolean isDeadlock(Throwable e) {
-        for (Throwable t = e; t != null; t = t.getCause()) {
-            // 일괄 실행(BatchUpdateException 등)은 원인을 getNextException 사슬에 단다
-            for (SQLException sql = t instanceof SQLException s ? s : null; sql != null; sql = sql.getNextException()) {
-                if (sql.getErrorCode() == MYSQL_DEADLOCK) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     private void requireStockedProduct(UUID productId) {

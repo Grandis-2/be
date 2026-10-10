@@ -30,7 +30,13 @@ public enum OrderErrorCode implements ErrorCode {
     /** 사전예약은 선점이 없어 재고 행을 두지 않는다. */
     STOCK_NOT_TRACKED(409, "사전예약 상품은 재고를 두지 않습니다."),
     /** details.options 에 걸린 옵션과 줄일 수 있는 하한(committed)을 모두 싣는다. */
-    STOCK_BELOW_COMMITTED(409, "확보 · 판매된 수량보다 적게 줄일 수 없습니다.");
+    STOCK_BELOW_COMMITTED(409, "확보 · 판매된 수량보다 적게 줄일 수 없습니다."),
+    /** 사전예약 상품은 장바구니에 담지 않는다(명세 F-U-07). */
+    PREORDER_NOT_CARTABLE(409, "사전예약은 장바구니에 담을 수 없습니다."),
+    /** 담거나 바꾸려는 수량(같은 줄에 합산한 값)이 가용 재고보다 많다. 재고는 확인만 하고 확보하지 않는다. */
+    INSUFFICIENT_STOCK(409, "가용 재고보다 많이 담을 수 없습니다."),
+    /** 지금 상태로는 할 수 없다 — 판매 중지 상품 담기 등. 이름 · 문구는 catalog 의 같은 코드와 같다. */
+    STATE_CONFLICT(409, "현재 상태에서는 처리할 수 없습니다. 최신 상태를 조회해 주세요.");
 
     private final int status;
     private final String message;

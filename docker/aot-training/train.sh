@@ -193,6 +193,7 @@ app_json() {
         preorder: {"spring.http.serviceclient.catalog.base-url": url("catalog"),
                    "spring.http.serviceclient.order.base-url": url("order")},
         order: {"spring.http.serviceclient.preorder.base-url": url("preorder"),
+                "spring.http.serviceclient.catalog.base-url": url("catalog"),
                 "spring.http.serviceclient.payment.base-url": url("payment"),
                 "spring.http.serviceclient.payment-confirm.base-url": url("payment")},
         payment: {"spring.http.serviceclient.toss.base-url": "http://127.0.0.1:\($toss)"},

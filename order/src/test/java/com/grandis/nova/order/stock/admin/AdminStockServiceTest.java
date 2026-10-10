@@ -1,5 +1,6 @@
 package com.grandis.nova.order.stock.admin;
 
+import com.grandis.nova.order.MySqlLockFailures;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.web.ApiError;
@@ -96,10 +97,10 @@ class AdminStockServiceTest {
     @Test
     void deadlockIsFoundInNextExceptionChain() {
         BatchUpdateException batch = new BatchUpdateException("batch failed", "40001", 0, new int[0]);
-        batch.setNextException(new SQLException("Deadlock found", "40001", AdminStockService.MYSQL_DEADLOCK));
+        batch.setNextException(new SQLException("Deadlock found", "40001", MySqlLockFailures.MYSQL_DEADLOCK));
 
-        assertThat(AdminStockService.isDeadlock(new CannotAcquireLockException("batch", batch))).isTrue();
-        assertThat(AdminStockService.isDeadlock(new CannotAcquireLockException("timeout",
+        assertThat(MySqlLockFailures.isDeadlock(new CannotAcquireLockException("batch", batch))).isTrue();
+        assertThat(MySqlLockFailures.isDeadlock(new CannotAcquireLockException("timeout",
                 new SQLException("Lock wait timeout exceeded", "40001", 1205)))).isFalse();
     }
 
@@ -196,6 +197,6 @@ class AdminStockServiceTest {
 
     private static CannotAcquireLockException deadlock() {
         return new CannotAcquireLockException("Deadlock found",
-                new SQLException("Deadlock found when trying to get lock", "40001", AdminStockService.MYSQL_DEADLOCK));
+                new SQLException("Deadlock found when trying to get lock", "40001", MySqlLockFailures.MYSQL_DEADLOCK));
     }
 }

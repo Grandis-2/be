@@ -35,6 +35,11 @@ spring:
         base-url: http://localhost:8083
         connect-timeout: 300ms
         read-timeout: 1s
+      # 장바구니 조회 · 담기 때 옵션 일괄 조회(GET /internal/options). 답이 없으면 503 이다(장바구니는 바꾸지 않는다)
+      catalog:
+        base-url: http://localhost:8082
+        connect-timeout: 300ms
+        read-timeout: 1s
       # 결제 준비 때 결제창을 열 거래 생성(POST /internal/payment-attempts). 토스를 부르지 않는 짧은 호출이라 preorder 와 같은 수준이다.
       # 답이 없으면 503 이고, payment 가 이미 만든 거래는 버려진 PENDING 으로 남는다(사용자가 다시 부른다)
       payment:
@@ -123,3 +128,14 @@ jwt:
   audience: nova-api
   jwk-set-uri: https://member.example.com/.well-known/jwks.json
   # jwk-set-allow-http: true    # VPC 안 Cloud Map 주소(http://member.ureca.local:8080/…)를 쓰는 동안만 명시. 서비스 간 TLS 가 붙으면 지운다
+
+# 장바구니의 catalog 호출 장애 대응(서킷 브레이커 · 동시 호출 상한). 기본값은 코드(OrderDefaults)에 있고, 바꿀 때만 여기서 덮는다
+# resilience4j:
+#   circuitbreaker:
+#     instances:
+#       catalog:
+#         wait-duration-in-open-state: 30s
+#   bulkhead:
+#     instances:
+#       catalog:
+#         max-concurrent-calls: 40
