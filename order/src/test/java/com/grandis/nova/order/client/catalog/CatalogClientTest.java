@@ -1,5 +1,9 @@
 package com.grandis.nova.order.client.catalog;
 
+import io.github.resilience4j.bulkhead.Bulkhead;
+import io.github.resilience4j.bulkhead.BulkheadConfig;
+import io.github.resilience4j.bulkhead.BulkheadRegistry;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.security.BearerTokens;
@@ -15,6 +19,7 @@ import org.springframework.web.client.support.RestClientAdapter;
 import org.springframework.web.service.invoker.HttpServiceProxyFactory;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,6 +46,8 @@ class CatalogClientTest {
     static final String SESSION = "order-catalog-client-test-user";
 
     MockRestServiceServer server;
+    CircuitBreakerRegistry circuitBreakers;
+    BulkheadRegistry bulkheads;
     CatalogReader reader;
 
     @BeforeEach
@@ -49,7 +56,9 @@ class CatalogClientTest {
         server = MockRestServiceServer.bindTo(builder).build();
         CatalogClient client = HttpServiceProxyFactory.builderFor(RestClientAdapter.create(builder.build())).build()
                 .createClient(CatalogClient.class);
-        reader = new CatalogReader(client);
+        circuitBreakers = CircuitBreakerRegistry.ofDefaults();
+        bulkheads = BulkheadRegistry.of(BulkheadConfig.custom().maxConcurrentCalls(1).maxWaitDuration(Duration.ZERO).build());
+        reader = new CatalogReader(client, circuitBreakers, bulkheads);
     }
 
     @Test
@@ -155,6 +164,31 @@ class CatalogClientTest {
         server.expect(requestTo(org.hamcrest.Matchers.startsWith("http://catalog/internal/options")))
                 .andRespond(withSuccess(envelope(item(FIRST)), MediaType.APPLICATION_JSON));
         assertThat(reader.find(List.of(FIRST), SESSION)).as("대조군 — 고치지 않은 같은 줄은 읽힌다").containsOnlyKeys(FIRST);
+    }
+
+    @Test
+    @DisplayName("회로가 열렸거나 동시 호출 상한이 차면 catalog 를 부르지 않고 DEPENDENCY_UNAVAILABLE(503)")
+    void openCircuitOrFullBulkheadIsUnavailableWithoutCalling() {
+        circuitBreakers.circuitBreaker(CatalogReader.DEPENDENCY).transitionToOpenState();
+        assertThatThrownBy(() -> reader.find(List.of(FIRST), SESSION))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
+        circuitBreakers.circuitBreaker(CatalogReader.DEPENDENCY).reset();
+
+        Bulkhead bulkhead = bulkheads.bulkhead(CatalogReader.DEPENDENCY);
+        bulkhead.acquirePermission();
+        try {
+            assertThatThrownBy(() -> reader.find(List.of(FIRST), SESSION))
+                    .isInstanceOfSatisfying(BusinessException.class,
+                            e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
+        } finally {
+            bulkhead.onComplete();
+        }
+        server.verify();   // 기대한 요청이 없다 — 두 번 다 부르지 않았다
+
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("http://catalog/internal/options")))
+                .andRespond(withSuccess(envelope(item(FIRST)), MediaType.APPLICATION_JSON));
+        assertThat(reader.find(List.of(FIRST), SESSION)).as("대조군 — 닫히고 비면 부른다").containsOnlyKeys(FIRST);
     }
 
     private static String item(UUID optionId) {

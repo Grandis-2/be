@@ -1,5 +1,6 @@
 package com.grandis.nova.order.config;
 
+import com.grandis.nova.order.client.catalog.CatalogReader;
 import org.springframework.boot.EnvironmentPostProcessor;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.WebApplicationType;
@@ -9,6 +10,7 @@ import org.springframework.core.Ordered;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -19,13 +21,40 @@ class OrderDefaults implements EnvironmentPostProcessor, Ordered {
 
     static final String SOURCE_NAME = "orderDefaults";
 
-    static final Map<String, Object> DEFAULTS = Map.of(
-            // 헬스는 서비스 포트(8084)와 나눈 관리 포트로만 내놓는다. ALB 헬스 체크는 이 포트의 readiness 를 본다
-            "management.server.port", "9084",
-            "management.endpoints.web.exposure.include", "health",
-            "management.endpoint.health.probes.enabled", "true",
-            // readiness 는 앱의 준비 상태만 본다. DB · Redis 를 넣으면 공용 의존성 장애 한 번에 모든 태스크가 비정상이 된다
-            "management.endpoint.health.group.readiness.include", "readinessState");
+    static final Map<String, Object> DEFAULTS = defaults();
+
+    private static Map<String, Object> defaults() {
+        Map<String, Object> defaults = new LinkedHashMap<>();
+        // 헬스는 서비스 포트(8084)와 나눈 관리 포트로만 내놓는다. ALB 헬스 체크는 이 포트의 readiness 를 본다
+        defaults.put("management.server.port", "9084");
+        defaults.put("management.endpoints.web.exposure.include", "health");
+        defaults.put("management.endpoint.health.probes.enabled", "true");
+        // readiness 는 앱의 준비 상태만 본다. DB · Redis 를 넣으면 공용 의존성 장애 한 번에 모든 태스크가 비정상이 된다
+        defaults.put("management.endpoint.health.group.readiness.include", "readinessState");
+        catalogResilience(defaults);
+        return Map.copyOf(defaults);
+    }
+
+    /**
+     * 장바구니의 catalog 호출 장애 대응(preorder 의 내부 호출과 같은 값). 서킷 브레이커(50건 중 실패 · 1초 넘는 호출이 절반이면 10초 열림)
+     * → 동시 호출 상한(20, 기다리지 않음). 4xx 와 상한 초과는 상대 장애가 아니라 회로의 실패로 세지 않는다. 재시도는 하지 않는다 —
+     * 화면 조회라 사용자가 다시 부르고, 읽기 1초에 재시도가 붙으면 응답이 그만큼 늘어난다. 값은 부하 실측으로 확정한다.
+     */
+    private static void catalogResilience(Map<String, Object> defaults) {
+        String circuitBreaker = "resilience4j.circuitbreaker.instances." + CatalogReader.DEPENDENCY + ".";
+        defaults.put(circuitBreaker + "sliding-window-size", 50);
+        defaults.put(circuitBreaker + "minimum-number-of-calls", 20);
+        defaults.put(circuitBreaker + "failure-rate-threshold", 50);
+        defaults.put(circuitBreaker + "slow-call-duration-threshold", "1s");
+        defaults.put(circuitBreaker + "slow-call-rate-threshold", 50);
+        defaults.put(circuitBreaker + "wait-duration-in-open-state", "10s");
+        defaults.put(circuitBreaker + "permitted-number-of-calls-in-half-open-state", 5);
+        defaults.put(circuitBreaker + "ignore-exceptions",
+                "org.springframework.web.client.HttpClientErrorException,io.github.resilience4j.bulkhead.BulkheadFullException");
+        String bulkhead = "resilience4j.bulkhead.instances." + CatalogReader.DEPENDENCY + ".";
+        defaults.put(bulkhead + "max-concurrent-calls", 20);
+        defaults.put(bulkhead + "max-wait-duration", "0");
+    }
 
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {

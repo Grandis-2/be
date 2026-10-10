@@ -4,6 +4,12 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.web.client.InternalCallFailures;
+import io.github.resilience4j.bulkhead.Bulkhead;
+import io.github.resilience4j.bulkhead.BulkheadFullException;
+import io.github.resilience4j.bulkhead.BulkheadRegistry;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -19,6 +25,9 @@ import java.util.UUID;
  * 장바구니에 쓸 옵션 정보. 부를 때마다 catalog 에 묻는다 — 가격 · 판매 상태가 바뀌므로 캐시하지 않는다.
  * 트랜잭션 밖에서 부른다(DB 잠금을 catalog 응답 시간만큼 붙잡지 않게).
  *
+ * 요청 스레드에서 부르므로 서킷 브레이커 → 동시 호출 상한을 거친다(설정 기본값은 OrderDefaults). 회로가 열렸거나 상한이 차면
+ * 부르지 않고 503 이다 — catalog 가 느려져도 장바구니와 무관한 주문 API 의 요청 스레드가 남는다.
+ *
  * 사용자의 액세스 토큰을 Authorization: Bearer 로 그대로 싣는다. 토큰은 로그 · 예외 메시지에 싣지 않는다.
  */
 @Component
@@ -26,20 +35,26 @@ public class CatalogReader {
 
     private static final Logger log = LoggerFactory.getLogger(CatalogReader.class);
 
-    static final String DEPENDENCY = "catalog";
+    /** 장애 대응 설정(resilience4j.*.instances.catalog)과 같은 이름. */
+    public static final String DEPENDENCY = "catalog";
     static final String OPERATION = "getOptions";
 
     private final CatalogClient catalogClient;
+    private final CircuitBreaker circuitBreaker;
+    private final Bulkhead bulkhead;
 
-    public CatalogReader(CatalogClient catalogClient) {
+    public CatalogReader(CatalogClient catalogClient, CircuitBreakerRegistry circuitBreakers, BulkheadRegistry bulkheads) {
         this.catalogClient = catalogClient;
+        this.circuitBreaker = circuitBreakers.circuitBreaker(DEPENDENCY);
+        this.bulkhead = bulkheads.bulkhead(DEPENDENCY);
     }
 
     /**
      * 옵션 id → 사실. 없는 옵션은 빠진다(호출자가 "판매 종료" 로 판정). 빈 묶음이면 부르지 않는다.
      *
      * @param sessionToken 사용자가 보낸 액세스 토큰 원문(접두어 없음). null 이면 싣지 않는다(catalog 가 401)
-     * @throws BusinessException     UNAUTHENTICATED — catalog 가 토큰을 거절(401). DEPENDENCY_UNAVAILABLE — 타임아웃 · 연결 실패 · 5xx
+     * @throws BusinessException     UNAUTHENTICATED — catalog 가 토큰을 거절(401). DEPENDENCY_UNAVAILABLE — 타임아웃 · 연결 실패 · 5xx,
+     *                               회로 열림 · 동시 호출 상한
      * @throws IllegalStateException 연동 오류(500) — 그 밖의 4xx(경로 없음 · 계약 어긋남), 읽을 수 없는 응답, 판정 칸이 빠진 옵션 · 묻지 않은 옵션
      */
     public Map<UUID, CatalogOption> find(Collection<UUID> optionIds, String sessionToken) {
@@ -49,7 +64,14 @@ public class CatalogReader {
         }
         CatalogOptions options;
         try {
-            options = catalogClient.getOptions(optionIds, authorization(sessionToken)).data();
+            options = CircuitBreaker.decorateSupplier(circuitBreaker, Bulkhead.decorateSupplier(bulkhead,
+                    () -> catalogClient.getOptions(optionIds, authorization(sessionToken)).data())).get();
+        } catch (CallNotPermittedException e) {
+            log.warn("{} 회로가 열려 호출하지 않는다", DEPENDENCY);
+            throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+        } catch (BulkheadFullException e) {
+            log.warn("{} 동시 호출 상한이 찼다", DEPENDENCY);
+            throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
         } catch (HttpClientErrorException.Unauthorized e) {
             throw new BusinessException(CommonErrorCode.UNAUTHENTICATED);
         } catch (HttpClientErrorException e) {

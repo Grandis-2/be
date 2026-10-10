@@ -128,7 +128,7 @@ public class CartService {
         return write("수량 변경", customerId, () -> {
             CartLine line = store.lockLine(customerId, lineId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
             requireAvailable(line.optionId(), quantity);
-            store.changeQuantity(line.id(), quantity, clock.instant());
+            requireChanged(store.changeQuantity(line.id(), quantity, clock.instant()), line);
             return new CartLine(line.id(), customerId, line.optionId(), line.warranty(), quantity);
         });
     }
@@ -155,10 +155,17 @@ public class CartService {
         requireAvailable(optionId, next);
         if (existing.isPresent()) {
             CartLine line = existing.get();
-            store.changeQuantity(line.id(), next, clock.instant());
+            requireChanged(store.changeQuantity(line.id(), next, clock.instant()), line);
             return new CartLine(line.id(), customerId, optionId, warranty, next);
         }
         return store.insert(customerId, optionId, warranty, quantity);
+    }
+
+    /** 잠가 읽은 줄이라 늘 1행이다. 아니면 저장하지 않은 수량을 성공으로 돌려주게 되므로 롤백한다. */
+    private static void requireChanged(int updated, CartLine line) {
+        if (updated != 1) {
+            throw new IllegalStateException("잠근 장바구니 줄의 수량 변경이 " + updated + "행: lineId=" + line.id());
+        }
     }
 
     private static void requireCartable(CartOption option, boolean warranty) {

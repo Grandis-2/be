@@ -128,3 +128,14 @@ jwt:
   audience: nova-api
   jwk-set-uri: https://member.example.com/.well-known/jwks.json
   # jwk-set-allow-http: true    # VPC 안 Cloud Map 주소(http://member.ureca.local:8080/…)를 쓰는 동안만 명시. 서비스 간 TLS 가 붙으면 지운다
+
+# 장바구니의 catalog 호출 장애 대응(서킷 브레이커 · 동시 호출 상한). 기본값은 코드(OrderDefaults)에 있고, 바꿀 때만 여기서 덮는다
+# resilience4j:
+#   circuitbreaker:
+#     instances:
+#       catalog:
+#         wait-duration-in-open-state: 30s
+#   bulkhead:
+#     instances:
+#       catalog:
+#         max-concurrent-calls: 40

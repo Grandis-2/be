@@ -3,11 +3,15 @@ package com.grandis.nova.order.cart;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.order.cart.domain.repository.CartStore;
 import com.grandis.nova.order.client.catalog.CatalogClient;
+import com.grandis.nova.order.client.catalog.CatalogReader;
 import com.grandis.nova.order.client.catalog.CatalogOption;
 import com.grandis.nova.order.client.catalog.CatalogOptions;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
+import io.github.resilience4j.bulkhead.BulkheadRegistry;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,6 +24,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -61,6 +66,8 @@ class CartApiTest {
     @MockitoBean CatalogClient catalogClient;
     /** 쓰지 않지만 CartConcurrencyTest 와 같은 대역 구성으로 두어 Spring 컨텍스트(와 MySQL 컨테이너)를 하나로 함께 쓴다. */
     @MockitoSpyBean CartStore store;
+    @Autowired CircuitBreakerRegistry circuitBreakers;
+    @Autowired BulkheadRegistry bulkheads;
 
     OrderFixtures fixtures;
     UUID customerId;
@@ -264,6 +271,32 @@ class CartApiTest {
         expectError(add(option, 1, false), HttpStatus.SERVICE_UNAVAILABLE, "DEPENDENCY_UNAVAILABLE");
         assertThat(jdbcTemplate.queryForObject("SELECT quantity FROM cart_items WHERE customer_id = ?", Integer.class, (Object) bytes(customerId)))
                 .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("catalog 호출의 서킷 브레이커 · 동시 상한은 배포 기본값으로 선다 — 5xx 는 회로의 실패, 4xx · 상한 초과는 아니다")
+    void catalogResilienceDefaultsAreApplied() throws Exception {
+        CircuitBreaker breaker = circuitBreakers.circuitBreaker(CatalogReader.DEPENDENCY);
+        breaker.reset();
+        try {
+            assertThat(breaker.getCircuitBreakerConfig().getMinimumNumberOfCalls()).isEqualTo(20);
+            assertThat(breaker.getCircuitBreakerConfig().getWaitIntervalFunctionInOpenState().apply(1)).isEqualTo(10_000L);
+            assertThat(bulkheads.bulkhead(CatalogReader.DEPENDENCY).getBulkheadConfig().getMaxConcurrentCalls()).isEqualTo(20);
+            assertThat(bulkheads.bulkhead(CatalogReader.DEPENDENCY).getBulkheadConfig().getMaxWaitDuration()).isZero();
+
+            UUID option = sellable(true, 5);
+            willThrow(HttpClientErrorException.create(HttpStatus.BAD_REQUEST, "Bad Request", null, null, null))
+                    .given(catalogClient).getOptions(any(), any());
+            add(option, 1, false).andExpect(status().isInternalServerError());
+            assertThat(breaker.getMetrics().getNumberOfFailedCalls()).as("4xx 는 실패로 세지 않는다").isZero();
+
+            willThrow(HttpServerErrorException.create(HttpStatus.SERVICE_UNAVAILABLE, "Service Unavailable", null, null, null))
+                    .given(catalogClient).getOptions(any(), any());
+            add(option, 1, false).andExpect(status().isServiceUnavailable());
+            assertThat(breaker.getMetrics().getNumberOfFailedCalls()).as("5xx 는 실패").isEqualTo(1);
+        } finally {
+            breaker.reset();   // 같은 컨텍스트를 쓰는 다른 시험에 회로 상태를 남기지 않는다
+        }
     }
 
     /** 일반 판매 · 공개 · 판매 중인 옵션 하나. stock 이 음수면 재고 행을 만들지 않는다. */
