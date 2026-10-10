@@ -11,9 +11,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
 
-
 /**
- * 주문의 결제창을 열 거래를 payment 에 만든다. 트랜잭션 밖에서 부른다(DB 잠금을 payment 응답 시간만큼 붙잡지 않게).
+ * 결제 대상(주문 · 응모)의 결제창을 열 거래를 payment 에 만든다. 트랜잭션 밖에서 부른다(DB 잠금을 payment 응답 시간만큼 붙잡지 않게).
  *
  * 사용자의 액세스 토큰을 Authorization: Bearer 로 그대로 싣는다(헤더 값은 여기서 만든다). 토큰은 로그 · 예외 메시지에 싣지 않는다.
  * 응답이 없으면(타임아웃) payment 가 거래를 이미 만들었을 수 있다 — 버려진 PENDING 으로 남고 사용자가 다시 부른다.

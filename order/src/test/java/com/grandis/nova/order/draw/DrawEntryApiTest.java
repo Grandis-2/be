@@ -376,6 +376,100 @@ class DrawEntryApiTest {
         verifyNoInteractions(confirmClient);
     }
 
+    // ── 결제 시작 갈래: 결제창 확인(시작 금지 + 확보)의 답 · 경합 ──
+
+    @Test
+    @DisplayName("결제창 확인이 '모르는 결제창' 이면 승인 중으로 바꾸지 않고 404 — 모르는 번호로 승인 중이 되면 아무도 풀지 못한다")
+    void unknownWindowAtCheckDoesNotStart() throws Exception {
+        UUID draw = openDraw();
+        UUID entry = insertEntry(draw, customerId, "AWAITING_PAYMENT", null);
+        HttpClientErrorException rejected = rejection(HttpStatus.NOT_FOUND, "PAYMENT_ATTEMPT_NOT_FOUND");
+        given(confirmClient.confirm(any(), any(), any())).willThrow(rejected);
+
+        confirm(customerId, draw, FEE).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PAYMENT_ATTEMPT_NOT_FOUND"));
+
+        assertThat(entryRow(entry)).containsEntry("status", "AWAITING_PAYMENT").containsEntry("authorizing_provider_order_id", null);
+        verify(confirmClient, never()).confirm(any(), argThat(ConfirmRequest::startAllowed), any());
+    }
+
+    @Test
+    @DisplayName("결제창 확인이 '이미 끝남(거절 · 만료)' 이면 승인 중으로 바꾸지 않고 DECLINED — 준비부터 다시")
+    void finishedWindowAtCheckIsDeclined() throws Exception {
+        UUID draw = openDraw();
+        UUID entry = insertEntry(draw, customerId, "AWAITING_PAYMENT", null);
+        given(confirmClient.confirm(any(), any(), any())).willReturn(reply(ConfirmReply.Result.DECLINED, DeclineReason.PAYMENT_EXPIRED));
+
+        confirm(customerId, draw, FEE).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.result").value("DECLINED"))
+                .andExpect(jsonPath("$.data.entryStatus").value("AWAITING_PAYMENT"))
+                .andExpect(jsonPath("$.data.declineReason").value("PAYMENT_EXPIRED"));
+
+        assertThat(statusOf(entry)).isEqualTo("AWAITING_PAYMENT");
+        verify(confirmClient, times(1)).confirm(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("결제창 확인이 '이미 승인됨' 이면 승인 중을 거쳐 결제 완료로 반영한다")
+    void approvedWindowAtCheckIsPaid() throws Exception {
+        UUID draw = openDraw();
+        UUID entry = insertEntry(draw, customerId, "AWAITING_PAYMENT", null);
+        given(confirmClient.confirm(any(), any(), any())).willReturn(reply(ConfirmReply.Result.APPROVED, null));
+
+        confirm(customerId, draw, FEE).andExpect(status().isOk()).andExpect(jsonPath("$.data.result").value("APPROVED"));
+
+        assertThat(statusOf(entry)).isEqualTo("PAID");
+    }
+
+    @Test
+    @DisplayName("결제창 확인 뒤 다른 요청이 먼저 승인 중으로 바꿨으면 덮지 않고 확인 중(PENDING) — 전제(결제 대기)를 건 UPDATE")
+    void otherRequestStartedFirstIsNotOverwritten() throws Exception {
+        UUID draw = openDraw();
+        UUID entry = insertEntry(draw, customerId, "AWAITING_PAYMENT", null);
+        paymentChecks(call -> {
+            jdbcTemplate.update("UPDATE draw_entries SET status = 'AUTHORIZING', authorizing_provider_order_id = 'other_window_9' WHERE id = ?",
+                    (Object) bytes(entry));
+            return reply(ConfirmReply.Result.PENDING, null);
+        }, reply(ConfirmReply.Result.APPROVED, null));
+
+        confirm(customerId, draw, FEE).andExpect(status().isOk()).andExpect(jsonPath("$.data.result").value("PENDING"));
+
+        assertThat(entryRow(entry)).containsEntry("status", "AUTHORIZING").containsEntry("authorizing_provider_order_id", "other_window_9");
+        verify(confirmClient, never()).confirm(any(), argThat(ConfirmRequest::startAllowed), any());
+    }
+
+    /** 마감은 시각이 지나서 온다(회차의 마감 시각은 바뀌지 않는다) — 결제창 확인이 마감 시각을 넘길 때까지 답하지 않게 해서 그 순간을 만든다. */
+    @Test
+    @DisplayName("결제창 확인을 지나는 사이 마감되면 시작하지 않는다 — 승인 중으로 두고 시작 금지로만 묻는다")
+    void closedWhileCheckingDoesNotStart() throws Exception {
+        Instant closes = Instant.now().plusMillis(1500);
+        UUID draw = draw(Instant.now().minus(Duration.ofHours(1)), closes);
+        UUID entry = insertEntry(draw, customerId, "AWAITING_PAYMENT", null);
+        paymentChecks(call -> {
+            Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> Instant.now().isAfter(closes));
+            return reply(ConfirmReply.Result.PENDING, null);
+        }, reply(ConfirmReply.Result.PENDING, null));
+
+        confirm(customerId, draw, FEE).andExpect(status().isOk()).andExpect(jsonPath("$.data.result").value("PENDING"));
+
+        assertThat(statusOf(entry)).isEqualTo("AUTHORIZING");
+        verify(confirmClient, never()).confirm(any(), argThat(ConfirmRequest::startAllowed), any());
+        verify(confirmClient).confirm(eq(TOSS_ORDER_ID), argThat(r -> !r.startAllowed() && !r.reserve()), any());
+    }
+
+    @Test
+    @DisplayName("승인 중인 응모에 같은 결제창으로 다시 오면, 응모 기간이면 시작을 허락해 결과를 회수한다")
+    void sameWindowWhileOpenMayStart() throws Exception {
+        UUID draw = openDraw();
+        UUID entry = insertEntry(draw, customerId, "AUTHORIZING", TOSS_ORDER_ID);
+        paymentAnswers(reply(ConfirmReply.Result.APPROVED, null));
+
+        confirm(customerId, draw, FEE).andExpect(status().isOk()).andExpect(jsonPath("$.data.result").value("APPROVED"));
+
+        verify(confirmClient).confirm(eq(TOSS_ORDER_ID), argThat(ConfirmRequest::startAllowed), any());
+        assertThat(statusOf(entry)).isEqualTo("PAID");
+    }
+
     // ── 도우미 ──
 
     private UUID openDraw() {
@@ -440,6 +534,12 @@ class DrawEntryApiTest {
     private void paymentAnswers(ApiResponse<ConfirmReply> reply) {
         given(confirmClient.confirm(any(), any(), any())).willAnswer((Answer<ApiResponse<ConfirmReply>>) call ->
                 isCheck(call) ? reply(ConfirmReply.Result.PENDING, null) : reply);
+    }
+
+    /** 결제창 확인(reserve=true)은 check 로, 그 밖의 호출은 reply 로 답한다. */
+    private void paymentChecks(Answer<ApiResponse<ConfirmReply>> check, ApiResponse<ConfirmReply> reply) {
+        given(confirmClient.confirm(any(), any(), any())).willAnswer((Answer<ApiResponse<ConfirmReply>>) call ->
+                isCheck(call) ? check.answer(call) : reply);
     }
 
     /** request 가 null 이면 다시 스텁하는 중이다. */

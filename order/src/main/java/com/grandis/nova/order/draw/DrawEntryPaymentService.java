@@ -18,6 +18,7 @@ import com.grandis.nova.order.draw.domain.repository.DrawCampaignStore;
 import com.grandis.nova.order.draw.domain.repository.DrawEntryStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -28,15 +29,16 @@ import java.time.Clock;
 import java.util.UUID;
 
 /**
- * 응모비 결제 — 주문 결제(order.pay 의 준비 · 승인)와 같은 순서 · 같은 보장이다. 대상이 응모(DRAW_ENTRY)이고 금액이 응모의 저장 응모비다.
+ * 응모비 결제 — 주문 결제(order.pay 의 준비 · 승인)와 같은 순서 · 같은 보장이다. 대상이 응모(DRAW_ENTRY)이고 금액이 회차의 응모비다.
  *
  * 준비: 내 응모(결제 대기) → 응모 기간 확인 → payment 에 거래 생성(트랜잭션 밖).
  * 승인: 내 응모 → 금액 대조 → 동시 상한 → 응모 기간 확인 → 결제창 확인(payment, 시작 금지 + 확보) → [tx] 승인 중 + 결제창 번호
  * → payment 승인(트랜잭션 밖) → [tx] 결과 반영({@link DrawEntryPaymentResults}).
  *
  * - 사용자가 보낸 금액은 대조 대상이다. payment 에는 회차의 응모비가 간다({@link PayableTarget#of(DrawEntry, DrawCampaign)}).
- * - 결제 시작은 응모 기간에만 한다. 시작한 결제는 마감 뒤에 확정돼도 결제 완료로 반영한다 — 돈은 이미 나갔고 환불이 없다.
- *   승인 중 재요청이 결제창을 처음 시작하게 되는 경우에도 응모 기간을 다시 보고, 지났으면 "시작 금지" 로 결과만 회수한다.
+ * - 결제 시작은 응모 기간에만 한다 — 승인 중으로 바꾸기 전과 payment 승인을 부르기 직전에 두 번 본다. 지났으면 "시작 금지" 로 결과만
+ *   회수한다(승인 중 재요청도 같다). 시작한 결제는 마감 뒤에 확정돼도 결제 완료로 반영한다 — 돈은 이미 나갔고 환불이 없다. 그래서 추첨은
+ *   그 회차의 승인 중 응모가 0건이 된 뒤에 한다(NV-396).
  * - 결제 대기로 되돌리는 것은 payment 가 "이 결제창은 앞으로도 시작될 수 없다" 고 확언할 때(NotStartable)와 거절뿐이다. 답을 받지 못하면
  *   응모를 그대로 두고 오류로 답한다 — 앞선 요청이 같은 결제창을 이미 시작했을 수 있다.
  * - 승인 중으로 바꾸는 결제창은 payment 가 이 응모의 것으로 아는 번호뿐이다(결제창 확인) — 그래서 승인 중인 응모는 payment 의 만료 ·
@@ -141,7 +143,8 @@ public class DrawEntryPaymentService {
             case PaymentConfirmation.Pending pending -> {
             }
             case PaymentConfirmation.Approved approved -> {
-                // 이 결제창이 이미 승인됐다(앞선 응답 · 이벤트를 잃었다). 승인 중을 거쳐 아래 승인 호출이 그 결과를 반영한다
+                // 결제 대기인데 이 결제창이 이미 승인됐다 — 상태 머신으로는 갈 수 없는 경우다(승인은 승인 중에만 시작된다 · 버그 · 수동 수정의 신호).
+                // 그 대상의 유일한 성공 결제이므로 승인 중을 거쳐 아래 승인 호출이 결제 완료로 반영한다
             }
             case PaymentConfirmation.Declined declined -> {
                 // 이미 끝난 결제창(거절 · 만료)이다. 승인 중으로 바꾸지 않고 거절로 답한다 — 결제 준비부터 다시
@@ -150,12 +153,21 @@ public class DrawEntryPaymentService {
             case PaymentConfirmation.NotStartable notStartable -> throw notStartable.failure();
             case PaymentConfirmation.Unanswered unanswered -> throw unanswered.failure();
         }
-        EntryTransition requested = writeTransaction.execute(status -> entries.requestPayment(entry.id(), providerOrderId, clock.instant()));
+        EntryTransition requested;
+        try {
+            requested = writeTransaction.execute(status -> entries.requestPayment(entry.id(), providerOrderId, clock.instant()));
+        } catch (PessimisticLockingFailureException e) {
+            // 행 하나만 바꾼다 — 교착은 없고 잠금 대기 초과만 있다. 시작 전이라 아무것도 바뀌지 않았다
+            log.warn("응모비 승인 중 전환 잠금 실패 entryId={}", entry.id(), e);
+            throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+        }
         if (!requested.applied()) {
             // 읽은 뒤 다른 요청이 먼저 승인을 시작했거나 결제가 끝났다 — 지금 상태로 다시 판정한다
             return proceed(reload(entry.id()), campaign, sessionToken, providerOrderId, paymentKey, false);
         }
-        return call(entry, campaign, providerOrderId, paymentKey, sessionToken, true);
+        // 결제창 확인(네트워크)을 지나는 사이 마감됐을 수 있다 — 지금 다시 보고, 지났으면 시작하지 않는다(시작 금지 → 확인 중, payment 의 만료가
+        // 결제 대기로 되돌린다). 주문의 "승인 중 재요청 · 기한 지남 → 시작 금지" 와 같은 모양
+        return call(entry, campaign, providerOrderId, paymentKey, sessionToken, isOpen(campaign));
     }
 
     private ConfirmedEntryPayment call(DrawEntry entry, DrawCampaign campaign, String providerOrderId, String paymentKey, String sessionToken,

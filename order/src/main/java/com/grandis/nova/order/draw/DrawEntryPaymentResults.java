@@ -1,12 +1,16 @@
 package com.grandis.nova.order.draw;
 
+import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.order.client.payment.DeclineReason;
 import com.grandis.nova.order.draw.domain.model.DrawEntry;
+import com.grandis.nova.order.draw.domain.model.DrawEntryStatus;
 import com.grandis.nova.order.draw.domain.model.EntryTransition;
 import com.grandis.nova.order.draw.domain.repository.DrawCampaignStore;
 import com.grandis.nova.order.draw.domain.repository.DrawEntryStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -15,13 +19,14 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * 응모비 결제 결과를 응모에 반영한다 — 승인 API 의 동기 응답과 결과 이벤트 소비가 같은 길을 쓴다. 둘 다 오거나 순서가 바뀌어도 전제를 건
  * UPDATE 로 한 번만 반영된다({@link DrawEntryStore}). 결과 하나 = 트랜잭션 하나(행 하나만 바꾼다).
  *
- * - 승인은 결제창을 대조하지 않고 결제 완료로 바꾼다. 응모에는 취소가 없어, 결제 대기에서 오는 승인도 그 응모의 돈이다 — 놓치면 돈을 받고도
- *   추첨에서 빠진다.
+ * - 승인은 결제창을 대조하지 않고 결제 완료로 바꾼다. 결제 대기에 오는 승인은 상태 머신으로 갈 수 없는 경우라 ERROR 로 남기되 받는다 — 그 대상의
+ *   유일한 성공 결제이고, 응모에는 취소가 없어 놓치면 돈을 받고도 추첨에서 빠진다.
  * - 거절 · 되돌림은 그 결제창의 승인 중일 때만 결제 대기로 돌린다.
  */
 @Service
@@ -62,8 +67,19 @@ public class DrawEntryPaymentResults {
 
     EntryTransition approved(UUID entryId, String providerOrderId) {
         Instant now = clock.instant();
-        EntryTransition transition = writeTransaction.execute(status -> entries.approve(entryId, now));
-        if (transition.applied()) {
+        boolean[] fromAwaiting = {false};
+        EntryTransition transition = write(entryId, () -> {
+            EntryTransition approved = entries.approve(entryId, now);
+            if (!approved.applied() && approved.status() == DrawEntryStatus.AWAITING_PAYMENT) {
+                approved = entries.approveAwaiting(entryId, now);
+                fromAwaiting[0] = approved.applied();
+            }
+            return approved;
+        });
+        if (fromAwaiting[0]) {
+            log.error("결제 대기 응모에 승인이 왔다 — 상태 머신으로 갈 수 없는 경우(버그 · 수동 수정 확인), 유일한 성공 결제라 결제 완료로 반영 "
+                    + "entryId={} providerOrderId={}", entryId, providerOrderId);
+        } else if (transition.applied()) {
             log.info("응모비 결제 완료 entryId={} providerOrderId={}", entryId, providerOrderId);
         }
         return transition;
@@ -86,9 +102,22 @@ public class DrawEntryPaymentResults {
         return transition;
     }
 
+    /**
+     * 행 하나만 바꾸는 트랜잭션이라 교착은 생기지 않는다(바꾸는 칸은 어떤 보조 인덱스에도 없다). 잠금 대기 초과는 주문 결제 반영과 같이 503 이다 —
+     * 동기 응답이면 사용자가 다시 보내고, 결과 이벤트면 다시 받는다.
+     */
+    private EntryTransition write(UUID entryId, Supplier<EntryTransition> change) {
+        try {
+            return writeTransaction.execute(status -> change.get());
+        } catch (PessimisticLockingFailureException e) {
+            log.warn("응모비 결제 반영 잠금 실패 entryId={}", entryId, e);
+            throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+        }
+    }
+
     private EntryTransition revert(UUID entryId, String providerOrderId) {
         Instant now = clock.instant();
         // 반영되지 않았으면 다른 결제창의 늦은 결과다(다른 결제창이 승인 중 · 결제 완료) — 되돌리지 않는다
-        return writeTransaction.execute(status -> entries.revert(entryId, providerOrderId, now));
+        return write(entryId, () -> entries.revert(entryId, providerOrderId, now));
     }
 }

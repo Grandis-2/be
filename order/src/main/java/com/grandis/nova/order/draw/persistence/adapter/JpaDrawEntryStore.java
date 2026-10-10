@@ -72,6 +72,11 @@ class JpaDrawEntryStore implements DrawEntryStore {
     }
 
     @Override
+    public EntryTransition approveAwaiting(UUID entryId, Instant now) {
+        return transition(entryId, entries.approveAwaiting(entryId, now));
+    }
+
+    @Override
     public EntryTransition revert(UUID entryId, String providerOrderId, Instant now) {
         return transition(entryId, entries.revert(entryId, providerOrderId, now));
     }

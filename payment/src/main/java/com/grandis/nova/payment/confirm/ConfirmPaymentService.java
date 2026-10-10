@@ -39,7 +39,7 @@ import java.util.UUID;
  * 거래 하나 = 트랜잭션 하나(원장 계약)이고 원장 예외는 트랜잭션 경계 밖에서 잡는다.
  *
  * 응답 약속(호출자가 대상을 결제 전으로 되돌려도 되는지가 여기 달렸다):
- * - 시작 전 업무 오류(PaymentErrorCode)는 4xx 다. 그중 결제창 번호 없음 · 금액 불일치 · 미지원 대상은 "이 결제창은 앞으로도 시작될 수
+ * - 시작 전 업무 오류(PaymentErrorCode)는 4xx 다. 그중 결제창 번호 없음 · 금액 불일치는 "이 결제창은 앞으로도 시작될 수
  *   없다" 는 확언이다 — 결제창의 대상 · 금액은 바뀌지 않는다.
  * - 시작한 뒤에는 업무 오류를 내지 않는다. 결과는 늘 200(불명 · 처리 중은 PENDING)이고, 예상 밖 실패는 5xx 다.
  *   확정하지 못한 거래는 리스가 끝나면 복구({@link CaptureRecovery})가 이어 받는다.
@@ -74,7 +74,7 @@ public class ConfirmPaymentService {
     /**
      * @param target     호출자가 말한 대상. 거래가 그 대상의 것인지 대조한다
      * @param paymentKey 결제창이 돌려준 결제 키
-     * @param amount       호출자의 저장 금액(주문 총액). 사용자 입력이 아니다
+     * @param amount       호출자의 저장 금액(주문 총액 · 응모비). 사용자 입력이 아니다
      * @param startAllowed false 면 시작하지 않고 지금 결과만 돌려준다(아직 시작 전이면 PENDING)
      * @throws BusinessException 시작하지 않았다 — PAYMENT_ATTEMPT_NOT_FOUND · PAYMENT_AMOUNT_MISMATCH · PAYMENT_START_CONFLICT
      */

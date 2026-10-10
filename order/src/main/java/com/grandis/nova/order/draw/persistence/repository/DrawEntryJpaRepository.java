@@ -27,8 +27,14 @@ public interface DrawEntryJpaRepository extends JpaRepository<DrawEntryJpaEntity
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query(value = """
             UPDATE draw_entries SET status = 'PAID', authorizing_provider_order_id = NULL, updated_at = :now
-             WHERE id = :id AND status IN ('AWAITING_PAYMENT', 'AUTHORIZING')""", nativeQuery = true)
+             WHERE id = :id AND status = 'AUTHORIZING'""", nativeQuery = true)
     int approve(@Param("id") UUID id, @Param("now") Instant now);
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = """
+            UPDATE draw_entries SET status = 'PAID', updated_at = :now
+             WHERE id = :id AND status = 'AWAITING_PAYMENT'""", nativeQuery = true)
+    int approveAwaiting(@Param("id") UUID id, @Param("now") Instant now);
 
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query(value = """

@@ -28,11 +28,14 @@ public interface DrawEntryStore {
     /** 결제 대기 → 승인 중(그 결제창). */
     EntryTransition requestPayment(UUID entryId, String providerOrderId, Instant now);
 
-    /**
-     * 결제 완료. 승인 중이든 결제 대기든 받는다 — 승인은 결제창을 대조하지 않는다(대상당 성공 결제는 하나라 언제 와도 그 응모의 결제다).
-     * 응모에는 취소가 없어, 결제 대기에서 오는 승인은 앞선 결제창의 늦은 결과뿐이고 돈은 이미 나갔다.
-     */
+    /** 승인 중 → 결제 완료. 결제창을 대조하지 않는다 — payment 는 대상당 성공 결제가 하나라 언제 와도 그 응모의 결제다. */
     EntryTransition approve(UUID entryId, Instant now);
+
+    /**
+     * 결제 대기 → 결제 완료. 상태 머신으로는 갈 수 없는 경우다(승인은 승인 중에만 시작되고, 되돌림은 그 결제창의 확정 거절 · 시작 불가 확언뿐) —
+     * 버그 · 수동 수정의 신호다. 그래도 그 대상의 유일한 성공 결제라 받는다: 응모에는 취소가 없어, 놓치면 돈을 받고도 추첨에서 빠진다.
+     */
+    EntryTransition approveAwaiting(UUID entryId, Instant now);
 
     /** 승인 중 → 결제 대기. 그 결제창의 승인 중일 때만(늦게 온 이전 결제창의 거절이 새 결제창을 되돌리지 않게). */
     EntryTransition revert(UUID entryId, String providerOrderId, Instant now);
