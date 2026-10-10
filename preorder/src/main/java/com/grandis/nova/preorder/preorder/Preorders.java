@@ -2,6 +2,7 @@ package com.grandis.nova.preorder.preorder;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.OffsetPage;
+import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.preorder.domain.AdminPreorderSearchQuery;
 import com.grandis.nova.preorder.preorder.domain.Preorder;
 import com.grandis.nova.preorder.preorder.domain.PreorderEvent;
@@ -52,6 +53,11 @@ public class Preorders {
 
     public Optional<PreorderSnapshot> findById(UUID preorderId) {
         return preorders.findById(preorderId).map(Preorder::toSnapshot);
+    }
+
+    /** @throws BusinessException PREORDER_NOT_FOUND */
+    public PreorderSnapshot getById(UUID preorderId) {
+        return findById(preorderId).orElseThrow(() -> new BusinessException(PreorderErrorCode.PREORDER_NOT_FOUND));
     }
 
     /** id → 예약. 없는 id 는 빠진다. */
