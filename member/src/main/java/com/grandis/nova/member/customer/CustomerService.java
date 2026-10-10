@@ -29,7 +29,7 @@ public class CustomerService {
 
     @Transactional
     public ProfileView changeProfile(UUID customerId, Profile profile) {
-        Customer customer = find(customerId);
+        Customer customer = lock(customerId);
         customer.changeProfile(profile);
         return new ProfileView(customer.getDisplayName(), customer.profile());
     }
@@ -41,13 +41,18 @@ public class CustomerService {
 
     @Transactional
     public ShippingAddress changeDefaultAddress(UUID customerId, ShippingAddress address) {
-        Customer customer = find(customerId);
+        Customer customer = lock(customerId);
         customer.changeDefaultAddress(address);
         return customer.defaultAddress();
     }
 
     /** 표시 이름은 카카오에서 온 읽기 전용 값이라 프로필과 같이 다닌다. */
     public record ProfileView(String displayName, Profile profile) {
+    }
+
+    /** 쓰기 경로. 회원 행을 잠그고 읽어 같은 자원의 PUT 이 칸마다 섞이지 않게 한다({@link CustomerRepository#findForUpdate}). */
+    private Customer lock(UUID customerId) {
+        return customers.findForUpdate(customerId).orElseThrow(() -> new BusinessException(CommonErrorCode.UNAUTHENTICATED));
     }
 
     private Customer find(UUID customerId) {
