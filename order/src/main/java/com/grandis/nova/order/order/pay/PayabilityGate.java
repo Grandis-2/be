@@ -66,7 +66,7 @@ class PayabilityGate {
         switch (order.source()) {
             case PREORDER -> requirePreorderPayable(order, sessionToken);
             case CART -> {
-                if (!clock.instant().isBefore(order.paymentDueAt())) {
+                if (!order.acceptsPaymentAt(clock.instant())) {
                     throw new BusinessException(OrderErrorCode.PAYMENT_WINDOW_EXPIRED);
                 }
             }
