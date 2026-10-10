@@ -3,9 +3,9 @@ package com.grandis.nova.order.cart;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.order.cart.domain.repository.CartStore;
 import com.grandis.nova.order.client.catalog.CatalogClient;
-import com.grandis.nova.order.client.catalog.CatalogReader;
 import com.grandis.nova.order.client.catalog.CatalogOption;
 import com.grandis.nova.order.client.catalog.CatalogOptions;
+import com.grandis.nova.order.client.catalog.CatalogReader;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
@@ -15,6 +15,8 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.HttpStatus;
@@ -321,6 +323,24 @@ class CartApiTest {
                                       boolean ready, boolean warrantyOffered) {
         return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.optionTitle(), o.sku(), o.price(), optionStatus, saleMode,
                 productStatus, visible, ready, new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), o.imageUrl());
+    }
+
+    /** 수량은 JSON 정수만 — Jackson 기본값은 1.9 를 1 로 잘라 다른 수량이 조용히 담긴다. */
+    @ParameterizedTest
+    @ValueSource(strings = {"1.9", "2.0", "\"2\"", "1e1"})
+    @DisplayName("담기 · 수량 변경의 수량이 정수가 아니면 400 — 잘라 담지 않는다")
+    void nonIntegerQuantityIs400(String token) throws Exception {
+        UUID option = sellable(true, 10);
+        asCustomer(post("/api/v1/cart/items").contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"variantId\": \"%s\", \"quantity\": %s }".formatted(option, token)))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
+        assertThat(lineCount()).isZero();
+
+        String line = data(add(option, 3, false)).get("cartItemId").asString();
+        asCustomer(patch("/api/v1/cart/items/{id}", line).contentType(MediaType.APPLICATION_JSON).content("{ \"quantity\": %s }".formatted(token)))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
+        assertThat(jdbcTemplate.queryForObject("SELECT quantity FROM cart_items WHERE customer_id = ?", Integer.class, (Object) bytes(customerId)))
+                .isEqualTo(3);
     }
 
     private ResultActions add(UUID option, int quantity, Boolean warranty) throws Exception {
