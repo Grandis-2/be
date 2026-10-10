@@ -105,7 +105,8 @@ public class PlaceCartOrderService {
      * @param customerId   인증 주체의 회원 id
      * @param sessionToken 사용자가 보낸 액세스 토큰(catalog 에 그대로 전달). 로그 · 예외에 싣지 않는다
      * @param selections   고른 장바구니 줄. 비어 있지 않고 (옵션, 보증)이 겹치지 않아야 한다(요청 검증이 거른다)
-     * @throws BusinessException 409 STATE_CONFLICT(살 수 없는 줄) · PRICE_CHANGED · CART_CHANGED · INSUFFICIENT_STOCK(details.variantIds),
+     * @throws BusinessException 409 STATE_CONFLICT(살 수 없는 줄) · PRICE_CHANGED · CART_CHANGED · INSUFFICIENT_STOCK(details.variantIds) ·
+     *                           PAYMENT_IN_PROGRESS(details.orderId · status — 결제 진행 중인 앞 주문),
      *                           401 · 503 · 500(catalog, {@link CartCatalog#find}), 503(잠금 대기 초과 · 다시 해도 교착)
      */
     public PlaceResult place(UUID customerId, String sessionToken, List<CartSelection> selections, PlaceOrderCommand.Address shipTo) {
@@ -155,11 +156,13 @@ public class PlaceCartOrderService {
             }
         }
         Map<UUID, Integer> released = new HashMap<>();
+        List<UUID> canceledOrders = new ArrayList<>();
         for (Order order : unpaid) {
             // 판정은 잠근 뒤에만 한다. 승인 중이면(읽을 때 이미 그랬든, 읽은 뒤 잠그기 전에 결제 시작이 바꿨든 — 결제 시작은 주문 행만 잠가
             // 장바구니 잠금으로 막히지 않는다) 바꾸지 않고 409 PAYMENT_IN_PROGRESS 와 막는 주문을 알린다. 기한이 지났어도 같다(돈이 나갔을 수 있고,
-            // 승인 호출은 기한을 넘길 수 있다 — 2026-10-10 결정). 그 사이 결제가 끝났거나(결제됨) 다른 취소가 먼저 취소했으면 결제 안 된 주문이
-            // 아니므로 그냥 지나간다(반환은 그쪽이 했다).
+            // 승인 호출은 기한을 넘길 수 있다 — 2026-10-10 결정). 다른 취소(만료 처리 · 사용자 취소)가 먼저 취소했으면 결제 안 된 주문이 아니므로
+            // 그냥 지나간다(반환은 그쪽이 했다). 결제됨도 지나가지만, 결제 반영이 주문 행 → 장바구니 줄을 잠가 이 장바구니 잠금과 겹치면 교착 →
+            // 다시 하기로 가므로 한 시도 안에서는 사실상 오지 않는 방어 갈래다.
             OrderTransition canceled = ledger.cancelUnpaidReleasingStock(order.id(), EventCause.system(REPLACED_REASON));
             if (!canceled.applied()) {
                 if (canceled.status() == OrderStatus.AUTHORIZING) {
@@ -168,6 +171,7 @@ public class PlaceCartOrderService {
                 }
                 continue;
             }
+            canceledOrders.add(order.id());
             itemsByOrder.getOrDefault(order.id(), List.of())
                     .forEach(item -> released.merge(item.line().optionId(), item.line().quantity().value(), Integer::sum));
         }
@@ -175,8 +179,10 @@ public class PlaceCartOrderService {
         try {
             stock.releaseAndReserve(released, quantities(draft.lines()));
         } catch (IllegalStateException e) {
-            throw new IllegalStateException("바꾸는 앞 주문의 확보를 반환하지 못했다: orderIds="
-                    + unpaid.stream().map(Order::id).toList(), e);
+            // 경보 규칙이 이 문구("재고 어긋남")로 잡는다 — 결제 반영의 판매 확정 경보(CartOrderFulfillment)와 같은 문구다. 바꾸지 않는다.
+            log.error("재고 어긋남 — 앞 장바구니 주문의 확보를 반환하지 못해 새 주문을 만들지 않았다, 재고 장부 확인 필요 customerId={} orderIds={} released={}",
+                    customerId, canceledOrders, released, e);
+            throw new IllegalStateException("바꾸는 앞 주문의 확보를 반환하지 못했다: orderIds=" + canceledOrders, e);
         }
         Order order = ledger.place(draft, cause);
         return new PlaceResult(order, orderReader.findItems(order.id()), true);

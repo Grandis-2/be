@@ -102,7 +102,8 @@ public class StockLedger {
      * 옵션도 되돌아간다(전량 확보 아니면 아무것도 확보하지 않음).
      *
      * @param quantities 옵션 id → 확보할 수량(1 이상)
-     * @throws StockShortageException 가용 재고가 모자란 옵션이 있다(재고 행이 없는 옵션 포함)
+     * @throws StockShortageException   가용 재고가 모자란 옵션이 있다(재고 행이 없는 옵션 포함)
+     * @throws IllegalArgumentException 1 미만 수량이 있다
      */
     public void reserve(Map<UUID, Integer> quantities) {
         releaseAndReserve(Map.of(), quantities);
@@ -116,8 +117,9 @@ public class StockLedger {
      *
      * @param released 옵션 id → 되돌릴 수량(앞 주문들이 확보해 둔 것)
      * @param reserved 옵션 id → 새로 확보할 수량
-     * @throws StockShortageException 순증을 확보할 가용 재고가 모자란 옵션이 있다. 호출자가 롤백한다(반환도 되돌아간다)
-     * @throws IllegalStateException  순감을 되돌릴 확보가 모자란다 — 데이터가 어긋난 것이다
+     * @throws StockShortageException  순증을 확보할 가용 재고가 모자란 옵션이 있다. 호출자가 롤백한다(반환도 되돌아간다)
+     * @throws IllegalStateException   순감을 되돌릴 확보가 모자란다 — 데이터가 어긋난 것이다
+     * @throws IllegalArgumentException 1 미만 수량이 있다 — 호출하는 코드의 잘못이다
      */
     public void releaseAndReserve(Map<UUID, Integer> released, Map<UUID, Integer> reserved) {
         requirePositive(released);
