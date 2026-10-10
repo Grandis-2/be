@@ -7,6 +7,7 @@ import com.grandis.nova.order.cart.domain.repository.CartStore;
 import com.grandis.nova.order.client.catalog.CatalogClient;
 import com.grandis.nova.order.client.catalog.CatalogOption;
 import com.grandis.nova.order.client.catalog.CatalogOptions;
+import com.grandis.nova.order.stock.StockLedger;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
@@ -21,6 +22,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -55,9 +58,13 @@ class CartOrderApiTest {
     static final BigDecimal WARRANTY = new BigDecimal("199000");
     static final String SHIP_TO = """
             {"name":"홍길동","phone":"010-0000-0000","postalCode":"04524","line1":"서울시 중구 세종대로 110"}""";
+    static final String OTHER_SHIP_TO = """
+            {"name":"홍길동","phone":"010-0000-0000","postalCode":"48058","line1":"부산시 해운대구 센텀로 1"}""";
 
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
+    @Autowired StockLedger stock;
+    @Autowired PlatformTransactionManager transactionManager;
     @MockitoBean CatalogClient catalogClient;
     /** 쓰지 않지만 CartApiTest 와 같은 대역 구성으로 두어 Spring 컨텍스트를 함께 쓴다. */
     @MockitoSpyBean CartStore store;
@@ -119,21 +126,81 @@ class CartOrderApiTest {
     }
 
     @Test
-    @DisplayName("같은 구성으로 다시 보내면 새 주문 · 새 확보 없이 기존 주문(200) — 구성이 다르면 새 주문")
-    void sameCompositionReusesOpenOrder() throws Exception {
+    @DisplayName("구성 · 단가 · 보증가 · 배송지가 모두 같으면 새 주문 · 새 확보 없이 기존 주문(200, reused) — 승인 중이어도")
+    void identicalRequestReusesOpenOrder() throws Exception {
         UUID phone = sellable(10);
         cartLine(phone, false, 2);
 
-        String first = data(place(item(phone, 2, false)).andExpect(status().isCreated())).get("orderId").asString();
+        JsonNode first = data(place(item(phone, 2, false)).andExpect(status().isCreated()));
+        assertThat(first.get("reused").asBoolean()).isFalse();
         JsonNode again = data(place(item(phone, 2, false)).andExpect(status().isOk()));
 
-        assertThat(again.get("orderId").asString()).isEqualTo(first);
+        assertThat(again.get("orderId").asString()).isEqualTo(first.get("orderId").asString());
+        assertThat(again.get("reused").asBoolean()).isTrue();
         assertThat(reserved(phone)).isEqualTo(2);
 
-        jdbcTemplate.update("UPDATE cart_items SET quantity = 3 WHERE customer_id = ?", (Object) bytes(customerId));
-        String other = data(place(item(phone, 3, false)).andExpect(status().isCreated())).get("orderId").asString();
-        assertThat(other).isNotEqualTo(first);
-        assertThat(reserved(phone)).isEqualTo(5);
+        jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-1' WHERE order_token = ?",
+                first.get("orderId").asString());
+        assertThat(data(place(item(phone, 2, false)).andExpect(status().isOk())).get("orderId").asString())
+                .as("승인 중도 열린 주문이다").isEqualTo(first.get("orderId").asString());
+    }
+
+    @Test
+    @DisplayName("같은 구성인데 배송지 · 단가가 다르면 새 주문을 만들고 결제 대기인 앞 주문은 취소 · 재고 반환 — 결제 대기는 늘 하나")
+    void changedValuesReplaceUnpaidOrder() throws Exception {
+        UUID phone = sellable(10);
+        cartLine(phone, false, 2);
+        String first = data(place(item(phone, 2, false)).andExpect(status().isCreated())).get("orderId").asString();
+
+        String moved = data(perform("""
+                {"source":"CART","items":[%s],"shipTo":%s}""".formatted(item(phone, 2, false), OTHER_SHIP_TO))
+                .andExpect(status().isCreated())).get("orderId").asString();
+
+        assertThat(moved).isNotEqualTo(first);
+        assertThat(orderStatus(first)).isEqualTo("CANCELED");
+        assertThat(stockReleased(first)).as("반환 표식").isTrue();
+        assertThat(reserved(phone)).as("앞 주문의 확보는 돌아갔다").isEqualTo(2);
+        assertThat(lastEventReason(first)).isEqualTo("REPLACED_BY_NEW_ORDER");
+
+        // 이번엔 배송지는 앞 주문(moved)과 같게 두고 단가만 바꾼다 — 가격 축만 다르다
+        catalog.put(phone, copyPrice(catalog.get(phone), new BigDecimal("1000000")));
+        String cheaper = data(perform("""
+                {"source":"CART","items":[{"variantId":"%s","quantity":2,"expectedUnitPrice":1000000}],"shipTo":%s}"""
+                .formatted(phone, OTHER_SHIP_TO)).andExpect(status().isCreated())).get("orderId").asString();
+        assertThat(orderStatus(moved)).isEqualTo("CANCELED");
+        assertThat(orderTotal(cheaper)).isEqualByComparingTo("2000000");
+        assertThat(reserved(phone)).isEqualTo(2);
+        assertThat(openOrderCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("보증 수량이 다르면 다른 구성 — 새 주문이고 앞 주문은 그대로 둔다")
+    void differentWarrantySplitIsAnotherComposition() throws Exception {
+        UUID phone = sellable(10);
+        cartLine(phone, false, 2);
+        String plain = data(place(item(phone, 2, false)).andExpect(status().isCreated())).get("orderId").asString();
+
+        jdbcTemplate.update("UPDATE cart_items SET warranty_selected = 1 WHERE customer_id = ?", (Object) bytes(customerId));
+        String withWarranty = data(place(item(phone, 2, true)).andExpect(status().isCreated())).get("orderId").asString();
+
+        assertThat(withWarranty).isNotEqualTo(plain);
+        assertThat(orderStatus(plain)).isEqualTo("AWAITING_PAYMENT");
+        assertThat(reserved(phone)).isEqualTo(4);
+    }
+
+    @Test
+    @DisplayName("같은 구성의 승인 중 주문이 있는데 값이 다르면 409 STATE_CONFLICT — 결제가 진행 중인 주문은 바꾸지 않는다")
+    void authorizingOrderIsNotReplaced() throws Exception {
+        UUID phone = sellable(10);
+        cartLine(phone, false, 1);
+        String first = data(place(item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
+        jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-2' WHERE order_token = ?", first);
+
+        expectError(perform("""
+                {"source":"CART","items":[%s],"shipTo":%s}""".formatted(item(phone, 1, false), OTHER_SHIP_TO)), 409, "STATE_CONFLICT");
+
+        assertThat(orderStatus(first)).isEqualTo("AUTHORIZING");
+        assertThat(reserved(phone)).isEqualTo(1);
     }
 
     @Test
@@ -226,7 +293,7 @@ class CartOrderApiTest {
     }
 
     @Test
-    @DisplayName("요청 검증 — 줄 없음 · 같은 줄 두 번 · 보증 줄의 보증가 없음 · 수량 0 · 51줄은 400, 바로 구매는 아직 400")
+    @DisplayName("요청 검증 — 줄 없음 · 같은 줄 두 번 · 보증 줄의 보증가 없음 · 수량 0 · 51줄 · 다른 출처의 칸은 400, 바로 구매는 아직 400")
     void invalidRequestsAreRejected() throws Exception {
         UUID phone = sellable(10);
         cartLine(phone, false, 1);
@@ -241,6 +308,12 @@ class CartOrderApiTest {
                 "items");
         expectViolation(perform("""
                 {"source":"BUY_NOW","items":[%s],"shipTo":%s}""".formatted(item(phone, 1, false), SHIP_TO)), "source");
+        expectViolation(perform("""
+                {"source":"CART","preorderId":"%s","items":[%s],"shipTo":%s}""".formatted(UUID.randomUUID(), item(phone, 1, false), SHIP_TO)),
+                "preorderId");
+        expectViolation(perform("""
+                {"source":"PREORDER","preorderId":"%s","items":[%s],"shipTo":%s}""".formatted(UUID.randomUUID(), item(phone, 1, false), SHIP_TO)),
+                "items");
         assertThat(orderCount()).isZero();
     }
 
@@ -276,6 +349,57 @@ class CartOrderApiTest {
         assertThat(reserved(phone)).isEqualTo(2);
     }
 
+    @Test
+    @DisplayName("주문 금액이 칸(12자리)을 넘으면 400 — 주문 · 확보 없음")
+    void totalOverLimitIsRejected() throws Exception {
+        UUID costly = sellable(100);
+        catalog.put(costly, copyPrice(catalog.get(costly), new BigDecimal("999999999999")));
+        cartLine(costly, false, 2);
+
+        expectViolation(place("""
+                {"variantId":"%s","quantity":2,"expectedUnitPrice":999999999999}""".formatted(costly)), "items");
+        assertThat(reserved(costly)).isZero();
+    }
+
+    /**
+     * 여러 옵션의 확보는 요청의 줄 순서가 아니라 잠금 순서(option_id 바이트 오름차순)로 한다 — 결정적으로 본다.
+     * 다른 트랜잭션이 앞 옵션(A)을 확보한 채 열려 있을 때, 줄을 [B, A] 로 보낸 주문은 A 에서 기다린다(B 를 쥐지 않는다).
+     * 그래서 그 트랜잭션이 이어서 B 를 확보해도 교착하지 않는다. 줄 순서대로 잠그면 주문이 B 를 쥔 채 A 를 기다려 교착(1213)이다.
+     */
+    @Test
+    void reservationLocksOptionsInStorageOrderRegardlessOfRequestOrder() throws Exception {
+        List<UUID> options = new java.util.ArrayList<>(List.of(sellable(10), sellable(10)));
+        options.sort((a, b) -> java.util.Arrays.compareUnsigned(bytes(a), bytes(b)));
+        UUID first = options.get(0);
+        UUID second = options.get(1);
+        cartLine(second, false, 1);
+        cartLine(first, false, 1);
+        java.util.concurrent.CountDownLatch reservedFirst = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch requestWaiting = new java.util.concurrent.CountDownLatch(1);
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        java.util.concurrent.CompletableFuture<Void> holder = java.util.concurrent.CompletableFuture.runAsync(() -> tx.executeWithoutResult(s -> {
+            stock.reserve(Map.of(first, 1));
+            reservedFirst.countDown();
+            await(requestWaiting);
+            stock.reserve(Map.of(second, 1));
+        }));
+        await(reservedFirst);
+        java.util.concurrent.CompletableFuture<Integer> request = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try {
+                return place(item(second, 1, false), item(first, 1, false)).andReturn().getResponse().getStatus();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        waitForLockWait();
+        requestWaiting.countDown();
+
+        assertThat(holder).as("교착 없이 커밋").succeedsWithin(Duration.ofSeconds(20));
+        assertThat(request.get(20, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo(201);
+        assertThat(reserved(first)).isEqualTo(2);
+        assertThat(reserved(second)).isEqualTo(2);
+    }
+
     /** 일반 판매 · 공개 · 판매 중 · 보증 제공 옵션. stock 이 음수면 재고 행을 만들지 않는다. */
     private UUID sellable(int stock) {
         OrderFixtures.StockProduct product = fixtures.inStockProduct(1);
@@ -292,6 +416,63 @@ class CartOrderApiTest {
         return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.optionTitle(), o.sku(), o.price(), optionStatus,
                 o.saleMode(), productStatus, visible, true,
                 new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), o.imageUrl());
+    }
+
+    private static CatalogOption copyPrice(CatalogOption o, BigDecimal price) {
+        return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.optionTitle(), o.sku(), price, o.optionStatus(),
+                o.saleMode(), o.productStatus(), o.visible(), o.registrationCompleted(), o.warranty(), o.imageUrl());
+    }
+
+    /**
+     * 주문의 확보 UPDATE 가 행 잠금에서 멈출 때까지(최대 10초). 시험 계정은 잠금 대기 표(performance_schema)를 못 읽어(SELECT 거부),
+     * 같은 계정의 연결은 볼 수 있는 PROCESSLIST 에서 "실행 중인 확보 UPDATE" 를 센다 — 잠금이 없으면 마이크로초에 끝나는 문장이라
+     * 보인다면 기다리는 중이다. 계기가 0 을 내면 시험이 시간 초과로 실패한다.
+     */
+    private void waitForLockWait() throws InterruptedException {
+        for (int i = 0; i < 100; i++) {
+            Long waits = jdbcTemplate.queryForObject("""
+                    SELECT COUNT(*) FROM information_schema.PROCESSLIST
+                     WHERE COMMAND = 'Query' AND INFO LIKE 'UPDATE option_inventories SET stock_reserved = stock_reserved +%'""", Long.class);
+            if (waits != null && waits > 0) {
+                return;
+            }
+            Thread.sleep(100);
+        }
+        throw new AssertionError("잠금 대기가 생기지 않았다");
+    }
+
+    private static void await(java.util.concurrent.CountDownLatch latch) {
+        try {
+            if (!latch.await(20, java.util.concurrent.TimeUnit.SECONDS)) {
+                throw new IllegalStateException("기다리다 시간 초과");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private String orderStatus(String orderToken) {
+        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE order_token = ?", String.class, orderToken);
+    }
+
+    private boolean stockReleased(String orderToken) {
+        return jdbcTemplate.queryForObject("SELECT stock_released_at IS NOT NULL FROM orders WHERE order_token = ?", Boolean.class, orderToken);
+    }
+
+    private BigDecimal orderTotal(String orderToken) {
+        return jdbcTemplate.queryForObject("SELECT total_amount FROM orders WHERE order_token = ?", BigDecimal.class, orderToken);
+    }
+
+    private String lastEventReason(String orderToken) {
+        return jdbcTemplate.queryForObject("""
+                SELECT e.reason FROM order_events e JOIN orders o ON o.id = e.order_id
+                 WHERE o.order_token = ? ORDER BY e.event_sequence DESC LIMIT 1""", String.class, orderToken);
+    }
+
+    private long openOrderCount() {
+        return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM orders WHERE customer_id = ? AND status = 'AWAITING_PAYMENT'", Long.class,
+                (Object) bytes(customerId));
     }
 
     private void cartLine(UUID option, boolean warranty, int quantity) {

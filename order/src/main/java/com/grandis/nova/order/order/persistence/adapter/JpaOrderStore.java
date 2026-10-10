@@ -106,6 +106,13 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     @Override
+    public int cancelReleasingStock(UUID orderId, Instant now) {
+        int updated = orders.cancelReleasingStock(orderId, now);
+        entityManager.detach(entityManager.getReference(OrderJpaEntity.class, orderId));
+        return updated;
+    }
+
+    @Override
     public int changeStatus(UUID orderId, OrderStatus from, OrderStatus to, String authorizingProviderOrderId,
                             Instant now) {
         int updated = orders.changeStatus(orderId, from, to, authorizingProviderOrderId, now);

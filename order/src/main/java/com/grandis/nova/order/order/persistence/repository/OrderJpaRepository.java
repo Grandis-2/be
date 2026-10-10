@@ -41,6 +41,16 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
     int changeStatus(@Param("id") UUID id, @Param("from") OrderStatus from, @Param("to") OrderStatus to,
                      @Param("attempt") String authorizingProviderOrderId, @Param("now") Instant now);
 
+    @Modifying(flushAutomatically = true)
+    @Query("""
+            update OrderJpaEntity o
+               set o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.CANCELED, o.stockReleasedAt = :now,
+                   o.eventSequence = o.eventSequence + 1, o.updatedAt = :now
+             where o.id = :id and o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.AWAITING_PAYMENT
+               and o.source <> com.grandis.nova.order.order.domain.enums.OrderSource.PREORDER and o.stockReleasedAt is null
+            """)
+    int cancelReleasingStock(@Param("id") UUID id, @Param("now") Instant now);
+
     /** 스칼라 조회라 영속성 컨텍스트의 엔티티가 아니라 DB 값을 읽는다. 행을 잠근 트랜잭션에서 부른다. */
     @Query("select o.authorizingProviderOrderId from OrderJpaEntity o where o.id = :id")
     Optional<String> findAuthorizingProviderOrderId(@Param("id") UUID id);

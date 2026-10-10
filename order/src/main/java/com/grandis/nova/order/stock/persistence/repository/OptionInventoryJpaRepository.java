@@ -51,6 +51,13 @@ public interface OptionInventoryJpaRepository extends JpaRepository<OptionInvent
             """, nativeQuery = true)
     int reserve(@Param("id") UUID optionId, @Param("quantity") int quantity, @Param("now") Instant now);
 
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+            UPDATE option_inventories SET stock_reserved = stock_reserved - :quantity, updated_at = :now
+             WHERE option_id = :id AND stock_reserved >= :quantity
+            """, nativeQuery = true)
+    int release(@Param("id") UUID optionId, @Param("quantity") int quantity, @Param("now") Instant now);
+
     interface InventoryRow {
 
         byte[] getOptionId();

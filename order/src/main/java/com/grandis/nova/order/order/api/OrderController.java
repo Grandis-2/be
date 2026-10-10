@@ -44,7 +44,7 @@ public class OrderController {
      * preorder 의 401 을 그대로 돌려준다.
      */
     @PostMapping
-    public ResponseEntity<ApiResponse<OrderResponse>> place(
+    public ResponseEntity<ApiResponse<PlaceOrderResponse>> place(
             @CurrentCustomerId UUID customerId,
             @Valid @RequestBody PlaceOrderRequest request,
             HttpServletRequest httpRequest) {
@@ -56,7 +56,7 @@ public class OrderController {
                     request.shipTo().toAddress());
             case BUY_NOW -> throw ValidationFailures.of("source", "바로 구매 주문은 아직 받지 않습니다.");
         };
-        ApiResponse<OrderResponse> body = ApiResponse.ok(OrderResponse.of(result.order(), result.items()));
+        ApiResponse<PlaceOrderResponse> body = ApiResponse.ok(PlaceOrderResponse.of(result));
         if (!result.created()) {
             return ResponseEntity.ok(body);
         }

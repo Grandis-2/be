@@ -166,6 +166,29 @@ public class OrderLedger {
         return true;
     }
 
+    /**
+     * 결제 대기인 일반 주문을 취소하고 재고 반환 표식을 적는다(취소와 같은 UPDATE). 재고 행의 반환은 호출하는 쪽이 같은 트랜잭션에서
+     * 한다 — 이 메서드가 true 를 돌려준 때만, 그래서 한 번만.
+     *
+     * 결제 대기가 아니면(승인 중 · 결제됨 · 이미 취소) 아무것도 바꾸지 않고 지금 상태를 돌려준다.
+     *
+     * @throws IllegalArgumentException 주문이 없다
+     * @throws IllegalStateException    결제 대기인데 바꾸지 못했다 — 사전예약 주문이거나 표식이 이미 있다(호출하는 코드의 잘못 · 데이터 어긋남)
+     */
+    public OrderTransition cancelUnpaidReleasingStock(UUID orderId, EventCause cause) {
+        OrderStatus from = lock(orderId);
+        if (from != OrderStatus.AWAITING_PAYMENT) {
+            return new OrderTransition(false, from);
+        }
+        OrderStatus to = from.next(OrderTrigger.CANCEL_REQUESTED).orElseThrow();
+        Instant now = clock.instant();
+        if (writer.cancelReleasingStock(orderId, now) != 1) {
+            throw new IllegalStateException("결제 대기인 일반 주문을 취소 · 반환 표식하지 못했다: orderId=" + orderId);
+        }
+        writer.appendEvent(new OrderEvent(orderId, writer.eventSequence(orderId), from, to, cause, now));
+        return new OrderTransition(true, to);
+    }
+
     private OrderStatus lock(UUID orderId) {
         return writer.lockStatus(orderId).orElseThrow(() -> new IllegalArgumentException("주문이 없다: " + orderId));
     }

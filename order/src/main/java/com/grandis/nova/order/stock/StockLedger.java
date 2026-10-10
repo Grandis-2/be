@@ -28,12 +28,13 @@ import java.util.stream.Collectors;
  * 재고 표를 바꾸는 유일한 길. 쓰기 포트({@link StockWriter})는 여기서만 쓴다(StockArchitectureTest 가 강제).
  * 모든 변경은 조건부 UPDATE 이고 영향 행으로 판정한다.
  *
- * 여러 옵션의 처리(option_id 오름차순):
+ * 여러 옵션의 처리(option_id 의 바이트 오름차순 — {@link #LOCK_ORDER}):
  * <ul>
  *   <li>설정({@link #set}): 있는 행을 잠가 읽기 → 있으면 조건부 UPDATE, 없으면 INSERT.</li>
  *   <li>초기화({@link #initialize}): 있는 행을 잠그지 않고 읽기 → 없는 것만 INSERT. 있는 행은 건드리지 않으므로 잠그지 않는다 —
  *       재고 행은 주문의 확보 · 반환이 드나드는 자리라 쓰지 않을 행을 붙잡지 않는다.</li>
  *   <li>확보({@link #reserve}): 옵션마다 조건부 UPDATE 한 번(가용 ≥ 수량일 때만 확보 += 수량). 읽고 계산하지 않는다.</li>
+ *   <li>반환({@link #release}): 옵션마다 조건부 UPDATE 한 번(확보 ≥ 수량일 때만 확보 −= 수량).</li>
  * </ul>
  * 잠금 순서가 요청 순서와 무관해, 옵션 순서가 다른 요청끼리 서로 기다리며 교착하지 않는다. 동시 삽입이 부르는 잠금
  * (PK 중복 확인의 S 잠금, FK 검사의 product_options 부모 S 잠금)은 이 순서 밖이라 드물게 교착할 수 있고, 그건 호출하는
@@ -50,6 +51,15 @@ import java.util.stream.Collectors;
 @Component
 @Transactional(propagation = Propagation.MANDATORY)
 public class StockLedger {
+
+    /**
+     * 잠그는 순서. option_id 칸(BINARY(16), 상위 → 하위 64비트, UuidBinary)의 바이트 순서 — MySQL 의 {@code ORDER BY option_id} 와 같다.
+     * UUID.compareTo 는 부호 있는 비교라 상위 비트가 1 인 id 에서 이 순서와 갈린다(v7 은 지금 시각대에선 일치하지만 생성기에 기대지 않는다).
+     */
+    static final Comparator<UUID> LOCK_ORDER = (a, b) -> {
+        int high = Long.compareUnsigned(a.getMostSignificantBits(), b.getMostSignificantBits());
+        return high != 0 ? high : Long.compareUnsigned(a.getLeastSignificantBits(), b.getLeastSignificantBits());
+    };
 
     private final StockWriter writer;
     private final StockReader reader;
@@ -86,7 +96,7 @@ public class StockLedger {
     }
 
     /**
-     * 주문의 재고 확보. 옵션 id 오름차순으로 하나씩 조건부 UPDATE 하고, 하나라도 0행이면 걸린 옵션을 모두 모아 던진다 —
+     * 주문의 재고 확보. {@link #LOCK_ORDER} 순서로 하나씩 조건부 UPDATE 하고, 하나라도 0행이면 걸린 옵션을 모두 모아 던진다 —
      * 호출자가 롤백하므로 먼저 확보한 옵션도 되돌아간다(전량 확보 아니면 아무것도 확보하지 않음).
      *
      * @param quantities 옵션 id → 확보할 수량(1 이상)
@@ -95,7 +105,7 @@ public class StockLedger {
     public void reserve(Map<UUID, Integer> quantities) {
         Instant now = clock.instant();
         List<UUID> shortages = new ArrayList<>();
-        for (Map.Entry<UUID, Integer> entry : new TreeMap<>(quantities).entrySet()) {
+        for (Map.Entry<UUID, Integer> entry : ordered(quantities).entrySet()) {
             if (entry.getValue() < 1) {
                 throw new IllegalArgumentException("확보 수량은 1 이상이다: " + entry);
             }
@@ -105,6 +115,21 @@ public class StockLedger {
         }
         if (!shortages.isEmpty()) {
             throw new StockShortageException(shortages);
+        }
+    }
+
+    /**
+     * 미결제 취소의 반환 — 주문이 확보해 둔 수량을 되돌린다. 한 번만 부른다(주문의 반환 표식, OrderLedger#cancelUnpaidReleasingStock).
+     *
+     * @param quantities 옵션 id → 그 주문이 확보한 수량
+     * @throws IllegalStateException 확보가 모자란 옵션이 있다 — 데이터가 어긋난 것이다. 취소 전체를 롤백한다
+     */
+    public void release(Map<UUID, Integer> quantities) {
+        Instant now = clock.instant();
+        for (Map.Entry<UUID, Integer> entry : ordered(quantities).entrySet()) {
+            if (writer.release(entry.getKey(), entry.getValue(), now) != 1) {
+                throw new IllegalStateException("반환할 확보가 모자란다: optionId=" + entry.getKey() + ", quantity=" + entry.getValue());
+            }
         }
     }
 
@@ -140,12 +165,18 @@ public class StockLedger {
         return levels.stream().collect(Collectors.toMap(StockLevel::optionId, Function.identity()));
     }
 
+    private static Map<UUID, Integer> ordered(Map<UUID, Integer> quantities) {
+        Map<UUID, Integer> ordered = new TreeMap<>(LOCK_ORDER);
+        ordered.putAll(quantities);
+        return ordered;
+    }
+
     private static List<StockSetting> ascending(List<StockSetting> settings) {
         if (settings.stream().map(StockSetting::optionId).distinct().count() != settings.size()) {
             throw new IllegalArgumentException("같은 옵션이 두 번 있다: " + settings);
         }
         return settings.stream()
-                .sorted(Comparator.comparing(StockSetting::optionId))
+                .sorted(Comparator.comparing(StockSetting::optionId, LOCK_ORDER))
                 .toList();
     }
 }

@@ -5,11 +5,14 @@ import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderDraft;
 import com.grandis.nova.order.order.domain.model.OrderItem;
+import com.grandis.nova.order.order.domain.model.OrderLine;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.domain.repository.OrderWriter;
 import com.grandis.nova.order.order.persistence.entity.OrderItemJpaEntity;
 import com.grandis.nova.order.order.persistence.repository.OrderItemJpaRepository;
+import com.grandis.nova.order.order.vo.Money;
 import com.grandis.nova.order.order.vo.OrderToken;
+import com.grandis.nova.order.order.vo.Quantity;
 import com.grandis.nova.order.order.vo.ShipTo;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderFixtures.PreorderProduct;
@@ -22,6 +25,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 import static com.grandis.nova.order.support.OrderFixtures.bytes;
@@ -131,4 +135,32 @@ class JpaOrderStoreTest {
         assertThat(reader.findByPreorderId(UUID.randomUUID())).isEmpty();
         assertThat(writer.lockStatus(UUID.randomUUID())).isEmpty();
     }
+
+    /** 보증 칸까지 왕복하고, 열린 장바구니 주문은 기한이 now 보다 뒤인 것만이다 — 기한 == now 는 지났다(만료 처리는 기한 <= now 를 고른다). */
+    @Test
+    void cartOrderRoundTripsWarrantyAndOpenMeansDueAfterNow() {
+        Instant placedAt = Instant.parse("2026-10-10T06:00:00.123456Z");
+        OrderFixtures.StockProduct stocked = fixtures.inStockProduct(1);
+        UUID option = stocked.optionIds().getFirst();
+        OrderDraft draft = new OrderDraft(customerId, OrderSource.CART, null, null,
+                new ShipTo("홍길동", "010-0000-0000", "04524", "세종대로 110", null), List.of(
+                new OrderLine(stocked.productId(), option, new Quantity(3), Money.won(1_000), 2, Money.won(300), "상품", "옵션")));
+        Order stored = writer.insert(Order.place(draft, OrderToken.issue(), placedAt));
+        writer.insertItems(stored.id(), draft.lines());
+        entityManager.flush();
+        entityManager.clear();
+
+        OrderLine line = reader.findItems(stored.id()).getFirst().line();
+        assertThat(line.warrantyQuantity()).isEqualTo(2);
+        assertThat(line.warrantyUnitPrice()).isEqualTo(Money.won(300));
+        Instant due = placedAt.plus(Order.PAYMENT_WINDOW);
+        assertThat(reader.findOpenCartOrders(customerId, due.minusNanos(1_000))).extracting(Order::id).containsExactly(stored.id());
+        assertThat(reader.findOpenCartOrders(customerId, due)).as("기한 == now 는 열린 주문이 아니다").isEmpty();
+
+        fixtures.forceAuthorizing(stored.id(), "p-1");
+        assertThat(reader.findOpenCartOrders(customerId, placedAt)).as("승인 중도 열린 주문").hasSize(1);
+        fixtures.forceStatus(stored.id(), "CANCELED");
+        assertThat(reader.findOpenCartOrders(customerId, placedAt)).isEmpty();
+    }
+
 }

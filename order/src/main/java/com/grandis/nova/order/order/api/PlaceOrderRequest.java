@@ -36,16 +36,22 @@ public record PlaceOrderRequest(
 
     static final String UUID_PATTERN = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
 
-    /** 사전예약 주문의 예약 토큰. 없으면 400. */
+    /** 사전예약 주문의 예약 토큰. 없거나 장바구니 칸(items)이 같이 오면 400. */
     String requirePreorderToken() {
+        if (items != null) {
+            throw ValidationFailures.of("items", "사전예약 주문에는 보낼 수 없습니다.");
+        }
         if (preorderId == null) {
             throw ValidationFailures.of("preorderId", "필수 항목입니다.");
         }
         return preorderId;
     }
 
-    /** 장바구니 주문의 고른 줄. 없거나 비었으면 400. */
+    /** 장바구니 주문의 고른 줄. 없거나 비었거나 예약 토큰이 같이 오면 400. */
     List<CartSelection> requireCartSelections() {
+        if (preorderId != null) {
+            throw ValidationFailures.of("preorderId", "장바구니 주문에는 보낼 수 없습니다.");
+        }
         if (items == null || items.isEmpty()) {
             throw ValidationFailures.of("items", "필수 항목입니다.");
         }
