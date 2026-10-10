@@ -51,10 +51,11 @@ import java.util.stream.Collectors;
  * 1. 트랜잭션 밖: catalog 일괄 조회({@link CartCatalog}). 살 수 없는 줄이 있으면 409 STATE_CONFLICT(details.items 에 줄마다 이유),
  *    화면에서 본 단가 · 보증가가 지금 값과 다르면 409 PRICE_CHANGED(details.items 에 지금 값). 금액은 catalog 의 지금 값으로 계산한다.
  * 2. 트랜잭션: 그 회원의 장바구니 줄을 잠그고({@link CartStore#lockByCustomer}) 고른 줄이 모두 그대로 있는지 대조 → 아니면 409 CART_CHANGED.
- *    같은 구성(옵션마다 수량 · 보증 수량)의 아직 유효한 장바구니 주문(결제 대기 · 승인 중, 기한 전)을 본다(2026-10-10 결정):
- *    - 단가 · 보증가 · 배송지까지 같으면 그 주문을 돌려준다(200, reused — 기한 연장 없음). 두 번 누른 요청이 여기로 온다.
- *    - 값이 다르고 결제 대기면 그 주문을 취소 · 재고 반환하고 새로 만든다 — 같은 구성의 결제 대기 주문은 늘 하나다.
- *    - 값이 다르고 승인 중이면 409 STATE_CONFLICT — 결제가 진행 중인 주문은 바꾸지 않는다.
+ *    그 회원의 아직 유효한 장바구니 주문(결제 대기 · 승인 중, 기한 전)을 본다 — 결제 안 된 장바구니 주문은 회원당 하나다(2026-10-10 결정):
+ *    - 구성(옵션마다 수량 · 보증 수량) · 단가 · 보증가 · 배송지가 모두 같은 주문이 있으면 그것을 돌려준다(200, reused — 기한 연장 없음).
+ *      두 번 누른 요청이 여기로 온다.
+ *    - 아니면 결제 대기인 앞 주문을 모두(구성이 달라도) 취소 · 재고 반환하고 새로 만든다 — 재고를 여러 주문으로 잡아 두지 못한다.
+ *    - 승인 중인 앞 주문이 있으면 409 STATE_CONFLICT — 결제가 진행 중인 주문은 바꾸지 않고, 그 옆에 새 주문도 만들지 않는다.
  *    새로 만들 때: 재고 확보({@link StockLedger#reserve}) → 주문 · 주문상품 · 첫 이력, 기한 = 지금 + 10분.
  *
  * - 같은 회원의 주문 생성끼리는 장바구니 줄 잠금으로 줄 선다 — 두 번 누른 요청은 뒤의 것이 앞의 주문을 돌려받는다.
@@ -143,23 +144,15 @@ public class PlaceCartOrderService {
         List<Order> open = orderReader.findOpenCartOrders(customerId, clock.instant());
         Map<UUID, List<OrderItem>> itemsByOrder = orderReader.findItemsByOrderIds(open.stream().map(Order::id).toList()).stream()
                 .collect(Collectors.groupingBy(OrderItem::orderId));
-        List<Order> replaced = new ArrayList<>();
         for (Order order : open) {
             List<OrderItem> items = itemsByOrder.getOrDefault(order.id(), List.of());
-            if (!sameComposition(items, draft.lines())) {
-                continue;
-            }
-            if (sameValues(order, items, draft)) {
+            if (sameComposition(items, draft.lines()) && sameValues(order, items, draft)) {
                 return new PlaceResult(order, items, false);
             }
-            if (order.status() != OrderStatus.AWAITING_PAYMENT) {
-                throw new BusinessException(OrderErrorCode.STATE_CONFLICT);
-            }
-            replaced.add(order);
         }
-        for (Order order : replaced) {
-            // 읽을 때는 결제 대기였어도 잠그고 보면 승인 중일 수 있다(결제 시작은 주문 행만 잠가 장바구니 잠금으로 막히지 않는다).
-            // 그러면 바꾸지 않고 409 — 만료로 이미 취소된 주문만 그냥 지나간다(반환도 이미 했다).
+        for (Order order : open) {
+            // 승인 중이면(읽을 때 이미 그랬든, 읽은 뒤 잠그기 전에 결제 시작이 바꿨든 — 결제 시작은 주문 행만 잠가 장바구니 잠금으로 막히지 않는다)
+            // 바꾸지 않고 409 다. 판정은 잠근 뒤에만 한다. 만료로 이미 취소된 주문만 그냥 지나간다(반환도 이미 했다).
             OrderTransition canceled = ledger.cancelUnpaidReleasingStock(order.id(), EventCause.system(REPLACED_REASON));
             if (!canceled.applied()) {
                 if (canceled.status() != OrderStatus.CANCELED) {

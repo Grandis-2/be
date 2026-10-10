@@ -234,18 +234,43 @@ class CartOrderApiTest {
     }
 
     @Test
-    @DisplayName("보증 수량이 다르면 다른 구성 — 새 주문이고 앞 주문은 그대로 둔다")
-    void differentWarrantySplitIsAnotherComposition() throws Exception {
+    @DisplayName("결제 안 된 장바구니 주문은 회원당 하나 — 구성이 달라도(보증 수량 · 다른 상품) 새 주문이 앞 주문을 취소 · 반환한다")
+    void newOrderCancelsUnpaidOrderOfAnyComposition() throws Exception {
         UUID phone = sellable(10);
+        UUID watch = sellable(10);
         cartLine(phone, false, 2);
+        cartLine(watch, false, 1);
         String plain = data(place(item(phone, 2, false)).andExpect(status().isCreated())).get("orderId").asString();
 
-        jdbcTemplate.update("UPDATE cart_items SET warranty_selected = 1 WHERE customer_id = ?", (Object) bytes(customerId));
+        jdbcTemplate.update("UPDATE cart_items SET warranty_selected = 1 WHERE customer_id = ? AND option_id = ?", bytes(customerId), bytes(phone));
         String withWarranty = data(place(item(phone, 2, true)).andExpect(status().isCreated())).get("orderId").asString();
-
         assertThat(withWarranty).isNotEqualTo(plain);
-        assertThat(orderStatus(plain)).isEqualTo("AWAITING_PAYMENT");
-        assertThat(reserved(phone)).isEqualTo(4);
+        assertThat(orderStatus(plain)).isEqualTo("CANCELED");
+        assertThat(reserved(phone)).isEqualTo(2);
+
+        String other = data(place(item(watch, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
+        assertThat(orderStatus(withWarranty)).as("다른 상품의 새 주문도 앞 주문을 바꾼다").isEqualTo("CANCELED");
+        assertThat(reserved(phone)).isZero();
+        assertThat(reserved(watch)).isEqualTo(1);
+        assertThat(openOrderCount()).isEqualTo(1);
+        assertThat(data(mockMvc.perform(get("/api/v1/orders/{id}", other).with(TestAuth.customer(customerId)))).get("status").asString())
+                .isEqualTo("AWAITING_PAYMENT");
+    }
+
+    @Test
+    @DisplayName("결제 진행 중(승인 중)인 앞 주문이 있으면 구성이 달라도 새 장바구니 주문은 409 — 그 옆에 만들지 않는다")
+    void authorizingOrderBlocksNewOrderOfAnyComposition() throws Exception {
+        UUID phone = sellable(10);
+        UUID watch = sellable(10);
+        cartLine(phone, false, 1);
+        cartLine(watch, false, 1);
+        String first = data(place(item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
+        jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-3' WHERE order_token = ?", first);
+
+        expectError(place(item(watch, 1, false)), 409, "STATE_CONFLICT");
+
+        assertThat(orderCount()).isEqualTo(1);
+        assertThat(reserved(watch)).isZero();
     }
 
     @Test
