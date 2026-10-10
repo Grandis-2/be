@@ -18,7 +18,10 @@ import com.grandis.nova.order.support.TestAuth;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -28,10 +31,14 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,6 +57,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @OrderIntegrationTest
 @AutoConfigureMockMvc
+@ExtendWith(OutputCaptureExtension.class)
 class CartOrderPaymentTest {
 
     static final String SESSION = "cart-order-payment-test";
@@ -167,6 +175,63 @@ class CartOrderPaymentTest {
 
         assertThat(cart()).isEmpty();
         assertThat(stockOf(watch)).containsExactly(10, 0, 1);
+    }
+
+    /**
+     * 결제 반영(주문 행 → 장바구니 줄)과 같은 회원의 장바구니 주문 생성(장바구니 줄 → 앞 주문 행)이 엇갈리면 교착이다. 결제 반영이 희생자가
+     * 되어도 새 트랜잭션에서 다시 해 한 번 반영된다 — 결정적으로 본다: 생성 쪽 트랜잭션이 장바구니 줄을 잠그고 재고 행 30개를 바꿔(InnoDB 는
+     * 바꾼 행이 적은 쪽을 희생자로 고른다) 무겁게 둔 채, 결제 반영이 장바구니 줄에서 기다리는 것을 확인한 뒤 그 주문 행을 잠근다.
+     */
+    @Test
+    void settlementDeadlockVictimIsRetriedInNewTransaction(CapturedOutput output) throws Exception {
+        fixtures.forceAuthorizing(order.id(), PROVIDER_ORDER_ID);
+        List<UUID> ballast = fixtures.inStockProduct(30).optionIds();
+        ballast.forEach(option -> fixtures.stock(option, 1, 0, 0));
+        CountDownLatch cartLocked = new CountDownLatch(1);
+        CountDownLatch settlementWaiting = new CountDownLatch(1);
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        CompletableFuture<Void> placing = CompletableFuture.runAsync(() -> tx.executeWithoutResult(status -> {
+            jdbcTemplate.queryForList("SELECT id FROM cart_items WHERE customer_id = ? FOR UPDATE", (Object) bytes(customerId));
+            ballast.forEach(option -> jdbcTemplate.update("UPDATE option_inventories SET updated_at = UTC_TIMESTAMP(6) WHERE option_id = ?",
+                    (Object) bytes(option)));
+            cartLocked.countDown();
+            await(settlementWaiting);
+            jdbcTemplate.queryForList("SELECT status FROM orders WHERE id = ? FOR UPDATE", (Object) bytes(order.id()));
+        }));
+        await(cartLocked);
+        CompletableFuture<Boolean> settling = CompletableFuture.supplyAsync(() -> results.settle(approved()).applied());
+        waitForQuery("SELECT %FROM cart_items WHERE customer_id = %FOR UPDATE");
+        settlementWaiting.countDown();
+
+        assertThat(placing).as("무거운 쪽은 교착에서 살아남는다").succeedsWithin(Duration.ofSeconds(30));
+        assertThat(settling.get(30, TimeUnit.SECONDS)).as("희생된 결제 반영은 다시 해 반영된다").isTrue();
+        assertThat(output).contains("결제 결과 반영 교착, 다시 시도 1/");
+        assertThat(statusOf()).isEqualTo("AWAITING_CONFIRMATION");
+        assertThat(stockOf(phone)).containsExactly(10, 0, 4);
+        assertThat(cart()).containsExactlyInAnyOrderEntriesOf(Map.of(phone + "/false", 1));
+    }
+
+    private void waitForQuery(String like) throws InterruptedException {
+        for (int i = 0; i < 100; i++) {
+            Long running = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE COMMAND = 'Query' AND INFO LIKE ?", Long.class, like);
+            if (running != null && running > 0) {
+                return;
+            }
+            Thread.sleep(100);
+        }
+        throw new AssertionError("그 문장이 기다리지 않았다: " + like);
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(20, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("기다리다 시간 초과");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     private Order place(List<PlaceOrderCommand.Line> lines) {

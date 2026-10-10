@@ -1,5 +1,6 @@
 package com.grandis.nova.order.order.pay;
 
+import com.grandis.nova.order.MySqlLockFailures;
 import com.grandis.nova.order.client.payment.DeclineReason;
 import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
@@ -10,8 +11,10 @@ import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.EnumSet;
@@ -40,6 +43,8 @@ public class PaymentResults {
     private static final Set<OrderStatus> PAID = EnumSet.of(OrderStatus.AWAITING_CONFIRMATION,
             OrderStatus.PREPARING_ITEMS, OrderStatus.READY_TO_SHIP, OrderStatus.SHIPPED, OrderStatus.DELIVERED,
             OrderStatus.CANCELING);
+
+    static final int MAX_ATTEMPTS = 3;
 
     private final OrderLedger ledger;
     private final OrderReader orderReader;
@@ -98,15 +103,32 @@ public class PaymentResults {
         return apply(orderId, OrderTrigger.PAYMENT_DECLINED, providerOrderId, EventCause.system("PAYMENT_NOT_STARTED"));
     }
 
+    /**
+     * 교착(1213)이면 새 트랜잭션에서 다시 한다(최대 {@link #MAX_ATTEMPTS}번). 장바구니 주문의 승인은 주문 행 → 장바구니 줄 → 재고 행 순서로
+     * 잠그는데, 같은 회원의 장바구니 주문 생성은 장바구니 줄 → 앞 주문 행 순서라 결제 반영 순간 다시 주문하면 서로 기다릴 수 있다. 다시 하기는
+     * 원장의 승인 중 전제로 한 번만 반영된다. 바깥 트랜잭션 안에서 불리면 새 트랜잭션을 열 수 없으므로 다시 하지 않는다.
+     */
     private OrderTransition apply(UUID orderId, OrderTrigger result, String providerOrderId, EventCause cause) {
-        OrderTransition transition = writeTransaction.execute(status -> {
-            OrderTransition settled = ledger.settlePayment(orderId, result, providerOrderId, cause);
-            // 승인이 이번에 반영됐을 때만 — 같은 트랜잭션이라 판매 확정 · 장바구니 차감이 실패하면 승인 반영도 되돌아가 다시 받는다
-            if (settled.applied() && result == OrderTrigger.PAYMENT_APPROVED) {
-                fulfillment.onApproved(orderId);
+        int attempts = TransactionSynchronizationManager.isActualTransactionActive() ? 1 : MAX_ATTEMPTS;
+        OrderTransition transition;
+        for (int attempt = 1; ; attempt++) {
+            try {
+                transition = writeTransaction.execute(status -> {
+                    OrderTransition settled = ledger.settlePayment(orderId, result, providerOrderId, cause);
+                    // 승인이 이번에 반영됐을 때만 — 같은 트랜잭션이라 판매 확정 · 장바구니 차감이 실패하면 승인 반영도 되돌아가 다시 받는다
+                    if (settled.applied() && result == OrderTrigger.PAYMENT_APPROVED) {
+                        fulfillment.onApproved(orderId);
+                    }
+                    return settled;
+                });
+                break;
+            } catch (PessimisticLockingFailureException e) {
+                if (attempt >= attempts || !MySqlLockFailures.isDeadlock(e)) {
+                    throw e;
+                }
+                log.info("결제 결과 반영 교착, 다시 시도 {}/{} orderId={}", attempt, attempts, orderId);
             }
-            return settled;
-        });
+        }
         log.info("결제 결과 반영 orderId={} providerOrderId={} result={} applied={} status={}",
                 orderId, providerOrderId, result, transition.applied(), transition.status());
         return transition;
