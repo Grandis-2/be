@@ -2,6 +2,7 @@ package com.grandis.nova.order.cart;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.order.MySqlLockFailures;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.cart.domain.exception.CartSlotTakenException;
 import com.grandis.nova.order.cart.domain.model.CartLimits;
@@ -14,6 +15,9 @@ import com.grandis.nova.order.client.catalog.CatalogReader;
 import com.grandis.nova.order.stock.domain.model.StockLevel;
 import com.grandis.nova.order.stock.domain.repository.StockReader;
 import com.grandis.nova.order.web.ValidationFailures;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -29,6 +33,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * 장바구니(명세 F-U-07). 상품 정보는 catalog 에 묻고(트랜잭션 밖), 재고는 order 의 재고 표를 읽기만 한다 — 담기 · 수정은 가용 재고를 넘지 않는지
@@ -39,12 +44,16 @@ import java.util.UUID;
  * 유일 키에서 기존 줄보다 앞(옵션 id 가 작음)이면 못 본다. 두 번째는 처음부터 다시 훑어 그 줄까지 본다(MySQL 8.4.11 · READ COMMITTED,
  * 유일 키로 훑는 계획에서 실측: 한 번이면 51줄, 두 번이면 50줄 — CartConcurrencyTest).
  * 비어 있는 장바구니에서 같은 옵션 담기가 겹치면 유일 키가 잡고({@link CartSlotTakenException}), 새 트랜잭션에서 한 번 더 하면 그 줄에 합산된다.
+ * 줄 수 50 은 앱만 지킨다(DB 제약 없음). 수동 SQL 등으로 넘으면 catalog 일괄 조회(최대 50)가 거절해 그 회원의 조회가 500 이 된다 —
+ * 그때는 그 회원의 줄을 created_at 이 늦은 것부터 50 을 넘는 만큼 지운다.
  */
 @Service
 public class CartService {
 
-    /** 같은 줄 넣기가 겹쳐 유일 키에 걸렸을 때 시도하는 횟수. 두 번째 시도는 그 줄을 보고 합산한다. 그래도 겹치면 409 STATE_CONFLICT. */
-    static final int ADD_ATTEMPTS = 2;
+    private static final Logger log = LoggerFactory.getLogger(CartService.class);
+
+    /** 쓰기 한 번의 시도 횟수 — 같은 줄 넣기 겹침 · 교착이면 한 번 더 한다({@link #write}). */
+    static final int WRITE_ATTEMPTS = 2;
     static final String ACTIVE = "ACTIVE";
     static final String IN_STOCK = "IN_STOCK";
 
@@ -96,7 +105,8 @@ public class CartService {
      * @throws BusinessException 404 NOT_FOUND — 없는 옵션 · 회원에게 보이지 않는 상품(비공개 · 준비 전).
      *                           409 PREORDER_NOT_CARTABLE · STATE_CONFLICT(판매 중지, 또는 같은 줄 넣기가 두 번 연달아 겹침) ·
      *                           INSUFFICIENT_STOCK(합산이 가용 재고 초과).
-     *                           400 VALIDATION_FAILED — 보증을 주지 않는 상품에 보증, 합산 99 초과, 51번째 줄
+     *                           400 VALIDATION_FAILED — 보증을 주지 않는 상품에 보증, 합산 99 초과, 51번째 줄.
+     *                           503 DEPENDENCY_UNAVAILABLE — 잠금 대기 초과 · 다시 해도 교착
      */
     public CartLine add(UUID customerId, String sessionToken, UUID optionId, int quantity, boolean warranty) {
         requireNoTransaction();
@@ -104,25 +114,18 @@ public class CartService {
         CatalogOption found = catalog.find(List.of(optionId), sessionToken).get(optionId);
         CartOption option = found == null ? null : toOption(found);
         requireCartable(option, warranty);
-        for (int attempt = 1; ; attempt++) {
-            try {
-                return transaction.execute(status -> addLocked(customerId, optionId, quantity, warranty));
-            } catch (CartSlotTakenException e) {
-                if (attempt >= ADD_ATTEMPTS) {
-                    throw new BusinessException(OrderErrorCode.STATE_CONFLICT);
-                }
-            }
-        }
+        return write("담기", customerId, () -> addLocked(customerId, optionId, quantity, warranty));
     }
 
     /**
      * 수량을 절대값으로 바꾼다(1~99). 옵션 · 보증 교체는 삭제 후 담기다(명세). 판매 상태는 보지 않는다 — 조회가 살 수 없음을 알린다.
      *
-     * @throws BusinessException 404 NOT_FOUND — 없는 줄 · 남의 줄. 409 INSUFFICIENT_STOCK — 가용 재고 초과
+     * @throws BusinessException 404 NOT_FOUND — 없는 줄 · 남의 줄. 409 INSUFFICIENT_STOCK — 가용 재고 초과.
+     *                           503 DEPENDENCY_UNAVAILABLE — 잠금 대기 초과 · 다시 해도 교착
      */
     public CartLine changeQuantity(UUID customerId, UUID lineId, int quantity) {
         CartLimits.requireQuantity(quantity);
-        return transaction.execute(status -> {
+        return write("수량 변경", customerId, () -> {
             CartLine line = store.lockLine(customerId, lineId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
             requireAvailable(line.optionId(), quantity);
             store.changeQuantity(line.id(), quantity, clock.instant());
@@ -130,10 +133,10 @@ public class CartService {
         });
     }
 
-    /** @throws BusinessException 404 NOT_FOUND — 없는 줄 · 남의 줄 */
+    /** @throws BusinessException 404 NOT_FOUND — 없는 줄 · 남의 줄. 503 DEPENDENCY_UNAVAILABLE — 잠금 대기 초과 · 다시 해도 교착 */
     public void remove(UUID customerId, UUID lineId) {
-        Integer deleted = transaction.execute(status -> store.delete(customerId, lineId));
-        if (deleted == null || deleted == 0) {
+        int deleted = write("삭제", customerId, () -> store.delete(customerId, lineId));
+        if (deleted == 0) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
     }
@@ -210,9 +213,39 @@ public class CartService {
     }
 
     /** catalog 호출이 트랜잭션 안에 들어가면 그 응답 시간만큼 잠금을 쥔다 — 바깥 트랜잭션에서 부르지 않는다. */
+    /**
+     * 장바구니 쓰기 한 번 = 트랜잭션 하나. 겨루기에 지면 새 트랜잭션에서 다시 한다(요청 스레드라 시도 사이에 기다리지 않는다).
+     * - 같은 줄 넣기가 겹쳐 유일 키에 걸림({@link CartSlotTakenException}) — 다시 하면 그 줄에 합산된다. 또 겹치면 409 STATE_CONFLICT.
+     * - 교착(MySQL 1213) — 담기 셋이 겹치면 두 번째 잠금 읽기와 다음 담기의 첫 잠금 읽기가 서로 기다릴 수 있다. 상대는 이미 끝나 있다.
+     *   또 교착이면 503.
+     * - 잠금 대기 초과(1205)는 다시 하지 않고 503 — 이미 innodb_lock_wait_timeout 만큼 기다렸다(AdminStockService 와 같은 기준).
+     */
+    private <T> T write(String operation, UUID customerId, Supplier<T> work) {
+        requireNoTransaction();
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return transaction.execute(status -> work.get());
+            } catch (CartSlotTakenException e) {
+                if (attempt >= WRITE_ATTEMPTS) {
+                    throw new BusinessException(OrderErrorCode.STATE_CONFLICT);
+                }
+            } catch (PessimisticLockingFailureException e) {
+                if (!MySqlLockFailures.isDeadlock(e)) {
+                    log.warn("장바구니 {} 잠금 대기 초과, 다시 하지 않음 customerId={}", operation, customerId, e);
+                    throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+                }
+                if (attempt >= WRITE_ATTEMPTS) {
+                    log.warn("장바구니 {} 교착 {}회, 포기 customerId={}", operation, WRITE_ATTEMPTS, customerId, e);
+                    throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+                }
+                log.info("장바구니 {} 교착, 다시 시도 {}/{} customerId={}", operation, attempt, WRITE_ATTEMPTS, customerId);
+            }
+        }
+    }
+
     private static void requireNoTransaction() {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
-            throw new IllegalStateException("장바구니 조회 · 담기는 트랜잭션 밖에서 불러야 한다 — catalog 호출 동안 잠금을 쥐지 않게");
+            throw new IllegalStateException("장바구니 조회 · 쓰기는 트랜잭션 밖에서 불러야 한다 — catalog 호출 동안 잠금을 쥐지 않고, 다시 하기가 새 트랜잭션이게");
         }
     }
 }

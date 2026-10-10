@@ -3,6 +3,7 @@ package com.grandis.nova.order.cart;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.web.ApiResponse;
+import com.grandis.nova.order.MySqlLockFailures;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.cart.domain.exception.CartSlotTakenException;
 import com.grandis.nova.order.cart.domain.model.CartLine;
@@ -15,6 +16,7 @@ import com.grandis.nova.order.support.OrderIntegrationTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -22,6 +24,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -42,6 +45,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
@@ -153,8 +157,52 @@ class CartConcurrencyTest {
 
         assertThatThrownBy(() -> cart.add(customerId, "token", option, 1, false))
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.errorCode()).isEqualTo(OrderErrorCode.STATE_CONFLICT));
-        verify(store, times(CartService.ADD_ATTEMPTS)).insert(any(), any(), anyBoolean(), anyInt());
+        verify(store, times(CartService.WRITE_ATTEMPTS)).insert(any(), any(), anyBoolean(), anyInt());
         assertThat(lineCount()).isZero();
+    }
+
+    /** 교착은 상대가 이미 끝나 있으므로 새 트랜잭션에서 한 번 더 한다 — 담기 · 수량 변경 · 삭제 모두. */
+    @Test
+    void deadlockIsRetriedInNewTransaction() {
+        UUID option = fixtures.inStockProduct(1).optionIds().getFirst();
+        fixtures.stock(option, 10, 0, 0);
+        willThrow(deadlock()).willCallRealMethod().given(store).lockByCustomer(customerId);
+        CartLine line = cart.add(customerId, "token", option, 1, false);
+        assertThat(lineCount()).isEqualTo(1);
+
+        willThrow(deadlock()).willCallRealMethod().given(store).lockLine(customerId, line.id());
+        assertThat(cart.changeQuantity(customerId, line.id(), 3).quantity()).isEqualTo(3);
+
+        willThrow(deadlock()).willCallRealMethod().given(store).delete(customerId, line.id());
+        cart.remove(customerId, line.id());
+        assertThat(lineCount()).isZero();
+    }
+
+    /** 다시 해도 교착이면 503. 잠금 대기 초과(1205)는 이미 오래 기다렸으므로 다시 하지 않고 503. */
+    @Test
+    void repeatedDeadlockAndLockWaitTimeoutAreUnavailable() {
+        UUID option = fixtures.inStockProduct(1).optionIds().getFirst();
+        fixtures.stock(option, 10, 0, 0);
+
+        willThrow(deadlock()).given(store).lockByCustomer(customerId);
+        assertThatThrownBy(() -> cart.add(customerId, "token", option, 1, false))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
+        verify(store, times(CartService.WRITE_ATTEMPTS)).lockByCustomer(customerId);
+
+        clearInvocations(store);
+        willThrow(new CannotAcquireLockException("timeout", new SQLException("Lock wait timeout exceeded", "40001", 1205)))
+                .given(store).lockByCustomer(customerId);
+        assertThatThrownBy(() -> cart.add(customerId, "token", option, 1, false))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
+        verify(store, times(1)).lockByCustomer(customerId);
+        assertThat(lineCount()).isZero();
+    }
+
+    private static CannotAcquireLockException deadlock() {
+        return new CannotAcquireLockException("deadlock",
+                new SQLException("Deadlock found when trying to get lock", "40001", MySqlLockFailures.MYSQL_DEADLOCK));
     }
 
     /** 다른 회원 40명 × 50줄. 표가 49줄뿐이면 옵티마이저가 전체 훑기를 고른다. */
