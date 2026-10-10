@@ -380,9 +380,6 @@ class ReviewApiTest {
         assertThat(ReviewService.mask(null)).isEqualTo("***");
     }
 
-    // ── 도우미 ──────────────────────────────────────────────────────────────
-
-    /** 공개 · 판매 중 · 재고 행이 있는(준비된) 일반 상품 — 상품 상세가 보여 주는 상품. */
     /**
      * 별점만 고치는 요청이 그사이 다른 요청이 고친 본문을 되돌리지 않는다. 결정적으로 본다: 다른 트랜잭션이 본문을 고친 채 커밋하지 않고,
      * 별점 고치기가 그 리뷰 행에서 기다리는 것을 확인한 뒤 커밋한다. 잠그고 읽어야 커밋된 본문을 보고 별점만 바꾼다.
@@ -410,7 +407,8 @@ class ReviewApiTest {
         });
         Awaitility.await("별점 고치기가 리뷰 행에서 기다리지 않았다").atMost(Duration.ofSeconds(10)).until(() -> jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.PROCESSLIST
-                 WHERE COMMAND = 'Query' AND INFO LIKE '%product_reviews%' AND INFO NOT LIKE '%PROCESSLIST%'""", Long.class) > 0);
+                 WHERE COMMAND = 'Query' AND ID <> CONNECTION_ID()
+                   AND LOWER(INFO) LIKE '%from product_reviews %for update%'""", Long.class) > 0);
         commit.countDown();
         other.get(20, TimeUnit.SECONDS);
 
@@ -419,6 +417,8 @@ class ReviewApiTest {
         assertThat(((Number) row.get("rating")).intValue()).isEqualTo(5);
         assertThat(row.get("body")).isEqualTo("new body");
     }
+
+    // ── 도우미 ──────────────────────────────────────────────────────────────
 
     private static void awaitLatch(CountDownLatch latch) {
         try {
@@ -431,6 +431,7 @@ class ReviewApiTest {
         }
     }
 
+    /** 공개 · 판매 중 · 재고 행이 있는(준비된) 일반 상품 — 상품 상세가 보여 주는 상품. */
     private UUID readyInStock(UUID categoryId) {
         UUID product = fixtures.product(categoryId, "IN_STOCK", "ACTIVE");
         fixtures.inventory(fixtures.option(product, "ACTIVE", new BigDecimal("1000")), 5, 0, 0);
