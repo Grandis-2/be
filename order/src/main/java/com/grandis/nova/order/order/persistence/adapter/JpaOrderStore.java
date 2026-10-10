@@ -1,6 +1,7 @@
 package com.grandis.nova.order.order.persistence.adapter;
 
 import com.grandis.nova.common.OffsetPage;
+import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.exception.OrderAlreadyPlacedException;
 import com.grandis.nova.order.order.domain.model.Order;
@@ -105,6 +106,13 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     @Override
+    public int cancelReleasingStock(UUID orderId, Instant now) {
+        int updated = orders.cancelReleasingStock(orderId, now);
+        entityManager.detach(entityManager.getReference(OrderJpaEntity.class, orderId));
+        return updated;
+    }
+
+    @Override
     public int changeStatus(UUID orderId, OrderStatus from, OrderStatus to, String authorizingProviderOrderId,
                             Instant now) {
         int updated = orders.changeStatus(orderId, from, to, authorizingProviderOrderId, now);
@@ -144,6 +152,12 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     @Override
     public Optional<Order> findByPreorderId(UUID preorderId) {
         return orders.findByPreorderId(preorderId).map(OrderMapper::toDomain);
+    }
+
+    @Override
+    public List<Order> findUnpaidCartOrders(UUID customerId) {
+        return orders.findByCustomerIdAndSourceAndStatusIn(customerId, OrderSource.CART,
+                List.of(OrderStatus.AWAITING_PAYMENT, OrderStatus.AUTHORIZING)).stream().map(OrderMapper::toDomain).toList();
     }
 
     @Override

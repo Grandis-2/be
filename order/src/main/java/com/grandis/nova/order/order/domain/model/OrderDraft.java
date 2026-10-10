@@ -49,7 +49,7 @@ public record OrderDraft(
         }
     }
 
-    /** 주문 금액. 줄마다 단가 × 수량의 합이다. */
+    /** 주문 금액. 줄 금액(단가 × 수량 + 보증가 × 보증 수량, {@link OrderLine#subtotal})의 합이다. */
     public Money totalAmount() {
         return lines.stream().map(OrderLine::subtotal).reduce(Money.ZERO, Money::plus);
     }

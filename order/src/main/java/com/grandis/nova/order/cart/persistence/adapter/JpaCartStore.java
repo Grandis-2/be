@@ -41,8 +41,15 @@ class JpaCartStore implements CartStore {
         return items.findRows(customerId).stream().map(JpaCartStore::toLine).toList();
     }
 
+    /**
+     * 잠금 읽기를 두 번 한다. 첫 번째는 앞선 쓰기의 커밋을 기다리는 줄서기다 — 기다리던 잠금 읽기는 그 자리부터 이어 읽어, 앞선 쓰기가 넣은 줄이
+     * 유일 키(customer_id, option_id, warranty_selected)에서 기존 줄보다 앞(옵션 id 가 작음)이면 못 본다. 두 번째는 새 문장이라 처음부터
+     * 다시 훑어 그 줄까지 본다 — 첫 읽기가 끝났으면 그 회원 줄을 쥐었던 앞선 쓰기는 모두 커밋했다(MySQL 8.4.11 · READ COMMITTED,
+     * 유일 키로 훑는 계획에서 실측: 한 번이면 49줄에서 겹친 담기 둘이 51줄, 두 번이면 50줄 — CartConcurrencyTest).
+     */
     @Override
     public List<CartLine> lockByCustomer(UUID customerId) {
+        items.findRowsForUpdate(customerId);
         return items.findRowsForUpdate(customerId).stream().map(JpaCartStore::toLine).toList();
     }
 

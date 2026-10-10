@@ -33,6 +33,12 @@ public class OrderItemJpaEntity {
     @Column(nullable = false, updatable = false, precision = 12, scale = 0)
     private BigDecimal unitPriceSnapshot;
 
+    @Column(nullable = false, updatable = false)
+    private int warrantyQuantity;
+
+    @Column(nullable = false, updatable = false, precision = 12, scale = 0)
+    private BigDecimal warrantyPriceSnapshot;
+
     @Column(nullable = false, updatable = false, length = 100)
     private String productTitleSnapshot;
 
@@ -43,12 +49,15 @@ public class OrderItemJpaEntity {
     }
 
     public OrderItemJpaEntity(UUID orderId, UUID productId, UUID optionId, int quantity, BigDecimal unitPriceSnapshot,
+                              int warrantyQuantity, BigDecimal warrantyPriceSnapshot,
                               String productTitleSnapshot, String optionTitleSnapshot) {
         this.orderId = orderId;
         this.productId = productId;
         this.optionId = optionId;
         this.quantity = quantity;
         this.unitPriceSnapshot = unitPriceSnapshot;
+        this.warrantyQuantity = warrantyQuantity;
+        this.warrantyPriceSnapshot = warrantyPriceSnapshot;
         this.productTitleSnapshot = productTitleSnapshot;
         this.optionTitleSnapshot = optionTitleSnapshot;
     }
@@ -75,6 +84,14 @@ public class OrderItemJpaEntity {
 
     public BigDecimal getUnitPriceSnapshot() {
         return unitPriceSnapshot;
+    }
+
+    public int getWarrantyQuantity() {
+        return warrantyQuantity;
+    }
+
+    public BigDecimal getWarrantyPriceSnapshot() {
+        return warrantyPriceSnapshot;
     }
 
     public String getProductTitleSnapshot() {

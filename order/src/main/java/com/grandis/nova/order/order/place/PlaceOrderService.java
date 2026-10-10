@@ -22,6 +22,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -169,6 +170,6 @@ public class PlaceOrderService {
         return new PlaceOrderCommand(customerId, OrderSource.PREORDER, preorder.preorderInternalId(),
                 preorder.preorderId(), shipTo, List.of(
                 new PlaceOrderCommand.Line(preorder.productId(), preorder.optionId(), 1, preorder.unitPrice(),
-                        preorder.productTitle(), preorder.optionTitle())));
+                        0, BigDecimal.ZERO, preorder.productTitle(), preorder.optionTitle())));
     }
 }

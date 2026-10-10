@@ -2,6 +2,7 @@ package com.grandis.nova.order.stock;
 
 import com.grandis.nova.order.stock.domain.exception.StockBelowCommittedException;
 import com.grandis.nova.order.stock.domain.exception.StockBelowCommittedException.Shortfall;
+import com.grandis.nova.order.stock.domain.exception.StockShortageException;
 import com.grandis.nova.order.stock.domain.model.StockLevel;
 import com.grandis.nova.order.stock.domain.model.StockSetting;
 import com.grandis.nova.order.stock.domain.repository.StockReader;
@@ -19,6 +20,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -129,4 +131,59 @@ class StockLedgerTest {
         assertThatThrownBy(() -> ledger.set(List.of(new StockSetting(first, 1), new StockSetting(first, 2))))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    /** 가용(총량 − 확보 − 판매)이 수량과 같아도 확보된다 — 경계에서 하나 모자라면 0행이다. */
+    @Test
+    void reserveAddsToReservedUpToExactlyAvailable() {
+        fixtures.stock(first, 10, 3, 2);
+        fixtures.stock(second, 4, 0, 0);
+
+        ledger.reserve(Map.of(first, 5, second, 1));
+
+        assertThat(reader.findByOptionIds(List.of(first, second)))
+                .containsExactly(new StockLevel(first, 10, 8, 2), new StockLevel(second, 4, 1, 0));
+        assertThatThrownBy(() -> ledger.reserve(Map.of(first, 1)))
+                .isInstanceOfSatisfying(StockShortageException.class, e -> assertThat(e.optionIds()).containsExactly(first));
+    }
+
+    /** 모자란 옵션 · 재고 행이 없는 옵션을 모두 담아 던진다. 되돌리는 것은 호출자의 롤백이다(주문 생성 시험이 커밋 경계로 본다). */
+    @Test
+    void shortageListsEveryOptionThatCouldNotBeReserved() {
+        UUID missing = fixtures.inStockProduct(1).optionIds().getFirst();
+        fixtures.stock(first, 1, 0, 0);
+        fixtures.stock(second, 5, 0, 0);
+
+        assertThatThrownBy(() -> ledger.reserve(Map.of(first, 2, second, 1, missing, 1)))
+                .isInstanceOfSatisfying(StockShortageException.class,
+                        e -> assertThat(e.optionIds()).containsExactlyInAnyOrder(first, missing));
+    }
+
+
+    /** 반환과 확보를 옵션별 증감으로 합친다 — 순증은 조건부 확보, 순감은 반환, 0 은 그대로. 순증이 모자라면 모은다. */
+    @Test
+    void releaseAndReserveAppliesNetChangePerOption() {
+        UUID third = fixtures.inStockProduct(1).optionIds().getFirst();
+        fixtures.stock(first, 10, 4, 0);
+        fixtures.stock(second, 10, 3, 0);
+        fixtures.stock(third, 10, 2, 0);
+
+        ledger.releaseAndReserve(Map.of(first, 3, second, 2), Map.of(first, 1, second, 2, third, 5));
+
+        assertThat(reader.findByOptionIds(List.of(first, second, third))).containsExactlyInAnyOrder(
+                new StockLevel(first, 10, 2, 0), new StockLevel(second, 10, 3, 0), new StockLevel(third, 10, 7, 0));
+        assertThatThrownBy(() -> ledger.releaseAndReserve(Map.of(), Map.of(third, 4)))
+                .isInstanceOfSatisfying(StockShortageException.class, e -> assertThat(e.optionIds()).containsExactly(third));
+    }
+
+    /** 순감을 되돌릴 확보가 모자라면 데이터 어긋남(ISE). 0 · 음수 수량은 호출하는 코드의 잘못(IAE). */
+    @Test
+    void releaseAndReserveRejectsMissingReservationAndNonPositiveQuantities() {
+        fixtures.stock(first, 10, 1, 0);
+
+        assertThatThrownBy(() -> ledger.releaseAndReserve(Map.of(first, 2), Map.of())).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> ledger.releaseAndReserve(Map.of(first, 0), Map.of())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> ledger.releaseAndReserve(Map.of(), Map.of(first, -1))).isInstanceOf(IllegalArgumentException.class);
+        assertThat(reader.findByOptionIds(List.of(first))).containsExactly(new StockLevel(first, 10, 1, 0));
+    }
+
 }

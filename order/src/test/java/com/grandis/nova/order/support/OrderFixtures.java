@@ -88,7 +88,7 @@ public class OrderFixtures {
     public static PlaceOrderCommand preorderCommand(UUID customerId, UUID preorderId, PreorderProduct product,
                                                     UUID optionId, int quantity) {
         return new PlaceOrderCommand(customerId, OrderSource.PREORDER, preorderId, preorderToken(preorderId), ADDRESS,
-                List.of(new PlaceOrderCommand.Line(product.productId(), optionId, quantity, UNIT_PRICE,
+                List.of(new PlaceOrderCommand.Line(product.productId(), optionId, quantity, UNIT_PRICE, 0, BigDecimal.ZERO,
                         PRODUCT_TITLE, OPTION_TITLE)));
     }
 

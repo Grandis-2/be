@@ -62,6 +62,6 @@ class OrderNamesTest {
     }
 
     private static OrderItem item(String productTitle, String optionTitle) {
-        return new OrderItem(TestIds.id(1), TestIds.id(1), new OrderLine(TestIds.id(1), TestIds.id(1), Quantity.ONE, Money.won(1000), productTitle, optionTitle));
+        return new OrderItem(TestIds.id(1), TestIds.id(1), OrderLine.withoutWarranty(TestIds.id(1), TestIds.id(1), Quantity.ONE, Money.won(1000), productTitle, optionTitle));
     }
 }

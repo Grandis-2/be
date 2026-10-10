@@ -46,6 +46,14 @@ public interface OrderWriter {
      */
     int changeStatus(UUID orderId, OrderStatus from, OrderStatus to, String authorizingProviderOrderId, Instant now);
 
+    /**
+     * 결제 대기인 일반 주문을 취소로 바꾸며 재고 반환 표식을 같은 UPDATE 에서 적는다(ck_order_stock_released_canceled). 이력 번호를 1 올린다.
+     * 표식이 이미 있으면 바꾸지 않는다 — 반환은 한 번만이다.
+     *
+     * @return 바뀐 행 수(0 또는 1)
+     */
+    int cancelReleasingStock(UUID orderId, Instant now);
+
     /** 승인 중 결제창 번호. 승인 중이 아니면 비어 있다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다. */
     Optional<String> authorizingProviderOrderId(UUID orderId);
 

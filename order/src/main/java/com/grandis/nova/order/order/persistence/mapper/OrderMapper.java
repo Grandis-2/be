@@ -41,12 +41,14 @@ public final class OrderMapper {
 
     public static OrderItemJpaEntity toEntity(UUID orderId, OrderLine line) {
         return new OrderItemJpaEntity(orderId, line.productId(), line.optionId(), line.quantity().value(),
-                line.unitPrice().amount(), line.productTitle(), line.optionTitle());
+                line.unitPrice().amount(), line.warrantyQuantity(), line.warrantyUnitPrice().amount(), line.productTitle(),
+                line.optionTitle());
     }
 
     public static OrderItem toDomain(OrderItemJpaEntity entity) {
         return new OrderItem(entity.getId(), entity.getOrderId(), new OrderLine(entity.getProductId(),
                 entity.getOptionId(), new Quantity(entity.getQuantity()), new Money(entity.getUnitPriceSnapshot()),
+                entity.getWarrantyQuantity(), new Money(entity.getWarrantyPriceSnapshot()),
                 entity.getProductTitleSnapshot(), entity.getOptionTitleSnapshot()));
     }
 

@@ -6,6 +6,7 @@ import com.grandis.nova.order.order.vo.Money;
 import com.grandis.nova.order.order.vo.OrderToken;
 import com.grandis.nova.order.order.vo.ShipTo;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
@@ -81,22 +82,33 @@ public record Order(
         }
     }
 
+    /** 일반 주문(장바구니)의 결제 기한. 만들 때 재고를 확보하고, 기한까지 결제하지 않으면 취소 · 반환한다. */
+    public static final Duration PAYMENT_WINDOW = Duration.ofMinutes(10);
+
     /**
      * 새 주문(저장 전, id 없음). 결제 대기에서 시작하고 이력 번호는 첫 이력과 같은 1이다.
      *
-     * 지금은 사전예약 주문만 받는다 — 일반 주문은 결제 기한(10분) · 재고 규칙이 아직 없다.
-     * 사전예약 주문은 예약 하나에 옵션 하나 · 수량 1이다(예약에 수량 칸이 없다).
+     * 받는 출처는 사전예약 · 장바구니다(바로 구매는 아직 없다).
+     * - 사전예약: 예약 하나에 옵션 하나 · 수량 1 · 보증 없음(예약에 수량 · 보증 칸이 없다). 기한은 예약의 24시간이라 비운다.
+     * - 장바구니: 기한은 만든 때부터 {@link #PAYMENT_WINDOW}.
+     *
+     * @param now 만든 시각 — 장바구니 주문의 기한 기준
      */
-    public static Order place(OrderDraft draft, OrderToken orderToken) {
-        if (draft.source() != OrderSource.PREORDER) {
-            throw new IllegalArgumentException("사전예약 주문만 만들 수 있다: source=" + draft.source());
-        }
-        if (draft.lines().size() != 1 || draft.lines().getFirst().quantity().value() != 1) {
-            throw new IllegalArgumentException("사전예약 주문은 옵션 하나 · 수량 1이다");
-        }
+    public static Order place(OrderDraft draft, OrderToken orderToken, Instant now) {
+        Instant paymentDueAt = switch (draft.source()) {
+            case PREORDER -> {
+                OrderLine line = draft.lines().getFirst();
+                if (draft.lines().size() != 1 || line.quantity().value() != 1 || line.warrantyQuantity() != 0) {
+                    throw new IllegalArgumentException("사전예약 주문은 옵션 하나 · 수량 1 · 보증 없음이다");
+                }
+                yield null;
+            }
+            case CART -> now.plus(PAYMENT_WINDOW);
+            case BUY_NOW -> throw new IllegalArgumentException("바로 구매 주문은 아직 만들 수 없다: source=" + draft.source());
+        };
         return new Order(null, orderToken, draft.customerId(), draft.source(), draft.preorderId(),
-                draft.preorderToken(), OrderStatus.AWAITING_PAYMENT, null, draft.totalAmount(), null, null, draft.shipTo(), null,
-                OrderEvent.FIRST_SEQUENCE, null, null);
+                draft.preorderToken(), OrderStatus.AWAITING_PAYMENT, null, draft.totalAmount(), paymentDueAt, null, draft.shipTo(),
+                null, OrderEvent.FIRST_SEQUENCE, null, null);
     }
 
     @Override
@@ -108,6 +120,19 @@ public record Order(
     /** 저장 전인가. 저장소는 이런 주문만 새로 넣는다. */
     public boolean isNew() {
         return id == null;
+    }
+
+    /**
+     * 일반 주문이 now 에 아직 결제 기한 안인가 — 기한 == now 는 지났다. 기한이 지난 주문을 고르는 쪽(만료 처리)은 이 반대(기한 <= now)를 써야
+     * 사이에 빠지는 주문이 없다. 사전예약 주문은 기한을 preorder 가 판정하므로 여기서 묻지 않는다.
+     *
+     * @throws IllegalStateException 사전예약 주문이다
+     */
+    public boolean acceptsPaymentAt(Instant now) {
+        if (paymentDueAt == null) {
+            throw new IllegalStateException("사전예약 주문의 기한은 preorder 가 판정한다: orderId=" + id);
+        }
+        return now.isBefore(paymentDueAt);
     }
 
     /** 취소를 받아들일 수 있는가. 규칙은 {@link OrderStatus#isCancelable()} 에 있다. */

@@ -6,6 +6,7 @@ import com.grandis.nova.order.order.domain.model.OrderEvent;
 import com.grandis.nova.order.order.domain.model.OrderItem;
 import com.grandis.nova.order.order.vo.OrderToken;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -31,6 +32,12 @@ public interface OrderReader {
     Optional<OrderItem> findItem(UUID orderItemId);
 
     List<OrderItem> findItems(UUID orderId);
+
+    /**
+     * 그 회원의 결제 안 된 장바구니 주문 — 결제 대기 · 승인 중이면 기한과 상관없이 전부(기한이 지났어도 아직 확보를 쥐고 있다).
+     * 장바구니 주문 생성이 "회원당 하나" 를 지키는 데 쓴다 — 기한 판정({@link Order#acceptsPaymentAt})은 부르는 쪽이 한다.
+     */
+    List<Order> findUnpaidCartOrders(UUID customerId);
 
     /**
      * 여러 주문의 항목을 한 번에(주문마다 다시 묻지 않는다). 주문 id · 항목 id 순이다.

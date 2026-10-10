@@ -15,12 +15,14 @@ import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import jakarta.persistence.EntityManagerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
@@ -59,6 +61,7 @@ class CartConcurrencyTest {
     @Autowired JdbcTemplate jdbcTemplate;
     @MockitoBean CatalogClient catalogClient;
     @MockitoSpyBean CartStore store;
+    @Autowired EntityManagerFactory entityManagerFactory;
 
     OrderFixtures fixtures;
     UUID customerId;
@@ -161,14 +164,27 @@ class CartConcurrencyTest {
         assertThat(lineCount()).isZero();
     }
 
-    /** 교착은 상대가 이미 끝나 있으므로 새 트랜잭션에서 한 번 더 한다 — 담기 · 수량 변경 · 삭제 모두. */
+    /**
+     * 교착은 상대가 이미 끝나 있으므로 새 트랜잭션에서 한 번 더 한다 — 담기 · 수량 변경 · 삭제 모두.
+     * 진짜 교착이면 InnoDB 가 그 트랜잭션을 되돌리므로 같은 트랜잭션에서 다시 하면 안 된다 — 시도마다 묶인 트랜잭션 자원이 다른지 본다.
+     */
     @Test
     void deadlockIsRetriedInNewTransaction() {
         UUID option = fixtures.inStockProduct(1).optionIds().getFirst();
         fixtures.stock(option, 10, 0, 0);
-        willThrow(deadlock()).willCallRealMethod().given(store).lockByCustomer(customerId);
+        List<Object> transactions = new ArrayList<>();
+        AtomicBoolean first = new AtomicBoolean(true);
+        willAnswer(invocation -> {
+            transactions.add(TransactionSynchronizationManager.getResource(entityManagerFactory));
+            if (first.getAndSet(false)) {
+                throw deadlock();
+            }
+            return invocation.callRealMethod();
+        }).given(store).lockByCustomer(customerId);
         CartLine line = cart.add(customerId, "token", option, 1, false);
         assertThat(lineCount()).isEqualTo(1);
+        assertThat(transactions).hasSize(2).doesNotContainNull();
+        assertThat(transactions.get(0)).as("다시 하기는 새 트랜잭션").isNotSameAs(transactions.get(1));
 
         willThrow(deadlock()).willCallRealMethod().given(store).lockLine(customerId, line.id());
         assertThat(cart.changeQuantity(customerId, line.id(), 3).quantity()).isEqualTo(3);
@@ -176,6 +192,46 @@ class CartConcurrencyTest {
         willThrow(deadlock()).willCallRealMethod().given(store).delete(customerId, line.id());
         cart.remove(customerId, line.id());
         assertThat(lineCount()).isZero();
+    }
+
+    /**
+     * 장바구니 경로의 진짜 잠금 대기 초과(1205)가 교착이 아닌 잠금 실패로 갈려 다시 하지 않고 503 이다 — 합성 예외가 아니라 MySQL 의 오류로 본다.
+     * 다른 트랜잭션이 그 회원의 줄을 잠근 채 두고, 담기의 연결만 잠금 대기를 1초로 줄인다(끝나면 되돌린다 — 풀의 연결이다).
+     */
+    @Test
+    void realLockWaitTimeoutOnCartLinesIsUnavailableWithoutRetry() throws Exception {
+        UUID option = fixtures.inStockProduct(1).optionIds().getFirst();
+        fixtures.stock(option, 10, 0, 0);
+        transactionTemplate.executeWithoutResult(status -> store.insert(customerId, option, false, 1));
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CompletableFuture<Void> holder = CompletableFuture.runAsync(() -> transactionTemplate.executeWithoutResult(status -> {
+            jdbcTemplate.queryForList("SELECT id FROM cart_items WHERE customer_id = ? FOR UPDATE", (Object) bytes(customerId));
+            locked.countDown();
+            awaitQuietly(release);
+        }));
+        assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+        willAnswer(invocation -> {
+            Integer before = jdbcTemplate.queryForObject("SELECT @@SESSION.innodb_lock_wait_timeout", Integer.class);
+            jdbcTemplate.execute("SET SESSION innodb_lock_wait_timeout = 1");
+            try {
+                return invocation.callRealMethod();
+            } finally {
+                jdbcTemplate.execute("SET SESSION innodb_lock_wait_timeout = " + before);
+            }
+        }).given(store).lockByCustomer(customerId);
+        try {
+            long started = System.nanoTime();
+            assertThatThrownBy(() -> cart.add(customerId, "token", option, 1, false))
+                    .isInstanceOfSatisfying(BusinessException.class,
+                            e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
+            // 1초 설정이 담기의 연결에 걸렸다는 대조 — 안 걸렸으면 기본 50초를 기다린 뒤 똑같이 503 이다
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(10));
+            verify(store, times(1)).lockByCustomer(customerId);
+        } finally {
+            release.countDown();
+            holder.get(10, TimeUnit.SECONDS);
+        }
     }
 
     /** 다시 해도 교착이면 503. 잠금 대기 초과(1205)는 이미 오래 기다렸으므로 다시 하지 않고 503. */

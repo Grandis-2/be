@@ -280,6 +280,11 @@ class CartApiTest {
         breaker.reset();
         try {
             assertThat(breaker.getCircuitBreakerConfig().getMinimumNumberOfCalls()).isEqualTo(20);
+            assertThat(breaker.getCircuitBreakerConfig().getSlidingWindowSize()).isEqualTo(50);
+            assertThat(breaker.getCircuitBreakerConfig().getSlowCallDurationThreshold()).isEqualTo(java.time.Duration.ofSeconds(1));
+            assertThat(breaker.getCircuitBreakerConfig().getIgnoreExceptionPredicate()
+                    .test(io.github.resilience4j.bulkhead.BulkheadFullException.createBulkheadFullException(
+                            bulkheads.bulkhead(CatalogReader.DEPENDENCY)))).as("상한 초과는 회로의 실패가 아니다").isTrue();
             assertThat(breaker.getCircuitBreakerConfig().getWaitIntervalFunctionInOpenState().apply(1)).isEqualTo(10_000L);
             assertThat(bulkheads.bulkhead(CatalogReader.DEPENDENCY).getBulkheadConfig().getMaxConcurrentCalls()).isEqualTo(20);
             assertThat(bulkheads.bulkhead(CatalogReader.DEPENDENCY).getBulkheadConfig().getMaxWaitDuration()).isZero();

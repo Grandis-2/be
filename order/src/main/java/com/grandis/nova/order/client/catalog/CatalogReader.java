@@ -90,13 +90,14 @@ public class CatalogReader {
     }
 
     /**
-     * 판정 · 금액에 쓰는 칸이 다 있고, 물은 옵션인가. 빠진 칸을 기본값으로 읽으면 가격 0 · 보증가 0 · 잘못된 거절 사유가 되고,
+     * 판정 · 금액 · 주문 스냅샷에 쓰는 칸이 다 있고, 물은 옵션인가. 빠진 칸을 기본값으로 읽으면 가격 0 · 보증가 0 · 잘못된 거절 사유가 되고,
      * 묻지 않은 옵션을 받으면 물은 옵션이 판매 종료로 보인다. 다시 물어도 같으므로 연동 오류(500)다.
      *
      * @return 그 옵션의 id
      */
     private static UUID requireReadable(Collection<UUID> requested, CatalogOption option) {
-        boolean complete = option.optionId() != null && option.price() != null && option.saleMode() != null
+        boolean complete = option.optionId() != null && option.productId() != null && option.productTitle() != null
+                && option.optionTitle() != null && option.price() != null && option.saleMode() != null
                 && option.productStatus() != null && option.optionStatus() != null && option.visible() != null
                 && option.registrationCompleted() != null && option.warranty() != null
                 && (!option.warranty().offered() || option.warranty().surcharge() != null);

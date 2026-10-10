@@ -4,6 +4,7 @@ import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.vo.Money;
 import com.grandis.nova.order.order.vo.OrderToken;
+import com.grandis.nova.order.order.vo.Quantity;
 import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.Test;
 
@@ -24,7 +25,7 @@ class OrderTest {
         OrderToken token = OrderToken.issue();
 
         Order order = Order.place(new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, SHIP_TO,
-                List.of(line(TestIds.id(10), 1, 1_250_000))), token);
+                List.of(line(TestIds.id(10), 1, 1_250_000))), token, Instant.EPOCH);
 
         assertThat(order.id()).isNull();
         assertThat(order.orderToken()).isEqualTo(token);
@@ -36,10 +37,10 @@ class OrderTest {
     }
 
     @Test
-    void onlyPreorderOrdersCanBePlacedForNow() {
+    void buyNowOrdersCannotBePlacedYet() {
         OrderDraft buyNow = new OrderDraft(TestIds.id(1), OrderSource.BUY_NOW, null, null, SHIP_TO, List.of(line(TestIds.id(10), 1, 1000)));
 
-        assertThatThrownBy(() -> Order.place(buyNow, OrderToken.issue()))
+        assertThatThrownBy(() -> Order.place(buyNow, OrderToken.issue(), Instant.EPOCH))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("BUY_NOW");
     }
@@ -50,8 +51,8 @@ class OrderTest {
         OrderDraft twoOptions = new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, SHIP_TO,
                 List.of(line(TestIds.id(10), 1, 1000), line(TestIds.id(11), 1, 1000)));
 
-        assertThatThrownBy(() -> Order.place(twoUnits, OrderToken.issue())).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> Order.place(twoOptions, OrderToken.issue())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Order.place(twoUnits, OrderToken.issue(), Instant.EPOCH)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Order.place(twoOptions, OrderToken.issue(), Instant.EPOCH)).isInstanceOf(IllegalArgumentException.class);
     }
 
     // 생성자는 place 를 거치지 않는 경로(저장소에서 되살리기 등)에도 DB CHECK 와 같은 규칙을 건다.
@@ -136,4 +137,43 @@ class OrderTest {
         return new Order(TestIds.id(1), TOKEN, TestIds.id(1), source, preorderId, preorderToken, status, null, Money.won(1000), paymentDueAt, stockReleasedAt,
                 SHIP_TO, null, eventSequence, Instant.EPOCH, Instant.EPOCH);
     }
+
+    @Test
+    void cartOrderHasPaymentWindowAndManyLinesWithWarranty() {
+        Instant now = Instant.parse("2026-10-10T06:00:00Z");
+        OrderDraft cart = new OrderDraft(TestIds.id(1), OrderSource.CART, null, null, SHIP_TO, List.of(
+                new OrderLine(TestIds.id(100), TestIds.id(10), new Quantity(2), Money.won(1_000), 1, Money.won(300), "상품", "옵션 1"),
+                line(TestIds.id(11), 3, 500)));
+
+        Order order = Order.place(cart, OrderToken.issue(), now);
+
+        assertThat(order.paymentDueAt()).isEqualTo(now.plus(Order.PAYMENT_WINDOW)).isEqualTo(Instant.parse("2026-10-10T06:10:00Z"));
+        assertThat(order.totalAmount()).isEqualTo(Money.won(2 * 1_000 + 300 + 3 * 500));
+        assertThat(order.status()).isEqualTo(OrderStatus.AWAITING_PAYMENT);
+        assertThat(order.preorderId()).isNull();
+    }
+
+    @Test
+    void preorderOrderCannotCarryWarranty() {
+        OrderDraft withWarranty = new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, SHIP_TO, List.of(
+                new OrderLine(TestIds.id(100), TestIds.id(10), Quantity.ONE, Money.won(1_000), 1, Money.won(300), "상품", "옵션")));
+
+        assertThatThrownBy(() -> Order.place(withWarranty, OrderToken.issue(), Instant.EPOCH)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 기한 == now 는 지났다 — 기한이 지난 주문을 고르는 쪽(만료 처리)은 기한 <= now 를 써야 사이에 빠지는 주문이 없다(계약). */
+    @Test
+    void cartOrderAcceptsPaymentStrictlyBeforeDue() {
+        Instant now = Instant.parse("2026-10-10T06:00:00Z");
+        Order order = Order.place(new OrderDraft(TestIds.id(1), OrderSource.CART, null, null, SHIP_TO, List.of(line(TestIds.id(10), 1, 1000))),
+                OrderToken.issue(), now);
+        Instant due = now.plus(Order.PAYMENT_WINDOW);
+
+        assertThat(order.acceptsPaymentAt(due.minusNanos(1))).isTrue();
+        assertThat(order.acceptsPaymentAt(due)).isFalse();
+        assertThatThrownBy(() -> Order.place(new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, SHIP_TO,
+                List.of(line(TestIds.id(10), 1, 1000))), OrderToken.issue(), now).acceptsPaymentAt(now))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
 }
