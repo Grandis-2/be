@@ -6,6 +6,7 @@ import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.repository.AdminOrderFilter;
 import com.grandis.nova.order.order.query.OrderQueryService;
+import com.grandis.nova.order.web.PageSizes;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
