@@ -64,6 +64,7 @@ class OutboxPublisher {
             return false;
         }
         metrics.published(row.eventType(), true);
+        // 보낸 기록이다. 커밋 직후 발행과 릴레이가 같은 행을 둘 다 보낼 수 있어, 한 event_id 에 이 줄이 둘 이상일 수 있다(의도)
         withEventKeys(log.atInfo(), row)
                 .addKeyValue("destination", message.destination())
                 .log("아웃박스 발행");

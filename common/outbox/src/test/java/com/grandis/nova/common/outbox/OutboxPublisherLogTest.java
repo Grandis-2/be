@@ -16,6 +16,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -66,7 +67,7 @@ class OutboxPublisherLogTest {
 
         assertThat(publisher.publish(row, null)).isTrue();
 
-        assertThat(appender.list).singleElement().satisfies(event -> {
+        assertThat(eventsOfRow()).singleElement().satisfies(event -> {
             assertThat(event.getLevel()).isEqualTo(Level.INFO);
             assertThat(keyValues(event)).isEqualTo(Map.of(
                     "event_id", row.eventId(),
@@ -86,8 +87,7 @@ class OutboxPublisherLogTest {
 
         assertThat(publisher.publish(row, null)).isFalse();
 
-        assertThat(appender.list).singleElement()
-                .satisfies(event -> assertThat(keyValues(event)).containsEntry("event_id", row.eventId()));
+        assertThat(eventsOfRow()).hasSize(1);
     }
 
     @Test
@@ -96,7 +96,7 @@ class OutboxPublisherLogTest {
 
         assertThat(publisher.publish(row, null)).isFalse();
 
-        assertThat(appender.list).singleElement().satisfies(event -> {
+        assertThat(eventsOfRow()).singleElement().satisfies(event -> {
             assertThat(event.getLevel()).isEqualTo(Level.WARN);
             assertThat(keyValues(event))
                     .containsEntry("event_id", row.eventId())
@@ -106,6 +106,13 @@ class OutboxPublisherLogTest {
             assertThat(event.getFormattedMessage()).contains("outboxEventId=7").doesNotContain("shipTo");
             assertThat(event.getThrowableProxy().getMessage()).isEqualTo("queue down");
         });
+    }
+
+    /** 이 시험의 행이 남긴 로그만. 로거를 같은 JVM 의 다른 시험(다른 컨텍스트의 발행)과 함께 쓰므로 event_id 로 거른다. */
+    private List<ILoggingEvent> eventsOfRow() {
+        return appender.list.stream()
+                .filter(event -> row.eventId().equals(keyValues(event).get("event_id")))
+                .toList();
     }
 
     private static Map<String, String> keyValues(ILoggingEvent event) {
