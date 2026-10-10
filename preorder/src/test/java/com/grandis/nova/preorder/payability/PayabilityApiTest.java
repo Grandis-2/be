@@ -132,6 +132,42 @@ class PayabilityApiTest {
                 .andExpect(status().isUnauthorized());
     }
 
+    /** order 가 주문에 저장한 내부 id 로 묻는 입구. 응답은 공개 번호 입구와 같다. */
+    @Test
+    void 내부_id_로_물어도_공개_번호와_같은_결과를_준다() throws Exception {
+        makePayable();
+
+        mockMvc.perform(get("/internal/preorders/ids/{id}/payability", preorderId).with(customer(customerId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.preorderId").value(token))
+                .andExpect(jsonPath("$.data.preorderInternalId").value(preorderId.toString()))
+                .andExpect(jsonPath("$.data.customerId").value(customerId.toString()))
+                .andExpect(jsonPath("$.data.status").value("REGISTERED"))
+                .andExpect(jsonPath("$.data.payable").value(true))
+                .andExpect(jsonPath("$.data.reason").value(nullValue()));
+    }
+
+    @Test
+    void 내부_id_입구도_없는_예약은_코드가_있는_404_남의_예약은_403_토큰이_없으면_401() throws Exception {
+        mockMvc.perform(get("/internal/preorders/ids/{id}/payability", UUID.randomUUID()).with(customer(customerId)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PREORDER_NOT_FOUND"));
+        mockMvc.perform(get("/internal/preorders/ids/{id}/payability", preorderId).with(customer(fixtures.customer())))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
+        mockMvc.perform(get("/internal/preorders/ids/{id}/payability", preorderId).with(admin()))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/internal/preorders/ids/{id}/payability", preorderId))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void 내부_id_가_UUID_가_아니면_400() throws Exception {
+        mockMvc.perform(get("/internal/preorders/ids/{id}/payability", "not-a-uuid").with(customer(customerId)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
+    }
+
     private void makePayable() {
         handler.onExternalJobSucceeded(new ExternalJobSucceeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
                 token, "REGISTER", "R-" + ShopFixtures.unique()));
