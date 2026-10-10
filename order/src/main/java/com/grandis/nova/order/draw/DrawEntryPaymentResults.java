@@ -2,12 +2,14 @@ package com.grandis.nova.order.draw;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.order.client.payment.DeclineReason;
 import com.grandis.nova.order.draw.domain.model.DrawEntry;
 import com.grandis.nova.order.draw.domain.model.DrawEntryStatus;
 import com.grandis.nova.order.draw.domain.model.EntryTransition;
 import com.grandis.nova.order.draw.domain.repository.DrawCampaignStore;
 import com.grandis.nova.order.draw.domain.repository.DrawEntryStore;
+import com.grandis.nova.order.outbox.DrawEntryPaid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.PessimisticLockingFailureException;
@@ -27,6 +29,7 @@ import java.util.function.Supplier;
  *
  * - 승인은 결제창을 대조하지 않고 결제 완료로 바꾼다. 결제 대기에 오는 승인은 상태 머신으로 갈 수 없는 경우라 ERROR 로 남기되 받는다 — 그 대상의
  *   유일한 성공 결제이고, 응모에는 취소가 없어 놓치면 돈을 받고도 추첨에서 빠진다.
+ * - 결제 완료를 반영한 트랜잭션에서 Mock 전송 이벤트(DRAW_ENTRY_PAID)를 쓴다 — worker 가 받아 Mock(추첨)에 넘긴다.
  * - 거절 · 되돌림은 그 결제창의 승인 중일 때만 결제 대기로 돌린다.
  */
 @Service
@@ -36,13 +39,16 @@ public class DrawEntryPaymentResults {
 
     private final DrawCampaignStore campaigns;
     private final DrawEntryStore entries;
+    private final OutboxWriter outbox;
     private final TransactionTemplate writeTransaction;
     private final TransactionTemplate readTransaction;
     private final Clock clock;
 
-    public DrawEntryPaymentResults(DrawCampaignStore campaigns, DrawEntryStore entries, PlatformTransactionManager transactionManager, Clock clock) {
+    public DrawEntryPaymentResults(DrawCampaignStore campaigns, DrawEntryStore entries, OutboxWriter outbox,
+                                   PlatformTransactionManager transactionManager, Clock clock) {
         this.campaigns = campaigns;
         this.entries = entries;
+        this.outbox = outbox;
         this.writeTransaction = new TransactionTemplate(transactionManager);
         this.readTransaction = new TransactionTemplate(transactionManager);
         this.readTransaction.setReadOnly(true);
@@ -77,6 +83,11 @@ public class DrawEntryPaymentResults {
                 case PAID -> new EntryTransition(false, DrawEntryStatus.PAID);
             };
             fromAwaiting[0] = approved.applied() && before == DrawEntryStatus.AWAITING_PAYMENT;
+            if (approved.applied()) {
+                // 결제 완료와 Mock 전송 이벤트는 한 트랜잭션이다 — 반영이 한 번뿐이라(전제를 건 UPDATE) 이벤트도 한 번 쓴다
+                DrawEntry entry = entries.findById(entryId).orElseThrow(() -> new IllegalStateException("응모가 사라졌다: " + entryId));
+                outbox.append(new DrawEntryPaid(entry.id(), entry.campaignId(), entry.customerId()));
+            }
             return approved;
         });
         if (fromAwaiting[0]) {
