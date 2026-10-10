@@ -22,7 +22,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.net.URI;
@@ -84,11 +83,11 @@ public class DrawController {
     }
 
     @PostMapping("/{drawId}/entries/me/payment-attempts")
-    @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "응모비 결제 준비", description = "결제창을 열 값. 금액은 응모비다. 결제 대기 · 응모 기간일 때만")
-    public ApiResponse<EntryPaymentAttemptResponse> prepare(@CurrentCustomerId UUID customerId, @PathVariable UUID drawId,
-                                                            HttpServletRequest httpRequest) {
-        return ApiResponse.ok(EntryPaymentAttemptResponse.of(payments.prepare(customerId, BearerTokens.extract(httpRequest).orElse(null), drawId)));
+    @Operation(summary = "응모비 결제 준비", description = "201 결제창을 열 값. 금액은 응모비다. 결제 대기 · 응모 기간일 때만")
+    public ResponseEntity<ApiResponse<EntryPaymentAttemptResponse>> prepare(@CurrentCustomerId UUID customerId, @PathVariable UUID drawId,
+                                                                            HttpServletRequest httpRequest) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(
+                EntryPaymentAttemptResponse.of(payments.prepare(customerId, BearerTokens.extract(httpRequest).orElse(null), drawId))));
     }
 
     @PostMapping("/{drawId}/entries/me/payment-attempts/{tossOrderId}/confirm")
