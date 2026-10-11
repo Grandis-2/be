@@ -68,6 +68,7 @@ class WorkerPropertiesTest {
                 Map.of("nova.worker.concurrency.decrease-factor", "1"),
                 Map.of("nova.worker.circuit.open-multiplier", "0.5"),
                 Map.of("nova.worker.mock.max-response-body", "10B"),
+                Map.of("nova.worker.mock.max-response-body", "2GB"),
                 Map.of("nova.worker.mock.validate-after-inactivity", "0s"),
                 Map.of("nova.worker.reject-guard.pause", "0s"),
                 Map.of("nova.worker.concurrency.per-mock", "65536", "nova.worker.concurrency.mock-max-instances", "65536"),

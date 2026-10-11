@@ -9,8 +9,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /** 상한 6 · 시작 3 · 최소 2 · CANCEL 전용 1, 10초 창. p95 1초 미만 · 실패 5% 미만이면 +1, p95 0.15초 이상 · 실패 20% 이상이면 절반. */
 class ConcurrencyLimiterTest {
@@ -48,15 +50,16 @@ class ConcurrencyLimiterTest {
     @Test
     void 기다리는_동안_자리가_나면_잡는다() throws Exception {
         acquire(JobType.CANCEL, 3);
-        Thread releaser = Thread.ofVirtual().start(() -> {
-            sleep(Duration.ofMillis(100));
-            held.getFirst().close();
-        });
+        AtomicReference<Optional<Permit>> waited = new AtomicReference<>();
+        Thread waiter = Thread.ofPlatform().start(
+                () -> waited.set(limiter.tryAcquire(JobType.CANCEL, Duration.ofSeconds(30))));
+        // 자리가 없어 기다리기 시작한 뒤에 돌려준다
+        await().atMost(Duration.ofSeconds(5)).until(() -> waiter.getState() == Thread.State.TIMED_WAITING);
 
-        Optional<Permit> permit = limiter.tryAcquire(JobType.CANCEL, Duration.ofSeconds(5));
+        held.getFirst().close();
 
-        releaser.join();
-        assertThat(permit).isPresent();
+        waiter.join(Duration.ofSeconds(5));
+        assertThat(waited.get()).isPresent();
     }
 
     @Test
@@ -183,13 +186,5 @@ class ConcurrencyLimiterTest {
             }
         }
         return acquired;
-    }
-
-    private static void sleep(Duration duration) {
-        try {
-            Thread.sleep(duration);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
     }
 }

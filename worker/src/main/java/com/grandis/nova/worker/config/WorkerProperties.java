@@ -55,7 +55,7 @@ public record WorkerProperties(
                     && positive(readTimeout), "mock 의 시간 값은 0 보다 커야 한다");
             require(maxResponseBody != null && maxResponseBody.toBytes() >= 1024
                             && maxResponseBody.toBytes() <= Integer.MAX_VALUE,
-                    "mock.max-response-body 는 1KB 이상이어야 한다: " + maxResponseBody);
+                    "mock.max-response-body 는 1KB 이상 2GB 미만이어야 한다: " + maxResponseBody);
             require(positive(slowCallThreshold) && slowCallThreshold.compareTo(readTimeout) < 0,
                     "mock.slow-call-threshold 는 0 보다 크고 read-timeout 보다 짧아야 한다: " + slowCallThreshold);
         }
