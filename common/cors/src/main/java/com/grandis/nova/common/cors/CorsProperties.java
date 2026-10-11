@@ -2,7 +2,9 @@ package com.grandis.nova.common.cors;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -29,6 +31,13 @@ record CorsProperties(List<String> allowedOrigins) {
             }
         }
         allowedOrigins = List.copyOf(allowedOrigins);
+    }
+
+    /** 이 목록에 more 를 더한 것(순서 유지 · 중복 제거). 더한 값도 같은 검사를 거친다. */
+    CorsProperties including(List<String> more) {
+        Set<String> merged = new LinkedHashSet<>(allowedOrigins);
+        merged.addAll(more);
+        return new CorsProperties(List.copyOf(merged));
     }
 
     /** 브라우저는 기본 포트(https 443 · http 80)를 빼고 보낸다 — 붙여 적으면 어떤 요청과도 맞지 않는다. */
