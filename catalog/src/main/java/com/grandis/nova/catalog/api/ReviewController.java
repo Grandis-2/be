@@ -41,7 +41,7 @@ public class ReviewController {
         this.bodies = bodies;
     }
 
-    @Operation(summary = "리뷰 작성", description = "배송 완료된 내 일반 판매 주문상품에 하나. body 는 앞뒤 공백을 뺀 1~2,000자")
+    @Operation(summary = "리뷰 작성", description = "배송 완료된 내 일반 판매 주문상품(사전예약 · 드로우 당첨 증정 제외)에 하나. body 는 앞뒤 공백을 뺀 1~2,000자")
     @PostMapping("/api/v1/reviews")
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<ReviewView> write(@CurrentCustomerId UUID customerId,

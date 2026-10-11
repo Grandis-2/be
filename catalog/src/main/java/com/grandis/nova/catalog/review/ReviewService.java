@@ -25,7 +25,7 @@ import java.util.UUID;
  * 상품 리뷰 — 일반 판매 상품의 배송 완료된 주문상품 1건당 1개, 작성자만 수정 · 삭제, 조회는 비로그인도(2026-10-06 결정).
  *
  * <p><b>쓸 자격은 order 가 안다.</b> catalog 는 order 표를 읽지 않고 order 내부 API 로 묻는다 — 주문상품이 없거나 토큰 주인의 것이
- * 아니면(order 의 ORDER_ITEM_NOT_FOUND 404) 404, 배송 완료(DELIVERED)가 아니거나 사전예약 주문이면 409 REVIEW_NOT_ALLOWED.
+ * 아니면(order 의 ORDER_ITEM_NOT_FOUND 404) 404, 배송 완료(DELIVERED)가 아니거나 사전예약 주문 · 드로우 당첨 주문이면 409 REVIEW_NOT_ALLOWED.
  * 상품이 사전예약이어도 409 다(catalog 표로 판정). 응답이 물은 주문상품이 아니거나 필수 칸이 비면 연동 오류(500)다 — 리뷰의 상품은
  * order 응답만 정하므로(서비스를 넘는 FK 가 없다) 대조한다. 작성자 표시명은 member 내부 API 로 받아 가린 값(첫 글자 + "**")만 저장한다.
  *
@@ -39,6 +39,8 @@ public class ReviewService {
     static final String ORDER_ITEM_NOT_FOUND = "ORDER_ITEM_NOT_FOUND";
     static final String DELIVERED = "DELIVERED";
     static final String PREORDER_SOURCE = "PREORDER";
+    /** 럭키 드로우 당첨 증정 주문 — 구매가 아니라 증정이라 리뷰를 받지 않는다 */
+    static final String DRAW_SOURCE = "DRAW";
     private static final String MASK = "**";
 
     private final ProductReviewRepository reviews;
@@ -72,6 +74,9 @@ public class ReviewService {
                 .orElseThrow(() -> InternalCalls.contractViolation(Dependencies.ORDER, "catalog 에 없는 상품의 주문상품"));
         if (PREORDER_SOURCE.equals(item.orderSource()) || product.getSaleMode() == SaleMode.PREORDER) {
             throw new BusinessException(CatalogErrorCode.REVIEW_NOT_ALLOWED, "사전예약 상품은 리뷰를 받지 않습니다.");
+        }
+        if (DRAW_SOURCE.equals(item.orderSource())) {
+            throw new BusinessException(CatalogErrorCode.REVIEW_NOT_ALLOWED, "드로우 당첨 증정품은 리뷰를 받지 않습니다.");
         }
         // member 는 토큰의 회원이 없으면 401 로 답한다. 404 는 경로 없음(배포 순서 · 주소 오류)이라 연동 오류다 — 401 로 바꾸면
         // 프론트가 토큰 문제로 보고 재발급 · 로그아웃한다

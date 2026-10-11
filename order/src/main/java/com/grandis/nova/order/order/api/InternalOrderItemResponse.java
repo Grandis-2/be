@@ -13,7 +13,7 @@ import java.util.UUID;
  * @param orderId     주문 내부 id(orders.id). 공개 주문 번호(order_token)가 아니다
  * @param optionTitle 주문 당시 옵션명(order_items.option_title_snapshot)
  * @param orderStatus orders.status 이름 그대로
- * @param orderSource orders.source 이름 그대로(PREORDER · BUY_NOW · CART)
+ * @param orderSource orders.source 이름 그대로(PREORDER · BUY_NOW · CART · DRAW)
  */
 public record InternalOrderItemResponse(UUID orderItemId, UUID orderId, UUID productId, UUID optionId,
                                         String optionTitle, OrderStatus orderStatus, OrderSource orderSource) {
