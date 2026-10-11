@@ -149,7 +149,7 @@ class BatchQueueConsumerFailureTest {
         consumer.start();
 
         await().atMost(TIMEOUT).until(() -> !consumer.isRunning() && consumer.inFlight() == 0);
-        assertThat(receivingStopped()).isTrue();
+        await().atMost(TIMEOUT).until(this::receivesNothingForAWhile);
     }
 
     /** 지우는 작업만 죽고 받기가 남으면 지우지 못하는 메시지를 끝없이 다시 처리한다. */
@@ -163,7 +163,7 @@ class BatchQueueConsumerFailureTest {
         consumer.start();
 
         await().atMost(TIMEOUT).until(() -> !consumer.isRunning());
-        assertThat(receivingStopped()).isTrue();
+        await().atMost(TIMEOUT).until(this::receivesNothingForAWhile);
     }
 
     @Test
@@ -228,11 +228,10 @@ class BatchQueueConsumerFailureTest {
         }).given(sqs).deleteMessageBatch(any(Consumer.class));
     }
 
-    /** 진행 중이던 받기 한 번이 끝난 뒤로는 더 받지 않는다. */
-    private boolean receivingStopped() {
-        await().pollDelay(Duration.ofMillis(200)).until(() -> true);
+    /** 빈 받기는 20ms 마다 돌아오므로, 그 열 배 넘게 받기가 늘지 않으면 멈춘 것이다. */
+    private boolean receivesNothingForAWhile() throws InterruptedException {
         int before = receives.get();
-        await().pollDelay(Duration.ofMillis(300)).until(() -> true);
+        Thread.sleep(Duration.ofMillis(300));
         return receives.get() == before;
     }
 
