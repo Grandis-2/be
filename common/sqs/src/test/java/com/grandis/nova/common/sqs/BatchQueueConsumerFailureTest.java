@@ -41,8 +41,8 @@ import static org.mockito.Mockito.verify;
 @ExtendWith(OutputCaptureExtension.class)
 class BatchQueueConsumerFailureTest {
 
-    static final BatchConsumerSettings SETTINGS = new BatchConsumerSettings("preorder-register", 0,
-            Duration.ofMinutes(2), Duration.ofMillis(20), Duration.ofSeconds(5));
+    static final BatchConsumerSettings SETTINGS =
+            new BatchConsumerSettings("preorder-register", 0, Duration.ofMinutes(2), Duration.ofSeconds(5));
     static final Duration TIMEOUT = Duration.ofSeconds(10);
 
     final SqsClient sqs = mock(SqsClient.class);

@@ -2,13 +2,10 @@ package com.grandis.nova.common.sqs;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.SmartLifecycle;
-import software.amazon.awssdk.retries.api.BackoffStrategy;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.DeleteMessageBatchRequestEntry;
 import software.amazon.awssdk.services.sqs.model.DeleteMessageBatchResponse;
 import software.amazon.awssdk.services.sqs.model.Message;
-import software.amazon.awssdk.services.sqs.model.MessageSystemAttributeName;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -27,33 +24,26 @@ import java.util.function.IntSupplier;
  * 받은 묶음이 끝나기를 기다리지 않고 다시 받으므로, 빈 자리 수는 {@link #inFlight()} 를 빼고 알려 준다.
  * 끝내는 방식은 처리 함수가 {@link MessageOutcome} 으로 정하고, 지울 메시지는 모아서 묶음으로 지운다.
  */
-public final class BatchQueueConsumer implements SmartLifecycle {
+public final class BatchQueueConsumer extends QueuePoller {
 
     private static final Logger log = LoggerFactory.getLogger(BatchQueueConsumer.class);
-    /** SQS 가 한 번에 받고 지우는 최대 건수. */
+    /** SQS 가 한 번에 지우는 최대 건수. */
     private static final int MAX_BATCH = 10;
-    private static final BackoffStrategy RECEIVE_FAILURE_BACKOFF =
-            BackoffStrategy.exponentialDelayHalfJitter(Duration.ofSeconds(1), Duration.ofSeconds(30));
-    private static final Duration RECEIVE_TIMEOUT_MARGIN = Duration.ofSeconds(5);
     /** 지울 메시지가 하나 생긴 뒤 묶음을 채우려고 더 기다리는 시간. */
     private static final Duration DELETE_LINGER = Duration.ofMillis(100);
     /** 삭제 작업을 끝내라는 표식. 종료 때 남은 삭제 뒤에 넣는다. */
     private static final Message STOP = Message.builder().build();
 
-    private final SqsClient sqs;
     private final SqsQueueUrls queueUrls;
-    private final BatchConsumerSettings settings;
-    private final List<String> messageAttributeNames;
+    private final Duration stopTimeout;
     private final IntSupplier freeSlots;
     private final BatchMessageHandler handler;
-    private final Duration receiveTimeout;
     private final AtomicInteger inFlight = new AtomicInteger();
     private final BlockingQueue<Message> deletions = new LinkedBlockingQueue<>();
     private ExecutorService handlers;
-    private volatile Thread receiver;
     private volatile Thread deleter;
-    private volatile boolean running;
     private volatile boolean paused;
+    private volatile boolean aborted;
 
     /**
      * @param messageAttributeNames 함께 받을 메시지 속성 이름. 적지 않은 속성은 받은 메시지에 없다
@@ -61,26 +51,24 @@ public final class BatchQueueConsumer implements SmartLifecycle {
      */
     public BatchQueueConsumer(SqsClient sqs, SqsQueueUrls queueUrls, BatchConsumerSettings settings,
                               List<String> messageAttributeNames, IntSupplier freeSlots, BatchMessageHandler handler) {
-        this.sqs = sqs;
+        super(sqs, queueUrls, settings.pollerSettings(), messageAttributeNames);
         this.queueUrls = queueUrls;
-        this.settings = settings;
-        this.messageAttributeNames = List.copyOf(messageAttributeNames);
+        this.stopTimeout = settings.stopTimeout();
         this.freeSlots = freeSlots;
         this.handler = handler;
-        this.receiveTimeout = Duration.ofSeconds(settings.waitSeconds()).plus(RECEIVE_TIMEOUT_MARGIN);
     }
 
     @Override
     public synchronized void start() {
-        if (receiver != null) {
+        if (deleter != null) {
             return;
         }
-        running = true;
+        aborted = false;
         deletions.clear();
         handlers = Executors.newThreadPerTaskExecutor(
                 Thread.ofVirtual().name(settings.queue() + "-handler-", 0).factory());
-        deleter = Thread.ofVirtual().name(settings.queue() + "-deleter").start(() -> guarded(this::deleteLoop));
-        receiver = Thread.ofVirtual().name(settings.queue() + "-receiver").start(() -> guarded(this::receiveLoop));
+        deleter = Thread.ofVirtual().name(settings.queue() + "-deleter").start(this::deleteGuarded);
+        super.start();
     }
 
     /**
@@ -89,40 +77,34 @@ public final class BatchQueueConsumer implements SmartLifecycle {
      */
     @Override
     public synchronized void stop() {
-        if (receiver == null) {
+        if (deleter == null) {
             return;
         }
-        running = false;
+        super.stop();
         try {
-            if (!receiver.join(Duration.ofSeconds(settings.waitSeconds() + 10L))) {
-                log.warn("{} 받기가 종료 시간 안에 끝나지 않아 인터럽트한다", settings.queue());
-                receiver.interrupt();
-            }
             handlers.shutdown();
-            if (!handlers.awaitTermination(settings.stopTimeout().toMillis(), TimeUnit.MILLISECONDS)) {
+            if (!handlers.awaitTermination(stopTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
                 log.warn("{} 처리 중인 메시지가 종료 시간 안에 끝나지 않아 인터럽트한다 inFlight={}",
                         settings.queue(), inFlight.get());
                 handlers.shutdownNow();
             }
             deletions.add(STOP);
-            if (!deleter.join(settings.stopTimeout())) {
+            if (!deleter.join(stopTimeout)) {
                 log.warn("{} 남은 삭제가 종료 시간 안에 끝나지 않아 인터럽트한다", settings.queue());
                 deleter.interrupt();
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } finally {
-            receiver = null;
             deleter = null;
         }
     }
 
-    /** 멈추지 않았고 받기 · 삭제 작업이 모두 살아 있다. 예상 못 한 오류로 스스로 끝났으면 false 다. */
+    /** 받기 · 삭제 작업이 모두 살아 있다. 예상 못 한 오류로 스스로 끝났으면 false 다. */
     @Override
     public boolean isRunning() {
-        Thread receiving = receiver;
         Thread deleting = deleter;
-        return running && receiving != null && receiving.isAlive() && deleting != null && deleting.isAlive();
+        return super.isRunning() && !aborted && deleting != null && deleting.isAlive();
     }
 
     /** 새로 받지 않는다. 진행 중인 롱 폴링이 돌려주는 메시지는 처리 함수에 넘어간다. 처리 중인 메시지는 그대로 끝낸다. */
@@ -143,57 +125,14 @@ public final class BatchQueueConsumer implements SmartLifecycle {
         return inFlight.get();
     }
 
-    private void guarded(Runnable loop) {
-        try {
-            loop.run();
-        } catch (Throwable e) {
-            abort(e);
-        }
+    @Override
+    protected int receiveLimit() {
+        return paused || aborted ? 0 : freeSlots.getAsInt();
     }
 
-    /** 이어 가도 또 실패할 오류(메모리 부족 등)다. 받기 · 삭제 중 하나만 남아 돌지 않게 새로 받지 않고, 다시 띄우지 않는다. */
-    private void abort(Throwable e) {
-        running = false;
-        log.error("{} 큐 소비 작업이 예상 못 한 오류로 끝났다 — 다시 띄우지 않는다 worker={}",
-                settings.queue(), Thread.currentThread().getName(), e);
-    }
-
-    private void receiveLoop() {
-        int failures = 0;
-        while (running) {
-            try {
-                int slots = paused ? 0 : Math.min(freeSlots.getAsInt(), MAX_BATCH);
-                if (slots <= 0) {
-                    if (!sleep(settings.idleWait())) {
-                        return;
-                    }
-                    continue;
-                }
-                String queueUrl = queueUrls.of(settings.queue());
-                List<Message> messages = sqs.receiveMessage(request -> request
-                        .queueUrl(queueUrl)
-                        .waitTimeSeconds(settings.waitSeconds())
-                        .maxNumberOfMessages(slots)
-                        .visibilityTimeout((int) settings.visibility().toSeconds())
-                        .messageSystemAttributeNames(MessageSystemAttributeName.APPROXIMATE_RECEIVE_COUNT,
-                                MessageSystemAttributeName.SENT_TIMESTAMP)
-                        .messageAttributeNames(messageAttributeNames)
-                        .overrideConfiguration(config -> config.apiCallTimeout(receiveTimeout)))
-                        .messages();
-                failures = 0;
-                messages.forEach(message -> dispatch(queueUrl, message));
-            } catch (RuntimeException e) {
-                failures++;
-                Duration pause = RECEIVE_FAILURE_BACKOFF.computeDelay(failures + 1);
-                log.warn("{} 큐를 받지 못했다 — {} 뒤 다시 받는다 failures={}", settings.queue(), pause, failures, e);
-                if (!sleep(pause)) {
-                    return;
-                }
-            }
-        }
-    }
-
-    private void dispatch(String queueUrl, Message message) {
+    /** 처리를 기다리지 않고 넘긴다. 종료 중이라 넘기지 못한 메시지는 가시성 시간 뒤 다시 보인다. */
+    @Override
+    protected void handle(String queueUrl, Message message) {
         inFlight.incrementAndGet();
         try {
             handlers.execute(() -> process(queueUrl, message));
@@ -222,6 +161,13 @@ public final class BatchQueueConsumer implements SmartLifecycle {
         }
     }
 
+    /** 이어 가도 또 실패할 오류(메모리 부족 등)다. 받기 · 삭제 중 하나만 남아 돌지 않게 새로 받지 않고, 다시 띄우지 않는다. */
+    private void abort(Throwable e) {
+        aborted = true;
+        log.error("{} 큐 소비 작업이 예상 못 한 오류로 끝났다 — 다시 띄우지 않는다 worker={}",
+                settings.queue(), Thread.currentThread().getName(), e);
+    }
+
     private void returnAfter(String queueUrl, Message message, Duration delay) {
         try {
             sqs.changeMessageVisibility(request -> request.queueUrl(queueUrl)
@@ -233,36 +179,42 @@ public final class BatchQueueConsumer implements SmartLifecycle {
         }
     }
 
-    private void deleteLoop() {
-        List<Message> batch = new ArrayList<>(MAX_BATCH);
+    private void deleteGuarded() {
         try {
-            while (true) {
-                Message first = deletions.take();
-                if (first == STOP) {
-                    return;
-                }
-                batch.add(first);
-                boolean stopping = false;
-                long deadline = System.nanoTime() + DELETE_LINGER.toNanos();
-                while (batch.size() < MAX_BATCH) {
-                    Message next = deletions.poll(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
-                    if (next == null) {
-                        break;
-                    }
-                    if (next == STOP) {
-                        stopping = true;
-                        break;
-                    }
-                    batch.add(next);
-                }
-                deleteBatch(batch);
-                batch.clear();
-                if (stopping) {
-                    return;
-                }
-            }
+            deleteLoop();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        } catch (Throwable e) {
+            abort(e);
+        }
+    }
+
+    private void deleteLoop() throws InterruptedException {
+        List<Message> batch = new ArrayList<>(MAX_BATCH);
+        while (true) {
+            Message first = deletions.take();
+            if (first == STOP) {
+                return;
+            }
+            batch.add(first);
+            boolean stopping = false;
+            long deadline = System.nanoTime() + DELETE_LINGER.toNanos();
+            while (batch.size() < MAX_BATCH) {
+                Message next = deletions.poll(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
+                if (next == null) {
+                    break;
+                }
+                if (next == STOP) {
+                    stopping = true;
+                    break;
+                }
+                batch.add(next);
+            }
+            deleteBatch(batch);
+            batch.clear();
+            if (stopping) {
+                return;
+            }
         }
     }
 
@@ -282,17 +234,6 @@ public final class BatchQueueConsumer implements SmartLifecycle {
         } catch (RuntimeException e) {
             log.warn("처리한 메시지 {}건을 지우지 못했다 — 다시 받으면 멱등하게 한 번 더 처리된다 queue={}",
                     batch.size(), settings.queue(), e);
-        }
-    }
-
-    /** @return 인터럽트되면 false — 이 작업 스레드를 끝낸다 */
-    private static boolean sleep(Duration duration) {
-        try {
-            Thread.sleep(duration);
-            return true;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return false;
         }
     }
 }

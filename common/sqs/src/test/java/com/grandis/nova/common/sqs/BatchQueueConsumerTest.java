@@ -40,8 +40,8 @@ class BatchQueueConsumerTest {
     static final String EVENT_TYPE = "eventType";
     static final Duration TIMEOUT = Duration.ofSeconds(15);
     static final Duration VISIBILITY = Duration.ofSeconds(3);
-    static final BatchConsumerSettings SETTINGS = new BatchConsumerSettings(QUEUE, 1, VISIBILITY,
-            Duration.ofMillis(50), Duration.ofSeconds(10));
+    static final BatchConsumerSettings SETTINGS =
+            new BatchConsumerSettings(QUEUE, 1, VISIBILITY, Duration.ofSeconds(10));
 
     SqsClient sqs;
     TestQueues queues;
