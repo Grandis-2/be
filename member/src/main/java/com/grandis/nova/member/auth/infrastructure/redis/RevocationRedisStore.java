@@ -10,7 +10,7 @@ import org.springframework.stereotype.Repository;
 
 /**
  * 폐기 표식 저장소. revokeAll 은 세션을 열거하지 않고 회원 not-before 키 하나로 한다.
- * 값 형식은 RevocationRedisChecker 가 읽는 것과 맞춘다: revoked-sid 는 "1", nbf 는 epoch 초 십진 문자열.
+ * 값 형식은 RevocationRedisChecker 가 읽는 것과 맞춘다: revoked-sid 는 "1"(새 로그인에 밀린 세션은 "replaced"), nbf 는 epoch 초 십진 문자열.
  */
 @Repository
 public class RevocationRedisStore implements RevocationStore {
@@ -25,7 +25,12 @@ public class RevocationRedisStore implements RevocationStore {
 
     @Override
     public void revokeSession(UUID sessionId, Duration accessTokenTtl) {
-        redis.opsForValue().set(AuthRedisKeys.revokedSession(sessionId), "1", accessTokenTtl);
+        redis.opsForValue().setIfAbsent(AuthRedisKeys.revokedSession(sessionId), AuthRedisKeys.REVOKED_SESSION_MARK, accessTokenTtl);
+    }
+
+    @Override
+    public void replaceSession(UUID sessionId, Duration refreshTokenTtl) {
+        redis.opsForValue().set(AuthRedisKeys.revokedSession(sessionId), AuthRedisKeys.REPLACED_SESSION_MARK, refreshTokenTtl);
     }
 
     @Override

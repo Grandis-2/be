@@ -43,6 +43,7 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * - POST /auth/kakao/callback {code, redirectUri} → 200 {sessionToken, displayName, role} + 쿠키 refresh_token.
  *   프론트 주도 코드 교환: state 는 프론트가 만들고 프론트가 검증한다. 서버는 redirectUri 가 허용 목록에 있는지만 본다.
+ *   회원은 한 번에 세션 하나다 — 새 로그인이 그 회원의 앞 세션을 끊고, 끊긴 기기의 요청 · 재발급은 401 `details.reason = SESSION_REPLACED`(TokenService.issue).
  * - POST /session/refresh (쿠키) → 200 같은 모양 + 새 쿠키. 공개 경로. Origin 허용 목록(RefreshOriginPolicy) → 회원 이름을 **먼저** 읽고(
  *   회전 뒤에 DB 가 죽으면 회전만 되고 쿠키를 못 줘 다음 시도가 재사용으로 찍힌다) → TokenService.rotate(폐기 검사 두 번 포함).
  * - GET /session → {displayName, role}. USER 면 customers 에서 이름을 읽는다.

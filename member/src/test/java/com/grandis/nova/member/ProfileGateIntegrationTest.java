@@ -141,11 +141,11 @@ class ProfileGateIntegrationTest {
     @Test
     @DisplayName("다 채운 뒤 한 칸을 비우면 다시 false — 게이트는 지금 상태를 본다")
     void clearingAFieldReopensTheGate() throws Exception {
-        String token = accessTokenOf(login());
-        save(token, FULL);
-        assertThat(flagOf(login())).isTrue();
+        save(accessTokenOf(login()), FULL);
+        MvcResult again = login();   // 다시 로그인하면 앞 세션은 끊긴다 — 이후 저장은 새 세션의 토큰으로
+        assertThat(flagOf(again)).isTrue();
 
-        save(token, "{\"name\":\"홍길동\",\"email\":\"\",\"phoneNumber\":\"010-1234-5678\"}");   // 빈 문자열은 비움이다
+        save(accessTokenOf(again), "{\"name\":\"홍길동\",\"email\":\"\",\"phoneNumber\":\"010-1234-5678\"}");   // 빈 문자열은 비움이다
         assertThat(flagOf(login())).isFalse();
     }
 

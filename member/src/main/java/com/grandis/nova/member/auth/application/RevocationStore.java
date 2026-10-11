@@ -8,8 +8,17 @@ import java.util.UUID;
  */
 public interface RevocationStore {
 
-    /** 세션 하나를 끊는다(로그아웃·리프레시 재사용 탐지). TTL 은 액세스 만료 — 그 뒤엔 토큰이 어차피 죽는다. */
+    /**
+     * 세션 하나를 끊는다(로그아웃·리프레시 재사용 탐지). TTL 은 액세스 만료 — 그 뒤엔 토큰이 어차피 죽는다.
+     * 이미 표식이 있으면 덮지 않는다 — 새 로그인에 밀린 세션의 표식(이유 · 리프레시 만료 TTL)을 그 기기의 로그아웃이 지우지 않게.
+     */
     void revokeSession(UUID sessionId, Duration accessTokenTtl);
+
+    /**
+     * 같은 회원의 새 로그인에 밀린 세션을 끊는다. 표식 값이 달라 401 에 이유(SESSION_REPLACED)가 실린다.
+     * TTL 은 리프레시 만료 — 끊긴 기기가 며칠 뒤 리프레시 쿠키로 와도 재발급 401 에 이유가 실린다.
+     */
+    void replaceSession(UUID sessionId, Duration refreshTokenTtl);
 
     /**
      * 회원의 모든 세션을 끊는다(제재·탈퇴). sid 를 열거하지 않고 "지금 이전에 발급된 토큰은 전부 무효" 를 심는다.

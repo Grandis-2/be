@@ -1,5 +1,6 @@
 package com.grandis.nova.member.auth.infrastructure.db;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.member.auth.application.RefreshTokenStore;
 import com.grandis.nova.member.auth.application.RefreshTokens;
 import com.grandis.nova.common.security.JwtProperties;
@@ -53,11 +54,28 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
 
     @Override
     @Transactional
-    public void save(UUID sessionId, String subject, String rawToken, Instant expiresAt) {
+    public List<UUID> replace(UUID sessionId, String subject, String rawToken, Instant expiresAt) {
         UUID customerId = customerIdOf(subject).orElseThrow(() ->
                 new IllegalStateException("회원 리프레시 저장소에 회원 id 가 아닌 subject 가 왔다: " + subject));
-        rows.save(RefreshToken.issue(customerId, sessionId, RefreshTokens.hash(rawToken),
-                now(), expiresAt));
+        // 회원 행을 먼저 잠근다 — 같은 회원의 로그인이 둘 오면 늦은 쪽이 기다렸다가 앞 쪽이 커밋한 세션을 보고 끊는다. 리프레시 행만 잠가서는
+        // 줄이 서지 않는다: 첫 로그인은 잠글 행이 없고, 기다린 쪽은 앞 쪽이 넣은 새 행을 못 본다(READ COMMITTED).
+        // 대가: 그 회원 행에 외래키 공유 잠금을 쥔 트랜잭션(장바구니 · 주문 · 예약 · 응모 · 리뷰 INSERT, 리프레시 회전 · 폐기)이 끝날 때까지 로그인이
+        // 기다린다(교착은 아니다 — 리뷰 실측: 장바구니 INSERT 가 4초 쥐면 로그인도 4초). 오픈 피크에 같은 회원의 긴 접수가 있으면 그만큼 늦다
+        if (rows.lockCustomer(UuidBinary.toBytes(customerId)).isEmpty()) {
+            throw new IllegalStateException("없는 회원의 로그인: " + customerId);
+        }
+        Instant now = now();
+        // 탐지 창 안의 행만 — 창이 지난 체인은 막을 액세스 토큰이 없고 정리가 지우는 중일 수 있다(revokeAllOf 와 같은 이유)
+        Instant windowStart = now.minus(detectionWindow);
+        List<UUID> replaced = rows.findLiveFamiliesOf(customerId, windowStart).stream().map(UUID::fromString).toList();
+        List<UUID> live = rows.findLiveIdsOf(customerId, windowStart);
+        if (!live.isEmpty()) {
+            // 이미 교체된(rotated) 행까지 폐기한다. 그래서 끊긴 체인에 탈취한 옛 원문이 와도 재사용 탐지(경고) 대신 REVOKED 로 끝난다 —
+            // 체인이 이미 죽어 안전은 같고, 탈취 신호만 남지 않는다
+            rows.revokeByIds(live, now);
+        }
+        rows.save(RefreshToken.issue(customerId, sessionId, RefreshTokens.hash(rawToken), now, expiresAt));
+        return replaced;
     }
 
     @Override
@@ -72,7 +90,14 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
     @Transactional
     public Rotation rotate(String presentedRawToken, String newRawToken) {
         Instant now = now();
-        Optional<RefreshToken> found = rows.findByTokenHashForUpdate(RefreshTokens.hash(presentedRawToken));
+        byte[] hash = RefreshTokens.hash(presentedRawToken);
+        // 회원 행 → 리프레시 행 순서로 잠근다(로그인 replace 와 같은 순서). 새 행 INSERT 의 외래키 검사가 회원 행에 공유 잠금을 거는데, 리프레시 행을
+        // 먼저 잠그면 로그인(회원 행 → 이 리프레시 행 폐기)과 서로 기다려 교착한다(실측 1213 — 로그인이 희생됐다)
+        Optional<UUID> owner = rows.findOwnerByTokenHash(hash);
+        if (owner.isEmpty() || rows.shareCustomer(UuidBinary.toBytes(owner.get())).isEmpty()) {
+            return Rotation.rejected(Rotation.Status.NOT_FOUND, null, null);
+        }
+        Optional<RefreshToken> found = rows.findByTokenHashForUpdate(hash);
         if (found.isEmpty()) {
             return Rotation.rejected(Rotation.Status.NOT_FOUND, null, null);
         }
@@ -112,6 +137,12 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
         if (expiry == null || !expiry.isAfter(now.minus(detectionWindow))) {
             return;
         }
+        // 회원 행 → 리프레시 행 순서(로그인 replace 와 같다). 폐기 UPDATE 가 외래키 검사로 회원 행 공유 잠금을 거는데, 체인 행을 먼저 잠그면
+        // 그 회원의 로그인과 교착한다(실측 1213, 로그인 희생 — 이미 쓴 카카오 code 는 다시 못 써서 사용자가 로그인을 처음부터 다시 한다)
+        Optional<UUID> owner = rows.findOwnerOfFamily(sessionId.toString());
+        if (owner.isEmpty() || rows.shareCustomer(UuidBinary.toBytes(owner.get())).isEmpty()) {
+            return;
+        }
         rows.revokeFamily(sessionId.toString(), now);
     }
 
@@ -121,6 +152,10 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
         // 관리자 세션은 이 표에 행이 없다(회원 외래키). 조용히 지나간다.
         // 탐지 창 안의 행만 잠그지 않고 골라 기본키로 폐기한다 — 창이 지난 행은 정리가 지우는 중일 수 있고, 폐기해도 막을 액세스 토큰이 없다
         customerIdOf(subject).ifPresent(customerId -> {
+            // 회원 행 → 리프레시 행 순서(revokeSession 과 같은 이유). 회원 행이 없으면 폐기할 행도 없다
+            if (rows.shareCustomer(UuidBinary.toBytes(customerId)).isEmpty()) {
+                return;
+            }
             Instant now = now();
             List<UUID> live = rows.findLiveIdsOf(customerId, now.minus(detectionWindow));
             if (!live.isEmpty()) {

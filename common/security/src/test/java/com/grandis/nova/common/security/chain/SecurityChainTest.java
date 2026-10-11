@@ -2,6 +2,7 @@ package com.grandis.nova.common.security.chain;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -117,6 +118,28 @@ class SecurityChainTest {
     void revokedToken() throws Exception {
         when(checker.isRevoked(any())).thenReturn(true);
         mvc.perform(post("/api/v1/preorders").header(H, BearerTokens.value(user))).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("새 로그인에 밀린 세션의 토큰은 401 details.reason SESSION_REPLACED · 이유 조회가 안 되면 이유 없는 401 · 그냥 폐기면 이유 없음")
+    void replacedSessionCarriesReason() throws Exception {
+        when(checker.isRevoked(any())).thenReturn(true);
+        when(checker.isReplaced(any())).thenReturn(true);
+        mvc.perform(post("/api/v1/preorders").header(H, BearerTokens.value(user)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"))
+                .andExpect(jsonPath("$.error.details.reason").value("SESSION_REPLACED"));
+
+        when(checker.isReplaced(any())).thenThrow(new RevocationCheckFailedException(new RuntimeException("down")));
+        mvc.perform(post("/api/v1/preorders").header(H, BearerTokens.value(user)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.details").doesNotExist());
+
+        reset(checker);
+        when(checker.isRevoked(any())).thenReturn(true);
+        mvc.perform(post("/api/v1/preorders").header(H, BearerTokens.value(user)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.details").doesNotExist());
     }
 
     @Test
@@ -259,7 +282,7 @@ class SecurityChainTest {
         mvc.perform(put("/api/v1/me/default-address").header(H, BearerTokens.value(user)))
                 .andExpect(status().isUnauthorized());
         // 대조군: Redis 가 살아 있으면 둘 다 통과한다 — 401 이 인가 규칙이 아니라 닫는 경로 판정에서 왔다
-        org.mockito.Mockito.reset(checker);
+        reset(checker);
         when(checker.isRevoked(any())).thenReturn(false);
         mvc.perform(post("/api/v1/admin/preorders/1/cancel").header(H, BearerTokens.value(admin))).andExpect(status().isOk());
         mvc.perform(put("/api/v1/me/default-address").header(H, BearerTokens.value(user))).andExpect(status().isOk());

@@ -7,12 +7,14 @@ import com.grandis.nova.common.security.RevocationCheckFailedException;
 import com.grandis.nova.common.security.RevocationChecker;
 import com.grandis.nova.common.security.RevocationLookupUnavailableException;
 import com.grandis.nova.common.security.Role;
+import com.grandis.nova.common.security.SessionReplacedException;
 import com.grandis.nova.common.security.TokenClaims;
 import com.grandis.nova.common.security.TokenType;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -73,7 +75,14 @@ public class TokenService {
         this.clock = clock;
     }
 
-    /** 로그인. 새 sid 하나에 액세스·리프레시 한 쌍. 회원은 DB 에 행을, 관리자는 Redis 에 jti 를 남긴다. */
+    /**
+     * 로그인. 새 sid 하나에 액세스·리프레시 한 쌍. 회원은 DB 에 행을, 관리자는 Redis 에 jti 를 남긴다.
+     *
+     * 회원은 한 번에 세션 하나다 — 새 로그인이 그 회원의 살아 있는 세션을 끊는다(리프레시는 같은 트랜잭션에서 폐기, 액세스는 커밋 뒤 폐기 표식).
+     * 끊긴 세션의 다음 요청 · 재발급은 401 이고, 표식이 심긴 뒤면 `details.reason = SESSION_REPLACED` 가 실린다. 이유가 없는 401 도 있다 —
+     * 표식을 못 심었을 때, 로그인 커밋과 표식 사이(수 ms)에 재발급이 판정했을 때. 표식을 못 심어도 로그인은 성공한다 — 끊긴 세션의 리프레시는
+     * 이미 죽었고, 남은 액세스 토큰은 만료(액세스 유효기간)까지만 산다(그 WARN 이 경보 재료다). 관리자는 끊지 않는다.
+     */
     public IssuedTokens issue(String subject, Role role) {
         UUID sessionId = UUID.randomUUID();
         String access = provider.create(subject, role, sessionId, TokenType.ACCESS);
@@ -84,7 +93,11 @@ public class TokenService {
             return new IssuedTokens(access, refresh, validity);
         }
         String refresh = RefreshTokens.newToken();
-        refreshTokens.save(sessionId, subject, refresh, now().plus(validity));
+        List<UUID> replaced = refreshTokens.replace(sessionId, subject, refresh, now().plus(validity));
+        replaced.forEach(old -> markReplaced(old, validity));
+        if (!replaced.isEmpty()) {
+            log.info("login replaced sessions subject={} sessions={}", subject, replaced.size());
+        }
         return new IssuedTokens(access, refresh, validity);
     }
 
@@ -115,7 +128,7 @@ public class TokenService {
                 .orElseThrow(() -> new InvalidTokenException("refresh token not found"));
         TokenClaims asClaims = claimsOf(session);
         if (revokedBeforeRotation(asClaims)) {
-            throw new InvalidTokenException("refresh of revoked session sid=" + shortSid(session.sessionId()));
+            throw rejectRevoked(asClaims, "refresh of revoked session sid=" + shortSid(session.sessionId()));
         }
 
         String newRefresh = RefreshTokens.newToken();
@@ -126,13 +139,18 @@ public class TokenService {
             log.warn("refresh reuse detected, session revoked sid={}", shortSid(rotation.sessionId()));
             throw new InvalidTokenException("refresh reuse sid=" + shortSid(rotation.sessionId()));
         }
+        if (rotation.status() == RefreshTokenStore.Rotation.Status.REVOKED) {
+            // 회전 전 검사와 행 잠금 사이에 새 로그인이 이 세션을 끊었을 수 있다. 표식은 로그인 커밋 뒤에 심기므로 아직 없으면 이유 없는 401 이다
+            throw rejectRevoked(asClaims, "refresh rejected: REVOKED");
+        }
         if (rotation.status() != RefreshTokenStore.Rotation.Status.ROTATED) {
             throw new InvalidTokenException("refresh rejected: " + rotation.status());
         }
 
         if (revokedDuringRotation(asClaims)) {
             revokeSessionBestEffort(session.sessionId(), "revoked during rotation");
-            throw new InvalidTokenException("session revoked during rotation sid=" + shortSid(session.sessionId()));
+            // 회전 커밋 뒤 새 로그인이 이 세션을 끊었으면 이유를 싣는다(표식은 덮지 않는다 — RevocationStore.revokeSession)
+            throw rejectRevoked(asClaims, "session revoked during rotation sid=" + shortSid(session.sessionId()));
         }
         String access = provider.create(session.subject(), Role.USER, session.sessionId(), TokenType.ACCESS);
         Duration remaining = Duration.between(clock.instant(), rotation.expiresAt());
@@ -186,6 +204,28 @@ public class TokenService {
         } catch (RevocationCheckFailedException e) {
             log.warn("post-rotation revocation lookup failed sid={} cause={}", shortSid(claims.sessionId()), e.getMessage());
             return true;
+        }
+    }
+
+    /** 끊긴 세션의 재발급 401. 새 로그인에 밀린 세션이면 이유를 싣는다. 이유 조회가 안 되면 이유 없는 401 — 거절은 이미 정해졌다. */
+    private RuntimeException rejectRevoked(TokenClaims claims, String reason) {
+        try {
+            if (revocationChecker.isReplaced(claims)) {
+                return new SessionReplacedException();
+            }
+        } catch (RevocationCheckFailedException e) {
+            log.warn("refresh rejection reason lookup failed sid={} cause={}", shortSid(claims.sessionId()), e.getMessage());
+        }
+        return new InvalidTokenException(reason);
+    }
+
+    /** 새 로그인에 밀린 세션의 액세스 토큰을 끊는다. 실패는 WARN — 로그인은 성공시킨다(issue 문서). */
+    private void markReplaced(UUID sessionId, Duration refreshTokenValidity) {
+        try {
+            revocations.replaceSession(sessionId, refreshTokenValidity);
+        } catch (DataAccessException e) {
+            log.warn("auth.login.replaced_mark_failed — replaced session's access token lives until expiry sid={} cause={}",
+                    shortSid(sessionId), e.getClass().getSimpleName());
         }
     }
 
