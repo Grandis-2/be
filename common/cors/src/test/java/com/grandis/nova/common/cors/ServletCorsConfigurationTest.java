@@ -37,4 +37,20 @@ class ServletCorsConfigurationTest {
                 .withPropertyValues("nova.cors.allowed-origins=https://grandis-nova.link/")
                 .run(context -> assertThat(context).hasFailed());
     }
+
+    @Test
+    void 재발급_허용_오리진도_CORS_허용에_더한다_중복은_한_번() {
+        new WebApplicationContextRunner().withConfiguration(AUTO)
+                .withPropertyValues(ORIGINS, "auth.refresh.allowed-origins=http://localhost:3000,https://grandis-nova.link")
+                .run(context -> assertThat(context.getBean(CorsConfigurationSource.class)
+                        .getCorsConfiguration(new MockHttpServletRequest("POST", "/api/v1/session/refresh"))
+                        .getAllowedOrigins()).containsExactly("https://grandis-nova.link", "http://localhost:3000"));
+    }
+
+    @Test
+    void 재발급_허용_오리진의_모양이_틀리면_기동_실패다() {
+        new WebApplicationContextRunner().withConfiguration(AUTO)
+                .withPropertyValues(ORIGINS, "auth.refresh.allowed-origins=*")
+                .run(context -> assertThat(context).hasFailed());
+    }
 }
