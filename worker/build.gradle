@@ -1,12 +1,32 @@
 apply plugin: 'org.springframework.boot'
 
-// SQS 메시지를 소비한다. 웹 서버를 띄우지 않는다.
-// 큐 적체(Backlog per Task)로 1~20 까지 스케일되므로, 여러 개가 동시에 떠도 되는 일만 둔다.
+// Spring Boot BOM 이 관리하지 않는 라이브러리 버전. 올릴 때 여기만 바꾼다.
+ext {
+    archunitVersion = '1.5.1'
+    resilience4jVersion = '2.4.0'
+}
+
+// SQS 로 받은 외부 예약 등록 · 취소를 외부 mock 에 보내고 결과를 이벤트로 돌려준다. DB 를 쓰지 않는다.
+// 여러 대가 서로 모르고 동시에 돈다 — 상태는 메시지에 싣고 다닌다.
 dependencies {
     implementation project(':common:types')
     implementation project(':common:message')
-    implementation 'org.springframework.boot:spring-boot-starter'
-    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
-    implementation 'io.awspring.cloud:spring-cloud-aws-starter-sqs'
-    runtimeOnly 'com.mysql:mysql-connector-j'
+    // SQS 클라이언트 · 묶음 소비기 · 지연 재전송. AWS SDK 와 그 버전도 여기서 온다.
+    implementation project(':common:sqs')
+    // 서비스 API 는 없다. health · 지표를 내놓을 웹 서버만 쓴다(웹 서버가 없으면 actuator 가 HTTP 로 열리지 않는다)
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    // 외부 mock 은 RestClient 로 부른다.
+    implementation 'org.springframework.boot:spring-boot-starter-restclient'
+    // 외부 mock 장애 대응: 서킷 브레이커. 설정 · 지표는 스타터가 맡는다
+    implementation "io.github.resilience4j:resilience4j-spring-boot4:${resilience4jVersion}"
+    // 관측: health · Prometheus 지표(/actuator/prometheus). 수집은 CloudWatch 에이전트가 한다.
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
+
+    // SQS 연계는 로컬 AWS 에뮬레이터 Floci 로 검증한다. 컨테이너 · 큐 도우미는 common:sqs 와 한 벌이다.
+    testImplementation testFixtures(project(':common:sqs'))
+    // 테스트는 기본적으로 지표 내보내기를 끈다. Prometheus 엔드포인트를 확인하는 테스트만 켠다(@AutoConfigureMetrics).
+    testImplementation 'org.springframework.boot:spring-boot-micrometer-metrics-test'
+    // 모듈 경계 규칙(ModuleBoundaryTest)
+    testImplementation "com.tngtech.archunit:archunit-junit5:${archunitVersion}"
 }
