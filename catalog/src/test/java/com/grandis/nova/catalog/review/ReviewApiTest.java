@@ -8,6 +8,7 @@ import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.security.RevocationCheckProperties;
 import com.grandis.nova.common.web.ApiResponse;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -21,6 +22,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
@@ -28,7 +31,12 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -55,6 +63,7 @@ class ReviewApiTest {
 
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
+    @Autowired PlatformTransactionManager transactionManager;
     @Autowired RevocationCheckProperties revocation;
     @MockitoBean OrderClient orders;
     @MockitoBean MemberClient members;
@@ -371,7 +380,56 @@ class ReviewApiTest {
         assertThat(ReviewService.mask(null)).isEqualTo("***");
     }
 
+    /**
+     * 별점만 고치는 요청이 그사이 다른 요청이 고친 본문을 되돌리지 않는다. 결정적으로 본다: 다른 트랜잭션이 본문을 고친 채 커밋하지 않고,
+     * 별점 고치기가 그 리뷰 행에서 기다리는 것을 확인한 뒤 커밋한다. 잠그고 읽어야 커밋된 본문을 보고 별점만 바꾼다.
+     */
+    @Test
+    @DisplayName("별점만 고쳐도 그사이 다른 요청이 고친 본문을 되돌리지 않는다")
+    void ratingRevisionKeepsConcurrentBodyRevision() throws Exception {
+        UUID orderItemId = deliveredItem(productId);
+        UUID reviewId = UUID.fromString(data(write(customerId, orderItemId, 3, "original").andExpect(status().isCreated()))
+                .get("reviewId").asString());
+        CountDownLatch rewritten = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
+        CompletableFuture<Void> other = CompletableFuture.runAsync(() -> new TransactionTemplate(transactionManager).executeWithoutResult(s -> {
+            jdbcTemplate.update("UPDATE product_reviews SET body = 'new body' WHERE id = ?", (Object) UuidBinary.toBytes(reviewId));
+            rewritten.countDown();
+            awaitLatch(commit);
+        }));
+        awaitLatch(rewritten);
+        CompletableFuture<Integer> rating = CompletableFuture.supplyAsync(() -> {
+            try {
+                return revise(customerId, reviewId, "{ \"rating\": 5 }").andReturn().getResponse().getStatus();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        Awaitility.await("별점 고치기가 리뷰 행에서 기다리지 않았다").atMost(Duration.ofSeconds(10)).until(() -> jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.PROCESSLIST
+                 WHERE COMMAND = 'Query' AND ID <> CONNECTION_ID()
+                   AND LOWER(INFO) LIKE '%from product_reviews %for update%'""", Long.class) > 0);
+        commit.countDown();
+        other.get(20, TimeUnit.SECONDS);
+
+        assertThat(rating.get(20, TimeUnit.SECONDS)).isEqualTo(200);
+        Map<String, Object> row = jdbcTemplate.queryForMap("SELECT rating, body FROM product_reviews WHERE id = ?", (Object) UuidBinary.toBytes(reviewId));
+        assertThat(((Number) row.get("rating")).intValue()).isEqualTo(5);
+        assertThat(row.get("body")).isEqualTo("new body");
+    }
+
     // ── 도우미 ──────────────────────────────────────────────────────────────
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            if (!latch.await(20, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("기다리다 시간 초과");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
 
     /** 공개 · 판매 중 · 재고 행이 있는(준비된) 일반 상품 — 상품 상세가 보여 주는 상품. */
     private UUID readyInStock(UUID categoryId) {

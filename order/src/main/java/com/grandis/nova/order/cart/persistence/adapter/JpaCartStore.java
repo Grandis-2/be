@@ -45,7 +45,9 @@ class JpaCartStore implements CartStore {
      * 잠금 읽기를 두 번 한다. 첫 번째는 앞선 쓰기의 커밋을 기다리는 줄서기다 — 기다리던 잠금 읽기는 그 자리부터 이어 읽어, 앞선 쓰기가 넣은 줄이
      * 유일 키(customer_id, option_id, warranty_selected)에서 기존 줄보다 앞(옵션 id 가 작음)이면 못 본다. 두 번째는 새 문장이라 처음부터
      * 다시 훑어 그 줄까지 본다 — 첫 읽기가 끝났으면 그 회원 줄을 쥐었던 앞선 쓰기는 모두 커밋했다(MySQL 8.4.11 · READ COMMITTED,
-     * 유일 키로 훑는 계획에서 실측: 한 번이면 49줄에서 겹친 담기 둘이 51줄, 두 번이면 50줄 — CartConcurrencyTest).
+     * 유일 키로 훑는 계획에서 실측).
+     * 담기의 줄 수 상한은 이제 넣은 뒤 다시 세기(CartService)도 지킨다 — 한 번만 읽어 49줄로 보고 넣어도 다시 세기가 51 을 보고 롤백한다(리뷰 때
+     * 실측). 두 번 읽기가 남은 이유는 장바구니 주문 생성이 그사이 앞에 끼인 줄까지 보고 고른 줄과 대조하게 하려는 것이다(PlaceCartOrderService).
      */
     @Override
     public List<CartLine> lockByCustomer(UUID customerId) {

@@ -13,7 +13,9 @@ import org.hibernate.annotations.DynamicUpdate;
  * `@DynamicUpdate` 를 붙인 이유: 이 행에는 서로 다른 자원 둘(내 정보 · 기본 배송지)이 같이 산다. 기본 UPDATE 는 모든 칼럼을 쓰므로
  * 두 트랜잭션이 각각 읽고 각각 바꾸면 **늦게 커밋한 쪽이 상대의 변경을 자기가 읽은 옛 값으로 되돌린다**(실측:
  * ProfileIntegrationTest.concurrentProfileAndAddressEditsDoNotClobberEachOther 가 이 애너테이션 없이 실패한다 — 배송지 저장이 이름을 null 로 돌렸다).
- * 바뀐 칼럼만 쓰면 두 자원이 서로를 덮지 않는다. 같은 자원을 동시에 고치면 여전히 나중 것이 이긴다 — 그건 PUT 이 통째 교체라 의도한 동작이다.
+ * 바뀐 칼럼만 쓰면 두 자원이 서로를 덮지 않는다. 다만 같은 자원의 PUT 두 개를 잠그지 않고 읽으면 "나중 것이 이긴다" 가 아니라 칸마다 섞인다 —
+ * 늦은 PUT 이 옛 값으로 읽은 칸을 "바뀌지 않음" 으로 보고 쓰지 않는다(재현: ProfileIntegrationTest). 그래서 쓰기 경로는 회원 행을 잠그고 읽는다
+ * (CustomerRepository#findForUpdate).
  */
 @Entity
 @Table(name = "customers")

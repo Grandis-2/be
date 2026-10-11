@@ -13,9 +13,9 @@ import com.grandis.nova.order.client.catalog.CatalogOption;
 import com.grandis.nova.order.client.catalog.CatalogOptions;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
+import jakarta.persistence.EntityManagerFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import jakarta.persistence.EntityManagerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.dao.CannotAcquireLockException;
@@ -34,9 +34,11 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -44,6 +46,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.BDDMockito.willThrow;
@@ -81,7 +84,8 @@ class CartConcurrencyTest {
      * 잠금이 풀리면 50줄을 보고 400 — 둘 다 49줄을 읽어 51줄이 되지 않는다.
      *
      * 앞선 트랜잭션이 넣는 줄은 옵션 id 가 가장 작아 유일 키 (customer_id, option_id, warranty_selected) 에서 기존 줄보다 앞에 놓인다.
-     * 잠금 읽기는 기다리던 자리부터 이어 읽으므로 한 번의 잠금 읽기로는 이 줄을 놓친다 — 이 순서가 깨지는 쪽이다.
+     * 잠금 읽기는 기다리던 자리부터 이어 읽으므로 한 번의 잠금 읽기로는 이 줄을 놓친다 — 이 순서가 깨지는 쪽이다. 담기에서는 넣은 뒤 다시 세기도
+     * 51 을 막으므로 이 시험만으로는 두 번 읽기를 가르지 못한다(둘 중 하나만 있어도 50줄).
      * 다른 회원 줄을 깔아 운영처럼 그 유일 키로 훑는 계획(ref)인지 먼저 확인한다 — 49줄뿐이면 전체 훑기(ALL)라 놓침이 재현되지 않는다.
      */
     @Test
@@ -121,6 +125,70 @@ class CartConcurrencyTest {
                     assertThat(e.details().toString()).contains("variantId");
                 });
         assertThat(lineCount()).isEqualTo(50);
+    }
+
+    /**
+     * 빈 장바구니에서는 잠금 읽기가 줄을 세우지 못한다 — 잠글 줄이 없고 READ COMMITTED 는 빈 구간을 잠그지 않는다. 결정적으로 본다: 담기 하나가
+     * 빈 장바구니를 잠가 읽은 뒤 멈춘 사이 다른 담기 50번이 커밋되고, 멈춘 담기를 놓는다. 넣은 뒤 다시 세어 51줄이 되면 400 · 롤백이다.
+     */
+    @Test
+    void addFromEmptyCartCannotExceedLimitWhileOthersFillIt() throws Exception {
+        List<UUID> options = fixtures.inStockProduct(51).optionIds();
+        options.forEach(option -> fixtures.stock(option, 10, 0, 0));
+        CountDownLatch read = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicBoolean first = new AtomicBoolean(true);
+        willAnswer(invocation -> {
+            Object lines = invocation.callRealMethod();
+            if (first.getAndSet(false)) {
+                read.countDown();
+                awaitQuietly(release);
+            }
+            return lines;
+        }).given(store).lockByCustomer(customerId);
+        CompletableFuture<CartLine> paused = CompletableFuture.supplyAsync(() -> cart.add(customerId, "token", options.getLast(), 1, false));
+        assertThat(read.await(10, TimeUnit.SECONDS)).isTrue();
+        try {
+            options.subList(0, 50).forEach(option -> cart.add(customerId, "token", option, 1, false));
+            assertThat(lineCount()).isEqualTo(50);
+        } finally {
+            release.countDown();
+        }
+
+        assertThat(paused).failsWithin(Duration.ofSeconds(10)).withThrowableThat().havingRootCause()
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(CommonErrorCode.VALIDATION_FAILED);
+                    assertThat(e.details().toString()).contains("variantId");
+                });
+        assertThat(lineCount()).isEqualTo(50);
+    }
+
+    /**
+     * 빈 장바구니에 다른 줄 담기 둘이 겹치면 넣은 뒤 다시 세기가 서로의 커밋 전 줄에서 기다려 교착하고, 한쪽이 새 트랜잭션에서 다시 해 둘 다
+     * 담긴다. 결정적으로 본다: 두 담기가 각자 넣은 뒤 장벽에서 만난 다음 다시 센다. 다시 세기가 잠그지 않는 셈이면 교착이 없어 다시 하기도 없다 —
+     * 그래서 "넣기 세 번(한쪽 다시 하기)" 이 다시 세기가 잠그는지를 본다.
+     */
+    @Test
+    void twoAddsToEmptyCartDeadlockOnRecountAndBothSucceed() throws Exception {
+        List<UUID> options = fixtures.inStockProduct(2).optionIds();
+        options.forEach(option -> fixtures.stock(option, 10, 0, 0));
+        CyclicBarrier inserted = new CyclicBarrier(2);
+        AtomicInteger inserts = new AtomicInteger();
+        willAnswer(invocation -> {
+            Object line = invocation.callRealMethod();
+            if (inserts.incrementAndGet() <= 2) {
+                inserted.await(10, TimeUnit.SECONDS);
+            }
+            return line;
+        }).given(store).insert(eq(customerId), any(), anyBoolean(), anyInt());
+
+        CompletableFuture<CartLine> one = CompletableFuture.supplyAsync(() -> cart.add(customerId, "token", options.get(0), 1, false));
+        CompletableFuture<CartLine> two = CompletableFuture.supplyAsync(() -> cart.add(customerId, "token", options.get(1), 1, false));
+
+        assertThat(one.get(20, TimeUnit.SECONDS)).isNotNull();
+        assertThat(two.get(20, TimeUnit.SECONDS)).isNotNull();
+        assertThat(lineCount()).isEqualTo(2);
+        assertThat(inserts.get()).as("교착한 한쪽이 다시 넣었다").isEqualTo(3);
     }
 
     /**
@@ -183,8 +251,10 @@ class CartConcurrencyTest {
         }).given(store).lockByCustomer(customerId);
         CartLine line = cart.add(customerId, "token", option, 1, false);
         assertThat(lineCount()).isEqualTo(1);
-        assertThat(transactions).hasSize(2).doesNotContainNull();
+        // 처음 잠금 읽기(교착) · 다시 하기의 잠금 읽기 · 넣은 뒤 다시 세기
+        assertThat(transactions).hasSize(3).doesNotContainNull();
         assertThat(transactions.get(0)).as("다시 하기는 새 트랜잭션").isNotSameAs(transactions.get(1));
+        assertThat(transactions.get(2)).as("다시 세기는 넣은 트랜잭션 안").isSameAs(transactions.get(1));
 
         willThrow(deadlock()).willCallRealMethod().given(store).lockLine(customerId, line.id());
         assertThat(cart.changeQuantity(customerId, line.id(), 3).quantity()).isEqualTo(3);
