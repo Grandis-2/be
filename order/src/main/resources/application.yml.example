@@ -106,6 +106,12 @@ nova:
     relay-after: 1m        # 만든 지 이만큼 지난 미발행 행만 재발행
     relay-batch: 100
     relay-lease: 1m        # 릴레이가 가져간 행을 다른 인스턴스가 건드리지 않는 시간. 전송 한 번(sqs.api-call-timeout 의 두 배)보다 길어야 한다(아니면 기동 실패)
+  # 브라우저 호출을 허용할 프론트 오리진(scheme://host[:port], 정확 일치). 적으면 기본값(운영 프론트 두 도메인 · API 도메인)이 통째로 바뀐다.
+  # 로컬에서만 적는다 — 운영은 기본값을 쓴다.
+  cors:
+    allowed-origins:
+      - http://localhost:5173   # 로컬 프론트(Vite)
+      - http://localhost:9000   # 로컬 문서 허브(docker/openapi-hub)
 
 auth:
   # 폐기 표식 조회가 실패(Redis 장애)했을 때 401 로 닫는 경로. 목록 밖은 열린다(통과 + 경고 + 카운터).
