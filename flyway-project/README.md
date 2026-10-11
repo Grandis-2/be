@@ -11,8 +11,9 @@ MySQL 8.4.11과 Flyway 11.20.0으로 검증하며, 유료 비교/생성 기능�
 
 두 스키마가 같은 DB 서버에 있어도 이 프로젝트는 `shop.flyway_schema_history`만 관리한다.
 Mock 저장소는 `external_mock`의 마이그레이션과 이력 테이블을 별도로 관리한다.
-스키마 설정 자체는 권한 경계가 아니다. 운영의 마이그레이션 계정(`nova_migrator`)은 NCP의 DDL 권한이라
-NCP 문서 기준으로 `external_mock`을 포함한 모든 사용자 DB를 바꿀 수 있다(권한 축소는 인프라와 따로 정한다).
+스키마 설정 자체는 권한 경계가 아니다. 운영의 마이그레이션 계정(`nova_migrator`)은 NCP의 DDL 권한이라, NCP 문서 기준으로
+모든 사용자 DB에 ALL PRIVILEGES(WITH GRANT OPTION)를, 전역으로 CREATE USER · REPLICATION SLAVE를 가진다.
+그래서 `external_mock`을 포함한 모든 사용자 DB를 바꾸고 계정을 만들어 권한을 넘길 수 있다(권한 축소는 인프라와 따로 정한다).
 `external_mock`을 지키는 것은 리뷰와 CI의 external_mock 미생성 검사다.
 서비스는 Flyway를 실행하지 않고 기존 Hibernate `ddl-auto: validate`를 유지한다.
 
@@ -34,6 +35,7 @@ bash flyway-project/verify.sh
 
 이 명령은 전용 임시 MySQL 컨테이너를 생성하고 종료 시 제거한다. 호스트 포트와
 영속 볼륨을 사용하지 않으며 기존 로컬 DB나 운영 DB에는 접속하지 않는다.
+release가 운영 DB에 돌리는 이미지(`Dockerfile`)도 같은 DB에 돌려, 이미지에 든 마이그레이션 · 설정이 같은지 확인한다.
 전체 적용 뒤의 최신 shop 정의는 `build/flyway/schema.sql`로 남는다(저장소에는 두지 않는다. CI에서는 database 잡의
 `shop-schema` 산출물). 덤프는 Flyway 이력과 데이터를 제외한다.
 설계 설명은 마이그레이션의 SQL 주석에 기록한다. 덤프에는 SQL 주석이 보존되지 않는다.
@@ -71,6 +73,7 @@ release.yml의 `migrate` job이 서비스 배포 전에 다음을 한다.
    `/nova-prod/migration/run-task`에 적는다. 클러스터가 없으면 경고하고 건너뛰고, 클러스터는 있는데 파라미터가 없으면(인프라 미적용) 실패한다.
 2. 이 디렉터리의 `Dockerfile`(Flyway, `flyway.toml`, `migrations/`)로 이미지를 만들어 ECR `nova/migration:latest`로 올린다.
 3. ECS 태스크 `nova-prod-migration`을 띄워 `migrate`, `info`를 실행하고 끝날 때까지 기다린다(`ecs-migrate.sh run`).
+   태스크가 이 실행이 올린 이미지(digest)로 돌았는지도 확인한다. 용량 공급자는 인프라가 정한다(지금은 Fargate Spot — 회수되면 실패로 끝난다).
 4. 태스크가 성공했을 때만 서비스 배포로 넘어간다. Flyway 출력은 워크플로 로그와 CloudWatch `/ecs/nova-prod-migration`에 남는다.
 
 ### 직접 적용 (첫 적용, 복구)

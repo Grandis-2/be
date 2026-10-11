@@ -61,19 +61,24 @@ jobs:
         if: steps.target.outputs.skip != 'true'
         id: ecr
 
-      # 태스크 정의는 인프라가 <네임스페이스>/migration:latest 로 둔다. 띄우기 직전에 이 커밋의 SQL 로 latest 를 올린다.
+      # 태스크 정의는 인프라가 <네임스페이스>/migration:latest 로 둔다. 띄우기 직전에 이 커밋의 SQL 로 latest 를 올리고,
+      # 태스크가 이 digest 로 돌았는지 확인한다(그사이 다른 실행이 latest 를 덮으면 실패).
       # 커밋 태그는 붙이지 않는다 — 마이그레이션은 앞으로만 가서 고정 · 되돌릴 일이 없다. 덮인 이미지는 ECR 수명 정책이 지운다
       - name: 이미지 올리기
+        id: push
         if: steps.target.outputs.skip != 'true'
         env:
           IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_NAMESPACE }}/migration:latest
         run: |
           set -euo pipefail
-          docker build -t "$IMAGE" flyway-project
+          docker build --platform linux/amd64 -t "$IMAGE" flyway-project
           docker push "$IMAGE"
+          echo "digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE" | cut -d@ -f2)" >> "$GITHUB_OUTPUT"
 
       - name: 마이그레이션
         if: steps.target.outputs.skip != 'true'
+        env:
+          EXPECTED_DIGEST: ${{ steps.push.outputs.digest }}
         run: bash .github/scripts/ecs-migrate.sh run
 
   # ── 1단계: jar 를 전부 만들고, 내용이 바뀐 서비스만 고른다 ─────────────

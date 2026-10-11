@@ -6,7 +6,8 @@
 # 사용: ECS_CLUSTER=nova-prod ecs-migrate.sh check | run
 #   check — 띄울 수 있는지 본다. 클러스터가 없으면(ECS 스택 전 · 내린 뒤) 경고하고 skip=true 를 낸다.
 #           클러스터가 있는데 파라미터가 없으면 실패한다 — 마이그레이션 없이 배포하면 새 코드가 표 · 칸을 찾지 못한다
-#   run   — 태스크를 띄우고 기다린다. 태스크가 뜨지 못하거나 Flyway 가 0 이 아닌 값으로 끝나면 실패한다
+#   run   — 태스크를 띄우고 기다린다. 태스크가 뜨지 못하거나 Flyway 가 0 이 아닌 값으로 끝나면 실패한다.
+#           EXPECTED_DIGEST 를 주면 태스크가 그 이미지로 돌았는지도 본다
 set -euo pipefail
 cluster=${ECS_CLUSTER:?ECS_CLUSTER 가 없다}
 summary=${GITHUB_STEP_SUMMARY:-/dev/null}
@@ -15,7 +16,7 @@ param_name="/$cluster/migration/run-task"
 # 파라미터를 param 에 읽는다. 없거나 다른 클러스터 것이면 원인을 남기고 끝낸다
 read_param() {
   if ! param=$(aws ssm get-parameter --name "$param_name" --query Parameter.Value --output text 2>&1); then
-    echo "::error::$param_name 를 읽지 못했다 — nova-infra 의 마이그레이션 변경(ecr · securitygroup · iam · ecs)을 먼저 apply 한다: $param"
+    echo "::error::$param_name 를 읽지 못했다 — nova-infra 의 마이그레이션 변경(ecr · securitygroup · iam · ecs)을 먼저 apply 한다: ${param//$'\n'/ }"
     exit 1
   fi
   if [ "$(jq -r .cluster <<< "$param")" != "$cluster" ]; then
@@ -44,8 +45,14 @@ run() {
   log_group=$(jq -r .logGroup <<< "$param")
   log_prefix=$(jq -r .logStreamPrefix <<< "$param")
   network=$(jq -c '{awsvpcConfiguration: {subnets, securityGroups, assignPublicIp: "DISABLED"}}' <<< "$param")
+  # 용량 공급자는 인프라가 정한다(지금은 Fargate Spot). 없으면 클러스터 기본 전략을 쓴다
+  placement=()
+  if [ "$(jq 'has("capacityProviderStrategy")' <<< "$param")" = true ]; then
+    placement=(--capacity-provider-strategy "$(jq -c .capacityProviderStrategy <<< "$param")")
+  fi
 
-  started=$(aws ecs run-task --cluster "$cluster" --task-definition "$task_def" --launch-type FARGATE --count 1 \
+  # 빈 배열을 set -u 에서 펼치면 bash 3.2(macOS)가 멈춘다 — 있을 때만 펼친다
+  started=$(aws ecs run-task --cluster "$cluster" --task-definition "$task_def" ${placement[@]+"${placement[@]}"} --count 1 \
     --started-by "release-${GITHUB_RUN_ID:-manual}" --network-configuration "$network" --output json)
   if [ "$(jq '.failures | length' <<< "$started")" -ne 0 ] || [ "$(jq '.tasks | length' <<< "$started")" -ne 1 ]; then
     echo "::error::마이그레이션 태스크를 띄우지 못했다: $(jq -c .failures <<< "$started")"
@@ -68,13 +75,17 @@ run() {
   # Flyway 출력을 이 로그로 옮긴다. 태스크가 뜨지 못했으면 스트림이 없다
   if logs=$(aws logs get-log-events --log-group-name "$log_group" --log-stream-name "$log_prefix/$container/$id" \
       --start-from-head --query 'events[].message' --output text 2>&1); then
-    tr '\t' '\n' <<< "$logs"
+    if [ -n "$logs" ] && [ "$logs" != None ]; then
+      tr '\t' '\n' <<< "$logs"
+    else
+      echo "Flyway 로그가 비어 있다 — CloudWatch $log_group 의 $log_prefix/$container/$id 에서 본다"
+    fi
   else
     echo "Flyway 로그를 읽지 못했다: $logs"
   fi
 
   if [ "$stopped" != true ]; then
-    echo "::error::마이그레이션이 끝난 것을 확인하지 못했다: $id — $wait_err (태스크가 아직 돌 수 있다. 콘솔에서 확인한다)"
+    echo "::error::마이그레이션이 끝난 것을 확인하지 못했다: $id — 태스크가 아직 돌 수 있으니 콘솔에서 확인한다. 원인: ${wait_err//$'\n'/ }"
     exit 1
   fi
   desc=$(aws ecs describe-tasks --cluster "$cluster" --tasks "$task" --output json)
@@ -84,6 +95,14 @@ run() {
     echo "::error::마이그레이션 실패: $id 종료 코드 $code — $(jq -r '.tasks[0].stoppedReason // "" ' <<< "$desc")"
     echo "- 마이그레이션 실패: $id (종료 코드 $code)" >> "$summary"
     exit 1
+  fi
+  # 이 실행이 올린 이미지로 돌았는지 본다. 그사이 다른 실행이 latest 를 덮었으면 다른 커밋의 SQL 이 적용됐을 수 있다
+  if [ -n "${EXPECTED_DIGEST:-}" ]; then
+    got=$(jq -r --arg c "$container" '(.tasks[0].containers // [])[] | select(.name == $c) | .imageDigest // ""' <<< "$desc")
+    if [ "$got" != "$EXPECTED_DIGEST" ]; then
+      echo "::error::태스크가 이 실행이 올린 이미지($EXPECTED_DIGEST)가 아닌 ${got:-알 수 없는 이미지}로 돌았다 — 다른 실행이 latest 를 덮었다. 적용 이력을 확인하고 다시 돌린다"
+      exit 1
+    fi
   fi
   echo "- 마이그레이션 적용: $id" >> "$summary"
 }

@@ -49,6 +49,19 @@ history_after="$(mysql_query 'SELECT installed_rank, version, checksum, success 
 [[ "$history_before" == "$history_after" ]]
 [[ "$(mysql_query "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = 'external_mock'")" == 0 ]]
 
+# release 가 운영 DB 에 돌리는 이미지(Dockerfile)를 같은 DB 에 한 번 더 돌린다. 이미지에 든 마이그레이션 · 설정이
+# 위와 같으면 적용할 것 없이 끝나고 이력도 그대로다. 베이스 Flyway 는 flyway.sh 와 같은 digest 여야 한다
+flyway_image() { grep -o 'redgate/flyway:[^ ]*@sha256:[0-9a-f]*' "$1"; }
+if [[ "$(flyway_image "$project_dir/Dockerfile")" != "$(flyway_image "$project_dir/flyway.sh")" ]]; then
+  echo 'Dockerfile 과 flyway.sh 의 Flyway 이미지가 다르다. 둘을 함께 바꾼다.' >&2
+  exit 1
+fi
+image_id="$(docker build --platform linux/amd64 -q "$project_dir")"
+docker run --rm --platform linux/amd64 --network "container:$container_id" \
+  -e FLYWAY_URL -e FLYWAY_USER -e FLYWAY_PASSWORD "$image_id"
+docker rmi -f "$image_id" >/dev/null
+[[ "$history_before" == "$(mysql_query 'SELECT installed_rank, version, checksum, success FROM shop.flyway_schema_history ORDER BY installed_rank')" ]]
+
 # 시간・데이터・Flyway 이력을 제외한 최신 shop 정의를 덤프한다. 저장소에는 두지 않고 산출물로만 남긴다(CI: shop-schema).
 snapshot="$repo_dir/build/flyway/schema.sql"
 {
@@ -63,4 +76,4 @@ snapshot="$repo_dir/build/flyway/schema.sql"
     --set-gtid-purged=OFF --no-tablespaces --skip-add-drop-table \
     --skip-lock-tables --ignore-table=shop.flyway_schema_history shop | sed '${/^$/d;}'
 } > "$snapshot"
-echo '신규 DB 적용 · validate · 재실행 이력 불변 · Mock 미생성 검사 통과. 최신 shop 정의: build/flyway/schema.sql'
+echo '신규 DB 적용 · validate · 재실행 이력 불변 · Mock 미생성 · 운영 적용 이미지 검사 통과. 최신 shop 정의: build/flyway/schema.sql'
