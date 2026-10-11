@@ -115,11 +115,10 @@ auth:
       - /api/v1/me/**
 
 nova:
-  # 브라우저 호출을 허용할 프론트 오리진(scheme://host[:port], 정확 일치). 적으면 기본값(운영 프론트 두 도메인 · API 도메인)이 통째로 바뀐다.
-  # 로컬에서만 적는다 — 운영은 기본값을 쓴다.
+  # 브라우저 호출을 허용할 오리진(scheme://host[:port], 정확 일치). 적으면 기본값(운영 프론트 두 도메인 · API 도메인)이 통째로 바뀐다.
+  # 프론트 오리진은 따로 적지 않는다 — 위 auth.refresh.allowed-origins 가 CORS 허용에도 더해진다(두 목록이 어긋나지 않게).
   cors:
     allowed-origins:
-      - http://localhost:5173   # 로컬 프론트(Vite)
       - http://localhost:9000   # 로컬 문서 허브(docker/openapi-hub)
 
 # 서명은 RS256. member 만 개인키를 갖고 서명한다. 다른 서비스는 jwk-set-uri 로 공개키를 받아 검증만 한다.
