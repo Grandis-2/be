@@ -395,6 +395,31 @@ class DrawSettlementTest {
     }
 
     @Test
+    @DisplayName("응모비를 결제하지 않은 응모는 반영 뒤에도 결과가 없다 — 결제 완료 응모만 당첨/낙첨")
+    void unpaidEntryHasNoResultAfterSettle() throws Exception {
+        UUID draw = closedDraw(1);
+        UUID winner = fixtures.customer();
+        UUID a = entry(draw, winner, "PAID", null);
+        UUID loser = fixtures.customer();
+        entry(draw, loser, "PAID", null);
+        UUID unpaid = fixtures.customer();
+        entry(draw, unpaid, "AWAITING_PAYMENT", null);
+        settlement.close(draw);
+
+        dispatcher.dispatch(result(draw, a));
+
+        assertThat(campaign(draw).get("settled_at")).isNotNull();
+        mockMvc.perform(get("/api/v1/draws/{id}/entries/me", draw).with(TestAuth.customer(winner)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.result").value("WON"));
+        mockMvc.perform(get("/api/v1/draws/{id}/entries/me", draw).with(TestAuth.customer(loser)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.result").value("LOST"));
+        mockMvc.perform(get("/api/v1/draws/{id}/entries/me", draw).with(TestAuth.customer(unpaid)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("AWAITING_PAYMENT"))
+                .andExpect(jsonPath("$.data.result").doesNotExist());
+    }
+
+    @Test
     @DisplayName("계약에 맞지 않는 결과는 반영하지 않는다 — 요청 안 한 회차 · 당첨 수가 다름 · 같은 응모 두 번 · 그 회차의 결제 완료가 아님")
     void invalidResultsChangeNothing() {
         UUID notRequested = closedDraw(1);

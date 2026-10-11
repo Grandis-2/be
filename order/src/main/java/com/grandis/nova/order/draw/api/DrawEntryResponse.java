@@ -11,7 +11,7 @@ import java.util.UUID;
  * 내 응모. 본인에게만 보인다.
  *
  * @param status AWAITING_PAYMENT(응모비 결제 전 — 응모 기간 안에 결제해야 추첨 대상) · AUTHORIZING(결제 확인 중) · PAID(추첨 대상)
- * @param result 추첨 결과 WON · LOST. 결과 반영 전이면 null — 당첨이면 내 주문 목록에 0원 주문(source DRAW)이 있다
+ * @param result 추첨 결과 WON · LOST. 결과 반영 전이거나 결제 완료(PAID)가 아니면 null — 당첨이면 내 주문 목록에 0원 주문(source DRAW)이 있다
  */
 public record DrawEntryResponse(UUID entryId, UUID drawId, DrawEntryStatus status, DrawEntryResult result, ShipTo shipTo,
                                 Instant createdAt) {
