@@ -15,8 +15,9 @@ dependencies {
     implementation project(':common:sqs')
     // 서비스 API 는 없다. health · 지표를 내놓을 웹 서버만 쓴다(웹 서버가 없으면 actuator 가 HTTP 로 열리지 않는다)
     implementation 'org.springframework.boot:spring-boot-starter-web'
-    // 외부 mock 은 RestClient 로 부른다.
+    // 외부 mock 은 RestClient 로 부른다. 연결 최대 수명을 정하려고 Apache HttpClient 를 쓴다(버전은 Boot 가 관리)
     implementation 'org.springframework.boot:spring-boot-starter-restclient'
+    implementation 'org.apache.httpcomponents.client5:httpclient5'
     // 외부 mock 장애 대응: 서킷 브레이커. 설정 · 지표는 스타터가 맡는다
     implementation "io.github.resilience4j:resilience4j-spring-boot4:${resilience4jVersion}"
     // 관측: health · Prometheus 지표(/actuator/prometheus). 수집은 CloudWatch 에이전트가 한다.

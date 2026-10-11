@@ -34,6 +34,12 @@ class WorkerPropertiesTest {
         assertThat(properties.consumer().enabled()).isTrue();
         assertThat(properties.consumer().settings("preorder-cancel").visibility()).isEqualTo(Duration.ofSeconds(120));
         assertThat(properties.rejectGuard().invalidRequests()).isEqualTo(5);
+        assertThat(properties.rejectGuard().pause()).isEqualTo(Duration.ofMinutes(1));
+        assertThat(properties.mock().validateAfterInactivity()).isEqualTo(Duration.ofSeconds(1));
+        assertThat(properties.mock().maxResponseBody().toBytes()).isEqualTo(64 * 1024);
+        assertThat(properties.concurrency().increaseStep()).isEqualTo(1);
+        assertThat(properties.concurrency().decreaseFactor()).isEqualTo(0.5);
+        assertThat(properties.circuit().openMultiplier()).isEqualTo(2);
     }
 
     @Test
@@ -56,6 +62,15 @@ class WorkerPropertiesTest {
                 Map.of("nova.worker.concurrency.initial", "17"),
                 Map.of("nova.worker.concurrency.min", "9"),
                 Map.of("nova.worker.concurrency.cancel-reserved", "2"),
+                Map.of("nova.worker.concurrency.unhealthy-failure-rate", "5"),
+                Map.of("nova.worker.concurrency.unhealthy-failure-rate", "101"),
+                Map.of("nova.worker.concurrency.increase-step", "0"),
+                Map.of("nova.worker.concurrency.decrease-factor", "1"),
+                Map.of("nova.worker.circuit.open-multiplier", "0.5"),
+                Map.of("nova.worker.mock.max-response-body", "10B"),
+                Map.of("nova.worker.mock.max-response-body", "2GB"),
+                Map.of("nova.worker.mock.validate-after-inactivity", "0s"),
+                Map.of("nova.worker.reject-guard.pause", "0s"),
                 Map.of("nova.worker.concurrency.per-mock", "65536", "nova.worker.concurrency.mock-max-instances", "65536"),
                 Map.of("nova.worker.concurrency.rate-per-second", "2147483647",
                         "nova.worker.concurrency.mock-max-instances", "2"),
