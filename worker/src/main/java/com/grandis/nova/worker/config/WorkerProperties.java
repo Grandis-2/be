@@ -4,6 +4,8 @@ import com.grandis.nova.common.sqs.BatchConsumerSettings;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
+import org.springframework.util.unit.DataSize;
+
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
@@ -33,14 +35,15 @@ public record WorkerProperties(
     }
 
     /**
-     * @param connectionMaxLifetime 연결 하나를 다시 쓰는 최대 시간. 짧게 두어 새로 뜬 mock 에도 요청이 가게 한다
-     * @param dnsCache              JVM 이 이름 풀이 결과를 기억하는 시간. 길면 사라진 mock 주소로 계속 보낸다
-     * @param slowCallThreshold     성공했어도 이보다 느리면 차단기가 느린 호출로 센다
+     * @param connectionMaxLifetime   연결 하나를 다시 쓰는 최대 시간. 짧게 두어 새로 뜬 mock 에도 요청이 가게 한다
+     * @param validateAfterInactivity 이보다 오래 쉰 연결은 다시 쓰기 전에 끊겼는지 확인한다
+     * @param slowCallThreshold       성공했어도 이보다 느리면 차단기가 느린 호출로 센다
      */
     public record Mock(
             URI baseUrl,
             @DefaultValue("30s") Duration connectionMaxLifetime,
-            @DefaultValue("5s") Duration dnsCache,
+            @DefaultValue("1s") Duration validateAfterInactivity,
+            @DefaultValue("64KB") DataSize maxResponseBody,
             @DefaultValue("3s") Duration connectTimeout,
             @DefaultValue("3s") Duration readTimeout,
             @DefaultValue("1500ms") Duration slowCallThreshold
@@ -48,19 +51,20 @@ public record WorkerProperties(
 
         public Mock {
             require(baseUrl != null && baseUrl.isAbsolute(), "mock.base-url 은 절대 주소여야 한다: " + baseUrl);
-            require(positive(connectionMaxLifetime) && positive(dnsCache) && positive(connectTimeout)
+            require(positive(connectionMaxLifetime) && positive(validateAfterInactivity) && positive(connectTimeout)
                     && positive(readTimeout), "mock 의 시간 값은 0 보다 커야 한다");
+            require(maxResponseBody != null && maxResponseBody.toBytes() >= 1024
+                            && maxResponseBody.toBytes() <= Integer.MAX_VALUE,
+                    "mock.max-response-body 는 1KB 이상이어야 한다: " + maxResponseBody);
             require(positive(slowCallThreshold) && slowCallThreshold.compareTo(readTimeout) < 0,
                     "mock.slow-call-threshold 는 0 보다 크고 read-timeout 보다 짧아야 한다: " + slowCallThreshold);
         }
     }
 
     /**
-     * 동시에 나가 있는 요청 수. 상한 = perMock × mockMaxInstances 이고, 자동 조절이 min ~ 상한 사이에서 정한다.
-     *
-     * @param mockMaxInstances mock 자동 확장의 최대 대수. 인프라가 넘긴다
-     * @param permitWait       받은 뒤 자리를 못 얻었을 때 큐로 돌려보내기 전에 기다리는 시간
-     * @param healthyP95       이보다 빠르고 실패율이 healthyFailureRate 미만이면 자리를 늘린다
+     * 동시에 나가 있는 요청 수. 상한 = perMock × mockMaxInstances(인프라가 넘기는 mock 최대 대수)이고 그 안에서 자동 조절한다.
+     * 창(adjustEvery)마다 p95 가 healthyP95 미만 · 실패율이 healthyFailureRate 미만이면 increaseStep 만큼 늘리고,
+     * 느린 호출 기준을 넘거나 실패율이 unhealthyFailureRate 이상이면 decreaseFactor 를 곱해 줄인다.
      */
     public record Concurrency(
             @DefaultValue("16") int perMock,
@@ -72,7 +76,10 @@ public record WorkerProperties(
             @DefaultValue("40") int ratePerSecond,
             @DefaultValue("10s") Duration adjustEvery,
             @DefaultValue("1s") Duration healthyP95,
-            @DefaultValue("5") int healthyFailureRate
+            @DefaultValue("5") int healthyFailureRate,
+            @DefaultValue("20") int unhealthyFailureRate,
+            @DefaultValue("1") int increaseStep,
+            @DefaultValue("0.5") double decreaseFactor
     ) {
 
         public Concurrency {
@@ -89,7 +96,11 @@ public record WorkerProperties(
                     "concurrency.cancel-reserved 는 0 이상이고 min 보다 작아야 한다: " + cancelReserved);
             require(positive(permitWait) && positive(adjustEvery) && positive(healthyP95),
                     "concurrency 의 시간 값은 0 보다 커야 한다");
-            require(percent(healthyFailureRate), "concurrency.healthy-failure-rate 는 1 ~ 100 이어야 한다");
+            require(percent(healthyFailureRate) && percent(unhealthyFailureRate)
+                            && healthyFailureRate < unhealthyFailureRate,
+                    "concurrency 는 1 <= healthy-failure-rate < unhealthy-failure-rate <= 100 이어야 한다");
+            require(increaseStep >= 1 && decreaseFactor > 0 && decreaseFactor < 1,
+                    "concurrency 는 increase-step >= 1, 0 < decrease-factor < 1 이어야 한다");
         }
 
         /** worker 하나의 동시 요청 상한. */
@@ -105,7 +116,7 @@ public record WorkerProperties(
 
     /**
      * @param window        판단에 쓰는 최근 호출 수
-     * @param openFirst     처음 열렸을 때 닫아 두는 시간. 다시 열릴 때마다 두 배, openMax 까지
+     * @param openFirst     처음 열렸을 때 닫아 두는 시간. 다시 열릴 때마다 openMultiplier 배, openMax 까지
      * @param halfOpenCalls 반쯤 열린 동안 시험으로 보내는 호출 수
      */
     public record Circuit(
@@ -115,6 +126,7 @@ public record WorkerProperties(
             @DefaultValue("80") int slowCallRate,
             @DefaultValue("10s") Duration openFirst,
             @DefaultValue("2m") Duration openMax,
+            @DefaultValue("2") double openMultiplier,
             @DefaultValue("3") int halfOpenCalls
     ) {
 
@@ -125,6 +137,7 @@ public record WorkerProperties(
                     "circuit 의 failure-rate · slow-call-rate 는 1 ~ 100 이어야 한다");
             require(positive(openFirst) && openFirst.compareTo(openMax) <= 0 && openMax.compareTo(MAX_DELAY) <= 0,
                     "circuit 는 0 < open-first <= open-max <= 15m 여야 한다(열린 동안 지연 재전송한다): " + openMax);
+            require(openMultiplier >= 1, "circuit.open-multiplier 는 1 이상이어야 한다: " + openMultiplier);
             require(halfOpenCalls >= 1, "circuit.half-open-calls 는 1 이상이어야 한다");
         }
     }
@@ -181,14 +194,17 @@ public record WorkerProperties(
      * 우리 요청이 잘못돼 거절이 이어질 때 받기를 멈추는 기준.
      *
      * @param invalidRequests per 동안 이만큼 거절되면 멈춘다
+     * @param pause           멈춰 있는 시간. 지나면 다시 받아 본다
      */
     public record RejectGuard(
             @DefaultValue("5") int invalidRequests,
-            @DefaultValue("1m") Duration per
+            @DefaultValue("1m") Duration per,
+            @DefaultValue("1m") Duration pause
     ) {
 
         public RejectGuard {
-            require(invalidRequests >= 1 && positive(per), "reject-guard 는 invalid-requests >= 1, per > 0 이어야 한다");
+            require(invalidRequests >= 1 && positive(per) && positive(pause),
+                    "reject-guard 는 invalid-requests >= 1, per > 0, pause > 0 이어야 한다");
         }
     }
 
