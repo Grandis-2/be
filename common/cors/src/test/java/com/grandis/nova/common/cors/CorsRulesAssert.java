@@ -20,7 +20,7 @@ final class CorsRulesAssert {
         assertThat(configuration.getAllowedMethods()).containsExactly("GET", "POST", "PUT", "PATCH", "DELETE");
         assertThat(configuration.getAllowedHeaders()).containsExactly("Authorization", "Content-Type", "Idempotency-Key",
                 "X-Admission-Ticket", "Queue-Token", "X-Request-Id");
-        assertThat(configuration.getExposedHeaders()).containsExactly("Retry-After", "X-Idempotent-Replay", "X-Request-Id");
+        assertThat(configuration.getExposedHeaders()).containsExactly("Location", "Retry-After", "X-Idempotent-Replay", "X-Request-Id");
         assertThat(configuration.getMaxAge()).isEqualTo(3600L);
     }
 }

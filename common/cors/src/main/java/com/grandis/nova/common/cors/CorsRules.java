@@ -20,7 +20,8 @@ final class CorsRules {
     static final List<String> REQUEST_HEADERS = List.of(
             HttpHeaders.AUTHORIZATION, HttpHeaders.CONTENT_TYPE, "Idempotency-Key", "X-Admission-Ticket", "Queue-Token",
             "X-Request-Id");
-    static final List<String> RESPONSE_HEADERS = List.of(HttpHeaders.RETRY_AFTER, "X-Idempotent-Replay", "X-Request-Id");
+    static final List<String> RESPONSE_HEADERS = List.of(
+            HttpHeaders.LOCATION, HttpHeaders.RETRY_AFTER, "X-Idempotent-Replay", "X-Request-Id");
     /** 사전 요청(OPTIONS) 결과를 브라우저가 묵혀 두는 시간. 크롬은 2시간에서 자른다. */
     static final Duration PREFLIGHT_CACHE = Duration.ofHours(1);
 

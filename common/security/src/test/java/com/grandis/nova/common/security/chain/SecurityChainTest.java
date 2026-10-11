@@ -370,7 +370,7 @@ class SecurityChainTest {
                 .andExpect(status().isOk())
                 .andExpect(header().string("Access-Control-Allow-Origin", FRONT))
                 .andExpect(header().string("Access-Control-Allow-Credentials", "true"))
-                .andExpect(header().string("Access-Control-Expose-Headers", "Retry-After, X-Idempotent-Replay, X-Request-Id"));
+                .andExpect(header().string("Access-Control-Expose-Headers", "Location, Retry-After, X-Idempotent-Replay, X-Request-Id"));
         mvc.perform(get("/api/v1/me").header("Origin", "https://www.grandis-nova.link"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().string("Access-Control-Allow-Origin", "https://www.grandis-nova.link"))
