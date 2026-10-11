@@ -25,7 +25,7 @@ public class RevocationRedisStore implements RevocationStore {
 
     @Override
     public void revokeSession(UUID sessionId, Duration accessTokenTtl) {
-        redis.opsForValue().set(AuthRedisKeys.revokedSession(sessionId), AuthRedisKeys.REVOKED_SESSION_MARK, accessTokenTtl);
+        redis.opsForValue().setIfAbsent(AuthRedisKeys.revokedSession(sessionId), AuthRedisKeys.REVOKED_SESSION_MARK, accessTokenTtl);
     }
 
     @Override

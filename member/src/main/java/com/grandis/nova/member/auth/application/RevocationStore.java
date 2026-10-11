@@ -8,7 +8,10 @@ import java.util.UUID;
  */
 public interface RevocationStore {
 
-    /** 세션 하나를 끊는다(로그아웃·리프레시 재사용 탐지). TTL 은 액세스 만료 — 그 뒤엔 토큰이 어차피 죽는다. */
+    /**
+     * 세션 하나를 끊는다(로그아웃·리프레시 재사용 탐지). TTL 은 액세스 만료 — 그 뒤엔 토큰이 어차피 죽는다.
+     * 이미 표식이 있으면 덮지 않는다 — 새 로그인에 밀린 세션의 표식(이유 · 리프레시 만료 TTL)을 그 기기의 로그아웃이 지우지 않게.
+     */
     void revokeSession(UUID sessionId, Duration accessTokenTtl);
 
     /**

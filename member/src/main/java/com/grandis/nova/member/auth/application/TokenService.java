@@ -79,8 +79,9 @@ public class TokenService {
      * 로그인. 새 sid 하나에 액세스·리프레시 한 쌍. 회원은 DB 에 행을, 관리자는 Redis 에 jti 를 남긴다.
      *
      * 회원은 한 번에 세션 하나다 — 새 로그인이 그 회원의 살아 있는 세션을 끊는다(리프레시는 같은 트랜잭션에서 폐기, 액세스는 커밋 뒤 폐기 표식).
-     * 끊긴 세션의 다음 요청 · 재발급은 401 `details.reason = SESSION_REPLACED` 다. 표식을 못 심어도 로그인은 성공한다 — 끊긴 세션의 리프레시는
-     * 이미 죽었고, 남은 액세스 토큰은 만료(액세스 유효기간)까지만 산다. 관리자는 끊지 않는다.
+     * 끊긴 세션의 다음 요청 · 재발급은 401 이고, 표식이 심긴 뒤면 `details.reason = SESSION_REPLACED` 가 실린다. 이유가 없는 401 도 있다 —
+     * 표식을 못 심었을 때, 로그인 커밋과 표식 사이(수 ms)에 재발급이 판정했을 때. 표식을 못 심어도 로그인은 성공한다 — 끊긴 세션의 리프레시는
+     * 이미 죽었고, 남은 액세스 토큰은 만료(액세스 유효기간)까지만 산다(그 WARN 이 경보 재료다). 관리자는 끊지 않는다.
      */
     public IssuedTokens issue(String subject, Role role) {
         UUID sessionId = UUID.randomUUID();
@@ -139,7 +140,7 @@ public class TokenService {
             throw new InvalidTokenException("refresh reuse sid=" + shortSid(rotation.sessionId()));
         }
         if (rotation.status() == RefreshTokenStore.Rotation.Status.REVOKED) {
-            // 회전 전 검사와 행 잠금 사이에 새 로그인이 이 세션을 끊었으면 표식이 이제 있다
+            // 회전 전 검사와 행 잠금 사이에 새 로그인이 이 세션을 끊었을 수 있다. 표식은 로그인 커밋 뒤에 심기므로 아직 없으면 이유 없는 401 이다
             throw rejectRevoked(asClaims, "refresh rejected: REVOKED");
         }
         if (rotation.status() != RefreshTokenStore.Rotation.Status.ROTATED) {
@@ -148,7 +149,8 @@ public class TokenService {
 
         if (revokedDuringRotation(asClaims)) {
             revokeSessionBestEffort(session.sessionId(), "revoked during rotation");
-            throw new InvalidTokenException("session revoked during rotation sid=" + shortSid(session.sessionId()));
+            // 회전 커밋 뒤 새 로그인이 이 세션을 끊었으면 이유를 싣는다(표식은 덮지 않는다 — RevocationStore.revokeSession)
+            throw rejectRevoked(asClaims, "session revoked during rotation sid=" + shortSid(session.sessionId()));
         }
         String access = provider.create(session.subject(), Role.USER, session.sessionId(), TokenType.ACCESS);
         Duration remaining = Duration.between(clock.instant(), rotation.expiresAt());
@@ -222,7 +224,7 @@ public class TokenService {
         try {
             revocations.replaceSession(sessionId, refreshTokenValidity);
         } catch (DataAccessException e) {
-            log.warn("login: replaced-session mark not written, its access token lives until expiry sid={} cause={}",
+            log.warn("auth.login.replaced_mark_failed — replaced session's access token lives until expiry sid={} cause={}",
                     shortSid(sessionId), e.getClass().getSimpleName());
         }
     }

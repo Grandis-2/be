@@ -17,6 +17,7 @@ import com.grandis.nova.common.security.RevocationCheckFailedException;
 import com.grandis.nova.common.security.RevocationChecker;
 import com.grandis.nova.common.security.RevocationLookupUnavailableException;
 import com.grandis.nova.common.security.Role;
+import com.grandis.nova.common.security.SessionReplacedException;
 import com.grandis.nova.common.security.TokenClaims;
 import com.grandis.nova.common.security.TokenType;
 import com.grandis.nova.member.auth.application.RefreshTokenStore.Rotation;
@@ -25,6 +26,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -190,6 +192,48 @@ class TokenServiceTest {
                     .as("%s", status).isInstanceOf(InvalidTokenException.class);
             verify(revocations, never()).revokeSession(any(), any());
         }
+    }
+
+    @Test
+    @DisplayName("issue(회원): 끊은 앞 세션마다 replaced 표식을 리프레시 만료(14일) TTL 로 심는다 · 표식 저장이 실패해도 로그인은 성공한다")
+    void issueMarksReplacedSessionsAndSurvivesMarkFailure() {
+        UUID phone = UUID.randomUUID();
+        UUID tablet = UUID.randomUUID();
+        when(refreshTokens.replace(any(), eq(CUSTOMER), any(), any())).thenReturn(List.of(phone, tablet));
+        doThrow(new RedisConnectionFailureException("down")).when(revocations).replaceSession(eq(phone), any());
+
+        TokenService.IssuedTokens tokens = service.issue(CUSTOMER, Role.USER);
+
+        assertThat(tokens.accessToken()).isNotBlank();
+        verify(revocations).replaceSession(phone, REFRESH);
+        verify(revocations).replaceSession(tablet, REFRESH);
+        verify(revocations, never()).revokeSession(any(), any());
+    }
+
+    @Test
+    @DisplayName("rotate: 새 로그인에 밀린 세션이면 SessionReplacedException — 회전 전 검사 · 저장소 REVOKED · 회전 뒤 검사 세 갈래 모두")
+    void replacedSessionRotationsCarryTheReason() {
+        // 회전 전 검사
+        loggedIn(UUID.randomUUID());
+        when(checker.isRevoked(any())).thenReturn(true);
+        when(checker.isReplaced(any())).thenReturn(true);
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(SessionReplacedException.class);
+
+        // 회전 전 검사는 통과, 저장소가 행을 잠그고 보니 폐기(그사이 로그인 커밋)
+        Mockito.reset(refreshTokens, checker);
+        Session session = loggedIn(UUID.randomUUID());
+        when(checker.isRevoked(any())).thenReturn(false);
+        when(checker.isReplaced(any())).thenReturn(true);
+        when(refreshTokens.rotate(any(), any())).thenReturn(Rotation.rejected(Rotation.Status.REVOKED, session.sessionId(), session.subject()));
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(SessionReplacedException.class);
+
+        // 회전은 됐고, 회전 뒤 검사에서 폐기(회전 커밋 뒤 로그인)
+        Mockito.reset(refreshTokens, checker);
+        session = loggedIn(UUID.randomUUID());
+        rotationSucceeds(session);
+        when(checker.isRevoked(any())).thenReturn(false, true);
+        when(checker.isReplaced(any())).thenReturn(true);
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(SessionReplacedException.class);
     }
 
     @Test
