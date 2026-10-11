@@ -28,6 +28,10 @@ public abstract class QueuePoller implements SmartLifecycle {
             BackoffStrategy.exponentialDelayHalfJitter(Duration.ofSeconds(1), Duration.ofSeconds(30));
     /** 롱 폴링은 대기 시간만큼 걸리므로 클라이언트 기본 제한 시간 대신 대기 시간에 여유를 더해 쓴다. */
     private static final Duration RECEIVE_TIMEOUT_MARGIN = Duration.ofSeconds(5);
+    /** SQS 가 한 번에 주는 최대 건수. */
+    private static final int MAX_RECEIVE = 10;
+    /** 받을 것이 없다고 한 뒤({@link #receiveLimit()} 0 이하) 다시 묻기까지 쉬는 시간. */
+    private static final Duration IDLE_WAIT = Duration.ofMillis(100);
 
     protected final SqsClient sqs;
     protected final QueuePollerSettings settings;
@@ -53,6 +57,11 @@ public abstract class QueuePoller implements SmartLifecycle {
 
     /** 메시지 하나를 끝낸다(지우기 · 다시 보이기 · 적재 등). 새는 예외 · Error 는 남기고 같은 묶음의 다음 메시지로 넘어간다. */
     protected abstract void handle(String queueUrl, Message message);
+
+    /** 이번에 받을 최대 건수(10 까지). 받기 직전마다 묻고, 0 이하면 받지 않고 잠시 쉰 뒤 다시 묻는다. 기본은 설정값이다. */
+    protected int receiveLimit() {
+        return settings.maxMessages();
+    }
 
     /** 이미 돌고 있으면 그대로 둔다 — 컨텍스트 재시작 등으로 다시 불려도 작업이 concurrency 보다 늘지 않게. */
     @Override
@@ -120,11 +129,18 @@ public abstract class QueuePoller implements SmartLifecycle {
         int failures = 0;
         while (running) {
             try {
+                int limit = Math.min(receiveLimit(), MAX_RECEIVE);
+                if (limit <= 0) {
+                    if (!pause(IDLE_WAIT)) {
+                        return;
+                    }
+                    continue;
+                }
                 String queueUrl = queueUrls.of(settings.queue());
                 List<Message> messages = sqs.receiveMessage(request -> request
                         .queueUrl(queueUrl)
                         .waitTimeSeconds(settings.waitSeconds())
-                        .maxNumberOfMessages(settings.maxMessages())
+                        .maxNumberOfMessages(limit)
                         .visibilityTimeout((int) settings.visibility().toSeconds())
                         .messageSystemAttributeNames(MessageSystemAttributeName.APPROXIMATE_RECEIVE_COUNT,
                                 MessageSystemAttributeName.SENT_TIMESTAMP)
