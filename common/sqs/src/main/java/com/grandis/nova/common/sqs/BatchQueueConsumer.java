@@ -94,6 +94,9 @@ public final class BatchQueueConsumer extends QueuePoller {
                 deleter.interrupt();
             }
         } catch (InterruptedException e) {
+            // 기다리지 못해도 처리 · 삭제 작업을 남겨 두지 않는다
+            handlers.shutdownNow();
+            deleter.interrupt();
             Thread.currentThread().interrupt();
         } finally {
             deleter = null;
