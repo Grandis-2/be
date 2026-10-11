@@ -123,6 +123,21 @@ class RefreshTokenDbStoreTest {
     }
 
     @Test
+    @DisplayName("replace: 막 만료된 세션(탐지 창 30분 안)은 끊고, 창이 지난 세션은 건드리지 않는다 — 그 체인이 낸 액세스가 아직 살 수 있는가")
+    void replaceHonoursTheDetectionWindow() {
+        UUID customer = newCustomer();
+        String justExpired = expiring(customer, nowSeconds().minus(java.time.Duration.ofMinutes(10)));
+        String longExpired = expiring(customer, nowSeconds().minus(java.time.Duration.ofMinutes(40)));
+        UUID justExpiredSession = store.find(justExpired).orElseThrow().sessionId();
+
+        List<UUID> replaced = store.replace(UUID.randomUUID(), String.valueOf(customer), RefreshTokens.newToken(), nowSeconds().plus(FOURTEEN_DAYS));
+
+        assertThat(replaced).containsExactly(justExpiredSession);
+        assertThat(jdbc.queryForObject("SELECT revoked_at FROM refresh_tokens WHERE token_hash = ?", LocalDateTime.class,
+                (Object) RefreshTokens.hash(longExpired))).as("창이 지난 행").isNull();
+    }
+
+    @Test
     @DisplayName("find: 원문으로 주인과 세션을 찾는다. 모르는 원문은 없음")
     void findResolvesTheOwner() {
         UUID customerId = newCustomer();
