@@ -47,6 +47,20 @@ class HealthEndpointTest {
         assertThat(get("/actuator/env").statusCode()).isEqualTo(404);
     }
 
+    /** 수집기(Prometheus · CloudWatch 에이전트)가 긁어 가는 출력에 차단기 상태와 자리 수가 호출 전부터 있다. */
+    @Test
+    void 차단기_상태와_동시_요청_자리가_지표로_나간다() throws Exception {
+        String metrics = get("/actuator/prometheus").body();
+
+        assertThat(metrics).containsPattern("resilience4j_circuitbreaker_state\\{[^}]*name=\"mock\"[^}]*state=\"open\"[^}]*} 0");
+        assertThat(metrics).containsPattern("resilience4j_circuitbreaker_state\\{[^}]*name=\"mock\"[^}]*state=\"closed\"[^}]*} 1");
+        assertThat(metrics).containsPattern("resilience4j_circuitbreaker_not_permitted_calls_total\\{[^}]*name=\"mock\"");
+        assertThat(metrics).containsPattern("resilience4j_ratelimiter_available_permissions\\{[^}]*name=\"mock\"");
+        assertThat(metrics).containsPattern("worker_concurrency_limit(\\{[^}]*})? 8");
+        assertThat(metrics).containsPattern("worker_concurrency_in_use(\\{[^}]*})? 0");
+        assertThat(metrics).containsPattern("worker_receive_blocked(\\{[^}]*})? 0");
+    }
+
     @Test
     void readiness_는_앱의_준비_상태만_본다() {
         assertThat(groups.get("readiness").isMember("readinessState")).isTrue();

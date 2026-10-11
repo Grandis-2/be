@@ -28,9 +28,9 @@ class ModuleBoundaryTest {
                     "com.grandis.nova.catalog..", "com.grandis.nova.member..", "com.grandis.nova.waitingroom..",
                     "com.grandis.nova.batch..");
 
-    /** 메시지 · 이벤트의 모양은 운영값(설정)에 기대지 않는다. */
+    /** 메시지 · 이벤트의 모양은 운영값(설정)과 외부 호출에 기대지 않는다. */
     @ArchTest
-    static final ArchRule 메시지와_이벤트는_설정에_기대지_않는다 = noClasses()
+    static final ArchRule 메시지와_이벤트는_설정과_외부_호출에_기대지_않는다 = noClasses()
             .that().resideInAnyPackage(ROOT + ".job..", ROOT + ".event..")
-            .should().dependOnClassesThat().resideInAPackage(ROOT + ".config..");
+            .should().dependOnClassesThat().resideInAnyPackage(ROOT + ".config..", ROOT + ".mock..");
 }
