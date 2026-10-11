@@ -16,11 +16,15 @@ import org.springframework.security.web.access.AccessDeniedHandler;
  * 401 UNAUTHENTICATED("세션 없음·만료"), 403 FORBIDDEN("권한 부족"). 이유(필터의 ATTR_FAILURE_REASON)는 응답에 내지 않는다.
  * 폐기 조회 실패로 닫힌 401 만 `error.details.retryable = true` 다(폐기 조회 실패 정책). 공통 봉투에는 retryable 칸이 없으므로(nova PR #4, 2026-09-22)
  * 로그인 쪽 의미는 details 에 싣는다 — 프론트는 이 값으로 "잠시 후 재시도" 를 가른다.
+ * 같은 회원의 새 로그인에 밀려 끊긴 세션의 401 은 `error.details.reason = SESSION_REPLACED` 다 — 프론트가 "다른 곳에서 로그인해 로그아웃됐습니다" 를 띄운다.
  */
 public final class JsonAuthFailureHandlers {
 
     /** 닫힌 경로에서 폐기 조회가 안 돼 거절했을 때의 details. 같은 요청을 잠시 뒤 다시 보내면 성공할 수 있다는 뜻. */
     public static final Map<String, Object> RETRYABLE_DETAILS = Map.of("retryable", true);
+
+    /** 같은 회원이 다른 곳에서 새로 로그인해 이 세션이 끊겼을 때의 details. 다시 로그인하면 이번엔 다른 곳의 세션이 끊긴다. */
+    public static final Map<String, Object> SESSION_REPLACED_DETAILS = Map.of("reason", "SESSION_REPLACED");
 
     private final ObjectMapper objectMapper;
 
@@ -31,8 +35,10 @@ public final class JsonAuthFailureHandlers {
     public AuthenticationEntryPoint entryPoint() {
         return (request, response, ex) -> {
             boolean retryable = Boolean.TRUE.equals(request.getAttribute(JwtAuthenticationFilter.ATTR_RETRYABLE));
+            boolean replaced = Boolean.TRUE.equals(request.getAttribute(JwtAuthenticationFilter.ATTR_SESSION_REPLACED));
             write(response, 401, ApiResponse.fail(CommonErrorCode.UNAUTHENTICATED,
-                    CommonErrorCode.UNAUTHENTICATED.defaultMessage(), retryable ? RETRYABLE_DETAILS : null));
+                    CommonErrorCode.UNAUTHENTICATED.defaultMessage(),
+                    retryable ? RETRYABLE_DETAILS : replaced ? SESSION_REPLACED_DETAILS : null));
         };
     }
 
