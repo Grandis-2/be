@@ -1,6 +1,6 @@
 name: release
 
-# main 에 들어간 것만 이미지가 된다. PR 은 build.yml 이 검증만 한다.
+# main 에 들어간 것만 이미지가 되고, latest 가 바뀐 서비스는 바뀐 그 자리에서 ECS 에 다시 배포된다. PR 은 build.yml 이 검증만 한다.
 on:
   push:
     branches: [main]
@@ -13,6 +13,7 @@ on:
 
 # 한 번에 하나만 돈다. 겹쳐 돌면 latest 를 누가 마지막에 옮기는지 정해지지 않는다.
 # 대기는 하나만 남으므로 연달아 푸시하면 중간 커밋은 sha 태그 없이 건너뛴다. latest 는 마지막 내용을 따라간다.
+# 새 푸시 뒤에 옛 실행을 다시 돌리지 않는다 — latest 를 옛 이미지로 되감고 그대로 배포한다.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -22,6 +23,7 @@ concurrency:
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
   ECR_NAMESPACE: nova
+  ECS_CLUSTER: nova-prod   # 태스크 정의 · 서비스(nova-prod-<서비스>)는 인프라가 만든다
 
 permissions:
   contents: read
@@ -143,26 +145,39 @@ jobs:
       # 건너뛰는 서비스도 sha · latest 를 지금 내용의 이미지로 옮긴다. 되돌림 커밋으로 예전 내용이 되면
       # latest 가 직전 이미지에 남아 있기 때문이다. 매니페스트에 태그만 붙이므로 레이어는 오가지 않는다.
       # 다이제스트를 함께 넘겨, 매니페스트가 원본과 다르면 새 이미지를 만들지 않고 실패한다.
+      # latest 가 실제로 다른 이미지로 옮겨진 서비스는 그 자리에서 바로 배포한다 — 뒤 서비스가 실패해도 앞 배포는 남는다.
+      # 재실행이면 이전 시도에서 latest 만 옮기고 배포 전에 끊겼을 수 있어, 옮길 대상 서비스를 모두 다시 배포한다.
+      # 새로 올리는 서비스는 3단계가 올린 직후 배포한다.
       - name: 태그 옮기기
         env:
           SHA: ${{ github.sha }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          jq -c '.[] | select(.action == "move")' plan.json | while read -r row; do
+          # 대입으로 먼저 받아 jq 실패가 set -e 에 걸리게 한다
+          rows=$(jq -c '.[] | select(.action == "move")' plan.json)
+          while read -r row; do
+            [ -n "$row" ] || continue
             s=$(echo "$row" | jq -r .service)
             key=$(echo "$row" | jq -r .key)
             image=$(echo "$row" | jq -c .image)
+            latest="latest 는 이미 같음"
             for tag in "$SHA" latest; do
               # 이미 같은 이미지에 붙어 있으면 ImageAlreadyExistsException 이다. 할 일이 없으니 넘어간다.
-              if ! out=$(aws ecr put-image --repository-name "$ECR_NAMESPACE/$s" --image-tag "$tag" \
+              if out=$(aws ecr put-image --repository-name "$ECR_NAMESPACE/$s" --image-tag "$tag" \
                     --image-manifest "$(echo "$image" | jq -r .imageManifest)" \
                     --image-manifest-media-type "$(echo "$image" | jq -r .imageManifestMediaType)" \
                     --image-digest "$(echo "$image" | jq -r .imageId.imageDigest)" 2>&1 < /dev/null); then
+                if [ "$tag" = latest ]; then latest="latest 옮김"; fi
+              else
                 grep -qF ImageAlreadyExistsException <<< "$out" || { echo "$out"; exit 1; }
               fi
             done
-            echo "$ECR_NAMESPACE/$s: content-${key:0:12} → $SHA, latest"
-          done
+            echo "$ECR_NAMESPACE/$s: content-${key:0:12} → $SHA ($latest)"
+            if [ "$latest" = "latest 옮김" ] || [ "$RUN_ATTEMPT" -gt 1 ]; then
+              bash .github/scripts/ecs-deploy.sh "$s"
+            fi
+          done <<< "$rows"
 
       # 2단계가 같은 jar 를 쓰도록 넘긴다. gradle 을 다시 돌리지 않는다.
       - uses: actions/upload-artifact@v4
@@ -227,6 +242,11 @@ jobs:
         include: ${{ fromJSON(needs.package.outputs.publish) }}
     name: publish ${{ matrix.service }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false   # 같은 job 에서 서드파티 액션(trivy)이 돈다
+
       - uses: actions/download-artifact@v4
         with:
           name: images
@@ -273,3 +293,9 @@ jobs:
           done
           echo "### $REPO" >> "$GITHUB_STEP_SUMMARY"
           echo '`'"$REGISTRY/$REPO:$SHA"'`' >> "$GITHUB_STEP_SUMMARY"
+
+      # 올린 직후 이 서비스만 배포한다. 다른 서비스의 올리기가 실패해도 이 배포는 남고, 올리지 못한 서비스는 배포하지 않는다.
+      - name: 배포
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: bash .github/scripts/ecs-deploy.sh "$SERVICE"
