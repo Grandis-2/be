@@ -3,6 +3,7 @@ package com.grandis.nova.common.cors;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.util.List;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -14,18 +15,36 @@ import java.util.regex.Pattern;
 @ConfigurationProperties("nova.cors")
 record CorsProperties(List<String> allowedOrigins) {
 
-    private static final Pattern ORIGIN = Pattern.compile("https?://[A-Za-z0-9.-]+(:\\d{1,5})?");
+    private static final Pattern ORIGIN = Pattern.compile("(https?)://[A-Za-z0-9.-]+(?::([1-9]\\d{0,4}))?");
+    private static final int MAX_PORT = 65_535;
 
     CorsProperties {
         if (allowedOrigins == null || allowedOrigins.isEmpty()) {
             throw new IllegalArgumentException("nova.cors.allowed-origins 가 비어 있다");
         }
         for (String origin : allowedOrigins) {
-            if (origin == null || !ORIGIN.matcher(origin).matches()) {
-                throw new IllegalArgumentException(
-                        "nova.cors.allowed-origins 는 scheme://host[:port] 여야 한다(경로 · 끝 '/' · 와일드카드 불가): " + origin);
+            if (!isBrowserOrigin(origin)) {
+                throw new IllegalArgumentException("nova.cors.allowed-origins 는 브라우저가 보내는 모양(scheme://host[:port])이어야 한다"
+                        + "(경로 · 끝 '/' · 와일드카드 · 기본 포트 · 범위 밖 포트 불가): " + origin);
             }
         }
         allowedOrigins = List.copyOf(allowedOrigins);
+    }
+
+    /** 브라우저는 기본 포트(https 443 · http 80)를 빼고 보낸다 — 붙여 적으면 어떤 요청과도 맞지 않는다. */
+    private static boolean isBrowserOrigin(String origin) {
+        if (origin == null) {
+            return false;
+        }
+        Matcher matcher = ORIGIN.matcher(origin);
+        if (!matcher.matches()) {
+            return false;
+        }
+        if (matcher.group(2) == null) {
+            return true;
+        }
+        int port = Integer.parseInt(matcher.group(2));
+        int defaultPort = matcher.group(1).equals("https") ? 443 : 80;
+        return port <= MAX_PORT && port != defaultPort;
     }
 }
