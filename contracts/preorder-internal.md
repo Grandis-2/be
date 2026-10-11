@@ -10,7 +10,7 @@
 
 | 언제 | 누가 | 실린 JWT | 목적 |
 | --- | --- | --- | --- |
-| 관리자 회차 · 차수 수정(`PUT /admin/products/{id}/preorder-campaign` 등, 등록 뒤 오픈 전) | preorder `PreorderCampaignAdminService.requirePreorderProduct` | 관리자(ADMIN) | 회차를 붙일 상품이 사전예약 상품인지 확인 |
+| 관리자 회차 · 차수 수정(`PUT /api/v1/admin/preorders/products/{id}/campaign` 등, 등록 뒤 오픈 전) | preorder `PreorderCampaignAdminService.requirePreorderProduct` | 관리자(ADMIN) | 회차를 붙일 상품이 사전예약 상품인지 확인 |
 | 사용자 접수 (`PreorderAcceptTransaction`) | preorder `CatalogReader`(캐시 경유) | 회원(USER) | 접수 가능 여부 판정과 옵션 스냅샷 복사 |
 
 **인증.** 호출자의 JWT(`Authorization: Bearer {accessToken}`, 2026-09-28 — 이전 `X-Session-Token`)를 그대로 전달한다. catalog 는 `common:security` 필터로 서명·만료·`aud`·역할·폐기를 검증하고(NV-139 채택) **이 읽기 엔드포인트는 USER·ADMIN 둘 다 허용**한다(앞으로 생길 `/internal/**` 쓰기 엔드포인트는 ADMIN 만). 업무 판정(접수 가능한가)은 catalog 가 아니라 preorder 가 한다. TLS는 전송 암호화 역할이며 호출 서비스의 접근 제한은 위 노출 조건으로 검증한다. preorder 쪽은 `CatalogClient` 호출에 헤더를 전파하는 인터셉터를 둔다(`TokenRelayConfig` · `common:security` 의 `BearerTokenRelayInterceptor`, NV-277).
@@ -23,15 +23,15 @@
 {
   "success": true,
   "data": {
-    "productId": 12,
+    "productId": "0199a3f2-8a10-7b21-9c32-4d5e6f708192",
     "title": "스마트폰 A",
     "saleMode": "PREORDER",
     "status": "ACTIVE",
     "visible": false,
     "registrationCompleted": false,
     "options": [
-      { "optionId": 101, "sku": "BLACK-256", "title": "블랙 / 256GB", "price": 1200000, "status": "ACTIVE" },
-      { "optionId": 102, "sku": "BLACK-512", "title": "블랙 / 512GB", "price": 1400000, "status": "PAUSED" }
+      { "optionId": "0199a3f2-8a11-7c22-8d33-5e6f70819203", "sku": "BLACK-256", "title": "블랙 / 256GB", "price": 1200000, "status": "ACTIVE" },
+      { "optionId": "0199a3f2-8a11-7c22-8d33-5e6f70819204", "sku": "BLACK-512", "title": "블랙 / 512GB", "price": 1400000, "status": "PAUSED" }
     ]
   },
   "error": null,
@@ -42,7 +42,7 @@
 
 | 칸 | 타입 | 뜻 |
 | --- | --- | --- |
-| `productId` | number | `products.id` |
+| `productId` | string(UUID) | `products.id` |
 | `title` | string | 상품명. 스냅샷 원본 |
 | `saleMode` | `PREORDER` \| `IN_STOCK` | `products.sale_mode` |
 | `status` | `ACTIVE` \| `PAUSED` | `products.status`. PAUSED 는 판매 중지 — 소비자는 신규 접수 · 주문을 막는다. 사전예약 상품은 오픈 3분 전부터 이 칸이 바뀌지 않는다(2026-10-04 결정). 오픈 전에 PAUSED 로 둔 채 오픈을 넘긴 상품도 판매 중지일 뿐 회차 취소가 아니다 — 회차 취소는 이 칸으로 알리지 않고 `PREORDER_CAMPAIGN_CANCELED` 이벤트로 따로 알린다(contracts/catalog-events.md — 오픈 뒤 관리자 판매 중지 · 사유) |
@@ -50,7 +50,7 @@
 | `registrationCompleted` | boolean | 판매 방식별 준비 — 등록 이벤트를 받은 서비스가 행을 만들었는가. 사전예약은 `preorder_campaigns` 에 그 상품 행이 있다, 일반은 `option_inventories` 에 그 상품 옵션의 행이 있다(contracts/catalog-events.md) |
 
 `visible` · `status` · `registrationCompleted` 는 **한 문장**으로 읽어 같은 스냅샷에서 나온다(`ProductListingQueryRepository.findExposure`). 둘은 서로 다른 트랜잭션(관리자 공개 전환 · preorder/order 의 등록 이벤트 처리)이 바꾸지만, READ COMMITTED 에서 따로 읽으면 두 문장 사이에 둘 다 커밋돼 한순간도 없던 조합(공개 · 준비)이 나온다. 접수가 이 셋으로 판정하므로 한 문장이어야 한다.
-| `options[].optionId` | number | `product_options.id` |
+| `options[].optionId` | string(UUID) | `product_options.id` |
 | `options[].sku` | string | 모델 안 유일 |
 | `options[].title` | string | 옵션 표시명. 스냅샷 원본 |
 | `options[].price` | number(정수 원) | 최종가. 스냅샷 원본 |
@@ -65,7 +65,7 @@
 | 401 | `UNAUTHENTICATED` | 토큰 없음·만료·폐기·`Authorization` 헤더 모양 이상. 이 봉투는 common:security 의 진입점이 준다(NV-139 부터). **이 경로는 폐기 조회가 실패해도 열린다**(폐기 조회가 실패하면 닫히는 경로에 들지 않는다 — 실측: Redis 를 끊고 USER 토큰 → 200) — 그래서 여기서는 `details.retryable = true` 인 401 이 나오지 않는다. preorder 가 그 갈래를 만들 필요가 없다 |
 | 403 | `FORBIDDEN` | 허용 역할(USER · ADMIN) 밖. catalog 는 `hasAnyRole(USER, ADMIN)` 으로 막는다 |
 | 404 | `PRODUCT_NOT_FOUND` | 상품 없음. preorder 는 **이 코드일 때만** 빈 결과로 바꾼다. 틀린 경로의 404 는 공통 `NOT_FOUND` 로 오므로 그건 연동 오류다(지금 `CatalogReader` 는 코드를 안 보고 404 를 전부 빈 결과로 캐시한다 — 아래 남은 일). 옵션이 없는 상품은 404 가 아니라 `options: []` |
-| 400 · 405 · 500 | `VALIDATION_FAILED` · `METHOD_NOT_ALLOWED` · `INTERNAL_ERROR` | 공통 처리기의 봉투. productId 가 숫자가 아님 · 허용되지 않은 메서드 · 서버 오류(원문은 싣지 않는다) |
+| 400 · 405 · 500 | `VALIDATION_FAILED` · `METHOD_NOT_ALLOWED` · `INTERNAL_ERROR` | 공통 처리기의 봉투. productId 가 UUID 가 아님 · 허용되지 않은 메서드 · 서버 오류(원문은 싣지 않는다) |
 
 preorder `CatalogReader` 는 401 을 사용자 토큰 문제(401)로, 404 외 나머지 4xx(403 포함)는 연동 오류(500)로 처리한다(NV-277). 401·403은 인증·권한 실패다(이 경로에는 `retryable` 401 이 없다 — 위 표). 오류를 상품 없음으로 캐시하지 않는다.
 

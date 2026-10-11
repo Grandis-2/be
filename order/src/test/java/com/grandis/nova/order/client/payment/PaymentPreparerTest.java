@@ -3,6 +3,12 @@ package com.grandis.nova.order.client.payment;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.security.BearerTokens;
+import com.grandis.nova.order.order.domain.enums.OrderSource;
+import com.grandis.nova.order.order.domain.enums.OrderStatus;
+import com.grandis.nova.order.order.domain.model.Order;
+import com.grandis.nova.order.order.vo.Money;
+import com.grandis.nova.order.order.vo.ShipTo;
+import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -22,6 +28,8 @@ import org.springframework.web.service.invoker.HttpServiceProxyFactory;
 
 import java.math.BigDecimal;
 import java.net.SocketTimeoutException;
+import java.time.Instant;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -42,9 +50,12 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 class PaymentPreparerTest {
 
     static final String ATTEMPTS_URL = "http://payment/internal/payment-attempts";
-    static final Long ORDER_ID = 81L;
+    static final UUID ORDER_ID = TestIds.id(81);
     static final BigDecimal AMOUNT = new BigDecimal("1250000");
     static final String PROVIDER_ORDER_ID = "6f1c2d3e-4b5a-4c7d-8e9f-0a1b2c3d4e5f";
+    static final PayableTarget TARGET = PayableTarget.of(new Order(ORDER_ID, TestIds.id(7), OrderSource.PREORDER,
+            TestIds.id(5), "9f1c2d3e-0000-4000-8000-000000000001", OrderStatus.AWAITING_PAYMENT, null, new Money(AMOUNT), null, null, null,
+            new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 1, Instant.EPOCH, Instant.EPOCH));
     // 전달할 액세스 토큰 자리(접두어 없음). 로그 검사에도 쓴다. 실제 토큰 모양이 아니다.
     static final String SESSION = "payment-client-test-user-7";
 
@@ -68,11 +79,11 @@ class PaymentPreparerTest {
                 .andExpect(request -> assertThat(BearerTokens.parse(request.getHeaders().getFirst(BearerTokens.HEADER)))
                         .contains(SESSION))
                 .andExpect(content().json("""
-                        {"targetType":"ORDER","targetId":81,"amount":1250000}
+                        {"targetType":"ORDER","targetId":"00000000-0000-7000-8000-000000000081","amount":1250000}
                         """, JsonCompareMode.STRICT))
                 .andRespond(created(PROVIDER_ORDER_ID, "1250000"));
 
-        PaymentAttempt attempt = preparer.openCapture(ORDER_ID, AMOUNT, SESSION);
+        PaymentAttempt attempt = preparer.openCapture(TARGET, SESSION);
 
         assertThat(attempt).isEqualTo(new PaymentAttempt(PROVIDER_ORDER_ID, AMOUNT));
         server.verify();
@@ -85,7 +96,7 @@ class PaymentPreparerTest {
                 .andExpect(headerDoesNotExist(BearerTokens.HEADER))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED));
 
-        catchThrowable(() -> preparer.openCapture(ORDER_ID, AMOUNT, null));
+        catchThrowable(() -> preparer.openCapture(TARGET, null));
         server.verify();
     }
 
@@ -95,7 +106,7 @@ class PaymentPreparerTest {
     void rejectedTokenIsUnavailable(CapturedOutput output) {
         server.expect(requestTo(ATTEMPTS_URL)).andRespond(withStatus(HttpStatus.UNAUTHORIZED));
 
-        assertUnavailable(catchThrowable(() -> preparer.openCapture(ORDER_ID, AMOUNT, SESSION)));
+        assertUnavailable(catchThrowable(() -> preparer.openCapture(TARGET, SESSION)));
         assertThat(output.getAll()).contains("ERROR").contains("전달 토큰 거절(401)");
     }
 
@@ -105,7 +116,7 @@ class PaymentPreparerTest {
     void otherClientErrorsAreIntegrationErrors(HttpStatus status) {
         server.expect(requestTo(ATTEMPTS_URL)).andRespond(withStatus(status));
 
-        assertThat(catchThrowable(() -> preparer.openCapture(ORDER_ID, AMOUNT, SESSION)))
+        assertThat(catchThrowable(() -> preparer.openCapture(TARGET, SESSION)))
                 .isInstanceOf(IllegalStateException.class);
     }
 
@@ -114,7 +125,7 @@ class PaymentPreparerTest {
     void serverErrorsAreUnavailable(HttpStatus status) {
         server.expect(requestTo(ATTEMPTS_URL)).andRespond(withStatus(status));
 
-        assertUnavailable(catchThrowable(() -> preparer.openCapture(ORDER_ID, AMOUNT, SESSION)));
+        assertUnavailable(catchThrowable(() -> preparer.openCapture(TARGET, SESSION)));
     }
 
     // 타임아웃 뒤 payment 가 PENDING 을 이미 만들었을 수 있다 — 버려진 PENDING 으로 남고 사용자가 다시 부른다.
@@ -122,7 +133,7 @@ class PaymentPreparerTest {
     void timeoutIsUnavailable() {
         server.expect(requestTo(ATTEMPTS_URL)).andRespond(withException(new SocketTimeoutException("Read timed out")));
 
-        assertUnavailable(catchThrowable(() -> preparer.openCapture(ORDER_ID, AMOUNT, SESSION)));
+        assertUnavailable(catchThrowable(() -> preparer.openCapture(TARGET, SESSION)));
     }
 
     @Test
@@ -130,7 +141,7 @@ class PaymentPreparerTest {
         server.expect(requestTo(ATTEMPTS_URL)).andRespond(withStatus(HttpStatus.CREATED)
                 .contentType(MediaType.APPLICATION_JSON).body("{\"success\":true,\"data\":{\"amount\":\"many\""));
 
-        assertThat(catchThrowable(() -> preparer.openCapture(ORDER_ID, AMOUNT, SESSION)))
+        assertThat(catchThrowable(() -> preparer.openCapture(TARGET, SESSION)))
                 .isInstanceOf(IllegalStateException.class);
     }
 
@@ -139,7 +150,7 @@ class PaymentPreparerTest {
     void differentAmountIsIntegrationError() {
         server.expect(requestTo(ATTEMPTS_URL)).andRespond(created(PROVIDER_ORDER_ID, "1000"));
 
-        assertThat(catchThrowable(() -> preparer.openCapture(ORDER_ID, AMOUNT, SESSION)))
+        assertThat(catchThrowable(() -> preparer.openCapture(TARGET, SESSION)))
                 .isInstanceOf(IllegalStateException.class);
     }
 
@@ -148,7 +159,7 @@ class PaymentPreparerTest {
         server.expect(requestTo(ATTEMPTS_URL)).andRespond(withStatus(HttpStatus.CREATED)
                 .contentType(MediaType.APPLICATION_JSON).body(envelope("{\"providerOrderId\":null,\"amount\":1250000}")));
 
-        assertThat(catchThrowable(() -> preparer.openCapture(ORDER_ID, AMOUNT, SESSION)))
+        assertThat(catchThrowable(() -> preparer.openCapture(TARGET, SESSION)))
                 .isInstanceOf(IllegalStateException.class);
     }
 
@@ -157,7 +168,7 @@ class PaymentPreparerTest {
         server.expect(requestTo(ATTEMPTS_URL)).andRespond(withStatus(HttpStatus.CREATED)
                 .contentType(MediaType.APPLICATION_JSON).body(envelope("null")));
 
-        assertThat(catchThrowable(() -> preparer.openCapture(ORDER_ID, AMOUNT, SESSION)))
+        assertThat(catchThrowable(() -> preparer.openCapture(TARGET, SESSION)))
                 .isInstanceOf(IllegalStateException.class);
     }
 
@@ -168,14 +179,14 @@ class PaymentPreparerTest {
         server.expect(requestTo(ATTEMPTS_URL)).andRespond(withStatus(status).body("{\"success\":false}")
                 .contentType(MediaType.APPLICATION_JSON));
 
-        assertNoCredential(catchThrowable(() -> preparer.openCapture(ORDER_ID, AMOUNT, SESSION)), output);
+        assertNoCredential(catchThrowable(() -> preparer.openCapture(TARGET, SESSION)), output);
     }
 
     @Test
     void sessionTokenIsNotLoggedOnTimeout(CapturedOutput output) {
         server.expect(requestTo(ATTEMPTS_URL)).andRespond(withException(new SocketTimeoutException("Read timed out")));
 
-        assertNoCredential(catchThrowable(() -> preparer.openCapture(ORDER_ID, AMOUNT, SESSION)), output);
+        assertNoCredential(catchThrowable(() -> preparer.openCapture(TARGET, SESSION)), output);
     }
 
     private static void assertUnavailable(Throwable thrown) {

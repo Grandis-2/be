@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.syncjob;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.syncjob.domain.ErrorGroup;
 import com.grandis.nova.preorder.syncjob.domain.SyncJobFilter;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -12,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -32,7 +34,7 @@ public class SyncAttemptReader {
             """;
 
     private final RowMapper<SyncAttempt> attemptMapper = (rs, rowNum) -> new SyncAttempt(
-            rs.getLong(1), rs.getInt(2), rs.getString(3), rs.getString(4),
+            UuidBinary.fromBytes(rs.getBytes(1)), rs.getInt(2), rs.getString(3), rs.getString(4),
             rs.getObject(5, Integer.class), rs.getString(6), rs.getString(7),
             rs.getTimestamp(8).toInstant(), instantOrNull(rs.getTimestamp(9)));
 
@@ -55,12 +57,13 @@ public class SyncAttemptReader {
     }
 
     /** 작업별 시도 목록(번호 순). 작업이 없으면 빈 Map. */
-    public Map<Long, List<SyncAttempt>> findByJobIds(Collection<Long> syncJobIds) {
+    public Map<UUID, List<SyncAttempt>> findByJobIds(Collection<UUID> syncJobIds) {
         if (syncJobIds.isEmpty()) {
             return Map.of();
         }
         String placeholders = syncJobIds.stream().map(id -> "?").collect(Collectors.joining(", "));
-        return jdbcTemplate.query(FIND_BY_JOBS.formatted(placeholders), attemptMapper, syncJobIds.toArray()).stream()
+        return jdbcTemplate.query(FIND_BY_JOBS.formatted(placeholders), attemptMapper,
+                        syncJobIds.stream().map(UuidBinary::toBytes).toArray()).stream()
                 .collect(Collectors.groupingBy(SyncAttempt::syncJobId));
     }
 
@@ -78,7 +81,7 @@ public class SyncAttemptReader {
         }
         if (filter.preorderId() != null) {
             conditions.add("j.preorder_id = ?");
-            args.add(filter.preorderId());
+            args.add(UuidBinary.toBytes(filter.preorderId()));
         }
         String where = conditions.isEmpty() ? "" : " WHERE " + String.join(" AND ", conditions);
         String sql = "SELECT error_code, COUNT(*) FROM (" + LAST_ERROR_CODES + where + ") last"

@@ -20,7 +20,7 @@ public sealed interface PaymentConfirmation {
     }
 
     /**
-     * payment 가 "이 결제창은 앞으로도 시작될 수 없다" 고 확언했다(번호 없음 · 금액 불일치 · 미지원 대상). 대상을 결제 대기로
+     * payment 가 "이 결제창은 앞으로도 시작될 수 없다" 고 확언했다(번호 없음 · 금액 불일치). 대상을 결제 대기로
      * 되돌린 뒤 failure 로 답한다.
      */
     record NotStartable(RuntimeException failure) implements PaymentConfirmation {

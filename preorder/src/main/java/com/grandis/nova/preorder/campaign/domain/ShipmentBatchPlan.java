@@ -6,6 +6,7 @@ import com.grandis.nova.preorder.PreorderErrorCode;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * 배송 차수 설정 한 벌. 오픈 전에 전체를 교체하며, 여기서 구간 규칙을 검사한다.
@@ -28,7 +29,7 @@ public record ShipmentBatchPlan(List<Line> lines) {
                        LocalDate estimatedShipStart, LocalDate estimatedShipEnd) {
     }
 
-    public List<ShipmentBatch> toBatches(Long productId) {
+    public List<ShipmentBatch> toBatches(UUID productId) {
         return lines.stream()
                 .map(line -> new ShipmentBatch(productId, line.batchNumber(), line.positionFrom(), line.positionTo(),
                         line.estimatedShipStart(), line.estimatedShipEnd()))

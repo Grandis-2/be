@@ -1,5 +1,7 @@
 package com.grandis.nova.order.order.domain.exception;
 
+import java.util.UUID;
+
 /**
  * 예약 식별 칸(uq_order_preorder · uq_order_preorder_token)이 이미 쓰였다. 예약당 주문은 평생 하나다.
  *
@@ -10,14 +12,14 @@ package com.grandis.nova.order.order.domain.exception;
  */
 public class OrderAlreadyPlacedException extends RuntimeException {
 
-    private final Long preorderId;
+    private final UUID preorderId;
 
-    public OrderAlreadyPlacedException(Long preorderId, Throwable cause) {
+    public OrderAlreadyPlacedException(UUID preorderId, Throwable cause) {
         super("이 예약의 주문이 이미 있다: preorderId=" + preorderId, cause);
         this.preorderId = preorderId;
     }
 
-    public Long getPreorderId() {
+    public UUID getPreorderId() {
         return preorderId;
     }
 }

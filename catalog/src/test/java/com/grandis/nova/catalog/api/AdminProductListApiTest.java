@@ -2,6 +2,7 @@ package com.grandis.nova.catalog.api;
 
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
+import com.grandis.nova.common.UuidBinary;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -22,6 +23,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -46,9 +48,9 @@ class AdminProductListApiTest {
 
     ShopFixtures fixtures;
     String tag;
-    Long categoryId;
+    UUID categoryId;
     /** completed 로 만든 일반 상품. 목록을 부르기 직전에 준비(재고 행)를 넣는다 — 시험이 옵션을 다 넣은 뒤여야 해서. */
-    List<Long> inStockProducts;
+    List<UUID> inStockProducts;
 
     @BeforeEach
     void setUp() {
@@ -65,28 +67,28 @@ class AdminProductListApiTest {
         @Test
         @DisplayName("노출 규칙이 없다 — 등록 없음 · 준비 전 · 비공개 · 판매 중지 · 오래된 마감이 전부 나오고 공개 여부 · 등록 완료(판매 방식별 준비) · 옵션 수가 실린다")
         void everyProductIsListedWithAdminFields() throws Exception {
-            Long shown = completed("보임", "IN_STOCK");
+            UUID shown = completed("보임", "IN_STOCK");
             fixtures.option(shown, "ACTIVE", new BigDecimal("1000"));
             fixtures.option(shown, "PAUSED", new BigDecimal("900"));
             // 등록 API 이전에 들어온 행 — 기록이 없고 visible 은 칸 기본값 1
-            Long noRegistration = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "등록 없음", tag);
+            UUID noRegistration = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "등록 없음", tag);
             // 관리자가 비공개로 고르고 등록한 뒤, order 가 아직 재고 행을 만들지 않은 상품
-            Long incomplete = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "준비 전", tag);
+            UUID incomplete = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "준비 전", tag);
             fixtures.option(incomplete, "ACTIVE");
             fixtures.registration(incomplete, ShopFixtures.unique());
-            jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", incomplete);
-            Long hidden = completed("비공개", "IN_STOCK");
-            jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", hidden);
-            Long paused = completed("판매 중지", "IN_STOCK");
-            jdbcTemplate.update("UPDATE products SET status = 'PAUSED' WHERE id = ?", paused);
+            jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", (Object) UuidBinary.toBytes(incomplete));
+            UUID hidden = completed("비공개", "IN_STOCK");
+            jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", (Object) UuidBinary.toBytes(hidden));
+            UUID paused = completed("판매 중지", "IN_STOCK");
+            jdbcTemplate.update("UPDATE products SET status = 'PAUSED' WHERE id = ?", (Object) UuidBinary.toBytes(paused));
             Instant now = Instant.now();
-            Long longClosed = completed("오래된 마감", "PREORDER");
+            UUID longClosed = completed("오래된 마감", "PREORDER");
             fixtures.campaign(longClosed, now.minus(HOUR.multipliedBy(200)), now.minus(HOUR.multipliedBy(190)));
 
             JsonNode page = data(perform());
             JsonNode items = page.get("items");
             assertThat(page.get("total").asLong()).as("건수도 노출 규칙 없이 전부(등록 없는 행 포함)").isEqualTo(6);
-            assertThat(ids(items)).as("productId 내림차순, 전부")
+            assertThat(ids(items)).as("최신 등록순, 전부")
                     .containsExactly(longClosed, paused, hidden, incomplete, noRegistration, shown);
             assertThat(find(items, shown).get("visible").asBoolean()).isTrue();
             assertThat(find(items, shown).get("registrationCompleted").asBoolean()).isTrue();
@@ -115,14 +117,14 @@ class AdminProductListApiTest {
         @DisplayName("등록 API 로 고른 visible 이 목록에 바로 실린다 — 등록 완료는 order 가 재고 행을 만들어야 true")
         void chosenVisibilityIsStoredAndCompletionFollowsStock() throws Exception {
             String body = """
-                    { "categoryId": %d, "saleMode": "IN_STOCK", "title": "등록 중", "tags": "%s", "visible": true, "basePrice": 10000,
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "등록 중", "tags": "%s", "visible": true, "basePrice": 10000,
                       "combinations": [ { "selections": {}, "stock": 3 } ] }
                     """.formatted(categoryId, tag);
             ResultActions created = mockMvc.perform(post(PATH).header("Idempotency-Key", "k-" + ShopFixtures.unique())
                     .contentType(MediaType.APPLICATION_JSON).content(body).with(user("admin").roles("ADMIN")))
                     .andExpect(status().isCreated());
-            long productId = JSON.readTree(created.andReturn().getResponse().getContentAsString())
-                    .get("data").get("registration").get("productId").asLong();
+            UUID productId = UUID.fromString(JSON.readTree(created.andReturn().getResponse().getContentAsString())
+                    .get("data").get("registration").get("productId").asString());
             JsonNode item = find(list(), productId);
             assertThat(item.get("visible").asBoolean()).as("고른 값이 products.visible 에").isTrue();
             assertThat(item.get("registrationCompleted").asBoolean()).as("재고 행 전").isFalse();
@@ -136,9 +138,9 @@ class AdminProductListApiTest {
         @Test
         @DisplayName("회원 목록과 같은 칸 — 최저가 · 판매 가능 · 품절 · 대표 사진 — 이 같은 규칙으로 실린다")
         void sharesTheMemberListingColumns() throws Exception {
-            Long productId = completed("칸", "IN_STOCK");
-            Long paused = fixtures.option(productId, "PAUSED", new BigDecimal("100"));
-            Long soldOut = fixtures.option(productId, "ACTIVE", new BigDecimal("500"));
+            UUID productId = completed("칸", "IN_STOCK");
+            UUID paused = fixtures.option(productId, "PAUSED", new BigDecimal("100"));
+            UUID soldOut = fixtures.option(productId, "ACTIVE", new BigDecimal("500"));
             fixtures.inventory(soldOut, 10, 4, 6);
             fixtures.image(productId, "GALLERY", "", 0, true, "https://img/main.jpg");
 
@@ -159,10 +161,10 @@ class AdminProductListApiTest {
         @Test
         @DisplayName("saleMode · status 로 좁히고, q 는 상품명 · tags 부분 일치(대소문자 무시 · 와일드카드는 문자)")
         void filters() throws Exception {
-            Long inStock = completed("Nova Case", "IN_STOCK");
-            Long preorder = completed("Nova Phone", "PREORDER");
-            Long paused = completed("Nova Pad 100%", "IN_STOCK");
-            jdbcTemplate.update("UPDATE products SET status = 'PAUSED' WHERE id = ?", paused);
+            UUID inStock = completed("Nova Case", "IN_STOCK");
+            UUID preorder = completed("Nova Phone", "PREORDER");
+            UUID paused = completed("Nova Pad 100%", "IN_STOCK");
+            jdbcTemplate.update("UPDATE products SET status = 'PAUSED' WHERE id = ?", (Object) UuidBinary.toBytes(paused));
 
             JsonNode preorderPage = data(perform("saleMode", "PREORDER"));
             assertThat(ids(preorderPage.get("items"))).containsExactly(preorder);
@@ -176,7 +178,7 @@ class AdminProductListApiTest {
             assertThat(activePage.get("total").asLong()).isEqualTo(2);
             assertThat(activePage.get("hasNext").asBoolean()).isTrue();
             // q 는 회원 목록과 같은 정규화 — 공백 접기 · NFC(맥 한글 입력기의 NFD 도 찾는다)
-            Long hangul = completed("케이스", "IN_STOCK");
+            UUID hangul = completed("케이스", "IN_STOCK");
             assertThat(ids(list("q", "NOVA  case"))).contains(inStock).doesNotContain(preorder, paused);
             assertThat(ids(list("q", java.text.Normalizer.normalize("케이스", java.text.Normalizer.Form.NFD)))).contains(hangul);
             assertThat(ids(list("q", "nova pa"))).as("q 를 덮으면 tag 로 안 거르니 다른 시험 상품이 섞일 수 있다 — 포함만 본다").contains(paused);
@@ -189,9 +191,9 @@ class AdminProductListApiTest {
         @Test
         @DisplayName("page · size · total · hasNext, size 는 1~100 · page 는 0 이상")
         void paging() throws Exception {
-            Long first = completed("1", "IN_STOCK");
-            Long second = completed("2", "IN_STOCK");
-            Long third = completed("3", "IN_STOCK");
+            UUID first = completed("1", "IN_STOCK");
+            UUID second = completed("2", "IN_STOCK");
+            UUID third = completed("3", "IN_STOCK");
 
             JsonNode page0 = data(perform("size", "2", "page", "0"));
             assertThat(page0.get("total").asLong()).isEqualTo(3);
@@ -220,8 +222,8 @@ class AdminProductListApiTest {
      * 등록하고 준비까지 끝난 상품. 일반은 실제 등록처럼 옵션 하나로 시작하고(판매 중지 — 최저가 · 판매 가능 · 품절에 안 센다)
      * 목록을 부르기 직전에 재고 행을 넣는다. 사전예약은 시험이 회차를 넣는다.
      */
-    private Long completed(String title, String saleMode) {
-        Long productId = fixtures.product(categoryId, saleMode, "ACTIVE", title, tag);
+    private UUID completed(String title, String saleMode) {
+        UUID productId = fixtures.product(categoryId, saleMode, "ACTIVE", title, tag);
         fixtures.registration(productId);
         if ("IN_STOCK".equals(saleMode)) {
             fixtures.option(productId, "PAUSED");
@@ -252,17 +254,17 @@ class AdminProductListApiTest {
         return JSON.readTree(actions.andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).get("data");
     }
 
-    private static List<Long> ids(JsonNode items) {
-        List<Long> ids = new ArrayList<>();
+    private static List<UUID> ids(JsonNode items) {
+        List<UUID> ids = new ArrayList<>();
         for (JsonNode item : items) {
-            ids.add(item.get("productId").asLong());
+            ids.add(UUID.fromString(item.get("productId").asString()));
         }
         return ids;
     }
 
-    private static JsonNode find(JsonNode items, Long productId) {
+    private static JsonNode find(JsonNode items, UUID productId) {
         for (JsonNode item : items) {
-            if (item.get("productId").asLong() == productId) {
+            if (item.get("productId").asString().equals(productId.toString())) {
                 return item;
             }
         }

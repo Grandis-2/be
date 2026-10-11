@@ -37,7 +37,7 @@ public class StrictBodies {
             .withCoercionConfig(LogicalType.Boolean, config -> config
                     .setCoercion(CoercionInputShape.Integer, CoercionAction.Fail)
                     .setCoercion(CoercionInputShape.String, CoercionAction.Fail))
-            // 정수 칸(int · long — 재고 · 차수 번호 · 순번 · id 등 중첩 record 포함 전부)은 소수 표기를 받지 않는다 — 1.9 가 조용히 1 로 잘려
+            // 정수 칸(int · long — 재고 · 차수 번호 · 순번 등 중첩 record 포함 전부)은 소수 표기를 받지 않는다 — 1.9 가 조용히 1 로 잘려
             // 저장되지 않게. 1.0 · 1e3 처럼 값이 정수여도 소수 표기면 400 이다(금액 BigDecimal 칸은 해당 없음)
             .withCoercionConfig(LogicalType.Integer, config -> config
                     .setCoercion(CoercionInputShape.Float, CoercionAction.Fail))

@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.util.UUID;
 
 /**
  * 취소 시작 트랜잭션. 사용자 · 관리자 · 만료 · 회차 취소가 모두 이 경로를 탄다.
@@ -54,7 +55,7 @@ public class CancelStarter {
     }
 
     /** 방금 남긴 CANCELING 진입 이력의 순번. 예약 행을 잠그고 있으므로 가장 최근 것이 이번 시도다. */
-    private Long cancelSequence(Long preorderId) {
+    private Long cancelSequence(UUID preorderId) {
         return preorders.lastTransitionTo(preorderId, PreorderStatus.CANCELING)
                 .map(PreorderHistoryEntry::eventSequence)
                 .orElseThrow(() -> new IllegalStateException("취소 시작 이력이 없다: preorderId=" + preorderId));

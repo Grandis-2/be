@@ -44,8 +44,8 @@ public class CurrentViewerArgumentResolver implements HandlerMethodArgumentResol
         }
         try {
             return new Viewer(principal.customerId(), false);
-        } catch (NumberFormatException e) {
-            // USER 토큰의 sub 는 customers.id 다. 십진수가 아니면 우리 토큰이 아니다 — 500 이 아니라 401(공통 리졸버와 같다).
+        } catch (IllegalArgumentException e) {
+            // USER 토큰의 sub 는 customers.id 다. UUID 가 아니면 우리 토큰이 아니다 — 500 이 아니라 401(공통 리졸버와 같다).
             throw new BusinessException(CommonErrorCode.UNAUTHENTICATED);
         }
     }

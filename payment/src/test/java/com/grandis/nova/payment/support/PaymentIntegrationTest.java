@@ -2,6 +2,7 @@ package com.grandis.nova.payment.support;
 
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.annotation.AliasFor;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -30,6 +31,8 @@ import java.lang.annotation.Target;
         "nova.outbox.transport=log",
         "nova.outbox.log-transport-allowed=true",
         "nova.outbox.relay-interval=1h",
+        // 관리 포트는 코드 기본값이 고정 포트라, 실제 포트로 띄우는 컨텍스트끼리 겹치지 않게 빈 포트로 둔다
+        "management.server.port=0",
         // 주기 작업(복구 · 만료)은 끈다 — 커밋된 행을 공유하는 다른 테스트의 거래를 집어 간다. 테스트가 작업을 직접 부른다
         "nova.payment.jobs.enabled=false",
         // 토스 가맹점 자격 증명 · 주소 · 시간 예산은 필수라(없으면 기동 실패) 운영 값으로 채운다.
@@ -49,4 +52,8 @@ import java.lang.annotation.Target;
 })
 @Import({MySqlContainerConfig.class, TestJwt.class})
 public @interface PaymentIntegrationTest {
+
+    /** 기본은 MockMvc(MOCK). 내장 톰캣을 실제로 띄워 HTTP 로 쳐야 하는 시험만 RANDOM_PORT 로 바꾼다. */
+    @AliasFor(annotation = SpringBootTest.class)
+    SpringBootTest.WebEnvironment webEnvironment() default SpringBootTest.WebEnvironment.MOCK;
 }

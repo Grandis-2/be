@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * 카테고리 전체를 트리로 읽는다. 행이 열 개 남짓이라 한 번에 읽어 메모리에서 잇는다.
@@ -30,18 +31,18 @@ public class CategoryTreeService {
         this.categories = categories;
     }
 
-    /** 상위 목록(id 순). 각 상위의 children 에 하위가 id 순으로 온다. 상위 아래 하위까지 두 단계만 싣는다. */
+    /** 상위 목록(표시 순서). 각 상위의 children 에 하위가 같은 순서로 온다. 상위 아래 하위까지 두 단계만 싣는다. */
     @Transactional(readOnly = true)
     public List<CategoryNode> tree() {
-        List<Category> all = categories.findAllByOrderById();
-        Set<Long> rootIds = new HashSet<>();
+        List<Category> all = categories.findAllByOrderBySortOrderAscCreatedAtAscIdAsc();
+        Set<UUID> rootIds = new HashSet<>();
         for (Category category : all) {
             if (category.isTopLevel()) {
                 rootIds.add(category.getId());
             }
         }
-        Map<Long, List<CategoryNode>> childrenByParent = new LinkedHashMap<>();
-        List<Long> dropped = new ArrayList<>();
+        Map<UUID, List<CategoryNode>> childrenByParent = new LinkedHashMap<>();
+        List<UUID> dropped = new ArrayList<>();
         for (Category category : all) {
             if (category.isTopLevel()) {
                 continue;
@@ -66,6 +67,6 @@ public class CategoryTreeService {
     }
 
     private static CategoryNode toNode(Category category, List<CategoryNode> children) {
-        return new CategoryNode(category.getId(), category.getCode(), category.getName(), category.getParentId(), children);
+        return new CategoryNode(category.getId(), category.getName(), category.getParentId(), children);
     }
 }

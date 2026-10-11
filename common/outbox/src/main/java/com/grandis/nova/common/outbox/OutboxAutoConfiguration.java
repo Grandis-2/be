@@ -81,6 +81,12 @@ public class OutboxAutoConfiguration {
     }
 
     @Bean
+    OutboxCleaner outboxCleaner(OutboxStore store, OutboxMetrics metrics, OutboxProperties properties,
+                                ObjectProvider<Clock> clock) {
+        return new OutboxCleaner(store, metrics, properties, clockOf(clock));
+    }
+
+    @Bean
     @ConditionalOnProperty(name = "nova.outbox.transport", havingValue = "log")
     LoggingMessageTransport loggingMessageTransport(Environment environment) {
         return new LoggingMessageTransport(

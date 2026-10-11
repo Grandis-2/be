@@ -27,6 +27,8 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.function.Supplier;
 
+import static com.grandis.nova.waitingroom.support.TestIds.customerId;
+import static com.grandis.nova.waitingroom.support.TestIds.productKey;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class AcceptOutcomeWatchTest {
@@ -124,8 +126,8 @@ class AcceptOutcomeWatchTest {
 
     private static MockServerWebExchange rejectedAccept() {
         MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.post("/api/v1/preorders"));
-        exchange.getAttributes().put(AdmissionTicketCheck.PRODUCT_ATTRIBUTE, "101");
-        exchange.getAttributes().put(AdmissionTicketCheck.CUSTOMER_ATTRIBUTE, "1");
+        exchange.getAttributes().put(AdmissionTicketCheck.PRODUCT_ATTRIBUTE, productKey(101));
+        exchange.getAttributes().put(AdmissionTicketCheck.CUSTOMER_ATTRIBUTE, customerId(1));
         exchange.getAttributes().put(AdmissionTicketCheck.EXPIRES_ATTRIBUTE, Instant.now());
         return exchange;
     }

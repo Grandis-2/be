@@ -1,6 +1,6 @@
 package com.grandis.nova.catalog.listing;
 
-import com.grandis.nova.catalog.option.ProductOptionValue;
+import com.grandis.nova.catalog.option.OptionText;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
 
@@ -13,7 +13,7 @@ import com.grandis.nova.catalog.product.SaleStatus;
 public record AdminProductListFilter(String q, SaleMode saleMode, SaleStatus status) {
 
     public AdminProductListFilter {
-        q = q == null || q.isBlank() ? null : ProductOptionValue.normalize(q);
+        q = q == null || q.isBlank() ? null : OptionText.normalize(q);
     }
 
     public static AdminProductListFilter none() {

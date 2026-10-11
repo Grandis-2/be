@@ -15,6 +15,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
 
 import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
@@ -37,7 +38,7 @@ class AuthenticationApiTest {
     StringRedisTemplate redis;
 
     ShopFixtures fixtures;
-    Long customerId;
+    UUID customerId;
 
     @BeforeEach
     void setUp() {
@@ -78,11 +79,10 @@ class AuthenticationApiTest {
     }
 
     @Test
-    void 배송_차수_공개_조회와_관리_지표는_토큰_없이_열린다() throws Exception {
+    void 배송_차수_공개_조회는_토큰_없이_열린다() throws Exception {
         PreorderProduct product = fixtures.openPreorderProduct();
 
-        mockMvc.perform(get("/api/v1/products/{id}/shipment-batches", product.productId()))
+        mockMvc.perform(get("/api/v1/preorders/products/{id}/shipment-batches", product.productId()))
                 .andExpect(status().isOk());
-        mockMvc.perform(get("/actuator/health")).andExpect(status().isOk());
     }
 }

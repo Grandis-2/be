@@ -59,7 +59,7 @@ class LogoutWhenRedisDownTest {
     }
 
     private String accessToken() {
-        return provider.create("101", Role.USER, UUID.randomUUID(), TokenType.ACCESS);
+        return provider.create("0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d", Role.USER, UUID.randomUUID(), TokenType.ACCESS);
     }
 
     @Test

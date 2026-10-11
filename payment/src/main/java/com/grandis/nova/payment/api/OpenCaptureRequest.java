@@ -8,6 +8,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
 /**
  * 결제창을 열 거래 요청. 금액은 호출자가 자기 저장값(주문 총액 · 응모비)으로 준다.
@@ -20,7 +21,7 @@ import java.math.BigDecimal;
  */
 public record OpenCaptureRequest(
         @NotNull TargetType targetType,
-        @NotNull @Positive Long targetId,
+        @NotNull UUID targetId,
         @NotNull @Positive @Digits(integer = 12, fraction = 0) BigDecimal amount
 ) {
 

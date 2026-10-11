@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.UUID;
 
 /** 내 예약 조회. 목록은 본인 것만, 상세 · 이력은 본인과 관리자만 본다. */
 @Tag(name = "사전예약")
@@ -34,9 +35,9 @@ class PreorderQueryController {
     @Operation(summary = "내 예약 목록(커서 페이지)")
     @GetMapping
     public ApiResponse<CursorPage<PreorderSummaryResponse>> list(
-            @CurrentCustomerId Long customerId,
+            @CurrentCustomerId UUID customerId,
             @RequestParam(required = false) PreorderStatus status,
-            @RequestParam(required = false) Long productId,
+            @RequestParam(required = false) UUID productId,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         return ApiResponse.ok(queryService.findMine(customerId, status, productId, cursor, PageSizes.require(size))

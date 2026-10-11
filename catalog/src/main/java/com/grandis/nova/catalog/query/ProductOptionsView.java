@@ -5,6 +5,7 @@ import com.grandis.nova.catalog.product.SaleStatus;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 상품과 옵션 전체 — 내부 조회 API(GET /internal/products/{id}/options)의 응답. 계약: contracts/preorder-internal.md.
@@ -17,7 +18,7 @@ import java.util.List;
  * @param registrationCompleted 판매 방식별 준비 — 사전예약은 preorder 회차 행, 일반은 order 재고 행이 있다(등록 이벤트가 처리됐다)
  */
 public record ProductOptionsView(
-        Long productId,
+        UUID productId,
         String title,
         SaleMode saleMode,
         SaleStatus status,
@@ -31,6 +32,6 @@ public record ProductOptionsView(
     }
 
     /** @param price 최종가(정수 원). 스냅샷 원본 */
-    public record Option(Long optionId, String sku, String title, BigDecimal price, SaleStatus status) {
+    public record Option(UUID optionId, String sku, String title, BigDecimal price, SaleStatus status) {
     }
 }

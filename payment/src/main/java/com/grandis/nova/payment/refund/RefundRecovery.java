@@ -192,7 +192,7 @@ class RefundRecovery implements RecoveryHandler {
             log.error("토스 환불 응답이 전액 취소와 맞지 않다 — 결과 불명으로 둔다 transactionId={} status={} totalAmount={} "
                     + "balanceAmount={} amount={}", held.id(), payment.status(), payment.totalAmount(),
                     payment.balanceAmount(), amount);
-            return new Outcome.Unknown(new ProviderError(REFUND_MISMATCH, UnknownReason.MISMATCHED_RESPONSE.name()));
+            return new Outcome.Unknown(ProviderError.unknown(REFUND_MISMATCH, UnknownReason.MISMATCHED_RESPONSE.name()));
         }
         Optional<Instant> canceledAt = payment.cancels().stream()
                 .map(TossPayment.Cancel::canceledAt)
@@ -200,7 +200,7 @@ class RefundRecovery implements RecoveryHandler {
                 .max(Comparator.naturalOrder());
         if (canceledAt.isEmpty()) {
             log.error("토스 환불 응답에 취소 시각이 없다 — 결과 불명으로 둔다 transactionId={}", held.id());
-            return new Outcome.Unknown(new ProviderError(MISSING_CANCELED_AT, UnknownReason.UNREADABLE_RESPONSE.name()));
+            return new Outcome.Unknown(ProviderError.unknown(MISSING_CANCELED_AT, UnknownReason.UNREADABLE_RESPONSE.name()));
         }
         return new Outcome.Confirmed(canceledAt.get());
     }

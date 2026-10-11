@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -32,9 +33,9 @@ class ProductListingServiceTest {
     void adminListCountsAndItemsComeFromOneSnapshot() throws Exception {
         ShopFixtures fixtures = new ShopFixtures(jdbcTemplate);
         String tag = "t" + ShopFixtures.unique().replace("-", "");
-        Long categoryId = fixtures.category();
-        Long existing = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "먼저", tag);
-        Long[] inserted = {null};
+        UUID categoryId = fixtures.category();
+        UUID existing = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "먼저", tag);
+        UUID[] inserted = {null};
         doAnswer(invocation -> {
             Object total = invocation.callRealMethod();
             inserted[0] = onAnotherConnection(() -> fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "사이에", tag));

@@ -6,6 +6,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -57,10 +58,9 @@ class PaymentValuesTest {
     }
 
     @Test
-    void paymentTargetNeedsTypeAndPositiveId() {
-        assertThat(PaymentTarget.order(1L).type()).isEqualTo(TargetType.ORDER);
-        assertThat(PaymentTarget.drawEntry(1L).type()).isEqualTo(TargetType.DRAW_ENTRY);
-        assertThatThrownBy(() -> PaymentTarget.order(0L)).isInstanceOf(IllegalArgumentException.class);
+    void paymentTargetNeedsTypeAndId() {
+        assertThat(PaymentTarget.order(UUID.randomUUID()).type()).isEqualTo(TargetType.ORDER);
+        assertThat(PaymentTarget.drawEntry(UUID.randomUUID()).type()).isEqualTo(TargetType.DRAW_ENTRY);
         assertThatThrownBy(() -> PaymentTarget.order(null)).isInstanceOf(NullPointerException.class);
     }
 
@@ -83,11 +83,13 @@ class PaymentValuesTest {
     void providerErrorTruncatesToColumnsWithoutSplittingCharacters() {
         String longMessage = "😀".repeat(ProviderError.MESSAGE_MAX + 5);
 
-        ProviderError error = new ProviderError("C".repeat(ProviderError.CODE_MAX + 3), longMessage);
+        ProviderError error = new ProviderError("C".repeat(ProviderError.CODE_MAX + 3), longMessage,
+                "R".repeat(ProviderError.UNKNOWN_REASON_MAX + 1));
 
         assertThat(error.code()).hasSize(ProviderError.CODE_MAX);
         assertThat(error.message().codePointCount(0, error.message().length())).isEqualTo(ProviderError.MESSAGE_MAX);
         assertThat(error.message()).isEqualTo("😀".repeat(ProviderError.MESSAGE_MAX));
+        assertThat(error.unknownReason()).hasSize(ProviderError.UNKNOWN_REASON_MAX);
     }
 
     @Test

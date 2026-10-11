@@ -13,6 +13,7 @@ import org.hibernate.annotations.Immutable;
 
 import java.io.Serializable;
 import java.time.Instant;
+import java.util.UUID;
 
 /** order_events 행. 추가 전용이라 {@link Immutable} 이다. */
 @Entity
@@ -22,7 +23,7 @@ import java.time.Instant;
 public class OrderEventJpaEntity {
 
     @Id
-    private Long orderId;
+    private UUID orderId;
 
     @Id
     private Long eventSequence;
@@ -48,7 +49,7 @@ public class OrderEventJpaEntity {
     protected OrderEventJpaEntity() {
     }
 
-    public OrderEventJpaEntity(Long orderId, long eventSequence, OrderStatus fromStatus, OrderStatus toStatus,
+    public OrderEventJpaEntity(UUID orderId, long eventSequence, OrderStatus fromStatus, OrderStatus toStatus,
                                EventActor actor, String reason, Instant createdAt) {
         this.orderId = orderId;
         this.eventSequence = eventSequence;
@@ -59,7 +60,7 @@ public class OrderEventJpaEntity {
         this.createdAt = createdAt;
     }
 
-    public Long getOrderId() {
+    public UUID getOrderId() {
         return orderId;
     }
 
@@ -88,6 +89,6 @@ public class OrderEventJpaEntity {
     }
 
     /** 복합 키 (order_id, event_sequence). */
-    public record Key(Long orderId, Long eventSequence) implements Serializable {
+    public record Key(UUID orderId, Long eventSequence) implements Serializable {
     }
 }

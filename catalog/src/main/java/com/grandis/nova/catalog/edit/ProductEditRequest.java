@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog.edit;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotNull;
@@ -18,9 +19,11 @@ public record ProductEditRequest(
         @Valid Warranty warranty
 ) {
 
+    @Schema(name = "EditWarranty")
     public record Warranty(@NotNull Boolean offered, @DecimalMin("0") BigDecimal surcharge) {
     }
 
+    @Schema(hidden = true)   // 문서 전용 — 없으면 swagger 가 getter 꼴 메서드를 empty 칸으로 그린다
     public boolean isEmpty() {
         return title == null && description == null && tags == null && basePrice == null && warranty == null;
     }

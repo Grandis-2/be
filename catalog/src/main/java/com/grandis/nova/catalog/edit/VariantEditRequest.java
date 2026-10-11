@@ -1,6 +1,7 @@
 package com.grandis.nova.catalog.edit;
 
 import com.grandis.nova.catalog.product.SaleStatus;
+import io.swagger.v3.oas.annotations.media.Schema;
 
 /**
  * PATCH /admin/products/{id}/variants/{variantId} — 옵션의 판매 상태(ACTIVE · PAUSED)만 바꾼다. 비면 400.
@@ -11,6 +12,7 @@ import com.grandis.nova.catalog.product.SaleStatus;
  */
 public record VariantEditRequest(SaleStatus status) {
 
+    @Schema(hidden = true)   // 문서 전용 — 없으면 swagger 가 getter 꼴 메서드를 empty 칸으로 그린다
     public boolean isEmpty() {
         return status == null;
     }

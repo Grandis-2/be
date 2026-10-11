@@ -4,20 +4,20 @@ import com.grandis.nova.preorder.campaign.ShipmentBatchSnapshot;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EntityListeners;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.UuidGenerator;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.UUID;
 
 /**
  * 배송 차수 = 모델 순번의 구간 [positionFrom, positionTo]. positionTo 가 null 이면 상한 없는 마지막 차수다.
  *
- * 오픈 뒤에는 바꾸지 않으므로 updated_at 이 없다(BaseEntity 를 쓰지 않는다).
+ * 오픈 뒤에는 바꾸지 않아 updated_at 이 없으므로 BaseEntity 를 상속하지 않고 id · 생성 시각을 직접 둔다.
  * open_ended_marker 는 DB 가 계산하는 칼럼이라 매핑하지 않는다 — 매핑하면 앱이 쓸 수 있는 자리가 생긴다.
  */
 @Entity
@@ -26,11 +26,11 @@ import java.time.LocalDate;
 public class ShipmentBatch {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    @UuidGenerator(style = UuidGenerator.Style.VERSION_7)
+    private UUID id;
 
     @Column(nullable = false, updatable = false)
-    private Long productId;
+    private UUID productId;
 
     @Column(nullable = false)
     private int batchNumber;
@@ -54,7 +54,7 @@ public class ShipmentBatch {
     }
 
     /** 오픈 전 설정에서만 만든다. 구간 규칙은 {@link ShipmentBatchPlan} 이 본다. */
-    ShipmentBatch(Long productId, int batchNumber, long positionFrom, Long positionTo,
+    ShipmentBatch(UUID productId, int batchNumber, long positionFrom, Long positionTo,
                   LocalDate estimatedShipStart, LocalDate estimatedShipEnd) {
         this.productId = productId;
         this.batchNumber = batchNumber;
@@ -74,11 +74,11 @@ public class ShipmentBatch {
                 getPositionTo(), getEstimatedShipStart(), getEstimatedShipEnd());
     }
 
-    public Long getId() {
+    public UUID getId() {
         return id;
     }
 
-    public Long getProductId() {
+    public UUID getProductId() {
         return productId;
     }
 

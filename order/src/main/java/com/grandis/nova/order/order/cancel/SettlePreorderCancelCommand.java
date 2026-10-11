@@ -1,6 +1,7 @@
 package com.grandis.nova.order.order.cancel;
 
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * 예약 취소 요청 하나. 받은 봉투 · payload 에서 분배기가 만든다.
@@ -10,7 +11,7 @@ import java.util.Objects;
  * @param customerId         예약의 회원. 주문의 회원과 다르면 데이터가 어긋난 것이다
  * @param cancelSequence     어느 취소 시도인지. 저장하지 않고 결과에 그대로 돌려준다
  */
-public record SettlePreorderCancelCommand(Long preorderInternalId, String preorderId, Long customerId,
+public record SettlePreorderCancelCommand(UUID preorderInternalId, String preorderId, UUID customerId,
                                           CancelReason reason, Long cancelSequence) {
 
     public SettlePreorderCancelCommand {

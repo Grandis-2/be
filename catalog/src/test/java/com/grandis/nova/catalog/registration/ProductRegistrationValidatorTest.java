@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -42,7 +43,7 @@ class ProductRegistrationValidatorTest {
     }
 
     private static ProductRegistrationRequest preorder(Instant opensAt) {
-        return new ProductRegistrationRequest(1L, SaleMode.PREORDER, "Nova", null, null, true, new BigDecimal("1000"), null,
+        return new ProductRegistrationRequest(UUID.randomUUID(), SaleMode.PREORDER, "Nova", null, null, true, new BigDecimal("1000"), null,
                 null, List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, null)), null,
                 new ProductRegistrationRequest.Campaign(opensAt, opensAt.plus(Duration.ofDays(1))),
                 List.of(new ProductRegistrationRequest.ShipmentBatch(1, 1L, null, LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 7))));

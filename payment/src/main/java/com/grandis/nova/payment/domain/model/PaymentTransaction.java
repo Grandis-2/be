@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 결제 거래(payment_transactions) 한 행의 한 시점 스냅샷. 불변이다 — 상태는 이 객체를 고쳐서 바꾸지 않고
@@ -43,7 +44,7 @@ import java.util.Optional;
  * @param escalatedAt      복구가 스스로 끝낼 수 없다고 멈춘 시각. 보낸 적 있는 거래에만. 상태는 그대로다 — 사람이 본다
  */
 public record PaymentTransaction(
-        Long id,
+        UUID id,
         PaymentTarget target,
         TransactionType type,
         ProviderOrderId providerOrderId,

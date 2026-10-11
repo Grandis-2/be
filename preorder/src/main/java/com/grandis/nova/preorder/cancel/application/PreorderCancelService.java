@@ -9,6 +9,8 @@ import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.Preorders;
 import org.springframework.stereotype.Service;
 
+import java.util.UUID;
+
 /**
  * 사용자 · 관리자 취소 요청. 사전 확인(order 호출)은 트랜잭션 밖에서 하고, 상태 변경은 {@link CancelStarter} 가 한다.
  *
@@ -30,7 +32,7 @@ public class PreorderCancelService {
     }
 
     /** 회원 본인의 취소. 남의 예약은 존재를 알리지 않는다(404). */
-    public CancelResult cancelByCustomer(Long customerId, String preorderToken, String reason) {
+    public CancelResult cancelByCustomer(UUID customerId, String preorderToken, String reason) {
         PreorderSnapshot preorder = preorders.getByToken(preorderToken);
         if (!preorder.customerId().equals(customerId)) {
             throw new BusinessException(PreorderErrorCode.PREORDER_NOT_FOUND);

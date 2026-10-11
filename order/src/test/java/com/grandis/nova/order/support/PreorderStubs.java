@@ -16,6 +16,7 @@ import tools.jackson.databind.json.JsonMapper;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -37,9 +38,9 @@ public final class PreorderStubs {
     /**
      * 결제 가능한 예약.
      *
-     * @param preorderInternalId 픽스처로 넣은 preorders.id — 주문의 복합 FK(preorder_id, customer_id)가 실제 행을 가리켜야 한다
+     * @param preorderInternalId 픽스처 예약의 id({@link OrderFixtures#preorderId()})
      */
-    public static PreorderPayability payable(Long preorderInternalId, String preorderId, Long customerId,
+    public static PreorderPayability payable(UUID preorderInternalId, String preorderId, UUID customerId,
                                              PreorderProduct product) {
         return payability(preorderInternalId, preorderId, customerId, product, "PAYABLE", true, null);
     }
@@ -49,7 +50,7 @@ public final class PreorderStubs {
      *
      * @param reason NOT_YET_REGISTERED · DUE_PASSED · CANCELING · CANCELED
      */
-    public static PreorderPayability blocked(Long preorderInternalId, String preorderId, Long customerId,
+    public static PreorderPayability blocked(UUID preorderInternalId, String preorderId, UUID customerId,
                                              PreorderProduct product, String reason) {
         String status = switch (reason) {
             case "NOT_YET_REGISTERED" -> "PENDING_SYNC";
@@ -59,7 +60,7 @@ public final class PreorderStubs {
         return payability(preorderInternalId, preorderId, customerId, product, status, false, reason);
     }
 
-    private static PreorderPayability payability(Long preorderInternalId, String preorderId, Long customerId,
+    private static PreorderPayability payability(UUID preorderInternalId, String preorderId, UUID customerId,
                                                  PreorderProduct product, String status, boolean payable,
                                                  String reason) {
         Instant payableFrom = "PENDING_SYNC".equals(status) ? null
@@ -69,8 +70,10 @@ public final class PreorderStubs {
                 status, payableFrom, payableFrom == null ? null : payableFrom.plus(PAYMENT_WINDOW), payable, reason);
     }
 
+    /** 두 입구 모두 — 주문 생성은 예약 UUID 로, 결제 재확인은 예약 내부 id 로 묻는다. */
     public static void stub(PreorderClient client, PreorderPayability payability) {
         given(client.getPayability(eq(payability.preorderId()), any())).willReturn(ApiResponse.ok(payability));
+        given(client.getPayabilityById(eq(payability.preorderInternalId()), any())).willReturn(ApiResponse.ok(payability));
     }
 
     /** 4xx(401 토큰 거절 · 403 남의 예약 등). 본문 없음 — 404 는 본문의 code 로 나뉘므로 아래 둘을 쓴다. */
@@ -79,9 +82,20 @@ public final class PreorderStubs {
                 .willThrow(HttpClientErrorException.create(status, status.getReasonPhrase(), null, null, null));
     }
 
+    /** 결제 재확인(내부 id 입구)의 4xx. */
+    public static void stubClientError(PreorderClient client, UUID preorderInternalId, HttpStatus status) {
+        given(client.getPayabilityById(eq(preorderInternalId), any()))
+                .willThrow(HttpClientErrorException.create(status, status.getReasonPhrase(), null, null, null));
+    }
+
     /** 예약 없음. preorder 는 404 + error.code PREORDER_NOT_FOUND 로 답한다. */
     public static void stubPreorderNotFound(PreorderClient client, String preorderId) {
         given(client.getPayability(eq(preorderId), any())).willThrow(notFound("PREORDER_NOT_FOUND"));
+    }
+
+    /** 결제 재확인(내부 id 입구)의 예약 없음. */
+    public static void stubPreorderNotFound(PreorderClient client, UUID preorderInternalId) {
+        given(client.getPayabilityById(eq(preorderInternalId), any())).willThrow(notFound("PREORDER_NOT_FOUND"));
     }
 
     /** 경로 없음(배포 순서 어긋남 · 잘못된 주소). preorder 공통 처리기는 404 + error.code NOT_FOUND 로 답한다. */

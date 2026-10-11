@@ -33,7 +33,7 @@ public class CurrentViewerArgumentResolver implements HandlerMethodArgumentResol
         }
         try {
             return new Viewer(principal.customerId(), false);
-        } catch (NumberFormatException e) {
+        } catch (IllegalArgumentException e) {
             throw new BusinessException(CommonErrorCode.UNAUTHENTICATED);
         }
     }

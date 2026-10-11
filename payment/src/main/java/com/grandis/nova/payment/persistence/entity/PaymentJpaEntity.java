@@ -7,13 +7,11 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * payments 행. persistence 밖으로 내보내지 않는다. 칼럼은 전부 updatable = false 다 — 환불 표시는 조건부 UPDATE
@@ -23,16 +21,12 @@ import java.time.Instant;
 @Table(name = "payments")
 public class PaymentJpaEntity extends BaseEntity {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, updatable = false, length = 20)
     private TargetType targetType;
 
     @Column(nullable = false, updatable = false)
-    private Long targetId;
+    private UUID targetId;
 
     @Column(nullable = false, updatable = false, length = 200)
     private String providerPaymentKey;
@@ -53,7 +47,7 @@ public class PaymentJpaEntity extends BaseEntity {
     protected PaymentJpaEntity() {
     }
 
-    public PaymentJpaEntity(TargetType targetType, Long targetId, String providerPaymentKey, BigDecimal amount, PaymentStatus status,
+    public PaymentJpaEntity(TargetType targetType, UUID targetId, String providerPaymentKey, BigDecimal amount, PaymentStatus status,
                             Instant approvedAt, Instant refundedAt) {
         this.targetType = targetType;
         this.targetId = targetId;
@@ -64,15 +58,11 @@ public class PaymentJpaEntity extends BaseEntity {
         this.refundedAt = refundedAt;
     }
 
-    public Long getId() {
-        return id;
-    }
-
     public TargetType getTargetType() {
         return targetType;
     }
 
-    public Long getTargetId() {
+    public UUID getTargetId() {
         return targetId;
     }
 

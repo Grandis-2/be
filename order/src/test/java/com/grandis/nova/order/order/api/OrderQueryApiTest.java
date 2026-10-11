@@ -21,6 +21,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -45,7 +46,7 @@ class OrderQueryApiTest {
 
     OrderFixtures fixtures;
     PlacedOrders orders;
-    Long customerId;
+    UUID customerId;
 
     @BeforeEach
     void setUp() {
@@ -63,8 +64,8 @@ class OrderQueryApiTest {
         mockMvc.perform(get("/api/v1/orders").with(me()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items", hasSize(2)))
-                .andExpect(jsonPath("$.data.items[0].orderId").value(newer.orderToken().value()))
-                .andExpect(jsonPath("$.data.items[1].orderId").value(older.orderToken().value()))
+                .andExpect(jsonPath("$.data.items[0].orderId").value(newer.id().toString()))
+                .andExpect(jsonPath("$.data.items[1].orderId").value(older.id().toString()))
                 .andExpect(jsonPath("$.data.items[0].items[0].productTitle").value(OrderFixtures.PRODUCT_TITLE))
                 .andExpect(jsonPath("$.data.items[0].items[0].optionTitle").value(OrderFixtures.OPTION_TITLE))
                 .andExpect(jsonPath("$.data.nextCursor").isEmpty());
@@ -84,14 +85,14 @@ class OrderQueryApiTest {
 
         String firstPage = mockMvc.perform(get("/api/v1/orders").param("size", "2").with(me()))
                 .andExpect(jsonPath("$.data.items", hasSize(2)))
-                .andExpect(jsonPath("$.data.items[0].orderId").value(placed.get(2).orderToken().value()))
-                .andExpect(jsonPath("$.data.items[1].orderId").value(placed.get(1).orderToken().value()))
+                .andExpect(jsonPath("$.data.items[0].orderId").value(placed.get(2).id().toString()))
+                .andExpect(jsonPath("$.data.items[1].orderId").value(placed.get(1).id().toString()))
                 .andReturn().getResponse().getContentAsString();
         String cursor = JsonPath.read(firstPage, "$.data.nextCursor");
 
         mockMvc.perform(get("/api/v1/orders").param("size", "2").param("cursor", cursor).with(me()))
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
-                .andExpect(jsonPath("$.data.items[0].orderId").value(placed.getFirst().orderToken().value()))
+                .andExpect(jsonPath("$.data.items[0].orderId").value(placed.getFirst().id().toString()))
                 .andExpect(jsonPath("$.data.nextCursor").isEmpty());
     }
 
@@ -100,7 +101,7 @@ class OrderQueryApiTest {
     void stringCursorPagesThroughSameCreatedAt() throws Exception {
         List<Order> placed = List.of(orders.place(customerId), orders.place(customerId), orders.place(customerId));
         placed.forEach(order -> jdbcTemplate.update("UPDATE orders SET created_at = ? WHERE id = ?",
-                java.sql.Timestamp.from(java.time.Instant.parse("2020-01-01T00:00:00.5Z")), order.id()));
+                java.sql.Timestamp.from(java.time.Instant.parse("2020-01-01T00:00:00.5Z")), bytes(order.id())));
 
         List<String> seen = new java.util.ArrayList<>();
         String cursor = null;
@@ -116,8 +117,10 @@ class OrderQueryApiTest {
             cursor = JsonPath.read(body, "$.data.nextCursor");
         } while (cursor != null && seen.size() <= placed.size());
 
-        assertThat(seen).containsExactlyElementsOf(placed.reversed().stream()
-                .map(order -> order.orderToken().value()).toList());
+        // 같은 시각이면 id 내림차순이다. id 는 만든 순서를 보장하지 않으므로 기대 순서도 id 로 정한다
+        assertThat(seen).containsExactlyElementsOf(placed.stream()
+                .sorted(java.util.Comparator.comparing(Order::id).reversed())
+                .map(order -> order.id().toString()).toList());
     }
 
     /* 상한 바로 아래의 나노초 커서. 바인딩 때 반올림돼 DATETIME 범위를 넘으면 500 이 된다. */
@@ -125,7 +128,7 @@ class OrderQueryApiTest {
     void subMicrosecondCursorNearUpperBoundIsNotServerError() throws Exception {
         orders.place(customerId);
 
-        mockMvc.perform(get("/api/v1/orders").param("cursor", encode("9999-12-31T23:59:59.9999995Z|1")).with(me()))
+        mockMvc.perform(get("/api/v1/orders").param("cursor", encode("9999-12-31T23:59:59.9999995Z|" + UUID.randomUUID())).with(me()))
                 .andExpect(status().isOk());
     }
 
@@ -149,9 +152,9 @@ class OrderQueryApiTest {
         Order order = orders.place(customerId);
         orders.cancel(order.id(), "USER_REQUEST");
 
-        mockMvc.perform(get("/api/v1/orders/" + order.orderToken().value()).with(me()))
+        mockMvc.perform(get("/api/v1/orders/" + order.id().toString()).with(me()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.orderId").value(order.orderToken().value()))
+                .andExpect(jsonPath("$.data.orderId").value(order.id().toString()))
                 .andExpect(jsonPath("$.data.status").value("CANCELED"))
                 .andExpect(jsonPath("$.data.source").value("PREORDER"))
                 .andExpect(jsonPath("$.data.totalAmount").value(OrderFixtures.UNIT_PRICE.intValue()))
@@ -168,7 +171,6 @@ class OrderQueryApiTest {
                 .andExpect(jsonPath("$.data.events[1].reason").value("USER_REQUEST"))
                 .andExpect(jsonPath("$.data.id").doesNotExist())
                 .andExpect(jsonPath("$.data.paymentDueAt").doesNotExist())
-                .andExpect(jsonPath("$.data.internalNote").doesNotExist())
                 .andExpect(jsonPath("$.data.customerId").doesNotExist());
     }
 
@@ -176,7 +178,7 @@ class OrderQueryApiTest {
     void someoneElsesOrderIsNotFound() throws Exception {
         Order others = orders.place(fixtures.customer());
 
-        mockMvc.perform(get("/api/v1/orders/" + others.orderToken().value()).with(me()))
+        mockMvc.perform(get("/api/v1/orders/" + others.id().toString()).with(me()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("ORDER_NOT_FOUND"));
     }
@@ -197,7 +199,7 @@ class OrderQueryApiTest {
 
         mockMvc.perform(get("/api/v1/orders").with(TestAuth.admin()))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(get("/api/v1/orders/" + order.orderToken().value()).with(TestAuth.admin()))
+        mockMvc.perform(get("/api/v1/orders/" + order.id().toString()).with(TestAuth.admin()))
                 .andExpect(status().isForbidden());
     }
 

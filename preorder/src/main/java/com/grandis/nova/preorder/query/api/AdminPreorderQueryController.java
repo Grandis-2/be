@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
 import java.util.Map;
+import java.util.UUID;
 
 /** 관리자 예약 조회. 권한은 보안 설정이 경로로 막는다(ADMIN). */
 @Tag(name = "관리자 · 예약")
@@ -41,8 +42,8 @@ class AdminPreorderQueryController {
     @GetMapping
     public ApiResponse<OffsetPage<AdminPreorderSummaryResponse>> list(
             @RequestParam(required = false) PreorderStatus status,
-            @RequestParam(required = false) Long customerId,
-            @RequestParam(required = false) Long productId,
+            @RequestParam(required = false) UUID customerId,
+            @RequestParam(required = false) UUID productId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
             @RequestParam(required = false) SyncJobStatus registerJobStatus,

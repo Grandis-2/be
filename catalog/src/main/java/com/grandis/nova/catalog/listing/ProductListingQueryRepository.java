@@ -2,6 +2,7 @@ package com.grandis.nova.catalog.listing;
 
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
+import com.grandis.nova.common.UuidBinary;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -13,10 +14,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 상품 목록 · 검색 · 상세 · 관리자 목록의 읽기 전용 저장소. **catalog 가 다른 서비스의 표를 읽는 유일한 자리**다 —
@@ -29,7 +32,8 @@ import java.util.Optional;
  * (사용자 결정 2026-09-27). 숨기지 않는다.
  *
  * 시각은 datetime(6) UTC 벽시계다. Instant 를 UTC LocalDateTime 으로 바꿔 넘기고 같은 방식으로 읽는다 — Timestamp 로 넘기면 JVM 시간대로 바뀐다.
- * 정렬은 계약대로 productId 내림차순 고정이다.
+ * id 는 BINARY(16) 이라 {@link UuidBinary} 로 바인딩하고 읽는다.
+ * 회원 목록의 정렬은 {@link ProductSort}(최신순 · 가격순), 관리자 목록은 최신순(등록 시각 내림차순, 같으면 id 내림차순) 고정이다.
  */
 @Repository
 public class ProductListingQueryRepository {
@@ -61,9 +65,7 @@ public class ProductListingQueryRepository {
                      WHERE o.product_id = p.id AND o.status = 'ACTIVE') AS min_price,
                    EXISTS (SELECT 1 FROM product_options po
                             WHERE po.product_id = p.id AND po.status = 'ACTIVE') AS sellable,
-                   (SELECT i.url FROM product_images i
-                     WHERE i.product_id = p.id AND i.kind = 'GALLERY' AND i.is_primary = 1
-                     ORDER BY (i.bundle_key <> ''), i.bundle_key LIMIT 1) AS image_url,
+                   p.thumbnail_url AS image_url,
                    CASE WHEN p.sale_mode = 'IN_STOCK' AND NOT EXISTS (
                             SELECT 1 FROM product_options o
                               JOIN option_inventories inv ON inv.option_id = o.id
@@ -105,11 +107,11 @@ public class ProductListingQueryRepository {
         return count == null ? 0 : count;
     }
 
-    public List<ProductListItem> find(ProductListFilter filter, Instant now, int page, int size) {
+    public List<ProductListItem> find(ProductListFilter filter, ProductSort sort, Instant now, int page, int size) {
         StringBuilder sql = new StringBuilder(SELECT_ITEMS).append(FROM_VISIBLE);
         MapSqlParameterSource params = baseParams(now);
         appendFilters(sql, params, filter);
-        sql.append(" ORDER BY p.id DESC LIMIT :limit OFFSET :offset");
+        sql.append(sort.orderBy()).append(" LIMIT :limit OFFSET :offset");
         params.addValue("limit", size).addValue("offset", (long) page * size);
         return jdbc.query(sql.toString(), params, (rs, rowNum) -> toItem(rs, now));
     }
@@ -122,12 +124,12 @@ public class ProductListingQueryRepository {
         return count == null ? 0 : count;
     }
 
-    /** 회원 목록과 같은 열(최저가 · 대표 사진 · 판매 가능 · 품절 · 회차)에 공개 여부 · 판매 방식별 준비 · 옵션 수를 더해 읽는다. */
+    /** 회원 목록과 같은 열(최저가 · 썸네일 · 판매 가능 · 품절 · 회차)에 공개 여부 · 판매 방식별 준비 · 옵션 수를 더해 읽는다. */
     public List<AdminProductListItem> findForAdmin(AdminProductListFilter filter, Instant now, int page, int size) {
         StringBuilder sql = new StringBuilder(SELECT_ITEMS.stripTrailing()).append(ADMIN_COLUMNS).append(FROM_ALL);
         MapSqlParameterSource params = new MapSqlParameterSource();
         appendAdminFilters(sql, params, filter);
-        sql.append(" ORDER BY p.id DESC LIMIT :limit OFFSET :offset");
+        sql.append(" ORDER BY p.created_at DESC, p.id DESC LIMIT :limit OFFSET :offset");
         params.addValue("limit", size).addValue("offset", (long) page * size);
         return jdbc.query(sql.toString(), params, (rs, rowNum) -> AdminProductListItem.of(toItem(rs, now),
                 rs.getBoolean("visible"), rs.getBoolean("ready"), rs.getInt("option_count")));
@@ -163,7 +165,7 @@ public class ProductListingQueryRepository {
         }
         if (filter.categoryId() != null) {
             sql.append(" AND p.category_id IN (SELECT ct.id FROM categories ct WHERE ct.id = :categoryId OR ct.parent_id = :categoryId)");
-            params.addValue("categoryId", filter.categoryId());
+            params.addValue("categoryId", UuidBinary.toBytes(filter.categoryId()));
         }
         appendTextFilter(sql, params, filter.q());
         if (!filter.colors().isEmpty() || !filter.storages().isEmpty()) {
@@ -180,12 +182,10 @@ public class ProductListingQueryRepository {
         if (values.isEmpty()) {
             return;
         }
-        sql.append(" AND EXISTS (SELECT 1 FROM product_option_selections s")
-                .append(" JOIN product_option_axes a ON a.id = s.axis_id")
-                .append(" JOIN product_option_values v ON v.id = s.value_id")
-                .append(" WHERE s.option_id = o.id AND a.axis_key = :").append(axisKey).append("Axis")
-                .append(" AND v.normalized_value IN (:").append(axisKey).append("Values))");
-        params.addValue(axisKey + "Axis", axisKey).addValue(axisKey + "Values", values);
+        // ->> 의 결과는 utf8mb4_bin 이라 그대로 비교하면 대소문자 · 악센트를 가린다(black 으로 Black 이 안 걸린다) — 표 시절 값 칸과 같은 콜레이션(같은 축의 중복 판정과도 같다)으로 맞춘다
+        sql.append(" AND (o.filter_attributes->>'$.").append(axisKey).append("') COLLATE utf8mb4_0900_ai_ci IN (:")
+                .append(axisKey).append("Values)");
+        params.addValue(axisKey + "Values", values);
     }
 
     /**
@@ -193,9 +193,9 @@ public class ProductListingQueryRepository {
      * 공개 여부와 함께 판정하는 자리에서 이것을 따로 부르려면 REPEATABLE READ 트랜잭션 안이어야 한다(회원 · 관리자 상세) — READ COMMITTED 는
      * 문장마다 스냅샷을 새로 잡아, 두 문장 사이에 공개 전환과 회차 생성이 커밋되면 한순간도 없던 조합이 나온다. 그 밖에서는 {@link #findExposure} 를 쓴다.
      */
-    public boolean isReady(Long productId) {
+    public boolean isReady(UUID productId) {
         List<Boolean> rows = jdbc.query("SELECT " + READY + " AS ready FROM products p WHERE p.id = :productId",
-                new MapSqlParameterSource("productId", productId), (rs, rowNum) -> rs.getBoolean("ready"));
+                new MapSqlParameterSource("productId", UuidBinary.toBytes(productId)), (rs, rowNum) -> rs.getBoolean("ready"));
         return !rows.isEmpty() && rows.getFirst();
     }
 
@@ -203,11 +203,29 @@ public class ProductListingQueryRepository {
      * 공개 여부 · 판매 상태 · 판매 방식별 준비를 한 문장으로 읽는다. 사전예약 접수가 이 셋을 함께 보고 판정하므로(내부 조회 API)
      * 같은 스냅샷이어야 한다. 상품이 없으면 비어 있다.
      */
-    public Optional<Exposure> findExposure(Long productId) {
+    public Optional<Exposure> findExposure(UUID productId) {
         List<Exposure> rows = jdbc.query("SELECT p.visible, p.status, " + READY + " AS ready FROM products p WHERE p.id = :productId",
-                new MapSqlParameterSource("productId", productId),
+                new MapSqlParameterSource("productId", UuidBinary.toBytes(productId)),
                 (rs, rowNum) -> new Exposure(rs.getBoolean("visible"), SaleStatus.valueOf(rs.getString("status")), rs.getBoolean("ready")));
         return rows.stream().findFirst();
+    }
+
+    /**
+     * 여러 상품의 공개 여부 · 판매 상태 · 판매 방식별 준비를 한 문장으로 읽는다({@link #findExposure} 의 일괄판). 없는 상품은 빠진다.
+     * 호출자가 옵션과 같은 스냅샷으로 읽도록 REPEATABLE READ 트랜잭션 안에서 부른다.
+     */
+    public Map<UUID, Exposure> findExposures(Collection<UUID> productIds) {
+        Map<UUID, Exposure> exposures = new HashMap<>();
+        if (productIds.isEmpty()) {
+            return exposures;
+        }
+        jdbc.query("SELECT p.id, p.visible, p.status, " + READY + " AS ready FROM products p WHERE p.id IN (:productIds)",
+                new MapSqlParameterSource("productIds", productIds.stream().map(UuidBinary::toBytes).toList()),
+                rs -> {
+                    exposures.put(UuidBinary.fromBytes(rs.getBytes("id")),
+                            new Exposure(rs.getBoolean("visible"), SaleStatus.valueOf(rs.getString("status")), rs.getBoolean("ready")));
+                });
+        return exposures;
     }
 
     /** 한 문장으로 읽은 노출 판정 재료. */
@@ -215,24 +233,24 @@ public class ProductListingQueryRepository {
     }
 
     /** 사전예약 회차 시각. 회차가 없으면 비어 있다. */
-    public Optional<CampaignWindow> findCampaign(Long productId) {
+    public Optional<CampaignWindow> findCampaign(UUID productId) {
         List<CampaignWindow> rows = jdbc.query(
                 "SELECT opens_at, closes_at FROM preorder_campaigns WHERE product_id = :productId",
-                new MapSqlParameterSource("productId", productId),
+                new MapSqlParameterSource("productId", UuidBinary.toBytes(productId)),
                 (rs, rowNum) -> new CampaignWindow(instant(rs, "opens_at"), instant(rs, "closes_at")));
         return rows.stream().findFirst();
     }
 
     /** 옵션별 가용 수량(총량 − 선점 − 판매). 재고 행이 없는 옵션은 빠진다 — 판매 불가로 읽는다. */
-    public Map<Long, Integer> findAvailableQuantities(Long productId) {
-        Map<Long, Integer> available = new HashMap<>();
+    public Map<UUID, Integer> findAvailableQuantities(UUID productId) {
+        Map<UUID, Integer> available = new HashMap<>();
         jdbc.query("""
                 SELECT o.id, inv.stock_total - inv.stock_reserved - inv.stock_sold AS available
                   FROM product_options o
                   JOIN option_inventories inv ON inv.option_id = o.id
                  WHERE o.product_id = :productId
-                """, new MapSqlParameterSource("productId", productId),
-                (rs, rowNum) -> available.put(rs.getLong("id"), rs.getInt("available")));
+                """, new MapSqlParameterSource("productId", UuidBinary.toBytes(productId)),
+                (rs, rowNum) -> available.put(UuidBinary.fromBytes(rs.getBytes("id")), rs.getInt("available")));
         return available;
     }
 
@@ -248,7 +266,7 @@ public class ProductListingQueryRepository {
         PreorderSaleStatus preorderStatus = saleMode == SaleMode.PREORDER && opensAt != null && closesAt != null
                 ? PreorderSaleStatus.of(opensAt, closesAt, now) : null;
         BigDecimal minPrice = rs.getBigDecimal("min_price");
-        return new ProductListItem(rs.getLong("id"), saleMode, rs.getString("title"), rs.getString("image_url"),
+        return new ProductListItem(UuidBinary.fromBytes(rs.getBytes("id")), saleMode, rs.getString("title"), rs.getString("image_url"),
                 SaleStatus.valueOf(rs.getString("status")), minPrice, rs.getBoolean("sellable"), rs.getBoolean("sold_out"),
                 preorderStatus, opensAt, closesAt);
     }

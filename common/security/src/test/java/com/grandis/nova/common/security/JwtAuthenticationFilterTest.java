@@ -30,6 +30,8 @@ import org.springframework.security.core.context.SecurityContextHolder;
 @DisplayName("JwtAuthenticationFilter")
 class JwtAuthenticationFilterTest {
 
+    private static final String CUSTOMER_ID = "0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d";
+
     private static final Instant NOW = Instant.parse("2026-09-19T12:00:00Z");
 
     private JwtTokenProvider provider;
@@ -126,14 +128,14 @@ class JwtAuthenticationFilterTest {
         String[] subjectSeenDownstream = new String[1];
         jakarta.servlet.FilterChain capturing = (req, res) -> subjectSeenDownstream[0] = MDC.get(JwtAuthenticationFilter.MDC_SUBJECT);
 
-        filter.doFilter(request("/api/v1/preorders", access("101", Role.USER)), new MockHttpServletResponse(), capturing);
+        filter.doFilter(request("/api/v1/preorders", access(CUSTOMER_ID, Role.USER)), new MockHttpServletResponse(), capturing);
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
 
         assertThat(auth).isInstanceOf(NovaAuthentication.class);
-        assertThat(auth.getName()).isEqualTo("101");
+        assertThat(auth.getName()).isEqualTo(CUSTOMER_ID);
         assertThat(auth.getAuthorities()).extracting("authority").containsExactly("ROLE_USER");
-        assertThat(((NovaAuthentication) auth).getPrincipal().customerId()).isEqualTo(101L);
-        assertThat(subjectSeenDownstream[0]).isEqualTo("101");
+        assertThat(((NovaAuthentication) auth).getPrincipal().customerId()).isEqualTo(UUID.fromString(CUSTOMER_ID));
+        assertThat(subjectSeenDownstream[0]).isEqualTo(CUSTOMER_ID);
         assertThat(MDC.get(JwtAuthenticationFilter.MDC_SUBJECT)).as("스레드 풀 재사용 시 다음 요청으로 새지 않게 지운다").isNull();
         verify(checker).isRevoked(any());
     }

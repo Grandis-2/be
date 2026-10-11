@@ -1,0 +1,9 @@
+{
+  "request": { "method": "POST", "urlPath": "/v1/payments/confirm" },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "transformers": ["response-template"],
+    "body": "{\"mId\":\"tosspayments\",\"lastTransactionKey\":\"txn-{{randomValue length=12 type='ALPHANUMERIC'}}\",\"paymentKey\":\"{{jsonPath request.body '$.paymentKey'}}\",\"orderId\":\"{{jsonPath request.body '$.orderId'}}\",\"orderName\":\"AOT 학습\",\"status\":\"DONE\",\"requestedAt\":\"{{now format=\"yyyy-MM-dd'T'HH:mm:ssXXX\"}}\",\"approvedAt\":\"{{now format=\"yyyy-MM-dd'T'HH:mm:ssXXX\"}}\",\"type\":\"NORMAL\",\"currency\":\"KRW\",\"totalAmount\":{{jsonPath request.body '$.amount'}},\"balanceAmount\":{{jsonPath request.body '$.amount'}},\"method\":\"카드\",\"version\":\"2022-11-16\"}"
+  }
+}

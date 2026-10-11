@@ -6,6 +6,7 @@ import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 
 import java.time.Instant;
+import java.util.UUID;
 
 import static org.mockito.BDDMockito.given;
 
@@ -25,12 +26,12 @@ public class AcceptFixtures {
         this.catalogClient = catalogClient;
     }
 
-    public AcceptResult accept(Long customerId) {
+    public AcceptResult accept(UUID customerId) {
         return accept(customerId, fixtures.openPreorderProduct());
     }
 
     /** 같은 상품에 여러 예약을 만들 때 쓴다. */
-    public AcceptResult accept(Long customerId, PreorderProduct product) {
+    public AcceptResult accept(UUID customerId, PreorderProduct product) {
         stubCatalog(product);
         return submit(customerId, product);
     }
@@ -42,7 +43,7 @@ public class AcceptFixtures {
     }
 
     /** 스텁 없이 접수만 한다. 여러 스레드에서 불러도 된다. */
-    public AcceptResult submit(Long customerId, PreorderProduct product) {
+    public AcceptResult submit(UUID customerId, PreorderProduct product) {
         return acceptService.acceptByCustomer(customerId, product.productId(), product.productId(),
                 product.optionId(), "fixture-key-" + ShopFixtures.unique(),
                 AdmissionTickets.issue(product.productId(), customerId, Instant.now()));

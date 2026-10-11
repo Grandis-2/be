@@ -37,7 +37,8 @@ public final class PaymentMapper {
                 new IdempotencyKey(entity.getIdempotencyKey()), entity.getStatus(), entity.getAttemptCount(),
                 entity.getNextRetryAt(), valueOf(entity.getLeaseToken(), LeaseToken::new), entity.getLeaseExpiresAt(),
                 entity.getLastErrorCode() == null ? null
-                        : new ProviderError(entity.getLastErrorCode(), entity.getLastErrorMessage()),
+                        : new ProviderError(entity.getLastErrorCode(), entity.getLastErrorMessage(),
+                                entity.getLastUnknownReason()),
                 entity.getRequestedAt(), entity.getFinishedAt(), entity.getCreatedAt(), entity.getEscalatedAt());
     }
 

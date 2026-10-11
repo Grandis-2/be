@@ -5,6 +5,8 @@ import com.grandis.nova.common.security.NovaAuthentication;
 import com.grandis.nova.common.security.Role;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import java.util.UUID;
+
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 
 /**
@@ -18,7 +20,7 @@ public final class TestAuth {
     private TestAuth() {
     }
 
-    public static RequestPostProcessor customer(Long customerId) {
+    public static RequestPostProcessor customer(UUID customerId) {
         return authentication(new NovaAuthentication(new AuthenticatedPrincipal(customerId.toString(), Role.USER)));
     }
 

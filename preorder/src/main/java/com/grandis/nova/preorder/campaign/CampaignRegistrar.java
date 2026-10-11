@@ -16,6 +16,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 사전예약 상품 등록에서 회차 · 배송 차수를 처음 만든다(모듈 공개 API). catalog 는 회차 행이 생기는 순간 상품을 노출한다.
@@ -48,7 +49,7 @@ public class CampaignRegistrar {
      *
      * @return 이번에 만들었으면 true, 이미 있어 그대로 두었으면 false
      */
-    public boolean register(Long productId, CampaignRegistration registration) {
+    public boolean register(UUID productId, CampaignRegistration registration) {
         ShipmentBatchPlan plan = toPlan(registration);
         try {
             return Boolean.TRUE.equals(transactionTemplate.execute(status -> create(productId, registration, plan)));
@@ -61,7 +62,7 @@ public class CampaignRegistrar {
         }
     }
 
-    private boolean create(Long productId, CampaignRegistration registration, ShipmentBatchPlan plan) {
+    private boolean create(UUID productId, CampaignRegistration registration, ShipmentBatchPlan plan) {
         Optional<PreorderCampaign> existing = campaigns.findForUpdate(productId);
         if (existing.isPresent()) {
             log.info("회차가 이미 있어 등록 이벤트의 일정 · 차수를 건너뛴다 productId={}", productId);

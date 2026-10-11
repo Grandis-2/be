@@ -15,6 +15,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 회차 · 차수를 바꾸는 트랜잭션. 모두 회차 행을 잠근 채 한다 —
@@ -49,13 +50,13 @@ class PreorderCampaignWriter {
      * @param visible 새로 만들 때만 쓰는 catalog 의 공개 여부. 번호는 0 으로 두어 catalog 이벤트가 이긴다
      */
     @Transactional
-    PreorderCampaign upsert(Long productId, Instant opensAt, Instant closesAt, boolean visible) {
+    PreorderCampaign upsert(UUID productId, Instant opensAt, Instant closesAt, boolean visible) {
         return campaigns.findForUpdate(productId)
                 .map(campaign -> reschedule(campaign, opensAt, closesAt))
                 .orElseGet(() -> create(productId, opensAt, closesAt, visible));
     }
 
-    private PreorderCampaign create(Long productId, Instant opensAt, Instant closesAt, boolean visible) {
+    private PreorderCampaign create(UUID productId, Instant opensAt, Instant closesAt, boolean visible) {
         requireLeadTime(opensAt);
         PreorderCampaign campaign = campaigns.save(
                 new PreorderCampaign(productId, opensAt, closesAt, visible, NO_VISIBILITY_VERSION));
@@ -65,7 +66,7 @@ class PreorderCampaignWriter {
 
     /** 오픈 전 전체 교체. 순번이 나간 뒤에 구간을 바꾸면 그 순번의 배송 차수가 달라진다. */
     @Transactional
-    List<ShipmentBatch> replaceBatches(Long productId, ShipmentBatchPlan plan) {
+    List<ShipmentBatch> replaceBatches(UUID productId, ShipmentBatchPlan plan) {
         PreorderCampaign campaign = campaigns.findForUpdate(productId)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND));
         requireBeforeOpen(campaign);

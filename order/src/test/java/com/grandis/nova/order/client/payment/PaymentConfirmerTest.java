@@ -9,8 +9,8 @@ import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.vo.Money;
-import com.grandis.nova.order.order.vo.OrderToken;
 import com.grandis.nova.order.order.vo.ShipTo;
+import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -57,10 +57,10 @@ class PaymentConfirmerTest {
     static final String PAYMENT = "tgen_confirmer_test_20261002";
     // 전달할 액세스 토큰 자리(접두어 없음). 실제 토큰 모양이 아니다.
     static final String SESSION = "payment-confirm-test-user-7";
-    static final Order ORDER = new Order(81L, OrderToken.issue(), 7L, OrderSource.PREORDER, 5L,
-            "9f1c2d3e-0000-4000-8000-000000000001", OrderStatus.AUTHORIZING, PROVIDER_ORDER_ID,
-            new Money(new BigDecimal("1250000")), null, null,
-            new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), null, 2, Instant.EPOCH,
+    static final Order ORDER = new Order(TestIds.id(81), TestIds.id(7), OrderSource.PREORDER,
+            TestIds.id(5), "9f1c2d3e-0000-4000-8000-000000000001", OrderStatus.AUTHORIZING, PROVIDER_ORDER_ID,
+            new Money(new BigDecimal("1250000")), null, null, null,
+            new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 2, Instant.EPOCH,
             Instant.EPOCH);
 
     MockRestServiceServer server;
@@ -83,7 +83,8 @@ class PaymentConfirmerTest {
                 .andExpect(request -> assertThat(BearerTokens.parse(request.getHeaders().getFirst(BearerTokens.HEADER)))
                         .contains(SESSION))
                 .andExpect(content().json("""
-                        {"targetType":"ORDER","targetId":81,"paymentKey":"%s","amount":1250000,"startAllowed":true,"reserve":false}
+                        {"targetType":"ORDER","targetId":"00000000-0000-7000-8000-000000000081","paymentKey":"%s",
+                         "amount":1250000,"startAllowed":true,"reserve":false}
                         """.formatted(PAYMENT), JsonCompareMode.STRICT))
                 .andRespond(reply("APPROVED", null));
 
@@ -108,7 +109,7 @@ class PaymentConfirmerTest {
                 .andExpect(content().json("{\"startAllowed\":false,\"reserve\":false}", JsonCompareMode.LENIENT))
                 .andRespond(reply("PENDING", null));
 
-        assertThat(confirmer.confirm(ORDER, PROVIDER_ORDER_ID, PAYMENT, SESSION, false))
+        assertThat(confirmer.confirm(PayableTarget.of(ORDER), PROVIDER_ORDER_ID, PAYMENT, SESSION, false))
                 .isEqualTo(new PaymentConfirmation.Pending());
         server.verify();
     }
@@ -128,14 +129,6 @@ class PaymentConfirmerTest {
 
         assertNotStartable(confirm(), OrderErrorCode.PAYMENT_AMOUNT_MISMATCH);
         assertThat(output.getAll()).contains("ERROR");
-    }
-
-    @Test
-    void unsupportedTargetIsNotStartableIntegrationError() {
-        server.expect(requestTo(CONFIRM_URL)).andRespond(rejected(HttpStatus.BAD_REQUEST, "PAYMENT_TARGET_UNSUPPORTED"));
-
-        assertThat(confirm()).isInstanceOfSatisfying(PaymentConfirmation.NotStartable.class, notStartable ->
-                assertThat(notStartable.failure()).isInstanceOf(IllegalStateException.class));
     }
 
     // ── 이번 요청만 거절 · 닿지 못함: 앞선 요청이 이미 시작했을 수 있어 되돌리지 않는다 ─────────────
@@ -259,15 +252,15 @@ class PaymentConfirmerTest {
 
     @Test
     void requestToStringMasksPaymentKey() {
-        assertThat(ConfirmRequest.of(ORDER, PAYMENT, true).toString()).doesNotContain(PAYMENT).contains("1250000");
+        assertThat(ConfirmRequest.of(PayableTarget.of(ORDER), PAYMENT, true).toString()).doesNotContain(PAYMENT).contains("1250000");
     }
 
     private PaymentConfirmation confirm() {
-        return confirmer.confirm(ORDER, PROVIDER_ORDER_ID, PAYMENT, SESSION, true);
+        return confirmer.confirm(PayableTarget.of(ORDER), PROVIDER_ORDER_ID, PAYMENT, SESSION, true);
     }
 
     private PaymentConfirmation check() {
-        return confirmer.check(ORDER, PROVIDER_ORDER_ID, PAYMENT, SESSION);
+        return confirmer.check(PayableTarget.of(ORDER), PROVIDER_ORDER_ID, PAYMENT, SESSION);
     }
 
     private static ResponseCreator reply(String result, String declineReason) {

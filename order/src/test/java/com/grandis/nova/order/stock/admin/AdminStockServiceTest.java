@@ -1,5 +1,6 @@
 package com.grandis.nova.order.stock.admin;
 
+import com.grandis.nova.order.MySqlLockFailures;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.web.ApiError;
@@ -12,6 +13,7 @@ import com.grandis.nova.order.stock.domain.exception.StockBelowCommittedExceptio
 import com.grandis.nova.order.stock.domain.model.StockSetting;
 import com.grandis.nova.order.stock.domain.repository.CatalogOptions;
 import com.grandis.nova.order.stock.domain.repository.StockReader;
+import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.CannotAcquireLockException;
@@ -25,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -39,8 +42,8 @@ import static org.mockito.Mockito.verify;
 /** 판정 순서 · 다시 하기 · 예외 번역. DB 동작은 StockLedgerTest · AdminStockApiTest 가 MySQL 로 본다. */
 class AdminStockServiceTest {
 
-    static final Long PRODUCT_ID = 1L;
-    static final List<StockSetting> SETTINGS = List.of(new StockSetting(11L, 5), new StockSetting(12L, 0));
+    static final UUID PRODUCT_ID = TestIds.id(1);
+    static final List<StockSetting> SETTINGS = List.of(new StockSetting(TestIds.id(11), 5), new StockSetting(TestIds.id(12), 0));
 
     StockLedger ledger = mock(StockLedger.class);
     StockReader reader = mock(StockReader.class);
@@ -52,14 +55,14 @@ class AdminStockServiceTest {
     void setUp() {
         given(transactionManager.getTransaction(any())).willAnswer(invocation -> new SimpleTransactionStatus());
         given(catalog.findSaleMode(PRODUCT_ID)).willReturn(Optional.of(SaleMode.IN_STOCK));
-        given(catalog.findOwnedOptionIds(PRODUCT_ID, List.of(11L, 12L))).willReturn(Set.of(11L, 12L));
+        given(catalog.findOwnedOptionIds(PRODUCT_ID, List.of(TestIds.id(11), TestIds.id(12)))).willReturn(Set.of(TestIds.id(11), TestIds.id(12)));
         given(reader.findByOptionIds(any())).willReturn(List.of());
     }
 
     @Test
     void concurrentCreationIsRetriedInNewTransaction() {
         given(ledger.set(SETTINGS))
-                .willThrow(new StockAlreadyCreatedException(11L, null))
+                .willThrow(new StockAlreadyCreatedException(TestIds.id(11), null))
                 .willReturn(Set.of());
 
         service.set(PRODUCT_ID, SETTINGS);
@@ -71,7 +74,7 @@ class AdminStockServiceTest {
     @Test
     void initializeUsesLedgerInitializeWithTheSameRetry() {
         given(ledger.initialize(SETTINGS))
-                .willThrow(new StockAlreadyCreatedException(11L, null))
+                .willThrow(new StockAlreadyCreatedException(TestIds.id(11), null))
                 .willReturn(Set.of());
 
         service.initialize(PRODUCT_ID, SETTINGS);
@@ -82,7 +85,7 @@ class AdminStockServiceTest {
 
     @Test
     void repeatedCreationRaceGivesUpAfterMaxAttempts() {
-        given(ledger.set(SETTINGS)).willThrow(new StockAlreadyCreatedException(11L, null));
+        given(ledger.set(SETTINGS)).willThrow(new StockAlreadyCreatedException(TestIds.id(11), null));
 
         assertThatThrownBy(() -> service.set(PRODUCT_ID, SETTINGS))
                 .isInstanceOfSatisfying(BusinessException.class,
@@ -94,10 +97,10 @@ class AdminStockServiceTest {
     @Test
     void deadlockIsFoundInNextExceptionChain() {
         BatchUpdateException batch = new BatchUpdateException("batch failed", "40001", 0, new int[0]);
-        batch.setNextException(new SQLException("Deadlock found", "40001", AdminStockService.MYSQL_DEADLOCK));
+        batch.setNextException(new SQLException("Deadlock found", "40001", MySqlLockFailures.MYSQL_DEADLOCK));
 
-        assertThat(AdminStockService.isDeadlock(new CannotAcquireLockException("batch", batch))).isTrue();
-        assertThat(AdminStockService.isDeadlock(new CannotAcquireLockException("timeout",
+        assertThat(MySqlLockFailures.isDeadlock(new CannotAcquireLockException("batch", batch))).isTrue();
+        assertThat(MySqlLockFailures.isDeadlock(new CannotAcquireLockException("timeout",
                 new SQLException("Lock wait timeout exceeded", "40001", 1205)))).isFalse();
     }
 
@@ -135,13 +138,13 @@ class AdminStockServiceTest {
     @Test
     void belowCommittedIsNotRetriedAndListsEveryOption() {
         given(ledger.set(SETTINGS)).willThrow(new StockBelowCommittedException(
-                List.of(new Shortfall(11L, 6), new Shortfall(12L, 1))));
+                List.of(new Shortfall(TestIds.id(11), 6), new Shortfall(TestIds.id(12), 1))));
 
         assertThatThrownBy(() -> service.set(PRODUCT_ID, SETTINGS))
                 .isInstanceOfSatisfying(BusinessException.class, e -> {
                     assertThat(e.errorCode()).isEqualTo(OrderErrorCode.STOCK_BELOW_COMMITTED);
                     assertThat(e.details()).isEqualTo(Map.of("options", List.of(
-                            Map.of("optionId", 11L, "committed", 6), Map.of("optionId", 12L, "committed", 1))));
+                            Map.of("optionId", TestIds.id(11), "committed", 6), Map.of("optionId", TestIds.id(12), "committed", 1))));
                 });
         verify(ledger, times(1)).set(SETTINGS);
     }
@@ -164,7 +167,8 @@ class AdminStockServiceTest {
     // 원장까지 가면 PK 중복이 동시 생성으로 오인돼 다시 하다 503 이 된다. 트랜잭션을 열기 전에 400 으로 끊는다.
     @Test
     void sameOptionTwiceIsRejectedBeforeAnyTransaction() {
-        List<StockSetting> twice = List.of(new StockSetting(11L, 5), new StockSetting(12L, 1), new StockSetting(11L, 3));
+        List<StockSetting> twice = List.of(new StockSetting(TestIds.id(11), 5), new StockSetting(TestIds.id(12), 1),
+                new StockSetting(TestIds.id(11), 3));
 
         assertThatThrownBy(() -> service.initialize(PRODUCT_ID, twice))
                 .isInstanceOfSatisfying(BusinessException.class, e -> {
@@ -193,6 +197,6 @@ class AdminStockServiceTest {
 
     private static CannotAcquireLockException deadlock() {
         return new CannotAcquireLockException("Deadlock found",
-                new SQLException("Deadlock found when trying to get lock", "40001", AdminStockService.MYSQL_DEADLOCK));
+                new SQLException("Deadlock found when trying to get lock", "40001", MySqlLockFailures.MYSQL_DEADLOCK));
     }
 }

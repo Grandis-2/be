@@ -28,6 +28,7 @@ import java.util.Date;
 import java.util.Map;
 import java.util.UUID;
 
+import static com.grandis.nova.waitingroom.support.TestIds.customerId;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -48,9 +49,9 @@ class JwtDecoderFactoryTest {
 
     @Test
     void member_가_발급한_액세스_토큰을_받고_sub_와_role_을_읽는다() {
-        Jwt jwt = decode(TestJwts.user("1024", NOW));
+        Jwt jwt = decode(TestJwts.user(customerId(1024), NOW));
 
-        assertThat(jwt.getSubject()).isEqualTo("1024");
+        assertThat(jwt.getSubject()).isEqualTo(customerId(1024));
         assertThat(jwt.getClaimAsString("role")).isEqualTo("USER");
     }
 
@@ -77,7 +78,7 @@ class JwtDecoderFactoryTest {
 
         @Test
         void kid_가_없는_토큰은_거절한다() {
-            assertThatThrownBy(() -> decode(TestJwts.builder("1024", NOW).withoutKid().sign()))
+            assertThatThrownBy(() -> decode(TestJwts.builder(customerId(1024), NOW).withoutKid().sign()))
                     .isInstanceOf(BadJwtException.class).isNotInstanceOf(JwtValidationException.class);
         }
 
@@ -91,7 +92,7 @@ class JwtDecoderFactoryTest {
             ReactiveJwtDecoder withRemote = JwtDecoderFactory.create(jwksOnly, remote,
                     Clock.fixed(NOW, ZoneOffset.UTC));
 
-            assertThatThrownBy(() -> withRemote.decode(TestJwts.builder("1024", NOW).signingKey(TestJwts.generate("forged")).sign())
+            assertThatThrownBy(() -> withRemote.decode(TestJwts.builder(customerId(1024), NOW).signingKey(TestJwts.generate("forged")).sign())
                     .block(Duration.ofSeconds(5)))
                     .isInstanceOf(BadJwtException.class).isNotInstanceOf(JwtValidationException.class);
         }
@@ -101,9 +102,9 @@ class JwtDecoderFactoryTest {
             RSAKey other = TestJwts.generate(TestJwts.KID);
             RSAKey unknown = TestJwts.generate("unknown");
 
-            assertThatThrownBy(() -> decode(TestJwts.builder("1024", NOW).signingKey(other).sign()))
+            assertThatThrownBy(() -> decode(TestJwts.builder(customerId(1024), NOW).signingKey(other).sign()))
                     .isInstanceOf(BadJwtException.class).isNotInstanceOf(JwtValidationException.class);
-            assertThatThrownBy(() -> decode(TestJwts.builder("1024", NOW).signingKey(unknown).sign()))
+            assertThatThrownBy(() -> decode(TestJwts.builder(customerId(1024), NOW).signingKey(unknown).sign()))
                     .isInstanceOf(BadJwtException.class).isNotInstanceOf(JwtValidationException.class);
         }
     }
@@ -113,32 +114,32 @@ class JwtDecoderFactoryTest {
 
         @Test
         void 리프레시_토큰은_거절한다() {
-            assertThatThrownBy(() -> decode(TestJwts.builder("1024", NOW).typ("rt+jwt").type("REFRESH").sign()))
+            assertThatThrownBy(() -> decode(TestJwts.builder(customerId(1024), NOW).typ("rt+jwt").type("REFRESH").sign()))
                     .isInstanceOf(JwtValidationException.class);
-            assertThatThrownBy(() -> decode(TestJwts.builder("1024", NOW).type("REFRESH").sign()))
+            assertThatThrownBy(() -> decode(TestJwts.builder(customerId(1024), NOW).type("REFRESH").sign()))
                     .as("typ 만 맞춘 리프레시").isInstanceOf(JwtValidationException.class);
         }
 
         @Test
         void typ_이_at_jwt_가_아니면_거절한다() {
-            assertThatThrownBy(() -> decode(TestJwts.builder("1024", NOW).typ("JWT").sign()))
+            assertThatThrownBy(() -> decode(TestJwts.builder(customerId(1024), NOW).typ("JWT").sign()))
                     .isInstanceOf(JwtValidationException.class);
-            assertThatThrownBy(() -> decode(TestJwts.builder("1024", NOW).typ(null).sign()))
+            assertThatThrownBy(() -> decode(TestJwts.builder(customerId(1024), NOW).typ(null).sign()))
                     .isInstanceOf(JwtValidationException.class);
         }
 
         @Test
         void 발급자나_대상이_다르면_거절한다() {
-            assertThatThrownBy(() -> decode(TestJwts.builder("1024", NOW).issuer("other").sign()))
+            assertThatThrownBy(() -> decode(TestJwts.builder(customerId(1024), NOW).issuer("other").sign()))
                     .isInstanceOf(JwtValidationException.class);
-            assertThatThrownBy(() -> decode(TestJwts.builder("1024", NOW).audience("other-api").sign()))
+            assertThatThrownBy(() -> decode(TestJwts.builder(customerId(1024), NOW).audience("other-api").sign()))
                     .isInstanceOf(JwtValidationException.class);
         }
 
         @Test
         void 세션_ID_나_토큰_ID_가_없으면_거절한다() {
             for (String claim : new String[]{"sid", "jti"}) {
-                assertThatThrownBy(() -> decode(TestJwts.builder("1024", NOW).omit(claim).sign()))
+                assertThatThrownBy(() -> decode(TestJwts.builder(customerId(1024), NOW).omit(claim).sign()))
                         .as(claim).isInstanceOf(JwtValidationException.class);
             }
         }
@@ -156,14 +157,14 @@ class JwtDecoderFactoryTest {
         @Test
         void role_이나_type_이_없으면_예외가_아니라_검증_실패로_거절한다() {
             for (String claim : new String[]{"role", "type", "sub"}) {
-                assertThatThrownBy(() -> decode(TestJwts.builder("1024", NOW).omit(claim).sign()))
+                assertThatThrownBy(() -> decode(TestJwts.builder(customerId(1024), NOW).omit(claim).sign()))
                         .as(claim).isInstanceOf(JwtValidationException.class);
             }
         }
 
         @Test
         void 모르는_role_이나_빈_sub_는_거절한다() {
-            assertThatThrownBy(() -> decode(TestJwts.builder("1024", NOW).role("ROOT").sign()))
+            assertThatThrownBy(() -> decode(TestJwts.builder(customerId(1024), NOW).role("ROOT").sign()))
                     .isInstanceOf(JwtValidationException.class);
             assertThatThrownBy(() -> decode(TestJwts.builder(" ", NOW).sign()))
                     .isInstanceOf(JwtValidationException.class);
@@ -172,10 +173,10 @@ class JwtDecoderFactoryTest {
         @Test
         void 만료는_30초까지_봐주고_그_뒤와_만료_없는_토큰은_거절한다() {
             Instant issuedAt = NOW.minusSeconds(900);
-            assertThat(decode(TestJwts.builder("1024", issuedAt).expiresAt(NOW.minusSeconds(29)).sign())).isNotNull();
-            assertThatThrownBy(() -> decode(TestJwts.builder("1024", issuedAt).expiresAt(NOW.minusSeconds(31)).sign()))
+            assertThat(decode(TestJwts.builder(customerId(1024), issuedAt).expiresAt(NOW.minusSeconds(29)).sign())).isNotNull();
+            assertThatThrownBy(() -> decode(TestJwts.builder(customerId(1024), issuedAt).expiresAt(NOW.minusSeconds(31)).sign()))
                     .isInstanceOf(JwtValidationException.class);
-            assertThatThrownBy(() -> decode(TestJwts.builder("1024", NOW).expiresAt(null).sign()))
+            assertThatThrownBy(() -> decode(TestJwts.builder(customerId(1024), NOW).expiresAt(null).sign()))
                     .isInstanceOf(JwtValidationException.class);
         }
     }
@@ -192,7 +193,7 @@ class JwtDecoderFactoryTest {
 
     private static JWTClaimsSet validClaims() {
         return new JWTClaimsSet.Builder()
-                .issuer(TestJwts.ISSUER).audience(TestJwts.AUDIENCE).subject("1024")
+                .issuer(TestJwts.ISSUER).audience(TestJwts.AUDIENCE).subject(customerId(1024))
                 .jwtID(UUID.randomUUID().toString()).claim("sid", UUID.randomUUID().toString())
                 .claim("role", "USER").claim("type", "ACCESS")
                 .issueTime(Date.from(NOW)).expirationTime(Date.from(NOW.plusSeconds(900)))

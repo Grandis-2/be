@@ -7,12 +7,12 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.Optional;
+import java.util.UUID;
 
-public interface ProductRepository extends JpaRepository<Product, Long> {
+public interface ProductRepository extends JpaRepository<Product, UUID> {
 
-    /** 그 상품의 등록 기록의 멱등 키. 등록 API 이전에 들어온 상품은 비어 있다. 관리자 상세가 등록 상태를 실을 때 쓴다. */
-    @Query("select r.idempotencyKey from ProductRegistration r where r.productId = :productId")
-    Optional<String> findRegistrationKey(@Param("productId") Long productId);
+    /** 등록의 멱등 키로 상품을 찾는다. 같은 키로 다시 온 등록 · 등록 상태 조회가 쓴다. */
+    Optional<Product> findByIdempotencyKey(String idempotencyKey);
 
     /**
      * 상품 행을 SELECT … FOR UPDATE 로 읽는다. 관리자 수정은 전부 이것부터 잡아 한 상품에 대한 수정을 줄 세운다 — 안 잡으면 기본가 수정과
@@ -21,5 +21,5 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select p from Product p where p.id = :productId")
-    Optional<Product> findForUpdate(@Param("productId") Long productId);
+    Optional<Product> findForUpdate(@Param("productId") UUID productId);
 }

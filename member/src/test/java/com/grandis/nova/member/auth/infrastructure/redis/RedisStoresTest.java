@@ -167,6 +167,17 @@ class RedisStoresTest {
         }
 
         @Test
+        @DisplayName("replaceSession 은 이유(replaced)와 리프레시 만료 TTL 로 심고, 그 뒤 같은 sid 의 revokeSession(밀린 기기의 로그아웃)이 덮지 않는다")
+        void replacedMarkSurvivesLaterRevoke() {
+            revocationStore.replaceSession(sid, REFRESH);
+            revocationStore.revokeSession(sid, ACCESS);
+
+            assertThat(checker.isRevoked(claimsIssuedAt(NOW))).isTrue();
+            assertThat(checker.isReplaced(claimsIssuedAt(NOW))).isTrue();
+            assertThat(redis.getExpire(AuthRedisKeys.revokedSession(sid), TimeUnit.SECONDS)).isBetween(REFRESH.toSeconds() - 5, REFRESH.toSeconds());
+        }
+
+        @Test
         @DisplayName("revokeAll 은 지금(초) 을 nbf 로 심는다. 그 전·같은 초 발급은 거부, 다음 초 발급은 통과")
         void revokeAllUsesNotBeforeBoundary() {
             revocationStore.revokeAll(subject, REFRESH);

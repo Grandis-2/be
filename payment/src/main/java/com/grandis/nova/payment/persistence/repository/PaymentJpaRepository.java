@@ -12,15 +12,16 @@ import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
-public interface PaymentJpaRepository extends JpaRepository<PaymentJpaEntity, Long> {
+public interface PaymentJpaRepository extends JpaRepository<PaymentJpaEntity, UUID> {
 
-    Optional<PaymentJpaEntity> findByTargetTypeAndTargetId(TargetType targetType, Long targetId);
+    Optional<PaymentJpaEntity> findByTargetTypeAndTargetId(TargetType targetType, UUID targetId);
 
     /** 대상의 결제 행을 잠가 읽는다(SELECT … FOR UPDATE). 환불 열기 · 환불 결과 반영을 대상 단위로 줄 세운다. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select p from PaymentJpaEntity p where p.targetType = :targetType and p.targetId = :targetId")
-    Optional<PaymentJpaEntity> lockByTarget(@Param("targetType") TargetType targetType, @Param("targetId") Long targetId);
+    Optional<PaymentJpaEntity> lockByTarget(@Param("targetType") TargetType targetType, @Param("targetId") UUID targetId);
 
     @Modifying(flushAutomatically = true)
     @Query("""
@@ -29,7 +30,7 @@ public interface PaymentJpaRepository extends JpaRepository<PaymentJpaEntity, Lo
              where p.targetType = :targetType and p.targetId = :targetId
                and p.providerPaymentKey = :paymentKey and p.status = :succeeded
             """)
-    int markRefunded(@Param("targetType") TargetType targetType, @Param("targetId") Long targetId,
+    int markRefunded(@Param("targetType") TargetType targetType, @Param("targetId") UUID targetId,
                      @Param("paymentKey") String paymentKey, @Param("refundedAt") Instant refundedAt,
                      @Param("now") Instant now, @Param("succeeded") PaymentStatus succeeded,
                      @Param("refunded") PaymentStatus refunded);

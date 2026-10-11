@@ -25,6 +25,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     public static final String ATTR_FAILURE_REASON = JwtAuthenticationFilter.class.getName() + ".reason";
     /** 폐기 조회 실패로 닫힌 경우 true. entry point 가 봉투의 error.details.retryable 을 true 로 낸다. */
     public static final String ATTR_RETRYABLE = JwtAuthenticationFilter.class.getName() + ".retryable";
+    /** 같은 회원의 새 로그인에 밀려 끊긴 세션이면 true. entry point 가 봉투의 error.details.reason 을 SESSION_REPLACED 로 낸다. */
+    public static final String ATTR_SESSION_REPLACED = JwtAuthenticationFilter.class.getName() + ".sessionReplaced";
     static final String MDC_SUBJECT = "subject";
 
     private static final Logger log = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
@@ -81,6 +83,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
         if (Boolean.TRUE.equals(revoked)) {
             reject(request, "revoked sid=" + shortSid(claims) + " (or nbf on auth:nbf:" + claims.subject() + ")", false);
+            if (replaced(claims)) {
+                request.setAttribute(ATTR_SESSION_REPLACED, Boolean.TRUE);
+            }
             chain.doFilter(request, response);
             return;
         }
@@ -93,6 +98,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         } finally {
             // 공통 RequestIdFilter 는 traceId 만 지운다. 스레드가 풀로 돌아가므로 subject 는 여기서 지운다.
             MDC.remove(MDC_SUBJECT);
+        }
+    }
+
+    /** 401 에 이유를 실을지만 정한다. 이유 조회가 안 되면 이유 없는 401 — 폐기 판정은 이미 끝났다. */
+    private boolean replaced(TokenClaims claims) {
+        try {
+            return revocationChecker.isReplaced(claims);
+        } catch (RevocationCheckFailedException e) {
+            log.warn("auth.revocation.reason_lookup_failed sid={} cause={}", shortSid(claims), e.getMessage());
+            return false;
         }
     }
 

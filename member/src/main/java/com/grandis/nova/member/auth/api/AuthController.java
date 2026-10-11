@@ -12,7 +12,6 @@ import com.grandis.nova.common.security.TokenClaims;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.member.auth.AuthErrorCode;
 import com.grandis.nova.member.auth.application.AdminLoginService;
-import com.grandis.nova.member.auth.application.ClientInfo;
 import com.grandis.nova.member.auth.application.KakaoLoginService;
 import com.grandis.nova.member.auth.application.TokenService;
 import com.grandis.nova.member.auth.infrastructure.redis.AdminLoginThrottle;
@@ -44,6 +43,7 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * - POST /auth/kakao/callback {code, redirectUri} → 200 {sessionToken, displayName, role} + 쿠키 refresh_token.
  *   프론트 주도 코드 교환: state 는 프론트가 만들고 프론트가 검증한다. 서버는 redirectUri 가 허용 목록에 있는지만 본다.
+ *   회원은 한 번에 세션 하나다 — 새 로그인이 그 회원의 앞 세션을 끊고, 끊긴 기기의 요청 · 재발급은 401 `details.reason = SESSION_REPLACED`(TokenService.issue).
  * - POST /session/refresh (쿠키) → 200 같은 모양 + 새 쿠키. 공개 경로. Origin 허용 목록(RefreshOriginPolicy) → 회원 이름을 **먼저** 읽고(
  *   회전 뒤에 DB 가 죽으면 회전만 되고 쿠키를 못 줘 다음 시도가 재사용으로 찍힌다) → TokenService.rotate(폐기 검사 두 번 포함).
  * - GET /session → {displayName, role}. USER 면 customers 에서 이름을 읽는다.
@@ -94,9 +94,8 @@ public class AuthController {
 
     @SecurityRequirements   // 공개 — 문서의 Bearer 요구를 뺀다(보안 체인의 permitAll 과 같은 목록)
     @PostMapping("/auth/kakao/callback")
-    public ResponseEntity<ApiResponse<LoginResponse>> kakaoCallback(@Valid @RequestBody KakaoCallbackRequest request,
-                                                                     HttpServletRequest servletRequest) {
-        KakaoLoginService.LoginResult result = kakaoLogin.login(request.code(), request.redirectUri(), clientOf(servletRequest));
+    public ResponseEntity<ApiResponse<LoginResponse>> kakaoCallback(@Valid @RequestBody KakaoCallbackRequest request) {
+        KakaoLoginService.LoginResult result = kakaoLogin.login(request.code(), request.redirectUri());
         return withRefreshCookie(result.tokens(), Role.USER,
                 new LoginResponse(result.tokens().accessToken(), result.displayName(), result.role(), result.profileComplete()));
     }
@@ -118,7 +117,7 @@ public class AuthController {
         // 실패할 수 있는 DB 조회(회원 이름)를 회전 **앞**에 둔다. 여기서 던지면 리프레시가 아직 교체되지 않아 같은 쿠키로 다시 올 수 있다.
         String subject = tokens.subjectOf(refreshToken, role);
         SessionOwner owner = ownerOf(new AuthenticatedPrincipal(subject, role));
-        TokenService.Rotated rotated = tokens.rotate(refreshToken, role, clientOf(request));
+        TokenService.Rotated rotated = tokens.rotate(refreshToken, role);
         return withRefreshCookie(rotated.tokens(), role,
                 new LoginResponse(rotated.tokens().accessToken(), owner.displayName(), role, owner.profileComplete()));
     }
@@ -193,7 +192,7 @@ public class AuthController {
         adminThrottle.acquire(clientIp).ifPresent(retryAfter -> {
             throw new AdminLoginThrottledException(retryAfter);
         });
-        TokenService.IssuedTokens issued = adminLogin.login(request.username(), request.password(), clientOf(servletRequest));
+        TokenService.IssuedTokens issued = adminLogin.login(request.username(), request.password());
         adminThrottle.reset(clientIp);
         return withRefreshCookie(issued, Role.ADMIN, new AdminSessionResponse(issued.accessToken(), Role.ADMIN));
     }
@@ -252,15 +251,6 @@ public class AuthController {
         return s != null && !s.isBlank();
     }
 
-    /**
-     * 리프레시 행에 남길 요청 흔적. 인증 판정에는 쓰지 않는다 — "로그인된 기기" 표시와 사고 조사용이다.
-     * 프록시 뒤에서 remoteAddr 은 로드밸런서 주소다. `server.forward-headers-strategy` 는 켜지 않는다(none) — 켜면 관리자 로그인 시도 제한의
-     * IP 판정(ClientIps)이 고쳐 쓴 헤더를 다시 세어 틀어진다(ClientIpsConfiguration 이 기동에서 막는다).
-     */
-    private static ClientInfo clientOf(HttpServletRequest request) {
-        return new ClientInfo(request.getRemoteAddr(), request.getHeader(HttpHeaders.USER_AGENT));
-    }
-
     /** 자기 역할의 리프레시 쿠키를 내리고 상대 역할의 쿠키는 만료시킨다 — 한 브라우저에는 한 역할. */
     private <T> ResponseEntity<ApiResponse<T>> withRefreshCookie(TokenService.IssuedTokens issued, Role role, T body) {
         Role other = role == Role.ADMIN ? Role.USER : Role.ADMIN;
@@ -282,12 +272,12 @@ public class AuthController {
         if (principal.role() != Role.USER) {
             return new SessionOwner(null, true);
         }
-        long customerId;
+        UUID customerId;
         try {
             customerId = principal.customerId();
-        } catch (NumberFormatException e) {
-            // CurrentCustomerIdArgumentResolver 와 같은 처리: USER 의 sub 는 발급기가 customers.id 로만 만든다. 십진수가 아니면 500 이 아니라 401.
-            throw new InvalidTokenException("non-numeric subject for USER");
+        } catch (IllegalArgumentException e) {
+            // CurrentCustomerIdArgumentResolver 와 같은 처리: USER 의 sub 는 발급기가 customers.id 로만 만든다. UUID 가 아니면 500 이 아니라 401.
+            throw new InvalidTokenException("non-uuid subject for USER");
         }
         // 행이 없으면 401 — CustomerService 와 같은 규칙. 탈퇴가 없어 지금은 도달하지 않는 갈래다.
         return customers.findById(customerId)

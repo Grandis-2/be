@@ -15,6 +15,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -41,14 +42,14 @@ class DatabaseUnavailableApiTest {
 
     @Test
     void 커넥션_풀이_바닥나면_503_과_Retry_After() throws Exception {
-        Long productId = new ShopFixtures(jdbcTemplate).openPreorderProduct().productId();
+        UUID productId = new ShopFixtures(jdbcTemplate).openPreorderProduct().productId();
         List<Connection> held = new ArrayList<>();
         try {
             for (int i = 0; i < dataSource.getMaximumPoolSize(); i++) {
                 held.add(dataSource.getConnection());
             }
 
-            mockMvc.perform(get("/api/v1/admin/products/{id}/preorder-campaign", productId).with(admin()))
+            mockMvc.perform(get("/api/v1/admin/preorders/products/{id}/campaign", productId).with(admin()))
                     .andExpect(status().isServiceUnavailable())
                     .andExpect(header().string(HttpHeaders.RETRY_AFTER, "1"))
                     .andExpect(jsonPath("$.error.code").value("DEPENDENCY_UNAVAILABLE"));

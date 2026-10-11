@@ -8,7 +8,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.time.Duration;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -31,7 +31,7 @@ class CatalogCacheInvalidationTest {
 
     @Test
     void 다른_인스턴스가_보낸_알림을_받으면_그_상품을_비운다() {
-        Long productId = cachedProduct();
+        UUID productId = cachedProduct();
 
         redis.convertAndSend(CatalogCacheInvalidation.CHANNEL, productId.toString());
 
@@ -40,8 +40,8 @@ class CatalogCacheInvalidationTest {
 
     @Test
     void 비우기는_이_인스턴스의_그_상품만_바로_비운다() {
-        Long productId = cachedProduct();
-        Long other = cachedProduct();
+        UUID productId = cachedProduct();
+        UUID other = cachedProduct();
 
         invalidation.evictEverywhere(productId);
 
@@ -51,17 +51,17 @@ class CatalogCacheInvalidationTest {
 
     @Test
     void 읽을_수_없는_알림은_버리고_구독은_계속된다() {
-        Long productId = cachedProduct();
+        UUID productId = cachedProduct();
 
-        redis.convertAndSend(CatalogCacheInvalidation.CHANNEL, "not-a-number");
+        redis.convertAndSend(CatalogCacheInvalidation.CHANNEL, "not-a-uuid");
         redis.convertAndSend(CatalogCacheInvalidation.CHANNEL, productId.toString());
 
         await().atMost(Duration.ofSeconds(5)).until(() -> catalogReader.cache().getIfPresent(productId) == null);
     }
 
-    private Long cachedProduct() {
-        Long productId = ThreadLocalRandom.current().nextLong(1_000_000, Long.MAX_VALUE);
-        CatalogStubs.stubPreorderProduct(catalogClient, productId, CatalogStubs.activeOption(1L));
+    private UUID cachedProduct() {
+        UUID productId = UUID.randomUUID();
+        CatalogStubs.stubPreorderProduct(catalogClient, productId, CatalogStubs.activeOption(UUID.randomUUID()));
         catalogReader.findProduct(productId);
         assertThat(catalogReader.cache().getIfPresent(productId)).isNotNull();
         return productId;

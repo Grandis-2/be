@@ -3,9 +3,6 @@ package com.grandis.nova.member.customer;
 import com.grandis.nova.common.BaseEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import org.hibernate.annotations.DynamicUpdate;
 
@@ -16,17 +13,14 @@ import org.hibernate.annotations.DynamicUpdate;
  * `@DynamicUpdate` 를 붙인 이유: 이 행에는 서로 다른 자원 둘(내 정보 · 기본 배송지)이 같이 산다. 기본 UPDATE 는 모든 칼럼을 쓰므로
  * 두 트랜잭션이 각각 읽고 각각 바꾸면 **늦게 커밋한 쪽이 상대의 변경을 자기가 읽은 옛 값으로 되돌린다**(실측:
  * ProfileIntegrationTest.concurrentProfileAndAddressEditsDoNotClobberEachOther 가 이 애너테이션 없이 실패한다 — 배송지 저장이 이름을 null 로 돌렸다).
- * 바뀐 칼럼만 쓰면 두 자원이 서로를 덮지 않는다. 같은 자원을 동시에 고치면 여전히 나중 것이 이긴다 — 그건 PUT 이 통째 교체라 의도한 동작이다.
- * `token_version` 은 아직 읽는 코드가 없어 매핑하지 않는다 — validate 는 DDL 에만 있는 칸을 안 잡는다.
+ * 바뀐 칼럼만 쓰면 두 자원이 서로를 덮지 않는다. 다만 같은 자원의 PUT 두 개를 잠그지 않고 읽으면 "나중 것이 이긴다" 가 아니라 칸마다 섞인다 —
+ * 늦은 PUT 이 옛 값으로 읽은 칸을 "바뀌지 않음" 으로 보고 쓰지 않는다(재현: ProfileIntegrationTest). 그래서 쓰기 경로는 회원 행을 잠그고 읽는다
+ * (CustomerRepository#findForUpdate).
  */
 @Entity
 @Table(name = "customers")
 @DynamicUpdate
 public class Customer extends BaseEntity {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
 
     @Column(name = "kakao_id", nullable = false, length = 64, updatable = false)
     private String kakaoId;
@@ -67,19 +61,21 @@ public class Customer extends BaseEntity {
 
     /**
      * 첫 카카오 로그인 = 가입. display_name 은 NOT NULL varchar(100) 이라 카카오에서 못 받은 경우와 넘치는 경우를 여기서 정한다.
-     * 닉네임 동의가 없으면 "카카오 회원", 100자를 넘으면 앞 100자. 회원은 나중에 자기 이름으로 바꿀 수 있다(그 기능이 생기면).
+     * 닉네임 동의가 없으면 "카카오 회원", 100자를 넘으면 앞 100자. 이후 로그인마다 {@link #displayNameFrom} 으로 다시 맞춘다.
      * "100자" 는 코드포인트 기준이다. char 로 자르면 이모지(서러게이트 쌍)가 경계에서 반쪽이 나 조용히 깨진다. MySQL utf8mb4 varchar(100) 도 문자 단위다.
      * 세기 전에 NFC 로 정규화한다 — NFD 한글은 음절 하나가 자모 2~3 코드포인트라 같은 이름이 2.6배로 잡힌다(DefaultAddressRequest 와 같은 자).
      */
     public static Customer fromKakao(String kakaoId, String nickname) {
         Customer c = new Customer();
         c.kakaoId = kakaoId;
-        String name = nickname == null ? "" : java.text.Normalizer.normalize(nickname, java.text.Normalizer.Form.NFC).strip();
-        if (name.isEmpty()) {
-            name = DEFAULT_DISPLAY_NAME;
-        }
-        c.displayName = truncateToCodePoints(name, DISPLAY_NAME_MAX);
+        c.displayName = displayNameFrom(nickname).orElse(DEFAULT_DISPLAY_NAME);
         return c;
+    }
+
+    /** 카카오 닉네임을 저장할 표시명으로 — NFC · 앞뒤 공백 제거 · 100 코드포인트. 동의가 없거나 비었으면 없음(기존 값을 두라는 뜻). */
+    public static java.util.Optional<String> displayNameFrom(String nickname) {
+        String name = nickname == null ? "" : java.text.Normalizer.normalize(nickname, java.text.Normalizer.Form.NFC).strip();
+        return name.isEmpty() ? java.util.Optional.empty() : java.util.Optional.of(truncateToCodePoints(name, DISPLAY_NAME_MAX));
     }
 
     static String truncateToCodePoints(String s, int max) {
@@ -121,9 +117,6 @@ public class Customer extends BaseEntity {
         this.defaultShipToLine2 = address.line2();
     }
 
-    public Long getId() {
-        return id;
-    }
 
     public String getKakaoId() {
         return kakaoId;

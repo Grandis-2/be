@@ -6,19 +6,20 @@ import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
-public interface ShipmentBatchRepository extends JpaRepository<ShipmentBatch, Long> {
+public interface ShipmentBatchRepository extends JpaRepository<ShipmentBatch, UUID> {
 
-    List<ShipmentBatch> findByProductIdOrderByBatchNumber(Long productId);
+    List<ShipmentBatch> findByProductIdOrderByBatchNumber(UUID productId);
 
     /** 오픈 전 전체 교체에서 쓴다. 오픈 뒤에는 부르지 않는다(예약이 차수를 가리킨다). */
-    void deleteByProductId(Long productId);
+    void deleteByProductId(UUID productId);
 
     /**
      * 예약에 배정된 차수. 접수 때 정해지고 바뀌지 않으므로 없을 수 없다 —
      * 없으면 오픈 전 검사를 지나친 데이터다.
      */
-    default ShipmentBatch getAssigned(Long shipmentBatchId) {
+    default ShipmentBatch getAssigned(UUID shipmentBatchId) {
         return findById(shipmentBatchId)
                 .orElseThrow(() -> new IllegalStateException("예약의 배송 차수가 없다: shipmentBatchId=" + shipmentBatchId));
     }
@@ -33,5 +34,5 @@ public interface ShipmentBatchRepository extends JpaRepository<ShipmentBatch, Lo
               and b.positionFrom <= :position
               and (b.positionTo is null or b.positionTo >= :position)
             """)
-    Optional<ShipmentBatch> findCovering(@Param("productId") Long productId, @Param("position") long position);
+    Optional<ShipmentBatch> findCovering(@Param("productId") UUID productId, @Param("position") long position);
 }

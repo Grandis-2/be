@@ -104,7 +104,7 @@ class SecurityRulesTest {
 
     private static MockHttpServletRequestBuilder openCapture() {
         return post(ATTEMPTS).contentType(MediaType.APPLICATION_JSON)
-                .content("{\"targetType\":\"ORDER\",\"targetId\":%d,\"amount\":1000}"
-                        .formatted(System.nanoTime()));
+                .content("{\"targetType\":\"ORDER\",\"targetId\":\"%s\",\"amount\":1000}"
+                        .formatted(UUID.randomUUID()));
     }
 }

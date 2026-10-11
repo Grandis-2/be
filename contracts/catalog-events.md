@@ -27,7 +27,7 @@ preorder · order 의 `EventEnvelope` 와 같은 모양이다.
   "eventId": "6f1c2a7e-0d3b-4c8f-9a51-2b7d8e4f0c19",
   "eventType": "IN_STOCK_PRODUCT_REGISTERED",
   "aggregateType": "PRODUCT",
-  "aggregateId": 42,
+  "aggregateId": "0199a3f2-8a10-7b21-9c32-4d5e6f708192",
   "occurredAt": "2026-10-02T03:00:00.123456Z",
   "payload": { }
 }
@@ -37,7 +37,7 @@ preorder · order 의 `EventEnvelope` 와 같은 모양이다.
 | --- | --- |
 | `eventId` | UUID. 같은 메시지가 두 번 오면 같은 값이다 |
 | `aggregateType` | `"PRODUCT"` (대문자 — preorder 의 `"PREORDER"` 와 같은 표기) |
-| `aggregateId` | 상품 id. **payload 에는 상품 id 를 다시 넣지 않는다** — 둘이 어긋날 수 있다. 예외는 `PREORDER_CAMPAIGN_CANCELED` 하나(아래) |
+| `aggregateId` | 상품 id(UUID 문자열). **payload 에는 상품 id 를 다시 넣지 않는다** — 둘이 어긋날 수 있다. 예외는 `PREORDER_CAMPAIGN_CANCELED` 하나(아래) |
 | `occurredAt` | catalog 가 아웃박스에 적은 시각(UTC) |
 
 **payload 에 값을 싣는 이유.** preorder · order 의 다른 이벤트는 식별자만 싣고 받는 쪽이 원장을 다시 읽는다. 등록 이벤트 둘은 그렇게 할 수 없다 — 회차 · 차수 · 초기 재고는 catalog 표 어디에도 없고(받는 쪽 표에 들어갈 값이다), 큐를 받는 스레드에는 catalog 내부 API 를 부를 사용자 토큰도 없다. 그래서 값을 payload 에 싣고, catalog 는 아웃박스 행을 바꾸지 않는다(같은 내용을 다시 보낸다).
@@ -70,7 +70,7 @@ preorder · order 의 `EventEnvelope` 와 같은 모양이다.
 
 ```json
 "payload": {
-  "items": [ { "optionId": 101, "stockTotal": 5 }, { "optionId": 102, "stockTotal": 0 } ]
+  "items": [ { "optionId": "0199a3f2-8a11-7c22-8d33-5e6f70819203", "stockTotal": 5 }, { "optionId": "0199a3f2-8a11-7c22-8d33-5e6f70819204", "stockTotal": 0 } ]
 }
 ```
 
@@ -89,7 +89,7 @@ preorder · order 의 `EventEnvelope` 와 같은 모양이다.
 관리자가 사전예약 **오픈 뒤**(회차 `opens_at` ≤ 지금) `PATCH /api/v1/admin/products/{id}/sale-status` 에 `{ "status": "PAUSED", "reason": "…" }` 를 보내면 회차 취소로 접수한다(202). catalog 는 같은 트랜잭션에서 상품을 판매 중지로 두고 취소 시각(`products.campaign_canceled_at`)을 남기고 이 이벤트를 적는다. 되돌릴 수 없다.
 
 ```json
-"payload": { "productId": 42, "reason": "회차 운영 취소" }
+"payload": { "productId": "0199a3f2-8a10-7b21-9c32-4d5e6f708192", "reason": "회차 운영 취소" }
 ```
 
 | 칸 | 뜻 |

@@ -15,10 +15,11 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.EnumSet;
 import java.util.Set;
+import java.util.UUID;
 
 /**
- * 환불 결과를 주문에 반영한다. 완료면 취소 중 → 취소, 확정 실패면 취소 중에 둔 채 환불 실패를 이력에 남긴다(U1 — 사용자에겐 실패 사실만,
- * 상세 오류는 payment 의 거래 행 · 관리자). 같은 결과를 다시 받아도 원장 전제(취소 중)로 한 번만 반영된다. 결과 하나 = 트랜잭션 하나.
+ * 환불 결과를 주문에 반영한다. 완료면 취소 중 → 취소, 확정 실패면 취소 중에 둔 채 환불 실패 시각과 이력을 남긴다(U1 — 사용자에겐
+ * 실패 사실만, 상세 오류는 payment 의 거래 행 · 관리자). 같은 결과를 다시 받아도 한 번만 반영된다(원장 전제 · 실패 시각). 결과 하나 = 트랜잭션 하나.
  *
  * 환불은 취소 중일 때만 요청되고 취소 중은 환불 완료로만 끝나므로, 완료가 왔는데 주문이 취소 중도 취소됨도 아니면 버그 · 수동 수정의
  * 신호다 — ERROR 로 경보하고 예외로 올리지 않는다(다시 받아도 같고 DLQ 만 채운다). 돈의 사실은 payment 쪽(payments REFUNDED)에 있다.
@@ -55,7 +56,7 @@ public class RefundResults {
         }
     }
 
-    private void refunded(Long orderId) {
+    private void refunded(UUID orderId) {
         OrderTransition transition = writeTransaction.execute(status ->
                 ledger.fire(orderId, OrderTrigger.REFUND_COMPLETED, CANCELING, REFUND_COMPLETED));
         if (!transition.applied() && transition.status() != OrderStatus.CANCELED) {
@@ -66,7 +67,7 @@ public class RefundResults {
                 transition.status());
     }
 
-    private void failed(Long orderId) {
+    private void failed(UUID orderId) {
         if (Boolean.TRUE.equals(writeTransaction.execute(status -> ledger.noteRefundFailed(orderId)))) {
             log.warn("환불 결과 반영 — 환불 확정 실패, 주문은 취소 중에 남는다 orderId={}", orderId);
             return;

@@ -1,5 +1,6 @@
 package com.grandis.nova.member;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.member.support.MemberIntegrationTest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -83,7 +84,7 @@ class DefaultAddressIntegrationTest {
         mvc.perform(get(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.shippingAddress.line2").value("101호"));
-        assertThat(jdbc.queryForList("SELECT default_ship_to_name, default_ship_to_phone, default_ship_to_postal_code, default_ship_to_line1, default_ship_to_line2 FROM customers WHERE id = ?", customer.getId()).get(0).values())
+        assertThat(jdbc.queryForList("SELECT default_ship_to_name, default_ship_to_phone, default_ship_to_postal_code, default_ship_to_line1, default_ship_to_line2 FROM customers WHERE id = ?", UuidBinary.toBytes(customer.getId())).get(0).values())
                 .containsExactly("홍길동", "01012345678", "06236", "서울시 강남구 예시로 1", "101호");
 
         // 상세주소만 비운 전체 교체: line2 = null, 나머지 넷은 NOT NULL — CHECK 가 허용하는 두 번째 모양
@@ -92,7 +93,7 @@ class DefaultAddressIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.shippingAddress.name").value("김철수"))
                 .andExpect(jsonPath("$.data.shippingAddress.line2").value(org.hamcrest.Matchers.nullValue()));
-        assertThat(jdbc.queryForObject("SELECT default_ship_to_line2 FROM customers WHERE id = ?", String.class, customer.getId())).isNull();
+        assertThat(jdbc.queryForObject("SELECT default_ship_to_line2 FROM customers WHERE id = ?", String.class, UuidBinary.toBytes(customer.getId()))).isNull();
     }
 
     private static String body(String name, String phone, String postalCode, String line1, String line2) {
@@ -129,7 +130,7 @@ class DefaultAddressIntegrationTest {
         mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
                         .content(body("가".repeat(50), "0".repeat(20), "1".repeat(10), "x".repeat(200), "y".repeat(200))))
                 .andExpect(status().isOk());
-        assertThat(jdbc.queryForObject("SELECT default_ship_to_name FROM customers WHERE id = ?", String.class, customer.getId())).isEqualTo("가".repeat(50));
+        assertThat(jdbc.queryForObject("SELECT default_ship_to_name FROM customers WHERE id = ?", String.class, UuidBinary.toBytes(customer.getId()))).isEqualTo("가".repeat(50));
     }
 
     @Test
@@ -141,7 +142,7 @@ class DefaultAddressIntegrationTest {
                         .content(body(fifty, "010", "1", "x", null)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.shippingAddress.name").value(fifty));
-        assertThat(jdbc.queryForObject("SELECT default_ship_to_name FROM customers WHERE id = ?", String.class, customer.getId())).isEqualTo(fifty);   // utf8mb4 varchar(50) 에 들어간다
+        assertThat(jdbc.queryForObject("SELECT default_ship_to_name FROM customers WHERE id = ?", String.class, UuidBinary.toBytes(customer.getId()))).isEqualTo(fifty);   // utf8mb4 varchar(50) 에 들어간다
 
         mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
                         .content(body(emoji.repeat(51), "010", "1", "x", null)))
@@ -160,8 +161,8 @@ class DefaultAddressIntegrationTest {
                         .content(body(nfd50, "010", "1", "x", null)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.shippingAddress.name").value(nfc50));       // 응답도 NFC
-        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(default_ship_to_name) FROM customers WHERE id = ?", Integer.class, customer.getId())).isEqualTo(50);
-        assertThat(jdbc.queryForObject("SELECT default_ship_to_name FROM customers WHERE id = ?", String.class, customer.getId())).isEqualTo(nfc50);
+        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(default_ship_to_name) FROM customers WHERE id = ?", Integer.class, UuidBinary.toBytes(customer.getId()))).isEqualTo(50);
+        assertThat(jdbc.queryForObject("SELECT default_ship_to_name FROM customers WHERE id = ?", String.class, UuidBinary.toBytes(customer.getId()))).isEqualTo(nfc50);
 
         String nfd51 = java.text.Normalizer.normalize(nfc50 + "한", java.text.Normalizer.Form.NFD);
         mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
@@ -188,7 +189,7 @@ class DefaultAddressIntegrationTest {
     @Test
     @DisplayName("실측: DDL 의 ck_customer_default_address — 이름 한 칸만 넣는 부분 갱신은 MySQL 3819 로 거부된다 (서버가 다섯 칸을 한 덩어리로 쓰는 이유)")
     void partialWriteIsRejectedByCheckConstraint() {
-        Throwable t = catchThrowable(() -> jdbc.update("UPDATE customers SET default_ship_to_name = ? WHERE id = ?", "홍길동", customer.getId()));
+        Throwable t = catchThrowable(() -> jdbc.update("UPDATE customers SET default_ship_to_name = ? WHERE id = ?", "홍길동", UuidBinary.toBytes(customer.getId())));
 
         // 실측: 3819 는 SQL state HY000 이라 스프링이 DataIntegrityViolationException 으로 번역하지 못하고 UncategorizedSQLException 으로 온다.
         // 그래서 CHECK 위반이 서비스까지 올라오면 봉투는 500 이다 — 부분 입력을 DB 전에 400 으로 막아야 하는 또 하나의 이유.
@@ -204,7 +205,7 @@ class DefaultAddressIntegrationTest {
         // 비교 실측: 길이 초과(1406, SQLSTATE 22001)는 번역이 된다 — DataIntegrityViolationException. CHECK 만 번역 밖이다.
         Throwable tooLong = catchThrowable(() -> jdbc.update(
                 "UPDATE customers SET default_ship_to_name = ?, default_ship_to_phone = ?, default_ship_to_postal_code = ?, default_ship_to_line1 = ? WHERE id = ?",
-                "홍", "010", "1".repeat(11), "x", customer.getId()));
+                "홍", "010", "1".repeat(11), "x", UuidBinary.toBytes(customer.getId())));
         assertThat(tooLong).isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
         Throwable tooLongRoot = tooLong;
         while (tooLongRoot.getCause() != null) {

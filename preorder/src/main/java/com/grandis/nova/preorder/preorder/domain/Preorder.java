@@ -9,13 +9,11 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 예약. 수량은 항상 1이라 칸이 없다.
@@ -31,25 +29,20 @@ import java.time.Instant;
 @Table(name = "preorders")
 public class Preorder extends BaseEntity {
 
-    /** 결제 기한. payable_from 부터 이만큼이다(ERD: 연장 없음). */
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
     @Column(nullable = false, updatable = false, length = 36)
     private String preorderToken;
 
     @Column(nullable = false, updatable = false)
-    private Long customerId;
+    private UUID customerId;
 
     @Column(nullable = false, updatable = false)
-    private Long productId;
+    private UUID productId;
 
     @Column(nullable = false, updatable = false)
-    private Long optionId;
+    private UUID optionId;
 
     @Column(nullable = false, updatable = false)
-    private Long shipmentBatchId;
+    private UUID shipmentBatchId;
 
     @Column(nullable = false, updatable = false)
     private long queuePosition;
@@ -128,27 +121,23 @@ public class Preorder extends BaseEntity {
                 getCreatedAt(), getUpdatedAt());
     }
 
-    public Long getId() {
-        return id;
-    }
-
     public String getPreorderToken() {
         return preorderToken;
     }
 
-    public Long getCustomerId() {
+    public UUID getCustomerId() {
         return customerId;
     }
 
-    public Long getProductId() {
+    public UUID getProductId() {
         return productId;
     }
 
-    public Long getOptionId() {
+    public UUID getOptionId() {
         return optionId;
     }
 
-    public Long getShipmentBatchId() {
+    public UUID getShipmentBatchId() {
         return shipmentBatchId;
     }
 

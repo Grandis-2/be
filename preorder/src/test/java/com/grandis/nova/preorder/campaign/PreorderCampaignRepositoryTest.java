@@ -15,6 +15,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -100,7 +101,7 @@ class PreorderCampaignRepositoryTest {
     }
 
     /** 회차를 잠근 채 잠시 들고 있다가 커밋한다. 커밋 직전 시각을 돌려준다. */
-    private Callable<Long> lockAndHold(Long productId, CountDownLatch locked, long holdMillis) {
+    private Callable<Long> lockAndHold(UUID productId, CountDownLatch locked, long holdMillis) {
         return () -> transactionTemplate.execute(status -> {
             campaigns.findForUpdate(productId).orElseThrow();
             locked.countDown();

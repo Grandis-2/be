@@ -3,18 +3,19 @@ package com.grandis.nova.preorder.preorder;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 모듈 밖에 내주는 예약 값. 엔티티는 이 모듈 안에만 두고, 상태를 바꾸는 일은 {@link PreorderLedger} 로만 한다.
  * 상품명 · 옵션명 · 가격은 접수 시점에 고정한 값이다.
  */
 public record PreorderSnapshot(
-        Long id,
+        UUID id,
         String preorderToken,
-        Long customerId,
-        Long productId,
-        Long optionId,
-        Long shipmentBatchId,
+        UUID customerId,
+        UUID productId,
+        UUID optionId,
+        UUID shipmentBatchId,
         long queuePosition,
         String admissionTicketId,
         String idempotencyKey,

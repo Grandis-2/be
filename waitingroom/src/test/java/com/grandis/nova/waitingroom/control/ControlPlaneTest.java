@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.function.BooleanSupplier;
 
+import static com.grandis.nova.waitingroom.support.TestIds.productKey;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** 노드 두 대가 같은 Redis 를 쓸 때 — 리더는 하나, 판정 재료는 둘 다 받고, 리더가 빠지면 넘겨받는다. */
@@ -36,7 +37,7 @@ class ControlPlaneTest {
     void setUp() {
         redis = RedisContainer.fresh();
         Instant now = Instant.now();
-        redis.opsForHash().put(RedisKeys.PRODUCTS, "101",
+        redis.opsForHash().put(RedisKeys.PRODUCTS, productKey(101),
                 ProductSchedules.format(new SalesWindow(now.minusSeconds(60), now.plusSeconds(3_600)), 1, true)).block();
         first = new Node(redis);
         second = new Node(redis);
@@ -55,16 +56,16 @@ class ControlPlaneTest {
 
         await(() -> first.holder.current().isPresent() && second.holder.current().isPresent()
                 && first.holder.current().get().meta().gatewayCount() == 2
-                && first.registry.find("waitingroom.queue.waiting").tag("product", "101").gauge() != null);
+                && first.registry.find("waitingroom.queue.waiting").tag("product", productKey(101)).gauge() != null);
 
         // 연장이 잠깐 늦으면 순간적으로 리더가 0명일 수 있어, 한 명이 될 때까지 기다린 뒤 둘이 아님을 본다
         await(() -> first.leadership.isLeader() ^ second.leadership.isLeader());
         assertThat(first.leadership.isLeader() && second.leadership.isLeader()).isFalse();
         assertThat(first.holder.stale()).isFalse();
-        assertThat(first.holder.current().get().product("101")).isPresent();
+        assertThat(first.holder.current().get().product(productKey(101))).isPresent();
         Node leader = first.leadership.isLeader() ? first : second;
         assertThat(leader.registry.get("waitingroom.leader").gauge().value()).isEqualTo(1.0);
-        assertThat(first.registry.get("waitingroom.queue.waiting").tag("product", "101").gauge().value()).isZero();
+        assertThat(first.registry.get("waitingroom.queue.waiting").tag("product", productKey(101)).gauge().value()).isZero();
     }
 
     @Test

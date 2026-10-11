@@ -7,13 +7,11 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * orders 행. persistence 밖으로 내보내지 않는다 — 밖에는 OrderMapper 가 도메인 주문으로 바꿔 내보낸다.
@@ -25,22 +23,15 @@ import java.time.Instant;
 @Table(name = "orders")
 public class OrderJpaEntity extends BaseEntity {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
-    @Column(nullable = false, updatable = false, length = 36)
-    private String orderToken;
-
     @Column(nullable = false, updatable = false)
-    private Long customerId;
+    private UUID customerId;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, updatable = false, length = 10)
     private OrderSource source;
 
     @Column(updatable = false)
-    private Long preorderId;
+    private UUID preorderId;
 
     @Column(updatable = false, length = 36)
     private String preorderToken;
@@ -62,6 +53,9 @@ public class OrderJpaEntity extends BaseEntity {
     @Column(updatable = false)
     private Instant stockReleasedAt;
 
+    @Column(updatable = false)
+    private Instant refundFailedAt;
+
     @Column(name = "ship_to_name", nullable = false, updatable = false, length = 50)
     private String shipToName;
 
@@ -77,20 +71,16 @@ public class OrderJpaEntity extends BaseEntity {
     @Column(name = "ship_to_line2", updatable = false, length = 200)
     private String shipToLine2;
 
-    @Column(updatable = false, columnDefinition = "text")
-    private String internalNote;
-
     @Column(nullable = false, updatable = false)
     private long eventSequence;
 
     protected OrderJpaEntity() {
     }
 
-    public OrderJpaEntity(String orderToken, Long customerId, OrderSource source, Long preorderId, String preorderToken,
+    public OrderJpaEntity(UUID customerId, OrderSource source, UUID preorderId, String preorderToken,
                           OrderStatus status, BigDecimal totalAmount, Instant paymentDueAt, Instant stockReleasedAt,
                           String shipToName, String shipToPhone, String shipToPostalCode, String shipToLine1,
-                          String shipToLine2, String internalNote, long eventSequence) {
-        this.orderToken = orderToken;
+                          String shipToLine2, long eventSequence) {
         this.customerId = customerId;
         this.source = source;
         this.preorderId = preorderId;
@@ -104,19 +94,10 @@ public class OrderJpaEntity extends BaseEntity {
         this.shipToPostalCode = shipToPostalCode;
         this.shipToLine1 = shipToLine1;
         this.shipToLine2 = shipToLine2;
-        this.internalNote = internalNote;
         this.eventSequence = eventSequence;
     }
 
-    public Long getId() {
-        return id;
-    }
-
-    public String getOrderToken() {
-        return orderToken;
-    }
-
-    public Long getCustomerId() {
+    public UUID getCustomerId() {
         return customerId;
     }
 
@@ -124,7 +105,7 @@ public class OrderJpaEntity extends BaseEntity {
         return source;
     }
 
-    public Long getPreorderId() {
+    public UUID getPreorderId() {
         return preorderId;
     }
 
@@ -152,6 +133,10 @@ public class OrderJpaEntity extends BaseEntity {
         return stockReleasedAt;
     }
 
+    public Instant getRefundFailedAt() {
+        return refundFailedAt;
+    }
+
     public String getShipToName() {
         return shipToName;
     }
@@ -170,10 +155,6 @@ public class OrderJpaEntity extends BaseEntity {
 
     public String getShipToLine2() {
         return shipToLine2;
-    }
-
-    public String getInternalNote() {
-        return internalNote;
     }
 
     public long getEventSequence() {

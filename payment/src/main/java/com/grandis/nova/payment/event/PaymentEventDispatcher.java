@@ -6,6 +6,8 @@ import com.grandis.nova.payment.vo.PaymentTarget;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.util.UUID;
+
 /**
  * 받은 메시지를 이벤트 종류별 처리로 보낸다. 큐 소비기(common:sqs)는 본문을 그대로 여기에 넘긴다.
  *
@@ -35,7 +37,7 @@ public class PaymentEventDispatcher {
     }
 
     /** 대상은 봉투의 aggregateId 로 찾는다. 다른 aggregate 의 id 로 엉뚱한 결제를 환불하지 않게 종류를 확인한다. */
-    private static Long orderId(EventEnvelope envelope) {
+    private static UUID orderId(EventEnvelope envelope) {
         if (!ORDER_AGGREGATE.equals(envelope.aggregateType()) || envelope.aggregateId() == null) {
             throw new IllegalArgumentException("%s 이벤트가 아니다: eventId=%s, aggregateType=%s, aggregateId=%s"
                     .formatted(ORDER_AGGREGATE, envelope.eventId(), envelope.aggregateType(), envelope.aggregateId()));

@@ -1,6 +1,7 @@
 package com.grandis.nova.order.order.domain.repository;
 
 import com.grandis.nova.order.order.domain.model.OrderItem;
+import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
@@ -37,7 +38,7 @@ class OrderReaderContractTest {
         given(reader.findItems(any())).willReturn(List.of());
         given(reader.findItemsByOrderIds(any())).willReturn(List.<OrderItem>of());
 
-        assertThat(reader.findItems(1L)).isEmpty();
-        assertThat(reader.findItemsByOrderIds(List.of(1L))).isEmpty();
+        assertThat(reader.findItems(TestIds.id(1))).isEmpty();
+        assertThat(reader.findItemsByOrderIds(List.of(TestIds.id(1)))).isEmpty();
     }
 }

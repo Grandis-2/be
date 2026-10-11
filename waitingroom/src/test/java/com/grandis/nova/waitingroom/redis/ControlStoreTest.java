@@ -24,13 +24,14 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static com.grandis.nova.waitingroom.support.TestIds.productKey;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
 
 class ControlStoreTest {
 
-    static final String PRODUCT = "101";
+    static final String PRODUCT = productKey(101);
     static final Duration WAIT = Duration.ofSeconds(5);
     static final long FENCE_TTL = 60_000;
 
@@ -333,12 +334,12 @@ class ControlStoreTest {
 
         @Test
         void 발행한_필드만_남기고_옛_임기의_발행은_막는다() {
-            assertThat(control.publishSnapshot(5, FENCE_TTL, Map.of("p:1", "x", "p:2", "y")).block(WAIT)).isTrue();
-            assertThat(control.publishSnapshot(6, FENCE_TTL, Map.of("p:1", "z")).block(WAIT)).isTrue();
-            assertThat(control.publishSnapshot(5, FENCE_TTL, Map.of("p:9", "old")).block(WAIT)).isFalse();
+            assertThat(control.publishSnapshot(5, FENCE_TTL, Map.of("p:" + productKey(1), "x", "p:" + productKey(2), "y")).block(WAIT)).isTrue();
+            assertThat(control.publishSnapshot(6, FENCE_TTL, Map.of("p:" + productKey(1), "z")).block(WAIT)).isTrue();
+            assertThat(control.publishSnapshot(5, FENCE_TTL, Map.of("p:" + productKey(9), "old")).block(WAIT)).isFalse();
 
             ControlStore.TimedEntries read = control.readSnapshot().block(WAIT);
-            assertThat(read.entries()).containsExactly(Map.entry("p:1", "z"));
+            assertThat(read.entries()).containsExactly(Map.entry("p:" + productKey(1), "z"));
             assertThat(read.redisNowMillis()).isCloseTo(System.currentTimeMillis(), Offset.offset(5_000L));
         }
 

@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.cancel;
 
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
@@ -32,6 +33,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -92,12 +94,12 @@ class CampaignCancelServiceTest {
 
     @Test
     void 판매_중지하면_회차를_마감하고_진행_중_예약만_관리자_사유로_취소를_시작한다() {
-        Long pending = accept().preorder().id();
+        UUID pending = accept().preorder().id();
         AcceptResult payable = accept();
         handler.onExternalJobSucceeded(new ExternalJobSucceeded(
                 fixtures.workerSucceeds(payable.preorder().id(), "REGISTER"),
                 AcceptFixtures.tokenOf(payable), "REGISTER", "R-" + ShopFixtures.unique()));
-        Long alreadyCanceling = accept().preorder().id();
+        UUID alreadyCanceling = accept().preorder().id();
         cancelStarter.start(preorders.findById(alreadyCanceling).orElseThrow(), EventActor.USER, null,
                 CancelReason.USER);
         Instant before = Instant.now();
@@ -106,7 +108,7 @@ class CampaignCancelServiceTest {
 
         assertThat(closesAt()).isBeforeOrEqualTo(Instant.now()).isAfterOrEqualTo(before.minusSeconds(1));
         assertThat(statuses()).containsOnly("CANCELING");
-        for (Long id : List.of(pending, payable.preorder().id())) {
+        for (UUID id : List.of(pending, payable.preorder().id())) {
             assertThat(cancelingEvents(id)).containsExactly(Map.of("actor", "ADMIN", "reason", "공급 차질로 사전예약 취소"));
             assertThat(outboxReasons(id)).containsExactly("CAMPAIGN_CANCELED");
         }
@@ -137,7 +139,7 @@ class CampaignCancelServiceTest {
 
     @Test
     void 중간에_멈춘_뒤_같은_이벤트를_다시_받으면_남은_예약만_이어서_취소한다() {
-        List<Long> ids = IntStream.rangeClosed(0, CampaignCancelService.BATCH_SIZE)
+        List<UUID> ids = IntStream.rangeClosed(0, CampaignCancelService.BATCH_SIZE)
                 .mapToObj(i -> accept().preorder().id())
                 .toList();
         AtomicInteger starts = new AtomicInteger();
@@ -167,7 +169,7 @@ class CampaignCancelServiceTest {
     @Test
     void 접수가_회차를_먼저_잠그면_판매_중지는_기다렸다가_그_예약까지_취소한다() throws Exception {
         accepts.stubCatalog(product);
-        Long customer = fixtures.customer();
+        UUID customer = fixtures.customer();
         CountDownLatch acceptLocked = new CountDownLatch(1);
         CountDownLatch cancelWaiting = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
@@ -198,7 +200,7 @@ class CampaignCancelServiceTest {
                 release.countDown();
             }
 
-            Long preorderId = accepting.get(10, TimeUnit.SECONDS).preorder().id();
+            UUID preorderId = accepting.get(10, TimeUnit.SECONDS).preorder().id();
             canceling.get(10, TimeUnit.SECONDS);
             assertThat(cancelingEvents(preorderId)).hasSize(1);
             assertThat(statuses()).containsExactly("CANCELING");
@@ -213,7 +215,8 @@ class CampaignCancelServiceTest {
         campaignCancelService.cancel(upcoming.productId(), "공급 차질");
 
         Map<String, Object> period = jdbcTemplate.queryForMap(
-                "SELECT opens_at, closes_at FROM preorder_campaigns WHERE product_id = ?", upcoming.productId());
+                "SELECT opens_at, closes_at FROM preorder_campaigns WHERE product_id = ?",
+                (Object) UuidBinary.toBytes(upcoming.productId()));
         Instant opensAt = toInstant(period.get("opens_at"));
         Instant closesAt = toInstant(period.get("closes_at"));
         assertThat(opensAt).isBefore(closesAt);
@@ -222,12 +225,12 @@ class CampaignCancelServiceTest {
 
     @Test
     void 사유가_비었으면_기본_문구를_길면_500자로_잘라_남긴다() {
-        Long blank = accept().preorder().id();
+        UUID blank = accept().preorder().id();
         campaignCancelService.cancel(product.productId(), " ");
         assertThat(cancelingEvents(blank).getFirst().get("reason")).isEqualTo("사전예약 회차 판매 중지");
 
         PreorderProduct other = fixtures.openPreorderProduct();
-        Long longReason = accepts.accept(fixtures.customer(), other).preorder().id();
+        UUID longReason = accepts.accept(fixtures.customer(), other).preorder().id();
         campaignCancelService.cancel(other.productId(), "가".repeat(600));
         assertThat((String) cancelingEvents(longReason).getFirst().get("reason")).hasSize(500);
     }
@@ -239,25 +242,25 @@ class CampaignCancelServiceTest {
     private Instant closesAt() {
         return toInstant(jdbcTemplate.queryForObject(
                 "SELECT closes_at FROM preorder_campaigns WHERE product_id = ?", LocalDateTime.class,
-                product.productId()));
+                (Object) UuidBinary.toBytes(product.productId())));
     }
 
     private List<String> statuses() {
         return jdbcTemplate.queryForList("SELECT status FROM preorders WHERE product_id = ?", String.class,
-                product.productId());
+                (Object) UuidBinary.toBytes(product.productId()));
     }
 
-    private List<Map<String, Object>> cancelingEvents(Long preorderId) {
+    private List<Map<String, Object>> cancelingEvents(UUID preorderId) {
         return jdbcTemplate.queryForList("""
                 SELECT actor, reason FROM preorder_events WHERE preorder_id = ? AND to_status = 'CANCELING'
-                """, preorderId);
+                """, (Object) UuidBinary.toBytes(preorderId));
     }
 
-    private List<String> outboxReasons(Long preorderId) {
+    private List<String> outboxReasons(UUID preorderId) {
         return jdbcTemplate.queryForList("""
                 SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.reason')) FROM preorder_outbox_events
                  WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
-                """, String.class, preorderId);
+                """, String.class, (Object) UuidBinary.toBytes(preorderId));
     }
 
     private static Instant toInstant(Object value) {

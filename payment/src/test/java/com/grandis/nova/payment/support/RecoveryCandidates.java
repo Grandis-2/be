@@ -2,6 +2,8 @@ package com.grandis.nova.payment.support;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.util.UUID;
+
 /**
  * 통합 테스트는 커밋된 행을 공유한다. 워커를 돌리는 테스트는 먼저 다른 테스트가 남긴 복구 후보를 치워 자기 후보만 남긴다.
  * 치운 행도 도메인 불변식을 지켜야 한다 — 다른 테스트가 대상별 거래를 읽을 때 매퍼가 깨지지 않게.

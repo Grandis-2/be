@@ -5,15 +5,17 @@ import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.model.OrderLine;
 import com.grandis.nova.order.order.query.OrderView;
 
+import java.util.UUID;
+
 /**
  * 주문상품 하나(내부 API 응답). 판정 없이 사실만 준다 — catalog 가 배송 완료 · 출처로 리뷰 가능 여부를 가린다.
  *
- * @param orderId     주문 내부 id(orders.id). 공개 주문 번호(order_token)가 아니다
+ * @param orderId     주문 id(orders.id). 주문 API 의 orderId 와 같다
  * @param optionTitle 주문 당시 옵션명(order_items.option_title_snapshot)
  * @param orderStatus orders.status 이름 그대로
- * @param orderSource orders.source 이름 그대로(PREORDER · BUY_NOW · CART)
+ * @param orderSource orders.source 이름 그대로(PREORDER · BUY_NOW · CART · DRAW)
  */
-public record InternalOrderItemResponse(Long orderItemId, Long orderId, Long productId, Long optionId,
+public record InternalOrderItemResponse(UUID orderItemId, UUID orderId, UUID productId, UUID optionId,
                                         String optionTitle, OrderStatus orderStatus, OrderSource orderSource) {
 
     static InternalOrderItemResponse from(OrderView.Item view) {

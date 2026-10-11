@@ -10,6 +10,8 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.UUID;
+
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -36,7 +38,7 @@ class ShipmentBatchApiTest {
     void 로그인_없이_차수를_번호_순으로_본다() throws Exception {
         PreorderProduct product = fixtures.openPreorderProduct();
 
-        mockMvc.perform(get("/api/v1/products/{productId}/shipment-batches", product.productId()))
+        mockMvc.perform(get("/api/v1/preorders/products/{productId}/shipment-batches", product.productId()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items", hasSize(2)))
                 .andExpect(jsonPath("$.data.items[0].batchNumber").value(1))
@@ -49,9 +51,9 @@ class ShipmentBatchApiTest {
 
     @Test
     void 차수가_없는_상품은_404() throws Exception {
-        Long productId = fixtures.product("IN_STOCK", "ACTIVE");
+        UUID productId = fixtures.product("IN_STOCK", "ACTIVE");
 
-        mockMvc.perform(get("/api/v1/products/{productId}/shipment-batches", productId))
+        mockMvc.perform(get("/api/v1/preorders/products/{productId}/shipment-batches", productId))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
     }

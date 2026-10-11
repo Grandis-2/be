@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.integration.sqs;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.outbox.MessageTransport;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.common.sqs.testing.FlociTestContainer;
@@ -31,9 +32,12 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ThreadLocalRandom;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -92,9 +96,9 @@ class SqsMessagingTest {
         fixtures = new ShopFixtures(jdbcTemplate);
         doAnswer(invocation -> {
             threads.put(invocation.getArgument(0), Thread.currentThread().getName());
-            invocation.callRealMethod();
+            Object handling = invocation.callRealMethod();
             handled.merge(invocation.getArgument(0), 1, Integer::sum);
-            return null;
+            return handling;
         }).when(dispatcher).dispatch(anyString());
         doAnswer(invocation -> {
             threads.put(invocation.<IncomingDeadLetter>getArgument(0).body(), Thread.currentThread().getName());
@@ -112,7 +116,7 @@ class SqsMessagingTest {
 
     @Test
     void 커밋되면_목적지_큐로_봉투를_보낸다() {
-        long syncJobId = ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE);
+        UUID syncJobId = UUID.randomUUID();
         Long id = transactionTemplate.execute(status -> writer.append(new RegisterJobReady(syncJobId, "9f1c2d3e")));
         String eventId = jdbcTemplate.queryForObject(
                 "SELECT event_id FROM preorder_outbox_events WHERE id = ?", String.class, id);
@@ -121,14 +125,14 @@ class SqsMessagingTest {
 
         JsonNode body = jsonMapper.readTree(message.body());
         assertThat(body.get("eventType").asString()).isEqualTo("REGISTER_JOB_READY");
-        assertThat(body.get("payload").get("syncJobId").asLong()).isEqualTo(syncJobId);
+        assertThat(body.get("payload").get("syncJobId").asString()).isEqualTo(syncJobId.toString());
         assertThat(message.messageAttributes().get("eventType").stringValue()).isEqualTo("REGISTER_JOB_READY");
     }
 
     @Test
     void 받은_이벤트를_처리하면_그_메시지를_큐에서_지운다() {
         AcceptResult accepted = new AcceptFixtures(acceptService, fixtures, catalogClient).accept(fixtures.customer());
-        Long preorderId = accepted.preorder().id();
+        UUID preorderId = accepted.preorder().id();
         String eventId = ShopFixtures.unique();
         String externalNumber = "R-" + ShopFixtures.unique();
 
@@ -139,7 +143,7 @@ class SqsMessagingTest {
 
         await().atMost(TIMEOUT).until(() -> "REGISTERED".equals(status(preorderId)));
         assertThat(jdbcTemplate.queryForObject("SELECT external_reference FROM preorders WHERE id = ?",
-                String.class, preorderId)).isEqualTo(externalNumber);
+                String.class, (Object) UuidBinary.toBytes(preorderId))).isEqualTo(externalNumber);
         // 지우지 못했다면 가시성 시간(2s) 뒤 다시 보여 한 번 더 처리된다 — 그 몇 배를 기다려도 한 번이어야 한다
         await().alias("처리한 메시지는 지워져 다시 처리되지 않는다")
                 .during(Duration.ofSeconds(8)).atMost(TIMEOUT)
@@ -151,7 +155,7 @@ class SqsMessagingTest {
     @Test
     void 같은_이벤트가_두_번_와도_한_번만_반영된다() {
         AcceptResult accepted = new AcceptFixtures(acceptService, fixtures, catalogClient).accept(fixtures.customer());
-        Long preorderId = accepted.preorder().id();
+        UUID preorderId = accepted.preorder().id();
         String externalNumber = "R-" + ShopFixtures.unique();
         String body = externalJobSucceeded(ShopFixtures.unique(), fixtures.workerSucceeds(preorderId, "REGISTER"),
                 AcceptFixtures.tokenOf(accepted), externalNumber);
@@ -165,9 +169,9 @@ class SqsMessagingTest {
         assertThat(status(preorderId)).isEqualTo("REGISTERED");
         assertThat(fixtures.count("""
                 SELECT COUNT(*) FROM preorder_events WHERE preorder_id = ? AND to_status = 'REGISTERED'
-                """, preorderId)).isEqualTo(1);
+                """, (Object) UuidBinary.toBytes(preorderId))).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject("SELECT external_reference FROM preorders WHERE id = ?",
-                String.class, preorderId)).isEqualTo(externalNumber);
+                String.class, (Object) UuidBinary.toBytes(preorderId))).isEqualTo(externalNumber);
     }
 
     @Test
@@ -180,12 +184,41 @@ class SqsMessagingTest {
                         .formatted(FlociTestContainer.MAX_RECEIVE_COUNT))
                 .atMost(Duration.ofSeconds(30))
                 .until(() -> fixtures.count("""
-                        SELECT COUNT(*) FROM dead_letter_events
+                        SELECT COUNT(*) FROM preorder_dead_letter_events
                          WHERE body = ? AND status = 'OPEN' AND failure_reason = 'UNREADABLE_BODY'
                         """, poison) == 1);
         assertThat(queues.receive("preorder-events-dlq", m -> m.body().equals(poison), Duration.ofSeconds(3)))
                 .as("옮긴 메시지는 DLQ 에서 지운다").isEmpty();
         assertThat(threads.get(poison)).isEqualTo("preorder-events-dlq-0");
+    }
+
+    /**
+     * 등록보다 먼저 온 공개 여부 변경은 실패가 아니라 보류다. 재수신 한도를 넘겨 받아도 DLQ 로 가지 않고, 회차가 생기면 반영된다.
+     */
+    @Test
+    void 회차보다_먼저_온_공개_여부_변경은_DLQ_로_가지_않고_늦춰_다시_받다가_회차가_생기면_반영된다() {
+        UUID productId = fixtures.product("PREORDER", "ACTIVE");
+        String changed = """
+                {"eventId":"%s","eventType":"PREORDER_PRODUCT_CHANGED","aggregateType":"PRODUCT",
+                 "aggregateId":"%s","occurredAt":"2026-10-08T01:00:00Z",
+                 "payload":{"visible":false,"visibilityVersion":1}}
+                """.formatted(ShopFixtures.unique(), productId);
+
+        queues.send("preorder-events", changed);
+        await().alias("재수신 한도보다 많이 받는다 — 보류한 사본은 받은 횟수가 새로 시작한다")
+                .atMost(Duration.ofSeconds(30))
+                .until(() -> dispatchCount(changed) > FlociTestContainer.MAX_RECEIVE_COUNT);
+        Instant opensAt = Instant.now().plus(Duration.ofDays(1));
+        jdbcTemplate.update("""
+                INSERT INTO preorder_campaigns (product_id, opens_at, closes_at, created_at, updated_at)
+                VALUES (?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """, UuidBinary.toBytes(productId), utc(opensAt), utc(opensAt.plus(Duration.ofDays(1))));
+
+        await().atMost(TIMEOUT).until(() -> "0|1".equals(jdbcTemplate.queryForObject(
+                "SELECT CONCAT_WS('|', visible, visibility_version) FROM preorder_campaigns WHERE product_id = ?",
+                String.class, (Object) UuidBinary.toBytes(productId))));
+        assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_dead_letter_events WHERE body = ?", changed))
+                .as("DLQ 로 가지 않았다").isZero();
     }
 
     /** 빈 큐의 롱 폴링은 대기 시간만큼 걸린다. 클라이언트 기본 제한 시간에 걸려 받기가 실패하면 안 된다. */
@@ -200,12 +233,13 @@ class SqsMessagingTest {
     @Test
     void 접수부터_외부_등록_성공까지_SQS_로_이어져_결제_가능이_된다() {
         AcceptResult accepted = new AcceptFixtures(acceptService, fixtures, catalogClient).accept(fixtures.customer());
-        Long preorderId = accepted.preorder().id();
+        UUID preorderId = accepted.preorder().id();
         String token = AcceptFixtures.tokenOf(accepted);
 
         Message registerJobReady = queues.receive("preorder-register", m -> m.body().contains(token), TIMEOUT)
                 .orElseThrow();
-        long syncJobId = jsonMapper.readTree(registerJobReady.body()).get("payload").get("syncJobId").asLong();
+        UUID syncJobId = UUID.fromString(
+                jsonMapper.readTree(registerJobReady.body()).get("payload").get("syncJobId").asString());
         assertThat(syncJobId).isEqualTo(fixtures.workerSucceeds(preorderId, "REGISTER"));
 
         queues.send("preorder-events",
@@ -214,11 +248,11 @@ class SqsMessagingTest {
         await().atMost(TIMEOUT).until(() -> "REGISTERED".equals(status(preorderId)));
     }
 
-    private String externalJobSucceeded(String eventId, Long syncJobId, String token, String externalNumber) {
+    private String externalJobSucceeded(String eventId, UUID syncJobId, String token, String externalNumber) {
         return """
                 {"eventId":"%s","eventType":"EXTERNAL_JOB_SUCCEEDED","aggregateType":"PREORDER_SYNC_JOB",
-                 "aggregateId":%d,"occurredAt":"2026-09-03T01:00:03.470Z",
-                 "payload":{"syncJobId":%d,"preorderId":"%s","jobType":"REGISTER","externalNumber":"%s"}}
+                 "aggregateId":"%s","occurredAt":"2026-09-03T01:00:03.470Z",
+                 "payload":{"syncJobId":"%s","preorderId":"%s","jobType":"REGISTER","externalNumber":"%s"}}
                 """.formatted(eventId, syncJobId, syncJobId, token, externalNumber);
     }
 
@@ -230,7 +264,13 @@ class SqsMessagingTest {
                 .count();
     }
 
-    private String status(Long preorderId) {
-        return jdbcTemplate.queryForObject("SELECT status FROM preorders WHERE id = ?", String.class, preorderId);
+    /** DB 는 UTC 벽시계 시각을 담는다. */
+    private static LocalDateTime utc(Instant instant) {
+        return LocalDateTime.ofInstant(instant, ZoneOffset.UTC);
+    }
+
+    private String status(UUID preorderId) {
+        return jdbcTemplate.queryForObject("SELECT status FROM preorders WHERE id = ?", String.class,
+                (Object) UuidBinary.toBytes(preorderId));
     }
 }

@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.campaign;
 
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.preorder.campaign.application.PreorderCampaignAdminService;
@@ -22,6 +23,7 @@ import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -54,8 +56,8 @@ class CampaignChangeEventTest {
 
     @Test
     void 생성은_번호_1_로_변경은_번호를_올려_적고_같은_일정은_적지_않는다() {
-        Long productId = fixtures.product("PREORDER", "ACTIVE");
-        CatalogStubs.stubPreorderProduct(catalogClient, productId, CatalogStubs.activeOption(1L));
+        UUID productId = fixtures.product("PREORDER", "ACTIVE");
+        CatalogStubs.stubPreorderProduct(catalogClient, productId, CatalogStubs.activeOption(UUID.randomUUID()));
         Instant opensAt = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.MICROS);
 
         service.upsertCampaign(productId, opensAt, opensAt.plusSeconds(3600));
@@ -87,7 +89,7 @@ class CampaignChangeEventTest {
     void 일정_변경과_판매_중지가_동시에_와도_번호는_1씩_오르고_이벤트마다_그때의_일정이_적힌다() throws Exception {
         Instant opensAt = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.SECONDS);
         PreorderProduct product = fixtures.preorderProduct(opensAt, opensAt.plusSeconds(3600));
-        Long productId = product.productId();
+        UUID productId = product.productId();
         CatalogStubs.stubPreorderProduct(catalogClient, productId, CatalogStubs.activeOption(product.optionId()));
         Instant closedAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
 
@@ -124,7 +126,7 @@ class CampaignChangeEventTest {
         campaigns.closeNow(upcoming.productId(), now);
         campaigns.closeNow(upcoming.productId(), now.plusSeconds(1));
         campaigns.closeNow(ended.productId(), now);
-        campaigns.closeNow(Long.MAX_VALUE, now);
+        campaigns.closeNow(UUID.randomUUID(), now);
 
         List<Map<String, Object>> events = events(upcoming.productId());
         assertThat(events).extracting(event -> event.get("change")).containsExactly("CLOSED");
@@ -156,7 +158,7 @@ class CampaignChangeEventTest {
     void 공개_여부는_더_큰_번호만_반영하고_값이_바뀔_때만_일정_번호를_올려_적으며_재발행에도_실린다() {
         Instant now = Instant.now();
         PreorderProduct product = fixtures.preorderProduct(now.plusSeconds(3600), now.plusSeconds(7200));
-        Long productId = product.productId();
+        UUID productId = product.productId();
 
         campaigns.applyVisibility(productId, false, 2);
         campaigns.applyVisibility(productId, true, 1);
@@ -172,11 +174,12 @@ class CampaignChangeEventTest {
         assertThat(events).extracting(event -> event.get("version")).containsExactly(1L, 1L, 2L);
         assertThat(scheduleVersion(productId)).isEqualTo(2);
         assertThat(jdbcTemplate.queryForObject(
-                "SELECT visibility_version FROM preorder_campaigns WHERE product_id = ?", Long.class, productId))
+                "SELECT visibility_version FROM preorder_campaigns WHERE product_id = ?", Long.class,
+                (Object) UuidBinary.toBytes(productId)))
                 .isEqualTo(4);
     }
 
-    private List<Map<String, Object>> events(Long productId) {
+    private List<Map<String, Object>> events(UUID productId) {
         return jdbcTemplate.queryForList("""
                 SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.change')) AS `change`,
                        CAST(JSON_EXTRACT(payload, '$.scheduleVersion') AS SIGNED) AS version,
@@ -187,17 +190,18 @@ class CampaignChangeEventTest {
                  WHERE event_type = 'PREORDER_CAMPAIGN_CHANGED' AND aggregate_type = 'PREORDER_CAMPAIGN'
                    AND aggregate_id = ?
                  ORDER BY id
-                """, productId);
+                """, (Object) UuidBinary.toBytes(productId));
     }
 
     /** DB 는 UTC 벽시계 시각을 담는다. */
-    private Instant utc(Long productId, String column) {
+    private Instant utc(UUID productId, String column) {
         return jdbcTemplate.queryForObject("SELECT " + column + " FROM preorder_campaigns WHERE product_id = ?",
-                LocalDateTime.class, productId).toInstant(ZoneOffset.UTC);
+                LocalDateTime.class, (Object) UuidBinary.toBytes(productId)).toInstant(ZoneOffset.UTC);
     }
 
-    private long scheduleVersion(Long productId) {
+    private long scheduleVersion(UUID productId) {
         return jdbcTemplate.queryForObject(
-                "SELECT schedule_version FROM preorder_campaigns WHERE product_id = ?", Long.class, productId);
+                "SELECT schedule_version FROM preorder_campaigns WHERE product_id = ?", Long.class,
+                (Object) UuidBinary.toBytes(productId));
     }
 }

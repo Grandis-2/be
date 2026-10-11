@@ -20,11 +20,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
+import static com.grandis.nova.waitingroom.support.TestIds.productKey;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class QueueStoreTest {
 
-    static final String PRODUCT = "101";
+    static final String PRODUCT = productKey(101);
     static final Duration WAIT = Duration.ofSeconds(5);
 
     private ReactiveStringRedisTemplate redis;

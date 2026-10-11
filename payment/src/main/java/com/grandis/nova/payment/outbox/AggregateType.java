@@ -7,5 +7,6 @@ import com.grandis.nova.common.outbox.OutboxAggregateType;
  * 결제 결과는 결제 대상(주문 · 응모)의 것이라 대상 서비스의 id 를 aggregateId 로 쓴다.
  */
 public enum AggregateType implements OutboxAggregateType {
-    ORDER
+    ORDER,
+    DRAW_ENTRY
 }

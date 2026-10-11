@@ -1,5 +1,6 @@
 package com.grandis.nova.payment;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.payment.domain.enums.TransactionStatus;
@@ -22,6 +23,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -69,7 +71,7 @@ class PaymentLedgerConcurrencyTest {
         PaymentTransaction started = transactionTemplate.execute(s -> ledger.start(pending, target, providerPayment, AMOUNT))
                 .orElseThrow().transaction();
         jdbcTemplate.update("UPDATE payment_transactions SET lease_expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND "
-                + "WHERE id = ?", started.id());
+                + "WHERE id = ?", UuidBinary.toBytes(started.id()));
 
         List<Outcome<Optional<ClaimedTransaction>>> outcomes = Concurrently.run(WORKERS, i -> () ->
                 transactionTemplate.execute(s -> ledger.claim(started)));
@@ -118,7 +120,7 @@ class PaymentLedgerConcurrencyTest {
                 .hasSize(1);
     }
 
-    private void assertOneHolder(List<Outcome<Optional<ClaimedTransaction>>> outcomes, Long id) {
+    private void assertOneHolder(List<Outcome<Optional<ClaimedTransaction>>> outcomes, UUID id) {
         assertThat(outcomes).allSatisfy(o -> assertThat(o.error()).isNull());
         List<ClaimedTransaction> holders = outcomes.stream().map(Outcome::value).flatMap(Optional::stream).toList();
         assertThat(holders).hasSize(1);

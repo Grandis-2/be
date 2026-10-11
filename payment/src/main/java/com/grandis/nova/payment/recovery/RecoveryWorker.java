@@ -19,6 +19,7 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 결과를 확정하지 못한 거래를 집어 유형별 처리기({@link RecoveryHandler})에 넘긴다. 대상은 원장 claim 의 준비 조건과 같다 —
@@ -105,7 +106,7 @@ public class RecoveryWorker {
     }
 
     private static void recover(RecoveryHandler handler, Claim claim) {
-        Long id = claim.seen().id();
+        UUID id = claim.seen().id();
         try {
             handler.recover(claim.seen(), claim.claimed());
         } catch (LeaseLostException e) {

@@ -2,6 +2,7 @@ package com.grandis.nova.order.client.preorder;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * preorder 의 결제 가능 확인 응답(preorder PayabilityResponse 와 같은 모양). 주문은 여기의 상품 · 옵션 · 이름 · 단가를
@@ -10,17 +11,17 @@ import java.time.Instant;
  *
  * @param preorderId         예약 공개 UUID
  * @param preorderInternalId preorders.id. orders.preorder_id 에 저장한다. 밖으로 내보내지 않는다
- * @param customerId         예약 회원. 주문 회원으로 저장한다(복합 FK)
+ * @param customerId         예약 회원. 주문 회원으로 저장한다
  * @param payableFrom        PAYABLE 이 된 시각. 그 전이면 null
  * @param paymentDueAt       결제 기한(= payableFrom + 24시간). 그 전이면 null
  * @param reason             payable 이 false 인 까닭(NOT_YET_REGISTERED · DUE_PASSED · CANCELING · CANCELED). true 면 null
  */
 public record PreorderPayability(
         String preorderId,
-        Long preorderInternalId,
-        Long customerId,
-        Long productId,
-        Long optionId,
+        UUID preorderInternalId,
+        UUID customerId,
+        UUID productId,
+        UUID optionId,
         String productTitle,
         String optionTitle,
         BigDecimal unitPrice,
@@ -34,7 +35,7 @@ public record PreorderPayability(
     static final String DUE_PASSED = "DUE_PASSED";
     static final String CANCELED = "CANCELED";
 
-    public boolean isOwnedBy(Long customerId) {
+    public boolean isOwnedBy(UUID customerId) {
         return this.customerId.equals(customerId);
     }
 

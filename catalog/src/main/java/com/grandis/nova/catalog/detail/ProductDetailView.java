@@ -8,6 +8,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * 상품 상세. 배송 차수는 싣지 않는다 — preorder 의 공개 API 를 프론트가 부른다(catalog 는 shipment_batches 를 읽지 않는다).
@@ -20,8 +21,8 @@ import java.util.Map;
  * @param variants       옵션 전체. 판매 중지 옵션도 상태 그대로 싣는다 — 화면이 선택을 막는다
  */
 public record ProductDetailView(
-        Long productId,
-        Long categoryId,
+        UUID productId,
+        UUID categoryId,
         SaleMode saleMode,
         String title,
         String description,
@@ -44,11 +45,15 @@ public record ProductDetailView(
     public record Campaign(Instant opensAt, Instant closesAt, PreorderSaleStatus status) {
     }
 
-    /** 옵션 축과 그 값. 화면의 선택기가 이 순서(축 position · 값 position)로 그린다. */
+    /** 옵션 축과 그 값. 화면의 선택기가 이 순서(관리자가 넣은 축 · 값 순)로 그린다. */
     public record OptionAxis(String key, String label, List<OptionValue> values) {
     }
 
-    public record OptionValue(String value, String normalizedValue, BigDecimal surcharge) {
+    /**
+     * @param valueId 값의 고정 id(문자열). 이름을 고쳐도 그대로다 — 관리자 값 수정 경로(…/option-values/{valueId})가 이것을 받는다
+     * @param hex     색상 스와치(#RRGGBB). 색상 축이 아니거나 등록하지 않았으면 null
+     */
+    public record OptionValue(String valueId, String value, String normalizedValue, String hex, BigDecimal surcharge) {
     }
 
     /**
@@ -56,12 +61,11 @@ public record ProductDetailView(
      * @param availableQuantity 일반 상품의 가용 수량(총량 − 선점 − 판매, 재고 행이 없으면 0). 사전예약은 null(무제한 접수)
      */
     public record Variant(
-            Long variantId,
+            UUID variantId,
             String sku,
             String title,
             BigDecimal price,
             Map<String, String> filterAttributes,
-            Map<String, String> displayAttributes,
             Map<String, String> selections,
             SaleStatus status,
             Integer availableQuantity
@@ -69,8 +73,8 @@ public record ProductDetailView(
     }
 
     /**
-     * @param gallery 색상 묶음별 상품 사진. 기본 묶음은 bundleKey "". 묶음 안은 position 순, 묶음은 사전순
-     * @param detail  상세 콘텐츠 영역별 이미지(상세정보 · 제품사양 · 유의사항 …). 영역 안은 position 순
+     * @param gallery 색상 묶음별 상품 사진(bundleKey = 색상의 정규화값). 색상 축이 없으면 기본 묶음 하나(bundleKey ""). 묶음은 색상 값 순, 묶음 안은 넣은 순
+     * @param detail  상세 콘텐츠 영역별 이미지(상세정보 · 제품사양 · 유의사항 …). 영역은 넣은 순, 영역 안은 넣은 순
      */
     public record Images(List<ImageBundle> gallery, List<ImageBundle> detail) {
     }

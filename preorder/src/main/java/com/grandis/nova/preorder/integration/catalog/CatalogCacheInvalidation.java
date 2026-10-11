@@ -10,6 +10,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 상품 캐시 비우기를 모든 인스턴스에 알린다. 캐시는 인스턴스마다 따로인데 큐 메시지는 한 대만 받으므로,
@@ -40,7 +41,7 @@ public class CatalogCacheInvalidation {
     }
 
     /** 이 인스턴스는 바로 비우고 나머지에 알린다. 알리기 실패는 뒤에서 다시 하고, 호출한 쪽에는 올리지 않는다. */
-    public void evictEverywhere(Long productId) {
+    public void evictEverywhere(UUID productId) {
         catalogReader.evict(productId);
         if (publish(productId)) {
             return;
@@ -55,13 +56,13 @@ public class CatalogCacheInvalidation {
     /** 다른 인스턴스(또는 자신)가 보낸 알림. 읽을 수 없는 본문은 버린다 — 다음 갱신이 바로잡는다. */
     void onMessage(String body) {
         try {
-            catalogReader.evict(Long.valueOf(body));
-        } catch (NumberFormatException e) {
+            catalogReader.evict(UUID.fromString(body));
+        } catch (IllegalArgumentException e) {
             log.warn("읽을 수 없는 상품 캐시 비우기 알림을 버린다: {}", body);
         }
     }
 
-    private void retryPublish(Long productId) {
+    private void retryPublish(UUID productId) {
         for (Duration delay : retryDelays) {
             try {
                 Thread.sleep(delay);
@@ -77,7 +78,7 @@ public class CatalogCacheInvalidation {
         giveUp(productId);
     }
 
-    private boolean publish(Long productId) {
+    private boolean publish(UUID productId) {
         try {
             redis.convertAndSend(CHANNEL, productId.toString());
             return true;
@@ -87,7 +88,7 @@ public class CatalogCacheInvalidation {
         }
     }
 
-    private void giveUp(Long productId) {
+    private void giveUp(UUID productId) {
         publishFailures.increment();
         log.error("상품 캐시 비우기를 끝내 알리지 못했다 — 다른 인스턴스는 1분 갱신으로 따라온다 productId={}", productId);
     }

@@ -5,8 +5,8 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 
 /**
- * 결제사(토스)에 알리는 주문 번호. CAPTURE 시도마다 새로 발급한다 — 우리 주문 id 는 순번이라 추측할 수 있고,
- * 한 주문의 두 번째 시도가 같은 번호를 쓰면 토스가 중복으로 거절한다.
+ * 결제사(토스)에 알리는 주문 번호. 우리 주문 id 가 아니라 CAPTURE 시도마다 새로 발급한다 — 한 주문의 두 번째 시도가
+ * 같은 번호를 쓰면 토스가 중복으로 거절한다.
  * 토스 규칙: 6~64자, 영문 대소문자 · 숫자 · '-' · '_'.
  */
 public record ProviderOrderId(String value) {

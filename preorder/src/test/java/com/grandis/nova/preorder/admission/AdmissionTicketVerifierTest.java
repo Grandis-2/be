@@ -10,6 +10,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -18,8 +19,10 @@ class AdmissionTicketVerifierTest {
 
     static final String CURRENT = "nova-test-current-secret-0123456789";
     static final String PREVIOUS = "nova-test-previous-secret-0123456789";
-    static final Long PRODUCT_ID = 101L;
-    static final Long CUSTOMER_ID = 1024L;
+    static final UUID PRODUCT_ID = UUID.fromString("00000000-0000-7000-8000-000000000101");
+    static final UUID CUSTOMER_ID = UUID.fromString("00000000-0000-7000-8000-000000001024");
+    static final UUID OTHER_PRODUCT_ID = UUID.fromString("00000000-0000-7000-8000-000000000202");
+    static final UUID OTHER_CUSTOMER_ID = UUID.fromString("00000000-0000-7000-8000-000000000077");
 
     /** 발급 시각. 창(30초) 시작은 01:00:00, 만료는 그 + 120초 = 01:02:00(epoch 1790816520). */
     static final Instant ISSUED_AT = Instant.parse("2026-10-01T01:00:07Z");
@@ -32,15 +35,15 @@ class AdmissionTicketVerifierTest {
     /** 만료 − 수명(120초) − 시각 오차(30초). 이보다 앞서 발급됐을 수 없다. */
     static final Instant ISSUED_NO_EARLIER_THAN = EXPIRES_AT.minusSeconds(150);
 
-    static final String VECTOR_CURRENT =
-            "et_MTAxHzEwMjQfMTc5MDgxNjUyMA.eLyT_jlZvbtd8xkwWxcyH2fvoyaZs0cXeXQbA8E-OKo";
-    static final String VECTOR_CURRENT_ID = "0fa344e6a5944743178270c54bd9534f35024cc04e20f20968965a9a992418f5";
-    static final String VECTOR_OTHER_PRODUCT =
-            "et_MjAyHzc3HzE3OTA4MTY1MjA.z6M2CLHz31DBoddp3bVbXUdfoQofqEWhz0Mee728ztA";
-    static final String VECTOR_PREVIOUS_KEY =
-            "et_MTAxHzEwMjQfMTc5MDgxNjUyMA.MfGdQ4gHG7gwdzc2Gi6F-N2GI1FB8Xg-yGCM2scz2uI";
-    static final String VECTOR_QUEUE_TOKEN =
-            "qt_MTAxHzEwMjQfMTc5MDgxNjUyMA.K6Ol3GWYPYAtwU4ngEDQeY9NzaWBxltmHkMJ-pGVJkM";
+    static final String VECTOR_CURRENT = "et_MDAwMDAwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMTAxHzAwMDAwMDAwLTAwMDAtNzAwMC04"
+            + "MDAwLTAwMDAwMDAwMTAyNB8xNzkwODE2NTIw.QDp7_sRDfjNKhq8Hw2y0yzpizrzNBYaXSe5Lhy-nh1M";
+    static final String VECTOR_CURRENT_ID = "e22d4f070196f167eb633a6092c09e4267feee1ff872db83807f4fb349b7332e";
+    static final String VECTOR_OTHER_PRODUCT = "et_MDAwMDAwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMjAyHzAwMDAwMDAwLTAwMDAtNzAw"
+            + "MC04MDAwLTAwMDAwMDAwMDA3Nx8xNzkwODE2NTIw.5UT5cldXa-INLn6aW4qgQtoFq0HD-dYESzzSzgtsl44";
+    static final String VECTOR_PREVIOUS_KEY = "et_MDAwMDAwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMTAxHzAwMDAwMDAwLTAwMDAtNzAwMC04"
+            + "MDAwLTAwMDAwMDAwMTAyNB8xNzkwODE2NTIw.DTOEEcyaD-PLgXh-Ndka_YHVQpeF6V5cQa2znplVwR8";
+    static final String VECTOR_QUEUE_TOKEN = "qt_MDAwMDAwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMTAxHzAwMDAwMDAwLTAwMDAtNzAwMC04"
+            + "MDAwLTAwMDAwMDAwMTAyNB8xNzkwODE2NTIw.mgG-uqldBdt5zaFhDeLlCzhMtSxnnzLEMmms_vrCDGA";
 
     @Nested
     class 공통_벡터 {
@@ -56,7 +59,8 @@ class AdmissionTicketVerifierTest {
             assertThat(AdmissionTickets.issue(CURRENT, PRODUCT_ID, CUSTOMER_ID, ISSUED_AT)).isEqualTo(VECTOR_CURRENT);
             assertThat(AdmissionTickets.issue(CURRENT, PRODUCT_ID, CUSTOMER_ID, ISSUED_AT.plusSeconds(20)))
                     .as("같은 창 안에서는 같은 입장권").isEqualTo(VECTOR_CURRENT);
-            assertThat(AdmissionTickets.issue(CURRENT, 202L, 77L, ISSUED_AT)).isEqualTo(VECTOR_OTHER_PRODUCT);
+            assertThat(AdmissionTickets.issue(CURRENT, OTHER_PRODUCT_ID, OTHER_CUSTOMER_ID,
+                    ISSUED_AT)).isEqualTo(VECTOR_OTHER_PRODUCT);
         }
     }
 
@@ -65,12 +69,12 @@ class AdmissionTicketVerifierTest {
 
         @Test
         void 다른_상품의_입장권은_거절한다() {
-            assertThat(verifierAt(ISSUED_AT).verify(VECTOR_OTHER_PRODUCT, PRODUCT_ID, 77L)).isEmpty();
+            assertThat(verifierAt(ISSUED_AT).verify(VECTOR_OTHER_PRODUCT, PRODUCT_ID, OTHER_CUSTOMER_ID)).isEmpty();
         }
 
         @Test
         void 다른_회원의_입장권은_거절한다() {
-            assertThat(verifierAt(ISSUED_AT).verify(VECTOR_CURRENT, PRODUCT_ID, 9999L)).isEmpty();
+            assertThat(verifierAt(ISSUED_AT).verify(VECTOR_CURRENT, PRODUCT_ID, UUID.randomUUID())).isEmpty();
         }
     }
 
@@ -103,8 +107,8 @@ class AdmissionTicketVerifierTest {
         void 마지막_글자의_안_쓰는_비트를_바꾼_표기는_거절한다() {
             String base = VECTOR_CURRENT.substring(0, VECTOR_CURRENT.length() - 1);
 
-            assertThat(verifierAt(ISSUED_AT).verify(base + "p", PRODUCT_ID, CUSTOMER_ID)).isEmpty();
-            assertThat(verifierAt(ISSUED_AT).verify(base + "q", PRODUCT_ID, CUSTOMER_ID)).isEmpty();
+            assertThat(verifierAt(ISSUED_AT).verify(base + "N", PRODUCT_ID, CUSTOMER_ID)).isEmpty();
+            assertThat(verifierAt(ISSUED_AT).verify(base + "O", PRODUCT_ID, CUSTOMER_ID)).isEmpty();
             assertThat(verifierAt(ISSUED_AT).verify(VECTOR_CURRENT, PRODUCT_ID, CUSTOMER_ID)).isPresent();
         }
     }
@@ -124,7 +128,7 @@ class AdmissionTicketVerifierTest {
         void 남의_페이로드에_내_서명을_붙이면_거절한다() {
             String spliced = VECTOR_OTHER_PRODUCT.split("\\.")[0] + "." + VECTOR_CURRENT.split("\\.")[1];
 
-            assertThat(verifierAt(ISSUED_AT).verify(spliced, 202L, 77L)).isEmpty();
+            assertThat(verifierAt(ISSUED_AT).verify(spliced, OTHER_PRODUCT_ID, OTHER_CUSTOMER_ID)).isEmpty();
         }
 
         @Test
@@ -162,9 +166,10 @@ class AdmissionTicketVerifierTest {
 
         @Test
         void 서명이_맞아도_칸이_셋이_아니면_거절한다() {
-            String twoFields = AdmissionTickets.issueRaw(CURRENT, "et_", "101" + (char) 0x1f + "1024");
+            String twoFields = AdmissionTickets.issueRaw(CURRENT, "et_",
+                    PRODUCT_ID.toString() + (char) 0x1f + CUSTOMER_ID);
             String fourFields = AdmissionTickets.issueRaw(CURRENT, "et_",
-                    "101" + (char) 0x1f + "1024" + (char) 0x1f + "1790816520" + (char) 0x1f + "x");
+                    PRODUCT_ID.toString() + (char) 0x1f + CUSTOMER_ID + (char) 0x1f + "1790816520" + (char) 0x1f + "x");
 
             assertThat(verifierAt(ISSUED_AT).verify(twoFields, PRODUCT_ID, CUSTOMER_ID)).isEmpty();
             assertThat(verifierAt(ISSUED_AT).verify(fourFields, PRODUCT_ID, CUSTOMER_ID)).isEmpty();
@@ -173,7 +178,7 @@ class AdmissionTicketVerifierTest {
         @Test
         void 만료_칸이_숫자가_아니면_거절한다() {
             String badExp = AdmissionTickets.issueRaw(CURRENT, "et_",
-                    "101" + (char) 0x1f + "1024" + (char) 0x1f + "soon");
+                    PRODUCT_ID.toString() + (char) 0x1f + CUSTOMER_ID + (char) 0x1f + "soon");
 
             assertThat(verifierAt(ISSUED_AT).verify(badExp, PRODUCT_ID, CUSTOMER_ID)).isEmpty();
         }

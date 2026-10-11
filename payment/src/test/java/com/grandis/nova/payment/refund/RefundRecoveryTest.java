@@ -1,5 +1,6 @@
 package com.grandis.nova.payment.refund;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.security.RevocationChecker;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.payment.ClaimedTransaction;
@@ -12,6 +13,7 @@ import com.grandis.nova.payment.client.toss.TossPayment;
 import com.grandis.nova.payment.client.toss.TossPaymentClient;
 import com.grandis.nova.payment.client.toss.TossPaymentStatus;
 import com.grandis.nova.payment.client.toss.UnknownReason;
+import com.grandis.nova.payment.confirm.TossOutcomes;
 import com.grandis.nova.payment.domain.enums.PaymentStatus;
 import com.grandis.nova.payment.domain.enums.TransactionStatus;
 import com.grandis.nova.payment.domain.exception.LeaseLostException;
@@ -46,6 +48,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -71,11 +74,10 @@ class RefundRecoveryTest {
     static final Money AMOUNT = Money.won(15000);
     static final Instant APPROVED_AT = Instant.parse("2026-10-04T01:00:00Z");
     static final Instant CANCELED_AT = Instant.parse("2026-10-04T01:20:30Z");
-    static final ProviderError TIMEOUT = new ProviderError(UnknownReason.TIMEOUT.name(), UnknownReason.TIMEOUT.name());
+    static final ProviderError TIMEOUT = unknownResult(UnknownReason.TIMEOUT, null);
     static final ProviderError PROVIDER_ERROR = new ProviderError("PROVIDER_ERROR", "일시적인 오류");
     static final ProviderError BUSY = new ProviderError("IDEMPOTENT_REQUEST_PROCESSING", null);
-    static final ProviderError ALREADY_CANCELED =
-            new ProviderError("ALREADY_CANCELED_PAYMENT", UnknownReason.LISTED_CODE.name());
+    static final ProviderError ALREADY_CANCELED = unknownResult(UnknownReason.LISTED_CODE, "ALREADY_CANCELED_PAYMENT");
     static final String NOT_CANCELABLE = "NOT_CANCELABLE_PAYMENT";
 
     @Autowired
@@ -467,7 +469,7 @@ class RefundRecoveryTest {
     @Test
     void retryIntervalIsCapped() {
         PaymentTransaction refund = claim(refundOpened()).transaction();
-        jdbcTemplate.update("UPDATE payment_transactions SET attempt_count = 40 WHERE id = ?", refund.id());
+        jdbcTemplate.update("UPDATE payment_transactions SET attempt_count = 40 WHERE id = ?", UuidBinary.toBytes(refund.id()));
         PaymentTransaction many = transactions.findById(refund.id()).orElseThrow();
 
         assertThat(RefundRecovery.retryAfter(many)).isEqualTo(RefundRecovery.MAX_RETRY_AFTER);
@@ -587,39 +589,44 @@ class RefundRecoveryTest {
         return jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM payment_outbox_events
                  WHERE aggregate_type = 'ORDER' AND aggregate_id = ? AND event_type = 'ORDER_REFUND_SETTLED'
-                """, Integer.class, target.id());
+                """, Integer.class, UuidBinary.toBytes(target.id()));
     }
 
     private JsonNode settledPayload() {
         List<String> payloads = jdbcTemplate.queryForList("""
                 SELECT payload FROM payment_outbox_events
                  WHERE aggregate_type = 'ORDER' AND aggregate_id = ? AND event_type = 'ORDER_REFUND_SETTLED'
-                """, String.class, target.id());
+                """, String.class, UuidBinary.toBytes(target.id()));
         assertThat(payloads).hasSize(1);
         assertThat(payloads.getFirst()).doesNotContain(paymentKey.value());
         return jsonMapper.readTree(payloads.getFirst());
     }
 
-    private long secondsUntilRetry(Long id) {
+    private long secondsUntilRetry(UUID id) {
         return jdbcTemplate.queryForObject(
                 "SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(6), next_retry_at) FROM payment_transactions WHERE id = ?",
-                Long.class, id);
+                Long.class, UuidBinary.toBytes(id));
     }
 
     // ---- 시각 당기기 ----
 
-    private void expireLease(Long id) {
+    private void expireLease(UUID id) {
         jdbcTemplate.update("UPDATE payment_transactions SET lease_expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND "
-                + "WHERE id = ?", id);
+                + "WHERE id = ?", UuidBinary.toBytes(id));
     }
 
-    private void makeRetryDue(Long id) {
+    private void makeRetryDue(UUID id) {
         jdbcTemplate.update("UPDATE payment_transactions SET next_retry_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND "
-                + "WHERE id = ?", id);
+                + "WHERE id = ?", UuidBinary.toBytes(id));
     }
 
-    private void ageRequestedAt(Long id, Duration age) {
+    private void ageRequestedAt(UUID id, Duration age) {
         jdbcTemplate.update("UPDATE payment_transactions SET requested_at = requested_at - INTERVAL ? SECOND WHERE id = ?",
-                age.toSeconds(), id);
+                age.toSeconds(), UuidBinary.toBytes(id));
+    }
+
+    /** 명령이 결과 불명으로 끝났을 때 행에 남는 오류. 운영 코드가 만든 그대로 쓴다. */
+    private static ProviderError unknownResult(UnknownReason reason, String code) {
+        return ((Outcome.Unknown) TossOutcomes.notSucceeded(new TossCommandResult.Unknown(reason, code))).error();
     }
 }

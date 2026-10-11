@@ -6,6 +6,7 @@ import com.grandis.nova.catalog.outbox.OutboundEventType;
 import com.grandis.nova.catalog.outbox.OutboxMessage;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 일반 판매 상품을 등록했다 — order 가 옵션별 초기 재고를 만든다(order-events). 계약: contracts/catalog-events.md.
@@ -16,7 +17,7 @@ import java.util.List;
  * @param items 등록한 옵션 전부의 초기 재고(일반 상품은 옵션마다 필수, 0 허용)
  */
 public record InStockProductRegistered(
-        @JsonIgnore Long productId,
+        @JsonIgnore UUID productId,
         List<Item> items
 ) implements OutboxMessage {
 
@@ -35,10 +36,10 @@ public record InStockProductRegistered(
     }
 
     @Override
-    public Long aggregateId() {
+    public UUID aggregateId() {
         return productId;
     }
 
-    public record Item(Long optionId, int stockTotal) {
+    public record Item(UUID optionId, int stockTotal) {
     }
 }

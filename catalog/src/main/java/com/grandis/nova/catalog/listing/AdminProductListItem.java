@@ -5,6 +5,7 @@ import com.grandis.nova.catalog.product.SaleStatus;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 관리자 목록의 한 상품 — 회원 목록의 칸 그대로에 관리자만 보는 셋을 더한 것. 회원 목록과 달리 노출 규칙을 거치지 않는다.
@@ -16,7 +17,7 @@ import java.time.Instant;
  * @param preorderStatus        사전예약의 접수 단계. 일반 상품 · 회차 없음은 null
  */
 public record AdminProductListItem(
-        Long productId,
+        UUID productId,
         SaleMode saleMode,
         String title,
         String imageUrl,

@@ -10,6 +10,7 @@ import com.grandis.nova.payment.vo.ProviderPaymentKey;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 결제 거래 쓰기 포트. {@link com.grandis.nova.payment.PaymentLedger} 만 쓴다(PaymentArchitectureTest) —
@@ -45,39 +46,39 @@ public interface PaymentTransactionWriter {
      *
      * @param seenLease 읽은 스냅샷의 리스 표식. 없으면 null
      */
-    int claim(Long transactionId, TransactionStatus seenStatus, LeaseToken seenLease, LeaseToken lease,
+    int claim(UUID transactionId, TransactionStatus seenStatus, LeaseToken seenLease, LeaseToken lease,
               Duration leaseFor, Instant now);
 
     /**
      * 끝내기(SUCCEEDED · FAILED). 리스를 풀고 끝난 시각을 적는다. 마지막 오류는 error 로 바꾼다 — 성공(null)이면 지운다.
      * 성공한 거래에 앞선 시도의 오류가 남으면 "마지막 시도 결과" 를 보여 줄 때 실패로 읽힌다.
      */
-    int finish(Long transactionId, LeaseToken lease, TransactionStatus to, ProviderError error, Instant now);
+    int finish(UUID transactionId, LeaseToken lease, TransactionStatus to, ProviderError error, Instant now);
 
     /** RETRY_SCHEDULED 로. 리스를 풀고 재시도 시각을 DB 시각 + delay 로 적는다. */
-    int reschedule(Long transactionId, LeaseToken lease, ProviderError error, Duration delay);
+    int reschedule(UUID transactionId, LeaseToken lease, ProviderError error, Duration delay);
 
     /** 상태 · 리스는 그대로 두고 마지막 오류만 적는다(결과 불명). */
-    int recordError(Long transactionId, LeaseToken lease, ProviderError error);
+    int recordError(UUID transactionId, LeaseToken lease, ProviderError error);
 
     /**
      * 만료: 한 번도 보내지 않은 CAPTURE(PENDING · 리스 없음)이고 연(확보한) 지 openedFor 가 지났을 때만(DB 시각) EXPIRED 로, 끝난
      * 시각을 적는다.
      * 시작(start)과 같은 PENDING 조건이라 둘이 겹치면 한쪽만 1행이다.
      */
-    int expire(Long transactionId, Duration openedFor, Instant now);
+    int expire(UUID transactionId, Duration openedFor, Instant now);
 
     /**
      * 확보: 한 번도 보내지 않은 CAPTURE(PENDING · 리스 없음)에 확보 시각(DB 시각)을 적는다 — 만료 기준이 그 시각부터 다시 잰다.
      * 만료와 같은 PENDING 조건이라 겹치면 한쪽만 1행이다.
      */
-    int reserve(Long transactionId);
+    int reserve(UUID transactionId);
 
     /**
      * 에스컬레이션: 리스를 쥔 작업자가 스스로 끝낼 수 없다고 판단했다. 상태 · 리스는 그대로 두고 시각 · 마지막 오류를 적는다 —
      * 복구 후보에서 빠지고, 실패로 굳지 않는다.
      */
-    int escalate(Long transactionId, LeaseToken lease, ProviderError error, Instant now);
+    int escalate(UUID transactionId, LeaseToken lease, ProviderError error, Instant now);
 
     /**
      * 멱등 키 교체: 리스를 쥔 거래에만. 토스는 같은 키의 재요청에 첫 응답(오류 포함)을 돌려주므로, 조회로 "처리 안 됨"을 확인한 뒤
@@ -85,5 +86,5 @@ public interface PaymentTransactionWriter {
      * 대상당 진행 중 하나(uq_payment_tx_active)라 새 행을 열 수 없다.
      * 리스를 leaseFor 로 새로 잡고 마지막 오류를 지운다 — 새 키 전송이 리스 안에 들고, 교체 뒤 멈추면 다음 작업자가 같은 키로 이어 간다.
      */
-    int rotateIdempotencyKey(Long transactionId, LeaseToken lease, IdempotencyKey key, Duration leaseFor);
+    int rotateIdempotencyKey(UUID transactionId, LeaseToken lease, IdempotencyKey key, Duration leaseFor);
 }

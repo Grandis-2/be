@@ -1,5 +1,6 @@
 package com.grandis.nova.payment.client.toss;
 
+import com.grandis.nova.payment.vo.ProviderError;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -29,6 +30,13 @@ class UnknownReasonTest {
     void everyReasonHasTheAgreedResolution(UnknownReason reason) {
         assertThat(EXPECTED).containsKey(reason);
         assertThat(reason.resolution()).isEqualTo(EXPECTED.get(reason));
+    }
+
+    // 사유 이름은 결제 거래의 last_unknown_reason 칸에 그대로 들어간다 — 넘으면 결과를 남기는 UPDATE 가 실패한다
+    @ParameterizedTest
+    @EnumSource(UnknownReason.class)
+    void reasonNameFitsRecordedColumn(UnknownReason reason) {
+        assertThat(reason.name().length()).isLessThanOrEqualTo(ProviderError.UNKNOWN_REASON_MAX);
     }
 
     @Test

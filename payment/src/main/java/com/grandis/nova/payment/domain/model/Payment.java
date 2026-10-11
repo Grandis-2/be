@@ -7,6 +7,7 @@ import com.grandis.nova.payment.vo.ProviderPaymentKey;
 
 import java.time.Instant;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * 성공한 결제(payments). 대상당 1행이고 CAPTURE 성공 반영과 같은 트랜잭션에서 생긴다. 시도 · 재시도는
@@ -17,7 +18,7 @@ import java.util.Objects;
  * @param updatedAt 저장 전이면 null
  */
 public record Payment(
-        Long id,
+        UUID id,
         PaymentTarget target,
         ProviderPaymentKey providerPaymentKey,
         Money amount,

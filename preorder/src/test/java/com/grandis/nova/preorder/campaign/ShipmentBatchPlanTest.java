@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -25,7 +26,7 @@ class ShipmentBatchPlanTest {
         ShipmentBatchPlan plan = new ShipmentBatchPlan(List.of(
                 line(1, 1, 1000L), line(2, 1001, 5000L), line(3, 5001, null)));
 
-        assertThat(plan.toBatches(101L))
+        assertThat(plan.toBatches(UUID.randomUUID()))
                 .extracting(ShipmentBatch::getBatchNumber, ShipmentBatch::getPositionFrom, ShipmentBatch::getPositionTo)
                 .containsExactly(tuple(1, 1L, 1000L), tuple(2, 1001L, 5000L), tuple(3, 5001L, null));
     }

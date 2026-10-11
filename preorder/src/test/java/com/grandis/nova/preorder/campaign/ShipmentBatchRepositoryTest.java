@@ -10,6 +10,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.util.UUID;
+
 import static com.grandis.nova.preorder.support.ShopFixtures.FIRST_BATCH_LAST_POSITION;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -54,7 +56,7 @@ class ShipmentBatchRepositoryTest {
 
     @Test
     void 차수가_없는_상품이면_비어_있다() {
-        Long productId = fixtures.product("PREORDER", "ACTIVE");
+        UUID productId = fixtures.product("PREORDER", "ACTIVE");
 
         assertThat(batches.findCovering(productId, 1)).isEmpty();
     }

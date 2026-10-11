@@ -1,5 +1,6 @@
 package com.grandis.nova.member;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.member.support.MemberIntegrationTest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -64,7 +65,7 @@ class ProfileIntegrationTest {
     }
 
     private Map<String, Object> row() {
-        return jdbc.queryForMap("SELECT name, email, phone_number FROM customers WHERE id = ?", customer.getId());
+        return jdbc.queryForMap("SELECT name, email, phone_number FROM customers WHERE id = ?", UuidBinary.toBytes(customer.getId()));
     }
 
     private static String body(String name, String email, String phone) {
@@ -73,6 +74,83 @@ class ProfileIntegrationTest {
 
     private static String json(String v) {
         return v == null ? "null" : "\"" + v + "\"";
+    }
+
+    /**
+     * 같은 자원의 PUT 두 개가 칸마다 섞여 저장되지 않는다 — 결과는 어느 한 요청 그대로다(통째 교체). 결정적으로 본다: 다른 트랜잭션이 이메일만
+     * 바꾼 채 커밋하지 않고, 이름만 바꾼 PUT(이메일은 화면의 옛 값 그대로 실음)이 그 회원 행에서 기다리는 것을 확인한 뒤 커밋한다.
+     * 바뀐 칸만 쓰는 UPDATE(@DynamicUpdate)는 잠그지 않고 읽으면 이 PUT 의 이메일을 "바뀌지 않음" 으로 보고 빼 버려 두 요청이 섞인다.
+     */
+    @Test
+    @DisplayName("내 정보 PUT 이 겹쳐도 칸마다 섞이지 않는다 — 늦은 PUT 의 본문 그대로")
+    void concurrentProfilePutsDoNotMerge() throws Exception {
+        mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
+                .content(body("기존 이름", "old@example.com", "010-0000-0000"))).andExpect(status().isOk());
+        byte[] id = UuidBinary.toBytes(customer.getId());
+
+        holdWhile(() -> jdbc.update("UPDATE customers SET email = 'new@example.com' WHERE id = ?", (Object) id),
+                () -> mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
+                        .content(body("새 이름", "old@example.com", "010-0000-0000"))).andReturn().getResponse().getStatus());
+
+        assertThat(row()).containsEntry("name", "새 이름").containsEntry("email", "old@example.com");
+    }
+
+    @Test
+    @DisplayName("기본 배송지 PUT 이 겹쳐도 칸마다 섞이지 않는다 — 늦은 PUT 의 본문 그대로")
+    void concurrentAddressPutsDoNotMerge() throws Exception {
+        String path = "/api/v1/me/default-address";
+        mvc.perform(put(path).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"홍길동\",\"phone\":\"01012345678\",\"postalCode\":\"06236\",\"line1\":\"서울\",\"line2\":null}"))
+                .andExpect(status().isOk());
+        byte[] id = UuidBinary.toBytes(customer.getId());
+
+        holdWhile(() -> jdbc.update("UPDATE customers SET default_ship_to_line1 = '부산' WHERE id = ?", (Object) id),
+                () -> mvc.perform(put(path).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"김철수\",\"phone\":\"01012345678\",\"postalCode\":\"06236\",\"line1\":\"서울\",\"line2\":null}"))
+                        .andReturn().getResponse().getStatus());
+
+        assertThat(jdbc.queryForMap("SELECT default_ship_to_name, default_ship_to_line1 FROM customers WHERE id = ?", (Object) id))
+                .containsEntry("default_ship_to_name", "김철수").containsEntry("default_ship_to_line1", "서울");
+    }
+
+    /** 이 클래스의 await 는 둘이 만나는 장벽(먼저 countDown)이라 여기서는 쓰지 않는다 — 신호만 기다린다. */
+    private static void waitFor(java.util.concurrent.CountDownLatch latch) {
+        try {
+            if (!latch.await(20, java.util.concurrent.TimeUnit.SECONDS)) {
+                throw new IllegalStateException("기다리다 시간 초과");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** other 를 커밋하지 않은 채 put 을 보내고, put 이 회원 행에서 기다리는 것을 확인한 뒤 other 를 커밋한다. put 은 200 이어야 한다. */
+    private void holdWhile(Runnable other, java.util.concurrent.Callable<Integer> put) throws Exception {
+        java.util.concurrent.CountDownLatch written = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch commit = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CompletableFuture<Void> holder = java.util.concurrent.CompletableFuture.runAsync(() ->
+                transactions.executeWithoutResult(status -> {
+                    other.run();
+                    written.countDown();
+                    waitFor(commit);
+                }));
+        waitFor(written);
+        java.util.concurrent.CompletableFuture<Integer> putting = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try {
+                return put.call();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        org.awaitility.Awaitility.await("PUT 이 회원 행에서 기다리지 않았다").atMost(java.time.Duration.ofSeconds(10)).until(() ->
+                jdbc.queryForObject("""
+                        SELECT COUNT(*) FROM information_schema.PROCESSLIST
+                         WHERE COMMAND = 'Query' AND ID <> CONNECTION_ID()
+                           AND LOWER(INFO) LIKE '%from customers %for update%'""", Long.class) > 0);
+        commit.countDown();
+        holder.get(20, java.util.concurrent.TimeUnit.SECONDS);
+        assertThat(putting.get(20, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo(200);
     }
 
     @Test
@@ -101,7 +179,7 @@ class ProfileIntegrationTest {
                 .andExpect(jsonPath("$.data.email").value("hong@example.com"));
         assertThat(row()).containsEntry("name", "홍길동").containsEntry("email", "hong@example.com")
                 .containsEntry("phone_number", "010-1234-5678");
-        assertThat(jdbc.queryForObject("SELECT display_name FROM customers WHERE id = ?", String.class, customer.getId()))
+        assertThat(jdbc.queryForObject("SELECT display_name FROM customers WHERE id = ?", String.class, UuidBinary.toBytes(customer.getId())))
                 .isEqualTo("카카오닉네임");
     }
 
@@ -149,7 +227,7 @@ class ProfileIntegrationTest {
         mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
                         .content(body(emoji.repeat(50), null, null)))
                 .andExpect(status().isOk());
-        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(name) FROM customers WHERE id = ?", Integer.class, customer.getId()))
+        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(name) FROM customers WHERE id = ?", Integer.class, UuidBinary.toBytes(customer.getId())))
                 .isEqualTo(50);
 
         mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
@@ -164,7 +242,7 @@ class ProfileIntegrationTest {
                         .content(body(nfd, null, null)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.name").value(nfc));
-        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(name) FROM customers WHERE id = ?", Integer.class, customer.getId()))
+        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(name) FROM customers WHERE id = ?", Integer.class, UuidBinary.toBytes(customer.getId())))
                 .isEqualTo(50);
     }
 
@@ -179,7 +257,7 @@ class ProfileIntegrationTest {
         mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
                         .content(body(null, longest, "0".repeat(20))))
                 .andExpect(status().isOk());
-        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(email) FROM customers WHERE id = ?", Integer.class, customer.getId()))
+        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(email) FROM customers WHERE id = ?", Integer.class, UuidBinary.toBytes(customer.getId())))
                 .isEqualTo(255);
 
         // 한 글자만 더 붙인다. 형식은 그대로 유효하고 길이만 넘는다 — 거절하는 규칙이 크기 규칙임이 이 한 쌍으로 갈린다.
@@ -189,7 +267,7 @@ class ProfileIntegrationTest {
                         .content(body(null, tooLong, null)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.details.violations[?(@.field == 'email')]").exists());
-        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(email) FROM customers WHERE id = ?", Integer.class, customer.getId()))
+        assertThat(jdbc.queryForObject("SELECT CHAR_LENGTH(email) FROM customers WHERE id = ?", Integer.class, UuidBinary.toBytes(customer.getId())))
                 .isEqualTo(255);   // 거절된 요청은 아무것도 안 바꾼다
 
         mvc.perform(put(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken)).contentType(MediaType.APPLICATION_JSON)
@@ -264,7 +342,7 @@ class ProfileIntegrationTest {
                 .andExpect(status().isOk());
 
         // 두 트랜잭션이 **둘 다 읽은 뒤에** 각자 쓰게 만든다. 순서대로 돌면 늦게 커밋한 쪽이 이겨 버그가 안 드러난다.
-        long id = customer.getId();
+        UUID id = customer.getId();
         java.util.concurrent.CountDownLatch bothLoaded = new java.util.concurrent.CountDownLatch(2);
         java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(2);
         java.util.List<Throwable> failures = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
@@ -291,7 +369,7 @@ class ProfileIntegrationTest {
         assertThat(failures).as("두 저장 모두 예외 없이 끝난다").isEmpty();
 
         Map<String, Object> saved = jdbc.queryForMap(
-                "SELECT name, email, phone_number, default_ship_to_name, default_ship_to_line1 FROM customers WHERE id = ?", id);
+                "SELECT name, email, phone_number, default_ship_to_name, default_ship_to_line1 FROM customers WHERE id = ?", UuidBinary.toBytes(id));
         assertThat(saved).as("프로필 저장이 배송지를 되돌리지 않았다")
                 .containsEntry("default_ship_to_name", "김철수").containsEntry("default_ship_to_line1", "부산");
         assertThat(saved).as("배송지 저장이 프로필을 되돌리지 않았다")

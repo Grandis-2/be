@@ -55,6 +55,18 @@ public class RevocationRedisChecker implements RevocationChecker {
         return !claims.issuedAt().isAfter(parseEpochSeconds(notBefore));
     }
 
+    /** sid 표식 값이 {@link AuthRedisKeys#REPLACED_SESSION_MARK} 인가. 폐기된 요청에서만 불려 정상 요청의 왕복은 늘지 않는다. */
+    @Override
+    public boolean isReplaced(TokenClaims claims) {
+        String mark;
+        try {
+            mark = redis.opsForValue().get(AuthRedisKeys.revokedSession(claims.sessionId()));
+        } catch (RuntimeException e) {
+            throw new RevocationCheckFailedException(e);
+        }
+        return AuthRedisKeys.REPLACED_SESSION_MARK.equals(mark);
+    }
+
     private static Instant parseEpochSeconds(String value) {
         // 두 단계가 서로 다른 예외로 실패한다: parseLong 은 NumberFormatException, ofEpochSecond 는 범위 밖에서 DateTimeException.
         // 실측(garbageNotBeforeIsRevoked): "99999999999999999" 는 long 이지만 Instant 범위(≈3.16e16) 밖이라 DateTimeException.

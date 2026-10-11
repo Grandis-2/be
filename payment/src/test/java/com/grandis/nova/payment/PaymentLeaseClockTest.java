@@ -1,5 +1,6 @@
 package com.grandis.nova.payment;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.jpa.StorageClock;
 import com.grandis.nova.payment.domain.model.Outcome;
 import com.grandis.nova.payment.domain.model.PaymentTransaction;
@@ -77,6 +78,6 @@ class PaymentLeaseClockTest {
 
     private long secondsFromDatabaseNow(String column, ClaimedTransaction claimed) {
         return jdbcTemplate.queryForObject("SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(6), " + column
-                + ") FROM payment_transactions WHERE id = ?", Long.class, claimed.transaction().id());
+                + ") FROM payment_transactions WHERE id = ?", Long.class, UuidBinary.toBytes(claimed.transaction().id()));
     }
 }

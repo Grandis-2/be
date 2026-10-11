@@ -2,8 +2,10 @@ package com.grandis.nova.common.security.chain;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -51,6 +53,8 @@ import org.springframework.web.context.WebApplicationContext;
 @DisplayName("SecurityFilterChain (인가 규칙 · 폐기 조회 실패 정책 · 응답 봉투)")
 class SecurityChainTest {
 
+    private static final String CUSTOMER_ID = "0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d";
+
     @org.springframework.test.context.DynamicPropertySource
     static void keys(org.springframework.test.context.DynamicPropertyRegistry registry) {
         com.grandis.nova.common.security.TestKeys.register(registry);
@@ -72,7 +76,7 @@ class SecurityChainTest {
                 .addFilters(requestIdFilter, springSecurityFilterChain)   // 서블릿 필터 순서 그대로: traceId → 보안 체인
                 .build();
         UUID sid = UUID.randomUUID();
-        user = provider.create("101", Role.USER, sid, TokenType.ACCESS);
+        user = provider.create(CUSTOMER_ID, Role.USER, sid, TokenType.ACCESS);
         admin = provider.create("admin", Role.ADMIN, UUID.randomUUID(), TokenType.ACCESS);
         when(checker.isRevoked(any())).thenReturn(false);
     }
@@ -118,11 +122,33 @@ class SecurityChainTest {
     }
 
     @Test
-    @DisplayName("USER 토큰으로 /me 는 200 이고 @CurrentCustomerId 가 101")
+    @DisplayName("새 로그인에 밀린 세션의 토큰은 401 details.reason SESSION_REPLACED · 이유 조회가 안 되면 이유 없는 401 · 그냥 폐기면 이유 없음")
+    void replacedSessionCarriesReason() throws Exception {
+        when(checker.isRevoked(any())).thenReturn(true);
+        when(checker.isReplaced(any())).thenReturn(true);
+        mvc.perform(post("/api/v1/preorders").header(H, BearerTokens.value(user)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"))
+                .andExpect(jsonPath("$.error.details.reason").value("SESSION_REPLACED"));
+
+        when(checker.isReplaced(any())).thenThrow(new RevocationCheckFailedException(new RuntimeException("down")));
+        mvc.perform(post("/api/v1/preorders").header(H, BearerTokens.value(user)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.details").doesNotExist());
+
+        reset(checker);
+        when(checker.isRevoked(any())).thenReturn(true);
+        mvc.perform(post("/api/v1/preorders").header(H, BearerTokens.value(user)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.details").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("USER 토큰으로 /me 는 200 이고 @CurrentCustomerId 가 토큰의 회원 id")
     void userMe() throws Exception {
         mvc.perform(get("/api/v1/me").header(H, BearerTokens.value(user)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.customerId").value(101));
+                .andExpect(jsonPath("$.data.customerId").value(CUSTOMER_ID));
     }
 
     @Test
@@ -135,8 +161,8 @@ class SecurityChainTest {
     }
 
     @Test
-    @DisplayName("USER 토큰인데 sub 가 십진수가 아니면 /me 는 500 이 아니라 401")
-    void userTokenWithNonNumericSubject() throws Exception {
+    @DisplayName("USER 토큰인데 sub 가 UUID 가 아니면 /me 는 500 이 아니라 401")
+    void userTokenWithNonUuidSubject() throws Exception {
         String odd = provider.create("abc", Role.USER, UUID.randomUUID(), TokenType.ACCESS);
         mvc.perform(get("/api/v1/me").header(H, BearerTokens.value(odd)))
                 .andExpect(status().isUnauthorized())
@@ -257,7 +283,7 @@ class SecurityChainTest {
         mvc.perform(put("/api/v1/me/default-address").header(H, BearerTokens.value(user)))
                 .andExpect(status().isUnauthorized());
         // 대조군: Redis 가 살아 있으면 둘 다 통과한다 — 401 이 인가 규칙이 아니라 닫는 경로 판정에서 왔다
-        org.mockito.Mockito.reset(checker);
+        reset(checker);
         when(checker.isRevoked(any())).thenReturn(false);
         mvc.perform(post("/api/v1/admin/preorders/1/cancel").header(H, BearerTokens.value(admin))).andExpect(status().isOk());
         mvc.perform(put("/api/v1/me/default-address").header(H, BearerTokens.value(user))).andExpect(status().isOk());
@@ -304,5 +330,58 @@ class SecurityChainTest {
                 .andExpect(header().string("X-Content-Type-Options", "nosniff"))
                 .andExpect(header().string("X-Frame-Options", "DENY"));
         // HSTS 는 HTTPS 응답에만 붙는다(Spring Security 문서, RFC 6797). MockMvc 는 http 라 없어야 정상 — CloudFront/ALB 뒤 TLS 종료 환경은 이식 때 확인
+    }
+
+    // ── CORS: 프론트(grandis-nova.link · www)와 API 의 오리진이 다르다. 허용 목록은 common:cors 의 기본값 ──
+    private static final String FRONT = "https://grandis-nova.link";
+
+    @Test
+    @DisplayName("CORS: 허용 오리진의 사전 요청은 토큰 없이도 200 — 인증 전에 답하고 자격 증명 · 헤더를 허용한다")
+    void corsPreflightFromFrontPassesWithoutToken() throws Exception {
+        mvc.perform(options("/api/v1/me").header("Origin", FRONT)
+                        .header("Access-Control-Request-Method", "PATCH")
+                        .header("Access-Control-Request-Headers", "authorization,content-type,idempotency-key"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin", FRONT))
+                .andExpect(header().string("Access-Control-Allow-Credentials", "true"))
+                .andExpect(header().string("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE"))
+                .andExpect(header().string("Access-Control-Allow-Headers", "authorization, content-type, idempotency-key"))
+                .andExpect(header().string("Access-Control-Max-Age", "3600"));
+    }
+
+    @Test
+    @DisplayName("CORS: 목록 밖 오리진 · 허용하지 않은 헤더의 사전 요청은 403 이고 허용 헤더가 없다")
+    void corsPreflightFromOtherOriginIsRejected() throws Exception {
+        mvc.perform(options("/api/v1/me").header("Origin", "https://evil.example")
+                        .header("Access-Control-Request-Method", "GET"))
+                .andExpect(status().isForbidden())
+                .andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
+        mvc.perform(options("/api/v1/me").header("Origin", FRONT)
+                        .header("Access-Control-Request-Method", "GET")
+                        .header("Access-Control-Request-Headers", "x-unknown"))
+                .andExpect(status().isForbidden())
+                .andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
+    }
+
+    @Test
+    @DisplayName("CORS: 허용 오리진의 실제 요청은 응답에 오리진 · 노출 헤더가 붙고, 401 에도 붙어 프론트가 본문(이유)을 읽는다")
+    void corsActualRequestCarriesHeadersEvenOn401() throws Exception {
+        mvc.perform(get("/api/v1/me").header("Origin", FRONT).header(H, BearerTokens.value(user)))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin", FRONT))
+                .andExpect(header().string("Access-Control-Allow-Credentials", "true"))
+                .andExpect(header().string("Access-Control-Expose-Headers", "Location, Retry-After, X-Idempotent-Replay, X-Request-Id"));
+        mvc.perform(get("/api/v1/me").header("Origin", "https://www.grandis-nova.link"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string("Access-Control-Allow-Origin", "https://www.grandis-nova.link"))
+                .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
+    }
+
+    @Test
+    @DisplayName("CORS: 목록 밖 오리진의 실제 요청은 403 으로 막고 컨트롤러에 닿지 않는다")
+    void corsActualRequestFromOtherOriginIsRejected() throws Exception {
+        mvc.perform(get("/api/v1/me").header("Origin", "https://evil.example").header(H, BearerTokens.value(user)))
+                .andExpect(status().isForbidden())
+                .andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
     }
 }

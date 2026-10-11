@@ -29,6 +29,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 /** 관리자 동기화 작업 조회 · 재처리. */
 @Service
@@ -75,29 +76,29 @@ public class SyncJobAdminService {
     }
 
     @Transactional(readOnly = true)
-    public SyncJobView findOne(Long syncJobId) {
+    public SyncJobView findOne(UUID syncJobId) {
         PreorderSyncJob job = syncJobs.findById(syncJobId)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.SYNC_JOB_NOT_FOUND));
         return views(List.of(job)).getFirst();
     }
 
-    public SyncJobView reprocess(Long syncJobId, String requestedBy) {
+    public SyncJobView reprocess(UUID syncJobId, String requestedBy) {
         return views(List.of(reprocessor.reprocess(syncJobId, requestedBy))).getFirst();
     }
 
     /**
      * 대상을 골라 바로 돌려주고, 이 인스턴스가 초당 ratePerSecond 건씩 재처리 요청을 기록한다(한 번에 최대 MAX_BATCH_SIZE).
-     * syncJobIds 를 비우면 DEAD_LETTER 인 REGISTER 를 id 순으로. 남은 것은 다시 요청하면 이어진다.
+     * syncJobIds 를 비우면 DEAD_LETTER 인 REGISTER 를 만든 순으로. 남은 것은 다시 요청하면 이어진다.
      * 재처리 조건 밖이거나 없는 작업은 건너뛴 수로 세고, errorCodeFilter 에 맞지 않는 작업은 세지 않는다.
      */
-    public BatchReprocess reprocessBatch(List<Long> syncJobIds, String errorCodeFilter, int ratePerSecond,
+    public BatchReprocess reprocessBatch(List<UUID> syncJobIds, String errorCodeFilter, int ratePerSecond,
                                          String requestedBy) {
         List<ReprocessCandidate> candidates;
         int missing = 0;
         if (syncJobIds == null || syncJobIds.isEmpty()) {
             candidates = candidateReader.findDeadLetters(errorCodeFilter, MAX_BATCH_SIZE);
         } else {
-            List<Long> ids = syncJobIds.stream().distinct().toList();
+            List<UUID> ids = syncJobIds.stream().distinct().toList();
             if (ids.size() > MAX_BATCH_SIZE) {
                 throw new IllegalArgumentException("한 번에 " + MAX_BATCH_SIZE + " 건까지다: " + ids.size());
             }
@@ -107,7 +108,7 @@ public class SyncJobAdminService {
                 candidates = candidates.stream().filter(c -> errorCodeFilter.equals(c.lastErrorCode())).toList();
             }
         }
-        List<Long> targets = candidates.stream()
+        List<UUID> targets = candidates.stream()
                 .filter(ReprocessCandidate::reprocessable)
                 .map(ReprocessCandidate::syncJobId)
                 .toList();
@@ -118,9 +119,9 @@ public class SyncJobAdminService {
                 (targets.size() + ratePerSecond - 1L) / ratePerSecond);
     }
 
-    private void reprocessPaced(List<Long> targets, int ratePerSecond, String requestedBy) {
+    private void reprocessPaced(List<UUID> targets, int ratePerSecond, String requestedBy) {
         Duration interval = Duration.ofNanos(Duration.ofSeconds(1).toNanos() / ratePerSecond);
-        for (Long syncJobId : targets) {
+        for (UUID syncJobId : targets) {
             try {
                 reprocessor.reprocess(syncJobId, requestedBy);
             } catch (BusinessException e) {
@@ -147,19 +148,19 @@ public class SyncJobAdminService {
     }
 
     private List<SyncJobView> views(List<PreorderSyncJob> jobs) {
-        Map<Long, PreorderSnapshot> owners = preordersOf(jobs);
-        Map<Long, List<SyncAttempt>> attempts = syncAttempts.findByJobIds(ids(jobs));
+        Map<UUID, PreorderSnapshot> owners = preordersOf(jobs);
+        Map<UUID, List<SyncAttempt>> attempts = syncAttempts.findByJobIds(ids(jobs));
         return jobs.stream()
                 .map(job -> new SyncJobView(job, owners.get(job.getPreorderId()).preorderToken(),
                         attempts.getOrDefault(job.getId(), List.of())))
                 .toList();
     }
 
-    private Map<Long, PreorderSnapshot> preordersOf(Collection<PreorderSyncJob> jobs) {
+    private Map<UUID, PreorderSnapshot> preordersOf(Collection<PreorderSyncJob> jobs) {
         return preorders.findAllById(jobs.stream().map(PreorderSyncJob::getPreorderId).distinct().toList());
     }
 
-    private List<Long> ids(Collection<PreorderSyncJob> jobs) {
+    private List<UUID> ids(Collection<PreorderSyncJob> jobs) {
         return jobs.stream().map(PreorderSyncJob::getId).toList();
     }
 }

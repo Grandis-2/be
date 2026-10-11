@@ -1,5 +1,6 @@
 package com.grandis.nova.common.outbox;
 
+import com.grandis.nova.common.UuidBinary;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.RowMapper;
@@ -17,6 +18,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 서비스 아웃박스 표의 읽기 · 쓰기. 표 이름을 모르는 공통 코드라 엔티티 대신 JDBC 로 쓴다.
@@ -50,7 +52,7 @@ class OutboxStore implements InitializingBean {
         }
     }
 
-    Long insert(String eventId, String aggregateType, Long aggregateId, String eventType, String payload,
+    Long insert(String eventId, String aggregateType, UUID aggregateId, String eventType, String payload,
                 Instant createdAt) {
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.sql("INSERT INTO " + table
@@ -58,7 +60,7 @@ class OutboxStore implements InitializingBean {
                         + " VALUES (:eventId, :aggregateType, :aggregateId, :eventType, :payload, :createdAt)")
                 .param("eventId", eventId)
                 .param("aggregateType", aggregateType)
-                .param("aggregateId", aggregateId)
+                .param("aggregateId", UuidBinary.toBytes(aggregateId))
                 .param("eventType", eventType)
                 .param("payload", payload)
                 .param("createdAt", utc(createdAt))
@@ -74,6 +76,21 @@ class OutboxStore implements InitializingBean {
     }
 
     /** 발행 완료 표시. 이미 채워졌으면 바꾸지 않는다. */
+    /**
+     * 발행이 끝나고 cutoff 보다 먼저 발행한 행을 limit 건까지 지운다. 미발행 행은 건드리지 않는다.
+     * 정렬을 미발행 인덱스(published_at, publish_attempts, id) 순서와 맞춰 그 범위만 읽는다 — id 순이면 기본 키를 훑어
+     * 지울 행이 적은 마지막 묶음이 표 전체를 읽는다. 한 번에 지우는 양을 묶어 잠금 · 복제 지연을 짧게 둔다.
+     *
+     * @return 지운 행 수. limit 보다 작으면 더 지울 행이 없다
+     */
+    int deletePublishedBefore(Instant cutoff, int limit) {
+        return jdbc.sql("DELETE FROM " + table + " WHERE published_at IS NOT NULL AND published_at < :cutoff"
+                        + " ORDER BY published_at, publish_attempts, id LIMIT :limit")
+                .param("cutoff", utc(cutoff))
+                .param("limit", limit)
+                .update();
+    }
+
     int markPublished(Long id, Instant now) {
         return jdbc.sql("UPDATE " + table + " SET published_at = :now WHERE id = :id AND published_at IS NULL")
                 .param("now", utc(now))
@@ -163,7 +180,7 @@ class OutboxStore implements InitializingBean {
 
     private static OutboxRow toRow(ResultSet rs, int rowNum) throws SQLException {
         return new OutboxRow(rs.getLong("id"), rs.getString("event_id"), rs.getString("aggregate_type"),
-                rs.getLong("aggregate_id"), rs.getString("event_type"), rs.getString("payload"),
+                UuidBinary.fromBytes(rs.getBytes("aggregate_id")), rs.getString("event_type"), rs.getString("payload"),
                 rs.getInt("publish_attempts"), instant(rs, "created_at"), instant(rs, "published_at"));
     }
 }

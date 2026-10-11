@@ -9,8 +9,8 @@ import { Counter } from 'k6/metrics';
 import { issueAdmissionTicket } from './admission-ticket.js';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8083';
-const PRODUCT_ID = Number(__ENV.PRODUCT_ID);
-const OPTION_ID = Number(__ENV.OPTION_ID);
+const PRODUCT_ID = __ENV.PRODUCT_ID;
+const OPTION_ID = __ENV.OPTION_ID;
 const TICKET_SECRET = __ENV.TICKET_SECRET;
 const RATE = Number(__ENV.RATE || 500);
 const DURATION_SECONDS = Number(__ENV.DURATION_SECONDS || 10);
@@ -23,7 +23,7 @@ const members = new SharedArray('members', () => open(__ENV.TOKENS_FILE)
     .filter((line) => line.length > 0 && !line.startsWith('#'))
     .map((line) => {
       const [customerId, accessToken] = line.split(',');
-      return { customerId: Number(customerId), accessToken };
+      return { customerId, accessToken };
     }));
 
 const acceptErrors = new Counter('accept_errors');

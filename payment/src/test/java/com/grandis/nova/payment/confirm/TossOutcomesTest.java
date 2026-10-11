@@ -16,6 +16,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.Instant;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -23,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TossOutcomesTest {
 
     static final Instant APPROVED_AT = Instant.parse("2026-10-02T01:02:03Z");
-    static final PaymentTransaction HELD = PaymentTransaction.openCapture(PaymentTarget.order(7L), Money.won(15000),
+    static final PaymentTransaction HELD = PaymentTransaction.openCapture(PaymentTarget.order(UUID.fromString("0199a3c4-0000-7000-8000-000000000007")), Money.won(15000),
             Instant.parse("2026-10-02T01:00:00Z"));
 
     @Test
@@ -35,13 +36,13 @@ class TossOutcomesTest {
     @Test
     void doneWithDifferentAmountIsUnknown() {
         assertThat(TossOutcomes.of(succeeded(14000, APPROVED_AT), HELD)).isEqualTo(new Outcome.Unknown(
-                new ProviderError(TossOutcomes.AMOUNT_MISMATCH, UnknownReason.MISMATCHED_RESPONSE.name())));
+                ProviderError.unknown(TossOutcomes.AMOUNT_MISMATCH, UnknownReason.MISMATCHED_RESPONSE.name())));
     }
 
     @Test
     void doneWithoutApprovedAtIsUnknown() {
         assertThat(TossOutcomes.of(succeeded(15000, null), HELD)).isEqualTo(new Outcome.Unknown(
-                new ProviderError(TossOutcomes.MISSING_APPROVED_AT, UnknownReason.UNREADABLE_RESPONSE.name())));
+                ProviderError.unknown(TossOutcomes.MISSING_APPROVED_AT, UnknownReason.UNREADABLE_RESPONSE.name())));
     }
 
     @Test
@@ -59,14 +60,14 @@ class TossOutcomesTest {
                         TossOutcomes.RETRY_AFTER));
     }
 
-    // 복구(NV-102)가 푸는 방법을 고르도록 불명 사유는 늘 문구 칸에 남는다. 토스 코드가 없으면 사유가 코드 칸에도 들어간다
+    // 복구(NV-102)가 푸는 방법을 고르도록 불명 사유 이름은 늘 문구 칸과 사유 칸에 남는다. 토스 코드가 없으면 사유가 코드 칸에도 들어간다
     @ParameterizedTest
     @EnumSource(UnknownReason.class)
     void unknownRecordsReason(UnknownReason reason) {
         assertThat(TossOutcomes.of(new TossCommandResult.Unknown(reason, null), HELD))
-                .isEqualTo(new Outcome.Unknown(new ProviderError(reason.name(), reason.name())));
+                .isEqualTo(new Outcome.Unknown(new ProviderError(reason.name(), reason.name(), reason.name())));
         assertThat(TossOutcomes.of(new TossCommandResult.Unknown(reason, "ALREADY_PROCESSED_PAYMENT"), HELD))
-                .isEqualTo(new Outcome.Unknown(new ProviderError("ALREADY_PROCESSED_PAYMENT", reason.name())));
+                .isEqualTo(new Outcome.Unknown(new ProviderError("ALREADY_PROCESSED_PAYMENT", reason.name(), reason.name())));
     }
 
     @Test

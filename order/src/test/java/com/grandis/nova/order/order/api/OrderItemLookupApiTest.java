@@ -16,6 +16,9 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.UUID;
+
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -39,7 +42,7 @@ class OrderItemLookupApiTest {
 
     OrderFixtures fixtures;
     PlacedOrders orders;
-    Long customerId;
+    UUID customerId;
 
     @BeforeEach
     void setUp() {
@@ -53,16 +56,19 @@ class OrderItemLookupApiTest {
     void ownItemReturnsFacts() throws Exception {
         Order order = orders.place(customerId);
         fixtures.forceStatus(order.id(), "DELIVERED");
-        Long itemId = itemOf(order);
+        UUID itemId = itemOf(order);
         var row = jdbcTemplate.queryForMap(
-                "SELECT product_id, option_id, option_title_snapshot FROM order_items WHERE id = ?", itemId);
+                """
+                SELECT BIN_TO_UUID(product_id) AS product_id, BIN_TO_UUID(option_id) AS option_id, option_title_snapshot
+                  FROM order_items WHERE id = ?
+                """, bytes(itemId));
 
         mockMvc.perform(item(itemId).with(me()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.orderItemId").value(itemId))
-                .andExpect(jsonPath("$.data.orderId").value(order.id()))
-                .andExpect(jsonPath("$.data.productId").value(((Number) row.get("product_id")).longValue()))
-                .andExpect(jsonPath("$.data.optionId").value(((Number) row.get("option_id")).longValue()))
+                .andExpect(jsonPath("$.data.orderItemId").value(itemId.toString()))
+                .andExpect(jsonPath("$.data.orderId").value(order.id().toString()))
+                .andExpect(jsonPath("$.data.productId").value(row.get("product_id")))
+                .andExpect(jsonPath("$.data.optionId").value(row.get("option_id")))
                 .andExpect(jsonPath("$.data.optionTitle").value(row.get("option_title_snapshot")))
                 .andExpect(jsonPath("$.data.orderStatus").value("DELIVERED"))
                 .andExpect(jsonPath("$.data.orderSource").value("PREORDER"));
@@ -91,7 +97,7 @@ class OrderItemLookupApiTest {
 
     @Test
     void missingItemIsNotFound() throws Exception {
-        mockMvc.perform(item(987654321L).with(me()))
+        mockMvc.perform(item(UUID.randomUUID()).with(me()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("ORDER_ITEM_NOT_FOUND"));
     }
@@ -122,11 +128,12 @@ class OrderItemLookupApiTest {
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
     }
 
-    private Long itemOf(Order order) {
-        return jdbcTemplate.queryForObject("SELECT id FROM order_items WHERE order_id = ?", Long.class, order.id());
+    private UUID itemOf(Order order) {
+        return UUID.fromString(jdbcTemplate.queryForObject(
+                "SELECT BIN_TO_UUID(id) FROM order_items WHERE order_id = ?", String.class, bytes(order.id())));
     }
 
-    private static MockHttpServletRequestBuilder item(Long orderItemId) {
+    private static MockHttpServletRequestBuilder item(UUID orderItemId) {
         return get("/internal/order-items/{orderItemId}", orderItemId);
     }
 

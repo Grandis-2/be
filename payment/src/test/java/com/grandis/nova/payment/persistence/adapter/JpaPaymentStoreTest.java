@@ -19,6 +19,7 @@ import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -65,8 +66,8 @@ class JpaPaymentStoreTest {
         PaymentTransaction refund = PaymentTransaction.openRefund(Payment.approved(target, providerPayment, AMOUNT, NOW), NOW);
 
         transactionTemplate.executeWithoutResult(s -> {
-            Long captureId = transactionWriter.insert(capture).id();
-            Long refundId = transactionWriter.insert(refund).id();
+            UUID captureId = transactionWriter.insert(capture).id();
+            UUID refundId = transactionWriter.insert(refund).id();
             entityManager.clear();
 
             assertThat(transactionReader.findById(captureId).orElseThrow()).usingRecursiveComparison()

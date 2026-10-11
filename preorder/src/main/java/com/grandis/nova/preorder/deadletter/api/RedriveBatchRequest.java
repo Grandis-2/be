@@ -8,13 +8,14 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
- * @param deadLetterIds 비우면 조건(eventType · failureReason)에 맞는 되돌리기 대기 행을 id 순으로
+ * @param deadLetterIds 비우면 조건(eventType · failureReason)에 맞는 되돌리기 대기 행을 쌓인 순으로
  * @param failureReason 조건으로 고를 때 비우면 PROCESSING_FAILED
  */
 record RedriveBatchRequest(
-        @Size(max = DeadLetterAdminService.MAX_BATCH_SIZE) List<@NotNull Long> deadLetterIds,
+        @Size(max = DeadLetterAdminService.MAX_BATCH_SIZE) List<@NotNull UUID> deadLetterIds,
         String eventType,
         FailureReason failureReason,
         @Min(1) @Max(200) Integer ratePerSecond

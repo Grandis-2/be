@@ -2,6 +2,7 @@ package com.grandis.nova.order.config;
 
 import com.grandis.nova.order.client.payment.PaymentClient;
 import com.grandis.nova.order.client.payment.PaymentConfirmClient;
+import com.grandis.nova.order.client.catalog.CatalogClient;
 import com.grandis.nova.order.client.preorder.PreorderClient;
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.context.annotation.Bean;
@@ -14,6 +15,7 @@ import org.springframework.web.service.registry.ImportHttpServices;
  */
 @Configuration(proxyBeanMethods = false)
 @ImportHttpServices(group = "preorder", types = PreorderClient.class)
+@ImportHttpServices(group = "catalog", types = CatalogClient.class)
 @ImportHttpServices(group = "payment", types = PaymentClient.class)
 @ImportHttpServices(group = "payment-confirm", types = PaymentConfirmClient.class)
 public class HttpClientConfig {

@@ -25,6 +25,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 
+import static com.grandis.nova.waitingroom.support.TestIds.customerId;
+import static com.grandis.nova.waitingroom.support.TestIds.productKey;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** 운영값 관리자 API 를 실제 Redis 로 확인한다. 리더 반영은 제어 평면 시험이 본다. */
@@ -79,11 +81,11 @@ class WaitingroomAdminApiTest {
     @Test
     void 관리자만_쓸_수_있다() {
         client.get().uri(BASE + "/admission-rate").exchange().expectStatus().isUnauthorized();
-        client.get().uri(BASE + "/admission-rate").headers(headers -> headers.setBearerAuth(TestJwts.user("1", now)))
+        client.get().uri(BASE + "/admission-rate").headers(headers -> headers.setBearerAuth(TestJwts.user(customerId(1), now)))
                 .exchange().expectStatus().isForbidden();
-        client.put().uri(BASE + "/admission-rate").headers(headers -> headers.setBearerAuth(TestJwts.user("1", now)))
+        client.put().uri(BASE + "/admission-rate").headers(headers -> headers.setBearerAuth(TestJwts.user(customerId(1), now)))
                 .bodyValue(Map.of("globalCredit", 0)).exchange().expectStatus().isForbidden();
-        client.delete().uri(BASE + "/max-wait").headers(headers -> headers.setBearerAuth(TestJwts.user("1", now)))
+        client.delete().uri(BASE + "/max-wait").headers(headers -> headers.setBearerAuth(TestJwts.user(customerId(1), now)))
                 .exchange().expectStatus().isForbidden();
 
         assertThat(redis.opsForHash().size(RedisKeys.SETTINGS).block(WAIT)).isZero();
@@ -94,7 +96,7 @@ class WaitingroomAdminApiTest {
         put("/admission-rate", Map.of("globalCredit", 0.5)).exchange().expectStatus().isBadRequest().expectBody()
                 .jsonPath("$.error.details.field").isEqualTo("globalCredit");
         put("/max-wait", Map.of("seconds", "60")).exchange().expectStatus().isBadRequest();
-        put("/products/101/admission-rate", Map.of("cap", 1.9)).exchange().expectStatus().isBadRequest();
+        put("/products/" + productKey(101) + "/admission-rate", Map.of("cap", 1.9)).exchange().expectStatus().isBadRequest();
         put("/max-wait", Map.of("seconds", 60.0)).exchange().expectStatus().isBadRequest();
         put("/max-wait", Map.of("seconds", new BigInteger("9223372036854775808"))).exchange().expectStatus().isBadRequest();
         client.put().uri(BASE + "/admission-rate").headers(headers -> headers.setBearerAuth(TestJwts.admin(now)))
@@ -146,8 +148,8 @@ class WaitingroomAdminApiTest {
         put("/admission-rate", Map.of("globalCredit", OperationalSettingsAdmin.MAX_GLOBAL_CREDIT + 1)).exchange()
                 .expectStatus().isBadRequest();
         put("/admission-rate", Map.of()).exchange().expectStatus().isBadRequest();
-        put("/products/101/admission-rate", Map.of("cap", 0)).exchange().expectStatus().isBadRequest();
-        put("/products/0101/admission-rate", Map.of("cap", 5)).exchange().expectStatus().isBadRequest().expectBody()
+        put("/products/" + productKey(101) + "/admission-rate", Map.of("cap", 0)).exchange().expectStatus().isBadRequest();
+        put("/products/101/admission-rate", Map.of("cap", 5)).exchange().expectStatus().isBadRequest().expectBody()
                 .jsonPath("$.error.details.field").isEqualTo("productId");
         put("/max-wait", Map.of("seconds", 0)).exchange().expectStatus().isBadRequest();
 
@@ -157,28 +159,28 @@ class WaitingroomAdminApiTest {
     @Test
     void 모델별_상한과_최대_대기_시간을_정하면_줄_상한을_입장_속도로_계산해_보여_준다() {
         SalesWindow window = new SalesWindow(now.minusSeconds(60), now.plusSeconds(3_600));
-        TestSnapshots.put(snapshots, Map.of("101", ProductState.withQueue(5, 10, window, ProductState.UNLIMITED_CAP),
-                "202", ProductState.idle(window, ProductState.UNLIMITED_CAP)), new SnapshotMeta(100, 1, MaxWait.unlimited()));
+        TestSnapshots.put(snapshots, Map.of(productKey(101), ProductState.withQueue(5, 10, window, ProductState.UNLIMITED_CAP),
+                productKey(202), ProductState.idle(window, ProductState.UNLIMITED_CAP)), new SnapshotMeta(100, 1, MaxWait.unlimited()));
 
-        put("/products/101/admission-rate", Map.of("cap", 7)).exchange().expectStatus().isOk();
-        put("/products/303/admission-rate", Map.of("cap", 3)).exchange().expectStatus().isOk();
+        put("/products/" + productKey(101) + "/admission-rate", Map.of("cap", 7)).exchange().expectStatus().isOk();
+        put("/products/" + productKey(303) + "/admission-rate", Map.of("cap", 3)).exchange().expectStatus().isOk();
         put("/max-wait", Map.of("seconds", 60)).exchange().expectStatus().isOk().expectBody()
                 .jsonPath("$.data.maxWaitSeconds.value").isEqualTo(60)
-                .jsonPath("$.data.products[0].productId").isEqualTo("101")
+                .jsonPath("$.data.products[0].productId").isEqualTo(productKey(101))
                 .jsonPath("$.data.products[0].cap.value").isEqualTo(7)
                 .jsonPath("$.data.products[0].cap.source").isEqualTo("OPERATIONAL")
                 .jsonPath("$.data.products[0].queueLimit").isEqualTo(300)
-                .jsonPath("$.data.products[1].productId").isEqualTo("202")
+                .jsonPath("$.data.products[1].productId").isEqualTo(productKey(202))
                 .jsonPath("$.data.products[1].cap.value").isEqualTo(150)
                 .jsonPath("$.data.products[1].cap.source").isEqualTo("DEFAULT")
                 .jsonPath("$.data.products[1].queueLimit").isEqualTo(60)
-                .jsonPath("$.data.products[2].productId").isEqualTo("303")
+                .jsonPath("$.data.products[2].productId").isEqualTo(productKey(303))
                 // 판정 재료에 아직 없는 모델은 가장 낮은 속도로 잰다
                 .jsonPath("$.data.products[2].queueLimit").isEqualTo(60);
-        assertThat(setting("cap:101")).isEqualTo("7");
+        assertThat(setting("cap:" + productKey(101))).isEqualTo("7");
 
-        delete("/products/101/admission-rate").expectStatus().isOk();
-        delete("/products/303/admission-rate").expectStatus().isOk();
+        delete("/products/" + productKey(101) + "/admission-rate").expectStatus().isOk();
+        delete("/products/" + productKey(303) + "/admission-rate").expectStatus().isOk();
         delete("/max-wait").expectStatus().isOk().expectBody()
                 .jsonPath("$.data.maxWaitSeconds.value").isEmpty()
                 .jsonPath("$.data.products[0].queueLimit").isEmpty();
@@ -188,7 +190,7 @@ class WaitingroomAdminApiTest {
     @Test
     void 현황은_받은_판정_재료의_모델별_상태와_리더를_보여_준다() {
         SalesWindow window = new SalesWindow(now.minusSeconds(60), now.plusSeconds(3_600));
-        TestSnapshots.put(snapshots, Map.of("101", ProductState.withQueue(5, 10, window, 7)),
+        TestSnapshots.put(snapshots, Map.of(productKey(101), ProductState.withQueue(5, 10, window, 7)),
                 new SnapshotMeta(80, 2, MaxWait.of(Duration.ofSeconds(120))), 0.5);
         redis.opsForValue().set(RedisKeys.LEADER, "9|node-a").block(WAIT);
 
@@ -199,7 +201,7 @@ class WaitingroomAdminApiTest {
                 .jsonPath("$.data.globalCredit").isEqualTo(80)
                 .jsonPath("$.data.brakeFactor").isEqualTo(0.5)
                 .jsonPath("$.data.maxWaitSeconds").isEqualTo(120)
-                .jsonPath("$.data.products[0].productId").isEqualTo("101")
+                .jsonPath("$.data.products[0].productId").isEqualTo(productKey(101))
                 .jsonPath("$.data.products[0].phase").isEqualTo("OPEN")
                 .jsonPath("$.data.products[0].waiting").isEqualTo(10)
                 .jsonPath("$.data.products[0].credit").isEqualTo(5)

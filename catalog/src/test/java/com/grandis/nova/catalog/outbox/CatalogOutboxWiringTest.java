@@ -5,6 +5,7 @@ import com.grandis.nova.catalog.edit.PreorderProductChanged;
 import com.grandis.nova.catalog.registration.InStockProductRegistered;
 import com.grandis.nova.catalog.registration.PreorderProductRegistered;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.outbox.MessageTransport;
 import com.grandis.nova.common.outbox.OutboundMessage;
 import com.grandis.nova.common.outbox.OutboxWriter;
@@ -30,7 +31,6 @@ import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -41,7 +41,7 @@ import static org.mockito.BDDMockito.willAnswer;
  * catalog 가 공통 아웃박스(common:outbox)에 제대로 엮였는가 — 실제 마이그레이션의 catalog_outbox_events 위에서 본다.
  * 기록 · 발행 · 릴레이 동작 자체는 common:outbox 시험이 본다. 여기서는 catalog 의 표 · 종류 · 목적지 · payload 계약을 본다.
  *
- * payload 기준 문자열은 공통 모듈로 옮기기 전 catalog 의 전용 매퍼(JsonMapper.builder().build())가 낸 값이다(실측).
+ * payload 기준 문자열은 공통 모듈로 옮기기 전 catalog 의 전용 매퍼(JsonMapper.builder().build())가 내던 모양이다(id 는 UUID 문자열).
  * 옮긴 뒤에는 앱의 JsonMapper 빈이 쓴다 — 받는 쪽 계약이라 글자까지 같아야 한다.
  *
  * 릴레이는 전용 실행기가 짧은 주기로 돌게 한다(배선까지 본다). 다른 시험이 이 주기를 물려받지 않게 끝나면 컨텍스트를 닫는다.
@@ -55,9 +55,10 @@ class CatalogOutboxWiringTest {
     static final String PREORDER_PAYLOAD = "{\"campaign\":{\"opensAt\":\"2026-10-10T03:00:00.123456Z\",\"closesAt\":\"2026-10-13T03:00:00Z\"},"
             + "\"shipmentBatches\":[{\"batchNumber\":1,\"positionFrom\":1,\"positionTo\":100,\"estimatedShipStart\":\"2026-11-01\",\"estimatedShipEnd\":\"2026-11-07\"},"
             + "{\"batchNumber\":2,\"positionFrom\":101,\"positionTo\":null,\"estimatedShipStart\":\"2026-11-08\",\"estimatedShipEnd\":\"2026-11-14\"}]}";
-    static final String IN_STOCK_PAYLOAD = "{\"items\":[{\"optionId\":101,\"stockTotal\":5},{\"optionId\":102,\"stockTotal\":0}]}";
-    /** 상품 표와 잇지 않는 표라 상품 행 없이 대상 id 만 겹치지 않게 고른다. */
-    static final AtomicLong NEXT_PRODUCT = new AtomicLong(System.currentTimeMillis());
+    static final UUID FIRST_OPTION = UUID.fromString("0199b2c4-0000-7000-8000-000000000101");
+    static final UUID SECOND_OPTION = UUID.fromString("0199b2c4-0000-7000-8000-000000000102");
+    static final String IN_STOCK_PAYLOAD = "{\"items\":[{\"optionId\":\"" + FIRST_OPTION + "\",\"stockTotal\":5},"
+            + "{\"optionId\":\"" + SECOND_OPTION + "\",\"stockTotal\":0}]}";
 
     @Autowired OutboxWriter writer;
     @Autowired TransactionTemplate transactionTemplate;
@@ -77,15 +78,15 @@ class CatalogOutboxWiringTest {
     @Test
     @DisplayName("앱의 JsonMapper 가 쓰는 payload 는 공통 모듈로 옮기기 전 전용 매퍼의 값과 글자까지 같다")
     void payloadTextIsUnchanged() {
-        assertThat(jsonMapper.writeValueAsString(preorder(1L))).isEqualTo(PREORDER_PAYLOAD);
-        assertThat(jsonMapper.writeValueAsString(inStock(1L))).isEqualTo(IN_STOCK_PAYLOAD);
+        assertThat(jsonMapper.writeValueAsString(preorder(UUID.randomUUID()))).isEqualTo(PREORDER_PAYLOAD);
+        assertThat(jsonMapper.writeValueAsString(inStock(UUID.randomUUID()))).isEqualTo(IN_STOCK_PAYLOAD);
     }
 
-    /** preorder 가 먼저 정의한 회차 취소 이벤트 — 받는 쪽 레코드(PreorderCampaignCanceled(Long productId, String reason))와 같은 칸 이름 · 모양. */
+    /** preorder 가 먼저 정의한 회차 취소 이벤트 — 받는 쪽 레코드(PreorderCampaignCanceled(UUID productId, String reason))와 같은 칸 이름 · 모양. */
     @Test
     @DisplayName("회차 취소는 preorder-events 로 가고 payload 는 preorder 가 읽는 {productId, reason} 이다")
     void campaignCancelGoesToPreorderWithItsShape() {
-        Long productId = NEXT_PRODUCT.incrementAndGet();
+        UUID productId = UUID.randomUUID();
         String eventId = eventIdOf(transactionTemplate.execute(status -> writer.append(new PreorderCampaignCanceled(productId, "회차 운영 취소"))));
 
         await().atMost(TIMEOUT).until(() -> sentOf(eventId).isPresent());
@@ -93,13 +94,13 @@ class CatalogOutboxWiringTest {
         assertThat(message.destination()).isEqualTo("preorder-events");
         assertThat(message.eventType()).isEqualTo("PREORDER_CAMPAIGN_CANCELED");
         assertThat(jsonMapper.readTree(message.body()).get("payload"))
-                .isEqualTo(jsonMapper.readTree("{\"productId\":" + productId + ",\"reason\":\"회차 운영 취소\"}"));
+                .isEqualTo(jsonMapper.readTree("{\"productId\":\"" + productId + "\",\"reason\":\"회차 운영 취소\"}"));
     }
 
     @Test
     @DisplayName("사전예약 상품 변경은 preorder-events 로 가고 payload 는 빈 객체, 상품 id 는 봉투의 aggregateId 다")
     void productChangeGoesToPreorderWithEmptyPayload() {
-        Long productId = NEXT_PRODUCT.incrementAndGet();
+        UUID productId = UUID.randomUUID();
         String eventId = eventIdOf(transactionTemplate.execute(status -> writer.append(new PreorderProductChanged(productId))));
 
         await().atMost(TIMEOUT).until(() -> sentOf(eventId).isPresent());
@@ -109,21 +110,21 @@ class CatalogOutboxWiringTest {
         JsonNode envelope = jsonMapper.readTree(message.body());
         assertThat(envelope.get("payload")).isEqualTo(jsonMapper.readTree("{}"));
         assertThat(envelope.get("aggregateType").asString()).isEqualTo("PRODUCT");
-        assertThat(envelope.get("aggregateId").asLong()).isEqualTo(productId);
+        assertThat(envelope.get("aggregateId").asString()).isEqualTo(productId.toString());
     }
 
     @Test
     @DisplayName("catalog 메시지는 catalog_outbox_events 에 종류 · 대상 · payload 그대로 적히고 다른 서비스 표에는 적히지 않는다")
     void writesToCatalogTable() {
-        Long productId = NEXT_PRODUCT.incrementAndGet();
+        UUID productId = UUID.randomUUID();
         Long id = transactionTemplate.execute(status -> writer.append(preorder(productId)));
 
         Map<String, Object> row = jdbcTemplate.queryForMap(
-                "SELECT event_id, event_type, aggregate_type, aggregate_id, payload FROM catalog_outbox_events WHERE id = ?", id);
+                "SELECT event_id, event_type, aggregate_type, BIN_TO_UUID(aggregate_id) AS aggregate_id, payload FROM catalog_outbox_events WHERE id = ?", id);
         assertThat(row)
                 .containsEntry("event_type", "PREORDER_PRODUCT_REGISTERED")
                 .containsEntry("aggregate_type", "PRODUCT")
-                .containsEntry("aggregate_id", productId);
+                .containsEntry("aggregate_id", productId.toString());
         assertThat(jsonMapper.readTree((String) row.get("payload"))).isEqualTo(jsonMapper.readTree(PREORDER_PAYLOAD));
         for (String other : List.of("preorder_outbox_events", "order_outbox_events")) {
             assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM " + other + " WHERE event_id = ?", Integer.class, row.get("event_id")))
@@ -134,8 +135,8 @@ class CatalogOutboxWiringTest {
     @Test
     @DisplayName("커밋 직후 종류마다 정한 목적지로 봉투를 보낸다 — 사전예약은 preorder-events, 일반은 order-events")
     void publishesToEachDestination() {
-        Long preorderProduct = NEXT_PRODUCT.incrementAndGet();
-        Long inStockProduct = NEXT_PRODUCT.incrementAndGet();
+        UUID preorderProduct = UUID.randomUUID();
+        UUID inStockProduct = UUID.randomUUID();
         String preorderEvent = eventIdOf(transactionTemplate.execute(status -> writer.append(preorder(preorderProduct))));
         String inStockEvent = eventIdOf(transactionTemplate.execute(status -> writer.append(inStock(inStockProduct))));
 
@@ -146,7 +147,7 @@ class CatalogOutboxWiringTest {
         assertThat(toPreorder.eventType()).isEqualTo("PREORDER_PRODUCT_REGISTERED");
         JsonNode preorderEnvelope = jsonMapper.readTree(toPreorder.body());
         assertThat(preorderEnvelope.get("aggregateType").asString()).isEqualTo("PRODUCT");
-        assertThat(preorderEnvelope.get("aggregateId").asLong()).isEqualTo(preorderProduct);
+        assertThat(preorderEnvelope.get("aggregateId").asString()).isEqualTo(preorderProduct.toString());
         assertThat(preorderEnvelope.get("payload")).isEqualTo(jsonMapper.readTree(PREORDER_PAYLOAD));
 
         OutboundMessage toOrder = sentOf(inStockEvent).orElseThrow();
@@ -180,7 +181,7 @@ class CatalogOutboxWiringTest {
         jdbcTemplate.update("""
                 INSERT INTO catalog_outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, created_at)
                 VALUES (?, 'PRODUCT', ?, 'IN_STOCK_PRODUCT_REGISTERED', ?, UTC_TIMESTAMP(6) - INTERVAL 2 MINUTE)
-                """, eventId, NEXT_PRODUCT.incrementAndGet(), IN_STOCK_PAYLOAD);
+                """, eventId, UuidBinary.toBytes(UUID.randomUUID()), IN_STOCK_PAYLOAD);
 
         await().atMost(TIMEOUT).until(() -> sentOf(eventId).isPresent());
         await().atMost(TIMEOUT).until(() -> jdbcTemplate.queryForObject(
@@ -192,16 +193,16 @@ class CatalogOutboxWiringTest {
                 Integer.class, eventId)).as("실패 한 번이 표에 남는다").isEqualTo(1);
     }
 
-    private static PreorderProductRegistered preorder(Long productId) {
+    private static PreorderProductRegistered preorder(UUID productId) {
         return new PreorderProductRegistered(productId,
                 new PreorderProductRegistered.Campaign(Instant.parse("2026-10-10T03:00:00.123456Z"), Instant.parse("2026-10-13T03:00:00Z")),
                 List.of(new PreorderProductRegistered.ShipmentBatch(1, 1, 100L, LocalDate.parse("2026-11-01"), LocalDate.parse("2026-11-07")),
                         new PreorderProductRegistered.ShipmentBatch(2, 101, null, LocalDate.parse("2026-11-08"), LocalDate.parse("2026-11-14"))));
     }
 
-    private static InStockProductRegistered inStock(Long productId) {
+    private static InStockProductRegistered inStock(UUID productId) {
         return new InStockProductRegistered(productId,
-                List.of(new InStockProductRegistered.Item(101L, 5), new InStockProductRegistered.Item(102L, 0)));
+                List.of(new InStockProductRegistered.Item(FIRST_OPTION, 5), new InStockProductRegistered.Item(SECOND_OPTION, 0)));
     }
 
     private String eventIdOf(Long rowId) {

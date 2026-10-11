@@ -21,6 +21,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
+import static com.grandis.nova.waitingroom.support.TestIds.productKey;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -33,7 +34,7 @@ class ControlPartsTest {
     class 판정_재료_형식 {
 
         private final GatewaySnapshot snapshot = new GatewaySnapshot(
-                Map.of("101", ProductState.withQueue(5, 20, WINDOW, 8), "202", ProductState.idle(WINDOW, ProductState.UNLIMITED_CAP)),
+                Map.of(productKey(101), ProductState.withQueue(5, 20, WINDOW, 8), productKey(202), ProductState.idle(WINDOW, ProductState.UNLIMITED_CAP)),
                 new SnapshotMeta(100, 3, MaxWait.of(Duration.ofMinutes(10))), 1_790_000_000_000L);
 
         @Test
@@ -44,9 +45,9 @@ class ControlPartsTest {
         @Test
         void 깨진_모델은_그_모델만_빼고_전역_값이_없으면_통째로_안_읽는다() {
             Map<String, String> fields = new HashMap<>(SnapshotCodec.encode(snapshot));
-            fields.put("p:202", "broken");
+            fields.put("p:" + productKey(202), "broken");
 
-            assertThat(SnapshotCodec.decode(fields).orElseThrow().products()).containsOnlyKeys("101");
+            assertThat(SnapshotCodec.decode(fields).orElseThrow().products()).containsOnlyKeys(productKey(101));
             fields.remove(SnapshotCodec.GLOBAL_CREDIT);
             assertThat(SnapshotCodec.decode(fields)).isEmpty();
         }
@@ -59,12 +60,12 @@ class ControlPartsTest {
         void 없거나_깨진_값은_기본값이고_모델_상한은_양수만_받는다() {
             OperationalSettings settings = OperationalSettings.from(Map.of(
                     OperationalSettings.GLOBAL_CREDIT, "abc", OperationalSettings.MAX_WAIT_SEC, "-5",
-                    "cap:101", "7", "cap:202", "0", "cap:{x}", "9"), 100);
+                    "cap:" + productKey(101), "7", "cap:" + productKey(202), "0", "cap:{x}", "9"), 100);
 
             assertThat(settings.globalCredit()).isEqualTo(100);
             assertThat(settings.maxWait()).isEqualTo(MaxWait.unlimited());
-            assertThat(settings.capOf("101")).isEqualTo(7);
-            assertThat(settings.capOf("202")).isEqualTo(ProductState.UNLIMITED_CAP);
+            assertThat(settings.capOf(productKey(101))).isEqualTo(7);
+            assertThat(settings.capOf(productKey(202))).isEqualTo(ProductState.UNLIMITED_CAP);
         }
 
         @Test

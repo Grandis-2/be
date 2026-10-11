@@ -4,6 +4,8 @@ import com.grandis.nova.common.outbox.OutboxAggregateType;
 import com.grandis.nova.common.outbox.OutboxEventType;
 import com.grandis.nova.common.outbox.OutboxMessage;
 
+import java.util.UUID;
+
 /** 시험용 서비스가 발행하는 이벤트 종류 · aggregate · 메시지. 서비스 코드와 같은 모양(enum + sealed + record)이다. */
 public final class TestOutbox {
 
@@ -49,7 +51,7 @@ public final class TestOutbox {
     }
 
     /** @param itemId 봉투의 aggregateId 로만 나간다 */
-    public record ItemSettled(@com.fasterxml.jackson.annotation.JsonIgnore Long itemId, String result, Long sequence)
+    public record ItemSettled(@com.fasterxml.jackson.annotation.JsonIgnore UUID itemId, String result, Long sequence)
             implements Message {
 
         @Override
@@ -63,12 +65,12 @@ public final class TestOutbox {
         }
 
         @Override
-        public Long aggregateId() {
+        public UUID aggregateId() {
             return itemId;
         }
     }
 
-    public record ItemForgotten(Long itemId) implements Message {
+    public record ItemForgotten(UUID itemId) implements Message {
 
         @Override
         public UnregisteredType eventType() {
@@ -81,7 +83,7 @@ public final class TestOutbox {
         }
 
         @Override
-        public Long aggregateId() {
+        public UUID aggregateId() {
             return itemId;
         }
     }

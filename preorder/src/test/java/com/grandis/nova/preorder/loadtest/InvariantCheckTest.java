@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.loadtest;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
@@ -25,6 +26,7 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -55,7 +57,7 @@ class InvariantCheckTest {
         AcceptFixtures accepts = new AcceptFixtures(acceptService, fixtures, catalogClient);
         PreorderProduct product = fixtures.openPreorderProduct();
         accepts.stubCatalog(product);
-        List<Long> customers = IntStream.range(0, REQUESTS).mapToObj(i -> fixtures.customer()).toList();
+        List<UUID> customers = IntStream.range(0, REQUESTS).mapToObj(i -> fixtures.customer()).toList();
         long lockWaits = registry.get("preorder.campaign.lock.wait").timer().count();
 
         List<Outcome<Object>> outcomes =
@@ -78,30 +80,30 @@ class InvariantCheckTest {
         ShopFixtures fixtures = new ShopFixtures(jdbcTemplate);
         AcceptFixtures accepts = new AcceptFixtures(acceptService, fixtures, catalogClient);
         PreorderProduct product = fixtures.openPreorderProduct();
-        Long missing = accepts.accept(fixtures.customer(), product).preorder().id();
-        Long duplicated = accepts.accept(fixtures.customer(), product).preorder().id();
+        UUID missing = accepts.accept(fixtures.customer(), product).preorder().id();
+        UUID duplicated = accepts.accept(fixtures.customer(), product).preorder().id();
         accepts.accept(fixtures.customer(), product);
 
         jdbcTemplate.update("""
                 DELETE o FROM preorder_outbox_events o JOIN preorder_sync_jobs j ON j.id = o.aggregate_id
                  WHERE j.preorder_id = ? AND o.event_type = 'REGISTER_JOB_READY'
-                """, missing);
+                """, (Object) UuidBinary.toBytes(missing));
         jdbcTemplate.update("""
                 INSERT INTO preorder_outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, created_at)
                 SELECT UUID(), o.aggregate_type, o.aggregate_id, o.event_type, o.payload, o.created_at
                   FROM preorder_outbox_events o JOIN preorder_sync_jobs j ON j.id = o.aggregate_id
                  WHERE j.preorder_id = ? AND o.event_type = 'REGISTER_JOB_READY'
-                """, duplicated);
+                """, (Object) UuidBinary.toBytes(duplicated));
 
         assertThat(((Number) invariants(product.productId()).get("register_event_mismatch")).longValue())
                 .isEqualTo(2);
     }
 
     /** 세션 변수를 쓰므로 SET 과 SELECT 를 같은 커넥션에서 실행한다. */
-    private Map<String, Object> invariants(Long productId) {
+    private Map<String, Object> invariants(UUID productId) {
         return jdbcTemplate.execute((ConnectionCallback<Map<String, Object>>) connection -> {
             try (PreparedStatement set = connection.prepareStatement("SET @product_id = ?")) {
-                set.setLong(1, productId);
+                set.setBytes(1, UuidBinary.toBytes(productId));
                 set.execute();
             }
             try (PreparedStatement select = connection.prepareStatement(Files.readString(INVARIANT_SQL));

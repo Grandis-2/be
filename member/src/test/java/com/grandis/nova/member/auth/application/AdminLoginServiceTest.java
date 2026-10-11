@@ -36,10 +36,10 @@ class AdminLoginServiceTest {
     void wrongUsernameStillRunsMatches() {
         when(encoder.matches(any(), any())).thenReturn(true);
 
-        assertThatThrownBy(() -> service.login("root", "pw", ClientInfo.UNKNOWN)).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.login("root", "pw")).isInstanceOf(BusinessException.class);
 
         verify(encoder, times(1)).matches("pw", HASH);
-        verify(tokens, never()).issue(any(), any(), any());
+        verify(tokens, never()).issue(any(), any());
     }
 
     @Test
@@ -47,11 +47,11 @@ class AdminLoginServiceTest {
     void wrongPasswordIs401() {
         when(encoder.matches(any(), any())).thenReturn(false);
 
-        assertThatThrownBy(() -> service.login("admin", "wrong", ClientInfo.UNKNOWN)).isInstanceOf(BusinessException.class);
-        assertThatThrownBy(() -> service.login("admin", null, ClientInfo.UNKNOWN)).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.login("admin", "wrong")).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.login("admin", null)).isInstanceOf(BusinessException.class);
 
         verify(encoder).matches("", HASH);
-        verify(tokens, never()).issue(any(), any(), any());
+        verify(tokens, never()).issue(any(), any());
     }
 
     @Test
@@ -59,8 +59,8 @@ class AdminLoginServiceTest {
     void issuesAdminTokens() {
         when(encoder.matches("pw", HASH)).thenReturn(true);
 
-        service.login("admin", "pw", ClientInfo.UNKNOWN);
+        service.login("admin", "pw");
 
-        verify(tokens).issue(AdminLoginService.ADMIN_SUBJECT, Role.ADMIN, ClientInfo.UNKNOWN);
+        verify(tokens).issue(AdminLoginService.ADMIN_SUBJECT, Role.ADMIN);
     }
 }

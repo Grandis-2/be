@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.campaign;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.preorder.campaign.application.PreorderCampaignAdminService;
@@ -16,6 +17,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -40,15 +42,16 @@ class PreorderCampaignAdminServiceTest {
 
     @RepeatedTest(3)
     void 동시에_처음_회차를_만들어도_한_행만_남는다() throws Exception {
-        Long productId = fixtures.product("PREORDER", "ACTIVE");
-        CatalogStubs.stubPreorderProduct(catalogClient, productId, CatalogStubs.activeOption(1L));
+        UUID productId = fixtures.product("PREORDER", "ACTIVE");
+        CatalogStubs.stubPreorderProduct(catalogClient, productId, CatalogStubs.activeOption(UUID.randomUUID()));
         Instant opensAt = Instant.now().plusSeconds(3600);
 
         List<Outcome<PreorderCampaign>> outcomes = Concurrently.run(4, i -> () ->
                 service.upsertCampaign(productId, opensAt.plusSeconds(i), opensAt.plusSeconds(i + 7200)));
 
         assertThat(outcomes).allMatch(Outcome::succeeded);
-        assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_campaigns WHERE product_id = ?", productId))
+        assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_campaigns WHERE product_id = ?",
+                (Object) UuidBinary.toBytes(productId)))
                 .isEqualTo(1);
     }
 }

@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.UUID;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -24,7 +25,7 @@ import javax.crypto.spec.SecretKeySpec;
  *
  * <pre>
  * token      = "et_" + payloadB64 + "." + sigB64
- * payloadB64 = base64url_nopad(UTF8(productId + U+001F + customerId + U+001F + exp))
+ * payloadB64 = base64url_nopad(UTF8(productId + U+001F + customerId + U+001F + exp))  — id 는 UUID 소문자 표준 표기
  * sigB64     = base64url_nopad(HMAC-SHA256(UTF8(secret), UTF8("et_" + payloadB64)))
  * </pre>
  *
@@ -79,7 +80,7 @@ public class AdmissionTicketVerifier {
      *
      * @return 통과하면 입장권(ID · 만료 여부). 서명 · 상품 · 회원 · 모양이 하나라도 어긋나면 비어 있다
      */
-    public Optional<AdmissionTicket> verify(String token, Long productId, Long customerId) {
+    public Optional<AdmissionTicket> verify(String token, UUID productId, UUID customerId) {
         if (token == null || !token.startsWith(PREFIX)) {
             return Optional.empty();
         }
@@ -99,8 +100,8 @@ public class AdmissionTicketVerifier {
         }
         String[] parts = new String(claims, StandardCharsets.UTF_8).split(FIELD, -1);
         if (parts.length != 3
-                || !parts[0].equals(String.valueOf(productId))
-                || !parts[1].equals(String.valueOf(customerId))) {
+                || !parts[0].equals(productId.toString())
+                || !parts[1].equals(customerId.toString())) {
             return Optional.empty();
         }
         OptionalLong expiresAt = epochSecond(parts[2]);

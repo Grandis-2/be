@@ -8,6 +8,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * 아직 저장하지 않은 주문. 금액 칸이 없다 — 받은 금액을 믿지 않도록 {@link #totalAmount()} 로만 계산한다.
@@ -16,12 +17,12 @@ import java.util.Set;
  * 지금 어떤 출처를 받아 줄지는 {@link Order#place} 가 정한다.
  *
  * @param preorderId    사전예약 주문이면 그 예약의 내부 id, 아니면 null
- * @param preorderToken 사전예약 주문이면 그 예약의 공개 UUID(preorder_id 와 같은 예약), 아니면 null
+ * @param preorderToken 사전예약 주문이면 그 예약의 공개 UUID(preorder_id 와 같은 예약), 아니면 null. 같이 도는 구버전이 읽어 채운다
  */
 public record OrderDraft(
-        Long customerId,
+        UUID customerId,
         OrderSource source,
-        Long preorderId,
+        UUID preorderId,
         String preorderToken,
         ShipTo shipTo,
         List<OrderLine> lines
@@ -40,7 +41,7 @@ public record OrderDraft(
         if (lines.isEmpty()) {
             throw new IllegalArgumentException("주문상품이 없다");
         }
-        Set<Long> optionIds = new HashSet<>();
+        Set<UUID> optionIds = new HashSet<>();
         for (OrderLine line : lines) {
             if (!optionIds.add(line.optionId())) {
                 throw new IllegalArgumentException("같은 옵션이 두 번 들어 있다: optionId=" + line.optionId());
@@ -48,7 +49,7 @@ public record OrderDraft(
         }
     }
 
-    /** 주문 금액. 줄마다 단가 × 수량의 합이다. */
+    /** 주문 금액. 줄 금액(단가 × 수량 + 보증가 × 보증 수량, {@link OrderLine#subtotal})의 합이다. */
     public Money totalAmount() {
         return lines.stream().map(OrderLine::subtotal).reduce(Money.ZERO, Money::plus);
     }

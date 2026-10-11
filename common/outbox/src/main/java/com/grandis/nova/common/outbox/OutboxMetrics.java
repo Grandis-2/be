@@ -20,4 +20,12 @@ interface OutboxMetrics {
 
     default void refreshBacklog() {
     }
+
+    /** 보존 기간이 지나 지운 발행 완료 행 수. */
+    default void cleaned(int count) {
+    }
+
+    /** 정리가 실패했다. 계속 늘면 표가 줄지 않는다(DB 장애 · 권한). */
+    default void cleanupFailed() {
+    }
 }

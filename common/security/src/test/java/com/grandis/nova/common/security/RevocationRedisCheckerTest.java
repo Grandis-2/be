@@ -98,6 +98,19 @@ class RevocationRedisCheckerTest {
     }
 
     @Test
+    @DisplayName("새 로그인에 밀린 세션 표식(replaced)도 거부하고, 그때만 isReplaced 가 true — 로그아웃 표식(1) · 표식 없음은 false")
+    void replacedSessionIsRevokedWithReason() {
+        assertThat(checker.isReplaced(claims())).as("표식 없음").isFalse();
+        redis.opsForValue().set(AuthRedisKeys.revokedSession(sid), AuthRedisKeys.REVOKED_SESSION_MARK, Duration.ofSeconds(30));
+        assertThat(checker.isReplaced(claims())).as("로그아웃 표식").isFalse();
+
+        redis.opsForValue().set(AuthRedisKeys.revokedSession(sid), AuthRedisKeys.REPLACED_SESSION_MARK, Duration.ofSeconds(30));
+
+        assertThat(checker.isRevoked(claims())).isTrue();
+        assertThat(checker.isReplaced(claims())).isTrue();
+    }
+
+    @Test
     @DisplayName("회원 nbf 가 iat 보다 뒤면 거부한다 (제재 뒤에 남은 토큰)")
     void notBeforeAfterIssuedAtIsRevoked() {
         redis.opsForValue().set(AuthRedisKeys.notBefore(subject), String.valueOf(IAT.plusSeconds(1).getEpochSecond()), Duration.ofSeconds(30));

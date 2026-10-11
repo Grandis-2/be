@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * 예약 조회. 쓰기가 없어 읽기 전용 트랜잭션이다.
@@ -54,7 +55,7 @@ public class PreorderQueryService {
     }
 
     /** 내 예약 목록(최신순). 한 건 더 읽어 다음 페이지가 있는지 본다. */
-    public CursorPage<PreorderView.Summary> findMine(Long customerId, PreorderStatus status, Long productId,
+    public CursorPage<PreorderView.Summary> findMine(UUID customerId, PreorderStatus status, UUID productId,
                                                      String cursor, int size) {
         Position position = Position.of(cursor);
         List<PreorderSnapshot> found = new ArrayList<>(preorders.findForCustomer(customerId, status, productId,
@@ -63,7 +64,7 @@ public class PreorderQueryService {
         if (hasNext) {
             found.removeLast();
         }
-        Map<Long, SyncJobStatus> registerStatuses = registerJobStatuses(found);
+        Map<UUID, SyncJobStatus> registerStatuses = registerJobStatuses(found);
         Instant now = clock.instant();
         List<PreorderView.Summary> items = withBatches(found, (preorder, batch) -> new PreorderView.Summary(
                 preorder, batch, displayStatus(preorder, registerStatuses.get(preorder.id()), now)));
@@ -92,7 +93,7 @@ public class PreorderQueryService {
         OffsetPage<PreorderSnapshot> found = preorders.searchForAdmin(new AdminPreorderSearch(filter.status(),
                 filter.customerId(), filter.productId(), filter.from(), filter.to(),
                 jobStatus == null ? null : jobStatus.name()), page, size);
-        Map<Long, SyncJobStatus> registerStatuses = registerJobStatuses(found.items());
+        Map<UUID, SyncJobStatus> registerStatuses = registerJobStatuses(found.items());
         Instant now = clock.instant();
         List<PreorderView.AdminSummary> items = withBatches(found.items(), (preorder, batch) ->
                 new PreorderView.AdminSummary(preorder, batch, registerStatuses.get(preorder.id()),
@@ -141,12 +142,12 @@ public class PreorderQueryService {
     }
 
     private <T> List<T> withBatches(List<PreorderSnapshot> found, BatchMapper<T> mapper) {
-        Map<Long, ShipmentBatchSnapshot> byId = campaigns.findBatches(
+        Map<UUID, ShipmentBatchSnapshot> byId = campaigns.findBatches(
                 found.stream().map(PreorderSnapshot::shipmentBatchId).distinct().toList());
         return found.stream().map(preorder -> mapper.map(preorder, byId.get(preorder.shipmentBatchId()))).toList();
     }
 
-    private Map<Long, SyncJobStatus> registerJobStatuses(Collection<PreorderSnapshot> found) {
+    private Map<UUID, SyncJobStatus> registerJobStatuses(Collection<PreorderSnapshot> found) {
         return syncJobs.registerStatuses(found.stream().map(PreorderSnapshot::id).toList());
     }
 

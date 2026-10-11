@@ -17,7 +17,7 @@ public record EventCause(EventActor actor, String reason) {
 
     public static final int MAX_REASON_LENGTH = 500;
     /**
-     * 취소 중 환불이 확정 실패했다는 이력의 사유. 상태를 바꾸지 않는 이력이라 이 사유로 알아본다(OrderLedger#noteRefundFailed).
+     * 취소 중 환불이 확정 실패했다는 이력의 사유. 사람이 읽는 기록이다 — 판정은 주문의 환불 실패 시각으로 한다.
      * 사용자에게도 보인다 — 오류 코드는 싣지 않는다(U1).
      */
     public static final String REFUND_FAILED = "REFUND_FAILED";
@@ -47,9 +47,5 @@ public record EventCause(EventActor actor, String reason) {
 
     public static EventCause refundFailed() {
         return system(REFUND_FAILED);
-    }
-
-    public boolean isRefundFailure() {
-        return actor == EventActor.SYSTEM && REFUND_FAILED.equals(reason);
     }
 }

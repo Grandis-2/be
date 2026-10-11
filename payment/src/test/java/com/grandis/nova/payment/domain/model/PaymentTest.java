@@ -7,6 +7,7 @@ import com.grandis.nova.payment.vo.ProviderPaymentKey;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -14,7 +15,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class PaymentTest {
 
     static final Instant NOW = Instant.parse("2026-09-29T01:00:00Z");
-    static final PaymentTarget TARGET = PaymentTarget.drawEntry(7L);
+    static final PaymentTarget TARGET = PaymentTarget.drawEntry(UUID.fromString("0199a3c4-0000-7000-8000-000000000007"));
+    static final UUID ID = UUID.fromString("0199a3c4-0000-7000-8000-000000000001");
     static final ProviderPaymentKey PAYMENT = new ProviderPaymentKey("tgen_payment_1");
 
     @Test
@@ -28,9 +30,9 @@ class PaymentTest {
 
     @Test
     void refundedAndOnlyRefundedHasRefundTime() { // ck_payment_refunded_at
-        assertThatThrownBy(() -> new Payment(1L, TARGET, PAYMENT, Money.won(1000), PaymentStatus.REFUNDED, NOW, null,
+        assertThatThrownBy(() -> new Payment(ID, TARGET, PAYMENT, Money.won(1000), PaymentStatus.REFUNDED, NOW, null,
                 null, null)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new Payment(1L, TARGET, PAYMENT, Money.won(1000), PaymentStatus.SUCCEEDED, NOW, NOW,
+        assertThatThrownBy(() -> new Payment(ID, TARGET, PAYMENT, Money.won(1000), PaymentStatus.SUCCEEDED, NOW, NOW,
                 null, null)).isInstanceOf(IllegalArgumentException.class);
     }
 

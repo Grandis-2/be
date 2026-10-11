@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 상태를 바꾸는 쿼리는 모두 "현재 상태를 조건으로 한 UPDATE" 이고 영향 행 수를 돌려준다.
@@ -26,7 +27,7 @@ import java.util.Optional;
  * 벌크 UPDATE 는 영속성 컨텍스트를 거치지 않으므로 앞뒤로 flush · clear 한다. 그러지 않으면
  * 같은 트랜잭션에서 이미 읽어 둔 엔티티가 옛 상태를 들고 있다.
  */
-public interface PreorderRepository extends JpaRepository<Preorder, Long>, JpaSpecificationExecutor<Preorder> {
+public interface PreorderRepository extends JpaRepository<Preorder, UUID>, JpaSpecificationExecutor<Preorder> {
 
     /** 공개 UUID 로 찾는다. 조회 API 는 이 값만 받는다 — 내부 id 는 밖에 알리지 않는다. */
     Optional<Preorder> findByPreorderToken(String preorderToken);
@@ -46,7 +47,7 @@ public interface PreorderRepository extends JpaRepository<Preorder, Long>, JpaSp
                set p.status = :to, p.eventSequence = p.eventSequence + 1, p.updatedAt = :now
              where p.id = :id and p.status = :from
             """)
-    int changeStatus(@Param("id") Long id, @Param("from") PreorderStatus from, @Param("to") PreorderStatus to,
+    int changeStatus(@Param("id") UUID id, @Param("from") PreorderStatus from, @Param("to") PreorderStatus to,
                      @Param("now") Instant now);
 
     /**
@@ -59,7 +60,7 @@ public interface PreorderRepository extends JpaRepository<Preorder, Long>, JpaSp
                set p.status = :to, p.eventSequence = p.eventSequence + 1, p.updatedAt = :now
              where p.id = :id and p.status = :from and p.payableFrom is not null
             """)
-    int revertCancel(@Param("id") Long id, @Param("now") Instant now,
+    int revertCancel(@Param("id") UUID id, @Param("now") Instant now,
                      @Param("from") PreorderStatus from, @Param("to") PreorderStatus to);
 
     /** 결제 시작 시각. 처음 한 번만 찍는다. 상태 · 이력 번호는 그대로다. */
@@ -69,7 +70,7 @@ public interface PreorderRepository extends JpaRepository<Preorder, Long>, JpaSp
                set p.paymentStartedAt = coalesce(p.paymentStartedAt, :startedAt), p.updatedAt = :now
              where p.id = :id and p.status = :from
             """)
-    int markPaymentStarted(@Param("id") Long id, @Param("startedAt") Instant startedAt, @Param("now") Instant now,
+    int markPaymentStarted(@Param("id") UUID id, @Param("startedAt") Instant startedAt, @Param("now") Instant now,
                            @Param("from") PreorderStatus from);
 
     /** 결제 확인 → 예약 확정. 결제 시각은 처음 한 번만 찍는다. */
@@ -80,7 +81,7 @@ public interface PreorderRepository extends JpaRepository<Preorder, Long>, JpaSp
                    p.eventSequence = p.eventSequence + 1, p.updatedAt = :now
              where p.id = :id and p.status = :from
             """)
-    int markReserved(@Param("id") Long id, @Param("paidAt") Instant paidAt, @Param("now") Instant now,
+    int markReserved(@Param("id") UUID id, @Param("paidAt") Instant paidAt, @Param("now") Instant now,
                      @Param("from") PreorderStatus from, @Param("reserved") PreorderStatus reserved);
 
     /** 상태는 그대로 두고 결제 시각만 남긴다(취소 중 결제 확인 · 결제된 주문의 거절). 처음 한 번만 찍는다. */
@@ -90,12 +91,12 @@ public interface PreorderRepository extends JpaRepository<Preorder, Long>, JpaSp
                set p.reservedAt = coalesce(p.reservedAt, :paidAt), p.updatedAt = :now
              where p.id = :id and p.status = :from
             """)
-    int recordPaid(@Param("id") Long id, @Param("paidAt") Instant paidAt, @Param("now") Instant now,
+    int recordPaid(@Param("id") UUID id, @Param("paidAt") Instant paidAt, @Param("now") Instant now,
                    @Param("from") PreorderStatus from);
 
     /** 결제 확인 시각(취소 거절 때 어디로 돌아갈지 가른다). 행을 잠근 트랜잭션에서 부른다. */
     @Query("select p.reservedAt from Preorder p where p.id = :id")
-    Optional<Instant> findReservedAt(@Param("id") Long id);
+    Optional<Instant> findReservedAt(@Param("id") UUID id);
 
     /** 등록 확인 반영. payable_from 은 처음 한 번만 찍는다(여기서 24시간이 결제 기한). */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
@@ -108,19 +109,19 @@ public interface PreorderRepository extends JpaRepository<Preorder, Long>, JpaSp
                    p.updatedAt = :now
              where p.id = :id and p.status = :from
             """)
-    int markRegistered(@Param("id") Long id, @Param("externalReference") String externalReference,
+    int markRegistered(@Param("id") UUID id, @Param("externalReference") String externalReference,
                     @Param("now") Instant now,
                     @Param("from") PreorderStatus from, @Param("registered") PreorderStatus registered);
 
     /** 같은 접수 키의 기존 예약(재전송 판정). */
-    Optional<Preorder> findByCustomerIdAndIdempotencyKey(Long customerId, String idempotencyKey);
+    Optional<Preorder> findByCustomerIdAndIdempotencyKey(UUID customerId, String idempotencyKey);
 
     /** 회원의 그 모델 마지막 접수 시각(상태 무관). uq_preorder_active 의 앞부분(customer_id, product_id)으로 찾는다. */
     @Query("select max(p.createdAt) from Preorder p where p.customerId = :customerId and p.productId = :productId")
-    Optional<Instant> findLastAcceptedAt(@Param("customerId") Long customerId, @Param("productId") Long productId);
+    Optional<Instant> findLastAcceptedAt(@Param("customerId") UUID customerId, @Param("productId") UUID productId);
 
     /** 같은 모델의 진행 중 예약(취소 완료 제외). 활성 예약 UNIQUE 충돌 때 기존 예약을 알려 주려고 쓴다. */
-    Optional<Preorder> findFirstByCustomerIdAndProductIdAndStatusNot(Long customerId, Long productId,
+    Optional<Preorder> findFirstByCustomerIdAndProductIdAndStatusNot(UUID customerId, UUID productId,
                                                                     PreorderStatus status);
 
     /**
@@ -128,11 +129,11 @@ public interface PreorderRepository extends JpaRepository<Preorder, Long>, JpaSp
      * 잠금 순서는 예약 행 → 그 예약의 작업 행이다. 작업 행을 먼저 잠근 뒤 이걸 부르지 않는다(교착).
      */
     @Query(value = "SELECT status FROM preorders WHERE id = :id FOR UPDATE", nativeQuery = true)
-    Optional<PreorderStatus> findStatusForUpdate(@Param("id") Long id);
+    Optional<PreorderStatus> findStatusForUpdate(@Param("id") UUID id);
 
     /** 방금 올린 이력 번호. 같은 트랜잭션의 UPDATE 가 행을 잠그고 있으므로 다른 트랜잭션이 끼어들 수 없다. */
     @Query("select p.eventSequence from Preorder p where p.id = :id")
-    long findEventSequence(@Param("id") Long id);
+    long findEventSequence(@Param("id") UUID id);
 
     /** 예약 행을 잠그고 읽는다. 트랜잭션에서 처음 읽을 때 불러야 잠근 뒤의 최신 값을 받는다. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
@@ -140,7 +141,7 @@ public interface PreorderRepository extends JpaRepository<Preorder, Long>, JpaSp
     Optional<Preorder> findForUpdateByPreorderToken(@Param("token") String token);
 
     /** 상품의 예약을 순번 순으로 읽는다. uq_preorder_position(product_id, queue_position) 을 탄다. */
-    List<Preorder> findByProductIdAndStatusInOrderByQueuePosition(Long productId, Collection<PreorderStatus> statuses,
+    List<Preorder> findByProductIdAndStatusInOrderByQueuePosition(UUID productId, Collection<PreorderStatus> statuses,
                                                                    Limit limit);
 
     /** 상태별 예약 수. ix_preorder_payable(status, payable_from) 로 인덱스만 읽는다. */

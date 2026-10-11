@@ -9,7 +9,6 @@ import com.grandis.nova.order.order.domain.model.OrderEvent;
 import com.grandis.nova.order.order.domain.model.OrderTransition;
 import com.grandis.nova.order.order.domain.repository.OrderWriter;
 import com.grandis.nova.order.order.vo.EventCause;
-import com.grandis.nova.order.order.vo.OrderToken;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +17,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.EnumSet;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * 주문 상태를 바꾸는 유일한 길. 쓰기 포트({@link OrderWriter})는 여기서만 쓴다(아키텍처 테스트가 강제).
@@ -35,8 +35,8 @@ import java.util.Set;
  *       기존 주문 재조회 같은 후속 작업은 새 트랜잭션에서 한다. 그래서 사용자 입력 검증(OrderDraft · EventCause
  *       생성)은 원장을 부르기 전에 끝나 있어야 한다.</li>
  *   <li>원장 안에서 나는 IllegalArgumentException 은 모두 호출하는 코드의 잘못이다 — 없는 주문, 빈 기대 상태,
- *       그리고 지금 받지 않는 주문({@link Order#place} 의 수락 규칙: 사전예약 · 옵션 하나 · 수량 1). 수락 규칙은
- *       사용자 입력이 아니라 이 에픽이 만들 수 있는 주문의 범위라, 예약에서 초안을 만드는 생성 유스케이스는 어길 수 없다.</li>
+ *       그리고 지금 받지 않는 주문({@link Order#place} 의 수락 규칙: 사전예약은 옵션 하나 · 수량 1 · 보증 없음, 바로 구매는 아직
+ *       없음). 수락 규칙은 사용자 입력이 아니라 만들 수 있는 주문의 범위라, 초안을 만드는 생성 유스케이스는 어길 수 없다.</li>
  *   <li>같은 예약으로 동시에 생성하다 먼저 들어간 쪽이 롤백되면 기다리던 쪽끼리 교착할 수 있다(InnoDB 중복 키 S 잠금 →
  *       삽입 의도 잠금). 생성 유스케이스는 교착 예외를 재시도 대상으로 둔다.</li>
  * </ul>
@@ -60,15 +60,15 @@ public class OrderLedger {
     }
 
     /**
-     * 새 주문과 항목 · 첫 이력(번호 1, from 없음)을 저장한다. 금액은 항목에서 계산하고 공개 토큰은 여기서 발급한다.
+     * 새 주문과 항목 · 첫 이력(번호 1, from 없음)을 저장한다. 금액은 항목에서 계산한다.
      *
      * @throws OrderAlreadyPlacedException 예약 식별 칸(내부 id · UUID)이 이미 쓰였다 — 그 예약의 주문인지, 기존 주문을
      *                                     돌려줄지(200) 취소된 주문이라 거절할지(409)는 생성 유스케이스가 새 트랜잭션에서 조회해 판정한다
      */
     public Order place(OrderDraft draft, EventCause cause) {
-        Order order = writer.insert(Order.place(draft, OrderToken.issue()));
+        Order order = writer.insert(Order.place(draft, clock.instant()));
         writer.insertItems(order.id(), draft.lines());
-        writer.appendEvent(OrderEvent.placed(order.id(), cause, clock.instant()));
+        writer.appendEvent(OrderEvent.placed(order.id(), order.status(), cause, clock.instant()));
         return order;
     }
 
@@ -88,7 +88,7 @@ public class OrderLedger {
      * @param expectedFrom 비어 있으면 안 된다
      * @throws IllegalArgumentException 주문이 없다 · 결제 사건이다 — 호출하는 쪽의 잘못이다
      */
-    public OrderTransition fire(Long orderId, OrderTrigger trigger, Set<OrderStatus> expectedFrom, EventCause cause) {
+    public OrderTransition fire(UUID orderId, OrderTrigger trigger, Set<OrderStatus> expectedFrom, EventCause cause) {
         if (PAYMENT_TRIGGERS.contains(trigger)) {
             throw new IllegalArgumentException("결제 사건은 requestPayment · settlePayment 로 알린다: " + trigger);
         }
@@ -107,7 +107,7 @@ public class OrderLedger {
      *
      * @param providerOrderId 승인할 결제창(결제사 주문 번호)
      */
-    public OrderTransition requestPayment(Long orderId, String providerOrderId, EventCause cause) {
+    public OrderTransition requestPayment(UUID orderId, String providerOrderId, EventCause cause) {
         if (providerOrderId == null || providerOrderId.isBlank()) {
             throw new IllegalArgumentException("결제창 번호가 없다");
         }
@@ -127,7 +127,7 @@ public class OrderLedger {
      *
      * @param result PAYMENT_APPROVED · PAYMENT_DECLINED
      */
-    public OrderTransition settlePayment(Long orderId, OrderTrigger result, String providerOrderId, EventCause cause) {
+    public OrderTransition settlePayment(UUID orderId, OrderTrigger result, String providerOrderId, EventCause cause) {
         if (result != OrderTrigger.PAYMENT_APPROVED && result != OrderTrigger.PAYMENT_DECLINED) {
             throw new IllegalArgumentException("결제 결과가 아니다: " + result);
         }
@@ -143,34 +143,65 @@ public class OrderLedger {
     }
 
     /**
-     * 취소 중 환불이 확정 실패했다고 이력에 남긴다 — 상태는 그대로다(from = to = CANCELING). 환불이 끝나지 않았으니 취소로 끝낼 수 없고,
-     * 다시 여는 것은 사람의 판단이다(U1). 이력 번호는 전이처럼 1 올린다.
-     * 취소 중일 때만, 마지막 이력이 이미 환불 실패가 아닐 때만 남긴다 — 같은 알림을 다시 받아도 한 줄이다.
+     * 취소 중 환불이 확정 실패했다고 적는다 — 주문의 환불 실패 시각을 채우고 이력을 한 줄 남긴다. 상태는 그대로다(취소 중).
+     * 환불이 끝나지 않았으니 취소로 끝낼 수 없고, 다시 여는 것은 사람의 판단이다(U1). 이력 번호는 전이처럼 1 올린다.
+     * 취소 중이고 아직 적지 않았을 때만 적는다 — 같은 알림을 다시 받아도 한 번이다.
      *
-     * @return 남겼으면 true. 취소 중이 아니거나 이미 남겼으면 false
+     * @return 적었으면 true. 취소 중이 아니거나 이미 적었으면 false
      * @throws IllegalArgumentException 주문이 없다
      */
-    public boolean noteRefundFailed(Long orderId) {
+    public boolean noteRefundFailed(UUID orderId) {
         OrderStatus from = lock(orderId);
-        if (from != OrderStatus.CANCELING
-                || writer.lastEventCause(orderId).filter(EventCause::isRefundFailure).isPresent()) {
+        if (from != OrderStatus.CANCELING) {
             return false;
         }
         Instant now = clock.instant();
-        if (writer.changeStatus(orderId, from, from, null, now) != 1) {
-            throw new IllegalStateException("잠근 주문의 상태가 바뀌었다: orderId=" + orderId);
+        if (writer.markRefundFailed(orderId, now) == 0) {
+            return false;
         }
         writer.appendEvent(new OrderEvent(orderId, writer.eventSequence(orderId), from, from, EventCause.refundFailed(),
                 now));
         return true;
     }
 
-    private OrderStatus lock(Long orderId) {
+    /**
+     * 결제 대기인 일반 주문을 취소하고 재고 반환 표식을 적는다(취소와 같은 UPDATE). 재고 행의 반환은 호출하는 쪽이 같은 트랜잭션에서
+     * 한다 — 이 메서드가 true 를 돌려준 때만, 그래서 한 번만.
+     *
+     * 결제 대기가 아니면(승인 중 · 결제됨 · 이미 취소) 아무것도 바꾸지 않고 지금 상태를 돌려준다.
+     *
+     * @throws IllegalArgumentException 주문이 없다
+     * @throws IllegalStateException    결제 대기인데 바꾸지 못했다 — 사전예약 주문이거나 표식이 이미 있다(호출하는 코드의 잘못 · 데이터 어긋남)
+     */
+    public OrderTransition cancelUnpaidReleasingStock(UUID orderId, EventCause cause) {
+        OrderStatus from = lock(orderId);
+        if (from != OrderStatus.AWAITING_PAYMENT) {
+            return new OrderTransition(false, from);
+        }
+        OrderStatus to = from.next(OrderTrigger.CANCEL_REQUESTED).orElseThrow();
+        Instant now = clock.instant();
+        if (writer.cancelReleasingStock(orderId, now) != 1) {
+            throw new IllegalStateException("결제 대기인 일반 주문을 취소 · 반환 표식하지 못했다: orderId=" + orderId);
+        }
+        writer.appendEvent(new OrderEvent(orderId, writer.eventSequence(orderId), from, to, cause, now));
+        return new OrderTransition(true, to);
+    }
+
+    /**
+     * 주문 행을 잠그고 지금 상태를 읽는다 — 잠그지 않고 읽어 둔 주문을 돌려주거나 판단하기 전에 다시 보는 데 쓴다. 바꾸지 않는다.
+     *
+     * @throws IllegalArgumentException 주문이 없다
+     */
+    public OrderStatus lockedStatus(UUID orderId) {
+        return lock(orderId);
+    }
+
+    private OrderStatus lock(UUID orderId) {
         return writer.lockStatus(orderId).orElseThrow(() -> new IllegalArgumentException("주문이 없다: " + orderId));
     }
 
     /** 잠근 주문을 사건대로 바꾼다. 상태 머신이 받지 않는 사건이면 그대로 둔다. */
-    private OrderTransition transition(Long orderId, OrderStatus from, OrderTrigger trigger,
+    private OrderTransition transition(UUID orderId, OrderStatus from, OrderTrigger trigger,
                                        String authorizingProviderOrderId, EventCause cause) {
         OrderStatus to = from.next(trigger).orElse(null);
         if (to == null) {

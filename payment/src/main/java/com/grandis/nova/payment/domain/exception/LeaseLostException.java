@@ -1,5 +1,7 @@
 package com.grandis.nova.payment.domain.exception;
 
+import java.util.UUID;
+
 /**
  * 결과를 반영하려는데 리스를 잃었다(만료 · 다른 작업자가 다시 선점). 반영은 0행이고, 이 예외로 호출자의 트랜잭션은
  * rollback-only 가 된다 — 같은 트랜잭션에서 먼저 한 업무 변경(아웃박스 기록 등)도 함께 되돌아간다.
@@ -12,14 +14,14 @@ package com.grandis.nova.payment.domain.exception;
  */
 public class LeaseLostException extends RuntimeException {
 
-    private final Long transactionId;
+    private final UUID transactionId;
 
-    public LeaseLostException(Long transactionId) {
+    public LeaseLostException(UUID transactionId) {
         super("결제 거래의 리스를 잃어 결과를 반영하지 않았다: transactionId=" + transactionId);
         this.transactionId = transactionId;
     }
 
-    public Long getTransactionId() {
+    public UUID getTransactionId() {
         return transactionId;
     }
 }

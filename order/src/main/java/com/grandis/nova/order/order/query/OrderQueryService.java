@@ -9,7 +9,7 @@ import com.grandis.nova.order.order.domain.model.OrderItem;
 import com.grandis.nova.order.order.domain.repository.AdminOrderFilter;
 import com.grandis.nova.order.order.domain.repository.OrderPosition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
-import com.grandis.nova.order.order.vo.OrderToken;
+import com.grandis.nova.order.order.vo.OrderIds;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -36,7 +37,7 @@ public class OrderQueryService {
     }
 
     /** 내 주문 목록(최신순). 한 건 더 읽어 다음 페이지가 있는지 본다. */
-    public CursorPage<OrderView.Summary> findMine(Long customerId, String cursor, int size) {
+    public CursorPage<OrderView.Summary> findMine(UUID customerId, String cursor, int size) {
         List<Order> found = new ArrayList<>(reader.findByCustomer(customerId, OrderCursor.decode(cursor), size + 1));
         boolean hasNext = found.size() > size;
         if (hasNext) {
@@ -51,15 +52,15 @@ public class OrderQueryService {
     }
 
     /** 내 주문 하나. 남의 주문은 존재를 알리지 않는다(404). */
-    public OrderView.Detail findOne(Long customerId, String orderToken) {
-        Order order = find(orderToken)
+    public OrderView.Detail findOne(UUID customerId, String orderId) {
+        Order order = find(orderId)
                 .filter(found -> found.customerId().equals(customerId))
                 .orElseThrow(OrderQueryService::notFound);
         return detail(order);
     }
 
     /** 내 주문상품 하나와 그 주문. 남의 것은 존재를 알리지 않는다(404). catalog 가 리뷰를 쓸 때 묻는다 — 판정은 catalog 가 한다. */
-    public OrderView.Item findItem(Long customerId, Long orderItemId) {
+    public OrderView.Item findItem(UUID customerId, UUID orderItemId) {
         OrderItem item = reader.findItem(orderItemId).orElseThrow(OrderQueryService::itemNotFound);
         Order order = reader.findById(item.orderId())
                 .filter(found -> found.customerId().equals(customerId))
@@ -72,12 +73,12 @@ public class OrderQueryService {
         return OffsetPage.of(withItems(found.items()), found.page(), found.size(), found.total());
     }
 
-    public OrderView.Detail findOneForAdmin(String orderToken) {
-        return detail(find(orderToken).orElseThrow(OrderQueryService::notFound));
+    public OrderView.Detail findOneForAdmin(String orderId) {
+        return detail(find(orderId).orElseThrow(OrderQueryService::notFound));
     }
 
-    private Optional<Order> find(String orderToken) {
-        return OrderToken.parse(orderToken).flatMap(reader::findByOrderToken);
+    private Optional<Order> find(String orderId) {
+        return OrderIds.parse(orderId).flatMap(reader::findById);
     }
 
     /** 이력은 읽은 주문의 번호까지만 — 그 뒤에 커밋된 전이가 섞이면 상태와 이력의 마지막이 어긋난다. */
@@ -87,7 +88,7 @@ public class OrderQueryService {
     }
 
     private List<OrderView.Summary> withItems(List<Order> found) {
-        Map<Long, List<OrderItem>> byOrder = reader.findItemsByOrderIds(found.stream().map(Order::id).toList()).stream()
+        Map<UUID, List<OrderItem>> byOrder = reader.findItemsByOrderIds(found.stream().map(Order::id).toList()).stream()
                 .collect(Collectors.groupingBy(OrderItem::orderId));
         return found.stream()
                 .map(order -> new OrderView.Summary(order, byOrder.getOrDefault(order.id(), List.of())))

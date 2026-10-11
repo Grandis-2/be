@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.preorder;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
@@ -13,6 +14,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -38,10 +40,10 @@ class PreorderLedgerConcurrencyTest {
     void 같은_모델을_동시에_접수하면_하나만_커밋되고_나머지는_UNIQUE_로_실패한다() throws Exception {
         ShopFixtures fixtures = new ShopFixtures(jdbcTemplate);
         PreorderProduct product = fixtures.openPreorderProduct();
-        Long customerId = fixtures.customer();
+        UUID customerId = fixtures.customer();
         int requests = 5;
 
-        List<Outcome<Long>> outcomes = Concurrently.run(requests, i -> () -> transactionTemplate.execute(status ->
+        List<Outcome<UUID>> outcomes = Concurrently.run(requests, i -> () -> transactionTemplate.execute(status ->
                 ledger.accept(draft(product, customerId, i + 1), EventActor.USER, null).id()));
 
         assertThat(outcomes.stream().filter(Outcome::succeeded)).hasSize(1);
@@ -52,14 +54,16 @@ class PreorderLedgerConcurrencyTest {
                         .hasMessageContaining("uq_preorder_active"));
         assertThat(jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM preorders WHERE customer_id = ? AND product_id = ? AND active_marker = 1
-                """, Integer.class, customerId, product.productId())).isEqualTo(1);
+                """, Integer.class, UuidBinary.toBytes(customerId), UuidBinary.toBytes(product.productId())))
+                .isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM preorder_events e JOIN preorders p ON p.id = e.preorder_id
                  WHERE p.customer_id = ? AND p.product_id = ?
-                """, Integer.class, customerId, product.productId())).isEqualTo(1);
+                """, Integer.class, UuidBinary.toBytes(customerId), UuidBinary.toBytes(product.productId())))
+                .isEqualTo(1);
     }
 
-    private static NewPreorder draft(PreorderProduct product, Long customerId, long position) {
+    private static NewPreorder draft(PreorderProduct product, UUID customerId, long position) {
         return new NewPreorder(ShopFixtures.unique(), customerId, product.productId(), product.optionId(),
                 product.firstBatchId(), position, null, ShopFixtures.unique(),
                 "Nova 1", "블랙 / 256GB", new BigDecimal("1250000"));

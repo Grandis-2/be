@@ -5,11 +5,11 @@ import com.grandis.nova.order.order.domain.exception.OrderAlreadyPlacedException
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderEvent;
 import com.grandis.nova.order.order.domain.model.OrderLine;
-import com.grandis.nova.order.order.vo.EventCause;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 주문 쓰기 포트. {@link com.grandis.nova.order.order.OrderLedger} 만 쓴다 — 다른 곳이 쓰면 이력 없는 전이가 생긴다.
@@ -27,7 +27,7 @@ public interface OrderWriter {
      */
     Order insert(Order order);
 
-    void insertItems(Long orderId, List<OrderLine> lines);
+    void insertItems(UUID orderId, List<OrderLine> lines);
 
     void appendEvent(OrderEvent event);
 
@@ -35,7 +35,7 @@ public interface OrderWriter {
      * 상태를 읽으며 주문 행을 잠근다. 판정하고 반영할 때까지 다른 트랜잭션이 상태를 바꾸지 못한다.
      * 잠금 순서는 주문 행 → 결제 행 → 재고 행이다. 뒤의 행을 먼저 잠근 뒤 이걸 부르지 않는다(교착).
      */
-    Optional<OrderStatus> lockStatus(Long orderId);
+    Optional<OrderStatus> lockStatus(UUID orderId);
 
     /**
      * 상태가 from 일 때만 to 로 바꾸고 이력 번호를 1 올린다. 승인 중 결제창 번호도 함께 바꾼다 —
@@ -43,14 +43,27 @@ public interface OrderWriter {
      *
      * @return 바뀐 행 수(0 또는 1)
      */
-    int changeStatus(Long orderId, OrderStatus from, OrderStatus to, String authorizingProviderOrderId, Instant now);
+    int changeStatus(UUID orderId, OrderStatus from, OrderStatus to, String authorizingProviderOrderId, Instant now);
+
+    /**
+     * 결제 대기인 일반 주문을 취소로 바꾸며 재고 반환 표식을 같은 UPDATE 에서 적는다(ck_order_stock_released_canceled). 이력 번호를 1 올린다.
+     * 표식이 이미 있으면 바꾸지 않는다 — 반환은 한 번만이다.
+     *
+     * @return 바뀐 행 수(0 또는 1)
+     */
+    int cancelReleasingStock(UUID orderId, Instant now);
+
+    /**
+     * 취소 중인 주문에 환불 실패 시각을 적는다(ck_order_refund_failed). 이력 번호를 1 올린다.
+     * 이미 적혀 있으면 바꾸지 않는다 — 같은 실패는 한 번만 적는다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다.
+     *
+     * @return 바뀐 행 수(0 또는 1)
+     */
+    int markRefundFailed(UUID orderId, Instant now);
 
     /** 승인 중 결제창 번호. 승인 중이 아니면 비어 있다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다. */
-    Optional<String> authorizingProviderOrderId(Long orderId);
+    Optional<String> authorizingProviderOrderId(UUID orderId);
 
     /** 방금 올린 이력 번호. 같은 트랜잭션의 UPDATE 가 행을 잠그고 있어 다른 트랜잭션이 끼어들 수 없다. */
-    long eventSequence(Long orderId);
-
-    /** 마지막 이력의 "누가 · 왜". {@link #lockStatus} 로 행을 잠근 뒤에 부른다(같은 주문의 이력은 잠근 쪽만 늘린다). */
-    Optional<EventCause> lastEventCause(Long orderId);
+    long eventSequence(UUID orderId);
 }

@@ -37,7 +37,7 @@ public final class AccessTokens {
     }
 
     /** 회원 토큰을 실은 요청. */
-    public static RequestPostProcessor customer(long customerId) {
+    public static RequestPostProcessor customer(UUID customerId) {
         return withToken(customerToken(customerId));
     }
 
@@ -46,8 +46,8 @@ public final class AccessTokens {
         return withToken(adminToken());
     }
 
-    public static String customerToken(long customerId) {
-        return PROVIDER.create(Long.toString(customerId), Role.USER, UUID.randomUUID(), TokenType.ACCESS);
+    public static String customerToken(UUID customerId) {
+        return PROVIDER.create(customerId.toString(), Role.USER, UUID.randomUUID(), TokenType.ACCESS);
     }
 
     public static String adminToken() {
@@ -55,15 +55,15 @@ public final class AccessTokens {
     }
 
     /** 앱이 모르는 키로 서명한 회원 토큰(서명 불일치). */
-    public static String foreignCustomerToken(long customerId) {
+    public static String foreignCustomerToken(UUID customerId) {
         return provider(generate(), Clock.systemUTC())
-                .create(Long.toString(customerId), Role.USER, UUID.randomUUID(), TokenType.ACCESS);
+                .create(customerId.toString(), Role.USER, UUID.randomUUID(), TokenType.ACCESS);
     }
 
     /** 한 시간 전에 발급돼 이미 만료된(유효 30분) 회원 토큰. */
-    public static String expiredCustomerToken(long customerId) {
+    public static String expiredCustomerToken(UUID customerId) {
         Clock anHourAgo = Clock.fixed(Instant.now().minus(Duration.ofHours(1)), ZoneOffset.UTC);
-        return provider(KEYS, anHourAgo).create(Long.toString(customerId), Role.USER, UUID.randomUUID(),
+        return provider(KEYS, anHourAgo).create(customerId.toString(), Role.USER, UUID.randomUUID(),
                 TokenType.ACCESS);
     }
 

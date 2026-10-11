@@ -1,6 +1,7 @@
 package com.grandis.nova.payment.api;
 
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.security.JwtTokenProvider;
@@ -86,6 +87,6 @@ class PaymentConfirmAfterStartTest {
 
         // 결과 반영은 통째로 되돌아가 리스를 쥔 채 남는다 — 복구(NV-102)가 이어 받는다
         assertThat(jdbcTemplate.queryForObject("SELECT status FROM payment_transactions WHERE id = ?", String.class,
-                opened.id())).isEqualTo("PROCESSING");
+                UuidBinary.toBytes(opened.id()))).isEqualTo("PROCESSING");
     }
 }

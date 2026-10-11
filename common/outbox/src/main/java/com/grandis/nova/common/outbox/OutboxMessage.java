@@ -1,5 +1,7 @@
 package com.grandis.nova.common.outbox;
 
+import java.util.UUID;
+
 /**
  * 아웃박스에 적는 메시지. 서비스는 이 인터페이스를 잇는 자기 sealed 인터페이스와 record 로 메시지를 정의한다.
  *
@@ -12,5 +14,5 @@ public interface OutboxMessage {
 
     OutboxAggregateType aggregateType();
 
-    Long aggregateId();
+    UUID aggregateId();
 }

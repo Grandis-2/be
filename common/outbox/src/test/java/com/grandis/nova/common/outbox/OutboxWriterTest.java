@@ -1,5 +1,6 @@
 package com.grandis.nova.common.outbox;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.outbox.support.BusinessRecord;
 import com.grandis.nova.common.outbox.support.BusinessRecords;
 import com.grandis.nova.common.outbox.support.OutboxIntegrationTest;
@@ -18,10 +19,10 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.UUID;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.ThreadLocalRandom;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -55,11 +56,11 @@ class OutboxWriterTest {
     @Autowired
     Clock clock;
 
-    long itemId;
+    UUID itemId;
 
     @BeforeEach
     void setUp() {
-        itemId = ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE);
+        itemId = UUID.randomUUID();
         committedEvents.received.clear();
     }
 
@@ -70,7 +71,8 @@ class OutboxWriterTest {
         Instant after = clock.instant();
 
         Map<String, Object> row = jdbcTemplate.queryForMap("""
-                SELECT event_id, event_type, aggregate_type, aggregate_id, publish_attempts, lease_until, published_at,
+                SELECT event_id, event_type, aggregate_type, BIN_TO_UUID(aggregate_id) AS aggregate_id, publish_attempts,
+                       lease_until, published_at,
                        DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%s.%fZ') AS created_at_utc
                   FROM it_outbox_events WHERE id = ?
                 """, id);
@@ -78,7 +80,7 @@ class OutboxWriterTest {
         assertThat(row)
                 .containsEntry("event_type", "ITEM_SETTLED")
                 .containsEntry("aggregate_type", "ITEM")
-                .containsEntry("aggregate_id", itemId)
+                .containsEntry("aggregate_id", itemId.toString())
                 .containsEntry("publish_attempts", 0)
                 .containsEntry("lease_until", null)
                 .containsEntry("published_at", null);
@@ -173,9 +175,9 @@ class OutboxWriterTest {
         return new ItemSettled(itemId, "OK", 3L);
     }
 
-    private int rowsOf(long aggregateId) {
+    private int rowsOf(UUID aggregateId) {
         return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM it_outbox_events WHERE aggregate_id = ?",
-                Integer.class, aggregateId);
+                Integer.class, (Object) UuidBinary.toBytes(aggregateId));
     }
 
     private int businessRows(String name) {

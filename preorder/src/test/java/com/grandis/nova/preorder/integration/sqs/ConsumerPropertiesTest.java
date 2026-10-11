@@ -27,6 +27,9 @@ class ConsumerPropertiesTest {
             assertThat(consumer.toSettings().queue()).isEqualTo("preorder-events");
             assertThat(consumer.toSettings().visibility()).isEqualTo(Duration.ofMinutes(5));
             assertThat(consumer.toSettings().backoffBase()).isEqualTo(Duration.ofSeconds(5));
+            assertThat(consumer.toDeferSettings().firstDelay()).isEqualTo(Duration.ofSeconds(10));
+            assertThat(consumer.toDeferSettings().maxDelay()).isEqualTo(Duration.ofMinutes(15));
+            assertThat(consumer.toDeferSettings().alertAfter()).isEqualTo(Duration.ofHours(1));
             assertThat(deadLetter.enabled()).isFalse();
             assertThat(deadLetter.toSettings().queue()).isEqualTo("preorder-events-dlq");
             assertThat(deadLetter.toSettings().concurrency()).isEqualTo(1);
@@ -39,6 +42,12 @@ class ConsumerPropertiesTest {
     void 꺼_둔_환경에서도_소비기_설정이_범위_밖이면_받지_않는다() {
         runner.withPropertyValues("nova.sqs.consumer.max-messages=20").run(ctx ->
                 assertThat(ctx).getFailure().rootCause().hasMessageContaining("max-messages"));
+    }
+
+    @Test
+    void 꺼_둔_환경에서도_보류_설정이_범위_밖이면_받지_않는다() {
+        runner.withPropertyValues("nova.sqs.consumer.defer-max-delay=16m").run(ctx ->
+                assertThat(ctx).getFailure().rootCause().hasMessageContaining("max"));
     }
 
     @Test

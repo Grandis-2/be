@@ -71,7 +71,7 @@ class PaymentOutboxWiringTest {
         JsonNode body = jsonMapper.readTree(message.body());
         assertThat(body.get("eventType").asString()).isEqualTo("ORDER_PAYMENT_SETTLED");
         assertThat(body.get("aggregateType").asString()).isEqualTo("ORDER");
-        assertThat(body.get("aggregateId").asLong()).isEqualTo(attempt.target().id());
+        assertThat(body.get("aggregateId").asString()).isEqualTo(attempt.target().id().toString());
         assertThat(body.get("payload").get("result").asString()).isEqualTo("APPROVED");
     }
 

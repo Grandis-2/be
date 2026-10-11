@@ -38,6 +38,8 @@ dependencies {
     testImplementation 'org.testcontainers:testcontainers-mysql'
     // SQS 연계는 로컬 AWS 에뮬레이터 Floci 로 검증한다. 컨테이너 · 큐 도우미는 common:sqs 와 한 벌이다.
     testImplementation testFixtures(project(':common:sqs'))
+    // 관리 포트는 MockMvc 로 닿지 않아 지표 이름은 Prometheus 레지스트리 출력으로 본다
+    testImplementation 'io.micrometer:micrometer-registry-prometheus'
     // 동시성 테스트 도우미(Concurrently)
     testImplementation project(':common:testing')
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'

@@ -23,6 +23,7 @@ jobs:
     outputs:
       modules: ${{ steps.g.outputs.modules }}
       any: ${{ steps.g.outputs.any }}
+      services: ${{ steps.g.outputs.services }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -57,6 +58,9 @@ jobs:
           [ "$(echo "$list" | jq 'length')" -gt 0 ] \
             && echo "any=true" >> "$GITHUB_OUTPUT" \
             || echo "any=false" >> "$GITHUB_OUTPUT"
+          # 영향받는 모듈 중 서비스(이미지가 되는 것)가 있는가 — AOT 학습 검증을 돌릴지 정한다
+          echo "services=$(jq -r --argjson m "$list" \
+            '[.services[] | ":" + .] - ([.services[] | ":" + .] - $m) | length > 0' build/service-graph.json)" >> "$GITHUB_OUTPUT"
 
           {
             echo "## 테스트 대상"
@@ -175,6 +179,43 @@ jobs:
             skipped)  echo "테스트할 모듈이 없다" ;;
             *)        echo "::error::테스트가 실패했다. 빨간불이 뜬 잡 이름이 깨진 모듈이다"; exit 1 ;;
           esac
+
+  # 이미지의 AOT 캐시 학습(docker/aot-training)을 main 으로 가는 PR 에서 미리 돌려 본다. 이미지를 올리지 않는다.
+  # 학습 시나리오는 실제 API 를 부르므로 API 가 바뀌면 깨진다 — 머지 뒤 릴리스가 아니라 머지 전에 빨개지게 한다.
+  # 학습은 서비스 8개를 모두 띄워 10분 남짓 걸려 dev · 에픽 PR 에서는 돌리지 않는다. 서비스가 영향받지 않으면 건너뛴다.
+  aot:
+    needs: graph
+    if: github.event_name == 'pull_request' && github.base_ref == 'main' && needs.graph.outputs.services == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      # PR 코드(gradlew · train.sh)를 실행한다 — 토큰을 git 설정에 남기지 않는다
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: jar 만들기
+        run: |
+          set -euo pipefail
+          ./gradlew serviceGraph -q --no-daemon > /dev/null
+          jq -r '.services[] | ":" + . + ":bootJar"' build/service-graph.json | xargs -r ./gradlew --no-daemon
+          for s in $(jq -r '.services[]' build/service-graph.json); do
+            jar=$(ls "$s"/build/libs/*.jar | grep -v -- '-plain.jar$')
+            mkdir -p "dist/$s"
+            cp "$jar" "dist/$s/app.jar"
+          done
+
+      - name: 학습 · 검증
+        env:
+          FINAL_REPO: aot-check
+        run: SUMMARY="$GITHUB_STEP_SUMMARY" docker/aot-training/train.sh
 
   secrets:
     runs-on: ubuntu-latest

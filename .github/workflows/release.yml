@@ -1,6 +1,6 @@
 name: release
 
-# main 에 들어간 것만 이미지가 된다. PR 은 build.yml 이 검증만 한다.
+# main 에 들어간 것만 이미지가 되고, latest 가 바뀐 서비스는 바뀐 그 자리에서 ECS 에 다시 배포된다. PR 은 build.yml 이 검증만 한다.
 on:
   push:
     branches: [main]
@@ -13,12 +13,17 @@ on:
 
 # 한 번에 하나만 돈다. 겹쳐 돌면 latest 를 누가 마지막에 옮기는지 정해지지 않는다.
 # 대기는 하나만 남으므로 연달아 푸시하면 중간 커밋은 sha 태그 없이 건너뛴다. latest 는 마지막 내용을 따라간다.
+# 새 푸시 뒤에 옛 실행을 다시 돌리지 않는다 — latest 를 옛 이미지로 되감고 그대로 배포한다.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# ECR 저장소는 <네임스페이스>/<서비스> 다. 프로젝트 단위로 묶이고 IAM 은 repository/nova/* 하나로 건다.
+# 서비스가 늘어도 이름은 여기서만 정한다.
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_NAMESPACE: nova
+  ECS_CLUSTER: nova-prod   # 태스크 정의 · 서비스(nova-prod-<서비스>)는 인프라가 만든다
 
 permissions:
   contents: read
@@ -26,9 +31,10 @@ permissions:
 
 jobs:
   # ── 1단계: jar 를 전부 만들고, 내용이 바뀐 서비스만 고른다 ─────────────
-  # 바뀐 파일로 짐작하지 않는다. jar 와 Dockerfile 의 해시(내용 키)가 ECR 에 이미 있으면
-  # 그 이미지에 태그만 옮기고, 없으면 2단계에서 이미지를 만든다. jar 는 재현 가능하게 만들어진다.
-  # 이미지에 들어가는 것이 이 둘뿐이라는 전제다. Dockerfile 이 다른 파일을 COPY 하면 그 파일도 키에 넣는다.
+  # 바뀐 파일로 짐작하지 않는다. 내용 키가 ECR 에 이미 있으면 그 이미지에 태그만 옮기고, 없으면 2단계에서 이미지를 만든다.
+  # 내용 키 = jar + 이미지를 만드는 입력(Dockerfile 둘 · AOT 학습 디렉터리 · 큐 스크립트). jar 는 재현 가능하게 만들어진다.
+  # AOT 캐시 자체는 키에 넣지 않는다 — 학습할 때마다 바이트가 달라지지만, 같은 입력에서 나온 캐시는 같은 일을 한다.
+  # 이미지에 들어가는 것이 이것뿐이라는 전제다. Dockerfile 이 다른 파일을 COPY 하면 그 파일도 키에 넣는다.
   package:
     runs-on: ubuntu-latest
     outputs:
@@ -77,20 +83,25 @@ jobs:
               || { echo "::error::없는 서비스다: $s"; exit 1; }
           done
 
-          dockerfile=$(sha256sum docker/Dockerfile | cut -d' ' -f1)
+          # git 이 아는 것(경로 · 실행 비트 · 내용 해시)만 본다 — 체크아웃 시각 · 파일 시스템 권한이 키를 흔들지 않게
+          image_inputs=$(git ls-files -s docker/Dockerfile docker/Dockerfile.aot docker/aot-training docker/floci/create-queues.sh \
+            | sha256sum | cut -d' ' -f1)
           echo '[]' > plan.json
           for s in $(jq -r '.services[]' "$graph"); do
             jars=()
             for f in "$s"/build/libs/*.jar; do [[ $f == *-plain.jar ]] || jars+=("$f"); done
             [ "${#jars[@]}" -eq 1 ] || { echo "::error::$s 의 jar 가 하나가 아니다: ${jars[*]}"; exit 1; }
             jar=${jars[0]}
-            key=$(printf '%s%s' "$(sha256sum "$jar" | cut -d' ' -f1)" "$dockerfile" | sha256sum | cut -d' ' -f1)
+            key=$(printf '%s%s' "$(sha256sum "$jar" | cut -d' ' -f1)" "$image_inputs" | sha256sum | cut -d' ' -f1)
+            # AOT 학습은 서비스 사이를 오가므로 올리지 않는 서비스의 jar 도 함께 넘긴다
+            mkdir -p "dist/$s"
+            cp "$jar" "dist/$s/app.jar"
 
             image=null
             if grep -qxF -- "$s" <<< "$forced"; then
               action=publish
             else
-              found=$(aws ecr batch-get-image --repository-name "nova-$s" \
+              found=$(aws ecr batch-get-image --repository-name "$ECR_NAMESPACE/$s" \
                 --image-ids "imageTag=content-$key" \
                 --accepted-media-types \
                   application/vnd.docker.distribution.manifest.v2+json \
@@ -104,17 +115,19 @@ jobs:
               elif echo "$found" | jq -e '[.failures[].failureCode] == ["ImageNotFound"]' > /dev/null; then
                 action=publish
               else
-                echo "::error::nova-$s 조회 실패: $(echo "$found" | jq -c '.failures')"
+                echo "::error::$ECR_NAMESPACE/$s 조회 실패: $(echo "$found" | jq -c '.failures')"
                 exit 1
               fi
             fi
 
-            if [ "$action" = publish ]; then
-              mkdir -p "dist/$s" && cp "$jar" "dist/$s/app.jar"
-            fi
+            # && 로 잇지 않는다 — && 목록 앞쪽의 실패는 set -e 로 멈추지 않아, 판정이 빈 채로 초록이 된다
             jq --arg s "$s" --arg k "$key" --arg a "$action" --argjson i "$image" \
-              '. + [{service: $s, key: $k, action: $a, image: $i}]' plan.json > plan.tmp && mv plan.tmp plan.json
+              '. + [{service: $s, key: $k, action: $a, image: $i}]' plan.json > plan.tmp
+            mv plan.tmp plan.json
           done
+          # 서비스마다 판정이 하나씩 있어야 한다. 빠지면 그 서비스는 올라가지도 태그가 옮겨지지도 않은 채 초록이 된다
+          [ "$(jq length plan.json)" -eq "$(jq '.services | length' "$graph")" ] \
+            || { echo "::error::판정이 서비스 수와 다르다"; exit 1; }
 
           publish=$(jq -c '[.[] | select(.action == "publish") | {service, key}]' plan.json)
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
@@ -132,26 +145,39 @@ jobs:
       # 건너뛰는 서비스도 sha · latest 를 지금 내용의 이미지로 옮긴다. 되돌림 커밋으로 예전 내용이 되면
       # latest 가 직전 이미지에 남아 있기 때문이다. 매니페스트에 태그만 붙이므로 레이어는 오가지 않는다.
       # 다이제스트를 함께 넘겨, 매니페스트가 원본과 다르면 새 이미지를 만들지 않고 실패한다.
+      # latest 가 실제로 다른 이미지로 옮겨진 서비스는 그 자리에서 바로 배포한다 — 뒤 서비스가 실패해도 앞 배포는 남는다.
+      # 재실행이면 이전 시도에서 latest 만 옮기고 배포 전에 끊겼을 수 있어, 옮길 대상 서비스를 모두 다시 배포한다.
+      # 새로 올리는 서비스는 3단계가 올린 직후 배포한다.
       - name: 태그 옮기기
         env:
           SHA: ${{ github.sha }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          jq -c '.[] | select(.action == "move")' plan.json | while read -r row; do
+          # 대입으로 먼저 받아 jq 실패가 set -e 에 걸리게 한다
+          rows=$(jq -c '.[] | select(.action == "move")' plan.json)
+          while read -r row; do
+            [ -n "$row" ] || continue
             s=$(echo "$row" | jq -r .service)
             key=$(echo "$row" | jq -r .key)
             image=$(echo "$row" | jq -c .image)
+            latest="latest 는 이미 같음"
             for tag in "$SHA" latest; do
               # 이미 같은 이미지에 붙어 있으면 ImageAlreadyExistsException 이다. 할 일이 없으니 넘어간다.
-              if ! out=$(aws ecr put-image --repository-name "nova-$s" --image-tag "$tag" \
+              if out=$(aws ecr put-image --repository-name "$ECR_NAMESPACE/$s" --image-tag "$tag" \
                     --image-manifest "$(echo "$image" | jq -r .imageManifest)" \
                     --image-manifest-media-type "$(echo "$image" | jq -r .imageManifestMediaType)" \
                     --image-digest "$(echo "$image" | jq -r .imageId.imageDigest)" 2>&1 < /dev/null); then
+                if [ "$tag" = latest ]; then latest="latest 옮김"; fi
+              else
                 grep -qF ImageAlreadyExistsException <<< "$out" || { echo "$out"; exit 1; }
               fi
             done
-            echo "nova-$s: content-${key:0:12} → $SHA, latest"
-          done
+            echo "$ECR_NAMESPACE/$s: content-${key:0:12} → $SHA ($latest)"
+            if [ "$latest" = "latest 옮김" ] || [ "$RUN_ATTEMPT" -gt 1 ]; then
+              bash .github/scripts/ecs-deploy.sh "$s"
+            fi
+          done <<< "$rows"
 
       # 2단계가 같은 jar 를 쓰도록 넘긴다. gradle 을 다시 돌리지 않는다.
       - uses: actions/upload-artifact@v4
@@ -162,11 +188,53 @@ jobs:
           compression-level: 0   # jar 는 이미 압축돼 있다
           retention-days: 1
 
-  # ── 2단계: 이미지를 한 번 만들어 훑고, 훑은 그 이미지를 올린다 ──────────
-  # 빨간불의 의미는 스텝 이름으로 구분한다. 이미지 만들기 = Dockerfile, trivy = 보안, 올리기 = 권한·네트워크.
-  publish:
+  # ── 2단계: 이미지를 만들고 AOT 캐시를 학습해 얹는다 ──────────────────
+  # 기반 이미지 빌드 · 학습 · 캐시 얹기 · 검증을 한 job 에서 한다. 캐시는 학습한 그 이미지 위에만 얹어야 한다 — JVM 은 jar 가
+  # 학습 때와 같은지 보지 않아, 다시 빌드한 이미지와 짝지으면 옛 클래스가 돈다. 그래서 만든 이미지를 그대로 3단계로 넘긴다.
+  # 학습은 서비스 사이를 오가서 8개를 모두 띄우고, 올릴 서비스의 이미지만 넘긴다. 내용은 docker/aot-training/train.sh.
+  # 빨간불의 의미: 학습 = 학습 환경 · 시나리오, 검증 = 캐시가 받아지지 않음(JDK · 캐시 경로 어긋남).
+  image:
     needs: package
     if: needs.package.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read   # 학습 컨테이너를 여럿 띄운다 — AWS 자격(id-token)은 주지 않는다
+    steps:
+      # train.sh 가 띄우는 컨테이너에 토큰이 닿지 않게 git 설정에 남기지 않는다
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: jars
+          path: dist
+
+      - name: 학습 · 검증
+        run: SUMMARY="$GITHUB_STEP_SUMMARY" docker/aot-training/train.sh
+
+      - name: 이미지 넘기기
+        env:
+          PUBLISH: ${{ needs.package.outputs.publish }}
+        run: |
+          set -euo pipefail
+          mkdir -p images
+          for s in $(echo "$PUBLISH" | jq -r '.[].service'); do
+            docker save "release:$s" | gzip -1 > "images/$s.tar.gz"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: images
+          path: images/
+          compression-level: 0   # 이미 gzip 이다
+          retention-days: 1
+
+  # ── 3단계: 2단계가 만든 이미지를 훑고, 훑은 그 이미지를 올린다 ──────────
+  # 빨간불의 의미는 스텝 이름으로 구분한다. trivy = 보안, 올리기 = 권한·네트워크.
+  publish:
+    needs: [package, image]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -174,20 +242,18 @@ jobs:
         include: ${{ fromJSON(needs.package.outputs.publish) }}
     name: publish ${{ matrix.service }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false   # 같은 job 에서 서드파티 액션(trivy)이 돈다
 
       - uses: actions/download-artifact@v4
         with:
-          name: jars
-          path: dist
+          name: images
+          path: images
 
-      - name: 이미지 만들기
-        run: |
-          set -euo pipefail
-          mv "dist/${{ matrix.service }}/app.jar" dist/app.jar
-          docker build --file docker/Dockerfile \
-            --build-arg JAR_FILE=dist/app.jar \
-            --tag release:${{ matrix.service }} .
+      - name: 이미지 받기
+        run: docker load --quiet --input "images/${{ matrix.service }}.tar.gz"
 
       # 베이스 이미지의 OS 패키지와 안에 든 jar 를 함께 훑는다.
       # ECR 의 scanOnPush 는 올라간 뒤에 보므로, 막을 수 있는 건 여기뿐이다.
@@ -216,7 +282,7 @@ jobs:
       - name: 올리기
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
-          REPO: nova-${{ matrix.service }}
+          REPO: ${{ env.ECR_NAMESPACE }}/${{ matrix.service }}
           SHA: ${{ github.sha }}
           KEY: ${{ matrix.key }}
         run: |
@@ -227,3 +293,9 @@ jobs:
           done
           echo "### $REPO" >> "$GITHUB_STEP_SUMMARY"
           echo '`'"$REGISTRY/$REPO:$SHA"'`' >> "$GITHUB_STEP_SUMMARY"
+
+      # 올린 직후 이 서비스만 배포한다. 다른 서비스의 올리기가 실패해도 이 배포는 남고, 올리지 못한 서비스는 배포하지 않는다.
+      - name: 배포
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: bash .github/scripts/ecs-deploy.sh "$SERVICE"

@@ -3,6 +3,8 @@ package com.grandis.nova.order.event;
 import com.grandis.nova.order.order.cancel.CancelReason;
 import com.grandis.nova.order.order.cancel.SettlePreorderCancelCommand;
 
+import java.util.UUID;
+
 /**
  * PREORDER_CANCEL_REQUESTED 의 payload(preorder outbox.OutboxMessage.PreorderCancelRequested 가 보낸다).
  * 예약 내부 id 는 payload 에 없고 봉투의 aggregateId 로만 온다.
@@ -11,7 +13,7 @@ import com.grandis.nova.order.order.cancel.SettlePreorderCancelCommand;
  *
  * @param preorderId 예약 공개 UUID. 주문을 찾는 데 쓰지 않는다
  */
-public record PreorderCancelRequested(String preorderId, Long customerId, CancelReason reason, Long cancelSequence) {
+public record PreorderCancelRequested(String preorderId, UUID customerId, CancelReason reason, Long cancelSequence) {
 
     public PreorderCancelRequested {
         if (preorderId == null || preorderId.isBlank() || customerId == null || reason == null
@@ -21,7 +23,7 @@ public record PreorderCancelRequested(String preorderId, Long customerId, Cancel
         }
     }
 
-    SettlePreorderCancelCommand toCancel(Long preorderInternalId) {
+    SettlePreorderCancelCommand toCancel(UUID preorderInternalId) {
         return new SettlePreorderCancelCommand(preorderInternalId, preorderId, customerId, reason, cancelSequence);
     }
 }

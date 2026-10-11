@@ -7,6 +7,7 @@ import com.grandis.nova.payment.domain.model.PaymentTransaction;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * 주문 결제의 환불 확정 결과(완료 · 실패). order 의 결과 소비기가 받아 주문을 취소로 끝내거나(완료) 취소 중에 둔 채 환불 실패를 표시한다.
@@ -18,7 +19,7 @@ import java.util.Objects;
  * @param amount     환불 금액(원, 전액). 받는 쪽은 주문 총액과 대조만 한다
  * @param refundedAt 완료일 때만. 결제사가 알린 취소 시각
  */
-public record OrderRefundSettled(@JsonIgnore Long orderId, Result result, BigDecimal amount, Instant refundedAt)
+public record OrderRefundSettled(@JsonIgnore UUID orderId, Result result, BigDecimal amount, Instant refundedAt)
         implements OutboxMessage {
 
     public OrderRefundSettled {
@@ -50,11 +51,11 @@ public record OrderRefundSettled(@JsonIgnore Long orderId, Result result, BigDec
     }
 
     @Override
-    public Long aggregateId() {
+    public UUID aggregateId() {
         return orderId;
     }
 
-    private static Long orderIdOf(PaymentTransaction refund) {
+    private static UUID orderIdOf(PaymentTransaction refund) {
         if (refund.target().type() != TargetType.ORDER) {
             throw new IllegalArgumentException("주문 결제의 환불이 아니다: " + refund);
         }

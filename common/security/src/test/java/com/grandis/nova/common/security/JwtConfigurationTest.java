@@ -1,11 +1,13 @@
 package com.grandis.nova.common.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.validation.autoconfigure.ValidationAutoConfiguration; // Boot 4: spring-boot-validation 모듈로 이동
@@ -118,14 +120,45 @@ class JwtConfigurationTest {
     }
 
     @Test
-    @DisplayName("검증 전용(public-keys 만): 기동은 되고 JwtKeyRing 은 서명 못 함")
+    @DisplayName("검증 전용(public-keys 만): 만료 설정 없이 기동은 되고 JwtKeyRing 은 서명 못 하며 발급을 부르면 막는다")
     void verifierOnlyBoots() {
-        runner.withPropertyValues("jwt.issuer=nova", "jwt.access-token-validity=1h", "jwt.refresh-token-validity=14d",
+        runner.withPropertyValues("jwt.issuer=nova",
                         "jwt.public-keys." + TestKeys.KID + "=" + TestKeys.publicPem(TestKeys.ISSUER))
                 .run(ctx -> {
                     assertThat(ctx).hasNotFailed();
                     assertThat(ctx.getBean(JwtKeyRing.class).canSign()).isFalse();
                     assertThat(ctx.getBean(JwtKeyRing.class).resolve(TestKeys.KID)).isPresent();
+                    JwtTokenProvider provider = new JwtTokenProvider(ctx.getBean(JwtProperties.class),
+                            ctx.getBean(JwtKeyRing.class), Clock.systemUTC());
+                    assertThatThrownBy(() -> provider.create("1", Role.USER, UUID.randomUUID(), TokenType.ACCESS))
+                            .isInstanceOf(IllegalStateException.class).hasMessageContaining("발급하지 않는다");
+                    assertThatThrownBy(() -> provider.create("1", Role.USER, UUID.randomUUID(), TokenType.REFRESH,
+                            Instant.now().plusSeconds(60)))
+                            .isInstanceOf(IllegalStateException.class).hasMessageContaining("발급하지 않는다");
+                });
+    }
+
+    @Test
+    @DisplayName("검증 전용이라도 만료를 주면 지금처럼 검사한다")
+    void verifierValidityIsStillChecked() {
+        runner.withPropertyValues("jwt.issuer=nova", "jwt.access-token-validity=0s",
+                        "jwt.public-keys." + TestKeys.KID + "=" + TestKeys.publicPem(TestKeys.ISSUER))
+                .run(ctx -> {
+                    assertThat(ctx).hasFailed();
+                    assertThat(rootMessage(ctx.getStartupFailure()))
+                            .contains("jwt.access-token-validity must be positive");
+                });
+    }
+
+    @Test
+    @DisplayName("발급 서비스(private-key)는 만료 설정이 없으면 기동이 실패한다")
+    void issuerWithoutValidityFailsStartup() {
+        runner.withPropertyValues("jwt.issuer=nova", "jwt.key-id=" + TestKeys.KID, "jwt.private-key=" + PEM,
+                        "jwt.access-token-validity=1h")
+                .run(ctx -> {
+                    assertThat(ctx).hasFailed();
+                    assertThat(rootMessage(ctx.getStartupFailure()))
+                            .contains("jwt.access-token-validity and jwt.refresh-token-validity are required");
                 });
     }
 

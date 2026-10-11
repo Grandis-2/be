@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -17,14 +18,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class OrderRefundSettledTest {
 
     static final Instant NOW = Instant.parse("2026-10-04T00:00:00Z");
+    static final UUID ORDER_ID = UUID.fromString("0199a3c4-0000-7000-8000-000000000009");
 
     @Test
     void refundedCarriesOrderAmountAndTime() {
-        PaymentTransaction refund = refundOf(PaymentTarget.order(9L));
+        PaymentTransaction refund = refundOf(PaymentTarget.order(ORDER_ID));
 
         OrderRefundSettled settled = OrderRefundSettled.refunded(refund, NOW);
 
-        assertThat(settled.aggregateId()).isEqualTo(9L);
+        assertThat(settled.aggregateId()).isEqualTo(ORDER_ID);
         assertThat(settled.eventType()).isEqualTo(OutboundEventType.ORDER_REFUND_SETTLED);
         assertThat(settled.eventType().destination()).isEqualTo("order-events");
         assertThat(settled.result()).isEqualTo(OrderRefundSettled.Result.REFUNDED);
@@ -34,7 +36,7 @@ class OrderRefundSettledTest {
 
     @Test
     void failedHasNoRefundTime() {
-        OrderRefundSettled settled = OrderRefundSettled.failed(refundOf(PaymentTarget.order(9L)));
+        OrderRefundSettled settled = OrderRefundSettled.failed(refundOf(PaymentTarget.order(ORDER_ID)));
 
         assertThat(settled.result()).isEqualTo(OrderRefundSettled.Result.FAILED);
         assertThat(settled.refundedAt()).isNull();
@@ -42,7 +44,7 @@ class OrderRefundSettledTest {
 
     @Test
     void rejectsDrawEntryTarget() {
-        PaymentTransaction refund = refundOf(PaymentTarget.drawEntry(9L));
+        PaymentTransaction refund = refundOf(PaymentTarget.drawEntry(ORDER_ID));
 
         assertThatThrownBy(() -> OrderRefundSettled.failed(refund)).isInstanceOf(IllegalArgumentException.class);
     }
@@ -50,9 +52,9 @@ class OrderRefundSettledTest {
     @Test
     void rejectsMismatchedFields() {
         BigDecimal amount = BigDecimal.TEN;
-        assertThatThrownBy(() -> new OrderRefundSettled(1L, OrderRefundSettled.Result.REFUNDED, amount, null))
+        assertThatThrownBy(() -> new OrderRefundSettled(ORDER_ID, OrderRefundSettled.Result.REFUNDED, amount, null))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new OrderRefundSettled(1L, OrderRefundSettled.Result.FAILED, amount, NOW))
+        assertThatThrownBy(() -> new OrderRefundSettled(ORDER_ID, OrderRefundSettled.Result.FAILED, amount, NOW))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

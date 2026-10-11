@@ -1,5 +1,6 @@
 package com.grandis.nova.order.event;
 
+import com.grandis.nova.common.sqs.DeferredRedelivery;
 import com.grandis.nova.common.sqs.QueuePollerSettings;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;

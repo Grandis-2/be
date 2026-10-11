@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.syncjob;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.NewPreorder;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
@@ -17,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -26,7 +28,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class PreorderSyncJobRepositoryTest {
 
     static final String PAYLOAD = """
-            {"preorderToken":"t","customerId":1,"productId":2,"sku":"NOVA-1-BLK-256"}""";
+            {"preorderToken":"t","customerId":"00000000-0000-7000-8000-000000000001",
+             "productId":"00000000-0000-7000-8000-000000000002","sku":"NOVA-1-BLK-256"}""";
 
     @Autowired
     PreorderSyncJobRepository jobs;
@@ -37,7 +40,7 @@ class PreorderSyncJobRepositoryTest {
     @Autowired
     JdbcTemplate jdbcTemplate;
 
-    Long preorderId;
+    UUID preorderId;
 
     @BeforeEach
     void setUp() {
@@ -55,7 +58,7 @@ class PreorderSyncJobRepositoryTest {
         assertThat(job.getStatus()).isEqualTo(SyncJobStatus.PENDING);
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT JSON_UNQUOTE(JSON_EXTRACT(request_payload, '$.sku')) FROM preorder_sync_jobs WHERE id = ?",
-                String.class, job.getId())).isEqualTo("NOVA-1-BLK-256");
+                String.class, (Object) UuidBinary.toBytes(job.getId()))).isEqualTo("NOVA-1-BLK-256");
         assertThat(jobs.findByPreorderIdAndJobType(preorderId, SyncJobType.REGISTER)).isPresent();
     }
 
@@ -70,7 +73,7 @@ class PreorderSyncJobRepositoryTest {
 
     @Test
     void 끝나지_않은_등록_작업은_취소_시작에서_무효화된다() {
-        Long jobId = jobs.saveAndFlush(PreorderSyncJob.register(preorderId, PAYLOAD)).getId();
+        UUID jobId = jobs.saveAndFlush(PreorderSyncJob.register(preorderId, PAYLOAD)).getId();
 
         assertThat(jobs.cancelRegister(preorderId, Instant.now())).isEqualTo(1);
         assertThat(jobs.cancelRegister(preorderId, Instant.now())).isZero();
@@ -79,7 +82,7 @@ class PreorderSyncJobRepositoryTest {
 
     @Test
     void DEAD_LETTER_등록_작업도_무효화된다() {
-        Long jobId = jobs.saveAndFlush(PreorderSyncJob.register(preorderId, PAYLOAD)).getId();
+        UUID jobId = jobs.saveAndFlush(PreorderSyncJob.register(preorderId, PAYLOAD)).getId();
         workerSets(jobId, "DEAD_LETTER");
 
         assertThat(jobs.cancelRegister(preorderId, Instant.now())).isEqualTo(1);
@@ -88,7 +91,7 @@ class PreorderSyncJobRepositoryTest {
 
     @Test
     void 이미_성공한_등록_작업은_무효화하지_않는다() {
-        Long jobId = jobs.saveAndFlush(PreorderSyncJob.register(preorderId, PAYLOAD)).getId();
+        UUID jobId = jobs.saveAndFlush(PreorderSyncJob.register(preorderId, PAYLOAD)).getId();
         workerSets(jobId, "SUCCEEDED");
 
         assertThat(jobs.cancelRegister(preorderId, Instant.now())).isZero();
@@ -97,22 +100,23 @@ class PreorderSyncJobRepositoryTest {
 
     @Test
     void 취소_작업은_등록_무효화의_대상이_아니다() {
-        Long cancelJobId = jobs.saveAndFlush(PreorderSyncJob.cancel(preorderId, PAYLOAD)).getId();
+        UUID cancelJobId = jobs.saveAndFlush(PreorderSyncJob.cancel(preorderId, PAYLOAD)).getId();
 
         assertThat(jobs.cancelRegister(preorderId, Instant.now())).isZero();
         assertThat(status(cancelJobId)).isEqualTo("PENDING");
     }
 
     /** worker 가 하는 변경을 흉내 낸다. preorder 코드에는 이 전이가 없다. */
-    private void workerSets(Long jobId, String status) {
+    private void workerSets(UUID jobId, String status) {
         jdbcTemplate.update("""
                 UPDATE preorder_sync_jobs
                    SET status = ?, dead_lettered_at = IF(? = 'DEAD_LETTER', UTC_TIMESTAMP(6), dead_lettered_at)
                  WHERE id = ?
-                """, status, status, jobId);
+                """, status, status, UuidBinary.toBytes(jobId));
     }
 
-    private String status(Long jobId) {
-        return jdbcTemplate.queryForObject("SELECT status FROM preorder_sync_jobs WHERE id = ?", String.class, jobId);
+    private String status(UUID jobId) {
+        return jdbcTemplate.queryForObject("SELECT status FROM preorder_sync_jobs WHERE id = ?", String.class,
+                (Object) UuidBinary.toBytes(jobId));
     }
 }

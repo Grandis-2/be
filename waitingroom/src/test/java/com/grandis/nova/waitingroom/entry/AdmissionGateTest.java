@@ -20,6 +20,9 @@ import reactor.test.StepVerifier;
 import java.time.Clock;
 import java.util.List;
 
+import static com.grandis.nova.waitingroom.support.TestIds.customerId;
+import static com.grandis.nova.waitingroom.support.TestIds.productKey;
+
 /** 기동 직후처럼 판정 재료를 한 번도 받지 못한 노드는 통과시키지 않는다. */
 class AdmissionGateTest {
 
@@ -37,11 +40,11 @@ class AdmissionGateTest {
     void 판정_재료가_없으면_진입도_조회도_503_이다() {
         QueueLookup lookup = new QueueLookup(empty, clock, queue, queueTokens, closures, gate, metrics);
 
-        StepVerifier.create(gate.enter("101", "1"))
+        StepVerifier.create(gate.enter(productKey(101), customerId(1)))
                 .expectErrorMatches(e -> e instanceof BusinessException business
                         && business.errorCode() == CommonErrorCode.DEPENDENCY_UNAVAILABLE)
                 .verify();
-        StepVerifier.create(lookup.status("101", "1", "qt_x"))
+        StepVerifier.create(lookup.status(productKey(101), customerId(1), "qt_x"))
                 .expectErrorMatches(e -> e instanceof BusinessException business
                         && business.errorCode() == CommonErrorCode.DEPENDENCY_UNAVAILABLE)
                 .verify();

@@ -1,11 +1,13 @@
 package com.grandis.nova.catalog.registration;
 
 import com.grandis.nova.catalog.product.SaleMode;
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
@@ -15,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * 관리자의 "한 번 등록" 요청. 상품 · 옵션 축과 값 · 조합 설정 · 사진 · 보증 · 판매 유형별 설정을 한 본문에 담는다.
@@ -25,7 +28,7 @@ import java.util.Map;
  * 형식 검사(필수 · 길이 · 범위)는 여기 애너테이션이, 조합 · 축 · 사진 묶음 · 판매 유형 규칙은 {@link ProductRegistrationValidator} 가 한다.
  */
 public record ProductRegistrationRequest(
-        @NotNull Long categoryId,
+        @NotNull UUID categoryId,
         @NotNull SaleMode saleMode,
         @NotBlank @Size(max = 100) String title,
         @Size(max = 5000) String description,
@@ -39,6 +42,9 @@ public record ProductRegistrationRequest(
         @Valid Campaign campaign,
         List<@NotNull @Valid ShipmentBatch> shipmentBatches
 ) {
+
+    /** 색상 hex 형식. 등록 · 값 추가 · 값 수정이 같이 쓴다. */
+    public static final String HEX_PATTERN = "#[0-9A-Fa-f]{6}";
 
     /** 축 5개 · 축당 값 20개 · 조합 500개. 조합은 곱이라 상한이 없으면 수백만 행을 만들 수 있다. */
     public static final int MAX_AXES = 5;
@@ -58,6 +64,7 @@ public record ProductRegistrationRequest(
         return list == null ? List.of() : Collections.unmodifiableList(new ArrayList<>(list));
     }
 
+    @Schema(name = "RegistrationWarranty")
     public record Warranty(@NotNull Boolean offered, @DecimalMin("0") BigDecimal surcharge) {
         public Warranty {
             surcharge = surcharge == null ? BigDecimal.ZERO : surcharge;
@@ -65,6 +72,7 @@ public record ProductRegistrationRequest(
     }
 
     /** @param key color · storage 또는 관리자 입력 키(소문자로 접는다) */
+    @Schema(name = "RegistrationOptionAxis")
     public record OptionAxis(@NotBlank @Size(max = 40) String key, @NotBlank @Size(max = 60) String label,
                              @NotEmpty @Size(max = MAX_VALUES_PER_AXIS) List<@NotNull @Valid OptionValue> values) {
         public OptionAxis {
@@ -72,7 +80,10 @@ public record ProductRegistrationRequest(
         }
     }
 
-    public record OptionValue(@NotBlank @Size(max = 60) String value, @DecimalMin("0") BigDecimal surcharge) {
+    /** @param hex 색상 스와치(#RRGGBB). color 축의 값만 받고 다른 축이면 400. 없으면 null */
+    @Schema(name = "RegistrationOptionValue")
+    public record OptionValue(@NotBlank @Size(max = 60) String value, @DecimalMin("0") BigDecimal surcharge,
+                              @Pattern(regexp = HEX_PATTERN, message = "#RRGGBB 형식이어야 합니다.") String hex) {
         public OptionValue {
             surcharge = surcharge == null ? BigDecimal.ZERO : surcharge;
         }
@@ -85,6 +96,7 @@ public record ProductRegistrationRequest(
      * @param sku      비면 값의 정규화값을 '-' 로 이어 만든다
      * @param stock    일반 상품의 초기 재고. 일반은 제외하지 않은 조합마다 필수(0 허용 — 품절로 공개), 사전예약은 보내지 않는다
      */
+    @Schema(name = "RegistrationCombination")
     public record Combination(@NotNull Map<String, String> selections, Boolean excluded, @Size(max = 80) String sku,
                               Integer stock) {
         public Combination {
@@ -96,6 +108,7 @@ public record ProductRegistrationRequest(
      * @param gallery color 축이 있으면 색상 묶음만(묶음마다 color 필수), 없으면 기본 묶음(color null) 하나. 묶음당 최대 10장, 첫 장이 대표(primary 로 바꿀 수 있다)
      * @param detail  상세 영역별 이미지. 장수 상한과 대표 자동 지정이 없다(설계 §2.3 — 상세 콘텐츠에는 같은 제한을 정하지 않았다)
      */
+    @Schema(name = "RegistrationImages")
     public record Images(List<@NotNull @Valid GalleryBundle> gallery, List<@NotNull @Valid DetailBundle> detail) {
         public Images {
             gallery = frozen(gallery);
@@ -103,27 +116,32 @@ public record ProductRegistrationRequest(
         }
     }
 
+    @Schema(name = "RegistrationGalleryBundle")
     public record GalleryBundle(@Size(max = 60) String color, @NotEmpty List<@NotNull @Valid Image> items) {
         public GalleryBundle {
             items = frozen(items);
         }
     }
 
+    @Schema(name = "RegistrationDetailBundle")
     public record DetailBundle(@NotBlank @Size(max = 60) String section, @NotEmpty List<@NotNull @Valid Image> items) {
         public DetailBundle {
             items = frozen(items);
         }
     }
 
+    @Schema(name = "RegistrationImage")
     public record Image(@NotBlank @Size(max = 1000) String url, Boolean primary) {
         public Image {
             primary = primary != null && primary;
         }
     }
 
+    @Schema(name = "RegistrationCampaign")
     public record Campaign(@NotNull Instant opensAt, @NotNull Instant closesAt) {
     }
 
+    @Schema(name = "RegistrationShipmentBatch")
     public record ShipmentBatch(@NotNull Integer batchNumber, @NotNull Long positionFrom, Long positionTo,
                                 @NotNull LocalDate estimatedShipStart, @NotNull LocalDate estimatedShipEnd) {
     }

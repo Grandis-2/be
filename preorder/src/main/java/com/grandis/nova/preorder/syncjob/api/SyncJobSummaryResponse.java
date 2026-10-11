@@ -6,9 +6,10 @@ import com.grandis.nova.preorder.syncjob.application.SyncJobView;
 import com.grandis.nova.preorder.syncjob.domain.PreorderSyncJob;
 
 import java.time.Instant;
+import java.util.UUID;
 
 record SyncJobSummaryResponse(
-        Long syncJobId,
+        UUID syncJobId,
         String preorderId,
         SyncJobType jobType,
         SyncJobStatus status,

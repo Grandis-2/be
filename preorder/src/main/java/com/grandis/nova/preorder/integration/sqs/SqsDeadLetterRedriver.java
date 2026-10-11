@@ -8,6 +8,7 @@ import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.MessageAttributeValue;
 
 import java.util.Map;
+import java.util.UUID;
 
 /** DLQ 원문을 원래 큐로 다시 보낸다. 처리 결과를 그 행에 남기도록 행 id 를 메시지 속성에 싣는다. */
 @Component
@@ -23,12 +24,12 @@ class SqsDeadLetterRedriver implements DeadLetterRedriver {
     }
 
     @Override
-    public void redrive(String sourceQueue, String body, Long deadLetterId) {
+    public void redrive(String sourceQueue, String body, UUID deadLetterId) {
         sqs.sendMessage(request -> request
                 .queueUrl(queueUrls.of(sourceQueue))
                 .messageBody(body)
                 .messageAttributes(Map.of(DEAD_LETTER_ID_ATTRIBUTE, MessageAttributeValue.builder()
-                        .dataType("Number")
+                        .dataType("String")
                         .stringValue(deadLetterId.toString())
                         .build())));
     }

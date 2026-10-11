@@ -115,7 +115,7 @@ class ConfigBindingTest {
     @Test
     @DisplayName("auth.cookie.secure=true(예시 값) 컨텍스트에서 실제 Set-Cookie 헤더에 Secure·HttpOnly·SameSite=Strict 가 실린다")
     void secureCookieFlagReachesSetCookieHeader() throws Exception {
-        String access = provider.create("101", Role.USER, UUID.randomUUID(), TokenType.ACCESS);
+        String access = provider.create("0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d", Role.USER, UUID.randomUUID(), TokenType.ACCESS);
         String setCookie = MockMvcBuilders.webAppContextSetup(context).addFilters(requestIdFilter, springSecurityFilterChain).build()
                 .perform(delete("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(access)))
                 .andExpect(status().isNoContent())

@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.outbox;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.outbox.MessageTransport;
 import com.grandis.nova.common.outbox.OutboundMessage;
 import com.grandis.nova.common.outbox.OutboxWriter;
@@ -17,10 +18,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -30,13 +34,11 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ThreadLocalRandom;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.BDDMockito.willAnswer;
 
 /**
  * preorder 가 내보내는 메시지의 계약 — 봉투 칸 · 종류 → 목적지 · payload 모양. order · worker · 대기열(별도 저장소)이 읽으므로
@@ -45,11 +47,13 @@ import static org.mockito.BDDMockito.willAnswer;
  * 릴레이는 짧은 주기로 돌게 한다. 다른 시험이 이 주기를 물려받지 않게 끝나면 컨텍스트를 닫는다.
  */
 @PreorderIntegrationTest
+@Import(PreorderOutboxWiringTest.RecordingTransportConfig.class)
 @TestPropertySource(properties = "nova.outbox.relay-interval=200ms")
 @DirtiesContext
 class PreorderOutboxWiringTest {
 
     static final Duration TIMEOUT = Duration.ofSeconds(10);
+    static final UUID CUSTOMER_ID = UUID.fromString("00000000-0000-7000-8000-000000001024");
     static final List<String> ENVELOPE_FIELDS =
             List.of("eventId", "eventType", "aggregateType", "aggregateId", "occurredAt", "payload");
 
@@ -68,18 +72,14 @@ class PreorderOutboxWiringTest {
     @Autowired
     MeterRegistry registry;
 
-    @MockitoBean
-    MessageTransport transport;
+    @Autowired
+    RecordingTransport transport;
 
-    /** 전송 구현이 받은 메시지. */
-    final Queue<OutboundMessage> sent = new ConcurrentLinkedQueue<>();
-
-    long aggregateId;
+    UUID aggregateId;
 
     @BeforeEach
     void setUp() {
-        aggregateId = ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE);
-        willAnswer(invocation -> sent.add(invocation.getArgument(0))).given(transport).send(any());
+        aggregateId = UUID.randomUUID();
     }
 
     @Test
@@ -89,14 +89,15 @@ class PreorderOutboxWiringTest {
             // 커밋 직후 발행이 published_at 을 채우기 전에 읽도록 같은 트랜잭션에서 본다
             Long appended = idOf(new RegisterJobReady(aggregateId, "9f1c2d3e"));
             Map<String, Object> row = jdbcTemplate.queryForMap("""
-                    SELECT event_type, aggregate_type, aggregate_id, publish_attempts, published_at,
+                    SELECT event_type, aggregate_type, BIN_TO_UUID(aggregate_id) AS aggregate_id, publish_attempts,
+                           published_at,
                            DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%s.%fZ') AS created_at_utc
                       FROM preorder_outbox_events WHERE id = ?
                     """, appended);
             assertThat(row)
                     .containsEntry("event_type", "REGISTER_JOB_READY")
                     .containsEntry("aggregate_type", "PREORDER_SYNC_JOB")
-                    .containsEntry("aggregate_id", aggregateId)
+                    .containsEntry("aggregate_id", aggregateId.toString())
                     .containsEntry("publish_attempts", 0)
                     .containsEntry("published_at", null);
             assertThat(Instant.parse((String) row.get("created_at_utc"))).isBetween(before, Instant.now());
@@ -105,7 +106,7 @@ class PreorderOutboxWiringTest {
 
         assertThat(id).isNotNull();
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM order_outbox_events WHERE aggregate_id = ?",
-                Integer.class, aggregateId)).as("order 표에는 적지 않는다").isZero();
+                Integer.class, (Object) UuidBinary.toBytes(aggregateId))).as("order 표에는 적지 않는다").isZero();
     }
 
     @Test
@@ -118,10 +119,10 @@ class PreorderOutboxWiringTest {
         });
 
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM preorder_outbox_events WHERE aggregate_id = ?",
-                Integer.class, aggregateId)).isZero();
+                Integer.class, (Object) UuidBinary.toBytes(aggregateId))).isZero();
         // 발행은 비동기라 바로 보면 늘 비어 있다 — 커밋 직후 발행이 끝날 만한 시간 동안 보내지 않는지 본다
         await().during(Duration.ofSeconds(1)).atMost(TIMEOUT)
-                .until(() -> sent.stream().noneMatch(message -> message.eventId().equals(eventId)));
+                .until(() -> transport.sent.stream().noneMatch(message -> message.eventId().equals(eventId)));
     }
 
     @Test
@@ -137,29 +138,31 @@ class PreorderOutboxWiringTest {
         assertThat(envelope.get("eventId").asString()).isEqualTo(eventId);
         assertThat(envelope.get("eventType").asString()).isEqualTo("REGISTER_JOB_READY");
         assertThat(envelope.get("aggregateType").asString()).isEqualTo("PREORDER_SYNC_JOB");
-        assertThat(envelope.get("aggregateId").asLong()).isEqualTo(aggregateId);
+        assertThat(envelope.get("aggregateId").asString()).isEqualTo(aggregateId.toString());
         assertThat(envelope.get("occurredAt").isString()).as("ISO-8601 문자열").isTrue();
         assertThat(Instant.parse(envelope.get("occurredAt").asString())).as("행의 created_at(마이크로초, UTC)")
                 .isEqualTo(Instant.parse(jdbcTemplate.queryForObject(
                         "SELECT DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%s.%fZ') FROM preorder_outbox_events WHERE event_id = ?",
                         String.class, eventId)));
         assertThat(envelope.get("payload")).isEqualTo(json(
-                "{\"syncJobId\":" + aggregateId + ",\"preorderId\":\"9f1c2d3e\",\"jobType\":\"REGISTER\"}"));
+                "{\"syncJobId\":\"" + aggregateId + "\",\"preorderId\":\"9f1c2d3e\",\"jobType\":\"REGISTER\"}"));
     }
 
     /** 예약 내부 id 는 봉투의 aggregateId 로만 나가고 payload 에는 싣지 않는다. */
     @Test
     void 취소_요청은_order_events_로_내부_id_없이_보낸다() {
-        String eventId = append(new PreorderCancelRequested(aggregateId, "9f1c2d3e", 1024L, CancelReason.EXPIRY, 3L));
+        String eventId = append(new PreorderCancelRequested(aggregateId, "9f1c2d3e", CUSTOMER_ID, CancelReason.EXPIRY,
+                3L));
 
         OutboundMessage message = sentFor(eventId);
         JsonNode envelope = jsonMapper.readTree(message.body());
 
         assertThat(message.destination()).isEqualTo("order-events");
         assertThat(envelope.get("aggregateType").asString()).isEqualTo("PREORDER");
-        assertThat(envelope.get("aggregateId").asLong()).isEqualTo(aggregateId);
+        assertThat(envelope.get("aggregateId").asString()).isEqualTo(aggregateId.toString());
         assertThat(envelope.get("payload")).isEqualTo(json(
-                "{\"preorderId\":\"9f1c2d3e\",\"customerId\":1024,\"reason\":\"EXPIRY\",\"cancelSequence\":3}"));
+                "{\"preorderId\":\"9f1c2d3e\",\"customerId\":\"" + CUSTOMER_ID
+                        + "\",\"reason\":\"EXPIRY\",\"cancelSequence\":3}"));
     }
 
     /** 작업 종류(jobType)는 record 칸이 아니라 이벤트가 정한 고정값이다. */
@@ -171,7 +174,7 @@ class PreorderOutboxWiringTest {
 
         assertThat(message.destination()).isEqualTo("preorder-cancel");
         assertThat(jsonMapper.readTree(message.body()).get("payload")).isEqualTo(json(
-                "{\"syncJobId\":" + aggregateId + ",\"preorderId\":\"9f1c2d3e\",\"jobType\":\"CANCEL\"}"));
+                "{\"syncJobId\":\"" + aggregateId + "\",\"preorderId\":\"9f1c2d3e\",\"jobType\":\"CANCEL\"}"));
     }
 
     /** 대기열은 payload 의 일정을 그대로 믿는다 — 시각 형식도 계약이다. */
@@ -185,7 +188,7 @@ class PreorderOutboxWiringTest {
 
         assertThat(message.destination()).isEqualTo("waitingroom-events");
         assertThat(jsonMapper.readTree(message.body()).get("payload")).isEqualTo(json(
-                "{\"productId\":" + aggregateId + ",\"scheduleVersion\":4,\"opensAt\":\"2026-10-10T01:00:00Z\","
+                "{\"productId\":\"" + aggregateId + "\",\"scheduleVersion\":4,\"opensAt\":\"2026-10-10T01:00:00Z\","
                         + "\"closesAt\":\"2026-10-11T01:00:00Z\",\"visible\":false,"
                         + "\"changedAt\":\"2026-10-02T02:03:04.123456Z\",\"change\":\"RESCHEDULED\"}"));
     }
@@ -204,7 +207,7 @@ class PreorderOutboxWiringTest {
         jdbcTemplate.update("""
                 INSERT INTO preorder_outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, created_at)
                 VALUES (?, ?, ?, ?, '{}', UTC_TIMESTAMP(6) - INTERVAL 2 MINUTE)
-                """, eventId, aggregateType, aggregateId, eventType);
+                """, eventId, aggregateType, UuidBinary.toBytes(aggregateId), eventType);
 
         assertThat(sentFor(eventId).destination()).isEqualTo(destination);
         await().atMost(TIMEOUT).until(() -> jdbcTemplate.queryForObject(
@@ -218,7 +221,7 @@ class PreorderOutboxWiringTest {
                 INSERT INTO preorder_outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload,
                                                     publish_attempts, created_at)
                 VALUES (?, 'PREORDER_SYNC_JOB', ?, 'CANCEL_JOB_READY', '{}', 7, UTC_TIMESTAMP(6))
-                """, ShopFixtures.unique(), aggregateId);
+                """, ShopFixtures.unique(), UuidBinary.toBytes(aggregateId));
 
         await().atMost(TIMEOUT).untilAsserted(() -> {
             assertThat(registry.get("preorder.outbox.unpublished").gauge().value()).isPositive();
@@ -244,7 +247,32 @@ class PreorderOutboxWiringTest {
 
     private OutboundMessage sentFor(String eventId) {
         return await().atMost(TIMEOUT).until(
-                () -> sent.stream().filter(message -> message.eventId().equals(eventId)).findFirst().orElse(null),
+                () -> transport.sent.stream().filter(message -> message.eventId().equals(eventId)).findFirst().orElse(null),
                 message -> message != null);
+    }
+
+    /**
+     * 받은 메시지를 기록만 하는 전송기. mock 을 쓰지 않는다 — 릴레이 · 커밋 직후 발행이 다른 스레드에서 보내는 동안
+     * 시험마다 다시 스텁하면 Mockito 가 미완성 스텁(UnfinishedStubbingException)으로 가끔 실패했다.
+     */
+    static class RecordingTransport implements MessageTransport {
+
+        final Queue<OutboundMessage> sent = new ConcurrentLinkedQueue<>();
+
+        @Override
+        public void send(OutboundMessage message) {
+            sent.add(message);
+        }
+    }
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class RecordingTransportConfig {
+
+        /** 시험 설정의 로그 전송기 대신 쓴다. */
+        @Bean
+        @Primary
+        RecordingTransport recordingTransport() {
+            return new RecordingTransport();
+        }
     }
 }

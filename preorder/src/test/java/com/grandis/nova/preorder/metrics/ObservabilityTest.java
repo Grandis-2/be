@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.metrics;
 
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
@@ -14,32 +15,26 @@ import com.grandis.nova.preorder.support.ShopFixtures;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfigureMetrics;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
-import static org.hamcrest.Matchers.containsString;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /** 부하 시험 · 운영에서 볼 지표가 실제로 기록되고 /actuator/prometheus 로 나가는지. 레지스트리를 공유하므로 증가분으로 본다. */
 @PreorderIntegrationTest
 @AutoConfigureMetrics
-@AutoConfigureMockMvc
 class ObservabilityTest {
 
     @Autowired
@@ -64,7 +59,7 @@ class ObservabilityTest {
     JdbcTemplate jdbcTemplate;
 
     @Autowired
-    MockMvc mockMvc;
+    PrometheusMeterRegistry prometheus;
 
     @MockitoBean
     CatalogClient catalogClient;
@@ -98,14 +93,14 @@ class ObservabilityTest {
     @Test
     void 이벤트는_종류별_처리_결과와_소비_지연을_남긴다() {
         AcceptResult result = accepts.accept(fixtures.customer());
-        Long jobId = fixtures.workerSucceeds(result.preorder().id(), "REGISTER");
+        UUID jobId = fixtures.workerSucceeds(result.preorder().id(), "REGISTER");
         long succeeded = timerCount("preorder.events.handle", "eventType", "EXTERNAL_JOB_SUCCEEDED");
         long unknown = timerCount("preorder.events.handle", "eventType", "UNKNOWN");
 
         dispatcher.dispatch("""
                 {"eventId":"%s","eventType":"EXTERNAL_JOB_SUCCEEDED","aggregateType":"PREORDER_SYNC_JOB",
-                 "aggregateId":%d,"occurredAt":"2026-09-03T01:00:03.470Z",
-                 "payload":{"syncJobId":%d,"preorderId":"%s","jobType":"REGISTER","externalNumber":"R-%s"}}
+                 "aggregateId":"%s","occurredAt":"2026-09-03T01:00:03.470Z",
+                 "payload":{"syncJobId":"%s","preorderId":"%s","jobType":"REGISTER","externalNumber":"R-%s"}}
                 """.formatted(ShopFixtures.unique(), jobId, jobId, AcceptFixtures.tokenOf(result),
                 ShopFixtures.unique()));
         assertThatThrownBy(() -> dispatcher.dispatch("not-json")).isInstanceOf(RuntimeException.class);
@@ -120,15 +115,15 @@ class ObservabilityTest {
     @Test
     void 발생_시각이_미래면_소비_지연을_0_으로_남긴다() {
         AcceptResult result = accepts.accept(fixtures.customer());
-        Long jobId = fixtures.workerSucceeds(result.preorder().id(), "REGISTER");
+        UUID jobId = fixtures.workerSucceeds(result.preorder().id(), "REGISTER");
         Timer lag = registry.timer("preorder.events.lag", "eventType", "EXTERNAL_JOB_SUCCEEDED");
         long count = lag.count();
         double total = lag.totalTime(TimeUnit.NANOSECONDS);
 
         dispatcher.dispatch("""
                 {"eventId":"%s","eventType":"EXTERNAL_JOB_SUCCEEDED","aggregateType":"PREORDER_SYNC_JOB",
-                 "aggregateId":%d,"occurredAt":"2099-01-01T00:00:00Z",
-                 "payload":{"syncJobId":%d,"preorderId":"%s","jobType":"REGISTER","externalNumber":"R-%s"}}
+                 "aggregateId":"%s","occurredAt":"2099-01-01T00:00:00Z",
+                 "payload":{"syncJobId":"%s","preorderId":"%s","jobType":"REGISTER","externalNumber":"R-%s"}}
                 """.formatted(ShopFixtures.unique(), jobId, jobId, AcceptFixtures.tokenOf(result),
                 ShopFixtures.unique()));
 
@@ -141,7 +136,7 @@ class ObservabilityTest {
         double published = publishCount();
 
         transactionTemplate.executeWithoutResult(status -> outboxWriter.append(
-                new RegisterJobReady(ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE), ShopFixtures.unique())));
+                new RegisterJobReady(UUID.randomUUID(), ShopFixtures.unique())));
 
         await().atMost(Duration.ofSeconds(5)).until(() -> publishCount() == published + 1);
     }
@@ -150,11 +145,11 @@ class ObservabilityTest {
     void 상태_지표는_갱신할_때_DB_에서_센다() {
         accepts.accept(fixtures.customer());
         jdbcTemplate.update("""
-                INSERT INTO dead_letter_events (source_queue, message_id, body, failure_reason, receive_count, status,
-                                                created_at, updated_at)
-                VALUES ('preorder-events', ?, 'not-json', 'UNREADABLE_BODY', 5, 'OPEN',
+                INSERT INTO preorder_dead_letter_events (id, source_queue, message_id, body, failure_reason, receive_count,
+                                                status, created_at, updated_at)
+                VALUES (?, 'preorder-events', ?, 'not-json', 'UNREADABLE_BODY', 5, 'OPEN',
                         UTC_TIMESTAMP(6) - INTERVAL 1 HOUR, UTC_TIMESTAMP(6))
-                """, ShopFixtures.unique());
+                """, UuidBinary.toBytes(UUID.randomUUID()), ShopFixtures.unique());
 
         stateGauges.refresh();
 
@@ -169,17 +164,16 @@ class ObservabilityTest {
         accepts.accept(fixtures.customer());
 
         assertThat(registry.get("cache.gets").tag("cache", "catalog.products").functionCounters()).isNotEmpty();
-        mockMvc.perform(get("/actuator/prometheus"))
-                .andExpect(status().isOk())
-                .andExpect(content().string(containsString("preorder_accept_seconds")))
-                .andExpect(content().string(containsString("preorder_campaign_lock_wait_seconds_bucket")))
-                .andExpect(content().string(containsString("preorder_status_count")))
-                .andExpect(content().string(containsString("# TYPE preorder_outbox_unpublished gauge")))
-                .andExpect(content().string(containsString("# TYPE preorder_outbox_unpublished_max_attempts gauge")))
-                .andExpect(content().string(containsString("hikaricp_connections_pending")))
-                .andExpect(content().string(containsString("resilience4j_circuitbreaker_state")))
-                .andExpect(content().string(containsString("resilience4j_retry_calls")))
-                .andExpect(content().string(containsString("resilience4j_bulkhead_available_concurrent_calls")));
+        assertThat(prometheus.scrape()).contains(
+                "preorder_accept_seconds",
+                "preorder_campaign_lock_wait_seconds_bucket",
+                "preorder_status_count",
+                "# TYPE preorder_outbox_unpublished gauge",
+                "# TYPE preorder_outbox_unpublished_max_attempts gauge",
+                "hikaricp_connections_pending",
+                "resilience4j_circuitbreaker_state",
+                "resilience4j_retry_calls",
+                "resilience4j_bulkhead_available_concurrent_calls");
     }
 
     private long timerCount(String name, String tag, String value) {

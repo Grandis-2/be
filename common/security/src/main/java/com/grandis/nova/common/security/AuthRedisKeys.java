@@ -12,8 +12,18 @@ public final class AuthRedisKeys {
     /** 현재 리프레시 jti. TTL = 리프레시 만료. 발급·회전·로그아웃이 쓴다. */
     public static final String REFRESH_PREFIX = "auth:refresh:";
 
-    /** 세션(sid) 폐기 표식. TTL = 액세스 만료. 로그아웃·재사용 탐지가 심고 필터가 읽는다. */
+    /**
+     * 세션(sid) 폐기 표식. 값은 {@link #REVOKED_SESSION_MARK}(로그아웃 · 재사용 탐지, TTL = 액세스 만료) 또는
+     * {@link #REPLACED_SESSION_MARK}(같은 회원이 다른 곳에서 새로 로그인해 끊긴 세션, TTL = 리프레시 만료 — 재발급 401 에도 이유를 싣는다).
+     * member 가 심고 필터가 읽는다. 값과 상관없이 키가 있으면 폐기다.
+     */
     public static final String REVOKED_SESSION_PREFIX = "auth:revoked-sid:";
+
+    /** 로그아웃 · 재사용 탐지로 끊긴 세션의 표식 값. */
+    public static final String REVOKED_SESSION_MARK = "1";
+
+    /** 같은 회원의 새 로그인에 밀려 끊긴 세션의 표식 값. 이 값이면 401 이 {@code details.reason = SESSION_REPLACED} 다. */
+    public static final String REPLACED_SESSION_MARK = "replaced";
 
     /** 회원 단위 not-before(epoch 초). 이 시각 이전에 발급된 토큰은 전부 무효. TTL = 리프레시 만료. 제재·탈퇴가 심는다. */
     public static final String NOT_BEFORE_PREFIX = "auth:nbf:";

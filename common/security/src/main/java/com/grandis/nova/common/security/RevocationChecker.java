@@ -13,4 +13,12 @@ package com.grandis.nova.common.security;
 public interface RevocationChecker {
 
     boolean isRevoked(TokenClaims claims);
+
+    /**
+     * 폐기된 토큰이 같은 회원의 새 로그인에 밀려 끊긴 세션의 것인가. {@link #isRevoked} 가 true 일 때만 묻는다 — 401 에 이유를 싣는 데만 쓰고
+     * 판정에는 쓰지 않는다. 기본 구현은 false(이유 없는 401). 조회가 안 되면 RevocationCheckFailedException 이고 부르는 쪽이 이유 없이 401 을 낸다.
+     */
+    default boolean isReplaced(TokenClaims claims) {
+        return false;
+    }
 }

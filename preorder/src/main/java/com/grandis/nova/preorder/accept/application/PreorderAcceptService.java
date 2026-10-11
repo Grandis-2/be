@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
@@ -57,20 +58,20 @@ public class PreorderAcceptService {
      *
      * @param queryProductId 게이트웨이가 대기열을 고른 쿼리 값. 본문과 달라야 할 이유가 없다
      */
-    public AcceptResult acceptByCustomer(Long customerId, Long queryProductId, Long productId, Long optionId,
+    public AcceptResult acceptByCustomer(UUID customerId, UUID queryProductId, UUID productId, UUID optionId,
                                          String idempotencyKey, String admissionTicket) {
         return measured(() -> acceptVerified(customerId, queryProductId, productId, optionId, idempotencyKey,
                 admissionTicket));
     }
 
     /** 관리자 대신 접수. 같은 트랜잭션 · 같은 규칙이고 입장권만 없다. */
-    public AcceptResult acceptByAdmin(Long customerId, Long productId, Long optionId, String idempotencyKey,
+    public AcceptResult acceptByAdmin(UUID customerId, UUID productId, UUID optionId, String idempotencyKey,
                                       String reason, String internalNote) {
         return measured(() -> accept(new AcceptCommand(customerId, productId, optionId, idempotencyKey, null,
                 EventActor.ADMIN, reason, internalNote)));
     }
 
-    private AcceptResult acceptVerified(Long customerId, Long queryProductId, Long productId, Long optionId,
+    private AcceptResult acceptVerified(UUID customerId, UUID queryProductId, UUID productId, UUID optionId,
                                         String idempotencyKey, String admissionTicket) {
         if (!queryProductId.equals(productId)) {
             throw ValidationFailures.of("productId", "쿼리의 productId 와 같아야 합니다.");

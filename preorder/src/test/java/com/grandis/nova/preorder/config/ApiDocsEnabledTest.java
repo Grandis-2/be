@@ -36,7 +36,7 @@ class ApiDocsEnabledTest {
                         not(hasItem("customerId"))))
                 .andExpect(jsonPath("$.paths['/api/v1/preorders/{preorderId}'].get.parameters[*].name",
                         not(hasItem("viewer"))))
-                .andExpect(jsonPath("$.paths['/api/v1/products/{productId}/shipment-batches'].get.security",
+                .andExpect(jsonPath("$.paths['/api/v1/preorders/products/{productId}/shipment-batches'].get.security",
                         empty()));
     }
 
@@ -47,7 +47,7 @@ class ApiDocsEnabledTest {
                 .andExpect(jsonPath("$.paths['/api/v1/preorders'].get.responses['401']").exists())
                 .andExpect(jsonPath("$.paths['/api/v1/admin/preorders'].get.responses['403']").exists())
                 .andExpect(jsonPath("$.paths['/api/v1/preorders'].get.responses['default']").exists())
-                .andExpect(jsonPath("$.paths['/api/v1/products/{productId}/shipment-batches'].get.responses['401']")
+                .andExpect(jsonPath("$.paths['/api/v1/preorders/products/{productId}/shipment-batches'].get.responses['401']")
                         .doesNotExist());
     }
 

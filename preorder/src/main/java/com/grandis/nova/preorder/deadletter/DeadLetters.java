@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.util.Optional;
+import java.util.UUID;
 
 /** DLQ 적재와 되돌린 메시지의 결과 기록(모듈 공개 API). 큐 소비자가 부른다. */
 @Service
@@ -55,7 +56,7 @@ public class DeadLetters {
 
     /** 되돌린 메시지가 처리됐다. 이미 결과가 났거나 없는 행이면 바꾸지 않는다. */
     @Transactional
-    public void markRedriveSucceeded(Long deadLetterId) {
+    public void markRedriveSucceeded(UUID deadLetterId) {
         if (events.markOutcome(deadLetterId, DeadLetterStatus.SUCCEEDED, clock.instant()) != 1) {
             log.info("되돌린 메시지의 처리 결과를 남기지 않았다(이미 결과가 있거나 없는 행) deadLetterId={}", deadLetterId);
         }
@@ -63,7 +64,7 @@ public class DeadLetters {
 
     /** 앞선 행이 없으면(속성이 잘못 실림) 잇지 않는다 — FK 에 걸려 적재가 계속 실패하지 않게. */
     private IncomingDeadLetter linkPrevious(IncomingDeadLetter incoming) {
-        Long previous = incoming.redrivenFromId();
+        UUID previous = incoming.redrivenFromId();
         if (previous == null) {
             return incoming;
         }

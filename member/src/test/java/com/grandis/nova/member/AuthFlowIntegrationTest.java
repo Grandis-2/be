@@ -17,6 +17,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.security.BearerTokens;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import com.grandis.nova.member.auth.application.AdminLoginService;
@@ -26,7 +27,9 @@ import com.grandis.nova.member.auth.api.AuthCookies;
 import com.grandis.nova.member.auth.application.KakaoLoginService;
 import com.grandis.nova.member.auth.infrastructure.kakao.KakaoOAuthClient;
 import com.grandis.nova.member.auth.infrastructure.kakao.KakaoUserInfo;
+import com.grandis.nova.member.customer.Customer;
 import com.grandis.nova.member.customer.CustomerRepository;
+import com.grandis.nova.member.customer.Profile;
 import jakarta.servlet.http.Cookie;
 import java.util.List;
 import java.util.UUID;
@@ -44,6 +47,7 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.web.FilterChainProxy;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -73,6 +77,7 @@ class AuthFlowIntegrationTest {
     @Autowired CustomerRepository customers;
     @Autowired KakaoLoginService loginService;
     @Autowired StringRedisTemplate redis;
+    @Autowired JdbcTemplate jdbc;
     @MockitoBean KakaoOAuthClient kakao;
 
     private MockMvc mvc;
@@ -133,12 +138,81 @@ class AuthFlowIntegrationTest {
     void secondLoginReusesRow() throws Exception {
         login();
         long before = customers.count();
-        Long id = customers.findByKakaoId(kakaoId).orElseThrow().getId();
+        UUID id = customers.findByKakaoId(kakaoId).orElseThrow().getId();
 
         login();
 
         assertThat(customers.count()).isEqualTo(before);
         assertThat(customers.findByKakaoId(kakaoId).orElseThrow().getId()).isEqualTo(id);
+    }
+
+    @Test
+    @DisplayName("다른 곳에서 새로 로그인하면 앞 세션이 끊긴다 — 앞 액세스 · 앞 리프레시 모두 401 details.reason SESSION_REPLACED, 새 세션은 그대로")
+    void newLoginReplacesThePreviousSession() throws Exception {
+        MvcResult phone = login();
+        String phoneAccess = json(phone, "/data/sessionToken");
+        mvc.perform(get("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(phoneAccess))).andExpect(status().isOk());
+
+        MvcResult laptop = login();
+
+        mvc.perform(get("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(phoneAccess)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"))
+                .andExpect(jsonPath("$.error.details.reason").value("SESSION_REPLACED"));
+        mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(refreshCookie(phone)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"))
+                .andExpect(jsonPath("$.error.details.reason").value("SESSION_REPLACED"));
+        mvc.perform(get("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(json(laptop, "/data/sessionToken"))))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(refreshCookie(laptop)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("로그아웃 · 재사용 탐지로 끊긴 세션의 401 에는 이유가 없다 — SESSION_REPLACED 는 새 로그인에 밀린 세션에만")
+    void otherRevocationsCarryNoReplacedReason() throws Exception {
+        MvcResult r = login();
+        String access = json(r, "/data/sessionToken");
+        mvc.perform(delete("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(access))).andExpect(status().isNoContent());
+
+        mvc.perform(get("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(access)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.details.reason").doesNotExist());
+        mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(refreshCookie(r)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.details.reason").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("다시 로그인하면 표시명이 카카오 닉네임을 따라간다 — 닉네임이 없으면(동의 철회 · 빈 값) 그대로, 내 정보는 덮지 않는다")
+    void displayNameFollowsKakaoNickname() throws Exception {
+        login();
+        Customer first = customers.findByKakaoId(kakaoId).orElseThrow();
+        first.changeProfile(new Profile("김실명", null, null));
+        customers.saveAndFlush(first);
+
+        when(kakao.fetchUser("kakao-at")).thenReturn(new KakaoUserInfo(kakaoId, "길동이", null));
+        assertThat(json(login(), "/data/displayName")).isEqualTo("길동이");
+        Customer renamed = customers.findByKakaoId(kakaoId).orElseThrow();
+        assertThat(renamed.getDisplayName()).isEqualTo("길동이");
+        assertThat(renamed.profile().name()).as("표시명만 바꾸고 내 정보는 그대로").isEqualTo("김실명");
+
+        for (String missing : new String[] {null, "   "}) {
+            when(kakao.fetchUser("kakao-at")).thenReturn(new KakaoUserInfo(kakaoId, missing, null));
+            assertThat(json(login(), "/data/displayName")).as("닉네임 %s — 기존 값을 둔다", missing).isEqualTo("길동이");
+            assertThat(customers.findByKakaoId(kakaoId).orElseThrow().getDisplayName()).isEqualTo("길동이");
+        }
+
+        // 대소문자 · 악센트만 바뀐 닉네임도 저장한다 — 칼럼 콜레이션은 john = John, Jose = José 로 본다
+        for (String[] change : new String[][] {{"john", "John"}, {"Jose", "José"}}) {
+            when(kakao.fetchUser("kakao-at")).thenReturn(new KakaoUserInfo(kakaoId, change[0], null));
+            login();
+            when(kakao.fetchUser("kakao-at")).thenReturn(new KakaoUserInfo(kakaoId, change[1], null));
+            assertThat(json(login(), "/data/displayName")).isEqualTo(change[1]);
+            assertThat(customers.findByKakaoId(kakaoId).orElseThrow().getDisplayName()).as("%s → %s", change[0], change[1])
+                    .isEqualTo(change[1]);
+        }
     }
 
     @Test
@@ -152,13 +226,17 @@ class AuthFlowIntegrationTest {
             return new KakaoUserInfo(kakaoId, "홍길동", null);
         });
         java.util.List<Concurrently.Outcome<KakaoLoginService.LoginResult>> results = Concurrently.run(n,
-                i -> () -> loginService.login("c", REDIRECT, com.grandis.nova.member.auth.application.ClientInfo.UNKNOWN));
+                i -> () -> loginService.login("c", REDIRECT));
 
         assertThat(results).allSatisfy(r -> {
             assertThat(r.error()).isNull();
             assertThat(r.value().displayName()).isEqualTo("홍길동");
         });
         assertThat(customers.findAll().stream().filter(c -> c.getKakaoId().equals(kakaoId)).count()).isEqualTo(1);
+        // 동시에 로그인해도 살아 남는 세션은 하나다 — 회원 행 잠금이 로그인을 줄 세워 늦은 쪽이 앞 쪽 세션을 끊는다
+        UUID customerId = customers.findByKakaoId(kakaoId).orElseThrow().getId();
+        assertThat(jdbc.queryForObject("SELECT COUNT(DISTINCT family_id) FROM refresh_tokens WHERE customer_id = ? AND revoked_at IS NULL",
+                Integer.class, (Object) UuidBinary.toBytes(customerId))).as("살아 있는 세션 수").isEqualTo(1);
         // catch (DataIntegrityViolationException) 에 들어간 횟수. 0 이면 직렬화돼서 분기를 안 밟은 것이고 이 시험은 실측이 아니다
         long lostRaces = output.getOut().lines().filter(l -> l.contains("customers insert lost the race on kakao_id")).count();
         assertThat(lostRaces).as("1062 재조회 분기 진입 횟수").isBetween(1L, (long) n - 1);

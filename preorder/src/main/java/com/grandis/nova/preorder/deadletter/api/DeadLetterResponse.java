@@ -6,6 +6,7 @@ import com.grandis.nova.preorder.deadletter.domain.DeadLetterStatus;
 import com.grandis.nova.preorder.deadletter.domain.FailureReason;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 상세. 원문과 되돌리기 · 버리기 기록을 함께 준다. 실제 예외는 messageId 로 처리 실패 로그에서 찾는다.
@@ -13,20 +14,20 @@ import java.time.Instant;
  * @param preorderId 예약 공개 UUID. 예약이 없는 이벤트면 null
  */
 record DeadLetterResponse(
-        Long deadLetterId,
+        UUID deadLetterId,
         String sourceQueue,
         String messageId,
         String eventId,
         String eventType,
         String aggregateType,
-        Long aggregateId,
+        UUID aggregateId,
         String preorderId,
-        Long customerId,
+        UUID customerId,
         FailureReason failureReason,
         int receiveCount,
         DeadLetterStatus status,
         boolean redrivable,
-        Long redrivenFromId,
+        UUID redrivenFromId,
         String body,
         Instant sentAt,
         String redriveRequestedBy,

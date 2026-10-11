@@ -11,6 +11,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -28,41 +29,41 @@ public class SyncJobs {
 
     /** 외부 등록 작업을 만든다. @return 작업 id */
     @Transactional(propagation = Propagation.MANDATORY)
-    public Long createRegister(Long preorderId, String requestPayload) {
+    public UUID createRegister(UUID preorderId, String requestPayload) {
         return syncJobs.save(PreorderSyncJob.register(preorderId, requestPayload)).getId();
     }
 
     /** 외부 취소 작업을 만든다. @return 작업 id */
     @Transactional(propagation = Propagation.MANDATORY)
-    public Long createCancel(Long preorderId, String requestPayload) {
+    public UUID createCancel(UUID preorderId, String requestPayload) {
         return syncJobs.save(PreorderSyncJob.cancel(preorderId, requestPayload)).getId();
     }
 
     /** 아직 성공하지 않은 등록 작업을 무효화한다(취소 시작). @return 바뀐 행 수 */
     @Transactional(propagation = Propagation.MANDATORY)
-    public int cancelRegister(Long preorderId, Instant now) {
+    public int cancelRegister(UUID preorderId, Instant now) {
         return syncJobs.cancelRegister(preorderId, now);
     }
 
     @Transactional(readOnly = true)
-    public Optional<SyncJobSnapshot> findById(Long syncJobId) {
+    public Optional<SyncJobSnapshot> findById(UUID syncJobId) {
         return syncJobs.findById(syncJobId).map(PreorderSyncJob::toSnapshot);
     }
 
     @Transactional(readOnly = true)
-    public boolean exists(Long preorderId, SyncJobType jobType) {
+    public boolean exists(UUID preorderId, SyncJobType jobType) {
         return syncJobs.findByPreorderIdAndJobType(preorderId, jobType).isPresent();
     }
 
     /** 예약의 작업(종류 순). */
     @Transactional(readOnly = true)
-    public List<SyncJobSnapshot> findByPreorder(Long preorderId) {
+    public List<SyncJobSnapshot> findByPreorder(UUID preorderId) {
         return syncJobs.findByPreorderIdOrderByJobType(preorderId).stream().map(PreorderSyncJob::toSnapshot).toList();
     }
 
     /** 예약 id → 등록 작업 상태. 작업이 없는 예약은 빠진다. */
     @Transactional(readOnly = true)
-    public Map<Long, SyncJobStatus> registerStatuses(Collection<Long> preorderIds) {
+    public Map<UUID, SyncJobStatus> registerStatuses(Collection<UUID> preorderIds) {
         if (preorderIds.isEmpty()) {
             return Map.of();
         }

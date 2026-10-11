@@ -8,6 +8,7 @@ import com.grandis.nova.preorder.query.application.PreorderView;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 예약 목록 한 줄(openapi PreorderSummary). 상품명 · 옵션명 · 가격은 접수 시점 값이다.
@@ -18,9 +19,9 @@ import java.time.Instant;
  */
 record PreorderSummaryResponse(
         String preorderId,
-        Long productId,
+        UUID productId,
         String productTitle,
-        Long optionId,
+        UUID optionId,
         String optionTitle,
         BigDecimal unitPrice,
         PreorderStatus status,

@@ -7,6 +7,7 @@ import org.springframework.web.client.HttpClientErrorException;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.UUID;
 
 import static org.mockito.BDDMockito.given;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
@@ -19,43 +20,43 @@ public final class CatalogStubs {
     private CatalogStubs() {
     }
 
-    public static ApiResponse<ProductCatalog> product(Long productId, String saleMode, String status,
+    public static ApiResponse<ProductCatalog> product(UUID productId, String saleMode, String status,
                                                       ProductCatalog.Option... options) {
         return ApiResponse.ok(new ProductCatalog(productId, "Nova 1", saleMode, status, true, true, List.of(options)));
     }
 
     /** 판매 중인 사전예약 상품. */
-    public static ApiResponse<ProductCatalog> preorderProduct(Long productId, ProductCatalog.Option... options) {
+    public static ApiResponse<ProductCatalog> preorderProduct(UUID productId, ProductCatalog.Option... options) {
         return product(productId, "PREORDER", "ACTIVE", options);
     }
 
-    public static ProductCatalog.Option option(Long optionId, String status) {
+    public static ProductCatalog.Option option(UUID optionId, String status) {
         return new ProductCatalog.Option(optionId, "SKU-" + optionId, "블랙 / 256GB", PRICE, status);
     }
 
-    public static ProductCatalog.Option activeOption(Long optionId) {
+    public static ProductCatalog.Option activeOption(UUID optionId) {
         return option(optionId, "ACTIVE");
     }
 
     /** catalog 대역이 그 상품을 사전예약 판매 중으로 답하게 한다. */
-    public static void stubPreorderProduct(CatalogClient client, Long productId, ProductCatalog.Option... options) {
+    public static void stubPreorderProduct(CatalogClient client, UUID productId, ProductCatalog.Option... options) {
         given(client.getProduct(productId)).willReturn(preorderProduct(productId, options));
     }
 
-    public static void stubProduct(CatalogClient client, Long productId, String saleMode, String status,
+    public static void stubProduct(CatalogClient client, UUID productId, String saleMode, String status,
                                    ProductCatalog.Option... options) {
         given(client.getProduct(productId)).willReturn(product(productId, saleMode, status, options));
     }
 
     /** 판매 중인 사전예약 상품이지만 공개 여부 · 등록 완료가 주어진 값이다. */
-    public static void stubPreorderProduct(CatalogClient client, Long productId, boolean visible,
+    public static void stubPreorderProduct(CatalogClient client, UUID productId, boolean visible,
                                            boolean registrationCompleted, ProductCatalog.Option... options) {
         given(client.getProduct(productId)).willReturn(ApiResponse.ok(new ProductCatalog(productId, "Nova 1",
                 "PREORDER", "ACTIVE", visible, registrationCompleted, List.of(options))));
     }
 
     /** catalog 대역이 없는 상품으로 답하게 한다. */
-    public static void stubNotFound(CatalogClient client, Long productId) {
+    public static void stubNotFound(CatalogClient client, UUID productId) {
         given(client.getProduct(productId))
                 .willThrow(HttpClientErrorException.create(NOT_FOUND, "Not Found", null, null, null));
     }

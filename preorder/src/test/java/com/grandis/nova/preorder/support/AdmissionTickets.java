@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.UUID;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -23,13 +24,13 @@ public final class AdmissionTickets {
     }
 
     /** 테스트 공용 비밀로 발급. */
-    public static String issue(Long productId, Long customerId, Instant now) {
+    public static String issue(UUID productId, UUID customerId, Instant now) {
         return issue(PreorderIntegrationTest.ADMISSION_TICKET_SECRET, productId, customerId, now);
     }
 
-    public static String issue(String secret, Long productId, Long customerId, Instant now) {
+    public static String issue(String secret, UUID productId, UUID customerId, Instant now) {
         long exp = now.getEpochSecond() / WINDOW_SECONDS * WINDOW_SECONDS + TTL_SECONDS;
-        return issueRaw(secret, "et_", String.valueOf(productId) + FIELD + customerId + FIELD + exp);
+        return issueRaw(secret, "et_", productId.toString() + FIELD + customerId + FIELD + exp);
     }
 
     /** 페이로드를 그대로 서명한다. 모양이 틀린 입장권을 만들 때 쓴다. */

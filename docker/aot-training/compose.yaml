@@ -1,0 +1,36 @@
+# AOT 캐시 학습용 기반 시설. 서비스 컨테이너는 train.sh 가 이 네트워크(nova-aot_default)에 직접 띄운다.
+# 호스트 포트를 열지 않는다 — 개발 PC 의 로컬 MySQL · Redis · Floci 와 부딪히지 않게. 스키마 적용도 컨테이너 안에서 한다.
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?train.sh 가 매번 새로 정한다}
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_ROOT_PASSWORD\" mysqladmin ping -h 127.0.0.1 -uroot"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  redis:
+    image: redis:8
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  floci:
+    image: floci/floci:2.1.0
+
+  # 로컬 개발과 같은 큐 · DLQ 를 만든다(docker/floci 의 스크립트를 그대로 쓴다)
+  floci-init:
+    image: amazon/aws-cli:2.37.4
+    depends_on:
+      - floci
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: ap-northeast-2
+    entrypoint: ["sh", "/init/create-queues.sh"]
+    volumes:
+      - ../floci/create-queues.sh:/init/create-queues.sh:ro

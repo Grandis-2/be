@@ -30,9 +30,15 @@ spring:
       connect-timeout: 200ms
   http:
     serviceclient:
-      # 주문 생성 때 예약 조회(GET /internal/preorders/{token}). 답이 없으면 주문을 만들지 않고 503 이다.
+      # 예약 결제 가능 확인 — 주문 생성은 예약 UUID 로(GET /internal/preorders/{uuid}/payability), 결제 준비 · 승인은 예약 내부 id 로
+      # (GET /internal/preorders/ids/{id}/payability). 답이 없으면 503 이다.
       preorder:
         base-url: http://localhost:8083
+        connect-timeout: 300ms
+        read-timeout: 1s
+      # 장바구니 조회 · 담기 때 옵션 일괄 조회(GET /internal/options). 답이 없으면 503 이다(장바구니는 바꾸지 않는다)
+      catalog:
+        base-url: http://localhost:8082
         connect-timeout: 300ms
         read-timeout: 1s
       # 결제 준비 때 결제창을 열 거래 생성(POST /internal/payment-attempts). 토스를 부르지 않는 짧은 호출이라 preorder 와 같은 수준이다.
@@ -61,10 +67,13 @@ server:
 #     enabled: true
 
 nova:
-  # 결제 승인 동시 상한(인스턴스당). payment 응답을 최대 70s 기다리는 승인이 이만큼 차면 다음 승인은 상태를 바꾸기 전에 503 이다 —
+  # 결제 승인 동시 상한(인스턴스당, 주문 · 응모비 승인이 나눠 씀). payment 응답을 최대 70s 기다리는 승인이 이만큼 차면 다음 승인은 상태를 바꾸기 전에 503 이다 —
   # 토스가 느려져도 결제와 무관한 주문 API 의 요청 스레드(Tomcat 200)가 남는다
   payment-confirm:
     max-concurrency: 50
+  # 결제 기한(10분)이 지난 결제 대기 장바구니 주문을 취소 · 재고 반환하는 주기(앞 실행이 끝난 뒤부터 잰다). 기본 30s
+  # cart-order:
+  #   expiry-interval: 30s
   # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다
   sqs:
     region: ap-northeast-2
@@ -97,6 +106,12 @@ nova:
     relay-after: 1m        # 만든 지 이만큼 지난 미발행 행만 재발행
     relay-batch: 100
     relay-lease: 1m        # 릴레이가 가져간 행을 다른 인스턴스가 건드리지 않는 시간. 전송 한 번(sqs.api-call-timeout 의 두 배)보다 길어야 한다(아니면 기동 실패)
+  # 브라우저 호출을 허용할 프론트 오리진(scheme://host[:port], 정확 일치). 적으면 기본값(운영 프론트 두 도메인 · API 도메인)이 통째로 바뀐다.
+  # 로컬에서만 적는다 — 운영은 기본값을 쓴다.
+  cors:
+    allowed-origins:
+      - http://localhost:5173   # 로컬 프론트(Vite)
+      - http://localhost:9000   # 로컬 문서 허브(docker/openapi-hub)
 
 auth:
   # 폐기 표식 조회가 실패(Redis 장애)했을 때 401 로 닫는 경로. 목록 밖은 열린다(통과 + 경고 + 카운터).
@@ -109,6 +124,7 @@ auth:
       - /api/v1/session/refresh
       - /api/v1/me/**
       - /api/v1/orders/*/payment-attempts/**
+      - /api/v1/draws/*/entries/me/payment-attempts/**
       - POST /api/v1/orders/*/cancel
       - PATCH /api/v1/orders/*/shipping-address
       # 주문 생성은 열어 둔다(2026-09-29 결정): 닫으면 Redis 장애 동안 전원 주문 불가. 결제 · 취소 · 배송지가 닫혀 있어
@@ -122,7 +138,15 @@ jwt:
   issuer: nova
   audience: nova-api
   jwk-set-uri: https://member.example.com/.well-known/jwks.json
-  # 필수(없으면 기동 실패 — JwtProperties @NotNull). 검증만 하는 서비스에서는 쓰이지 않지만 member 와 같은 값을 둔다
-  access-token-validity: 30m
-  refresh-token-validity: 14d
   # jwk-set-allow-http: true    # VPC 안 Cloud Map 주소(http://member.ureca.local:8080/…)를 쓰는 동안만 명시. 서비스 간 TLS 가 붙으면 지운다
+
+# 장바구니의 catalog 호출 장애 대응(서킷 브레이커 · 동시 호출 상한). 기본값은 코드(OrderDefaults)에 있고, 바꿀 때만 여기서 덮는다
+# resilience4j:
+#   circuitbreaker:
+#     instances:
+#       catalog:
+#         wait-duration-in-open-state: 30s
+#   bulkhead:
+#     instances:
+#       catalog:
+#         max-concurrent-calls: 40

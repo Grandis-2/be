@@ -5,7 +5,8 @@ import java.util.regex.Pattern;
 
 /**
  * Redis 키를 한 곳에서만 만든다. 모델별 키는 해시 태그 {productKey} 로 한 슬롯에 묶는다 — Lua 가 KEYS 로
- * 함께 만지는 키가 슬롯이 갈리면 클러스터가 거절한다. 모델 키는 상품 ID(양의 정수)만 받는다.
+ * 함께 만지는 키가 슬롯이 갈리면 클러스터가 거절한다. 모델 키는 상품 ID 의 UUID 소문자 표준 표기만 받는다 —
+ * 같은 상품이 대소문자만 다른 두 키(두 줄)로 갈리지 않게, 입장권을 검증하는 preorder 의 표기({@code UUID.toString()})와 맞게.
  */
 public final class RedisKeys {
 
@@ -26,7 +27,7 @@ public final class RedisKeys {
     /** 일정을 모른 채 연달아 요청한 횟수. 늘수록 다음 요청까지 오래 기다린다. */
     public static final String RESYNC_ATTEMPTS = "wr:resync-attempts";
 
-    private static final Pattern PRODUCT_KEY = Pattern.compile("[1-9][0-9]{0,18}");
+    private static final Pattern PRODUCT_KEY = Pattern.compile("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
 
     private RedisKeys() {
     }
@@ -107,7 +108,7 @@ public final class RedisKeys {
 
     private static String checked(String productKey) {
         if (!validProductKey(productKey)) {
-            throw new IllegalArgumentException("모델 키는 양의 정수여야 한다: " + productKey);
+            throw new IllegalArgumentException("모델 키는 UUID 소문자 표준 표기여야 한다: " + productKey);
         }
         return productKey;
     }

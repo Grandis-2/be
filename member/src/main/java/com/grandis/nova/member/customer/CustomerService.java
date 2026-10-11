@@ -5,6 +5,8 @@ import com.grandis.nova.common.CommonErrorCode;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.UUID;
+
 /**
  * 내 정보(이름·이메일·연락처)와 기본 배송지의 조회·교체. 주소록은 없고 회원당 하나다. 기존 주문의 배송지는 주문이 복사해 가므로 여기 변경과 무관하다.
  * 토큰의 subject 가 가리키는 행이 없으면 401 — 발급기가 만든 id 인데 행이 없다는 것은 그 세션이 더 이상 회원을 가리키지 않는다는 뜻이다.
@@ -20,26 +22,26 @@ public class CustomerService {
     }
 
     @Transactional(readOnly = true)
-    public ProfileView profile(long customerId) {
+    public ProfileView profile(UUID customerId) {
         Customer customer = find(customerId);
         return new ProfileView(customer.getDisplayName(), customer.profile());
     }
 
     @Transactional
-    public ProfileView changeProfile(long customerId, Profile profile) {
-        Customer customer = find(customerId);
+    public ProfileView changeProfile(UUID customerId, Profile profile) {
+        Customer customer = lock(customerId);
         customer.changeProfile(profile);
         return new ProfileView(customer.getDisplayName(), customer.profile());
     }
 
     @Transactional(readOnly = true)
-    public ShippingAddress defaultAddress(long customerId) {
+    public ShippingAddress defaultAddress(UUID customerId) {
         return find(customerId).defaultAddress();
     }
 
     @Transactional
-    public ShippingAddress changeDefaultAddress(long customerId, ShippingAddress address) {
-        Customer customer = find(customerId);
+    public ShippingAddress changeDefaultAddress(UUID customerId, ShippingAddress address) {
+        Customer customer = lock(customerId);
         customer.changeDefaultAddress(address);
         return customer.defaultAddress();
     }
@@ -48,7 +50,12 @@ public class CustomerService {
     public record ProfileView(String displayName, Profile profile) {
     }
 
-    private Customer find(long customerId) {
+    /** 쓰기 경로. 회원 행을 잠그고 읽어 같은 자원의 PUT 이 칸마다 섞이지 않게 한다({@link CustomerRepository#findForUpdate}). */
+    private Customer lock(UUID customerId) {
+        return customers.findForUpdate(customerId).orElseThrow(() -> new BusinessException(CommonErrorCode.UNAUTHENTICATED));
+    }
+
+    private Customer find(UUID customerId) {
         return customers.findById(customerId).orElseThrow(() -> new BusinessException(CommonErrorCode.UNAUTHENTICATED));
     }
 }

@@ -1,8 +1,7 @@
 package com.grandis.nova.catalog.registration;
 
+import com.grandis.nova.catalog.option.OptionText;
 import com.grandis.nova.catalog.option.OptionCombination;
-import com.grandis.nova.catalog.option.ProductOptionAxis;
-import com.grandis.nova.catalog.option.ProductOptionValue;
 import com.grandis.nova.catalog.product.Amounts;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.registration.ProductRegistrationRequest.Combination;
@@ -51,9 +50,9 @@ public class ProductRegistrationValidator {
     static final Instant DB_INSTANT_MAX = Instant.parse("9999-12-31T23:59:59.999999Z");
     public static final int MAX_SKU_LENGTH = 80;
     public static final int MAX_OPTION_TITLE_LENGTH = 120;
-    /** 옵션 값(value · normalized_value) · 사진 묶음 키(bundle_key) 칼럼 길이. */
+    /** 옵션 값 · 사진 묶음 키 길이 상한. 문서 안이라 칼럼은 없지만 같은 축 중복 판정({@link com.grandis.nova.catalog.option.CollationDuplicates})이 이 길이로 편다. */
     public static final int MAX_OPTION_VALUE_LENGTH = 60;
-    /** 축 키(axis_key) 칼럼 길이. */
+    /** 축 키 길이 상한 — 요청의 @Size 와 같다. */
     static final int MAX_AXIS_KEY_LENGTH = 40;
     public static final String STANDALONE_SKU = "STD";
     public static final Pattern STORAGE = Pattern.compile("\\d+(MB|GB|TB)");
@@ -66,7 +65,8 @@ public class ProductRegistrationValidator {
         }
     }
 
-    public record Value(String display, String normalized, BigDecimal surcharge) {
+    /** @param hex 색상 스와치(대문자 #RRGGBB). color 축만, 없으면 null */
+    public record Value(String display, String normalized, BigDecimal surcharge, String hex) {
     }
 
     /** 만들 조합 하나. selections 는 축 키 → 정규화값(축 순). stock 은 일반 상품만, 사전예약은 null. */
@@ -93,8 +93,8 @@ public class ProductRegistrationValidator {
      * DB 콜레이션(utf8mb4_0900_ai_ci)이 같다고 보는 것 — 대소문자 · 악센트 · 전각 — 을 같게 만드는 비교 키.
      * 값 · 묶음 키 · 영역 이름의 중복 검사에 쓴다.
      * <p><b>근사다.</b> 콜레이션이 분해가 아니라 확장으로 같다고 보는 문자(ß=ss · Æ=AE · Œ=OE, MySQL 8.4.11 실측)는 NFKD 로
-     * 안 갈라져 여기서 못 잡는다. 그런 드문 중복은 DB 의 UNIQUE 가 최종 판정하고 서비스가 1062 를 400 으로 돌린다
-     * ({@code ProductRegistrationService#saveOrReject}). 이 키는 대부분을 정확한 칸 이름으로 먼저 거르는 1차 그물이다.
+     * 안 갈라져 여기서 못 잡는다. 그런 드문 중복은 같은 콜레이션의 DB 질의가 최종 판정한다({@code CollationDuplicates}).
+     * 이 키는 대부분을 정확한 칸 이름으로 먼저 거르는 1차 그물이다.
      */
     public static String collationKey(String text) {
         String compatible = Normalizer.normalize(text, Normalizer.Form.NFKD);
@@ -216,18 +216,18 @@ public class ProductRegistrationValidator {
             for (int j = 0; j < axis.values().size(); j++) {
                 OptionValue value = axis.values().get(j);
                 String field = "optionAxes[%d].values[%d]".formatted(i, j);
-                String normalized = ProductOptionValue.normalizeFor(key, value.value());
-                if (ProductOptionAxis.STORAGE.equals(key) && !STORAGE.matcher(normalized).matches()) {
+                String normalized = OptionText.normalizeFor(key, value.value());
+                if (OptionText.STORAGE.equals(key) && !STORAGE.matcher(normalized).matches()) {
                     throw ValidationFailures.of(field + ".value", "용량은 숫자와 단위(MB · GB · TB)로 씁니다. 예: 256GB");
                 }
                 if (!seen.add(collationKey(normalized))) {
                     throw ValidationFailures.of(field + ".value", "같은 축에 같은 값이 있습니다(대소문자 · 악센트 · 전각은 같은 값): " + value.value());
                 }
-                String display = ProductOptionValue.normalize(value.value());
+                String display = OptionText.normalize(value.value());
                 // 비교 키(normalized)는 표시값보다 길지 않다 — 용량만 다르게 접는데, 위 형식 검사를 지난 용량은 ASCII 라 공백을 지우면 짧아질 뿐이다
                 requireStorableText(display, MAX_OPTION_VALUE_LENGTH, field + ".value");
                 requireWholeWon(value.surcharge(), field + ".surcharge");
-                values.add(new Value(display, normalized, value.surcharge()));
+                values.add(new Value(display, normalized, value.surcharge(), hexOf(key, value.hex(), field + ".hex")));
             }
             axes.add(new Axis(key, axis.label().strip(), values));
         }
@@ -312,7 +312,7 @@ public class ProductRegistrationValidator {
                 if (raw == null || raw.isBlank()) {
                     throw ValidationFailures.of(field, "축 '%s' 의 값이 없습니다.".formatted(axis.key()));
                 }
-                String value = ProductOptionValue.normalizeFor(axis.key(), raw);
+                String value = OptionText.normalizeFor(axis.key(), raw);
                 if (axis.value(value) == null) {
                     throw ValidationFailures.of(field, "축 '%s' 에 없는 값입니다: %s".formatted(axis.key(), raw));
                 }
@@ -361,7 +361,7 @@ public class ProductRegistrationValidator {
     }
 
     private static List<GalleryDraft> normalizeGallery(ProductRegistrationRequest request, List<Axis> axes) {
-        Axis color = axes.stream().filter(axis -> ProductOptionAxis.COLOR.equals(axis.key())).findFirst().orElse(null);
+        Axis color = axes.stream().filter(axis -> OptionText.COLOR.equals(axis.key())).findFirst().orElse(null);
         List<GalleryDraft> bundles = new ArrayList<>();
         Set<String> keys = new HashSet<>();
         for (int i = 0; i < request.images().gallery().size(); i++) {
@@ -376,7 +376,7 @@ public class ProductRegistrationValidator {
             }
             String key = "";
             if (hasColor) {
-                key = ProductOptionValue.normalizeFor(ProductOptionAxis.COLOR, bundle.color());
+                key = OptionText.normalizeFor(OptionText.COLOR, bundle.color());
                 if (color.value(key) == null) {
                     throw ValidationFailures.of(field + ".color", "color 축에 없는 값입니다: " + bundle.color());
                 }
@@ -398,7 +398,7 @@ public class ProductRegistrationValidator {
         for (int i = 0; i < request.images().detail().size(); i++) {
             var bundle = request.images().detail().get(i);
             String field = "images.detail[%d]".formatted(i);
-            String section = ProductOptionValue.normalize(bundle.section());
+            String section = OptionText.normalize(bundle.section());
             requireStorableText(section, MAX_OPTION_VALUE_LENGTH, field + ".section");
             if (!names.add(collationKey(section))) {
                 throw ValidationFailures.of(field + ".section", "같은 영역이 두 번 왔습니다.");
@@ -424,6 +424,17 @@ public class ProductRegistrationValidator {
         List<Image> withDefault = new ArrayList<>(items);
         withDefault.set(0, new Image(items.getFirst().url(), true));
         return withDefault;
+    }
+
+    /** 색상 hex 를 대문자로. color 축이 아니면 받지 않는다 — 다른 축에 스와치가 있을 자리가 없다. 형식(#RRGGBB)은 요청 경계가 먼저 본다. */
+    public static String hexOf(String axisKey, String hex, String field) {
+        if (hex == null || hex.isBlank()) {
+            return null;
+        }
+        if (!OptionText.COLOR.equals(axisKey)) {
+            throw ValidationFailures.of(field, "색상(color) 축의 값만 hex 를 받습니다.");
+        }
+        return hex.strip().toUpperCase(Locale.ROOT);
     }
 
     /** 0 이상의 정수 원 — 아니면 그 칸의 400. 소수는 decimal(12,0) 칼럼이 조용히 반올림하므로 여기서 거절한다. 수정 API 도 같은 판정을 쓴다. */

@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.deadletter;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * DLQ 에서 받은 메시지 하나.
@@ -14,7 +15,7 @@ public record IncomingDeadLetter(
         String body,
         int receiveCount,
         Instant sentAt,
-        Long redrivenFromId
+        UUID redrivenFromId
 ) {
 
     /** 앞선 행을 잇지 않는다(속성이 가리키는 행이 없을 때). */

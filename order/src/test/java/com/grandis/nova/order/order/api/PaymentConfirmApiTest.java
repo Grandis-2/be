@@ -9,8 +9,11 @@ import com.grandis.nova.order.client.payment.PaymentConfirmClient;
 import com.grandis.nova.order.client.preorder.PreorderClient;
 import com.grandis.nova.order.event.OrderEventDispatcher;
 import com.grandis.nova.order.order.OrderLedger;
+import com.grandis.nova.order.order.command.PlaceOrderCommand;
+import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.vo.EventCause;
+import com.grandis.nova.order.stock.StockLedger;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderFixtures.PreorderProduct;
 import com.grandis.nova.order.support.OrderIntegrationTest;
@@ -51,6 +54,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -66,7 +70,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * POST /api/v1/orders/{orderToken}/payment-attempts/{tossOrderId}/confirm — 결제 승인과 주문 반영. MySQL 위에서 돌고
+ * POST /api/v1/orders/{orderId}/payment-attempts/{tossOrderId}/confirm — 결제 승인과 주문 반영. MySQL 위에서 돌고
  * preorder · payment 내부 API 만 대역이다(응답 모양 대조는 PaymentConfirmerTest). 결과 이벤트는 실제 분배기로 넣는다.
  *
  * 인증은 흉내({@link TestAuth})다 — Authorization 헤더의 값은 전달 확인용 자리일 뿐이다.
@@ -101,6 +105,9 @@ class PaymentConfirmApiTest {
     @Autowired
     PlatformTransactionManager transactionManager;
 
+    @Autowired
+    StockLedger stock;
+
     @MockitoBean
     PreorderClient preorderClient;
 
@@ -109,20 +116,22 @@ class PaymentConfirmApiTest {
 
     OrderFixtures fixtures;
     PreorderProduct product;
-    Long customerId;
-    Long preorderId;
+    UUID customerId;
+    UUID preorderId;
     Order order;
     String attempt;
+    /** 장바구니 주문 시험({@link #cartOrder})이 심은 옵션. */
+    UUID cartOption;
 
     @BeforeEach
     void setUp() {
         fixtures = new OrderFixtures(jdbcTemplate);
         product = fixtures.preorderProduct();
         customerId = fixtures.customer();
-        preorderId = fixtures.payablePreorder(customerId, product, 1);
+        preorderId = OrderFixtures.preorderId();
         order = new TransactionTemplate(transactionManager).execute(status -> ledger.place(
                 OrderFixtures.preorderCommand(customerId, preorderId, product).toDraft(), EventCause.user()));
-        jdbcTemplate.update("UPDATE orders SET total_amount = ? WHERE id = ?", TOTAL, order.id());
+        jdbcTemplate.update("UPDATE orders SET total_amount = ? WHERE id = ?", TOTAL, bytes(order.id()));
         attempt = UUID.randomUUID().toString();
         PreorderStubs.stub(preorderClient, PreorderStubs.payable(preorderId, order.preorderToken(), customerId, product));
     }
@@ -340,7 +349,7 @@ class PaymentConfirmApiTest {
 
     @Test
     void someoneElsesOrderIsNotFound() throws Exception {
-        perform(fixtures.customer(), order.orderToken().value(), attempt, body(PAYMENT, TOTAL))
+        perform(fixtures.customer(), order.id().toString(), attempt, body(PAYMENT, TOTAL))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("ORDER_NOT_FOUND"));
 
@@ -389,7 +398,7 @@ class PaymentConfirmApiTest {
     @ParameterizedTest
     @ValueSource(strings = {".", "..", "tgen_bad\nline"})
     void paymentKeyBreakingProviderRulesIsRejected(String badKey) throws Exception {
-        perform(customerId, order.orderToken().value(), attempt, body(badKey, TOTAL))
+        perform(customerId, order.id().toString(), attempt, body(badKey, TOTAL))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
 
@@ -445,10 +454,10 @@ class PaymentConfirmApiTest {
     @Test
     void retryWhosePayabilityCannotBeCheckedOnlyRecoversResult() throws Exception {
         fixtures.forceAuthorizing(order.id(), attempt);
-        given(preorderClient.getPayability(eq(order.preorderToken()), any()))
+        given(preorderClient.getPayabilityById(eq(order.preorderId()), any()))
                 .willThrow(HttpServerErrorException.create(HttpStatus.SERVICE_UNAVAILABLE, "Service Unavailable", null,
                         null, null))
-                .willReturn(ApiResponse.ok(PreorderStubs.payable(preorderId + 1_000_000, order.preorderToken(),
+                .willReturn(ApiResponse.ok(PreorderStubs.payable(UUID.randomUUID(), order.preorderToken(),
                         customerId, product)));
         paymentAnswers(reply(ConfirmReply.Result.PENDING, null));
 
@@ -605,6 +614,78 @@ class PaymentConfirmApiTest {
         return output.getAll().lines().filter(line -> line.contains(" --- [order] ")).toList();
     }
 
+    // ── 장바구니 주문 ───────────────────────────────────────────────────────
+
+    /** 승인 요청 경로(동기 응답)로도 판매 확정 · 장바구니 차감이 같은 트랜잭션에서 한 번 일어난다. preorder 에 묻지 않는다. */
+    @Test
+    void approvedCartOrderSellsStockAndDeductsCart() throws Exception {
+        Order cart = cartOrder(2);
+        paymentAnswers(reply(ConfirmReply.Result.APPROVED, null));
+
+        perform(customerId, cart.id().toString(), attempt, body(PAYMENT, cart.totalAmount().amount()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.result").value("APPROVED"))
+                .andExpect(jsonPath("$.data.orderStatus").value("AWAITING_CONFIRMATION"));
+
+        assertThat(jdbcTemplate.queryForList("SELECT stock_reserved, stock_sold FROM option_inventories WHERE option_id = ?",
+                (Object) bytes(cartOption))).containsExactly(Map.of("stock_reserved", 0, "stock_sold", 2));
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM cart_items WHERE customer_id = ?", Long.class,
+                (Object) bytes(customerId))).isZero();
+        verifyNoInteractions(preorderClient);
+    }
+
+    /** 장바구니 주문은 주문의 기한(만든 때 + 10분)을 본다 — 지났으면 결제를 시작하지 않는다. */
+    @Test
+    void expiredCartOrderIsNotStarted() throws Exception {
+        Order cart = cartOrder(1);
+        // 저장은 UTC 다 — JVM 시간대로 바인딩되는 Timestamp 대신 DB 의 UTC 로 기한을 지나게 한다
+        jdbcTemplate.update("UPDATE orders SET payment_due_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ?", (Object) bytes(cart.id()));
+
+        perform(customerId, cart.id().toString(), attempt, body(PAYMENT, cart.totalAmount().amount()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("PAYMENT_WINDOW_EXPIRED"));
+
+        verifyNoInteractions(paymentClient);
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, (Object) bytes(cart.id())))
+                .isEqualTo("AWAITING_PAYMENT");
+    }
+
+    /** 승인 중 재요청인데 장바구니 주문의 기한이 지났다 — 시작하지 않고 결과만 회수한다(돈이 이미 나갔을 수 있어 주문은 그대로). */
+    @Test
+    void retryForExpiredCartOrderOnlyRecoversResult() throws Exception {
+        Order cart = cartOrder(1);
+        fixtures.forceAuthorizing(cart.id(), attempt);
+        jdbcTemplate.update("UPDATE orders SET payment_due_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ?", (Object) bytes(cart.id()));
+        paymentAnswers(reply(ConfirmReply.Result.PENDING, null));
+
+        perform(customerId, cart.id().toString(), attempt, body(PAYMENT, cart.totalAmount().amount()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.result").value("PENDING"));
+
+        verify(paymentClient).confirm(eq(attempt),
+                eq(new ConfirmRequest("ORDER", cart.id(), PAYMENT, cart.totalAmount().amount(), false, false)), any());
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, (Object) bytes(cart.id())))
+                .isEqualTo("AUTHORIZING");
+    }
+
+    /** 같은 회원의 장바구니 주문 — 장바구니 줄(무보증, quantity) · 재고 5 를 심고 확보까지 한 결제 대기 주문. */
+    private Order cartOrder(int quantity) {
+        OrderFixtures.StockProduct stocked = fixtures.inStockProduct(1);
+        cartOption = stocked.optionIds().getFirst();
+        fixtures.stock(cartOption, 5, 0, 0);
+        jdbcTemplate.update("""
+                INSERT INTO cart_items (id, customer_id, option_id, warranty_selected, quantity, created_at, updated_at)
+                VALUES (?, ?, ?, 0, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """, bytes(UUID.randomUUID()), bytes(customerId), bytes(cartOption), quantity);
+        PlaceOrderCommand command = new PlaceOrderCommand(customerId, OrderSource.CART, null, null, OrderFixtures.ADDRESS, List.of(
+                new PlaceOrderCommand.Line(stocked.productId(), cartOption, quantity, new BigDecimal("1250000"), 0, BigDecimal.ZERO,
+                        "아이폰 17", "블랙")));
+        return new TransactionTemplate(transactionManager).execute(status -> {
+            stock.reserve(Map.of(cartOption, quantity));
+            return ledger.place(command.toDraft(), EventCause.user());
+        });
+    }
+
     private void paymentAnswers(ApiResponse<ConfirmReply> reply) {
         paymentDoes(call -> reply);
     }
@@ -653,12 +734,12 @@ class PaymentConfirmApiTest {
     }
 
     private ResultActions confirm(String tossOrderId, BigDecimal amount) throws Exception {
-        return perform(customerId, order.orderToken().value(), tossOrderId, body(PAYMENT, amount));
+        return perform(customerId, order.id().toString(), tossOrderId, body(PAYMENT, amount));
     }
 
-    private ResultActions perform(Long customer, String orderToken, String tossOrderId, String json) throws Exception {
-        return mockMvc.perform(post("/api/v1/orders/{orderToken}/payment-attempts/{tossOrderId}/confirm",
-                orderToken, tossOrderId)
+    private ResultActions perform(UUID customer, String orderId, String tossOrderId, String json) throws Exception {
+        return mockMvc.perform(post("/api/v1/orders/{orderId}/payment-attempts/{tossOrderId}/confirm",
+                orderId, tossOrderId)
                 .with(TestAuth.customer(customer))
                 .header(BearerTokens.HEADER, BearerTokens.value(SESSION))
                 .contentType(MediaType.APPLICATION_JSON)
@@ -692,7 +773,7 @@ class PaymentConfirmApiTest {
                 .put("eventId", UUID.randomUUID().toString())
                 .put("eventType", "ORDER_PAYMENT_SETTLED")
                 .put("aggregateType", "ORDER")
-                .put("aggregateId", order.id())
+                .put("aggregateId", order.id().toString())
                 .put("occurredAt", "2026-10-02T03:04:06Z");
         envelope.set("payload", payload);
         return jsonMapper.writeValueAsString(envelope);
@@ -700,7 +781,7 @@ class PaymentConfirmApiTest {
 
     private Map<String, Object> orderRow() {
         return jdbcTemplate.queryForMap("SELECT status, authorizing_provider_order_id FROM orders WHERE id = ?",
-                order.id());
+                bytes(order.id()));
     }
 
     /** "번호:from>to:actor:reason" 목록. 번호 순. */
@@ -709,6 +790,6 @@ class PaymentConfirmApiTest {
                 SELECT event_sequence, from_status, to_status, actor, reason
                   FROM order_events WHERE order_id = ? ORDER BY event_sequence
                 """, (rs, n) -> rs.getLong(1) + ":" + rs.getString(2) + ">" + rs.getString(3) + ":"
-                + rs.getString(4) + ":" + rs.getString(5), order.id());
+                + rs.getString(4) + ":" + rs.getString(5), bytes(order.id()));
     }
 }

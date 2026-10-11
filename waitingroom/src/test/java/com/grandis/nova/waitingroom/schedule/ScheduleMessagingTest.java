@@ -31,6 +31,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
+import static com.grandis.nova.waitingroom.support.TestIds.productKey;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** 실제 큐(Floci)로 회차 일정을 받아 반영하고, 재발행 요청을 preorder 의 소비 큐에 계약 모양대로 보낸다. */
@@ -73,24 +74,24 @@ class ScheduleMessagingTest {
 
     @Test
     void 일정_이벤트를_받아_반영하고_늦게_온_옛_일정은_버린다() {
-        queues.send("waitingroom-events", changed(501, 3, MOVED));
-        awaitSchedule("501", ProductSchedules.format(MOVED, 3, true));
+        queues.send("waitingroom-events", changed(productKey(501), 3, MOVED));
+        awaitSchedule(productKey(501), ProductSchedules.format(MOVED, 3, true));
 
         double staleBefore = staleEvents();
-        queues.send("waitingroom-events", changed(501, 2, WINDOW));
+        queues.send("waitingroom-events", changed(productKey(501), 2, WINDOW));
         StepVerifier.create(Flux.interval(Duration.ofMillis(100)).filter(tick -> staleEvents() > staleBefore).next())
                 .expectNextCount(1).expectComplete().verify(WAIT);
 
-        assertThat(schedule("501")).as("옛 번호는 받고 버린다").isEqualTo(ProductSchedules.format(MOVED, 3, true));
+        assertThat(schedule(productKey(501))).as("옛 번호는 받고 버린다").isEqualTo(ProductSchedules.format(MOVED, 3, true));
     }
 
     @Test
     void 비공개_일정을_받으면_비공개로_반영하고_칸이_없으면_공개로_본다() {
-        queues.send("waitingroom-events", changed(502, 1, WINDOW, false));
-        awaitSchedule("502", ProductSchedules.format(WINDOW, 1, false));
+        queues.send("waitingroom-events", changed(productKey(502), 1, WINDOW, false));
+        awaitSchedule(productKey(502), ProductSchedules.format(WINDOW, 1, false));
 
-        queues.send("waitingroom-events", changed(502, 2, WINDOW));
-        awaitSchedule("502", ProductSchedules.format(WINDOW, 2, true));
+        queues.send("waitingroom-events", changed(productKey(502), 2, WINDOW));
+        awaitSchedule(productKey(502), ProductSchedules.format(WINDOW, 2, true));
     }
 
     @Test
@@ -120,11 +121,11 @@ class ScheduleMessagingTest {
         assertThat(resyncRequester.maxRequestTime()).as("주소 조회 + 전송, 호출마다 기본 시한 3초").isEqualTo(Duration.ofSeconds(6));
     }
 
-    private String changed(long productId, long version, SalesWindow window) {
+    private String changed(String productId, long version, SalesWindow window) {
         return changed(productId, version, window, null);
     }
 
-    private String changed(long productId, long version, SalesWindow window, Boolean visible) {
+    private String changed(String productId, long version, SalesWindow window, Boolean visible) {
         Map<String, Object> payload = new HashMap<>(Map.of("productId", productId, "scheduleVersion", version,
                 "opensAt", window.opensAt().toString(), "closesAt", window.closesAt().toString(),
                 "changedAt", Instant.now().toString(), "change", visible == null ? "RESCHEDULED" : "VISIBILITY"));
@@ -132,7 +133,7 @@ class ScheduleMessagingTest {
             payload.put("visible", visible);
         }
         return jsonMapper.writeValueAsString(new EventEnvelope(UUID.randomUUID().toString(), "PREORDER_CAMPAIGN_CHANGED",
-                "PREORDER_CAMPAIGN", productId, Instant.now(), jsonMapper.valueToTree(payload)));
+                "PREORDER_CAMPAIGN", UUID.fromString(productId), Instant.now(), jsonMapper.valueToTree(payload)));
     }
 
     private double failedEvents() {

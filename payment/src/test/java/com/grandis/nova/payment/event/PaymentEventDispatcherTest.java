@@ -167,9 +167,9 @@ class PaymentEventDispatcherTest {
                 .toList();
     }
 
-    static String refundRequested(Long orderId, String amount) {
+    static String refundRequested(UUID orderId, String amount) {
         return """
-                {"eventId":"%s","eventType":"ORDER_REFUND_REQUESTED","aggregateType":"ORDER","aggregateId":%d,
+                {"eventId":"%s","eventType":"ORDER_REFUND_REQUESTED","aggregateType":"ORDER","aggregateId":"%s",
                  "occurredAt":"2026-10-04T01:00:00Z","payload":{"amount":%s}}
                 """.formatted(UUID.randomUUID(), orderId, amount);
     }

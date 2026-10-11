@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.cancel;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
@@ -22,6 +23,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -51,7 +53,7 @@ class ExpiryCancelServiceTest {
     CatalogClient catalogClient;
 
     ShopFixtures fixtures;
-    Long preorderId;
+    UUID preorderId;
     String token;
 
     @BeforeEach
@@ -72,12 +74,12 @@ class ExpiryCancelServiceTest {
         assertThat(status()).isEqualTo("CANCELING");
         Map<String, Object> event = jdbcTemplate.queryForMap("""
                 SELECT actor, reason FROM preorder_events WHERE preorder_id = ? AND to_status = 'CANCELING'
-                """, preorderId);
+                """, (Object) UuidBinary.toBytes(preorderId));
         assertThat(event).containsEntry("actor", "SYSTEM").containsEntry("reason", null);
         assertThat(jdbcTemplate.queryForList("""
                 SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.reason')) FROM preorder_outbox_events
                  WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
-                """, String.class, preorderId)).containsExactly("EXPIRY");
+                """, String.class, (Object) UuidBinary.toBytes(preorderId))).containsExactly("EXPIRY");
     }
 
     @Test
@@ -138,20 +140,21 @@ class ExpiryCancelServiceTest {
         handler.onExternalJobSucceeded(new ExternalJobSucceeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
                 token, "REGISTER", "R-" + ShopFixtures.unique()));
         jdbcTemplate.update("UPDATE preorders SET payable_from = UTC_TIMESTAMP(6) - INTERVAL ? HOUR WHERE id = ?",
-                hoursAgo, preorderId);
+                hoursAgo, UuidBinary.toBytes(preorderId));
     }
 
     private void assertSingleCancelStart() {
         assertThat(status()).isEqualTo("CANCELING");
         assertThat(fixtures.count("""
                 SELECT COUNT(*) FROM preorder_events WHERE preorder_id = ? AND to_status = 'CANCELING'
-                """, preorderId)).isEqualTo(1);
+                """, (Object) UuidBinary.toBytes(preorderId))).isEqualTo(1);
         assertThat(fixtures.count("""
                 SELECT COUNT(*) FROM preorder_outbox_events WHERE event_type = 'PREORDER_CANCEL_REQUESTED' AND aggregate_id = ?
-                """, preorderId)).isEqualTo(1);
+                """, (Object) UuidBinary.toBytes(preorderId))).isEqualTo(1);
     }
 
     private String status() {
-        return jdbcTemplate.queryForObject("SELECT status FROM preorders WHERE id = ?", String.class, preorderId);
+        return jdbcTemplate.queryForObject("SELECT status FROM preorders WHERE id = ?", String.class,
+                (Object) UuidBinary.toBytes(preorderId));
     }
 }

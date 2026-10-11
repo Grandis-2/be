@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -68,7 +69,7 @@ public class RefreshTokenCleanup {
         Instant cutoff = clock.instant().truncatedTo(ChronoUnit.SECONDS).minus(grace).minus(MARGIN_AFTER_DETECTION);
         int total = 0;
         for (int batch = 0; batch < settings.maxBatchesPerRun(); batch++) {
-            List<Long> expired = rows.findExpiredIds(cutoff, settings.batchSize());   // 잠그지 않고 고른다
+            List<UUID> expired = rows.findExpiredIds(cutoff, settings.batchSize());   // 잠그지 않고 고른다
             if (expired.isEmpty()) {
                 break;
             }

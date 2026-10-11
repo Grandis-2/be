@@ -5,13 +5,14 @@ import com.grandis.nova.preorder.syncjob.domain.PreorderSyncJob;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 외부 동기화 작업(openapi SyncJobDetail). 누적 시도 수와 마지막 오류는 시도 기록에서 센다 —
  * 작업 행에 세어 두면 워커가 죽었을 때 둘이 어긋난다.
  */
 public record SyncJobResponse(
-        Long syncJobId,
+        UUID syncJobId,
         String preorderId,
         SyncJobType jobType,
         SyncJobStatus status,

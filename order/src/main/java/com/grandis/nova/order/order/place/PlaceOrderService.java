@@ -22,8 +22,10 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 주문 생성(order 의 유스케이스). 지금은 사전예약 출처(source=PREORDER)만 받는다 — 다른 출처가 생기면 여기서 나눈다.
@@ -87,7 +89,7 @@ public class PlaceOrderService {
      *                           ORDER_ALREADY_CANCELED · PREORDER_NOT_PAYABLE · PAYMENT_WINDOW_EXPIRED ·
      *                           DEPENDENCY_UNAVAILABLE(preorder 응답 없음)
      */
-    public PlaceResult place(Long customerId, String sessionToken, String preorderToken,
+    public PlaceResult place(UUID customerId, String sessionToken, String preorderToken,
                              PlaceOrderCommand.Address shipTo) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("주문 생성은 트랜잭션 밖에서 불러야 한다 — 재시도 · 재조회가 새 트랜잭션이어야 한다");
@@ -137,19 +139,12 @@ public class PlaceOrderService {
      * 그 예약의 기존 주문. 취소된 주문이면 다시 만들 수 없으므로 409 다(예약당 주문은 평생 하나).
      *
      * 본인 확인은 예약 스냅샷으로 이미 했지만 주문의 회원도 한 번 더 대조한다. 남의 주문(배송지)을 돌려주는 길을
-     * 호출 순서 하나에만 맡기지 않는다. 복합 FK(preorder_id, customer_id)상 어긋날 수 없으므로 어긋나면 404 로 숨긴다.
-     *
-     * 주문의 예약 UUID 도 대조한다. 짝(preorder_id ↔ preorder_token)은 DB 가 아니라 앱이 보장하므로, 어긋난 주문을
-     * "이 예약의 주문" 으로 돌려주지 않는다 — 데이터가 어긋난 것이라 500 이다.
+     * 호출 순서 하나에만 맡기지 않는다. 주문은 예약 회원으로 만들어 어긋날 수 없으므로 어긋나면 404 로 숨긴다.
      */
-    private Optional<PlaceResult> findExisting(PreorderPayability preorder, Long customerId) {
-        Long preorderId = preorder.preorderInternalId();
+    private Optional<PlaceResult> findExisting(PreorderPayability preorder, UUID customerId) {
+        UUID preorderId = preorder.preorderInternalId();
         Optional<PlaceResult> existing = readTransaction.execute(status -> orderReader.findByPreorderId(preorderId)
                 .map(order -> new PlaceResult(order, orderReader.findItems(order.id()), false)));
-        if (existing.isPresent() && !preorder.preorderId().equals(existing.get().order().preorderToken())) {
-            throw new IllegalStateException("주문의 예약 UUID 가 예약과 다르다: preorderId=%d, orderId=%d"
-                    .formatted(preorderId, existing.get().order().id()));
-        }
         if (existing.isPresent() && !existing.get().order().customerId().equals(customerId)) {
             throw new BusinessException(OrderErrorCode.PREORDER_NOT_FOUND);
         }
@@ -163,11 +158,11 @@ public class PlaceOrderService {
      * 옵션 하나 · 수량 1. 이름 · 단가는 예약 접수 시점 스냅샷을 그대로 옮긴다(카탈로그를 다시 읽지 않는다).
      * 예약 내부 id 와 공개 UUID 는 같은 응답에서 함께 옮긴다 — 둘이 같은 예약이라는 것을 DB 가 아니라 이것이 보장한다.
      */
-    private static PlaceOrderCommand toCommand(Long customerId, PreorderPayability preorder,
+    private static PlaceOrderCommand toCommand(UUID customerId, PreorderPayability preorder,
                                                PlaceOrderCommand.Address shipTo) {
         return new PlaceOrderCommand(customerId, OrderSource.PREORDER, preorder.preorderInternalId(),
                 preorder.preorderId(), shipTo, List.of(
                 new PlaceOrderCommand.Line(preorder.productId(), preorder.optionId(), 1, preorder.unitPrice(),
-                        preorder.productTitle(), preorder.optionTitle())));
+                        0, BigDecimal.ZERO, preorder.productTitle(), preorder.optionTitle())));
     }
 }

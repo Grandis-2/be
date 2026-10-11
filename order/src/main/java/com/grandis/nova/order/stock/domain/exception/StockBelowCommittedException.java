@@ -1,6 +1,7 @@
 package com.grandis.nova.order.stock.domain.exception;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 확보 + 판매보다 작게 총량을 줄이려 했다. 걸린 옵션을 모두 담는다 — 관리자가 하나씩 고치며 다시 거절당하지 않게.
@@ -20,6 +21,6 @@ public class StockBelowCommittedException extends RuntimeException {
     }
 
     /** @param committed 줄일 수 있는 하한(확보 + 판매) */
-    public record Shortfall(Long optionId, int committed) {
+    public record Shortfall(UUID optionId, int committed) {
     }
 }

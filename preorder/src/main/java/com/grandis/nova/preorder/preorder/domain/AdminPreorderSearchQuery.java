@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.preorder.domain;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.preorder.AdminPreorderSearch;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -8,6 +9,7 @@ import org.springframework.stereotype.Component;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 관리자 검색의 대상 id 와 총 건수. 등록 작업 상태 조건 때문에 작업 표를 읽기 전용으로 조인하므로
@@ -23,13 +25,13 @@ public class AdminPreorderSearchQuery {
     }
 
     /** 최신순(created_at · id 내림차순) 한 페이지의 id. */
-    public List<Long> findIds(AdminPreorderSearch search, int page, int size) {
+    public List<UUID> findIds(AdminPreorderSearch search, int page, int size) {
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("limit", size)
                 .addValue("offset", (long) page * size);
         String sql = "SELECT p.id FROM preorders p" + where(search, params)
                 + " ORDER BY p.created_at DESC, p.id DESC LIMIT :limit OFFSET :offset";
-        return jdbcTemplate.queryForList(sql, params, Long.class);
+        return jdbcTemplate.query(sql, params, (rs, rowNum) -> UuidBinary.fromBytes(rs.getBytes(1)));
     }
 
     public long count(AdminPreorderSearch search) {
@@ -47,11 +49,11 @@ public class AdminPreorderSearchQuery {
         }
         if (search.customerId() != null) {
             conditions.add("p.customer_id = :customerId");
-            params.addValue("customerId", search.customerId());
+            params.addValue("customerId", UuidBinary.toBytes(search.customerId()));
         }
         if (search.productId() != null) {
             conditions.add("p.product_id = :productId");
-            params.addValue("productId", search.productId());
+            params.addValue("productId", UuidBinary.toBytes(search.productId()));
         }
         if (search.from() != null) {
             conditions.add("p.created_at >= :from");

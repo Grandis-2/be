@@ -3,6 +3,8 @@ package com.grandis.nova.preorder.accept.application;
 import com.grandis.nova.preorder.admission.AdmissionTicket;
 import com.grandis.nova.preorder.preorder.EventActor;
 
+import java.util.UUID;
+
 /**
  * 검증을 마친 접수 요청.
  *
@@ -11,9 +13,9 @@ import com.grandis.nova.preorder.preorder.EventActor;
  * @param internalNote      관리자 메모. 없으면 null
  */
 record AcceptCommand(
-        Long customerId,
-        Long productId,
-        Long optionId,
+        UUID customerId,
+        UUID productId,
+        UUID optionId,
         String idempotencyKey,
         AdmissionTicket admissionTicket,
         EventActor actor,

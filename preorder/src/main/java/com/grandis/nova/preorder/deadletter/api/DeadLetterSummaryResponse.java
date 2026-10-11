@@ -8,20 +8,21 @@ import com.grandis.nova.preorder.deadletter.domain.DeadLetterSummary;
 import com.grandis.nova.preorder.deadletter.domain.FailureReason;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /** @param preorderId 예약 공개 UUID. 예약이 없는 이벤트면 null */
 record DeadLetterSummaryResponse(
-        Long deadLetterId,
+        UUID deadLetterId,
         String messageId,
         String eventId,
         String eventType,
         String preorderId,
-        Long customerId,
+        UUID customerId,
         FailureReason failureReason,
         int receiveCount,
         DeadLetterStatus status,
         boolean redrivable,
-        Long redrivenFromId,
+        UUID redrivenFromId,
         Instant sentAt,
         Instant createdAt,
         Instant updatedAt

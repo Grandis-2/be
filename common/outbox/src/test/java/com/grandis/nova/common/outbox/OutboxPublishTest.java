@@ -1,5 +1,6 @@
 package com.grandis.nova.common.outbox;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.outbox.support.OutboxIntegrationTest;
 import com.grandis.nova.common.outbox.support.TestOutbox.ItemSettled;
 import com.grandis.nova.common.testing.Concurrently;
@@ -30,7 +31,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.IntStream;
@@ -106,11 +106,11 @@ class OutboxPublishTest {
     final CountDownLatch sending = new CountDownLatch(1);
     final CountDownLatch released = new CountDownLatch(1);
 
-    long itemId;
+    UUID itemId;
 
     @BeforeEach
     void setUp() {
-        itemId = ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE);
+        itemId = UUID.randomUUID();
         willAnswer(invocation -> {
             if (transportDown) {
                 throw new IllegalStateException("transport down");
@@ -181,7 +181,7 @@ class OutboxPublishTest {
         assertThat(body.get("eventId").asString()).isEqualTo(eventId);
         assertThat(body.get("eventType").asString()).isEqualTo("ITEM_SETTLED");
         assertThat(body.get("aggregateType").asString()).isEqualTo("ITEM");
-        assertThat(body.get("aggregateId").asLong()).isEqualTo(itemId);
+        assertThat(body.get("aggregateId").asString()).isEqualTo(itemId.toString());
         assertThat(Instant.parse(body.get("occurredAt").asString())).isEqualTo(createdAt(id));
         JsonNode payload = body.get("payload");
         assertThat(payload.isObject()).as("payload 는 문자열이 아닌 JSON 객체").isTrue();
@@ -199,7 +199,7 @@ class OutboxPublishTest {
 
         // 커밋 후 콜백 자체가 불리지 않으므로 잠시 기다려도 나가는 것이 없어야 한다
         await().during(Duration.ofMillis(300)).atMost(ASYNC_TIMEOUT)
-                .until(() -> sent.stream().noneMatch(message -> aggregateIdOf(message) == itemId));
+                .until(() -> sent.stream().noneMatch(message -> itemId.equals(aggregateIdOf(message))));
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM it_outbox_events WHERE id = ?", Integer.class, id))
                 .isZero();
     }
@@ -503,7 +503,7 @@ class OutboxPublishTest {
                                               published_at)
                 VALUES (?, 'ITEM', ?, ?, '{}', UTC_TIMESTAMP(6) - INTERVAL 2 MINUTE,
                         IF(?, UTC_TIMESTAMP(6) - INTERVAL 1 MINUTE, NULL))
-                """, eventId, itemId, eventType, published);
+                """, eventId, UuidBinary.toBytes(itemId), eventType, published);
         return jdbcTemplate.queryForObject("SELECT id FROM it_outbox_events WHERE event_id = ?", Long.class, eventId);
     }
 
@@ -550,7 +550,7 @@ class OutboxPublishTest {
                 .count();
     }
 
-    private long aggregateIdOf(OutboundMessage message) {
-        return jsonMapper.readTree(message.body()).get("aggregateId").asLong();
+    private UUID aggregateIdOf(OutboundMessage message) {
+        return UUID.fromString(jsonMapper.readTree(message.body()).get("aggregateId").asString());
     }
 }

@@ -2,6 +2,7 @@ package com.grandis.nova.catalog.api;
 
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
+import com.grandis.nova.common.UuidBinary;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -16,6 +17,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -37,7 +39,7 @@ class AdminProductDetailApiTest {
     @Autowired JdbcTemplate jdbcTemplate;
 
     ShopFixtures fixtures;
-    Long categoryId;
+    UUID categoryId;
 
     @BeforeEach
     void setUp() {
@@ -51,7 +53,7 @@ class AdminProductDetailApiTest {
         Instant opensAt = Instant.now().plus(HOUR.multipliedBy(2));
         String key = "k-" + ShopFixtures.unique();
         String body = """
-                { "categoryId": %d, "saleMode": "PREORDER", "title": "Nova 1", "description": "설명", "tags": "nova,신제품",
+                { "categoryId": "%s", "saleMode": "PREORDER", "title": "Nova 1", "description": "설명", "tags": "nova,신제품",
                   "visible": true, "basePrice": 1000000,
                   "optionAxes": [ { "key": "color", "label": "색상", "values": [ { "value": "블랙" } ] } ],
                   "images": { "gallery": [ { "color": "블랙", "items": [ { "url": "https://img/b0.jpg" } ] } ] },
@@ -61,7 +63,7 @@ class AdminProductDetailApiTest {
         ResultActions created = mockMvc.perform(post(PATH).header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON)
                 .content(body).with(user("admin").roles("ADMIN"))).andExpect(status().isCreated());
         JsonNode createdData = data(created);
-        long productId = createdData.get("registration").get("productId").asLong();
+        UUID productId = UUID.fromString(createdData.get("registration").get("productId").asString());
 
         JsonNode detail = data(admin(productId).andExpect(status().isOk())
                 .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store"))));
@@ -71,7 +73,7 @@ class AdminProductDetailApiTest {
         assertThat(detail.get("product").get("images").get("gallery").get(0).get("bundleKey").asString()).isEqualTo("블랙");
         assertThat(detail.get("tags").asString()).isEqualTo("nova,신제품");
         JsonNode registration = detail.get("registration");
-        assertThat(registration.get("productId").asLong()).isEqualTo(productId);
+        assertThat(registration.get("productId").asString()).isEqualTo(productId.toString());
         assertThat(registration.get("idempotencyKey").asString()).isEqualTo(key);
         assertThat(registration.get("completed").asBoolean()).as("회차 행 전").isFalse();
         assertThat(registration.size()).as("등록 상태는 productId · idempotencyKey · completed 셋뿐").isEqualTo(3);
@@ -84,7 +86,7 @@ class AdminProductDetailApiTest {
     @Test
     @DisplayName("노출 규칙이 없다 — 등록 기록 없음(idempotencyKey null, 준비는 그대로 실림) · 비공개 · 판매 중지 · 오래된 마감도 200, 없는 상품만 404 NOT_FOUND")
     void noExposureRule() throws Exception {
-        Long noRegistration = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "등록 없음", "legacy");
+        UUID noRegistration = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "등록 없음", "legacy");
         JsonNode legacy = data(admin(noRegistration).andExpect(status().isOk()));
         assertThat(legacy.get("registration").get("idempotencyKey").isNull()).as("등록 기록이 없다").isTrue();
         assertThat(legacy.get("registration").get("completed").asBoolean()).as("준비 전 — 관리자 목록과 같은 판정").isFalse();
@@ -95,35 +97,35 @@ class AdminProductDetailApiTest {
         assertThat(legacy.get("tags").asString()).isEqualTo("legacy");
         assertThat(legacy.get("product").get("visible").asBoolean()).as("관리자 상세의 visible 은 칸 그대로(기본값 1). 회원 노출은 판매 방식별 준비도 필요하다").isTrue();
 
-        Long hidden = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "비공개", null);
+        UUID hidden = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "비공개", null);
         fixtures.registration(hidden);
         fixtures.option(hidden, "ACTIVE");
         fixtures.stockReady(hidden);
-        jdbcTemplate.update("UPDATE products SET visible = 0, status = 'PAUSED' WHERE id = ?", hidden);
+        jdbcTemplate.update("UPDATE products SET visible = 0, status = 'PAUSED' WHERE id = ?", (Object) UuidBinary.toBytes(hidden));
         JsonNode hiddenDetail = data(admin(hidden).andExpect(status().isOk()));
         assertThat(hiddenDetail.get("product").get("visible").asBoolean()).isFalse();
         assertThat(hiddenDetail.get("product").get("status").asString()).isEqualTo("PAUSED");
         assertThat(hiddenDetail.get("registration").get("completed").asBoolean()).isTrue();
 
         Instant now = Instant.now();
-        Long longClosed = fixtures.product(categoryId, "PREORDER", "ACTIVE", "오래 전 마감", null);
+        UUID longClosed = fixtures.product(categoryId, "PREORDER", "ACTIVE", "오래 전 마감", null);
         fixtures.registration(longClosed);
         fixtures.campaign(longClosed, now.minus(HOUR.multipliedBy(200)), now.minus(HOUR.multipliedBy(190)));
         assertThat(data(admin(longClosed).andExpect(status().isOk())).get("product").get("campaign").get("status").asString())
                 .isEqualTo("CLOSED");
 
-        admin(999_999_999L).andExpect(status().isNotFound()).andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
+        admin(UUID.randomUUID()).andExpect(status().isNotFound()).andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
     }
 
     @Test
     @DisplayName("관리자만 — 익명 401, 회원 403")
     void adminOnly() throws Exception {
-        Long productId = fixtures.product(categoryId, "IN_STOCK", "ACTIVE");
+        UUID productId = fixtures.product(categoryId, "IN_STOCK", "ACTIVE");
         mockMvc.perform(get(PATH + "/{id}", productId)).andExpect(status().isUnauthorized());
         mockMvc.perform(get(PATH + "/{id}", productId).with(user("657").roles("USER"))).andExpect(status().isForbidden());
     }
 
-    private ResultActions admin(long productId) throws Exception {
+    private ResultActions admin(UUID productId) throws Exception {
         return mockMvc.perform(get(PATH + "/{id}", productId).with(user("admin").roles("ADMIN")));
     }
 

@@ -19,11 +19,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.UUID;
+
 /**
  * 상품 리뷰 — 일반 판매 상품의 배송 완료된 주문상품 1건당 1개, 작성자만 수정 · 삭제, 조회는 비로그인도(2026-10-06 결정).
  *
  * <p><b>쓸 자격은 order 가 안다.</b> catalog 는 order 표를 읽지 않고 order 내부 API 로 묻는다 — 주문상품이 없거나 토큰 주인의 것이
- * 아니면(order 의 ORDER_ITEM_NOT_FOUND 404) 404, 배송 완료(DELIVERED)가 아니거나 사전예약 주문이면 409 REVIEW_NOT_ALLOWED.
+ * 아니면(order 의 ORDER_ITEM_NOT_FOUND 404) 404, 배송 완료(DELIVERED)가 아니거나 사전예약 주문 · 드로우 당첨 주문이면 409 REVIEW_NOT_ALLOWED.
  * 상품이 사전예약이어도 409 다(catalog 표로 판정). 응답이 물은 주문상품이 아니거나 필수 칸이 비면 연동 오류(500)다 — 리뷰의 상품은
  * order 응답만 정하므로(서비스를 넘는 FK 가 없다) 대조한다. 작성자 표시명은 member 내부 API 로 받아 가린 값(첫 글자 + "**")만 저장한다.
  *
@@ -37,6 +39,8 @@ public class ReviewService {
     static final String ORDER_ITEM_NOT_FOUND = "ORDER_ITEM_NOT_FOUND";
     static final String DELIVERED = "DELIVERED";
     static final String PREORDER_SOURCE = "PREORDER";
+    /** 럭키 드로우 당첨 증정 주문 — 구매가 아니라 증정이라 리뷰를 받지 않는다 */
+    static final String DRAW_SOURCE = "DRAW";
     private static final String MASK = "**";
 
     private final ProductReviewRepository reviews;
@@ -57,7 +61,7 @@ public class ReviewService {
     }
 
     /** @throws BusinessException NOT_FOUND(내 주문상품이 아님) · REVIEW_NOT_ALLOWED · REVIEW_ALREADY_WRITTEN · VALIDATION_FAILED */
-    public ReviewView write(Long customerId, ReviewCreateRequest request) {
+    public ReviewView write(UUID customerId, ReviewCreateRequest request) {
         String body = requireBody(request.body());
         OrderClient.OrderItem item = requireContract(request.orderItemId(), InternalCalls.call(Dependencies.ORDER,
                 () -> orders.getOrderItem(request.orderItemId()), ORDER_ITEM_NOT_FOUND,
@@ -71,6 +75,9 @@ public class ReviewService {
         if (PREORDER_SOURCE.equals(item.orderSource()) || product.getSaleMode() == SaleMode.PREORDER) {
             throw new BusinessException(CatalogErrorCode.REVIEW_NOT_ALLOWED, "사전예약 상품은 리뷰를 받지 않습니다.");
         }
+        if (DRAW_SOURCE.equals(item.orderSource())) {
+            throw new BusinessException(CatalogErrorCode.REVIEW_NOT_ALLOWED, "드로우 당첨 증정품은 리뷰를 받지 않습니다.");
+        }
         // member 는 토큰의 회원이 없으면 401 로 답한다. 404 는 경로 없음(배포 순서 · 주소 오류)이라 연동 오류다 — 401 로 바꾸면
         // 프론트가 토큰 문제로 보고 재발급 · 로그아웃한다
         MemberClient.Customer author = InternalCalls.call(Dependencies.MEMBER, members::getMe);
@@ -78,7 +85,7 @@ public class ReviewService {
             throw InternalCalls.contractViolation(Dependencies.MEMBER, "토큰 주인이 아닌 회원의 응답");
         }
         ProductReview review = ProductReview.write(product.getId(), customerId, item.orderItemId(), request.rating(), body,
-                item.optionTitle(), mask(author.displayName()));
+                item.optionTitle(), mask(author.reviewerName()));
         try {
             reviews.saveAndFlush(review);
         } catch (DataIntegrityViolationException e) {
@@ -92,24 +99,25 @@ public class ReviewService {
 
     /** 작성자 본인만. 남의 리뷰 · 없는 리뷰는 404. */
     @Transactional
-    public ReviewView revise(Long customerId, Long reviewId, ReviewUpdateRequest request) {
+    public ReviewView revise(UUID customerId, UUID reviewId, ReviewUpdateRequest request) {
         if (request.isEmpty()) {
             throw ValidationFailures.of("body", "바꿀 칸이 하나도 없습니다.");
         }
-        ProductReview review = requireMine(customerId, reviewId);
+        ProductReview review = reviews.findMineForUpdate(reviewId, customerId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND, "리뷰를 찾을 수 없습니다."));
         review.revise(request.rating(), request.body() == null ? null : requireBody(request.body()));
         reviews.flush();
         return mine(customerId, review.getOrderItemId());
     }
 
     @Transactional
-    public void delete(Long customerId, Long reviewId) {
+    public void delete(UUID customerId, UUID reviewId) {
         reviews.delete(requireMine(customerId, reviewId));
     }
 
     /** 상품 상세의 후기 탭. 상품을 보여 주지 않는 경우(없음 · 비공개 · 준비 전)는 상품 상세처럼 404. */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public OffsetPage<ReviewView> productReviews(Long productId, int page, int size) {
+    public OffsetPage<ReviewView> productReviews(UUID productId, int page, int size) {
         Product product = products.findById(productId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
         if (!(product.isVisible() && crossReads.isReady(productId))) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
@@ -119,29 +127,29 @@ public class ReviewService {
 
     /** 모아보기. 비공개 상품의 리뷰는 빠진다. */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public OffsetPage<ReviewView> visibleReviews(Long categoryId, int page, int size) {
+    public OffsetPage<ReviewView> visibleReviews(UUID categoryId, int page, int size) {
         return new OffsetPage<>(queries.findVisible(categoryId, page, size), page, size, queries.countVisible(categoryId));
     }
 
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public OffsetPage<ReviewView> myReviews(Long customerId, Long orderItemId, int page, int size) {
+    public OffsetPage<ReviewView> myReviews(UUID customerId, UUID orderItemId, int page, int size) {
         return new OffsetPage<>(queries.findMine(customerId, orderItemId, page, size), page, size,
                 queries.countMine(customerId, orderItemId));
     }
 
-    private ProductReview requireMine(Long customerId, Long reviewId) {
+    private ProductReview requireMine(UUID customerId, UUID reviewId) {
         return reviews.findByIdAndCustomerId(reviewId, customerId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND, "리뷰를 찾을 수 없습니다."));
     }
 
     /** 방금 쓰거나 고친 내 리뷰. 그 사이 지워졌으면(같은 회원의 동시 삭제) 404. */
-    private ReviewView mine(Long customerId, Long orderItemId) {
+    private ReviewView mine(UUID customerId, UUID orderItemId) {
         return queries.findMine(customerId, orderItemId, 0, 1).stream().findFirst()
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND, "리뷰를 찾을 수 없습니다."));
     }
 
     /** order 응답이 물은 주문상품이고 필수 칸이 있는가. */
-    private static OrderClient.OrderItem requireContract(Long requested, OrderClient.OrderItem item) {
+    private static OrderClient.OrderItem requireContract(UUID requested, OrderClient.OrderItem item) {
         if (!requested.equals(item.orderItemId())) {
             throw InternalCalls.contractViolation(Dependencies.ORDER, "물은 주문상품과 다른 응답");
         }
@@ -181,9 +189,9 @@ public class ReviewService {
     /** 글자(Lo) 범주지만 보이지 않는 것 — 한글 채움 문자(초성 · 중성 채움, 한글 채움, 반각 한글 채움), 점자 빈칸. */
     private static final java.util.Set<Integer> INVISIBLE_LETTERS = java.util.Set.of(0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800);
 
-    /** 첫 글자(코드포인트) + "**". 표시명이 비었으면 "***". */
-    static String mask(String displayName) {
-        String name = displayName == null ? "" : displayName.strip();
+    /** 첫 글자(코드포인트) + "**". 이름이 비었으면 "***". */
+    static String mask(String reviewerName) {
+        String name = reviewerName == null ? "" : reviewerName.strip();
         if (name.isEmpty()) {
             return "*" + MASK;
         }

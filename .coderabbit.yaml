@@ -8,8 +8,7 @@
 #
 # 소유 경계(README 기준)
 #   member    customers · refresh_tokens
-#   catalog   categories · products · product_options · product_option_axes · product_option_values
-#             product_option_selections · product_images · product_registrations · product_reviews · catalog_outbox_events
+#   catalog   categories · products · product_options · product_reviews · catalog_outbox_events
 #   preorder  preorders · preorder_events · preorder_campaigns · shipment_batches · dead_letter_events
 #   order     orders · order_items · order_events · cart_items · payments · payment_transactions
 #             option_inventories (재고. 옵션당 1행, 일반 판매 옵션만)
@@ -83,7 +82,7 @@ reviews:
           외부 호출은 워커가 한다.
           예외(내부 서비스 동기 호출): catalog 상품 조회(캐시 미스일 때만) · order 취소 사전 확인.
           둘 다 타임아웃 · 서킷 브레이커 · 동시 호출 상한(DependencyGuard)을 거쳐야 하고, 거치지 않으면 지적한다.
-          예외(타임아웃만): catalog 리뷰 작성의 order 주문상품 조회 · member 표시명 조회 — 드문 쓰기라 서킷 브레이커 · 동시 상한은
+          예외(타임아웃만): catalog 리뷰 작성의 order 주문상품 조회 · member 작성자 이름 조회 — 드문 쓰기라 서킷 브레이커 · 동시 상한은
           두지 않는다(2026-10-06 결정). 타임아웃(spring.http.serviceclient.order · member)이 없으면 지적한다.
         - @Transactional 범위 안의 HTTP 호출 · SQS 전송 · Thread.sleep · 외부 락 대기.
           DB 잠금을 외부 응답 시간만큼 붙잡는다.
@@ -239,11 +238,11 @@ reviews:
           판매 방식별 준비(등록 이벤트를 받은 서비스가 회차 행 · 재고 행을 만들었는가)에 쓰며 읽기 전용 저장소 한 곳에서만 읽는다.
           그 두 표에 INSERT · UPDATE · DELETE 가 있으면 지적한다. 다른 클래스가 같은 표를 읽어도 지적한다.
           src/test 의 시험 코드가 시험 데이터로 그 표에 INSERT · UPDATE 하는 것은 예외다 — 운영 코드 경계가 아니라 시험 준비 · 경쟁 재현이다.
-        - shipment_batches 는 읽지 않는다. 상세의 배송 안내는 preorder 의 공개 API(GET /api/v1/products/{id}/shipment-batches)를 프론트가 부른다.
+        - shipment_batches 는 읽지 않는다. 상세의 배송 안내는 preorder 의 공개 API(GET /api/v1/preorders/products/{id}/shipment-batches)를 프론트가 부른다.
         - products.sale_mode 는 등록 뒤 바꾸지 않는다. order 의 재고 검증(일반 판매 상품에만 재고 행)이 이 계약에 기댄다.
           바꾸는 경로가 생기면 지적한다.
         - preorders · orders · payments · cart_items 는 읽기도 지적한다.
-          리뷰를 쓸 자격(내 주문상품 · 배송 완료 · 일반 주문)과 작성자 표시명은 order · member 내부 API 로 묻는다(contracts/order-internal.md ·
+          리뷰를 쓸 자격(내 주문상품 · 배송 완료 · 일반 주문)과 작성자 이름(실명 우선)은 order · member 내부 API 로 묻는다(contracts/order-internal.md ·
           member-internal.md). orders · order_items · customers 를 읽어 판정하면 지적한다.
         - sku 는 모델 안에서 유일하다. 중복 검사를 애플리케이션 조회로만 하면 UNIQUE 제약을 함께 쓰도록 제안한다.
         - 상품 · 옵션의 물리 삭제는 지적한다. 신청 이력이 있으므로 상태로 숨긴다.
@@ -252,9 +251,11 @@ reviews:
         - 카테고리 parent_id 를 쓰는 경로가 순환(자기 자신 포함) · 3단계를 검사하지 않으면 지적한다. DB 는 못 막는다.
         - 회원에게 상품을 노출하는 판정(목록 · 상세)이 products.visible 만 보고 판매 방식별 준비(ProductListingQueryRepository.READY)를 함께 보지 않으면 지적한다.
           visible 은 관리자가 고른 값이라 준비 전에도 true 일 수 있다.
-        - product_images 의 GALLERY bundle_key 가 그 상품 color 축의 정규화값(또는 '')인지 검사하지 않으면 지적한다.
-        - product_options 의 combination_key · filter_attributes · title 과 product_option_selections 를 OptionCombination 밖에서 따로 만들면 지적한다.
-        - product_images.position 을 한 UPDATE 로 교환하거나, 이동 UPDATE 에 방향에 맞는 ORDER BY 가 없으면 지적한다(UNIQUE 는 행마다 검사된다).
+        - 옵션 축 · 값 · 사진은 products.options(JSON) 한 칸이다(ProductOptions). 색상 사진을 color 축 값 밖(다른 축 · 없는 값)에 두면 지적한다.
+        - products.options 를 Product.replaceOptions 밖에서 쓰면 지적한다 — 썸네일(thumbnail_url)이 같이 바뀌지 않는다. 고치는 경로가 상품 행 잠금
+          (ProductRepository.findForUpdate) 없이 문서를 읽고 다시 쓰면 지적한다(동시 수정이 서로 덮는다).
+        - 같은 축의 같은 값 검사를 앱의 근사(collationKey)로만 하고 CollationDuplicates(DB 콜레이션 판정)를 거치지 않으면 지적한다.
+        - product_options 의 combination_key · filter_attributes · title 을 OptionCombination 밖에서 따로 만들면 지적한다.
         - 다른 서비스가 만들 값(사전예약 회차 · 차수, 일반 상품 초기 재고)을 그 서비스의 API 를 동기로 불러 넣거나 그 표에 직접 쓰면 지적한다.
           같은 트랜잭션에서 OutboxWriter 로 이벤트를 적는다(contracts/catalog-events.md).
         - catalog_outbox_events 를 OutboxWriter 밖에서 INSERT 하거나, 업무 트랜잭션과 다른 트랜잭션에서 append 하면 지적한다(MANDATORY).

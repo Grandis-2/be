@@ -4,6 +4,7 @@ import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
 import com.grandis.nova.preorder.campaign.domain.PreorderSaleStatus;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * 모집 일정(openapi AdminPreorderCampaign). 순번 카운터 대신 발급 수만 알린다.
@@ -12,7 +13,7 @@ import java.time.Instant;
  * @param issuedCount 지금까지 발급한 순번 수(취소 행 포함)
  */
 record PreorderCampaignResponse(
-        Long productId,
+        UUID productId,
         Instant opensAt,
         Instant closesAt,
         PreorderSaleStatus saleStatus,

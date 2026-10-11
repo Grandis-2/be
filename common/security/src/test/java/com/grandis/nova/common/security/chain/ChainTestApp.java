@@ -4,6 +4,7 @@ import com.grandis.nova.common.security.CurrentCustomerId;
 import com.grandis.nova.common.security.SecurityFilterChainSupport;
 import com.grandis.nova.common.web.ApiResponse;
 import java.util.Map;
+import java.util.UUID;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -51,7 +52,7 @@ public class ChainTestApp {
         }
 
         @GetMapping("/api/v1/me")
-        ApiResponse<Map<String, Long>> me(@CurrentCustomerId Long customerId) {
+        ApiResponse<Map<String, UUID>> me(@CurrentCustomerId UUID customerId) {
             return ApiResponse.ok(Map.of("customerId", customerId));
         }
 
@@ -66,7 +67,7 @@ public class ChainTestApp {
         }
 
         @PutMapping("/api/v1/me/default-address")
-        ApiResponse<Map<String, String>> putAddress(@CurrentCustomerId Long customerId) {
+        ApiResponse<Map<String, String>> putAddress(@CurrentCustomerId UUID customerId) {
             return ApiResponse.ok(Map.of("ok", "address"));
         }
 

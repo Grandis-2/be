@@ -24,10 +24,9 @@ public final class OrderView {
     /** 상세. 이력은 번호순이고 주문을 읽은 시점의 번호까지다. */
     public record Detail(Order order, List<OrderItem> items, List<OrderEvent> events) {
 
-        /** 취소 중인데 환불이 확정 실패했다(마지막 이력이 환불 실패). 사용자에겐 실패 사실만 보인다(U1). */
+        /** 취소 중인데 환불이 확정 실패했다. 사용자에겐 실패 사실만 보인다(U1). */
         public boolean refundFailed() {
-            return order.status() == OrderStatus.CANCELING && !events.isEmpty()
-                    && events.getLast().cause().isRefundFailure();
+            return order.status() == OrderStatus.CANCELING && order.refundFailedAt() != null;
         }
     }
 }

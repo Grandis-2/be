@@ -7,6 +7,7 @@ import com.grandis.nova.preorder.campaign.domain.ShipmentBatchRepository;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.UUID;
 
 /** 배송 차수 공개 조회. 차수가 없으면 사전예약 상품이 아니거나 아직 준비 전이다. */
 @Service
@@ -18,7 +19,7 @@ public class ShipmentBatchQueryService {
         this.batches = batches;
     }
 
-    public List<ShipmentBatch> findPublished(Long productId) {
+    public List<ShipmentBatch> findPublished(UUID productId) {
         List<ShipmentBatch> found = batches.findByProductIdOrderByBatchNumber(productId);
         if (found.isEmpty()) {
             throw new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND);

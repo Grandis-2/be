@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 
 import java.math.BigDecimal;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * 결제된 주문을 취소 중으로 바꿨다 — 그 주문의 결제를 전액 환불해 달라는 요청. payment 의 {@code event.OrderRefundRequested} 가 받는다.
@@ -14,7 +15,7 @@ import java.util.Objects;
  * @param orderId 주문 id(결제 대상 id). 봉투의 aggregateId 로만 나가고 payload 에는 싣지 않는다
  * @param amount  주문 총액
  */
-public record OrderRefundRequested(@JsonIgnore Long orderId, BigDecimal amount) implements OutboxMessage {
+public record OrderRefundRequested(@JsonIgnore UUID orderId, BigDecimal amount) implements OutboxMessage {
 
     public OrderRefundRequested {
         Objects.requireNonNull(orderId, "orderId");
@@ -32,7 +33,7 @@ public record OrderRefundRequested(@JsonIgnore Long orderId, BigDecimal amount) 
     }
 
     @Override
-    public Long aggregateId() {
+    public UUID aggregateId() {
         return orderId;
     }
 }

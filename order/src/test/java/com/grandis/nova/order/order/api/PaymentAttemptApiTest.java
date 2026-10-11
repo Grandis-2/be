@@ -31,7 +31,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.ResourceAccessException;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
+import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -43,7 +45,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * POST /api/v1/orders/{orderToken}/payment-attempts — 결제창을 열 값을 돌려준다. MySQL 위에서 돌고 preorder · payment 내부 API 만 대역이다.
+ * POST /api/v1/orders/{orderId}/payment-attempts — 결제창을 열 값을 돌려준다. MySQL 위에서 돌고 preorder · payment 내부 API 만 대역이다.
  * 대역 응답 모양의 계약 대조는 PreorderClientTest · PaymentPreparerTest 가 한다.
  *
  * 인증은 흉내({@link TestAuth})다 — 필터가 토큰을 읽지 않으므로 Authorization 헤더의 값은 전달 확인용 자리일 뿐이다.
@@ -78,8 +80,8 @@ class PaymentAttemptApiTest {
 
     OrderFixtures fixtures;
     PreorderProduct product;
-    Long customerId;
-    Long preorderId;
+    UUID customerId;
+    UUID preorderId;
     Order order;
 
     @BeforeEach
@@ -87,18 +89,18 @@ class PaymentAttemptApiTest {
         fixtures = new OrderFixtures(jdbcTemplate);
         product = fixtures.preorderProduct();
         customerId = fixtures.customer();
-        preorderId = fixtures.payablePreorder(customerId, product, 1);
+        preorderId = OrderFixtures.preorderId();
         order = new TransactionTemplate(transactionManager).execute(status -> ledger.place(
                 OrderFixtures.preorderCommand(customerId, preorderId, product).toDraft(), EventCause.user()));
     }
 
     @Test
     void returnsValuesToOpenPaymentWindow() throws Exception {
-        jdbcTemplate.update("UPDATE orders SET total_amount = ? WHERE id = ?", TOTAL, order.id());
+        jdbcTemplate.update("UPDATE orders SET total_amount = ? WHERE id = ?", TOTAL, bytes(order.id()));
         stubPreorder(PreorderStubs.payable(preorderId, order.preorderToken(), customerId, product));
         stubPaymentOpens(TOTAL);
 
-        prepare(customerId, order.orderToken().value())
+        prepare(customerId, order.id().toString())
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.tossOrderId").value(PROVIDER_ORDER_ID))
@@ -106,8 +108,8 @@ class PaymentAttemptApiTest {
                 .andExpect(jsonPath("$.data.orderName").value(OrderFixtures.PRODUCT_TITLE + " " + OrderFixtures.OPTION_TITLE))
                 .andExpect(jsonPath("$.data.customerKey").doesNotExist());
 
-        // 예약은 주문에 저장한 UUID 로 묻고, 결제는 주문 id · 서버 금액으로 연다. 사용자 토큰은 둘 다에 그대로 싣는다.
-        verify(preorderClient).getPayability(order.preorderToken(), BearerTokens.value(SESSION));
+        // 예약은 주문에 저장한 예약 내부 id 로 묻고, 결제는 주문 id · 서버 금액으로 연다. 사용자 토큰은 둘 다에 그대로 싣는다.
+        verify(preorderClient).getPayabilityById(order.preorderId(), BearerTokens.value(SESSION));
         verify(paymentClient).openCapture(new CaptureRequest("ORDER", order.id(), TOTAL), BearerTokens.value(SESSION));
         assertThat(statusOf(order)).isEqualTo("AWAITING_PAYMENT");
     }
@@ -116,8 +118,8 @@ class PaymentAttemptApiTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"00000000-0000-4000-8000-000000000000", "not-a-token", "6F1C2D3E-4B5A-4C7D-8E9F-0A1B2C3D4E5F"})
-    void unknownOrderIsNotFound(String orderToken) throws Exception {
-        prepare(customerId, orderToken)
+    void unknownOrderIsNotFound(String orderId) throws Exception {
+        prepare(customerId, orderId)
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("ORDER_NOT_FOUND"));
 
@@ -126,7 +128,7 @@ class PaymentAttemptApiTest {
 
     @Test
     void someoneElsesOrderIsNotFound() throws Exception {
-        prepare(fixtures.customer(), order.orderToken().value())
+        prepare(fixtures.customer(), order.id().toString())
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("ORDER_NOT_FOUND"));
 
@@ -139,7 +141,7 @@ class PaymentAttemptApiTest {
     void orderNotAwaitingPaymentIsNotPayable(String status) throws Exception {
         fixtures.forceStatus(order.id(), status);
 
-        prepare(customerId, order.orderToken().value())
+        prepare(customerId, order.id().toString())
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("ORDER_NOT_PAYABLE"));
 
@@ -149,10 +151,10 @@ class PaymentAttemptApiTest {
     // 0원 주문은 결제창을 열 수 없다. payment 에 보내면 400 → 늘 500 이 되므로 부르기 전에 거절한다.
     @Test
     void zeroAmountOrderIsNotPayable() throws Exception {
-        jdbcTemplate.update("UPDATE orders SET total_amount = 0 WHERE id = ?", order.id());
+        jdbcTemplate.update("UPDATE orders SET total_amount = 0 WHERE id = ?", bytes(order.id()));
         stubPreorder(PreorderStubs.payable(preorderId, order.preorderToken(), customerId, product));
 
-        prepare(customerId, order.orderToken().value())
+        prepare(customerId, order.id().toString())
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("ORDER_NOT_PAYABLE"));
 
@@ -162,10 +164,10 @@ class PaymentAttemptApiTest {
     // 0원 거절은 예약 확인 뒤다 — 예약이 취소된 0원 주문도 남은 주문 정리(R1)를 거친다.
     @Test
     void zeroAmountOrderOfCanceledPreorderIsStillCanceled() throws Exception {
-        jdbcTemplate.update("UPDATE orders SET total_amount = 0 WHERE id = ?", order.id());
+        jdbcTemplate.update("UPDATE orders SET total_amount = 0 WHERE id = ?", bytes(order.id()));
         stubPreorder(PreorderStubs.blocked(preorderId, order.preorderToken(), customerId, product, "CANCELED"));
 
-        prepare(customerId, order.orderToken().value())
+        prepare(customerId, order.id().toString())
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("PREORDER_NOT_PAYABLE"));
 
@@ -182,20 +184,20 @@ class PaymentAttemptApiTest {
     void canceledPreorderCancelsLeftoverOrder() throws Exception {
         stubPreorder(PreorderStubs.blocked(preorderId, order.preorderToken(), customerId, product, "CANCELED"));
 
-        prepare(customerId, order.orderToken().value())
+        prepare(customerId, order.id().toString())
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("PREORDER_NOT_PAYABLE"));
 
         assertThat(statusOf(order)).isEqualTo("CANCELED");
         assertThat(jdbcTemplate.queryForMap("""
                 SELECT from_status, to_status, actor, reason FROM order_events WHERE order_id = ? AND event_sequence = 2
-                """, order.id()))
+                """, bytes(order.id())))
                 .containsEntry("from_status", "AWAITING_PAYMENT")
                 .containsEntry("to_status", "CANCELED")
                 .containsEntry("actor", "SYSTEM")
                 .containsEntry("reason", "PREORDER_CANCELED");
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM order_outbox_events WHERE aggregate_id = ?",
-                Integer.class, preorderId)).isZero();
+                Integer.class, bytes(preorderId))).isZero();
         verifyNoInteractions(paymentClient);
     }
 
@@ -204,18 +206,18 @@ class PaymentAttemptApiTest {
     void leftoverCancelSkipsOrderThatMovedOn() throws Exception {
         PreorderPayability canceled =
                 PreorderStubs.blocked(preorderId, order.preorderToken(), customerId, product, "CANCELED");
-        given(preorderClient.getPayability(eq(order.preorderToken()), any())).willAnswer(invocation -> {
+        given(preorderClient.getPayabilityById(eq(order.preorderId()), any())).willAnswer(invocation -> {
             fixtures.forceStatus(order.id(), "AUTHORIZING");
             return ApiResponse.ok(canceled);
         });
 
-        prepare(customerId, order.orderToken().value())
+        prepare(customerId, order.id().toString())
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("PREORDER_NOT_PAYABLE"));
 
         assertThat(statusOf(order)).isEqualTo("AUTHORIZING");
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM order_events WHERE order_id = ?",
-                Integer.class, order.id())).isEqualTo(1);
+                Integer.class, bytes(order.id()))).isEqualTo(1);
         verifyNoInteractions(paymentClient);
     }
 
@@ -224,7 +226,7 @@ class PaymentAttemptApiTest {
     void cancelingPreorderLeavesOrderToCancelMessage() throws Exception {
         stubPreorder(PreorderStubs.blocked(preorderId, order.preorderToken(), customerId, product, "CANCELING"));
 
-        prepare(customerId, order.orderToken().value())
+        prepare(customerId, order.id().toString())
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("PREORDER_NOT_PAYABLE"));
 
@@ -236,7 +238,7 @@ class PaymentAttemptApiTest {
     void duePassedIsPaymentWindowExpired() throws Exception {
         stubPreorder(PreorderStubs.blocked(preorderId, order.preorderToken(), customerId, product, "DUE_PASSED"));
 
-        prepare(customerId, order.orderToken().value())
+        prepare(customerId, order.id().toString())
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("PAYMENT_WINDOW_EXPIRED"));
 
@@ -248,7 +250,7 @@ class PaymentAttemptApiTest {
     void otherBlockedPreorderIsNotPayable() throws Exception {
         stubPreorder(PreorderStubs.blocked(preorderId, order.preorderToken(), customerId, product, "NOT_YET_REGISTERED"));
 
-        prepare(customerId, order.orderToken().value())
+        prepare(customerId, order.id().toString())
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("PREORDER_NOT_PAYABLE"));
 
@@ -258,9 +260,9 @@ class PaymentAttemptApiTest {
     // 주문은 그 예약에서 만들었다 — 예약이 안 보이면(없음 · 남의 것) 데이터가 어긋난 것이라 500 이다. 결제창을 열지 않는다.
     @Test
     void missingPreorderIsInternalError() throws Exception {
-        PreorderStubs.stubPreorderNotFound(preorderClient, order.preorderToken());
+        PreorderStubs.stubPreorderNotFound(preorderClient, order.preorderId());
 
-        prepare(customerId, order.orderToken().value())
+        prepare(customerId, order.id().toString())
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.error.code").value("INTERNAL_ERROR"));
 
@@ -269,9 +271,10 @@ class PaymentAttemptApiTest {
 
     @Test
     void responseForAnotherPreorderIdIsInternalError() throws Exception {
-        stubPreorder(PreorderStubs.payable(preorderId + 1_000_000, order.preorderToken(), customerId, product));
+        given(preorderClient.getPayabilityById(eq(order.preorderId()), any())).willReturn(
+                ApiResponse.ok(PreorderStubs.payable(UUID.randomUUID(), order.preorderToken(), customerId, product)));
 
-        prepare(customerId, order.orderToken().value()).andExpect(status().isInternalServerError());
+        prepare(customerId, order.id().toString()).andExpect(status().isInternalServerError());
 
         verifyNoInteractions(paymentClient);
     }
@@ -280,16 +283,16 @@ class PaymentAttemptApiTest {
     void preorderOfAnotherCustomerIsInternalError() throws Exception {
         stubPreorder(PreorderStubs.payable(preorderId, order.preorderToken(), fixtures.customer(), product));
 
-        prepare(customerId, order.orderToken().value()).andExpect(status().isInternalServerError());
+        prepare(customerId, order.id().toString()).andExpect(status().isInternalServerError());
 
         verifyNoInteractions(paymentClient);
     }
 
     @Test
     void preorderRejectingTokenIsUnauthenticated() throws Exception {
-        PreorderStubs.stubClientError(preorderClient, order.preorderToken(), HttpStatus.UNAUTHORIZED);
+        PreorderStubs.stubClientError(preorderClient, order.preorderId(), HttpStatus.UNAUTHORIZED);
 
-        prepare(customerId, order.orderToken().value())
+        prepare(customerId, order.id().toString())
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
     }
@@ -301,7 +304,7 @@ class PaymentAttemptApiTest {
         stubPreorder(PreorderStubs.payable(preorderId, order.preorderToken(), customerId, product));
         given(paymentClient.openCapture(any(), any())).willThrow(new ResourceAccessException("Read timed out"));
 
-        prepare(customerId, order.orderToken().value())
+        prepare(customerId, order.id().toString())
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.error.code").value("DEPENDENCY_UNAVAILABLE"));
 
@@ -317,13 +320,13 @@ class PaymentAttemptApiTest {
                 .willReturn(ApiResponse.ok(new PaymentAttempt(PROVIDER_ORDER_ID, amount)));
     }
 
-    private ResultActions prepare(Long customer, String orderToken) throws Exception {
-        return mockMvc.perform(post("/api/v1/orders/{orderToken}/payment-attempts", orderToken)
+    private ResultActions prepare(UUID customer, String orderId) throws Exception {
+        return mockMvc.perform(post("/api/v1/orders/{orderId}/payment-attempts", orderId)
                 .with(TestAuth.customer(customer))
                 .header(BearerTokens.HEADER, BearerTokens.value(SESSION)));
     }
 
     private String statusOf(Order placed) {
-        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, placed.id());
+        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, bytes(placed.id()));
     }
 }

@@ -3,6 +3,7 @@ package com.grandis.nova.catalog.review;
 import com.grandis.nova.catalog.support.AccessTokens;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
+import com.grandis.nova.common.UuidBinary;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterAll;
@@ -24,8 +25,9 @@ import java.math.BigDecimal;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -42,9 +44,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("리뷰 작성의 내부 호출 — 토큰 릴레이와 order · member 응답의 변환(실제 HTTP)")
 class ReviewInternalCallsTest {
 
-    private static final AtomicLong IDS = new AtomicLong(System.nanoTime() % 1_000_000_000L + 2_000_000_000L);
-    private static final Map<Long, Reply> ORDER = new ConcurrentHashMap<>();
-    private static final Map<Long, Reply> MEMBER = new ConcurrentHashMap<>();
+    private static final Map<UUID, Reply> ORDER = new ConcurrentHashMap<>();
+    private static final Map<UUID, Reply> MEMBER = new ConcurrentHashMap<>();
     private static final Map<String, String> SEEN_AUTHORIZATION = new ConcurrentHashMap<>();
     private static final HttpServer SERVER = start();
 
@@ -85,8 +86,8 @@ class ReviewInternalCallsTest {
     @Test
     @DisplayName("order · member 에 회원이 보낸 토큰을 그대로 싣고, 둘 다 200 이면 201 로 저장한다")
     void relaysTheCallersTokenToBothServices() throws Exception {
-        long customer = IDS.incrementAndGet();
-        long orderItemId = deliveredFor(customer);
+        UUID customer = UUID.randomUUID();
+        UUID orderItemId = deliveredFor(customer);
         String token = AccessTokens.customerToken(customer);
 
         write(token, orderItemId).andExpect(status().isCreated()).andExpect(jsonPath("$.data.authorName").value("김**"));
@@ -98,7 +99,7 @@ class ReviewInternalCallsTest {
     @Test
     @DisplayName("order — ORDER_ITEM_NOT_FOUND 404 만 404, 공통 NOT_FOUND 404(경로 없음) · 403 · 읽을 수 없는 200 은 500, 401 은 401, 503 은 503")
     void orderRepliesMapToTheCallersStatus() throws Exception {
-        long customer = IDS.incrementAndGet();
+        UUID customer = UUID.randomUUID();
         String token = AccessTokens.customerToken(customer);
         expect(write(token, orderItem(customer, Reply.error(404, "ORDER_ITEM_NOT_FOUND"))), 404, "NOT_FOUND");
         expect(write(token, orderItem(customer, Reply.error(403, "FORBIDDEN"))), 500, "INTERNAL_ERROR");
@@ -107,48 +108,48 @@ class ReviewInternalCallsTest {
         expect(write(token, orderItem(customer, Reply.error(401, "UNAUTHENTICATED"))), 401, "UNAUTHENTICATED");
         expect(write(token, orderItem(customer, Reply.error(503, "DEPENDENCY_UNAVAILABLE"))), 503, "DEPENDENCY_UNAVAILABLE");
         expect(write(token, orderItem(customer, new Reply(200, "text/html", "<html>login</html>"))), 500, "INTERNAL_ERROR");
-        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM product_reviews WHERE customer_id = ?", Long.class, customer)).isZero();
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM product_reviews WHERE customer_id = ?", Long.class, UuidBinary.toBytes(customer))).isZero();
     }
 
     @Test
     @DisplayName("member — 404(경로 없음) · 403 은 401 이 아니라 500, 401 은 401, 503 은 503")
     void memberRepliesMapToTheCallersStatus() throws Exception {
-        long customer = IDS.incrementAndGet();
+        UUID customer = UUID.randomUUID();
         String token = AccessTokens.customerToken(customer);
         expect(write(token, deliveredFor(customer, Reply.error(404, "NOT_FOUND"))), 500, "INTERNAL_ERROR");
         expect(write(token, deliveredFor(customer, Reply.error(403, "FORBIDDEN"))), 500, "INTERNAL_ERROR");
         expect(write(token, deliveredFor(customer, Reply.error(401, "UNAUTHENTICATED"))), 401, "UNAUTHENTICATED");
         expect(write(token, deliveredFor(customer, Reply.error(503, "DEPENDENCY_UNAVAILABLE"))), 503, "DEPENDENCY_UNAVAILABLE");
-        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM product_reviews WHERE customer_id = ?", Long.class, customer)).isZero();
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM product_reviews WHERE customer_id = ?", Long.class, UuidBinary.toBytes(customer))).isZero();
     }
 
     // ── 도우미 ──────────────────────────────────────────────────────────────
 
-    private long deliveredFor(long customer) {
-        return deliveredFor(customer, Reply.json(200, "{\"success\":true,\"data\":{\"customerId\":%d,\"displayName\":\"김철수\"}}".formatted(customer)));
+    private UUID deliveredFor(UUID customer) {
+        return deliveredFor(customer, Reply.json(200, "{\"success\":true,\"data\":{\"customerId\":\"%s\",\"displayName\":\"김철수\"}}".formatted(customer)));
     }
 
     /** 배송 완료된 일반 주문상품 — member 는 reply 로 답한다. */
-    private long deliveredFor(long customer, Reply member) {
-        long id = IDS.incrementAndGet();
-        Long product = fixtures.product("IN_STOCK", "ACTIVE");
+    private UUID deliveredFor(UUID customer, Reply member) {
+        UUID id = UUID.randomUUID();
+        UUID product = fixtures.product("IN_STOCK", "ACTIVE");
         fixtures.inventory(fixtures.option(product, "ACTIVE", new BigDecimal("1000")), 1, 0, 0);
-        ORDER.put(id, Reply.json(200, ("{\"success\":true,\"data\":{\"orderItemId\":%d,\"orderId\":1,\"productId\":%d,\"optionId\":1,"
-                + "\"optionTitle\":\"블랙 / 256GB\",\"orderStatus\":\"DELIVERED\",\"orderSource\":\"BUY_NOW\"}}").formatted(id, product)));
+        ORDER.put(id, Reply.json(200, ("{\"success\":true,\"data\":{\"orderItemId\":\"%s\",\"orderId\":\"%s\",\"productId\":\"%s\",\"optionId\":\"%s\","
+                + "\"optionTitle\":\"블랙 / 256GB\",\"orderStatus\":\"DELIVERED\",\"orderSource\":\"BUY_NOW\"}}").formatted(id, UUID.randomUUID(), product, UUID.randomUUID())));
         MEMBER.put(id, member);
         return id;
     }
 
     /** order 가 reply 로 답하는 주문상품. member 까지 가지 않는다. */
-    private long orderItem(long customer, Reply order) {
-        long id = deliveredFor(customer);
+    private UUID orderItem(UUID customer, Reply order) {
+        UUID id = deliveredFor(customer);
         ORDER.put(id, order);
         return id;
     }
 
-    private ResultActions write(String token, long orderItemId) throws Exception {
+    private ResultActions write(String token, UUID orderItemId) throws Exception {
         return mockMvc.perform(post("/api/v1/reviews").contentType(MediaType.APPLICATION_JSON)
-                .content("{ \"orderItemId\": %d, \"rating\": 5, \"body\": \"좋아요\" }".formatted(orderItemId))
+                .content("{ \"orderItemId\": \"%s\", \"rating\": 5, \"body\": \"좋아요\" }".formatted(orderItemId))
                 .with(AccessTokens.withToken(token)));
     }
 
@@ -159,16 +160,16 @@ class ReviewInternalCallsTest {
     private static HttpServer start() {
         try {
             HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
-            long[] lastItem = {0};
+            AtomicReference<UUID> lastItem = new AtomicReference<>();
             server.createContext("/internal/order-items/", exchange -> {
-                long id = Long.parseLong(exchange.getRequestURI().getPath().substring("/internal/order-items/".length()));
-                lastItem[0] = id;
+                UUID id = UUID.fromString(exchange.getRequestURI().getPath().substring("/internal/order-items/".length()));
+                lastItem.set(id);
                 SEEN_AUTHORIZATION.put(exchange.getRequestURI().getPath(), String.valueOf(exchange.getRequestHeaders().getFirst("Authorization")));
                 respond(exchange, ORDER.getOrDefault(id, Reply.error(404, "ORDER_ITEM_NOT_FOUND")));
             });
             server.createContext("/internal/customers/me", exchange -> {
-                SEEN_AUTHORIZATION.put("/internal/customers/me#" + lastItem[0], String.valueOf(exchange.getRequestHeaders().getFirst("Authorization")));
-                respond(exchange, MEMBER.getOrDefault(lastItem[0], Reply.error(404, "NOT_FOUND")));
+                SEEN_AUTHORIZATION.put("/internal/customers/me#" + lastItem.get(), String.valueOf(exchange.getRequestHeaders().getFirst("Authorization")));
+                respond(exchange, MEMBER.getOrDefault(lastItem.get(), Reply.error(404, "NOT_FOUND")));
             });
             server.start();
             return server;

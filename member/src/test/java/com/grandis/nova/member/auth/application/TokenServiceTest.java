@@ -17,6 +17,7 @@ import com.grandis.nova.common.security.RevocationCheckFailedException;
 import com.grandis.nova.common.security.RevocationChecker;
 import com.grandis.nova.common.security.RevocationLookupUnavailableException;
 import com.grandis.nova.common.security.Role;
+import com.grandis.nova.common.security.SessionReplacedException;
 import com.grandis.nova.common.security.TokenClaims;
 import com.grandis.nova.common.security.TokenType;
 import com.grandis.nova.member.auth.application.RefreshTokenStore.Rotation;
@@ -25,6 +26,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,10 +47,11 @@ import org.springframework.data.redis.RedisConnectionFailureException;
 @DisplayName("TokenService")
 class TokenServiceTest {
 
+    private static final String CUSTOMER = "0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d";
+
     private static final Instant NOW = Instant.parse("2026-09-19T16:00:00Z");
     private static final Duration ACCESS = Duration.ofHours(1);
     private static final Duration REFRESH = Duration.ofDays(14);
-    private static final ClientInfo CLIENT = new ClientInfo("203.0.113.9", "JUnit");
     private static final String PRESENTED = "presented-opaque-refresh";
 
     private final MutableClock clock = new MutableClock(NOW);
@@ -81,13 +84,13 @@ class TokenServiceTest {
 
     /** 로그인해 둔 회원 세션 하나. 제시할 원문은 PRESENTED 로 고정한다(저장소가 모킹이라 값 자체는 불투명하면 된다). */
     private Session loggedIn(UUID sessionId) {
-        Session session = new Session(sessionId, "101", NOW, NOW.plus(REFRESH));
+        Session session = new Session(sessionId, CUSTOMER, NOW, NOW.plus(REFRESH));
         when(refreshTokens.find(PRESENTED)).thenReturn(Optional.of(session));
         return session;
     }
 
     private void rotationSucceeds(Session session) {
-        when(refreshTokens.rotate(eq(PRESENTED), any(), any()))
+        when(refreshTokens.rotate(eq(PRESENTED), any()))
                 .thenReturn(new Rotation(Rotation.Status.ROTATED, session.sessionId(), session.subject(), session.expiresAt()));
     }
 
@@ -96,7 +99,7 @@ class TokenServiceTest {
     @Test
     @DisplayName("issue(회원): 액세스는 JWT, 리프레시는 불투명 난수(JWT 가 아니다). 같은 sid 로 DB 에 14일 만료로 저장된다")
     void issueStoresOpaqueRefreshInDatabase() {
-        TokenService.IssuedTokens tokens = service.issue("101", Role.USER, CLIENT);
+        TokenService.IssuedTokens tokens = service.issue(CUSTOMER, Role.USER);
 
         TokenClaims access = provider.parse(tokens.accessToken());
         assertThat(access.type()).isEqualTo(TokenType.ACCESS);
@@ -104,25 +107,25 @@ class TokenServiceTest {
                 .as("리프레시는 JWT 가 아니라 난수라 파싱되지 않는다").isInstanceOf(InvalidTokenException.class);
         assertThat(tokens.refreshToken()).hasSize(43);   // 256비트 base64url, 패딩 없음
         assertThat(tokens.refreshTokenMaxAge()).isEqualTo(REFRESH);
-        verify(refreshTokens).save(access.sessionId(), "101", tokens.refreshToken(), NOW.plus(REFRESH), CLIENT);
+        verify(refreshTokens).replace(access.sessionId(), CUSTOMER, tokens.refreshToken(), NOW.plus(REFRESH));
     }
 
     @Test
     @DisplayName("issue: 두 번 발급하면 원문이 매번 다르다")
     void issuedRefreshTokensAreUnique() {
-        assertThat(service.issue("101", Role.USER, CLIENT).refreshToken())
-                .isNotEqualTo(service.issue("101", Role.USER, CLIENT).refreshToken());
+        assertThat(service.issue(CUSTOMER, Role.USER).refreshToken())
+                .isNotEqualTo(service.issue(CUSTOMER, Role.USER).refreshToken());
     }
 
     @Test
     @DisplayName("issue(관리자): 리프레시는 JWT 이고 Redis 저장소가 jti 를 든다 — 회원 표 외래키 때문에 DB 행을 만들 수 없다")
     void adminIssueUsesRedisStore() {
-        TokenService.IssuedTokens tokens = service.issue("admin", Role.ADMIN, CLIENT);
+        TokenService.IssuedTokens tokens = service.issue("admin", Role.ADMIN);
 
         TokenClaims refresh = provider.parse(tokens.refreshToken());
         assertThat(refresh.type()).isEqualTo(TokenType.REFRESH);
         verify(adminRefreshTokens).save(refresh.sessionId(), refresh.tokenId(), REFRESH);
-        verify(refreshTokens, never()).save(any(), any(), any(), any(), any());
+        verify(refreshTokens, never()).replace(any(), any(), any(), any());
     }
 
     // ────────────────────────────── 회전
@@ -134,17 +137,17 @@ class TokenServiceTest {
         rotationSucceeds(session);
         clock.set(NOW.plus(Duration.ofDays(3)));
 
-        TokenService.Rotated rotated = service.rotate(PRESENTED, Role.USER, CLIENT);
+        TokenService.Rotated rotated = service.rotate(PRESENTED, Role.USER);
 
         assertThat(rotated.tokens().refreshToken()).isNotEqualTo(PRESENTED).hasSize(43);
         assertThat(rotated.tokens().refreshTokenMaxAge()).isEqualTo(Duration.ofDays(11));
-        assertThat(rotated.subject()).isEqualTo("101");
+        assertThat(rotated.subject()).isEqualTo(CUSTOMER);
         assertThat(rotated.sessionId()).isEqualTo(session.sessionId());
         TokenClaims newAccess = provider.parse(rotated.tokens().accessToken());
         assertThat(newAccess.sessionId()).isEqualTo(session.sessionId());
         assertThat(newAccess.issuedAt()).isEqualTo(NOW.plus(Duration.ofDays(3)));
         ArgumentCaptor<String> newToken = ArgumentCaptor.forClass(String.class);
-        verify(refreshTokens).rotate(eq(PRESENTED), newToken.capture(), eq(CLIENT));
+        verify(refreshTokens).rotate(eq(PRESENTED), newToken.capture());
         assertThat(newToken.getValue()).isEqualTo(rotated.tokens().refreshToken());
     }
 
@@ -152,10 +155,10 @@ class TokenServiceTest {
     @DisplayName("rotate: 저장소가 재사용으로 판정하면 sid 표식 먼저 → DB 체인 폐기 → 관리자 키 삭제, 그리고 401")
     void reuseRevokesSession() {
         Session session = loggedIn(UUID.randomUUID());
-        when(refreshTokens.rotate(any(), any(), any()))
+        when(refreshTokens.rotate(any(), any()))
                 .thenReturn(Rotation.rejected(Rotation.Status.REUSED, session.sessionId(), session.subject()));
 
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER, CLIENT)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
 
         InOrder order = Mockito.inOrder(revocations, refreshTokens, adminRefreshTokens);
         order.verify(revocations).revokeSession(session.sessionId(), ACCESS);   // 필터가 읽는 표식이 먼저
@@ -167,11 +170,11 @@ class TokenServiceTest {
     @DisplayName("rotate 재사용 분기: 표식 쓰기가 실패해도 체인 폐기를 시도하고, 응답은 그대로 401 (저장소 예외를 500 으로 안 올림)")
     void reusePartialFailureStillReturns401() {
         Session session = loggedIn(UUID.randomUUID());
-        when(refreshTokens.rotate(any(), any(), any()))
+        when(refreshTokens.rotate(any(), any()))
                 .thenReturn(Rotation.rejected(Rotation.Status.REUSED, session.sessionId(), session.subject()));
         doThrow(new RedisConnectionFailureException("down")).when(revocations).revokeSession(any(), any());
 
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER, CLIENT)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
         verify(refreshTokens).revokeSession(session.sessionId());
     }
 
@@ -183,12 +186,54 @@ class TokenServiceTest {
             Mockito.reset(refreshTokens, revocations);
             when(checker.isRevoked(any())).thenReturn(false);
             Session session = loggedIn(UUID.randomUUID());
-            when(refreshTokens.rotate(any(), any(), any())).thenReturn(Rotation.rejected(status, session.sessionId(), session.subject()));
+            when(refreshTokens.rotate(any(), any())).thenReturn(Rotation.rejected(status, session.sessionId(), session.subject()));
 
-            assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER, CLIENT))
+            assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER))
                     .as("%s", status).isInstanceOf(InvalidTokenException.class);
             verify(revocations, never()).revokeSession(any(), any());
         }
+    }
+
+    @Test
+    @DisplayName("issue(회원): 끊은 앞 세션마다 replaced 표식을 리프레시 만료(14일) TTL 로 심는다 · 표식 저장이 실패해도 로그인은 성공한다")
+    void issueMarksReplacedSessionsAndSurvivesMarkFailure() {
+        UUID phone = UUID.randomUUID();
+        UUID tablet = UUID.randomUUID();
+        when(refreshTokens.replace(any(), eq(CUSTOMER), any(), any())).thenReturn(List.of(phone, tablet));
+        doThrow(new RedisConnectionFailureException("down")).when(revocations).replaceSession(eq(phone), any());
+
+        TokenService.IssuedTokens tokens = service.issue(CUSTOMER, Role.USER);
+
+        assertThat(tokens.accessToken()).isNotBlank();
+        verify(revocations).replaceSession(phone, REFRESH);
+        verify(revocations).replaceSession(tablet, REFRESH);
+        verify(revocations, never()).revokeSession(any(), any());
+    }
+
+    @Test
+    @DisplayName("rotate: 새 로그인에 밀린 세션이면 SessionReplacedException — 회전 전 검사 · 저장소 REVOKED · 회전 뒤 검사 세 갈래 모두")
+    void replacedSessionRotationsCarryTheReason() {
+        // 회전 전 검사
+        loggedIn(UUID.randomUUID());
+        when(checker.isRevoked(any())).thenReturn(true);
+        when(checker.isReplaced(any())).thenReturn(true);
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(SessionReplacedException.class);
+
+        // 회전 전 검사는 통과, 저장소가 행을 잠그고 보니 폐기(그사이 로그인 커밋)
+        Mockito.reset(refreshTokens, checker);
+        Session session = loggedIn(UUID.randomUUID());
+        when(checker.isRevoked(any())).thenReturn(false);
+        when(checker.isReplaced(any())).thenReturn(true);
+        when(refreshTokens.rotate(any(), any())).thenReturn(Rotation.rejected(Rotation.Status.REVOKED, session.sessionId(), session.subject()));
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(SessionReplacedException.class);
+
+        // 회전은 됐고, 회전 뒤 검사에서 폐기(회전 커밋 뒤 로그인)
+        Mockito.reset(refreshTokens, checker);
+        session = loggedIn(UUID.randomUUID());
+        rotationSucceeds(session);
+        when(checker.isRevoked(any())).thenReturn(false, true);
+        when(checker.isReplaced(any())).thenReturn(true);
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(SessionReplacedException.class);
     }
 
     @Test
@@ -196,8 +241,8 @@ class TokenServiceTest {
     void unknownRefreshTokenIsRejectedBeforeRotation() {
         when(refreshTokens.find(any())).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.rotate("nonexistent", Role.USER, CLIENT)).isInstanceOf(InvalidTokenException.class);
-        verify(refreshTokens, never()).rotate(any(), any(), any());
+        assertThatThrownBy(() -> service.rotate("nonexistent", Role.USER)).isInstanceOf(InvalidTokenException.class);
+        verify(refreshTokens, never()).rotate(any(), any());
     }
 
     @Test
@@ -206,8 +251,8 @@ class TokenServiceTest {
         loggedIn(UUID.randomUUID());
         when(checker.isRevoked(any())).thenReturn(true);
 
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER, CLIENT)).isInstanceOf(InvalidTokenException.class);
-        verify(refreshTokens, never()).rotate(any(), any(), any());
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        verify(refreshTokens, never()).rotate(any(), any());
     }
 
     @Test
@@ -216,8 +261,8 @@ class TokenServiceTest {
         loggedIn(UUID.randomUUID());
         when(checker.isRevoked(any())).thenThrow(new RevocationCheckFailedException(new RuntimeException("down")));
 
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER, CLIENT)).isInstanceOf(RevocationLookupUnavailableException.class);
-        verify(refreshTokens, never()).rotate(any(), any(), any());
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(RevocationLookupUnavailableException.class);
+        verify(refreshTokens, never()).rotate(any(), any());
     }
 
     @Test
@@ -227,7 +272,7 @@ class TokenServiceTest {
         rotationSucceeds(session);
         when(checker.isRevoked(any())).thenReturn(false, true);   // 회전 전 false, 회전 후 true
 
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER, CLIENT)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
 
         verify(checker, Mockito.times(2)).isRevoked(any());
         verify(revocations).revokeSession(session.sessionId(), ACCESS);
@@ -241,7 +286,7 @@ class TokenServiceTest {
         rotationSucceeds(session);
         when(checker.isRevoked(any())).thenReturn(false).thenThrow(new RevocationCheckFailedException(new RuntimeException("down")));
 
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER, CLIENT)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
         verify(revocations).revokeSession(session.sessionId(), ACCESS);
     }
 
@@ -251,13 +296,13 @@ class TokenServiceTest {
         Session session = loggedIn(UUID.randomUUID());
         rotationSucceeds(session);
 
-        service.rotate(PRESENTED, Role.USER, CLIENT);
+        service.rotate(PRESENTED, Role.USER);
 
         ArgumentCaptor<TokenClaims> claims = ArgumentCaptor.forClass(TokenClaims.class);
         verify(checker, Mockito.atLeastOnce()).isRevoked(claims.capture());
         assertThat(claims.getValue().issuedAt()).isEqualTo(session.issuedAt());
         assertThat(claims.getValue().sessionId()).isEqualTo(session.sessionId());
-        assertThat(claims.getValue().subject()).isEqualTo("101");
+        assertThat(claims.getValue().subject()).isEqualTo(CUSTOMER);
         // 지금 체커는 위 셋만 읽는다. 나머지 둘은 아무도 안 보지만 거짓이면 안 된다 —
         // 체커에 역할이나 종류를 보는 규칙이 하나 생기는 순간 폐기 판정이 조용히 빗나간다.
         assertThat(claims.getValue().role()).isEqualTo(Role.USER);
@@ -269,41 +314,41 @@ class TokenServiceTest {
     void storedTimesAreTruncatedToSeconds() {
         clock.set(NOW.plusNanos(123_456_789));
 
-        TokenService.IssuedTokens tokens = service.issue("101", Role.USER, CLIENT);
+        TokenService.IssuedTokens tokens = service.issue(CUSTOMER, Role.USER);
 
-        verify(refreshTokens).save(any(), eq("101"), eq(tokens.refreshToken()), eq(NOW.plus(REFRESH)), eq(CLIENT));
+        verify(refreshTokens).replace(any(), eq(CUSTOMER), eq(tokens.refreshToken()), eq(NOW.plus(REFRESH)));
     }
 
     @Test
     @DisplayName("rotate(관리자): Redis 비교교환이 성공해야 회전한다. 실패(재사용)면 세션을 끊고 401")
     void adminRotateUsesRedisCompareAndSwap() {
-        TokenService.IssuedTokens first = service.issue("admin", Role.ADMIN, CLIENT);
+        TokenService.IssuedTokens first = service.issue("admin", Role.ADMIN);
         TokenClaims refresh = provider.parse(first.refreshToken());
         when(adminRefreshTokens.rotate(eq(refresh.sessionId()), eq(refresh.tokenId()), any(), any())).thenReturn(true);
 
-        TokenService.Rotated rotated = service.rotate(first.refreshToken(), Role.ADMIN, CLIENT);
+        TokenService.Rotated rotated = service.rotate(first.refreshToken(), Role.ADMIN);
         assertThat(provider.parse(rotated.tokens().refreshToken()).expiresAt()).isEqualTo(refresh.expiresAt());
 
         when(adminRefreshTokens.rotate(any(), any(), any(), any())).thenReturn(false);
-        assertThatThrownBy(() -> service.rotate(first.refreshToken(), Role.ADMIN, CLIENT)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> service.rotate(first.refreshToken(), Role.ADMIN)).isInstanceOf(InvalidTokenException.class);
         verify(revocations).revokeSession(refresh.sessionId(), ACCESS);
     }
 
     @Test
     @DisplayName("rotate(관리자): 회원 역할의 리프레시 JWT 를 관리자 쿠키로 내면 401 — 쿠키 이름만으로 관리자로 취급하지 않는다")
     void adminRotateRejectsUserRoleToken() {
-        String userRefreshJwt = provider.create("101", Role.USER, UUID.randomUUID(), TokenType.REFRESH);
+        String userRefreshJwt = provider.create(CUSTOMER, Role.USER, UUID.randomUUID(), TokenType.REFRESH);
 
-        assertThatThrownBy(() -> service.rotate(userRefreshJwt, Role.ADMIN, CLIENT)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> service.rotate(userRefreshJwt, Role.ADMIN)).isInstanceOf(InvalidTokenException.class);
         verify(adminRefreshTokens, never()).rotate(any(), any(), any(), any());
     }
 
     @Test
     @DisplayName("rotate(관리자): 액세스 토큰을 내면 401 이고 저장소를 건드리지 않는다")
     void adminRotateRejectsAccessToken() {
-        TokenService.IssuedTokens first = service.issue("admin", Role.ADMIN, CLIENT);
+        TokenService.IssuedTokens first = service.issue("admin", Role.ADMIN);
 
-        assertThatThrownBy(() -> service.rotate(first.accessToken(), Role.ADMIN, CLIENT)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> service.rotate(first.accessToken(), Role.ADMIN)).isInstanceOf(InvalidTokenException.class);
         verify(adminRefreshTokens, never()).rotate(any(), any(), any(), any());
     }
 
@@ -313,7 +358,7 @@ class TokenServiceTest {
     @DisplayName("subjectOf: 불투명 리프레시의 주인은 저장소가 알려 준다. 없는 원문이면 401")
     void subjectOfReadsTheStore() {
         loggedIn(UUID.randomUUID());
-        assertThat(service.subjectOf(PRESENTED, Role.USER)).isEqualTo("101");
+        assertThat(service.subjectOf(PRESENTED, Role.USER)).isEqualTo(CUSTOMER);
 
         when(refreshTokens.find("gone")).thenReturn(Optional.empty());
         assertThatThrownBy(() -> service.subjectOf("gone", Role.USER)).isInstanceOf(InvalidTokenException.class);
@@ -370,10 +415,10 @@ class TokenServiceTest {
     @Test
     @DisplayName("revokeAll(제재): 회원 nbf 표식을 먼저 심고(액세스 차단) DB 의 살아 있는 리프레시를 전부 폐기한다")
     void revokeAllMarksThenRevokesRows() {
-        service.revokeAll("101");
+        service.revokeAll(CUSTOMER);
 
         InOrder order = Mockito.inOrder(revocations, refreshTokens);
-        order.verify(revocations).revokeAll("101", REFRESH);
-        order.verify(refreshTokens).revokeAllOf("101");
+        order.verify(revocations).revokeAll(CUSTOMER, REFRESH);
+        order.verify(refreshTokens).revokeAllOf(CUSTOMER);
     }
 }

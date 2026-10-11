@@ -15,13 +15,15 @@ import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientException;
 
+import java.util.UUID;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class OrderCancelabilityCheckerTest {
 
-    static final Long PREORDER_ID = 4021L;
+    static final UUID PREORDER_ID = UUID.fromString("00000000-0000-7000-8000-000000004021");
 
     @Test
     void 취소_가능하면_통과한다() {
@@ -115,7 +117,7 @@ class OrderCancelabilityCheckerTest {
         }
 
         @Override
-        public ApiResponse<Cancelability> getCancelability(Long preorderInternalId) {
+        public ApiResponse<Cancelability> getCancelability(UUID preorderInternalId) {
             if (failure != null) {
                 throw failure;
             }

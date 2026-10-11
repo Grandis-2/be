@@ -12,6 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.grandis.nova.catalog.support.AccessTokens;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.security.RevocationCheckFailedException;
 import com.grandis.nova.common.security.RevocationChecker;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,6 +25,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.UUID;
+
 /**
  * 폐기 조회가 실패하면(Redis 장애) 닫는 경로만 401 이고 나머지는 통과한다. catalog 는 공통 기본 목록에 리뷰 쓰기를 더한 목록을 쓰므로
  * 관리자 경로 · 리뷰 작성 · 수정 · 삭제가 닫히고 내부 조회 · 공개 조회 · 리뷰 조회는 열린다. 체커를 죽은 것으로 모킹해 그 갈래를 만든다.
@@ -32,11 +35,13 @@ import org.springframework.test.web.servlet.MockMvc;
 @AutoConfigureMockMvc
 class TokenAuthenticationRedisDownTest {
 
+    private static final UUID CUSTOMER = UUID.fromString("00000000-0000-7000-8000-000000000657");
+
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
     @MockitoBean RevocationChecker checker;
 
-    Long productId;
+    UUID productId;
 
     @BeforeEach
     void setUp() {
@@ -55,25 +60,25 @@ class TokenAuthenticationRedisDownTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"))
                 .andExpect(jsonPath("$.error.details.retryable").value(true));
-        mockMvc.perform(get("/internal/products/{id}/options", productId).with(AccessTokens.customer(657L))).andExpect(status().isOk());
+        mockMvc.perform(get("/internal/products/{id}/options", productId).with(AccessTokens.customer(CUSTOMER))).andExpect(status().isOk());
         // 공개 상세는 토큰과 무관하게 열린다 — 비공개면 관리자 토큰으로도 404(미리보기 없음)
         mockMvc.perform(get("/api/v1/products/{id}", productId).with(AccessTokens.admin())).andExpect(status().isOk());
-        jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", productId);
+        jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", (Object) UuidBinary.toBytes(productId));
         mockMvc.perform(get("/api/v1/products/{id}", productId).with(AccessTokens.admin())).andExpect(status().isNotFound());
     }
 
     @Test
     @DisplayName("폐기 조회 실패 — 리뷰 작성 · 수정 · 삭제는 401 retryable(닫는 경로), 상품 리뷰 · 모아보기 · 내 리뷰 조회는 열린 채 통과")
     void reviewWritesClosedReadsOpen() throws Exception {
-        String body = "{ \"orderItemId\": 1, \"rating\": 5, \"body\": \"x\" }";
+        String body = "{ \"orderItemId\": \"" + UUID.randomUUID() + "\", \"rating\": 5, \"body\": \"x\" }";
         expectClosed(mockMvc.perform(post("/api/v1/reviews").contentType(MediaType.APPLICATION_JSON).content(body)
-                .with(AccessTokens.customer(657L))));
-        expectClosed(mockMvc.perform(patch("/api/v1/reviews/1").contentType(MediaType.APPLICATION_JSON).content("{ \"rating\": 1 }")
-                .with(AccessTokens.customer(657L))));
-        expectClosed(mockMvc.perform(delete("/api/v1/reviews/1").with(AccessTokens.customer(657L))));
-        mockMvc.perform(get("/api/v1/products/{id}/reviews", productId).with(AccessTokens.customer(657L))).andExpect(status().isOk());
-        mockMvc.perform(get("/api/v1/reviews").with(AccessTokens.customer(657L))).andExpect(status().isOk());
-        mockMvc.perform(get("/api/v1/reviews/mine").with(AccessTokens.customer(657L))).andExpect(status().isOk());
+                .with(AccessTokens.customer(CUSTOMER))));
+        expectClosed(mockMvc.perform(patch("/api/v1/reviews/" + UUID.randomUUID()).contentType(MediaType.APPLICATION_JSON).content("{ \"rating\": 1 }")
+                .with(AccessTokens.customer(CUSTOMER))));
+        expectClosed(mockMvc.perform(delete("/api/v1/reviews/" + UUID.randomUUID()).with(AccessTokens.customer(CUSTOMER))));
+        mockMvc.perform(get("/api/v1/products/{id}/reviews", productId).with(AccessTokens.customer(CUSTOMER))).andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/reviews").with(AccessTokens.customer(CUSTOMER))).andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/reviews/mine").with(AccessTokens.customer(CUSTOMER))).andExpect(status().isOk());
     }
 
     private static void expectClosed(org.springframework.test.web.servlet.ResultActions actions) throws Exception {

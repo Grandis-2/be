@@ -8,11 +8,12 @@ import com.grandis.nova.preorder.syncjob.SyncJobResponse;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /** 관리자 상세(openapi AdminPreorderDetail). 입장권 · 내부 메모 · 작업 · 이력까지 본다. */
 record AdminPreorderDetailResponse(
         @JsonUnwrapped PreorderDetailResponse detail,
-        Long customerId,
+        UUID customerId,
         String admissionTicketId,
         String internalNote,
         List<SyncJobResponse> syncJobs,
@@ -22,7 +23,7 @@ record AdminPreorderDetailResponse(
     public static AdminPreorderDetailResponse from(PreorderView.AdminDetail view) {
         PreorderSnapshot preorder = view.preorder();
         PreorderView.Summary summary = new PreorderView.Summary(preorder, view.shipmentBatch(), view.displayStatus());
-        Map<Long, List<SyncAttempt>> attempts = view.attempts();
+        Map<UUID, List<SyncAttempt>> attempts = view.attempts();
         return new AdminPreorderDetailResponse(PreorderDetailResponse.from(summary), preorder.customerId(),
                 preorder.admissionTicketId(), preorder.internalNote(),
                 view.syncJobs().stream()

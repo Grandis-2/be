@@ -2,6 +2,7 @@ package com.grandis.nova.order.config;
 
 import com.grandis.nova.order.client.payment.CaptureRequest;
 import com.grandis.nova.order.client.payment.ConfirmRequest;
+import com.grandis.nova.order.client.payment.PayableTarget;
 import com.grandis.nova.order.client.payment.PaymentClient;
 import com.grandis.nova.order.client.payment.PaymentConfirmClient;
 import com.grandis.nova.order.client.payment.PaymentConfirmation;
@@ -11,8 +12,8 @@ import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.vo.Money;
-import com.grandis.nova.order.order.vo.OrderToken;
 import com.grandis.nova.order.order.vo.ShipTo;
+import com.grandis.nova.order.support.TestIds;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,10 +50,10 @@ class HttpClientConfigTest {
     static final long READ_TIMEOUT_MILLIS = 1_000;
     static final long STALL_MILLIS = 3_000;
     static final String PROVIDER_ORDER_ID = "6f1c2d3e-4b5a-4c7d-8e9f-0a1b2c3d4e5f";
-    static final Order ORDER = new Order(81L, OrderToken.issue(), 7L, OrderSource.PREORDER, 5L,
-            "9f1c2d3e-0000-4000-8000-000000000001", OrderStatus.AUTHORIZING, PROVIDER_ORDER_ID,
-            new Money(new BigDecimal("1000")), null, null,
-            new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), null, 2, Instant.EPOCH,
+    static final Order ORDER = new Order(TestIds.id(81), TestIds.id(7), OrderSource.PREORDER,
+            TestIds.id(5), "9f1c2d3e-0000-4000-8000-000000000001", OrderStatus.AUTHORIZING, PROVIDER_ORDER_ID,
+            new Money(new BigDecimal("1000")), null, null, null,
+            new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 2, Instant.EPOCH,
             Instant.EPOCH);
 
     HttpServer server;
@@ -107,10 +108,10 @@ class HttpClientConfigTest {
             assertThat(context.getBean(ClientHttpRequestFactoryBuilder.class))
                     .isInstanceOf(JdkClientHttpRequestFactoryBuilder.class);
             assertThat(rootCause(catchThrowable(() -> context.getBean(PaymentConfirmClient.class)
-                    .confirm(PROVIDER_ORDER_ID, ConfirmRequest.of(ORDER, "tgen_wiring", true), null))))
+                    .confirm(PROVIDER_ORDER_ID, ConfirmRequest.of(PayableTarget.of(ORDER), "tgen_wiring", true), null))))
                     .isInstanceOf(HttpTimeoutException.class);
             assertThat(rootCause(catchThrowable(() -> context.getBean(PaymentClient.class)
-                    .openCapture(CaptureRequest.order(81L, BigDecimal.TEN), null))))
+                    .openCapture(CaptureRequest.of(PayableTarget.of(ORDER)), null))))
                     .isInstanceOf(HttpTimeoutException.class);
             assertThat(rootCause(catchThrowable(() -> context.getBean(PreorderClient.class)
                     .getPayability("9f1c2d3e-0000-4000-8000-000000000001", null))))
@@ -125,7 +126,7 @@ class HttpClientConfigTest {
             long started = System.nanoTime();
 
             PaymentConfirmation result = context.getBean(PaymentConfirmer.class)
-                    .confirm(ORDER, PROVIDER_ORDER_ID, "tgen_wiring", "wiring-session", true);
+                    .confirm(PayableTarget.of(ORDER), PROVIDER_ORDER_ID, "tgen_wiring", "wiring-session", true);
 
             assertThat(result).isEqualTo(new PaymentConfirmation.Pending());
             assertThat((System.nanoTime() - started) / 1_000_000).isLessThan(STALL_MILLIS);
@@ -141,7 +142,7 @@ class HttpClientConfigTest {
         }
         runner("http://127.0.0.1:" + closedPort).run(context ->
                 assertThat(context.getBean(PaymentConfirmer.class)
-                        .confirm(ORDER, PROVIDER_ORDER_ID, "tgen_wiring", "wiring-session", true))
+                        .confirm(PayableTarget.of(ORDER), PROVIDER_ORDER_ID, "tgen_wiring", "wiring-session", true))
                         .isInstanceOf(PaymentConfirmation.Unanswered.class));
     }
 

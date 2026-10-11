@@ -1,6 +1,7 @@
 package com.grandis.nova.catalog.config;
 
 import com.grandis.nova.common.security.SecurityFilterChainSupport;
+import com.grandis.nova.common.web.OpenApiPaths;
 import jakarta.servlet.DispatcherType;
 import org.springframework.boot.security.autoconfigure.actuate.web.servlet.EndpointRequest;
 import org.springframework.context.annotation.Bean;
@@ -32,6 +33,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                 // 내부 조회는 접수(USER)와 관리자 등록(ADMIN)이 같이 쓴다. 역할이 둘뿐이라 authenticated() 와 동작은 같지만 계약대로 적는다
                 .requestMatchers("/internal/**").hasAnyRole("USER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, OpenApiPaths.docs()).permitAll()                             // OpenAPI 문서(켰을 때만 있다 — OpenApiExposure)
                 .anyRequest().denyAll());
     }
 }

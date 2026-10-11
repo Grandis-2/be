@@ -6,6 +6,7 @@ import com.grandis.nova.common.Cursor;
 
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.UUID;
 
 /**
  * 커서가 가리키는 자리(마지막으로 본 예약의 접수 시각과 id). 첫 페이지면 비어 있다.
@@ -13,7 +14,7 @@ import java.time.format.DateTimeParseException;
  * 커서는 클라이언트가 그대로 돌려주는 불투명 문자열이라 아무 값이나 올 수 있다.
  * 형식이 틀리면 400 이다 — 해석하다 실패하면 500 이 된다.
  */
-record Position(Instant createdAt, Long id) {
+record Position(Instant createdAt, UUID id) {
 
     static final Position FIRST_PAGE = new Position(null, null);
     static final int KEYS = 2;
@@ -27,8 +28,8 @@ record Position(Instant createdAt, Long id) {
             throw invalid();
         }
         try {
-            return new Position(Instant.parse(keys[0]), Long.valueOf(keys[1]));
-        } catch (DateTimeParseException | NumberFormatException e) {
+            return new Position(Instant.parse(keys[0]), UUID.fromString(keys[1]));
+        } catch (DateTimeParseException | IllegalArgumentException e) {
             throw invalid();
         }
     }

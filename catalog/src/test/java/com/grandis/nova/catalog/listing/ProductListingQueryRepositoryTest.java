@@ -18,6 +18,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -45,27 +46,27 @@ class ProductListingQueryRepositoryTest {
     @DisplayName("마감 + 120시간 직전에는 보이고, 그 시각부터는 숨는다")
     void hideBoundaryIsExactlyOneHundredTwentyHours() {
         Instant closesAt = Instant.parse("2026-10-01T00:00:00Z");
-        Long productId = fixtures.product(fixtures.category(), "PREORDER", "ACTIVE", "경계", tag);
+        UUID productId = fixtures.product(fixtures.category(), "PREORDER", "ACTIVE", "경계", tag);
         fixtures.registration(productId);
         fixtures.campaign(productId, closesAt.minusSeconds(3600), closesAt);
         // 상수를 참조하면 상수가 틀려도 시험이 같이 움직인다 — 확정값 120시간을 여기 박는다
         Instant boundary = closesAt.plus(Duration.ofHours(120));
         ProductListFilter filter = new ProductListFilter(tag, null, null, null, null);
 
-        assertThat(ids(repository.find(filter, boundary.minusNanos(1_000), 0, 10))).containsExactly(productId);
+        assertThat(ids(repository.find(filter, ProductSort.NEWEST, boundary.minusNanos(1_000), 0, 10))).containsExactly(productId);
         assertThat(repository.count(filter, boundary.minusNanos(1_000))).isEqualTo(1);
-        assertThat(ids(repository.find(filter, boundary, 0, 10))).isEmpty();
+        assertThat(ids(repository.find(filter, ProductSort.NEWEST, boundary, 0, 10))).isEmpty();
         assertThat(repository.count(filter, boundary)).isZero();
     }
 
     @Test
     @DisplayName("목록 · 검색은 다른 서비스의 표(preorder_campaigns · option_inventories)를 읽기만 한다")
     void readsButNeverWritesForeignTables() throws Exception {
-        Long productId = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "읽기만", tag);
+        UUID productId = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "읽기만", tag);
         fixtures.registration(productId);
-        Long axis = fixtures.axis(productId, "color", 0);
-        Long black = fixtures.value(axis, "블랙", 0);
-        Long option = fixtures.option(productId, "ACTIVE", new java.math.BigDecimal("1000"));
+        ShopFixtures.AxisRef axis = fixtures.axis(productId, "color", 0);
+        String black = fixtures.value(axis, "블랙", 0);
+        UUID option = fixtures.option(productId, "ACTIVE", new java.math.BigDecimal("1000"));
         fixtures.selection(productId, option, axis, black);
         fixtures.inventory(option, 1, 0, 0);
         ProductListFilter filter = new ProductListFilter(tag, null, null, List.of("블랙"), List.of());
@@ -77,7 +78,7 @@ class ProductListingQueryRepositoryTest {
             statement.execute("TRUNCATE TABLE mysql.general_log");
             try {
                 repository.count(filter, Instant.now());
-                repository.find(filter, Instant.now(), 0, 10);
+                repository.find(filter, ProductSort.NEWEST, Instant.now(), 0, 10);
             } finally {
                 statement.execute("SET GLOBAL general_log = 'OFF'");
             }
@@ -106,7 +107,7 @@ class ProductListingQueryRepositoryTest {
         return DriverManager.getConnection(mysql.getJdbcUrl(), "root", mysql.getPassword());
     }
 
-    private static List<Long> ids(List<ProductListItem> items) {
+    private static List<UUID> ids(List<ProductListItem> items) {
         return items.stream().map(ProductListItem::productId).toList();
     }
 }

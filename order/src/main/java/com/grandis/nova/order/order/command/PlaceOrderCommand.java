@@ -9,6 +9,7 @@ import com.grandis.nova.order.order.vo.ShipTo;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 주문 생성 입력. 유스케이스가 요청 · 외부 조회 결과를 모아 만든다. 값만 옮기고 규칙은 모른다 —
@@ -18,9 +19,9 @@ import java.util.List;
  * @param preorderToken 사전예약 주문이면 그 예약의 공개 UUID
  */
 public record PlaceOrderCommand(
-        Long customerId,
+        UUID customerId,
         OrderSource source,
-        Long preorderId,
+        UUID preorderId,
         String preorderToken,
         Address shipTo,
         List<Line> lines
@@ -44,13 +45,19 @@ public record PlaceOrderCommand(
         }
     }
 
-    /** 가격 · 이름은 예약 접수 시점의 스냅샷을 그대로 옮긴다. */
-    public record Line(Long productId, Long optionId, int quantity, BigDecimal unitPrice,
+    /**
+     * 가격 · 이름은 스냅샷을 그대로 옮긴다(사전예약은 예약 접수 때, 장바구니는 주문 때 catalog 값).
+     *
+     * @param warrantyQuantity  그중 보증을 산 수량(0 이면 보증 없음)
+     * @param warrantyUnitPrice 보증 1개 가격. 보증 수량이 0 이면 0
+     */
+    public record Line(UUID productId, UUID optionId, int quantity, BigDecimal unitPrice,
+                       int warrantyQuantity, BigDecimal warrantyUnitPrice,
                        String productTitle, String optionTitle) {
 
         OrderLine toOrderLine() {
             return new OrderLine(productId, optionId, new Quantity(quantity), new Money(unitPrice),
-                    productTitle, optionTitle);
+                    warrantyQuantity, new Money(warrantyUnitPrice), productTitle, optionTitle);
         }
     }
 }
