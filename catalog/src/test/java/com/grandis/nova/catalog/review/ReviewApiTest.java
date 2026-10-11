@@ -136,8 +136,11 @@ class ReviewApiTest {
 
         UUID delivered = deliveredItem(productId);
         write(customerId, delivered, 5, "좋아요").andExpect(status().isCreated());   // 대조군 — 같은 상품 · 배송 완료 · 일반 주문
+        UUID cartOrder = nextId();
+        stubItem(cartOrder, productId, "DELIVERED", "CART");
+        write(customerId, cartOrder, 4, "장바구니로 샀어요").andExpect(status().isCreated());   // 대조군 — 드로우 증정품과 같은 상품도 구매면 쓴다
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM product_reviews WHERE customer_id = ?", Long.class, UuidBinary.toBytes(customerId)))
-                .as("거절된 넷은 남지 않았다").isEqualTo(1L);
+                .as("거절된 넷은 남지 않았다").isEqualTo(2L);
     }
 
     @Test
