@@ -92,19 +92,20 @@ class JpaPaymentStore implements PaymentTransactionReader, PaymentTransactionWri
             throw new IllegalArgumentException("끝내는 상태가 아니다: " + to);
         }
         return detachAfter(transactionId, transactions.finish(transactionId, lease.value(), to.name(),
-                error == null ? null : error.code(), error == null ? null : error.message(), now));
+                error == null ? null : error.code(), error == null ? null : error.message(),
+                error == null ? null : error.unknownReason(), now));
     }
 
     @Override
     public int reschedule(UUID transactionId, LeaseToken lease, ProviderError error, Duration delay) {
         return detachAfter(transactionId, transactions.reschedule(transactionId, lease.value(), error.code(),
-                error.message(), micros(delay)));
+                error.message(), error.unknownReason(), micros(delay)));
     }
 
     @Override
     public int recordError(UUID transactionId, LeaseToken lease, ProviderError error) {
         return detachAfter(transactionId, transactions.recordError(transactionId, lease.value(), error.code(),
-                error.message()));
+                error.message(), error.unknownReason()));
     }
 
     @Override
@@ -120,7 +121,7 @@ class JpaPaymentStore implements PaymentTransactionReader, PaymentTransactionWri
     @Override
     public int escalate(UUID transactionId, LeaseToken lease, ProviderError error, Instant now) {
         return detachAfter(transactionId, transactions.escalate(transactionId, lease.value(), error.code(),
-                error.message(), now));
+                error.message(), error.unknownReason(), now));
     }
 
     @Override

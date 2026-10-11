@@ -156,7 +156,8 @@ class PaymentConfirmApiTest {
                 .andExpect(jsonPath("$.data.result").value("DECLINED"))
                 .andExpect(jsonPath("$.data.declineReason").value("CARD_REJECTED"));
 
-        assertThat(transaction()).containsEntry("status", "FAILED").containsEntry("last_error_code", "REJECT_CARD_PAYMENT");
+        assertThat(transaction()).containsEntry("status", "FAILED").containsEntry("last_error_code", "REJECT_CARD_PAYMENT")
+                .containsEntry("last_unknown_reason", null);
         JsonNode payload = settledPayload();
         assertThat(payload.get("result").asString()).isEqualTo("DECLINED");
         assertThat(payload.get("declineReason").asString()).isEqualTo("CARD_REJECTED");
@@ -172,7 +173,9 @@ class PaymentConfirmApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.result").value("PENDING"));
 
-        assertThat(transaction()).containsEntry("status", "PROCESSING").containsEntry("last_error_code", "TIMEOUT");
+        // 같이 도는 구버전은 문구 칸으로 푸는 방법을 고른다 — 사유 이름이 두 칸에 같이 남는다
+        assertThat(transaction()).containsEntry("status", "PROCESSING").containsEntry("last_error_code", "TIMEOUT")
+                .containsEntry("last_error_message", "TIMEOUT").containsEntry("last_unknown_reason", "TIMEOUT");
         assertThat(settledEvents()).isZero();
     }
 
@@ -197,7 +200,8 @@ class PaymentConfirmApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.result").value("PENDING"));
 
-        assertThat(transaction()).containsEntry("status", "PROCESSING").containsEntry("last_error_code", "AMOUNT_MISMATCH");
+        assertThat(transaction()).containsEntry("status", "PROCESSING").containsEntry("last_error_code", "AMOUNT_MISMATCH")
+                .containsEntry("last_error_message", "MISMATCHED_RESPONSE").containsEntry("last_unknown_reason", "MISMATCHED_RESPONSE");
         assertThat(paymentsOfTarget()).isZero();
         assertThat(settledEvents()).isZero();
     }
@@ -626,7 +630,7 @@ class PaymentConfirmApiTest {
 
     private Map<String, Object> transaction() {
         return jdbcTemplate.queryForMap("""
-                SELECT status, attempt_count, last_error_code FROM payment_transactions WHERE id = ?
+                SELECT status, attempt_count, last_error_code, last_error_message, last_unknown_reason FROM payment_transactions WHERE id = ?
                 """, UuidBinary.toBytes(opened.id()));
     }
 

@@ -13,6 +13,7 @@ import com.grandis.nova.payment.client.toss.TossPayment;
 import com.grandis.nova.payment.client.toss.TossPaymentClient;
 import com.grandis.nova.payment.client.toss.TossPaymentStatus;
 import com.grandis.nova.payment.client.toss.UnknownReason;
+import com.grandis.nova.payment.confirm.TossOutcomes;
 import com.grandis.nova.payment.domain.enums.PaymentStatus;
 import com.grandis.nova.payment.domain.enums.TransactionStatus;
 import com.grandis.nova.payment.domain.exception.LeaseLostException;
@@ -73,11 +74,10 @@ class RefundRecoveryTest {
     static final Money AMOUNT = Money.won(15000);
     static final Instant APPROVED_AT = Instant.parse("2026-10-04T01:00:00Z");
     static final Instant CANCELED_AT = Instant.parse("2026-10-04T01:20:30Z");
-    static final ProviderError TIMEOUT = new ProviderError(UnknownReason.TIMEOUT.name(), UnknownReason.TIMEOUT.name());
+    static final ProviderError TIMEOUT = unknownResult(UnknownReason.TIMEOUT, null);
     static final ProviderError PROVIDER_ERROR = new ProviderError("PROVIDER_ERROR", "일시적인 오류");
     static final ProviderError BUSY = new ProviderError("IDEMPOTENT_REQUEST_PROCESSING", null);
-    static final ProviderError ALREADY_CANCELED =
-            new ProviderError("ALREADY_CANCELED_PAYMENT", UnknownReason.LISTED_CODE.name());
+    static final ProviderError ALREADY_CANCELED = unknownResult(UnknownReason.LISTED_CODE, "ALREADY_CANCELED_PAYMENT");
     static final String NOT_CANCELABLE = "NOT_CANCELABLE_PAYMENT";
 
     @Autowired
@@ -623,5 +623,10 @@ class RefundRecoveryTest {
     private void ageRequestedAt(UUID id, Duration age) {
         jdbcTemplate.update("UPDATE payment_transactions SET requested_at = requested_at - INTERVAL ? SECOND WHERE id = ?",
                 age.toSeconds(), UuidBinary.toBytes(id));
+    }
+
+    /** 명령이 결과 불명으로 끝났을 때 행에 남는 오류. 운영 코드가 만든 그대로 쓴다. */
+    private static ProviderError unknownResult(UnknownReason reason, String code) {
+        return ((Outcome.Unknown) TossOutcomes.notSucceeded(new TossCommandResult.Unknown(reason, code))).error();
     }
 }

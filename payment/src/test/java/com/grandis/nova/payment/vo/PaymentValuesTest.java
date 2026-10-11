@@ -83,11 +83,13 @@ class PaymentValuesTest {
     void providerErrorTruncatesToColumnsWithoutSplittingCharacters() {
         String longMessage = "😀".repeat(ProviderError.MESSAGE_MAX + 5);
 
-        ProviderError error = new ProviderError("C".repeat(ProviderError.CODE_MAX + 3), longMessage);
+        ProviderError error = new ProviderError("C".repeat(ProviderError.CODE_MAX + 3), longMessage,
+                "R".repeat(ProviderError.UNKNOWN_REASON_MAX + 1));
 
         assertThat(error.code()).hasSize(ProviderError.CODE_MAX);
         assertThat(error.message().codePointCount(0, error.message().length())).isEqualTo(ProviderError.MESSAGE_MAX);
         assertThat(error.message()).isEqualTo("😀".repeat(ProviderError.MESSAGE_MAX));
+        assertThat(error.unknownReason()).hasSize(ProviderError.UNKNOWN_REASON_MAX);
     }
 
     @Test
