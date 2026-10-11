@@ -1,5 +1,6 @@
 package com.grandis.nova.member.auth.infrastructure.db;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.member.auth.application.RefreshTokenStore;
 import com.grandis.nova.member.auth.application.RefreshTokens;
 import com.grandis.nova.common.security.JwtProperties;
@@ -72,7 +73,14 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
     @Transactional
     public Rotation rotate(String presentedRawToken, String newRawToken) {
         Instant now = now();
-        Optional<RefreshToken> found = rows.findByTokenHashForUpdate(RefreshTokens.hash(presentedRawToken));
+        byte[] hash = RefreshTokens.hash(presentedRawToken);
+        // 회원 행 → 리프레시 행 순서로 잠근다(로그인 replace 와 같은 순서). 새 행 INSERT 의 외래키 검사가 회원 행에 공유 잠금을 거는데, 리프레시 행을
+        // 먼저 잠그면 로그인(회원 행 → 이 리프레시 행 폐기)과 서로 기다려 교착한다(실측 1213 — 로그인이 희생됐다)
+        Optional<UUID> owner = rows.findOwnerByTokenHash(hash);
+        if (owner.isEmpty() || rows.shareCustomer(UuidBinary.toBytes(owner.get())).isEmpty()) {
+            return Rotation.rejected(Rotation.Status.NOT_FOUND, null, null);
+        }
+        Optional<RefreshToken> found = rows.findByTokenHashForUpdate(hash);
         if (found.isEmpty()) {
             return Rotation.rejected(Rotation.Status.NOT_FOUND, null, null);
         }
