@@ -517,6 +517,56 @@ class QueueFlowTest {
         }
     }
 
+    /** 프론트(grandis-nova.link)와 API 의 오리진이 다르다. 허용 목록은 common:cors 의 기본값이다. */
+    @Nested
+    class CORS {
+
+        static final String FRONT = "https://grandis-nova.link";
+
+        @Test
+        void 허용_오리진의_사전_요청은_토큰_없이_200_이고_대기열_헤더를_허용한다() {
+            client.options().uri("/api/v1/preorders/queue?productId=" + PRODUCT)
+                    .header(HttpHeaders.ORIGIN, FRONT)
+                    .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                    .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, "authorization,queue-token")
+                    .exchange()
+                    .expectStatus().isOk()
+                    .expectHeader().valueEquals(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, FRONT)
+                    .expectHeader().valueEquals(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true")
+                    .expectHeader().valueEquals(HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS, "authorization, queue-token");
+        }
+
+        @Test
+        void 목록_밖_오리진은_403_이고_허용_헤더가_없다() {
+            client.options().uri("/api/v1/preorders/queue?productId=" + PRODUCT)
+                    .header(HttpHeaders.ORIGIN, "https://evil.example")
+                    .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                    .exchange()
+                    .expectStatus().isForbidden()
+                    .expectHeader().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN);
+        }
+
+        @Test
+        void 전달한_접수의_응답에는_허용_오리진이_한_번만_붙고_preorder_에는_Origin_을_넘기지_않는다() {
+            String ticket = tickets.issue(PRODUCT, customerId(1), now);
+
+            client.post().uri("/api/v1/preorders?productId=" + PRODUCT)
+                    .headers(headers -> {
+                        headers.setBearerAuth(TestJwts.user(customerId(1), now));
+                        headers.set(HttpHeaders.ORIGIN, FRONT);
+                        headers.set("Idempotency-Key", "key-0123456789");
+                        headers.set("X-Admission-Ticket", ticket);
+                    })
+                    .bodyValue(Map.of("productId", PRODUCT, "optionId", TestIds.uuid(1)))
+                    .exchange()
+                    .expectStatus().isAccepted()
+                    .expectHeader().valueEquals(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, FRONT)
+                    .expectHeader().valueEquals(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true");
+
+            assertThat(RECEIVED.get()).doesNotContainKey("origin").containsKey("authorization");
+        }
+    }
+
     @Nested
     class 헬스 {
 
