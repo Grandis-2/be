@@ -42,6 +42,10 @@ jobs:
       - name: MySQL 8.4 적용 · 재실행 · 최신 스키마 문서 검증
         run: bash flyway-project/verify.sh
 
+      # release 가 운영 DB 에 적용하는 이미지(.github/scripts/ecs-migrate.sh)가 머지 전에 만들어지는지 본다
+      - name: 운영 적용 이미지 빌드
+        run: docker build -q flyway-project
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
