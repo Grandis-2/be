@@ -10,6 +10,7 @@ import org.springframework.context.annotation.Configuration;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** 실제 기동으로 본다 — 기본값은 spring.factories 로 등록된 EnvironmentPostProcessor 가 깐다. */
 class CorsDefaultsTest {
@@ -37,6 +38,12 @@ class CorsDefaultsTest {
             assertThat(context.getBean(CorsProperties.class).allowedOrigins())
                     .containsExactly("http://localhost:5173", "http://localhost:9000");
         }
+    }
+
+    @Test
+    void 설정의_오리진_모양이_틀리면_기동이_실패한다() {
+        assertThatThrownBy(() -> run(Map.of("nova.cors.allowed-origins[0]", "https://grandis-nova.link/")))
+                .rootCause().hasMessageContaining("nova.cors.allowed-origins");
     }
 
     private static ConfigurableApplicationContext run(Map<String, Object> properties) {

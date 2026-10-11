@@ -23,4 +23,11 @@ class ReactiveCorsConfigurationTest {
                             .getCorsConfiguration(MockServerWebExchange.from(MockServerHttpRequest.post("/api/v1/preorders"))));
                 });
     }
+
+    @Test
+    void 허용_오리진의_모양이_틀리면_기동_실패다() {
+        new ReactiveWebApplicationContextRunner().withConfiguration(AutoConfigurations.of(CorsAutoConfiguration.class))
+                .withPropertyValues("nova.cors.allowed-origins=https://grandis-nova.link:443")
+                .run(context -> assertThat(context).hasFailed());
+    }
 }
