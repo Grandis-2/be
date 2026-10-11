@@ -31,7 +31,7 @@ class CorsDefaultsTest {
     }
 
     @Test
-    void 환경변수처럼_콤마로_이어_써도_목록이_된다() {
+    void 한_줄에_콤마로_이어_써도_목록이_된다_환경변수와_같은_모양() {
         try (ConfigurableApplicationContext context = run(Map.of(
                 "nova.cors.allowed-origins", "http://localhost:5173,http://localhost:9000"))) {
             assertThat(context.getBean(CorsProperties.class).allowedOrigins())
