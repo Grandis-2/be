@@ -133,6 +133,12 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
         if (expiry == null || !expiry.isAfter(now.minus(detectionWindow))) {
             return;
         }
+        // 회원 행 → 리프레시 행 순서(로그인 replace 와 같다). 폐기 UPDATE 가 외래키 검사로 회원 행 공유 잠금을 거는데, 체인 행을 먼저 잠그면
+        // 그 회원의 로그인과 교착한다(실측 1213, 로그인 희생 — 이미 쓴 카카오 code 는 다시 못 써서 사용자가 로그인을 처음부터 다시 한다)
+        Optional<UUID> owner = rows.findOwnerOfFamily(sessionId.toString());
+        if (owner.isEmpty() || rows.shareCustomer(UuidBinary.toBytes(owner.get())).isEmpty()) {
+            return;
+        }
         rows.revokeFamily(sessionId.toString(), now);
     }
 
@@ -142,6 +148,10 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
         // 관리자 세션은 이 표에 행이 없다(회원 외래키). 조용히 지나간다.
         // 탐지 창 안의 행만 잠그지 않고 골라 기본키로 폐기한다 — 창이 지난 행은 정리가 지우는 중일 수 있고, 폐기해도 막을 액세스 토큰이 없다
         customerIdOf(subject).ifPresent(customerId -> {
+            // 회원 행 → 리프레시 행 순서(revokeSession 과 같은 이유). 회원 행이 없으면 폐기할 행도 없다
+            if (rows.shareCustomer(UuidBinary.toBytes(customerId)).isEmpty()) {
+                return;
+            }
             Instant now = now();
             List<UUID> live = rows.findLiveIdsOf(customerId, now.minus(detectionWindow));
             if (!live.isEmpty()) {

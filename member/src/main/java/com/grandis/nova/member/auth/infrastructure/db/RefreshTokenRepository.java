@@ -67,13 +67,19 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, UUID
     @Query("select t.customerId from RefreshToken t where t.tokenHash = :hash")
     Optional<UUID> findOwnerByTokenHash(@Param("hash") byte[] hash);
 
+    /** 체인의 주인(회원 id)만. 로그아웃이 회원 행을 먼저 잠그려고 쓴다. 엔티티로 읽지 않는다(findOwnerByTokenHash 와 같은 이유). */
+    @Query("select distinct t.customerId from RefreshToken t where t.familyId = :familyId")
+    Optional<UUID> findOwnerOfFamily(@Param("familyId") String familyId);
+
     /** 로그인이 회원의 세션을 바꾸는 동안 같은 회원의 로그인 · 회전을 막는다. 회원 행이 없으면 빈 결과. */
     @Query(value = "SELECT id FROM customers WHERE id = :customerId FOR UPDATE", nativeQuery = true)
     Optional<byte[]> lockCustomer(@Param("customerId") byte[] customerId);
 
     /**
-     * 회전이 로그인과 같은 순서(회원 행 → 리프레시 행)로 잠그게 한다. 회전은 새 행을 넣을 때 외래키 검사로 회원 행에 공유 잠금을 거는데,
-     * 그 전에 리프레시 행을 잠그면 로그인(회원 행 → 그 리프레시 행 폐기)과 서로 기다려 교착한다(실측 1213). 회원 행이 없으면 빈 결과.
+     * 회전 · 로그아웃 · 회원 전체 폐기가 로그인과 같은 순서(회원 행 → 리프레시 행)로 잠그게 한다. 리프레시 행에 회원 행 공유 잠금이 따라붙는 쓰기가
+     * 둘이다 — 새 행 INSERT 의 외래키 검사, 그리고 revoked_at 을 바꾸는 UPDATE(외래키 인덱스 ix_refresh_customer 가 (customer_id, revoked_at)
+     * 이라 그 칸이 바뀌면 외래키를 다시 본다. rotated_at 만 바꾸는 UPDATE 는 회원 행을 잠그지 않는다). 리프레시 행을 먼저 잠그면 로그인
+     * (회원 행 → 그 리프레시 행 폐기)과 서로 기다려 교착한다(실측 1213 — 회전 · 로그아웃 둘 다, 로그인이 희생됐다). 회원 행이 없으면 빈 결과.
      */
     @Query(value = "SELECT id FROM customers WHERE id = :customerId FOR SHARE", nativeQuery = true)
     Optional<byte[]> shareCustomer(@Param("customerId") byte[] customerId);
