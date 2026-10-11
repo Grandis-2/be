@@ -62,7 +62,7 @@ class RefreshTokenDbStoreTest {
     /** 세션 하나를 만들고 첫 원문을 돌려준다. */
     private String login(UUID customerId, UUID sessionId) {
         String raw = RefreshTokens.newToken();
-        store.save(sessionId, String.valueOf(customerId), raw, nowSeconds().plus(FOURTEEN_DAYS));
+        store.replace(sessionId, String.valueOf(customerId), raw, nowSeconds().plus(FOURTEEN_DAYS));
         return raw;
     }
 
@@ -75,14 +75,14 @@ class RefreshTokenDbStoreTest {
     // ────────────────────────────── 발급·식별
 
     @Test
-    @DisplayName("save: 원문은 어디에도 없고 SHA-256 32바이트만 남는다. 체인 식별자는 세션(sid)이다")
-    void saveStoresOnlyTheHash() {
+    @DisplayName("replace: 원문은 어디에도 없고 SHA-256 32바이트만 남는다. 체인 식별자는 세션(sid)이다")
+    void replaceStoresOnlyTheHash() {
         UUID customerId = newCustomer();
         UUID sessionId = UUID.randomUUID();
         Instant expiresAt = nowSeconds().plus(FOURTEEN_DAYS);
 
         String raw = RefreshTokens.newToken();
-        store.save(sessionId, String.valueOf(customerId), raw, expiresAt);
+        store.replace(sessionId, String.valueOf(customerId), raw, expiresAt);
 
         var row = jdbc.queryForMap("SELECT * FROM refresh_tokens WHERE family_id = ?", sessionId.toString());
         assertThat((byte[]) row.get("token_hash")).hasSize(32).isEqualTo(RefreshTokens.hash(raw));
@@ -93,6 +93,33 @@ class RefreshTokenDbStoreTest {
         assertThat((LocalDateTime) row.get("expires_at")).isEqualTo(LocalDateTime.ofInstant(expiresAt, ZoneOffset.UTC));
         // 원문이 어느 칸에도 그대로 들어가 있지 않다
         assertThat(row.values().stream().map(String::valueOf)).noneMatch(v -> v.contains(raw));
+    }
+
+    @Test
+    @DisplayName("replace: 그 회원의 살아 있는 세션을 전부 끊고 끊은 sid 를 돌려준다 — 회전한 체인의 행까지, 다른 회원 · 이미 끊긴 세션은 그대로")
+    void replaceRevokesEveryLiveSessionOfTheCustomer() {
+        UUID target = newCustomer();
+        UUID bystander = newCustomer();
+        UUID phone = UUID.randomUUID();
+        String phoneRaw = login(target, phone);
+        assertThat(store.rotate(phoneRaw, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.ROTATED);
+        String tabletRaw = expiring(target, nowSeconds().plus(FOURTEEN_DAYS));   // 두 번째 살아 있는 세션
+        UUID tablet = store.find(tabletRaw).orElseThrow().sessionId();
+        UUID loggedOut = UUID.randomUUID();
+        jdbc.update("INSERT INTO refresh_tokens(id, customer_id, family_id, token_hash, expires_at, created_at, revoked_at) VALUES (?,?,?,?,?,?,?)",
+                UuidBinary.toBytes(UUID.randomUUID()), UuidBinary.toBytes(target), loggedOut.toString(), RefreshTokens.hash(RefreshTokens.newToken()),
+                LocalDateTime.ofInstant(nowSeconds().plus(FOURTEEN_DAYS), ZoneOffset.UTC), LocalDateTime.ofInstant(nowSeconds(), ZoneOffset.UTC),
+                LocalDateTime.ofInstant(nowSeconds(), ZoneOffset.UTC));
+        login(bystander, UUID.randomUUID());
+
+        UUID laptop = UUID.randomUUID();
+        List<UUID> replaced = store.replace(laptop, String.valueOf(target), RefreshTokens.newToken(), nowSeconds().plus(FOURTEEN_DAYS));
+
+        assertThat(replaced).containsExactlyInAnyOrder(phone, tablet);
+        assertThat(jdbc.queryForList("SELECT DISTINCT family_id FROM refresh_tokens WHERE customer_id = ? AND revoked_at IS NULL",
+                String.class, (Object) UuidBinary.toBytes(target))).containsExactly(laptop.toString());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE customer_id = ? AND revoked_at IS NULL",
+                Integer.class, (Object) UuidBinary.toBytes(bystander))).isEqualTo(1);
     }
 
     @Test
@@ -388,9 +415,8 @@ class RefreshTokenDbStoreTest {
         UUID target = newCustomer();
         UUID bystander = newCustomer();
         UUID phone = UUID.randomUUID();
-        UUID laptop = UUID.randomUUID();
         login(target, phone);
-        login(target, laptop);
+        expiring(target, nowSeconds().plus(FOURTEEN_DAYS));   // 두 번째 살아 있는 세션 — 로그인으로 만들면 앞 세션이 끊긴다
         UUID other = UUID.randomUUID();
         login(bystander, other);
 

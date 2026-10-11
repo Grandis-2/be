@@ -67,12 +67,20 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, UUID
     @Query("select t.customerId from RefreshToken t where t.tokenHash = :hash")
     Optional<UUID> findOwnerByTokenHash(@Param("hash") byte[] hash);
 
+    /** 로그인이 회원의 세션을 바꾸는 동안 같은 회원의 로그인 · 회전을 막는다. 회원 행이 없으면 빈 결과. */
+    @Query(value = "SELECT id FROM customers WHERE id = :customerId FOR UPDATE", nativeQuery = true)
+    Optional<byte[]> lockCustomer(@Param("customerId") byte[] customerId);
+
     /**
      * 회전이 로그인과 같은 순서(회원 행 → 리프레시 행)로 잠그게 한다. 회전은 새 행을 넣을 때 외래키 검사로 회원 행에 공유 잠금을 거는데,
      * 그 전에 리프레시 행을 잠그면 로그인(회원 행 → 그 리프레시 행 폐기)과 서로 기다려 교착한다(실측 1213). 회원 행이 없으면 빈 결과.
      */
     @Query(value = "SELECT id FROM customers WHERE id = :customerId FOR SHARE", nativeQuery = true)
     Optional<byte[]> shareCustomer(@Param("customerId") byte[] customerId);
+
+    /** 로그인이 끊을 세션 — {@link #findLiveIdsOf} 와 같은 행의 체인(sid). 회원 행을 잠근 뒤 부른다. */
+    @Query("select distinct t.familyId from RefreshToken t where t.customerId = :customerId and t.revokedAt is null and t.expiresAt > :windowStart")
+    List<String> findLiveFamiliesOf(@Param("customerId") UUID customerId, @Param("windowStart") Instant windowStart);
 
     /** 고른 행만 폐기한다(기본키). 이미 폐기된 행은 시각을 덮지 않는다. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)

@@ -54,11 +54,24 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
 
     @Override
     @Transactional
-    public void save(UUID sessionId, String subject, String rawToken, Instant expiresAt) {
+    public List<UUID> replace(UUID sessionId, String subject, String rawToken, Instant expiresAt) {
         UUID customerId = customerIdOf(subject).orElseThrow(() ->
                 new IllegalStateException("회원 리프레시 저장소에 회원 id 가 아닌 subject 가 왔다: " + subject));
-        rows.save(RefreshToken.issue(customerId, sessionId, RefreshTokens.hash(rawToken),
-                now(), expiresAt));
+        // 회원 행을 먼저 잠근다 — 같은 회원의 로그인이 둘 오면 늦은 쪽이 기다렸다가 앞 쪽이 커밋한 세션을 보고 끊는다. 리프레시 행만 잠가서는
+        // 줄이 서지 않는다: 첫 로그인은 잠글 행이 없고, 기다린 쪽은 앞 쪽이 넣은 새 행을 못 본다(READ COMMITTED)
+        if (rows.lockCustomer(UuidBinary.toBytes(customerId)).isEmpty()) {
+            throw new IllegalStateException("없는 회원의 로그인: " + customerId);
+        }
+        Instant now = now();
+        // 탐지 창 안의 행만 — 창이 지난 체인은 막을 액세스 토큰이 없고 정리가 지우는 중일 수 있다(revokeAllOf 와 같은 이유)
+        Instant windowStart = now.minus(detectionWindow);
+        List<UUID> replaced = rows.findLiveFamiliesOf(customerId, windowStart).stream().map(UUID::fromString).toList();
+        List<UUID> live = rows.findLiveIdsOf(customerId, windowStart);
+        if (!live.isEmpty()) {
+            rows.revokeByIds(live, now);
+        }
+        rows.save(RefreshToken.issue(customerId, sessionId, RefreshTokens.hash(rawToken), now, expiresAt));
+        return replaced;
     }
 
     @Override

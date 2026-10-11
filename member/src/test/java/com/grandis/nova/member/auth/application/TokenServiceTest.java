@@ -105,7 +105,7 @@ class TokenServiceTest {
                 .as("리프레시는 JWT 가 아니라 난수라 파싱되지 않는다").isInstanceOf(InvalidTokenException.class);
         assertThat(tokens.refreshToken()).hasSize(43);   // 256비트 base64url, 패딩 없음
         assertThat(tokens.refreshTokenMaxAge()).isEqualTo(REFRESH);
-        verify(refreshTokens).save(access.sessionId(), CUSTOMER, tokens.refreshToken(), NOW.plus(REFRESH));
+        verify(refreshTokens).replace(access.sessionId(), CUSTOMER, tokens.refreshToken(), NOW.plus(REFRESH));
     }
 
     @Test
@@ -123,7 +123,7 @@ class TokenServiceTest {
         TokenClaims refresh = provider.parse(tokens.refreshToken());
         assertThat(refresh.type()).isEqualTo(TokenType.REFRESH);
         verify(adminRefreshTokens).save(refresh.sessionId(), refresh.tokenId(), REFRESH);
-        verify(refreshTokens, never()).save(any(), any(), any(), any());
+        verify(refreshTokens, never()).replace(any(), any(), any(), any());
     }
 
     // ────────────────────────────── 회전
@@ -272,7 +272,7 @@ class TokenServiceTest {
 
         TokenService.IssuedTokens tokens = service.issue(CUSTOMER, Role.USER);
 
-        verify(refreshTokens).save(any(), eq(CUSTOMER), eq(tokens.refreshToken()), eq(NOW.plus(REFRESH)));
+        verify(refreshTokens).replace(any(), eq(CUSTOMER), eq(tokens.refreshToken()), eq(NOW.plus(REFRESH)));
     }
 
     @Test
