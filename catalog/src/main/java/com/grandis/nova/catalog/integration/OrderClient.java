@@ -21,7 +21,7 @@ public interface OrderClient {
     /**
      * @param optionTitle 주문 당시 옵션명(order_items.option_title_snapshot)
      * @param orderStatus 주문 상태 이름(DELIVERED 일 때만 리뷰를 쓴다)
-     * @param orderSource 주문 경로 이름(PREORDER · BUY_NOW · CART)
+     * @param orderSource 주문 경로 이름(PREORDER · BUY_NOW · CART · DRAW)
      */
     record OrderItem(UUID orderItemId, UUID orderId, UUID productId, UUID optionId, String optionTitle,
                      String orderStatus, String orderSource) {
