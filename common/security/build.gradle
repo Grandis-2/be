@@ -12,6 +12,7 @@ dependencies {
     runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
 
     implementation project(':common:web')                                   // ApiResponse 봉투 · MdcContextFilter 의 traceId
+    implementation project(':common:cors')                                  // 프론트 오리진 허용 규칙(CorsConfigurationSource 빈)
     implementation 'org.springframework:spring-web'
     implementation 'org.springframework:spring-webmvc'
     implementation 'org.springframework.boot:spring-boot-starter-json'      // 401/403 봉투를 직접 쓴다 (Jackson 3)
