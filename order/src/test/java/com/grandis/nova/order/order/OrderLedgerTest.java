@@ -7,6 +7,7 @@ import com.grandis.nova.order.order.domain.exception.OrderAlreadyPlacedException
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderDraft;
 import com.grandis.nova.order.order.domain.model.OrderTransition;
+import com.grandis.nova.order.order.domain.repository.OrderWriter;
 import com.grandis.nova.order.order.vo.EventCause;
 import com.grandis.nova.order.order.vo.Money;
 import com.grandis.nova.order.support.OrderFixtures;
@@ -23,12 +24,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static com.grandis.nova.order.order.domain.enums.OrderStatus.AUTHORIZING;
 import static com.grandis.nova.order.order.domain.enums.OrderStatus.AWAITING_CONFIRMATION;
@@ -44,6 +45,10 @@ import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static com.grandis.nova.order.support.OrderFixtures.preorderCommand;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.AdditionalAnswers.delegatesTo;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 
 @OrderIntegrationTest
 @Transactional
@@ -57,6 +62,12 @@ class OrderLedgerTest {
     OrderLedger ledger;
 
     @Autowired
+    OrderWriter writer;
+
+    @Autowired
+    Clock clock;
+
+    @Autowired
     JdbcTemplate jdbcTemplate;
 
     @Autowired
@@ -65,7 +76,6 @@ class OrderLedgerTest {
     OrderFixtures fixtures;
     PreorderProduct product;
     UUID customerId;
-    final AtomicLong nextPosition = new AtomicLong(1);
 
     @BeforeEach
     void setUp() {
@@ -125,10 +135,8 @@ class OrderLedgerTest {
     void preorderTokenOfAnotherPreorderIsRejectedAsPreorderKeyConflict() {
         UUID first = preorder();
         ledger.place(draft(first), EventCause.user());
-        // 회원당 상품마다 진행 중인 예약은 하나라(uq_preorder_active) 다른 상품의 예약이다.
-        PreorderProduct otherProduct = fixtures.preorderProduct();
-        UUID second = fixtures.payablePreorder(customerId, otherProduct, 1);
-        OrderDraft borrowed = preorderCommand(customerId, second, otherProduct).toDraft();
+        UUID second = preorder();
+        OrderDraft borrowed = draft(second);
         OrderDraft mismatched = new OrderDraft(borrowed.customerId(), borrowed.source(), second,
                 OrderFixtures.preorderToken(first), borrowed.shipTo(), borrowed.lines());
 
@@ -138,25 +146,15 @@ class OrderLedgerTest {
                 .satisfies(e -> assertThat(((OrderAlreadyPlacedException) e).getPreorderId()).isEqualTo(second));
     }
 
-    // 앱의 회원 대조를 빠뜨려도 복합 FK(fk_order_preorder)가 한 번 더 막는다. 이건 도메인 예외로 바꾸지 않는다.
-    @Test
-    void orderForAnotherCustomersPreorderIsRejectedByForeignKey() {
-        OrderDraft stranger = preorderCommand(fixtures.customer(), preorder(), product).toDraft();
-
-        assertThatThrownBy(() -> ledger.place(stranger, EventCause.user()))
-                .isInstanceOf(DataIntegrityViolationException.class)
-                .isNotInstanceOf(OrderAlreadyPlacedException.class)
-                .hasMessageContaining("fk_order_preorder");
-    }
-
     // 저장소가 쓰기마다 flush 하므로 항목 제약 위반도 부른 자리에서 Spring 예외로 올라온다.
     @Test
     void itemConstraintViolationSurfacesAtCallSiteAsSpringException() {
-        OrderDraft missingOption = preorderCommand(customerId, preorder(), product, UUID.randomUUID(), 1).toDraft();
+        OrderDraft draft = draft(preorder());
+        UUID orderId = ledger.place(draft, EventCause.user()).id();
 
-        assertThatThrownBy(() -> ledger.place(missingOption, EventCause.user()))
+        assertThatThrownBy(() -> writer.insertItems(orderId, draft.lines()))
                 .isInstanceOf(DataIntegrityViolationException.class)
-                .hasMessageContaining("fk_order_item_option_ref");
+                .hasMessageContaining("uq_order_item_option");
     }
 
     @Test
@@ -267,15 +265,17 @@ class OrderLedgerTest {
                 .isInstanceOf(IllegalTransactionStateException.class);
     }
 
-    // 주문 · 항목 · 이력 중 하나만 남지 않는다. 항목 INSERT 가 실패하면 먼저 쓴 주문 행도 없어진다.
+    // 주문 · 항목 · 이력 중 하나만 남지 않는다. 항목 쓰기가 실패하면 먼저 쓴 주문 행도 없어진다.
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void failedItemInsertLeavesNoOrderBehind() {
         UUID preorderId = preorder();
-        OrderDraft missingOption = preorderCommand(customerId, preorderId, product, UUID.randomUUID(), 1).toDraft();
+        OrderWriter failingItems = mock(OrderWriter.class, delegatesTo(writer));
+        doThrow(new DataIntegrityViolationException("항목 쓰기 실패")).when(failingItems).insertItems(any(), any());
+        OrderLedger failingLedger = new OrderLedger(failingItems, clock);
 
         assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status ->
-                ledger.place(missingOption, EventCause.user())))
+                failingLedger.place(draft(preorderId), EventCause.user())))
                 .isInstanceOf(DataIntegrityViolationException.class);
 
         assertThat(jdbcTemplate.queryForObject(
@@ -376,7 +376,7 @@ class OrderLedgerTest {
     }
 
     private UUID preorder() {
-        return fixtures.payablePreorder(customerId, product, nextPosition.getAndIncrement());
+        return OrderFixtures.preorderId();
     }
 
     private OrderDraft draft(UUID preorderId) {

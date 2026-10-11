@@ -117,7 +117,7 @@ public class AdminDrawService {
                 }
                 throw new BusinessException(OrderErrorCode.INSUFFICIENT_STOCK, "당첨 인원만큼 재고가 없습니다.", Map.of("variantIds", e.optionIds()));
             } catch (PessimisticLockingFailureException e) {
-                // 재고 원장의 계약 — 동시 삽입이 부르는 잠금(FK 부모 S 잠금)의 드문 교착은 호출하는 쪽이 한 번 더 한다(장바구니 주문과 같다)
+                // 재고 원장의 계약 — 동시 삽입이 부르는 S 잠금(중복 키 확인 · 외래 키 부모)의 드문 교착은 호출하는 쪽이 한 번 더 한다(장바구니 주문과 같다)
                 if (!MySqlLockFailures.isDeadlock(e) || attempt >= MAX_ATTEMPTS) {
                     Optional<DrawCampaign> winner = findByKey(key);
                     if (winner.isPresent()) {

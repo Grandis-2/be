@@ -6,14 +6,13 @@ import com.grandis.nova.order.order.domain.enums.OrderSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * 테스트 데이터. 주문 · 재고가 참조하는 다른 모듈 소유 행(회원 · 카테고리 · 상품 · 옵션 · 배송 차수 · 예약)을 SQL 로 바로 넣는다.
- * 운영 코드의 모듈 경계와 무관하다 — 테스트 픽스처만 남의 테이블에 쓴다.
+ * 테스트 데이터. 재고 · 장바구니가 읽거나 외래 키로 가리키는 다른 모듈 소유 행(회원 · 카테고리 · 상품 · 옵션)을 SQL 로 바로 넣는다.
+ * 운영 코드의 모듈 경계와 무관하다 — 테스트 픽스처만 남의 테이블에 쓴다. 예약 행은 넣지 않는다 — order 는 예약을 preorder API 로만 본다.
  *
  * 매번 새 행을 만들고 지우지 않는다. id · 유일 칸은 UUID 로 채워 테스트끼리 겹치지 않으므로
  * 커밋하는 동시성 테스트와 롤백하는 테스트가 같은 컨테이너를 순서 상관없이 쓸 수 있다.
@@ -39,42 +38,20 @@ public class OrderFixtures {
                 """, unique());
     }
 
-    /** 사전예약 상품 하나(옵션 하나, 차수 하나). */
+    /** 사전예약 상품 하나(옵션 하나). */
     public PreorderProduct preorderProduct() {
         UUID productId = product("PREORDER");
-        UUID optionId = option(productId);
-        LocalDate shipStart = LocalDate.of(2026, 11, 1);
-        UUID batchId = insert("""
-                INSERT INTO shipment_batches (id, product_id, batch_number, position_from, position_to,
-                                              estimated_ship_start, estimated_ship_end, created_at)
-                VALUES (?, ?, 1, 1, NULL, ?, ?, UTC_TIMESTAMP(6))
-                """, bytes(productId), shipStart, shipStart.plusDays(6));
-        return new PreorderProduct(productId, optionId, batchId);
+        return new PreorderProduct(productId, option(productId));
+    }
+
+    /** 주문이 가리킬 예약의 id. 예약 행은 만들지 않는다. 공개 UUID 는 {@link #preorderToken(UUID)} 이다. */
+    public static UUID preorderId() {
+        return TestIds.next();
     }
 
     /**
-     * 결제 가능한 예약. 주문은 이 상태의 예약에서만 만들어진다. 공개 UUID 는 {@link #preorderToken(UUID)} 이다.
-     *
-     * @param queuePosition 같은 상품 안에서 겹치지 않아야 한다(uq_preorder_position)
-     */
-    public UUID payablePreorder(UUID customerId, PreorderProduct product, long queuePosition) {
-        UUID preorderId = TestIds.next();
-        jdbcTemplate.update("""
-                INSERT INTO preorders (id, preorder_token, customer_id, product_id, option_id, shipment_batch_id,
-                                       queue_position, idempotency_key, product_title_snapshot,
-                                       option_title_snapshot, unit_price_snapshot, status, payable_from,
-                                       event_sequence, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PAYABLE', UTC_TIMESTAMP(6), 2,
-                        UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, bytes(preorderId), preorderToken(preorderId), bytes(customerId), bytes(product.productId()),
-                bytes(product.optionId()), bytes(product.batchId()), queuePosition, unique(), PRODUCT_TITLE,
-                OPTION_TITLE, UNIT_PRICE);
-        return preorderId;
-    }
-
-    /**
-     * 픽스처 예약의 공개 UUID. id 로 정해 두어, 예약 id 만 받는 명령(static)도 DB 와 같은 짝(preorder_id ↔ preorder_token)을
-     * 싣는다. id 가 다르면 UUID 도 다르다.
+     * 픽스처 예약의 공개 UUID. id 로 정해 두어, 예약 id 만 받는 곳도 같은 짝(preorder_id ↔ preorder_token)을 만든다.
+     * id 가 다르면 UUID 도 다르다.
      */
     public static String preorderToken(UUID preorderId) {
         return UUID.nameUUIDFromBytes(UuidBinary.toBytes(preorderId)).toString();
@@ -161,7 +138,7 @@ public class OrderFixtures {
         return UuidBinary.toBytes(id);
     }
 
-    public record PreorderProduct(UUID productId, UUID optionId, UUID batchId) {
+    public record PreorderProduct(UUID productId, UUID optionId) {
     }
 
     /** @param optionIds option_id 오름차순 */

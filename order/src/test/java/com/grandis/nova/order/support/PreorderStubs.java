@@ -38,7 +38,7 @@ public final class PreorderStubs {
     /**
      * 결제 가능한 예약.
      *
-     * @param preorderInternalId 픽스처로 넣은 preorders.id — 주문의 복합 FK(preorder_id, customer_id)가 실제 행을 가리켜야 한다
+     * @param preorderInternalId 픽스처 예약의 id({@link OrderFixtures#preorderId()})
      */
     public static PreorderPayability payable(UUID preorderInternalId, String preorderId, UUID customerId,
                                              PreorderProduct product) {

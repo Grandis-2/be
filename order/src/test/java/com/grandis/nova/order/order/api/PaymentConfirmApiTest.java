@@ -128,7 +128,7 @@ class PaymentConfirmApiTest {
         fixtures = new OrderFixtures(jdbcTemplate);
         product = fixtures.preorderProduct();
         customerId = fixtures.customer();
-        preorderId = fixtures.payablePreorder(customerId, product, 1);
+        preorderId = OrderFixtures.preorderId();
         order = new TransactionTemplate(transactionManager).execute(status -> ledger.place(
                 OrderFixtures.preorderCommand(customerId, preorderId, product).toDraft(), EventCause.user()));
         jdbcTemplate.update("UPDATE orders SET total_amount = ? WHERE id = ?", TOTAL, bytes(order.id()));

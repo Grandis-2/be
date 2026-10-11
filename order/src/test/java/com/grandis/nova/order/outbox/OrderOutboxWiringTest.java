@@ -32,7 +32,6 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static com.grandis.nova.order.support.OrderFixtures.preorderCommand;
@@ -83,7 +82,6 @@ class OrderOutboxWiringTest {
     OrderFixtures fixtures;
     PreorderProduct product;
     UUID customerId;
-    final AtomicLong nextPosition = new AtomicLong(1);
 
     @BeforeEach
     void setUp() {
@@ -160,8 +158,7 @@ class OrderOutboxWiringTest {
     void payload_는_preorder_가_받는_계약과_같다() {
         UUID rejectedPreorder = preorder();
         String rejectedToken = tokenOf(rejectedPreorder);
-        // 한 회원은 한 상품에 활성 예약 하나(uq_preorder_active)라 두 번째 예약은 다른 회원으로 만든다.
-        UUID noOrderPreorder = fixtures.payablePreorder(fixtures.customer(), product, nextPosition.getAndIncrement());
+        UUID noOrderPreorder = preorder();
         String noOrderToken = tokenOf(noOrderPreorder);
 
         List<Long> ids = transactionTemplate.execute(status -> List.of(
@@ -214,7 +211,7 @@ class OrderOutboxWiringTest {
     }
 
     private UUID preorder() {
-        return fixtures.payablePreorder(customerId, product, nextPosition.getAndIncrement());
+        return OrderFixtures.preorderId();
     }
 
     private UUID placeOrder(UUID preorderId) {
@@ -223,8 +220,7 @@ class OrderOutboxWiringTest {
     }
 
     private String tokenOf(UUID preorderId) {
-        return jdbcTemplate.queryForObject("SELECT preorder_token FROM preorders WHERE id = ?", String.class,
-                bytes(preorderId));
+        return OrderFixtures.preorderToken(preorderId);
     }
 
     private String eventIdOf(Long id) {

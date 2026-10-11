@@ -139,7 +139,7 @@ class CartOrderCancelTest {
         cancel(customerId, "not-a-token").andExpect(status().isNotFound());
 
         OrderFixtures.PreorderProduct product = fixtures.preorderProduct();
-        UUID preorderId = fixtures.payablePreorder(customerId, product, 1);
+        UUID preorderId = OrderFixtures.preorderId();
         Order preorder = new TransactionTemplate(transactionManager).execute(status -> ledger.place(
                 OrderFixtures.preorderCommand(customerId, preorderId, product).toDraft(), EventCause.user()));
         cancel(customerId, preorder.orderToken().value()).andExpect(status().isConflict())

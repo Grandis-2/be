@@ -281,8 +281,7 @@ class SqsMessagingTest {
     }
 
     private String preorderUuidOf(Order order) {
-        return jdbcTemplate.queryForObject("SELECT preorder_token FROM preorders WHERE id = ?",
-                String.class, bytes(order.preorderId()));
+        return OrderFixtures.preorderToken(order.preorderId());
     }
 
     private String statusOf(Order order) {

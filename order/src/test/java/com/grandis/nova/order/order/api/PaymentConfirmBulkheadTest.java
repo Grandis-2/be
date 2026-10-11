@@ -78,8 +78,8 @@ class PaymentConfirmBulkheadTest {
     void confirmBeyondLimitIsRejectedBeforeChangingOrder() throws Exception {
         OrderFixtures fixtures = new OrderFixtures(jdbcTemplate);
         PreorderProduct product = fixtures.preorderProduct();
-        Order waiting = placedOrder(fixtures, product, 1);
-        Order rejected = placedOrder(fixtures, product, 2);
+        Order waiting = placedOrder(fixtures, product);
+        Order rejected = placedOrder(fixtures, product);
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         given(paymentClient.confirm(any(), any(), any())).willAnswer(invocation -> {
@@ -110,7 +110,7 @@ class PaymentConfirmBulkheadTest {
                 .willThrow(new ResourceAccessException("refused", new ConnectException("refused")))
                 .willReturn(ApiResponse.ok(new ConfirmReply(ConfirmReply.Result.PENDING, null)));
         confirm(rejected).andExpect(status().isServiceUnavailable());
-        confirm(placedOrder(fixtures, product, 3)).andExpect(status().isOk());
+        confirm(placedOrder(fixtures, product)).andExpect(status().isOk());
     }
 
     /** 응모비 승인은 주문 승인과 같은 상한을 나눠 쓴다 — 주문 승인이 자리를 다 쓰고 있으면 응모비 승인도 응모를 바꾸기 전에 503 이고, 끝나면 자리를 돌려준다. */
@@ -118,7 +118,7 @@ class PaymentConfirmBulkheadTest {
     @DisplayName("응모비 승인도 같은 상한 — 주문 승인이 차 있으면 응모를 바꾸기 전에 503, 실패로 끝나도 자리를 돌려준다")
     void drawEntryConfirmSharesTheLimit() throws Exception {
         OrderFixtures fixtures = new OrderFixtures(jdbcTemplate);
-        Order waiting = placedOrder(fixtures, fixtures.preorderProduct(), 1);
+        Order waiting = placedOrder(fixtures, fixtures.preorderProduct());
         UUID member = fixtures.customer();
         UUID draw = openDraw(fixtures);
         UUID entry = UUID.randomUUID();
@@ -153,7 +153,7 @@ class PaymentConfirmBulkheadTest {
                 .willThrow(new ResourceAccessException("refused", new ConnectException("refused")))
                 .willReturn(ApiResponse.ok(new ConfirmReply(ConfirmReply.Result.PENDING, null)));
         confirmEntry(member, draw).andExpect(status().isServiceUnavailable());
-        confirm(placedOrder(fixtures, fixtures.preorderProduct(), 1)).andExpect(status().isOk());
+        confirm(placedOrder(fixtures, fixtures.preorderProduct())).andExpect(status().isOk());
     }
 
     private UUID openDraw(OrderFixtures fixtures) {
@@ -176,9 +176,9 @@ class PaymentConfirmBulkheadTest {
                 .content("{\"paymentKey\":\"%s\",\"amount\":100}".formatted(PAYMENT)));
     }
 
-    private Order placedOrder(OrderFixtures fixtures, PreorderProduct product, long position) {
+    private Order placedOrder(OrderFixtures fixtures, PreorderProduct product) {
         UUID customerId = fixtures.customer();
-        UUID preorderId = fixtures.payablePreorder(customerId, product, position);
+        UUID preorderId = OrderFixtures.preorderId();
         Order order = new TransactionTemplate(transactionManager).execute(status -> ledger.place(
                 OrderFixtures.preorderCommand(customerId, preorderId, product).toDraft(), EventCause.user()));
         PreorderStubs.stub(preorderClient, PreorderStubs.payable(preorderId, order.preorderToken(), customerId, product));

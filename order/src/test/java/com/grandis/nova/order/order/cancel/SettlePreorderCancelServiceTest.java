@@ -69,7 +69,7 @@ class SettlePreorderCancelServiceTest {
 
     @Test
     void 주문이_없으면_NO_ORDER_를_받은_시도_순번과_함께_적는다() {
-        UUID preorderId = fixtures.payablePreorder(customerId, fixtures.preorderProduct(), 1);
+        UUID preorderId = OrderFixtures.preorderId();
         String preorderUuid = uuidOf(preorderId);
 
         settlement.settle(cancel(preorderId, preorderUuid, CancelReason.USER));
@@ -296,8 +296,7 @@ class SettlePreorderCancelServiceTest {
     }
 
     private String uuidOf(UUID preorderId) {
-        return jdbcTemplate.queryForObject("SELECT preorder_token FROM preorders WHERE id = ?", String.class,
-                bytes(preorderId));
+        return OrderFixtures.preorderToken(preorderId);
     }
 
     private String statusOf(Order order) {

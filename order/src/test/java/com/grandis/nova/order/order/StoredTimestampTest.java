@@ -67,7 +67,7 @@ class StoredTimestampTest {
         OrderFixtures fixtures = new OrderFixtures(jdbcTemplate);
         PreorderProduct product = fixtures.preorderProduct();
         UUID customerId = fixtures.customer();
-        UUID preorderId = fixtures.payablePreorder(customerId, product, 1);
+        UUID preorderId = OrderFixtures.preorderId();
 
         Order placed = ledger.place(preorderCommand(customerId, preorderId, product).toDraft(), EventCause.user());
         ledger.fire(placed.id(), OrderTrigger.CANCEL_REQUESTED, EnumSet.of(OrderStatus.AWAITING_PAYMENT),

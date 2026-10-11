@@ -26,10 +26,10 @@ public class PlacedOrders {
         this.fixtures = fixtures;
     }
 
-    /** 그 회원의 새 예약으로 주문 하나. 회원은 상품마다 진행 중인 예약이 하나라(uq_preorder_active) 상품도 새로 만든다. */
+    /** 그 회원의 새 예약 · 새 상품으로 주문 하나. */
     public Order place(UUID customerId) {
         OrderFixtures.PreorderProduct product = fixtures.preorderProduct();
-        UUID preorderId = fixtures.payablePreorder(customerId, product, 1);
+        UUID preorderId = OrderFixtures.preorderId();
         return transactionTemplate.execute(status -> ledger.place(
                 OrderFixtures.preorderCommand(customerId, preorderId, product).toDraft(), EventCause.user()));
     }

@@ -48,7 +48,7 @@ class OrderLedgerConcurrencyTest {
         OrderFixtures fixtures = new OrderFixtures(jdbcTemplate);
         product = fixtures.preorderProduct();
         customerId = fixtures.customer();
-        preorderId = fixtures.payablePreorder(customerId, product, 1);
+        preorderId = OrderFixtures.preorderId();
     }
 
     // 잠금 없이 조건부 UPDATE 만 쓰면 늦은 쪽이 0행으로 예외가 된다. 행을 잠그고 판정하므로 늦은 쪽은 "변화 없음" 이다.
