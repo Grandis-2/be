@@ -47,6 +47,7 @@ class PreorderClientTest {
 
     static final String PREORDER_UUID = "0b8f6a3e-5a8c-4d59-9a53-3c1f0e0f7a11";
     static final String PAYABILITY_URL = "http://preorder/internal/preorders/" + PREORDER_UUID + "/payability";
+    static final String PAYABILITY_BY_ID_URL = "http://preorder/internal/preorders/ids/" + TestIds.id(50231) + "/payability";
     // 전달할 액세스 토큰 자리(접두어 없음). 로그 검사에도 쓴다. 실제 토큰 모양이 아니다.
     static final String SESSION = "order-client-test-user-7";
 
@@ -100,6 +101,29 @@ class PreorderClientTest {
                 TestIds.id(101), TestIds.id(1002),
                 "갤럭시 G999", "256GB 블랙", new BigDecimal("1290000"), "PAYABLE",
                 Instant.parse("2026-09-03T01:00:03.470Z"), Instant.parse("2026-09-04T01:00:03.470Z"), true, null));
+        server.verify();
+    }
+
+    // 내부 id 입구는 경로만 다르고 헤더 · 응답이 같다.
+    @Test
+    void readsPayabilityByInternalIdFromItsOwnPath() {
+        server.expect(requestTo(PAYABILITY_BY_ID_URL))
+                .andExpect(method(HttpMethod.GET))
+                .andExpect(header(BearerTokens.HEADER, BearerTokens.value(SESSION)))
+                .andRespond(withSuccess("""
+                        {"success":true,
+                         "data":{"preorderId":"%s","preorderInternalId":"00000000-0000-7000-8000-000000050231",
+                                 "customerId":"00000000-0000-7000-8000-000000001024",
+                                 "productId":"00000000-0000-7000-8000-000000000101",
+                                 "optionId":"00000000-0000-7000-8000-000000001002","productTitle":"갤럭시 G999","optionTitle":"256GB 블랙",
+                                 "unitPrice":1290000,"status":"PAYABLE",
+                                 "payableFrom":"2026-09-03T01:00:03.470Z","paymentDueAt":"2026-09-04T01:00:03.470Z",
+                                 "payable":true,"reason":null},
+                         "error":null,"timestamp":"2026-09-03T02:00:00Z","traceId":"t-1"}
+                        """.formatted(PREORDER_UUID), MediaType.APPLICATION_JSON));
+
+        assertThat(new PreorderReader(client).findById(TestIds.id(50231), SESSION)).get()
+                .extracting(PreorderPayability::preorderInternalId).isEqualTo(TestIds.id(50231));
         server.verify();
     }
 

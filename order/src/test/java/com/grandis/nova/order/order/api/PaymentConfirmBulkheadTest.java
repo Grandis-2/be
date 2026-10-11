@@ -102,7 +102,7 @@ class PaymentConfirmBulkheadTest {
                 .andExpect(jsonPath("$.error.code").value("DEPENDENCY_UNAVAILABLE"));
 
         assertThat(statusOf(rejected)).isEqualTo("AWAITING_PAYMENT");
-        verify(preorderClient, never()).getPayability(eq(rejected.preorderToken()), any());
+        verify(preorderClient, never()).getPayabilityById(eq(rejected.preorderId()), any());
         release.countDown();
         first.get(10, TimeUnit.SECONDS);
         // 실패로 끝난 승인(Unanswered → 503)도 자리를 돌려준다 — 반납이 빠지면 상한 1 에서 다음 승인이 503 이 된다

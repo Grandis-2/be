@@ -77,11 +77,12 @@ class PayabilityGate {
     }
 
     private void requirePreorderPayable(Order order, String sessionToken) {
-        PreorderPayability preorder = preorderReader.find(order.preorderToken(), sessionToken)
+        // 응답이 물은 예약의 것인지는 PreorderReader 가 본다
+        PreorderPayability preorder = preorderReader.findById(order.preorderId(), sessionToken)
                 .orElseThrow(() -> new IllegalStateException("주문의 예약이 보이지 않는다: orderId=" + order.id()));
         // 주문은 그 예약에서 예약 회원으로 만들었다 — 다르면 데이터가 어긋난 것이라 500 이다
-        if (!preorder.preorderInternalId().equals(order.preorderId()) || !preorder.isOwnedBy(order.customerId())) {
-            throw new IllegalStateException("주문과 다른 예약 · 회원의 응답이다: orderId=" + order.id());
+        if (!preorder.isOwnedBy(order.customerId())) {
+            throw new IllegalStateException("주문과 다른 회원의 예약이다: orderId=" + order.id());
         }
         if (preorder.isCanceled()) {
             cancelLeftover(order);

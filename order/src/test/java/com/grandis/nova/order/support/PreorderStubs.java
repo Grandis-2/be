@@ -70,8 +70,10 @@ public final class PreorderStubs {
                 status, payableFrom, payableFrom == null ? null : payableFrom.plus(PAYMENT_WINDOW), payable, reason);
     }
 
+    /** 두 입구 모두 — 주문 생성은 예약 UUID 로, 결제 재확인은 예약 내부 id 로 묻는다. */
     public static void stub(PreorderClient client, PreorderPayability payability) {
         given(client.getPayability(eq(payability.preorderId()), any())).willReturn(ApiResponse.ok(payability));
+        given(client.getPayabilityById(eq(payability.preorderInternalId()), any())).willReturn(ApiResponse.ok(payability));
     }
 
     /** 4xx(401 토큰 거절 · 403 남의 예약 등). 본문 없음 — 404 는 본문의 code 로 나뉘므로 아래 둘을 쓴다. */
@@ -80,9 +82,20 @@ public final class PreorderStubs {
                 .willThrow(HttpClientErrorException.create(status, status.getReasonPhrase(), null, null, null));
     }
 
+    /** 결제 재확인(내부 id 입구)의 4xx. */
+    public static void stubClientError(PreorderClient client, UUID preorderInternalId, HttpStatus status) {
+        given(client.getPayabilityById(eq(preorderInternalId), any()))
+                .willThrow(HttpClientErrorException.create(status, status.getReasonPhrase(), null, null, null));
+    }
+
     /** 예약 없음. preorder 는 404 + error.code PREORDER_NOT_FOUND 로 답한다. */
     public static void stubPreorderNotFound(PreorderClient client, String preorderId) {
         given(client.getPayability(eq(preorderId), any())).willThrow(notFound("PREORDER_NOT_FOUND"));
+    }
+
+    /** 결제 재확인(내부 id 입구)의 예약 없음. */
+    public static void stubPreorderNotFound(PreorderClient client, UUID preorderInternalId) {
+        given(client.getPayabilityById(eq(preorderInternalId), any())).willThrow(notFound("PREORDER_NOT_FOUND"));
     }
 
     /** 경로 없음(배포 순서 어긋남 · 잘못된 주소). preorder 공통 처리기는 404 + error.code NOT_FOUND 로 답한다. */

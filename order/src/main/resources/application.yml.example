@@ -30,7 +30,8 @@ spring:
       connect-timeout: 200ms
   http:
     serviceclient:
-      # 주문 생성 때 예약 조회(GET /internal/preorders/{token}). 답이 없으면 주문을 만들지 않고 503 이다.
+      # 예약 결제 가능 확인 — 주문 생성은 예약 UUID 로(GET /internal/preorders/{uuid}/payability), 결제 준비 · 승인은 예약 내부 id 로
+      # (GET /internal/preorders/ids/{id}/payability). 답이 없으면 503 이다.
       preorder:
         base-url: http://localhost:8083
         connect-timeout: 300ms

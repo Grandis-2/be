@@ -83,11 +83,17 @@ class OrderTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    // 되살린 행에도 ck_order_preorder_token 규칙을 건다.
+    // 읽은 사전예약 주문은 예약 UUID 가 비어도 받는다(이 칸을 채우지 않는 버전과 같이 돈다). 있으면 사전예약 주문의 36자여야 한다.
     @Test
-    void constructorRejectsPreorderOrderWithoutPreorderToken() {
-        assertThatThrownBy(() -> new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), null, OrderStatus.AWAITING_PAYMENT, null,
-                Money.won(1000), null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH))
+    void constructorAcceptsPreorderOrderWithoutPreorderTokenButChecksPresentOne() {
+        assertThat(new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), null, OrderStatus.AWAITING_PAYMENT, null,
+                Money.won(1000), null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH).preorderToken()).isNull();
+        assertThatThrownBy(() -> new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), "0b8f6a3e",
+                OrderStatus.AWAITING_PAYMENT, null, Money.won(1000), null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("36");
+        assertThatThrownBy(() -> new Order(TestIds.id(1), TestIds.id(1), OrderSource.CART, null, PREORDER_UUID,
+                OrderStatus.AWAITING_PAYMENT, null, Money.won(1000), Instant.EPOCH, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("preorderToken");
     }

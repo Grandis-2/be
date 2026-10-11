@@ -68,6 +68,32 @@ class PreorderReaderTest {
         assertThatThrownBy(() -> reader.find(PREORDER_UUID, SESSION)).isInstanceOf(IllegalStateException.class);
     }
 
+    // 결제 재확인은 주문에 저장한 내부 id 로 묻는다(내부 id 입구). 응답이 그 예약의 것인지는 내부 id 로 대조한다.
+    @Test
+    void findByIdAsksWithInternalIdAndChecksTheAnswer() {
+        Instant payableFrom = Instant.now();
+        PreorderPayability payability = new PreorderPayability(PREORDER_UUID, TestIds.id(1), TestIds.id(7),
+                TestIds.id(3), TestIds.id(30), "Nova 1", "블랙", new BigDecimal("1000"), "PAYABLE", payableFrom,
+                payableFrom.plus(Duration.ofHours(24)), true, null);
+        given(client.getPayabilityById(TestIds.id(1), AUTHORIZATION)).willReturn(ApiResponse.ok(payability));
+        given(client.getPayabilityById(TestIds.id(2), AUTHORIZATION)).willReturn(ApiResponse.ok(payability));
+
+        assertThat(reader.findById(TestIds.id(1), SESSION)).contains(payability);
+        assertThatThrownBy(() -> reader.findById(TestIds.id(2), SESSION))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("물은 예약과 다른 응답");
+    }
+
+    // 내부 id 입구도 같은 규칙으로 404 를 가른다. preorder 가 그 입구보다 늦게 배포되면 경로 없음이라 연동 오류(500)다.
+    @Test
+    void findByIdSplitsNotFoundTheSameWay() {
+        given(client.getPayabilityById(TestIds.id(1), AUTHORIZATION)).willThrow(PreorderStubs.notFound("PREORDER_NOT_FOUND"));
+        given(client.getPayabilityById(TestIds.id(2), AUTHORIZATION)).willThrow(PreorderStubs.notFound("NOT_FOUND"));
+
+        assertThat(reader.findById(TestIds.id(1), SESSION)).isEmpty();
+        assertThatThrownBy(() -> reader.findById(TestIds.id(2), SESSION)).isInstanceOf(IllegalStateException.class);
+    }
+
     @Test
     void preorderNotFoundIsEmpty() {
         given(client.getPayability(PREORDER_UUID, AUTHORIZATION)).willThrow(PreorderStubs.notFound("PREORDER_NOT_FOUND"));

@@ -108,8 +108,8 @@ class PaymentAttemptApiTest {
                 .andExpect(jsonPath("$.data.orderName").value(OrderFixtures.PRODUCT_TITLE + " " + OrderFixtures.OPTION_TITLE))
                 .andExpect(jsonPath("$.data.customerKey").doesNotExist());
 
-        // 예약은 주문에 저장한 UUID 로 묻고, 결제는 주문 id · 서버 금액으로 연다. 사용자 토큰은 둘 다에 그대로 싣는다.
-        verify(preorderClient).getPayability(order.preorderToken(), BearerTokens.value(SESSION));
+        // 예약은 주문에 저장한 예약 내부 id 로 묻고, 결제는 주문 id · 서버 금액으로 연다. 사용자 토큰은 둘 다에 그대로 싣는다.
+        verify(preorderClient).getPayabilityById(order.preorderId(), BearerTokens.value(SESSION));
         verify(paymentClient).openCapture(new CaptureRequest("ORDER", order.id(), TOTAL), BearerTokens.value(SESSION));
         assertThat(statusOf(order)).isEqualTo("AWAITING_PAYMENT");
     }
@@ -206,7 +206,7 @@ class PaymentAttemptApiTest {
     void leftoverCancelSkipsOrderThatMovedOn() throws Exception {
         PreorderPayability canceled =
                 PreorderStubs.blocked(preorderId, order.preorderToken(), customerId, product, "CANCELED");
-        given(preorderClient.getPayability(eq(order.preorderToken()), any())).willAnswer(invocation -> {
+        given(preorderClient.getPayabilityById(eq(order.preorderId()), any())).willAnswer(invocation -> {
             fixtures.forceStatus(order.id(), "AUTHORIZING");
             return ApiResponse.ok(canceled);
         });
@@ -260,7 +260,7 @@ class PaymentAttemptApiTest {
     // 주문은 그 예약에서 만들었다 — 예약이 안 보이면(없음 · 남의 것) 데이터가 어긋난 것이라 500 이다. 결제창을 열지 않는다.
     @Test
     void missingPreorderIsInternalError() throws Exception {
-        PreorderStubs.stubPreorderNotFound(preorderClient, order.preorderToken());
+        PreorderStubs.stubPreorderNotFound(preorderClient, order.preorderId());
 
         prepare(customerId, order.id().toString())
                 .andExpect(status().isInternalServerError())
@@ -271,7 +271,8 @@ class PaymentAttemptApiTest {
 
     @Test
     void responseForAnotherPreorderIdIsInternalError() throws Exception {
-        stubPreorder(PreorderStubs.payable(UUID.randomUUID(), order.preorderToken(), customerId, product));
+        given(preorderClient.getPayabilityById(eq(order.preorderId()), any())).willReturn(
+                ApiResponse.ok(PreorderStubs.payable(UUID.randomUUID(), order.preorderToken(), customerId, product)));
 
         prepare(customerId, order.id().toString()).andExpect(status().isInternalServerError());
 
@@ -289,7 +290,7 @@ class PaymentAttemptApiTest {
 
     @Test
     void preorderRejectingTokenIsUnauthenticated() throws Exception {
-        PreorderStubs.stubClientError(preorderClient, order.preorderToken(), HttpStatus.UNAUTHORIZED);
+        PreorderStubs.stubClientError(preorderClient, order.preorderId(), HttpStatus.UNAUTHORIZED);
 
         prepare(customerId, order.id().toString())
                 .andExpect(status().isUnauthorized())

@@ -454,7 +454,7 @@ class PaymentConfirmApiTest {
     @Test
     void retryWhosePayabilityCannotBeCheckedOnlyRecoversResult() throws Exception {
         fixtures.forceAuthorizing(order.id(), attempt);
-        given(preorderClient.getPayability(eq(order.preorderToken()), any()))
+        given(preorderClient.getPayabilityById(eq(order.preorderId()), any()))
                 .willThrow(HttpServerErrorException.create(HttpStatus.SERVICE_UNAVAILABLE, "Service Unavailable", null,
                         null, null))
                 .willReturn(ApiResponse.ok(PreorderStubs.payable(UUID.randomUUID(), order.preorderToken(),
@@ -631,7 +631,7 @@ class PaymentConfirmApiTest {
                 (Object) bytes(cartOption))).containsExactly(Map.of("stock_reserved", 0, "stock_sold", 2));
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM cart_items WHERE customer_id = ?", Long.class,
                 (Object) bytes(customerId))).isZero();
-        verify(preorderClient, never()).getPayability(eq(cart.id().toString()), any());
+        verifyNoInteractions(preorderClient);
     }
 
     /** 장바구니 주문은 주문의 기한(만든 때 + 10분)을 본다 — 지났으면 결제를 시작하지 않는다. */
