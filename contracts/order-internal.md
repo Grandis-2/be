@@ -47,11 +47,11 @@ order 와 catalog 가 서로 부르는 내부 API 를 담는다(preorder 가 부
 | `optionId` | string(UUID) | `order_items.option_id` |
 | `optionTitle` | string | 주문 당시 옵션명(`order_items.option_title_snapshot`). 상품이 바뀌어도 그대로다 |
 | `orderStatus` | string | `orders.status` 이름 그대로(AWAITING_PAYMENT · AUTHORIZING · AWAITING_CONFIRMATION · PREPARING_ITEMS · READY_TO_SHIP · SHIPPED · DELIVERED · CANCELING · CANCELED) |
-| `orderSource` | string | `orders.source` 이름 그대로(PREORDER · BUY_NOW · CART) |
+| `orderSource` | string | `orders.source` 이름 그대로(PREORDER · BUY_NOW · CART · DRAW). DRAW 는 럭키 드로우 당첨 증정 0원 주문 |
 
-**판정은 catalog 가 한다.** 배송 완료 여부, 사전예약 주문 제외, 주문상품 1건당 리뷰 1개는 catalog 가 가린다. order 는 판정하지 않고 사실만 돌려준다 — 배송 전 주문상품도 200 이다.
+**판정은 catalog 가 한다.** 배송 완료 여부, 사전예약 주문 · 드로우 당첨 주문 제외, 주문상품 1건당 리뷰 1개는 catalog 가 가린다. order 는 판정하지 않고 사실만 돌려준다 — 배송 전 주문상품도 200 이다.
 
-**현재 order 는 사전예약(PREORDER) 주문만 만든다.** BUY_NOW · CART 주문은 아직 생기지 않으므로, 지금은 모든 응답의 `orderSource` 가 `PREORDER` 이고 "사전예약 제외" 판정 때문에 리뷰 가능한 주문상품이 없다. 통합 시험에서 이를 버그로 오인하지 않는다.
+**현재 order 가 만드는 주문은 PREORDER · CART · DRAW 다.** BUY_NOW 주문은 아직 생기지 않는다. 리뷰를 쓸 수 있는 주문상품은 배송 완료된 CART 주문의 것뿐이다.
 
 **오류.** 공통 봉투 그대로.
 
