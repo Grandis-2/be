@@ -41,5 +41,10 @@ public sealed interface MessageOutcome {
                 throw new IllegalArgumentException("다시 보일 때까지의 시간은 0 ~ 12h 여야 한다: " + delay);
             }
         }
+
+        /** SQS 는 초 단위다. 1초에 못 미치는 나머지는 올린다 — 0 보다 큰 지연이 곧바로 다시 보이지 않게. */
+        int seconds() {
+            return (int) delay.getSeconds() + (delay.getNano() > 0 ? 1 : 0);
+        }
     }
 }

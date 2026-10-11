@@ -31,6 +31,8 @@ public final class BatchQueueConsumer extends QueuePoller {
     private static final int MAX_BATCH = 10;
     /** 지울 메시지가 하나 생긴 뒤 묶음을 채우려고 더 기다리는 시간. */
     private static final Duration DELETE_LINGER = Duration.ofMillis(100);
+    /** 종료 시간을 넘겨 인터럽트한 처리가 끝나기를 더 기다리는 시간. */
+    private static final Duration INTERRUPT_GRACE = Duration.ofSeconds(2);
     /** 삭제 작업을 끝내라는 표식. 종료 때 남은 삭제 뒤에 넣는다. */
     private static final Message STOP = Message.builder().build();
 
@@ -87,6 +89,11 @@ public final class BatchQueueConsumer extends QueuePoller {
                 log.warn("{} 처리 중인 메시지가 종료 시간 안에 끝나지 않아 인터럽트한다 inFlight={}",
                         settings.queue(), inFlight.get());
                 handlers.shutdownNow();
+                // 인터럽트된 처리가 지우려는 메시지까지 남은 삭제에 담기게 기다린다. 그래도 안 끝난 건은 다시 받는다
+                if (!handlers.awaitTermination(INTERRUPT_GRACE.toMillis(), TimeUnit.MILLISECONDS)) {
+                    log.warn("{} 인터럽트한 처리도 끝나지 않았다 — 기다리지 않고 종료한다 inFlight={}",
+                            settings.queue(), inFlight.get());
+                }
             }
             deletions.add(STOP);
             if (!deleter.join(stopTimeout)) {
@@ -150,7 +157,7 @@ public final class BatchQueueConsumer extends QueuePoller {
             MessageOutcome outcome = handler.handle(message);
             switch (outcome) {
                 case MessageOutcome.Delete _ -> deletions.add(message);
-                case MessageOutcome.Return(Duration delay) -> returnAfter(queueUrl, message, delay);
+                case MessageOutcome.Return returned -> returnAfter(queueUrl, message, returned.seconds());
                 case MessageOutcome.Keep _ -> {
                 }
             }
@@ -171,11 +178,11 @@ public final class BatchQueueConsumer extends QueuePoller {
                 settings.queue(), Thread.currentThread().getName(), e);
     }
 
-    private void returnAfter(String queueUrl, Message message, Duration delay) {
+    private void returnAfter(String queueUrl, Message message, int seconds) {
         try {
             sqs.changeMessageVisibility(request -> request.queueUrl(queueUrl)
                     .receiptHandle(message.receiptHandle())
-                    .visibilityTimeout((int) ((delay.toMillis() + 999) / 1000)));
+                    .visibilityTimeout(seconds));
         } catch (RuntimeException e) {
             log.warn("다시 보일 시각을 바꾸지 못했다 — 가시성 시간이 지나면 다시 보인다 queue={} messageId={}",
                     settings.queue(), message.messageId(), e);

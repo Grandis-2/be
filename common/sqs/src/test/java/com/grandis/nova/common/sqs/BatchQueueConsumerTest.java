@@ -22,6 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 
@@ -56,6 +57,11 @@ class BatchQueueConsumerTest {
     /** 본문 → 마지막으로 받은 메시지 속성. */
     final Map<String, Map<String, String>> attributes = new ConcurrentHashMap<>();
     final CountDownLatch holdEntered = new CountDownLatch(1);
+    /** 빈 자리 수를 물은 횟수. 받기 스레드 하나가 앞선 받기가 돌아온 뒤에야 다시 묻는다. */
+    final AtomicInteger slotQueries = new AtomicInteger();
+    /** 켜면 다음에 빈 자리 수를 물을 때 받기를 멈춘다 — 그 순간에는 진행 중인 받기가 없다. */
+    final AtomicBoolean pauseOnNextQuery = new AtomicBoolean();
+    final CountDownLatch pausedBetweenReceives = new CountDownLatch(1);
 
     @BeforeEach
     void setUp() {
@@ -72,7 +78,7 @@ class BatchQueueConsumerTest {
         SqsQueueUrls queueUrls = new SqsQueueUrls(sqs, properties);
         resend = new DelayedResend(sqs, queueUrls, QUEUE);
         consumer = new BatchQueueConsumer(sqs, queueUrls, SETTINGS, List.of(ATTEMPT, LAST_OUTCOME, EVENT_TYPE),
-                () -> limit.get() - consumer.inFlight(), this::handle);
+                this::freeSlots, this::handle);
         consumer.start();
     }
 
@@ -95,10 +101,11 @@ class BatchQueueConsumerTest {
     }
 
     @Test
-    void 빈_자리가_없으면_받지_않고_생기면_받는다() throws Exception {
+    void 빈_자리가_없으면_받지_않고_생기면_받는다() {
         limit.set(0);
-        // 자리가 있을 때 시작한 롱 폴링(1s)이 끝나기를 기다린다
-        Thread.sleep(Duration.ofMillis(1500));
+        // 자리가 있을 때 시작한 롱 폴링이 돌아와야 다시 묻는다 — 이 뒤로 물으면 자리 0 을 본 것이다
+        int queries = slotQueries.get();
+        await().atMost(TIMEOUT).until(() -> slotQueries.get() > queries);
         String body = "ok-" + UUID.randomUUID();
 
         queues.send(QUEUE, body);
@@ -153,9 +160,8 @@ class BatchQueueConsumerTest {
 
     @Test
     void 받기를_멈추면_받지_않고_재개하면_받는다() throws Exception {
-        consumer.pause();
-        // 멈추기 전에 시작한 롱 폴링(1s)이 끝나기를 기다린다
-        Thread.sleep(Duration.ofMillis(1500));
+        pauseOnNextQuery.set(true);
+        assertThat(pausedBetweenReceives.await(TIMEOUT.toSeconds(), TimeUnit.SECONDS)).isTrue();
         String body = "ok-" + UUID.randomUUID();
 
         queues.send(QUEUE, body);
@@ -193,6 +199,16 @@ class BatchQueueConsumerTest {
         assertThat(attributes.get(body)).containsOnly(Map.entry(ATTEMPT, "2"), Map.entry(LAST_OUTCOME, "UNKNOWN"),
                 Map.entry(EVENT_TYPE, "REGISTER_JOB_READY"));
         assertThat(gap(body)).as("DelaySeconds 1초").isGreaterThanOrEqualTo(Duration.ofMillis(900));
+    }
+
+    private int freeSlots() {
+        slotQueries.incrementAndGet();
+        if (pauseOnNextQuery.compareAndSet(true, false)) {
+            consumer.pause();
+            pausedBetweenReceives.countDown();
+            return 0;
+        }
+        return limit.get() - consumer.inFlight();
     }
 
     private MessageOutcome handle(Message message) {

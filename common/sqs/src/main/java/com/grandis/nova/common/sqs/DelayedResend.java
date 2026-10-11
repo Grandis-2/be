@@ -50,7 +50,7 @@ public class DelayedResend {
                 carried.put(name, MessageAttributeValue.builder().dataType("String").stringValue(value).build());
             }
         });
-        int delaySeconds = (int) ((delay.toMillis() + 999) / 1000);
+        int delaySeconds = (int) delay.getSeconds() + (delay.getNano() > 0 ? 1 : 0);
         try {
             sqs.sendMessage(request -> request.queueUrl(queueUrls.of(queue))
                     .messageBody(message.body())

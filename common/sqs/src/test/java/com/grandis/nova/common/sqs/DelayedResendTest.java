@@ -67,6 +67,8 @@ class DelayedResendTest {
     @Test
     void 지연은_초로_올리고_0초와_15분까지_받는다() {
         assertThat(resend(Map.of(), Duration.ofMillis(100)).delaySeconds()).isEqualTo(1);
+        assertThat(resend(Map.of(), Duration.ofNanos(1)).delaySeconds()).isEqualTo(1);
+        assertThat(resend(Map.of(), Duration.ofMillis(1001)).delaySeconds()).isEqualTo(2);
         assertThat(resend(Map.of(), Duration.ZERO).delaySeconds()).isZero();
         assertThat(resend(Map.of(), Duration.ofMinutes(15)).delaySeconds()).isEqualTo(900);
     }

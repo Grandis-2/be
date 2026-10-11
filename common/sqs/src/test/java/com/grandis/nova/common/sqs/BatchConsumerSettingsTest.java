@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -40,6 +41,14 @@ class BatchConsumerSettingsTest {
         assertThatThrownBy(() -> MessageOutcome.returnAfter(Duration.ofHours(12).plusSeconds(1)))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> MessageOutcome.returnAfter(null)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void 돌려보낼_시간은_초로_올리고_0보다_크면_1초_이상이다() {
+        assertThat(new MessageOutcome.Return(Duration.ZERO).seconds()).isZero();
+        assertThat(new MessageOutcome.Return(Duration.ofNanos(1)).seconds()).isEqualTo(1);
+        assertThat(new MessageOutcome.Return(Duration.ofMillis(1500)).seconds()).isEqualTo(2);
+        assertThat(new MessageOutcome.Return(Duration.ofSeconds(30)).seconds()).isEqualTo(30);
     }
 
     private static BatchConsumerSettings settings(int waitSeconds, Duration visibility) {
