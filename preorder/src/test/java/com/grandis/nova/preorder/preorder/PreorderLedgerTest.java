@@ -14,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import jakarta.persistence.EntityManager;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.IllegalTransactionStateException;
@@ -180,6 +181,29 @@ class PreorderLedgerTest {
         assertThatThrownBy(() -> ledger.accept(draft(customerId), EventActor.USER, null))
                 .isInstanceOf(DataIntegrityViolationException.class)
                 .hasMessageContaining("uq_preorder_active");
+    }
+
+    /** CHECK 위반(MySQL 3819)은 Spring 이 무결성 예외로 분류하지 않아 데이터 접근 예외 · 제약 이름으로 본다. */
+    @Test
+    void 옛_상태_이름_PAYABLE_은_CHECK_로_막힌다() {
+        UUID id = payable();
+        entityManager.flush();
+
+        assertThatThrownBy(() -> jdbcTemplate.update("UPDATE preorders SET status = 'PAYABLE' WHERE id = ?",
+                (Object) UuidBinary.toBytes(id)))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("ck_preorder_status");
+    }
+
+    @Test
+    void REGISTERED_는_결제_가능_시각_없이_둘_수_없다() {
+        UUID id = payable();
+        entityManager.flush();
+
+        assertThatThrownBy(() -> jdbcTemplate.update("UPDATE preorders SET payable_from = NULL WHERE id = ?",
+                (Object) UuidBinary.toBytes(id)))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("ck_preorder_payable_from");
     }
 
     @Test

@@ -62,6 +62,18 @@ class PreorderApplicationTest {
         assertThat(checks).containsExactly("ck_preorder_outbox_attempts");
     }
 
+    /** 주문의 복합 외래 키 대상이던 (id, customer_id) 유일 키는 그 키가 빠져 지웠다 — id 가 PK 라 겹친다. */
+    @Test
+    void preorders_에는_주문_외래_키용_유일_키가_없다() {
+        List<String> uniques = jdbcTemplate.queryForList("""
+                SELECT DISTINCT index_name FROM information_schema.statistics
+                 WHERE table_schema = 'shop' AND table_name = 'preorders' AND non_unique = 0
+                """, String.class);
+
+        assertThat(uniques).as("대조군 — 활성 예약 유일 키").contains("PRIMARY", "uq_preorder_active");
+        assertThat(uniques).doesNotContain("uq_preorder_id_customer");
+    }
+
     /** 꺼지면 기동은 되고 @Scheduled 작업(상태 지표 갱신 등)만 조용히 멈춘다. */
     @Test
     void 스케줄링이_켜져_있다() {

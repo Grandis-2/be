@@ -95,3 +95,9 @@ nova:
     # queues:               # 논리 목적지 → 실제 큐 이름. 없으면 논리 이름(preorder-events · order-events)을 그대로 쓴다
     #   preorder-events: preorder-events
     #   order-events: order-events
+  # 브라우저 호출을 허용할 프론트 오리진(scheme://host[:port], 정확 일치). 적으면 기본값(운영 프론트 두 도메인 · API 도메인)이 통째로 바뀐다.
+  # 로컬에서만 적는다 — 운영은 기본값을 쓴다.
+  cors:
+    allowed-origins:
+      - http://localhost:5173   # 로컬 프론트(Vite)
+      - http://localhost:9000   # 로컬 문서 허브(docker/openapi-hub)

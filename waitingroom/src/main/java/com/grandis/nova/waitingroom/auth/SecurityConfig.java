@@ -1,10 +1,12 @@
 package com.grandis.nova.waitingroom.auth;
 
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.cors.CorsAutoConfiguration;
 import com.grandis.nova.waitingroom.web.ErrorResponses;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
@@ -25,6 +27,7 @@ import org.springframework.security.web.server.authorization.ServerAccessDeniedH
 import org.springframework.security.web.server.context.NoOpServerSecurityContextRepository;
 import org.springframework.security.web.server.savedrequest.NoOpServerRequestCache;
 import org.springframework.security.web.server.util.matcher.ServerWebExchangeMatcher;
+import org.springframework.web.cors.reactive.CorsConfigurationSource;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.server.ServerWebExchange;
 
@@ -61,6 +64,7 @@ class SecurityConfig {
     @Bean
     SecurityWebFilterChain securityWebFilterChain(ServerHttpSecurity http, ReactiveJwtDecoder jwtDecoder,
                                                   ErrorResponses errorResponses,
+                                                  @Qualifier(CorsAutoConfiguration.SOURCE_BEAN) CorsConfigurationSource cors,
                                                   @Value("${server.port:8080}") int serverPort,
                                                   @Value("${management.server.port:-1}") int managementPort) {
         ServerAuthenticationEntryPoint unauthenticated = (exchange, ex) -> {
@@ -83,8 +87,8 @@ class SecurityConfig {
             return unauthenticated.commence(exchange, ex);
         };
         return http
-                // 프론트와 API 가 한 도메인이라 CORS 를 켜지 않는다(다른 서비스와 같다)
-                .cors(ServerHttpSecurity.CorsSpec::disable)
+                // 규칙은 common:cors 의 빈 — 다른 서비스와 같다. 사전 요청은 인증 전에 답한다
+                .cors(spec -> spec.configurationSource(cors))
                 .csrf(ServerHttpSecurity.CsrfSpec::disable)
                 .httpBasic(ServerHttpSecurity.HttpBasicSpec::disable)
                 .formLogin(ServerHttpSecurity.FormLoginSpec::disable)
