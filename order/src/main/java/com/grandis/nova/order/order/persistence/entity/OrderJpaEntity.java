@@ -71,9 +71,6 @@ public class OrderJpaEntity extends BaseEntity {
     @Column(name = "ship_to_line2", updatable = false, length = 200)
     private String shipToLine2;
 
-    @Column(updatable = false, columnDefinition = "text")
-    private String internalNote;
-
     @Column(nullable = false, updatable = false)
     private long eventSequence;
 
@@ -83,7 +80,7 @@ public class OrderJpaEntity extends BaseEntity {
     public OrderJpaEntity(String orderToken, UUID customerId, OrderSource source, UUID preorderId, String preorderToken,
                           OrderStatus status, BigDecimal totalAmount, Instant paymentDueAt, Instant stockReleasedAt,
                           String shipToName, String shipToPhone, String shipToPostalCode, String shipToLine1,
-                          String shipToLine2, String internalNote, long eventSequence) {
+                          String shipToLine2, long eventSequence) {
         this.orderToken = orderToken;
         this.customerId = customerId;
         this.source = source;
@@ -98,7 +95,6 @@ public class OrderJpaEntity extends BaseEntity {
         this.shipToPostalCode = shipToPostalCode;
         this.shipToLine1 = shipToLine1;
         this.shipToLine2 = shipToLine2;
-        this.internalNote = internalNote;
         this.eventSequence = eventSequence;
     }
 
@@ -160,10 +156,6 @@ public class OrderJpaEntity extends BaseEntity {
 
     public String getShipToLine2() {
         return shipToLine2;
-    }
-
-    public String getInternalNote() {
-        return internalNote;
     }
 
     public long getEventSequence() {

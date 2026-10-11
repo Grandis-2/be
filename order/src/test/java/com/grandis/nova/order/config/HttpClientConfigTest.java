@@ -54,7 +54,7 @@ class HttpClientConfigTest {
     static final Order ORDER = new Order(TestIds.id(81), OrderToken.issue(), TestIds.id(7), OrderSource.PREORDER,
             TestIds.id(5), "9f1c2d3e-0000-4000-8000-000000000001", OrderStatus.AUTHORIZING, PROVIDER_ORDER_ID,
             new Money(new BigDecimal("1000")), null, null,
-            new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), null, 2, Instant.EPOCH,
+            new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 2, Instant.EPOCH,
             Instant.EPOCH);
 
     HttpServer server;

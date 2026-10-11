@@ -23,7 +23,6 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
-import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
@@ -137,16 +136,13 @@ class AdminOrderQueryApiTest {
     }
 
     @Test
-    void detailAddsCustomerAndInternalNote() throws Exception {
+    void detailAddsCustomer() throws Exception {
         Order order = orders.place(customerId);
-        // 관리자 메모 수정 API 는 이번 범위가 아니다. 칸이 실리는지만 본다.
-        jdbcTemplate.update("UPDATE orders SET internal_note = ? WHERE id = ?", "연락 요망", bytes(order.id()));
 
         mockMvc.perform(get("/api/v1/admin/orders/" + order.orderToken().value()).with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.orderId").value(order.orderToken().value()))
                 .andExpect(jsonPath("$.data.customerId").value(customerId.toString()))
-                .andExpect(jsonPath("$.data.internalNote").value("연락 요망"))
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.events", hasSize(1)))
                 .andExpect(jsonPath("$.data.id").doesNotExist())

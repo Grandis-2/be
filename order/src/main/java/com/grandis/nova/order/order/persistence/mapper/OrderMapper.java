@@ -26,7 +26,7 @@ public final class OrderMapper {
         return new OrderJpaEntity(order.orderToken().value(), order.customerId(), order.source(),
                 order.preorderId(), order.preorderToken(), order.status(), order.totalAmount().amount(), order.paymentDueAt(),
                 order.stockReleasedAt(), shipTo.name(), shipTo.phone(), shipTo.postalCode(), shipTo.line1(),
-                shipTo.line2(), order.internalNote(), order.eventSequence());
+                shipTo.line2(), order.eventSequence());
     }
 
     public static Order toDomain(OrderJpaEntity entity) {
@@ -36,7 +36,7 @@ public final class OrderMapper {
                 entity.getPaymentDueAt(), entity.getStockReleasedAt(),
                 new ShipTo(entity.getShipToName(), entity.getShipToPhone(), entity.getShipToPostalCode(),
                         entity.getShipToLine1(), entity.getShipToLine2()),
-                entity.getInternalNote(), entity.getEventSequence(), entity.getCreatedAt(), entity.getUpdatedAt());
+                entity.getEventSequence(), entity.getCreatedAt(), entity.getUpdatedAt());
     }
 
     public static OrderItemJpaEntity toEntity(UUID orderId, OrderLine line) {

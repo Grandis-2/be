@@ -83,7 +83,7 @@ class OrderTest {
     @Test
     void constructorRejectsPreorderOrderWithoutPreorderToken() {
         assertThatThrownBy(() -> new Order(TestIds.id(1), TOKEN, TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), null, OrderStatus.AWAITING_PAYMENT, null,
-                Money.won(1000), null, null, SHIP_TO, null, 1, Instant.EPOCH, Instant.EPOCH))
+                Money.won(1000), null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("preorderToken");
     }
@@ -94,15 +94,15 @@ class OrderTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    // 배송지 · 관리자 메모에는 개인정보가 들어갈 수 있다. 로그 · 예외 메시지로 새지 않게 식별 · 상태만 싣는다.
+    // 배송지에는 개인정보가 들어 있다. 로그 · 예외 메시지로 새지 않게 식별 · 상태만 싣는다.
     @Test
     void toStringCarriesNoPersonalData() {
         Order order = new Order(TestIds.id(1), TOKEN, TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, OrderStatus.AWAITING_PAYMENT, null,
-                Money.won(1000), null, null, SHIP_TO, "고객 요청: 010-9999-8888 로 연락", 1, Instant.EPOCH, Instant.EPOCH);
+                Money.won(1000), null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH);
 
         assertThat(order.toString())
                 .contains("status=AWAITING_PAYMENT")
-                .doesNotContain("홍길동", "010-0000-0000", "세종대로", "010-9999-8888");
+                .doesNotContain("홍길동", "010-0000-0000", "세종대로");
     }
 
     // 값 비교다. 같은 주문의 전이 전 · 후 스냅샷은 다르다.
@@ -122,10 +122,10 @@ class OrderTest {
         assertThatThrownBy(() -> order(OrderSource.PREORDER, TestIds.id(7), OrderStatus.AUTHORIZING, null, null, 2))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new Order(TestIds.id(1), TOKEN, TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID,
-                OrderStatus.AWAITING_PAYMENT, "attempt-0001", Money.won(1000), null, null, SHIP_TO, null, 1,
+                OrderStatus.AWAITING_PAYMENT, "attempt-0001", Money.won(1000), null, null, SHIP_TO, 1,
                 Instant.EPOCH, Instant.EPOCH)).isInstanceOf(IllegalArgumentException.class);
         assertThat(new Order(TestIds.id(1), TOKEN, TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, OrderStatus.AUTHORIZING,
-                "attempt-0001", Money.won(1000), null, null, SHIP_TO, null, 2, Instant.EPOCH, Instant.EPOCH)
+                "attempt-0001", Money.won(1000), null, null, SHIP_TO, 2, Instant.EPOCH, Instant.EPOCH)
                 .authorizingProviderOrderId()).isEqualTo("attempt-0001");
     }
 
@@ -135,7 +135,7 @@ class OrderTest {
                                Instant stockReleasedAt, long eventSequence) {
         String preorderToken = source == OrderSource.PREORDER ? PREORDER_UUID : null;
         return new Order(TestIds.id(1), TOKEN, TestIds.id(1), source, preorderId, preorderToken, status, null, Money.won(1000), paymentDueAt, stockReleasedAt,
-                SHIP_TO, null, eventSequence, Instant.EPOCH, Instant.EPOCH);
+                SHIP_TO, eventSequence, Instant.EPOCH, Instant.EPOCH);
     }
 
     @Test

@@ -171,7 +171,6 @@ class OrderQueryApiTest {
                 .andExpect(jsonPath("$.data.events[1].reason").value("USER_REQUEST"))
                 .andExpect(jsonPath("$.data.id").doesNotExist())
                 .andExpect(jsonPath("$.data.paymentDueAt").doesNotExist())
-                .andExpect(jsonPath("$.data.internalNote").doesNotExist())
                 .andExpect(jsonPath("$.data.customerId").doesNotExist());
     }
 

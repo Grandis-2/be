@@ -15,7 +15,7 @@ import java.util.UUID;
  * 주문의 한 시점 스냅샷. 불변이다 — 상태는 이 객체를 고쳐서 바꾸지 않고 {@link com.grandis.nova.order.order.OrderLedger} 가
  * 저장소에서 "현재 상태를 조건으로 한 UPDATE + 이력 INSERT" 로 바꾼다. 그래서 읽어 둔 주문이 옛 상태를 되써 넣을 길이 없다.
  *
- * toString 은 식별 · 상태만 싣는다. 배송지 · 관리자 메모에는 개인정보가 들어갈 수 있어 로그 · 예외 메시지로 새지 않게.
+ * toString 은 식별 · 상태만 싣는다. 배송지에는 개인정보가 들어 있어 로그 · 예외 메시지로 새지 않게.
  *
  * equals 는 값 비교다. 같은 주문의 전이 전 · 후 스냅샷은 서로 다르다 — 같은 주문인지는 id 로 판단한다.
  *
@@ -46,7 +46,6 @@ public record Order(
         Instant paymentDueAt,
         Instant stockReleasedAt,
         ShipTo shipTo,
-        String internalNote,
         long eventSequence,
         Instant createdAt,
         Instant updatedAt
@@ -114,7 +113,7 @@ public record Order(
         };
         return new Order(null, orderToken, draft.customerId(), draft.source(), draft.preorderId(),
                 draft.preorderToken(), initialStatus(draft.source()), null, draft.totalAmount(), paymentDueAt, null, draft.shipTo(),
-                null, OrderEvent.FIRST_SEQUENCE, null, null);
+                OrderEvent.FIRST_SEQUENCE, null, null);
     }
 
     /** 처음 상태. 드로우 당첨 주문은 결제가 없어(응모비로 이미 냈다) 결제 완료 — 결제 확인 대기로 생긴다. 나머지는 결제 대기다. */
