@@ -186,8 +186,8 @@ class PaymentConfirmBulkheadTest {
     }
 
     private ResultActions confirm(Order order) throws Exception {
-        return mockMvc.perform(post("/api/v1/orders/{orderToken}/payment-attempts/{tossOrderId}/confirm",
-                order.orderToken().value(), UUID.randomUUID().toString())
+        return mockMvc.perform(post("/api/v1/orders/{orderId}/payment-attempts/{tossOrderId}/confirm",
+                order.id().toString(), UUID.randomUUID().toString())
                 .with(TestAuth.customer(order.customerId()))
                 .header(BearerTokens.HEADER, BearerTokens.value(SESSION))
                 .contentType(MediaType.APPLICATION_JSON)

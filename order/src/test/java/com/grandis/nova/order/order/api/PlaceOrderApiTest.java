@@ -97,7 +97,7 @@ class PlaceOrderApiTest {
 
         String orderId = orderIdOf(result);
         assertThat(result.getResponse().getHeader("Location")).isEqualTo("/api/v1/orders/" + orderId);
-        assertThat(count("SELECT COUNT(*) FROM orders WHERE preorder_id = ? AND order_token = ?",
+        assertThat(count("SELECT COUNT(*) FROM orders WHERE preorder_id = ? AND id = UUID_TO_BIN(?)",
                 bytes(preorderId), orderId))
                 .isEqualTo(1);
         assertThat(count("""
@@ -281,8 +281,7 @@ class PlaceOrderApiTest {
     void canceledOrderCannotBePlacedAgain() throws Exception {
         stubPayable();
         String orderId = orderIdOf(place(customerId, token).andExpect(status().isCreated()).andReturn());
-        fixtures.forceStatus(UUID.fromString(jdbcTemplate.queryForObject(
-                "SELECT BIN_TO_UUID(id) FROM orders WHERE order_token = ?", String.class, orderId)), "CANCELED");
+        fixtures.forceStatus(UUID.fromString(orderId), "CANCELED");
 
         place(customerId, token)
                 .andExpect(status().isConflict())

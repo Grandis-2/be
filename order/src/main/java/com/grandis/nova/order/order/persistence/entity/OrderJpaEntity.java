@@ -23,9 +23,6 @@ import java.util.UUID;
 @Table(name = "orders")
 public class OrderJpaEntity extends BaseEntity {
 
-    @Column(nullable = false, updatable = false, length = 36)
-    private String orderToken;
-
     @Column(nullable = false, updatable = false)
     private UUID customerId;
 
@@ -80,11 +77,10 @@ public class OrderJpaEntity extends BaseEntity {
     protected OrderJpaEntity() {
     }
 
-    public OrderJpaEntity(String orderToken, UUID customerId, OrderSource source, UUID preorderId, String preorderToken,
+    public OrderJpaEntity(UUID customerId, OrderSource source, UUID preorderId, String preorderToken,
                           OrderStatus status, BigDecimal totalAmount, Instant paymentDueAt, Instant stockReleasedAt,
                           String shipToName, String shipToPhone, String shipToPostalCode, String shipToLine1,
                           String shipToLine2, long eventSequence) {
-        this.orderToken = orderToken;
         this.customerId = customerId;
         this.source = source;
         this.preorderId = preorderId;
@@ -99,10 +95,6 @@ public class OrderJpaEntity extends BaseEntity {
         this.shipToLine1 = shipToLine1;
         this.shipToLine2 = shipToLine2;
         this.eventSequence = eventSequence;
-    }
-
-    public String getOrderToken() {
-        return orderToken;
     }
 
     public UUID getCustomerId() {

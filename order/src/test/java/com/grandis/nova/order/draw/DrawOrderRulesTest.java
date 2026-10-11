@@ -8,7 +8,6 @@ import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderDraft;
 import com.grandis.nova.order.order.domain.model.OrderLine;
 import com.grandis.nova.order.order.vo.Money;
-import com.grandis.nova.order.order.vo.OrderToken;
 import com.grandis.nova.order.order.vo.Quantity;
 import com.grandis.nova.order.order.vo.ShipTo;
 import com.grandis.nova.order.support.TestIds;
@@ -31,11 +30,11 @@ class DrawOrderRulesTest {
     @Test
     @DisplayName("드로우 주문은 0원 · 결제 기한 없음 · 결제 확인 대기로 생긴다 — 0원이 아니면 거절")
     void drawOrderIsFreeAndAlreadyPaid() {
-        Order order = Order.place(draft(Money.ZERO), OrderToken.issue(), NOW);
+        Order order = Order.place(draft(Money.ZERO), NOW);
 
         assertThat(order.status()).isEqualTo(OrderStatus.AWAITING_CONFIRMATION);
         assertThat(order.paymentDueAt()).isNull();
-        assertThatThrownBy(() -> Order.place(draft(new Money(new BigDecimal("100"))), OrderToken.issue(), NOW))
+        assertThatThrownBy(() -> Order.place(draft(new Money(new BigDecimal("100"))), NOW))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

@@ -12,7 +12,6 @@ import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.vo.Money;
-import com.grandis.nova.order.order.vo.OrderToken;
 import com.grandis.nova.order.order.vo.ShipTo;
 import com.grandis.nova.order.support.TestIds;
 import com.sun.net.httpserver.HttpServer;
@@ -51,7 +50,7 @@ class HttpClientConfigTest {
     static final long READ_TIMEOUT_MILLIS = 1_000;
     static final long STALL_MILLIS = 3_000;
     static final String PROVIDER_ORDER_ID = "6f1c2d3e-4b5a-4c7d-8e9f-0a1b2c3d4e5f";
-    static final Order ORDER = new Order(TestIds.id(81), OrderToken.issue(), TestIds.id(7), OrderSource.PREORDER,
+    static final Order ORDER = new Order(TestIds.id(81), TestIds.id(7), OrderSource.PREORDER,
             TestIds.id(5), "9f1c2d3e-0000-4000-8000-000000000001", OrderStatus.AUTHORIZING, PROVIDER_ORDER_ID,
             new Money(new BigDecimal("1000")), null, null, null,
             new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 2, Instant.EPOCH,

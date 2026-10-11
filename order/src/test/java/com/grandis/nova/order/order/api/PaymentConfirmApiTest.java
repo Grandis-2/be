@@ -70,7 +70,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * POST /api/v1/orders/{orderToken}/payment-attempts/{tossOrderId}/confirm — 결제 승인과 주문 반영. MySQL 위에서 돌고
+ * POST /api/v1/orders/{orderId}/payment-attempts/{tossOrderId}/confirm — 결제 승인과 주문 반영. MySQL 위에서 돌고
  * preorder · payment 내부 API 만 대역이다(응답 모양 대조는 PaymentConfirmerTest). 결과 이벤트는 실제 분배기로 넣는다.
  *
  * 인증은 흉내({@link TestAuth})다 — Authorization 헤더의 값은 전달 확인용 자리일 뿐이다.
@@ -349,7 +349,7 @@ class PaymentConfirmApiTest {
 
     @Test
     void someoneElsesOrderIsNotFound() throws Exception {
-        perform(fixtures.customer(), order.orderToken().value(), attempt, body(PAYMENT, TOTAL))
+        perform(fixtures.customer(), order.id().toString(), attempt, body(PAYMENT, TOTAL))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("ORDER_NOT_FOUND"));
 
@@ -398,7 +398,7 @@ class PaymentConfirmApiTest {
     @ParameterizedTest
     @ValueSource(strings = {".", "..", "tgen_bad\nline"})
     void paymentKeyBreakingProviderRulesIsRejected(String badKey) throws Exception {
-        perform(customerId, order.orderToken().value(), attempt, body(badKey, TOTAL))
+        perform(customerId, order.id().toString(), attempt, body(badKey, TOTAL))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
 
@@ -622,7 +622,7 @@ class PaymentConfirmApiTest {
         Order cart = cartOrder(2);
         paymentAnswers(reply(ConfirmReply.Result.APPROVED, null));
 
-        perform(customerId, cart.orderToken().value(), attempt, body(PAYMENT, cart.totalAmount().amount()))
+        perform(customerId, cart.id().toString(), attempt, body(PAYMENT, cart.totalAmount().amount()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.result").value("APPROVED"))
                 .andExpect(jsonPath("$.data.orderStatus").value("AWAITING_CONFIRMATION"));
@@ -631,7 +631,7 @@ class PaymentConfirmApiTest {
                 (Object) bytes(cartOption))).containsExactly(Map.of("stock_reserved", 0, "stock_sold", 2));
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM cart_items WHERE customer_id = ?", Long.class,
                 (Object) bytes(customerId))).isZero();
-        verify(preorderClient, never()).getPayability(eq(cart.orderToken().value()), any());
+        verify(preorderClient, never()).getPayability(eq(cart.id().toString()), any());
     }
 
     /** 장바구니 주문은 주문의 기한(만든 때 + 10분)을 본다 — 지났으면 결제를 시작하지 않는다. */
@@ -641,7 +641,7 @@ class PaymentConfirmApiTest {
         // 저장은 UTC 다 — JVM 시간대로 바인딩되는 Timestamp 대신 DB 의 UTC 로 기한을 지나게 한다
         jdbcTemplate.update("UPDATE orders SET payment_due_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ?", (Object) bytes(cart.id()));
 
-        perform(customerId, cart.orderToken().value(), attempt, body(PAYMENT, cart.totalAmount().amount()))
+        perform(customerId, cart.id().toString(), attempt, body(PAYMENT, cart.totalAmount().amount()))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("PAYMENT_WINDOW_EXPIRED"));
 
@@ -658,7 +658,7 @@ class PaymentConfirmApiTest {
         jdbcTemplate.update("UPDATE orders SET payment_due_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ?", (Object) bytes(cart.id()));
         paymentAnswers(reply(ConfirmReply.Result.PENDING, null));
 
-        perform(customerId, cart.orderToken().value(), attempt, body(PAYMENT, cart.totalAmount().amount()))
+        perform(customerId, cart.id().toString(), attempt, body(PAYMENT, cart.totalAmount().amount()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.result").value("PENDING"));
 
@@ -734,12 +734,12 @@ class PaymentConfirmApiTest {
     }
 
     private ResultActions confirm(String tossOrderId, BigDecimal amount) throws Exception {
-        return perform(customerId, order.orderToken().value(), tossOrderId, body(PAYMENT, amount));
+        return perform(customerId, order.id().toString(), tossOrderId, body(PAYMENT, amount));
     }
 
-    private ResultActions perform(UUID customer, String orderToken, String tossOrderId, String json) throws Exception {
-        return mockMvc.perform(post("/api/v1/orders/{orderToken}/payment-attempts/{tossOrderId}/confirm",
-                orderToken, tossOrderId)
+    private ResultActions perform(UUID customer, String orderId, String tossOrderId, String json) throws Exception {
+        return mockMvc.perform(post("/api/v1/orders/{orderId}/payment-attempts/{tossOrderId}/confirm",
+                orderId, tossOrderId)
                 .with(TestAuth.customer(customer))
                 .header(BearerTokens.HEADER, BearerTokens.value(SESSION))
                 .contentType(MediaType.APPLICATION_JSON)

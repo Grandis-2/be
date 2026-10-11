@@ -110,14 +110,14 @@ class RefundResultsTest {
         Order refunding = canceling();
         refundResults.settle(failed(order));
 
-        mockMvc.perform(get("/api/v1/orders/{orderId}", order.orderToken().value()).with(TestAuth.customer(customerId)))
+        mockMvc.perform(get("/api/v1/orders/{orderId}", order.id().toString()).with(TestAuth.customer(customerId)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("CANCELING"))
                 .andExpect(jsonPath("$.data.refundFailed").value(true));
-        mockMvc.perform(get("/api/v1/admin/orders/{orderId}", order.orderToken().value()).with(TestAuth.admin()))
+        mockMvc.perform(get("/api/v1/admin/orders/{orderId}", order.id().toString()).with(TestAuth.admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.refundFailed").value(true));
-        mockMvc.perform(get("/api/v1/orders/{orderId}", refunding.orderToken().value())
+        mockMvc.perform(get("/api/v1/orders/{orderId}", refunding.id().toString())
                         .with(TestAuth.customer(customerId)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.refundFailed").value(false));
@@ -132,7 +132,7 @@ class RefundResultsTest {
         refundResults.settle(refunded(order));
 
         assertThat(statusOf(order)).isEqualTo("CANCELED");
-        mockMvc.perform(get("/api/v1/orders/{orderId}", order.orderToken().value()).with(TestAuth.customer(customerId)))
+        mockMvc.perform(get("/api/v1/orders/{orderId}", order.id().toString()).with(TestAuth.customer(customerId)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.refundFailed").value(false));
     }

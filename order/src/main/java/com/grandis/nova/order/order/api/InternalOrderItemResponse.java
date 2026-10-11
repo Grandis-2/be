@@ -10,7 +10,7 @@ import java.util.UUID;
 /**
  * 주문상품 하나(내부 API 응답). 판정 없이 사실만 준다 — catalog 가 배송 완료 · 출처로 리뷰 가능 여부를 가린다.
  *
- * @param orderId     주문 내부 id(orders.id). 공개 주문 번호(order_token)가 아니다
+ * @param orderId     주문 id(orders.id). 주문 API 의 orderId 와 같다
  * @param optionTitle 주문 당시 옵션명(order_items.option_title_snapshot)
  * @param orderStatus orders.status 이름 그대로
  * @param orderSource orders.source 이름 그대로(PREORDER · BUY_NOW · CART · DRAW)

@@ -94,7 +94,6 @@ class OrderLedgerTest {
         assertThat(order.createdAt()).isNotNull();
         assertThat(order.totalAmount()).isEqualTo(new Money(UNIT_PRICE));
         assertThat(row(order.id()))
-                .containsEntry("order_token", order.orderToken().value())
                 .containsEntry("status", "AWAITING_PAYMENT")
                 .containsEntry("event_sequence", 1L)
                 .containsEntry("source", "PREORDER")
@@ -399,7 +398,7 @@ class OrderLedgerTest {
 
     private Map<String, Object> row(UUID id) {
         return jdbcTemplate.queryForMap("""
-                SELECT order_token, status, event_sequence, source, BIN_TO_UUID(preorder_id) AS preorder_id, total_amount,
+                SELECT status, event_sequence, source, BIN_TO_UUID(preorder_id) AS preorder_id, total_amount,
                        payment_due_at, ship_to_name, ship_to_line2
                   FROM orders WHERE id = ?
                 """, bytes(id));

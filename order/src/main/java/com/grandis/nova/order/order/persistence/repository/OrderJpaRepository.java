@@ -25,8 +25,6 @@ import java.util.UUID;
 public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
         JpaSpecificationExecutor<OrderJpaEntity> {
 
-    Optional<OrderJpaEntity> findByOrderToken(String orderToken);
-
     Optional<OrderJpaEntity> findByPreorderId(UUID preorderId);
 
     List<OrderJpaEntity> findByCustomerIdAndSourceAndStatusIn(UUID customerId, OrderSource source, Collection<OrderStatus> statuses);

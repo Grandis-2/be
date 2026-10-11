@@ -42,7 +42,7 @@ order 와 catalog 가 서로 부르는 내부 API 를 담는다(preorder 가 부
 | 칸 | 타입 | 뜻 |
 | --- | --- | --- |
 | `orderItemId` | string(UUID) | `order_items.id` |
-| `orderId` | string(UUID) | `orders.id` — 주문 **내부** id. 공개 주문 번호(`order_token`, 주문 API 의 `orderId`)가 아니다 |
+| `orderId` | string(UUID) | `orders.id` — 주문 API 의 `orderId` 와 같은 값이다 |
 | `productId` | string(UUID) | `order_items.product_id` |
 | `optionId` | string(UUID) | `order_items.option_id` |
 | `optionTitle` | string | 주문 당시 옵션명(`order_items.option_title_snapshot`). 상품이 바뀌어도 그대로다 |

@@ -19,7 +19,6 @@ import com.grandis.nova.order.order.persistence.repository.OrderEventJpaReposito
 import com.grandis.nova.order.order.persistence.repository.OrderItemJpaRepository;
 import com.grandis.nova.order.order.persistence.repository.OrderJpaRepository;
 import com.grandis.nova.order.order.persistence.repository.OrderSpecifications;
-import com.grandis.nova.order.order.vo.OrderToken;
 import jakarta.persistence.EntityManager;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -144,11 +143,6 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     @Override
     public Optional<Order> findById(UUID orderId) {
         return orders.findById(orderId).map(OrderMapper::toDomain);
-    }
-
-    @Override
-    public Optional<Order> findByOrderToken(OrderToken orderToken) {
-        return orders.findByOrderToken(orderToken.value()).map(OrderMapper::toDomain);
     }
 
     @Override

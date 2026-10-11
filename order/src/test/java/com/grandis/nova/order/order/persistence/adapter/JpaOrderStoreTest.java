@@ -11,7 +11,6 @@ import com.grandis.nova.order.order.domain.repository.OrderWriter;
 import com.grandis.nova.order.order.persistence.entity.OrderItemJpaEntity;
 import com.grandis.nova.order.order.persistence.repository.OrderItemJpaRepository;
 import com.grandis.nova.order.order.vo.Money;
-import com.grandis.nova.order.order.vo.OrderToken;
 import com.grandis.nova.order.order.vo.Quantity;
 import com.grandis.nova.order.order.vo.ShipTo;
 import com.grandis.nova.order.support.OrderFixtures;
@@ -74,7 +73,7 @@ class JpaOrderStoreTest {
         OrderDraft draft = new OrderDraft(customerId, OrderSource.PREORDER, preorderId, OrderFixtures.preorderToken(preorderId),
                 new ShipTo("홍길동", "010-0000-0000", "04524", "세종대로 110", "3층"),
                 preorderCommand(customerId, preorderId, product).toDraft().lines());
-        Order placed = Order.place(draft, OrderToken.issue(), Instant.EPOCH);
+        Order placed = Order.place(draft, Instant.EPOCH);
         Order stored = writer.insert(placed);
         writer.insertItems(stored.id(), draft.lines());
         entityManager.clear();
@@ -87,16 +86,24 @@ class JpaOrderStoreTest {
         assertThat(loaded.id()).isEqualTo(stored.id());
         // 시계가 DB 해상도(마이크로초)라 저장하고 돌려준 시각과 DB 행의 시각이 같다(common:jpa StorageClock).
         assertThat(loaded.createdAt()).isEqualTo(stored.createdAt());
-        assertThat(reader.findByOrderToken(placed.orderToken())).contains(loaded);
         assertThat(reader.findByPreorderId(preorderId)).contains(loaded);
         assertThat(reader.findItems(stored.id())).map(OrderItem::line).containsExactlyElementsOf(draft.lines());
+    }
+
+    // 같이 도는 구버전은 order_token 을 NOT NULL 로 읽고 그 값으로 주문을 찾는다. 새 버전은 쓰지 않으므로 DB 가 id 의 문자열로 채운다.
+    @Test
+    void orderTokenIsFilledWithIdForOldVersion() {
+        Order stored = writer.insert(Order.place(preorderCommand(customerId, preorderId, product).toDraft(), Instant.EPOCH));
+
+        assertThat(jdbcTemplate.queryForObject("SELECT order_token FROM orders WHERE id = ?", String.class, bytes(stored.id())))
+                .isEqualTo(stored.id().toString());
     }
 
     // 저장된 주문을 다시 넣거나 결제 대기가 아닌 주문을 넣으면 상태 머신 · 이력을 거치지 않은 주문이 생긴다.
     @Test
     void insertAcceptsOnlyNewAwaitingPaymentOrders() {
-        Order placed = Order.place(preorderCommand(customerId, preorderId, product).toDraft(), OrderToken.issue(), Instant.EPOCH);
-        Order delivered = new Order(null, placed.orderToken(), customerId, OrderSource.PREORDER, preorderId,
+        Order placed = Order.place(preorderCommand(customerId, preorderId, product).toDraft(), Instant.EPOCH);
+        Order delivered = new Order(null, customerId, OrderSource.PREORDER, preorderId,
                 placed.preorderToken(), OrderStatus.DELIVERED, null, placed.totalAmount(), null, null, null, placed.shipTo(), 5, null, null);
         Order stored = writer.insert(placed);
 
@@ -116,7 +123,7 @@ class JpaOrderStoreTest {
     @Test
     void changeStatusDetachesOnlyTheChangedOrder() {
         OrderDraft draft = preorderCommand(customerId, preorderId, product).toDraft();
-        Order stored = writer.insert(Order.place(draft, OrderToken.issue(), Instant.EPOCH));
+        Order stored = writer.insert(Order.place(draft, Instant.EPOCH));
         writer.insertItems(stored.id(), draft.lines());
         entityManager.clear();
         assertThat(reader.findById(stored.id())).get().extracting(Order::status).isEqualTo(OrderStatus.AWAITING_PAYMENT);
@@ -131,7 +138,6 @@ class JpaOrderStoreTest {
     @Test
     void missingOrderIsEmpty() {
         assertThat(reader.findById(UUID.randomUUID())).isEmpty();
-        assertThat(reader.findByOrderToken(OrderToken.issue())).isEmpty();
         assertThat(reader.findByPreorderId(UUID.randomUUID())).isEmpty();
         assertThat(writer.lockStatus(UUID.randomUUID())).isEmpty();
     }
@@ -145,7 +151,7 @@ class JpaOrderStoreTest {
         OrderDraft draft = new OrderDraft(customerId, OrderSource.CART, null, null,
                 new ShipTo("홍길동", "010-0000-0000", "04524", "세종대로 110", null), List.of(
                 new OrderLine(stocked.productId(), option, new Quantity(3), Money.won(1_000), 2, Money.won(300), "상품", "옵션")));
-        Order stored = writer.insert(Order.place(draft, OrderToken.issue(), placedAt));
+        Order stored = writer.insert(Order.place(draft, placedAt));
         writer.insertItems(stored.id(), draft.lines());
         entityManager.flush();
         entityManager.clear();
@@ -153,13 +159,13 @@ class JpaOrderStoreTest {
         OrderLine line = reader.findItems(stored.id()).getFirst().line();
         assertThat(line.warrantyQuantity()).isEqualTo(2);
         assertThat(line.warrantyUnitPrice()).isEqualTo(Money.won(300));
-        Order future = writer.insert(Order.place(draft, OrderToken.issue(), Instant.now().plusSeconds(3_600)));
+        Order future = writer.insert(Order.place(draft, Instant.now().plusSeconds(3_600)));
         writer.insertItems(future.id(), draft.lines());
         UUID other = fixtures.customer();
         Order othersOrder = writer.insert(Order.place(new OrderDraft(other, OrderSource.CART, null, null, draft.shipTo(), draft.lines()),
-                OrderToken.issue(), placedAt));
+                placedAt));
         writer.insertItems(othersOrder.id(), draft.lines());
-        Order preorder = writer.insert(Order.place(preorderCommand(customerId, preorderId, product).toDraft(), OrderToken.issue(), placedAt));
+        Order preorder = writer.insert(Order.place(preorderCommand(customerId, preorderId, product).toDraft(), placedAt));
         writer.insertItems(preorder.id(), preorderCommand(customerId, preorderId, product).toDraft().lines());
         assertThat(reader.findUnpaidCartOrders(customerId)).as("기한이 지났든(과거) 아직이든(미래), 이 회원의 장바구니 주문만 — 결제 대기인 사전예약 주문 · 다른 회원 주문은 빠진다")
                 .extracting(Order::id).containsExactlyInAnyOrder(stored.id(), future.id());

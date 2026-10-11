@@ -3,7 +3,6 @@ package com.grandis.nova.order.order.domain.model;
 import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.vo.Money;
-import com.grandis.nova.order.order.vo.OrderToken;
 import com.grandis.nova.order.order.vo.ShipTo;
 
 import java.time.Duration;
@@ -36,7 +35,6 @@ import java.util.UUID;
  */
 public record Order(
         UUID id,
-        OrderToken orderToken,
         UUID customerId,
         OrderSource source,
         UUID preorderId,
@@ -54,7 +52,6 @@ public record Order(
 ) {
 
     public Order {
-        Objects.requireNonNull(orderToken, "orderToken");
         Objects.requireNonNull(customerId, "customerId");
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(status, "status");
@@ -99,7 +96,7 @@ public record Order(
      *
      * @param now 만든 시각 — 장바구니 주문의 기한 기준
      */
-    public static Order place(OrderDraft draft, OrderToken orderToken, Instant now) {
+    public static Order place(OrderDraft draft, Instant now) {
         Instant paymentDueAt = switch (draft.source()) {
             case PREORDER -> {
                 OrderLine line = draft.lines().getFirst();
@@ -117,7 +114,7 @@ public record Order(
                 yield null;
             }
         };
-        return new Order(null, orderToken, draft.customerId(), draft.source(), draft.preorderId(),
+        return new Order(null, draft.customerId(), draft.source(), draft.preorderId(),
                 draft.preorderToken(), initialStatus(draft.source()), null, draft.totalAmount(), paymentDueAt, null, null, draft.shipTo(),
                 OrderEvent.FIRST_SEQUENCE, null, null);
     }

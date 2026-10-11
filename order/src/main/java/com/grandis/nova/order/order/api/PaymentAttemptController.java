@@ -25,7 +25,7 @@ import java.util.UUID;
  * {@link BearerTokens#extract} 다.
  */
 @RestController
-@RequestMapping("/api/v1/orders/{orderToken}/payment-attempts")
+@RequestMapping("/api/v1/orders/{orderId}/payment-attempts")
 public class PaymentAttemptController {
 
     private final PreparePaymentService prepareService;
@@ -40,10 +40,10 @@ public class PaymentAttemptController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<PaymentAttemptResponse> prepare(@CurrentCustomerId UUID customerId,
-                                                       @PathVariable String orderToken,
+                                                       @PathVariable String orderId,
                                                        HttpServletRequest httpRequest) {
         String accessToken = BearerTokens.extract(httpRequest).orElse(null);
-        return ApiResponse.ok(PaymentAttemptResponse.of(prepareService.prepare(customerId, accessToken, orderToken)));
+        return ApiResponse.ok(PaymentAttemptResponse.of(prepareService.prepare(customerId, accessToken, orderId)));
     }
 
     /**
@@ -53,13 +53,13 @@ public class PaymentAttemptController {
      */
     @PostMapping("/{tossOrderId}/confirm")
     public ApiResponse<ConfirmPaymentResponse> confirm(@CurrentCustomerId UUID customerId,
-                                                       @PathVariable String orderToken,
+                                                       @PathVariable String orderId,
                                                        @PathVariable @Pattern(regexp = "[A-Za-z0-9_-]{6,64}")
                                                        String tossOrderId,
                                                        @Valid @RequestBody ConfirmPaymentRequest request,
                                                        HttpServletRequest httpRequest) {
         String accessToken = BearerTokens.extract(httpRequest).orElse(null);
-        return ApiResponse.ok(ConfirmPaymentResponse.of(confirmService.confirm(customerId, accessToken, orderToken,
+        return ApiResponse.ok(ConfirmPaymentResponse.of(confirmService.confirm(customerId, accessToken, orderId,
                 tossOrderId, request.paymentKey(), request.amount())));
     }
 }

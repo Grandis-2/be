@@ -172,7 +172,7 @@ public class PlaceCartOrderService {
             if (!canceled.applied()) {
                 if (canceled.status() == OrderStatus.AUTHORIZING) {
                     throw new BusinessException(OrderErrorCode.PAYMENT_IN_PROGRESS,
-                            Map.of("orderId", order.orderToken().value(), "status", canceled.status().name()));
+                            Map.of("orderId", order.id().toString(), "status", canceled.status().name()));
                 }
                 continue;
             }

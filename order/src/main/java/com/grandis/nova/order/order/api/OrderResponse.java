@@ -14,14 +14,14 @@ import java.util.UUID;
 /**
  * 주문 응답. 생성 · 조회가 함께 쓴다.
  *
- * 밖에는 공개 토큰(orderId)만 알린다 — 내부 id · 예약 내부 id 는 싣지 않는다.
+ * 주문 번호(orderId)는 orders.id 다. 예약 내부 id 는 싣지 않는다.
  * 결제 기한은 장바구니 주문만 싣는다(만든 때 + 10분). 사전예약 주문은 null — 그 기한은 preorder 상세가 계산해 준다.
  *
- * @param orderId      order_token
+ * @param orderId      orders.id
  * @param paymentDueAt 장바구니 주문의 결제 기한. 사전예약 주문은 null
  */
 public record OrderResponse(
-        String orderId,
+        UUID orderId,
         OrderStatus status,
         OrderSource source,
         BigDecimal totalAmount,
@@ -33,7 +33,7 @@ public record OrderResponse(
 
     public static OrderResponse of(Order order, List<OrderItem> items) {
         com.grandis.nova.order.order.vo.ShipTo shipTo = order.shipTo();
-        return new OrderResponse(order.orderToken().value(), order.status(), order.source(),
+        return new OrderResponse(order.id(), order.status(), order.source(),
                 order.totalAmount().amount(), order.paymentDueAt(), items.stream().map(item -> Item.of(item.line())).toList(),
                 new ShipTo(shipTo.name(), shipTo.phone(), shipTo.postalCode(), shipTo.line1(), shipTo.line2()),
                 order.createdAt());

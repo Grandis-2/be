@@ -10,7 +10,7 @@ import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderTransition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
-import com.grandis.nova.order.order.vo.OrderToken;
+import com.grandis.nova.order.order.vo.OrderIds;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.PessimisticLockingFailureException;
@@ -55,11 +55,11 @@ public class CancelCartOrderService {
      * @return 취소 뒤 상태(CANCELED)
      * @throws BusinessException 404 ORDER_NOT_FOUND(없음 · 남의 주문) · 409 PAYMENT_IN_PROGRESS · STATE_CONFLICT · 503
      */
-    public Order cancel(UUID customerId, String orderToken) {
+    public Order cancel(UUID customerId, String orderId) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("주문 취소는 트랜잭션 밖에서 불러야 한다 — 다시 하기가 새 트랜잭션이어야 한다");
         }
-        Order order = readTransaction.execute(status -> OrderToken.parse(orderToken).flatMap(orderReader::findByOrderToken)
+        Order order = readTransaction.execute(status -> OrderIds.parse(orderId).flatMap(orderReader::findById)
                         .filter(found -> found.customerId().equals(customerId)))
                 .orElseThrow(() -> new BusinessException(OrderErrorCode.ORDER_NOT_FOUND));
         // switch 식이라 출처가 늘면 컴파일러가 갈래를 요구한다(switch 문은 빠진 상수가 그대로 취소로 내려간다)
