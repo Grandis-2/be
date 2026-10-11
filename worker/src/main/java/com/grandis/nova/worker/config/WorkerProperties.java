@@ -78,6 +78,10 @@ public record WorkerProperties(
         public Concurrency {
             require(perMock >= 1 && mockMaxInstances >= 1 && ratePerSecond >= 1,
                     "concurrency 의 per-mock · mock-max-instances · rate-per-second 는 1 이상이어야 한다");
+            // 곱이 int 를 넘으면 상한이 0 이나 음수로 접힌다
+            require((long) perMock * mockMaxInstances <= Integer.MAX_VALUE
+                            && (long) ratePerSecond * mockMaxInstances <= Integer.MAX_VALUE,
+                    "concurrency 의 per-mock · rate-per-second 에 mock-max-instances 를 곱한 값이 너무 크다");
             require(min >= 1 && min <= initial && initial <= (long) perMock * mockMaxInstances,
                     "concurrency 는 1 <= min <= initial <= per-mock × mock-max-instances 여야 한다: min=" + min
                             + " initial=" + initial);
