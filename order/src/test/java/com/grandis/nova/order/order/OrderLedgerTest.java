@@ -358,6 +358,15 @@ class OrderLedgerTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    // 환불 실패 시각은 취소 중 · 취소된 주문에만 있다 — 원장을 거치지 않은 쓰기도 DB 가 막는다
+    @Test
+    void refundFailedAtOutsideCancelIsRejectedByDatabase() {
+        UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
+
+        assertThatThrownBy(() -> jdbcTemplate.update("UPDATE orders SET refund_failed_at = UTC_TIMESTAMP(6) WHERE id = ?", bytes(id)))
+                .hasMessageContaining("ck_order_refund_failed");
+    }
+
     // 승인 중일 때만 결제창 번호가 있다 — 원장을 거치지 않은 쓰기도 DB 가 막는다
     @Test
     void authorizingWithoutAttemptIsRejectedByDatabase() {

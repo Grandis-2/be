@@ -23,6 +23,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -85,15 +86,18 @@ class RefundResultsTest {
         assertThat(eventCount(order)).isEqualTo(5);
     }
 
-    // U1: 환불이 확정 실패하면 취소 중에 둔 채 실패를 이력에 한 줄 남긴다 — 같은 알림을 다시 받아도 한 줄이다
+    // U1: 환불이 확정 실패하면 취소 중에 둔 채 실패 시각을 적고 이력에 한 줄 남긴다 — 같은 알림을 다시 받아도 한 번이다
     @Test
     void failedRefundKeepsCancelingAndNotesOnce() {
         Order order = canceling();
 
         refundResults.settle(failed(order));
+        LocalDateTime firstNoted = refundFailedAtOf(order);
         refundResults.settle(failed(order));
 
         assertThat(statusOf(order)).isEqualTo("CANCELING");
+        assertThat(firstNoted).isNotNull();
+        assertThat(refundFailedAtOf(order)).isEqualTo(firstNoted);
         assertThat(lastEvent(order)).containsEntry("from_status", "CANCELING").containsEntry("to_status", "CANCELING")
                 .containsEntry("actor", "SYSTEM").containsEntry("reason", EventCause.REFUND_FAILED);
         assertThat(eventCount(order)).isEqualTo(5);
@@ -199,6 +203,11 @@ class RefundResultsTest {
 
     private String statusOf(Order order) {
         return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, bytes(order.id()));
+    }
+
+    private LocalDateTime refundFailedAtOf(Order order) {
+        return jdbcTemplate.queryForObject("SELECT refund_failed_at FROM orders WHERE id = ?", LocalDateTime.class,
+                bytes(order.id()));
     }
 
     private int eventCount(Order order) {

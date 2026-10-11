@@ -19,7 +19,6 @@ import com.grandis.nova.order.order.persistence.repository.OrderEventJpaReposito
 import com.grandis.nova.order.order.persistence.repository.OrderItemJpaRepository;
 import com.grandis.nova.order.order.persistence.repository.OrderJpaRepository;
 import com.grandis.nova.order.order.persistence.repository.OrderSpecifications;
-import com.grandis.nova.order.order.vo.EventCause;
 import com.grandis.nova.order.order.vo.OrderToken;
 import jakarta.persistence.EntityManager;
 import org.hibernate.exception.ConstraintViolationException;
@@ -116,6 +115,13 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     @Override
+    public int markRefundFailed(UUID orderId, Instant now) {
+        int updated = orders.markRefundFailed(orderId, now);
+        entityManager.detach(entityManager.getReference(OrderJpaEntity.class, orderId));
+        return updated;
+    }
+
+    @Override
     public int changeStatus(UUID orderId, OrderStatus from, OrderStatus to, String authorizingProviderOrderId,
                             Instant now) {
         int updated = orders.changeStatus(orderId, from, to, authorizingProviderOrderId, now);
@@ -133,13 +139,6 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     @Override
     public long eventSequence(UUID orderId) {
         return orders.findEventSequence(orderId);
-    }
-
-    @Override
-    public Optional<EventCause> lastEventCause(UUID orderId) {
-        return events.findFirstByOrderIdOrderByEventSequenceDesc(orderId)
-                .map(OrderMapper::toDomain)
-                .map(OrderEvent::cause);
     }
 
     @Override

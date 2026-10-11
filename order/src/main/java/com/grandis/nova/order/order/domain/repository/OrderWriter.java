@@ -5,7 +5,6 @@ import com.grandis.nova.order.order.domain.exception.OrderAlreadyPlacedException
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderEvent;
 import com.grandis.nova.order.order.domain.model.OrderLine;
-import com.grandis.nova.order.order.vo.EventCause;
 
 import java.time.Instant;
 import java.util.List;
@@ -54,12 +53,17 @@ public interface OrderWriter {
      */
     int cancelReleasingStock(UUID orderId, Instant now);
 
+    /**
+     * 취소 중인 주문에 환불 실패 시각을 적는다(ck_order_refund_failed). 이력 번호를 1 올린다.
+     * 이미 적혀 있으면 바꾸지 않는다 — 같은 실패는 한 번만 적는다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다.
+     *
+     * @return 바뀐 행 수(0 또는 1)
+     */
+    int markRefundFailed(UUID orderId, Instant now);
+
     /** 승인 중 결제창 번호. 승인 중이 아니면 비어 있다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다. */
     Optional<String> authorizingProviderOrderId(UUID orderId);
 
     /** 방금 올린 이력 번호. 같은 트랜잭션의 UPDATE 가 행을 잠그고 있어 다른 트랜잭션이 끼어들 수 없다. */
     long eventSequence(UUID orderId);
-
-    /** 마지막 이력의 "누가 · 왜". {@link #lockStatus} 로 행을 잠근 뒤에 부른다(같은 주문의 이력은 잠근 쪽만 늘린다). */
-    Optional<EventCause> lastEventCause(UUID orderId);
 }

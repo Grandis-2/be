@@ -144,22 +144,21 @@ public class OrderLedger {
     }
 
     /**
-     * 취소 중 환불이 확정 실패했다고 이력에 남긴다 — 상태는 그대로다(from = to = CANCELING). 환불이 끝나지 않았으니 취소로 끝낼 수 없고,
-     * 다시 여는 것은 사람의 판단이다(U1). 이력 번호는 전이처럼 1 올린다.
-     * 취소 중일 때만, 마지막 이력이 이미 환불 실패가 아닐 때만 남긴다 — 같은 알림을 다시 받아도 한 줄이다.
+     * 취소 중 환불이 확정 실패했다고 적는다 — 주문의 환불 실패 시각을 채우고 이력을 한 줄 남긴다. 상태는 그대로다(취소 중).
+     * 환불이 끝나지 않았으니 취소로 끝낼 수 없고, 다시 여는 것은 사람의 판단이다(U1). 이력 번호는 전이처럼 1 올린다.
+     * 취소 중이고 아직 적지 않았을 때만 적는다 — 같은 알림을 다시 받아도 한 번이다.
      *
-     * @return 남겼으면 true. 취소 중이 아니거나 이미 남겼으면 false
+     * @return 적었으면 true. 취소 중이 아니거나 이미 적었으면 false
      * @throws IllegalArgumentException 주문이 없다
      */
     public boolean noteRefundFailed(UUID orderId) {
         OrderStatus from = lock(orderId);
-        if (from != OrderStatus.CANCELING
-                || writer.lastEventCause(orderId).filter(EventCause::isRefundFailure).isPresent()) {
+        if (from != OrderStatus.CANCELING) {
             return false;
         }
         Instant now = clock.instant();
-        if (writer.changeStatus(orderId, from, from, null, now) != 1) {
-            throw new IllegalStateException("잠근 주문의 상태가 바뀌었다: orderId=" + orderId);
+        if (writer.markRefundFailed(orderId, now) == 0) {
+            return false;
         }
         writer.appendEvent(new OrderEvent(orderId, writer.eventSequence(orderId), from, from, EventCause.refundFailed(),
                 now));

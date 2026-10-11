@@ -79,11 +79,19 @@ class OrderTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void refundFailedAtOnlyWhileCancelingOrAfterCanceled() {
+        assertThat(refundFailed(OrderStatus.CANCELING)).isNotNull();
+        assertThat(refundFailed(OrderStatus.CANCELED)).isNotNull();
+        assertThatThrownBy(() -> refundFailed(OrderStatus.AWAITING_CONFIRMATION))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     // 되살린 행에도 ck_order_preorder_token 규칙을 건다.
     @Test
     void constructorRejectsPreorderOrderWithoutPreorderToken() {
         assertThatThrownBy(() -> new Order(TestIds.id(1), TOKEN, TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), null, OrderStatus.AWAITING_PAYMENT, null,
-                Money.won(1000), null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH))
+                Money.won(1000), null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("preorderToken");
     }
@@ -98,7 +106,7 @@ class OrderTest {
     @Test
     void toStringCarriesNoPersonalData() {
         Order order = new Order(TestIds.id(1), TOKEN, TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, OrderStatus.AWAITING_PAYMENT, null,
-                Money.won(1000), null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH);
+                Money.won(1000), null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH);
 
         assertThat(order.toString())
                 .contains("status=AWAITING_PAYMENT")
@@ -122,10 +130,10 @@ class OrderTest {
         assertThatThrownBy(() -> order(OrderSource.PREORDER, TestIds.id(7), OrderStatus.AUTHORIZING, null, null, 2))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new Order(TestIds.id(1), TOKEN, TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID,
-                OrderStatus.AWAITING_PAYMENT, "attempt-0001", Money.won(1000), null, null, SHIP_TO, 1,
+                OrderStatus.AWAITING_PAYMENT, "attempt-0001", Money.won(1000), null, null, null, SHIP_TO, 1,
                 Instant.EPOCH, Instant.EPOCH)).isInstanceOf(IllegalArgumentException.class);
         assertThat(new Order(TestIds.id(1), TOKEN, TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, OrderStatus.AUTHORIZING,
-                "attempt-0001", Money.won(1000), null, null, SHIP_TO, 2, Instant.EPOCH, Instant.EPOCH)
+                "attempt-0001", Money.won(1000), null, null, null, SHIP_TO, 2, Instant.EPOCH, Instant.EPOCH)
                 .authorizingProviderOrderId()).isEqualTo("attempt-0001");
     }
 
@@ -134,8 +142,13 @@ class OrderTest {
     private static Order order(OrderSource source, UUID preorderId, OrderStatus status, Instant paymentDueAt,
                                Instant stockReleasedAt, long eventSequence) {
         String preorderToken = source == OrderSource.PREORDER ? PREORDER_UUID : null;
-        return new Order(TestIds.id(1), TOKEN, TestIds.id(1), source, preorderId, preorderToken, status, null, Money.won(1000), paymentDueAt, stockReleasedAt,
+        return new Order(TestIds.id(1), TOKEN, TestIds.id(1), source, preorderId, preorderToken, status, null, Money.won(1000), paymentDueAt, stockReleasedAt, null,
                 SHIP_TO, eventSequence, Instant.EPOCH, Instant.EPOCH);
+    }
+
+    private static Order refundFailed(OrderStatus status) {
+        return new Order(TestIds.id(1), TOKEN, TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, status, null,
+                Money.won(1000), null, null, Instant.EPOCH, SHIP_TO, 3, Instant.EPOCH, Instant.EPOCH);
     }
 
     @Test
