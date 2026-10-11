@@ -1,0 +1,12 @@
+// CORS 공통 규칙. 프론트(grandis-nova.link · www)와 API(api.grandis-nova.link)가 오리진이 달라 브라우저 호출에 필요하다.
+// 서블릿(common:security 를 쓰는 서비스)과 WebFlux(waitingroom)가 같은 규칙을 쓰도록 둘 다 가진 spring-web 에만 기댄다.
+apply plugin: 'java-library'
+
+dependencies {
+    api 'org.springframework:spring-web'
+    implementation 'org.springframework.boot:spring-boot-autoconfigure'
+
+    // 두 스택의 컨텍스트로 소스 빈을 확인한다
+    testImplementation 'jakarta.servlet:jakarta.servlet-api'
+    testImplementation 'org.springframework.boot:spring-boot-starter-webflux'
+}

@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -329,5 +330,58 @@ class SecurityChainTest {
                 .andExpect(header().string("X-Content-Type-Options", "nosniff"))
                 .andExpect(header().string("X-Frame-Options", "DENY"));
         // HSTS 는 HTTPS 응답에만 붙는다(Spring Security 문서, RFC 6797). MockMvc 는 http 라 없어야 정상 — CloudFront/ALB 뒤 TLS 종료 환경은 이식 때 확인
+    }
+
+    // ── CORS: 프론트(grandis-nova.link · www)와 API 의 오리진이 다르다. 허용 목록은 common:cors 의 기본값 ──
+    private static final String FRONT = "https://grandis-nova.link";
+
+    @Test
+    @DisplayName("CORS: 허용 오리진의 사전 요청은 토큰 없이도 200 — 인증 전에 답하고 자격 증명 · 헤더를 허용한다")
+    void corsPreflightFromFrontPassesWithoutToken() throws Exception {
+        mvc.perform(options("/api/v1/me").header("Origin", FRONT)
+                        .header("Access-Control-Request-Method", "PATCH")
+                        .header("Access-Control-Request-Headers", "authorization,content-type,idempotency-key"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin", FRONT))
+                .andExpect(header().string("Access-Control-Allow-Credentials", "true"))
+                .andExpect(header().string("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE"))
+                .andExpect(header().string("Access-Control-Allow-Headers", "authorization, content-type, idempotency-key"))
+                .andExpect(header().string("Access-Control-Max-Age", "3600"));
+    }
+
+    @Test
+    @DisplayName("CORS: 목록 밖 오리진 · 허용하지 않은 헤더의 사전 요청은 403 이고 허용 헤더가 없다")
+    void corsPreflightFromOtherOriginIsRejected() throws Exception {
+        mvc.perform(options("/api/v1/me").header("Origin", "https://evil.example")
+                        .header("Access-Control-Request-Method", "GET"))
+                .andExpect(status().isForbidden())
+                .andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
+        mvc.perform(options("/api/v1/me").header("Origin", FRONT)
+                        .header("Access-Control-Request-Method", "GET")
+                        .header("Access-Control-Request-Headers", "x-unknown"))
+                .andExpect(status().isForbidden())
+                .andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
+    }
+
+    @Test
+    @DisplayName("CORS: 허용 오리진의 실제 요청은 응답에 오리진 · 노출 헤더가 붙고, 401 에도 붙어 프론트가 본문(이유)을 읽는다")
+    void corsActualRequestCarriesHeadersEvenOn401() throws Exception {
+        mvc.perform(get("/api/v1/me").header("Origin", FRONT).header(H, BearerTokens.value(user)))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin", FRONT))
+                .andExpect(header().string("Access-Control-Allow-Credentials", "true"))
+                .andExpect(header().string("Access-Control-Expose-Headers", "Location, Retry-After, X-Idempotent-Replay, X-Request-Id"));
+        mvc.perform(get("/api/v1/me").header("Origin", "https://www.grandis-nova.link"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string("Access-Control-Allow-Origin", "https://www.grandis-nova.link"))
+                .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
+    }
+
+    @Test
+    @DisplayName("CORS: 목록 밖 오리진의 실제 요청은 403 으로 막고 컨트롤러에 닿지 않는다")
+    void corsActualRequestFromOtherOriginIsRejected() throws Exception {
+        mvc.perform(get("/api/v1/me").header("Origin", "https://evil.example").header(H, BearerTokens.value(user)))
+                .andExpect(status().isForbidden())
+                .andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
     }
 }

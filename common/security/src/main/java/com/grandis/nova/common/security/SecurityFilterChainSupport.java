@@ -1,5 +1,7 @@
 package com.grandis.nova.common.security;
 
+import com.grandis.nova.common.cors.CorsAutoConfiguration;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -8,6 +10,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.stereotype.Component;
+import org.springframework.web.cors.CorsConfigurationSource;
 import tools.jackson.databind.ObjectMapper;   // Boot 4 = Jackson 3 (tools.jackson)
 
 /**
@@ -19,7 +22,7 @@ import tools.jackson.databind.ObjectMapper;   // Boot 4 = Jackson 3 (tools.jacks
  *
  * - 세션 없음(STATELESS). 인증은 JWT 로만.
  * - CSRF 끔. 액세스가 쿠키가 아니라 헤더라 브라우저가 자동으로 붙이지 않는다.
- * - CORS 끔. 프론트와 API 가 한 도메인이다. 도메인이 갈리면 그때 켠다.
+ * - CORS 켬. 프론트와 API 의 도메인이 갈렸다. 규칙은 common:cors 의 빈 하나 — 서비스마다 고치지 않는다.
  * - 401/403 은 JsonAuthFailureHandlers 가 api-spec 봉투로.
  * - JwtAuthenticationFilter 를 UsernamePasswordAuthenticationFilter 앞에. 필터 인스턴스는 여기서만 만든다(빈 아님).
  * - 메서드 보안(@EnableMethodSecurity)은 쓰지 않는다. 권한 규칙은 URL 로만 — api-spec 이 경로별로 권한을 적었고,
@@ -32,13 +35,16 @@ public class SecurityFilterChainSupport {
     private final RevocationChecker revocationChecker;
     private final RevocationFailurePolicy policy;
     private final JsonAuthFailureHandlers handlers;
+    private final CorsConfigurationSource cors;
 
     public SecurityFilterChainSupport(JwtTokenProvider provider, RevocationChecker revocationChecker,
-                                      RevocationFailurePolicy policy, ObjectMapper objectMapper) {
+                                      RevocationFailurePolicy policy, ObjectMapper objectMapper,
+                                      @Qualifier(CorsAutoConfiguration.SOURCE_BEAN) CorsConfigurationSource cors) {
         this.provider = provider;
         this.revocationChecker = revocationChecker;
         this.policy = policy;
         this.handlers = new JsonAuthFailureHandlers(objectMapper);
+        this.cors = cors;
     }
 
     public SecurityFilterChain build(
@@ -47,7 +53,7 @@ public class SecurityFilterChainSupport {
             throws Exception {
         return http
                 .csrf(AbstractHttpConfigurer::disable)
-                .cors(AbstractHttpConfigurer::disable)
+                .cors(c -> c.configurationSource(cors))
                 .formLogin(AbstractHttpConfigurer::disable)
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .logout(AbstractHttpConfigurer::disable)
