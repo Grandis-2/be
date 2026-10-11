@@ -50,8 +50,8 @@ public final class BatchQueueConsumer implements SmartLifecycle {
     private final AtomicInteger inFlight = new AtomicInteger();
     private final BlockingQueue<Message> deletions = new LinkedBlockingQueue<>();
     private ExecutorService handlers;
-    private Thread receiver;
-    private Thread deleter;
+    private volatile Thread receiver;
+    private volatile Thread deleter;
     private volatile boolean running;
     private volatile boolean paused;
 
@@ -72,7 +72,7 @@ public final class BatchQueueConsumer implements SmartLifecycle {
 
     @Override
     public synchronized void start() {
-        if (running) {
+        if (receiver != null) {
             return;
         }
         running = true;
@@ -89,7 +89,7 @@ public final class BatchQueueConsumer implements SmartLifecycle {
      */
     @Override
     public synchronized void stop() {
-        if (!running) {
+        if (receiver == null) {
             return;
         }
         running = false;
@@ -111,10 +111,13 @@ public final class BatchQueueConsumer implements SmartLifecycle {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        } finally {
+            receiver = null;
+            deleter = null;
         }
     }
 
-    /** 멈추지 않았고 받기 · 삭제 작업이 모두 살아 있다. */
+    /** 멈추지 않았고 받기 · 삭제 작업이 모두 살아 있다. 예상 못 한 오류로 스스로 끝났으면 false 다. */
     @Override
     public boolean isRunning() {
         Thread receiving = receiver;
@@ -144,9 +147,15 @@ public final class BatchQueueConsumer implements SmartLifecycle {
         try {
             loop.run();
         } catch (Throwable e) {
-            log.error("{} 큐 소비 작업이 예상 못 한 오류로 끝났다 — 다시 띄우지 않는다 worker={}",
-                    settings.queue(), Thread.currentThread().getName(), e);
+            abort(e);
         }
+    }
+
+    /** 이어 가도 또 실패할 오류(메모리 부족 등)다. 받기 · 삭제 중 하나만 남아 돌지 않게 새로 받지 않고, 다시 띄우지 않는다. */
+    private void abort(Throwable e) {
+        running = false;
+        log.error("{} 큐 소비 작업이 예상 못 한 오류로 끝났다 — 다시 띄우지 않는다 worker={}",
+                settings.queue(), Thread.currentThread().getName(), e);
     }
 
     private void receiveLoop() {
@@ -193,7 +202,7 @@ public final class BatchQueueConsumer implements SmartLifecycle {
         }
     }
 
-    /** 한 건이 낸 예외 · Error 는 그 메시지에서 끝낸다(가시성 시간 뒤 다시 보인다). 메모리 부족만 다시 던진다. */
+    /** 한 건이 낸 예외 · Error 는 그 메시지에서 끝낸다(가시성 시간 뒤 다시 보인다). 메모리 부족이면 소비를 끝낸다. */
     private void process(String queueUrl, Message message) {
         try {
             MessageOutcome outcome = handler.handle(message);
@@ -204,7 +213,7 @@ public final class BatchQueueConsumer implements SmartLifecycle {
                 }
             }
         } catch (OutOfMemoryError e) {
-            throw e;
+            abort(e);
         } catch (Exception | Error e) {
             log.warn("{} 메시지를 끝내지 못했다 — 가시성 시간 뒤 다시 보인다 messageId={}",
                     settings.queue(), message.messageId(), e);
