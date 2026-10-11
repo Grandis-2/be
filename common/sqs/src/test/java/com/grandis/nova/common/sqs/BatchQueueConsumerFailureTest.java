@@ -140,6 +140,33 @@ class BatchQueueConsumerFailureTest {
     }
 
     @Test
+    void 처리_중_메모리가_부족하면_새로_받지_않고_돌고_있다고_하지_않는다() {
+        queueReturnsOnce(message("oom"));
+        consumer = consumer(() -> 10, message -> {
+            throw new OutOfMemoryError("흉내");
+        });
+
+        consumer.start();
+
+        await().atMost(TIMEOUT).until(() -> !consumer.isRunning() && consumer.inFlight() == 0);
+        assertThat(receivingStopped()).isTrue();
+    }
+
+    /** 지우는 작업만 죽고 받기가 남으면 지우지 못하는 메시지를 끝없이 다시 처리한다. */
+    @Test
+    @SuppressWarnings("unchecked")
+    void 삭제_작업이_끝나면_받기도_멈춘다() {
+        queueReturnsOnce(message("a"));
+        given(sqs.deleteMessageBatch(any(Consumer.class))).willThrow(new OutOfMemoryError("흉내"));
+        consumer = consumer(() -> 10, message -> MessageOutcome.delete());
+
+        consumer.start();
+
+        await().atMost(TIMEOUT).until(() -> !consumer.isRunning());
+        assertThat(receivingStopped()).isTrue();
+    }
+
+    @Test
     void 돌려보낼_시간은_초로_올려_넘긴다() {
         queueReturnsOnce(message("a"));
         consumer = consumer(() -> 10, message -> MessageOutcome.returnAfter(Duration.ofMillis(1500)));
@@ -199,6 +226,14 @@ class BatchQueueConsumerFailureTest {
             deleted.add(builder.build().entries());
             return response;
         }).given(sqs).deleteMessageBatch(any(Consumer.class));
+    }
+
+    /** 진행 중이던 받기 한 번이 끝난 뒤로는 더 받지 않는다. */
+    private boolean receivingStopped() {
+        await().pollDelay(Duration.ofMillis(200)).until(() -> true);
+        int before = receives.get();
+        await().pollDelay(Duration.ofMillis(300)).until(() -> true);
+        return receives.get() == before;
     }
 
     private static Message message(String body) {
