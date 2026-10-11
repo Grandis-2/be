@@ -115,7 +115,7 @@ class ReviewApiTest {
     }
 
     @Test
-    @DisplayName("배송 완료 전 · 사전예약 주문 · 사전예약 상품이면 409 REVIEW_NOT_ALLOWED 이고 저장하지 않는다")
+    @DisplayName("배송 완료 전 · 사전예약 주문 · 사전예약 상품 · 드로우 당첨 주문이면 409 REVIEW_NOT_ALLOWED 이고 저장하지 않는다")
     void refusesWhenNotEligible() throws Exception {
         UUID shipped = nextId();
         stubItem(shipped, productId, "SHIPPED", "BUY_NOW");
@@ -130,10 +130,14 @@ class ReviewApiTest {
         stubItem(onPreorderProduct, preorderProduct, "DELIVERED", "CART");
         expectError(write(customerId, onPreorderProduct, 5, "좋아요"), HttpStatus.CONFLICT, "REVIEW_NOT_ALLOWED");
 
+        UUID drawOrder = nextId();
+        stubItem(drawOrder, productId, "DELIVERED", "DRAW");
+        expectError(write(customerId, drawOrder, 5, "좋아요"), HttpStatus.CONFLICT, "REVIEW_NOT_ALLOWED");
+
         UUID delivered = deliveredItem(productId);
         write(customerId, delivered, 5, "좋아요").andExpect(status().isCreated());   // 대조군 — 같은 상품 · 배송 완료 · 일반 주문
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM product_reviews WHERE customer_id = ?", Long.class, UuidBinary.toBytes(customerId)))
-                .as("거절된 셋은 남지 않았다").isEqualTo(1L);
+                .as("거절된 넷은 남지 않았다").isEqualTo(1L);
     }
 
     @Test
