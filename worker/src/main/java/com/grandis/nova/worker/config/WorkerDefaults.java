@@ -25,7 +25,9 @@ class WorkerDefaults implements EnvironmentPostProcessor, Ordered {
             "management.endpoints.web.exposure.include", "health,prometheus",
             "management.endpoint.health.probes.enabled", "true",
             // readiness 는 앱의 준비 상태만 본다. 외부 mock · SQS 를 넣으면 그쪽 장애 한 번에 모든 태스크가 비정상이 된다
-            "management.endpoint.health.group.readiness.include", "readinessState");
+            "management.endpoint.health.group.readiness.include", "readinessState",
+            // mock 지연은 p95 · p99 를 보려고 히스토그램으로 낸다
+            "management.metrics.distribution.percentiles-histogram.worker.mock.latency", "true");
 
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
