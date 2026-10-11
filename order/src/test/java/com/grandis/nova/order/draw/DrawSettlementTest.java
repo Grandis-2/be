@@ -114,9 +114,10 @@ class DrawSettlementTest {
         UUID winner = fixtures.customer();
         UUID entry = entry(draw, winner, "PAID", null);
         settlement.close(draw);
-        String token = jdbcTemplate.queryForObject("SELECT order_token FROM orders WHERE id = ?", String.class, (Object) wonOrder(entry));
+        String orderId = jdbcTemplate.queryForObject("SELECT BIN_TO_UUID(won_order_id) FROM draw_entries WHERE id = ?", String.class,
+                (Object) bytes(entry));
 
-        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/v1/orders/{token}/cancel", token)
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/v1/orders/{orderId}/cancel", orderId)
                         .with(TestAuth.customer(winner)))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.message").value("드로우 당첨 주문은 취소할 수 없습니다."));

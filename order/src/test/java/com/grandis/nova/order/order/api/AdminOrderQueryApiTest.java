@@ -23,7 +23,6 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
-import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
@@ -77,16 +76,16 @@ class AdminOrderQueryApiTest {
                 .andReturn().getResponse().getContentAsString();
 
         List<String> ids = JsonPath.read(body, "$.data.items[*].orderId");
-        assertThat(ids).contains(others.orderToken().value(), mine.orderToken().value());
-        assertThat(ids.indexOf(mine.orderToken().value())).isLessThan(ids.indexOf(others.orderToken().value()));
+        assertThat(ids).contains(others.id().toString(), mine.id().toString());
+        assertThat(ids.indexOf(mine.id().toString())).isLessThan(ids.indexOf(others.id().toString()));
         List<String> createdAts = JsonPath.read(body, "$.data.items[*].createdAt");
         assertThat(createdAts.stream().map(Instant::parse).toList())
                 .isSortedAccordingTo(Comparator.reverseOrder());
         assertThat(JsonPath.<List<String>>read(body, "$.data.items[?(@.orderId == '%s')].customerId"
-                .formatted(mine.orderToken().value())))
+                .formatted(mine.id().toString())))
                 .containsExactly(customerId.toString());
         assertThat(JsonPath.<List<String>>read(body, "$.data.items[?(@.orderId == '%s')].items[0].productTitle"
-                .formatted(mine.orderToken().value()))).containsExactly(OrderFixtures.PRODUCT_TITLE);
+                .formatted(mine.id().toString()))).containsExactly(OrderFixtures.PRODUCT_TITLE);
     }
 
     @Test
@@ -101,8 +100,8 @@ class AdminOrderQueryApiTest {
                 .andExpect(jsonPath("$.data.items[*].status", everyItem(is("CANCELED"))))
                 .andReturn().getResponse().getContentAsString();
         assertThat(JsonPath.<List<String>>read(byStatus, "$.data.items[*].orderId"))
-                .contains(canceled.orderToken().value())
-                .doesNotContain(awaiting.orderToken().value());
+                .contains(canceled.id().toString())
+                .doesNotContain(awaiting.id().toString());
 
         String bySource = mockMvc.perform(get("/api/v1/admin/orders").param("status", "AWAITING_PAYMENT")
                         .param("source", "PREORDER").param("size", "" + PageSizes.MAX).with(admin()))
@@ -110,7 +109,7 @@ class AdminOrderQueryApiTest {
                 .andExpect(jsonPath("$.data.items[*].source", everyItem(is("PREORDER"))))
                 .andReturn().getResponse().getContentAsString();
         assertThat(JsonPath.<List<String>>read(bySource, "$.data.items[*].orderId"))
-                .contains(awaiting.orderToken().value());
+                .contains(awaiting.id().toString());
 
         String otherSource = mockMvc.perform(get("/api/v1/admin/orders").param("source", "BUY_NOW")
                         .param("size", "" + PageSizes.MAX).with(admin()))
@@ -118,7 +117,7 @@ class AdminOrderQueryApiTest {
                 .andExpect(jsonPath("$.data.items[*].source", everyItem(is("BUY_NOW"))))
                 .andReturn().getResponse().getContentAsString();
         assertThat(JsonPath.<List<String>>read(otherSource, "$.data.items[*].orderId"))
-                .doesNotContain(canceled.orderToken().value(), awaiting.orderToken().value());
+                .doesNotContain(canceled.id().toString(), awaiting.id().toString());
     }
 
     @Test
@@ -137,16 +136,13 @@ class AdminOrderQueryApiTest {
     }
 
     @Test
-    void detailAddsCustomerAndInternalNote() throws Exception {
+    void detailAddsCustomer() throws Exception {
         Order order = orders.place(customerId);
-        // 관리자 메모 수정 API 는 이번 범위가 아니다. 칸이 실리는지만 본다.
-        jdbcTemplate.update("UPDATE orders SET internal_note = ? WHERE id = ?", "연락 요망", bytes(order.id()));
 
-        mockMvc.perform(get("/api/v1/admin/orders/" + order.orderToken().value()).with(admin()))
+        mockMvc.perform(get("/api/v1/admin/orders/" + order.id().toString()).with(admin()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.orderId").value(order.orderToken().value()))
+                .andExpect(jsonPath("$.data.orderId").value(order.id().toString()))
                 .andExpect(jsonPath("$.data.customerId").value(customerId.toString()))
-                .andExpect(jsonPath("$.data.internalNote").value("연락 요망"))
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.events", hasSize(1)))
                 .andExpect(jsonPath("$.data.id").doesNotExist())
@@ -166,7 +162,7 @@ class AdminOrderQueryApiTest {
 
         mockMvc.perform(get("/api/v1/admin/orders").with(TestAuth.customer(customerId)))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(get("/api/v1/admin/orders/" + order.orderToken().value())
+        mockMvc.perform(get("/api/v1/admin/orders/" + order.id().toString())
                         .with(TestAuth.customer(customerId)))
                 .andExpect(status().isForbidden());
     }

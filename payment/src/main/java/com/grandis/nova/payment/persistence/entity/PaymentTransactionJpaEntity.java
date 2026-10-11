@@ -75,6 +75,9 @@ public class PaymentTransactionJpaEntity {
     @Column(updatable = false, length = 500)
     private String lastErrorMessage;
 
+    @Column(updatable = false, length = 30)
+    private String lastUnknownReason;
+
     @Column(updatable = false)
     private Instant requestedAt;
 
@@ -163,6 +166,10 @@ public class PaymentTransactionJpaEntity {
 
     public String getLastErrorMessage() {
         return lastErrorMessage;
+    }
+
+    public String getLastUnknownReason() {
+        return lastUnknownReason;
     }
 
     public Instant getRequestedAt() {

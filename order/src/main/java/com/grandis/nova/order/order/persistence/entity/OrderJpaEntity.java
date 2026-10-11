@@ -23,9 +23,6 @@ import java.util.UUID;
 @Table(name = "orders")
 public class OrderJpaEntity extends BaseEntity {
 
-    @Column(nullable = false, updatable = false, length = 36)
-    private String orderToken;
-
     @Column(nullable = false, updatable = false)
     private UUID customerId;
 
@@ -56,6 +53,9 @@ public class OrderJpaEntity extends BaseEntity {
     @Column(updatable = false)
     private Instant stockReleasedAt;
 
+    @Column(updatable = false)
+    private Instant refundFailedAt;
+
     @Column(name = "ship_to_name", nullable = false, updatable = false, length = 50)
     private String shipToName;
 
@@ -71,20 +71,16 @@ public class OrderJpaEntity extends BaseEntity {
     @Column(name = "ship_to_line2", updatable = false, length = 200)
     private String shipToLine2;
 
-    @Column(updatable = false, columnDefinition = "text")
-    private String internalNote;
-
     @Column(nullable = false, updatable = false)
     private long eventSequence;
 
     protected OrderJpaEntity() {
     }
 
-    public OrderJpaEntity(String orderToken, UUID customerId, OrderSource source, UUID preorderId, String preorderToken,
+    public OrderJpaEntity(UUID customerId, OrderSource source, UUID preorderId, String preorderToken,
                           OrderStatus status, BigDecimal totalAmount, Instant paymentDueAt, Instant stockReleasedAt,
                           String shipToName, String shipToPhone, String shipToPostalCode, String shipToLine1,
-                          String shipToLine2, String internalNote, long eventSequence) {
-        this.orderToken = orderToken;
+                          String shipToLine2, long eventSequence) {
         this.customerId = customerId;
         this.source = source;
         this.preorderId = preorderId;
@@ -98,12 +94,7 @@ public class OrderJpaEntity extends BaseEntity {
         this.shipToPostalCode = shipToPostalCode;
         this.shipToLine1 = shipToLine1;
         this.shipToLine2 = shipToLine2;
-        this.internalNote = internalNote;
         this.eventSequence = eventSequence;
-    }
-
-    public String getOrderToken() {
-        return orderToken;
     }
 
     public UUID getCustomerId() {
@@ -142,6 +133,10 @@ public class OrderJpaEntity extends BaseEntity {
         return stockReleasedAt;
     }
 
+    public Instant getRefundFailedAt() {
+        return refundFailedAt;
+    }
+
     public String getShipToName() {
         return shipToName;
     }
@@ -160,10 +155,6 @@ public class OrderJpaEntity extends BaseEntity {
 
     public String getShipToLine2() {
         return shipToLine2;
-    }
-
-    public String getInternalNote() {
-        return internalNote;
     }
 
     public long getEventSequence() {

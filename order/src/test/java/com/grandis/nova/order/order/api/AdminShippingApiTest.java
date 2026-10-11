@@ -95,7 +95,7 @@ class AdminShippingApiTest {
         for (String[] step : steps) {
             advance(order, step[0], step[2])
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.data.orderId").value(order.orderToken().value()))
+                    .andExpect(jsonPath("$.data.orderId").value(order.id().toString()))
                     .andExpect(jsonPath("$.data.status").value(step[1]))
                     .andExpect(jsonPath("$.data.applied").value(true));
         }
@@ -218,7 +218,7 @@ class AdminShippingApiTest {
     void customerTokenIsForbidden() throws Exception {
         Order order = paidOrder();
 
-        mockMvc.perform(post("/api/v1/admin/orders/{orderId}/shipping-steps", order.orderToken().value())
+        mockMvc.perform(post("/api/v1/admin/orders/{orderId}/shipping-steps", order.id().toString())
                         .with(TestAuth.customer(customerId))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"step\":\"PREPARATION_STARTED\",\"reason\":\"사유\"}"))
@@ -232,7 +232,7 @@ class AdminShippingApiTest {
         Order order = paidOrder();
         advance(order, "PREPARATION_STARTED", "주소 재확인 필요 — 고객 통화 예정").andExpect(status().isOk());
 
-        mockMvc.perform(get("/api/v1/orders/{orderId}", order.orderToken().value())
+        mockMvc.perform(get("/api/v1/orders/{orderId}", order.id().toString())
                         .with(TestAuth.customer(customerId)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.events", hasSize(4)))
@@ -240,7 +240,7 @@ class AdminShippingApiTest {
                 .andExpect(jsonPath("$.data.events[3].actor").value("ADMIN"))
                 .andExpect(jsonPath("$.data.events[3].toStatus").value("PREPARING_ITEMS"))
                 .andExpect(jsonPath("$.data.events[3].reason").isEmpty());
-        mockMvc.perform(get("/api/v1/admin/orders/{orderId}", order.orderToken().value()).with(admin()))
+        mockMvc.perform(get("/api/v1/admin/orders/{orderId}", order.id().toString()).with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.events[3].reason").value("주소 재확인 필요 — 고객 통화 예정"));
     }
@@ -334,7 +334,7 @@ class AdminShippingApiTest {
     }
 
     private ResultActions send(Order order, String body) throws Exception {
-        return mockMvc.perform(post("/api/v1/admin/orders/{orderId}/shipping-steps", order.orderToken().value())
+        return mockMvc.perform(post("/api/v1/admin/orders/{orderId}/shipping-steps", order.id().toString())
                 .with(admin())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body));

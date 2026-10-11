@@ -9,7 +9,6 @@ import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.vo.Money;
-import com.grandis.nova.order.order.vo.OrderToken;
 import com.grandis.nova.order.order.vo.ShipTo;
 import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
@@ -58,10 +57,10 @@ class PaymentConfirmerTest {
     static final String PAYMENT = "tgen_confirmer_test_20261002";
     // 전달할 액세스 토큰 자리(접두어 없음). 실제 토큰 모양이 아니다.
     static final String SESSION = "payment-confirm-test-user-7";
-    static final Order ORDER = new Order(TestIds.id(81), OrderToken.issue(), TestIds.id(7), OrderSource.PREORDER,
+    static final Order ORDER = new Order(TestIds.id(81), TestIds.id(7), OrderSource.PREORDER,
             TestIds.id(5), "9f1c2d3e-0000-4000-8000-000000000001", OrderStatus.AUTHORIZING, PROVIDER_ORDER_ID,
-            new Money(new BigDecimal("1250000")), null, null,
-            new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), null, 2, Instant.EPOCH,
+            new Money(new BigDecimal("1250000")), null, null, null,
+            new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 2, Instant.EPOCH,
             Instant.EPOCH);
 
     MockRestServiceServer server;

@@ -18,7 +18,7 @@ import java.time.Duration;
  * 토스 승인 · 취소 결과 → 결제 도메인 사건. 결제 도메인이 토스를 모르게 둘을 잇는 곳은 여기 하나다(에픽 계획서 §4).
  * 성공 응답의 대조(금액 · 시각)는 명령마다 달라 승인은 여기({@link #approved}), 환불은 RefundRecovery 가 한다.
  *
- * 결과 불명은 코드 칸에 토스 코드(없으면 우리가 붙인 코드), 문구 칸에 늘 불명 사유({@link UnknownReason}) 이름을 적는다 —
+ * 결과 불명은 코드 칸에 토스 코드(없으면 사유 이름)를, 문구 칸과 불명 사유 칸에 사유({@link UnknownReason}) 이름을 적는다 —
  * 복구(CaptureRecovery · RefundRecovery)가 {@link #resolutionOf} 로 푸는 방법(같은 키 재전송 · 조회)을 고른다.
  * 복구가 조회로 확정한 실패는 코드 칸에 {@code LOOKUP_<토스 상태>} 를 적는다 — 토스 코드가 아니라 조회 결과다.
  */
@@ -59,7 +59,7 @@ public final class TossOutcomes {
                     new Outcome.InProgress(new ProviderError(transientError.code(), transientError.message()), RETRY_AFTER);
             case TossCommandResult.Processing processing ->
                     new Outcome.InProgress(new ProviderError(processing.code(), null), RETRY_AFTER);
-            case TossCommandResult.Unknown unknown -> new Outcome.Unknown(new ProviderError(
+            case TossCommandResult.Unknown unknown -> new Outcome.Unknown(ProviderError.unknown(
                     unknown.code() == null ? unknown.reason().name() : unknown.code(), unknown.reason().name()));
         };
     }
@@ -102,12 +102,12 @@ public final class TossOutcomes {
         if (payment.totalAmount() != held.amount().amount().longValueExact()) {
             log.error("토스 승인 금액이 거래 금액과 다르다 — 결과 불명으로 둔다 transactionId={} orderId={} totalAmount={} amount={}",
                     held.id(), held.providerOrderId().value(), payment.totalAmount(), held.amount().amount());
-            return new Outcome.Unknown(new ProviderError(AMOUNT_MISMATCH, UnknownReason.MISMATCHED_RESPONSE.name()));
+            return new Outcome.Unknown(ProviderError.unknown(AMOUNT_MISMATCH, UnknownReason.MISMATCHED_RESPONSE.name()));
         }
         if (payment.approvedAt() == null) {
             log.error("토스 승인 응답에 승인 시각이 없다 — 결과 불명으로 둔다 transactionId={} orderId={}",
                     held.id(), held.providerOrderId().value());
-            return new Outcome.Unknown(new ProviderError(MISSING_APPROVED_AT, UnknownReason.UNREADABLE_RESPONSE.name()));
+            return new Outcome.Unknown(ProviderError.unknown(MISSING_APPROVED_AT, UnknownReason.UNREADABLE_RESPONSE.name()));
         }
         return new Outcome.Confirmed(payment.approvedAt());
     }

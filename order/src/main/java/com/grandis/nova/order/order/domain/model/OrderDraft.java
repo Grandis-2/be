@@ -17,7 +17,7 @@ import java.util.UUID;
  * 지금 어떤 출처를 받아 줄지는 {@link Order#place} 가 정한다.
  *
  * @param preorderId    사전예약 주문이면 그 예약의 내부 id, 아니면 null
- * @param preorderToken 사전예약 주문이면 그 예약의 공개 UUID(preorder_id 와 같은 예약), 아니면 null
+ * @param preorderToken 사전예약 주문이면 그 예약의 공개 UUID(preorder_id 와 같은 예약), 아니면 null. 같이 도는 구버전이 읽어 채운다
  */
 public record OrderDraft(
         UUID customerId,

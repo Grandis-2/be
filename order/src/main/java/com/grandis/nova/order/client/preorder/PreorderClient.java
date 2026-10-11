@@ -7,6 +7,8 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.service.annotation.GetExchange;
 import org.springframework.web.service.annotation.HttpExchange;
 
+import java.util.UUID;
+
 /**
  * order → preorder 서비스 내부 API 호출 클라이언트(선언형 HTTP 인터페이스, 구현은 HttpClientConfig 가 만든다).
  * 예약은 preorder 에게 묻는다 — preorders 테이블을 직접 읽지 않는다(모듈 경계).
@@ -26,4 +28,15 @@ public interface PreorderClient {
     ApiResponse<PreorderPayability> getPayability(@PathVariable String preorderId,
                                                   @RequestHeader(name = BearerTokens.HEADER, required = false)
                                                   String authorization);
+
+    /**
+     * 같은 확인을 예약 내부 id 로. 응답 · 오류는 위와 같다.
+     *
+     * @param preorderInternalId 예약 내부 id(orders.preorder_id)
+     * @param authorization      위와 같다
+     */
+    @GetExchange("/ids/{preorderInternalId}/payability")
+    ApiResponse<PreorderPayability> getPayabilityById(@PathVariable UUID preorderInternalId,
+                                                      @RequestHeader(name = BearerTokens.HEADER, required = false)
+                                                      String authorization);
 }

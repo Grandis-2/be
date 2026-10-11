@@ -70,8 +70,8 @@ class CaptureRecoveryTest {
 
     static final Money AMOUNT = Money.won(15000);
     static final Instant APPROVED_AT = Instant.parse("2026-10-03T03:04:05Z");
-    static final ProviderError TIMEOUT = new ProviderError(UnknownReason.TIMEOUT.name(), UnknownReason.TIMEOUT.name());
-    static final ProviderError UNLISTED = new ProviderError("SOMETHING_NEW", UnknownReason.UNLISTED_CODE.name());
+    static final ProviderError TIMEOUT = unknownResult(UnknownReason.TIMEOUT, null);
+    static final ProviderError UNLISTED = unknownResult(UnknownReason.UNLISTED_CODE, "SOMETHING_NEW");
     static final ProviderError PROVIDER_ERROR = new ProviderError("PROVIDER_ERROR", "일시적인 오류");
     static final ProviderError BUSY = new ProviderError("IDEMPOTENT_REQUEST_PROCESSING", null);
     static final Duration PAST_SETTLE_DEADLINE =
@@ -748,5 +748,10 @@ class CaptureRecoveryTest {
     private void ageRequestedAt(UUID id, Duration age) {
         jdbcTemplate.update("UPDATE payment_transactions SET requested_at = requested_at - INTERVAL ? SECOND WHERE id = ?",
                 age.toSeconds(), UuidBinary.toBytes(id));
+    }
+
+    /** 명령이 결과 불명으로 끝났을 때 행에 남는 오류. 운영 코드가 만든 그대로 쓴다. */
+    private static ProviderError unknownResult(UnknownReason reason, String code) {
+        return ((Outcome.Unknown) TossOutcomes.notSucceeded(new TossCommandResult.Unknown(reason, code))).error();
     }
 }

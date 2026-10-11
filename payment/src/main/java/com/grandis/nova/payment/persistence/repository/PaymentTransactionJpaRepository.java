@@ -65,35 +65,39 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
     @Query(value = """
             UPDATE payment_transactions
                SET status = :to, finished_at = :now, lease_token = NULL, lease_expires_at = NULL,
-                   last_error_code = :errorCode, last_error_message = :errorMessage
+                   last_error_code = :errorCode, last_error_message = :errorMessage,
+                   last_unknown_reason = :errorUnknownReason
              WHERE id = :id AND status = 'PROCESSING' AND lease_token = :lease
                AND lease_expires_at > UTC_TIMESTAMP(6)
             """, nativeQuery = true)
     int finish(@Param("id") UUID id, @Param("lease") String lease, @Param("to") String to,
                @Param("errorCode") String errorCode, @Param("errorMessage") String errorMessage,
-               @Param("now") Instant now);
+               @Param("errorUnknownReason") String errorUnknownReason, @Param("now") Instant now);
 
     @Modifying(flushAutomatically = true)
     @Query(value = """
             UPDATE payment_transactions
                SET status = 'RETRY_SCHEDULED', lease_token = NULL, lease_expires_at = NULL,
                    next_retry_at = UTC_TIMESTAMP(6) + INTERVAL :delayMicros MICROSECOND,
-                   last_error_code = :errorCode, last_error_message = :errorMessage
+                   last_error_code = :errorCode, last_error_message = :errorMessage,
+                   last_unknown_reason = :errorUnknownReason
              WHERE id = :id AND status = 'PROCESSING' AND lease_token = :lease
                AND lease_expires_at > UTC_TIMESTAMP(6)
             """, nativeQuery = true)
     int reschedule(@Param("id") UUID id, @Param("lease") String lease, @Param("errorCode") String errorCode,
-                   @Param("errorMessage") String errorMessage, @Param("delayMicros") long delayMicros);
+                   @Param("errorMessage") String errorMessage, @Param("errorUnknownReason") String errorUnknownReason,
+                   @Param("delayMicros") long delayMicros);
 
     @Modifying(flushAutomatically = true)
     @Query(value = """
             UPDATE payment_transactions
-               SET last_error_code = :errorCode, last_error_message = :errorMessage
+               SET last_error_code = :errorCode, last_error_message = :errorMessage,
+                   last_unknown_reason = :errorUnknownReason
              WHERE id = :id AND status = 'PROCESSING' AND lease_token = :lease
                AND lease_expires_at > UTC_TIMESTAMP(6)
             """, nativeQuery = true)
     int recordError(@Param("id") UUID id, @Param("lease") String lease, @Param("errorCode") String errorCode,
-                    @Param("errorMessage") String errorMessage);
+                    @Param("errorMessage") String errorMessage, @Param("errorUnknownReason") String errorUnknownReason);
 
     /*
      * 만료 후보 · 만료. PENDING 은 결제창을 연 행만이고 만료로 계속 빠지므로 ix_payment_tx_recoverable 의 앞부분(status)으로 찾아 거른다.
@@ -165,12 +169,14 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
     @Modifying(flushAutomatically = true)
     @Query(value = """
             UPDATE payment_transactions
-               SET escalated_at = :now, last_error_code = :errorCode, last_error_message = :errorMessage
+               SET escalated_at = :now, last_error_code = :errorCode, last_error_message = :errorMessage,
+                   last_unknown_reason = :errorUnknownReason
              WHERE id = :id AND status = 'PROCESSING' AND lease_token = :lease
                AND lease_expires_at > UTC_TIMESTAMP(6)
             """, nativeQuery = true)
     int escalate(@Param("id") UUID id, @Param("lease") String lease, @Param("errorCode") String errorCode,
-                 @Param("errorMessage") String errorMessage, @Param("now") Instant now);
+                 @Param("errorMessage") String errorMessage, @Param("errorUnknownReason") String errorUnknownReason,
+                 @Param("now") Instant now);
 
     /*
      * 키 교체는 곧 새 키로 보낸다는 뜻이다. 리스를 새로 잡아 그 전송 하나가 리스 안에 들게 하고(조회에 쓴 시간 때문에 다른 작업자가 집지
@@ -181,6 +187,7 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
     @Query(value = """
             UPDATE payment_transactions
                SET idempotency_key = :idempotencyKey, last_error_code = NULL, last_error_message = NULL,
+                   last_unknown_reason = NULL,
                    lease_expires_at = UTC_TIMESTAMP(6) + INTERVAL :leaseMicros MICROSECOND
              WHERE id = :id AND status = 'PROCESSING' AND lease_token = :lease
                AND lease_expires_at > UTC_TIMESTAMP(6)

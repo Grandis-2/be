@@ -54,7 +54,7 @@ class OrderCancelabilityApiTest {
     /* 결제 전 예약은 주문이 없다. 정리할 주문이 없으니 취소해도 된다. */
     @Test
     void noOrderIsCancelable() throws Exception {
-        UUID preorderId = fixtures.payablePreorder(customerId, fixtures.preorderProduct(), 1);
+        UUID preorderId = OrderFixtures.preorderId();
 
         mockMvc.perform(cancelability(preorderId).with(me()))
                 .andExpect(status().isOk())

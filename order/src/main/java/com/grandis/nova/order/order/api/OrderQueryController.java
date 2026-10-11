@@ -17,7 +17,7 @@ import java.util.UUID;
  * 내 주문 조회. 본인 것만 본다. 관리자는 회원 id 가 없어 "내 주문" 이 성립하지 않는다 —
  * {@link CurrentCustomerId} 가 ADMIN 을 403 으로 막는다. 관리자는 /api/v1/admin/orders 를 쓴다.
  *
- * 경로의 orderId 는 order_token 이다. 생성 응답의 Location 이 이 상세 경로를 가리킨다.
+ * 경로의 orderId 는 orders.id 다. 생성 응답의 Location 이 이 상세 경로를 가리킨다.
  */
 @RestController
 @RequestMapping("/api/v1/orders")

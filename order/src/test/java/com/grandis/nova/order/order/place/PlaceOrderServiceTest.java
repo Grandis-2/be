@@ -13,7 +13,6 @@ import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderDraft;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.Money;
-import com.grandis.nova.order.order.vo.OrderToken;
 import com.grandis.nova.order.order.vo.ShipTo;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.TestIds;
@@ -121,9 +120,9 @@ class PlaceOrderServiceTest {
     @Test
     void existingOrderOfAnotherCustomerIsHidden() {
         payable();
-        Order foreign = new Order(TestIds.id(100), OrderToken.issue(), TestIds.id(999), OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID,
-                OrderStatus.AWAITING_PAYMENT, null, Money.won(1_250_000), null, null,
-                new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), null, 1, NOW, NOW);
+        Order foreign = new Order(TestIds.id(100), TestIds.id(999), OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID,
+                OrderStatus.AWAITING_PAYMENT, null, Money.won(1_250_000), null, null, null,
+                new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 1, NOW, NOW);
         given(orderReader.findByPreorderId(PREORDER_ID)).willReturn(Optional.of(foreign));
 
         assertThatThrownBy(() -> service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS))
@@ -159,24 +158,19 @@ class PlaceOrderServiceTest {
                 .hasMessageContaining("이 예약의 주문이 없다");
     }
 
-    // 그 예약 id 의 주문이 있어도 예약 UUID 가 다르면 짝이 어긋난 주문이다 — "이 예약의 주문" 으로 돌려주지 않는다.
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void existingOrderWithAnotherPreorderTokenIsNotReturned(boolean foundAfterDuplicateKey) {
+    // 기존 주문은 예약 내부 id 로만 고른다 — 주문에 남은 예약 UUID 는 대조하지 않는다(비어 있을 수도 있다).
+    @Test
+    void existingOrderIsFoundByPreorderIdWhateverItsStoredToken() {
         payable();
-        Order mismatched = new Order(TestIds.id(100), OrderToken.issue(), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID,
-                "1c9e2b7d-3f4a-4b5c-8d6e-7f8091a2b3c4", OrderStatus.AWAITING_PAYMENT, null, Money.won(1_250_000), null, null,
-                new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), null, 1, NOW, NOW);
-        if (foundAfterDuplicateKey) {
-            given(orderReader.findByPreorderId(PREORDER_ID)).willReturn(Optional.empty(), Optional.of(mismatched));
-            given(ledger.place(any(), any())).willThrow(new OrderAlreadyPlacedException(PREORDER_ID, null));
-        } else {
-            given(orderReader.findByPreorderId(PREORDER_ID)).willReturn(Optional.of(mismatched));
-        }
+        Order stored = new Order(TestIds.id(100), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID, null,
+                OrderStatus.AWAITING_PAYMENT, null, Money.won(1_250_000), null, null, null,
+                new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 1, NOW, NOW);
+        given(orderReader.findByPreorderId(PREORDER_ID)).willReturn(Optional.of(stored));
 
-        assertThatThrownBy(() -> service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("예약 UUID 가 예약과 다르다");
+        PlaceResult result = service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS);
+
+        assertThat(result.created()).isFalse();
+        assertThat(result.order()).isEqualTo(stored);
     }
 
     // 받은 토큰을 preorder 호출까지 그대로 넘긴다.
@@ -257,8 +251,8 @@ class PlaceOrderServiceTest {
     }
 
     private static Order order(OrderStatus status) {
-        return new Order(TestIds.id(100), OrderToken.issue(), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID, status, null,
-                Money.won(1_250_000), null, null,
-                new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), null, 1, NOW, NOW);
+        return new Order(TestIds.id(100), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID, status, null,
+                Money.won(1_250_000), null, null, null,
+                new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 1, NOW, NOW);
     }
 }

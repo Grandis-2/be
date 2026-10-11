@@ -26,7 +26,6 @@ import org.springframework.test.web.servlet.ResultActions;
 
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -48,9 +47,6 @@ class PlaceOrderApiTest {
 
     // 에픽 완료 조건: 같은 예약으로 동시에 100건을 보내도 주문은 1건만 생긴다(나머지는 같은 주문을 돌려받는다).
     static final int CONCURRENT_REQUESTS = 100;
-
-    // 같은 상품 안에서 순번이 겹치면 안 된다(uq_preorder_position). 테스트마다 상품을 새로 만들지만 한 테스트 안에서 예약을 여럿 만든다.
-    static final AtomicLong QUEUE_POSITION = new AtomicLong();
 
     // 사용자가 보낸 액세스 토큰 자리(Authorization: Bearer 의 값). preorder 에 그대로 전달돼야 한다. 실제 토큰 모양이 아니다.
     static final String SESSION = "place-order-api-test";
@@ -75,7 +71,7 @@ class PlaceOrderApiTest {
         fixtures = new OrderFixtures(jdbcTemplate);
         product = fixtures.preorderProduct();
         customerId = fixtures.customer();
-        preorderId = fixtures.payablePreorder(customerId, product, QUEUE_POSITION.incrementAndGet());
+        preorderId = OrderFixtures.preorderId();
         token = OrderFixtures.unique();
     }
 
@@ -101,7 +97,7 @@ class PlaceOrderApiTest {
 
         String orderId = orderIdOf(result);
         assertThat(result.getResponse().getHeader("Location")).isEqualTo("/api/v1/orders/" + orderId);
-        assertThat(count("SELECT COUNT(*) FROM orders WHERE preorder_id = ? AND order_token = ?",
+        assertThat(count("SELECT COUNT(*) FROM orders WHERE preorder_id = ? AND id = UUID_TO_BIN(?)",
                 bytes(preorderId), orderId))
                 .isEqualTo(1);
         assertThat(count("""
@@ -285,8 +281,7 @@ class PlaceOrderApiTest {
     void canceledOrderCannotBePlacedAgain() throws Exception {
         stubPayable();
         String orderId = orderIdOf(place(customerId, token).andExpect(status().isCreated()).andReturn());
-        fixtures.forceStatus(UUID.fromString(jdbcTemplate.queryForObject(
-                "SELECT BIN_TO_UUID(id) FROM orders WHERE order_token = ?", String.class, orderId)), "CANCELED");
+        fixtures.forceStatus(UUID.fromString(orderId), "CANCELED");
 
         place(customerId, token)
                 .andExpect(status().isConflict())

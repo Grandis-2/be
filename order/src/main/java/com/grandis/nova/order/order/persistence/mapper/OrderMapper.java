@@ -9,7 +9,6 @@ import com.grandis.nova.order.order.persistence.entity.OrderItemJpaEntity;
 import com.grandis.nova.order.order.persistence.entity.OrderJpaEntity;
 import com.grandis.nova.order.order.vo.EventCause;
 import com.grandis.nova.order.order.vo.Money;
-import com.grandis.nova.order.order.vo.OrderToken;
 import com.grandis.nova.order.order.vo.Quantity;
 import com.grandis.nova.order.order.vo.ShipTo;
 
@@ -23,20 +22,20 @@ public final class OrderMapper {
 
     public static OrderJpaEntity toEntity(Order order) {
         ShipTo shipTo = order.shipTo();
-        return new OrderJpaEntity(order.orderToken().value(), order.customerId(), order.source(),
+        return new OrderJpaEntity(order.customerId(), order.source(),
                 order.preorderId(), order.preorderToken(), order.status(), order.totalAmount().amount(), order.paymentDueAt(),
                 order.stockReleasedAt(), shipTo.name(), shipTo.phone(), shipTo.postalCode(), shipTo.line1(),
-                shipTo.line2(), order.internalNote(), order.eventSequence());
+                shipTo.line2(), order.eventSequence());
     }
 
     public static Order toDomain(OrderJpaEntity entity) {
-        return new Order(entity.getId(), new OrderToken(entity.getOrderToken()), entity.getCustomerId(),
+        return new Order(entity.getId(), entity.getCustomerId(),
                 entity.getSource(), entity.getPreorderId(), entity.getPreorderToken(), entity.getStatus(),
                 entity.getAuthorizingProviderOrderId(), new Money(entity.getTotalAmount()),
-                entity.getPaymentDueAt(), entity.getStockReleasedAt(),
+                entity.getPaymentDueAt(), entity.getStockReleasedAt(), entity.getRefundFailedAt(),
                 new ShipTo(entity.getShipToName(), entity.getShipToPhone(), entity.getShipToPostalCode(),
                         entity.getShipToLine1(), entity.getShipToLine2()),
-                entity.getInternalNote(), entity.getEventSequence(), entity.getCreatedAt(), entity.getUpdatedAt());
+                entity.getEventSequence(), entity.getCreatedAt(), entity.getUpdatedAt());
     }
 
     public static OrderItemJpaEntity toEntity(UUID orderId, OrderLine line) {

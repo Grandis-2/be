@@ -273,7 +273,7 @@ class CartOrderPaymentTest {
     }
 
     private ResultActions prepare() throws Exception {
-        return mockMvc.perform(post("/api/v1/orders/{orderToken}/payment-attempts", order.orderToken().value())
+        return mockMvc.perform(post("/api/v1/orders/{orderId}/payment-attempts", order.id().toString())
                 .with(TestAuth.customer(customerId)).header(BearerTokens.HEADER, BearerTokens.value(SESSION)));
     }
 

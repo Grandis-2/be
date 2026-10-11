@@ -69,7 +69,7 @@ class SettlePreorderCancelServiceTest {
 
     @Test
     void 주문이_없으면_NO_ORDER_를_받은_시도_순번과_함께_적는다() {
-        UUID preorderId = fixtures.payablePreorder(customerId, fixtures.preorderProduct(), 1);
+        UUID preorderId = OrderFixtures.preorderId();
         String preorderUuid = uuidOf(preorderId);
 
         settlement.settle(cancel(preorderId, preorderUuid, CancelReason.USER));
@@ -247,31 +247,17 @@ class SettlePreorderCancelServiceTest {
         assertThat(outboxRows(order.preorderId())).isEmpty();
     }
 
-    /*
-     * 주문은 봉투의 aggregateId 로 찾고, payload 의 UUID 는 그 주문의 preorder_token 과 대조한다. 다르면 봉투와 payload 가
-     * 다른 예약을 가리킨다 — 어느 예약의 결과인지 알 수 없으니 주문을 건드리지도 결과를 적지도 않는다(소비기가 DLQ 로 보낸다).
-     */
+    // 주문은 봉투의 aggregateId(예약 내부 id)로 찾는다. 결과에 싣는 예약 UUID 는 주문의 칸이 아니라 받은 payload 의 값이다.
     @Test
-    void payload_의_예약_UUID_가_주문의_예약과_다르면_아무것도_바꾸지_않고_실패한다() {
+    void 결과의_예약_UUID_는_받은_payload_의_값이다() {
         Order order = placedOrders.place(customerId);
-        String otherUuid = OrderFixtures.unique();
+        String payloadUuid = OrderFixtures.unique();
 
-        assertThatThrownBy(() -> settlement.settle(new SettlePreorderCancelCommand(order.preorderId(), otherUuid,
-                customerId, CancelReason.USER, CANCEL_SEQUENCE)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(otherUuid);
+        settlement.settle(cancel(order.preorderId(), payloadUuid, CancelReason.USER));
 
-        assertThat(statusOf(order)).isEqualTo("AWAITING_PAYMENT");
-        assertThat(eventCount(order)).isEqualTo(1);
-        assertThat(outboxRows(order.preorderId())).isEmpty();
-    }
-
-    // 주문이 저장한 UUID 는 예약의 것과 같다 — 그래서 정상 수신(uuidOf)은 대조를 통과한다.
-    @Test
-    void 주문은_예약의_UUID_를_저장한다() {
-        Order order = placedOrders.place(customerId);
-
-        assertThat(order.preorderToken()).isEqualTo(uuidOf(order.preorderId()));
+        assertThat(statusOf(order)).isEqualTo("CANCELED");
+        assertThat(outboxRows(order.preorderId())).singleElement()
+                .satisfies(row -> assertThat(payloadOf(row).get("preorderId").asString()).isEqualTo(payloadUuid));
     }
 
     @Test
@@ -296,8 +282,7 @@ class SettlePreorderCancelServiceTest {
     }
 
     private String uuidOf(UUID preorderId) {
-        return jdbcTemplate.queryForObject("SELECT preorder_token FROM preorders WHERE id = ?", String.class,
-                bytes(preorderId));
+        return OrderFixtures.preorderToken(preorderId);
     }
 
     private String statusOf(Order order) {

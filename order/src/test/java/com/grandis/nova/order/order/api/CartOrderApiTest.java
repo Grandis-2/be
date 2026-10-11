@@ -149,7 +149,7 @@ class CartOrderApiTest {
         assertThat(again.get("reused").asBoolean()).isTrue();
         assertThat(reserved(phone)).isEqualTo(2);
 
-        jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-1' WHERE order_token = ?",
+        jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-1' WHERE id = UUID_TO_BIN(?)",
                 first.get("orderId").asString());
         assertThat(data(place(item(phone, 2, false)).andExpect(status().isOk())).get("orderId").asString())
                 .as("승인 중도 열린 주문이다").isEqualTo(first.get("orderId").asString());
@@ -220,7 +220,7 @@ class CartOrderApiTest {
         CompletableFuture<Void> payment = CompletableFuture.runAsync(() -> tx.executeWithoutResult(s -> {
             assertThat(jdbcTemplate.update("""
                     UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-race'
-                     WHERE order_token = ? AND status = 'AWAITING_PAYMENT'""", first)).isEqualTo(1);
+                     WHERE id = UUID_TO_BIN(?) AND status = 'AWAITING_PAYMENT'""", first)).isEqualTo(1);
             authorized.countDown();
             await(commit);
         }));
@@ -279,7 +279,7 @@ class CartOrderApiTest {
         cartLine(phone, false, 1);
         cartLine(watch, false, 1);
         String first = data(place(item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
-        jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-3' WHERE order_token = ?", first);
+        jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-3' WHERE id = UUID_TO_BIN(?)", first);
 
         expectBlockedBy(place(item(watch, 1, false)), first);
 
@@ -293,7 +293,7 @@ class CartOrderApiTest {
         UUID phone = sellable(10);
         cartLine(phone, false, 1);
         String first = data(place(item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
-        jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-2' WHERE order_token = ?", first);
+        jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-2' WHERE id = UUID_TO_BIN(?)", first);
 
         expectBlockedBy(perform("""
                 {"source":"CART","items":[%s],"shipTo":%s}""".formatted(item(phone, 1, false), OTHER_SHIP_TO)), first);
@@ -324,7 +324,7 @@ class CartOrderApiTest {
         UUID phone = sellable(10);
         cartLine(phone, false, 1);
         String first = data(place(item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
-        jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-4' WHERE order_token = ?", first);
+        jdbcTemplate.update("UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-4' WHERE id = UUID_TO_BIN(?)", first);
         expire(first);
 
         expectBlockedBy(perform("""
@@ -615,16 +615,16 @@ class CartOrderApiTest {
                 new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), o.imageUrl());
     }
 
-    private static void expectBlockedBy(ResultActions actions, String orderToken) throws Exception {
+    private static void expectBlockedBy(ResultActions actions, String orderId) throws Exception {
         actions.andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("PAYMENT_IN_PROGRESS"))
-                .andExpect(jsonPath("$.error.details.orderId").value(orderToken))
+                .andExpect(jsonPath("$.error.details.orderId").value(orderId))
                 .andExpect(jsonPath("$.error.details.status").value("AUTHORIZING"));
     }
 
     /** 저장은 UTC 다 — JVM 시간대(KST)로 바인딩되는 Timestamp 를 쓰지 않고 DB 의 UTC 로 기한을 지나게 한다. */
-    private void expire(String orderToken) {
-        jdbcTemplate.update("UPDATE orders SET payment_due_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE order_token = ?", orderToken);
+    private void expire(String orderId) {
+        jdbcTemplate.update("UPDATE orders SET payment_due_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = UUID_TO_BIN(?)", orderId);
     }
 
     private static CatalogOption copyPrice(CatalogOption o, BigDecimal price) {
@@ -666,22 +666,22 @@ class CartOrderApiTest {
         }
     }
 
-    private String orderStatus(String orderToken) {
-        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE order_token = ?", String.class, orderToken);
+    private String orderStatus(String orderId) {
+        return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = UUID_TO_BIN(?)", String.class, orderId);
     }
 
-    private boolean stockReleased(String orderToken) {
-        return jdbcTemplate.queryForObject("SELECT stock_released_at IS NOT NULL FROM orders WHERE order_token = ?", Boolean.class, orderToken);
+    private boolean stockReleased(String orderId) {
+        return jdbcTemplate.queryForObject("SELECT stock_released_at IS NOT NULL FROM orders WHERE id = UUID_TO_BIN(?)", Boolean.class, orderId);
     }
 
-    private BigDecimal orderTotal(String orderToken) {
-        return jdbcTemplate.queryForObject("SELECT total_amount FROM orders WHERE order_token = ?", BigDecimal.class, orderToken);
+    private BigDecimal orderTotal(String orderId) {
+        return jdbcTemplate.queryForObject("SELECT total_amount FROM orders WHERE id = UUID_TO_BIN(?)", BigDecimal.class, orderId);
     }
 
-    private String lastEventReason(String orderToken) {
+    private String lastEventReason(String orderId) {
         return jdbcTemplate.queryForObject("""
                 SELECT e.reason FROM order_events e JOIN orders o ON o.id = e.order_id
-                 WHERE o.order_token = ? ORDER BY e.event_sequence DESC LIMIT 1""", String.class, orderToken);
+                 WHERE o.id = UUID_TO_BIN(?) ORDER BY e.event_sequence DESC LIMIT 1""", String.class, orderId);
     }
 
     private long openOrderCount() {

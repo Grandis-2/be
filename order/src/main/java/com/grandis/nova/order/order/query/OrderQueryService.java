@@ -9,7 +9,7 @@ import com.grandis.nova.order.order.domain.model.OrderItem;
 import com.grandis.nova.order.order.domain.repository.AdminOrderFilter;
 import com.grandis.nova.order.order.domain.repository.OrderPosition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
-import com.grandis.nova.order.order.vo.OrderToken;
+import com.grandis.nova.order.order.vo.OrderIds;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -52,8 +52,8 @@ public class OrderQueryService {
     }
 
     /** 내 주문 하나. 남의 주문은 존재를 알리지 않는다(404). */
-    public OrderView.Detail findOne(UUID customerId, String orderToken) {
-        Order order = find(orderToken)
+    public OrderView.Detail findOne(UUID customerId, String orderId) {
+        Order order = find(orderId)
                 .filter(found -> found.customerId().equals(customerId))
                 .orElseThrow(OrderQueryService::notFound);
         return detail(order);
@@ -73,12 +73,12 @@ public class OrderQueryService {
         return OffsetPage.of(withItems(found.items()), found.page(), found.size(), found.total());
     }
 
-    public OrderView.Detail findOneForAdmin(String orderToken) {
-        return detail(find(orderToken).orElseThrow(OrderQueryService::notFound));
+    public OrderView.Detail findOneForAdmin(String orderId) {
+        return detail(find(orderId).orElseThrow(OrderQueryService::notFound));
     }
 
-    private Optional<Order> find(String orderToken) {
-        return OrderToken.parse(orderToken).flatMap(reader::findByOrderToken);
+    private Optional<Order> find(String orderId) {
+        return OrderIds.parse(orderId).flatMap(reader::findById);
     }
 
     /** 이력은 읽은 주문의 번호까지만 — 그 뒤에 커밋된 전이가 섞이면 상태와 이력의 마지막이 어긋난다. */

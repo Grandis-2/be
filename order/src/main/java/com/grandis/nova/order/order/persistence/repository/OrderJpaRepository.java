@@ -25,8 +25,6 @@ import java.util.UUID;
 public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
         JpaSpecificationExecutor<OrderJpaEntity> {
 
-    Optional<OrderJpaEntity> findByOrderToken(String orderToken);
-
     Optional<OrderJpaEntity> findByPreorderId(UUID preorderId);
 
     List<OrderJpaEntity> findByCustomerIdAndSourceAndStatusIn(UUID customerId, OrderSource source, Collection<OrderStatus> statuses);
@@ -64,6 +62,15 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
                and o.source <> com.grandis.nova.order.order.domain.enums.OrderSource.PREORDER and o.stockReleasedAt is null
             """)
     int cancelReleasingStock(@Param("id") UUID id, @Param("now") Instant now);
+
+    @Modifying(flushAutomatically = true)
+    @Query("""
+            update OrderJpaEntity o
+               set o.refundFailedAt = :now, o.eventSequence = o.eventSequence + 1, o.updatedAt = :now
+             where o.id = :id and o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.CANCELING
+               and o.refundFailedAt is null
+            """)
+    int markRefundFailed(@Param("id") UUID id, @Param("now") Instant now);
 
     /** 스칼라 조회라 영속성 컨텍스트의 엔티티가 아니라 DB 값을 읽는다. 행을 잠근 트랜잭션에서 부른다. */
     @Query("select o.authorizingProviderOrderId from OrderJpaEntity o where o.id = :id")

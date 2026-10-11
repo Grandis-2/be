@@ -128,10 +128,10 @@ class CartAndOrderItemSchemaTest {
     private UUID cartOrder() {
         UUID orderId = TestIds.next();
         jdbcTemplate.update("""
-                INSERT INTO orders (id, order_token, customer_id, source, status, total_amount, payment_due_at,
+                INSERT INTO orders (id, customer_id, source, status, total_amount, payment_due_at,
                                     ship_to_name, ship_to_phone, ship_to_postal_code, ship_to_line1, event_sequence, created_at, updated_at)
-                VALUES (?, ?, ?, 'CART', 'AWAITING_PAYMENT', 0, UTC_TIMESTAMP(6), 'a', '1', '1', 'x', 1, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""",
-                bytes(orderId), OrderFixtures.unique(), bytes(customerId));
+                VALUES (?, ?, 'CART', 'AWAITING_PAYMENT', 0, UTC_TIMESTAMP(6), 'a', '1', '1', 'x', 1, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""",
+                bytes(orderId), bytes(customerId));
         return orderId;
     }
 }

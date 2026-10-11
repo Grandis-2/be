@@ -20,7 +20,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 
-import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
@@ -84,18 +83,18 @@ class LockFailureClassificationTest {
         assertThat(MySqlLockFailures.isDeadlock(failure)).isFalse();
     }
 
-    /** INSERT 의 FK 검사는 product_options 부모 행에 S 잠금을 잡는다. 그 행을 다른 트랜잭션이 X 로 쥐고 있으면 기다리다 1205 다. */
+    /** INSERT 의 PK 중복 확인은 다른 트랜잭션이 넣고 아직 커밋하지 않은 같은 옵션 행을 기다린다. 그 트랜잭션이 끝나지 않으면 1205 다. */
     @Test
-    void insertWaitingOnParentRowTimesOutAsNonDeadlock() throws Exception {
+    void insertWaitingOnUncommittedSameRowTimesOutAsNonDeadlock() throws Exception {
         UUID option = unstocked.getFirst();
-        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch inserted = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         CompletableFuture<Void> holder = CompletableFuture.runAsync(() -> transactionTemplate.executeWithoutResult(status -> {
-            jdbcTemplate.queryForList("SELECT id FROM product_options WHERE id = ? FOR UPDATE", bytes(option));
-            locked.countDown();
+            writer.insert(option, 1, Instant.now());
+            inserted.countDown();
             await(release);
         }));
-        assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+        assertThat(inserted.await(10, TimeUnit.SECONDS)).isTrue();
 
         Throwable failure;
         try {

@@ -10,7 +10,6 @@ import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
-import com.grandis.nova.order.order.vo.OrderToken;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
@@ -139,10 +138,10 @@ class CartOrderCancelTest {
         cancel(customerId, "not-a-token").andExpect(status().isNotFound());
 
         OrderFixtures.PreorderProduct product = fixtures.preorderProduct();
-        UUID preorderId = fixtures.payablePreorder(customerId, product, 1);
+        UUID preorderId = OrderFixtures.preorderId();
         Order preorder = new TransactionTemplate(transactionManager).execute(status -> ledger.place(
                 OrderFixtures.preorderCommand(customerId, preorderId, product).toDraft(), EventCause.user()));
-        cancel(customerId, preorder.orderToken().value()).andExpect(status().isConflict())
+        cancel(customerId, preorder.id().toString()).andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"));
         assertThat(reserved(phone)).isEqualTo(1);
     }
@@ -189,7 +188,7 @@ class CartOrderCancelTest {
         assertThat(reserved(phone)).isZero();
         assertThat(column(order, "status", String.class)).isEqualTo("CANCELED");
         assertThat(jdbcTemplate.queryForObject("""
-                SELECT COUNT(*) FROM order_events e JOIN orders o ON o.id = e.order_id WHERE o.order_token = ? AND e.to_status = 'CANCELED'""",
+                SELECT COUNT(*) FROM order_events e JOIN orders o ON o.id = e.order_id WHERE o.id = UUID_TO_BIN(?) AND e.to_status = 'CANCELED'""",
                 Long.class, order)).as("취소 이력도 하나").isEqualTo(1);
     }
 
@@ -323,7 +322,7 @@ class CartOrderCancelTest {
         CompletableFuture<Void> paying = CompletableFuture.runAsync(() -> tx.executeWithoutResult(status -> {
             jdbcTemplate.update("""
                     UPDATE orders SET status = 'AUTHORIZING', authorizing_provider_order_id = 'p-reuse'
-                     WHERE order_token = ? AND status = 'AWAITING_PAYMENT'""", first);
+                     WHERE id = UUID_TO_BIN(?) AND status = 'AWAITING_PAYMENT'""", first);
             authorized.countDown();
             await(commit);
         }));
@@ -419,26 +418,26 @@ class CartOrderCancelTest {
                         {"source":"CART","items":[%s],"shipTo":%s}""".formatted(item, SHIP_TO)));
     }
 
-    private ResultActions cancel(UUID customer, String orderToken) throws Exception {
-        return mockMvc.perform(post("/api/v1/orders/{id}/cancel", orderToken).with(TestAuth.customer(customer)));
+    private ResultActions cancel(UUID customer, String orderId) throws Exception {
+        return mockMvc.perform(post("/api/v1/orders/{id}/cancel", orderId).with(TestAuth.customer(customer)));
     }
 
-    private UUID idOf(String orderToken) {
-        return orderReader.findByOrderToken(OrderToken.parse(orderToken).orElseThrow()).orElseThrow().id();
+    private UUID idOf(String orderId) {
+        return UUID.fromString(orderId);
     }
 
-    private Instant dueAt(String orderToken) {
-        return orderReader.findByOrderToken(OrderToken.parse(orderToken).orElseThrow()).orElseThrow().paymentDueAt();
+    private Instant dueAt(String orderId) {
+        return orderReader.findById(idOf(orderId)).orElseThrow().paymentDueAt();
     }
 
     /** JVM 시간대로 바인딩되지 않게 UTC 문자열로 넣는다(저장은 UTC). */
-    private void setDue(String orderToken, Instant due) {
-        jdbcTemplate.update("UPDATE orders SET payment_due_at = ? WHERE order_token = ?",
-                due.toString().replace("T", " ").replace("Z", ""), orderToken);
+    private void setDue(String orderId, Instant due) {
+        jdbcTemplate.update("UPDATE orders SET payment_due_at = ? WHERE id = UUID_TO_BIN(?)",
+                due.toString().replace("T", " ").replace("Z", ""), orderId);
     }
 
-    private <T> T column(String orderToken, String expression, Class<T> type) {
-        return jdbcTemplate.queryForObject("SELECT " + expression + " FROM orders WHERE order_token = ?", type, orderToken);
+    private <T> T column(String orderId, String expression, Class<T> type) {
+        return jdbcTemplate.queryForObject("SELECT " + expression + " FROM orders WHERE id = UUID_TO_BIN(?)", type, orderId);
     }
 
     private int reserved(UUID option) {
@@ -446,10 +445,10 @@ class CartOrderCancelTest {
                 (Object) bytes(option));
     }
 
-    private Map<String, Object> lastEvent(String orderToken) {
+    private Map<String, Object> lastEvent(String orderId) {
         return jdbcTemplate.queryForMap("""
                 SELECT e.actor, e.reason, e.to_status FROM order_events e JOIN orders o ON o.id = e.order_id
-                 WHERE o.order_token = ? ORDER BY e.event_sequence DESC LIMIT 1""", orderToken);
+                 WHERE o.id = UUID_TO_BIN(?) ORDER BY e.event_sequence DESC LIMIT 1""", orderId);
     }
 
     private void waitForQuery(String like) {

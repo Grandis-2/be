@@ -4,7 +4,6 @@ import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderEvent;
 import com.grandis.nova.order.order.domain.model.OrderItem;
-import com.grandis.nova.order.order.vo.OrderToken;
 
 import java.time.Instant;
 import java.util.Collection;
@@ -21,9 +20,6 @@ import java.util.UUID;
 public interface OrderReader {
 
     Optional<Order> findById(UUID orderId);
-
-    /** 공개 토큰으로 찾는다. 조회 API 는 이 값만 받는다. */
-    Optional<Order> findByOrderToken(OrderToken orderToken);
 
     /** 예약의 주문. 예약당 주문은 평생 하나라(uq_order_preorder) 0~1건이다. */
     Optional<Order> findByPreorderId(UUID preorderId);

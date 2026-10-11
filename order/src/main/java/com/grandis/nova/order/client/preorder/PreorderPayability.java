@@ -11,7 +11,7 @@ import java.util.UUID;
  *
  * @param preorderId         예약 공개 UUID
  * @param preorderInternalId preorders.id. orders.preorder_id 에 저장한다. 밖으로 내보내지 않는다
- * @param customerId         예약 회원. 주문 회원으로 저장한다(복합 FK)
+ * @param customerId         예약 회원. 주문 회원으로 저장한다
  * @param payableFrom        PAYABLE 이 된 시각. 그 전이면 null
  * @param paymentDueAt       결제 기한(= payableFrom + 24시간). 그 전이면 null
  * @param reason             payable 이 false 인 까닭(NOT_YET_REGISTERED · DUE_PASSED · CANCELING · CANCELED). true 면 null

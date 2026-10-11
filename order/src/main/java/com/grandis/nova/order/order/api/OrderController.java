@@ -45,9 +45,9 @@ public class OrderController {
      * 미결제 장바구니 주문 취소(명세 POST /orders/{orderId}/cancel). 결제 대기면 그 자리에서 취소 · 재고 반환(200), 이미 취소됐으면 같은 200.
      * 승인 중이면 409 PAYMENT_IN_PROGRESS, 결제된 주문 · 사전예약 주문은 409 STATE_CONFLICT. 남의 주문은 404.
      */
-    @PostMapping("/{orderToken}/cancel")
-    public ApiResponse<CancelOrderResponse> cancel(@CurrentCustomerId UUID customerId, @PathVariable String orderToken) {
-        return ApiResponse.ok(CancelOrderResponse.of(cancelCartOrderService.cancel(customerId, orderToken)));
+    @PostMapping("/{orderId}/cancel")
+    public ApiResponse<CancelOrderResponse> cancel(@CurrentCustomerId UUID customerId, @PathVariable String orderId) {
+        return ApiResponse.ok(CancelOrderResponse.of(cancelCartOrderService.cancel(customerId, orderId)));
     }
 
     /**
@@ -75,6 +75,6 @@ public class OrderController {
         if (!result.created()) {
             return ResponseEntity.ok(body);
         }
-        return ResponseEntity.created(URI.create(BASE_PATH + "/" + result.order().orderToken().value())).body(body);
+        return ResponseEntity.created(URI.create(BASE_PATH + "/" + result.order().id())).body(body);
     }
 }

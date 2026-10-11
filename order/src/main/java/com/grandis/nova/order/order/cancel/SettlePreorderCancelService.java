@@ -25,8 +25,7 @@ import java.util.Set;
  * 미결제면 바로 취소, 결제됨(만료 아님)이면 취소 중으로 바꾸고 같은 트랜잭션에서 환불 요청(ORDER_REFUND_REQUESTED)을 적는다 —
  * 결과는 환불이 끝난 뒤(CANCELED) 다시 받은 메시지가 적는다({@link CancelSettlement.Deferred}).
  *
- * - 주문은 봉투의 aggregateId 로 찾고, payload 의 UUID 는 찾은 주문의 preorder_token 과 대조만 한다. 다르면 어느 예약의 결과인지 알 수
- *   없어 적지 않는다.
+ * - 주문은 봉투의 aggregateId(예약 내부 id)로 찾고 회원을 대조한다. 결과에 싣는 예약 UUID 는 받은 payload 의 값을 그대로 돌려준다.
  * - 결과는 원장이 행을 잠근 뒤 돌려준 status 로 정한다. 조회한 상태로 고르면 그사이 승인된 결제를 미결제로 취소할 수 있다.
  * - 트랜잭션은 여기서 연다(원장 · OutboxWriter 는 MANDATORY). 바깥 트랜잭션 안에서 부르지 않는다 — 부르는 곳은 큐 소비기뿐이다.
  * - 같은 요청을 다시 받으면 전이 · 환불 요청은 상태 머신이 한 번만 하고, 결과는 다시 적는다(preorder 가 cancelSequence 로 멱등 처리).
@@ -53,7 +52,7 @@ public class SettlePreorderCancelService {
 
     /**
      * @return 적은 결과, 또는 아직 정할 수 없음(이번에 취소 중으로 바꿨으면 그 전이 · 환불 요청은 커밋된다)
-     * @throws IllegalStateException 예약의 회원 또는 예약 UUID 가 주문과 다르다 — 데이터가 어긋났다.
+     * @throws IllegalStateException 예약의 회원이 주문의 회원과 다르다 — 데이터가 어긋났다.
      *                               다시 받아도 같으므로 소비기가 지우지 않고 DLQ 로 보낸다
      */
     @Transactional
@@ -70,12 +69,6 @@ public class SettlePreorderCancelService {
             if (!order.customerId().equals(cancel.customerId())) {
                 throw new IllegalStateException("예약의 회원과 주문의 회원이 다르다: preorderInternalId=%s, orderId=%s"
                         .formatted(cancel.preorderInternalId(), order.id()));
-            }
-            if (!order.preorderToken().equals(cancel.preorderId())) {
-                throw new IllegalStateException(
-                        "봉투의 예약과 payload 의 예약 UUID 가 다르다: preorderInternalId=%s, orderId=%s, payload=%s, order=%s"
-                                .formatted(cancel.preorderInternalId(), order.id(), cancel.preorderId(),
-                                        order.preorderToken()));
             }
             OrderTransition transition =
                     ledger.fire(order.id(), OrderTrigger.CANCEL_REQUESTED, cancelableFrom(cancel.reason()), cause);
