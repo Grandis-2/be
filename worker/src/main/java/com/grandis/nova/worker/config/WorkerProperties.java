@@ -29,7 +29,8 @@ public record WorkerProperties(
 
     public WorkerProperties {
         // 한 차례(조회 + 호출 + 즉시 재시도)가 가시성 시간 안에 끝나야 같은 메시지를 다른 worker 가 또 받지 않는다
-        Duration round = mock.connectTimeout().plus(mock.readTimeout()).multipliedBy(retry.inRound() + 2L);
+        Duration round = mock.connectTimeout().plus(mock.readTimeout()).multipliedBy(retry.inRound() + 2L)
+                .plus(retry.inRoundDelayMax().multipliedBy(retry.inRound()));
         require(consumer.visibility().compareTo(round) > 0,
                 "consumer.visibility 는 한 차례(조회 + 호출 + 즉시 재시도)보다 길어야 한다: " + consumer.visibility());
     }
@@ -143,16 +144,21 @@ public record WorkerProperties(
     }
 
     /**
-     * @param inRound     한 차례 안에서 곧바로 다시 보내는 횟수(일시 실패만)
-     * @param backoff     다음 차례까지의 지연. 차례 사이마다 하나씩이라 roundsPerGeneration − 1 개
-     * @param generations REGISTER 가 최종 실패하기까지의 세대 수. CANCEL 은 제한이 없다
+     * @param inRound         한 차례 안에서 곧바로 다시 보내는 횟수(일시 실패만)
+     * @param inRoundDelayMin 곧바로 다시 보내기 전에 쉬는 시간의 아래 끝. 위 끝(inRoundDelayMax)까지 고르게 흩는다
+     * @param backoff         다음 차례까지의 지연. 차례 사이마다 하나씩이라 roundsPerGeneration − 1 개
+     * @param generations     REGISTER 가 최종 실패하기까지의 세대 수. CANCEL 은 제한이 없다
+     * @param jitterRatio     지연을 흩는 폭. 0.2 면 ±20% — 여러 worker 의 재시도가 한 순간에 몰리지 않게 한다
      */
     public record Retry(
             @DefaultValue("1") int inRound,
+            @DefaultValue("200ms") Duration inRoundDelayMin,
+            @DefaultValue("500ms") Duration inRoundDelayMax,
             @DefaultValue({"10s", "20s", "40s"}) List<Duration> backoff,
             @DefaultValue("4") int roundsPerGeneration,
             @DefaultValue("3") int generations,
-            @DefaultValue("15m") Duration generationGap
+            @DefaultValue("15m") Duration generationGap,
+            @DefaultValue("0.2") double jitterRatio
     ) {
 
         public Retry {
@@ -164,6 +170,11 @@ public record WorkerProperties(
             require(backoff.stream().allMatch(delay -> positive(delay) && delay.compareTo(MAX_DELAY) <= 0)
                             && positive(generationGap) && generationGap.compareTo(MAX_DELAY) <= 0,
                     "retry 의 backoff · generation-gap 은 0 보다 크고 15m 이하여야 한다");
+            require(inRoundDelayMin != null && !inRoundDelayMin.isNegative() && inRoundDelayMax != null
+                            && inRoundDelayMax.compareTo(inRoundDelayMin) >= 0,
+                    "retry.in-round-delay-min 은 0 이상이고 in-round-delay-max 이하여야 한다: " + inRoundDelayMin
+                            + " ~ " + inRoundDelayMax);
+            require(jitterRatio >= 0 && jitterRatio < 1, "retry.jitter-ratio 는 0 이상 1 미만이어야 한다: " + jitterRatio);
         }
     }
 
@@ -171,16 +182,20 @@ public record WorkerProperties(
      * @param waitSeconds 롱 폴링 대기. 받기 멈춤 · 종료는 진행 중인 롱 폴링이 끝난 뒤부터 듣는다. 0 이면 빈 큐를 쉬지 않고 받는다
      * @param visibility  받은 메시지를 다른 worker 에게 숨기는 시간
      * @param stopTimeout 종료 때 호출 중인 건을 기다리는 시간
+     * @param requeueDelay 받았지만 지금 부를 수 없는 메시지(자리 없음 · 초당 상한)를 큐로 돌려보낼 때의 지연
      */
     public record Consumer(
             @DefaultValue("true") boolean enabled,
             @DefaultValue("5") int waitSeconds,
             @DefaultValue("120s") Duration visibility,
-            @DefaultValue("20s") Duration stopTimeout
+            @DefaultValue("20s") Duration stopTimeout,
+            @DefaultValue("1s") Duration requeueDelay
     ) {
 
         public Consumer {
             require(waitSeconds >= 1, "consumer.wait-seconds 는 1 이상이어야 한다: " + waitSeconds);
+            require(positive(requeueDelay) && requeueDelay.compareTo(MAX_DELAY) <= 0,
+                    "consumer.requeue-delay 는 0 보다 크고 15m 이하여야 한다: " + requeueDelay);
             // 범위 검증은 소비 설정이 한다. 큐 이름은 쓰는 쪽이 정하므로 여기서는 자리만 채운다
             new BatchConsumerSettings("queue", waitSeconds, visibility, stopTimeout);
         }

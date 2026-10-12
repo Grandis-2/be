@@ -31,6 +31,10 @@ class WorkerPropertiesTest {
                 .containsExactly(Duration.ofSeconds(10), Duration.ofSeconds(20), Duration.ofSeconds(40));
         assertThat(properties.retry().generations()).isEqualTo(3);
         assertThat(properties.retry().generationGap()).isEqualTo(Duration.ofMinutes(15));
+        assertThat(properties.retry().inRoundDelayMin()).isEqualTo(Duration.ofMillis(200));
+        assertThat(properties.retry().inRoundDelayMax()).isEqualTo(Duration.ofMillis(500));
+        assertThat(properties.retry().jitterRatio()).isEqualTo(0.2);
+        assertThat(properties.consumer().requeueDelay()).isEqualTo(Duration.ofSeconds(1));
         assertThat(properties.consumer().enabled()).isTrue();
         assertThat(properties.consumer().settings("preorder-cancel").visibility()).isEqualTo(Duration.ofSeconds(120));
         assertThat(properties.rejectGuard().invalidRequests()).isEqualTo(5);
@@ -79,6 +83,11 @@ class WorkerPropertiesTest {
                 Map.of("nova.worker.circuit.open-max", "16m"),
                 Map.of("nova.worker.retry.backoff", "10s,20s"),
                 Map.of("nova.worker.retry.generation-gap", "16m"),
+                Map.of("nova.worker.retry.in-round-delay-min", "600ms"),
+                Map.of("nova.worker.retry.jitter-ratio", "1"),
+                Map.of("nova.worker.retry.jitter-ratio", "-0.1"),
+                Map.of("nova.worker.consumer.requeue-delay", "0s"),
+                Map.of("nova.worker.consumer.requeue-delay", "16m"),
                 Map.of("nova.worker.consumer.wait-seconds", "0"),
                 Map.of("nova.worker.consumer.wait-seconds", "21"),
                 Map.of("nova.worker.consumer.visibility", "10s"),
