@@ -1,9 +1,23 @@
 apply plugin: 'org.springframework.boot'
 
-// 만료 스캔과 정합성 검사. desired 1 로 고정한다 — 여러 개가 뜨면 같은 스캔이 중복 실행된다.
+// 정합성 검사. ECS 에 1개만 띄운다 — 실행 행(reconciliation_runs)의 대기 · 실행 중 표식이 겹친 실행을 막는다.
 dependencies {
     implementation project(':common:types')
-    implementation 'org.springframework.boot:spring-boot-starter'
+    implementation project(':common:jpa')
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    // Mock 원장 목록 조회. 응답 JSON 은 이 스타터에 딸린 Jackson 으로 읽는다
+    implementation 'org.springframework.boot:spring-boot-starter-restclient'
     runtimeOnly 'com.mysql:mysql-connector-j'
+
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    testImplementation 'org.testcontainers:testcontainers-mysql'
+    // 시험 DB 는 운영과 같은 flyway-project/migrations 로 만든다
+    testImplementation 'org.springframework.boot:spring-boot-starter-flyway'
+    testRuntimeOnly 'org.flywaydb:flyway-mysql'
+}
+
+tasks.named('test') {
+    // 모듈 작업 디렉터리에 기대지 않고 절대 경로로 넘긴다.
+    systemProperty 'nova.migrations-path', rootProject.file('flyway-project/migrations').absolutePath
 }
