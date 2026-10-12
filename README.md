@@ -1,262 +1,320 @@
-# nova
+# NOVA
 
-스마트폰 사전예약 시스템 백엔드.
+**전자기기 사전예약 서비스의 백엔드.** 오픈 순간 신청이 몰려도 한 건도 잃지 않고 받고, 럭키 드로우(추첨 응모)도 함께 운영한다.
 
-DB 초기 구성과 변경 절차는 [스키마 · Flyway 안내](flyway-project/README.md)를 따른다.
-
----
-
-## 무엇을 만드나
-
-오픈 직후 신청이 몰려도 사전예약을 안전하게 접수하고, **외부 예약 시스템의 처리를 기다리지 않고**
-접수 결과를 안내한다. 접수된 예약은 백그라운드에서 외부에 등록하며, 서버가 중단됐다 복구되어도
-유실 없이 최종 결과에 도달해야 한다.
-
-```
-모델·옵션 선택 → 영속 접수 → 접수 완료·순번 안내 → 백그라운드 외부 등록 → 예약 확정·배송 차수 안내
-                    ▲                                        ▲
-              여기서 응답한다                       사용자를 기다리게 하지 않는다
-```
-
-## 이것부터 이해해야 한다
-
-**접수 완료 ≠ 외부 등록 완료.** 접수 완료는 "신청을 안전하게 받았다"는 뜻이지 외부 등록·구매·재고
-확보가 끝났다는 뜻이 아니다. **일시적인 외부 호출 실패를 예약의 최종 실패와 같은 것으로 취급하지 않는다.**
-이 구분이 설계 전체를 지배한다.
-
-외부 Mock 은 평균 500ms 지연과 5% 실패를 재현한다. 여기서 5% 는 **외부 호출의 실패율**이지
-전체 예약의 5% 를 최종 실패시키라는 뜻이 아니다.
+신청은 저장되면 바로 `202 Accepted` 로 답한다. 느리고 가끔 실패하는 외부 예약 시스템 등록은 그 뒤에 백그라운드에서 처리한다.
+서버가 중간에 죽었다 살아나도 접수된 예약은 사라지지 않고 이어서 처리된다. 자동 재시도로도 끝나지 않는 건은 관리자가 확인해 재처리한다.
 
 ---
 
-## 서비스 구성
+## 어떤 문제를 푸나
+
+인기 전자기기 사전예약이 열리면 몇 초 만에 수천 명이 몰린다. 이때 세 가지가 동시에 어렵다.
+
+1. **몰림** — 10초에 5,000건이 들어와도 순서를 지키고, 같은 사람이 두 번 접수되지 않아야 한다.
+2. **느린 외부 시스템** — 예약은 외부 시스템에 등록돼야 확정되는데, 이 시스템은 평균 500ms 걸리고 5% 는 실패한다.
+3. **장애** — 처리 중에 서버가 죽어도 예약이 사라지거나 외부에 두 번 등록되면 안 된다.
+
+NOVA 는 이 문제를 하나의 구분으로 푼다.
+
+> **접수 완료 ≠ 외부 등록 완료**
+>
+> "접수 완료"는 신청을 안전하게 저장했다는 뜻이다. 외부 등록이 끝났다는 뜻이 아니다.
+> 그래서 외부 시스템을 기다리지 않고 바로 답하고, 외부 호출이 한 번 실패해도 예약이 실패한 것으로 보지 않는다.
+
+사용자 화면은 접수 뒤 5초 동안 결과를 지켜본다. 그사이 외부 등록이 끝나면 바로 결제로 넘어가고,
+아직이면 마이페이지로 보낸다. 등록이 끝나면 마이페이지에서 결제할 수 있다.
 
 ```
-be/
-├── commerce-common/     공통 응답 · 예외 · JWT 검증 · 공용 VO      (라이브러리)
-├── member/              카카오 로그인 · JWT 발급 · 회원 · 기본 배송지
-├── catalog/             상품 · 옵션 · 관리자 등록/편집
-├── preorder/            접수 · 순번 · 회차 · 배송 차수 · 예약 취소
-├── order/               주문 · 결제기록 · 재고 · 장바구니
-├── waitingroom/         입장 대기열 — 진입 판정 · 순서 · 입장권, 접수를 preorder 로 전달
-├── worker/              SQS 소비 — 외부 예약 등록 · 알림
-└── batch/               만료 스캔 · 정합성 검사
+신청 ─▶ 202 접수 완료 · 순번 안내 ─┬─ 5초 안에 외부 등록 확인 ─▶ 결제 ─▶ 예약 확정
+                                   └─ 아직 처리 중 ─▶ 마이페이지 ─▶ 등록되면 결제 ─▶ 예약 확정
 ```
 
-| 서비스 | ECS desired | 스케일 기준 | 소유 테이블 |
-| --- | --- | --- | --- |
-| `member` | 2~4 | CPU | `customers` · `refresh_tokens` |
-| `catalog` | 2~6 | 요청 수 | `categories` · `products` · `product_options`<br>`product_reviews` · `catalog_outbox_events` |
-| **`preorder`** | **6~12** | **요청 수** | `preorders` · `preorder_events`<br>`preorder_campaigns` · `shipment_batches`<br>`preorder_sync_jobs` · `preorder_sync_attempts` |
-| `waitingroom` | 2~12 | 요청 수 · 오픈 전 예약 확장 | (없음 — 대기열은 전용 Redis) |
-| `order` | 2~8 | CPU | `orders` · `order_items` · `order_events`<br>`cart_items` · `payments` · `payment_transactions` · `option_inventories`<br>`draw_campaigns` · `draw_entries` |
-| `worker` | 1~20 | Backlog per Task · SPOT | (없음 — DB 를 쓰지 않는다) |
-| `batch` | **1 고정** | — | (읽기) |
+## 주요 기능
 
-catalog 표에 걸린 교차 읽기는 둘이다. 나머지는 소유 서비스의 API 로 묻는다(preorder 는 접수 때 catalog API 로 상품 · 옵션 상태를 확인하고, 접수 시점의 상품명 · 옵션명 · 가격을 예약에 복사한다).
+**사용자**
 
-| 읽는 쪽 → 표 | 왜 |
+- 카카오 로그인
+- 입장 대기열 — 오픈 순간 몰린 사람을 줄 세워 차례로 들여보낸다
+- 사전예약 신청 · 처리 상태 · 순번 · 배송 차수 · 결제 · 취소
+- 럭키 드로우 — 응모비를 결제하고 응모, 당첨되면 상품을 0원 주문으로 받는다
+- 일반 판매 상품 주문 · 장바구니 · 토스페이먼츠 결제 · 환불
+- 상품 리뷰
+
+**관리자**
+
+- 상품 · 옵션 등록과 편집, 사전예약 회차와 배송 차수 설정
+- 예약 · 실패 내역 조회, 처리하지 못한 메시지(DLQ) 확인과 재처리
+- 대기열 입장 속도 조절
+- 럭키 드로우 회차 만들기 · 응모와 추첨 진행 확인
+
+## 전체 구조
+
+```mermaid
+flowchart LR
+    U[사용자] --> WR[waitingroom<br/>입장 대기열]
+    WR -- 입장권 --> PO[preorder<br/>접수 · 순번 · 배송 차수]
+    U --> M[member<br/>로그인 · JWT]
+    U --> C[catalog<br/>상품 · 옵션]
+    U --> O[order<br/>주문 · 재고 · 드로우]
+    O --> P[payment<br/>토스 결제 · 환불]
+
+    PO -- outbox --> Q[(SQS)]
+    O -- outbox --> Q
+    C -- outbox --> Q
+    Q --> W[worker<br/>외부 등록 · 알림]
+    W --> X[외부 예약 Mock]
+
+    B[batch<br/>만료 · 정합성 검사] -.읽기.-> DB[(MySQL)]
+```
+
+- 서비스는 모두 Spring Boot 이고 AWS ECS Fargate 위에서 따로 돈다. DB 는 NCP 의 MySQL 이다.
+- 서비스끼리는 HTTP(묻기)나 SQS 이벤트(알리기)로만 이야기한다.
+- 외부 예약 시스템은 팀이 만든 Mock 이 대신한다. 별도 저장소([Grandis-2/mock](https://github.com/Grandis-2/mock))에 있고 우리와는 HTTP 로만 통신한다.
+
+## 두 가지 흐름
+
+### 사전예약
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as 사용자
+    participant WR as waitingroom
+    participant PO as preorder
+    participant Q as SQS
+    participant W as worker
+    participant X as 외부 예약 Mock
+    participant O as order
+    participant P as payment
+    participant T as 토스페이먼츠
+
+    U->>WR: 줄 서기
+    WR-->>U: 차례가 되면 입장권
+    U->>WR: 신청 (입장권 · Idempotency-Key)
+    WR->>PO: 입장권 확인 뒤 전달
+    Note over PO: 한 트랜잭션<br/>회차 잠금 → 순번 → 예약 저장 → outbox
+    PO-->>U: 202 접수 완료 · 순번 · 배송 차수 · 상태 주소
+    PO->>Q: 외부 등록 요청 (커밋 직후)
+    Q->>W: 전달
+    W->>X: 예약 등록 (실패하면 지연을 늘려 가며 재시도)
+    W->>Q: 결과 이벤트 (차례마다 · 성공)
+    Q->>PO: 전달
+    Note over PO: 시도 기록 · 작업 상태를 남기고<br/>PENDING_SYNC → REGISTERED<br/>24시간 결제 가능
+
+    U->>PO: 상태 주소 확인 (5초 동안)
+    alt 그사이 등록됨
+        PO-->>U: REGISTERED → 결제 화면으로
+    else 아직 처리 중
+        PO-->>U: PENDING_SYNC → 마이페이지로 (등록되면 거기서 결제)
+    end
+
+    U->>O: 결제 준비
+    O->>PO: 결제할 수 있는 예약인가 (동기 조회)
+    O->>P: 결제 시도 만들기
+    U->>T: 결제창에서 결제
+    U->>O: 결제 승인
+    O->>P: 승인
+    P->>T: 승인 (멱등 키)
+    O->>Q: 결제 완료
+    Q->>PO: 전달
+    Note over PO: REGISTERED → RESERVED (예약 확정)
+```
+
+### 럭키 드로우
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor A as 관리자
+    actor U as 사용자
+    participant O as order
+    participant P as payment
+    participant T as 토스페이먼츠
+    participant Q as SQS
+    participant W as worker
+    participant X as 외부 Mock
+
+    A->>O: 회차 만들기 (당첨 인원 · 응모비 · 증정품)
+    Note over O: 증정품 재고를 당첨 인원만큼 미리 확보
+
+    U->>O: 응모 (회차당 한 번)
+    O-->>U: 결제 대기
+    U->>O: 응모비 결제 준비 · 승인
+    O->>P: 결제 시도 · 승인
+    P->>T: 승인
+    Note over O: 한 트랜잭션<br/>응모 PAID → outbox
+    O->>Q: 응모 결제 완료
+    Q->>W: 전달
+    W->>X: 응모 등록 (응모 id 가 멱등 키)
+
+    Note over O: 마감 뒤, 결제 확인 중인 응모가 0건이 되면 추첨할 차례
+    alt 결제 완료 응모 ≤ 당첨 인원
+        Note over O: 추첨 없이 전원 당첨
+    else 더 많음
+        O->>Q: 추첨 요청
+        Q->>W: 전달
+        W->>X: 받은 응모 수 대조 뒤 추첨
+        W->>Q: 당첨 응모 목록
+        Q->>O: 전달
+    end
+    Note over O: 한 트랜잭션<br/>당첨자마다 0원 주문 · 확보한 재고를 판매로
+    U->>O: 내 응모 결과
+    O-->>U: 당첨 · 미당첨
+```
+
+사전예약의 worker 구간은 동작한다. 럭키 드로우의 worker 구간(응모 등록 · 추첨)은 아직 구현 중이라,
+그림은 서비스 사이 계약([`contracts/draw-entry-sync.md`](contracts/draw-entry-sync.md))에 정해 둔 동작이다.
+
+## 핵심 설계
+
+### 1. 같은 사람이 두 번 접수되지 않는다 — 락이 아니라 유니크 키로
+
+"모델당 1인 1매"는 애플리케이션 코드가 아니라 DB 가 지킨다.
+진행 중인 예약에만 값이 있는 칸(`active_marker`)을 두고 `(회원, 모델, active_marker)` 에 유니크 키를 건다.
+동시에 두 건이 들어와도 하나는 반드시 막힌다. 취소된 예약은 이 칸이 비어서 다시 신청할 수 있다.
+
+### 2. 같은 요청을 다시 보내도 결과는 하나 — 멱등키
+
+클라이언트는 신청마다 `Idempotency-Key` 를 보낸다.
+
+- 같은 키로 같은 내용을 다시 보내면 → 새 예약을 만들지 않고 기존 결과를 돌려준다.
+- 같은 키로 다른 내용을 보내면 → 거절하고 무엇이 달랐는지 알려준다.
+
+그래서 응답을 못 받고 새로고침해도 원래 예약을 다시 찾을 수 있고, 순번이 두 번 소비되지 않는다.
+
+### 3. 모델마다 1번부터 빈틈없는 순번 — 회차 행 잠금
+
+순번은 모델마다 따로 1번부터 센다. 접수할 때 그 모델의 회차 행을 잠그고(`SELECT … FOR UPDATE`) 다음 번호를 가져간다.
+잠금은 모델 단위라서 다른 모델의 신청과는 서로 기다리지 않는다. 마지막 방어선으로 `(모델, 순번)` 유니크 키도 건다.
+
+배송 차수는 이 순번으로 정한다. 관리자가 "1~1,000번은 1차"처럼 구간을 정하고, 순번이 속한 구간이 곧 배송 차수다.
+**외부 등록이 끝난 순서와는 상관이 없다.**
+
+### 4. 저장과 발행을 한 트랜잭션에 — Transactional Outbox
+
+접수 트랜잭션 안에서 예약 · 이력 · 외부 등록 작업 · 발행할 이벤트를 함께 저장한다.
+이벤트는 커밋 직후 SQS 로 보내고, 못 보낸 것은 릴레이가 다시 집어 보낸다.
+"예약은 저장됐는데 메시지는 사라짐", 혹은 그 반대가 생기지 않는다.
+
+### 5. 실패는 다시 시도하고, 끝내 안 되면 사람이 본다 — 재시도 · DLQ
+
+worker 는 DB 를 쓰지 않는다. 외부에 보낼 내용과 몇 번째 시도인지를 메시지에 싣고 다니며,
+실패하면 지연을 늘려 가며(+지터) 같은 큐에 다시 보낸다. 차례마다 결과를 이벤트로 알리면 preorder 가 시도 기록과 작업 상태를 남긴다.
+정해진 횟수를 다 쓰면 포기(DEAD_LETTER)로 기록하고 관리자가 확인 · 재처리한다.
+**포기로 기록된 것 자체를 예약 실패로 보지 않는다.**
+
+외부에 두 번 등록되지 않도록, 예약 하나에 등록 작업은 하나만 만들고(유니크 키), 재시도마다 접수 때 고정한 같은 요청과 같은 멱등 키를 보낸다.
+결과가 불분명하면 다시 등록하지 않고 같은 키로 먼저 조회한다.
+
+### 6. 오픈 순간의 몰림은 대기열이 받는다 — waitingroom
+
+접수는 회차 행 잠금과 DB 커넥션을 쓰기 때문에 한 번에 받을 수 있는 양에 한계가 있다. 그래서 그 앞에 대기열을 두고 들어오는 속도를 조절한다.
+
+- 줄은 Redis 정렬 집합(ZSET)에 서고, 줄 서기 · 입장 판정은 Lua 스크립트로 한 번에 처리한다.
+- 차례가 되면 HMAC 서명 입장권을 받는다. preorder 는 저장소를 조회하지 않고 서명만 확인한다.
+- 여러 모델이 동시에 열려도 리더 하나가 전체 입장 속도를 모델별로 나눠 준다.
+
+### 7. 추첨은 한 번, 빠진 응모 없이 — 럭키 드로우
+
+- 응모는 회원마다 회차당 하나다. 동시에 두 번 눌러도 유니크 키가 하나만 남긴다.
+- 회차를 만들 때 증정품 재고를 당첨 인원만큼 미리 확보한다. 당첨됐는데 줄 물건이 없는 일이 생기지 않는다.
+- 추첨은 마감 뒤 결제 확인 중인 응모가 모두 끝난 다음에 한다. 추첨 직전에는 외부 Mock 이 받은 응모 수를 우리 쪽 결제 완료 수와 대조하고,
+  다르면 추첨을 미룬다. 추첨 뒤에는 빠진 응모를 되돌릴 수 없기 때문이다.
+- 서버가 여러 대여도 회차 행 잠금과 "요청함 · 반영함" 표식으로 추첨과 결과 반영은 회차마다 한 번이다.
+
+### 8. 트랜잭션이 서비스 경계를 정했다
+
+한 트랜잭션에 묶여야 하는 것은 한 서비스 안에 둔다.
+
+```
+접수        회차 잠금 → 순번 → 예약 저장 → 이력 → outbox           preorder 안에서 끝난다
+결제 성공    주문 전이 + 재고 held→sold + 장바구니 차감              order 안에서 끝난다
+```
+
+재고와 장바구니가 catalog 가 아니라 order 에 있는 이유다. catalog 에 두면 결제 성공이 분산 트랜잭션이 된다.
+worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이 되면 깨어나고 1대로 고정)는 늘어나는 방식이 정반대라 나눴다.
+
+## 기술 스택
+
+| 영역 | 사용 |
 | --- | --- |
-| `order` → `products` · `product_options` | 재고 행을 만들 때 판매 방식 · 옵션 소속 확인 |
-| `catalog` → `preorder_campaigns`(`opens_at` · `closes_at` · 행의 유무) · `option_inventories` | 목록·검색의 노출 조건(오픈 예정 · 마감 · 마감+120시간 숨김 · 품절)이 **페이징 조건**이라 쿼리 안에 있어야 한다. 상세의 회차 시각 · 옵션별 가용 수량, 판매 방식별 준비(등록 이벤트로 회차 행 · 재고 행이 생겼는가)도 같은 곳에서 읽는다. 읽기 전용 저장소 한 곳에서만 읽고 쓰지 않는다 |
+| 언어 · 프레임워크 | Java 25 · Spring Boot 4.1 · Spring Data JPA · Spring Cloud Gateway(WebFlux) |
+| 저장소 | MySQL 8.4 (`READ COMMITTED`, NCP) · Redis |
+| 메시징 | AWS SQS (Transactional Outbox) |
+| 인증 | 카카오 OAuth · JWT RS256 (JWKS 로 공개키 배포) · 리프레시 토큰 회전 |
+| 결제 | 토스페이먼츠 |
+| 회복 · 캐시 | Resilience4j · Caffeine |
+| DB 변경 | Flyway (Docker CLI) |
+| 테스트 | JUnit 5 · Testcontainers · ArchUnit · k6 |
+| 관측 | Micrometer · Prometheus · OpenTelemetry Java 에이전트 |
+| 배포 | GitHub Actions · Amazon ECR · ECS Fargate · JVM AOT 캐시 |
 
-preorder 는 catalog 를 API(`GET /internal/products/{id}/options`)로 묻고 catalog 는 preorder 표를 SQL 로 읽는 비대칭은 이유가 다르기 때문이다. 앞은 접수 때 상태를 확인하고 그 시점 값을 복사하고, 뒤는 목록의 페이징 조건으로 거른다.
+## 모듈 구성
 
-`preorder_sync_jobs` · `preorder_sync_attempts`(외부 등록 · 취소 작업과 시도 기록)는 `preorder` 만 쓴다. `worker` 는 DB 없이 메시지에 실린 내용으로
-외부를 부르고 결과(성공 · 실패한 차례 · 포기)를 `preorder-events` 로 알리며, `preorder` 가 그 이벤트를 받아 작업 상태와 시도 기록을 남긴다.
+| 모듈 | 하는 일 | 상태 |
+| --- | --- | --- |
+| `member` | 카카오 로그인 · JWT 발급 · 회원 · 기본 배송지 | 동작 |
+| `catalog` | 상품 · 옵션 · 리뷰 · 관리자 등록/편집 | 동작 |
+| `waitingroom` | 입장 대기열 — 줄 서기 · 입장권 · 접수 전달 | 동작 |
+| `preorder` | 사전예약 접수 · 순번 · 회차 · 배송 차수 · 취소 · 외부 작업 원장 · DLQ 관리 | 동작 |
+| `order` | 주문 · 재고 · 장바구니 · 드로우 | 동작 |
+| `payment` | 토스 결제 · 결제 원장 · 복구 · 환불 (내부 전용) | 동작 |
+| `worker` | SQS 를 받아 외부 예약 등록 · 취소, 드로우 응모 · 추첨, 알림 (DB 없음) | 예약 등록 · 취소 동작, 드로우 · 알림 구현 중 |
+| `batch` | 결제 기한 만료 스캔 · 우리 DB 와 외부 Mock DB 의 정합성 검사 | 골격 — 구현 중 |
+| `common:*` | 서비스가 함께 쓰는 라이브러리 (응답 · 보안 · outbox · SQS · Redis 등) | — |
 
-별도 저장소로 도는 것이 하나 더 있다.
+<details>
+<summary>서비스별로 소유한 표</summary>
 
-| | 역할 |
+| 서비스 | 표 |
 | --- | --- |
-| **mock-external** | 외부 예약 Mock + 결제 Mock. 우리와 **HTTP 로만** 통신한다 |
+| `member` | `customers` · `refresh_tokens` |
+| `catalog` | `categories` · `products` · `product_options` · `product_reviews` · `catalog_outbox_events` |
+| `preorder` | `preorders` · `preorder_events` · `preorder_campaigns` · `shipment_batches` · `preorder_outbox_events` · `dead_letter_events`<br>`preorder_sync_jobs` · `preorder_sync_attempts` (외부 작업 · 시도 원장) |
+| `order` | `orders` · `order_items` · `order_events` · `cart_items` · `option_inventories` · `draw_campaigns` · `draw_entries` |
+| `payment` | `payments` · `payment_transactions` |
+| `worker` | (없음 — DB 를 쓰지 않는다. 결과는 이벤트로 preorder 에 알린다) |
+| `waitingroom` | (없음 — 전용 Redis) |
 
-### 왜 이렇게 나눴나
+표는 소유한 서비스만 쓴다. 다른 서비스의 데이터는 그 서비스의 API 로 묻는 것이 원칙이고,
+예외는 목록 화면의 페이징 조건처럼 쿼리 안에 있어야 하는 읽기뿐이다.
+표 사이 관계는 [ERD](https://dbdiagram.io/d/Copy-of-Untitled-Diagram-6aa66499957fec6d5bdd9189)에 있다.
 
-**트랜잭션이 경계를 정했다.** 한 트랜잭션에 묶인 것은 한 서비스 안에 둔다.
+</details>
 
+## 로컬에서 실행하기
+
+**필요한 것**: JDK 25, Docker, 로컬 MySQL 8.4(`shop` 스키마) · Redis
+
+```sh
+# 1. SQS 에뮬레이터(Floci)를 띄우고 큐를 만든다
+docker compose -f docker/floci/compose.yaml up -d
+
+# 2. DB 스키마를 만든다 (Flyway 는 컨테이너로 돈다. 자세한 건 스키마 · Flyway 안내)
+FLYWAY_URL=jdbc:mysql://host.docker.internal:3306/shop FLYWAY_USER=... FLYWAY_PASSWORD=... \
+  bash flyway-project/flyway.sh migrate
+
+# 3. 서비스마다 설정 예시를 복사하고 CHANGE_ME 를 채운다
+cp member/src/main/resources/application.yml.example member/src/main/resources/application.yml
+
+# 4. 서비스를 띄운다
+./gradlew :member:bootRun
 ```
-접수        회차 잠금 → 순번 → preorder INSERT → 이력 → outbox     preorder 안에서 닫힘
-결제 성공    주문 전이 + payments INSERT + 재고 held→sold + 장바구니 차감   order 안에서 닫힘
-```
 
-재고와 장바구니가 `order` 에 있는 이유가 이것이다. `catalog` 에 두면 결제 성공이 분산 트랜잭션이 된다.
-
-**`worker` 와 `batch` 는 스케일 방식이 반대라 갈랐다.**
-
-```
-worker   메시지가 오면 깨어남.  1~20 으로 늘어나야 함
-batch    시간이 되면 깨어남.   1 로 고정돼야 함 (늘면 같은 스캔이 중복 실행)
-```
-
-**결제·알림은 서비스로 두지 않았다.** 실 PG 를 붙이지 않으므로 결제 Mock 은 `mock-external` 로 나가고,
-결제 기록은 `order` 가 소유한다. 알림은 Mock 기록이라 `worker` 가 SQS 로 처리한다.
-
-### 서비스 간 연결점 다섯
-
-```
-결제 시작    order → preorder   "이 예약 결제 가능한가?"           동기 조회
-예약 취소    preorder → order → preorder                        SQS 이벤트
-상품 등록    catalog → preorder(회차 · 차수) / order(초기 재고)    SQS 이벤트 (contracts/catalog-events.md)
-상품 수정    catalog → preorder(캐시 비우기 · 회차 취소)             SQS 이벤트 (contracts/catalog-events.md)
-리뷰 작성    catalog → order(내 주문상품) · member(작성자 이름)     동기 조회 (contracts/order-internal.md · member-internal.md)
-```
-
-두 번째는 원래부터 단계적이었다. ERD 가 *"예약은 주문 CANCELED 와 Mock 취소 SUCCEEDED 가
-모두 확인된 트랜잭션에서 CANCELED"* 로 정해뒀기 때문에, 서비스를 나눠도 구조가 같다.
-
----
-
-## 확정된 업무 정책
-
-**모델별 1인 1매** — 같은 모델은 색상·용량을 바꿔도 추가 신청 불가. 다른 모델은 각각 신청 가능.
-
-**신청 단위** — 모델 하나의 옵션 하나, 수량 1.
-
-**모집 구조** — 한 번의 사전예약 모집. 1차·2차·3차는 추가 모집이 아니라 배송 일정 구분이다.
-
-**접수 순번** — 모델마다 독립적으로 1번부터. 다른 모델 신청 때문에 순번이 함께 증가하지 않는다.
-
-**배송 차수** — 해당 모델의 접수 순번과 배송 구간으로 결정한다. **외부 등록 완료 순서로 배정하지 않는다.**
-
-**중복 재전송** — 동일 신청의 재전송은 기존 접수 결과를 반환하며 새 예약·새 순번을 만들지 않는다.
-
-**접수 성공 판정** — 신청이 안전하게 저장된 뒤에만 안내한다.
-
-**외부 확정 판정** — 실제 외부 등록 성공이 확인된 뒤에만 안내한다.
-
----
-
-## 정해진 것
-
-| 항목 | 결정 |
+| 서비스 | 포트 |
 | --- | --- |
-| 재신청 | 최종 실패·취소 후 재신청 허용. 단 진행 중·확정 예약은 모델당 1건 |
-| 자동 재시도 실패 | DLQ 에 두고 관리자 확인·재처리. **DLQ 진입 자체가 예약 최종 실패가 아니다** |
-| 배송 차수 개수 | 모델별로 관리자가 설정 |
-| 접수 후 변경 | 해당 모델의 배송 기준과 기존 배정 변경 금지 |
-| 오픈·마감 | 모델별로 따로 설정. 마감은 당일 자정 |
-| 사용자 취소 | 포함. 배송 중부터 불가 (예약됨 → 배송 준비 중 → 배송 중 → 배송 완료) |
-| 입장 대기열 | 포함. `waitingroom` 모듈 |
-| 로그인 | 소셜 로그인만. 카카오 |
-| 인증 | JWT + 리프레시 토큰 (ElastiCache Redis) |
-| 결제 | 사전예약 후 결제 기한을 주는 방식 |
-| DB | MySQL 8.4 · 격리 수준 `READ COMMITTED` |
-| 비동기 | Outbox + SQS |
-| 배포 | ECS Fargate · RDS · ElastiCache |
-| 로그 수집 | OTel Java 에이전트(2.32.0)는 이미지의 `/otel/javaagent.jar` 에 있다. 켜는 건 nova-infra 작업 정의의 `JDK_JAVA_OPTIONS` |
+| member | 8080 |
+| catalog | 8082 |
+| preorder | 8083 |
+| order | 8084 |
+| waitingroom · payment | 8085 (둘을 함께 띄울 때는 하나를 바꾼다) |
 
-## 아직 안 정해진 것
+API 문서는 Swagger 허브(`docker/openapi-hub`)로 member · catalog · preorder · order 를 한곳에 모아 볼 수 있다.
 
-- 정합성 검사의 자동 실행 주기
-- 불일치를 발견했을 때 후속 조치를 어디까지 자동화할지
-- 자동 복구가 끝내 되지 않는 예약을 어떻게 종결할지
-- 재시도·DLQ 상태를 사용자 화면과 관리자 화면 중 어디에 어떻게 표시할지
-- 재신청할 때 접수 순번을 새로 줄지 기존 번호를 유지할지
-- 배송일이 정해지지 않은 구간을 허용할지
-- 옵션별 재고 관리와 접수 순서에 따른 배정을 사전예약에도 적용할지
-- 알림 종류, 그리고 사용자가 끌 수 없는 알림을 둘지
+## 더 읽을거리
 
----
-
-## 범위
-
-### 포함
-
-- 가상 회원 선택 이용
-- 외부 예약 시스템은 **팀이 만든 Mock 으로 대체** (500ms 지연 · 5% 실패, 시연 중 조절 가능)
-- 외부 처리를 기다리지 않는 접수, 접수 데이터 보존, 중복 방지
-- 비동기 외부 등록, 일시 실패 재시도, 중단 후 복구, 최종 결과 관리
-- 사용자 화면 — 신청, 접수 결과, 예약 목록·상세, 처리 상태·순번·배송 차수
-- 관리자 화면 — 예약·실패 내역, 처리 현황, Mock 설정, 정합성 배치 관리
-- 정합성 검사 — 두 시스템 결과 대조, 불일치 보고, 재검사·전후 비교
-
-### 제외
-
-- 추가 모집·사전예약 회차 생성 (한 번의 모집으로 제한)
-- 실제 PG·통신사·문자/이메일 연동 (전부 Mock)
-- 배송 추적·송장·배송 완료 관리 (배송 차수·예상 일정 안내까지만)
-
----
-
-## 검증 기준
-
-- **정상 흐름** — 접수 완료와 확정을 구분해서 안내하고 예약번호·순번·배송 정보를 보여준다
-- **중복 방지** — 같은 모델의 색상·용량을 바꿔 동시 신청해도 예약이 중복 생성되지 않는다
-- **멱등성** — 같은 키의 재전송은 기존 결과를 반환하고, 같은 키·다른 내용은 거절한다
-- **응답 유실** — 저장 후 응답을 잃거나 새로고침해도 원래 예약을 다시 찾을 수 있고 순번이 중복되지 않는다
-- **외부 일시 실패** — 재시도로 성공에 도달하며, 호출 실패를 최종 실패로 즉시 노출하지 않는다
-- **중단·재기동** — 처리 서버가 죽었다 살아나도 유실 없이 처리가 이어지고 외부 중복 등록이 없다
-- **배송 배정** — 외부 확정 순서가 접수 순서와 달라도 모델별 순번 기준으로 배정된다
-- **정합성 검사** — 불일치를 양방향으로 검출하고, 검사 자체는 업무 데이터를 바꾸지 않는다
-- **접근 제어** — 타인 예약과 관리자 기능 접근이 차단되고 민감정보가 노출되지 않는다
-- **트래픽** — 오픈 직후 집중 신청을 부하 시험으로 재현한다 (과제 예시 10초 5,000건)
-
----
-
-## 브랜치
-
-에픽 브랜치 아래에 작업 브랜치를 둔다.
-
-```
-main
- └── epic/NV-1                  에픽. main 에서 딴다
-      ├── feature/NV-2          작업. 에픽에서 따고 에픽으로 합친다
-      ├── feature/NV-3
-      └── fix/NV-4
-```
-
-작업 브랜치는 **에픽에서 따고 에픽으로 PR** 을 올린다. `main` 으로 직접 올리지 않는다.
-에픽이 끝나면 에픽 → `main` PR 을 올린다.
-
-브랜치 이름은 `<타입>/<이슈 키>` 다. 설명을 붙이고 싶으면 하이픈으로 잇는다.
-
-```
-epic/NV-1
-feature/NV-7
-feature/NV-7-kakao-login
-fix/NV-12
-```
-
-머지는 **작업 → 에픽, 에픽 → `main` 모두 merge commit** 으로 한다.
-작업 브랜치에서 쌓은 커밋이 그대로 보존되므로, 나중에 어느 단계에서 무엇이 바뀌었는지 되짚을 수 있다.
-
-PR 은 최소 1명이 승인해야 머지한다.
-
-에픽이 길어지면 `main` 과 벌어진다. **주기적으로 `main` 을 에픽에 반영해** 충돌을 미리 푼다 —
-에픽 → `main` PR 에서 한꺼번에 터지면 풀기 어렵다.
-
-## 커밋
-
-`<type>(<이슈 키>): <요약>` 형식. 요약은 한국어로 쓰고 마침표를 붙이지 않는다.
-
-| type | 쓰는 경우 |
-| --- | --- |
-| `feat` | 기능 추가 |
-| `fix` | 버그 수정 |
-| `refactor` | 동작 변경 없는 구조 개선 |
-| `test` | 테스트 추가·수정 |
-| `docs` | 문서 |
-| `chore` | 빌드·설정·의존성 |
-
-```
-feat(NV-7): 사전예약 접수 API 추가
-fix(NV-12): 같은 멱등키 동시 재전송 시 순번이 두 번 소비되는 문제 수정
-chore(NV-3): SQS 리스너 의존성 추가
-```
-
-이슈 키는 **그 커밋이 속한 작업**의 키다. 에픽 키가 아니다.
-
-**리뷰 반영 커밋에는 이슈 키를 붙이지 않는다.**
-
-```
-fix: 리뷰 반영 — 중복 검증을 서비스로 옮김
-refactor: 리뷰 반영 — 조건부 UPDATE 1행 확인 추가
-```
-
-PR 자체가 이미 이슈에 묶여 있어 키가 중복 정보이기 때문이다.
-
-머지를 squash 하지 않으므로 이 커밋들도 히스토리에 그대로 남는다.
-그래서 **"리뷰 반영"만 쓰지 말고 무엇을 고쳤는지 함께 적는다.**
-
-**한 커밋에 한 가지 일만 담는다.** 기능과 리팩터링이 섞이면 리뷰에서 무엇이 바뀐 건지 가려낼 수 없다.
+- [ERD](https://dbdiagram.io/d/Copy-of-Untitled-Diagram-6aa66499957fec6d5bdd9189) — 표 · 관계 · 칸 설명 (기준: 2026-10-11 dev)
+- [스키마 · Flyway 안내](flyway-project/README.md) — DB 를 바꾸는 절차
+- [`contracts/`](contracts) — 서비스 사이 API · 이벤트 계약
+- [기여 방법](CONTRIBUTING.md) — 브랜치 · 커밋 규칙
