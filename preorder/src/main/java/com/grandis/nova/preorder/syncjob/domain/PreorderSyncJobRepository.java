@@ -71,10 +71,19 @@ public interface PreorderSyncJobRepository extends JpaRepository<PreorderSyncJob
         return transit(id, IN_PROGRESS, SyncJobStatus.DEAD_LETTER, now, now);
     }
 
-    /** 관리자 재처리. 포기한 작업만 되돌린다 — 여러 번 불러도 한 번만 1. */
+    /** 관리자 재처리. 포기한 작업만 되돌리고 실행 회차를 올린다 — 여러 번 불러도 한 번만 1. */
     default int reopen(UUID id, Instant now) {
-        return transit(id, List.of(SyncJobStatus.DEAD_LETTER), SyncJobStatus.PENDING, null, now);
+        return reopen(id, SyncJobStatus.DEAD_LETTER, SyncJobStatus.PENDING, now);
     }
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("""
+            update PreorderSyncJob j
+               set j.status = :to, j.run = j.run + 1, j.deadLetteredAt = null, j.updatedAt = :now
+             where j.id = :id and j.status = :from
+            """)
+    int reopen(@Param("id") UUID id, @Param("from") SyncJobStatus from, @Param("to") SyncJobStatus to,
+               @Param("now") Instant now);
 
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("""

@@ -59,9 +59,11 @@ class SyncJobReprocessor {
             throw new BusinessException(PreorderErrorCode.SYNC_JOB_NOT_REPROCESSABLE,
                     Map.of("reason", blocker.orElse("status=" + job.getStatus())));
         }
+        PreorderSyncJob reopened = syncJobs.findById(syncJobId).orElseThrow();
         outboxWriter.append(new RegisterJobReady(syncJobId, preorders.getById(preorderId).preorderToken(),
-                job.getRequestPayload(), SyncActor.ADMIN));
-        log.info("외부 등록 작업을 재처리한다 syncJobId={} requestedBy={}", syncJobId, requestedBy);
-        return syncJobs.findById(syncJobId).orElseThrow();
+                reopened.getRequestPayload(), SyncActor.ADMIN, reopened.getRun()));
+        log.info("외부 등록 작업을 재처리한다 syncJobId={} run={} requestedBy={}", syncJobId, reopened.getRun(),
+                requestedBy);
+        return reopened;
     }
 }

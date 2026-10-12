@@ -9,6 +9,7 @@ public record SyncJobSnapshot(
         UUID preorderId,
         SyncJobType jobType,
         SyncJobStatus status,
+        int run,
         String requestPayload,
         Instant leaseExpiresAt,
         Instant deadLetteredAt,

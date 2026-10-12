@@ -172,7 +172,7 @@ class AdminSyncJobApiTest {
                 .andExpect(jsonPath("$.data.deadLetteredAt").doesNotExist());
 
         assertThat(reprocessRequests(jobId)).containsExactly(Map.of("syncJobId", jobId, "preorderId", token,
-                "ourReservationId", token, "actor", "ADMIN"));
+                "ourReservationId", token, "actor", "ADMIN", "run", 2));
     }
 
     /** 되돌린 작업은 더는 DEAD_LETTER 가 아니다 — 같은 작업이 worker 에서 두 번 돌지 않는다. */
@@ -371,14 +371,15 @@ class AdminSyncJobApiTest {
                 SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.syncJobId')) AS syncJobId,
                        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.preorderId')) AS preorderId,
                        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.request.ourReservationId')) AS ourReservationId,
-                       JSON_UNQUOTE(JSON_EXTRACT(payload, '$.actor')) AS actor
+                       JSON_UNQUOTE(JSON_EXTRACT(payload, '$.actor')) AS actor,
+                       CAST(JSON_EXTRACT(payload, '$.run') AS SIGNED) AS run
                   FROM preorder_outbox_events
                  WHERE event_type = 'REGISTER_JOB_READY' AND aggregate_id = ?
                    AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.actor')) = 'ADMIN'
                 """, (Object) UuidBinary.toBytes(syncJobId)).stream()
                 .map(row -> Map.<String, Object>of("syncJobId", UUID.fromString((String) row.get("syncJobId")),
                         "preorderId", row.get("preorderId"), "ourReservationId", row.get("ourReservationId"),
-                        "actor", row.get("actor")))
+                        "actor", row.get("actor"), "run", ((Number) row.get("run")).intValue()))
                 .toList();
     }
 }

@@ -118,7 +118,7 @@ class ExternalJobResultTest {
     /** 외부가 준 값은 길이를 믿지 않는다 — 칸보다 길어도 메시지를 버리지 않고 잘라 남긴다. */
     @Test
     void 칸보다_긴_오류_코드와_메시지는_잘라_남긴다() {
-        NewSyncAttempt tooLong = new NewSyncAttempt(1, 1, "SYSTEM", "REJECTED", 422, "C".repeat(150),
+        NewSyncAttempt tooLong = new NewSyncAttempt(1, 1, 1, "SYSTEM", "REJECTED", 422, "C".repeat(150),
                 "가".repeat(499) + "😀😀", STARTED, FINISHED);
 
         handler.onExternalJobAttempted(ShopFixtures.unique(), attempted(tooLong));
@@ -217,6 +217,43 @@ class ExternalJobResultTest {
         assertThat(attempts()).hasSize(1);
     }
 
+    /** 접수 메시지가 두 번 나가 같은 작업이 두 갈래로 돌았거나, worker 가 포기를 알린 뒤 같은 차례를 다시 실행한 경우다. */
+    @Test
+    void 재처리_뒤에_온_지난_실행의_결과는_기록만_하고_되돌린_작업을_바꾸지_않는다() {
+        handler.onExternalJobFailed(ShopFixtures.unique(), exhausted());
+        reopen();
+        String reason = "R-" + ShopFixtures.unique();
+
+        handler.onExternalJobAttempted(ShopFixtures.unique(), attempted(attempt(2, 3, "TRANSIENT_FAILURE", 503, null)));
+        handler.onExternalJobFailed(ShopFixtures.unique(), failed("REGISTER", reason,
+                attempt(3, 4, "TRANSIENT_FAILURE", 503, null)));
+
+        assertThat(jobStatus()).as("지난 실행(run 1)의 결과다").isEqualTo("PENDING");
+        assertThat(attempts()).as("외부 호출이 있었다는 기록은 남긴다").hasSize(3);
+        assertThat(failedCount("REGISTER", reason)).isZero();
+    }
+
+    @Test
+    void 재처리한_실행의_포기는_작업을_다시_DEAD_LETTER_로_둔다() {
+        handler.onExternalJobFailed(ShopFixtures.unique(), exhausted());
+        reopen();
+
+        handler.onExternalJobFailed(ShopFixtures.unique(), failed("REGISTER", "MOCK_REJECTED",
+                new NewSyncAttempt(2, 1, 1, "ADMIN", "REJECTED", 422, "MOCK_REJECTED", null, STARTED, FINISHED)));
+
+        assertThat(jobStatus()).isEqualTo("DEAD_LETTER");
+    }
+
+    /** 실행 회차가 없으면 지난 실행의 결과인지 가릴 수 없다. */
+    @Test
+    void 실행_회차_없는_실패한_차례는_받지_않는다() {
+        NewSyncAttempt withoutRun = new NewSyncAttempt(0, 1, 1, "SYSTEM", "UNKNOWN", null, null, null, STARTED, FINISHED);
+
+        assertThatThrownBy(() -> handler.onExternalJobAttempted(ShopFixtures.unique(), attempted(withoutRun)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(attempts()).isEmpty();
+    }
+
     /** 재처리하면 worker 는 세대 · 차례를 처음부터 다시 센다. 이전 기록과 겹쳐도 새 줄로 남아야 한다. */
     @Test
     void 재처리_뒤의_차례는_세대와_차례가_이전과_같아도_새로_남긴다() {
@@ -225,7 +262,7 @@ class ExternalJobResultTest {
         reopen();
 
         handler.onExternalJobSucceeded(ShopFixtures.unique(), new ExternalJobSucceeded(jobId, token, "REGISTER", external(),
-                new NewSyncAttempt(1, 1, "ADMIN", "SUCCESS", 201, null, null, STARTED, FINISHED)));
+                new NewSyncAttempt(2, 1, 1, "ADMIN", "SUCCESS", 201, null, null, STARTED, FINISHED)));
 
         assertThat(attempts()).extracting(row -> row.get("attempt_number") + ":" + row.get("generation") + "-"
                         + row.get("generation_attempt") + ":" + row.get("actor"))
@@ -284,7 +321,7 @@ class ExternalJobResultTest {
 
     private static NewSyncAttempt attempt(int generation, int attempt, String result, Integer httpStatus,
                                           String errorCode) {
-        return new NewSyncAttempt(generation, attempt, "SYSTEM", result, httpStatus, errorCode, null, STARTED, FINISHED);
+        return new NewSyncAttempt(1, generation, attempt, "SYSTEM", result, httpStatus, errorCode, null, STARTED, FINISHED);
     }
 
     /** 재시도를 다 쓰고 포기한 것. 마지막 차례를 싣는다. */
@@ -300,10 +337,11 @@ class ExternalJobResultTest {
         return new ExternalJobFailed(jobId, token, jobType, reason, attempt);
     }
 
-    /** 관리자 재처리가 작업을 되돌린 것처럼 만든다. */
+    /** 관리자 재처리가 작업을 되돌린 것처럼 만든다(실행 회차가 오른다). */
     private void reopen() {
-        jdbcTemplate.update("UPDATE preorder_sync_jobs SET status = 'PENDING', dead_lettered_at = NULL WHERE id = ?",
-                (Object) UuidBinary.toBytes(jobId));
+        jdbcTemplate.update("""
+                UPDATE preorder_sync_jobs SET status = 'PENDING', dead_lettered_at = NULL, run = run + 1 WHERE id = ?
+                """, (Object) UuidBinary.toBytes(jobId));
     }
 
     private double failedCount(String jobType, String reason) {

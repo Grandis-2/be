@@ -41,6 +41,10 @@ public class PreorderSyncJob extends BaseEntity {
     @Column(nullable = false, updatable = false, length = 20)
     private SyncJobStatus status;
 
+    /** 몇 번째 실행인가. 관리자 재처리마다 1 씩 오른다 — 지난 실행의 결과가 늦게 와도 작업 상태를 바꾸지 못하게 가린다. */
+    @Column(nullable = false, updatable = false)
+    private int run;
+
     @Column(insertable = false, updatable = false, length = 64)
     private String leaseToken;
 
@@ -58,6 +62,7 @@ public class PreorderSyncJob extends BaseEntity {
         this.jobType = jobType;
         this.requestPayload = requestPayload;
         this.status = SyncJobStatus.PENDING;
+        this.run = 1;
     }
 
     /** 접수 트랜잭션에서 만든다. */
@@ -72,7 +77,7 @@ public class PreorderSyncJob extends BaseEntity {
 
     /** 다른 모듈에 넘기는 읽기 전용 값. */
     public SyncJobSnapshot toSnapshot() {
-        return new SyncJobSnapshot(getId(), getPreorderId(), getJobType(), getStatus(),
+        return new SyncJobSnapshot(getId(), getPreorderId(), getJobType(), getStatus(), getRun(),
                 getRequestPayload(), getLeaseExpiresAt(), getDeadLetteredAt(), getCreatedAt(),
                 getUpdatedAt());
     }
@@ -91,6 +96,10 @@ public class PreorderSyncJob extends BaseEntity {
 
     public SyncJobStatus getStatus() {
         return status;
+    }
+
+    public int getRun() {
+        return run;
     }
 
     public String getLeaseToken() {

@@ -94,7 +94,7 @@ class PreorderEventDispatcherTest {
     @Test
     void 외부_작업의_실패한_차례와_포기_메시지를_작업_원장_기록으로_보낸다() {
         UUID jobId = fixtures.registerJob(preorderId);
-        ObjectNode attempt = payload().put("generation", 1).put("attempt", 1).put("actor", "SYSTEM")
+        ObjectNode attempt = payload().put("run", 1).put("generation", 1).put("attempt", 1).put("actor", "SYSTEM")
                 .put("result", "TRANSIENT_FAILURE").put("httpStatus", 503).put("errorCode", "UPSTREAM_UNAVAILABLE")
                 .putNull("errorMessage").put("startedAt", "2026-10-04T01:00:00Z").put("finishedAt", "2026-10-04T01:00:01Z");
 

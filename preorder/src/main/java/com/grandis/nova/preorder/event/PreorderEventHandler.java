@@ -105,6 +105,7 @@ public class PreorderEventHandler {
         requireAttempt(message.attempt(), message.syncJobId());
         Optional<SyncJobSnapshot> job = lockJob(message.syncJobId());
         if (job.isPresent() && syncJobs.recordAttempt(job.get().id(), eventId, message.attempt())
+                && isCurrentRun(job.get(), message.attempt())
                 && syncJobs.scheduleRetry(job.get().id(), clock.instant()) == 0) {
             log.info("이미 끝난 작업의 차례는 기록만 한다 syncJobId={} status={}", job.get().id(), job.get().status());
         }
@@ -113,13 +114,14 @@ public class PreorderEventHandler {
     /**
      * worker 가 포기했다. 등록 작업은 DEAD_LETTER 로 두고 관리자 재처리를 기다린다 — 예약은 그대로 둔다.
      * 취소 작업은 포기 상태가 없어(DB CHECK) 작업은 그대로 두고 로그로 알린다. 둘 다 지표로 센다.
-     * 이미 받은 이벤트면 아무것도 하지 않는다 — 재처리로 되돌린 작업을 늦은 중복이 다시 포기시키지 않게.
+     * 이미 받은 이벤트 · 지난 실행의 결과면 작업을 바꾸지 않는다 — 재처리로 되돌린 작업을 늦은 결과가 다시 포기시키지 않게.
      */
     @Transactional
     public void onExternalJobFailed(String eventId, ExternalJobFailed message) {
         requireAttempt(message.attempt(), message.syncJobId());
         Optional<SyncJobSnapshot> found = lockJob(message.syncJobId());
-        if (found.isEmpty() || !syncJobs.recordAttempt(found.get().id(), eventId, message.attempt())) {
+        if (found.isEmpty() || !syncJobs.recordAttempt(found.get().id(), eventId, message.attempt())
+                || !isCurrentRun(found.get(), message.attempt())) {
             return;
         }
         SyncJobSnapshot job = found.get();
@@ -158,13 +160,23 @@ public class PreorderEventHandler {
     }
 
     /**
-     * 실패한 차례 · 포기는 차례 기록이 있어야 받는다 — 이미 받은 이벤트인지를 그 기록의 이벤트 id 로 가리기 때문이다.
+     * 실패한 차례 · 포기는 차례 기록이 있어야 받는다 — 이미 받은 이벤트인지, 지난 실행의 결과인지를 그 기록으로 가린다.
      * 없으면 계약이 어긋난 것이라 예외로 올린다(재수신 한도를 넘으면 DLQ).
      */
     private static void requireAttempt(NewSyncAttempt attempt, UUID syncJobId) {
-        if (attempt == null) {
-            throw new IllegalArgumentException("차례 기록(attempt)이 없는 결과 이벤트다: syncJobId=" + syncJobId);
+        if (attempt == null || attempt.run() < 1) {
+            throw new IllegalArgumentException("차례 기록(attempt)이나 실행 회차(run)가 없는 결과 이벤트다: syncJobId=" + syncJobId);
         }
+    }
+
+    /** 관리자 재처리 전에 돌던 실행의 결과인가. 그런 결과는 차례 기록만 남기고 작업 상태는 바꾸지 않는다. */
+    private static boolean isCurrentRun(SyncJobSnapshot job, NewSyncAttempt attempt) {
+        if (attempt.run() >= job.run()) {
+            return true;
+        }
+        log.warn("지난 실행의 결과라 작업 상태는 바꾸지 않는다 syncJobId={} run={} currentRun={}",
+                job.id(), attempt.run(), job.run());
+        return false;
     }
 
     /** 결제 시작. 화면의 "결제 진행 중" 표시용 시각만 남긴다 — 결제 가능 상태가 아니면 무시된다. */

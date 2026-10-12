@@ -119,7 +119,7 @@ class SqsMessagingTest {
     void 커밋되면_목적지_큐로_봉투를_보낸다() {
         UUID syncJobId = UUID.randomUUID();
         Long id = transactionTemplate.execute(status -> writer.append(new RegisterJobReady(syncJobId, "9f1c2d3e",
-                "{\"ourReservationId\":\"9f1c2d3e\"}", SyncActor.SYSTEM)));
+                "{\"ourReservationId\":\"9f1c2d3e\"}", SyncActor.SYSTEM, 1)));
         String eventId = jdbcTemplate.queryForObject(
                 "SELECT event_id FROM preorder_outbox_events WHERE id = ?", String.class, id);
 
@@ -133,6 +133,7 @@ class SqsMessagingTest {
         assertThat(message.messageAttributes().get("eventId").stringValue()).isEqualTo(eventId);
         assertThat(message.messageAttributes().get("attempt").stringValue()).isEqualTo("1");
         assertThat(message.messageAttributes().get("generation").stringValue()).isEqualTo("1");
+        assertThat(message.messageAttributes().get("run").stringValue()).isEqualTo("1");
         assertThat(message.messageAttributes().get("actor").stringValue()).isEqualTo("SYSTEM");
     }
 
@@ -265,7 +266,7 @@ class SqsMessagingTest {
                 {"eventId":"%s","eventType":"EXTERNAL_JOB_SUCCEEDED","aggregateType":"PREORDER_SYNC_JOB",
                  "aggregateId":"%s","occurredAt":"2026-09-03T01:00:03.470Z",
                  "payload":{"syncJobId":"%s","preorderId":"%s","jobType":"REGISTER","externalNumber":"%s",
-                            "attempt":{"generation":1,"attempt":1,"actor":"SYSTEM","result":"SUCCESS","httpStatus":201,
+                            "attempt":{"run":1,"generation":1,"attempt":1,"actor":"SYSTEM","result":"SUCCESS","httpStatus":201,
                                        "errorCode":null,"errorMessage":null,
                                        "startedAt":"2026-09-03T01:00:03.100Z","finishedAt":"2026-09-03T01:00:03.400Z"}}}
                 """.formatted(eventId, syncJobId, syncJobId, token, externalNumber);

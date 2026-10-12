@@ -137,7 +137,7 @@ class ObservabilityTest {
         double published = publishCount();
 
         transactionTemplate.executeWithoutResult(status -> outboxWriter.append(
-                new RegisterJobReady(UUID.randomUUID(), ShopFixtures.unique(), "{}", SyncActor.SYSTEM)));
+                new RegisterJobReady(UUID.randomUUID(), ShopFixtures.unique(), "{}", SyncActor.SYSTEM, 1)));
 
         await().atMost(Duration.ofSeconds(5)).until(() -> publishCount() == published + 1);
     }

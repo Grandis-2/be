@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ResultEventPayloadTest {
 
     static final UUID JOB = UUID.fromString("0190f3a1-0000-7000-8000-000000000001");
-    static final Attempt ATTEMPT = new Attempt(2, 3, Actor.SYSTEM, AttemptResult.TRANSIENT_FAILURE, 503,
+    static final Attempt ATTEMPT = new Attempt(1, 2, 3, Actor.SYSTEM, AttemptResult.TRANSIENT_FAILURE, 503,
             "UPSTREAM_UNAVAILABLE", "down", Instant.parse("2026-10-12T01:00:00Z"), Instant.parse("2026-10-12T01:00:01Z"));
 
     final JsonMapper json = JsonMapper.builder().build();
@@ -31,7 +31,7 @@ class ResultEventPayloadTest {
         assertThat(payload.get("preorderId").asString()).isEqualTo("PO-1");
         assertThat(payload.get("jobType").asString()).isEqualTo("REGISTER");
         assertThat(payload.get("externalNumber").asString()).isEqualTo("EXT-9");
-        assertThat(payload.get("attempt").propertyNames()).containsExactly("generation", "attempt", "actor", "result",
+        assertThat(payload.get("attempt").propertyNames()).containsExactly("run", "generation", "attempt", "actor", "result",
                 "httpStatus", "errorCode", "errorMessage", "startedAt", "finishedAt");
     }
 
