@@ -33,11 +33,12 @@ class ModuleBoundaryTest {
 
     static final String ROOT = "com.grandis.nova.preorder";
 
-    private static final String[] USE_CASES = modules("accept", "cancel", "query", "payability", "event", "deadletter");
+    private static final String[] USE_CASES =
+            modules("accept", "cancel", "query", "payability", "event", "deadletter", "reconciliation");
     private static final String[] WIRING = modules("config", "metrics");
     /** 안을 api · application · domain 으로 나눈 모듈. 작은 모듈은 평평하게 둔다. */
     private static final String[] LAYERED =
-            {"accept", "cancel", "query", "preorder", "campaign", "syncjob", "deadletter"};
+            {"accept", "cancel", "query", "preorder", "campaign", "syncjob", "deadletter", "reconciliation"};
 
     /** 나눈 모듈은 모듈 하나를, 그 밖(integration 의 catalog · order · sqs 등)은 패키지 하나를 한 조각으로 본다. */
     @ArchTest
@@ -130,7 +131,7 @@ class ModuleBoundaryTest {
     static final ArchRule 컨트롤러는_기능_모듈에만_둔다 = classes()
             .that().areAnnotatedWith(RestController.class)
             .should().resideInAnyPackage(modules("accept", "cancel", "query", "payability", "campaign", "syncjob",
-                    "deadletter"));
+                    "deadletter", "reconciliation"));
 
     @ArchTest
     static final ArchRule 컨트롤러는_리포지토리를_직접_부르지_않는다 = noClasses()
