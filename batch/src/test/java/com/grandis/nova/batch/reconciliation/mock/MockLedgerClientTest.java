@@ -106,9 +106,22 @@ class MockLedgerClientTest {
     void 서버에_닿지_못하면_던진다() {
         MockLedgerClient nowhere = client("http://localhost:1", Duration.ofMinutes(1));
 
+        // 연결 주소 같은 예외 원문은 화면에 나가지 않는다
         assertThatThrownBy(() -> nowhere.entries().hasNext())
                 .isInstanceOf(MockLedgerUnavailable.class)
-                .hasMessageStartingWith("Mock 목록 조회 실패(1페이지, 응답을 받지 못함 — ");
+                .hasMessage("Mock 목록 조회 실패(1페이지, 응답을 받지 못함 — 연결 실패)");
+    }
+
+    @Test
+    void 계약에_없는_값은_사유에_담지_않는다() {
+        MOCK.respondAtPage(1, """
+                {"items":[{"externalKey":"k1","externalNumber":null,"customerId":null,"productId":null,"sku":null,
+                 "status":"SECRET-VALUE","confirmedAt":null,"canceledAt":null}],"nextCursor":null}
+                """);
+
+        assertThatThrownBy(() -> drain(client.entries()))
+                .isInstanceOf(MockLedgerUnavailable.class)
+                .hasMessage("Mock 목록 조회 실패(1페이지, 응답이 계약과 다름 — status 값이 계약에 없음)");
     }
 
     @Test

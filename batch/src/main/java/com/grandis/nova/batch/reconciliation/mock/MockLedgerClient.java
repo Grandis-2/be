@@ -1,5 +1,7 @@
 package com.grandis.nova.batch.reconciliation.mock;
 
+import java.net.ConnectException;
+import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
@@ -8,6 +10,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
@@ -21,10 +25,12 @@ import tools.jackson.databind.json.JsonMapper;
  *
  * 다시 보내지 않는다 — 한 페이지라도 못 받으면 그 실행을 판정 불가로 끝낸다({@link MockLedgerUnavailable}).
  * 응답이 계약(Mock docs/api.md)과 다르거나, 키 순서가 어긋나거나, 목록 전체 기한을 넘겨도 같다.
+ * 실패 사유는 관리자 화면에 나가므로 고정 문구만 담는다. 예외 원문(연결 주소 등)과 응답 값은 로그에만 남긴다.
  */
 public class MockLedgerClient {
 
     static final String PATH = "/external/reservations";
+    private static final Logger log = LoggerFactory.getLogger(MockLedgerClient.class);
     private static final Set<String> STATUSES = Set.of(MockLedgerEntry.ACTIVE, MockLedgerEntry.CANCELED);
 
     private final RestClient rest;
@@ -74,7 +80,8 @@ public class MockLedgerClient {
                         return parse(page, body);
                     });
         } catch (RestClientException e) {
-            throw new MockLedgerUnavailable(page, "응답을 받지 못함 — " + rootCause(e), e);
+            log.warn("Mock 목록 조회 실패 {}페이지", page, e);
+            throw new MockLedgerUnavailable(page, "응답을 받지 못함 — " + reason(e), e);
         }
     }
 
@@ -83,14 +90,15 @@ public class MockLedgerClient {
         try {
             root = json.readTree(body);
         } catch (JacksonException e) {
+            log.warn("Mock 목록 응답이 JSON 이 아님 {}페이지", page, e);
             throw new MockLedgerUnavailable(page, "응답이 JSON 이 아님", e);
         }
         if (root == null || !root.isObject()) {
-            throw contractBroken(page, "본문이 객체가 아님");
+            throw contractBroken(page, "본문이 객체가 아님", null);
         }
         JsonNode items = root.get("items");
         if (items == null || !items.isArray()) {
-            throw contractBroken(page, "items 가 배열이 아님");
+            throw contractBroken(page, "items 가 배열이 아님", null);
         }
         List<MockLedgerEntry> entries = new ArrayList<>(items.size());
         for (JsonNode item : items) {
@@ -101,12 +109,12 @@ public class MockLedgerClient {
 
     private MockLedgerEntry entry(int page, JsonNode item) {
         if (item == null || !item.isObject()) {
-            throw contractBroken(page, "items 의 한 건이 객체가 아님");
+            throw contractBroken(page, "items 의 한 건이 객체가 아님", null);
         }
         String key = requiredText(page, item, "externalKey");
         String status = requiredText(page, item, "status");
         if (!STATUSES.contains(status)) {
-            throw contractBroken(page, "모르는 status " + status + " (키 " + key + ")");
+            throw contractBroken(page, "status 값이 계약에 없음", "키 " + key + " status " + status);
         }
         return new MockLedgerEntry(key, nullableText(page, item, "externalNumber"), nullableText(page, item, "customerId"),
                 nullableText(page, item, "productId"), nullableText(page, item, "sku"), status,
@@ -116,7 +124,7 @@ public class MockLedgerClient {
     private static String requiredText(int page, JsonNode node, String field) {
         String value = nullableText(page, node, field);
         if (value == null || value.isBlank()) {
-            throw contractBroken(page, field + " 가 비어 있음");
+            throw contractBroken(page, field + " 가 비어 있음", null);
         }
         return value;
     }
@@ -125,13 +133,13 @@ public class MockLedgerClient {
     private static String nullableText(int page, JsonNode node, String field) {
         JsonNode value = node.get(field);
         if (value == null) {
-            throw contractBroken(page, field + " 필드가 없음");
+            throw contractBroken(page, field + " 필드가 없음", null);
         }
         if (value.isNull()) {
             return null;
         }
         if (!value.isString()) {
-            throw contractBroken(page, field + " 가 문자열이 아님");
+            throw contractBroken(page, field + " 가 문자열이 아님", null);
         }
         return value.stringValue();
     }
@@ -141,21 +149,32 @@ public class MockLedgerClient {
         try {
             return value == null ? null : Instant.parse(value);
         } catch (DateTimeParseException e) {
-            throw contractBroken(page, field + " 가 시각이 아님: " + value);
+            throw contractBroken(page, field + " 가 시각 형식이 아님", field + " " + value);
         }
     }
 
-    private static MockLedgerUnavailable contractBroken(int page, String detail) {
-        return new MockLedgerUnavailable(page, "응답이 계약과 다름 — " + detail);
+    /**
+     * @param reason 화면에 나가는 고정 문구
+     * @param detail 로그에만 남기는 응답 값. 없으면 null
+     */
+    private static MockLedgerUnavailable contractBroken(int page, String reason, String detail) {
+        if (detail != null) {
+            log.warn("Mock 목록 응답이 계약과 다름 {}페이지 — {} ({})", page, reason, detail);
+        }
+        return new MockLedgerUnavailable(page, "응답이 계약과 다름 — " + reason);
     }
 
-    private static String rootCause(Throwable e) {
-        Throwable cause = e;
-        while (cause.getCause() != null && cause.getCause() != cause) {
-            cause = cause.getCause();
+    /** 화면에 나가는 통신 실패 사유. 예외 원문은 연결 주소를 담을 수 있어 로그에만 남긴다 */
+    static String reason(Throwable e) {
+        for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+            if (cause instanceof HttpTimeoutException) {
+                return "시간 초과";
+            }
+            if (cause instanceof ConnectException) {
+                return "연결 실패";
+            }
         }
-        String message = cause.getMessage();
-        return cause.getClass().getSimpleName() + (message == null || message.isBlank() ? "" : ": " + message);
+        return "통신 오류";
     }
 
     private static String readable(Duration duration) {
@@ -192,7 +211,7 @@ public class MockLedgerClient {
                 nextCursor = fetched.nextCursor();
                 last = nextCursor == null;
                 if (!last && fetched.entries().isEmpty()) {
-                    throw contractBroken(page, "빈 페이지인데 nextCursor 가 있음");
+                    throw contractBroken(page, "빈 페이지인데 nextCursor 가 있음", null);
                 }
             }
             return current.hasNext();
@@ -205,7 +224,7 @@ public class MockLedgerClient {
             }
             MockLedgerEntry entry = current.next();
             if (previousKey != null && entry.externalKey().compareTo(previousKey) <= 0) {
-                throw contractBroken(page, "외부 키 순서가 아님(" + previousKey + " 다음 " + entry.externalKey() + ")");
+                throw contractBroken(page, "외부 키 순서가 아님", previousKey + " 다음 " + entry.externalKey());
             }
             previousKey = entry.externalKey();
             return entry;
