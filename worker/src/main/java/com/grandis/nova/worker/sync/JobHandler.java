@@ -96,9 +96,7 @@ final class JobHandler implements BatchMessageHandler {
     @Override
     public MessageOutcome handle(Message message) {
         if (shutdown.stopping()) {
-            // 아직 아무것도 부르지 않았다. 다른 worker 가 곧바로 받게 지연 없이 다시 보낸다(받은 횟수를 쓰지 않는다)
-            resend.resend(message, Map.of(), Duration.ZERO);
-            return done("returned");
+            return giveBack(message);
         }
         JobProgress progress = JobProgress.of(message);
         Optional<JsonNode> payload = payloadOf(message);
@@ -126,6 +124,10 @@ final class JobHandler implements BatchMessageHandler {
         try (Permit permit = limiter.tryAcquire(type, permitWait).orElse(null)) {
             if (permit == null) {
                 return hold(message, requeueDelay);
+            }
+            // 자리를 기다리는 사이에 내려가기 시작했을 수 있다
+            if (shutdown.stopping()) {
+                return giveBack(message);
             }
             outcome = turn.run(job.get(), progress);
         }
@@ -187,6 +189,12 @@ final class JobHandler implements BatchMessageHandler {
                 delay);
         resend.resend(message, Map.of(), delay);
         return done("held");
+    }
+
+    /** 내려가는 중이다. 아직 부르지 않았으므로 다른 worker 가 곧바로 받게 지연 없이 다시 보낸다(받은 횟수를 쓰지 않는다). */
+    private MessageOutcome giveBack(Message message) {
+        resend.resend(message, Map.of(), Duration.ZERO);
+        return done("returned");
     }
 
     private MessageOutcome done(String outcome) {

@@ -28,8 +28,9 @@ final class InRoundRetry {
     MockResult from(MockResult first, Supplier<MockResult> call) {
         MockResult result = first;
         for (int retried = 0; retried < times && result.retryNow(); retried++) {
-            // 내려가는 중이면 더 부르지 않는다 — 지금 결과로 차례를 끝내고 다음 차례는 다른 worker 가 한다
-            if (shutdown.stopping() || !pause(schedule.inRoundDelay())) {
+            // 내려가는 중이면 더 부르지 않는다 — 지금 결과로 차례를 끝내고 다음 차례는 다른 worker 가 한다.
+            // 쉬는 사이에 내려가기 시작했을 수 있어 쉰 뒤에도 본다
+            if (shutdown.stopping() || !pause(schedule.inRoundDelay()) || shutdown.stopping()) {
                 break;
             }
             MockResult again = call.get();
