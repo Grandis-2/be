@@ -162,37 +162,41 @@ class AdminSyncJobApiTest {
     }
 
     @Test
-    void DEAD_LETTER_인_등록_작업은_202_로_재처리_요청을_남긴다() throws Exception {
+    void DEAD_LETTER_인_등록_작업은_202_로_되돌리고_등록_메시지를_다시_보낸다() throws Exception {
         UUID jobId = fixtures.deadLetter(preorderId);
 
         asAdmin(post("/api/v1/admin/preorders/sync-jobs/{id}/reprocess", jobId))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.syncJobId").value(jobId.toString()))
-                .andExpect(jsonPath("$.data.status").value("DEAD_LETTER"));
+                .andExpect(jsonPath("$.data.status").value("PENDING"))
+                .andExpect(jsonPath("$.data.deadLetteredAt").doesNotExist());
 
-        assertThat(reprocessRequests(jobId)).containsExactly(Map.of("syncJobId", jobId, "requestedBy", "admin"));
+        assertThat(reprocessRequests(jobId)).containsExactly(Map.of("syncJobId", jobId, "preorderId", token,
+                "ourReservationId", token, "actor", "ADMIN"));
     }
 
-    /** 요청을 받아들일 때마다 한 건씩 남긴다(중복 제거는 하지 않는다). worker 가 DEAD_LETTER 일 때만 되돌려 효과는 한 번이다. */
+    /** 되돌린 작업은 더는 DEAD_LETTER 가 아니다 — 같은 작업이 worker 에서 두 번 돌지 않는다. */
     @Test
-    void 같은_작업을_연달아_재처리하면_받아들인_요청마다_한_건씩_남긴다() throws Exception {
+    void 같은_작업을_연달아_재처리하면_처음만_받아들이고_한_건만_보낸다() throws Exception {
         UUID jobId = fixtures.deadLetter(preorderId);
 
         asAdmin(post("/api/v1/admin/preorders/sync-jobs/{id}/reprocess", jobId)).andExpect(status().isAccepted());
-        asAdmin(post("/api/v1/admin/preorders/sync-jobs/{id}/reprocess", jobId)).andExpect(status().isAccepted());
+        asAdmin(post("/api/v1/admin/preorders/sync-jobs/{id}/reprocess", jobId))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.details.reason").value("jobType=REGISTER, status=PENDING"));
 
-        assertThat(reprocessRequests(jobId)).hasSize(2);
+        assertThat(reprocessRequests(jobId)).hasSize(1);
     }
 
     @Test
-    void 같은_작업을_동시에_재처리해도_둘_다_받아들이고_한_건씩_남긴다() throws Exception {
+    void 같은_작업을_동시에_재처리해도_하나만_받아들이고_한_건만_보낸다() throws Exception {
         UUID jobId = fixtures.deadLetter(preorderId);
 
         List<Outcome<Integer>> outcomes = Concurrently.run(2, i -> () ->
                 asAdmin(post("/api/v1/admin/preorders/sync-jobs/{id}/reprocess", jobId)).andReturn().getResponse().getStatus());
 
-        assertThat(outcomes).allSatisfy(outcome -> assertThat(outcome.value()).isEqualTo(202));
-        assertThat(reprocessRequests(jobId)).hasSize(2);
+        assertThat(outcomes).extracting(Outcome::value).containsExactlyInAnyOrder(202, 409);
+        assertThat(reprocessRequests(jobId)).hasSize(1);
     }
 
     @Test
@@ -361,14 +365,20 @@ class AdminSyncJobApiTest {
         }
     }
 
+    /** 재처리로 다시 보낸 등록 메시지(접수 때 보낸 것은 뺀다). */
     private List<Map<String, Object>> reprocessRequests(UUID syncJobId) {
         return jdbcTemplate.queryForList("""
                 SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.syncJobId')) AS syncJobId,
-                       JSON_UNQUOTE(JSON_EXTRACT(payload, '$.requestedBy')) AS requestedBy
-                  FROM preorder_outbox_events WHERE event_type = 'SYNC_JOB_REPROCESS_REQUESTED' AND aggregate_id = ?
+                       JSON_UNQUOTE(JSON_EXTRACT(payload, '$.preorderId')) AS preorderId,
+                       JSON_UNQUOTE(JSON_EXTRACT(payload, '$.request.ourReservationId')) AS ourReservationId,
+                       JSON_UNQUOTE(JSON_EXTRACT(payload, '$.actor')) AS actor
+                  FROM preorder_outbox_events
+                 WHERE event_type = 'REGISTER_JOB_READY' AND aggregate_id = ?
+                   AND JSON_UNQUOTE(JSON_EXTRACT(payload, '$.actor')) = 'ADMIN'
                 """, (Object) UuidBinary.toBytes(syncJobId)).stream()
                 .map(row -> Map.<String, Object>of("syncJobId", UUID.fromString((String) row.get("syncJobId")),
-                        "requestedBy", row.get("requestedBy")))
+                        "preorderId", row.get("preorderId"), "ourReservationId", row.get("ourReservationId"),
+                        "actor", row.get("actor")))
                 .toList();
     }
 }
