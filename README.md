@@ -3,7 +3,7 @@
 **전자기기 사전예약 서비스의 백엔드.** 오픈 순간 신청이 몰려도 한 건도 잃지 않고 받고, 럭키 드로우(추첨 응모)도 함께 운영한다.
 
 신청은 저장되면 바로 `202 Accepted` 로 답한다. 느리고 가끔 실패하는 외부 예약 시스템 등록은 그 뒤에 백그라운드에서 처리한다.
-서버가 중간에 죽었다 살아나도 접수된 예약은 끝까지 최종 결과에 도달한다.
+서버가 중간에 죽었다 살아나도 접수된 예약은 사라지지 않고 이어서 처리된다. 자동 재시도로도 끝나지 않는 건은 관리자가 확인해 재처리한다.
 
 ---
 
@@ -274,6 +274,8 @@ worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이
 | `payment` | `payments` · `payment_transactions` |
 | `worker` | `preorder_sync_jobs` · `preorder_sync_attempts` |
 | `waitingroom` | (없음 — 전용 Redis) |
+
+`preorder_sync_jobs` 는 실행하는 worker 의 표지만, 행은 preorder 가 접수 · 취소 트랜잭션에서 만들고 무효화한다.
 
 표는 소유한 서비스만 쓴다. 다른 서비스의 데이터는 그 서비스의 API 로 묻는 것이 원칙이고,
 예외는 목록 화면의 페이징 조건처럼 쿼리 안에 있어야 하는 읽기뿐이다. 표 사이 관계는 [ERD](https://dbdiagram.io/d/Copy-of-Untitled-Diagram-6aa66499957fec6d5bdd9189)에 있다.
