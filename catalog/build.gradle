@@ -12,6 +12,8 @@ dependencies {
     // SQS 클라이언트 · 아웃박스 SQS 전송. AWS SDK 와 그 버전도 여기서 온다.
     // 운영 클래스패스에 필요하다 — 시험은 아래 testFixtures 가 같은 모듈을 들여와 이 줄이 빠져도 통과하고, 운영에서만 transport=sqs 기동이 실패한다.
     implementation project(':common:sqs')
+    // 관리자 사진 업로드 presigned PUT 서명(S3Presigner — ImageUploadConfig). HTTP 클라이언트는 common:sqs 와 같은 url-connection 하나만 두고
+    // apache · netty 는 뺀다. 시험의 S3Client(MinIO 로 실제 PUT 확인)도 이 클라이언트를 쓴다
     implementation('software.amazon.awssdk:s3') {
         exclude group: 'software.amazon.awssdk', module: 'apache-client'
         exclude group: 'software.amazon.awssdk', module: 'netty-nio-client'
