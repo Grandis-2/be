@@ -47,10 +47,10 @@ be/
 | --- | --- | --- | --- |
 | `member` | 2~4 | CPU | `customers` · `refresh_tokens` |
 | `catalog` | 2~6 | 요청 수 | `categories` · `products` · `product_options`<br>`product_reviews` · `catalog_outbox_events` |
-| **`preorder`** | **6~12** | **요청 수** | `preorders` · `preorder_events`<br>`preorder_campaigns` · `shipment_batches` |
+| **`preorder`** | **6~12** | **요청 수** | `preorders` · `preorder_events`<br>`preorder_campaigns` · `shipment_batches`<br>`preorder_sync_jobs` · `preorder_sync_attempts` |
 | `waitingroom` | 2~12 | 요청 수 · 오픈 전 예약 확장 | (없음 — 대기열은 전용 Redis) |
 | `order` | 2~8 | CPU | `orders` · `order_items` · `order_events`<br>`cart_items` · `payments` · `payment_transactions` · `option_inventories`<br>`draw_campaigns` · `draw_entries` |
-| `worker` | 1~20 | Backlog per Task · SPOT | `preorder_sync_jobs` · `preorder_sync_attempts` |
+| `worker` | 1~20 | Backlog per Task · SPOT | (없음 — DB 를 쓰지 않는다) |
 | `batch` | **1 고정** | — | (읽기) |
 
 catalog 표에 걸린 교차 읽기는 둘이다. 나머지는 소유 서비스의 API 로 묻는다(preorder 는 접수 때 catalog API 로 상품 · 옵션 상태를 확인하고, 접수 시점의 상품명 · 옵션명 · 가격을 예약에 복사한다).
@@ -62,8 +62,8 @@ catalog 표에 걸린 교차 읽기는 둘이다. 나머지는 소유 서비스�
 
 preorder 는 catalog 를 API(`GET /internal/products/{id}/options`)로 묻고 catalog 는 preorder 표를 SQL 로 읽는 비대칭은 이유가 다르기 때문이다. 앞은 접수 때 상태를 확인하고 그 시점 값을 복사하고, 뒤는 목록의 페이징 조건으로 거른다.
 
-`preorder_sync_jobs` · `preorder_sync_attempts` 는 `worker` 소유지만 `preorder` 도 작업 행에 쓴다. 접수 · 취소와 같은 트랜잭션에서 작업 행을 만들고,
-예약이 취소되면 아직 끝나지 않은 작업을 무효화한다. 시도 기록(`preorder_sync_attempts`)은 `worker` 가 쓸 표이고 `preorder` 는 관리자 화면에서 읽기만 한다.
+`preorder_sync_jobs` · `preorder_sync_attempts`(외부 등록 · 취소 작업과 시도 기록)는 `preorder` 만 쓴다. `worker` 는 DB 없이 메시지에 실린 내용으로
+외부를 부르고 결과(성공 · 실패한 차례 · 포기)를 `preorder-events` 로 알리며, `preorder` 가 그 이벤트를 받아 작업 상태와 시도 기록을 남긴다.
 
 별도 저장소로 도는 것이 하나 더 있다.
 

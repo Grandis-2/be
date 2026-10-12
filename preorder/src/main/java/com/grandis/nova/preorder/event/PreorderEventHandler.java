@@ -72,7 +72,7 @@ public class PreorderEventHandler {
      * 외부 등록 · 취소 성공. 작업을 SUCCEEDED 로 바꾸고 예약에 반영한다. 포기한 뒤(DEAD_LETTER) 늦게 온 성공도 받는다.
      * 취소가 무효화한 등록 작업(CANCELED)이면 반영하지 않는다 — 외부 쪽은 CANCEL 작업이 정리한다.
      *
-     * @param eventId 받은 이벤트의 id. 차례 기록을 한 번만 남기는 데 쓴다
+     * @param eventId 받은 이벤트의 id. 차례 기록을 한 번만 남기는 데 쓴다. 성공은 다시 반영해도 같아 차례 기록이 없어도 받는다
      */
     @Transactional
     public void onExternalJobSucceeded(String eventId, ExternalJobSucceeded message) {
@@ -81,7 +81,9 @@ public class PreorderEventHandler {
             return;
         }
         SyncJobSnapshot job = found.get();
-        recordAttempt(job, eventId, message.attempt());
+        if (message.attempt() != null) {
+            syncJobs.recordAttempt(job.id(), eventId, message.attempt());
+        }
         if (job.status() == SyncJobStatus.CANCELED) {
             log.warn("무효화된 작업의 성공 이벤트를 무시한다 syncJobId={}", job.id());
             return;
@@ -100,8 +102,9 @@ public class PreorderEventHandler {
     /** 실패한 차례가 있었고 worker 가 다시 시도한다. 차례를 남기고, 아직 끝나지 않은 작업이면 재시도 대기로 표시한다. */
     @Transactional
     public void onExternalJobAttempted(String eventId, ExternalJobAttempted message) {
+        requireAttempt(message.attempt(), message.syncJobId());
         Optional<SyncJobSnapshot> job = lockJob(message.syncJobId());
-        if (job.isPresent() && recordAttempt(job.get(), eventId, message.attempt())
+        if (job.isPresent() && syncJobs.recordAttempt(job.get().id(), eventId, message.attempt())
                 && syncJobs.scheduleRetry(job.get().id(), clock.instant()) == 0) {
             log.info("이미 끝난 작업의 차례는 기록만 한다 syncJobId={} status={}", job.get().id(), job.get().status());
         }
@@ -114,8 +117,9 @@ public class PreorderEventHandler {
      */
     @Transactional
     public void onExternalJobFailed(String eventId, ExternalJobFailed message) {
+        requireAttempt(message.attempt(), message.syncJobId());
         Optional<SyncJobSnapshot> found = lockJob(message.syncJobId());
-        if (found.isEmpty() || !recordAttempt(found.get(), eventId, message.attempt())) {
+        if (found.isEmpty() || !syncJobs.recordAttempt(found.get().id(), eventId, message.attempt())) {
             return;
         }
         SyncJobSnapshot job = found.get();
@@ -153,9 +157,14 @@ public class PreorderEventHandler {
         return syncJobs.findById(syncJobId);
     }
 
-    /** @return 이미 받은 이벤트면 false. 차례 기록이 없는 이벤트는 가릴 수 없어 true */
-    private boolean recordAttempt(SyncJobSnapshot job, String eventId, NewSyncAttempt attempt) {
-        return attempt == null || syncJobs.recordAttempt(job.id(), eventId, attempt);
+    /**
+     * 실패한 차례 · 포기는 차례 기록이 있어야 받는다 — 이미 받은 이벤트인지를 그 기록의 이벤트 id 로 가리기 때문이다.
+     * 없으면 계약이 어긋난 것이라 예외로 올린다(재수신 한도를 넘으면 DLQ).
+     */
+    private static void requireAttempt(NewSyncAttempt attempt, UUID syncJobId) {
+        if (attempt == null) {
+            throw new IllegalArgumentException("차례 기록(attempt)이 없는 결과 이벤트다: syncJobId=" + syncJobId);
+        }
     }
 
     /** 결제 시작. 화면의 "결제 진행 중" 표시용 시각만 남긴다 — 결제 가능 상태가 아니면 무시된다. */

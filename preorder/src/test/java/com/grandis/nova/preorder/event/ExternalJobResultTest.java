@@ -28,6 +28,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * worker 가 보낸 결과 이벤트(성공 · 실패한 차례 · 포기)를 작업 원장과 시도 기록에 남기는지 본다.
@@ -144,29 +145,32 @@ class ExternalJobResultTest {
         assertThat(failedCount("REGISTER", reason)).as("같은 이벤트를 두 번 받아도 한 번만 센다").isEqualTo(1);
     }
 
-    /** 호출하지 않고 끝낸 포기(재시도 소진 등)는 차례 기록 없이 온다. */
+    /** 이미 받은 이벤트인지는 차례 기록의 이벤트 id 로 가린다 — 기록이 없으면 가릴 수 없어 계약 위반으로 올린다. */
     @Test
-    void 차례_기록_없는_포기_이벤트도_작업을_DEAD_LETTER_로_둔다() {
-        handler.onExternalJobFailed(ShopFixtures.unique(), failed("REGISTER", "GENERATION_EXHAUSTED", null));
+    void 차례_기록_없는_실패한_차례와_포기_이벤트는_받지_않는다() {
+        assertThatThrownBy(() -> handler.onExternalJobAttempted(ShopFixtures.unique(), attempted(null)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> handler.onExternalJobFailed(ShopFixtures.unique(),
+                failed("REGISTER", "GENERATION_EXHAUSTED", null))).isInstanceOf(IllegalArgumentException.class);
 
-        assertThat(jobStatus()).isEqualTo("DEAD_LETTER");
+        assertThat(jobStatus()).isEqualTo("PENDING");
         assertThat(attempts()).isEmpty();
     }
 
     @Test
     void 포기한_뒤_늦게_온_실패한_차례는_기록만_하고_작업을_되돌리지_않는다() {
-        handler.onExternalJobFailed(ShopFixtures.unique(), failed("REGISTER", "GENERATION_EXHAUSTED", null));
+        handler.onExternalJobFailed(ShopFixtures.unique(), exhausted());
 
         handler.onExternalJobAttempted(ShopFixtures.unique(), attempted(attempt(3, 4, "TRANSIENT_FAILURE", 503, null)));
 
         assertThat(jobStatus()).isEqualTo("DEAD_LETTER");
-        assertThat(attempts()).hasSize(1);
+        assertThat(attempts()).hasSize(2);
     }
 
     /** 응답을 못 받아 포기했지만 외부에는 등록된 경우 — 늦게라도 성공을 알면 예약을 살린다. */
     @Test
     void 포기한_뒤_늦게_온_성공은_받아_작업과_예약에_반영한다() {
-        handler.onExternalJobFailed(ShopFixtures.unique(), failed("REGISTER", "GENERATION_EXHAUSTED", null));
+        handler.onExternalJobFailed(ShopFixtures.unique(), exhausted());
 
         handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(jobId, token, "REGISTER", external()));
 
@@ -179,7 +183,7 @@ class ExternalJobResultTest {
         handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(jobId, token, "REGISTER", external()));
 
         handler.onExternalJobAttempted(ShopFixtures.unique(), attempted(attempt(1, 1, "UNKNOWN", null, null)));
-        handler.onExternalJobFailed(ShopFixtures.unique(), failed("REGISTER", "GENERATION_EXHAUSTED", null));
+        handler.onExternalJobFailed(ShopFixtures.unique(), exhausted());
 
         assertThat(jobStatus()).isEqualTo("SUCCEEDED");
         assertThat(preorderStatus()).isEqualTo("REGISTERED");
@@ -190,13 +194,13 @@ class ExternalJobResultTest {
         cancelStarter.start(preorders.findById(preorderId).orElseThrow(), EventActor.USER, null, CancelReason.USER);
 
         handler.onExternalJobAttempted(ShopFixtures.unique(), attempted(attempt(1, 1, "UNKNOWN", null, null)));
-        handler.onExternalJobFailed(ShopFixtures.unique(), failed("REGISTER", "GENERATION_EXHAUSTED", null));
+        handler.onExternalJobFailed(ShopFixtures.unique(), exhausted());
         handler.onExternalJobSucceeded(ShopFixtures.unique(), new ExternalJobSucceeded(jobId, token, "REGISTER", external(),
                 attempt(1, 2, "SUCCESS", 201, null)));
 
         assertThat(jobStatus()).isEqualTo("CANCELED");
         assertThat(preorderStatus()).isEqualTo("CANCELING");
-        assertThat(attempts()).as("외부 호출이 있었다는 기록은 남긴다").hasSize(2);
+        assertThat(attempts()).as("외부 호출이 있었다는 기록은 남긴다").hasSize(3);
     }
 
     /** SQS 는 같은 메시지를 한참 뒤에 다시 줄 수 있다 — 재처리로 되살린 작업을 옛 포기가 다시 죽이면 안 된다. */
@@ -231,7 +235,7 @@ class ExternalJobResultTest {
 
     /** 취소 작업은 포기 상태가 없다(DB CHECK). 외부에 예약이 남으므로 지표와 로그로 알린다. */
     @Test
-    void 취소_작업의_포기는_작업을_바꾸지_않고_지표로_알린다() {
+    void 취소_작업의_포기는_작업을_바꾸지_않고_동시에_두_번_받아도_지표는_한_번만_센다() throws InterruptedException {
         handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(jobId, token, "REGISTER", external()));
         cancelStarter.start(preorders.findById(preorderId).orElseThrow(), EventActor.USER, null, CancelReason.USER);
         handler.onOrderSettled(new PreorderOrderSettled(token, PreorderOrderSettled.Result.NO_ORDER, null,
@@ -241,8 +245,16 @@ class ExternalJobResultTest {
                 (rs, rowNum) -> UuidBinary.fromBytes(rs.getBytes(1)), (Object) UuidBinary.toBytes(preorderId));
         String reason = "R-" + ShopFixtures.unique();
 
-        handler.onExternalJobFailed(ShopFixtures.unique(), new ExternalJobFailed(cancelJobId, token, "CANCEL", reason,
-                attempt(1, 1, "TRANSIENT_FAILURE", 503, null)));
+        String eventId = ShopFixtures.unique();
+        ExternalJobFailed failed = new ExternalJobFailed(cancelJobId, token, "CANCEL", reason,
+                attempt(3, 4, "TRANSIENT_FAILURE", 503, null));
+
+        List<Outcome<Boolean>> outcomes = Concurrently.run(2, i -> () -> {
+            handler.onExternalJobFailed(eventId, failed);
+            return true;
+        });
+
+        assertThat(outcomes).allSatisfy(outcome -> assertThat(outcome.error()).isNull());
 
         assertThat(jdbcTemplate.queryForObject("SELECT status FROM preorder_sync_jobs WHERE id = ?", String.class,
                 (Object) UuidBinary.toBytes(cancelJobId))).isEqualTo("PENDING");
@@ -259,7 +271,8 @@ class ExternalJobResultTest {
             handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(unknown, token, "REGISTER", external()));
             handler.onExternalJobAttempted(ShopFixtures.unique(), new ExternalJobAttempted(unknown, token, "REGISTER",
                     attempt(1, 1, "UNKNOWN", null, null)));
-            handler.onExternalJobFailed(ShopFixtures.unique(), new ExternalJobFailed(unknown, token, "REGISTER", "X", null));
+            handler.onExternalJobFailed(ShopFixtures.unique(), new ExternalJobFailed(unknown, token, "REGISTER", "X",
+                    attempt(1, 1, "REJECTED", 422, null)));
         }).doesNotThrowAnyException();
         assertThat(preorderStatus()).isEqualTo("PENDING_SYNC");
     }
@@ -272,6 +285,11 @@ class ExternalJobResultTest {
     private static NewSyncAttempt attempt(int generation, int attempt, String result, Integer httpStatus,
                                           String errorCode) {
         return new NewSyncAttempt(generation, attempt, "SYSTEM", result, httpStatus, errorCode, null, STARTED, FINISHED);
+    }
+
+    /** 재시도를 다 쓰고 포기한 것. 마지막 차례를 싣는다. */
+    private ExternalJobFailed exhausted() {
+        return failed("REGISTER", "GENERATION_EXHAUSTED", attempt(3, 4, "TRANSIENT_FAILURE", 503, null));
     }
 
     private ExternalJobAttempted attempted(NewSyncAttempt attempt) {

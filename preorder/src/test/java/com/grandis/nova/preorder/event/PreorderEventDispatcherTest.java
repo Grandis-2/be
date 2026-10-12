@@ -105,8 +105,8 @@ class PreorderEventDispatcherTest {
 
         dispatcher.dispatch(envelope("EXTERNAL_JOB_FAILED", "PREORDER_SYNC_JOB", jobId, payload()
                 .put("syncJobId", jobId.toString()).put("preorderId", token).put("jobType", "REGISTER")
-                .put("reason", "GENERATION_EXHAUSTED").putNull("attempt")));
-        assertThat(jobRow(jobId)).isEqualTo("DEAD_LETTER|1");
+                .put("reason", "GENERATION_EXHAUSTED").set("attempt", attempt.deepCopy().put("attempt", 4))));
+        assertThat(jobRow(jobId)).isEqualTo("DEAD_LETTER|2");
         assertThat(status()).as("예약은 그대로 둔다").isEqualTo("PENDING_SYNC");
     }
 

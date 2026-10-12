@@ -12,6 +12,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** payload 의 JSON 모양(칸 이름 · 형)이 preorder 와의 계약이다. */
 class ResultEventPayloadTest {
@@ -47,11 +48,21 @@ class ResultEventPayloadTest {
     }
 
     @Test
-    void 최종_실패는_이유를_싣고_호출하지_않았으면_차례_기록이_없다() {
-        JsonNode payload = json.valueToTree(new ExternalJobFailed(JOB, "PO-1", JobType.REGISTER, "PAYLOAD_INVALID", null));
+    void 최종_실패는_이유와_마지막_차례를_싣는다() {
+        JsonNode payload = json.valueToTree(new ExternalJobFailed(JOB, "PO-1", JobType.REGISTER, "GENERATION_EXHAUSTED",
+                ATTEMPT));
 
-        assertThat(payload.get("reason").asString()).isEqualTo("PAYLOAD_INVALID");
-        assertThat(payload.get("attempt").isNull()).isTrue();
+        assertThat(payload.get("reason").asString()).isEqualTo("GENERATION_EXHAUSTED");
+        assertThat(payload.get("attempt").get("attempt").asInt()).isEqualTo(3);
+    }
+
+    /** preorder 는 차례 기록의 이벤트 id 로 이미 받은 이벤트를 가린다 — 없는 이벤트는 만들 수 없게 한다. */
+    @Test
+    void 실패한_차례와_최종_실패는_차례_기록_없이_만들_수_없다() {
+        assertThatThrownBy(() -> new ExternalJobAttempted(JOB, "PO-1", JobType.REGISTER, null))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new ExternalJobFailed(JOB, "PO-1", JobType.REGISTER, "PAYLOAD_INVALID", null))
+                .isInstanceOf(NullPointerException.class);
     }
 
     @Test
