@@ -54,11 +54,14 @@ class RetryScheduleTest {
     }
 
     @Test
-    void 외부가_더_늦게_보내라고_하면_그만큼_기다리되_SQS_상한을_넘지_않는다() {
+    void 외부가_더_늦게_보내라고_하면_그_뒤로_흩어_기다리되_SQS_상한을_넘지_않는다() {
         JobProgress first = new JobProgress(1, 1, 1, null, Actor.SYSTEM);
 
         assertThat(schedule.next(JobType.REGISTER, first, AttemptResult.TRANSIENT_FAILURE, Duration.ofSeconds(30))
-                .orElseThrow().delay()).isEqualTo(Duration.ofSeconds(30));
+                .orElseThrow().delay()).isEqualTo(Duration.ofSeconds(33));
+        assertThat(new RetrySchedule(SETTINGS, () -> 0.0).next(JobType.REGISTER, first,
+                AttemptResult.TRANSIENT_FAILURE, Duration.ofSeconds(30)).orElseThrow().delay())
+                .as("외부가 정한 시각보다 앞서지 않는다").isEqualTo(Duration.ofSeconds(30));
         assertThat(schedule.next(JobType.REGISTER, first, AttemptResult.TRANSIENT_FAILURE, Duration.ofSeconds(3))
                 .orElseThrow().delay()).as("우리 지연이 더 길면 그대로").isEqualTo(Duration.ofSeconds(10));
         assertThat(schedule.next(JobType.REGISTER, first, AttemptResult.TRANSIENT_FAILURE, Duration.ofHours(1))

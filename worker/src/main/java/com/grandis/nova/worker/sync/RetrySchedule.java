@@ -65,8 +65,9 @@ final class RetrySchedule {
         return capped(Duration.ofMillis((long) (base.toMillis() * factor)));
     }
 
-    private static Duration atLeast(Duration delay, Duration floor) {
-        return floor == null || floor.compareTo(delay) <= 0 ? delay : capped(floor);
+    /** 외부가 정한 시각(floor)이 더 늦으면 그 뒤로 흩는다 — 같은 값을 받은 메시지들이 한 순간에 돌아오지 않게. */
+    private Duration atLeast(Duration delay, Duration floor) {
+        return floor == null || floor.compareTo(delay) <= 0 ? delay : past(floor);
     }
 
     private static Duration capped(Duration delay) {
