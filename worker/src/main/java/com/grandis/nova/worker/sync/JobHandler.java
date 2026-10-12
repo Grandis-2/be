@@ -43,6 +43,8 @@ import java.util.UUID;
 final class JobHandler implements BatchMessageHandler {
 
     static final String JOBS_METRIC = "worker.jobs";
+    /** 한 세대를 다 쓰고 다음 세대로 넘어간 횟수. 포기하지 않는 CANCEL 은 이 값이 "계속 실패 중"의 신호다. */
+    static final String GENERATIONS_METRIC = "worker.jobs.generations";
     static final String PAYLOAD_INVALID = "PAYLOAD_INVALID";
     static final String GENERATION_EXHAUSTED = "GENERATION_EXHAUSTED";
     private static final String REJECTED = "REJECTED";
@@ -142,12 +144,24 @@ final class JobHandler implements BatchMessageHandler {
         publisher.publish(ResultEventType.EXTERNAL_JOB_ATTEMPTED, job.syncJobId(), new ExternalJobAttempted(
                 job.syncJobId(), job.preorderId(), type, attemptOf(progress, outcome)));
         resend.resend(message, next.get().progress().toAttributes(), next.get().delay());
+        if (next.get().progress().generation() > progress.generation()) {
+            log.warn("한 세대를 다 쓰고도 실패해 다음 세대로 넘긴다 jobType={} syncJobId={} generation={} delay={}", type,
+                    job.syncJobId(), next.get().progress().generation(), next.get().delay());
+            meters.counter(GENERATIONS_METRIC, "jobType", type.name()).increment();
+        }
         return done("retried");
     }
 
     private MessageOutcome fail(JobReady job, JobProgress progress, Turn.Outcome outcome, String reason) {
-        log.warn("외부 작업을 포기한다 jobType={} syncJobId={} reason={} generation={} attempt={}", type, job.syncJobId(),
-                reason, progress.generation(), progress.attempt());
+        if (type == JobType.CANCEL) {
+            // 외부에 등록이 남는다 — preorder 상태로는 드러나지 않으므로 사람이 봐야 한다
+            log.error("외부 취소를 포기한다 — 외부에 등록이 남았을 수 있다 syncJobId={} preorderId={} reason={} "
+                    + "generation={} attempt={}", job.syncJobId(), job.preorderId(), reason, progress.generation(),
+                    progress.attempt());
+        } else {
+            log.warn("외부 작업을 포기한다 jobType={} syncJobId={} reason={} generation={} attempt={}", type,
+                    job.syncJobId(), reason, progress.generation(), progress.attempt());
+        }
         publisher.publish(ResultEventType.EXTERNAL_JOB_FAILED, job.syncJobId(), new ExternalJobFailed(
                 job.syncJobId(), job.preorderId(), type, reason, attemptOf(progress, outcome)));
         return done("failed");
