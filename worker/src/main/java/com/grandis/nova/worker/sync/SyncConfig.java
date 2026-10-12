@@ -42,14 +42,17 @@ class SyncConfig {
     }
 
     @Bean
+    DelayedResend registerResend(SqsClient sqs, SqsQueueUrls queueUrls) {
+        return new DelayedResend(sqs, queueUrls, JobEventType.REGISTER_JOB_READY.queue());
+    }
+
+    @Bean
     JobHandler registerJobHandler(MockGateway mock, RetrySchedule schedule, ConcurrencyLimiter limiter,
                                   MockCircuit circuit, RejectGuard rejectGuard, ResultPublisher publisher,
-                                  SqsClient sqs, SqsQueueUrls queueUrls, WorkerProperties properties, JsonMapper json,
+                                  DelayedResend registerResend, WorkerProperties properties, JsonMapper json,
                                   MeterRegistry meters, Clock clock) {
         return new JobHandler(JobType.REGISTER, new RegisterTurn(mock, schedule, properties.retry()), schedule, limiter,
-                circuit, rejectGuard, publisher,
-                new DelayedResend(sqs, queueUrls, JobEventType.REGISTER_JOB_READY.queue()), properties, json, meters,
-                clock);
+                circuit, rejectGuard, publisher, registerResend, properties, json, meters, clock);
     }
 
     /** 등록 큐 소비기. 지금 부를 수 있는 만큼만 받는다 — 받은 메시지는 곧 자리를 잡으러 오므로, 처리 중인 건수를 뺀 자리 수다. */

@@ -2,6 +2,7 @@ package com.grandis.nova.worker.sync;
 
 import com.grandis.nova.common.sqs.MessageOutcome;
 import com.grandis.nova.common.sqs.BatchQueueConsumer;
+import com.grandis.nova.common.sqs.DelayedResend;
 import com.grandis.nova.common.sqs.testing.SqsTestConfig;
 import com.grandis.nova.common.sqs.testing.TestQueues;
 import com.grandis.nova.worker.mock.FakeMock;
@@ -72,6 +73,9 @@ class JobHandlerTest {
 
     @MockitoSpyBean
     ResultPublisher publisher;
+
+    @MockitoSpyBean
+    DelayedResend registerResend;
 
     final Jobs job = new Jobs();
 
@@ -295,6 +299,45 @@ class JobHandlerTest {
         assertThatThrownBy(() -> handler.handle(job.message(Map.of()))).isInstanceOf(IllegalStateException.class);
 
         assertThat(job.resent(queues, Duration.ofSeconds(2))).isEmpty();
+    }
+
+    /** 알린 뒤 다시 보내지 못하면 원본이 남아 같은 차례를 다시 한다. 차례 기록은 같은 번호로 한 번 더 나간다. */
+    @Test
+    void 결과를_알린_뒤_다시_보내지_못하면_던지고_다시_받아_같은_차례를_다시_한다() {
+        MOCK.respond(html(503));
+        Message message = job.message(Map.of("run", "2"));
+        willThrow(new IllegalStateException("sqs down")).willCallRealMethod()
+                .given(registerResend).resend(any(), any(), any());
+
+        assertThatThrownBy(() -> handler.handle(message)).isInstanceOf(IllegalStateException.class);
+        JsonNode first = job.event(queues);
+        assertThat(job.resent(queues, Duration.ofSeconds(2))).as("다음 차례로 넘어가지 않았다").isEmpty();
+
+        assertThat(handler.handle(message)).isEqualTo(MessageOutcome.delete());
+        JsonNode second = job.event(queues);
+
+        assertThat(attempt(first.get("payload"))).isEqualTo("run=2 1-1 SYSTEM TRANSIENT_FAILURE 503 null");
+        assertThat(attempt(second.get("payload"))).isEqualTo(attempt(first.get("payload")));
+        assertThat(second.get("eventType").asString()).isEqualTo("EXTERNAL_JOB_ATTEMPTED");
+        assertThat(job.resent(queues)).containsEntry("run", "2").containsEntry("generation", "1")
+                .containsEntry("attempt", "2");
+    }
+
+    /** 원본을 지우지 못했거나 가시성 시간이 지나 같은 메시지를 또 받는다. 외부는 같은 키 · 같은 내용이어야 같은 등록으로 본다. */
+    @Test
+    void 같은_메시지를_두_번_받으면_같은_키와_같은_내용으로_다시_보낸다() {
+        MOCK.respond(json(201, CREATED));
+        Message message = job.message(Map.of());
+
+        handler.handle(message);
+        handler.handle(message);
+
+        assertThat(job.calls(MOCK)).containsExactly("POST /external/reservations", "POST /external/reservations");
+        assertThat(MOCK.requests().stream().filter(request -> job.key.equals(request.idempotencyKey()))
+                .map(FakeMock.Received::body).distinct().toList())
+                .containsExactly("{\"ourReservationId\":\"" + job.key + "\",\"qty\":1}");
+        assertThat(attempt(job.event(queues).get("payload"))).isEqualTo("run=1 1-1 SYSTEM SUCCESS 201 null");
+        assertThat(attempt(job.event(queues).get("payload"))).isEqualTo("run=1 1-1 SYSTEM SUCCESS 201 null");
     }
 
     private double count(String outcome) {
