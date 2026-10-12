@@ -86,8 +86,9 @@ public class PreorderEventHandler {
             log.warn("무효화된 작업의 성공 이벤트를 무시한다 syncJobId={}", job.id());
             return;
         }
-        if (job.status() != SyncJobStatus.SUCCEEDED) {
-            syncJobs.succeed(job.id(), clock.instant());
+        if (job.status() != SyncJobStatus.SUCCEEDED && syncJobs.succeed(job.id(), clock.instant()) == 0) {
+            log.warn("성공으로 바꿀 수 없는 작업의 성공 이벤트를 무시한다 syncJobId={} status={}", job.id(), job.status());
+            return;
         }
         if (job.jobType() == SyncJobType.REGISTER) {
             ledger.fire(job.preorderId(), new PreorderFact.RegisterConfirmed(message.externalNumber()));
@@ -100,8 +101,9 @@ public class PreorderEventHandler {
     @Transactional
     public void onExternalJobAttempted(String eventId, ExternalJobAttempted message) {
         Optional<SyncJobSnapshot> job = lockJob(message.syncJobId());
-        if (job.isPresent() && recordAttempt(job.get(), eventId, message.attempt())) {
-            syncJobs.scheduleRetry(job.get().id(), clock.instant());
+        if (job.isPresent() && recordAttempt(job.get(), eventId, message.attempt())
+                && syncJobs.scheduleRetry(job.get().id(), clock.instant()) == 0) {
+            log.info("이미 끝난 작업의 차례는 기록만 한다 syncJobId={} status={}", job.get().id(), job.get().status());
         }
     }
 

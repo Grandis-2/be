@@ -1,6 +1,8 @@
 package com.grandis.nova.preorder.event;
 
 import com.grandis.nova.common.UuidBinary;
+import com.grandis.nova.common.testing.Concurrently;
+import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.cancel.application.CancelStarter;
@@ -72,18 +74,23 @@ class ExternalJobResultTest {
         jobId = fixtures.registerJob(preorderId);
     }
 
+    /** 소비기가 여럿이면 같은 메시지를 동시에 받을 수 있다 — 둘 다 실패 없이 끝나고 결과는 한 번만 남아야 한다. */
     @Test
-    void 성공_이벤트로_작업을_성공으로_바꾸고_예약에_반영하며_차례를_남긴다() {
+    void 성공_이벤트로_작업을_성공으로_바꾸고_예약에_반영하며_차례를_남긴다() throws InterruptedException {
         String eventId = ShopFixtures.unique();
         ExternalJobSucceeded message = new ExternalJobSucceeded(jobId, token, "REGISTER", external(),
                 attempt(1, 1, "SUCCESS", 201, null));
 
-        handler.onExternalJobSucceeded(eventId, message);
+        List<Outcome<Boolean>> outcomes = Concurrently.run(2, i -> () -> {
+            handler.onExternalJobSucceeded(eventId, message);
+            return true;
+        });
         handler.onExternalJobSucceeded(eventId, message);
 
+        assertThat(outcomes).allSatisfy(outcome -> assertThat(outcome.error()).isNull());
         assertThat(jobStatus()).isEqualTo("SUCCEEDED");
         assertThat(preorderStatus()).isEqualTo("REGISTERED");
-        assertThat(attempts()).as("같은 이벤트를 두 번 받아도 한 줄").hasSize(1);
+        assertThat(attempts()).as("같은 이벤트를 동시에 · 다시 받아도 한 줄").hasSize(1);
         assertThat(attempts().getFirst())
                 .containsEntry("attempt_number", 1).containsEntry("generation", 1)
                 .containsEntry("generation_attempt", 1).containsEntry("actor", "SYSTEM")
