@@ -65,7 +65,8 @@ flowchart LR
     Q --> W[worker<br/>외부 등록 · 알림]
     W --> X[외부 예약 Mock]
 
-    B[batch<br/>만료 · 정합성 검사] -.읽기.-> DB[(MySQL)]
+    B[batch<br/>정합성 검사] -.읽기 · 결과 기록.-> DB[(MySQL)]
+    B -.목록 조회.-> X
 ```
 
 - 서비스는 모두 Spring Boot 이고 AWS ECS Fargate 위에서 따로 돈다. DB 는 NCP 의 MySQL 이다.
@@ -261,7 +262,7 @@ worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이
 | `order` | 주문 · 재고 · 장바구니 · 드로우 | 동작 |
 | `payment` | 토스 결제 · 결제 원장 · 복구 · 환불 (내부 전용) | 동작 |
 | `worker` | SQS 를 받아 외부 예약 등록 · 취소, 드로우 응모 · 추첨, 알림 (DB 없음) | 예약 등록 · 취소 동작, 드로우 · 알림 구현 중 |
-| `batch` | 결제 기한 만료 스캔 · 우리 DB 와 외부 Mock DB 의 정합성 검사 | 골격 — 구현 중 |
+| `batch` | 정합성 검사 — 우리 DB 와 Mock 원장(목록 조회 API)을 대조해 결과를 남긴다 | 골격 — 구현 중 |
 | `common:*` | 서비스가 함께 쓰는 라이브러리 (응답 · 보안 · outbox · SQS · Redis 등) | — |
 
 <details>
@@ -275,10 +276,12 @@ worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이
 | `order` | `orders` · `order_items` · `order_events` · `cart_items` · `option_inventories` · `draw_campaigns` · `draw_entries` |
 | `payment` | `payments` · `payment_transactions` |
 | `worker` | (없음 — DB 를 쓰지 않는다. 결과는 이벤트로 preorder 에 알린다) |
+| `batch` | `reconciliation_runs` · `reconciliation_findings` (정합성 검사 결과. 업무 표는 읽기만) |
 | `waitingroom` | (없음 — 전용 Redis) |
 
 표는 소유한 서비스만 쓴다. 다른 서비스의 데이터는 그 서비스의 API 로 묻는 것이 원칙이고,
 예외는 목록 화면의 페이징 조건처럼 쿼리 안에 있어야 하는 읽기뿐이다.
+정합성 검사 결과는 예외로 preorder 도 쓴다 — 관리자 화면 API 가 preorder 에 있어, `reconciliation_runs` 에 실행 요청을 넣고 `reconciliation_findings` 의 조치 칸을 바꾼다.
 표 사이 관계는 [ERD](https://dbdiagram.io/d/Copy-of-Untitled-Diagram-6aa66499957fec6d5bdd9189)에 있다.
 
 </details>
