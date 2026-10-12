@@ -23,17 +23,21 @@ import org.springframework.stereotype.Component;
 @Component
 public class BeSnapshot {
 
-    // 예약당 등록 · 취소 작업은 하나씩이다(uq_sync_job_type). 그래서 두 번 붙여도 행이 늘지 않는다
+    // 예약당 등록 · 취소 작업은 하나씩이다(uq_sync_job_type). 마지막 이력은 예약 행의 이력 번호(event_sequence)와 같은 번호의
+    // 이력이다 — preorder 가 상태를 바꿀 때 번호를 올리고 그 번호로 이력을 남긴다. 모두 기본 키 · 유일 키로 붙어 행이 늘지 않는다
     private static final String SELECT = """
             SELECT p.preorder_token, BIN_TO_UUID(p.id) AS id, p.status, p.external_reference,
                    BIN_TO_UUID(p.customer_id) AS customer_id, BIN_TO_UUID(p.product_id) AS product_id, o.sku,
-                   rj.status AS register_job_status, cj.status AS cancel_job_status,
+                   rj.status AS register_job_status, cj.status AS cancel_job_status, e.to_status AS last_event_status,
+                   p.queue_position, b.position_from AS batch_from, b.position_to AS batch_to,
                    GREATEST(p.updated_at, COALESCE(rj.updated_at, p.updated_at), COALESCE(cj.updated_at, p.updated_at))
                        AS changed_at
               FROM preorders p
               JOIN product_options o ON o.id = p.option_id
+              JOIN shipment_batches b ON b.id = p.shipment_batch_id
               LEFT JOIN preorder_sync_jobs rj ON rj.preorder_id = p.id AND rj.job_type = 'REGISTER'
               LEFT JOIN preorder_sync_jobs cj ON cj.preorder_id = p.id AND cj.job_type = 'CANCEL'
+              LEFT JOIN preorder_events e ON e.preorder_id = p.id AND e.event_sequence = p.event_sequence
              WHERE p.preorder_token > :after
             """;
 
@@ -73,7 +77,8 @@ public class BeSnapshot {
         return new BePreorder(rs.getString("preorder_token"), rs.getString("id"), rs.getString("status"),
                 rs.getString("external_reference"), rs.getString("customer_id"), rs.getString("product_id"),
                 rs.getString("sku"), rs.getString("register_job_status"), rs.getString("cancel_job_status"),
-                utc(rs, "changed_at"));
+                rs.getString("last_event_status"), rs.getLong("queue_position"), rs.getLong("batch_from"),
+                rs.getObject("batch_to", Long.class), utc(rs, "changed_at"));
     }
 
     static Instant utc(ResultSet rs, String column) throws SQLException {

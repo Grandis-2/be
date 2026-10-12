@@ -28,6 +28,11 @@ public final class FindingSink {
      * @param be   검사 때 본 be 값. 없으면 null
      * @param mock 검사 때 본 Mock 원장 행. 없으면 null
      */
+    public void add(CheckCode code, String targetKey, Object be, Object mock) {
+        add(code.name(), targetKey, be, mock);
+    }
+
+    /** 코드를 문자열로 받는다 — 시험용 확인할 것이 코드 목록에 없는 값을 쓴다 */
     public void add(String checkCode, String targetKey, Object be, Object mock) {
         String key = checkCode + '\u0000' + targetKey;
         if (found.containsKey(key)) {

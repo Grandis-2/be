@@ -115,7 +115,7 @@ class ReconcilerTest {
 
     private static BePreorder be(String token, String status, String registerJob, Instant changedAt) {
         return new BePreorder(token, UUID.randomUUID().toString(), status, null, UUID.randomUUID().toString(), PRODUCT,
-                "SKU", registerJob, null, changedAt);
+                "SKU", registerJob, null, status, 1, 1, null, changedAt);
     }
 
     private static MockLedgerEntry mock(String key, String productId, Instant confirmedAt) {
