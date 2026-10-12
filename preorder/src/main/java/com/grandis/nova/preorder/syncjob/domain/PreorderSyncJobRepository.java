@@ -28,9 +28,17 @@ public interface PreorderSyncJobRepository extends JpaRepository<PreorderSyncJob
     /** 목록 화면용. 여러 예약의 작업을 한 번에 읽는다(행마다 다시 묻지 않는다). */
     List<PreorderSyncJob> findByPreorderIdInAndJobType(Collection<UUID> preorderIds, SyncJobType jobType);
 
+    /** 아직 결과가 나지 않은 작업. */
+    List<SyncJobStatus> IN_PROGRESS =
+            List.of(SyncJobStatus.PENDING, SyncJobStatus.PROCESSING, SyncJobStatus.RETRY_SCHEDULED);
+
+    /** 성공으로 바꿀 수 있는 작업. 진행 중이거나 포기한 작업이다. */
+    List<SyncJobStatus> SUCCEEDABLE = List.of(SyncJobStatus.PENDING, SyncJobStatus.PROCESSING,
+            SyncJobStatus.RETRY_SCHEDULED, SyncJobStatus.DEAD_LETTER);
+
     /**
      * 예약 취소 시작 트랜잭션에서 아직 성공하지 않은 REGISTER 작업을 무효화한다(DEAD_LETTER 포함).
-     * 실행 중인 worker 는 리스 토큰 조건부 완료가 0행이 되어 결과를 반영하지 못한다.
+     * 그 뒤에 오는 worker 의 결과는 작업이 CANCELED 라 반영되지 않는다.
      * 이미 SUCCEEDED 면 0 — 외부에 등록된 것이므로 CANCEL 작업으로 취소한다.
      */
     default int cancelRegister(UUID preorderId, Instant now) {
@@ -46,6 +54,36 @@ public interface PreorderSyncJobRepository extends JpaRepository<PreorderSyncJob
     int cancelUnfinished(@Param("preorderId") UUID preorderId, @Param("jobType") SyncJobType jobType,
                          @Param("finished") Collection<SyncJobStatus> finished,
                          @Param("canceled") SyncJobStatus canceled, @Param("now") Instant now);
+
+    /** 외부 호출 성공. 포기한 뒤(DEAD_LETTER) 늦게 온 성공도 받는다 — 외부에는 등록된 것이다. 무효화된 작업은 0. */
+    default int markSucceeded(UUID id, Instant now) {
+        return transit(id, SUCCEEDABLE, SyncJobStatus.SUCCEEDED, null, now);
+    }
+
+    /** 실패한 차례가 있었고 worker 가 다시 보낸다. 이미 끝난 작업은 0. */
+    default int markRetryScheduled(UUID id, Instant now) {
+        return transit(id, List.of(SyncJobStatus.PENDING, SyncJobStatus.RETRY_SCHEDULED),
+                SyncJobStatus.RETRY_SCHEDULED, null, now);
+    }
+
+    /** worker 가 포기했다. REGISTER 에만 쓴다(DB CHECK). 이미 끝난 작업은 0. */
+    default int markDeadLetter(UUID id, Instant now) {
+        return transit(id, IN_PROGRESS, SyncJobStatus.DEAD_LETTER, now, now);
+    }
+
+    /** 관리자 재처리. 포기한 작업만 되돌린다 — 여러 번 불러도 한 번만 1. */
+    default int reopen(UUID id, Instant now) {
+        return transit(id, List.of(SyncJobStatus.DEAD_LETTER), SyncJobStatus.PENDING, null, now);
+    }
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("""
+            update PreorderSyncJob j
+               set j.status = :to, j.deadLetteredAt = :deadLetteredAt, j.updatedAt = :now
+             where j.id = :id and j.status in :from
+            """)
+    int transit(@Param("id") UUID id, @Param("from") Collection<SyncJobStatus> from, @Param("to") SyncJobStatus to,
+                @Param("deadLetteredAt") Instant deadLetteredAt, @Param("now") Instant now);
 
     /** 작업의 예약 id 만 읽는다. 예약을 먼저 잠그려고 작업 엔티티를 올리지 않는다. */
     @Query("select j.preorderId from PreorderSyncJob j where j.id = :id")
