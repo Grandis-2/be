@@ -92,6 +92,25 @@ class PreorderEventDispatcherTest {
     }
 
     @Test
+    void 외부_작업의_실패한_차례와_포기_메시지를_작업_원장_기록으로_보낸다() {
+        UUID jobId = fixtures.registerJob(preorderId);
+        ObjectNode attempt = payload().put("run", 1).put("generation", 1).put("attempt", 1).put("actor", "SYSTEM")
+                .put("result", "TRANSIENT_FAILURE").put("httpStatus", 503).put("errorCode", "UPSTREAM_UNAVAILABLE")
+                .putNull("errorMessage").put("startedAt", "2026-10-04T01:00:00Z").put("finishedAt", "2026-10-04T01:00:01Z");
+
+        dispatcher.dispatch(envelope("EXTERNAL_JOB_ATTEMPTED", "PREORDER_SYNC_JOB", jobId, payload()
+                .put("syncJobId", jobId.toString()).put("preorderId", token).put("jobType", "REGISTER")
+                .set("attempt", attempt)));
+        assertThat(jobRow(jobId)).isEqualTo("RETRY_SCHEDULED|1");
+
+        dispatcher.dispatch(envelope("EXTERNAL_JOB_FAILED", "PREORDER_SYNC_JOB", jobId, payload()
+                .put("syncJobId", jobId.toString()).put("preorderId", token).put("jobType", "REGISTER")
+                .put("reason", "GENERATION_EXHAUSTED").set("attempt", attempt.deepCopy().put("attempt", 4))));
+        assertThat(jobRow(jobId)).isEqualTo("DEAD_LETTER|2");
+        assertThat(status()).as("예약은 그대로 둔다").isEqualTo("PENDING_SYNC");
+    }
+
+    @Test
     void 결제_시작_확인_메시지를_예약_확정으로_보내고_거절에_실린_결제_시각도_읽는다() {
         UUID jobId = fixtures.workerSucceeds(preorderId, "REGISTER");
         dispatcher.dispatch(envelope("EXTERNAL_JOB_SUCCEEDED", "PREORDER_SYNC_JOB", jobId, payload()
@@ -130,7 +149,7 @@ class PreorderEventDispatcherTest {
 
     @Test
     void 만료_요청_메시지를_만료_취소로_보낸다() {
-        handler.onExternalJobSucceeded(new ExternalJobSucceeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
+        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
                 token, "REGISTER", "R-" + ShopFixtures.unique()));
         jdbcTemplate.update("UPDATE preorders SET payable_from = UTC_TIMESTAMP(6) - INTERVAL 25 HOUR WHERE id = ?",
                 (Object) UuidBinary.toBytes(preorderId));
@@ -273,6 +292,14 @@ class PreorderEventDispatcherTest {
                 .put("occurredAt", "2026-09-03T01:00:03.470Z");
         envelope.set("payload", payload);
         return jsonMapper.writeValueAsString(envelope);
+    }
+
+    /** 작업 상태 | 시도 수 */
+    private String jobRow(UUID jobId) {
+        return jdbcTemplate.queryForObject("""
+                SELECT CONCAT(j.status, '|', (SELECT COUNT(*) FROM preorder_sync_attempts a WHERE a.sync_job_id = j.id))
+                  FROM preorder_sync_jobs j WHERE j.id = ?
+                """, String.class, (Object) UuidBinary.toBytes(jobId));
     }
 
     private String status() {

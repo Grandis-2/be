@@ -46,6 +46,9 @@ import static org.assertj.core.api.Assertions.assertThat;
         "nova.outbox.transport=log",
         "nova.outbox.log-transport-allowed=true",
         "nova.outbox.relay-interval=1h",
+        "nova.upload.bucket=catalog-test-images",
+        "nova.upload.cdn-base-url=https://img",
+        "nova.upload.region=ap-northeast-2",
         "management.server.port=0"
 })
 @Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class})
