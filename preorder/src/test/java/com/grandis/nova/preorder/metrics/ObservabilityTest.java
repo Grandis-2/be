@@ -5,13 +5,14 @@ import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
-import com.grandis.nova.preorder.accept.application.RegisterJobReady;
 import com.grandis.nova.preorder.event.PreorderEventDispatcher;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 import com.grandis.nova.preorder.support.ShopFixtures;
+import com.grandis.nova.preorder.syncjob.RegisterJobReady;
+import com.grandis.nova.preorder.syncjob.SyncActor;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -136,7 +137,7 @@ class ObservabilityTest {
         double published = publishCount();
 
         transactionTemplate.executeWithoutResult(status -> outboxWriter.append(
-                new RegisterJobReady(UUID.randomUUID(), ShopFixtures.unique())));
+                new RegisterJobReady(UUID.randomUUID(), ShopFixtures.unique(), "{}", SyncActor.SYSTEM, 1)));
 
         await().atMost(Duration.ofSeconds(5)).until(() -> publishCount() == published + 1);
     }

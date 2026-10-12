@@ -1,14 +1,19 @@
 package com.grandis.nova.preorder.event;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonRawValue;
 import com.grandis.nova.preorder.outbox.AggregateType;
 import com.grandis.nova.preorder.outbox.OutboundEventType;
 import com.grandis.nova.preorder.outbox.OutboxMessage;
 
 import java.util.UUID;
 
-/** 주문 정리가 끝난 뒤. worker 가 외부 취소를 보낸다. jobType 은 고정값이다. */
-public record CancelJobReady(UUID syncJobId, String preorderId) implements OutboxMessage {
+/**
+ * 주문 정리가 끝난 뒤. worker 가 외부 취소를 보낸다. 보낼 내용(request)은 작업에 저장한 JSON 그대로다.
+ * jobType 은 고정값이다.
+ */
+public record CancelJobReady(UUID syncJobId, String preorderId, @JsonRawValue String request)
+        implements OutboxMessage {
 
     @JsonProperty
     public String jobType() {

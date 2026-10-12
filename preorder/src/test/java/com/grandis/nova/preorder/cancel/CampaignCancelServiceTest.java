@@ -7,7 +7,6 @@ import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.cancel.application.CancelStarter;
-import com.grandis.nova.preorder.event.ExternalJobSucceeded;
 import com.grandis.nova.preorder.event.PreorderEventHandler;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.CancelReason;
@@ -96,7 +95,7 @@ class CampaignCancelServiceTest {
     void 판매_중지하면_회차를_마감하고_진행_중_예약만_관리자_사유로_취소를_시작한다() {
         UUID pending = accept().preorder().id();
         AcceptResult payable = accept();
-        handler.onExternalJobSucceeded(new ExternalJobSucceeded(
+        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(
                 fixtures.workerSucceeds(payable.preorder().id(), "REGISTER"),
                 AcceptFixtures.tokenOf(payable), "REGISTER", "R-" + ShopFixtures.unique()));
         UUID alreadyCanceling = accept().preorder().id();

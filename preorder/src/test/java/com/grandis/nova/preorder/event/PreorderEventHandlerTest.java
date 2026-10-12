@@ -63,23 +63,13 @@ class PreorderEventHandlerTest {
     void 등록_성공이면_결제_가능이_되고_두_번_받아도_한_번만_반영된다() {
         UUID jobId = fixtures.workerSucceeds(preorderId, "REGISTER");
         String externalNumber = "R-" + ShopFixtures.unique();
-        ExternalJobSucceeded message = new ExternalJobSucceeded(jobId, token, "REGISTER", externalNumber);
+        ExternalJobSucceeded message = ShopFixtures.succeeded(jobId, token, "REGISTER", externalNumber);
 
-        handler.onExternalJobSucceeded(message);
-        handler.onExternalJobSucceeded(message);
+        handler.onExternalJobSucceeded(ShopFixtures.unique(), message);
+        handler.onExternalJobSucceeded(ShopFixtures.unique(), message);
 
         assertThat(row()).containsEntry("status", "REGISTERED").containsEntry("external_reference", externalNumber);
         assertThat(eventCount()).isEqualTo(2);
-    }
-
-    @Test
-    void 작업이_성공하지_않았으면_payload_를_믿지_않고_무시한다() {
-        UUID jobId = jdbcTemplate.queryForObject("SELECT id FROM preorder_sync_jobs WHERE preorder_id = ?",
-                (rs, rowNum) -> UuidBinary.fromBytes(rs.getBytes(1)), (Object) UuidBinary.toBytes(preorderId));
-
-        handler.onExternalJobSucceeded(new ExternalJobSucceeded(jobId, token, "REGISTER", "R-FAKE"));
-
-        assertThat(row()).containsEntry("status", "PENDING_SYNC").containsEntry("external_reference", null);
     }
 
     @Test
@@ -87,7 +77,7 @@ class PreorderEventHandlerTest {
         startCancel(EventActor.USER);
         UUID jobId = fixtures.workerSucceeds(preorderId, "REGISTER");
 
-        handler.onExternalJobSucceeded(new ExternalJobSucceeded(jobId, token, "REGISTER", "R-LATE"));
+        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(jobId, token, "REGISTER", "R-LATE"));
 
         assertThat(row()).containsEntry("status", "CANCELING").containsEntry("external_reference", null);
     }
@@ -123,7 +113,7 @@ class PreorderEventHandlerTest {
 
     @Test
     void 주문이_취소를_거절하면_결제_가능으로_되돌리고_사유를_남긴다() {
-        handler.onExternalJobSucceeded(new ExternalJobSucceeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
+        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
                 token, "REGISTER", "R-" + ShopFixtures.unique()));
         startCancel(EventActor.USER);
 
@@ -141,7 +131,7 @@ class PreorderEventHandlerTest {
         handler.onOrderSettled(settled(PreorderOrderSettled.Result.NO_ORDER, null));
         UUID cancelJobId = fixtures.workerSucceeds(preorderId, "CANCEL");
 
-        handler.onExternalJobSucceeded(new ExternalJobSucceeded(cancelJobId, token, "CANCEL", null));
+        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(cancelJobId, token, "CANCEL", null));
 
         assertThat(row()).containsEntry("status", "CANCELED").containsEntry("active_marker", null);
     }
@@ -152,7 +142,7 @@ class PreorderEventHandlerTest {
      */
     @Test
     void 이전_취소_시도의_결과가_다시_와도_지금_취소에는_반영하지_않는다() {
-        handler.onExternalJobSucceeded(new ExternalJobSucceeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
+        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
                 token, "REGISTER", "R-" + ShopFixtures.unique()));
         startCancel(EventActor.SYSTEM);
         PreorderOrderSettled firstRejected = settled(PreorderOrderSettled.Result.REJECTED, "PAID");

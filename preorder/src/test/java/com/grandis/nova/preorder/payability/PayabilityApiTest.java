@@ -4,7 +4,6 @@ import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.cancel.application.CancelStarter;
-import com.grandis.nova.preorder.event.ExternalJobSucceeded;
 import com.grandis.nova.preorder.event.PreorderEventHandler;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.CancelReason;
@@ -169,7 +168,7 @@ class PayabilityApiTest {
     }
 
     private void makePayable() {
-        handler.onExternalJobSucceeded(new ExternalJobSucceeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
+        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
                 token, "REGISTER", "R-" + ShopFixtures.unique()));
     }
 
