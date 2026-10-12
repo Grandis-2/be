@@ -105,7 +105,7 @@ class ImageUploadApiTest {
     }
 
     @Test
-    @DisplayName("형식은 jpeg · png · webp 만(대소문자 · 앞뒤 공백은 접는다), 크기는 1 ~ 10MB — 경계는 받고 밖은 그 칸의 400")
+    @DisplayName("형식은 jpeg · png · webp 만(대소문자 · 앞뒤 공백은 접는다), 크기는 1 ~ 10MiB — 경계는 받고 밖은 그 칸의 400")
     void typeAndSizeAreChecked() throws Exception {
         issue("image/webp", 1).andExpect(status().isCreated());
         issue(" IMAGE/JPEG ", ImageUploadService.MAX_BYTES).andExpect(status().isCreated())

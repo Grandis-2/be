@@ -25,13 +25,13 @@ class ImageUploadPropertiesTest {
     }
 
     @Test
-    @DisplayName("버킷이 없거나 · 예시 자리표시(CHANGE_ME)거나, CDN 주소가 없거나 · http 거나 · 경로 · 쿼리가 있으면 기동 실패")
+    @DisplayName("버킷이 없거나 · 예시 자리표시(CHANGE_ME)거나, CDN 주소가 없거나 · http 거나 · 사용자 정보 · 경로 · 쿼리가 있으면 기동 실패")
     void refusesMissingOrMalformed() {
         runner.withPropertyValues("nova.images.cdn-base-url=https://cdn.example.com")
                 .run(context -> assertThat(context).getFailure().rootCause().hasMessageContaining("nova.images.bucket"));
         runner.withPropertyValues("nova.images.bucket=CHANGE_ME", "nova.images.cdn-base-url=https://cdn.example.com")
                 .run(context -> assertThat(context).getFailure().rootCause().hasMessageContaining("placeholder"));
-        for (String cdn : new String[]{null, "http://cdn.example.com", "https://cdn.example.com/images", "https://cdn.example.com?x=1"}) {
+        for (String cdn : new String[]{null, "http://cdn.example.com", "https://cdn.example.com/images", "https://cdn.example.com?x=1", "https://u:p@cdn.example.com"}) {
             ApplicationContextRunner withBucket = runner.withPropertyValues("nova.images.bucket=b");
             (cdn == null ? withBucket : withBucket.withPropertyValues("nova.images.cdn-base-url=" + cdn))
                     .run(context -> assertThat(context).as(String.valueOf(cdn)).getFailure().rootCause()

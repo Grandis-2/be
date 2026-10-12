@@ -130,7 +130,7 @@ public class AdminProductController {
 
     /** 상품 사진 업로드 URL. 경로가 /products 아래인 것은 ALB 가 catalog 로 보내는 경로(/api/v1/admin/products*) 안이어야 해서다. */
     @Operation(summary = "상품 사진 업로드 URL 발급", description = "201 브라우저가 파일을 PUT 할 uploadUrl(5분 유효) · 실어야 할 headers · 올린 뒤의 imageUrl. "
-            + "형식은 image/jpeg · image/png · image/webp, 크기는 1 ~ 10MB — 다르면 400. 발급받은 형식 · 크기와 다른 파일을 PUT 하면 S3 가 403 이다. "
+            + "형식은 image/jpeg · image/png · image/webp, 크기는 1 ~ 10MiB(10,485,760 바이트) — 다르면 400. 발급받은 형식 · 크기와 다른 파일을 PUT 하면 S3 가 403 이다. "
             + "상품 등록의 이미지 url 에는 imageUrl 을 넣는다")
     @PostMapping("/image-uploads")
     public ResponseEntity<ApiResponse<ImageUpload>> imageUpload(@io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ImageUploadRequest.class))) @RequestBody String body) {

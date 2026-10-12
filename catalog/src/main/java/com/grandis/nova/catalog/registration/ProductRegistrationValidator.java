@@ -104,6 +104,7 @@ public class ProductRegistrationValidator {
     /**
      * 사진은 업로드 API 로 올린 것만 — 바깥 주소(추적 픽셀 · 지워질 수 있는 남의 이미지)가 상품 화면에 실리지 않게 한다.
      * 접두 끝의 "/" 까지 대조하므로 cdn 주소를 앞에 붙인 다른 호스트(cdn.example.com.evil.test)는 걸린다.
+     * 주소만 본다 — 그 객체가 실제로 올라가 있는지, 이 서비스가 발급한 키인지는 확인하지 않는다.
      */
     private void requireUploadedImages(ProductRegistrationRequest request) {
         for (int i = 0; i < request.images().gallery().size(); i++) {

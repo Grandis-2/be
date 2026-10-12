@@ -9,7 +9,7 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
-/** presigned URL 서명기. 서명은 네트워크를 타지 않는다 — 자격 증명(태스크 역할)은 처음 서명할 때 받는다. */
+/** presigned URL 서명기. 서명은 버킷에 요청하지 않고 앱 안에서 한다(실측: 없는 버킷 · 가짜 자격 증명으로도 URL 이 나온다). */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(ImageUploadProperties.class)
 class ImageUploadConfig {

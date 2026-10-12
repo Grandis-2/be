@@ -15,13 +15,15 @@ import java.util.UUID;
  * 형식(Content-Type)과 크기(Content-Length)를 서명에 넣어 S3 가 다른 파일을 거절하게 한다. 실측: SDK 가 서명하는 헤더가 content-length ·
  * content-type · host 이고, 서명을 검사하는 MinIO 에서 크기 · 형식이 다른 PUT 은 403(ImageUploadApiTest), 만료된 URL 의 PUT 도 403(1초 유효로
  * 발급한 일회성 프로브). AWS S3 자체에서는 재지 않았다.
- * 객체 키는 서버가 정한다(무작위 UUID) — 남이 올린 키를 덮어쓰는 업로드는 없다.
+ * 객체 키는 서버가 무작위 UUID 로 정한다 — 남의 키를 짐작해 덮어쓸 수는 없다. 다만 URL 은 일회용이 아니다: 만료 전에는 같은 URL 로 같은 형식 · 크기의
+ * 파일을 다시 PUT 해 덮어쓸 수 있다(실측, MinIO). 올린 내용이 이미지인지 디코딩해 보지도 않는다 — 관리자만 발급받는다.
  */
 @Service
 public class ImageUploadService {
 
     /** 받는 형식 → 객체 키 확장자. */
     static final Map<String, String> EXTENSIONS = Map.of("image/jpeg", "jpg", "image/png", "png", "image/webp", "webp");
+    /** 10MiB(10,485,760 바이트). */
     static final long MAX_BYTES = 10L * 1024 * 1024;
     /** 업로드 URL 유효 시간. 파일 하나를 고른 직후 올리는 데 쓴다. */
     static final Duration URL_TTL = Duration.ofMinutes(5);
@@ -43,7 +45,7 @@ public class ImageUploadService {
         }
         long length = request.contentLength();
         if (length < 1 || length > MAX_BYTES) {
-            throw ValidationFailures.of("contentLength", "1 ~ %d 바이트(10MB)여야 합니다.".formatted(MAX_BYTES));
+            throw ValidationFailures.of("contentLength", "1 ~ %d 바이트(10MiB)여야 합니다.".formatted(MAX_BYTES));
         }
         String key = KEY_PREFIX + UUID.randomUUID() + "." + extension;
         PresignedPutObjectRequest signed = presigner.presignPutObject(presign -> presign
