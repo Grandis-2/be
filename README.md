@@ -97,10 +97,10 @@ sequenceDiagram
     PO-->>U: 202 접수 완료 · 순번 · 배송 차수 · 상태 주소
     PO->>Q: 외부 등록 요청 (커밋 직후)
     Q->>W: 전달
-    W->>X: 예약 등록 (실패하면 백오프 재시도)
-    W->>Q: 등록 성공
+    W->>X: 예약 등록 (실패하면 지연을 늘려 가며 재시도)
+    W->>Q: 결과 이벤트 (차례마다 · 성공)
     Q->>PO: 전달
-    Note over PO: PENDING_SYNC → REGISTERED<br/>24시간 결제 가능
+    Note over PO: 시도 기록 · 작업 상태를 남기고<br/>PENDING_SYNC → REGISTERED<br/>24시간 결제 가능
 
     U->>PO: 상태 주소 확인 (5초 동안)
     alt 그사이 등록됨
@@ -163,7 +163,8 @@ sequenceDiagram
     O-->>U: 당첨 · 미당첨
 ```
 
-worker 는 아직 구현 중이다. 위 그림의 worker 구간은 서비스 사이 계약([`contracts/`](contracts))에 정해 둔 동작이다.
+사전예약의 worker 구간은 동작한다. 럭키 드로우의 worker 구간(응모 등록 · 추첨)은 아직 구현 중이라,
+그림은 서비스 사이 계약([`contracts/draw-entry-sync.md`](contracts/draw-entry-sync.md))에 정해 둔 동작이다.
 
 ## 핵심 설계
 
@@ -198,12 +199,13 @@ worker 는 아직 구현 중이다. 위 그림의 worker 구간은 서비스 사
 
 ### 5. 실패는 다시 시도하고, 끝내 안 되면 사람이 본다 — 재시도 · DLQ
 
-외부 호출이 실패하면 메시지를 지수 백오프(+지터)로 미뤘다가 다시 처리한다.
-정해진 횟수를 넘기면 DLQ 로 옮기고 관리자 화면에서 확인 · 재처리한다.
-**DLQ 에 들어간 것 자체를 예약 실패로 보지 않는다.**
+worker 는 DB 를 쓰지 않는다. 외부에 보낼 내용과 몇 번째 시도인지를 메시지에 싣고 다니며,
+실패하면 지연을 늘려 가며(+지터) 같은 큐에 다시 보낸다. 차례마다 결과를 이벤트로 알리면 preorder 가 시도 기록과 작업 상태를 남긴다.
+정해진 횟수를 다 쓰면 포기(DEAD_LETTER)로 기록하고 관리자가 확인 · 재처리한다.
+**포기로 기록된 것 자체를 예약 실패로 보지 않는다.**
 
-외부에 두 번 등록되지 않도록, 예약 하나에 등록 작업은 하나만 만들고(유니크 키), 재시도마다 접수 때 고정한 같은 요청을 보낸다.
-결과가 불분명하면 다시 등록하지 않고 먼저 조회한다.
+외부에 두 번 등록되지 않도록, 예약 하나에 등록 작업은 하나만 만들고(유니크 키), 재시도마다 접수 때 고정한 같은 요청과 같은 멱등 키를 보낸다.
+결과가 불분명하면 다시 등록하지 않고 같은 키로 먼저 조회한다.
 
 ### 6. 오픈 순간의 몰림은 대기열이 받는다 — waitingroom
 
@@ -255,10 +257,10 @@ worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이
 | `member` | 카카오 로그인 · JWT 발급 · 회원 · 기본 배송지 | 동작 |
 | `catalog` | 상품 · 옵션 · 리뷰 · 관리자 등록/편집 | 동작 |
 | `waitingroom` | 입장 대기열 — 줄 서기 · 입장권 · 접수 전달 | 동작 |
-| `preorder` | 사전예약 접수 · 순번 · 회차 · 배송 차수 · 취소 · DLQ 관리 | 동작 |
+| `preorder` | 사전예약 접수 · 순번 · 회차 · 배송 차수 · 취소 · 외부 작업 원장 · DLQ 관리 | 동작 |
 | `order` | 주문 · 재고 · 장바구니 · 드로우 | 동작 |
 | `payment` | 토스 결제 · 결제 원장 · 복구 · 환불 (내부 전용) | 동작 |
-| `worker` | SQS 를 받아 외부 예약 등록 · 알림 | 골격 — 구현 중 |
+| `worker` | SQS 를 받아 외부 예약 등록 · 취소, 드로우 응모 · 추첨, 알림 (DB 없음) | 예약 등록 · 취소 동작, 드로우 · 알림 구현 중 |
 | `batch` | 결제 기한 만료 스캔 · 우리 DB 와 외부 Mock DB 의 정합성 검사 | 골격 — 구현 중 |
 | `common:*` | 서비스가 함께 쓰는 라이브러리 (응답 · 보안 · outbox · SQS · Redis 등) | — |
 
@@ -269,15 +271,14 @@ worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이
 | --- | --- |
 | `member` | `customers` · `refresh_tokens` |
 | `catalog` | `categories` · `products` · `product_options` · `product_reviews` · `catalog_outbox_events` |
-| `preorder` | `preorders` · `preorder_events` · `preorder_campaigns` · `shipment_batches` · `preorder_outbox_events` · `dead_letter_events` |
+| `preorder` | `preorders` · `preorder_events` · `preorder_campaigns` · `shipment_batches` · `preorder_outbox_events` · `dead_letter_events`<br>`preorder_sync_jobs` · `preorder_sync_attempts` (외부 작업 · 시도 원장) |
 | `order` | `orders` · `order_items` · `order_events` · `cart_items` · `option_inventories` · `draw_campaigns` · `draw_entries` |
 | `payment` | `payments` · `payment_transactions` |
-| `worker` | `preorder_sync_jobs` · `preorder_sync_attempts` |
+| `worker` | (없음 — DB 를 쓰지 않는다. 결과는 이벤트로 preorder 에 알린다) |
 | `waitingroom` | (없음 — 전용 Redis) |
 
-표는 소유한 서비스만 쓰는 것이 원칙이다. 쓰기의 예외는 `preorder_sync_jobs` 하나다 — 실행하는 worker 의 표지만,
-행은 preorder 가 접수 · 취소 트랜잭션에서 만들고 무효화한다.
-다른 서비스의 데이터는 그 서비스의 API 로 묻고, 읽기의 예외는 목록 화면의 페이징 조건처럼 쿼리 안에 있어야 하는 경우뿐이다.
+표는 소유한 서비스만 쓴다. 다른 서비스의 데이터는 그 서비스의 API 로 묻는 것이 원칙이고,
+예외는 목록 화면의 페이징 조건처럼 쿼리 안에 있어야 하는 읽기뿐이다.
 표 사이 관계는 [ERD](https://dbdiagram.io/d/Copy-of-Untitled-Diagram-6aa66499957fec6d5bdd9189)에 있다.
 
 </details>
