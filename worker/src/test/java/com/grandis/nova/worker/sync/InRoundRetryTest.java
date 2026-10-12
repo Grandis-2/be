@@ -68,6 +68,21 @@ class InRoundRetryTest {
         assertThat(calls).hasValue(0);
     }
 
+    /** 쉬는 시간을 정할 때(첫 확인 뒤) 내려가기 시작한 경우다. 쉬고 나서 새 호출을 시작하지 않는다. */
+    @Test
+    void 쉬는_사이에_내려가기_시작해도_다시_부르지_않는다() {
+        InRoundRetry closingWhilePaused = new InRoundRetry(new RetrySchedule(RetryScheduleTest.SETTINGS, () -> {
+            shutdown.onApplicationEvent(new ContextClosedEvent(context));
+            return 0.0;
+        }), RetryScheduleTest.SETTINGS, shutdown);
+
+        assertThat(closingWhilePaused.from(RETRYABLE, () -> {
+            calls.incrementAndGet();
+            return SUCCESS;
+        })).isSameAs(RETRYABLE);
+        assertThat(calls).hasValue(0);
+    }
+
     @Test
     void 다른_컨텍스트가_닫히는_것은_내려가는_것이_아니다() {
         shutdown.onApplicationEvent(new ContextClosedEvent(new GenericApplicationContext()));
