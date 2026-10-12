@@ -19,24 +19,45 @@ final class Jobs {
 
     static final Duration TIMEOUT = Duration.ofSeconds(10);
     static final String REGISTER_QUEUE = "preorder-register";
+    static final String CANCEL_QUEUE = "preorder-cancel";
     static final String EVENTS_QUEUE = "preorder-events";
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     final UUID syncJobId = UUID.randomUUID();
     /** 예약의 공개 id. 외부 mock 의 멱등 키다. */
     final String key = "PO-" + UUID.randomUUID();
+    private final boolean cancel;
+
+    Jobs() {
+        this(false);
+    }
+
+    private Jobs(boolean cancel) {
+        this.cancel = cancel;
+    }
+
+    /** 취소 작업. preorder 는 취소 메시지의 payload 에 시작한 쪽 · 실행 회차를 싣지 않는다. */
+    static Jobs cancel() {
+        return new Jobs(true);
+    }
+
+    String queue() {
+        return cancel ? CANCEL_QUEUE : REGISTER_QUEUE;
+    }
 
     String body() {
-        return body("\"request\":{\"ourReservationId\":\"%s\",\"qty\":1},".formatted(key));
+        return body(cancel ? "\"request\":{\"externalKey\":\"%s\",\"reason\":\"USER_CANCEL\"},".formatted(key)
+                : "\"request\":{\"ourReservationId\":\"%s\",\"qty\":1},".formatted(key));
     }
 
     /** @param request payload 의 request 칸(끝에 쉼표까지). 빈 문자열이면 보낼 내용이 없는 메시지다 */
     String body(String request) {
         return """
-                {"eventId":"%s","eventType":"REGISTER_JOB_READY","aggregateType":"PREORDER_SYNC_JOB","aggregateId":"%s",
+                {"eventId":"%s","eventType":"%s","aggregateType":"PREORDER_SYNC_JOB","aggregateId":"%s",
                  "occurredAt":"2026-10-12T01:00:00Z",
-                 "payload":{"syncJobId":"%s","preorderId":"%s",%s"actor":"SYSTEM","run":1,"jobType":"REGISTER"}}
-                """.formatted(UUID.randomUUID(), syncJobId, syncJobId, key, request);
+                 "payload":{"syncJobId":"%s","preorderId":"%s",%s%s}}
+                """.formatted(UUID.randomUUID(), eventType(), syncJobId, syncJobId, key, request,
+                cancel ? "\"jobType\":\"CANCEL\"" : "\"actor\":\"SYSTEM\",\"run\":1,\"jobType\":\"REGISTER\"");
     }
 
     /** 큐에서 받은 것처럼 만든 메시지. */
@@ -45,9 +66,13 @@ final class Jobs {
                 .messageAttributes(attributes(attributes)).build();
     }
 
-    static Map<String, MessageAttributeValue> attributes(Map<String, String> values) {
+    String eventType() {
+        return cancel ? "CANCEL_JOB_READY" : "REGISTER_JOB_READY";
+    }
+
+    Map<String, MessageAttributeValue> attributes(Map<String, String> values) {
         Map<String, MessageAttributeValue> attributes = new HashMap<>();
-        attributes.put("eventType", text("REGISTER_JOB_READY"));
+        attributes.put("eventType", text(eventType()));
         values.forEach((name, value) -> attributes.put(name, text(value)));
         return attributes;
     }
@@ -64,7 +89,7 @@ final class Jobs {
 
     /** worker 가 지연을 두고 다시 보낸 작업 메시지의 속성(이름 → 값). 받은 것은 큐에서 지운다. */
     Optional<Map<String, String>> resent(TestQueues queues, Duration timeout) {
-        return queues.receive(REGISTER_QUEUE, message -> message.body().contains(syncJobId.toString()), timeout)
+        return queues.receive(queue(), message -> message.body().contains(syncJobId.toString()), timeout)
                 .map(message -> {
                     Map<String, String> values = new HashMap<>();
                     message.messageAttributes().forEach((name, value) -> values.put(name, value.stringValue()));
@@ -76,12 +101,22 @@ final class Jobs {
         return resent(queues, TIMEOUT).orElseThrow(() -> new AssertionError("다시 보낸 메시지가 없다"));
     }
 
-    /** 이 작업의 키로 외부 mock 이 받은 요청("METHOD 경로"). */
+    /** 이 작업의 키로 외부 mock 이 받은 요청("METHOD 경로"). 취소는 키가 본문에 있다. */
     List<String> calls(FakeMock mock) {
         return mock.requests().stream()
-                .filter(request -> key.equals(request.idempotencyKey()) || request.path().endsWith(key))
+                .filter(request -> key.equals(request.idempotencyKey()) || request.path().endsWith(key)
+                        || request.body().contains(key))
                 .map(request -> request.method() + " " + request.path().replace(key, "{key}"))
                 .toList();
+    }
+
+    /** "run=회차 세대-차례 시작한쪽 결과 응답상태 오류코드" */
+    static String attempt(JsonNode payload) {
+        JsonNode attempt = payload.get("attempt");
+        return "run=%d %d-%d %s %s %s %s".formatted(attempt.get("run").asInt(), attempt.get("generation").asInt(),
+                attempt.get("attempt").asInt(), attempt.get("actor").asString(), attempt.get("result").asString(),
+                attempt.get("httpStatus").isNull() ? null : attempt.get("httpStatus").asInt(),
+                attempt.get("errorCode").isNull() ? null : attempt.get("errorCode").asString());
     }
 
     private static MessageAttributeValue text(String value) {

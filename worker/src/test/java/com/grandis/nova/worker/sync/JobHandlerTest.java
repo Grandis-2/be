@@ -10,6 +10,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
@@ -28,6 +29,7 @@ import static com.grandis.nova.worker.mock.FakeMock.empty;
 import static com.grandis.nova.worker.mock.FakeMock.html;
 import static com.grandis.nova.worker.mock.FakeMock.inOrder;
 import static com.grandis.nova.worker.mock.FakeMock.json;
+import static com.grandis.nova.worker.sync.Jobs.attempt;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -59,6 +61,7 @@ class JobHandlerTest {
     static final String CREATED = "{\"externalKey\":\"K\",\"externalNumber\":\"R-1\",\"status\":\"ACTIVE\"}";
 
     @Autowired
+    @Qualifier("registerJobHandler")
     JobHandler handler;
 
     @Autowired
@@ -67,6 +70,9 @@ class JobHandlerTest {
     /** 소비기가 큐를 받지 않게 대역으로 바꾼다. 처리기는 시험이 직접 부른다. */
     @MockitoBean
     BatchQueueConsumer registerConsumer;
+
+    @MockitoBean
+    BatchQueueConsumer cancelConsumer;
 
     @Autowired
     MeterRegistry meters;
@@ -342,14 +348,5 @@ class JobHandlerTest {
 
     private double count(String outcome) {
         return meters.counter(JobHandler.JOBS_METRIC, "jobType", "REGISTER", "outcome", outcome).count();
-    }
-
-    /** "run=회차 세대-차례 시작한쪽 결과 응답상태 오류코드" */
-    private static String attempt(JsonNode payload) {
-        JsonNode attempt = payload.get("attempt");
-        return "run=%d %d-%d %s %s %s %s".formatted(attempt.get("run").asInt(), attempt.get("generation").asInt(),
-                attempt.get("attempt").asInt(), attempt.get("actor").asString(), attempt.get("result").asString(),
-                attempt.get("httpStatus").isNull() ? null : attempt.get("httpStatus").asInt(),
-                attempt.get("errorCode").isNull() ? null : attempt.get("errorCode").asString());
     }
 }
