@@ -102,9 +102,9 @@ nova:
   upload:
     bucket: CHANGE_ME                           # 업로드 버킷 이름
     cdn-base-url: https://cdn.grandis-nova.link  # 그 버킷을 내놓는 CDN(https, 경로 없음)
-    # 로컬 에뮬레이터(Floci)에 올려 볼 때만. 버킷은 미리 만들어 둔다. Floci 는 서명을 검사하지 않아 크기 · 형식이 달라도 받는다
-    region: ap-northeast-2
-    endpoint: http://localhost:4566
+    # 로컬 에뮬레이터(Floci)에 올려 볼 때만 연다. 버킷은 미리 만들어 둔다. Floci 는 서명을 검사하지 않아 크기 · 형식이 달라도 받는다
+    # region: ap-northeast-2
+    # endpoint: http://localhost:4566
   # 브라우저 호출을 허용할 프론트 오리진(scheme://host[:port], 정확 일치). 적으면 기본값(운영 프론트 두 도메인 · API 도메인)이 통째로 바뀐다.
   # 로컬에서만 적는다 — 운영은 기본값을 쓴다.
   cors:
