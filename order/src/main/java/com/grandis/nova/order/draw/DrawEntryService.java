@@ -54,18 +54,18 @@ public class DrawEntryService {
                 .orElseThrow(() -> new BusinessException(OrderErrorCode.DRAW_NOT_FOUND));
         Optional<DrawEntry> existing = find(drawId, customerId);
         if (existing.isPresent()) {
-            return new Entered(existing.get(), false);
+            return new Entered(existing.get(), false, campaign);
         }
         if (campaign.phaseAt(clock.instant()) != DrawPhase.OPEN) {
             throw new BusinessException(OrderErrorCode.DRAW_NOT_OPEN);
         }
         try {
             return new Entered(writeTransaction.execute(status ->
-                    entries.insert(new NewDrawEntry(drawId, customerId, shipTo))), true);
+                    entries.insert(new NewDrawEntry(drawId, customerId, shipTo))), true, campaign);
         } catch (DrawEntryTakenException e) {
             // 같은 회원의 응모가 동시에 왔다. 이 트랜잭션은 롤백됐으므로 새 트랜잭션에서 먼저 들어간 응모를 읽는다
             return new Entered(find(drawId, customerId)
-                    .orElseThrow(() -> new IllegalStateException("응모 충돌인데 그 응모가 없다: drawId=" + drawId, e)), false);
+                    .orElseThrow(() -> new IllegalStateException("응모 충돌인데 그 응모가 없다: drawId=" + drawId, e)), false, campaign);
         }
     }
 
@@ -75,8 +75,8 @@ public class DrawEntryService {
     }
 
     /**
-     * 내 응모와 추첨 결과. 결과를 반영하기 전이거나 응모비를 결제하지 않았으면(추첨 대상이 아니다) 결과가 없다(null) — 반영 뒤 결제 완료
-     * 응모에 당첨 주문이 이어져 있으면 당첨, 아니면 낙첨이다.
+     * 내 응모와 추첨 결과, 그 회차. 결과를 반영하기 전이거나 응모비를 결제하지 않았으면(추첨 대상이 아니다) 결과가 없다(null) — 반영 뒤 결제 완료
+     * 응모에 당첨 주문이 이어져 있으면 당첨, 아니면 낙첨이다. 회차는 화면이 다시 조회하지 않게 같이 준다(만든 뒤 바뀌지 않아 읽는 순서와 무관하다).
      *
      * @throws BusinessException 404 DRAW_ENTRY_NOT_FOUND
      */
@@ -87,7 +87,10 @@ public class DrawEntryService {
         DrawEntry entry = mine(customerId, drawId);
         DrawEntryResult result = !settled || entry.status() != DrawEntryStatus.PAID ? null
                 : entry.wonOrderId() != null ? DrawEntryResult.WON : DrawEntryResult.LOST;
-        return new MyEntry(entry, result);
+        // 응모가 회차를 외래 키로 가리키고 회차는 지우지 않으므로 응모가 있으면 회차도 있다
+        DrawCampaign campaign = readTransaction.execute(status -> campaigns.findById(drawId))
+                .orElseThrow(() -> new IllegalStateException("응모의 회차가 없다: drawId=" + drawId));
+        return new MyEntry(entry, result, campaign);
     }
 
     private Optional<DrawEntry> find(UUID drawId, UUID customerId) {
@@ -95,10 +98,10 @@ public class DrawEntryService {
     }
 
     /** @param result 결과 반영 전이면 null */
-    public record MyEntry(DrawEntry entry, DrawEntryResult result) {
+    public record MyEntry(DrawEntry entry, DrawEntryResult result, DrawCampaign campaign) {
     }
 
     /** @param created 이번 요청이 만들었으면 true, 이미 있던 응모면 false */
-    public record Entered(DrawEntry entry, boolean created) {
+    public record Entered(DrawEntry entry, boolean created, DrawCampaign campaign) {
     }
 }
