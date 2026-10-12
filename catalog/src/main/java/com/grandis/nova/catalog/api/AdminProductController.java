@@ -12,6 +12,9 @@ import com.grandis.nova.catalog.edit.VariantAddRequest;
 import com.grandis.nova.catalog.edit.VariantEditRequest;
 import com.grandis.nova.catalog.edit.VisibilityChangeRequest;
 import com.grandis.nova.catalog.edit.VisibilityView;
+import com.grandis.nova.catalog.image.ImageUpload;
+import com.grandis.nova.catalog.image.ImageUploadRequest;
+import com.grandis.nova.catalog.image.ImageUploadService;
 import com.grandis.nova.catalog.web.StrictBodies;
 import com.grandis.nova.catalog.listing.AdminProductListFilter;
 import com.grandis.nova.catalog.listing.AdminProductListItem;
@@ -48,7 +51,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 관리자 상품 등록 · 목록 · 상세 · 수정(표시 정보 · 가격 · 보증 · 옵션 값 · 옵션). 권한은 보안 설정이 경로로 막는다(ADMIN).
+ * 관리자 상품 등록 · 목록 · 상세 · 수정(표시 정보 · 가격 · 보증 · 옵션 값 · 옵션) · 사진 업로드 URL 발급. 권한은 보안 설정이 경로로 막는다(ADMIN).
  * 수정 규칙(사전예약 오픈 뒤 금지 · 재계산 · 구성 불변)은 {@link ProductEditService}.
  *
  * 목록 · 상세에는 노출 규칙이 없다 — 비공개 · 준비 전 · 판매 중지 · 오래된 마감도 전부 나오고, 공개 여부 · 등록 완료(판매 방식별 준비)가 같이 실린다.
@@ -69,16 +72,18 @@ public class AdminProductController {
     private final ProductListingService listingService;
     private final ProductDetailService detailService;
     private final ProductEditService editService;
+    private final ImageUploadService imageUploadService;
     private final RegistrationRequestParser parser;
     private final StrictBodies bodies;
 
     public AdminProductController(ProductRegistrationService registrationService, ProductListingService listingService,
                                   ProductDetailService detailService, ProductEditService editService,
-                                  RegistrationRequestParser parser, StrictBodies bodies) {
+                                  ImageUploadService imageUploadService, RegistrationRequestParser parser, StrictBodies bodies) {
         this.registrationService = registrationService;
         this.listingService = listingService;
         this.detailService = detailService;
         this.editService = editService;
+        this.imageUploadService = imageUploadService;
         this.bodies = bodies;
         this.parser = parser;
     }
@@ -121,6 +126,16 @@ public class AdminProductController {
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         return ApiResponse.ok(ProductPageResponse.from(
                 listingService.listGiftCandidates(q, PageSizes.requirePage(page), PageSizes.require(size))));
+    }
+
+    /** 상품 사진 업로드 URL. 경로가 /products 아래인 것은 ALB 가 catalog 로 보내는 경로(/api/v1/admin/products*) 안이어야 해서다. */
+    @Operation(summary = "상품 사진 업로드 URL 발급", description = "201 브라우저가 파일을 PUT 할 uploadUrl(5분 유효) · 실어야 할 headers · 올린 뒤의 imageUrl. "
+            + "형식은 image/jpeg · image/png · image/webp, 크기는 1 ~ 10MiB(10,485,760 바이트) — 다르면 400. 발급받은 형식 · 크기와 다른 파일을 PUT 하면 S3 가 403 이다. "
+            + "상품 등록의 이미지 url 에는 imageUrl 을 넣는다")
+    @PostMapping("/image-uploads")
+    public ResponseEntity<ApiResponse<ImageUpload>> imageUpload(@io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ImageUploadRequest.class))) @RequestBody String body) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResponse.ok(imageUploadService.prepare(bodies.parse(body, ImageUploadRequest.class))));
     }
 
     @Operation(summary = "상품 상세")
