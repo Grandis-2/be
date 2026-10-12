@@ -13,12 +13,12 @@ class ImageUploadPropertiesTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withConfiguration(UserConfigurations.of(ImageUploadConfig.class))
-            .withPropertyValues("nova.images.region=ap-northeast-2");
+            .withPropertyValues("nova.upload.region=ap-northeast-2");
 
     @Test
     @DisplayName("대조군 — 버킷 · https CDN 주소(끝 / 있어도 됨)면 뜨고, 이미지 주소 접두는 CDN 주소 + /")
     void startsWithBucketAndCdn() {
-        runner.withPropertyValues("nova.images.bucket=b", "nova.images.cdn-base-url=https://cdn.example.com/").run(context -> {
+        runner.withPropertyValues("nova.upload.bucket=b", "nova.upload.cdn-base-url=https://cdn.example.com/").run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context.getBean(ImageUploadProperties.class).imageUrlPrefix()).isEqualTo("https://cdn.example.com/");
         });
@@ -27,15 +27,15 @@ class ImageUploadPropertiesTest {
     @Test
     @DisplayName("버킷이 없거나 · 예시 자리표시(CHANGE_ME)거나, CDN 주소가 없거나 · http 거나 · 사용자 정보 · 경로 · 쿼리가 있으면 기동 실패")
     void refusesMissingOrMalformed() {
-        runner.withPropertyValues("nova.images.cdn-base-url=https://cdn.example.com")
-                .run(context -> assertThat(context).getFailure().rootCause().hasMessageContaining("nova.images.bucket"));
-        runner.withPropertyValues("nova.images.bucket=CHANGE_ME", "nova.images.cdn-base-url=https://cdn.example.com")
+        runner.withPropertyValues("nova.upload.cdn-base-url=https://cdn.example.com")
+                .run(context -> assertThat(context).getFailure().rootCause().hasMessageContaining("nova.upload.bucket"));
+        runner.withPropertyValues("nova.upload.bucket=CHANGE_ME", "nova.upload.cdn-base-url=https://cdn.example.com")
                 .run(context -> assertThat(context).getFailure().rootCause().hasMessageContaining("placeholder"));
         for (String cdn : new String[]{null, "http://cdn.example.com", "https://cdn.example.com/images", "https://cdn.example.com?x=1", "https://u:p@cdn.example.com"}) {
-            ApplicationContextRunner withBucket = runner.withPropertyValues("nova.images.bucket=b");
-            (cdn == null ? withBucket : withBucket.withPropertyValues("nova.images.cdn-base-url=" + cdn))
+            ApplicationContextRunner withBucket = runner.withPropertyValues("nova.upload.bucket=b");
+            (cdn == null ? withBucket : withBucket.withPropertyValues("nova.upload.cdn-base-url=" + cdn))
                     .run(context -> assertThat(context).as(String.valueOf(cdn)).getFailure().rootCause()
-                            .hasMessageContaining("nova.images.cdn-base-url"));
+                            .hasMessageContaining("nova.upload.cdn-base-url"));
         }
     }
 }

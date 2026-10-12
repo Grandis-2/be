@@ -52,10 +52,10 @@ class ImageUploadApiTest {
 
     @DynamicPropertySource
     static void minio(DynamicPropertyRegistry registry) {
-        registry.add("nova.images.bucket", () -> BUCKET);
-        registry.add("nova.images.endpoint", MinioContainer::endpoint);
-        registry.add("nova.images.access-key", () -> MinioContainer.ACCESS_KEY);
-        registry.add("nova.images.secret-key", () -> MinioContainer.SECRET_KEY);
+        registry.add("nova.upload.bucket", () -> BUCKET);
+        registry.add("nova.upload.endpoint", MinioContainer::endpoint);
+        registry.add("nova.upload.access-key", () -> MinioContainer.ACCESS_KEY);
+        registry.add("nova.upload.secret-key", () -> MinioContainer.SECRET_KEY);
     }
 
     @BeforeAll
