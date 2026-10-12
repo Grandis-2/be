@@ -23,6 +23,7 @@ import tools.jackson.databind.JsonNode;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 import static com.grandis.nova.worker.mock.FakeMock.empty;
@@ -344,6 +345,18 @@ class JobHandlerTest {
                 .containsExactly("{\"ourReservationId\":\"" + job.key + "\",\"qty\":1}");
         assertThat(attempt(job.event(queues).get("payload"))).isEqualTo("run=1 1-1 SYSTEM SUCCESS 201 null");
         assertThat(attempt(job.event(queues).get("payload"))).isEqualTo("run=1 1-1 SYSTEM SUCCESS 201 null");
+    }
+
+    /** 한 번도 일어나지 않은 결과도 0 으로 나가야 경보가 "값 없음"을 따로 다루지 않는다. */
+    @Test
+    void 처리_결과_지표는_일어나기_전부터_종류별로_있다() {
+        for (String jobType : List.of("REGISTER", "CANCEL")) {
+            for (String outcome : JobHandler.OUTCOMES) {
+                assertThat(meters.find(JobHandler.JOBS_METRIC).tags("jobType", jobType, "outcome", outcome).counter())
+                        .as(jobType + " " + outcome).isNotNull();
+            }
+            assertThat(meters.find(JobHandler.GENERATIONS_METRIC).tags("jobType", jobType).counter()).isNotNull();
+        }
     }
 
     private double count(String outcome) {
