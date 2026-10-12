@@ -34,6 +34,19 @@ public class ProductListingService {
         return OffsetPage.of(items, page, size, total);
     }
 
+    /**
+     * 럭키 드로우 증정품 후보(관리자 회차 만들기 화면) — 상품마다 후보 옵션과 지금 확보할 수 있는 수량. 건수 · 상품 · 옵션이 한 스냅샷이다.
+     *
+     * @param q 상품명 · tags 부분 일치. 관리자 목록과 같은 정규화. 비면 전부
+     */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public OffsetPage<GiftCandidate> listGiftCandidates(String q, int page, int size) {
+        String text = new AdminProductListFilter(q, null, null).q();
+        long total = repository.countGiftCandidates(text);
+        List<GiftCandidate> items = total == 0 ? List.of() : repository.findGiftCandidates(text, page, size);
+        return OffsetPage.of(items, page, size, total);
+    }
+
     /** 관리자 목록 — 노출 규칙 없이 전부. 건수와 목록은 위와 같은 이유로 한 스냅샷이다. */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public OffsetPage<AdminProductListItem> listForAdmin(AdminProductListFilter filter, int page, int size) {
