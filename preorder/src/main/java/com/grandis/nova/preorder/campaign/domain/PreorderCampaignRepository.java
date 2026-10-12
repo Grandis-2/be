@@ -29,4 +29,7 @@ public interface PreorderCampaignRepository extends JpaRepository<PreorderCampai
              order by c.productId""")
     List<PreorderCampaign> findNotClosedAfter(@Param("now") Instant now, @Param("afterProductId") UUID afterProductId,
                                               Limit limit);
+
+    /** (since, now] 에 오픈한 회차가 있는가 */
+    boolean existsByOpensAtGreaterThanAndOpensAtLessThanEqual(Instant since, Instant now);
 }
