@@ -10,8 +10,9 @@
 #      startup  — 빈을 모두 만든 뒤 lifecycle 시작 전에 끝낸다(-Dspring.context.exit=onRefresh). 요청이 없는 서비스(worker · batch)
 # 4) 학습한 그 이미지에 캐시를 얹는다(docker/Dockerfile.aot → <FINAL_REPO>:<서비스>). 다시 빌드한 이미지에 얹으면 안 된다 —
 #    JVM 은 jar 가 학습 때와 같은지 보지 않아, 어긋나면 거절 대신 캐시의 옛 클래스를 실행한다(JDK 25 실측).
-# 5) 검증: 최종 이미지를 그 ENTRYPOINT 에 -XX:AOTMode=on 을 더해 띄운다 — JDK · 캐시 경로가 어긋나 캐시를 받지 못하면 JVM 이 실패한다
-#    (운영의 기본 auto 는 조용히 캐시 없이 뜬다). 기반 이미지(지금의 운영과 같은 기본 CDS)를 띄운 시간과 함께 표로 남긴다(SUMMARY, 없으면 표준 출력).
+# 5) 검증: 최종 이미지를 그 ENTRYPOINT 에 -XX:AOTMode=on 을 더해 띄운다 — JDK · 캐시 경로 · 모듈 구성이 어긋나 캐시를 받지 못하면
+#    JVM 이 실패한다(운영의 기본 auto 는 조용히 캐시 없이 뜬다). 운영이 켜는 OTel 에이전트를 붙여 한 번 더 띄운다.
+#    기반 이미지(지금의 운영과 같은 기본 CDS)를 띄운 시간과 함께 표로 남긴다(SUMMARY, 없으면 표준 출력).
 #
 # 학습 환경은 이번 실행에서만 쓰고 버린다. 비밀값(DB · 관리자 비밀번호 · JWT 키 · 입장권 · Toss 키)은 모두 매번 새로 만든다.
 #
@@ -37,6 +38,8 @@ STEADY_SECONDS=${STEADY_SECONDS:-90}
 SERVER_PORT=8080
 MANAGEMENT_PORT=8081
 TOSS_PORT=18089
+# 학습에 더하는 모듈. Dockerfile.aot 의 ENTRYPOINT 와 같아야 캐시가 받아진다 — 이유는 그 파일에
+AOT_MODULES=--add-modules=java.instrument
 # 회차는 등록 뒤 MIN 이 지나야 열 수 있고(catalog 검증), 학습은 OPEN 뒤에 연다
 MIN_OPEN_LEAD_SECONDS=20
 OPEN_LEAD_SECONDS=40
@@ -189,7 +192,10 @@ app_json() {
     + ({
         catalog: {"spring.http.serviceclient.order.base-url": url("order"),
                   "spring.http.serviceclient.member.base-url": url("member"),
-                  "catalog.registration.min-open-lead": $lead},
+                  "catalog.registration.min-open-lead": $lead,
+                  # 운영은 인프라가 uploads: true 로 넣는 값. 서명기만 만들고 버킷에는 붙지 않는다(학습 부하에 업로드가 없다)
+                  "nova.upload.bucket": "aot-training",
+                  "nova.upload.region": "ap-northeast-2"},
         preorder: {"spring.http.serviceclient.catalog.base-url": url("catalog"),
                    "spring.http.serviceclient.order.base-url": url("order")},
         order: {"spring.http.serviceclient.preorder.base-url": url("preorder"),
@@ -259,7 +265,7 @@ collect_cache() {
 train_startup() {
   local s=$1 name=$PROJECT-train-$1
   run_app "$name" "$PROJECT/$s:base" "$s" "" \
-    -XX:AOTCacheOutput=/tmp/app.aot -Dspring.context.exit=onRefresh -jar /app/app.jar > /dev/null 2>&1 \
+    -XX:AOTCacheOutput=/tmp/app.aot "$AOT_MODULES" -Dspring.context.exit=onRefresh -jar /app/app.jar > /dev/null 2>&1 \
     || fail_with_logs "$s 학습 실패" "$name"
   collect_cache "$s" "$name"
 }
@@ -324,7 +330,7 @@ train_workload() {
   # 하나씩 띄워 준비될 때까지 기다린다. member 가 맨 앞이다 — 나머지는 기동하자마자 member 의 JWKS 를 받는다
   # (waitingroom 은 놓치면 5분 뒤에야 다시 받는다). 한꺼번에 띄우면 CPU 경합으로 기동 시간 제한을 넘기기도 한다.
   for s in $WORKLOAD_SERVICES; do
-    run_app "$PROJECT-train-$s" "$PROJECT/$s:base" "$s" -d -XX:AOTCacheOutput=/tmp/app.aot -jar /app/app.jar > /dev/null
+    run_app "$PROJECT-train-$s" "$PROJECT/$s:base" "$s" -d -XX:AOTCacheOutput=/tmp/app.aot "$AOT_MODULES" -jar /app/app.jar > /dev/null
     names+=("$PROJECT-train-$s")
     wait_ready "$s"
   done
@@ -365,17 +371,23 @@ done
 
 # ── 4) 최종 이미지 · 5) 검증 ─────────────────────────────────────
 # 이미지를 그 ENTRYPOINT 그대로 띄워 onRefresh 까지 걸린 벽시계 시간(컨테이너 시작 포함 — 두 이미지에 같은 몫).
-# 옵션은 JDK_JAVA_OPTIONS 로 더한다(java 실행기가 명령줄 앞에 붙인다). 최종 이미지에 AOTMode=on 을 주면 ENTRYPOINT 의
-# 캐시 경로가 틀렸을 때 여기서 실패한다.
-#   startup_seconds <이미지> <서비스> [더할 JVM 옵션]
+# 옵션은 JDK_JAVA_OPTIONS 로 더한다(java 실행기가 명령줄 앞에 붙인다). 최종 이미지에 AOTMode=on 을 주면 캐시를 받지 못할 때
+# 여기서 실패한다. 나머지 인자는 docker run 에 넘긴다(환경 변수).
+#   startup_seconds <이미지> <서비스> [더할 JVM 옵션] [docker run 인자…]
 startup_seconds() {
   local image=$1 s=$2 extra=${3:-} start
+  shift 3 2> /dev/null || shift $#
   start=$(now)
   app_container "$PROJECT-measure-$s" "$s" --rm \
-    -e JDK_JAVA_OPTIONS="$extra -Dspring.context.exit=onRefresh" "$image" \
+    -e JDK_JAVA_OPTIONS="$extra -Dspring.context.exit=onRefresh" "$@" "$image" \
     > "$WORK/$s.measure.log" 2>&1 || { log "$s 측정 실행 실패($image $extra)"; tail -n 60 "$WORK/$s.measure.log" >&2; return 1; }
   python3 -c "print(f'{$(now) - $start:.1f}')"
 }
+
+# 운영처럼 에이전트를 켠다(nova-infra 의 작업 정의와 같은 계측 범위). 내보내기는 끈다 — 받을 곳이 없고, 기동에서 볼 것은 캐시 수락이다
+AGENT_OPTIONS="-javaagent:/otel/javaagent.jar"
+AGENT_ENV=(-e OTEL_SERVICE_NAME=aot-training -e OTEL_TRACES_EXPORTER=none -e OTEL_METRICS_EXPORTER=none -e OTEL_LOGS_EXPORTER=none
+  -e OTEL_INSTRUMENTATION_COMMON_DEFAULT_ENABLED=false -e OTEL_INSTRUMENTATION_LOGBACK_APPENDER_ENABLED=true)
 
 mb() { python3 -c "print(f'{$1 / 1048576:.0f}')"; }
 
@@ -383,8 +395,8 @@ mb() { python3 -c "print(f'{$1 / 1048576:.0f}')"; }
   echo "## AOT 캐시"
   echo "베이스 \`$BASE_IMAGE\` · 측정 자원 cpu $TRAIN_CPUS / 메모리 $TRAIN_MEMORY · 기동은 빈 생성 완료(onRefresh)까지"
   echo
-  echo "| 서비스 | 학습 | 기동(캐시 없음) | 기동(캐시) | 단축 | app.aot | 이미지 증가 |"
-  echo "|---|---|---|---|---|---|---|"
+  echo "| 서비스 | 학습 | 기동(캐시 없음) | 기동(캐시) | 단축 | 기동(캐시 + 에이전트) | app.aot | 이미지 증가 |"
+  echo "|---|---|---|---|---|---|---|---|"
 } >> "$SUMMARY"
 
 for s in "${services[@]}"; do
@@ -393,10 +405,11 @@ for s in "${services[@]}"; do
   # 최종 이미지는 ENTRYPOINT 에 AOTMode=on 만 더한다 — 캐시를 받지 못하면 여기서 실패한다.
   # 기준은 기반 이미지 그대로다(JDK 기본 CDS 는 켜진 지금의 운영과 같다). AOTMode=off 는 기본 CDS 까지 꺼 효과를 부풀린다.
   with=$(startup_seconds "$FINAL_REPO:$s" "$s" -XX:AOTMode=on)
+  with_agent=$(startup_seconds "$FINAL_REPO:$s" "$s" "-XX:AOTMode=on $AGENT_OPTIONS" "${AGENT_ENV[@]}")
   without=$(startup_seconds "$PROJECT/$s:base" "$s")
   aot=$(wc -c < "$DIST/$s/app.aot" | tr -d ' ')
   grown=$(( $(docker image inspect -f '{{.Size}}' "$FINAL_REPO:$s") - $(docker image inspect -f '{{.Size}}' "$PROJECT/$s:base") ))
   cut=$(python3 -c "print(f'{(1 - $with / $without) * 100:.0f}%')")
-  echo "| $s | $(mode_of "$s") | ${without}s | ${with}s | $cut | $(mb "$aot") MB | $(mb "$grown") MB |" >> "$SUMMARY"
-  log "$s 검증 통과 — ${without}s → ${with}s"
+  echo "| $s | $(mode_of "$s") | ${without}s | ${with}s | $cut | ${with_agent}s | $(mb "$aot") MB | $(mb "$grown") MB |" >> "$SUMMARY"
+  log "$s 검증 통과 — ${without}s → ${with}s(에이전트 ${with_agent}s)"
 done

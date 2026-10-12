@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog.registration;
 
+import com.grandis.nova.catalog.image.ImageUploadProperties;
 import com.grandis.nova.catalog.option.OptionText;
 import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.catalog.product.Amounts;
@@ -36,7 +37,8 @@ import java.util.regex.Pattern;
  * 용량은 숫자+단위 · 조합은 축 전부를 덮고 값이 그 축에 있어야 하며 같은 조합 둘 금지 · 조합 상한 · SKU 는 상품 안 유일(비면 값을 '-' 로 잇는다) ·
  * 표시명 120자 · 가격은 정수 원 · 재고는 일반 상품에서 조합마다 필수이고 사전예약은 받지 않는다 · 가격은 기본가 + 추가금 합만(수동 가격 없음, 2026-10-06 결정) ·
  * 사진 묶음은 color 축이 있으면 색상별만(사용자 결정 2026-09-28), 없으면 기본 묶음 하나 · GALLERY 묶음당 10장 · 대표는 하나(없으면 첫 장) ·
- * DETAIL 은 상한과 대표 자동 지정이 없다 · 사전예약은 회차 + 차수 필수이고 오픈은 지금 + 여유 이후 · 일반은 회차 · 차수를 받지 않는다.
+ * DETAIL 은 상한과 대표 자동 지정이 없다 · 사진 주소는 설정한 CDN 주소(nova.upload.cdn-base-url) 아래만 · 사전예약은 회차 + 차수 필수이고
+ * 오픈은 지금 + 여유 이후 · 일반은 회차 · 차수를 받지 않는다.
  */
 @Component
 public class ProductRegistrationValidator {
@@ -82,11 +84,44 @@ public class ProductRegistrationValidator {
     public record Draft(List<Axis> axes, List<Combo> combos, List<GalleryDraft> gallery, List<DetailDraft> detail) {
     }
 
+    /** 사진 주소가 시작해야 하는 접두(CDN 주소 + "/"). */
+    private final String imageUrlPrefix;
+
+    public ProductRegistrationValidator(ImageUploadProperties images) {
+        this.imageUrlPrefix = images.imageUrlPrefix();
+    }
+
     public Draft validate(ProductRegistrationRequest request, Instant now, Duration minOpenLead) {
         requireSaleModeShape(request, now, minOpenLead);
         List<Axis> axes = normalizeAxes(request.optionAxes());
         List<Combo> combos = buildCombos(request, axes);
-        return new Draft(axes, combos, normalizeGallery(request, axes), normalizeDetail(request));
+        List<GalleryDraft> gallery = normalizeGallery(request, axes);
+        List<DetailDraft> detail = normalizeDetail(request);
+        requireUploadedImages(request);
+        return new Draft(axes, combos, gallery, detail);
+    }
+
+    /**
+     * 사진 주소는 설정한 CDN 주소 아래만 — 바깥 주소(추적 픽셀 · 지워질 수 있는 남의 이미지)가 상품 화면에 실리지 않게 한다.
+     * 접두 끝의 "/" 까지 대조하므로 cdn 주소를 앞에 붙인 다른 호스트(cdn.example.com.evil.test)는 걸린다.
+     * 주소만 본다 — 그 객체가 실제로 올라가 있는지, 이 서비스가 발급한 키인지는 확인하지 않는다.
+     */
+    private void requireUploadedImages(ProductRegistrationRequest request) {
+        for (int i = 0; i < request.images().gallery().size(); i++) {
+            requireUploaded(request.images().gallery().get(i).items(), "images.gallery[%d]".formatted(i));
+        }
+        for (int i = 0; i < request.images().detail().size(); i++) {
+            requireUploaded(request.images().detail().get(i).items(), "images.detail[%d]".formatted(i));
+        }
+    }
+
+    private void requireUploaded(List<Image> items, String field) {
+        for (int j = 0; j < items.size(); j++) {
+            String url = items.get(j).url();
+            if (!url.startsWith(imageUrlPrefix) || url.length() == imageUrlPrefix.length()) {
+                throw ValidationFailures.of(field + ".items[%d].url".formatted(j), "이미지 주소는 " + imageUrlPrefix + " 아래만 받습니다.");
+            }
+        }
     }
 
     /**

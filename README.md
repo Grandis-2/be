@@ -144,6 +144,7 @@ batch    시간이 되면 깨어남.   1 로 고정돼야 함 (늘면 같은 스
 | DB | MySQL 8.4 · 격리 수준 `READ COMMITTED` |
 | 비동기 | Outbox + SQS |
 | 배포 | ECS Fargate · RDS · ElastiCache |
+| 로그 수집 | OTel Java 에이전트(2.32.0)는 이미지의 `/otel/javaagent.jar` 에 있다. 켜는 건 nova-infra 작업 정의의 `JDK_JAVA_OPTIONS` |
 
 ## 아직 안 정해진 것
 
