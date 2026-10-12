@@ -19,6 +19,7 @@ import org.springframework.scheduling.support.CronExpression;
  *                                   worker 가 등록을 포기하기까지 최대 약 41분이라 45분이다. 마감 뒤 실행도 마감 + 이 값에 돈다
  * @param intakeRushWindow           회차 오픈 뒤 신청이 몰리는 구간. 이 안의 회차가 있으면 정기 · 마감 뒤 실행을 건너뛴다
  * @param chunkSize                  be 예약을 한 번에 읽는 건수
+ * @param maxFindings                한 실행의 불일치 상한. 넘으면 판정 불가 — 그만큼 어긋났으면 Mock 주소 · 데이터 설정 오류일 가능성이 크다
  */
 @ConfigurationProperties("nova.batch.reconciliation")
 public record ReconciliationProperties(
@@ -30,7 +31,8 @@ public record ReconciliationProperties(
         @DefaultValue("1d") Duration campaignCloseLookback,
         @DefaultValue("45m") Duration cutoffMargin,
         @DefaultValue("1h") Duration intakeRushWindow,
-        @DefaultValue("1000") int chunkSize
+        @DefaultValue("1000") int chunkSize,
+        @DefaultValue("10000") int maxFindings
 ) {
 
     public ReconciliationProperties {
@@ -44,8 +46,8 @@ public record ReconciliationProperties(
         if (cutoffMargin.isNegative()) {
             throw new IllegalArgumentException("nova.batch.reconciliation.cutoff-margin 은 0 이상이어야 한다");
         }
-        if (chunkSize < 1) {
-            throw new IllegalArgumentException("nova.batch.reconciliation.chunk-size 는 1 이상이어야 한다");
+        if (chunkSize < 1 || maxFindings < 1) {
+            throw new IllegalArgumentException("nova.batch.reconciliation 의 chunk-size · max-findings 는 1 이상이어야 한다");
         }
     }
 

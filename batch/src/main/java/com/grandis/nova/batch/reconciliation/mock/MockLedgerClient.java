@@ -1,5 +1,6 @@
 package com.grandis.nova.batch.reconciliation.mock;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -19,7 +20,7 @@ import tools.jackson.databind.json.JsonMapper;
  * 다음 페이지는 앞 페이지를 다 넘긴 뒤에 부르므로 원장 전체를 메모리에 올리지 않는다.
  *
  * 다시 보내지 않는다 — 한 페이지라도 못 받으면 그 실행을 판정 불가로 끝낸다({@link MockLedgerUnavailable}).
- * 응답이 계약(Mock docs/api.md)과 다르거나 키 순서가 어긋나도 같다. 순서가 어긋나면 be 예약과 맞대기가 틀어진다.
+ * 응답이 계약(Mock docs/api.md)과 다르거나, 키 순서가 어긋나거나, 목록 전체 기한을 넘겨도 같다.
  */
 public class MockLedgerClient {
 
@@ -30,21 +31,24 @@ public class MockLedgerClient {
     private final JsonMapper json;
     private final int pageSize;
     private final int maxBody;
+    private final Duration maxDuration;
 
     /**
-     * @param rest    Mock 주소와 제한 시간이 걸린 클라이언트
-     * @param maxBody 한 페이지 본문을 읽는 상한(바이트)
+     * @param rest        Mock 주소와 제한 시간이 걸린 클라이언트
+     * @param maxBody     한 페이지 본문을 읽는 상한(바이트)
+     * @param maxDuration 목록 전체를 받는 기한. 둘째 페이지부터 부르기 전에 본다
      */
-    public MockLedgerClient(RestClient rest, JsonMapper json, int pageSize, int maxBody) {
+    public MockLedgerClient(RestClient rest, JsonMapper json, int pageSize, int maxBody, Duration maxDuration) {
         this.rest = rest;
         this.json = json;
         this.pageSize = pageSize;
         this.maxBody = maxBody;
+        this.maxDuration = maxDuration;
     }
 
     /** 원장 전체를 외부 키 순서로. 페이지를 받다 실패하면 next() · hasNext() 가 {@link MockLedgerUnavailable} 을 던진다 */
     public Iterator<MockLedgerEntry> entries() {
-        return new Pages();
+        return new Pages(System.nanoTime());
     }
 
     Page fetch(int page, String cursor) {
@@ -154,21 +158,35 @@ public class MockLedgerClient {
         return cause.getClass().getSimpleName() + (message == null || message.isBlank() ? "" : ": " + message);
     }
 
+    private static String readable(Duration duration) {
+        return duration.toSecondsPart() == 0 && duration.toMinutes() > 0
+                ? duration.toMinutes() + "분"
+                : duration.toSeconds() + "초";
+    }
+
     record Page(List<MockLedgerEntry> entries, String nextCursor) {
     }
 
     /** 페이지를 필요할 때 하나씩 받는다. 키가 앞 행보다 커야 한다(외부 키 순서) */
     private final class Pages implements Iterator<MockLedgerEntry> {
 
+        private final long startedNanos;
         private int page;
         private Iterator<MockLedgerEntry> current;
         private String nextCursor;
         private boolean last;
         private String previousKey;
 
+        Pages(long startedNanos) {
+            this.startedNanos = startedNanos;
+        }
+
         @Override
         public boolean hasNext() {
             while ((current == null || !current.hasNext()) && !last) {
+                if (page > 0 && System.nanoTime() - startedNanos > maxDuration.toNanos()) {
+                    throw new MockLedgerUnavailable(page + 1, "목록 전체 기한(" + readable(maxDuration) + ")을 넘음");
+                }
                 Page fetched = fetch(++page, nextCursor);
                 current = fetched.entries().iterator();
                 nextCursor = fetched.nextCursor();

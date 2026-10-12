@@ -1,6 +1,7 @@
 package com.grandis.nova.batch.reconciliation.check;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.grandis.nova.batch.reconciliation.mock.MockLedgerEntry;
 import com.grandis.nova.batch.reconciliation.run.RunCounts;
@@ -29,7 +30,7 @@ class ReconcilerTest {
         reconciler.reconcile(
                 List.of(be("a", "REGISTERED", "SUCCEEDED", BEFORE), be("c", "REGISTERED", "SUCCEEDED", BEFORE)).iterator(),
                 List.of(mock("b", PRODUCT, BEFORE), mock("c", PRODUCT, BEFORE), mock("d", PRODUCT, BEFORE)).iterator(),
-                null, CUTOFF);
+                scope(null));
 
         assertThat(seen).extracting(KeyPair::key).containsExactly("a", "b", "c", "d");
         assertThat(seen.get(0).mock()).isNull();
@@ -43,7 +44,7 @@ class ReconcilerTest {
         ReconcileResult result = reconciler.reconcile(
                 List.of(be("a", "REGISTERED", "SUCCEEDED", AFTER), be("b", "REGISTERED", "SUCCEEDED", BEFORE)).iterator(),
                 List.of(mock("b", PRODUCT, AFTER), mock("c", PRODUCT, BEFORE)).iterator(),
-                null, CUTOFF);
+                scope(null));
 
         assertThat(seen).extracting(KeyPair::key).containsExactly("c");
         assertThat(result.counts().held()).isEqualTo(2);
@@ -55,7 +56,7 @@ class ReconcilerTest {
                 List.of(be("b", "REGISTERED", "SUCCEEDED", BEFORE)).iterator(),
                 List.of(mock("a", OTHER_PRODUCT, BEFORE), mock("b", PRODUCT, BEFORE), marker("c", BEFORE),
                         mock("d", PRODUCT, BEFORE)).iterator(),
-                UUID.fromString(PRODUCT), CUTOFF);
+                scope(UUID.fromString(PRODUCT)));
 
         assertThat(seen).extracting(KeyPair::key).containsExactly("b", "d");
     }
@@ -65,7 +66,7 @@ class ReconcilerTest {
         ReconcileResult result = reconciler.reconcile(
                 List.of(be("a", "PENDING_SYNC", "PENDING", AFTER), be("b", "PENDING_SYNC", "DEAD_LETTER", BEFORE),
                         be("c", "CANCELING", "SUCCEEDED", BEFORE), be("d", "RESERVED", "SUCCEEDED", BEFORE)).iterator(),
-                List.<MockLedgerEntry>of().iterator(), null, CUTOFF);
+                List.<MockLedgerEntry>of().iterator(), scope(null));
 
         assertThat(result.counts()).isEqualTo(new RunCounts(1, 1, 1, 1));
     }
@@ -78,13 +79,29 @@ class ReconcilerTest {
                 JsonMapper.builder().build());
 
         ReconcileResult result = twice.reconcile(List.<BePreorder>of().iterator(),
-                List.of(mock("a", PRODUCT, BEFORE)).iterator(), null, CUTOFF);
+                List.of(mock("a", PRODUCT, BEFORE)).iterator(), scope(null));
 
         assertThat(result.findings()).singleElement().satisfies(f -> {
             assertThat(f.checkCode()).isEqualTo("MOCK_ONLY");
             assertThat(f.beSnapshot()).isNull();
             assertThat(f.mockSnapshot()).contains("\"externalKey\":\"a\"");
         });
+    }
+
+    @Test
+    void 불일치가_상한을_넘으면_더_모으지_않고_판정_불가로_던진다() {
+        Reconciler flagging = new Reconciler(List.of((pair, findings) -> findings.add("MOCK_ONLY", pair.key(), null,
+                pair.mock())), List.of(), JsonMapper.builder().build());
+
+        assertThatThrownBy(() -> flagging.reconcile(List.<BePreorder>of().iterator(),
+                List.of(mock("a", PRODUCT, BEFORE), mock("b", PRODUCT, BEFORE), mock("c", PRODUCT, BEFORE)).iterator(),
+                new RunScope(null, CUTOFF, 2)))
+                .isInstanceOf(TooManyFindings.class)
+                .hasMessage("불일치가 상한(2건)을 넘음 — Mock 주소 · 데이터 설정 확인 필요");
+    }
+
+    private static RunScope scope(UUID productId) {
+        return new RunScope(productId, CUTOFF, 100);
     }
 
     private static BePreorder be(String token, String status, String registerJob, Instant changedAt) {

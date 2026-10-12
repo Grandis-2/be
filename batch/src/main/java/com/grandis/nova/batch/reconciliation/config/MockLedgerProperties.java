@@ -14,6 +14,7 @@ import org.springframework.util.unit.DataSize;
  * @param readTimeout     한 페이지 응답을 다 받을 때까지의 제한 시간
  * @param pageSize        한 페이지 건수. Mock 계약은 1~1000
  * @param maxResponseBody 한 페이지 본문을 읽는 상한. 엉뚱한 서버가 큰 본문을 보내도 여기까지만 읽는다
+ * @param maxDuration     목록 전체를 받는 기한. 검사 트랜잭션(스냅샷)이 Mock 응답을 기다리는 동안 열려 있으므로 끝없이 늘지 않게 한다
  */
 @ConfigurationProperties("external.mock")
 public record MockLedgerProperties(
@@ -21,14 +22,16 @@ public record MockLedgerProperties(
         @DefaultValue("2s") Duration connectTimeout,
         @DefaultValue("10s") Duration readTimeout,
         @DefaultValue("1000") int pageSize,
-        @DefaultValue("8MB") DataSize maxResponseBody
+        @DefaultValue("8MB") DataSize maxResponseBody,
+        @DefaultValue("10m") Duration maxDuration
 ) {
 
     public MockLedgerProperties {
         if (baseUrl == null || baseUrl.getHost() == null) {
             throw new IllegalArgumentException("external.mock.base-url 이 없다 — Mock 원장을 읽을 수 없다");
         }
-        if (connectTimeout == null || !connectTimeout.isPositive() || readTimeout == null || !readTimeout.isPositive()) {
+        if (connectTimeout == null || !connectTimeout.isPositive() || readTimeout == null || !readTimeout.isPositive()
+                || maxDuration == null || !maxDuration.isPositive()) {
             throw new IllegalArgumentException("external.mock 의 제한 시간은 0 보다 커야 한다");
         }
         if (pageSize < 1 || pageSize > 1000) {

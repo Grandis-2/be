@@ -18,8 +18,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.TestPropertySource;
 
 @Import(ReconciliationRunTest.Checks.class)
+@TestPropertySource(properties = "nova.batch.reconciliation.max-findings=2")
 class ReconciliationRunTest extends BatchIntegrationTest {
 
     private static final Instant TWO_HOURS_AGO = Instant.now().minus(Duration.ofHours(2));
@@ -144,6 +146,20 @@ class ReconciliationRunTest extends BatchIntegrationTest {
                 .containsEntry("requested_by", "admin")
                 .containsEntry("product_id", phone.productId().toString());
         assertThat(check.keys()).containsExactly("t-1", "t-3");
+    }
+
+    @Test
+    void 불일치가_상한을_넘으면_판정_불가로_끝내고_결과를_남기지_않는다() {
+        for (String key : List.of("g-1", "g-2", "g-3")) {
+            MOCK.active(key, "R-" + key, UUID.randomUUID().toString(), UUID.randomUUID().toString(), "SKU", TWO_HOURS_AGO);
+            check.flag(key);
+        }
+
+        service.runScheduled();
+
+        assertThat(onlyRun()).containsEntry("status", "FAILED")
+                .containsEntry("error_message", "불일치가 상한(2건)을 넘음 — Mock 주소 · 데이터 설정 확인 필요");
+        assertThat(count("reconciliation_findings")).isZero();
     }
 
     private Map<String, Object> onlyRun() {

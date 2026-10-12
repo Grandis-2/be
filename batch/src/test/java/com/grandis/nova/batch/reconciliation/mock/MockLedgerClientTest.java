@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.grandis.nova.batch.support.FakeMockLedger;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -19,8 +20,7 @@ class MockLedgerClientTest {
     private static final FakeMockLedger MOCK = FakeMockLedger.start();
     private static final Instant AT = Instant.parse("2026-10-12T01:00:00.123Z");
 
-    private final MockLedgerClient client = new MockLedgerClient(RestClient.builder().baseUrl(MOCK.url()).build(),
-            JsonMapper.builder().build(), 2, 1 << 20);
+    private final MockLedgerClient client = client(MOCK.url(), Duration.ofMinutes(1));
 
     @BeforeEach
     void reset() {
@@ -104,12 +104,33 @@ class MockLedgerClientTest {
 
     @Test
     void 서버에_닿지_못하면_던진다() {
-        MockLedgerClient nowhere = new MockLedgerClient(RestClient.builder().baseUrl("http://localhost:1").build(),
-                JsonMapper.builder().build(), 2, 1 << 20);
+        MockLedgerClient nowhere = client("http://localhost:1", Duration.ofMinutes(1));
 
         assertThatThrownBy(() -> nowhere.entries().hasNext())
                 .isInstanceOf(MockLedgerUnavailable.class)
                 .hasMessageStartingWith("Mock 목록 조회 실패(1페이지, 응답을 받지 못함 — ");
+    }
+
+    @Test
+    void 목록_전체_기한을_넘기면_다음_페이지를_부르지_않고_던진다() {
+        for (int i = 1; i <= 3; i++) {
+            MOCK.active("k" + i, "R-" + i, "c", "p", "SKU", AT);
+        }
+        MockLedgerClient hurried = client(MOCK.url(), Duration.ofNanos(1));
+
+        Iterator<MockLedgerEntry> entries = hurried.entries();
+        entries.next();
+        entries.next();
+
+        assertThatThrownBy(entries::hasNext)
+                .isInstanceOf(MockLedgerUnavailable.class)
+                .hasMessage("Mock 목록 조회 실패(2페이지, 목록 전체 기한(0초)을 넘음)");
+        assertThat(MOCK.requests()).isEqualTo(1);
+    }
+
+    private static MockLedgerClient client(String url, Duration maxDuration) {
+        return new MockLedgerClient(RestClient.builder().baseUrl(url).build(), JsonMapper.builder().build(), 2, 1 << 20,
+                maxDuration);
     }
 
     private static String row(String key) {

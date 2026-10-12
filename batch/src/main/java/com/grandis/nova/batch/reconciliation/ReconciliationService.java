@@ -2,6 +2,8 @@ package com.grandis.nova.batch.reconciliation;
 
 import com.grandis.nova.batch.reconciliation.check.ReconcileResult;
 import com.grandis.nova.batch.reconciliation.check.Reconciler;
+import com.grandis.nova.batch.reconciliation.check.RunScope;
+import com.grandis.nova.batch.reconciliation.check.TooManyFindings;
 import com.grandis.nova.batch.reconciliation.config.ReconciliationProperties;
 import com.grandis.nova.batch.reconciliation.mock.MockLedgerClient;
 import com.grandis.nova.batch.reconciliation.mock.MockLedgerUnavailable;
@@ -23,7 +25,10 @@ import org.springframework.transaction.support.TransactionTemplate;
  *
  * <ol>
  *   <li>실행 행을 실행 중으로 — 정기 실행은 넣고, 관리자 실행은 요청을 가져간다. 시작 시각 · 기준 시각(시작 − 여유)을 적고 커밋</li>
- *   <li>검사 트랜잭션(REPEATABLE READ · 읽기 전용, 한 스냅샷)에서 be 예약과 Mock 원장을 맞대고 be 내부 검사를 돈다</li>
+ *   <li>검사 트랜잭션(REPEATABLE READ · 읽기 전용, 한 스냅샷)에서 be 예약과 Mock 원장을 맞대고 be 내부 검사를 돈다.
+ *       Mock 목록 조회(HTTP)를 이 트랜잭션 안에서 기다린다 — 일부러다. be 를 한 스냅샷으로, Mock 보다 먼저 읽어야 처리 중인 건이
+ *       불일치로 잡히지 않는다. 잠금 없는 일관 읽기라 행을 잠그지 않고, 대신 연결 하나와 read view 를 잡으므로 목록 전체 기한
+ *       (external.mock.max-duration)을 넘으면 판정 불가로 끊는다</li>
  *   <li>찾은 불일치를 넣고 완료로 — 한 트랜잭션. 실패하면 판정 불가(FAILED)로 끝내고 결과는 남기지 않는다</li>
  * </ol>
  * 주기 작업은 스케줄러 스레드 하나에서 차례로 돌아 서로 겹치지 않는다. 대기 · 실행 중인 실행은 DB 가 하나로 막는다.
@@ -96,12 +101,12 @@ public class ReconciliationService {
 
     void execute(ReconciliationRun run) {
         try {
+            RunScope scope = new RunScope(run.getProductId(), run.getCutoffAt(), properties.maxFindings());
             ReconcileResult result = snapshot.execute(status -> reconciler.reconcile(
-                    be.preorders(run.getProductId(), properties.chunkSize()), mock.entries(),
-                    run.getProductId(), run.getCutoffAt()));
+                    be.preorders(run.getProductId(), properties.chunkSize()), mock.entries(), scope));
             runs.complete(run.getId(), clock.instant(), result.counts(), result.findings());
             log.info("정합성 검사 완료 runId={} 불일치 {}건 {}", run.getId(), result.findings().size(), result.counts());
-        } catch (MockLedgerUnavailable e) {
+        } catch (MockLedgerUnavailable | TooManyFindings e) {
             log.warn("정합성 검사 판정 불가 runId={} — {}", run.getId(), e.getMessage());
             runs.fail(run.getId(), clock.instant(), e.getMessage());
         } catch (RunNotRunning e) {
