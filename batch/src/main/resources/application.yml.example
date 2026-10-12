@@ -5,6 +5,7 @@ spring:
     web-application-type: none
   datasource:
     url: jdbc:mysql://localhost:3306/shop?serverTimezone=UTC&characterEncoding=UTF-8
+    # batch 전용 계정. 업무 표는 읽기만, 결과 표(reconciliation_runs · reconciliation_findings)에만 쓴다
     username: nova
     password: CHANGE_ME
     hikari:
@@ -12,6 +13,7 @@ spring:
       # 근거: "없는 행을 잠금 읽기로 확인한 뒤 INSERT" 하는 절차가 RR 에서
       #      갭 락과 삽입 의도 락으로 교착한다 (실측 RR 4/4 데드락, RC 4/4 통과).
       # 빠뜨려도 오류가 나지 않는다. 부하가 걸릴 때까지 아무도 모른다.
+      # 검사 트랜잭션만 코드에서 REPEATABLE READ · 읽기 전용으로 연다(한 스냅샷).
       transaction-isolation: TRANSACTION_READ_COMMITTED
       maximum-pool-size: 10
   jpa:
@@ -24,15 +26,21 @@ spring:
           time_zone: UTC
     open-in-view: false
 
-# desired 1 고정. 여러 개가 뜨면 같은 스캔이 중복 실행된다.
-nova:
-  batch:
-    expiry-scan-cron: "0 */1 * * * *"
-    reconciliation-report-dir: ./build/reports/reconciliation
+# 정합성 검사. desired 1 고정. 아래는 코드 기본값이라 바꿀 때만 적는다(정합성-검사-구현-조치 6장, 10-12 결정)
+# nova:
+#   batch:
+#     reconciliation:
+#       cron: "0 0 4 * * *"            # 정기 실행
+#       zone: Asia/Seoul
+#       request-poll-interval: 5s      # 관리자 실행 요청을 가져가는 주기
+#       campaign-close-check-interval: 5m
+#       cutoff-margin: 45m             # 판정 기준 시각 = 시작 − 이 값. 회차 마감 뒤 실행도 마감 + 이 값에 돈다
+#       intake-rush-window: 1h         # 회차 오픈 뒤 이 구간에는 정기 · 마감 뒤 실행을 건너뛴다
 
-# 정합성 검사는 Mock API 가 아니라 external_mock DB 를 직접 조회한다.
-external-mock:
-  datasource:
-    url: jdbc:mysql://localhost:3306/external_mock?serverTimezone=UTC
-    username: nova
-    password: CHANGE_ME
+# Mock 원장은 목록 조회 API(GET /external/reservations)로 읽는다. external_mock DB 는 읽지 않는다.
+external:
+  mock:
+    base-url: http://localhost:8081
+    connect-timeout: 2s
+    read-timeout: 10s
+    page-size: 1000
