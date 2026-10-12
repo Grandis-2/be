@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.tuple;
 import com.grandis.nova.batch.support.FakeMockLedger;
 import com.grandis.nova.batch.support.MySqlTestContainer;
 import com.grandis.nova.batch.support.TestData;
+import com.grandis.nova.batch.support.TestData.BePreorderRow;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -71,19 +72,24 @@ class BatchAccountTest {
     @Test
     void 결과_표에만_쓰는_권한으로_검사를_끝까지_돌린다() {
         TestData data = new TestData(root);
-        data.preorder("폰", "t-1", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO);
+        BePreorderRow registered = data.preorder("폰", "t-1", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO);
+        data.registerJobReady(registered, 1, TWO_HOURS_AGO, null);
+        data.attempt(registered, "SUCCESS", TWO_HOURS_AGO);
         data.preorder("폰", "t-2", "PENDING_SYNC", "PENDING", TWO_HOURS_AGO);
         MOCK.active("g-1", "R-GHOST", UUID.randomUUID().toString(), UUID.randomUUID().toString(), "SKU", TWO_HOURS_AGO);
 
         service.runScheduled();
 
         assertThat(root.sql("SELECT status FROM reconciliation_runs").query(String.class).single()).isEqualTo("COMPLETED");
+        // 키마다 보는 규칙과 이벤트 · 시도 · 순번을 읽는 SQL 규칙이 모두 돌았다
         assertThat(root.sql("SELECT check_code, target_key FROM reconciliation_findings").query().listOfRows())
                 .extracting(f -> f.get("check_code"), f -> f.get("target_key"))
                 .containsExactlyInAnyOrder(
                         tuple("MOCK_ONLY", "g-1"),
                         tuple("REGISTERED_NOT_IN_MOCK", "t-1"),
-                        tuple("STUCK", "t-2"));
+                        tuple("STUCK", "t-1"),
+                        tuple("STUCK", "t-2"),
+                        tuple("OUTBOX_MISSING", "t-2"));
     }
 
     /** Spring 은 권한 오류를 BadSqlGrammarException 으로 감싸고 MySQL 의 문구는 원인 예외에 남긴다 */

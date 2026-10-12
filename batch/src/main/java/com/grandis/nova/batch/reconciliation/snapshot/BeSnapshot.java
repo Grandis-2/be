@@ -81,7 +81,7 @@ public class BeSnapshot {
                 rs.getObject("batch_to", Long.class), utc(rs, "changed_at"));
     }
 
-    static Instant utc(ResultSet rs, String column) throws SQLException {
+    public static Instant utc(ResultSet rs, String column) throws SQLException {
         LocalDateTime value = rs.getObject(column, LocalDateTime.class);
         return value == null ? null : value.toInstant(ZoneOffset.UTC);
     }
