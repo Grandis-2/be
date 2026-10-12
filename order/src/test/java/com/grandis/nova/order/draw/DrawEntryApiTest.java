@@ -112,7 +112,7 @@ class DrawEntryApiTest {
     // ── 응모 ──
 
     @Test
-    @DisplayName("응모하면 201 · 결제 대기 · 배송지 저장. 다시 응모하면 그 응모를 200 으로 — 배송지를 바꾸지 않는다")
+    @DisplayName("응모하면 201 · 결제 대기 · 배송지 저장. 다시 응모하면 그 응모를 200 으로 — 배송지를 바꾸지 않는다. 응모 · 내 응모 응답에 그 회차가 같이 온다")
     void enterOncePerMember() throws Exception {
         UUID draw = openDraw();
 
@@ -129,6 +129,14 @@ class DrawEntryApiTest {
         JsonNode mine = data(mockMvc.perform(get("/api/v1/draws/{id}/entries/me", draw).with(TestAuth.customer(customerId)))
                 .andExpect(status().isOk()));
         assertThat(mine.get("entryId").asString()).isEqualTo(entry.get("entryId").asString());
+        for (JsonNode response : List.of(entry, again, mine)) {
+            JsonNode campaign = response.get("draw");
+            assertThat(campaign.get("drawId").asString()).isEqualTo(draw.toString());
+            assertThat(campaign.get("title").asString()).isEqualTo("드로우 회차");
+            assertThat(campaign.get("phase").asString()).isEqualTo("OPEN");
+            assertThat(campaign.get("entryFee").decimalValue()).isEqualByComparingTo(FEE);
+            assertThat(campaign.get("gift").get("productTitle").asString()).isEqualTo("p");
+        }
     }
 
     @Test
@@ -145,7 +153,10 @@ class DrawEntryApiTest {
         assertThat(entriesOf(scheduled) + entriesOf(closed)).isZero();
 
         insertEntry(closed, customerId, "AWAITING_PAYMENT", null);
-        enter(customerId, closed, shipTo("홍길동")).andExpect(status().isOk());
+        enter(customerId, closed, shipTo("홍길동")).andExpect(status().isOk()).andExpect(jsonPath("$.data.draw.phase").value("CLOSED"));
+        mockMvc.perform(get("/api/v1/draws/{id}/entries/me", closed).with(TestAuth.customer(customerId)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.draw.phase").value("CLOSED"))
+                .andExpect(jsonPath("$.data.draw.closesAt").exists());
     }
 
     @Test
