@@ -3,9 +3,7 @@ package com.grandis.nova.batch.reconciliation.trigger;
 import com.grandis.nova.batch.reconciliation.ReconciliationService;
 import com.grandis.nova.batch.reconciliation.config.ReconciliationProperties;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.SchedulingConfigurer;
 import org.springframework.scheduling.config.CronTask;
 import org.springframework.scheduling.config.ScheduledTaskRegistrar;
@@ -28,16 +26,15 @@ class ReconciliationSchedule implements SchedulingConfigurer {
         this.properties = properties;
     }
 
+    /**
+     * 작업을 등록하기 전에 끝나지 않은 실행부터 정리한다. 작업은 이 메서드가 끝난 뒤에 스케줄되므로, 막 가져간 요청을 정리가 실패로
+     * 바꾸는 일이 없다. ApplicationReadyEvent 에서 정리하면 이미 작업이 돌기 시작한 뒤라 그럴 수 있다.
+     */
     @Override
     public void configureTasks(ScheduledTaskRegistrar registrar) {
+        service.cleanupAfterRestart();
         registrar.addFixedDelayTask(service::runRequested, properties.requestPollInterval());
         registrar.addCronTask(new CronTask(service::runScheduled, new CronTrigger(properties.cron(), properties.zone())));
         registrar.addFixedDelayTask(service::runAfterCampaignClose, properties.campaignCloseCheckInterval());
-    }
-
-    /** 주기 작업이 돌기 전에 끝나지 않은 실행부터 정리한다 */
-    @EventListener(ApplicationReadyEvent.class)
-    void cleanupAfterRestart() {
-        service.cleanupAfterRestart();
     }
 }
