@@ -19,6 +19,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static com.grandis.nova.worker.mock.FakeMock.after;
@@ -146,18 +147,28 @@ class JobHandlerHoldTest {
     /** 취소는 꼭 반영돼야 한다 — 등록이 몰려도 전용 자리 하나로 나간다. */
     @Test
     void 등록이_자리를_다_써도_취소는_전용_자리로_나간다() throws Exception {
-        MOCK.respond(after(Duration.ofMillis(800),
-                json(201, "{\"externalKey\":\"K\",\"externalNumber\":\"R-1\",\"status\":\"ACTIVE\"}")));
+        CountDownLatch registered = new CountDownLatch(1);
+        MOCK.respond(exchange -> {
+            if (exchange.getRequestURI().getPath().endsWith("/cancellations")) {
+                json(200, "{\"externalNumbers\":[\"R-1\"]}").handle(exchange);
+            } else {
+                registered.await(1500, TimeUnit.MILLISECONDS);
+                json(201, "{\"externalKey\":\"K\",\"externalNumber\":\"R-1\",\"status\":\"ACTIVE\"}").handle(exchange);
+            }
+        });
         Jobs running = new Jobs();
         CompletableFuture<Void> first = CompletableFuture.runAsync(() -> handler.handle(running.message(Map.of())));
         await().atMost(Duration.ofSeconds(5)).until(() -> !running.calls(MOCK).isEmpty());
-        MOCK.respond(json(200, "{\"externalNumbers\":[\"R-1\"]}"));
         Jobs cancel = Jobs.cancel();
 
-        cancelHandler.handle(cancel.message(Map.of()));
+        try {
+            cancelHandler.handle(cancel.message(Map.of()));
 
-        assertThat(first).as("등록은 아직 자리를 쥐고 있다").isNotDone();
-        assertThat(cancel.calls(MOCK)).containsExactly("POST /external/cancellations");
+            assertThat(first).as("등록은 아직 자리를 쥐고 있다").isNotDone();
+            assertThat(cancel.calls(MOCK)).containsExactly("POST /external/cancellations");
+        } finally {
+            registered.countDown();
+        }
         assertThat(cancel.event(queues).get("eventType").asString()).isEqualTo("EXTERNAL_JOB_SUCCEEDED");
         first.get(10, TimeUnit.SECONDS);
     }
