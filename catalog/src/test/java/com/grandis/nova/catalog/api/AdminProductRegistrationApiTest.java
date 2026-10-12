@@ -376,7 +376,7 @@ class AdminProductRegistrationApiTest {
         }
 
         @Test
-        @DisplayName("사진 주소는 업로드 API 가 준 CDN 주소 아래만 — 바깥 주소 · 비슷한 호스트는 그 칸의 400(시험 CDN 은 https://img)")
+        @DisplayName("사진 주소는 설정한 CDN 주소 아래만 — 바깥 주소 · 비슷한 호스트는 그 칸의 400(시험 CDN 은 https://img)")
         void imageUrlsMustBeUploaded() throws Exception {
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("""
                     "images": { "gallery": [ { "color": "블랙", "items": [ { "url": "https://img/ok.jpg" }, { "url": "https://elsewhere.example/x.jpg" } ] } ] },

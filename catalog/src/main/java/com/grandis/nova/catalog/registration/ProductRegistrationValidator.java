@@ -37,7 +37,7 @@ import java.util.regex.Pattern;
  * 용량은 숫자+단위 · 조합은 축 전부를 덮고 값이 그 축에 있어야 하며 같은 조합 둘 금지 · 조합 상한 · SKU 는 상품 안 유일(비면 값을 '-' 로 잇는다) ·
  * 표시명 120자 · 가격은 정수 원 · 재고는 일반 상품에서 조합마다 필수이고 사전예약은 받지 않는다 · 가격은 기본가 + 추가금 합만(수동 가격 없음, 2026-10-06 결정) ·
  * 사진 묶음은 color 축이 있으면 색상별만(사용자 결정 2026-09-28), 없으면 기본 묶음 하나 · GALLERY 묶음당 10장 · 대표는 하나(없으면 첫 장) ·
- * DETAIL 은 상한과 대표 자동 지정이 없다 · 사진 주소는 업로드 API 가 준 CDN 주소(nova.upload.cdn-base-url 아래)만 · 사전예약은 회차 + 차수 필수이고
+ * DETAIL 은 상한과 대표 자동 지정이 없다 · 사진 주소는 설정한 CDN 주소(nova.upload.cdn-base-url) 아래만 · 사전예약은 회차 + 차수 필수이고
  * 오픈은 지금 + 여유 이후 · 일반은 회차 · 차수를 받지 않는다.
  */
 @Component
@@ -102,7 +102,7 @@ public class ProductRegistrationValidator {
     }
 
     /**
-     * 사진은 업로드 API 로 올린 것만 — 바깥 주소(추적 픽셀 · 지워질 수 있는 남의 이미지)가 상품 화면에 실리지 않게 한다.
+     * 사진 주소는 설정한 CDN 주소 아래만 — 바깥 주소(추적 픽셀 · 지워질 수 있는 남의 이미지)가 상품 화면에 실리지 않게 한다.
      * 접두 끝의 "/" 까지 대조하므로 cdn 주소를 앞에 붙인 다른 호스트(cdn.example.com.evil.test)는 걸린다.
      * 주소만 본다 — 그 객체가 실제로 올라가 있는지, 이 서비스가 발급한 키인지는 확인하지 않는다.
      */
@@ -119,7 +119,7 @@ public class ProductRegistrationValidator {
         for (int j = 0; j < items.size(); j++) {
             String url = items.get(j).url();
             if (!url.startsWith(imageUrlPrefix) || url.length() == imageUrlPrefix.length()) {
-                throw ValidationFailures.of(field + ".items[%d].url".formatted(j), "업로드 API 로 올린 이미지 주소(" + imageUrlPrefix + "…)만 받습니다.");
+                throw ValidationFailures.of(field + ".items[%d].url".formatted(j), "이미지 주소는 " + imageUrlPrefix + " 아래만 받습니다.");
             }
         }
     }

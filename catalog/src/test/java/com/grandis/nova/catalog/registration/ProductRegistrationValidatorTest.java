@@ -51,10 +51,12 @@ class ProductRegistrationValidatorTest {
     @DisplayName("사진 주소 — CDN 주소 아래만 받고, 바깥 주소 · 비슷한 호스트 · 접두만 · 상세 영역도 그 칸 경로로 400")
     void imageUrlsMustBeUnderTheCdn() {
         assertThatCode(() -> validator.validate(withImages(CDN + "/products/a.png", CDN + "/products/b.webp"), NOW, LEAD))
-                .as("대조군 — 업로드 API 가 준 주소").doesNotThrowAnyException();
+                .as("대조군 — CDN 주소 아래").doesNotThrowAnyException();
         assertRejected(withImages("https://elsewhere.example/a.png", CDN + "/products/b.png"), "images.gallery[0].items[0].url");
         assertRejected(withImages(CDN + ".evil.test/a.png", CDN + "/products/b.png"), "images.gallery[0].items[0].url");
         assertRejected(withImages(CDN + "/", CDN + "/products/b.png"), "images.gallery[0].items[0].url");
+        assertRejected(withImages("https://elsewhere.example/?u=" + CDN + "/products/a.png", CDN + "/products/b.png"),
+                "images.gallery[0].items[0].url");
         assertRejected(withImages(CDN + "/products/a.png", "http://cdn.example.com/products/b.png"), "images.detail[0].items[0].url");
     }
 
