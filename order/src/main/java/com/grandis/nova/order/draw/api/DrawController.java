@@ -69,7 +69,7 @@ public class DrawController {
     public ResponseEntity<ApiResponse<DrawEntryResponse>> enter(@CurrentCustomerId UUID customerId, @PathVariable UUID drawId,
                                                                 @Valid @RequestBody EnterDrawRequest request) {
         DrawEntryService.Entered entered = entries.enter(customerId, drawId, request.toShipTo());
-        ApiResponse<DrawEntryResponse> body = ApiResponse.ok(DrawEntryResponse.of(entered.entry()));
+        ApiResponse<DrawEntryResponse> body = ApiResponse.ok(DrawEntryResponse.of(entered.entry(), DrawResponse.of(entered.campaign(), queries.now())));
         if (!entered.created()) {
             return ResponseEntity.ok(body);
         }
@@ -77,10 +77,10 @@ public class DrawController {
     }
 
     @GetMapping("/{drawId}/entries/me")
-    @Operation(summary = "내 응모", description = "결과(result)는 추첨 반영 뒤 결제 완료(PAID) 응모만 WON · LOST, 반영 전이거나 결제 완료가 아니면 null. 응모하지 않았으면 404 DRAW_ENTRY_NOT_FOUND")
+    @Operation(summary = "내 응모", description = "그 회차(draw, 회차 상세와 같은 모양)를 같이 준다. 결과(result)는 추첨 반영 뒤 결제 완료(PAID) 응모만 WON · LOST, 반영 전이거나 결제 완료가 아니면 null. 응모하지 않았으면 404 DRAW_ENTRY_NOT_FOUND")
     public ApiResponse<DrawEntryResponse> mine(@CurrentCustomerId UUID customerId, @PathVariable UUID drawId) {
         DrawEntryService.MyEntry mine = entries.view(customerId, drawId);
-        return ApiResponse.ok(DrawEntryResponse.of(mine.entry(), mine.result()));
+        return ApiResponse.ok(DrawEntryResponse.of(mine.entry(), mine.result(), DrawResponse.of(mine.campaign(), queries.now())));
     }
 
     @PostMapping("/{drawId}/entries/me/payment-attempts")

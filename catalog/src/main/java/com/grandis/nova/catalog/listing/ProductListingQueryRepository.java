@@ -14,6 +14,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -239,6 +240,59 @@ public class ProductListingQueryRepository {
                 new MapSqlParameterSource("productId", UuidBinary.toBytes(productId)),
                 (rs, rowNum) -> new CampaignWindow(instant(rs, "opens_at"), instant(rs, "closes_at")));
         return rows.stream().findFirst();
+    }
+
+    /**
+     * 증정품 후보 옵션 — 판매 중이고 재고 행이 있는 옵션. 상품 쪽 조건(일반 판매 · 판매 중)은 {@link #GIFT_PRODUCTS} 가 건다.
+     * 재고 행이 있으면 판매 방식별 준비({@link #READY})도 참이다(일반 상품의 준비가 곧 재고 행의 유무).
+     */
+    private static final String GIFT_OPTION = """
+            SELECT 1 FROM product_options go JOIN option_inventories gi ON gi.option_id = go.id
+             WHERE go.product_id = p.id AND go.status = 'ACTIVE'""";
+
+    /** 증정품 후보 상품 — 일반 판매 · 판매 중이고 후보 옵션이 하나 이상. 공개 여부는 보지 않는다. */
+    private static final String GIFT_PRODUCTS = """
+              FROM products p
+             WHERE p.sale_mode = 'IN_STOCK' AND p.status = 'ACTIVE'
+               AND EXISTS (%s)
+            """.formatted(GIFT_OPTION);
+
+    public long countGiftCandidates(String q) {
+        StringBuilder sql = new StringBuilder("SELECT COUNT(*)").append(GIFT_PRODUCTS);
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        appendTextFilter(sql, params, q);
+        Long count = jdbc.queryForObject(sql.toString(), params, Long.class);
+        return count == null ? 0 : count;
+    }
+
+    /** 증정품 후보 상품 한 쪽과 그 후보 옵션들. 상품은 관리자 목록과 같은 최신순, 옵션은 등록 순. 같은 스냅샷이 되게 REPEATABLE READ 안에서 부른다. */
+    public List<GiftCandidate> findGiftCandidates(String q, int page, int size) {
+        StringBuilder sql = new StringBuilder("SELECT p.id, p.title, p.thumbnail_url, p.visible").append(GIFT_PRODUCTS);
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        appendTextFilter(sql, params, q);
+        sql.append(" ORDER BY p.created_at DESC, p.id DESC LIMIT :limit OFFSET :offset");
+        params.addValue("limit", size).addValue("offset", (long) page * size);
+        List<GiftCandidate> products = jdbc.query(sql.toString(), params, (rs, rowNum) -> new GiftCandidate(
+                UuidBinary.fromBytes(rs.getBytes("id")), rs.getString("title"), rs.getString("thumbnail_url"), rs.getBoolean("visible"), List.of()));
+        if (products.isEmpty()) {
+            return products;
+        }
+        Map<UUID, List<GiftCandidate.Option>> options = new HashMap<>();
+        jdbc.query("""
+                SELECT o.product_id, o.id, o.sku, o.title, inv.stock_total - inv.stock_reserved - inv.stock_sold AS available
+                  FROM product_options o
+                  JOIN option_inventories inv ON inv.option_id = o.id
+                 WHERE o.product_id IN (:productIds) AND o.status = 'ACTIVE'
+                 ORDER BY o.product_id, o.created_at, o.id
+                """, new MapSqlParameterSource("productIds", products.stream().map(c -> UuidBinary.toBytes(c.productId())).toList()),
+                rs -> {
+                    options.computeIfAbsent(UuidBinary.fromBytes(rs.getBytes("product_id")), id -> new ArrayList<>())
+                            .add(new GiftCandidate.Option(UuidBinary.fromBytes(rs.getBytes("id")), rs.getString("sku"), rs.getString("title"),
+                                    rs.getInt("available")));
+                });
+        return products.stream()
+                .map(c -> new GiftCandidate(c.productId(), c.title(), c.imageUrl(), c.visible(), List.copyOf(options.getOrDefault(c.productId(), List.of()))))
+                .toList();
     }
 
     /** 옵션별 가용 수량(총량 − 선점 − 판매). 재고 행이 없는 옵션은 빠진다 — 판매 불가로 읽는다. */

@@ -15,6 +15,7 @@ import com.grandis.nova.catalog.edit.VisibilityView;
 import com.grandis.nova.catalog.web.StrictBodies;
 import com.grandis.nova.catalog.listing.AdminProductListFilter;
 import com.grandis.nova.catalog.listing.AdminProductListItem;
+import com.grandis.nova.catalog.listing.GiftCandidate;
 import com.grandis.nova.catalog.listing.ProductListingService;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
@@ -109,6 +110,17 @@ public class AdminProductController {
         AdminProductListFilter filter = new AdminProductListFilter(q, saleMode, status);
         return ApiResponse.ok(ProductPageResponse.from(
                 listingService.listForAdmin(filter, PageSizes.requirePage(page), PageSizes.require(size))));
+    }
+
+    @Operation(summary = "럭키 드로우 증정품 후보", description = "회차 만들기 화면용 — 일반 판매 · 판매 중이고 재고를 등록한 옵션이 있는 상품(비공개 포함)과 "
+            + "그 옵션별 지금 확보할 수 있는 수량(available). q 는 상품명 · 태그 검색. 최신순, page 는 0 부터")
+    @GetMapping("/gift-candidates")
+    public ApiResponse<ProductPageResponse<GiftCandidate>> giftCandidates(
+            @RequestParam(required = false) String q,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
+        return ApiResponse.ok(ProductPageResponse.from(
+                listingService.listGiftCandidates(q, PageSizes.requirePage(page), PageSizes.require(size))));
     }
 
     @Operation(summary = "상품 상세")

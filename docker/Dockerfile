@@ -8,6 +8,12 @@
 # 서비스 8개가 같은 베이스를 쓴다.
 ARG BASE_IMAGE=eclipse-temurin:25-jre
 
+# OpenTelemetry Java 에이전트. jar 만 싣고 켜지 않는다 — 켜는 쪽은 nova-infra 의 작업 정의(JDK_JAVA_OPTIONS=-javaagent:/otel/javaagent.jar 와 OTEL_*)다.
+# JAVA_TOOL_OPTIONS 로 켜지 않는다 — 아래 ENV 의 힙 옵션이 그 변수에 있어, 작업 정의가 덮으면 힙 옵션이 조용히 사라진다.
+# 에이전트를 붙여도 AOT 캐시가 받아지도록 Dockerfile.aot 와 학습(train.sh)이 java.instrument 모듈을 늘 더한다.
+# 버전과 다이제스트를 같이 고정한다. 이 파일은 release.yml 의 내용 키에 들어 있어, 바꾸면 서비스 8개가 모두 다시 만들어진다.
+FROM ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-java:2.32.0@sha256:9dad1c6e3e2ecee48fc164a19bcfde703510bee972c8cb421689fde89b5f89e9 AS otel
+
 FROM ${BASE_IMAGE} AS extract
 WORKDIR /build
 ARG JAR_FILE
@@ -22,6 +28,7 @@ RUN groupadd --system spring && useradd --system --gid spring spring
 USER spring
 
 COPY --from=extract --chown=spring:spring /extracted/ /app/
+COPY --from=otel /javaagent.jar /otel/javaagent.jar
 
 # 컨테이너에 준 메모리를 기준으로 힙을 잡는다. ECS 태스크 메모리를 바꾸면 따라간다.
 ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"

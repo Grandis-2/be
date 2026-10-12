@@ -68,7 +68,7 @@ flowchart LR
     B[batch<br/>만료 · 정합성 검사] -.읽기.-> DB[(MySQL)]
 ```
 
-- 서비스는 모두 Spring Boot 이고 AWS ECS Fargate 위에서 따로 돈다.
+- 서비스는 모두 Spring Boot 이고 AWS ECS Fargate 위에서 따로 돈다. DB 는 NCP 의 MySQL 이다.
 - 서비스끼리는 HTTP(묻기)나 SQS 이벤트(알리기)로만 이야기한다.
 - 외부 예약 시스템은 팀이 만든 Mock 이 대신한다. 별도 저장소([Grandis-2/mock](https://github.com/Grandis-2/mock))에 있고 우리와는 HTTP 로만 통신한다.
 
@@ -238,13 +238,14 @@ worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이
 | 영역 | 사용 |
 | --- | --- |
 | 언어 · 프레임워크 | Java 25 · Spring Boot 4.1 · Spring Data JPA · Spring Cloud Gateway(WebFlux) |
-| 저장소 | MySQL 8.4 (`READ COMMITTED`) · Redis |
+| 저장소 | MySQL 8.4 (`READ COMMITTED`, NCP) · Redis |
 | 메시징 | AWS SQS (Transactional Outbox) |
 | 인증 | 카카오 OAuth · JWT RS256 (JWKS 로 공개키 배포) · 리프레시 토큰 회전 |
 | 결제 | 토스페이먼츠 |
 | 회복 · 캐시 | Resilience4j · Caffeine |
 | DB 변경 | Flyway (Docker CLI) |
 | 테스트 | JUnit 5 · Testcontainers · ArchUnit · k6 |
+| 관측 | Micrometer · Prometheus · OpenTelemetry Java 에이전트 |
 | 배포 | GitHub Actions · Amazon ECR · ECS Fargate · JVM AOT 캐시 |
 
 ## 모듈 구성
@@ -287,8 +288,9 @@ worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이
 # 1. SQS 에뮬레이터(Floci)를 띄우고 큐를 만든다
 docker compose -f docker/floci/compose.yaml up -d
 
-# 2. DB 스키마를 만든다
-bash flyway-project/flyway.sh migrate
+# 2. DB 스키마를 만든다 (Flyway 는 컨테이너로 돈다. 자세한 건 스키마 · Flyway 안내)
+FLYWAY_URL=jdbc:mysql://host.docker.internal:3306/shop FLYWAY_USER=... FLYWAY_PASSWORD=... \
+  bash flyway-project/flyway.sh migrate
 
 # 3. 서비스마다 설정 예시를 복사하고 CHANGE_ME 를 채운다
 cp member/src/main/resources/application.yml.example member/src/main/resources/application.yml
