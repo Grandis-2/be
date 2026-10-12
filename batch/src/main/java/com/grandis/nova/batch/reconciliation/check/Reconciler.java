@@ -16,7 +16,8 @@ import tools.jackson.databind.json.JsonMapper;
  *   <li>둘 다 키 순서로 흘러오므로 작은 쪽을 한 칸씩 넘기며 맞댄다 — 한쪽에만 있는 키도 한 번씩 나온다</li>
  *   <li>be 첫 건을 Mock 첫 페이지보다 먼저 읽는다. 검사 트랜잭션의 스냅샷이 그때 정해져 be 가 Mock 보다 앞선 시점이 된다</li>
  *   <li>예약 · Mock 행이 기준 시각 뒤에 바뀌었으면 판정하지 않고 판정 보류로 센다</li>
- *   <li>범위가 상품 하나면 다른 상품의 Mock 행(be 에 그 키가 없는 행)은 버린다. 상품을 모르는 취소 표식도 같다</li>
+ *   <li>범위가 상품 하나면 다른 상품의 Mock 행(be 에 그 키가 없는 행)은 버린다. 상품을 모르는 취소 표식도 같다.
+ *       Mock 행은 이 상품인데 키가 다른 상품의 be 예약이면 이 실행에서 빼고 전체 검사가 "내용 다름" 으로 잡게 둔다</li>
  *   <li>불일치가 상한을 넘으면 {@link TooManyFindings} — 그 실행은 판정 불가다</li>
  *   <li>처리 중 · 관리자 대기 수는 판정 보류와 상관없이 be 예약 상태로 센다(미완료 현황)</li>
  * </ul>
@@ -80,8 +81,14 @@ public class Reconciler {
     }
 
     private static boolean outOfScope(KeyPair pair, RunScope scope) {
-        return scope.productId() != null && pair.be() == null
-                && !scope.productId().toString().equals(pair.mock().productId());
+        if (scope.productId() == null || pair.be() != null) {
+            return false;
+        }
+        if (!scope.productId().toString().equals(pair.mock().productId())) {
+            return true;
+        }
+        // 이 상품의 예약만 읽었으니, be 어딘가에 이 키가 있다면 다른 상품의 예약이다
+        return scope.beHasKey().test(pair.key());
     }
 
     private static boolean changedAfter(KeyPair pair, Instant cutoff) {

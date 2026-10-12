@@ -134,6 +134,8 @@ class ReconciliationRunTest extends BatchIntegrationTest {
         data.preorder("시계", "t-2", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO);
         MOCK.active("t-0", "R-0", UUID.randomUUID().toString(), data.product("시계").toString(), "SKU", TWO_HOURS_AGO);
         MOCK.active("t-3", "R-3", UUID.randomUUID().toString(), phone.productId().toString(), "SKU", TWO_HOURS_AGO);
+        // Mock 은 폰이라고 하지만 키는 시계 예약 — 이 실행에서는 빼고 전체 검사가 "내용 다름" 으로 잡는다
+        MOCK.active("t-2", "R-2", UUID.randomUUID().toString(), phone.productId().toString(), "SKU", TWO_HOURS_AGO);
         jdbc.sql("""
                         INSERT INTO reconciliation_runs (id, requested_by, product_id, status, created_at, updated_at)
                         VALUES (UUID_TO_BIN(UUID()), 'admin', UUID_TO_BIN(:product), 'REQUESTED', NOW(6), NOW(6))

@@ -51,6 +51,14 @@ public class BeSnapshot {
         return new Chunks(productId, chunkSize);
     }
 
+    /** 상품 구분 없이 그 외부 키의 예약이 있는가. 상품 범위 검사에서 Mock 에만 있는 듯한 키를 한 번 더 확인한다(드물다) */
+    public boolean exists(String token) {
+        return Boolean.TRUE.equals(jdbc.sql("SELECT EXISTS (SELECT 1 FROM preorders WHERE preorder_token = :token)")
+                .param("token", token)
+                .query(Boolean.class)
+                .single());
+    }
+
     List<BePreorder> chunk(UUID productId, String after, int size) {
         String sql = SELECT + (productId == null ? "" : " AND p.product_id = UUID_TO_BIN(:productId)")
                 + " ORDER BY p.preorder_token LIMIT :size";

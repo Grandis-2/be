@@ -89,19 +89,28 @@ class ReconcilerTest {
     }
 
     @Test
+    void 상품_하나만_검사할_때_이_상품의_Mock_행이라도_키가_다른_상품의_예약이면_뺀다() {
+        reconciler.reconcile(List.<BePreorder>of().iterator(),
+                List.of(mock("x", PRODUCT, BEFORE), mock("y", PRODUCT, BEFORE)).iterator(),
+                new RunScope(UUID.fromString(PRODUCT), CUTOFF, 100, key -> key.equals("x")));
+
+        assertThat(seen).extracting(KeyPair::key).containsExactly("y");
+    }
+
+    @Test
     void 불일치가_상한을_넘으면_더_모으지_않고_판정_불가로_던진다() {
         Reconciler flagging = new Reconciler(List.of((pair, findings) -> findings.add("MOCK_ONLY", pair.key(), null,
                 pair.mock())), List.of(), JsonMapper.builder().build());
 
         assertThatThrownBy(() -> flagging.reconcile(List.<BePreorder>of().iterator(),
                 List.of(mock("a", PRODUCT, BEFORE), mock("b", PRODUCT, BEFORE), mock("c", PRODUCT, BEFORE)).iterator(),
-                new RunScope(null, CUTOFF, 2)))
+                new RunScope(null, CUTOFF, 2, key -> false)))
                 .isInstanceOf(TooManyFindings.class)
                 .hasMessage("불일치가 상한(2건)을 넘음 — Mock 주소 · 데이터 설정 확인 필요");
     }
 
     private static RunScope scope(UUID productId) {
-        return new RunScope(productId, CUTOFF, 100);
+        return new RunScope(productId, CUTOFF, 100, key -> false);
     }
 
     private static BePreorder be(String token, String status, String registerJob, Instant changedAt) {

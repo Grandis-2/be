@@ -101,7 +101,7 @@ public class ReconciliationService {
 
     void execute(ReconciliationRun run) {
         try {
-            RunScope scope = new RunScope(run.getProductId(), run.getCutoffAt(), properties.maxFindings());
+            RunScope scope = new RunScope(run.getProductId(), run.getCutoffAt(), properties.maxFindings(), be::exists);
             ReconcileResult result = snapshot.execute(status -> reconciler.reconcile(
                     be.preorders(run.getProductId(), properties.chunkSize()), mock.entries(), scope));
             runs.complete(run.getId(), clock.instant(), result.counts(), result.findings());
