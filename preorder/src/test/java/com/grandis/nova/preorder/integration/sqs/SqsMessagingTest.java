@@ -7,13 +7,14 @@ import com.grandis.nova.common.sqs.testing.FlociTestContainer;
 import com.grandis.nova.common.sqs.testing.TestQueues;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
-import com.grandis.nova.preorder.accept.application.RegisterJobReady;
 import com.grandis.nova.preorder.deadletter.DeadLetters;
 import com.grandis.nova.preorder.deadletter.IncomingDeadLetter;
 import com.grandis.nova.preorder.event.PreorderEventDispatcher;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.ShopFixtures;
+import com.grandis.nova.preorder.syncjob.RegisterJobReady;
+import com.grandis.nova.preorder.syncjob.SyncActor;
 import com.grandis.nova.preorder.support.SqsIntegrationTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -117,7 +118,8 @@ class SqsMessagingTest {
     @Test
     void 커밋되면_목적지_큐로_봉투를_보낸다() {
         UUID syncJobId = UUID.randomUUID();
-        Long id = transactionTemplate.execute(status -> writer.append(new RegisterJobReady(syncJobId, "9f1c2d3e")));
+        Long id = transactionTemplate.execute(status -> writer.append(new RegisterJobReady(syncJobId, "9f1c2d3e",
+                "{\"ourReservationId\":\"9f1c2d3e\"}", SyncActor.SYSTEM, 1)));
         String eventId = jdbcTemplate.queryForObject(
                 "SELECT event_id FROM preorder_outbox_events WHERE id = ?", String.class, id);
 
@@ -126,7 +128,13 @@ class SqsMessagingTest {
         JsonNode body = jsonMapper.readTree(message.body());
         assertThat(body.get("eventType").asString()).isEqualTo("REGISTER_JOB_READY");
         assertThat(body.get("payload").get("syncJobId").asString()).isEqualTo(syncJobId.toString());
+        assertThat(body.get("payload").get("request").get("ourReservationId").asString()).isEqualTo("9f1c2d3e");
         assertThat(message.messageAttributes().get("eventType").stringValue()).isEqualTo("REGISTER_JOB_READY");
+        assertThat(message.messageAttributes().get("eventId").stringValue()).isEqualTo(eventId);
+        assertThat(message.messageAttributes().get("attempt").stringValue()).isEqualTo("1");
+        assertThat(message.messageAttributes().get("generation").stringValue()).isEqualTo("1");
+        assertThat(message.messageAttributes().get("run").stringValue()).isEqualTo("1");
+        assertThat(message.messageAttributes().get("actor").stringValue()).isEqualTo("SYSTEM");
     }
 
     @Test
@@ -229,7 +237,7 @@ class SqsMessagingTest {
                 .until(() -> !output.getOut().contains("큐를 받지 못했다"));
     }
 
-    /** 흐름 ①: 접수가 등록 요청을 발행하고, worker 대역이 성공을 알리면 예약이 결제 가능이 된다. */
+    /** 흐름 ①: 접수가 등록 요청을 발행하고, worker 대역이 성공을 알리면 작업이 성공으로 바뀌고 예약이 결제 가능이 된다. */
     @Test
     void 접수부터_외부_등록_성공까지_SQS_로_이어져_결제_가능이_된다() {
         AcceptResult accepted = new AcceptFixtures(acceptService, fixtures, catalogClient).accept(fixtures.customer());
@@ -240,19 +248,27 @@ class SqsMessagingTest {
                 .orElseThrow();
         UUID syncJobId = UUID.fromString(
                 jsonMapper.readTree(registerJobReady.body()).get("payload").get("syncJobId").asString());
-        assertThat(syncJobId).isEqualTo(fixtures.workerSucceeds(preorderId, "REGISTER"));
+        assertThat(jsonMapper.readTree(registerJobReady.body()).get("payload").get("request")
+                .get("ourReservationId").asString()).as("worker 가 외부에 보낼 내용").isEqualTo(token);
 
         queues.send("preorder-events",
                 externalJobSucceeded(ShopFixtures.unique(), syncJobId, token, "R-" + ShopFixtures.unique()));
 
         await().atMost(TIMEOUT).until(() -> "REGISTERED".equals(status(preorderId)));
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM preorder_sync_jobs WHERE id = ?", String.class,
+                (Object) UuidBinary.toBytes(syncJobId))).isEqualTo("SUCCEEDED");
+        assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_sync_attempts WHERE sync_job_id = ?",
+                (Object) UuidBinary.toBytes(syncJobId))).as("성공한 차례를 남긴다").isEqualTo(1);
     }
 
     private String externalJobSucceeded(String eventId, UUID syncJobId, String token, String externalNumber) {
         return """
                 {"eventId":"%s","eventType":"EXTERNAL_JOB_SUCCEEDED","aggregateType":"PREORDER_SYNC_JOB",
                  "aggregateId":"%s","occurredAt":"2026-09-03T01:00:03.470Z",
-                 "payload":{"syncJobId":"%s","preorderId":"%s","jobType":"REGISTER","externalNumber":"%s"}}
+                 "payload":{"syncJobId":"%s","preorderId":"%s","jobType":"REGISTER","externalNumber":"%s",
+                            "attempt":{"run":1,"generation":1,"attempt":1,"actor":"SYSTEM","result":"SUCCESS","httpStatus":201,
+                                       "errorCode":null,"errorMessage":null,
+                                       "startedAt":"2026-09-03T01:00:03.100Z","finishedAt":"2026-09-03T01:00:03.400Z"}}}
                 """.formatted(eventId, syncJobId, syncJobId, token, externalNumber);
     }
 

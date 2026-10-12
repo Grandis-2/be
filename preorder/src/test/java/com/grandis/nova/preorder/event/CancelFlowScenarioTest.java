@@ -70,7 +70,7 @@ class CancelFlowScenarioTest {
         given(orderClient.getCancelability(any()))
                 .willReturn(ApiResponse.ok(new Cancelability(null, true, null)));
         externalNumber = "R-" + ShopFixtures.unique();
-        handler.onExternalJobSucceeded(new ExternalJobSucceeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
+        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
                 token, "REGISTER", externalNumber));
     }
 
@@ -81,7 +81,7 @@ class CancelFlowScenarioTest {
         cancelService.cancelByCustomer(customerId, token, null);
         handler.onOrderSettled(new PreorderOrderSettled(token, result, null, fixtures.cancelSequence(preorderId), null));
         UUID cancelJobId = fixtures.workerSucceeds(preorderId, "CANCEL");
-        handler.onExternalJobSucceeded(new ExternalJobSucceeded(cancelJobId, token, "CANCEL", null));
+        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(cancelJobId, token, "CANCEL", null));
 
         assertThat(history()).containsExactly(
                 "null>PENDING_SYNC", "PENDING_SYNC>REGISTERED", "REGISTERED>CANCELING", "CANCELING>CANCELED");

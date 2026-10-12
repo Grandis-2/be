@@ -10,6 +10,10 @@ public enum InboundEventType {
 
     /** worker: 외부 등록 · 취소 성공. */
     EXTERNAL_JOB_SUCCEEDED,
+    /** worker: 외부 호출이 실패했고 다시 시도한다(차례 기록). */
+    EXTERNAL_JOB_ATTEMPTED,
+    /** worker: 외부 등록 · 취소를 포기했다. */
+    EXTERNAL_JOB_FAILED,
     /** order: 예약 취소에 따른 주문 정리 결과. */
     PREORDER_ORDER_SETTLED,
     /** batch: 결제 기한 만료. */

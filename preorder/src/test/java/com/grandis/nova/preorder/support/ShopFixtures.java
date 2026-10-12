@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.support;
 
 import com.grandis.nova.common.UuidBinary;
+import com.grandis.nova.preorder.event.ExternalJobSucceeded;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
@@ -86,17 +87,24 @@ public class ShopFixtures {
         return LocalDateTime.ofInstant(instant, ZoneOffset.UTC);
     }
 
-    /** worker 가 남기는 시도 기록. preorder 는 관리자 화면에서 읽기만 한다. */
+    /** 결과 이벤트를 받아 남긴 시도 기록(1세대, 차례 = 번호). */
     public void syncAttempt(UUID syncJobId, int attemptNumber, String result, Integer httpStatus, String errorCode) {
         jdbcTemplate.update("""
-                INSERT INTO preorder_sync_attempts (sync_job_id, attempt_number, actor, result, http_status,
-                                                    error_code, started_at, finished_at)
-                VALUES (?, ?, 'SYSTEM', ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-                """, UuidBinary.toBytes(syncJobId), attemptNumber, result, httpStatus, errorCode);
+                INSERT INTO preorder_sync_attempts (sync_job_id, attempt_number, generation_attempt, actor, result,
+                                                    http_status, error_code, started_at, finished_at)
+                VALUES (?, ?, ?, 'SYSTEM', ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                """, UuidBinary.toBytes(syncJobId), attemptNumber, attemptNumber, result, httpStatus, errorCode);
+    }
+
+    /** 예약의 REGISTER 작업 id. */
+    public UUID registerJob(UUID preorderId) {
+        return jdbcTemplate.queryForObject(
+                "SELECT id FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'REGISTER'",
+                (rs, rowNum) -> UuidBinary.fromBytes(rs.getBytes(1)), (Object) UuidBinary.toBytes(preorderId));
     }
 
     /**
-     * worker 가 외부 호출에 성공해 작업을 SUCCEEDED 로 바꾼 것처럼 만든다. preorder 코드에는 이 전이가 없다.
+     * 성공 이벤트를 이미 한 번 받은 것처럼 작업을 SUCCEEDED 로 만든다. 예약에는 반영하지 않는다.
      *
      * @return 그 작업의 id
      */
@@ -120,7 +128,7 @@ public class ShopFixtures {
                 """, Long.class, (Object) UuidBinary.toBytes(preorderId));
     }
 
-    /** worker 가 등록을 포기한 것처럼 예약의 REGISTER 작업을 DEAD_LETTER 로 만든다. @return 그 작업의 id */
+    /** 포기 이벤트를 받은 것처럼 예약의 REGISTER 작업을 DEAD_LETTER 로 만든다. @return 그 작업의 id */
     public UUID deadLetter(UUID preorderId) {
         UUID jobId = jdbcTemplate.queryForObject(
                 "SELECT id FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'REGISTER'",
@@ -140,6 +148,12 @@ public class ShopFixtures {
     public long nextQueuePosition(UUID productId) {
         return jdbcTemplate.queryForObject("SELECT next_queue_position FROM preorder_campaigns WHERE product_id = ?",
                 Long.class, (Object) UuidBinary.toBytes(productId));
+    }
+
+    /** 차례 기록이 실리지 않은 성공 이벤트. */
+    public static ExternalJobSucceeded succeeded(UUID syncJobId, String preorderToken, String jobType,
+                                                 String externalNumber) {
+        return new ExternalJobSucceeded(syncJobId, preorderToken, jobType, externalNumber, null);
     }
 
     public static String unique() {

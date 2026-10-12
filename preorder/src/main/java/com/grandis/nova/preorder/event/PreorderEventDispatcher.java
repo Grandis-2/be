@@ -96,8 +96,12 @@ public class PreorderEventDispatcher {
 
     private MessageHandling route(InboundEventType type, EventEnvelope envelope) {
         switch (type) {
-            case EXTERNAL_JOB_SUCCEEDED -> handler.onExternalJobSucceeded(
+            case EXTERNAL_JOB_SUCCEEDED -> handler.onExternalJobSucceeded(envelope.eventId(),
                     jsonMapper.treeToValue(envelope.payload(), ExternalJobSucceeded.class));
+            case EXTERNAL_JOB_ATTEMPTED -> handler.onExternalJobAttempted(envelope.eventId(),
+                    jsonMapper.treeToValue(envelope.payload(), ExternalJobAttempted.class));
+            case EXTERNAL_JOB_FAILED -> handler.onExternalJobFailed(envelope.eventId(),
+                    jsonMapper.treeToValue(envelope.payload(), ExternalJobFailed.class));
             case PREORDER_ORDER_SETTLED -> handler.onOrderSettled(
                     jsonMapper.treeToValue(envelope.payload(), PreorderOrderSettled.class));
             case PREORDER_PAYMENT_STARTED -> handler.onPaymentStarted(

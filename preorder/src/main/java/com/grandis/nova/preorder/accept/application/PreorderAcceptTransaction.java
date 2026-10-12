@@ -13,6 +13,8 @@ import com.grandis.nova.preorder.preorder.NewPreorder;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.Preorders;
+import com.grandis.nova.preorder.syncjob.RegisterJobReady;
+import com.grandis.nova.preorder.syncjob.SyncActor;
 import com.grandis.nova.preorder.syncjob.SyncJobs;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -102,7 +104,7 @@ class PreorderAcceptTransaction {
         String payload = jsonMapper.writeValueAsString(RegisterRequestPayload.of(preorderToken,
                 command.customerId(), command.productId(), option.sku(), externalScope));
         UUID jobId = syncJobs.createRegister(preorder.id(), payload);
-        outboxWriter.append(new RegisterJobReady(jobId, preorderToken));
+        outboxWriter.append(new RegisterJobReady(jobId, preorderToken, payload, SyncActor.SYSTEM, 1));
 
         return new AcceptResult(preorder, issued.batch(), false);
     }

@@ -4,6 +4,7 @@ import com.grandis.nova.common.message.EventEnvelope;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.spi.LoggingEventBuilder;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
@@ -28,15 +29,22 @@ class OutboxPublisher {
     private final JsonMapper jsonMapper;
     private final Clock clock;
     private final OutboxMetrics metrics;
+    private final OutboundAttributes attributes;
 
     OutboxPublisher(OutboxStore store, OutboxDefinition definition, MessageTransport transport, JsonMapper jsonMapper,
                     Clock clock, OutboxMetrics metrics) {
+        this(store, definition, transport, jsonMapper, clock, metrics, OutboundAttributes.NONE);
+    }
+
+    OutboxPublisher(OutboxStore store, OutboxDefinition definition, MessageTransport transport, JsonMapper jsonMapper,
+                    Clock clock, OutboxMetrics metrics, OutboundAttributes attributes) {
         this.store = store;
         this.definition = definition;
         this.transport = transport;
         this.jsonMapper = jsonMapper;
         this.clock = clock;
         this.metrics = metrics;
+        this.attributes = attributes;
     }
 
     /** 이미 발행된 행(릴레이가 먼저 보냄)은 건너뛴다. */
@@ -82,8 +90,10 @@ class OutboxPublisher {
 
     private OutboundMessage toMessage(OutboxRow row) {
         String destination = definition.destinationOf(row.eventType());
+        JsonNode payload = jsonMapper.readTree(row.payload());
         EventEnvelope envelope = new EventEnvelope(row.eventId(), row.eventType(), row.aggregateType(),
-                row.aggregateId(), row.createdAt(), jsonMapper.readTree(row.payload()));
-        return new OutboundMessage(destination, row.eventId(), row.eventType(), jsonMapper.writeValueAsString(envelope));
+                row.aggregateId(), row.createdAt(), payload);
+        return new OutboundMessage(destination, row.eventId(), row.eventType(), jsonMapper.writeValueAsString(envelope),
+                attributes.of(row.eventType(), payload));
     }
 }

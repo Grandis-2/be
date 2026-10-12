@@ -6,7 +6,6 @@ import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.cancel.application.CancelStarter;
-import com.grandis.nova.preorder.event.ExternalJobSucceeded;
 import com.grandis.nova.preorder.event.PreorderEventHandler;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.CancelReason;
@@ -137,7 +136,7 @@ class ExpiryCancelServiceTest {
 
     /** 외부 등록을 확인해 결제 가능으로 만들고, 결제 가능 시작을 그만큼 과거로 옮긴다. */
     private void makePayable(int hoursAgo) {
-        handler.onExternalJobSucceeded(new ExternalJobSucceeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
+        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
                 token, "REGISTER", "R-" + ShopFixtures.unique()));
         jdbcTemplate.update("UPDATE preorders SET payable_from = UTC_TIMESTAMP(6) - INTERVAL ? HOUR WHERE id = ?",
                 hoursAgo, UuidBinary.toBytes(preorderId));

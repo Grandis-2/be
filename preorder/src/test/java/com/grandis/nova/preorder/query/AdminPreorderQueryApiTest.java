@@ -7,6 +7,7 @@ import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
+import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -77,17 +78,19 @@ class AdminPreorderQueryApiTest {
                 .andExpect(jsonPath("$.data.items[0].registerJobStatus").value("PENDING"));
     }
 
+    /** DB 를 다른 시험과 함께 쓰므로 이 시험이 만든 상품으로 좁혀 본다. */
     @Test
     void 등록_작업_상태로_재처리_대기_예약을_거른다() throws Exception {
-        AcceptResult deadLettered = accepts.accept(customerId);
-        accepts.accept(fixtures.customer());
+        PreorderProduct product = fixtures.openPreorderProduct();
+        AcceptResult deadLettered = accepts.accept(customerId, product);
+        accepts.accept(fixtures.customer(), product);
         jdbcTemplate.update("""
                 UPDATE preorder_sync_jobs SET status = 'DEAD_LETTER', dead_lettered_at = UTC_TIMESTAMP(6)
                  WHERE preorder_id = ?
                 """, (Object) UuidBinary.toBytes(deadLettered.preorder().id()));
 
         mockMvc.perform(get("/api/v1/admin/preorders").param("registerJobStatus", "DEAD_LETTER")
-                        .with(admin()))
+                        .param("productId", product.productId().toString()).with(admin()))
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(deadLettered)))
                 .andExpect(jsonPath("$.data.items[0].registerJobStatus").value("DEAD_LETTER"));
