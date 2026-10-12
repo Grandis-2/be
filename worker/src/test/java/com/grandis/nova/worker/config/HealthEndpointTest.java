@@ -15,9 +15,9 @@ import java.net.http.HttpResponse;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** 실제 웹 서버에 HTTP 로 묻는다. DB · SQS 없이 뜨고, 열리는 것은 health 와 지표뿐이다. */
+/** 실제 웹 서버에 HTTP 로 묻는다. DB · SQS 없이 뜨고(큐 소비는 끈다), 열리는 것은 health 와 지표뿐이다. */
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT,
-        properties = "nova.worker.mock.base-url=http://mock.nova.local:8081")
+        properties = {"nova.worker.mock.base-url=http://mock.nova.local:8081", "nova.worker.consumer.enabled=false"})
 @AutoConfigureMetrics
 class HealthEndpointTest {
 
