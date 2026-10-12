@@ -39,7 +39,7 @@ jobs:
             python3 flyway-project/migrations.py check
           fi
 
-      - name: MySQL 8.4 적용 · 재실행 · 최신 스키마 문서 검증
+      - name: MySQL 8.4 적용 · 재실행 · 운영 적용 이미지 · 최신 스키마 문서 검증
         run: bash flyway-project/verify.sh
 
       - uses: actions/upload-artifact@v4
