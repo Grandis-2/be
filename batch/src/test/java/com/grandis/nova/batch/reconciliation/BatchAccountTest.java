@@ -72,6 +72,7 @@ class BatchAccountTest {
     void 결과_표에만_쓰는_권한으로_검사를_끝까지_돌린다() {
         TestData data = new TestData(root);
         data.preorder("폰", "t-1", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO);
+        data.preorder("폰", "t-2", "PENDING_SYNC", "PENDING", TWO_HOURS_AGO);
         MOCK.active("g-1", "R-GHOST", UUID.randomUUID().toString(), UUID.randomUUID().toString(), "SKU", TWO_HOURS_AGO);
 
         service.runScheduled();
@@ -81,7 +82,8 @@ class BatchAccountTest {
                 .extracting(f -> f.get("check_code"), f -> f.get("target_key"))
                 .containsExactlyInAnyOrder(
                         tuple("MOCK_ONLY", "g-1"),
-                        tuple("REGISTERED_NOT_IN_MOCK", "t-1"));
+                        tuple("REGISTERED_NOT_IN_MOCK", "t-1"),
+                        tuple("STUCK", "t-2"));
     }
 
     /** Spring 은 권한 오류를 BadSqlGrammarException 으로 감싸고 MySQL 의 문구는 원인 예외에 남긴다 */
