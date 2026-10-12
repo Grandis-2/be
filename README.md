@@ -275,10 +275,10 @@ worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이
 | `worker` | `preorder_sync_jobs` · `preorder_sync_attempts` |
 | `waitingroom` | (없음 — 전용 Redis) |
 
-`preorder_sync_jobs` 는 실행하는 worker 의 표지만, 행은 preorder 가 접수 · 취소 트랜잭션에서 만들고 무효화한다.
-
-표는 소유한 서비스만 쓴다. 다른 서비스의 데이터는 그 서비스의 API 로 묻는 것이 원칙이고,
-예외는 목록 화면의 페이징 조건처럼 쿼리 안에 있어야 하는 읽기뿐이다. 표 사이 관계는 [ERD](https://dbdiagram.io/d/Copy-of-Untitled-Diagram-6aa66499957fec6d5bdd9189)에 있다.
+표는 소유한 서비스만 쓰는 것이 원칙이다. 쓰기의 예외는 `preorder_sync_jobs` 하나다 — 실행하는 worker 의 표지만,
+행은 preorder 가 접수 · 취소 트랜잭션에서 만들고 무효화한다.
+다른 서비스의 데이터는 그 서비스의 API 로 묻고, 읽기의 예외는 목록 화면의 페이징 조건처럼 쿼리 안에 있어야 하는 경우뿐이다.
+표 사이 관계는 [ERD](https://dbdiagram.io/d/Copy-of-Untitled-Diagram-6aa66499957fec6d5bdd9189)에 있다.
 
 </details>
 
