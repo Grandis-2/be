@@ -31,7 +31,47 @@ interface RunRepository extends JpaRepository<ReconciliationRun, UUID> {
     List<ReconciliationRun> findPreviousCompleted(@Param("before") Instant before, @Param("productId") UUID productId,
                                                   Limit limit);
 
-    /** batch 가 다시 떴을 때 남아 있는 대기 · 실행 중을 실패로 끝낸다. 일괄 UPDATE 라 변경 시각을 직접 적는다 */
+    /*
+     * 상태 전이는 모두 "지금 상태가 이것일 때만" 바꾸는 조건부 UPDATE 다. 영향 행 수가 0 이면 다른 곳(겹쳐 뜬 인스턴스 · 기동 정리)이
+     * 먼저 바꾼 것이다. 엔티티를 읽고 고쳐 쓰면 그 사이에 바뀐 것을 덮는다. 일괄 UPDATE 라 변경 시각을 직접 적는다.
+     */
+
+    /** 요청(REQUESTED)을 가져가 실행 중으로 */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update ReconciliationRun r
+               set r.status = com.grandis.nova.batch.reconciliation.run.RunStatus.RUNNING,
+                   r.startedAt = :now, r.cutoffAt = :cutoff, r.updatedAt = :now
+             where r.id = :id and r.status = com.grandis.nova.batch.reconciliation.run.RunStatus.REQUESTED
+            """)
+    int claim(@Param("id") UUID id, @Param("now") Instant now, @Param("cutoff") Instant cutoff);
+
+    /** 실행 중(RUNNING)을 완료로 */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update ReconciliationRun r
+               set r.status = com.grandis.nova.batch.reconciliation.run.RunStatus.COMPLETED,
+                   r.finishedAt = :now, r.heldCount = :held, r.pendingSyncCount = :pendingSync,
+                   r.cancelingCount = :canceling, r.deadLetterCount = :deadLetter, r.updatedAt = :now
+             where r.id = :id and r.status = com.grandis.nova.batch.reconciliation.run.RunStatus.RUNNING
+            """)
+    int complete(@Param("id") UUID id, @Param("now") Instant now, @Param("held") int held,
+                 @Param("pendingSync") int pendingSync, @Param("canceling") int canceling,
+                 @Param("deadLetter") int deadLetter);
+
+    /** 대기 · 실행 중을 실패로 */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update ReconciliationRun r
+               set r.status = com.grandis.nova.batch.reconciliation.run.RunStatus.FAILED,
+                   r.finishedAt = :now, r.errorMessage = :message, r.updatedAt = :now
+             where r.id = :id
+               and r.status in (com.grandis.nova.batch.reconciliation.run.RunStatus.REQUESTED,
+                                com.grandis.nova.batch.reconciliation.run.RunStatus.RUNNING)
+            """)
+    int fail(@Param("id") UUID id, @Param("now") Instant now, @Param("message") String message);
+
+    /** batch 가 다시 떴을 때 남아 있는 대기 · 실행 중을 모두 실패로 */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             update ReconciliationRun r

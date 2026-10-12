@@ -7,6 +7,7 @@ import com.grandis.nova.batch.reconciliation.mock.MockLedgerClient;
 import com.grandis.nova.batch.reconciliation.mock.MockLedgerUnavailable;
 import com.grandis.nova.batch.reconciliation.run.ReconciliationRun;
 import com.grandis.nova.batch.reconciliation.run.RunStore;
+import com.grandis.nova.batch.reconciliation.run.RunStore.RunNotRunning;
 import com.grandis.nova.batch.reconciliation.snapshot.BeSnapshot;
 import java.time.Clock;
 import java.time.Instant;
@@ -103,6 +104,9 @@ public class ReconciliationService {
         } catch (MockLedgerUnavailable e) {
             log.warn("정합성 검사 판정 불가 runId={} — {}", run.getId(), e.getMessage());
             runs.fail(run.getId(), clock.instant(), e.getMessage());
+        } catch (RunNotRunning e) {
+            // 검사하는 동안 다른 곳(기동 정리 · 겹쳐 뜬 인스턴스)이 이 실행을 먼저 끝냈다. 결과는 넣지 않았다
+            log.warn("정합성 검사 결과를 버림 — {}", e.getMessage());
         } catch (RuntimeException e) {
             log.error("정합성 검사 실패 runId={}", run.getId(), e);
             runs.fail(run.getId(), clock.instant(), UNEXPECTED_FAILURE + " — " + e.getClass().getSimpleName());

@@ -18,6 +18,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * 실행 행의 상태를 바꾼다. 바꿀 때마다 짧은 트랜잭션 하나로 커밋한다 — 검사(스냅샷 읽기)는 그 사이에 따로 돈다.
  * 대기 · 실행 중인 실행은 하나뿐이라(active_marker UNIQUE) 정기 실행을 넣다가 1062 가 나면 건너뛴다.
+ * 가져가기 · 완료 · 실패는 조건부 UPDATE 의 영향 행 수로 판정한다 — 배포 중 인스턴스가 겹쳐도 같은 요청을 두 번 가져가지 않는다.
  */
 @Component
 public class RunStore {
@@ -53,10 +54,9 @@ public class RunStore {
     /** 관리자가 남긴 요청을 가져가 실행 중으로 바꾼다 */
     public Optional<ReconciliationRun> claimRequested(Instant now, Duration cutoffMargin) {
         return Optional.ofNullable(tx.execute(status -> runs.findFirstByStatusOrderByCreatedAtAsc(RunStatus.REQUESTED)
-                .map(run -> {
-                    run.start(now, now.minus(cutoffMargin));
-                    return runs.saveAndFlush(run);
-                })
+                // 읽은 뒤 다른 인스턴스가 먼저 가져갔으면 0 행 — 가져가지 않는다
+                .filter(requested -> runs.claim(requested.getId(), now, now.minus(cutoffMargin)) == 1)
+                .flatMap(claimed -> runs.findById(claimed.getId()))
                 .orElse(null)));
     }
 
@@ -71,27 +71,45 @@ public class RunStore {
         return count == null ? 0 : count;
     }
 
+    /** 판정 불가로 끝낸다. 이미 끝난 실행(기동 정리가 먼저 실패로 바꿈 등)이면 그대로 둔다 */
     public void fail(UUID runId, Instant now, String message) {
-        tx.executeWithoutResult(status -> {
-            ReconciliationRun run = runs.findById(runId).orElseThrow();
-            run.fail(now, message);
-        });
+        Integer changed = tx.execute(status -> runs.fail(runId, now, truncate(message)));
+        if (changed == null || changed == 0) {
+            log.info("이미 끝난 실행이라 실패로 바꾸지 않았다 runId={}", runId);
+        }
     }
 
     /**
      * 찾은 불일치를 넣고 실행을 완료로 바꾼다. 둘이 한 트랜잭션이다 — 완료로 보이는 실행에는 결과가 다 들어 있다.
+     * 실행 중이 아니면(기동 정리가 먼저 실패로 바꿈 등) 결과를 넣지 않고 {@link RunNotRunning} 을 던진다.
      * 처음 발견 시각은 범위가 같은 앞 완료 실행에 같은 (코드, 대상)이 있으면 그 값을, 없으면 이 실행의 시작 시각이다.
      */
     public void complete(UUID runId, Instant now, RunCounts counts, List<NewFinding> found) {
         tx.executeWithoutResult(status -> {
+            if (runs.complete(runId, now, counts.held(), counts.pendingSync(), counts.canceling(), counts.deadLetter()) != 1) {
+                throw new RunNotRunning(runId);
+            }
             ReconciliationRun run = runs.findById(runId).orElseThrow();
             Map<String, Instant> earlier = firstDetectedInPrevious(run);
             findings.saveAll(found.stream()
                     .map(f -> new ReconciliationFinding(runId, f.checkCode(), f.targetKey(), f.beSnapshot(),
                             f.mockSnapshot(), earlier.getOrDefault(key(f.checkCode(), f.targetKey()), run.getStartedAt())))
                     .toList());
-            run.complete(now, counts);
         });
+    }
+
+    static String truncate(String message) {
+        String text = message == null || message.isBlank() ? "원인 불명" : message.strip();
+        int limit = ReconciliationRun.ERROR_MESSAGE_LENGTH;
+        return text.length() <= limit ? text : text.substring(0, limit);
+    }
+
+    /** 끝내려던 실행이 이미 실행 중이 아니다 — 다른 곳이 먼저 끝냈다 */
+    public static class RunNotRunning extends RuntimeException {
+
+        RunNotRunning(UUID runId) {
+            super("실행 중이 아니라 완료하지 않았다 runId=" + runId);
+        }
     }
 
     private Map<String, Instant> firstDetectedInPrevious(ReconciliationRun run) {

@@ -12,6 +12,7 @@ import java.util.UUID;
 /**
  * 검사 실행 한 번(reconciliation_runs). 관리자 실행은 preorder 가 REQUESTED 로 넣고, 정기 실행은 batch 가 RUNNING 으로 넣는다.
  * 대기 · 실행 중 표식(active_marker)은 DB 가 상태로 계산하는 칸이라 매핑하지 않는다.
+ * 상태 전이는 엔티티를 고쳐 쓰지 않고 {@link RunRepository} 의 조건부 UPDATE 로 한다 — 그 사이 다른 곳이 바꾼 것을 덮지 않게.
  */
 @Entity
 @Table(name = "reconciliation_runs")
@@ -58,43 +59,6 @@ public class ReconciliationRun extends BaseEntity {
         run.startedAt = startedAt;
         run.cutoffAt = cutoffAt;
         return run;
-    }
-
-    /** 관리자 요청을 가져가 실행 중으로 바꾼다 */
-    public void start(Instant startedAt, Instant cutoffAt) {
-        if (status != RunStatus.REQUESTED) {
-            throw new IllegalStateException("요청(REQUESTED)인 실행만 시작한다: " + getId() + " " + status);
-        }
-        this.status = RunStatus.RUNNING;
-        this.startedAt = startedAt;
-        this.cutoffAt = cutoffAt;
-    }
-
-    public void complete(Instant finishedAt, RunCounts counts) {
-        if (status != RunStatus.RUNNING) {
-            throw new IllegalStateException("실행 중(RUNNING)인 실행만 끝낸다: " + getId() + " " + status);
-        }
-        this.status = RunStatus.COMPLETED;
-        this.finishedAt = finishedAt;
-        this.heldCount = counts.held();
-        this.pendingSyncCount = counts.pendingSync();
-        this.cancelingCount = counts.canceling();
-        this.deadLetterCount = counts.deadLetter();
-    }
-
-    /** 판정 불가로 끝낸다. 대기 중이던 실행도 실패로 끝낼 수 있다(batch 재시작 정리) */
-    public void fail(Instant finishedAt, String message) {
-        if (status != RunStatus.REQUESTED && status != RunStatus.RUNNING) {
-            throw new IllegalStateException("끝난 실행은 실패로 바꾸지 않는다: " + getId() + " " + status);
-        }
-        this.status = RunStatus.FAILED;
-        this.finishedAt = finishedAt;
-        this.errorMessage = truncate(message);
-    }
-
-    static String truncate(String message) {
-        String text = message == null || message.isBlank() ? "원인 불명" : message.strip();
-        return text.length() <= ERROR_MESSAGE_LENGTH ? text : text.substring(0, ERROR_MESSAGE_LENGTH);
     }
 
     public String getRequestedBy() {
