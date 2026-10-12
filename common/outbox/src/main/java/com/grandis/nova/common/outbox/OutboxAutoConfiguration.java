@@ -50,7 +50,7 @@ public class OutboxAutoConfiguration {
     @Bean
     OutboxPublisher outboxPublisher(OutboxStore store, OutboxDefinition definition, MessageTransport transport,
                                     JsonMapper jsonMapper, ObjectProvider<Clock> clock, OutboxMetrics metrics,
-                                    OutboxProperties properties) {
+                                    OutboxProperties properties, ObjectProvider<OutboundAttributes> attributes) {
         // 리스는 연장한 뒤 전송과 발행 완료 표시(DB)까지 지켜야 한다 — 전송 시간만큼만 길면 DB 가 조금만 늦어도 남이 가져간다
         Duration needed = transport.maxSendTime().plus(LEASE_MARGIN);
         if (properties.relayLease().compareTo(needed) <= 0) {
@@ -58,7 +58,8 @@ public class OutboxAutoConfiguration {
                     + transport.maxSendTime() + ")에 여유 " + LEASE_MARGIN + " 를 더한 것보다 길어야 한다"
                     + " — 보내는 동안 리스가 끝나 같은 행을 두 번 보낸다");
         }
-        return new OutboxPublisher(store, definition, transport, jsonMapper, clockOf(clock), metrics);
+        return new OutboxPublisher(store, definition, transport, jsonMapper, clockOf(clock), metrics,
+                attributes.getIfAvailable(() -> OutboundAttributes.NONE));
     }
 
     @Bean

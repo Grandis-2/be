@@ -16,11 +16,10 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * 외부 등록 · 취소 작업의 원장. 행은 preorder 가 만들고 실행은 worker 가 한다.
+ * 외부 등록 · 취소 작업의 원장. 행은 preorder 만 쓴다 — 실행은 worker 가 하고, 결과는 이벤트로 받아 여기에 남긴다.
  *
- * preorder 의 쓰기 범위는 INSERT(PENDING)와 REGISTER 무효화(→ CANCELED)뿐이다.
- * 그래서 실행 칸(lease_token · lease_expires_at · dead_lettered_at)은 읽기 전용으로 매핑하고,
- * status 도 변경 감지로는 바뀌지 않게 막았다 — 무효화는 {@link PreorderSyncJobRepository#cancelRegister} 로만 한다.
+ * 상태는 변경 감지로 바뀌지 않게 막았다 — 전이는 {@link PreorderSyncJobRepository} 의 조건부 UPDATE 로만 한다
+ * (순서 없이 · 두 번 오는 결과 이벤트가 끝난 작업을 되돌리지 못하게). 리스 칸(lease_token · lease_expires_at)은 쓰지 않는다.
  */
 @Entity
 @Table(name = "preorder_sync_jobs")
@@ -42,6 +41,10 @@ public class PreorderSyncJob extends BaseEntity {
     @Column(nullable = false, updatable = false, length = 20)
     private SyncJobStatus status;
 
+    /** 몇 번째 실행인가. 관리자 재처리마다 1 씩 오른다 — 지난 실행의 결과가 늦게 와도 작업 상태를 바꾸지 못하게 가린다. */
+    @Column(nullable = false, updatable = false)
+    private int run;
+
     @Column(insertable = false, updatable = false, length = 64)
     private String leaseToken;
 
@@ -59,6 +62,7 @@ public class PreorderSyncJob extends BaseEntity {
         this.jobType = jobType;
         this.requestPayload = requestPayload;
         this.status = SyncJobStatus.PENDING;
+        this.run = 1;
     }
 
     /** 접수 트랜잭션에서 만든다. */
@@ -73,7 +77,7 @@ public class PreorderSyncJob extends BaseEntity {
 
     /** 다른 모듈에 넘기는 읽기 전용 값. */
     public SyncJobSnapshot toSnapshot() {
-        return new SyncJobSnapshot(getId(), getPreorderId(), getJobType(), getStatus(),
+        return new SyncJobSnapshot(getId(), getPreorderId(), getJobType(), getStatus(), getRun(),
                 getRequestPayload(), getLeaseExpiresAt(), getDeadLetteredAt(), getCreatedAt(),
                 getUpdatedAt());
     }
@@ -92,6 +96,10 @@ public class PreorderSyncJob extends BaseEntity {
 
     public SyncJobStatus getStatus() {
         return status;
+    }
+
+    public int getRun() {
+        return run;
     }
 
     public String getLeaseToken() {

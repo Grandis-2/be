@@ -24,7 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
 
-/** 외부 동기화 작업 조회와 DEAD_LETTER 재처리. 재처리는 요청만 남기고 작업을 되돌리는 것은 worker 다. */
+/** 외부 동기화 작업 조회와 DEAD_LETTER 재처리. 재처리는 작업을 PENDING 으로 되돌리고 등록 메시지를 다시 보낸다. */
 @Tag(name = "관리자 · 동기화 작업")
 @RestController
 @RequestMapping("/api/v1/admin/preorders/sync-jobs")
