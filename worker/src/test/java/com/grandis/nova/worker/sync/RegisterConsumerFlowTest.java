@@ -99,6 +99,6 @@ class RegisterConsumerFlowTest {
     private void send(Map<String, String> attributes) {
         String url = sqs.getQueueUrl(request -> request.queueName(Jobs.REGISTER_QUEUE)).queueUrl();
         sqs.sendMessage(request -> request.queueUrl(url).messageBody(job.body())
-                .messageAttributes(Jobs.attributes(attributes)));
+                .messageAttributes(job.attributes(attributes)));
     }
 }

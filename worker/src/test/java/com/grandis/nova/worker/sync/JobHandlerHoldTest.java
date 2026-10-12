@@ -8,6 +8,7 @@ import com.grandis.nova.worker.mock.MockCircuit;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
@@ -57,7 +58,12 @@ class JobHandlerHoldTest {
             Map.of("run", "2", "attempt", "3", "generation", "2", "lastOutcome", "TRANSIENT_FAILURE", "actor", "ADMIN");
 
     @Autowired
+    @Qualifier("registerJobHandler")
     JobHandler handler;
+
+    @Autowired
+    @Qualifier("cancelJobHandler")
+    JobHandler cancelHandler;
 
     @Autowired
     MockCircuit circuit;
@@ -68,6 +74,9 @@ class JobHandlerHoldTest {
     /** 소비기가 큐를 받지 않게 대역으로 바꾼다. 처리기는 시험이 직접 부른다. */
     @MockitoBean
     BatchQueueConsumer registerConsumer;
+
+    @MockitoBean
+    BatchQueueConsumer cancelConsumer;
 
     @DynamicPropertySource
     static void mock(DynamicPropertyRegistry registry) {
@@ -132,5 +141,24 @@ class JobHandlerHoldTest {
         assertThat(held.resent(queues)).containsAllEntriesOf(THIRD_TURN);
         first.get(10, TimeUnit.SECONDS);
         assertThat(running.event(queues).get("eventType").asString()).isEqualTo("EXTERNAL_JOB_SUCCEEDED");
+    }
+
+    /** 취소는 꼭 반영돼야 한다 — 등록이 몰려도 전용 자리 하나로 나간다. */
+    @Test
+    void 등록이_자리를_다_써도_취소는_전용_자리로_나간다() throws Exception {
+        MOCK.respond(after(Duration.ofMillis(800),
+                json(201, "{\"externalKey\":\"K\",\"externalNumber\":\"R-1\",\"status\":\"ACTIVE\"}")));
+        Jobs running = new Jobs();
+        CompletableFuture<Void> first = CompletableFuture.runAsync(() -> handler.handle(running.message(Map.of())));
+        await().atMost(Duration.ofSeconds(5)).until(() -> !running.calls(MOCK).isEmpty());
+        MOCK.respond(json(200, "{\"externalNumbers\":[\"R-1\"]}"));
+        Jobs cancel = Jobs.cancel();
+
+        cancelHandler.handle(cancel.message(Map.of()));
+
+        assertThat(first).as("등록은 아직 자리를 쥐고 있다").isNotDone();
+        assertThat(cancel.calls(MOCK)).containsExactly("POST /external/cancellations");
+        assertThat(cancel.event(queues).get("eventType").asString()).isEqualTo("EXTERNAL_JOB_SUCCEEDED");
+        first.get(10, TimeUnit.SECONDS);
     }
 }
