@@ -87,7 +87,7 @@ class AdminGiftCandidateApiTest {
     }
 
     @Test
-    @DisplayName("q 는 상품명으로도 거르고 · size 로 쪽을 나눈다(total 은 그대로)")
+    @DisplayName("q 는 상품명으로도 거르고 · 쪽을 나눈다 — 두 쪽이 겹치지 않고 최신순, 범위 밖 쪽은 비고 total 은 그대로, 기본값은 첫 쪽")
     void filtersByTitleAndPages() throws Exception {
         UUID first = product("IN_STOCK", "ACTIVE", "갤럭시 " + tag);
         fixtures.inventory(fixtures.option(first, "ACTIVE"), 3, 0, 0);
@@ -95,12 +95,28 @@ class AdminGiftCandidateApiTest {
         fixtures.inventory(fixtures.option(second, "ACTIVE"), 3, 0, 0);
 
         assertThat(ids(list("갤럭시 " + tag).get("items"))).containsExactly(first);
-        JsonNode page = JSON.readTree(mockMvc.perform(get(PATH).queryParam("q", tag).queryParam("size", "1")
+        JsonNode firstPage = page("0", "1");
+        JsonNode secondPage = page("1", "1");
+        JsonNode beyond = page("2", "1");
+        assertThat(firstPage.get("total").asLong()).isEqualTo(2);
+        assertThat(firstPage.get("hasNext").asBoolean()).isTrue();
+        assertThat(secondPage.get("total").asLong()).isEqualTo(2);
+        assertThat(secondPage.get("hasNext").asBoolean()).isFalse();
+        List<UUID> both = new ArrayList<>(ids(firstPage.get("items")));
+        both.addAll(ids(secondPage.get("items")));
+        assertThat(both).as("두 쪽이 겹치지 않고 최신순").containsExactly(second, first);
+        assertThat(beyond.get("items")).as("범위 밖 쪽").isEmpty();
+        assertThat(beyond.get("total").asLong()).isEqualTo(2);
+        JsonNode defaults = JSON.readTree(mockMvc.perform(get(PATH).queryParam("q", tag).with(user("admin").roles("ADMIN")))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).get("data");
+        assertThat(defaults.get("page").asInt()).as("기본 page").isZero();
+        assertThat(ids(defaults.get("items"))).containsExactly(second, first);
+    }
+
+    private JsonNode page(String page, String size) throws Exception {
+        return JSON.readTree(mockMvc.perform(get(PATH).queryParam("q", tag).queryParam("page", page).queryParam("size", size)
                         .with(user("admin").roles("ADMIN")))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).get("data");
-        assertThat(page.get("items")).hasSize(1);
-        assertThat(page.get("total").asLong()).isEqualTo(2);
-        assertThat(page.get("hasNext").asBoolean()).isTrue();
     }
 
     @Test
