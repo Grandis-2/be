@@ -14,6 +14,7 @@ import com.grandis.nova.worker.mock.ReceiveGate;
 import com.grandis.nova.worker.mock.RejectGuard;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import software.amazon.awssdk.services.sqs.SqsClient;
@@ -41,8 +42,13 @@ class SyncConfig {
     }
 
     @Bean
-    InRoundRetry inRoundRetry(RetrySchedule schedule, WorkerProperties properties) {
-        return new InRoundRetry(schedule, properties.retry());
+    ShutdownSignal shutdownSignal(ApplicationContext context) {
+        return new ShutdownSignal(context);
+    }
+
+    @Bean
+    InRoundRetry inRoundRetry(RetrySchedule schedule, WorkerProperties properties, ShutdownSignal shutdown) {
+        return new InRoundRetry(schedule, properties.retry(), shutdown);
     }
 
     @Bean
@@ -59,18 +65,18 @@ class SyncConfig {
     JobHandler registerJobHandler(MockGateway mock, InRoundRetry inRound, RetrySchedule schedule,
                                   ConcurrencyLimiter limiter, MockCircuit circuit, RejectGuard rejectGuard,
                                   ResultPublisher publisher, DelayedResend registerResend, WorkerProperties properties,
-                                  JsonMapper json, MeterRegistry meters, Clock clock) {
+                                  JsonMapper json, MeterRegistry meters, Clock clock, ShutdownSignal shutdown) {
         return new JobHandler(JobType.REGISTER, new RegisterTurn(mock, inRound), schedule, limiter, circuit,
-                rejectGuard, publisher, registerResend, properties, json, meters, clock);
+                rejectGuard, publisher, registerResend, properties, json, meters, clock, shutdown);
     }
 
     @Bean
     JobHandler cancelJobHandler(MockGateway mock, InRoundRetry inRound, RetrySchedule schedule,
                                 ConcurrencyLimiter limiter, MockCircuit circuit, RejectGuard rejectGuard,
                                 ResultPublisher publisher, DelayedResend cancelResend, WorkerProperties properties,
-                                JsonMapper json, MeterRegistry meters, Clock clock) {
+                                JsonMapper json, MeterRegistry meters, Clock clock, ShutdownSignal shutdown) {
         return new JobHandler(JobType.CANCEL, new CancelTurn(mock, inRound), schedule, limiter, circuit, rejectGuard,
-                publisher, cancelResend, properties, json, meters, clock);
+                publisher, cancelResend, properties, json, meters, clock, shutdown);
     }
 
     @Bean
@@ -80,28 +86,32 @@ class SyncConfig {
 
     @Bean
     BatchQueueConsumer registerConsumer(SqsClient sqs, SqsQueueUrls queueUrls, WorkerProperties properties,
-                                        ReceiveGate gate, JobHandler registerJobHandler, InFlightJobs inFlight) {
+                                        ReceiveGate gate, JobHandler registerJobHandler, InFlightJobs inFlight,
+                                        ShutdownSignal shutdown) {
         return consumer(JobEventType.REGISTER_JOB_READY, sqs, queueUrls, properties, gate, registerJobHandler,
-                inFlight);
+                inFlight, shutdown);
     }
 
     @Bean
     BatchQueueConsumer cancelConsumer(SqsClient sqs, SqsQueueUrls queueUrls, WorkerProperties properties,
-                                      ReceiveGate gate, JobHandler cancelJobHandler, InFlightJobs inFlight) {
-        return consumer(JobEventType.CANCEL_JOB_READY, sqs, queueUrls, properties, gate, cancelJobHandler, inFlight);
+                                      ReceiveGate gate, JobHandler cancelJobHandler, InFlightJobs inFlight,
+                                      ShutdownSignal shutdown) {
+        return consumer(JobEventType.CANCEL_JOB_READY, sqs, queueUrls, properties, gate, cancelJobHandler, inFlight,
+                shutdown);
     }
 
     /**
      * 지금 부를 수 있는 만큼만 받는다. 받은 메시지는 곧 자리를 잡으러 오고 자리는 두 큐가 나눠 쓰므로,
      * 이 종류가 쓸 수 있는 자리 수에서 두 소비기가 처리 중인 건수를 모두 뺀다. 건수는 받기 전에 정하므로 기다리는 사이
      * 다른 큐가 자리를 쓰면 넘칠 수 있다 — 그때는 처리기가 차례를 쓰지 않고 돌려보낸다.
+     * 내려가는 중에는 받지 않는다 — 받아도 돌려보낼 뿐이라, 멈출 차례를 기다리는 소비기가 받고 돌려보내기를 되풀이하지 않게.
      */
     private static BatchQueueConsumer consumer(JobEventType event, SqsClient sqs, SqsQueueUrls queueUrls,
                                                WorkerProperties properties, ReceiveGate gate, JobHandler handler,
-                                               InFlightJobs inFlight) {
+                                               InFlightJobs inFlight, ShutdownSignal shutdown) {
         BatchQueueConsumer consumer = new BatchQueueConsumer(sqs, queueUrls,
                 properties.consumer().settings(event.queue()), JobProgress.ATTRIBUTE_NAMES,
-                () -> gate.receivable(event.jobType(), inFlight.count()), handler);
+                () -> shutdown.stopping() ? 0 : gate.receivable(event.jobType(), inFlight.count()), handler);
         inFlight.add(consumer);
         return consumer;
     }

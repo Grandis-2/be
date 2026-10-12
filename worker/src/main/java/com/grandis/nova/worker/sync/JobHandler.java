@@ -31,6 +31,7 @@ import tools.jackson.databind.json.JsonMapper;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -39,6 +40,7 @@ import java.util.UUID;
  * 작업 메시지 하나를 한 차례 처리한다. 상태는 메시지 속성에만 있다 — 결과를 preorder 에 알리고, 다시 해야 하면 속성을 고쳐
  * 지연을 두고 같은 큐에 다시 보낸 뒤 원본을 지운다. 알리거나 다시 보내지 못하면 던져서 원본을 남긴다(가시성 시간 뒤 같은 차례를 다시 한다).
  * 지금 부를 수 없으면(차단기 · 거절 이어짐 · 자리 없음) 차례를 쓰지 않고 속성 그대로 돌려보낸다.
+ * 내려가는 중에 받은 메시지는 부르지 않고 속성 그대로 곧바로 다시 보낸다.
  */
 final class JobHandler implements BatchMessageHandler {
 
@@ -48,6 +50,9 @@ final class JobHandler implements BatchMessageHandler {
     static final String PAYLOAD_INVALID = "PAYLOAD_INVALID";
     static final String GENERATION_EXHAUSTED = "GENERATION_EXHAUSTED";
     private static final String REJECTED = "REJECTED";
+    /** {@link #JOBS_METRIC} 의 outcome 값. 경보가 "값 없음"과 0 을 가리지 않아도 되게 처음부터 0 으로 내보낸다. */
+    static final List<String> OUTCOMES =
+            List.of("succeeded", "failed", "retried", "held", "returned", "invalid", "unreadable");
     private static final Logger log = LoggerFactory.getLogger(JobHandler.class);
 
     private final JobType type;
@@ -64,10 +69,11 @@ final class JobHandler implements BatchMessageHandler {
     private final JsonMapper json;
     private final MeterRegistry meters;
     private final Clock clock;
+    private final ShutdownSignal shutdown;
 
     JobHandler(JobType type, Turn turn, RetrySchedule schedule, ConcurrencyLimiter limiter, MockCircuit circuit,
                RejectGuard rejectGuard, ResultPublisher publisher, DelayedResend resend, WorkerProperties properties,
-               JsonMapper json, MeterRegistry meters, Clock clock) {
+               JsonMapper json, MeterRegistry meters, Clock clock, ShutdownSignal shutdown) {
         this.type = type;
         this.turn = turn;
         this.schedule = schedule;
@@ -82,10 +88,18 @@ final class JobHandler implements BatchMessageHandler {
         this.json = json;
         this.meters = meters;
         this.clock = clock;
+        this.shutdown = shutdown;
+        OUTCOMES.forEach(outcome -> meters.counter(JOBS_METRIC, "jobType", type.name(), "outcome", outcome));
+        meters.counter(GENERATIONS_METRIC, "jobType", type.name());
     }
 
     @Override
     public MessageOutcome handle(Message message) {
+        if (shutdown.stopping()) {
+            // 아직 아무것도 부르지 않았다. 다른 worker 가 곧바로 받게 지연 없이 다시 보낸다(받은 횟수를 쓰지 않는다)
+            resend.resend(message, Map.of(), Duration.ZERO);
+            return done("returned");
+        }
         JobProgress progress = JobProgress.of(message);
         Optional<JsonNode> payload = payloadOf(message);
         if (payload.isEmpty()) {
