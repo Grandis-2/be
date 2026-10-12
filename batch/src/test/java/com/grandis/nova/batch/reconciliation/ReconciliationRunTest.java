@@ -2,6 +2,7 @@ package com.grandis.nova.batch.reconciliation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.grandis.nova.batch.reconciliation.check.Reconciler;
 import com.grandis.nova.batch.support.BatchIntegrationTest;
 import com.grandis.nova.batch.support.RecordingCheck;
 import com.grandis.nova.batch.support.TestData;
@@ -18,8 +19,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.TestPropertySource;
+import tools.jackson.databind.json.JsonMapper;
 
+/** 실행 틀(맞대기 · 판정 보류 · 결과 넣기 · 실패)을 본다. 비교 규칙 대신 시험용 확인할 것만 단다 — 규칙은 ReconciliationChecksTest */
 @Import(ReconciliationRunTest.Checks.class)
 @TestPropertySource(properties = "nova.batch.reconciliation.max-findings=2")
 class ReconciliationRunTest extends BatchIntegrationTest {
@@ -32,6 +36,12 @@ class ReconciliationRunTest extends BatchIntegrationTest {
         @Bean
         RecordingCheck recordingCheck() {
             return new RecordingCheck();
+        }
+
+        @Bean
+        @Primary
+        Reconciler recordingOnly(RecordingCheck check, JsonMapper json) {
+            return new Reconciler(List.of(check), List.of(), json);
         }
     }
 
