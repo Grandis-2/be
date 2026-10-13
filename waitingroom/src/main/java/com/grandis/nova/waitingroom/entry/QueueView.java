@@ -20,8 +20,8 @@ public sealed interface QueueView {
     }
 
     /**
-     * 줄 서는 중. position 은 1부터 세는 내 순서이고 뒤로 가지 않는다. 대기 토큰과 재방문 여부는 진입 응답에만,
-     * 총원 · 뒤 인원은 조회 응답에만 있다(줄 서기는 왕복을 늘리지 않으려고 세지 않는다).
+     * 줄 서는 중. position 은 1부터 세는 내 순서이고 뒤로 가지 않는다. 대기 토큰은 진입 응답과, 만료가 가까워 바꿔 줄 때의
+     * 조회 응답에 있다. 재방문 여부는 진입 응답에만, 총원 · 뒤 인원은 조회 응답에만 있다(줄 서기는 왕복을 늘리지 않으려고 세지 않는다).
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     record Waiting(String queueToken, long position, long etaSeconds, Long totalWaiting, Long behind,

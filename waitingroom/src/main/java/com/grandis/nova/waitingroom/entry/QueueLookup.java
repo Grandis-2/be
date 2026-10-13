@@ -14,12 +14,14 @@ import com.grandis.nova.waitingroom.domain.queue.EtaPolicy;
 import com.grandis.nova.waitingroom.domain.queue.PollIntervalPolicy;
 import com.grandis.nova.waitingroom.domain.queue.QueueEntry;
 import com.grandis.nova.waitingroom.domain.queue.QueueToken;
+import com.grandis.nova.waitingroom.domain.queue.SignedToken;
 import com.grandis.nova.waitingroom.redis.QueueStore;
 import com.grandis.nova.waitingroom.redis.QueueStore.QueueStatus;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
 import java.time.Instant;
+import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -59,30 +61,32 @@ public class QueueLookup {
             if (state.phaseAt(now) == SalesPhase.CLOSED || closures.closed(productKey, state.window())) {
                 return Mono.just(closed(QueueView.Closed.Reason.SALE_CLOSED));
             }
-            boolean owner = queueTokens.verify(queueToken, productKey, now).filter(customerId::equals).isPresent();
+            Optional<SignedToken.Holder> owner = queueTokens.verify(queueToken, productKey, now)
+                    .filter(holder -> customerId.equals(holder.customerId()));
             // 비공개 상품은 줄에 선 사람에게만 드러낸다
-            if (!owner && state.runtime() == RuntimeState.HIDDEN) {
+            if (owner.isEmpty() && state.runtime() == RuntimeState.HIDDEN) {
                 throw AdmissionGate.rejected(WaitingroomErrorCode.PRODUCT_NOT_FOUND);
             }
-            if (!owner) {
+            if (owner.isEmpty()) {
                 return Mono.just(closed(QueueView.Closed.Reason.NOT_IN_QUEUE));
             }
             return queue.status(productKey, customerId, now)
                     .onErrorMap(AdmissionGate::storeFailure, AdmissionGate::unavailable)
-                    .map(found -> view(productKey, customerId, state, snapshot.meta(), now, found));
+                    .map(found -> view(productKey, owner.get(), state, snapshot.meta(), now, found));
         }).doOnNext(view -> metrics.status(view instanceof QueueView.Closed closed ? closed.reason().name() : view.status()))
                 .doOnError(BusinessException.class, e -> metrics.status(e.errorCode().name()));
     }
 
-    private QueueView view(String productKey, String customerId, ProductState state, SnapshotMeta meta, Instant now,
-                           QueueStatus found) {
+    private QueueView view(String productKey, SignedToken.Holder owner, ProductState state, SnapshotMeta meta,
+                           Instant now, QueueStatus found) {
         QueueEntry entry = found.entry();
         return switch (entry.state()) {
-            case ADMITTED -> gate.admitted(productKey, customerId, found.admittedAt(), now);
+            case ADMITTED -> gate.admitted(productKey, owner.customerId(), found.admittedAt(), now);
             case WAITING -> {
                 double eta = EtaCredit.etaSec(entry.rank(), state, meta);
                 long behind = entry.behind();
-                yield new QueueView.Waiting(null, entry.rank() + 1, EtaPolicy.reportSec(eta),
+                yield new QueueView.Waiting(queueTokens.renewal(productKey, owner, now).orElse(null),
+                        entry.rank() + 1, EtaPolicy.reportSec(eta),
                         entry.total() == QueueEntry.UNKNOWN_TOTAL ? null : entry.total(),
                         behind == QueueEntry.UNKNOWN_TOTAL ? null : behind, null,
                         polls.intervalSec(eta, ThreadLocalRandom.current()::nextDouble));
