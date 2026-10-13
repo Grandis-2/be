@@ -23,6 +23,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -264,6 +265,25 @@ class PreorderAcceptConcurrencyTest {
 
         List<Outcome> outcomes = concurrently(tickets.size(), i -> () -> acceptService.acceptByCustomer(customerId,
                 product.productId(), product.productId(), product.optionId(), "same-admission-" + i, tickets.get(i)));
+
+        assertThat(outcomes.stream().filter(Outcome::accepted)).hasSize(1);
+        assertThat(outcomes.stream().filter(o -> !o.accepted()))
+                .singleElement().extracting(Outcome::error).isEqualTo(PreorderErrorCode.ADMISSION_TICKET_STALE);
+        assertThat(committedPositions()).containsExactly(1L);
+    }
+
+    /** 대기열 교체 배포 중에는 옛 노드와 새 노드가 같은 입장에 발급 시각 칸이 없는 것 · 있는 것을 한 장씩 낼 수 있다. */
+    @RepeatedTest(3)
+    void 같은_입장의_발급_시각이_없는_입장권과_있는_입장권을_동시에_보내면_하나만_받고_나머지는_STALE() throws Exception {
+        UUID customerId = fixtures.customer();
+        Instant admittedAt = Instant.now();
+        List<String> tickets = List.of(
+                AdmissionTickets.issue(product.productId(), customerId, admittedAt),
+                AdmissionTickets.issueWithIssuedAt(product.productId(), customerId, admittedAt,
+                        Duration.ofSeconds(AdmissionTickets.TTL_SECONDS)));
+
+        List<Outcome> outcomes = concurrently(tickets.size(), i -> () -> acceptService.acceptByCustomer(customerId,
+                product.productId(), product.productId(), product.optionId(), "mixed-admission-" + i, tickets.get(i)));
 
         assertThat(outcomes.stream().filter(Outcome::accepted)).hasSize(1);
         assertThat(outcomes.stream().filter(o -> !o.accepted()))
