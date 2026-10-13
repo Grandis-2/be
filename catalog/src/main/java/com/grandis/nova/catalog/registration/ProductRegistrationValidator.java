@@ -43,7 +43,7 @@ import java.util.regex.Pattern;
 @Component
 public class ProductRegistrationValidator {
 
-    static final int MAX_GALLERY_IMAGES_PER_BUNDLE = 10;
+    public static final int MAX_GALLERY_IMAGES_PER_BUNDLE = 10;
     /** 사전예약 배송 차수 최대 개수(2026-10-04 결정). 등록 이벤트 한 통에 싣는다. */
     public static final int MAX_SHIPMENT_BATCHES = 100;
     /** MySQL 문서의 date · datetime 지원 범위. 상한을 넘는 값은 preorder 가 저장하지 못한다(9999-12-31 23:59:59.999999 까지 들어간다 — 실측). */
@@ -107,20 +107,31 @@ public class ProductRegistrationValidator {
      * 주소만 본다 — 그 객체가 실제로 올라가 있는지, 이 서비스가 발급한 키인지는 확인하지 않는다.
      */
     private void requireUploadedImages(ProductRegistrationRequest request) {
+        Set<String> seen = new HashSet<>();
         for (int i = 0; i < request.images().gallery().size(); i++) {
-            requireUploaded(request.images().gallery().get(i).items(), "images.gallery[%d]".formatted(i));
+            requireUploaded(request.images().gallery().get(i).items(), "images.gallery[%d]".formatted(i), seen);
         }
         for (int i = 0; i < request.images().detail().size(); i++) {
-            requireUploaded(request.images().detail().get(i).items(), "images.detail[%d]".formatted(i));
+            requireUploaded(request.images().detail().get(i).items(), "images.detail[%d]".formatted(i), seen);
         }
     }
 
-    private void requireUploaded(List<Image> items, String field) {
+    /** 한 상품 안에서 같은 주소는 한 번 — 사진 수정 API 가 주소로 사진 한 장을 가리킨다. 업로드 API 는 파일마다 새 주소를 준다. */
+    private void requireUploaded(List<Image> items, String field, Set<String> seen) {
         for (int j = 0; j < items.size(); j++) {
             String url = items.get(j).url();
-            if (!url.startsWith(imageUrlPrefix) || url.length() == imageUrlPrefix.length()) {
-                throw ValidationFailures.of(field + ".items[%d].url".formatted(j), "이미지 주소는 " + imageUrlPrefix + " 아래만 받습니다.");
+            String itemField = field + ".items[%d].url".formatted(j);
+            requireUploadedUrl(url, itemField);
+            if (!seen.add(url)) {
+                throw ValidationFailures.of(itemField, "같은 사진 주소가 두 번 왔습니다.");
             }
+        }
+    }
+
+    /** 등록 · 사진 수정이 같이 쓴다. */
+    public void requireUploadedUrl(String url, String field) {
+        if (!url.startsWith(imageUrlPrefix) || url.length() == imageUrlPrefix.length()) {
+            throw ValidationFailures.of(field, "이미지 주소는 " + imageUrlPrefix + " 아래만 받습니다.");
         }
     }
 
