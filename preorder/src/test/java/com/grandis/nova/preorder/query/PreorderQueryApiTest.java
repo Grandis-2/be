@@ -4,12 +4,15 @@ import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
+import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.PreorderFact;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.support.AcceptFixtures;
+import com.grandis.nova.preorder.support.AdmissionTickets;
 import com.grandis.nova.preorder.support.PreorderCancels;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
+import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -242,6 +245,62 @@ class PreorderQueryApiTest {
         mockMvc.perform(get("/api/v1/preorders").with(admin()))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
+    }
+
+    @Test
+    void 진행_중인_예약만_상품마다_한_건씩_최신순으로_준다() throws Exception {
+        PreorderProduct reapplied = fixtures.openPreorderProduct();
+        cancels.complete(accepts.accept(customerId, reapplied).preorder().id());
+        // 같은 입장의 입장권은 한 번만 받으므로 다시 진입해 받은 것으로 재신청한다
+        AcceptResult again = acceptService.acceptByCustomer(customerId, reapplied.productId(), reapplied.productId(),
+                reapplied.optionId(), "reapply-" + ShopFixtures.unique(), AdmissionTickets.issue(
+                        reapplied.productId(), customerId, Instant.now().plusSeconds(3 * AdmissionTickets.WINDOW_SECONDS)));
+        cancels.complete(accepts.accept(customerId).preorder().id());
+        AcceptResult newest = accepts.accept(customerId);
+        accepts.accept(fixtures.customer());
+
+        mockMvc.perform(get("/api/v1/preorders/active").with(customer(customerId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items", hasSize(2)))
+                .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(newest)))
+                .andExpect(jsonPath("$.data.items[0].productId").value(newest.preorder().productId().toString()))
+                .andExpect(jsonPath("$.data.items[1].preorderId").value(AcceptFixtures.tokenOf(again)))
+                .andExpect(jsonPath("$.data.items[1].productId").value(reapplied.productId().toString()))
+                .andExpect(jsonPath("$.data.items[0].version").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].queuePosition").doesNotExist());
+    }
+
+    @Test
+    void 진행_중인_예약의_화면_단계를_주고_결제_기한은_결제를_기다리는_동안에만_준다() throws Exception {
+        UUID id = accepts.accept(customerId).preorder().id();
+        mockMvc.perform(get("/api/v1/preorders/active").with(customer(customerId)))
+                .andExpect(jsonPath("$.data.items[0].displayStatus").value("RECEIVED"))
+                .andExpect(jsonPath("$.data.items[0].paymentDueAt").doesNotExist());
+
+        fire(id, new PreorderFact.RegisterConfirmed("EXT-" + ShopFixtures.unique()));
+        mockMvc.perform(get("/api/v1/preorders/active").with(customer(customerId)))
+                .andExpect(jsonPath("$.data.items[0].displayStatus").value("PAYABLE"))
+                .andExpect(jsonPath("$.data.items[0].paymentDueAt").isNotEmpty());
+
+        fire(id, new PreorderFact.PaymentConfirmed(Instant.parse("2026-10-04T01:00:00Z")));
+        mockMvc.perform(get("/api/v1/preorders/active").with(customer(customerId)))
+                .andExpect(jsonPath("$.data.items[0].displayStatus").value("RESERVED"))
+                .andExpect(jsonPath("$.data.items[0].paymentDueAt").doesNotExist());
+
+        fire(id, new PreorderFact.CancelRequested(EventActor.USER, null));
+        mockMvc.perform(get("/api/v1/preorders/active").with(customer(customerId)))
+                .andExpect(jsonPath("$.data.items", hasSize(1)))
+                .andExpect(jsonPath("$.data.items[0].displayStatus").value("CANCELING"));
+    }
+
+    @Test
+    void 진행_중인_예약이_없으면_빈_목록이고_로그인하지_않으면_401() throws Exception {
+        cancels.complete(accepts.accept(customerId).preorder().id());
+
+        mockMvc.perform(get("/api/v1/preorders/active").with(customer(customerId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items", hasSize(0)));
+        mockMvc.perform(get("/api/v1/preorders/active")).andExpect(status().isUnauthorized());
     }
 
     private void fire(UUID preorderId, PreorderFact fact) {
