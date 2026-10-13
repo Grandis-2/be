@@ -43,14 +43,16 @@ public class PreorderQueryService {
     private final Campaigns campaigns;
     private final SyncJobs syncJobs;
     private final SyncAttemptReader syncAttempts;
+    private final PreorderQueryProperties properties;
     private final Clock clock;
 
     PreorderQueryService(Preorders preorders, Campaigns campaigns, SyncJobs syncJobs,
-                         SyncAttemptReader syncAttempts, Clock clock) {
+                         SyncAttemptReader syncAttempts, PreorderQueryProperties properties, Clock clock) {
         this.preorders = preorders;
         this.campaigns = campaigns;
         this.syncJobs = syncJobs;
         this.syncAttempts = syncAttempts;
+        this.properties = properties;
         this.clock = clock;
     }
 
@@ -60,19 +62,29 @@ public class PreorderQueryService {
         Position position = Position.of(cursor);
         List<PreorderSnapshot> found = new ArrayList<>(preorders.findForCustomer(customerId, status, productId,
                 position.createdAt(), position.id(), size + 1));
-        boolean hasNext = found.size() > size;
-        if (hasNext) {
-            found.removeLast();
-        }
+        String nextCursor = trimToPage(found, size);
         Map<UUID, SyncJobStatus> registerStatuses = registerJobStatuses(found);
         Instant now = clock.instant();
         List<PreorderView.Summary> items = withBatches(found, (preorder, batch) -> new PreorderView.Summary(
                 preorder, batch, displayStatus(preorder, registerStatuses.get(preorder.id()), now)));
-        if (!hasNext) {
-            return CursorPage.last(items);
-        }
-        PreorderSnapshot last = found.getLast();
-        return CursorPage.of(items, Cursor.encode(last.createdAt().toString(), last.id()));
+        return nextCursor == null ? CursorPage.last(items) : CursorPage.of(items, nextCursor);
+    }
+
+    /**
+     * 내 진행 중인 예약(최신순). 상품마다 많아야 한 건이라 보통 한 페이지에 다 담긴다 —
+     * 넘치면 잘라 버리지 않고 다음 커서를 준다(빠진 상품은 예약하지 않은 것으로 보인다).
+     */
+    public CursorPage<PreorderView.Active> findMyActive(UUID customerId, String cursor) {
+        Position position = Position.of(cursor);
+        int size = properties.activePageSize();
+        List<PreorderSnapshot> found = new ArrayList<>(preorders.findActiveForCustomer(customerId,
+                position.createdAt(), position.id(), size + 1));
+        String nextCursor = trimToPage(found, size);
+        Map<UUID, SyncJobStatus> registerStatuses = registerJobStatuses(found);
+        Instant now = clock.instant();
+        List<PreorderView.Active> items = found.stream().map(preorder -> new PreorderView.Active(
+                preorder, displayStatus(preorder, registerStatuses.get(preorder.id()), now))).toList();
+        return nextCursor == null ? CursorPage.last(items) : CursorPage.of(items, nextCursor);
     }
 
     /** 예약 하나. 본인과 관리자만 볼 수 있고, 남의 예약은 존재를 알리지 않는다(404). */
@@ -131,6 +143,16 @@ public class PreorderQueryService {
             case CANCELING -> PreorderDisplayStatus.CANCELING;
             case CANCELED -> PreorderDisplayStatus.CANCELED;
         };
+    }
+
+    /** 한 건 더 읽은 목록을 페이지 크기로 줄인다. 다음 페이지가 있으면 그 커서를, 없으면 null 을 준다. */
+    private static String trimToPage(List<PreorderSnapshot> found, int size) {
+        if (found.size() <= size) {
+            return null;
+        }
+        found.removeLast();
+        PreorderSnapshot last = found.getLast();
+        return Cursor.encode(last.createdAt().toString(), last.id());
     }
 
     private PreorderSnapshot require(Viewer viewer, String preorderToken) {
