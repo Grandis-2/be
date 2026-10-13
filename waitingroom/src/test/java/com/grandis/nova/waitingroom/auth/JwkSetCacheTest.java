@@ -9,11 +9,13 @@ import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
 import com.nimbusds.jose.util.Base64URL;
 import com.nimbusds.jwt.SignedJWT;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
+import reactor.test.scheduler.VirtualTimeScheduler;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -241,6 +243,85 @@ class JwkSetCacheTest {
         cache.refresh().block(Duration.ofSeconds(5));
 
         assertThat(kids("k1")).containsExactly("k1");
+    }
+
+    @Nested
+    class 기동 {
+
+        /** 재시도 간격은 최소 갱신 간격을 넘지 않는다. 그 두 배면 한 번은 다시 받는다. */
+        private static final Duration LONGEST_RETRY = JwkSetCache.MIN_INTERVAL.multipliedBy(2);
+
+        private final VirtualTimeScheduler time = VirtualTimeScheduler.getOrSet();
+
+        @AfterEach
+        void stop() {
+            cache.stop();
+            VirtualTimeScheduler.reset();
+        }
+
+        @Test
+        void 처음_받기에_실패하면_요청이_없어도_곧_다시_받는다() {
+            response.set(Mono.error(new IllegalStateException("member 가 아직 안 떴다")));
+            cache.start();
+            assertThat(fetches).hasValue(1);
+            assertThat(cache.loadedOnce()).isFalse();
+
+            time.advanceTimeBy(JwkSetCache.STARTUP_RETRY_MIN.multipliedBy(2));
+            assertThat(fetches).as("주기(5분)를 기다리지 않는다").hasValueGreaterThanOrEqualTo(2);
+
+            response.set(Mono.just(keySet("k1")));
+            time.advanceTimeBy(LONGEST_RETRY);
+            assertThat(cache.loadedOnce()).isTrue();
+        }
+
+        @Test
+        void 계속_실패해도_다시_받는_간격은_최소_갱신_간격을_넘지_않는다() {
+            response.set(Mono.error(new IllegalStateException("member 장애")));
+            cache.start();
+            time.advanceTimeBy(Duration.ofMinutes(2));
+            int before = fetches.get();
+
+            time.advanceTimeBy(LONGEST_RETRY);
+            assertThat(fetches.get()).isGreaterThan(before);
+        }
+
+        @Test
+        void 받은_뒤에는_주기가_될_때까지_다시_받지_않는다() {
+            response.set(Mono.just(keySet("k1")));
+            cache.start();
+            assertThat(cache.loadedOnce()).isTrue();
+
+            time.advanceTimeBy(JwkSetCache.REFRESH_INTERVAL.minusSeconds(1));
+            assertThat(fetches).hasValue(1);
+            time.advanceTimeBy(Duration.ofSeconds(1));
+            assertThat(fetches).hasValue(2);
+        }
+
+        @Test
+        void 요청_경로가_먼저_받았으면_기동_재시도는_다시_받지_않고_주기로_넘어간다() {
+            response.set(Mono.error(new IllegalStateException("member 가 아직 안 떴다")));
+            cache.start();
+            response.set(Mono.just(keySet("k1")));
+            cache.refresh().block(Duration.ofSeconds(5));
+            int loaded = fetches.get();
+
+            time.advanceTimeBy(LONGEST_RETRY);
+            assertThat(fetches).hasValue(loaded);
+            time.advanceTimeBy(JwkSetCache.REFRESH_INTERVAL);
+            assertThat(fetches).hasValue(loaded + 1);
+        }
+
+        @Test
+        void 멈추면_기동_재시도도_끝난다() {
+            response.set(Mono.error(new IllegalStateException("member 장애")));
+            cache.start();
+            cache.stop();
+            int stopped = fetches.get();
+
+            time.advanceTimeBy(Duration.ofMinutes(10));
+            assertThat(fetches).hasValue(stopped);
+            assertThat(cache.isRunning()).isFalse();
+        }
     }
 
     @Test
