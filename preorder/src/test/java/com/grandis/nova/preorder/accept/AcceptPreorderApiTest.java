@@ -23,6 +23,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Map;
@@ -322,6 +323,25 @@ class AcceptPreorderApiTest {
                 .andExpect(jsonPath("$.error.code").value("ADMISSION_TICKET_STALE"));
         accept(customerId, product.productId(), product.optionId(), "key-stale-4",
                 AdmissionTickets.issue(product.productId(), customerId, laterWindow()))
+                .andExpect(status().isAccepted());
+    }
+
+    /** 수명이 설정(120초)보다 길어도 발급 시각 칸으로 가린다. 만료에서 거꾸로 세면 접수 뒤에 발급된 것으로 보여 통과한다. */
+    @Test
+    void 발급_시각을_실은_입장권은_수명과_상관없이_발급_시각으로_마지막_접수_전후를_가린다() throws Exception {
+        Duration longTtl = Duration.ofSeconds(4 * AdmissionTickets.TTL_SECONDS);
+        String ticket = AdmissionTickets.issueWithIssuedAt(product.productId(), customerId, Instant.now(), longTtl);
+        String first = body(accept(customerId, product.productId(), product.optionId(), "key-iat-1", ticket)
+                .andExpect(status().isAccepted()));
+        cancels.complete(preorderIdOf(first));
+        String sameAdmission = AdmissionTickets.issueWithIssuedAt(product.productId(), customerId,
+                Instant.now().minusSeconds(1), longTtl);
+
+        accept(customerId, product.productId(), product.optionId(), "key-iat-2", sameAdmission)
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("ADMISSION_TICKET_STALE"));
+        accept(customerId, product.productId(), product.optionId(), "key-iat-3",
+                AdmissionTickets.issueWithIssuedAt(product.productId(), customerId, laterWindow(), longTtl))
                 .andExpect(status().isAccepted());
     }
 
