@@ -22,6 +22,7 @@ import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.integration.order.Cancelability;
 import com.grandis.nova.preorder.integration.order.OrderClient;
 import com.grandis.nova.preorder.support.AcceptFixtures;
+import com.grandis.nova.preorder.support.FakeExternalMock;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
@@ -31,6 +32,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
@@ -42,6 +45,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.IntStream;
 
 /**
  * 결과 표는 이 시험만 쓰므로 시험마다 비운다. 대기 · 실행 중 표식이 DB 전체에서 하나라 다른 시험과 겹치면 안 된다.
@@ -73,8 +77,17 @@ class ReconciliationAdminApiTest {
     ShopFixtures fixtures;
     AcceptFixtures accepts;
 
+    /** 키로 Mock 취소가 부르는 가짜 Mock. 이 클래스만 주소를 덮는다 */
+    static final FakeExternalMock MOCK = FakeExternalMock.start();
+
+    @DynamicPropertySource
+    static void externalMock(DynamicPropertyRegistry registry) {
+        registry.add("external.mock.base-url", MOCK::url);
+    }
+
     @BeforeEach
     void setUp() {
+        MOCK.reset();
         fixtures = new ShopFixtures(jdbcTemplate);
         accepts = new AcceptFixtures(acceptService, fixtures, catalogClient);
         jdbcTemplate.update("DELETE FROM reconciliation_findings");
@@ -346,6 +359,169 @@ class ReconciliationAdminApiTest {
     }
 
     @Test
+    void 키로_Mock_취소는_활성_등록을_취소하고_예약은_그대로_둔다() throws Exception {
+        AcceptResult canceled = canceledPreorder();
+        String key = AcceptFixtures.tokenOf(canceled);
+        MOCK.active(key);
+        UUID findingId = finding(run("COMPLETED", null, TWO_HOURS_AGO), "CANCELED_BUT_MOCK_ACTIVE", key);
+
+        asAdmin(post(FINDINGS + "/{id}/external-cancel", findingId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.actionStatus").value("SUCCEEDED"))
+                .andExpect(jsonPath("$.data.actionType").value("EXTERNAL_CANCEL"))
+                .andExpect(jsonPath("$.data.actionRequestedBy").value("admin"))
+                .andExpect(jsonPath("$.data.actionNote").value("Mock 등록을 취소함"));
+
+        assertThat(MOCK.cancels()).singleElement().satisfies(sent -> {
+            assertThat(sent.get("externalKey").asString()).isEqualTo(key);
+            assertThat(sent.get("reason").asString()).isEqualTo("GHOST_COMPENSATION");
+        });
+        assertThat(preorderStatus(canceled)).isEqualTo("CANCELED");
+    }
+
+    @Test
+    void 이미_취소된_키면_보내지_않고_ALREADY_RESOLVED_다() throws Exception {
+        String key = AcceptFixtures.tokenOf(canceledPreorder());
+        MOCK.canceled(key);
+        UUID runId = run("COMPLETED", null, TWO_HOURS_AGO);
+        UUID active = finding(runId, "CANCELED_BUT_MOCK_ACTIVE", key);
+        UUID jobIncomplete = finding(runId, "CANCEL_JOB_INCOMPLETE", key);
+
+        asAdmin(post(FINDINGS + "/{id}/external-cancel", active))
+                .andExpect(jsonPath("$.data.actionStatus").value("ALREADY_RESOLVED"))
+                .andExpect(jsonPath("$.data.actionNote").value("Mock 은 이미 취소됨"));
+        asAdmin(post(FINDINGS + "/{id}/external-cancel", jobIncomplete))
+                .andExpect(jsonPath("$.data.actionStatus").value("ALREADY_RESOLVED"))
+                .andExpect(jsonPath("$.data.actionNote").value("Mock 은 이미 취소됨 — 취소 작업 기록은 수동 조사"));
+
+        assertThat(MOCK.cancels()).isEmpty();
+    }
+
+    @Test
+    void 취소_표식이_없으면_키로_취소해_표식을_남긴다() throws Exception {
+        String key = AcceptFixtures.tokenOf(canceledPreorder());
+        UUID findingId = finding(run("COMPLETED", null, TWO_HOURS_AGO), "CANCELED_WITHOUT_MOCK_MARKER", key);
+
+        asAdmin(post(FINDINGS + "/{id}/external-cancel", findingId))
+                .andExpect(jsonPath("$.data.actionStatus").value("SUCCEEDED"))
+                .andExpect(jsonPath("$.data.actionNote").value("Mock 에 취소 표식을 남김"));
+
+        assertThat(MOCK.state(key)).isEqualTo("CANCELED");
+    }
+
+    @Test
+    void Mock_에만_있는_키는_취소하고_Mock_에도_없으면_보내지_않는다() throws Exception {
+        UUID runId = run("COMPLETED", null, TWO_HOURS_AGO);
+        String stillActive = UUID.randomUUID().toString();
+        MOCK.active(stillActive);
+        UUID active = finding(runId, "MOCK_ONLY", stillActive);
+        UUID gone = finding(runId, "MOCK_ONLY", UUID.randomUUID().toString());
+
+        asAdmin(post(FINDINGS + "/{id}/external-cancel", active))
+                .andExpect(jsonPath("$.data.actionStatus").value("SUCCEEDED"));
+        asAdmin(post(FINDINGS + "/{id}/external-cancel", gone))
+                .andExpect(jsonPath("$.data.actionStatus").value("ALREADY_RESOLVED"))
+                .andExpect(jsonPath("$.data.actionNote").value("Mock 에도 그 키의 기록이 없음"));
+
+        assertThat(MOCK.cancels()).hasSize(1);
+    }
+
+    @Test
+    void be_예약이_살아_있으면_Mock_을_부르지_않고_409_다() throws Exception {
+        AcceptResult pending = accepts.accept(fixtures.customer());
+        String key = AcceptFixtures.tokenOf(pending);
+        MOCK.active(key);
+        UUID runId = run("COMPLETED", null, TWO_HOURS_AGO);
+        UUID canceledCode = finding(runId, "CANCELED_BUT_MOCK_ACTIVE", key);
+        UUID mockOnlyCode = finding(runId, "MOCK_ONLY", key);
+        UUID wrongCode = finding(runId, "STUCK", key);
+
+        for (UUID findingId : List.of(canceledCode, mockOnlyCode, wrongCode)) {
+            asAdmin(post(FINDINGS + "/{id}/external-cancel", findingId))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.error.code").value("RECONCILIATION_ACTION_NOT_ALLOWED"));
+            assertThat(actionStatus(findingId)).isEqualTo("NOT_STARTED");
+        }
+        assertThat(MOCK.lookups()).isZero();
+        assertThat(MOCK.cancels()).isEmpty();
+    }
+
+    @Test
+    void Mock_이_실패하면_FAILED_로_남고_다시_누를_수_있다() throws Exception {
+        String key = AcceptFixtures.tokenOf(canceledPreorder());
+        MOCK.active(key);
+        MOCK.cancelAnswers(503);
+        UUID findingId = finding(run("COMPLETED", null, TWO_HOURS_AGO), "CANCELED_BUT_MOCK_ACTIVE", key);
+
+        asAdmin(post(FINDINGS + "/{id}/external-cancel", findingId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.actionStatus").value("FAILED"))
+                .andExpect(jsonPath("$.data.actionNote").value("Mock 키로 취소 응답이 계약과 다름(HTTP 503)"));
+
+        MOCK.cancelAnswers(200);
+        asAdmin(post(FINDINGS + "/{id}/external-cancel", findingId))
+                .andExpect(jsonPath("$.data.actionStatus").value("SUCCEEDED"))
+                .andExpect(jsonPath("$.data.actionNote").value("Mock 등록을 취소함"));
+        asAdmin(post(FINDINGS + "/{id}/external-cancel", findingId))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("RECONCILIATION_ACTION_TAKEN"));
+    }
+
+    @Test
+    void 같은_건을_동시에_키로_Mock_취소해도_하나만_받아들이고_한_번만_보낸다() throws Exception {
+        String key = AcceptFixtures.tokenOf(canceledPreorder());
+        MOCK.active(key);
+        UUID findingId = finding(run("COMPLETED", null, TWO_HOURS_AGO), "CANCELED_BUT_MOCK_ACTIVE", key);
+
+        List<Outcome<Integer>> outcomes = Concurrently.run(2, i -> () ->
+                asAdmin(post(FINDINGS + "/{id}/external-cancel", findingId)).andReturn().getResponse().getStatus());
+
+        assertThat(outcomes).extracting(Outcome::value).containsExactlyInAnyOrder(200, 409);
+        assertThat(MOCK.cancels()).hasSize(1);
+    }
+
+    @Test
+    void 일괄_키로_Mock_취소는_건마다_처리하고_Mock_에만_있음은_받지_않는다() throws Exception {
+        String key = AcceptFixtures.tokenOf(canceledPreorder());
+        MOCK.active(key);
+        UUID runId = run("COMPLETED", null, TWO_HOURS_AGO);
+        UUID ok = finding(runId, "CANCELED_BUT_MOCK_ACTIVE", key);
+        UUID mockOnly = finding(runId, "MOCK_ONLY", UUID.randomUUID().toString());
+        UUID wrongCode = finding(runId, "STUCK", key);
+        UUID missing = UUID.randomUUID();
+
+        asAdmin(post(FINDINGS + "/external-cancel").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"findingIds\":[\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"]}".formatted(ok, mockOnly, wrongCode, ok,
+                        missing)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[*].findingId").value(contains(ok.toString(), mockOnly.toString(),
+                        wrongCode.toString(), missing.toString())))
+                .andExpect(jsonPath("$.data.items[0].finding.actionStatus").value("SUCCEEDED"))
+                .andExpect(jsonPath("$.data.items[0].errorCode").value(nullValue()))
+                .andExpect(jsonPath("$.data.items[1].finding").value(nullValue()))
+                .andExpect(jsonPath("$.data.items[1].errorCode").value("RECONCILIATION_ACTION_NOT_ALLOWED"))
+                .andExpect(jsonPath("$.data.items[2].errorCode").value("RECONCILIATION_ACTION_NOT_ALLOWED"))
+                .andExpect(jsonPath("$.data.items[3].errorCode").value("RECONCILIATION_FINDING_NOT_FOUND"));
+
+        assertThat(MOCK.cancels()).hasSize(1);
+        assertThat(actionStatus(mockOnly)).isEqualTo("NOT_STARTED");
+    }
+
+    @Test
+    void 일괄_키로_Mock_취소는_1건에서_100건까지다() throws Exception {
+        String tooMany = String.join(",", IntStream.range(0, 101)
+                .mapToObj(i -> "\"" + UUID.randomUUID() + "\"").toList());
+
+        asAdmin(post(FINDINGS + "/external-cancel").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"findingIds\":[" + tooMany + "]}"))
+                .andExpect(status().isBadRequest());
+        asAdmin(post(FINDINGS + "/external-cancel").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"findingIds\":[]}"))
+                .andExpect(status().isBadRequest());
+        assertThat(MOCK.lookups()).isZero();
+    }
+
+    @Test
     void 관리자_예약_취소_조치는_사유가_필요하고_코드에_맞아야_한다() throws Exception {
         AcceptResult accepted = accepts.accept(fixtures.customer());
         UUID runId = run("COMPLETED", null, TWO_HOURS_AGO);
@@ -395,6 +571,19 @@ class ReconciliationAdminApiTest {
                         """,
                 UuidBinary.toBytes(id), UuidBinary.toBytes(runId), checkCode, targetKey, targetKey);
         return id;
+    }
+
+    /** 취소까지 끝난 예약. 취소 흐름(order · worker 응답)을 거치지 않고 상태만 바꾼다 — 키로 Mock 취소는 상태만 본다 */
+    private AcceptResult canceledPreorder() {
+        AcceptResult accepted = accepts.accept(fixtures.customer());
+        jdbcTemplate.update("UPDATE preorders SET status = 'CANCELED' WHERE id = ?",
+                (Object) UuidBinary.toBytes(accepted.preorder().id()));
+        return accepted;
+    }
+
+    private String preorderStatus(AcceptResult accepted) {
+        return jdbcTemplate.queryForObject("SELECT status FROM preorders WHERE id = ?", String.class,
+                (Object) UuidBinary.toBytes(accepted.preorder().id()));
     }
 
     private String jobStatus(UUID jobId) {
