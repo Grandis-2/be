@@ -120,6 +120,20 @@ class InternalOptionApiTest {
                 .andExpect(jsonPath("$.data.items[1].imageUrl").value("https://img/silver-0.jpg"))
                 // 사진 없는 색상은 상품 썸네일
                 .andExpect(jsonPath("$.data.items[2].imageUrl").value("https://img/black-0.jpg"));
+
+        // 색상 축이 없는 상품은 기본 묶음의 첫 장(대표가 둘째 장이어도)
+        mockMvc.perform(post("/api/v1/admin/products").header("Idempotency-Key", "k-" + ShopFixtures.unique())
+                        .contentType(MediaType.APPLICATION_JSON).with(user("admin").roles("ADMIN")).content("""
+                        { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Cable", "brand": "LG", "modelName": "LG-C9", "visible": true, "basePrice": 1000,
+                          "combinations": [ { "selections": {}, "stock": 1 } ],
+                          "images": { "gallery": [ { "items": [ { "url": "https://img/cable-0.jpg" }, { "url": "https://img/cable-1.jpg", "primary": true } ] } ] } }
+                        """.formatted(fixtures.category())))
+                .andExpect(status().isCreated());
+        UUID cableOption = jdbcTemplate.queryForObject("""
+                SELECT BIN_TO_UUID(o.id) FROM product_options o JOIN products p ON p.id = o.product_id WHERE p.model_name = 'LG-C9'
+                 ORDER BY p.created_at DESC LIMIT 1""", UUID.class);
+        asUser(List.of(cableOption)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].imageUrl").value("https://img/cable-0.jpg"));
     }
 
     @Test
