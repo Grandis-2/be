@@ -276,13 +276,20 @@ class JwkSetCacheTest {
 
         @Test
         void 계속_실패해도_다시_받는_간격은_최소_갱신_간격을_넘지_않는다() {
-            response.set(Mono.error(new IllegalStateException("member 장애")));
+            List<Long> attemptedAt = new ArrayList<>();
+            response.set(Mono.defer(() -> {
+                attemptedAt.add(time.now(TimeUnit.MILLISECONDS));
+                return Mono.error(new IllegalStateException("member 장애"));
+            }));
             cache.start();
             time.advanceTimeBy(Duration.ofMinutes(2));
-            int before = fetches.get();
 
-            time.advanceTimeBy(LONGEST_RETRY);
-            assertThat(fetches.get()).isGreaterThan(before);
+            List<Long> gaps = new ArrayList<>();
+            for (int i = 1; i < attemptedAt.size(); i++) {
+                gaps.add(attemptedAt.get(i) - attemptedAt.get(i - 1));
+            }
+            assertThat(gaps).as("2분이면 간격이 상한까지 늘어난 뒤다").hasSizeGreaterThan(10)
+                    .allSatisfy(gap -> assertThat(gap).isLessThanOrEqualTo(JwkSetCache.MIN_INTERVAL.toMillis()));
         }
 
         @Test
