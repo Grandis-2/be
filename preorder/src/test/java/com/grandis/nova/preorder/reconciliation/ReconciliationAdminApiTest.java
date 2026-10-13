@@ -327,6 +327,24 @@ class ReconciliationAdminApiTest {
                 .containsEntry("reason", "외부에서 취소됨");
     }
 
+    /** 취소는 잠그지 않고 먼저 하므로 둘 다 취소까지 갈 수 있다. 조치를 남기는 조건부 갱신이 뒤의 것을 409 로 돌린다. */
+    @Test
+    void 같은_건을_동시에_관리자_취소해도_하나만_받아들이고_취소_이력은_한_번이다() throws Exception {
+        AcceptResult accepted = accepts.accept(fixtures.customer());
+        given(orderClient.getCancelability(accepted.preorder().id()))
+                .willReturn(ApiResponse.ok(new Cancelability(null, true, null)));
+        UUID findingId = finding(run("COMPLETED", null, TWO_HOURS_AGO), "PENDING_BUT_MOCK_CANCEL_MARKER",
+                AcceptFixtures.tokenOf(accepted));
+
+        List<Outcome<Integer>> outcomes = Concurrently.run(2, i -> () ->
+                asAdmin(post(FINDINGS + "/{id}/cancel", findingId).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"외부에서 취소됨\"}")).andReturn().getResponse().getStatus());
+
+        assertThat(outcomes).extracting(Outcome::value).containsExactlyInAnyOrder(202, 409);
+        assertThat(count("SELECT COUNT(*) FROM preorder_events WHERE preorder_id = ? AND to_status = 'CANCELING'",
+                UuidBinary.toBytes(accepted.preorder().id()))).isEqualTo(1);
+    }
+
     @Test
     void 관리자_예약_취소_조치는_사유가_필요하고_코드에_맞아야_한다() throws Exception {
         AcceptResult accepted = accepts.accept(fixtures.customer());
