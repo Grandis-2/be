@@ -84,6 +84,22 @@ class AdminReconciliationController {
                 reconciliationAdminService.cancel(findingId, request.reason(), admin.getName())));
     }
 
+    @Operation(summary = "불일치 조치 — 키로 Mock 취소(be 예약은 그대로). be 가 취소 완료이거나 예약이 없을 때만. "
+            + "결과를 바로 준다: SUCCEEDED · ALREADY_RESOLVED(이미 취소돼 보내지 않음) · FAILED(다시 누를 수 있다)")
+    @PostMapping("/findings/{findingId}/external-cancel")
+    public ApiResponse<FindingResponse> externalCancel(@PathVariable UUID findingId, Authentication admin) {
+        return ApiResponse.ok(FindingResponse.from(reconciliationAdminService.externalCancel(findingId, admin.getName())));
+    }
+
+    @Operation(summary = "불일치 조치 — 키로 Mock 취소 일괄(최대 100건). be 가 취소 완료인 건만 받고(Mock 에만 있음은 한 건씩), "
+            + "건마다 따로 처리해 건별 결과를 준다")
+    @PostMapping("/findings/external-cancel")
+    public ApiResponse<ExternalCancelBatchResponse> externalCancelAll(
+            @Valid @RequestBody ExternalCancelBatchRequest request, Authentication admin) {
+        return ApiResponse.ok(ExternalCancelBatchResponse.from(
+                reconciliationAdminService.externalCancelAll(request.findingIds(), admin.getName())));
+    }
+
     private static <T> ResponseEntity<ApiResponse<T>> accepted(T body) {
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResponse.ok(body));
     }

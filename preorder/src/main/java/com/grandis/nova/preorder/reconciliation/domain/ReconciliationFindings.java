@@ -86,6 +86,44 @@ public class ReconciliationFindings {
                 actionType.name(), requestedBy, at, at, UuidBinary.toBytes(findingId));
     }
 
+    /**
+     * 키로 Mock 취소를 시작한 건을 REQUESTED 로 남긴다. 아직 조치하지 않은 건과, 앞선 키로 Mock 취소가 실패한(FAILED) 건만 바꾼다 —
+     * 실패는 대개 연결 문제라 다시 누를 수 있다. 앞 실패 메모는 지운다.
+     *
+     * @return 바뀐 행 수. 0 이면 그 사이 다른 조치가 먼저 들어왔다
+     */
+    public int markExternalCancelRequested(UUID findingId, String requestedBy, Instant now) {
+        LocalDateTime at = utc(now);
+        return jdbcTemplate.update("""
+                        UPDATE reconciliation_findings
+                           SET action_status = 'REQUESTED', action_type = 'EXTERNAL_CANCEL', action_requested_by = ?,
+                               action_requested_at = ?, action_note = NULL, updated_at = ?
+                         WHERE id = ?
+                           AND (action_status = 'NOT_STARTED'
+                                OR (action_status = 'FAILED' AND action_type = 'EXTERNAL_CANCEL'))
+                        """,
+                requestedBy, at, at, UuidBinary.toBytes(findingId));
+    }
+
+    /**
+     * 키로 Mock 취소의 결과를 남긴다(SUCCEEDED · ALREADY_RESOLVED · FAILED). 그 조치로 REQUESTED 인 건만 바꾼다.
+     *
+     * @param note 관리자에게 보일 메모. FAILED 면 필수(DB CHECK)
+     * @return 바뀐 행 수
+     */
+    public int finishExternalCancel(UUID findingId, ActionStatus result, String note, Instant now) {
+        return jdbcTemplate.update("""
+                        UPDATE reconciliation_findings
+                           SET action_status = ?, action_note = ?, updated_at = ?
+                         WHERE id = ? AND action_status = 'REQUESTED' AND action_type = 'EXTERNAL_CANCEL'
+                        """,
+                result.name(), note, utc(now), UuidBinary.toBytes(findingId));
+    }
+
+    private static LocalDateTime utc(Instant instant) {
+        return LocalDateTime.ofInstant(instant.truncatedTo(ChronoUnit.MICROS), ZoneOffset.UTC);
+    }
+
     /** run 에만 있고 other 에는 없는 (코드, 대상) */
     public List<FindingKey> findOnlyIn(UUID runId, UUID otherRunId) {
         return compare(runId, otherRunId, "NOT EXISTS");

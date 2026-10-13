@@ -5,7 +5,11 @@ import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.cancel.AdminCancelService;
+import com.grandis.nova.preorder.integration.mock.ExternalMock;
+import com.grandis.nova.preorder.integration.mock.ExternalMockUnavailable;
+import com.grandis.nova.preorder.integration.mock.MockKeyState;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
+import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.reconciliation.domain.ActionStatus;
 import com.grandis.nova.preorder.reconciliation.domain.ActionType;
@@ -25,8 +29,13 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -38,6 +47,12 @@ public class ReconciliationAdminService {
 
     /** 대기 · 실행 중 표식의 UNIQUE. 이것에 걸린 넣기만 409 로 바꾼다 */
     static final String ACTIVE_RUN_CONSTRAINT = "uq_reconciliation_run_active";
+    /** Mock 에 활성인데 be 에 그 키의 예약이 없음 — 키로 Mock 취소는 그 키의 예약이 없을 때만, 한 건씩 */
+    static final String MOCK_ONLY = "MOCK_ONLY";
+    /** 취소 완료인데 취소 작업이 성공이 아님 — Mock 이 이미 취소됐어도 be 의 작업 기록은 남는다 */
+    static final String CANCEL_JOB_INCOMPLETE = "CANCEL_JOB_INCOMPLETE";
+    /** 일괄 키로 Mock 취소 한 번의 상한. 건마다 Mock 을 차례로 부르므로 요청 하나가 끝없이 길어지지 않게 한다 */
+    public static final int MAX_EXTERNAL_CANCEL_BATCH = 100;
 
     private final ReconciliationRunRequestRepository runRequests;
     private final ReconciliationRuns runs;
@@ -46,15 +61,19 @@ public class ReconciliationAdminService {
     private final Preorders preorders;
     private final SyncJobReprocessing reprocessing;
     private final AdminCancelService adminCancel;
+    private final ExternalMock externalMock;
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
     private final Duration intakeRushWindow;
+    private final Duration externalCancelBatchDeadline;
 
     ReconciliationAdminService(ReconciliationRunRequestRepository runRequests, ReconciliationRuns runs,
                                ReconciliationFindings findings, Campaigns campaigns, Preorders preorders,
                                SyncJobReprocessing reprocessing, AdminCancelService adminCancel,
-                               TransactionTemplate transactionTemplate, Clock clock,
-                               @Value("${nova.reconciliation.intake-rush-window:1h}") Duration intakeRushWindow) {
+                               ExternalMock externalMock, TransactionTemplate transactionTemplate, Clock clock,
+                               @Value("${nova.reconciliation.intake-rush-window:1h}") Duration intakeRushWindow,
+                               @Value("${nova.reconciliation.external-cancel-batch-deadline:20s}")
+                               Duration externalCancelBatchDeadline) {
         this.runRequests = runRequests;
         this.runs = runs;
         this.findings = findings;
@@ -62,9 +81,11 @@ public class ReconciliationAdminService {
         this.preorders = preorders;
         this.reprocessing = reprocessing;
         this.adminCancel = adminCancel;
+        this.externalMock = externalMock;
         this.transactionTemplate = transactionTemplate;
         this.clock = clock;
         this.intakeRushWindow = intakeRushWindow;
+        this.externalCancelBatchDeadline = externalCancelBatchDeadline;
     }
 
     /**
@@ -177,6 +198,116 @@ public class ReconciliationAdminService {
         });
     }
 
+    /**
+     * 그 건의 외부 키로 Mock 을 취소한다. be 예약은 건드리지 않는다. 결과를 바로 알아 그 건을 SUCCEEDED · ALREADY_RESOLVED · FAILED 로
+     * 끝낸다. 보내기 직전 키로 다시 보고 이미 취소됐으면 보내지 않는다.
+     *
+     * 먼저 REQUESTED 로 표시해 같은 건의 동시 요청은 뒤의 것이 "이미 조치함" 으로 끝나고, Mock 은 트랜잭션 밖에서 부른다.
+     * Mock 을 부르는 사이 서버가 죽으면 그 건은 REQUESTED 로 남는다 — 다음 검사에서 사라지면 끝난 것이다.
+     *
+     * @throws BusinessException RECONCILIATION_FINDING_NOT_FOUND · RECONCILIATION_ACTION_NOT_ALLOWED(코드가 맞지 않거나 be 예약이
+     *                           살아 있음) · RECONCILIATION_ACTION_TAKEN
+     */
+    public FindingRow externalCancel(UUID findingId, String requestedBy) {
+        FindingRow finding = findings.find(findingId)
+                .orElseThrow(() -> new BusinessException(PreorderErrorCode.RECONCILIATION_FINDING_NOT_FOUND));
+        requireExternalCancelable(finding);
+        requireNoLivePreorder(finding);
+        Integer marked = transactionTemplate.execute(status ->
+                findings.markExternalCancelRequested(findingId, requestedBy, clock.instant()));
+        if (marked == null || marked != 1) {
+            throw actionTaken(findings.find(findingId).orElseThrow());
+        }
+        ExternalCancelResult result = cancelAtMock(finding);
+        return transactionTemplate.execute(status -> {
+            if (findings.finishExternalCancel(findingId, result.status(), result.note(), clock.instant()) != 1) {
+                throw new IllegalStateException("REQUESTED 로 표시한 불일치 건의 조치 상태가 바뀌었다: findingId=" + findingId);
+            }
+            return findings.find(findingId).orElseThrow();
+        });
+    }
+
+    /**
+     * 여러 건을 차례로 키로 Mock 취소한다. be 예약이 취소 완료인 건만 받는다 — Mock 에만 있음은 be 기록이 사라진 경우일 수 있어
+     * 한 건씩 확인하고 누른다. 건마다 따로 확인 · 처리하고, 일부가 거절 · 실패해도 나머지는 계속한다.
+     * 관리자 요청 스레드가 Mock 을 차례로 기다리므로 마감 시간(기본 20초)을 둔다 — 마감이 지나면 남은 건은 시작하지 않고
+     * RECONCILIATION_BATCH_DEADLINE 으로 돌려준다(조치 칸은 그대로라 다시 요청하면 된다). 응답이 로드밸런서 제한 시간 안에 나가게 한다.
+     *
+     * @param findingIds 1 ~ {@value #MAX_EXTERNAL_CANCEL_BATCH}건. 같은 건을 두 번 넣으면 한 번만 처리한다
+     * @return 넣은 순서대로 건별 결과
+     */
+    public List<ExternalCancelOutcome> externalCancelAll(List<UUID> findingIds, String requestedBy) {
+        List<ExternalCancelOutcome> outcomes = new ArrayList<>();
+        Instant deadline = clock.instant().plus(externalCancelBatchDeadline);
+        for (UUID findingId : new LinkedHashSet<>(findingIds)) {
+            if (!clock.instant().isBefore(deadline)) {
+                outcomes.add(ExternalCancelOutcome.rejected(findingId, PreorderErrorCode.RECONCILIATION_BATCH_DEADLINE.name(),
+                        PreorderErrorCode.RECONCILIATION_BATCH_DEADLINE.defaultMessage()));
+                continue;
+            }
+            try {
+                FindingRow finding = findings.find(findingId)
+                        .orElseThrow(() -> new BusinessException(PreorderErrorCode.RECONCILIATION_FINDING_NOT_FOUND));
+                if (MOCK_ONLY.equals(finding.checkCode())) {
+                    throw new BusinessException(PreorderErrorCode.RECONCILIATION_ACTION_NOT_ALLOWED,
+                            Map.of("reason", "checkCode=MOCK_ONLY 는 한 건씩 조치한다"));
+                }
+                outcomes.add(ExternalCancelOutcome.done(externalCancel(findingId, requestedBy)));
+            } catch (BusinessException e) {
+                outcomes.add(ExternalCancelOutcome.rejected(findingId, e.errorCode().name(), e.getMessage()));
+            }
+        }
+        return outcomes;
+    }
+
+    private ExternalCancelResult cancelAtMock(FindingRow finding) {
+        String key = finding.targetKey();
+        try {
+            MockKeyState state = externalMock.lookup(key);
+            if (state == MockKeyState.CANCELED) {
+                return new ExternalCancelResult(ActionStatus.ALREADY_RESOLVED,
+                        CANCEL_JOB_INCOMPLETE.equals(finding.checkCode())
+                                ? "Mock 은 이미 취소됨 — 취소 작업 기록은 수동 조사"
+                                : "Mock 은 이미 취소됨");
+            }
+            if (state == MockKeyState.ABSENT && MOCK_ONLY.equals(finding.checkCode())) {
+                return new ExternalCancelResult(ActionStatus.ALREADY_RESOLVED, "Mock 에도 그 키의 기록이 없음");
+            }
+            externalMock.cancel(key, ExternalMock.GHOST_COMPENSATION);
+            return new ExternalCancelResult(ActionStatus.SUCCEEDED,
+                    state == MockKeyState.ACTIVE ? "Mock 등록을 취소함" : "Mock 에 취소 표식을 남김");
+        } catch (ExternalMockUnavailable e) {
+            return new ExternalCancelResult(ActionStatus.FAILED, e.getMessage());
+        }
+    }
+
+    /** 코드가 맞고, 아직 조치하지 않았거나 앞선 키로 Mock 취소가 실패한 건 */
+    private static void requireExternalCancelable(FindingRow finding) {
+        if (!ActionType.EXTERNAL_CANCEL.allows(finding.checkCode())) {
+            throw new BusinessException(PreorderErrorCode.RECONCILIATION_ACTION_NOT_ALLOWED,
+                    Map.of("reason", "checkCode=" + finding.checkCode() + ", action=" + ActionType.EXTERNAL_CANCEL));
+        }
+        boolean retry = finding.actionStatus() == ActionStatus.FAILED && finding.actionType() == ActionType.EXTERNAL_CANCEL;
+        if (finding.actionStatus() != ActionStatus.NOT_STARTED && !retry) {
+            throw actionTaken(finding);
+        }
+    }
+
+    /**
+     * Mock 만 고치는 조치라 be 예약이 살아 있으면 하지 않는다 — 살아 있는 예약의 Mock 을 지우면 같은 키로 다시 등록할 수 없다(409).
+     * Mock 에만 있음은 그 키의 예약이 없어야 하고, 나머지는 예약이 취소 완료여야 한다.
+     */
+    private void requireNoLivePreorder(FindingRow finding) {
+        Optional<PreorderStatus> status = preorders.findByToken(finding.targetKey()).map(PreorderSnapshot::status);
+        boolean allowed = MOCK_ONLY.equals(finding.checkCode())
+                ? status.isEmpty()
+                : status.filter(s -> s == PreorderStatus.CANCELED).isPresent();
+        if (!allowed) {
+            throw new BusinessException(PreorderErrorCode.RECONCILIATION_ACTION_NOT_ALLOWED,
+                    Map.of("reason", "preorderStatus=" + status.map(Enum::name).orElse("없음")));
+        }
+    }
+
     private RunRow requireRun(UUID runId) {
         return runs.find(runId)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.RECONCILIATION_RUN_NOT_FOUND));
@@ -195,5 +326,9 @@ public class ReconciliationAdminService {
     private static BusinessException actionTaken(FindingRow finding) {
         return new BusinessException(PreorderErrorCode.RECONCILIATION_ACTION_TAKEN,
                 Map.of("reason", "actionStatus=" + finding.actionStatus() + ", actionType=" + finding.actionType()));
+    }
+
+    /** @param note 조치 메모 — 관리자 화면에 그대로 나간다 */
+    private record ExternalCancelResult(ActionStatus status, String note) {
     }
 }

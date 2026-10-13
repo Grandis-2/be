@@ -39,6 +39,8 @@ public enum PreorderErrorCode implements ErrorCode {
     RECONCILIATION_NOT_COMPARABLE(409, "비교할 수 없는 실행입니다."),
     RECONCILIATION_ACTION_NOT_ALLOWED(409, "이 불일치에는 할 수 없는 조치입니다."),
     RECONCILIATION_ACTION_TAKEN(409, "이미 조치한 불일치입니다."),
+    /** 일괄 키로 Mock 취소의 마감 시간이 지나 그 건은 시작하지 않았다(건별 결과로만 나간다) */
+    RECONCILIATION_BATCH_DEADLINE(409, "일괄 처리 시간을 넘겨 처리하지 않았습니다. 다시 요청해 주세요."),
     KEY_PAYLOAD_MISMATCH(422, "이전 요청과 내용이 다릅니다. 새 신청으로 다시 시도해 주세요.");
 
     private final int status;
