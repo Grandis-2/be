@@ -25,6 +25,7 @@ import java.util.UUID;
  * 바꾸는 일은 {@link PreorderCampaignWriter} 가 회차 행을 잠근 채 한다.
  *
  * 오픈 뒤에는 일정도 차수도 바꾸지 않는다(ERD 결정 29 · 30) — 이미 배정된 순번의 뜻이 달라진다.
+ * 접수를 지금 멈추는 조기 마감만 예외다 — 마감을 앞당길 뿐이라 배정된 순번은 그대로다.
  */
 @Service
 public class PreorderCampaignAdminService {
@@ -65,6 +66,16 @@ public class PreorderCampaignAdminService {
             }
             return writer.upsert(productId, opensAt, closesAt, visible);
         }
+    }
+
+    /**
+     * 접수 중인 회차를 지금 마감한다(이미 마감이면 그대로). 기존 예약은 건드리지 않는다 — 예약까지 취소하는 것은 회차 취소다.
+     *
+     * @param closedBy 마감한 관리자. 회차에는 이력이 없어 로그에만 남긴다
+     * @throws BusinessException PRODUCT_NOT_FOUND — 회차가 없다, SALE_NOT_OPEN — 아직 오픈 전이다
+     */
+    public PreorderCampaign closeCampaign(UUID productId, String closedBy) {
+        return writer.closeEarly(productId, closedBy);
     }
 
     @Transactional(readOnly = true)

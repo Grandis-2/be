@@ -8,6 +8,8 @@ import com.grandis.nova.preorder.campaign.domain.ShipmentBatch;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatchPlan;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatchRepository;
 import com.grandis.nova.preorder.web.ValidationFailures;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,6 +27,8 @@ import java.util.UUID;
  */
 @Component
 class PreorderCampaignWriter {
+
+    private static final Logger log = LoggerFactory.getLogger(PreorderCampaignWriter.class);
 
     /** catalog 이벤트를 받기 전 번호. catalog 의 첫 번호(1)부터 이긴다. */
     private static final long NO_VISIBILITY_VERSION = 0;
@@ -73,6 +77,25 @@ class PreorderCampaignWriter {
         batches.deleteByProductId(productId);
         batches.flush();
         return batches.saveAll(plan.toBatches(productId));
+    }
+
+    /**
+     * 접수 중인 회차를 지금 마감한다. 기존 예약은 그대로이고 새 접수만 막힌다 — 접수도 이 행을 잠그므로 마감 뒤의 접수는 거절된다.
+     * 이미 마감이면 그대로 돌려준다(이벤트 없음). 오픈 뒤에는 일정을 바꿀 수 없어 다시 열 수 없다.
+     */
+    @Transactional
+    PreorderCampaign closeEarly(UUID productId, String closedBy) {
+        PreorderCampaign campaign = campaigns.findForUpdate(productId)
+                .orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND));
+        Instant now = clock.instant();
+        if (!campaign.isOpened(now)) {
+            throw new BusinessException(PreorderErrorCode.SALE_NOT_OPEN);
+        }
+        if (campaign.closeNow(now)) {
+            changePublisher.publish(campaign, CampaignChange.CLOSED);
+            log.info("접수 조기 마감 productId={} closedBy={} closesAt={}", productId, closedBy, now);
+        }
+        return campaign;
     }
 
     private PreorderCampaign reschedule(PreorderCampaign campaign, Instant opensAt, Instant closesAt) {
