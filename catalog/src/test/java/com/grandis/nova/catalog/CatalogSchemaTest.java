@@ -84,6 +84,20 @@ class CatalogSchemaTest {
             jdbcTemplate.update("UPDATE categories SET sort_order = 0 WHERE id = ?", UuidBinary.toBytes(id));   // 대조군 — 경계는 들어간다
             assertThat(columnExists("categories", "code")).isFalse();
         }
+
+        @Test
+        @DisplayName("기본 옵션 축은 넣지 않으면 [], 배열이 아닌 값 · NULL 은 거절한다")
+        void optionAxesDefaultsToEmptyArray() {
+            UUID id = fixtures.category();
+            assertThat(jdbcTemplate.queryForObject("SELECT CAST(option_axes AS CHAR) FROM categories WHERE id = ?", String.class, UuidBinary.toBytes(id)))
+                    .isEqualTo("[]");
+            assertThatThrownBy(() -> jdbcTemplate.update("UPDATE categories SET option_axes = JSON_OBJECT('key', 'color') WHERE id = ?", UuidBinary.toBytes(id)))
+                    .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_category_option_axes");
+            assertThatThrownBy(() -> jdbcTemplate.update("UPDATE categories SET option_axes = NULL WHERE id = ?", UuidBinary.toBytes(id)))
+                    .isInstanceOf(DataAccessException.class);
+            // 대조군 — 배열은 들어간다
+            jdbcTemplate.update("UPDATE categories SET option_axes = JSON_ARRAY(JSON_OBJECT('key', 'color', 'label', '색상')) WHERE id = ?", UuidBinary.toBytes(id));
+        }
     }
 
     @Nested

@@ -4,7 +4,11 @@ import com.grandis.nova.common.BaseEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+import tools.jackson.databind.json.JsonMapper;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -17,6 +21,8 @@ import java.util.UUID;
 @Table(name = "categories")
 public class Category extends BaseEntity {
 
+    private static final JsonMapper JSON = JsonMapper.builder().build();
+
     /** 상위 카테고리. null 이면 상위다. */
     private UUID parentId;
 
@@ -26,6 +32,11 @@ public class Category extends BaseEntity {
     /** 표시 순서. 작을수록 앞. 같으면 생성 순(created_at, 같으면 id)이다. */
     @Column(nullable = false)
     private int sortOrder;
+
+    /** 기본 옵션 축 — [{"key", "label"}] 배열(DB CHECK 가 배열만 받는다). 행 · 값은 운영 init.sql 이 넣는다. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(nullable = false)
+    private String optionAxes;
 
     protected Category() {
     }
@@ -44,5 +55,9 @@ public class Category extends BaseEntity {
 
     public int getSortOrder() {
         return sortOrder;
+    }
+
+    public List<CategoryNode.OptionAxis> getOptionAxes() {
+        return List.of(JSON.readValue(optionAxes, CategoryNode.OptionAxis[].class));
     }
 }

@@ -16,9 +16,9 @@ import java.util.UUID;
 /**
  * 카테고리 전체를 트리로 읽는다. 행이 열 개 남짓이라 한 번에 읽어 메모리에서 잇는다.
  *
- * 관리자 CRUD 가 없으므로 행은 마이그레이션 시드가 넣는다. FK 는 "상위가 존재한다" 만 지키고 깊이 3 이상 · 순환(자기 참조 포함)은
+ * 관리자 CRUD 가 없으므로 행(기본 옵션 축 포함)은 운영 init.sql 이 넣는다 — 마이그레이션은 칸만 만든다. FK 는 "상위가 존재한다" 만 지키고 깊이 3 이상 · 순환(자기 참조 포함)은
  * 못 막는다(실측). 그런 행은 여기서 오류 없이 응답에서 빠진다 — 그 카테고리에 배정된 상품도 트리로는 닿지 않는다.
- * 그래서 막을 자리는 읽는 쪽이 아니라 시드다(시드 뒤 깊이 ≤ 2 · 순환 없음을 SQL 로 검증). 빠지는 행은 경고 로그로 남긴다.
+ * 그래서 막을 자리는 읽는 쪽이 아니라 행을 넣는 쪽이다(넣은 뒤 깊이 ≤ 2 · 순환 없음을 SQL 로 검증). 빠지는 행은 경고 로그로 남긴다.
  */
 @Service
 public class CategoryTreeService {
@@ -67,6 +67,6 @@ public class CategoryTreeService {
     }
 
     private static CategoryNode toNode(Category category, List<CategoryNode> children) {
-        return new CategoryNode(category.getId(), category.getName(), category.getParentId(), children);
+        return new CategoryNode(category.getId(), category.getName(), category.getParentId(), category.getOptionAxes(), children);
     }
 }
