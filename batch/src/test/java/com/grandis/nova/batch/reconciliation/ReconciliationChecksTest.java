@@ -26,7 +26,9 @@ class ReconciliationChecksTest extends BatchIntegrationTest {
     @Test
     void 정상_데이터는_불일치가_없다() {
         mockActive(data.preorder("폰", "n-1", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO), "폰");
-        mockActive(data.preorder("폰", "n-2", "RESERVED", "SUCCEEDED", TWO_HOURS_AGO), "폰");
+        BePreorderRow reserved = data.preorder("폰", "n-2", "RESERVED", "SUCCEEDED", TWO_HOURS_AGO);
+        mockActive(reserved, "폰");
+        data.paidOrder(reserved, "SUCCEEDED", TWO_HOURS_AGO);
         // 결제 가능에서 취소 — Mock 은 번호 있는 취소
         BePreorderRow canceled = data.preorder("폰", "n-3", "CANCELED", "SUCCEEDED", TWO_HOURS_AGO);
         data.cancelJob(canceled, "SUCCEEDED", TWO_HOURS_AGO);
@@ -46,6 +48,14 @@ class ReconciliationChecksTest extends BatchIntegrationTest {
         data.attempt(retried, "TRANSIENT_FAILURE", TWO_HOURS_AGO);
         data.attempt(retried, "SUCCESS", TWO_HOURS_AGO);
         mockActive(retried, "시계");
+        // 막 결제한 결제 가능 — 결제 확인 이벤트가 오는 중일 수 있어 기준 시각 뒤 결제는 보지 않는다
+        BePreorderRow justPaid = data.preorder("시계", "n-8", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO);
+        mockActive(justPaid, "시계");
+        data.paidOrder(justPaid, "SUCCEEDED", JUST_NOW);
+        // 환불된 결제는 결제 성공이 아니다
+        BePreorderRow refunded = data.preorder("시계", "n-9", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO);
+        mockActive(refunded, "시계");
+        data.paidOrder(refunded, "REFUNDED", TWO_HOURS_AGO);
 
         service.runScheduled();
 
@@ -110,6 +120,9 @@ class ReconciliationChecksTest extends BatchIntegrationTest {
         mockActive(moved, "빈틈");
         jdbc.sql("UPDATE preorders SET queue_position = 5 WHERE id = UUID_TO_BIN(:id)")
                 .param("id", moved.id().toString()).update();
+        BePreorderRow paidButRegistered = data.preorder("폰", "c-6", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO);
+        mockActive(paidButRegistered, "폰");
+        data.paidOrder(paidButRegistered, "SUCCEEDED", TWO_HOURS_AGO);
 
         service.runScheduled();
 
@@ -137,7 +150,8 @@ class ReconciliationChecksTest extends BatchIntegrationTest {
                 tuple("STUCK", "c-2"),
                 tuple("OUTBOX_MISSING", "c-3"),
                 tuple("STUCK", "c-3"),
-                tuple("QUEUE_GAP", data.product("빈틈").toString()));
+                tuple("QUEUE_GAP", data.product("빈틈").toString()),
+                tuple("PAID_BUT_REGISTERED", "c-6"));
     }
 
     @Test
@@ -150,6 +164,9 @@ class ReconciliationChecksTest extends BatchIntegrationTest {
         data.registerJobReady(watch, 1, TWO_HOURS_AGO, null);
         data.attempt(watch, null, TWO_HOURS_AGO);
         data.preorder("시계", "w-2", "PENDING_SYNC", "PENDING", TWO_HOURS_AGO);
+        BePreorderRow watchPaid = data.preorder("시계", "w-3", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO);
+        mockActive(watchPaid, "시계");
+        data.paidOrder(watchPaid, "SUCCEEDED", TWO_HOURS_AGO);
         jdbc.sql("UPDATE preorders SET queue_position = 9 WHERE preorder_token = 'w-1'").update();
         jdbc.sql("""
                         INSERT INTO reconciliation_runs (id, requested_by, product_id, status, created_at, updated_at)
