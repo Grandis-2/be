@@ -123,11 +123,13 @@ public class Preorders {
                 .toList();
     }
 
-    /** 회원의 진행 중인 예약(최신순) 최대 limit 건. 상품마다 많아야 한 건이다. */
-    public List<PreorderSnapshot> findActiveForCustomer(UUID customerId, int limit) {
+    /** 회원의 진행 중인 예약(최신순)을 커서 자리 다음부터 최대 limit 건. 상품마다 많아야 한 건이다. */
+    public List<PreorderSnapshot> findActiveForCustomer(UUID customerId, Instant afterCreatedAt, UUID afterId,
+                                                        int limit) {
         Specification<Preorder> specification = PreorderSpecifications.allOf(
                 PreorderSpecifications.customer(Objects.requireNonNull(customerId)),
-                PreorderSpecifications.active());
+                PreorderSpecifications.active(),
+                PreorderSpecifications.after(afterCreatedAt, afterId));
         return preorders.findBy(specification, query -> query.sortBy(NEWEST_FIRST).limit(limit).all()).stream()
                 .map(Preorder::toSnapshot)
                 .toList();

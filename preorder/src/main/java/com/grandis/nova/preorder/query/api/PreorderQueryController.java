@@ -44,13 +44,13 @@ class PreorderQueryController {
                 .map(PreorderSummaryResponse::from));
     }
 
-    @Operation(summary = "내 진행 중인 예약 전부(상품마다 많아야 한 건)",
-            description = "상품 목록에서 예약 여부 · 단계를 보이는 데 쓴다. 취소가 끝난 예약은 나오지 않는다.")
+    @Operation(summary = "내 진행 중인 예약(상품마다 많아야 한 건)",
+            description = "상품 목록에서 예약 여부 · 단계를 보이는 데 쓴다. 취소가 끝난 예약은 나오지 않는다. "
+                    + "보통 한 번에 다 오고, nextCursor 가 있으면 그 값으로 이어 읽는다.")
     @GetMapping("/active")
-    public ApiResponse<Items<ActivePreorderResponse>> active(@CurrentCustomerId UUID customerId) {
-        return ApiResponse.ok(new Items<>(queryService.findMyActive(customerId).stream()
-                .map(ActivePreorderResponse::from)
-                .toList()));
+    public ApiResponse<CursorPage<ActivePreorderResponse>> active(@CurrentCustomerId UUID customerId,
+                                                                  @RequestParam(required = false) String cursor) {
+        return ApiResponse.ok(queryService.findMyActive(customerId, cursor).map(ActivePreorderResponse::from));
     }
 
     @Operation(summary = "예약 상세(본인 · 관리자)")
