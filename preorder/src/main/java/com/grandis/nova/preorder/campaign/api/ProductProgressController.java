@@ -25,7 +25,7 @@ class ProductProgressController {
     }
 
     @Operation(summary = "접수 현황 공개 조회(로그인 없이) — 접수 상태 · 지금 신청하면 배정될 배송 차수",
-            description = "잠깐 캐시한 값이다. 회차가 없거나 공개 전인 상품은 404")
+            description = "잠깐 캐시한 값이다. 회차 · 배송 차수가 없거나 공개 전인 상품은 404")
     @SecurityRequirements
     @GetMapping
     public ApiResponse<CampaignProgressResponse> progress(@PathVariable UUID productId) {

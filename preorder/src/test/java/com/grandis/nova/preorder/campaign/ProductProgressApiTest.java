@@ -3,6 +3,7 @@ package com.grandis.nova.preorder.campaign;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.support.AcceptFixtures;
+import com.grandis.nova.preorder.support.CatalogStubs;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -21,6 +23,7 @@ import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -113,6 +116,23 @@ class ProductProgressApiTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
         mockMvc.perform(get(PATH, UUID.randomUUID()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
+    }
+
+    /** 관리자가 일정만 잡고 배송 차수는 아직 정하지 않은 상품. 배송 차수 공개 조회도 이때 404 다. */
+    @Test
+    void 배송_차수를_아직_정하지_않은_상품은_404_다() throws Exception {
+        UUID productId = fixtures.product("PREORDER", "ACTIVE");
+        CatalogStubs.stubPreorderProduct(catalogClient, productId, CatalogStubs.activeOption(UUID.randomUUID()));
+        Instant opensAt = Instant.now().plusSeconds(3600);
+        mockMvc.perform(put("/api/v1/admin/preorders/products/{id}/campaign", productId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"opensAt\":\"%s\",\"closesAt\":\"%s\"}".formatted(opensAt, opensAt.plusSeconds(3600)))
+                        .with(admin()))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get(PATH, productId))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
     }

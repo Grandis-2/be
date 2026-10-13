@@ -29,7 +29,7 @@ public class CampaignProgressService {
                 .build();
     }
 
-    /** @throws BusinessException PRODUCT_NOT_FOUND — 회차가 없거나 아직 공개하지 않은 상품(캐시에 남기지 않는다) */
+    /** @throws BusinessException PRODUCT_NOT_FOUND — 회차 · 배송 차수가 없거나 아직 공개하지 않은 상품(캐시에 남기지 않는다) */
     public CampaignProgress find(UUID productId) {
         return cache.get(productId, reader::read).at(clock.instant());
     }
