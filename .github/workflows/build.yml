@@ -24,6 +24,7 @@ jobs:
       modules: ${{ steps.g.outputs.modules }}
       any: ${{ steps.g.outputs.any }}
       services: ${{ steps.g.outputs.services }}
+      otel: ${{ steps.g.outputs.otel }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,9 +50,13 @@ jobs:
              || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
             echo "::notice::비교 기준을 찾을 수 없다. 전체를 테스트한다."
             list=$(jq -c '.modules' build/service-graph.json)
+            echo "otel=true" >> "$GITHUB_OUTPUT"
           else
             git diff --name-only "$BASE" "${{ github.sha }}" > changed.txt
             list=$(python3 .github/scripts/affected.py build/service-graph.json changed.txt)
+            # 끈 OTel 계측의 검사(otel 잡)를 바꾸는 파일 — 서비스 코드가 안 바뀌어도 돌린다
+            grep -qE '^(docker/otel/|docker/Dockerfile$|\.github/scripts/otel_agent_config\.py$)' changed.txt \
+              && echo "otel=true" >> "$GITHUB_OUTPUT" || echo "otel=false" >> "$GITHUB_OUTPUT"
           fi
 
           echo "modules=$list" >> "$GITHUB_OUTPUT"
@@ -216,6 +221,39 @@ jobs:
         env:
           FINAL_REPO: aot-check
         run: SUMMARY="$GITHUB_STEP_SUMMARY" docker/aot-training/train.sh
+
+  # 끈 OTel 계측(docker/otel/agent.properties)을 다시 켜야 하는지 본다. 서비스 이미지에 그 라이브러리가 실리거나,
+  # main 소스가 그 기능을 쓰기 시작하거나, 에이전트를 올려 계측 이름이 바뀌면 실패한다 — 사람이 기억하지 않아도 되게.
+  # 선언이 아니라 실제로 실리는 것(bootJar 의 BOOT-INF/lib)을 봐서 간접 의존성도 잡는다. 내용은 .github/scripts/otel_agent_config.py.
+  otel:
+    needs: graph
+    if: needs.graph.outputs.services == 'true' || needs.graph.outputs.otel == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3  # v4.9.1
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1  # v4.4.4
+
+      - name: jar 만들기
+        run: |
+          set -euo pipefail
+          ./gradlew serviceGraph -q --no-daemon > /dev/null
+          jq -r '.services[] | ":" + . + ":bootJar"' build/service-graph.json | xargs -r ./gradlew --no-daemon
+          for s in $(jq -r '.services[]' build/service-graph.json); do
+            jar=$(ls "$s"/build/libs/*.jar | grep -v -- '-plain.jar$')
+            mkdir -p "dist/$s"
+            cp "$jar" "dist/$s/app.jar"
+          done
+
+      - name: 끈 계측 확인
+        run: python3 .github/scripts/otel_agent_config.py dist
 
   secrets:
     runs-on: ubuntu-latest

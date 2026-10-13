@@ -83,7 +83,7 @@ jobs:
 
   # ── 1단계: jar 를 전부 만들고, 내용이 바뀐 서비스만 고른다 ─────────────
   # 바뀐 파일로 짐작하지 않는다. 내용 키가 ECR 에 이미 있으면 그 이미지에 태그만 옮기고, 없으면 2단계에서 이미지를 만든다.
-  # 내용 키 = jar + 이미지를 만드는 입력(Dockerfile 둘 · AOT 학습 디렉터리 · 큐 스크립트). jar 는 재현 가능하게 만들어진다.
+  # 내용 키 = jar + 이미지를 만드는 입력(Dockerfile 둘 · .dockerignore · OTel 에이전트 설정 · AOT 학습 디렉터리 · 큐 스크립트). jar 는 재현 가능하게 만들어진다.
   # AOT 캐시 자체는 키에 넣지 않는다 — 학습할 때마다 바이트가 달라지지만, 같은 입력에서 나온 캐시는 같은 일을 한다.
   # 이미지에 들어가는 것이 이것뿐이라는 전제다. Dockerfile 이 다른 파일을 COPY 하면 그 파일도 키에 넣는다.
   package:
@@ -136,7 +136,7 @@ jobs:
           done
 
           # git 이 아는 것(경로 · 실행 비트 · 내용 해시)만 본다 — 체크아웃 시각 · 파일 시스템 권한이 키를 흔들지 않게
-          image_inputs=$(git ls-files -s docker/Dockerfile docker/Dockerfile.aot docker/aot-training docker/floci/create-queues.sh \
+          image_inputs=$(git ls-files -s docker/Dockerfile docker/Dockerfile.aot .dockerignore docker/otel docker/aot-training docker/floci/create-queues.sh \
             | sha256sum | cut -d' ' -f1)
           echo '[]' > plan.json
           for s in $(jq -r '.services[]' "$graph"); do
