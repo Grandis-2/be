@@ -86,10 +86,7 @@ public class PreorderCampaign {
 
     /** 지금 판매 상태. */
     public PreorderSaleStatus saleStatus(Instant now) {
-        if (now.isBefore(opensAt)) {
-            return PreorderSaleStatus.BEFORE_OPEN;
-        }
-        return isAccepting(now) ? PreorderSaleStatus.OPEN : PreorderSaleStatus.CLOSED;
+        return PreorderSaleStatus.of(opensAt, closesAt, now);
     }
 
     /** 지금 일정이 이것과 같은가. */
