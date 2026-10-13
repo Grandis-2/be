@@ -21,6 +21,10 @@ public final class PreorderView {
                           PreorderDisplayStatus displayStatus) {
     }
 
+    /** 진행 중인 예약 한 건. 상품 목록에서 예약 여부 · 단계만 보이는 데 쓴다. */
+    public record Active(PreorderSnapshot preorder, PreorderDisplayStatus displayStatus) {
+    }
+
     /** 관리자 목록. 외부 등록 작업 상태가 더 붙는다(DEAD_LETTER 면 재처리 대기). */
     public record AdminSummary(PreorderSnapshot preorder, ShipmentBatchSnapshot shipmentBatch, SyncJobStatus registerJobStatus,
                                PreorderDisplayStatus displayStatus) {
