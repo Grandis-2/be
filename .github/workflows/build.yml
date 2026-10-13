@@ -2,13 +2,14 @@ name: build
 
 on:
   pull_request:
-    branches: [main, dev, 'epic/**']
-  push:
-    branches: [main, dev]
+    branches: [dev, 'epic/**']   # main 은 promote.yml 만 옮긴다 — main 으로 가는 PR 은 없다
+  # dev 푸시는 promote.yml 이 이 워크플로를 불러 검사하고, 통과하면 main 으로 옮긴다
+  workflow_call:
 
 # 같은 PR 에 새 커밋이 올라오면 이전 실행을 취소한다. 러너 시간을 아낀다.
+# 그룹 이름을 적어 둔다 — 불려 돌 때 github.workflow 는 부른 쪽(promote) 이름이라 database 와 같은 그룹이 되어 서로 취소한다.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: build-${{ github.ref }}
   cancel-in-progress: true
 
 # 읽기만 한다. 기본 토큰 권한이 read/write 여도 이 워크플로는 저장소에 쓰지 않는다.
@@ -39,13 +40,15 @@ jobs:
 
       - id: g
         env:
-          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           ./gradlew serviceGraph -q --no-daemon > /dev/null
 
-          # 기준을 못 찾으면(첫 푸시·강제 푸시) 전부 돌린다.
-          # 애매할 때 많이 돌리는 쪽이 누락보다 안전하다.
+          # PR 은 대상 브랜치와, 승격 관문(promote.yml)은 main 과 비교한다. 직전 dev 커밋과 비교하면
+          # 관문이 대기 중에 건너뛴 커밋의 변경이 검사 없이 main 으로 간다.
+          # 기준을 못 찾으면 전부 돌린다. 애매할 때 많이 돌리는 쪽이 누락보다 안전하다.
+          [ -n "$BASE" ] || BASE=$(git rev-parse -q --verify origin/main || true)
           if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
              || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
             echo "::notice::비교 기준을 찾을 수 없다. 전체를 테스트한다."
@@ -185,12 +188,12 @@ jobs:
             *)        echo "::error::테스트가 실패했다. 빨간불이 뜬 잡 이름이 깨진 모듈이다"; exit 1 ;;
           esac
 
-  # 이미지의 AOT 캐시 학습(docker/aot-training)을 main 으로 가는 PR 에서 미리 돌려 본다. 이미지를 올리지 않는다.
-  # 학습 시나리오는 실제 API 를 부르므로 API 가 바뀌면 깨진다 — 머지 뒤 릴리스가 아니라 머지 전에 빨개지게 한다.
-  # 학습은 서비스 8개를 모두 띄워 10분 남짓 걸려 dev · 에픽 PR 에서는 돌리지 않는다. 서비스가 영향받지 않으면 건너뛴다.
+  # 이미지의 AOT 캐시 학습(docker/aot-training)을 main 승격 전에 미리 돌려 본다. 이미지를 올리지 않는다.
+  # 학습 시나리오는 실제 API 를 부르므로 API 가 바뀌면 깨진다 — release 가 운영 DB 를 마이그레이션한 뒤가 아니라 승격 전에 빨개지게 한다.
+  # 서비스 8개를 모두 띄워 10분 남짓 걸려 PR 에서는 돌리지 않고 promote.yml 이 부를 때만 돈다. 서비스가 영향받지 않으면 건너뛴다.
   aot:
     needs: graph
-    if: github.event_name == 'pull_request' && github.base_ref == 'main' && needs.graph.outputs.services == 'true'
+    if: github.event_name != 'pull_request' && needs.graph.outputs.services == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
