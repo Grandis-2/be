@@ -42,13 +42,13 @@ class ProductListingServiceTest {
             return total;
         }).when(repository).countForAdmin(any());
 
-        OffsetPage<AdminProductListItem> page = service.listForAdmin(new AdminProductListFilter(tag, null, null), 0, 20);
+        OffsetPage<AdminProductListItem> page = service.listForAdmin(new AdminProductListFilter(tag, null, null, null), 0, 20);
 
         assertThat(inserted[0]).as("count 뒤에 다른 커넥션이 정말 끼어들었다").isNotNull();
         assertThat(page.total()).isEqualTo(1);
         assertThat(page.items()).extracting(AdminProductListItem::productId).containsExactly(existing);
         // 트랜잭션이 끝난 뒤에는 둘 다 보인다 — 대조군
-        assertThat(service.listForAdmin(new AdminProductListFilter(tag, null, null), 0, 20).total()).isEqualTo(2);
+        assertThat(service.listForAdmin(new AdminProductListFilter(tag, null, null, null), 0, 20).total()).isEqualTo(2);
     }
 
     private static <T> T onAnotherConnection(java.util.concurrent.Callable<T> work) {

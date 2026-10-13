@@ -40,7 +40,7 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 관리자 상품 수정 — 표시 정보 · 기본 가격 · 보증, 옵션 값 추가 · 수정, 옵션(조합) 추가 · 수정, 상품 판매 상태 · 공개 여부.
  *
- * <p><b>사전예약은 오픈 3분 전부터 공개 여부 말고는 아무것도 못 바꾼다.</b> 표시 정보 · 가격 · 추가금 · 값 · 조합 추가 · 옵션 판매 상태 · 상품 판매 상태 전부
+ * <p><b>사전예약은 오픈 3분 전부터 공개 여부 말고는 아무것도 못 바꾼다</b>(사진은 따로 — {@link ProductImageEditService}). 표시 정보 · 가격 · 추가금 · 값 · 조합 추가 · 옵션 판매 상태 · 상품 판매 상태 전부
  * 409 STATE_CONFLICT(2026-09-29 결정 — 판매 상태도 막는다. preorder 는 접수용 상품 사본을 캐시해 두고 그 값으로 판정한다. 사전예약 상품을
  * 고치면 PREORDER_PRODUCT_CHANGED 로 알려 preorder 가 모든 인스턴스의 사본을 비우지만, 비우기는 아웃박스 릴레이 · SQS 전달만큼 늦고
  * preorder 의 인스턴스 간 알림이 실패하면 사본은 최대 30분(캐시 만료) 묵을 수 있다 — contracts/preorder-internal.md "캐시". 그래서 오픈
@@ -104,6 +104,9 @@ public class ProductEditService {
         if (request.title() != null && request.title().isBlank()) {
             throw ValidationFailures.of("title", "제목이 비었습니다.");
         }
+        if (request.modelName() != null && request.modelName().isBlank()) {
+            throw ValidationFailures.of("modelName", "모델명이 비었습니다.");
+        }
         if (request.basePrice() != null) {
             ProductRegistrationValidator.requireWholeWon(request.basePrice(), "basePrice");
         }
@@ -116,7 +119,7 @@ public class ProductEditService {
         }
         Product product = requireEditable(productId);
         String titleBefore = product.getTitle();
-        product.edit(request.title(), request.description(), request.tags());
+        product.edit(request.title(), request.brand(), request.modelName(), request.description(), request.tags());
         if (!product.getTitle().equals(titleBefore)) {
             retitleStandaloneOptions(product);   // 축 없는 상품의 옵션 표시명은 상품 제목이다
         }

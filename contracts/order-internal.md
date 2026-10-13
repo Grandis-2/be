@@ -127,7 +127,7 @@ order 와 catalog 가 서로 부르는 내부 API 를 담는다(preorder 가 부
 | `visible` | boolean | 상품 공개 여부. 늘 실린다 |
 | `registrationCompleted` | boolean | 판매 방식별 준비 — 일반은 order 재고 행, 사전예약은 preorder 회차 행이 있다. 늘 실린다 |
 | `warranty.offered` · `warranty.surcharge` | boolean · number | 상품의 보증 설정(옵션 문서의 `warranty`). 제공하지 않으면 `false` · `0` |
-| `imageUrl` | string \| null | 상품 썸네일(첫 색상의 첫 장, 색상이 없으면 기본 사진의 첫 장). 없으면 null |
+| `imageUrl` | string \| null | 그 옵션의 사진 — 옵션이 고른 색상의 첫 장. 색상 축이 없거나 그 색상에 사진이 없으면 상품 썸네일(첫 색상의 첫 장, 색상이 없으면 기본 사진의 첫 장). 없으면 null |
 
 **판정은 order 가 한다.** 사전예약 제외 · 판매 중지 · 비공개 · 재고 · 보증 미제공 여부를 order 가 이 칸들로 가린다. catalog 는 비공개 · 판매 중지 · 사전예약 옵션도 200 으로 사실만 돌려준다.
 

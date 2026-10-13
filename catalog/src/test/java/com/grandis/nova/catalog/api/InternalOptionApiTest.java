@@ -9,6 +9,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -24,6 +25,7 @@ import java.util.stream.Collectors;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -87,6 +89,51 @@ class InternalOptionApiTest {
                 .andExpect(jsonPath("$.data.items[1].warranty.surcharge").value(199000))
                 .andExpect(jsonPath("$.data.items[1].imageUrl").value("https://img/black-0.jpg"))
                 .andExpect(jsonPath("$.error").doesNotExist());
+    }
+
+    /** 첫 색상(블랙)의 대표가 둘째 장이라 "썸네일 · 대표 · 고른 색상의 첫 장" 셋이 서로 다른 값이 된다 — 어느 하나로 바꿔도 걸린다. */
+    @Test
+    @DisplayName("imageUrl 은 옵션이 고른 색상의 첫 장 — 그 색상에 사진이 없으면 상품 썸네일(첫 색상의 첫 장)이고, 대표 표시는 보지 않는다")
+    void imageUrlIsTheChosenColorsFirstImage() throws Exception {
+        String body = """
+                { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Watch", "brand": "SAMSUNG", "modelName": "SM-R1", "visible": true, "basePrice": 1000,
+                  "optionAxes": [ { "key": "color", "label": "색상", "values": [ { "value": "블랙" }, { "value": "실버" }, { "value": "레드" } ] } ],
+                  "combinations": [ { "selections": { "color": "블랙" }, "stock": 1 }, { "selections": { "color": "실버" }, "stock": 1 },
+                                    { "selections": { "color": "레드" }, "stock": 1 } ],
+                  "images": { "gallery": [
+                    { "color": "블랙", "items": [ { "url": "https://img/black-0.jpg" }, { "url": "https://img/black-1.jpg", "primary": true } ] },
+                    { "color": "실버", "items": [ { "url": "https://img/silver-0.jpg" }, { "url": "https://img/silver-1.jpg", "primary": true } ] } ] } }
+                """.formatted(fixtures.category());
+        mockMvc.perform(post("/api/v1/admin/products").header("Idempotency-Key", "k-" + ShopFixtures.unique())
+                        .contentType(MediaType.APPLICATION_JSON).content(body).with(user("admin").roles("ADMIN")))
+                .andExpect(status().isCreated());
+        UUID productId = jdbcTemplate.queryForObject("SELECT BIN_TO_UUID(id) FROM products WHERE model_name = 'SM-R1' ORDER BY created_at DESC LIMIT 1",
+                UUID.class);
+        java.util.Map<String, UUID> byTitle = new java.util.HashMap<>();
+        jdbcTemplate.query("SELECT BIN_TO_UUID(id) AS id, title FROM product_options WHERE product_id = ?",
+                rs -> { byTitle.put(rs.getString("title"), UUID.fromString(rs.getString("id"))); }, UuidBinary.toBytes(productId));
+
+        asUser(List.of(byTitle.get("블랙"), byTitle.get("실버"), byTitle.get("레드")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].imageUrl").value("https://img/black-0.jpg"))
+                // 고른 색상 — 썸네일(black-0) · 대표(silver-1)가 아니다
+                .andExpect(jsonPath("$.data.items[1].imageUrl").value("https://img/silver-0.jpg"))
+                // 사진 없는 색상은 상품 썸네일
+                .andExpect(jsonPath("$.data.items[2].imageUrl").value("https://img/black-0.jpg"));
+
+        // 색상 축이 없는 상품은 기본 묶음의 첫 장(대표가 둘째 장이어도)
+        mockMvc.perform(post("/api/v1/admin/products").header("Idempotency-Key", "k-" + ShopFixtures.unique())
+                        .contentType(MediaType.APPLICATION_JSON).with(user("admin").roles("ADMIN")).content("""
+                        { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Cable", "brand": "LG", "modelName": "LG-C9", "visible": true, "basePrice": 1000,
+                          "combinations": [ { "selections": {}, "stock": 1 } ],
+                          "images": { "gallery": [ { "items": [ { "url": "https://img/cable-0.jpg" }, { "url": "https://img/cable-1.jpg", "primary": true } ] } ] } }
+                        """.formatted(fixtures.category())))
+                .andExpect(status().isCreated());
+        UUID cableOption = jdbcTemplate.queryForObject("""
+                SELECT BIN_TO_UUID(o.id) FROM product_options o JOIN products p ON p.id = o.product_id WHERE p.model_name = 'LG-C9'
+                 ORDER BY p.created_at DESC LIMIT 1""", UUID.class);
+        asUser(List.of(cableOption)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].imageUrl").value("https://img/cable-0.jpg"));
     }
 
     @Test

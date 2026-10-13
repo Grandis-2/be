@@ -10,6 +10,8 @@ import com.grandis.nova.catalog.detail.ProductDetailView;
 import com.grandis.nova.catalog.edit.OptionValueAddRequest;
 import com.grandis.nova.catalog.edit.OptionValueEditRequest;
 import com.grandis.nova.catalog.edit.ProductEditRequest;
+import com.grandis.nova.catalog.edit.ProductImageAddRequest;
+import com.grandis.nova.catalog.edit.ProductImageReplaceRequest;
 import com.grandis.nova.catalog.edit.SaleStatusChangeRequest;
 import com.grandis.nova.catalog.edit.SaleStatusView;
 import com.grandis.nova.catalog.edit.VariantAddRequest;
@@ -122,6 +124,8 @@ class OpenApiDocumentTest {
         expected.put("PATCH /api/v1/admin/products/{productId}/sale-status", "SaleStatusChangeRequest");
         expected.put("PATCH /api/v1/admin/products/{productId}/visibility", "VisibilityChangeRequest");
         expected.put("POST /api/v1/admin/products/image-uploads", "ImageUploadRequest");
+        expected.put("POST /api/v1/admin/products/{productId}/images", "ProductImageAddRequest");
+        expected.put("PATCH /api/v1/admin/products/{productId}/images", "ProductImageReplaceRequest");
         expected.put("POST /api/v1/reviews", "ReviewCreateRequest");
         expected.put("PATCH /api/v1/reviews/{reviewId}", "ReviewUpdateRequest");
 
@@ -170,7 +174,7 @@ class OpenApiDocumentTest {
         java.util.ArrayDeque<Class<?>> queue = new java.util.ArrayDeque<>(List.of(
                 ProductRegistrationRequest.class, ProductEditRequest.class, OptionValueAddRequest.class, OptionValueEditRequest.class,
                 VariantAddRequest.class, VariantEditRequest.class, SaleStatusChangeRequest.class, VisibilityChangeRequest.class,
-                ReviewCreateRequest.class, ReviewUpdateRequest.class,
+                ProductImageAddRequest.class, ProductImageReplaceRequest.class, ReviewCreateRequest.class, ReviewUpdateRequest.class,
                 ProductDetailView.class, ProductListItem.class, AdminProductListItem.class, CategoryNode.class, ReviewView.class,
                 RegistrationStatusView.class, SaleStatusView.class, VisibilityView.class));
         while (!queue.isEmpty()) {

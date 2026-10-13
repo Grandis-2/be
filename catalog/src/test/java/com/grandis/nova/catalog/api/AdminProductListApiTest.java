@@ -117,7 +117,7 @@ class AdminProductListApiTest {
         @DisplayName("등록 API 로 고른 visible 이 목록에 바로 실린다 — 등록 완료는 order 가 재고 행을 만들어야 true")
         void chosenVisibilityIsStoredAndCompletionFollowsStock() throws Exception {
             String body = """
-                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "등록 중", "tags": "%s", "visible": true, "basePrice": 10000,
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "등록 중", "brand": "APPLE", "modelName": "A0001", "tags": "%s", "visible": true, "basePrice": 10000,
                       "combinations": [ { "selections": {}, "stock": 3 } ] }
                     """.formatted(categoryId, tag);
             ResultActions created = mockMvc.perform(post(PATH).header("Idempotency-Key", "k-" + ShopFixtures.unique())
@@ -186,6 +186,31 @@ class AdminProductListApiTest {
             perform("status", "SOLD").andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
                     .andExpect(jsonPath("$.error.details.violations[0].field").value("status"));
+        }
+
+        @Test
+        @DisplayName("brand 는 여러 값(OR)이고 건수도 같은 필터를 탄다, q 는 모델명 · 브랜드 코드도 찾는다, 항목에 brand · modelName — 목록 밖 brand 는 그 칸의 400")
+        void brandFilterAndModelNameSearch() throws Exception {
+            UUID apple = completed("애플", "IN_STOCK");
+            UUID samsung = completed("삼성", "IN_STOCK");
+            fixtures.brand(samsung, "SAMSUNG", "SM-" + tag);
+            UUID lg = completed("엘지", "PREORDER");
+            fixtures.brand(lg, "LG", "L1");
+
+            JsonNode page = data(perform("brand", "SAMSUNG", "brand", "LG"));
+            assertThat(ids(page.get("items"))).containsExactlyInAnyOrder(samsung, lg);
+            assertThat(page.get("total").asLong()).isEqualTo(2);
+            assertThat(ids(list("brand", "APPLE"))).containsExactly(apple);
+            JsonNode item = find(list(), samsung);
+            assertThat(item.get("brand").asString()).isEqualTo("SAMSUNG");
+            assertThat(item.get("modelName").asString()).isEqualTo("SM-" + tag);
+
+            assertThat(ids(list("q", "sm-" + tag))).as("모델명 — 제목 · 태그에는 없다").containsExactly(samsung);
+            fixtures.brand(lg, "LG", tag);
+            assertThat(ids(list("q", "lg"))).as("브랜드 코드 — 다른 시험 상품도 섞이니 포함만 본다").contains(lg).doesNotContain(apple, samsung);
+            perform("brand", "SONY").andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+                    .andExpect(jsonPath("$.error.details.violations[0].field").value("brand"));
         }
 
         @Test

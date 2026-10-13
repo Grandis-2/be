@@ -10,6 +10,7 @@ import com.grandis.nova.catalog.option.ProductOptions.Image;
 import com.grandis.nova.catalog.option.ProductOptions.Pick;
 import com.grandis.nova.catalog.option.ProductOptions.Section;
 import com.grandis.nova.catalog.option.ProductOptions.Value;
+import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.Product;
 import com.grandis.nova.catalog.product.ProductOption;
 import com.grandis.nova.catalog.product.ProductOptionRepository;
@@ -80,7 +81,7 @@ class CatalogEntityMappingTest {
     @DisplayName("상품 · 옵션은 저장한 값 그대로 DB 에 남는다")
     void productAndOptionRoundTrip() {
         UUID categoryId = fixtures.childCategory(fixtures.category(), "Apple");
-        Product product = products.saveAndFlush(Product.register(null, categoryId, SaleMode.PREORDER, "Nova 1",
+        Product product = products.saveAndFlush(Product.register(null, categoryId, SaleMode.PREORDER, "Nova 1", Brand.APPLE, "A0001",
                 new BigDecimal("1200000"), "설명", "nova,phone", false, true, new BigDecimal("199000"), ProductOptions.EMPTY));
         OptionCombination none = OptionCombination.none(product.getId(), " Nova  1 ");
         assertThat(none.isStandalone()).isTrue();
@@ -126,7 +127,7 @@ class CatalogEntityMappingTest {
         ProductOptions document = new ProductOptions(List.of(new Axis(OptionText.COLOR, "색상", List.of(
                 new Value("1", "블랙", "블랙", null, BigDecimal.ZERO, List.of(new Image("https://img/b.jpg", false)))))), List.of(), List.of(), ProductOptions.Warranty.NONE);
         Product product = products.saveAndFlush(Product.register(null, fixtures.category(), SaleMode.IN_STOCK,
-                "Nova Book", BigDecimal.ZERO, null, null, false, false, new BigDecimal("50000"), document));
+                "Nova Book", Brand.APPLE, "A0001", BigDecimal.ZERO, null, null, false, false, new BigDecimal("50000"), document));
         assertThat(product.getWarrantySurcharge()).isEqualByComparingTo("0");
         assertThat(product.isWarrantyOffered()).isFalse();
 
@@ -147,10 +148,10 @@ class CatalogEntityMappingTest {
     @DisplayName("상품은 등록 때 고른 공개 여부로 시작하고, 공개 · 비공개 전환은 조건 없이 된다 — 노출은 판매 방식별 준비를 함께 본다")
     void productStartsWithChosenVisibility() {
         Product hidden = products.saveAndFlush(Product.register(null, fixtures.category(), SaleMode.IN_STOCK,
-                "Nova Book", BigDecimal.ZERO, null, null, false, false, BigDecimal.ZERO, ProductOptions.EMPTY));
+                "Nova Book", Brand.APPLE, "A0001", BigDecimal.ZERO, null, null, false, false, BigDecimal.ZERO, ProductOptions.EMPTY));
         assertThat(visibleInDb(hidden.getId())).isFalse();
         Product shown = products.saveAndFlush(Product.register(null, fixtures.category(), SaleMode.IN_STOCK,
-                "Nova Book", BigDecimal.ZERO, null, null, true, false, BigDecimal.ZERO, ProductOptions.EMPTY));
+                "Nova Book", Brand.APPLE, "A0001", BigDecimal.ZERO, null, null, true, false, BigDecimal.ZERO, ProductOptions.EMPTY));
         assertThat(visibleInDb(shown.getId())).isTrue();
 
         hidden.publish();
@@ -176,7 +177,7 @@ class CatalogEntityMappingTest {
         Axis length = new Axis("length", "길이", List.of(twoMeters));
         ProductOptions document = new ProductOptions(List.of(color, length), List.of(),
                 List.of(new Section("제품 사양", List.of(new Image("https://img/spec.jpg", false)))), ProductOptions.Warranty.NONE);
-        Product product = products.saveAndFlush(Product.register(null, fixtures.category(), SaleMode.IN_STOCK, "Nova Cable",
+        Product product = products.saveAndFlush(Product.register(null, fixtures.category(), SaleMode.IN_STOCK, "Nova Cable", Brand.APPLE, "A0001",
                 new BigDecimal("10000"), null, null, false, false, BigDecimal.ZERO, document));
         entityManager.clear();
 
@@ -248,11 +249,11 @@ class CatalogEntityMappingTest {
     void idempotencyKeyRoundTrip() {
         String key = ShopFixtures.unique();
         UUID categoryId = fixtures.category();
-        Product product = products.saveAndFlush(Product.register(key, categoryId, SaleMode.PREORDER, "Nova 1",
+        Product product = products.saveAndFlush(Product.register(key, categoryId, SaleMode.PREORDER, "Nova 1", Brand.APPLE, "A0001",
                 BigDecimal.ONE, null, null, false, false, BigDecimal.ZERO, ProductOptions.EMPTY));
-        products.saveAndFlush(Product.register(null, categoryId, SaleMode.IN_STOCK, "A", BigDecimal.ONE, null, null, false, false,
+        products.saveAndFlush(Product.register(null, categoryId, SaleMode.IN_STOCK, "A", Brand.APPLE, "A0001", BigDecimal.ONE, null, null, false, false,
                 BigDecimal.ZERO, ProductOptions.EMPTY));
-        products.saveAndFlush(Product.register(null, categoryId, SaleMode.IN_STOCK, "B", BigDecimal.ONE, null, null, false, false,
+        products.saveAndFlush(Product.register(null, categoryId, SaleMode.IN_STOCK, "B", Brand.APPLE, "A0001", BigDecimal.ONE, null, null, false, false,
                 BigDecimal.ZERO, ProductOptions.EMPTY));
 
         assertThat(products.findByIdempotencyKey(key)).get().extracting(Product::getId).isEqualTo(product.getId());

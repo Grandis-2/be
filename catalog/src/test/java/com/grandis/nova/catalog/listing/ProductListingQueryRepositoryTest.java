@@ -51,7 +51,7 @@ class ProductListingQueryRepositoryTest {
         fixtures.campaign(productId, closesAt.minusSeconds(3600), closesAt);
         // 상수를 참조하면 상수가 틀려도 시험이 같이 움직인다 — 확정값 120시간을 여기 박는다
         Instant boundary = closesAt.plus(Duration.ofHours(120));
-        ProductListFilter filter = new ProductListFilter(tag, null, null, null, null);
+        ProductListFilter filter = new ProductListFilter(tag, null, null, null, null, null);
 
         assertThat(ids(repository.find(filter, ProductSort.NEWEST, boundary.minusNanos(1_000), 0, 10))).containsExactly(productId);
         assertThat(repository.count(filter, boundary.minusNanos(1_000))).isEqualTo(1);
@@ -69,7 +69,7 @@ class ProductListingQueryRepositoryTest {
         UUID option = fixtures.option(productId, "ACTIVE", new java.math.BigDecimal("1000"));
         fixtures.selection(productId, option, axis, black);
         fixtures.inventory(option, 1, 0, 0);
-        ProductListFilter filter = new ProductListFilter(tag, null, null, List.of("블랙"), List.of());
+        ProductListFilter filter = new ProductListFilter(tag, null, null, null, List.of("블랙"), List.of());
 
         List<String> statements;
         try (Connection root = rootConnection(); Statement statement = root.createStatement()) {

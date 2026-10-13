@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog.listing;
 
+import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
 
@@ -23,6 +24,8 @@ public record ProductListItem(
         UUID productId,
         SaleMode saleMode,
         String title,
+        Brand brand,
+        String modelName,
         String imageUrl,
         SaleStatus status,
         BigDecimal minPrice,

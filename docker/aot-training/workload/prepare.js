@@ -30,7 +30,7 @@ function register(admin, key, body, expected) {
 
 function preorderBody(title, opensAt, axes) {
   return Object.assign({
-    categoryId: data.categoryId, saleMode: 'PREORDER', title, visible: true, basePrice: 1200000,
+    categoryId: data.categoryId, saleMode: 'PREORDER', title, brand: 'APPLE', modelName: 'AOT-P', visible: true, basePrice: 1200000,
     description: 'AOT 학습용 사전예약 상품', tags: 'aot,학습',
     campaign: { opensAt: iso(opensAt), closesAt: iso(opensAt + 2 * DAY) },
     shipmentBatches: [
@@ -105,9 +105,9 @@ function prepare() {
   const keys = { p1: uuid(), p2: uuid(), s1: uuid(), s2: uuid() };
   register(admin, keys.p1, preorderBody('AOT 학습 폰', opensAt), 201);
   register(admin, keys.p2, preorderBody('AOT 학습 폰 프로', opensAt, STORAGE), 201);
-  register(admin, keys.s1, { categoryId: data.categoryId, saleMode: 'IN_STOCK', title: 'AOT 학습 케이스', visible: true,
+  register(admin, keys.s1, { categoryId: data.categoryId, saleMode: 'IN_STOCK', title: 'AOT 학습 케이스', brand: 'APPLE', modelName: 'AOT-C', visible: true,
     basePrice: 30000, combinations: [{ selections: {}, stock: 500 }] }, 201);
-  register(admin, keys.s2, { categoryId: data.categoryId, saleMode: 'IN_STOCK', title: 'AOT 학습 메모리', visible: true,
+  register(admin, keys.s2, { categoryId: data.categoryId, saleMode: 'IN_STOCK', title: 'AOT 학습 메모리', brand: 'SAMSUNG', modelName: 'AOT-M', visible: true,
     basePrice: 90000, optionAxes: STORAGE,
     combinations: [{ selections: { storage: '256GB' }, stock: 300 }, { selections: { storage: '512GB' }, stock: 300 }] }, 201);
   register(admin, keys.p1, preorderBody('AOT 학습 폰', opensAt), [200, 202]);

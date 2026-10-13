@@ -6,6 +6,7 @@ import com.grandis.nova.catalog.listing.ProductListFilter;
 import com.grandis.nova.catalog.listing.ProductListItem;
 import com.grandis.nova.catalog.listing.ProductListingService;
 import com.grandis.nova.catalog.listing.ProductSort;
+import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.common.web.ApiResponse;
 import io.swagger.v3.oas.annotations.Operation;
@@ -52,19 +53,21 @@ public class ProductController {
         return ApiResponse.ok(detailService.findVariant(productId, variantId));
     }
 
-    @Operation(summary = "상품 목록 · 검색(로그인 없이)", description = "sort: NEWEST(최신순, 기본) · PRICE_ASC(낮은 가격순) · PRICE_DESC(높은 가격순). 가격은 판매 중인 옵션의 최저가이고 판매 중인 옵션이 없는 상품은 가격순에서 맨 뒤")
+    @Operation(summary = "상품 목록 · 검색(로그인 없이)", description = "sort: NEWEST(최신순, 기본) · PRICE_ASC(낮은 가격순) · PRICE_DESC(높은 가격순). 가격은 판매 중인 옵션의 최저가이고 판매 중인 옵션이 없는 상품은 가격순에서 맨 뒤. "
+            + "q 는 상품명 · 태그 · 모델명 · 브랜드 코드 부분 일치, brand · color · storage 는 이름을 반복해 여러 값(OR — brand=APPLE&brand=LG)")
     @SecurityRequirements
     @GetMapping
     public ApiResponse<ProductPageResponse<ProductListItem>> list(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) UUID categoryId,
             @RequestParam(required = false) SaleMode saleMode,
+            @RequestParam(required = false) List<Brand> brand,
             @RequestParam(required = false) List<String> color,
             @RequestParam(required = false) List<String> storage,
             @RequestParam(defaultValue = "NEWEST") ProductSort sort,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        ProductListFilter filter = new ProductListFilter(q, categoryId, saleMode, color, storage);
+        ProductListFilter filter = new ProductListFilter(q, categoryId, saleMode, brand, color, storage);
         return ApiResponse.ok(ProductPageResponse.from(
                 listingService.list(filter, sort, PageSizes.requirePage(page), PageSizes.require(size))));
     }

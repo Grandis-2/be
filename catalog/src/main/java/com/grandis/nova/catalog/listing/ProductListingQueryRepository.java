@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog.listing;
 
+import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.common.UuidBinary;
@@ -61,7 +62,7 @@ public class ProductListingQueryRepository {
                AND\s""" + READY + "\n";
 
     private static final String SELECT_ITEMS = """
-            SELECT p.id, p.sale_mode, p.title, p.status, c.opens_at, c.closes_at,
+            SELECT p.id, p.sale_mode, p.title, p.brand, p.model_name, p.status, c.opens_at, c.closes_at,
                    (SELECT MIN(o.price) FROM product_options o
                      WHERE o.product_id = p.id AND o.status = 'ACTIVE') AS min_price,
                    EXISTS (SELECT 1 FROM product_options po
@@ -146,11 +147,20 @@ public class ProductListingQueryRepository {
             params.addValue("status", filter.status().name());
         }
         appendTextFilter(sql, params, filter.q());
+        appendBrandFilter(sql, params, filter.brands());
+    }
+
+    private static void appendBrandFilter(StringBuilder sql, MapSqlParameterSource params, List<Brand> brands) {
+        if (!brands.isEmpty()) {
+            sql.append(" AND p.brand IN (:brands)");
+            params.addValue("brands", brands.stream().map(Brand::name).toList());
+        }
     }
 
     private static void appendTextFilter(StringBuilder sql, MapSqlParameterSource params, String q) {
         if (q != null) {
-            sql.append(" AND (p.title LIKE :q ESCAPE '\\\\' OR p.tags LIKE :q ESCAPE '\\\\')");
+            sql.append(" AND (p.title LIKE :q ESCAPE '\\\\' OR p.tags LIKE :q ESCAPE '\\\\'"
+                    + " OR p.model_name LIKE :q ESCAPE '\\\\' OR p.brand LIKE :q ESCAPE '\\\\')");
             params.addValue("q", "%" + escapeLike(q) + "%");
         }
     }
@@ -169,6 +179,7 @@ public class ProductListingQueryRepository {
             params.addValue("categoryId", UuidBinary.toBytes(filter.categoryId()));
         }
         appendTextFilter(sql, params, filter.q());
+        appendBrandFilter(sql, params, filter.brands());
         if (!filter.colors().isEmpty() || !filter.storages().isEmpty()) {
             // 필터 조건은 판매 중 옵션 하나가 모든 축을 함께 만족해야 한다. 품절은 포함, 판매 중지는 제외
             sql.append(" AND EXISTS (SELECT 1 FROM product_options o WHERE o.product_id = p.id AND o.status = 'ACTIVE'");
@@ -320,7 +331,8 @@ public class ProductListingQueryRepository {
         PreorderSaleStatus preorderStatus = saleMode == SaleMode.PREORDER && opensAt != null && closesAt != null
                 ? PreorderSaleStatus.of(opensAt, closesAt, now) : null;
         BigDecimal minPrice = rs.getBigDecimal("min_price");
-        return new ProductListItem(UuidBinary.fromBytes(rs.getBytes("id")), saleMode, rs.getString("title"), rs.getString("image_url"),
+        return new ProductListItem(UuidBinary.fromBytes(rs.getBytes("id")), saleMode, rs.getString("title"),
+                Brand.valueOf(rs.getString("brand")), rs.getString("model_name"), rs.getString("image_url"),
                 SaleStatus.valueOf(rs.getString("status")), minPrice, rs.getBoolean("sellable"), rs.getBoolean("sold_out"),
                 preorderStatus, opensAt, closesAt);
     }

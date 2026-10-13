@@ -41,7 +41,7 @@ public class ProductListingService {
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public OffsetPage<GiftCandidate> listGiftCandidates(String q, int page, int size) {
-        String text = new AdminProductListFilter(q, null, null).q();
+        String text = new AdminProductListFilter(q, null, null, List.of()).q();
         long total = repository.countGiftCandidates(text);
         List<GiftCandidate> items = total == 0 ? List.of() : repository.findGiftCandidates(text, page, size);
         return OffsetPage.of(items, page, size, total);

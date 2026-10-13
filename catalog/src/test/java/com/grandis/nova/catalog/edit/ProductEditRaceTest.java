@@ -22,6 +22,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -62,6 +63,7 @@ class ProductEditRaceTest {
     Clock clock;
 
     @MockitoSpyBean ProductEditService editService;
+    @Autowired ProductImageEditService imageEditService;
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired PlatformTransactionManager transactionManager;
@@ -91,7 +93,7 @@ class ProductEditRaceTest {
         UUID productId = registerInStock();
         String storage512 = fixtures.valueId(productId, "storage", "512GB");
         // 첫 수정: 기본가 1,000,000 → 1,100,000. 둘째 수정: 512GB 추가금 200,000 → 300,000 — 첫 수정이 커밋되기 전에 시작한다
-        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)),
+        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null)),
                 () -> editService.editOptionValue(productId, storage512, new OptionValueEditRequest(null, new BigDecimal("300000"), null)));
 
         assertThat(price(productId, "256GB")).isEqualByComparingTo("1100000");
@@ -104,7 +106,7 @@ class ProductEditRaceTest {
     void variantEditAfterRecomputeKeepsTheNewPrice() throws Exception {
         UUID productId = registerInStock();
         UUID option512 = optionId(productId, "512GB");
-        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)),
+        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null)),
                 () -> editService.editVariant(productId, option512, new VariantEditRequest(SaleStatus.PAUSED)));
 
         assertThat(optionStatus(option512)).isEqualTo("PAUSED");
@@ -118,7 +120,7 @@ class ProductEditRaceTest {
         UUID productId = registerInStock();
         UUID option512 = optionId(productId, "512GB");
         interleave(() -> editService.editVariant(productId, option512, new VariantEditRequest(SaleStatus.PAUSED)),
-                () -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)));
+                () -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null)));
 
         assertThat(optionStatus(option512)).as("옛 상태를 읽어 두고 쓰면 ACTIVE 로 되돌아간다").isEqualTo("PAUSED");
         assertThat(price(productId, "512GB")).isEqualByComparingTo("1300000");
@@ -137,6 +139,32 @@ class ProductEditRaceTest {
                            NESTED PATH '$.values[*]' COLUMNS (v VARCHAR(60) PATH '$.normalized'))) j
                  WHERE p.id = ? AND j.k = 'storage'
                 """, String.class, UuidBinary.toBytes(productId))).containsExactlyInAnyOrder("256GB", "512GB", "1TB", "2TB");
+    }
+
+    /** 사진 수정도 문서를 통째로 다시 쓴다 — 잠그지 않고 읽으면 앞 수정이 커밋되기 전의 문서를 써서 앞의 변경을 지운다. 두 순서 모두 본다. */
+    @Test
+    @DisplayName("사진 넣기와 옵션 값 추가가 겹쳐도 둘 다 남는다 — 어느 쪽이 먼저든 뒤의 것은 앞의 것이 커밋된 문서를 읽는다")
+    void imageAddAndValueAddBothSurvive() throws Exception {
+        UUID imageFirst = registerInStock();
+        interleave(() -> imageEditService.add(imageFirst, imageAdd("https://img/race-a.jpg")),
+                () -> editService.addOptionValue(imageFirst, new OptionValueAddRequest("storage", "1TB", null, null)));
+        assertThat(storageValues(imageFirst)).contains("1TB");
+        assertThat(defaultImages(imageFirst)).containsExactly("https://img/race-a.jpg");
+
+        UUID valueFirst = registerInStock();
+        interleave(() -> editService.addOptionValue(valueFirst, new OptionValueAddRequest("storage", "1TB", null, null)),
+                () -> imageEditService.add(valueFirst, imageAdd("https://img/race-b.jpg")));
+        assertThat(storageValues(valueFirst)).contains("1TB");
+        assertThat(defaultImages(valueFirst)).containsExactly("https://img/race-b.jpg");
+    }
+
+    @Test
+    @DisplayName("사진 넣기 둘이 겹쳐도 둘 다 남는다")
+    void concurrentImageAddsBothSurvive() throws Exception {
+        UUID productId = registerInStock();
+        interleave(() -> imageEditService.add(productId, imageAdd("https://img/race-1.jpg")),
+                () -> imageEditService.add(productId, imageAdd("https://img/race-2.jpg")));
+        assertThat(defaultImages(productId)).containsExactly("https://img/race-1.jpg", "https://img/race-2.jpg");
     }
 
     @Test
@@ -295,7 +323,7 @@ class ProductEditRaceTest {
     @DisplayName("기본가 수정이 커밋되기 전에 공개 전환이 들어오면 기다렸다가 새 기본가 위에 적는다 — 기본가 · 옵션 가격 · 공개 여부가 모두 새 값")
     void visibilityChangeSerializesWithEdit() throws Exception {
         UUID productId = registerInStock();
-        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)),
+        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null)),
                 () -> editService.changeVisibility(productId, new VisibilityChangeRequest(true)));
 
         assertThat(jdbcTemplate.queryForObject("SELECT base_price FROM products WHERE id = ?", BigDecimal.class, UuidBinary.toBytes(productId)))
@@ -418,6 +446,26 @@ class ProductEditRaceTest {
         return String.valueOf(root.getMessage());
     }
 
+    private static ProductImageAddRequest imageAdd(String url) {
+        return new ProductImageAddRequest(ProductImageAddRequest.Kind.GALLERY, null, url);
+    }
+
+    private List<String> storageValues(UUID productId) {
+        return jdbcTemplate.queryForList("""
+                SELECT j.v FROM products p,
+                       JSON_TABLE(p.options, '$.axes[*]' COLUMNS (k VARCHAR(40) PATH '$.key',
+                           NESTED PATH '$.values[*]' COLUMNS (v VARCHAR(60) PATH '$.normalized'))) j
+                 WHERE p.id = ? AND j.k = 'storage'
+                """, String.class, UuidBinary.toBytes(productId));
+    }
+
+    private List<String> defaultImages(UUID productId) {
+        return jdbcTemplate.queryForList("""
+                SELECT j.url FROM products p, JSON_TABLE(p.options, '$.defaultImages[*]' COLUMNS (url VARCHAR(1000) PATH '$.url')) j
+                 WHERE p.id = ?
+                """, String.class, UuidBinary.toBytes(productId));
+    }
+
     private UUID optionId(UUID productId, String title) {
         return UuidBinary.fromBytes(jdbcTemplate.queryForObject("SELECT id FROM product_options WHERE product_id = ? AND title = ?",
                 byte[].class, UuidBinary.toBytes(productId), title));
@@ -438,7 +486,7 @@ class ProductEditRaceTest {
     }
 
     private static ProductEditRequest titleOnly(String title) {
-        return new ProductEditRequest(title, null, null, null, null);
+        return new ProductEditRequest(title, null, null, null, null, null, null);
     }
 
     private static void assertStateConflict(Runnable edit) {
@@ -557,7 +605,7 @@ class ProductEditRaceTest {
     /** 축 storage 하나(256GB +0 · 512GB +200,000), 기본가 1,000,000. */
     private UUID registerInStock() throws Exception {
         return register("""
-                { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Race", "visible": false, "basePrice": 1000000,
+                { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Race", "brand": "APPLE", "modelName": "A0001", "visible": false, "basePrice": 1000000,
                   "optionAxes": [ { "key": "storage", "label": "용량", "values": [ { "value": "256GB" }, { "value": "512GB", "surcharge": 200000 } ] } ],
                   "combinations": [ { "selections": { "storage": "256GB" }, "stock": 1 }, { "selections": { "storage": "512GB" }, "stock": 1 } ] }
                 """.formatted(categoryId));
@@ -566,7 +614,7 @@ class ProductEditRaceTest {
     private UUID registerPreorder() throws Exception {
         Instant opensAt = Instant.now().plus(Duration.ofHours(2));
         return register("""
-                { "categoryId": "%s", "saleMode": "PREORDER", "title": "Race", "visible": false, "basePrice": 1000000,
+                { "categoryId": "%s", "saleMode": "PREORDER", "title": "Race", "brand": "APPLE", "modelName": "A0001", "visible": false, "basePrice": 1000000,
                   "optionAxes": [ { "key": "storage", "label": "용량", "values": [ { "value": "256GB" } ] } ],
                   "combinations": [ { "selections": { "storage": "256GB" } } ],
                   "campaign": { "opensAt": "%s", "closesAt": "%s" },

@@ -69,16 +69,16 @@ public class ShopFixtures {
 
     public UUID product(UUID categoryId, String saleMode, String status) {
         return insert("""
-                INSERT INTO products (id, category_id, sale_mode, title, status, created_at, updated_at)
-                VALUES (?, ?, ?, 'Nova 1', ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                INSERT INTO products (id, category_id, sale_mode, title, brand, model_name, status, created_at, updated_at)
+                VALUES (?, ?, ?, 'Nova 1', 'APPLE', 'A0001', ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
                 """, categoryId, saleMode, status);
     }
 
     /** 제목 · 검색 키워드까지 지정한 상품. 목록 시험이 자기 상품만 골라내는 데 쓴다. */
     public UUID product(UUID categoryId, String saleMode, String status, String title, String tags) {
         return insert("""
-                INSERT INTO products (id, category_id, sale_mode, title, tags, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                INSERT INTO products (id, category_id, sale_mode, title, brand, model_name, tags, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'APPLE', 'A0001', ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
                 """, categoryId, saleMode, title, tags, status);
     }
 
@@ -272,6 +272,11 @@ public class ShopFixtures {
     /** 등록 API 로 들어온 상품의 멱등 키. */
     public void registration(UUID productId, String idempotencyKey) {
         update("UPDATE products SET idempotency_key = ? WHERE id = ?", idempotencyKey, productId);
+    }
+
+    /** 상품 행의 기본값(APPLE · A0001)을 바꾼다. 브랜드 필터 · 모델명 검색 시험용. */
+    public void brand(UUID productId, String brand, String modelName) {
+        update("UPDATE products SET brand = ?, model_name = ? WHERE id = ?", brand, modelName, productId);
     }
 
     /** 그 축에서 정규화값으로 값 id 를 찾는다. */

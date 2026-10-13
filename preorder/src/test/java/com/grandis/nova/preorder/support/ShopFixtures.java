@@ -60,8 +60,8 @@ public class ShopFixtures {
                 VALUES (?, '스마트폰', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
                 """);
         return insert("""
-                INSERT INTO products (id, category_id, sale_mode, title, status, created_at, updated_at)
-                VALUES (?, ?, ?, 'Nova 1', ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                INSERT INTO products (id, category_id, sale_mode, title, brand, model_name, status, created_at, updated_at)
+                VALUES (?, ?, ?, 'Nova 1', 'APPLE', 'A0001', ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
                 """, UuidBinary.toBytes(categoryId), saleMode, status);
     }
 

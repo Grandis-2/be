@@ -43,7 +43,7 @@ import java.util.regex.Pattern;
 @Component
 public class ProductRegistrationValidator {
 
-    static final int MAX_GALLERY_IMAGES_PER_BUNDLE = 10;
+    public static final int MAX_GALLERY_IMAGES_PER_BUNDLE = 10;
     /** 사전예약 배송 차수 최대 개수(2026-10-04 결정). 등록 이벤트 한 통에 싣는다. */
     public static final int MAX_SHIPMENT_BATCHES = 100;
     /** MySQL 문서의 date · datetime 지원 범위. 상한을 넘는 값은 preorder 가 저장하지 못한다(9999-12-31 23:59:59.999999 까지 들어간다 — 실측). */
@@ -107,20 +107,31 @@ public class ProductRegistrationValidator {
      * 주소만 본다 — 그 객체가 실제로 올라가 있는지, 이 서비스가 발급한 키인지는 확인하지 않는다.
      */
     private void requireUploadedImages(ProductRegistrationRequest request) {
+        Set<String> seen = new HashSet<>();
         for (int i = 0; i < request.images().gallery().size(); i++) {
-            requireUploaded(request.images().gallery().get(i).items(), "images.gallery[%d]".formatted(i));
+            requireUploaded(request.images().gallery().get(i).items(), "images.gallery[%d]".formatted(i), seen);
         }
         for (int i = 0; i < request.images().detail().size(); i++) {
-            requireUploaded(request.images().detail().get(i).items(), "images.detail[%d]".formatted(i));
+            requireUploaded(request.images().detail().get(i).items(), "images.detail[%d]".formatted(i), seen);
         }
     }
 
-    private void requireUploaded(List<Image> items, String field) {
+    /** 한 상품 안에서 같은 주소는 한 번 — 사진 수정 API 가 주소로 사진 한 장을 가리킨다. 업로드 API 는 파일마다 새 주소를 준다. */
+    private void requireUploaded(List<Image> items, String field, Set<String> seen) {
         for (int j = 0; j < items.size(); j++) {
             String url = items.get(j).url();
-            if (!url.startsWith(imageUrlPrefix) || url.length() == imageUrlPrefix.length()) {
-                throw ValidationFailures.of(field + ".items[%d].url".formatted(j), "이미지 주소는 " + imageUrlPrefix + " 아래만 받습니다.");
+            String itemField = field + ".items[%d].url".formatted(j);
+            requireUploadedUrl(url, itemField);
+            if (!seen.add(url)) {
+                throw ValidationFailures.of(itemField, "같은 사진 주소가 두 번 왔습니다.");
             }
+        }
+    }
+
+    /** 등록 · 사진 수정이 같이 쓴다. */
+    public void requireUploadedUrl(String url, String field) {
+        if (!url.startsWith(imageUrlPrefix) || url.length() == imageUrlPrefix.length()) {
+            throw ValidationFailures.of(field, "이미지 주소는 " + imageUrlPrefix + " 아래만 받습니다.");
         }
     }
 
@@ -360,14 +371,18 @@ public class ProductRegistrationValidator {
         return settings;
     }
 
+    /**
+     * 조합 전부. 각 조합의 selections 는 축을 넣은 순서다 — 기본 SKU 가 이 순서로 값을 잇는다. 옵션 추가(ProductEditService)와 표시명도
+     * 축 순이라 같은 조합이면 어느 경로로 만들어도 같은 SKU 다(전에는 여기만 키 사전순이었다). 설정과 대조하는 키는 {@link #selectionKey} 가 순서를 지운다.
+     */
     private static List<Map<String, String>> cartesian(List<Axis> axes) {
         List<Map<String, String>> result = new ArrayList<>();
-        result.add(new TreeMap<>());
+        result.add(new LinkedHashMap<>());
         for (Axis axis : axes) {
             List<Map<String, String>> next = new ArrayList<>();
             for (Map<String, String> partial : result) {
                 for (Value value : axis.values()) {
-                    Map<String, String> extended = new TreeMap<>(partial);
+                    Map<String, String> extended = new LinkedHashMap<>(partial);
                     extended.put(axis.key(), value.normalized());
                     next.add(extended);
                 }

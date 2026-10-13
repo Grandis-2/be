@@ -81,6 +81,55 @@ class CategoryApiTest {
     }
 
     @Test
+    @DisplayName("노드마다 optionAxes(기본 옵션 축)가 DB 에 넣은 순서 그대로 온다 — 넣지 않은 카테고리(상위 포함)는 빈 배열")
+    void nodesCarryDefaultOptionAxes() throws Exception {
+        UUID mobile = fixtures.category();
+        UUID tablet = fixtures.childCategory(mobile, "태블릿");
+        UUID foldable = fixtures.childCategory(mobile, "폴더블");
+        // 키 사전순(color · connectivity · storage)과 다른 순서 — 화면이 그리는 순서다
+        jdbcTemplate.update("""
+                UPDATE categories SET option_axes = JSON_ARRAY(JSON_OBJECT('key', 'storage', 'label', '저장 용량'),
+                       JSON_OBJECT('key', 'color', 'label', '색상'), JSON_OBJECT('key', 'connectivity', 'label', '연결')) WHERE id = ?""",
+                (Object) UuidBinary.toBytes(tablet));
+
+        JsonNode items = itemsOf(mockMvc.perform(get("/api/v1/categories"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+
+        JsonNode mobileNode = find(items, mobile);
+        assertThat(mobileNode.get("optionAxes").isArray()).isTrue();
+        assertThat(mobileNode.get("optionAxes")).isEmpty();
+        JsonNode axes = find(mobileNode.get("children"), tablet).get("optionAxes");
+        assertThat(axes).hasSize(3);
+        assertThat(axes.get(0).get("key").asString()).isEqualTo("storage");
+        assertThat(axes.get(0).get("label").asString()).isEqualTo("저장 용량");
+        assertThat(axes.get(1).get("key").asString()).isEqualTo("color");
+        assertThat(axes.get(2).get("key").asString()).isEqualTo("connectivity");
+        assertThat(find(mobileNode.get("children"), foldable).get("optionAxes")).as("기본값 []").isEmpty();
+    }
+
+    @Test
+    @DisplayName("기본 옵션 축이 배열이지만 모양이 틀린 행(문자열 원소 · key 없는 원소)은 그 행의 optionAxes 만 빈 배열 — 트리는 200 이고 다른 행은 그대로")
+    void malformedOptionAxesDoNotBreakTheTree() throws Exception {
+        UUID mobile = fixtures.category();
+        UUID strings = fixtures.childCategory(mobile, "문자열");
+        UUID noKey = fixtures.childCategory(mobile, "키 없음");
+        UUID fine = fixtures.childCategory(mobile, "정상");
+        jdbcTemplate.update("UPDATE categories SET option_axes = JSON_ARRAY('color') WHERE id = ?", (Object) UuidBinary.toBytes(strings));
+        jdbcTemplate.update("UPDATE categories SET option_axes = JSON_ARRAY(JSON_OBJECT('label', '색상')) WHERE id = ?", (Object) UuidBinary.toBytes(noKey));
+        jdbcTemplate.update("UPDATE categories SET option_axes = JSON_ARRAY(JSON_OBJECT('key', 'color', 'label', '색상')) WHERE id = ?",
+                (Object) UuidBinary.toBytes(fine));
+
+        JsonNode children = find(itemsOf(mockMvc.perform(get("/api/v1/categories"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString()), mobile).get("children");
+
+        assertThat(find(children, strings).get("optionAxes")).isEmpty();
+        assertThat(find(children, noKey).get("optionAxes")).isEmpty();
+        assertThat(find(children, fine).get("optionAxes")).as("대조군 — 맞는 행은 그대로").hasSize(1);
+    }
+
+    @Test
     @DisplayName("깊이 3 이상인 행은 오류 없이 응답에서 빠진다 — 막는 자리는 시드다")
     void grandchildIsDroppedWithoutError() throws Exception {
         UUID root = fixtures.category();

@@ -14,7 +14,7 @@ import java.util.UUID;
  * @param price                 옵션 최종가(정수 원)
  * @param registrationCompleted 판매 방식별 준비 — 일반은 order 재고 행, 사전예약은 preorder 회차 행이 있다
  * @param warranty              상품의 보증 설정(옵션 문서의 warranty). 제공하지 않으면 offered false · surcharge 0
- * @param imageUrl              상품 썸네일(목록과 같은 규칙 — 첫 색상의 첫 장). 없으면 null
+ * @param imageUrl              그 옵션의 사진 — 고른 색상의 첫 장, 색상이 없거나 그 색상에 사진이 없으면 상품 썸네일(첫 색상의 첫 장). 없으면 null
  */
 public record OptionLookupView(
         UUID optionId,
