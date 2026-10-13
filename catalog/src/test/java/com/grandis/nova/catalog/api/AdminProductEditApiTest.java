@@ -327,6 +327,28 @@ class AdminProductEditApiTest {
                     .content("{ \"selections\": { \"Color\": \"화이트\", \"color\": \"퍼플\", \"storage\": \"256GB\" } }")), "selections");
         }
 
+        /** 축 키가 사전순이 아닌 상품이어야 두 경로의 차이가 보인다 — color · storage 순이면 사전순과 같아 반대 구현도 통과한다. */
+        @Test
+        @DisplayName("기본 SKU 는 등록 · 옵션 추가 모두 축을 넣은 순서로 값을 잇는다 — storage 를 먼저 넣으면 256GB-블랙(사전순의 블랙-256GB 가 아니다)")
+        void defaultSkuFollowsAxisOrderOnBothPaths() throws Exception {
+            UUID productId = registerRaw("""
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Order", "brand": "APPLE", "modelName": "A0001", "visible": false, "basePrice": 1000,
+                      "optionAxes": [
+                        { "key": "storage", "label": "용량", "values": [ { "value": "256GB" }, { "value": "512GB" } ] },
+                        { "key": "color", "label": "색상", "values": [ { "value": "블랙" } ] } ],
+                      "combinations": [
+                        { "selections": { "color": "블랙", "storage": "256GB" }, "stock": 1 },
+                        { "selections": { "color": "블랙", "storage": "512GB" }, "excluded": true } ],
+                      "images": { "gallery": [ { "color": "블랙", "items": [ { "url": "https://img/b.jpg" } ] } ] } }
+                    """.formatted(categoryId));
+            assertThat(skus(productId)).as("등록 경로").containsExactly("256GB-블랙");
+
+            JsonNode added = data(mockMvc.perform(admin(post(PATH + "/{id}/variants", productId))
+                    .content("{ \"selections\": { \"color\": \"블랙\", \"storage\": \"512GB\" } }")).andExpect(status().isCreated()));
+            assertThat(added.get("sku").asString()).as("옵션 추가 경로도 같은 순서").isEqualTo("512GB-블랙");
+            assertThat(added.get("title").asString()).as("표시명과 같은 순서다").isEqualTo("512GB / 블랙");
+        }
+
         @Test
         @DisplayName("값에서 만들어지는 칸이 상한을 넘으면 400 — 기본 SKU 80자, 값 문구를 고쳐 길어진 옵션 표시명 120자")
         void derivedLengthsAreBounded() throws Exception {
@@ -879,6 +901,12 @@ class AdminProductEditApiTest {
 
     private ResultActions editVariant(UUID productId, UUID variantId, String body) throws Exception {
         return mockMvc.perform(admin(patch(PATH + "/{id}/variants/{v}", productId, variantId)).content(body));
+    }
+
+    private List<String> skus(UUID productId) throws Exception {
+        List<String> out = new ArrayList<>();
+        data(adminDetail(productId)).get("product").get("variants").forEach(variant -> out.add(variant.get("sku").asString()));
+        return out;
     }
 
     private ResultActions adminDetail(UUID productId) throws Exception {

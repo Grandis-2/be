@@ -360,14 +360,18 @@ public class ProductRegistrationValidator {
         return settings;
     }
 
+    /**
+     * 조합 전부. 각 조합의 selections 는 축을 넣은 순서다 — 기본 SKU 가 이 순서로 값을 잇는다. 옵션 추가(ProductEditService)와 표시명도
+     * 축 순이라 같은 조합이면 어느 경로로 만들어도 같은 SKU 다(전에는 여기만 키 사전순이었다). 설정과 대조하는 키는 {@link #selectionKey} 가 순서를 지운다.
+     */
     private static List<Map<String, String>> cartesian(List<Axis> axes) {
         List<Map<String, String>> result = new ArrayList<>();
-        result.add(new TreeMap<>());
+        result.add(new LinkedHashMap<>());
         for (Axis axis : axes) {
             List<Map<String, String>> next = new ArrayList<>();
             for (Map<String, String> partial : result) {
                 for (Value value : axis.values()) {
-                    Map<String, String> extended = new TreeMap<>(partial);
+                    Map<String, String> extended = new LinkedHashMap<>(partial);
                     extended.put(axis.key(), value.normalized());
                     next.add(extended);
                 }
