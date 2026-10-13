@@ -154,7 +154,7 @@ public record ProductOptions(List<Axis> axes, List<Image> defaultImages, List<Se
     }
 
     /**
-     * 목록 · 장바구니 · 리뷰 카드의 썸네일 — 첫 색상(관리자가 넣은 순서)의 첫 장, 색상 축이 없으면 기본 묶음의 첫 장. 첫 색상에 사진이 없으면 null 이다
+     * 목록 · 리뷰 카드의 썸네일 — 첫 색상(관리자가 넣은 순서)의 첫 장, 색상 축이 없으면 기본 묶음의 첫 장. 첫 색상에 사진이 없으면 null 이다
      * (다음 색상으로 넘어가지 않는다). 대표 표시는 보지 않는다. 프론트 카드가 첫 색상을 골라 그 색상의 사진을 첫 장부터 보여 주는 것과 같은 규칙이다.
      */
     public String thumbnailUrl() {
@@ -162,5 +162,19 @@ public record ProductOptions(List<Axis> axes, List<Image> defaultImages, List<Se
                 .map(color -> color.values().isEmpty() ? List.<Image>of() : color.values().getFirst().images())
                 .orElse(defaultImages);
         return first.isEmpty() ? null : first.getFirst().url();
+    }
+
+    /**
+     * 옵션(조합) 하나의 사진 — 장바구니 · 증정품처럼 고른 옵션을 보여 주는 자리. 그 조합이 고른 색상 값의 첫 장이고, 색상 축이 없거나
+     * 그 색상에 사진이 없으면 {@link #thumbnailUrl()} 이다. 대표 표시는 보지 않는다(썸네일과 같은 "첫 장" 규칙).
+     *
+     * @param valueIds 그 옵션의 조합 키가 고른 값 id
+     */
+    public String imageUrlOf(Collection<String> valueIds) {
+        return axis(OptionText.COLOR)
+                .flatMap(color -> color.values().stream().filter(value -> valueIds.contains(value.id())).findFirst())
+                .filter(value -> !value.images().isEmpty())
+                .map(value -> value.images().getFirst().url())
+                .orElseGet(this::thumbnailUrl);
     }
 }

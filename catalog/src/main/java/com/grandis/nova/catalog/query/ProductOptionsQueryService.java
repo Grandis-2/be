@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.catalog.option.ProductOptions;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -71,7 +72,7 @@ public class ProductOptionsQueryService {
         Map<UUID, Product> productsById = new HashMap<>();
         products.findAllById(productIds).forEach(product -> productsById.put(product.getId(), product));
         Map<UUID, ProductListingQueryRepository.Exposure> exposures = crossReads.findExposures(productIds);
-        Map<UUID, ProductOptions.Warranty> warranties = new HashMap<>();   // 상품 문서(JSON)는 상품마다 한 번만 푼다
+        Map<UUID, ProductOptions> documents = new HashMap<>();   // 상품 문서(JSON)는 상품마다 한 번만 푼다
 
         List<OptionLookupView> views = new ArrayList<>();
         for (UUID optionId : new LinkedHashSet<>(optionIds)) {
@@ -84,10 +85,12 @@ public class ProductOptionsQueryService {
             if (product == null || exposure == null) {
                 throw new IllegalStateException("옵션의 상품이 같은 스냅샷에 없다(FK 위반?): option=" + optionId);
             }
-            ProductOptions.Warranty warranty = warranties.computeIfAbsent(product.getId(), id -> product.getOptions().warranty());
+            ProductOptions document = documents.computeIfAbsent(product.getId(), id -> product.getOptions());
+            ProductOptions.Warranty warranty = document.warranty();
             views.add(new OptionLookupView(option.getId(), product.getId(), product.getTitle(), option.getTitle(), option.getSku(),
                     option.getPrice(), option.getStatus(), product.getSaleMode(), exposure.status(), exposure.visible(), exposure.ready(),
-                    new OptionLookupView.Warranty(warranty.offered(), warranty.surcharge()), product.getThumbnailUrl()));
+                    new OptionLookupView.Warranty(warranty.offered(), warranty.surcharge()),
+                    document.imageUrlOf(OptionCombination.valueIdsOf(option.getCombinationKey()))));
         }
         return views;
     }
