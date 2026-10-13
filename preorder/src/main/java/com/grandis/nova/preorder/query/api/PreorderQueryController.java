@@ -44,6 +44,15 @@ class PreorderQueryController {
                 .map(PreorderSummaryResponse::from));
     }
 
+    @Operation(summary = "내 진행 중인 예약 전부(상품마다 많아야 한 건)",
+            description = "상품 목록에서 예약 여부 · 단계를 보이는 데 쓴다. 취소가 끝난 예약은 나오지 않는다.")
+    @GetMapping("/active")
+    public ApiResponse<Items<ActivePreorderResponse>> active(@CurrentCustomerId UUID customerId) {
+        return ApiResponse.ok(new Items<>(queryService.findMyActive(customerId).stream()
+                .map(ActivePreorderResponse::from)
+                .toList()));
+    }
+
     @Operation(summary = "예약 상세(본인 · 관리자)")
     @GetMapping("/{preorderId}")
     public ApiResponse<PreorderDetailResponse> get(@CurrentViewer Viewer viewer, @PathVariable String preorderId) {

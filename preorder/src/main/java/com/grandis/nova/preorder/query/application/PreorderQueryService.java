@@ -43,14 +43,16 @@ public class PreorderQueryService {
     private final Campaigns campaigns;
     private final SyncJobs syncJobs;
     private final SyncAttemptReader syncAttempts;
+    private final PreorderQueryProperties properties;
     private final Clock clock;
 
     PreorderQueryService(Preorders preorders, Campaigns campaigns, SyncJobs syncJobs,
-                         SyncAttemptReader syncAttempts, Clock clock) {
+                         SyncAttemptReader syncAttempts, PreorderQueryProperties properties, Clock clock) {
         this.preorders = preorders;
         this.campaigns = campaigns;
         this.syncJobs = syncJobs;
         this.syncAttempts = syncAttempts;
+        this.properties = properties;
         this.clock = clock;
     }
 
@@ -73,6 +75,15 @@ public class PreorderQueryService {
         }
         PreorderSnapshot last = found.getLast();
         return CursorPage.of(items, Cursor.encode(last.createdAt().toString(), last.id()));
+    }
+
+    /** 내 진행 중인 예약 전부(최신순). 상품마다 많아야 한 건이라 페이지를 나누지 않는다. */
+    public List<PreorderView.Active> findMyActive(UUID customerId) {
+        List<PreorderSnapshot> found = preorders.findActiveForCustomer(customerId, properties.activeLimit());
+        Map<UUID, SyncJobStatus> registerStatuses = registerJobStatuses(found);
+        Instant now = clock.instant();
+        return found.stream().map(preorder -> new PreorderView.Active(
+                preorder, displayStatus(preorder, registerStatuses.get(preorder.id()), now))).toList();
     }
 
     /** 예약 하나. 본인과 관리자만 볼 수 있고, 남의 예약은 존재를 알리지 않는다(404). */

@@ -32,6 +32,11 @@ public final class PreorderSpecifications {
                 : (root, query, builder) -> builder.equal(root.get("productId"), productId);
     }
 
+    /** 진행 중인 예약(취소 완료가 아닌 것). DB 의 active_marker 와 같은 기준이라 회원 · 상품마다 많아야 한 건이다. */
+    public static Specification<Preorder> active() {
+        return (root, query, builder) -> builder.notEqual(root.get("status"), PreorderStatus.CANCELED);
+    }
+
     /** 커서보다 뒤(더 오래된 것). 정렬이 created_at · id 내림차순이라 둘을 함께 본다. */
     public static Specification<Preorder> after(Instant createdAt, UUID id) {
         return createdAt == null ? Specification.unrestricted() : (root, query, builder) -> builder.or(
