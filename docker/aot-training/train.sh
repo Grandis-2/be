@@ -11,7 +11,8 @@
 # 4) 학습한 그 이미지에 캐시를 얹는다(docker/Dockerfile.aot → <FINAL_REPO>:<서비스>). 다시 빌드한 이미지에 얹으면 안 된다 —
 #    JVM 은 jar 가 학습 때와 같은지 보지 않아, 어긋나면 거절 대신 캐시의 옛 클래스를 실행한다(JDK 25 실측).
 # 5) 검증: 최종 이미지를 그 ENTRYPOINT 에 -XX:AOTMode=on 을 더해 띄운다 — JDK · 캐시 경로 · 모듈 구성이 어긋나 캐시를 받지 못하면
-#    JVM 이 실패한다(운영의 기본 auto 는 조용히 캐시 없이 뜬다). 운영이 켜는 OTel 에이전트를 붙여 한 번 더 띄운다.
+#    JVM 이 실패한다(운영의 기본 auto 는 조용히 캐시 없이 뜬다). 운영처럼 OTel 에이전트를 붙여 한 번 더 띄우고,
+#    기동 로그가 OTel 로그 레코드로 나왔는지 본다(에이전트가 JDK 와 맞지 않으면 경고 없이 아무것도 내보내지 않는다).
 #    기반 이미지(지금의 운영과 같은 기본 CDS)를 띄운 시간과 함께 표로 남긴다(SUMMARY, 없으면 표준 출력).
 #
 # 학습 환경은 이번 실행에서만 쓰고 버린다. 비밀값(DB · 관리자 비밀번호 · JWT 키 · 입장권 · Toss 키)은 모두 매번 새로 만든다.
@@ -384,10 +385,12 @@ startup_seconds() {
   python3 -c "print(f'{$(now) - $start:.1f}')"
 }
 
-# 운영처럼 에이전트를 켠다(nova-infra 의 작업 정의와 같은 계측 범위). 내보내기는 끈다 — 받을 곳이 없고, 기동에서 볼 것은 캐시 수락이다
+# 운영처럼 에이전트를 켠다 — nova-infra 작업 정의(otel.tf)와 같이 계측은 전부. 로그만 표준 출력(console)으로 내보내
+# 기동 로그가 OTel 로그 레코드로 찍혔는지 본다. 그 줄의 모양: <시각> INFO 'Starting …' : <trace id> <span id> [scopeInfo: …] {…}
+# 검증 실행은 onRefresh 에서 끝나 "Started …" 는 찍히지 않는다 — 맨 앞의 "Starting …" 을 본다.
 AGENT_OPTIONS="-javaagent:/otel/javaagent.jar"
-AGENT_ENV=(-e OTEL_SERVICE_NAME=aot-training -e OTEL_TRACES_EXPORTER=none -e OTEL_METRICS_EXPORTER=none -e OTEL_LOGS_EXPORTER=none
-  -e OTEL_INSTRUMENTATION_COMMON_DEFAULT_ENABLED=false -e OTEL_INSTRUMENTATION_LOGBACK_APPENDER_ENABLED=true)
+AGENT_ENV=(-e OTEL_SERVICE_NAME=aot-training -e OTEL_TRACES_EXPORTER=none -e OTEL_METRICS_EXPORTER=none -e OTEL_LOGS_EXPORTER=console)
+AGENT_LOG_RECORD="^[^ ]+ INFO 'Starting .*' : [0-9a-f]{32} [0-9a-f]{16} \[scopeInfo: "
 
 mb() { python3 -c "print(f'{$1 / 1048576:.0f}')"; }
 
@@ -406,6 +409,8 @@ for s in "${services[@]}"; do
   # 기준은 기반 이미지 그대로다(JDK 기본 CDS 는 켜진 지금의 운영과 같다). AOTMode=off 는 기본 CDS 까지 꺼 효과를 부풀린다.
   with=$(startup_seconds "$FINAL_REPO:$s" "$s" -XX:AOTMode=on)
   with_agent=$(startup_seconds "$FINAL_REPO:$s" "$s" "-XX:AOTMode=on $AGENT_OPTIONS" "${AGENT_ENV[@]}")
+  grep -qE "$AGENT_LOG_RECORD" "$WORK/$s.measure.log" \
+    || { log "$s: 에이전트가 기동 로그를 OTel 로그 레코드로 내보내지 않았다"; tail -n 60 "$WORK/$s.measure.log" >&2; exit 1; }
   without=$(startup_seconds "$PROJECT/$s:base" "$s")
   aot=$(wc -c < "$DIST/$s/app.aot" | tr -d ' ')
   grown=$(( $(docker image inspect -f '{{.Size}}' "$FINAL_REPO:$s") - $(docker image inspect -f '{{.Size}}' "$PROJECT/$s:base") ))
