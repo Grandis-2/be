@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.core.JacksonException;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -67,6 +68,27 @@ public class CategoryTreeService {
     }
 
     private static CategoryNode toNode(Category category, List<CategoryNode> children) {
-        return new CategoryNode(category.getId(), category.getName(), category.getParentId(), category.getOptionAxes(), children);
+        return new CategoryNode(category.getId(), category.getName(), category.getParentId(), optionAxesOf(category), children);
+    }
+
+    /**
+     * 기본 옵션 축. DB CHECK 는 배열인지만 본다 — 원소가 문자열이거나 key · label 이 없는 행(init.sql 실수)은 그 행만 빈 배열로 두고 경고한다.
+     * 화면을 미리 채우는 틀일 뿐이라 카테고리는 트리에 남긴다. 예외를 그대로 두면 공개 트리 전체가 500 이었다(실측).
+     */
+    private static List<CategoryNode.OptionAxis> optionAxesOf(Category category) {
+        try {
+            List<CategoryNode.OptionAxis> axes = category.getOptionAxes();
+            if (axes.stream().allMatch(axis -> axis != null && hasText(axis.key()) && hasText(axis.label()))) {
+                return axes;
+            }
+        } catch (JacksonException e) {
+            // 아래에서 경고하고 빈 배열
+        }
+        log.warn("기본 옵션 축의 모양이 틀린 카테고리 — 빈 배열로 싣는다. id={}", category.getId());
+        return List.of();
+    }
+
+    private static boolean hasText(String text) {
+        return text != null && !text.isBlank();
     }
 }

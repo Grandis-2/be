@@ -109,6 +109,27 @@ class CategoryApiTest {
     }
 
     @Test
+    @DisplayName("기본 옵션 축이 배열이지만 모양이 틀린 행(문자열 원소 · key 없는 원소)은 그 행의 optionAxes 만 빈 배열 — 트리는 200 이고 다른 행은 그대로")
+    void malformedOptionAxesDoNotBreakTheTree() throws Exception {
+        UUID mobile = fixtures.category();
+        UUID strings = fixtures.childCategory(mobile, "문자열");
+        UUID noKey = fixtures.childCategory(mobile, "키 없음");
+        UUID fine = fixtures.childCategory(mobile, "정상");
+        jdbcTemplate.update("UPDATE categories SET option_axes = JSON_ARRAY('color') WHERE id = ?", (Object) UuidBinary.toBytes(strings));
+        jdbcTemplate.update("UPDATE categories SET option_axes = JSON_ARRAY(JSON_OBJECT('label', '색상')) WHERE id = ?", (Object) UuidBinary.toBytes(noKey));
+        jdbcTemplate.update("UPDATE categories SET option_axes = JSON_ARRAY(JSON_OBJECT('key', 'color', 'label', '색상')) WHERE id = ?",
+                (Object) UuidBinary.toBytes(fine));
+
+        JsonNode children = find(itemsOf(mockMvc.perform(get("/api/v1/categories"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString()), mobile).get("children");
+
+        assertThat(find(children, strings).get("optionAxes")).isEmpty();
+        assertThat(find(children, noKey).get("optionAxes")).isEmpty();
+        assertThat(find(children, fine).get("optionAxes")).as("대조군 — 맞는 행은 그대로").hasSize(1);
+    }
+
+    @Test
     @DisplayName("깊이 3 이상인 행은 오류 없이 응답에서 빠진다 — 막는 자리는 시드다")
     void grandchildIsDroppedWithoutError() throws Exception {
         UUID root = fixtures.category();
