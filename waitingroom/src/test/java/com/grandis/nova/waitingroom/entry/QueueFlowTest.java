@@ -8,6 +8,7 @@ import com.grandis.nova.waitingroom.domain.product.SalesWindow;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
 import com.grandis.nova.waitingroom.domain.queue.AdmissionTicket;
 import com.grandis.nova.waitingroom.domain.queue.EtaPolicy;
+import com.grandis.nova.waitingroom.domain.queue.QueueToken;
 import com.grandis.nova.waitingroom.redis.ControlStore;
 import com.grandis.nova.waitingroom.redis.LuaScripts;
 import com.grandis.nova.waitingroom.support.RedisContainer;
@@ -100,6 +101,9 @@ class QueueFlowTest {
     @Autowired
     AdmissionTicket tickets;
 
+    @Autowired
+    QueueToken queueTokens;
+
     WebTestClient client;
     ControlStore control;
     Instant now;
@@ -152,6 +156,12 @@ class QueueFlowTest {
 
     private String queueToken(String customer) {
         return (String) data(enter(customer).expectStatus().isAccepted()).get("queueToken");
+    }
+
+    /** 오래 기다린 사람의 토큰 — 만료까지 30분이 안 남았다. */
+    private String agedQueueToken(String customer) {
+        queueToken(customer);
+        return queueTokens.issue(PRODUCT, customer, now.minusSeconds(QueueToken.TTL_SEC - QueueToken.RENEW_BELOW_SEC + 60));
     }
 
     private static String ticketOf(WebTestClient.ResponseSpec response) {
@@ -330,7 +340,7 @@ class QueueFlowTest {
     class 조회 {
 
         @Test
-        void 줄_서는_중이면_순서_총원_뒤_인원과_다시_올_때를_준다() {
+        void 줄_서는_중이면_순서_총원_뒤_인원과_다시_올_때를_주고_갓_받은_토큰은_바꾸지_않는다() {
             snapshot(crowded());
             String token = queueToken(customerId(1));
             queueToken(customerId(2));
@@ -343,6 +353,41 @@ class QueueFlowTest {
                     .jsonPath("$.data.totalWaiting").isEqualTo(2)
                     .jsonPath("$.data.behind").isEqualTo(1)
                     .jsonPath("$.data.queueToken").doesNotExist();
+        }
+
+        @Test
+        void 만료가_가까운_대기_토큰으로_조회하면_새_토큰을_주고_옛_토큰도_만료_전까지_된다() {
+            snapshot(crowded());
+            String aged = agedQueueToken(customerId(1));
+
+            String renewed = (String) data(status(customerId(1), aged).expectStatus().isOk()).get("queueToken");
+
+            assertThat(renewed).isNotNull().isNotEqualTo(aged);
+            status(customerId(1), renewed).expectStatus().isOk().expectBody()
+                    .jsonPath("$.data.status").isEqualTo("WAITING")
+                    .jsonPath("$.data.position").isEqualTo(1)
+                    .jsonPath("$.data.queueToken").doesNotExist();
+            status(customerId(1), aged).expectStatus().isOk().expectBody()
+                    .jsonPath("$.data.status").isEqualTo("WAITING")
+                    .jsonPath("$.data.queueToken").isNotEmpty();
+            Instant afterAged = now.plusSeconds(QueueToken.RENEW_BELOW_SEC);
+            assertThat(queueTokens.verify(aged, PRODUCT, afterAged)).isEmpty();
+            assertThat(queueTokens.verify(renewed, PRODUCT, afterAged)).isPresent();
+        }
+
+        @Test
+        void 비공개로_멈춘_줄에서도_새_토큰을_줘_만료_뒤_줄을_잃지_않는다() {
+            snapshot(crowded());
+            String aged = agedQueueToken(customerId(1));
+            snapshot(ProductState.hidden(1, open(), ProductState.UNLIMITED_CAP));
+
+            String renewed = (String) data(status(customerId(1), aged).expectStatus().isOk()).get("queueToken");
+
+            assertThat(queueTokens.verify(renewed, PRODUCT, now.plusSeconds(QueueToken.RENEW_BELOW_SEC)))
+                    .isPresent();
+            status(customerId(1), renewed).expectStatus().isOk().expectBody()
+                    .jsonPath("$.data.status").isEqualTo("WAITING")
+                    .jsonPath("$.data.position").isEqualTo(1);
         }
 
         @Test
