@@ -266,6 +266,7 @@ class PreorderQueryApiTest {
                 .andExpect(jsonPath("$.data.items[0].productId").value(newest.preorder().productId().toString()))
                 .andExpect(jsonPath("$.data.items[1].preorderId").value(AcceptFixtures.tokenOf(again)))
                 .andExpect(jsonPath("$.data.items[1].productId").value(reapplied.productId().toString()))
+                .andExpect(jsonPath("$.data.nextCursor").doesNotExist())
                 .andExpect(jsonPath("$.data.items[0].version").doesNotExist())
                 .andExpect(jsonPath("$.data.items[0].queuePosition").doesNotExist());
     }
@@ -275,6 +276,12 @@ class PreorderQueryApiTest {
         UUID id = accepts.accept(customerId).preorder().id();
         mockMvc.perform(get("/api/v1/preorders/active").with(customer(customerId)))
                 .andExpect(jsonPath("$.data.items[0].displayStatus").value("RECEIVED"))
+                .andExpect(jsonPath("$.data.items[0].paymentDueAt").doesNotExist());
+
+        jdbcTemplate.update("UPDATE preorder_sync_jobs SET status = 'RETRY_SCHEDULED' WHERE preorder_id = ?",
+                (Object) UuidBinary.toBytes(id));
+        mockMvc.perform(get("/api/v1/preorders/active").with(customer(customerId)))
+                .andExpect(jsonPath("$.data.items[0].displayStatus").value("PROCESSING"))
                 .andExpect(jsonPath("$.data.items[0].paymentDueAt").doesNotExist());
 
         fire(id, new PreorderFact.RegisterConfirmed("EXT-" + ShopFixtures.unique()));
@@ -294,13 +301,16 @@ class PreorderQueryApiTest {
     }
 
     @Test
-    void 진행_중인_예약이_없으면_빈_목록이고_로그인하지_않으면_401() throws Exception {
+    void 진행_중인_예약이_없으면_빈_목록이고_로그인하지_않으면_401_잘못된_커서는_400() throws Exception {
         cancels.complete(accepts.accept(customerId).preorder().id());
 
         mockMvc.perform(get("/api/v1/preorders/active").with(customer(customerId)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items", hasSize(0)));
         mockMvc.perform(get("/api/v1/preorders/active")).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/v1/preorders/active").param("cursor", "not-a-cursor").with(customer(customerId)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
     }
 
     private void fire(UUID preorderId, PreorderFact fact) {
