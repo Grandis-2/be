@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog.listing;
 
+import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.common.UuidBinary;
@@ -61,7 +62,7 @@ public class ProductListingQueryRepository {
                AND\s""" + READY + "\n";
 
     private static final String SELECT_ITEMS = """
-            SELECT p.id, p.sale_mode, p.title, p.status, c.opens_at, c.closes_at,
+            SELECT p.id, p.sale_mode, p.title, p.brand, p.model_name, p.status, c.opens_at, c.closes_at,
                    (SELECT MIN(o.price) FROM product_options o
                      WHERE o.product_id = p.id AND o.status = 'ACTIVE') AS min_price,
                    EXISTS (SELECT 1 FROM product_options po
@@ -320,7 +321,8 @@ public class ProductListingQueryRepository {
         PreorderSaleStatus preorderStatus = saleMode == SaleMode.PREORDER && opensAt != null && closesAt != null
                 ? PreorderSaleStatus.of(opensAt, closesAt, now) : null;
         BigDecimal minPrice = rs.getBigDecimal("min_price");
-        return new ProductListItem(UuidBinary.fromBytes(rs.getBytes("id")), saleMode, rs.getString("title"), rs.getString("image_url"),
+        return new ProductListItem(UuidBinary.fromBytes(rs.getBytes("id")), saleMode, rs.getString("title"),
+                Brand.valueOf(rs.getString("brand")), rs.getString("model_name"), rs.getString("image_url"),
                 SaleStatus.valueOf(rs.getString("status")), minPrice, rs.getBoolean("sellable"), rs.getBoolean("sold_out"),
                 preorderStatus, opensAt, closesAt);
     }

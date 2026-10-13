@@ -112,8 +112,8 @@ public class OrderFixtures {
                 VALUES (?, '스마트폰', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
                 """);
         return insert("""
-                INSERT INTO products (id, category_id, sale_mode, title, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 'ACTIVE', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                INSERT INTO products (id, category_id, sale_mode, title, brand, model_name, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'APPLE', 'A0001', 'ACTIVE', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
                 """, bytes(categoryId), saleMode, PRODUCT_TITLE);
     }
 

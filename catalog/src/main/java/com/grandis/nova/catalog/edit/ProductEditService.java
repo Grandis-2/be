@@ -104,6 +104,9 @@ public class ProductEditService {
         if (request.title() != null && request.title().isBlank()) {
             throw ValidationFailures.of("title", "제목이 비었습니다.");
         }
+        if (request.modelName() != null && request.modelName().isBlank()) {
+            throw ValidationFailures.of("modelName", "모델명이 비었습니다.");
+        }
         if (request.basePrice() != null) {
             ProductRegistrationValidator.requireWholeWon(request.basePrice(), "basePrice");
         }
@@ -116,7 +119,7 @@ public class ProductEditService {
         }
         Product product = requireEditable(productId);
         String titleBefore = product.getTitle();
-        product.edit(request.title(), request.description(), request.tags());
+        product.edit(request.title(), request.brand(), request.modelName(), request.description(), request.tags());
         if (!product.getTitle().equals(titleBefore)) {
             retitleStandaloneOptions(product);   // 축 없는 상품의 옵션 표시명은 상품 제목이다
         }

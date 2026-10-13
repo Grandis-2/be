@@ -117,7 +117,7 @@ class AdminProductListApiTest {
         @DisplayName("등록 API 로 고른 visible 이 목록에 바로 실린다 — 등록 완료는 order 가 재고 행을 만들어야 true")
         void chosenVisibilityIsStoredAndCompletionFollowsStock() throws Exception {
             String body = """
-                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "등록 중", "tags": "%s", "visible": true, "basePrice": 10000,
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "등록 중", "brand": "APPLE", "modelName": "A0001", "tags": "%s", "visible": true, "basePrice": 10000,
                       "combinations": [ { "selections": {}, "stock": 3 } ] }
                     """.formatted(categoryId, tag);
             ResultActions created = mockMvc.perform(post(PATH).header("Idempotency-Key", "k-" + ShopFixtures.unique())

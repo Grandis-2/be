@@ -2,6 +2,7 @@ package com.grandis.nova.catalog;
 
 import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.catalog.option.ProductOptions;
+import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.Product;
 import com.grandis.nova.catalog.product.ProductOption;
 import com.grandis.nova.catalog.product.ProductOptionRepository;
@@ -46,10 +47,10 @@ class CatalogRepositoryWriteTest {
     void secondProductWithSameIdempotencyKeyIsRejected() {
         String key = ShopFixtures.unique();
         UUID categoryId = fixtures.category();
-        Product first = products.saveAndFlush(Product.register(key, categoryId, SaleMode.PREORDER, "First",
+        Product first = products.saveAndFlush(Product.register(key, categoryId, SaleMode.PREORDER, "First", Brand.APPLE, "A0001",
                 BigDecimal.ONE, null, null, false, false, BigDecimal.ZERO, ProductOptions.EMPTY));
 
-        assertThatThrownBy(() -> products.saveAndFlush(Product.register(key, categoryId, SaleMode.PREORDER, "Second",
+        assertThatThrownBy(() -> products.saveAndFlush(Product.register(key, categoryId, SaleMode.PREORDER, "Second", Brand.APPLE, "A0001",
                 BigDecimal.ONE, null, null, false, false, BigDecimal.ZERO, ProductOptions.EMPTY)))
                 .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("uq_product_idempotency");
 

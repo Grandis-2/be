@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog.listing;
 
+import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
 
@@ -20,6 +21,8 @@ public record AdminProductListItem(
         UUID productId,
         SaleMode saleMode,
         String title,
+        Brand brand,
+        String modelName,
         String imageUrl,
         SaleStatus status,
         boolean visible,
@@ -34,7 +37,7 @@ public record AdminProductListItem(
 ) {
 
     static AdminProductListItem of(ProductListItem item, boolean visible, boolean registrationCompleted, int optionCount) {
-        return new AdminProductListItem(item.productId(), item.saleMode(), item.title(), item.imageUrl(), item.status(),
+        return new AdminProductListItem(item.productId(), item.saleMode(), item.title(), item.brand(), item.modelName(), item.imageUrl(), item.status(),
                 visible, registrationCompleted, optionCount, item.minPrice(), item.sellable(), item.soldOut(),
                 item.preorderStatus(), item.opensAt(), item.closesAt());
     }

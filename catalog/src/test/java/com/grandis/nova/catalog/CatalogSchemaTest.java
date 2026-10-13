@@ -113,6 +113,26 @@ class CatalogSchemaTest {
         }
 
         @Test
+        @DisplayName("브랜드 · 모델명은 기본값이 없어 빠뜨린 INSERT 를 거절하고(1364), 브랜드는 SAMSUNG · APPLE · LG 만 받는다")
+        void brandAndModelNameAreRequired() {
+            UUID categoryId = fixtures.category();
+            assertThatThrownBy(() -> jdbcTemplate.update("""
+                    INSERT INTO products (id, category_id, sale_mode, title, model_name, status, created_at, updated_at)
+                    VALUES (UUID_TO_BIN(UUID()), ?, 'IN_STOCK', 'x', 'A1', 'ACTIVE', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""", UuidBinary.toBytes(categoryId)))
+                    .isInstanceOf(DataAccessException.class).hasMessageContaining("brand");
+            assertThatThrownBy(() -> jdbcTemplate.update("""
+                    INSERT INTO products (id, category_id, sale_mode, title, brand, status, created_at, updated_at)
+                    VALUES (UUID_TO_BIN(UUID()), ?, 'IN_STOCK', 'x', 'APPLE', 'ACTIVE', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""", UuidBinary.toBytes(categoryId)))
+                    .isInstanceOf(DataAccessException.class).hasMessageContaining("model_name");
+            UUID productId = fixtures.product(categoryId, "IN_STOCK", "ACTIVE");   // 대조군 — 두 칸을 넣은 행은 들어간다
+            assertThatThrownBy(() -> jdbcTemplate.update("UPDATE products SET brand = 'SONY' WHERE id = ?", UuidBinary.toBytes(productId)))
+                    .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_product_brand");
+            assertThatThrownBy(() -> jdbcTemplate.update("UPDATE products SET brand = '' WHERE id = ?", UuidBinary.toBytes(productId)))
+                    .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_product_brand");
+            jdbcTemplate.update("UPDATE products SET brand = 'LG' WHERE id = ?", UuidBinary.toBytes(productId));
+        }
+
+        @Test
         @DisplayName("기본가는 음수를 거부한다")
         void negativeAmountsRejected() {
             UUID productId = fixtures.product("IN_STOCK", "ACTIVE");

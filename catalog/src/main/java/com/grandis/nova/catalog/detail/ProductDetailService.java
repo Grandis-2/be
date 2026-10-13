@@ -114,6 +114,7 @@ public class ProductDetailService {
         Images productImages = imagesOf(document);
 
         return new ProductDetailView(product.getId(), product.getCategoryId(), product.getSaleMode(), product.getTitle(),
+                product.getBrand(), product.getModelName(),
                 product.getDescription(), product.getThumbnailUrl(), product.getStatus(), visible,
                 product.getBasePrice(), new Warranty(product.isWarrantyOffered(), product.getWarrantySurcharge()),
                 sellable, soldOut, campaign, toAxes(document), variants, productImages);

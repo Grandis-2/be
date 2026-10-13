@@ -1,6 +1,7 @@
 package com.grandis.nova.catalog.detail;
 
 import com.grandis.nova.catalog.listing.PreorderSaleStatus;
+import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
 
@@ -25,6 +26,8 @@ public record ProductDetailView(
         UUID categoryId,
         SaleMode saleMode,
         String title,
+        Brand brand,
+        String modelName,
         String description,
         String imageUrl,
         SaleStatus status,

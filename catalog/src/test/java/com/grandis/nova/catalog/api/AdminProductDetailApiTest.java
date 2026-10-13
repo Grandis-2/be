@@ -53,7 +53,7 @@ class AdminProductDetailApiTest {
         Instant opensAt = Instant.now().plus(HOUR.multipliedBy(2));
         String key = "k-" + ShopFixtures.unique();
         String body = """
-                { "categoryId": "%s", "saleMode": "PREORDER", "title": "Nova 1", "description": "설명", "tags": "nova,신제품",
+                { "categoryId": "%s", "saleMode": "PREORDER", "title": "Nova 1", "brand": "APPLE", "modelName": "A0001", "description": "설명", "tags": "nova,신제품",
                   "visible": true, "basePrice": 1000000,
                   "optionAxes": [ { "key": "color", "label": "색상", "values": [ { "value": "블랙" } ] } ],
                   "images": { "gallery": [ { "color": "블랙", "items": [ { "url": "https://img/b0.jpg" } ] } ] },

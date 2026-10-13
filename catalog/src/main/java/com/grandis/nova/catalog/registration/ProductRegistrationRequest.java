@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog.registration;
 
+import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.SaleMode;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
@@ -31,6 +32,8 @@ public record ProductRegistrationRequest(
         @NotNull UUID categoryId,
         @NotNull SaleMode saleMode,
         @NotBlank @Size(max = 100) String title,
+        @NotNull Brand brand,
+        @NotBlank @Size(max = MAX_MODEL_NAME_LENGTH) String modelName,
         @Size(max = 5000) String description,
         @Size(max = 500) String tags,
         @NotNull Boolean visible,
@@ -42,6 +45,9 @@ public record ProductRegistrationRequest(
         @Valid Campaign campaign,
         List<@NotNull @Valid ShipmentBatch> shipmentBatches
 ) {
+
+    /** 모델명 길이(products.model_name). 등록 · 수정이 같이 쓴다. 앞뒤 공백을 지운 값을 저장한다. */
+    public static final int MAX_MODEL_NAME_LENGTH = 40;
 
     /** 색상 hex 형식. 등록 · 값 추가 · 값 수정이 같이 쓴다. */
     public static final String HEX_PATTERN = "#[0-9A-Fa-f]{6}";

@@ -48,6 +48,14 @@ public class Product extends BaseEntity {
     @Column(nullable = false, length = 100)
     private String title;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private Brand brand;
+
+    /** 화면에 상품명과 함께 보이는 모델명(예: A5390). 표시용이라 옵션 SKU 와 섞지 않는다. */
+    @Column(nullable = false, length = 40)
+    private String modelName;
+
     @Column(nullable = false)
     private BigDecimal basePrice;
 
@@ -80,12 +88,14 @@ public class Product extends BaseEntity {
     protected Product() {
     }
 
-    private Product(String idempotencyKey, UUID categoryId, SaleMode saleMode, String title, BigDecimal basePrice,
-                    String description, String tags, boolean visible, ProductOptions options) {
+    private Product(String idempotencyKey, UUID categoryId, SaleMode saleMode, String title, Brand brand, String modelName,
+                    BigDecimal basePrice, String description, String tags, boolean visible, ProductOptions options) {
         this.idempotencyKey = idempotencyKey;
         this.categoryId = categoryId;
         this.saleMode = saleMode;
         this.title = title;
+        this.brand = Objects.requireNonNull(brand, "brand");
+        this.modelName = Objects.requireNonNull(modelName, "modelName").strip();
         this.basePrice = Amounts.requireWholeWon(basePrice, "basePrice");
         this.description = description;
         this.tags = tags;
@@ -98,10 +108,10 @@ public class Product extends BaseEntity {
      * 새 상품. 판매 상태는 ACTIVE, 공개 여부는 관리자가 고른 값이다 — 판매 방식별 준비가 끝나기 전에는 visible 이어도 노출되지 않는다.
      * 보증을 제공하지 않으면 추가금은 0 이다.
      */
-    public static Product register(String idempotencyKey, UUID categoryId, SaleMode saleMode, String title, BigDecimal basePrice,
-                                   String description, String tags, boolean visible,
+    public static Product register(String idempotencyKey, UUID categoryId, SaleMode saleMode, String title, Brand brand,
+                                   String modelName, BigDecimal basePrice, String description, String tags, boolean visible,
                                    boolean warrantyOffered, BigDecimal warrantySurcharge, ProductOptions options) {
-        return new Product(idempotencyKey, categoryId, saleMode, title, basePrice, description, tags, visible,
+        return new Product(idempotencyKey, categoryId, saleMode, title, brand, modelName, basePrice, description, tags, visible,
                 Objects.requireNonNull(options, "options").withWarranty(warrantyOf(warrantyOffered, warrantySurcharge, "warrantySurcharge")));
     }
 
@@ -162,9 +172,15 @@ public class Product extends BaseEntity {
     }
 
     /** 표시 정보 수정. null 은 "보내지 않음" 이라 그대로 둔다. 사전예약 오픈 뒤 금지는 서비스가 지킨다(회차는 preorder 표). */
-    public void edit(String title, String description, String tags) {
+    public void edit(String title, Brand brand, String modelName, String description, String tags) {
         if (title != null) {
             this.title = title.strip();
+        }
+        if (brand != null) {
+            this.brand = brand;
+        }
+        if (modelName != null) {
+            this.modelName = modelName.strip();
         }
         if (description != null) {
             this.description = description;
@@ -208,6 +224,14 @@ public class Product extends BaseEntity {
 
     public String getTitle() {
         return title;
+    }
+
+    public Brand getBrand() {
+        return brand;
+    }
+
+    public String getModelName() {
+        return modelName;
     }
 
     public BigDecimal getBasePrice() {

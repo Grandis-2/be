@@ -91,7 +91,7 @@ class ProductEditRaceTest {
         UUID productId = registerInStock();
         String storage512 = fixtures.valueId(productId, "storage", "512GB");
         // 첫 수정: 기본가 1,000,000 → 1,100,000. 둘째 수정: 512GB 추가금 200,000 → 300,000 — 첫 수정이 커밋되기 전에 시작한다
-        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)),
+        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null)),
                 () -> editService.editOptionValue(productId, storage512, new OptionValueEditRequest(null, new BigDecimal("300000"), null)));
 
         assertThat(price(productId, "256GB")).isEqualByComparingTo("1100000");
@@ -104,7 +104,7 @@ class ProductEditRaceTest {
     void variantEditAfterRecomputeKeepsTheNewPrice() throws Exception {
         UUID productId = registerInStock();
         UUID option512 = optionId(productId, "512GB");
-        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)),
+        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null)),
                 () -> editService.editVariant(productId, option512, new VariantEditRequest(SaleStatus.PAUSED)));
 
         assertThat(optionStatus(option512)).isEqualTo("PAUSED");
@@ -118,7 +118,7 @@ class ProductEditRaceTest {
         UUID productId = registerInStock();
         UUID option512 = optionId(productId, "512GB");
         interleave(() -> editService.editVariant(productId, option512, new VariantEditRequest(SaleStatus.PAUSED)),
-                () -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)));
+                () -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null)));
 
         assertThat(optionStatus(option512)).as("옛 상태를 읽어 두고 쓰면 ACTIVE 로 되돌아간다").isEqualTo("PAUSED");
         assertThat(price(productId, "512GB")).isEqualByComparingTo("1300000");
@@ -295,7 +295,7 @@ class ProductEditRaceTest {
     @DisplayName("기본가 수정이 커밋되기 전에 공개 전환이 들어오면 기다렸다가 새 기본가 위에 적는다 — 기본가 · 옵션 가격 · 공개 여부가 모두 새 값")
     void visibilityChangeSerializesWithEdit() throws Exception {
         UUID productId = registerInStock();
-        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)),
+        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null)),
                 () -> editService.changeVisibility(productId, new VisibilityChangeRequest(true)));
 
         assertThat(jdbcTemplate.queryForObject("SELECT base_price FROM products WHERE id = ?", BigDecimal.class, UuidBinary.toBytes(productId)))
@@ -438,7 +438,7 @@ class ProductEditRaceTest {
     }
 
     private static ProductEditRequest titleOnly(String title) {
-        return new ProductEditRequest(title, null, null, null, null);
+        return new ProductEditRequest(title, null, null, null, null, null, null);
     }
 
     private static void assertStateConflict(Runnable edit) {
@@ -557,7 +557,7 @@ class ProductEditRaceTest {
     /** 축 storage 하나(256GB +0 · 512GB +200,000), 기본가 1,000,000. */
     private UUID registerInStock() throws Exception {
         return register("""
-                { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Race", "visible": false, "basePrice": 1000000,
+                { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Race", "brand": "APPLE", "modelName": "A0001", "visible": false, "basePrice": 1000000,
                   "optionAxes": [ { "key": "storage", "label": "용량", "values": [ { "value": "256GB" }, { "value": "512GB", "surcharge": 200000 } ] } ],
                   "combinations": [ { "selections": { "storage": "256GB" }, "stock": 1 }, { "selections": { "storage": "512GB" }, "stock": 1 } ] }
                 """.formatted(categoryId));
@@ -566,7 +566,7 @@ class ProductEditRaceTest {
     private UUID registerPreorder() throws Exception {
         Instant opensAt = Instant.now().plus(Duration.ofHours(2));
         return register("""
-                { "categoryId": "%s", "saleMode": "PREORDER", "title": "Race", "visible": false, "basePrice": 1000000,
+                { "categoryId": "%s", "saleMode": "PREORDER", "title": "Race", "brand": "APPLE", "modelName": "A0001", "visible": false, "basePrice": 1000000,
                   "optionAxes": [ { "key": "storage", "label": "용량", "values": [ { "value": "256GB" } ] } ],
                   "combinations": [ { "selections": { "storage": "256GB" } } ],
                   "campaign": { "opensAt": "%s", "closesAt": "%s" },

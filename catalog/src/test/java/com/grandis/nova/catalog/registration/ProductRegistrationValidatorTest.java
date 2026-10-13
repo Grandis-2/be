@@ -1,6 +1,7 @@
 package com.grandis.nova.catalog.registration;
 
 import com.grandis.nova.catalog.image.ImageUploadProperties;
+import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.common.BusinessException;
 import org.junit.jupiter.api.DisplayName;
@@ -71,12 +72,12 @@ class ProductRegistrationValidatorTest {
         var images = new ProductRegistrationRequest.Images(
                 List.of(new ProductRegistrationRequest.GalleryBundle(null, List.of(new ProductRegistrationRequest.Image(galleryUrl, null)))),
                 List.of(new ProductRegistrationRequest.DetailBundle("사양", List.of(new ProductRegistrationRequest.Image(detailUrl, null)))));
-        return new ProductRegistrationRequest(UUID.randomUUID(), SaleMode.IN_STOCK, "Nova", null, null, true, new BigDecimal("1000"), null,
+        return new ProductRegistrationRequest(UUID.randomUUID(), SaleMode.IN_STOCK, "Nova", Brand.APPLE, "A0001", null, null, true, new BigDecimal("1000"), null,
                 null, List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, 1)), images, null, null);
     }
 
     private static ProductRegistrationRequest preorder(Instant opensAt) {
-        return new ProductRegistrationRequest(UUID.randomUUID(), SaleMode.PREORDER, "Nova", null, null, true, new BigDecimal("1000"), null,
+        return new ProductRegistrationRequest(UUID.randomUUID(), SaleMode.PREORDER, "Nova", Brand.APPLE, "A0001", null, null, true, new BigDecimal("1000"), null,
                 null, List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, null)), null,
                 new ProductRegistrationRequest.Campaign(opensAt, opensAt.plus(Duration.ofDays(1))),
                 List.of(new ProductRegistrationRequest.ShipmentBatch(1, 1L, null, LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 7))));

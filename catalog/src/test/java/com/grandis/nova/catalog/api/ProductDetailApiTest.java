@@ -84,6 +84,8 @@ class ProductDetailApiTest {
             assertThat(data.get("categoryId").asString()).isEqualTo(categoryId.toString());
             assertThat(data.get("saleMode").asString()).isEqualTo("PREORDER");
             assertThat(data.get("title").asString()).isEqualTo("Nova 1");
+            assertThat(data.get("brand").asString()).isEqualTo("APPLE");
+            assertThat(data.get("modelName").asString()).isEqualTo("A0001");
             assertThat(data.get("description").asString()).isEqualTo("설명");
             assertThat(data.get("status").asString()).isEqualTo("ACTIVE");
             assertThat(data.get("visible").asBoolean()).isTrue();
