@@ -71,6 +71,17 @@ class AdminProductImageEditApiTest {
         assertThat(product.get("imageUrl").asString()).as("썸네일은 첫 색상의 첫 장 그대로").isEqualTo("https://img/b0.jpg");
     }
 
+    /** 앱의 근사 비교 키(NFKD)는 ß 를 ss 로 펴지 않는다 — DB 콜레이션은 같다고 본다(등록의 영역 중복 판정과 같은 규칙). */
+    @Test
+    @DisplayName("상세 영역 이름은 DB 콜레이션으로 맞춘다 — Straße 영역이 있으면 Strasse 로 넣어도 그 영역 끝에 붙는다")
+    void detailSectionMatchesByDbCollation() throws Exception {
+        UUID productId = registerColorProduct();
+        add(productId, "DETAIL", "Straße", "https://img/st0.jpg").andExpect(status().isCreated());
+        JsonNode product = data(add(productId, "DETAIL", "Strasse", "https://img/st1.jpg").andExpect(status().isCreated())).get("product");
+        assertThat(sections(product)).containsExactly("제품 사양", "유의사항", "Straße");
+        assertThat(detail(product, "Straße")).containsExactly("https://img/st0.jpg", "https://img/st1.jpg");
+    }
+
     @Test
     @DisplayName("넣기 검사 — 이미 있는 주소 · CDN 밖 · 묶음 11장째 · 없는 색상 · color 상품에 색상 빠짐 · 상세에 영역 빠짐 · 모르는 kind 는 400 이고 아무것도 바뀌지 않는다")
     void addRules() throws Exception {

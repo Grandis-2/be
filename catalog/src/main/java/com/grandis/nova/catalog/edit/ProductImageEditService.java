@@ -2,6 +2,7 @@ package com.grandis.nova.catalog.edit;
 
 import com.grandis.nova.catalog.detail.AdminProductDetail;
 import com.grandis.nova.catalog.detail.ProductDetailService;
+import com.grandis.nova.catalog.option.CollationDuplicates;
 import com.grandis.nova.catalog.option.OptionText;
 import com.grandis.nova.catalog.option.ProductOptions;
 import com.grandis.nova.catalog.option.ProductOptions.Image;
@@ -21,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 관리자 사진 수정 — 한 장씩 넣기 · 바꾸기 · 빼기. 사진은 주소로 가리킨다(한 상품 안에서 주소는 한 번 — 등록 · 넣기 · 바꾸기가 막는다).
+ * 이 규칙 전에 등록한 상품에는 같은 주소가 두 자리에 있을 수 있다 — 그런 주소를 바꾸거나 빼면 두 자리 모두 바뀐다(같은 파일이라 결과는 같다).
  * 사진은 옵션 문서(products.options) 안에 있어 문서를 고쳐 다시 쓰고, 썸네일도 같이 다시 계산한다({@link Product#replaceOptions}).
  *
  * <p><b>사전예약 오픈 뒤에도 고칠 수 있다</b>(2026-10-13 결정) — 사진은 접수된 예약 · 주문이 복사해 두는 값이 아니고 preorder 의 접수 판정에도
@@ -33,11 +35,14 @@ public class ProductImageEditService {
     private final ProductRepository products;
     private final ProductRegistrationValidator validator;
     private final ProductDetailService detailService;
+    private final CollationDuplicates duplicates;
 
-    public ProductImageEditService(ProductRepository products, ProductRegistrationValidator validator, ProductDetailService detailService) {
+    public ProductImageEditService(ProductRepository products, ProductRegistrationValidator validator, ProductDetailService detailService,
+                                   CollationDuplicates duplicates) {
         this.products = products;
         this.validator = validator;
         this.detailService = detailService;
+        this.duplicates = duplicates;
     }
 
     /** 그 묶음 맨 뒤에 넣는다. 빈 상품 사진 묶음에 넣은 첫 장은 대표가 된다(등록과 같은 규칙). 상품 사진 묶음은 최대 10장. */
@@ -116,7 +121,8 @@ public class ProductImageEditService {
         return new ProductOptions(axes, document.defaultImages(), document.detailImages(), document.warranty());
     }
 
-    private static ProductOptions addToDetail(ProductOptions document, String bundle, String url) {
+    /** 같은 영역은 등록의 중복 판정과 같은 규칙 — 앱 근사 키로 먼저, 근사가 못 펴는 확장 문자(ß=ss)는 DB 콜레이션으로({@link CollationDuplicates}). */
+    private ProductOptions addToDetail(ProductOptions document, String bundle, String url) {
         if (bundle == null) {
             throw ValidationFailures.of("bundle", "상세 영역 이름이 필요합니다.");
         }
@@ -126,7 +132,7 @@ public class ProductImageEditService {
         List<Section> detail = new ArrayList<>();
         boolean added = false;
         for (Section existing : document.detailImages()) {
-            if (!added && ProductRegistrationValidator.collationKey(existing.section()).equals(key)) {
+            if (!added && sameSection(existing.section(), section, key)) {
                 List<Image> images = new ArrayList<>(existing.images());
                 images.add(new Image(url, false));
                 detail.add(new Section(existing.section(), images));
@@ -139,6 +145,10 @@ public class ProductImageEditService {
             detail.add(new Section(section, List.of(new Image(url, false))));
         }
         return new ProductOptions(document.axes(), document.defaultImages(), detail, document.warranty());
+    }
+
+    private boolean sameSection(String existing, String section, String key) {
+        return ProductRegistrationValidator.collationKey(existing).equals(key) || duplicates.any(List.of(existing, section));
     }
 
     private static List<Image> appended(List<Image> images, String url) {
