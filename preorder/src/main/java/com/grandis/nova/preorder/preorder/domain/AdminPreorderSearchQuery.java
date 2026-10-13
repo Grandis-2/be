@@ -6,13 +6,15 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
 
-import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * 관리자 검색의 대상 id 와 총 건수. 등록 작업 상태 조건 때문에 작업 표를 읽기 전용으로 조인하므로
+ * 관리자 검색의 대상 id 와 총 건수. 등록 작업 상태 · 배송 차수 조건 때문에 다른 모듈의 표를 읽기 전용으로 보므로
  * 엔티티 대신 SQL 로 고르고, 예약 값은 id 로 다시 읽는다.
  */
 @Component
@@ -57,11 +59,11 @@ public class AdminPreorderSearchQuery {
         }
         if (search.from() != null) {
             conditions.add("p.created_at >= :from");
-            params.addValue("from", Timestamp.from(search.from()));
+            params.addValue("from", utc(search.from()));
         }
         if (search.to() != null) {
             conditions.add("p.created_at < :to");
-            params.addValue("to", Timestamp.from(search.to()));
+            params.addValue("to", utc(search.to()));
         }
         if (search.registerJobStatus() != null) {
             conditions.add("""
@@ -69,6 +71,49 @@ public class AdminPreorderSearchQuery {
                              WHERE j.preorder_id = p.id AND j.job_type = 'REGISTER' AND j.status = :jobStatus)""");
             params.addValue("jobStatus", search.registerJobStatus());
         }
+        if (search.externalReference() != null) {
+            conditions.add("p.external_reference = :externalReference");
+            params.addValue("externalReference", search.externalReference());
+        }
+        if (search.optionId() != null) {
+            conditions.add("p.option_id = :optionId");
+            params.addValue("optionId", UuidBinary.toBytes(search.optionId()));
+        }
+        if (search.batchNumber() != null) {
+            // 차수 번호는 상품 안에서만 유일하다. 그 상품에 없는 번호면 아무것도 고르지 않는다
+            conditions.add("""
+                    p.shipment_batch_id = (SELECT b.id FROM shipment_batches b
+                                            WHERE b.product_id = :productId AND b.batch_number = :batchNumber)""");
+            params.addValue("batchNumber", search.batchNumber());
+        }
+        if (search.progress() != null) {
+            progress(search.progress(), conditions, params);
+        }
         return conditions.isEmpty() ? "" : " WHERE " + String.join(" AND ", conditions);
+    }
+
+    private void progress(AdminPreorderSearch.Progress progress, List<String> conditions,
+                          MapSqlParameterSource params) {
+        if (progress.registerAttempted() != null) {
+            conditions.add((progress.registerAttempted() ? "" : "NOT ") + """
+                    EXISTS (SELECT 1 FROM preorder_sync_jobs j
+                             WHERE j.preorder_id = p.id AND j.job_type = 'REGISTER' AND j.status <> 'PENDING')""");
+        }
+        if (progress.payableAfter() != null) {
+            conditions.add("p.payable_from > :payableAfter");
+            params.addValue("payableAfter", utc(progress.payableAfter()));
+        }
+        if (progress.payableUntil() != null) {
+            conditions.add("p.payable_from <= :payableUntil");
+            params.addValue("payableUntil", utc(progress.payableUntil()));
+        }
+        if (progress.paymentStarted() != null) {
+            conditions.add("p.payment_started_at IS " + (progress.paymentStarted() ? "NOT NULL" : "NULL"));
+        }
+    }
+
+    /** DB 는 UTC 벽시계 시각을 담는다. Timestamp 로 주고받으면 JVM 시간대만큼 어긋난다. */
+    private static LocalDateTime utc(Instant instant) {
+        return LocalDateTime.ofInstant(instant, ZoneOffset.UTC);
     }
 }

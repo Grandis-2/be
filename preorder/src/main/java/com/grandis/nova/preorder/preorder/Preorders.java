@@ -5,6 +5,7 @@ import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.preorder.domain.AdminPreorderSearchQuery;
 import com.grandis.nova.preorder.preorder.domain.Preorder;
+import com.grandis.nova.preorder.preorder.domain.PreorderBacklogQuery;
 import com.grandis.nova.preorder.preorder.domain.PreorderEvent;
 import com.grandis.nova.preorder.preorder.domain.PreorderEventRepository;
 import com.grandis.nova.preorder.preorder.domain.PreorderRepository;
@@ -36,11 +37,14 @@ public class Preorders {
     private final PreorderRepository preorders;
     private final PreorderEventRepository events;
     private final AdminPreorderSearchQuery adminSearch;
+    private final PreorderBacklogQuery backlog;
 
-    Preorders(PreorderRepository preorders, PreorderEventRepository events, AdminPreorderSearchQuery adminSearch) {
+    Preorders(PreorderRepository preorders, PreorderEventRepository events, AdminPreorderSearchQuery adminSearch,
+              PreorderBacklogQuery backlog) {
         this.preorders = preorders;
         this.events = events;
         this.adminSearch = adminSearch;
+        this.backlog = backlog;
     }
 
     public Optional<PreorderSnapshot> findByToken(String preorderToken) {
@@ -107,6 +111,13 @@ public class Preorders {
         Map<PreorderStatus, Long> counts = new EnumMap<>(PreorderStatus.class);
         preorders.countByStatus().forEach(row -> counts.put(row.getStatus(), row.getCount()));
         return counts;
+    }
+
+    /** 운영 현황용 예약 수. productId 가 null 이면 전체를 센다. */
+    public PreorderBacklog backlog(UUID productId, Instant now) {
+        return new PreorderBacklog(backlog.countByStatus(productId),
+                backlog.countRegisteredPayableUntil(now.minus(PreorderSnapshot.PAYMENT_WINDOW), productId),
+                backlog.findOldestCreatedAt(PreorderStatus.PENDING_SYNC, productId).orElse(null));
     }
 
     /** 회원의 예약(최신순)을 커서 자리 다음부터 최대 limit 건. 커서가 없으면 처음부터다. */

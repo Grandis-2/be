@@ -58,6 +58,12 @@ public class Campaigns {
         return new IssuedPosition(position, batch.toSnapshot());
     }
 
+    /** 그 상품에 사전예약 회차가 있는가. */
+    @Transactional(readOnly = true)
+    public boolean exists(UUID productId) {
+        return campaigns.existsById(productId);
+    }
+
     /** 예약에 배정된 차수. 없으면 IllegalStateException(오픈 전 검사를 지나친 데이터). */
     @Transactional(readOnly = true)
     public ShipmentBatchSnapshot getBatch(UUID shipmentBatchId) {
