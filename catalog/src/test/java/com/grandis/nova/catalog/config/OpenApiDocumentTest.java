@@ -122,6 +122,8 @@ class OpenApiDocumentTest {
         expected.put("PATCH /api/v1/admin/products/{productId}/sale-status", "SaleStatusChangeRequest");
         expected.put("PATCH /api/v1/admin/products/{productId}/visibility", "VisibilityChangeRequest");
         expected.put("POST /api/v1/admin/products/image-uploads", "ImageUploadRequest");
+        expected.put("POST /api/v1/admin/products/{productId}/images", "ProductImageAddRequest");
+        expected.put("PATCH /api/v1/admin/products/{productId}/images", "ProductImageReplaceRequest");
         expected.put("POST /api/v1/reviews", "ReviewCreateRequest");
         expected.put("PATCH /api/v1/reviews/{reviewId}", "ReviewUpdateRequest");
 
