@@ -11,7 +11,9 @@
 -- 상품 행이 이미 있는 DB 에서는 실패한다: 칸 추가가 기존 행을 '' 로 채우고 그 행이 ck_product_brand 에 걸린다(3819).
 -- 기존 상품의 브랜드를 정할 규칙이 없어 채우지 않는다. 운영은 상품 0행에서 적용한다(2026-10-13).
 -- products 를 먼저 바꾼다 — DDL 은 문장마다 커밋되어, 뒤 문장이 실패하면 앞 문장만 남은 채 이력이 실패로 남는다.
--- 이 순서면 행이 있어 실패할 때 아무 칸도 생기지 않는다(MySQL 8.4.11 · Flyway CLI 실측: 칸 0개, 지우고 다시 돌릴 것이 없다).
+-- 이 순서면 행이 있어 실패할 때 아무 칸도 생기지 않는다(MySQL 8.4.11 · Flyway CLI 실측: 칸 0개). 다만 이력에 실패(success=0)가 남아
+-- 다음 migrate 는 validate 에서 멈춘다 — 상품 행을 정리하고 flyway repair 뒤 다시 migrate 한다(release 는 migrate 가 실패하면 어떤 서비스도
+-- 배포하지 않는다). 운영 상품 0행은 밖에서 잴 수 없어 적용 전에 확인한다.
 -- 구버전 catalog 는 두 칸 없이 INSERT 하므로 이 마이그레이션부터 구버전 종료까지 상품 등록을 받지 않는다(조회 · 수정은 그대로 돈다).
 ALTER TABLE shop.products
     ADD COLUMN brand      varchar(20) NOT NULL AFTER title,
