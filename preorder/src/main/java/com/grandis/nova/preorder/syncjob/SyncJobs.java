@@ -2,6 +2,7 @@ package com.grandis.nova.preorder.syncjob;
 
 import com.grandis.nova.preorder.syncjob.domain.PreorderSyncJob;
 import com.grandis.nova.preorder.syncjob.domain.PreorderSyncJobRepository;
+import com.grandis.nova.preorder.syncjob.domain.UnfinishedJobCountQuery;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,10 +26,12 @@ public class SyncJobs {
 
     private final PreorderSyncJobRepository syncJobs;
     private final SyncAttemptWriter attempts;
+    private final UnfinishedJobCountQuery unfinished;
 
-    SyncJobs(PreorderSyncJobRepository syncJobs, SyncAttemptWriter attempts) {
+    SyncJobs(PreorderSyncJobRepository syncJobs, SyncAttemptWriter attempts, UnfinishedJobCountQuery unfinished) {
         this.syncJobs = syncJobs;
         this.attempts = attempts;
+        this.unfinished = unfinished;
     }
 
     /** 외부 등록 작업을 만든다. @return 작업 id */
@@ -103,5 +106,11 @@ public class SyncJobs {
         }
         return syncJobs.findByPreorderIdInAndJobType(preorderIds, SyncJobType.REGISTER).stream()
                 .collect(Collectors.toMap(PreorderSyncJob::getPreorderId, PreorderSyncJob::getStatus));
+    }
+
+    /** 끝나지 않은(대기 · 처리 중 · 재시도 대기 · 포기) 작업 수. 종류 → 상태 → 수. productId 가 null 이면 전체를 센다. */
+    @Transactional(readOnly = true)
+    public Map<SyncJobType, Map<SyncJobStatus, Long>> countUnfinished(UUID productId) {
+        return unfinished.count(productId);
     }
 }
