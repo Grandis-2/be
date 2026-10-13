@@ -6,6 +6,7 @@ import com.grandis.nova.common.ErrorCode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
@@ -13,7 +14,9 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebExceptionHandler;
 import reactor.core.publisher.Mono;
+import reactor.netty.channel.AbortedException;
 
+import java.io.IOException;
 import java.net.ConnectException;
 import java.util.concurrent.TimeoutException;
 
@@ -70,8 +73,19 @@ class GlobalErrorHandler implements WebExceptionHandler {
             log.warn("전달 대상에 연결하지 못했다: {}", ex.toString());
             return errorResponses.write(exchange, CommonErrorCode.DEPENDENCY_UNAVAILABLE);
         }
+        // 전달 대상에 붙은 뒤 답을 받기 전에 끊겼다(내려가는 preorder 태스크 · 사이의 프록시). 접수됐는지는 모른다 —
+        // 같은 Idempotency-Key 로 다시 보내면 preorder 가 한 번만 처리하므로 다시 보내라고 답한다
+        if (relayed(exchange) && (hasCause(ex, IOException.class) || hasCause(ex, AbortedException.class))) {
+            log.warn("전달 대상과의 연결이 끊겼다: {}", ex.toString());
+            return errorResponses.write(exchange, CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+        }
         log.error("처리하지 못한 오류", ex);
         return errorResponses.write(exchange, CommonErrorCode.INTERNAL_ERROR);
+    }
+
+    /** 접수 전달 경로의 요청인가. 경로를 고른 뒤의 오류만 전달 대상 탓으로 본다. */
+    private static boolean relayed(ServerWebExchange exchange) {
+        return exchange.getAttribute(ServerWebExchangeUtils.GATEWAY_ROUTE_ATTR) != null;
     }
 
     /** 계약에 코드가 있는 상태는 그 코드로, 나머지 4xx 는 VALIDATION_FAILED 로 묶되 상태 코드는 그대로 둔다. */

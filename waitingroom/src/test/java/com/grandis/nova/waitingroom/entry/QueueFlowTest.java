@@ -53,7 +53,7 @@ class QueueFlowTest {
     static final String PRODUCT = productKey(101);
     static final Duration WAIT = Duration.ofSeconds(5);
 
-    /** 가짜 preorder — 다음 응답을 정해 두고, 받은 요청 헤더를 남긴다. */
+    /** 가짜 preorder — 다음 응답을 정해 두고, 받은 요청 헤더를 남긴다. 요청 ID 는 실제 preorder 처럼 응답에 되싣는다. */
     static final AtomicReference<FakeReply> NEXT = new AtomicReference<>();
     static final AtomicReference<Map<String, String>> RECEIVED = new AtomicReference<>();
     static final DisposableServer PREORDER = HttpServer.create().port(0)
@@ -62,8 +62,13 @@ class QueueFlowTest {
                 request.requestHeaders().forEach(header -> headers.put(header.getKey().toLowerCase(), header.getValue()));
                 RECEIVED.set(headers);
                 FakeReply reply = NEXT.get();
+                if (reply.status() == FakeReply.DROP) {
+                    return request.receive().then().then(Mono.<Void>fromRunnable(
+                            () -> response.withConnection(connection -> connection.channel().close())).then(Mono.never()));
+                }
                 return request.receive().then()
                         .then(response.status(reply.status()).header("Content-Type", "application/json")
+                                .header("X-Request-Id", headers.getOrDefault("x-request-id", ""))
                                 .sendString(Mono.just(reply.body())).then());
             }))
             .bindNow();
@@ -431,6 +436,24 @@ class QueueFlowTest {
         }
 
         @Test
+        void 전달한_접수의_응답에는_요청_ID_가_한_번만_실린다() {
+            String ticket = tickets.issue(PRODUCT, customerId(1), now);
+
+            accept(customerId(1), ticket).expectStatus().isAccepted()
+                    .expectHeader().values("X-Request-Id", values -> assertThat(values)
+                            .containsExactly(RECEIVED.get().get("x-request-id")));
+        }
+
+        @Test
+        void preorder_가_답하지_않고_연결을_끊으면_500_이_아니라_다시_보내라는_503_이다() {
+            NEXT.set(new FakeReply(FakeReply.DROP, ""));
+
+            accept(customerId(1), tickets.issue(PRODUCT, customerId(1), now)).expectStatus().isEqualTo(503)
+                    .expectHeader().valueEquals(HttpHeaders.RETRY_AFTER, "2")
+                    .expectBody().jsonPath("$.error.code").isEqualTo("DEPENDENCY_UNAVAILABLE");
+        }
+
+        @Test
         void 만료된_지_잠깐인_입장권은_전달해_같은_접수의_재전송을_preorder_가_판단하게_한다() {
             String expired = tickets.issue(PRODUCT, customerId(1), now.minusSeconds(600));
 
@@ -580,5 +603,8 @@ class QueueFlowTest {
     }
 
     record FakeReply(int status, String body) {
+
+        /** 답하지 않고 연결을 끊는다 — 내려가는 preorder 태스크. */
+        static final int DROP = -1;
     }
 }
