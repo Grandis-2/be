@@ -8,8 +8,10 @@ import com.grandis.nova.preorder.web.Items;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -49,6 +51,15 @@ class AdminProductPreorderController {
                                                              @Valid @RequestBody PreorderCampaignRequest request) {
         return ApiResponse.ok(PreorderCampaignResponse.from(
                 campaignService.upsertCampaign(productId, request.opensAt(), request.closesAt()), clock.instant()));
+    }
+
+    /** 접수 중인 회차를 지금 마감한다. 새 접수만 막고 기존 예약은 그대로다. 되돌릴 수 없다. */
+    @Operation(summary = "접수 조기 마감(오픈 전 409)",
+            description = "새 접수만 막고 기존 예약은 그대로 둔다. 이미 마감이면 현재 일정을 그대로 준다. 다시 열 수 없다")
+    @PostMapping("/campaign/close")
+    public ApiResponse<PreorderCampaignResponse> closeCampaign(@PathVariable UUID productId, Authentication admin) {
+        return ApiResponse.ok(PreorderCampaignResponse.from(
+                campaignService.closeCampaign(productId, admin.getName()), clock.instant()));
     }
 
     @Operation(summary = "배송 차수 조회")

@@ -155,6 +155,12 @@ public class ShopFixtures {
                 (Object) UuidBinary.toBytes(preorderId));
     }
 
+    /** 그 대상에 대해 아웃박스에 적힌 그 종류의 이벤트 수. */
+    public int outboxEvents(String eventType, UUID aggregateId) {
+        return count("SELECT COUNT(*) FROM preorder_outbox_events WHERE event_type = ? AND aggregate_id = ?",
+                eventType, UuidBinary.toBytes(aggregateId));
+    }
+
     /** 확인용 건수 조회. */
     public int count(String sql, Object... args) {
         return jdbcTemplate.queryForObject(sql, Integer.class, args);
