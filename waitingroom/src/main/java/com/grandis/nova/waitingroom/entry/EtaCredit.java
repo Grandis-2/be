@@ -16,6 +16,11 @@ final class EtaCredit {
         return state.runtime() == RuntimeState.HIDDEN ? EtaPolicy.UNKNOWN : EtaPolicy.etaSec(rank, of(state, meta));
     }
 
+    /** 줄이 멈췄는가 — 비공개이거나 관리자가 전체 입장을 멈췄다. 브레이크는 1 아래로 줄이지 않아 0 은 정지뿐이다. */
+    static boolean paused(ProductState state, SnapshotMeta meta) {
+        return state.runtime() == RuntimeState.HIDDEN || meta.globalCredit() == 0;
+    }
+
     /**
      * 모델 몫을 모르면(급증 직후 판정 재료가 아직 한산을 말할 때 0) 전역 속도와 모델 상한 중 작은 쪽으로 잰다 —
      * 모른다고 가장 긴 조회 간격을 주면 이미 입장한 사람이 30초 뒤에야 안다. 전역 0(일시 정지)이면 모름 그대로다.

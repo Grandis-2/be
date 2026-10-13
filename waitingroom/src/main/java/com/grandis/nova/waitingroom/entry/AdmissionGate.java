@@ -155,7 +155,7 @@ public class AdmissionGate {
         }
         double eta = EtaCredit.etaSec(entry.rank(), state, meta);
         return new QueueView.Waiting(queueTokens.issue(productKey, customerId, now), entry.rank() + 1,
-                EtaPolicy.reportSec(eta), null, null, entry.alreadyQueued(),
+                EtaPolicy.reportSec(eta), null, null, entry.alreadyQueued(), EtaCredit.paused(state, meta),
                 polls.intervalSec(eta, ThreadLocalRandom.current()::nextDouble));
     }
 
