@@ -22,6 +22,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -62,6 +63,7 @@ class ProductEditRaceTest {
     Clock clock;
 
     @MockitoSpyBean ProductEditService editService;
+    @Autowired ProductImageEditService imageEditService;
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired PlatformTransactionManager transactionManager;
@@ -137,6 +139,32 @@ class ProductEditRaceTest {
                            NESTED PATH '$.values[*]' COLUMNS (v VARCHAR(60) PATH '$.normalized'))) j
                  WHERE p.id = ? AND j.k = 'storage'
                 """, String.class, UuidBinary.toBytes(productId))).containsExactlyInAnyOrder("256GB", "512GB", "1TB", "2TB");
+    }
+
+    /** 사진 수정도 문서를 통째로 다시 쓴다 — 잠그지 않고 읽으면 앞 수정이 커밋되기 전의 문서를 써서 앞의 변경을 지운다. 두 순서 모두 본다. */
+    @Test
+    @DisplayName("사진 넣기와 옵션 값 추가가 겹쳐도 둘 다 남는다 — 어느 쪽이 먼저든 뒤의 것은 앞의 것이 커밋된 문서를 읽는다")
+    void imageAddAndValueAddBothSurvive() throws Exception {
+        UUID imageFirst = registerInStock();
+        interleave(() -> imageEditService.add(imageFirst, imageAdd("https://img/race-a.jpg")),
+                () -> editService.addOptionValue(imageFirst, new OptionValueAddRequest("storage", "1TB", null, null)));
+        assertThat(storageValues(imageFirst)).contains("1TB");
+        assertThat(defaultImages(imageFirst)).containsExactly("https://img/race-a.jpg");
+
+        UUID valueFirst = registerInStock();
+        interleave(() -> editService.addOptionValue(valueFirst, new OptionValueAddRequest("storage", "1TB", null, null)),
+                () -> imageEditService.add(valueFirst, imageAdd("https://img/race-b.jpg")));
+        assertThat(storageValues(valueFirst)).contains("1TB");
+        assertThat(defaultImages(valueFirst)).containsExactly("https://img/race-b.jpg");
+    }
+
+    @Test
+    @DisplayName("사진 넣기 둘이 겹쳐도 둘 다 남는다")
+    void concurrentImageAddsBothSurvive() throws Exception {
+        UUID productId = registerInStock();
+        interleave(() -> imageEditService.add(productId, imageAdd("https://img/race-1.jpg")),
+                () -> imageEditService.add(productId, imageAdd("https://img/race-2.jpg")));
+        assertThat(defaultImages(productId)).containsExactly("https://img/race-1.jpg", "https://img/race-2.jpg");
     }
 
     @Test
@@ -416,6 +444,26 @@ class ProductEditRaceTest {
             root = root.getCause();
         }
         return String.valueOf(root.getMessage());
+    }
+
+    private static ProductImageAddRequest imageAdd(String url) {
+        return new ProductImageAddRequest(ProductImageAddRequest.Kind.GALLERY, null, url);
+    }
+
+    private List<String> storageValues(UUID productId) {
+        return jdbcTemplate.queryForList("""
+                SELECT j.v FROM products p,
+                       JSON_TABLE(p.options, '$.axes[*]' COLUMNS (k VARCHAR(40) PATH '$.key',
+                           NESTED PATH '$.values[*]' COLUMNS (v VARCHAR(60) PATH '$.normalized'))) j
+                 WHERE p.id = ? AND j.k = 'storage'
+                """, String.class, UuidBinary.toBytes(productId));
+    }
+
+    private List<String> defaultImages(UUID productId) {
+        return jdbcTemplate.queryForList("""
+                SELECT j.url FROM products p, JSON_TABLE(p.options, '$.defaultImages[*]' COLUMNS (url VARCHAR(1000) PATH '$.url')) j
+                 WHERE p.id = ?
+                """, String.class, UuidBinary.toBytes(productId));
     }
 
     private UUID optionId(UUID productId, String title) {
