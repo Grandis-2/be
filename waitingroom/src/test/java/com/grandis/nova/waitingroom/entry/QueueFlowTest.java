@@ -129,6 +129,11 @@ class QueueFlowTest {
         TestSnapshots.put(snapshots, Map.of(PRODUCT, state), new SnapshotMeta(100, 1, maxWait));
     }
 
+    /** 관리자가 전체 입장 속도를 0 으로 내린 상태. */
+    private void snapshotPaused(ProductState state) {
+        TestSnapshots.put(snapshots, Map.of(PRODUCT, state), new SnapshotMeta(0, 1, MaxWait.unlimited()));
+    }
+
     private SalesWindow open() {
         return new SalesWindow(now.minusSeconds(60), now.plusSeconds(3_600));
     }
@@ -303,7 +308,8 @@ class QueueFlowTest {
             enter(customerId(2)).expectStatus().isAccepted().expectBody()
                     .jsonPath("$.data.position").isEqualTo(1)
                     .jsonPath("$.data.etaSeconds").isEqualTo(EtaPolicy.reportSec(EtaPolicy.UNKNOWN))
-                    .jsonPath("$.data.rejoined").isEqualTo(true);
+                    .jsonPath("$.data.rejoined").isEqualTo(true)
+                    .jsonPath("$.data.paused").isEqualTo(true);
             assertThat(redis.opsForZSet().size("wr:queue:{" + PRODUCT + "}").block(WAIT)).as("거절된 사람은 서지 않는다")
                     .isEqualTo(1);
         }
@@ -352,7 +358,8 @@ class QueueFlowTest {
                     .jsonPath("$.data.position").isEqualTo(1)
                     .jsonPath("$.data.totalWaiting").isEqualTo(2)
                     .jsonPath("$.data.behind").isEqualTo(1)
-                    .jsonPath("$.data.queueToken").doesNotExist();
+                    .jsonPath("$.data.queueToken").doesNotExist()
+                    .jsonPath("$.data.paused").doesNotExist();
         }
 
         @Test
@@ -427,13 +434,48 @@ class QueueFlowTest {
                     .expectBody()
                     .jsonPath("$.data.status").isEqualTo("WAITING")
                     .jsonPath("$.data.position").isEqualTo(2)
-                    .jsonPath("$.data.etaSeconds").isEqualTo(EtaPolicy.reportSec(EtaPolicy.UNKNOWN));
+                    .jsonPath("$.data.etaSeconds").isEqualTo(EtaPolicy.reportSec(EtaPolicy.UNKNOWN))
+                    .jsonPath("$.data.paused").isEqualTo(true);
+            // 다시 공개되면 멈춤 안내가 사라진다
+            snapshot(crowded());
+            status(customerId(2), token).expectStatus().isOk().expectBody().jsonPath("$.data.paused").doesNotExist();
+            snapshot(ProductState.hidden(2, open(), ProductState.UNLIMITED_CAP));
             // 맨 앞이어도 곧 입장이 아니다
             status(customerId(1), first).expectStatus().isOk().expectBody()
                     .jsonPath("$.data.position").isEqualTo(1)
                     .jsonPath("$.data.etaSeconds").isEqualTo(EtaPolicy.reportSec(EtaPolicy.UNKNOWN));
             status(customerId(9), first).expectStatus().isNotFound().expectBody()
                     .jsonPath("$.error.code").isEqualTo("PRODUCT_NOT_FOUND");
+        }
+
+        @Test
+        void 전체_입장을_멈추면_진입과_조회에_멈춤을_알리고_다시_열면_사라진다() {
+            snapshot(crowded());
+            String token = queueToken(customerId(1));
+            snapshotPaused(crowded());
+
+            status(customerId(1), token).expectStatus().isOk().expectBody()
+                    .jsonPath("$.data.status").isEqualTo("WAITING")
+                    .jsonPath("$.data.position").isEqualTo(1)
+                    .jsonPath("$.data.paused").isEqualTo(true);
+            enter(customerId(2)).expectStatus().isAccepted().expectBody()
+                    .jsonPath("$.data.position").isEqualTo(2)
+                    .jsonPath("$.data.paused").isEqualTo(true);
+
+            snapshot(crowded());
+            status(customerId(1), token).expectStatus().isOk().expectBody().jsonPath("$.data.paused").doesNotExist();
+            enter(customerId(2)).expectStatus().isAccepted().expectBody().jsonPath("$.data.paused").doesNotExist();
+        }
+
+        @Test
+        void 입장_속도가_줄어_몫이_0_이어도_전체를_멈춘_것이_아니면_멈춤이_아니다() {
+            snapshot(crowded());
+            String token = queueToken(customerId(1));
+            snapshot(ProductState.withQueue(0, 1, open(), ProductState.UNLIMITED_CAP));
+
+            status(customerId(1), token).expectStatus().isOk().expectBody()
+                    .jsonPath("$.data.status").isEqualTo("WAITING")
+                    .jsonPath("$.data.paused").doesNotExist();
         }
 
         @Test

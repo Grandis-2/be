@@ -88,7 +88,7 @@ public class QueueLookup {
                 yield new QueueView.Waiting(queueTokens.renewal(productKey, owner, now).orElse(null),
                         entry.rank() + 1, EtaPolicy.reportSec(eta),
                         entry.total() == QueueEntry.UNKNOWN_TOTAL ? null : entry.total(),
-                        behind == QueueEntry.UNKNOWN_TOTAL ? null : behind, null,
+                        behind == QueueEntry.UNKNOWN_TOTAL ? null : behind, null, EtaCredit.paused(state, meta),
                         polls.intervalSec(eta, ThreadLocalRandom.current()::nextDouble));
             }
             case NOT_QUEUED, REJECTED -> closed(QueueView.Closed.Reason.NOT_IN_QUEUE);
