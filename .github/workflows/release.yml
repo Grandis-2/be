@@ -1,7 +1,7 @@
 name: release
 
 # main 에 들어간 것만 이미지가 되고, 운영 DB 마이그레이션을 먼저 적용한 뒤 latest 가 바뀐 서비스는 바뀐 그 자리에서 ECS 에 다시 배포된다.
-# PR 은 build.yml 이 검증만 한다.
+# main 은 promote.yml 만 옮긴다 — dev 커밋이 build · database 를 통과했을 때다. PR 은 build.yml 이 검증만 한다.
 on:
   push:
     branches: [main]
@@ -102,7 +102,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      # 여기서 빨간불이면 코드 문제다. 테스트는 PR 에서 build.yml 이 이미 돌렸다.
+      # 여기서 빨간불이면 코드 문제다. 테스트는 승격 전에 promote.yml 이 build.yml 로 이미 돌렸다.
       - name: jar 만들기
         run: |
           set -euo pipefail

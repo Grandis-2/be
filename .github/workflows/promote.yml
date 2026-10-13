@@ -1,0 +1,62 @@
+name: promote
+
+# dev 에 들어온 커밋을 검사하고, 통과하면 main 을 그 커밋으로 옮긴다. main 푸시가 release.yml(운영 마이그레이션 · 배포)을 부른다.
+# main 은 이 워크플로만 옮긴다 — main ruleset 의 우회 대상이 이 GitHub App 하나다.
+# GITHUB_TOKEN 으로 옮기면 push 이벤트가 버려져 release.yml 이 돌지 않는다. 그래서 App 토큰을 쓴다.
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:   # 스위치(AUTO_RELEASE)를 다시 켠 뒤 지금 dev 를 승격할 때
+
+# 도는 실행은 끝까지 두고, 기다리는 실행은 가장 최근 것 하나만 남긴다. 관문이 수십 분이라 앞 실행을 취소하면
+# 머지가 잦을 때 main 이 계속 못 나아간다. 건너뛴 커밋의 변경은 main 과 비교하는 다음 실행이 함께 검사한다.
+concurrency:
+  group: promote-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+
+  database:
+    uses: ./.github/workflows/database.yml
+
+  # 저장소 변수 AUTO_RELEASE 가 'false' 면 검사만 하고 main 을 옮기지 않는다 (부하 테스트 · 시연 중).
+  promote:
+    needs: [build, database]
+    if: github.ref == 'refs/heads/dev' && vars.AUTO_RELEASE != 'false'
+    runs-on: ubuntu-latest
+    # App 키는 dev 에서만 쓸 수 있는 환경에 둔다. 저장소 시크릿이면 아무 브랜치의 워크플로나 꺼내 main 을 옮길 수 있다.
+    environment: release
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        id: app
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-workflows: write   # 옮기는 커밋에 .github/workflows 변경이 있으면 없을 때 거부된다
+
+      # fast-forward 만 한다. main 에 dev 에 없는 커밋이 있으면 덮지 않고 실패한다 — dev 로 받은 뒤 다시 돌린다.
+      - name: main 옮기기
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          status=$(gh api "repos/$REPO/compare/main...$SHA" --jq .status)
+          case "$status" in
+            identical|behind)
+              msg="이미 main 에 있다: \`$SHA\`" ;;
+            ahead)
+              gh api -X PATCH "repos/$REPO/git/refs/heads/main" -f sha="$SHA" -F force=false > /dev/null
+              msg="main → \`$SHA\`" ;;
+            *)
+              echo "::error::main 과 갈라졌다($status). main 에만 있는 커밋을 dev 로 받은 뒤 다시 돌린다"
+              exit 1 ;;
+          esac
+          echo "$msg" | tee -a "$GITHUB_STEP_SUMMARY"
