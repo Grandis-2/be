@@ -29,6 +29,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -64,12 +65,15 @@ public class ReconciliationAdminService {
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
     private final Duration intakeRushWindow;
+    private final Duration externalCancelBatchDeadline;
 
     ReconciliationAdminService(ReconciliationRunRequestRepository runRequests, ReconciliationRuns runs,
                                ReconciliationFindings findings, Campaigns campaigns, Preorders preorders,
                                SyncJobReprocessing reprocessing, AdminCancelService adminCancel,
                                ExternalMock externalMock, TransactionTemplate transactionTemplate, Clock clock,
-                               @Value("${nova.reconciliation.intake-rush-window:1h}") Duration intakeRushWindow) {
+                               @Value("${nova.reconciliation.intake-rush-window:1h}") Duration intakeRushWindow,
+                               @Value("${nova.reconciliation.external-cancel-batch-deadline:20s}")
+                               Duration externalCancelBatchDeadline) {
         this.runRequests = runRequests;
         this.runs = runs;
         this.findings = findings;
@@ -81,6 +85,7 @@ public class ReconciliationAdminService {
         this.transactionTemplate = transactionTemplate;
         this.clock = clock;
         this.intakeRushWindow = intakeRushWindow;
+        this.externalCancelBatchDeadline = externalCancelBatchDeadline;
     }
 
     /**
@@ -225,13 +230,21 @@ public class ReconciliationAdminService {
     /**
      * 여러 건을 차례로 키로 Mock 취소한다. be 예약이 취소 완료인 건만 받는다 — Mock 에만 있음은 be 기록이 사라진 경우일 수 있어
      * 한 건씩 확인하고 누른다. 건마다 따로 확인 · 처리하고, 일부가 거절 · 실패해도 나머지는 계속한다.
+     * 관리자 요청 스레드가 Mock 을 차례로 기다리므로 마감 시간(기본 20초)을 둔다 — 마감이 지나면 남은 건은 시작하지 않고
+     * RECONCILIATION_BATCH_DEADLINE 으로 돌려준다(조치 칸은 그대로라 다시 요청하면 된다). 응답이 로드밸런서 제한 시간 안에 나가게 한다.
      *
      * @param findingIds 1 ~ {@value #MAX_EXTERNAL_CANCEL_BATCH}건. 같은 건을 두 번 넣으면 한 번만 처리한다
      * @return 넣은 순서대로 건별 결과
      */
     public List<ExternalCancelOutcome> externalCancelAll(List<UUID> findingIds, String requestedBy) {
         List<ExternalCancelOutcome> outcomes = new ArrayList<>();
+        Instant deadline = clock.instant().plus(externalCancelBatchDeadline);
         for (UUID findingId : new LinkedHashSet<>(findingIds)) {
+            if (!clock.instant().isBefore(deadline)) {
+                outcomes.add(ExternalCancelOutcome.rejected(findingId, PreorderErrorCode.RECONCILIATION_BATCH_DEADLINE.name(),
+                        PreorderErrorCode.RECONCILIATION_BATCH_DEADLINE.defaultMessage()));
+                continue;
+            }
             try {
                 FindingRow finding = findings.find(findingId)
                         .orElseThrow(() -> new BusinessException(PreorderErrorCode.RECONCILIATION_FINDING_NOT_FOUND));

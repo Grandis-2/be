@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.integration.mock;
 
+import com.grandis.nova.preorder.integration.DependencyGuard;
 import java.net.http.HttpClient;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -17,7 +18,7 @@ import tools.jackson.databind.json.JsonMapper;
 class ExternalMockClientConfig {
 
     @Bean
-    ExternalMock externalMock(ExternalMockProperties properties, JsonMapper json) {
+    ExternalMock externalMock(ExternalMockProperties properties, JsonMapper json, DependencyGuard guard) {
         HttpClient httpClient = HttpClient.newBuilder()
                 .connectTimeout(properties.connectTimeout())
                 .followRedirects(HttpClient.Redirect.NEVER)
@@ -26,6 +27,6 @@ class ExternalMockClientConfig {
         factory.setReadTimeout(properties.readTimeout());
         RestClient rest = RestClient.builder().requestFactory(factory).baseUrl(properties.baseUrl().toString()).build();
         int maxBody = (int) Math.min(Integer.MAX_VALUE, properties.maxResponseBody().toBytes());
-        return new ExternalMock(rest, json, maxBody);
+        return new ExternalMock(rest, json, maxBody, guard);
     }
 }

@@ -69,8 +69,10 @@ server:
 nova:
   # 정합성 검사 관리자 API(/api/v1/admin/preorders/reconciliation). 회차 오픈 후 이 시간 안에는 실행 요청을 409 로 막는다.
   # batch 의 nova.batch.reconciliation.intake-rush-window 와 같게 둔다. 기본값 1h
+  # 일괄 키로 Mock 취소의 마감 시간 — 넘으면 남은 건은 시작하지 않고 건별 결과로 돌려준다(로드밸런서 제한 시간보다 짧게). 기본값 20s
   # reconciliation:
   #   intake-rush-window: 1h
+  #   external-cancel-batch-deadline: 20s
   # 대기열 입장권. 게이트웨이와 같은 비밀(Secrets Manager). 형식: gateway-auth-tokens.md 5절
   admission-ticket:
     secret: ${WAITING_TOKEN_SECRET}
@@ -134,7 +136,8 @@ nova:
 #         max-concurrent-calls: 40
 
 # 외부 예약 Mock (별도 레포). 정합성 조치의 키로 Mock 취소가 키로 조회 · 취소를 부른다 — 관리자가 결과를 기다리는 호출이라
-# 제한 시간이 짧다(기본 연결 300ms · 읽기 2s). 주소 속성 이름은 batch 와 같다. 없으면 기동하지 않는다
+# 제한 시간이 짧다(기본 연결 300ms · 읽기 2s). 주소 속성 이름은 batch 와 같다. 없으면 기동하지 않는다.
+# 서킷 브레이커 · 동시 호출 상한은 내부 호출과 같은 기본값을 이름 mock 으로 쓴다(resilience4j.*.instances.mock 으로 덮는다)
 external:
   mock:
     base-url: http://localhost:8081
