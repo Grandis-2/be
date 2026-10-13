@@ -133,10 +133,13 @@ nova:
 #       default:
 #         max-concurrent-calls: 40
 
-# 외부 예약 Mock (별도 레포)
+# 외부 예약 Mock (별도 레포). 정합성 조치의 키로 Mock 취소가 키로 조회 · 취소를 부른다 — 관리자가 결과를 기다리는 호출이라
+# 제한 시간이 짧다(기본 연결 300ms · 읽기 2s). 주소 속성 이름은 batch 와 같다. 없으면 기동하지 않는다
 external:
   mock:
     base-url: http://localhost:8081
+    # connect-timeout: 300ms
+    # read-timeout: 2s
 
 # 검증만 한다(개인키 없음). 공개키는 member 가 게시하는 JWKS(GET /.well-known/jwks.json)에서 받아 kid 로 고른다 —
 # 기동 직후와 5분마다 백그라운드로 받고, 요청 스레드는 캐시만 읽는다. 키를 바꿀 때 이 서비스는 재배포하지 않는다.
