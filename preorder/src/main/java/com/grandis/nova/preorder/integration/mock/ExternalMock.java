@@ -18,6 +18,7 @@ import tools.jackson.databind.json.JsonMapper;
  *
  * 다시 보내지 않는다. 못 받았거나 응답이 계약과 다르면 {@link ExternalMockUnavailable} 을 던지고, 다시 할지는 관리자가 정한다.
  * 키로 취소는 여러 번 보내도 효과가 한 번이라(Mock 계약) 다시 눌러도 안전하다.
+ * 로그에는 키(예약 토큰) · 응답 본문 · 요청 주소를 남기지 않는다.
  */
 public class ExternalMock {
 
@@ -49,7 +50,7 @@ public class ExternalMock {
             return MockKeyState.ABSENT;
         }
         if (reply.status() != 200 || reply.body() == null) {
-            throw unexpected("키로 조회", reply, key);
+            throw unexpected("키로 조회", reply);
         }
         if (text(reply.body(), "cancelMarkerAt") != null) {
             return MockKeyState.CANCELED;
@@ -62,7 +63,7 @@ public class ExternalMock {
                 }
             }
         }
-        throw unexpected("키로 조회", reply, key);
+        throw unexpected("키로 조회", reply);
     }
 
     /** 키로 취소한다. 등록이 없어도 취소 표식이 남는다(Mock 계약 — 키로 취소는 항상 200) */
@@ -75,7 +76,7 @@ public class ExternalMock {
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(json.writeValueAsBytes(body)));
         if (reply.status() != 200) {
-            throw unexpected("키로 취소", reply, key);
+            throw unexpected("키로 취소", reply);
         }
     }
 
@@ -84,7 +85,8 @@ public class ExternalMock {
             return request.accept(MediaType.APPLICATION_JSON).exchange((sent, response) ->
                     new Reply(response.getStatusCode().value(), object(response.getBody().readNBytes(maxBody))));
         } catch (RestClientException e) {
-            log.warn("Mock {} 실패", what, e);
+            // 예외 메시지에 요청 주소(키가 든 경로)가 있어 예외는 찍지 않는다. 원인은 cause 로 넘긴다
+            log.warn("Mock {} 실패 — {} ({})", what, reason(e), rootCause(e).getClass().getName());
             throw new ExternalMockUnavailable("Mock " + what + " 응답을 받지 못함 — " + reason(e), e);
         }
     }
@@ -101,8 +103,8 @@ public class ExternalMock {
         }
     }
 
-    private static ExternalMockUnavailable unexpected(String what, Reply reply, String key) {
-        log.warn("Mock {} 응답이 계약과 다름 키 {} HTTP {} 본문 {}", what, key, reply.status(), reply.body());
+    private static ExternalMockUnavailable unexpected(String what, Reply reply) {
+        log.warn("Mock {} 응답이 계약과 다름 HTTP {}", what, reply.status());
         return new ExternalMockUnavailable("Mock " + what + " 응답이 계약과 다름(HTTP " + reply.status() + ")");
     }
 
@@ -121,6 +123,14 @@ public class ExternalMock {
             }
         }
         return "통신 오류";
+    }
+
+    private static Throwable rootCause(Throwable e) {
+        Throwable root = e;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        return root;
     }
 
     /** @param body 본문이 JSON 객체가 아니면 null */
