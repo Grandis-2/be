@@ -69,6 +69,9 @@ class AdminProductDetailApiTest {
                 .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store"))));
         assertThat(detail.get("product")).as("201 의 미리보기와 같은 모양").isEqualTo(createdData.get("product"));
         assertThat(detail.get("product").get("visible").asBoolean()).as("고른 공개 여부 그대로 — 회원 노출은 준비가 정한다").isTrue();
+        // 두 응답이 함께 칸을 빠뜨려도 위 동등 비교는 통과한다 — 값으로 따로 본다
+        assertThat(detail.get("product").get("brand").asString()).isEqualTo("APPLE");
+        assertThat(detail.get("product").get("modelName").asString()).isEqualTo("A0001");
         assertThat(detail.get("product").get("variants")).hasSize(1);
         assertThat(detail.get("product").get("images").get("gallery").get(0).get("bundleKey").asString()).isEqualTo("블랙");
         assertThat(detail.get("tags").asString()).isEqualTo("nova,신제품");

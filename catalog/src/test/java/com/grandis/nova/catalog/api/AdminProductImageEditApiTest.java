@@ -181,19 +181,29 @@ class AdminProductImageEditApiTest {
 
         mockMvc.perform(admin(patch(PATH + "/{id}", productId)).content("{ \"title\": \"x\" }")).andExpect(status().isConflict());
         add(productId, "GALLERY", "실버", "https://img/s1.jpg").andExpect(status().isCreated());
+        assertThat(galleryUrls(productId, "실버")).containsExactly("https://img/s0.jpg", "https://img/s1.jpg");
         replace(productId, "https://img/s1.jpg", "https://img/s2.jpg").andExpect(status().isOk());
+        assertThat(galleryUrls(productId, "실버")).containsExactly("https://img/s0.jpg", "https://img/s2.jpg");
         remove(productId, "https://img/s2.jpg").andExpect(status().isOk());
+        assertThat(galleryUrls(productId, "실버")).as("응답이 아니라 저장된 문서").containsExactly("https://img/s0.jpg");
     }
 
     @Test
-    @DisplayName("ADMIN 만 — 회원은 403, 익명은 401. 없는 상품은 404")
+    @DisplayName("넣기 · 바꾸기 · 빼기 모두 ADMIN 만 — 회원은 403, 익명은 401 이고 문서는 그대로. 없는 상품은 404")
     void adminOnly() throws Exception {
         UUID productId = registerColorProduct();
+        String before = options(productId);
         String body = "{ \"kind\": \"GALLERY\", \"bundle\": \"실버\", \"url\": \"https://img/s1.jpg\" }";
-        mockMvc.perform(post(PATH + "/{id}/images", productId).contentType(MediaType.APPLICATION_JSON).content(body).with(user("7").roles("USER")))
-                .andExpect(status().isForbidden());
-        mockMvc.perform(post(PATH + "/{id}/images", productId).contentType(MediaType.APPLICATION_JSON).content(body))
-                .andExpect(status().isUnauthorized());
+        String replaceBody = "{ \"url\": \"https://img/s0.jpg\", \"newUrl\": \"https://img/s9.jpg\" }";
+        List<java.util.function.Supplier<MockHttpServletRequestBuilder>> requests = List.of(
+                () -> post(PATH + "/{id}/images", productId).contentType(MediaType.APPLICATION_JSON).content(body),
+                () -> patch(PATH + "/{id}/images", productId).contentType(MediaType.APPLICATION_JSON).content(replaceBody),
+                () -> delete(PATH + "/{id}/images", productId).param("url", "https://img/s0.jpg"));
+        for (var request : requests) {
+            mockMvc.perform(request.get().with(user("7").roles("USER"))).andExpect(status().isForbidden());
+            mockMvc.perform(request.get()).andExpect(status().isUnauthorized());
+        }
+        assertThat(options(productId)).as("거절된 요청은 문서를 바꾸지 않는다").isEqualTo(before);
         mockMvc.perform(admin(post(PATH + "/{id}/images", UUID.randomUUID())).content(body))
                 .andExpect(status().isNotFound()).andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
     }
@@ -240,6 +250,15 @@ class AdminProductImageEditApiTest {
 
     private ResultActions remove(UUID productId, String url) throws Exception {
         return mockMvc.perform(delete(PATH + "/{id}/images", productId).param("url", url).with(user("admin").roles("ADMIN")));
+    }
+
+    private List<String> galleryUrls(UUID productId, String color) {
+        return jdbcTemplate.queryForList("""
+                SELECT j.url FROM products p, JSON_TABLE(p.options, '$.axes[*]' COLUMNS (k VARCHAR(40) PATH '$.key',
+                       NESTED PATH '$.values[*]' COLUMNS (v VARCHAR(60) PATH '$.normalized',
+                           NESTED PATH '$.images[*]' COLUMNS (url VARCHAR(1000) PATH '$.url')))) j
+                 WHERE p.id = UUID_TO_BIN(?) AND j.k = 'color' AND j.v = ? AND j.url IS NOT NULL
+                """, String.class, productId.toString(), color);
     }
 
     private String options(UUID productId) {
