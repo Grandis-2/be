@@ -274,6 +274,11 @@ public class ShopFixtures {
         update("UPDATE products SET idempotency_key = ? WHERE id = ?", idempotencyKey, productId);
     }
 
+    /** 상품 행의 기본값(APPLE · A0001)을 바꾼다. 브랜드 필터 · 모델명 검색 시험용. */
+    public void brand(UUID productId, String brand, String modelName) {
+        update("UPDATE products SET brand = ?, model_name = ? WHERE id = ?", brand, modelName, productId);
+    }
+
     /** 그 축에서 정규화값으로 값 id 를 찾는다. */
     public String valueId(UUID productId, String axisKey, String normalized) {
         return options(productId).axis(axisKey).flatMap(axis -> axis.valueByNormalized(normalized)).orElseThrow().id();

@@ -20,6 +20,7 @@ import com.grandis.nova.catalog.listing.AdminProductListFilter;
 import com.grandis.nova.catalog.listing.AdminProductListItem;
 import com.grandis.nova.catalog.listing.GiftCandidate;
 import com.grandis.nova.catalog.listing.ProductListingService;
+import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.catalog.registration.ProductRegistrationRequest;
@@ -34,6 +35,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Supplier;
@@ -104,21 +106,23 @@ public class AdminProductController {
         };
     }
 
-    @Operation(summary = "상품 목록", description = "노출 규칙 없이 비공개 · 준비 전 · 판매 중지 · 마감도 전부")
+    @Operation(summary = "상품 목록", description = "노출 규칙 없이 비공개 · 준비 전 · 판매 중지 · 마감도 전부. "
+            + "q 는 상품명 · 태그 · 모델명 · 브랜드 코드 부분 일치, brand 는 이름을 반복해 여러 값(OR — brand=APPLE&brand=LG)")
     @GetMapping
     public ApiResponse<ProductPageResponse<AdminProductListItem>> list(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) SaleMode saleMode,
             @RequestParam(required = false) SaleStatus status,
+            @RequestParam(required = false) List<Brand> brand,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        AdminProductListFilter filter = new AdminProductListFilter(q, saleMode, status);
+        AdminProductListFilter filter = new AdminProductListFilter(q, saleMode, status, brand);
         return ApiResponse.ok(ProductPageResponse.from(
                 listingService.listForAdmin(filter, PageSizes.requirePage(page), PageSizes.require(size))));
     }
 
     @Operation(summary = "럭키 드로우 증정품 후보", description = "회차 만들기 화면용 — 일반 판매 · 판매 중이고 재고를 등록한 옵션이 있는 상품(비공개 포함)과 "
-            + "그 옵션별 지금 확보할 수 있는 수량(available). q 는 상품명 · 태그 검색. 최신순, page 는 0 부터")
+            + "그 옵션별 지금 확보할 수 있는 수량(available). q 는 상품명 · 태그 · 모델명 · 브랜드 검색. 최신순, page 는 0 부터")
     @GetMapping("/gift-candidates")
     public ApiResponse<ProductPageResponse<GiftCandidate>> giftCandidates(
             @RequestParam(required = false) String q,

@@ -189,6 +189,31 @@ class AdminProductListApiTest {
         }
 
         @Test
+        @DisplayName("brand 는 여러 값(OR)이고 건수도 같은 필터를 탄다, q 는 모델명 · 브랜드 코드도 찾는다, 항목에 brand · modelName — 목록 밖 brand 는 그 칸의 400")
+        void brandFilterAndModelNameSearch() throws Exception {
+            UUID apple = completed("애플", "IN_STOCK");
+            UUID samsung = completed("삼성", "IN_STOCK");
+            fixtures.brand(samsung, "SAMSUNG", "SM-" + tag);
+            UUID lg = completed("엘지", "PREORDER");
+            fixtures.brand(lg, "LG", "L1");
+
+            JsonNode page = data(perform("brand", "SAMSUNG", "brand", "LG"));
+            assertThat(ids(page.get("items"))).containsExactlyInAnyOrder(samsung, lg);
+            assertThat(page.get("total").asLong()).isEqualTo(2);
+            assertThat(ids(list("brand", "APPLE"))).containsExactly(apple);
+            JsonNode item = find(list(), samsung);
+            assertThat(item.get("brand").asString()).isEqualTo("SAMSUNG");
+            assertThat(item.get("modelName").asString()).isEqualTo("SM-" + tag);
+
+            assertThat(ids(list("q", "sm-" + tag))).as("모델명 — 제목 · 태그에는 없다").containsExactly(samsung);
+            fixtures.brand(lg, "LG", tag);
+            assertThat(ids(list("q", "lg"))).as("브랜드 코드 — 다른 시험 상품도 섞이니 포함만 본다").contains(lg).doesNotContain(apple, samsung);
+            perform("brand", "SONY").andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+                    .andExpect(jsonPath("$.error.details.violations[0].field").value("brand"));
+        }
+
+        @Test
         @DisplayName("page · size · total · hasNext, size 는 1~100 · page 는 0 이상")
         void paging() throws Exception {
             UUID first = completed("1", "IN_STOCK");

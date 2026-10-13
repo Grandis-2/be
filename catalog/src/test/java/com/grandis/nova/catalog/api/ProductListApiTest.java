@@ -234,6 +234,44 @@ class ProductListApiTest {
         }
 
         @Test
+        @DisplayName("q 는 모델명 · 브랜드 코드도 부분 일치로 찾는다(대소문자 무시) — 목록 항목에 brand · modelName 이 온다")
+        void keywordSearchCoversModelNameAndBrand() throws Exception {
+            UUID apple = visibleInStock("아이폰 " + tag);
+            fixtures.brand(apple, "APPLE", "A5390-" + tag);
+            UUID samsung = visibleInStock("갤럭시 " + tag);
+            fixtures.brand(samsung, "SAMSUNG", "SM-" + tag);
+
+            assertThat(ids(list("q", "a5390-" + tag))).as("모델명 — 제목 · 태그에는 없다").containsExactly(apple);
+            JsonNode items = list("q", tag);
+            assertThat(ids(items)).containsExactlyInAnyOrder(apple, samsung);
+            items.forEach(item -> {
+                if (item.get("productId").asString().equals(apple.toString())) {
+                    assertThat(item.get("brand").asString()).isEqualTo("APPLE");
+                    assertThat(item.get("modelName").asString()).isEqualTo("A5390-" + tag);
+                }
+            });
+            // 브랜드 코드 — 시험 DB 의 다른 상품과 섞이지 않게 상품명에도 없는 tag 를 같이 건다
+            fixtures.brand(samsung, "SAMSUNG", tag);
+            assertThat(ids(list("q", "samsung"))).as("다른 시험의 SAMSUNG 상품도 잡히므로 포함만 본다").contains(samsung).doesNotContain(apple);
+        }
+
+        @Test
+        @DisplayName("brand 는 이름을 반복해 여러 값(OR) — 목록 밖 값은 400")
+        void brandFilter() throws Exception {
+            UUID apple = visibleInStock("애플 " + tag);
+            UUID samsung = visibleInStock("삼성 " + tag);
+            fixtures.brand(samsung, "SAMSUNG", "S1");
+            UUID lg = visibleInStock("엘지 " + tag);
+            fixtures.brand(lg, "LG", "L1");
+
+            assertThat(ids(list("brand", "SAMSUNG"))).containsExactly(samsung);
+            assertThat(ids(list("brand", "SAMSUNG", "brand", "LG"))).containsExactlyInAnyOrder(samsung, lg);
+            assertThat(ids(list())).as("대조군 — 거르지 않으면 셋 다").containsExactlyInAnyOrder(apple, samsung, lg);
+            perform("brand", "SONY").andExpect(status().isBadRequest());
+            perform("brand", "Apple").andExpect(status().isBadRequest());
+        }
+
+        @Test
         @DisplayName("saleMode 와 categoryId 로 좁힌다 — 상위 카테고리는 하위에 배정된 상품까지 포함한다")
         void saleModeAndCategory() throws Exception {
             UUID child = fixtures.childCategory(categoryId, "삼성");

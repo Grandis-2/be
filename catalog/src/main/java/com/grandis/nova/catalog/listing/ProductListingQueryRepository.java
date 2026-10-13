@@ -147,11 +147,20 @@ public class ProductListingQueryRepository {
             params.addValue("status", filter.status().name());
         }
         appendTextFilter(sql, params, filter.q());
+        appendBrandFilter(sql, params, filter.brands());
+    }
+
+    private static void appendBrandFilter(StringBuilder sql, MapSqlParameterSource params, List<Brand> brands) {
+        if (!brands.isEmpty()) {
+            sql.append(" AND p.brand IN (:brands)");
+            params.addValue("brands", brands.stream().map(Brand::name).toList());
+        }
     }
 
     private static void appendTextFilter(StringBuilder sql, MapSqlParameterSource params, String q) {
         if (q != null) {
-            sql.append(" AND (p.title LIKE :q ESCAPE '\\\\' OR p.tags LIKE :q ESCAPE '\\\\')");
+            sql.append(" AND (p.title LIKE :q ESCAPE '\\\\' OR p.tags LIKE :q ESCAPE '\\\\'"
+                    + " OR p.model_name LIKE :q ESCAPE '\\\\' OR p.brand LIKE :q ESCAPE '\\\\')");
             params.addValue("q", "%" + escapeLike(q) + "%");
         }
     }
@@ -170,6 +179,7 @@ public class ProductListingQueryRepository {
             params.addValue("categoryId", UuidBinary.toBytes(filter.categoryId()));
         }
         appendTextFilter(sql, params, filter.q());
+        appendBrandFilter(sql, params, filter.brands());
         if (!filter.colors().isEmpty() || !filter.storages().isEmpty()) {
             // 필터 조건은 판매 중 옵션 하나가 모든 축을 함께 만족해야 한다. 품절은 포함, 판매 중지는 제외
             sql.append(" AND EXISTS (SELECT 1 FROM product_options o WHERE o.product_id = p.id AND o.status = 'ACTIVE'");
