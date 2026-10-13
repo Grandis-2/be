@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.Map;
@@ -69,6 +70,18 @@ public class Campaigns {
     public Map<UUID, ShipmentBatchSnapshot> findBatches(Collection<UUID> shipmentBatchIds) {
         return batches.findAllById(shipmentBatchIds).stream()
                 .collect(Collectors.toMap(ShipmentBatch::getId, ShipmentBatch::toSnapshot));
+    }
+
+    /** 회차가 있는 상품(사전예약 상품)인가 */
+    @Transactional(readOnly = true)
+    public boolean exists(UUID productId) {
+        return campaigns.existsById(productId);
+    }
+
+    /** 오픈한 지 window 가 안 된 회차가 있는가 — 신청이 몰리는 구간이다 */
+    @Transactional(readOnly = true)
+    public boolean anyOpenedWithin(Instant now, Duration window) {
+        return campaigns.existsByOpensAtGreaterThanAndOpensAtLessThanEqual(now.minus(window), now);
     }
 
     /** 판매 중지: 회차를 지금 시각으로 닫는다. 실제로 닫았을 때만 회차 변경 이벤트를 적는다(없거나 이미 지났으면 그대로). */

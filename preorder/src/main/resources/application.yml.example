@@ -67,6 +67,10 @@ server:
 # 관리 포트를 서비스 포트와 같게 두거나 끄면 기동이 막힌다 — 헬스 체크는 관리 포트의 /actuator/health/readiness 로 한다
 
 nova:
+  # 정합성 검사 관리자 API(/api/v1/admin/preorders/reconciliation). 회차 오픈 후 이 시간 안에는 실행 요청을 409 로 막는다.
+  # batch 의 nova.batch.reconciliation.intake-rush-window 와 같게 둔다. 기본값 1h
+  # reconciliation:
+  #   intake-rush-window: 1h
   # 대기열 입장권. 게이트웨이와 같은 비밀(Secrets Manager). 형식: gateway-auth-tokens.md 5절
   admission-ticket:
     secret: ${WAITING_TOKEN_SECRET}
