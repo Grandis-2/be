@@ -105,9 +105,23 @@ class ReconciliationRunTest extends BatchIntegrationTest {
         service.runScheduled();
 
         assertThat(onlyRun()).containsEntry("status", "FAILED")
-                .containsEntry("error_message", "Mock 목록 조회 실패(2페이지, HTTP 503)")
+                .containsEntry("error_message", "Mock 목록 조회 실패(2페이지, HTTP 503 · 3번 시도)")
                 .containsEntry("held_count", null);
         assertThat(count("reconciliation_findings")).isZero();
+    }
+
+    @Test
+    void Mock_목록_페이지가_한_번_실패해도_다시_받아_완료한다() {
+        for (String key : List.of("m-1", "m-2", "m-3")) {
+            MOCK.active(key, "R-" + key, UUID.randomUUID().toString(), UUID.randomUUID().toString(), "SKU", TWO_HOURS_AGO);
+        }
+        MOCK.failAtPage(2, 503, 1);
+
+        service.runScheduled();
+
+        assertThat(onlyRun()).containsEntry("status", "COMPLETED");
+        assertThat(check.keys()).containsExactly("m-1", "m-2", "m-3");
+        assertThat(MOCK.requests()).isEqualTo(3);
     }
 
     @Test

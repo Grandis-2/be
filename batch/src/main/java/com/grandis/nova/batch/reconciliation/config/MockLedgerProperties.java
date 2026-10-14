@@ -15,6 +15,9 @@ import org.springframework.util.unit.DataSize;
  * @param pageSize        한 페이지 건수. Mock 계약은 1~1000
  * @param maxResponseBody 한 페이지 본문을 읽는 상한. 엉뚱한 서버가 큰 본문을 보내도 여기까지만 읽는다
  * @param maxDuration     목록 전체를 받는 기한. 검사 트랜잭션(스냅샷)이 Mock 응답을 기다리는 동안 열려 있으므로 끝없이 늘지 않게 한다
+ * @param retries         한 페이지를 일시 실패(응답을 받지 못함 · 5xx) 뒤 다시 받는 횟수. 0 이면 다시 받지 않는다.
+ *                        하루 한 번 도는 검사가 일시 실패 한 번에 판정 불가가 되지 않게 한다
+ * @param retryDelay      처음 다시 받기 전에 기다리는 시간. 다음부터는 두 배씩. 기다리는 시간도 목록 전체 기한 안에 든다
  */
 @ConfigurationProperties("external.mock")
 public record MockLedgerProperties(
@@ -23,7 +26,9 @@ public record MockLedgerProperties(
         @DefaultValue("10s") Duration readTimeout,
         @DefaultValue("1000") int pageSize,
         @DefaultValue("8MB") DataSize maxResponseBody,
-        @DefaultValue("10m") Duration maxDuration
+        @DefaultValue("10m") Duration maxDuration,
+        @DefaultValue("2") int retries,
+        @DefaultValue("1s") Duration retryDelay
 ) {
 
     public MockLedgerProperties {
@@ -39,6 +44,9 @@ public record MockLedgerProperties(
         }
         if (maxResponseBody == null || maxResponseBody.toBytes() < 1) {
             throw new IllegalArgumentException("external.mock.max-response-body 는 0 보다 커야 한다");
+        }
+        if (retries < 0 || retryDelay == null || !retryDelay.isPositive()) {
+            throw new IllegalArgumentException("external.mock.retries 는 0 이상, retry-delay 는 0 보다 커야 한다");
         }
     }
 }

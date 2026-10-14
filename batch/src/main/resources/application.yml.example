@@ -44,3 +44,5 @@ external:
     connect-timeout: 2s
     read-timeout: 10s
     page-size: 1000
+    # retries: 2                     # 한 페이지를 일시 실패(응답을 받지 못함 · 5xx) 뒤 다시 받는 횟수. 4xx · 계약 위반은 다시 받지 않는다
+    # retry-delay: 1s                # 처음 다시 받기 전 기다림. 다음부터 두 배. 기다리는 시간도 목록 전체 기한(max-duration, 10m) 안에 든다

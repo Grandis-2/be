@@ -23,8 +23,10 @@ import tools.jackson.databind.json.JsonMapper;
  * Mock 원장 목록 조회(GET /external/reservations). 외부 키 순서로 한 페이지씩 받아 nextCursor 가 null 일 때까지 흘려 준다.
  * 다음 페이지는 앞 페이지를 다 넘긴 뒤에 부르므로 원장 전체를 메모리에 올리지 않는다.
  *
- * 다시 보내지 않는다 — 한 페이지라도 못 받으면 그 실행을 판정 불가로 끝낸다({@link MockLedgerUnavailable}).
- * 응답이 계약(Mock docs/api.md)과 다르거나, 키 순서가 어긋나거나, 목록 전체 기한을 넘겨도 같다.
+ * 응답을 받지 못했거나 5xx 면 잠깐 기다렸다 같은 페이지를 다시 받는다(읽기만 하는 GET 이고 커서가 같아 다시 받아도 안전하다).
+ * 정해진 횟수를 다 써도 못 받으면 그 실행을 판정 불가로 끝낸다({@link MockLedgerUnavailable}). 4xx · 3xx · 본문 상한 초과 ·
+ * 계약(Mock docs/api.md)과 다른 응답 · 키 순서 어긋남은 주소 · 계약 문제라 다시 받지 않고 바로 판정 불가다. 다시 받는 시간도
+ * 목록 전체 기한 안에 든다 — 기다리면 기한을 넘기는 경우에는 다시 받지 않는다.
  * 실패 사유는 관리자 화면에 나가므로 고정 문구만 담는다. 예외 원문(연결 주소 등)과 응답 값은 로그에만 남긴다.
  */
 public class MockLedgerClient {
@@ -38,18 +40,25 @@ public class MockLedgerClient {
     private final int pageSize;
     private final int maxBody;
     private final Duration maxDuration;
+    private final int retries;
+    private final Duration retryDelay;
 
     /**
      * @param rest        Mock 주소와 제한 시간이 걸린 클라이언트
      * @param maxBody     한 페이지 본문을 읽는 상한(바이트)
-     * @param maxDuration 목록 전체를 받는 기한. 둘째 페이지부터 부르기 전에 본다
+     * @param maxDuration 목록 전체를 받는 기한. 둘째 페이지부터 부르기 전과 다시 받기 전에 본다
+     * @param retries     한 페이지를 일시 실패 뒤 다시 받는 횟수. 0 이면 다시 받지 않는다
+     * @param retryDelay  처음 다시 받기 전에 기다리는 시간. 다음부터는 두 배씩
      */
-    public MockLedgerClient(RestClient rest, JsonMapper json, int pageSize, int maxBody, Duration maxDuration) {
+    public MockLedgerClient(RestClient rest, JsonMapper json, int pageSize, int maxBody, Duration maxDuration,
+                            int retries, Duration retryDelay) {
         this.rest = rest;
         this.json = json;
         this.pageSize = pageSize;
         this.maxBody = maxBody;
         this.maxDuration = maxDuration;
+        this.retries = retries;
+        this.retryDelay = retryDelay;
     }
 
     /** 원장 전체를 외부 키 순서로. 페이지를 받다 실패하면 next() · hasNext() 가 {@link MockLedgerUnavailable} 을 던진다 */
@@ -71,17 +80,21 @@ public class MockLedgerClient {
                     .exchange((request, response) -> {
                         int status = response.getStatusCode().value();
                         byte[] body = response.getBody().readNBytes(maxBody + 1);
-                        if (status != 200) {
-                            throw new MockLedgerUnavailable(page, "HTTP " + status);
-                        }
+                        // 본문 상한을 먼저 본다 — 엉뚱한 서버일 수 있어 5xx 라도 다시 받지 않는다
                         if (body.length > maxBody) {
                             throw new MockLedgerUnavailable(page, "응답 본문이 상한(" + maxBody + "바이트)을 넘음");
+                        }
+                        if (status >= 500 && status <= 599) {
+                            throw MockLedgerUnavailable.retryable(page, "HTTP " + status, null);
+                        }
+                        if (status != 200) {
+                            throw new MockLedgerUnavailable(page, "HTTP " + status);
                         }
                         return parse(page, body);
                     });
         } catch (RestClientException e) {
             log.warn("Mock 목록 조회 실패 {}페이지", page, e);
-            throw new MockLedgerUnavailable(page, "응답을 받지 못함 — " + reason(e), e);
+            throw MockLedgerUnavailable.retryable(page, "응답을 받지 못함 — " + reason(e), e);
         }
     }
 
@@ -206,7 +219,7 @@ public class MockLedgerClient {
                 if (page > 0 && System.nanoTime() - startedNanos > maxDuration.toNanos()) {
                     throw new MockLedgerUnavailable(page + 1, "목록 전체 기한(" + readable(maxDuration) + ")을 넘음");
                 }
-                Page fetched = fetch(++page, nextCursor);
+                Page fetched = fetchRetrying(++page, nextCursor);
                 current = fetched.entries().iterator();
                 nextCursor = fetched.nextCursor();
                 last = nextCursor == null;
@@ -215,6 +228,40 @@ public class MockLedgerClient {
                 }
             }
             return current.hasNext();
+        }
+
+        /** 일시 실패면 기다렸다 같은 페이지를 다시 받는다. 횟수를 다 쓰거나 기다리면 기한을 넘기면 시도 횟수를 담아 던진다 */
+        private Page fetchRetrying(int page, String cursor) {
+            Duration delay = retryDelay;
+            for (int attempt = 1; ; attempt++) {
+                try {
+                    return fetch(page, cursor);
+                } catch (MockLedgerUnavailable e) {
+                    if (!e.isRetryable()) {
+                        throw e;
+                    }
+                    boolean pastDeadline = System.nanoTime() + delay.toNanos() - startedNanos > maxDuration.toNanos();
+                    if (attempt > retries || pastDeadline) {
+                        throw attempt == 1 ? e : e.afterAttempts(attempt);
+                    }
+                    log.warn("Mock 목록 {}페이지 다시 받음 — {}ms 뒤 {}번째 시도", page, delay.toMillis(), attempt + 1);
+                    pause(delay, e);
+                    if (System.nanoTime() - startedNanos > maxDuration.toNanos()) {
+                        // 기다림이 예상보다 길어 기한을 넘겼다 — 더 부르지 않는다
+                        throw attempt == 1 ? e : e.afterAttempts(attempt);
+                    }
+                    delay = delay.multipliedBy(2);
+                }
+            }
+        }
+
+        private void pause(Duration delay, MockLedgerUnavailable failure) {
+            try {
+                Thread.sleep(delay);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw failure;
+            }
         }
 
         @Override

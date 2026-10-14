@@ -31,6 +31,7 @@ public final class FakeMockLedger implements AutoCloseable {
     private final HttpServer server;
     private final NavigableMap<String, Map<String, Object>> rows = new ConcurrentSkipListMap<>();
     private final Map<Integer, Integer> failures = new ConcurrentHashMap<>();
+    private final Map<Integer, AtomicInteger> failuresLeft = new ConcurrentHashMap<>();
     private final Map<Integer, String> rawBodies = new ConcurrentHashMap<>();
     private final AtomicInteger requests = new AtomicInteger();
 
@@ -57,6 +58,7 @@ public final class FakeMockLedger implements AutoCloseable {
     public void reset() {
         rows.clear();
         failures.clear();
+        failuresLeft.clear();
         rawBodies.clear();
         requests.set(0);
     }
@@ -90,6 +92,12 @@ public final class FakeMockLedger implements AutoCloseable {
         failures.put(page, status);
     }
 
+    /** 이 페이지를 처음 times 번 부를 때만 HTTP 상태를 돌려주고, 그 뒤에는 정상으로 준다(일시 실패) */
+    public void failAtPage(int page, int status, int times) {
+        failuresLeft.put(page, new AtomicInteger(times));
+        failures.put(page, status);
+    }
+
     /** 이 페이지를 부르면 본문을 그대로 돌려준다(200) */
     public void respondAtPage(int page, String body) {
         rawBodies.put(page, body);
@@ -113,7 +121,8 @@ public final class FakeMockLedger implements AutoCloseable {
         int page = (cursor == null ? 0 : rows.headMap(cursor, true).size()) / size + 1;
 
         Integer failure = failures.get(page);
-        if (failure != null) {
+        AtomicInteger left = failuresLeft.get(page);
+        if (failure != null && (left == null || left.getAndDecrement() > 0)) {
             respond(exchange, failure, "{\"errorCode\":\"FAKE\"}");
             return;
         }
