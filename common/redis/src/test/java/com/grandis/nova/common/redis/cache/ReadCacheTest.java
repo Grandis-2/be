@@ -153,18 +153,67 @@ class ReadCacheTest {
     }
 
     @Test
-    @DisplayName("올리기는 차단기를 거치지 않는다 — 이 인스턴스의 차단기가 열려 있어도 세대는 올라 다른 인스턴스가 새 값을 읽는다")
-    void bumpIgnoresOpenBreaker() {
+    @DisplayName("차단기가 열린 동안의 올리기는 버리지 않고 미룬다 — 닫힌 뒤 이 인스턴스의 첫 조회에서 올라 다른 인스턴스도 새 값을 읽는다")
+    void bumpDeferredWhileBreakerOpen() {
         ReadCache other = new ReadCache(redis, JSON, "svc");
         ReadCache.Spec<Item> otherItems = other.spec("item", Item.class, Duration.ofSeconds(30));
         other.get(otherItems, "products", "1", () -> item("old", new AtomicInteger()));
 
         cache.breaker().transitionToForcedOpenState();
         cache.bumpAfterCommit("products");
+        assertThat(redis.opsForValue().get("svc:cache:gen:products")).as("열린 동안은 부르지 않는다").isNull();
         cache.breaker().transitionToClosedState();
 
+        cache.get(items, "reviews", "x", () -> item("x", new AtomicInteger()));   // 다른 세대의 조회여도 미룬 것을 올린다
         assertThat(redis.opsForValue().get("svc:cache:gen:products")).isEqualTo("1");
         assertThat(other.get(otherItems, "products", "1", () -> item("new", new AtomicInteger())).name()).isEqualTo("new");
+    }
+
+    @Test
+    @DisplayName("미룬 뒤 다음 올리기가 성공하면 미룬 것은 지운다 — 다음 조회가 한 번 더 올리지 않는다")
+    void successfulBumpClearsPending() {
+        redis.opsForValue().set("svc:cache:gen:products", "not-a-number");
+        cache.bumpAfterCommit("products");   // 실패 — 미룬다
+        redis.delete("svc:cache:gen:products");
+        cache.bumpAfterCommit("products");   // 성공
+
+        cache.get(items, "products", "1", () -> item("v", new AtomicInteger()));
+        assertThat(redis.opsForValue().get("svc:cache:gen:products")).isEqualTo("1");
+    }
+
+    @Test
+    @DisplayName("미룬 올리기를 다시 해 보다 또 실패하면 다시 미룬다 — 그다음 조회에서 올린다")
+    void failedRetryStaysPending() {
+        redis.opsForValue().set("svc:cache:gen:products", "not-a-number");
+        cache.bumpAfterCommit("products");
+        cache.get(items, "reviews", "x", () -> item("x", new AtomicInteger()));   // 다른 세대 조회 — 다시 해 보지만 또 실패
+        redis.delete("svc:cache:gen:products");
+
+        cache.get(items, "reviews", "x", () -> item("x", new AtomicInteger()));
+        assertThat(redis.opsForValue().get("svc:cache:gen:products")).isEqualTo("1");
+    }
+
+    @Test
+    @DisplayName("복구 직후 여러 조회가 겹쳐도 미룬 세대는 한 번만 올린다")
+    void pendingBumpRetriedOnceUnderConcurrency() throws Exception {
+        redis.opsForValue().set("svc:cache:gen:products", "not-a-number");
+        cache.bumpAfterCommit("products");
+        redis.delete("svc:cache:gen:products");
+
+        concurrently(32, () -> cache.get(items, "reviews", "x", () -> item("x", new AtomicInteger())));
+        assertThat(redis.opsForValue().get("svc:cache:gen:products")).isEqualTo("1");
+    }
+
+    @Test
+    @DisplayName("한 트랜잭션에서 두 캐시(서비스)가 같은 이름의 세대를 올리면 각자 올린다 — 서로의 커밋 콜백에 섞이지 않는다")
+    void twoCachesInOneTransactionBumpSeparately() {
+        ReadCache other = new ReadCache(redis, JSON, "other");
+        new TransactionTemplate(new NoOpTransactionManager()).executeWithoutResult(status -> {
+            cache.bumpAfterCommit("products");
+            other.bumpAfterCommit("products");
+        });
+        assertThat(redis.opsForValue().get("svc:cache:gen:products")).isEqualTo("1");
+        assertThat(redis.opsForValue().get("other:cache:gen:products")).isEqualTo("1");
     }
 
     @Test
@@ -302,6 +351,7 @@ class ReadCacheTest {
             start = System.nanoTime();
             Item a = cache.get(items, "products", "a", () -> item("db-a", new AtomicInteger()));
             Item b = cache.get(items, "products", "b", () -> item("db-b", new AtomicInteger()));
+            cache.bumpAfterCommit("products");   // 열린 동안은 부르지 않고 미룬다 — 커밋 뒤 콜백이 DB 커넥션을 쥔 채 기다리지 않게
             long openMillis = (System.nanoTime() - start) / 1_000_000;
             assertThat(a.name()).isEqualTo("db-a");
             assertThat(b.name()).isEqualTo("db-b");
