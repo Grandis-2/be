@@ -261,7 +261,7 @@ public final class ReadCache {
     }
 
     /**
-     * 미룬 세대를 올린다(Redis 를 방금 읽은 조회에서). 집합에서 먼저 뺀 스레드만 올린다 — 복구 직후 여러 조회가 겹쳐도 세대마다 한 번. 실패하면 다시 넣는다.
+     * 미룬 세대를 올린다(Redis 를 방금 읽은 조회에서, 차단기를 거쳐). 집합에서 먼저 뺀 스레드만 올린다 — 복구 직후 여러 조회가 겹쳐도 세대마다 한 번. 실패하면 다시 넣는다.
      * generation 을 이번에 올렸으면 true.
      */
     private boolean retryPendingBumps(String generation) {
@@ -271,11 +271,16 @@ public final class ReadCache {
                 continue;   // 다른 조회가 가져갔다
             }
             try {
-                redis.opsForValue().increment(prefix + "gen:" + pending);
+                // 조회 경로라 차단기를 거친다 — 실패가 이어지면 열려, 미룬 것이 있는 동안 조회마다 제한 시간을 기다리지 않게
+                breaker.executeRunnable(() -> redis.opsForValue().increment(prefix + "gen:" + pending));
                 bumpedThis |= pending.equals(generation);
+            } catch (CallNotPermittedException e) {
+                pendingBumps.add(pending);
+                return bumpedThis;
             } catch (RuntimeException e) {
                 pendingBumps.add(pending);
-                return bumpedThis;   // 아직 안 된다 — 다음 조회에서
+                log.error("미룬 읽기 캐시 세대 올리기가 또 실패해 다음 조회에서 다시 한다 generation={}", pending, e);
+                return bumpedThis;
             }
         }
         return bumpedThis;
