@@ -99,10 +99,10 @@ public class PromotionService {
             return new Created(view(id), false);
         } catch (DataIntegrityViolationException e) {
             // 겹친 요청이 먼저 커밋했다 — 같은 키면 그 홍보를, 같은 상품이면 실제로 겹친 상품을 알린다. 다른 제약 위반은 그대로 던진다
-            if (ConstraintViolations.mentions(e, IDEMPOTENCY_KEY)) {
+            if (ConstraintViolations.mentionsKey(e, IDEMPOTENCY_KEY)) {
                 return new Created(view(promotions.findByIdempotencyKey(idempotencyKey).orElseThrow(() -> e).getId()), true);
             }
-            if (ConstraintViolations.mentions(e, PromotionProducts.UNIQUE_PRODUCT)) {
+            if (ConstraintViolations.mentionsKey(e, PromotionProducts.UNIQUE_PRODUCT)) {
                 throw linkedElsewhere(ownedByOthers(request.productIds(), null));
             }
             throw e;
@@ -123,7 +123,7 @@ public class PromotionService {
                 cache.bumpAfterCommit(PromotionQueryService.PROMOTIONS);
             });
         } catch (DataIntegrityViolationException e) {
-            if (ConstraintViolations.mentions(e, PromotionProducts.UNIQUE_PRODUCT)) {
+            if (ConstraintViolations.mentionsKey(e, PromotionProducts.UNIQUE_PRODUCT)) {
                 throw linkedElsewhere(ownedByOthers(request.productIds(), promotionId));
             }
             throw e;
