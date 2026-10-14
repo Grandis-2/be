@@ -129,6 +129,38 @@ public final class TestData {
                 .update();
     }
 
+    /**
+     * 그 예약의 사전예약 주문과 결제. 주문은 결제 확인 뒤 상태(AWAITING_CONFIRMATION)다
+     *
+     * @param paymentStatus 결제 상태(SUCCEEDED · REFUNDED)
+     * @param at            주문 · 결제의 변경 시각
+     */
+    public void paidOrder(BePreorderRow preorder, String paymentStatus, Instant at) {
+        UUID orderId = UUID.randomUUID();
+        LocalDateTime changed = utc(at);
+        jdbc.sql("""
+                        INSERT INTO orders (id, customer_id, source, preorder_id, preorder_token, status, total_amount,
+                                            ship_to_name, ship_to_phone, ship_to_postal_code, ship_to_line1, created_at,
+                                            updated_at)
+                        VALUES (UUID_TO_BIN(:id), UUID_TO_BIN(:customer), 'PREORDER', UUID_TO_BIN(:preorder), :token,
+                                'AWAITING_CONFIRMATION', 1000, '받는 사람', '010-0000-0000', '00000', '주소', :at, :at)
+                        """)
+                .param("id", orderId.toString()).param("customer", preorder.customerId().toString())
+                .param("preorder", preorder.id().toString()).param("token", preorder.token()).param("at", changed)
+                .update();
+        jdbc.sql("""
+                        INSERT INTO payments (id, target_type, target_id, provider_payment_key, amount, status, approved_at,
+                                              refunded_at, created_at, updated_at)
+                        VALUES (UUID_TO_BIN(UUID()), 'ORDER', UUID_TO_BIN(:order), :paymentKey, 1000, :status, :at,
+                                :refundedAt, :at, :at)
+                        """)
+                .param("order", orderId.toString()).param("paymentKey", "test-pay-" + orderId)
+                .param("status", paymentStatus)
+                .param("refundedAt", paymentStatus.equals("REFUNDED") ? changed : null)
+                .param("at", changed)
+                .update();
+    }
+
     /** 이력을 하나 더 남기고 예약 행의 이력 번호를 올린다 — 예약 상태는 바꾸지 않는다 */
     public void history(BePreorderRow preorder, String toStatus) {
         jdbc.sql("""
@@ -156,7 +188,8 @@ public final class TestData {
 
     /** 시험이 넣은 결과 · 업무 행을 지운다. 외래 키 순서대로 */
     public void clear() {
-        for (String table : new String[]{"reconciliation_findings", "reconciliation_runs", "preorder_outbox_events",
+        for (String table : new String[]{"reconciliation_findings", "reconciliation_runs", "payments", "orders",
+                "preorder_outbox_events",
                 "preorder_sync_attempts", "preorder_sync_jobs", "preorder_events", "preorders", "shipment_batches",
                 "preorder_campaigns", "customers", "product_options", "products", "categories"}) {
             jdbc.sql("DELETE FROM " + table).update();

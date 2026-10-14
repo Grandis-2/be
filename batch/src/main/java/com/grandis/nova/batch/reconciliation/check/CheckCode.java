@@ -4,8 +4,8 @@ package com.grandis.nova.batch.reconciliation.check;
  * 확인할 것 코드(reconciliation_findings.check_code). 화면의 유형 · 문구 · 조치 버튼은 preorder 가 이 이름으로 정한다.
  * 결과 테이블에 CHECK 가 없어 코드를 더해도 마이그레이션이 필요 없다.
  *
- * 만료 누락(EXPIRY_MISSED)은 만료 스캔이 생길 때까지 검사하지 않는다(10-12). 재고 불일치(STOCK_MISMATCH) · 결제 · 예약
- * 불일치(ORDER_PAYMENT_MISMATCH)는 비교 기준을 받은 뒤 붙인다.
+ * 만료 누락(EXPIRY_MISSED)은 만료 스캔이 생길 때까지 검사하지 않는다(10-12). 재고 · 환불 불일치는 order 안에서 한 트랜잭션으로
+ * 바뀌어 버그나 손으로 고친 경우에만 생기므로 보지 않는다.
  */
 public enum CheckCode {
 
@@ -52,5 +52,7 @@ public enum CheckCode {
     /** 순번이 배정된 배송 차수 구간 밖 */
     SHIPMENT_BATCH_MISMATCH,
     /** 상품의 최대 순번 ≠ 예약 수 */
-    QUEUE_GAP
+    QUEUE_GAP,
+    /** 결제가 성공(환불 전)했는데 예약이 결제 가능에 머묾 — 결제 확인 이벤트를 preorder 가 받지 못함 */
+    PAID_BUT_REGISTERED
 }

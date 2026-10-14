@@ -29,9 +29,9 @@ class RegisterEventCheck implements InternalCheck {
                                   AND CAST(JSON_EXTRACT(e.payload, '$.run') AS UNSIGNED) = j.run)
             """;
 
-    private final JdbcClient jdbc;
+    private final StreamingJdbc jdbc;
 
-    RegisterEventCheck(JdbcClient jdbc) {
+    RegisterEventCheck(StreamingJdbc jdbc) {
         this.jdbc = jdbc;
     }
 
