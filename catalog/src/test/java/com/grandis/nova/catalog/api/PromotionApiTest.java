@@ -127,16 +127,18 @@ class PromotionApiTest {
     }
 
     @Test
-    @DisplayName("같은 상품을 역순으로 묶는 두 만들기가 겹쳐도 교착하지 않는다 — 늘 하나는 201, 다른 하나는 겹친 상품을 알리는 409(다시 시도 409 아님)")
+    @DisplayName("상품을 역순으로 묶는 두 만들기가 겹쳐도 교착하지 않는다 — 늘 하나는 201, 다른 하나는 실제로 겹친 상품만 알리는 409(다시 시도 409 아님)")
     void reverseOrderCreatesDoNotDeadlock() throws Exception {
         java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
         try {
             for (int round = 0; round < 10; round++) {
                 UUID a = preorder("A" + round);
                 UUID b = preorder("B" + round);
+                UUID c = preorder("C" + round);
+                UUID d = preorder("D" + round);   // a 와 d 는 한쪽에만 — 409 는 겹친 b · c 만 알려야 한다
                 java.util.concurrent.CyclicBarrier start = new java.util.concurrent.CyclicBarrier(2);
                 List<java.util.concurrent.Future<org.springframework.mock.web.MockHttpServletResponse>> futures = new ArrayList<>();
-                for (UUID[] order : new UUID[][] {{a, b}, {b, a}}) {
+                for (UUID[] order : new UUID[][] {{a, b, c}, {d, c, b}}) {
                     futures.add(pool.submit(() -> {
                         start.await();
                         return create(body("역순", today, today, List.of(), order)).andReturn().getResponse();
@@ -148,7 +150,9 @@ class PromotionApiTest {
                     statuses.add(response.getStatus());
                     if (response.getStatus() == 409) {
                         JsonNode details = JSON.readTree(response.getContentAsString()).get("error").get("details");
-                        assertThat(details.has("productIds")).as("round %d: %s", round, details).isTrue();
+                        List<String> conflicted = new ArrayList<>();
+                        details.get("productIds").forEach(id -> conflicted.add(id.asString()));
+                        assertThat(conflicted).as("round %d: %s", round, details).containsExactlyInAnyOrder(b.toString(), c.toString());
                     }
                 }
                 assertThat(statuses).as("round %d", round).containsExactlyInAnyOrder(201, 409);
