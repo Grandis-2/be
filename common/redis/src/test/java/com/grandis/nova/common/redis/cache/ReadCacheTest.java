@@ -336,14 +336,39 @@ class ReadCacheTest {
     @Test
     @DisplayName("만료 전 값은 계속 센다 — 예산 400 · TTL 10초에서 0초 400 을 넣으면 9초의 360 은 거절, 10초 뒤에는 받는다(토큰 버킷이면 받았다)")
     void liveBytesStayCountedUntilExpiry() {
-        MutableClock clock = new MutableClock(Instant.parse("2026-10-14T00:00:00Z"));
-        ReadCache.StoreBudget budget = new ReadCache.StoreBudget(400, clock);
-        assertThat(budget.tryTake(400, Duration.ofSeconds(10))).isTrue();
-        clock.advance(Duration.ofSeconds(9));
-        assertThat(budget.tryTake(360, Duration.ofSeconds(10))).isFalse();
-        clock.advance(Duration.ofSeconds(1));
-        assertThat(budget.tryTake(360, Duration.ofSeconds(10))).isTrue();
+        java.util.concurrent.atomic.AtomicLong nanos = new java.util.concurrent.atomic.AtomicLong();
+        ReadCache.StoreBudget budget = new ReadCache.StoreBudget(400, nanos::get);
+        budget.confirm(budget.reserve(400), Duration.ofSeconds(10));
+        nanos.addAndGet(Duration.ofSeconds(9).toNanos());
+        assertThat(budget.reserve(360)).isNull();
+        nanos.addAndGet(Duration.ofSeconds(1).toNanos());
+        assertThat(budget.reserve(360)).isNotNull();
         assertThat(budget.used()).isEqualTo(360);
+    }
+
+    @Test
+    @DisplayName("잡은 몫은 SET 응답(확정) 전에는 아무리 오래돼도 풀리지 않고, 확정한 때부터 TTL 을 센다 — SET 이 늦게 닿아도 Redis 만료보다 먼저 풀리지 않게")
+    void reservedBytesWaitForConfirm() {
+        java.util.concurrent.atomic.AtomicLong nanos = new java.util.concurrent.atomic.AtomicLong();
+        ReadCache.StoreBudget budget = new ReadCache.StoreBudget(400, nanos::get);
+        ReadCache.StoreBudget.Hold hold = budget.reserve(400);
+        nanos.addAndGet(Duration.ofSeconds(30).toNanos());   // SET 이 30초 늦었다
+        assertThat(budget.reserve(1)).as("확정 전에는 풀리지 않는다").isNull();
+
+        budget.confirm(hold, Duration.ofSeconds(10));
+        nanos.addAndGet(Duration.ofSeconds(9).toNanos());
+        assertThat(budget.reserve(1)).as("확정 9초 뒤 — 아직 살아 있다").isNull();
+        nanos.addAndGet(Duration.ofSeconds(1).toNanos());
+        assertThat(budget.reserve(1)).isNotNull();
+    }
+
+    @Test
+    @DisplayName("보내지 않은 것이 확실하면(release) 몫을 바로 돌려준다")
+    void releaseReturnsTheHold() {
+        ReadCache.StoreBudget budget = new ReadCache.StoreBudget(400, System::nanoTime);
+        budget.release(budget.reserve(400));
+        assertThat(budget.used()).isZero();
+        assertThat(budget.reserve(400)).isNotNull();
     }
 
     @Test

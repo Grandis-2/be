@@ -25,6 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
@@ -129,7 +130,7 @@ public final class ReadCache {
         if (ttl.isNegative() || ttl.isZero()) {
             throw new IllegalArgumentException("ttl must be positive: " + ttl);
         }
-        return new Spec<>(name, type, Shape.fingerprint(type), ttl, new StoreBudget(budgetBytes, clock));
+        return new Spec<>(name, type, Shape.fingerprint(type), ttl, new StoreBudget(budgetBytes, System::nanoTime));
     }
 
     /**
@@ -281,14 +282,21 @@ public final class ReadCache {
         // 이 인스턴스가 이 캐시로 들고 있는 양이 상한을 넘으면 넣지 않는다(DB 로 답한다) — 나눠 쓰는 Redis 의 다른 키(토큰 폐기 표식 · 대기열)를 덜 밀어내게
         long charge = StoreBudget.charge(key.getBytes(java.nio.charset.StandardCharsets.UTF_8).length,
                 body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
-        if (!spec.budget().tryTake(charge, left)) {
+        StoreBudget.Hold hold = spec.budget().reserve(charge);
+        if (hold == null) {
             spec.budget().warnSkipped(spec.name());
             return;
         }
-        call(() -> {
-            redis.opsForValue().set(key, body, left);
-            return Boolean.TRUE;
-        });
+        try {
+            breaker.executeRunnable(() -> redis.opsForValue().set(key, body, left));
+            spec.budget().confirm(hold, left);
+        } catch (CallNotPermittedException e) {
+            spec.budget().release(hold);   // 차단기가 막아 보내지 않았다
+        } catch (RuntimeException e) {
+            // 시간 초과 등 결과를 모른다 — 들어갔다고 보고 지금부터 TTL 동안 잡아 둔다
+            spec.budget().confirm(hold, left);
+            log.warn("읽기 캐시 Redis 호출 실패 — 캐시 없이 간다: {}", e.toString());
+        }
     }
 
     /** Redis 호출 하나. 실패 · 차단기 열림이면 null — 호출하는 쪽이 캐시 없이 간다. */
@@ -339,6 +347,10 @@ public final class ReadCache {
      * <ul>
      *   <li>차지할 양은 {@link #charge} — Valkey 9.1.2 에서 MEMORY USAGE 로 잰 값(키 · 값 외에 작은 값은 40~60B, 60KB 는 약 9%, 200KB 는 약 15%)보다
      *       크게 잡는다. 큰 값의 몫은 할당기(jemalloc)의 크기 구간이 두 배마다 4칸이라 최대 약 25% 다.</li>
+     *   <li>넣기 전에 몫을 잡고(풀리지 않음), SET 응답을 받은 뒤부터 TTL 동안 센다 — Redis 의 만료는 SET 을 처리한 때부터라 몫이 먼저 풀리지 않는다.
+     *       결과를 모르는 실패(시간 초과)도 들어갔다고 보고 센다. 차단기가 막아 보내지 않았을 때만 바로 돌려준다.</li>
+     *   <li>경과 시간은 단조 증가 시간원(System.nanoTime)으로 잰다 — 벽시계를 앞으로 맞춰도 살아 있는 값의 몫이 풀리지 않는다. 응답 신선도(loadedAt)는
+     *       벽시계로 따로 잰다.</li>
      *   <li>TTL 전에 지워지거나 밀려난 값은 만료 시각까지 그대로 센다(보수적). 같은 키를 다시 넣으면 둘 다 센다(보수적).</li>
      *   <li><b>인스턴스 하나의 상한이다.</b> 재시작하면 0 에서 다시 센다 — 그때 Redis 에 남은 옛 값은 세지 않는다. 그래서 서비스 전체 점유는
      *       상한 × (떠 있는 인스턴스 + TTL 안에 내려간 인스턴스) 로 잡는다(배포 중 겹침 포함).</li>
@@ -350,17 +362,18 @@ public final class ReadCache {
         static final int PER_KEY_OVERHEAD = 64;
 
         private final long capacity;
-        private final Clock clock;
-        private final java.util.PriorityQueue<long[]> live = new java.util.PriorityQueue<>(java.util.Comparator.comparingLong(e -> e[0]));
+        private final LongSupplier nanos;
+        private final java.util.PriorityQueue<Hold> live = new java.util.PriorityQueue<>(java.util.Comparator.comparingLong(h -> h.expiresAtNanos));
         private long used;
-        private long lastWarn;
+        private long lastWarnNanos = Long.MIN_VALUE;
 
-        StoreBudget(long capacity, Clock clock) {
+        /** @param nanos 경과 시간을 재는 단조 증가 시간원(기본 System::nanoTime) — 벽시계를 앞으로 맞춰도 살아 있는 값의 몫이 풀리지 않게 */
+        StoreBudget(long capacity, LongSupplier nanos) {
             if (capacity <= 0) {
                 throw new IllegalArgumentException("budget must be positive: " + capacity);
             }
             this.capacity = capacity;
-            this.clock = clock;
+            this.nanos = Objects.requireNonNull(nanos, "nanos");
         }
 
         /** Redis 메모리로 셀 양 — 키 + 값 + 고정 비용 + 값의 1/4(큰 값의 할당 구간 몫). */
@@ -368,29 +381,63 @@ public final class ReadCache {
             return keyBytes + valueBytes + PER_KEY_OVERHEAD + valueBytes / 4L;
         }
 
-        /** ttl 동안 살아 있을 bytes 를 넣어도 상한 안인가. 그렇다면 센다. */
-        synchronized boolean tryTake(long bytes, Duration ttl) {
-            long now = clock.millis();
-            while (!live.isEmpty() && live.peek()[0] <= now) {
-                used -= live.poll()[1];
-            }
+        /**
+         * 넣기 전에 bytes 만큼 잡는다. 상한을 넘으면 null. 잡은 몫은 {@link #confirm} 이나 {@link #release} 전까지 풀리지 않는다 — SET 이 늦게
+         * 닿아도 Redis 의 실제 만료보다 먼저 몫이 풀리지 않게.
+         */
+        synchronized Hold reserve(long bytes) {
+            purge();
             if (used + bytes > capacity) {
-                return false;
+                return null;
             }
-            live.add(new long[] {now + ttl.toMillis(), bytes});
+            Hold hold = new Hold(bytes);
+            live.add(hold);
             used += bytes;
-            return true;
+            return hold;
+        }
+
+        /** SET 응답을 받았다(또는 결과를 모른다) — 지금부터 ttl 동안 잡아 둔다. Redis 의 만료는 SET 을 처리한 때부터라 이보다 늦지 않다. */
+        synchronized void confirm(Hold hold, Duration ttl) {
+            if (live.remove(hold)) {
+                hold.expiresAtNanos = nanos.getAsLong() + ttl.toNanos();
+                live.add(hold);
+            }
+        }
+
+        /** 보내지 않은 것이 확실하다(차단기가 막음) — 바로 돌려준다. */
+        synchronized void release(Hold hold) {
+            if (live.remove(hold)) {
+                used -= hold.bytes;
+            }
         }
 
         synchronized long used() {
+            purge();
             return used;
+        }
+
+        private void purge() {
+            long now = nanos.getAsLong();
+            while (!live.isEmpty() && live.peek().expiresAtNanos - now <= 0) {
+                used -= live.poll().bytes;
+            }
+        }
+
+        /** 잡은 몫 하나. 확정 전에는 만료 시각이 없다(풀리지 않는다). */
+        static final class Hold {
+            private final long bytes;
+            private long expiresAtNanos = Long.MAX_VALUE;
+
+            private Hold(long bytes) {
+                this.bytes = bytes;
+            }
         }
 
         /** 상한을 넘어 넣지 않았다 — 분마다 한 번만 남긴다. */
         synchronized void warnSkipped(String name) {
-            long now = clock.millis();
-            if (now - lastWarn >= 60_000) {
-                lastWarn = now;
+            long now = nanos.getAsLong();
+            if (lastWarnNanos == Long.MIN_VALUE || now - lastWarnNanos >= 60_000_000_000L) {
+                lastWarnNanos = now;
                 log.warn("읽기 캐시 저장 상한({} bytes)을 넘어 넣지 않았다 — DB 로 답한다 cache={}", capacity, name);
             }
         }
