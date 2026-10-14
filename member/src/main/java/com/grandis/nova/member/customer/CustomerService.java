@@ -71,9 +71,9 @@ public class CustomerService {
         private static final String MASK = "**";
 
         static MemberName of(Customer customer) {
-            // 앱이 쓰는 경로는 빈 문자열을 null 로 바꾸므로(ProfileRequest — 유일한 쓰기 경로) null 만 본다. DB CHECK 는 없다
+            // 앱 쓰기 경로(ProfileRequest)는 빈 값을 null 로 바꾸지만 DB CHECK 는 없다 — 공백뿐인 실명도 없는 것으로 본다(catalog 와 같다)
             String name = customer.profile().name();
-            return new MemberName(customer.getId(), mask(name != null ? name : customer.getDisplayName()));
+            return new MemberName(customer.getId(), mask(name != null && !name.isBlank() ? name : customer.getDisplayName()));
         }
 
         /** 첫 글자(코드포인트) + "**". 비었으면 "***". catalog 리뷰 작성자명(ReviewService.mask)과 같은 규칙이다. */

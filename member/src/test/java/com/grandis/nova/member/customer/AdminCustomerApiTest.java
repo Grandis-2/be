@@ -50,6 +50,13 @@ class AdminCustomerApiTest {
         customers.saveAndFlush(withName);
         Customer nicknameOnly = customers.saveAndFlush(Customer.fromKakao(kakaoId(), "영희랑"));
         UUID missing = UUID.randomUUID();
+        // 앱 경로로는 못 만드는 공백뿐인 실명 — 없는 것으로 보고 표시 이름을 가린다(catalog 리뷰 작성자명과 같다)
+        Customer blankName = customers.saveAndFlush(Customer.fromKakao(kakaoId(), "민수랑"));
+        blankName.changeProfile(new Profile("   ", null, null));
+        customers.saveAndFlush(blankName);
+        mvc.perform(asAdmin(get(PATH).param("ids", blankName.getId().toString())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].name").value("민**"));
 
         mvc.perform(asAdmin(get(PATH).param("ids", nicknameOnly.getId() + "," + missing + "," + withName.getId() + "," + nicknameOnly.getId())))
                 .andExpect(status().isOk())
