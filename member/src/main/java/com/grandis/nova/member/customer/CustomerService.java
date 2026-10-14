@@ -5,7 +5,13 @@ import com.grandis.nova.common.CommonErrorCode;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collection;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * 내 정보(이름·이메일·연락처)와 기본 배송지의 조회·교체. 주소록은 없고 회원당 하나다. 기존 주문의 배송지는 주문이 복사해 가므로 여기 변경과 무관하다.
@@ -44,6 +50,26 @@ public class CustomerService {
         Customer customer = lock(customerId);
         customer.changeDefaultAddress(address);
         return customer.defaultAddress();
+    }
+
+    /**
+     * 관리자 화면이 회원 id 를 이름으로 바꿀 때 — 요청 순서(같은 id 는 한 번), 없는 id 는 빠진다.
+     * 이름은 실명, 실명이 없으면 카카오 표시 이름이다(리뷰 작성자명과 같은 규칙, 2026-10-07 결정). 실명은 가입 폼에서 받지만 비울 수도 있다
+     * (PUT /me/profile 에 빈 값을 보내면 그 칸이 null 이 된다 — ProfileRequest).
+     */
+    @Transactional(readOnly = true)
+    public List<MemberName> names(Collection<UUID> customerIds) {
+        LinkedHashSet<UUID> ordered = new LinkedHashSet<>(customerIds);
+        Map<UUID, Customer> found = customers.findAllById(ordered).stream().collect(Collectors.toMap(Customer::getId, Function.identity()));
+        return ordered.stream().filter(found::containsKey).map(id -> MemberName.of(found.get(id))).toList();
+    }
+
+    public record MemberName(UUID memberId, String name) {
+        static MemberName of(Customer customer) {
+            // 앱이 쓰는 경로는 빈 문자열을 null 로 바꾸므로(ProfileRequest — 유일한 쓰기 경로) null 만 본다. DB CHECK 는 없다
+            String name = customer.profile().name();
+            return new MemberName(customer.getId(), name != null ? name : customer.getDisplayName());
+        }
     }
 
     /** 표시 이름은 카카오에서 온 읽기 전용 값이라 프로필과 같이 다닌다. */
