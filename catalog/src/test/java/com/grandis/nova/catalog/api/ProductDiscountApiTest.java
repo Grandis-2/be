@@ -93,6 +93,36 @@ class ProductDiscountApiTest {
     }
 
     @Test
+    @DisplayName("할인가가 100원보다 작아지는 옵션은 만들지 않는다 — 등록 · 할인율 · 기본가 · 조합 추가 모두 원인 칸의 400 이고 값은 그대로")
+    void salePriceMustBeAtLeastHundredWon() throws Exception {
+        // 정가 150 × 50% = 75
+        expectValidation(mockMvc.perform(admin(post(PATH)).header("Idempotency-Key", "k-" + ShopFixtures.unique())
+                .content(lowPriceBody("\"discountRate\": 50,", ""))), "combinations[storage=256GB]");
+        // 0% 여도 정가 자체가 하한 밑이면 400
+        expectValidation(mockMvc.perform(admin(post(PATH)).header("Idempotency-Key", "k-" + ShopFixtures.unique())
+                .content(lowPriceBody("", "").replace("\"basePrice\": 150", "\"basePrice\": 99"))), "combinations[storage=256GB]");
+
+        UUID productId = register(lowPriceBody("", ""));
+        expectValidation(edit(productId, "{ \"discountRate\": 50 }"), "discountRate");
+        expectValidation(edit(productId, "{ \"basePrice\": 99 }"), "basePrice");
+        JsonNode unchanged = data(adminDetail(productId)).get("product");
+        assertThat(unchanged.get("discountRate").asInt()).isZero();
+        assertThat(prices(unchanged)).containsExactly(Map.entry("256GB", "150/150"), Map.entry("512GB", "200150/200150"));
+
+        // 기본가와 할인율을 함께 보내면 새 할인율로 판정한다 — 1000 × 50% = 500
+        edit(productId, "{ \"basePrice\": 1000, \"discountRate\": 50 }").andExpect(status().isOk());
+        // 그 뒤 할인율을 내리며 기본가를 150 으로 — 옛 할인율(50%)로 판정하면 75 라 거절된다
+        JsonNode lowered = data(edit(productId, "{ \"basePrice\": 150, \"discountRate\": 0 }").andExpect(status().isOk())).get("product");
+        assertThat(prices(lowered)).containsExactly(Map.entry("256GB", "150/150"), Map.entry("512GB", "200150/200150"));
+
+        // 256GB 를 빼고 50% 로 등록 → 그 조합을 더하면 75
+        UUID withoutBase = register(lowPriceBody("\"discountRate\": 50,", ", \"excluded\": true"));
+        expectValidation(mockMvc.perform(admin(post(PATH + "/{id}/variants", withoutBase))
+                .content("{ \"selections\": { \"storage\": \"256GB\" } }")), "selections");
+        assertThat(data(adminDetail(withoutBase)).get("product").get("variants")).hasSize(1);
+    }
+
+    @Test
     @DisplayName("일반 상품은 언제든 할인율만 따로 고친다 — 고친 값이 바로 가격에 걸리고 0 으로 되돌리면 정가다")
     void inStockRateIsEditableAnyTime() throws Exception {
         UUID productId = registerInStock("");
@@ -198,6 +228,14 @@ class ProductDiscountApiTest {
         return body("IN_STOCK", extra + """
                 "combinations": [ { "selections": { "storage": "256GB" }, "stock": 3 }, { "selections": { "storage": "512GB" }, "stock": 3 } ],
                 """);
+    }
+
+    /** 기본가 150, 256GB(+0) · 512GB(+200,000). excluded256 은 256GB 조합 설정 뒤에 붙일 JSON 조각. */
+    private String lowPriceBody(String extra, String excluded256) {
+        return inStockBody(extra).replace("\"basePrice\": 2278190", "\"basePrice\": 150")
+                .replace("{ \"selections\": { \"storage\": \"256GB\" }, \"stock\": 3 }",
+                        excluded256.isEmpty() ? "{ \"selections\": { \"storage\": \"256GB\" }, \"stock\": 3 }"
+                                : "{ \"selections\": { \"storage\": \"256GB\" }" + excluded256 + " }");
     }
 
     private String body(String saleMode, String extra) {
