@@ -1,5 +1,7 @@
 package com.grandis.nova.common.redis.cache;
 
+import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.CommonErrorCode;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
@@ -12,13 +14,17 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JavaType;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 
 /**
@@ -27,15 +33,20 @@ import java.util.function.Supplier;
  * <ul>
  *   <li><b>장애</b>: Redis 읽기 · 쓰기가 실패하면 캐시 없이 loader(DB)로 답한다. 실패가 이어지면 차단기가 열려 {@link #OPEN_FOR} 동안
  *       Redis 를 부르지 않는다 — 요청마다 Redis 제한 시간만큼 기다리지 않게. 그 뒤 몇 번 불러 보고 되면 다시 쓴다.</li>
- *   <li><b>몰림</b>: 같은 키를 동시에 찾는 요청은 이 인스턴스 안에서 loader 를 한 번만 부르고 나머지는 그 결과를 받는다 — 인기 키가 비는 순간
- *       (만료 · Redis 복구 직후) DB 로 한꺼번에 가지 않게. loader 의 예외(404 등)도 같이 받는다.</li>
+ *   <li><b>몰림</b>: 같은 키(세대 번호 포함)를 동시에 찾는 요청은 이 인스턴스 안에서 loader 를 한 번만 부르고 나머지는 그 결과를 받는다 —
+ *       인기 키가 비는 순간(만료 · Redis 복구 직후) DB 로 한꺼번에 가지 않게. loader 의 예외(404 등)도 같이 받는다. 같이 받는 쪽은
+ *       {@link #WAIT_FOR_LOAD} 까지만 기다린다(넘으면 503).</li>
  *   <li><b>무효화</b>: 키에 세대 번호를 넣고, 바뀐 쪽이 {@link #bumpAfterCommit} 으로 번호를 올린다 — 조건마다 다른 키(목록 · 검색)를 하나씩
  *       찾아 지우지 않는다. 올리기는 트랜잭션 커밋 뒤라 롤백된 수정으로 비우지 않는다. 올리기가 실패하면 ERROR 이고 그 값은 TTL 이 지나야
  *       바뀐다. 커밋 전에 DB 를 읽은 요청이 올린 뒤에 옛 값을 쓰는 경우도 TTL 이 끝낸다 — TTL 이 최악의 지연이다.</li>
  *   <li><b>배포</b>: 값은 JSON 이고 키에 그 타입 모양의 지문({@link Shape})을 넣는다. 모양이 다른 버전(blue/green 이 겹치는 동안)은 서로의 키를
  *       읽지 않는다 — 읽으면 새 칸이 null 로 조용히 비어 나간다. 지문이 같은데 못 읽는 값은 없는 것으로 보고 다시 채운다.</li>
  * </ul>
- * 값은 바뀌지 않는(불변) 객체여야 한다 — 같이 기다린 요청들이 한 객체를 나눠 쓴다.
+ * 값은 바뀌지 않는(불변) 객체여야 한다 — 같이 기다린 요청들이 한 객체를 나눠 쓴다. 지문은 레코드 칸 · enum 만 본다 — 값 타입에 Jackson 이름
+ * 애너테이션(@JsonProperty 등)이나 레코드 아닌 클래스를 쓰면 캐시 이름에 버전을 붙여 바꾼다.
+ * <p>운영 Redis 는 여러 서비스가 나눠 쓰는 단일 노드이고 메모리가 차면 TTL 있는 키부터 지운다(volatile-lru) — 토큰 폐기 표식도 TTL 이 있어
+ * 같이 밀려날 수 있다. 그래서 캐시 키가 끝없이 늘 수 있는 조회(자유 검색어 · 깊은 페이지)는 쓰는 쪽이 캐시하지 않는다. 세대 키는 TTL 이 없어
+ * 이 정책이 지우지 않는다(사람이 지우면 0 으로 돌아간다).
  */
 public final class ReadCache {
 
@@ -43,12 +54,18 @@ public final class ReadCache {
 
     /** 차단기가 열린 뒤 Redis 를 부르지 않는 시간. */
     static final Duration OPEN_FOR = Duration.ofSeconds(10);
+    /** 같은 키의 진행 중 조회를 같이 받는 쪽이 기다리는 상한. */
+    static final Duration WAIT_FOR_LOAD = Duration.ofSeconds(5);
+    /** Redis 에 넣는 모양({@link Stored})의 버전 — 키에 들어간다. */
+    static final String FORMAT = "f1";
 
     private final StringRedisTemplate redis;
     private final JsonMapper json;
     private final String prefix;
     private final CircuitBreaker breaker;
     private final ConcurrentHashMap<String, CompletableFuture<Object>> loading = new ConcurrentHashMap<>();
+    private final Clock clock;
+    private final Duration waitForLoad;
     /** false 면 Redis 를 부르지 않고 늘 loader 로 답한다({@link #off}). */
     private final boolean enabled;
 
@@ -66,11 +83,14 @@ public final class ReadCache {
     }
 
     ReadCache(StringRedisTemplate redis, JsonMapper json, String service, CircuitBreakerConfig breakerConfig) {
-        this(redis, json, service, breakerConfig, true);
+        this(redis, json, service, breakerConfig, true, Clock.systemUTC(), WAIT_FOR_LOAD);
     }
 
-    private ReadCache(StringRedisTemplate redis, JsonMapper json, String service, CircuitBreakerConfig breakerConfig, boolean enabled) {
+    ReadCache(StringRedisTemplate redis, JsonMapper json, String service, CircuitBreakerConfig breakerConfig, boolean enabled, Clock clock,
+              Duration waitForLoad) {
         this.enabled = enabled;
+        this.clock = Objects.requireNonNull(clock, "clock");
+        this.waitForLoad = Objects.requireNonNull(waitForLoad, "waitForLoad");
         this.redis = enabled ? Objects.requireNonNull(redis, "redis") : redis;
         this.json = Objects.requireNonNull(json, "json");
         this.prefix = Objects.requireNonNull(service, "service") + ":cache:";
@@ -81,7 +101,7 @@ public final class ReadCache {
      * 끈 캐시 — 늘 loader 로 답하고 Redis 를 부르지 않는다. 시험이 DB 를 JDBC 로 직접 고치는 경우처럼 세대를 올리지 않는 쓰기를 쓰는 곳에서 쓴다.
      */
     public static ReadCache off(JsonMapper json, String service) {
-        return new ReadCache(null, json, service, CircuitBreakerConfig.ofDefaults(), false);
+        return new ReadCache(null, json, service, CircuitBreakerConfig.ofDefaults(), false, Clock.systemUTC(), WAIT_FOR_LOAD);
     }
 
     /** 캐시 하나의 이름 · 값 타입 · TTL. 이름과 타입 지문이 키에 들어간다. */
@@ -100,29 +120,37 @@ public final class ReadCache {
         return new Spec<>(name, type, Shape.fingerprint(type), ttl);
     }
 
-    /**
-     * 세대 {@code generation} 의 키 {@code id} 값을 돌려준다. 없으면 loader 로 만들어 넣는다. loader 가 null 을 주면 넣지 않는다.
-     * 세대 번호를 못 읽으면(Redis 장애) 캐시를 건너뛰고 loader 로 답한다 — 아무 번호나 쓰면 옛 값을 줄 수 있다.
-     */
+    /** {@link #entry} 의 값만. */
     public <T> T get(Spec<T> spec, String generation, String id, Supplier<T> loader) {
+        return entry(spec, generation, id, loader).value();
+    }
+
+    /**
+     * 세대 {@code generation} 의 키 {@code id} 값과 그 값을 DB 에서 읽은 시각. 없으면 loader 로 만들어 넣는다. loader 가 null 을 주면 넣지 않는다.
+     * 세대 번호를 못 읽으면(Redis 장애) 캐시를 건너뛰고 loader 로 답한다 — 아무 번호나 쓰면 옛 값을 줄 수 있다.
+     * 읽은 시각은 응답의 HTTP 캐시 시간({@link Entry#remaining})을 정하는 데 쓴다 — 앞단 캐시가 이 값을 TTL 넘게 들고 있지 않게.
+     */
+    public <T> Entry<T> entry(Spec<T> spec, String generation, String id, Supplier<T> loader) {
         if (!enabled) {
-            return loader.get();
+            return new Entry<>(loader.get(), clock.instant());
         }
-        String slot = spec.name() + ":" + generation + ":" + id;
         Long current = call(() -> currentGeneration(generation));
         if (current == null) {
-            return load(slot, null, spec, loader);
+            // 세대를 모르면 장애 중인 요청끼리만 같이 받는다 — 정상 세대의 진행 중 조회와 섞이지 않게
+            return load("down|" + spec.name() + ":" + generation + ":" + id, null, spec, loader);
         }
-        String key = prefix + spec.name() + ":" + spec.fingerprint() + ":" + generation + "." + current + ":" + id;
+        String key = prefix + spec.name() + ":" + FORMAT + "." + spec.fingerprint() + ":" + generation + "." + current + ":" + id;
         String cached = call(() -> redis.opsForValue().get(key));
         if (cached != null) {
             try {
-                return json.readValue(cached, spec.type());
+                Stored<T> stored = json.readValue(cached, json.getTypeFactory().constructParametricType(Stored.class, spec.type()));
+                return new Entry<>(stored.value(), Instant.ofEpochMilli(stored.loadedAt()));
             } catch (JacksonException e) {
                 log.warn("읽기 캐시 값을 읽지 못해 다시 채운다 key={}", key, e);
             }
         }
-        return load(slot, key, spec, loader);
+        // 완성된 키(세대 번호 포함)로 줄 세운다 — 세대가 오른 뒤 온 요청이 옛 세대의 진행 중 조회를 같이 받지 않게
+        return load(key, key, spec, loader);
     }
 
     /**
@@ -174,27 +202,35 @@ public final class ReadCache {
     }
 
     /**
-     * 같은 자리(캐시 이름 + id)의 loader 를 한 번만 부른다. 세대와 상관없이 자리로 줄 세운다 — Redis 장애로 세대를 못 읽는 동안에도 같은 요청이
-     * DB 로 몰리지 않게. key 가 null 이면(세대를 못 읽음) 넣지 않는다.
+     * 같은 자리(slot)의 loader 를 이 인스턴스에서 한 번만 부르고, 나머지는 그 결과(또는 예외)를 같이 받는다. key 가 null 이면 넣지 않는다.
+     * 같이 받는 쪽은 {@link #WAIT_FOR_LOAD} 까지만 기다리고 넘으면 503(다시 시도) — 멈춘 조회 하나에 같은 상품 요청이 전부 묶이지 않게.
+     * 넘었다고 각자 DB 로 가게 풀지 않는다(DB 가 느린 때 부하가 그만큼 는다). 진행 중인 조회는 그대로 두고 끝나면 자리가 빈다.
      */
     @SuppressWarnings("unchecked")
-    private <T> T load(String slot, String key, Spec<T> spec, Supplier<T> loader) {
+    private <T> Entry<T> load(String slot, String key, Spec<T> spec, Supplier<T> loader) {
         CompletableFuture<Object> mine = new CompletableFuture<>();
         CompletableFuture<Object> running = loading.putIfAbsent(slot, mine);
         if (running != null) {
             try {
-                return (T) running.join();
-            } catch (CompletionException e) {
-                throw e.getCause() instanceof RuntimeException runtime ? runtime : e;
+                return (Entry<T>) running.get(waitForLoad.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (ExecutionException e) {
+                throw e.getCause() instanceof RuntimeException runtime ? runtime : new IllegalStateException(e.getCause());
+            } catch (TimeoutException e) {
+                log.warn("읽기 캐시 — 같은 키의 조회가 {} 안에 끝나지 않아 503 slot={}", waitForLoad, slot);
+                throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
             }
         }
         try {
-            T value = loader.get();
-            mine.complete(value);
-            if (key != null && value != null) {
-                store(key, spec, value);
+            Instant loadedAt = clock.instant();   // 읽기 전 시각 — 응답의 나이를 짧게 잡지 않게
+            Entry<T> entry = new Entry<>(loader.get(), loadedAt);
+            mine.complete(entry);
+            if (key != null && entry.value() != null) {
+                store(key, spec, entry);
             }
-            return value;
+            return entry;
         } catch (RuntimeException | Error e) {
             mine.completeExceptionally(e);
             throw e;
@@ -203,16 +239,21 @@ public final class ReadCache {
         }
     }
 
-    private <T> void store(String key, Spec<T> spec, T value) {
+    private <T> void store(String key, Spec<T> spec, Entry<T> entry) {
         String body;
         try {
-            body = json.writeValueAsString(value);
+            body = json.writeValueAsString(new Stored<>(entry.loadedAt().toEpochMilli(), entry.value()));
         } catch (JacksonException e) {
             log.warn("읽기 캐시에 넣을 값을 JSON 으로 못 바꿨다 key={}", key, e);
             return;
         }
+        // 남은 시간만큼만 둔다 — 읽는 데 걸린 시간도 TTL 에서 뺀다
+        Duration left = spec.ttl().minus(Duration.between(entry.loadedAt(), clock.instant()));
+        if (left.toMillis() <= 0) {
+            return;
+        }
         call(() -> {
-            redis.opsForValue().set(key, body, spec.ttl());
+            redis.opsForValue().set(key, body, left);
             return Boolean.TRUE;
         });
     }
@@ -227,6 +268,29 @@ public final class ReadCache {
             log.warn("읽기 캐시 Redis 호출 실패 — 캐시 없이 간다: {}", e.toString());
             return null;
         }
+    }
+
+    /**
+     * 값과 DB 에서 읽은 시각.
+     *
+     * @param loadedAt 이 값을 만든 loader 가 시작한 시각
+     */
+    public record Entry<T>(T value, Instant loadedAt) {
+
+        /** 값만 바꾼 사본 — 읽은 시각은 그대로(응답 봉투로 감쌀 때). */
+        public <R> Entry<R> map(java.util.function.Function<T, R> mapper) {
+            return new Entry<>(mapper.apply(value), loadedAt);
+        }
+
+        /** 이 값을 TTL 안에서 더 들고 있어도 되는 시간 — 앞단 HTTP 캐시의 max-age 상한. 0 보다 작으면 0. */
+        public Duration remaining(Duration ttl, Instant now) {
+            Duration left = ttl.minus(Duration.between(loadedAt, now));
+            return left.isNegative() ? Duration.ZERO : left;
+        }
+    }
+
+    /** Redis 에 넣는 모양. 이 모양을 바꾸면 {@link #FORMAT} 을 올린다. */
+    record Stored<T>(long loadedAt, T value) {
     }
 
     /**

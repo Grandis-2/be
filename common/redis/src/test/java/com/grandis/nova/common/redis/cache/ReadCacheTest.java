@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -162,6 +163,34 @@ class ReadCacheTest {
     }
 
     @Test
+    @DisplayName("세대가 오른 뒤 들어온 요청은 옛 세대의 진행 중 조회를 같이 받지 않는다 — 새 세대로 다시 읽는다")
+    void requestAfterBumpDoesNotShareOldGenerationLoad() throws Exception {
+        CountDownLatch oldLoadStarted = new CountDownLatch(1);
+        CountDownLatch releaseOldLoad = new CountDownLatch(1);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<Item> old = pool.submit(() -> cache.get(items, "products", "1", () -> {
+                oldLoadStarted.countDown();
+                await(releaseOldLoad);
+                return item("before-edit", new AtomicInteger());
+            }));
+            oldLoadStarted.await();
+            cache.bumpAfterCommit("products");   // 관리자 수정이 커밋됐다
+
+            CompletableFuture<Item> fresh = CompletableFuture.supplyAsync(
+                    () -> cache.get(items, "products", "1", () -> item("after-edit", new AtomicInteger())));
+            Item freshItem = fresh.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            releaseOldLoad.countDown();
+
+            assertThat(freshItem.name()).isEqualTo("after-edit");
+            assertThat(old.get().name()).isEqualTo("before-edit");
+        } finally {
+            releaseOldLoad.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
     @DisplayName("모양이 다른 타입은 같은 이름이어도 서로의 값을 읽지 않는다 — 칸이 는 새 버전이 옛 값을 읽어 새 칸을 null 로 내보내지 않게")
     void differentShapeUsesDifferentKey() {
         ReadCache.Spec<ItemV1> v1 = cache.spec("shape", ItemV1.class, Duration.ofSeconds(30));
@@ -217,6 +246,80 @@ class ReadCacheTest {
     }
 
     @Test
+    @DisplayName("같은 키 조회를 기다리는 쪽은 상한까지만 — 넘으면 503 이고 loader 를 새로 부르지 않는다. 진행 중 조회는 그대로 끝난다")
+    void waitersGiveUpAfterTheCap() throws Exception {
+        ReadCache shortWait = new ReadCache(redis, JSON, "svc", io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.ofDefaults(), true,
+                java.time.Clock.systemUTC(), Duration.ofMillis(300));
+        ReadCache.Spec<Item> spec = shortWait.spec("item", Item.class, Duration.ofSeconds(30));
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger loads = new AtomicInteger();
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<Item> first = pool.submit(() -> shortWait.get(spec, "products", "slow", () -> {
+                loads.incrementAndGet();
+                started.countDown();
+                await(release);
+                return item("slow", new AtomicInteger());
+            }));
+            started.await();
+            long start = System.nanoTime();
+            assertThatThrownBy(() -> shortWait.get(spec, "products", "slow", () -> {
+                loads.incrementAndGet();
+                return item("second", new AtomicInteger());
+            })).isInstanceOf(com.grandis.nova.common.BusinessException.class)
+                    .satisfies(e -> assertThat(((com.grandis.nova.common.BusinessException) e).errorCode())
+                            .isEqualTo(com.grandis.nova.common.CommonErrorCode.DEPENDENCY_UNAVAILABLE));
+            assertThat((System.nanoTime() - start) / 1_000_000).isBetween(250L, 2_000L);
+            release.countDown();
+            assertThat(first.get().name()).isEqualTo("slow");
+            assertThat(loads).hasValue(1);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("값을 읽은 시각이 같이 저장된다 — 남은 시간(HTTP max-age 상한)은 TTL 에서 나이를 뺀 값, 넘으면 0")
+    void entryCarriesLoadedAt() throws Exception {
+        ReadCache.Entry<Item> loaded = cache.entry(items, "products", "1", () -> item("v", new AtomicInteger()));
+        Thread.sleep(1100);
+        ReadCache.Entry<Item> hit = cache.entry(items, "products", "1", () -> item("other", new AtomicInteger()));
+
+        assertThat(hit.value().name()).isEqualTo("v");
+        assertThat(hit.loadedAt()).isEqualTo(loaded.loadedAt().truncatedTo(java.time.temporal.ChronoUnit.MILLIS));
+        Duration remaining = hit.remaining(Duration.ofSeconds(30), Instant.now());
+        assertThat(remaining).isBetween(Duration.ofSeconds(27), Duration.ofSeconds(29));
+        assertThat(hit.remaining(Duration.ofSeconds(1), Instant.now())).isEqualTo(Duration.ZERO);
+    }
+
+    @Test
+    @DisplayName("Redis 가 돌아오면 차단기가 열린 시간 뒤 시험 호출로 다시 닫히고 캐시를 다시 쓴다")
+    void breakerClosesAfterRecovery() throws Exception {
+        ReadCache quick = new ReadCache(redis, JSON, "svc", io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.custom()
+                .slidingWindowSize(4).minimumNumberOfCalls(2).failureRateThreshold(50)
+                .waitDurationInOpenState(Duration.ofMillis(500)).permittedNumberOfCallsInHalfOpenState(2).build(),
+                true, java.time.Clock.systemUTC(), Duration.ofSeconds(5));
+        ReadCache.Spec<Item> spec = quick.spec("item", Item.class, Duration.ofSeconds(30));
+        REDIS.getDockerClient().pauseContainerCmd(REDIS.getContainerId()).exec();
+        try {
+            for (int i = 0; i < 3 && quick.breakerState() != CircuitBreaker.State.OPEN; i++) {
+                quick.get(spec, "products", "x" + i, () -> item("db", new AtomicInteger()));
+            }
+            assertThat(quick.breakerState()).isEqualTo(CircuitBreaker.State.OPEN);
+        } finally {
+            REDIS.getDockerClient().unpauseContainerCmd(REDIS.getContainerId()).exec();
+        }
+        Thread.sleep(600);
+        AtomicInteger loads = new AtomicInteger();
+        quick.get(spec, "products", "back", () -> item("back", loads));
+        quick.get(spec, "products", "back", () -> item("again", loads));
+        assertThat(quick.breakerState()).isEqualTo(CircuitBreaker.State.CLOSED);
+        assertThat(loads).as("닫힌 뒤 두 번째는 캐시에서").hasValue(1);
+    }
+
+    @Test
     @DisplayName("TTL 은 0 보다 커야 한다")
     void ttlMustBePositive() {
         assertThatThrownBy(() -> cache.spec("x", Item.class, Duration.ZERO)).isInstanceOf(IllegalArgumentException.class);
@@ -255,6 +358,14 @@ class ReadCacheTest {
             return out;
         } finally {
             pool.shutdownNow();
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
