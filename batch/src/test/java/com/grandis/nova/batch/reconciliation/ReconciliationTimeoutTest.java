@@ -20,7 +20,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 /** 검사 트랜잭션의 제한 시간 — 걸린 조회를 끊고 판정 불가로 끝낸다. 시험용 be 내부 검사가 제한 시간보다 오래 걸리는 조회를 한다 */
 @Import(ReconciliationTimeoutTest.SlowCheck.class)
-@TestPropertySource(properties = "nova.batch.reconciliation.run-timeout=1s")
+@TestPropertySource(properties = {"nova.batch.reconciliation.run-timeout=1s", "external.mock.max-duration=1s"})
 class ReconciliationTimeoutTest extends BatchIntegrationTest {
 
     @TestConfiguration(proxyBeanMethods = false)

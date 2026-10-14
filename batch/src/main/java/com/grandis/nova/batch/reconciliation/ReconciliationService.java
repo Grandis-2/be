@@ -4,6 +4,7 @@ import com.grandis.nova.batch.reconciliation.check.ReconcileResult;
 import com.grandis.nova.batch.reconciliation.check.Reconciler;
 import com.grandis.nova.batch.reconciliation.check.RunScope;
 import com.grandis.nova.batch.reconciliation.check.TooManyFindings;
+import com.grandis.nova.batch.reconciliation.config.MockLedgerProperties;
 import com.grandis.nova.batch.reconciliation.config.ReconciliationProperties;
 import com.grandis.nova.batch.reconciliation.mock.MockLedgerClient;
 import com.grandis.nova.batch.reconciliation.mock.MockLedgerUnavailable;
@@ -60,8 +61,13 @@ public class ReconciliationService {
     private final TransactionTemplate snapshot;
 
     ReconciliationService(RunStore runs, BeSnapshot be, MockLedgerClient mock, Reconciler reconciler,
-                          CampaignCalendar calendar, ReconciliationProperties properties, Clock clock,
-                          PlatformTransactionManager transactionManager) {
+                          CampaignCalendar calendar, ReconciliationProperties properties, MockLedgerProperties mockLedger,
+                          Clock clock, PlatformTransactionManager transactionManager) {
+        // 검사 트랜잭션에서 DB 조회 없이 도는 구간은 Mock 목록뿐이다. 그 기한이 제한 시간 안이어야 실행이 제한 시간 + 몇 초 안에 끝나고,
+        // 시작한 지 제한 시간 + 여유가 넘은 실행 중을 주인 없는 행으로 볼 수 있다
+        if (properties.runTimeout().compareTo(mockLedger.maxDuration()) < 0) {
+            throw new IllegalArgumentException("nova.batch.reconciliation.run-timeout 은 external.mock.max-duration 이상이어야 한다");
+        }
         this.runs = runs;
         this.be = be;
         this.mock = mock;
