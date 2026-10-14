@@ -153,12 +153,33 @@ class ScheduleResyncTest {
         // 회복한 뒤의 실패는 처음 간격부터 쉰다
         sqsDown.set(true);
         redis.delete(RedisKeys.RESYNC_REQUESTED).block(WAIT);
+        clock.advance(ScheduleResync.FIRST_QUIET);
         resync.requestIfQuiet();
         await(() -> tried.get() == 4 && !has(RedisKeys.RESYNC_REQUESTED));
         sqsDown.set(false);
         clock.advance(ScheduleResync.FIRST_RETRY);
         resync.requestIfQuiet();
         await(() -> sent.size() == 2);
+    }
+
+    @Test
+    void 보낸_뒤_표식이_남지_않아도_이_노드는_조용한_기간_안에_다시_보내지_않는다() {
+        ScheduleResync resync = resync(PERIODIC);
+
+        resync.requestIfQuiet();
+        await(() -> marked(RedisKeys.RESYNC_PERIODIC));
+        // 표식을 세우지 못해 선점만 남았다가 시한이 다한 것을 대신한다
+        redis.delete(RedisKeys.RESYNC_REQUESTED, RedisKeys.RESYNC_PERIODIC).block(WAIT);
+        clock.advance(ScheduleResync.FIRST_QUIET.minusSeconds(1));
+        resync.requestIfQuiet();
+        resync.requestIfDue();
+        assertThat(has(RedisKeys.RESYNC_REQUESTED) || has(RedisKeys.RESYNC_PERIODIC)).isFalse();
+        assertThat(sent).containsExactly("SCHEDULE_EMPTY");
+
+        clock.advance(Duration.ofSeconds(1));
+        resync.requestIfQuiet();
+        await(() -> sent.size() == 2);
+        assertThat(sent).containsExactly("SCHEDULE_EMPTY", "SCHEDULE_EMPTY");
     }
 
     @Test

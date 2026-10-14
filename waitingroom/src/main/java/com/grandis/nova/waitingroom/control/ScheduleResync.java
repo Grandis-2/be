@@ -43,6 +43,8 @@ class ScheduleResync {
     private final AtomicBoolean attemptsOutstanding = new AtomicBoolean(true);
     private final AtomicInteger sendFailures = new AtomicInteger();
     private volatile Instant retryAt = Instant.MIN;
+    /** 보낸 뒤 Redis 표식을 세우지 못해도 이 노드는 조용한 기간을 지킨다 — 선점 시한마다 되풀이해 보내지 않게. */
+    private volatile Instant quietUntil = Instant.MIN;
     /** 주기 표식이 살아 있는 동안은 Redis 에 묻지 않는다. */
     private volatile Instant periodicProbeAt = Instant.MIN;
 
@@ -76,8 +78,12 @@ class ScheduleResync {
 
     void requestIfQuiet() {
         attemptsOutstanding.set(true);
+        if (clock.instant().isBefore(quietUntil)) {
+            return;
+        }
         // 방금 전체를 요청했으니 주기 요청도 그만큼 미룬다
         Mono<Long> sent = store.nextResyncAttempt()
+                .doOnNext(attempt -> quietUntil = clock.instant().plus(quietAfter(attempt)))
                 .flatMap(attempt -> store.markResyncRequested(RedisKeys.RESYNC_REQUESTED, quietAfter(attempt))
                         .then(markPeriodic())
                         .thenReturn(attempt));
@@ -120,7 +126,8 @@ class ScheduleResync {
                                 .onErrorResume(ignored -> Mono.empty())
                                 .then(Mono.fromRunnable(() -> sendFailed(e)))
                                 .thenReturn(false))
-                        .flatMap(sent -> sent ? Mono.fromRunnable(this::sendRecovered).then(afterSent) : Mono.empty()))
+                        .flatMap(delivered -> !delivered ? Mono.<Long>empty()
+                                : Mono.fromRunnable(() -> onSent(marker)).then(afterSent)))
                 .doOnNext(attempt -> {
                     metrics.resyncRequested(reason);
                     // 정말 회차가 없으면 계속 비어 있다 — 처음 한 번만 INFO 로 남긴다
@@ -157,9 +164,17 @@ class ScheduleResync {
         }
     }
 
-    private void sendRecovered() {
+    /** 표식보다 먼저 이 노드의 기억부터 미룬다. 횟수를 아직 몰라 가장 짧은 기간으로 잡고, 알게 되면 늘린다. */
+    private void onSent(String marker) {
         if (sendFailures.getAndSet(0) > 0) {
             log.info("회차 일정 재발행 요청이 다시 된다");
+        }
+        Instant now = clock.instant();
+        if (RedisKeys.RESYNC_REQUESTED.equals(marker)) {
+            quietUntil = now.plus(FIRST_QUIET);
+        }
+        if (properties.periodicEnabled()) {
+            periodicProbeAt = now.plus(properties.periodic());
         }
     }
 }
