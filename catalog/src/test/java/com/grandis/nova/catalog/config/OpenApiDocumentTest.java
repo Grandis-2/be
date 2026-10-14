@@ -123,6 +123,7 @@ class OpenApiDocumentTest {
         expected.put("PATCH /api/v1/admin/products/{productId}/variants/{variantId}", "VariantEditRequest");
         expected.put("PATCH /api/v1/admin/products/{productId}/sale-status", "SaleStatusChangeRequest");
         expected.put("PATCH /api/v1/admin/products/{productId}/visibility", "VisibilityChangeRequest");
+        expected.put("POST /api/v1/admin/products/{productId}/conversion", "InStockConversionRequest");
         expected.put("POST /api/v1/admin/products/image-uploads", "ImageUploadRequest");
         expected.put("POST /api/v1/admin/products/{productId}/images", "ProductImageAddRequest");
         expected.put("PATCH /api/v1/admin/products/{productId}/images", "ProductImageReplaceRequest");
