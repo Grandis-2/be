@@ -27,9 +27,9 @@ class PaidButRegisteredCheck implements InternalCheck {
                AND pay.updated_at <= :cutoff AND p.updated_at <= :cutoff
             """;
 
-    private final JdbcClient jdbc;
+    private final StreamingJdbc jdbc;
 
-    PaidButRegisteredCheck(JdbcClient jdbc) {
+    PaidButRegisteredCheck(StreamingJdbc jdbc) {
         this.jdbc = jdbc;
     }
 

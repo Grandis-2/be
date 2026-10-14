@@ -44,9 +44,9 @@ class StuckRowsCheck implements InternalCheck {
              WHERE a.result IS NULL AND a.started_at <= :cutoff
             """;
 
-    private final JdbcClient jdbc;
+    private final StreamingJdbc jdbc;
 
-    StuckRowsCheck(JdbcClient jdbc) {
+    StuckRowsCheck(StreamingJdbc jdbc) {
         this.jdbc = jdbc;
     }
 
