@@ -20,6 +20,8 @@ import org.springframework.scheduling.support.CronExpression;
  * @param intakeRushWindow           회차 오픈 뒤 신청이 몰리는 구간. 이 안의 회차가 있으면 정기 · 마감 뒤 실행을 건너뛴다
  * @param chunkSize                  be 예약을 한 번에 읽는 건수
  * @param maxFindings                한 실행의 불일치 상한. 넘으면 판정 불가 — 그만큼 어긋났으면 Mock 주소 · 데이터 설정 오류일 가능성이 크다
+ * @param runTimeout                 검사 트랜잭션의 제한 시간. 넘으면 진행 중인 DB 조회를 끊고 판정 불가로 끝낸다. Mock 목록 전체 기한
+ *                                   (external.mock.max-duration)보다 길어야 한다. 시작한 지 이 값 + 여유가 넘은 실행 중은 주인 없는 행으로 본다
  */
 @ConfigurationProperties("nova.batch.reconciliation")
 public record ReconciliationProperties(
@@ -32,7 +34,8 @@ public record ReconciliationProperties(
         @DefaultValue("45m") Duration cutoffMargin,
         @DefaultValue("1h") Duration intakeRushWindow,
         @DefaultValue("1000") int chunkSize,
-        @DefaultValue("10000") int maxFindings
+        @DefaultValue("10000") int maxFindings,
+        @DefaultValue("30m") Duration runTimeout
 ) {
 
     public ReconciliationProperties {
@@ -48,6 +51,10 @@ public record ReconciliationProperties(
         }
         if (chunkSize < 1 || maxFindings < 1) {
             throw new IllegalArgumentException("nova.batch.reconciliation 의 chunk-size · max-findings 는 1 이상이어야 한다");
+        }
+        // 트랜잭션 제한 시간은 초 단위다
+        if (runTimeout == null || runTimeout.toSeconds() < 1) {
+            throw new IllegalArgumentException("nova.batch.reconciliation.run-timeout 은 1초 이상이어야 한다");
         }
     }
 
