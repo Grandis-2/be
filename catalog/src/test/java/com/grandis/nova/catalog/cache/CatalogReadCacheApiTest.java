@@ -137,6 +137,48 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
+    @DisplayName("상세는 본문만 캐시하고 재고 · 판매 준비 · 회차는 요청마다 읽는다 — 본문이 캐시에서 나와도 재고 수량 · 품절 · 조기 마감 · 판매 준비가 바로 바뀐다")
+    void detailLivePartsAreNotCached() throws Exception {
+        UUID productId = registerInStock("실시간");   // 재고 행 0 — 품절
+        JsonNode first = data(mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk()));
+        assertThat(first.get("soldOut").asBoolean()).isTrue();
+        UUID optionId = UUID.fromString(first.get("variants").get(0).get("variantId").asString());
+        jdbcTemplate.update("UPDATE products SET title = '직접 고침' WHERE id = ?", (Object) UuidBinary.toBytes(productId));
+        jdbcTemplate.update("UPDATE option_inventories SET stock_total = 7 WHERE option_id = ?", (Object) UuidBinary.toBytes(optionId));   // order 가 재고를 바꿨다
+
+        JsonNode second = data(mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk()));
+        assertThat(second.get("title").asString()).as("본문은 캐시에서").isEqualTo("실시간");
+        assertThat(second.get("variants").get(0).get("availableQuantity").asInt()).isEqualTo(7);
+        assertThat(second.get("soldOut").asBoolean()).isFalse();
+        assertThat(data(mockMvc.perform(get("/api/v1/products/{id}/variants/{v}", productId, optionId))).get("availableQuantity").asInt())
+                .isEqualTo(7);
+
+        // 사전예약: 판매 준비 전 404 → 회차 행이 생기면 바로 200, 조기 마감도 바로
+        String tag = "lv" + ShopFixtures.unique();
+        UUID preorder = fixtures.product(categoryId, "PREORDER", "ACTIVE", "곧 열림", tag);
+        fixtures.registration(preorder);
+        fixtures.option(preorder, "ACTIVE");
+        mockMvc.perform(get("/api/v1/products/{id}", preorder)).andExpect(status().isNotFound());
+        Instant now = Instant.now();
+        fixtures.campaign(preorder, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
+        assertThat(data(mockMvc.perform(get("/api/v1/products/{id}", preorder)).andExpect(status().isOk())).get("campaign").get("status").asString())
+                .isEqualTo("OPEN");
+        jdbcTemplate.update("UPDATE preorder_campaigns SET closes_at = UTC_TIMESTAMP(6) - INTERVAL 1 MINUTE WHERE product_id = ?",
+                (Object) UuidBinary.toBytes(preorder));   // preorder 가 조기 마감했다
+        assertThat(data(mockMvc.perform(get("/api/v1/products/{id}", preorder))).get("campaign").get("status").asString()).isEqualTo("CLOSED");
+        assertThat(redis.keys("catalog:cache:product-detail-body:*")).as("두 상품의 본문만 캐시").hasSize(2);
+    }
+
+    @Test
+    @DisplayName("상세 본문의 Redis TTL 은 10분 — 응답 max-age 는 실시간 칸 때문에 5초 상한")
+    void detailBodyTtlIsLong() throws Exception {
+        UUID productId = registerInStock("길게");
+        assertThat(maxAge(get("/api/v1/products/{id}", productId))).isBetween(4L, 5L);
+        String key = redis.keys("catalog:cache:product-detail-body:*" + productId).iterator().next();
+        assertThat(redis.getExpire(key)).isBetween(590L, 600L);
+    }
+
+    @Test
     @DisplayName("관리자가 고치면(JPA 쓰기) 커밋 뒤 세대가 올라 상세 · 옵션 상세 · 목록이 다음 조회부터 새 값이다")
     void adminEditInvalidates() throws Exception {
         String tag = "c" + ShopFixtures.unique();
