@@ -102,22 +102,32 @@ class ProductDiscountApiTest {
         // 2,278,190 × 0.9 = 2,050,371 · 2,478,190 × 0.9 = 2,230,371
         assertThat(prices(edited)).containsExactly(Map.entry("256GB", "2050300/2278190"), Map.entry("512GB", "2230300/2478190"));
 
+        // 같은 트랜잭션의 응답이 아니라 다시 읽은 값 — 저장되지 않는 칸이면 여기서 0 이 나온다
+        assertThat(prices(data(adminDetail(productId)).get("product")))
+                .containsExactly(Map.entry("256GB", "2050300/2278190"), Map.entry("512GB", "2230300/2478190"));
+
         JsonNode reverted = data(edit(productId, "{ \"discountRate\": 0 }").andExpect(status().isOk())).get("product");
         assertThat(prices(reverted)).containsExactly(Map.entry("256GB", "2278190/2278190"), Map.entry("512GB", "2478190/2478190"));
     }
 
     @Test
-    @DisplayName("사전예약은 오픈 전까지만 할인율을 고친다 — 오픈 뒤 409 이고 할인율은 그대로")
-    void preorderRateIsFrozenAfterOpen() throws Exception {
+    @DisplayName("사전예약은 오픈 3분 전까지만 할인율을 고친다 — 고치면 preorder 에 상품 변경을 알리고, 오픈 2분 전 · 오픈 뒤는 409 이고 할인율은 그대로")
+    void preorderRateIsFrozenBeforeOpen() throws Exception {
         Instant now = Instant.now();
         UUID beforeOpen = registerPreorder("\"discountRate\": 5,", now.plus(HOUR.multipliedBy(2)));
+        fixtures.moveCampaignOpensAt(beforeOpen, now.plus(Duration.ofMinutes(5)));
+        long changedBefore = productChangedEvents(beforeOpen);
         edit(beforeOpen, "{ \"discountRate\": 20 }").andExpect(status().isOk());
         assertThat(data(adminDetail(beforeOpen)).get("product").get("discountRate").asInt()).isEqualTo(20);
+        // preorder 의 접수용 상품 사본(가격 포함)을 비워야 새 할인가로 접수한다
+        assertThat(productChangedEvents(beforeOpen)).isEqualTo(changedBefore + 1);
 
-        UUID opened = registerPreorder("\"discountRate\": 5,", now.plus(HOUR.multipliedBy(2)));
-        fixtures.moveCampaignOpensAt(opened, now.minus(HOUR));
-        edit(opened, "{ \"discountRate\": 20 }").andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"));
-        assertThat(data(adminDetail(opened)).get("product").get("discountRate").asInt()).isEqualTo(5);
+        for (Instant opensAt : new Instant[] {now.plus(Duration.ofMinutes(2)), now.minus(HOUR)}) {
+            UUID frozen = registerPreorder("\"discountRate\": 5,", now.plus(HOUR.multipliedBy(2)));
+            fixtures.moveCampaignOpensAt(frozen, opensAt);
+            edit(frozen, "{ \"discountRate\": 20 }").andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STATE_CONFLICT"));
+            assertThat(data(adminDetail(frozen)).get("product").get("discountRate").asInt()).isEqualTo(5);
+        }
     }
 
     @Test
@@ -228,6 +238,12 @@ class ProductDiscountApiTest {
 
     private ResultActions adminDetail(UUID productId) throws Exception {
         return mockMvc.perform(get(PATH + "/{id}", productId).with(user("admin").roles("ADMIN"))).andExpect(status().isOk());
+    }
+
+    private long productChangedEvents(UUID productId) {
+        return jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM catalog_outbox_events WHERE aggregate_id = ? AND event_type = 'PREORDER_PRODUCT_CHANGED'",
+                Long.class, (Object) UuidBinary.toBytes(productId));
     }
 
     private UUID optionIdOf(UUID productId, String storage) throws Exception {
