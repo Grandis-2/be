@@ -29,7 +29,7 @@ public class AdminCustomerController {
     }
 
     @Operation(summary = "회원 이름 일괄 조회", description = "ids 1~100개(반복 · 쉼표 모두). 요청 순서, 같은 id 는 한 번, 없는 회원은 빠진다. "
-            + "name 은 실명이고 실명이 없으면 카카오 표시 이름")
+            + "name 은 실명(없으면 카카오 표시 이름)의 첫 글자만 남기고 가린 값 — 김철수 · 김철 → 김**")
     @GetMapping
     public ApiResponse<AdminMembersResponse> names(@RequestParam @Size(min = 1, max = MAX_IDS) List<@NotNull UUID> ids) {
         return ApiResponse.ok(new AdminMembersResponse(customers.names(ids)));
