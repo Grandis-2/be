@@ -181,6 +181,41 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
+    @DisplayName("홍보 — 본문은 캐시에서(DB 를 직접 고쳐도 옛 값), 관리자가 고치면 바로 새 값, 상품 카드(회차 · 할인가)는 요청마다 읽는다")
+    void promotionBodyCachedCardsLive() throws Exception {
+        java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
+        UUID productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", "홍보 상품", "t");
+        fixtures.registration(productId);
+        fixtures.option(productId, "ACTIVE", new java.math.BigDecimal("1000000"));
+        Instant now = Instant.now();
+        fixtures.campaign(productId, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
+        String body = """
+                { "name": "첫 이름", "startDate": "%s", "endDate": "%s", "thumbnailUrl": "https://img/t.jpg", "detailImageUrls": [], "productIds": ["%s"] }
+                """.formatted(today, today, productId);
+        UUID promotionId = UUID.fromString(data(admin(post("/api/v1/admin/promotions").header("Idempotency-Key", "k-" + ShopFixtures.unique()), body)
+                .andExpect(status().isCreated())).get("promotionId").asString());
+
+        JsonNode first = data(mockMvc.perform(get("/api/v1/promotions/{id}", promotionId)).andExpect(status().isOk()));
+        assertThat(first.get("products").get(0).get("preorderStatus").asString()).isEqualTo("OPEN");
+        assertThat(titlesOfPromotions()).contains("첫 이름");   // 목록도 캐시에 채운다
+        jdbcTemplate.update("UPDATE promotions SET name = '직접 고침' WHERE id = ?", (Object) UuidBinary.toBytes(promotionId));
+        jdbcTemplate.update("UPDATE preorder_campaigns SET closes_at = UTC_TIMESTAMP(6) - INTERVAL 1 MINUTE WHERE product_id = ?",
+                (Object) UuidBinary.toBytes(productId));   // 조기 마감
+        jdbcTemplate.update("UPDATE products SET discount_rate = 50 WHERE id = ?", (Object) UuidBinary.toBytes(productId));
+
+        JsonNode second = data(mockMvc.perform(get("/api/v1/promotions/{id}", promotionId)).andExpect(status().isOk()));
+        assertThat(second.get("name").asString()).as("본문은 캐시에서").isEqualTo("첫 이름");
+        assertThat(second.get("products").get(0).get("preorderStatus").asString()).isEqualTo("CLOSED");
+        assertThat(second.get("products").get(0).get("minPrice").decimalValue()).isEqualByComparingTo("500000");
+        assertThat(titlesOfPromotions()).contains("첫 이름");
+
+        admin(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/v1/admin/promotions/{id}", promotionId),
+                body.replace("첫 이름", "고친 이름")).andExpect(status().isOk());
+        assertThat(data(mockMvc.perform(get("/api/v1/promotions/{id}", promotionId))).get("name").asString()).isEqualTo("고친 이름");
+        assertThat(titlesOfPromotions()).contains("고친 이름").doesNotContain("첫 이름");
+    }
+
+    @Test
     @DisplayName("관리자가 고치면(JPA 쓰기) 커밋 뒤 세대가 올라 상세 · 옵션 상세 · 목록이 다음 조회부터 새 값이다")
     void adminEditInvalidates() throws Exception {
         String tag = "c" + ShopFixtures.unique();
@@ -342,6 +377,12 @@ class CatalogReadCacheApiTest {
         String value = mockMvc.perform(request).andExpect(status().isOk()).andReturn().getResponse().getHeader("Cache-Control");
         assertThat(value).matches("max-age=\\d+, public");
         return Long.parseLong(value.substring("max-age=".length(), value.indexOf(',')));
+    }
+
+    private java.util.List<String> titlesOfPromotions() throws Exception {
+        java.util.List<String> names = new java.util.ArrayList<>();
+        data(mockMvc.perform(get("/api/v1/promotions")).andExpect(status().isOk())).get("items").forEach(item -> names.add(item.get("name").asString()));
+        return names;
     }
 
     private long generation(String name) {
