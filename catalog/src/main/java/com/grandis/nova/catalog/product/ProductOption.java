@@ -17,7 +17,8 @@ import java.util.UUID;
 /**
  * 옵션 = 축마다 값 하나를 고른 조합(예: 블랙 / 256GB). 어느 값을 골랐는지는 combinationKey(값 id) 와 filterAttributes(필터 축의 정규화값)가 갖는다.
  *
- * price 는 최종가 = 기본가 + Σ(고른 값의 추가금)이다. 직접 고치는 경로는 없다 — 기본가 · 추가금이 바뀌면 다시 계산된다.
+ * price 는 정가 = 기본가 + Σ(고른 값의 추가금)이다. 직접 고치는 경로는 없다 — 기본가 · 추가금이 바뀌면 다시 계산된다.
+ * 회원이 내는 값은 여기에 상품 할인율을 건 할인가다({@link Product#salePrice}) — 할인가는 저장하지 않는다.
  * filterAttributes(color · storage 의 JSON) · title · combinationKey 는 한 {@link OptionCombination} 에서 함께 나온다 —
  * 따로 만들면 어긋날 자리가 열리고 DB 는 못 막는다. 목록의 색상 · 용량 필터가 filterAttributes 를 읽는다.
  * combinationKey 는 고른 값 id 를 짧은 것 먼저 · 같으면 문자열 순으로 '-' 로 이은 것이라 키를 채운 옵션끼리는 같은 조합을 DB UNIQUE 가 막는다.

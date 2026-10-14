@@ -1,10 +1,13 @@
 package com.grandis.nova.catalog.registration;
 
 import com.grandis.nova.catalog.product.Brand;
+import com.grandis.nova.catalog.product.Discount;
 import com.grandis.nova.catalog.product.SaleMode;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -25,6 +28,7 @@ import java.util.UUID;
  *
  * 옵션 조합은 서버가 축의 값으로 전부 만든다. {@link #combinations} 는 그중 일부를 손보는 자리다 — 제외 · SKU · 가격 수동 지정 · 초기 재고.
  * 조합의 selections 는 축 키 → 값(입력값. 저장과 같은 규칙으로 정규화해 대조한다).
+ * discountRate 는 상품 할인율(정수 %, 0~99)이고 비우면 0 이다 — 모든 옵션에 같이 걸린다({@link Discount}).
  *
  * 형식 검사(필수 · 길이 · 범위)는 여기 애너테이션이, 조합 · 축 · 사진 묶음 · 판매 유형 규칙은 {@link ProductRegistrationValidator} 가 한다.
  */
@@ -38,6 +42,7 @@ public record ProductRegistrationRequest(
         @Size(max = 500) String tags,
         @NotNull Boolean visible,
         @NotNull @DecimalMin("0") BigDecimal basePrice,
+        @Min(Discount.MIN_RATE) @Max(Discount.MAX_RATE) Integer discountRate,
         @Valid Warranty warranty,
         @Size(max = MAX_AXES) List<@NotNull @Valid OptionAxis> optionAxes,
         List<@NotNull @Valid Combination> combinations,
@@ -61,6 +66,7 @@ public record ProductRegistrationRequest(
         optionAxes = frozen(optionAxes);
         combinations = frozen(combinations);
         shipmentBatches = frozen(shipmentBatches);
+        discountRate = discountRate == null ? 0 : discountRate;   // 비우면 할인 없음
         warranty = warranty == null ? new Warranty(false, BigDecimal.ZERO) : warranty;
         images = images == null ? new Images(List.of(), List.of()) : images;
     }

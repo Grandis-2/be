@@ -1,6 +1,7 @@
 package com.grandis.nova.catalog.listing;
 
 import com.grandis.nova.catalog.product.Brand;
+import com.grandis.nova.catalog.product.Discount;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.common.UuidBinary;
@@ -61,10 +62,18 @@ public class ProductListingQueryRepository {
                AND (p.sale_mode = 'IN_STOCK' OR (c.closes_at IS NOT NULL AND c.closes_at > :hideBefore))
                AND\s""" + READY + "\n";
 
+    /**
+     * 판매 중 옵션의 최저 정가. 할인가는 정가에 대해 줄지 않으므로(같은 상품은 할인율이 하나) 최저 정가에 할인을 건 값이 최저 할인가다 —
+     * 옵션마다 할인가를 계산해 MIN 하지 않는다.
+     */
+    private static final String MIN_LIST_PRICE = """
+            (SELECT MIN(o.price) FROM product_options o
+                     WHERE o.product_id = p.id AND o.status = 'ACTIVE')""";
+
     private static final String SELECT_ITEMS = """
-            SELECT p.id, p.sale_mode, p.title, p.brand, p.model_name, p.status, c.opens_at, c.closes_at,
-                   (SELECT MIN(o.price) FROM product_options o
-                     WHERE o.product_id = p.id AND o.status = 'ACTIVE') AS min_price,
+            SELECT p.id, p.sale_mode, p.title, p.brand, p.model_name, p.status, p.discount_rate, c.opens_at, c.closes_at,
+                   %1$s AS min_list_price,
+                   %2$s AS min_price,
                    EXISTS (SELECT 1 FROM product_options po
                             WHERE po.product_id = p.id AND po.status = 'ACTIVE') AS sellable,
                    p.thumbnail_url AS image_url,
@@ -74,7 +83,7 @@ public class ProductListingQueryRepository {
                              WHERE o.product_id = p.id AND o.status = 'ACTIVE'
                                AND inv.stock_total - inv.stock_reserved - inv.stock_sold > 0)
                         THEN 1 ELSE 0 END AS sold_out
-            """;
+            """.formatted(MIN_LIST_PRICE, Discount.sql(MIN_LIST_PRICE, "p.discount_rate"));
 
     /** 관리자 목록 — 노출 규칙 없이 전부. */
     private static final String FROM_ALL = """
@@ -331,9 +340,10 @@ public class ProductListingQueryRepository {
         PreorderSaleStatus preorderStatus = saleMode == SaleMode.PREORDER && opensAt != null && closesAt != null
                 ? PreorderSaleStatus.of(opensAt, closesAt, now) : null;
         BigDecimal minPrice = rs.getBigDecimal("min_price");
+        BigDecimal minListPrice = rs.getBigDecimal("min_list_price");
         return new ProductListItem(UuidBinary.fromBytes(rs.getBytes("id")), saleMode, rs.getString("title"),
                 Brand.valueOf(rs.getString("brand")), rs.getString("model_name"), rs.getString("image_url"),
-                SaleStatus.valueOf(rs.getString("status")), minPrice, rs.getBoolean("sellable"), rs.getBoolean("sold_out"),
+                SaleStatus.valueOf(rs.getString("status")), minPrice, minListPrice, rs.getInt("discount_rate"), rs.getBoolean("sellable"), rs.getBoolean("sold_out"),
                 preorderStatus, opensAt, closesAt);
     }
 

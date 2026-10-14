@@ -4,6 +4,7 @@ import com.grandis.nova.catalog.image.ImageUploadProperties;
 import com.grandis.nova.catalog.option.OptionText;
 import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.catalog.product.Amounts;
+import com.grandis.nova.catalog.product.Discount;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.registration.ProductRegistrationRequest.Combination;
 import com.grandis.nova.catalog.registration.ProductRegistrationRequest.GalleryBundle;
@@ -316,6 +317,7 @@ public class ProductRegistrationValidator {
                 computed = computed.add(axis.value(selections.get(axis.key())).surcharge());
             }
             BigDecimal price = requireStorablePrice(computed, field);
+            requireSellablePrice(price, request.discountRate(), field);
             Integer stock = setting == null ? null : setting.stock();
             if (request.saleMode() == SaleMode.IN_STOCK) {
                 if (stock == null) {
@@ -501,6 +503,18 @@ public class ProductRegistrationValidator {
             throw ValidationFailures.of(field, "옵션 가격(기본가 + 추가금 %s)이 999,999,999,999 를 넘습니다.".formatted(computed.toPlainString()));
         }
         return computed;
+    }
+
+    /**
+     * 회원이 내는 값(정가에 할인율을 건 할인가)이 {@link Discount#MIN_SALE_PRICE} 이상인가. 아니면 원인 칸(field)의 400 — 그대로 두면 그 옵션은
+     * 결제 승인에서 거절돼 살 수 없다. 할인율 0 이면 정가를 본다. 판매 중지 옵션도 본다(다시 판매할 수 있다).
+     */
+    public static void requireSellablePrice(BigDecimal listPrice, int discountRate, String field) {
+        BigDecimal salePrice = Discount.apply(listPrice, discountRate);
+        if (salePrice.compareTo(Discount.MIN_SALE_PRICE) < 0) {
+            throw ValidationFailures.of(field, "옵션 가격(정가 %s원, 할인율 %d%%)의 할인가 %s원이 %s원보다 작습니다.".formatted(
+                    listPrice.toPlainString(), discountRate, salePrice.toPlainString(), Discount.MIN_SALE_PRICE.toPlainString()));
+        }
     }
 
     /**

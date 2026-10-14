@@ -127,8 +127,14 @@ public class ProductEditService {
             // 보낸 칸만 바뀐다 — 제공만 보내면 기존 추가금을 유지한다. 제공하지 않으면 추가금은 0 이다(엔티티가 지킨다)
             product.setWarranty(warranty.offered(), warranty.surcharge() == null ? product.getWarrantySurcharge() : warranty.surcharge());
         }
+        if (request.discountRate() != null) {
+            product.changeDiscountRate(request.discountRate());   // 재계산보다 먼저 — 바뀐 정가의 하한 판정이 새 할인율로 돈다
+        }
         if (request.basePrice() != null && product.reprice(request.basePrice())) {
             recomputePrices(product, product.getOptions(), null, "basePrice");
+        }
+        if (request.discountRate() != null) {
+            requireSellablePrices(product);
         }
         products.flush();
         AdminProductDetail edited = detailService.findAdminProduct(productId);
@@ -255,6 +261,7 @@ public class ProductEditService {
             throw ValidationFailures.of("selections", "옵션 표시명이 %d자를 넘습니다.".formatted(ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH));
         }
         BigDecimal price = ProductRegistrationValidator.requireStorablePrice(computedPrice(product, picks), "selections");
+        ProductRegistrationValidator.requireSellablePrice(price, product.getDiscountRate(), "selections");
         ProductOption option;
         try {
             option = options.saveAndFlush(ProductOption.of(sku, price, combination));
@@ -429,8 +436,16 @@ public class ProductEditService {
             if (valueId != null && !valueIds.contains(valueId)) {
                 continue;
             }
-            option.recomputePrice(ProductRegistrationValidator.requireStorablePrice(
-                    computedPrice(product, document.picksOf(valueIds)), cause));
+            BigDecimal price = ProductRegistrationValidator.requireStorablePrice(computedPrice(product, document.picksOf(valueIds)), cause);
+            ProductRegistrationValidator.requireSellablePrice(price, product.getDiscountRate(), cause);
+            option.recomputePrice(price);
+        }
+    }
+
+    /** 지금 할인율로 모든 옵션의 할인가가 하한 이상인가. 아니면 discountRate 의 400. */
+    private void requireSellablePrices(Product product) {
+        for (ProductOption option : options.findByProductIdOrderByCreatedAtAscIdAsc(product.getId())) {
+            ProductRegistrationValidator.requireSellablePrice(option.getPrice(), product.getDiscountRate(), "discountRate");
         }
     }
 

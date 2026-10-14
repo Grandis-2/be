@@ -18,6 +18,8 @@ import java.util.UUID;
  *                       관리자 목록 · 상세에서는 products.visible 칸 그대로이고 등록 완료(판매 방식별 준비)는 registration 이 따로 말한다
  * @param sellable       판매 중 옵션이 하나 이상 있다(목록과 같은 규칙). false 면 화면이 "판매 중지" 를 그린다
  * @param soldOut        일반 상품에서 가용 재고가 있는 판매 중 옵션이 없다(목록과 같은 규칙). 사전예약은 항상 false
+ * @param basePrice      기본가(정가 기준). 옵션 정가 = 기본가 + 고른 값의 추가금
+ * @param discountRate   할인율(정수 %, 0~99). 모든 옵션에 같이 걸린다. 보증 추가금에는 걸지 않는다
  * @param campaign       사전예약 회차. 일반 상품은 null
  * @param variants       옵션 전체. 판매 중지 옵션도 상태 그대로 싣는다 — 화면이 선택을 막는다
  */
@@ -33,6 +35,7 @@ public record ProductDetailView(
         SaleStatus status,
         boolean visible,
         BigDecimal basePrice,
+        int discountRate,
         Warranty warranty,
         boolean sellable,
         boolean soldOut,
@@ -60,6 +63,8 @@ public record ProductDetailView(
     }
 
     /**
+     * @param price             회원이 내는 값 — 정가에 할인율을 걸어 100원 단위로 버린 할인가. 할인율이 0 이면 정가와 같다
+     * @param listPrice         정가(기본가 + 고른 값의 추가금). 화면의 취소선 가격
      * @param selections        축 키 → 고른 값의 정규화값. 선택기가 조합을 찾는 키
      * @param availableQuantity 일반 상품의 가용 수량(총량 − 선점 − 판매, 재고 행이 없으면 0). 사전예약은 null(무제한 접수)
      */
@@ -68,6 +73,7 @@ public record ProductDetailView(
             String sku,
             String title,
             BigDecimal price,
+            BigDecimal listPrice,
             Map<String, String> filterAttributes,
             Map<String, String> selections,
             SaleStatus status,

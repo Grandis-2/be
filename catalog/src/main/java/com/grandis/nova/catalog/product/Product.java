@@ -22,7 +22,8 @@ import java.util.UUID;
  * 준비는 다른 서비스가 등록 이벤트를 받아 만든 행이라 catalog 가 칸으로 들고 있지 않고, 노출을 읽는 쿼리가 함께 본다
  * ({@link com.grandis.nova.catalog.listing.ProductListingQueryRepository}). 그래서 visible 은 관리자가 고른 값을 등록 때 바로 담는다 —
  * 준비가 안 된 상품은 visible 이어도 회원에게 보이지 않는다.
- * 가격은 basePrice 가 기준이고 옵션의 price 가 최종가다(기본가 + 고른 값의 추가금 합 — 조합별 수동 가격은 없다).
+ * 가격은 basePrice 가 기준이고 옵션의 price 가 정가다(기본가 + 고른 값의 추가금 합 — 조합별 수동 가격은 없다). 회원이 내는 값은
+ * 정가에 discountRate 를 건 할인가다({@link #salePrice}).
  * 옵션 축 · 값 · 사진 · 보증은 {@link #getOptions() options}(JSON) 한 칸이다({@link ProductOptions}). 썸네일은 그 문서에서 계산해 같이 저장한다.
  * 예약 · 주문은 접수 시점 값을 복사하므로 여기를 고쳐도 과거 거래에 소급되지 않는다.
  *
@@ -59,6 +60,10 @@ public class Product extends BaseEntity {
     @Column(nullable = false)
     private BigDecimal basePrice;
 
+    /** 할인율(정수 %, 0~99). 옵션 가격(정가)에 걸어 할인가를 읽을 때 계산한다({@link Discount}). 보증 추가금에는 걸지 않는다. */
+    @Column(nullable = false)
+    private int discountRate;
+
     /** 옵션 축 · 값 · 추가금 · 색상 hex · 사진 · 보증({@link ProductOptions}). 비면 "{}". */
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(nullable = false)
@@ -89,7 +94,7 @@ public class Product extends BaseEntity {
     }
 
     private Product(String idempotencyKey, UUID categoryId, SaleMode saleMode, String title, Brand brand, String modelName,
-                    BigDecimal basePrice, String description, String tags, boolean visible, ProductOptions options) {
+                    BigDecimal basePrice, int discountRate, String description, String tags, boolean visible, ProductOptions options) {
         this.idempotencyKey = idempotencyKey;
         this.categoryId = categoryId;
         this.saleMode = saleMode;
@@ -97,6 +102,7 @@ public class Product extends BaseEntity {
         this.brand = Objects.requireNonNull(brand, "brand");
         this.modelName = Objects.requireNonNull(modelName, "modelName").strip();
         this.basePrice = Amounts.requireWholeWon(basePrice, "basePrice");
+        this.discountRate = Discount.requireRate(discountRate);
         this.description = description;
         this.tags = tags;
         this.status = SaleStatus.ACTIVE;
@@ -109,9 +115,9 @@ public class Product extends BaseEntity {
      * 보증을 제공하지 않으면 추가금은 0 이다.
      */
     public static Product register(String idempotencyKey, UUID categoryId, SaleMode saleMode, String title, Brand brand,
-                                   String modelName, BigDecimal basePrice, String description, String tags, boolean visible,
+                                   String modelName, BigDecimal basePrice, int discountRate, String description, String tags, boolean visible,
                                    boolean warrantyOffered, BigDecimal warrantySurcharge, ProductOptions options) {
-        return new Product(idempotencyKey, categoryId, saleMode, title, brand, modelName, basePrice, description, tags, visible,
+        return new Product(idempotencyKey, categoryId, saleMode, title, brand, modelName, basePrice, discountRate, description, tags, visible,
                 Objects.requireNonNull(options, "options").withWarranty(warrantyOf(warrantyOffered, warrantySurcharge, "warrantySurcharge")));
     }
 
@@ -200,6 +206,16 @@ public class Product extends BaseEntity {
         return true;
     }
 
+    /** 할인율. 사전예약 오픈 뒤 금지는 서비스가 지킨다(다른 수정과 같은 규칙). */
+    public void changeDiscountRate(int discountRate) {
+        this.discountRate = Discount.requireRate(discountRate);
+    }
+
+    /** 이 상품의 할인율을 건 옵션 가격. */
+    public BigDecimal salePrice(BigDecimal listPrice) {
+        return Discount.apply(listPrice, discountRate);
+    }
+
     /** 보증 설정 — 옵션 문서의 warranty 를 바꾼다. 제공하지 않으면 추가금은 0 이다(등록과 같은 규칙). */
     public void setWarranty(boolean offered, BigDecimal surcharge) {
         ProductOptions document = getOptions();
@@ -236,6 +252,10 @@ public class Product extends BaseEntity {
 
     public BigDecimal getBasePrice() {
         return basePrice;
+    }
+
+    public int getDiscountRate() {
+        return discountRate;
     }
 
     public String getDescription() {

@@ -110,7 +110,7 @@ public class ProductRegistrationService {
         requireNoCollationDuplicates(draft);
         ProductOptions document = documentOf(draft);
         Product product = saveProduct(Product.register(key, request.categoryId(), request.saleMode(), request.title(),
-                request.brand(), request.modelName(), request.basePrice(), request.description(), request.tags(), request.visible(),
+                request.brand(), request.modelName(), request.basePrice(), request.discountRate(), request.description(), request.tags(), request.visible(),
                 request.warranty().offered(), request.warranty().surcharge(), document));
         UUID productId = product.getId();
 
