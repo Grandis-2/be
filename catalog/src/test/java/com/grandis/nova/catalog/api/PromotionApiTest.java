@@ -85,6 +85,42 @@ class PromotionApiTest {
     }
 
     @Test
+    @DisplayName("같은 Idempotency-Key 로 동시에 두 번 — 늘 201 하나 · 200 하나, 같은 홍보이고 홍보 행 하나 · 묶음은 상품 수만큼")
+    void concurrentReplayReturnsTheSamePromotion() throws Exception {
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < 10; round++) {
+                UUID a = preorder("A" + round);
+                UUID b = preorder("B" + round);
+                String key = "k-" + ShopFixtures.unique();
+                String body = body("동시 재전송", today, today, List.of(), a, b);
+                java.util.concurrent.CyclicBarrier start = new java.util.concurrent.CyclicBarrier(2);
+                List<java.util.concurrent.Future<org.springframework.mock.web.MockHttpServletResponse>> futures = new ArrayList<>();
+                for (int i = 0; i < 2; i++) {
+                    futures.add(pool.submit(() -> {
+                        start.await();
+                        return create(key, body).andReturn().getResponse();
+                    }));
+                }
+                List<Integer> statuses = new ArrayList<>();
+                List<String> promotionIds = new ArrayList<>();
+                for (var future : futures) {
+                    org.springframework.mock.web.MockHttpServletResponse response = future.get();
+                    statuses.add(response.getStatus());
+                    promotionIds.add(JSON.readTree(response.getContentAsString()).get("data").get("promotionId").asString());
+                }
+                assertThat(statuses).as("round %d", round).containsExactlyInAnyOrder(201, 200);
+                assertThat(promotionIds.get(0)).isEqualTo(promotionIds.get(1));
+                assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM promotions WHERE idempotency_key = ?", Long.class, key)).isEqualTo(1L);
+                assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM promotion_products WHERE promotion_id = ?", Long.class,
+                        UuidBinary.toBytes(UUID.fromString(promotionIds.get(0))))).isEqualTo(2L);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
     @DisplayName("본문 검사 — 기간 순서 · 업로드 주소 · 같은 사진 두 번 · 상품 없음 · 같은 상품 두 번 · 없는 상품 · 사전예약 아님 · 회차 취소 · 모르는 칸은 400")
     void rejectsBadBodies() throws Exception {
         UUID ok = preorder("OK");
