@@ -43,7 +43,7 @@ class AdminCustomerApiTest {
     }
 
     @Test
-    @DisplayName("요청 순서로 이름 — 실명이 있으면 실명, 없으면 카카오 표시 이름. 같은 id 는 한 번, 없는 회원은 빠진다")
+    @DisplayName("요청 순서로 가린 이름 — 실명(철수랑 닉네임의 김철수 → 김**), 실명이 없으면 카카오 표시 이름(영희랑 → 영**). 같은 id 는 한 번, 없는 회원은 빠진다")
     void returnsNamesInRequestOrder() throws Exception {
         Customer withName = customers.saveAndFlush(Customer.fromKakao(kakaoId(), "철수랑"));
         withName.changeProfile(new Profile("김철수", null, null));
@@ -55,14 +55,14 @@ class AdminCustomerApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items.length()").value(2))
                 .andExpect(jsonPath("$.data.items[0].memberId").value(nicknameOnly.getId().toString()))
-                .andExpect(jsonPath("$.data.items[0].name").value("영희랑"))
+                .andExpect(jsonPath("$.data.items[0].name").value("영**"))
                 .andExpect(jsonPath("$.data.items[1].memberId").value(withName.getId().toString()))
-                .andExpect(jsonPath("$.data.items[1].name").value("김철수"));
+                .andExpect(jsonPath("$.data.items[1].name").value("김**"));
         // 반복 파라미터도 같다
         mvc.perform(asAdmin(get(PATH).param("ids", withName.getId().toString()).param("ids", nicknameOnly.getId().toString())))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.items[0].name").value("김철수"))
-                .andExpect(jsonPath("$.data.items[1].name").value("영희랑"));
+                .andExpect(jsonPath("$.data.items[0].name").value("김**"))
+                .andExpect(jsonPath("$.data.items[1].name").value("영**"));
     }
 
     @Test

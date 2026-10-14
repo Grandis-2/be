@@ -56,6 +56,7 @@ public class CustomerService {
      * 관리자 화면이 회원 id 를 이름으로 바꿀 때 — 요청 순서(같은 id 는 한 번), 없는 id 는 빠진다.
      * 이름은 실명, 실명이 없으면 카카오 표시 이름이다(리뷰 작성자명과 같은 규칙, 2026-10-07 결정). 실명은 가입 폼에서 받지만 비울 수도 있다
      * (PUT /me/profile 에 빈 값을 보내면 그 칸이 null 이 된다 — ProfileRequest).
+     * 이름은 가려서 낸다 — 첫 글자(성)만 남기고 뒤는 길이와 상관없이 "**"(김철수 · 김철 → 김**). 리뷰 작성자명과 같은 모양(2026-10-14 결정).
      */
     @Transactional(readOnly = true)
     public List<MemberName> names(Collection<UUID> customerIds) {
@@ -64,11 +65,24 @@ public class CustomerService {
         return ordered.stream().filter(found::containsKey).map(id -> MemberName.of(found.get(id))).toList();
     }
 
+    /** @param name 가린 이름(예: 김**) */
     public record MemberName(UUID memberId, String name) {
+
+        private static final String MASK = "**";
+
         static MemberName of(Customer customer) {
             // 앱이 쓰는 경로는 빈 문자열을 null 로 바꾸므로(ProfileRequest — 유일한 쓰기 경로) null 만 본다. DB CHECK 는 없다
             String name = customer.profile().name();
-            return new MemberName(customer.getId(), name != null ? name : customer.getDisplayName());
+            return new MemberName(customer.getId(), mask(name != null ? name : customer.getDisplayName()));
+        }
+
+        /** 첫 글자(코드포인트) + "**". 비었으면 "***". catalog 리뷰 작성자명(ReviewService.mask)과 같은 규칙이다. */
+        static String mask(String name) {
+            String stripped = name == null ? "" : name.strip();
+            if (stripped.isEmpty()) {
+                return "*" + MASK;
+            }
+            return new String(Character.toChars(stripped.codePointAt(0))) + MASK;
         }
     }
 
