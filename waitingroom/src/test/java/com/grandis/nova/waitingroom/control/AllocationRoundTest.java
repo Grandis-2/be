@@ -5,6 +5,7 @@ import com.grandis.nova.waitingroom.domain.product.ProductState;
 import com.grandis.nova.waitingroom.domain.product.RuntimeState;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
 import com.grandis.nova.waitingroom.domain.product.SalesWindow;
+import com.grandis.nova.waitingroom.domain.queue.LeaveGrace;
 import com.grandis.nova.waitingroom.domain.queue.QueueState;
 import com.grandis.nova.waitingroom.redis.ControlStore;
 import com.grandis.nova.waitingroom.redis.ControlStore.ClusterView;
@@ -84,12 +85,17 @@ class AllocationRoundTest {
     }
 
     private void line(String product, int count) {
-        IntStream.range(0, count).forEach(i -> queue.enqueue(product, product + "-" + i, QueueStore.UNLIMITED, now).block(WAIT));
+        line(product, count, now);
+    }
+
+    /** 그 시각에 줄을 세운다. 마감 전에 선 사람은 생존 신호가 마감 + 유예에 끝난다. */
+    private void line(String product, int count, Instant at) {
+        IntStream.range(0, count).forEach(i -> queue.enqueue(product, product + "-" + i, QueueStore.UNLIMITED, at, LeaveGrace.MIN).block(WAIT));
     }
 
     private long admitted(String product, int count) {
         return IntStream.range(0, count)
-                .filter(i -> queue.status(product, product + "-" + i, now).block(WAIT).entry().state() == QueueState.ADMITTED)
+                .filter(i -> queue.status(product, product + "-" + i, now, LeaveGrace.MIN).block(WAIT).entry().state() == QueueState.ADMITTED)
                 .count();
     }
 
@@ -124,7 +130,7 @@ class AllocationRoundTest {
         GatewaySnapshot snapshot = run(7, 0);
 
         assertThat(admitted(productKey(101), 20) + admitted(productKey(202), 20)).isEqualTo(10);
-        assertThat(queue.status(productKey(101), productKey(101) + "-0", now).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);
+        assertThat(queue.status(productKey(101), productKey(101) + "-0", now, LeaveGrace.MIN).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);
         assertThat(snapshot.product(productKey(101)).orElseThrow().credit()).isEqualTo(5);
         assertThat(snapshot.product(productKey(101)).orElseThrow().waiting()).isEqualTo(15);
         assertThat(snapshot.meta().gatewayCount()).isEqualTo(2);
@@ -145,11 +151,11 @@ class AllocationRoundTest {
         assertThat(hidden.credit()).isZero();
         assertThat(hidden.waiting()).isEqualTo(20);
         assertThat(SnapshotCodec.decode(control.readSnapshot().block(WAIT).entries())).contains(snapshot);
-        assertThat(queue.status(productKey(101), productKey(101) + "-5", now).block(WAIT).entry().rank()).as("자리는 그대로").isEqualTo(5);
+        assertThat(queue.status(productKey(101), productKey(101) + "-5", now, LeaveGrace.MIN).block(WAIT).entry().rank()).as("자리는 그대로").isEqualTo(5);
 
         control.applySchedule(productKey(101), window, 2, true).block(WAIT);
         run(7, 0, 2);
-        assertThat(queue.status(productKey(101), productKey(101) + "-0", now).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);
+        assertThat(queue.status(productKey(101), productKey(101) + "-0", now, LeaveGrace.MIN).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);
         assertThat(admitted(productKey(101), 20)).isEqualTo(10);
     }
 
@@ -192,9 +198,9 @@ class AllocationRoundTest {
 
     @Test
     void 비공개여도_마감되면_마감으로_발행하고_줄을_정리한다() {
-        control.applySchedule(productKey(101), new SalesWindow(now.minus(Duration.ofHours(1)),
-                now.minus(PROPERTIES.closeGrace()).minusSeconds(1)), 1, false).block(WAIT);
-        line(productKey(101), 3);
+        Instant closesAt = now.minus(PROPERTIES.closeGrace()).minusSeconds(1);
+        control.applySchedule(productKey(101), new SalesWindow(now.minus(Duration.ofHours(1)), closesAt), 1, false).block(WAIT);
+        line(productKey(101), 3, closesAt);
 
         assertThat(run(7, 0).product(productKey(101)).orElseThrow().runtime()).isEqualTo(RuntimeState.CLOSED);
         run(7, 0);
@@ -217,9 +223,31 @@ class AllocationRoundTest {
     }
 
     @Test
+    void 이탈_유예는_판정_재료에_싣는다() {
+        redis.opsForHash().put(RedisKeys.SETTINGS, OperationalSettings.LEAVE_GRACE_SEC, "600").block(WAIT);
+
+        assertThat(run(7, 0).meta().leaveGrace()).isEqualTo(Duration.ofSeconds(600));
+    }
+
+    @Test
+    void 유예를_줄인_뒤_마감돼도_늘린_유예로_쓴_생존_신호가_걷힐_때까지_줄을_지우지_않는다() {
+        Instant closesAt = now.minus(PROPERTIES.closeGrace()).minusSeconds(1);
+        schedule(productKey(101), now.minus(Duration.ofHours(1)), closesAt);
+        line(productKey(101), 2, closesAt);
+        queue.enqueue(productKey(101), "long", QueueStore.UNLIMITED, closesAt, LeaveGrace.MAX).block(WAIT);
+
+        run(7, 0);
+        run(7, 0);
+
+        assertThat(redis.hasKey("wr:queue:{" + productKey(101) + "}").block(WAIT)).as("기본 유예는 지났다").isTrue();
+        assertThat(redis.opsForZSet().score("wr:alive:{" + productKey(101) + "}", "long").block(WAIT)).isNotNull();
+    }
+
+    @Test
     void 마감_유예가_지나면_줄과_생존_신호를_지우고_입장_표시는_보관_기간_뒤_사라지게_한다() {
-        schedule(productKey(101), now.minus(Duration.ofHours(1)), now.minus(PROPERTIES.closeGrace()).minusSeconds(1));
-        line(productKey(101), 3);
+        Instant closesAt = now.minus(PROPERTIES.closeGrace()).minusSeconds(1);
+        schedule(productKey(101), now.minus(Duration.ofHours(1)), closesAt);
+        line(productKey(101), 3, closesAt);
         redis.opsForHash().put("wr:grace:{" + productKey(101) + "}", "x", "a:" + now.getEpochSecond()).block(WAIT);
 
         run(7, 0);
@@ -232,15 +260,16 @@ class AllocationRoundTest {
 
     @Test
     void 오래된_모델도_줄을_지운_것을_확인한_뒤에야_Redis_를_치지_않고_마감으로만_발행한다() {
-        schedule(productKey(101), now.minus(Duration.ofDays(2)), now.minus(Duration.ofDays(1)));
-        line(productKey(101), 3);
+        Instant closesAt = now.minus(Duration.ofDays(1));
+        schedule(productKey(101), now.minus(Duration.ofDays(2)), closesAt);
+        line(productKey(101), 3, closesAt);
 
         assertThat(run(7, 0).product(productKey(101)).orElseThrow().waiting()).as("첫 회차는 표만 세워 아직 읽는다").isEqualTo(3);
         assertThat(redis.hasKey("wr:queue:{" + productKey(101) + "}").block(WAIT)).as("시각이 지났다고 정리를 건너뛰지 않는다").isTrue();
         run(7, 0);
         assertThat(redis.hasKey("wr:queue:{" + productKey(101) + "}").block(WAIT)).isFalse();
 
-        line(productKey(101), 2);
+        line(productKey(101), 2, closesAt);
         GatewaySnapshot snapshot = run(7, 0);
         assertThat(snapshot.product(productKey(101)).orElseThrow().runtime()).isEqualTo(RuntimeState.CLOSED);
         assertThat(snapshot.product(productKey(101)).orElseThrow().waiting()).as("은퇴 뒤에는 줄 길이를 읽지 않는다").isZero();
@@ -249,8 +278,9 @@ class AllocationRoundTest {
 
     @Test
     void 줄_정리가_막히면_은퇴하지_않고_다음_회차에_줄_길이를_다시_읽고_정리를_다시_한다() {
-        schedule(productKey(101), now.minus(Duration.ofDays(2)), now.minus(Duration.ofDays(1)));
-        line(productKey(101), 3);
+        Instant closesAt = now.minus(Duration.ofDays(1));
+        schedule(productKey(101), now.minus(Duration.ofDays(2)), closesAt);
+        line(productKey(101), 3, closesAt);
         redis.opsForValue().set("wr:closefence:{" + productKey(101) + "}", "100").block(WAIT);
 
         run(7, 0);
@@ -266,11 +296,12 @@ class AllocationRoundTest {
 
     @Test
     void 리더가_바뀌면_새_리더는_은퇴_시각이_지났어도_줄을_지운_것을_스스로_확인한_뒤에야_은퇴시킨다() {
-        schedule(productKey(101), now.minus(Duration.ofDays(2)), now.minus(Duration.ofDays(1)));
-        line(productKey(101), 3);
+        Instant closesAt = now.minus(Duration.ofDays(1));
+        schedule(productKey(101), now.minus(Duration.ofDays(2)), closesAt);
+        line(productKey(101), 3, closesAt);
         run(7, 0);
         run(7, 0);
-        line(productKey(101), 2);
+        line(productKey(101), 2, closesAt);
         assertThat(run(7, 0).product(productKey(101)).orElseThrow().waiting()).as("옛 리더는 은퇴시켰다").isZero();
 
         round = newRound();
@@ -278,7 +309,7 @@ class AllocationRoundTest {
         assertThat(run(8, 0).product(productKey(101)).orElseThrow().waiting()).as("새 리더는 다시 읽는다").isEqualTo(2);
         run(8, 0);
         assertThat(redis.hasKey("wr:queue:{" + productKey(101) + "}").block(WAIT)).isFalse();
-        line(productKey(101), 1);
+        line(productKey(101), 1, closesAt);
         assertThat(run(8, 0).product(productKey(101)).orElseThrow().waiting()).as("확인한 뒤에야 은퇴").isZero();
     }
 

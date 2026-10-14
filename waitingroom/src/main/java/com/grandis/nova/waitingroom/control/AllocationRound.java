@@ -135,7 +135,8 @@ class AllocationRound {
                 .collectMap(Map.Entry::getKey, Map.Entry::getValue)
                 .flatMap(states -> {
                     GatewaySnapshot snapshot = new GatewaySnapshot(states,
-                            new SnapshotMeta(globalCredit, cluster.aliveGateways(), settings.maxWait()), nowMillis, brakeFactor);
+                            new SnapshotMeta(globalCredit, cluster.aliveGateways(), settings.maxWait(),
+                                    settings.leaveGrace()), nowMillis, brakeFactor);
                     return store.publishSnapshot(fence, properties.fenceTtl().toMillis(), SnapshotCodec.encode(snapshot))
                             .flatMap(published -> published ? Mono.just(snapshot) : Mono.error(new LostLeadershipException()));
                 })

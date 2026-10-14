@@ -44,6 +44,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static com.grandis.nova.waitingroom.support.TestIds.customerId;
 import static com.grandis.nova.waitingroom.support.TestIds.productKey;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 /** 진입 · 조회 · 접수 전달을 실제 Redis 와 가짜 preorder 로 끝까지 확인한다. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
@@ -465,6 +466,25 @@ class QueueFlowTest {
             snapshot(crowded());
             status(customerId(1), token).expectStatus().isOk().expectBody().jsonPath("$.data.paused").doesNotExist();
             enter(customerId(2)).expectStatus().isAccepted().expectBody().jsonPath("$.data.paused").doesNotExist();
+        }
+
+        @Test
+        void 이탈_유예를_늘리면_그_뒤_진입과_조회가_늘린_만큼_생존_신호를_쓴다() {
+            String alive = "wr:alive:{" + PRODUCT + "}";
+            snapshot(crowded());
+            String token = queueToken(customerId(1));
+            assertThat(redis.opsForZSet().score(alive, customerId(1)).block(WAIT))
+                    .isCloseTo(Instant.now().getEpochSecond() + 250.0, within(5.0));
+
+            TestSnapshots.put(snapshots, Map.of(PRODUCT, crowded()),
+                    new SnapshotMeta(100, 1, MaxWait.unlimited(), Duration.ofSeconds(600)));
+            status(customerId(1), token).expectStatus().isOk();
+            enter(customerId(2)).expectStatus().isAccepted();
+
+            assertThat(redis.opsForZSet().score(alive, customerId(1)).block(WAIT))
+                    .isCloseTo(Instant.now().getEpochSecond() + 600.0, within(5.0));
+            assertThat(redis.opsForZSet().score(alive, customerId(2)).block(WAIT))
+                    .isCloseTo(Instant.now().getEpochSecond() + 600.0, within(5.0));
         }
 
         @Test
