@@ -215,6 +215,14 @@ class JwkSetCacheTest {
         }
 
         @Test
+        void 본문_없는_응답은_실패로_끝난다() {
+            response.set(Mono.empty());
+
+            assertThatThrownBy(() -> cache.refresh().block()).hasMessageContaining("본문이 비었다");
+            assertThat(cache.loadedOnce()).isFalse();
+        }
+
+        @Test
         void 쓸_키가_없는_집합은_실패로_보고_갖고_있던_키를_지킨다() throws Exception {
             loaded("k1");
             response.set(Mono.just("{\"keys\":[]}"));
@@ -268,6 +276,17 @@ class JwkSetCacheTest {
 
             time.advanceTimeBy(JwkSetCache.STARTUP_RETRY_MIN.multipliedBy(2));
             assertThat(fetches).as("주기(5분)를 기다리지 않는다").hasValueGreaterThanOrEqualTo(2);
+
+            response.set(Mono.just(keySet("k1")));
+            time.advanceTimeBy(LONGEST_RETRY);
+            assertThat(cache.loadedOnce()).isTrue();
+        }
+
+        @Test
+        void 처음_받은_응답의_본문이_비어도_주기를_기다리지_않고_다시_받는다() {
+            response.set(Mono.empty());
+            cache.start();
+            assertThat(cache.loadedOnce()).isFalse();
 
             response.set(Mono.just(keySet("k1")));
             time.advanceTimeBy(LONGEST_RETRY);

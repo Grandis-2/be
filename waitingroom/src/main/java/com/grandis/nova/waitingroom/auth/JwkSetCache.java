@@ -96,6 +96,8 @@ final class JwkSetCache implements Function<SignedJWT, Flux<JWK>>, SmartLifecycl
     /** 한 번 받는다. 실패는 failed 가 기록하고 오류로 끝난다. */
     Mono<JWKSet> refresh() {
         return fetch.timeout(TIMEOUT)
+                // 본문 없는 응답은 값 없이 끝나 재시도 · 실패 기록을 건너뛴다 — 실패로 본다
+                .switchIfEmpty(Mono.error(() -> new IllegalStateException("JWKS 응답 본문이 비었다")))
                 .handle(this::parse)
                 .doOnNext(this::stored)
                 .doOnError(this::failed);
