@@ -56,8 +56,14 @@ class CampaignScheduleHandler implements QueueMessageHandler {
             }
             boolean written = applied;
             outcome = written ? "APPLIED" : "STALE";
-            log.info("회차 일정 {} productId={} scheduleVersion={} visible={} change={}", written ? "반영" : "무시(옛 번호)",
-                    changed.productId(), changed.scheduleVersion(), changed.isVisible(), changed.change());
+            if (written) {
+                log.info("회차 일정 반영 productId={} scheduleVersion={} visible={} change={}",
+                        changed.productId(), changed.scheduleVersion(), changed.isVisible(), changed.change());
+            } else {
+                // 주기 재발행은 대부분 이미 아는 일정이다 — 지표(STALE)로 보고 로그는 낮춘다
+                log.debug("회차 일정 무시(같거나 옛 번호) productId={} scheduleVersion={} change={}",
+                        changed.productId(), changed.scheduleVersion(), changed.change());
+            }
         } finally {
             Counter.builder("waitingroom.schedule.events").tag("outcome", outcome).register(registry).increment();
         }
