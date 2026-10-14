@@ -101,6 +101,26 @@ class ControlPartsTest {
         }
 
         @Test
+        void 전역_속도와_모델별_상한은_최댓값에서_자른다() {
+            OperationalSettings settings = OperationalSettings.from(Map.of(OperationalSettings.GLOBAL_CREDIT, "15000",
+                    "cap:" + productKey(101), "15000", "cap:" + productKey(202), "7"), 150, 150, 1_500);
+
+            assertThat(settings.globalCredit()).isEqualTo(1_500);
+            assertThat(settings.capOf(productKey(101))).isEqualTo(1_500);
+            assertThat(settings.capOf(productKey(202))).isEqualTo(7);
+        }
+
+        @Test
+        void 기본_입장_속도나_모델별_상한이_속도_최댓값보다_크면_기동하지_않는다() {
+            assertThat(new AdmissionProperties(null, null).maxGlobalCredit()).isEqualTo(1_500);
+            assertThatThrownBy(() -> new AdmissionProperties(1_501L, null, null, null))
+                    .hasMessageContaining("max-global-credit");
+            assertThatThrownBy(() -> new AdmissionProperties(null, null, 2_000L, 1_500L))
+                    .hasMessageContaining("max-global-credit");
+            assertThat(new AdmissionProperties(3_000L, null, null, 5_000L).globalCredit()).isEqualTo(3_000);
+        }
+
+        @Test
         void 전역_속도_0_은_입장을_멈추는_운영값이라_받는다() {
             assertThat(OperationalSettings.from(Map.of(OperationalSettings.GLOBAL_CREDIT, "0"), 100).globalCredit()).isZero();
         }

@@ -135,6 +135,21 @@ class WaitingroomAdminApiTest {
     }
 
     @Test
+    void 입장_속도와_모델별_상한은_배포_설정의_최댓값까지_받고_Redis_에_남은_더_큰_값은_최댓값으로_자른다() {
+        put("/admission-rate", Map.of("globalCredit", 1_500)).exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.data.globalCredit.value").isEqualTo(1_500)
+                .jsonPath("$.data.maxGlobalCredit").isEqualTo(1_500);
+        put("/products/" + productKey(101) + "/admission-rate", Map.of("cap", 1_500)).exchange().expectStatus().isOk();
+
+        redis.opsForHash().put(RedisKeys.SETTINGS, "global-credit", "15000").block(WAIT);
+        redis.opsForHash().put(RedisKeys.SETTINGS, "cap:" + productKey(202), "15000").block(WAIT);
+        get("/admission-rate").expectStatus().isOk().expectBody()
+                .jsonPath("$.data.globalCredit.value").isEqualTo(1_500)
+                .jsonPath("$.data.products[1].productId").isEqualTo(productKey(202))
+                .jsonPath("$.data.products[1].cap.value").isEqualTo(1_500);
+    }
+
+    @Test
     void 이탈_유예는_250초에서_1800초_사이로_바꾸고_지우면_기본값으로_돌아간다() {
         put("/leave-grace", Map.of("seconds", 600)).exchange().expectStatus().isOk().expectBody()
                 .jsonPath("$.data.leaveGraceSeconds.value").isEqualTo(600)
@@ -171,8 +186,9 @@ class WaitingroomAdminApiTest {
         put("/admission-rate", Map.of("globalCredit", -1)).exchange().expectStatus().isBadRequest().expectBody()
                 .jsonPath("$.error.code").isEqualTo("VALIDATION_FAILED")
                 .jsonPath("$.error.details.field").isEqualTo("globalCredit");
-        put("/admission-rate", Map.of("globalCredit", OperationalSettingsAdmin.MAX_GLOBAL_CREDIT + 1)).exchange()
-                .expectStatus().isBadRequest();
+        put("/admission-rate", Map.of("globalCredit", 1_501)).exchange().expectStatus().isBadRequest().expectBody()
+                .jsonPath("$.error.message").value(message -> assertThat((String) message).contains("1500"));
+        put("/products/" + productKey(101) + "/admission-rate", Map.of("cap", 1_501)).exchange().expectStatus().isBadRequest();
         put("/admission-rate", Map.of()).exchange().expectStatus().isBadRequest();
         put("/products/" + productKey(101) + "/admission-rate", Map.of("cap", 0)).exchange().expectStatus().isBadRequest();
         put("/products/101/admission-rate", Map.of("cap", 5)).exchange().expectStatus().isBadRequest().expectBody()
