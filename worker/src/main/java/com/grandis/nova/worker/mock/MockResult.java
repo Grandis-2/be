@@ -1,6 +1,7 @@
 package com.grandis.nova.worker.mock;
 
 import com.grandis.nova.worker.job.AttemptResult;
+import tools.jackson.databind.JsonNode;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -11,6 +12,7 @@ import java.time.Instant;
  * @param httpStatus 응답을 받지 못했거나 호출하지 않았으면 null
  * @param retryNow   같은 차례 안에서 곧바로 다시 보내도 되는 일시 실패다
  * @param retryAfter 외부가 이만큼 뒤에 다시 보내라고 했다. 없으면 null
+ * @param body       성공한 응답의 본문(드로우 회차 조회 · 추첨이 읽는다). 성공이 아니면 null
  */
 public record MockResult(
         Verdict verdict,
@@ -22,7 +24,8 @@ public record MockResult(
         boolean retryNow,
         Duration retryAfter,
         Instant startedAt,
-        Instant finishedAt
+        Instant finishedAt,
+        JsonNode body
 ) {
 
     public enum Skipped {
@@ -34,7 +37,7 @@ public record MockResult(
     private static final int MAX_MESSAGE = 500;
 
     static MockResult notCalled(Skipped reason, Instant now) {
-        return new MockResult(Verdict.NOT_CALLED, reason, null, null, null, null, false, null, now, now);
+        return new MockResult(Verdict.NOT_CALLED, reason, null, null, null, null, false, null, now, now, null);
     }
 
     static MockResult of(Judgement judgement, MockReply reply, Instant startedAt, Instant finishedAt) {
@@ -42,21 +45,22 @@ public record MockResult(
         return new MockResult(judgement.verdict(), null, reply.responded() ? reply.status() : null,
                 judgement.errorCode(),
                 message != null && message.length() > MAX_MESSAGE ? message.substring(0, MAX_MESSAGE) : message,
-                judgement.externalNumber(), judgement.retryNow(), judgement.retryAfter(), startedAt, finishedAt);
+                judgement.externalNumber(), judgement.retryNow(), judgement.retryAfter(), startedAt, finishedAt,
+                judgement.verdict() == Verdict.SUCCESS ? reply.body() : null);
     }
 
     public Duration elapsed() {
         return Duration.between(startedAt, finishedAt);
     }
 
-    /** 시도 원장에 남길 결과. 시도로 세지 않는 것(설정 오류 · 호출 안 함 · 조회의 등록 없음)은 null. */
+    /** 시도 원장에 남길 결과. 시도로 세지 않는 것(설정 오류 · 호출 안 함 · 조회의 등록 없음 · 드로우의 기다림)은 null. */
     public AttemptResult attemptResult() {
         return switch (verdict) {
             case SUCCESS -> AttemptResult.SUCCESS;
             case TRANSIENT -> AttemptResult.TRANSIENT_FAILURE;
             case UNKNOWN -> AttemptResult.UNKNOWN;
             case REJECTED -> AttemptResult.REJECTED;
-            case MISCONFIGURED, ABSENT, NOT_CALLED -> null;
+            case MISCONFIGURED, ABSENT, PENDING, NOT_CALLED -> null;
         };
     }
 }
