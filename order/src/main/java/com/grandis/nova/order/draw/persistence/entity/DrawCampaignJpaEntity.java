@@ -2,7 +2,9 @@ package com.grandis.nova.order.draw.persistence.entity;
 
 import com.grandis.nova.common.BaseEntity;
 import jakarta.persistence.Column;
+import com.grandis.nova.order.draw.DrawReadCache;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EntityListeners;
 import jakarta.persistence.Table;
 
 import java.math.BigDecimal;
@@ -11,6 +13,7 @@ import java.util.UUID;
 
 /** draw_campaigns 행. 만든 뒤 바꾸지 않는다(모든 칸 updatable=false). */
 @Entity
+@EntityListeners(DrawReadCache.Invalidation.class)
 @Table(name = "draw_campaigns")
 public class DrawCampaignJpaEntity extends BaseEntity {
 
