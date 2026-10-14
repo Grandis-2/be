@@ -41,8 +41,6 @@ import java.util.concurrent.TimeoutException;
 @Component
 class OperationalSettingsAdmin {
 
-    static final long MAX_GLOBAL_CREDIT = 100_000;
-    static final long MAX_PRODUCT_CAP = 100_000;
     static final long MAX_WAIT_SECONDS = Duration.ofDays(1).toSeconds();
     private static final Logger log = LoggerFactory.getLogger(OperationalSettingsAdmin.class);
 
@@ -68,14 +66,14 @@ class OperationalSettingsAdmin {
     }
 
     Mono<AdmissionRateView> setGlobalCredit(String actor, Long value) {
-        long checked = checked("globalCredit", value, 0, MAX_GLOBAL_CREDIT);
+        long checked = checked("globalCredit", value, 0, defaults.maxGlobalCredit());
         return change(actor, OperationalSettings.GLOBAL_CREDIT, store.writeSetting(OperationalSettings.GLOBAL_CREDIT,
                 String.valueOf(checked)), String.valueOf(checked));
     }
 
     Mono<AdmissionRateView> setProductCap(String actor, String productId, Long value) {
         String field = RedisKeys.capField(checkedProduct(productId));
-        long checked = checked("cap", value, 1, MAX_PRODUCT_CAP);
+        long checked = checked("cap", value, 1, defaults.maxGlobalCredit());
         return change(actor, field, store.writeSetting(field, String.valueOf(checked)), String.valueOf(checked));
     }
 
@@ -141,7 +139,8 @@ class OperationalSettingsAdmin {
     }
 
     private AdmissionRateView view(Map<String, String> raw) {
-        OperationalSettings settings = OperationalSettings.from(raw, defaults.globalCredit(), defaults.productCap());
+        OperationalSettings settings = OperationalSettings.from(raw, defaults.globalCredit(), defaults.productCap(),
+                defaults.maxGlobalCredit());
         // 출처는 리더가 실제로 받아들인 값인지로 정한다 — 깨진 값이 저장돼 있으면 리더는 기본값을 쓴다
         Setting globalCredit = new Setting(settings.globalCredit(),
                 OperationalSettings.acceptsGlobalCredit(raw.get(OperationalSettings.GLOBAL_CREDIT)) ? Source.OPERATIONAL : Source.DEFAULT);
@@ -153,10 +152,11 @@ class OperationalSettingsAdmin {
         Map<String, ProductState> states = snapshots.current().map(GatewaySnapshot::products).orElse(Map.of());
         TreeSet<String> productIds = new TreeSet<>(states.keySet());
         productIds.addAll(settings.caps().keySet());
-        return new AdmissionRateView(globalCredit, maxWaitSeconds, leaveGraceSeconds, productIds.stream()
-                .map(productId -> new ProductRate(productId, cap(settings, productId),
-                        queueLimit(states.get(productId), maxWait)))
-                .toList());
+        return new AdmissionRateView(globalCredit, defaults.maxGlobalCredit(), maxWaitSeconds, leaveGraceSeconds,
+                productIds.stream()
+                        .map(productId -> new ProductRate(productId, cap(settings, productId),
+                                queueLimit(states.get(productId), maxWait)))
+                        .toList());
     }
 
     private static Setting cap(OperationalSettings settings, String productId) {

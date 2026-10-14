@@ -19,6 +19,9 @@ waitingroom:
     secret: ${WAITING_TOKEN_SECRET}
     previous: ${WAITING_TOKEN_PREVIOUS:}
     rollout-ends-at: ${WAITING_TOKEN_ROLLOUT_ENDS_AT:}
+  # 관리자가 올릴 수 있는 입장 속도(초당 입장 인원)의 최댓값. 기본 1500, preorder 대수를 바꾸면 같이 바꾼다
+  # admission:
+  #   max-global-credit: 1500
   relay:
     # preorder 주소(VPC 안 Cloud Map). 접수 POST 만 이리로 전달한다
     preorder-uri: http://preorder.ureca.local:8083

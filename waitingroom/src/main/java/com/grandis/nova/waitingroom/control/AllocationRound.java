@@ -77,7 +77,7 @@ class AllocationRound {
                     TimedEntries products = read.getT1();
                     Instant readAt = Instant.ofEpochMilli(products.redisNowMillis());
                     OperationalSettings settings = OperationalSettings.from(read.getT2(), admission.globalCredit(),
-                            admission.productCap());
+                            admission.productCap(), admission.maxGlobalCredit());
                     Map<String, Schedule> schedules = schedules(products.entries());
                     // 쓸 수 있는 일정이 하나도 없으면(비었거나 깨진 값 · 은퇴 표식만) 놓친 회차가 있을 수 있다.
                     // 일정을 알아도 메시지 하나를 놓쳤을 수 있어 드물게는 다시 요청한다

@@ -21,13 +21,15 @@ public record OperationalSettings(long globalCredit, MaxWait maxWait, Duration l
     public static final String MAX_WAIT_SEC = "max-wait-sec";
     public static final String LEAVE_GRACE_SEC = "leave-grace-sec";
 
-    /** 모델별 상한 기본값 없이(제한 없음) 읽는다. */
+    /** 모델별 상한 기본값과 속도 최댓값 없이(제한 없음) 읽는다. */
     public static OperationalSettings from(Map<String, String> raw, long defaultGlobalCredit) {
-        return from(raw, defaultGlobalCredit, ProductState.UNLIMITED_CAP);
+        return from(raw, defaultGlobalCredit, ProductState.UNLIMITED_CAP, Long.MAX_VALUE);
     }
 
-    public static OperationalSettings from(Map<String, String> raw, long defaultGlobalCredit, long defaultCap) {
-        long globalCredit = positiveOr(raw.get(GLOBAL_CREDIT), defaultGlobalCredit, true);
+    /** @param maxCredit 전역 속도와 모델별 상한을 이 값에서 자른다 — 최댓값을 낮춰 배포해도 Redis 에 남은 큰 값이 쓰이지 않게 */
+    public static OperationalSettings from(Map<String, String> raw, long defaultGlobalCredit, long defaultCap,
+                                           long maxCredit) {
+        long globalCredit = Math.min(positiveOr(raw.get(GLOBAL_CREDIT), defaultGlobalCredit, true), maxCredit);
         long maxWaitSec = positiveOr(raw.get(MAX_WAIT_SEC), -1, false);
         long leaveGraceSec = positiveOr(raw.get(LEAVE_GRACE_SEC), -1, false);
         Map<String, Long> caps = new HashMap<>();
@@ -36,7 +38,7 @@ public record OperationalSettings(long globalCredit, MaxWait maxWait, Duration l
                 String productKey = field.substring(4);
                 long cap = positiveOr(value, -1, false);
                 if (RedisKeys.validProductKey(productKey) && cap > 0) {
-                    caps.put(productKey, cap);
+                    caps.put(productKey, Math.min(cap, maxCredit));
                 }
             }
         });
