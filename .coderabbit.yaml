@@ -265,8 +265,10 @@ reviews:
           그 두 표에 INSERT · UPDATE · DELETE 가 있으면 지적한다. 다른 클래스가 같은 표를 읽어도 지적한다.
           src/test 의 시험 코드가 시험 데이터로 그 표에 INSERT · UPDATE 하는 것은 예외다 — 운영 코드 경계가 아니라 시험 준비 · 경쟁 재현이다.
         - shipment_batches 는 읽지 않는다. 상세의 배송 안내는 preorder 의 공개 API(GET /api/v1/preorders/products/{id}/shipment-batches)를 프론트가 부른다.
-        - products.sale_mode 는 등록 뒤 바꾸지 않는다. order 의 재고 검증(일반 판매 상품에만 재고 행)이 이 계약에 기댄다.
-          바꾸는 경로가 생기면 지적한다.
+        - products.sale_mode 를 등록 뒤 바꾸는 길은 하나뿐이다 — 마감된 사전예약을 일반 상품으로 바꾸는 전환(ProductEditService.convertToInStock,
+          POST /api/v1/admin/products/{id}/conversion). 반대(일반 → 사전예약)는 없다. order 의 재고 검증(일반 판매 상품에만 재고 행)이 이 계약에 기댄다 —
+          전환은 판매 방식을 바꾼 뒤에 재고 이벤트(IN_STOCK_PRODUCT_REGISTERED)를 보내므로 사전예약 상품에 재고 행이 생기지 않는다.
+          그 밖에 판매 방식을 바꾸는 경로가 생기거나, 전환이 마감 전 · 회차 취소 상품을 허용하면 지적한다.
         - preorders · orders · payments · cart_items 는 읽기도 지적한다.
           리뷰를 쓸 자격(내 주문상품 · 배송 완료 · 일반 주문)과 작성자 이름(실명 우선)은 order · member 내부 API 로 묻는다(contracts/order-internal.md ·
           member-internal.md). orders · order_items · customers 를 읽어 판정하면 지적한다.
