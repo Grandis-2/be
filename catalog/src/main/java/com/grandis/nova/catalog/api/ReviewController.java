@@ -25,6 +25,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Clock;
 import java.util.UUID;
 
 /**
@@ -38,11 +39,13 @@ public class ReviewController {
     private final ReviewService reviews;
     private final CatalogReadCache cache;
     private final StrictBodies bodies;
+    private final Clock clock;
 
-    public ReviewController(ReviewService reviews, CatalogReadCache cache, StrictBodies bodies) {
+    public ReviewController(ReviewService reviews, CatalogReadCache cache, StrictBodies bodies, Clock clock) {
         this.reviews = reviews;
         this.cache = cache;
         this.bodies = bodies;
+        this.clock = clock;
     }
 
     @Operation(summary = "리뷰 작성", description = "배송 완료된 내 일반 판매 주문상품(사전예약 · 드로우 당첨 증정 제외)에 하나. body 는 앞뒤 공백을 뺀 1~2,000자")
@@ -75,8 +78,8 @@ public class ReviewController {
             @PathVariable UUID productId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        return PublicCache.ok(PublicCache.REVIEW, ProductPageResponse.from(
-                cache.productReviews(productId, PageSizes.requirePage(page), PageSizes.require(size))));
+        return PublicCache.ok(cache.productReviews(productId, PageSizes.requirePage(page), PageSizes.require(size)).map(ProductPageResponse::from),
+                CatalogReadCache.REVIEW_TTL, PublicCache.REVIEW, clock);
     }
 
     /** 구매후기 모아보기. categoryId 는 상위면 하위 포함. */
@@ -87,8 +90,8 @@ public class ReviewController {
             @RequestParam(required = false) UUID categoryId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        return PublicCache.ok(PublicCache.REVIEW, ProductPageResponse.from(
-                cache.visibleReviews(categoryId, PageSizes.requirePage(page), PageSizes.require(size))));
+        return PublicCache.ok(cache.visibleReviews(categoryId, PageSizes.requirePage(page), PageSizes.require(size)).map(ProductPageResponse::from),
+                CatalogReadCache.REVIEW_TTL, PublicCache.REVIEW, clock);
     }
 
     /** 내 리뷰. orderItemId 를 주면 그 주문상품의 리뷰만 — 주문 내역의 "리뷰 쓰기 / 내가 쓴 리뷰 보기" 를 가른다. */

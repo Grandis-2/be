@@ -87,9 +87,34 @@ class CatalogReadCacheApiTest {
             String second = data(mockMvc.perform(get(path)).andExpect(status().isOk())).toString();
             assertThat(second).as(path).isEqualTo(first);
         }
-        assertThat(redis.keys("catalog:cache:product-list:*")).hasSize(2);
+        assertThat(redis.keys("catalog:cache:product-list:*")).as("q 검색은 넣지 않는다 — 정렬 목록 하나만").hasSize(1);
         assertThat(redis.keys("catalog:cache:category-tree:*")).hasSize(1);
         assertThat(redis.keys("catalog:cache:reviews:*")).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("자유 검색어(q) · 다섯째 페이지부터는 Redis 에 넣지 않는다 — 키가 끝없이 늘어 나눠 쓰는 Redis 의 다른 키를 밀어내지 않게. 응답은 같다")
+    void unboundedQueriesAreNotStored() throws Exception {
+        String tag = "q" + ShopFixtures.unique();
+        registerInStock("검색", tag);
+        mockMvc.perform(get("/api/v1/products").param("q", tag)).andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/products").param("categoryId", categoryId.toString()).param("page", "5")).andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/reviews").param("page", "5")).andExpect(status().isOk());
+        assertThat(redis.keys("catalog:cache:product-list:*")).isEmpty();
+        assertThat(redis.keys("catalog:cache:reviews:*")).isEmpty();
+
+        assertThat(data(mockMvc.perform(get("/api/v1/products").param("q", tag))).get("items").get(0).get("title").asString()).isEqualTo("검색");
+        mockMvc.perform(get("/api/v1/products").param("categoryId", categoryId.toString()).param("page", "4")).andExpect(status().isOk());
+        assertThat(redis.keys("catalog:cache:product-list:*")).as("넷째 페이지까지는 넣는다").hasSize(1);
+    }
+
+    @Test
+    @DisplayName("max-age 는 그 값이 Redis 에서 묵은 만큼 줄어든다(초는 버림) — 앞단 캐시와 합쳐도 TTL(5초)을 넘지 않게")
+    void maxAgeShrinksWithAge() throws Exception {
+        UUID productId = registerInStock("나이");
+        assertThat(maxAge(get("/api/v1/products/{id}", productId))).isBetween(4L, 5L);
+        Thread.sleep(2_100);
+        assertThat(maxAge(get("/api/v1/products/{id}", productId))).isBetween(1L, 2L);
     }
 
     @Test
@@ -167,11 +192,12 @@ class CatalogReadCacheApiTest {
     @DisplayName("공개 조회는 Cache-Control public + max-age(상품 5초 · 리뷰 60초 · 카테고리 5분), 관리자 조회는 그대로 no-store")
     void publicResponsesCarryCacheControl() throws Exception {
         UUID productId = registerInStock("헤더");
-        mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(header().string("Cache-Control", "max-age=5, public"));
-        mockMvc.perform(get("/api/v1/products")).andExpect(header().string("Cache-Control", "max-age=5, public"));
-        mockMvc.perform(get("/api/v1/products/{id}/reviews", productId)).andExpect(header().string("Cache-Control", "max-age=60, public"));
-        mockMvc.perform(get("/api/v1/reviews")).andExpect(header().string("Cache-Control", "max-age=60, public"));
-        mockMvc.perform(get("/api/v1/categories")).andExpect(header().string("Cache-Control", "max-age=300, public"));
+        // 갓 읽은 값도 남은 시간을 초로 버려 상한보다 1 작을 수 있다(늦게 보이는 쪽으로 넘지 않게)
+        assertThat(maxAge(get("/api/v1/products/{id}", productId))).isBetween(4L, 5L);
+        assertThat(maxAge(get("/api/v1/products"))).isBetween(4L, 5L);
+        assertThat(maxAge(get("/api/v1/products/{id}/reviews", productId))).isBetween(59L, 60L);
+        assertThat(maxAge(get("/api/v1/reviews"))).isBetween(59L, 60L);
+        assertThat(maxAge(get("/api/v1/categories"))).isEqualTo(300L);
         mockMvc.perform(get(ADMIN + "/{id}", productId).with(user("admin").roles("ADMIN")))
                 .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")));
         // 오류 응답은 캐시하라고 하지 않는다
@@ -236,14 +262,22 @@ class CatalogReadCacheApiTest {
         return mockMvc.perform(request.contentType(MediaType.APPLICATION_JSON).content(body).with(user("admin").roles("ADMIN")));
     }
 
+    /** 이 시험의 카테고리로 좁힌 목록 — 캐시되는 조회다(자유 검색어 q 는 캐시하지 않는다). tag 는 읽기 쉬우라고 받기만 한다. */
     private JsonNode list(String tag) throws Exception {
-        return data(mockMvc.perform(get("/api/v1/products").param("q", tag)).andExpect(status().isOk())).get("items");
+        return data(mockMvc.perform(get("/api/v1/products").param("categoryId", categoryId.toString())).andExpect(status().isOk())).get("items");
     }
 
     private java.util.List<String> titles(String tag) throws Exception {
         java.util.List<String> titles = new java.util.ArrayList<>();
         list(tag).forEach(item -> titles.add(item.get("title").asString()));
         return titles;
+    }
+
+    /** Cache-Control 의 max-age 초. public 이 아니면 실패. */
+    private long maxAge(MockHttpServletRequestBuilder request) throws Exception {
+        String value = mockMvc.perform(request).andExpect(status().isOk()).andReturn().getResponse().getHeader("Cache-Control");
+        assertThat(value).matches("max-age=\\d+, public");
+        return Long.parseLong(value.substring("max-age=".length(), value.indexOf(',')));
     }
 
     private long generation(String name) {

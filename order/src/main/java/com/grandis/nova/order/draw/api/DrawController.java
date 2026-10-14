@@ -1,6 +1,7 @@
 package com.grandis.nova.order.draw.api;
 
 import com.grandis.nova.common.OffsetPage;
+import com.grandis.nova.common.redis.cache.ReadCache;
 import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.security.CurrentCustomerId;
 import com.grandis.nova.common.web.ApiResponse;
@@ -63,17 +64,20 @@ public class DrawController {
                                                                       @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         int checkedSize = PageSizes.require(size);
         Instant now = queries.now();
-        return publicOk(cache.list(PageSizes.requirePage(page, checkedSize), checkedSize).map(c -> DrawResponse.of(c, now)));
+        return publicOk(cache.list(PageSizes.requirePage(page, checkedSize), checkedSize).map(found -> found.map(c -> DrawResponse.of(c, now))));
     }
 
     @GetMapping("/{drawId}")
     @Operation(summary = "회차 상세")
     public ResponseEntity<ApiResponse<DrawResponse>> get(@PathVariable UUID drawId) {
-        return publicOk(DrawResponse.of(cache.get(drawId), queries.now()));
+        Instant now = queries.now();
+        return publicOk(cache.get(drawId).map(c -> DrawResponse.of(c, now)));
     }
 
-    private static <T> ResponseEntity<ApiResponse<T>> publicOk(T body) {
-        return ResponseEntity.ok().cacheControl(CacheControl.maxAge(PUBLIC_MAX_AGE).cachePublic()).body(ApiResponse.ok(body));
+    /** max-age 는 상한과, 읽기 캐시 TTL 에서 그 값을 읽은 뒤 남은 시간 중 작은 쪽 — 두 단계를 합쳐도 TTL 을 넘지 않게. */
+    private <T> ResponseEntity<ApiResponse<T>> publicOk(ReadCache.Entry<T> entry) {
+        long seconds = Math.min(PUBLIC_MAX_AGE.toSeconds(), entry.remaining(DrawReadCache.TTL, queries.now()).toSeconds());
+        return ResponseEntity.ok().cacheControl(CacheControl.maxAge(Duration.ofSeconds(seconds)).cachePublic()).body(ApiResponse.ok(entry.value()));
     }
 
     @PostMapping("/{drawId}/entries")

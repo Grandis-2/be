@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Clock;
 import java.util.List;
 import java.util.UUID;
 
@@ -32,23 +33,25 @@ import java.util.UUID;
 public class ProductController {
 
     private final CatalogReadCache cache;
+    private final Clock clock;
 
-    public ProductController(CatalogReadCache cache) {
+    public ProductController(CatalogReadCache cache, Clock clock) {
         this.cache = cache;
+        this.clock = clock;
     }
 
     @Operation(summary = "상품 상세(로그인 없이)")
     @SecurityRequirements
     @GetMapping("/{productId}")
     public ResponseEntity<ApiResponse<ProductDetailView>> product(@PathVariable UUID productId) {
-        return PublicCache.ok(PublicCache.PRODUCT, cache.product(productId));
+        return PublicCache.ok(cache.product(productId), CatalogReadCache.PRODUCT_TTL, PublicCache.PRODUCT, clock);
     }
 
     @Operation(summary = "옵션(조합) 상세(로그인 없이)")
     @SecurityRequirements
     @GetMapping("/{productId}/variants/{variantId}")
     public ResponseEntity<ApiResponse<ProductDetailView.Variant>> variant(@PathVariable UUID productId, @PathVariable UUID variantId) {
-        return PublicCache.ok(PublicCache.PRODUCT, cache.variant(productId, variantId));
+        return PublicCache.ok(cache.variant(productId, variantId), CatalogReadCache.PRODUCT_TTL, PublicCache.PRODUCT, clock);
     }
 
     @Operation(summary = "상품 목록 · 검색(로그인 없이)", description = "sort: NEWEST(최신순, 기본) · PRICE_ASC(낮은 가격순) · PRICE_DESC(높은 가격순). 가격은 판매 중인 옵션의 최저 할인가(minPrice)이고 판매 중인 옵션이 없는 상품은 가격순에서 맨 뒤. "
@@ -66,7 +69,7 @@ public class ProductController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         ProductListFilter filter = new ProductListFilter(q, categoryId, saleMode, brand, color, storage);
-        return PublicCache.ok(PublicCache.PRODUCT, ProductPageResponse.from(
-                cache.products(filter, sort, PageSizes.requirePage(page), PageSizes.require(size))));
+        return PublicCache.ok(cache.products(filter, sort, PageSizes.requirePage(page), PageSizes.require(size)).map(ProductPageResponse::from),
+                CatalogReadCache.PRODUCT_TTL, PublicCache.PRODUCT, clock);
     }
 }

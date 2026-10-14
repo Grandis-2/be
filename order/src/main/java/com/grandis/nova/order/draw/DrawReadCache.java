@@ -20,7 +20,8 @@ import java.util.UUID;
 public class DrawReadCache {
 
     static final String DRAWS = "draws";
-    static final Duration TTL = Duration.ofMinutes(10);
+    public static final Duration TTL = Duration.ofMinutes(10);
+    static final int CACHED_PAGES = 5;
 
     private final ReadCache cache;
     private final DrawQueryService queries;
@@ -34,13 +35,17 @@ public class DrawReadCache {
         this.detailSpec = cache.spec("draw-detail", DrawCampaign.class, TTL);
     }
 
-    public OffsetPage<DrawCampaign> list(int page, int size) {
-        return cache.get(listSpec, DRAWS, page + ":" + size, () -> queries.list(page, size));
+    /** 앞 페이지({@link #CACHED_PAGES} 미만)만 Redis 에 넣는다 — 키 수가 끝없이 늘어 나눠 쓰는 Redis 의 다른 키를 밀어내지 않게. */
+    public ReadCache.Entry<OffsetPage<DrawCampaign>> list(int page, int size) {
+        if (page >= CACHED_PAGES) {
+            return new ReadCache.Entry<>(queries.list(page, size), queries.now());
+        }
+        return cache.entry(listSpec, DRAWS, page + ":" + size, () -> queries.list(page, size));
     }
 
     /** @throws com.grandis.nova.common.BusinessException 404 DRAW_NOT_FOUND — 없는 회차는 넣지 않는다 */
-    public DrawCampaign get(UUID drawId) {
-        return cache.get(detailSpec, DRAWS, drawId.toString(), () -> queries.get(drawId));
+    public ReadCache.Entry<DrawCampaign> get(UUID drawId) {
+        return cache.entry(detailSpec, DRAWS, drawId.toString(), () -> queries.get(drawId));
     }
 
     /** 회차 엔티티 리스너 — 새 회차가 커밋되면 세대를 올린다. */

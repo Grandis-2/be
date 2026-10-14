@@ -23,6 +23,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
@@ -36,6 +37,8 @@ import java.util.UUID;
  *   <li><b>다른 서비스가 바꾸는 것</b>(판매 준비 완료 — order 재고 행 · preorder 회차 행, 회차 시각 · 조기 마감, 재고 수량)은 catalog 가 알 수 없어
  *       TTL 이 지나야 보인다 — 그래서 상품 목록 · 상세의 TTL 은 짧다. 주문 · 접수는 이 캐시를 거치지 않고 다시 확인한다.</li>
  *   <li><b>시각으로 정하는 칸</b>(사전예약 접수 단계)은 꺼낼 때 지금 시각으로 다시 계산한다.</li>
+ *   <li><b>앞단 HTTP 캐시</b>는 돌려준 {@link ReadCache.Entry#loadedAt()} 로 남은 시간만큼만 허용한다(PublicCache) — 두 단계를 합쳐도 TTL 을 넘지
+ *       않게.</li>
  * </ul>
  * Redis 가 실패하면 캐시 없이 DB 로 답한다({@link ReadCache}).
  */
@@ -49,9 +52,11 @@ public class CatalogReadCache {
     /** 올리는 곳이 없다 — 카테고리는 운영 초기 데이터로만 바뀐다(관리 API 없음). TTL 이 끝낸다. */
     static final String CATEGORIES = "categories";
 
-    static final Duration PRODUCT_TTL = Duration.ofSeconds(5);
-    static final Duration REVIEW_TTL = Duration.ofSeconds(60);
-    static final Duration CATEGORY_TTL = Duration.ofMinutes(10);
+    public static final Duration PRODUCT_TTL = Duration.ofSeconds(5);
+    public static final Duration REVIEW_TTL = Duration.ofSeconds(60);
+    public static final Duration CATEGORY_TTL = Duration.ofMinutes(10);
+    /** 목록 · 리뷰는 앞 페이지(0~4)만 Redis 에 넣는다. */
+    static final int CACHED_PAGES = 5;
 
     private final ReadCache cache;
     private final JsonMapper json;
@@ -81,35 +86,54 @@ public class CatalogReadCache {
         this.reviewSpec = cache.spec("reviews", new TypeReference<OffsetPage<ReviewView>>() { }, REVIEW_TTL);
     }
 
-    public ProductDetailView product(UUID productId) {
-        return cache.get(detailSpec, PRODUCTS, productId.toString(), () -> details.findProduct(productId)).at(clock.instant());
+    public ReadCache.Entry<ProductDetailView> product(UUID productId) {
+        ReadCache.Entry<ProductDetailView> entry = cache.entry(detailSpec, PRODUCTS, productId.toString(), () -> details.findProduct(productId));
+        return new ReadCache.Entry<>(entry.value().at(clock.instant()), entry.loadedAt());
     }
 
     /** 옵션 상세 — 상품 상세(같은 캐시)에서 꺼낸다. 그 상품의 옵션이 아니면 404(상세 서비스와 같은 판정). */
-    public ProductDetailView.Variant variant(UUID productId, UUID variantId) {
-        return product(productId).variants().stream()
-                .filter(variant -> variant.variantId().equals(variantId))
+    public ReadCache.Entry<ProductDetailView.Variant> variant(UUID productId, UUID variantId) {
+        ReadCache.Entry<ProductDetailView> product = product(productId);
+        ProductDetailView.Variant variant = product.value().variants().stream()
+                .filter(candidate -> candidate.variantId().equals(variantId))
                 .findFirst()
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
+        return new ReadCache.Entry<>(variant, product.loadedAt());
     }
 
-    public OffsetPage<ProductListItem> products(ProductListFilter filter, ProductSort sort, int page, int size) {
-        OffsetPage<ProductListItem> found = cache.get(listSpec, PRODUCTS, digest(new ListKey(filter, sort, page, size)),
+    /**
+     * 상품 목록. 자유 검색어(q)가 있거나 {@link #CACHED_PAGES} 보다 깊은 페이지는 Redis 에 넣지 않는다 — 키 수가 끝없이 늘 수 있는 조회가 나눠 쓰는
+     * Redis 의 메모리를 채워 다른 키(토큰 폐기 표식 · 대기열)를 밀어내지 않게. 그런 조회는 늘 DB 다.
+     */
+    public ReadCache.Entry<OffsetPage<ProductListItem>> products(ProductListFilter filter, ProductSort sort, int page, int size) {
+        Instant now = clock.instant();
+        if (filter.q() != null || page >= CACHED_PAGES) {
+            return new ReadCache.Entry<>(listings.list(filter, sort, page, size), now);
+        }
+        ReadCache.Entry<OffsetPage<ProductListItem>> entry = cache.entry(listSpec, PRODUCTS, digest(new ListKey(filter, sort, page, size)),
                 () -> listings.list(filter, sort, page, size));
-        return found.map(item -> item.at(clock.instant()));
+        Instant served = clock.instant();
+        return new ReadCache.Entry<>(entry.value().map(item -> item.at(served)), entry.loadedAt());
     }
 
-    public List<CategoryNode> categoryTree() {
-        return cache.get(categorySpec, CATEGORIES, "tree", categories::tree);
+    public ReadCache.Entry<List<CategoryNode>> categoryTree() {
+        return cache.entry(categorySpec, CATEGORIES, "tree", categories::tree);
     }
 
-    public OffsetPage<ReviewView> productReviews(UUID productId, int page, int size) {
-        return cache.get(reviewSpec, REVIEWS, "product:" + productId + ":" + page + ":" + size,
+    /** 상품 리뷰. {@link #CACHED_PAGES} 보다 깊은 페이지는 Redis 에 넣지 않는다(목록과 같은 이유). */
+    public ReadCache.Entry<OffsetPage<ReviewView>> productReviews(UUID productId, int page, int size) {
+        if (page >= CACHED_PAGES) {
+            return new ReadCache.Entry<>(reviews.productReviews(productId, page, size), clock.instant());
+        }
+        return cache.entry(reviewSpec, REVIEWS, "product:" + productId + ":" + page + ":" + size,
                 () -> reviews.productReviews(productId, page, size));
     }
 
-    public OffsetPage<ReviewView> visibleReviews(UUID categoryId, int page, int size) {
-        return cache.get(reviewSpec, REVIEWS, "visible:" + categoryId + ":" + page + ":" + size,
+    public ReadCache.Entry<OffsetPage<ReviewView>> visibleReviews(UUID categoryId, int page, int size) {
+        if (page >= CACHED_PAGES) {
+            return new ReadCache.Entry<>(reviews.visibleReviews(categoryId, page, size), clock.instant());
+        }
+        return cache.entry(reviewSpec, REVIEWS, "visible:" + categoryId + ":" + page + ":" + size,
                 () -> reviews.visibleReviews(categoryId, page, size));
     }
 
