@@ -103,6 +103,30 @@ class RunLifecycleTest extends BatchIntegrationTest {
     }
 
     @Test
+    void 끝나지_않고_남은_실행_중은_요청을_확인할_때_실패로_끝내_다음_실행을_막지_않는다() {
+        // 프로세스는 살아 있는데 기록이 실패해 실행 중으로 남은 행 — 기동 정리가 돌지 않는다
+        insertRunning("2 HOUR");
+
+        service.runRequested();
+        service.runScheduled();
+
+        // 제한 시간 30분(기본값) + 여유 5분
+        assertThat(runs()).extracting(run -> run.get("status")).containsExactly("FAILED", "COMPLETED");
+        assertThat(runs().getFirst()).containsEntry("error_message", "끝나지 않은 실행을 정리(시작 뒤 35분 넘음)");
+        assertThat(runs().getFirst().get("finished_at")).isNotNull();
+    }
+
+    @Test
+    void 제한_시간_안에_있는_실행_중은_정리하지_않는다() {
+        // 겹쳐 뜬 다른 batch 가 돌리는 중일 수 있다
+        insertRunning("30 MINUTE");
+
+        service.runRequested();
+
+        assertThat(runs()).singleElement().satisfies(run -> assertThat(run).containsEntry("status", "RUNNING"));
+    }
+
+    @Test
     void batch_가_다시_뜨면_가져가지_못한_요청도_실패로_끝내_다음_실행을_막지_않는다() {
         insertRun("admin", "REQUESTED");
 
@@ -124,6 +148,15 @@ class RunLifecycleTest extends BatchIntegrationTest {
                         VALUES (UUID_TO_BIN(UUID()), :by, :status, NOW(6), NOW(6))
                         """)
                 .param("by", requestedBy).param("status", status).update();
+    }
+
+    /** 이만큼 전에 시작한 실행 중 행. interval 은 MySQL INTERVAL 식(예: "2 HOUR") */
+    private void insertRunning(String interval) {
+        jdbc.sql("""
+                        INSERT INTO reconciliation_runs (id, status, started_at, cutoff_at, created_at, updated_at)
+                        VALUES (UUID_TO_BIN(UUID()), 'RUNNING', NOW(6) - INTERVAL %1$s,
+                                NOW(6) - INTERVAL %1$s - INTERVAL 45 MINUTE, NOW(6) - INTERVAL %1$s, NOW(6) - INTERVAL %1$s)
+                        """.formatted(interval)).update();
     }
 
     private List<Map<String, Object>> runs() {
