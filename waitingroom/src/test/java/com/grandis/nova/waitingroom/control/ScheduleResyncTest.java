@@ -8,6 +8,7 @@ import com.grandis.nova.waitingroom.support.RedisContainer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -37,11 +38,19 @@ class ScheduleResyncTest {
     /** 실패까지 포함해 요청을 시도한 횟수. */
     private final AtomicInteger tried = new AtomicInteger();
     private final AtomicBoolean sqsDown = new AtomicBoolean();
+    /** 켜면 보낸 뒤 표식을 세우는 쓰기가 실패한다. */
+    private final AtomicBoolean markFails = new AtomicBoolean();
 
     @BeforeEach
     void setUp() {
         redis = RedisContainer.fresh();
-        control = new ControlStore(new LuaScripts(redis), redis);
+        control = new ControlStore(new LuaScripts(redis), redis) {
+            @Override
+            public Mono<Boolean> markResyncRequested(String marker, Duration quietPeriod) {
+                return markFails.get() ? Mono.error(new QueryTimeoutException("redis write timeout"))
+                        : super.markResyncRequested(marker, quietPeriod);
+            }
+        };
     }
 
     private ScheduleResync resync(Duration periodic) {
@@ -163,23 +172,47 @@ class ScheduleResyncTest {
     }
 
     @Test
-    void 보낸_뒤_표식이_남지_않아도_이_노드는_조용한_기간_안에_다시_보내지_않는다() {
+    void 보낸_뒤_표식_쓰기가_실패해도_선점은_풀지_않고_이_노드는_조용한_기간_안에_다시_보내지_않는다() {
         ScheduleResync resync = resync(PERIODIC);
+        markFails.set(true);
 
         resync.requestIfQuiet();
-        await(() -> marked(RedisKeys.RESYNC_PERIODIC));
-        // 표식을 세우지 못해 선점만 남았다가 시한이 다한 것을 대신한다
-        redis.delete(RedisKeys.RESYNC_REQUESTED, RedisKeys.RESYNC_PERIODIC).block(WAIT);
+        await(() -> sent.size() == 1 && marked(RedisKeys.RESYNC_ATTEMPTS));
+        String claim = redis.opsForValue().get(RedisKeys.RESYNC_REQUESTED).block(WAIT);
+        assertThat(claim).as("보낸 요청의 선점은 풀지 않는다").isNotNull().isNotEqualTo("1");
+
+        // 선점 시한이 다한 것을 대신한다
+        redis.delete(RedisKeys.RESYNC_REQUESTED).block(WAIT);
         clock.advance(ScheduleResync.FIRST_QUIET.minusSeconds(1));
         resync.requestIfQuiet();
         resync.requestIfDue();
-        assertThat(has(RedisKeys.RESYNC_REQUESTED) || has(RedisKeys.RESYNC_PERIODIC)).isFalse();
+        assertThat(has(RedisKeys.RESYNC_REQUESTED) || has(RedisKeys.RESYNC_PERIODIC)).as("Redis 에 묻지도 않는다").isFalse();
         assertThat(sent).containsExactly("SCHEDULE_EMPTY");
 
+        markFails.set(false);
         clock.advance(Duration.ofSeconds(1));
         resync.requestIfQuiet();
-        await(() -> sent.size() == 2);
+        await(() -> marked(RedisKeys.RESYNC_REQUESTED));
         assertThat(sent).containsExactly("SCHEDULE_EMPTY", "SCHEDULE_EMPTY");
+    }
+
+    @Test
+    void 주기_요청을_보낸_뒤_표식_쓰기가_실패해도_주기_안에는_다시_보내지_않는다() {
+        ScheduleResync resync = resync(PERIODIC);
+        markFails.set(true);
+
+        resync.requestIfDue();
+        await(() -> sent.size() == 1);
+        redis.delete(RedisKeys.RESYNC_PERIODIC).block(WAIT);
+        clock.advance(PERIODIC.minusSeconds(1));
+        resync.requestIfDue();
+        assertThat(has(RedisKeys.RESYNC_PERIODIC)).isFalse();
+
+        markFails.set(false);
+        clock.advance(Duration.ofSeconds(1));
+        resync.requestIfDue();
+        await(() -> marked(RedisKeys.RESYNC_PERIODIC));
+        assertThat(sent).containsExactly("PERIODIC", "PERIODIC");
     }
 
     @Test
