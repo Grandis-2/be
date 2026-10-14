@@ -40,8 +40,9 @@ import java.util.function.Supplier;
  *       인기 키가 비는 순간(만료 · Redis 복구 직후) DB 로 한꺼번에 가지 않게. loader 의 예외(404 등)도 같이 받는다. 같이 받는 쪽은
  *       {@link #WAIT_FOR_LOAD} 까지만 기다린다(넘으면 503).</li>
  *   <li><b>무효화</b>: 키에 세대 번호를 넣고, 바뀐 쪽이 {@link #bumpAfterCommit} 으로 번호를 올린다 — 조건마다 다른 키(목록 · 검색)를 하나씩
- *       찾아 지우지 않는다. 올리기는 트랜잭션 커밋 뒤라 롤백된 수정으로 비우지 않는다. 올리기는 차단기를 거치지 않고, 실패하면 미뤄 두었다가 Redis 를
- *       다시 읽을 수 있게 된 첫 조회에서 올린다. 커밋 전에 DB 를 읽은 요청의 옛 값은 그때 정한 옛 세대 키에 들어가 새 세대 조회에는 안 보인다.</li>
+ *       찾아 지우지 않는다. 올리기는 트랜잭션 커밋 뒤라 롤백된 수정으로 비우지 않는다. 올리기가 실패하거나 차단기가 열려 있으면 미뤄 두었다가 이 인스턴스가
+ *       Redis 를 다시 읽는 첫 조회에서 올린다 — 미룬 것은 메모리에만 있어 그 전에 인스턴스가 내려가면 사라지고, 그때 최악은 그 캐시의 TTL 이다.
+ *       커밋 전에 DB 를 읽은 요청의 옛 값은 그때 정한 옛 세대 키에 들어가 새 세대 조회에는 안 보인다.</li>
  *   <li><b>시계</b>: 값의 만료는 앱 벽시계로 정한 절대 시각(PXAT)이다 — 앱 시계가 Redis 보다 빠르면 그만큼 더 살고, 느리면 덜 산다. 그래서 신선도의
  *       최악은 TTL + 앱 · Redis 시계 차다(둘 다 AWS 시간 동기화를 쓴다는 가정).</li>
  *   <li><b>배포</b>: 값은 JSON 이고 키에 그 타입 모양의 지문({@link Shape})을 넣는다. 모양이 다른 버전(blue/green 이 겹치는 동안)은 서로의 키를
@@ -65,8 +66,6 @@ public final class ReadCache {
     static final Duration CLOCK_SKEW_MARGIN = Duration.ofSeconds(2);
     /** 캐시 하나가 인스턴스 하나에서 Redis 에 동시에 들고 있는 양의 기본 상한({@link StoreBudget}). */
     static final long DEFAULT_BUDGET_BYTES = 4L * 1024 * 1024;
-    /** 세대 올리기를 바로 다시 해 보는 횟수 — 넘으면 미뤄 둔다. */
-    static final int BUMP_ATTEMPTS = 2;
     /** Redis 에 넣는 모양({@link Stored})의 버전 — 키에 들어간다. */
     static final String FORMAT = "f1";
 
@@ -239,35 +238,43 @@ public final class ReadCache {
     }
 
     /**
-     * 세대를 올린다. 차단기를 거치지 않는다 — 차단기는 인스턴스마다 따로라, 이 인스턴스만 열려 있어도 올리기를 버리면 다른 인스턴스가 옛 값을
-     * TTL 동안 낸다. 두 번 해 보고 안 되면 {@link #pendingBumps} 에 두고 Redis 를 다시 읽을 수 있게 된 첫 조회에서 올린다(ERROR 로그).
-     * 시간 초과는 결과를 모르는 실패다 — 서버가 늦게 실행해 한 번 더 오를 수 있다(실측: 멈춘 Redis 를 풀자 시간 초과된 두 번이 다 들어갔다).
+     * 세대를 올린다. 실패를 버리지 않는다 — 차단기는 인스턴스마다 따로라, 이 인스턴스에서 실패한 올리기를 버리면 다른 인스턴스가 옛 값을 TTL 동안 낸다.
+     * 한 번 해 보고 안 되면 {@link #pendingBumps} 에 두고 이 인스턴스가 Redis 를 다시 읽는 첫 조회에서 올린다(ERROR 로그). 차단기가 열려 있으면
+     * 부르지 않고 바로 미룬다 — 커밋 뒤 콜백은 DB 커넥션을 쥔 채 돌므로(spring-tx 는 afterCommit 뒤에 커넥션을 돌려준다) 멈춘 Redis 를 기다리지 않게.
+     * 시간 초과는 결과를 모르는 실패다 — 서버가 늦게 실행해 한 번 더 오를 수 있다(실측: 멈춘 Redis 를 풀자 시간 초과된 INCR 이 들어갔다).
      * 더 오르는 것은 값을 한 번 더 채울 뿐이라 그대로 둔다.
      */
     private void bump(String generation) {
-        RuntimeException last = null;
-        for (int attempt = 0; attempt < BUMP_ATTEMPTS; attempt++) {
-            try {
-                redis.opsForValue().increment(prefix + "gen:" + generation);
-                pendingBumps.remove(generation);
-                return;
-            } catch (RuntimeException e) {
-                last = e;
-            }
+        if (!breaker.tryAcquirePermission()) {
+            pendingBumps.add(generation);
+            log.error("읽기 캐시 차단기가 열려 세대 올리기를 미룬다 — 그때까지 옛 값이 보일 수 있다 generation={}", generation);
+            return;
         }
-        pendingBumps.add(generation);
-        log.error("읽기 캐시 세대를 올리지 못해 나중에 다시 올린다 — 그때까지 옛 값이 보일 수 있다 generation={}", generation, last);
+        breaker.releasePermission();   // 허락만 물었다 — 결과는 차단기에 세지 않는다
+        try {
+            redis.opsForValue().increment(prefix + "gen:" + generation);
+            pendingBumps.remove(generation);
+        } catch (RuntimeException e) {
+            pendingBumps.add(generation);
+            log.error("읽기 캐시 세대를 올리지 못해 나중에 다시 올린다 — 그때까지 옛 값이 보일 수 있다 generation={}", generation, e);
+        }
     }
 
-    /** 미룬 세대를 올린다(Redis 를 방금 읽은 조회에서). generation 을 이번에 올렸으면 true. */
+    /**
+     * 미룬 세대를 올린다(Redis 를 방금 읽은 조회에서). 집합에서 먼저 뺀 스레드만 올린다 — 복구 직후 여러 조회가 겹쳐도 세대마다 한 번. 실패하면 다시 넣는다.
+     * generation 을 이번에 올렸으면 true.
+     */
     private boolean retryPendingBumps(String generation) {
         boolean bumpedThis = false;
         for (String pending : List.copyOf(pendingBumps)) {
+            if (!pendingBumps.remove(pending)) {
+                continue;   // 다른 조회가 가져갔다
+            }
             try {
                 redis.opsForValue().increment(prefix + "gen:" + pending);
-                pendingBumps.remove(pending);
                 bumpedThis |= pending.equals(generation);
             } catch (RuntimeException e) {
+                pendingBumps.add(pending);
                 return bumpedThis;   // 아직 안 된다 — 다음 조회에서
             }
         }
@@ -279,8 +286,10 @@ public final class ReadCache {
      * 남아 예산이 찬 인스턴스가 그동안 새로 넣지 못한다. 지우지 못하면(Redis 실패) 몫도 남겨 둔다(값이 Redis 에 남아 있을 수 있다).
      */
     private void releaseOlderGenerations(Spec<?> spec, String generation, long current) {
-        Long seen = seenGenerations.put(spec.name() + "|" + generation, current);
-        if (seen == null || seen >= current) {
+        String seenKey = spec.name() + "|" + generation;
+        Long seen = seenGenerations.get(seenKey);
+        // 늦게 온 조회가 옛 번호로 되돌리지 않게 큰 쪽만 남긴다
+        if (seenGenerations.merge(seenKey, current, Math::max) != current || seen == null || seen >= current) {
             return;
         }
         List<StoreBudget.Hold> older = spec.budget().olderThan(generation, current);
@@ -433,11 +442,13 @@ public final class ReadCache {
      *   <li>차지할 양은 {@link #charge} — Valkey 9.1.2 에서 MEMORY USAGE 로 잰 값(키 · 값 외에 작은 값은 40~60B, 60KB 는 약 9%, 200KB 는 약 15%)보다
      *       크게 잡는다. 큰 값의 몫은 할당기(jemalloc)의 크기 구간이 두 배마다 4칸이라 최대 약 25% 다.</li>
      *   <li>값은 절대 만료 시각(PXAT = 앱 벽시계 지금 + 남은 TTL)으로 넣고, 몫은 넣기 전에 같은 시간 + {@link #CLOCK_SKEW_MARGIN} 만큼 잡는다 — 서버가
-     *       SET 을 늦게 처리해도 값은 그 시각에 사라지므로, 결과를 모르는 실패(시간 초과)에서도 몫이 값보다 먼저 풀리지 않는다. 앱과 Redis 의 시계 차가
+     *       SET 을 늦게 처리해도 값은 그 시각에 사라지므로, 결과를 모르는 실패(시간 초과)에서도 몫이 값보다 먼저 풀리지 않는다(세대가 오를 때의 예외는 아래). 앱과 Redis 의 시계 차가
      *       여유보다 크면 이 보장이 깨진다(둘 다 AWS 시간 동기화를 쓴다는 가정 — 운영에서 재지는 않았다). 차단기가 막아 보내지 않았을 때만 바로 돌려준다.</li>
      *   <li>경과 시간은 단조 증가 시간원(System.nanoTime)으로 잰다 — 벽시계를 앞으로 맞춰도 살아 있는 값의 몫이 풀리지 않는다. 응답 신선도(loadedAt)는
      *       벽시계로 따로 잰다.</li>
-     *   <li>TTL 전에 지워지거나 밀려난 값은 만료 시각까지 그대로 센다(보수적). 같은 키를 다시 넣으면 둘 다 센다(보수적).</li>
+     *   <li>TTL 전에 지워지거나 밀려난 값은 만료 시각까지 그대로 센다(보수적). 같은 키를 다시 넣으면 둘 다 센다(보수적). 세대가 오르면 이 인스턴스가
+     *       옛 세대로 넣은 키를 지우고 그 몫을 돌려준다 — 그 순간 진행 중이던 옛 세대 저장(지운 뒤에 SET 이 들어간 것)은 값이 TTL 까지 남는데 몫은
+     *       이미 돌려줘 그만큼 덜 센다. 크기는 세대가 오르는 순간 진행 중이던 저장 수만큼이다.</li>
      *   <li><b>인스턴스 하나의 상한이다.</b> 재시작하면 0 에서 다시 센다 — 그때 Redis 에 남은 옛 값은 세지 않는다. 그래서 서비스 전체 점유는
      *       상한 × (떠 있는 인스턴스 + TTL 안에 내려간 인스턴스) 로 잡는다(배포 중 겹침 포함).</li>
      * </ul>
