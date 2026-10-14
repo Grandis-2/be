@@ -45,15 +45,10 @@ public record ProductDetailView(
         Images images
 ) {
 
-    /** 시각으로 정하는 칸(회차의 접수 단계)을 now 로 다시 계산한 사본 — 캐시에 든 값이 만든 때의 단계를 내보내지 않게. */
-    public ProductDetailView at(Instant now) {
-        if (campaign == null) {
-            return this;
-        }
+    /** 실시간 칸(회차 · 옵션의 가용 수량 · 품절)만 바꾼 사본 — 캐시해 둔 본문에 요청마다 채운다(ProductDetailService#withLiveParts). */
+    public ProductDetailView withLive(Campaign liveCampaign, List<Variant> liveVariants, boolean liveSoldOut) {
         return new ProductDetailView(productId, categoryId, saleMode, title, brand, modelName, description, imageUrl, status, visible,
-                basePrice, discountRate, warranty, sellable, soldOut,
-                new Campaign(campaign.opensAt(), campaign.closesAt(), PreorderSaleStatus.of(campaign.opensAt(), campaign.closesAt(), now)),
-                optionAxes, variants, images);
+                basePrice, discountRate, warranty, sellable, liveSoldOut, liveCampaign, optionAxes, liveVariants, images);
     }
 
     public record Warranty(boolean offered, BigDecimal surcharge) {
@@ -90,6 +85,10 @@ public record ProductDetailView(
             SaleStatus status,
             Integer availableQuantity
     ) {
+
+        public Variant withAvailableQuantity(Integer quantity) {
+            return new Variant(variantId, sku, title, price, listPrice, filterAttributes, selections, status, quantity);
+        }
     }
 
     /**
