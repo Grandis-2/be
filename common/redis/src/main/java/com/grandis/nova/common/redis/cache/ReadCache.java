@@ -58,6 +58,8 @@ public final class ReadCache {
     static final Duration OPEN_FOR = Duration.ofSeconds(10);
     /** 같은 키의 진행 중 조회를 같이 받는 쪽이 기다리는 상한. */
     static final Duration WAIT_FOR_LOAD = Duration.ofSeconds(5);
+    /** 앱과 Redis 의 시계 차 여유 — 저장 몫을 값의 절대 만료보다 이만큼 더 잡는다({@link StoreBudget}). */
+    static final Duration CLOCK_SKEW_MARGIN = Duration.ofSeconds(2);
     /** 캐시 하나가 인스턴스 하나에서 Redis 에 동시에 들고 있는 양의 기본 상한({@link StoreBudget}). */
     static final long DEFAULT_BUDGET_BYTES = 4L * 1024 * 1024;
     /** Redis 에 넣는 모양({@link Stored})의 버전 — 키에 들어간다. */
@@ -223,6 +225,11 @@ public final class ReadCache {
         return breaker.getState();
     }
 
+    /** 시험용 — 차단기를 직접 연다. */
+    CircuitBreaker breaker() {
+        return breaker;
+    }
+
     private long currentGeneration(String generation) {
         String value = redis.opsForValue().get(prefix + "gen:" + generation);
         return value == null ? 0 : Long.parseLong(value);
@@ -282,20 +289,25 @@ public final class ReadCache {
         // 이 인스턴스가 이 캐시로 들고 있는 양이 상한을 넘으면 넣지 않는다(DB 로 답한다) — 나눠 쓰는 Redis 의 다른 키(토큰 폐기 표식 · 대기열)를 덜 밀어내게
         long charge = StoreBudget.charge(key.getBytes(java.nio.charset.StandardCharsets.UTF_8).length,
                 body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
-        StoreBudget.Hold hold = spec.budget().reserve(charge);
+        // 만료는 절대 시각(PXAT)으로 준다 — 서버가 SET 을 늦게 처리해도 이 시각에 사라진다(늦게 처리된 만큼 더 살지 않는다).
+        // 몫은 지금부터 같은 시간 + 시계 차 여유만큼 잡는다 — 결과를 모르는 실패(시간 초과)에서도 따로 셀 것이 없다
+        long expiresAtEpochMillis = clock.millis() + left.toMillis();
+        StoreBudget.Hold hold = spec.budget().reserve(charge, left.plus(CLOCK_SKEW_MARGIN));
         if (hold == null) {
             spec.budget().warnSkipped(spec.name());
             return;
         }
+        byte[] keyBytes = key.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] bodyBytes = body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         try {
-            breaker.executeRunnable(() -> redis.opsForValue().set(key, body, left));
-            spec.budget().confirm(hold, left);
+            breaker.executeRunnable(() -> redis.execute((org.springframework.data.redis.core.RedisCallback<Boolean>) connection ->
+                    connection.stringCommands().set(keyBytes, bodyBytes,
+                            org.springframework.data.redis.core.types.Expiration.unixTimestamp(expiresAtEpochMillis, TimeUnit.MILLISECONDS),
+                            org.springframework.data.redis.connection.RedisStringCommands.SetOption.upsert())));
         } catch (CallNotPermittedException e) {
             spec.budget().release(hold);   // 차단기가 막아 보내지 않았다
         } catch (RuntimeException e) {
-            // 시간 초과 등 결과를 모른다 — 들어갔다고 보고 지금부터 TTL 동안 잡아 둔다
-            spec.budget().confirm(hold, left);
-            log.warn("읽기 캐시 Redis 호출 실패 — 캐시 없이 간다: {}", e.toString());
+            log.warn("읽기 캐시 Redis 호출 실패 — 캐시 없이 간다: {}", e.toString());   // 결과 모름 — 몫은 잡은 그대로(절대 만료라 그 안에 사라진다)
         }
     }
 
@@ -347,8 +359,9 @@ public final class ReadCache {
      * <ul>
      *   <li>차지할 양은 {@link #charge} — Valkey 9.1.2 에서 MEMORY USAGE 로 잰 값(키 · 값 외에 작은 값은 40~60B, 60KB 는 약 9%, 200KB 는 약 15%)보다
      *       크게 잡는다. 큰 값의 몫은 할당기(jemalloc)의 크기 구간이 두 배마다 4칸이라 최대 약 25% 다.</li>
-     *   <li>넣기 전에 몫을 잡고(풀리지 않음), SET 응답을 받은 뒤부터 TTL 동안 센다 — Redis 의 만료는 SET 을 처리한 때부터라 몫이 먼저 풀리지 않는다.
-     *       결과를 모르는 실패(시간 초과)도 들어갔다고 보고 센다. 차단기가 막아 보내지 않았을 때만 바로 돌려준다.</li>
+     *   <li>값은 절대 만료 시각(PXAT = 앱 벽시계 지금 + 남은 TTL)으로 넣고, 몫은 넣기 전에 같은 시간 + {@link #CLOCK_SKEW_MARGIN} 만큼 잡는다 — 서버가
+     *       SET 을 늦게 처리해도 값은 그 시각에 사라지므로, 결과를 모르는 실패(시간 초과)에서도 몫이 값보다 먼저 풀리지 않는다. 앱과 Redis 의 시계 차가
+     *       여유보다 크면 이 보장이 깨진다(둘 다 AWS 시간 동기화를 쓴다는 가정 — 운영에서 재지는 않았다). 차단기가 막아 보내지 않았을 때만 바로 돌려준다.</li>
      *   <li>경과 시간은 단조 증가 시간원(System.nanoTime)으로 잰다 — 벽시계를 앞으로 맞춰도 살아 있는 값의 몫이 풀리지 않는다. 응답 신선도(loadedAt)는
      *       벽시계로 따로 잰다.</li>
      *   <li>TTL 전에 지워지거나 밀려난 값은 만료 시각까지 그대로 센다(보수적). 같은 키를 다시 넣으면 둘 다 센다(보수적).</li>
@@ -363,7 +376,7 @@ public final class ReadCache {
 
         private final long capacity;
         private final LongSupplier nanos;
-        private final java.util.PriorityQueue<Hold> live = new java.util.PriorityQueue<>(java.util.Comparator.comparingLong(h -> h.expiresAtNanos));
+        private final java.util.PriorityQueue<Hold> live = new java.util.PriorityQueue<>((a, b) -> Long.compare(a.expiresAtNanos - b.expiresAtNanos, 0));
         private long used;
         private long lastWarnNanos = Long.MIN_VALUE;
 
@@ -382,26 +395,18 @@ public final class ReadCache {
         }
 
         /**
-         * 넣기 전에 bytes 만큼 잡는다. 상한을 넘으면 null. 잡은 몫은 {@link #confirm} 이나 {@link #release} 전까지 풀리지 않는다 — SET 이 늦게
-         * 닿아도 Redis 의 실제 만료보다 먼저 몫이 풀리지 않게.
+         * 지금부터 holdFor 동안 bytes 를 잡는다. 상한을 넘으면 null. 만료 시각은 잡을 때 정한다 — 미확정 상태가 없어(특별한 값으로 표시하지 않는다)
+         * 음수 nanoTime 에서 넘침으로 몫이 풀리는 일이 없다. 넣는 값의 Redis 만료가 절대 시각이라, 그 시각 + 시계 차 여유를 holdFor 로 준다.
          */
-        synchronized Hold reserve(long bytes) {
+        synchronized Hold reserve(long bytes, Duration holdFor) {
             purge();
             if (used + bytes > capacity) {
                 return null;
             }
-            Hold hold = new Hold(bytes);
+            Hold hold = new Hold(bytes, nanos.getAsLong() + holdFor.toNanos());
             live.add(hold);
             used += bytes;
             return hold;
-        }
-
-        /** SET 응답을 받았다(또는 결과를 모른다) — 지금부터 ttl 동안 잡아 둔다. Redis 의 만료는 SET 을 처리한 때부터라 이보다 늦지 않다. */
-        synchronized void confirm(Hold hold, Duration ttl) {
-            if (live.remove(hold)) {
-                hold.expiresAtNanos = nanos.getAsLong() + ttl.toNanos();
-                live.add(hold);
-            }
         }
 
         /** 보내지 않은 것이 확실하다(차단기가 막음) — 바로 돌려준다. */
@@ -423,13 +428,14 @@ public final class ReadCache {
             }
         }
 
-        /** 잡은 몫 하나. 확정 전에는 만료 시각이 없다(풀리지 않는다). */
+        /** 잡은 몫 하나. */
         static final class Hold {
             private final long bytes;
-            private long expiresAtNanos = Long.MAX_VALUE;
+            private final long expiresAtNanos;
 
-            private Hold(long bytes) {
+            private Hold(long bytes, long expiresAtNanos) {
                 this.bytes = bytes;
+                this.expiresAtNanos = expiresAtNanos;
             }
         }
 

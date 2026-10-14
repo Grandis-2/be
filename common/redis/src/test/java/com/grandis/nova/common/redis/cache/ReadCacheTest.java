@@ -334,41 +334,73 @@ class ReadCacheTest {
     }
 
     @Test
-    @DisplayName("만료 전 값은 계속 센다 — 예산 400 · TTL 10초에서 0초 400 을 넣으면 9초의 360 은 거절, 10초 뒤에는 받는다(토큰 버킷이면 받았다)")
+    @DisplayName("만료 전 값은 계속 센다 — 예산 400 · 10초 잡기에서 0초 400 을 잡으면 9초의 360 은 거절, 10초 뒤에는 받는다(토큰 버킷이면 받았다)")
     void liveBytesStayCountedUntilExpiry() {
         java.util.concurrent.atomic.AtomicLong nanos = new java.util.concurrent.atomic.AtomicLong();
         ReadCache.StoreBudget budget = new ReadCache.StoreBudget(400, nanos::get);
-        budget.confirm(budget.reserve(400), Duration.ofSeconds(10));
+        assertThat(budget.reserve(400, Duration.ofSeconds(10))).isNotNull();
         nanos.addAndGet(Duration.ofSeconds(9).toNanos());
-        assertThat(budget.reserve(360)).isNull();
+        assertThat(budget.reserve(360, Duration.ofSeconds(10))).isNull();
         nanos.addAndGet(Duration.ofSeconds(1).toNanos());
-        assertThat(budget.reserve(360)).isNotNull();
+        assertThat(budget.reserve(360, Duration.ofSeconds(10))).isNotNull();
         assertThat(budget.used()).isEqualTo(360);
     }
 
     @Test
-    @DisplayName("잡은 몫은 SET 응답(확정) 전에는 아무리 오래돼도 풀리지 않고, 확정한 때부터 TTL 을 센다 — SET 이 늦게 닿아도 Redis 만료보다 먼저 풀리지 않게")
-    void reservedBytesWaitForConfirm() {
-        java.util.concurrent.atomic.AtomicLong nanos = new java.util.concurrent.atomic.AtomicLong();
+    @DisplayName("nanoTime 이 음수이거나 만료 시각이 넘쳐도 잡은 몫이 바로 풀리지 않는다 — 차이로 비교한다")
+    void negativeNanoTimeKeepsHolds() {
+        java.util.concurrent.atomic.AtomicLong nanos = new java.util.concurrent.atomic.AtomicLong(-1);
         ReadCache.StoreBudget budget = new ReadCache.StoreBudget(400, nanos::get);
-        ReadCache.StoreBudget.Hold hold = budget.reserve(400);
-        nanos.addAndGet(Duration.ofSeconds(30).toNanos());   // SET 이 30초 늦었다
-        assertThat(budget.reserve(1)).as("확정 전에는 풀리지 않는다").isNull();
+        assertThat(budget.reserve(400, Duration.ofSeconds(10))).isNotNull();
+        assertThat(budget.reserve(400, Duration.ofSeconds(10))).isNull();
+        nanos.set(Long.MIN_VALUE + 5);   // 아주 작은 음수에서 시작한 경우
+        ReadCache.StoreBudget fromMin = new ReadCache.StoreBudget(400, nanos::get);
+        assertThat(fromMin.reserve(400, Duration.ofSeconds(10))).isNotNull();
+        assertThat(fromMin.reserve(1, Duration.ofSeconds(10))).isNull();
+        nanos.addAndGet(Duration.ofSeconds(10).toNanos());
+        assertThat(fromMin.reserve(400, Duration.ofSeconds(10))).isNotNull();
 
-        budget.confirm(hold, Duration.ofSeconds(10));
-        nanos.addAndGet(Duration.ofSeconds(9).toNanos());
-        assertThat(budget.reserve(1)).as("확정 9초 뒤 — 아직 살아 있다").isNull();
-        nanos.addAndGet(Duration.ofSeconds(1).toNanos());
-        assertThat(budget.reserve(1)).isNotNull();
+        nanos.set(Long.MAX_VALUE - 5);   // 만료 시각이 넘쳐 음수가 되는 자리
+        ReadCache.StoreBudget nearMax = new ReadCache.StoreBudget(400, nanos::get);
+        assertThat(nearMax.reserve(400, Duration.ofSeconds(10))).isNotNull();
+        assertThat(nearMax.reserve(1, Duration.ofSeconds(10))).isNull();
     }
 
     @Test
-    @DisplayName("보내지 않은 것이 확실하면(release) 몫을 바로 돌려준다")
-    void releaseReturnsTheHold() {
-        ReadCache.StoreBudget budget = new ReadCache.StoreBudget(400, System::nanoTime);
-        budget.release(budget.reserve(400));
-        assertThat(budget.used()).isZero();
-        assertThat(budget.reserve(400)).isNotNull();
+    @DisplayName("값은 절대 만료 시각(PXAT)으로 들어간다 — 만료 시각이 넣은 때의 벽시계 + 남은 TTL 이라 서버가 늦게 처리해도 늘지 않는다")
+    void storedWithAbsoluteExpiry() throws Exception {
+        long before = System.currentTimeMillis();
+        cache.get(items, "products", "abs", () -> item("abs", new AtomicInteger()));
+        long after = System.currentTimeMillis();
+        String key = onlyKey("svc:cache:item:*abs");
+        long expiresAt = Long.parseLong(REDIS.execInContainer("valkey-cli", "PEXPIRETIME", key).getStdout().strip());
+        assertThat(expiresAt).isBetween(before + 29_000, after + 30_000);
+    }
+
+    @Test
+    @DisplayName("서버가 SET 을 늦게 처리해도(CLIENT PAUSE WRITE) 만료 시각은 넣으려던 때 기준 — 늦은 만큼 더 살지 않는다")
+    void lateExecutedSetDoesNotLiveLonger() throws Exception {
+        REDIS.execInContainer("valkey-cli", "CLIENT", "PAUSE", "1500", "WRITE");   // 읽기는 되고 쓰기만 1.5초 멈춘다
+        long before = System.currentTimeMillis();
+        cache.get(items, "products", "late", () -> item("late", new AtomicInteger()));   // SET 은 300ms 에 시간 초과
+        Thread.sleep(2_000);   // 멈춤이 풀리고 서버가 밀린 SET 을 처리했다
+        String key = onlyKey("svc:cache:item:*late");
+        long expiresAt = Long.parseLong(REDIS.execInContainer("valkey-cli", "PEXPIRETIME", key).getStdout().strip());
+        assertThat(expiresAt).as("상대 TTL(PX)이면 처리 시각(+1.5초)부터 30초").isLessThanOrEqualTo(before + 30_000 + 500);
+    }
+
+    @Test
+    @DisplayName("저장 직전에 차단기가 열려 보내지 않았으면 몫을 바로 돌려준다")
+    void releasedWhenBreakerBlocksTheWrite() {
+        ReadCache.Spec<Item> spec = cache.spec("blocked", Item.class, Duration.ofSeconds(30), 10_000);
+        Item value = cache.get(spec, "products", "x", () -> {
+            cache.breaker().transitionToForcedOpenState();   // 읽는 사이 차단기가 열렸다
+            return item("x", new AtomicInteger());
+        });
+        assertThat(value.name()).isEqualTo("x");
+        assertThat(spec.budget().used()).isZero();
+        cache.breaker().transitionToClosedState();
+        assertThat(redis.keys("svc:cache:blocked:*")).isEmpty();
     }
 
     @Test
