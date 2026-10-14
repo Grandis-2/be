@@ -25,6 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /**
@@ -56,6 +57,8 @@ public final class ReadCache {
     static final Duration OPEN_FOR = Duration.ofSeconds(10);
     /** 같은 키의 진행 중 조회를 같이 받는 쪽이 기다리는 상한. */
     static final Duration WAIT_FOR_LOAD = Duration.ofSeconds(5);
+    /** 캐시 하나가 인스턴스 하나에서 Redis 에 들고 있는 양의 기본 상한. */
+    static final long DEFAULT_BUDGET_BYTES = 4L * 1024 * 1024;
     /** Redis 에 넣는 모양({@link Stored})의 버전 — 키에 들어간다. */
     static final String FORMAT = "f1";
 
@@ -104,20 +107,33 @@ public final class ReadCache {
         return new ReadCache(null, json, service, CircuitBreakerConfig.ofDefaults(), false, Clock.systemUTC(), WAIT_FOR_LOAD);
     }
 
-    /** 캐시 하나의 이름 · 값 타입 · TTL. 이름과 타입 지문이 키에 들어간다. */
+    /** 캐시 하나의 이름 · 값 타입 · TTL. 이름과 타입 지문이 키에 들어간다. 메모리 예산은 {@link #DEFAULT_BUDGET_BYTES}. */
     public <T> Spec<T> spec(String name, Class<T> type, Duration ttl) {
-        return spec(name, json.constructType(type), ttl);
+        return spec(name, json.constructType(type), ttl, DEFAULT_BUDGET_BYTES);
     }
 
     public <T> Spec<T> spec(String name, tools.jackson.core.type.TypeReference<T> type, Duration ttl) {
-        return spec(name, json.constructType(type), ttl);
+        return spec(name, json.constructType(type), ttl, DEFAULT_BUDGET_BYTES);
     }
 
-    private <T> Spec<T> spec(String name, JavaType type, Duration ttl) {
+    <T> Spec<T> spec(String name, Class<T> type, Duration ttl, long budgetBytes) {
+        return spec(name, json.constructType(type), ttl, budgetBytes);
+    }
+
+    private <T> Spec<T> spec(String name, JavaType type, Duration ttl, long budgetBytes) {
         if (ttl.isNegative() || ttl.isZero()) {
             throw new IllegalArgumentException("ttl must be positive: " + ttl);
         }
-        return new Spec<>(name, type, Shape.fingerprint(type), ttl);
+        return new Spec<>(name, type, Shape.fingerprint(type), ttl, new ByteBudget(budgetBytes, ttl, clock));
+    }
+
+    /**
+     * 캐시하지 않는 조회 — loader 로 답하고 시작 시각을 읽은 시각으로 준다(캐시를 거친 값과 같은 기준으로 max-age 를 정하게).
+     * 키가 끝없이 늘 수 있는 조회(자유 검색어 · 깊은 페이지)처럼 쓰는 쪽이 넣지 않기로 한 조회에 쓴다.
+     */
+    public <T> Entry<T> uncached(Supplier<T> loader) {
+        Instant start = clock.instant();
+        return new Entry<>(loader.get(), start);
     }
 
     /** {@link #entry} 의 값만. */
@@ -125,19 +141,24 @@ public final class ReadCache {
         return entry(spec, generation, id, loader).value();
     }
 
+    /** null 이 아닌 값은 넣는다. */
+    public <T> Entry<T> entry(Spec<T> spec, String generation, String id, Supplier<T> loader) {
+        return entry(spec, generation, id, loader, value -> true);
+    }
+
     /**
      * 세대 {@code generation} 의 키 {@code id} 값과 그 값을 DB 에서 읽은 시각. 없으면 loader 로 만들어 넣는다. loader 가 null 을 주면 넣지 않는다.
      * 세대 번호를 못 읽으면(Redis 장애) 캐시를 건너뛰고 loader 로 답한다 — 아무 번호나 쓰면 옛 값을 줄 수 있다.
      * 읽은 시각은 응답의 HTTP 캐시 시간({@link Entry#remaining})을 정하는 데 쓴다 — 앞단 캐시가 이 값을 TTL 넘게 들고 있지 않게.
      */
-    public <T> Entry<T> entry(Spec<T> spec, String generation, String id, Supplier<T> loader) {
+    public <T> Entry<T> entry(Spec<T> spec, String generation, String id, Supplier<T> loader, Predicate<T> storable) {
         if (!enabled) {
-            return new Entry<>(loader.get(), clock.instant());
+            return uncached(loader);
         }
         Long current = call(() -> currentGeneration(generation));
         if (current == null) {
             // 세대를 모르면 장애 중인 요청끼리만 같이 받는다 — 정상 세대의 진행 중 조회와 섞이지 않게
-            return load("down|" + spec.name() + ":" + generation + ":" + id, null, spec, loader);
+            return load("down|" + spec.name() + ":" + generation + ":" + id, null, spec, loader, storable);
         }
         String key = prefix + spec.name() + ":" + FORMAT + "." + spec.fingerprint() + ":" + generation + "." + current + ":" + id;
         String cached = call(() -> redis.opsForValue().get(key));
@@ -150,7 +171,7 @@ public final class ReadCache {
             }
         }
         // 완성된 키(세대 번호 포함)로 줄 세운다 — 세대가 오른 뒤 온 요청이 옛 세대의 진행 중 조회를 같이 받지 않게
-        return load(key, key, spec, loader);
+        return load(key, key, spec, loader, storable);
     }
 
     /**
@@ -207,7 +228,7 @@ public final class ReadCache {
      * 넘었다고 각자 DB 로 가게 풀지 않는다(DB 가 느린 때 부하가 그만큼 는다). 진행 중인 조회는 그대로 두고 끝나면 자리가 빈다.
      */
     @SuppressWarnings("unchecked")
-    private <T> Entry<T> load(String slot, String key, Spec<T> spec, Supplier<T> loader) {
+    private <T> Entry<T> load(String slot, String key, Spec<T> spec, Supplier<T> loader, Predicate<T> storable) {
         CompletableFuture<Object> mine = new CompletableFuture<>();
         CompletableFuture<Object> running = loading.putIfAbsent(slot, mine);
         if (running != null) {
@@ -227,7 +248,7 @@ public final class ReadCache {
             Instant loadedAt = clock.instant();   // 읽기 전 시각 — 응답의 나이를 짧게 잡지 않게
             Entry<T> entry = new Entry<>(loader.get(), loadedAt);
             mine.complete(entry);
-            if (key != null && entry.value() != null) {
+            if (key != null && entry.value() != null && storable.test(entry.value())) {
                 store(key, spec, entry);
             }
             return entry;
@@ -250,6 +271,11 @@ public final class ReadCache {
         // 남은 시간만큼만 둔다 — 읽는 데 걸린 시간도 TTL 에서 뺀다
         Duration left = spec.ttl().minus(Duration.between(entry.loadedAt(), clock.instant()));
         if (left.toMillis() <= 0) {
+            return;
+        }
+        // 메모리 예산을 넘으면 넣지 않는다(DB 로만 답한다) — 나눠 쓰는 Redis 의 다른 키(토큰 폐기 표식 · 대기열)를 밀어내지 않게
+        if (!spec.budget().tryTake(body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)) {
+            spec.budget().warnSkipped(spec.name());
             return;
         }
         call(() -> {
@@ -295,7 +321,54 @@ public final class ReadCache {
 
     /**
      * @param fingerprint 값 타입 모양의 지문 — 레코드 칸 이름 · 타입, enum 상수가 바뀌면 달라진다
+     * @param budget      이 캐시가 이 인스턴스에서 Redis 에 쓰는 양의 상한
      */
-    public record Spec<T>(String name, JavaType type, String fingerprint, Duration ttl) {
+    public record Spec<T>(String name, JavaType type, String fingerprint, Duration ttl, ByteBudget budget) {
+    }
+
+    /**
+     * 캐시 하나가 Redis 에 쓰는 바이트의 상한(토큰 버킷). 담을 수 있는 양은 budgetBytes 이고 TTL 동안 그만큼 다시 찬다 — 넣은 값은 TTL 이 지나면
+     * 사라지므로, 이 인스턴스가 이 캐시로 Redis 에 동시에 들고 있는 양이 대략 budgetBytes 를 넘지 않는다. 입력 조합(필터 · 페이지)이 아무리 많아도
+     * 메모리가 이 상한에 묶인다. 넘친 값은 넣지 않고 DB 로 답한다.
+     */
+    static final class ByteBudget {
+
+        private final long capacity;
+        private final double refillPerMilli;
+        private final Clock clock;
+        private double tokens;
+        private long lastRefill;
+        private long lastWarn;
+
+        ByteBudget(long capacity, Duration ttl, Clock clock) {
+            if (capacity <= 0) {
+                throw new IllegalArgumentException("budget must be positive: " + capacity);
+            }
+            this.capacity = capacity;
+            this.refillPerMilli = (double) capacity / Math.max(1, ttl.toMillis());
+            this.clock = clock;
+            this.tokens = capacity;
+            this.lastRefill = clock.millis();
+        }
+
+        synchronized boolean tryTake(long bytes) {
+            long now = clock.millis();
+            tokens = Math.min(capacity, tokens + (now - lastRefill) * refillPerMilli);
+            lastRefill = now;
+            if (bytes > tokens) {
+                return false;
+            }
+            tokens -= bytes;
+            return true;
+        }
+
+        /** 예산을 넘어 넣지 않았다 — 분마다 한 번만 남긴다. */
+        synchronized void warnSkipped(String name) {
+            long now = clock.millis();
+            if (now - lastWarn >= 60_000) {
+                lastWarn = now;
+                log.warn("읽기 캐시 메모리 예산({} bytes)을 넘어 넣지 않았다 — DB 로 답한다 cache={}", capacity, name);
+            }
+        }
     }
 }

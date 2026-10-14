@@ -320,6 +320,40 @@ class ReadCacheTest {
     }
 
     @Test
+    @DisplayName("메모리 예산을 넘는 값은 넣지 않고 loader 로 답한다 — TTL 동안 예산만큼 다시 찬다")
+    void budgetCapsWhatIsStored() throws Exception {
+        ReadCache.Spec<Item> small = cache.spec("small", Item.class, Duration.ofSeconds(1), 400);
+        AtomicInteger loads = new AtomicInteger();
+        cache.get(small, "products", "a", () -> item("a", loads));   // 한 값이 약 200 바이트
+        cache.get(small, "products", "b", () -> item("b", loads));
+        cache.get(small, "products", "c", () -> item("c", loads));   // 예산 초과 — 넣지 않는다
+        assertThat(redis.keys("svc:cache:small:*")).hasSize(2);
+        cache.get(small, "products", "c", () -> item("c", loads));
+        assertThat(loads).as("넣지 못한 c 는 다시 DB").hasValue(4);
+
+        Thread.sleep(1_100);   // TTL 이 지나 예산이 다시 찼다
+        cache.get(small, "products", "c", () -> item("c", loads));
+        assertThat(redis.keys("svc:cache:small:*")).contains(onlyKeyMatching("svc:cache:small:*c"));
+    }
+
+    @Test
+    @DisplayName("넣을지 정하는 조건(빈 결과 등)이 false 면 넣지 않는다 · 캐시하지 않는 조회도 시작 시각을 읽은 시각으로 준다")
+    void storablePredicateAndUncachedStartTime() {
+        AtomicInteger loads = new AtomicInteger();
+        cache.entry(items, "products", "empty", () -> item("e", loads), value -> false);
+        cache.entry(items, "products", "empty", () -> item("e", loads), value -> false);
+        assertThat(loads).hasValue(2);
+        assertThat(redis.keys("svc:cache:item:*")).isEmpty();
+
+        Instant before = Instant.now();
+        ReadCache.Entry<Item> direct = cache.uncached(() -> {
+            sleep(200);
+            return item("d", loads);
+        });
+        assertThat(direct.loadedAt()).isBetween(before, before.plusMillis(150));
+    }
+
+    @Test
     @DisplayName("TTL 은 0 보다 커야 한다")
     void ttlMustBePositive() {
         assertThatThrownBy(() -> cache.spec("x", Item.class, Duration.ZERO)).isInstanceOf(IllegalArgumentException.class);
@@ -328,6 +362,10 @@ class ReadCacheTest {
     private static Item item(String name, AtomicInteger loads) {
         loads.incrementAndGet();
         return new Item(UUID.nameUUIDFromBytes(name.getBytes()), name, BigDecimal.TEN, Instant.EPOCH, Kind.A, List.of());
+    }
+
+    private static String onlyKeyMatching(String pattern) {
+        return onlyKey(pattern);
     }
 
     private static String onlyKey(String pattern) {
