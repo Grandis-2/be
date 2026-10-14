@@ -66,12 +66,13 @@ class AdminCustomerApiTest {
     }
 
     @Test
-    @DisplayName("ids 는 1~100개 — 100 은 200, 101 · 없음 · 빈 원소 · UUID 아님은 ids 칸의 400")
+    @DisplayName("ids 는 1~100개 — 100 은 200, 101 · 없음 · 0개(ids=) · 빈 원소 · UUID 아님은 ids 칸의 400")
     void idsMustBeOneToHundred() throws Exception {
         String hundred = IntStream.range(0, 100).mapToObj(i -> UUID.randomUUID().toString()).collect(Collectors.joining(","));
         mvc.perform(asAdmin(get(PATH).param("ids", hundred))).andExpect(status().isOk()).andExpect(jsonPath("$.data.items.length()").value(0));
         expectIdsViolation(mvc.perform(asAdmin(get(PATH).param("ids", hundred + "," + UUID.randomUUID()))));
         expectIdsViolation(mvc.perform(asAdmin(get(PATH))));
+        expectIdsViolation(mvc.perform(asAdmin(get(PATH).param("ids", ""))));   // 0개 — 위의 "없음"은 required 가, 이것은 @Size(min) 가 막는다
         expectIdsViolation(mvc.perform(asAdmin(get(PATH).param("ids", UUID.randomUUID() + ","))));
         expectIdsViolation(mvc.perform(asAdmin(get(PATH).param("ids", "not-a-uuid"))));
     }

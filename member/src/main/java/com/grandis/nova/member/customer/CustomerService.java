@@ -54,7 +54,8 @@ public class CustomerService {
 
     /**
      * 관리자 화면이 회원 id 를 이름으로 바꿀 때 — 요청 순서(같은 id 는 한 번), 없는 id 는 빠진다.
-     * 이름은 실명, 실명이 없으면 카카오 표시 이름이다(리뷰 작성자명과 같은 규칙, 2026-10-07 결정). 가입을 마친 회원은 실명이 늘 있다(가입 폼 필수).
+     * 이름은 실명, 실명이 없으면 카카오 표시 이름이다(리뷰 작성자명과 같은 규칙, 2026-10-07 결정). 실명은 가입 폼에서 받지만 비울 수도 있다
+     * (PUT /me/profile 에 빈 값을 보내면 그 칸이 null 이 된다 — ProfileRequest).
      */
     @Transactional(readOnly = true)
     public List<MemberName> names(Collection<UUID> customerIds) {
@@ -65,7 +66,7 @@ public class CustomerService {
 
     public record MemberName(UUID memberId, String name) {
         static MemberName of(Customer customer) {
-            // 빈 문자열은 요청 경계에서 null 이 되므로(ProfileRequest) null 만 본다
+            // 앱이 쓰는 경로는 빈 문자열을 null 로 바꾸므로(ProfileRequest — 유일한 쓰기 경로) null 만 본다. DB CHECK 는 없다
             String name = customer.profile().name();
             return new MemberName(customer.getId(), name != null ? name : customer.getDisplayName());
         }
