@@ -21,6 +21,8 @@ import tools.jackson.databind.JsonNode;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.grandis.nova.worker.mock.FakeMock.html;
@@ -45,8 +47,7 @@ import static org.awaitility.Awaitility.await;
         "nova.worker.retry.in-round-delay-min=10ms",
         "nova.worker.retry.in-round-delay-max=20ms",
         "nova.worker.draw.retry-delays=1s",
-        // 시험 큐는 2번 받으면 DLQ 로 옮긴다. 두 번째로 받기 전에 늦은 응모가 닿을 만큼 기다린다
-        "nova.worker.draw.wait-delays=6s",
+        "nova.worker.draw.wait-delays=1s",
         "nova.worker.circuit.window=100",
         "nova.worker.circuit.minimum-calls=100"})
 @Import(SqsTestConfig.class)
@@ -74,35 +75,38 @@ class DrawConsumerFlowTest {
         MOCK.close();
     }
 
-    /** 늦은 응모가 닿을 때까지 기다렸다가, 수가 맞으면 추첨해 결과를 보내고 원본을 지운다. */
+    /**
+     * 받은 응모 수가 처음엔 모자라 기다렸다가, 다시 받아 수가 맞으면 추첨해 결과를 보내고 원본을 지운다.
+     * 순서를 시간에 기대지 않는다 — 응모 처리가 끝난 뒤 추첨 요청을 보내고, Mock 은 첫 조회만 1건(늦은 응모가 아직 세지지 않음)으로 답한다.
+     */
     @Test
-    void 늦은_응모가_닿으면_추첨해_결과를_order_에_보낸다() {
-        AtomicInteger received = new AtomicInteger(1);
+    void 받은_응모_수가_모자라면_기다렸다가_맞으면_추첨해_결과를_order_에_보낸다() throws InterruptedException {
+        CountDownLatch entered = new CountDownLatch(1);
+        AtomicInteger lookups = new AtomicInteger();
         List<String> winners = winners(1);
         MOCK.respond((HttpExchange exchange) -> {
             String path = exchange.getRequestURI().getPath();
             if (path.equals("/external/draw-entries")) {
-                received.incrementAndGet();
                 json(201, ENTERED).handle(exchange);
+                entered.countDown();
             } else if ("GET".equals(exchange.getRequestMethod())) {
-                status(received.get()).handle(exchange);
+                status(lookups.getAndIncrement() == 0 ? 1 : 2).handle(exchange);
             } else {
                 drawn(winners).handle(exchange);
             }
         });
 
-        send(draw.requestedBody(2, 1));
-        await().atMost(Duration.ofSeconds(10))
-                .until(() -> draw.calls(MOCK).contains("GET /external/draws/{drawId}"));
-        assertThat(draw.calls(MOCK)).as("1건뿐이라 추첨하지 않고 기다린다").doesNotContain("POST /external/draws/{drawId}/draw");
-
         send(draw.entryBody());
+        assertThat(entered.await(10, TimeUnit.SECONDS)).as("응모를 Mock 에 넘겼다").isTrue();
+        send(draw.requestedBody(2, 1));
 
         Message result = draw.result(queues, Duration.ofSeconds(15))
                 .orElseThrow(() -> new AssertionError("추첨 결과가 오지 않았다"));
         JsonNode payload = Draws.body(result).get("payload");
         assertThat(payload.get("winnerEntryIds").valueStream().map(JsonNode::asString).toList()).isEqualTo(winners);
-        assertThat(draw.calls(MOCK)).containsOnlyOnce("POST /external/draws/{drawId}/draw");
+        assertThat(draw.calls(MOCK)).as("1건일 때는 추첨하지 않고 다시 받아 대조했다").containsExactly(
+                "POST /external/draw-entries", "GET /external/draws/{drawId}", "GET /external/draws/{drawId}",
+                "POST /external/draws/{drawId}/draw");
         await().during(Duration.ofSeconds(5)).atMost(Duration.ofSeconds(8))
                 .until(() -> draw.calls(MOCK).stream().filter(call -> call.endsWith("/draw")).count() == 1);
     }
