@@ -383,7 +383,13 @@ class ReadCacheTest {
         REDIS.execInContainer("valkey-cli", "CLIENT", "PAUSE", "1500", "WRITE");   // 읽기는 되고 쓰기만 1.5초 멈춘다
         long before = System.currentTimeMillis();
         cache.get(items, "products", "late", () -> item("late", new AtomicInteger()));   // SET 은 300ms 에 시간 초과
-        Thread.sleep(2_000);   // 멈춤이 풀리고 서버가 밀린 SET 을 처리했다
+        // 멈춤이 풀리고 서버가 밀린 SET 을 처리할 때까지 기다린다(고정 시간이 아니라 키가 생길 때까지 — 느린 CI 에서도).
+        // 앱 연결에서는 밀린 SET 뒤에 줄을 서므로 다른 연결(valkey-cli)로 본다
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (REDIS.execInContainer("valkey-cli", "--scan", "--pattern", "svc:cache:item:*late").getStdout().isBlank()
+                && System.nanoTime() < deadline) {
+            Thread.sleep(50);
+        }
         String key = onlyKey("svc:cache:item:*late");
         long expiresAt = Long.parseLong(REDIS.execInContainer("valkey-cli", "PEXPIRETIME", key).getStdout().strip());
         assertThat(expiresAt).as("상대 TTL(PX)이면 처리 시각(+1.5초)부터 30초").isLessThanOrEqualTo(before + 30_000 + 500);
