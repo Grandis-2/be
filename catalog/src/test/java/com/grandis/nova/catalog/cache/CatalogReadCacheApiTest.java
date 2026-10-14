@@ -81,7 +81,7 @@ class CatalogReadCacheApiTest {
         UUID productId = registerInStock("왕복", tag);
         fixtures.childCategory(categoryId, "하위");
         reviews.saveAndFlush(ProductReview.write(productId, UUID.randomUUID(), UUID.randomUUID(), 5, "좋아요", "기본", "김**"));
-        for (String path : new String[] {"/api/v1/products?q=" + tag, "/api/v1/products?sort=PRICE_ASC&size=5", "/api/v1/categories",
+        for (String path : new String[] {"/api/v1/products?q=" + tag, "/api/v1/products?sort=PRICE_ASC&size=12", "/api/v1/categories",
                 "/api/v1/products/" + productId + "/reviews", "/api/v1/reviews?categoryId=" + categoryId}) {
             String first = data(mockMvc.perform(get(path)).andExpect(status().isOk())).toString();
             String second = data(mockMvc.perform(get(path)).andExpect(status().isOk())).toString();
@@ -93,19 +93,38 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
-    @DisplayName("자유 검색어(q) · 다섯째 페이지부터는 Redis 에 넣지 않는다 — 키가 끝없이 늘어 나눠 쓰는 Redis 의 다른 키를 밀어내지 않게. 응답은 같다")
-    void unboundedQueriesAreNotStored() throws Exception {
+    @DisplayName("입력이 열린 조회는 Redis 에 넣지 않는다 — 검색어 · 색상 · 용량 · 다섯째 이후 페이지 · 화면이 안 쓰는 size · 빈 결과(없는 카테고리 · 없는 상품). 응답은 같다")
+    void openInputsAreNotStored() throws Exception {
         String tag = "q" + ShopFixtures.unique();
-        registerInStock("검색", tag);
-        mockMvc.perform(get("/api/v1/products").param("q", tag)).andExpect(status().isOk());
-        mockMvc.perform(get("/api/v1/products").param("categoryId", categoryId.toString()).param("page", "5")).andExpect(status().isOk());
-        mockMvc.perform(get("/api/v1/reviews").param("page", "5")).andExpect(status().isOk());
+        UUID productId = registerInStock("검색", tag);
+        String category = categoryId.toString();
+        String[][] requests = {
+                {"q", tag}, {"color", "cache-probe-" + ShopFixtures.unique()}, {"storage", "9TB"}, {"page", "5"}, {"size", "37"}};
+        for (String[] param : requests) {
+            mockMvc.perform(get("/api/v1/products").param("categoryId", category).param(param[0], param[1])).andExpect(status().isOk());
+        }
+        mockMvc.perform(get("/api/v1/products").param("categoryId", UUID.randomUUID().toString())).andExpect(status().isOk());   // 없는 카테고리 — 빈 목록
+        // 결과가 있는 색상 조회도 넣지 않는다 — 있는 색상에 아무 문자열을 OR 로 붙여 키를 끝없이 만들 수 있다
+        UUID black = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "블랙폰", tag);
+        fixtures.registration(black);
+        fixtures.optionWithAttributes(black, "ACTIVE", new java.math.BigDecimal("1000"), "블랙", "{\"color\":\"블랙\"}");
+        fixtures.stockReady(black);
+        JsonNode colored = data(mockMvc.perform(get("/api/v1/products").param("categoryId", category)
+                .param("color", "블랙", "probe-" + ShopFixtures.unique())).andExpect(status().isOk())).get("items");
+        assertThat(colored).as("결과가 있는 조회").hasSize(1);
+        mockMvc.perform(get("/api/v1/reviews").param("categoryId", UUID.randomUUID().toString())).andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/products/{id}/reviews", UUID.randomUUID())).andExpect(status().isNotFound());   // 없는 상품
+        mockMvc.perform(get("/api/v1/products/{id}/reviews", productId).param("size", "37")).andExpect(status().isOk());
         assertThat(redis.keys("catalog:cache:product-list:*")).isEmpty();
         assertThat(redis.keys("catalog:cache:reviews:*")).isEmpty();
+        java.util.List<String> searched = new java.util.ArrayList<>();
+        data(mockMvc.perform(get("/api/v1/products").param("q", tag))).get("items").forEach(item -> searched.add(item.get("title").asString()));
+        assertThat(searched).contains("검색");
 
-        assertThat(data(mockMvc.perform(get("/api/v1/products").param("q", tag))).get("items").get(0).get("title").asString()).isEqualTo("검색");
-        mockMvc.perform(get("/api/v1/products").param("categoryId", categoryId.toString()).param("page", "4")).andExpect(status().isOk());
-        assertThat(redis.keys("catalog:cache:product-list:*")).as("넷째 페이지까지는 넣는다").hasSize(1);
+        // 닫힌 입력은 넣는다 — 넷째 페이지까지, 브랜드는 순서만 달라도 같은 키
+        mockMvc.perform(get("/api/v1/products").param("categoryId", category).param("brand", "APPLE", "LG")).andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/products").param("categoryId", category).param("brand", "LG", "APPLE")).andExpect(status().isOk());
+        assertThat(redis.keys("catalog:cache:product-list:*")).hasSize(1);
     }
 
     @Test
@@ -176,16 +195,17 @@ class CatalogReadCacheApiTest {
     @DisplayName("다른 서비스가 바꾼 것(판매 준비 완료)은 TTL 이 지나야 보인다 — 상품 목록 · 상세 TTL 5초")
     void crossServiceChangesWaitForTtl() throws Exception {
         String tag = "t" + ShopFixtures.unique();
+        registerInStock("이미 준비", tag);   // 빈 목록은 넣지 않으므로 캐시될 목록을 먼저 만든다
         UUID productId = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "준비 전", tag);
         fixtures.registration(productId);
         fixtures.option(productId, "ACTIVE");
-        assertThat(list(tag)).isEmpty();
+        assertThat(titles(tag)).containsExactly("이미 준비");
 
         fixtures.stockReady(productId);   // order 가 재고 행을 만든 것 — catalog 는 모른다
-        assertThat(list(tag)).as("TTL 안에서는 캐시된 빈 목록").isEmpty();
+        assertThat(titles(tag)).as("TTL 안에서는 캐시된 목록").containsExactly("이미 준비");
 
         Thread.sleep(CatalogReadCache.PRODUCT_TTL.toMillis() + 300);
-        assertThat(list(tag)).hasSize(1);
+        assertThat(titles(tag)).containsExactlyInAnyOrder("이미 준비", "준비 전");
     }
 
     @Test

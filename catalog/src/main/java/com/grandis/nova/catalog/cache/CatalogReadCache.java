@@ -26,6 +26,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -57,6 +58,10 @@ public class CatalogReadCache {
     public static final Duration CATEGORY_TTL = Duration.ofMinutes(10);
     /** 목록 · 리뷰는 앞 페이지(0~4)만 Redis 에 넣는다. */
     static final int CACHED_PAGES = 5;
+    /** 화면이 쓰는 상품 목록 size(추천 4 · 랭킹 10 · 목록 · 검색 12 · 기본 20). 다른 size 는 넣지 않는다. */
+    static final Set<Integer> CACHED_PRODUCT_SIZES = Set.of(4, 10, 12, 20);
+    /** 화면이 쓰는 리뷰 size(목록 100 · 기본 20). */
+    static final Set<Integer> CACHED_REVIEW_SIZES = Set.of(20, 100);
 
     private final ReadCache cache;
     private final JsonMapper json;
@@ -102,16 +107,21 @@ public class CatalogReadCache {
     }
 
     /**
-     * 상품 목록. 자유 검색어(q)가 있거나 {@link #CACHED_PAGES} 보다 깊은 페이지는 Redis 에 넣지 않는다 — 키 수가 끝없이 늘 수 있는 조회가 나눠 쓰는
-     * Redis 의 메모리를 채워 다른 키(토큰 폐기 표식 · 대기열)를 밀어내지 않게. 그런 조회는 늘 DB 다.
+     * 상품 목록. Redis 에 넣는 것은 입력이 닫힌 조회뿐이다 — 자유 문자열(검색어 q · 색상 · 용량)이 없고, 앞 {@link #CACHED_PAGES} 페이지이고,
+     * size 가 화면이 쓰는 값({@link #CACHED_PRODUCT_SIZES})이고, 결과가 비지 않았다(없는 카테고리 id 는 빈 목록이라 넣지 않는다). 나머지는 늘 DB 다.
+     * 입력을 아무렇게나 바꿔 키를 끝없이 만들어 나눠 쓰는 Redis 의 다른 키(토큰 폐기 표식 · 대기열)를 밀어내지 않게. 넣는 양 자체도 캐시마다
+     * 메모리 예산이 묶는다(ReadCache).
      */
     public ReadCache.Entry<OffsetPage<ProductListItem>> products(ProductListFilter filter, ProductSort sort, int page, int size) {
-        Instant now = clock.instant();
-        if (filter.q() != null || page >= CACHED_PAGES) {
-            return new ReadCache.Entry<>(listings.list(filter, sort, page, size), now);
+        boolean closedInput = filter.q() == null && filter.colors().isEmpty() && filter.storages().isEmpty()
+                && page < CACHED_PAGES && CACHED_PRODUCT_SIZES.contains(size);
+        if (!closedInput) {
+            return cache.uncached(() -> listings.list(filter, sort, page, size));
         }
-        ReadCache.Entry<OffsetPage<ProductListItem>> entry = cache.entry(listSpec, PRODUCTS, digest(new ListKey(filter, sort, page, size)),
-                () -> listings.list(filter, sort, page, size));
+        ProductListFilter keyed = new ProductListFilter(null, filter.categoryId(), filter.saleMode(),
+                filter.brands().stream().sorted().toList(), List.of(), List.of());   // OR 조건은 순서를 맞춰 같은 조건이 같은 키
+        ReadCache.Entry<OffsetPage<ProductListItem>> entry = cache.entry(listSpec, PRODUCTS, digest(new ListKey(keyed, sort, page, size)),
+                () -> listings.list(filter, sort, page, size), found -> !found.items().isEmpty());
         Instant served = clock.instant();
         return new ReadCache.Entry<>(entry.value().map(item -> item.at(served)), entry.loadedAt());
     }
@@ -120,21 +130,22 @@ public class CatalogReadCache {
         return cache.entry(categorySpec, CATEGORIES, "tree", categories::tree);
     }
 
-    /** 상품 리뷰. {@link #CACHED_PAGES} 보다 깊은 페이지는 Redis 에 넣지 않는다(목록과 같은 이유). */
+    /** 상품 리뷰. 앞 페이지 · 화면이 쓰는 size · 비지 않은 결과만 넣는다(없는 상품 id 는 빈 목록이라 넣지 않는다). */
     public ReadCache.Entry<OffsetPage<ReviewView>> productReviews(UUID productId, int page, int size) {
-        if (page >= CACHED_PAGES) {
-            return new ReadCache.Entry<>(reviews.productReviews(productId, page, size), clock.instant());
+        if (page >= CACHED_PAGES || !CACHED_REVIEW_SIZES.contains(size)) {
+            return cache.uncached(() -> reviews.productReviews(productId, page, size));
         }
         return cache.entry(reviewSpec, REVIEWS, "product:" + productId + ":" + page + ":" + size,
-                () -> reviews.productReviews(productId, page, size));
+                () -> reviews.productReviews(productId, page, size), found -> !found.items().isEmpty());
     }
 
+    /** 구매후기 모아보기. 상품 리뷰와 같은 규칙(없는 카테고리 id 는 빈 목록이라 넣지 않는다). */
     public ReadCache.Entry<OffsetPage<ReviewView>> visibleReviews(UUID categoryId, int page, int size) {
-        if (page >= CACHED_PAGES) {
-            return new ReadCache.Entry<>(reviews.visibleReviews(categoryId, page, size), clock.instant());
+        if (page >= CACHED_PAGES || !CACHED_REVIEW_SIZES.contains(size)) {
+            return cache.uncached(() -> reviews.visibleReviews(categoryId, page, size));
         }
         return cache.entry(reviewSpec, REVIEWS, "visible:" + categoryId + ":" + page + ":" + size,
-                () -> reviews.visibleReviews(categoryId, page, size));
+                () -> reviews.visibleReviews(categoryId, page, size), found -> !found.items().isEmpty());
     }
 
     /** 목록 조건의 키. 조건은 정규화된 값(ProductListFilter)이라 같은 검색이면 같은 글이다. 길이를 고정하려고 해시로 줄인다. */

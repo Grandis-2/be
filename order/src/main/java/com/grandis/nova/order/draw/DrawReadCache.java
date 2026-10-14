@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 import tools.jackson.core.type.TypeReference;
 
 import java.time.Duration;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -22,6 +23,8 @@ public class DrawReadCache {
     static final String DRAWS = "draws";
     public static final Duration TTL = Duration.ofMinutes(10);
     static final int CACHED_PAGES = 5;
+    /** 화면이 쓰는 size(목록 100 · 기본 20). */
+    static final Set<Integer> CACHED_SIZES = Set.of(20, 100);
 
     private final ReadCache cache;
     private final DrawQueryService queries;
@@ -35,12 +38,15 @@ public class DrawReadCache {
         this.detailSpec = cache.spec("draw-detail", DrawCampaign.class, TTL);
     }
 
-    /** 앞 페이지({@link #CACHED_PAGES} 미만)만 Redis 에 넣는다 — 키 수가 끝없이 늘어 나눠 쓰는 Redis 의 다른 키를 밀어내지 않게. */
+    /**
+     * 앞 페이지({@link #CACHED_PAGES} 미만) · 화면이 쓰는 size({@link #CACHED_SIZES}) · 비지 않은 결과만 Redis 에 넣는다 — 입력을 바꿔 키를
+     * 끝없이 만들어 나눠 쓰는 Redis 의 다른 키(토큰 폐기 표식 · 대기열)를 밀어내지 않게. 넣는 양도 메모리 예산이 묶는다(ReadCache).
+     */
     public ReadCache.Entry<OffsetPage<DrawCampaign>> list(int page, int size) {
-        if (page >= CACHED_PAGES) {
-            return new ReadCache.Entry<>(queries.list(page, size), queries.now());
+        if (page >= CACHED_PAGES || !CACHED_SIZES.contains(size)) {
+            return cache.uncached(() -> queries.list(page, size));
         }
-        return cache.entry(listSpec, DRAWS, page + ":" + size, () -> queries.list(page, size));
+        return cache.entry(listSpec, DRAWS, page + ":" + size, () -> queries.list(page, size), found -> !found.items().isEmpty());
     }
 
     /** @throws com.grandis.nova.common.BusinessException 404 DRAW_NOT_FOUND — 없는 회차는 넣지 않는다 */
