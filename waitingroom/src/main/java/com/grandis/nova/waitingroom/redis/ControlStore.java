@@ -85,14 +85,19 @@ public class ControlStore {
                 .map(removed -> removed == 1);
     }
 
-    /** 재발행 요청을 선점한다. 표식이 없을 때만 세워, 리더가 바뀌는 순간에도 한 노드만 보낸다. @return 선점했으면 true */
-    public Mono<Boolean> claimResync(String token, Duration claimTtl) {
-        return redis.opsForValue().setIfAbsent(RedisKeys.RESYNC_REQUESTED, token, claimTtl);
+    /**
+     * 재발행 요청을 선점한다. 표식이 없을 때만 세워, 리더가 바뀌는 순간에도 한 노드만 보낸다.
+     *
+     * @param marker 표식 키 — 일정을 몰라서({@link RedisKeys#RESYNC_REQUESTED})와 주기({@link RedisKeys#RESYNC_PERIODIC})가 따로다
+     * @return 선점했으면 true
+     */
+    public Mono<Boolean> claimResync(String marker, String token, Duration claimTtl) {
+        return redis.opsForValue().setIfAbsent(marker, token, claimTtl);
     }
 
-    /** 보내지 못했을 때 내 선점만 푼다 — 다음 회차에 다시 요청하게. */
-    public Mono<Boolean> releaseResyncClaim(String token) {
-        return scripts.single(scripts.releaseResync, List.of(RedisKeys.RESYNC_REQUESTED), List.of(token))
+    /** 보내지 못했을 때 내 선점만 푼다 — 다시 요청할 수 있게. */
+    public Mono<Boolean> releaseResyncClaim(String marker, String token) {
+        return scripts.single(scripts.releaseResync, List.of(marker), List.of(token))
                 .map(released -> released == 1);
     }
 
@@ -108,8 +113,8 @@ public class ControlStore {
     }
 
     /** 보낸 뒤 선점 표식을 조용한 기간 표식으로 바꾼다. */
-    public Mono<Boolean> markResyncRequested(Duration quietPeriod) {
-        return redis.opsForValue().set(RedisKeys.RESYNC_REQUESTED, "1", quietPeriod);
+    public Mono<Boolean> markResyncRequested(String marker, Duration quietPeriod) {
+        return redis.opsForValue().set(marker, "1", quietPeriod);
     }
 
     /** 운영값 한 칸을 쓴다. 리더가 다음 회차에 읽는다. @return 쓰기 전 값(감사 로그용) */

@@ -25,6 +25,9 @@ waitingroom:
   schedule:
     # 기본값: 일정 이벤트 waitingroom-events, 재발행 요청 preorder-events
     queue: waitingroom-events
+    # 일정을 아는 동안에도 전체 재발행을 요청하는 주기. 기본 10m, 0 이면 끈다(1분 미만은 기동 실패)
+    # resync:
+    #   periodic: 10m
 
 # SQS(회차 일정 수신 · 재발행 요청). 지역이 없으면 일정을 받지 않는다(로컬은 Redis 에 직접 넣는다)
 nova:
