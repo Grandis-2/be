@@ -18,6 +18,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -39,8 +40,10 @@ import java.util.function.Supplier;
  *       인기 키가 비는 순간(만료 · Redis 복구 직후) DB 로 한꺼번에 가지 않게. loader 의 예외(404 등)도 같이 받는다. 같이 받는 쪽은
  *       {@link #WAIT_FOR_LOAD} 까지만 기다린다(넘으면 503).</li>
  *   <li><b>무효화</b>: 키에 세대 번호를 넣고, 바뀐 쪽이 {@link #bumpAfterCommit} 으로 번호를 올린다 — 조건마다 다른 키(목록 · 검색)를 하나씩
- *       찾아 지우지 않는다. 올리기는 트랜잭션 커밋 뒤라 롤백된 수정으로 비우지 않는다. 올리기가 실패하면 ERROR 이고 그 값은 TTL 이 지나야
- *       바뀐다. 커밋 전에 DB 를 읽은 요청이 올린 뒤에 옛 값을 쓰는 경우도 TTL 이 끝낸다 — TTL 이 최악의 지연이다.</li>
+ *       찾아 지우지 않는다. 올리기는 트랜잭션 커밋 뒤라 롤백된 수정으로 비우지 않는다. 올리기는 차단기를 거치지 않고, 실패하면 미뤄 두었다가 Redis 를
+ *       다시 읽을 수 있게 된 첫 조회에서 올린다. 커밋 전에 DB 를 읽은 요청의 옛 값은 그때 정한 옛 세대 키에 들어가 새 세대 조회에는 안 보인다.</li>
+ *   <li><b>시계</b>: 값의 만료는 앱 벽시계로 정한 절대 시각(PXAT)이다 — 앱 시계가 Redis 보다 빠르면 그만큼 더 살고, 느리면 덜 산다. 그래서 신선도의
+ *       최악은 TTL + 앱 · Redis 시계 차다(둘 다 AWS 시간 동기화를 쓴다는 가정).</li>
  *   <li><b>배포</b>: 값은 JSON 이고 키에 그 타입 모양의 지문({@link Shape})을 넣는다. 모양이 다른 버전(blue/green 이 겹치는 동안)은 서로의 키를
  *       읽지 않는다 — 읽으면 새 칸이 null 로 조용히 비어 나간다. 지문이 같은데 못 읽는 값은 없는 것으로 보고 다시 채운다.</li>
  * </ul>
@@ -62,6 +65,8 @@ public final class ReadCache {
     static final Duration CLOCK_SKEW_MARGIN = Duration.ofSeconds(2);
     /** 캐시 하나가 인스턴스 하나에서 Redis 에 동시에 들고 있는 양의 기본 상한({@link StoreBudget}). */
     static final long DEFAULT_BUDGET_BYTES = 4L * 1024 * 1024;
+    /** 세대 올리기를 바로 다시 해 보는 횟수 — 넘으면 미뤄 둔다. */
+    static final int BUMP_ATTEMPTS = 2;
     /** Redis 에 넣는 모양({@link Stored})의 버전 — 키에 들어간다. */
     static final String FORMAT = "f1";
 
@@ -74,6 +79,10 @@ public final class ReadCache {
     private final Duration waitForLoad;
     /** false 면 Redis 를 부르지 않고 늘 loader 로 답한다({@link #off}). */
     private final boolean enabled;
+    /** 올리지 못한 세대 — Redis 를 다시 읽을 수 있게 되면 그때 올린다({@link #retryPendingBumps}). */
+    private final Set<String> pendingBumps = ConcurrentHashMap.newKeySet();
+    /** 세대마다 이 인스턴스가 마지막으로 본 번호 — 오른 것을 처음 보면 옛 세대로 넣은 키를 지우고 저장 몫을 돌려준다. */
+    private final ConcurrentHashMap<String, Long> seenGenerations = new ConcurrentHashMap<>();
 
     /** @param service 키 앞에 붙는 서비스 이름(catalog · order) — 같은 Redis 를 나눠 쓰는 서비스끼리 키가 겹치지 않게 */
     public ReadCache(StringRedisTemplate redis, JsonMapper json, String service) {
@@ -166,8 +175,15 @@ public final class ReadCache {
         Long current = call(() -> currentGeneration(generation));
         if (current == null) {
             // 세대를 모르면 장애 중인 요청끼리만 같이 받는다 — 정상 세대의 진행 중 조회와 섞이지 않게
-            return load("down|" + spec.name() + ":" + generation + ":" + id, null, spec, loader, storable);
+            return load("down|" + spec.name() + ":" + generation + ":" + id, null, spec, loader, storable, generation, -1);
         }
+        if (!pendingBumps.isEmpty() && retryPendingBumps(generation)) {
+            current = call(() -> currentGeneration(generation));   // 방금 올린 세대 — 새 번호로 읽는다
+            if (current == null) {
+                return load("down|" + spec.name() + ":" + generation + ":" + id, null, spec, loader, storable, generation, -1);
+            }
+        }
+        releaseOlderGenerations(spec, generation, current);
         String key = prefix + spec.name() + ":" + FORMAT + "." + spec.fingerprint() + ":" + generation + "." + current + ":" + id;
         String cached = call(() -> redis.opsForValue().get(key));
         if (cached != null) {
@@ -179,12 +195,13 @@ public final class ReadCache {
             }
         }
         // 완성된 키(세대 번호 포함)로 줄 세운다 — 세대가 오른 뒤 온 요청이 옛 세대의 진행 중 조회를 같이 받지 않게
-        return load(key, key, spec, loader, storable);
+        return load(key, key, spec, loader, storable, generation, current);
     }
 
     /**
-     * 세대 번호를 올린다 — 그 세대를 키에 넣은 값이 전부 다음 조회부터 새로 채워진다. 트랜잭션 안이면 커밋 뒤에(한 트랜잭션에서 같은 세대를
-     * 여러 번 불러도 한 번), 밖이면 바로 한다. 실패해도 던지지 않는다(수정은 이미 커밋됐다) — ERROR 를 남기고 TTL 이 끝낸다.
+     * 세대 번호를 올린다 — 그 세대를 키에 넣은 값이 전부 다음 조회부터 새로 채워진다. 트랜잭션 안이면 그 트랜잭션의 커밋 뒤에(한 트랜잭션에서 같은
+     * 세대를 여러 번 불러도 한 번), 밖이면 바로 한다. 안쪽 새 트랜잭션(REQUIRES_NEW)은 자기 커밋에 붙는다 — 지금 트랜잭션의 동기화 목록에서 찾는다.
+     * 실패해도 던지지 않는다(수정은 이미 커밋됐다) — {@link #bump} 가 다시 시도하고 끝내 못 올리면 나중에 다시 한다.
      */
     public void bumpAfterCommit(String generation) {
         if (!enabled) {
@@ -194,30 +211,85 @@ public final class ReadCache {
             bump(generation);
             return;
         }
-        @SuppressWarnings("unchecked")
-        Set<String> pending = (Set<String>) TransactionSynchronizationManager.getResource(this);
-        if (pending == null) {
-            Set<String> created = new LinkedHashSet<>();
-            TransactionSynchronizationManager.bindResource(this, created);
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    created.forEach(ReadCache.this::bump);
-                }
-
-                @Override
-                public void afterCompletion(int status) {
-                    TransactionSynchronizationManager.unbindResourceIfPossible(ReadCache.this);
-                }
-            });
-            pending = created;
+        for (TransactionSynchronization registered : TransactionSynchronizationManager.getSynchronizations()) {
+            if (registered instanceof BumpOnCommit mine && mine.owner == this) {
+                mine.generations.add(generation);
+                return;
+            }
         }
-        pending.add(generation);
+        BumpOnCommit created = new BumpOnCommit(this);
+        created.generations.add(generation);
+        TransactionSynchronizationManager.registerSynchronization(created);
     }
 
+    /** 한 트랜잭션의 커밋 뒤에 그 트랜잭션에서 부른 세대를 한 번씩 올린다. */
+    private static final class BumpOnCommit implements TransactionSynchronization {
+
+        private final ReadCache owner;
+        private final Set<String> generations = new LinkedHashSet<>();
+
+        private BumpOnCommit(ReadCache owner) {
+            this.owner = owner;
+        }
+
+        @Override
+        public void afterCommit() {
+            generations.forEach(owner::bump);
+        }
+    }
+
+    /**
+     * 세대를 올린다. 차단기를 거치지 않는다 — 차단기는 인스턴스마다 따로라, 이 인스턴스만 열려 있어도 올리기를 버리면 다른 인스턴스가 옛 값을
+     * TTL 동안 낸다. 두 번 해 보고 안 되면 {@link #pendingBumps} 에 두고 Redis 를 다시 읽을 수 있게 된 첫 조회에서 올린다(ERROR 로그).
+     * 시간 초과는 결과를 모르는 실패다 — 서버가 늦게 실행해 한 번 더 오를 수 있다(실측: 멈춘 Redis 를 풀자 시간 초과된 두 번이 다 들어갔다).
+     * 더 오르는 것은 값을 한 번 더 채울 뿐이라 그대로 둔다.
+     */
     private void bump(String generation) {
-        if (call(() -> redis.opsForValue().increment(prefix + "gen:" + generation)) == null) {
-            log.error("읽기 캐시 세대를 올리지 못했다 — TTL 이 지날 때까지 옛 값이 보일 수 있다 generation={}", generation);
+        RuntimeException last = null;
+        for (int attempt = 0; attempt < BUMP_ATTEMPTS; attempt++) {
+            try {
+                redis.opsForValue().increment(prefix + "gen:" + generation);
+                pendingBumps.remove(generation);
+                return;
+            } catch (RuntimeException e) {
+                last = e;
+            }
+        }
+        pendingBumps.add(generation);
+        log.error("읽기 캐시 세대를 올리지 못해 나중에 다시 올린다 — 그때까지 옛 값이 보일 수 있다 generation={}", generation, last);
+    }
+
+    /** 미룬 세대를 올린다(Redis 를 방금 읽은 조회에서). generation 을 이번에 올렸으면 true. */
+    private boolean retryPendingBumps(String generation) {
+        boolean bumpedThis = false;
+        for (String pending : List.copyOf(pendingBumps)) {
+            try {
+                redis.opsForValue().increment(prefix + "gen:" + pending);
+                pendingBumps.remove(pending);
+                bumpedThis |= pending.equals(generation);
+            } catch (RuntimeException e) {
+                return bumpedThis;   // 아직 안 된다 — 다음 조회에서
+            }
+        }
+        return bumpedThis;
+    }
+
+    /**
+     * 세대가 오른 것을 처음 보면 이 인스턴스가 옛 세대로 넣은 이 캐시의 키를 지우고, 지운 몫을 저장 상한에서 돌려준다 — 안 그러면 옛 값의 몫이 TTL 동안
+     * 남아 예산이 찬 인스턴스가 그동안 새로 넣지 못한다. 지우지 못하면(Redis 실패) 몫도 남겨 둔다(값이 Redis 에 남아 있을 수 있다).
+     */
+    private void releaseOlderGenerations(Spec<?> spec, String generation, long current) {
+        Long seen = seenGenerations.put(spec.name() + "|" + generation, current);
+        if (seen == null || seen >= current) {
+            return;
+        }
+        List<StoreBudget.Hold> older = spec.budget().olderThan(generation, current);
+        if (older.isEmpty()) {
+            return;
+        }
+        List<String> keys = older.stream().map(StoreBudget.Hold::key).toList();
+        if (call(() -> redis.unlink(keys)) != null) {
+            older.forEach(spec.budget()::release);
         }
     }
 
@@ -241,7 +313,8 @@ public final class ReadCache {
      * 넘었다고 각자 DB 로 가게 풀지 않는다(DB 가 느린 때 부하가 그만큼 는다). 진행 중인 조회는 그대로 두고 끝나면 자리가 빈다.
      */
     @SuppressWarnings("unchecked")
-    private <T> Entry<T> load(String slot, String key, Spec<T> spec, Supplier<T> loader, Predicate<T> storable) {
+    private <T> Entry<T> load(String slot, String key, Spec<T> spec, Supplier<T> loader, Predicate<T> storable, String generation,
+                              long generationNumber) {
         CompletableFuture<Object> mine = new CompletableFuture<>();
         CompletableFuture<Object> running = loading.putIfAbsent(slot, mine);
         if (running != null) {
@@ -262,7 +335,7 @@ public final class ReadCache {
             Entry<T> entry = new Entry<>(loader.get(), loadedAt);
             mine.complete(entry);
             if (key != null && entry.value() != null && storable.test(entry.value())) {
-                store(key, spec, entry);
+                store(key, spec, entry, generation, generationNumber);
             }
             return entry;
         } catch (RuntimeException | Error e) {
@@ -273,7 +346,7 @@ public final class ReadCache {
         }
     }
 
-    private <T> void store(String key, Spec<T> spec, Entry<T> entry) {
+    private <T> void store(String key, Spec<T> spec, Entry<T> entry, String generation, long generationNumber) {
         String body;
         try {
             body = json.writeValueAsString(new Stored<>(entry.loadedAt().toEpochMilli(), entry.value()));
@@ -292,7 +365,7 @@ public final class ReadCache {
         // 만료는 절대 시각(PXAT)으로 준다 — 서버가 SET 을 늦게 처리해도 이 시각에 사라진다(늦게 처리된 만큼 더 살지 않는다).
         // 몫은 지금부터 같은 시간 + 시계 차 여유만큼 잡는다 — 결과를 모르는 실패(시간 초과)에서도 따로 셀 것이 없다
         long expiresAtEpochMillis = clock.millis() + left.toMillis();
-        StoreBudget.Hold hold = spec.budget().reserve(charge, left.plus(CLOCK_SKEW_MARGIN));
+        StoreBudget.Hold hold = spec.budget().reserve(charge, left.plus(CLOCK_SKEW_MARGIN), key, generation, generationNumber);
         if (hold == null) {
             spec.budget().warnSkipped(spec.name());
             return;
@@ -399,11 +472,16 @@ public final class ReadCache {
          * 음수 nanoTime 에서 넘침으로 몫이 풀리는 일이 없다. 넣는 값의 Redis 만료가 절대 시각이라, 그 시각 + 시계 차 여유를 holdFor 로 준다.
          */
         synchronized Hold reserve(long bytes, Duration holdFor) {
+            return reserve(bytes, holdFor, null, null, -1);
+        }
+
+        /** @param key 넣는 키 · generation · generationNumber — 세대가 오르면 옛 세대 몫을 찾아 지우려고 같이 적는다 */
+        synchronized Hold reserve(long bytes, Duration holdFor, String key, String generation, long generationNumber) {
             purge();
             if (used + bytes > capacity) {
                 return null;
             }
-            Hold hold = new Hold(bytes, nanos.getAsLong() + holdFor.toNanos());
+            Hold hold = new Hold(bytes, nanos.getAsLong() + holdFor.toNanos(), key, generation, generationNumber);
             live.add(hold);
             used += bytes;
             return hold;
@@ -414,6 +492,12 @@ public final class ReadCache {
             if (live.remove(hold)) {
                 used -= hold.bytes;
             }
+        }
+
+        /** 아직 살아 있는 몫 중 그 세대의 옛 번호(current 미만)로 넣은 것. */
+        synchronized List<Hold> olderThan(String generation, long current) {
+            purge();
+            return live.stream().filter(h -> h.key != null && generation.equals(h.generation) && h.generationNumber < current).toList();
         }
 
         synchronized long used() {
@@ -432,10 +516,20 @@ public final class ReadCache {
         static final class Hold {
             private final long bytes;
             private final long expiresAtNanos;
+            private final String key;
+            private final String generation;
+            private final long generationNumber;
 
-            private Hold(long bytes, long expiresAtNanos) {
+            private Hold(long bytes, long expiresAtNanos, String key, String generation, long generationNumber) {
                 this.bytes = bytes;
                 this.expiresAtNanos = expiresAtNanos;
+                this.key = key;
+                this.generation = generation;
+                this.generationNumber = generationNumber;
+            }
+
+            String key() {
+                return key;
             }
         }
 
