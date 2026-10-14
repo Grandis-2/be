@@ -136,6 +136,72 @@ class ReadCacheTest {
     }
 
     @Test
+    @DisplayName("안쪽 새 트랜잭션(REQUIRES_NEW)의 올리기는 안쪽 커밋에 붙는다 — 바깥이 먼저 불렀어도 바깥 롤백에 같이 버려지지 않는다")
+    void requiresNewBumpsOnItsOwnCommit() {
+        TransactionTemplate outer = new TransactionTemplate(new NestingTransactionManager());
+        TransactionTemplate inner = new TransactionTemplate(outer.getTransactionManager());
+        inner.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        outer.executeWithoutResult(status -> {
+            cache.bumpAfterCommit("reviews");
+            inner.executeWithoutResult(nested -> cache.bumpAfterCommit("products"));
+            assertThat(redis.opsForValue().get("svc:cache:gen:products")).as("안쪽 커밋 직후").isEqualTo("1");
+            status.setRollbackOnly();
+        });
+        assertThat(redis.opsForValue().get("svc:cache:gen:products")).isEqualTo("1");
+        assertThat(redis.opsForValue().get("svc:cache:gen:reviews")).as("롤백된 바깥은 올리지 않는다").isNull();
+    }
+
+    @Test
+    @DisplayName("올리기는 차단기를 거치지 않는다 — 이 인스턴스의 차단기가 열려 있어도 세대는 올라 다른 인스턴스가 새 값을 읽는다")
+    void bumpIgnoresOpenBreaker() {
+        ReadCache other = new ReadCache(redis, JSON, "svc");
+        ReadCache.Spec<Item> otherItems = other.spec("item", Item.class, Duration.ofSeconds(30));
+        other.get(otherItems, "products", "1", () -> item("old", new AtomicInteger()));
+
+        cache.breaker().transitionToForcedOpenState();
+        cache.bumpAfterCommit("products");
+        cache.breaker().transitionToClosedState();
+
+        assertThat(redis.opsForValue().get("svc:cache:gen:products")).isEqualTo("1");
+        assertThat(other.get(otherItems, "products", "1", () -> item("new", new AtomicInteger())).name()).isEqualTo("new");
+    }
+
+    @Test
+    @DisplayName("올리지 못한 세대는 미뤄 두었다가 Redis 를 다시 읽는 첫 조회에서 올린다 — 그 조회부터 새 값")
+    void failedBumpIsRetriedOnRecovery() {
+        cache.get(items, "products", "1", () -> item("old", new AtomicInteger()));
+        // INCR 이 확실히 실패하게(정수가 아닌 값). 멈춘 Redis(PAUSE)로는 못 잰다 — 시간 초과된 INCR 이 풀린 뒤 서버에서 실행돼 세대가 올라 버린다
+        redis.opsForValue().set("svc:cache:gen:products", "not-a-number");
+        cache.bumpAfterCommit("products");   // 던지지 않는다
+        redis.delete("svc:cache:gen:products");   // 복구 — 세대는 다시 0 이고 옛 값(0 세대 키)이 그대로 있다
+
+        assertThat(cache.get(items, "products", "1", () -> item("new", new AtomicInteger())).name()).isEqualTo("new");
+        assertThat(redis.opsForValue().get("svc:cache:gen:products")).isEqualTo("1");
+        cache.get(items, "products", "1", () -> item("newer", new AtomicInteger()));
+        assertThat(redis.opsForValue().get("svc:cache:gen:products")).as("한 번만 올린다").isEqualTo("1");
+    }
+
+    @Test
+    @DisplayName("세대가 오르면 이 인스턴스가 옛 세대로 넣은 키를 지우고 저장 몫을 돌려준다 — 예산이 찬 캐시도 새 세대 값을 바로 넣는다")
+    void bumpReleasesOldGenerationBudget() {
+        ReadCache.Spec<Item> small = cache.spec("small", Item.class, Duration.ofSeconds(30), 500);   // 값 하나(약 360)만 들어간다
+        cache.get(small, "products", "a", () -> item("a", new AtomicInteger()));
+        cache.get(small, "reviews", "r", () -> item("r", new AtomicInteger()));   // 예산이 차서 안 들어간다 — 다른 세대 이름
+        assertThat(redis.keys("svc:cache:small:*")).hasSize(1);
+
+        cache.bumpAfterCommit("products");
+        AtomicInteger loads = new AtomicInteger();
+        cache.get(small, "products", "b", () -> item("b", loads));
+        cache.get(small, "products", "b", () -> item("b", loads));
+
+        assertThat(loads).as("두 번째는 캐시에서").hasValue(1);
+        Set<String> keys = redis.keys("svc:cache:small:*");
+        assertThat(keys).hasSize(1);
+        assertThat(keys.iterator().next()).contains(":products.1:");
+    }
+
+    @Test
     @DisplayName("같은 키를 동시에 20개가 찾으면 loader 는 한 번 — 나머지는 그 결과를 받는다. loader 의 예외도 같이 받는다")
     void concurrentMissesLoadOnce() throws Exception {
         AtomicInteger loads = new AtomicInteger();
@@ -236,7 +302,6 @@ class ReadCacheTest {
             start = System.nanoTime();
             Item a = cache.get(items, "products", "a", () -> item("db-a", new AtomicInteger()));
             Item b = cache.get(items, "products", "b", () -> item("db-b", new AtomicInteger()));
-            cache.bumpAfterCommit("products");
             long openMillis = (System.nanoTime() - start) / 1_000_000;
             assertThat(a.name()).isEqualTo("db-a");
             assertThat(b.name()).isEqualTo("db-b");
@@ -526,6 +591,52 @@ class ReadCacheTest {
         @Override
         public Instant instant() {
             return now;
+        }
+    }
+
+    /** 바깥 트랜잭션을 알아보고 REQUIRES_NEW 에서 바깥 동기화를 떼어 두는 관리자 — DB 없이 안쪽 커밋을 재려고. */
+    static final class NestingTransactionManager extends AbstractPlatformTransactionManager {
+        private final ThreadLocal<Integer> depth = ThreadLocal.withInitial(() -> 0);
+
+        @Override
+        protected Object doGetTransaction() {
+            return depth.get();
+        }
+
+        @Override
+        protected boolean isExistingTransaction(Object transaction) {
+            return (Integer) transaction > 0;
+        }
+
+        @Override
+        protected void doBegin(Object transaction, TransactionDefinition definition) {
+            depth.set(depth.get() + 1);
+        }
+
+        @Override
+        protected Object doSuspend(Object transaction) {
+            return transaction;
+        }
+
+        @Override
+        protected void doResume(Object transaction, Object suspendedResources) {
+        }
+
+        @Override
+        protected void doCommit(DefaultTransactionStatus status) {
+        }
+
+        @Override
+        protected void doRollback(DefaultTransactionStatus status) {
+        }
+
+        @Override
+        protected void doSetRollbackOnly(DefaultTransactionStatus status) {
+        }
+
+        @Override
+        protected void doCleanupAfterCompletion(Object transaction) {
+            depth.set(depth.get() - 1);
         }
     }
 
