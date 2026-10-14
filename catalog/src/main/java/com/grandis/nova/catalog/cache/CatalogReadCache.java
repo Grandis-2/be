@@ -53,7 +53,10 @@ public class CatalogReadCache {
     /** 올리는 곳이 없다 — 카테고리는 운영 초기 데이터로만 바뀐다(관리 API 없음). TTL 이 끝낸다. */
     static final String CATEGORIES = "categories";
 
+    /** 상품 목록(재고 · 노출이 쿼리 안에서 정해져 실시간 칸을 따로 읽을 수 없다). */
     public static final Duration PRODUCT_TTL = Duration.ofSeconds(5);
+    /** 상품 상세의 본문 — catalog 가 고치면 바로 비우므로 이 값은 놓친 비우기의 상한이다. 실시간 칸은 캐시하지 않는다. */
+    public static final Duration DETAIL_TTL = Duration.ofMinutes(10);
     public static final Duration REVIEW_TTL = Duration.ofSeconds(60);
     public static final Duration CATEGORY_TTL = Duration.ofMinutes(10);
     /** 카테고리 트리의 저장 상한(키 하나). 나머지 캐시는 ReadCache 기본(4MB). */
@@ -87,16 +90,21 @@ public class CatalogReadCache {
         this.listings = listings;
         this.categories = categories;
         this.reviews = reviews;
-        this.detailSpec = cache.spec("product-detail", ProductDetailView.class, PRODUCT_TTL);
+        this.detailSpec = cache.spec("product-detail-body", ProductDetailView.class, DETAIL_TTL);
         this.listSpec = cache.spec("product-list", new TypeReference<OffsetPage<ProductListItem>>() { }, PRODUCT_TTL);
         // 키가 하나뿐이다 — 상한을 작게
         this.categorySpec = cache.spec("category-tree", new TypeReference<List<CategoryNode>>() { }, CATEGORY_TTL, CATEGORY_BUDGET_BYTES);
         this.reviewSpec = cache.spec("reviews", new TypeReference<OffsetPage<ReviewView>>() { }, REVIEW_TTL);
     }
 
+    /**
+     * 상품 상세. 본문(catalog 가 정하는 칸)만 {@link #DETAIL_TTL} 동안 캐시하고, 실시간 칸(판매 준비 · 회차 · 재고)은 요청마다 읽어 채운다 — 가격 · 재고를
+     * 상품 정보와 따로 다루는 커머스 플랫폼들의 방식(본문은 길게, 가격 · 재고는 실시간)을 따른다. 가격 · 할인율은 catalog 가 바꾸므로 본문에 두고 세대로 비운다.
+     * 돌려주는 읽은 시각은 본문의 것이다 — 앞단 HTTP 캐시의 상한은 PublicCache 가 실시간 칸에 맞춰 짧게 묶는다.
+     */
     public ReadCache.Entry<ProductDetailView> product(UUID productId) {
-        ReadCache.Entry<ProductDetailView> entry = cache.entry(detailSpec, PRODUCTS, productId.toString(), () -> details.findProduct(productId));
-        return new ReadCache.Entry<>(entry.value().at(clock.instant()), entry.loadedAt());
+        ReadCache.Entry<ProductDetailView> body = cache.entry(detailSpec, PRODUCTS, productId.toString(), () -> details.findProductBody(productId));
+        return body.map(details::withLiveParts);
     }
 
     /** 옵션 상세 — 상품 상세(같은 캐시)에서 꺼낸다. 그 상품의 옵션이 아니면 404(상세 서비스와 같은 판정). */
