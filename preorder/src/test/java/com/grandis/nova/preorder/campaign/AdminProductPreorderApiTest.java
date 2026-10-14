@@ -1,11 +1,17 @@
 package com.grandis.nova.preorder.campaign;
 
+import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.UuidBinary;
+import com.grandis.nova.preorder.PreorderErrorCode;
+import com.grandis.nova.preorder.accept.application.AcceptResult;
+import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
+import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.CatalogStubs;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 import com.grandis.nova.preorder.support.ShopFixtures;
+import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,6 +22,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -24,8 +31,10 @@ import java.util.UUID;
 import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -35,6 +44,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @PreorderIntegrationTest
 @AutoConfigureMockMvc
 class AdminProductPreorderApiTest {
+
+    static final String CAMPAIGN_CHANGED = "PREORDER_CAMPAIGN_CHANGED";
 
     static final String THREE_BATCHES = """
             {"batches":[
@@ -50,6 +61,9 @@ class AdminProductPreorderApiTest {
 
     @Autowired
     JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    PreorderAcceptService acceptService;
 
     @MockitoBean
     CatalogClient catalogClient;
@@ -268,6 +282,73 @@ class AdminProductPreorderApiTest {
     }
 
     @Test
+    void 접수_중인_회차를_조기_마감하면_새_접수만_막히고_기존_예약은_그대로다() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        AcceptFixtures accepts = new AcceptFixtures(acceptService, fixtures, catalogClient);
+        AcceptResult accepted = accepts.accept(fixtures.customer(), product);
+        int eventsBefore = fixtures.outboxEvents(CAMPAIGN_CHANGED, product.productId());
+        Instant before = Instant.now();
+
+        closeCampaign(product.productId())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.saleStatus").value("CLOSED"))
+                .andExpect(jsonPath("$.data.issuedCount").value(1));
+
+        Instant closesAt = closesAtOf(product.productId());
+        assertThat(closesAt).isBetween(before.minusMillis(1), Instant.now());
+        assertThat(fixtures.outboxEvents(CAMPAIGN_CHANGED, product.productId())).as("대기열에 마감을 알린다")
+                .isEqualTo(eventsBefore + 1);
+        assertThatThrownBy(() -> accepts.accept(fixtures.customer(), product))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode()).isEqualTo(PreorderErrorCode.SALE_CLOSED);
+        mockMvc.perform(get("/api/v1/admin/preorders/" + AcceptFixtures.tokenOf(accepted)).with(admin()))
+                .andExpect(jsonPath("$.data.status").value("PENDING_SYNC"));
+    }
+
+    @Test
+    void 이미_마감한_회차를_다시_마감해도_일정이_그대로이고_이벤트를_더_내지_않는다() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        closeCampaign(product.productId()).andExpect(status().isOk());
+        Instant closesAt = closesAtOf(product.productId());
+        int events = fixtures.outboxEvents(CAMPAIGN_CHANGED, product.productId());
+
+        closeCampaign(product.productId())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.saleStatus").value("CLOSED"));
+
+        assertThat(closesAtOf(product.productId())).isEqualTo(closesAt);
+        assertThat(fixtures.outboxEvents(CAMPAIGN_CHANGED, product.productId())).isEqualTo(events);
+    }
+
+    @Test
+    void 오픈_전_회차는_조기_마감할_수_없고_회차가_없으면_404_다() throws Exception {
+        Instant opensAt = Instant.now().plusSeconds(3600);
+        PreorderProduct notOpened = fixtures.preorderProduct(opensAt, opensAt.plusSeconds(3600));
+
+        closeCampaign(notOpened.productId())
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("SALE_NOT_OPEN"));
+        mockMvc.perform(get("/api/v1/admin/preorders/products/{id}/campaign", notOpened.productId()).with(admin()))
+                .andExpect(jsonPath("$.data.saleStatus").value("BEFORE_OPEN"))
+                .andExpect(jsonPath("$.data.opensAt").value(startsWith(opensAt.toString().substring(0, 19))));
+        closeCampaign(UUID.randomUUID())
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
+    }
+
+    @Test
+    void 조기_마감은_관리자만_한다() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        String path = "/api/v1/admin/preorders/products/{id}/campaign/close";
+
+        mockMvc.perform(post(path, product.productId()).with(customer(UUID.randomUUID())))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post(path, product.productId())).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/v1/admin/preorders/products/{id}/campaign", product.productId()).with(admin()))
+                .andExpect(jsonPath("$.data.saleStatus").value("OPEN"));
+    }
+
+    @Test
     void 사용자_토큰은_403_로그인_없으면_401() throws Exception {
         UUID productId = preorderProduct();
 
@@ -288,6 +369,17 @@ class AdminProductPreorderApiTest {
     private LocalDateTime opensAtOf(UUID productId) {
         return jdbcTemplate.queryForObject("SELECT opens_at FROM preorder_campaigns WHERE product_id = ?",
                 LocalDateTime.class, (Object) UuidBinary.toBytes(productId));
+    }
+
+    private ResultActions closeCampaign(UUID productId) throws Exception {
+        return mockMvc.perform(post("/api/v1/admin/preorders/products/{id}/campaign/close", productId).with(admin()));
+    }
+
+    /** 응답으로 본 지금의 마감 시각. */
+    private Instant closesAtOf(UUID productId) throws Exception {
+        String body = mockMvc.perform(get("/api/v1/admin/preorders/products/{id}/campaign", productId).with(admin()))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        return Instant.parse(JsonPath.<String>read(body, "$.data.closesAt"));
     }
 
     private ResultActions putCampaign(UUID productId, Instant opensAt, Instant closesAt) throws Exception {

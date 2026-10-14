@@ -25,7 +25,8 @@ import javax.crypto.spec.SecretKeySpec;
  *
  * <pre>
  * token      = "et_" + payloadB64 + "." + sigB64
- * payloadB64 = base64url_nopad(UTF8(productId + U+001F + customerId + U+001F + exp))  — id 는 UUID 소문자 표준 표기
+ * payloadB64 = base64url_nopad(UTF8(productId + U+001F + customerId + U+001F + exp + U+001F + iat))
+ *              — id 는 UUID 소문자 표준 표기, exp · iat 는 epoch 초. iat 가 없는 세 칸도 받는다
  * sigB64     = base64url_nopad(HMAC-SHA256(UTF8(secret), UTF8("et_" + payloadB64)))
  * </pre>
  *
@@ -47,6 +48,8 @@ public class AdmissionTicketVerifier {
     private static final int MAX_PREVIOUS = 2;
     private static final char SEPARATOR = '.';
     private static final String FIELD = String.valueOf((char) 0x1f);
+    private static final int FIELDS = 3;
+    private static final int FIELDS_WITH_ISSUED_AT = 4;
     private static final Base64.Decoder DECODER = Base64.getUrlDecoder();
     private static final Base64.Encoder ENCODER = Base64.getUrlEncoder().withoutPadding();
 
@@ -59,6 +62,7 @@ public class AdmissionTicketVerifier {
      */
     private final Instant acceptPreviousUntil;
     private final long clockSkewSeconds;
+    /** 발급 시각이 없는 세 칸 입장권의 발급 시각을 만료에서 거꾸로 셀 때만 쓴다. 네 칸은 수명을 보지 않는다. */
     private final Duration ttl;
     private final Clock clock;
 
@@ -99,7 +103,7 @@ public class AdmissionTicketVerifier {
             return Optional.empty();
         }
         String[] parts = new String(claims, StandardCharsets.UTF_8).split(FIELD, -1);
-        if (parts.length != 3
+        if ((parts.length != FIELDS && parts.length != FIELDS_WITH_ISSUED_AT)
                 || !parts[0].equals(productId.toString())
                 || !parts[1].equals(customerId.toString())) {
             return Optional.empty();
@@ -108,8 +112,9 @@ public class AdmissionTicketVerifier {
         if (expiresAt.isEmpty()) {
             return Optional.empty();
         }
-        return Optional.of(new AdmissionTicket(sha256Hex(token), isExpired(expiresAt.getAsLong(), now),
-                Instant.ofEpochSecond(expiresAt.getAsLong()).minus(ttl).minusSeconds(clockSkewSeconds)));
+        boolean expired = isExpired(expiresAt.getAsLong(), now);
+        return issuedAt(parts, Instant.ofEpochSecond(expiresAt.getAsLong())).map(issuedAt ->
+                new AdmissionTicket(sha256Hex(token), expired, issuedAt.minusSeconds(clockSkewSeconds)));
     }
 
     /** @param presented 받은 서명 표기의 바이트 */
@@ -125,9 +130,26 @@ public class AdmissionTicketVerifier {
         return matched || byPrevious;
     }
 
-    private OptionalLong epochSecond(String exp) {
+    /**
+     * 넷째 칸이 있으면 그 값이다. 수명과 견주지 않는다 — 게이트웨이가 수명을 바꿔도 맞출 것이 없게.
+     * 세 칸이면 만료에서 수명을 뺀다.
+     *
+     * @return 넷째 칸이 숫자가 아니거나 만료보다 뒤면 비어 있다
+     */
+    private Optional<Instant> issuedAt(String[] parts, Instant expiresAt) {
+        if (parts.length == FIELDS) {
+            return Optional.of(expiresAt.minus(ttl));
+        }
+        OptionalLong issuedAt = epochSecond(parts[FIELDS]);
+        if (issuedAt.isEmpty() || issuedAt.getAsLong() > expiresAt.getEpochSecond()) {
+            return Optional.empty();
+        }
+        return Optional.of(Instant.ofEpochSecond(issuedAt.getAsLong()));
+    }
+
+    private OptionalLong epochSecond(String value) {
         try {
-            return OptionalLong.of(Long.parseLong(exp));
+            return OptionalLong.of(Long.parseLong(value));
         } catch (NumberFormatException e) {
             return OptionalLong.empty();
         }

@@ -17,6 +17,7 @@ import com.grandis.nova.preorder.syncjob.SyncJobSnapshot;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 import com.grandis.nova.preorder.syncjob.SyncJobType;
 import com.grandis.nova.preorder.syncjob.SyncJobs;
+import com.grandis.nova.preorder.web.ValidationFailures;
 import com.grandis.nova.preorder.web.Viewer;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -100,17 +101,43 @@ public class PreorderQueryService {
         return preorders.history(require(viewer, preorderToken).id());
     }
 
+    /** @throws BusinessException VALIDATION_FAILED — 옵션 · 배송 차수를 상품 없이 물었다 */
     public OffsetPage<PreorderView.AdminSummary> findForAdmin(AdminPreorderFilter filter, int page, int size) {
-        SyncJobStatus jobStatus = filter.registerJobStatus();
-        OffsetPage<PreorderSnapshot> found = preorders.searchForAdmin(new AdminPreorderSearch(filter.status(),
-                filter.customerId(), filter.productId(), filter.from(), filter.to(),
-                jobStatus == null ? null : jobStatus.name()), page, size);
-        Map<UUID, SyncJobStatus> registerStatuses = registerJobStatuses(found.items());
+        requireProductScope(filter);
         Instant now = clock.instant();
+        PreorderStatus status = filter.status();
+        AdminPreorderSearch.Progress progress = null;
+        if (filter.displayStatus() != null) {
+            PreorderStatus shown = statusOf(filter.displayStatus());
+            if (status != null && status != shown) {
+                return OffsetPage.of(List.of(), page, size, 0);
+            }
+            status = shown;
+            progress = progressOf(filter.displayStatus(), now);
+        }
+        SyncJobStatus jobStatus = filter.registerJobStatus();
+        OffsetPage<PreorderSnapshot> found = preorders.searchForAdmin(new AdminPreorderSearch(status,
+                filter.customerId(), filter.productId(), filter.from(), filter.to(),
+                jobStatus == null ? null : jobStatus.name(), filter.externalReference(), filter.optionId(),
+                filter.batchNumber(), progress), page, size);
+        Map<UUID, SyncJobStatus> registerStatuses = registerJobStatuses(found.items());
         List<PreorderView.AdminSummary> items = withBatches(found.items(), (preorder, batch) ->
                 new PreorderView.AdminSummary(preorder, batch, registerStatuses.get(preorder.id()),
                         displayStatus(preorder, registerStatuses.get(preorder.id()), now)));
         return OffsetPage.of(items, page, size, found.total());
+    }
+
+    /** 옵션 · 차수 색인은 상품 id 로 시작하고, 차수 번호는 상품마다 따로 매긴다. */
+    private void requireProductScope(AdminPreorderFilter filter) {
+        if (filter.productId() != null) {
+            return;
+        }
+        if (filter.optionId() != null) {
+            throw ValidationFailures.of("optionId", "productId 와 함께 보내야 합니다.");
+        }
+        if (filter.batchNumber() != null) {
+            throw ValidationFailures.of("batchNumber", "productId 와 함께 보내야 합니다.");
+        }
     }
 
     /** 관리자 상세. 작업 · 시도 · 이력까지 함께 읽는다. */
@@ -142,6 +169,30 @@ public class PreorderQueryService {
             case RESERVED -> PreorderDisplayStatus.RESERVED;
             case CANCELING -> PreorderDisplayStatus.CANCELING;
             case CANCELED -> PreorderDisplayStatus.CANCELED;
+        };
+    }
+
+    /** 그 화면 단계로 보이는 원장 상태. {@link #displayStatus} 를 거꾸로 푼 것이라 함께 고친다. */
+    private static PreorderStatus statusOf(PreorderDisplayStatus displayStatus) {
+        return switch (displayStatus) {
+            case RECEIVED, PROCESSING -> PreorderStatus.PENDING_SYNC;
+            case PAYABLE, PAYMENT_IN_PROGRESS, PAYMENT_EXPIRED -> PreorderStatus.REGISTERED;
+            case RESERVED -> PreorderStatus.RESERVED;
+            case CANCELING -> PreorderStatus.CANCELING;
+            case CANCELED -> PreorderStatus.CANCELED;
+        };
+    }
+
+    /** 원장 상태가 같은 화면 단계들을 가르는 조건. 상태만으로 정해지는 단계는 null 이다. */
+    private static AdminPreorderSearch.Progress progressOf(PreorderDisplayStatus displayStatus, Instant now) {
+        Instant dueCutoff = now.minus(PreorderSnapshot.PAYMENT_WINDOW);
+        return switch (displayStatus) {
+            case RECEIVED -> AdminPreorderSearch.Progress.registerAttempted(false);
+            case PROCESSING -> AdminPreorderSearch.Progress.registerAttempted(true);
+            case PAYABLE -> AdminPreorderSearch.Progress.payableAfter(dueCutoff, false);
+            case PAYMENT_IN_PROGRESS -> AdminPreorderSearch.Progress.payableAfter(dueCutoff, true);
+            case PAYMENT_EXPIRED -> AdminPreorderSearch.Progress.payableUntil(dueCutoff);
+            case RESERVED, CANCELING, CANCELED -> null;
         };
     }
 

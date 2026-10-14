@@ -45,6 +45,12 @@ class AdmissionTicketVerifierTest {
     static final String VECTOR_QUEUE_TOKEN = "qt_MDAwMDAwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMTAxHzAwMDAwMDAwLTAwMDAtNzAwMC04"
             + "MDAwLTAwMDAwMDAwMTAyNB8xNzkwODE2NTIw.mgG-uqldBdt5zaFhDeLlCzhMtSxnnzLEMmms_vrCDGA";
 
+    /** 발급 시각을 실은 네 칸 공통 벡터 — 만료 1790816527, 발급 1790816407. 대기열 테스트가 같은 값을 쓴다. */
+    static final Instant VECTOR_ISSUED_AT = Instant.ofEpochSecond(1790816407);
+    static final String VECTOR_WITH_ISSUED_AT = "et_MDAwMDAwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMTAxHzAwMDAwMDAwLTAwMDAtNzAwMC04"
+            + "MDAwLTAwMDAwMDAwMTAyNB8xNzkwODE2NTI3HzE3OTA4MTY0MDc.1oFs2R18hOoYTARp963rUa3SUMef-TMyL88DklTSwSQ";
+    static final String VECTOR_WITH_ISSUED_AT_ID = "75d5c756209f4e376cbe17bf4f111543932189a95aac29c2309e0afcb006a01e";
+
     @Nested
     class 공통_벡터 {
 
@@ -61,6 +67,67 @@ class AdmissionTicketVerifierTest {
                     .as("같은 창 안에서는 같은 입장권").isEqualTo(VECTOR_CURRENT);
             assertThat(AdmissionTickets.issue(CURRENT, OTHER_PRODUCT_ID, OTHER_CUSTOMER_ID,
                     ISSUED_AT)).isEqualTo(VECTOR_OTHER_PRODUCT);
+        }
+    }
+
+    @Nested
+    class 발급_시각 {
+
+        @Test
+        void 발급_시각을_실은_입장권은_그_칸에서_시각_오차만_뺀다() {
+            assertThat(verifierAt(VECTOR_ISSUED_AT).verify(VECTOR_WITH_ISSUED_AT, PRODUCT_ID, CUSTOMER_ID))
+                    .contains(new AdmissionTicket(VECTOR_WITH_ISSUED_AT_ID, false, Instant.ofEpochSecond(1790816377)));
+        }
+
+        @Test
+        void 테스트_발급기는_발급_시각을_실은_공통_벡터와_같은_문자열을_만든다() {
+            assertThat(AdmissionTickets.issueWithIssuedAt(CURRENT, PRODUCT_ID, CUSTOMER_ID, VECTOR_ISSUED_AT,
+                    Duration.ofSeconds(120))).isEqualTo(VECTOR_WITH_ISSUED_AT);
+        }
+
+        /** 수명은 게이트웨이만 안다. 설정(120초)과 달라도 발급 시각은 칸에서 읽은 그대로다. */
+        @Test
+        void 수명이_설정과_달라도_발급_시각은_그대로다() {
+            for (Duration ttl : List.of(Duration.ofSeconds(30), Duration.ofSeconds(240), Duration.ofMinutes(10))) {
+                String ticket = AdmissionTickets.issueWithIssuedAt(CURRENT, PRODUCT_ID, CUSTOMER_ID, ISSUED_AT, ttl);
+
+                assertThat(verifierAt(ISSUED_AT).verify(ticket, PRODUCT_ID, CUSTOMER_ID)).as("수명 %s", ttl)
+                        .hasValueSatisfying(verified -> {
+                            assertThat(verified.expired()).isFalse();
+                            assertThat(verified.issuedNoEarlierThan()).isEqualTo(ISSUED_AT.minusSeconds(30));
+                        });
+            }
+        }
+
+        @Test
+        void 만료는_발급_시각이_아니라_만료_칸으로_가린다() {
+            String ticket = AdmissionTickets.issueWithIssuedAt(CURRENT, PRODUCT_ID, CUSTOMER_ID, ISSUED_AT,
+                    Duration.ofSeconds(240));
+
+            assertThat(verifierAt(ISSUED_AT.plusSeconds(269)).verify(ticket, PRODUCT_ID, CUSTOMER_ID))
+                    .hasValueSatisfying(verified -> assertThat(verified.expired()).isFalse());
+            assertThat(verifierAt(ISSUED_AT.plusSeconds(270)).verify(ticket, PRODUCT_ID, CUSTOMER_ID))
+                    .hasValueSatisfying(verified -> assertThat(verified.expired()).isTrue());
+        }
+
+        @Test
+        void 발급_시각이_숫자가_아니거나_만료보다_뒤면_거절한다() {
+            assertThat(verifierAt(ISSUED_AT).verify(withIssuedAt("1790816520", "x"), PRODUCT_ID, CUSTOMER_ID)).isEmpty();
+            assertThat(verifierAt(ISSUED_AT).verify(withIssuedAt("1790816520", ""), PRODUCT_ID, CUSTOMER_ID)).isEmpty();
+            assertThat(verifierAt(ISSUED_AT).verify(withIssuedAt("1790816520", "1790816521"), PRODUCT_ID, CUSTOMER_ID))
+                    .isEmpty();
+        }
+
+        @Test
+        void 발급_시각이_만료와_같으면_받는다() {
+            assertThat(verifierAt(ISSUED_AT).verify(withIssuedAt("1790816520", "1790816520"), PRODUCT_ID, CUSTOMER_ID))
+                    .hasValueSatisfying(verified -> assertThat(verified.issuedNoEarlierThan())
+                            .isEqualTo(EXPIRES_AT.minusSeconds(30)));
+        }
+
+        private String withIssuedAt(String exp, String iat) {
+            return AdmissionTickets.issueRaw(CURRENT, "et_",
+                    PRODUCT_ID.toString() + (char) 0x1f + CUSTOMER_ID + (char) 0x1f + exp + (char) 0x1f + iat);
         }
     }
 
@@ -165,14 +232,14 @@ class AdmissionTicketVerifierTest {
         }
 
         @Test
-        void 서명이_맞아도_칸이_셋이_아니면_거절한다() {
+        void 서명이_맞아도_칸이_셋이나_넷이_아니면_거절한다() {
             String twoFields = AdmissionTickets.issueRaw(CURRENT, "et_",
                     PRODUCT_ID.toString() + (char) 0x1f + CUSTOMER_ID);
-            String fourFields = AdmissionTickets.issueRaw(CURRENT, "et_",
-                    PRODUCT_ID.toString() + (char) 0x1f + CUSTOMER_ID + (char) 0x1f + "1790816520" + (char) 0x1f + "x");
+            String fiveFields = AdmissionTickets.issueRaw(CURRENT, "et_", PRODUCT_ID.toString() + (char) 0x1f
+                    + CUSTOMER_ID + (char) 0x1f + "1790816520" + (char) 0x1f + "1790816400" + (char) 0x1f + "1");
 
             assertThat(verifierAt(ISSUED_AT).verify(twoFields, PRODUCT_ID, CUSTOMER_ID)).isEmpty();
-            assertThat(verifierAt(ISSUED_AT).verify(fourFields, PRODUCT_ID, CUSTOMER_ID)).isEmpty();
+            assertThat(verifierAt(ISSUED_AT).verify(fiveFields, PRODUCT_ID, CUSTOMER_ID)).isEmpty();
         }
 
         @Test

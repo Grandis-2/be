@@ -2,6 +2,7 @@ package com.grandis.nova.preorder.support;
 
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.UUID;
@@ -10,7 +11,7 @@ import javax.crypto.spec.SecretKeySpec;
 
 /**
  * 테스트 전용 입장권 발급기. 운영 코드에는 발급이 없다 — 발급은 게이트웨이의 일이다.
- * waiting SignedToken 과 같은 규칙이며, AdmissionTicketVerifierTest 가 waiting 으로 만든 벡터와 같은 문자열이 나오는지 확인한다.
+ * waiting SignedToken 과 같은 규칙이며(발급 시각 칸이 없는 세 칸 · 있는 네 칸), AdmissionTicketVerifierTest 가 waiting 으로 만든 벡터와 같은 문자열이 나오는지 확인한다.
  */
 public final class AdmissionTickets {
 
@@ -31,6 +32,18 @@ public final class AdmissionTickets {
     public static String issue(String secret, UUID productId, UUID customerId, Instant now) {
         long exp = now.getEpochSecond() / WINDOW_SECONDS * WINDOW_SECONDS + TTL_SECONDS;
         return issueRaw(secret, "et_", productId.toString() + FIELD + customerId + FIELD + exp);
+    }
+
+    /** 발급 시각을 실은 네 칸 입장권. 창으로 내리지 않아 만료는 발급 시각 + 수명이다. */
+    public static String issueWithIssuedAt(UUID productId, UUID customerId, Instant issuedAt, Duration ttl) {
+        return issueWithIssuedAt(PreorderIntegrationTest.ADMISSION_TICKET_SECRET, productId, customerId, issuedAt, ttl);
+    }
+
+    public static String issueWithIssuedAt(String secret, UUID productId, UUID customerId, Instant issuedAt,
+                                           Duration ttl) {
+        long iat = issuedAt.getEpochSecond();
+        return issueRaw(secret, "et_",
+                productId.toString() + FIELD + customerId + FIELD + (iat + ttl.toSeconds()) + FIELD + iat);
     }
 
     /** 페이로드를 그대로 서명한다. 모양이 틀린 입장권을 만들 때 쓴다. */

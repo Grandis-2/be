@@ -4,7 +4,13 @@ import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
+import com.grandis.nova.preorder.preorder.EventActor;
+import com.grandis.nova.preorder.preorder.PreorderFact;
+import com.grandis.nova.preorder.preorder.PreorderLedger;
+import com.grandis.nova.preorder.query.application.PreorderDisplayStatus;
 import com.grandis.nova.preorder.support.AcceptFixtures;
+import com.grandis.nova.preorder.support.CatalogStubs;
+import com.grandis.nova.preorder.support.PreorderCancels;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
@@ -16,8 +22,11 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
+import java.util.EnumMap;
+import java.util.Map;
 import java.util.UUID;
 
 import static com.grandis.nova.preorder.support.AccessTokens.admin;
@@ -42,6 +51,12 @@ class AdminPreorderQueryApiTest {
 
     @Autowired
     PreorderAcceptService acceptService;
+
+    @Autowired
+    PreorderLedger ledger;
+
+    @Autowired
+    TransactionTemplate transactionTemplate;
 
     @MockitoBean
     CatalogClient catalogClient;
@@ -179,4 +194,129 @@ class AdminPreorderQueryApiTest {
                 .andExpect(status().isForbidden());
     }
 
+
+    @Test
+    void 외부_예약_번호로_한_건을_찾고_빈_값은_조건으로_보지_않는다() throws Exception {
+        AcceptResult registered = accepts.accept(customerId);
+        accepts.accept(customerId);
+        String reference = "EXT-" + ShopFixtures.unique();
+        fire(registered.preorder().id(), new PreorderFact.RegisterConfirmed(reference));
+
+        mockMvc.perform(get("/api/v1/admin/preorders").param("externalReference", " " + reference + " ")
+                        .with(admin()))
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(registered)));
+        mockMvc.perform(get("/api/v1/admin/preorders").param("externalReference", " ")
+                        .param("customerId", customerId.toString()).with(admin()))
+                .andExpect(jsonPath("$.data.total").value(2));
+    }
+
+    /** 첫 차수를 순번 1 까지로 두어 둘째 접수가 다음 차수로 넘어가게 한다. */
+    @Test
+    void 상품_안에서_옵션과_배송_차수로_거른다() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct(1);
+        UUID otherOption = fixtures.option(product.productId(), "ACTIVE");
+        CatalogStubs.stubPreorderProduct(catalogClient, product.productId(),
+                CatalogStubs.activeOption(product.optionId()), CatalogStubs.activeOption(otherOption));
+        AcceptResult first = accepts.submit(customerId, product);
+        AcceptResult second = accepts.submit(fixtures.customer(), new PreorderProduct(product.productId(),
+                otherOption, product.firstBatchId(), product.lastBatchId()));
+        String productId = product.productId().toString();
+
+        mockMvc.perform(get("/api/v1/admin/preorders").param("productId", productId)
+                        .param("optionId", otherOption.toString()).with(admin()))
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(second)));
+        mockMvc.perform(get("/api/v1/admin/preorders").param("productId", productId).param("batchNumber", "1")
+                        .with(admin()))
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(first)));
+        mockMvc.perform(get("/api/v1/admin/preorders").param("productId", productId).param("batchNumber", "2")
+                        .with(admin()))
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(second)))
+                .andExpect(jsonPath("$.data.items[0].shipmentBatch.batchNumber").value(2));
+        mockMvc.perform(get("/api/v1/admin/preorders").param("productId", productId).param("batchNumber", "9")
+                        .with(admin()))
+                .andExpect(jsonPath("$.data.total").value(0));
+    }
+
+    @Test
+    void 옵션과_배송_차수는_상품_없이_물으면_400_이다() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/preorders").param("optionId", UUID.randomUUID().toString())
+                        .with(admin()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.details.violations[0].field").value("optionId"));
+        mockMvc.perform(get("/api/v1/admin/preorders").param("batchNumber", "1").with(admin()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.details.violations[0].field").value("batchNumber"));
+    }
+
+    /** 거르는 조건(SQL)과 응답의 화면 단계 계산이 어긋나면 여기서 드러난다. 단계마다 예약을 하나씩 둔다. */
+    @Test
+    void 화면_단계로_거르면_그_단계의_예약만_나오고_응답의_화면_단계와_같다() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        Map<PreorderDisplayStatus, String> tokens = new EnumMap<>(PreorderDisplayStatus.class);
+        for (PreorderDisplayStatus stage : PreorderDisplayStatus.values()) {
+            AcceptResult accepted = accepts.accept(fixtures.customer(), product);
+            tokens.put(stage, AcceptFixtures.tokenOf(accepted));
+            advance(accepted.preorder().id(), stage);
+        }
+
+        for (PreorderDisplayStatus stage : PreorderDisplayStatus.values()) {
+            mockMvc.perform(get("/api/v1/admin/preorders").param("productId", product.productId().toString())
+                            .param("displayStatus", stage.name()).with(admin()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.total").value(1))
+                    .andExpect(jsonPath("$.data.items[0].preorderId").value(tokens.get(stage)))
+                    .andExpect(jsonPath("$.data.items[0].displayStatus").value(stage.name()));
+        }
+    }
+
+    @Test
+    void 상태와_화면_단계가_맞지_않으면_아무것도_나오지_않는다() throws Exception {
+        AcceptResult accepted = accepts.accept(customerId);
+        String productId = accepted.preorder().productId().toString();
+
+        mockMvc.perform(get("/api/v1/admin/preorders").param("productId", productId)
+                        .param("status", "CANCELED").param("displayStatus", "RECEIVED").with(admin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items", hasSize(0)))
+                .andExpect(jsonPath("$.data.total").value(0));
+        mockMvc.perform(get("/api/v1/admin/preorders").param("productId", productId)
+                        .param("status", "PENDING_SYNC").param("displayStatus", "RECEIVED").with(admin()))
+                .andExpect(jsonPath("$.data.total").value(1));
+    }
+
+    /** 접수 직후(RECEIVED)의 예약을 그 화면 단계까지 보낸다. */
+    private void advance(UUID preorderId, PreorderDisplayStatus stage) {
+        switch (stage) {
+            case RECEIVED -> { }
+            // 포기해 재처리를 기다리는 작업도 처리 중으로 보인다
+            case PROCESSING -> fixtures.deadLetter(preorderId);
+            case PAYABLE -> register(preorderId);
+            case PAYMENT_IN_PROGRESS -> {
+                register(preorderId);
+                fire(preorderId, new PreorderFact.PaymentStarted(Instant.now()));
+            }
+            case PAYMENT_EXPIRED -> {
+                register(preorderId);
+                fixtures.passPaymentDue(preorderId);
+            }
+            case RESERVED -> {
+                register(preorderId);
+                fire(preorderId, new PreorderFact.PaymentConfirmed(Instant.now()));
+            }
+            case CANCELING -> fire(preorderId, new PreorderFact.CancelRequested(EventActor.USER, null));
+            case CANCELED -> new PreorderCancels(ledger, transactionTemplate).complete(preorderId);
+        }
+    }
+
+    private void register(UUID preorderId) {
+        fire(preorderId, new PreorderFact.RegisterConfirmed("EXT-" + ShopFixtures.unique()));
+    }
+
+    private void fire(UUID preorderId, PreorderFact fact) {
+        transactionTemplate.executeWithoutResult(status -> ledger.fire(preorderId, fact));
+    }
 }

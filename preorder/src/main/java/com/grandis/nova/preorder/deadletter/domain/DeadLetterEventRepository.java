@@ -150,4 +150,29 @@ public interface DeadLetterEventRepository extends JpaRepository<DeadLetterEvent
     Optional<Instant> findOldestWaitingCreatedAt(@Param("open") DeadLetterStatus open,
                                                  @Param("redriving") DeadLetterStatus redriving,
                                                  @Param("staleBefore") Instant staleBefore);
+
+    default long countWaitingOfProduct(UUID productId, Instant staleBefore) {
+        return countWaitingOfProduct(OPEN, REDRIVING, staleBefore, productId);
+    }
+
+    default Optional<Instant> findOldestWaitingCreatedAtOfProduct(UUID productId, Instant staleBefore) {
+        return findOldestWaitingCreatedAtOfProduct(OPEN, REDRIVING, staleBefore, productId);
+    }
+
+    /** 그 상품의 예약에 묶인 것만 센다. 예약 표는 읽기만 한다. */
+    @Query("""
+            select count(d) from DeadLetterEvent d
+             where (d.status = :open or (d.status = :redriving and d.redriveStartedAt < :staleBefore))
+               and d.preorderId in (select p.id from Preorder p where p.productId = :productId)""")
+    long countWaitingOfProduct(@Param("open") DeadLetterStatus open, @Param("redriving") DeadLetterStatus redriving,
+                               @Param("staleBefore") Instant staleBefore, @Param("productId") UUID productId);
+
+    @Query("""
+            select min(d.createdAt) from DeadLetterEvent d
+             where (d.status = :open or (d.status = :redriving and d.redriveStartedAt < :staleBefore))
+               and d.preorderId in (select p.id from Preorder p where p.productId = :productId)""")
+    Optional<Instant> findOldestWaitingCreatedAtOfProduct(@Param("open") DeadLetterStatus open,
+                                                          @Param("redriving") DeadLetterStatus redriving,
+                                                          @Param("staleBefore") Instant staleBefore,
+                                                          @Param("productId") UUID productId);
 }
