@@ -2,6 +2,7 @@ package com.grandis.nova.catalog.api;
 
 import com.grandis.nova.catalog.detail.ProductDetailService;
 import com.grandis.nova.catalog.detail.ProductDetailView;
+import com.grandis.nova.catalog.edit.InStockConversionRequest;
 import com.grandis.nova.catalog.edit.OptionValueAddRequest;
 import com.grandis.nova.catalog.edit.OptionValueEditRequest;
 import com.grandis.nova.catalog.edit.ProductEditRequest;
@@ -239,6 +240,16 @@ public class AdminProductController {
     @PatchMapping("/{productId}/visibility")
     public ApiResponse<VisibilityView> changeVisibility(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = VisibilityChangeRequest.class))) @RequestBody String body) {
         return ApiResponse.ok(serialized(() -> editService.changeVisibility(productId, bodies.parse(body, VisibilityChangeRequest.class))));
+    }
+
+    /**
+     * 마감된 사전예약 상품을 같은 상품 그대로 일반 상품으로 바꾼다 — 판매 중이 되고, 옵션마다 초기 재고 · 할인율(비우면 0)을 받는다.
+     * order 가 재고를 만들면 목록 · 장바구니에 나온다. 마감 전 · 회차 취소 · 이미 일반 상품이면 409.
+     */
+    @Operation(summary = "사전예약 → 일반 상품 전환", description = "마감 뒤에만. stocks 는 그 상품의 옵션(판매 중지 포함)을 빠짐없이 한 번씩(0 허용). 할인가가 100원보다 작아지면 400(discountRate)")
+    @PostMapping("/{productId}/conversion")
+    public ApiResponse<AdminProductResponse> convertToInStock(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = InStockConversionRequest.class))) @RequestBody String body) {
+        return ApiResponse.ok(AdminProductResponse.from(serialized(() -> editService.convertToInStock(productId, bodies.parse(body, InStockConversionRequest.class)))));
     }
 
     /** 키로 상태만 묻는다. 응답이 유실된 클라이언트가 productId 와 진행 상태를 되찾는 데 쓴다. */

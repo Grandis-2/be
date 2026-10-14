@@ -335,8 +335,9 @@ public class ProductListingQueryRepository {
 
     private static ProductListItem toItem(ResultSet rs, Instant now) throws SQLException {
         SaleMode saleMode = SaleMode.valueOf(rs.getString("sale_mode"));
-        Instant opensAt = instant(rs, "opens_at");
-        Instant closesAt = instant(rs, "closes_at");
+        // 회차 시각은 사전예약만 — 일반 전환한 상품에도 preorder 회차 행이 남아 있어 그대로 싣지 않는다
+        Instant opensAt = saleMode == SaleMode.PREORDER ? instant(rs, "opens_at") : null;
+        Instant closesAt = saleMode == SaleMode.PREORDER ? instant(rs, "closes_at") : null;
         BigDecimal minPrice = rs.getBigDecimal("min_price");
         BigDecimal minListPrice = rs.getBigDecimal("min_list_price");
         return new ProductListItem(UuidBinary.fromBytes(rs.getBytes("id")), saleMode, rs.getString("title"),

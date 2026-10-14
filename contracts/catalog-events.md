@@ -78,6 +78,8 @@ preorder · order 의 `EventEnvelope` 와 같은 모양이다.
 | --- | --- |
 | `items` | 등록한 옵션 전부의 초기 재고(일반 상품은 옵션마다 필수, 0 허용). order 의 재고 초기화 API(`POST /api/v1/admin/products/{id}/stock`) 본문의 `items` 와 같은 모양 |
 
+**보내는 때는 둘이다.** 일반 상품을 등록할 때와, 마감된 사전예약 상품을 일반 상품으로 바꿀 때(`POST /api/v1/admin/products/{id}/conversion`)다. 전환은 판매 방식을 `IN_STOCK` 으로 바꾸는 수정과 같은 트랜잭션에서 그 상품 옵션 전부(판매 중지 포함)의 초기 재고를 싣는다 — 받는 쪽이 할 일은 같다. 이벤트를 받는 시점에는 상품이 이미 일반 판매다.
+
 **받는 쪽이 할 일.**
 
 1. 재고 초기화와 같은 규칙으로 처리한다 — `AdminStockService.initialize` 를 그대로 부르면 쓰는 길이 하나로 끝난다. 한 트랜잭션에서 모두 되거나 모두 안 된다.
@@ -123,6 +125,7 @@ payload 는 빈 객체다. 무엇이 바뀌었는지는 싣지 않는다 — pre
 | `PATCH sale-status` (오픈 전) | 상태가 바뀌었을 때만 — 같은 상태를 다시 보내면 보내지 않는다 |
 | `PATCH visibility` | 공개 여부가 바뀌었을 때만 |
 | `PATCH sale-status` (오픈 뒤 판매 중지 = 회차 취소) | 보내지 않는다 — `PREORDER_CAMPAIGN_CANCELED` 를 받은 preorder 가 캐시를 비운다 |
+| `POST conversion` (마감 뒤 일반 전환) | 보낸다 — 판매 방식이 일반으로 바뀌어 preorder 의 사본이 낡는다(`IN_STOCK_PRODUCT_REGISTERED` 와 같은 트랜잭션) |
 
 - 일반 판매 상품은 보내지 않는다 — preorder 가 읽지 않는다.
 - 내부 조회 API 의 응답이 실제로 달라졌는지는 따지지 않는다(설명 · 태그 · 보증만 고쳐도 보낸다). 받는 쪽은 비우기만 하므로 더 보내도 다시 받는 조회 한 번이 늘 뿐이다.
