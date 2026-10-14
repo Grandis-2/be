@@ -127,6 +127,38 @@ class PromotionApiTest {
     }
 
     @Test
+    @DisplayName("같은 상품을 역순으로 묶는 두 만들기가 겹쳐도 교착하지 않는다 — 늘 하나는 201, 다른 하나는 겹친 상품을 알리는 409(다시 시도 409 아님)")
+    void reverseOrderCreatesDoNotDeadlock() throws Exception {
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < 10; round++) {
+                UUID a = preorder("A" + round);
+                UUID b = preorder("B" + round);
+                java.util.concurrent.CyclicBarrier start = new java.util.concurrent.CyclicBarrier(2);
+                List<java.util.concurrent.Future<org.springframework.mock.web.MockHttpServletResponse>> futures = new ArrayList<>();
+                for (UUID[] order : new UUID[][] {{a, b}, {b, a}}) {
+                    futures.add(pool.submit(() -> {
+                        start.await();
+                        return create(body("역순", today, today, List.of(), order)).andReturn().getResponse();
+                    }));
+                }
+                List<Integer> statuses = new ArrayList<>();
+                for (var future : futures) {
+                    org.springframework.mock.web.MockHttpServletResponse response = future.get();
+                    statuses.add(response.getStatus());
+                    if (response.getStatus() == 409) {
+                        JsonNode details = JSON.readTree(response.getContentAsString()).get("error").get("details");
+                        assertThat(details.has("productIds")).as("round %d: %s", round, details).isTrue();
+                    }
+                }
+                assertThat(statuses).as("round %d", round).containsExactlyInAnyOrder(201, 409);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
     @DisplayName("고치기 — 순서를 맞바꿔도 된다(한 상품 한 홍보 제약에 걸리지 않게 통째로 다시 넣는다) · 일반으로 바꾼 상품도 남겨 둘 수 있다 · 없는 홍보 404")
     void replaceReordersAndKeepsConverted() throws Exception {
         UUID a = preorder("A");
@@ -210,9 +242,10 @@ class PromotionApiTest {
         jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", (Object) UuidBinary.toBytes(hidden));
         UUID shown = promotionId(create(body("오늘", today, today, List.of(), late, early, hidden)));
         UUID future = promotionId(create(body("내일", today.plusDays(1), today.plusDays(2), List.of(), preorder("F"))));
+        UUID ended = promotionId(create(body("어제 끝남", today.minusDays(2), today.minusDays(1), List.of(), preorder("E"))));
 
         JsonNode items = data(mockMvc.perform(get("/api/v1/promotions")).andExpect(status().isOk())).get("items");
-        assertThat(idsOf(items)).contains(shown.toString()).doesNotContain(future.toString());
+        assertThat(idsOf(items)).contains(shown.toString()).doesNotContain(future.toString(), ended.toString());
         JsonNode card = find(items, shown);
         assertThat(Instant.parse(card.get("opensAt").asString())).isCloseTo(now.minus(HOUR.multipliedBy(3)), within());
         assertThat(Instant.parse(card.get("closesAt").asString())).isCloseTo(now.plus(HOUR.multipliedBy(5)), within());
@@ -220,7 +253,7 @@ class PromotionApiTest {
     }
 
     @Test
-    @DisplayName("고객 상세 — 상품은 묶은 순서 · 공개 · 판매 준비된 것만(숨김 · 준비 전 빠짐), 일반 전환 · 마감도 싣고 할인가 · 정가 · 할인율 · 접수 단계 · Cache-Control public")
+    @DisplayName("고객 상세 — 상품은 묶은 순서 · 공개 · 판매 중 · 판매 준비된 것만(숨김 · 판매 중지 · 회차 취소 · 준비 전 빠짐), 일반 전환 · 마감도 싣고 할인가 · 정가 · 할인율 · 접수 단계 · Cache-Control public")
     void publicDetail() throws Exception {
         Instant now = Instant.now();
         UUID open = preorder("진행", now.minus(HOUR), now.plus(HOUR));
@@ -230,10 +263,15 @@ class PromotionApiTest {
         jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", (Object) UuidBinary.toBytes(hidden));
         UUID notReady = fixtures.product(categoryId, "PREORDER", "ACTIVE", "준비 전", "t");   // 회차 행 없음
         UUID converted = preorder("전환", now.minus(HOUR.multipliedBy(5)), now.minus(HOUR));
-        UUID promotionId = promotionId(create(body("상세", today, today, List.of("https://img/d.jpg"), open, closed, hidden, converted)));
+        UUID paused = preorder("판매 중지", now.minus(HOUR), now.plus(HOUR));
+        UUID canceled = preorder("회차 취소", now.minus(HOUR), now.plus(HOUR));
+        UUID promotionId = promotionId(create(body("상세", today, today, List.of("https://img/d.jpg"), open, closed, hidden, converted, paused, canceled)));
+        jdbcTemplate.update("UPDATE products SET status = 'PAUSED' WHERE id = ?", (Object) UuidBinary.toBytes(paused));
+        // 오픈 뒤 판매 중지 = 회차 취소 — 묶인 뒤에 취소돼도 카드에서 빠진다
+        jdbcTemplate.update("UPDATE products SET status = 'PAUSED', campaign_canceled_at = UTC_TIMESTAMP(6) WHERE id = ?", (Object) UuidBinary.toBytes(canceled));
         jdbcTemplate.update("UPDATE products SET sale_mode = 'IN_STOCK' WHERE id = ?", (Object) UuidBinary.toBytes(converted));
         fixtures.stockReady(converted);
-        jdbcTemplate.update("INSERT INTO promotion_products (promotion_id, position, product_id) VALUES (?, 4, ?)",
+        jdbcTemplate.update("INSERT INTO promotion_products (promotion_id, position, product_id) VALUES (?, 6, ?)",
                 UuidBinary.toBytes(promotionId), UuidBinary.toBytes(notReady));
 
         ResultActions response = mockMvc.perform(get("/api/v1/promotions/{id}", promotionId)).andExpect(status().isOk());
