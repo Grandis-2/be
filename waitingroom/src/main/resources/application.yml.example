@@ -27,6 +27,8 @@ waitingroom:
   relay:
     # preorder 주소(VPC 안 Cloud Map). 접수 POST 만 이리로 전달한다
     preorder-uri: http://preorder.ureca.local:8083
+    # preorder 의 nova.admission-ticket.clock-skew 와 같은 값. 거절 뒤 재진입 대기(Retry-After)가 이 값 + 1초다
+    # preorder-clock-skew: 30s
   schedule:
     # 기본값: 일정 이벤트 waitingroom-events, 재발행 요청 preorder-events
     queue: waitingroom-events

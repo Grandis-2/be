@@ -40,10 +40,12 @@ class AcceptOutcomeWatchTest {
     @Test
     void 다시_진입할_때는_지금_더하기_오차_뒤에_입장해_새_입장권이_접수_규칙을_통과한다() {
         long lastAcceptedAt = 1_000;
-        long admittedAt = lastAcceptedAt + AcceptOutcomeWatch.retryAfterSeconds();
+        for (Duration skew : List.of(Duration.ZERO, Duration.ofSeconds(30), Duration.ofSeconds(90))) {
+            long admittedAt = lastAcceptedAt + AcceptOutcomeWatch.retryAfterSeconds(skew);
 
-        assertThat(admittedAt - AcceptOutcomeWatch.PREORDER_CLOCK_SKEW_SEC).as("발급 시각 − 오차가 마지막 접수보다 뒤")
-                .isGreaterThan(lastAcceptedAt);
+            assertThat(admittedAt - skew.toSeconds()).as("발급 시각 − 오차가 마지막 접수보다 뒤: %s", skew)
+                    .isGreaterThan(lastAcceptedAt);
+        }
     }
 
     /** 입장 기록을 지우지 못해도 접수 응답은 그대로 나가고, 실패를 세고, 다음 성공은 다시 센다. */
@@ -60,7 +62,7 @@ class AcceptOutcomeWatchTest {
         };
         private final AcceptOutcomeWatch watch = new AcceptOutcomeWatch(TestSnapshots.emptyHolder(),
                 new RedisClock(Clock.systemUTC()), new ProductClosures(), queue, JsonMapper.builder().build(),
-                new RelayMetrics(registry));
+                new RelayMetrics(registry), new RelayProperties(null, null));
 
         @Test
         void 응답을_쓰기_시작하면_preorder_가_답한_시각을_남긴다() {

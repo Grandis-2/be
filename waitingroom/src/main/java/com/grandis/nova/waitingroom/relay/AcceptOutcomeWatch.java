@@ -44,8 +44,6 @@ class AcceptOutcomeWatch implements GatewayFilter {
     /** 오류 본문은 수백 바이트다. 길이를 밝힌 본문이 이보다 크면 읽지 않고 그대로 흘려보낸다. */
     private static final int MAX_ERROR_BODY = 256 * 1024;
     private static final Duration FORGET_TIMEOUT = Duration.ofMillis(500);
-    /** preorder 가 입장권 발급 시각에서 빼는 시각 오차(nova.admission-ticket.clock-skew 기본값). */
-    static final long PREORDER_CLOCK_SKEW_SEC = 30;
 
     private final SnapshotHolder snapshots;
     private final RedisClock clock;
@@ -53,17 +51,19 @@ class AcceptOutcomeWatch implements GatewayFilter {
     private final QueueStore queue;
     private final JsonMapper jsonMapper;
     private final RelayMetrics metrics;
+    private final long retryAfterSeconds;
     /** 장애 동안 요청마다 쌓이지 않게 상태가 바뀔 때만 로그를 남긴다. */
     private final AtomicBoolean forgetFailing = new AtomicBoolean();
 
     AcceptOutcomeWatch(SnapshotHolder snapshots, RedisClock clock, ProductClosures closures, QueueStore queue,
-                       JsonMapper jsonMapper, RelayMetrics metrics) {
+                       JsonMapper jsonMapper, RelayMetrics metrics, RelayProperties properties) {
         this.snapshots = snapshots;
         this.clock = clock;
         this.closures = closures;
         this.queue = queue;
         this.jsonMapper = jsonMapper;
         this.metrics = metrics;
+        this.retryAfterSeconds = retryAfterSeconds(properties.preorderClockSkew());
     }
 
     @Override
@@ -104,7 +104,7 @@ class AcceptOutcomeWatch implements GatewayFilter {
                         metrics.observed(SALE_CLOSED);
                     }));
             case TICKET_STALE, TICKET_USED -> Mono.fromRunnable(() -> exchange.getResponse().getHeaders()
-                            .set(HttpHeaders.RETRY_AFTER, String.valueOf(retryAfterSeconds())))
+                            .set(HttpHeaders.RETRY_AFTER, String.valueOf(retryAfterSeconds)))
                     .then(queue.forgetAdmission(productKey, customerId, ticketExpiresAt))
                     .timeout(FORGET_TIMEOUT)
                     .doOnNext(removed -> {
@@ -131,8 +131,8 @@ class AcceptOutcomeWatch implements GatewayFilter {
      * 다시 진입할 때까지. 접수 쪽은 발급 시각 − 오차(30초)가 마지막 접수보다 뒤인 입장권만 받으므로, 지금 + 오차보다
      * 뒤에 입장해야 한다. 그 전에 다시 오면 같은 이유로 또 거절된다.
      */
-    static long retryAfterSeconds() {
-        return PREORDER_CLOCK_SKEW_SEC + 1;
+    static long retryAfterSeconds(Duration preorderClockSkew) {
+        return preorderClockSkew.toSeconds() + 1;
     }
 
     private String errorCode(byte[] body) {
