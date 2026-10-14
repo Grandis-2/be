@@ -69,6 +69,8 @@ class QueueTokenTest {
 
     @Test
     void 이탈_기록은_입장권_수명보다_오래_남는다() {
-        assertThat(GraceRetention.SECONDS).isGreaterThan(AdmissionTicket.TTL_SEC);
+        assertThat(GraceRetention.seconds(30)).isGreaterThan(30);
+        assertThat(GraceRetention.seconds(120)).isGreaterThan(120);
+        assertThat(GraceRetention.seconds(600)).isGreaterThan(600);
     }
 }

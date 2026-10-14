@@ -6,6 +6,7 @@ import com.grandis.nova.waitingroom.domain.queue.AdmissionTicket;
 import com.grandis.nova.waitingroom.entry.ProductClosures;
 import com.grandis.nova.waitingroom.redis.LuaScripts;
 import com.grandis.nova.waitingroom.redis.QueueStore;
+import com.grandis.nova.waitingroom.support.TestJwts;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -25,6 +26,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.List;
 import java.util.function.Supplier;
 
 import static com.grandis.nova.waitingroom.support.TestIds.customerId;
@@ -36,14 +38,12 @@ class AcceptOutcomeWatchTest {
     static final String USED = "{\"success\":false,\"error\":{\"code\":\"ADMISSION_TICKET_USED\"}}";
 
     @Test
-    void 다시_진입할_때는_지금_더하기_오차_뒤에_시작하는_창이라_새_입장권이_접수_규칙을_통과한다() {
-        for (long now = 1_000; now < 1_000 + 2 * AdmissionTicket.WINDOW_SEC; now++) {
-            long wait = AcceptOutcomeWatch.retryAfterSeconds(Instant.ofEpochSecond(now));
-            long windowStart = (now + wait) / AdmissionTicket.WINDOW_SEC * AdmissionTicket.WINDOW_SEC;
+    void 다시_진입할_때는_지금_더하기_오차_뒤에_입장해_새_입장권이_접수_규칙을_통과한다() {
+        long lastAcceptedAt = 1_000;
+        long admittedAt = lastAcceptedAt + AcceptOutcomeWatch.retryAfterSeconds();
 
-            assertThat(windowStart).as("now=%d", now).isGreaterThan(now + AdmissionTicket.WINDOW_SEC);
-            assertThat(wait).isBetween(1L, 2 * AdmissionTicket.WINDOW_SEC);
-        }
+        assertThat(admittedAt - AcceptOutcomeWatch.PREORDER_CLOCK_SKEW_SEC).as("발급 시각 − 오차가 마지막 접수보다 뒤")
+                .isGreaterThan(lastAcceptedAt);
     }
 
     /** 입장 기록을 지우지 못해도 접수 응답은 그대로 나가고, 실패를 세고, 다음 성공은 다시 센다. */
@@ -52,7 +52,7 @@ class AcceptOutcomeWatchTest {
 
         private final Deque<Supplier<Mono<Boolean>>> replies = new ArrayDeque<>();
         private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        private final QueueStore queue = new QueueStore(new LuaScripts(null)) {
+        private final QueueStore queue = new QueueStore(new LuaScripts(null), AdmissionTicket.of(TestJwts.TOKEN_SECRET, List.of(), null)) {
             @Override
             public Mono<Boolean> forgetAdmission(String productKey, String customerId, Instant ticketExpiresAt) {
                 return replies.removeFirst().get();

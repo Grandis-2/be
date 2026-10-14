@@ -5,6 +5,7 @@ import com.grandis.nova.waitingroom.domain.product.ProductState;
 import com.grandis.nova.waitingroom.domain.product.RuntimeState;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
 import com.grandis.nova.waitingroom.domain.product.SalesWindow;
+import com.grandis.nova.waitingroom.domain.queue.AdmissionTicket;
 import com.grandis.nova.waitingroom.domain.queue.LeaveGrace;
 import com.grandis.nova.waitingroom.domain.queue.QueueState;
 import com.grandis.nova.waitingroom.redis.ControlStore;
@@ -16,6 +17,7 @@ import com.grandis.nova.waitingroom.redis.QueueStore;
 import com.grandis.nova.waitingroom.redis.RedisKeys;
 import com.grandis.nova.waitingroom.support.MutableClock;
 import com.grandis.nova.waitingroom.support.RedisContainer;
+import com.grandis.nova.waitingroom.support.TestJwts;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -61,7 +63,7 @@ class AllocationRoundTest {
     void setUp() {
         redis = RedisContainer.fresh();
         LuaScripts scripts = new LuaScripts(redis);
-        queue = new QueueStore(scripts);
+        queue = new QueueStore(scripts, AdmissionTicket.of(TestJwts.TOKEN_SECRET, List.of(), null));
         control = new ControlStore(scripts, redis);
         round = newRound();
         now = Instant.now();
@@ -71,7 +73,7 @@ class AllocationRoundTest {
     private AllocationRound newRound() {
         ControlMetrics metrics = new ControlMetrics(new SimpleMeterRegistry(), leadership,
                 new SnapshotHolder(new RedisClock(Clock.systemUTC()), PROPERTIES));
-        return new AllocationRound(control, new AdmissionProperties(10L, 0.7), PROPERTIES, metrics, leadership,
+        return new AllocationRound(control, new AdmissionProperties(10L, 0.7), AdmissionTicket.of(TestJwts.TOKEN_SECRET, List.of(), null), PROPERTIES, metrics, leadership,
                 new ScheduleResync(control, reason -> failNextResync.compareAndSet(true, false)
                         ? Mono.error(new IllegalStateException("sqs down"))
                         : Mono.fromRunnable(() -> resyncReasons.add(reason)), metrics,

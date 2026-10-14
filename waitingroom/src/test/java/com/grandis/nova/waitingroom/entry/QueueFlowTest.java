@@ -9,6 +9,7 @@ import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
 import com.grandis.nova.waitingroom.domain.queue.AdmissionTicket;
 import com.grandis.nova.waitingroom.domain.queue.EtaPolicy;
 import com.grandis.nova.waitingroom.domain.queue.QueueToken;
+import com.grandis.nova.waitingroom.domain.queue.SignedToken;
 import com.grandis.nova.waitingroom.redis.ControlStore;
 import com.grandis.nova.waitingroom.redis.LuaScripts;
 import com.grandis.nova.waitingroom.support.RedisContainer;
@@ -198,7 +199,7 @@ class QueueFlowTest {
                     .expectStatus().isOk());
 
             assertThat(admitted.get("status")).isEqualTo("ADMITTED");
-            assertThat((Integer) admitted.get("expiresIn")).isBetween(1, (int) AdmissionTicket.TTL_SEC);
+            assertThat((Integer) admitted.get("expiresIn")).as("30초 내림 없이 수명만큼(1초 미만은 버림)").isBetween(119, 120);
             assertThat(tickets.verify((String) admitted.get("admissionTicket"), quiet, now)).contains(customerId(7));
         }
 
@@ -543,6 +544,16 @@ class QueueFlowTest {
         }
 
         @Test
+        void 교체_배포_동안_옛_노드가_낸_세_칸_입장권도_전달한다() {
+            String legacy = SignedToken.of("et_", 120, 30, TestJwts.TOKEN_SECRET, List.of(), null)
+                    .issue(PRODUCT, customerId(1), now);
+
+            accept(customerId(1), legacy).expectStatus().isAccepted();
+
+            assertThat(RECEIVED.get()).containsEntry("x-admission-ticket", legacy);
+        }
+
+        @Test
         void 전달한_접수의_응답에는_요청_ID_가_한_번만_실린다() {
             String ticket = tickets.issue(PRODUCT, customerId(1), now);
 
@@ -588,7 +599,7 @@ class QueueFlowTest {
             NEXT.set(new FakeReply(409, "{\"success\":false,\"error\":{\"code\":\"ADMISSION_TICKET_USED\"}}"));
 
             accept(customerId(1), ticket).expectStatus().isEqualTo(409)
-                    .expectHeader().value(HttpHeaders.RETRY_AFTER, seconds -> assertThat(Long.parseLong(seconds)).isBetween(31L, 60L));
+                    .expectHeader().valueEquals(HttpHeaders.RETRY_AFTER, "31");
 
             status(customerId(1), token).expectStatus().isOk().expectBody().jsonPath("$.data.reason").isEqualTo("NOT_IN_QUEUE");
         }

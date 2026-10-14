@@ -7,6 +7,7 @@ import com.grandis.nova.waitingroom.domain.queue.QueueEntry;
 import com.grandis.nova.waitingroom.domain.queue.QueueState;
 import com.grandis.nova.waitingroom.redis.QueueStore.QueueStatus;
 import com.grandis.nova.waitingroom.support.RedisContainer;
+import com.grandis.nova.waitingroom.support.TestJwts;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -39,7 +40,7 @@ class QueueStoreTest {
     void setUp() {
         redis = RedisContainer.fresh();
         LuaScripts scripts = new LuaScripts(redis);
-        queue = new QueueStore(scripts);
+        queue = new QueueStore(scripts, AdmissionTicket.of(TestJwts.TOKEN_SECRET, List.of(), null));
         control = new ControlStore(scripts, redis);
         now = Instant.now();
     }
@@ -184,8 +185,7 @@ class QueueStoreTest {
             enqueue("a");
             admit(1);
             Instant admittedAt = status("a").admittedAt();
-            Instant expiresAt = Instant.ofEpochSecond(admittedAt.getEpochSecond() / AdmissionTicket.WINDOW_SEC
-                    * AdmissionTicket.WINDOW_SEC + AdmissionTicket.TTL_SEC);
+            Instant expiresAt = admittedAt.plus(AdmissionTicket.DEFAULT_TTL);
 
             assertThat(queue.status(PRODUCT, "a", expiresAt.minusSeconds(1), LeaveGrace.MIN).block(WAIT).admittedAt()).isEqualTo(admittedAt);
             assertThat(queue.status(PRODUCT, "a", expiresAt, LeaveGrace.MIN).block(WAIT).entry().state()).as("입장권과 같은 식으로 만료")
@@ -219,7 +219,7 @@ class QueueStoreTest {
             long later = now.getEpochSecond() + 1_000;
             queue.status(PRODUCT, "b", Instant.ofEpochSecond(later), LeaveGrace.MIN).block(WAIT);
             control.sweep(PRODUCT, 100, later, 3_000, 100, "0", true, 1).block(WAIT);
-            Instant expired = Instant.ofEpochSecond(later + GraceRetention.SECONDS + 1);
+            Instant expired = Instant.ofEpochSecond(later + GraceRetention.seconds(AdmissionTicket.DEFAULT_TTL.toSeconds()) + 1);
 
             assertThat(queue.status(PRODUCT, "a", expired, LeaveGrace.MIN).block(WAIT).entry().state()).isEqualTo(QueueState.NOT_QUEUED);
             QueueEntry back = queue.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, expired, LeaveGrace.MIN).block(WAIT).entry();
@@ -229,12 +229,26 @@ class QueueStoreTest {
         }
 
         @Test
+        void 입장권_수명을_바꾸면_입장_기록도_그_수명이_지나면_끝난다() {
+            QueueStore shortLived = new QueueStore(new LuaScripts(redis),
+                    AdmissionTicket.of(TestJwts.TOKEN_SECRET, List.of(), null, Duration.ofSeconds(60)));
+            shortLived.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, now, LeaveGrace.MIN).block(WAIT);
+            admit(1);
+            Instant admittedAt = shortLived.status(PRODUCT, "a", now, LeaveGrace.MIN).block(WAIT).admittedAt();
+
+            assertThat(shortLived.status(PRODUCT, "a", admittedAt.plusSeconds(59), LeaveGrace.MIN).block(WAIT).admittedAt())
+                    .isEqualTo(admittedAt);
+            assertThat(shortLived.status(PRODUCT, "a", admittedAt.plusSeconds(60), LeaveGrace.MIN).block(WAIT).entry().state())
+                    .isEqualTo(QueueState.NOT_QUEUED);
+        }
+
+        @Test
         void 입장권_수명이_지난_입장은_끝난_것이라_조회는_줄에_없고_다시_진입하면_맨_뒤에_선다() {
             enqueue("a");
             enqueue("b");
             admit(1);
             status("a");
-            Instant expired = now.plusSeconds(AdmissionTicket.TTL_SEC);
+            Instant expired = now.plus(AdmissionTicket.DEFAULT_TTL);
 
             assertThat(queue.status(PRODUCT, "a", expired, LeaveGrace.MIN).block(WAIT).entry().state()).isEqualTo(QueueState.NOT_QUEUED);
             QueueEntry back = queue.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, expired, LeaveGrace.MIN).block(WAIT).entry();

@@ -1,6 +1,7 @@
 package com.grandis.nova.waitingroom.redis;
 
 import com.grandis.nova.waitingroom.domain.product.SalesWindow;
+import com.grandis.nova.waitingroom.domain.queue.AdmissionTicket;
 import com.grandis.nova.waitingroom.domain.queue.LeaveGrace;
 import com.grandis.nova.waitingroom.domain.queue.QueueEntry;
 import com.grandis.nova.waitingroom.domain.queue.QueueState;
@@ -9,6 +10,7 @@ import com.grandis.nova.waitingroom.redis.ControlStore.ClusterView;
 import com.grandis.nova.waitingroom.redis.ControlStore.LeaderLease;
 import com.grandis.nova.waitingroom.redis.ControlStore.RelayOutcome;
 import com.grandis.nova.waitingroom.support.RedisContainer;
+import com.grandis.nova.waitingroom.support.TestJwts;
 import org.assertj.core.data.Offset;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -46,7 +48,7 @@ class ControlStoreTest {
         redis = RedisContainer.fresh();
         LuaScripts scripts = new LuaScripts(redis);
         control = new ControlStore(scripts, redis);
-        queue = new QueueStore(scripts);
+        queue = new QueueStore(scripts, AdmissionTicket.of(TestJwts.TOKEN_SECRET, List.of(), null));
         now = Instant.now();
     }
 
@@ -419,12 +421,12 @@ class ControlStoreTest {
             long past = now.getEpochSecond() - 10;
             long future = now.getEpochSecond() + 3_600;
 
-            assertThat(control.closeQueue(PRODUCT, 7, true, FENCE_TTL, past).block(WAIT)).as("표가 없다").isEqualTo(-2);
-            assertThat(control.closeQueue(PRODUCT, 7, true, FENCE_TTL, future).block(WAIT)).as("아직 유예").isZero();
-            assertThat(control.closeQueue(PRODUCT, 6, true, FENCE_TTL, past).block(WAIT)).as("옛 임기").isEqualTo(-1);
-            assertThat(control.closeQueue(PRODUCT, 7, true, FENCE_TTL, past).block(WAIT)).as("청소가 걷지 않은 생존 신호").isZero();
+            assertThat(control.closeQueue(PRODUCT, 7, true, FENCE_TTL, past, 600).block(WAIT)).as("표가 없다").isEqualTo(-2);
+            assertThat(control.closeQueue(PRODUCT, 7, true, FENCE_TTL, future, 600).block(WAIT)).as("아직 유예").isZero();
+            assertThat(control.closeQueue(PRODUCT, 6, true, FENCE_TTL, past, 600).block(WAIT)).as("옛 임기").isEqualTo(-1);
+            assertThat(control.closeQueue(PRODUCT, 7, true, FENCE_TTL, past, 600).block(WAIT)).as("청소가 걷지 않은 생존 신호").isZero();
             redis.opsForZSet().remove("wr:alive:{" + PRODUCT + "}", "a").block(WAIT);
-            assertThat(control.closeQueue(PRODUCT, 7, true, FENCE_TTL, past).block(WAIT)).isEqualTo(1);
+            assertThat(control.closeQueue(PRODUCT, 7, true, FENCE_TTL, past, 600).block(WAIT)).isEqualTo(1);
             assertThat(redis.hasKey("wr:queue:{" + PRODUCT + "}").block(WAIT)).isFalse();
         }
     }
