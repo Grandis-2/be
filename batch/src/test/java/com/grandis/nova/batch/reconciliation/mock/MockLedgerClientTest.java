@@ -100,6 +100,17 @@ class MockLedgerClientTest {
     }
 
     @Test
+    void 본문이_상한을_넘으면_5xx_라도_다시_받지_않는다() {
+        MOCK.failAtPage(1, 503);
+        MockLedgerClient tight = client(MOCK.url(), Duration.ofMinutes(1), Duration.ofMillis(1), 8);
+
+        assertThatThrownBy(() -> drain(tight.entries()))
+                .isInstanceOf(MockLedgerUnavailable.class)
+                .hasMessage("Mock 목록 조회 실패(1페이지, 응답 본문이 상한(8바이트)을 넘음)");
+        assertThat(MOCK.requests()).isEqualTo(1);
+    }
+
+    @Test
     void 기다리면_목록_전체_기한을_넘길_때는_다시_받지_않는다() {
         MOCK.active("k1", "R-1", "c", "p", "SKU", AT);
         MOCK.failAtPage(1, 503);
@@ -194,11 +205,15 @@ class MockLedgerClientTest {
      * 그 클라이언트는 503 을 스스로 한 번 더 보내 요청 횟수가 달라진다
      */
     private static MockLedgerClient client(String url, Duration maxDuration, Duration retryDelay) {
+        return client(url, maxDuration, retryDelay, 1 << 20);
+    }
+
+    private static MockLedgerClient client(String url, Duration maxDuration, Duration retryDelay, int maxBody) {
         RestClient rest = RestClient.builder()
                 .requestFactory(new JdkClientHttpRequestFactory(HttpClient.newHttpClient()))
                 .baseUrl(url)
                 .build();
-        return new MockLedgerClient(rest, JsonMapper.builder().build(), 2, 1 << 20, maxDuration, 2, retryDelay);
+        return new MockLedgerClient(rest, JsonMapper.builder().build(), 2, maxBody, maxDuration, 2, retryDelay);
     }
 
     private static String row(String key) {

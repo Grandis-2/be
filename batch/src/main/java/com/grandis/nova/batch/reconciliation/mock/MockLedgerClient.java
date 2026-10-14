@@ -80,14 +80,15 @@ public class MockLedgerClient {
                     .exchange((request, response) -> {
                         int status = response.getStatusCode().value();
                         byte[] body = response.getBody().readNBytes(maxBody + 1);
+                        // 본문 상한을 먼저 본다 — 엉뚱한 서버일 수 있어 5xx 라도 다시 받지 않는다
+                        if (body.length > maxBody) {
+                            throw new MockLedgerUnavailable(page, "응답 본문이 상한(" + maxBody + "바이트)을 넘음");
+                        }
                         if (status >= 500 && status <= 599) {
                             throw MockLedgerUnavailable.retryable(page, "HTTP " + status, null);
                         }
                         if (status != 200) {
                             throw new MockLedgerUnavailable(page, "HTTP " + status);
-                        }
-                        if (body.length > maxBody) {
-                            throw new MockLedgerUnavailable(page, "응답 본문이 상한(" + maxBody + "바이트)을 넘음");
                         }
                         return parse(page, body);
                     });
@@ -245,6 +246,10 @@ public class MockLedgerClient {
                     }
                     log.warn("Mock 목록 {}페이지 다시 받음 — {}ms 뒤 {}번째 시도", page, delay.toMillis(), attempt + 1);
                     pause(delay, e);
+                    if (System.nanoTime() - startedNanos > maxDuration.toNanos()) {
+                        // 기다림이 예상보다 길어 기한을 넘겼다 — 더 부르지 않는다
+                        throw attempt == 1 ? e : e.afterAttempts(attempt);
+                    }
                     delay = delay.multipliedBy(2);
                 }
             }
