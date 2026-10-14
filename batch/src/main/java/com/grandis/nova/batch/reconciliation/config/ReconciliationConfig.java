@@ -27,6 +27,7 @@ class ReconciliationConfig {
         factory.setReadTimeout(properties.readTimeout());
         RestClient rest = RestClient.builder().requestFactory(factory).baseUrl(properties.baseUrl().toString()).build();
         int maxBody = (int) Math.min(Integer.MAX_VALUE - 1L, properties.maxResponseBody().toBytes());
-        return new MockLedgerClient(rest, json, properties.pageSize(), maxBody, properties.maxDuration());
+        return new MockLedgerClient(rest, json, properties.pageSize(), maxBody, properties.maxDuration(),
+                properties.retries(), properties.retryDelay());
     }
 }

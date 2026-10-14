@@ -105,7 +105,7 @@ class ReconciliationRunTest extends BatchIntegrationTest {
         service.runScheduled();
 
         assertThat(onlyRun()).containsEntry("status", "FAILED")
-                .containsEntry("error_message", "Mock 목록 조회 실패(2페이지, HTTP 503)")
+                .containsEntry("error_message", "Mock 목록 조회 실패(2페이지, HTTP 503 · 3번 시도)")
                 .containsEntry("held_count", null);
         assertThat(count("reconciliation_findings")).isZero();
     }

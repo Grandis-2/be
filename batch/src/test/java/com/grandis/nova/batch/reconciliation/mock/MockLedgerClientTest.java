@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.grandis.nova.batch.support.FakeMockLedger;
+import java.net.http.HttpClient;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -12,6 +13,7 @@ import java.util.List;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -55,7 +57,7 @@ class MockLedgerClientTest {
     }
 
     @Test
-    void 중간_페이지가_실패하면_그_페이지와_상태를_담아_판정_불가로_던진다() {
+    void 중간_페이지가_계속_실패하면_그_페이지와_상태_시도_횟수를_담아_판정_불가로_던진다() {
         for (int i = 1; i <= 5; i++) {
             MOCK.active("k" + i, "R-" + i, "c", "p", "SKU", AT);
         }
@@ -67,7 +69,7 @@ class MockLedgerClientTest {
         assertThat(entries.next().externalKey()).isEqualTo("k2");
         assertThatThrownBy(entries::hasNext)
                 .isInstanceOf(MockLedgerUnavailable.class)
-                .hasMessage("Mock 목록 조회 실패(2페이지, HTTP 503)");
+                .hasMessage("Mock 목록 조회 실패(2페이지, HTTP 503 · 3번 시도)");
     }
 
     @Test
@@ -109,7 +111,7 @@ class MockLedgerClientTest {
         // 연결 주소 같은 예외 원문은 화면에 나가지 않는다
         assertThatThrownBy(() -> nowhere.entries().hasNext())
                 .isInstanceOf(MockLedgerUnavailable.class)
-                .hasMessage("Mock 목록 조회 실패(1페이지, 응답을 받지 못함 — 연결 실패)");
+                .hasMessage("Mock 목록 조회 실패(1페이지, 응답을 받지 못함 — 연결 실패 · 3번 시도)");
     }
 
     @Test
@@ -141,9 +143,21 @@ class MockLedgerClientTest {
         assertThat(MOCK.requests()).isEqualTo(1);
     }
 
+    /** 페이지 2건 · 다시 받기 2번(1ms, 2ms 뒤) */
     private static MockLedgerClient client(String url, Duration maxDuration) {
-        return new MockLedgerClient(RestClient.builder().baseUrl(url).build(), JsonMapper.builder().build(), 2, 1 << 20,
-                maxDuration);
+        return client(url, maxDuration, Duration.ofMillis(1));
+    }
+
+    /**
+     * 운영(ReconciliationConfig)과 같은 JDK 클라이언트. 기본 빌더는 시험 경로에만 있는 Apache 클라이언트를 고르는데,
+     * 그 클라이언트는 503 을 스스로 한 번 더 보내 요청 횟수가 달라진다
+     */
+    private static MockLedgerClient client(String url, Duration maxDuration, Duration retryDelay) {
+        RestClient rest = RestClient.builder()
+                .requestFactory(new JdkClientHttpRequestFactory(HttpClient.newHttpClient()))
+                .baseUrl(url)
+                .build();
+        return new MockLedgerClient(rest, JsonMapper.builder().build(), 2, 1 << 20, maxDuration, 2, retryDelay);
     }
 
     private static String row(String key) {
