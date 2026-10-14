@@ -54,6 +54,19 @@ class WorkerPropertiesTest {
         assertThat(properties.concurrency().rateLimit()).isEqualTo(160);
     }
 
+    /** 받은 횟수(1부터)로 고르고 넘으면 마지막 값. 기다림의 합(약 1시간 51분)이 order 의 결과 반영 지연 경보(마감 뒤 1시간)보다 길다. */
+    @Test
+    void 드로우는_받은_횟수에_따라_점점_길게_늦춘다() {
+        WorkerProperties.Draw draw = bind(Map.of()).draw();
+
+        assertThat(draw.retryDelay(1)).isEqualTo(Duration.ofSeconds(10));
+        assertThat(draw.retryDelay(5)).isEqualTo(Duration.ofMinutes(15));
+        assertThat(draw.retryDelay(99)).isEqualTo(Duration.ofMinutes(15));
+        assertThat(draw.waitDelay(1)).isEqualTo(Duration.ofMinutes(1));
+        assertThat(draw.waitDelay(5)).isEqualTo(Duration.ofHours(1));
+        assertThat(draw.waitDelays().stream().reduce(Duration.ZERO, Duration::plus)).isGreaterThan(Duration.ofHours(1));
+    }
+
     @Test
     void mock_주소가_없으면_기동을_막는다() {
         assertThatThrownBy(() -> bindRaw(Map.of())).rootCause().hasMessageContaining("mock.base-url");
@@ -91,7 +104,9 @@ class WorkerPropertiesTest {
                 Map.of("nova.worker.consumer.wait-seconds", "0"),
                 Map.of("nova.worker.consumer.wait-seconds", "21"),
                 Map.of("nova.worker.consumer.visibility", "10s"),
-                Map.of("nova.worker.reject-guard.invalid-requests", "0"))) {
+                Map.of("nova.worker.reject-guard.invalid-requests", "0"),
+                Map.of("nova.worker.draw.retry-delays", "0s"),
+                Map.of("nova.worker.draw.wait-delays", "1m,13h"))) {
             assertThatThrownBy(() -> bind(invalid)).as(invalid.toString())
                     .rootCause().isInstanceOf(IllegalArgumentException.class);
         }
