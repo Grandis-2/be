@@ -2,7 +2,6 @@ package com.grandis.nova.waitingroom.relay;
 
 import com.grandis.nova.waitingroom.control.RedisClock;
 import com.grandis.nova.waitingroom.control.SnapshotHolder;
-import com.grandis.nova.waitingroom.domain.queue.AdmissionTicket;
 import com.grandis.nova.waitingroom.entry.ProductClosures;
 import com.grandis.nova.waitingroom.redis.QueueStore;
 import org.reactivestreams.Publisher;
@@ -45,6 +44,8 @@ class AcceptOutcomeWatch implements GatewayFilter {
     /** 오류 본문은 수백 바이트다. 길이를 밝힌 본문이 이보다 크면 읽지 않고 그대로 흘려보낸다. */
     private static final int MAX_ERROR_BODY = 256 * 1024;
     private static final Duration FORGET_TIMEOUT = Duration.ofMillis(500);
+    /** preorder 가 입장권 발급 시각에서 빼는 시각 오차(nova.admission-ticket.clock-skew 기본값). */
+    static final long PREORDER_CLOCK_SKEW_SEC = 30;
 
     private final SnapshotHolder snapshots;
     private final RedisClock clock;
@@ -103,7 +104,7 @@ class AcceptOutcomeWatch implements GatewayFilter {
                         metrics.observed(SALE_CLOSED);
                     }));
             case TICKET_STALE, TICKET_USED -> Mono.fromRunnable(() -> exchange.getResponse().getHeaders()
-                            .set(HttpHeaders.RETRY_AFTER, String.valueOf(retryAfterSeconds(clock.now()))))
+                            .set(HttpHeaders.RETRY_AFTER, String.valueOf(retryAfterSeconds())))
                     .then(queue.forgetAdmission(productKey, customerId, ticketExpiresAt))
                     .timeout(FORGET_TIMEOUT)
                     .doOnNext(removed -> {
@@ -127,13 +128,11 @@ class AcceptOutcomeWatch implements GatewayFilter {
     }
 
     /**
-     * 다시 진입할 때까지. 같은 30초 창에서는 같은 입장권이 나오고, 접수 쪽은 마지막 접수 뒤(오차 30초) 창의 입장권만
-     * 받으므로 지금 + 오차 이후에 시작하는 창까지 기다리게 한다(최대 약 60초).
+     * 다시 진입할 때까지. 접수 쪽은 발급 시각 − 오차(30초)가 마지막 접수보다 뒤인 입장권만 받으므로, 지금 + 오차보다
+     * 뒤에 입장해야 한다. 그 전에 다시 오면 같은 이유로 또 거절된다.
      */
-    static long retryAfterSeconds(Instant now) {
-        long window = AdmissionTicket.WINDOW_SEC;
-        long acceptableFrom = (now.getEpochSecond() + window) / window * window + window;
-        return acceptableFrom - now.getEpochSecond();
+    static long retryAfterSeconds() {
+        return PREORDER_CLOCK_SKEW_SEC + 1;
     }
 
     private String errorCode(byte[] body) {

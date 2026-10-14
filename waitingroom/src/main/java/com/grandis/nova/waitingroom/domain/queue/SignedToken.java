@@ -14,8 +14,9 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * HMAC 서명 토큰 — prefix + base64url(productKey US customerId US exp) + "." + base64url(HMAC(prefix + payload)).
- * preorder 의 입장권 검증과 형식이 같아야 한다. 검증에 저장소 조회가 없어 요청 경로가 Redis 를 치지 않는다.
+ * HMAC 서명 토큰 — prefix + base64url(productKey US customerId US exp [US iat]) + "." + base64url(HMAC(prefix + payload)).
+ * 발급 시각(iat)은 그것을 싣는 토큰(입장권)만 쓴다. preorder 의 입장권 검증과 형식이 같아야 한다.
+ * 검증에 저장소 조회가 없어 요청 경로가 Redis 를 치지 않는다.
  */
 public final class SignedToken {
 
@@ -24,7 +25,7 @@ public final class SignedToken {
     /** 인증 없는 요청 하나가 키 수만큼 HMAC 을 돌리므로 옛 키 수를 묶는다. */
     private static final int MAX_PREVIOUS = 2;
     private static final char SEPARATOR = '.';
-    /** 정상 토큰은 200자 안쪽이다(UUID 두 개 + 만료). 인증 없는 요청이 긴 입력으로 HMAC 을 여러 번 돌리지 못하게 먼저 자른다. */
+    /** 정상 토큰은 200자 안쪽이다(UUID 두 개 + 만료 + 발급 시각). 인증 없는 요청이 긴 입력으로 HMAC 을 여러 번 돌리지 못하게 먼저 자른다. */
     private static final int MAX_TOKEN_LENGTH = 512;
     /** 필드 구분자(U+001F). 식별자에 들어갈 수 없는 글자라 경계가 옮겨지지 않는다. */
     private static final char FIELD = (char) 0x1f;
@@ -34,6 +35,8 @@ public final class SignedToken {
     private final String prefix;
     private final long ttlSec;
     private final long windowSec;
+    /** 발급 시각 칸을 싣는가. 실으면 받는 쪽이 수명을 몰라도 발급 시각을 안다. */
+    private final boolean stamped;
     private final byte[] secret;
     /** 검증에서만 받는 옛 키. 발급에는 안 쓴다 — 옛 키로 내면 그 키를 뺀 뒤 방금 낸 토큰이 죽는다. */
     private final List<byte[]> previous;
@@ -41,11 +44,12 @@ public final class SignedToken {
     private final Instant acceptPreviousUntil;
     private final AtomicLong acceptedByPrevious = new AtomicLong();
 
-    private SignedToken(String prefix, long ttlSec, long windowSec, byte[] secret, List<byte[]> previous,
-                        Instant acceptPreviousUntil) {
+    private SignedToken(String prefix, long ttlSec, long windowSec, boolean stamped, byte[] secret,
+                        List<byte[]> previous, Instant acceptPreviousUntil) {
         this.prefix = prefix;
         this.ttlSec = ttlSec;
         this.windowSec = windowSec;
+        this.stamped = stamped;
         this.secret = secret;
         this.previous = previous;
         this.acceptPreviousUntil = acceptPreviousUntil;
@@ -54,6 +58,20 @@ public final class SignedToken {
     /** @param rolloutEndsAt 키 교체 배포가 모두 끝나는 때. 옛 키가 있으면 필수다 */
     public static SignedToken of(String prefix, long ttlSec, long windowSec, String secret,
                                  List<String> previous, Instant rolloutEndsAt) {
+        return create(prefix, ttlSec, windowSec, false, secret, previous, rolloutEndsAt);
+    }
+
+    /**
+     * 발급 시각을 싣고 창 없이 발급 시각 + 수명에 만료되는 토큰. 검증은 발급 시각 칸이 없는 옛 형식도 받는다 —
+     * 교체 배포 동안 옛 노드가 낸 토큰이 있다.
+     */
+    public static SignedToken stamped(String prefix, long ttlSec, String secret, List<String> previous,
+                                      Instant rolloutEndsAt) {
+        return create(prefix, ttlSec, 1, true, secret, previous, rolloutEndsAt);
+    }
+
+    private static SignedToken create(String prefix, long ttlSec, long windowSec, boolean stamped, String secret,
+                                      List<String> previous, Instant rolloutEndsAt) {
         if (secret == null || secret.length() < MIN_SECRET_LENGTH) {
             throw new IllegalArgumentException("토큰 비밀키는 %d자 이상이어야 한다".formatted(MIN_SECRET_LENGTH));
         }
@@ -79,15 +97,16 @@ public final class SignedToken {
             throw new IllegalArgumentException("수명과 창은 양수이고 창 <= 수명이어야 한다: ttl=%d window=%d"
                     .formatted(ttlSec, windowSec));
         }
-        return new SignedToken(prefix, ttlSec, windowSec, secret.getBytes(StandardCharsets.UTF_8),
+        return new SignedToken(prefix, ttlSec, windowSec, stamped, secret.getBytes(StandardCharsets.UTF_8),
                 previous.stream().map(key -> key.getBytes(StandardCharsets.UTF_8)).toList(),
                 rolloutEndsAt == null ? null : rolloutEndsAt.plusSeconds(ttlSec + windowSec));
     }
 
     /** 같은 창(window) 안에서는 같은 사람에게 같은 값을 준다 — 폴링마다 토큰이 바뀌지 않게. */
     public String issue(String productKey, String customerId, Instant now) {
-        String payload = ENCODER.encodeToString(
-                (productKey + FIELD + customerId + FIELD + expiry(now)).getBytes(StandardCharsets.UTF_8));
+        String fields = productKey + FIELD + customerId + FIELD + expiry(now)
+                + (stamped ? FIELD + String.valueOf(now.getEpochSecond()) : "");
+        String payload = ENCODER.encodeToString(fields.getBytes(StandardCharsets.UTF_8));
         return prefix + payload + SEPARATOR + new String(signature(secret, payload), StandardCharsets.UTF_8);
     }
 
@@ -117,12 +136,18 @@ public final class SignedToken {
             return Optional.empty();
         }
         String[] parts = fields(payload);
-        if (parts.length != 3 || !parts[0].equals(productKey)) {
+        if (!(parts.length == 3 || (stamped && parts.length == 4)) || !parts[0].equals(productKey)) {
             return Optional.empty();
         }
         OptionalLong exp = epochSecond(parts[2]);
         if (exp.isEmpty()) {
             return Optional.empty();
+        }
+        if (parts.length == 4) {
+            OptionalLong issuedAt = epochSecond(parts[3]);
+            if (issuedAt.isEmpty() || issuedAt.getAsLong() > exp.getAsLong()) {
+                return Optional.empty();
+            }
         }
         Holder holder = new Holder(parts[1], Instant.ofEpochSecond(exp.getAsLong()));
         if (match == Match.PREVIOUS && !holder.expired(now)) {

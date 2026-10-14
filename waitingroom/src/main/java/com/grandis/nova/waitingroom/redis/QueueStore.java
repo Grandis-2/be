@@ -21,11 +21,17 @@ public class QueueStore {
     public static final long UNLIMITED = -1;
     /** 순서 바닥값 수명. 줄이 빈 동안 시계가 뒤로 가도 이전 순서 아래로 서지 않게 넉넉히 둔다. */
     static final long MAX_SCORE_TTL_SEC = 86_400;
+    /** 스크립트의 입장권 창. 입장권은 창 없이 입장 시각 + 수명에 만료된다. */
+    private static final String NO_WINDOW = "1";
 
     private final LuaScripts scripts;
+    private final String ticketTtl;
+    private final String retention;
 
-    public QueueStore(LuaScripts scripts) {
+    public QueueStore(LuaScripts scripts, AdmissionTicket tickets) {
         this.scripts = scripts;
+        this.ticketTtl = String.valueOf(tickets.ttlSec());
+        this.retention = String.valueOf(GraceRetention.seconds(tickets.ttlSec()));
     }
 
     /**
@@ -37,8 +43,7 @@ public class QueueStore {
     public Mono<QueueStatus> enqueue(String productKey, String customerId, long maxLength, Instant now, Duration leaveGrace) {
         return scripts.list(scripts.enqueue, RedisKeys.enqueue(productKey), List.of(customerId,
                         String.valueOf(MAX_SCORE_TTL_SEC), String.valueOf(leaveGrace.toSeconds()),
-                        String.valueOf(maxLength), String.valueOf(now.getEpochSecond()), String.valueOf(GraceRetention.SECONDS),
-                        String.valueOf(AdmissionTicket.TTL_SEC), String.valueOf(AdmissionTicket.WINDOW_SEC)))
+                        String.valueOf(maxLength), String.valueOf(now.getEpochSecond()), retention, ticketTtl, NO_WINDOW))
                 .map(reply -> {
                     long admittedAt = Long.parseLong(LuaScripts.text(reply, 5));
                     if (admittedAt >= 0) {
@@ -59,8 +64,7 @@ public class QueueStore {
     public Mono<QueueStatus> status(String productKey, String customerId, Instant now, Duration leaveGrace) {
         return scripts.list(scripts.status, RedisKeys.status(productKey), List.of(customerId,
                         String.valueOf(leaveGrace.toSeconds()), String.valueOf(now.getEpochSecond()),
-                        String.valueOf(AdmissionTicket.TTL_SEC), String.valueOf(AdmissionTicket.WINDOW_SEC),
-                        String.valueOf(GraceRetention.SECONDS)))
+                        ticketTtl, NO_WINDOW, retention))
                 .map(reply -> {
                     QueueState state = QueueState.valueOf(LuaScripts.text(reply, 0));
                     long rank = LuaScripts.number(reply, 1);
@@ -85,8 +89,7 @@ public class QueueStore {
      */
     public Mono<Boolean> forgetAdmission(String productKey, String customerId, Instant ticketExpiresAt) {
         return scripts.single(scripts.forgetAdmission, RedisKeys.forget(productKey), List.of(customerId,
-                        String.valueOf(ticketExpiresAt.getEpochSecond()), String.valueOf(AdmissionTicket.WINDOW_SEC),
-                        String.valueOf(AdmissionTicket.TTL_SEC)))
+                        String.valueOf(ticketExpiresAt.getEpochSecond()), NO_WINDOW, ticketTtl))
                 .map(removed -> removed == 1);
     }
 
