@@ -112,7 +112,8 @@ class ControlPlaneTest {
             RedisClock clock = new RedisClock(Clock.systemUTC());
             holder = new SnapshotHolder(clock, FAST);
             metrics = new ControlMetrics(registry, leadership, holder);
-            ScheduleResync resync = new ScheduleResync(store, reason -> Mono.empty(), metrics);
+            ScheduleResync resync = new ScheduleResync(store, reason -> Mono.empty(), metrics,
+                    new ScheduleResyncProperties(null), Clock.systemUTC());
             plane = new ControlPlane(store, leadership, new AllocationRound(store, new AdmissionProperties(10L, 0.7), FAST,
                     metrics, leadership, resync, new Brake(BrakeTest.DEFAULTS, metrics)),
                     holder, clock, new IdlePassCounter(), new RelayOutcomeCounter(), FAST, metrics, new LoopBeats());

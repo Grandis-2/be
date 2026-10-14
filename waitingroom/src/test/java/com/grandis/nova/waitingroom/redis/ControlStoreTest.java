@@ -272,12 +272,15 @@ class ControlStoreTest {
 
         @Test
         void 재발행_선점은_한_노드만_잡고_남의_선점은_풀지_않는다() {
-            assertThat(control.claimResync("a", Duration.ofSeconds(60)).block(WAIT)).isTrue();
-            assertThat(control.claimResync("b", Duration.ofSeconds(60)).block(WAIT)).isFalse();
+            String marker = RedisKeys.RESYNC_REQUESTED;
+            assertThat(control.claimResync(marker, "a", Duration.ofSeconds(60)).block(WAIT)).isTrue();
+            assertThat(control.claimResync(marker, "b", Duration.ofSeconds(60)).block(WAIT)).isFalse();
 
-            assertThat(control.releaseResyncClaim("b").block(WAIT)).isFalse();
-            assertThat(control.releaseResyncClaim("a").block(WAIT)).isTrue();
-            assertThat(control.claimResync("b", Duration.ofSeconds(60)).block(WAIT)).isTrue();
+            assertThat(control.releaseResyncClaim(marker, "b").block(WAIT)).isFalse();
+            assertThat(control.releaseResyncClaim(marker, "a").block(WAIT)).isTrue();
+            assertThat(control.claimResync(marker, "b", Duration.ofSeconds(60)).block(WAIT)).isTrue();
+            assertThat(control.claimResync(RedisKeys.RESYNC_PERIODIC, "c", Duration.ofSeconds(60)).block(WAIT))
+                    .as("주기 표식은 따로 선점한다").isTrue();
         }
 
         @Test
@@ -289,7 +292,7 @@ class ControlStoreTest {
         @Test
         void 재발행_요청_표식은_보낸_뒤에_세우고_기간이_지나면_사라진다() {
             assertThat(redis.hasKey(RedisKeys.RESYNC_REQUESTED).block(WAIT)).isFalse();
-            control.markResyncRequested(Duration.ofSeconds(60)).block(WAIT);
+            control.markResyncRequested(RedisKeys.RESYNC_REQUESTED, Duration.ofSeconds(60)).block(WAIT);
 
             assertThat(redis.hasKey(RedisKeys.RESYNC_REQUESTED).block(WAIT)).isTrue();
             assertThat(redis.getExpire(RedisKeys.RESYNC_REQUESTED).block(WAIT)).isPositive();

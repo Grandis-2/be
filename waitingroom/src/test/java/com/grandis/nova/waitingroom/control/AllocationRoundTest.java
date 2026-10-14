@@ -13,6 +13,7 @@ import com.grandis.nova.waitingroom.redis.LuaScripts;
 import com.grandis.nova.waitingroom.redis.ProductSchedules;
 import com.grandis.nova.waitingroom.redis.QueueStore;
 import com.grandis.nova.waitingroom.redis.RedisKeys;
+import com.grandis.nova.waitingroom.support.MutableClock;
 import com.grandis.nova.waitingroom.support.RedisContainer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -52,6 +53,7 @@ class AllocationRoundTest {
     /** 재발행 요청을 받은 순서대로 남긴다. failNextResync 가 켜져 있으면 한 번 실패한다. */
     private final List<String> resyncReasons = new CopyOnWriteArrayList<>();
     private final AtomicBoolean failNextResync = new AtomicBoolean();
+    private final MutableClock resyncClock = new MutableClock(Instant.parse("2026-10-10T01:00:00Z"));
     private Instant now;
 
     @BeforeEach
@@ -71,7 +73,8 @@ class AllocationRoundTest {
         return new AllocationRound(control, new AdmissionProperties(10L, 0.7), PROPERTIES, metrics, leadership,
                 new ScheduleResync(control, reason -> failNextResync.compareAndSet(true, false)
                         ? Mono.error(new IllegalStateException("sqs down"))
-                        : Mono.fromRunnable(() -> resyncReasons.add(reason)), metrics),
+                        : Mono.fromRunnable(() -> resyncReasons.add(reason)), metrics,
+                        new ScheduleResyncProperties(null), resyncClock),
                 new Brake(NO_HOLD, metrics));
     }
 
@@ -295,7 +298,7 @@ class AllocationRoundTest {
     }
 
     @Test
-    void 재발행_요청을_보내지_못하면_선점을_풀어_다음_회차에_다시_요청한다() {
+    void 재발행_요청을_보내지_못하면_선점을_풀고_쉰_뒤에_다시_요청한다() {
         failNextResync.set(true);
 
         run(7, 0);
@@ -303,6 +306,7 @@ class AllocationRoundTest {
         assertThat(resyncReasons).isEmpty();
         assertThat(redis.hasKey(RedisKeys.RESYNC_ATTEMPTS).block(WAIT)).as("보내지 못한 요청은 세지 않는다").isFalse();
 
+        resyncClock.advance(ScheduleResync.FIRST_RETRY);
         run(7, 0);
         await(() -> "1".equals(redis.opsForValue().get(RedisKeys.RESYNC_ATTEMPTS).toFuture().join()));
         assertThat(resyncReasons).containsExactly("SCHEDULE_EMPTY");
@@ -323,7 +327,8 @@ class AllocationRoundTest {
         };
 
         assertThatThrownBy(() -> new ScheduleResync(control, slow,
-                new ControlMetrics(new SimpleMeterRegistry(), leadership, TestSnapshots.emptyHolder())))
+                new ControlMetrics(new SimpleMeterRegistry(), leadership, TestSnapshots.emptyHolder()),
+                new ScheduleResyncProperties(null), resyncClock))
                 .hasMessageContaining("선점 시한");
     }
 
@@ -358,13 +363,17 @@ class AllocationRoundTest {
     }
 
     @Test
-    void 일정을_아는_동안은_재발행을_요청하지_않는다() {
+    void 일정을_아는_동안에는_몰라서_하는_요청은_없고_주기_요청만_한_번_나간다() {
         schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
 
         run(7, 0);
+        await(() -> "1".equals(redis.opsForValue().get(RedisKeys.RESYNC_PERIODIC).toFuture().join()));
+        run(7, 0);
+        round = newRound();
+        run(8, 0);
 
         assertThat(redis.hasKey(RedisKeys.RESYNC_REQUESTED).block(WAIT)).isFalse();
-        assertThat(resyncReasons).isEmpty();
+        assertThat(resyncReasons).as("리더가 바뀌어도 표식이 있으면 다시 요청하지 않는다").containsExactly("PERIODIC");
     }
 
     @Test
