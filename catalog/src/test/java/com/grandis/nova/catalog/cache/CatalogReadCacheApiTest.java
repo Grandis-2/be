@@ -130,10 +130,11 @@ class CatalogReadCacheApiTest {
     @Test
     @DisplayName("max-age 는 그 값이 Redis 에서 묵은 만큼 줄어든다(초는 버림) — 앞단 캐시와 합쳐도 TTL(5초)을 넘지 않게")
     void maxAgeShrinksWithAge() throws Exception {
-        UUID productId = registerInStock("나이");
-        assertThat(maxAge(get("/api/v1/products/{id}", productId))).isBetween(4L, 5L);
+        registerInStock("나이");
+        MockHttpServletRequestBuilder listing = get("/api/v1/products").param("categoryId", categoryId.toString());
+        assertThat(maxAge(listing)).isBetween(4L, 5L);
         Thread.sleep(2_100);
-        assertThat(maxAge(get("/api/v1/products/{id}", productId))).isBetween(1L, 2L);
+        assertThat(maxAge(listing)).isBetween(1L, 2L);
     }
 
     @Test
@@ -178,6 +179,14 @@ class CatalogReadCacheApiTest {
         assertThat(keys).as("본문이 캐시에 들어갔다").hasSize(1);
         String key = keys.iterator().next();
         assertThat(redis.getExpire(key)).isBetween(590L, 600L);
+
+        // 본문이 30초 묵어도 max-age 는 5초 상한 그대로 — 남은 시간은 본문 TTL(10분)로 센다(상품 TTL 5초로 세면 0)
+        tools.jackson.databind.node.ObjectNode stored = (tools.jackson.databind.node.ObjectNode) JSON.readTree(redis.opsForValue().get(key));
+        stored.put("loadedAt", System.currentTimeMillis() - 30_000);
+        redis.opsForValue().set(key, stored.toString(), Duration.ofMinutes(9));
+        assertThat(maxAge(get("/api/v1/products/{id}", productId))).isBetween(4L, 5L);
+        UUID variantId = UUID.fromString(data(mockMvc.perform(get("/api/v1/products/{id}", productId))).get("variants").get(0).get("variantId").asString());
+        assertThat(maxAge(get("/api/v1/products/{id}/variants/{v}", productId, variantId))).isBetween(4L, 5L);
     }
 
     @Test
@@ -213,6 +222,15 @@ class CatalogReadCacheApiTest {
                 body.replace("첫 이름", "고친 이름")).andExpect(status().isOk());
         assertThat(data(mockMvc.perform(get("/api/v1/promotions/{id}", promotionId))).get("name").asString()).isEqualTo("고친 이름");
         assertThat(titlesOfPromotions()).contains("고친 이름").doesNotContain("첫 이름");
+
+        // 새로 만든 홍보도 세대를 올린다 — 캐시된 목록에 다음 조회부터 나온다
+        UUID another = fixtures.product(categoryId, "PREORDER", "ACTIVE", "홍보 상품 2", "t");
+        fixtures.registration(another);
+        fixtures.option(another, "ACTIVE");
+        fixtures.campaign(another, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
+        admin(post("/api/v1/admin/promotions").header("Idempotency-Key", "k-" + ShopFixtures.unique()),
+                body.replace("첫 이름", "새 홍보").replace(productId.toString(), another.toString())).andExpect(status().isCreated());
+        assertThat(titlesOfPromotions()).contains("고친 이름", "새 홍보");
     }
 
     @Test
@@ -232,6 +250,67 @@ class CatalogReadCacheApiTest {
         assertThat(data(mockMvc.perform(get("/api/v1/products/{id}/variants/{v}", productId, variantId))).get("price").decimalValue())
                 .isEqualByComparingTo("500000");
         assertThat(titles(tag)).containsExactly("고친 뒤");
+    }
+
+    @Test
+    @DisplayName("공개 전환 · 판매 상태 · 사진 넣기 · 옵션 값 추가도 커밋 뒤 세대를 올린다 — 캐시된 상세가 다음 조회부터 새 값(비공개는 404)")
+    void otherAdminWritesInvalidate() throws Exception {
+        UUID paused = registerInStock("판매 중지");
+        mockMvc.perform(get("/api/v1/products/{id}", paused)).andExpect(status().isOk());
+        admin(patch(ADMIN + "/{id}/sale-status", paused), "{ \"status\": \"PAUSED\" }").andExpect(status().isOk());
+        assertThat(data(mockMvc.perform(get("/api/v1/products/{id}", paused))).get("status").asString()).isEqualTo("PAUSED");
+
+        UUID imaged = registerInStock("사진");
+        mockMvc.perform(get("/api/v1/products/{id}", imaged)).andExpect(status().isOk());
+        String url = "https://img/added-" + ShopFixtures.unique() + ".jpg";
+        admin(post(ADMIN + "/{id}/images", imaged), "{ \"kind\": \"DETAIL\", \"bundle\": \"스펙\", \"url\": \"%s\" }".formatted(url))
+                .andExpect(status().isCreated());
+        assertThat(data(mockMvc.perform(get("/api/v1/products/{id}", imaged))).toString()).contains(url);
+
+        UUID colored = registerWithColor("색 추가");
+        assertThat(data(mockMvc.perform(get("/api/v1/products/{id}", colored))).toString()).doesNotContain("블루");
+        admin(post(ADMIN + "/{id}/option-values", colored), "{ \"axisKey\": \"color\", \"value\": \"블루\" }").andExpect(status().isCreated());
+        assertThat(data(mockMvc.perform(get("/api/v1/products/{id}", colored))).toString()).contains("블루");
+
+        UUID hidden = registerInStock("숨김");
+        mockMvc.perform(get("/api/v1/products/{id}", hidden)).andExpect(status().isOk());
+        admin(patch(ADMIN + "/{id}/visibility", hidden), "{ \"visible\": false }").andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/products/{id}", hidden)).andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("사전예약 → 일반 전환도 세대를 올린다 — 캐시된 마감 상세가 다음 조회부터 일반 상품")
+    void conversionInvalidates() throws Exception {
+        UUID productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", "전환", "t" + ShopFixtures.unique());
+        fixtures.registration(productId);
+        UUID optionId = fixtures.option(productId, "ACTIVE");
+        Instant now = Instant.now();
+        fixtures.campaign(productId, now.minus(Duration.ofHours(2)), now.minus(Duration.ofHours(1)));
+        assertThat(data(mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk())).get("saleMode").asString())
+                .isEqualTo("PREORDER");
+
+        admin(post(ADMIN + "/{id}/conversion", productId), "{ \"stocks\": [ { \"variantId\": \"%s\", \"stock\": 1 } ] }".formatted(optionId))
+                .andExpect(status().isOk());
+        fixtures.stockReady(productId);   // order 가 전환 이벤트로 재고 행을 만든 것
+
+        assertThat(data(mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk())).get("saleMode").asString())
+                .isEqualTo("IN_STOCK");
+    }
+
+    @Test
+    @DisplayName("리뷰를 지우면(API) 리뷰 세대가 올라 캐시된 상품 리뷰 목록에서 다음 조회부터 빠진다")
+    void reviewDeleteInvalidates() throws Exception {
+        UUID productId = registerInStock("리뷰 삭제");
+        UUID customerId = UUID.randomUUID();
+        reviews.saveAndFlush(ProductReview.write(productId, customerId, UUID.randomUUID(), 5, "지울 리뷰", "기본", "김**"));
+        JsonNode listed = data(mockMvc.perform(get("/api/v1/products/{id}/reviews", productId))).get("items");
+        assertThat(listed).hasSize(1);
+        UUID reviewId = UUID.fromString(listed.get(0).get("reviewId").asString());
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete("/api/v1/reviews/{id}", reviewId)
+                .with(com.grandis.nova.catalog.support.AccessTokens.customer(customerId))).andExpect(status().isNoContent());
+
+        assertThat(data(mockMvc.perform(get("/api/v1/products/{id}/reviews", productId))).get("items")).isEmpty();
     }
 
     @Test
@@ -351,6 +430,21 @@ class CatalogReadCacheApiTest {
                   "basePrice": 1000000, "combinations": [ { "selections": {}, "stock": 3 } ],
                   "images": { "gallery": [ { "items": [ { "url": "https://img/c.jpg" } ] } ] } }
                 """.formatted(categoryId, title, tags);
+        UUID productId = UUID.fromString(data(admin(post(ADMIN).header("Idempotency-Key", "k-" + ShopFixtures.unique()), body)
+                .andExpect(status().isCreated())).get("registration").get("productId").asString());
+        fixtures.stockReady(productId);
+        return productId;
+    }
+
+    /** 색상 축(화이트) 하나인 일반 상품을 관리자 API 로 등록하고 판매 준비를 넣는다. */
+    private UUID registerWithColor(String title) throws Exception {
+        String body = """
+                { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "%s", "brand": "APPLE", "modelName": "A0001", "tags": "t%s", "visible": true,
+                  "basePrice": 1000000,
+                  "optionAxes": [ { "key": "color", "label": "색상", "values": [ { "value": "화이트" } ] } ],
+                  "combinations": [ { "selections": { "color": "화이트" }, "stock": 3 } ],
+                  "images": { "gallery": [ { "color": "화이트", "items": [ { "url": "https://img/w.jpg" } ] } ] } }
+                """.formatted(categoryId, title, ShopFixtures.unique());
         UUID productId = UUID.fromString(data(admin(post(ADMIN).header("Idempotency-Key", "k-" + ShopFixtures.unique()), body)
                 .andExpect(status().isCreated())).get("registration").get("productId").asString());
         fixtures.stockReady(productId);
