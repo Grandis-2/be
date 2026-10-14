@@ -37,7 +37,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ReadCacheTest {
 
-    private static final GenericContainer<?> REDIS = new GenericContainer<>("redis:8").withExposedPorts(6379);
+    /** 운영과 같은 Valkey 9 — 메모리 계산 기준(StoreBudget.charge)을 이 엔진으로 잰다. */
+    private static final GenericContainer<?> REDIS = new GenericContainer<>("valkey/valkey:9").withExposedPorts(6379);
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     static LettuceConnectionFactory connections;
@@ -320,20 +321,43 @@ class ReadCacheTest {
     }
 
     @Test
-    @DisplayName("메모리 예산을 넘는 값은 넣지 않고 loader 로 답한다 — TTL 동안 예산만큼 다시 찬다")
-    void budgetCapsWhatIsStored() throws Exception {
-        ReadCache.Spec<Item> small = cache.spec("small", Item.class, Duration.ofSeconds(1), 400);
+    @DisplayName("저장 상한을 넘는 값은 넣지 않고 loader 로 답한다 — 상한은 키 · 값 · 관리 비용을 합친 양으로 센다")
+    void budgetCapsWhatIsStored() {
+        ReadCache.Spec<Item> small = cache.spec("small", Item.class, Duration.ofSeconds(30), 500);
         AtomicInteger loads = new AtomicInteger();
-        cache.get(small, "products", "a", () -> item("a", loads));   // 한 값이 약 200 바이트
+        cache.get(small, "products", "a", () -> item("a", loads));
+        cache.get(small, "products", "b", () -> item("b", loads));   // 값 하나가 약 360 바이트로 세어져 두 번째는 넘는다
+        assertThat(redis.keys("svc:cache:small:*")).hasSize(1);
+        assertThat(small.budget().used()).isBetween(250L, 500L);
         cache.get(small, "products", "b", () -> item("b", loads));
-        cache.get(small, "products", "c", () -> item("c", loads));   // 예산 초과 — 넣지 않는다
-        assertThat(redis.keys("svc:cache:small:*")).hasSize(2);
-        cache.get(small, "products", "c", () -> item("c", loads));
-        assertThat(loads).as("넣지 못한 c 는 다시 DB").hasValue(4);
+        assertThat(loads).as("넣지 못한 b 는 다시 DB").hasValue(3);
+    }
 
-        Thread.sleep(1_100);   // TTL 이 지나 예산이 다시 찼다
-        cache.get(small, "products", "c", () -> item("c", loads));
-        assertThat(redis.keys("svc:cache:small:*")).contains(onlyKeyMatching("svc:cache:small:*c"));
+    @Test
+    @DisplayName("만료 전 값은 계속 센다 — 예산 400 · TTL 10초에서 0초 400 을 넣으면 9초의 360 은 거절, 10초 뒤에는 받는다(토큰 버킷이면 받았다)")
+    void liveBytesStayCountedUntilExpiry() {
+        MutableClock clock = new MutableClock(Instant.parse("2026-10-14T00:00:00Z"));
+        ReadCache.StoreBudget budget = new ReadCache.StoreBudget(400, clock);
+        assertThat(budget.tryTake(400, Duration.ofSeconds(10))).isTrue();
+        clock.advance(Duration.ofSeconds(9));
+        assertThat(budget.tryTake(360, Duration.ofSeconds(10))).isFalse();
+        clock.advance(Duration.ofSeconds(1));
+        assertThat(budget.tryTake(360, Duration.ofSeconds(10))).isTrue();
+        assertThat(budget.used()).isEqualTo(360);
+    }
+
+    @Test
+    @DisplayName("셀 양(charge)은 Valkey 의 MEMORY USAGE 보다 늘 크다 — 작은 값(키마다 고정 비용)부터 큰 값(할당 단위)까지")
+    void chargeIsAtLeastActualMemory() throws Exception {
+        String key = "catalog:cache:product-detail:f1.3fa2c1d0e9ab:products.12:0199a3f2-8a11-7c22-8d33-5e6f70819203";
+        for (int size : new int[] {1, 50, 200, 1_000, 5_000, 20_000, 60_000, 200_000, 300_000, 1_000_000}) {
+            String value = "가".repeat(size / 3) + "x".repeat(size % 3);
+            redis.opsForValue().set(key, value, Duration.ofMinutes(10));
+            long actual = Long.parseLong(REDIS.execInContainer("valkey-cli", "MEMORY", "USAGE", key).getStdout().strip());
+            int valueBytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            assertThat(ReadCache.StoreBudget.charge(key.length(), valueBytes)).as("value %d bytes, actual %d", valueBytes, actual)
+                    .isGreaterThanOrEqualTo(actual);
+        }
     }
 
     @Test
@@ -412,6 +436,33 @@ class ReadCacheTest {
             Thread.sleep(millis);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    static final class MutableClock extends java.time.Clock {
+        private Instant now;
+
+        MutableClock(Instant now) {
+            this.now = now;
+        }
+
+        void advance(Duration by) {
+            now = now.plus(by);
+        }
+
+        @Override
+        public java.time.ZoneId getZone() {
+            return java.time.ZoneOffset.UTC;
+        }
+
+        @Override
+        public java.time.Clock withZone(java.time.ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
         }
     }
 

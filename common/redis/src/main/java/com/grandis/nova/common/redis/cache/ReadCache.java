@@ -57,7 +57,7 @@ public final class ReadCache {
     static final Duration OPEN_FOR = Duration.ofSeconds(10);
     /** 같은 키의 진행 중 조회를 같이 받는 쪽이 기다리는 상한. */
     static final Duration WAIT_FOR_LOAD = Duration.ofSeconds(5);
-    /** 캐시 하나가 인스턴스 하나에서 Redis 에 들고 있는 양의 기본 상한. */
+    /** 캐시 하나가 인스턴스 하나에서 Redis 에 동시에 들고 있는 양의 기본 상한({@link StoreBudget}). */
     static final long DEFAULT_BUDGET_BYTES = 4L * 1024 * 1024;
     /** Redis 에 넣는 모양({@link Stored})의 버전 — 키에 들어간다. */
     static final String FORMAT = "f1";
@@ -116,7 +116,12 @@ public final class ReadCache {
         return spec(name, json.constructType(type), ttl, DEFAULT_BUDGET_BYTES);
     }
 
-    <T> Spec<T> spec(String name, Class<T> type, Duration ttl, long budgetBytes) {
+    /** @param budgetBytes 이 인스턴스가 이 캐시로 Redis 에 동시에 들고 있는 양의 상한({@link StoreBudget}) */
+    public <T> Spec<T> spec(String name, Class<T> type, Duration ttl, long budgetBytes) {
+        return spec(name, json.constructType(type), ttl, budgetBytes);
+    }
+
+    public <T> Spec<T> spec(String name, tools.jackson.core.type.TypeReference<T> type, Duration ttl, long budgetBytes) {
         return spec(name, json.constructType(type), ttl, budgetBytes);
     }
 
@@ -124,7 +129,7 @@ public final class ReadCache {
         if (ttl.isNegative() || ttl.isZero()) {
             throw new IllegalArgumentException("ttl must be positive: " + ttl);
         }
-        return new Spec<>(name, type, Shape.fingerprint(type), ttl, new ByteBudget(budgetBytes, ttl, clock));
+        return new Spec<>(name, type, Shape.fingerprint(type), ttl, new StoreBudget(budgetBytes, clock));
     }
 
     /**
@@ -273,8 +278,10 @@ public final class ReadCache {
         if (left.toMillis() <= 0) {
             return;
         }
-        // 메모리 예산을 넘으면 넣지 않는다(DB 로만 답한다) — 나눠 쓰는 Redis 의 다른 키(토큰 폐기 표식 · 대기열)를 밀어내지 않게
-        if (!spec.budget().tryTake(body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)) {
+        // 이 인스턴스가 이 캐시로 들고 있는 양이 상한을 넘으면 넣지 않는다(DB 로 답한다) — 나눠 쓰는 Redis 의 다른 키(토큰 폐기 표식 · 대기열)를 덜 밀어내게
+        long charge = StoreBudget.charge(key.getBytes(java.nio.charset.StandardCharsets.UTF_8).length,
+                body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+        if (!spec.budget().tryTake(charge, left)) {
             spec.budget().warnSkipped(spec.name());
             return;
         }
@@ -321,53 +328,70 @@ public final class ReadCache {
 
     /**
      * @param fingerprint 값 타입 모양의 지문 — 레코드 칸 이름 · 타입, enum 상수가 바뀌면 달라진다
-     * @param budget      이 캐시가 이 인스턴스에서 Redis 에 쓰는 양의 상한
+     * @param budget      이 캐시가 이 인스턴스에서 Redis 에 동시에 들고 있는 양의 상한
      */
-    public record Spec<T>(String name, JavaType type, String fingerprint, Duration ttl, ByteBudget budget) {
+    public record Spec<T>(String name, JavaType type, String fingerprint, Duration ttl, StoreBudget budget) {
     }
 
     /**
-     * 캐시 하나가 Redis 에 쓰는 바이트의 상한(토큰 버킷). 담을 수 있는 양은 budgetBytes 이고 TTL 동안 그만큼 다시 찬다 — 넣은 값은 TTL 이 지나면
-     * 사라지므로, 이 인스턴스가 이 캐시로 Redis 에 동시에 들고 있는 양이 대략 budgetBytes 를 넘지 않는다. 입력 조합(필터 · 페이지)이 아무리 많아도
-     * 메모리가 이 상한에 묶인다. 넘친 값은 넣지 않고 DB 로 답한다.
+     * 캐시 하나가 이 인스턴스에서 Redis 에 넣어 둔 값 중 아직 살아 있는(만료 전) 것의 합 상한. 넣을 때 만료 시각과 차지할 양을 적어 두고, 만료된 것을
+     * 빼고 더해 상한을 넘으면 넣지 않는다(DB 로 답한다) — 입력 조합(필터 · 페이지)이 아무리 많아도 이 인스턴스가 동시에 들고 있는 양이 상한에 묶인다.
+     * <ul>
+     *   <li>차지할 양은 {@link #charge} — Valkey 9.1.2 에서 MEMORY USAGE 로 잰 값(키 · 값 외에 작은 값은 40~60B, 60KB 는 약 9%, 200KB 는 약 15%)보다
+     *       크게 잡는다. 큰 값의 몫은 할당기(jemalloc)의 크기 구간이 두 배마다 4칸이라 최대 약 25% 다.</li>
+     *   <li>TTL 전에 지워지거나 밀려난 값은 만료 시각까지 그대로 센다(보수적). 같은 키를 다시 넣으면 둘 다 센다(보수적).</li>
+     *   <li><b>인스턴스 하나의 상한이다.</b> 재시작하면 0 에서 다시 센다 — 그때 Redis 에 남은 옛 값은 세지 않는다. 그래서 서비스 전체 점유는
+     *       상한 × (떠 있는 인스턴스 + TTL 안에 내려간 인스턴스) 로 잡는다(배포 중 겹침 포함).</li>
+     * </ul>
      */
-    static final class ByteBudget {
+    public static final class StoreBudget {
+
+        /** 키 하나에 더해 셀 고정 비용 — 잰 값(41~59B)보다 크게. */
+        static final int PER_KEY_OVERHEAD = 64;
 
         private final long capacity;
-        private final double refillPerMilli;
         private final Clock clock;
-        private double tokens;
-        private long lastRefill;
+        private final java.util.PriorityQueue<long[]> live = new java.util.PriorityQueue<>(java.util.Comparator.comparingLong(e -> e[0]));
+        private long used;
         private long lastWarn;
 
-        ByteBudget(long capacity, Duration ttl, Clock clock) {
+        StoreBudget(long capacity, Clock clock) {
             if (capacity <= 0) {
                 throw new IllegalArgumentException("budget must be positive: " + capacity);
             }
             this.capacity = capacity;
-            this.refillPerMilli = (double) capacity / Math.max(1, ttl.toMillis());
             this.clock = clock;
-            this.tokens = capacity;
-            this.lastRefill = clock.millis();
         }
 
-        synchronized boolean tryTake(long bytes) {
+        /** Redis 메모리로 셀 양 — 키 + 값 + 고정 비용 + 값의 1/4(큰 값의 할당 구간 몫). */
+        static long charge(int keyBytes, int valueBytes) {
+            return keyBytes + valueBytes + PER_KEY_OVERHEAD + valueBytes / 4L;
+        }
+
+        /** ttl 동안 살아 있을 bytes 를 넣어도 상한 안인가. 그렇다면 센다. */
+        synchronized boolean tryTake(long bytes, Duration ttl) {
             long now = clock.millis();
-            tokens = Math.min(capacity, tokens + (now - lastRefill) * refillPerMilli);
-            lastRefill = now;
-            if (bytes > tokens) {
+            while (!live.isEmpty() && live.peek()[0] <= now) {
+                used -= live.poll()[1];
+            }
+            if (used + bytes > capacity) {
                 return false;
             }
-            tokens -= bytes;
+            live.add(new long[] {now + ttl.toMillis(), bytes});
+            used += bytes;
             return true;
         }
 
-        /** 예산을 넘어 넣지 않았다 — 분마다 한 번만 남긴다. */
+        synchronized long used() {
+            return used;
+        }
+
+        /** 상한을 넘어 넣지 않았다 — 분마다 한 번만 남긴다. */
         synchronized void warnSkipped(String name) {
             long now = clock.millis();
             if (now - lastWarn >= 60_000) {
                 lastWarn = now;
-                log.warn("읽기 캐시 메모리 예산({} bytes)을 넘어 넣지 않았다 — DB 로 답한다 cache={}", capacity, name);
+                log.warn("읽기 캐시 저장 상한({} bytes)을 넘어 넣지 않았다 — DB 로 답한다 cache={}", capacity, name);
             }
         }
     }
