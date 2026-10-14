@@ -28,7 +28,7 @@ class AdmissionGateTest {
 
     private final SnapshotHolder empty = TestSnapshots.emptyHolder();
     private final RedisClock clock = new RedisClock(Clock.systemUTC());
-    private final QueueStore queue = new QueueStore(new LuaScripts(null));
+    private final QueueStore queue = new QueueStore(new LuaScripts(null), AdmissionTicket.of(TestJwts.TOKEN_SECRET, List.of(), null));
     private final QueueToken queueTokens = QueueToken.of(TestJwts.TOKEN_SECRET, List.of(), null);
     private final ProductClosures closures = new ProductClosures();
     private final EntryMetrics metrics = new EntryMetrics(new SimpleMeterRegistry());

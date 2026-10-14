@@ -19,12 +19,16 @@ waitingroom:
     secret: ${WAITING_TOKEN_SECRET}
     previous: ${WAITING_TOKEN_PREVIOUS:}
     rollout-ends-at: ${WAITING_TOKEN_ROLLOUT_ENDS_AT:}
+    # 입장권 수명(입장 시각부터). 기본 120s, 30s ~ 10m. 늘리면 preorder 의 nova.admission-ticket.ttl 도 그 이상으로
+    # admission-ttl: 120s
   # 관리자가 올릴 수 있는 입장 속도(초당 입장 인원)의 최댓값. 기본 1500, preorder 대수를 바꾸면 같이 바꾼다
   # admission:
   #   max-global-credit: 1500
   relay:
     # preorder 주소(VPC 안 Cloud Map). 접수 POST 만 이리로 전달한다
     preorder-uri: http://preorder.ureca.local:8083
+    # preorder 의 nova.admission-ticket.clock-skew 와 같은 값. 거절 뒤 재진입 대기(Retry-After)가 이 값 + 1초다
+    # preorder-clock-skew: 30s
   schedule:
     # 기본값: 일정 이벤트 waitingroom-events, 재발행 요청 preorder-events
     queue: waitingroom-events

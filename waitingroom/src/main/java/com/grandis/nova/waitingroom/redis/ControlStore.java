@@ -1,7 +1,6 @@
 package com.grandis.nova.waitingroom.redis;
 
 import com.grandis.nova.waitingroom.domain.product.SalesWindow;
-import com.grandis.nova.waitingroom.domain.queue.GraceRetention;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
@@ -194,10 +193,12 @@ public class ControlStore {
     }
 
     /** @return 1 지웠다 · 0 안 지웠다 · -1 옛 임기 · -2 표가 없어 막았다 */
-    public Mono<Long> closeQueue(String productKey, long fence, boolean confirm, long fenceTtlMillis, long deletableAtSec) {
+    /** @param graceTtlSec 줄을 지운 뒤 입장 표시를 남겨 둘 기간 — 남은 입장권과 미통지 보관이 끝날 만큼 */
+    public Mono<Long> closeQueue(String productKey, long fence, boolean confirm, long fenceTtlMillis, long deletableAtSec,
+                                 long graceTtlSec) {
         return scripts.single(scripts.closeQueue, RedisKeys.close(productKey), List.of(String.valueOf(fence),
                 confirm ? "1" : "0", String.valueOf(fenceTtlMillis), String.valueOf(deletableAtSec),
-                String.valueOf(GraceRetention.SECONDS * 2)));
+                String.valueOf(graceTtlSec)));
     }
 
     private static TimedEntries timed(List<Object> reply) {

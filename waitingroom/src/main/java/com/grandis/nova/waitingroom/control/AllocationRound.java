@@ -6,6 +6,7 @@ import com.grandis.nova.waitingroom.domain.allocation.ProductDemand;
 import com.grandis.nova.waitingroom.domain.product.ProductState;
 import com.grandis.nova.waitingroom.domain.product.SalesPhase;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
+import com.grandis.nova.waitingroom.domain.queue.AdmissionTicket;
 import com.grandis.nova.waitingroom.domain.queue.GraceRetention;
 import com.grandis.nova.waitingroom.redis.ControlStore;
 import com.grandis.nova.waitingroom.redis.ControlStore.ClusterView;
@@ -48,6 +49,8 @@ class AllocationRound {
     private final Leadership leadership;
     private final ScheduleResync resync;
     private final Brake brake;
+    /** 입장 표시 · 이탈 기록 보관 기간(초). 입장권 수명에서 나온다. */
+    private final long retentionSec;
     /** 이 리더가 모델별로 본 커서 최댓값. Redis 가 커서를 잃으면 되살리는 데 쓴다(값은 늘기만 한다). */
     private final Map<String, Long> writtenMax = new ConcurrentHashMap<>();
     private final Map<String, String> sweepCursors = new ConcurrentHashMap<>();
@@ -59,9 +62,11 @@ class AllocationRound {
     private final AtomicBoolean retireFailing = new AtomicBoolean();
     private final AtomicBoolean tombstoneFailing = new AtomicBoolean();
 
-    AllocationRound(ControlStore store, AdmissionProperties admission, ControlPlaneProperties properties,
-                    ControlMetrics metrics, Leadership leadership, ScheduleResync resync, Brake brake) {
+    AllocationRound(ControlStore store, AdmissionProperties admission, AdmissionTicket tickets,
+                    ControlPlaneProperties properties, ControlMetrics metrics, Leadership leadership, ScheduleResync resync,
+                    Brake brake) {
         this.brake = brake;
+        this.retentionSec = GraceRetention.seconds(tickets.ttlSec());
         this.resync = resync;
         this.store = store;
         this.admission = admission;
@@ -274,7 +279,7 @@ class AllocationRound {
     }
 
     private Mono<Void> sweep(long fence, Row row, Instant now) {
-        return store.sweep(row.key(), properties.sweepScanLimit(), now.getEpochSecond(), GraceRetention.SECONDS,
+        return store.sweep(row.key(), properties.sweepScanLimit(), now.getEpochSecond(), retentionSec,
                         properties.sweepBudget(), sweepCursors.getOrDefault(row.key(), "0"), true, fence)
                 .doOnNext(result -> sweepCursors.put(row.key(), result.nextCursor()))
                 .then();
@@ -286,7 +291,7 @@ class AllocationRound {
             return Mono.empty();
         }
         long deletableAt = closesAt.plus(properties.closeGrace()).getEpochSecond();
-        return store.closeQueue(row.key(), fence, true, properties.fenceTtl().toMillis(), deletableAt)
+        return store.closeQueue(row.key(), fence, true, properties.fenceTtl().toMillis(), deletableAt, retentionSec * 2)
                 .doOnNext(result -> {
                     if (result == CLOSED) {
                         cleaned.add(row.key());
@@ -318,7 +323,7 @@ class AllocationRound {
      * 수만큼 틱 비용이 늘지 않게. 마감 상태로는 계속 남겨 진입이 404 가 아니라 마감으로 답한다.
      */
     private boolean retired(String key, Schedule schedule, Instant now) {
-        Instant done = schedule.window().closesAt().plus(properties.closeGrace()).plusSeconds(GraceRetention.SECONDS * 2);
+        Instant done = schedule.window().closesAt().plus(properties.closeGrace()).plusSeconds(retentionSec * 2);
         return cleaned.contains(key) && !now.isBefore(done);
     }
 
