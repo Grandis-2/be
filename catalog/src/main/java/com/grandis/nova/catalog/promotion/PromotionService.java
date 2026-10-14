@@ -8,12 +8,14 @@ import com.grandis.nova.catalog.product.Product;
 import com.grandis.nova.catalog.product.ProductRepository;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.registration.ProductRegistrationValidator;
+import com.grandis.nova.catalog.web.ConstraintViolations;
 import com.grandis.nova.catalog.web.ValidationFailures;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.common.redis.cache.ReadCache;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -36,7 +38,8 @@ import java.util.UUID;
  *
  * <ul>
  *   <li>새로 묶는 상품은 회차가 취소되지 않은 사전예약 상품만(400). 이미 묶인 상품은 일반으로 바꿨어도 고칠 때 그대로 둘 수 있다(2026-10-14 결정).</li>
- *   <li>한 상품은 홍보 하나에만 — 다른 홍보에 묶인 상품이면 409(details.productIds). 겹친 두 요청은 DB 유일 키(uq_promotion_product)가 하나만 남긴다.</li>
+ *   <li>한 상품은 홍보 하나에만 — 다른 홍보에 묶인 상품이면 409(details.productIds = 실제로 겹친 상품). 겹친 두 요청은 DB 유일 키(uq_promotion_product)가
+ *       하나만 남긴다. 잠금 대기 초과 · 교착은 409 retryable.</li>
  *   <li>사진은 상품과 같은 업로드 주소만(400).</li>
  *   <li>만들기는 Idempotency-Key 로 한 번 — 같은 키로 다시 오면 처음 홍보를 돌려준다(내용은 대조하지 않는다, 상품 등록과 같다).</li>
  *   <li>고치면 커밋 뒤 고객 조회 캐시의 홍보 세대를 올린다({@link PromotionQueryService#PROMOTIONS}).</li>
@@ -45,6 +48,8 @@ import java.util.UUID;
 @Service
 public class PromotionService {
 
+    /** 같은 Idempotency-Key 유일 키 이름. */
+    static final String IDEMPOTENCY_KEY = "uq_promotion_idempotency";
     /** 홍보 기간 · 진행 단계를 가르는 날짜의 시간대. */
     static final ZoneId KOREA = ZoneId.of("Asia/Seoul");
 
@@ -93,12 +98,16 @@ public class PromotionService {
             });
             return new Created(view(id), false);
         } catch (DataIntegrityViolationException e) {
-            // 같은 키가 겹쳐 먼저 들어간 홍보가 있으면 그것을, 아니면 같은 상품을 다른 홍보가 먼저 묶은 것이다
-            var raced = promotions.findByIdempotencyKey(idempotencyKey);
-            if (raced.isPresent()) {
-                return new Created(view(raced.get().getId()), true);
+            // 겹친 요청이 먼저 커밋했다 — 같은 키면 그 홍보를, 같은 상품이면 실제로 겹친 상품을 알린다. 다른 제약 위반은 그대로 던진다
+            if (ConstraintViolations.mentions(e, IDEMPOTENCY_KEY)) {
+                return new Created(view(promotions.findByIdempotencyKey(idempotencyKey).orElseThrow(() -> e).getId()), true);
             }
-            throw linkedElsewhere(request.productIds());
+            if (ConstraintViolations.mentions(e, PromotionProducts.UNIQUE_PRODUCT)) {
+                throw linkedElsewhere(ownedByOthers(request.productIds(), null));
+            }
+            throw e;
+        } catch (PessimisticLockingFailureException e) {
+            throw retryable();
         }
     }
 
@@ -114,7 +123,12 @@ public class PromotionService {
                 cache.bumpAfterCommit(PromotionQueryService.PROMOTIONS);
             });
         } catch (DataIntegrityViolationException e) {
-            throw linkedElsewhere(request.productIds());
+            if (ConstraintViolations.mentions(e, PromotionProducts.UNIQUE_PRODUCT)) {
+                throw linkedElsewhere(ownedByOthers(request.productIds(), promotionId));
+            }
+            throw e;
+        } catch (PessimisticLockingFailureException e) {
+            throw retryable();
         }
         return view(promotionId);
     }
@@ -183,6 +197,20 @@ public class PromotionService {
         if (!elsewhere.isEmpty()) {
             throw linkedElsewhere(elsewhere);
         }
+    }
+
+    /** 겹친 요청이 커밋한 뒤 — 요청한 상품 중 지금 다른 홍보(self 아닌)에 묶인 것. */
+    private List<UUID> ownedByOthers(List<UUID> productIds, UUID self) {
+        return links.findOwners(productIds).entrySet().stream()
+                .filter(owner -> !owner.getValue().equals(self))
+                .map(Map.Entry::getKey)
+                .toList();
+    }
+
+    /** 잠금 대기 초과 · 교착 — 다른 작업과 겹쳤다. 상품 수정과 같은 409 다시 시도(AdminProductController#serialized). */
+    private static BusinessException retryable() {
+        return new BusinessException(CatalogErrorCode.STATE_CONFLICT, "다른 작업과 겹쳐 처리하지 못했습니다. 다시 시도해 주세요.",
+                Map.of("retryable", true));
     }
 
     private static BusinessException linkedElsewhere(List<UUID> productIds) {

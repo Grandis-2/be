@@ -6,6 +6,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,20 +20,31 @@ import java.util.UUID;
 @Repository
 public class PromotionProducts {
 
+    /** 한 상품 한 홍보 유일 키 이름. */
+    public static final String UNIQUE_PRODUCT = "uq_promotion_product";
+
     private final NamedParameterJdbcTemplate jdbc;
 
     public PromotionProducts(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }
 
-    /** 그 홍보의 묶음을 productIds 순서로 바꾼다. 다른 홍보에 묶인 상품이 있으면 uq_promotion_product 위반(DataIntegrityViolationException). */
+    /** 그 홍보의 묶음을 productIds 순서로 바꾼다. 다른 홍보에 묶인 상품이 있으면 {@link #UNIQUE_PRODUCT} 위반(DataIntegrityViolationException). */
     public void replace(UUID promotionId, List<UUID> productIds) {
         byte[] promotion = UuidBinary.toBytes(promotionId);
         jdbc.update("DELETE FROM promotion_products WHERE promotion_id = :promotionId", new MapSqlParameterSource("promotionId", promotion));
-        MapSqlParameterSource[] rows = new MapSqlParameterSource[productIds.size()];
+        // 넣는 순서는 product_id 바이트 순(position 은 보낸 순서 그대로) — 겹친 두 요청이 같은 상품들을 반대 순서로 넣으면 유일 키 잠금을 서로 기다려
+        // 교착(1213)이다(실측). 같은 순서로 넣으면 늦은 쪽이 중복(1062)으로 끝나 409 가 된다
+        List<Integer> order = new ArrayList<>();
         for (int i = 0; i < productIds.size(); i++) {
-            rows[i] = new MapSqlParameterSource().addValue("promotionId", promotion).addValue("position", i)
-                    .addValue("productId", UuidBinary.toBytes(productIds.get(i)));
+            order.add(i);
+        }
+        order.sort((a, b) -> Arrays.compareUnsigned(UuidBinary.toBytes(productIds.get(a)), UuidBinary.toBytes(productIds.get(b))));
+        MapSqlParameterSource[] rows = new MapSqlParameterSource[productIds.size()];
+        for (int k = 0; k < order.size(); k++) {
+            int position = order.get(k);
+            rows[k] = new MapSqlParameterSource().addValue("promotionId", promotion).addValue("position", position)
+                    .addValue("productId", UuidBinary.toBytes(productIds.get(position)));
         }
         jdbc.batchUpdate("INSERT INTO promotion_products (promotion_id, position, product_id) VALUES (:promotionId, :position, :productId)", rows);
     }
