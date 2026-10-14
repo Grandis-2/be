@@ -23,6 +23,8 @@ public class DrawReadCache {
     static final String DRAWS = "draws";
     public static final Duration TTL = Duration.ofMinutes(10);
     static final int CACHED_PAGES = 5;
+    /** 회차는 수가 적고 값이 작다 — 캐시마다 인스턴스당 1MB. TTL 이 10분이라 배포 중 겹침도 이 안에서 센다(ReadCache.StoreBudget). */
+    static final long BUDGET_BYTES = 1024 * 1024;
     /** 화면이 쓰는 size(목록 100 · 기본 20). */
     static final Set<Integer> CACHED_SIZES = Set.of(20, 100);
 
@@ -34,8 +36,8 @@ public class DrawReadCache {
     public DrawReadCache(ReadCache cache, DrawQueryService queries) {
         this.cache = cache;
         this.queries = queries;
-        this.listSpec = cache.spec("draw-list", new TypeReference<OffsetPage<DrawCampaign>>() { }, TTL);
-        this.detailSpec = cache.spec("draw-detail", DrawCampaign.class, TTL);
+        this.listSpec = cache.spec("draw-list", new TypeReference<OffsetPage<DrawCampaign>>() { }, TTL, BUDGET_BYTES);
+        this.detailSpec = cache.spec("draw-detail", DrawCampaign.class, TTL, BUDGET_BYTES);
     }
 
     /**

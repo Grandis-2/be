@@ -56,6 +56,8 @@ public class CatalogReadCache {
     public static final Duration PRODUCT_TTL = Duration.ofSeconds(5);
     public static final Duration REVIEW_TTL = Duration.ofSeconds(60);
     public static final Duration CATEGORY_TTL = Duration.ofMinutes(10);
+    /** 카테고리 트리의 저장 상한(키 하나). 나머지 캐시는 ReadCache 기본(4MB). */
+    static final long CATEGORY_BUDGET_BYTES = 256 * 1024;
     /** 목록 · 리뷰는 앞 페이지(0~4)만 Redis 에 넣는다. */
     static final int CACHED_PAGES = 5;
     /** 화면이 쓰는 상품 목록 size(추천 4 · 랭킹 10 · 목록 · 검색 12 · 기본 20). 다른 size 는 넣지 않는다. */
@@ -87,7 +89,8 @@ public class CatalogReadCache {
         this.reviews = reviews;
         this.detailSpec = cache.spec("product-detail", ProductDetailView.class, PRODUCT_TTL);
         this.listSpec = cache.spec("product-list", new TypeReference<OffsetPage<ProductListItem>>() { }, PRODUCT_TTL);
-        this.categorySpec = cache.spec("category-tree", new TypeReference<List<CategoryNode>>() { }, CATEGORY_TTL);
+        // 키가 하나뿐이다 — 상한을 작게
+        this.categorySpec = cache.spec("category-tree", new TypeReference<List<CategoryNode>>() { }, CATEGORY_TTL, CATEGORY_BUDGET_BYTES);
         this.reviewSpec = cache.spec("reviews", new TypeReference<OffsetPage<ReviewView>>() { }, REVIEW_TTL);
     }
 
