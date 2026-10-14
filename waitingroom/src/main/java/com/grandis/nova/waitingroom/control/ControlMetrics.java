@@ -69,8 +69,9 @@ public class ControlMetrics {
         Counter.builder("waitingroom.brake.changes").tag("direction", direction).register(registry).increment();
     }
 
-    void resyncRequested() {
-        Counter.builder("waitingroom.schedule.resync.requests").register(registry).increment();
+    /** 재발행을 요청했다. SCHEDULE_EMPTY · PERIODIC. */
+    void resyncRequested(String reason) {
+        Counter.builder("waitingroom.schedule.resync.requests").tag("reason", reason).register(registry).increment();
     }
 
     void loopFailed(String loop) {

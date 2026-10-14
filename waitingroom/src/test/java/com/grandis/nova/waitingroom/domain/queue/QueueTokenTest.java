@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 import static com.grandis.nova.waitingroom.support.TestIds.customerId;
 import static com.grandis.nova.waitingroom.support.TestIds.productKey;
@@ -23,10 +24,34 @@ class QueueTokenTest {
         Instant expiresAt = Instant.ofEpochSecond(NOW.getEpochSecond() / QueueToken.WINDOW_SEC * QueueToken.WINDOW_SEC
                 + QueueToken.TTL_SEC);
 
-        assertThat(queueToken.verify(token, productKey(101), NOW)).contains(customerId(1024));
-        assertThat(queueToken.verify(token, productKey(202), NOW)).isEmpty();
-        assertThat(queueToken.verify(token, productKey(101), expiresAt.minusSeconds(1))).contains(customerId(1024));
-        assertThat(queueToken.verify(token, productKey(101), expiresAt)).isEmpty();
+        assertThat(customerOf(token, productKey(101), NOW)).contains(customerId(1024));
+        assertThat(customerOf(token, productKey(202), NOW)).isEmpty();
+        assertThat(customerOf(token, productKey(101), expiresAt.minusSeconds(1))).contains(customerId(1024));
+        assertThat(customerOf(token, productKey(101), expiresAt)).isEmpty();
+        assertThat(queueToken.verify(token, productKey(101), NOW)).map(SignedToken.Holder::expiresAt)
+                .contains(expiresAt);
+    }
+
+    @Test
+    void 남은_수명이_절반_아래로_내려가야_새_토큰을_주고_새_토큰은_다시_바꾸지_않는다() {
+        String token = queueToken.issue(productKey(101), customerId(1024), NOW);
+        SignedToken.Holder holder = queueToken.verify(token, productKey(101), NOW).orElseThrow();
+        Instant half = holder.expiresAt().minusSeconds(QueueToken.RENEW_BELOW_SEC);
+
+        assertThat(queueToken.renewal(productKey(101), holder, NOW)).isEmpty();
+        assertThat(queueToken.renewal(productKey(101), holder, half)).isEmpty();
+
+        Instant later = half.plusSeconds(1);
+        String renewed = queueToken.renewal(productKey(101), holder, later).orElseThrow();
+        SignedToken.Holder next = queueToken.verify(renewed, productKey(101), later).orElseThrow();
+
+        assertThat(next.customerId()).isEqualTo(customerId(1024));
+        assertThat(next.expiresAt()).isAfter(holder.expiresAt());
+        assertThat(queueToken.renewal(productKey(101), next, later)).isEmpty();
+        // 옛 토큰은 만료 전까지 그대로 되고, 그 뒤에는 새 토큰만 된다
+        assertThat(customerOf(token, productKey(101), holder.expiresAt().minusSeconds(1))).contains(customerId(1024));
+        assertThat(customerOf(token, productKey(101), holder.expiresAt())).isEmpty();
+        assertThat(customerOf(renewed, productKey(101), holder.expiresAt())).contains(customerId(1024));
     }
 
     @Test
@@ -38,8 +63,14 @@ class QueueTokenTest {
         assertThat(queueToken.verify(admitted, productKey(101), NOW)).isEmpty();
     }
 
+    private Optional<String> customerOf(String token, String productKey, Instant now) {
+        return queueToken.verify(token, productKey, now).map(SignedToken.Holder::customerId);
+    }
+
     @Test
     void 이탈_기록은_입장권_수명보다_오래_남는다() {
-        assertThat(GraceRetention.SECONDS).isGreaterThan(AdmissionTicket.TTL_SEC);
+        assertThat(GraceRetention.seconds(30)).isGreaterThan(30);
+        assertThat(GraceRetention.seconds(120)).isGreaterThan(120);
+        assertThat(GraceRetention.seconds(600)).isGreaterThan(600);
     }
 }

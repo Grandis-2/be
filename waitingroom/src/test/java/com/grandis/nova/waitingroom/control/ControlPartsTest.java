@@ -4,6 +4,7 @@ import com.grandis.nova.waitingroom.domain.product.MaxWait;
 import com.grandis.nova.waitingroom.domain.product.ProductState;
 import com.grandis.nova.waitingroom.domain.product.SalesWindow;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
+import com.grandis.nova.waitingroom.domain.queue.LeaveGrace;
 import com.grandis.nova.waitingroom.redis.ControlStore.RelayOutcome;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -51,6 +52,21 @@ class ControlPartsTest {
             fields.remove(SnapshotCodec.GLOBAL_CREDIT);
             assertThat(SnapshotCodec.decode(fields)).isEmpty();
         }
+
+        @Test
+        void 이탈_유예는_실어_보내고_없거나_깨졌으면_재료를_버리지_않고_기본값으로_읽는다() {
+            GatewaySnapshot extended = new GatewaySnapshot(snapshot.products(),
+                    new SnapshotMeta(100, 3, MaxWait.unlimited(), Duration.ofSeconds(600)), 1_790_000_000_000L);
+            Map<String, String> fields = new HashMap<>(SnapshotCodec.encode(extended));
+
+            assertThat(SnapshotCodec.decode(fields)).contains(extended);
+            fields.remove(SnapshotCodec.LEAVE_GRACE);
+            assertThat(SnapshotCodec.decode(fields).orElseThrow().meta().leaveGrace()).as("옛 리더가 낸 재료").isEqualTo(LeaveGrace.MIN);
+            fields.put(SnapshotCodec.LEAVE_GRACE, "10");
+            assertThat(SnapshotCodec.decode(fields).orElseThrow().meta().leaveGrace()).isEqualTo(LeaveGrace.MIN);
+            fields.put(SnapshotCodec.LEAVE_GRACE, "abc");
+            assertThat(SnapshotCodec.decode(fields).orElseThrow().meta().leaveGrace()).isEqualTo(LeaveGrace.MIN);
+        }
     }
 
     @Nested
@@ -66,6 +82,42 @@ class ControlPartsTest {
             assertThat(settings.maxWait()).isEqualTo(MaxWait.unlimited());
             assertThat(settings.capOf(productKey(101))).isEqualTo(7);
             assertThat(settings.capOf(productKey(202))).isEqualTo(ProductState.UNLIMITED_CAP);
+        }
+
+        @Test
+        void 이탈_유예는_250초에서_1800초_사이만_받고_아니면_기본값이다() {
+            assertThat(leaveGrace("250")).isEqualTo(Duration.ofSeconds(250));
+            assertThat(leaveGrace("1800")).isEqualTo(Duration.ofSeconds(1_800));
+            assertThat(leaveGrace("249")).isEqualTo(LeaveGrace.MIN);
+            assertThat(leaveGrace("1801")).isEqualTo(LeaveGrace.MIN);
+            assertThat(leaveGrace("abc")).isEqualTo(LeaveGrace.MIN);
+            assertThat(OperationalSettings.from(Map.of(), 100).leaveGrace()).isEqualTo(LeaveGrace.MIN);
+            assertThat(OperationalSettings.acceptsLeaveGrace("249")).isFalse();
+            assertThat(OperationalSettings.acceptsLeaveGrace("600")).isTrue();
+        }
+
+        private static Duration leaveGrace(String value) {
+            return OperationalSettings.from(Map.of(OperationalSettings.LEAVE_GRACE_SEC, value), 100).leaveGrace();
+        }
+
+        @Test
+        void 전역_속도와_모델별_상한은_최댓값에서_자른다() {
+            OperationalSettings settings = OperationalSettings.from(Map.of(OperationalSettings.GLOBAL_CREDIT, "15000",
+                    "cap:" + productKey(101), "15000", "cap:" + productKey(202), "7"), 150, 150, 1_500);
+
+            assertThat(settings.globalCredit()).isEqualTo(1_500);
+            assertThat(settings.capOf(productKey(101))).isEqualTo(1_500);
+            assertThat(settings.capOf(productKey(202))).isEqualTo(7);
+        }
+
+        @Test
+        void 기본_입장_속도나_모델별_상한이_속도_최댓값보다_크면_기동하지_않는다() {
+            assertThat(new AdmissionProperties(null, null).maxGlobalCredit()).isEqualTo(1_500);
+            assertThatThrownBy(() -> new AdmissionProperties(1_501L, null, null, null))
+                    .hasMessageContaining("max-global-credit");
+            assertThatThrownBy(() -> new AdmissionProperties(null, null, 2_000L, 1_500L))
+                    .hasMessageContaining("max-global-credit");
+            assertThat(new AdmissionProperties(3_000L, null, null, 5_000L).globalCredit()).isEqualTo(3_000);
         }
 
         @Test

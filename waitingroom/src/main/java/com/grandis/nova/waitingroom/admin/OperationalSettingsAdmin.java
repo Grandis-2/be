@@ -15,6 +15,7 @@ import com.grandis.nova.waitingroom.control.SnapshotHolder;
 import com.grandis.nova.waitingroom.domain.admission.AdmissionDecider;
 import com.grandis.nova.waitingroom.domain.product.MaxWait;
 import com.grandis.nova.waitingroom.domain.product.ProductState;
+import com.grandis.nova.waitingroom.domain.queue.LeaveGrace;
 import com.grandis.nova.waitingroom.redis.ControlStore;
 import com.grandis.nova.waitingroom.redis.RedisKeys;
 import io.micrometer.core.instrument.Counter;
@@ -34,14 +35,12 @@ import java.util.TreeSet;
 import java.util.concurrent.TimeoutException;
 
 /**
- * 운영값(초당 입장 인원 · 모델별 상한 · 최대 대기 시간)을 Redis 에 쓰고 읽는다. 바꾼 사람 · 시각 · 전후 값을 남긴다.
+ * 운영값(초당 입장 인원 · 모델별 상한 · 최대 대기 시간 · 이탈 유예)을 Redis 에 쓰고 읽는다. 바꾼 사람 · 시각 · 전후 값을 남긴다.
  * 전역 0 은 입장 일시 정지다(줄은 그대로). 상한을 낮춰도 이미 선 사람은 빼지 않는다.
  */
 @Component
 class OperationalSettingsAdmin {
 
-    static final long MAX_GLOBAL_CREDIT = 100_000;
-    static final long MAX_PRODUCT_CAP = 100_000;
     static final long MAX_WAIT_SECONDS = Duration.ofDays(1).toSeconds();
     private static final Logger log = LoggerFactory.getLogger(OperationalSettingsAdmin.class);
 
@@ -67,20 +66,27 @@ class OperationalSettingsAdmin {
     }
 
     Mono<AdmissionRateView> setGlobalCredit(String actor, Long value) {
-        long checked = checked("globalCredit", value, 0, MAX_GLOBAL_CREDIT);
+        long checked = checked("globalCredit", value, 0, defaults.maxGlobalCredit());
         return change(actor, OperationalSettings.GLOBAL_CREDIT, store.writeSetting(OperationalSettings.GLOBAL_CREDIT,
                 String.valueOf(checked)), String.valueOf(checked));
     }
 
     Mono<AdmissionRateView> setProductCap(String actor, String productId, Long value) {
         String field = RedisKeys.capField(checkedProduct(productId));
-        long checked = checked("cap", value, 1, MAX_PRODUCT_CAP);
+        long checked = checked("cap", value, 1, defaults.maxGlobalCredit());
         return change(actor, field, store.writeSetting(field, String.valueOf(checked)), String.valueOf(checked));
     }
 
     Mono<AdmissionRateView> setMaxWait(String actor, Long seconds) {
         long checked = checked("seconds", seconds, 1, MAX_WAIT_SECONDS);
         return change(actor, OperationalSettings.MAX_WAIT_SEC, store.writeSetting(OperationalSettings.MAX_WAIT_SEC,
+                String.valueOf(checked)), String.valueOf(checked));
+    }
+
+    /** 다음 조회부터 적용된다. 이미 써 둔 생존 신호는 그대로라 늘린 직후에는 옛 시간으로 걷힐 수 있다. */
+    Mono<AdmissionRateView> setLeaveGrace(String actor, Long seconds) {
+        long checked = checked("seconds", seconds, LeaveGrace.MIN.toSeconds(), LeaveGrace.MAX.toSeconds());
+        return change(actor, OperationalSettings.LEAVE_GRACE_SEC, store.writeSetting(OperationalSettings.LEAVE_GRACE_SEC,
                 String.valueOf(checked)), String.valueOf(checked));
     }
 
@@ -103,6 +109,7 @@ class OperationalSettingsAdmin {
                             snapshot.map(current -> current.meta().globalCredit()).orElse(null),
                             snapshot.map(GatewaySnapshot::brakeFactor).orElse(null),
                             snapshot.map(current -> current.meta().maxWait().duration()).map(Duration::toSeconds).orElse(null),
+                            snapshot.map(current -> current.meta().leaveGrace().toSeconds()).orElse(null),
                             snapshot.map(this::products).orElse(List.of()));
                 });
     }
@@ -132,20 +139,24 @@ class OperationalSettingsAdmin {
     }
 
     private AdmissionRateView view(Map<String, String> raw) {
-        OperationalSettings settings = OperationalSettings.from(raw, defaults.globalCredit(), defaults.productCap());
+        OperationalSettings settings = OperationalSettings.from(raw, defaults.globalCredit(), defaults.productCap(),
+                defaults.maxGlobalCredit());
         // 출처는 리더가 실제로 받아들인 값인지로 정한다 — 깨진 값이 저장돼 있으면 리더는 기본값을 쓴다
         Setting globalCredit = new Setting(settings.globalCredit(),
                 OperationalSettings.acceptsGlobalCredit(raw.get(OperationalSettings.GLOBAL_CREDIT)) ? Source.OPERATIONAL : Source.DEFAULT);
         MaxWait maxWait = settings.maxWait();
         Setting maxWaitSeconds = new Setting(maxWait.duration() == null ? null : maxWait.duration().toSeconds(),
                 OperationalSettings.acceptsMaxWait(raw.get(OperationalSettings.MAX_WAIT_SEC)) ? Source.OPERATIONAL : Source.DEFAULT);
+        Setting leaveGraceSeconds = new Setting(settings.leaveGrace().toSeconds(),
+                OperationalSettings.acceptsLeaveGrace(raw.get(OperationalSettings.LEAVE_GRACE_SEC)) ? Source.OPERATIONAL : Source.DEFAULT);
         Map<String, ProductState> states = snapshots.current().map(GatewaySnapshot::products).orElse(Map.of());
         TreeSet<String> productIds = new TreeSet<>(states.keySet());
         productIds.addAll(settings.caps().keySet());
-        return new AdmissionRateView(globalCredit, maxWaitSeconds, productIds.stream()
-                .map(productId -> new ProductRate(productId, cap(settings, productId),
-                        queueLimit(states.get(productId), maxWait)))
-                .toList());
+        return new AdmissionRateView(globalCredit, defaults.maxGlobalCredit(), maxWaitSeconds, leaveGraceSeconds,
+                productIds.stream()
+                        .map(productId -> new ProductRate(productId, cap(settings, productId),
+                                queueLimit(states.get(productId), maxWait)))
+                        .toList());
     }
 
     private static Setting cap(OperationalSettings settings, String productId) {

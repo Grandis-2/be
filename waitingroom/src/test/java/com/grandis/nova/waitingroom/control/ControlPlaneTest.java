@@ -1,11 +1,13 @@
 package com.grandis.nova.waitingroom.control;
 
 import com.grandis.nova.waitingroom.domain.product.SalesWindow;
+import com.grandis.nova.waitingroom.domain.queue.AdmissionTicket;
 import com.grandis.nova.waitingroom.redis.ControlStore;
 import com.grandis.nova.waitingroom.redis.LuaScripts;
 import com.grandis.nova.waitingroom.redis.ProductSchedules;
 import com.grandis.nova.waitingroom.redis.RedisKeys;
 import com.grandis.nova.waitingroom.support.RedisContainer;
+import com.grandis.nova.waitingroom.support.TestJwts;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,6 +20,7 @@ import reactor.test.StepVerifier;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.function.BooleanSupplier;
 
 import static com.grandis.nova.waitingroom.support.TestIds.productKey;
@@ -112,8 +115,9 @@ class ControlPlaneTest {
             RedisClock clock = new RedisClock(Clock.systemUTC());
             holder = new SnapshotHolder(clock, FAST);
             metrics = new ControlMetrics(registry, leadership, holder);
-            ScheduleResync resync = new ScheduleResync(store, reason -> Mono.empty(), metrics);
-            plane = new ControlPlane(store, leadership, new AllocationRound(store, new AdmissionProperties(10L, 0.7), FAST,
+            ScheduleResync resync = new ScheduleResync(store, reason -> Mono.empty(), metrics,
+                    new ScheduleResyncProperties(null), Clock.systemUTC());
+            plane = new ControlPlane(store, leadership, new AllocationRound(store, new AdmissionProperties(10L, 0.7), AdmissionTicket.of(TestJwts.TOKEN_SECRET, List.of(), null), FAST,
                     metrics, leadership, resync, new Brake(BrakeTest.DEFAULTS, metrics)),
                     holder, clock, new IdlePassCounter(), new RelayOutcomeCounter(), FAST, metrics, new LoopBeats());
         }

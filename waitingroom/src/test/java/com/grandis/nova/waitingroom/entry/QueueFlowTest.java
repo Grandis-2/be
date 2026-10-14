@@ -8,6 +8,8 @@ import com.grandis.nova.waitingroom.domain.product.SalesWindow;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
 import com.grandis.nova.waitingroom.domain.queue.AdmissionTicket;
 import com.grandis.nova.waitingroom.domain.queue.EtaPolicy;
+import com.grandis.nova.waitingroom.domain.queue.QueueToken;
+import com.grandis.nova.waitingroom.domain.queue.SignedToken;
 import com.grandis.nova.waitingroom.redis.ControlStore;
 import com.grandis.nova.waitingroom.redis.LuaScripts;
 import com.grandis.nova.waitingroom.support.RedisContainer;
@@ -43,6 +45,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static com.grandis.nova.waitingroom.support.TestIds.customerId;
 import static com.grandis.nova.waitingroom.support.TestIds.productKey;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 /** 진입 · 조회 · 접수 전달을 실제 Redis 와 가짜 preorder 로 끝까지 확인한다. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
@@ -53,7 +56,7 @@ class QueueFlowTest {
     static final String PRODUCT = productKey(101);
     static final Duration WAIT = Duration.ofSeconds(5);
 
-    /** 가짜 preorder — 다음 응답을 정해 두고, 받은 요청 헤더를 남긴다. */
+    /** 가짜 preorder — 다음 응답을 정해 두고, 받은 요청 헤더를 남긴다. 요청 ID 는 실제 preorder 처럼 응답에 되싣는다. */
     static final AtomicReference<FakeReply> NEXT = new AtomicReference<>();
     static final AtomicReference<Map<String, String>> RECEIVED = new AtomicReference<>();
     static final DisposableServer PREORDER = HttpServer.create().port(0)
@@ -62,8 +65,13 @@ class QueueFlowTest {
                 request.requestHeaders().forEach(header -> headers.put(header.getKey().toLowerCase(), header.getValue()));
                 RECEIVED.set(headers);
                 FakeReply reply = NEXT.get();
+                if (reply.status() == FakeReply.DROP) {
+                    return request.receive().then().then(Mono.<Void>fromRunnable(
+                            () -> response.withConnection(connection -> connection.channel().close())).then(Mono.never()));
+                }
                 return request.receive().then()
                         .then(response.status(reply.status()).header("Content-Type", "application/json")
+                                .header("X-Request-Id", headers.getOrDefault("x-request-id", ""))
                                 .sendString(Mono.just(reply.body())).then());
             }))
             .bindNow();
@@ -95,6 +103,9 @@ class QueueFlowTest {
     @Autowired
     AdmissionTicket tickets;
 
+    @Autowired
+    QueueToken queueTokens;
+
     WebTestClient client;
     ControlStore control;
     Instant now;
@@ -118,6 +129,11 @@ class QueueFlowTest {
 
     private void snapshot(ProductState state, MaxWait maxWait) {
         TestSnapshots.put(snapshots, Map.of(PRODUCT, state), new SnapshotMeta(100, 1, maxWait));
+    }
+
+    /** 관리자가 전체 입장 속도를 0 으로 내린 상태. */
+    private void snapshotPaused(ProductState state) {
+        TestSnapshots.put(snapshots, Map.of(PRODUCT, state), new SnapshotMeta(0, 1, MaxWait.unlimited()));
     }
 
     private SalesWindow open() {
@@ -149,6 +165,12 @@ class QueueFlowTest {
         return (String) data(enter(customer).expectStatus().isAccepted()).get("queueToken");
     }
 
+    /** 오래 기다린 사람의 토큰 — 만료까지 30분이 안 남았다. */
+    private String agedQueueToken(String customer) {
+        queueToken(customer);
+        return queueTokens.issue(PRODUCT, customer, now.minusSeconds(QueueToken.TTL_SEC - QueueToken.RENEW_BELOW_SEC + 60));
+    }
+
     private static String ticketOf(WebTestClient.ResponseSpec response) {
         return (String) data(response.expectStatus().is2xxSuccessful()).get("admissionTicket");
     }
@@ -177,7 +199,7 @@ class QueueFlowTest {
                     .expectStatus().isOk());
 
             assertThat(admitted.get("status")).isEqualTo("ADMITTED");
-            assertThat((Integer) admitted.get("expiresIn")).isBetween(1, (int) AdmissionTicket.TTL_SEC);
+            assertThat((Integer) admitted.get("expiresIn")).as("30초 내림 없이 수명만큼(1초 미만은 버림)").isBetween(119, 120);
             assertThat(tickets.verify((String) admitted.get("admissionTicket"), quiet, now)).contains(customerId(7));
         }
 
@@ -288,7 +310,8 @@ class QueueFlowTest {
             enter(customerId(2)).expectStatus().isAccepted().expectBody()
                     .jsonPath("$.data.position").isEqualTo(1)
                     .jsonPath("$.data.etaSeconds").isEqualTo(EtaPolicy.reportSec(EtaPolicy.UNKNOWN))
-                    .jsonPath("$.data.rejoined").isEqualTo(true);
+                    .jsonPath("$.data.rejoined").isEqualTo(true)
+                    .jsonPath("$.data.paused").isEqualTo(true);
             assertThat(redis.opsForZSet().size("wr:queue:{" + PRODUCT + "}").block(WAIT)).as("거절된 사람은 서지 않는다")
                     .isEqualTo(1);
         }
@@ -325,7 +348,7 @@ class QueueFlowTest {
     class 조회 {
 
         @Test
-        void 줄_서는_중이면_순서_총원_뒤_인원과_다시_올_때를_준다() {
+        void 줄_서는_중이면_순서_총원_뒤_인원과_다시_올_때를_주고_갓_받은_토큰은_바꾸지_않는다() {
             snapshot(crowded());
             String token = queueToken(customerId(1));
             queueToken(customerId(2));
@@ -337,7 +360,43 @@ class QueueFlowTest {
                     .jsonPath("$.data.position").isEqualTo(1)
                     .jsonPath("$.data.totalWaiting").isEqualTo(2)
                     .jsonPath("$.data.behind").isEqualTo(1)
+                    .jsonPath("$.data.queueToken").doesNotExist()
+                    .jsonPath("$.data.paused").doesNotExist();
+        }
+
+        @Test
+        void 만료가_가까운_대기_토큰으로_조회하면_새_토큰을_주고_옛_토큰도_만료_전까지_된다() {
+            snapshot(crowded());
+            String aged = agedQueueToken(customerId(1));
+
+            String renewed = (String) data(status(customerId(1), aged).expectStatus().isOk()).get("queueToken");
+
+            assertThat(renewed).isNotNull().isNotEqualTo(aged);
+            status(customerId(1), renewed).expectStatus().isOk().expectBody()
+                    .jsonPath("$.data.status").isEqualTo("WAITING")
+                    .jsonPath("$.data.position").isEqualTo(1)
                     .jsonPath("$.data.queueToken").doesNotExist();
+            status(customerId(1), aged).expectStatus().isOk().expectBody()
+                    .jsonPath("$.data.status").isEqualTo("WAITING")
+                    .jsonPath("$.data.queueToken").isNotEmpty();
+            Instant afterAged = now.plusSeconds(QueueToken.RENEW_BELOW_SEC);
+            assertThat(queueTokens.verify(aged, PRODUCT, afterAged)).isEmpty();
+            assertThat(queueTokens.verify(renewed, PRODUCT, afterAged)).isPresent();
+        }
+
+        @Test
+        void 비공개로_멈춘_줄에서도_새_토큰을_줘_만료_뒤_줄을_잃지_않는다() {
+            snapshot(crowded());
+            String aged = agedQueueToken(customerId(1));
+            snapshot(ProductState.hidden(1, open(), ProductState.UNLIMITED_CAP));
+
+            String renewed = (String) data(status(customerId(1), aged).expectStatus().isOk()).get("queueToken");
+
+            assertThat(queueTokens.verify(renewed, PRODUCT, now.plusSeconds(QueueToken.RENEW_BELOW_SEC)))
+                    .isPresent();
+            status(customerId(1), renewed).expectStatus().isOk().expectBody()
+                    .jsonPath("$.data.status").isEqualTo("WAITING")
+                    .jsonPath("$.data.position").isEqualTo(1);
         }
 
         @Test
@@ -377,13 +436,67 @@ class QueueFlowTest {
                     .expectBody()
                     .jsonPath("$.data.status").isEqualTo("WAITING")
                     .jsonPath("$.data.position").isEqualTo(2)
-                    .jsonPath("$.data.etaSeconds").isEqualTo(EtaPolicy.reportSec(EtaPolicy.UNKNOWN));
+                    .jsonPath("$.data.etaSeconds").isEqualTo(EtaPolicy.reportSec(EtaPolicy.UNKNOWN))
+                    .jsonPath("$.data.paused").isEqualTo(true);
+            // 다시 공개되면 멈춤 안내가 사라진다
+            snapshot(crowded());
+            status(customerId(2), token).expectStatus().isOk().expectBody().jsonPath("$.data.paused").doesNotExist();
+            snapshot(ProductState.hidden(2, open(), ProductState.UNLIMITED_CAP));
             // 맨 앞이어도 곧 입장이 아니다
             status(customerId(1), first).expectStatus().isOk().expectBody()
                     .jsonPath("$.data.position").isEqualTo(1)
                     .jsonPath("$.data.etaSeconds").isEqualTo(EtaPolicy.reportSec(EtaPolicy.UNKNOWN));
             status(customerId(9), first).expectStatus().isNotFound().expectBody()
                     .jsonPath("$.error.code").isEqualTo("PRODUCT_NOT_FOUND");
+        }
+
+        @Test
+        void 전체_입장을_멈추면_진입과_조회에_멈춤을_알리고_다시_열면_사라진다() {
+            snapshot(crowded());
+            String token = queueToken(customerId(1));
+            snapshotPaused(crowded());
+
+            status(customerId(1), token).expectStatus().isOk().expectBody()
+                    .jsonPath("$.data.status").isEqualTo("WAITING")
+                    .jsonPath("$.data.position").isEqualTo(1)
+                    .jsonPath("$.data.paused").isEqualTo(true);
+            enter(customerId(2)).expectStatus().isAccepted().expectBody()
+                    .jsonPath("$.data.position").isEqualTo(2)
+                    .jsonPath("$.data.paused").isEqualTo(true);
+
+            snapshot(crowded());
+            status(customerId(1), token).expectStatus().isOk().expectBody().jsonPath("$.data.paused").doesNotExist();
+            enter(customerId(2)).expectStatus().isAccepted().expectBody().jsonPath("$.data.paused").doesNotExist();
+        }
+
+        @Test
+        void 이탈_유예를_늘리면_그_뒤_진입과_조회가_늘린_만큼_생존_신호를_쓴다() {
+            String alive = "wr:alive:{" + PRODUCT + "}";
+            snapshot(crowded());
+            String token = queueToken(customerId(1));
+            assertThat(redis.opsForZSet().score(alive, customerId(1)).block(WAIT))
+                    .isCloseTo(Instant.now().getEpochSecond() + 250.0, within(5.0));
+
+            TestSnapshots.put(snapshots, Map.of(PRODUCT, crowded()),
+                    new SnapshotMeta(100, 1, MaxWait.unlimited(), Duration.ofSeconds(600)));
+            status(customerId(1), token).expectStatus().isOk();
+            enter(customerId(2)).expectStatus().isAccepted();
+
+            assertThat(redis.opsForZSet().score(alive, customerId(1)).block(WAIT))
+                    .isCloseTo(Instant.now().getEpochSecond() + 600.0, within(5.0));
+            assertThat(redis.opsForZSet().score(alive, customerId(2)).block(WAIT))
+                    .isCloseTo(Instant.now().getEpochSecond() + 600.0, within(5.0));
+        }
+
+        @Test
+        void 입장_속도가_줄어_몫이_0_이어도_전체를_멈춘_것이_아니면_멈춤이_아니다() {
+            snapshot(crowded());
+            String token = queueToken(customerId(1));
+            snapshot(ProductState.withQueue(0, 1, open(), ProductState.UNLIMITED_CAP));
+
+            status(customerId(1), token).expectStatus().isOk().expectBody()
+                    .jsonPath("$.data.status").isEqualTo("WAITING")
+                    .jsonPath("$.data.paused").doesNotExist();
         }
 
         @Test
@@ -431,6 +544,34 @@ class QueueFlowTest {
         }
 
         @Test
+        void 교체_배포_동안_옛_노드가_낸_세_칸_입장권도_전달한다() {
+            String legacy = SignedToken.of("et_", 120, 30, TestJwts.TOKEN_SECRET, List.of(), null)
+                    .issue(PRODUCT, customerId(1), now);
+
+            accept(customerId(1), legacy).expectStatus().isAccepted();
+
+            assertThat(RECEIVED.get()).containsEntry("x-admission-ticket", legacy);
+        }
+
+        @Test
+        void 전달한_접수의_응답에는_요청_ID_가_한_번만_실린다() {
+            String ticket = tickets.issue(PRODUCT, customerId(1), now);
+
+            accept(customerId(1), ticket).expectStatus().isAccepted()
+                    .expectHeader().values("X-Request-Id", values -> assertThat(values)
+                            .containsExactly(RECEIVED.get().get("x-request-id")));
+        }
+
+        @Test
+        void preorder_가_답하지_않고_연결을_끊으면_500_이_아니라_다시_보내라는_503_이다() {
+            NEXT.set(new FakeReply(FakeReply.DROP, ""));
+
+            accept(customerId(1), tickets.issue(PRODUCT, customerId(1), now)).expectStatus().isEqualTo(503)
+                    .expectHeader().valueEquals(HttpHeaders.RETRY_AFTER, "2")
+                    .expectBody().jsonPath("$.error.code").isEqualTo("DEPENDENCY_UNAVAILABLE");
+        }
+
+        @Test
         void 만료된_지_잠깐인_입장권은_전달해_같은_접수의_재전송을_preorder_가_판단하게_한다() {
             String expired = tickets.issue(PRODUCT, customerId(1), now.minusSeconds(600));
 
@@ -458,7 +599,7 @@ class QueueFlowTest {
             NEXT.set(new FakeReply(409, "{\"success\":false,\"error\":{\"code\":\"ADMISSION_TICKET_USED\"}}"));
 
             accept(customerId(1), ticket).expectStatus().isEqualTo(409)
-                    .expectHeader().value(HttpHeaders.RETRY_AFTER, seconds -> assertThat(Long.parseLong(seconds)).isBetween(31L, 60L));
+                    .expectHeader().valueEquals(HttpHeaders.RETRY_AFTER, "31");
 
             status(customerId(1), token).expectStatus().isOk().expectBody().jsonPath("$.data.reason").isEqualTo("NOT_IN_QUEUE");
         }
@@ -580,5 +721,8 @@ class QueueFlowTest {
     }
 
     record FakeReply(int status, String body) {
+
+        /** 답하지 않고 연결을 끊는다 — 내려가는 preorder 태스크. */
+        static final int DROP = -1;
     }
 }
