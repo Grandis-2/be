@@ -71,6 +71,18 @@ interface RunRepository extends JpaRepository<ReconciliationRun, UUID> {
             """)
     int fail(@Param("id") UUID id, @Param("now") Instant now, @Param("message") String message);
 
+    /** 이 시각 전에 시작한 실행 중을 실패로 — 끝나지 않고 남은 행 */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update ReconciliationRun r
+               set r.status = com.grandis.nova.batch.reconciliation.run.RunStatus.FAILED,
+                   r.finishedAt = :now, r.errorMessage = :message, r.updatedAt = :now
+             where r.status = com.grandis.nova.batch.reconciliation.run.RunStatus.RUNNING
+               and r.startedAt < :startedBefore
+            """)
+    int failStale(@Param("startedBefore") Instant startedBefore, @Param("now") Instant now,
+                  @Param("message") String message);
+
     /** batch 가 다시 떴을 때 남아 있는 대기 · 실행 중을 모두 실패로 */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""

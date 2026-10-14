@@ -71,6 +71,16 @@ public class RunStore {
         return count == null ? 0 : count;
     }
 
+    /**
+     * 시작한 지 staleAfter 가 넘은 실행 중을 실패로 끝낸다 — 기록이 실패해 실행 중으로 남은 행(프로세스는 살아 있어 기동 정리가 돌지 않는다).
+     * 이 batch 가 검사를 돌리지 않는 동안(주기 작업 사이)에 부른다. 몇 건을 정리했는지 돌려준다
+     */
+    public int failStale(Instant now, Duration staleAfter) {
+        String message = "끝나지 않은 실행을 정리(시작 뒤 " + staleAfter.toMinutes() + "분 넘음)";
+        Integer count = tx.execute(status -> runs.failStale(now.minus(staleAfter), now, message));
+        return count == null ? 0 : count;
+    }
+
     /** 판정 불가로 끝낸다. 이미 끝난 실행(기동 정리가 먼저 실패로 바꿈 등)이면 그대로 둔다 */
     public void fail(UUID runId, Instant now, String message) {
         Integer changed = tx.execute(status -> runs.fail(runId, now, truncate(message)));

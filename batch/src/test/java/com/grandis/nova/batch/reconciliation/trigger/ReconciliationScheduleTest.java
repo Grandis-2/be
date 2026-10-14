@@ -21,7 +21,7 @@ class ReconciliationScheduleTest {
 
     private final ReconciliationProperties properties = new ReconciliationProperties(true, "0 0 4 * * *",
             ZoneId.of("Asia/Seoul"), Duration.ofSeconds(5), Duration.ofMinutes(5), Duration.ofDays(1),
-            Duration.ofMinutes(45), Duration.ofHours(1), 1000, 10000);
+            Duration.ofMinutes(45), Duration.ofHours(1), 1000, 10000, Duration.ofMinutes(30));
 
     private final ReconciliationService service = mock(ReconciliationService.class);
     private final ScheduledTaskRegistrar registrar = mock(ScheduledTaskRegistrar.class);
