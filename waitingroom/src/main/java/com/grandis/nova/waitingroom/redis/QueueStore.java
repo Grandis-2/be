@@ -2,12 +2,12 @@ package com.grandis.nova.waitingroom.redis;
 
 import com.grandis.nova.waitingroom.domain.queue.AdmissionTicket;
 import com.grandis.nova.waitingroom.domain.queue.GraceRetention;
-import com.grandis.nova.waitingroom.domain.queue.PollIntervalPolicy;
 import com.grandis.nova.waitingroom.domain.queue.QueueEntry;
 import com.grandis.nova.waitingroom.domain.queue.QueueState;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
@@ -31,11 +31,12 @@ public class QueueStore {
     /**
      * 줄에 세운다. 이미 입장했으면(입장권이 살아 있는 동안) 다시 세우지 않고 입장과 그 시각을 돌려준다.
      *
-     * @param maxLength 줄 상한. 제한 없음은 {@link #UNLIMITED}
+     * @param maxLength  줄 상한. 제한 없음은 {@link #UNLIMITED}
+     * @param leaveGrace 조회가 끊겨도 줄에 남겨 두는 시간(생존 신호 수명)
      */
-    public Mono<QueueStatus> enqueue(String productKey, String customerId, long maxLength, Instant now) {
+    public Mono<QueueStatus> enqueue(String productKey, String customerId, long maxLength, Instant now, Duration leaveGrace) {
         return scripts.list(scripts.enqueue, RedisKeys.enqueue(productKey), List.of(customerId,
-                        String.valueOf(MAX_SCORE_TTL_SEC), String.valueOf(PollIntervalPolicy.aliveTtl().toSeconds()),
+                        String.valueOf(MAX_SCORE_TTL_SEC), String.valueOf(leaveGrace.toSeconds()),
                         String.valueOf(maxLength), String.valueOf(now.getEpochSecond()), String.valueOf(GraceRetention.SECONDS),
                         String.valueOf(AdmissionTicket.TTL_SEC), String.valueOf(AdmissionTicket.WINDOW_SEC)))
                 .map(reply -> {
@@ -55,9 +56,9 @@ public class QueueStore {
     }
 
     /** 조회가 곧 생존 신호다. 입장했으면 입장 시각을 함께 돌려줘 입장권을 매번 같게 만든다. 입장권 수명이 지난 입장은 줄에 없다. */
-    public Mono<QueueStatus> status(String productKey, String customerId, Instant now) {
+    public Mono<QueueStatus> status(String productKey, String customerId, Instant now, Duration leaveGrace) {
         return scripts.list(scripts.status, RedisKeys.status(productKey), List.of(customerId,
-                        String.valueOf(PollIntervalPolicy.aliveTtl().toSeconds()), String.valueOf(now.getEpochSecond()),
+                        String.valueOf(leaveGrace.toSeconds()), String.valueOf(now.getEpochSecond()),
                         String.valueOf(AdmissionTicket.TTL_SEC), String.valueOf(AdmissionTicket.WINDOW_SEC),
                         String.valueOf(GraceRetention.SECONDS)))
                 .map(reply -> {

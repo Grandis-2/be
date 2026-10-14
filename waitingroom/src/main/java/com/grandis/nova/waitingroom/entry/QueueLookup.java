@@ -70,7 +70,7 @@ public class QueueLookup {
             if (owner.isEmpty()) {
                 return Mono.just(closed(QueueView.Closed.Reason.NOT_IN_QUEUE));
             }
-            return queue.status(productKey, customerId, now)
+            return queue.status(productKey, customerId, now, snapshot.meta().leaveGrace())
                     .onErrorMap(AdmissionGate::storeFailure, AdmissionGate::unavailable)
                     .map(found -> view(productKey, owner.get(), state, snapshot.meta(), now, found));
         }).doOnNext(view -> metrics.status(view instanceof QueueView.Closed closed ? closed.reason().name() : view.status()))

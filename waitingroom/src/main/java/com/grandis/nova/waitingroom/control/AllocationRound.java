@@ -7,6 +7,7 @@ import com.grandis.nova.waitingroom.domain.product.ProductState;
 import com.grandis.nova.waitingroom.domain.product.SalesPhase;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
 import com.grandis.nova.waitingroom.domain.queue.GraceRetention;
+import com.grandis.nova.waitingroom.domain.queue.LeaveGrace;
 import com.grandis.nova.waitingroom.redis.ControlStore;
 import com.grandis.nova.waitingroom.redis.ControlStore.ClusterView;
 import com.grandis.nova.waitingroom.redis.ControlStore.QueueDepth;
@@ -91,7 +92,7 @@ class AllocationRound {
                     sweepCursors.keySet().retainAll(schedules.keySet());
                     cleaned.retainAll(schedules.keySet());
                     return Flux.fromIterable(schedules.keySet())
-                            .concatMap(key -> retired(key, schedules.get(key), readAt)
+                            .concatMap(key -> retired(key, schedules.get(key), readAt, closeGrace(settings))
                                     ? Mono.just(new Row(key, schedules.get(key), RETIRED))
                                     : store.depth(key).map(depth -> new Row(key, schedules.get(key), depth)))
                             .collectList()
@@ -135,11 +136,13 @@ class AllocationRound {
                 .collectMap(Map.Entry::getKey, Map.Entry::getValue)
                 .flatMap(states -> {
                     GatewaySnapshot snapshot = new GatewaySnapshot(states,
-                            new SnapshotMeta(globalCredit, cluster.aliveGateways(), settings.maxWait()), nowMillis, brakeFactor);
+                            new SnapshotMeta(globalCredit, cluster.aliveGateways(), settings.maxWait(),
+                                    settings.leaveGrace()), nowMillis, brakeFactor);
                     return store.publishSnapshot(fence, properties.fenceTtl().toMillis(), SnapshotCodec.encode(snapshot))
                             .flatMap(published -> published ? Mono.just(snapshot) : Mono.error(new LostLeadershipException()));
                 })
-                .flatMap(snapshot -> tidy(fence, rows, now).then(retireFinished(rows, now)).thenReturn(snapshot));
+                .flatMap(snapshot -> tidy(fence, rows, now, closeGrace(settings)).then(retireFinished(rows, now))
+                        .thenReturn(snapshot));
     }
 
     /**
@@ -252,11 +255,11 @@ class AllocationRound {
      * 이탈자 청소와 마감된 줄 정리. 실패해도 다음 회차에 다시 하므로 배분 결과를 막지 않고, 한 모델이 실패해도
      * 뒤 모델은 정리한다. 줄 길이 읽기는 격리하지 않는다 — 빼고 발행하면 그 모델이 "없는 상품"이 된다.
      */
-    private Mono<Void> tidy(long fence, List<Row> rows, Instant now) {
+    private Mono<Void> tidy(long fence, List<Row> rows, Instant now, Duration closeGrace) {
         AtomicBoolean failed = new AtomicBoolean();
         return Flux.fromIterable(rows)
                 .filter(row -> row.depth() != RETIRED)
-                .concatMap(row -> sweep(fence, row, now).then(close(fence, row, now))
+                .concatMap(row -> sweep(fence, row, now).then(close(fence, row, now, closeGrace))
                         .onErrorResume(e -> {
                             failed.set(true);
                             metrics.loopFailed("tidy");
@@ -279,12 +282,12 @@ class AllocationRound {
                 .then();
     }
 
-    private Mono<Void> close(long fence, Row row, Instant now) {
+    private Mono<Void> close(long fence, Row row, Instant now, Duration closeGrace) {
         Instant closesAt = row.schedule().window().closesAt();
         if (now.isBefore(closesAt)) {
             return Mono.empty();
         }
-        long deletableAt = closesAt.plus(properties.closeGrace()).getEpochSecond();
+        long deletableAt = closesAt.plus(closeGrace).getEpochSecond();
         return store.closeQueue(row.key(), fence, true, properties.fenceTtl().toMillis(), deletableAt)
                 .doOnNext(result -> {
                     if (result == CLOSED) {
@@ -292,6 +295,14 @@ class AllocationRound {
                     }
                 })
                 .then();
+    }
+
+    /**
+     * 마감 뒤 줄을 지우기까지의 유예. 이탈 유예를 늘린 만큼 함께 늘린다 — 생존 신호가 남은 채 줄을 지우면
+     * 입장하고 조회를 놓친 사람을 청소가 '입장 미통지'로 옮기지 못한다.
+     */
+    private Duration closeGrace(OperationalSettings settings) {
+        return properties.closeGrace().plus(settings.leaveGrace().minus(LeaveGrace.MIN));
     }
 
     /** 깨진 일정과 모양이 틀린 모델 키는 빼고(처음 볼 때 한 번만 남긴다), 나머지는 키 순서로 고정한다. */
@@ -316,8 +327,8 @@ class AllocationRound {
      * 이탈 기록 보관까지 지났고 줄을 지운 것도 확인한 모델. Redis 를 치지 않고 마감 상태만 발행한다 — 누적된 모델
      * 수만큼 틱 비용이 늘지 않게. 마감 상태로는 계속 남겨 진입이 404 가 아니라 마감으로 답한다.
      */
-    private boolean retired(String key, Schedule schedule, Instant now) {
-        Instant done = schedule.window().closesAt().plus(properties.closeGrace()).plusSeconds(GraceRetention.SECONDS * 2);
+    private boolean retired(String key, Schedule schedule, Instant now, Duration closeGrace) {
+        Instant done = schedule.window().closesAt().plus(closeGrace).plusSeconds(GraceRetention.SECONDS * 2);
         return cleaned.contains(key) && !now.isBefore(done);
     }
 

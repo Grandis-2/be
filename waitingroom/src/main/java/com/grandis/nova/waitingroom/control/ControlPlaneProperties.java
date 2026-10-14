@@ -1,6 +1,6 @@
 package com.grandis.nova.waitingroom.control;
 
-import com.grandis.nova.waitingroom.domain.queue.PollIntervalPolicy;
+import com.grandis.nova.waitingroom.domain.queue.LeaveGrace;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
@@ -31,7 +31,8 @@ public record ControlPlaneProperties(
         snapshotRefresh = snapshotRefresh == null ? Duration.ofMillis(500) : snapshotRefresh;
         snapshotStaleAfter = snapshotStaleAfter == null ? Duration.ofSeconds(5) : snapshotStaleAfter;
         gatewayReapAfter = gatewayReapAfter == null ? Duration.ofSeconds(5) : gatewayReapAfter;
-        // 마감 뒤 줄을 지우기까지의 유예. 생존 신호 수명보다 길어야 입장하고 조회를 놓친 사람을 청소가 먼저 '입장 미통지'로 옮긴다
+        // 마감 뒤 줄을 지우기까지의 유예. 이탈 유예보다 길어야 입장하고 조회를 놓친 사람을 청소가 먼저 '입장 미통지'로 옮긴다.
+        // 이탈 유예를 운영값으로 늘리면 리더가 그만큼 더한다
         closeGrace = closeGrace == null ? Duration.ofSeconds(300) : closeGrace;
         sweepScanLimit = sweepScanLimit == null ? 1_000 : sweepScanLimit;
         sweepBudget = sweepBudget == null ? 1_000 : sweepBudget;
@@ -50,8 +51,8 @@ public record ControlPlaneProperties(
         if (slowest.multipliedBy(4).compareTo(ControlLoopHealthIndicator.STALL) >= 0) {
             throw new IllegalArgumentException("가장 긴 주기의 네 배가 " + ControlLoopHealthIndicator.STALL + " 보다 짧아야 한다");
         }
-        if (closeGrace.compareTo(PollIntervalPolicy.aliveTtl()) <= 0) {
-            throw new IllegalArgumentException("close-grace 는 생존 신호 수명(" + PollIntervalPolicy.aliveTtl() + ")보다 길어야 한다");
+        if (closeGrace.compareTo(LeaveGrace.MIN) <= 0) {
+            throw new IllegalArgumentException("close-grace 는 이탈 유예 최솟값(" + LeaveGrace.MIN + ")보다 길어야 한다");
         }
         if (sweepScanLimit < 1 || sweepScanLimit > 3_999 || sweepBudget < 1 || sweepBudget > 7_999) {
             throw new IllegalArgumentException("sweep-scan-limit 은 1..3999, sweep-budget 은 1..7999 여야 한다");
