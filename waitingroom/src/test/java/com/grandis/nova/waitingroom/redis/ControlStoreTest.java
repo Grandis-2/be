@@ -1,6 +1,7 @@
 package com.grandis.nova.waitingroom.redis;
 
 import com.grandis.nova.waitingroom.domain.product.SalesWindow;
+import com.grandis.nova.waitingroom.domain.queue.LeaveGrace;
 import com.grandis.nova.waitingroom.domain.queue.QueueEntry;
 import com.grandis.nova.waitingroom.domain.queue.QueueState;
 import com.grandis.nova.waitingroom.redis.ControlStore.ApplyResult;
@@ -51,7 +52,7 @@ class ControlStoreTest {
 
     private void enqueue(String... customers) {
         for (String customer : customers) {
-            queue.enqueue(PRODUCT, customer, QueueStore.UNLIMITED, now).block(WAIT);
+            queue.enqueue(PRODUCT, customer, QueueStore.UNLIMITED, now, LeaveGrace.MIN).block(WAIT);
         }
     }
 
@@ -116,8 +117,8 @@ class ControlStoreTest {
 
             assertThat(first.entered()).isEqualTo(2);
             assertThat(none.cursor()).isEqualTo(first.cursor());
-            assertThat(queue.status(PRODUCT, "b", now).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);
-            assertThat(queue.status(PRODUCT, "c", now).block(WAIT).entry().state()).isEqualTo(QueueState.WAITING);
+            assertThat(queue.status(PRODUCT, "b", now, LeaveGrace.MIN).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);
+            assertThat(queue.status(PRODUCT, "c", now, LeaveGrace.MIN).block(WAIT).entry().state()).isEqualTo(QueueState.WAITING);
         }
 
         @Test
@@ -126,7 +127,7 @@ class ControlStoreTest {
             control.apply(PRODUCT, 100, 10, FENCE_TTL, -1, 3).block(WAIT);
             enqueue("late");
 
-            assertThat(queue.status(PRODUCT, "late", now).block(WAIT).entry().state()).isEqualTo(QueueState.WAITING);
+            assertThat(queue.status(PRODUCT, "late", now, LeaveGrace.MIN).block(WAIT).entry().state()).isEqualTo(QueueState.WAITING);
         }
 
         @Test
@@ -136,7 +137,7 @@ class ControlStoreTest {
 
             assertThat(control.apply(PRODUCT, 1, 19, FENCE_TTL, -1, 5).block(WAIT).fenced()).isTrue();
             assertThat(control.apply(PRODUCT, 1, 0, FENCE_TTL, -1, 6).block(WAIT).fenced()).as("리더가 아니다").isTrue();
-            assertThat(queue.status(PRODUCT, "b", now).block(WAIT).entry().state()).isEqualTo(QueueState.WAITING);
+            assertThat(queue.status(PRODUCT, "b", now, LeaveGrace.MIN).block(WAIT).entry().state()).isEqualTo(QueueState.WAITING);
         }
 
         @Test
@@ -155,7 +156,7 @@ class ControlStoreTest {
             assertThat(control.apply(PRODUCT, 1, 10, FENCE_TTL, -1, 501).block(WAIT).entered()).isEqualTo(1);
             assertThat(control.apply(PRODUCT, 1, 11, FENCE_TTL, -1, 400).block(WAIT).entered())
                     .as("새 임기는 회차가 작아도 들인다").isEqualTo(1);
-            assertThat(queue.status(PRODUCT, "d", now).block(WAIT).entry().state()).isEqualTo(QueueState.WAITING);
+            assertThat(queue.status(PRODUCT, "d", now, LeaveGrace.MIN).block(WAIT).entry().state()).isEqualTo(QueueState.WAITING);
         }
 
         @Test
@@ -168,8 +169,8 @@ class ControlStoreTest {
 
             assertThat(results).filteredOn(ApplyResult::applied).hasSize(1);
             assertThat(results).extracting(ApplyResult::entered).containsOnly(0L, 1L);
-            assertThat(queue.status(PRODUCT, "a", now).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);
-            assertThat(queue.status(PRODUCT, "b", now).block(WAIT).entry().state()).isEqualTo(QueueState.WAITING);
+            assertThat(queue.status(PRODUCT, "a", now, LeaveGrace.MIN).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);
+            assertThat(queue.status(PRODUCT, "b", now, LeaveGrace.MIN).block(WAIT).entry().state()).isEqualTo(QueueState.WAITING);
         }
 
         @Test
@@ -191,7 +192,7 @@ class ControlStoreTest {
             ApplyResult healed = control.apply(PRODUCT, 0, 10, FENCE_TTL, applied.cursor(), 8).block(WAIT);
 
             assertThat(healed.cursor()).isEqualTo(applied.cursor());
-            assertThat(queue.status(PRODUCT, "a", now).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);
+            assertThat(queue.status(PRODUCT, "a", now, LeaveGrace.MIN).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);
         }
     }
 
@@ -397,13 +398,13 @@ class ControlStoreTest {
             // 지금(later) 뒤로 살아 있는 신호가 하나도 없으면 아무도 빼지 않는다 — b 의 신호를 살린다
             assertThat(result.swept()).isZero();
 
-            queue.status(PRODUCT, "b", Instant.ofEpochSecond(later)).block(WAIT);
+            queue.status(PRODUCT, "b", Instant.ofEpochSecond(later), LeaveGrace.MIN).block(WAIT);
             result = control.sweep(PRODUCT, 100, later, 3_000, 100, "0", true, 1).block(WAIT);
             assertThat(result.swept()).isEqualTo(1);
-            assertThat(queue.status(PRODUCT, "a", Instant.ofEpochSecond(later)).block(WAIT).entry().state())
+            assertThat(queue.status(PRODUCT, "a", Instant.ofEpochSecond(later), LeaveGrace.MIN).block(WAIT).entry().state())
                     .isEqualTo(QueueState.NOT_QUEUED);
 
-            QueueEntry back = queue.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, Instant.ofEpochSecond(later)).block(WAIT).entry();
+            QueueEntry back = queue.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, Instant.ofEpochSecond(later), LeaveGrace.MIN).block(WAIT).entry();
             assertThat(back.rejoined()).isTrue();
             assertThat(back.rank()).as("떠난 사이 온 사람을 추월하지 않는다").isEqualTo(1);
         }

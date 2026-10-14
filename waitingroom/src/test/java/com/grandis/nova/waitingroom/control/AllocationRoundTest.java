@@ -5,6 +5,7 @@ import com.grandis.nova.waitingroom.domain.product.ProductState;
 import com.grandis.nova.waitingroom.domain.product.RuntimeState;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
 import com.grandis.nova.waitingroom.domain.product.SalesWindow;
+import com.grandis.nova.waitingroom.domain.queue.LeaveGrace;
 import com.grandis.nova.waitingroom.domain.queue.QueueState;
 import com.grandis.nova.waitingroom.redis.ControlStore;
 import com.grandis.nova.waitingroom.redis.ControlStore.ClusterView;
@@ -84,12 +85,12 @@ class AllocationRoundTest {
     }
 
     private void line(String product, int count) {
-        IntStream.range(0, count).forEach(i -> queue.enqueue(product, product + "-" + i, QueueStore.UNLIMITED, now).block(WAIT));
+        IntStream.range(0, count).forEach(i -> queue.enqueue(product, product + "-" + i, QueueStore.UNLIMITED, now, LeaveGrace.MIN).block(WAIT));
     }
 
     private long admitted(String product, int count) {
         return IntStream.range(0, count)
-                .filter(i -> queue.status(product, product + "-" + i, now).block(WAIT).entry().state() == QueueState.ADMITTED)
+                .filter(i -> queue.status(product, product + "-" + i, now, LeaveGrace.MIN).block(WAIT).entry().state() == QueueState.ADMITTED)
                 .count();
     }
 
@@ -124,7 +125,7 @@ class AllocationRoundTest {
         GatewaySnapshot snapshot = run(7, 0);
 
         assertThat(admitted(productKey(101), 20) + admitted(productKey(202), 20)).isEqualTo(10);
-        assertThat(queue.status(productKey(101), productKey(101) + "-0", now).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);
+        assertThat(queue.status(productKey(101), productKey(101) + "-0", now, LeaveGrace.MIN).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);
         assertThat(snapshot.product(productKey(101)).orElseThrow().credit()).isEqualTo(5);
         assertThat(snapshot.product(productKey(101)).orElseThrow().waiting()).isEqualTo(15);
         assertThat(snapshot.meta().gatewayCount()).isEqualTo(2);
@@ -145,11 +146,11 @@ class AllocationRoundTest {
         assertThat(hidden.credit()).isZero();
         assertThat(hidden.waiting()).isEqualTo(20);
         assertThat(SnapshotCodec.decode(control.readSnapshot().block(WAIT).entries())).contains(snapshot);
-        assertThat(queue.status(productKey(101), productKey(101) + "-5", now).block(WAIT).entry().rank()).as("자리는 그대로").isEqualTo(5);
+        assertThat(queue.status(productKey(101), productKey(101) + "-5", now, LeaveGrace.MIN).block(WAIT).entry().rank()).as("자리는 그대로").isEqualTo(5);
 
         control.applySchedule(productKey(101), window, 2, true).block(WAIT);
         run(7, 0, 2);
-        assertThat(queue.status(productKey(101), productKey(101) + "-0", now).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);
+        assertThat(queue.status(productKey(101), productKey(101) + "-0", now, LeaveGrace.MIN).block(WAIT).entry().state()).isEqualTo(QueueState.ADMITTED);
         assertThat(admitted(productKey(101), 20)).isEqualTo(10);
     }
 
@@ -214,6 +215,22 @@ class AllocationRoundTest {
 
         assertThat(admitted(productKey(202), 5)).isEqualTo(5);
         assertThat(snapshot.products()).containsKeys(productKey(101), productKey(202));
+    }
+
+    @Test
+    void 이탈_유예를_늘리면_판정_재료에_싣고_마감된_줄도_늘린_만큼_늦게_지운다() {
+        redis.opsForHash().put(RedisKeys.SETTINGS, OperationalSettings.LEAVE_GRACE_SEC, "600").block(WAIT);
+        Instant defaultGraceAgo = now.minus(PROPERTIES.closeGrace()).minusSeconds(1);
+        schedule(productKey(101), now.minus(Duration.ofHours(1)), defaultGraceAgo);
+        schedule(productKey(202), now.minus(Duration.ofHours(1)), defaultGraceAgo.minusSeconds(600 - LeaveGrace.MIN.toSeconds()));
+        line(productKey(101), 3);
+        line(productKey(202), 3);
+
+        assertThat(run(7, 0).meta().leaveGrace()).isEqualTo(Duration.ofSeconds(600));
+        run(7, 0);
+
+        assertThat(redis.hasKey("wr:queue:{" + productKey(101) + "}").block(WAIT)).as("생존 신호가 아직 남았을 수 있다").isTrue();
+        assertThat(redis.hasKey("wr:queue:{" + productKey(202) + "}").block(WAIT)).isFalse();
     }
 
     @Test
