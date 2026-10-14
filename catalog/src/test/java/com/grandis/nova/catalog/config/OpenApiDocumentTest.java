@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.grandis.nova.catalog.category.CategoryNode;
 import com.grandis.nova.catalog.detail.ProductDetailView;
+import com.grandis.nova.catalog.edit.InStockConversionRequest;
 import com.grandis.nova.catalog.edit.OptionValueAddRequest;
 import com.grandis.nova.catalog.edit.OptionValueEditRequest;
 import com.grandis.nova.catalog.edit.ProductEditRequest;
@@ -123,6 +124,7 @@ class OpenApiDocumentTest {
         expected.put("PATCH /api/v1/admin/products/{productId}/variants/{variantId}", "VariantEditRequest");
         expected.put("PATCH /api/v1/admin/products/{productId}/sale-status", "SaleStatusChangeRequest");
         expected.put("PATCH /api/v1/admin/products/{productId}/visibility", "VisibilityChangeRequest");
+        expected.put("POST /api/v1/admin/products/{productId}/conversion", "InStockConversionRequest");
         expected.put("POST /api/v1/admin/products/image-uploads", "ImageUploadRequest");
         expected.put("POST /api/v1/admin/products/{productId}/images", "ProductImageAddRequest");
         expected.put("PATCH /api/v1/admin/products/{productId}/images", "ProductImageReplaceRequest");
@@ -176,7 +178,7 @@ class OpenApiDocumentTest {
                 VariantAddRequest.class, VariantEditRequest.class, SaleStatusChangeRequest.class, VisibilityChangeRequest.class,
                 ProductImageAddRequest.class, ProductImageReplaceRequest.class, ReviewCreateRequest.class, ReviewUpdateRequest.class,
                 ProductDetailView.class, ProductListItem.class, AdminProductListItem.class, CategoryNode.class, ReviewView.class,
-                RegistrationStatusView.class, SaleStatusView.class, VisibilityView.class));
+                RegistrationStatusView.class, SaleStatusView.class, VisibilityView.class, InStockConversionRequest.class));
         while (!queue.isEmpty()) {
             Class<?> type = queue.poll();
             Schema named = type.getAnnotation(Schema.class);

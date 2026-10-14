@@ -45,6 +45,12 @@ public record ProductDetailView(
         Images images
 ) {
 
+    /** 실시간 칸(회차 · 옵션의 가용 수량 · 품절)만 바꾼 사본 — 캐시해 둔 본문에 요청마다 채운다(ProductDetailService#withLiveParts). */
+    public ProductDetailView withLive(Campaign liveCampaign, List<Variant> liveVariants, boolean liveSoldOut) {
+        return new ProductDetailView(productId, categoryId, saleMode, title, brand, modelName, description, imageUrl, status, visible,
+                basePrice, discountRate, warranty, sellable, liveSoldOut, liveCampaign, optionAxes, liveVariants, images);
+    }
+
     public record Warranty(boolean offered, BigDecimal surcharge) {
     }
 
@@ -79,6 +85,10 @@ public record ProductDetailView(
             SaleStatus status,
             Integer availableQuantity
     ) {
+
+        public Variant withAvailableQuantity(Integer quantity) {
+            return new Variant(variantId, sku, title, price, listPrice, filterAttributes, selections, status, quantity);
+        }
     }
 
     /**

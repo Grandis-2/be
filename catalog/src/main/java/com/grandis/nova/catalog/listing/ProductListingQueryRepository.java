@@ -335,16 +335,15 @@ public class ProductListingQueryRepository {
 
     private static ProductListItem toItem(ResultSet rs, Instant now) throws SQLException {
         SaleMode saleMode = SaleMode.valueOf(rs.getString("sale_mode"));
-        Instant opensAt = instant(rs, "opens_at");
-        Instant closesAt = instant(rs, "closes_at");
-        PreorderSaleStatus preorderStatus = saleMode == SaleMode.PREORDER && opensAt != null && closesAt != null
-                ? PreorderSaleStatus.of(opensAt, closesAt, now) : null;
+        // 회차 시각은 사전예약만 — 일반 전환한 상품에도 preorder 회차 행이 남아 있어 그대로 싣지 않는다
+        Instant opensAt = saleMode == SaleMode.PREORDER ? instant(rs, "opens_at") : null;
+        Instant closesAt = saleMode == SaleMode.PREORDER ? instant(rs, "closes_at") : null;
         BigDecimal minPrice = rs.getBigDecimal("min_price");
         BigDecimal minListPrice = rs.getBigDecimal("min_list_price");
         return new ProductListItem(UuidBinary.fromBytes(rs.getBytes("id")), saleMode, rs.getString("title"),
                 Brand.valueOf(rs.getString("brand")), rs.getString("model_name"), rs.getString("image_url"),
                 SaleStatus.valueOf(rs.getString("status")), minPrice, minListPrice, rs.getInt("discount_rate"), rs.getBoolean("sellable"), rs.getBoolean("sold_out"),
-                preorderStatus, opensAt, closesAt);
+                null, opensAt, closesAt).at(now);   // 접수 단계는 캐시에서 꺼낼 때와 같은 규칙(ProductListItem#at)으로
     }
 
     private static Instant instant(ResultSet rs, String column) throws SQLException {

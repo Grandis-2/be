@@ -4,6 +4,7 @@ import com.grandis.nova.catalog.CatalogErrorCode;
 import com.grandis.nova.catalog.detail.AdminProductDetail;
 import com.grandis.nova.catalog.detail.ProductDetailService;
 import com.grandis.nova.catalog.detail.ProductDetailView;
+import com.grandis.nova.catalog.listing.CampaignWindow;
 import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
 import com.grandis.nova.catalog.option.CollationDuplicates;
 import com.grandis.nova.catalog.option.OptionCombination;
@@ -17,6 +18,7 @@ import com.grandis.nova.catalog.product.ProductOptionRepository;
 import com.grandis.nova.catalog.product.ProductRepository;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
+import com.grandis.nova.catalog.registration.InStockProductRegistered;
 import com.grandis.nova.catalog.registration.ProductRegistrationValidator;
 import com.grandis.nova.catalog.web.ConstraintViolations;
 import com.grandis.nova.catalog.web.ValidationFailures;
@@ -32,6 +34,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -373,6 +378,67 @@ public class ProductEditService {
             notifyPreorder(product);
         }
         return new VisibilityView(productId, product.isVisible());
+    }
+
+    /**
+     * 마감된 사전예약 상품을 같은 상품 그대로 일반 상품으로 바꾼다(2026-10-14 결정). 판매 중(ACTIVE)이 되고, 할인율은 요청 값(비우면 0)이다.
+     * 옵션별 초기 재고는 등록과 같은 이벤트(IN_STOCK_PRODUCT_REGISTERED)로 order 에 넘긴다 — order 가 재고 행을 만들면 판매 준비가 끝나 목록 · 장바구니에
+     * 나온다(그 전에는 노출되지 않는다). preorder 의 접수용 사본도 비운다(PREORDER_PRODUCT_CHANGED — 판매 방식이 바뀌었다).
+     *
+     * <ul>
+     *   <li>409 STATE_CONFLICT: 사전예약이 아님(이미 바꿨음 포함) · 회차가 취소됨 · 회차가 없음 · 마감 전(closes_at &gt; 지금)</li>
+     *   <li>400: 재고가 그 상품의 옵션을 빠짐없이 한 번씩 덮지 않음(stocks) · 할인가가 100원보다 작아지는 옵션(discountRate)</li>
+     * </ul>
+     * 이미 접수된 예약 · 주문은 자기 스냅샷 가격으로 그대로 진행한다 — 마감 뒤 결제 기간 중에 바꿔도 preorder 결제는 catalog 를 다시 읽지 않는다.
+     */
+    @Transactional
+    public AdminProductDetail convertToInStock(UUID productId, InStockConversionRequest request) {
+        Product product = lockProduct(productId);
+        if (product.getSaleMode() != SaleMode.PREORDER) {
+            throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "사전예약 상품만 일반 상품으로 바꿀 수 있습니다.");
+        }
+        if (product.getCampaignCanceledAt() != null) {
+            throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "회차가 취소된 상품은 일반 상품으로 바꿀 수 없습니다.");
+        }
+        CampaignWindow window = crossReads.findCampaign(productId)
+                .orElseThrow(() -> new BusinessException(CatalogErrorCode.STATE_CONFLICT, "회차가 없는 사전예약 상품은 일반 상품으로 바꿀 수 없습니다."));
+        if (clock.instant().isBefore(window.closesAt())) {
+            throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "사전예약이 마감된 뒤에만 일반 상품으로 바꿀 수 있습니다.");
+        }
+        List<ProductOption> all = options.findByProductIdOrderByCreatedAtAscIdAsc(productId);
+        Map<UUID, Integer> stockByOption = requireEveryOption(all, request.stocks());
+        int rate = request.discountRate();
+        for (ProductOption option : all) {
+            ProductRegistrationValidator.requireSellablePrice(option.getPrice(), rate, "discountRate");
+        }
+        product.convertToInStock(rate);
+        products.flush();   // 판매 방식 UPDATE 를 먼저 내려 제약(CHECK) 위반이 이벤트를 적기 전에 드러나게 한다
+        outbox.append(new InStockProductRegistered(productId, all.stream()
+                .map(option -> new InStockProductRegistered.Item(option.getId(), stockByOption.get(option.getId())))
+                .toList()));
+        outbox.append(new PreorderProductChanged(productId));
+        return detailService.findAdminProduct(productId);
+    }
+
+    /** 재고가 옵션을 빠짐없이 한 번씩 덮는가 — 모르는 옵션 · 같은 옵션 두 번 · 빠진 옵션은 stocks 의 400. */
+    private static Map<UUID, Integer> requireEveryOption(List<ProductOption> all, List<InStockConversionRequest.Stock> stocks) {
+        Set<UUID> optionIds = new HashSet<>();
+        all.forEach(option -> optionIds.add(option.getId()));
+        Map<UUID, Integer> stockByOption = new HashMap<>();
+        for (int i = 0; i < stocks.size(); i++) {
+            InStockConversionRequest.Stock stock = stocks.get(i);
+            if (!optionIds.contains(stock.variantId())) {
+                throw ValidationFailures.of("stocks[" + i + "].variantId", "이 상품의 옵션이 아닙니다: " + stock.variantId());
+            }
+            if (stockByOption.put(stock.variantId(), stock.stock()) != null) {
+                throw ValidationFailures.of("stocks[" + i + "].variantId", "같은 옵션이 두 번 있습니다: " + stock.variantId());
+            }
+        }
+        if (stockByOption.size() != optionIds.size()) {
+            List<UUID> missing = all.stream().map(ProductOption::getId).filter(id -> !stockByOption.containsKey(id)).toList();
+            throw ValidationFailures.of("stocks", "모든 옵션의 재고가 필요합니다(0 허용, 판매 중지 옵션 포함). 빠진 옵션: " + missing);
+        }
+        return stockByOption;
     }
 
     /**

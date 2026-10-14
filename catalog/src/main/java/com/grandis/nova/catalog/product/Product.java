@@ -3,7 +3,9 @@ package com.grandis.nova.catalog.product;
 import com.grandis.nova.catalog.option.ProductOptions;
 import com.grandis.nova.common.BaseEntity;
 import jakarta.persistence.Column;
+import com.grandis.nova.catalog.cache.CatalogCacheInvalidation;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EntityListeners;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
@@ -32,6 +34,7 @@ import java.util.UUID;
  * 옵션 가격만 새 값으로 남아 "가격 = 기본가 + Σ추가금" 이 깨진다(실측). 새 쓰기 경로는 "잠그지 않고 읽기 → 수정 커밋 → 쓰기" 모양의 시험을 같이 둔다.
  */
 @Entity
+@EntityListeners(CatalogCacheInvalidation.class)
 @Table(name = "products")
 public class Product extends BaseEntity {
 
@@ -42,8 +45,9 @@ public class Product extends BaseEntity {
     @Column(nullable = false)
     private UUID categoryId;
 
+    /** 등록 때 정하고, 바뀌는 길은 마감된 사전예약의 일반 전환({@link #convertToInStock}) 하나뿐이다. */
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, updatable = false, length = 20)
+    @Column(nullable = false, length = 20)
     private SaleMode saleMode;
 
     @Column(nullable = false, length = 100)
@@ -157,6 +161,22 @@ public class Product extends BaseEntity {
      */
     public void changeStatus(SaleStatus status) {
         this.status = Objects.requireNonNull(status, "status");
+    }
+
+    /**
+     * 사전예약 → 일반 상품. 판매 중(ACTIVE)으로 두고 할인율을 바꾼다. 마감 뒤인지 · 재고 · 옵션 가격 하한은 서비스가 본다(회차 · 재고는 다른 서비스 표).
+     * 회차가 취소된 상품은 바꾸지 않는다(2026-10-14 결정 — DB CHECK 도 취소 표식이 있는 행은 사전예약 · 판매 중지만 허용한다).
+     */
+    public void convertToInStock(int discountRate) {
+        if (saleMode != SaleMode.PREORDER) {
+            throw new IllegalStateException("일반 전환은 사전예약 상품만: " + getId());
+        }
+        if (campaignCanceledAt != null) {
+            throw new IllegalStateException("회차가 취소된 상품은 일반 전환하지 않는다: " + getId());
+        }
+        this.saleMode = SaleMode.IN_STOCK;
+        this.status = SaleStatus.ACTIVE;
+        this.discountRate = Discount.requireRate(discountRate);
     }
 
     /**
