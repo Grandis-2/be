@@ -40,8 +40,8 @@ class ScheduleResyncTest {
     private final AtomicBoolean sqsDown = new AtomicBoolean();
     /** 켜면 보낸 뒤 표식을 세우는 쓰기가 실패한다. */
     private final AtomicBoolean markFails = new AtomicBoolean();
-    /** 표식 쓰기를 시도한 횟수. 보낸 뒤 이 노드의 기억을 미룬 다음에야 오른다. */
-    private final AtomicInteger markTried = new AtomicInteger();
+    /** 표식 쓰기가 실패한 횟수. 보낸 뒤 이 노드의 기억을 미룬 다음에야 오른다. */
+    private final AtomicInteger markFailed = new AtomicInteger();
 
     @BeforeEach
     void setUp() {
@@ -50,9 +50,11 @@ class ScheduleResyncTest {
             @Override
             public Mono<Boolean> markResyncRequested(String marker, Duration quietPeriod) {
                 return Mono.defer(() -> {
-                    markTried.incrementAndGet();
-                    return markFails.get() ? Mono.error(new QueryTimeoutException("redis write timeout"))
-                            : super.markResyncRequested(marker, quietPeriod);
+                    if (!markFails.get()) {
+                        return super.markResyncRequested(marker, quietPeriod);
+                    }
+                    markFailed.incrementAndGet();
+                    return Mono.error(new QueryTimeoutException("redis write timeout"));
                 });
             }
         };
@@ -182,7 +184,7 @@ class ScheduleResyncTest {
         markFails.set(true);
 
         resync.requestIfQuiet();
-        await(() -> markTried.get() == 1);
+        await(() -> markFailed.get() == 1);
         String claim = redis.opsForValue().get(RedisKeys.RESYNC_REQUESTED).block(WAIT);
         assertThat(claim).as("보낸 요청의 선점은 풀지 않는다").isNotNull().isNotEqualTo("1");
 
@@ -210,7 +212,7 @@ class ScheduleResyncTest {
         markFails.set(true);
 
         resync.requestIfDue();
-        await(() -> markTried.get() == 1);
+        await(() -> markFailed.get() == 1);
         redis.delete(RedisKeys.RESYNC_PERIODIC).block(WAIT);
         clock.advance(PERIODIC.minusSeconds(1));
         resync.requestIfDue();
