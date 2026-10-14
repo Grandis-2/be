@@ -174,7 +174,9 @@ class CatalogReadCacheApiTest {
     void detailBodyTtlIsLong() throws Exception {
         UUID productId = registerInStock("길게");
         assertThat(maxAge(get("/api/v1/products/{id}", productId))).isBetween(4L, 5L);
-        String key = redis.keys("catalog:cache:product-detail-body:*" + productId).iterator().next();
+        java.util.Set<String> keys = redis.keys("catalog:cache:product-detail-body:*" + productId);
+        assertThat(keys).as("본문이 캐시에 들어갔다").hasSize(1);
+        String key = keys.iterator().next();
         assertThat(redis.getExpire(key)).isBetween(590L, 600L);
     }
 
