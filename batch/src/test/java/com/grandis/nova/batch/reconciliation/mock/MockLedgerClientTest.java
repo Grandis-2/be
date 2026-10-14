@@ -70,6 +70,45 @@ class MockLedgerClientTest {
         assertThatThrownBy(entries::hasNext)
                 .isInstanceOf(MockLedgerUnavailable.class)
                 .hasMessage("Mock 목록 조회 실패(2페이지, HTTP 503 · 3번 시도)");
+        // 1페이지 한 번 + 2페이지 처음 한 번과 다시 받기 두 번
+        assertThat(MOCK.requests()).isEqualTo(4);
+    }
+
+    @Test
+    void 일시_실패한_페이지는_다시_받아_이어_간다() {
+        for (int i = 1; i <= 5; i++) {
+            MOCK.active("k" + i, "R-" + i, "c", "p", "SKU", AT);
+        }
+        MOCK.failAtPage(2, 503, 1);
+
+        List<MockLedgerEntry> entries = drain(client.entries());
+
+        assertThat(entries).extracting(MockLedgerEntry::externalKey).containsExactly("k1", "k2", "k3", "k4", "k5");
+        // 세 페이지 + 2페이지 다시 받기 한 번
+        assertThat(MOCK.requests()).isEqualTo(4);
+    }
+
+    @Test
+    void 주소_문제로_보이는_4xx_는_다시_받지_않는다() {
+        MOCK.active("k1", "R-1", "c", "p", "SKU", AT);
+        MOCK.failAtPage(1, 404);
+
+        assertThatThrownBy(() -> drain(client.entries()))
+                .isInstanceOf(MockLedgerUnavailable.class)
+                .hasMessage("Mock 목록 조회 실패(1페이지, HTTP 404)");
+        assertThat(MOCK.requests()).isEqualTo(1);
+    }
+
+    @Test
+    void 기다리면_목록_전체_기한을_넘길_때는_다시_받지_않는다() {
+        MOCK.active("k1", "R-1", "c", "p", "SKU", AT);
+        MOCK.failAtPage(1, 503);
+        MockLedgerClient patient = client(MOCK.url(), Duration.ofMinutes(1), Duration.ofHours(1));
+
+        assertThatThrownBy(() -> drain(patient.entries()))
+                .isInstanceOf(MockLedgerUnavailable.class)
+                .hasMessage("Mock 목록 조회 실패(1페이지, HTTP 503)");
+        assertThat(MOCK.requests()).isEqualTo(1);
     }
 
     @Test
@@ -102,6 +141,8 @@ class MockLedgerClientTest {
         assertThatThrownBy(() -> drain(client.entries()))
                 .isInstanceOf(MockLedgerUnavailable.class)
                 .hasMessage("Mock 목록 조회 실패(1페이지, 응답이 JSON 이 아님)");
+        // 계약과 다른 응답은 다시 받아도 같다
+        assertThat(MOCK.requests()).isEqualTo(1);
     }
 
     @Test
