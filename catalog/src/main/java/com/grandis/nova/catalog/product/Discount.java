@@ -11,6 +11,8 @@ public final class Discount {
 
     public static final int MIN_RATE = 0;
     public static final int MAX_RATE = 99;
+    /** 회원이 내는 옵션 가격의 하한(원). 결제(토스 승인)가 0원 이하를 거절하고 너무 작은 금액도 거절할 수 있어 응모비 하한과 같게 둔다. */
+    public static final BigDecimal MIN_SALE_PRICE = BigDecimal.valueOf(100);
 
     /** 할인가를 이 단위(원) 아래에서 버린다. */
     private static final BigDecimal UNIT = BigDecimal.valueOf(100);
