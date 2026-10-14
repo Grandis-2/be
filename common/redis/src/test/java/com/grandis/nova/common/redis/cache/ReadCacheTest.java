@@ -1,0 +1,288 @@
+package com.grandis.nova.common.redis.cache;
+
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
+import org.springframework.transaction.support.DefaultTransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.testcontainers.containers.GenericContainer;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.json.JsonMapper;
+
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+class ReadCacheTest {
+
+    private static final GenericContainer<?> REDIS = new GenericContainer<>("redis:8").withExposedPorts(6379);
+    private static final JsonMapper JSON = JsonMapper.builder().build();
+
+    static LettuceConnectionFactory connections;
+    static StringRedisTemplate redis;
+
+    ReadCache cache;
+    ReadCache.Spec<Item> items;
+
+    record Item(UUID id, String name, BigDecimal price, Instant at, Kind kind, List<String> tags) {
+    }
+
+    enum Kind { A, B }
+
+    record ItemV1(String name) {
+    }
+
+    record ItemV2(String name, String added) {
+    }
+
+    record Page<T>(int page, List<T> items) {
+    }
+
+    @BeforeAll
+    static void start() {
+        REDIS.start();
+        RedisStandaloneConfiguration server = new RedisStandaloneConfiguration(REDIS.getHost(), REDIS.getMappedPort(6379));
+        // 운영 예시 설정과 같은 제한 시간 — 멈춘 Redis 에서 한 번에 이만큼 기다린다
+        connections = new LettuceConnectionFactory(server, LettuceClientConfiguration.builder().commandTimeout(Duration.ofMillis(300)).build());
+        connections.afterPropertiesSet();
+        connections.start();
+        redis = new StringRedisTemplate(connections);
+    }
+
+    @AfterAll
+    static void stop() {
+        connections.destroy();
+        REDIS.stop();
+    }
+
+    @BeforeEach
+    void setUp() {
+        redis.getConnectionFactory().getConnection().serverCommands().flushAll();
+        cache = new ReadCache(redis, JSON, "svc");
+        items = cache.spec("item", Item.class, Duration.ofSeconds(30));
+    }
+
+    @Test
+    @DisplayName("없으면 loader 로 채우고, 다음 조회는 loader 없이 같은 값 — JSON 을 거쳐도 금액 · 시각 · enum · 목록이 그대로다")
+    void missThenHit() {
+        AtomicInteger loads = new AtomicInteger();
+        Item item = new Item(UUID.randomUUID(), "폰", new BigDecimal("2118600"), Instant.parse("2026-10-14T01:02:03.123456Z"), Kind.B, List.of("a", "b"));
+
+        assertThat(cache.get(items, "products", "1", () -> { loads.incrementAndGet(); return item; })).isEqualTo(item);
+        assertThat(cache.get(items, "products", "1", () -> { loads.incrementAndGet(); return null; })).isEqualTo(item);
+        assertThat(loads).hasValue(1);
+        assertThat(redis.getExpire(onlyKey("svc:cache:item:*"))).isBetween(25L, 30L);
+    }
+
+    @Test
+    @DisplayName("세대를 올리면 그 세대의 값은 다음 조회부터 새로 채운다 — 다른 세대 이름의 값은 그대로")
+    void bumpInvalidatesOnlyThatGeneration() {
+        AtomicInteger loads = new AtomicInteger();
+        cache.get(items, "products", "1", () -> item("v1", loads));
+        cache.get(items, "reviews", "1", () -> item("r1", loads));
+
+        cache.bumpAfterCommit("products");
+
+        assertThat(cache.get(items, "products", "1", () -> item("v2", loads)).name()).isEqualTo("v2");
+        assertThat(cache.get(items, "reviews", "1", () -> item("r2", loads)).name()).isEqualTo("r1");
+        assertThat(loads).hasValue(3);
+    }
+
+    @Test
+    @DisplayName("트랜잭션 안의 올리기는 커밋 뒤에만 — 커밋 전에는 옛 값, 롤백이면 올리지 않는다")
+    void bumpWaitsForCommit() {
+        TransactionTemplate tx = new TransactionTemplate(new NoOpTransactionManager());
+        cache.get(items, "products", "1", () -> item("old", new AtomicInteger()));
+
+        tx.executeWithoutResult(status -> {
+            cache.bumpAfterCommit("products");
+            assertThat(cache.get(items, "products", "1", () -> item("inside", new AtomicInteger())).name()).isEqualTo("old");
+            status.setRollbackOnly();
+        });
+        assertThat(cache.get(items, "products", "1", () -> item("after-rollback", new AtomicInteger())).name()).isEqualTo("old");
+
+        tx.executeWithoutResult(status -> {
+            cache.bumpAfterCommit("products");
+            cache.bumpAfterCommit("products");
+            cache.bumpAfterCommit("reviews");
+        });
+        assertThat(cache.get(items, "products", "1", () -> item("after-commit", new AtomicInteger())).name()).isEqualTo("after-commit");
+        // 한 트랜잭션에서 여러 번 불러도 세대마다 한 번 올린다
+        assertThat(redis.opsForValue().get("svc:cache:gen:products")).isEqualTo("1");
+        assertThat(redis.opsForValue().get("svc:cache:gen:reviews")).isEqualTo("1");
+    }
+
+    @Test
+    @DisplayName("같은 키를 동시에 20개가 찾으면 loader 는 한 번 — 나머지는 그 결과를 받는다. loader 의 예외도 같이 받는다")
+    void concurrentMissesLoadOnce() throws Exception {
+        AtomicInteger loads = new AtomicInteger();
+        List<Item> results = concurrently(20, () -> cache.get(items, "products", "hot", () -> {
+            loads.incrementAndGet();
+            sleep(300);
+            return item("hot", new AtomicInteger());
+        }));
+        assertThat(loads).hasValue(1);
+        assertThat(results).extracting(Item::name).containsOnly("hot");
+
+        AtomicInteger failures = new AtomicInteger();
+        List<Item> failed = concurrently(10, () -> {
+            try {
+                return cache.get(items, "products", "missing", () -> {
+                    failures.incrementAndGet();
+                    sleep(300);
+                    throw new IllegalStateException("not found");
+                });
+            } catch (IllegalStateException e) {
+                return null;
+            }
+        });
+        assertThat(failures).hasValue(1);
+        assertThat(failed).containsOnlyNulls();
+    }
+
+    @Test
+    @DisplayName("모양이 다른 타입은 같은 이름이어도 서로의 값을 읽지 않는다 — 칸이 는 새 버전이 옛 값을 읽어 새 칸을 null 로 내보내지 않게")
+    void differentShapeUsesDifferentKey() {
+        ReadCache.Spec<ItemV1> v1 = cache.spec("shape", ItemV1.class, Duration.ofSeconds(30));
+        ReadCache.Spec<ItemV2> v2 = cache.spec("shape", ItemV2.class, Duration.ofSeconds(30));
+        cache.get(v1, "products", "1", () -> new ItemV1("old"));
+
+        assertThat(cache.get(v2, "products", "1", () -> new ItemV2("new", "x"))).isEqualTo(new ItemV2("new", "x"));
+        assertThat(v1.fingerprint()).isNotEqualTo(v2.fingerprint());
+
+        ReadCache.Spec<Page<ItemV1>> pageOfV1 = cache.spec("page", new TypeReference<Page<ItemV1>>() { }, Duration.ofSeconds(30));
+        ReadCache.Spec<Page<ItemV2>> pageOfV2 = cache.spec("page", new TypeReference<Page<ItemV2>>() { }, Duration.ofSeconds(30));
+        assertThat(pageOfV1.fingerprint()).as("타입 인자의 모양도 지문에 들어간다").isNotEqualTo(pageOfV2.fingerprint());
+        assertThat(cache.spec("e", Item.class, Duration.ofSeconds(1)).fingerprint()).isEqualTo(items.fingerprint());
+    }
+
+    @Test
+    @DisplayName("지문이 같은데 못 읽는 값(깨진 JSON)은 없는 것으로 보고 다시 채운다")
+    void unreadableValueIsReloaded() {
+        cache.get(items, "products", "1", () -> item("v1", new AtomicInteger()));
+        redis.opsForValue().set(onlyKey("svc:cache:item:*"), "{not json");
+
+        assertThat(cache.get(items, "products", "1", () -> item("v2", new AtomicInteger())).name()).isEqualTo("v2");
+        assertThat(cache.get(items, "products", "1", () -> item("v3", new AtomicInteger())).name()).isEqualTo("v2");
+    }
+
+    @Test
+    @DisplayName("Redis 가 멈추면 캐시 없이 loader 로 답하고(예외 없음), 실패가 이어지면 차단기가 열려 Redis 를 기다리지 않는다 — 다른 id 끼리 섞이지 않는다")
+    void redisDownFallsBackToLoaderAndStopsWaiting() {
+        cache.get(items, "products", "1", () -> item("cached", new AtomicInteger()));
+        REDIS.getDockerClient().pauseContainerCmd(REDIS.getContainerId()).exec();
+        try {
+            long start = System.nanoTime();
+            assertThat(cache.get(items, "products", "1", () -> item("db-1", new AtomicInteger())).name()).isEqualTo("db-1");
+            long firstMillis = (System.nanoTime() - start) / 1_000_000;
+            assertThat(firstMillis).as("열리기 전에는 제한 시간만큼 기다린다").isGreaterThanOrEqualTo(250);
+
+            for (int i = 0; i < 5 && cache.breakerState() != CircuitBreaker.State.OPEN; i++) {
+                cache.get(items, "products", "x" + i, () -> item("db", new AtomicInteger()));
+            }
+            assertThat(cache.breakerState()).isEqualTo(CircuitBreaker.State.OPEN);
+
+            start = System.nanoTime();
+            Item a = cache.get(items, "products", "a", () -> item("db-a", new AtomicInteger()));
+            Item b = cache.get(items, "products", "b", () -> item("db-b", new AtomicInteger()));
+            cache.bumpAfterCommit("products");
+            long openMillis = (System.nanoTime() - start) / 1_000_000;
+            assertThat(a.name()).isEqualTo("db-a");
+            assertThat(b.name()).isEqualTo("db-b");
+            assertThat(openMillis).as("열린 뒤에는 Redis 를 부르지 않는다").isLessThan(100);
+        } finally {
+            REDIS.getDockerClient().unpauseContainerCmd(REDIS.getContainerId()).exec();
+        }
+    }
+
+    @Test
+    @DisplayName("TTL 은 0 보다 커야 한다")
+    void ttlMustBePositive() {
+        assertThatThrownBy(() -> cache.spec("x", Item.class, Duration.ZERO)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private static Item item(String name, AtomicInteger loads) {
+        loads.incrementAndGet();
+        return new Item(UUID.nameUUIDFromBytes(name.getBytes()), name, BigDecimal.TEN, Instant.EPOCH, Kind.A, List.of());
+    }
+
+    private static String onlyKey(String pattern) {
+        Set<String> keys = redis.keys(pattern);
+        assertThat(keys).hasSize(1);
+        return keys.iterator().next();
+    }
+
+    private static <T> List<T> concurrently(int threads, java.util.concurrent.Callable<T> task) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            CountDownLatch ready = new CountDownLatch(threads);
+            CountDownLatch go = new CountDownLatch(1);
+            List<Future<T>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> {
+                    ready.countDown();
+                    go.await();
+                    return task.call();
+                }));
+            }
+            ready.await();
+            go.countDown();
+            List<T> out = new ArrayList<>();
+            for (Future<T> future : futures) {
+                out.add(future.get());
+            }
+            return out;
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private static void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** 커밋 · 롤백 때 동기화 콜백만 돌리는 트랜잭션 관리자 — DB 없이 "커밋 뒤" 를 재려고. */
+    static final class NoOpTransactionManager extends AbstractPlatformTransactionManager {
+        @Override
+        protected Object doGetTransaction() {
+            return new Object();
+        }
+
+        @Override
+        protected void doBegin(Object transaction, TransactionDefinition definition) {
+        }
+
+        @Override
+        protected void doCommit(DefaultTransactionStatus status) {
+        }
+
+        @Override
+        protected void doRollback(DefaultTransactionStatus status) {
+        }
+    }
+}
