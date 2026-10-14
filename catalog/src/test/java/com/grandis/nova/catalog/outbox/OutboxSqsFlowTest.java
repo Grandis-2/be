@@ -51,12 +51,12 @@ class OutboxSqsFlowTest {
     void registrationEventsReachTheirQueues() {
         UUID categoryId = new ShopFixtures(jdbcTemplate).category();
         UUID inStock = registrations.register("k-" + ShopFixtures.unique(), new ProductRegistrationRequest(categoryId, SaleMode.IN_STOCK,
-                "케이블", Brand.APPLE, "A0001", null, null, true, new BigDecimal("9000"), null, null,
+                "케이블", Brand.APPLE, "A0001", null, null, true, new BigDecimal("9000"), null, null, null,
                 List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, 3)), null, null, null))
                 .registration().productId();
         Instant opensAt = Instant.now().plus(Duration.ofHours(1));
         UUID preorder = registrations.register("k-" + ShopFixtures.unique(), new ProductRegistrationRequest(categoryId, SaleMode.PREORDER,
-                "Nova", Brand.APPLE, "A0001", null, null, false, new BigDecimal("1000"), null, null,
+                "Nova", Brand.APPLE, "A0001", null, null, false, new BigDecimal("1000"), null, null, null,
                 List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, null)), null,
                 new ProductRegistrationRequest.Campaign(opensAt, opensAt.plus(Duration.ofDays(1))),
                 List.of(new ProductRegistrationRequest.ShipmentBatch(1, 1L, null, LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 7)))))

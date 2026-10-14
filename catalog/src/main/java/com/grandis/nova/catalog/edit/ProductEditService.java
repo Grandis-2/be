@@ -130,6 +130,9 @@ public class ProductEditService {
         if (request.basePrice() != null && product.reprice(request.basePrice())) {
             recomputePrices(product, product.getOptions(), null, "basePrice");
         }
+        if (request.discountRate() != null) {
+            product.changeDiscountRate(request.discountRate());
+        }
         products.flush();
         AdminProductDetail edited = detailService.findAdminProduct(productId);
         requireNotOpenedAtCommit(product);

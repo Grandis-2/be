@@ -86,7 +86,7 @@ class ProductRegistrationServiceTest {
     }
 
     private ProductRegistrationRequest inStockRequest() {
-        return new ProductRegistrationRequest(categoryId, SaleMode.IN_STOCK, "케이블", Brand.APPLE, "A0001", null, null, true, new BigDecimal("9000"), null,
+        return new ProductRegistrationRequest(categoryId, SaleMode.IN_STOCK, "케이블", Brand.APPLE, "A0001", null, null, true, new BigDecimal("9000"), null, null,
                 null, List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, 3)), null, null, null);
     }
 
@@ -94,7 +94,7 @@ class ProductRegistrationServiceTest {
     @DisplayName("일반 상품 등록은 order 로 갈 초기 재고 이벤트 하나를 적는다 — items 는 저장한 옵션 id 와 요청한 재고, 상품 id 는 봉투로만")
     void inStockRegistrationAppendsInitialStockEvent() {
         ProductRegistrationRequest inStock = new ProductRegistrationRequest(categoryId, SaleMode.IN_STOCK, "케이스", Brand.APPLE, "A0001", null, null,
-                true, new BigDecimal("10000"), null,
+                true, new BigDecimal("10000"), null, null,
                 List.of(new ProductRegistrationRequest.OptionAxis("color", "색상",
                         List.of(new ProductRegistrationRequest.OptionValue("블랙", null, null), new ProductRegistrationRequest.OptionValue("화이트", null, null)))),
                 List.of(new ProductRegistrationRequest.Combination(Map.of("color", "블랙"), false, null, 5),
@@ -167,7 +167,7 @@ class ProductRegistrationServiceTest {
 
     private ProductRegistrationRequest preorderRequest(Instant opensAt) {
         return new ProductRegistrationRequest(categoryId, SaleMode.PREORDER, "Nova", Brand.APPLE, "A0001", null, null,
-                false, new BigDecimal("1000"), null, null, List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, null)),
+                false, new BigDecimal("1000"), null, null, null, List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, null)),
                 null, new ProductRegistrationRequest.Campaign(opensAt, opensAt.plus(Duration.ofDays(1))),
                 List.of(new ProductRegistrationRequest.ShipmentBatch(1, 1L, 100L, LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 7)),
                         new ProductRegistrationRequest.ShipmentBatch(2, 101L, null, LocalDate.of(2026, 11, 8), LocalDate.of(2026, 11, 14))));
