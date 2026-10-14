@@ -40,6 +40,8 @@ class ScheduleResyncTest {
     private final AtomicBoolean sqsDown = new AtomicBoolean();
     /** 켜면 보낸 뒤 표식을 세우는 쓰기가 실패한다. */
     private final AtomicBoolean markFails = new AtomicBoolean();
+    /** 표식 쓰기를 시도한 횟수. 보낸 뒤 이 노드의 기억을 미룬 다음에야 오른다. */
+    private final AtomicInteger markTried = new AtomicInteger();
 
     @BeforeEach
     void setUp() {
@@ -47,8 +49,11 @@ class ScheduleResyncTest {
         control = new ControlStore(new LuaScripts(redis), redis) {
             @Override
             public Mono<Boolean> markResyncRequested(String marker, Duration quietPeriod) {
-                return markFails.get() ? Mono.error(new QueryTimeoutException("redis write timeout"))
-                        : super.markResyncRequested(marker, quietPeriod);
+                return Mono.defer(() -> {
+                    markTried.incrementAndGet();
+                    return markFails.get() ? Mono.error(new QueryTimeoutException("redis write timeout"))
+                            : super.markResyncRequested(marker, quietPeriod);
+                });
             }
         };
     }
@@ -177,7 +182,7 @@ class ScheduleResyncTest {
         markFails.set(true);
 
         resync.requestIfQuiet();
-        await(() -> sent.size() == 1 && marked(RedisKeys.RESYNC_ATTEMPTS));
+        await(() -> markTried.get() == 1);
         String claim = redis.opsForValue().get(RedisKeys.RESYNC_REQUESTED).block(WAIT);
         assertThat(claim).as("보낸 요청의 선점은 풀지 않는다").isNotNull().isNotEqualTo("1");
 
@@ -191,8 +196,11 @@ class ScheduleResyncTest {
 
         markFails.set(false);
         clock.advance(Duration.ofSeconds(1));
-        resync.requestIfQuiet();
-        await(() -> marked(RedisKeys.RESYNC_REQUESTED));
+        // 앞선 요청의 뒤처리가 끝나야 받아 주므로 될 때까지 다시 부른다
+        await(() -> {
+            resync.requestIfQuiet();
+            return marked(RedisKeys.RESYNC_REQUESTED);
+        });
         assertThat(sent).containsExactly("SCHEDULE_EMPTY", "SCHEDULE_EMPTY");
     }
 
@@ -202,7 +210,7 @@ class ScheduleResyncTest {
         markFails.set(true);
 
         resync.requestIfDue();
-        await(() -> sent.size() == 1);
+        await(() -> markTried.get() == 1);
         redis.delete(RedisKeys.RESYNC_PERIODIC).block(WAIT);
         clock.advance(PERIODIC.minusSeconds(1));
         resync.requestIfDue();
@@ -210,8 +218,10 @@ class ScheduleResyncTest {
 
         markFails.set(false);
         clock.advance(Duration.ofSeconds(1));
-        resync.requestIfDue();
-        await(() -> marked(RedisKeys.RESYNC_PERIODIC));
+        await(() -> {
+            resync.requestIfDue();
+            return marked(RedisKeys.RESYNC_PERIODIC);
+        });
         assertThat(sent).containsExactly("PERIODIC", "PERIODIC");
     }
 
