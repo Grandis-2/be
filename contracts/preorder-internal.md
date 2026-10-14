@@ -53,7 +53,7 @@
 | `options[].optionId` | string(UUID) | `product_options.id` |
 | `options[].sku` | string | 모델 안 유일 |
 | `options[].title` | string | 옵션 표시명. 스냅샷 원본 |
-| `options[].price` | number(정수 원) | 최종가. 스냅샷 원본 |
+| `options[].price` | number(정수 원) | 회원이 내는 값 — 정가에 상품 할인율을 걸어 100원 단위로 버린 할인가(할인율 0 이면 정가). 스냅샷 원본 |
 | `options[].status` | `ACTIVE` \| `PAUSED` | 옵션 판매 상태 |
 
 **비공개·미완료 상품도 200 으로 준다.** 숨기는 판정은 목적별로 호출자가 한다(아래). 이 API 가 먼저 숨기면 관리자 등록 흐름이 자기 상품을 못 본다.

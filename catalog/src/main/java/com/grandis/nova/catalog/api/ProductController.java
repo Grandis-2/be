@@ -53,7 +53,7 @@ public class ProductController {
         return ApiResponse.ok(detailService.findVariant(productId, variantId));
     }
 
-    @Operation(summary = "상품 목록 · 검색(로그인 없이)", description = "sort: NEWEST(최신순, 기본) · PRICE_ASC(낮은 가격순) · PRICE_DESC(높은 가격순). 가격은 판매 중인 옵션의 최저가이고 판매 중인 옵션이 없는 상품은 가격순에서 맨 뒤. "
+    @Operation(summary = "상품 목록 · 검색(로그인 없이)", description = "sort: NEWEST(최신순, 기본) · PRICE_ASC(낮은 가격순) · PRICE_DESC(높은 가격순). 가격은 판매 중인 옵션의 최저 할인가(minPrice)이고 판매 중인 옵션이 없는 상품은 가격순에서 맨 뒤. "
             + "q 는 상품명 · 태그 · 모델명 · 브랜드 코드 부분 일치, brand · color · storage 는 이름을 반복해 여러 값(OR — brand=APPLE&brand=LG)")
     @SecurityRequirements
     @GetMapping

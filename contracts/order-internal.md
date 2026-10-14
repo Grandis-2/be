@@ -120,7 +120,7 @@ order 와 catalog 가 서로 부르는 내부 API 를 담는다(preorder 가 부
 | `productTitle` | string | 상품 이름(지금 값) |
 | `optionTitle` | string | 옵션 표시명(지금 값, 예: 블랙 / 256GB) |
 | `sku` | string | 옵션 SKU |
-| `price` | number | 옵션 최종가(정수 원) — 기본가 + 고른 값의 추가금 |
+| `price` | number | 회원이 내는 옵션 가격(정수 원) — 정가(기본가 + 고른 값의 추가금)에 상품 할인율을 걸어 100원 단위로 버린 값. 할인율 0 이면 정가. 보증 추가금은 할인하지 않는다 |
 | `optionStatus` | string | 옵션 판매 상태(ACTIVE · PAUSED) |
 | `saleMode` | string | 상품 판매 방식(IN_STOCK · PREORDER) |
 | `productStatus` | string | 상품 판매 상태(ACTIVE · PAUSED) |

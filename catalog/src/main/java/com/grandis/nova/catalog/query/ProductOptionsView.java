@@ -31,7 +31,7 @@ public record ProductOptionsView(
         options = options == null ? List.of() : List.copyOf(options);
     }
 
-    /** @param price 최종가(정수 원). 스냅샷 원본 */
+    /** @param price 회원이 내는 값(정수 원) — 정가에 상품 할인율을 건 할인가. 스냅샷 원본 */
     public record Option(UUID optionId, String sku, String title, BigDecimal price, SaleStatus status) {
     }
 }

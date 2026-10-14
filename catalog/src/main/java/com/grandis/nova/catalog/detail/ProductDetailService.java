@@ -97,7 +97,7 @@ public class ProductDetailService {
         boolean sellable = false;
         boolean purchasable = false;
         for (ProductOption option : options.findByProductIdOrderByCreatedAtAscIdAsc(productId)) {
-            Variant variant = toVariant(option, product.getSaleMode(), document, available);
+            Variant variant = toVariant(option, product, document, available);
             variants.add(variant);
             boolean active = option.getStatus() == SaleStatus.ACTIVE;
             sellable |= active;
@@ -116,7 +116,7 @@ public class ProductDetailService {
         return new ProductDetailView(product.getId(), product.getCategoryId(), product.getSaleMode(), product.getTitle(),
                 product.getBrand(), product.getModelName(),
                 product.getDescription(), product.getThumbnailUrl(), product.getStatus(), visible,
-                product.getBasePrice(), new Warranty(product.isWarrantyOffered(), product.getWarrantySurcharge()),
+                product.getBasePrice(), product.getDiscountRate(), new Warranty(product.isWarrantyOffered(), product.getWarrantySurcharge()),
                 sellable, soldOut, campaign, toAxes(document), variants, productImages);
     }
 
@@ -138,15 +138,15 @@ public class ProductDetailService {
         return product;
     }
 
-    private static Variant toVariant(ProductOption option, SaleMode saleMode, ProductOptions document, Map<UUID, Integer> available) {
-        Integer availableQuantity = saleMode == SaleMode.IN_STOCK
+    private static Variant toVariant(ProductOption option, Product product, ProductOptions document, Map<UUID, Integer> available) {
+        Integer availableQuantity = product.getSaleMode() == SaleMode.IN_STOCK
                 ? Math.max(0, available.getOrDefault(option.getId(), 0)) : null;
         // 고른 값은 조합 키(값 id)로 문서에서 찾는다 — 축 키 → 정규화값
         Map<String, String> selections = new TreeMap<>();
         for (ProductOptions.Pick pick : document.picksOf(OptionCombination.valueIdsOf(option.getCombinationKey()))) {
             selections.put(pick.axis().key(), pick.value().normalized());
         }
-        return new Variant(option.getId(), option.getSku(), option.getTitle(), option.getPrice(),
+        return new Variant(option.getId(), option.getSku(), option.getTitle(), product.salePrice(option.getPrice()), option.getPrice(),
                 attributes(option.getFilterAttributes()), selections, option.getStatus(), availableQuantity);
     }
 

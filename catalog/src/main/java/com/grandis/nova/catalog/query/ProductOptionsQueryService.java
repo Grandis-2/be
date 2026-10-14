@@ -53,7 +53,7 @@ public class ProductOptionsQueryService {
         Product product = products.findById(productId)
                 .orElseThrow(() -> new BusinessException(CatalogErrorCode.PRODUCT_NOT_FOUND));
         List<ProductOptionsView.Option> optionViews = options.findByProductIdOrderByCreatedAtAscIdAsc(productId).stream()
-                .map(ProductOptionsQueryService::toView)
+                .map(option -> toView(option, product))
                 .toList();
         return new ProductOptionsView(product.getId(), product.getTitle(), product.getSaleMode(), exposure.status(),
                 exposure.visible(), exposure.ready(), optionViews);
@@ -88,15 +88,15 @@ public class ProductOptionsQueryService {
             ProductOptions document = documents.computeIfAbsent(product.getId(), id -> product.getOptions());
             ProductOptions.Warranty warranty = document.warranty();
             views.add(new OptionLookupView(option.getId(), product.getId(), product.getTitle(), option.getTitle(), option.getSku(),
-                    option.getPrice(), option.getStatus(), product.getSaleMode(), exposure.status(), exposure.visible(), exposure.ready(),
+                    product.salePrice(option.getPrice()), option.getStatus(), product.getSaleMode(), exposure.status(), exposure.visible(), exposure.ready(),
                     new OptionLookupView.Warranty(warranty.offered(), warranty.surcharge()),
                     document.imageUrlOf(OptionCombination.valueIdsOf(option.getCombinationKey()))));
         }
         return views;
     }
 
-    private static ProductOptionsView.Option toView(ProductOption option) {
-        return new ProductOptionsView.Option(option.getId(), option.getSku(), option.getTitle(), option.getPrice(),
+    private static ProductOptionsView.Option toView(ProductOption option, Product product) {
+        return new ProductOptionsView.Option(option.getId(), option.getSku(), option.getTitle(), product.salePrice(option.getPrice()),
                 option.getStatus());
     }
 }
