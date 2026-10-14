@@ -32,7 +32,7 @@ public record ControlPlaneProperties(
         snapshotStaleAfter = snapshotStaleAfter == null ? Duration.ofSeconds(5) : snapshotStaleAfter;
         gatewayReapAfter = gatewayReapAfter == null ? Duration.ofSeconds(5) : gatewayReapAfter;
         // 마감 뒤 줄을 지우기까지의 유예. 이탈 유예보다 길어야 입장하고 조회를 놓친 사람을 청소가 먼저 '입장 미통지'로 옮긴다.
-        // 이탈 유예를 운영값으로 늘리면 리더가 그만큼 더한다
+        // 운영값으로 늘린 유예의 신호가 남아 있으면 정리가 신호가 걷힐 때까지 기다린다
         closeGrace = closeGrace == null ? Duration.ofSeconds(300) : closeGrace;
         sweepScanLimit = sweepScanLimit == null ? 1_000 : sweepScanLimit;
         sweepBudget = sweepBudget == null ? 1_000 : sweepBudget;

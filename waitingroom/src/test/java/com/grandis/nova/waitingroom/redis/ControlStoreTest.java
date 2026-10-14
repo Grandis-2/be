@@ -422,6 +422,8 @@ class ControlStoreTest {
             assertThat(control.closeQueue(PRODUCT, 7, true, FENCE_TTL, past).block(WAIT)).as("표가 없다").isEqualTo(-2);
             assertThat(control.closeQueue(PRODUCT, 7, true, FENCE_TTL, future).block(WAIT)).as("아직 유예").isZero();
             assertThat(control.closeQueue(PRODUCT, 6, true, FENCE_TTL, past).block(WAIT)).as("옛 임기").isEqualTo(-1);
+            assertThat(control.closeQueue(PRODUCT, 7, true, FENCE_TTL, past).block(WAIT)).as("청소가 걷지 않은 생존 신호").isZero();
+            redis.opsForZSet().remove("wr:alive:{" + PRODUCT + "}", "a").block(WAIT);
             assertThat(control.closeQueue(PRODUCT, 7, true, FENCE_TTL, past).block(WAIT)).isEqualTo(1);
             assertThat(redis.hasKey("wr:queue:{" + PRODUCT + "}").block(WAIT)).isFalse();
         }
