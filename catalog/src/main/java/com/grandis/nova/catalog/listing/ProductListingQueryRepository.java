@@ -317,8 +317,9 @@ public class ProductListingQueryRepository {
     }
 
     /**
-     * 홍보 상품 카드 — 목록과 같은 칸. 공개이고 판매 방식별 준비가 끝난 상품만 싣고, 판매 상태 · 마감 뒤 시간 · 일반 전환과는 상관없이 싣는다
-     * (홍보 페이지는 마감 뒤에도 "일반 구매" 로 상품을 보인다). 순서는 ids 순서, 빠진 상품(비공개 · 준비 전)은 건너뛴다.
+     * 홍보 상품 카드 — 목록과 같은 칸. 공개 · 판매 중(ACTIVE) · 판매 방식별 준비가 끝난 상품만 싣는다 — 판매 중지 · 회차 취소(PAUSED)는 뺀다
+     * (2026-10-14 결정 — 취소 직후 preorder 가 회차를 닫기 전까지 "접수 중" 으로 보이지 않게). 마감 뒤 시간 · 일반 전환과는 상관없이 싣는다(홍보 페이지는
+     * 마감 뒤에도 "일반 구매" 로 상품을 보인다 — 일반 전환한 상품은 판매 중이다). 순서는 ids 순서, 빠진 상품은 건너뛴다.
      */
     public List<ProductListItem> findCards(List<UUID> ids, Instant now) {
         if (ids.isEmpty()) {
@@ -327,7 +328,7 @@ public class ProductListingQueryRepository {
         String sql = SELECT_ITEMS + """
                   FROM products p
                   LEFT JOIN preorder_campaigns c ON c.product_id = p.id
-                 WHERE p.id IN (:ids) AND p.visible = 1 AND
+                 WHERE p.id IN (:ids) AND p.visible = 1 AND p.status = 'ACTIVE' AND
                 """ + READY;
         Map<UUID, ProductListItem> byId = new HashMap<>();
         jdbc.query(sql, new MapSqlParameterSource("ids", ids.stream().map(UuidBinary::toBytes).toList()),

@@ -36,7 +36,7 @@ public class PromotionController {
         return PublicCache.ok(promotions.shown().map(Items::new), PromotionQueryService.BODY_TTL, PublicCache.PRODUCT, clock);
     }
 
-    @Operation(summary = "홍보 상세(로그인 없이)", description = "홍보 기간 밖이면 404. products 는 상품 목록과 같은 칸 — 공개 · 판매 준비가 끝난 상품만, 마감 · 일반 전환 뒤에도 싣는다")
+    @Operation(summary = "홍보 상세(로그인 없이)", description = "홍보 기간 밖이면 404. products 는 상품 목록과 같은 칸 — 공개 · 판매 중 · 판매 준비가 끝난 상품만(판매 중지 · 회차 취소 제외), 마감 · 일반 전환 뒤에도 싣는다")
     @SecurityRequirements
     @GetMapping("/{promotionId}")
     public ResponseEntity<ApiResponse<PromotionViews.Detail>> detail(@PathVariable UUID promotionId) {

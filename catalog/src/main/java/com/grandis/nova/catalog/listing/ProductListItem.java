@@ -9,7 +9,8 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * 목록의 한 상품. 노출 규칙을 지난 상품만 여기 온다(판매 방식별 준비 · 공개 · 판매 중 · 사전예약이면 마감 + 120시간 전).
+ * 목록의 한 상품. 회원 목록은 노출 규칙을 지난 상품만 싣는다(판매 방식별 준비 · 공개 · 판매 중 · 사전예약이면 마감 + 120시간 전). 홍보 카드
+ * (ProductListingQueryRepository#findCards)는 같은 칸에 마감 뒤 시간 조건만 빼고 싣는다 — 홍보 페이지는 마감 · 일반 전환 뒤에도 상품을 보인다.
  *
  * @param imageUrl       썸네일 — 첫 색상(관리자가 넣은 순서)의 첫 장, 색상 축이 없으면 기본 묶음의 첫 장. 대표 표시는 보지 않고, 첫 색상에 사진이
  *                       없으면 null 이다(다른 색상으로 넘어가지 않는다 — 화면이 대체 이미지). {@link com.grandis.nova.catalog.option.ProductOptions#thumbnailUrl}
