@@ -337,14 +337,12 @@ public class ProductListingQueryRepository {
         SaleMode saleMode = SaleMode.valueOf(rs.getString("sale_mode"));
         Instant opensAt = instant(rs, "opens_at");
         Instant closesAt = instant(rs, "closes_at");
-        PreorderSaleStatus preorderStatus = saleMode == SaleMode.PREORDER && opensAt != null && closesAt != null
-                ? PreorderSaleStatus.of(opensAt, closesAt, now) : null;
         BigDecimal minPrice = rs.getBigDecimal("min_price");
         BigDecimal minListPrice = rs.getBigDecimal("min_list_price");
         return new ProductListItem(UuidBinary.fromBytes(rs.getBytes("id")), saleMode, rs.getString("title"),
                 Brand.valueOf(rs.getString("brand")), rs.getString("model_name"), rs.getString("image_url"),
                 SaleStatus.valueOf(rs.getString("status")), minPrice, minListPrice, rs.getInt("discount_rate"), rs.getBoolean("sellable"), rs.getBoolean("sold_out"),
-                preorderStatus, opensAt, closesAt);
+                null, opensAt, closesAt).at(now);   // 접수 단계는 캐시에서 꺼낼 때와 같은 규칙(ProductListItem#at)으로
     }
 
     private static Instant instant(ResultSet rs, String column) throws SQLException {

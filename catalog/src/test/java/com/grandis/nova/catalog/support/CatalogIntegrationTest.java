@@ -48,7 +48,10 @@ import java.lang.annotation.Target;
         // CDN 주소는 기존 시험 본문의 사진 주소(https://img/…)가 그대로 통과하도록 https://img 로 둔다
         "nova.upload.bucket=catalog-test-images",
         "nova.upload.cdn-base-url=https://img",
-        "nova.upload.region=ap-northeast-2"
+        "nova.upload.region=ap-northeast-2",
+        // 읽기 캐시는 끈다 — 시험 픽스처가 DB 를 JDBC 로 바로 고쳐(캐시 세대를 안 올림) 다음 조회가 옛 값을 받는다. 캐시 동작은
+        // 켠 채로 도는 캐시 시험(ReadCache · CatalogReadCache 시험)이 본다
+        "nova.read-cache.enabled=false"
 })
 @Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class})
 public @interface CatalogIntegrationTest {

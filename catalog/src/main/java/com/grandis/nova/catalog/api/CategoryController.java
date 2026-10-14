@@ -1,11 +1,12 @@
 package com.grandis.nova.catalog.api;
 
 import com.grandis.nova.catalog.category.CategoryNode;
-import com.grandis.nova.catalog.category.CategoryTreeService;
+import com.grandis.nova.catalog.cache.CatalogReadCache;
 import com.grandis.nova.common.web.ApiResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -19,16 +20,16 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/categories")
 public class CategoryController {
 
-    private final CategoryTreeService treeService;
+    private final CatalogReadCache cache;
 
-    public CategoryController(CategoryTreeService treeService) {
-        this.treeService = treeService;
+    public CategoryController(CatalogReadCache cache) {
+        this.cache = cache;
     }
 
     @Operation(summary = "카테고리 트리(로그인 없이)")
     @SecurityRequirements
     @GetMapping
-    public ApiResponse<Items<CategoryNode>> tree() {
-        return ApiResponse.ok(new Items<>(treeService.tree()));
+    public ResponseEntity<ApiResponse<Items<CategoryNode>>> tree() {
+        return PublicCache.ok(PublicCache.CATEGORY, new Items<>(cache.categoryTree()));
     }
 }

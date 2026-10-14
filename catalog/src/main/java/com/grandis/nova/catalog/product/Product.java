@@ -3,7 +3,9 @@ package com.grandis.nova.catalog.product;
 import com.grandis.nova.catalog.option.ProductOptions;
 import com.grandis.nova.common.BaseEntity;
 import jakarta.persistence.Column;
+import com.grandis.nova.catalog.cache.CatalogCacheInvalidation;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EntityListeners;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
@@ -32,6 +34,7 @@ import java.util.UUID;
  * 옵션 가격만 새 값으로 남아 "가격 = 기본가 + Σ추가금" 이 깨진다(실측). 새 쓰기 경로는 "잠그지 않고 읽기 → 수정 커밋 → 쓰기" 모양의 시험을 같이 둔다.
  */
 @Entity
+@EntityListeners(CatalogCacheInvalidation.class)
 @Table(name = "products")
 public class Product extends BaseEntity {
 

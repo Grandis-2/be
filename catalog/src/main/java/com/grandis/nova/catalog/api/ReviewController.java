@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog.api;
 
+import com.grandis.nova.catalog.cache.CatalogReadCache;
 import com.grandis.nova.catalog.review.ReviewCreateRequest;
 import com.grandis.nova.catalog.review.ReviewService;
 import com.grandis.nova.catalog.review.ReviewUpdateRequest;
@@ -13,6 +14,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -34,10 +36,12 @@ import java.util.UUID;
 public class ReviewController {
 
     private final ReviewService reviews;
+    private final CatalogReadCache cache;
     private final StrictBodies bodies;
 
-    public ReviewController(ReviewService reviews, StrictBodies bodies) {
+    public ReviewController(ReviewService reviews, CatalogReadCache cache, StrictBodies bodies) {
         this.reviews = reviews;
+        this.cache = cache;
         this.bodies = bodies;
     }
 
@@ -67,24 +71,24 @@ public class ReviewController {
     @Operation(summary = "상품 리뷰(로그인 없이)")
     @SecurityRequirements
     @GetMapping("/api/v1/products/{productId}/reviews")
-    public ApiResponse<ProductPageResponse<ReviewView>> productReviews(
+    public ResponseEntity<ApiResponse<ProductPageResponse<ReviewView>>> productReviews(
             @PathVariable UUID productId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        return ApiResponse.ok(ProductPageResponse.from(
-                reviews.productReviews(productId, PageSizes.requirePage(page), PageSizes.require(size))));
+        return PublicCache.ok(PublicCache.REVIEW, ProductPageResponse.from(
+                cache.productReviews(productId, PageSizes.requirePage(page), PageSizes.require(size))));
     }
 
     /** 구매후기 모아보기. categoryId 는 상위면 하위 포함. */
     @Operation(summary = "구매후기 모아보기(로그인 없이)")
     @SecurityRequirements
     @GetMapping("/api/v1/reviews")
-    public ApiResponse<ProductPageResponse<ReviewView>> visibleReviews(
+    public ResponseEntity<ApiResponse<ProductPageResponse<ReviewView>>> visibleReviews(
             @RequestParam(required = false) UUID categoryId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        return ApiResponse.ok(ProductPageResponse.from(
-                reviews.visibleReviews(categoryId, PageSizes.requirePage(page), PageSizes.require(size))));
+        return PublicCache.ok(PublicCache.REVIEW, ProductPageResponse.from(
+                cache.visibleReviews(categoryId, PageSizes.requirePage(page), PageSizes.require(size))));
     }
 
     /** 내 리뷰. orderItemId 를 주면 그 주문상품의 리뷰만 — 주문 내역의 "리뷰 쓰기 / 내가 쓴 리뷰 보기" 를 가른다. */

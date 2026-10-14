@@ -3,7 +3,9 @@ package com.grandis.nova.catalog.product;
 import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.common.BaseEntity;
 import jakarta.persistence.Column;
+import com.grandis.nova.catalog.cache.CatalogCacheInvalidation;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EntityListeners;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
@@ -27,6 +29,7 @@ import java.util.UUID;
  * 재고는 여기 없다(order 소유 option_inventories). 사전예약 옵션에는 재고 행이 없다.
  */
 @Entity
+@EntityListeners(CatalogCacheInvalidation.class)
 @Table(name = "product_options")
 public class ProductOption extends BaseEntity {
 
