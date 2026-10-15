@@ -1,11 +1,13 @@
 package com.grandis.nova.catalog.listing;
 
+import com.grandis.nova.catalog.option.ProductOptions;
 import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -13,6 +15,7 @@ import java.util.UUID;
  * 시각 미만). 홍보 카드(ProductListingQueryRepository#findCards)는 같은 칸에 접수 기간 조건만 빼고 싣는다 — 홍보 페이지는 오픈 전 · 마감 ·
  * 일반 전환 뒤에도 상품을 보인다.
  *
+ * @param colors         색상칩 — 색상 축 값마다 표시값 · hex(없으면 null) · 그 색상의 사진(넣은 순서). 색상 축이 없으면 빈 목록. 첫 칩의 첫 사진이 imageUrl 이다
  * @param imageUrl       썸네일 — 첫 색상(관리자가 넣은 순서)의 첫 장, 색상 축이 없으면 기본 묶음의 첫 장. 대표 표시는 보지 않고, 첫 색상에 사진이
  *                       없으면 null 이다(다른 색상으로 넘어가지 않는다 — 화면이 대체 이미지). {@link com.grandis.nova.catalog.option.ProductOptions#thumbnailUrl}
  * @param minPrice       판매 중(ACTIVE) 옵션의 최저 할인가(회원이 내는 값 — 가격순도 이 값). 품절 옵션 포함, 판매 중지 옵션 제외. 판매 중 옵션이 없으면 null
@@ -31,6 +34,7 @@ public record ProductListItem(
         Brand brand,
         String modelName,
         String imageUrl,
+        List<ProductOptions.ColorChip> colors,
         SaleStatus status,
         BigDecimal minPrice,
         BigDecimal minListPrice,
@@ -46,7 +50,7 @@ public record ProductListItem(
     public ProductListItem at(Instant now) {
         PreorderSaleStatus current = saleMode == SaleMode.PREORDER && opensAt != null && closesAt != null
                 ? PreorderSaleStatus.of(opensAt, closesAt, now) : null;
-        return new ProductListItem(productId, saleMode, title, brand, modelName, imageUrl, status, minPrice, minListPrice, discountRate,
+        return new ProductListItem(productId, saleMode, title, brand, modelName, imageUrl, colors, status, minPrice, minListPrice, discountRate,
                 sellable, soldOut, current, opensAt, closesAt);
     }
 }

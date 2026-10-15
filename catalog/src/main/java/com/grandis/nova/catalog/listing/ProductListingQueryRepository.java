@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog.listing;
 
+import com.grandis.nova.catalog.option.ProductOptions;
 import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.Discount;
 import com.grandis.nova.catalog.product.SaleMode;
@@ -74,7 +75,7 @@ public class ProductListingQueryRepository {
                    %2$s AS min_price,
                    EXISTS (SELECT 1 FROM product_options po
                             WHERE po.product_id = p.id AND po.status = 'ACTIVE') AS sellable,
-                   p.thumbnail_url AS image_url,
+                   p.thumbnail_url AS image_url, p.options,
                    CASE WHEN p.sale_mode = 'IN_STOCK' AND NOT EXISTS (
                             SELECT 1 FROM product_options o
                               JOIN option_inventories inv ON inv.option_id = o.id
@@ -389,6 +390,7 @@ public class ProductListingQueryRepository {
         BigDecimal minListPrice = rs.getBigDecimal("min_list_price");
         return new ProductListItem(UuidBinary.fromBytes(rs.getBytes("id")), saleMode, rs.getString("title"),
                 Brand.valueOf(rs.getString("brand")), rs.getString("model_name"), rs.getString("image_url"),
+                ProductOptions.parse(rs.getString("options")).colorChips(),
                 SaleStatus.valueOf(rs.getString("status")), minPrice, minListPrice, rs.getInt("discount_rate"), rs.getBoolean("sellable"), rs.getBoolean("sold_out"),
                 null, opensAt, closesAt).at(now);   // 접수 단계는 캐시에서 꺼낼 때와 같은 규칙(ProductListItem#at)으로
     }
