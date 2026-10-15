@@ -2,6 +2,7 @@ package com.grandis.nova.member.notification;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
@@ -16,6 +17,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -33,8 +35,8 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * 연결은 DB 를 읽지 않고 등록만 한다 — 배포 뒤 수천 연결이 한꺼번에 다시 붙어도 풀(10)과 요청 스레드를 붙잡지 않게. 첫 수는
  * {@link NotificationTail} 이 다음 주기에 다른 회원과 묶어 세어 {@link #push} 로 보낸다. 세기 직전에 전역 순번을 받고 연결은 이미 넘긴 것보다
- * 큰 순번의 수만 쓴다 — 먼저 센 수가 늦게 와 새 수를 덮지 않게. 순번은 세기 시작 순서일 뿐이라 드물게 뒤 순번이 조금 앞선 수를 실을 수 있고,
- * 다음 새 알림이나 화면의 안전망 조회가 바로잡는다.
+ * 큰 순번의 수만 쓴다 — 먼저 센 수가 늦게 와 새 수를 덮지 않게. 세기는 주기 하나가 차례로 하므로 정상 경로에서는 역전이 없고, 순번은 그 가정이
+ * 깨질 때(세는 곳이 늘 때)를 막는 방어다.
  *
  * 쓰기는 연결마다 가상 스레드 하나로 한다 — 버퍼가 찬 클라이언트 하나가 다른 연결의 주기 신호 · 수를 막지 않게. 쓰는 중에 온 수는 가장 새 것 하나만
  * 들고 있다가 이어 쓰고, 주기 신호는 건너뛴다(쓰는 중이면 이미 오가는 것이 있다). 닫기도 같은 까닭으로 가상 스레드에서 한다. 목록 잠금을 쥔 채로는
@@ -51,11 +53,19 @@ class NotificationStreams implements SmartLifecycle {
 
     static final String METRIC = "member.notification.streams";
     static final String UNREAD_EVENT = "unread";
+    /**
+     * 새 수를 쓴 결과. sent = 썼다, failed = 쓰다 실패해 닫았다(떠난 클라이언트), skipped = 쓰는 중이라 들고 있던 수가 더 새 수에 밀려 버려졌다.
+     * 이미 닫힌 연결이나 더 새 수를 이미 넘겨 건너뛴 것은 세지 않는다
+     */
+    static final String PUSH_METRIC = "member.notification.stream.pushes";
 
     private final NotificationStreamProperties properties;
     private final Clock clock;
     private final AtomicLong sequence = new AtomicLong();
     private final ThreadFactory writers = Thread.ofVirtual().name("notification-stream-write").factory();
+    private final Counter sent;
+    private final Counter failed;
+    private final Counter skipped;
 
     private final Object lock = new Object();
     /** lock 으로 지킨다. 회원마다 연 순서대로 — 넘치면 맨 앞(가장 오래된 것)을 닫는다 */
@@ -70,6 +80,9 @@ class NotificationStreams implements SmartLifecycle {
         this.properties = properties;
         this.clock = clock;
         Gauge.builder(METRIC, this, NotificationStreams::size).register(meterRegistry);
+        this.sent = meterRegistry.counter(PUSH_METRIC, "outcome", "sent");
+        this.failed = meterRegistry.counter(PUSH_METRIC, "outcome", "failed");
+        this.skipped = meterRegistry.counter(PUSH_METRIC, "outcome", "skipped");
     }
 
     /**
@@ -122,6 +135,19 @@ class NotificationStreams implements SmartLifecycle {
             });
         }
         return customers;
+    }
+
+    /** @return 주어진 회원 중 이 인스턴스에 연결이 있는 회원 */
+    Set<UUID> connected(Collection<UUID> customerIds) {
+        Set<UUID> connected = new HashSet<>();
+        synchronized (lock) {
+            for (UUID customerId : customerIds) {
+                if (byCustomer.containsKey(customerId)) {
+                    connected.add(customerId);
+                }
+            }
+        }
+        return connected;
     }
 
     int size() {
@@ -275,7 +301,7 @@ class NotificationStreams implements SmartLifecycle {
         private long lastSequence;
         private boolean writing;
         /** 쓰는 중에 온 가장 새 수. 쓰기가 끝나면 이어 쓴다 */
-        private SseEmitter.SseEventBuilder held;
+        private Write held;
 
         Connection(NotificationStreams owner, UUID customerId, SseEmitter emitter) {
             this.owner = owner;
@@ -289,20 +315,26 @@ class NotificationStreams implements SmartLifecycle {
 
         /** 더 새 수만 받는다. 쓰는 중이면 들고 있다가(앞서 들고 있던 것은 버린다) 지금 쓰기가 끝나면 쓴다. */
         void offerUnread(long order, long count) {
-            SseEmitter.SseEventBuilder event = SseEmitter.event().name(UNREAD_EVENT)
-                    .data(new NotificationController.UnreadCount(count), MediaType.APPLICATION_JSON);
+            Write write = new Write(SseEmitter.event().name(UNREAD_EVENT)
+                    .data(new NotificationController.UnreadCount(count), MediaType.APPLICATION_JSON), true);
+            boolean replaced;
             synchronized (this) {
                 if (done || order <= lastSequence) {
                     return;
                 }
                 lastSequence = order;
                 if (writing) {
-                    held = event;
-                    return;
+                    replaced = held != null;
+                    held = write;
+                } else {
+                    writing = true;
+                    replaced = false;
+                    owner.writers.newThread(() -> drain(write)).start();
                 }
-                writing = true;
             }
-            owner.writers.newThread(() -> drain(event)).start();
+            if (replaced) {
+                owner.skipped.increment();
+            }
         }
 
         void offerHeartbeat() {
@@ -313,27 +345,41 @@ class NotificationStreams implements SmartLifecycle {
                 writing = true;
             }
             // 빌더는 쓸 때 고쳐지므로(build) 연결마다 새로 만든다
-            owner.writers.newThread(() -> drain(SseEmitter.event().comment(""))).start();
+            owner.writers.newThread(() -> drain(new Write(SseEmitter.event().comment(""), false))).start();
         }
 
-        private void drain(SseEmitter.SseEventBuilder first) {
-            SseEmitter.SseEventBuilder event = first;
-            while (event != null) {
+        private void drain(Write first) {
+            Write write = first;
+            while (write != null) {
                 try {
-                    emitter.send(event);
-                } catch (IOException | IllegalStateException e) {
-                    // 떠난 클라이언트(IOException)이거나 이미 닫힌 연결(IllegalStateException)이다
+                    emitter.send(write.event());
+                    if (write.unread()) {
+                        owner.sent.increment();
+                    }
+                } catch (IOException e) {
+                    // 떠난 클라이언트
+                    if (write.unread()) {
+                        owner.failed.increment();
+                    }
+                    owner.broken(this);
+                    return;
+                } catch (RuntimeException e) {
+                    // 그사이 닫힌 연결(IllegalStateException)은 평범한 닫힘이라 실패로 세지 않는다. 그 밖의 예외도 닫는다 — 쓰는 중 표시가 남으면 다시 못 쓴다
                     owner.broken(this);
                     return;
                 }
                 synchronized (this) {
-                    event = held;
+                    write = held;
                     held = null;
-                    if (event == null) {
+                    if (write == null) {
                         writing = false;
                     }
                 }
             }
+        }
+
+        /** @param unread 안 읽은 수면 true, 주기 신호면 false(지표에 세지 않는다) */
+        private record Write(SseEmitter.SseEventBuilder event, boolean unread) {
         }
 
         /** 쓰는 중이면 에미터 잠금을 기다릴 수 있어 가상 스레드에서 닫는다. */

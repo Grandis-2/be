@@ -25,9 +25,10 @@ class NotificationStreamsTest {
     static final Instant NOW = Instant.parse("2026-10-15T03:00:00Z");
     static final Duration WAIT = Duration.ofSeconds(2);
 
+    final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
     final NotificationStreams streams = new NotificationStreams(
-            new NotificationStreamProperties(Duration.ofSeconds(25), Duration.ofMinutes(30), 5, 5000, Duration.ofSeconds(2)),
-            Clock.fixed(NOW, ZoneOffset.UTC), new SimpleMeterRegistry());
+            new NotificationStreamProperties(Duration.ofSeconds(25), Duration.ofMinutes(30), 5, 5000, Duration.ofSeconds(2), Duration.ofSeconds(10)),
+            Clock.fixed(NOW, ZoneOffset.UTC), meterRegistry);
 
     @Test
     @DisplayName("수명은 최대 수명과 토큰이 남은 시간 중 짧은 쪽 — 이미 만료됐으면 1ms(0 은 서블릿에서 만료 없음)")
@@ -74,19 +75,23 @@ class NotificationStreamsTest {
             streams.push(stuck, streams.nextSequence(), 1);
             await().atMost(WAIT).until(() -> stuckEmitter.attempts.size() == 1);
             streams.push(healthy, streams.nextSequence(), 1);
-            // 쓰는 중이면 주기 신호는 건너뛰므로, 성한 연결의 쓰기가 끝난 뒤에 신호를 보낸다
             await().atMost(WAIT).until(() -> healthyEmitter.sent.size() == 1);
-            streams.beat();
             streams.push(stuck, streams.nextSequence(), 2);
             streams.push(stuck, streams.nextSequence(), 3);
         });
-        await().atMost(WAIT).until(() -> healthyEmitter.sent.size() == 2);
+        // 쓰는 중이면 주기 신호는 건너뛴다 — 성한 연결의 쓰기 표시가 내려가는 순간과 겹칠 수 있어 신호가 닿을 때까지 다시 보낸다
+        await().atMost(WAIT).until(() -> {
+            streams.beat();
+            return healthyEmitter.sent.size() >= 2;
+        });
         assertThat(healthyEmitter.counts()).containsExactly(1L);
         assertThat(stuckEmitter.sent).as("막힌 동안은 아무것도 끝나지 않는다").isEmpty();
 
         release.countDown();
 
         await().atMost(WAIT).until(() -> stuckEmitter.counts().equals(List.of(1L, 3L)));
+        assertThat(meterRegistry.counter(NotificationStreams.PUSH_METRIC, "outcome", "skipped").count()).isEqualTo(1);
+        assertThat(meterRegistry.counter(NotificationStreams.PUSH_METRIC, "outcome", "sent").count()).isEqualTo(3);
     }
 
     /** 쓴 이벤트를 모은다. release 가 있으면 첫 쓰기를 그것이 풀릴 때까지 붙잡는다(버퍼가 찬 클라이언트). */

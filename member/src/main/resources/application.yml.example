@@ -88,7 +88,8 @@ member:
   # max-lifetime 보다 액세스 토큰 만료가 이르면 그때 닫는다 — 화면은 새 토큰으로 다시 연결한다.
   # max-per-customer 를 넘으면 그 회원의 가장 오래된 연결을 닫고, max-connections(인스턴스당)를 넘으면 503 — 화면은 주기 조회로 돌아간다.
   #   max-connections 는 Tomcat 의 server.tomcat.max-connections(기본 8192)보다 넉넉히 작게 — 스트림이 소켓을 다 쓰면 다른 API 가 접속하지 못한다.
-  # 첫 수는 연결이 DB 를 읽지 않고 tail-interval 마다 새 연결을 묶어 센다 — 배포 뒤 몰린 재연결이 DB 풀을 붙잡지 않게.
+  # 연결이 있는 인스턴스만 tail-interval 마다 새 알림을 찾고, 새 연결의 첫 수와 함께 묶어 센다 — 연결은 DB 를 읽지 않아 배포 뒤 몰린 재연결이 풀을
+  # 붙잡지 않는다. overlap 은 늦게 커밋된 행을 잡으려고 되돌아 읽는 폭 — 알림 INSERT 하나가 이보다 오래 걸리면 그 알림은 실시간으로 가지 않는다.
   notification:
     stream:
       heartbeat: 25s
@@ -96,6 +97,7 @@ member:
       max-per-customer: 5
       max-connections: 5000
       tail-interval: 2s
+      overlap: 10s
 
 auth:
   # 관리자 로그인 시도 제한(IP 별). 창 안에서 max-attempts 를 넘으면 bcrypt 비교 없이 429 + Retry-After. 성공하면 그 IP 의 수를 지운다.

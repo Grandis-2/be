@@ -17,12 +17,13 @@ import org.springframework.core.io.ClassPathResource;
 class NotificationStreamPropertiesTest {
 
     static final NotificationStreamProperties DEFAULTS =
-            new NotificationStreamProperties(Duration.ofSeconds(25), Duration.ofMinutes(30), 5, 5000, Duration.ofSeconds(2));
+            new NotificationStreamProperties(Duration.ofSeconds(25), Duration.ofMinutes(30), 5, 5000, Duration.ofSeconds(2),
+                    Duration.ofSeconds(10));
 
     final ApplicationContextRunner runner = new ApplicationContextRunner().withUserConfiguration(PropertiesConfig.class);
 
     @Test
-    @DisplayName("기본값 — 주기 신호 25초 · 최대 수명 30분 · 회원당 5 · 인스턴스당 5000 · 2초마다 세기")
+    @DisplayName("기본값 — 주기 신호 25초 · 최대 수명 30분 · 회원당 5 · 인스턴스당 5000 · 2초마다 세기 · 10초 겹침")
     void defaults() {
         runner.run(ctx -> assertThat(ctx.getBean(NotificationStreamProperties.class))
                 .isEqualTo(DEFAULTS));
@@ -39,7 +40,7 @@ class NotificationStreamPropertiesTest {
                 .filter(entry -> entry.getKey().toString().startsWith("member.notification.stream."))
                 .map(entry -> entry.getKey() + "=" + entry.getValue())
                 .toArray(String[]::new);
-        assertThat(stream).hasSize(5);
+        assertThat(stream).hasSize(6);
 
         runner.withPropertyValues(stream).run(ctx -> assertThat(ctx.getBean(NotificationStreamProperties.class))
                 .isEqualTo(DEFAULTS));
@@ -48,7 +49,7 @@ class NotificationStreamPropertiesTest {
     @Test
     @DisplayName("간격 · 수명 · 상한이 0 이하면 기동이 실패한다")
     void rejectsNonPositive() {
-        for (String bad : new String[] {"heartbeat=0s", "max-lifetime=-1s", "max-per-customer=0", "max-connections=0", "tail-interval=0s"}) {
+        for (String bad : new String[] {"heartbeat=0s", "max-lifetime=-1s", "max-per-customer=0", "max-connections=0", "tail-interval=0s", "overlap=0s"}) {
             runner.withPropertyValues("member.notification.stream." + bad).run(ctx ->
                     assertThat(ctx).getFailure().rootCause().isInstanceOf(IllegalArgumentException.class));
         }

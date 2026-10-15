@@ -2,9 +2,11 @@ package com.grandis.nova.member.notification;
 
 import com.grandis.nova.common.UuidBinary;
 import org.hibernate.id.uuid.UuidVersion7Strategy;
+import org.springframework.jdbc.core.ArgumentPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.sql.PreparedStatement;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -24,7 +26,9 @@ import java.util.UUID;
  * DuplicateKeyException 으로 끝난다. 그대로 던져 일시 오류로 다시 받게 한다 — 다시 받으면 읽기가 그 회원들을 거른다. INSERT IGNORE 는
  * 쓰지 않는다: 중복 말고 다른 오류(길이 · 형)까지 경고로 내려 조용히 잃는다.
  *
- * id 는 엔티티와 같은 v7 생성기에서 받는다(Hibernate {@code @UuidGenerator(VERSION_7)} 가 쓰는 것) — JPA 를 거치지 않아도 같은 규칙이다.
+ * id 는 엔티티와 같은 v7 생성기에서 받되(Hibernate {@code @UuidGenerator(VERSION_7)} 가 쓰는 것), INSERT 의 DB 연결을 얻은 뒤 문장 직전에 만든다.
+ * 실시간 연결({@link NotificationTail})은 id 순으로 새 행을 찾고 overlap(10초)만큼만 되돌아 읽는다 — id 를 먼저 만들면 연결 대기
+ * (Hikari connectionTimeout, 최대 30초)가 id 시각과 커밋 사이에 끼어 그 행을 놓칠 수 있다.
  */
 @Component
 class NotificationWriter {
@@ -58,7 +62,12 @@ class NotificationWriter {
         if (missing.isEmpty()) {
             return 0;
         }
-        jdbc.update(INSERT + String.join(", ", Collections.nCopies(missing.size(), ROW)), args(incoming, missing));
+        String sql = INSERT + String.join(", ", Collections.nCopies(missing.size(), ROW));
+        jdbc.update(connection -> {
+            PreparedStatement statement = connection.prepareStatement(sql);
+            new ArgumentPreparedStatementSetter(args(incoming, missing)).setValues(statement);
+            return statement;
+        });
         return missing.size();
     }
 
