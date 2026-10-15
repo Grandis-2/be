@@ -164,6 +164,15 @@ public class AdminDrawService {
                 }
                 throw new BusinessException(OrderErrorCode.INSUFFICIENT_STOCK, "당첨 인원만큼 재고가 없습니다.", Map.of("variantIds", e.optionIds()));
             } catch (PessimisticLockingFailureException e) {
+                // 기한 뒤의 잠금 실패(대기 초과 · 교착)도 다른 실패처럼 409 — 그 사이 같은 키의 회차가 들어갔으면 그것을 돌려준다
+                if (!clock.instant().isBefore(deadline)) {
+                    Optional<DrawCampaign> winner = findByKey(key);
+                    if (winner.isPresent()) {
+                        return new Created(winner.get(), false);
+                    }
+                    log.warn("드로우 회차 만들기 시간 예산 초과(잠금 실패) optionId={} budget={}", option.optionId(), budget, e);
+                    throw budgetExceeded();
+                }
                 // 재고 원장의 계약 — 동시 삽입이 부르는 S 잠금(중복 키 확인 · 외래 키 부모)의 드문 교착은 호출하는 쪽이 한 번 더 한다(장바구니 주문과 같다)
                 if (!MySqlLockFailures.isDeadlock(e) || attempt >= MAX_ATTEMPTS) {
                     Optional<DrawCampaign> winner = findByKey(key);

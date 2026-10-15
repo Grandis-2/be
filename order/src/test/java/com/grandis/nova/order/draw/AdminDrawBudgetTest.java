@@ -11,9 +11,11 @@ import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.orm.jpa.JpaSystemException;
 
 import java.math.BigDecimal;
+import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -142,6 +144,23 @@ class AdminDrawBudgetTest {
         clock.now = NOW;
         willThrow(new JpaSystemException(new RuntimeException("boom"))).given(campaigns).insert(any());
         assertThatThrownBy(() -> service.create(null, "k-2", command())).isInstanceOf(JpaSystemException.class);
+    }
+
+    @Test
+    @DisplayName("기한 뒤의 잠금 실패도 409 retryable — 대기 초과(1205) · 교착(1213), 기한 안의 대기 초과는 지금처럼 503")
+    void lockFailureAfterDeadlineIsBudgetExceeded() {
+        for (int vendorCode : new int[]{1205, 1213}) {
+            clock.now = NOW;
+            willAnswer(invocation -> {
+                clock.now = NOW.plus(BUDGET);
+                throw new CannotAcquireLockException("lock", new SQLException("lock failure", "40001", vendorCode));
+            }).given(stock).reserve(anyMap());
+            assertBudgetExceeded();
+        }
+        clock.now = NOW;
+        willThrow(new CannotAcquireLockException("lock", new SQLException("lock failure", "40001", 1205))).given(stock).reserve(anyMap());
+        assertThatThrownBy(() -> service.create(null, "k-1", command())).isInstanceOfSatisfying(BusinessException.class,
+                e -> assertThat(e.errorCode()).isEqualTo(com.grandis.nova.common.CommonErrorCode.DEPENDENCY_UNAVAILABLE));
     }
 
     @Test
