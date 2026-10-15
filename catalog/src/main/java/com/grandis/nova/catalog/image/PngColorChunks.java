@@ -16,12 +16,14 @@ import java.util.zip.Inflater;
  * (실측: 선형 RGB 프로파일을 단 128 회색이 메타데이터를 읽든 안 읽든 128 로 풀린다) 라이터는 색 청크를 쓰지 않아, 그냥 다시 인코딩하면
  * Display-P3 같은 사진의 색이 바뀐다. JPEG 는 리더가 ICC 를 sRGB 픽셀로 바꿔 풀어(실측: 같은 회색이 188) 옮길 것이 없다.
  *
- * 원본 바이트를 그대로 옮기지 않는다 — 색 청크에도 임의 데이터를 실을 수 있다.
+ * 청크를 바이트 그대로 옮기지 않고 검사한 내용으로 새로 쓴다(길이 · CRC · 압축을 새로 만든다).
  * <ul>
  *   <li>sRGB(1바이트) · gAMA(4바이트) · cHRM(32바이트)은 정해진 길이일 때만 내용을 새 청크로 쓴다. 길이가 다르면 버린다.</li>
- *   <li>iCCP 는 {@link #MAX_PROFILE_BYTES} 까지만 풀어 ICC 프로파일로 읽히는지 보고, 읽힌 프로파일을 다시 압축해 새 청크로 쓴다. 읽히지 않거나
- *       크면 {@link IllegalArgumentException}(업로드는 400).</li>
- *   <li>sRGB 가 있으면 iCCP 는 쓰지 않는다 — 둘을 함께 두지 않는 것이 규격이다.</li>
+ *   <li>iCCP 는 {@link #MAX_PROFILE_BYTES} 까지만 풀어 ICC 프로파일로 읽히는지(헤더 · 태그 표) 보고, 읽힌 프로파일을 다시 압축해 새 청크로
+ *       쓴다. 읽히지 않거나 크면 {@link IllegalArgumentException}(업로드는 400). 프로파일 뒤에 덧붙인 바이트는 잘리지만 태그 내용(설명 문자열 등)은
+ *       검사하지 않고 옮긴다(리뷰 실측).</li>
+ *   <li>iCCP 가 있으면 sRGB 는 쓰지 않는다 — 둘을 함께 두지 않고, 넓은 색역(Display-P3 등) 프로파일을 잃지 않는 쪽을 남긴다.
+ *       cICP(HDR 색 정보) 등 그 밖의 색 청크는 옮기지 않는다.</li>
  * </ul>
  */
 final class PngColorChunks {
@@ -33,7 +35,7 @@ final class PngColorChunks {
     private PngColorChunks() {
     }
 
-    /** IDAT 앞의 색 청크를 검사해 새로 만든 청크들(sRGB → gAMA → cHRM → iCCP 순). 구조가 깨졌으면 그 앞까지만 본다. */
+    /** IDAT 앞의 색 청크를 검사해 새로 만든 청크들(sRGB 또는 iCCP 하나 · gAMA · cHRM). 구조가 깨졌으면 그 앞까지만 본다. */
     static List<byte[]> extract(byte[] png) {
         byte[] srgb = null;
         byte[] gama = null;
@@ -58,7 +60,7 @@ final class PngColorChunks {
             i = (int) next;
         }
         List<byte[]> chunks = new ArrayList<>();
-        if (srgb != null) {
+        if (iccp == null && srgb != null) {
             chunks.add(chunk("sRGB", srgb));
         }
         if (gama != null) {
@@ -67,7 +69,7 @@ final class PngColorChunks {
         if (chrm != null) {
             chunks.add(chunk("cHRM", chrm));
         }
-        if (srgb == null && iccp != null) {
+        if (iccp != null) {
             chunks.add(chunk("iCCP", iccpData(profile(iccp))));
         }
         return chunks;

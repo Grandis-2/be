@@ -39,6 +39,17 @@ public class ImageProcessor {
     /** JPEG 다시 인코딩 품질. */
     static final float JPEG_QUALITY = 0.9f;
 
+    private final long outputLimit;
+
+    public ImageProcessor() {
+        this(MAX_BYTES);
+    }
+
+    /** 시험용 — 다시 인코딩 결과의 상한만 바꾼다(상한을 넘는 출력을 작은 사진으로 태운다). */
+    ImageProcessor(long outputLimit) {
+        this.outputLimit = outputLimit;
+    }
+
     /** 검사를 통과한 원본의 형식과 헤더의 가로 · 세로. */
     public record Inspected(ImageFormat format, int width, int height) {
     }
@@ -96,7 +107,7 @@ public class ImageProcessor {
         }
         byte[] out;
         if (image.format() == ImageFormat.JPEG) {
-            out = writeJpeg(orient(pixels, JpegOrientation.of(bytes)));
+            out = writeJpeg(orient(pixels, JpegOrientation.of(bytes)), outputLimit);
         } else {
             List<byte[]> color;
             try {
@@ -104,9 +115,9 @@ public class ImageProcessor {
             } catch (IllegalArgumentException e) {
                 throw invalid("색 프로파일(ICC)을 읽을 수 없습니다. sRGB 로 다시 저장해 올려 주세요.");
             }
-            out = PngColorChunks.insertAfterHeader(writePng(pixels), color);
+            out = PngColorChunks.insertAfterHeader(writePng(pixels, outputLimit), color);
         }
-        if (out.length > MAX_BYTES) {  // PNG 는 색 청크를 더한 뒤 한 번 더 본다
+        if (out.length > outputLimit) {  // PNG 는 색 청크를 더한 뒤 한 번 더 본다
             throw tooLarge();
         }
         return out;
@@ -170,28 +181,32 @@ public class ImageProcessor {
         return new BufferedImage(src.getColorModel(), to, src.isAlphaPremultiplied(), null);
     }
 
-    private static byte[] writeJpeg(BufferedImage pixels) {
+    private static byte[] writeJpeg(BufferedImage pixels, long limit) {
         ImageWriter writer = ImageIO.getImageWritersByFormatName("jpeg").next();
         ImageWriteParam param = writer.getDefaultWriteParam();
         param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
         param.setCompressionQuality(JPEG_QUALITY);
-        return write(writer, pixels, param);
+        return write(writer, pixels, param, limit);
     }
 
-    private static byte[] writePng(BufferedImage pixels) {
+    private static byte[] writePng(BufferedImage pixels, long limit) {
         ImageWriter writer = ImageIO.getImageWritersByFormatName("png").next();
-        return write(writer, pixels, writer.getDefaultWriteParam());
+        return write(writer, pixels, writer.getDefaultWriteParam(), limit);
     }
 
     /** 메타데이터 없이 쓴다(IIOImage 의 메타데이터 null). 결과가 상한을 넘는 순간 멈추고 400 이다. */
-    private static byte[] write(ImageWriter writer, BufferedImage pixels, ImageWriteParam param) {
-        try (BoundedImageOutputStream out = new BoundedImageOutputStream((int) MAX_BYTES)) {
+    private static byte[] write(ImageWriter writer, BufferedImage pixels, ImageWriteParam param, long limit) {
+        try (BoundedImageOutputStream out = new BoundedImageOutputStream((int) limit)) {
             writer.setOutput(out);
             writer.write(null, new IIOImage(pixels, null, null), param);
             return out.toByteArray();
-        } catch (BoundedImageOutputStream.TooLarge e) {
-            throw tooLarge();
         } catch (IOException | RuntimeException e) {
+            // PNG 라이터는 TooLarge 를 IIOException 으로 감싸고 JPEG 라이터는 그대로 던진다(리뷰 실측) — 원인 사슬에서 찾는다
+            for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+                if (cause instanceof BoundedImageOutputStream.TooLarge) {
+                    throw tooLarge();
+                }
+            }
             throw unreadable();
         } finally {
             writer.dispose();

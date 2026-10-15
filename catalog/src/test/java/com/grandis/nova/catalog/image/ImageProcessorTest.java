@@ -221,7 +221,7 @@ class ImageProcessorTest {
     }
 
     @Test
-    @DisplayName("sRGB 가 있으면 iCCP 는 쓰지 않는다(둘 중 하나가 규격) · 길이가 틀린 gAMA 는 버린다")
+    @DisplayName("iCCP 와 sRGB 가 함께 오면 iCCP 만 남긴다(넓은 색역을 잃지 않는다) · 길이가 틀린 gAMA 는 버린다 · sRGB 만이면 sRGB 를 남긴다")
     void srgbWinsAndMalformedFixedChunksAreDropped() {
         byte[] png = ImageFixtures.withChunkAfterHeader(ImageFixtures.png(8, 8), ImageFixtures.iccpChunk());
         png = ImageFixtures.withChunkAfterHeader(png, ImageFixtures.chunk("sRGB", new byte[]{0}));
@@ -229,7 +229,24 @@ class ImageProcessorTest {
         assertThat(ImageFixtures.pngChunkTypes(png)).contains("iCCP", "sRGB", "gAMA");
 
         byte[] out = process(png);
-        assertThat(ImageFixtures.pngChunkTypes(out)).contains("sRGB").doesNotContain("iCCP", "gAMA");
+        assertThat(ImageFixtures.pngChunkTypes(out)).contains("iCCP").doesNotContain("sRGB", "gAMA");
+
+        byte[] srgbOnly = ImageFixtures.withChunkAfterHeader(ImageFixtures.png(8, 8), ImageFixtures.chunk("sRGB", new byte[]{0}));
+        assertThat(ImageFixtures.pngChunkTypes(process(srgbOnly))).containsOnlyOnce("sRGB");
+    }
+
+    @Test
+    @DisplayName("다시 인코딩한 결과가 상한을 넘으면 그 자리에서 멈추고 '넘습니다' 400 — PNG(라이터가 감싸 던짐) · JPEG 둘 다")
+    void encodedOutputOverLimitIsTooLarge() {
+        ImageProcessor small = new ImageProcessor(10_000);
+        BufferedImage noise = new BufferedImage(300, 300, BufferedImage.TYPE_3BYTE_BGR);
+        new java.util.Random(1).nextBytes(((java.awt.image.DataBufferByte) noise.getRaster().getDataBuffer()).getData());
+        for (String format : List.of("png", "jpg")) {
+            byte[] input = ImageFixtures.encode(noise, format);
+            ImageProcessor.Inspected inspected = small.inspect(input.length, new ByteArrayResource(input));
+            assertThatThrownBy(() -> small.reencode(inspected, input)).as(format)
+                    .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.details().toString()).contains("file", "넘습니다"));
+        }
     }
 
     @Test
