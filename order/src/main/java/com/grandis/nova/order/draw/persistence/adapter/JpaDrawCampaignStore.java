@@ -4,6 +4,7 @@ import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.order.draw.domain.exception.DrawKeyTakenException;
 import com.grandis.nova.order.draw.domain.model.DrawCampaign;
+import com.grandis.nova.order.draw.domain.model.DrawPhase;
 import com.grandis.nova.order.draw.domain.model.DrawCloseState;
 import com.grandis.nova.order.draw.domain.model.DrawProgress;
 import com.grandis.nova.order.draw.domain.model.NewDrawCampaign;
@@ -109,7 +110,20 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
 
     @Override
     public OffsetPage<DrawCampaign> findNewestFirst(int page, int size) {
-        Page<DrawCampaignJpaEntity> found = campaigns.findAll(PageRequest.of(page, size, NEWEST_FIRST));
+        return toPage(campaigns.findAll(PageRequest.of(page, size, NEWEST_FIRST)), page, size);
+    }
+
+    @Override
+    public OffsetPage<DrawCampaign> findNewestFirst(DrawPhase phase, Instant now, int page, int size) {
+        PageRequest request = PageRequest.of(page, size, NEWEST_FIRST);
+        return toPage(switch (phase) {
+            case SCHEDULED -> campaigns.findScheduled(now, request);
+            case OPEN -> campaigns.findOpen(now, request);
+            case CLOSED -> campaigns.findClosed(now, request);
+        }, page, size);
+    }
+
+    private static OffsetPage<DrawCampaign> toPage(Page<DrawCampaignJpaEntity> found, int page, int size) {
         return OffsetPage.of(found.getContent().stream().map(JpaDrawCampaignStore::toDomain).toList(), page, size, found.getTotalElements());
     }
 

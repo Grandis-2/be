@@ -4,6 +4,7 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.draw.domain.model.DrawCampaign;
+import com.grandis.nova.order.draw.domain.model.DrawPhase;
 import com.grandis.nova.order.draw.domain.model.DrawProgress;
 import com.grandis.nova.order.draw.domain.repository.DrawCampaignStore;
 import org.springframework.stereotype.Service;
@@ -32,6 +33,17 @@ public class DrawQueryService {
     /** 최신순. page 는 0 부터. */
     public OffsetPage<DrawCampaign> list(int page, int size) {
         return readTransaction.execute(status -> campaigns.findNewestFirst(page, size));
+    }
+
+    /**
+     * 그 단계의 회차만, 최신순. 단계는 now 로 가른다 — 응답의 단계 칸도 같은 now 로 만들어야 한 응답 안에서 필터와 칸이 어긋나지 않는다.
+     * phase 가 null 이면 전부.
+     */
+    public OffsetPage<DrawCampaign> list(DrawPhase phase, Instant now, int page, int size) {
+        if (phase == null) {
+            return list(page, size);
+        }
+        return readTransaction.execute(status -> campaigns.findNewestFirst(phase, now, page, size));
     }
 
     /** @throws BusinessException 404 DRAW_NOT_FOUND */
