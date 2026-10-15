@@ -69,6 +69,9 @@ class ConfigBindingTest {
         // 예시의 정리 주기(10분마다)는 끈다 — 이 컨텍스트는 JVM 끝까지 캐시되고 같은 MySQL 을 쓰므로, 켜 두면 다른 시험이 넣은 만료 행을
         // 도중에 지울 수 있다. 예시의 cron 값 자체는 RefreshTokenCleanupWiringTest 가, 나머지 칸은 아래 refreshCleanupSettings 가 본다
         registry.add("member.refresh-cleanup.cron", () -> "-");
+        // 예시의 알림 소비기는 끈다 — 예시 주소(localhost:4566)에 로컬 Floci 가 떠 있으면 개발용 큐의 메시지를 시험 DB 에 넣는다.
+        // 예시의 소비기 칸은 NotificationConsumerPropertiesTest 가 본다
+        registry.add("nova.sqs.consumer.enabled", () -> "false");
     }
 
     @Autowired DataSource dataSource;
