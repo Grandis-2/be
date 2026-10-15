@@ -12,11 +12,11 @@ import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.CannotAcquireLockException;
-import org.springframework.transaction.PlatformTransactionManager;
 
 import java.math.BigDecimal;
 import java.sql.SQLException;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Map;
@@ -47,8 +47,8 @@ class AdminDrawRetryTest {
     final CatalogReader catalog = mock(CatalogReader.class);
     final StockLedger stock = mock(StockLedger.class);
     final DrawCampaignStore campaigns = mock(DrawCampaignStore.class);
-    final AdminDrawService service = new AdminDrawService(catalog, stock, campaigns, mock(PlatformTransactionManager.class),
-            Clock.fixed(NOW, ZoneOffset.UTC));
+    final AdminDrawService service = new AdminDrawService(catalog, stock, campaigns, new NoOpTransactionManager(),
+            Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofSeconds(60));
     final DrawCampaign draw = new DrawCampaign(TestIds.id(3), PRODUCT, OPTION, "t", "p", "o", null, new BigDecimal("100"), 1, NOW,
             NOW.plusSeconds(600), NOW);
 
