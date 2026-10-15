@@ -113,8 +113,17 @@ class InStockConversionApiTest {
         jdbcTemplate.update("UPDATE products SET status = 'PAUSED' WHERE id = ?", (Object) UuidBinary.toBytes(productId));
         admin(patch(PATH + "/{id}", productId), "{ \"title\": \"전환 전\" }").andExpect(status().isConflict());
 
+        long versionBefore = jdbcTemplate.queryForObject("SELECT listing_version FROM products WHERE id = ?", Long.class,
+                (Object) UuidBinary.toBytes(productId));
+
         JsonNode product = data(convert(productId, stocksBody(variants(productId), 1)).andExpect(status().isOk())).get("product");
         assertThat(product.get("status").asString()).isEqualTo("ACTIVE");
+        // 판매 상태가 바뀌었으니 번호가 올라야 preorder 가 회차의 상품 사본을 덮는다(같은 번호면 그대로 둔다)
+        JsonNode changed = JSON.readTree(jdbcTemplate.queryForObject(
+                "SELECT payload FROM catalog_outbox_events WHERE aggregate_id = ? AND event_type = 'PREORDER_PRODUCT_CHANGED' ORDER BY id DESC LIMIT 1",
+                String.class, (Object) UuidBinary.toBytes(productId)));
+        assertThat(changed.get("status").asString()).isEqualTo("ACTIVE");
+        assertThat(changed.get("listingVersion").asLong()).isEqualTo(versionBefore + 1);
 
         admin(patch(PATH + "/{id}", productId), "{ \"title\": \"전환 뒤\" }").andExpect(status().isOk());
     }
