@@ -352,8 +352,10 @@ class CatalogReadCacheApiTest {
         JsonNode detail = data(mockMvc.perform(get("/api/v1/products/{id}", productId)));
         assertThat(detail.get("title").asString()).isEqualTo("오픈 직전");
         assertThat(detail.get("campaign").get("status").asString()).isEqualTo("OPEN");
-        JsonNode item = list(tag).get(0);
-        assertThat(item.get("title").asString()).as("목록은 캐시에서 — 마감 순간에 빠지는 것은 TTL 만큼 늦다").isEqualTo("마감 직전");
+        JsonNode cached = list(tag);
+        assertThat(cached).as("캐시된 목록 그대로 — 오픈한 상품이 들어오는 것도, 마감한 상품이 빠지는 것도 TTL 만큼 늦다").hasSize(1);
+        JsonNode item = cached.get(0);
+        assertThat(item.get("title").asString()).isEqualTo("마감 직전");
         assertThat(item.get("preorderStatus").asString()).isEqualTo("CLOSED");
     }
 

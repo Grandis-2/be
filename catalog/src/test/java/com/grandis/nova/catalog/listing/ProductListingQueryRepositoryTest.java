@@ -56,11 +56,16 @@ class ProductListingQueryRepositoryTest {
         for (Instant hidden : List.of(opensAt.minus(micro), closesAt)) {
             assertThat(ids(repository.find(filter, ProductSort.NEWEST, hidden, 0, 10))).as("%s", hidden).isEmpty();
             assertThat(repository.count(filter, hidden)).as("%s", hidden).isZero();
+            assertThat(PreorderSaleStatus.of(opensAt, closesAt, hidden)).as("%s", hidden).isNotEqualTo(PreorderSaleStatus.OPEN);
         }
+        // µs 아래가 붙은 시각도 접수 단계와 같은 쪽 — 마감 1ns 전은 OPEN 이고 목록에도 있다
+        Instant lastNano = closesAt.minusNanos(1);
+        assertThat(PreorderSaleStatus.of(opensAt, closesAt, lastNano)).isEqualTo(PreorderSaleStatus.OPEN);
+        assertThat(repository.count(filter, lastNano)).isEqualTo(1);
         for (Instant shown : List.of(opensAt, closesAt.minus(micro))) {
             assertThat(ids(repository.find(filter, ProductSort.NEWEST, shown, 0, 10))).as("%s", shown).containsExactly(productId);
             assertThat(repository.count(filter, shown)).as("%s", shown).isEqualTo(1);
-            assertThat(com.grandis.nova.catalog.listing.PreorderSaleStatus.of(opensAt, closesAt, shown)).isEqualTo(PreorderSaleStatus.OPEN);
+            assertThat(PreorderSaleStatus.of(opensAt, closesAt, shown)).isEqualTo(PreorderSaleStatus.OPEN);
         }
     }
 
