@@ -135,10 +135,11 @@ class ProductListingQueryRepositoryTest {
                     capture(statement, "%option_count%LIMIT%", () -> repository.findForAdmin(new AdminProductListFilter(tag, null, null, null), Instant.now(), 0, 20)),
                     capture(statement, "%option_inventories gi%LIMIT%", () -> repository.findGiftCandidates(tag, 0, 20)));
             try {
-                // 틀린 통계 세 모양 — 옵티마이저가 고르는 나쁜 계획이 서로 달라 힌트마다 어느 한쪽이 잡는다
+                // 틀린 통계 네 모양 — 옵티마이저가 고르는 나쁜 계획이 서로 달라 힌트마다 어느 한쪽이 잡는다
                 //   구분값만 0(행 수는 실제) · 옵션 · 재고 표는 행 수까지 0 · 재고 표만 행 수까지 0(재고는 order 가 늦게 몰아 채운다)
+                //   · 구분값 0 에 재고 표 행 수까지 0 — 재고 쪽 두 힌트(JOIN_ORDER · 재고 PRIMARY)가 각각 있어야 막히는 모양
                 Map<String, List<String>> zeroRows = Map.of("구분값만", List.of(), "옵션 · 재고 행 수까지", List.of("product_options", "option_inventories"),
-                        "재고 표만", List.of("option_inventories"));
+                        "재고 표만", List.of("option_inventories"), "구분값 + 재고 행 수", List.of("option_inventories"));
                 for (Map.Entry<String, List<String>> shape : zeroRows.entrySet()) {
                     statement.execute("ANALYZE TABLE shop.products, shop.product_options, shop.option_inventories");
                     for (String table : List.of("products", "product_options", "option_inventories")) {
