@@ -94,6 +94,42 @@ class NotificationStreamsTest {
         assertThat(meterRegistry.counter(NotificationStreams.PUSH_METRIC, "outcome", "sent").count()).isEqualTo(3);
     }
 
+    @Test
+    @DisplayName("이미 닫힌 연결(원인 없는 IllegalStateException)에 쓰다 난 예외는 실패로 세지 않고 연결을 닫는다")
+    void writeToCompletedConnectionClosesWithoutCountingFailure() {
+        streams.register(UUID.randomUUID(), new ThrowingEmitter(new IllegalStateException("ResponseBodyEmitter has already completed")));
+
+        streams.awaitingFirstCount().forEach(customerId -> streams.push(customerId, streams.nextSequence(), 1));
+
+        await().atMost(WAIT).until(() -> streams.size() == 0);
+        assertThat(meterRegistry.counter(NotificationStreams.PUSH_METRIC, "outcome", "failed").count()).isZero();
+    }
+
+    @Test
+    @DisplayName("원인이 있는 예외(Spring 이 감싼 직렬화 오류 등)는 실패로 세고 연결을 닫는다")
+    void unexpectedWriteFailureClosesAndCountsFailure() {
+        streams.register(UUID.randomUUID(), new ThrowingEmitter(new IllegalStateException("Failed to send", new RuntimeException("직렬화"))));
+
+        streams.awaitingFirstCount().forEach(customerId -> streams.push(customerId, streams.nextSequence(), 1));
+
+        await().atMost(WAIT).until(() -> streams.size() == 0);
+        assertThat(meterRegistry.counter(NotificationStreams.PUSH_METRIC, "outcome", "failed").count()).isEqualTo(1);
+    }
+
+    static final class ThrowingEmitter extends SseEmitter {
+
+        private final RuntimeException failure;
+
+        ThrowingEmitter(RuntimeException failure) {
+            this.failure = failure;
+        }
+
+        @Override
+        public void send(SseEventBuilder builder) {
+            throw failure;
+        }
+    }
+
     /** 쓴 이벤트를 모은다. release 가 있으면 첫 쓰기를 그것이 풀릴 때까지 붙잡는다(버퍼가 찬 클라이언트). */
     static final class RecordingEmitter extends SseEmitter {
 

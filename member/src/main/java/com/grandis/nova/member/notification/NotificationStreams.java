@@ -364,7 +364,14 @@ class NotificationStreams implements SmartLifecycle {
                     owner.broken(this);
                     return;
                 } catch (RuntimeException e) {
-                    // 그사이 닫힌 연결(IllegalStateException)은 평범한 닫힘이라 실패로 세지 않는다. 그 밖의 예외도 닫는다 — 쓰는 중 표시가 남으면 다시 못 쓴다
+                    // 그사이 닫힌 연결은 원인 없는 IllegalStateException("already completed")이라 평범한 닫힘으로 둔다. 그 밖 — Spring 이 직렬화 오류 같은
+                    // 예외를 원인으로 감싼 IllegalStateException 포함 — 은 버그일 수 있어 남기고 실패로 센다. 어느 쪽이든 닫는다(쓰는 중 표시가 남으면 다시 못 쓴다)
+                    if (!(e instanceof IllegalStateException) || e.getCause() != null) {
+                        log.warn("실시간 연결에 쓰다 예기치 않게 실패해 닫는다 customerId={}", customerId, e);
+                        if (write.unread()) {
+                            owner.failed.increment();
+                        }
+                    }
                     owner.broken(this);
                     return;
                 }
