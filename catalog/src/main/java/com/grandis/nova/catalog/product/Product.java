@@ -85,6 +85,19 @@ public class Product extends BaseEntity {
     /** 사전예약 회차 취소를 접수한 시각. null 이면 취소 아님 — 오픈 전에 판매 중지로 둔 채 오픈을 넘긴 상품도 null 이다(2026-10-04 결정). */
     private Instant campaignCanceledAt;
 
+    /**
+     * 상품명 · 판매 상태 · 공개 여부의 변경 번호. 셋 중 하나가 실제로 바뀔 때마다 1 오른다(상품 행을 잠근 수정 안에서).
+     * preorder 는 이 셋을 회차 행에 사본으로 두고, 순서가 뒤집혀 온 이벤트를 이 번호로 거른다(contracts/catalog-events.md).
+     */
+    @Column(nullable = false)
+    private long listingVersion;
+
+    /**
+     * 새 상품의 변경 번호. preorder 는 0 을 "catalog 값을 받기 전"(관리자가 먼저 만든 회차)으로 두므로 등록 이벤트가 그보다 커야 이긴다.
+     * 이 칸이 생기기 전의 상품은 0 이고, 다음 변경부터 1 이상을 보낸다.
+     */
+    static final long FIRST_LISTING_VERSION = 1;
+
     protected Product() {
     }
 
@@ -101,6 +114,7 @@ public class Product extends BaseEntity {
         this.tags = tags;
         this.status = SaleStatus.ACTIVE;
         this.visible = visible;
+        this.listingVersion = FIRST_LISTING_VERSION;
         replaceOptions(options);
     }
 
@@ -136,12 +150,18 @@ public class Product extends BaseEntity {
 
     /** 공개. 조건 없다 — 준비가 안 된 상품은 공개여도 노출 쿼리가 거른다. */
     public void publish() {
-        this.visible = true;
+        if (!visible) {
+            this.visible = true;
+            listingVersion++;
+        }
     }
 
     /** 비공개. 조건 없다. 기존 예약 · 주문에는 손대지 않는다. */
     public void hide() {
-        this.visible = false;
+        if (visible) {
+            this.visible = false;
+            listingVersion++;
+        }
     }
 
     /**
@@ -150,7 +170,10 @@ public class Product extends BaseEntity {
      * 사전예약은 오픈 3분 전부터 못 바꾼다는 규칙은 서비스가 지킨다(회차는 preorder 표).
      */
     public void changeStatus(SaleStatus status) {
-        this.status = Objects.requireNonNull(status, "status");
+        if (this.status != Objects.requireNonNull(status, "status")) {
+            this.status = status;
+            listingVersion++;
+        }
     }
 
     /**
@@ -166,15 +189,16 @@ public class Product extends BaseEntity {
         if (campaignCanceledAt != null) {
             return false;
         }
-        this.status = SaleStatus.PAUSED;
+        changeStatus(SaleStatus.PAUSED);
         this.campaignCanceledAt = Objects.requireNonNull(now, "now");
         return true;
     }
 
     /** 표시 정보 수정. null 은 "보내지 않음" 이라 그대로 둔다. 사전예약 오픈 뒤 금지는 서비스가 지킨다(회차는 preorder 표). */
     public void edit(String title, Brand brand, String modelName, String description, String tags) {
-        if (title != null) {
+        if (title != null && !title.strip().equals(this.title)) {
             this.title = title.strip();
+            listingVersion++;
         }
         if (brand != null) {
             this.brand = brand;
@@ -256,6 +280,10 @@ public class Product extends BaseEntity {
 
     public boolean isVisible() {
         return visible;
+    }
+
+    public long getListingVersion() {
+        return listingVersion;
     }
 
     public boolean isWarrantyOffered() {
