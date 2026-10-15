@@ -6,6 +6,7 @@ import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderDraft;
 import com.grandis.nova.order.order.domain.model.OrderItem;
 import com.grandis.nova.order.order.domain.model.OrderLine;
+import com.grandis.nova.order.order.domain.repository.ExpiredOrderPosition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.domain.repository.OrderWriter;
 import com.grandis.nova.order.order.persistence.entity.OrderItemJpaEntity;
@@ -179,4 +180,29 @@ class JpaOrderStoreTest {
         assertThat(reader.findUnpaidCartOrders(customerId)).isEmpty();
     }
 
+    /**
+     * 기한 만료는 결제 대기인 장바구니 · 바로 구매 주문을 고르고(기한 없는 사전예약은 아니다), "회원당 하나" 는 장바구니 주문만 센다.
+     * 공유 DB 의 다른 주문(지금 시각대 기한)이 섞이지 않게 아주 옛 시각에 만들어 그 기한으로 묻는다.
+     */
+    @Test
+    void expiredAwaitingIncludesBuyNowButUnpaidCartOrdersDoNot() {
+        Instant placedAt = Instant.parse("2000-01-01T00:00:00Z");
+        OrderFixtures.StockProduct stocked = fixtures.inStockProduct(1);
+        List<OrderLine> lines = List.of(new OrderLine(stocked.productId(), stocked.optionIds().getFirst(), new Quantity(1), Money.won(1_000), 0,
+                Money.ZERO, "상품", "옵션"));
+        ShipTo shipTo = new ShipTo("홍길동", "010-0000-0000", "04524", "세종대로 110", null);
+        Order cart = writer.insert(Order.place(new OrderDraft(customerId, OrderSource.CART, null, null, shipTo, lines), placedAt));
+        writer.insertItems(cart.id(), lines);
+        Order buyNow = writer.insert(Order.place(new OrderDraft(customerId, OrderSource.BUY_NOW, null, null, shipTo, lines), placedAt));
+        writer.insertItems(buyNow.id(), lines);
+        Order preorder = writer.insert(Order.place(preorderCommand(customerId, preorderId, product).toDraft(), placedAt));
+        writer.insertItems(preorder.id(), preorderCommand(customerId, preorderId, product).toDraft().lines());
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(reader.findExpiredAwaitingOrders(placedAt.plus(Order.PAYMENT_WINDOW), ExpiredOrderPosition.START, 100))
+                .extracting(Order::id).containsExactlyInAnyOrder(cart.id(), buyNow.id());
+        assertThat(reader.findUnpaidCartOrders(customerId)).as("바로 구매 주문은 회원당 하나 규칙 밖")
+                .extracting(Order::id).containsExactly(cart.id());
+    }
 }

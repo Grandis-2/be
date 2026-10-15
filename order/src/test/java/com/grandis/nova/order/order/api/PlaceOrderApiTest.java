@@ -339,7 +339,7 @@ class PlaceOrderApiTest {
 
     @Test
     void otherSourcesAreRejected() throws Exception {
-        perform(customerId, body("BUY_NOW", token))
+        perform(customerId, body("DRAW", token))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
                 .andExpect(jsonPath("$.error.details.violations[0].field").value("source"));

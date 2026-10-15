@@ -54,6 +54,8 @@ class JpaOrderStore implements OrderReader, OrderWriter {
      * 정말 그 예약의 주문인지는 부른 쪽이 새 트랜잭션에서 다시 읽어 판정한다.
      */
     static final Set<String> PREORDER_KEYS = Set.of("uq_order_preorder", "uq_order_preorder_token");
+    /** 결제 기한(10분)이 있는 출처(ck_order_due) — 기한이 지나면 만료 처리가 취소 · 반환한다. */
+    static final Set<OrderSource> DUE_SOURCES = Set.of(OrderSource.CART, OrderSource.BUY_NOW);
 
     private final OrderJpaRepository orders;
     private final OrderItemJpaRepository items;
@@ -157,8 +159,8 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     @Override
-    public List<Order> findExpiredCartOrders(Instant now, ExpiredOrderPosition after, int limit) {
-        return orders.findExpiredAfter(OrderSource.CART, OrderStatus.AWAITING_PAYMENT, now, after.paymentDueAt(), after.id(), Limit.of(limit))
+    public List<Order> findExpiredAwaitingOrders(Instant now, ExpiredOrderPosition after, int limit) {
+        return orders.findExpiredAfter(DUE_SOURCES, OrderStatus.AWAITING_PAYMENT, now, after.paymentDueAt(), after.id(), Limit.of(limit))
                 .stream().map(OrderMapper::toDomain).toList();
     }
 

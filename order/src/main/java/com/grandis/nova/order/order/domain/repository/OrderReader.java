@@ -32,17 +32,18 @@ public interface OrderReader {
     /**
      * 그 회원의 결제 안 된 장바구니 주문 — 결제 대기 · 승인 중이면 기한과 상관없이 전부(기한이 지났어도 아직 확보를 쥐고 있다).
      * 장바구니 주문 생성이 "회원당 하나" 를 지키는 데 쓴다 — 기한 판정({@link Order#acceptsPaymentAt})은 부르는 쪽이 한다.
+     * 바로 구매 주문은 들지 않는다(그 규칙 밖이다).
      */
     List<Order> findUnpaidCartOrders(UUID customerId);
 
     /**
-     * 기한이 지난 결제 대기 장바구니 주문 — 기한 <= now({@link Order#acceptsPaymentAt} 의 반대, 사이에 빠지는 주문이 없다). (기한, id) 순으로
+     * 기한이 지난 결제 대기 주문(장바구니 · 바로 구매) — 기한 <= now({@link Order#acceptsPaymentAt} 의 반대, 사이에 빠지는 주문이 없다). (기한, id) 순으로
      * after 다음부터 최대 limit 개 — 이어 읽기(keyset)라 처리하지 못한 주문이 앞에 남아도 그 뒤로 넘어간다. 잠그지 않는다 — 취소는 주문마다
      * 잠근 뒤 다시 판정한다. 승인 중은 고르지 않는다(결과를 기다린다).
      *
      * @param after 직전 쪽의 마지막 (기한, id). 처음이면 {@link ExpiredOrderPosition#START}
      */
-    List<Order> findExpiredCartOrders(Instant now, ExpiredOrderPosition after, int limit);
+    List<Order> findExpiredAwaitingOrders(Instant now, ExpiredOrderPosition after, int limit);
 
     /**
      * 여러 주문의 항목을 한 번에(주문마다 다시 묻지 않는다). 주문 id · 항목 id 순이다.

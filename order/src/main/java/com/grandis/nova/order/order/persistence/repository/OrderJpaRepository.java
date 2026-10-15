@@ -35,11 +35,11 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
      */
     @Query("""
             select o from OrderJpaEntity o
-             where o.source = :source and o.status = :status and o.paymentDueAt <= :now
+             where o.source in :sources and o.status = :status and o.paymentDueAt <= :now
                and (o.paymentDueAt > :afterDue or (o.paymentDueAt = :afterDue and o.id > :afterId))
              order by o.paymentDueAt asc, o.id asc
             """)
-    List<OrderJpaEntity> findExpiredAfter(@Param("source") OrderSource source, @Param("status") OrderStatus status,
+    List<OrderJpaEntity> findExpiredAfter(@Param("sources") Collection<OrderSource> sources, @Param("status") OrderStatus status,
                                           @Param("now") Instant now, @Param("afterDue") Instant afterDue, @Param("afterId") UUID afterId,
                                           Limit limit);
 

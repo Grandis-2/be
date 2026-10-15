@@ -28,7 +28,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * 주문 생성(order 의 유스케이스). 지금은 사전예약 출처(source=PREORDER)만 받는다 — 다른 출처가 생기면 여기서 나눈다.
+ * 사전예약 주문 생성(source=PREORDER). 장바구니 · 바로 구매 주문은 {@link PlaceCartOrderService} · {@link PlaceBuyNowOrderService} 가 만든다.
  * PAYABLE 예약 하나에 주문 하나(uq_order_preorder)를 만든다. 예약 정보는 preorder 서비스에 HTTP 로 묻는다(client.preorder).
  *
  * 순서: 결제 가능 확인(preorder, 트랜잭션 밖) → 본인 재대조 → 기존 주문 확인 → preorder 판정 적용 → 원장 place(트랜잭션).

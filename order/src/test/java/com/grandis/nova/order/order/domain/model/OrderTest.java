@@ -33,12 +33,18 @@ class OrderTest {
     }
 
     @Test
-    void buyNowOrdersCannotBePlacedYet() {
-        OrderDraft buyNow = new OrderDraft(TestIds.id(1), OrderSource.BUY_NOW, null, null, SHIP_TO, List.of(line(TestIds.id(10), 1, 1000)));
+    void buyNowOrderHasOneOptionAndPaymentWindow() {
+        OrderDraft buyNow = new OrderDraft(TestIds.id(1), OrderSource.BUY_NOW, null, null, SHIP_TO, List.of(line(TestIds.id(10), 2, 1000)));
 
-        assertThatThrownBy(() -> Order.place(buyNow, Instant.EPOCH))
+        Order order = Order.place(buyNow, Instant.EPOCH);
+
+        assertThat(order.status()).isEqualTo(OrderStatus.AWAITING_PAYMENT);
+        assertThat(order.paymentDueAt()).isEqualTo(Instant.EPOCH.plus(Order.PAYMENT_WINDOW));
+        OrderDraft twoOptions = new OrderDraft(TestIds.id(1), OrderSource.BUY_NOW, null, null, SHIP_TO,
+                List.of(line(TestIds.id(10), 1, 1000), line(TestIds.id(11), 1, 1000)));
+        assertThatThrownBy(() -> Order.place(twoOptions, Instant.EPOCH))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("BUY_NOW");
+                .hasMessageContaining("옵션 하나");
     }
 
     @Test

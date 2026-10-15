@@ -157,11 +157,11 @@ class OrderLedgerTest {
     }
 
     @Test
-    void nonPreorderSourceIsRejectedBeforeWriting() {
+    void draftOutsideAcceptanceRuleIsRejectedBeforeWriting() {
         OrderDraft preorder = draft(preorder());
-        OrderDraft buyNow = new OrderDraft(customerId, OrderSource.BUY_NOW, null, null, preorder.shipTo(), preorder.lines());
+        OrderDraft paidDraw = new OrderDraft(customerId, OrderSource.DRAW, null, null, preorder.shipTo(), preorder.lines());
 
-        assertThatThrownBy(() -> ledger.place(buyNow, EventCause.user()))
+        assertThatThrownBy(() -> ledger.place(paidDraw, EventCause.user()))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(ordersOf(customerId)).isZero();
     }

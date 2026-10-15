@@ -51,7 +51,7 @@ order 와 catalog 가 서로 부르는 내부 API 를 담는다(preorder 가 부
 
 **판정은 catalog 가 한다.** 배송 완료 여부, 사전예약 주문 · 드로우 당첨 주문 제외, 주문상품 1건당 리뷰 1개는 catalog 가 가린다. order 는 판정하지 않고 사실만 돌려준다 — 배송 전 주문상품도 200 이다.
 
-**현재 order 가 만드는 주문은 PREORDER · CART · DRAW 다.** BUY_NOW 주문은 아직 생기지 않는다. 리뷰를 쓸 수 있는 주문상품은 배송 완료된 CART 주문의 것뿐이다.
+**현재 order 가 만드는 주문은 PREORDER · BUY_NOW · CART · DRAW 다.** BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, 옵션 하나). 리뷰를 쓸 수 있는 주문상품은 배송 완료된 CART · BUY_NOW 주문의 것이다.
 
 **오류.** 공통 봉투 그대로.
 

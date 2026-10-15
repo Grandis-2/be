@@ -67,7 +67,7 @@ public record Order(
         PreorderTokens.requireReadable(source, preorderToken);
         // ck_order_due — 사전예약(예약의 기한을 따름) · 드로우 당첨(결제 없음)은 기한이 없다
         if ((preorder || source == OrderSource.DRAW) != (paymentDueAt == null)) {
-            throw new IllegalArgumentException("결제 기한은 장바구니 · 바로 구매 주문에만 있다: source=" + source);
+            throw new IllegalArgumentException("결제 기한은 장바구니 · 바로 구매 주문에만 있고, 이 둘은 반드시 있다: source=" + source);
         }
         // ck_order_preorder_no_stock · ck_order_stock_released_canceled
         if (stockReleasedAt != null && (preorder || status != OrderStatus.CANCELED)) {
@@ -86,17 +86,19 @@ public record Order(
         }
     }
 
-    /** 일반 주문(장바구니)의 결제 기한. 만들 때 재고를 확보하고, 기한까지 결제하지 않으면 취소 · 반환한다. */
+    /** 일반 주문(장바구니 · 바로 구매)의 결제 기한. 만들 때 재고를 확보하고, 기한까지 결제하지 않으면 취소 · 반환한다. */
     public static final Duration PAYMENT_WINDOW = Duration.ofMinutes(10);
 
     /**
      * 새 주문(저장 전, id 없음). 결제 대기에서 시작하고 이력 번호는 첫 이력과 같은 1이다.
      *
-     * 받는 출처는 사전예약 · 장바구니다(바로 구매는 아직 없다).
+     * 출처마다 받는 범위:
      * - 사전예약: 예약 하나에 옵션 하나 · 수량 1 · 보증 없음(예약에 수량 · 보증 칸이 없다). 기한은 예약의 24시간이라 비운다.
      * - 장바구니: 기한은 만든 때부터 {@link #PAYMENT_WINDOW}.
+     * - 바로 구매: 옵션 하나(보증 포함 · 미포함은 한 줄로 합쳐 온다). 기한은 장바구니와 같다.
+     * - 드로우 당첨: 0원, 기한 없음.
      *
-     * @param now 만든 시각 — 장바구니 주문의 기한 기준
+     * @param now 만든 시각 — 장바구니 · 바로 구매 주문의 기한 기준
      */
     public static Order place(OrderDraft draft, Instant now) {
         Instant paymentDueAt = switch (draft.source()) {
@@ -108,7 +110,12 @@ public record Order(
                 yield null;
             }
             case CART -> now.plus(PAYMENT_WINDOW);
-            case BUY_NOW -> throw new IllegalArgumentException("바로 구매 주문은 아직 만들 수 없다: source=" + draft.source());
+            case BUY_NOW -> {
+                if (draft.lines().size() != 1) {
+                    throw new IllegalArgumentException("바로 구매 주문은 옵션 하나다");
+                }
+                yield now.plus(PAYMENT_WINDOW);
+            }
             case DRAW -> {
                 if (draft.totalAmount().amount().signum() != 0) {
                     throw new IllegalArgumentException("드로우 당첨 주문은 0원이다");
