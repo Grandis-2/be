@@ -3,11 +3,13 @@ package com.grandis.nova.order.draw;
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.common.redis.cache.ReadCache;
 import com.grandis.nova.order.draw.domain.model.DrawCampaign;
+import com.grandis.nova.order.draw.domain.model.DrawPhase;
 import jakarta.persistence.PostPersist;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.type.TypeReference;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Set;
 import java.util.UUID;
 
@@ -43,8 +45,18 @@ public class DrawReadCache {
     /**
      * 앞 페이지({@link #CACHED_PAGES} 미만) · 화면이 쓰는 size({@link #CACHED_SIZES}) · 비지 않은 결과만 Redis 에 넣는다 — 입력을 바꿔 키를
      * 끝없이 만들어 나눠 쓰는 Redis 의 다른 키(토큰 폐기 표식 · 대기열)를 밀어내지 않게. 넣는 양도 메모리 예산이 묶는다(ReadCache).
+     *
+     * 단계(phase)로 거른 목록은 캐시하지 않는다 — 단계는 시각이 지나면 바뀌는데 캐시는 TTL({@link #TTL}) 동안 그대로라, "응모 중" 목록에 이미
+     * 마감된 회차가 최대 TTL 동안 섞인다(응답의 단계 칸은 지금 시각으로 가르므로 한 응답 안에서 필터와 칸이 어긋난다). 거르지 않은 목록은
+     * 담기는 회차가 시각과 상관없이 같으므로 그대로 캐시한다.
+     *
+     * @param phase null 이면 전부
+     * @param now   단계를 가르는 시각 — 응답의 단계 칸과 같은 값을 넘긴다
      */
-    public ReadCache.Entry<OffsetPage<DrawCampaign>> list(int page, int size) {
+    public ReadCache.Entry<OffsetPage<DrawCampaign>> list(DrawPhase phase, Instant now, int page, int size) {
+        if (phase != null) {
+            return cache.uncached(() -> queries.list(phase, now, page, size));
+        }
         if (page >= CACHED_PAGES || !CACHED_SIZES.contains(size)) {
             return cache.uncached(() -> queries.list(page, size));
         }

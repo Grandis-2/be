@@ -5,6 +5,7 @@ import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.order.draw.AdminDrawService;
 import com.grandis.nova.order.draw.DrawQueryService;
+import com.grandis.nova.order.draw.domain.model.DrawPhase;
 import com.grandis.nova.order.web.PageSizes;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -53,12 +54,14 @@ public class AdminDrawController {
     }
 
     @GetMapping
-    @Operation(summary = "회차 목록", description = "최신순. page 는 0 부터, size 1~100")
-    public ApiResponse<OffsetPage<DrawResponse>> list(@RequestParam(defaultValue = "0") int page,
+    @Operation(summary = "회차 목록", description = "최신순. page 는 0 부터, size 1~100. phase(선택): SCHEDULED 예정 · OPEN 응모 중 · CLOSED 마감 — "
+            + "주면 그 단계만, 비우면 전부. 모르는 값은 400")
+    public ApiResponse<OffsetPage<DrawResponse>> list(@RequestParam(required = false) DrawPhase phase,
+                                                      @RequestParam(defaultValue = "0") int page,
                                                       @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         int checkedSize = PageSizes.require(size);
         Instant now = queries.now();
-        return ApiResponse.ok(queries.list(PageSizes.requirePage(page, checkedSize), checkedSize).map(c -> DrawResponse.of(c, now)));
+        return ApiResponse.ok(queries.list(phase, now, PageSizes.requirePage(page, checkedSize), checkedSize).map(c -> DrawResponse.of(c, now)));
     }
 
     @GetMapping("/{drawId}/progress")

@@ -121,6 +121,23 @@ class DrawReadCacheApiTest {
     }
 
     @Test
+    @DisplayName("단계로 거른 목록은 캐시하지 않는다 — DB 에서 마감 시각을 지나게 고치면 다음 조회의 OPEN 목록에서 바로 빠진다. 대조군: 거르지 않은 목록은 캐시된 옛 값")
+    void phaseFilteredListIsNotCached() throws Exception {
+        UUID drawId = create("거르기", Instant.now().minusSeconds(60), Instant.now().plus(Duration.ofDays(1)));
+        assertThat(ids(mockMvc.perform(get("/api/v1/draws").param("phase", "OPEN").param("size", "100")))).contains(drawId.toString());
+        assertThat(ids(mockMvc.perform(get("/api/v1/draws").param("size", "100")))).contains(drawId.toString());
+        String unfilteredBefore = data(mockMvc.perform(get("/api/v1/draws").param("size", "100"))).toString();
+
+        // 세대를 올리지 않고 DB 만 고친다 — 캐시된 값이면 옛 회차가 그대로 나온다
+        jdbcTemplate.update("UPDATE draw_campaigns SET opens_at = UTC_TIMESTAMP(6) - INTERVAL 2 MINUTE, closes_at = UTC_TIMESTAMP(6) - INTERVAL 1 MINUTE WHERE id = ?",
+                (Object) OrderFixtures.bytes(drawId));
+
+        assertThat(ids(mockMvc.perform(get("/api/v1/draws").param("phase", "OPEN").param("size", "100")))).doesNotContain(drawId.toString());
+        assertThat(ids(mockMvc.perform(get("/api/v1/draws").param("phase", "CLOSED").param("size", "100")))).contains(drawId.toString());
+        assertThat(data(mockMvc.perform(get("/api/v1/draws").param("size", "100"))).toString()).as("거르지 않은 목록은 캐시").isEqualTo(unfilteredBefore);
+    }
+
+    @Test
     @DisplayName("목록 · 상세는 Cache-Control public, max-age=10 — 없는 회차(404)는 no-store")
     void publicResponsesCarryCacheControl() throws Exception {
         UUID drawId = create("헤더", Instant.now().minusSeconds(60), Instant.now().plus(Duration.ofDays(1)));
@@ -152,6 +169,12 @@ class DrawReadCacheApiTest {
         TransactionTemplate tx = new TransactionTemplate(transactionManager);
         return tx.execute(status -> campaigns.insert(new NewDrawCampaign(UUID.randomUUID().toString(), gift.productId(), gift.optionIds().getFirst(),
                 title, "증정품", "기본", null, new BigDecimal("100"), 1, opensAt, closesAt)).id());
+    }
+
+    private static List<String> ids(ResultActions actions) throws Exception {
+        List<String> ids = new ArrayList<>();
+        data(actions.andExpect(status().isOk())).get("items").forEach(item -> ids.add(item.get("drawId").asString()));
+        return ids;
     }
 
     private List<String> titles() throws Exception {
