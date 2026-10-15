@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.grandis.nova.catalog.CatalogErrorCode;
 import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
+import com.grandis.nova.catalog.registration.ProductRegistrationService;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.BusinessException;
@@ -63,6 +64,7 @@ class ProductEditRaceTest {
     Clock clock;
 
     @MockitoSpyBean ProductEditService editService;
+    @MockitoSpyBean ProductRegistrationService registrationService;
     @Autowired ProductImageEditService imageEditService;
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
@@ -231,6 +233,21 @@ class ProductEditRaceTest {
 
         String body = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch("/api/v1/admin/products/{id}", productId)
                         .contentType(MediaType.APPLICATION_JSON).with(user("admin").roles("ADMIN")).content("{ \"basePrice\": 1100000 }"))
+                .andExpect(status().isConflict()).andReturn().getResponse().getContentAsString();
+        var error = JSON.readTree(body).get("error");
+        assertThat(error.get("code").asString()).isEqualTo("STATE_CONFLICT");
+        assertThat(error.get("details").get("retryable").asBoolean()).isTrue();
+    }
+
+    @Test
+    @DisplayName("등록도 잠금 실패(교착 희생 · 잠금 대기 초과)로 끝나면 409 STATE_CONFLICT · retryable — 사진 붙이기가 이미지 행을 잠근다")
+    void mappingOfLockFailureOnRegistration() throws Exception {
+        doThrow(new CannotAcquireLockException("Deadlock found when trying to get lock"))
+                .when(registrationService).register(any(), any());
+
+        String body = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/v1/admin/products")
+                        .header("Idempotency-Key", "k-" + ShopFixtures.unique())
+                        .contentType(MediaType.APPLICATION_JSON).with(user("admin").roles("ADMIN")).content(inStockBody()))
                 .andExpect(status().isConflict()).andReturn().getResponse().getContentAsString();
         var error = JSON.readTree(body).get("error");
         assertThat(error.get("code").asString()).isEqualTo("STATE_CONFLICT");
@@ -604,11 +621,15 @@ class ProductEditRaceTest {
 
     /** 축 storage 하나(256GB +0 · 512GB +200,000), 기본가 1,000,000. */
     private UUID registerInStock() throws Exception {
-        return register("""
+        return register(inStockBody());
+    }
+
+    private String inStockBody() {
+        return """
                 { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Race", "brand": "APPLE", "modelName": "A0001", "visible": false, "basePrice": 1000000,
                   "optionAxes": [ { "key": "storage", "label": "용량", "values": [ { "value": "256GB" }, { "value": "512GB", "surcharge": 200000 } ] } ],
                   "combinations": [ { "selections": { "storage": "256GB" }, "stock": 1 }, { "selections": { "storage": "512GB" }, "stock": 1 } ] }
-                """.formatted(categoryId));
+                """.formatted(categoryId);
     }
 
     private UUID registerPreorder() throws Exception {

@@ -99,7 +99,8 @@ public class AdminProductController {
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ProductRegistrationRequest.class))) @RequestBody String body) {
         ProductRegistrationRequest request = parser.parse(body);
-        RegistrationOutcome outcome = registrationService.register(idempotencyKey, request);
+        // 사진 붙이기가 이미지 행을 잠근다 — 다른 저장 · 정리 배치와 겹쳐 교착하면 다른 수정처럼 409 retryable
+        RegistrationOutcome outcome = serialized(() -> registrationService.register(idempotencyKey, request));
         return switch (outcome.kind()) {
             case CREATED -> ResponseEntity.status(HttpStatus.CREATED)
                     .body(ApiResponse.ok(new ProductRegistrationResponse(outcome.registration(), outcome.preview())));
@@ -245,7 +246,7 @@ public class AdminProductController {
     }
 
     /**
-     * 수정 트랜잭션이 DB 교착의 희생자가 되면 409 STATE_CONFLICT + `details.retryable=true`. 수정은 옵션 행을 생성 순으로 잠그는데, 다른 모듈의
+     * 등록 · 수정 트랜잭션이 DB 교착의 희생자가 되면 409 STATE_CONFLICT + `details.retryable=true`. 수정은 옵션 행을 생성 순으로 잠그는데, 다른 모듈의
      * 외래키 확인(장바구니 · 주문 · 예약 행 INSERT 가 옵션 행에 거는 공유 잠금)은 순서를 catalog 가 정하지 못한다(실측: 역순 INSERT 와 교착 →
      * 500). 수정은 통째로 되돌려졌으니 같은 요청을 다시 보내면 된다. 한 상품의 수정끼리는 상품 행 잠금으로 줄 서므로 교착하지 않는다.
      */
