@@ -44,14 +44,14 @@ public class ProductController {
     @SecurityRequirements
     @GetMapping("/{productId}")
     public ResponseEntity<ApiResponse<ProductDetailView>> product(@PathVariable UUID productId) {
-        return PublicCache.ok(cache.product(productId), CatalogReadCache.PRODUCT_TTL, PublicCache.PRODUCT, clock);
+        return PublicCache.ok(cache.product(productId), CatalogReadCache.DETAIL_TTL, PublicCache.PRODUCT, clock);
     }
 
     @Operation(summary = "옵션(조합) 상세(로그인 없이)")
     @SecurityRequirements
     @GetMapping("/{productId}/variants/{variantId}")
     public ResponseEntity<ApiResponse<ProductDetailView.Variant>> variant(@PathVariable UUID productId, @PathVariable UUID variantId) {
-        return PublicCache.ok(cache.variant(productId, variantId), CatalogReadCache.PRODUCT_TTL, PublicCache.PRODUCT, clock);
+        return PublicCache.ok(cache.variant(productId, variantId), CatalogReadCache.DETAIL_TTL, PublicCache.PRODUCT, clock);
     }
 
     @Operation(summary = "상품 목록 · 검색(로그인 없이)", description = "sort: NEWEST(최신순, 기본) · PRICE_ASC(낮은 가격순) · PRICE_DESC(높은 가격순). 가격은 판매 중인 옵션의 최저 할인가(minPrice)이고 판매 중인 옵션이 없는 상품은 가격순에서 맨 뒤. "

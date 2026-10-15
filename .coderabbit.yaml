@@ -8,7 +8,7 @@
 #
 # 소유 경계(README 기준)
 #   member    customers · refresh_tokens
-#   catalog   categories · products · product_options · product_reviews · catalog_outbox_events
+#   catalog   categories · products · product_options · product_reviews · promotions · promotion_products · catalog_outbox_events
 #   preorder  preorders · preorder_events · preorder_campaigns · shipment_batches · dead_letter_events
 #             preorder_sync_jobs · preorder_sync_attempts (작업 · 시도 원장. worker 의 결과 이벤트를 받아 기록)
 #   order     orders · order_items · order_events · cart_items · payments · payment_transactions

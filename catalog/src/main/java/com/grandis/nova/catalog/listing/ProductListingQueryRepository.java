@@ -4,6 +4,7 @@ import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.Discount;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
+import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.common.UuidBinary;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -313,6 +314,54 @@ public class ProductListingQueryRepository {
         return products.stream()
                 .map(c -> new GiftCandidate(c.productId(), c.title(), c.imageUrl(), c.visible(), List.copyOf(options.getOrDefault(c.productId(), List.of()))))
                 .toList();
+    }
+
+    /**
+     * 홍보 상품 카드 — 목록과 같은 칸. 공개 · 판매 중(ACTIVE) · 판매 방식별 준비가 끝난 상품만 싣는다 — 판매 중지 · 회차 취소(PAUSED)는 뺀다
+     * (2026-10-14 결정 — 취소 직후 preorder 가 회차를 닫기 전까지 "접수 중" 으로 보이지 않게). 마감 뒤 시간 · 일반 전환과는 상관없이 싣는다(홍보 페이지는
+     * 마감 뒤에도 "일반 구매" 로 상품을 보인다 — 일반 전환한 상품은 판매 중이다). 순서는 ids 순서, 빠진 상품은 건너뛴다.
+     */
+    public List<ProductListItem> findCards(List<UUID> ids, Instant now) {
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        String sql = SELECT_ITEMS + """
+                  FROM products p
+                  LEFT JOIN preorder_campaigns c ON c.product_id = p.id
+                 WHERE p.id IN (:ids) AND p.visible = 1 AND p.status = 'ACTIVE' AND
+                """ + READY;
+        Map<UUID, ProductListItem> byId = new HashMap<>();
+        jdbc.query(sql, new MapSqlParameterSource("ids", ids.stream().map(UuidBinary::toBytes).toList()),
+                (rs, rowNum) -> toItem(rs, now)).forEach(item -> byId.put(item.productId(), item));
+        return ids.stream().map(byId::get).filter(java.util.Objects::nonNull).toList();
+    }
+
+    /**
+     * 홍보에 묶을 수 있는 상품 — 회차가 취소되지 않은 사전예약 상품 중 다른 홍보에 묶이지 않은 것. promotionId 를 주면(수정) 그 홍보에 이미 묶인
+     * 상품도 판매 방식과 상관없이 싣는다(일반으로 바꾼 상품도 수정 화면에서 풀 수 있게). 공개 여부 · 준비와는 상관없다(관리자 화면). 최신 등록순.
+     */
+    public OffsetPage<LinkableRow> findLinkable(UUID promotionId, int page, int size) {
+        MapSqlParameterSource params = new MapSqlParameterSource("promotionId", promotionId == null ? null : UuidBinary.toBytes(promotionId));
+        String where = """
+                 WHERE (p.sale_mode = 'PREORDER' AND p.campaign_canceled_at IS NULL
+                        AND NOT EXISTS (SELECT 1 FROM promotion_products other WHERE other.product_id = p.id
+                                         AND (:promotionId IS NULL OR other.promotion_id <> :promotionId)))
+                    OR EXISTS (SELECT 1 FROM promotion_products mine WHERE mine.product_id = p.id AND mine.promotion_id = :promotionId)
+                """;
+        Long total = jdbc.queryForObject("SELECT COUNT(*) FROM products p" + where, params, Long.class);
+        params.addValue("limit", size).addValue("offset", (long) page * size);
+        List<LinkableRow> rows = jdbc.query("""
+                SELECT p.id, p.title, p.sale_mode, c.opens_at
+                  FROM products p
+                  LEFT JOIN preorder_campaigns c ON c.product_id = p.id
+                """ + where + " ORDER BY p.created_at DESC, p.id DESC LIMIT :limit OFFSET :offset", params,
+                (rs, rowNum) -> new LinkableRow(UuidBinary.fromBytes(rs.getBytes("id")), rs.getString("title"),
+                        SaleMode.valueOf(rs.getString("sale_mode")), instant(rs, "opens_at")));
+        return OffsetPage.of(rows, page, size, total == null ? 0 : total);
+    }
+
+    /** @param opensAt 회차 오픈 시각. 회차 행이 없으면(등록 이벤트 처리 전) null */
+    public record LinkableRow(UUID productId, String title, SaleMode saleMode, Instant opensAt) {
     }
 
     /** 옵션별 가용 수량(총량 − 선점 − 판매). 재고 행이 없는 옵션은 빠진다 — 판매 불가로 읽는다. */
