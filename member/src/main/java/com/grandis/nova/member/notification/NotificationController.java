@@ -19,7 +19,8 @@ import java.util.UUID;
 
 /**
  * 내 알림(헤더 종 아이콘). 권한 USER — ADMIN 토큰은 @CurrentCustomerId 리졸버가 403 으로 막는다. 경로는 ALB 에서 member 로 온다
- * (member 가 다른 서비스에 없는 /api/v1/* 를 받는다). 읽음 표시 둘은 본문 없이 204 다 — 화면은 이미 가진 항목의 read 를 바꾸고 배지를 다시 센다.
+ * (member 가 다른 서비스에 없는 /api/v1/* 를 받는다). 배지는 실시간 연결({@link NotificationStreamController})로 받고, 끊긴 동안에만
+ * unread-count 를 주기적으로 부른다. 읽음 표시 둘은 본문 없이 204 다 — 화면은 이미 가진 항목의 read 를 바꾸고 배지를 다시 센다.
  */
 @RestController
 @RequestMapping("/api/v1/notifications")
@@ -44,7 +45,7 @@ public class NotificationController {
         return ApiResponse.ok(notifications.list(customerId, cursor, size));
     }
 
-    @Operation(summary = "안 읽은 알림 수", description = "헤더 배지용. 화면이 주기적으로 부른다 — 인덱스만 읽는다")
+    @Operation(summary = "안 읽은 알림 수", description = "헤더 배지용. 실시간 연결이 끊긴 동안 화면이 주기적으로 부른다 — 인덱스만 읽는다")
     @GetMapping("/unread-count")
     public ApiResponse<UnreadCount> unreadCount(@CurrentCustomerId UUID customerId) {
         return ApiResponse.ok(new UnreadCount(notifications.unreadCount(customerId)));
