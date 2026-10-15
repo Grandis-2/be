@@ -65,7 +65,8 @@ public class PreorderCampaign {
     private boolean visible;
 
     /**
-     * catalog 상품명 · 판매 상태 · 공개 여부의 변경 번호(products.listing_version). 이보다 큰 번호의 값만 반영한다(0 = catalog 값을 받기 전).
+     * catalog 상품명 · 판매 상태 · 공개 여부의 변경 번호(products.listing_version). 이보다 큰 번호의 값만 반영한다 — 사본이 비었으면(상품명 null)
+     * 같은 번호도 받는다(0 = catalog 값을 받기 전).
      * 칸 이름은 공개 여부만 받던 때의 것이다 — 이름을 바꾸면 마이그레이션과 배포 사이의 구버전이 회차를 못 읽는다.
      */
     @Column(name = "visibility_version", nullable = false)
@@ -120,13 +121,16 @@ public class PreorderCampaign {
 
     /**
      * catalog 상품 값의 사본을 덮는다. 번호가 지금보다 클 때만 셋을 함께 쓴다 — 표준 큐라 옛 값이 늦게 올 수 있다.
+     * 번호가 같아도 사본이 비어 있으면(상품명 null — 사본 칸이 생기기 전의 회차) 쓴다. catalog 는 셋이 바뀔 때만 번호를 올리므로
+     * 같은 번호의 메시지는 모두 같은 값을 싣는다 — 그래서 번호 0 인 기존 상품도 옵션 · 가격만 고친 변경으로 사본이 찬다.
      * 싣지 않은 칸(null)은 그대로 둔다. 공개 여부가 실제로 바뀌면 일정 번호도 올린다 — 대기열은 일정 번호로 새 값을 판정한다.
      * 상품명 · 판매 상태는 대기열이 보지 않아 일정 번호와 무관하다. 반드시 잠근 행에서 부른다.
      *
      * @return 공개 여부가 바뀌었으면 true(회차 변경 이벤트를 낼 것)
      */
     public boolean applyListing(ProductListing listing) {
-        if (listing.version() <= this.listingVersion) {
+        boolean empty = this.productTitle == null;
+        if (listing.version() < this.listingVersion || (listing.version() == this.listingVersion && !empty)) {
             return false;
         }
         this.listingVersion = listing.version();

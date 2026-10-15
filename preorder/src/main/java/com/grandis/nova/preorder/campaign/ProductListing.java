@@ -2,7 +2,7 @@ package com.grandis.nova.preorder.campaign;
 
 /**
  * 회차 행에 두는 catalog 상품 값의 사본 — 상품명 · 판매 상태 · 공개 여부와 그 변경 번호(모듈 공개 API 입력).
- * 오픈 알림이 문구 · 대상 판정에 쓴다. 번호가 지금보다 클 때만 셋을 함께 덮는다(contracts/catalog-events.md).
+ * 오픈 알림이 문구 · 대상 판정에 쓴다. 번호가 지금보다 클 때(사본이 비었으면 같을 때도) 셋을 함께 덮는다(contracts/catalog-events.md).
  *
  * @param title   상품명. null 이면 catalog 가 싣지 않았다(이 칸을 모르는 catalog)
  * @param status  판매 상태. null 이면 위와 같다

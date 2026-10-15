@@ -179,6 +179,23 @@ class CampaignChangeEventTest {
                 .isEqualTo(4);
     }
 
+    @Test
+    void 사본이_빈_기존_회차는_같은_번호로도_채우고_한_번_채운_뒤에는_같은_번호를_버린다() {
+        Instant now = Instant.now();
+        UUID productId = fixtures.preorderProduct(now.plusSeconds(3600), now.plusSeconds(7200)).productId();
+        jdbcTemplate.update("UPDATE preorder_campaigns SET product_title = NULL, product_status = NULL, visibility_version = 0"
+                + " WHERE product_id = ?", (Object) UuidBinary.toBytes(productId));
+
+        campaigns.applyListing(productId, new ProductListing("Nova 1", ProductStatus.PAUSED, false, 0));
+        campaigns.applyListing(productId, new ProductListing("다른 이름", ProductStatus.ACTIVE, true, 0));
+
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT CONCAT_WS('|', product_title, product_status, visible, visibility_version) FROM preorder_campaigns"
+                        + " WHERE product_id = ?", String.class, (Object) UuidBinary.toBytes(productId)))
+                .isEqualTo("Nova 1|PAUSED|0|0");
+        assertThat(events(productId)).extracting(event -> event.get("change")).containsExactly("VISIBILITY");
+    }
+
     private List<Map<String, Object>> events(UUID productId) {
         return jdbcTemplate.queryForList("""
                 SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.change')) AS `change`,
