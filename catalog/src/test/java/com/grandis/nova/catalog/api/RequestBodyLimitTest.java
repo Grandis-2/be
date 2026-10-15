@@ -1,6 +1,7 @@
-package com.grandis.nova.catalog.image;
+package com.grandis.nova.catalog.api;
 
 import com.grandis.nova.catalog.support.AccessTokens;
+import com.grandis.nova.catalog.web.RegistrationBodyLimitFilter;
 import com.grandis.nova.catalog.support.MySqlContainerConfig;
 import com.grandis.nova.catalog.support.RedisContainerConfig;
 import com.grandis.nova.catalog.support.SecurityTestConfig;
@@ -25,8 +26,9 @@ import java.util.Arrays;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 멀티파트 상한(CatalogDefaults)은 실제 Tomcat 이 건다 — MockMvc 는 멀티파트를 파싱하지 않아 이 경우를 못 본다.
- * 넘친 요청은 컨트롤러 전에 413 이고 봉투의 코드는 VALIDATION_FAILED 다(프론트는 상태 413 으로 가른다).
+ * 본문 크기 상한 — 실제 Tomcat 으로 잰다(MockMvc 는 멀티파트를 파싱하지 않고 chunked 전송도 없다).
+ * 사진 업로드의 멀티파트 상한(CatalogDefaults)과 상품 등록 JSON 상한(RegistrationBodyLimitFilter). 넘친 요청은 컨트롤러 전에 413 이고
+ * 봉투의 코드는 VALIDATION_FAILED 다(프론트는 상태 413 으로 가른다).
  */
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT, properties = {
         "spring.datasource.hikari.transaction-isolation=TRANSACTION_READ_COMMITTED",
@@ -52,8 +54,8 @@ import static org.assertj.core.api.Assertions.assertThat;
         "management.server.port=0"
 })
 @Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class})
-@DisplayName("사진 업로드 멀티파트 상한 — 실제 서버에서 413")
-class ImageUploadLimitTest {
+@DisplayName("본문 크기 상한 — 실제 서버에서 413")
+class RequestBodyLimitTest {
 
     private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     private static final JsonMapper JSON = JsonMapper.builder().build();
@@ -81,6 +83,64 @@ class ImageUploadLimitTest {
         byte[] small = fakeJpeg(16);
         assertThat(send(body(small, 3)).statusCode()).as("파트 5개").isEqualTo(400);
         assertThat(send(body(small, 4)).statusCode()).as("파트 6개").isEqualTo(413);
+    }
+
+    @Test
+    @DisplayName("상품 등록 JSON — Content-Length 가 256KiB 면 컨트롤러가 보고(깨진 JSON 400), 256KiB + 1 이면 413 VALIDATION_FAILED")
+    void registrationBodyLimitByContentLength() throws Exception {
+        HttpResponse<String> atLimit = register("/api/v1/admin/products", HttpRequest.BodyPublishers.ofByteArray(spaces(RegistrationBodyLimitFilter.MAX_BYTES)));
+        assertThat(atLimit.statusCode()).isEqualTo(400);
+
+        HttpResponse<String> over = register("/api/v1/admin/products", HttpRequest.BodyPublishers.ofByteArray(spaces(RegistrationBodyLimitFilter.MAX_BYTES + 1)));
+        assertThat(over.statusCode()).isEqualTo(413);
+        assertThat(JSON.readTree(over.body()).get("error").get("code").asString()).isEqualTo("VALIDATION_FAILED");
+    }
+
+    @Test
+    @DisplayName("상품 등록 JSON — chunked(길이 없음)도 256KiB + 1 이면 413, 작은 본문은 그대로 컨트롤러에 간다(모르는 칸 x 의 400)")
+    void registrationBodyLimitWhenChunked() throws Exception {
+        HttpResponse<String> over = register("/api/v1/admin/products", chunked(spaces(RegistrationBodyLimitFilter.MAX_BYTES + 1)));
+        assertThat(over.statusCode()).isEqualTo(413);
+
+        HttpResponse<String> small = register("/api/v1/admin/products", chunked("{ \"x\": 1 }".getBytes(StandardCharsets.UTF_8)));
+        assertThat(small.statusCode()).isEqualTo(400);
+        assertThat(small.body()).contains("\"field\":\"x\"");
+    }
+
+    @Test
+    @DisplayName("상품 등록 JSON — 퍼센트 인코딩(%70roducts)도 같은 경로로 보고 413(대조군: 그 경로의 작은 본문은 등록 컨트롤러가 받는다)")
+    void registrationBodyLimitSeesTheDecodedPath() throws Exception {
+        String encoded = "/api/v1/admin/%70roducts";
+        assertThat(register(encoded, HttpRequest.BodyPublishers.ofString("{ \"x\": 1 }")).body()).as("대조군").contains("\"field\":\"x\"");
+        assertThat(register(encoded, HttpRequest.BodyPublishers.ofByteArray(spaces(RegistrationBodyLimitFilter.MAX_BYTES + 1))).statusCode()).isEqualTo(413);
+    }
+
+    @Test
+    @DisplayName("경로 매개변수(;x=1)를 붙인 등록은 보안 방화벽이 컨트롤러 전에 400 으로 거절한다 — 작은 본문도 등록에 닿지 않는다(봉투가 아닌 거절)")
+    void pathParametersNeverReachRegistration() throws Exception {
+        HttpResponse<String> small = register("/api/v1/admin/products;x=1", HttpRequest.BodyPublishers.ofString("{ \"x\": 1 }"));
+        assertThat(small.statusCode()).isEqualTo(400);
+        assertThat(small.body()).doesNotContain("\"field\":\"x\"");
+    }
+
+    private HttpResponse<String> register(String path, HttpRequest.BodyPublisher body) throws Exception {
+        return HTTP.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+                .timeout(Duration.ofSeconds(30))
+                .header("Authorization", "Bearer " + AccessTokens.adminToken())
+                .header("Idempotency-Key", "k-limit")
+                .header("Content-Type", "application/json")
+                .POST(body).build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    /** 길이를 알리지 않는 본문 — HttpClient 는 Transfer-Encoding: chunked 로 보낸다. */
+    private static HttpRequest.BodyPublisher chunked(byte[] bytes) {
+        return HttpRequest.BodyPublishers.ofInputStream(() -> new java.io.ByteArrayInputStream(bytes));
+    }
+
+    private static byte[] spaces(int size) {
+        byte[] bytes = new byte[size];
+        Arrays.fill(bytes, (byte) ' ');
+        return bytes;
     }
 
     /** 시그니처만 JPEG 인 바이트 — 크기 검사는 통과하고 헤더 읽기에서 400 이다. */
