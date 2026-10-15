@@ -59,8 +59,10 @@ import java.util.UUID;
  *         확인 뒤에 남는 것은 COMMIT 문 하나다(그 문장 자체에는 시간 상한이 없다).</li>
  *     <li>저장 트랜잭션의 시간 상한(남은 예산을 초로 올림)은 스레드를 붙잡지 않게 하는 장치다 — 재고 행 잠금을 기다리는 문장이 잠금 대기 기본값(50초)
  *         대신 그 상한에서 끊긴다(실측: 예산 2초에 2.2초에 끝남). 상한이 올림이라 예산을 조금 넘겨 끊길 수 있고, 그 몫은 커밋 직전 확인이 막는다.</li>
- *     <li>예산을 넘긴 뒤의 실패는 종류와 상관없이 409 다 — 끊는 지점에 따라 QueryTimeoutException(잠금 대기 중) · JpaSystemException
+ *     <li>예산을 넘긴 뒤의 DB · 트랜잭션 · 잠금 실패는 예외 종류와 상관없이 409 다 — 끊는 지점에 따라 QueryTimeoutException(잠금 대기 중) · JpaSystemException
  *         (Hibernate 의 "Transaction timeout expired" — 상한 직전에 잠금을 얻고 INSERT 를 준비할 때)으로 달리 온다(리뷰 실측).</li>
+ *     <li>재고 부족은 기한 뒤라도 409 INSUFFICIENT_STOCK 그대로다 — 시간 탓이 아닌 실제 상태라 다시 보내도 같고(retryable 이 아니다),
+ *         트랜잭션은 롤백돼 사진 주소를 저장하지 않는다.</li>
  *   </ul>
  */
 @Service

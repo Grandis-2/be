@@ -133,7 +133,7 @@ class AdminDrawBudgetTest {
     }
 
     @Test
-    @DisplayName("예산을 넘긴 뒤의 실패는 종류와 상관없이 409 retryable(상한 직전 잠금 뒤 INSERT 준비의 JpaSystemException 등), 예산 안의 같은 실패는 그대로 던진다")
+    @DisplayName("예산을 넘긴 뒤의 DB · 트랜잭션 실패는 예외 종류와 상관없이 409 retryable(상한 직전 잠금 뒤 INSERT 준비의 JpaSystemException 등), 예산 안의 같은 실패는 그대로 던진다")
     void failureAfterDeadlineIsBudgetExceeded() {
         given(campaigns.insert(any())).willAnswer(invocation -> {
             clock.now = NOW.plus(BUDGET);
@@ -161,6 +161,19 @@ class AdminDrawBudgetTest {
         willThrow(new CannotAcquireLockException("lock", new SQLException("lock failure", "40001", 1205))).given(stock).reserve(anyMap());
         assertThatThrownBy(() -> service.create(null, "k-1", command())).isInstanceOfSatisfying(BusinessException.class,
                 e -> assertThat(e.errorCode()).isEqualTo(com.grandis.nova.common.CommonErrorCode.DEPENDENCY_UNAVAILABLE));
+    }
+
+    @Test
+    @DisplayName("기한 뒤의 재고 부족은 409 INSUFFICIENT_STOCK 그대로 — 시간 탓이 아닌 실제 상태라 retryable 로 바꾸지 않는다")
+    void stockShortageAfterDeadlineStaysInsufficientStock() {
+        willAnswer(invocation -> {
+            clock.now = NOW.plus(BUDGET);
+            throw new com.grandis.nova.order.stock.domain.exception.StockShortageException(java.util.List.of(TestIds.id(2)));
+        }).given(stock).reserve(anyMap());
+        assertThatThrownBy(() -> service.create(null, "k-4", command())).isInstanceOfSatisfying(BusinessException.class, e -> {
+            assertThat(e.errorCode()).isEqualTo(OrderErrorCode.INSUFFICIENT_STOCK);
+            assertThat(e.details()).doesNotContainKey("retryable");
+        });
     }
 
     @Test
