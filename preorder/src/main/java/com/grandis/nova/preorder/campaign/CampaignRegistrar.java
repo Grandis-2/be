@@ -21,7 +21,7 @@ import java.util.UUID;
 /**
  * 사전예약 상품 등록에서 회차 · 배송 차수를 처음 만든다(모듈 공개 API). catalog 는 회차 행이 생기는 순간 상품을 노출한다.
  * 이미 회차가 있으면 일정 · 차수는 바꾸지 않는다 — 같은 메시지를 다시 받거나, 관리자가 그사이 고친 값을 덮지 않게.
- * 공개 여부만 번호가 더 클 때 반영한다(관리자가 먼저 만든 회차는 번호 0).
+ * 상품명 · 판매 상태 · 공개 여부 사본만 번호가 더 클 때 반영한다(관리자가 먼저 만든 회차는 번호 0).
  * 규칙 위반은 예외로 올린다(받은 메시지는 재수신 한도를 넘으면 DLQ 로 간다).
  */
 @Service
@@ -67,14 +67,14 @@ public class CampaignRegistrar {
         if (existing.isPresent()) {
             log.info("회차가 이미 있어 등록 이벤트의 일정 · 차수를 건너뛴다 productId={}", productId);
             PreorderCampaign campaign = existing.get();
-            if (campaign.applyVisibility(registration.visible(), registration.visibilityVersion())) {
+            if (campaign.applyListing(registration.listing())) {
                 changePublisher.publish(campaign, CampaignChange.VISIBILITY);
             }
             return false;
         }
         requireSchedule(registration.opensAt(), registration.closesAt());
         PreorderCampaign campaign = campaigns.save(new PreorderCampaign(productId, registration.opensAt(),
-                registration.closesAt(), registration.visible(), registration.visibilityVersion()));
+                registration.closesAt(), registration.listing()));
         batches.saveAll(plan.toBatches(productId));
         changePublisher.publish(campaign, CampaignChange.CREATED);
         return true;

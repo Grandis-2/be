@@ -160,12 +160,12 @@ class CampaignChangeEventTest {
         PreorderProduct product = fixtures.preorderProduct(now.plusSeconds(3600), now.plusSeconds(7200));
         UUID productId = product.productId();
 
-        campaigns.applyVisibility(productId, false, 2);
-        campaigns.applyVisibility(productId, true, 1);
-        campaigns.applyVisibility(productId, true, 2);
-        campaigns.applyVisibility(productId, false, 3);
+        campaigns.applyListing(productId, new ProductListing("Nova 1", ProductStatus.ACTIVE, false, 2));
+        campaigns.applyListing(productId, new ProductListing("Nova 1", ProductStatus.ACTIVE, true, 1));
+        campaigns.applyListing(productId, new ProductListing("Nova 1", ProductStatus.ACTIVE, true, 2));
+        campaigns.applyListing(productId, new ProductListing("Nova 1", ProductStatus.ACTIVE, false, 3));
         republisher.republishAll();
-        campaigns.applyVisibility(productId, true, 4);
+        campaigns.applyListing(productId, new ProductListing("Nova 1", ProductStatus.ACTIVE, true, 4));
 
         List<Map<String, Object>> events = events(productId);
         assertThat(events).extracting(event -> event.get("change"))

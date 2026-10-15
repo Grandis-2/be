@@ -110,7 +110,7 @@ class ProductProgressApiTest {
     @Test
     void 회차가_없거나_공개_전인_상품은_404_다() throws Exception {
         PreorderProduct hidden = fixtures.openPreorderProduct();
-        campaigns.applyVisibility(hidden.productId(), false, 1);
+        campaigns.applyListing(hidden.productId(), new ProductListing("Nova 1", ProductStatus.ACTIVE, false, 1));
 
         mockMvc.perform(get(PATH, hidden.productId()))
                 .andExpect(status().isNotFound())
