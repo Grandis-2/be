@@ -90,6 +90,18 @@ class PreorderRowCheckTest {
     }
 
     @Test
+    void 멈춤_기준_안에_바뀐_등록_대기_취소_중은_처리_중이라_멈춤이_아니다() {
+        RunScope recentlyChanged = scope(AT.minusSeconds(1));
+
+        for (BePreorder inFlight : List.of(preorder("PENDING_SYNC", "RETRY_SCHEDULED", null),
+                preorder("CANCELING", "CANCELED", "RETRY_SCHEDULED"))) {
+            FindingSink sink = sink();
+            check.inspect(new KeyPair(inFlight.token(), inFlight, null), recentlyChanged, sink);
+            assertThat(sink.findings()).isEmpty();
+        }
+    }
+
+    @Test
     void 등록_작업이_없으면_발행_누락이다() {
         assertThat(codes(preorder("PENDING_SYNC", null, null))).containsExactly("OUTBOX_MISSING", "STUCK");
     }

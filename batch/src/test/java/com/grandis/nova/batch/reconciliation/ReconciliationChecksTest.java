@@ -19,6 +19,8 @@ class ReconciliationChecksTest extends BatchIntegrationTest {
 
     private static final Instant TWO_HOURS_AGO = Instant.now().minus(Duration.ofHours(2));
     private static final Instant JUST_NOW = Instant.now().minusSeconds(5);
+    private static final Instant FIVE_MINUTES_AGO = Instant.now().minus(Duration.ofMinutes(5));
+    private static final Instant THIRTY_MINUTES_AGO = Instant.now().minus(Duration.ofMinutes(30));
 
     @Autowired
     ReconciliationService service;
@@ -48,20 +50,30 @@ class ReconciliationChecksTest extends BatchIntegrationTest {
         data.attempt(retried, "TRANSIENT_FAILURE", TWO_HOURS_AGO);
         data.attempt(retried, "SUCCESS", TWO_HOURS_AGO);
         mockActive(retried, "시계");
-        // 막 결제한 결제 가능 — 결제 확인 이벤트가 오는 중일 수 있어 멈춤 기준(45분) 안 결제는 보지 않는다
+        // 30분 전에 결제한 결제 가능 — 결제 확인 이벤트가 재전달 중일 수 있어 멈춤 기준(45분) 안 결제는 보지 않는다
         BePreorderRow justPaid = data.preorder("시계", "n-8", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO);
         mockActive(justPaid, "시계");
-        data.paidOrder(justPaid, "SUCCEEDED", JUST_NOW);
+        data.paidOrder(justPaid, "SUCCEEDED", THIRTY_MINUTES_AGO);
         // 환불된 결제는 결제 성공이 아니다
         BePreorderRow refunded = data.preorder("시계", "n-9", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO);
         mockActive(refunded, "시계");
         data.paidOrder(refunded, "REFUNDED", TWO_HOURS_AGO);
+        // 검사 도중 Mock 에 등록된 등록 대기 — 판정 보류
+        BePreorderRow registering = data.preorder("시계", "n-10", "PENDING_SYNC", "PROCESSING", JUST_NOW);
+        MOCK.active("n-10", "R-N10", registering.customerId().toString(), registering.productId().toString(),
+                TestData.sku("시계"), JUST_NOW);
+        // 5분 전에 결제 가능이 된 예약 — 판정 보류가 아니라 판정해서 일치
+        mockActive(data.preorder("시계", "n-11", "REGISTERED", "SUCCEEDED", FIVE_MINUTES_AGO), "시계");
+        // 5분 전에 Mock 에서 확정된 예약 — 검사 전 일이라(여유 2분 밖) 판정해서 일치
+        BePreorderRow confirmedEarlier = data.preorder("시계", "n-12", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO);
+        MOCK.active("n-12", confirmedEarlier.externalNumber(), confirmedEarlier.customerId().toString(),
+                confirmedEarlier.productId().toString(), TestData.sku("시계"), FIVE_MINUTES_AGO);
 
         service.runScheduled();
 
         assertThat(run()).containsEntry("status", "COMPLETED")
-                .containsEntry("held_count", 0)
-                .containsEntry("pending_sync_count", 1)
+                .containsEntry("held_count", 1)
+                .containsEntry("pending_sync_count", 2)
                 .containsEntry("dead_letter_count", 1);
         assertThat(findings()).isEmpty();
     }
@@ -123,12 +135,23 @@ class ReconciliationChecksTest extends BatchIntegrationTest {
         BePreorderRow paidButRegistered = data.preorder("폰", "c-6", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO);
         mockActive(paidButRegistered, "폰");
         data.paidOrder(paidButRegistered, "SUCCEEDED", TWO_HOURS_AGO);
+        // 조사하며 메모만 고친 예약 — 상태는 결제 가능 그대로라 계속 잡는다
+        BePreorderRow noteEdited = data.preorder("폰", "c-7", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO);
+        mockActive(noteEdited, "폰");
+        data.paidOrder(noteEdited, "SUCCEEDED", TWO_HOURS_AGO);
+        jdbc.sql("UPDATE preorders SET internal_note = 'DLQ 확인 중', updated_at = NOW(6) WHERE id = UUID_TO_BIN(:id)")
+                .param("id", noteEdited.id().toString()).update();
+
+        // 5분 전에 바뀐 예약도 판정한다 — 조치 직후 다시 검사해 확인할 수 있다
+        data.preorder("폰", "d-1", "REGISTERED", "SUCCEEDED", FIVE_MINUTES_AGO);
 
         service.runScheduled();
 
         assertThat(run()).containsEntry("status", "COMPLETED");
         assertThat(findings()).extracting(f -> f.get("check_code"), f -> f.get("target_key")).containsExactlyInAnyOrder(
                 tuple("REGISTERED_NOT_IN_MOCK", "a-1"),
+                tuple("REGISTERED_NOT_IN_MOCK", "d-1"),
+                tuple("PAID_BUT_REGISTERED", "c-7"),
                 tuple("REGISTERED_BUT_MOCK_CANCELED", "a-2"),
                 tuple("NUMBER_MISMATCH", "a-3"),
                 tuple("CONTENT_MISMATCH", "a-4"),
