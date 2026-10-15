@@ -298,6 +298,11 @@ class PromotionApiTest {
         Instant now = Instant.now();
         UUID open = preorder("진행", now.minus(HOUR), now.plus(HOUR));
         jdbcTemplate.update("UPDATE products SET discount_rate = 10 WHERE id = ?", (Object) UuidBinary.toBytes(open));
+        jdbcTemplate.update("UPDATE products SET options = ? WHERE id = ?", """
+                {"axes": [{"key": "color", "label": "색상", "values": [
+                  {"id": "c1", "value": "화이트", "normalized": "화이트", "hex": "#FFFFFF", "surcharge": 0, "images": [{"url": "https://img/w.jpg", "primary": true}]}]}]}
+                """, UuidBinary.toBytes(open));
+        fixtures.optionWithAttributes(open, "ACTIVE", new BigDecimal("1250000"), "화이트", "{\"color\": \"화이트\"}");
         UUID closed = preorder("마감", now.minus(HOUR.multipliedBy(5)), now.minus(HOUR));
         UUID hidden = preorder("숨김", now.minus(HOUR), now.plus(HOUR));
         jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", (Object) UuidBinary.toBytes(hidden));
@@ -321,6 +326,8 @@ class PromotionApiTest {
         JsonNode products = detail.get("products");
         assertThat(ids(products)).containsExactly(open.toString(), closed.toString(), converted.toString());
         assertThat(products.get(0).get("preorderStatus").asString()).isEqualTo("OPEN");
+        assertThat(products.get(0).get("colors").get(0).get("label").asString()).as("홍보 상세 카드에도 색상칩").isEqualTo("화이트");
+        assertThat(products.get(0).get("colors").get(0).get("imageUrls").toString()).isEqualTo("[\"https://img/w.jpg\"]");
         assertThat(products.get(0).get("minPrice").decimalValue()).isEqualByComparingTo("1125000");   // 1,250,000 × 0.9
         assertThat(products.get(0).get("minListPrice").decimalValue()).isEqualByComparingTo("1250000");
         assertThat(products.get(1).get("preorderStatus").asString()).isEqualTo("CLOSED");
