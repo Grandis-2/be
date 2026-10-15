@@ -125,7 +125,7 @@ public class ProductRegistrationService {
 
         // 다른 서비스가 만들 값은 같은 트랜잭션의 아웃박스로 보낸다. 롤백되면 이벤트도 없다
         outbox.append(request.saleMode() == SaleMode.PREORDER
-                ? PreorderProductRegistered.of(productId, request.campaign(), request.shipmentBatches())
+                ? PreorderProductRegistered.of(product, request.campaign(), request.shipmentBatches())
                 : new InStockProductRegistered(productId, initialStock));
         // 미리보기는 커밋 전에 같은 트랜잭션에서 읽는다 — 커밋 전엔 남이 이 상품을 못 건드려 저장한 그대로가 실린다.
         // 준비는 아직이다: 이벤트는 커밋 뒤에 나가므로 회차 · 재고 행이 이 시점에 있을 수 없다
