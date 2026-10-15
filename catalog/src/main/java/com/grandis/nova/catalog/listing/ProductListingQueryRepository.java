@@ -90,14 +90,16 @@ public class ProductListingQueryRepository {
             """.formatted(MIN_LIST_PRICE, Discount.sql(MIN_LIST_PRICE, "p.discount_rate"));
 
     /**
-     * 색상칩에 쓰는 칸 — 옵션 문서와, 판매 중 옵션이 고른 색상(정규화값, 목록의 color 필터가 보는 값). 칩을 내보내는 회원 목록 · 홍보 상세만 읽는다
-     * (관리자 목록 · 홍보 목록은 칩을 쓰지 않는다 — 행마다 옵션 문서가 수 KB 다).
+     * 색상칩에 쓰는 칸 — 옵션 문서와, 판매 중 옵션이 고른 색상(정규화값, 목록의 color 필터가 보는 값). 칩을 내보내는 회원 목록 · 홍보 상세만,
+     * 쪽을 고른 **뒤에** 그 상품 id 로 따로 읽는다({@link #withColors}) — 목록 문장에 넣으면 정렬 전에 후보 행 전부에서 계산되고(실측: 후보 300행에
+     * 56ms → 72ms, 정렬 방식과 상관없이) 행마다 수 KB 인 옵션 문서가 정렬 버퍼에 실린다.
      */
     private static final String CHIP_COLUMNS = """
-            ,
-                   p.options,
+            SELECT p.id, p.options,
                    (SELECT JSON_ARRAYAGG(sc.filter_attributes->>'$.color') FROM product_options sc
                      WHERE sc.product_id = p.id AND sc.status = 'ACTIVE') AS sellable_colors
+              FROM products p
+             WHERE p.id IN (:ids)
             """;
 
     /** 관리자 목록 — 노출 규칙 없이 전부. */
@@ -137,12 +139,12 @@ public class ProductListingQueryRepository {
     }
 
     public List<ProductListItem> find(ProductListFilter filter, ProductSort sort, Instant now, int page, int size) {
-        StringBuilder sql = new StringBuilder(SELECT_ITEMS.stripTrailing()).append(CHIP_COLUMNS).append(FROM_VISIBLE);
+        StringBuilder sql = new StringBuilder(SELECT_ITEMS).append(FROM_VISIBLE);
         MapSqlParameterSource params = baseParams(now);
         appendFilters(sql, params, filter);
         sql.append(sort.orderBy()).append(" LIMIT :limit OFFSET :offset");
         params.addValue("limit", size).addValue("offset", (long) page * size);
-        return jdbc.query(sql.toString(), params, (rs, rowNum) -> toItem(rs, now, true));
+        return withColors(jdbc.query(sql.toString(), params, (rs, rowNum) -> toItem(rs, now)));
     }
 
     public long countForAdmin(AdminProductListFilter filter) {
@@ -160,7 +162,7 @@ public class ProductListingQueryRepository {
         appendAdminFilters(sql, params, filter);
         sql.append(" ORDER BY p.created_at DESC, p.id DESC LIMIT :limit OFFSET :offset");
         params.addValue("limit", size).addValue("offset", (long) page * size);
-        return jdbc.query(sql.toString(), params, (rs, rowNum) -> AdminProductListItem.of(toItem(rs, now, false),
+        return jdbc.query(sql.toString(), params, (rs, rowNum) -> AdminProductListItem.of(toItem(rs, now),
                 rs.getBoolean("visible"), rs.getBoolean("ready"), rs.getInt("option_count")));
     }
 
@@ -345,15 +347,30 @@ public class ProductListingQueryRepository {
         if (ids.isEmpty()) {
             return List.of();
         }
-        String sql = SELECT_ITEMS.stripTrailing() + (withColors ? CHIP_COLUMNS : "\n") + """
+        String sql = SELECT_ITEMS + """
                   FROM products p
                   LEFT JOIN preorder_campaigns c ON c.product_id = p.id
                  WHERE p.id IN (:ids) AND p.visible = 1 AND p.status = 'ACTIVE' AND
                 """ + READY;
         Map<UUID, ProductListItem> byId = new HashMap<>();
         jdbc.query(sql, new MapSqlParameterSource("ids", ids.stream().map(UuidBinary::toBytes).toList()),
-                (rs, rowNum) -> toItem(rs, now, withColors)).forEach(item -> byId.put(item.productId(), item));
-        return ids.stream().map(byId::get).filter(java.util.Objects::nonNull).toList();
+                (rs, rowNum) -> toItem(rs, now)).forEach(item -> byId.put(item.productId(), item));
+        List<ProductListItem> cards = ids.stream().map(byId::get).filter(java.util.Objects::nonNull).toList();
+        return withColors ? withColors(cards) : cards;
+    }
+
+    /** 고른 상품들에 색상칩을 붙인다 — 칩 칸({@link #CHIP_COLUMNS})을 그 상품 id 로 한 번에 읽는다. 순서는 그대로. */
+    private List<ProductListItem> withColors(List<ProductListItem> items) {
+        if (items.isEmpty()) {
+            return items;
+        }
+        Map<UUID, List<ProductOptions.ColorChip>> chips = new HashMap<>();
+        jdbc.query(CHIP_COLUMNS, new MapSqlParameterSource("ids", items.stream().map(item -> UuidBinary.toBytes(item.productId())).toList()),
+                (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+                    UUID productId = UuidBinary.fromBytes(rs.getBytes("id"));
+                    chips.put(productId, colorChips(productId, rs.getString("options"), rs.getString("sellable_colors")));
+                });
+        return items.stream().map(item -> item.withColors(chips.getOrDefault(item.productId(), List.of()))).toList();
     }
 
     /**
@@ -402,8 +419,8 @@ public class ProductListingQueryRepository {
         return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
-    /** @param withColors 색상칩 칸({@link #CHIP_COLUMNS})을 읽었다. false 면 colors 는 빈 목록 */
-    private static ProductListItem toItem(ResultSet rs, Instant now, boolean withColors) throws SQLException {
+    /** 색상칩은 비운다 — 칩을 내보내는 곳은 {@link #withColors} 로 붙인다. */
+    private static ProductListItem toItem(ResultSet rs, Instant now) throws SQLException {
         UUID productId = UuidBinary.fromBytes(rs.getBytes("id"));
         SaleMode saleMode = SaleMode.valueOf(rs.getString("sale_mode"));
         // 회차 시각은 사전예약만 — 일반 전환한 상품에도 preorder 회차 행이 남아 있어 그대로 싣지 않는다
@@ -411,10 +428,9 @@ public class ProductListingQueryRepository {
         Instant closesAt = saleMode == SaleMode.PREORDER ? instant(rs, "closes_at") : null;
         BigDecimal minPrice = rs.getBigDecimal("min_price");
         BigDecimal minListPrice = rs.getBigDecimal("min_list_price");
-        List<ProductOptions.ColorChip> colors = withColors ? colorChips(productId, rs.getString("options"), rs.getString("sellable_colors")) : List.of();
         return new ProductListItem(productId, saleMode, rs.getString("title"),
                 Brand.valueOf(rs.getString("brand")), rs.getString("model_name"), rs.getString("image_url"),
-                colors,
+                List.of(),
                 SaleStatus.valueOf(rs.getString("status")), minPrice, minListPrice, rs.getInt("discount_rate"), rs.getBoolean("sellable"), rs.getBoolean("sold_out"),
                 null, opensAt, closesAt).at(now);   // 접수 단계는 캐시에서 꺼낼 때와 같은 규칙(ProductListItem#at)으로
     }

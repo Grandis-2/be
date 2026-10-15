@@ -47,6 +47,12 @@ public record ProductListItem(
         Instant closesAt
 ) {
 
+    /** 색상칩만 바꾼 사본. */
+    public ProductListItem withColors(List<ProductOptions.ColorChip> replaced) {
+        return new ProductListItem(productId, saleMode, title, brand, modelName, imageUrl, replaced, status, minPrice, minListPrice, discountRate,
+                sellable, soldOut, preorderStatus, opensAt, closesAt);
+    }
+
     /** 시각으로 정하는 칸(접수 단계)을 now 로 다시 계산한 사본 — 캐시에 든 값이 만든 때의 단계를 내보내지 않게. 계산 규칙은 목록 쿼리와 같다. */
     public ProductListItem at(Instant now) {
         PreorderSaleStatus current = saleMode == SaleMode.PREORDER && opensAt != null && closesAt != null
