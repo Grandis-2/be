@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 /**
  * STUCK 가운데 예약 표 밖의 것 — 기준 시각 전에 생겼는데 아직 발행되지 않은 preorder 이벤트, 기준 시각 전에 시작했는데 결과가
  * 없는 외부 호출 차례. 멈춘 건을 다시 보내는 작업이 없고 SQS 보존 기간이 지나면 재전달도 끊겨 이 검사만 찾을 수 있다.
- * 기준 시각(시작 − 45분)이 멈춤 기준 시간과 같다. 오래 멈춘 등록 대기 · 취소 중 예약은 {@link PreorderRowCheck} 가 본다.
+ * 멈춤 경계(시작 − 45분) 전부터 그대로인 행만 본다. 오래 멈춘 등록 대기 · 취소 중 예약은 {@link PreorderRowCheck} 가 본다.
  *
  * 대상 키는 그 행이 가리키는 예약의 외부 키다(관리자 예약 상세로 연다). 회차 이벤트는 예약이 없어 상품 id 다.
  * 같은 예약이 이미 STUCK 이면 한 건으로 남는다.
@@ -51,8 +51,9 @@ class StuckRowsCheck implements InternalCheck {
     }
 
     @Override
-    public void inspect(UUID productId, Instant cutoff, FindingSink findings) {
-        LocalDateTime at = LocalDateTime.ofInstant(cutoff, ZoneOffset.UTC);
+    public void inspect(RunScope scope, FindingSink findings) {
+        UUID productId = scope.productId();
+        LocalDateTime at = LocalDateTime.ofInstant(scope.stuckBefore(), ZoneOffset.UTC);
         statement(UNPUBLISHED + (productId == null ? "" : UNPUBLISHED_IN_PRODUCT), at, productId)
                 .query(rs -> {
                     findings.add(CheckCode.STUCK, rs.getString("target_key"),

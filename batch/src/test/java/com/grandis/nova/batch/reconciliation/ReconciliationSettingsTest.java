@@ -35,8 +35,8 @@ class ReconciliationSettingsTest {
 
     private static ReconciliationService service(Duration runTimeout, Duration mockMaxDuration) {
         ReconciliationProperties properties = new ReconciliationProperties(true, "0 0 4 * * *", ZoneId.of("Asia/Seoul"),
-                Duration.ofSeconds(5), Duration.ofMinutes(5), Duration.ofDays(1), Duration.ofMinutes(45),
-                Duration.ofHours(1), 1000, 10000, runTimeout);
+                Duration.ofSeconds(5), Duration.ofMinutes(5), Duration.ofDays(1), Duration.ofMinutes(2),
+                Duration.ofMinutes(45), Duration.ofHours(1), 1000, 10000, runTimeout);
         MockLedgerProperties mockLedger = new MockLedgerProperties(URI.create("http://localhost:8081"),
                 Duration.ofSeconds(2), Duration.ofSeconds(10), 1000, DataSize.ofMegabytes(8), mockMaxDuration, 2,
                 Duration.ofSeconds(1));

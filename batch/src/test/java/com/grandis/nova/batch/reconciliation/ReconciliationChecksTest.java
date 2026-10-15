@@ -39,7 +39,7 @@ class ReconciliationChecksTest extends BatchIntegrationTest {
         MOCK.cancelMarker("n-4", TWO_HOURS_AGO);
         // 관리자 대기(등록 작업 DEAD_LETTER)는 불일치가 아니라 건수다
         data.preorder("폰", "n-5", "PENDING_SYNC", "DEAD_LETTER", TWO_HOURS_AGO);
-        // 막 들어온 등록 대기 — 발행 전 이벤트 · 결과 없는 차례도 기준 시각 뒤라 보지 않는다
+        // 막 들어온 등록 대기 — 처리 중이라 불일치가 아니고, 발행 전 이벤트 · 결과 없는 차례도 멈춤 기준(45분) 안이라 멈춤이 아니다
         BePreorderRow fresh = data.preorder("시계", "n-6", "PENDING_SYNC", "PENDING", JUST_NOW);
         data.registerJobReady(fresh, 1, JUST_NOW, null);
         data.attempt(fresh, null, JUST_NOW);
@@ -48,7 +48,7 @@ class ReconciliationChecksTest extends BatchIntegrationTest {
         data.attempt(retried, "TRANSIENT_FAILURE", TWO_HOURS_AGO);
         data.attempt(retried, "SUCCESS", TWO_HOURS_AGO);
         mockActive(retried, "시계");
-        // 막 결제한 결제 가능 — 결제 확인 이벤트가 오는 중일 수 있어 기준 시각 뒤 결제는 보지 않는다
+        // 막 결제한 결제 가능 — 결제 확인 이벤트가 오는 중일 수 있어 멈춤 기준(45분) 안 결제는 보지 않는다
         BePreorderRow justPaid = data.preorder("시계", "n-8", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO);
         mockActive(justPaid, "시계");
         data.paidOrder(justPaid, "SUCCEEDED", JUST_NOW);
@@ -60,7 +60,7 @@ class ReconciliationChecksTest extends BatchIntegrationTest {
         service.runScheduled();
 
         assertThat(run()).containsEntry("status", "COMPLETED")
-                .containsEntry("held_count", 1)
+                .containsEntry("held_count", 0)
                 .containsEntry("pending_sync_count", 1)
                 .containsEntry("dead_letter_count", 1);
         assertThat(findings()).isEmpty();

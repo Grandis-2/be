@@ -61,7 +61,8 @@ class StreamingJdbcTest extends BatchIntegrationTest {
 
         snapshot.executeWithoutResult(status -> {
             FindingSink findings = new FindingSink(json, 2);
-            assertThatThrownBy(() -> paidButRegistered.inspect(null, Instant.now(), findings))
+            Instant now = Instant.now();
+            assertThatThrownBy(() -> paidButRegistered.inspect(new RunScope(null, now, now, 2, key -> false), findings))
                     .isInstanceOf(TooManyFindings.class);
             assertThat(findings.size()).isEqualTo(2);
             // 끊긴 결과가 닫히지 않았으면 여기서 "Streaming result set … is still active" 로 실패한다

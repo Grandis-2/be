@@ -17,6 +17,8 @@ class MockLedgerCheckTest {
     private static final Instant AT = Instant.parse("2026-10-12T01:00:00Z");
     private static final String CUSTOMER = "0199a3f2-7c4e-7b20-9c3e-000000000001";
     private static final String PRODUCT = "0199a3f2-7c4e-7b20-9c3e-000000000002";
+    /** 이 확인할 것은 경계 시각을 쓰지 않는다 */
+    private static final RunScope SCOPE = new RunScope(null, AT, AT, 100, key -> false);
 
     private final MockLedgerCheck check = new MockLedgerCheck();
 
@@ -107,7 +109,7 @@ class MockLedgerCheckTest {
 
     private List<NewFinding> inspect(BePreorder be, MockLedgerEntry mock) {
         FindingSink sink = new FindingSink(JsonMapper.builder().build(), 100);
-        check.inspect(new KeyPair("k-1", be, mock), sink);
+        check.inspect(new KeyPair("k-1", be, mock), SCOPE, sink);
         return sink.findings();
     }
 

@@ -13,7 +13,8 @@ import org.springframework.stereotype.Component;
  * 접수 · 재처리는 작업과 이벤트를 한 트랜잭션에 넣으므로, 이벤트가 없으면 worker 가 그 작업을 영영 모른다.
  * 발행이 끝난 이벤트는 보존 기간(7일) 뒤 지워지므로 대기 중인 작업만 본다. 등록 작업이 아예 없는 예약은 {@link PreorderRowCheck} 가 본다.
  *
- * 이벤트 표에는 대상 id 인덱스가 없어 작업마다 훑지만, 기준 시각(시작 − 45분) 전부터 대기인 작업은 정상이면 없다.
+ * 이벤트 표에는 대상 id 인덱스가 없어 작업마다 훑는다. 그래서 멈춤 경계(시작 − 45분) 전부터 대기인 작업만 본다 — 정상이면 없고,
+ * 이벤트가 없는 작업은 영영 처리되지 않으므로 늦게 잡아도 놓치지 않는다.
  */
 @Component
 class RegisterEventCheck implements InternalCheck {
@@ -36,10 +37,11 @@ class RegisterEventCheck implements InternalCheck {
     }
 
     @Override
-    public void inspect(UUID productId, Instant cutoff, FindingSink findings) {
+    public void inspect(RunScope scope, FindingSink findings) {
+        UUID productId = scope.productId();
         JdbcClient.StatementSpec statement = jdbc
                 .sql(SQL + (productId == null ? "" : " AND p.product_id = UUID_TO_BIN(:productId)"))
-                .param("cutoff", LocalDateTime.ofInstant(cutoff, ZoneOffset.UTC));
+                .param("cutoff", LocalDateTime.ofInstant(scope.stuckBefore(), ZoneOffset.UTC));
         if (productId != null) {
             statement = statement.param("productId", productId.toString());
         }

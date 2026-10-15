@@ -28,7 +28,7 @@ import org.springframework.stereotype.Component;
 class MockLedgerCheck implements Check {
 
     @Override
-    public void inspect(KeyPair pair, FindingSink findings) {
+    public void inspect(KeyPair pair, RunScope scope, FindingSink findings) {
         BePreorder be = pair.be();
         MockLedgerEntry mock = pair.mock();
         if (be == null) {

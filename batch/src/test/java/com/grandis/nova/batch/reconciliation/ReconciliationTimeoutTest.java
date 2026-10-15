@@ -29,7 +29,7 @@ class ReconciliationTimeoutTest extends BatchIntegrationTest {
         @Bean
         @Primary
         Reconciler slowInternalCheckOnly(JdbcClient jdbc, JsonMapper json) {
-            InternalCheck slow = (productId, cutoff, findings) -> jdbc.sql("SELECT SLEEP(5)").query(Integer.class).single();
+            InternalCheck slow = (scope, findings) -> jdbc.sql("SELECT SLEEP(5)").query(Integer.class).single();
             return new Reconciler(List.of(), List.of(slow), json);
         }
     }
