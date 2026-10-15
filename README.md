@@ -62,7 +62,8 @@ flowchart LR
     PO -- outbox --> Q[(SQS)]
     O -- outbox --> Q
     C -- outbox --> Q
-    Q --> W[worker<br/>외부 등록 · 알림]
+    Q --> W[worker<br/>외부 등록 · 드로우]
+    Q -- 알림 --> M
     W --> X[외부 예약 Mock]
 
     B[batch<br/>만료 · 정합성 검사] -.읽기.-> DB[(MySQL)]
@@ -256,13 +257,13 @@ worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이
 
 | 모듈 | 하는 일 | 상태 |
 | --- | --- | --- |
-| `member` | 카카오 로그인 · JWT 발급 · 회원 · 기본 배송지 | 동작 |
+| `member` | 카카오 로그인 · JWT 발급 · 회원 · 기본 배송지 · 알림 저장 · 조회 | 동작 |
 | `catalog` | 상품 · 옵션 · 리뷰 · 관리자 등록/편집 | 동작 |
 | `waitingroom` | 입장 대기열 — 줄 서기 · 입장권 · 접수 전달 | 동작 |
 | `preorder` | 사전예약 접수 · 순번 · 회차 · 배송 차수 · 취소 · 외부 작업 원장 · DLQ 관리 | 동작 |
 | `order` | 주문 · 재고 · 장바구니 · 드로우 | 동작 |
 | `payment` | 토스 결제 · 결제 원장 · 복구 · 환불 (내부 전용) | 동작 |
-| `worker` | SQS 를 받아 외부 예약 등록 · 취소, 드로우 응모 · 추첨, 알림 (DB 없음) | 예약 등록 · 취소 · 드로우 동작, 알림 구현 중 |
+| `worker` | SQS 를 받아 외부 예약 등록 · 취소, 드로우 응모 · 추첨 (DB 없음) | 예약 등록 · 취소 · 드로우 동작 |
 | `batch` | 결제 기한 만료 스캔 · 우리 DB 와 외부 Mock DB 의 정합성 검사 | 골격 — 구현 중 |
 | `common:*` | 서비스가 함께 쓰는 라이브러리 (응답 · 보안 · outbox · SQS · Redis 등) | — |
 
@@ -271,7 +272,7 @@ worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이
 
 | 서비스 | 표 |
 | --- | --- |
-| `member` | `customers` · `refresh_tokens` |
+| `member` | `customers` · `refresh_tokens` · `notifications` |
 | `catalog` | `categories` · `products` · `product_options` · `product_reviews` · `catalog_outbox_events` |
 | `preorder` | `preorders` · `preorder_events` · `preorder_campaigns` · `shipment_batches` · `preorder_outbox_events` · `dead_letter_events`<br>`preorder_sync_jobs` · `preorder_sync_attempts` (외부 작업 · 시도 원장) |
 | `order` | `orders` · `order_items` · `order_events` · `cart_items` · `option_inventories` · `draw_campaigns` · `draw_entries` |

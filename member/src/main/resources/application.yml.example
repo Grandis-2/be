@@ -120,6 +120,21 @@ nova:
   cors:
     allowed-origins:
       - http://localhost:9000   # 로컬 문서 허브(docker/openapi-hub)
+  # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다
+  sqs:
+    region: ap-northeast-2
+    endpoint: http://localhost:4566
+    api-call-timeout: 3s
+    # 알림 요청(preorder · order → member) 소비기. 끄면 알림이 큐에 쌓이기만 한다 — 운영에서 끄지 않는다.
+    # Floci 없이 띄우면 받기 실패 경고만 남는다(최대 30초 간격). 로그인만 볼 때는 false 로
+    consumer:
+      enabled: true
+      queue: notification
+      concurrency: 1
+      wait-seconds: 20
+      visibility: 5m       # 처리 한 건보다 길게
+      backoff-base: 30s    # DB 순단에 DLQ 가 차지 않게 — 5번 실패해 DLQ 까지 약 6~12분(5s 면 1~3분)
+      backoff-max: 5m
 
 # 서명은 RS256. member 만 개인키를 갖고 서명한다. 다른 서비스는 jwk-set-uri 로 공개키를 받아 검증만 한다.
 #   개인키 생성: openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out jwt.pem   (PKCS#8, "BEGIN PRIVATE KEY")
