@@ -6,6 +6,7 @@ import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -151,6 +152,15 @@ public record ProductOptions(List<Axis> axes, List<Image> defaultImages, List<Se
     /** 보증만 바꾼 문서. */
     public ProductOptions withWarranty(Warranty replaced) {
         return new ProductOptions(axes, defaultImages, detailImages, replaced);
+    }
+
+    /** 문서의 사진 주소 전부(기본 묶음 → 축 값 → 상세 영역 순, 중복 없이). 사진 붙이기 · 떼기가 저장 전후를 비교한다. */
+    public Set<String> imageUrls() {
+        Set<String> urls = new LinkedHashSet<>();
+        defaultImages.forEach(image -> urls.add(image.url()));
+        axes.forEach(axis -> axis.values().forEach(value -> value.images().forEach(image -> urls.add(image.url()))));
+        detailImages.forEach(section -> section.images().forEach(image -> urls.add(image.url())));
+        return urls;
     }
 
     /**

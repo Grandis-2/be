@@ -2,6 +2,8 @@ package com.grandis.nova.catalog.edit;
 
 import com.grandis.nova.catalog.detail.AdminProductDetail;
 import com.grandis.nova.catalog.detail.ProductDetailService;
+import com.grandis.nova.catalog.image.ImageAttachments;
+import com.grandis.nova.catalog.image.ImagePurpose;
 import com.grandis.nova.catalog.option.CollationDuplicates;
 import com.grandis.nova.catalog.option.OptionText;
 import com.grandis.nova.catalog.option.ProductOptions;
@@ -33,22 +35,21 @@ import org.springframework.transaction.annotation.Transactional;
 public class ProductImageEditService {
 
     private final ProductRepository products;
-    private final ProductRegistrationValidator validator;
     private final ProductDetailService detailService;
     private final CollationDuplicates duplicates;
+    private final ImageAttachments images;
 
-    public ProductImageEditService(ProductRepository products, ProductRegistrationValidator validator, ProductDetailService detailService,
-                                   CollationDuplicates duplicates) {
+    public ProductImageEditService(ProductRepository products, ProductDetailService detailService, CollationDuplicates duplicates,
+                                   ImageAttachments images) {
         this.products = products;
-        this.validator = validator;
         this.detailService = detailService;
         this.duplicates = duplicates;
+        this.images = images;
     }
 
     /** 그 묶음 맨 뒤에 넣는다. 빈 상품 사진 묶음에 넣은 첫 장은 대표가 된다(등록과 같은 규칙). 상품 사진 묶음은 최대 10장. */
     @Transactional
     public AdminProductDetail add(UUID productId, ProductImageAddRequest request) {
-        validator.requireUploadedUrl(request.url(), "url");
         Product product = lock(productId);
         ProductOptions document = product.getOptions();
         requireAbsent(document, request.url(), "url");
@@ -56,22 +57,21 @@ public class ProductImageEditService {
         ProductOptions next = request.kind() == ProductImageAddRequest.Kind.GALLERY
                 ? addToGallery(document, hasBundle ? request.bundle() : null, request.url())
                 : addToDetail(document, hasBundle ? request.bundle() : null, request.url());
-        return save(product, next);
+        return save(product, next, "url");
     }
 
     /** 자리와 대표 여부는 그대로 두고 주소만 바꾼다. */
     @Transactional
     public AdminProductDetail replace(UUID productId, ProductImageReplaceRequest request) {
-        validator.requireUploadedUrl(request.newUrl(), "newUrl");
         Product product = lock(productId);
         ProductOptions document = product.getOptions();
         requirePresent(document, request.url());
         if (!request.newUrl().equals(request.url())) {
             requireAbsent(document, request.newUrl(), "newUrl");
         }
-        return save(product, map(document, images -> images.stream()
+        return save(product, map(document, list -> list.stream()
                 .map(image -> image.url().equals(request.url()) ? new Image(request.newUrl(), image.primary()) : image)
-                .toList()));
+                .toList()), "newUrl");
     }
 
     /**
@@ -96,7 +96,7 @@ public class ProductImageEditService {
                 .map(section -> new Section(section.section(), without(section.images(), url)))
                 .filter(section -> !section.images().isEmpty())
                 .toList();
-        return save(product, new ProductOptions(axes, withoutGallery.apply(document.defaultImages()), detail, document.warranty()));
+        return save(product, new ProductOptions(axes, withoutGallery.apply(document.defaultImages()), detail, document.warranty()), "url");
     }
 
     private ProductOptions addToGallery(ProductOptions document, String bundle, String url) {
@@ -216,7 +216,9 @@ public class ProductImageEditService {
         return products.findForUpdate(productId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
     }
 
-    private AdminProductDetail save(Product product, ProductOptions next) {
+    /** 문서를 바꾸고 사진을 붙이고 뗀다. field 는 새 사진 주소가 올린 사진이 아닐 때 400 이 가리키는 칸. */
+    private AdminProductDetail save(Product product, ProductOptions next, String field) {
+        images.sync(ImagePurpose.PRODUCT, product.getOptions().imageUrls(), next.imageUrls(), url -> field);
         product.replaceOptions(next);
         products.flush();
         return detailService.findAdminProduct(product.getId());

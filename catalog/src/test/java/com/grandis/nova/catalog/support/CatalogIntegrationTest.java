@@ -53,6 +53,6 @@ import java.lang.annotation.Target;
         // 켠 채로 도는 캐시 시험(ReadCache · CatalogReadCache 시험)이 본다
         "nova.read-cache.enabled=false"
 })
-@Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class})
+@Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class, ImageAttachmentsTestConfig.class})
 public @interface CatalogIntegrationTest {
 }
