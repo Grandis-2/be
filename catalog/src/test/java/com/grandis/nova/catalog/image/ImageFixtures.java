@@ -120,9 +120,14 @@ final class ImageFixtures {
 
     /** 선형 RGB 프로파일의 iCCP 청크. */
     static byte[] iccpChunk() {
+        return iccpChunk(ICC_Profile.getInstance(ColorSpace.CS_LINEAR_RGB).getData());
+    }
+
+    /** 내용(풀린 바이트)을 마음대로 정한 iCCP 청크. */
+    static byte[] iccpChunk(byte[] profile) {
         ByteArrayOutputStream z = new ByteArrayOutputStream();
         try (DeflaterOutputStream d = new DeflaterOutputStream(z)) {
-            d.write(ICC_Profile.getInstance(ColorSpace.CS_LINEAR_RGB).getData());
+            d.write(profile);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
@@ -142,6 +147,20 @@ final class ImageFixtures {
         out.writeBytes(chunk);
         out.write(png, headerEnd, png.length - headerEnd);
         return out.toByteArray();
+    }
+
+    /** 그 종류의 첫 청크 내용. 없으면 null. */
+    static byte[] pngChunkData(byte[] png, String type) {
+        for (int i = 8; i + 12 <= png.length; ) {
+            int n = ((png[i] & 0xFF) << 24) | ((png[i + 1] & 0xFF) << 16) | ((png[i + 2] & 0xFF) << 8) | (png[i + 3] & 0xFF);
+            if (new String(png, i + 4, 4, StandardCharsets.ISO_8859_1).equals(type)) {
+                byte[] data = new byte[n];
+                System.arraycopy(png, i + 8, data, 0, n);
+                return data;
+            }
+            i += 12 + n;
+        }
+        return null;
     }
 
     /** 청크 종류 목록(순서대로). */

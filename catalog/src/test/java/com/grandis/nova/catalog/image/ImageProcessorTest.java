@@ -8,10 +8,13 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.core.io.ByteArrayResource;
 
 import javax.imageio.ImageIO;
+import java.awt.color.ColorSpace;
+import java.awt.color.ICC_Profile;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.zip.InflaterInputStream;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiFunction;
@@ -157,6 +160,40 @@ class ImageProcessorTest {
 
         byte[] plainOut = process(plain);
         assertThat(ImageFixtures.pngChunkTypes(plainOut)).doesNotContain("iCCP", "sRGB", "gAMA", "cHRM");
+    }
+
+    @Test
+    @DisplayName("iCCP 는 풀어 읽은 프로파일로 새로 쓴다 — 같은 프로파일이 남는다. 프로파일이 아닌 내용 · 1MiB 넘게 풀리는 내용은 400(file)")
+    void iccpIsParsedAndRewritten() throws Exception {
+        byte[] linear = ICC_Profile.getInstance(ColorSpace.CS_LINEAR_RGB).getData();
+        byte[] out = process(ImageFixtures.withChunkAfterHeader(ImageFixtures.png(8, 8), ImageFixtures.iccpChunk(linear)));
+        byte[] data = ImageFixtures.pngChunkData(out, "iCCP");
+        int nul = 0;
+        while (data[nul] != 0) {
+            nul++;
+        }
+        byte[] inflated = new InflaterInputStream(new ByteArrayInputStream(data, nul + 2, data.length - nul - 2)).readAllBytes();
+        assertThat(ICC_Profile.getInstance(inflated).getData()).isEqualTo(ICC_Profile.getInstance(linear).getData());
+
+        byte[] notAProfile = ImageFixtures.withChunkAfterHeader(ImageFixtures.png(8, 8), ImageFixtures.iccpChunk("<script>".repeat(100).getBytes()));
+        assertThatThrownBy(() -> process(notAProfile))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.details().toString()).contains("file", "ICC"));
+        byte[] bomb = ImageFixtures.withChunkAfterHeader(ImageFixtures.png(8, 8), ImageFixtures.iccpChunk(new byte[PngColorChunks.MAX_PROFILE_BYTES + 1]));
+        assertThat(bomb.length).as("압축돼 작다").isLessThan(16 * 1024);
+        assertThatThrownBy(() -> process(bomb))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.details().toString()).contains("file", "ICC"));
+    }
+
+    @Test
+    @DisplayName("sRGB 가 있으면 iCCP 는 쓰지 않는다(둘 중 하나가 규격) · 길이가 틀린 gAMA 는 버린다")
+    void srgbWinsAndMalformedFixedChunksAreDropped() {
+        byte[] png = ImageFixtures.withChunkAfterHeader(ImageFixtures.png(8, 8), ImageFixtures.iccpChunk());
+        png = ImageFixtures.withChunkAfterHeader(png, ImageFixtures.chunk("sRGB", new byte[]{0}));
+        png = ImageFixtures.withChunkAfterHeader(png, ImageFixtures.chunk("gAMA", new byte[]{0, 0, 1}));
+        assertThat(ImageFixtures.pngChunkTypes(png)).contains("iCCP", "sRGB", "gAMA");
+
+        byte[] out = process(png);
+        assertThat(ImageFixtures.pngChunkTypes(out)).contains("sRGB").doesNotContain("iCCP", "gAMA");
     }
 
     @Test

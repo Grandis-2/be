@@ -20,10 +20,11 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Iterator;
+import java.util.List;
 
 /**
  * 올린 파일을 검사하고 다시 인코딩한다(OWASP 파일 업로드: 앞 바이트로 형식 판정 · 풀기 전 크기 확인 · 디코딩 후 재인코딩 · 메타데이터 제거).
- * 다시 인코딩한 파일에는 픽셀과 색 정보만 남는다 — EXIF(촬영 위치 등) · 주석 · 뒤에 붙은 바이트는 빠진다.
+ * 다시 인코딩한 파일에는 픽셀과 색 정보만 남는다 — EXIF(촬영 위치 등) · 주석 · 뒤에 붙은 바이트는 빠지고, 색 정보도 검사해 새로 쓴다({@link PngColorChunks}).
  *
  * 메모리: 풀린 크기는 파일 크기와 상관없다(작은 PNG 가 수백 MB 로 풀린다). 그래서 풀기 전에 헤더의 가로 · 세로로 {@link #MAX_SIDE} · {@link #MAX_PIXELS}
  * 를 본다. 한 장이 쓰는 메모리의 상한과 동시 처리 수({@link ImageUploadService})가 함께 힙 사용을 묶는다.
@@ -99,7 +100,13 @@ public class ImageProcessor {
         if (image.format() == ImageFormat.JPEG) {
             out = writeJpeg(orient(pixels, JpegOrientation.of(bytes)));
         } else {
-            out = PngColorChunks.insertAfterHeader(writePng(pixels), PngColorChunks.extract(bytes));
+            List<byte[]> color;
+            try {
+                color = PngColorChunks.extract(bytes);
+            } catch (IllegalArgumentException e) {
+                throw invalid("색 프로파일(ICC)을 읽을 수 없습니다. sRGB 로 다시 저장해 올려 주세요.");
+            }
+            out = PngColorChunks.insertAfterHeader(writePng(pixels), color);
         }
         if (out.length > MAX_BYTES) {
             throw invalid("다시 저장한 파일이 %d 바이트(10MiB)를 넘습니다. 크기를 줄여 올려 주세요.".formatted(MAX_BYTES));
