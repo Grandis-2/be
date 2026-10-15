@@ -53,7 +53,10 @@ public class CatalogReadCache {
     /** 올리는 곳이 없다 — 카테고리는 운영 초기 데이터로만 바뀐다(관리 API 없음). TTL 이 끝낸다. */
     static final String CATEGORIES = "categories";
 
-    /** 상품 목록(재고 · 노출이 쿼리 안에서 정해져 실시간 칸을 따로 읽을 수 없다). */
+    /**
+     * 상품 목록(재고 · 노출이 쿼리 안에서 정해져 실시간 칸을 따로 읽을 수 없다). 사전예약이 목록에 나오고 빠지는 순간(오픈 · 마감)도 쿼리 시각
+     * 기준이라 이만큼 늦을 수 있다 — 접수 단계 칸은 꺼낼 때 다시 계산한다.
+     */
     public static final Duration PRODUCT_TTL = Duration.ofSeconds(5);
     /** 상품 상세의 본문 — catalog 가 고치면 바로 비우므로 이 값은 놓친 비우기의 상한이다. 실시간 칸은 캐시하지 않는다. */
     public static final Duration DETAIL_TTL = Duration.ofMinutes(10);
