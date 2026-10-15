@@ -87,6 +87,8 @@ class WaitingroomAdminApiTest {
                 .bodyValue(Map.of("globalCredit", 0)).exchange().expectStatus().isForbidden();
         client.delete().uri(BASE + "/max-wait").headers(headers -> headers.setBearerAuth(TestJwts.user(customerId(1), now)))
                 .exchange().expectStatus().isForbidden();
+        client.put().uri(BASE + "/leave-grace").headers(headers -> headers.setBearerAuth(TestJwts.user(customerId(1), now)))
+                .bodyValue(Map.of("seconds", 600)).exchange().expectStatus().isForbidden();
 
         assertThat(redis.opsForHash().size(RedisKeys.SETTINGS).block(WAIT)).isZero();
     }
@@ -110,12 +112,15 @@ class WaitingroomAdminApiTest {
     void 저장된_값이_깨져_리더가_기본값을_쓰면_출처도_기본값이다() {
         redis.opsForHash().put(RedisKeys.SETTINGS, "global-credit", "-5").block(WAIT);
         redis.opsForHash().put(RedisKeys.SETTINGS, "max-wait-sec", "0").block(WAIT);
+        redis.opsForHash().put(RedisKeys.SETTINGS, "leave-grace-sec", "10").block(WAIT);
 
         get("/admission-rate").expectStatus().isOk().expectBody()
                 .jsonPath("$.data.globalCredit.value").isEqualTo(150)
                 .jsonPath("$.data.globalCredit.source").isEqualTo("DEFAULT")
                 .jsonPath("$.data.maxWaitSeconds.value").isEmpty()
-                .jsonPath("$.data.maxWaitSeconds.source").isEqualTo("DEFAULT");
+                .jsonPath("$.data.maxWaitSeconds.source").isEqualTo("DEFAULT")
+                .jsonPath("$.data.leaveGraceSeconds.value").isEqualTo(250)
+                .jsonPath("$.data.leaveGraceSeconds.source").isEqualTo("DEFAULT");
     }
 
     @Test
@@ -124,7 +129,43 @@ class WaitingroomAdminApiTest {
                 .jsonPath("$.data.globalCredit.value").isEqualTo(150)
                 .jsonPath("$.data.globalCredit.source").isEqualTo("DEFAULT")
                 .jsonPath("$.data.maxWaitSeconds.value").isEmpty()
-                .jsonPath("$.data.maxWaitSeconds.source").isEqualTo("DEFAULT");
+                .jsonPath("$.data.maxWaitSeconds.source").isEqualTo("DEFAULT")
+                .jsonPath("$.data.leaveGraceSeconds.value").isEqualTo(250)
+                .jsonPath("$.data.leaveGraceSeconds.source").isEqualTo("DEFAULT");
+    }
+
+    @Test
+    void 입장_속도와_모델별_상한은_배포_설정의_최댓값까지_받고_Redis_에_남은_더_큰_값은_최댓값으로_자른다() {
+        put("/admission-rate", Map.of("globalCredit", 1_500)).exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.data.globalCredit.value").isEqualTo(1_500)
+                .jsonPath("$.data.maxGlobalCredit").isEqualTo(1_500);
+        put("/products/" + productKey(101) + "/admission-rate", Map.of("cap", 1_500)).exchange().expectStatus().isOk();
+
+        redis.opsForHash().put(RedisKeys.SETTINGS, "global-credit", "15000").block(WAIT);
+        redis.opsForHash().put(RedisKeys.SETTINGS, "cap:" + productKey(202), "15000").block(WAIT);
+        get("/admission-rate").expectStatus().isOk().expectBody()
+                .jsonPath("$.data.globalCredit.value").isEqualTo(1_500)
+                .jsonPath("$.data.products[1].productId").isEqualTo(productKey(202))
+                .jsonPath("$.data.products[1].cap.value").isEqualTo(1_500);
+    }
+
+    @Test
+    void 이탈_유예는_250초에서_1800초_사이로_바꾸고_지우면_기본값으로_돌아간다() {
+        put("/leave-grace", Map.of("seconds", 600)).exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.data.leaveGraceSeconds.value").isEqualTo(600)
+                .jsonPath("$.data.leaveGraceSeconds.source").isEqualTo("OPERATIONAL");
+        assertThat(setting("leave-grace-sec")).isEqualTo("600");
+
+        put("/leave-grace", Map.of("seconds", 249)).exchange().expectStatus().isBadRequest().expectBody()
+                .jsonPath("$.error.details.field").isEqualTo("seconds");
+        put("/leave-grace", Map.of("seconds", 1_801)).exchange().expectStatus().isBadRequest();
+        put("/leave-grace", Map.of()).exchange().expectStatus().isBadRequest();
+        assertThat(setting("leave-grace-sec")).as("거절한 값은 쓰지 않는다").isEqualTo("600");
+
+        delete("/leave-grace").expectStatus().isOk().expectBody()
+                .jsonPath("$.data.leaveGraceSeconds.value").isEqualTo(250)
+                .jsonPath("$.data.leaveGraceSeconds.source").isEqualTo("DEFAULT");
+        assertThat(setting("leave-grace-sec")).isNull();
     }
 
     @Test
@@ -145,8 +186,9 @@ class WaitingroomAdminApiTest {
         put("/admission-rate", Map.of("globalCredit", -1)).exchange().expectStatus().isBadRequest().expectBody()
                 .jsonPath("$.error.code").isEqualTo("VALIDATION_FAILED")
                 .jsonPath("$.error.details.field").isEqualTo("globalCredit");
-        put("/admission-rate", Map.of("globalCredit", OperationalSettingsAdmin.MAX_GLOBAL_CREDIT + 1)).exchange()
-                .expectStatus().isBadRequest();
+        put("/admission-rate", Map.of("globalCredit", 1_501)).exchange().expectStatus().isBadRequest().expectBody()
+                .jsonPath("$.error.message").value(message -> assertThat((String) message).contains("1500"));
+        put("/products/" + productKey(101) + "/admission-rate", Map.of("cap", 1_501)).exchange().expectStatus().isBadRequest();
         put("/admission-rate", Map.of()).exchange().expectStatus().isBadRequest();
         put("/products/" + productKey(101) + "/admission-rate", Map.of("cap", 0)).exchange().expectStatus().isBadRequest();
         put("/products/101/admission-rate", Map.of("cap", 5)).exchange().expectStatus().isBadRequest().expectBody()
@@ -191,7 +233,7 @@ class WaitingroomAdminApiTest {
     void 현황은_받은_판정_재료의_모델별_상태와_리더를_보여_준다() {
         SalesWindow window = new SalesWindow(now.minusSeconds(60), now.plusSeconds(3_600));
         TestSnapshots.put(snapshots, Map.of(productKey(101), ProductState.withQueue(5, 10, window, 7)),
-                new SnapshotMeta(80, 2, MaxWait.of(Duration.ofSeconds(120))), 0.5);
+                new SnapshotMeta(80, 2, MaxWait.of(Duration.ofSeconds(120)), Duration.ofSeconds(600)), 0.5);
         redis.opsForValue().set(RedisKeys.LEADER, "9|node-a").block(WAIT);
 
         get("/status").expectStatus().isOk().expectBody()
@@ -201,6 +243,7 @@ class WaitingroomAdminApiTest {
                 .jsonPath("$.data.globalCredit").isEqualTo(80)
                 .jsonPath("$.data.brakeFactor").isEqualTo(0.5)
                 .jsonPath("$.data.maxWaitSeconds").isEqualTo(120)
+                .jsonPath("$.data.leaveGraceSeconds").isEqualTo(600)
                 .jsonPath("$.data.products[0].productId").isEqualTo(productKey(101))
                 .jsonPath("$.data.products[0].phase").isEqualTo("OPEN")
                 .jsonPath("$.data.products[0].waiting").isEqualTo(10)

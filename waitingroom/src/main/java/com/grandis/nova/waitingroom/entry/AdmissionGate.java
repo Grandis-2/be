@@ -126,7 +126,7 @@ public class AdmissionGate {
      */
     private Mono<QueueView> rejoinHidden(String productKey, String customerId, ProductState state, SnapshotMeta meta,
                                          Instant now, long second) {
-        return queue.enqueue(productKey, customerId, 0, now)
+        return queue.enqueue(productKey, customerId, 0, now, meta.leaveGrace())
                 .onErrorMap(AdmissionGate::storeFailure, AdmissionGate::unavailable)
                 .map(placed -> {
                     if (placed.admittedAt() == null && !placed.entry().accepted()) {
@@ -138,7 +138,7 @@ public class AdmissionGate {
 
     private Mono<QueueView> placeIn(String productKey, String customerId, ProductState state, SnapshotMeta meta,
                                     Instant now, long second, long maxLength) {
-        return queue.enqueue(productKey, customerId, maxLength, now)
+        return queue.enqueue(productKey, customerId, maxLength, now, meta.leaveGrace())
                 .onErrorMap(AdmissionGate::storeFailure, AdmissionGate::unavailable)
                 .map(placed -> placed(productKey, customerId, state, meta, now, second, placed));
     }
@@ -155,7 +155,7 @@ public class AdmissionGate {
         }
         double eta = EtaCredit.etaSec(entry.rank(), state, meta);
         return new QueueView.Waiting(queueTokens.issue(productKey, customerId, now), entry.rank() + 1,
-                EtaPolicy.reportSec(eta), null, null, entry.alreadyQueued(),
+                EtaPolicy.reportSec(eta), null, null, entry.alreadyQueued(), EtaCredit.paused(state, meta),
                 polls.intervalSec(eta, ThreadLocalRandom.current()::nextDouble));
     }
 

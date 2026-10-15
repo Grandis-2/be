@@ -13,6 +13,7 @@ final class MockJudge {
     static final String INVALID_REQUEST = "INVALID_REQUEST";
     private static final String UPSTREAM_UNAVAILABLE = "UPSTREAM_UNAVAILABLE";
     private static final String NOT_FOUND = "NOT_FOUND";
+    private static final String ENTRY_COUNT_MISMATCH = "ENTRY_COUNT_MISMATCH";
     private static final String NO_SUCH_ENDPOINT = "NO_SUCH_ENDPOINT";
 
     private MockJudge() {
@@ -103,6 +104,71 @@ final class MockJudge {
         }
         if (status / 100 == 2) {
             return Judgement.of(Verdict.TRANSIENT, reply);
+        }
+        String errorCode = reply.errorCode();
+        if (errorCode == null) {
+            return withoutErrorCode(reply, Verdict.TRANSIENT);
+        }
+        if (errorCode.equals(NO_SUCH_ENDPOINT)) {
+            return Judgement.of(Verdict.MISCONFIGURED, reply);
+        }
+        return status / 100 == 5
+                ? Judgement.of(Verdict.TRANSIENT, reply).retryable()
+                : Judgement.of(Verdict.REJECTED, reply);
+    }
+
+    /** 드로우 응모. 같은 키로 다시 보내면 처음 결과가 와서(재생) 결과를 몰라도 조회 없이 다시 보낸다. */
+    static Judgement drawEntry(MockReply reply) {
+        if (reply.responded() && reply.status() == 201 && reply.errorCode() == null) {
+            return Judgement.success(null);
+        }
+        return replayable(reply);
+    }
+
+    /** 드로우 회차 조회. 200 이면 받은 응모 수(entryCount)가 있어야 한다. 404 NOT_FOUND 는 받은 응모가 아직 없다는 뜻이다. */
+    static Judgement drawStatus(MockReply reply) {
+        if (reply.responded() && reply.status() == 200) {
+            JsonNode count = reply.body() == null ? null : reply.body().get("entryCount");
+            return count != null && count.isIntegralNumber()
+                    ? Judgement.success(null) : Judgement.of(Verdict.UNKNOWN, reply);
+        }
+        if (reply.responded() && reply.status() == 404 && NOT_FOUND.equals(reply.errorCode())) {
+            return Judgement.of(Verdict.ABSENT, reply);
+        }
+        return replayable(reply);
+    }
+
+    /**
+     * 추첨. 2xx 면(Mock 은 200) 당첨 응모 목록(winnerEntryIds)이 있어야 한다. 받은 수가 기대와 다르거나(409 ENTRY_COUNT_MISMATCH) 회차에
+     * 응모가 없으면(404 NOT_FOUND) 거절이 아니라 기다림이다 — 늦은 응모가 아직 오는 중일 수 있다.
+     */
+    static Judgement draw(MockReply reply) {
+        if (reply.responded() && reply.status() / 100 == 2) {
+            JsonNode winners = reply.body() == null ? null : reply.body().get("winnerEntryIds");
+            return winners != null && winners.isArray()
+                    ? Judgement.success(null) : Judgement.of(Verdict.UNKNOWN, reply);
+        }
+        if (reply.responded() && (reply.status() == 409 && ENTRY_COUNT_MISMATCH.equals(reply.errorCode())
+                || reply.status() == 404 && NOT_FOUND.equals(reply.errorCode()))) {
+            return Judgement.of(Verdict.PENDING, reply);
+        }
+        return replayable(reply);
+    }
+
+    /**
+     * 다시 보내도 처음 결과가 오는 호출(드로우)에서 성공 · 기다림이 아닌 응답. 2xx 인데 모양이 다르면 결과 모름(계약 확인 경고),
+     * 408 · 429 · 5xx 는 일시 실패, 없는 경로 · errorCode 없는 3xx · 4xx 는 설정 오류, 그 밖의 4xx 는 거절이다.
+     */
+    private static Judgement replayable(MockReply reply) {
+        if (!reply.responded()) {
+            return Judgement.failed(Verdict.TRANSIENT, reply, true);
+        }
+        int status = reply.status();
+        if (status / 100 == 2) {
+            return Judgement.of(Verdict.UNKNOWN, reply);
+        }
+        if (status == 408 || status == 429) {
+            return Judgement.of(Verdict.TRANSIENT, reply).after(reply.retryAfter());
         }
         String errorCode = reply.errorCode();
         if (errorCode == null) {

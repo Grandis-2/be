@@ -7,6 +7,7 @@ MySQL 8.4.11과 Flyway 11.20.0으로 검증하며, 유료 비교/생성 기능�
 
 - `migrations/`: 실제 적용의 정본이자 유일한 shop 정의. 최초 파일은 도입 당시 shop 정의와 설계 주석을 보존한다.
 - `flyway.toml`: SQL 경로, shop 스키마, 검증 및 실행 규칙. 접속 비밀값은 넣지 않는다.
+- `init.sql`: 운영 초기 데이터. 마이그레이션이 아닌 행(기본 카테고리 · 기본 옵션 축)을 직접 적용한다(아래 "초기 데이터(init.sql)").
 - `../docs/external-mock-schema.sql`: 도입 당시 Mock 정의를 보존한 참고 자료. 최신 정의는 Mock 저장소에서 관리한다.
 
 두 스키마가 같은 DB 서버에 있어도 이 프로젝트는 `shop.flyway_schema_history`만 관리한다.
@@ -36,6 +37,7 @@ bash flyway-project/verify.sh
 이 명령은 전용 임시 MySQL 컨테이너를 생성하고 종료 시 제거한다. 호스트 포트와
 영속 볼륨을 사용하지 않으며 기존 로컬 DB나 운영 DB에는 접속하지 않는다.
 release가 운영 DB에 돌리는 이미지(`Dockerfile`)도 같은 DB에 돌려, 이미지에 든 마이그레이션 · 설정이 같은지 확인한다.
+`init.sql`도 같은 DB에 두 번 적용해 결과가 같은지, 카테고리 트리와 기본 옵션 축의 모양이 맞는지 본다.
 전체 적용 뒤의 최신 shop 정의는 `build/flyway/schema.sql`로 남는다(저장소에는 두지 않는다. CI에서는 database 잡의
 `shop-schema` 산출물). 덤프는 Flyway 이력과 데이터를 제외한다.
 설계 설명은 마이그레이션의 SQL 주석에 기록한다. 덤프에는 SQL 주석이 보존되지 않는다.
@@ -52,7 +54,7 @@ release가 운영 DB에 돌리는 이미지(`Dockerfile`)도 같은 DB에 돌려
   버전을 바꿨다면 해당 임시 DB를 새로 구성한다.
 - CI는 버전 형식·중복·기존 파일 불변성·신규 버전 순서를 검사한다.
 - 이어서 빈 MySQL 8.4에 전체 적용, Flyway validate, 재실행 시 이력 불변,
-  external_mock 미생성을 확인하고 최신 shop 정의 덤프를 산출물로 올린다.
+  external_mock 미생성, `init.sql` 두 번 적용을 확인하고 최신 shop 정의 덤프를 산출물로 올린다.
 - CI는 운영 DB의 실제 상태나 업무 의미의 충돌까지 판별하지 않는다.
 
 ## 운영 DB(NCP) 준비와 적용
@@ -105,6 +107,25 @@ Flyway 이미지에 든 JDBC 드라이버는 MariaDB Connector/J 2.7이다. MySQ
 로컬 호스트의 MySQL은 Docker Desktop에서 `host.docker.internal`로 접근할 수 있다.
 같은 Docker 네트워크의 DB에는 `NOVA_FLYWAY_NETWORK`를 지정한다.
 CLI는 저장소의 flyway.toml을 명시적으로 읽고 접속 변수 세 개만 컨테이너로 전달한다.
+
+### 초기 데이터(init.sql)
+
+`init.sql`은 마이그레이션이 아니라서 release가 돌리지 않는다. 행을 넣거나 고칠 때 위 절차로 포트를 열고 직접 적용한다.
+
+- 그 행이 쓰는 칸을 만든 마이그레이션이 release로 먼저 적용되어 있어야 한다.
+- 행만 쓰므로 서비스 CRUD 계정으로 충분하다(카테고리는 `nova-prod/db/app/catalog`).
+- 몇 번을 돌려도 결과가 같다(`updated_at`만 적용 시각으로 바뀐다). 파일에서 뺀 행은 지우지 않는다.
+- 로컬 DB는 seed 저장소(Grandis-2/seed)가 채운다. seed는 카테고리를 다른 id로 넣으므로, 그 DB에 `init.sql`을 돌리면
+  같은 이름의 카테고리가 한 벌 더 생긴다.
+
+```sh
+s=$(aws secretsmanager get-secret-value --secret-id nova-prod/db/app/catalog --query SecretString --output text)
+user=$(jq -r .username <<< "$s"); export MYSQL_PWD=$(jq -r .password <<< "$s"); unset s
+docker run --rm -i -e MYSQL_PWD mysql:8.4.11 \
+  mysql -h host.docker.internal -P 13306 -u "$user" --ssl-mode=REQUIRED < flyway-project/init.sql
+```
+
+적용 뒤 `GET /api/v1/categories`로 확인한다.
 
 ### 배포 순서와 실패 복구
 

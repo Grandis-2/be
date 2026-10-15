@@ -6,7 +6,9 @@ package com.grandis.nova.waitingroom.domain.queue;
  */
 public final class GraceRetention {
 
-    public static final long SECONDS = Math.max(300, AdmissionTicket.TTL_SEC * 2);
+    public static long seconds(long ticketTtlSec) {
+        return Math.max(300, ticketTtlSec * 2);
+    }
 
     private GraceRetention() {
     }

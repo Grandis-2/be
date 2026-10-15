@@ -5,6 +5,7 @@ import com.grandis.nova.waitingroom.domain.product.ProductState;
 import com.grandis.nova.waitingroom.domain.product.RuntimeState;
 import com.grandis.nova.waitingroom.domain.product.SalesWindow;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
+import com.grandis.nova.waitingroom.domain.queue.LeaveGrace;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,6 +27,7 @@ final class SnapshotCodec {
     static final String GLOBAL_CREDIT = "#credit";
     static final String GATEWAYS = "#gateways";
     static final String MAX_WAIT = "#max-wait-sec";
+    static final String LEAVE_GRACE = "#leave-grace-sec";
     static final String PUBLISHED_AT = "#at";
     static final String BRAKE = "#brake";
 
@@ -42,6 +44,7 @@ final class SnapshotCodec {
         fields.put(GLOBAL_CREDIT, String.valueOf(meta.globalCredit()));
         fields.put(GATEWAYS, String.valueOf(meta.gatewayCount()));
         fields.put(MAX_WAIT, meta.maxWait().duration() == null ? "-1" : String.valueOf(meta.maxWait().duration().toSeconds()));
+        fields.put(LEAVE_GRACE, String.valueOf(meta.leaveGrace().toSeconds()));
         fields.put(PUBLISHED_AT, String.valueOf(snapshot.publishedAtMillis()));
         fields.put(BRAKE, String.valueOf(snapshot.brakeFactor()));
         return fields;
@@ -62,8 +65,8 @@ final class SnapshotCodec {
                             () -> log.debug("판정 재료의 모델 필드를 읽지 못해 뺀다: {}", field));
                 }
             });
-            return Optional.of(new GatewaySnapshot(products, new SnapshotMeta(globalCredit, gateways, maxWait), publishedAt,
-                    brakeFactor(fields.get(BRAKE))));
+            return Optional.of(new GatewaySnapshot(products, new SnapshotMeta(globalCredit, gateways, maxWait,
+                    leaveGrace(fields.get(LEAVE_GRACE))), publishedAt, brakeFactor(fields.get(BRAKE))));
         } catch (RuntimeException e) {
             return Optional.empty();
         }
@@ -81,6 +84,16 @@ final class SnapshotCodec {
                     Long.parseLong(parts[2]), Long.parseLong(parts[3]), window));
         } catch (IllegalArgumentException e) {
             return Optional.empty();
+        }
+    }
+
+    /** 없거나 깨졌으면 기본값으로 읽는다 — 이 필드를 모르는 옛 리더가 낸 재료도 판정에 써야 한다. */
+    private static Duration leaveGrace(String value) {
+        try {
+            long seconds = value == null ? -1 : Long.parseLong(value);
+            return LeaveGrace.accepts(seconds) ? Duration.ofSeconds(seconds) : LeaveGrace.MIN;
+        } catch (NumberFormatException e) {
+            return LeaveGrace.MIN;
         }
     }
 

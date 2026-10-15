@@ -48,6 +48,14 @@ class ConcurrencyLimiterTest {
     }
 
     @Test
+    void 드로우도_CANCEL_전용_자리를_쓰지_못하고_등록과_자리를_나눠_쓴다() {
+        assertThat(acquire(JobType.DRAW, 3)).isEqualTo(2);
+
+        assertThat(limiter.tryAcquire(JobType.REGISTER, NO_WAIT)).as("등록 · 드로우가 같은 자리를 쓴다").isEmpty();
+        assertThat(limiter.tryAcquire(JobType.CANCEL, NO_WAIT)).isPresent();
+    }
+
+    @Test
     void 기다리는_동안_자리가_나면_잡는다() throws Exception {
         acquire(JobType.CANCEL, 3);
         AtomicReference<Optional<Permit>> waited = new AtomicReference<>();

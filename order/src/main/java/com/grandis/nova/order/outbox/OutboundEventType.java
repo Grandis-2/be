@@ -10,7 +10,9 @@ public enum OutboundEventType implements OutboxEventType {
     /** 응모비를 결제한 응모 — worker 가 받아 Mock(추첨)에 넘긴다(contracts/draw-entry-sync.md). */
     DRAW_ENTRY_PAID("draw-register"),
     /** 회차의 추첨 요청 — worker 가 Mock 과 응모 수를 대조한 뒤 추첨을 맡긴다(contracts/draw-entry-sync.md). */
-    DRAW_REQUESTED("draw-register");
+    DRAW_REQUESTED("draw-register"),
+    /** 회원 알림 한 건 — member 가 받아 저장한다(contracts/notification-events.md). */
+    NOTIFICATION_REQUESTED("notification");
 
     private final String destination;
 

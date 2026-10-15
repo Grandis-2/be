@@ -20,7 +20,7 @@ import java.util.concurrent.locks.ReentrantLock;
 /**
  * 동시에 나가 있는 요청 수를 묶는 벌크헤드. mock 은 몰려도 거절하지 않고 느려지기만 해서, 자리 수를 묶으면 느려질수록 덜 보낸다.
  * 자리 수는 스스로 조절한다(AIMD): 창마다 빠르고 실패가 적으면 조금 늘리고, 느리거나 실패가 많으면 크게 줄인다.
- * 자리 일부는 CANCEL 전용이다 — 등록이 밀려도 취소는 나간다.
+ * 자리 일부는 CANCEL 전용이다 — 등록 · 드로우가 밀려도 취소는 나간다.
  */
 public final class ConcurrencyLimiter {
 
@@ -56,7 +56,7 @@ public final class ConcurrencyLimiter {
         this.windowStart = clock.instant();
     }
 
-    /** 자리를 잡는다. wait 안에 나지 않으면 비어 있는 값을 돌려준다. REGISTER 는 CANCEL 전용 자리를 쓰지 못한다. */
+    /** 자리를 잡는다. wait 안에 나지 않으면 비어 있는 값을 돌려준다. CANCEL 이 아니면 CANCEL 전용 자리를 쓰지 못한다. */
     public Optional<Permit> tryAcquire(JobType type, Duration wait) {
         long nanos = wait.toNanos();
         lock.lock();

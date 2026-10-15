@@ -5,10 +5,12 @@ import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 /**
  * 입장 속도 기본값 — 전 모델 합산 초당 입장 인원, 한산한 모델이 노드 몫에서 줄 없이 통과시킬 비율, 모델별 상한.
- * 운영 중에는 Redis 운영값이 이긴다(관리자 API). preorder 를 늘리면 전역 속도만 운영값으로 올린다.
+ * 운영 중에는 Redis 운영값이 이긴다(관리자 API). preorder 를 늘리면 전역 속도를 운영값으로 올리고, 최댓값을 넘으면 최댓값도 올려 배포한다.
+ *
+ * @param maxGlobalCredit 운영값으로 정할 수 있는 입장 속도의 최댓값(전역 · 모델별). preorder 대수를 바꾸면 같이 바꾼다
  */
 @ConfigurationProperties("waitingroom.admission")
-public record AdmissionProperties(Long globalCredit, Double idleCreditRatio, Long productCap) {
+public record AdmissionProperties(Long globalCredit, Double idleCreditRatio, Long productCap, Long maxGlobalCredit) {
 
     @ConstructorBinding
     public AdmissionProperties {
@@ -16,6 +18,8 @@ public record AdmissionProperties(Long globalCredit, Double idleCreditRatio, Lon
         globalCredit = globalCredit == null ? 150L : globalCredit;
         productCap = productCap == null ? 150L : productCap;
         idleCreditRatio = idleCreditRatio == null ? 0.7 : idleCreditRatio;
+        // 기본 속도의 10배(preorder 약 10대 분량). 그보다 큰 입력은 preorder 가 감당할 수 없으니 관리자 API 가 받지 않는다
+        maxGlobalCredit = maxGlobalCredit == null ? 1_500L : maxGlobalCredit;
         if (globalCredit < 0) {
             throw new IllegalArgumentException("waitingroom.admission.global-credit 은 0 이상이어야 한다: " + globalCredit);
         }
@@ -25,9 +29,13 @@ public record AdmissionProperties(Long globalCredit, Double idleCreditRatio, Lon
         if (productCap < 1) {
             throw new IllegalArgumentException("waitingroom.admission.product-cap 은 1 이상이어야 한다: " + productCap);
         }
+        if (globalCredit > maxGlobalCredit || productCap > maxGlobalCredit) {
+            throw new IllegalArgumentException("waitingroom.admission.global-credit(" + globalCredit + ") 과 product-cap("
+                    + productCap + ") 은 max-global-credit(" + maxGlobalCredit + ") 이하여야 한다");
+        }
     }
 
     public AdmissionProperties(Long globalCredit, Double idleCreditRatio) {
-        this(globalCredit, idleCreditRatio, null);
+        this(globalCredit, idleCreditRatio, null, null);
     }
 }

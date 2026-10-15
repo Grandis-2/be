@@ -67,7 +67,7 @@ class WaitingroomAdminController {
 
     /** 줄 최대 길이 = 입장 속도 × 이 값. 지우면 제한 없음. */
     @PutMapping("/max-wait")
-    Mono<ApiResponse<AdmissionRateView>> setMaxWait(@RequestBody MaxWaitRequest request, @AuthenticationPrincipal Jwt jwt,
+    Mono<ApiResponse<AdmissionRateView>> setMaxWait(@RequestBody SecondsRequest request, @AuthenticationPrincipal Jwt jwt,
                                                      ServerWebExchange exchange) {
         return settings.setMaxWait(jwt.getSubject(),
                 OperationalSettingsAdmin.integral(request.seconds(), "seconds")).map(view -> ok(view, exchange));
@@ -76,6 +76,19 @@ class WaitingroomAdminController {
     @DeleteMapping("/max-wait")
     Mono<ApiResponse<AdmissionRateView>> clearMaxWait(@AuthenticationPrincipal Jwt jwt, ServerWebExchange exchange) {
         return settings.clear(jwt.getSubject(), OperationalSettings.MAX_WAIT_SEC).map(view -> ok(view, exchange));
+    }
+
+    /** 조회가 끊긴 대기자를 줄에 남겨 두는 시간. 늘린 만큼 떠난 사람이 줄에 남는다. 지우면 기본값. */
+    @PutMapping("/leave-grace")
+    Mono<ApiResponse<AdmissionRateView>> setLeaveGrace(@RequestBody SecondsRequest request, @AuthenticationPrincipal Jwt jwt,
+                                                        ServerWebExchange exchange) {
+        return settings.setLeaveGrace(jwt.getSubject(),
+                OperationalSettingsAdmin.integral(request.seconds(), "seconds")).map(view -> ok(view, exchange));
+    }
+
+    @DeleteMapping("/leave-grace")
+    Mono<ApiResponse<AdmissionRateView>> clearLeaveGrace(@AuthenticationPrincipal Jwt jwt, ServerWebExchange exchange) {
+        return settings.clear(jwt.getSubject(), OperationalSettings.LEAVE_GRACE_SEC).map(view -> ok(view, exchange));
     }
 
     @GetMapping("/status")
@@ -94,6 +107,6 @@ class WaitingroomAdminController {
     record ProductCapRequest(JsonNode cap) {
     }
 
-    record MaxWaitRequest(JsonNode seconds) {
+    record SecondsRequest(JsonNode seconds) {
     }
 }

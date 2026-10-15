@@ -57,6 +57,21 @@ public class MockGateway {
         return call("cancel", () -> client.cancel(request), MockJudge::cancel);
     }
 
+    /** 드로우 응모. 다시 보낼 때도 같은 키(응모 id) · 같은 본문을 쓴다. */
+    public MockResult enterDraw(String entryId, JsonNode request) {
+        return call("draw-entry", () -> client.enterDraw(entryId, request), MockJudge::drawEntry);
+    }
+
+    /** 드로우 회차 — 받은 응모 수 · 추첨 결과. 응모가 아직 없으면 ABSENT. */
+    public MockResult drawStatus(String drawId) {
+        return call("draw-status", () -> client.drawStatus(drawId), MockJudge::drawStatus);
+    }
+
+    /** 추첨. 회차 id 가 멱등 키라 같은 요청을 다시 보내면 처음 결과가 온다. */
+    public MockResult draw(String drawId, JsonNode request) {
+        return call("draw", () -> client.draw(drawId, request), MockJudge::draw);
+    }
+
     private MockResult call(String operation, Supplier<MockReply> send, Function<MockReply, Judgement> judge) {
         if (!circuit.tryAcquire()) {
             return skipped(operation, Skipped.CIRCUIT_OPEN);
