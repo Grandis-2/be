@@ -41,6 +41,40 @@ class ImageProcessorTest {
     }
 
     @Test
+    @DisplayName("여러 픽셀 형식이 같은 크기로 다시 저장된다 — 팔레트 · 16비트 회색 · 알파 PNG(투명도 유지) · 회색 JPEG · progressive JPEG")
+    void roundTripsPixelFormats() throws Exception {
+        BufferedImage alpha = new BufferedImage(6, 4, BufferedImage.TYPE_INT_ARGB);
+        alpha.setRGB(1, 1, 0x40FF0000);
+        List<byte[]> inputs = List.of(
+                ImageFixtures.encode(new BufferedImage(6, 4, BufferedImage.TYPE_BYTE_INDEXED), "png"),
+                ImageFixtures.encode(new BufferedImage(6, 4, BufferedImage.TYPE_USHORT_GRAY), "png"),
+                ImageFixtures.encode(alpha, "png"),
+                ImageFixtures.encode(new BufferedImage(6, 4, BufferedImage.TYPE_BYTE_GRAY), "jpg"),
+                progressiveJpeg(ImageFixtures.rgb(6, 4)));
+        for (byte[] input : inputs) {
+            BufferedImage out = ImageIO.read(new ByteArrayInputStream(process(input)));
+            assertThat(out.getWidth()).isEqualTo(6);
+            assertThat(out.getHeight()).isEqualTo(4);
+        }
+        BufferedImage alphaOut = ImageIO.read(new ByteArrayInputStream(process(ImageFixtures.encode(alpha, "png"))));
+        assertThat(alphaOut.getRGB(1, 1) >>> 24).as("투명도").isEqualTo(0x40);
+    }
+
+    private static byte[] progressiveJpeg(BufferedImage image) throws IOException {
+        javax.imageio.ImageWriter writer = ImageIO.getImageWritersByFormatName("jpeg").next();
+        javax.imageio.ImageWriteParam param = writer.getDefaultWriteParam();
+        param.setProgressiveMode(javax.imageio.ImageWriteParam.MODE_DEFAULT);
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (javax.imageio.stream.MemoryCacheImageOutputStream out = new javax.imageio.stream.MemoryCacheImageOutputStream(bytes)) {
+            writer.setOutput(out);
+            writer.write(null, new javax.imageio.IIOImage(image, null, null), param);
+        } finally {
+            writer.dispose();
+        }
+        return bytes.toByteArray();
+    }
+
+    @Test
     @DisplayName("형식은 앞 바이트로만 — GIF · 글자 · 빈 파일은 400(file)")
     void rejectsOtherFormats() {
         assertRejected(ImageFixtures.encode(ImageFixtures.rgb(4, 4), "gif"));
