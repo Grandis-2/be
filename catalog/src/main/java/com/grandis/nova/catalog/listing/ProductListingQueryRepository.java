@@ -49,14 +49,26 @@ import java.util.UUID;
 public class ProductListingQueryRepository {
 
     /**
-     * 상품마다 그 상품의 옵션을 찾는 서브쿼리에 거는 인덱스 — (product_id, id). {@link #READY} 의 옵션 · 재고 조인은 옵션부터 읽게 순서도 고정하고
-     * (JOIN_ORDER), WHERE 의 EXISTS(색상 · 용량 필터 · 증정품 후보)는 세미조인으로 바꾸지 않는다(NO_SEMIJOIN — 바꾸면 옵션 표가 맨 앞에 와 인덱스
-     * 힌트가 소용없다). 셋 다 통계를 일부러 틀리게 넣은 시험이 하나씩 잡는다.
+     * 상품마다 그 상품의 옵션을 찾는 서브쿼리의 계획을 통계와 상관없이 고정한다.
+     * <ul>
+     *   <li>옵션은 {@link #BY_PRODUCT} — (product_id, id) 로 찾는다.</li>
+     *   <li>옵션 · 재고를 잇는 조인은 옵션부터 읽고({@code JOIN_ORDER}) 재고는 {@link #INVENTORY_BY_OPTION} 으로 붙인다 — 안 그러면 재고 표 통계만
+     *       틀릴 때 "재고 전부 → 옵션을 uq_option_product 로" 가 FORCE INDEX 아래에서도 허용된다.</li>
+     *   <li>WHERE 의 EXISTS(색상 · 용량 필터 · 증정품 후보)는 세미조인으로 바꾸지 않는다({@code NO_SEMIJOIN}) — 바꾸면 옵션 표가 맨 앞에 와 인덱스
+     *       힌트가 소용없다. 대가: 통계가 맞고 다른 상품이 아주 많으면 세미조인이 더 빠를 수 있다(리뷰 실측: 다른 카테고리 5000 상품에서 18ms 대 6ms).</li>
+     * </ul>
      * 통계가 실제와 다르면(데이터를 한꺼번에 넣은 직후 — 자동 재계산으로 영구 통계가 바뀐 뒤에도 계획은 ANALYZE TABLE 전까지 그대로였다) 옵티마이저가
-     * 상품마다 옵션 표 전체(ALL)나 재고 표 전체를 훑는다. 실측(MySQL 8.4.11, 한 카테고리 상품 300 · 옵션 600, 목록 20개 + 건수): 데이터를 넣은 직후
-     * 힌트 없이 120~143ms → 힌트로 5.6~6.3ms, ANALYZE TABLE 뒤에는 둘 다 4.5~5.8ms. 이름은 마이그레이션의 제약 이름과 같아야 한다.
+     * 상품마다 옵션 표나 재고 표 전체를 훑는다. 실측(MySQL 8.4.11, 한 카테고리 상품 300 · 옵션 600, 목록 20개 + 건수): 데이터를 넣은 직후 힌트 없이
+     * 120~143ms → 힌트로 5.6~6.3ms, ANALYZE TABLE 뒤에는 둘 다 4.5~5.8ms. 시험이 틀린 통계 세 모양(구분값만 · 옵션 · 재고 행 수까지 · 재고 표만)에서
+     * 옵션 · 재고 접근이 전부 ref/eq_ref 인지 본다. 위치별로 잰 것: READY 의 순서 · 필터와 증정품의 NO_SEMIJOIN · 칩의 인덱스는 하나씩 빼면 시험이
+     * 잡는다. 재고 쪽의 JOIN_ORDER 와 재고 PRIMARY 는 이 시험에서 둘 중 하나만으로도 막혔지만(둘 다 빼면 잡힌다) 리뷰 실측에서는 JOIN_ORDER 만으로
+     * 재고 표를 다 읽어 둘 다 건다. 관리자 옵션 수(oc)는 어느 모양에서도 힌트 없이 ref 였다 — 같은 꼴이라 같은 힌트를 건다(일관성).
+     * <p>인덱스 이름은 마이그레이션의 이름과 맞아야 한다. 힌트 이름은 접두사로도 맞는다(리뷰 실측: uq_option_product_id 로 바꿔도 오류 없이 걸린다) —
+     * 이름이 바뀌면 오류(1176)가 날 수도, 다른 인덱스에 조용히 걸릴 수도 있다. 이 표에 커버링 인덱스(예: product_id · status · price)를 더하면 이
+     * 힌트가 그 인덱스를 막으니 같이 바꾼다.
      */
     private static final String BY_PRODUCT = "FORCE INDEX (uq_option_product)";
+    private static final String INVENTORY_BY_OPTION = "FORCE INDEX (PRIMARY)";
 
     /**
      * 판매 방식별 준비 — 등록 이벤트를 받은 서비스가 자기 표에 행을 만들었는가. 사전예약은 preorder 회차 행, 일반은 그 상품 옵션의
@@ -66,8 +78,8 @@ public class ProductListingQueryRepository {
             (CASE WHEN p.sale_mode = 'PREORDER'
                   THEN EXISTS (SELECT 1 FROM preorder_campaigns rc WHERE rc.product_id = p.id)
                   ELSE EXISTS (SELECT /*+ JOIN_ORDER(ro, ri) */ 1 FROM product_options ro %s
-                                 JOIN option_inventories ri ON ri.option_id = ro.id
-                                WHERE ro.product_id = p.id) END)""".formatted(BY_PRODUCT);
+                                 JOIN option_inventories ri %s ON ri.option_id = ro.id
+                                WHERE ro.product_id = p.id) END)""".formatted(BY_PRODUCT, INVENTORY_BY_OPTION);
 
     private static final String FROM_VISIBLE = """
               FROM products p
@@ -93,12 +105,12 @@ public class ProductListingQueryRepository {
                             WHERE po.product_id = p.id AND po.status = 'ACTIVE') AS sellable,
                    p.thumbnail_url AS image_url,
                    CASE WHEN p.sale_mode = 'IN_STOCK' AND NOT EXISTS (
-                            SELECT 1 FROM product_options o %3$s
-                              JOIN option_inventories inv ON inv.option_id = o.id
+                            SELECT /*+ JOIN_ORDER(o, inv) */ 1 FROM product_options o %3$s
+                              JOIN option_inventories inv %4$s ON inv.option_id = o.id
                              WHERE o.product_id = p.id AND o.status = 'ACTIVE'
                                AND inv.stock_total - inv.stock_reserved - inv.stock_sold > 0)
                         THEN 1 ELSE 0 END AS sold_out
-            """.formatted(MIN_LIST_PRICE, Discount.sql(MIN_LIST_PRICE, "p.discount_rate"), BY_PRODUCT);
+            """.formatted(MIN_LIST_PRICE, Discount.sql(MIN_LIST_PRICE, "p.discount_rate"), BY_PRODUCT, INVENTORY_BY_OPTION);
 
     /**
      * 색상칩에 쓰는 칸 — 옵션 문서와, 판매 중 옵션이 고른 색상(정규화값, 목록의 color 필터가 보는 값). 칩을 내보내는 회원 목록 · 홍보 상세만,
@@ -300,8 +312,8 @@ public class ProductListingQueryRepository {
      * 재고 행이 있으면 판매 방식별 준비({@link #READY})도 참이다(일반 상품의 준비가 곧 재고 행의 유무).
      */
     private static final String GIFT_OPTION = """
-            SELECT /*+ NO_SEMIJOIN() */ 1 FROM product_options go %s JOIN option_inventories gi ON gi.option_id = go.id
-             WHERE go.product_id = p.id AND go.status = 'ACTIVE'""".formatted(BY_PRODUCT);
+            SELECT /*+ NO_SEMIJOIN() JOIN_ORDER(go, gi) */ 1 FROM product_options go %s JOIN option_inventories gi %s ON gi.option_id = go.id
+             WHERE go.product_id = p.id AND go.status = 'ACTIVE'""".formatted(BY_PRODUCT, INVENTORY_BY_OPTION);
 
     /** 증정품 후보 상품 — 일반 판매 · 판매 중이고 후보 옵션이 하나 이상. 공개 여부는 보지 않는다. */
     private static final String GIFT_PRODUCTS = """
