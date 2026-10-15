@@ -165,12 +165,16 @@ public record ProductOptions(List<Axis> axes, List<Image> defaultImages, List<Se
     }
 
     /**
-     * 목록 카드의 색상칩 — 색상 축의 값마다(관리자가 넣은 순서) 표시값 · hex · 그 색상의 사진 주소(넣은 순서). 색상 축이 없으면 빈 목록이다.
-     * 판매 중지 옵션만 고르는 색상도 싣는다 — 상세의 색상 축 값과 같은 목록이다.
+     * 목록 카드의 색상칩 — 색상 축의 값 중 판매 중 옵션이 고르는 것만, 관리자가 넣은 순서로 표시값 · hex · 그 색상의 사진 주소(넣은 순서).
+     * 판매 중지 옵션만 고르는 색상은 뺀다(2026-10-15 결정 — 목록의 색상 필터가 판매 중 옵션만 보므로, 칩과 필터가 어긋나지 않게).
+     * 색상 축이 없으면 빈 목록이다. 상세는 이 규칙 없이 색상 축 값 전부를 싣는다.
+     *
+     * @param sellable 판매 중 옵션이 고른 색상의 정규화값(product_options.filter_attributes 의 color)
      */
-    public List<ColorChip> colorChips() {
+    public List<ColorChip> colorChips(Collection<String> sellable) {
         return axis(OptionText.COLOR)
                 .map(color -> color.values().stream()
+                        .filter(value -> sellable.contains(value.normalized()))
                         .map(value -> new ColorChip(value.value(), value.hex(), value.images().stream().map(Image::url).toList()))
                         .toList())
                 .orElse(List.of());
