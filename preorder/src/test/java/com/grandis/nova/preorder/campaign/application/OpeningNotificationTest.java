@@ -14,6 +14,7 @@ import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -251,8 +252,8 @@ class OpeningNotificationTest {
         CompletableFuture<Chunk> nextChunk = CompletableFuture.supplyAsync(() -> notifier.sendNextChunk(productId));
 
         assertThat(accept.get(5, TimeUnit.SECONDS)).as("회차 행 잠금이 묶음을 기다리지 않는다").isTrue();
-        Thread.sleep(300);
-        assertThat(nextChunk).as("다음 묶음은 진행 행에서 기다린다").isNotDone();
+        Awaitility.await("다음 묶음은 진행 행에서 기다린다").during(Duration.ofMillis(300)).atMost(Duration.ofSeconds(5))
+                .until(() -> !nextChunk.isDone());
         release.countDown();
 
         firstChunk.get(10, TimeUnit.SECONDS);
@@ -282,8 +283,8 @@ class OpeningNotificationTest {
 
         CompletableFuture<Boolean> marking = CompletableFuture.supplyAsync(() ->
                 notifier.markOpened(productId, now, now.minus(Duration.ofHours(1))));
-        Thread.sleep(300);
-        assertThat(marking).as("신청이 커밋할 때까지 표시가 기다린다").isNotDone();
+        Awaitility.await("신청이 커밋할 때까지 표시가 기다린다").during(Duration.ofMillis(300)).atMost(Duration.ofSeconds(5))
+                .until(() -> !marking.isDone());
         release.countDown();
 
         subscribing.get(10, TimeUnit.SECONDS);
