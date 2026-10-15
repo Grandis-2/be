@@ -43,20 +43,30 @@ class ProductListingQueryRepositoryTest {
     }
 
     @Test
-    @DisplayName("마감 + 120시간 직전에는 보이고, 그 시각부터는 숨는다")
-    void hideBoundaryIsExactlyOneHundredTwentyHours() {
-        Instant closesAt = Instant.parse("2026-10-01T00:00:00Z");
+    @DisplayName("사전예약은 오픈 시각부터 보이고 마감 시각부터 숨는다 — 접수 단계(OPEN)와 같은 경계, 1µs 앞뒤로 목록 · 건수가 같이 바뀐다")
+    void listedFromOpenUntilClose() {
+        Instant opensAt = Instant.parse("2026-10-01T00:00:00Z");
+        Instant closesAt = opensAt.plus(Duration.ofHours(1));
         UUID productId = fixtures.product(fixtures.category(), "PREORDER", "ACTIVE", "경계", tag);
         fixtures.registration(productId);
-        fixtures.campaign(productId, closesAt.minusSeconds(3600), closesAt);
-        // 상수를 참조하면 상수가 틀려도 시험이 같이 움직인다 — 확정값 120시간을 여기 박는다
-        Instant boundary = closesAt.plus(Duration.ofHours(120));
+        fixtures.campaign(productId, opensAt, closesAt);
         ProductListFilter filter = new ProductListFilter(tag, null, null, null, null, null);
+        Duration micro = Duration.ofNanos(1_000);   // datetime(6) 의 한 칸
 
-        assertThat(ids(repository.find(filter, ProductSort.NEWEST, boundary.minusNanos(1_000), 0, 10))).containsExactly(productId);
-        assertThat(repository.count(filter, boundary.minusNanos(1_000))).isEqualTo(1);
-        assertThat(ids(repository.find(filter, ProductSort.NEWEST, boundary, 0, 10))).isEmpty();
-        assertThat(repository.count(filter, boundary)).isZero();
+        for (Instant hidden : List.of(opensAt.minus(micro), closesAt)) {
+            assertThat(ids(repository.find(filter, ProductSort.NEWEST, hidden, 0, 10))).as("%s", hidden).isEmpty();
+            assertThat(repository.count(filter, hidden)).as("%s", hidden).isZero();
+            assertThat(PreorderSaleStatus.of(opensAt, closesAt, hidden)).as("%s", hidden).isNotEqualTo(PreorderSaleStatus.OPEN);
+        }
+        // µs 아래가 붙은 시각도 접수 단계와 같은 쪽 — 마감 1ns 전은 OPEN 이고 목록에도 있다
+        Instant lastNano = closesAt.minusNanos(1);
+        assertThat(PreorderSaleStatus.of(opensAt, closesAt, lastNano)).isEqualTo(PreorderSaleStatus.OPEN);
+        assertThat(repository.count(filter, lastNano)).isEqualTo(1);
+        for (Instant shown : List.of(opensAt, closesAt.minus(micro))) {
+            assertThat(ids(repository.find(filter, ProductSort.NEWEST, shown, 0, 10))).as("%s", shown).containsExactly(productId);
+            assertThat(repository.count(filter, shown)).as("%s", shown).isEqualTo(1);
+            assertThat(PreorderSaleStatus.of(opensAt, closesAt, shown)).isEqualTo(PreorderSaleStatus.OPEN);
+        }
     }
 
     @Test

@@ -326,7 +326,7 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
-    @DisplayName("사전예약 접수 단계는 꺼낼 때 지금 시각으로 — 캐시된 상세 · 목록도 오픈 시각이 지나면 OPEN")
+    @DisplayName("사전예약 접수 단계는 꺼낼 때 지금 시각으로 — 캐시된 상세는 오픈 시각이, 캐시된 목록은 마감 시각이 지나면 바로 바뀐다")
     void preorderStatusIsRecomputed() throws Exception {
         String tag = "p" + ShopFixtures.unique();
         UUID productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", "오픈 직전", tag);
@@ -334,19 +334,29 @@ class CatalogReadCacheApiTest {
         fixtures.option(productId, "ACTIVE");
         Instant opensAt = Instant.now().plusMillis(1500);
         fixtures.campaign(productId, opensAt, opensAt.plus(Duration.ofHours(1)));
-
         assertThat(data(mockMvc.perform(get("/api/v1/products/{id}", productId))).get("campaign").get("status").asString()).isEqualTo("BEFORE_OPEN");
-        assertThat(list(tag).get(0).get("preorderStatus").asString()).isEqualTo("BEFORE_OPEN");
+
+        // 목록은 접수 중일 때만 싣는다 — 마감이 곧 오는 다른 상품으로 캐시된 목록의 단계 재계산을 본다
+        UUID closing = fixtures.product(categoryId, "PREORDER", "ACTIVE", "마감 직전", tag);
+        fixtures.registration(closing);
+        fixtures.option(closing, "ACTIVE");
+        Instant closesAt = Instant.now().plusMillis(1500);
+        fixtures.campaign(closing, Instant.now().minus(Duration.ofHours(1)), closesAt);
+        assertThat(list(tag).get(0).get("preorderStatus").asString()).isEqualTo("OPEN");
+
         // 캐시에서 꺼낸 것인지 확인하려고 DB 를 직접 고친다(세대 안 올림)
-        jdbcTemplate.update("UPDATE products SET title = '직접 고침' WHERE id = ?", (Object) UuidBinary.toBytes(productId));
-        Thread.sleep(Math.max(0, Duration.between(Instant.now(), opensAt).toMillis()) + 200);
+        jdbcTemplate.update("UPDATE products SET title = '직접 고침' WHERE id IN (?, ?)", UuidBinary.toBytes(productId), UuidBinary.toBytes(closing));
+        Instant later = opensAt.isAfter(closesAt) ? opensAt : closesAt;
+        Thread.sleep(Math.max(0, Duration.between(Instant.now(), later).toMillis()) + 200);
 
         JsonNode detail = data(mockMvc.perform(get("/api/v1/products/{id}", productId)));
         assertThat(detail.get("title").asString()).isEqualTo("오픈 직전");
         assertThat(detail.get("campaign").get("status").asString()).isEqualTo("OPEN");
-        JsonNode item = list(tag).get(0);
-        assertThat(item.get("title").asString()).isEqualTo("오픈 직전");
-        assertThat(item.get("preorderStatus").asString()).isEqualTo("OPEN");
+        JsonNode cached = list(tag);
+        assertThat(cached).as("캐시된 목록 그대로 — 오픈한 상품이 들어오는 것도, 마감한 상품이 빠지는 것도 TTL 만큼 늦다").hasSize(1);
+        JsonNode item = cached.get(0);
+        assertThat(item.get("title").asString()).isEqualTo("마감 직전");
+        assertThat(item.get("preorderStatus").asString()).isEqualTo("CLOSED");
     }
 
     @Test
