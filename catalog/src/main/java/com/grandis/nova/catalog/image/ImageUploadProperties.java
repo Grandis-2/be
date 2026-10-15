@@ -33,7 +33,7 @@ public record ImageUploadProperties(
 
     public ImageUploadProperties {
         if (bucket == null || bucket.isBlank()) {
-            throw new IllegalArgumentException("nova.upload.bucket is required (the upload bucket browsers PUT images into)");
+            throw new IllegalArgumentException("nova.upload.bucket is required (the bucket uploaded images are stored in)");
         }
         if (bucket.startsWith("CHANGE_ME")) {
             throw new IllegalArgumentException("nova.upload.bucket is still the example placeholder");

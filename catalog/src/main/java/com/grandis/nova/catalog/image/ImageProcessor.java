@@ -11,12 +11,10 @@ import javax.imageio.ImageReader;
 import javax.imageio.ImageWriteParam;
 import javax.imageio.ImageWriter;
 import javax.imageio.stream.ImageInputStream;
-import javax.imageio.stream.MemoryCacheImageOutputStream;
 import java.awt.color.ColorSpace;
 import java.awt.image.BufferedImage;
 import java.awt.image.WritableRaster;
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Iterator;
@@ -108,8 +106,8 @@ public class ImageProcessor {
             }
             out = PngColorChunks.insertAfterHeader(writePng(pixels), color);
         }
-        if (out.length > MAX_BYTES) {
-            throw invalid("다시 저장한 파일이 %d 바이트(10MiB)를 넘습니다. 크기를 줄여 올려 주세요.".formatted(MAX_BYTES));
+        if (out.length > MAX_BYTES) {  // PNG 는 색 청크를 더한 뒤 한 번 더 본다
+            throw tooLarge();
         }
         return out;
     }
@@ -185,23 +183,28 @@ public class ImageProcessor {
         return write(writer, pixels, writer.getDefaultWriteParam());
     }
 
-    /** 메타데이터 없이 쓴다(IIOImage 의 메타데이터 null). */
+    /** 메타데이터 없이 쓴다(IIOImage 의 메타데이터 null). 결과가 상한을 넘는 순간 멈추고 400 이다. */
     private static byte[] write(ImageWriter writer, BufferedImage pixels, ImageWriteParam param) {
-        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        try (MemoryCacheImageOutputStream out = new MemoryCacheImageOutputStream(bytes)) {
+        try (BoundedImageOutputStream out = new BoundedImageOutputStream((int) MAX_BYTES)) {
             writer.setOutput(out);
             writer.write(null, new IIOImage(pixels, null, null), param);
+            return out.toByteArray();
+        } catch (BoundedImageOutputStream.TooLarge e) {
+            throw tooLarge();
         } catch (IOException | RuntimeException e) {
             throw unreadable();
         } finally {
             writer.dispose();
         }
-        return bytes.toByteArray();
     }
 
     private static ImageReader reader(ImageFormat format) {
         Iterator<ImageReader> readers = ImageIO.getImageReadersByFormatName(format.imageIoName());
         return readers.next();
+    }
+
+    private static BusinessException tooLarge() {
+        return invalid("다시 저장한 파일이 %d 바이트(10MiB)를 넘습니다. 크기를 줄여 올려 주세요.".formatted(MAX_BYTES));
     }
 
     private static BusinessException unreadable() {

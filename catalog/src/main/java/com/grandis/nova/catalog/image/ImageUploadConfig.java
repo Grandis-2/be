@@ -12,7 +12,8 @@ import software.amazon.awssdk.services.s3.S3ClientBuilder;
 
 /**
  * 사진을 올리는 S3 클라이언트. 시도마다 · 재시도를 합친 전체에 시간 상한을 둔다 — S3 가 멈춰도 업로드가 상한 뒤에 503 으로 끝나고
- * 동시 처리 허가를 돌려준다. 전체 상한은 CloudFront 가 origin 응답을 기다리는 시간(60초)보다 짧아야 한다(디코딩 · 재인코딩 시간을 더해도).
+ * 동시 처리 허가를 돌려준다(실측: 응답 없는 서버에 전체 1초 상한이면 1.07초에 예외). 전체 상한(25초)은 CloudFront 가 origin 응답을 기다리는
+ * 시간(60초)보다 짧게 잡았다. 디코딩 · 재인코딩에는 시간 상한이 없어(재 본 입력은 2초 안), 업로드 전체가 60초 안이라는 보장은 아니다.
  */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(ImageUploadProperties.class)

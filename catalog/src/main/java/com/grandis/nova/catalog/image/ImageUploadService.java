@@ -31,12 +31,17 @@ public class ImageUploadService {
     private static final Logger log = LoggerFactory.getLogger(ImageUploadService.class);
 
     /**
-     * 동시에 디코딩 · 전송하는 장 수. 실측(JDK 25, 빈 JVM 에서 한 장을 처리하고 끝나는 최소 힙 — ExitOnOutOfMemoryError):
-     * 픽셀 상한(2,500만)의 16비트 RGBA PNG 230MB · 방향을 돌리는 JPEG 180MB · 8비트 PNG 130MB. 운영 힙(태스크 메모리 2GB 의 75%)에서
-     * 두 장이면 최악 약 460MB 다. 운영은 OutOfMemoryError 에서 프로세스를 끝내므로(Dockerfile) 늘리기 전에 다시 잰다.
+     * 동시에 디코딩 · 전송하는 장 수. 실측(JDK 25, 빈 JVM 에서 한 장을 끝까지 처리하는 최소 힙 — ExitOnOutOfMemoryError, 20MB 간격):
+     * 16비트 RGBA PNG 5,000×5,000 220MB · 노이즈 JPEG 5,000×5,000(품질 0.5 · 10.3MB · 방향 6, 다시 쓰면 상한을 넘어 400) 200MB ·
+     * 노이즈 JPEG 3,500×3,500(품질 0.7 · 방향 6, 결과 10.4MB) 140MB. 운영 힙(태스크 메모리 2GB 의 75%)에서 두 장이면 최악 약 440MB 다.
+     * 디코더의 네이티브 메모리(libjpeg)는 이 측정에 잡히지 않는다 — 컨테이너 메모리로는 재지 않았다.
+     * 운영은 OutOfMemoryError 에서 프로세스를 끝내므로(Dockerfile) 늘리기 전에 다시 잰다.
      */
     static final int MAX_CONCURRENT = 2;
-    /** 허가를 못 받았을 때 다시 시도하라는 초. 한 장의 처리는 1 ~ 2초다(위 실측의 디코딩 · 다시 인코딩). */
+    /**
+     * 허가를 못 받았을 때 다시 시도하라는 초. 디코딩 · 다시 인코딩은 0.5 ~ 1.7초였다(5,000×5,000 JPEG · PNG, 위와 같은 환경). S3 가 느리면
+     * 허가는 전송 상한(시도 10초 · 전체 25초)까지 잡히므로 이 값은 보장이 아니라 첫 재시도 간격이다.
+     */
     static final int RETRY_AFTER_SECONDS = 2;
 
     private final ImageProcessor processor;
