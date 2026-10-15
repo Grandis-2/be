@@ -58,9 +58,10 @@ class ImageProcessorTest {
     @Test
     @DisplayName("가로 · 세로는 풀기 전 헤더로 본다 — 헤더가 8,001 이거나 픽셀 상한을 넘으면 픽셀 데이터를 보지 않고 400, 상한 안이면 헤더 크기 그대로 통과")
     void checksSizeFromHeaderBeforeDecoding() {
-        assertRejected(ImageFixtures.pngClaiming(8_001, 1));
-        assertRejected(ImageFixtures.pngClaiming(1, 8_001));
-        assertRejected(ImageFixtures.pngClaiming(5_001, 5_000));  // 25,005,000 > 25,000,000
+        // 거절은 inspect 에서, 크기 문구로 — 픽셀 데이터가 가짜라 풀었다면 "읽을 수 없습니다" 로 갈렸을 것이다
+        assertRejectedForSize(ImageFixtures.pngClaiming(8_001, 1));
+        assertRejectedForSize(ImageFixtures.pngClaiming(1, 8_001));
+        assertRejectedForSize(ImageFixtures.pngClaiming(5_001, 5_000));  // 25,005,000 > 25,000,000
         ImageProcessor.Inspected atLimit = inspect(ImageFixtures.pngClaiming(5_000, 5_000));
         assertThat(atLimit.width()).isEqualTo(5_000);
         assertThat(atLimit.height()).isEqualTo(5_000);
@@ -172,6 +173,11 @@ class ImageProcessorTest {
 
     private byte[] process(byte[] bytes) {
         return processor.reencode(inspect(bytes), bytes);
+    }
+
+    private void assertRejectedForSize(byte[] bytes) {
+        assertThatThrownBy(() -> inspect(bytes))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.details().toString()).contains("file", "픽셀 이하"));
     }
 
     private void assertRejected(byte[] bytes) {
