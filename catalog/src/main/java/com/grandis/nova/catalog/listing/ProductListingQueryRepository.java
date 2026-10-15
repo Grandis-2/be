@@ -49,14 +49,38 @@ import java.util.UUID;
 public class ProductListingQueryRepository {
 
     /**
+     * 상품마다 그 상품의 옵션을 찾는 서브쿼리의 계획을 통계와 상관없이 고정한다.
+     * <ul>
+     *   <li>옵션은 {@link #BY_PRODUCT} — (product_id, id) 로 찾는다.</li>
+     *   <li>옵션 · 재고를 잇는 조인은 옵션부터 읽고({@code JOIN_ORDER}) 재고는 {@link #INVENTORY_BY_OPTION} 으로 붙인다 — 안 그러면 재고 표 통계만
+     *       틀릴 때 "재고 전부 → 옵션을 uq_option_product 로" 가 FORCE INDEX 아래에서도 허용된다.</li>
+     *   <li>WHERE 의 EXISTS(색상 · 용량 필터 · 증정품 후보)는 세미조인으로 바꾸지 않는다({@code NO_SEMIJOIN}) — 바꾸면 옵션 표가 맨 앞에 와 인덱스
+     *       힌트가 소용없다. 대가: 통계가 맞고 다른 상품이 아주 많으면 세미조인이 더 빠를 수 있다(리뷰 실측: 다른 카테고리 5000 상품에서 18ms 대 6ms).</li>
+     * </ul>
+     * 통계가 실제와 다르면(데이터를 한꺼번에 넣은 직후 — 자동 재계산으로 영구 통계가 바뀐 뒤에도 계획은 ANALYZE TABLE 전까지 그대로였다) 옵티마이저가
+     * 상품마다 옵션 표나 재고 표 전체를 훑는다. 실측(MySQL 8.4.11, 한 카테고리 상품 300 · 옵션 600, 목록 20개 + 건수): 데이터를 넣은 직후 힌트 없이
+     * 120~143ms → 힌트로 5.6~6.3ms, ANALYZE TABLE 뒤에는 둘 다 4.5~5.8ms. 시험이 틀린 통계 세 모양(구분값만 · 옵션 · 재고 행 수까지 · 재고 표만)에서
+     * 옵션 · 재고 접근이 전부 ref/eq_ref 인지 본다. 위치별로 잰 것: READY 의 순서 · 필터와 증정품의 NO_SEMIJOIN · 칩의 인덱스는 하나씩 빼면 시험이
+     * 잡는다. 재고 쪽의 JOIN_ORDER 와 재고 PRIMARY 는 둘 다 있어야 한다 — 구분값 0 에 재고 표 행 수까지 0 인 모양에서 JOIN_ORDER 만이면 품절이
+     * 재고 표를 다 읽고(16ms), 재고 PRIMARY 만이면 품절 · 증정품이 재고부터 읽는다(36 · 28ms, 둘 다면 5.6 · 1.1ms — 리뷰 실측). 시험에 그 모양이
+     * 있어 하나씩 빼면 잡힌다. 관리자 옵션 수(oc)는 어느 모양에서도 힌트 없이 ref 였다 — 같은 꼴이라 같은 힌트를 건다(일관성).
+     * <p>인덱스 이름은 마이그레이션의 이름과 맞아야 한다. 힌트 이름은 접두사로도 맞는다(리뷰 실측: uq_option_product_id 로 바꿔도 오류 없이 걸린다) —
+     * 이름이 바뀌면 오류(1176)가 날 수도, 다른 인덱스에 조용히 걸릴 수도 있다. 이 표에 커버링 인덱스(예: product_id · status · price)를 더하면 이
+     * 힌트가 그 인덱스를 막으니 같이 바꾼다.
+     */
+    private static final String BY_PRODUCT = "FORCE INDEX (uq_option_product)";
+    private static final String INVENTORY_BY_OPTION = "FORCE INDEX (PRIMARY)";
+
+    /**
      * 판매 방식별 준비 — 등록 이벤트를 받은 서비스가 자기 표에 행을 만들었는가. 사전예약은 preorder 회차 행, 일반은 그 상품 옵션의
      * order 재고 행(초기화는 한 상품의 옵션을 한 트랜잭션에서 모두 만들므로 하나라도 있으면 등록분은 다 있다). products 를 p 로 둔 문장에 넣는다.
      */
     static final String READY = """
             (CASE WHEN p.sale_mode = 'PREORDER'
                   THEN EXISTS (SELECT 1 FROM preorder_campaigns rc WHERE rc.product_id = p.id)
-                  ELSE EXISTS (SELECT 1 FROM product_options ro JOIN option_inventories ri ON ri.option_id = ro.id
-                                WHERE ro.product_id = p.id) END)""";
+                  ELSE EXISTS (SELECT /*+ JOIN_ORDER(ro, ri) */ 1 FROM product_options ro %s
+                                 JOIN option_inventories ri %s ON ri.option_id = ro.id
+                                WHERE ro.product_id = p.id) END)""".formatted(BY_PRODUCT, INVENTORY_BY_OPTION);
 
     private static final String FROM_VISIBLE = """
               FROM products p
@@ -71,23 +95,23 @@ public class ProductListingQueryRepository {
      * 옵션마다 할인가를 계산해 MIN 하지 않는다.
      */
     private static final String MIN_LIST_PRICE = """
-            (SELECT MIN(o.price) FROM product_options o
-                     WHERE o.product_id = p.id AND o.status = 'ACTIVE')""";
+            (SELECT MIN(o.price) FROM product_options o %s
+                     WHERE o.product_id = p.id AND o.status = 'ACTIVE')""".formatted(BY_PRODUCT);
 
     private static final String SELECT_ITEMS = """
             SELECT p.id, p.sale_mode, p.title, p.brand, p.model_name, p.status, p.discount_rate, c.opens_at, c.closes_at,
                    %1$s AS min_list_price,
                    %2$s AS min_price,
-                   EXISTS (SELECT 1 FROM product_options po
+                   EXISTS (SELECT 1 FROM product_options po %3$s
                             WHERE po.product_id = p.id AND po.status = 'ACTIVE') AS sellable,
                    p.thumbnail_url AS image_url,
                    CASE WHEN p.sale_mode = 'IN_STOCK' AND NOT EXISTS (
-                            SELECT 1 FROM product_options o
-                              JOIN option_inventories inv ON inv.option_id = o.id
+                            SELECT /*+ JOIN_ORDER(o, inv) */ 1 FROM product_options o %3$s
+                              JOIN option_inventories inv %4$s ON inv.option_id = o.id
                              WHERE o.product_id = p.id AND o.status = 'ACTIVE'
                                AND inv.stock_total - inv.stock_reserved - inv.stock_sold > 0)
                         THEN 1 ELSE 0 END AS sold_out
-            """.formatted(MIN_LIST_PRICE, Discount.sql(MIN_LIST_PRICE, "p.discount_rate"));
+            """.formatted(MIN_LIST_PRICE, Discount.sql(MIN_LIST_PRICE, "p.discount_rate"), BY_PRODUCT, INVENTORY_BY_OPTION);
 
     /**
      * 색상칩에 쓰는 칸 — 옵션 문서와, 판매 중 옵션이 고른 색상(정규화값, 목록의 color 필터가 보는 값). 칩을 내보내는 회원 목록 · 홍보 상세만,
@@ -96,11 +120,11 @@ public class ProductListingQueryRepository {
      */
     private static final String CHIP_COLUMNS = """
             SELECT p.id, p.options,
-                   (SELECT JSON_ARRAYAGG(sc.filter_attributes->>'$.color') FROM product_options sc
+                   (SELECT JSON_ARRAYAGG(sc.filter_attributes->>'$.color') FROM product_options sc %s
                      WHERE sc.product_id = p.id AND sc.status = 'ACTIVE') AS sellable_colors
               FROM products p
              WHERE p.id IN (:ids)
-            """;
+            """.formatted(BY_PRODUCT);
 
     /** 관리자 목록 — 노출 규칙 없이 전부. */
     private static final String FROM_ALL = """
@@ -112,8 +136,8 @@ public class ProductListingQueryRepository {
     private static final String ADMIN_COLUMNS = """
             ,
                    p.visible, %s AS ready,
-                   (SELECT COUNT(*) FROM product_options oc WHERE oc.product_id = p.id) AS option_count
-            """.formatted(READY);
+                   (SELECT COUNT(*) FROM product_options oc %s WHERE oc.product_id = p.id) AS option_count
+            """.formatted(READY, BY_PRODUCT);
 
     /** 건수는 products 와 필터만 본다 — 회차는 건수에 영향이 없다(product_id 가 PRIMARY KEY 라 행이 안 는다). */
     private static final String COUNT_FROM = """
@@ -212,7 +236,8 @@ public class ProductListingQueryRepository {
         appendBrandFilter(sql, params, filter.brands());
         if (!filter.colors().isEmpty() || !filter.storages().isEmpty()) {
             // 필터 조건은 판매 중 옵션 하나가 모든 축을 함께 만족해야 한다. 품절은 포함, 판매 중지는 제외
-            sql.append(" AND EXISTS (SELECT 1 FROM product_options o WHERE o.product_id = p.id AND o.status = 'ACTIVE'");
+            // 세미조인으로 바꾸면 옵션 표부터 전부 읽는 계획이 될 수 있다(통계가 틀릴 때 실측 — 맨 앞 표에는 인덱스 힌트가 소용없다). 상품마다 인덱스로 찾게 둔다
+            sql.append(" AND EXISTS (SELECT /*+ NO_SEMIJOIN() */ 1 FROM product_options o ").append(BY_PRODUCT).append(" WHERE o.product_id = p.id AND o.status = 'ACTIVE'");
             appendAxisCondition(sql, params, "color", filter.colors());
             appendAxisCondition(sql, params, "storage", filter.storages());
             sql.append(")");
@@ -288,8 +313,8 @@ public class ProductListingQueryRepository {
      * 재고 행이 있으면 판매 방식별 준비({@link #READY})도 참이다(일반 상품의 준비가 곧 재고 행의 유무).
      */
     private static final String GIFT_OPTION = """
-            SELECT 1 FROM product_options go JOIN option_inventories gi ON gi.option_id = go.id
-             WHERE go.product_id = p.id AND go.status = 'ACTIVE'""";
+            SELECT /*+ NO_SEMIJOIN() JOIN_ORDER(go, gi) */ 1 FROM product_options go %s JOIN option_inventories gi %s ON gi.option_id = go.id
+             WHERE go.product_id = p.id AND go.status = 'ACTIVE'""".formatted(BY_PRODUCT, INVENTORY_BY_OPTION);
 
     /** 증정품 후보 상품 — 일반 판매 · 판매 중이고 후보 옵션이 하나 이상. 공개 여부는 보지 않는다. */
     private static final String GIFT_PRODUCTS = """
