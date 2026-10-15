@@ -16,6 +16,7 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -172,7 +173,8 @@ public class ProductListingQueryRepository {
     }
 
     private static MapSqlParameterSource baseParams(Instant now) {
-        return new MapSqlParameterSource("now", utc(now));
+        // µs 로 자른다 — datetime(6) 바인딩은 µs 아래를 반올림해(드라이버) 접수 단계(PreorderSaleStatus, 자르지 않음)와 1µs 어긋날 수 있다
+        return new MapSqlParameterSource("now", utc(now.truncatedTo(ChronoUnit.MICROS)));
     }
 
     private static void appendFilters(StringBuilder sql, MapSqlParameterSource params, ProductListFilter filter) {
