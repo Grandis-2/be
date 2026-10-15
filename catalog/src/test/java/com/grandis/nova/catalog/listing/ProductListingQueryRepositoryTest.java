@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 import java.util.UUID;
 
@@ -127,15 +128,25 @@ class ProductListingQueryRepositoryTest {
         }
         ProductListFilter filter = new ProductListFilter(null, category, null, null, List.of("화이트"), List.of());
         try (Connection root = rootConnection(); Statement statement = root.createStatement()) {
-            String list = capture(statement, "%sold_out%", () -> repository.find(filter, ProductSort.PRICE_ASC, Instant.now(), 0, 20));
-            String gifts = capture(statement, "%option_inventories gi%", () -> repository.findGiftCandidates(tag, 0, 20));
-            List<String> tables = List.of("products", "product_options", "option_inventories");
+            // 목록(색상 필터) · 색상칩 · 관리자 목록(옵션 수) · 증정품 후보 — 상품마다 옵션을 찾는 문장 전부
+            List<String> statements = List.of(
+                    capture(statement, "%sold_out%NO_SEMIJOIN%LIMIT%", () -> repository.find(filter, ProductSort.PRICE_ASC, Instant.now(), 0, 20)),
+                    capture(statement, "%sellable_colors%", () -> repository.find(filter, ProductSort.PRICE_ASC, Instant.now(), 0, 20)),
+                    capture(statement, "%option_count%LIMIT%", () -> repository.findForAdmin(new AdminProductListFilter(tag, null, null, null), Instant.now(), 0, 20)),
+                    capture(statement, "%option_inventories gi%LIMIT%", () -> repository.findGiftCandidates(tag, 0, 20)));
             try {
-                // 틀린 통계 두 모양 — 구분값만 0(행 수는 실제) · 옵션 · 재고 표는 행 수까지 0. 옵티마이저가 고르는 나쁜 계획이 서로 달라 힌트마다 한쪽이 잡는다
-                for (boolean rowsToo : new boolean[] {false, true}) {
+                // 틀린 통계 세 모양 — 옵티마이저가 고르는 나쁜 계획이 서로 달라 힌트마다 어느 한쪽이 잡는다
+                //   구분값만 0(행 수는 실제) · 옵션 · 재고 표는 행 수까지 0 · 재고 표만 행 수까지 0(재고는 order 가 늦게 몰아 채운다)
+                Map<String, List<String>> zeroRows = Map.of("구분값만", List.of(), "옵션 · 재고 행 수까지", List.of("product_options", "option_inventories"),
+                        "재고 표만", List.of("option_inventories"));
+                for (Map.Entry<String, List<String>> shape : zeroRows.entrySet()) {
                     statement.execute("ANALYZE TABLE shop.products, shop.product_options, shop.option_inventories");
-                    for (String table : tables) {
-                        if (rowsToo && !table.equals("products")) {
+                    for (String table : List.of("products", "product_options", "option_inventories")) {
+                        boolean onlyInventory = shape.getKey().equals("재고 표만");
+                        if (onlyInventory && !table.equals("option_inventories")) {
+                            continue;
+                        }
+                        if (shape.getValue().contains(table)) {
                             statement.execute("UPDATE mysql.innodb_table_stats SET n_rows = 0, clustered_index_size = 1, sum_of_other_index_sizes = 1"
                                     + " WHERE database_name = 'shop' AND table_name = '" + table + "'");
                         }
@@ -143,8 +154,14 @@ class ProductListingQueryRepositoryTest {
                                 + "' AND stat_name LIKE 'n_diff_pfx%'");
                         statement.execute("FLUSH TABLE shop." + table);
                     }
-                    for (String sql : List.of(list, gifts)) {
-                        assertThat(optionAccess(statement, sql)).as("옵션 · 재고 행 수까지 0: %s — %s", rowsToo, sql.substring(0, 60)).isNotEmpty()
+                    // 대조군 — 힌트를 걷어낸 같은 문장은 이 통계에서 옵션 · 재고 표를 훑는다(통계 조작이 먹혔다)
+                    List<String> unhinted = new ArrayList<>();
+                    for (String sql : statements) {
+                        unhinted.addAll(optionAccess(statement, sql.replaceAll("/\\*\\+[^*]*\\*/", "").replaceAll("FORCE INDEX \\(\\w+\\)", "")));
+                    }
+                    assertThat(unhinted).as("%s — 힌트 없는 문장", shape.getKey()).anyMatch(access -> !access.endsWith(":ref") && !access.endsWith(":eq_ref"));
+                    for (String sql : statements) {
+                        assertThat(optionAccess(statement, sql)).as("%s — %s", shape.getKey(), sql.substring(0, 60)).isNotEmpty()
                                 .allMatch(access -> access.endsWith(":ref") || access.endsWith(":eq_ref"));
                     }
                 }
@@ -154,7 +171,7 @@ class ProductListingQueryRepositoryTest {
         }
     }
 
-    /** 옵션 · 재고 표(별칭 o · ro · ri · inv · po · go · gi)의 접근 방식 — EXPLAIN FORMAT=JSON 의 access_type. */
+    /** 옵션 · 재고 표(별칭 o · ro · ri · inv · po · go · gi · sc · oc)의 접근 방식 — EXPLAIN FORMAT=JSON 의 access_type. */
     private static List<String> optionAccess(Statement statement, String sql) throws Exception {
         statement.execute("USE shop");
         List<String> access = new ArrayList<>();
@@ -163,7 +180,7 @@ class ProductListingQueryRepositoryTest {
             java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"table_name\": \"(\\w+)\",\\s*\"access_type\": \"(\\w+)\"")
                     .matcher(rs.getString(1));
             while (m.find()) {
-                if (m.group(1).matches("o|ro|ri|inv|po|go|gi")) {
+                if (m.group(1).matches("o|ro|ri|inv|po|go|gi|sc|oc")) {
                     access.add(m.group(1) + ":" + m.group(2));
                 }
             }
@@ -181,7 +198,7 @@ class ProductListingQueryRepositoryTest {
         } finally {
             statement.execute("SET GLOBAL general_log = 'OFF'");
         }
-        try (ResultSet rs = statement.executeQuery("SELECT argument FROM mysql.general_log WHERE command_type = 'Query' AND argument LIKE '%LIMIT%'"
+        try (ResultSet rs = statement.executeQuery("SELECT argument FROM mysql.general_log WHERE command_type = 'Query'"
                 + " AND argument LIKE '" + like + "'")) {
             assertThat(rs.next()).as("문장이 로그에 있다: %s", like).isTrue();
             return new String(rs.getBytes(1), java.nio.charset.StandardCharsets.UTF_8);
