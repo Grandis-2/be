@@ -2,6 +2,7 @@ package com.grandis.nova.preorder.event;
 
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.cancel.CancelRequestPayload;
+import com.grandis.nova.preorder.outbox.NotificationRequested;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.PreorderFact;
 import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
@@ -71,6 +72,8 @@ public class PreorderEventHandler {
     /**
      * 외부 등록 · 취소 성공. 작업을 SUCCEEDED 로 바꾸고 예약에 반영한다. 포기한 뒤(DEAD_LETTER) 늦게 온 성공도 받는다.
      * 취소가 무효화한 등록 작업(CANCELED)이면 반영하지 않는다 — 외부 쪽은 CANCEL 작업이 정리한다.
+     * 회원 알림은 예약 상태가 실제로 바뀐 때만 적는다. member 는 eventId 로만 중복을 거르는데 아웃박스 행마다 새 eventId 라,
+     * 같은 결과를 다시 받을 때 또 적으면 알림이 두 건이 된다.
      *
      * @param eventId 받은 이벤트의 id. 차례 기록을 한 번만 남기는 데 쓴다. 성공은 다시 반영해도 같아 차례 기록이 없어도 받는다
      */
@@ -93,10 +96,18 @@ public class PreorderEventHandler {
             return;
         }
         if (job.jobType() == SyncJobType.REGISTER) {
-            ledger.fire(job.preorderId(), new PreorderFact.RegisterConfirmed(message.externalNumber()));
+            if (ledger.fire(job.preorderId(), new PreorderFact.RegisterConfirmed(message.externalNumber())).applied()) {
+                notifyRegistered(job.preorderId());
+            }
         } else {
             ledger.fire(job.preorderId(), new PreorderFact.CancelCompleted());
         }
+    }
+
+    private void notifyRegistered(UUID preorderId) {
+        PreorderSnapshot preorder = preorders.getById(preorderId);
+        outboxWriter.append(NotificationRequested.preorderRegistered(preorder.id(), preorder.preorderToken(),
+                preorder.customerId()));
     }
 
     /** 실패한 차례가 있었고 worker 가 다시 시도한다. 차례를 남기고, 아직 끝나지 않은 작업이면 재시도 대기로 표시한다. */
