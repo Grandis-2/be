@@ -63,7 +63,7 @@ public class PromotionQueryService {
         ReadCache.Entry<List<Body>> bodies = cache.entry(shownSpec, PROMOTIONS, today.toString(), () -> loadShown(today));
         List<UUID> allIds = bodies.value().stream().flatMap(body -> body.productIds().stream()).toList();
         Map<UUID, ProductListItem> cards = new HashMap<>();
-        crossReads.findCards(allIds, clock.instant()).forEach(card -> cards.put(card.productId(), card));
+        crossReads.findCards(allIds, clock.instant(), false).forEach(card -> cards.put(card.productId(), card));
         return bodies.map(list -> list.stream().map(body -> {
             List<ProductListItem> mine = body.productIds().stream().map(cards::get).filter(Objects::nonNull).toList();
             return new PromotionViews.Summary(body.promotionId(), body.name(), body.thumbnailUrl(), body.startDate(), body.endDate(),
@@ -78,7 +78,7 @@ public class PromotionQueryService {
         if (today.isBefore(body.value().startDate()) || today.isAfter(body.value().endDate())) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
-        List<ProductListItem> cards = crossReads.findCards(body.value().productIds(), clock.instant());
+        List<ProductListItem> cards = crossReads.findCards(body.value().productIds(), clock.instant(), true);
         return body.map(b -> new PromotionViews.Detail(b.promotionId(), b.name(), b.thumbnailUrl(), b.detailImageUrls(), b.startDate(),
                 b.endDate(), earliestOpen(cards), latestClose(cards), cards));
     }

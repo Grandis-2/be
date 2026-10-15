@@ -7,9 +7,13 @@ import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.common.UuidBinary;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
 import java.sql.ResultSet;
@@ -21,6 +25,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -75,7 +80,7 @@ public class ProductListingQueryRepository {
                    %2$s AS min_price,
                    EXISTS (SELECT 1 FROM product_options po
                             WHERE po.product_id = p.id AND po.status = 'ACTIVE') AS sellable,
-                   p.thumbnail_url AS image_url, p.options,
+                   p.thumbnail_url AS image_url,
                    CASE WHEN p.sale_mode = 'IN_STOCK' AND NOT EXISTS (
                             SELECT 1 FROM product_options o
                               JOIN option_inventories inv ON inv.option_id = o.id
@@ -83,6 +88,17 @@ public class ProductListingQueryRepository {
                                AND inv.stock_total - inv.stock_reserved - inv.stock_sold > 0)
                         THEN 1 ELSE 0 END AS sold_out
             """.formatted(MIN_LIST_PRICE, Discount.sql(MIN_LIST_PRICE, "p.discount_rate"));
+
+    /**
+     * 색상칩에 쓰는 칸 — 옵션 문서와, 판매 중 옵션이 고른 색상(정규화값, 목록의 color 필터가 보는 값). 칩을 내보내는 회원 목록 · 홍보 상세만 읽는다
+     * (관리자 목록 · 홍보 목록은 칩을 쓰지 않는다 — 행마다 옵션 문서가 수 KB 다).
+     */
+    private static final String CHIP_COLUMNS = """
+            ,
+                   p.options,
+                   (SELECT JSON_ARRAYAGG(sc.filter_attributes->>'$.color') FROM product_options sc
+                     WHERE sc.product_id = p.id AND sc.status = 'ACTIVE') AS sellable_colors
+            """;
 
     /** 관리자 목록 — 노출 규칙 없이 전부. */
     private static final String FROM_ALL = """
@@ -103,6 +119,9 @@ public class ProductListingQueryRepository {
              WHERE 1 = 1
             """;
 
+    private static final Logger log = LoggerFactory.getLogger(ProductListingQueryRepository.class);
+    private static final JsonMapper JSON = JsonMapper.builder().build();
+
     private final NamedParameterJdbcTemplate jdbc;
 
     public ProductListingQueryRepository(NamedParameterJdbcTemplate jdbc) {
@@ -118,12 +137,12 @@ public class ProductListingQueryRepository {
     }
 
     public List<ProductListItem> find(ProductListFilter filter, ProductSort sort, Instant now, int page, int size) {
-        StringBuilder sql = new StringBuilder(SELECT_ITEMS).append(FROM_VISIBLE);
+        StringBuilder sql = new StringBuilder(SELECT_ITEMS.stripTrailing()).append(CHIP_COLUMNS).append(FROM_VISIBLE);
         MapSqlParameterSource params = baseParams(now);
         appendFilters(sql, params, filter);
         sql.append(sort.orderBy()).append(" LIMIT :limit OFFSET :offset");
         params.addValue("limit", size).addValue("offset", (long) page * size);
-        return jdbc.query(sql.toString(), params, (rs, rowNum) -> toItem(rs, now));
+        return jdbc.query(sql.toString(), params, (rs, rowNum) -> toItem(rs, now, true));
     }
 
     public long countForAdmin(AdminProductListFilter filter) {
@@ -141,7 +160,7 @@ public class ProductListingQueryRepository {
         appendAdminFilters(sql, params, filter);
         sql.append(" ORDER BY p.created_at DESC, p.id DESC LIMIT :limit OFFSET :offset");
         params.addValue("limit", size).addValue("offset", (long) page * size);
-        return jdbc.query(sql.toString(), params, (rs, rowNum) -> AdminProductListItem.of(toItem(rs, now),
+        return jdbc.query(sql.toString(), params, (rs, rowNum) -> AdminProductListItem.of(toItem(rs, now, false),
                 rs.getBoolean("visible"), rs.getBoolean("ready"), rs.getInt("option_count")));
     }
 
@@ -319,19 +338,21 @@ public class ProductListingQueryRepository {
      * 홍보 상품 카드 — 목록과 같은 칸. 공개 · 판매 중(ACTIVE) · 판매 방식별 준비가 끝난 상품만 싣는다 — 판매 중지 · 회차 취소(PAUSED)는 뺀다
      * (2026-10-14 결정 — 취소 직후 preorder 가 회차를 닫기 전까지 "접수 중" 으로 보이지 않게). 마감 뒤 시간 · 일반 전환과는 상관없이 싣는다(홍보 페이지는
      * 마감 뒤에도 "일반 구매" 로 상품을 보인다 — 일반 전환한 상품은 판매 중이다). 순서는 ids 순서, 빠진 상품은 건너뛴다.
+     *
+     * @param withColors 색상칩까지 싣는다(홍보 상세). false 면 colors 는 빈 목록(홍보 목록은 회차 시각만 쓴다)
      */
-    public List<ProductListItem> findCards(List<UUID> ids, Instant now) {
+    public List<ProductListItem> findCards(List<UUID> ids, Instant now, boolean withColors) {
         if (ids.isEmpty()) {
             return List.of();
         }
-        String sql = SELECT_ITEMS + """
+        String sql = SELECT_ITEMS.stripTrailing() + (withColors ? CHIP_COLUMNS : "\n") + """
                   FROM products p
                   LEFT JOIN preorder_campaigns c ON c.product_id = p.id
                  WHERE p.id IN (:ids) AND p.visible = 1 AND p.status = 'ACTIVE' AND
                 """ + READY;
         Map<UUID, ProductListItem> byId = new HashMap<>();
         jdbc.query(sql, new MapSqlParameterSource("ids", ids.stream().map(UuidBinary::toBytes).toList()),
-                (rs, rowNum) -> toItem(rs, now)).forEach(item -> byId.put(item.productId(), item));
+                (rs, rowNum) -> toItem(rs, now, withColors)).forEach(item -> byId.put(item.productId(), item));
         return ids.stream().map(byId::get).filter(java.util.Objects::nonNull).toList();
     }
 
@@ -381,18 +402,36 @@ public class ProductListingQueryRepository {
         return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
-    private static ProductListItem toItem(ResultSet rs, Instant now) throws SQLException {
+    /** @param withColors 색상칩 칸({@link #CHIP_COLUMNS})을 읽었다. false 면 colors 는 빈 목록 */
+    private static ProductListItem toItem(ResultSet rs, Instant now, boolean withColors) throws SQLException {
+        UUID productId = UuidBinary.fromBytes(rs.getBytes("id"));
         SaleMode saleMode = SaleMode.valueOf(rs.getString("sale_mode"));
         // 회차 시각은 사전예약만 — 일반 전환한 상품에도 preorder 회차 행이 남아 있어 그대로 싣지 않는다
         Instant opensAt = saleMode == SaleMode.PREORDER ? instant(rs, "opens_at") : null;
         Instant closesAt = saleMode == SaleMode.PREORDER ? instant(rs, "closes_at") : null;
         BigDecimal minPrice = rs.getBigDecimal("min_price");
         BigDecimal minListPrice = rs.getBigDecimal("min_list_price");
-        return new ProductListItem(UuidBinary.fromBytes(rs.getBytes("id")), saleMode, rs.getString("title"),
+        List<ProductOptions.ColorChip> colors = withColors ? colorChips(productId, rs.getString("options"), rs.getString("sellable_colors")) : List.of();
+        return new ProductListItem(productId, saleMode, rs.getString("title"),
                 Brand.valueOf(rs.getString("brand")), rs.getString("model_name"), rs.getString("image_url"),
-                ProductOptions.parse(rs.getString("options")).colorChips(),
+                colors,
                 SaleStatus.valueOf(rs.getString("status")), minPrice, minListPrice, rs.getInt("discount_rate"), rs.getBoolean("sellable"), rs.getBoolean("sold_out"),
                 null, opensAt, closesAt).at(now);   // 접수 단계는 캐시에서 꺼낼 때와 같은 규칙(ProductListItem#at)으로
+    }
+
+    /**
+     * 색상칩. 옵션 문서를 읽지 못하면(모양이 틀린 행) 그 상품만 칩을 비우고 경고한다 — 예외를 그대로 두면 그 행이 든 목록 · 홍보 전체가 500 이다
+     * (실측). 옵션 문서는 앱이 쓰지만 중첩 칸에 원시형을 더하면 옛 행이 이 모양이 된다(ProductOptions.Warranty).
+     */
+    private static List<ProductOptions.ColorChip> colorChips(UUID productId, String options, String sellableColors) {
+        try {
+            List<String> sellable = sellableColors == null ? List.of()
+                    : JSON.readValue(sellableColors, new TypeReference<List<String>>() { }).stream().filter(java.util.Objects::nonNull).toList();
+            return ProductOptions.parse(options).colorChips(new HashSet<>(sellable));
+        } catch (RuntimeException e) {
+            log.warn("옵션 문서를 읽지 못해 색상칩을 비운다 productId={}: {}", productId, e.toString());
+            return List.of();
+        }
     }
 
     private static Instant instant(ResultSet rs, String column) throws SQLException {
