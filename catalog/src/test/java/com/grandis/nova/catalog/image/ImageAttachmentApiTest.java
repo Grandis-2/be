@@ -154,7 +154,107 @@ class ImageAttachmentApiTest {
     }
 
     @Test
-    @DisplayName("사진을 바꾸지 않는 수정(표시 정보 · 값 추가 · 값 이름)은 상태 · updated_at 을 건드리지 않는다")
+    @DisplayName("새 주소는 업로드 API 가 준 모양 그대로만 — 쿼리 · 조각을 붙이거나 바깥 호스트에 같은 키를 달면 400(상세 칸도 그 칸 이름)")
+    void newUrlsMustBeCanonical() throws Exception {
+        String a = uploaded(ImagePurpose.PRODUCT);
+        String key = a.substring(CDN.length());
+        for (String variant : List.of(a + "?v=1", a + "#a", "https://elsewhere.example/" + key)) {
+            expectValidation(register(colorBody(uploaded(ImagePurpose.PRODUCT), uploaded(ImagePurpose.PRODUCT), variant)),
+                    "images.detail[0].items[0].url");
+        }
+        assertThat(statuses(a)).containsOnly("UNUSED");
+
+        UUID productId = productId(register(colorBody(a, uploaded(ImagePurpose.PRODUCT), uploaded(ImagePurpose.PRODUCT))).andExpect(status().isCreated()));
+        String before = options(productId);
+        expectValidation(mockMvc.perform(admin(patch(PRODUCTS + "/{id}/images", productId))
+                .content("{ \"url\": \"%s\", \"newUrl\": \"%s\" }".formatted(a, "https://elsewhere.example/" + key))), "newUrl");
+        expectValidation(mockMvc.perform(admin(post(PRODUCTS + "/{id}/images", productId))
+                .content("{ \"kind\": \"GALLERY\", \"bundle\": \"실버\", \"url\": \"%s\" }".formatted(a + "?v=1"))), "url");
+        assertThat(options(productId)).isEqualTo(before);
+        assertThat(statuses(a)).containsOnly("USED");
+    }
+
+    @Test
+    @DisplayName("옛 문서가 같은 사진을 두 모양(쿼리 · 옛 도메인)으로 들고 있으면, 한 모양만 빼도 사진은 USED 로 남는다 — 다 빼야 UNUSED")
+    void sameKeyInTwoShapesStaysUsedUntilAllAreGone() throws Exception {
+        UUID product = preorder();
+        String a = uploaded(ImagePurpose.PROMOTION);
+        UUID promotionId = UUID.fromString(data(createPromotion(promotionBody(a, List.of(), product)).andExpect(status().isCreated()))
+                .get("promotionId").asString());
+        // 이 규칙 전에 저장된 문서 흉내 — 같은 키를 쿼리 붙은 모양 · 옛 CDN 도메인 모양으로도 든다
+        String query = a + "?v=1";
+        String oldDomain = "https://old-cdn.example/" + a.substring(CDN.length());
+        jdbc.update("UPDATE promotions SET detail_image_urls = JSON_ARRAY(?, ?) WHERE id = ?", query, oldDomain, (Object) UuidBinary.toBytes(promotionId));
+
+        replacePromotion(promotionId, promotionBody(a, List.of(oldDomain), product)).andExpect(status().isOk());
+        assertThat(statuses(a)).as("쿼리 모양만 뺐다").containsOnly("USED");
+        String other = uploaded(ImagePurpose.PROMOTION);
+        replacePromotion(promotionId, promotionBody(other, List.of(oldDomain), product)).andExpect(status().isOk());
+        assertThat(statuses(a)).as("정본 모양을 빼도 옛 도메인 모양이 남았다").containsOnly("USED");
+        replacePromotion(promotionId, promotionBody(other, List.of(), product)).andExpect(status().isOk());
+        assertThat(statuses(a)).containsOnly("UNUSED");
+    }
+
+    @Test
+    @DisplayName("옛 도메인 주소를 같은 키의 지금 CDN 주소로 바꿔 저장하면 같은 사진이다 — 400 아님, 상태 그대로(옛 · 새 모양이 함께 와도)")
+    void domainChangeOfTheSameKeyIsTheSameImage() throws Exception {
+        UUID product = preorder();
+        String a = uploaded(ImagePurpose.PROMOTION);
+        UUID promotionId = UUID.fromString(data(createPromotion(promotionBody(a, List.of(), product)).andExpect(status().isCreated()))
+                .get("promotionId").asString());
+        String oldDomain = "https://old-cdn.example/" + a.substring(CDN.length());
+        jdbc.update("UPDATE promotions SET thumbnail_url = ? WHERE id = ?", oldDomain, (Object) UuidBinary.toBytes(promotionId));
+        Instant attachedAt = updatedAt(a);
+
+        replacePromotion(promotionId, promotionBody(oldDomain, List.of(a), product)).andExpect(status().isOk());
+        replacePromotion(promotionId, promotionBody(a, List.of(), product)).andExpect(status().isOk());
+        assertThat(statuses(a)).containsOnly("USED");
+        assertThat(updatedAt(a)).isEqualTo(attachedAt);
+    }
+
+    @Test
+    @DisplayName("홍보 고치기 — 다른 곳이 쓰는 사진 · 상품 접두 · CDN 밖 · 올리지 않은 키는 그 칸의 400 이고 홍보 · 상태가 그대로")
+    void promotionReplaceRejects() throws Exception {
+        UUID product = preorder();
+        String thumb = uploaded(ImagePurpose.PROMOTION);
+        UUID promotionId = UUID.fromString(data(createPromotion(promotionBody(thumb, List.of(), product)).andExpect(status().isCreated()))
+                .get("promotionId").asString());
+        String usedElsewhere = uploaded(ImagePurpose.PROMOTION);
+        createPromotion(promotionBody(usedElsewhere, List.of(), preorder())).andExpect(status().isCreated());
+
+        expectValidation(replacePromotion(promotionId, promotionBody(usedElsewhere, List.of(), product)), "thumbnailUrl");
+        expectValidation(replacePromotion(promotionId, promotionBody(thumb, List.of(uploaded(ImagePurpose.PRODUCT)), product)), "detailImageUrls[0]");
+        expectValidation(replacePromotion(promotionId, promotionBody(thumb, List.of("https://elsewhere.example/x.jpg"), product)), "detailImageUrls[0]");
+        expectValidation(replacePromotion(promotionId, promotionBody(CDN + "promotions/" + UUID.randomUUID() + ".jpg", List.of(), product)),
+                "thumbnailUrl");
+        assertThat(jdbc.queryForObject("SELECT thumbnail_url FROM promotions WHERE id = ?", String.class, (Object) UuidBinary.toBytes(promotionId)))
+                .isEqualTo(thumb);
+        assertThat(statuses(thumb, usedElsewhere)).containsOnly("USED");
+    }
+
+    @Test
+    @DisplayName("사진 맞바꾸기 동시 저장 — 상품 P(A→B) · Q(B→A)를 동시에 바꾸면 둘 다 상대가 쓰는 사진이라 400, 교착 · 500 없음(10회)")
+    void concurrentSwapNeverDeadlocks() throws Exception {
+        try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
+            for (int round = 0; round < 10; round++) {
+                String a = uploaded(ImagePurpose.PRODUCT);
+                String b = uploaded(ImagePurpose.PRODUCT);
+                UUID p = productId(register(colorBody(a, uploaded(ImagePurpose.PRODUCT), uploaded(ImagePurpose.PRODUCT))).andExpect(status().isCreated()));
+                UUID q = productId(register(colorBody(b, uploaded(ImagePurpose.PRODUCT), uploaded(ImagePurpose.PRODUCT))).andExpect(status().isCreated()));
+                Callable<Integer> pSwap = () -> mockMvc.perform(admin(patch(PRODUCTS + "/{id}/images", p))
+                        .content("{ \"url\": \"%s\", \"newUrl\": \"%s\" }".formatted(a, b))).andReturn().getResponse().getStatus();
+                Callable<Integer> qSwap = () -> mockMvc.perform(admin(patch(PRODUCTS + "/{id}/images", q))
+                        .content("{ \"url\": \"%s\", \"newUrl\": \"%s\" }".formatted(b, a))).andReturn().getResponse().getStatus();
+                Future<Integer> first = pool.submit(pSwap);
+                Future<Integer> second = pool.submit(qSwap);
+                assertThat(List.of(first.get(), second.get())).as("round %d", round).containsOnly(400);
+                assertThat(statuses(a, b)).containsOnly("USED");
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("사진을 바꾸지 않는 수정(표시 정보 · 보증 · 값 추가 · 값 이름 · 조합 추가 · 판매 상태 · 공개)은 상태 · updated_at 을 건드리지 않는다")
     void nonImageEditsAreNoOps() throws Exception {
         String b0 = uploaded(ImagePurpose.PRODUCT);
         String b1 = uploaded(ImagePurpose.PRODUCT);
@@ -167,6 +267,12 @@ class ImageAttachmentApiTest {
                 .andExpect(status().isCreated());
         mockMvc.perform(admin(patch(PRODUCTS + "/{id}/option-values/{v}", productId, fixtures.valueId(productId, "color", "블랙")))
                 .content("{ \"value\": \"Black\" }")).andExpect(status().isOk());
+        mockMvc.perform(admin(patch(PRODUCTS + "/{id}", productId)).content("{ \"warranty\": { \"offered\": true, \"surcharge\": 9000 } }"))
+                .andExpect(status().isOk());
+        mockMvc.perform(admin(post(PRODUCTS + "/{id}/variants", productId)).content("{ \"selections\": { \"color\": \"블루\" } }"))
+                .andExpect(status().isCreated());
+        mockMvc.perform(admin(patch(PRODUCTS + "/{id}/sale-status", productId)).content("{ \"status\": \"PAUSED\" }")).andExpect(status().isOk());
+        mockMvc.perform(admin(patch(PRODUCTS + "/{id}/visibility", productId)).content("{ \"visible\": true }")).andExpect(status().isOk());
 
         assertThat(statuses(b0, b1, spec)).containsOnly("USED");
         assertThat(List.of(updatedAt(b0), updatedAt(b1), updatedAt(spec))).isEqualTo(before);
@@ -304,6 +410,11 @@ class ImageAttachmentApiTest {
     private ResultActions createPromotion(String body) throws Exception {
         return mockMvc.perform(post(PROMOTIONS).header("Idempotency-Key", "k-" + ShopFixtures.unique()).contentType(MediaType.APPLICATION_JSON)
                 .content(body).with(user("admin").roles("ADMIN")));
+    }
+
+    private ResultActions replacePromotion(UUID promotionId, String body) throws Exception {
+        return mockMvc.perform(put(PROMOTIONS + "/{id}", promotionId).contentType(MediaType.APPLICATION_JSON).content(body)
+                .with(user("admin").roles("ADMIN")));
     }
 
     private String options(UUID productId) {

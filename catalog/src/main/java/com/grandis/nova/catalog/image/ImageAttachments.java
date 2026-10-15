@@ -22,9 +22,10 @@ import java.util.function.Function;
  *
  * 비교는 주소가 아니라 객체 키(URI 경로)로 한다 — CDN 도메인이 바뀐 뒤 옛 주소를 새 주소로 바꿔 저장해도 같은 사진이다.
  * <ul>
- *   <li>새로 쓰는 사진: 주소가 CDN 주소 + 용도 접두(products/ · promotions/) 아래이고 표에 UNUSED 여야 한다. 아니면 그 칸의 400.
+ *   <li>새로 쓰는 사진: 주소가 업로드 API 가 준 모양 그대로(CDN 주소 + 키 — 쿼리 · 조각 · 다른 호스트 없음)이고 키가 용도 접두(products/ ·
+ *       promotions/)로 시작하며 표에 UNUSED 여야 한다. 아니면 그 칸의 400.
  *       한 사진은 한 곳에만 붙는다 — USED 인 사진(다른 상품 · 홍보가 쓴다)은 받지 않는다.</li>
- *   <li>빠진 사진: 표에 USED 로 있으면 UNUSED 로. 표에 없는 주소(시드 · 이관 전 주소 · CDN 밖)는 무시한다.</li>
+ *   <li>빠진 사진(이전 키 중 이후 문서의 어느 주소에도 없는 키): 표에 USED 로 있으면 UNUSED 로. 표에 없는 주소(시드 · 이관 전 주소 · CDN 밖)는 무시한다.</li>
  *   <li>그대로인 사진은 보지 않는다 — CDN 이 아닌 옛 주소도 다시 저장할 때 막히지 않는다.</li>
  * </ul>
  * 잠금은 새 사진과 빠진 사진의 id 를 합쳐 한 문장으로 건다({@link ImageStore#lock}).
@@ -50,34 +51,38 @@ public class ImageAttachments {
     @Transactional(propagation = Propagation.MANDATORY)
     public void sync(ImagePurpose purpose, Collection<String> before, Collection<String> after, Function<String, String> fieldOf) {
         Set<String> beforeUrls = new LinkedHashSet<>(before);
-        Set<String> afterUrls = new LinkedHashSet<>(after);
-        Map<String, String> beforeKeys = new LinkedHashMap<>();  // 키 → 주소. 빠진 것만
+        Map<String, String> beforeKeys = new LinkedHashMap<>();  // 키 → 주소
         for (String url : beforeUrls) {
-            if (!afterUrls.contains(url)) {
-                ImageKeys.keyOf(url).ifPresent(key -> beforeKeys.putIfAbsent(key, url));
-            }
+            ImageKeys.keyOf(url).ifPresent(key -> beforeKeys.putIfAbsent(key, url));
         }
+        // 뗄 것은 "이전 키 − 이후 키 전부" 다 — 그대로 둔 주소의 키도 이후 키에 넣는다. 같은 사진을 두 모양(쿼리 · 다른 도메인)으로 든 옛 문서에서
+        // 한 모양만 빼도 사진은 아직 쓰인다
         Set<String> afterKeys = new HashSet<>();
         Map<UUID, Attach> attach = new LinkedHashMap<>();
-        for (String url : afterUrls) {
-            if (beforeUrls.contains(url)) {
-                continue;
-            }
+        for (String url : new LinkedHashSet<>(after)) {
             Optional<String> key = ImageKeys.keyOf(url);
-            if (key.isPresent() && beforeKeys.containsKey(key.get())) {
-                afterKeys.add(key.get());  // 도메인만 바뀐 같은 사진
+            if (beforeUrls.contains(url)) {
+                key.ifPresent(afterKeys::add);  // 그대로인 주소는 보지 않는다(시드 · CDN 밖 옛 주소도 다시 저장된다)
                 continue;
             }
             String field = fieldOf.apply(url);
-            if (!url.startsWith(cdnPrefix + purpose.keyPrefix()) || key.isEmpty()) {
-                throw ValidationFailures.of(field, "사진은 업로드 API 로 올린 주소(" + cdnPrefix + purpose.keyPrefix() + "…)만 받습니다.");
+            // 새 주소는 정본 모양만 — CDN 주소 + 키 그대로(쿼리 · 조각 · 다른 호스트 없음). 같은 사진이 여러 모양으로 문서에 들어가지 않고,
+            // 바깥 호스트 주소가 같은 키를 달고 들어오지 못한다
+            if (key.isEmpty() || !url.equals(cdnPrefix + key.get())) {
+                throw ValidationFailures.of(field, "사진은 업로드 API 가 준 주소(" + cdnPrefix + purpose.keyPrefix() + "…) 그대로만 받습니다.");
+            }
+            afterKeys.add(key.get());
+            if (beforeKeys.containsKey(key.get())) {
+                continue;  // 이미 이 문서가 쓰는 사진 — 도메인만 바뀐 옛 주소를 새 주소로 바꿔 저장했다
+            }
+            if (!key.get().startsWith(purpose.keyPrefix())) {
+                throw ValidationFailures.of(field, "사진은 업로드 API 가 준 주소(" + cdnPrefix + purpose.keyPrefix() + "…) 그대로만 받습니다.");
             }
             UUID id = ImageKeys.idOf(key.get()).orElseThrow(() -> notUploaded(field));
             attach.put(id, new Attach(key.get(), field));
-            afterKeys.add(key.get());
         }
         Map<UUID, String> detach = new LinkedHashMap<>();  // id → 키
-        beforeKeys.forEach((key, url) -> {
+        beforeKeys.keySet().forEach(key -> {
             if (!afterKeys.contains(key)) {
                 ImageKeys.idOf(key).ifPresent(id -> detach.put(id, key));
             }
