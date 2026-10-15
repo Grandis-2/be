@@ -1,6 +1,8 @@
 package com.grandis.nova.preorder.outbox;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.util.List;
 import java.util.UUID;
@@ -41,6 +43,31 @@ class NotificationRequestedTest {
         assertThat(registered.aggregateType()).isEqualTo(AggregateType.PREORDER);
         assertThat(registered.aggregateId()).isEqualTo(preorderId);
         assertThat(registered.target()).isEqualTo(new NotificationRequested.Target(NotificationRequested.TargetType.PREORDER,
+                "token"));
+    }
+
+    @ParameterizedTest(name = "{0} · 결제 {1}")
+    @CsvSource({
+            "USER, false, 사전예약 취소가 완료됐어요.",
+            "USER, true, 사전예약 취소가 완료됐어요. 결제하신 금액은 환불됐어요.",
+            "EXPIRY, false, 결제 기한이 지나 사전예약이 취소됐어요.",
+            "EXPIRY, true, 결제 기한이 지나 사전예약이 취소됐어요. 결제하신 금액은 환불됐어요.",
+            "OTHER, false, 사전예약이 취소됐어요.",
+            "OTHER, true, 사전예약이 취소됐어요. 결제하신 금액은 환불됐어요."
+    })
+    void 취소_문구는_까닭과_결제_여부로_가른다(NotificationRequested.CancelCause cause, boolean paid, String body) {
+        UUID preorderId = UUID.randomUUID();
+        UUID customer = UUID.randomUUID();
+
+        NotificationRequested canceled = NotificationRequested.preorderCanceled(preorderId, "token", customer, cause, paid);
+
+        assertThat(canceled.body()).isEqualTo(body);
+        assertThat(canceled.title()).isEqualTo("사전예약 취소");
+        assertThat(canceled.kind()).isEqualTo(NotificationRequested.Kind.PREORDER_CANCELED);
+        assertThat(canceled.recipientIds()).containsExactly(customer);
+        assertThat(canceled.aggregateType()).isEqualTo(AggregateType.PREORDER);
+        assertThat(canceled.aggregateId()).isEqualTo(preorderId);
+        assertThat(canceled.target()).isEqualTo(new NotificationRequested.Target(NotificationRequested.TargetType.PREORDER,
                 "token"));
     }
 

@@ -41,13 +41,42 @@ public record NotificationRequested(@JsonIgnore AggregateType aggregateType, @Js
                 new Target(TargetType.PREORDER, preorderToken));
     }
 
+    /**
+     * 예약 취소가 끝나 CANCELED 가 됐다. 문구는 취소 까닭과 결제 여부로 가른다.
+     * 결제된 예약은 order 가 환불을 마쳐야(주문 CANCELED) 주문 정리 결과를 보내고 그 뒤에야 CANCELED 가 되므로 "환불됐어요" 다.
+     *
+     * @param paid 결제 확인을 받은 예약인가
+     */
+    public static NotificationRequested preorderCanceled(UUID preorderInternalId, String preorderToken,
+                                                         UUID customerId, CancelCause cause, boolean paid) {
+        String body = switch (cause) {
+            case USER -> "사전예약 취소가 완료됐어요.";
+            case EXPIRY -> "결제 기한이 지나 사전예약이 취소됐어요.";
+            case OTHER -> "사전예약이 취소됐어요.";
+        };
+        return new NotificationRequested(AggregateType.PREORDER, preorderInternalId, List.of(customerId),
+                Kind.PREORDER_CANCELED, "사전예약 취소", paid ? body + " 결제하신 금액은 환불됐어요." : body,
+                new Target(TargetType.PREORDER, preorderToken));
+    }
+
     @Override
     public OutboundEventType eventType() {
         return OutboundEventType.NOTIFICATION_REQUESTED;
     }
 
     public enum Kind {
-        PREORDER_REGISTERED
+        PREORDER_REGISTERED,
+        PREORDER_CANCELED
+    }
+
+    /**
+     * 취소 알림 문구를 가르는 까닭. 관리자 · 회차 판매 중지 · 알 수 없음은 문구가 같아 OTHER 하나다.
+     * 기반 모듈이라 예약 모듈의 CancelReason 을 쓰지 않는다.
+     */
+    public enum CancelCause {
+        USER,
+        EXPIRY,
+        OTHER
     }
 
     public enum TargetType {
