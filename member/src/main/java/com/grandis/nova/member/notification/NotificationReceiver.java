@@ -40,6 +40,9 @@ public class NotificationReceiver {
     static final String LAG_METRIC = "member.notifications.lag";
     static final int EVENT_ID_LENGTH = 36;
     static final int AGGREGATE_TYPE_LENGTH = 30;
+    /** occurred_at 은 MySQL datetime(6) 이라 1000-01-01 ~ 9999-12-31 만 담긴다 */
+    static final Instant EARLIEST_OCCURRED_AT = Instant.parse("1000-01-01T00:00:00Z");
+    static final Instant OCCURRED_AT_LIMIT = Instant.parse("+10000-01-01T00:00:00Z");
 
     private final NotificationWriter writer;
     private final JsonMapper jsonMapper;
@@ -78,8 +81,11 @@ public class NotificationReceiver {
                     "알림 요청이 아니다: eventType=" + envelope.eventType());
         }
         String eventId = envelope.eventId();
-        // aggregateType 은 추적용이라 없어도 받지만, 칸보다 길면 INSERT 가 다른 오류로 끝나 일시 오류처럼 다시 받는다
-        if (eventId == null || eventId.isBlank() || eventId.length() > EVENT_ID_LENGTH || envelope.occurredAt() == null
+        // 칸에 담기지 않는 값(긴 aggregateType · datetime(6) 범위 밖 시각)은 INSERT 가 DB 오류로 끝나 일시 오류처럼 다시 받다 이유 없이
+        // DLQ 로 간다 — 여기서 계약 위반으로 거른다. aggregateType 은 추적용이라 없어도 받는다
+        Instant occurredAt = envelope.occurredAt();
+        if (eventId == null || eventId.isBlank() || eventId.length() > EVENT_ID_LENGTH || occurredAt == null
+                || occurredAt.isBefore(EARLIEST_OCCURRED_AT) || !occurredAt.isBefore(OCCURRED_AT_LIMIT)
                 || envelope.aggregateType() != null && envelope.aggregateType().length() > AGGREGATE_TYPE_LENGTH) {
             throw new NotificationRejected(NotificationRejected.Reason.INVALID_ENVELOPE,
                     "봉투의 eventId · occurredAt · aggregateType 이 계약에 맞지 않는다: eventId=" + eventId);

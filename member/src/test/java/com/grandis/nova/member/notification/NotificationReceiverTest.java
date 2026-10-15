@@ -201,6 +201,8 @@ class NotificationReceiverTest {
                 violation("eventId 없음", m -> m.envelope.remove("eventId")),
                 violation("eventId 36자 초과", m -> m.envelope.put("eventId", m.eventId + "-x")),
                 violation("occurredAt 없음", m -> m.envelope.remove("occurredAt")),
+                violation("occurredAt 이 datetime(6) 보다 이름", m -> m.envelope.put("occurredAt", "0999-12-31T23:59:59Z")),
+                violation("occurredAt 이 datetime(6) 보다 늦음", m -> m.envelope.put("occurredAt", "+10000-01-01T00:00:00Z")),
                 violation("payload 없음", m -> m.envelope.remove("payload")),
                 violation("recipientIds 칸 없음", m -> m.payload().remove("recipientIds")),
                 violation("recipientIds 가 null", m -> m.payload().putNull("recipientIds")),

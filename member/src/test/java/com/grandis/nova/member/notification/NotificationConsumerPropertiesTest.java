@@ -55,7 +55,7 @@ class NotificationConsumerPropertiesTest {
             assertThat(properties.toSettings().concurrency()).isEqualTo(1);
             assertThat(properties.toSettings().waitSeconds()).isEqualTo(20);
             assertThat(properties.toSettings().visibility()).isEqualTo(Duration.ofMinutes(5));
-            assertThat(properties.toSettings().backoffBase()).isEqualTo(Duration.ofSeconds(5));
+            assertThat(properties.toSettings().backoffBase()).isEqualTo(Duration.ofSeconds(30));
             assertThat(properties.toSettings().backoffMax()).isEqualTo(Duration.ofMinutes(5));
         });
     }

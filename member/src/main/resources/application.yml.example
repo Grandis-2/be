@@ -133,7 +133,7 @@ nova:
       concurrency: 1
       wait-seconds: 20
       visibility: 5m       # 처리 한 건보다 길게
-      backoff-base: 5s
+      backoff-base: 30s    # DB 순단에 DLQ 가 차지 않게 — 5번 실패해 DLQ 까지 약 6~12분(5s 면 1~3분)
       backoff-max: 5m
 
 # 서명은 RS256. member 만 개인키를 갖고 서명한다. 다른 서비스는 jwk-set-uri 로 공개키를 받아 검증만 한다.

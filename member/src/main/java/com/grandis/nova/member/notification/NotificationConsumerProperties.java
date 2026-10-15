@@ -21,7 +21,7 @@ record NotificationConsumerProperties(
         @DefaultValue("20") int waitSeconds,
         @DefaultValue("10") int maxMessages,
         @DefaultValue("5m") Duration visibility,
-        @DefaultValue("5s") Duration backoffBase,
+        @DefaultValue("30s") Duration backoffBase,
         @DefaultValue("5m") Duration backoffMax
 ) {
 

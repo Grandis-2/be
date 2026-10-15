@@ -135,11 +135,11 @@ member 는 실패를 둘로 가른다. 섞으면 DB 순단 한 번에 멀쩡한 
 
 | 실패 | 예 | member 의 처리 | 결과 |
 | --- | --- | --- | --- |
-| **계약 위반** — 다시 받아도 같다 | JSON 이 아님 · 다른 eventType · 빈 제목 · 길이 초과 · recipientIds 가 없거나 비었거나 1,000개 초과 · 겹침 · UUID 아님 | 한 번 받고 `notification-dlq` 에 바로 넣고 원본을 지운다. 속성 `deadLetterReason` 에 이유(`UNREADABLE` · `NOT_NOTIFICATION` · `INVALID_ENVELOPE` · `INVALID_PAYLOAD`)를 붙인다. DLQ 에 넣지 못하면 원본을 남겨 다시 받는다 | 지표 `member.notifications.rejected{reason}` · ERROR 로그. 보내는 쪽 버그다 |
+| **계약 위반** — 다시 받아도 같다 | JSON 이 아님 · 다른 eventType · 발생 시각이 1000-01-01 ~ 9999-12-31 밖 · 빈 제목 · 길이 초과 · recipientIds 가 없거나 비었거나 1,000개 초과 · 겹침 · UUID 아님 | 한 번 받고 `notification-dlq` 에 바로 넣고 원본을 지운다. 속성 `deadLetterReason` 에 이유(`UNREADABLE` · `NOT_NOTIFICATION` · `INVALID_ENVELOPE` · `INVALID_PAYLOAD`)를 붙인다. DLQ 에 넣지 못하면 원본을 남겨 다시 받는다 | 지표 `member.notifications.rejected{reason}` · ERROR 로그. 보내는 쪽 버그다 |
 | **일시 오류** — 다시 하면 될 수 있다 | DB 연결 끊김 · 시간 초과 | 지우지 않고 지수 백오프(지터)로 늦춰 다시 받는다 | 재수신 한도(5회)를 넘기면 재드라이브 정책이 DLQ 로 옮긴다(이유 속성 없음) |
 | **중복** | 릴레이 재전송 · 소비자 두 대가 같은 메시지 | 저장 전에 그 eventId 로 이미 넣은 회원을 읽어 건너뛰고 나머지만 넣는다(유니크 키 `(event_id, customer_id)`). 읽은 뒤 다른 소비자가 먼저 넣었으면 유니크 키에 걸려 일시 오류로 다시 받고, 그때 모두 건너뛴다 | 지표 `member.notifications{outcome=duplicate}` — 건너뛴 회원 수 |
 
-**백오프와 DLQ 까지의 시간.** 운영 설정(인프라 `application/member/application.yml`)은 첫 대기 30초 · 상한 5분이다. 다섯 번 실패해 DLQ 로 가기까지 약 6~12분이다(지터 때문에 폭이 있다) — DB 가 그 안에 돌아오면 알림은 늦을 뿐 DLQ 로 가지 않는다. 기본값(5초)이면 약 1~3분이라 짧은 DB 순단에도 DLQ 가 찬다.
+**백오프와 DLQ 까지의 시간.** 운영 설정(인프라 `application/member/application.yml`)은 첫 대기 30초 · 상한 5분이다. 다섯 번 실패해 DLQ 로 가기까지 약 6~12분이다(지터 때문에 폭이 있다) — DB 가 그 안에 돌아오면 알림은 늦을 뿐 DLQ 로 가지 않는다. 코드 기본값과 로컬 예시도 30초다 — 5초면 약 1~3분이라 짧은 DB 순단에도 DLQ 가 찬다.
 
 **DLQ 를 비우는 법.**
 - `deadLetterReason` 이 있는 메시지(계약 위반): 보내는 쪽을 고친다. 메시지 자체는 다시 보내도 또 거절되므로 내용을 확인하고 버린다. 놓친 알림이 꼭 필요하면 보내는 쪽에서 다시 발행한다.
