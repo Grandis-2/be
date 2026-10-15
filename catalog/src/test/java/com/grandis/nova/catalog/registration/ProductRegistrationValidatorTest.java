@@ -28,7 +28,7 @@ class ProductRegistrationValidatorTest {
     static final String CDN = "https://cdn.example.com";
 
     final ProductRegistrationValidator validator =
-            new ProductRegistrationValidator(new ImageUploadProperties("bucket", URI.create(CDN), null, null, "test", "test"));
+            new ProductRegistrationValidator(new ImageUploadProperties("bucket", URI.create(CDN), null, null, "test", "test", java.time.Duration.ofSeconds(10), java.time.Duration.ofSeconds(25)));
 
     @Test
     @DisplayName("오픈 여유 경계 — 지금 + 30분 정각은 통과, 1µs 전은 거절")
