@@ -270,7 +270,7 @@ worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이
 | 서비스 | 표 |
 | --- | --- |
 | `member` | `customers` · `refresh_tokens` |
-| `catalog` | `categories` · `products` · `product_options` · `product_reviews` · `promotions` · `promotion_products` · `catalog_outbox_events` |
+| `catalog` | `categories` · `products` · `product_options` · `product_reviews` · `promotions` · `promotion_products` · `catalog_outbox_events` · `images` |
 | `preorder` | `preorders` · `preorder_events` · `preorder_campaigns` · `shipment_batches` · `preorder_outbox_events` · `dead_letter_events`<br>`preorder_sync_jobs` · `preorder_sync_attempts` (외부 작업 · 시도 원장) |
 | `order` | `orders` · `order_items` · `order_events` · `cart_items` · `option_inventories` · `draw_campaigns` · `draw_entries` |
 | `payment` | `payments` · `payment_transactions` |
@@ -279,6 +279,7 @@ worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이
 
 표는 소유한 서비스만 쓴다. 다른 서비스의 데이터는 그 서비스의 API 로 묻는 것이 원칙이고,
 예외는 목록 화면의 페이징 조건처럼 쿼리 안에 있어야 하는 읽기뿐이다.
+쓰기 예외는 하나다 — 정리 배치(`batch`)가 `images` 의 오래된 `UNUSED` 행(아무 데도 안 붙은 사진)과 그 S3 객체를 지운다.
 표 사이 관계는 [ERD](https://dbdiagram.io/d/Copy-of-Untitled-Diagram-6aa66499957fec6d5bdd9189)에 있다.
 
 </details>
