@@ -6,6 +6,7 @@ import com.grandis.nova.member.auth.api.AuthCookies;
 import com.grandis.nova.member.auth.api.RefreshOriginPolicy;
 import com.grandis.nova.member.auth.application.AdminLoginLimit;
 import com.grandis.nova.member.auth.application.AdminProperties;
+import jakarta.servlet.DispatcherType;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.security.autoconfigure.actuate.web.servlet.EndpointRequest;
 import org.springframework.context.annotation.Bean;
@@ -27,6 +28,9 @@ public class MemberSecurityConfig {
     @Bean
     SecurityFilterChain memberChain(HttpSecurity http, SecurityFilterChainSupport support) throws Exception {
         return support.build(http, a -> a
+                // 실시간 연결(SSE)을 닫을 때 컨테이너의 재디스패치. 인증 필터가 건너뛰어 익명으로 보여, 막으면 이미 나간 응답 위에서 ERROR 가 남는다(실측).
+                // 인가는 처음 REQUEST 디스패치가 이미 했다 — 비동기 엔드포인트(DeferredResult · Callable)를 더하면 그 경로의 규칙은 위가 아니라 아래에 둔다
+                .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
                 .requestMatchers(EndpointRequest.to("health")).permitAll()                       // 헬스 체크(관리 포트의 readiness · liveness)
                 .requestMatchers(HttpMethod.GET, "/.well-known/jwks.json").permitAll()          // 공개키 게시(RFC 7517). 검증 서비스가 받아 간다
                 .requestMatchers(HttpMethod.POST, "/api/v1/auth/kakao/callback").permitAll()   // 로그인(프론트 주도 코드 교환)
