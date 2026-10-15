@@ -26,6 +26,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -151,6 +152,12 @@ class ObservabilityTest {
                 VALUES (?, 'preorder-events', ?, 'not-json', 'UNREADABLE_BODY', 5, 'OPEN',
                         UTC_TIMESTAMP(6) - INTERVAL 1 HOUR, UTC_TIMESTAMP(6))
                 """, UuidBinary.toBytes(UUID.randomUUID()), ShopFixtures.unique());
+        UUID openAlertProduct = fixtures.preorderProduct(Instant.now().minus(Duration.ofHours(2)),
+                Instant.now().plus(Duration.ofHours(1))).productId();
+        jdbcTemplate.update("""
+                INSERT INTO preorder_open_alert_dispatches (product_id, last_customer_id, created_at, completed_at)
+                VALUES (?, NULL, UTC_TIMESTAMP(6) - INTERVAL 1 HOUR, NULL)
+                """, (Object) UuidBinary.toBytes(openAlertProduct));
 
         stateGauges.refresh();
 
@@ -158,6 +165,12 @@ class ObservabilityTest {
         assertThat(registry.get("preorder.dlq.waiting").gauge().value()).isPositive();
         assertThat(registry.get("preorder.dlq.waiting.oldest.age").gauge().value()).as("초")
                 .isGreaterThanOrEqualTo(3600);
+        assertThat(registry.get("preorder.open_alert.pending").gauge().value()).isPositive();
+        assertThat(registry.get("preorder.open_alert.pending.oldest.age").gauge().value()).as("초")
+                .isGreaterThanOrEqualTo(3600);
+        // 다른 시험의 주기 작업이 이 발송을 집지 않게 닫는다
+        jdbcTemplate.update("UPDATE preorder_open_alert_dispatches SET completed_at = UTC_TIMESTAMP(6) WHERE product_id = ?",
+                (Object) UuidBinary.toBytes(openAlertProduct));
     }
 
     @Test

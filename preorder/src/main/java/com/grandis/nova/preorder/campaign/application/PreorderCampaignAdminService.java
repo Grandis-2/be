@@ -2,6 +2,8 @@ package com.grandis.nova.preorder.campaign.application;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
+import com.grandis.nova.preorder.campaign.ProductListing;
+import com.grandis.nova.preorder.campaign.ProductStatus;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatch;
@@ -17,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
@@ -57,14 +60,14 @@ public class PreorderCampaignAdminService {
      */
     public PreorderCampaign upsertCampaign(UUID productId, Instant opensAt, Instant closesAt) {
         requirePeriod(opensAt, closesAt);
-        boolean visible = requirePreorderProduct(productId).isVisible();
+        ProductListing listing = listingOf(requirePreorderProduct(productId));
         try {
-            return writer.upsert(productId, opensAt, closesAt, visible);
+            return writer.upsert(productId, opensAt, closesAt, listing);
         } catch (DataIntegrityViolationException e) {
             if (!isDuplicateKey(e)) {
                 throw e;
             }
-            return writer.upsert(productId, opensAt, closesAt, visible);
+            return writer.upsert(productId, opensAt, closesAt, listing);
         }
     }
 
@@ -102,6 +105,17 @@ public class PreorderCampaignAdminService {
         if (!closesAt.isAfter(opensAt)) {
             throw ValidationFailures.of("closesAt", "opensAt 보다 뒤여야 합니다.");
         }
+    }
+
+    /**
+     * 관리자가 먼저 만드는 회차의 상품 사본. 내부 조회 API 의 값을 번호 0 으로 둔다 — 늦게 온 등록 · 변경 이벤트(1 이상)가 이긴다.
+     * 모르는 판매 상태는 비워 둔다(catalog 값을 받기 전과 같다).
+     */
+    private static ProductListing listingOf(ProductCatalog product) {
+        ProductStatus status = Arrays.stream(ProductStatus.values())
+                .filter(candidate -> candidate.name().equals(product.status()))
+                .findFirst().orElse(null);
+        return ProductListing.beforeCatalog(product.title(), status, product.isVisible());
     }
 
     /** 사전예약 상품에만 회차가 있다. 일반 상품 · 없는 상품이면 404 다. */
