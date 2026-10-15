@@ -30,7 +30,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * 사진 한 장씩 넣기 · 바꾸기 · 빼기 — 등록 API 로 만든 상품(색상 블랙 · 실버 · 레드, 블랙은 둘째 장이 대표, 레드는 사진 없음, 상세 영역 둘)을 고친다.
- * 시험 CDN 주소는 https://img 다. 사진 붙이기 · 떼기는 기록만 한다(ImageAttachmentsTestConfig) — 올린 사진인지 · 상태 전이는 ImageAttachmentApiTest 가 본다.
+ * 시험 CDN 주소는 https://img 다. 사진 붙이기 · 떼기는 대역이 아무것도 하지 않는다(ImageAttachmentsTestConfig) — 올린 사진인지 · 상태 전이는 ImageAttachmentApiTest 가 본다.
  */
 @CatalogIntegrationTest
 @AutoConfigureMockMvc

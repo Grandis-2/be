@@ -70,9 +70,9 @@ class ImageAttachmentApiTest {
     }
 
     @Test
-    @DisplayName("대조군 — 이 컨텍스트는 기록용 가짜가 아니라 진짜 구현이다")
+    @DisplayName("대조군 — 이 컨텍스트는 대역이 아니라 진짜 구현이다")
     void usesRealImplementation() {
-        assertThat(attachments.getClass().getName()).doesNotContain("Recording");
+        assertThat(org.springframework.aop.support.AopUtils.getTargetClass(attachments)).isEqualTo(ImageAttachments.class);
     }
 
     @Test
