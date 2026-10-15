@@ -86,6 +86,21 @@ class ImageProcessorTest {
         assertThat(ImageFixtures.hasJpegMarker(out, 0xE1)).isFalse();
     }
 
+    @Test
+    @DisplayName("파일 뒤에 붙인 바이트(polyglot — 스크립트 덧붙임)는 다시 인코딩한 결과에 없다 — JPEG · PNG 둘 다")
+    void appendedPayloadIsDropped() {
+        byte[] payload = "<script>alert(1)</script>".getBytes();
+        for (byte[] image : List.of(ImageFixtures.jpeg(20, 10), ImageFixtures.png(20, 10))) {
+            byte[] polyglot = new byte[image.length + payload.length];
+            System.arraycopy(image, 0, polyglot, 0, image.length);
+            System.arraycopy(payload, 0, polyglot, image.length, payload.length);
+            assertThat(new String(polyglot, java.nio.charset.StandardCharsets.ISO_8859_1)).as("대조군 — 원본에는 있다").contains("<script>");
+
+            byte[] out = process(polyglot);
+            assertThat(new String(out, java.nio.charset.StandardCharsets.ISO_8859_1)).doesNotContain("<script>");
+        }
+    }
+
     @ParameterizedTest(name = "Orientation={0}")
     @ValueSource(ints = {1, 2, 3, 4, 5, 6, 7, 8})
     @DisplayName("EXIF 방향대로 픽셀을 옮긴다 — 보일 그림의 (x, y) 는 EXIF 규격이 정한 원본 점이다")
