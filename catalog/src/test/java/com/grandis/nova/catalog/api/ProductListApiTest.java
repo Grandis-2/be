@@ -111,24 +111,26 @@ class ProductListApiTest {
         }
 
         @Test
-        @DisplayName("사전예약은 오픈 전 · 접수 중 · 마감 뒤 120시간 안이면 보이고 그 단계가 실린다. 120시간이 지나면 숨는다")
-        void preorderPhasesAndHideAfterClose() throws Exception {
+        @DisplayName("사전예약은 접수 중(오픈 ~ 마감)일 때만 목록 · 건수에 나온다 — 오픈 전 · 마감 직후 · 회차 없음은 빠지고, 상세 링크로는 보인다")
+        void preorderListedOnlyWhileOpen() throws Exception {
             Instant now = Instant.now();
             UUID beforeOpen = visiblePreorder("오픈 전", now.plus(HOUR), now.plus(HOUR.multipliedBy(2)));
             UUID open = visiblePreorder("접수 중", now.minus(HOUR), now.plus(HOUR));
             fixtures.option(open, "ACTIVE", new BigDecimal("1000"));
-            UUID closedRecently = visiblePreorder("마감 119h", now.minus(HOUR.multipliedBy(120)), now.minus(HOUR.multipliedBy(119)));
-            UUID closedLongAgo = visiblePreorder("마감 121h", now.minus(HOUR.multipliedBy(122)), now.minus(HOUR.multipliedBy(121)));
+            UUID justClosed = visiblePreorder("마감 직후", now.minus(HOUR), now.minusSeconds(60));
             UUID noCampaign = fixtures.product(categoryId, "PREORDER", "ACTIVE", "회차 없음", tag);
             fixtures.registration(noCampaign);
 
-            JsonNode items = list();
-            assertThat(ids(items)).containsExactly(closedRecently, open, beforeOpen).doesNotContain(closedLongAgo, noCampaign);
-            assertThat(find(items, beforeOpen).get("preorderStatus").asString()).isEqualTo("BEFORE_OPEN");
-            assertThat(find(items, open).get("preorderStatus").asString()).isEqualTo("OPEN");
-            assertThat(find(items, closedRecently).get("preorderStatus").asString()).isEqualTo("CLOSED");
-            assertThat(find(items, open).get("opensAt").asString()).isNotBlank();
-            assertThat(find(items, open).get("soldOut").asBoolean()).isFalse();
+            JsonNode page = data(mockMvc.perform(get("/api/v1/products").param("q", tag)).andExpect(status().isOk()));
+            assertThat(ids(page.get("items"))).containsExactly(open).doesNotContain(beforeOpen, justClosed, noCampaign);
+            assertThat(page.get("total").asLong()).as("건수도 같은 조건").isEqualTo(1);
+            JsonNode item = find(page.get("items"), open);
+            assertThat(item.get("preorderStatus").asString()).isEqualTo("OPEN");
+            assertThat(item.get("opensAt").asString()).isNotBlank();
+            assertThat(item.get("soldOut").asBoolean()).isFalse();
+            for (UUID hidden : List.of(beforeOpen, justClosed)) {
+                mockMvc.perform(get("/api/v1/products/{id}", hidden)).andExpect(status().isOk());
+            }
         }
     }
 
