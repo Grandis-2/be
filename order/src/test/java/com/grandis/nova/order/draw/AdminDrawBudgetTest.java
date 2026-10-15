@@ -145,6 +145,16 @@ class AdminDrawBudgetTest {
     }
 
     @Test
+    @DisplayName("기한 뒤라도 DB · 트랜잭션 예외가 아닌 실패(코드 결함)는 409 로 덮지 않고 그대로 던진다")
+    void nonDataFailureAfterDeadlineIsNotHidden() {
+        willAnswer(invocation -> {
+            clock.now = NOW.plus(BUDGET);
+            throw new IllegalStateException("bug");
+        }).given(campaigns).insert(any());
+        assertThatThrownBy(() -> service.create(null, "k-3", command())).isInstanceOf(IllegalStateException.class).hasMessage("bug");
+    }
+
+    @Test
     @DisplayName("예산은 0 보다 크고 10분 이하여야 뜬다")
     void budgetMustBeInRange() {
         assertThatThrownBy(() -> AdminDrawService.requireBudget(Duration.ZERO)).isInstanceOf(IllegalArgumentException.class);

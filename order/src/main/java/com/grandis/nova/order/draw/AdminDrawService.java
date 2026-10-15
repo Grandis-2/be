@@ -16,10 +16,12 @@ import com.grandis.nova.order.web.ValidationFailures;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.dao.QueryTimeoutException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionException;
 import org.springframework.transaction.TransactionTimedOutException;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -133,8 +135,9 @@ public class AdminDrawService {
         NewDrawCampaign draft = new NewDrawCampaign(key, option.productId(), option.optionId(), command.title(), option.productTitle(),
                 option.optionTitle(), option.imageUrl(), command.entryFee(), command.winnerCount(), command.opensAt(), command.closesAt());
         for (int attempt = 1; ; attempt++) {
+            TransactionTemplate transaction = writeTransaction(deadline);
             try {
-                return new Created(writeTransaction(deadline).execute(status -> {
+                return new Created(transaction.execute(status -> {
                     TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                         @Override
                         public void beforeCommit(boolean readOnly) {
@@ -171,10 +174,11 @@ public class AdminDrawService {
                     throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
                 }
                 log.info("드로우 회차 만들기 교착, 다시 시도 {}/{} optionId={}", attempt, MAX_ATTEMPTS, option.optionId());
-            } catch (RuntimeException e) {
-                // 예산을 넘긴 뒤의 실패는 시각으로 가른다 — 상한에 끊긴 예외가 위 목록 밖 종류(JpaSystemException 등)로도 온다
+            } catch (DataAccessException | TransactionException e) {
+                // 예산을 넘긴 뒤의 DB · 트랜잭션 실패는 시각으로 가른다 — 상한에 끊긴 예외가 위 목록 밖 종류(JpaSystemException 등)로도 온다.
+                // 그 밖의 예외(코드 결함)는 기한 뒤라도 덮지 않는다. 원인은 스택과 함께 남긴다
                 if (!clock.instant().isBefore(deadline)) {
-                    log.info("드로우 회차 만들기 시간 예산 초과 optionId={} budget={} cause={}", option.optionId(), budget, e.getClass().getName());
+                    log.warn("드로우 회차 만들기 시간 예산 초과 optionId={} budget={}", option.optionId(), budget, e);
                     throw budgetExceeded();
                 }
                 throw e;
