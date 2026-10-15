@@ -13,7 +13,6 @@ import org.springframework.stereotype.Repository;
 import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -30,7 +29,7 @@ import java.util.UUID;
  * preorder 소유 preorder_campaigns(opens_at · closes_at · 행의 유무)와 order 소유 option_inventories(재고 집계 · 행의 유무)를
  * 여기서만, SELECT 로만 읽는다.
  * 판매 방식별 준비({@link #READY})도 여기서 판정한다 — 등록 이벤트를 받은 preorder · order 가 자기 표에 행을 만들어야 노출된다.
- * 노출 조건(오픈 예정 · 마감 · 마감 + 120시간 숨김 · 품절)이 페이징 조건이라 쿼리 안에 있어야 한다. HTTP 로 받아 거르면 페이지가 깨진다.
+ * 노출 조건(판매 방식별 준비 · 공개 · 판매 중 · 사전예약은 접수 중일 때만)이 페이징 조건이라 쿼리 안에 있어야 한다. HTTP 로 받아 거르면 페이지가 깨진다.
  * 판매 중(ACTIVE) 옵션이 하나도 없는 상품(전부 판매 중지)은 목록에 남기고 sellable=false 로 알린다 — 화면이 "판매 중지" 를 그린다.
  * 옵션이 아예 없는 상품은 등록으로 생기지 않는다(조합 0 은 400, 옵션 삭제 경로 없음). 일반 상품이면 재고 행을 만들 옵션이 없어 준비될 수 없다
  * (사용자 결정 2026-09-27). 숨기지 않는다.
@@ -41,9 +40,6 @@ import java.util.UUID;
  */
 @Repository
 public class ProductListingQueryRepository {
-
-    /** 마감 뒤 이 시간이 지나면 목록에서 숨긴다(확정 5일). */
-    static final Duration HIDE_AFTER_CLOSE = Duration.ofHours(120);
 
     /**
      * 판매 방식별 준비 — 등록 이벤트를 받은 서비스가 자기 표에 행을 만들었는가. 사전예약은 preorder 회차 행, 일반은 그 상품 옵션의
@@ -60,7 +56,7 @@ public class ProductListingQueryRepository {
               LEFT JOIN preorder_campaigns c ON c.product_id = p.id
              WHERE p.visible = 1
                AND p.status = 'ACTIVE'
-               AND (p.sale_mode = 'IN_STOCK' OR (c.closes_at IS NOT NULL AND c.closes_at > :hideBefore))
+               AND (p.sale_mode = 'IN_STOCK' OR (c.opens_at <= :now AND c.closes_at > :now))
                AND\s""" + READY + "\n";
 
     /**
@@ -176,7 +172,7 @@ public class ProductListingQueryRepository {
     }
 
     private static MapSqlParameterSource baseParams(Instant now) {
-        return new MapSqlParameterSource("hideBefore", utc(now.minus(HIDE_AFTER_CLOSE)));
+        return new MapSqlParameterSource("now", utc(now));
     }
 
     private static void appendFilters(StringBuilder sql, MapSqlParameterSource params, ProductListFilter filter) {
