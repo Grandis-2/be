@@ -10,6 +10,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
@@ -32,6 +33,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -339,6 +341,22 @@ class ImageAttachmentApiTest {
                         .as("문서에 실린 곳도 하나").isEqualTo(1L);
             }
         }
+    }
+
+    @Test
+    @DisplayName("상태 전이는 이전 상태를 WHERE 에 다시 적은 조건부 UPDATE — 영향 행이 대상 수와 다르면(이미 바뀐 행 · 없는 행) 예외")
+    void transitionRequiresEveryRowInTheExpectedState() {
+        String a = uploaded(ImagePurpose.PRODUCT);
+        String b = uploaded(ImagePurpose.PRODUCT);
+        UUID idA = ImageKeys.idOf(ImageKeys.keyOf(a).orElseThrow()).orElseThrow();
+        UUID idB = ImageKeys.idOf(ImageKeys.keyOf(b).orElseThrow()).orElseThrow();
+
+        store.transition(List.of(idA, idB), ImageStore.Status.UNUSED, ImageStore.Status.USED, Instant.now());
+        assertThat(statuses(a, b)).containsOnly("USED");
+        assertThatThrownBy(() -> store.transition(List.of(idA), ImageStore.Status.UNUSED, ImageStore.Status.USED, Instant.now()))
+                .as("이미 USED").isInstanceOf(InvalidDataAccessApiUsageException.class).hasMessageContaining("0 of 1 rows");
+        assertThatThrownBy(() -> store.transition(List.of(idA, UUID.randomUUID()), ImageStore.Status.USED, ImageStore.Status.UNUSED, Instant.now()))
+                .as("없는 행이 섞임").isInstanceOf(InvalidDataAccessApiUsageException.class).hasMessageContaining("1 of 2 rows");
     }
 
     // ── 도우미 ─────────────────────────────────────────────

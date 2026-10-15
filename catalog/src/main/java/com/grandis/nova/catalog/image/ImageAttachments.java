@@ -108,8 +108,8 @@ public class ImageAttachments {
             }
         });
         var now = clock.instant();
-        store.mark(attach.keySet(), ImageStore.Status.USED, now);
-        store.mark(detached, ImageStore.Status.UNUSED, now);
+        store.transition(attach.keySet(), ImageStore.Status.UNUSED, ImageStore.Status.USED, now);
+        store.transition(detached, ImageStore.Status.USED, ImageStore.Status.UNUSED, now);
     }
 
     private static RuntimeException notUploaded(String field) {

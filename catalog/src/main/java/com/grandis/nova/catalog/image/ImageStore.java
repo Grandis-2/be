@@ -56,14 +56,22 @@ public class ImageStore {
         return rows;
     }
 
-    /** ids 의 상태를 바꾸고 updated_at 을 now 로 찍는다. 잠근 뒤에 부른다. */
-    public void mark(Collection<UUID> ids, Status status, Instant now) {
+    /**
+     * ids 의 상태를 from → to 로 바꾸고 updated_at 을 now 로 찍는다. 잠근 뒤에 부른다. 이전 상태를 WHERE 에 다시 적고 영향 행이 ids 수와 같아야
+     * 한다 — 아니면 예외다(던지는 것은 {@link IllegalStateException} 이고 @Repository 번역으로 InvalidDataAccessApiUsageException 이 되어 나간다 —
+     * 호출한 저장 트랜잭션 전체가 롤백되고 500). 잠금 아래라 어긋날 수 없지만, 잠그지 않은 경로가 생겨도
+     * 조용히 일부만 바뀌지 않게 한다.
+     */
+    public void transition(Collection<UUID> ids, Status from, Status to, Instant now) {
         if (ids.isEmpty()) {
             return;
         }
-        jdbc.update("UPDATE images SET status = :status, updated_at = :now WHERE id IN (:ids)",
-                new MapSqlParameterSource().addValue("status", status.name()).addValue("now", utc(now))
+        int updated = jdbc.update("UPDATE images SET status = :to, updated_at = :now WHERE id IN (:ids) AND status = :from",
+                new MapSqlParameterSource().addValue("to", to.name()).addValue("from", from.name()).addValue("now", utc(now))
                         .addValue("ids", ids.stream().map(UuidBinary::toBytes).toList()));
+        if (updated != ids.size()) {
+            throw new IllegalStateException("images %s → %s: %d of %d rows".formatted(from, to, updated, ids.size()));
+        }
     }
 
     /** 연결 시간대(serverTimezone=UTC)와 상관없이 UTC 벽시계 값으로 넣는다. */
