@@ -30,7 +30,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * 사진 한 장씩 넣기 · 바꾸기 · 빼기 — 등록 API 로 만든 상품(색상 블랙 · 실버 · 레드, 블랙은 둘째 장이 대표, 레드는 사진 없음, 상세 영역 둘)을 고친다.
- * 시험 CDN 주소는 https://img 다.
+ * 시험 CDN 주소는 https://img 다. 사진 붙이기 · 떼기는 대역이 아무것도 하지 않는다(ImageAttachmentsTestConfig) — 올린 사진인지 · 상태 전이는 ImageAttachmentApiTest 가 본다.
  */
 @CatalogIntegrationTest
 @AutoConfigureMockMvc
@@ -83,14 +83,13 @@ class AdminProductImageEditApiTest {
     }
 
     @Test
-    @DisplayName("넣기 검사 — 이미 있는 주소 · CDN 밖 · 묶음 11장째 · 없는 색상 · color 상품에 색상 빠짐 · 상세에 영역 빠짐 · 모르는 kind 는 400 이고 아무것도 바뀌지 않는다")
+    @DisplayName("넣기 검사 — 이미 있는 주소 · 묶음 11장째 · 없는 색상 · color 상품에 색상 빠짐 · 상세에 영역 빠짐 · 모르는 kind 는 400 이고 아무것도 바뀌지 않는다")
     void addRules() throws Exception {
         UUID productId = registerColorProduct();
         String before = options(productId);
 
         expectValidation(add(productId, "GALLERY", "실버", "https://img/b0.jpg"), "url");
         expectValidation(add(productId, "DETAIL", "유의사항", "https://img/s0.jpg"), "url");
-        expectValidation(add(productId, "GALLERY", "실버", "https://elsewhere.example/x.jpg"), "url");
         expectValidation(add(productId, "GALLERY", "그린", "https://img/g0.jpg"), "bundle");
         expectValidation(add(productId, "GALLERY", null, "https://img/g0.jpg"), "bundle");
         expectValidation(add(productId, "DETAIL", "  ", "https://img/g0.jpg"), "bundle");
@@ -118,7 +117,7 @@ class AdminProductImageEditApiTest {
     }
 
     @Test
-    @DisplayName("바꾸기 — 자리 · 대표 여부는 그대로 주소만, 첫 장이면 썸네일도 바뀐다. 없는 사진 · 이미 있는 새 주소 · CDN 밖은 400")
+    @DisplayName("바꾸기 — 자리 · 대표 여부는 그대로 주소만, 첫 장이면 썸네일도 바뀐다. 없는 사진 · 이미 있는 새 주소는 400")
     void replaceKeepsPositionAndPrimary() throws Exception {
         UUID productId = registerColorProduct();
 
@@ -135,7 +134,6 @@ class AdminProductImageEditApiTest {
         String before = options(productId);
         expectValidation(replace(productId, "https://img/b0.jpg", "https://img/x.jpg"), "url");
         expectValidation(replace(productId, "https://img/b0-new.jpg", "https://img/s0.jpg"), "newUrl");
-        expectValidation(replace(productId, "https://img/b0-new.jpg", "https://elsewhere.example/x.jpg"), "newUrl");
         assertThat(options(productId)).isEqualTo(before);
     }
 

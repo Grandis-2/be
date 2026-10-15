@@ -121,7 +121,7 @@ class PromotionApiTest {
     }
 
     @Test
-    @DisplayName("본문 검사 — 기간 순서 · 업로드 주소 · 같은 사진 두 번 · 상품 없음 · 같은 상품 두 번 · 없는 상품 · 사전예약 아님 · 회차 취소 · 모르는 칸은 400")
+    @DisplayName("본문 검사 — 기간 순서 · 상세의 같은 사진 두 번 · 상품 없음 · 같은 상품 두 번 · 없는 상품 · 사전예약 아님 · 회차 취소 · 모르는 칸은 400")
     void rejectsBadBodies() throws Exception {
         UUID ok = preorder("OK");
         UUID inStock = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "일반", "t");
@@ -130,7 +130,6 @@ class PromotionApiTest {
                 (Object) UuidBinary.toBytes(canceled));
 
         expectValidation(create(body("x", today, today.minusDays(1), List.of(), ok)), "endDate");
-        expectValidation(create(body("x", today, today, List.of(), ok).replace("https://img/t.jpg", "https://evil/t.jpg")), "thumbnailUrl");
         expectValidation(create(body("x", today, today, List.of("https://img/a.jpg", "https://img/a.jpg"), ok)), "detailImageUrls[1]");
         expectValidation(create(body("x", today, today, List.of())), "productIds");
         expectValidation(create(body("x", today, today, List.of(), ok, ok)), "productIds[1]");

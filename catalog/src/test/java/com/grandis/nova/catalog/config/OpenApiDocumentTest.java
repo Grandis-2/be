@@ -132,7 +132,6 @@ class OpenApiDocumentTest {
         expected.put("POST /api/v1/admin/products/{productId}/conversion", "InStockConversionRequest");
         expected.put("POST /api/v1/admin/promotions", "PromotionRequest");
         expected.put("PUT /api/v1/admin/promotions/{promotionId}", "PromotionRequest");
-        expected.put("POST /api/v1/admin/products/image-uploads", "ImageUploadRequest");
         expected.put("POST /api/v1/admin/products/{productId}/images", "ProductImageAddRequest");
         expected.put("PATCH /api/v1/admin/products/{productId}/images", "ProductImageReplaceRequest");
         expected.put("POST /api/v1/reviews", "ReviewCreateRequest");
@@ -141,13 +140,25 @@ class OpenApiDocumentTest {
         Map<String, String> documented = new LinkedHashMap<>();
         operations().forEach((name, operation) -> {
             JsonNode body = operation.path("requestBody");
-            if (!body.isMissingNode()) {
+            // 멀티파트(사진 업로드)는 문자열 본문이 아니다 — multipartUploadDocumentsFileAndPurpose
+            if (!body.isMissingNode() && !body.path("content").has("multipart/form-data")) {
                 JsonNode schema = body.path("content").path("application/json").path("schema");
                 documented.put(name, schema.path("$ref").asString("").replace("#/components/schemas/", ""));
             }
         });
         assertThat(documented).containsExactlyInAnyOrderEntriesOf(expected);
         expected.values().forEach(type -> assertThat(doc.path("components").path("schemas").has(type)).as(type).isTrue());
+    }
+
+    @Test
+    @DisplayName("사진 업로드는 멀티파트 본문의 파일 파트 file(binary)과 purpose(PRODUCT · PROMOTION)를 싣는다")
+    void multipartUploadDocumentsFileAndPurpose() {
+        JsonNode upload = operations().get("POST /api/v1/admin/images");
+        assertThat(upload.path("requestBody").path("content").path("multipart/form-data").path("schema").path("properties")
+                .path("file").path("format").asString()).isEqualTo("binary");
+        JsonNode purpose = upload.path("parameters").get(0);
+        assertThat(purpose.path("name").asString()).isEqualTo("purpose");
+        assertThat(purpose.path("schema").path("enum").toString()).isEqualTo("[\"PRODUCT\",\"PROMOTION\"]");
     }
 
     @Test

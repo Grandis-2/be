@@ -1,6 +1,5 @@
 package com.grandis.nova.catalog.registration;
 
-import com.grandis.nova.catalog.image.ImageUploadProperties;
 import com.grandis.nova.catalog.option.OptionText;
 import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.catalog.product.Amounts;
@@ -21,6 +20,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -38,7 +38,7 @@ import java.util.regex.Pattern;
  * 용량은 숫자+단위 · 조합은 축 전부를 덮고 값이 그 축에 있어야 하며 같은 조합 둘 금지 · 조합 상한 · SKU 는 상품 안 유일(비면 값을 '-' 로 잇는다) ·
  * 표시명 120자 · 가격은 정수 원 · 재고는 일반 상품에서 조합마다 필수이고 사전예약은 받지 않는다 · 가격은 기본가 + 추가금 합만(수동 가격 없음, 2026-10-06 결정) ·
  * 사진 묶음은 color 축이 있으면 색상별만(사용자 결정 2026-09-28), 없으면 기본 묶음 하나 · GALLERY 묶음당 10장 · 대표는 하나(없으면 첫 장) ·
- * DETAIL 은 상한과 대표 자동 지정이 없다 · 사진 주소는 설정한 CDN 주소(nova.upload.cdn-base-url) 아래만 · 사전예약은 회차 + 차수 필수이고
+ * DETAIL 은 상한과 대표 자동 지정이 없다 · 사진 주소는 상품 안에서 한 번(올린 사진인지는 저장 단계의 ImageAttachments) · 사전예약은 회차 + 차수 필수이고
  * 오픈은 지금 + 여유 이후 · 일반은 회차 · 차수를 받지 않는다.
  */
 @Component
@@ -85,55 +85,54 @@ public class ProductRegistrationValidator {
     public record Draft(List<Axis> axes, List<Combo> combos, List<GalleryDraft> gallery, List<DetailDraft> detail) {
     }
 
-    /** 사진 주소가 시작해야 하는 접두(CDN 주소 + "/"). */
-    private final String imageUrlPrefix;
-
-    public ProductRegistrationValidator(ImageUploadProperties images) {
-        this.imageUrlPrefix = images.imageUrlPrefix();
-    }
-
     public Draft validate(ProductRegistrationRequest request, Instant now, Duration minOpenLead) {
         requireSaleModeShape(request, now, minOpenLead);
         List<Axis> axes = normalizeAxes(request.optionAxes());
         List<Combo> combos = buildCombos(request, axes);
         List<GalleryDraft> gallery = normalizeGallery(request, axes);
         List<DetailDraft> detail = normalizeDetail(request);
-        requireUploadedImages(request);
+        requireDistinctImages(request);
         return new Draft(axes, combos, gallery, detail);
     }
 
     /**
-     * 사진 주소는 설정한 CDN 주소 아래만 — 바깥 주소(추적 픽셀 · 지워질 수 있는 남의 이미지)가 상품 화면에 실리지 않게 한다.
-     * 접두 끝의 "/" 까지 대조하므로 cdn 주소를 앞에 붙인 다른 호스트(cdn.example.com.evil.test)는 걸린다.
-     * 주소만 본다 — 그 객체가 실제로 올라가 있는지, 이 서비스가 발급한 키인지는 확인하지 않는다.
+     * 한 상품 안에서 같은 주소는 한 번 — 사진 수정 API 가 주소로 사진 한 장을 가리킨다. 업로드 API 는 파일마다 새 주소를 준다.
+     * 주소가 올린 사진인지(CDN · 용도 접두 · 표의 UNUSED)는 저장 단계의 붙이기가 본다({@code ImageAttachments}).
      */
-    private void requireUploadedImages(ProductRegistrationRequest request) {
+    private static void requireDistinctImages(ProductRegistrationRequest request) {
         Set<String> seen = new HashSet<>();
         for (int i = 0; i < request.images().gallery().size(); i++) {
-            requireUploaded(request.images().gallery().get(i).items(), "images.gallery[%d]".formatted(i), seen);
+            requireDistinct(request.images().gallery().get(i).items(), "images.gallery[%d]".formatted(i), seen);
         }
         for (int i = 0; i < request.images().detail().size(); i++) {
-            requireUploaded(request.images().detail().get(i).items(), "images.detail[%d]".formatted(i), seen);
+            requireDistinct(request.images().detail().get(i).items(), "images.detail[%d]".formatted(i), seen);
         }
     }
 
-    /** 한 상품 안에서 같은 주소는 한 번 — 사진 수정 API 가 주소로 사진 한 장을 가리킨다. 업로드 API 는 파일마다 새 주소를 준다. */
-    private void requireUploaded(List<Image> items, String field, Set<String> seen) {
+    private static void requireDistinct(List<Image> items, String field, Set<String> seen) {
         for (int j = 0; j < items.size(); j++) {
-            String url = items.get(j).url();
-            String itemField = field + ".items[%d].url".formatted(j);
-            requireUploadedUrl(url, itemField);
-            if (!seen.add(url)) {
-                throw ValidationFailures.of(itemField, "같은 사진 주소가 두 번 왔습니다.");
+            if (!seen.add(items.get(j).url())) {
+                throw ValidationFailures.of(field + ".items[%d].url".formatted(j), "같은 사진 주소가 두 번 왔습니다.");
             }
         }
     }
 
-    /** 등록 · 사진 수정이 같이 쓴다. */
-    public void requireUploadedUrl(String url, String field) {
-        if (!url.startsWith(imageUrlPrefix) || url.length() == imageUrlPrefix.length()) {
-            throw ValidationFailures.of(field, "이미지 주소는 " + imageUrlPrefix + " 아래만 받습니다.");
+    /** 요청의 사진 주소 → 칸 이름(images.gallery[i].items[j].url · images.detail[i].items[j].url). 붙이기의 400 이 가리킨다. */
+    public static Map<String, String> imageFields(ProductRegistrationRequest request) {
+        Map<String, String> fields = new HashMap<>();
+        for (int i = 0; i < request.images().gallery().size(); i++) {
+            List<Image> items = request.images().gallery().get(i).items();
+            for (int j = 0; j < items.size(); j++) {
+                fields.putIfAbsent(items.get(j).url(), "images.gallery[%d].items[%d].url".formatted(i, j));
+            }
         }
+        for (int i = 0; i < request.images().detail().size(); i++) {
+            List<Image> items = request.images().detail().get(i).items();
+            for (int j = 0; j < items.size(); j++) {
+                fields.putIfAbsent(items.get(j).url(), "images.detail[%d].items[%d].url".formatted(i, j));
+            }
+        }
+        return fields;
     }
 
     /**

@@ -376,17 +376,6 @@ class AdminProductRegistrationApiTest {
         }
 
         @Test
-        @DisplayName("사진 주소는 설정한 CDN 주소 아래만 — 바깥 주소 · 비슷한 호스트는 그 칸의 400(시험 CDN 은 https://img)")
-        void imageUrlsMustBeUploaded() throws Exception {
-            expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("""
-                    "images": { "gallery": [ { "color": "블랙", "items": [ { "url": "https://img/ok.jpg" }, { "url": "https://elsewhere.example/x.jpg" } ] } ] },
-                    """)), "images.gallery[0].items[1].url");
-            expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("""
-                    "images": { "detail": [ { "section": "사양", "items": [ { "url": "https://img.evil.test/x.jpg" } ] } ] },
-                    """)), "images.detail[0].items[0].url");
-        }
-
-        @Test
         @DisplayName("한 상품 안에서 같은 사진 주소는 한 번 — 묶음 · 상세 영역을 건너도 두 번째 자리의 400(사진 수정 API 가 주소로 한 장을 가리킨다)")
         void imageUrlsAreUniqueWithinProduct() throws Exception {
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("""

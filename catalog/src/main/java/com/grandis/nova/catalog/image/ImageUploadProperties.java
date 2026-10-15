@@ -4,17 +4,20 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
 import java.net.URI;
+import java.time.Duration;
 
 /**
- * 관리자 이미지 업로드(S3 presigned PUT) 설정. 배포 환경은 인프라가 uploads: true 인 서비스에 bucket · cdn-base-url · region 을 넣는다.
+ * 관리자 이미지 업로드 설정 — 서버가 받은 사진을 이 버킷에 올린다. 배포 환경은 인프라가 uploads: true 인 서비스에 bucket · cdn-base-url · region 을 넣는다.
  * bucket · cdn-base-url 이 없으면 기동하지 않는다 — 업로드 API 가 조용히 500 이 되거나
  * 상품 등록의 이미지 주소 검사가 아무 주소나 받게 열리는 대신 배포에서 드러난다.
  *
- * @param bucket     업로드 버킷 이름. 브라우저가 presigned URL 로 여기에 직접 PUT 한다
- * @param cdnBaseUrl 그 버킷을 내놓는 CDN 주소(https, 경로 없음). 이미지 주소는 이 주소 + "/" + 객체 키다. 상품 등록은 이 주소 아래 이미지만 받는다
+ * @param bucket     업로드 버킷 이름
+ * @param cdnBaseUrl 그 버킷을 내놓는 CDN 주소(https, 경로 없음). 이미지 주소는 이 주소 + "/" + 객체 키다. 상품 · 홍보 저장은 이 주소 아래 새 사진만 받는다
  * @param region     버킷 리전. 비우면 AWS 기본 리전 조회(환경 변수 AWS_REGION)를 쓰고, 그것도 없으면 기동 실패
  * @param endpoint   로컬 S3 에뮬레이터 주소 — 로컬 · 시험 전용이다. 정하면 accessKey · secretKey 로 정적 자격 증명과 경로 방식 주소를 쓰고,
  *                   비우면 AWS 기본 주소와 기본 자격 증명(태스크 역할)을 쓴다. 배포 환경은 비운다
+ * @param putAttemptTimeout S3 PutObject 한 번의 시간 상한
+ * @param putTimeout        재시도를 합친 PutObject 전체의 시간 상한. 넘으면 업로드는 503 이다
  */
 @ConfigurationProperties("nova.upload")
 public record ImageUploadProperties(
@@ -23,12 +26,14 @@ public record ImageUploadProperties(
         String region,
         URI endpoint,
         @DefaultValue("test") String accessKey,
-        @DefaultValue("test") String secretKey
+        @DefaultValue("test") String secretKey,
+        @DefaultValue("10s") Duration putAttemptTimeout,
+        @DefaultValue("25s") Duration putTimeout
 ) {
 
     public ImageUploadProperties {
         if (bucket == null || bucket.isBlank()) {
-            throw new IllegalArgumentException("nova.upload.bucket is required (the upload bucket browsers PUT images into)");
+            throw new IllegalArgumentException("nova.upload.bucket is required (the bucket uploaded images are stored in)");
         }
         if (bucket.startsWith("CHANGE_ME")) {
             throw new IllegalArgumentException("nova.upload.bucket is still the example placeholder");
