@@ -75,10 +75,11 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
-    @DisplayName("목록 · 카테고리 · 상품 리뷰 · 구매후기도 두 번째 응답의 data 가 첫 응답(DB)과 같다 — JSON 을 거쳐도 칸이 그대로")
+    @DisplayName("목록(색상칩 포함) · 카테고리 · 상품 리뷰 · 구매후기도 두 번째 응답의 data 가 첫 응답(DB)과 같다 — JSON 을 거쳐도 칸이 그대로")
     void otherPublicReadsRoundTrip() throws Exception {
         String tag = "r" + ShopFixtures.unique();
         UUID productId = registerInStock("왕복", tag);
+        registerWithColor("왕복 색상");   // 색상칩(중첩 레코드 목록)도 JSON 을 거쳐 그대로
         fixtures.childCategory(categoryId, "하위");
         reviews.saveAndFlush(ProductReview.write(productId, UUID.randomUUID(), UUID.randomUUID(), 5, "좋아요", "기본", "김**"));
         for (String path : new String[] {"/api/v1/products?q=" + tag, "/api/v1/products?sort=PRICE_ASC&size=12", "/api/v1/categories",
@@ -87,6 +88,10 @@ class CatalogReadCacheApiTest {
             String second = data(mockMvc.perform(get(path)).andExpect(status().isOk())).toString();
             assertThat(second).as(path).isEqualTo(first);
         }
+        java.util.List<String> chips = new java.util.ArrayList<>();
+        data(mockMvc.perform(get("/api/v1/products?sort=PRICE_ASC&size=12"))).get("items")
+                .forEach(item -> item.get("colors").forEach(chip -> chips.add(chip.get("label").asString())));
+        assertThat(chips).as("캐시에서 꺼낸 목록에 색상칩이 실렸다").contains("화이트");
         assertThat(redis.keys("catalog:cache:product-list:*")).as("q 검색은 넣지 않는다 — 정렬 목록 하나만").hasSize(1);
         assertThat(redis.keys("catalog:cache:category-tree:*")).hasSize(1);
         assertThat(redis.keys("catalog:cache:reviews:*")).hasSize(2);

@@ -202,6 +202,42 @@ class ProductListApiTest {
             assertThat(find(items, firstColorBare).get("imageUrl").isNull()).isTrue();
             assertThat(find(items, none).get("imageUrl").isNull()).isTrue();
         }
+
+        @Test
+        @DisplayName("색상칩은 색상 축 값마다 넣은 순서로 표시값 · hex · 그 색상 사진(넣은 순서) — hex 가 없으면 null, 사진이 없으면 빈 목록, 색상 축이 없으면 빈 목록")
+        void colorChips() throws Exception {
+            // 사전순이면 블루가 앞선다 — 넣은 순서(화이트 → 블루 → 블랙)가 그대로 나와야 한다. 블랙은 hex · 사진이 없다
+            UUID colored = visibleInStock("색상칩");
+            jdbcTemplate.update("UPDATE products SET options = ? WHERE id = ?", """
+                    {"axes": [
+                       {"key": "storage", "label": "용량", "values": [{"id": "s1", "value": "256GB", "normalized": "256GB", "surcharge": 0}]},
+                       {"key": "color", "label": "색상", "values": [
+                         {"id": "c1", "value": "화이트", "normalized": "화이트", "hex": "#FFFFFF", "surcharge": 0,
+                          "images": [{"url": "https://img/w2.jpg", "primary": false}, {"url": "https://img/w1.jpg", "primary": true}]},
+                         {"id": "c2", "value": "블루", "normalized": "블루", "hex": "#0000FF", "surcharge": 0,
+                          "images": [{"url": "https://img/b1.jpg", "primary": true}]},
+                         {"id": "c3", "value": "블랙", "normalized": "블랙", "surcharge": 0}]}],
+                     "defaultImages": [{"url": "https://img/default.jpg", "primary": true}], "detailImages": []}
+                    """, UuidBinary.toBytes(colored));
+            UUID plain = visibleInStock("색상 축 없음");
+            jdbcTemplate.update("UPDATE products SET options = ? WHERE id = ?", """
+                    {"axes": [{"key": "storage", "label": "용량", "values": [{"id": "s1", "value": "256GB", "normalized": "256GB", "surcharge": 0}]}],
+                     "defaultImages": [{"url": "https://img/default.jpg", "primary": true}], "detailImages": []}
+                    """, UuidBinary.toBytes(plain));
+
+            JsonNode items = list();
+            JsonNode chips = find(items, colored).get("colors");
+            assertThat(chips).hasSize(3);
+            List<String> labels = new ArrayList<>();
+            chips.forEach(chip -> labels.add(chip.get("label").asString()));
+            assertThat(labels).containsExactly("화이트", "블루", "블랙");
+            assertThat(chips.get(0).get("hex").asString()).isEqualTo("#FFFFFF");
+            assertThat(chips.get(0).get("imageUrls").toString()).isEqualTo("[\"https://img/w2.jpg\",\"https://img/w1.jpg\"]");
+            assertThat(chips.get(1).get("imageUrls").toString()).isEqualTo("[\"https://img/b1.jpg\"]");
+            assertThat(chips.get(2).get("hex").isNull()).isTrue();
+            assertThat(chips.get(2).get("imageUrls")).isEmpty();
+            assertThat(find(items, plain).get("colors")).as("기본 묶음 사진은 칩이 아니다").isEmpty();
+        }
     }
 
     // ── 필터 ────────────────────────────────────────────────────────────────
