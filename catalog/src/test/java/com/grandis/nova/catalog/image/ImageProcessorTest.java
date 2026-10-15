@@ -216,6 +216,8 @@ class ImageProcessorTest {
         assertThat(bomb.length).as("압축돼 작다").isLessThan(16 * 1024);
         assertThatThrownBy(() -> process(bomb))
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.details().toString()).contains("file", "ICC"));
+        // 거절 이유가 풀기 상한인지 — 0 바이트는 상한이 없어도 프로파일 파싱에서 거절되므로 위 단언만으로는 상한을 가리지 못한다
+        assertThatThrownBy(() -> PngColorChunks.extract(bomb)).isInstanceOf(IllegalArgumentException.class).hasMessage("iCCP too large");
     }
 
     @Test
