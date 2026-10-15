@@ -14,6 +14,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** member 가 DLQ 로 보낼 메시지(수신자 0명 · 1,000명 초과 · 겹침)는 만들지 못한다. 문구는 계약 표와 같다. */
 class NotificationRequestedTest {
 
+    static final UUID PRODUCT_ID = UUID.fromString("0199a3f2-8a10-7b21-9c32-4d5e6f708192");
+
     @Test
     void 수신자는_1명부터_1000명까지다() {
         assertThat(to(customers(1000)).recipientIds()).hasSize(1000);
@@ -69,6 +71,24 @@ class NotificationRequestedTest {
         assertThat(canceled.aggregateId()).isEqualTo(preorderId);
         assertThat(canceled.target()).isEqualTo(new NotificationRequested.Target(NotificationRequested.TargetType.PREORDER,
                 "token"));
+    }
+
+    @Test
+    void 상품명_사본이_없으면_상품명_없는_문구다() {
+        NotificationRequested opened = NotificationRequested.preorderOpened(PRODUCT_ID, null, customers(1));
+
+        assertThat(opened.body()).isEqualTo("알림 신청하신 사전예약이 시작됐어요.");
+        assertThat(opened.title()).isEqualTo("사전예약 오픈");
+        assertThat(opened.target()).isEqualTo(new NotificationRequested.Target(NotificationRequested.TargetType.PRODUCT,
+                PRODUCT_ID.toString()));
+    }
+
+    @Test
+    void 오픈_알림은_신청자_목록을_그대로_싣는다() {
+        List<UUID> recipients = customers(1000);
+
+        assertThat(NotificationRequested.preorderOpened(PRODUCT_ID, "Nova", recipients).recipientIds())
+                .containsExactlyElementsOf(recipients);
     }
 
     private static NotificationRequested to(List<UUID> recipients) {

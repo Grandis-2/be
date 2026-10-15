@@ -230,6 +230,23 @@ class PreorderOutboxWiringTest {
                         + "\"target\":{\"type\":\"PREORDER\",\"id\":\"9f1c2d3e\"}}"));
     }
 
+    @Test
+    void 오픈_알림은_신청자_목록과_상품으로_가는_곳을_싣고_원인은_회차다() {
+        UUID other = UUID.fromString("00000000-0000-7000-8000-000000001025");
+        String eventId = append(NotificationRequested.preorderOpened(aggregateId, "아이폰 Duo", List.of(CUSTOMER_ID, other)));
+
+        OutboundMessage message = sentFor(eventId);
+        JsonNode envelope = jsonMapper.readTree(message.body());
+
+        assertThat(message.destination()).isEqualTo("notification");
+        assertThat(envelope.get("aggregateType").asString()).isEqualTo("PREORDER_CAMPAIGN");
+        assertThat(envelope.get("aggregateId").asString()).isEqualTo(aggregateId.toString());
+        assertThat(envelope.get("payload")).isEqualTo(json(
+                "{\"recipientIds\":[\"" + CUSTOMER_ID + "\",\"" + other + "\"],\"kind\":\"PREORDER_OPENED\","
+                        + "\"title\":\"사전예약 오픈\",\"body\":\"알림 신청하신 아이폰 Duo 사전예약이 시작됐어요.\","
+                        + "\"target\":{\"type\":\"PRODUCT\",\"id\":\"" + aggregateId + "\"}}"));
+    }
+
     /** 커밋 직후 발행을 놓친 행(오래된 미발행)을 릴레이가 종류의 목적지로 보낸다. 종류마다 본다. */
     @ParameterizedTest
     @CsvSource({

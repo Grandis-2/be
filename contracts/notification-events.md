@@ -88,7 +88,7 @@
 
 ## 오픈 알림
 
-회원이 오픈 전 사전예약 상품에 "오픈 알림 신청"을 해 두면, 회차가 열릴 때 신청자에게만 보낸다. 신청은 preorder 가 갖는다(`preorder_open_alerts`, 신청 · 해제 `PUT` · `DELETE /api/v1/preorders/products/{productId}/open-alert`, 내 목록 `GET /api/v1/preorders/open-alerts`). 오픈은 누가 누르는 동작이 아니라 시각이 지나는 것이라 preorder 가 주기적으로(기본 30초) 회차를 찾는다.
+회원이 오픈 전 사전예약 상품에 "오픈 알림 신청"을 해 두면, 회차가 열릴 때 신청자에게만 보낸다. 신청은 preorder 가 갖는다(`preorder_open_alerts`, 신청 · 해제 `PUT` · `DELETE /api/v1/preorders/products/{productId}/open-alert`, 내 목록 `GET /api/v1/preorders/open-alerts`). 비공개 상품은 404, 판매 중지는 `PRODUCT_PAUSED`(409), 이미 열렸으면 `PRODUCT_ALREADY_OPEN`(409). 오픈은 누가 누르는 동작이 아니라 시각이 지나는 것이라 preorder 가 주기적으로(기본 30초) 회차를 찾는다.
 
 - **대상.** `opens_at ≤ 지금` 이고 `open_notified_at IS NULL` 이며 연 지 1시간이 안 됐고 아직 마감 전인 회차. 처음 배포할 때 오래전에 열린 회차의 알림이 몰려 나가지 않게, 장애가 길면 늦은 알림을 포기한다. 이미 마감(조기 마감 · 회차 취소)된 회차에는 "시작됐어요" 를 보내지 않는다.
 - **두 단계로 보낸다.** 회차 행은 접수가 순번을 받으려 잠그는 행이라, 오픈 순간 그 행을 오래 잡으면 접수가 신청자 수만큼 기다린다.

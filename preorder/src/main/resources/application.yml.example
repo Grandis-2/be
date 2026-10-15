@@ -108,6 +108,8 @@ nova:
   # DB 에서 세는 상태 지표(예약 상태별 수 · DLQ) 갱신 주기
   metrics:
     refresh-interval: 30s
+  # 오픈 알림(회차가 열리면 신청자에게 회원 알림)을 찾는 주기 작업. 기본값은 코드에 있다:
+  # campaign.open-alert.interval: 30s · window: 1h(연 지 이보다 오래된 회차는 보내지 않는다) · batch-size: 100
   # 외부 예약 Mock 등록 요청의 scope(시험 실행 범위). 접수 때 request_payload 에 고정된다
   external-mock:
     scope: preorder

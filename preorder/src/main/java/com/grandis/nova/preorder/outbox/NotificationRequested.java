@@ -9,7 +9,7 @@ import java.util.UUID;
 
 /**
  * 회원 알림 한 건 — 같은 문구를 받는 회원 1~1,000명. member 가 받아 회원마다 저장한다(contracts/notification-events.md).
- * member 는 예약을 읽을 수 없어, 다른 메시지와 달리 화면에 보일 문구와 이동할 곳까지 완성해 싣는다.
+ * member 는 예약 · 회차를 읽을 수 없어, 다른 메시지와 달리 화면에 보일 문구와 이동할 곳까지 완성해 싣는다.
  * 문구는 계약 표의 문구다. aggregate 는 봉투로만 나가는 추적용이다.
  *
  * @param recipientIds 받는 회원. 1~{@value #MAX_RECIPIENTS}명, 겹치지 않게 — member 가 어긋난 메시지를 DLQ 로 보내므로 여기서 막는다
@@ -59,6 +59,18 @@ public record NotificationRequested(@JsonIgnore AggregateType aggregateType, @Js
                 new Target(TargetType.PREORDER, preorderToken));
     }
 
+    /**
+     * 오픈 알림을 신청한 회원에게 회차가 열렸다고 알린다. 회원은 상품 상세로 간다.
+     *
+     * @param productTitle 상품명 사본. null 이면 상품명 없는 문구로 보낸다(catalog 값을 받기 전 회차)
+     */
+    public static NotificationRequested preorderOpened(UUID productId, String productTitle, List<UUID> recipientIds) {
+        String body = productTitle == null ? "알림 신청하신 사전예약이 시작됐어요."
+                : "알림 신청하신 " + productTitle + " 사전예약이 시작됐어요.";
+        return new NotificationRequested(AggregateType.PREORDER_CAMPAIGN, productId, recipientIds,
+                Kind.PREORDER_OPENED, "사전예약 오픈", body, new Target(TargetType.PRODUCT, productId.toString()));
+    }
+
     @Override
     public OutboundEventType eventType() {
         return OutboundEventType.NOTIFICATION_REQUESTED;
@@ -66,7 +78,8 @@ public record NotificationRequested(@JsonIgnore AggregateType aggregateType, @Js
 
     public enum Kind {
         PREORDER_REGISTERED,
-        PREORDER_CANCELED
+        PREORDER_CANCELED,
+        PREORDER_OPENED
     }
 
     /**
@@ -80,7 +93,8 @@ public record NotificationRequested(@JsonIgnore AggregateType aggregateType, @Js
     }
 
     public enum TargetType {
-        PREORDER
+        PREORDER,
+        PRODUCT
     }
 
     /** 누르면 갈 곳. 주소는 프론트가 만든다 — 주소가 바뀌어도 저장된 알림이 깨지지 않게. */
