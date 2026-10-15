@@ -11,6 +11,7 @@ import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.orm.jpa.JpaSystemException;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -26,6 +27,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -126,6 +128,29 @@ class AdminDrawBudgetTest {
             return null;
         }).given(stock).reserve(anyMap());
         assertBudgetExceeded();
+    }
+
+    @Test
+    @DisplayName("예산을 넘긴 뒤의 실패는 종류와 상관없이 409 retryable(상한 직전 잠금 뒤 INSERT 준비의 JpaSystemException 등), 예산 안의 같은 실패는 그대로 던진다")
+    void failureAfterDeadlineIsBudgetExceeded() {
+        given(campaigns.insert(any())).willAnswer(invocation -> {
+            clock.now = NOW.plus(BUDGET);
+            throw new JpaSystemException(new RuntimeException("Transaction timeout expired"));
+        });
+        assertBudgetExceeded();
+
+        clock.now = NOW;
+        willThrow(new JpaSystemException(new RuntimeException("boom"))).given(campaigns).insert(any());
+        assertThatThrownBy(() -> service.create(null, "k-2", command())).isInstanceOf(JpaSystemException.class);
+    }
+
+    @Test
+    @DisplayName("예산은 0 보다 크고 10분 이하여야 뜬다")
+    void budgetMustBeInRange() {
+        assertThatThrownBy(() -> AdminDrawService.requireBudget(Duration.ZERO)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AdminDrawService.requireBudget(Duration.ofSeconds(-1))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AdminDrawService.requireBudget(Duration.ofMinutes(10).plusNanos(1))).isInstanceOf(IllegalArgumentException.class);
+        assertThat(AdminDrawService.requireBudget(Duration.ofMinutes(10))).isEqualTo(Duration.ofMinutes(10));
     }
 
     private void assertBudgetExceeded() {

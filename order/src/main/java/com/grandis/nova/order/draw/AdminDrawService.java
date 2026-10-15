@@ -50,12 +50,15 @@ import java.util.UUID;
  * - 응모 마감은 지금보다 뒤여야 한다. 시작은 지금보다 앞이어도 된다(바로 응모 중).
  * - <b>시간 예산</b>: catalog 조회를 시작한 때부터 회차 저장의 커밋까지를 {@link #budget}(기본 60초) 안에 끝낸다. 회차는 증정품 사진 주소를
  *   스냅샷하는데, catalog 의 정리 배치는 아무 회차도 가리키지 않는 안 쓰는 사진을 지운다 — 읽어 둔 채 오래 멈춘 생성이 그 사이 빠지고 지워진
- *   사진을 저장하지 않게, 배치의 기준 시간(하한 1시간)보다 훨씬 짧은 예산 안에서만 커밋한다. 넘으면 롤백(확보 포함)하고 409 retryable 이다 —
- *   다시 보내면 지금 사진을 다시 읽는다. 커밋은 예산 안에서만 일어난다:
+ *   사진을 저장하지 않게, 배치의 기준 시간(하한 1시간)보다 훨씬 짧은 예산을 둔다. 넘으면 롤백(확보 포함)하고 409 retryable 이다 —
+ *   다시 보내면 지금 사진을 다시 읽는다.
  *   <ul>
- *     <li>저장 트랜잭션의 시간 상한을 남은 예산으로 건다 — 재고 행 잠금을 기다리는 문장도 그 안에서 끊긴다(실측: 예산 2초에 잠금 대기가
- *         2.2초에 끝남 — 잠금 대기 기본값 50초가 아니다).</li>
- *     <li>마지막 확인은 커밋 직전(beforeCommit)이다. 회차 INSERT 는 그 전에 flush 하므로 확인 뒤에는 커밋만 남는다.</li>
+ *     <li>예산이 보장하는 것은 커밋 직전 확인(beforeCommit)까지다 — 그 시각이 예산 안이어야 커밋으로 간다. 회차 INSERT 는 그 전에 flush 하므로
+ *         확인 뒤에 남는 것은 COMMIT 문 하나다(그 문장 자체에는 시간 상한이 없다).</li>
+ *     <li>저장 트랜잭션의 시간 상한(남은 예산을 초로 올림)은 스레드를 붙잡지 않게 하는 장치다 — 재고 행 잠금을 기다리는 문장이 잠금 대기 기본값(50초)
+ *         대신 그 상한에서 끊긴다(실측: 예산 2초에 2.2초에 끝남). 상한이 올림이라 예산을 조금 넘겨 끊길 수 있고, 그 몫은 커밋 직전 확인이 막는다.</li>
+ *     <li>예산을 넘긴 뒤의 실패는 종류와 상관없이 409 다 — 끊는 지점에 따라 QueryTimeoutException(잠금 대기 중) · JpaSystemException
+ *         (Hibernate 의 "Transaction timeout expired" — 상한 직전에 잠금을 얻고 INSERT 를 준비할 때)으로 달리 온다(리뷰 실측).</li>
  *   </ul>
  */
 @Service
@@ -67,6 +70,8 @@ public class AdminDrawService {
     static final int MAX_KEY_LENGTH = 100;
     static final int MAX_ATTEMPTS = 2;
     static final String ACTIVE = "ACTIVE";
+    /** 시간 예산의 상한. 정리 배치의 기준 시간 하한(1시간)과 거리를 둔다. */
+    static final Duration MAX_BUDGET = Duration.ofMinutes(10);
 
     private final CatalogReader catalog;
     private final StockLedger stock;
@@ -86,7 +91,15 @@ public class AdminDrawService {
         this.readTransaction = new TransactionTemplate(transactionManager);
         this.readTransaction.setReadOnly(true);
         this.clock = clock;
-        this.budget = budget;
+        this.budget = requireBudget(budget);
+    }
+
+    /** 0 보다 크고 10분 이하 — 정리 배치의 기준 시간 하한(1시간)보다 충분히 짧아야 한다. 0 이하면 모든 생성이 409 다. */
+    static Duration requireBudget(Duration budget) {
+        if (budget == null || budget.isNegative() || budget.isZero() || budget.compareTo(MAX_BUDGET) > 0) {
+            throw new IllegalArgumentException("nova.draw.create-budget must be in (0, " + MAX_BUDGET + "]: " + budget);
+        }
+        return budget;
     }
 
     /**
@@ -134,8 +147,7 @@ public class AdminDrawService {
                     return campaigns.insert(draft);
                 }), true);
             } catch (BudgetExceededException | TransactionTimedOutException | QueryTimeoutException e) {
-                // 재고 행 잠금을 기다리다 트랜잭션 상한에 끊기면 QueryTimeoutException 이다(실측 — 빼면 500, AdminDrawBudgetLockWaitTest).
-                // TransactionTimedOutException 은 상한이 지난 뒤 다음 문장을 시작할 때의 것이다(이 경로에서는 관측하지 않았다)
+                // 트랜잭션 상한에 끊긴 것 — 잠금 대기 중이면 QueryTimeoutException 이다(실측, AdminDrawBudgetLockWaitTest)
                 log.info("드로우 회차 만들기 시간 예산 초과 optionId={} budget={}", option.optionId(), budget);
                 throw budgetExceeded();
             } catch (DrawKeyTakenException e) {
@@ -159,6 +171,13 @@ public class AdminDrawService {
                     throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
                 }
                 log.info("드로우 회차 만들기 교착, 다시 시도 {}/{} optionId={}", attempt, MAX_ATTEMPTS, option.optionId());
+            } catch (RuntimeException e) {
+                // 예산을 넘긴 뒤의 실패는 시각으로 가른다 — 상한에 끊긴 예외가 위 목록 밖 종류(JpaSystemException 등)로도 온다
+                if (!clock.instant().isBefore(deadline)) {
+                    log.info("드로우 회차 만들기 시간 예산 초과 optionId={} budget={} cause={}", option.optionId(), budget, e.getClass().getName());
+                    throw budgetExceeded();
+                }
+                throw e;
             }
         }
     }
@@ -167,6 +186,7 @@ public class AdminDrawService {
     private TransactionTemplate writeTransaction(Instant deadline) {
         Duration remaining = Duration.between(clock.instant(), deadline);
         if (remaining.isNegative() || remaining.isZero()) {
+            log.info("드로우 회차 만들기 시간 예산 초과(저장 전) budget={}", budget);
             throw budgetExceeded();
         }
         TransactionTemplate template = new TransactionTemplate(transactionManager);
