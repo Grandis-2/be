@@ -29,4 +29,12 @@ public interface PreorderCampaignRepository extends JpaRepository<PreorderCampai
              order by c.productId""")
     List<PreorderCampaign> findNotClosedAfter(@Param("now") Instant now, @Param("afterProductId") UUID afterProductId,
                                               Limit limit);
+
+    /**
+     * 회차 행을 SELECT … FOR SHARE 로 잠근다. 오픈 알림 신청이 "아직 표시 전인가" 를 본 뒤 신청 행을 커밋할 때까지 오픈 표시({@link #markOpenNotified})가
+     * 기다린다. 신청끼리는 서로 막지 않는다.
+     */
+    @Lock(LockModeType.PESSIMISTIC_READ)
+    @Query("select c from PreorderCampaign c where c.productId = :productId")
+    Optional<PreorderCampaign> findForShare(@Param("productId") UUID productId);
 }
