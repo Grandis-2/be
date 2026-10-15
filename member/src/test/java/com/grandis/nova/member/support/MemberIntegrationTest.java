@@ -7,6 +7,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.annotation.AliasFor;
 
 /**
  * 실제 MySQL · Redis 위에서 도는 통합 시험. 인프라를 쓰는 시험은 이것만 붙인다.
@@ -18,6 +19,8 @@ import org.springframework.context.annotation.Import;
  * 비밀값·접속 정보는 {@link MemberTestContext} 가 넣는다.
  *
  * 특정 값이 달라야 하는 시험(예: 쿠키 Secure 를 켜고 보는 것)은 클래스에 `@TestPropertySource` 로 그 키만 덮는다.
+ * 진짜 HTTP 가 필요한 시험(스트림처럼 MockMvc 로 끝까지 볼 수 없는 것)은 webEnvironment 를 RANDOM_PORT 로 준다 — 그때는 관리 포트도 열리므로
+ * `management.server.port=0` 을 함께 덮는다.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
@@ -49,4 +52,7 @@ import org.springframework.context.annotation.Import;
 })
 @Import(MemberTestContext.class)
 public @interface MemberIntegrationTest {
+
+    @AliasFor(annotation = SpringBootTest.class)
+    SpringBootTest.WebEnvironment webEnvironment() default SpringBootTest.WebEnvironment.MOCK;
 }

@@ -212,13 +212,49 @@ class PreorderOutboxWiringTest {
                         + "\"changedAt\":\"2026-10-02T02:03:04.123456Z\",\"change\":\"RESCHEDULED\"}"));
     }
 
-    /** 커밋 직후 발행을 놓친 행(오래된 미발행)을 릴레이가 종류의 목적지로 보낸다. 종류 넷 모두. */
+    /** member 는 원장을 읽지 못해 payload 를 그대로 저장한다 — 문구와 이동할 곳까지 싣고 aggregate 는 봉투로만 보낸다. */
+    @Test
+    void 알림은_notification_으로_aggregate_없이_문구와_이동할_곳을_싣는다() {
+        String eventId = append(NotificationRequested.preorderRegistered(aggregateId, "9f1c2d3e", CUSTOMER_ID));
+
+        OutboundMessage message = sentFor(eventId);
+        JsonNode envelope = jsonMapper.readTree(message.body());
+
+        assertThat(message.destination()).isEqualTo("notification");
+        assertThat(message.attributes()).isEmpty();
+        assertThat(envelope.get("aggregateType").asString()).isEqualTo("PREORDER");
+        assertThat(envelope.get("aggregateId").asString()).isEqualTo(aggregateId.toString());
+        assertThat(envelope.get("payload")).isEqualTo(json(
+                "{\"recipientIds\":[\"" + CUSTOMER_ID + "\"],\"kind\":\"PREORDER_REGISTERED\","
+                        + "\"title\":\"사전예약 등록 완료\",\"body\":\"사전예약 등록이 완료됐어요. 24시간 안에 결제해 주세요.\","
+                        + "\"target\":{\"type\":\"PREORDER\",\"id\":\"9f1c2d3e\"}}"));
+    }
+
+    @Test
+    void 오픈_알림은_신청자_목록과_상품으로_가는_곳을_싣고_원인은_회차다() {
+        UUID other = UUID.fromString("00000000-0000-7000-8000-000000001025");
+        String eventId = append(NotificationRequested.preorderOpened(aggregateId, "아이폰 Duo", List.of(CUSTOMER_ID, other)));
+
+        OutboundMessage message = sentFor(eventId);
+        JsonNode envelope = jsonMapper.readTree(message.body());
+
+        assertThat(message.destination()).isEqualTo("notification");
+        assertThat(envelope.get("aggregateType").asString()).isEqualTo("PREORDER_CAMPAIGN");
+        assertThat(envelope.get("aggregateId").asString()).isEqualTo(aggregateId.toString());
+        assertThat(envelope.get("payload")).isEqualTo(json(
+                "{\"recipientIds\":[\"" + CUSTOMER_ID + "\",\"" + other + "\"],\"kind\":\"PREORDER_OPENED\","
+                        + "\"title\":\"사전예약 오픈\",\"body\":\"알림 신청하신 아이폰 Duo 사전예약이 시작됐어요.\","
+                        + "\"target\":{\"type\":\"PRODUCT\",\"id\":\"" + aggregateId + "\"}}"));
+    }
+
+    /** 커밋 직후 발행을 놓친 행(오래된 미발행)을 릴레이가 종류의 목적지로 보낸다. 종류마다 본다. */
     @ParameterizedTest
     @CsvSource({
             "REGISTER_JOB_READY, PREORDER_SYNC_JOB, preorder-register",
             "CANCEL_JOB_READY, PREORDER_SYNC_JOB, preorder-cancel",
             "PREORDER_CANCEL_REQUESTED, PREORDER, order-events",
-            "PREORDER_CAMPAIGN_CHANGED, PREORDER_CAMPAIGN, waitingroom-events"
+            "PREORDER_CAMPAIGN_CHANGED, PREORDER_CAMPAIGN, waitingroom-events",
+            "NOTIFICATION_REQUESTED, PREORDER, notification"
     })
     void 릴레이는_오래된_미발행_행을_종류의_목적지로_보낸다(String eventType, String aggregateType, String destination) {
         String eventId = ShopFixtures.unique();
