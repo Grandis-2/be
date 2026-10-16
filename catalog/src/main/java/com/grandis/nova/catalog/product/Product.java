@@ -198,7 +198,7 @@ public class Product extends BaseEntity {
             throw new IllegalStateException("회차가 취소된 상품은 일반 전환하지 않는다: " + getId());
         }
         this.saleMode = SaleMode.IN_STOCK;
-        this.status = SaleStatus.ACTIVE;
+        changeStatus(SaleStatus.ACTIVE);   // 판매 중지였으면 번호도 오른다 — preorder 의 회차 상품 사본이 따라가게
         this.discountRate = Discount.requireRate(discountRate);
     }
 
