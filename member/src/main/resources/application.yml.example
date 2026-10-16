@@ -83,6 +83,21 @@ member:
     cron: "0 */10 * * * *"
     batch-size: 1000
     max-batches-per-run: 100
+  # 알림 배지 실시간 연결(GET /api/v1/notifications/stream, SSE). 아래가 코드 기본값이라 운영에는 적지 않는다.
+  # heartbeat 는 CloudFront 원본 읽기 제한(60초) · ALB 유휴 제한(65초)보다 짧게 — 길면 조용한 연결이 중간에서 끊긴다.
+  # max-lifetime 보다 액세스 토큰 만료가 이르면 그때 닫는다 — 화면은 새 토큰으로 다시 연결한다.
+  # max-per-customer 를 넘으면 그 회원의 가장 오래된 연결을 닫고, max-connections(인스턴스당)를 넘으면 503 — 화면은 주기 조회로 돌아간다.
+  #   max-connections 는 Tomcat 의 server.tomcat.max-connections(기본 8192)보다 넉넉히 작게 — 스트림이 소켓을 다 쓰면 다른 API 가 접속하지 못한다.
+  # 연결이 있는 인스턴스만 tail-interval 마다 새 알림을 찾고, 새 연결의 첫 수와 함께 묶어 센다 — 연결은 DB 를 읽지 않아 배포 뒤 몰린 재연결이 풀을
+  # 붙잡지 않는다. overlap 은 늦게 커밋된 행을 잡으려고 되돌아 읽는 폭 — 알림 INSERT 하나가 이보다 오래 걸리면 그 알림은 실시간으로 가지 않는다.
+  notification:
+    stream:
+      heartbeat: 25s
+      max-lifetime: 30m
+      max-per-customer: 5
+      max-connections: 5000
+      tail-interval: 2s
+      overlap: 10s
 
 auth:
   # 관리자 로그인 시도 제한(IP 별). 창 안에서 max-attempts 를 넘으면 bcrypt 비교 없이 429 + Retry-After. 성공하면 그 IP 의 수를 지운다.
@@ -120,6 +135,21 @@ nova:
   cors:
     allowed-origins:
       - http://localhost:9000   # 로컬 문서 허브(docker/openapi-hub)
+  # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다
+  sqs:
+    region: ap-northeast-2
+    endpoint: http://localhost:4566
+    api-call-timeout: 3s
+    # 알림 요청(preorder · order → member) 소비기. 끄면 알림이 큐에 쌓이기만 한다 — 운영에서 끄지 않는다.
+    # Floci 없이 띄우면 받기 실패 경고만 남는다(최대 30초 간격). 로그인만 볼 때는 false 로
+    consumer:
+      enabled: true
+      queue: notification
+      concurrency: 1
+      wait-seconds: 20
+      visibility: 5m       # 처리 한 건보다 길게
+      backoff-base: 30s    # DB 순단에 DLQ 가 차지 않게 — 5번 실패해 DLQ 까지 약 6~12분(5s 면 1~3분)
+      backoff-max: 5m
 
 # 서명은 RS256. member 만 개인키를 갖고 서명한다. 다른 서비스는 jwk-set-uri 로 공개키를 받아 검증만 한다.
 #   개인키 생성: openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out jwt.pem   (PKCS#8, "BEGIN PRIVATE KEY")

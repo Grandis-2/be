@@ -53,6 +53,25 @@ class MockClient {
                 .body(json.writeValueAsBytes(request)));
     }
 
+    /** @param entryId 멱등 키(응모 id). 본문의 entryId 와 같아야 한다 */
+    MockReply enterDraw(String entryId, JsonNode request) {
+        return exchange(rest.post().uri("/external/draw-entries")
+                .header(IDEMPOTENCY_KEY, entryId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(json.writeValueAsBytes(request)));
+    }
+
+    MockReply drawStatus(String drawId) {
+        return exchange(rest.get().uri("/external/draws/{drawId}", drawId));
+    }
+
+    /** 멱등 키는 회차 id 다(경로). Idempotency-Key 헤더를 받지 않는다. */
+    MockReply draw(String drawId, JsonNode request) {
+        return exchange(rest.post().uri("/external/draws/{drawId}/draw", drawId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(json.writeValueAsBytes(request)));
+    }
+
     private MockReply exchange(RestClient.RequestHeadersSpec<?> request) {
         try {
             return request.accept(MediaType.APPLICATION_JSON).exchange((sent, response) ->

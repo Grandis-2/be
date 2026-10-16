@@ -193,7 +193,7 @@ class PreorderEventDispatcherTest {
         String closesAt = Instant.now().plusSeconds(90_000).truncatedTo(ChronoUnit.MICROS).toString();
         ObjectNode payload = (ObjectNode) jsonMapper.readTree("""
                 {"campaign":{"opensAt":"%s","closesAt":"%s","timezone":"Asia/Seoul"},
-                 "visible":false,"visibilityVersion":1,
+                 "title":"Nova 1 Pro","status":"ACTIVE","visible":false,"listingVersion":1,
                  "shipmentBatches":[
                    {"batchNumber":1,"positionFrom":1,"positionTo":3000,
                     "estimatedShipStart":"2026-11-01","estimatedShipEnd":"2026-11-07"},
@@ -204,6 +204,7 @@ class PreorderEventDispatcherTest {
         dispatcher.dispatch(envelope("PREORDER_PRODUCT_REGISTERED", "PRODUCT", productId, payload));
 
         assertThat(visibility(productId)).isEqualTo("0|1");
+        assertThat(listing(productId)).isEqualTo("Nova 1 Pro|ACTIVE");
         assertThat(jdbcTemplate.queryForList("""
                 SELECT CONCAT_WS('|', batch_number, position_from, COALESCE(position_to, 'NULL'),
                                  estimated_ship_start, estimated_ship_end)
@@ -219,10 +220,14 @@ class PreorderEventDispatcherTest {
                 noOpensAt))).isInstanceOf(NullPointerException.class).hasMessage("opensAt");
         assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_campaigns WHERE product_id = ?",
                 (Object) UuidBinary.toBytes(another))).isZero();
+        ObjectNode unknownStatus = payload.deepCopy().put("status", "DELETED");
+        assertThatThrownBy(() -> dispatcher.dispatch(envelope("PREORDER_PRODUCT_REGISTERED", "PRODUCT", another,
+                unknownStatus))).as("모르는 판매 상태는 계약 위반").isInstanceOf(IllegalArgumentException.class);
         ObjectNode legacy = payload.deepCopy();
-        legacy.remove(List.of("visible", "visibilityVersion"));
+        legacy.remove(List.of("title", "status", "visible", "listingVersion"));
         dispatcher.dispatch(envelope("PREORDER_PRODUCT_REGISTERED", "PRODUCT", another, legacy));
-        assertThat(visibility(another)).as("공개 여부 칸을 모르는 catalog 는 공개 · 번호 0").isEqualTo("1|0");
+        assertThat(visibility(another)).as("상품 칸을 모르는 catalog 는 공개 · 번호 0").isEqualTo("1|0");
+        assertThat(listing(another)).as("상품명 · 상태는 비운다").isEmpty();
     }
 
     @Test
@@ -241,14 +246,14 @@ class PreorderEventDispatcherTest {
     }
 
     @Test
-    void 상품_변경에_공개_여부가_있으면_회차에_반영하고_회차가_아직_없으면_보류해_늦춰_다시_받는다() {
+    void 상품_변경에_상품_값이_있으면_회차_사본에_반영하고_회차가_아직_없으면_보류해_늦춰_다시_받는다() {
         UUID productId = preorders.findById(preorderId).orElseThrow().productId();
 
-        dispatcher.dispatch(envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", productId, payload()
-                .put("visible", false)
-                .put("visibilityVersion", 1)));
+        dispatcher.dispatch(envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", productId, listing("Nova 1 Pro", "PAUSED", false, 2)));
+        dispatcher.dispatch(envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", productId, listing("Nova 1", "ACTIVE", true, 1)));
 
-        assertThat(visibility(productId)).isEqualTo("0|1");
+        assertThat(visibility(productId)).as("늦게 온 옛 번호는 버린다").isEqualTo("0|2");
+        assertThat(listing(productId)).isEqualTo("Nova 1 Pro|PAUSED");
         assertThat(fixtures.count("""
                 SELECT COUNT(*) FROM preorder_outbox_events
                  WHERE event_type = 'PREORDER_CAMPAIGN_CHANGED' AND aggregate_id = ?
@@ -256,9 +261,12 @@ class PreorderEventDispatcherTest {
                 """, (Object) UuidBinary.toBytes(productId))).isEqualTo(1);
         UUID notRegistered = fixtures.product("PREORDER", "ACTIVE");
         assertThat(dispatcher.dispatch(envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", notRegistered,
-                payload().put("visible", true).put("visibilityVersion", 1)))).isEqualTo(MessageHandling.DEFER);
+                listing("Nova 1", "ACTIVE", true, 1)))).isEqualTo(MessageHandling.DEFER);
         assertThat(dispatcher.dispatch(envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", notRegistered, payload())))
-                .as("공개 여부가 없으면 캐시만 비우고 끝낸다").isEqualTo(MessageHandling.DONE);
+                .as("상품 값이 없으면(구버전 catalog) 캐시만 비우고 끝낸다").isEqualTo(MessageHandling.DONE);
+        assertThat(dispatcher.dispatch(envelope("PREORDER_PRODUCT_CHANGED", "PRODUCT", notRegistered,
+                payload().put("visible", true).put("visibilityVersion", 1))))
+                .as("번호가 빠진 값은 쓰지 않는다 — 모르는 칸은 무시한다").isEqualTo(MessageHandling.DONE);
     }
 
     @Test
@@ -312,6 +320,18 @@ class PreorderEventDispatcherTest {
         return jdbcTemplate.queryForObject("""
                 SELECT CONCAT_WS('|', visible, visibility_version) FROM preorder_campaigns WHERE product_id = ?
                 """, String.class, (Object) UuidBinary.toBytes(productId));
+    }
+
+    /** 상품명 | 판매 상태. 둘 다 없으면 빈 문자열 */
+    private String listing(UUID productId) {
+        return jdbcTemplate.queryForObject("""
+                SELECT CONCAT_WS('|', product_title, product_status) FROM preorder_campaigns WHERE product_id = ?
+                """, String.class, (Object) UuidBinary.toBytes(productId));
+    }
+
+    private ObjectNode listing(String title, String status, boolean visible, long listingVersion) {
+        return payload().put("title", title).put("status", status).put("visible", visible)
+                .put("listingVersion", listingVersion);
     }
 
     private ObjectNode payload() {

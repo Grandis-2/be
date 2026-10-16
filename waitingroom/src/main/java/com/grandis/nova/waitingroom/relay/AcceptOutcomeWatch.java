@@ -2,7 +2,6 @@ package com.grandis.nova.waitingroom.relay;
 
 import com.grandis.nova.waitingroom.control.RedisClock;
 import com.grandis.nova.waitingroom.control.SnapshotHolder;
-import com.grandis.nova.waitingroom.domain.queue.AdmissionTicket;
 import com.grandis.nova.waitingroom.entry.ProductClosures;
 import com.grandis.nova.waitingroom.redis.QueueStore;
 import org.reactivestreams.Publisher;
@@ -52,17 +51,19 @@ class AcceptOutcomeWatch implements GatewayFilter {
     private final QueueStore queue;
     private final JsonMapper jsonMapper;
     private final RelayMetrics metrics;
+    private final long retryAfterSeconds;
     /** 장애 동안 요청마다 쌓이지 않게 상태가 바뀔 때만 로그를 남긴다. */
     private final AtomicBoolean forgetFailing = new AtomicBoolean();
 
     AcceptOutcomeWatch(SnapshotHolder snapshots, RedisClock clock, ProductClosures closures, QueueStore queue,
-                       JsonMapper jsonMapper, RelayMetrics metrics) {
+                       JsonMapper jsonMapper, RelayMetrics metrics, RelayProperties properties) {
         this.snapshots = snapshots;
         this.clock = clock;
         this.closures = closures;
         this.queue = queue;
         this.jsonMapper = jsonMapper;
         this.metrics = metrics;
+        this.retryAfterSeconds = retryAfterSeconds(properties.preorderClockSkew());
     }
 
     @Override
@@ -103,7 +104,7 @@ class AcceptOutcomeWatch implements GatewayFilter {
                         metrics.observed(SALE_CLOSED);
                     }));
             case TICKET_STALE, TICKET_USED -> Mono.fromRunnable(() -> exchange.getResponse().getHeaders()
-                            .set(HttpHeaders.RETRY_AFTER, String.valueOf(retryAfterSeconds(clock.now()))))
+                            .set(HttpHeaders.RETRY_AFTER, String.valueOf(retryAfterSeconds)))
                     .then(queue.forgetAdmission(productKey, customerId, ticketExpiresAt))
                     .timeout(FORGET_TIMEOUT)
                     .doOnNext(removed -> {
@@ -127,13 +128,11 @@ class AcceptOutcomeWatch implements GatewayFilter {
     }
 
     /**
-     * 다시 진입할 때까지. 같은 30초 창에서는 같은 입장권이 나오고, 접수 쪽은 마지막 접수 뒤(오차 30초) 창의 입장권만
-     * 받으므로 지금 + 오차 이후에 시작하는 창까지 기다리게 한다(최대 약 60초).
+     * 다시 진입할 때까지. 접수 쪽은 발급 시각 − 오차(30초)가 마지막 접수보다 뒤인 입장권만 받으므로, 지금 + 오차보다
+     * 뒤에 입장해야 한다. 그 전에 다시 오면 같은 이유로 또 거절된다.
      */
-    static long retryAfterSeconds(Instant now) {
-        long window = AdmissionTicket.WINDOW_SEC;
-        long acceptableFrom = (now.getEpochSecond() + window) / window * window + window;
-        return acceptableFrom - now.getEpochSecond();
+    static long retryAfterSeconds(Duration preorderClockSkew) {
+        return preorderClockSkew.toSeconds() + 1;
     }
 
     private String errorCode(byte[] body) {

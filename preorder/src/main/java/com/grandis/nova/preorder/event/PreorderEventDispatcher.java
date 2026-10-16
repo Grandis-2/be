@@ -5,6 +5,7 @@ import com.grandis.nova.common.sqs.MessageHandling;
 import com.grandis.nova.preorder.campaign.CampaignRegistrar;
 import com.grandis.nova.preorder.campaign.CampaignRepublisher;
 import com.grandis.nova.preorder.campaign.Campaigns;
+import com.grandis.nova.preorder.campaign.ProductListing;
 import com.grandis.nova.preorder.cancel.CampaignCancelService;
 import com.grandis.nova.preorder.cancel.ExpiryCancelService;
 import com.grandis.nova.preorder.integration.catalog.CatalogCacheInvalidation;
@@ -135,12 +136,12 @@ public class PreorderEventDispatcher {
 
     /**
      * 오픈 직전 가격 변경이 캐시 갱신(1분)을 기다리지 않고 모든 인스턴스의 접수에 바로 반영되게 캐시를 먼저 비운다.
-     * 공개 여부가 실려 있으면 회차에 반영한다 — 회차가 아직 없으면(등록 이벤트보다 먼저 옴) 늦춰 다시 받는다.
+     * 상품명 · 판매 상태 · 공개 여부가 실려 있으면 회차 사본에 반영한다 — 회차가 아직 없으면(등록 이벤트보다 먼저 옴) 늦춰 다시 받는다.
      */
     private MessageHandling onProductChanged(UUID productId, PreorderProductChanged changed) {
         catalogCache.evictEverywhere(productId);
-        if (changed != null && changed.hasVisibility()
-                && !campaigns.applyVisibility(productId, changed.visible(), changed.visibilityVersion())) {
+        ProductListing listing = changed == null ? null : changed.toListing();
+        if (listing != null && !campaigns.applyListing(productId, listing)) {
             return MessageHandling.DEFER;
         }
         return MessageHandling.DONE;

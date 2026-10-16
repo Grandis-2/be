@@ -2,6 +2,7 @@ package com.grandis.nova.preorder.campaign.application;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
+import com.grandis.nova.preorder.campaign.ProductListing;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatch;
@@ -30,9 +31,6 @@ class PreorderCampaignWriter {
 
     private static final Logger log = LoggerFactory.getLogger(PreorderCampaignWriter.class);
 
-    /** catalog 이벤트를 받기 전 번호. catalog 의 첫 번호(1)부터 이긴다. */
-    private static final long NO_VISIBILITY_VERSION = 0;
-
     private final PreorderCampaignRepository campaigns;
     private final ShipmentBatchRepository batches;
     private final CampaignChangePublisher changePublisher;
@@ -51,19 +49,18 @@ class PreorderCampaignWriter {
     /**
      * 없으면 만들고 있으면 바꾼다. 오픈 뒤에는 바꾸지 않는다.
      *
-     * @param visible 새로 만들 때만 쓰는 catalog 의 공개 여부. 번호는 0 으로 두어 catalog 이벤트가 이긴다
+     * @param listing 새로 만들 때만 쓰는 catalog 상품 값. 번호는 0 이어서 catalog 이벤트가 이긴다
      */
     @Transactional
-    PreorderCampaign upsert(UUID productId, Instant opensAt, Instant closesAt, boolean visible) {
+    PreorderCampaign upsert(UUID productId, Instant opensAt, Instant closesAt, ProductListing listing) {
         return campaigns.findForUpdate(productId)
                 .map(campaign -> reschedule(campaign, opensAt, closesAt))
-                .orElseGet(() -> create(productId, opensAt, closesAt, visible));
+                .orElseGet(() -> create(productId, opensAt, closesAt, listing));
     }
 
-    private PreorderCampaign create(UUID productId, Instant opensAt, Instant closesAt, boolean visible) {
+    private PreorderCampaign create(UUID productId, Instant opensAt, Instant closesAt, ProductListing listing) {
         requireLeadTime(opensAt);
-        PreorderCampaign campaign = campaigns.save(
-                new PreorderCampaign(productId, opensAt, closesAt, visible, NO_VISIBILITY_VERSION));
+        PreorderCampaign campaign = campaigns.save(new PreorderCampaign(productId, opensAt, closesAt, listing));
         changePublisher.publish(campaign, CampaignChange.CREATED);
         return campaign;
     }

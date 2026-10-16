@@ -116,7 +116,7 @@ class ProductRegistrationServiceTest {
     }
 
     @Test
-    @DisplayName("사전예약 등록은 preorder 로 갈 회차 · 차수 이벤트 하나를 적는다 — 회차 시각은 마이크로초로 자른다")
+    @DisplayName("사전예약 등록은 preorder 로 갈 회차 · 차수 이벤트 하나를 적는다 — 회차 시각은 마이크로초로 자르고, 상품명 · 판매 상태 · 공개 여부 · 번호 1 을 싣는다")
     void preorderRegistrationAppendsCampaignEvent() {
         Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.SECONDS).plusNanos(123_456_789);
         RegistrationOutcome created = service.register("k-" + ShopFixtures.unique(), preorderRequest(opensAt));
@@ -135,6 +135,10 @@ class ProductRegistrationServiceTest {
         assertThat(last.get("positionFrom").asLong()).isEqualTo(101L);
         assertThat(last.get("positionTo").isNull()).isTrue();
         assertThat(last.get("estimatedShipEnd").asString()).isEqualTo("2026-11-14");
+        assertThat(payload.get("title").asString()).isEqualTo("Nova");
+        assertThat(payload.get("status").asString()).isEqualTo("ACTIVE");
+        assertThat(payload.get("visible").asBoolean()).as("관리자가 고른 비공개 그대로").isFalse();
+        assertThat(payload.get("listingVersion").asLong()).isEqualTo(1);
     }
 
     @Test

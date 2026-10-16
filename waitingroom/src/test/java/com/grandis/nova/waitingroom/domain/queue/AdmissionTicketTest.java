@@ -3,7 +3,12 @@ package com.grandis.nova.waitingroom.domain.queue;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -14,7 +19,7 @@ class AdmissionTicketTest {
     static final String CURRENT = "nova-test-current-secret-0123456789";
     static final String PREVIOUS = "nova-test-previous-secret-0123456789";
 
-    /** 발급 시각. 창(30초) 시작은 01:00:00, 만료는 그 + 120초 = 01:02:00(epoch 1790816520). */
+    /** 입장 시각(epoch 1790816407). 네 칸은 그 + 120초(1790816527)에 만료, 옛 세 칸은 30초 내림 + 120초(1790816520). */
     static final Instant ISSUED_AT = Instant.parse("2026-10-01T01:00:07Z");
 
     static final String PRODUCT = "00000000-0000-7000-8000-000000000101";
@@ -22,7 +27,9 @@ class AdmissionTicketTest {
     static final String OTHER_PRODUCT = "00000000-0000-7000-8000-000000000202";
     static final String OTHER_CUSTOMER = "00000000-0000-7000-8000-000000000077";
 
-    /** preorder 의 입장권 검증 테스트와 같은 공통 테스트 벡터. 한쪽 서명 규칙이 바뀌면 여기서 먼저 깨진다. */
+    /** preorder 의 입장권 검증 테스트와 같은 네 칸 공통 벡터(발급 시각 칸 포함). 지금 발급하는 형식이다. */
+    static final String VECTOR_STAMPED = "et_MDAwMDAwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMTAxHzAwMDAwMDAwLTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwMTAyNB8xNzkwODE2NTI3HzE3OTA4MTY0MDc.1oFs2R18hOoYTARp963rUa3SUMef-TMyL88DklTSwSQ";
+    /** 옛 세 칸 공통 벡터. 교체 배포 동안 옛 노드가 낸 입장권이라 검증은 계속 받는다. */
     static final String VECTOR_CURRENT = "et_MDAwMDAwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMTAxHzAwMDAwMDAwLTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwMTAyNB8xNzkwODE2NTIw.QDp7_sRDfjNKhq8Hw2y0yzpizrzNBYaXSe5Lhy-nh1M";
     static final String VECTOR_OTHER_PRODUCT = "et_MDAwMDAwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMjAyHzAwMDAwMDAwLTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwMDA3Nx8xNzkwODE2NTIw.5UT5cldXa-INLn6aW4qgQtoFq0HD-dYESzzSzgtsl44";
     static final String VECTOR_SIGNED_BY_PREVIOUS = "et_MDAwMDAwMDAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMTAxHzAwMDAwMDAwLTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwMTAyNB8xNzkwODE2NTIw.DTOEEcyaD-PLgXh-Ndka_YHVQpeF6V5cQa2znplVwR8";
@@ -34,10 +41,16 @@ class AdmissionTicketTest {
     class 공통_벡터 {
 
         @Test
-        void preorder_와_같은_입장권을_발급하고_같은_창_안에서는_같은_값이다() {
-            assertThat(ticket.issue(PRODUCT, CUSTOMER, ISSUED_AT)).isEqualTo(VECTOR_CURRENT);
-            assertThat(ticket.issue(PRODUCT, CUSTOMER, ISSUED_AT.plusSeconds(20))).isEqualTo(VECTOR_CURRENT);
-            assertThat(ticket.issue(OTHER_PRODUCT, OTHER_CUSTOMER, ISSUED_AT)).isEqualTo(VECTOR_OTHER_PRODUCT);
+        void preorder_와_같은_네_칸_입장권을_발급하고_같은_입장_시각이면_같은_값이다() {
+            assertThat(ticket.issue(PRODUCT, CUSTOMER, ISSUED_AT)).isEqualTo(VECTOR_STAMPED);
+            assertThat(ticket.issue(PRODUCT, CUSTOMER, ISSUED_AT)).isEqualTo(ticket.issue(PRODUCT, CUSTOMER, ISSUED_AT));
+            assertThat(ticket.issue(PRODUCT, CUSTOMER, ISSUED_AT.plusSeconds(1))).isNotEqualTo(VECTOR_STAMPED);
+        }
+
+        @Test
+        void 옛_세_칸_벡터도_받는다() {
+            assertThat(ticket.verify(VECTOR_CURRENT, PRODUCT, ISSUED_AT)).contains(CUSTOMER);
+            assertThat(ticket.verify(VECTOR_OTHER_PRODUCT, OTHER_PRODUCT, ISSUED_AT)).contains(OTHER_CUSTOMER);
         }
 
         @Test
@@ -50,7 +63,32 @@ class AdmissionTicketTest {
 
         @Test
         void 벡터를_검증하면_회원을_돌려준다() {
-            assertThat(ticket.verify(VECTOR_CURRENT, PRODUCT, ISSUED_AT)).contains(CUSTOMER);
+            assertThat(ticket.verify(VECTOR_STAMPED, PRODUCT, ISSUED_AT)).contains(CUSTOMER);
+        }
+    }
+
+    @Nested
+    class 수명 {
+
+        @Test
+        void 내림_없이_입장_시각부터_정확히_수명만큼_산다() {
+            for (long second = 0; second < 30; second++) {
+                Instant admittedAt = ISSUED_AT.plusSeconds(second);
+
+                assertThat(ticket.expiresAt(admittedAt)).isEqualTo(admittedAt.plusSeconds(120));
+                assertThat(ticket.authenticate(ticket.issue(PRODUCT, CUSTOMER, admittedAt), PRODUCT, admittedAt)
+                        .orElseThrow().expiresAt()).isEqualTo(admittedAt.plusSeconds(120));
+            }
+        }
+
+        @Test
+        void 수명을_바꾸면_그_수명대로_만료한다() {
+            AdmissionTicket shortLived = AdmissionTicket.of(CURRENT, List.of(), null, Duration.ofSeconds(60));
+            String issued = shortLived.issue(PRODUCT, CUSTOMER, ISSUED_AT);
+
+            assertThat(shortLived.ttlSec()).isEqualTo(60);
+            assertThat(shortLived.verify(issued, PRODUCT, ISSUED_AT.plusSeconds(59))).contains(CUSTOMER);
+            assertThat(shortLived.verify(issued, PRODUCT, ISSUED_AT.plusSeconds(60))).isEmpty();
         }
     }
 
@@ -66,7 +104,7 @@ class AdmissionTicketTest {
             assertThat(holder).isEqualTo(new SignedToken.Holder(CUSTOMER, expiresAt));
             assertThat(holder.expired(expiresAt.minusSeconds(1))).isFalse();
             assertThat(holder.expired(expiresAt)).isTrue();
-            assertThat(ticket.expiresAt(ISSUED_AT)).isEqualTo(expiresAt);
+            assertThat(ticket.expiresAt(ISSUED_AT)).as("새로 내는 입장권은 내림이 없다").isEqualTo(ISSUED_AT.plusSeconds(120));
         }
 
         @Test
@@ -121,6 +159,24 @@ class AdmissionTicketTest {
         }
 
         @Test
+        void 발급_시각_칸이_숫자가_아니거나_만료보다_뒤이거나_칸_수가_틀리면_서명이_맞아도_거절한다() {
+            assertThat(ticket.verify(signed("et_", PRODUCT, CUSTOMER, "1790816527", "abc"), PRODUCT, ISSUED_AT)).isEmpty();
+            assertThat(ticket.verify(signed("et_", PRODUCT, CUSTOMER, "1790816527", "1790816528"), PRODUCT, ISSUED_AT)).isEmpty();
+            assertThat(ticket.verify(signed("et_", PRODUCT, CUSTOMER, "1790816527", "1790816407", "x"), PRODUCT, ISSUED_AT))
+                    .isEmpty();
+            assertThat(ticket.verify(signed("et_", PRODUCT, CUSTOMER, "1790816527", "1790816407"), PRODUCT, ISSUED_AT))
+                    .as("손으로 만든 것도 형식이 맞으면 받는다").contains(CUSTOMER);
+        }
+
+        @Test
+        void 대기_토큰은_발급_시각_칸을_받지_않는다() {
+            QueueToken queueToken = QueueToken.of(CURRENT, List.of(), null);
+
+            assertThat(queueToken.verify(signed("qt_", PRODUCT, CUSTOMER, "1790816527", "1790816407"), PRODUCT, ISSUED_AT))
+                    .isEmpty();
+        }
+
+        @Test
         void 옛_키로_서명한_입장권은_옛_키를_받기로_하지_않았으면_거절한다() {
             assertThat(ticket.verify(VECTOR_SIGNED_BY_PREVIOUS, PRODUCT, ISSUED_AT)).isEmpty();
         }
@@ -141,8 +197,8 @@ class AdmissionTicketTest {
         }
 
         @Test
-        void 창은_배포_끝_더하기_수명_더하기_창까지다() {
-            Instant closesAt = ROLLOUT_ENDS_AT.plusSeconds(AdmissionTicket.TTL_SEC + AdmissionTicket.WINDOW_SEC);
+        void 옛_키는_배포_끝_더하기_수명까지_받는다() {
+            Instant closesAt = ROLLOUT_ENDS_AT.plus(AdmissionTicket.DEFAULT_TTL).plusSeconds(1);
             String previousTicket = SignedToken.of("et_", 120, 30, PREVIOUS, List.of(), null)
                     .issue(PRODUCT, CUSTOMER, closesAt.minusSeconds(1));
 
@@ -152,7 +208,7 @@ class AdmissionTicketTest {
 
         @Test
         void 발급은_현재_키로만_한다() {
-            assertThat(rotating.issue(PRODUCT, CUSTOMER, ISSUED_AT)).isEqualTo(VECTOR_CURRENT);
+            assertThat(rotating.issue(PRODUCT, CUSTOMER, ISSUED_AT)).isEqualTo(VECTOR_STAMPED);
         }
     }
 
@@ -175,9 +231,34 @@ class AdmissionTicketTest {
         }
 
         @Test
+        void 수명이_30초에서_10분_사이의_초_단위가_아니면_기동을_막는다() {
+            assertThatThrownBy(() -> AdmissionTicket.of(CURRENT, List.of(), null, Duration.ofSeconds(29)))
+                    .hasMessageContaining("입장권 수명");
+            assertThatThrownBy(() -> AdmissionTicket.of(CURRENT, List.of(), null, Duration.ofSeconds(601)))
+                    .hasMessageContaining("입장권 수명");
+            assertThatThrownBy(() -> AdmissionTicket.of(CURRENT, List.of(), null, Duration.ofMillis(60_500)))
+                    .hasMessageContaining("입장권 수명");
+            assertThat(AdmissionTicket.of(CURRENT, List.of(), null, Duration.ofMinutes(10)).ttlSec()).isEqualTo(600);
+        }
+
+        @Test
         void 창이_수명보다_길면_기동을_막는다() {
             assertThatThrownBy(() -> SignedToken.of("et_", 30, 120, CURRENT, List.of(), null))
                     .hasMessageContaining("창 <= 수명");
+        }
+    }
+
+    /** 서명은 맞고 칸만 마음대로인 토큰. 발급 코드로는 만들 수 없는 모양을 검증에 넣어 본다. */
+    private static String signed(String prefix, String... fields) {
+        try {
+            String payload = Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(String.join("\u001f", fields).getBytes(StandardCharsets.UTF_8));
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(CURRENT.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            byte[] digest = mac.doFinal((prefix + payload).getBytes(StandardCharsets.UTF_8));
+            return prefix + payload + "." + Base64.getUrlEncoder().withoutPadding().encodeToString(digest);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
         }
     }
 }

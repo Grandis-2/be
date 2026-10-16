@@ -6,6 +6,7 @@ import com.grandis.nova.waitingroom.domain.queue.AdmissionTicket;
 import com.grandis.nova.waitingroom.entry.ProductClosures;
 import com.grandis.nova.waitingroom.redis.LuaScripts;
 import com.grandis.nova.waitingroom.redis.QueueStore;
+import com.grandis.nova.waitingroom.support.TestJwts;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -25,6 +26,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.List;
 import java.util.function.Supplier;
 
 import static com.grandis.nova.waitingroom.support.TestIds.customerId;
@@ -36,13 +38,13 @@ class AcceptOutcomeWatchTest {
     static final String USED = "{\"success\":false,\"error\":{\"code\":\"ADMISSION_TICKET_USED\"}}";
 
     @Test
-    void 다시_진입할_때는_지금_더하기_오차_뒤에_시작하는_창이라_새_입장권이_접수_규칙을_통과한다() {
-        for (long now = 1_000; now < 1_000 + 2 * AdmissionTicket.WINDOW_SEC; now++) {
-            long wait = AcceptOutcomeWatch.retryAfterSeconds(Instant.ofEpochSecond(now));
-            long windowStart = (now + wait) / AdmissionTicket.WINDOW_SEC * AdmissionTicket.WINDOW_SEC;
+    void 다시_진입할_때는_지금_더하기_오차_뒤에_입장해_새_입장권이_접수_규칙을_통과한다() {
+        long lastAcceptedAt = 1_000;
+        for (Duration skew : List.of(Duration.ZERO, Duration.ofSeconds(30), Duration.ofSeconds(90))) {
+            long admittedAt = lastAcceptedAt + AcceptOutcomeWatch.retryAfterSeconds(skew);
 
-            assertThat(windowStart).as("now=%d", now).isGreaterThan(now + AdmissionTicket.WINDOW_SEC);
-            assertThat(wait).isBetween(1L, 2 * AdmissionTicket.WINDOW_SEC);
+            assertThat(admittedAt - skew.toSeconds()).as("발급 시각 − 오차가 마지막 접수보다 뒤: %s", skew)
+                    .isGreaterThan(lastAcceptedAt);
         }
     }
 
@@ -52,7 +54,7 @@ class AcceptOutcomeWatchTest {
 
         private final Deque<Supplier<Mono<Boolean>>> replies = new ArrayDeque<>();
         private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        private final QueueStore queue = new QueueStore(new LuaScripts(null)) {
+        private final QueueStore queue = new QueueStore(new LuaScripts(null), AdmissionTicket.of(TestJwts.TOKEN_SECRET, List.of(), null)) {
             @Override
             public Mono<Boolean> forgetAdmission(String productKey, String customerId, Instant ticketExpiresAt) {
                 return replies.removeFirst().get();
@@ -60,7 +62,7 @@ class AcceptOutcomeWatchTest {
         };
         private final AcceptOutcomeWatch watch = new AcceptOutcomeWatch(TestSnapshots.emptyHolder(),
                 new RedisClock(Clock.systemUTC()), new ProductClosures(), queue, JsonMapper.builder().build(),
-                new RelayMetrics(registry));
+                new RelayMetrics(registry), new RelayProperties(null, null));
 
         @Test
         void 응답을_쓰기_시작하면_preorder_가_답한_시각을_남긴다() {

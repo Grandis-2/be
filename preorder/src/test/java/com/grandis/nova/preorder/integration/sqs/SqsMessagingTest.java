@@ -201,7 +201,7 @@ class SqsMessagingTest {
     }
 
     /**
-     * 등록보다 먼저 온 공개 여부 변경은 실패가 아니라 보류다. 재수신 한도를 넘겨 받아도 DLQ 로 가지 않고, 회차가 생기면 반영된다.
+     * 등록보다 먼저 온 상품 변경(상품명 · 판매 상태 · 공개 여부)은 실패가 아니라 보류다. 재수신 한도를 넘겨 받아도 DLQ 로 가지 않고, 회차가 생기면 반영된다.
      */
     @Test
     void 회차보다_먼저_온_공개_여부_변경은_DLQ_로_가지_않고_늦춰_다시_받다가_회차가_생기면_반영된다() {
@@ -209,7 +209,7 @@ class SqsMessagingTest {
         String changed = """
                 {"eventId":"%s","eventType":"PREORDER_PRODUCT_CHANGED","aggregateType":"PRODUCT",
                  "aggregateId":"%s","occurredAt":"2026-10-08T01:00:00Z",
-                 "payload":{"visible":false,"visibilityVersion":1}}
+                 "payload":{"title":"Nova 1","status":"ACTIVE","visible":false,"listingVersion":1}}
                 """.formatted(ShopFixtures.unique(), productId);
 
         queues.send("preorder-events", changed);

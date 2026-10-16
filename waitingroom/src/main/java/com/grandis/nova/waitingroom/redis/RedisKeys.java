@@ -24,6 +24,8 @@ public final class RedisKeys {
     public static final String SETTINGS = "wr:settings";
     /** 일정 전체 재발행을 요청한 표식. 있으면 다시 요청하지 않는다(리더가 바뀌어도). */
     public static final String RESYNC_REQUESTED = "wr:resync-requested";
+    /** 주기 재발행을 요청한 표식. 사라지면 일정을 아는 동안에도 한 번 더 요청한다. */
+    public static final String RESYNC_PERIODIC = "wr:resync-periodic";
     /** 일정을 모른 채 연달아 요청한 횟수. 늘수록 다음 요청까지 오래 기다린다. */
     public static final String RESYNC_ATTEMPTS = "wr:resync-attempts";
 

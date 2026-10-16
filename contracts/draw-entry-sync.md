@@ -1,6 +1,6 @@
 # order ↔ worker 드로우 계약
 
-응모 · 추첨 요청은 order 가 보내고(공통 모듈 `common:outbox` · `common:sqs` — 표와 이벤트 종류는 `OrderOutboxConfig`) worker 가 받아 Mock(추첨)에 넘긴다. 추첨 결과는 worker 가 order 에 보낸다(`InboundEventType`). 문서와 어긋나는 쪽이 고친다.
+응모 · 추첨 요청은 order 가 보내고(공통 모듈 `common:outbox` · `common:sqs` — 표와 이벤트 종류는 `OrderOutboxConfig`) worker 가 받아(`DrawHandler`) Mock(추첨)에 넘긴다. 추첨 결과는 worker 가 order 에 보낸다(`InboundEventType`). 문서와 어긋나는 쪽이 고친다.
 
 회원이 응모비를 결제하면 order 는 응모를 결제 완료(`PAID`)로 바꾸는 트랜잭션에서 아웃박스(`order_outbox_events`)에 `DRAW_ENTRY_PAID` 를 적고, 커밋 뒤 SQS 로 보낸다. 결제 완료한 응모만 추첨 대상이고, 아웃박스 행은 응모마다 하나다(결제 완료 반영이 응모마다 한 번뿐이다). 전달은 최소 한 번이라 같은 메시지가 두 번 갈 수는 있다(아래).
 
@@ -48,14 +48,27 @@ order 의 다른 이벤트와 같은 `EventEnvelope` 다.
 
 ## Mock 에 보낼 때
 
-- 멱등 키는 응모 id 다. 재시도마다 같은 키 · 같은 본문(응모 id · 회차 id · 회원 id)을 보낸다.
-- 재시도해도 결과가 같은 거절(본문 검증 실패 등)만 DLQ 로 보낸다 — 공통 소비기(`RetryingQueueConsumer`)는 예외 종류와 상관없이 다시 받기라, 바로 보내려면 worker 가 `draw-register-dlq` 에 직접 보내고 원본을 지운다(그 큐의 SendMessage 권한 포함). 408 · 429 · 5xx · 시간 초과 · **모르는 회차**는 재시도한다(가시성 지연) — 회차 등록을 따로 두면 순서 보장이 없어 응모가 먼저 도착할 수 있다.
-- worker 는 응모 하나하나의 처리 결과를 order 에 알리지 않는다 — order 는 넘긴 뒤 응모 상태를 바꾸지 않는다. order 가 받는 것은 회차의 추첨 결과(`DRAW_RESULT_READY`) 하나다.
+Mock API 는 mock 저장소 `docs/api.md` 「럭키드로우」 장이다(NV-505). 처음 보는 `drawId` 로 응모가 오면 Mock 이 회차를 만들어 받으므로 회차를 따로 등록하지 않는다 — 응모가 회차보다 먼저 도착해도 된다. 응모 · 추첨 모두 같은 요청을 다시 보내면 처음 결과가 온다(재생). 그래서 worker 는 결과를 모르면 조회 없이 같은 요청을 다시 보낸다.
 
-**Mock 담당과 정할 것(열린 질문).**
-- 응모 API 모양(경로 · 본문 칸 이름 · 응답). order 가 기대하는 것은 하나다: 같은 키로 다시 보내면 새 응모가 생기지 않고 처음 결과와 같다.
-- Mock 이 회차를 먼저 알아야 응모를 받는가. 회차는 order 가 만들고, 지금 Mock 에 회차를 등록하는 경로가 이 계약에 없다. 처음 보는 `drawId` 를 거절하면 모든 응모가 DLQ 로 간다 — 회차 등록 이벤트를 따로 둘지, 처음 보는 회차를 응모로 만들지 정한다.
-- Mock 이 받은 응모 수를 worker 가 어떻게 아는가 · 추첨 API 모양(아래 "추첨").
+| 호출 | 모양 |
+| --- | --- |
+| 응모 | `POST /external/draw-entries` — 헤더 `Idempotency-Key` = 응모 id, 본문 `{entryId, drawId, customerId}`. 재시도마다 같은 키 · 같은 본문 |
+| 회차 조회 | `GET /external/draws/{drawId}` — `entryCount` 가 받은 응모 수. 404 `NOT_FOUND` 는 받은 응모 0건 |
+| 추첨 | `POST /external/draws/{drawId}/draw` — 본문 `{winnerCount, expectedEntryCount}`(기대 수 = `paidEntries`). Mock 이 회차를 잠근 채 다시 세어 다르면 409 `ENTRY_COUNT_MISMATCH`. 회차 id 가 멱등 키다(헤더 없음) |
+
+worker 는 메시지를 아래 중 하나로 끝낸다. 재시도 · 실패 보관은 SQS 가 한다 — 지우지 않고 늦춘 메시지는 받은 횟수가 쌓여 최대 수신 횟수를 넘으면 SQS 가 DLQ(`draw-register-dlq`)로 옮긴다. 다시 보내도 결과가 같은 거절만 그 횟수를 기다리지 않고 worker 가 DLQ 에 바로 넣는다.
+
+| 결과 | 응답 | 처리 |
+| --- | --- | --- |
+| 성공 | 응모 201(재생 포함) · 추첨 200 | 추첨이면 `DRAW_RESULT_READY` 를 보낸 뒤 지운다. 응모는 order 에 알리지 않는다 — order 는 넘긴 뒤 응모 상태를 바꾸지 않는다 |
+| 일시 실패 | 408 · 429 · 5xx · 시간 초과 | 지우지 않고 늦춰 다시 받는다 — 받은 횟수에 따라 10초에서 15분까지(`nova.worker.draw.retry-delays`) |
+| 기다림 | 받은 응모 수 ≠ `paidEntries` · 추첨 409 `ENTRY_COUNT_MISMATCH` · 404 `NOT_FOUND` | 지우지 않고 늦춰 다시 받는다 — 1분에서 1시간까지(`wait-delays`). 합(약 1시간 51분)이 아래 "결과 반영 지연" 경보보다 길어 사람이 먼저 본다 |
+| 확정 거절 | 400 · 409 `CUSTOMER_ALREADY_ENTERED` · `DRAW_CLOSED` · 422 `KEY_PAYLOAD_MISMATCH` · `INVALID_WINNER_COUNT`, 계약과 다른 메시지 · 추첨 결과 | DLQ 에 바로 넣고(속성 `deadLetterReason`) 지운다. ERROR 로그 |
+| 지금 부를 수 없음 | Mock 차단기 열림 · 거절 이어짐 · 동시 요청 자리 없음 · 내려가는 중 · 주소 설정 오류(404 `NO_SUCH_ENDPOINT` — 응모 0건으로 읽지 않는다 — 와 errorCode 없는 3xx · 4xx, 즉 Mock 이 아닌 앞단의 응답) | 받은 횟수를 쓰지 않게 같은 큐에 새 메시지로 돌려보낸다. 주소 설정 오류는 고칠 때까지 DLQ 로 보내지 않는다 — 이어지면 받기를 멈추고 ERROR 로 알린다(사전예약과 같은 거절 이어짐 차단) |
+| 모르는 종류 | eventType 이 위 둘이 아님 | 지우지 않는다 — 그 종류를 아는 worker 가 받거나 재시도 뒤 DLQ |
+
+- worker 는 마감을 보지 않는다(위 "마감 뒤에도 온다"). 추첨 뒤에 닿은 응모는 Mock 이 409 `DRAW_CLOSED` 로 거절해 DLQ 로 간다 — order 의 `드로우 추첨 뒤 결제 완료` ERROR 와 같은 응모다.
+- Mock 호출은 사전예약 작업과 같은 차단기 · 초당 상한 · 동시 요청 자리를 쓴다(취소 전용 자리는 쓰지 못한다). 같은 Mock 이라 따로 두면 서로의 부하를 모른다. 대신 응모와 예약 등록이 한꺼번에 몰리면 자리를 나눠 쓰며 서로 기다린다(자리가 없으면 돌려보낸다).
 
 ## 추첨
 
@@ -70,13 +83,13 @@ order 는 마감 뒤 30초(인스턴스 사이 시계 차 여유)가 지나고 �
 | `payload.paidEntries` | 그 회차의 결제 완료 응모 수(추첨 대상) |
 | `payload.winnerCount` | 당첨 인원(`paidEntries` 보다 작다) |
 
-worker 는 **추첨 전에** Mock 이 그 회차로 받은 응모 수를 `paidEntries` 와 대조하고, **다르면 추첨을 맡기지 않는다** — 추첨 뒤에는 빠진 응모를 되돌릴 수 없고 환불도 없다. 다를 때 원인은 셋이다 — 바로 DLQ 라고 보지 않는다. 메시지를 늦춰 다시 받으며(가시성 지연) 기다렸다 다시 대조하되, 오래 맞지 않으면 아래를 본다.
+worker 는 **추첨 전에** Mock 이 그 회차로 받은 응모 수를 `paidEntries` 와 대조하고, **다르면 추첨을 맡기지 않는다** — 추첨 뒤에는 빠진 응모를 되돌릴 수 없고 환불도 없다. 다를 때 원인은 셋이다 — 바로 DLQ 라고 보지 않는다. 메시지를 늦춰 다시 받으며(가시성 지연, 위 "기다림") 기다렸다 다시 대조하고, 끝내 맞지 않으면 최대 수신 횟수를 넘겨 DLQ 로 간다. 오래 맞지 않으면 아래를 본다.
 - order 가 아직 못 보냈다: `order_outbox_events` 에 `event_type = 'DRAW_ENTRY_PAID'` 이고 `published_at IS NULL` 인 행이 남는다. 보낼 때마다 실패하면 `아웃박스 발행 실패 — 릴레이가 다시 보낸다` 경고 로그가 남는다.
 - 보냈는데 아직 재시도 중이다: `draw-register` 에 메시지가 남아 있다(가시성 지연).
 - worker · Mock 이 거절했다: `draw-register-dlq` 에 남는다. 원인을 고친 뒤 다시 흘린다 — 추첨 전에.
 - 추첨 요청 뒤에 결제 완료가 늘었다(위 "단, …" 의 경우): 그 응모가 대조 전에 Mock 에 닿으면 Mock 이 받은 수가 `paidEntries` 보다 커서 **저절로 맞지 않고**, 추첨 뒤에 닿으면 수는 맞은 채 그 응모만 추첨에서 빠진다. order 는 그 응모에 `드로우 추첨 뒤 결제 완료` ERROR 를 남긴다 — 사람이 회차를 정리한다(늦은 응모는 추첨에서 빼고 수동 환불).
 
-같으면 Mock 에 `winnerCount` 명 추첨을 맡기고, 결과를 `DRAW_RESULT_READY` 로 `order-events` 에 보낸다. 같은 요청을 두 번 받아도 추첨은 한 번이어야 한다(회차 id 가 멱등 키).
+같으면 Mock 에 `winnerCount` 명 추첨을 맡기고(기대 수를 함께 보내 Mock 이 대조와 추첨을 한 번에 한다), 결과를 `DRAW_RESULT_READY` 로 `order-events` 에 보낸다. 같은 요청을 두 번 받아도 추첨은 한 번이다(회차 id 가 멱등 키) — 결과를 보낸 뒤 원본을 지우기 전에 실패해도 다시 받아 같은 결과를 보낸다.
 
 `DRAW_RESULT_READY` — 봉투의 `aggregateType` 은 `"DRAW_CAMPAIGN"`, `aggregateId` 는 회차 id.
 
@@ -90,10 +103,11 @@ order 는 받으면 한 트랜잭션에서 당첨 응모마다 응모 때 배송
 
 마감 뒤 1시간이 지나도 결과를 반영하지 못한 회차는 order 가 10분마다 `드로우 결과 반영 지연` ERROR 로 알린다(요청 시각 · 결제 확인 중 수 · 결제 완료 수) — 마감 뒤 하루까지만, 그 뒤로는 진행 조회로 본다. 추첨 요청이 DLQ 로 갔거나 worker 가 없거나, 결제가 끝나지 않은 경우다 — 관리자 진행 조회(`GET /api/v1/admin/draws/{drawId}/progress`)로도 본다.
 
-order 가 이 이벤트를 쓰기 전에 아래가 있어야 한다. 빠져도 order 는 뜨고 결제도 되지만, 발행이 실패해 위 "아직 못 보냈다" 에서 조용히 쌓인다(큐 주소는 처음 보낼 때 찾는다).
-1. 운영 SQS 큐 `draw-register` 와 `draw-register-dlq`, 그 사이 redrive(최대 수신 횟수).
-2. order 실행 역할에 `draw-register` 의 `sqs:GetQueueUrl` · `sqs:SendMessage` 권한(큐 주소를 이름으로 찾은 뒤 보낸다).
-3. 환경마다 큐 이름에 접두어를 붙이면 `nova.sqs.queues.draw-register` 매핑.
+드로우를 열기 전에 아래가 있어야 한다(nova-infra `terraform/application/{order,worker}/service.yml`). order 쪽이 빠지면 order 는 뜨고 결제도 되지만 발행이 실패해 위 "아직 못 보냈다" 에서 조용히 쌓인다(큐 주소는 처음 보낼 때 찾는다).
+1. 운영 SQS 큐 `draw-register` 와 `draw-register-dlq`, 그 사이 redrive(최대 수신 횟수 — 운영 5).
+2. order 실행 역할에 `draw-register` 보내기(`sqs:GetQueueUrl` · `sqs:SendMessage`).
+3. worker 실행 역할에 `draw-register` 받기 · 보내기(돌려보내기), `order-events` 보내기, `draw-register-dlq` 보내기(확정 거절 — `queues.dlq_send`).
+4. 환경마다 큐 이름에 접두어를 붙이면 `nova.sqs.queues.draw-register` · `nova.sqs.queues.draw-register-dlq` 매핑(운영은 접두어가 없다).
 
 **worker 가 먼저 나간다 — 첫 도입에도.** worker 가 없으면 메시지가 `draw-register` 에 쌓이기만 하고, 본 큐 보존 기간(로컬은 SQS 기본값 — DLQ 만 14일로 늘려 둠)이 지나면 DLQ 로 가지 않고 사라져 대조 때 흔적이 없다. 드로우를 열기 전에 worker 의 소비기가 떠 있어야 한다.
 

@@ -20,9 +20,10 @@ container_id="$(docker run -d --rm \
   --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci)"
 trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
 
+# 컨테이너의 mysql 클라이언트는 기본이 latin1 이다. 한글을 ? 로 바꿔 비교가 뭉개지고 JSON_TABLE 의 문자열 칸이 깨지므로 utf8mb4 로 붙는다
 mysql_query() {
   docker exec -e MYSQL_PWD=nova-ci-only "$container_id" \
-    mysql -uroot --batch --skip-column-names -e "$1"
+    mysql -uroot --batch --skip-column-names --default-character-set=utf8mb4 -e "$1"
 }
 ready=false
 for ((attempt=0; attempt<90; attempt++)); do
@@ -62,6 +63,27 @@ docker run --rm --platform linux/amd64 --network "container:$container_id" \
 docker rmi -f "$image_id" >/dev/null
 [[ "$history_before" == "$(mysql_query 'SELECT installed_rank, version, checksum, success FROM shop.flyway_schema_history ORDER BY installed_rank')" ]]
 
+# 운영 초기 데이터(init.sql)를 최신 정의에 두 번 적용해 행이 같은지 본다(updated_at 은 적용 시각이라 뺀다).
+# 처음은 README 처럼 문자셋 없이(이 클라이언트는 latin1), 다음은 utf8mb4 로 붙는다 — init.sql 이 SET NAMES 를 빠뜨리면 한글이 달라진다.
+# 트리 검사는 CategoryTreeService 가 말없이 걸러 내는 것들이다: 부모에게 또 부모가 있는 행(깊이 3 이상 · 순환)은 응답에서 빠지고,
+# key · label 이 없는 축 원소가 있으면 그 카테고리의 축은 [] 가 된다
+fail() { echo "$1" >&2; exit 1; }
+apply_init() { docker exec -i -e MYSQL_PWD=nova-ci-only "$container_id" mysql -uroot "$@" < "$project_dir/init.sql"; }
+init_rows() {
+  mysql_query 'SELECT BIN_TO_UUID(id), BIN_TO_UUID(parent_id), name, sort_order, option_axes, created_at FROM shop.categories ORDER BY id'
+}
+apply_init
+init_first="$(init_rows)"
+[[ -n "$init_first" ]] || fail 'init.sql 을 적용했는데 카테고리가 없다.'
+apply_init --default-character-set=utf8mb4
+[[ "$init_first" == "$(init_rows)" ]] || fail 'init.sql 을 다시 적용하니 카테고리 행이 바뀌었다(고정되지 않은 값이나 SET NAMES 누락).'
+[[ "$(mysql_query 'SELECT COUNT(*) FROM shop.categories c JOIN shop.categories p ON c.parent_id = p.id
+  WHERE p.parent_id IS NOT NULL')" == 0 ]] || fail '깊이 3 이상이거나 순환하는 카테고리가 있다.'
+[[ "$(mysql_query "SELECT COUNT(*) FROM shop.categories c,
+  JSON_TABLE(c.option_axes, '\$[*]' COLUMNS (axis_key VARCHAR(255) PATH '\$.key', axis_label VARCHAR(255) PATH '\$.label')) axis
+  WHERE COALESCE(TRIM(axis.axis_key), '') = '' OR COALESCE(TRIM(axis.axis_label), '') = ''")" == 0 ]] ||
+  fail 'key · label 이 없는 기본 옵션 축 원소가 있다.'
+
 # 시간・데이터・Flyway 이력을 제외한 최신 shop 정의를 덤프한다. 저장소에는 두지 않고 산출물로만 남긴다(CI: shop-schema).
 snapshot="$repo_dir/build/flyway/schema.sql"
 {
@@ -76,4 +98,4 @@ snapshot="$repo_dir/build/flyway/schema.sql"
     --set-gtid-purged=OFF --no-tablespaces --skip-add-drop-table \
     --skip-lock-tables --ignore-table=shop.flyway_schema_history shop | sed '${/^$/d;}'
 } > "$snapshot"
-echo '신규 DB 적용 · validate · 재실행 이력 불변 · Mock 미생성 · 운영 적용 이미지 검사 통과. 최신 shop 정의: build/flyway/schema.sql'
+echo '신규 DB 적용 · validate · 재실행 이력 불변 · Mock 미생성 · 운영 적용 이미지 · 초기 데이터(init.sql) 검사 통과. 최신 shop 정의: build/flyway/schema.sql'

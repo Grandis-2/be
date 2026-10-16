@@ -335,7 +335,8 @@ public class ProductEditService {
 
     /**
      * 사전예약 오픈 뒤 판매 중지 = 회차 취소. 판매 중지로 두고 취소 시각을 남기고, 같은 트랜잭션에서 PREORDER_CAMPAIGN_CANCELED 를 아웃박스에 적는다.
-     * preorder 가 받아 회차를 지금 마감하고 진행 중 예약의 취소를 시작한다. 되돌릴 수 없다 — 오픈 뒤 ACTIVE 는 409.
+     * preorder 가 받아 회차를 지금 마감하고 진행 중 예약의 취소를 시작한다. 판매 상태가 실제로 바뀌었으면 PREORDER_PRODUCT_CHANGED 도 적는다.
+     * 되돌릴 수 없다 — 오픈 뒤 ACTIVE 는 409.
      * 이미 취소된 상품에 다시 보내면 이벤트를 다시 적지 않고 같은 답(접수됨)을 준다. 오픈 판정은 상품 행 잠금 아래에서 했다 — 같은 상품의 취소는 줄 서므로
      * 이벤트는 한 번만 적힌다.
      */
@@ -349,9 +350,13 @@ public class ProductEditService {
         if (reason.length() > REASON_MAX_LENGTH) {
             throw ValidationFailures.of("reason", "사유는 앞뒤 공백을 뺀 %d자 이하입니다.".formatted(REASON_MAX_LENGTH));
         }
+        long listingBefore = product.getListingVersion();
         if (product.cancelCampaign(clock.instant())) {
             products.flush();   // 표식 UPDATE 를 먼저 내려 제약(CHECK) 위반이 이벤트를 적기 전에 이 자리에서 드러나게 한다
             outbox.append(new PreorderCampaignCanceled(product.getId(), reason));
+            if (product.getListingVersion() != listingBefore) {
+                notifyPreorder(product);   // 판매 중이던 상품이면 판매 상태가 바뀌었다 — preorder 의 사본도 따라가게
+            }
         }
         return new SaleStatusView(product.getId(), product.getStatus(), true);
     }
@@ -416,7 +421,7 @@ public class ProductEditService {
         outbox.append(new InStockProductRegistered(productId, all.stream()
                 .map(option -> new InStockProductRegistered.Item(option.getId(), stockByOption.get(option.getId())))
                 .toList()));
-        outbox.append(new PreorderProductChanged(productId));
+        outbox.append(PreorderProductChanged.of(product));
         return detailService.findAdminProduct(productId);
     }
 
@@ -477,13 +482,13 @@ public class ProductEditService {
     }
 
     /**
-     * 사전예약 상품이면 PREORDER_PRODUCT_CHANGED 를 같은 트랜잭션의 아웃박스에 적는다 — preorder 가 모든 인스턴스의 접수용 상품 사본(캐시)을 비워
-     * 다음 접수가 바뀐 값으로 판정하게 한다. 수정이 되돌려지면 이벤트도 남지 않는다. 일반 상품은 preorder 가 읽지 않으므로 적지 않는다.
-     * 회차 취소는 자기 이벤트(PREORDER_CAMPAIGN_CANCELED)로 preorder 가 비우므로 여기를 거치지 않는다.
+     * 사전예약 상품이면 PREORDER_PRODUCT_CHANGED 를 같은 트랜잭션의 아웃박스에 적는다 — preorder 가 모든 인스턴스의 접수용 상품 사본(캐시)을 비우고,
+     * 회차 행의 상품명 · 판매 상태 · 공개 여부 사본을 번호가 더 클 때 덮는다. 번호는 상품 행을 잠근 이 트랜잭션에서 올랐으므로 커밋 순서와 같다.
+     * 수정이 되돌려지면 이벤트도 남지 않는다. 일반 상품은 preorder 가 읽지 않으므로 적지 않는다.
      */
     private void notifyPreorder(Product product) {
         if (product.getSaleMode() == SaleMode.PREORDER) {
-            outbox.append(new PreorderProductChanged(product.getId()));
+            outbox.append(PreorderProductChanged.of(product));
         }
     }
 
