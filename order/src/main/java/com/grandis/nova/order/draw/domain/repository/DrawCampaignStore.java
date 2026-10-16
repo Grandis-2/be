@@ -2,6 +2,7 @@ package com.grandis.nova.order.draw.domain.repository;
 
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.order.draw.domain.model.DrawCampaign;
+import com.grandis.nova.order.draw.domain.model.DrawPhase;
 import com.grandis.nova.order.draw.domain.model.DrawCloseState;
 import com.grandis.nova.order.draw.domain.model.DrawProgress;
 import com.grandis.nova.order.draw.domain.model.NewDrawCampaign;
@@ -27,6 +28,12 @@ public interface DrawCampaignStore {
 
     /** 최신순(만든 시각 · id 내림차순). page 는 0 부터. */
     OffsetPage<DrawCampaign> findNewestFirst(int page, int size);
+
+    /**
+     * 그 단계의 회차만, 최신순. 단계는 {@link DrawCampaign#phaseAt} 와 같은 경계로 now 에서 가른다 — 예정 opens_at &gt; now ·
+     * 응모 중 opens_at ≤ now &lt; closes_at · 마감 closes_at ≤ now.
+     */
+    OffsetPage<DrawCampaign> findNewestFirst(DrawPhase phase, Instant now, int page, int size);
 
     /**
      * 추첨할 차례인 회차 — 마감됐고(closes_at ≤ now) 추첨 요청 · 결과 반영 전이며 결제 확인 중(AUTHORIZING) 응모가 없다. 잠그지 않는다 —

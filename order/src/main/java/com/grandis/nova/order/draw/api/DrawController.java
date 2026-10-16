@@ -9,6 +9,7 @@ import com.grandis.nova.order.draw.DrawEntryPaymentService;
 import com.grandis.nova.order.draw.DrawEntryService;
 import com.grandis.nova.order.draw.DrawQueryService;
 import com.grandis.nova.order.draw.DrawReadCache;
+import com.grandis.nova.order.draw.domain.model.DrawPhase;
 import com.grandis.nova.order.order.api.ConfirmPaymentRequest;
 import com.grandis.nova.order.web.PageSizes;
 import io.swagger.v3.oas.annotations.Operation;
@@ -59,12 +60,15 @@ public class DrawController {
     }
 
     @GetMapping
-    @Operation(summary = "회차 목록", description = "최신순. page 는 0 부터, size 1~100. phase: SCHEDULED · OPEN · CLOSED")
-    public ResponseEntity<ApiResponse<OffsetPage<DrawResponse>>> list(@RequestParam(defaultValue = "0") int page,
+    @Operation(summary = "회차 목록", description = "최신순. page 는 0 부터, size 1~100. phase(선택): SCHEDULED 예정 · OPEN 응모 중 · CLOSED 마감 — "
+            + "주면 그 단계만, 비우면 전부. 응답의 phase 칸도 같은 시각으로 가른다. 모르는 값은 400")
+    public ResponseEntity<ApiResponse<OffsetPage<DrawResponse>>> list(@RequestParam(required = false) DrawPhase phase,
+                                                                      @RequestParam(defaultValue = "0") int page,
                                                                       @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         int checkedSize = PageSizes.require(size);
         Instant now = queries.now();
-        return publicOk(cache.list(PageSizes.requirePage(page, checkedSize), checkedSize).map(found -> found.map(c -> DrawResponse.of(c, now))));
+        return publicOk(cache.list(phase, now, PageSizes.requirePage(page, checkedSize), checkedSize)
+                .map(found -> found.map(c -> DrawResponse.of(c, now))));
     }
 
     @GetMapping("/{drawId}")
