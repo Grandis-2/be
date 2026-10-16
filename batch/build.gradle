@@ -1,12 +1,19 @@
 apply plugin: 'org.springframework.boot'
 
-// 정합성 검사. ECS 에 1개만 띄운다 — 실행 행(reconciliation_runs)의 대기 · 실행 중 표식이 겹친 실행을 막는다.
+// 정합성 검사 · 안 쓰는 사진 정리. ECS 에 1개만 띄운다 — 정합성은 실행 행(reconciliation_runs)의 대기 · 실행 중 표식이,
+// 사진 정리는 MySQL 이름 잠금이 겹친 실행을 막는다.
 dependencies {
     implementation project(':common:types')
     implementation project(':common:jpa')
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     // Mock 원장 목록 조회. 응답 JSON 은 이 스타터에 딸린 Jackson 으로 읽는다
     implementation 'org.springframework.boot:spring-boot-starter-restclient'
+    // 사진 정리의 S3 객체 삭제. 버전은 루트의 AWS SDK BOM 이 정하고, HTTP 클라이언트는 catalog 업로드와 같은 동기 구현을 쓴다
+    implementation('software.amazon.awssdk:s3') {
+        exclude group: 'software.amazon.awssdk', module: 'apache-client'
+        exclude group: 'software.amazon.awssdk', module: 'netty-nio-client'
+    }
+    implementation 'software.amazon.awssdk:url-connection-client'
     runtimeOnly 'com.mysql:mysql-connector-j'
 
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
