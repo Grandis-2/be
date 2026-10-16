@@ -45,6 +45,7 @@ class PromotionApiTest {
 
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean com.grandis.nova.catalog.promotion.PromotionRepository promotions;
 
     ShopFixtures fixtures;
     UUID categoryId;
@@ -118,6 +119,23 @@ class PromotionApiTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    @Test
+    @DisplayName("같은 키의 앞 요청이 커밋한 뒤에 검증하는 재전송(키 확인은 앞 요청 커밋 전에 지나감) — 묶인 상품 409 가 아니라 같은 홍보 200")
+    void replayThatMissedTheKeyCheckStillReturnsTheFirstPromotion() throws Exception {
+        UUID a = preorder("RA");
+        String key = "k-" + ShopFixtures.unique();
+        String body = body("늦은 재전송", today, today, List.of(), a);
+        String first = data(create(key, body).andExpect(status().isCreated())).get("promotionId").asString();
+
+        // 겹친 재전송이 앞 요청 커밋 전에 키 확인을 지나간 것과 같다 — 처음 한 번만 "없음" 을 본다
+        var committed = promotions.findByIdempotencyKey(key);
+        org.mockito.Mockito.doReturn(java.util.Optional.empty()).doReturn(committed).when(promotions).findByIdempotencyKey(key);
+        String replay = data(create(key, body).andExpect(status().isOk())).get("promotionId").asString();
+
+        assertThat(replay).isEqualTo(first);
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM promotions WHERE idempotency_key = ?", Long.class, key)).isEqualTo(1L);
     }
 
     @Test

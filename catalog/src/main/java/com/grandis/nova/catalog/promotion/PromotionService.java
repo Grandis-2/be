@@ -111,6 +111,9 @@ public class PromotionService {
                 throw linkedElsewhere(ownedByOthers(request.productIds(), null));
             }
             throw e;
+        } catch (BusinessException e) {
+            // 같은 키의 겹친 요청이 위 키 확인 뒤 · 이 검증 전에 커밋하면 검증이 먼저 걸린다(그 상품이 "다른 홍보" 에 묶였다) — 키로 다시 찾아 그 홍보를 준다
+            return promotions.findByIdempotencyKey(idempotencyKey).map(found -> new Created(view(found.getId()), true)).orElseThrow(() -> e);
         } catch (PessimisticLockingFailureException e) {
             throw retryable();
         }
