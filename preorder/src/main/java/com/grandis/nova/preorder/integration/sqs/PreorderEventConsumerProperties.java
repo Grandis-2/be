@@ -12,7 +12,8 @@ import java.time.Duration;
  * 꺼 둔 환경에서도 바인딩할 때 한다 — 잘못된 값이 조용히 남았다가 켜는 날 처음 드러나지 않게.
  *
  * @param visibility      받은 메시지를 다른 소비자에게 숨기는 시간. 처리 한 건(회차 취소 포함)보다 길게 둔다
- * @param backoffBase     처리 실패 후 다시 보이기까지의 첫 대기. 실패할수록 두 배, backoffMax 까지
+ * @param backoffBase     처리 실패 후 다시 보이기까지의 첫 대기. 실패할수록 두 배, backoffMax 까지. 30초면 수신 5회 한도에서
+ *                        DLQ 까지 약 6~12.5분이라 몇 분짜리 DB 장애를 넘긴다(5초면 약 1.3~2.6분)
  * @param deferFirstDelay 앞선 이벤트를 기다리는 메시지를 다시 보낼 때의 첫 지연. 보류할 때마다 두 배, deferMaxDelay 까지.
  *                        순서가 뒤집히는 시간은 보통 짧아 짧게 둔다
  * @param deferMaxDelay   보류 지연의 상한. SQS DelaySeconds 상한(15분) 이하
@@ -26,7 +27,7 @@ record PreorderEventConsumerProperties(
         @DefaultValue("20") int waitSeconds,
         @DefaultValue("10") int maxMessages,
         @DefaultValue("5m") Duration visibility,
-        @DefaultValue("5s") Duration backoffBase,
+        @DefaultValue("30s") Duration backoffBase,
         @DefaultValue("5m") Duration backoffMax,
         @DefaultValue("10s") Duration deferFirstDelay,
         @DefaultValue("15m") Duration deferMaxDelay,

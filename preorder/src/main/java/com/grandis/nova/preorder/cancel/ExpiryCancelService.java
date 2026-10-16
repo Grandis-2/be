@@ -30,15 +30,16 @@ public class ExpiryCancelService {
         this.clock = clock;
     }
 
+    /** @return 이번에 취소를 시작했으면 true. 이미 대상이 아니면(결제 · 취소됨 · 기한 전) false */
     @Transactional
-    public void expire(String preorderToken) {
+    public boolean expire(String preorderToken) {
         PreorderSnapshot preorder = ledger.lockByToken(preorderToken)
                 .orElseThrow(() -> new IllegalArgumentException("예약이 없다: " + preorderToken));
         Instant dueAt = preorder.paymentDueAt();
         if (preorder.status() != PreorderStatus.REGISTERED || clock.instant().isBefore(dueAt)) {
             log.info("만료 대상이 아니라 무시한다 preorderId={} status={}", preorderToken, preorder.status());
-            return;
+            return false;
         }
-        cancelStarter.start(preorder, EventActor.SYSTEM, null, CancelReason.EXPIRY);
+        return cancelStarter.start(preorder, EventActor.SYSTEM, null, CancelReason.EXPIRY).applied();
     }
 }
