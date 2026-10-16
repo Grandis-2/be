@@ -259,6 +259,32 @@ class StockReconcilerTest {
     }
 
     @Test
+    @DisplayName("표 읽기가 실패하면 기록을 남기지 않고 잠금을 놓는다 — 다음 대조는 돈다")
+    void failedScanLeavesNoRunAndReleasesTheLock() {
+        long runs = runCount();
+        StockExpectations failing = new StockExpectations() {
+            @Override
+            public Drifts findDrifted(int limit) {
+                throw new IllegalStateException("문장 시간 상한 초과");
+            }
+
+            @Override
+            public StockBalance balanceOf(UUID optionId) {
+                throw new UnsupportedOperationException();
+            }
+        };
+
+        assertThatThrownBy(() -> new StockReconciler(failing, reconcileRuns, lock, transactionManager, clock).reconcile())
+                .hasMessageContaining("문장 시간 상한 초과");
+
+        assertThat(runCount()).isEqualTo(runs);
+        assertThat(jdbcTemplate.queryForObject("SELECT IS_FREE_LOCK(CONCAT(DATABASE(), '.order-stock-reconcile'))", Integer.class))
+                .isEqualTo(1);
+        assertThat(reconciler.reconcile()).as("다음 대조는 돈다").isPresent();
+        assertThat(runCount()).isEqualTo(runs + 1);
+    }
+
+    @Test
     @DisplayName("다른 인스턴스(연결)가 대조 잠금을 쥐고 있으면 기다리지 않고 건너뛴다 — 기록을 남기지 않는다")
     void skipsWhileAnotherInstanceHoldsTheLock() throws Exception {
         long runs = runCount();
