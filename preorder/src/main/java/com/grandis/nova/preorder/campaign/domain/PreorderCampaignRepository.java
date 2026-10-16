@@ -53,6 +53,13 @@ public interface PreorderCampaignRepository extends JpaRepository<PreorderCampai
     List<PreorderCampaign> findOpenAlertWindow(@Param("now") Instant now, @Param("since") Instant since,
                                                @Param("paused") ProductStatus paused, Limit limit);
 
+    /** 지금 접수 중인 회차 수 — 오픈 뒤 · 마감 전 · 공개 · 판매 중지 아님. 지표용. */
+    @Query("""
+            select count(c) from PreorderCampaign c
+             where c.opensAt <= :now and c.closesAt > :now
+               and c.visible = true and (c.productStatus is null or c.productStatus <> :paused)""")
+    long countAccepting(@Param("now") Instant now, @Param("paused") ProductStatus paused);
+
     /** 오픈 알림 창 안에서 비공개라 표시하지 않은 회차 수. 지표용. */
     @Query("""
             select count(c) from PreorderCampaign c
