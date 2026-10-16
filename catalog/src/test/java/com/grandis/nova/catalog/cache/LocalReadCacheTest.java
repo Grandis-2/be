@@ -87,6 +87,7 @@ class LocalReadCacheTest {
             }).value());
             assertThat(inLoader.await(5, TimeUnit.SECONDS)).isTrue();
             Future<String> second = pool.submit(() -> cache.entry("k", () -> load("두 번째")).value());
+            awaitWaiting(cache, "k", 1);   // 둘째가 진행 중 조회에 붙은 뒤에 푼다 — 늦게 와 적중으로 통과하지 않게
             release.countDown();
             assertThat(first.get(5, TimeUnit.SECONDS)).isEqualTo("v");
             assertThat(second.get(5, TimeUnit.SECONDS)).isEqualTo("v");
@@ -119,6 +120,37 @@ class LocalReadCacheTest {
             release.countDown();
             pool.shutdownNow();
         }
+    }
+
+    @Test
+    @DisplayName("비운 뒤에 온 요청은 비우기 전에 시작된 진행 중 조회에 붙지 않는다 — 새로 읽어 새 값(loader 두 번). 앞 요청은 옛 값")
+    void requestAfterInvalidationDoesNotJoinStaleLoad() throws Exception {
+        LocalReadCache<String, String> cache = cache(true, 1024);
+        CountDownLatch inLoader = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<String> leader = pool.submit(() -> cache.entry("k", () -> {
+                inLoader.countDown();
+                await(release);
+                return load("옛 값");
+            }).value());
+            assertThat(inLoader.await(5, TimeUnit.SECONDS)).isTrue();
+            cache.invalidateAll();   // 수정이 커밋됐다
+            assertThat(cache.entry("k", () -> load("새 값")).value()).isEqualTo("새 값");
+            release.countDown();
+            assertThat(leader.get(5, TimeUnit.SECONDS)).isEqualTo("옛 값");
+            assertThat(loads.get()).isEqualTo(2);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("기다림 상한은 Redis 읽기 캐시와 같은 5초다(공개 생성자)")
+    void waitLimitIsFiveSeconds() {
+        assertThat(cache(true, 1024).waitForLoad()).isEqualTo(Duration.ofSeconds(5));
     }
 
     @Test
@@ -280,10 +312,7 @@ class LocalReadCacheTest {
                 results.add(pool.submit(() -> call(cache, loader)));
             }
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-            while (cache.waiting("shared") < 3) {   // 나머지 셋이 진행 중 조회에 붙을 때까지
-                assertThat(System.nanoTime()).as("셋이 붙지 않았다").isLessThan(deadline);
-                Thread.onSpinWait();
-            }
+            awaitWaiting(cache, "shared", 3);   // 나머지 셋이 진행 중 조회에 붙을 때까지
             release.countDown();
             java.util.List<String> values = new java.util.ArrayList<>();
             for (Future<String> result : results) {
@@ -293,6 +322,14 @@ class LocalReadCacheTest {
         } finally {
             release.countDown();
             pool.shutdownNow();
+        }
+    }
+
+    private static void awaitWaiting(LocalReadCache<String, String> cache, String key, int count) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (cache.waiting(key) < count) {
+            assertThat(System.nanoTime()).as("%d 개가 붙지 않았다", count).isLessThan(deadline);
+            Thread.onSpinWait();
         }
     }
 

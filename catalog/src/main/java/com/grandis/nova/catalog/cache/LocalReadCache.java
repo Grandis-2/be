@@ -28,8 +28,11 @@ import java.util.function.ToIntFunction;
  * 인스턴스 메모리 읽기 캐시(Caffeine). Redis 읽기 캐시({@link ReadCache})와 같은 약속을 지킨다.
  * <ul>
  *   <li>정본은 DB 다. 값과 함께 DB 에서 읽은 시각(loader 를 부르기 직전)을 준다 — 응답의 max-age 가 이 시각부터 TTL 안에서 남은 시간이다.</li>
- *   <li>값은 읽은 시각 + TTL 에 사라진다(넣은 시각이 아니다 — 읽는 데 걸린 시간도 TTL 에서 뺀다). 꺼낼 때도 앱 시계로 한 번 더 본다.</li>
- *   <li>같은 키를 동시에 찾으면 loader 는 이 인스턴스에서 한 번이고, 넣지 않는 값(storable 거짓)이든 예외든 기다린 쪽이 같은 결과를 받는다.
+ *   <li>값은 읽은 시각 + TTL 까지만 준다(넣은 시각이 아니다 — 읽는 데 걸린 시간도 TTL 에서 뺀다). 이것을 지키는 것은 꺼낼 때의 앱 시계 검사이고,
+ *       Caffeine 의 만료(같은 시각)는 메모리를 돌려받는 시점이다.</li>
+ *   <li>같은 키 · 같은 세대를 동시에 찾으면 loader 는 이 인스턴스에서 한 번이고, 넣지 않는 값(storable 거짓)이든 예외든 기다린 쪽이 같은 결과를 받는다.
+ *       세대가 오른 뒤 온 요청은 옛 세대의 진행 중 조회에 붙지 않고 새로 읽는다(Redis 판이 세대 번호를 넣은 키로 줄 세우는 것과 같다).
+ *       예외는 같은 객체가 기다린 쪽에도 던져진다(스택은 처음 읽은 스레드의 것) — Redis 판과 같다.
  *       기다리는 쪽은 {@link #WAIT_FOR_LOAD} 까지만 — 넘으면 503(다시 시도). loader 는 Caffeine 의 계산 밖에서 돌아 다른 키를 막지 않는다.</li>
  *   <li>꺼 두면 늘 loader 다.</li>
  * </ul>
@@ -54,7 +57,7 @@ public final class LocalReadCache<K, V> {
     private final ToIntFunction<V> weigher;
     private final Duration waitForLoad;
     private final Cache<K, Loaded<V>> cache;
-    private final ConcurrentHashMap<K, CompletableFuture<ReadCache.Entry<V>>> loading = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Slot<K>, CompletableFuture<ReadCache.Entry<V>>> loading = new ConcurrentHashMap<>();
     private final AtomicLong generation = new AtomicLong();
 
     /**
@@ -92,10 +95,15 @@ public final class LocalReadCache<K, V> {
         return cache;
     }
 
-    /** 시험용 — 그 키의 진행 중 조회를 기다리는 요청 수(추정). 진행 중인 조회가 없으면 0. */
+    /** 시험용 — 그 키(지금 세대)의 진행 중 조회를 기다리는 요청 수(추정). 진행 중인 조회가 없으면 0. */
     int waiting(K key) {
-        CompletableFuture<ReadCache.Entry<V>> running = loading.get(key);
+        CompletableFuture<ReadCache.Entry<V>> running = loading.get(new Slot<>(key, generation.get()));
         return running == null ? 0 : running.getNumberOfDependents();
+    }
+
+    /** 시험용. */
+    Duration waitForLoad() {
+        return waitForLoad;
     }
 
     /** 키의 값과 그 값을 DB 에서 읽은 시각. 없으면 loader 로 만들고, storable 이 참이면 넣는다. */
@@ -104,14 +112,15 @@ public final class LocalReadCache<K, V> {
             Instant at = clock.instant();
             return new ReadCache.Entry<>(loader.get(), at);
         }
+        long current = generation.get();   // 이 요청의 세대 — 꺼낸 값 · 같이 받을 조회 · 넣을 값이 모두 이 세대여야 한다
         Loaded<V> found = cache.getIfPresent(key);
         if (found != null) {
-            if (found.generation() == generation.get() && fresh(found.entry())) {
+            if (found.generation() == current && fresh(found.entry())) {
                 return found.entry();
             }
             cache.asMap().remove(key, found);   // 비우기 전 세대 · 시계로 지난 값
         }
-        return load(key, loader, storable);
+        return load(key, current, loader, storable);
     }
 
     public ReadCache.Entry<V> entry(K key, Supplier<V> loader) {
@@ -149,9 +158,10 @@ public final class LocalReadCache<K, V> {
     }
 
     /** 같은 키의 loader 를 한 번만 부르고 나머지는 그 결과(또는 예외)를 같이 받는다 — Redis 읽기 캐시의 load 와 같은 모양. */
-    private ReadCache.Entry<V> load(K key, Supplier<V> loader, Predicate<V> storable) {
+    private ReadCache.Entry<V> load(K key, long current, Supplier<V> loader, Predicate<V> storable) {
+        Slot<K> slot = new Slot<>(key, current);
         CompletableFuture<ReadCache.Entry<V>> mine = new CompletableFuture<>();
-        CompletableFuture<ReadCache.Entry<V>> running = loading.putIfAbsent(key, mine);
+        CompletableFuture<ReadCache.Entry<V>> running = loading.putIfAbsent(slot, mine);
         if (running != null) {
             try {
                 return running.get(waitForLoad.toMillis(), TimeUnit.MILLISECONDS);
@@ -166,19 +176,18 @@ public final class LocalReadCache<K, V> {
             }
         }
         try {
-            long started = generation.get();
             Instant loadedAt = clock.instant();   // 읽기 전 시각 — 응답의 나이를 짧게 잡지 않게
             ReadCache.Entry<V> entry = new ReadCache.Entry<>(loader.get(), loadedAt);
             mine.complete(entry);
             if (entry.value() != null && storable.test(entry.value())) {
-                store(key, entry, started);
+                store(key, entry, current);
             }
             return entry;
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {   // 검사 예외를 몰래 던지는 loader 도 기다린 쪽에 알린다
             mine.completeExceptionally(e);
             throw e;
         } finally {
-            loading.remove(key, mine);
+            loading.remove(slot, mine);
         }
     }
 
@@ -194,6 +203,10 @@ public final class LocalReadCache<K, V> {
         if (!left.isNegative() && !left.isZero()) {
             cache.put(key, new Loaded<>(entry, started, weight, left.toNanos()));
         }
+    }
+
+    /** 진행 중 조회의 자리 — 키와 그 요청의 세대. */
+    private record Slot<K>(K key, long generation) {
     }
 
     /**
