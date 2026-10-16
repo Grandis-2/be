@@ -7,5 +7,5 @@ package com.grandis.nova.batch.reconciliation.check;
  */
 public interface Check {
 
-    void inspect(KeyPair pair, FindingSink findings);
+    void inspect(KeyPair pair, RunScope scope, FindingSink findings);
 }

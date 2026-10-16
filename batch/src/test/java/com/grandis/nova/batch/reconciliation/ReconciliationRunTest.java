@@ -76,7 +76,7 @@ class ReconciliationRunTest extends BatchIntegrationTest {
                 .containsEntry("pending_sync_count", 1)
                 .containsEntry("dead_letter_count", 1)
                 .containsEntry("canceling_count", 1)
-                .containsEntry("cutoff_minutes", 45L);
+                .containsEntry("cutoff_minutes", 2L);
         assertThat(run.get("finished_at")).isNotNull();
         // 페이지 2건씩 세 번 받는 동안 키 순서대로 한 번씩 — be 에만 · 양쪽 · Mock 에만 모두
         assertThat(check.keys()).containsExactly("t-1", "t-2", "t-3", "t-4", "t-5");
@@ -84,14 +84,20 @@ class ReconciliationRunTest extends BatchIntegrationTest {
     }
 
     @Test
-    void 기준_시각_뒤에_바뀐_예약은_판정하지_않고_판정_보류로_센다() {
+    void 검사_도중_Mock_이_바뀐_키만_판정하지_않고_판정_보류로_센다() {
+        // 막 바뀐 be 예약은 판정한다 — be 를 먼저 읽어 be 가 Mock 보다 앞설 수 없다
         data.preorder("폰", "t-1", "REGISTERED", "SUCCEEDED", Instant.now());
-        data.preorder("폰", "t-2", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO);
+        // 검사가 시작되고 1분 뒤 Mock 에 확정된 키 — 판정 보류. 시계는 고정하지 않는다(처음 발견 시각 시험이 실행 순서를 생성 시각으로 본다)
+        BePreorderRow registeredDuringRun = data.preorder("폰", "t-2", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO);
+        MOCK.active("t-2", "R-TEST", registeredDuringRun.customerId().toString(), registeredDuringRun.productId().toString(),
+                TestData.sku("폰"), Instant.now().plus(Duration.ofMinutes(1)));
+        MOCK.active("t-3", "R-OLD", UUID.randomUUID().toString(), registeredDuringRun.productId().toString(), "SKU",
+                TWO_HOURS_AGO);
 
         service.runScheduled();
 
         assertThat(onlyRun()).containsEntry("status", "COMPLETED").containsEntry("held_count", 1);
-        assertThat(check.keys()).containsExactly("t-2");
+        assertThat(check.keys()).containsExactly("t-1", "t-3");
     }
 
     @Test

@@ -12,10 +12,11 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import tools.jackson.databind.json.JsonMapper;
 
-/** 여기 오는 예약은 판정 보류가 아니다 — 기준 시각(시작 − 45분) 전부터 바뀌지 않았다 */
+/** 시험 예약은 AT 에 마지막으로 바뀌었다. 기본 검사 조건은 그 예약이 멈춤 경계(시작 − 45분) 전부터 그대로인 경우다 */
 class PreorderRowCheckTest {
 
     private static final Instant AT = Instant.parse("2026-10-12T01:00:00Z");
+    private static final RunScope LONG_UNCHANGED = scope(AT.plusSeconds(1));
 
     private final PreorderRowCheck check = new PreorderRowCheck();
 
@@ -35,7 +36,7 @@ class PreorderRowCheckTest {
         MockLedgerEntry ghost = new MockLedgerEntry("k-1", "R-1", "c", "p", "SKU", "ACTIVE", AT, null);
         FindingSink sink = sink();
 
-        check.inspect(new KeyPair("k-1", null, ghost), sink);
+        check.inspect(new KeyPair("k-1", null, ghost), LONG_UNCHANGED, sink);
 
         assertThat(sink.findings()).isEmpty();
     }
@@ -89,6 +90,18 @@ class PreorderRowCheckTest {
     }
 
     @Test
+    void 멈춤_기준_안에_바뀐_등록_대기_취소_중은_처리_중이라_멈춤이_아니다() {
+        RunScope recentlyChanged = scope(AT.minusSeconds(1));
+
+        for (BePreorder inFlight : List.of(preorder("PENDING_SYNC", "RETRY_SCHEDULED", null),
+                preorder("CANCELING", "CANCELED", "RETRY_SCHEDULED"))) {
+            FindingSink sink = sink();
+            check.inspect(new KeyPair(inFlight.token(), inFlight, null), recentlyChanged, sink);
+            assertThat(sink.findings()).isEmpty();
+        }
+    }
+
+    @Test
     void 등록_작업이_없으면_발행_누락이다() {
         assertThat(codes(preorder("PENDING_SYNC", null, null))).containsExactly("OUTBOX_MISSING", "STUCK");
     }
@@ -127,7 +140,7 @@ class PreorderRowCheckTest {
         MockLedgerEntry mock = new MockLedgerEntry("k-1", "R-1", "c", "p", "SKU", "ACTIVE", AT, null);
         FindingSink sink = sink();
 
-        check.inspect(new KeyPair("k-1", preorder("CANCELING", "SUCCEEDED", null), mock), sink);
+        check.inspect(new KeyPair("k-1", preorder("CANCELING", "SUCCEEDED", null), mock), LONG_UNCHANGED, sink);
 
         assertThat(sink.findings()).singleElement().satisfies(f -> {
             assertThat(f.beSnapshot()).contains("\"status\":\"CANCELING\"");
@@ -141,8 +154,13 @@ class PreorderRowCheckTest {
 
     private List<NewFinding> inspect(BePreorder preorder) {
         FindingSink sink = sink();
-        check.inspect(new KeyPair(preorder.token(), preorder, null), sink);
+        check.inspect(new KeyPair(preorder.token(), preorder, null), LONG_UNCHANGED, sink);
         return sink.findings();
+    }
+
+    /** 멈춤 경계만 의미가 있다 — 이 확인할 것은 판정 보류 경계를 쓰지 않는다 */
+    private static RunScope scope(Instant stuckBefore) {
+        return new RunScope(null, stuckBefore, stuckBefore, 100, key -> false);
     }
 
     private static FindingSink sink() {

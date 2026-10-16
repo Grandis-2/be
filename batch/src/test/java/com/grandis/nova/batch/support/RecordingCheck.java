@@ -3,6 +3,7 @@ package com.grandis.nova.batch.support;
 import com.grandis.nova.batch.reconciliation.check.Check;
 import com.grandis.nova.batch.reconciliation.check.FindingSink;
 import com.grandis.nova.batch.reconciliation.check.KeyPair;
+import com.grandis.nova.batch.reconciliation.check.RunScope;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -20,7 +21,7 @@ public class RecordingCheck implements Check {
     private final Set<String> flagged = ConcurrentHashMap.newKeySet();
 
     @Override
-    public void inspect(KeyPair pair, FindingSink findings) {
+    public void inspect(KeyPair pair, RunScope scope, FindingSink findings) {
         keys.add(pair.key());
         if (flagged.contains(pair.key())) {
             findings.add(CODE, pair.key(), pair.be(), pair.mock());

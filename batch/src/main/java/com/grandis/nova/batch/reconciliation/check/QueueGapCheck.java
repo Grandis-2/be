@@ -1,6 +1,5 @@
 package com.grandis.nova.batch.reconciliation.check;
 
-import java.time.Instant;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
@@ -27,7 +26,8 @@ class QueueGapCheck implements InternalCheck {
     }
 
     @Override
-    public void inspect(UUID productId, Instant cutoff, FindingSink findings) {
+    public void inspect(RunScope scope, FindingSink findings) {
+        UUID productId = scope.productId();
         JdbcClient.StatementSpec statement = jdbc.sql(SQL
                 + (productId == null ? "" : " WHERE product_id = UUID_TO_BIN(:productId)") + GROUP);
         if (productId != null) {

@@ -7,8 +7,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * be 내부 확인할 것 가운데 예약 한 건(예약 · 등록 · 취소 작업 · 마지막 이력 · 배송 차수)으로 판정하는 것(구현-조치 3장).
- * be 예약을 읽으며 한 번에 본다 — 따로 SQL 로 예약 표를 다시 훑지 않는다. 판정 보류가 아닌 예약만 오므로(기준 시각 = 시작 − 45분)
- * 여기 온 등록 대기 · 취소 중은 45분 넘게 바뀌지 않은 것이다.
+ * be 예약을 읽으며 한 번에 본다 — 따로 SQL 로 예약 표를 다시 훑지 않는다. 예약 · 작업은 한 스냅샷이라 서로 어긋나 보이지 않는다.
+ * 등록 대기 · 취소 중은 처리 중이라 바로 멈춤이 아니다 — 멈춤 경계(시작 − 45분) 전부터 바뀌지 않았을 때만 멈춤이다.
  *
  * 예약 표 밖의 행(미발행 이벤트 · 결과 없는 시도 · 대기 중 등록 작업의 발행 이벤트 · 순번)은 SQL 검사가 본다.
  * be 내부 불일치는 Mock 값을 남기지 않는다(화면의 외부 열이 빈다).
@@ -25,7 +25,7 @@ class PreorderRowCheck implements Check {
             BePreorder.CANCELED, Set.of(BePreorder.SUCCEEDED, "CANCELED"));
 
     @Override
-    public void inspect(KeyPair pair, FindingSink findings) {
+    public void inspect(KeyPair pair, RunScope scope, FindingSink findings) {
         BePreorder be = pair.be();
         if (be == null) {
             return;
@@ -49,7 +49,7 @@ class PreorderRowCheck implements Check {
             findings.add(CheckCode.CANCEL_JOB_INCOMPLETE, key, be, null);
         }
         // 등록 작업 DEAD_LETTER 는 멈춤이 아니라 관리자 대기다(실행 행의 건수). 취소 작업은 포기하지 않아 기준 시간을 넘기면 멈춤이다
-        if (be.registering() || be.canceling()) {
+        if ((be.registering() || be.canceling()) && !be.changedAt().isAfter(scope.stuckBefore())) {
             findings.add(CheckCode.STUCK, key, be, null);
         }
         if (!be.status().equals(be.lastEventStatus())) {

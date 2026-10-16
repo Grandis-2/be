@@ -28,7 +28,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 검사 실행 한 번을 처음부터 끝까지 돌린다.
  *
  * <ol>
- *   <li>실행 행을 실행 중으로 — 정기 실행은 넣고, 관리자 실행은 요청을 가져간다. 시작 시각 · 기준 시각(시작 − 여유)을 적고 커밋</li>
+ *   <li>실행 행을 실행 중으로 — 정기 실행은 넣고, 관리자 실행은 요청을 가져간다. 시작 시각 · 기준 시각(시작 − 판정 보류 여유)을 적고 커밋</li>
  *   <li>검사 트랜잭션(REPEATABLE READ · 읽기 전용, 한 스냅샷)에서 be 예약과 Mock 원장을 맞대고 be 내부 검사를 돈다.
  *       Mock 목록 조회(HTTP)를 이 트랜잭션 안에서 기다린다 — 일부러다. be 를 한 스냅샷으로, Mock 보다 먼저 읽어야 처리 중인 건이
  *       불일치로 잡히지 않는다. 잠금 없는 일관 읽기라 행을 잠그지 않고, 대신 연결 하나와 read view 를 잡으므로 목록 전체 기한
@@ -92,7 +92,7 @@ public class ReconciliationService {
         if (stale > 0) {
             log.warn("끝나지 않은 실행 {}건을 실패로 바꿨다 — 시작한 지 {} 가 넘었다", stale, staleAfter);
         }
-        runs.claimRequested(now, properties.cutoffMargin()).ifPresent(this::execute);
+        runs.claimRequested(now, properties.holdMargin()).ifPresent(this::execute);
     }
 
     /** 정기 실행. 회차 오픈 뒤 몰리는 구간이면 행을 남기지 않고 건너뛴다 */
@@ -102,16 +102,16 @@ public class ReconciliationService {
             log.info("정기 실행 건너뜀 — 오픈한 지 {} 가 안 된 회차가 있다", properties.intakeRushWindow());
             return;
         }
-        runs.startScheduled(now, properties.cutoffMargin()).ifPresent(this::execute);
+        runs.startScheduled(now, properties.holdMargin()).ifPresent(this::execute);
     }
 
-    /** 회차가 마감되고 여유 시간이 지났는데 그 뒤에 시작한 실행이 없으면 한 번 돌린다 */
+    /** 회차가 마감되고 멈춤 기준만큼 지났는데 그 뒤에 시작한 실행이 없으면 한 번 돌린다 — 마감 직전 신청의 처리가 끝난 뒤에 본다 */
     public void runAfterCampaignClose() {
         Instant now = clock.instant();
-        calendar.latestCloseReadyAt(now, properties.cutoffMargin(), properties.campaignCloseLookback())
+        calendar.latestCloseReadyAt(now, properties.stuckAfter(), properties.campaignCloseLookback())
                 .filter(readyAt -> !runs.startedSince(readyAt))
                 .ifPresent(readyAt -> {
-                    log.info("회차 마감 뒤 실행 — 마감 + {} = {}", properties.cutoffMargin(), readyAt);
+                    log.info("회차 마감 뒤 실행 — 마감 + {} = {}", properties.stuckAfter(), readyAt);
                     runScheduled();
                 });
     }
@@ -127,7 +127,9 @@ public class ReconciliationService {
 
     void execute(ReconciliationRun run) {
         try {
-            RunScope scope = new RunScope(run.getProductId(), run.getCutoffAt(), properties.maxFindings(), be::exists);
+            Instant startedAt = run.getStartedAt();
+            RunScope scope = new RunScope(run.getProductId(), run.getCutoffAt(), startedAt.minus(properties.stuckAfter()),
+                    properties.maxFindings(), be::exists);
             ReconcileResult result = snapshot.execute(status -> reconciler.reconcile(
                     be.preorders(run.getProductId(), properties.chunkSize()), mock.entries(), scope));
             runs.complete(run.getId(), clock.instant(), result.counts(), result.findings());

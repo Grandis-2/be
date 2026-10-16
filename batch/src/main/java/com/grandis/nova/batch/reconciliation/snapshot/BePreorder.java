@@ -16,7 +16,7 @@ import java.time.Instant;
  * @param queuePosition     순번
  * @param batchFrom         배정된 배송 차수의 첫 순번
  * @param batchTo           배정된 배송 차수의 끝 순번. 끝이 열린 차수면 null
- * @param changedAt         예약 · 등록 작업 · 취소 작업 가운데 마지막으로 바뀐 시각. 판정 보류를 가를 때 쓴다
+ * @param changedAt         예약 · 등록 작업 · 취소 작업 가운데 마지막으로 바뀐 시각. 처리 중이 멈췄는지 가를 때 쓴다
  */
 public record BePreorder(String token, String id, String status, String externalReference, String customerId,
                          String productId, String sku, String registerJobStatus, String cancelJobStatus,
