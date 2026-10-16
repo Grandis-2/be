@@ -7,6 +7,7 @@ import com.grandis.nova.order.draw.domain.repository.DrawCampaignStore;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,6 +26,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +40,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 목록의 단계 필터와 응답의 단계 칸이 같은 앱 시계(storageClock)로 갈리는가 — 시계를 경계 정각에 고정하고 API 로 본다.
  * 실제 시각과 수년 떨어진 시각이라, 컨트롤러가 어느 한쪽에서라도 앱 시계 대신 실제 시각을 쓰면 목록이나 칸이 어긋난다.
  * 주기 작업(추첨 · 정체 점검)은 OrderIntegrationTest 가 1시간 뒤로 미뤄 고정 시계로 다른 회차를 처리하지 않는다.
+ * 만든 회차는 끝나면 지운다 — 만든 시각도 고정 시각(수년 뒤)이라, 남기면 표를 함께 쓰는 다른 시험의 최신순 목록 맨 앞을 차지한다
+ * (이 시험이 먼저 돌면 AdminDrawApiTest.listsNewestFirstWithPhase 가 실패했다).
  */
 @OrderIntegrationTest
 @AutoConfigureMockMvc
@@ -59,6 +63,13 @@ class DrawListPhaseClockTest {
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired PlatformTransactionManager transactionManager;
     @Autowired DrawCampaignStore campaigns;
+
+    final List<UUID> created = new ArrayList<>();
+
+    @AfterEach
+    void removeCreated() {
+        created.forEach(id -> jdbcTemplate.update("DELETE FROM draw_campaigns WHERE id = ?", (Object) OrderFixtures.bytes(id)));
+    }
 
     @Test
     @DisplayName("시작 시각 정각의 회차는 응모 중 목록에, 마감 시각 정각의 회차는 마감 목록에 — 받은 항목의 단계 칸도 그 값(회원 · 관리자)")
@@ -88,7 +99,9 @@ class DrawListPhaseClockTest {
 
     private UUID create(Instant opensAt, Instant closesAt) {
         OrderFixtures.StockProduct gift = new OrderFixtures(jdbcTemplate).inStockProduct(1);
-        return new TransactionTemplate(transactionManager).execute(status -> campaigns.insert(new NewDrawCampaign(UUID.randomUUID().toString(),
+        UUID id = new TransactionTemplate(transactionManager).execute(status -> campaigns.insert(new NewDrawCampaign(UUID.randomUUID().toString(),
                 gift.productId(), gift.optionIds().getFirst(), "시계 시험", "증정품", "기본", null, new BigDecimal("100"), 1, opensAt, closesAt)).id());
+        created.add(id);
+        return id;
     }
 }
