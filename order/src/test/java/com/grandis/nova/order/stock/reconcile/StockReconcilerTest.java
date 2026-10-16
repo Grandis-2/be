@@ -25,7 +25,10 @@ import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.MutableClock;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
+import com.zaxxer.hikari.HikariDataSource;
+import com.zaxxer.hikari.HikariPoolMXBean;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -45,6 +48,7 @@ import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -52,10 +56,13 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.function.Supplier;
 import java.util.UUID;
 
 import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
@@ -87,6 +94,7 @@ class StockReconcilerTest {
     @Autowired StockExpectations expectations;
     @Autowired StockReconcileRuns reconcileRuns;
     @Autowired ReconcileLock lock;
+    @Autowired Clock clock;
     @Autowired MeterRegistry registry;
     @Autowired OrderLedger orderLedger;
     @Autowired StockLedger stockLedger;
@@ -265,6 +273,64 @@ class StockReconcilerTest {
 
         assertThat(reconciler.reconcile()).as("놓은 뒤에는 돈다").isPresent();
         assertThat(runCount()).isEqualTo(runs + 1);
+    }
+
+    @Test
+    @DisplayName("잠금은 기록이 커밋된 뒤에 놓는다 — 그 사이 다른 인스턴스(연결)는 잠금을 못 잡고, 기록은 이미 다른 연결에서 보인다")
+    void holdsTheLockUntilTheRunIsCommitted() {
+        long runs = runCount();
+        Integer[] freeAfterCommit = new Integer[1];
+        long[] visibleAfterCommit = new long[1];
+        ReconcileLock probing = new ReconcileLock() {
+            @Override
+            public <T> Optional<T> runExclusively(Supplier<T> work) {
+                return lock.runExclusively(() -> {
+                    T result = work.get();
+                    // 일(트랜잭션)은 끝났고 잠금은 아직 쥔 순간 — 트랜잭션 밖이라 jdbcTemplate 은 풀의 다른 연결을 쓴다
+                    freeAfterCommit[0] = jdbcTemplate.queryForObject("SELECT IS_FREE_LOCK(CONCAT(DATABASE(), '.order-stock-reconcile'))",
+                            Integer.class);
+                    visibleAfterCommit[0] = runCount();
+                    return result;
+                });
+            }
+        };
+
+        new StockReconciler(expectations, reconcileRuns, probing, transactionManager, clock).reconcile().orElseThrow();
+
+        assertThat(freeAfterCommit[0]).as("커밋 뒤에도 쥐고 있다").isZero();
+        assertThat(visibleAfterCommit[0]).as("놓기 전에 이미 커밋됐다").isEqualTo(runs + 1);
+        assertThat(jdbcTemplate.queryForObject("SELECT IS_FREE_LOCK(CONCAT(DATABASE(), '.order-stock-reconcile'))", Integer.class))
+                .as("끝나면 놓는다").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("일하는 동안 잠금 연결이 끊기면(DB 순단) 그 연결을 풀에서 내보낸다 — 풀 슬롯이 새지 않고, 잠금은 서버가 풀어 다음 대조가 돈다")
+    void evictsTheLockConnectionWhenItDies() throws Exception {
+        HikariPoolMXBean poolStats = dataSource.unwrap(HikariDataSource.class).getHikariPoolMXBean();
+        int activeBefore = poolStats.getActiveConnections();
+
+        Optional<Integer> result = lock.runExclusively(() -> {
+            // 잠금을 쥔 세션을 다른 연결에서 끊는다 — 놓기가 실패한다
+            Long holder = jdbcTemplate.queryForObject("SELECT IS_USED_LOCK(CONCAT(DATABASE(), '.order-stock-reconcile'))", Long.class);
+            jdbcTemplate.execute("KILL CONNECTION " + holder);
+            return 1;
+        });
+
+        assertThat(result).contains(1);
+        assertThat(poolStats.getActiveConnections()).as("빌린 연결이 모두 돌아왔다").isEqualTo(activeBefore);
+        // KILL 은 비동기라 서버가 세션을 정리하며 잠금을 풀 때까지 잠깐 걸릴 수 있다
+        Awaitility.await("끊긴 세션의 잠금 풀림").atMost(Duration.ofSeconds(5)).until(() -> Integer.valueOf(1).equals(
+                jdbcTemplate.queryForObject("SELECT IS_FREE_LOCK(CONCAT(DATABASE(), '.order-stock-reconcile'))", Integer.class)));
+        assertThat(reconciler.reconcile()).as("다음 대조는 돈다").isPresent();
+    }
+
+    @Test
+    @DisplayName("트랜잭션 안에서 잠그면 거절한다 — 일의 커밋이 잠금을 놓은 뒤로 밀리는 것을 막는다")
+    void refusesToLockInsideATransaction() {
+        assertThatThrownBy(() -> tx.executeWithoutResult(status -> lock.runExclusively(() -> 1)))
+                .hasMessageContaining("트랜잭션 밖에서 잡는다");
+        assertThat(jdbcTemplate.queryForObject("SELECT IS_FREE_LOCK(CONCAT(DATABASE(), '.order-stock-reconcile'))", Integer.class))
+                .isEqualTo(1);
     }
 
     @Test

@@ -28,8 +28,8 @@ import java.util.Optional;
  * - 인스턴스가 여럿이면 DB 이름 잠금({@link ReconcileLock})을 잡은 하나만 돈다 — 기다리지 않고, 못 잡으면 건너뛴다. 잠금은 동시 실행만 막으므로,
  *   잠근 뒤 {@link #SCHEDULED_GAP} 안에 끝난 대조가 있으면 주기 실행은 건너뛴다 — 인스턴스마다 발화 시각이 조금씩 달라 연달아 도는 것과,
  *   4시가 성공한 날의 5시 회차를 함께 막는다. 실패는 기록하지 않으므로 4시가 실패한 날의 5시 회차는 돈다.
- *   잠금 · 읽기 · 기록이 한 트랜잭션(한 연결)이고 잠금은 커밋 직전에 놓는다 — 그 수 ms 사이에 다른 인스턴스가 잡으면 기록을 못 보고 한 번 더
- *   돌 수 있다. 결과는 같고 표 읽기가 한 번 늘 뿐이라 받아들인다. 읽기는 SQL 한 문장이라 잠금 없이도 그 시점에서 정확하다.
+ *   잠금은 트랜잭션 바깥에서 잡고 커밋이 끝난 뒤 놓는다 — 놓은 뒤 잡은 인스턴스는 간격 판정에서 앞 기록을 반드시 본다(Rails 마이그레이션이
+ *   잠근 뒤 이력을 다시 읽는 것과 같다). 읽기는 SQL 한 문장이라 잠금 없이도 그 시점에서 정확하다.
  * - ERROR 는 기록에 싣는 옵션(앞 {@link StockReconcileRun#DETAIL_LIMIT}개)만 옵션마다 남기고 나머지는 수만 한 줄로 — 처음 켤 때 과거 데이터로
  *   어긋남이 많아도 로그가 넘치지 않게.
  * - 실패(문장 시간 상한 · DB 오류)는 기록하지 않는다 — 마지막 성공 시각 지표(StockGauges)가 멈춰 경보로 드러난다.
@@ -73,29 +73,26 @@ public class StockReconciler {
 
     /** @param gap 이 안에 끝난 대조가 있으면 건너뛴다. ZERO 면 보지 않는다 */
     Optional<StockReconcileRun> run(Duration gap) {
-        return transaction.execute(status -> {
-            // 잡았는지 모른 채 실패해도(응답 유실) 놓기를 시도한다 — 쥐지 않은 잠금의 해제는 아무 일도 하지 않는다
-            try {
-                if (!lock.tryLock()) {
-                    log.info("재고 장부 대조 건너뜀 — 다른 인스턴스가 도는 중");
-                    return Optional.empty();
-                }
-                Instant startedAt = clock.instant();
-                if (!gap.isZero() && runs.findLatestSummary().filter(last -> last.finishedAt().isAfter(startedAt.minus(gap))).isPresent()) {
-                    log.info("재고 장부 대조 건너뜀 — {} 안에 끝난 대조가 있다", gap);
-                    return Optional.empty();
-                }
-                List<StockBalance> drifts = expectations.findDrifted();
-                StockReconcileRun run = StockReconcileRun.of(startedAt, clock.instant(), drifts);
-                report(run);
-                runs.save(run);
-                log.info("재고 장부 대조 끝 — 어긋난 옵션 {}개, {}ms", run.driftOptions(),
-                        run.finishedAt().toEpochMilli() - startedAt.toEpochMilli());
-                return Optional.of(run);
-            } finally {
-                release();
-            }
-        });
+        Optional<Optional<StockReconcileRun>> locked = lock.runExclusively(() -> transaction.execute(status -> reconcileLocked(gap)));
+        if (locked.isEmpty()) {
+            log.info("재고 장부 대조 건너뜀 — 다른 인스턴스가 도는 중");
+            return Optional.empty();
+        }
+        return locked.get();
+    }
+
+    private Optional<StockReconcileRun> reconcileLocked(Duration gap) {
+        Instant startedAt = clock.instant();
+        if (!gap.isZero() && runs.findLatestSummary().filter(last -> last.finishedAt().isAfter(startedAt.minus(gap))).isPresent()) {
+            log.info("재고 장부 대조 건너뜀 — {} 안에 끝난 대조가 있다", gap);
+            return Optional.empty();
+        }
+        List<StockBalance> drifts = expectations.findDrifted();
+        StockReconcileRun run = StockReconcileRun.of(startedAt, clock.instant(), drifts);
+        report(run);
+        runs.save(run);
+        log.info("재고 장부 대조 끝 — 어긋난 옵션 {}개, {}ms", run.driftOptions(), run.finishedAt().toEpochMilli() - startedAt.toEpochMilli());
+        return Optional.of(run);
     }
 
     private static void report(StockReconcileRun run) {
@@ -107,15 +104,6 @@ public class StockReconciler {
         if (run.truncated()) {
             log.error("재고 장부 대조 어긋남 — 옵션마다 남긴 {}개 밖에 {}개가 더 있다, 관리자 대조 결과 · DB 로 확인", run.drifts().size(),
                     run.driftOptions() - run.drifts().size());
-        }
-    }
-
-    /** 놓기 실패가 대조의 원래 예외를 가리지 않게 한다. 연결이 끊긴 것이면 잠금도 함께 풀린다. */
-    private void release() {
-        try {
-            lock.unlock();
-        } catch (RuntimeException e) {
-            log.warn("재고 장부 대조 잠금 놓기 실패", e);
         }
     }
 }
