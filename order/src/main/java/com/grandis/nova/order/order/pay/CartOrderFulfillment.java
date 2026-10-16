@@ -28,7 +28,8 @@ import java.util.UUID;
  *
  * 잠금 순서: 주문 행(원장) → 장바구니 줄 → 재고 행. 같은 회원의 장바구니 주문 생성은 장바구니 줄 → 앞 주문 행 → 재고 행이라 이 순간 겹치면
  * 교착할 수 있다 — 결제 결과 반영({@link PaymentResults})과 주문 생성 모두 교착이면 새 트랜잭션에서 다시 한다(시험으로 고정).
- * 바로 구매 주문은 장바구니를 거치지 않아(2026-10-15 결정) 판매 확정만 한다. 사전예약 주문은 재고 · 장바구니가 없어 아무것도 하지 않는다.
+ * 바로 구매 주문은 장바구니를 거치지 않아(2026-10-15 결정) 판매 확정만 한다. 사전예약 주문은 재고 · 장바구니가 없어 아무것도 하지 않는다
+ * (결제 승인 알림은 {@link PaymentResults} 가 적는다).
  *
  * 판매 확정에서 재고 장부가 어긋나 있으면(확보가 모자람) 그 옵션은 옮기지 않고 전용 ERROR 로 알린다 — 돈은 나갔으니 주문은 결제됨으로,
  * 장바구니도 뺀다(2026-10-10 결정, 돈을 따른다). 운영자는 그 옵션을 관리자 재고 보정(주문 기준으로 다시 맞추기)으로 고친다.
@@ -54,9 +55,12 @@ class CartOrderFulfillment {
         this.mismatches = mismatches;
     }
 
-    /** @param providerOrderId 승인된 결제창 — 재고 어긋남 경보에 싣는다(운영자가 결제와 맞춰 볼 수 있게) */
-    void onApproved(UUID orderId, String providerOrderId) {
-        Order order = orderReader.findById(orderId).orElseThrow(() -> new IllegalStateException("주문이 사라졌다: " + orderId));
+    /**
+     * @param order           승인을 반영한 주문(같은 트랜잭션에서 읽은 것)
+     * @param providerOrderId 승인된 결제창 — 재고 어긋남 경보에 싣는다(운영자가 결제와 맞춰 볼 수 있게)
+     */
+    void onApproved(Order order, String providerOrderId) {
+        UUID orderId = order.id();
         switch (order.source()) {
             case PREORDER -> {
             }

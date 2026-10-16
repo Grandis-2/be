@@ -2,7 +2,9 @@ package com.grandis.nova.catalog.review;
 
 import com.grandis.nova.common.BaseEntity;
 import jakarta.persistence.Column;
+import com.grandis.nova.catalog.cache.CatalogCacheInvalidation;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EntityListeners;
 import jakarta.persistence.Table;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
@@ -15,6 +17,7 @@ import java.util.UUID;
  * 수정은 별점 · 본문만, 삭제는 행을 지운다(숨김 상태 · 수정 이력 없음).
  */
 @Entity
+@EntityListeners(CatalogCacheInvalidation.class)
 @Table(name = "product_reviews")
 public class ProductReview extends BaseEntity {
 

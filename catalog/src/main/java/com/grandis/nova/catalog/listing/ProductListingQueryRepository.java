@@ -1,23 +1,31 @@
 package com.grandis.nova.catalog.listing;
 
+import com.grandis.nova.catalog.option.ProductOptions;
 import com.grandis.nova.catalog.product.Brand;
+import com.grandis.nova.catalog.product.Discount;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
+import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.common.UuidBinary;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -28,7 +36,7 @@ import java.util.UUID;
  * preorder 소유 preorder_campaigns(opens_at · closes_at · 행의 유무)와 order 소유 option_inventories(재고 집계 · 행의 유무)를
  * 여기서만, SELECT 로만 읽는다.
  * 판매 방식별 준비({@link #READY})도 여기서 판정한다 — 등록 이벤트를 받은 preorder · order 가 자기 표에 행을 만들어야 노출된다.
- * 노출 조건(오픈 예정 · 마감 · 마감 + 120시간 숨김 · 품절)이 페이징 조건이라 쿼리 안에 있어야 한다. HTTP 로 받아 거르면 페이지가 깨진다.
+ * 노출 조건(판매 방식별 준비 · 공개 · 판매 중 · 사전예약은 접수 중일 때만)이 페이징 조건이라 쿼리 안에 있어야 한다. HTTP 로 받아 거르면 페이지가 깨진다.
  * 판매 중(ACTIVE) 옵션이 하나도 없는 상품(전부 판매 중지)은 목록에 남기고 sellable=false 로 알린다 — 화면이 "판매 중지" 를 그린다.
  * 옵션이 아예 없는 상품은 등록으로 생기지 않는다(조합 0 은 400, 옵션 삭제 경로 없음). 일반 상품이면 재고 행을 만들 옵션이 없어 준비될 수 없다
  * (사용자 결정 2026-09-27). 숨기지 않는다.
@@ -40,8 +48,28 @@ import java.util.UUID;
 @Repository
 public class ProductListingQueryRepository {
 
-    /** 마감 뒤 이 시간이 지나면 목록에서 숨긴다(확정 5일). */
-    static final Duration HIDE_AFTER_CLOSE = Duration.ofHours(120);
+    /**
+     * 상품마다 그 상품의 옵션을 찾는 서브쿼리의 계획을 통계와 상관없이 고정한다.
+     * <ul>
+     *   <li>옵션은 {@link #BY_PRODUCT} — (product_id, id) 로 찾는다.</li>
+     *   <li>옵션 · 재고를 잇는 조인은 옵션부터 읽고({@code JOIN_ORDER}) 재고는 {@link #INVENTORY_BY_OPTION} 으로 붙인다 — 안 그러면 재고 표 통계만
+     *       틀릴 때 "재고 전부 → 옵션을 uq_option_product 로" 가 FORCE INDEX 아래에서도 허용된다.</li>
+     *   <li>WHERE 의 EXISTS(색상 · 용량 필터 · 증정품 후보)는 세미조인으로 바꾸지 않는다({@code NO_SEMIJOIN}) — 바꾸면 옵션 표가 맨 앞에 와 인덱스
+     *       힌트가 소용없다. 대가: 통계가 맞고 다른 상품이 아주 많으면 세미조인이 더 빠를 수 있다(리뷰 실측: 다른 카테고리 5000 상품에서 18ms 대 6ms).</li>
+     * </ul>
+     * 통계가 실제와 다르면(데이터를 한꺼번에 넣은 직후 — 자동 재계산으로 영구 통계가 바뀐 뒤에도 계획은 ANALYZE TABLE 전까지 그대로였다) 옵티마이저가
+     * 상품마다 옵션 표나 재고 표 전체를 훑는다. 실측(MySQL 8.4.11, 한 카테고리 상품 300 · 옵션 600, 목록 20개 + 건수): 데이터를 넣은 직후 힌트 없이
+     * 120~143ms → 힌트로 5.6~6.3ms, ANALYZE TABLE 뒤에는 둘 다 4.5~5.8ms. 시험이 틀린 통계 세 모양(구분값만 · 옵션 · 재고 행 수까지 · 재고 표만)에서
+     * 옵션 · 재고 접근이 전부 ref/eq_ref 인지 본다. 위치별로 잰 것: READY 의 순서 · 필터와 증정품의 NO_SEMIJOIN · 칩의 인덱스는 하나씩 빼면 시험이
+     * 잡는다. 재고 쪽의 JOIN_ORDER 와 재고 PRIMARY 는 둘 다 있어야 한다 — 구분값 0 에 재고 표 행 수까지 0 인 모양에서 JOIN_ORDER 만이면 품절이
+     * 재고 표를 다 읽고(16ms), 재고 PRIMARY 만이면 품절 · 증정품이 재고부터 읽는다(36 · 28ms, 둘 다면 5.6 · 1.1ms — 리뷰 실측). 시험에 그 모양이
+     * 있어 하나씩 빼면 잡힌다. 관리자 옵션 수(oc)는 어느 모양에서도 힌트 없이 ref 였다 — 같은 꼴이라 같은 힌트를 건다(일관성).
+     * <p>인덱스 이름은 마이그레이션의 이름과 맞아야 한다. 힌트 이름은 접두사로도 맞는다(리뷰 실측: uq_option_product_id 로 바꿔도 오류 없이 걸린다) —
+     * 이름이 바뀌면 오류(1176)가 날 수도, 다른 인덱스에 조용히 걸릴 수도 있다. 이 표에 커버링 인덱스(예: product_id · status · price)를 더하면 이
+     * 힌트가 그 인덱스를 막으니 같이 바꾼다.
+     */
+    private static final String BY_PRODUCT = "FORCE INDEX (uq_option_product)";
+    private static final String INVENTORY_BY_OPTION = "FORCE INDEX (PRIMARY)";
 
     /**
      * 판매 방식별 준비 — 등록 이벤트를 받은 서비스가 자기 표에 행을 만들었는가. 사전예약은 preorder 회차 행, 일반은 그 상품 옵션의
@@ -50,50 +78,75 @@ public class ProductListingQueryRepository {
     static final String READY = """
             (CASE WHEN p.sale_mode = 'PREORDER'
                   THEN EXISTS (SELECT 1 FROM preorder_campaigns rc WHERE rc.product_id = p.id)
-                  ELSE EXISTS (SELECT 1 FROM product_options ro JOIN option_inventories ri ON ri.option_id = ro.id
-                                WHERE ro.product_id = p.id) END)""";
+                  ELSE EXISTS (SELECT /*+ JOIN_ORDER(ro, ri) */ 1 FROM product_options ro %s
+                                 JOIN option_inventories ri %s ON ri.option_id = ro.id
+                                WHERE ro.product_id = p.id) END)""".formatted(BY_PRODUCT, INVENTORY_BY_OPTION);
 
     private static final String FROM_VISIBLE = """
               FROM products p
               LEFT JOIN preorder_campaigns c ON c.product_id = p.id
              WHERE p.visible = 1
                AND p.status = 'ACTIVE'
-               AND (p.sale_mode = 'IN_STOCK' OR (c.closes_at IS NOT NULL AND c.closes_at > :hideBefore))
+               AND (p.sale_mode = 'IN_STOCK' OR (c.opens_at <= :now AND c.closes_at > :now))
                AND\s""" + READY + "\n";
 
+    /**
+     * 판매 중 옵션의 최저 정가. 할인가는 정가에 대해 줄지 않으므로(같은 상품은 할인율이 하나) 최저 정가에 할인을 건 값이 최저 할인가다 —
+     * 옵션마다 할인가를 계산해 MIN 하지 않는다.
+     */
+    private static final String MIN_LIST_PRICE = """
+            (SELECT MIN(o.price) FROM product_options o %s
+                     WHERE o.product_id = p.id AND o.status = 'ACTIVE')""".formatted(BY_PRODUCT);
+
     private static final String SELECT_ITEMS = """
-            SELECT p.id, p.sale_mode, p.title, p.brand, p.model_name, p.status, c.opens_at, c.closes_at,
-                   (SELECT MIN(o.price) FROM product_options o
-                     WHERE o.product_id = p.id AND o.status = 'ACTIVE') AS min_price,
-                   EXISTS (SELECT 1 FROM product_options po
+            SELECT p.id, p.sale_mode, p.title, p.brand, p.model_name, p.status, p.discount_rate, c.opens_at, c.closes_at,
+                   %1$s AS min_list_price,
+                   %2$s AS min_price,
+                   EXISTS (SELECT 1 FROM product_options po %3$s
                             WHERE po.product_id = p.id AND po.status = 'ACTIVE') AS sellable,
                    p.thumbnail_url AS image_url,
                    CASE WHEN p.sale_mode = 'IN_STOCK' AND NOT EXISTS (
-                            SELECT 1 FROM product_options o
-                              JOIN option_inventories inv ON inv.option_id = o.id
+                            SELECT /*+ JOIN_ORDER(o, inv) */ 1 FROM product_options o %3$s
+                              JOIN option_inventories inv %4$s ON inv.option_id = o.id
                              WHERE o.product_id = p.id AND o.status = 'ACTIVE'
                                AND inv.stock_total - inv.stock_reserved - inv.stock_sold > 0)
                         THEN 1 ELSE 0 END AS sold_out
-            """;
+            """.formatted(MIN_LIST_PRICE, Discount.sql(MIN_LIST_PRICE, "p.discount_rate"), BY_PRODUCT, INVENTORY_BY_OPTION);
 
-    /** 관리자 목록 — 노출 규칙 없이 전부. */
+    /**
+     * 색상칩에 쓰는 칸 — 옵션 문서와, 판매 중 옵션이 고른 색상(정규화값, 목록의 color 필터가 보는 값). 칩을 내보내는 회원 목록 · 홍보 상세만,
+     * 쪽을 고른 **뒤에** 그 상품 id 로 따로 읽는다({@link #withColors}) — 목록 문장에 넣으면 정렬 전에 후보 행 전부에서 계산되고(실측: 후보 300행에
+     * 56ms → 72ms, 정렬 방식과 상관없이) 행마다 수 KB 인 옵션 문서가 정렬 버퍼에 실린다.
+     */
+    private static final String CHIP_COLUMNS = """
+            SELECT p.id, p.options,
+                   (SELECT JSON_ARRAYAGG(sc.filter_attributes->>'$.color') FROM product_options sc %s
+                     WHERE sc.product_id = p.id AND sc.status = 'ACTIVE') AS sellable_colors
+              FROM products p
+             WHERE p.id IN (:ids)
+            """.formatted(BY_PRODUCT);
+
+    /** 관리자 목록 — 노출 규칙 없이 전부. 삭제한 상품만 뺀다. */
     private static final String FROM_ALL = """
               FROM products p
               LEFT JOIN preorder_campaigns c ON c.product_id = p.id
-             WHERE 1 = 1
+             WHERE p.deleted_at IS NULL
             """;
 
     private static final String ADMIN_COLUMNS = """
             ,
                    p.visible, %s AS ready,
-                   (SELECT COUNT(*) FROM product_options oc WHERE oc.product_id = p.id) AS option_count
-            """.formatted(READY);
+                   (SELECT COUNT(*) FROM product_options oc %s WHERE oc.product_id = p.id) AS option_count
+            """.formatted(READY, BY_PRODUCT);
 
     /** 건수는 products 와 필터만 본다 — 회차는 건수에 영향이 없다(product_id 가 PRIMARY KEY 라 행이 안 는다). */
     private static final String COUNT_FROM = """
               FROM products p
-             WHERE 1 = 1
+             WHERE p.deleted_at IS NULL
             """;
+
+    private static final Logger log = LoggerFactory.getLogger(ProductListingQueryRepository.class);
+    private static final JsonMapper JSON = JsonMapper.builder().build();
 
     private final NamedParameterJdbcTemplate jdbc;
 
@@ -115,7 +168,7 @@ public class ProductListingQueryRepository {
         appendFilters(sql, params, filter);
         sql.append(sort.orderBy()).append(" LIMIT :limit OFFSET :offset");
         params.addValue("limit", size).addValue("offset", (long) page * size);
-        return jdbc.query(sql.toString(), params, (rs, rowNum) -> toItem(rs, now));
+        return withColors(jdbc.query(sql.toString(), params, (rs, rowNum) -> toItem(rs, now)));
     }
 
     public long countForAdmin(AdminProductListFilter filter) {
@@ -166,7 +219,8 @@ public class ProductListingQueryRepository {
     }
 
     private static MapSqlParameterSource baseParams(Instant now) {
-        return new MapSqlParameterSource("hideBefore", utc(now.minus(HIDE_AFTER_CLOSE)));
+        // µs 로 자른다 — datetime(6) 바인딩은 µs 아래를 반올림해(드라이버) 접수 단계(PreorderSaleStatus, 자르지 않음)와 1µs 어긋날 수 있다
+        return new MapSqlParameterSource("now", utc(now.truncatedTo(ChronoUnit.MICROS)));
     }
 
     private static void appendFilters(StringBuilder sql, MapSqlParameterSource params, ProductListFilter filter) {
@@ -182,7 +236,8 @@ public class ProductListingQueryRepository {
         appendBrandFilter(sql, params, filter.brands());
         if (!filter.colors().isEmpty() || !filter.storages().isEmpty()) {
             // 필터 조건은 판매 중 옵션 하나가 모든 축을 함께 만족해야 한다. 품절은 포함, 판매 중지는 제외
-            sql.append(" AND EXISTS (SELECT 1 FROM product_options o WHERE o.product_id = p.id AND o.status = 'ACTIVE'");
+            // 세미조인으로 바꾸면 옵션 표부터 전부 읽는 계획이 될 수 있다(통계가 틀릴 때 실측 — 맨 앞 표에는 인덱스 힌트가 소용없다). 상품마다 인덱스로 찾게 둔다
+            sql.append(" AND EXISTS (SELECT /*+ NO_SEMIJOIN() */ 1 FROM product_options o ").append(BY_PRODUCT).append(" WHERE o.product_id = p.id AND o.status = 'ACTIVE'");
             appendAxisCondition(sql, params, "color", filter.colors());
             appendAxisCondition(sql, params, "storage", filter.storages());
             sql.append(")");
@@ -258,13 +313,13 @@ public class ProductListingQueryRepository {
      * 재고 행이 있으면 판매 방식별 준비({@link #READY})도 참이다(일반 상품의 준비가 곧 재고 행의 유무).
      */
     private static final String GIFT_OPTION = """
-            SELECT 1 FROM product_options go JOIN option_inventories gi ON gi.option_id = go.id
-             WHERE go.product_id = p.id AND go.status = 'ACTIVE'""";
+            SELECT /*+ NO_SEMIJOIN() JOIN_ORDER(go, gi) */ 1 FROM product_options go %s JOIN option_inventories gi %s ON gi.option_id = go.id
+             WHERE go.product_id = p.id AND go.status = 'ACTIVE'""".formatted(BY_PRODUCT, INVENTORY_BY_OPTION);
 
-    /** 증정품 후보 상품 — 일반 판매 · 판매 중이고 후보 옵션이 하나 이상. 공개 여부는 보지 않는다. */
+    /** 증정품 후보 상품 — 일반 판매 · 판매 중이고 후보 옵션이 하나 이상. 공개 여부는 보지 않는다. 삭제한 상품은 뺀다. */
     private static final String GIFT_PRODUCTS = """
               FROM products p
-             WHERE p.sale_mode = 'IN_STOCK' AND p.status = 'ACTIVE'
+             WHERE p.sale_mode = 'IN_STOCK' AND p.status = 'ACTIVE' AND p.deleted_at IS NULL
                AND EXISTS (%s)
             """.formatted(GIFT_OPTION);
 
@@ -306,6 +361,73 @@ public class ProductListingQueryRepository {
                 .toList();
     }
 
+    /**
+     * 홍보 상품 카드 — 목록과 같은 칸. 공개 · 판매 중(ACTIVE) · 판매 방식별 준비가 끝난 상품만 싣는다 — 판매 중지 · 회차 취소(PAUSED)는 뺀다
+     * (2026-10-14 결정 — 취소 직후 preorder 가 회차를 닫기 전까지 "접수 중" 으로 보이지 않게). 마감 뒤 시간 · 일반 전환과는 상관없이 싣는다(홍보 페이지는
+     * 마감 뒤에도 "일반 구매" 로 상품을 보인다 — 일반 전환한 상품은 판매 중이다). 순서는 ids 순서, 빠진 상품은 건너뛴다.
+     *
+     * @param withColors 색상칩까지 싣는다(홍보 상세). false 면 colors 는 빈 목록(홍보 목록은 회차 시각만 쓴다)
+     */
+    public List<ProductListItem> findCards(List<UUID> ids, Instant now, boolean withColors) {
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        String sql = SELECT_ITEMS + """
+                  FROM products p
+                  LEFT JOIN preorder_campaigns c ON c.product_id = p.id
+                 WHERE p.id IN (:ids) AND p.visible = 1 AND p.status = 'ACTIVE' AND
+                """ + READY;
+        Map<UUID, ProductListItem> byId = new HashMap<>();
+        jdbc.query(sql, new MapSqlParameterSource("ids", ids.stream().map(UuidBinary::toBytes).toList()),
+                (rs, rowNum) -> toItem(rs, now)).forEach(item -> byId.put(item.productId(), item));
+        List<ProductListItem> cards = ids.stream().map(byId::get).filter(java.util.Objects::nonNull).toList();
+        return withColors ? withColors(cards) : cards;
+    }
+
+    /** 고른 상품들에 색상칩을 붙인다 — 칩 칸({@link #CHIP_COLUMNS})을 그 상품 id 로 한 번에 읽는다. 순서는 그대로. */
+    private List<ProductListItem> withColors(List<ProductListItem> items) {
+        if (items.isEmpty()) {
+            return items;
+        }
+        Map<UUID, List<ProductOptions.ColorChip>> chips = new HashMap<>();
+        jdbc.query(CHIP_COLUMNS, new MapSqlParameterSource("ids", items.stream().map(item -> UuidBinary.toBytes(item.productId())).toList()),
+                (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+                    UUID productId = UuidBinary.fromBytes(rs.getBytes("id"));
+                    chips.put(productId, colorChips(productId, rs.getString("options"), rs.getString("sellable_colors")));
+                });
+        return items.stream().map(item -> item.withColors(chips.getOrDefault(item.productId(), List.of()))).toList();
+    }
+
+    /**
+     * 홍보에 묶을 수 있는 상품 — 회차가 취소되지 않은 사전예약 상품 중 다른 홍보에 묶이지 않은 것. promotionId 를 주면(수정) 그 홍보에 이미 묶인
+     * 상품도 판매 방식과 상관없이 싣는다(일반으로 바꾼 상품도 수정 화면에서 풀 수 있게). 공개 여부 · 준비와는 상관없다(관리자 화면). 최신 등록순.
+     * 삭제한 상품은 어느 쪽으로도 싣지 않는다.
+     */
+    public OffsetPage<LinkableRow> findLinkable(UUID promotionId, int page, int size) {
+        MapSqlParameterSource params = new MapSqlParameterSource("promotionId", promotionId == null ? null : UuidBinary.toBytes(promotionId));
+        String where = """
+                 WHERE p.deleted_at IS NULL
+                   AND ((p.sale_mode = 'PREORDER' AND p.campaign_canceled_at IS NULL
+                         AND NOT EXISTS (SELECT 1 FROM promotion_products other WHERE other.product_id = p.id
+                                          AND (:promotionId IS NULL OR other.promotion_id <> :promotionId)))
+                        OR EXISTS (SELECT 1 FROM promotion_products mine WHERE mine.product_id = p.id AND mine.promotion_id = :promotionId))
+                """;
+        Long total = jdbc.queryForObject("SELECT COUNT(*) FROM products p" + where, params, Long.class);
+        params.addValue("limit", size).addValue("offset", (long) page * size);
+        List<LinkableRow> rows = jdbc.query("""
+                SELECT p.id, p.title, p.sale_mode, c.opens_at
+                  FROM products p
+                  LEFT JOIN preorder_campaigns c ON c.product_id = p.id
+                """ + where + " ORDER BY p.created_at DESC, p.id DESC LIMIT :limit OFFSET :offset", params,
+                (rs, rowNum) -> new LinkableRow(UuidBinary.fromBytes(rs.getBytes("id")), rs.getString("title"),
+                        SaleMode.valueOf(rs.getString("sale_mode")), instant(rs, "opens_at")));
+        return OffsetPage.of(rows, page, size, total == null ? 0 : total);
+    }
+
+    /** @param opensAt 회차 오픈 시각. 회차 행이 없으면(등록 이벤트 처리 전) null */
+    public record LinkableRow(UUID productId, String title, SaleMode saleMode, Instant opensAt) {
+    }
+
     /** 옵션별 가용 수량(총량 − 선점 − 판매). 재고 행이 없는 옵션은 빠진다 — 판매 불가로 읽는다. */
     public Map<UUID, Integer> findAvailableQuantities(UUID productId) {
         Map<UUID, Integer> available = new HashMap<>();
@@ -324,17 +446,35 @@ public class ProductListingQueryRepository {
         return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
+    /** 색상칩은 비운다 — 칩을 내보내는 곳은 {@link #withColors} 로 붙인다. */
     private static ProductListItem toItem(ResultSet rs, Instant now) throws SQLException {
+        UUID productId = UuidBinary.fromBytes(rs.getBytes("id"));
         SaleMode saleMode = SaleMode.valueOf(rs.getString("sale_mode"));
-        Instant opensAt = instant(rs, "opens_at");
-        Instant closesAt = instant(rs, "closes_at");
-        PreorderSaleStatus preorderStatus = saleMode == SaleMode.PREORDER && opensAt != null && closesAt != null
-                ? PreorderSaleStatus.of(opensAt, closesAt, now) : null;
+        // 회차 시각은 사전예약만 — 일반 전환한 상품에도 preorder 회차 행이 남아 있어 그대로 싣지 않는다
+        Instant opensAt = saleMode == SaleMode.PREORDER ? instant(rs, "opens_at") : null;
+        Instant closesAt = saleMode == SaleMode.PREORDER ? instant(rs, "closes_at") : null;
         BigDecimal minPrice = rs.getBigDecimal("min_price");
-        return new ProductListItem(UuidBinary.fromBytes(rs.getBytes("id")), saleMode, rs.getString("title"),
+        BigDecimal minListPrice = rs.getBigDecimal("min_list_price");
+        return new ProductListItem(productId, saleMode, rs.getString("title"),
                 Brand.valueOf(rs.getString("brand")), rs.getString("model_name"), rs.getString("image_url"),
-                SaleStatus.valueOf(rs.getString("status")), minPrice, rs.getBoolean("sellable"), rs.getBoolean("sold_out"),
-                preorderStatus, opensAt, closesAt);
+                List.of(),
+                SaleStatus.valueOf(rs.getString("status")), minPrice, minListPrice, rs.getInt("discount_rate"), rs.getBoolean("sellable"), rs.getBoolean("sold_out"),
+                null, opensAt, closesAt).at(now);   // 접수 단계는 캐시에서 꺼낼 때와 같은 규칙(ProductListItem#at)으로
+    }
+
+    /**
+     * 색상칩. 옵션 문서를 읽지 못하면(모양이 틀린 행) 그 상품만 칩을 비우고 경고한다 — 예외를 그대로 두면 그 행이 든 목록 · 홍보 전체가 500 이다
+     * (실측). 옵션 문서는 앱이 쓰지만 중첩 칸에 원시형을 더하면 옛 행이 이 모양이 된다(ProductOptions.Warranty).
+     */
+    private static List<ProductOptions.ColorChip> colorChips(UUID productId, String options, String sellableColors) {
+        try {
+            List<String> sellable = sellableColors == null ? List.of()
+                    : JSON.readValue(sellableColors, new TypeReference<List<String>>() { }).stream().filter(java.util.Objects::nonNull).toList();
+            return ProductOptions.parse(options).colorChips(new HashSet<>(sellable));
+        } catch (RuntimeException e) {
+            log.warn("옵션 문서를 읽지 못해 색상칩을 비운다 productId={}: {}", productId, e.toString());
+            return List.of();
+        }
     }
 
     private static Instant instant(ResultSet rs, String column) throws SQLException {

@@ -53,7 +53,9 @@ import java.lang.annotation.Target;
         "auth.revocation-check.fail-closed-paths[3]=/api/v1/orders/*/payment-attempts/**",
         "auth.revocation-check.fail-closed-paths[4]=POST /api/v1/orders/*/cancel",
         "auth.revocation-check.fail-closed-paths[5]=PATCH /api/v1/orders/*/shipping-address",
-        "auth.revocation-check.fail-closed-paths[6]=/api/v1/draws/*/entries/me/payment-attempts/**"
+        "auth.revocation-check.fail-closed-paths[6]=/api/v1/draws/*/entries/me/payment-attempts/**",
+        // 읽기 캐시는 끈다 — Redis 를 띄우지 않고, 시험 픽스처가 DB 를 JDBC 로 바로 넣어 캐시 세대를 안 올린다. 켠 동작은 DrawReadCacheApiTest 가 본다
+        "nova.read-cache.enabled=false"
 })
 @Import({MySqlContainerConfig.class, TestJwt.class})
 public @interface OrderIntegrationTest {

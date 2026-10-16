@@ -14,6 +14,7 @@ import com.grandis.nova.order.outbox.PreorderOrderSettled.RejectReason;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.EnumSet;
 import java.util.Optional;
 import java.util.Set;
@@ -27,6 +28,7 @@ import java.util.Set;
  *
  * - 주문은 봉투의 aggregateId(예약 내부 id)로 찾고 회원을 대조한다. 결과에 싣는 예약 UUID 는 받은 payload 의 값을 그대로 돌려준다.
  * - 결과는 원장이 행을 잠근 뒤 돌려준 status 로 정한다. 조회한 상태로 고르면 그사이 승인된 결제를 미결제로 취소할 수 있다.
+ *   거절에 싣는 결제 시각도 잠근 뒤 DB 에서 다시 읽는다 — 조회한 주문의 값은 그사이 반영된 승인(만료 경합)을 모른다.
  * - 트랜잭션은 여기서 연다(원장 · OutboxWriter 는 MANDATORY). 바깥 트랜잭션 안에서 부르지 않는다 — 부르는 곳은 큐 소비기뿐이다.
  * - 같은 요청을 다시 받으면 전이 · 환불 요청은 상태 머신이 한 번만 하고, 결과는 다시 적는다(preorder 가 cancelSequence 로 멱등 처리).
  */
@@ -75,7 +77,7 @@ public class SettlePreorderCancelService {
             if (transition.applied() && transition.status() == OrderStatus.CANCELING) {
                 outboxWriter.append(new OrderRefundRequested(order.id(), order.totalAmount().amount()));
             }
-            settlement = settledFor(transition.status(), cancel);
+            settlement = settledFor(transition.status(), cancel, orderReader.findPaidAt(order.id()).orElse(null));
         }
         if (settlement instanceof CancelSettlement.Settled settled) {
             outboxWriter.append(settled.result());
@@ -91,18 +93,19 @@ public class SettlePreorderCancelService {
     /**
      * 원장이 돌려준 상태로 정한 결과. 상태를 모두 적는다 — default 로 뭉뚱그리지 않아 상태가 늘면 컴파일러가 알린다.
      *
+     * @param paidAt 주문의 결제 시각(원장이 잠근 뒤 읽은 값). 거절에만 싣는다 — 사유와 상관없이 결제된 주문이면 있다
      * @throws IllegalStateException 미결제 · 결제됨(만료 아님)이 원장 뒤에도 남았다 — 전제에 있으므로 원장이 바꿨어야 한다
      */
-    static CancelSettlement settledFor(OrderStatus status, SettlePreorderCancelCommand cancel) {
+    static CancelSettlement settledFor(OrderStatus status, SettlePreorderCancelCommand cancel, Instant paidAt) {
         return switch (status) {
             // 이번에 취소했든, 환불이 끝나 취소됐든, 이미 취소돼 있었든(재수신) 같다.
             case CANCELED -> new CancelSettlement.Settled(PreorderOrderSettled.canceled(
                     cancel.preorderInternalId(), cancel.preorderId(), cancel.cancelSequence()));
-            case SHIPPED, DELIVERED -> rejected(cancel, RejectReason.SHIPPED);
+            case SHIPPED, DELIVERED -> rejected(cancel, RejectReason.SHIPPED, paidAt);
             // 만료 취소는 그사이 결제된 것이라(만료 경합) 환불하지 않고 거절한다. 그 밖의 사유면 원장이 취소 중으로 바꿨어야 한다.
             case AWAITING_CONFIRMATION, PREPARING_ITEMS, READY_TO_SHIP -> {
                 if (cancel.reason() == CancelReason.EXPIRY) {
-                    yield rejected(cancel, RejectReason.PAID);
+                    yield rejected(cancel, RejectReason.PAID, paidAt);
                 }
                 throw new IllegalStateException("결제된 주문이 취소 중으로 가지 않았다: preorderInternalId="
                         + cancel.preorderInternalId() + ", status=" + status);
@@ -116,8 +119,8 @@ public class SettlePreorderCancelService {
         };
     }
 
-    private static CancelSettlement rejected(SettlePreorderCancelCommand cancel, RejectReason reason) {
+    private static CancelSettlement rejected(SettlePreorderCancelCommand cancel, RejectReason reason, Instant paidAt) {
         return new CancelSettlement.Settled(PreorderOrderSettled.rejected(
-                cancel.preorderInternalId(), cancel.preorderId(), reason, cancel.cancelSequence()));
+                cancel.preorderInternalId(), cancel.preorderId(), reason, cancel.cancelSequence(), paidAt));
     }
 }

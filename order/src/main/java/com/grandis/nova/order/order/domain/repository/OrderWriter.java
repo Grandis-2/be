@@ -61,6 +61,14 @@ public interface OrderWriter {
      */
     int markRefundFailed(UUID orderId, Instant now);
 
+    /**
+     * 결제 확인 대기인 주문에 결제 시각을 적는다(ck_order_paid). 이력 번호는 올리지 않는다 — 같은 트랜잭션의 승인 전이가 이미 올렸다.
+     * 이미 적혀 있으면 바꾸지 않는다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다.
+     *
+     * @return 바뀐 행 수(0 또는 1)
+     */
+    int markPaid(UUID orderId, Instant paidAt);
+
     /** 승인 중 결제창 번호. 승인 중이 아니면 비어 있다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다. */
     Optional<String> authorizingProviderOrderId(UUID orderId);
 

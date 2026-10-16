@@ -36,6 +36,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -70,6 +73,7 @@ class CartOrderPaymentTest {
     static final String PROVIDER_ORDER_ID = "7a1c2d3e-4b5a-4c7d-8e9f-0a1b2c3d4e5f";
     static final BigDecimal PRICE = new BigDecimal("1250000");
     static final BigDecimal WARRANTY = new BigDecimal("199000");
+    static final Instant APPROVED_AT = Instant.parse("2026-10-16T03:00:00Z");
 
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
@@ -158,6 +162,12 @@ class CartOrderPaymentTest {
         assertThat(stockOf(phone)).containsExactly(10, 0, 4);
         assertThat(stockOf(watch)).containsExactly(10, 0, 1);
         assertThat(cart()).containsExactlyInAnyOrderEntriesOf(Map.of(phone + "/false", 1));
+        assertThat(jdbcTemplate.queryForObject("SELECT paid_at FROM orders WHERE id = ?", LocalDateTime.class, (Object) bytes(order.id())))
+                .as("결제 시각은 출처와 상관없이 적는다").isEqualTo(LocalDateTime.ofInstant(APPROVED_AT, ZoneOffset.UTC));
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM order_outbox_events
+                 WHERE event_type = 'PREORDER_PAYMENT_CONFIRMED' AND payload->>'$.orderId' = ?
+                """, Integer.class, order.id().toString())).as("결제 승인 알림은 사전예약 주문만").isZero();
     }
 
     @Test
@@ -166,7 +176,7 @@ class CartOrderPaymentTest {
         fixtures.forceAuthorizing(order.id(), PROVIDER_ORDER_ID);
 
         results.settle(new PaymentSettlement(order.id(), PROVIDER_ORDER_ID, PaymentSettlement.Result.DECLINED, order.totalAmount().amount(),
-                DeclineReason.CARD_REJECTED));
+                null, DeclineReason.CARD_REJECTED));
 
         assertThat(stockOf(phone)).containsExactly(10, 4, 0);
         assertThat(cart()).hasSize(3);
@@ -287,7 +297,8 @@ class CartOrderPaymentTest {
     }
 
     private PaymentSettlement approved() {
-        return new PaymentSettlement(order.id(), PROVIDER_ORDER_ID, PaymentSettlement.Result.APPROVED, order.totalAmount().amount(), null);
+        return new PaymentSettlement(order.id(), PROVIDER_ORDER_ID, PaymentSettlement.Result.APPROVED, order.totalAmount().amount(),
+                APPROVED_AT, null);
     }
 
     private void cartLine(UUID option, boolean warranty, int quantity) {

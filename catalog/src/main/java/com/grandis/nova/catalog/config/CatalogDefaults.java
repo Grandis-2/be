@@ -42,7 +42,13 @@ class CatalogDefaults implements EnvironmentPostProcessor, Ordered {
             Map.entry("spring.http.serviceclient." + Dependencies.ORDER + ".connect-timeout", "300ms"),
             Map.entry("spring.http.serviceclient." + Dependencies.ORDER + ".read-timeout", "1s"),
             Map.entry("spring.http.serviceclient." + Dependencies.MEMBER + ".connect-timeout", "300ms"),
-            Map.entry("spring.http.serviceclient." + Dependencies.MEMBER + ".read-timeout", "1s")));
+            Map.entry("spring.http.serviceclient." + Dependencies.MEMBER + ".read-timeout", "1s"),
+            // 사진 업로드(POST /api/v1/admin/images)의 멀티파트 상한. 넘으면 컨트롤러 전에 413 이다(크기 초과와 파트 수 초과는 구별되지 않는다).
+            // 파일은 사진 상한(10MiB — Spring 의 MB 는 1024²)과 같고, 요청은 그 위에 파트 머리 · purpose 칸만큼 여유를 둔다.
+            // 파트 수는 일반 칸도 센다 — 업로드는 file · purpose 둘이다. file-size-threshold 는 기본값 0 그대로 둔다(파일을 처음부터 디스크에 쓴다)
+            Map.entry("spring.servlet.multipart.max-file-size", "10MB"),
+            Map.entry("spring.servlet.multipart.max-request-size", "11MB"),
+            Map.entry("server.tomcat.max-part-count", "5")));
 
     /**
      * 폐기 조회가 실패하면 닫는 경로. 목록을 적으면 공통 기본값(관리자 · 재발급 · 내 정보)을 대체하므로, 공통 목록을 그대로 가져와

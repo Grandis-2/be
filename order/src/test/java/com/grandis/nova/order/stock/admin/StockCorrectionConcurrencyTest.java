@@ -104,7 +104,7 @@ class StockCorrectionConcurrencyTest {
         jdbcTemplate.update("UPDATE option_inventories SET stock_reserved = 5, stock_sold = 1 WHERE option_id = ?", (Object) bytes(option));
         RacingExpectations racing = new RacingExpectations(expectations,
                 () -> payments.settle(new PaymentSettlement(order.id(), window, PaymentSettlement.Result.APPROVED, order.totalAmount().amount(),
-                        null)).applied(),
+                        clock.instant(), null)).applied(),
                 "UPDATE option_inventories%stock_sold = stock_sold +%");
 
         StockCorrection correction = service(racing).correct(product.productId(), option, "보정", "admin");

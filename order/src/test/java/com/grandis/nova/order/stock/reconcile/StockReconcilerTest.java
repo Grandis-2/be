@@ -367,8 +367,9 @@ class StockReconcilerTest {
         String window = UUID.randomUUID().toString();
         tx.executeWithoutResult(status -> orderLedger.requestPayment(id, window, EventCause.user()));
         BigDecimal amount = jdbcTemplate.queryForObject("SELECT total_amount FROM orders WHERE id = ?", BigDecimal.class, (Object) bytes(id));
-        payments.settle(new PaymentSettlement(id, window, result, amount,
-                result == PaymentSettlement.Result.DECLINED ? DeclineReason.CARD_REJECTED : null));
+        boolean approved = result == PaymentSettlement.Result.APPROVED;
+        payments.settle(new PaymentSettlement(id, window, result, amount, approved ? clock.instant() : null,
+                approved ? null : DeclineReason.CARD_REJECTED));
     }
 
     private String placeCartOrder(UUID customer, UUID first, int firstQuantity, UUID second, int secondQuantity) throws Exception {

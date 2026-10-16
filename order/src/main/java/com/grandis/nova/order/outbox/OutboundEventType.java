@@ -6,6 +6,10 @@ import com.grandis.nova.common.outbox.OutboxEventType;
 public enum OutboundEventType implements OutboxEventType {
 
     PREORDER_ORDER_SETTLED("preorder-events"),
+    /** 사전예약 주문 생성(결제 시작) — preorder 가 받아 "결제 진행 중" 으로 보인다(contracts/preorder-order-events.md). */
+    PREORDER_PAYMENT_STARTED("preorder-events"),
+    /** 사전예약 주문 결제 승인 — preorder 가 받아 예약을 확정한다(contracts/preorder-order-events.md). */
+    PREORDER_PAYMENT_CONFIRMED("preorder-events"),
     ORDER_REFUND_REQUESTED("payment-events"),
     /** 응모비를 결제한 응모 — worker 가 받아 Mock(추첨)에 넘긴다(contracts/draw-entry-sync.md). */
     DRAW_ENTRY_PAID("draw-register"),

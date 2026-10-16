@@ -59,6 +59,9 @@ public class OrderJpaEntity extends BaseEntity {
     @Column(updatable = false)
     private Instant refundFailedAt;
 
+    @Column(updatable = false)
+    private Instant paidAt;
+
     @Column(name = "ship_to_name", nullable = false, updatable = false, length = 50)
     private String shipToName;
 
@@ -143,6 +146,10 @@ public class OrderJpaEntity extends BaseEntity {
 
     public Instant getRefundFailedAt() {
         return refundFailedAt;
+    }
+
+    public Instant getPaidAt() {
+        return paidAt;
     }
 
     public String getShipToName() {

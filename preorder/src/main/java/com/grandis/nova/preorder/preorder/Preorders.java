@@ -5,6 +5,7 @@ import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.preorder.domain.AdminPreorderSearchQuery;
 import com.grandis.nova.preorder.preorder.domain.Preorder;
+import com.grandis.nova.preorder.preorder.domain.PaymentOverdueQuery;
 import com.grandis.nova.preorder.preorder.domain.PreorderBacklogQuery;
 import com.grandis.nova.preorder.preorder.domain.PreorderEvent;
 import com.grandis.nova.preorder.preorder.domain.PreorderEventRepository;
@@ -38,13 +39,15 @@ public class Preorders {
     private final PreorderEventRepository events;
     private final AdminPreorderSearchQuery adminSearch;
     private final PreorderBacklogQuery backlog;
+    private final PaymentOverdueQuery paymentOverdue;
 
     Preorders(PreorderRepository preorders, PreorderEventRepository events, AdminPreorderSearchQuery adminSearch,
-              PreorderBacklogQuery backlog) {
+              PreorderBacklogQuery backlog, PaymentOverdueQuery paymentOverdue) {
         this.preorders = preorders;
         this.events = events;
         this.adminSearch = adminSearch;
         this.backlog = backlog;
+        this.paymentOverdue = paymentOverdue;
     }
 
     public Optional<PreorderSnapshot> findByToken(String preorderToken) {
@@ -100,6 +103,12 @@ public class Preorders {
                 .map(PreorderEvent::toHistoryEntry);
     }
 
+    /** 주문 쪽에서 취소가 거절돼 결제 가능(REGISTERED)으로 돌아온 적이 있는가. */
+    public boolean wasCancelRejectedToRegistered(UUID preorderId) {
+        return events.existsByPreorderIdAndFromStatusAndToStatus(preorderId, PreorderStatus.CANCELING,
+                PreorderStatus.REGISTERED);
+    }
+
     /** 이력(번호 순). */
     public List<PreorderHistoryEntry> history(UUID preorderId) {
         return events.findByPreorderIdOrderByEventSequence(preorderId).stream()
@@ -118,6 +127,15 @@ public class Preorders {
         return new PreorderBacklog(backlog.countByStatus(productId),
                 backlog.countRegisteredPayableUntil(now.minus(PreorderSnapshot.PAYMENT_WINDOW), productId),
                 backlog.findOldestCreatedAt(PreorderStatus.PENDING_SYNC, productId).orElse(null));
+    }
+
+    /** 결제 기한이 지나 만료할 예약의 공개 UUID. 기한이 오래된 것부터 limit 건. */
+    public List<String> findPaymentOverdue(Instant now, int limit) {
+        return paymentOverdue.findTokens(now.minus(PreorderSnapshot.PAYMENT_WINDOW), limit);
+    }
+
+    public PaymentOverdue countPaymentOverdue(Instant now) {
+        return paymentOverdue.count(now.minus(PreorderSnapshot.PAYMENT_WINDOW));
     }
 
     /** 회원의 예약(최신순)을 커서 자리 다음부터 최대 limit 건. 커서가 없으면 처음부터다. */

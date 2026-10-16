@@ -53,10 +53,10 @@
 | `options[].optionId` | string(UUID) | `product_options.id` |
 | `options[].sku` | string | 모델 안 유일 |
 | `options[].title` | string | 옵션 표시명. 스냅샷 원본 |
-| `options[].price` | number(정수 원) | 최종가. 스냅샷 원본 |
+| `options[].price` | number(정수 원) | 회원이 내는 값 — 정가에 상품 할인율을 걸어 100원 단위로 버린 할인가(할인율 0 이면 정가). 스냅샷 원본 |
 | `options[].status` | `ACTIVE` \| `PAUSED` | 옵션 판매 상태 |
 
-**비공개·미완료 상품도 200 으로 준다.** 숨기는 판정은 목적별로 호출자가 한다(아래). 이 API 가 먼저 숨기면 관리자 등록 흐름이 자기 상품을 못 본다.
+**비공개·미완료 상품도 200 으로 준다.** 숨기는 판정은 목적별로 호출자가 한다(아래). 이 API 가 먼저 숨기면 관리자 등록 흐름이 자기 상품을 못 본다. 삭제한 상품(소프트 삭제)은 숨김이 아니라 없는 상품이라 404 `PRODUCT_NOT_FOUND` 다 — 관리자 화면에서도 없는 상품이다.
 
 **오류.**
 
@@ -64,7 +64,7 @@
 | --- | --- | --- |
 | 401 | `UNAUTHENTICATED` | 토큰 없음·만료·폐기·`Authorization` 헤더 모양 이상. 이 봉투는 common:security 의 진입점이 준다(NV-139 부터). **이 경로는 폐기 조회가 실패해도 열린다**(폐기 조회가 실패하면 닫히는 경로에 들지 않는다 — 실측: Redis 를 끊고 USER 토큰 → 200) — 그래서 여기서는 `details.retryable = true` 인 401 이 나오지 않는다. preorder 가 그 갈래를 만들 필요가 없다 |
 | 403 | `FORBIDDEN` | 허용 역할(USER · ADMIN) 밖. catalog 는 `hasAnyRole(USER, ADMIN)` 으로 막는다 |
-| 404 | `PRODUCT_NOT_FOUND` | 상품 없음. preorder 는 **이 코드일 때만** 빈 결과로 바꾼다. 틀린 경로의 404 는 공통 `NOT_FOUND` 로 오므로 그건 연동 오류다(지금 `CatalogReader` 는 코드를 안 보고 404 를 전부 빈 결과로 캐시한다 — 아래 남은 일). 옵션이 없는 상품은 404 가 아니라 `options: []` |
+| 404 | `PRODUCT_NOT_FOUND` | 상품 없음(삭제한 상품 포함). preorder 는 **이 코드일 때만** 빈 결과로 바꾼다. 틀린 경로의 404 는 공통 `NOT_FOUND` 로 오므로 그건 연동 오류다(지금 `CatalogReader` 는 코드를 안 보고 404 를 전부 빈 결과로 캐시한다 — 아래 남은 일). 옵션이 없는 상품은 404 가 아니라 `options: []` |
 | 400 · 405 · 500 | `VALIDATION_FAILED` · `METHOD_NOT_ALLOWED` · `INTERNAL_ERROR` | 공통 처리기의 봉투. productId 가 UUID 가 아님 · 허용되지 않은 메서드 · 서버 오류(원문은 싣지 않는다) |
 
 preorder `CatalogReader` 는 401 을 사용자 토큰 문제(401)로, 404 외 나머지 4xx(403 포함)는 연동 오류(500)로 처리한다(NV-277). 401·403은 인증·권한 실패다(이 경로에는 `retryable` 401 이 없다 — 위 표). 오류를 상품 없음으로 캐시하지 않는다.

@@ -33,6 +33,8 @@ import java.util.UUID;
  * @param paymentDueAt    일반 주문의 10분 기한. 사전예약 주문은 예약의 24시간 기한을 따르므로 늘 null
  * @param stockReleasedAt 일반 판매의 재고 반환 표식. 사전예약 주문은 늘 null
  * @param refundFailedAt  취소 중 환불이 확정 실패한 시각. 취소 중 · 취소된 주문에만 있다
+ * @param paidAt          결제 시각 — 승인을 반영할 때 적는다(결과 이벤트의 승인 시각, 승인 응답으로 반영했으면 반영한 시각). 결제 전 상태에는
+ *                        없다. 결제된 상태라도 비어 있을 수 있다 — 드로우 당첨 주문(결제 없음), 이 칸을 모르는 구버전이 반영한 승인
  * @param createdAt       저장 전이면 null
  * @param updatedAt       저장 전이면 null
  */
@@ -49,6 +51,7 @@ public record Order(
         Instant paymentDueAt,
         Instant stockReleasedAt,
         Instant refundFailedAt,
+        Instant paidAt,
         ShipTo shipTo,
         long eventSequence,
         Instant createdAt,
@@ -79,6 +82,10 @@ public record Order(
         // ck_order_refund_failed
         if (refundFailedAt != null && status != OrderStatus.CANCELING && status != OrderStatus.CANCELED) {
             throw new IllegalArgumentException("환불 실패 시각은 취소 중 · 취소된 주문에만 있다: status=" + status);
+        }
+        // ck_order_paid
+        if (paidAt != null && (status == OrderStatus.AWAITING_PAYMENT || status == OrderStatus.AUTHORIZING)) {
+            throw new IllegalArgumentException("결제 시각은 결제 전 상태에 없다: status=" + status);
         }
         // ck_order_authorizing_attempt
         if ((status == OrderStatus.AUTHORIZING) != (authorizingProviderOrderId != null)) {
@@ -127,7 +134,7 @@ public record Order(
             }
         };
         return new Order(null, draft.customerId(), draft.source(), draft.preorderId(),
-                draft.preorderToken(), draft.idempotencyKey(), initialStatus(draft.source()), null, draft.totalAmount(), paymentDueAt, null, null, draft.shipTo(),
+                draft.preorderToken(), draft.idempotencyKey(), initialStatus(draft.source()), null, draft.totalAmount(), paymentDueAt, null, null, null, draft.shipTo(),
                 OrderEvent.FIRST_SEQUENCE, null, null);
     }
 

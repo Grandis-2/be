@@ -1,8 +1,14 @@
-// Redis 를 쓰는 모듈만 의존한다 (member · catalog · preorder).
+// Redis 를 쓰는 모듈만 의존한다 (member · catalog · preorder · order · payment).
 // worker · batch 는 쓰지 않으므로 여기에 연결하지 않는다.
+// 읽기 캐시(ReadCache)는 쓰는 서비스가 빈으로 직접 만든다(catalog · order) — 자동설정으로 켜지 않는다.
 apply plugin: 'java-library'
 
 dependencies {
     api project(':common:types')
     api 'org.springframework.boot:spring-boot-starter-data-redis'
+    // 읽기 캐시: 값은 JSON(Jackson 3), Redis 장애 차단기는 resilience4j 코어만(스프링 연동 없이 코드로 만든다)
+    implementation 'org.springframework.boot:spring-boot-starter-json'
+    implementation "io.github.resilience4j:resilience4j-circuitbreaker:${rootProject.resilience4jVersion}"   // 버전은 루트 build.gradle
+
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
 }

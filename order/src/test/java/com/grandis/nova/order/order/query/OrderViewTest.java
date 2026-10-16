@@ -32,7 +32,7 @@ class OrderViewTest {
 
     private static OrderView.Detail detail(OrderStatus status, Instant refundFailedAt, OrderEvent lastEvent) {
         Order order = new Order(TestIds.id(1), TestIds.id(2), OrderSource.PREORDER, TestIds.id(3),
-                "0b8f6a3e-5a8c-4d59-9a53-3c1f0e0f7a11", null, status, null, Money.won(1000), null, null, refundFailedAt, SHIP_TO, 3,
+                "0b8f6a3e-5a8c-4d59-9a53-3c1f0e0f7a11", null, status, null, Money.won(1000), null, null, refundFailedAt, null, SHIP_TO, 3,
                 Instant.EPOCH, Instant.EPOCH);
         return new OrderView.Detail(order, List.of(), List.of(lastEvent));
     }

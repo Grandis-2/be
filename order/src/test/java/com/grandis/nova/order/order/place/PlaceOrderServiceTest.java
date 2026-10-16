@@ -2,6 +2,7 @@ package com.grandis.nova.order.order.place;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.client.preorder.PreorderPayability;
 import com.grandis.nova.order.client.preorder.PreorderReader;
@@ -55,8 +56,9 @@ class PlaceOrderServiceTest {
     PreorderReader preorderReader = mock(PreorderReader.class);
     OrderLedger ledger = mock(OrderLedger.class);
     OrderReader orderReader = mock(OrderReader.class);
+    OutboxWriter outboxWriter = mock(OutboxWriter.class);
     PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
-    PlaceOrderService service = new PlaceOrderService(preorderReader, ledger, orderReader, transactionManager);
+    PlaceOrderService service = new PlaceOrderService(preorderReader, ledger, orderReader, outboxWriter, transactionManager);
 
     @BeforeEach
     void setUp() {
@@ -122,7 +124,7 @@ class PlaceOrderServiceTest {
         payable();
         Order foreign = new Order(TestIds.id(100), TestIds.id(999), OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID, null,
                 OrderStatus.AWAITING_PAYMENT, null, Money.won(1_250_000), null, null, null,
-                new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 1, NOW, NOW);
+                null, new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 1, NOW, NOW);
         given(orderReader.findByPreorderId(PREORDER_ID)).willReturn(Optional.of(foreign));
 
         assertThatThrownBy(() -> service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS))
@@ -164,7 +166,7 @@ class PlaceOrderServiceTest {
         payable();
         Order stored = new Order(TestIds.id(100), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID, null, null,
                 OrderStatus.AWAITING_PAYMENT, null, Money.won(1_250_000), null, null, null,
-                new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 1, NOW, NOW);
+                null, new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 1, NOW, NOW);
         given(orderReader.findByPreorderId(PREORDER_ID)).willReturn(Optional.of(stored));
 
         PlaceResult result = service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS);
@@ -253,6 +255,6 @@ class PlaceOrderServiceTest {
     private static Order order(OrderStatus status) {
         return new Order(TestIds.id(100), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID, null, status, null,
                 Money.won(1_250_000), null, null, null,
-                new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 1, NOW, NOW);
+                null, new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 1, NOW, NOW);
     }
 }

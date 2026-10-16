@@ -22,6 +22,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.time.Instant;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -80,11 +81,12 @@ class SettlePreorderCancelServiceTest {
                 .containsEntry("aggregate_type", "PREORDER")
                 .containsEntry("aggregate_id", preorderId.toString()));
         JsonNode payload = payloadOf(rows.getFirst());
-        assertThat(payload.propertyNames()).containsExactlyInAnyOrder("preorderId", "result", "reason", "cancelSequence");
+        assertThat(payload.propertyNames()).containsExactlyInAnyOrder("preorderId", "result", "reason", "cancelSequence", "paidAt");
         assertThat(payload.get("preorderId").asString()).isEqualTo(preorderUuid);
         assertThat(payload.get("result").asString()).isEqualTo("NO_ORDER");
         assertThat(payload.get("reason").isNull()).isTrue();
         assertThat(payload.get("cancelSequence").asLong()).isEqualTo(CANCEL_SEQUENCE);
+        assertThat(payload.get("paidAt").isNull()).isTrue();
     }
 
     @Test
@@ -148,6 +150,42 @@ class SettlePreorderCancelServiceTest {
         assertThat(outboxRows(order.preorderId())).singleElement().satisfies(row -> {
             assertThat(payloadOf(row).get("result").asString()).isEqualTo("REJECTED");
             assertThat(payloadOf(row).get("reason").asString()).isEqualTo(RejectReason.SHIPPED.name());
+            assertThat(payloadOf(row).get("paidAt").isNull()).as("결제 시각이 없는 주문").isTrue();
+        });
+    }
+
+    /** 결제 시각 칸을 모르는 구버전이 반영한 승인은 칸이 비어 있다 — 승인 반영 이력의 시각을 대신 싣는다. */
+    @Test
+    void 결제_시각_칸이_비었으면_승인_반영_이력의_시각을_싣는다() {
+        Order order = placedOrders.place(customerId);
+        placedOrders.pay(order.id());
+        jdbcTemplate.update("UPDATE orders SET paid_at = NULL, status = 'SHIPPED' WHERE id = ?", bytes(order.id()));
+        String approvedAt = jdbcTemplate.queryForObject("""
+                SELECT DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%s.%fZ') FROM order_events
+                 WHERE order_id = ? AND from_status = 'AUTHORIZING' AND to_status = 'AWAITING_CONFIRMATION'
+                """, String.class, bytes(order.id()));
+
+        settlement.settle(cancel(order, CancelReason.USER));
+
+        assertThat(outboxRows(order.preorderId())).singleElement().satisfies(row ->
+                assertThat(Instant.parse(payloadOf(row).get("paidAt").asString())).isEqualTo(Instant.parse(approvedAt)));
+    }
+
+    /** 거절에는 사유와 상관없이 주문의 결제 시각을 싣는다 — preorder 가 결제된 예약을 확정으로 되돌린다. */
+    @ParameterizedTest
+    @ValueSource(strings = {"SHIPPED", "DELIVERED"})
+    void 결제된_주문의_출고_거절에는_결제_시각을_싣는다(String shipped) {
+        Order order = placedOrders.place(customerId);
+        placedOrders.pay(order.id());
+        String paidAt = jdbcTemplate.queryForObject("SELECT DATE_FORMAT(paid_at, '%Y-%m-%dT%H:%i:%s.%fZ') FROM orders WHERE id = ?",
+                String.class, bytes(order.id()));
+        fixtures.forceStatus(order.id(), shipped);
+
+        settlement.settle(cancel(order, CancelReason.USER));
+
+        assertThat(outboxRows(order.preorderId())).singleElement().satisfies(row -> {
+            assertThat(payloadOf(row).get("reason").asString()).isEqualTo(RejectReason.SHIPPED.name());
+            assertThat(Instant.parse(payloadOf(row).get("paidAt").asString())).isEqualTo(Instant.parse(paidAt));
         });
     }
 

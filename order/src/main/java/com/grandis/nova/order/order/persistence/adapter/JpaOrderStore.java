@@ -130,6 +130,13 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     @Override
+    public int markPaid(UUID orderId, Instant paidAt) {
+        int updated = orders.markPaid(orderId, paidAt);
+        entityManager.detach(entityManager.getReference(OrderJpaEntity.class, orderId));
+        return updated;
+    }
+
+    @Override
     public int changeStatus(UUID orderId, OrderStatus from, OrderStatus to, String authorizingProviderOrderId,
                             Instant now) {
         int updated = orders.changeStatus(orderId, from, to, authorizingProviderOrderId, now);
@@ -147,6 +154,11 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     @Override
     public long eventSequence(UUID orderId) {
         return orders.findEventSequence(orderId);
+    }
+
+    @Override
+    public Optional<Instant> findPaidAt(UUID orderId) {
+        return orders.findPaidAt(orderId);
     }
 
     @Override

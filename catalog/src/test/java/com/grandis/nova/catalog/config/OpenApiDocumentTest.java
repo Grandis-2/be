@@ -7,6 +7,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.grandis.nova.catalog.category.CategoryNode;
 import com.grandis.nova.catalog.detail.ProductDetailView;
+import com.grandis.nova.catalog.edit.InStockConversionRequest;
+import com.grandis.nova.catalog.promotion.AdminPromotionView;
+import com.grandis.nova.catalog.promotion.LinkableProduct;
+import com.grandis.nova.catalog.promotion.PromotionRequest;
+import com.grandis.nova.catalog.promotion.PromotionViews;
 import com.grandis.nova.catalog.edit.OptionValueAddRequest;
 import com.grandis.nova.catalog.edit.OptionValueEditRequest;
 import com.grandis.nova.catalog.edit.ProductEditRequest;
@@ -108,7 +113,8 @@ class OpenApiDocumentTest {
         assertThat(mismatched).as("공개 표시 ↔ 토큰 없는 요청의 401").isEmpty();
         assertThat(marked).containsExactlyInAnyOrder(
                 "GET /api/v1/products", "GET /api/v1/products/{productId}", "GET /api/v1/products/{productId}/variants/{variantId}",
-                "GET /api/v1/products/{productId}/reviews", "GET /api/v1/categories", "GET /api/v1/reviews");
+                "GET /api/v1/products/{productId}/reviews", "GET /api/v1/categories", "GET /api/v1/reviews",
+                "GET /api/v1/promotions", "GET /api/v1/promotions/{promotionId}");
     }
 
     @Test
@@ -123,7 +129,9 @@ class OpenApiDocumentTest {
         expected.put("PATCH /api/v1/admin/products/{productId}/variants/{variantId}", "VariantEditRequest");
         expected.put("PATCH /api/v1/admin/products/{productId}/sale-status", "SaleStatusChangeRequest");
         expected.put("PATCH /api/v1/admin/products/{productId}/visibility", "VisibilityChangeRequest");
-        expected.put("POST /api/v1/admin/products/image-uploads", "ImageUploadRequest");
+        expected.put("POST /api/v1/admin/products/{productId}/conversion", "InStockConversionRequest");
+        expected.put("POST /api/v1/admin/promotions", "PromotionRequest");
+        expected.put("PUT /api/v1/admin/promotions/{promotionId}", "PromotionRequest");
         expected.put("POST /api/v1/admin/products/{productId}/images", "ProductImageAddRequest");
         expected.put("PATCH /api/v1/admin/products/{productId}/images", "ProductImageReplaceRequest");
         expected.put("POST /api/v1/reviews", "ReviewCreateRequest");
@@ -132,13 +140,25 @@ class OpenApiDocumentTest {
         Map<String, String> documented = new LinkedHashMap<>();
         operations().forEach((name, operation) -> {
             JsonNode body = operation.path("requestBody");
-            if (!body.isMissingNode()) {
+            // 멀티파트(사진 업로드)는 문자열 본문이 아니다 — multipartUploadDocumentsFileAndPurpose
+            if (!body.isMissingNode() && !body.path("content").has("multipart/form-data")) {
                 JsonNode schema = body.path("content").path("application/json").path("schema");
                 documented.put(name, schema.path("$ref").asString("").replace("#/components/schemas/", ""));
             }
         });
         assertThat(documented).containsExactlyInAnyOrderEntriesOf(expected);
         expected.values().forEach(type -> assertThat(doc.path("components").path("schemas").has(type)).as(type).isTrue());
+    }
+
+    @Test
+    @DisplayName("사진 업로드는 멀티파트 본문의 파일 파트 file(binary)과 purpose(PRODUCT · PROMOTION)를 싣는다")
+    void multipartUploadDocumentsFileAndPurpose() {
+        JsonNode upload = operations().get("POST /api/v1/admin/images");
+        assertThat(upload.path("requestBody").path("content").path("multipart/form-data").path("schema").path("properties")
+                .path("file").path("format").asString()).isEqualTo("binary");
+        JsonNode purpose = upload.path("parameters").get(0);
+        assertThat(purpose.path("name").asString()).isEqualTo("purpose");
+        assertThat(purpose.path("schema").path("enum").toString()).isEqualTo("[\"PRODUCT\",\"PROMOTION\"]");
     }
 
     @Test
@@ -176,7 +196,8 @@ class OpenApiDocumentTest {
                 VariantAddRequest.class, VariantEditRequest.class, SaleStatusChangeRequest.class, VisibilityChangeRequest.class,
                 ProductImageAddRequest.class, ProductImageReplaceRequest.class, ReviewCreateRequest.class, ReviewUpdateRequest.class,
                 ProductDetailView.class, ProductListItem.class, AdminProductListItem.class, CategoryNode.class, ReviewView.class,
-                RegistrationStatusView.class, SaleStatusView.class, VisibilityView.class));
+                RegistrationStatusView.class, SaleStatusView.class, VisibilityView.class, InStockConversionRequest.class, PromotionRequest.class,
+                AdminPromotionView.class, LinkableProduct.class, PromotionViews.Summary.class, PromotionViews.Detail.class));
         while (!queue.isEmpty()) {
             Class<?> type = queue.poll();
             Schema named = type.getAnnotation(Schema.class);

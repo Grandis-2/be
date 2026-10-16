@@ -8,13 +8,13 @@
 #
 # 소유 경계(README 기준)
 #   member    customers · refresh_tokens
-#   catalog   categories · products · product_options · product_reviews · catalog_outbox_events
+#   catalog   categories · products · product_options · product_reviews · promotions · promotion_products · catalog_outbox_events · images
 #   preorder  preorders · preorder_events · preorder_campaigns · shipment_batches · dead_letter_events
 #             preorder_sync_jobs · preorder_sync_attempts (작업 · 시도 원장. worker 의 결과 이벤트를 받아 기록)
 #   order     orders · order_items · order_events · cart_items · payments · payment_transactions
 #             option_inventories (재고. 옵션당 1행, 일반 판매 옵션만)
 #   worker    없음 (DB 를 쓰지 않는다. 작업 내용 · 재시도 횟수는 메시지에 싣는다)
-#   batch     읽기 전용
+#   batch     읽기 전용 (예외: images 의 오래된 UNUSED 행 삭제 · 그 S3 객체 삭제 — 안 쓰는 사진 정리)
 #
 # 테이블 이름이 바뀌면 이 주석과 아래 모듈 지시문을 함께 고친다.
 
@@ -248,6 +248,10 @@ reviews:
         - 동시 실행 방지 장치(락 · 단일 실행 표식)가 없으면 지적한다. desired 1 전제로 설계돼 있다.
         - 정합성 검사는 읽기 전용이다. 업무 테이블이나 external_mock 스키마에 쓰기를 하면 지적한다.
           조치는 정상 업무 경로(API · 이벤트)로 한다.
+        - 예외 하나: 안 쓰는 사진 정리는 images 행을 지운다. 기준 시간이 지난 UNUSED 행만, id 로(object_key 로 지우면 catalog 의 붙이기와
+          다른 인덱스 순서로 잠가 교착한다), 같은 문장에서 어떤 draw_campaigns.image_url_snapshot 도 그 키로 끝나지 않을 때만 지운다.
+          S3 객체는 행 삭제를 커밋한 뒤 지운다(지워진 행이 1개일 때만). 이 조건을 빼거나 USED 행 · images 밖의 표를 지우면 지적한다.
+          기준 시간이 하한(1시간)보다 짧아도 실행되면 지적한다 — 드로우 생성의 시간 예산(order, 60초)보다 충분히 길어야 한다.
         - 조회 실패 · 권한 오류가 있는 실행을 "불일치 0" 으로 집계하면 지적한다. 검사 미완료로 남긴다.
         - 정상 처리 중인 차이(접수 직후 · 등록 진행 중)를 불일치로 세면 지적한다. 기준 시각이 필요하다.
         - 전체 로드 후 메모리에서 처리하면 지적한다. 커서 · 청크로 끊는다.
@@ -259,19 +263,25 @@ reviews:
     - path: "catalog/**/*.java"
       instructions: |
         - 비소유 표 읽기는 둘만 허용한다: preorder_campaigns(opens_at · closes_at · 행의 유무) · option_inventories(재고 칼럼 집계 · 행의 유무).
-          목록·검색의 노출 조건(오픈 예정 · 마감 · 마감+120시간 숨김 · 품절)과 상세의 회차 시각 · 옵션별 가용 수량,
+          목록·검색의 노출 조건(사전예약은 접수 중 — opens_at ≤ 지금 < closes_at · 품절)과 상세의 회차 시각 · 옵션별 가용 수량,
           관리자 목록의 같은 칸, 관리자 수정의 오픈 판정(회차 opens_at — 사전예약 오픈 뒤 수정 금지),
           판매 방식별 준비(등록 이벤트를 받은 서비스가 회차 행 · 재고 행을 만들었는가)에 쓰며 읽기 전용 저장소 한 곳에서만 읽는다.
           그 두 표에 INSERT · UPDATE · DELETE 가 있으면 지적한다. 다른 클래스가 같은 표를 읽어도 지적한다.
           src/test 의 시험 코드가 시험 데이터로 그 표에 INSERT · UPDATE 하는 것은 예외다 — 운영 코드 경계가 아니라 시험 준비 · 경쟁 재현이다.
         - shipment_batches 는 읽지 않는다. 상세의 배송 안내는 preorder 의 공개 API(GET /api/v1/preorders/products/{id}/shipment-batches)를 프론트가 부른다.
-        - products.sale_mode 는 등록 뒤 바꾸지 않는다. order 의 재고 검증(일반 판매 상품에만 재고 행)이 이 계약에 기댄다.
-          바꾸는 경로가 생기면 지적한다.
+        - products.sale_mode 를 등록 뒤 바꾸는 길은 하나뿐이다 — 마감된 사전예약을 일반 상품으로 바꾸는 전환(ProductEditService.convertToInStock,
+          POST /api/v1/admin/products/{id}/conversion). 반대(일반 → 사전예약)는 없다. order 의 재고 검증(일반 판매 상품에만 재고 행)이 이 계약에 기댄다 —
+          전환은 판매 방식을 바꾼 뒤에 재고 이벤트(IN_STOCK_PRODUCT_REGISTERED)를 보내므로 사전예약 상품에 재고 행이 생기지 않는다.
+          그 밖에 판매 방식을 바꾸는 경로가 생기거나, 전환이 마감 전 · 회차 취소 상품을 허용하면 지적한다.
         - preorders · orders · payments · cart_items 는 읽기도 지적한다.
           리뷰를 쓸 자격(내 주문상품 · 배송 완료 · 일반 주문)과 작성자 이름(실명 우선)은 order · member 내부 API 로 묻는다(contracts/order-internal.md ·
           member-internal.md). orders · order_items · customers 를 읽어 판정하면 지적한다.
         - sku 는 모델 안에서 유일하다. 중복 검사를 애플리케이션 조회로만 하면 UNIQUE 제약을 함께 쓰도록 제안한다.
-        - 상품 · 옵션의 물리 삭제는 지적한다. 신청 이력이 있으므로 상태로 숨긴다.
+        - 상품 · 옵션의 물리 삭제는 지적한다. 신청 이력이 있으므로 상태로 숨긴다. 상품 삭제는 소프트 삭제(products.deleted_at, ProductDeleteService)다.
+          삭제한 상품은 비공개다(ck_product_deleted_hidden) — 회원 쪽 경로는 공개 여부로 이미 거른다. 공개 여부를 보지 않는 경로(관리자 목록 · 상세 · 수정,
+          증정품 후보 · 홍보 연결 후보, 내부 조회 API)가 deleted_at 을 거르지 않으면 지적한다. 수정 경로는 ProductRepository.findForUpdate 가 거른다.
+          예외: 등록 재생 · 등록 상태 조회는 같은 멱등 키에 그 상품 id 를 그대로 돌려준다(키는 다시 쓸 수 없다 — 삭제해도 새 상품을 만들지 않는다).
+          홍보 묶기 검증은 상품을 공유 잠금(ProductRepository.findAllForShare)으로 읽는다 — 잠그지 않고 읽으면 겹친 삭제의 커밋 전 값으로 통과한다.
         - 모집 오픈 이후 모집 일정 · 배송 기준을 바꾸는 경로는 지적한다.
         - 가격 · 이름 변경이 과거 예약에 소급되는 구조라면 지적한다. 예약은 접수 시점 값을 복사해 쓴다.
         - 카테고리 parent_id 를 쓰는 경로가 순환(자기 자신 포함) · 3단계를 검사하지 않으면 지적한다. DB 는 못 막는다.
@@ -288,6 +298,14 @@ reviews:
           이벤트 payload 에 상품 id 를 다시 넣으면 지적한다 — 봉투의 aggregateId 로만 싣는다. 예외는 PREORDER_CAMPAIGN_CANCELED 하나다
           (preorder 가 먼저 정의한 레코드가 payload 의 productId 로 읽는다 — 이 이벤트에서 productId 를 빼면 지적한다).
         - /internal/** 은 USER · ADMIN 만 허용하고 비공개 · 미완료 상품도 200 으로 준다. 여기서 먼저 숨기면 지적한다 — 숨김 판정은 호출자다.
+          예외는 삭제한 상품 하나다 — 숨김이 아니라 없는 상품이라 상품 옵션 조회는 404 PRODUCT_NOT_FOUND, 옵션 묶음 조회에서는 빠진다.
+        - 사진 주소를 바꾸는 저장(상품 등록 · 사진 넣기/바꾸기/빼기 · 홍보 만들기/고치기 · 상품 삭제)이 ImageAttachments.sync 를 같은
+          트랜잭션에서 부르지 않으면 지적한다 — 빠진 사진이 USED 로 남거나 붙인 사진이 UNUSED 로 남아 정리 배치가 쓰는 사진을 지운다.
+          붙이기는 멱등 키 INSERT 뒤에 부른다(앞에서 부르면 같은 키 동시 재전송이 앞 요청이 붙인 USED 를 보고 400 이 된다).
+        - images 를 잠그거나 고치는 문장이 id(PRIMARY) 가 아닌 object_key 로 걸리면 지적한다(정리 배치의 id 삭제와 교착).
+          붙일 것과 뗄 것을 두 문장으로 나눠 잠그면 지적한다 — 한 문장으로 합쳐 잠근다.
+        - 업로드가 올린 파일 바이트를 그대로 S3 에 올리면 지적한다 — 디코딩 뒤 다시 인코딩한 바이트만 올린다(메타데이터 · 덧붙인 바이트 제거).
+          형식은 앞 바이트로 정하고, 픽셀을 풀기 전에 헤더의 가로 · 세로를 검사한다. 동시 처리 허가 밖에서 파일을 힙에 다 올리면 지적한다.
 
     # ─────────────────────────────────────────────────────────────
     # 6. member — 로그인 · 토큰 · 회원
@@ -416,7 +434,7 @@ reviews:
           - batch → 전부 (읽기 전용 모듈)
 
           허용된 쓰기 — 소유가 아닌 테이블에 쓰는 것 중 이것만 실패가 아니다.
-          - 없음
+          - batch → images (기준 시간이 지난 UNUSED 행 삭제 — id 로, 드로우 스냅샷이 가리키지 않을 때만. 그 S3 객체 삭제는 행 삭제 커밋 뒤)
 
           위 조건에 해당하지 않으면 통과로 표시한다.
       - name: "동시성 안전"

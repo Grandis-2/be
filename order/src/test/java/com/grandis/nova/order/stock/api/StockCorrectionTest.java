@@ -79,7 +79,7 @@ class StockCorrectionTest {
         // 결제 반영만 하고 판매 확정은 하지 않는다 — 결제 반영이 판매를 놓친 어긋남
         tx.executeWithoutResult(status -> {
             orderLedger.requestPayment(paidWithoutSale.id(), UUID.randomUUID().toString(), EventCause.user());
-            orderLedger.settlePayment(paidWithoutSale.id(), OrderTrigger.PAYMENT_APPROVED, null, EventCause.system("PAYMENT_APPROVED"));
+            orderLedger.settlePayment(paidWithoutSale.id(), OrderTrigger.PAYMENT_APPROVED, null, null, EventCause.system("PAYMENT_APPROVED"));
         });
 
         preview(product.productId(), option).andExpect(status().isOk())

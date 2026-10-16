@@ -93,13 +93,13 @@ class OrderTest {
     @Test
     void constructorAcceptsPreorderOrderWithoutPreorderTokenButChecksPresentOne() {
         assertThat(new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), null, null, OrderStatus.AWAITING_PAYMENT, null,
-                Money.won(1000), null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH).preorderToken()).isNull();
+                Money.won(1000), null, null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH).preorderToken()).isNull();
         assertThatThrownBy(() -> new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), "0b8f6a3e", null,
-                OrderStatus.AWAITING_PAYMENT, null, Money.won(1000), null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH))
+                OrderStatus.AWAITING_PAYMENT, null, Money.won(1000), null, null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("36");
         assertThatThrownBy(() -> new Order(TestIds.id(1), TestIds.id(1), OrderSource.CART, null, PREORDER_UUID, null,
-                OrderStatus.AWAITING_PAYMENT, null, Money.won(1000), Instant.EPOCH, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH))
+                OrderStatus.AWAITING_PAYMENT, null, Money.won(1000), Instant.EPOCH, null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("preorderToken");
     }
@@ -114,7 +114,7 @@ class OrderTest {
     @Test
     void toStringCarriesNoPersonalData() {
         Order order = new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, null, OrderStatus.AWAITING_PAYMENT, null,
-                Money.won(1000), null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH);
+                Money.won(1000), null, null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH);
 
         assertThat(order.toString())
                 .contains("status=AWAITING_PAYMENT")
@@ -138,10 +138,10 @@ class OrderTest {
         assertThatThrownBy(() -> order(OrderSource.PREORDER, TestIds.id(7), OrderStatus.AUTHORIZING, null, null, 2))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, null,
-                OrderStatus.AWAITING_PAYMENT, "attempt-0001", Money.won(1000), null, null, null, SHIP_TO, 1,
+                OrderStatus.AWAITING_PAYMENT, "attempt-0001", Money.won(1000), null, null, null, null, SHIP_TO, 1,
                 Instant.EPOCH, Instant.EPOCH)).isInstanceOf(IllegalArgumentException.class);
         assertThat(new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, null, OrderStatus.AUTHORIZING,
-                "attempt-0001", Money.won(1000), null, null, null, SHIP_TO, 2, Instant.EPOCH, Instant.EPOCH)
+                "attempt-0001", Money.won(1000), null, null, null, null, SHIP_TO, 2, Instant.EPOCH, Instant.EPOCH)
                 .authorizingProviderOrderId()).isEqualTo("attempt-0001");
     }
 
@@ -150,12 +150,12 @@ class OrderTest {
         String preorderToken = source == OrderSource.PREORDER ? PREORDER_UUID : null;
         UUID idempotencyKey = source == OrderSource.BUY_NOW ? TestIds.id(50) : null;
         return new Order(TestIds.id(1), TestIds.id(1), source, preorderId, preorderToken, idempotencyKey, status, null, Money.won(1000), paymentDueAt, stockReleasedAt, null,
-                SHIP_TO, eventSequence, Instant.EPOCH, Instant.EPOCH);
+                null, SHIP_TO, eventSequence, Instant.EPOCH, Instant.EPOCH);
     }
 
     private static Order refundFailed(OrderStatus status) {
         return new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, null, status, null,
-                Money.won(1000), null, null, Instant.EPOCH, SHIP_TO, 3, Instant.EPOCH, Instant.EPOCH);
+                Money.won(1000), null, null, Instant.EPOCH, null, SHIP_TO, 3, Instant.EPOCH, Instant.EPOCH);
     }
 
     @Test

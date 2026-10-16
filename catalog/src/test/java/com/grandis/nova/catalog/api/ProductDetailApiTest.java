@@ -238,7 +238,7 @@ class ProductDetailApiTest {
         }
 
         @Test
-        @DisplayName("판매 중지는 200 에 상태 그대로, 마감 뒤 120시간이 지난 사전예약도 직접 링크로는 보인다")
+        @DisplayName("판매 중지는 200 에 상태 그대로, 목록에서 빠진 마감 사전예약도 직접 링크로는 보인다")
         void pausedAndLongClosedAreStillViewable() throws Exception {
             UUID paused = visibleInStock();
             fixtures.option(paused, "ACTIVE");

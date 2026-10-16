@@ -13,6 +13,7 @@ allprojects {
 ext {
     awsSdkVersion = '2.55.6'
     flociTestcontainersVersion = '2.16.1'
+    resilience4jVersion = '2.4.0'
 }
 
 subprojects {

@@ -29,6 +29,8 @@ public record AdminProductListItem(
         boolean registrationCompleted,
         int optionCount,
         BigDecimal minPrice,
+        BigDecimal minListPrice,
+        int discountRate,
         boolean sellable,
         boolean soldOut,
         PreorderSaleStatus preorderStatus,
@@ -38,7 +40,7 @@ public record AdminProductListItem(
 
     static AdminProductListItem of(ProductListItem item, boolean visible, boolean registrationCompleted, int optionCount) {
         return new AdminProductListItem(item.productId(), item.saleMode(), item.title(), item.brand(), item.modelName(), item.imageUrl(), item.status(),
-                visible, registrationCompleted, optionCount, item.minPrice(), item.sellable(), item.soldOut(),
+                visible, registrationCompleted, optionCount, item.minPrice(), item.minListPrice(), item.discountRate(), item.sellable(), item.soldOut(),
                 item.preorderStatus(), item.opensAt(), item.closesAt());
     }
 }

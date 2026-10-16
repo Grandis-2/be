@@ -3,18 +3,22 @@ package com.grandis.nova.catalog.edit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.doThrow;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.grandis.nova.catalog.CatalogErrorCode;
+import com.grandis.nova.catalog.integration.DrawGiftClient;
 import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
+import com.grandis.nova.catalog.registration.ProductRegistrationService;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.jpa.StorageClock;
+import com.grandis.nova.common.web.ApiResponse;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
@@ -42,6 +46,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.test.context.bean.override.convention.TestBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -63,7 +68,10 @@ class ProductEditRaceTest {
     Clock clock;
 
     @MockitoSpyBean ProductEditService editService;
+    @MockitoSpyBean ProductRegistrationService registrationService;
     @Autowired ProductImageEditService imageEditService;
+    @Autowired ProductDeleteService deleteService;
+    @MockitoBean DrawGiftClient drawGifts;
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired PlatformTransactionManager transactionManager;
@@ -93,7 +101,7 @@ class ProductEditRaceTest {
         UUID productId = registerInStock();
         String storage512 = fixtures.valueId(productId, "storage", "512GB");
         // 첫 수정: 기본가 1,000,000 → 1,100,000. 둘째 수정: 512GB 추가금 200,000 → 300,000 — 첫 수정이 커밋되기 전에 시작한다
-        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null)),
+        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null, null)),
                 () -> editService.editOptionValue(productId, storage512, new OptionValueEditRequest(null, new BigDecimal("300000"), null)));
 
         assertThat(price(productId, "256GB")).isEqualByComparingTo("1100000");
@@ -106,7 +114,7 @@ class ProductEditRaceTest {
     void variantEditAfterRecomputeKeepsTheNewPrice() throws Exception {
         UUID productId = registerInStock();
         UUID option512 = optionId(productId, "512GB");
-        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null)),
+        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null, null)),
                 () -> editService.editVariant(productId, option512, new VariantEditRequest(SaleStatus.PAUSED)));
 
         assertThat(optionStatus(option512)).isEqualTo("PAUSED");
@@ -120,7 +128,7 @@ class ProductEditRaceTest {
         UUID productId = registerInStock();
         UUID option512 = optionId(productId, "512GB");
         interleave(() -> editService.editVariant(productId, option512, new VariantEditRequest(SaleStatus.PAUSED)),
-                () -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null)));
+                () -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null, null)));
 
         assertThat(optionStatus(option512)).as("옛 상태를 읽어 두고 쓰면 ACTIVE 로 되돌아간다").isEqualTo("PAUSED");
         assertThat(price(productId, "512GB")).isEqualByComparingTo("1300000");
@@ -238,6 +246,21 @@ class ProductEditRaceTest {
     }
 
     @Test
+    @DisplayName("등록도 잠금 실패(교착 희생 · 잠금 대기 초과)로 끝나면 409 STATE_CONFLICT · retryable — 사진 붙이기가 이미지 행을 잠근다")
+    void mappingOfLockFailureOnRegistration() throws Exception {
+        doThrow(new CannotAcquireLockException("Deadlock found when trying to get lock"))
+                .when(registrationService).register(any(), any());
+
+        String body = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/v1/admin/products")
+                        .header("Idempotency-Key", "k-" + ShopFixtures.unique())
+                        .contentType(MediaType.APPLICATION_JSON).with(user("admin").roles("ADMIN")).content(inStockBody()))
+                .andExpect(status().isConflict()).andReturn().getResponse().getContentAsString();
+        var error = JSON.readTree(body).get("error");
+        assertThat(error.get("code").asString()).isEqualTo("STATE_CONFLICT");
+        assertThat(error.get("details").get("retryable").asBoolean()).isTrue();
+    }
+
+    @Test
     @DisplayName("오픈 3분 전 그 순간(지금 == opens_at − 3분)부터 잠긴다 — 409. 1마이크로초 전은 고칠 수 있다")
     void freezeBoundaryIsInclusive() throws Exception {
         UUID productId = registerPreorder();
@@ -268,6 +291,23 @@ class ProductEditRaceTest {
         assertStateConflict(() -> editService.editProduct(productId, titleOnly("오픈을 넘긴 수정")));
         assertThat(reads.get()).as("시계를 두 번 이상 읽었다 — 첫 판정은 통과했다").isGreaterThanOrEqualTo(2);
         assertThat(title(productId)).isEqualTo("Race");
+    }
+
+    @Test
+    @DisplayName("삭제도 같다 — 첫 판정 뒤 잠금 시각(오픈 3분 전)이 지나면 커밋하지 않는다: 409, deleted_at 그대로 비어 있다")
+    void openingDuringTheDeleteRejectsTheCommit() throws Exception {
+        UUID productId = registerPreorder();
+        Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.MICROS);
+        fixtures.campaign(productId, opensAt, opensAt.plus(Duration.ofDays(1)));
+        given(drawGifts.getGift(productId)).willReturn(ApiResponse.ok(new DrawGiftClient.DrawGift(productId, false)));
+
+        AtomicInteger reads = new AtomicInteger();
+        Instant freezesAt = opensAt.minus(ProductEditService.FREEZE_BEFORE_OPEN);
+        CLOCK.next = () -> reads.getAndIncrement() == 0 ? freezesAt.minusMillis(1) : freezesAt;   // 첫 판정 뒤 시간이 잠금 시각을 넘는다
+        assertStateConflict(() -> deleteService.delete(productId));
+        assertThat(reads.get()).as("첫 판정은 통과했다").isGreaterThanOrEqualTo(2);
+        assertThat(jdbcTemplate.queryForObject("SELECT deleted_at IS NULL FROM products WHERE id = ?", Boolean.class,
+                (Object) UuidBinary.toBytes(productId))).isTrue();
     }
 
     @Test
@@ -323,7 +363,7 @@ class ProductEditRaceTest {
     @DisplayName("기본가 수정이 커밋되기 전에 공개 전환이 들어오면 기다렸다가 새 기본가 위에 적는다 — 기본가 · 옵션 가격 · 공개 여부가 모두 새 값")
     void visibilityChangeSerializesWithEdit() throws Exception {
         UUID productId = registerInStock();
-        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null)),
+        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null, null)),
                 () -> editService.changeVisibility(productId, new VisibilityChangeRequest(true)));
 
         assertThat(jdbcTemplate.queryForObject("SELECT base_price FROM products WHERE id = ?", BigDecimal.class, UuidBinary.toBytes(productId)))
@@ -486,7 +526,7 @@ class ProductEditRaceTest {
     }
 
     private static ProductEditRequest titleOnly(String title) {
-        return new ProductEditRequest(title, null, null, null, null, null, null);
+        return new ProductEditRequest(title, null, null, null, null, null, null, null);
     }
 
     private static void assertStateConflict(Runnable edit) {
@@ -604,11 +644,15 @@ class ProductEditRaceTest {
 
     /** 축 storage 하나(256GB +0 · 512GB +200,000), 기본가 1,000,000. */
     private UUID registerInStock() throws Exception {
-        return register("""
+        return register(inStockBody());
+    }
+
+    private String inStockBody() {
+        return """
                 { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Race", "brand": "APPLE", "modelName": "A0001", "visible": false, "basePrice": 1000000,
                   "optionAxes": [ { "key": "storage", "label": "용량", "values": [ { "value": "256GB" }, { "value": "512GB", "surcharge": 200000 } ] } ],
                   "combinations": [ { "selections": { "storage": "256GB" }, "stock": 1 }, { "selections": { "storage": "512GB" }, "stock": 1 } ] }
-                """.formatted(categoryId));
+                """.formatted(categoryId);
     }
 
     private UUID registerPreorder() throws Exception {

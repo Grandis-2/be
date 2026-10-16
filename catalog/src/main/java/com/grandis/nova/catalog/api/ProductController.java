@@ -1,10 +1,9 @@
 package com.grandis.nova.catalog.api;
 
-import com.grandis.nova.catalog.detail.ProductDetailService;
+import com.grandis.nova.catalog.cache.CatalogReadCache;
 import com.grandis.nova.catalog.detail.ProductDetailView;
 import com.grandis.nova.catalog.listing.ProductListFilter;
 import com.grandis.nova.catalog.listing.ProductListItem;
-import com.grandis.nova.catalog.listing.ProductListingService;
 import com.grandis.nova.catalog.listing.ProductSort;
 import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.SaleMode;
@@ -12,12 +11,14 @@ import com.grandis.nova.common.web.ApiResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Clock;
 import java.util.List;
 import java.util.UUID;
 
@@ -31,33 +32,33 @@ import java.util.UUID;
 @RequestMapping("/api/v1/products")
 public class ProductController {
 
-    private final ProductListingService listingService;
-    private final ProductDetailService detailService;
+    private final CatalogReadCache cache;
+    private final Clock clock;
 
-    public ProductController(ProductListingService listingService, ProductDetailService detailService) {
-        this.listingService = listingService;
-        this.detailService = detailService;
+    public ProductController(CatalogReadCache cache, Clock clock) {
+        this.cache = cache;
+        this.clock = clock;
     }
 
     @Operation(summary = "상품 상세(로그인 없이)")
     @SecurityRequirements
     @GetMapping("/{productId}")
-    public ApiResponse<ProductDetailView> product(@PathVariable UUID productId) {
-        return ApiResponse.ok(detailService.findProduct(productId));
+    public ResponseEntity<ApiResponse<ProductDetailView>> product(@PathVariable UUID productId) {
+        return PublicCache.ok(cache.product(productId), CatalogReadCache.DETAIL_TTL, PublicCache.PRODUCT, clock);
     }
 
     @Operation(summary = "옵션(조합) 상세(로그인 없이)")
     @SecurityRequirements
     @GetMapping("/{productId}/variants/{variantId}")
-    public ApiResponse<ProductDetailView.Variant> variant(@PathVariable UUID productId, @PathVariable UUID variantId) {
-        return ApiResponse.ok(detailService.findVariant(productId, variantId));
+    public ResponseEntity<ApiResponse<ProductDetailView.Variant>> variant(@PathVariable UUID productId, @PathVariable UUID variantId) {
+        return PublicCache.ok(cache.variant(productId, variantId), CatalogReadCache.DETAIL_TTL, PublicCache.PRODUCT, clock);
     }
 
-    @Operation(summary = "상품 목록 · 검색(로그인 없이)", description = "sort: NEWEST(최신순, 기본) · PRICE_ASC(낮은 가격순) · PRICE_DESC(높은 가격순). 가격은 판매 중인 옵션의 최저가이고 판매 중인 옵션이 없는 상품은 가격순에서 맨 뒤. "
+    @Operation(summary = "상품 목록 · 검색(로그인 없이)", description = "사전예약은 접수 중(오픈 시각 ~ 마감 시각)인 상품만 나온다 — 오픈 전 · 마감 뒤에는 목록 · 검색에 안 나온다(상세 · 홍보에는 보인다). sort: NEWEST(최신순, 기본) · PRICE_ASC(낮은 가격순) · PRICE_DESC(높은 가격순). 가격은 판매 중인 옵션의 최저 할인가(minPrice)이고 판매 중인 옵션이 없는 상품은 가격순에서 맨 뒤. "
             + "q 는 상품명 · 태그 · 모델명 · 브랜드 코드 부분 일치, brand · color · storage 는 이름을 반복해 여러 값(OR — brand=APPLE&brand=LG)")
     @SecurityRequirements
     @GetMapping
-    public ApiResponse<ProductPageResponse<ProductListItem>> list(
+    public ResponseEntity<ApiResponse<ProductPageResponse<ProductListItem>>> list(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) UUID categoryId,
             @RequestParam(required = false) SaleMode saleMode,
@@ -68,7 +69,7 @@ public class ProductController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         ProductListFilter filter = new ProductListFilter(q, categoryId, saleMode, brand, color, storage);
-        return ApiResponse.ok(ProductPageResponse.from(
-                listingService.list(filter, sort, PageSizes.requirePage(page), PageSizes.require(size))));
+        return PublicCache.ok(cache.products(filter, sort, PageSizes.requirePage(page), PageSizes.require(size)).map(ProductPageResponse::from),
+                CatalogReadCache.PRODUCT_TTL, PublicCache.PRODUCT, clock);
     }
 }
