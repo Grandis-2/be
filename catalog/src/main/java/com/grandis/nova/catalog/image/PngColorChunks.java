@@ -125,7 +125,9 @@ final class PngColorChunks {
         out.writeBytes("ICC Profile".getBytes(StandardCharsets.ISO_8859_1));
         out.write(0);
         out.write(0);  // 압축 방식 0(zlib)
-        try (DeflaterOutputStream deflate = new DeflaterOutputStream(out, new Deflater(Deflater.BEST_COMPRESSION))) {
+        // 넘긴 Deflater 는 스트림을 닫아도 닫히지 않는다(JDK 25 실측) — 같이 닫아 네이티브 압축기를 GC 에 맡기지 않는다
+        try (Deflater compressor = new Deflater(Deflater.BEST_COMPRESSION);
+             DeflaterOutputStream deflate = new DeflaterOutputStream(out, compressor)) {
             deflate.write(profile.getData());
         } catch (java.io.IOException e) {
             throw new java.io.UncheckedIOException(e);

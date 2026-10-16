@@ -65,6 +65,8 @@ class ImageAttachmentApiTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired ImageStore store;
     @Autowired ImageAttachments attachments;
+    @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
+    org.springframework.transaction.support.TransactionTemplate transaction;
     @MockitoBean DrawGiftClient drawGifts;
 
     ShopFixtures fixtures;
@@ -74,6 +76,7 @@ class ImageAttachmentApiTest {
     void setUp() {
         fixtures = new ShopFixtures(jdbc);
         categoryId = fixtures.category();
+        transaction = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
     }
 
     @Test
@@ -346,6 +349,36 @@ class ImageAttachmentApiTest {
                 assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM products WHERE JSON_SEARCH(options, 'one', ?) IS NOT NULL", Long.class, url))
                         .as("문서에 실린 곳도 하나").isEqualTo(1L);
             }
+        }
+    }
+
+    @Test
+    @DisplayName("같은 사진 id 에 확장자만 다른 주소가 함께 오면 어느 순서든 올리지 않은 쪽 칸의 400 — 앞의 주소가 뒤의 주소에 가려 검사를 건너뛰지 않는다")
+    void sameIdWithOtherExtensionIsRejectedInEitherOrder() throws Exception {
+        long promotions = jdbc.queryForObject("SELECT COUNT(*) FROM promotions", Long.class);
+        String jpg = uploaded(ImagePurpose.PROMOTION);
+        String png = jpg.replace(".jpg", ".png");   // 올린 적 없는 객체
+        expectValidation(createPromotion(promotionBody(png, List.of(jpg), preorder())), "thumbnailUrl");
+        expectValidation(createPromotion(promotionBody(jpg, List.of(png), preorder())), "detailImageUrls[0]");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM promotions", Long.class)).as("홍보가 생기지 않았다").isEqualTo(promotions);
+        assertThat(statuses(jpg)).as("올린 사진도 붙지 않았다").containsOnly("UNUSED");
+
+        String b0 = uploaded(ImagePurpose.PRODUCT);
+        expectValidation(register(colorBody(b0.replace(".jpg", ".png"), b0, uploaded(ImagePurpose.PRODUCT))), "images.gallery[0].items[0].url");
+        assertThat(statuses(b0)).as("등록도 올린 사진이 붙지 않았다").containsOnly("UNUSED");
+    }
+
+    @Test
+    @DisplayName("떼기도 같은 id 의 주소를 전부 본다 — 진짜 · 가짜 확장자가 함께 든 옛 문서에서 둘 다 빼면 진짜 사진이 UNUSED(어느 순서든)")
+    void detachChecksEveryKeyOfTheSameId() {
+        for (boolean realFirst : List.of(true, false)) {
+            String real = uploaded(ImagePurpose.PRODUCT);
+            String fake = real.replace(".jpg", ".png");
+            List<String> before = realFirst ? List.of(real, fake) : List.of(fake, real);
+            transaction.executeWithoutResult(status -> attachments.sync(ImagePurpose.PRODUCT, List.of(), List.of(real), url -> "url"));
+            assertThat(statuses(real)).containsOnly("USED");
+            transaction.executeWithoutResult(status -> attachments.sync(ImagePurpose.PRODUCT, before, List.of(), url -> "url"));
+            assertThat(statuses(real)).as("진짜가 앞이면 %s", realFirst).containsOnly("UNUSED");
         }
     }
 
