@@ -340,7 +340,6 @@ class LocalReadCacheTest {
             for (int i = 0; i < 3; i++) {
                 results.add(pool.submit(() -> call(cache, loader)));
             }
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
             awaitWaiting(cache, "shared", 3);   // 나머지 셋이 진행 중 조회에 붙을 때까지
             release.countDown();
             java.util.List<String> values = new java.util.ArrayList<>();
