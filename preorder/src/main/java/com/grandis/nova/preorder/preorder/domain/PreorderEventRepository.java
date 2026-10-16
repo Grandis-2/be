@@ -15,4 +15,7 @@ public interface PreorderEventRepository extends JpaRepository<PreorderEvent, Pr
     /** 그 상태로 들어간 가장 최근 이력. 취소를 누가 시작했는지 볼 때 쓴다. */
     Optional<PreorderEvent> findFirstByPreorderIdAndToStatusOrderByEventSequenceDesc(UUID preorderId,
                                                                                     PreorderStatus toStatus);
+
+    boolean existsByPreorderIdAndFromStatusAndToStatus(UUID preorderId, PreorderStatus fromStatus,
+                                                       PreorderStatus toStatus);
 }

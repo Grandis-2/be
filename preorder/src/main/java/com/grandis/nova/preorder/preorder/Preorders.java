@@ -103,6 +103,12 @@ public class Preorders {
                 .map(PreorderEvent::toHistoryEntry);
     }
 
+    /** 주문 쪽에서 취소가 거절돼 결제 가능(REGISTERED)으로 돌아온 적이 있는가. */
+    public boolean wasCancelRejectedToRegistered(UUID preorderId) {
+        return events.existsByPreorderIdAndFromStatusAndToStatus(preorderId, PreorderStatus.CANCELING,
+                PreorderStatus.REGISTERED);
+    }
+
     /** 이력(번호 순). */
     public List<PreorderHistoryEntry> history(UUID preorderId) {
         return events.findByPreorderIdOrderByEventSequence(preorderId).stream()

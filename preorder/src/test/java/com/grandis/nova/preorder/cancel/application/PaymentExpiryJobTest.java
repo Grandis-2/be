@@ -33,6 +33,9 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.AdditionalAnswers.delegatesTo;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 
@@ -159,6 +162,23 @@ class PaymentExpiryJobTest {
 
         assertThat(status(overdue)).isEqualTo(PreorderStatus.REGISTERED);
         assertThat(fixtures.outboxEvents(CANCEL_REQUESTED, overdue.id())).as("취소 요청은 처음 한 번뿐").isEqualTo(1);
+    }
+
+    /** 후보를 읽은 뒤 잠그기 전에 다른 취소가 주문 쪽에서 거절돼 돌아왔다. 잠근 뒤 이력을 다시 보고 만료하지 않는다. */
+    @Test
+    void 후보를_고른_뒤_주문_쪽에서_취소가_거절돼_돌아오면_만료하지_않는다() {
+        Booking booking = overdue();
+        Preorders stale = mock(Preorders.class, delegatesTo(preorders));
+        doReturn(List.of(booking.token())).when(stale).findPaymentOverdue(any(), anyInt());
+        cancelStarter.start(preorders.getById(booking.id()), EventActor.USER, null, CancelReason.USER);
+        fire(booking.id(), new PreorderFact.CancelRejected("REJECTED_BY_ORDER:SHIPPED", null));
+
+        int started = new PaymentExpiryJob(stale, expiryCancelService,
+                new PaymentExpiryProperties(true, Duration.ofMinutes(1), WIDE_BATCH), meterRegistry, clock).expireOverdue();
+
+        assertThat(started).isZero();
+        assertThat(status(booking)).isEqualTo(PreorderStatus.REGISTERED);
+        assertThat(fixtures.outboxEvents(CANCEL_REQUESTED, booking.id())).as("사용자 취소의 요청 하나뿐").isEqualTo(1);
     }
 
     @Test
