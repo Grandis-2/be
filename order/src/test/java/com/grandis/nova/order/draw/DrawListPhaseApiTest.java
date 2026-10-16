@@ -107,6 +107,16 @@ class DrawListPhaseApiTest {
     }
 
     @Test
+    @DisplayName("빈 phase(phase=)는 거르지 않는다 — 이 시험의 세 단계 회차가 모두 나온다(회원 · 관리자)")
+    void blankPhaseListsAll() throws Exception {
+        for (String path : List.of("/api/v1/draws", "/api/v1/admin/draws")) {
+            List<String> ids = new ArrayList<>();
+            data(list(path, "")).get("items").forEach(item -> ids.add(item.get("drawId").asString()));
+            assertThat(ids).as(path).contains(mine.values().stream().map(UUID::toString).toArray(String[]::new));
+        }
+    }
+
+    @Test
     @DisplayName("경계는 단계 칸(phaseAt)과 같다 — 시작 시각 그 순간부터 응모 중(1µs · 1ns 전은 예정), 마감 시각 그 순간부터 마감(1µs · 1ns 전은 응모 중). now 가 µs 아래를 가져도 같다")
     void boundariesMatchPhaseAt() {
         Instant opensAt = Instant.now().plus(Duration.ofDays(30)).truncatedTo(ChronoUnit.MICROS);
