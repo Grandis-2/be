@@ -53,14 +53,14 @@ public class ImageAttachments {
     @Transactional(propagation = Propagation.MANDATORY)
     public void sync(ImagePurpose purpose, Collection<String> before, Collection<String> after, Function<String, String> fieldOf) {
         Set<String> beforeUrls = new LinkedHashSet<>(before);
-        Map<String, String> beforeKeys = new LinkedHashMap<>();  // 키 → 주소
+        Set<String> beforeKeys = new LinkedHashSet<>();
         for (String url : beforeUrls) {
-            ImageKeys.keyOf(url).ifPresent(key -> beforeKeys.putIfAbsent(key, url));
+            ImageKeys.keyOf(url).ifPresent(beforeKeys::add);
         }
         // 뗄 것은 "이전 키 − 이후 키 전부" 다 — 그대로 둔 주소의 키도 이후 키에 넣는다. 같은 사진을 두 모양(쿼리 · 다른 도메인)으로 든 옛 문서에서
         // 한 모양만 빼도 사진은 아직 쓰인다
         Set<String> afterKeys = new HashSet<>();
-        // id 하나에 주소가 여럿일 수 있다(확장자 · 접두만 다른 주소) — 하나로 덮으면 앞의 주소가 검사를 건너뛴다. 전부 들고 행의 키와 하나씩 맞춘다
+        // id 하나에 주소가 여럿일 수 있다(확장자만 다른 주소 — 접두가 다르면 아래에서 먼저 거절) — 하나로 덮으면 앞의 주소가 검사를 건너뛴다. 전부 들고 행의 키와 하나씩 맞춘다
         Map<UUID, List<Attach>> attach = new LinkedHashMap<>();
         for (String url : new LinkedHashSet<>(after)) {
             Optional<String> key = ImageKeys.keyOf(url);
@@ -75,7 +75,7 @@ public class ImageAttachments {
                 throw ValidationFailures.of(field, "사진은 업로드 API 가 준 주소(" + cdnPrefix + purpose.keyPrefix() + "…) 그대로만 받습니다.");
             }
             afterKeys.add(key.get());
-            if (beforeKeys.containsKey(key.get())) {
+            if (beforeKeys.contains(key.get())) {
                 continue;  // 이미 이 문서가 쓰는 사진 — 도메인만 바뀐 옛 주소를 새 주소로 바꿔 저장했다
             }
             if (!key.get().startsWith(purpose.keyPrefix())) {
@@ -84,10 +84,10 @@ public class ImageAttachments {
             UUID id = ImageKeys.idOf(key.get()).orElseThrow(() -> notUploaded(field));
             attach.computeIfAbsent(id, ignored -> new ArrayList<>()).add(new Attach(key.get(), field));
         }
-        Map<UUID, String> detach = new LinkedHashMap<>();  // id → 키
-        beforeKeys.keySet().forEach(key -> {
+        Map<UUID, Set<String>> detach = new LinkedHashMap<>();  // id → 키들(붙이기와 같은 까닭으로 덮지 않는다)
+        beforeKeys.forEach(key -> {
             if (!afterKeys.contains(key)) {
-                ImageKeys.idOf(key).ifPresent(id -> detach.put(id, key));
+                ImageKeys.idOf(key).ifPresent(id -> detach.computeIfAbsent(id, ignored -> new LinkedHashSet<>()).add(key));
             }
         });
         if (attach.isEmpty() && detach.isEmpty()) {
@@ -106,9 +106,9 @@ public class ImageAttachments {
             }
         });
         Set<UUID> detached = new LinkedHashSet<>();
-        detach.forEach((id, key) -> {
+        detach.forEach((id, keys) -> {
             ImageStore.Row row = rows.get(id);
-            if (row != null && row.objectKey().equals(key) && row.status() == ImageStore.Status.USED) {
+            if (row != null && keys.contains(row.objectKey()) && row.status() == ImageStore.Status.USED) {
                 detached.add(id);
             }
         });

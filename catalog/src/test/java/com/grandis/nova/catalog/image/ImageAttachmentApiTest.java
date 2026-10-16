@@ -65,6 +65,8 @@ class ImageAttachmentApiTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired ImageStore store;
     @Autowired ImageAttachments attachments;
+    @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
+    org.springframework.transaction.support.TransactionTemplate transaction;
     @MockitoBean DrawGiftClient drawGifts;
 
     ShopFixtures fixtures;
@@ -74,6 +76,7 @@ class ImageAttachmentApiTest {
     void setUp() {
         fixtures = new ShopFixtures(jdbc);
         categoryId = fixtures.category();
+        transaction = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
     }
 
     @Test
@@ -362,6 +365,21 @@ class ImageAttachmentApiTest {
 
         String b0 = uploaded(ImagePurpose.PRODUCT);
         expectValidation(register(colorBody(b0.replace(".jpg", ".png"), b0, uploaded(ImagePurpose.PRODUCT))), "images.gallery[0].items[0].url");
+        assertThat(statuses(b0)).as("등록도 롤백 — 올린 사진이 붙지 않았다").containsOnly("UNUSED");
+    }
+
+    @Test
+    @DisplayName("떼기도 같은 id 의 주소를 전부 본다 — 진짜 · 가짜 확장자가 함께 든 옛 문서에서 둘 다 빼면 진짜 사진이 UNUSED(어느 순서든)")
+    void detachChecksEveryKeyOfTheSameId() {
+        for (boolean realFirst : List.of(true, false)) {
+            String real = uploaded(ImagePurpose.PRODUCT);
+            String fake = real.replace(".jpg", ".png");
+            List<String> before = realFirst ? List.of(real, fake) : List.of(fake, real);
+            transaction.executeWithoutResult(status -> attachments.sync(ImagePurpose.PRODUCT, List.of(), List.of(real), url -> "url"));
+            assertThat(statuses(real)).containsOnly("USED");
+            transaction.executeWithoutResult(status -> attachments.sync(ImagePurpose.PRODUCT, before, List.of(), url -> "url"));
+            assertThat(statuses(real)).as("진짜가 앞이면 %s", realFirst).containsOnly("UNUSED");
+        }
     }
 
     @Test
