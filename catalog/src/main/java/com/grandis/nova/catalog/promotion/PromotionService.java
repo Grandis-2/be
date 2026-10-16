@@ -189,7 +189,7 @@ public class PromotionService {
         for (int i = 0; i < request.productIds().size(); i++) {
             UUID productId = request.productIds().get(i);
             Product product = found.get(productId);
-            if (product == null) {
+            if (product == null || product.isDeleted()) {   // 삭제한 상품은 없는 상품이다 — 묶여 있었어도 다시 보내면 400
                 throw ValidationFailures.of("productIds[" + i + "]", "없는 상품입니다.");
             }
             if (!current.contains(productId) && (product.getSaleMode() != SaleMode.PREORDER || product.getCampaignCanceledAt() != null)) {
@@ -249,6 +249,7 @@ public class PromotionService {
         return new AdminPromotionView(promotion.getId(), promotion.getName(), promotion.statusOn(today), promotion.getStartDate(),
                 promotion.getEndDate(), promotion.getThumbnailUrl(), promotion.getDetailImageUrls(),
                 linked.stream().map(productsById::get)
+                        .filter(product -> !product.isDeleted())   // 삭제한 상품은 빼고 보인다 — 화면이 그대로 저장하면 묶음에서도 빠진다
                         .map(product -> new AdminPromotionView.LinkedProduct(product.getId(), product.getTitle(), product.getSaleMode()))
                         .toList(),
                 promotion.getCreatedAt(), promotion.getUpdatedAt());

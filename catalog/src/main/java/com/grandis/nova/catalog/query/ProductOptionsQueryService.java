@@ -45,12 +45,13 @@ public class ProductOptionsQueryService {
         this.crossReads = crossReads;
     }
 
-    /** 없는 상품이면 PRODUCT_NOT_FOUND(404). 옵션이 없는 상품은 404 가 아니라 빈 목록이다. */
+    /** 없는 상품이면 PRODUCT_NOT_FOUND(404) — 삭제한 상품도 없는 상품이다. 옵션이 없는 상품은 404 가 아니라 빈 목록이다. */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public ProductOptionsView findProductOptions(UUID productId) {
         ProductListingQueryRepository.Exposure exposure = crossReads.findExposure(productId)
                 .orElseThrow(() -> new BusinessException(CatalogErrorCode.PRODUCT_NOT_FOUND));
         Product product = products.findById(productId)
+                .filter(found -> !found.isDeleted())
                 .orElseThrow(() -> new BusinessException(CatalogErrorCode.PRODUCT_NOT_FOUND));
         List<ProductOptionsView.Option> optionViews = options.findByProductIdOrderByCreatedAtAscIdAsc(productId).stream()
                 .map(option -> toView(option, product))
@@ -60,7 +61,8 @@ public class ProductOptionsQueryService {
     }
 
     /**
-     * 옵션 여러 개를 그 상품의 사실과 함께 — 장바구니(order)가 부른다. 없는 옵션은 빠지고, 결과는 요청 순서(같은 id 는 한 번)다.
+     * 옵션 여러 개를 그 상품의 사실과 함께 — 장바구니(order)가 부른다. 없는 옵션은 빠지고(삭제한 상품의 옵션도), 결과는 요청 순서(같은 id 는 한 번)다.
+     * 호출자는 빠진 옵션을 판매 종료로 본다(contracts/order-internal.md).
      * 노출 칸 · 옵션 · 상품을 한 스냅샷으로 읽는다(REPEATABLE READ) — 따로 읽으면 사이에 커밋된 판매 중지 · 공개 전환이 섞여 한순간도 없던 조합이 나온다.
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
@@ -84,6 +86,9 @@ public class ProductOptionsQueryService {
             ProductListingQueryRepository.Exposure exposure = exposures.get(option.getProductId());
             if (product == null || exposure == null) {
                 throw new IllegalStateException("옵션의 상품이 같은 스냅샷에 없다(FK 위반?): option=" + optionId);
+            }
+            if (product.isDeleted()) {
+                continue;
             }
             ProductOptions document = documents.computeIfAbsent(product.getId(), id -> product.getOptions());
             ProductOptions.Warranty warranty = document.warranty();
