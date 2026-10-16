@@ -59,6 +59,8 @@ class InStockConversionApiTest {
         UUID productId = closedPreorder();
         Map<String, UUID> variants = variants(productId);
         long changedBefore = events(productId, "PREORDER_PRODUCT_CHANGED");
+        long versionBefore = jdbcTemplate.queryForObject("SELECT listing_version FROM products WHERE id = ?", Long.class,
+                (Object) UuidBinary.toBytes(productId));
 
         JsonNode product = data(convert(productId, """
                 { "discountRate": 10, "stocks": [ { "variantId": "%s", "stock": 5 }, { "variantId": "%s", "stock": 0 } ] }
@@ -78,6 +80,11 @@ class InStockConversionApiTest {
         registered.get("items").forEach(item -> stocks.put(item.get("optionId").asString(), item.get("stockTotal").asInt()));
         assertThat(stocks).containsOnly(Map.entry(variants.get("256GB").toString(), 5), Map.entry(variants.get("512GB").toString(), 0));
         assertThat(events(productId, "PREORDER_PRODUCT_CHANGED")).isEqualTo(changedBefore + 1);
+        // 판매 중 → 판매 중이라 셋이 그대로다 — 번호도 그대로(바뀔 때만 오른다)
+        JsonNode changed = JSON.readTree(jdbcTemplate.queryForObject(
+                "SELECT payload FROM catalog_outbox_events WHERE aggregate_id = ? AND event_type = 'PREORDER_PRODUCT_CHANGED' ORDER BY id DESC LIMIT 1",
+                String.class, (Object) UuidBinary.toBytes(productId)));
+        assertThat(changed.get("listingVersion").asLong()).isEqualTo(versionBefore);
     }
 
     @Test
