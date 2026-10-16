@@ -186,6 +186,35 @@ class LocalReadCacheTest {
     }
 
     @Test
+    @DisplayName("loader 가 몰래 던진 검사 예외도 기다린 쪽에 바로 — 원인(같은 객체)으로 감싼 IllegalStateException, 상한까지 기다리지 않는다")
+    void sneakyCheckedFailureReachesWaiters() throws Exception {
+        LocalReadCache<String, String> cache = cache(true, 1024);
+        java.io.IOException failure = new java.io.IOException("디스크");
+        CountDownLatch inLoader = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Throwable> leader = pool.submit(() -> thrown(() -> cache.entry("k", () -> {
+                inLoader.countDown();
+                await(release);
+                return sneakyThrow(failure);
+            })));
+            assertThat(inLoader.await(5, TimeUnit.SECONDS)).isTrue();
+            Future<Throwable> waiter = pool.submit(() -> thrown(() -> cache.entry("k", () -> load("x"))));
+            awaitWaiting(cache, "k", 1);
+            long started = System.nanoTime();
+            release.countDown();
+            assertThat(leader.get(5, TimeUnit.SECONDS)).isSameAs(failure);
+            Throwable seen = waiter.get(5, TimeUnit.SECONDS);
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).as("상한(5초)까지 기다리지 않았다").isLessThan(Duration.ofSeconds(1));
+            assertThat(seen).isInstanceOf(IllegalStateException.class).hasCause(failure);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
     @org.junit.jupiter.api.Timeout(10)
     @DisplayName("같은 키의 조회를 기다리는 쪽은 상한까지만 — 넘으면 503(다시 시도)")
     void waitingBeyondLimitIs503() throws Exception {
@@ -323,6 +352,20 @@ class LocalReadCacheTest {
             release.countDown();
             pool.shutdownNow();
         }
+    }
+
+    private static Throwable thrown(Runnable call) {
+        try {
+            call.run();
+            return null;
+        } catch (Throwable e) {
+            return e;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T, E extends Throwable> T sneakyThrow(Throwable e) throws E {
+        throw (E) e;
     }
 
     private static void awaitWaiting(LocalReadCache<String, String> cache, String key, int count) {

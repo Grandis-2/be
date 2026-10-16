@@ -32,7 +32,8 @@ import java.util.function.ToIntFunction;
  *       Caffeine 의 만료(같은 시각)는 메모리를 돌려받는 시점이다.</li>
  *   <li>같은 키 · 같은 세대를 동시에 찾으면 loader 는 이 인스턴스에서 한 번이고, 넣지 않는 값(storable 거짓)이든 예외든 기다린 쪽이 같은 결과를 받는다.
  *       세대가 오른 뒤 온 요청은 옛 세대의 진행 중 조회에 붙지 않고 새로 읽는다(Redis 판이 세대 번호를 넣은 키로 줄 세우는 것과 같다).
- *       예외는 같은 객체가 기다린 쪽에도 던져진다(스택은 처음 읽은 스레드의 것) — Redis 판과 같다.
+ *       런타임 예외는 같은 객체가 기다린 쪽에도 던져진다(스택은 처음 읽은 스레드의 것). 그 밖(Error · 몰래 던진 검사 예외)은 원인으로 감싼
+ *       IllegalStateException 이다 — 이 경로만은 Redis 판과 다르다(Redis 판은 런타임 예외 · Error 만 넘겨, 몰래 던진 검사 예외면 기다린 쪽이 상한 뒤 503).
  *       기다리는 쪽은 {@link #WAIT_FOR_LOAD} 까지만 — 넘으면 503(다시 시도). loader 는 Caffeine 의 계산 밖에서 돌아 다른 키를 막지 않는다.</li>
  *   <li>꺼 두면 늘 loader 다.</li>
  * </ul>
@@ -95,7 +96,7 @@ public final class LocalReadCache<K, V> {
         return cache;
     }
 
-    /** 시험용 — 그 키(지금 세대)의 진행 중 조회를 기다리는 요청 수(추정). 진행 중인 조회가 없으면 0. */
+    /** 시험용 — 그 키(지금 세대)의 진행 중 조회를 기다리는 요청 수(추정). 진행 중인 조회가 없으면 0 — 비우기 전 세대의 조회는 세지 않는다. */
     int waiting(K key) {
         CompletableFuture<ReadCache.Entry<V>> running = loading.get(new Slot<>(key, generation.get()));
         return running == null ? 0 : running.getNumberOfDependents();
@@ -115,8 +116,8 @@ public final class LocalReadCache<K, V> {
         long current = generation.get();   // 이 요청의 세대 — 꺼낸 값 · 같이 받을 조회 · 넣을 값이 모두 이 세대여야 한다
         Loaded<V> found = cache.getIfPresent(key);
         if (found != null) {
-            if (found.generation() == current && fresh(found.entry())) {
-                return found.entry();
+            if (found.generation() >= current && fresh(found.entry())) {
+                return found.entry();   // 이 요청보다 새 세대의 값도 준다(이 요청이 시작된 뒤 비우기가 있었다)
             }
             cache.asMap().remove(key, found);   // 비우기 전 세대 · 시계로 지난 값
         }
