@@ -36,6 +36,9 @@ public class OrderJpaEntity extends BaseEntity {
     @Column(updatable = false, length = 36)
     private String preorderToken;
 
+    @Column(updatable = false)
+    private UUID idempotencyKey;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, updatable = false, length = 30)
     private OrderStatus status;
@@ -77,7 +80,7 @@ public class OrderJpaEntity extends BaseEntity {
     protected OrderJpaEntity() {
     }
 
-    public OrderJpaEntity(UUID customerId, OrderSource source, UUID preorderId, String preorderToken,
+    public OrderJpaEntity(UUID customerId, OrderSource source, UUID preorderId, String preorderToken, UUID idempotencyKey,
                           OrderStatus status, BigDecimal totalAmount, Instant paymentDueAt, Instant stockReleasedAt,
                           String shipToName, String shipToPhone, String shipToPostalCode, String shipToLine1,
                           String shipToLine2, long eventSequence) {
@@ -85,6 +88,7 @@ public class OrderJpaEntity extends BaseEntity {
         this.source = source;
         this.preorderId = preorderId;
         this.preorderToken = preorderToken;
+        this.idempotencyKey = idempotencyKey;
         this.status = status;
         this.totalAmount = totalAmount;
         this.paymentDueAt = paymentDueAt;
@@ -111,6 +115,10 @@ public class OrderJpaEntity extends BaseEntity {
 
     public String getPreorderToken() {
         return preorderToken;
+    }
+
+    public UUID getIdempotencyKey() {
+        return idempotencyKey;
     }
 
     public OrderStatus getStatus() {
