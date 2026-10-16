@@ -332,10 +332,11 @@ class ImageAttachmentApiTest {
         try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
             for (int round = 0; round < 10; round++) {
                 String url = uploaded(ImagePurpose.PRODUCT);
+                String section = "추가 " + round;   // 반복마다 새 영역 — 상세 영역은 3장까지라 한 영역에 쌓으면 장수 상한이 먼저 걸린다
                 List<Future<Integer>> results = new ArrayList<>();
                 for (UUID productId : List.of(first, second)) {
                     Callable<Integer> add = () -> mockMvc.perform(admin(post(PRODUCTS + "/{id}/images", productId))
-                            .content("{ \"kind\": \"DETAIL\", \"bundle\": \"추가\", \"url\": \"%s\" }".formatted(url)))
+                            .content("{ \"kind\": \"DETAIL\", \"bundle\": \"%s\", \"url\": \"%s\" }".formatted(section, url)))
                             .andReturn().getResponse().getStatus();
                     results.add(pool.submit(add));
                 }
