@@ -264,7 +264,7 @@ class ProductDeleteApiTest {
                         return e;
                     }
                 });
-                Thread.sleep(300);
+                awaitBlocked("%from products %for update%");
                 assertThat(edit.isDone()).as("수정은 잠금을 기다린다").isFalse();
                 release.countDown();
                 holder.get(10, TimeUnit.SECONDS);
@@ -305,8 +305,7 @@ class ProductDeleteApiTest {
                                 { "name": "홍보", "startDate": "2026-10-01", "endDate": "2026-12-31", "thumbnailUrl": "https://img/t.jpg",
                                   "detailImageUrls": [], "productIds": ["%s"] }""".formatted(productId)))
                         .andReturn().getResponse().getStatus());
-                Thread.sleep(300);
-                // 겹침을 만들었는지만 본다 — 잠그지 않는 검증도 묶음 INSERT 의 외래키 확인에서 기다리므로 두 구현을 가르는 것은 아래 상태 코드다
+                awaitBlocked("%from products %for share%");   // 검증의 공유 잠금 읽기가 상품 행에서 기다린다(잠그지 않는 검증은 여기 오지 않는다)
                 assertThat(save.isDone()).as("홍보 저장은 상품 행을 기다린다").isFalse();
                 release.countDown();
                 holder.get(10, TimeUnit.SECONDS);
@@ -319,6 +318,24 @@ class ProductDeleteApiTest {
     }
 
     // ── 도우미 ─────────────────────────────────────────────────────────────
+
+    /** 다른 연결에서 그 모양의 쿼리가 두 번 잇달아 실행 중으로 보일 때까지(잠금 대기) 기다린다. 30초 안에 안 보이면 실패. */
+    private void awaitBlocked(String likePattern) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        int seen = 0;
+        while (System.nanoTime() < deadline) {
+            Long blocked = jdbcTemplate.queryForObject("""
+                    SELECT COUNT(*) FROM information_schema.PROCESSLIST
+                     WHERE COMMAND = 'Query' AND ID <> CONNECTION_ID() AND LOWER(INFO) LIKE ?
+                    """, Long.class, likePattern);
+            seen = blocked != null && blocked > 0 ? seen + 1 : 0;
+            if (seen >= 2) {
+                return;
+            }
+            Thread.sleep(20);
+        }
+        throw new AssertionError("30초 안에 잠금에서 기다리는 쿼리가 보이지 않았다: " + likePattern);
+    }
 
     private static void await(CountDownLatch latch) {
         try {
