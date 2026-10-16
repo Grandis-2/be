@@ -6,7 +6,10 @@ import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.event.PreorderEventDispatcher;
+import com.grandis.nova.preorder.event.PreorderEventHandler;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
+import com.grandis.nova.preorder.preorder.PaymentOverdue;
+import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
@@ -53,6 +56,12 @@ class ObservabilityTest {
 
     @Autowired
     StateGauges stateGauges;
+
+    @Autowired
+    Preorders preorders;
+
+    @Autowired
+    PreorderEventHandler handler;
 
     @Autowired
     TransactionTemplate transactionTemplate;
@@ -171,6 +180,22 @@ class ObservabilityTest {
         // 다른 시험의 주기 작업이 이 발송을 집지 않게 닫는다
         jdbcTemplate.update("UPDATE preorder_open_alert_dispatches SET completed_at = UTC_TIMESTAMP(6) WHERE product_id = ?",
                 (Object) UuidBinary.toBytes(openAlertProduct));
+    }
+
+    @Test
+    void 결제_기한이_지난_예약_수를_만료_대기와_막힌_수로_나눠_센다() {
+        AcceptResult accepted = accepts.accept(fixtures.customer());
+        UUID preorderId = accepted.preorder().id();
+        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(
+                fixtures.workerSucceeds(preorderId, "REGISTER"), AcceptFixtures.tokenOf(accepted), "REGISTER",
+                "R-" + ShopFixtures.unique()));
+        fixtures.passPaymentDue(preorderId);
+
+        stateGauges.refresh();
+
+        PaymentOverdue counted = preorders.countPaymentOverdue(Instant.now());
+        assertThat(registry.get("preorder.expiry.overdue").gauge().value()).isPositive().isEqualTo(counted.overdue());
+        assertThat(registry.get("preorder.expiry.blocked").gauge().value()).isEqualTo(counted.blocked());
     }
 
     @Test
