@@ -21,6 +21,8 @@ import com.grandis.nova.order.order.domain.model.OrderLine;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
 import com.grandis.nova.order.stock.StockLedger;
+import com.grandis.nova.order.stock.StockMismatches;
+import com.grandis.nova.order.stock.domain.exception.StockReleaseMismatchException;
 import com.grandis.nova.order.stock.domain.exception.StockShortageException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -78,16 +80,18 @@ public class PlaceCartOrderService {
     private final CartCatalog catalog;
     private final CartStore cart;
     private final StockLedger stock;
+    private final StockMismatches mismatches;
     private final OrderLedger ledger;
     private final OrderReader orderReader;
     private final TransactionTemplate writeTransaction;
     private final Clock clock;
 
-    public PlaceCartOrderService(CartCatalog catalog, CartStore cart, StockLedger stock, OrderLedger ledger, OrderReader orderReader,
-                                 PlatformTransactionManager transactionManager, Clock clock) {
+    public PlaceCartOrderService(CartCatalog catalog, CartStore cart, StockLedger stock, StockMismatches mismatches, OrderLedger ledger,
+                                 OrderReader orderReader, PlatformTransactionManager transactionManager, Clock clock) {
         this.catalog = catalog;
         this.cart = cart;
         this.stock = stock;
+        this.mismatches = mismatches;
         this.ledger = ledger;
         this.orderReader = orderReader;
         this.writeTransaction = new TransactionTemplate(transactionManager);
@@ -168,10 +172,12 @@ public class PlaceCartOrderService {
         // 반환과 확보를 옵션별 증감 하나로 합쳐 잠금 순서대로 한 번에 — 따로 돌면 재고 행 잠금 순서가 깨진다
         try {
             stock.releaseAndReserve(released, SelectionRules.quantities(draft.lines()));
-        } catch (IllegalStateException e) {
-            // 경보 규칙이 이 문구("재고 어긋남")로 잡는다 — 결제 반영의 판매 확정 경보(CartOrderFulfillment)와 같은 문구다. 바꾸지 않는다.
+        } catch (StockReleaseMismatchException e) {
+            // 경보는 어긋남 지표(StockMismatches)로 건다. 문구("재고 어긋남")는 결제 반영의 판매 확정(CartOrderFulfillment)과 같아 로그를 한 번에 찾는
+            // 열쇠다 — 바꾸지 않는다.
             log.error("재고 어긋남 — 앞 장바구니 주문의 확보를 반환하지 못해 새 주문을 만들지 않았다, 재고 장부 확인 필요 customerId={} orderIds={} released={}",
                     customerId, canceledOrders, released, e);
+            mismatches.record(StockMismatches.Site.CART_REPLACE);
             throw new IllegalStateException("바꾸는 앞 주문의 확보를 반환하지 못했다: orderIds=" + canceledOrders, e);
         }
         Order order = ledger.place(draft, cause);

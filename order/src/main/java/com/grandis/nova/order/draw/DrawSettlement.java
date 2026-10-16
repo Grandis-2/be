@@ -17,6 +17,8 @@ import com.grandis.nova.order.order.vo.Quantity;
 import com.grandis.nova.order.outbox.DrawRequested;
 import com.grandis.nova.order.outbox.NotificationRequested;
 import com.grandis.nova.order.stock.StockLedger;
+import com.grandis.nova.order.stock.StockMismatches;
+import com.grandis.nova.order.stock.domain.exception.StockReleaseMismatchException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -62,16 +64,18 @@ public class DrawSettlement {
     private final DrawEntryStore entries;
     private final OrderLedger orders;
     private final StockLedger stock;
+    private final StockMismatches mismatches;
     private final OutboxWriter outbox;
     private final TransactionTemplate writeTransaction;
     private final Clock clock;
 
-    public DrawSettlement(DrawCampaignStore campaigns, DrawEntryStore entries, OrderLedger orders, StockLedger stock, OutboxWriter outbox,
-                          PlatformTransactionManager transactionManager, Clock clock) {
+    public DrawSettlement(DrawCampaignStore campaigns, DrawEntryStore entries, OrderLedger orders, StockLedger stock,
+                          StockMismatches mismatches, OutboxWriter outbox, PlatformTransactionManager transactionManager, Clock clock) {
         this.campaigns = campaigns;
         this.entries = entries;
         this.orders = orders;
         this.stock = stock;
+        this.mismatches = mismatches;
         this.outbox = outbox;
         this.writeTransaction = new TransactionTemplate(transactionManager);
         this.clock = clock;
@@ -165,11 +169,18 @@ public class DrawSettlement {
             if (!mismatched.isEmpty()) {
                 log.error("재고 어긋남 — 드로우 당첨분을 판매로 옮기지 못했다(당첨 주문은 만든다) drawId={} optionId={} quantity={}",
                         campaign.id(), campaign.optionId(), winners.size());
+                mismatches.record(StockMismatches.Site.DRAW_SALE);
             }
         }
         int leftover = campaign.winnerCount() - winners.size();
         if (leftover > 0) {
-            stock.release(Map.of(campaign.optionId(), leftover));
+            try {
+                stock.release(Map.of(campaign.optionId(), leftover));
+            } catch (StockReleaseMismatchException e) {
+                // 여기서는 세기만 한다. 추첨 주기(DrawCloser)는 "재고 어긋남" ERROR 를 남기고, 결과 소비는 다시 받기 · DLQ 로 간다
+                mismatches.record(StockMismatches.Site.DRAW_RELEASE);
+                throw e;
+            }
         }
     }
 }

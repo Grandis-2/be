@@ -25,9 +25,9 @@ class OrderDefaults implements EnvironmentPostProcessor, Ordered {
 
     private static Map<String, Object> defaults() {
         Map<String, Object> defaults = new LinkedHashMap<>();
-        // 헬스는 서비스 포트(8084)와 나눈 관리 포트로만 내놓는다. ALB 헬스 체크는 이 포트의 readiness 를 본다
+        // 헬스 · 지표는 서비스 포트(8084)와 나눈 관리 포트로만 내놓는다. ALB 헬스 체크는 이 포트의 readiness 를, 지표 수집은 prometheus 를 본다
         defaults.put("management.server.port", "9084");
-        defaults.put("management.endpoints.web.exposure.include", "health");
+        defaults.put("management.endpoints.web.exposure.include", "health,prometheus");
         defaults.put("management.endpoint.health.probes.enabled", "true");
         // readiness 는 앱의 준비 상태만 본다. DB · Redis 를 넣으면 공용 의존성 장애 한 번에 모든 태스크가 비정상이 된다
         defaults.put("management.endpoint.health.group.readiness.include", "readinessState");
@@ -69,7 +69,7 @@ class OrderDefaults implements EnvironmentPostProcessor, Ordered {
     }
 
     /**
-     * 관리 포트가 서비스 포트와 같거나 꺼져 있으면 기동을 막는다. 같으면 health 의 인증 없는 허용이 ALB 뒤 공개 포트에 걸리고,
+     * 관리 포트가 서비스 포트와 같거나 꺼져 있으면 기동을 막는다. 같으면 health · prometheus 의 인증 없는 허용이 ALB 뒤 공개 포트에 걸리고,
      * 헬스 체크가 보는 관리 포트는 아무도 듣지 않는다. 배포 설정이 관리 포트를 서비스 포트로 덮는 실수를 기동에서 드러낸다.
      */
     static void requireSeparateManagementPort(ConfigurableEnvironment environment) {

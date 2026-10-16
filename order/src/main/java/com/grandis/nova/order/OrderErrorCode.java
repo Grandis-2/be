@@ -31,6 +31,13 @@ public enum OrderErrorCode implements ErrorCode {
     STOCK_NOT_TRACKED(409, "사전예약 상품은 재고를 두지 않습니다."),
     /** details.options 에 걸린 옵션과 줄일 수 있는 하한(committed)을 모두 싣는다. */
     STOCK_BELOW_COMMITTED(409, "확보 · 판매된 수량보다 적게 줄일 수 없습니다."),
+    /**
+     * 재고 보정: 주문 기준 확보 + 판매가 총량을 넘는다(재고 행이 없으면 총량 0). details 에 optionId · registered · total ·
+     * expectedReserved · expectedSold — 총량을 먼저 늘린 뒤 다시 한다.
+     */
+    STOCK_TOTAL_BELOW_EXPECTED(409, "주문 기준 수량이 총량을 넘어 맞출 수 없습니다. 총량을 먼저 늘려 주세요."),
+    /** 재고 장부 대조가 아직 한 번도 끝나지 않았다. */
+    STOCK_RECONCILE_RUN_NOT_FOUND(404, "재고 장부 대조 결과가 아직 없습니다."),
     /** 사전예약 상품은 장바구니에 담지 않는다(명세 F-U-07). */
     PREORDER_NOT_CARTABLE(409, "사전예약은 장바구니에 담을 수 없습니다."),
     /**
