@@ -6,10 +6,12 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -58,7 +60,8 @@ public class ImageAttachments {
         // 뗄 것은 "이전 키 − 이후 키 전부" 다 — 그대로 둔 주소의 키도 이후 키에 넣는다. 같은 사진을 두 모양(쿼리 · 다른 도메인)으로 든 옛 문서에서
         // 한 모양만 빼도 사진은 아직 쓰인다
         Set<String> afterKeys = new HashSet<>();
-        Map<UUID, Attach> attach = new LinkedHashMap<>();
+        // id 하나에 주소가 여럿일 수 있다(확장자 · 접두만 다른 주소) — 하나로 덮으면 앞의 주소가 검사를 건너뛴다. 전부 들고 행의 키와 하나씩 맞춘다
+        Map<UUID, List<Attach>> attach = new LinkedHashMap<>();
         for (String url : new LinkedHashSet<>(after)) {
             Optional<String> key = ImageKeys.keyOf(url);
             if (beforeUrls.contains(url)) {
@@ -79,7 +82,7 @@ public class ImageAttachments {
                 throw ValidationFailures.of(field, "사진은 업로드 API 가 준 주소(" + cdnPrefix + purpose.keyPrefix() + "…) 그대로만 받습니다.");
             }
             UUID id = ImageKeys.idOf(key.get()).orElseThrow(() -> notUploaded(field));
-            attach.put(id, new Attach(key.get(), field));
+            attach.computeIfAbsent(id, ignored -> new ArrayList<>()).add(new Attach(key.get(), field));
         }
         Map<UUID, String> detach = new LinkedHashMap<>();  // id → 키
         beforeKeys.keySet().forEach(key -> {
@@ -93,11 +96,13 @@ public class ImageAttachments {
         Set<UUID> ids = new LinkedHashSet<>(attach.keySet());
         ids.addAll(detach.keySet());
         Map<UUID, ImageStore.Row> rows = store.lock(ids);
-        attach.forEach((id, target) -> {
+        attach.forEach((id, targets) -> {
             ImageStore.Row row = rows.get(id);
-            // 키까지 같아야 한다 — id 만 맞고 접두 · 확장자가 다른 주소는 올린 사진이 아니다
-            if (row == null || !row.objectKey().equals(target.key()) || row.status() != ImageStore.Status.UNUSED) {
-                throw notUploaded(target.field());
+            for (Attach target : targets) {
+                // 키까지 같아야 한다 — id 만 맞고 접두 · 확장자가 다른 주소는 올린 사진이 아니다
+                if (row == null || !row.objectKey().equals(target.key()) || row.status() != ImageStore.Status.UNUSED) {
+                    throw notUploaded(target.field());
+                }
             }
         });
         Set<UUID> detached = new LinkedHashSet<>();

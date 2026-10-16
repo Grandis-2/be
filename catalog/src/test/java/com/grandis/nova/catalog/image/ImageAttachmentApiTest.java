@@ -350,6 +350,21 @@ class ImageAttachmentApiTest {
     }
 
     @Test
+    @DisplayName("같은 사진 id 에 확장자만 다른 주소가 함께 오면 어느 순서든 올리지 않은 쪽 칸의 400 — 앞의 주소가 뒤의 주소에 가려 검사를 건너뛰지 않는다")
+    void sameIdWithOtherExtensionIsRejectedInEitherOrder() throws Exception {
+        long promotions = jdbc.queryForObject("SELECT COUNT(*) FROM promotions", Long.class);
+        String jpg = uploaded(ImagePurpose.PROMOTION);
+        String png = jpg.replace(".jpg", ".png");   // 올린 적 없는 객체
+        expectValidation(createPromotion(promotionBody(png, List.of(jpg), preorder())), "thumbnailUrl");
+        expectValidation(createPromotion(promotionBody(jpg, List.of(png), preorder())), "detailImageUrls[0]");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM promotions", Long.class)).as("홍보가 생기지 않았다").isEqualTo(promotions);
+        assertThat(statuses(jpg)).as("올린 사진도 붙지 않았다(롤백)").containsOnly("UNUSED");
+
+        String b0 = uploaded(ImagePurpose.PRODUCT);
+        expectValidation(register(colorBody(b0.replace(".jpg", ".png"), b0, uploaded(ImagePurpose.PRODUCT))), "images.gallery[0].items[0].url");
+    }
+
+    @Test
     @DisplayName("상태 전이는 이전 상태를 WHERE 에 다시 적은 조건부 UPDATE — 영향 행이 대상 수와 다르면(이미 바뀐 행 · 없는 행) 예외")
     void transitionRequiresEveryRowInTheExpectedState() {
         String a = uploaded(ImagePurpose.PRODUCT);
