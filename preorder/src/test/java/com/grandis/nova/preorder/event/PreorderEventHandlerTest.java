@@ -12,12 +12,14 @@ import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
+import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
@@ -41,6 +43,9 @@ class PreorderEventHandlerTest {
 
     @Autowired
     JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    MeterRegistry meterRegistry;
 
     @MockitoBean
     CatalogClient catalogClient;
@@ -113,8 +118,7 @@ class PreorderEventHandlerTest {
 
     @Test
     void 주문이_취소를_거절하면_결제_가능으로_되돌리고_사유를_남긴다() {
-        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
-                token, "REGISTER", "R-" + ShopFixtures.unique()));
+        register();
         startCancel(EventActor.USER);
 
         handler.onOrderSettled(settled(PreorderOrderSettled.Result.REJECTED, "SHIPPED"));
@@ -142,8 +146,7 @@ class PreorderEventHandlerTest {
      */
     @Test
     void 이전_취소_시도의_결과가_다시_와도_지금_취소에는_반영하지_않는다() {
-        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
-                token, "REGISTER", "R-" + ShopFixtures.unique()));
+        register();
         startCancel(EventActor.SYSTEM);
         PreorderOrderSettled firstRejected = settled(PreorderOrderSettled.Result.REJECTED, "PAID");
         handler.onOrderSettled(firstRejected);
@@ -155,6 +158,67 @@ class PreorderEventHandlerTest {
         handler.onOrderSettled(settled(PreorderOrderSettled.Result.CANCELED, null));
         assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'CANCEL'",
                 (Object) UuidBinary.toBytes(preorderId))).isEqualTo(1);
+    }
+
+    @Test
+    void 취소가_끝난_예약에_결제_확인이_오면_상태는_그대로_두고_경보로_센다() {
+        register();
+        startCancel(EventActor.USER);
+        completeCancel(PreorderOrderSettled.Result.NO_ORDER);
+        double before = paymentAfterCancel();
+
+        handler.onPaymentConfirmed(new PreorderPaymentConfirmed(token, "o-1", Instant.now()));
+
+        assertThat(row()).containsEntry("status", "CANCELED");
+        assertThat(preorders.findReservedAt(preorderId)).isEmpty();
+        assertThat(paymentAfterCancel() - before).isEqualTo(1);
+    }
+
+    /** 결제 → 환불로 취소된 예약에 취소 전 결제 확인이 다시 왔다. DB 가 버린 마이크로초 아래 자리는 같은 시각으로 본다. */
+    @Test
+    void 환불로_취소된_예약에_같은_결제_확인이_다시_오면_세지_않는다() {
+        register();
+        PreorderPaymentConfirmed confirmed =
+                new PreorderPaymentConfirmed(token, "o-1", Instant.parse("2026-10-04T01:02:00.123456789Z"));
+        handler.onPaymentConfirmed(confirmed);
+        startCancel(EventActor.USER);
+        completeCancel(PreorderOrderSettled.Result.CANCELED);
+        double before = paymentAfterCancel();
+
+        handler.onPaymentConfirmed(confirmed);
+
+        assertThat(row()).containsEntry("status", "CANCELED");
+        assertThat(paymentAfterCancel() - before).isZero();
+    }
+
+    @Test
+    void 취소_중에_온_결제_확인은_시각만_남기고_세지_않는다() {
+        register();
+        startCancel(EventActor.USER);
+        double before = paymentAfterCancel();
+
+        handler.onPaymentConfirmed(new PreorderPaymentConfirmed(token, "o-1", Instant.parse("2026-10-04T01:02:00Z")));
+
+        assertThat(row()).containsEntry("status", "CANCELING");
+        assertThat(preorders.findReservedAt(preorderId)).contains(Instant.parse("2026-10-04T01:02:00Z"));
+        assertThat(paymentAfterCancel() - before).isZero();
+    }
+
+    private void register() {
+        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
+                token, "REGISTER", "R-" + ShopFixtures.unique()));
+    }
+
+    /** 주문 정리 결과 → 외부 취소 성공으로 CANCELED 까지 간다. */
+    private void completeCancel(PreorderOrderSettled.Result result) {
+        handler.onOrderSettled(settled(result, null));
+        handler.onExternalJobSucceeded(ShopFixtures.unique(),
+                ShopFixtures.succeeded(fixtures.workerSucceeds(preorderId, "CANCEL"), token, "CANCEL", null));
+    }
+
+    /** 기동 때 등록돼 있어야 한다 — 없으면 get 이 실패한다. 공유 컨텍스트라 앞뒤 차이로 본다. */
+    private double paymentAfterCancel() {
+        return meterRegistry.get(PreorderEventHandler.PAYMENT_AFTER_CANCEL_METRIC).counter().count();
     }
 
     private void startCancel(EventActor actor) {
