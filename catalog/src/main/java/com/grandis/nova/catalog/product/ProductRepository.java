@@ -28,7 +28,10 @@ public interface ProductRepository extends JpaRepository<Product, UUID> {
 
     /**
      * 상품 행들을 공유 잠금(FOR SHARE)으로 읽는다 — 홍보 묶기 검증용. 삭제(상품 행 FOR UPDATE)가 커밋 전이면 기다렸다가 커밋된 값(삭제됨)을 본다.
-     * 잠그지 않고 읽으면 커밋 전 값으로 통과해 삭제된 상품이 묶인다(실측). 상품 수정 · 삭제는 홍보 행을 잡지 않으므로 홍보 잠금 → 상품 공유 잠금 순서와 엇갈리지 않는다.
+     * 잠그지 않고 읽으면 커밋 전 값으로 통과해 삭제된 상품이 묶인다(실측). 상품 쪽 경로(수정 · 삭제 · 사진 · 공개 전환 · 일반 전환 · 회차 취소)는 상품 한 행만
+     * FOR UPDATE 로 잡고 홍보 행 · 홍보 사진 · promotion_products 는 잡지 않으므로 상품 행을 사이에 둔 교착 자리가 없다. 잠금은 PRIMARY 오름차순으로 잡힌다
+     * (IN 목록 순서와 무관 — 실측). 상품이 적은 표에서는 계획이 전체 스캔이 되어 요청에 없는 상품의 잠금도 잠깐 기다린다 — READ COMMITTED 라 맞지 않는 행의
+     * 잠금은 평가 뒤 풀리므로 교착이 아니라 대기다.
      */
     @Lock(LockModeType.PESSIMISTIC_READ)
     @Query("select p from Product p where p.id in :ids")

@@ -283,7 +283,7 @@ class ProductDeleteApiTest {
     }
 
     @Test
-    @DisplayName("삭제가 커밋되기를 기다린 홍보 저장은 그 상품을 400 으로 거른다 — 검증이 상품 행을 공유 잠금으로 읽는다. 대조군: 잠그기만 하고 삭제하지 않으면 200")
+    @DisplayName("삭제가 커밋되기를 기다린 홍보 저장은 그 상품을 400 으로 거른다. 대조군: 잠그기만 하고 삭제하지 않으면 200")
     void promotionSaveWaitingBehindDeleteRejectsIt() throws Exception {
         for (boolean deleteWhileHolding : List.of(false, true)) {
             UUID productId = registerPreorder(Instant.now().plus(Duration.ofDays(2)));
@@ -306,6 +306,7 @@ class ProductDeleteApiTest {
                                   "detailImageUrls": [], "productIds": ["%s"] }""".formatted(productId)))
                         .andReturn().getResponse().getStatus());
                 Thread.sleep(300);
+                // 겹침을 만들었는지만 본다 — 잠그지 않는 검증도 묶음 INSERT 의 외래키 확인에서 기다리므로 두 구현을 가르는 것은 아래 상태 코드다
                 assertThat(save.isDone()).as("홍보 저장은 상품 행을 기다린다").isFalse();
                 release.countDown();
                 holder.get(10, TimeUnit.SECONDS);

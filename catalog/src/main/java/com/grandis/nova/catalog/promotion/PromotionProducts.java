@@ -34,7 +34,8 @@ public class PromotionProducts {
         byte[] promotion = UuidBinary.toBytes(promotionId);
         jdbc.update("DELETE FROM promotion_products WHERE promotion_id = :promotionId", new MapSqlParameterSource("promotionId", promotion));
         // 넣는 순서는 product_id 바이트 순(position 은 보낸 순서 그대로) — 겹친 두 요청이 같은 상품들을 반대 순서로 넣으면 유일 키 잠금을 서로 기다려
-        // 교착(1213)이다(실측). 같은 순서로 넣으면 늦은 쪽이 중복(1062)으로 끝나 409 가 된다
+        // 교착(1213)이다(실측). 같은 순서로 넣으면 INSERT 끼리는 늦은 쪽이 중복(1062)으로 끝나 409 가 된다. 위 DELETE(자기 홍보 줄)와 남의 INSERT 중복 검사가
+        // 유일 키에서 엇갈리면 교착(1213)이 날 수 있다(실측) — 서비스가 409 retryable 로 답한다
         List<Integer> order = new ArrayList<>();
         for (int i = 0; i < productIds.size(); i++) {
             order.add(i);
