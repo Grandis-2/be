@@ -47,6 +47,7 @@ class CatalogReadCacheApiTest {
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired StringRedisTemplate redis;
     @Autowired ProductReviewRepository reviews;
+    @Autowired CatalogLocalCaches local;
 
     ShopFixtures fixtures;
     UUID categoryId;
@@ -59,6 +60,14 @@ class CatalogReadCacheApiTest {
         if (!keys.isEmpty()) {
             redis.delete(keys);
         }
+        local.productList().invalidateAll();
+        local.categoryTree().invalidateAll();
+    }
+
+    /** 메모리 캐시에 든 키 수(정리 뒤). */
+    private static long localSize(LocalReadCache<?, ?> cache) {
+        cache.cache().cleanUp();
+        return cache.cache().estimatedSize();
     }
 
     @Test
@@ -95,13 +104,14 @@ class CatalogReadCacheApiTest {
             }
         });
         assertThat(chips).as("캐시에서 꺼낸 목록의 그 상품에 색상칩이 실렸다").containsExactly("화이트");
-        assertThat(redis.keys("catalog:cache:product-list:*")).as("q 검색은 넣지 않는다 — 정렬 목록 하나만").hasSize(1);
-        assertThat(redis.keys("catalog:cache:category-tree:*")).hasSize(1);
+        assertThat(localSize(local.productList())).as("q 검색은 넣지 않는다 — 정렬 목록 하나만(메모리)").isEqualTo(1);
+        assertThat(localSize(local.categoryTree())).isEqualTo(1);
+        assertThat(redis.keys("catalog:cache:product-list:*")).as("목록은 Redis 에 넣지 않는다").isEmpty();
         assertThat(redis.keys("catalog:cache:reviews:*")).hasSize(2);
     }
 
     @Test
-    @DisplayName("입력이 열린 조회는 Redis 에 넣지 않는다 — 검색어 · 색상 · 용량 · 다섯째 이후 페이지 · 화면이 안 쓰는 size · 빈 결과(없는 카테고리 · 없는 상품). 응답은 같다")
+    @DisplayName("입력이 열린 조회는 캐시에 넣지 않는다 — 검색어 · 색상 · 용량 · 다섯째 이후 페이지 · 화면이 안 쓰는 size · 빈 결과(없는 카테고리 · 없는 상품). 응답은 같다")
     void openInputsAreNotStored() throws Exception {
         String tag = "q" + ShopFixtures.unique();
         UUID productId = registerInStock("검색", tag);
@@ -123,7 +133,7 @@ class CatalogReadCacheApiTest {
         mockMvc.perform(get("/api/v1/reviews").param("categoryId", UUID.randomUUID().toString())).andExpect(status().isOk());
         mockMvc.perform(get("/api/v1/products/{id}/reviews", UUID.randomUUID())).andExpect(status().isNotFound());   // 없는 상품
         mockMvc.perform(get("/api/v1/products/{id}/reviews", productId).param("size", "37")).andExpect(status().isOk());
-        assertThat(redis.keys("catalog:cache:product-list:*")).isEmpty();
+        assertThat(localSize(local.productList())).isZero();
         assertThat(redis.keys("catalog:cache:reviews:*")).isEmpty();
         java.util.List<String> searched = new java.util.ArrayList<>();
         data(mockMvc.perform(get("/api/v1/products").param("q", tag))).get("items").forEach(item -> searched.add(item.get("title").asString()));
@@ -132,7 +142,7 @@ class CatalogReadCacheApiTest {
         // 닫힌 입력은 넣는다 — 넷째 페이지까지, 브랜드는 순서만 달라도 같은 키
         mockMvc.perform(get("/api/v1/products").param("categoryId", category).param("brand", "APPLE", "LG")).andExpect(status().isOk());
         mockMvc.perform(get("/api/v1/products").param("categoryId", category).param("brand", "LG", "APPLE")).andExpect(status().isOk());
-        assertThat(redis.keys("catalog:cache:product-list:*")).hasSize(1);
+        assertThat(localSize(local.productList())).isEqualTo(1);
     }
 
     @Test
@@ -430,6 +440,25 @@ class CatalogReadCacheApiTest {
             assertThat(data(mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk())).get("title").asString())
                     .isEqualTo("장애 중 DB 값");
             assertThat(titles(tag)).containsExactly("장애 중 DB 값");
+        } finally {
+            RedisContainerConfig.unpause();
+        }
+    }
+
+    @Test
+    @DisplayName("상품 목록은 인스턴스 메모리에서 — DB 를 직접 고쳐도(세대 안 올림) 옛 값이고, Redis 가 멈춰도 그대로다. 대조군: 상세는 Redis 가 멈추면 DB 값")
+    void productListIsServedFromMemory() throws Exception {
+        UUID productId = registerInStock("메모리");
+        mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk());
+        assertThat(list("").findValues("title").stream().map(JsonNode::asString).toList()).contains("메모리");
+        jdbcTemplate.update("UPDATE products SET title = '직접 고침' WHERE id = ?", (Object) UuidBinary.toBytes(productId));
+
+        assertThat(list("").findValues("title").stream().map(JsonNode::asString).toList()).as("메모리의 옛 값").contains("메모리");
+        RedisContainerConfig.pause();
+        try {
+            assertThat(list("").findValues("title").stream().map(JsonNode::asString).toList()).as("Redis 와 상관없다").contains("메모리");
+            assertThat(data(mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk())).get("title").asString())
+                    .as("대조군 — 상세는 Redis 캐시라 DB 로 답한다").isEqualTo("직접 고침");
         } finally {
             RedisContainerConfig.unpause();
         }

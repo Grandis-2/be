@@ -16,15 +16,10 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.redis.cache.ReadCache;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.type.TypeReference;
-import tools.jackson.databind.json.JsonMapper;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -34,14 +29,15 @@ import java.util.UUID;
  *
  * <ul>
  *   <li><b>catalog 가 바꾸는 것</b>(등록 · 수정 · 공개 전환 · 판매 상태 · 사진 · 옵션 · 리뷰)은 커밋 뒤 세대를 올려 다음 조회부터 새 값이다
- *       ({@link CatalogCacheInvalidation}).</li>
+ *       ({@link CatalogCacheInvalidation}). 상품 목록은 고친 인스턴스만 바로, 다른 인스턴스는 {@link #PRODUCT_TTL} 안에 새 값이다.</li>
  *   <li><b>다른 서비스가 바꾸는 것</b>(판매 준비 완료 — order 재고 행 · preorder 회차 행, 회차 시각 · 조기 마감, 재고 수량)은 catalog 가 알 수 없어
  *       TTL 이 지나야 보인다 — 그래서 상품 목록 · 상세의 TTL 은 짧다. 주문 · 접수는 이 캐시를 거치지 않고 다시 확인한다.</li>
  *   <li><b>시각으로 정하는 칸</b>(사전예약 접수 단계)은 꺼낼 때 지금 시각으로 다시 계산한다.</li>
  *   <li><b>앞단 HTTP 캐시</b>는 돌려준 {@link ReadCache.Entry#loadedAt()} 로 남은 시간만큼만 허용한다(PublicCache) — 두 단계를 합쳐도 TTL 을 넘지
  *       않게.</li>
  * </ul>
- * Redis 가 실패하면 캐시 없이 DB 로 답한다({@link ReadCache}).
+ * 상품 목록 · 카테고리 트리는 인스턴스 메모리({@link CatalogLocalCaches}), 나머지는 Redis 다. Redis 가 실패하면 캐시 없이 DB 로 답한다({@link ReadCache}).
+ * 메모리 캐시의 비우기는 그 인스턴스에만 닿는다 — 다른 인스턴스는 TTL 이 지나야 새 값이다(그래서 TTL 이 짧거나 고치는 쪽이 없는 조회만 둔다).
  */
 @Component
 public class CatalogReadCache {
@@ -50,8 +46,6 @@ public class CatalogReadCache {
     static final String PRODUCTS = "products";
     /** 리뷰가 바뀌거나 상품이 바뀌면(공개 여부가 리뷰 노출을 정한다) 올리는 세대. */
     static final String REVIEWS = "reviews";
-    /** 올리는 곳이 없다 — 카테고리는 운영 초기 데이터로만 바뀐다(관리 API 없음). TTL 이 끝낸다. */
-    static final String CATEGORIES = "categories";
 
     /**
      * 상품 목록(재고 · 노출이 쿼리 안에서 정해져 실시간 칸을 따로 읽을 수 없다). 사전예약이 목록에 나오고 빠지는 순간(오픈 · 마감)도 쿼리 시각
@@ -62,9 +56,7 @@ public class CatalogReadCache {
     public static final Duration DETAIL_TTL = Duration.ofMinutes(10);
     public static final Duration REVIEW_TTL = Duration.ofSeconds(60);
     public static final Duration CATEGORY_TTL = Duration.ofMinutes(10);
-    /** 카테고리 트리의 저장 상한(키 하나). 나머지 캐시는 ReadCache 기본(4MB). */
-    static final long CATEGORY_BUDGET_BYTES = 256 * 1024;
-    /** 목록 · 리뷰는 앞 페이지(0~4)만 Redis 에 넣는다. */
+    /** 목록 · 리뷰는 앞 페이지(0~4)만 넣는다. */
     static final int CACHED_PAGES = 5;
     /** 화면이 쓰는 상품 목록 size(추천 4 · 랭킹 10 · 목록 · 검색 12 · 기본 20). 다른 size 는 넣지 않는다. */
     static final Set<Integer> CACHED_PRODUCT_SIZES = Set.of(4, 10, 12, 20);
@@ -72,7 +64,7 @@ public class CatalogReadCache {
     static final Set<Integer> CACHED_REVIEW_SIZES = Set.of(20, 100);
 
     private final ReadCache cache;
-    private final JsonMapper json;
+    private final CatalogLocalCaches local;
     private final Clock clock;
     private final ProductDetailService details;
     private final ProductListingService listings;
@@ -80,23 +72,18 @@ public class CatalogReadCache {
     private final ReviewService reviews;
 
     private final ReadCache.Spec<ProductDetailView> detailSpec;
-    private final ReadCache.Spec<OffsetPage<ProductListItem>> listSpec;
-    private final ReadCache.Spec<List<CategoryNode>> categorySpec;
     private final ReadCache.Spec<OffsetPage<ReviewView>> reviewSpec;
 
-    public CatalogReadCache(ReadCache cache, JsonMapper json, Clock clock, ProductDetailService details, ProductListingService listings,
+    public CatalogReadCache(ReadCache cache, CatalogLocalCaches local, Clock clock, ProductDetailService details, ProductListingService listings,
                             CategoryTreeService categories, ReviewService reviews) {
         this.cache = cache;
-        this.json = json;
+        this.local = local;
         this.clock = clock;
         this.details = details;
         this.listings = listings;
         this.categories = categories;
         this.reviews = reviews;
         this.detailSpec = cache.spec("product-detail-body", ProductDetailView.class, DETAIL_TTL);
-        this.listSpec = cache.spec("product-list", new TypeReference<OffsetPage<ProductListItem>>() { }, PRODUCT_TTL);
-        // 키가 하나뿐이다 — 상한을 작게
-        this.categorySpec = cache.spec("category-tree", new TypeReference<List<CategoryNode>>() { }, CATEGORY_TTL, CATEGORY_BUDGET_BYTES);
         this.reviewSpec = cache.spec("reviews", new TypeReference<OffsetPage<ReviewView>>() { }, REVIEW_TTL);
     }
 
@@ -121,10 +108,9 @@ public class CatalogReadCache {
     }
 
     /**
-     * 상품 목록. Redis 에 넣는 것은 입력이 닫힌 조회뿐이다 — 자유 문자열(검색어 q · 색상 · 용량)이 없고, 앞 {@link #CACHED_PAGES} 페이지이고,
+     * 상품 목록(인스턴스 메모리). 넣는 것은 입력이 닫힌 조회뿐이다 — 자유 문자열(검색어 q · 색상 · 용량)이 없고, 앞 {@link #CACHED_PAGES} 페이지이고,
      * size 가 화면이 쓰는 값({@link #CACHED_PRODUCT_SIZES})이고, 결과가 비지 않았다(없는 카테고리 id 는 빈 목록이라 넣지 않는다). 나머지는 늘 DB 다.
-     * 입력을 아무렇게나 바꿔 키를 끝없이 만들어 나눠 쓰는 Redis 의 다른 키(토큰 폐기 표식 · 대기열)를 밀어내지 않게. 넣는 양 자체도 캐시마다
-     * 메모리 예산이 묶는다(ReadCache).
+     * 입력을 아무렇게나 바꿔 키를 끝없이 만들어도 같은 쪽을 다시 쓰지 못한 채 상한까지 밀어내지 않게. 넣는 양 자체도 무게 상한이 묶는다(CatalogLocalCaches).
      */
     public ReadCache.Entry<OffsetPage<ProductListItem>> products(ProductListFilter filter, ProductSort sort, int page, int size) {
         boolean closedInput = filter.q() == null && filter.colors().isEmpty() && filter.storages().isEmpty()
@@ -134,14 +120,15 @@ public class CatalogReadCache {
         }
         ProductListFilter keyed = new ProductListFilter(null, filter.categoryId(), filter.saleMode(),
                 filter.brands().stream().sorted().toList(), List.of(), List.of());   // OR 조건은 순서를 맞춰 같은 조건이 같은 키
-        ReadCache.Entry<OffsetPage<ProductListItem>> entry = cache.entry(listSpec, PRODUCTS, digest(new ListKey(keyed, sort, page, size)),
+        ReadCache.Entry<OffsetPage<ProductListItem>> entry = local.productList().entry(new ListKey(keyed, sort, page, size),
                 () -> listings.list(filter, sort, page, size), found -> !found.items().isEmpty());
         Instant served = clock.instant();
         return new ReadCache.Entry<>(entry.value().map(item -> item.at(served)), entry.loadedAt());
     }
 
+    /** 카테고리 트리(인스턴스 메모리). 고치는 API 가 없어 비우지 않는다 — 인스턴스마다 {@link #CATEGORY_TTL} 뒤 다시 읽는다. */
     public ReadCache.Entry<List<CategoryNode>> categoryTree() {
-        return cache.entry(categorySpec, CATEGORIES, "tree", categories::tree);
+        return local.categoryTree().entry("tree", categories::tree);
     }
 
     /** 상품 리뷰. 앞 페이지 · 화면이 쓰는 size · 비지 않은 결과만 넣는다(없는 상품 id 는 빈 목록이라 넣지 않는다). */
@@ -162,16 +149,7 @@ public class CatalogReadCache {
                 () -> reviews.visibleReviews(categoryId, page, size), found -> !found.items().isEmpty());
     }
 
-    /** 목록 조건의 키. 조건은 정규화된 값(ProductListFilter)이라 같은 검색이면 같은 글이다. 길이를 고정하려고 해시로 줄인다. */
-    private String digest(ListKey key) {
-        try {
-            byte[] hash = MessageDigest.getInstance("SHA-256").digest(json.writeValueAsString(key).getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash, 0, 16);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException(e);
-        }
-    }
-
+    /** 목록 조건의 키. 조건은 정규화된 값(ProductListFilter)이라 같은 검색이면 같은 값이다. */
     record ListKey(ProductListFilter filter, ProductSort sort, int page, int size) {
     }
 }
