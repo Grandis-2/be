@@ -166,6 +166,13 @@ public class ShopFixtures {
         return jdbcTemplate.queryForObject(sql, Integer.class, args);
     }
 
+    /** 회차 행의 catalog 상품 사본(상품명 · 판매 상태 · 공개 여부). 번호는 그대로 둔다. */
+    public void listing(UUID productId, String title, String status, boolean visible) {
+        jdbcTemplate.update("""
+                UPDATE preorder_campaigns SET product_title = ?, product_status = ?, visible = ? WHERE product_id = ?
+                """, title, status, visible, UuidBinary.toBytes(productId));
+    }
+
     /** 회차의 다음 순번 카운터. */
     public long nextQueuePosition(UUID productId) {
         return jdbcTemplate.queryForObject("SELECT next_queue_position FROM preorder_campaigns WHERE product_id = ?",

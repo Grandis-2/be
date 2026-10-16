@@ -2,6 +2,7 @@ package com.grandis.nova.preorder.event;
 
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.cancel.CancelRequestPayload;
+import com.grandis.nova.preorder.outbox.NotificationRequested;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.PreorderFact;
 import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
@@ -48,6 +49,12 @@ public class PreorderEventHandler {
             EventActor.ADMIN, "ADMIN_CANCEL",
             EventActor.SYSTEM, "DEADLINE_EXCEEDED");
 
+    /** 취소를 시작한 주체 → 취소 알림 문구. 관리자 취소와 회차 판매 중지는 둘 다 ADMIN 이고 문구도 같다. */
+    private static final Map<EventActor, NotificationRequested.CancelCause> CANCEL_CAUSES = Map.of(
+            EventActor.USER, NotificationRequested.CancelCause.USER,
+            EventActor.ADMIN, NotificationRequested.CancelCause.OTHER,
+            EventActor.SYSTEM, NotificationRequested.CancelCause.EXPIRY);
+
     private final Preorders preorders;
     private final SyncJobs syncJobs;
     private final PreorderLedger ledger;
@@ -71,6 +78,8 @@ public class PreorderEventHandler {
     /**
      * 외부 등록 · 취소 성공. 작업을 SUCCEEDED 로 바꾸고 예약에 반영한다. 포기한 뒤(DEAD_LETTER) 늦게 온 성공도 받는다.
      * 취소가 무효화한 등록 작업(CANCELED)이면 반영하지 않는다 — 외부 쪽은 CANCEL 작업이 정리한다.
+     * 회원 알림은 예약 상태가 실제로 바뀐 때만 적는다. member 는 eventId 로만 중복을 거르는데 아웃박스 행마다 새 eventId 라,
+     * 같은 결과를 다시 받을 때 또 적으면 알림이 두 건이 된다. CANCEL 작업 성공은 예약이 CANCELED 가 되는 유일한 길이다.
      *
      * @param eventId 받은 이벤트의 id. 차례 기록을 한 번만 남기는 데 쓴다. 성공은 다시 반영해도 같아 차례 기록이 없어도 받는다
      */
@@ -93,10 +102,32 @@ public class PreorderEventHandler {
             return;
         }
         if (job.jobType() == SyncJobType.REGISTER) {
-            ledger.fire(job.preorderId(), new PreorderFact.RegisterConfirmed(message.externalNumber()));
-        } else {
-            ledger.fire(job.preorderId(), new PreorderFact.CancelCompleted());
+            if (ledger.fire(job.preorderId(), new PreorderFact.RegisterConfirmed(message.externalNumber())).applied()) {
+                notifyRegistered(job.preorderId());
+            }
+        } else if (ledger.fire(job.preorderId(), new PreorderFact.CancelCompleted()).applied()) {
+            notifyCanceled(job.preorderId());
         }
+    }
+
+    private void notifyRegistered(UUID preorderId) {
+        PreorderSnapshot preorder = preorders.getById(preorderId);
+        outboxWriter.append(NotificationRequested.preorderRegistered(preorder.id(), preorder.preorderToken(),
+                preorder.customerId()));
+    }
+
+    /**
+     * 까닭은 이번 취소 시도의 CANCELING 진입 이력 주체로 정한다(예약 행에 사유 칸이 없다). 결제 여부는 결제 확인 시각으로 본다 —
+     * 결제 확인 이벤트가 취소 완료보다 늦게 오면 환불 문장이 빠지지만, 그런 순서는 드물고 문구만 덜 자세할 뿐이다.
+     */
+    private void notifyCanceled(UUID preorderId) {
+        PreorderSnapshot preorder = preorders.getById(preorderId);
+        NotificationRequested.CancelCause cause = preorders.lastTransitionTo(preorderId, PreorderStatus.CANCELING)
+                .map(PreorderHistoryEntry::actor)
+                .map(CANCEL_CAUSES::get)
+                .orElse(NotificationRequested.CancelCause.OTHER);
+        outboxWriter.append(NotificationRequested.preorderCanceled(preorder.id(), preorder.preorderToken(),
+                preorder.customerId(), cause, preorder.reservedAt() != null));
     }
 
     /** 실패한 차례가 있었고 worker 가 다시 시도한다. 차례를 남기고, 아직 끝나지 않은 작업이면 재시도 대기로 표시한다. */

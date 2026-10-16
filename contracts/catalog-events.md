@@ -11,10 +11,10 @@
 | `PREORDER_PRODUCT_REGISTERED` | `preorder-events` | preorder — 회차 · 배송 차수를 만든다 |
 | `IN_STOCK_PRODUCT_REGISTERED` | `order-events` | order — 옵션별 초기 재고를 만든다 |
 | `PREORDER_CAMPAIGN_CANCELED` | `preorder-events` | preorder — 회차를 지금 마감하고 진행 중 예약의 취소를 시작한다 |
-| `PREORDER_PRODUCT_CHANGED` | `preorder-events` | preorder — 모든 인스턴스의 접수용 상품 사본(캐시)을 비운다 |
+| `PREORDER_PRODUCT_CHANGED` | `preorder-events` | preorder — 모든 인스턴스의 접수용 상품 사본(캐시)을 비우고, 회차 행의 상품명 · 판매 상태 · 공개 여부 사본을 고친다 |
 
 - **최소 한 번.** 커밋 직후 한 번 보내고, 못 보냈으면 릴레이가 다시 보낸다. 같은 메시지가 두 번 갈 수 있다 — 받는 쪽은 두 번 받아도 결과가 같아야 한다.
-- **순서 보장 없음.** 회차 취소는 회차 행(등록 이벤트를 preorder 가 처리한 결과)이 있어야 보내므로 등록과 순서가 뒤집히지 않는다. 상품 변경은 여러 번 갈 수 있고 등록보다 먼저 닿을 수도 있다. 받는 쪽은 캐시를 비우기만 하므로 이 이벤트의 처리 결과는 순서와 상관없다. 다만 등록 처리 전에 누가 그 상품을 조회하면 preorder 는 `registrationCompleted=false` 를 캐시하고, 등록 이벤트로 회차 행을 만든 뒤에도 그 값을 비우지 않는다(`CampaignRegistrar`) — 상품 변경이 등록보다 먼저 와서 비운 뒤의 조회도 마찬가지다. 그 값은 다음 상품 변경 이벤트나 캐시 갱신(최대 30분)으로만 바뀐다(`contracts/preorder-internal.md` "캐시").
+- **순서 보장 없음.** 회차 취소는 회차 행(등록 이벤트를 preorder 가 처리한 결과)이 있어야 보내므로 등록과 순서가 뒤집히지 않는다. 상품 변경은 여러 번 갈 수 있고 등록보다 먼저 닿을 수도 있다. 캐시 비우기는 순서와 상관없고, 회차의 상품 사본은 변경 번호(`listingVersion`)가 지금보다 클 때만 덮으므로 늦게 온 옛 값이 새 값을 덮지 않는다(아래 "상품 사본과 변경 번호"). 회차 행이 아직 없으면 preorder 는 그 메시지를 보류해 늦춰 다시 받는다 — 버리면 늦게 온 등록의 옛 값이 굳는다. 다만 등록 처리 전에 누가 그 상품을 조회하면 preorder 는 `registrationCompleted=false` 를 캐시하고, 등록 이벤트로 회차 행을 만든 뒤에도 그 값을 비우지 않는다(`CampaignRegistrar`) — 상품 변경이 등록보다 먼저 와서 비운 뒤의 조회도 마찬가지다. 그 값은 다음 상품 변경 이벤트나 캐시 갱신(최대 30분)으로만 바뀐다(`contracts/preorder-internal.md` "캐시").
 - **메시지 속성.** `eventType` · `eventId`(문자열). preorder · order 가 보내는 메시지와 같다.
 - **배포 순서.** 받는 쪽이 모르는 종류는 처리에 실패해 재시도 뒤 DLQ 로 간다. 그래서 받는 쪽이 먼저 나간다 — `PREORDER_PRODUCT_CHANGED` 는 preorder NV-281 뒤의 catalog 가 보낸다.
 
@@ -40,7 +40,17 @@ preorder · order 의 `EventEnvelope` 와 같은 모양이다.
 | `aggregateId` | 상품 id(UUID 문자열). **payload 에는 상품 id 를 다시 넣지 않는다** — 둘이 어긋날 수 있다. 예외는 `PREORDER_CAMPAIGN_CANCELED` 하나(아래) |
 | `occurredAt` | catalog 가 아웃박스에 적은 시각(UTC) |
 
-**payload 에 값을 싣는 이유.** preorder · order 의 다른 이벤트는 식별자만 싣고 받는 쪽이 원장을 다시 읽는다. 등록 이벤트 둘은 그렇게 할 수 없다 — 회차 · 차수 · 초기 재고는 catalog 표 어디에도 없고(받는 쪽 표에 들어갈 값이다), 큐를 받는 스레드에는 catalog 내부 API 를 부를 사용자 토큰도 없다. 그래서 값을 payload 에 싣고, catalog 는 아웃박스 행을 바꾸지 않는다(같은 내용을 다시 보낸다).
+**payload 에 값을 싣는 이유.** preorder · order 의 다른 이벤트는 식별자만 싣고 받는 쪽이 원장을 다시 읽는다. 등록 이벤트 둘은 그렇게 할 수 없다 — 회차 · 차수 · 초기 재고는 catalog 표 어디에도 없고(받는 쪽 표에 들어갈 값이다), 큐를 받는 스레드에는 catalog 내부 API 를 부를 사용자 토큰도 없다. 상품명 · 판매 상태 · 공개 여부도 같은 이유로 싣는다 — preorder 의 오픈 알림 주기 작업에는 토큰이 없고 catalog 표는 읽지 않는다. 그래서 값을 payload 에 싣고, catalog 는 아웃박스 행을 바꾸지 않는다(같은 내용을 다시 보낸다).
+
+### 상품 사본과 변경 번호
+
+preorder 는 사전예약 상품의 상품명 · 판매 상태 · 공개 여부를 회차 행(`preorder_campaigns.product_title` · `product_status` · `visible`)에 사본으로 둔다. 오픈 알림의 문구와 "보낼까" 판정(`contracts/notification-events.md` "오픈 알림"), 대기열에 보내는 회차 변경 이벤트의 공개 여부가 이 사본을 쓴다. 원장은 catalog 다.
+
+- **번호.** `products.listing_version` — 상품마다 오르기만 한다. 상품 행을 잠근 수정 트랜잭션에서 셋 중 하나가 **실제로 바뀔 때만** +1 한다(같은 제목 · 같은 상태 · 같은 공개 여부를 다시 보내면 그대로). 새 상품은 1 로 만든다. 이 칸이 생기기 전의 상품은 0 이고 다음 변경부터 1 이상이다.
+- **싣는 값.** 등록 · 변경 이벤트 모두 그 순간의 셋과 번호를 싣는다. 무엇이 바뀌었는지는 싣지 않는다 — 옵션 · 가격만 고친 변경도 같은 번호로 다시 간다.
+- **받는 쪽.** 번호가 저장된 값보다 클 때만 셋을 함께 덮는다(같거나 작으면 버린다). 단 사본이 비어 있으면(상품명 없음) 같은 번호도 받는다 — 번호는 셋이 바뀔 때만 오르므로 같은 번호의 메시지는 같은 값을 싣는다. preorder 의 0 은 "catalog 값을 받기 전" 이다 — 관리자가 회차 API 로 먼저 만든 회차는 내부 조회 API 의 값을 번호 0 으로 두므로, 늦게 온 등록 이벤트(1)가 이긴다. 공개 여부가 실제로 바뀌면 회차 일정 번호도 올려 대기열에 알린다(상품명 · 판매 상태는 대기열이 보지 않는다). preorder 의 번호 칸 이름은 공개 여부만 받던 때의 `visibility_version` 그대로다.
+- **칸이 없는 메시지.** 이 칸을 모르는 catalog 의 변경은 빈 payload 라 캐시만 비운다. 그런 등록은 상품명 · 상태를 비우고 공개 · 번호 0 으로 만든다. 판매 상태가 비어 있으면(null) preorder 는 판매 중지로 보지 않는다.
+- **기존 회차.** 사본 칸이 생기기 전의 회차는 비어 있다(마이그레이션도 catalog 표를 읽지 않는다). 그 상품을 다음에 고칠 때(옵션 · 가격만이어도) 오는 변경 이벤트가 채운다. 그전까지 오픈 알림은 상품명 없는 문구로 가며 판매 중지로 보지 않는다. 바로 맞추려면 관리자 화면에서 그 상품을 한 번 저장한다.
 
 ## `PREORDER_PRODUCT_REGISTERED` → preorder
 
@@ -50,19 +60,24 @@ preorder · order 의 `EventEnvelope` 와 같은 모양이다.
   "shipmentBatches": [
     { "batchNumber": 1, "positionFrom": 1, "positionTo": 100, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "2026-11-07" },
     { "batchNumber": 2, "positionFrom": 101, "positionTo": null, "estimatedShipStart": "2026-11-08", "estimatedShipEnd": "2026-11-14" }
-  ]
+  ],
+  "title": "아이폰 Duo",
+  "status": "ACTIVE",
+  "visible": true,
+  "listingVersion": 1
 }
 ```
 
 | 칸 | 뜻 |
 | --- | --- |
 | `campaign.opensAt` · `closesAt` | 회차 시각(UTC ISO-8601). **마이크로초로 잘라 싣는다** — preorder 는 `datetime(6)` 에 저장한다. 마감은 9999-12-31 을 넘지 않고, 잘린 값으로도 마감 > 오픈이다(catalog 가 등록 때 막는다 — 같은 마이크로초 안의 두 시각은 잘리면 같아진다) |
+| `title` · `status` · `visible` · `listingVersion` | 상품명 · 판매 상태(`ACTIVE` \| `PAUSED`, 등록 때는 늘 `ACTIVE`) · 관리자가 고른 공개 여부 · 변경 번호(등록 때 1). 위 "상품 사본과 변경 번호" |
 | `shipmentBatches` | 배송 차수 전체, 관리자 요청 순서 그대로. `positionTo` 가 `null` 이면 상한 없는 마지막 차수. 날짜는 `yyyy-MM-dd`, 1000-01-01 ~ 9999-12-31(MySQL 문서의 date 지원 범위). **최대 100개** — catalog 가 등록 때 막는다(SQS 한 메시지에 담기게, 2026-10-04 결정) |
 
 **받는 쪽이 할 일.**
 
 1. 회차와 차수를 **한 트랜잭션에** 만든다. 따로 커밋하면 회차만 있고 차수가 없는 순간에 그 상품이 노출된다(catalog 는 회차 행으로 준비를 판정하고 `shipment_batches` 는 읽지 않는다).
-2. **이미 회차가 있으면 아무것도 바꾸지 않는다(생성 전용).** 같은 이벤트를 두 번 받거나, 그사이 관리자가 회차 API(`PUT …/preorder-campaign` · `…/shipment-batches`)로 고친 값을 덮지 않기 위해서다.
+2. **이미 회차가 있으면 일정 · 차수는 바꾸지 않는다(생성 전용).** 같은 이벤트를 두 번 받거나, 그사이 관리자가 회차 API(`PUT …/preorder-campaign` · `…/shipment-batches`)로 고친 값을 덮지 않기 위해서다. 상품 사본만 번호가 더 클 때 덮는다.
 3. catalog 내부 API 로 상품을 다시 확인하지 않는다. 이 이벤트는 catalog 가 사전예약 상품에만 보낸다. 큐 스레드에는 넘길 토큰도 없다.
 4. 차수 규칙(`ShipmentBatchPlan`: 1번부터 연속 · 첫 시작 1 · 이어짐 · 상한 없는 차수 하나)이나 "오픈은 미래" 에 어긋나면 처리를 실패시킨다 — 재시도 뒤 DLQ 로 간다. catalog 는 등록 때 같은 차수 규칙으로 먼저 걸러 400 을 돌려준다(`ProductRegistrationValidator`) — 그래서 차수 규칙(`ShipmentBatchPlan`) 위반으로 DLQ 로 가는 것은 두 규칙이 어긋났을 때뿐이다(DB 저장 오류처럼 규칙 밖의 이유는 여기 들지 않는다). 오픈 시각은 catalog 가 더 엄격하다(지금 + `catalog.registration.min-open-lead` 뒤, 기본 30분). DLQ 로 간 상품은 회원에게 보이지 않고, 관리자가 회차 API 로 직접 넣으면 보인다(회차 API 는 회차 · 차수를 따로 저장하므로 둘 다 넣는다).
 
@@ -108,10 +123,14 @@ preorder · order 의 `EventEnvelope` 와 같은 모양이다.
 관리자가 **사전예약 상품**을 고치면 catalog 는 그 수정과 같은 트랜잭션에서 이 이벤트를 적는다. 수정이 되돌려지면(400 · 409) 이벤트도 남지 않는다.
 
 ```json
-"payload": { }
+"payload": { "title": "아이폰 Duo", "status": "PAUSED", "visible": true, "listingVersion": 3 }
 ```
 
-payload 는 빈 객체다. 무엇이 바뀌었는지는 싣지 않는다 — preorder 는 캐시를 비우고 다음 조회에서 내부 조회 API(`GET /internal/products/{id}/options`)로 다시 받는다. 상품 id 는 봉투의 `aggregateId` 다.
+| 칸 | 뜻 |
+| --- | --- |
+| `title` · `status` · `visible` · `listingVersion` | 수정이 끝난 순간의 상품명 · 판매 상태 · 공개 여부와 변경 번호. 위 "상품 사본과 변경 번호" |
+
+무엇이 바뀌었는지는 싣지 않는다 — preorder 는 캐시를 비우고 다음 조회에서 내부 조회 API(`GET /internal/products/{id}/options`)로 다시 받는다. 상품 id 는 봉투의 `aggregateId` 다.
 
 보내는 수정(`/api/v1/admin/products/{id}` 아래):
 
@@ -122,13 +141,14 @@ payload 는 빈 객체다. 무엇이 바뀌었는지는 싣지 않는다 — pre
 | `POST variants` · `PATCH variants/{variantId}` | 수정이 성공하면 보낸다 |
 | `PATCH sale-status` (오픈 전) | 상태가 바뀌었을 때만 — 같은 상태를 다시 보내면 보내지 않는다 |
 | `PATCH visibility` | 공개 여부가 바뀌었을 때만 |
-| `PATCH sale-status` (오픈 뒤 판매 중지 = 회차 취소) | 보내지 않는다 — `PREORDER_CAMPAIGN_CANCELED` 를 받은 preorder 가 캐시를 비운다 |
+| `PATCH sale-status` (오픈 뒤 판매 중지 = 회차 취소) | 판매 중이던 상품이면 `PREORDER_CAMPAIGN_CANCELED` 와 함께 보낸다(판매 상태가 바뀌었다). 이미 판매 중지였거나 이미 취소된 상품이면 보내지 않는다 |
 
-- 일반 판매 상품은 보내지 않는다 — preorder 가 읽지 않는다.
-- 내부 조회 API 의 응답이 실제로 달라졌는지는 따지지 않는다(설명 · 태그 · 보증만 고쳐도 보낸다). 받는 쪽은 비우기만 하므로 더 보내도 다시 받는 조회 한 번이 늘 뿐이다.
-- 사전예약은 오픈 3분 전부터 공개 여부 말고는 못 고치므로(409), 그때부터 이 이벤트를 보내는 수정은 공개 여부 전환뿐이다.
+- 일반 판매 상품은 보내지 않는다 — preorder 가 읽지 않는다(번호는 일반 상품도 오른다).
+- 상품명 · 판매 상태 · 공개 여부를 바꾸는 경로는 모두 위 표에 있다 — 셋이 바뀌면 반드시 이 이벤트가 간다.
+- 내부 조회 API 의 응답이 실제로 달라졌는지는 따지지 않는다(설명 · 태그 · 보증만 고쳐도 보낸다). 받는 쪽은 캐시를 비우고, 번호가 같으면 사본은 그대로이므로 더 보내도 다시 받는 조회 한 번이 늘 뿐이다.
+- 사전예약은 오픈 3분 전부터 공개 여부 말고는 못 고치므로(409), 그때부터 이 이벤트를 보내는 수정은 공개 여부 전환과 오픈 뒤 회차 취소뿐이다. 그래서 오픈 순간의 상품명 · 판매 상태 사본은 최신이다.
 
-**받는 쪽이 할 일**(preorder 에 이미 있다 — `PreorderEventDispatcher` → `CatalogCacheInvalidation.evictEverywhere`): 받은 인스턴스가 자기 캐시를 비우고 Redis 채널로 다른 인스턴스에 알린다. 같은 이벤트를 두 번 받아도 결과가 같다.
+**받는 쪽이 할 일**(preorder — `PreorderEventDispatcher`): 받은 인스턴스가 자기 캐시를 비우고 Redis 채널로 다른 인스턴스에 알린다(`CatalogCacheInvalidation.evictEverywhere`). 네 칸이 다 있으면 회차의 상품 사본을 번호가 더 클 때 덮고(`Campaigns.applyListing`), 회차가 아직 없으면 보류해 늦춰 다시 받는다. 모르는 판매 상태는 계약 위반이라 재시도 뒤 DLQ 로 간다. 같은 이벤트를 두 번 받아도 결과가 같다.
 
 ## 판매 방식별 준비 — catalog 가 읽는 결과
 
@@ -152,4 +172,5 @@ catalog 는 완료 이벤트를 돌려받지 않는다. 받는 쪽이 만든 행
 ## 바꿀 때
 
 - payload 칸을 더하는 것은 받는 쪽이 모르는 칸을 무시하는 한 호환된다. 이름을 바꾸거나 빼는 것은 받는 쪽과 함께 바꾼다.
+- 상품 사본 칸(`title` · `status` · `visible` · `listingVersion`)은 사본을 받는 preorder 와 같은 배포로 나간다. 옛 preorder 는 변경 이벤트의 새 칸을 무시하고 캐시만 비우지만, 등록 이벤트의 `visible` 은 옛 preorder 도 읽어 번호 0 으로 회차를 만든다. 그래서 배포가 겹치는 몇 분 사이(서비스마다 따로 배포되고 blue/green 동안 옛 태스크도 받는다) 비공개로 등록된 상품은 preorder 사본이 비공개로 남을 수 있다 — 그 상품을 한 번 더 고치면(공개 전환 등) 번호가 0 보다 커서 바로잡힌다.
 - 이벤트 종류 이름 · 큐 이름은 `OutboundEventType` 이 정본이다.

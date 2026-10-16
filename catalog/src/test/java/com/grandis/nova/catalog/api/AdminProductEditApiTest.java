@@ -717,7 +717,7 @@ class AdminProductEditApiTest {
         }
 
         @Test
-        @DisplayName("사전예약 상품을 고치면 수정마다 PREORDER_PRODUCT_CHANGED 하나(빈 payload · aggregateId 상품 id) — 같은 상태 · 같은 공개 여부 · 400 · 오픈 3분 전의 409 는 없고, 그때도 공개 전환은 보낸다")
+        @DisplayName("사전예약 상품을 고치면 수정마다 PREORDER_PRODUCT_CHANGED 하나(aggregateId 상품 id) — 같은 상태 · 같은 공개 여부 · 400 · 오픈 3분 전의 409 는 없고, 그때도 공개 전환은 보낸다")
         void preorderEditsNotifyPreorder() throws Exception {
             UUID productId = registerPreorder();
             assertThat(changedEvents(productId)).as("등록은 이 이벤트가 아니다").isEmpty();
@@ -726,7 +726,6 @@ class AdminProductEditApiTest {
             List<java.util.Map<String, Object>> events = changedEvents(productId);
             assertThat(events).hasSize(1);
             assertThat(events.get(0)).containsEntry("aggregate_type", "PRODUCT").containsEntry("aggregate_id", productId.toString());
-            assertThat(JSON.readTree((String) events.get(0).get("payload")).isEmpty()).as("payload 는 빈 객체 — 상품 id 는 봉투에만").isTrue();
 
             mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"color\", \"value\": \"레드\" }"))
                     .andExpect(status().isCreated());
@@ -754,26 +753,63 @@ class AdminProductEditApiTest {
             assertThat(changedEvents(productId)).hasSize(8);
 
             fixtures.campaign(productId, Instant.now().plus(Duration.ofMinutes(2)), Instant.now().plus(HOUR));
+            long versionBeforeConflict = listingVersionOf(productId);
             edit(productId, "{ \"title\": \"Nova 1 Max\" }").andExpect(status().isConflict());
             assertThat(changedEvents(productId)).hasSize(8);
+            // 오픈 3분 전이라 시작 판정에서 409 — 고치기 전에 거절되므로 번호도 오르지 않는다
+            assertThat(listingVersionOf(productId)).isEqualTo(versionBeforeConflict);
             visibility(productId, true).andExpect(status().isOk());
             assertThat(changedEvents(productId)).as("오픈 3분 전에도 공개 전환은 바로 알린다").hasSize(9);
         }
 
         @Test
-        @DisplayName("일반 상품 수정과 사전예약 회차 취소는 PREORDER_PRODUCT_CHANGED 를 적지 않는다 — 회차 취소는 자기 이벤트로 preorder 가 캐시를 비운다")
-        void inStockEditsAndCampaignCancelDoNotNotifyChange() throws Exception {
+        @DisplayName("PREORDER_PRODUCT_CHANGED 는 지금 상품명 · 판매 상태 · 공개 여부와 번호를 싣는다 — 번호는 셋이 실제로 바뀔 때만 오르고 등록은 1 이다")
+        void changedPayloadCarriesListingAndVersionBumpsOnlyOnListingChange() throws Exception {
+            UUID productId = registerPreorder();
+            assertThat(listingVersionOf(productId)).as("등록은 1").isEqualTo(1);
+
+            edit(productId, "{ \"title\": \"  Nova 1 Pro \" }").andExpect(status().isOk());
+            edit(productId, "{ \"title\": \"Nova 1 Pro\", \"description\": \"새 설명\" }").andExpect(status().isOk());
+            mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"color\", \"value\": \"레드\" }"))
+                    .andExpect(status().isCreated());
+            saleStatus(productId, "PAUSED").andExpect(status().isOk());
+            visibility(productId, false).andExpect(status().isOk());
+            saleStatus(productId, "ACTIVE").andExpect(status().isOk());
+
+            assertThat(changedPayloads(productId)).containsExactly(
+                    listing("Nova 1 Pro", "ACTIVE", true, 2),
+                    listing("Nova 1 Pro", "ACTIVE", true, 2),   // 같은 제목 · 설명만 — 번호 그대로
+                    listing("Nova 1 Pro", "ACTIVE", true, 2),   // 옵션 값 추가 — 번호 그대로
+                    listing("Nova 1 Pro", "PAUSED", true, 3),
+                    listing("Nova 1 Pro", "PAUSED", false, 4),
+                    listing("Nova 1 Pro", "ACTIVE", false, 5));
+            assertThat(listingVersionOf(productId)).isEqualTo(5);
+        }
+
+        @Test
+        @DisplayName("일반 상품 수정은 PREORDER_PRODUCT_CHANGED 를 적지 않는다. 회차 취소는 판매 상태가 바뀌면 PREORDER_CAMPAIGN_CANCELED 와 함께 적는다")
+        void inStockEditsDoNotNotifyAndCampaignCancelNotifiesStatus() throws Exception {
             UUID inStock = registerInStock();
             edit(inStock, "{ \"title\": \"Nova 1 Pro\" }").andExpect(status().isOk());
             saleStatus(inStock, "PAUSED").andExpect(status().isOk());
             visibility(inStock, false).andExpect(status().isOk());
             assertThat(changedEvents(inStock)).isEmpty();
+            assertThat(listingVersionOf(inStock)).as("일반 상품도 번호는 오른다(보내지 않을 뿐)").isEqualTo(4);
 
             UUID canceled = registerPreorder();
             fixtures.campaign(canceled, Instant.now().minus(HOUR), Instant.now().plus(HOUR));
             saleStatusBody(canceled, "{ \"status\": \"PAUSED\", \"reason\": \"공급 중단\" }").andExpect(status().isAccepted());
+            saleStatusBody(canceled, "{ \"status\": \"PAUSED\", \"reason\": \"공급 중단\" }").andExpect(status().isAccepted());
             assertThat(cancelEvents(canceled)).hasSize(1);
-            assertThat(changedEvents(canceled)).isEmpty();
+            assertThat(changedPayloads(canceled)).as("다시 보낸 취소는 아무것도 적지 않는다").containsExactly(listing("Nova 1", "PAUSED", true, 2));
+
+            UUID pausedBeforeOpen = registerPreorder();
+            saleStatus(pausedBeforeOpen, "PAUSED").andExpect(status().isOk());
+            fixtures.campaign(pausedBeforeOpen, Instant.now().minus(HOUR), Instant.now().plus(HOUR));
+            saleStatusBody(pausedBeforeOpen, "{ \"status\": \"PAUSED\", \"reason\": \"공급 중단\" }").andExpect(status().isAccepted());
+            assertThat(cancelEvents(pausedBeforeOpen)).hasSize(1);
+            assertThat(changedPayloads(pausedBeforeOpen)).as("이미 판매 중지였으면 취소로 바뀐 사본 값이 없다")
+                    .containsExactly(listing("Nova 1", "PAUSED", true, 2));
         }
 
         /** 공개 · 판매 중 · 재고 행이 있는(준비된) 일반 상품. 회원 목록에서 이 상품만 고르도록 고유 태그를 붙인다. */
@@ -809,6 +845,19 @@ class AdminProductEditApiTest {
                     SELECT aggregate_type, BIN_TO_UUID(aggregate_id) AS aggregate_id, payload FROM catalog_outbox_events
                      WHERE aggregate_id = ? AND event_type = 'PREORDER_CAMPAIGN_CANCELED'
                     """, UuidBinary.toBytes(productId));
+        }
+
+        private List<JsonNode> changedPayloads(UUID productId) {
+            return changedEvents(productId).stream().map(event -> JSON.readTree((String) event.get("payload"))).toList();
+        }
+
+        private JsonNode listing(String title, String status, boolean visible, long listingVersion) {
+            return JSON.readTree("{ \"title\": \"%s\", \"status\": \"%s\", \"visible\": %s, \"listingVersion\": %d }"
+                    .formatted(title, status, visible, listingVersion));
+        }
+
+        private long listingVersionOf(UUID productId) {
+            return jdbcTemplate.queryForObject("SELECT listing_version FROM products WHERE id = ?", Long.class, UuidBinary.toBytes(productId));
         }
 
         private List<java.util.Map<String, Object>> changedEvents(UUID productId) {

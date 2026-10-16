@@ -22,7 +22,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.util.UUID;
 
 /**
- * 사용자의 미결제 장바구니 주문 취소(명세 POST /orders/{orderId}/cancel). 결제 대기면 그 자리에서 취소하고 재고를 돌려준다(200).
+ * 사용자의 미결제 장바구니 · 바로 구매 주문 취소(명세 POST /orders/{orderId}/cancel). 결제 대기면 그 자리에서 취소하고 재고를 돌려준다(200).
  * 다시 불러도 같은 결과다 — 이미 취소된 주문이면 200 CANCELED 이고 두 번 반환하지 않는다({@link UnpaidCartOrderRelease}).
  *
  * - 승인 중(결제 결과를 기다리는 중)이면 409 PAYMENT_IN_PROGRESS — 결과가 나면 다시 시도한다.
@@ -64,10 +64,9 @@ public class CancelCartOrderService {
                 .orElseThrow(() -> new BusinessException(OrderErrorCode.ORDER_NOT_FOUND));
         // switch 식이라 출처가 늘면 컴파일러가 갈래를 요구한다(switch 문은 빠진 상수가 그대로 취소로 내려간다)
         String refusal = switch (order.source()) {
-            case CART -> null;
+            case CART, BUY_NOW -> null;
             case PREORDER -> "사전예약 주문은 예약 취소로 취소합니다.";
             case DRAW -> "드로우 당첨 주문은 취소할 수 없습니다.";
-            case BUY_NOW -> "바로 구매 주문은 아직 취소할 수 없습니다.";
         };
         if (refusal != null) {
             throw new BusinessException(OrderErrorCode.STATE_CONFLICT, refusal);

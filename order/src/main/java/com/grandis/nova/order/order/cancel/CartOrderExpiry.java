@@ -19,7 +19,7 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * 결제 기한(10분)이 지난 결제 대기 장바구니 주문을 취소하고 재고를 돌려준다 — 결제창을 그냥 닫은 주문의 확보를 푼다(명세).
+ * 결제 기한(10분)이 지난 결제 대기 주문(장바구니 · 바로 구매)을 취소하고 재고를 돌려준다 — 결제창을 그냥 닫은 주문의 확보를 푼다(명세).
  *
  * 주기마다 기한 <= 지금인 결제 대기 주문을 (기한, id) 순으로 {@link #BATCH} 개씩 이어 읽어 끝까지 고르고(잠그지 않음), 주문마다 트랜잭션 하나에서 잠근 뒤 다시
  * 판정한다({@link UnpaidCartOrderRelease}) — 그 사이 결제를 시작했으면(승인 중) 건드리지 않는다. 승인 중은 결과를 받으므로 고르지도 않는다.
@@ -53,7 +53,7 @@ public class CartOrderExpiry {
     void run() {
         int expired = expireDue(clock.instant());
         if (expired > 0) {
-            log.info("결제 기한이 지난 장바구니 주문 {}건 취소 · 재고 반환", expired);
+            log.info("결제 기한이 지난 주문 {}건 취소 · 재고 반환", expired);
         }
     }
 
@@ -70,7 +70,7 @@ public class CartOrderExpiry {
         ExpiredOrderPosition after = ExpiredOrderPosition.START;
         int expired = 0;
         while (true) {
-            List<Order> page = orderReader.findExpiredCartOrders(now, after, batch);
+            List<Order> page = orderReader.findExpiredAwaitingOrders(now, after, batch);
             for (Order order : page) {
                 if (expire(order)) {
                     expired++;

@@ -63,7 +63,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 재고 장부 대조. 실제 흐름(장바구니 주문 생성 · 교체 · 사용자 취소 · 만료 · 결제 거절/승인 · 드로우 회차 생성 · 전원/일부 당첨 반영)은 어긋남을
+ * 재고 장부 대조. 실제 흐름(장바구니 주문 생성 · 교체 · 사용자 취소 · 만료 · 결제 거절/승인, 바로 구매 주문 생성 · 결제 승인 · 사용자 취소 · 만료,
+ * 드로우 회차 생성 · 전원/일부 당첨 반영)은 어긋남을
  * 남기지 않고, SQL 로 심은 어긋남 · 재고 행 없는 옵션은 잡는다. 시험끼리 DB 를 함께 쓰므로(다른 시험이 일부러 어긋난 장부를 심는다) 결과는
  * 이 시험이 만든 옵션으로만 본다.
  * 대역 구성은 CartOrderApiTest 와 같다 — Spring 컨텍스트를 함께 쓴다.
@@ -117,6 +118,7 @@ class StockReconcilerTest {
         UUID phone = sellable(20);
         UUID watch = sellable(20);
         UUID gift = sellable(20);
+        UUID tablet = sellable(20);
 
         // 교체: 같은 회원의 새 장바구니 주문이 결제 안 된 앞 주문을 취소하고 반환 + 새 확보를 한 번에 한다
         UUID buyer = fixtures.customer();
@@ -145,6 +147,15 @@ class StockReconcilerTest {
         cartLine(waiting, watch, 4);
         placeCartOrder(waiting, watch, 4, null, 0);
 
+        // 바로 구매: 결제 승인(확보 → 판매) · 사용자 취소 · 만료 · 결제 대기로 남는 주문 — 장바구니를 거치지 않는다
+        UUID direct = fixtures.customer();
+        settle(placeBuyNow(direct, tablet, 2), PaymentSettlement.Result.APPROVED);
+        mockMvc.perform(post("/api/v1/orders/{orderId}/cancel", placeBuyNow(direct, tablet, 1)).with(TestAuth.customer(direct)))
+                .andExpect(status().isOk());
+        String directExpired = placeBuyNow(direct, tablet, 3);
+        tx.executeWithoutResult(status -> release.cancel(UUID.fromString(directExpired), EventCause.system("PAYMENT_EXPIRED")));
+        placeBuyNow(direct, tablet, 1);
+
         // 드로우: 전원 당첨(남은 확보 반납) · 일부 당첨(추첨 요청 → 결과) · 아직 마감 전(확보 유지)
         UUID allWin = createDraw(gift, 3);
         paidEntry(allWin);
@@ -163,11 +174,12 @@ class StockReconcilerTest {
         assertThat(stockOf(phone)).as("교체로 반환된 2 · 판매 3 · 취소로 반환된 1").containsExactly(20, 0, 3);
         assertThat(stockOf(watch)).as("판매 1 · 만료로 반환된 2 · 결제 대기 4").containsExactly(20, 4, 1);
         assertThat(stockOf(gift)).as("당첨 2 + 1 판매 · 마감 전 회차 2 확보").containsExactly(20, 2, 3);
+        assertThat(stockOf(tablet)).as("판매 2 · 취소 1 · 만료 3 반환 · 결제 대기 1").containsExactly(20, 1, 2);
 
         reconciler.reconcile().orElseThrow();
 
-        assertThat(expectations.findDrifted()).extracting(StockBalance::optionId).doesNotContain(phone, watch, gift);
-        for (UUID option : List.of(phone, watch, gift)) {
+        assertThat(expectations.findDrifted()).extracting(StockBalance::optionId).doesNotContain(phone, watch, gift, tablet);
+        for (UUID option : List.of(phone, watch, gift, tablet)) {
             assertThat(expectations.balanceOf(option).matches()).as("미리보기도 같다: " + option).isTrue();
         }
     }
@@ -273,7 +285,7 @@ class StockReconcilerTest {
     private void place(UUID option, int quantity, boolean reserve) {
         UUID productId = jdbcTemplate.queryForObject("SELECT BIN_TO_UUID(product_id) FROM product_options WHERE id = ?",
                 (rs, n) -> UUID.fromString(rs.getString(1)), (Object) bytes(option));
-        PlaceOrderCommand command = new PlaceOrderCommand(fixtures.customer(), OrderSource.CART, null, null, OrderFixtures.ADDRESS,
+        PlaceOrderCommand command = new PlaceOrderCommand(fixtures.customer(), OrderSource.CART, null, null, null, OrderFixtures.ADDRESS,
                 List.of(new PlaceOrderCommand.Line(productId, option, quantity, PRICE, 0, BigDecimal.ZERO, "아이폰 17", "블랙")));
         tx.executeWithoutResult(status -> {
             if (reserve) {
@@ -298,6 +310,16 @@ class StockReconcilerTest {
         String body = mockMvc.perform(post("/api/v1/orders").with(TestAuth.customer(customer)).contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"source":"CART","items":[%s],"shipTo":%s}""".formatted(items, SHIP_TO)))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        return JSON.readTree(body).get("data").get("orderId").asString();
+    }
+
+    /** 바로 구매 주문 하나 — 누름마다 새 키. */
+    private String placeBuyNow(UUID customer, UUID option, int quantity) throws Exception {
+        String body = mockMvc.perform(post("/api/v1/orders").with(TestAuth.customer(customer)).contentType(MediaType.APPLICATION_JSON)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .content("""
+                                {"source":"BUY_NOW","items":[%s],"shipTo":%s}""".formatted(item(option, quantity), SHIP_TO)))
                 .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
         return JSON.readTree(body).get("data").get("orderId").asString();
     }
