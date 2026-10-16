@@ -174,7 +174,7 @@ class PreorderEventHandlerTest {
         assertThat(paymentAfterCancel() - before).isEqualTo(1);
     }
 
-    /** 결제 → 환불로 취소된 예약에 취소 전 결제 확인이 다시 왔다. DB 가 버린 마이크로초 아래 자리는 같은 시각으로 본다. */
+    /** 결제 → 환불로 취소된 예약에 취소 전 결제 확인이 다시 왔다. 마이크로초 아래 자리는 저장 전에 잘라 같은 시각이다. */
     @Test
     void 환불로_취소된_예약에_같은_결제_확인이_다시_오면_세지_않는다() {
         register();
@@ -189,6 +189,21 @@ class PreorderEventHandlerTest {
 
         assertThat(row()).containsEntry("status", "CANCELED");
         assertThat(paymentAfterCancel() - before).isZero();
+    }
+
+    /** 마이크로초 경계 양쪽으로 1ns 다른 시각은 다른 결제다. */
+    @Test
+    void 환불로_취소된_예약에_마이크로초가_다른_결제_확인이_오면_센다() {
+        register();
+        handler.onPaymentConfirmed(new PreorderPaymentConfirmed(token, "o-1", Instant.parse("2026-10-04T01:02:00.123456Z")));
+        startCancel(EventActor.USER);
+        completeCancel(PreorderOrderSettled.Result.CANCELED);
+        double before = paymentAfterCancel();
+
+        handler.onPaymentConfirmed(new PreorderPaymentConfirmed(token, "o-1", Instant.parse("2026-10-04T01:02:00.123455999Z")));
+        handler.onPaymentConfirmed(new PreorderPaymentConfirmed(token, "o-1", Instant.parse("2026-10-04T01:02:00.123457Z")));
+
+        assertThat(paymentAfterCancel() - before).isEqualTo(2);
     }
 
     @Test

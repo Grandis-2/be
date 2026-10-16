@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.preorder;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 
 /**
  * 예약 상태를 움직이는 사건과 그 사건이 원장에 남길 값. 사건마다 필요한 값을 타입이 함께 갖는다 —
@@ -14,6 +15,11 @@ public sealed interface PreorderFact {
 
     /** 이력에 남길 사유. 없으면 null. */
     String reason();
+
+    /** 결제 시각은 DB(datetime(6))가 남기는 마이크로초까지 자른다. 남긴 값과 다시 받은 값을 그대로 비교할 수 있다. */
+    private static Instant toStoredPrecision(Instant at) {
+        return at == null ? null : at.truncatedTo(ChronoUnit.MICROS);
+    }
 
     /** worker 가 외부 등록을 마쳤다. 취소 중에 늦게 도착하면 무시된다 — 취소된 예약을 되살리지 않는다(외부는 CANCEL 작업이 정리). */
     record RegisterConfirmed(String externalReference) implements PreorderFact {
@@ -56,6 +62,10 @@ public sealed interface PreorderFact {
     /** order 가 결제를 승인했다. 결제 가능 상태면 예약 확정, 취소 중이면 시각만 남긴다(거절되면 확정으로 돌아갈 근거). */
     record PaymentConfirmed(Instant paidAt) implements PreorderFact {
 
+        public PaymentConfirmed {
+            paidAt = toStoredPrecision(paidAt);
+        }
+
         @Override
         public PreorderTrigger trigger() {
             return PreorderTrigger.PAYMENT_CONFIRMED;
@@ -87,6 +97,10 @@ public sealed interface PreorderFact {
      * @param paidAt 결제된 주문이라 거절했으면 결제 시각, 아니면 null. 결제 확인 이벤트보다 먼저 와도 예약 확정으로 돌아가게 한다
      */
     record CancelRejected(String reason, Instant paidAt) implements PreorderFact {
+
+        public CancelRejected {
+            paidAt = toStoredPrecision(paidAt);
+        }
 
         @Override
         public PreorderTrigger trigger() {

@@ -25,7 +25,6 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
@@ -45,9 +44,6 @@ public class PreorderEventHandler {
 
     static final String FAILED_METRIC = "preorder.sync.failed";
     static final String PAYMENT_AFTER_CANCEL_METRIC = "preorder.payment.after_cancel";
-
-    /** DB 는 마이크로초까지 남긴다. 같은 결제 시각인지는 이보다 작은 차이를 버리고 본다. */
-    private static final Duration STORED_PRECISION = Duration.ofNanos(1_000);
 
     private static final String REJECTED_BY_ORDER = "ORDER_REJECTED";
 
@@ -235,9 +231,10 @@ public class PreorderEventHandler {
     @Transactional
     public void onPaymentConfirmed(PreorderPaymentConfirmed message) {
         UUID preorderId = requirePreorder(message.preorderId()).id();
-        PreorderTransition transition = ledger.fire(preorderId, new PreorderFact.PaymentConfirmed(message.paidAt()));
+        PreorderFact.PaymentConfirmed paid = new PreorderFact.PaymentConfirmed(message.paidAt());
+        PreorderTransition transition = ledger.fire(preorderId, paid);
         if (transition.applied() || transition.status() != PreorderStatus.CANCELED
-                || isRecordedPayment(preorderId, message.paidAt())) {
+                || isRecordedPayment(preorderId, paid.paidAt())) {
             return;
         }
         paymentAfterCancel.increment();
@@ -245,11 +242,9 @@ public class PreorderEventHandler {
                 message.preorderId(), message.orderId(), message.paidAt());
     }
 
-    /** 이미 남긴 결제 시각과 같은가. 같으면 취소 전에 반영한 결제 확인이 다시 온 것이다. */
+    /** 이미 남긴 결제 시각과 같은가. 같으면 취소 전에 반영한 결제 확인이 다시 온 것이다. 둘 다 저장 정밀도로 맞춘 값이다. */
     private boolean isRecordedPayment(UUID preorderId, Instant paidAt) {
-        return paidAt != null && preorders.findReservedAt(preorderId)
-                .filter(recorded -> Duration.between(recorded, paidAt).abs().compareTo(STORED_PRECISION) < 0)
-                .isPresent();
+        return paidAt != null && preorders.findReservedAt(preorderId).filter(paidAt::equals).isPresent();
     }
 
     /**
