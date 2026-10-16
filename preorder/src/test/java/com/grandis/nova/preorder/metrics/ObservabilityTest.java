@@ -5,7 +5,10 @@ import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
+import com.grandis.nova.preorder.campaign.Campaigns;
+import com.grandis.nova.preorder.campaign.OpenAlertBacklog;
 import com.grandis.nova.preorder.cancel.ExpiryCancelService;
+import com.grandis.nova.preorder.deadletter.DeadLetterBacklog;
 import com.grandis.nova.preorder.event.PreorderEventDispatcher;
 import com.grandis.nova.preorder.event.PreorderEventHandler;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
@@ -14,14 +17,17 @@ import com.grandis.nova.preorder.preorder.PreorderFact;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.support.AcceptFixtures;
+import com.grandis.nova.preorder.support.AdmissionTickets;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import com.grandis.nova.preorder.syncjob.RegisterJobReady;
 import com.grandis.nova.preorder.syncjob.SyncActor;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -30,15 +36,20 @@ import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfig
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.client.ResourceAccessException;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.BDDMockito.given;
 
 /** 부하 시험 · 운영에서 볼 지표가 실제로 기록되고 /actuator/prometheus 로 나가는지. 레지스트리를 공유하므로 증가분으로 본다. */
 @PreorderIntegrationTest
@@ -71,6 +82,15 @@ class ObservabilityTest {
 
     @Autowired
     ExpiryCancelService expiryCancelService;
+
+    @Autowired
+    Campaigns campaigns;
+
+    @Autowired
+    DeadLetterBacklog deadLetterBacklog;
+
+    @Autowired
+    OpenAlertBacklog openAlertBacklog;
 
     @Autowired
     TransactionTemplate transactionTemplate;
@@ -108,6 +128,75 @@ class ObservabilityTest {
         assertThat(timerCount("preorder.accept", "outcome", "accepted")).isEqualTo(accepted + 1);
         assertThat(timerCount("preorder.accept", "outcome", "ADMISSION_TICKET_INVALID")).isEqualTo(invalidTicket + 1);
         assertThat(registry.get("preorder.campaign.lock.wait").timer().count()).isEqualTo(lockWaits + 1);
+    }
+
+    /** 경보가 "값 없음"으로 빠지지 않게 접수 전부터 결과 · 경로 조합이 모두 있다. */
+    @Test
+    void 접수_업무_지표는_접수_전부터_모든_조합이_있다() {
+        for (String channel : List.of("user", "admin")) {
+            for (String result : List.of("success", "rejected", "error")) {
+                assertThat(registry.find("nova.preorder.created").tag("result", result).tag("channel", channel)
+                        .counter()).as("%s · %s", result, channel).isNotNull();
+            }
+        }
+    }
+
+    /** 업무 지표는 새 예약만 성공으로 센다. 재전송은 세지 않고, 업무 거절(4xx)과 장애(5xx · 예외)를 나눈다. */
+    @Test
+    void 접수_업무_지표는_새_예약만_성공으로_세고_거절과_장애를_나눠_센다() {
+        double userSuccess = created("success", "user");
+        double adminSuccess = created("success", "admin");
+        double rejected = created("rejected", "user");
+        double error = created("error", "user");
+        PreorderProduct product = fixtures.openPreorderProduct();
+        accepts.stubCatalog(product);
+        UUID customerId = fixtures.customer();
+        String key = "key-" + ShopFixtures.unique();
+        String ticket = AdmissionTickets.issue(product.productId(), customerId, Instant.now());
+
+        acceptService.acceptByCustomer(customerId, product.productId(), product.productId(), product.optionId(), key,
+                ticket);
+        acceptService.acceptByCustomer(customerId, product.productId(), product.productId(), product.optionId(), key,
+                ticket);
+        assertThatThrownBy(() -> acceptService.acceptByCustomer(fixtures.customer(), product.productId(),
+                product.productId(), product.optionId(), "key-" + ShopFixtures.unique(), "et_forged"))
+                .isInstanceOf(BusinessException.class);
+        PreorderProduct catalogDown = fixtures.openPreorderProduct();
+        given(catalogClient.getProduct(catalogDown.productId())).willThrow(new ResourceAccessException("timeout"));
+        assertThatThrownBy(() -> accepts.submit(fixtures.customer(), catalogDown)).isInstanceOf(RuntimeException.class);
+        acceptService.acceptByAdmin(fixtures.customer(), product.productId(), product.optionId(),
+                "key-" + ShopFixtures.unique(), "전화 접수", null);
+
+        assertThat(created("success", "user")).as("재전송은 새 예약이 아니다").isEqualTo(userSuccess + 1);
+        assertThat(created("rejected", "user")).isEqualTo(rejected + 1);
+        assertThat(created("error", "user")).as("catalog 장애(503)는 업무 거절이 아니다").isEqualTo(error + 1);
+        assertThat(created("success", "admin")).isEqualTo(adminSuccess + 1);
+    }
+
+    @Test
+    void 접수_중인_회차만_센다() {
+        Instant now = Instant.now();
+        long before = campaigns.countAccepting(now);
+        UUID accepting = fixtures.openPreorderProduct().productId();
+        UUID notOpen = fixtures.preorderProduct(now.plus(Duration.ofHours(1)), now.plus(Duration.ofHours(2)))
+                .productId();
+        UUID closed = fixtures.preorderProduct(now.minus(Duration.ofHours(2)), now.minus(Duration.ofHours(1)))
+                .productId();
+        UUID hidden = fixtures.openPreorderProduct().productId();
+        UUID paused = fixtures.openPreorderProduct().productId();
+        for (UUID productId : List.of(accepting, notOpen, closed)) {
+            fixtures.listing(productId, "상품", "ACTIVE", true);
+        }
+        fixtures.listing(hidden, "상품", "ACTIVE", false);
+        fixtures.listing(paused, "상품", "PAUSED", true);
+
+        long expected = before + 1;
+        assertThat(campaigns.countAccepting(now)).as("오픈 전 · 마감 · 비공개 · 판매 중지는 빠진다").isEqualTo(expected);
+        // 기대값과 같은 시각으로 세도록 시계를 고정한 인스턴스로 갱신한다
+        SimpleMeterRegistry gauges = new SimpleMeterRegistry();
+        new StateGauges(preorders, deadLetterBacklog, openAlertBacklog, campaigns, gauges,
+                Clock.fixed(now, ZoneOffset.UTC)).refresh();
+        assertThat(gauges.get(StateGauges.ACCEPTING_CAMPAIGNS_METRIC).gauge().value()).isEqualTo(expected);
     }
 
     @Test
@@ -234,6 +323,12 @@ class ObservabilityTest {
                 "resilience4j_circuitbreaker_state",
                 "resilience4j_retry_calls",
                 "resilience4j_bulkhead_available_concurrent_calls");
+    }
+
+    private double created(String result, String channel) {
+        Counter counter = registry.find("nova.preorder.created").tag("result", result).tag("channel", channel)
+                .counter();
+        return counter == null ? 0 : counter.count();
     }
 
     private long timerCount(String name, String tag, String value) {
