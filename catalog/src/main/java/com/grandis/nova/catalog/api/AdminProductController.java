@@ -6,6 +6,7 @@ import com.grandis.nova.catalog.edit.InStockConversionRequest;
 import com.grandis.nova.catalog.edit.OptionValueAddRequest;
 import com.grandis.nova.catalog.edit.OptionValueEditRequest;
 import com.grandis.nova.catalog.edit.ProductEditRequest;
+import com.grandis.nova.catalog.edit.ProductDeleteService;
 import com.grandis.nova.catalog.edit.ProductEditService;
 import com.grandis.nova.catalog.edit.ProductImageAddRequest;
 import com.grandis.nova.catalog.edit.ProductImageEditService;
@@ -77,18 +78,20 @@ public class AdminProductController {
     private final ProductDetailService detailService;
     private final ProductEditService editService;
     private final ProductImageEditService imageEditService;
+    private final ProductDeleteService deleteService;
     private final RegistrationRequestParser parser;
     private final StrictBodies bodies;
 
     public AdminProductController(ProductRegistrationService registrationService, ProductListingService listingService,
                                   ProductDetailService detailService, ProductEditService editService,
-                                  ProductImageEditService imageEditService,
+                                  ProductImageEditService imageEditService, ProductDeleteService deleteService,
                                   RegistrationRequestParser parser, StrictBodies bodies) {
         this.registrationService = registrationService;
         this.listingService = listingService;
         this.detailService = detailService;
         this.editService = editService;
         this.imageEditService = imageEditService;
+        this.deleteService = deleteService;
         this.bodies = bodies;
         this.parser = parser;
     }
@@ -147,6 +150,18 @@ public class AdminProductController {
     @PatchMapping("/{productId}")
     public ApiResponse<AdminProductResponse> edit(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ProductEditRequest.class))) @RequestBody String body) {
         return ApiResponse.ok(AdminProductResponse.from(serialized(() -> editService.editProduct(productId, bodies.parse(body, ProductEditRequest.class)))));
+    }
+
+    /** 소프트 삭제. 되살리기는 없다. 삭제한 상품은 목록 · 상세 · 수정에서 없는 상품(404)이고, 지난 주문 · 예약 · 드로우는 그대로다. */
+    @Operation(summary = "상품 삭제(소프트 삭제)",
+            description = "204. 없거나 이미 삭제한 상품은 404. 사전예약 오픈 3분 전부터 마감 전(회차 취소 전) · 반영 전 드로우의 증정품이면 409 — 판매 중지 · 드로우 종료가 먼저")
+    @DeleteMapping("/{productId}")
+    public ResponseEntity<Void> delete(@PathVariable UUID productId) {
+        serialized(() -> {
+            deleteService.delete(productId);
+            return null;
+        });
+        return ResponseEntity.noContent().build();
     }
 
     /** 축에 값 추가(새 색상 · 용량). 옵션은 만들지 않는다 — 조합은 아래 variants 로. */
