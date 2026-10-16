@@ -5,8 +5,14 @@ import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
+import com.grandis.nova.preorder.cancel.ExpiryCancelService;
 import com.grandis.nova.preorder.event.PreorderEventDispatcher;
+import com.grandis.nova.preorder.event.PreorderEventHandler;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
+import com.grandis.nova.preorder.preorder.PaymentOverdue;
+import com.grandis.nova.preorder.preorder.PreorderFact;
+import com.grandis.nova.preorder.preorder.PreorderLedger;
+import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
@@ -53,6 +59,18 @@ class ObservabilityTest {
 
     @Autowired
     StateGauges stateGauges;
+
+    @Autowired
+    Preorders preorders;
+
+    @Autowired
+    PreorderEventHandler handler;
+
+    @Autowired
+    PreorderLedger ledger;
+
+    @Autowired
+    ExpiryCancelService expiryCancelService;
 
     @Autowired
     TransactionTemplate transactionTemplate;
@@ -171,6 +189,34 @@ class ObservabilityTest {
         // 다른 시험의 주기 작업이 이 발송을 집지 않게 닫는다
         jdbcTemplate.update("UPDATE preorder_open_alert_dispatches SET completed_at = UTC_TIMESTAMP(6) WHERE product_id = ?",
                 (Object) UuidBinary.toBytes(openAlertProduct));
+    }
+
+    /** 공유 DB 라 전체 수가 아니라 이 시험이 더한 만큼 늘었는지 본다. */
+    @Test
+    void 결제_기한이_지난_예약_수를_만료_대기와_막힌_수로_나눠_센다() {
+        PaymentOverdue before = preorders.countPaymentOverdue(Instant.now());
+        overdue();
+        String rejected = overdue();
+        expiryCancelService.expire(rejected);
+        UUID rejectedId = preorders.getByToken(rejected).id();
+        transactionTemplate.executeWithoutResult(status -> ledger.fire(rejectedId,
+                new PreorderFact.CancelRejected("REJECTED_BY_ORDER:PAID", null)));
+
+        stateGauges.refresh();
+
+        assertThat(registry.get("preorder.expiry.overdue").gauge().value()).isGreaterThanOrEqualTo(before.overdue() + 1);
+        assertThat(registry.get("preorder.expiry.blocked").gauge().value()).isGreaterThanOrEqualTo(before.blocked() + 1);
+    }
+
+    /** 외부 등록을 확인해 결제 가능으로 만들고 결제 기한을 넘긴 예약. @return 예약 공개 UUID */
+    private String overdue() {
+        AcceptResult accepted = accepts.accept(fixtures.customer());
+        UUID preorderId = accepted.preorder().id();
+        String token = AcceptFixtures.tokenOf(accepted);
+        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(
+                fixtures.workerSucceeds(preorderId, "REGISTER"), token, "REGISTER", "R-" + ShopFixtures.unique()));
+        fixtures.passPaymentDue(preorderId);
+        return token;
     }
 
     @Test
