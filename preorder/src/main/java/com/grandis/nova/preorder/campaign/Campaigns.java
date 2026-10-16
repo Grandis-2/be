@@ -59,6 +59,12 @@ public class Campaigns {
     }
 
     /** 그 상품에 사전예약 회차가 있는가. */
+    /** 지금 접수 중인(오픈 뒤 · 마감 전 · 공개 · 판매 중지 아님) 회차 수. */
+    @Transactional(readOnly = true)
+    public long countAccepting(Instant now) {
+        return campaigns.countAccepting(now, ProductStatus.PAUSED);
+    }
+
     @Transactional(readOnly = true)
     public boolean exists(UUID productId) {
         return campaigns.existsById(productId);

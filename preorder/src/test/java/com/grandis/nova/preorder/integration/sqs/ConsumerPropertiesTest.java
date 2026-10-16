@@ -10,7 +10,7 @@ import java.time.Duration;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 설정 키는 예전(nova.sqs.consumer.* · nova.sqs.dead-letter.*) 그대로이고 기본값도 같다. 범위 검증은 QueuePollerSettings 가 하고,
+ * 설정 키는 nova.sqs.consumer.* · nova.sqs.dead-letter.* 다. 범위 검증은 QueuePollerSettings 가 하고,
  * 꺼 둔 환경에서도 바인딩할 때 막힌다(범위 표 전체는 common:sqs 의 시험이 본다).
  */
 class ConsumerPropertiesTest {
@@ -26,7 +26,7 @@ class ConsumerPropertiesTest {
             assertThat(consumer.enabled()).isFalse();
             assertThat(consumer.toSettings().queue()).isEqualTo("preorder-events");
             assertThat(consumer.toSettings().visibility()).isEqualTo(Duration.ofMinutes(5));
-            assertThat(consumer.toSettings().backoffBase()).isEqualTo(Duration.ofSeconds(5));
+            assertThat(consumer.toSettings().backoffBase()).isEqualTo(Duration.ofSeconds(30));
             assertThat(consumer.toDeferSettings().firstDelay()).isEqualTo(Duration.ofSeconds(10));
             assertThat(consumer.toDeferSettings().maxDelay()).isEqualTo(Duration.ofMinutes(15));
             assertThat(consumer.toDeferSettings().alertAfter()).isEqualTo(Duration.ofHours(1));
