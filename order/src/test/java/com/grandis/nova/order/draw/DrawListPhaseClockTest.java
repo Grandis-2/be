@@ -39,7 +39,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * 목록의 단계 필터와 응답의 단계 칸이 같은 앱 시계(storageClock)로 갈리는가 — 시계를 경계 정각에 고정하고 API 로 본다.
  * 실제 시각과 수년 떨어진 시각이라, 컨트롤러가 어느 한쪽에서라도 앱 시계 대신 실제 시각을 쓰면 목록이나 칸이 어긋난다.
- * 주기 작업(추첨 · 정체 점검)은 OrderIntegrationTest 가 1시간 뒤로 미뤄 고정 시계로 다른 회차를 처리하지 않는다.
+ * 주기 작업(추첨 · 정체 점검 · 아웃박스 릴레이 · 정리)은 OrderIntegrationTest 가 첫 실행을 1시간 뒤로 미뤄, 시험 실행이 그 안에 끝나는 한
+ * 고정 시계로 공유 표를 건드리지 않는다(이 컨텍스트는 따로 캐시되어 JVM 이 끝날 때까지 산다 — StoredTimestampTest 와 같은 전제).
  * 만든 회차는 끝나면 지운다 — 만든 시각도 고정 시각(수년 뒤)이라, 남기면 표를 함께 쓰는 다른 시험의 최신순 목록 맨 앞을 차지한다
  * (이 시험이 먼저 돌면 AdminDrawApiTest.listsNewestFirstWithPhase 가 실패했다).
  */
