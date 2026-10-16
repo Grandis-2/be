@@ -6,7 +6,9 @@ import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.campaign.Campaigns;
+import com.grandis.nova.preorder.campaign.OpenAlertBacklog;
 import com.grandis.nova.preorder.cancel.ExpiryCancelService;
+import com.grandis.nova.preorder.deadletter.DeadLetterBacklog;
 import com.grandis.nova.preorder.event.PreorderEventDispatcher;
 import com.grandis.nova.preorder.event.PreorderEventHandler;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
@@ -25,6 +27,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -35,8 +38,10 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.ResourceAccessException;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -80,6 +85,12 @@ class ObservabilityTest {
 
     @Autowired
     Campaigns campaigns;
+
+    @Autowired
+    DeadLetterBacklog deadLetterBacklog;
+
+    @Autowired
+    OpenAlertBacklog openAlertBacklog;
 
     @Autowired
     TransactionTemplate transactionTemplate;
@@ -179,9 +190,13 @@ class ObservabilityTest {
         fixtures.listing(hidden, "상품", "ACTIVE", false);
         fixtures.listing(paused, "상품", "PAUSED", true);
 
-        assertThat(campaigns.countAccepting(now)).as("오픈 전 · 마감 · 비공개 · 판매 중지는 빠진다").isEqualTo(before + 1);
-        stateGauges.refresh();
-        assertThat(registry.get(StateGauges.ACCEPTING_CAMPAIGNS_METRIC).gauge().value()).isPositive();
+        long expected = before + 1;
+        assertThat(campaigns.countAccepting(now)).as("오픈 전 · 마감 · 비공개 · 판매 중지는 빠진다").isEqualTo(expected);
+        // 기대값과 같은 시각으로 세도록 시계를 고정한 인스턴스로 갱신한다
+        SimpleMeterRegistry gauges = new SimpleMeterRegistry();
+        new StateGauges(preorders, deadLetterBacklog, openAlertBacklog, campaigns, gauges,
+                Clock.fixed(now, ZoneOffset.UTC)).refresh();
+        assertThat(gauges.get(StateGauges.ACCEPTING_CAMPAIGNS_METRIC).gauge().value()).isEqualTo(expected);
     }
 
     @Test
