@@ -102,6 +102,7 @@ class DrawListPhaseApiTest {
     void rejectsUnknownPhase() throws Exception {
         for (String path : List.of("/api/v1/draws", "/api/v1/admin/draws")) {
             list(path, "DRAWN").andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
                     .andExpect(jsonPath("$.error.details.violations[0].field").value("phase"));
         }
     }
