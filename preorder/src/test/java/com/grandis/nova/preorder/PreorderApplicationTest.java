@@ -34,7 +34,8 @@ class PreorderApplicationTest {
                 "SELECT COUNT(*) FROM flyway_schema_history WHERE success = 0", Integer.class);
 
         assertThat(tables).contains("preorder_campaigns", "shipment_batches", "preorders", "preorder_events",
-                "preorder_sync_jobs", "preorder_sync_attempts", "preorder_outbox_events", "flyway_schema_history");
+                "preorder_sync_jobs", "preorder_sync_attempts", "preorder_outbox_events", "preorder_payment_anomalies",
+                "flyway_schema_history");
         assertThat(tables).doesNotContain("outbox_events");
         assertThat(failed).isZero();
     }

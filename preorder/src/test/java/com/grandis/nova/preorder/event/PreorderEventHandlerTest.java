@@ -1,6 +1,8 @@
 package com.grandis.nova.preorder.event;
 
 import com.grandis.nova.common.UuidBinary;
+import com.grandis.nova.common.testing.Concurrently;
+import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.cancel.application.CancelStarter;
@@ -20,6 +22,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -174,6 +177,40 @@ class PreorderEventHandlerTest {
         assertThat(paymentAfterCancel() - before).isEqualTo(1);
     }
 
+    /** SQS 중복 전달 · 아웃박스 재발행. 같은 결제는 이상 결제 한 행이고 한 번만 센다. */
+    @Test
+    void 취소가_끝난_예약에_같은_결제_확인을_다시_받아도_한_번만_센다() {
+        register();
+        startCancel(EventActor.USER);
+        completeCancel(PreorderOrderSettled.Result.NO_ORDER);
+        PreorderPaymentConfirmed confirmed = new PreorderPaymentConfirmed(token, "o-1", Instant.now());
+        double before = paymentAfterCancel();
+
+        handler.onPaymentConfirmed(confirmed);
+        handler.onPaymentConfirmed(confirmed);
+
+        assertThat(paymentAfterCancel() - before).isEqualTo(1);
+        assertThat(anomalies()).isEqualTo(1);
+    }
+
+    @Test
+    void 취소가_끝난_예약에_같은_결제_확인이_동시에_와도_한_번만_센다() throws Exception {
+        register();
+        startCancel(EventActor.USER);
+        completeCancel(PreorderOrderSettled.Result.NO_ORDER);
+        PreorderPaymentConfirmed confirmed = new PreorderPaymentConfirmed(token, "o-1", Instant.now());
+        double before = paymentAfterCancel();
+
+        List<Outcome<Void>> outcomes = Concurrently.run(2, i -> () -> {
+            handler.onPaymentConfirmed(confirmed);
+            return null;
+        });
+
+        assertThat(outcomes).allMatch(Outcome::succeeded);
+        assertThat(paymentAfterCancel() - before).isEqualTo(1);
+        assertThat(anomalies()).isEqualTo(1);
+    }
+
     /** 결제 → 환불로 취소된 예약에 취소 전 결제 확인이 다시 왔다. 마이크로초 아래 자리는 저장 전에 잘라 같은 시각이다. */
     @Test
     void 환불로_취소된_예약에_같은_결제_확인이_다시_오면_세지_않는다() {
@@ -229,6 +266,11 @@ class PreorderEventHandlerTest {
         handler.onOrderSettled(settled(result, null));
         handler.onExternalJobSucceeded(ShopFixtures.unique(),
                 ShopFixtures.succeeded(fixtures.workerSucceeds(preorderId, "CANCEL"), token, "CANCEL", null));
+    }
+
+    private int anomalies() {
+        return fixtures.count("SELECT COUNT(*) FROM preorder_payment_anomalies WHERE preorder_id = ?",
+                (Object) UuidBinary.toBytes(preorderId));
     }
 
     /** 기동 때 등록돼 있어야 한다 — 없으면 get 이 실패한다. 공유 컨텍스트라 앞뒤 차이로 본다. */

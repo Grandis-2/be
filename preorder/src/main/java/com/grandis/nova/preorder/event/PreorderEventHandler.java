@@ -226,7 +226,8 @@ public class PreorderEventHandler {
     /**
      * 결제 확인 → 예약 확정. 취소 중이면 시각만 남겨 거절됐을 때 확정으로 돌아갈 근거로 둔다.
      * 취소가 끝난 예약에 남긴 결제 시각이 없거나 다른 결제 확인이 오면 order 가 취소한 주문을 승인한 것이다 — 상태는 그대로 두고
-     * 경보로 드러낸다. 결제 확인이 큐에서 늦어 환불 · 외부 취소 뒤에 처음 닿은 경우도 여기에 든다.
+     * 이상 결제로 남겨 경보로 드러낸다. 같은 결제는 다시 · 겹쳐 와도 처음 남길 때만 센다.
+     * 결제 확인이 큐에서 늦어 환불 · 외부 취소 뒤에 처음 닿은 경우도 여기에 든다.
      */
     @Transactional
     public void onPaymentConfirmed(PreorderPaymentConfirmed message) {
@@ -235,6 +236,10 @@ public class PreorderEventHandler {
         PreorderTransition transition = ledger.fire(preorderId, paid);
         if (transition.applied() || transition.status() != PreorderStatus.CANCELED
                 || isRecordedPayment(preorderId, paid.paidAt())) {
+            return;
+        }
+        if (!ledger.recordPaymentAfterCancel(preorderId, message.orderId(), paid.paidAt())) {
+            log.info("이미 남긴 이상 결제를 다시 받았다 preorderId={} paidAt={}", message.preorderId(), paid.paidAt());
             return;
         }
         paymentAfterCancel.increment();
