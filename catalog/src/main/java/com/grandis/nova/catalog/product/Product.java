@@ -94,6 +94,9 @@ public class Product extends BaseEntity {
     /** 사전예약 회차 취소를 접수한 시각. null 이면 취소 아님 — 오픈 전에 판매 중지로 둔 채 오픈을 넘긴 상품도 null 이다(2026-10-04 결정). */
     private Instant campaignCanceledAt;
 
+    /** 소프트 삭제한 시각. null 이면 삭제 아님. 삭제한 상품은 비공개다(DB CHECK) — 되살리기는 없다. */
+    private Instant deletedAt;
+
     /**
      * 상품명 · 판매 상태 · 공개 여부의 변경 번호. 셋 중 하나가 실제로 바뀔 때마다 1 오른다(상품 행을 잠근 수정 안에서).
      * preorder 는 이 셋을 회차 행에 사본으로 두고, 순서가 뒤집혀 온 이벤트를 이 번호로 거른다(contracts/catalog-events.md).
@@ -220,6 +223,18 @@ public class Product extends BaseEntity {
         return true;
     }
 
+    /**
+     * 소프트 삭제 — 비공개로 두고 삭제 시각을 남긴다. 행은 남는다(옵션을 가리키는 주문 · 장바구니 · 예약 · 드로우). 되돌릴 수 없다.
+     * 공개였으면 번호가 올라 사전예약은 preorder 의 회차 사본도 비공개가 된다. 진행 중 사전예약 · 드로우 증정품인지는 서비스가 본다(다른 서비스 표).
+     */
+    public void delete(Instant now) {
+        if (deletedAt != null) {
+            throw new IllegalStateException("이미 삭제한 상품: " + getId());
+        }
+        hide();
+        this.deletedAt = Objects.requireNonNull(now, "now");
+    }
+
     /** 표시 정보 수정. null 은 "보내지 않음" 이라 그대로 둔다. 사전예약 오픈 뒤 금지는 서비스가 지킨다(회차는 preorder 표). */
     public void edit(String title, Brand brand, String modelName, String description, String tags) {
         if (title != null && !title.strip().equals(this.title)) {
@@ -312,6 +327,10 @@ public class Product extends BaseEntity {
 
     public SaleStatus getStatus() {
         return status;
+    }
+
+    public boolean isDeleted() {
+        return deletedAt != null;
     }
 
     public Instant getCampaignCanceledAt() {
