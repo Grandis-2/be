@@ -2,6 +2,7 @@ package com.grandis.nova.order.order.pay;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.order.MySqlLockFailures;
 import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
@@ -38,7 +39,7 @@ class PaymentResultsRetryTest {
 
     final OrderLedger ledger = mock(OrderLedger.class);
     final PaymentResults results = new PaymentResults(ledger, mock(OrderReader.class), mock(CartOrderFulfillment.class),
-            mock(PlatformTransactionManager.class));
+            mock(OutboxWriter.class), mock(PlatformTransactionManager.class));
 
     @AfterEach
     void tearDown() {
@@ -47,35 +48,35 @@ class PaymentResultsRetryTest {
 
     @Test
     void deadlockIsRetriedAndExhaustedDeadlockIsUnavailable() {
-        given(ledger.settlePayment(eq(ORDER), eq(OrderTrigger.PAYMENT_DECLINED), eq(ATTEMPT), any()))
+        given(ledger.settlePayment(eq(ORDER), eq(OrderTrigger.PAYMENT_DECLINED), eq(ATTEMPT), any(), any()))
                 .willThrow(lockFailure(MySqlLockFailures.MYSQL_DEADLOCK))
                 .willReturn(new OrderTransition(true, OrderStatus.AWAITING_PAYMENT));
         assertThat(results.notStarted(ORDER, ATTEMPT).applied()).isTrue();
 
-        given(ledger.settlePayment(eq(ORDER), eq(OrderTrigger.PAYMENT_APPROVED), eq(ATTEMPT), any()))
+        given(ledger.settlePayment(eq(ORDER), eq(OrderTrigger.PAYMENT_APPROVED), eq(ATTEMPT), any(), any()))
                 .willThrow(lockFailure(MySqlLockFailures.MYSQL_DEADLOCK));
         assertThatThrownBy(() -> results.approved(ORDER, ATTEMPT)).isInstanceOfSatisfying(BusinessException.class,
                 e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
-        verify(ledger, times(PaymentResults.MAX_ATTEMPTS)).settlePayment(eq(ORDER), eq(OrderTrigger.PAYMENT_APPROVED), eq(ATTEMPT), any());
+        verify(ledger, times(PaymentResults.MAX_ATTEMPTS)).settlePayment(eq(ORDER), eq(OrderTrigger.PAYMENT_APPROVED), eq(ATTEMPT), any(), any());
     }
 
     @Test
     void lockWaitTimeoutIsNotRetried() {
-        given(ledger.settlePayment(eq(ORDER), eq(OrderTrigger.PAYMENT_APPROVED), eq(ATTEMPT), any())).willThrow(lockFailure(1205));
+        given(ledger.settlePayment(eq(ORDER), eq(OrderTrigger.PAYMENT_APPROVED), eq(ATTEMPT), any(), any())).willThrow(lockFailure(1205));
 
         assertThatThrownBy(() -> results.approved(ORDER, ATTEMPT)).isInstanceOfSatisfying(BusinessException.class,
                 e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
-        verify(ledger, times(1)).settlePayment(eq(ORDER), eq(OrderTrigger.PAYMENT_APPROVED), eq(ATTEMPT), any());
+        verify(ledger, times(1)).settlePayment(eq(ORDER), eq(OrderTrigger.PAYMENT_APPROVED), eq(ATTEMPT), any(), any());
     }
 
     @Test
     void insideOuterTransactionDeadlockIsNotRetried() {
         TransactionSynchronizationManager.setActualTransactionActive(true);
-        given(ledger.settlePayment(eq(ORDER), eq(OrderTrigger.PAYMENT_APPROVED), eq(ATTEMPT), any()))
+        given(ledger.settlePayment(eq(ORDER), eq(OrderTrigger.PAYMENT_APPROVED), eq(ATTEMPT), any(), any()))
                 .willThrow(lockFailure(MySqlLockFailures.MYSQL_DEADLOCK));
 
         assertThatThrownBy(() -> results.approved(ORDER, ATTEMPT)).isInstanceOf(BusinessException.class);
-        verify(ledger, times(1)).settlePayment(eq(ORDER), eq(OrderTrigger.PAYMENT_APPROVED), eq(ATTEMPT), any());
+        verify(ledger, times(1)).settlePayment(eq(ORDER), eq(OrderTrigger.PAYMENT_APPROVED), eq(ATTEMPT), any(), any());
     }
 
     private static CannotAcquireLockException lockFailure(int vendorCode) {

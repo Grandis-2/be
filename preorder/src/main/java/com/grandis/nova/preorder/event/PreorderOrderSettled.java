@@ -7,7 +7,7 @@ import java.time.Instant;
  *
  * @param reason         REJECTED 일 때 SHIPPED · PAID(만료 경합)
  * @param cancelSequence PREORDER_CANCEL_REQUESTED 에서 받은 값 그대로. 어느 취소 시도의 결과인지 가린다
- * @param paidAt         REJECTED · PAID 일 때 주문의 결제 시각. 없으면 null
+ * @param paidAt         REJECTED 이고 주문이 결제됐으면 사유(SHIPPED · PAID)와 상관없이 주문의 결제 시각. 없으면 null
  */
 record PreorderOrderSettled(String preorderId, Result result, String reason, Long cancelSequence, Instant paidAt) {
 

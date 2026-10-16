@@ -35,6 +35,7 @@ import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -182,9 +183,9 @@ class OrderEventDispatcherTest {
         dispatcher.dispatch(envelope("ORDER_PAYMENT_SETTLED", "ORDER", ORDER_ID, declined()));
 
         verify(paymentResults).settle(new PaymentSettlement(ORDER_ID, PROVIDER_ORDER_ID,
-                PaymentSettlement.Result.APPROVED, new BigDecimal("15000"), null));
+                PaymentSettlement.Result.APPROVED, new BigDecimal("15000"), Instant.parse("2026-10-02T03:04:05Z"), null));
         verify(paymentResults).settle(new PaymentSettlement(ORDER_ID, PROVIDER_ORDER_ID,
-                PaymentSettlement.Result.DECLINED, new BigDecimal("15000"), DeclineReason.CARD_REJECTED));
+                PaymentSettlement.Result.DECLINED, new BigDecimal("15000"), null, DeclineReason.CARD_REJECTED));
     }
 
     @Test

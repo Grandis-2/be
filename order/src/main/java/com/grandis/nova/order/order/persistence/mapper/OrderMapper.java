@@ -32,7 +32,7 @@ public final class OrderMapper {
         return new Order(entity.getId(), entity.getCustomerId(),
                 entity.getSource(), entity.getPreorderId(), entity.getPreorderToken(), entity.getIdempotencyKey(), entity.getStatus(),
                 entity.getAuthorizingProviderOrderId(), new Money(entity.getTotalAmount()),
-                entity.getPaymentDueAt(), entity.getStockReleasedAt(), entity.getRefundFailedAt(),
+                entity.getPaymentDueAt(), entity.getStockReleasedAt(), entity.getRefundFailedAt(), entity.getPaidAt(),
                 new ShipTo(entity.getShipToName(), entity.getShipToPhone(), entity.getShipToPostalCode(),
                         entity.getShipToLine1(), entity.getShipToLine2()),
                 entity.getEventSequence(), entity.getCreatedAt(), entity.getUpdatedAt());

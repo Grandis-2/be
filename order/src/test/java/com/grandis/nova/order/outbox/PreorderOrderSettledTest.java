@@ -5,6 +5,7 @@ import com.grandis.nova.order.outbox.PreorderOrderSettled.Result;
 import com.grandis.nova.order.support.TestIds;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -14,6 +15,7 @@ class PreorderOrderSettledTest {
 
     static final UUID PREORDER_ID = TestIds.id(42);
     static final String PREORDER_UUID = "9f1c2d3e-0000-0000-0000-000000000000";
+    static final Instant PAID_AT = Instant.parse("2026-10-16T03:00:00Z");
 
     @Test
     void factoriesSetResultAndReason() {
@@ -23,9 +25,17 @@ class PreorderOrderSettledTest {
         assertThat(PreorderOrderSettled.canceled(PREORDER_ID, PREORDER_UUID, 3L))
                 .extracting(PreorderOrderSettled::result, PreorderOrderSettled::reason)
                 .containsExactly(Result.CANCELED, null);
-        assertThat(PreorderOrderSettled.rejected(PREORDER_ID, PREORDER_UUID, RejectReason.PAID, 3L))
+        assertThat(PreorderOrderSettled.rejected(PREORDER_ID, PREORDER_UUID, RejectReason.PAID, 3L, PAID_AT))
                 .extracting(PreorderOrderSettled::result, PreorderOrderSettled::reason)
                 .containsExactly(Result.REJECTED, RejectReason.PAID);
+    }
+
+    /** 결제 시각은 거절에만 싣는다 — 받는 쪽은 거절일 때만 이것으로 예약을 확정으로 되돌린다. */
+    @Test
+    void paidAtOnlyWithRejection() {
+        assertThatThrownBy(() -> new PreorderOrderSettled(PREORDER_ID, PREORDER_UUID, Result.CANCELED, null, 3L, PAID_AT))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(PreorderOrderSettled.rejected(PREORDER_ID, PREORDER_UUID, RejectReason.SHIPPED, 3L, null).paidAt()).isNull();
     }
 
     @Test
@@ -61,11 +71,11 @@ class PreorderOrderSettledTest {
 
     @Test
     void reasonOnlyWithRejection() {
-        assertThatThrownBy(() -> new PreorderOrderSettled(PREORDER_ID, PREORDER_UUID, Result.REJECTED, null, 3L))
+        assertThatThrownBy(() -> new PreorderOrderSettled(PREORDER_ID, PREORDER_UUID, Result.REJECTED, null, 3L, null))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new PreorderOrderSettled(PREORDER_ID, PREORDER_UUID, Result.CANCELED, RejectReason.SHIPPED, 3L))
+        assertThatThrownBy(() -> new PreorderOrderSettled(PREORDER_ID, PREORDER_UUID, Result.CANCELED, RejectReason.SHIPPED, 3L, null))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> PreorderOrderSettled.rejected(PREORDER_ID, PREORDER_UUID, null, 3L))
+        assertThatThrownBy(() -> PreorderOrderSettled.rejected(PREORDER_ID, PREORDER_UUID, null, 3L, null))
                 .isInstanceOf(NullPointerException.class);
     }
 }

@@ -22,6 +22,8 @@ class OrderEventConsumerPropertiesTest {
             assertThat(properties.toSettings().queue()).isEqualTo("order-events");
             assertThat(properties.toSettings().waitSeconds()).isEqualTo(20);
             assertThat(properties.toSettings().visibility()).isEqualTo(Duration.ofMinutes(5));
+            // 운영 값(NV-580)과 같다 — DB 장애 조치보다 길게 버틴다
+            assertThat(properties.toSettings().backoffBase()).isEqualTo(Duration.ofSeconds(30));
         });
     }
 

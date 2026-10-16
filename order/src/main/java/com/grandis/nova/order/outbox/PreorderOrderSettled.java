@@ -2,13 +2,14 @@ package com.grandis.nova.order.outbox;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
+import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
 /**
  * 예약 취소(PREORDER_CANCEL_REQUESTED)에 따른 주문 정리 결과. preorder 의 {@code event.PreorderOrderSettled} 가 받는다.
  *
- * payload 모양은 받는 쪽 record 와 같아야 한다: {@code {preorderId, result, reason, cancelSequence}}.
+ * payload 모양은 받는 쪽 record 와 같아야 한다: {@code {preorderId, result, reason, cancelSequence, paidAt}}.
  * 받는 쪽은 cancelSequence 가 없으면 반영하지 않고 실패한다 — 그러면 order 는 이미 커밋해 되돌릴 수 없으므로,
  * 계약에 맞지 않는 조합은 여기서 생성할 때 막아 보내는 트랜잭션을 실패시킨다.
  *
@@ -16,9 +17,11 @@ import java.util.UUID;
  * @param preorderId         공개 UUID(preorder_token). 받는 쪽이 이것으로 예약을 찾는다
  * @param reason             REJECTED 일 때만 있다
  * @param cancelSequence     PREORDER_CANCEL_REQUESTED 에서 받은 값 그대로. order 는 저장하지 않는다
+ * @param paidAt             REJECTED 이고 주문이 결제됐으면 사유와 상관없이 그 결제 시각. 받는 쪽은 이것이 있으면 예약을 확정(RESERVED)으로
+ *                           되돌린다 — 승인 알림보다 먼저 와도 결제된 예약이 미결제로 돌아가 만료되지 않게
  */
 public record PreorderOrderSettled(@JsonIgnore UUID preorderInternalId, String preorderId, Result result,
-                                   RejectReason reason, Long cancelSequence) implements OutboxMessage {
+                                   RejectReason reason, Long cancelSequence, Instant paidAt) implements OutboxMessage {
 
     public PreorderOrderSettled {
         Objects.requireNonNull(preorderInternalId, "preorderInternalId");
@@ -32,23 +35,30 @@ public record PreorderOrderSettled(@JsonIgnore UUID preorderInternalId, String p
         if ((result == Result.REJECTED) != (reason != null)) {
             throw new IllegalArgumentException("거절일 때만 사유가 있다: result=" + result + ", reason=" + reason);
         }
+        if (paidAt != null && result != Result.REJECTED) {
+            throw new IllegalArgumentException("결제 시각은 거절에만 싣는다: result=" + result);
+        }
     }
 
     /** 그 예약의 주문이 없다. */
     public static PreorderOrderSettled noOrder(UUID preorderInternalId, String preorderId, Long cancelSequence) {
-        return new PreorderOrderSettled(preorderInternalId, preorderId, Result.NO_ORDER, null, cancelSequence);
+        return new PreorderOrderSettled(preorderInternalId, preorderId, Result.NO_ORDER, null, cancelSequence, null);
     }
 
     /** 주문이 취소됐다. 이번에 취소했든 이미 취소돼 있었든(중복 수신) 같다. */
     public static PreorderOrderSettled canceled(UUID preorderInternalId, String preorderId, Long cancelSequence) {
-        return new PreorderOrderSettled(preorderInternalId, preorderId, Result.CANCELED, null, cancelSequence);
+        return new PreorderOrderSettled(preorderInternalId, preorderId, Result.CANCELED, null, cancelSequence, null);
     }
 
-    /** 주문을 정리할 수 없어 예약 취소를 거절한다. */
+    /**
+     * 주문을 정리할 수 없어 예약 취소를 거절한다.
+     *
+     * @param paidAt 주문의 결제 시각. 결제되지 않은 주문이면 null
+     */
     public static PreorderOrderSettled rejected(UUID preorderInternalId, String preorderId, RejectReason reason,
-                                                Long cancelSequence) {
+                                                Long cancelSequence, Instant paidAt) {
         return new PreorderOrderSettled(preorderInternalId, preorderId, Result.REJECTED,
-                Objects.requireNonNull(reason, "reason"), cancelSequence);
+                Objects.requireNonNull(reason, "reason"), cancelSequence, paidAt);
     }
 
     @Override

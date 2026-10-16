@@ -12,7 +12,7 @@ import java.time.Duration;
  *
  * @param visibility  받은 메시지를 다른 소비자에게 숨기는 시간. 처리 한 건보다 길게 둔다
  * @param backoffBase 처리 실패 후 다시 보이기까지의 첫 대기. 실패할수록 두 배, backoffMax 까지. 실패는 대개 DB 장애라 장애 조치
- *                    (1~2분)보다 길게 버티도록 order 소비기보다 길게 둔다 — 재수신 5회면 약 7분
+ *                    (1~2분)보다 길게 버티도록 둔다 — 재수신 5회면 약 7분
  */
 @ConfigurationProperties("nova.sqs.consumer")
 record PaymentEventConsumerProperties(
