@@ -118,7 +118,7 @@ public record ProductRegistrationRequest(
 
     /**
      * @param gallery color 축이 있으면 색상 묶음만(묶음마다 color 필수), 없으면 기본 묶음(color null) 하나. 묶음당 최대 10장, 첫 장이 대표(primary 로 바꿀 수 있다)
-     * @param detail  상세 영역별 이미지. 장수 상한과 대표 자동 지정이 없다(설계 §2.3 — 상세 콘텐츠에는 같은 제한을 정하지 않았다)
+     * @param detail  상세 영역별 이미지. 영역당 최대 3장(2026-10-16 결정), 대표 자동 지정은 없다
      */
     @Schema(name = "RegistrationImages")
     public record Images(List<@NotNull @Valid GalleryBundle> gallery, List<@NotNull @Valid DetailBundle> detail) {

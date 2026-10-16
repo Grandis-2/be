@@ -184,7 +184,7 @@ public class AdminProductController {
 
     /** 사진 한 장을 그 묶음 맨 뒤에 넣는다(상품 사진 · 상세 영역). 사전예약 오픈 뒤에도 된다. */
     @Operation(summary = "사진 한 장 넣기", description = "kind: GALLERY(bundle = color 값, color 축이 없으면 비움) · DETAIL(bundle = 영역 이름, 없으면 새 영역). "
-            + "url 은 업로드 API 의 imageUrl — 이 상품에 이미 있는 주소 · CDN 밖 주소는 400, 상품 사진 묶음은 최대 10장. 빈 묶음에 넣은 첫 장은 대표")
+            + "url 은 업로드 API 의 imageUrl — 이 상품에 이미 있는 주소 · CDN 밖 주소는 400, 상품 사진 묶음은 최대 10장 · 상세 영역은 최대 3장. 빈 묶음에 넣은 첫 장은 대표")
     @PostMapping("/{productId}/images")
     public ResponseEntity<ApiResponse<AdminProductResponse>> addImage(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ProductImageAddRequest.class))) @RequestBody String body) {
         AdminProductResponse response = AdminProductResponse.from(

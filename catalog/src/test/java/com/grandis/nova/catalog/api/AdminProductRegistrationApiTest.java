@@ -297,7 +297,7 @@ class AdminProductRegistrationApiTest {
         }
 
         @Test
-        @DisplayName("용량 형식 · 축에 없는 값 · 같은 SKU · 묶음 11장 · 소수 금액은 400")
+        @DisplayName("용량 형식 · 축에 없는 값 · 같은 SKU · 묶음 11장 · 상세 영역 4장 · 소수 금액은 400")
         void optionAndImageRules() throws Exception {
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("").replace("\"value\": \"512 GB\"", "\"value\": \"512\"")),
                     "optionAxes[1].values[1].value");
@@ -314,10 +314,11 @@ class AdminProductRegistrationApiTest {
             }
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody(
                     "\"images\": { \"gallery\": [ { \"color\": \"블랙\", \"items\": [" + eleven + "] } ] },")), "images.gallery[0].items");
-            // 상세 영역에는 상한이 없다
-            register("k-" + ShopFixtures.unique(), preorderBody(
-                    "\"images\": { \"detail\": [ { \"section\": \"유의사항\", \"items\": [" + eleven + "] } ] },"))
-                    .andExpect(status().isCreated());
+            // 상세 영역은 영역마다 3장까지 — 3장은 저장되고 4장은 그 영역의 400
+            String detailOf = "\"images\": { \"detail\": [ { \"section\": \"구매 혜택\", \"items\": [ { \"url\": \"https://img/x.jpg\" } ] }, "
+                    + "{ \"section\": \"유의사항\", \"items\": [%s] } ] },";
+            register("k-" + ShopFixtures.unique(), preorderBody(detailOf.formatted(urls(3)))).andExpect(status().isCreated());
+            expectValidation(register("k-" + ShopFixtures.unique(), preorderBody(detailOf.formatted(urls(4)))), "images.detail[1].items");
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("").replace("\"basePrice\": 1000000", "\"basePrice\": 1000000.5")),
                     "basePrice");
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("").replace("\"title\": \"Nova 1\"", "\"title\": \"\"")),
@@ -768,5 +769,14 @@ class AdminProductRegistrationApiTest {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    /** 사진 n 장의 items 배열 내용(https://img/d0.jpg …). */
+    private static String urls(int n) {
+        StringBuilder items = new StringBuilder();
+        for (int i = 0; i < n; i++) {
+            items.append(i > 0 ? "," : "").append("{ \"url\": \"https://img/d%d.jpg\" }".formatted(i));
+        }
+        return items.toString();
     }
 }

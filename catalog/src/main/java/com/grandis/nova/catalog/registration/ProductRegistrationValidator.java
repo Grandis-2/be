@@ -38,13 +38,15 @@ import java.util.regex.Pattern;
  * 용량은 숫자+단위 · 조합은 축 전부를 덮고 값이 그 축에 있어야 하며 같은 조합 둘 금지 · 조합 상한 · SKU 는 상품 안 유일(비면 값을 '-' 로 잇는다) ·
  * 표시명 120자 · 가격은 정수 원 · 재고는 일반 상품에서 조합마다 필수이고 사전예약은 받지 않는다 · 가격은 기본가 + 추가금 합만(수동 가격 없음, 2026-10-06 결정) ·
  * 사진 묶음은 color 축이 있으면 색상별만(사용자 결정 2026-09-28), 없으면 기본 묶음 하나 · GALLERY 묶음당 10장 · 대표는 하나(없으면 첫 장) ·
- * DETAIL 은 상한과 대표 자동 지정이 없다 · 사진 주소는 상품 안에서 한 번(올린 사진인지는 저장 단계의 ImageAttachments) · 사전예약은 회차 + 차수 필수이고
+ * DETAIL 은 영역당 3장이고 대표 자동 지정이 없다 · 사진 주소는 상품 안에서 한 번(올린 사진인지는 저장 단계의 ImageAttachments) · 사전예약은 회차 + 차수 필수이고
  * 오픈은 지금 + 여유 이후 · 일반은 회차 · 차수를 받지 않는다.
  */
 @Component
 public class ProductRegistrationValidator {
 
     public static final int MAX_GALLERY_IMAGES_PER_BUNDLE = 10;
+    /** 상세 영역(구매 혜택 · 유의사항 등) 하나의 사진 상한(2026-10-16 결정). 영역 수에는 상한이 없다. */
+    public static final int MAX_DETAIL_IMAGES_PER_SECTION = 3;
     /** 사전예약 배송 차수 최대 개수(2026-10-04 결정). 등록 이벤트 한 통에 싣는다. */
     public static final int MAX_SHIPMENT_BATCHES = 100;
     /** MySQL 문서의 date · datetime 지원 범위. 상한을 넘는 값은 preorder 가 저장하지 못한다(9999-12-31 23:59:59.999999 까지 들어간다 — 실측). */
@@ -454,7 +456,10 @@ public class ProductRegistrationValidator {
             if (!names.add(collationKey(section))) {
                 throw ValidationFailures.of(field + ".section", "같은 영역이 두 번 왔습니다.");
             }
-            // 상세 영역: 상한 · 대표 자동 지정 없음. 대표를 둘 이상 찍는 것만 막는다(DB UNIQUE)
+            if (bundle.items().size() > MAX_DETAIL_IMAGES_PER_SECTION) {
+                throw ValidationFailures.of(field + ".items", "상세 영역당 최대 %d장입니다.".formatted(MAX_DETAIL_IMAGES_PER_SECTION));
+            }
+            // 상세 영역: 대표 자동 지정 없음. 대표를 둘 이상 찍는 것만 막는다(DB UNIQUE)
             sections.add(new DetailDraft(section, requireAtMostOnePrimary(bundle.items(), field)));
         }
         return sections;
