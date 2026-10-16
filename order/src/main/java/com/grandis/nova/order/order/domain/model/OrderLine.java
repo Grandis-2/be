@@ -7,10 +7,11 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * 주문할 상품 한 줄(옵션 하나). 가격 · 이름은 주문 시점의 스냅샷이다 — 사전예약은 예약 접수 때, 장바구니는 주문 때 catalog 값.
+ * 주문할 상품 한 줄(옵션 하나). 가격 · 이름은 주문 시점의 스냅샷이다 — 사전예약은 예약 접수 때, 장바구니 · 바로 구매는 주문 때 catalog 값.
  * 저장되면 {@link OrderItem} 이 이것을 그대로 들고 있다.
  *
- * 같은 옵션은 한 줄이다(uq_order_item_option) — 장바구니의 보증 포함 · 미포함 두 줄은 여기서 합쳐, 그중 보증을 산 수량과 보증가를 둔다.
+ * 같은 옵션은 한 줄이다(uq_order_item_option) — 장바구니 · 바로 구매의 보증 포함 · 미포함 두 줄은 여기서 합쳐, 그중 보증을 산 수량과
+ * 보증가를 둔다.
  * 보증 수량은 0 ~ 수량이다(ck_order_item_warranty_quantity). 보증을 사지 않았으면 보증가도 0 이다 — 이건 DB 가 아니라 여기만 지킨다
  * (ck_order_item_warranty_price 는 0 이상만 본다).
  *

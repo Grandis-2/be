@@ -484,7 +484,7 @@ class CartOrderApiTest {
     }
 
     @Test
-    @DisplayName("요청 검증 — 줄 없음 · 같은 줄 두 번 · 보증 줄의 보증가 없음 · 수량 0 · 51줄 · 다른 출처의 칸은 400, 바로 구매는 아직 400")
+    @DisplayName("요청 검증 — 줄 없음 · 같은 줄 두 번 · 보증 줄의 보증가 없음 · 수량 0 · 51줄 · 다른 출처의 칸은 400")
     void invalidRequestsAreRejected() throws Exception {
         UUID phone = sellable(10);
         cartLine(phone, false, 1);
@@ -497,8 +497,6 @@ class CartOrderApiTest {
         expectViolation(place(item(phone, 0, false)), "items[0].quantity");
         expectViolation(place(IntStream.range(0, 51).mapToObj(i -> item(UUID.randomUUID(), 1, false)).toArray(String[]::new)),
                 "items");
-        expectViolation(perform("""
-                {"source":"BUY_NOW","items":[%s],"shipTo":%s}""".formatted(item(phone, 1, false), SHIP_TO)), "source");
         expectViolation(perform("""
                 {"source":"CART","preorderId":"%s","items":[%s],"shipTo":%s}""".formatted(UUID.randomUUID(), item(phone, 1, false), SHIP_TO)),
                 "preorderId");

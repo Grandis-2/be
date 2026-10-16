@@ -4,9 +4,11 @@ import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.security.CurrentCustomerId;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.order.order.cancel.CancelCartOrderService;
+import com.grandis.nova.order.order.place.PlaceBuyNowOrderService;
 import com.grandis.nova.order.order.place.PlaceCartOrderService;
 import com.grandis.nova.order.order.place.PlaceResult;
 import com.grandis.nova.order.order.place.PlaceOrderService;
+import com.grandis.nova.order.web.IdempotencyKeys;
 import com.grandis.nova.order.web.ValidationFailures;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -14,6 +16,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -32,17 +35,19 @@ public class OrderController {
 
     private final PlaceOrderService placeOrderService;
     private final PlaceCartOrderService placeCartOrderService;
+    private final PlaceBuyNowOrderService placeBuyNowOrderService;
     private final CancelCartOrderService cancelCartOrderService;
 
     public OrderController(PlaceOrderService placeOrderService, PlaceCartOrderService placeCartOrderService,
-                           CancelCartOrderService cancelCartOrderService) {
+                           PlaceBuyNowOrderService placeBuyNowOrderService, CancelCartOrderService cancelCartOrderService) {
         this.placeOrderService = placeOrderService;
         this.placeCartOrderService = placeCartOrderService;
+        this.placeBuyNowOrderService = placeBuyNowOrderService;
         this.cancelCartOrderService = cancelCartOrderService;
     }
 
     /**
-     * 미결제 장바구니 주문 취소(명세 POST /orders/{orderId}/cancel). 결제 대기면 그 자리에서 취소 · 재고 반환(200), 이미 취소됐으면 같은 200.
+     * 미결제 장바구니 · 바로 구매 주문 취소(명세 POST /orders/{orderId}/cancel). 결제 대기면 그 자리에서 취소 · 재고 반환(200), 이미 취소됐으면 같은 200.
      * 승인 중이면 409 PAYMENT_IN_PROGRESS, 결제된 주문 · 사전예약 주문은 409 STATE_CONFLICT. 남의 주문은 404.
      */
     @PostMapping("/{orderId}/cancel")
@@ -51,7 +56,10 @@ public class OrderController {
     }
 
     /**
-     * 새로 만들면 201 + Location, 같은 예약의 주문 · 같은 구성의 유효한 장바구니 주문이 이미 있으면 200 + 그 주문.
+     * 새로 만들면 201 + Location, 같은 예약의 주문 · 같은 구성의 유효한 장바구니 주문 · 같은 Idempotency-Key 의 같은 바로 구매 요청이면 200 + 그 주문.
+     *
+     * Idempotency-Key(UUID)는 바로 구매만 요구한다 — 없으면 400 IDEMPOTENCY_KEY_REQUIRED, UUID 가 아니면 400 VALIDATION_FAILED. 다른 출처는 보지 않는다.
+     * CloudFront 는 시청자 헤더를 모두 넘긴다(Managed-AllViewerExceptHostHeader). 나중에 CORS 를 켜면(NV-407) 허용 헤더에 이 헤더를 넣어야 한다.
      *
      * 액세스 토큰(Authorization: Bearer)은 preorder 결제 가능 확인 · catalog 옵션 조회에 그대로 전달한다(사용자 토큰 전달, 받는 쪽이 다시 검증).
      * 꺼내는 규칙은 인증 필터와 같은 {@link BearerTokens#extract} 다. 인증을 통과했다면 토큰이 있다 — 없으면 싣지 않고
@@ -61,6 +69,7 @@ public class OrderController {
     public ResponseEntity<ApiResponse<PlaceOrderResponse>> place(
             @CurrentCustomerId UUID customerId,
             @Valid @RequestBody PlaceOrderRequest request,
+            @RequestHeader(value = IdempotencyKeys.HEADER, required = false) String idempotencyKey,
             HttpServletRequest httpRequest) {
         String accessToken = BearerTokens.extract(httpRequest).orElse(null);
         PlaceResult result = switch (request.source()) {
@@ -68,7 +77,8 @@ public class OrderController {
                     request.shipTo().toAddress());
             case CART -> placeCartOrderService.place(customerId, accessToken, request.requireCartSelections(),
                     request.shipTo().toAddress());
-            case BUY_NOW -> throw ValidationFailures.of("source", "바로 구매 주문은 아직 받지 않습니다.");
+            case BUY_NOW -> placeBuyNowOrderService.place(customerId, accessToken, IdempotencyKeys.requireUuid(idempotencyKey),
+                    request.requireBuyNowSelections(), request.shipTo().toAddress());
             case DRAW -> throw ValidationFailures.of("source", "드로우 당첨 주문은 만들 수 없습니다.");
         };
         ApiResponse<PlaceOrderResponse> body = ApiResponse.ok(PlaceOrderResponse.of(result));

@@ -4,6 +4,7 @@ import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.exception.OrderAlreadyPlacedException;
+import com.grandis.nova.order.order.domain.exception.OrderKeyTakenException;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderEvent;
 import com.grandis.nova.order.order.domain.model.OrderItem;
@@ -54,6 +55,11 @@ class JpaOrderStore implements OrderReader, OrderWriter {
      * 정말 그 예약의 주문인지는 부른 쪽이 새 트랜잭션에서 다시 읽어 판정한다.
      */
     static final Set<String> PREORDER_KEYS = Set.of("uq_order_preorder", "uq_order_preorder_token");
+    /** 같은 회원의 같은 멱등 키(바로 구매). 중복이면 벤더 코드(1062)와 이 이름으로 가른다 — CHECK 위반 등 다른 실패와 섞지 않는다. */
+    static final String IDEMPOTENCY_KEY = "uq_order_idempotency";
+    static final int MYSQL_DUPLICATE_KEY = 1062;
+    /** 결제 기한(10분)이 있는 출처(ck_order_due) — 기한이 지나면 만료 처리가 취소 · 반환한다. */
+    static final Set<OrderSource> DUE_SOURCES = Set.of(OrderSource.CART, OrderSource.BUY_NOW);
 
     private final OrderJpaRepository orders;
     private final OrderItemJpaRepository items;
@@ -84,6 +90,9 @@ class JpaOrderStore implements OrderReader, OrderWriter {
         } catch (DataIntegrityViolationException e) {
             if (PREORDER_KEYS.stream().anyMatch(key -> violates(e, key))) {
                 throw new OrderAlreadyPlacedException(order.preorderId(), e);
+            }
+            if (isDuplicate(e, IDEMPOTENCY_KEY)) {
+                throw new OrderKeyTakenException(e);
             }
             throw e;
         }
@@ -151,14 +160,19 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     @Override
+    public Optional<Order> findByIdempotencyKey(UUID customerId, UUID idempotencyKey) {
+        return orders.findByCustomerIdAndIdempotencyKey(customerId, idempotencyKey).map(OrderMapper::toDomain);
+    }
+
+    @Override
     public List<Order> findUnpaidCartOrders(UUID customerId) {
         return orders.findByCustomerIdAndSourceAndStatusIn(customerId, OrderSource.CART,
                 List.of(OrderStatus.AWAITING_PAYMENT, OrderStatus.AUTHORIZING)).stream().map(OrderMapper::toDomain).toList();
     }
 
     @Override
-    public List<Order> findExpiredCartOrders(Instant now, ExpiredOrderPosition after, int limit) {
-        return orders.findExpiredAfter(OrderSource.CART, OrderStatus.AWAITING_PAYMENT, now, after.paymentDueAt(), after.id(), Limit.of(limit))
+    public List<Order> findExpiredAwaitingOrders(Instant now, ExpiredOrderPosition after, int limit) {
+        return orders.findExpiredAfter(DUE_SOURCES, OrderStatus.AWAITING_PAYMENT, now, after.paymentDueAt(), after.id(), Limit.of(limit))
                 .stream().map(OrderMapper::toDomain).toList();
     }
 
@@ -215,6 +229,15 @@ class JpaOrderStore implements OrderReader, OrderWriter {
             if (t instanceof ConstraintViolationException violation) {
                 String name = violation.getConstraintName();
                 return name != null && (name.equals(constraint) || name.endsWith("." + constraint));
+            }
+        }
+        return false;
+    }
+
+    private static boolean isDuplicate(DataIntegrityViolationException e, String constraint) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof ConstraintViolationException violation) {
+                return violation.getErrorCode() == MYSQL_DUPLICATE_KEY && violates(e, constraint);
             }
         }
         return false;
