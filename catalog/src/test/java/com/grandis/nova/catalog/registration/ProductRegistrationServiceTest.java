@@ -142,6 +142,16 @@ class ProductRegistrationServiceTest {
     }
 
     @Test
+    @DisplayName("공개로 등록하면 이벤트의 공개 여부도 공개 — 위 시험(비공개)과 짝이라 한쪽 값으로 고정된 구현을 잡는다")
+    void preorderRegistrationCarriesVisibleTrue() {
+        UUID productId = service.register("k-" + ShopFixtures.unique(), preorderRequest(Instant.now().plus(Duration.ofHours(1)), true))
+                .registration().productId();
+
+        JsonNode payload = JSON.readTree((String) singleEventOf(productId).get("payload"));
+        assertThat(payload.get("visible").asBoolean()).isTrue();
+    }
+
+    @Test
     @DisplayName("같은 키로 다시 오면 이벤트를 다시 적지 않는다 — 준비 전이면 IN_PROGRESS, preorder 회차 행이 생기면 REPLAYED")
     void replayDoesNotAppendAndFollowsReadiness() {
         String key = "k-" + ShopFixtures.unique();
@@ -170,8 +180,12 @@ class ProductRegistrationServiceTest {
     }
 
     private ProductRegistrationRequest preorderRequest(Instant opensAt) {
+        return preorderRequest(opensAt, false);
+    }
+
+    private ProductRegistrationRequest preorderRequest(Instant opensAt, boolean visible) {
         return new ProductRegistrationRequest(categoryId, SaleMode.PREORDER, "Nova", Brand.APPLE, "A0001", null, null,
-                false, new BigDecimal("1000"), null, null, null, List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, null)),
+                visible, new BigDecimal("1000"), null, null, null, List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, null)),
                 null, new ProductRegistrationRequest.Campaign(opensAt, opensAt.plus(Duration.ofDays(1))),
                 List.of(new ProductRegistrationRequest.ShipmentBatch(1, 1L, 100L, LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 7)),
                         new ProductRegistrationRequest.ShipmentBatch(2, 101L, null, LocalDate.of(2026, 11, 8), LocalDate.of(2026, 11, 14))));
