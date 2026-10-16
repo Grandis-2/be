@@ -186,7 +186,7 @@ class StockReconcilerTest {
 
         reconciler.reconcile().orElseThrow();
 
-        assertThat(expectations.findDrifted()).extracting(StockBalance::optionId).doesNotContain(phone, watch, gift, tablet);
+        assertThat(expectations.findDrifted(Integer.MAX_VALUE).first()).extracting(StockBalance::optionId).doesNotContain(phone, watch, gift, tablet);
         for (UUID option : List.of(phone, watch, gift, tablet)) {
             assertThat(expectations.balanceOf(option).matches()).as("미리보기도 같다: " + option).isTrue();
         }
@@ -209,14 +209,18 @@ class StockReconcilerTest {
         StockReconcileRun run = reconciler.reconcile().orElseThrow();
 
         // 시험끼리 DB 를 함께 써 어긋난 옵션이 기록 상한을 넘을 수 있다 — 옵션별 판정은 전체 목록으로, 기록은 상한 · 수의 맞물림으로 본다
+        StockExpectations.Drifts all = expectations.findDrifted(Integer.MAX_VALUE);
         Map<UUID, StockBalance> drifts = new HashMap<>();
-        expectations.findDrifted().forEach(drift -> drifts.put(drift.optionId(), drift));
+        all.first().forEach(drift -> drifts.put(drift.optionId(), drift));
         assertThat(drifts.get(touched)).isEqualTo(new StockBalance(touched, drifts.get(touched).productId(), true, 10, 5, 1, 2, 0));
         assertThat(drifts.get(unregistered)).isEqualTo(new StockBalance(unregistered, unregisteredProduct.productId(), false, 0, 0, 0, 3, 0));
         assertThat(drifts).doesNotContainKey(clean);
         assertThat(run.driftOptions()).isGreaterThanOrEqualTo(2);
         assertThat(run.drifts()).hasSize(Math.min(run.driftOptions(), StockReconcileRun.DETAIL_LIMIT));
         assertThat(run.truncated()).isEqualTo(run.driftOptions() > StockReconcileRun.DETAIL_LIMIT);
+        StockExpectations.Drifts one = expectations.findDrifted(1);
+        assertThat(one.total()).as("수는 LIMIT 전에 센다").isEqualTo(all.total()).isEqualTo(all.first().size());
+        assertThat(one.first()).as("앞 limit 개만 가져온다").containsExactly(all.first().getFirst());
         Map<String, Object> row = jdbcTemplate.queryForMap(
                 "SELECT drift_options, detail FROM stock_reconcile_runs ORDER BY finished_at DESC LIMIT 1");
         assertThat(((Number) row.get("drift_options")).intValue()).isEqualTo(run.driftOptions());
@@ -237,9 +241,9 @@ class StockReconcilerTest {
         MutableClock clock = new MutableClock(start);
         StockExpectations slow = new StockExpectations() {
             @Override
-            public List<StockBalance> findDrifted() {
+            public Drifts findDrifted(int limit) {
                 clock.advance(Duration.ofSeconds(90));
-                return List.of();
+                return new Drifts(0, List.of());
             }
 
             @Override

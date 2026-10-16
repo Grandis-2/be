@@ -12,6 +12,7 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
@@ -22,6 +23,7 @@ import java.util.UUID;
  * 그 switch 가 컴파일러로 드러나고 여기 IN 목록은 따라온다.
  *
  * 전체 대조는 표 전체를 훑으므로 문장 실행 시간에 상한({@link #MAX_EXECUTION_MILLIS})을 건다 — 넘으면 오류로 끝나고 대조가 실패로 남는다.
+ * 어긋난 옵션 수는 창 함수(COUNT(*) OVER ())로 LIMIT 전에 세어 행마다 싣는다 — 수와 앞 limit 개가 한 문장이다.
  */
 @Repository
 class JdbcStockExpectations implements StockExpectations {
@@ -32,11 +34,12 @@ class JdbcStockExpectations implements StockExpectations {
             b.option_id, po.product_id, b.registered, b.total, b.actual_reserved, b.actual_sold, b.expected_reserved, b.expected_sold""";
 
     private static final String DRIFTED = """
-            SELECT /*+ MAX_EXECUTION_TIME(%d) */ %s
+            SELECT /*+ MAX_EXECUTION_TIME(%d) */ %s, COUNT(*) OVER () AS drift_total
               FROM (%s
                     HAVING SUM(expected_reserved) <> SUM(actual_reserved) OR SUM(expected_sold) <> SUM(actual_sold)) b
               LEFT JOIN product_options po ON po.id = b.option_id
              ORDER BY b.option_id
+             LIMIT :limit
             """.formatted(MAX_EXECUTION_MILLIS, BALANCE_COLUMNS, byOption(""));
 
     private static final String ONE = """
@@ -52,8 +55,17 @@ class JdbcStockExpectations implements StockExpectations {
     }
 
     @Override
-    public List<StockBalance> findDrifted() {
-        return jdbc.query(DRIFTED, holds(), JdbcStockExpectations::balance);
+    public Drifts findDrifted(int limit) {
+        if (limit < 1) {
+            throw new IllegalArgumentException("limit 은 1 이상: " + limit);
+        }
+        List<StockBalance> first = new ArrayList<>();
+        int[] total = {0};
+        jdbc.query(DRIFTED, holds().addValue("limit", limit), rs -> {
+            total[0] = rs.getInt("drift_total");
+            first.add(balance(rs, first.size()));
+        });
+        return new Drifts(total[0], first);
     }
 
     @Override

@@ -20,9 +20,16 @@ public record StockReconcileRun(Instant startedAt, Instant finishedAt, int drift
         drifts = List.copyOf(drifts);
     }
 
-    public static StockReconcileRun of(Instant startedAt, Instant finishedAt, List<StockBalance> drifts) {
-        boolean truncated = drifts.size() > DETAIL_LIMIT;
-        return new StockReconcileRun(startedAt, finishedAt, drifts.size(), truncated ? drifts.subList(0, DETAIL_LIMIT) : drifts, truncated);
+    /**
+     * @param driftOptions 어긋난 옵션 수(전부)
+     * @param first        그 가운데 option_id 오름차순 앞부분 — {@link #DETAIL_LIMIT}개를 넘으면 자른다
+     */
+    public static StockReconcileRun of(Instant startedAt, Instant finishedAt, int driftOptions, List<StockBalance> first) {
+        if (driftOptions < first.size()) {
+            throw new IllegalArgumentException("어긋난 옵션 수가 목록보다 적다: " + driftOptions + " < " + first.size());
+        }
+        List<StockBalance> kept = first.size() > DETAIL_LIMIT ? first.subList(0, DETAIL_LIMIT) : first;
+        return new StockReconcileRun(startedAt, finishedAt, driftOptions, kept, driftOptions > kept.size());
     }
 
     /** 경보 · 대시보드가 보는 값만. */

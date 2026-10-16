@@ -15,7 +15,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.List;
 import java.util.Optional;
 
 /**
@@ -87,8 +86,8 @@ public class StockReconciler {
             log.info("재고 장부 대조 건너뜀 — {} 안에 끝난 대조가 있다", gap);
             return Optional.empty();
         }
-        List<StockBalance> drifts = expectations.findDrifted();
-        StockReconcileRun run = StockReconcileRun.of(startedAt, clock.instant(), drifts);
+        StockExpectations.Drifts drifts = expectations.findDrifted(StockReconcileRun.DETAIL_LIMIT);
+        StockReconcileRun run = StockReconcileRun.of(startedAt, clock.instant(), drifts.total(), drifts.first());
         report(run);
         runs.save(run);
         log.info("재고 장부 대조 끝 — 어긋난 옵션 {}개, {}ms", run.driftOptions(), run.finishedAt().toEpochMilli() - startedAt.toEpochMilli());

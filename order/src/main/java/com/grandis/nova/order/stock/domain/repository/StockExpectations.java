@@ -11,9 +11,20 @@ import java.util.UUID;
  */
 public interface StockExpectations {
 
-    /** 장부와 주문 기준이 다른 옵션 전부, option_id 오름차순. 재고 행이 없는 옵션은 장부 0 으로 본다. 표 전체를 읽는다. */
-    List<StockBalance> findDrifted();
+    /**
+     * 장부와 주문 기준이 다른 옵션의 수와, option_id 오름차순으로 앞 limit 개. 재고 행이 없는 옵션은 장부 0 으로 본다. 표 전체를 읽지만 앱으로
+     * 가져오는 것은 앞 limit 개뿐이다 — 어긋남이 아무리 많아도 메모리가 늘지 않는다. 수와 목록은 같은 문장(같은 시점)이다.
+     */
+    Drifts findDrifted(int limit);
 
     /** 옵션 하나. 주문 · 재고 행이 없어도 0 으로 돌려준다. */
     StockBalance balanceOf(UUID optionId);
+
+    /** @param total 어긋난 옵션 수(전부) · @param first 그 가운데 앞 limit 개 */
+    record Drifts(int total, List<StockBalance> first) {
+
+        public Drifts {
+            first = List.copyOf(first);
+        }
+    }
 }

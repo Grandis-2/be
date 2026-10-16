@@ -155,8 +155,8 @@ class StockCorrectionConcurrencyTest {
         }
 
         @Override
-        public List<StockBalance> findDrifted() {
-            return delegate.findDrifted();
+        public Drifts findDrifted(int limit) {
+            return delegate.findDrifted(limit);
         }
 
         @Override

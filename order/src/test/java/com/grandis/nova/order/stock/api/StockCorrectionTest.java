@@ -198,7 +198,7 @@ class StockCorrectionTest {
         // 마지막 대조는 끝난 시각으로 고른다 — 다른 시험이 방금 남긴 기록이 이 기록보다 늦을 수 있어 비우고 시작한다
         jdbcTemplate.update("DELETE FROM stock_reconcile_runs");
         Instant finished = Instant.now().minusSeconds(1);
-        runs.save(StockReconcileRun.of(finished.minusMillis(200), finished,
+        runs.save(StockReconcileRun.of(finished.minusMillis(200), finished, 1,
                 List.of(new StockBalance(option, product.productId(), true, 10, 4, 1, 0, 0))));
 
         latest().andExpect(status().isOk())
@@ -223,7 +223,7 @@ class StockCorrectionTest {
         List<StockBalance> drifts = java.util.stream.IntStream.range(0, StockReconcileRun.DETAIL_LIMIT + 1)
                 .mapToObj(i -> new StockBalance(UUID.randomUUID(), null, true, 1, 1, 0, 0, 0)).toList();
 
-        StockReconcileRun run = StockReconcileRun.of(Instant.now(), Instant.now(), drifts);
+        StockReconcileRun run = StockReconcileRun.of(Instant.now(), Instant.now(), drifts.size(), drifts);
 
         assertThat(run.driftOptions()).isEqualTo(StockReconcileRun.DETAIL_LIMIT + 1);
         assertThat(run.drifts()).hasSize(StockReconcileRun.DETAIL_LIMIT);
