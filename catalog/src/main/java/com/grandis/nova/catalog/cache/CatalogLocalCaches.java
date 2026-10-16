@@ -3,9 +3,6 @@ package com.grandis.nova.catalog.cache;
 import com.grandis.nova.catalog.category.CategoryNode;
 import com.grandis.nova.catalog.listing.ProductListItem;
 import com.grandis.nova.common.OffsetPage;
-import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.binder.MeterBinder;
-import io.micrometer.core.instrument.binder.cache.CaffeineCacheMetrics;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
@@ -18,12 +15,14 @@ import java.util.List;
  * 고른 기준(2026-10-16 실측 — Testcontainers MySQL 8.4 · Redis 8, p50): 목록 20개 한 쪽은 30.6KB · DB 4.2ms · Redis 적중 1.05ms · 메모리 적중 0.002ms,
  * 카테고리 트리는 4.7KB · DB 1.5ms · Redis 적중 0.40ms. 둘 다 다른 인스턴스가 늦어도 되는 조회다 — 목록은 TTL(5초)이 원래 지연이고, 카테고리는
  * 고치는 API 가 없다. 상세 본문 · 리뷰 · 홍보는 TTL 이 길거나 쓴 사람이 바로 봐야 해 모든 인스턴스를 같이 비우는 Redis 세대가 필요하다.
- * 무게는 JSON 바이트로 센다(넣을 때 한 번 직렬화한다).
+ * 무게는 JSON 바이트로 센다(넣을 때 한 번 직렬화한다) — 힙 점유가 아니라 Redis 판의 저장 상한과 같은 단위의 근사다.
+ * 카테고리는 비우는 곳이 없다 — 시드를 SQL 로 직접 바꾸면 인스턴스마다 최대 TTL(10분) 뒤 또는 재기동 때 보인다(카테고리는 마이그레이션으로 바뀌고, 마이그레이션은
+ * 배포와 함께라 새 인스턴스가 뜬다).
  */
 @Component
-public class CatalogLocalCaches implements MeterBinder {
+public class CatalogLocalCaches {
 
-    /** 목록 캐시의 인스턴스당 상한. 한 쪽이 약 30KB(20개 · 색상칩) — 약 500쪽. 힙(약 1.5GB)에 비해 작게. */
+    /** 목록 캐시의 인스턴스당 상한(JSON 바이트). 한 쪽이 약 30KB(20개 · 색상칩) — 약 500쪽. */
     static final long PRODUCT_LIST_MAX_BYTES = 16L * 1024 * 1024;
     /** 카테고리 트리는 키 하나(약 5KB). */
     static final long CATEGORY_TREE_MAX_BYTES = 1024 * 1024;
@@ -45,12 +44,5 @@ public class CatalogLocalCaches implements MeterBinder {
 
     public LocalReadCache<String, List<CategoryNode>> categoryTree() {
         return categoryTree;
-    }
-
-    /** 적중 · 적재 · 퇴출 지표(cache.gets 등, cache=catalog.product-list · catalog.category-tree). */
-    @Override
-    public void bindTo(MeterRegistry registry) {
-        CaffeineCacheMetrics.monitor(registry, productList.cache(), productList.name());
-        CaffeineCacheMetrics.monitor(registry, categoryTree.cache(), categoryTree.name());
     }
 }

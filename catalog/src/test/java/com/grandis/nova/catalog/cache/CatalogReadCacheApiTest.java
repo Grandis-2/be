@@ -146,7 +146,7 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
-    @DisplayName("max-age 는 그 값이 Redis 에서 묵은 만큼 줄어든다(초는 버림) — 앞단 캐시와 합쳐도 TTL(5초)을 넘지 않게")
+    @DisplayName("max-age 는 그 값이 읽기 캐시에서 묵은 만큼 줄어든다(초는 버림) — 앞단 캐시와 합쳐도 TTL(5초)을 넘지 않게")
     void maxAgeShrinksWithAge() throws Exception {
         registerInStock("나이");
         MockHttpServletRequestBuilder listing = get("/api/v1/products").param("categoryId", categoryId.toString());
