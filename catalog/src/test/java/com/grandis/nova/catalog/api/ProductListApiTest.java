@@ -111,24 +111,26 @@ class ProductListApiTest {
         }
 
         @Test
-        @DisplayName("사전예약은 오픈 전 · 접수 중 · 마감 뒤 120시간 안이면 보이고 그 단계가 실린다. 120시간이 지나면 숨는다")
-        void preorderPhasesAndHideAfterClose() throws Exception {
+        @DisplayName("사전예약은 접수 중(오픈 ~ 마감)일 때만 목록 · 건수에 나온다 — 오픈 전 · 마감 직후 · 회차 없음은 빠지고, 상세 링크로는 보인다")
+        void preorderListedOnlyWhileOpen() throws Exception {
             Instant now = Instant.now();
             UUID beforeOpen = visiblePreorder("오픈 전", now.plus(HOUR), now.plus(HOUR.multipliedBy(2)));
             UUID open = visiblePreorder("접수 중", now.minus(HOUR), now.plus(HOUR));
             fixtures.option(open, "ACTIVE", new BigDecimal("1000"));
-            UUID closedRecently = visiblePreorder("마감 119h", now.minus(HOUR.multipliedBy(120)), now.minus(HOUR.multipliedBy(119)));
-            UUID closedLongAgo = visiblePreorder("마감 121h", now.minus(HOUR.multipliedBy(122)), now.minus(HOUR.multipliedBy(121)));
+            UUID justClosed = visiblePreorder("마감 직후", now.minus(HOUR), now.minusSeconds(60));
             UUID noCampaign = fixtures.product(categoryId, "PREORDER", "ACTIVE", "회차 없음", tag);
             fixtures.registration(noCampaign);
 
-            JsonNode items = list();
-            assertThat(ids(items)).containsExactly(closedRecently, open, beforeOpen).doesNotContain(closedLongAgo, noCampaign);
-            assertThat(find(items, beforeOpen).get("preorderStatus").asString()).isEqualTo("BEFORE_OPEN");
-            assertThat(find(items, open).get("preorderStatus").asString()).isEqualTo("OPEN");
-            assertThat(find(items, closedRecently).get("preorderStatus").asString()).isEqualTo("CLOSED");
-            assertThat(find(items, open).get("opensAt").asString()).isNotBlank();
-            assertThat(find(items, open).get("soldOut").asBoolean()).isFalse();
+            JsonNode page = data(mockMvc.perform(get("/api/v1/products").param("q", tag)).andExpect(status().isOk()));
+            assertThat(ids(page.get("items"))).containsExactly(open).doesNotContain(beforeOpen, justClosed, noCampaign);
+            assertThat(page.get("total").asLong()).as("건수도 같은 조건").isEqualTo(1);
+            JsonNode item = find(page.get("items"), open);
+            assertThat(item.get("preorderStatus").asString()).isEqualTo("OPEN");
+            assertThat(item.get("opensAt").asString()).isNotBlank();
+            assertThat(item.get("soldOut").asBoolean()).isFalse();
+            for (UUID hidden : List.of(beforeOpen, justClosed)) {
+                mockMvc.perform(get("/api/v1/products/{id}", hidden)).andExpect(status().isOk());
+            }
         }
     }
 
@@ -199,6 +201,60 @@ class ProductListApiTest {
             assertThat(find(items, colorOnly).get("imageUrl").asString()).isEqualTo("https://img/white-first.jpg");
             assertThat(find(items, firstColorBare).get("imageUrl").isNull()).isTrue();
             assertThat(find(items, none).get("imageUrl").isNull()).isTrue();
+        }
+
+        @Test
+        @DisplayName("색상칩은 판매 중 옵션이 고르는 색상만 넣은 순서로 표시값 · hex · 그 색상 사진(넣은 순서) — hex 가 없으면 null, 사진이 없으면 빈 목록, 판매 중지만 남은 색상 · 색상 축 없음은 빠진다")
+        void colorChips() throws Exception {
+            // 사전순이면 블루가 앞선다 — 넣은 순서(화이트 → 블루 → 블랙 → 레드)가 그대로 나와야 한다. 블랙은 hex · 사진이 없고, 레드는 판매 중지 옵션만 있다
+            UUID colored = visibleInStock("색상칩");
+            jdbcTemplate.update("UPDATE products SET options = ? WHERE id = ?", COLOR_DOCUMENT, UuidBinary.toBytes(colored));
+            for (String color : List.of("화이트", "블루", "블랙")) {
+                fixtures.optionWithAttributes(colored, "ACTIVE", new BigDecimal("1000"), color, "{\"color\": \"" + color + "\"}");
+            }
+            fixtures.optionWithAttributes(colored, "ACTIVE", new BigDecimal("1000"), "화이트 2", "{\"color\": \"화이트\"}");   // 같은 색 옵션이 둘이어도 칩 하나
+            fixtures.optionWithAttributes(colored, "PAUSED", new BigDecimal("1000"), "레드", "{\"color\": \"레드\"}");
+            UUID plain = visibleInStock("색상 축 없음");
+            jdbcTemplate.update("UPDATE products SET options = ? WHERE id = ?", """
+                    {"axes": [{"key": "storage", "label": "용량", "values": [{"id": "s1", "value": "256GB", "normalized": "256GB", "surcharge": 0}]}],
+                     "defaultImages": [{"url": "https://img/default.jpg", "primary": true}], "detailImages": []}
+                    """, UuidBinary.toBytes(plain));
+            fixtures.optionWithAttributes(plain, "ACTIVE", new BigDecimal("1000"), "256GB", "{\"storage\": \"256GB\"}");
+
+            JsonNode items = list();
+            JsonNode chips = find(items, colored).get("colors");
+            List<String> labels = new ArrayList<>();
+            chips.forEach(chip -> labels.add(chip.get("label").asString()));
+            assertThat(labels).containsExactly("화이트", "블루", "블랙");
+            assertThat(chips.get(0).get("hex").asString()).isEqualTo("#FFFFFF");
+            assertThat(chips.get(0).get("imageUrls").toString()).isEqualTo("[\"https://img/w2.jpg\",\"https://img/w1.jpg\"]");
+            assertThat(chips.get(1).get("imageUrls").toString()).isEqualTo("[\"https://img/b1.jpg\"]");
+            assertThat(chips.get(2).get("hex").isNull()).isTrue();
+            assertThat(chips.get(2).get("imageUrls")).isEmpty();
+            assertThat(find(items, plain).get("colors")).as("기본 묶음 사진은 칩이 아니다").isEmpty();
+            // 칩과 색상 필터가 같은 기준 — 판매 중지만 남은 레드로 거르면 그 상품이 안 나온다
+            assertThat(ids(list("color", "레드"))).doesNotContain(colored);
+            assertThat(ids(list("color", "블랙"))).contains(colored);
+        }
+
+        @Test
+        @DisplayName("옵션 문서가 틀린 행이 있어도 목록은 200 — 그 상품만 칩이 비고, 다른 상품의 칩은 그대로")
+        void unreadableOptionsDocumentEmptiesOnlyItsChips() throws Exception {
+            UUID broken = visibleInStock("문서 틀림");
+            jdbcTemplate.update("UPDATE products SET options = '[]' WHERE id = ?", (Object) UuidBinary.toBytes(broken));
+            UUID primitiveMissing = visibleInStock("원시형 칸 빠짐");
+            jdbcTemplate.update("UPDATE products SET options = ? WHERE id = ?",
+                    "{\"axes\": [{\"key\": \"color\", \"label\": \"색상\", \"values\": [{\"id\": \"a\", \"value\": \"화이트\", \"normalized\": \"화이트\", \"images\": [{\"url\": \"x.jpg\"}]}]}]}",
+                    UuidBinary.toBytes(primitiveMissing));
+            fixtures.optionWithAttributes(primitiveMissing, "ACTIVE", new BigDecimal("1000"), "화이트", "{\"color\": \"화이트\"}");
+            UUID healthy = visibleInStock("정상");
+            jdbcTemplate.update("UPDATE products SET options = ? WHERE id = ?", COLOR_DOCUMENT, UuidBinary.toBytes(healthy));
+            fixtures.optionWithAttributes(healthy, "ACTIVE", new BigDecimal("1000"), "블루", "{\"color\": \"블루\"}");
+
+            JsonNode items = list();
+            assertThat(find(items, broken).get("colors")).isEmpty();
+            assertThat(find(items, primitiveMissing).get("colors")).as("Image.primary 가 빠져 읽지 못한다").isEmpty();
+            assertThat(find(items, healthy).get("colors").get(0).get("label").asString()).isEqualTo("블루");
         }
     }
 
@@ -458,6 +514,21 @@ class ProductListApiTest {
      * 등록된 일반 상품. 실제 등록은 조합이 하나 이상이라 판매 중지 옵션 하나로 시작한다 — 판매 중지 옵션은 최저가 · 판매 가능 · 품절 · 필터에
      * 들어가지 않아 시험이 넣는 옵션의 판정을 바꾸지 않는다. 재고 행은 목록을 부르기 직전에 넣는다(시험이 재고를 직접 넣었으면 그대로).
      */
+    /** 색상 축(화이트 · 블루 · 블랙 · 레드)과 용량 축이 있는 옵션 문서. 블랙은 hex · 사진이 없다. */
+    private static final String COLOR_DOCUMENT = """
+            {"axes": [
+               {"key": "storage", "label": "용량", "values": [{"id": "s1", "value": "256GB", "normalized": "256GB", "surcharge": 0}]},
+               {"key": "color", "label": "색상", "values": [
+                 {"id": "c1", "value": "화이트", "normalized": "화이트", "hex": "#FFFFFF", "surcharge": 0,
+                  "images": [{"url": "https://img/w2.jpg", "primary": false}, {"url": "https://img/w1.jpg", "primary": true}]},
+                 {"id": "c2", "value": "블루", "normalized": "블루", "hex": "#0000FF", "surcharge": 0,
+                  "images": [{"url": "https://img/b1.jpg", "primary": true}]},
+                 {"id": "c3", "value": "블랙", "normalized": "블랙", "surcharge": 0},
+                 {"id": "c4", "value": "레드", "normalized": "레드", "hex": "#FF0000", "surcharge": 0,
+                  "images": [{"url": "https://img/r1.jpg", "primary": true}]}]}],
+             "defaultImages": [{"url": "https://img/default.jpg", "primary": true}], "detailImages": []}
+            """;
+
     private UUID visibleInStock(String title) {
         UUID productId = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", title, tag);
         fixtures.registration(productId);

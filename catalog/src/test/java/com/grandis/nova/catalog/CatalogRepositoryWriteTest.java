@@ -48,10 +48,10 @@ class CatalogRepositoryWriteTest {
         String key = ShopFixtures.unique();
         UUID categoryId = fixtures.category();
         Product first = products.saveAndFlush(Product.register(key, categoryId, SaleMode.PREORDER, "First", Brand.APPLE, "A0001",
-                BigDecimal.ONE, null, null, false, false, BigDecimal.ZERO, ProductOptions.EMPTY));
+                BigDecimal.ONE, 0, null, null, false, false, BigDecimal.ZERO, ProductOptions.EMPTY));
 
         assertThatThrownBy(() -> products.saveAndFlush(Product.register(key, categoryId, SaleMode.PREORDER, "Second", Brand.APPLE, "A0001",
-                BigDecimal.ONE, null, null, false, false, BigDecimal.ZERO, ProductOptions.EMPTY)))
+                BigDecimal.ONE, 0, null, null, false, false, BigDecimal.ZERO, ProductOptions.EMPTY)))
                 .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("uq_product_idempotency");
 
         assertThat(jdbcTemplate.queryForList("SELECT title FROM products WHERE idempotency_key = ?", String.class, key))

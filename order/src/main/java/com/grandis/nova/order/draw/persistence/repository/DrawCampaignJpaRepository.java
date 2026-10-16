@@ -1,6 +1,8 @@
 package com.grandis.nova.order.draw.persistence.repository;
 
 import com.grandis.nova.order.draw.persistence.entity.DrawCampaignJpaEntity;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -15,6 +17,21 @@ import java.util.UUID;
 public interface DrawCampaignJpaRepository extends JpaRepository<DrawCampaignJpaEntity, UUID> {
 
     Optional<DrawCampaignJpaEntity> findByIdempotencyKey(String idempotencyKey);
+
+    // 단계 필터 셋은 인덱스 없이 표를 훑는다 — 실측(MySQL 8.4, 회차 5,000 · 응모 중 30 · 예정 100): 목록 100건 1.7 ~ 2.9ms, 건수 0.75ms.
+    // 거르지 않은 최신순 목록도 이 크기에서 표를 훑고 2.3ms 다. 회차는 관리자가 만드는 것이라 이 크기를 넘기 어렵다
+
+    /** 예정 — 아직 응모 시작 전. */
+    @Query("SELECT c FROM DrawCampaignJpaEntity c WHERE c.opensAt > :now")
+    Page<DrawCampaignJpaEntity> findScheduled(@Param("now") Instant now, Pageable pageable);
+
+    /** 응모 중 — 시작 시각 포함, 마감 시각 제외. */
+    @Query("SELECT c FROM DrawCampaignJpaEntity c WHERE c.opensAt <= :now AND c.closesAt > :now")
+    Page<DrawCampaignJpaEntity> findOpen(@Param("now") Instant now, Pageable pageable);
+
+    /** 마감 — 마감 시각 포함. */
+    @Query("SELECT c FROM DrawCampaignJpaEntity c WHERE c.closesAt <= :now")
+    Page<DrawCampaignJpaEntity> findClosed(@Param("now") Instant now, Pageable pageable);
 
     @Query(value = """
             SELECT c.id FROM draw_campaigns c
@@ -49,6 +66,10 @@ public interface DrawCampaignJpaRepository extends JpaRepository<DrawCampaignJpa
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query(value = "UPDATE draw_campaigns SET settled_at = :now, updated_at = :now WHERE id = :id AND settled_at IS NULL", nativeQuery = true)
     int markSettled(@Param("id") UUID id, @Param("now") Instant now);
+
+    /** fk_draw_campaign_option (product_id, option_id) 의 인덱스로 찾는다. */
+    @Query(value = "SELECT EXISTS (SELECT 1 FROM draw_campaigns WHERE product_id = :productId AND settled_at IS NULL)", nativeQuery = true)
+    long existsUnsettledByProductId(@Param("productId") UUID productId);
 
     @Query(value = """
             SELECT COALESCE(SUM(e.status = 'PAID'), 0) AS paidEntries,

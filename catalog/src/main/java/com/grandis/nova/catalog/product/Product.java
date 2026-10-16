@@ -3,7 +3,9 @@ package com.grandis.nova.catalog.product;
 import com.grandis.nova.catalog.option.ProductOptions;
 import com.grandis.nova.common.BaseEntity;
 import jakarta.persistence.Column;
+import com.grandis.nova.catalog.cache.CatalogCacheInvalidation;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EntityListeners;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
@@ -22,7 +24,8 @@ import java.util.UUID;
  * 준비는 다른 서비스가 등록 이벤트를 받아 만든 행이라 catalog 가 칸으로 들고 있지 않고, 노출을 읽는 쿼리가 함께 본다
  * ({@link com.grandis.nova.catalog.listing.ProductListingQueryRepository}). 그래서 visible 은 관리자가 고른 값을 등록 때 바로 담는다 —
  * 준비가 안 된 상품은 visible 이어도 회원에게 보이지 않는다.
- * 가격은 basePrice 가 기준이고 옵션의 price 가 최종가다(기본가 + 고른 값의 추가금 합 — 조합별 수동 가격은 없다).
+ * 가격은 basePrice 가 기준이고 옵션의 price 가 정가다(기본가 + 고른 값의 추가금 합 — 조합별 수동 가격은 없다). 회원이 내는 값은
+ * 정가에 discountRate 를 건 할인가다({@link #salePrice}).
  * 옵션 축 · 값 · 사진 · 보증은 {@link #getOptions() options}(JSON) 한 칸이다({@link ProductOptions}). 썸네일은 그 문서에서 계산해 같이 저장한다.
  * 예약 · 주문은 접수 시점 값을 복사하므로 여기를 고쳐도 과거 거래에 소급되지 않는다.
  *
@@ -31,6 +34,7 @@ import java.util.UUID;
  * 옵션 가격만 새 값으로 남아 "가격 = 기본가 + Σ추가금" 이 깨진다(실측). 새 쓰기 경로는 "잠그지 않고 읽기 → 수정 커밋 → 쓰기" 모양의 시험을 같이 둔다.
  */
 @Entity
+@EntityListeners(CatalogCacheInvalidation.class)
 @Table(name = "products")
 public class Product extends BaseEntity {
 
@@ -41,8 +45,9 @@ public class Product extends BaseEntity {
     @Column(nullable = false)
     private UUID categoryId;
 
+    /** 등록 때 정하고, 바뀌는 길은 마감된 사전예약의 일반 전환({@link #convertToInStock}) 하나뿐이다. */
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, updatable = false, length = 20)
+    @Column(nullable = false, length = 20)
     private SaleMode saleMode;
 
     @Column(nullable = false, length = 100)
@@ -58,6 +63,10 @@ public class Product extends BaseEntity {
 
     @Column(nullable = false)
     private BigDecimal basePrice;
+
+    /** 할인율(정수 %, 0~99). 옵션 가격(정가)에 걸어 할인가를 읽을 때 계산한다({@link Discount}). 보증 추가금에는 걸지 않는다. */
+    @Column(nullable = false)
+    private int discountRate;
 
     /** 옵션 축 · 값 · 추가금 · 색상 hex · 사진 · 보증({@link ProductOptions}). 비면 "{}". */
     @JdbcTypeCode(SqlTypes.JSON)
@@ -85,6 +94,9 @@ public class Product extends BaseEntity {
     /** 사전예약 회차 취소를 접수한 시각. null 이면 취소 아님 — 오픈 전에 판매 중지로 둔 채 오픈을 넘긴 상품도 null 이다(2026-10-04 결정). */
     private Instant campaignCanceledAt;
 
+    /** 소프트 삭제한 시각. null 이면 삭제 아님. 삭제한 상품은 비공개다(DB CHECK) — 되살리기는 없다. */
+    private Instant deletedAt;
+
     /**
      * 상품명 · 판매 상태 · 공개 여부의 변경 번호. 셋 중 하나가 실제로 바뀔 때마다 1 오른다(상품 행을 잠근 수정 안에서).
      * preorder 는 이 셋을 회차 행에 사본으로 두고, 순서가 뒤집혀 온 이벤트를 이 번호로 거른다(contracts/catalog-events.md).
@@ -102,7 +114,7 @@ public class Product extends BaseEntity {
     }
 
     private Product(String idempotencyKey, UUID categoryId, SaleMode saleMode, String title, Brand brand, String modelName,
-                    BigDecimal basePrice, String description, String tags, boolean visible, ProductOptions options) {
+                    BigDecimal basePrice, int discountRate, String description, String tags, boolean visible, ProductOptions options) {
         this.idempotencyKey = idempotencyKey;
         this.categoryId = categoryId;
         this.saleMode = saleMode;
@@ -110,6 +122,7 @@ public class Product extends BaseEntity {
         this.brand = Objects.requireNonNull(brand, "brand");
         this.modelName = Objects.requireNonNull(modelName, "modelName").strip();
         this.basePrice = Amounts.requireWholeWon(basePrice, "basePrice");
+        this.discountRate = Discount.requireRate(discountRate);
         this.description = description;
         this.tags = tags;
         this.status = SaleStatus.ACTIVE;
@@ -123,9 +136,9 @@ public class Product extends BaseEntity {
      * 보증을 제공하지 않으면 추가금은 0 이다.
      */
     public static Product register(String idempotencyKey, UUID categoryId, SaleMode saleMode, String title, Brand brand,
-                                   String modelName, BigDecimal basePrice, String description, String tags, boolean visible,
+                                   String modelName, BigDecimal basePrice, int discountRate, String description, String tags, boolean visible,
                                    boolean warrantyOffered, BigDecimal warrantySurcharge, ProductOptions options) {
-        return new Product(idempotencyKey, categoryId, saleMode, title, brand, modelName, basePrice, description, tags, visible,
+        return new Product(idempotencyKey, categoryId, saleMode, title, brand, modelName, basePrice, discountRate, description, tags, visible,
                 Objects.requireNonNull(options, "options").withWarranty(warrantyOf(warrantyOffered, warrantySurcharge, "warrantySurcharge")));
     }
 
@@ -177,6 +190,22 @@ public class Product extends BaseEntity {
     }
 
     /**
+     * 사전예약 → 일반 상품. 판매 중(ACTIVE)으로 두고 할인율을 바꾼다. 마감 뒤인지 · 재고 · 옵션 가격 하한은 서비스가 본다(회차 · 재고는 다른 서비스 표).
+     * 회차가 취소된 상품은 바꾸지 않는다(2026-10-14 결정 — DB CHECK 도 취소 표식이 있는 행은 사전예약 · 판매 중지만 허용한다).
+     */
+    public void convertToInStock(int discountRate) {
+        if (saleMode != SaleMode.PREORDER) {
+            throw new IllegalStateException("일반 전환은 사전예약 상품만: " + getId());
+        }
+        if (campaignCanceledAt != null) {
+            throw new IllegalStateException("회차가 취소된 상품은 일반 전환하지 않는다: " + getId());
+        }
+        this.saleMode = SaleMode.IN_STOCK;
+        changeStatus(SaleStatus.ACTIVE);   // 판매 중지였으면 번호도 오른다 — preorder 의 회차 상품 사본이 따라가게
+        this.discountRate = Discount.requireRate(discountRate);
+    }
+
+    /**
      * 사전예약 회차 취소 — 판매 중지로 두고 취소 시각을 남긴다. 되돌릴 수 없다(DB CHECK 가 취소 표식이 있는 행의 ACTIVE 를 막는다).
      * 오픈 뒤인지는 서비스가 본다(회차는 preorder 표).
      *
@@ -192,6 +221,18 @@ public class Product extends BaseEntity {
         changeStatus(SaleStatus.PAUSED);
         this.campaignCanceledAt = Objects.requireNonNull(now, "now");
         return true;
+    }
+
+    /**
+     * 소프트 삭제 — 비공개로 두고 삭제 시각을 남긴다. 행은 남는다(옵션을 가리키는 주문 · 장바구니 · 예약 · 드로우). 되돌릴 수 없다.
+     * 공개였으면 번호가 올라 사전예약은 preorder 의 회차 사본도 비공개가 된다. 진행 중 사전예약 · 드로우 증정품인지는 서비스가 본다(다른 서비스 표).
+     */
+    public void delete(Instant now) {
+        if (deletedAt != null) {
+            throw new IllegalStateException("이미 삭제한 상품: " + getId());
+        }
+        hide();
+        this.deletedAt = Objects.requireNonNull(now, "now");
     }
 
     /** 표시 정보 수정. null 은 "보내지 않음" 이라 그대로 둔다. 사전예약 오픈 뒤 금지는 서비스가 지킨다(회차는 preorder 표). */
@@ -222,6 +263,16 @@ public class Product extends BaseEntity {
         }
         this.basePrice = next;
         return true;
+    }
+
+    /** 할인율. 사전예약 오픈 뒤 금지는 서비스가 지킨다(다른 수정과 같은 규칙). */
+    public void changeDiscountRate(int discountRate) {
+        this.discountRate = Discount.requireRate(discountRate);
+    }
+
+    /** 이 상품의 할인율을 건 옵션 가격. */
+    public BigDecimal salePrice(BigDecimal listPrice) {
+        return Discount.apply(listPrice, discountRate);
     }
 
     /** 보증 설정 — 옵션 문서의 warranty 를 바꾼다. 제공하지 않으면 추가금은 0 이다(등록과 같은 규칙). */
@@ -262,6 +313,10 @@ public class Product extends BaseEntity {
         return basePrice;
     }
 
+    public int getDiscountRate() {
+        return discountRate;
+    }
+
     public String getDescription() {
         return description;
     }
@@ -272,6 +327,10 @@ public class Product extends BaseEntity {
 
     public SaleStatus getStatus() {
         return status;
+    }
+
+    public boolean isDeleted() {
+        return deletedAt != null;
     }
 
     public Instant getCampaignCanceledAt() {

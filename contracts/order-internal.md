@@ -4,6 +4,7 @@ order 와 catalog 가 서로 부르는 내부 API 를 담는다(preorder 가 부
 
 - catalog → order: `GET /internal/order-items/{orderItemId}` — 리뷰 작성용 주문상품. order 가 응답을 만들고(`InternalOrderItemController` · `OrderQueryService.findItem`), catalog 의 리뷰 작성이 소비한다.
 - order → catalog: `GET /internal/options` — 장바구니용 옵션 일괄 조회. catalog 가 응답을 만들고(`InternalOptionController` · `ProductOptionsQueryService.findOptions`), order 의 장바구니가 소비한다.
+- catalog → order: `GET /internal/draws/gift-products/{productId}` — 상품 삭제의 드로우 증정품 확인. order 가 응답을 만들고(`InternalDrawController` · `DrawQueryService.giftInProgress`), catalog 의 상품 삭제(`ProductDeleteService`)가 소비한다.
 
 ## `GET /internal/order-items/{orderItemId}` — 리뷰 작성용 주문상품 (내부 전용)
 
@@ -84,7 +85,7 @@ BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, �
 **요청.** 본문 없음. `ids` 에 옵션 id(`product_options.id`, UUID)를 쉼표로 잇거나(`ids=a,b`) 파라미터를 반복한다(`ids=a&ids=b`) — 둘은 같다.
 - 같은 id 는 한 번으로 센다. 중복을 뺀 개수가 1~50 이어야 한다(장바구니 최대 줄 수 50). 비었거나 · 없거나 · 51개 이상 · UUID 가 아니거나 · 빈 원소(`ids=a,` 의 끝 쉼표)가 있으면 400(`field=ids`).
 
-**응답 200.** 봉투는 `common:web` 의 `ApiResponse` 그대로. 결과는 **요청 순서**(같은 id 는 처음 자리에 한 번)이고, **없는 옵션은 빠진다** — 호출자는 빠진 id 를 "판매 종료" 로 판정한다.
+**응답 200.** 봉투는 `common:web` 의 `ApiResponse` 그대로. 결과는 **요청 순서**(같은 id 는 처음 자리에 한 번)이고, **없는 옵션은 빠진다** — 삭제한 상품(소프트 삭제)의 옵션도 없는 옵션이다. 호출자는 빠진 id 를 "판매 종료" 로 판정한다.
 
 ```json
 {
@@ -121,7 +122,7 @@ BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, �
 | `productTitle` | string | 상품 이름(지금 값) |
 | `optionTitle` | string | 옵션 표시명(지금 값, 예: 블랙 / 256GB) |
 | `sku` | string | 옵션 SKU |
-| `price` | number | 옵션 최종가(정수 원) — 기본가 + 고른 값의 추가금 |
+| `price` | number | 회원이 내는 옵션 가격(정수 원) — 정가(기본가 + 고른 값의 추가금)에 상품 할인율을 걸어 100원 단위로 버린 값. 할인율 0 이면 정가. 보증 추가금은 할인하지 않는다 |
 | `optionStatus` | string | 옵션 판매 상태(ACTIVE · PAUSED) |
 | `saleMode` | string | 상품 판매 방식(IN_STOCK · PREORDER) |
 | `productStatus` | string | 상품 판매 상태(ACTIVE · PAUSED) |
@@ -143,3 +144,50 @@ BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, �
 | 403 | `FORBIDDEN` | USER · ADMIN 이 아닌 토큰 |
 
 **폐기 조회 실패.** 이 경로는 catalog 의 `auth.revocation-check.fail-closed-paths` 에 없다 — Redis 장애로 폐기 여부를 못 보면 통과(경고 · 지표만)한다. 읽기 전용이고, 폐기된 토큰으로 볼 수 있는 것도 상품 사실뿐이다.
+
+## `GET /internal/draws/gift-products/{productId}` — 상품 삭제의 드로우 증정품 확인 (내부 전용)
+
+**노출.** 위 두 API 와 같은 조건이다 — `/internal/**` 는 공개 라우팅에 두지 않고, OpenAPI 문서에서도 기본으로 빠진다.
+
+**호출 주체.**
+
+| 언제 | 누가 | 실린 JWT | 목적 |
+| --- | --- | --- | --- |
+| 관리자가 상품을 삭제할 때 한 번(캐시하지 않음) | catalog 상품 삭제 | 관리자(ADMIN) | 반영 전 드로우의 증정품이면 삭제를 409 로 막는다 |
+
+**인증.** 호출자가 받은 관리자 토큰을 그대로 싣는다. order 는 **ADMIN 만** 받는다 — 회원 토큰은 403 `FORBIDDEN`(`@CurrentViewer` 로 가른다).
+
+**요청.** 본문 없음. `productId` 는 `products.id`(UUID). UUID 가 아니면 400.
+
+**응답 200.**
+
+```json
+{
+  "success": true,
+  "data": { "productId": "0199a3f2-8a10-7b21-9c32-4d5e6f708192", "drawInProgress": true },
+  "error": null,
+  "timestamp": "2026-10-16T06:00:00Z",
+  "traceId": "…"
+}
+```
+
+| 칸 | 타입 | 뜻 |
+| --- | --- | --- |
+| `productId` | string(UUID) | 물은 상품 |
+| `drawInProgress` | boolean | 그 상품을 증정품으로 둔 회차(`draw_campaigns.product_id`) 중 반영(`settled_at`) 전인 것이 있다 — 응모 전 · 응모 중 · 마감 뒤 추첨 · 반영 전. 마감 뒤에도 반영 전에는 증정품 재고를 잡고 있고 당첨 주문을 만들므로 진행 중으로 본다 |
+
+**없는 상품도 200(false).** 상품의 유무는 catalog 가 안다 — order 는 회차만 본다. catalog 는 없는 상품이면 이 API 를 부르지 않고 404 로 끝낸다.
+
+**겹침.** catalog 는 상품 행을 잠근 채 HTTP 를 기다리지 않으려고 이 확인을 삭제 트랜잭션 밖에서 먼저 한다. 드로우 생성(`AdminDrawService`)도 catalog 옵션 조회를 트랜잭션 밖에서 먼저 하고 INSERT 는 뒤에 하므로, 이 확인보다 먼저 옵션을 읽은 생성이 확인 뒤에 커밋되면 막지 못한다 — 둘 다 관리자 작업이다. 삭제가 커밋된 뒤에 옵션 조회를 시작한 드로우 생성은 옵션을 못 찾아(`GET /internal/options` 에서 빠짐) 404 다.
+
+**멈춘 회차.** 반영(`settled_at`)을 적는 곳은 추첨 결과 반영 하나다. 반영이 계속 실패하는 회차가 있으면 그 증정품은 삭제가 계속 409 다 — 드로우 취소 경로는 없다.
+
+**배포 순서.** order 를 catalog 보다 먼저 낸다. catalog 가 먼저 나가면 이 경로가 없어 공통 `NOT_FOUND`(연동 오류 500)가 되고, 그동안 상품 삭제가 전부 실패한다.
+
+**오류.** 공통 봉투 그대로. catalog 는 200 이 아니면 전부 연동 오류(5xx 는 503 다시 시도, 그 밖은 500)로 다룬다 — 이 API 에 "대상 없음" 404 는 없다.
+
+| 상태 | 코드 | 언제 |
+| --- | --- | --- |
+| 400 | `VALIDATION_FAILED` | `productId` 가 UUID 가 아님 |
+| 401 | `UNAUTHENTICATED` | 토큰 없음 · 만료 · 서명 · 폐기된 토큰 |
+| 403 | `FORBIDDEN` | ADMIN 이 아닌 토큰 |

@@ -5,6 +5,8 @@ import com.grandis.nova.catalog.category.CategoryRepository;
 import com.grandis.nova.catalog.detail.ProductDetailService;
 import com.grandis.nova.catalog.detail.ProductDetailView;
 import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
+import com.grandis.nova.catalog.image.ImageAttachments;
+import com.grandis.nova.catalog.image.ImagePurpose;
 import com.grandis.nova.catalog.option.CollationDuplicates;
 import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.catalog.option.OptionText;
@@ -59,13 +61,14 @@ public class ProductRegistrationService {
     private final ProductDetailService detailService;
     private final ProductListingQueryRepository crossReads;
     private final OutboxWriter outbox;
+    private final ImageAttachments images;
     private final Clock clock;
     private final Duration minOpenLead;
 
     public ProductRegistrationService(CategoryRepository categories, ProductRepository products, ProductOptionRepository options,
                                       ProductRegistrationValidator validator, CollationDuplicates duplicates,
                                       ProductDetailService detailService, ProductListingQueryRepository crossReads,
-                                      OutboxWriter outbox, Clock clock,
+                                      OutboxWriter outbox, ImageAttachments images, Clock clock,
                                       @org.springframework.beans.factory.annotation.Value("${catalog.registration.min-open-lead:PT30M}")
                                       Duration minOpenLead) {
         this.categories = categories;
@@ -76,6 +79,7 @@ public class ProductRegistrationService {
         this.detailService = detailService;
         this.crossReads = crossReads;
         this.outbox = outbox;
+        this.images = images;
         this.clock = clock;
         this.minOpenLead = minOpenLead;
     }
@@ -110,9 +114,13 @@ public class ProductRegistrationService {
         requireNoCollationDuplicates(draft);
         ProductOptions document = documentOf(draft);
         Product product = saveProduct(Product.register(key, request.categoryId(), request.saleMode(), request.title(),
-                request.brand(), request.modelName(), request.basePrice(), request.description(), request.tags(), request.visible(),
+                request.brand(), request.modelName(), request.basePrice(), request.discountRate(), request.description(), request.tags(), request.visible(),
                 request.warranty().offered(), request.warranty().surcharge(), document));
         UUID productId = product.getId();
+        // 사진 붙이기는 멱등 키 INSERT(saveProduct) 뒤에 — 같은 키를 동시에 다시 보낸 요청은 위 INSERT 에서 기다렸다가 IN_PROGRESS 로 끝나고,
+        // 앞 요청이 붙인 USED 를 보고 400 이 되지 않는다
+        Map<String, String> imageFields = ProductRegistrationValidator.imageFields(request);
+        images.sync(ImagePurpose.PRODUCT, List.of(), document.imageUrls(), imageFields::get);
 
         List<InStockProductRegistered.Item> initialStock = new ArrayList<>();
         for (Combo combo : draft.combos()) {
