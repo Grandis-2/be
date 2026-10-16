@@ -6,21 +6,38 @@ import static org.assertj.core.api.Assertions.tuple;
 import com.grandis.nova.batch.support.BatchIntegrationTest;
 import com.grandis.nova.batch.support.TestData;
 import com.grandis.nova.batch.support.TestData.BePreorderRow;
+import com.grandis.nova.common.jpa.StorageClock;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.context.bean.override.convention.TestBean;
 
-/** 비교 규칙을 실제 DB · 가짜 Mock 원장으로 끝까지 돌린다 — 정상 데이터는 0건, 일부러 어긋낸 데이터는 유형마다 잡는다 */
+/**
+ * 비교 규칙을 실제 DB · 가짜 Mock 원장으로 끝까지 돌린다 — 정상 데이터는 0건, 일부러 어긋낸 데이터는 유형마다 잡는다.
+ * 검사 시계를 NOW 로 고정한다. 시험 데이터 시각과 검사 시작이 벌어지면 판정 보류(2분) · 멈춤(45분) 경계를 넘을 수 있다.
+ */
 class ReconciliationChecksTest extends BatchIntegrationTest {
 
-    private static final Instant TWO_HOURS_AGO = Instant.now().minus(Duration.ofHours(2));
-    private static final Instant JUST_NOW = Instant.now().minusSeconds(5);
-    private static final Instant FIVE_MINUTES_AGO = Instant.now().minus(Duration.ofMinutes(5));
-    private static final Instant THIRTY_MINUTES_AGO = Instant.now().minus(Duration.ofMinutes(30));
+    private static final Instant NOW = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+    private static final Instant TWO_HOURS_AGO = NOW.minus(Duration.ofHours(2));
+    private static final Instant JUST_NOW = NOW.minusSeconds(5);
+    private static final Instant FIVE_MINUTES_AGO = NOW.minus(Duration.ofMinutes(5));
+    private static final Instant THIRTY_MINUTES_AGO = NOW.minus(Duration.ofMinutes(30));
+
+    @TestBean(name = "storageClock", methodName = "fixedClock")
+    Clock storageClock;
+
+    static Clock fixedClock() {
+        return StorageClock.atStorageResolution(Clock.fixed(NOW, ZoneOffset.UTC));
+    }
 
     @Autowired
     ReconciliationService service;
@@ -139,8 +156,9 @@ class ReconciliationChecksTest extends BatchIntegrationTest {
         BePreorderRow noteEdited = data.preorder("폰", "c-7", "REGISTERED", "SUCCEEDED", TWO_HOURS_AGO);
         mockActive(noteEdited, "폰");
         data.paidOrder(noteEdited, "SUCCEEDED", TWO_HOURS_AGO);
-        jdbc.sql("UPDATE preorders SET internal_note = 'DLQ 확인 중', updated_at = NOW(6) WHERE id = UUID_TO_BIN(:id)")
-                .param("id", noteEdited.id().toString()).update();
+        jdbc.sql("UPDATE preorders SET internal_note = 'DLQ 확인 중', updated_at = :at WHERE id = UUID_TO_BIN(:id)")
+                .param("at", LocalDateTime.ofInstant(JUST_NOW, ZoneOffset.UTC)).param("id", noteEdited.id().toString())
+                .update();
 
         // 5분 전에 바뀐 예약도 판정한다 — 조치 직후 다시 검사해 확인할 수 있다
         data.preorder("폰", "d-1", "REGISTERED", "SUCCEEDED", FIVE_MINUTES_AGO);
