@@ -161,7 +161,7 @@ public class PlaceOrderService {
     private static PlaceOrderCommand toCommand(UUID customerId, PreorderPayability preorder,
                                                PlaceOrderCommand.Address shipTo) {
         return new PlaceOrderCommand(customerId, OrderSource.PREORDER, preorder.preorderInternalId(),
-                preorder.preorderId(), shipTo, List.of(
+                preorder.preorderId(), null, shipTo, List.of(
                 new PlaceOrderCommand.Line(preorder.productId(), preorder.optionId(), 1, preorder.unitPrice(),
                         0, BigDecimal.ZERO, preorder.productTitle(), preorder.optionTitle())));
     }

@@ -14,9 +14,12 @@ import com.grandis.nova.order.order.pay.PaymentSettlement;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
@@ -25,17 +28,24 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 
 import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,7 +56,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 바로 구매 주문(POST /api/v1/orders, source=BUY_NOW) — 생성 · 결제 결과 반영 · 미결제 취소, 장바구니 주문과의 독립.
+ * 바로 구매 주문(POST /api/v1/orders, source=BUY_NOW) — 생성 · 멱등 키(Idempotency-Key) · 결제 결과 반영 · 미결제 취소, 장바구니 주문과의 독립.
+ * 따로 키를 주지 않은 요청은 누름마다 새 키다.
  * 기한 만료 · 만료와 사용자 취소의 겹침은 CartOrderCancelTest 가 본다(만료 처리의 진입점이 패키지 안이다).
  * 대역 구성은 CartOrderApiTest · CartOrderCancelTest 와 같다 — Spring 컨텍스트(와 MySQL 컨테이너)를 함께 쓴다.
  */
@@ -59,11 +70,14 @@ class BuyNowOrderApiTest {
     static final BigDecimal WARRANTY = new BigDecimal("199000");
     static final String SHIP_TO = """
             {"name":"홍길동","phone":"010-0000-0000","postalCode":"04524","line1":"서울시 중구 세종대로 110"}""";
+    static final String OTHER_SHIP_TO = """
+            {"name":"홍길동","phone":"010-0000-0000","postalCode":"48058","line1":"부산시 해운대구 센텀로 1"}""";
 
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired PaymentResults results;
     @Autowired OrderReader orderReader;
+    @Autowired PlatformTransactionManager transactionManager;
     @MockitoBean CatalogClient catalogClient;
     /** 쓰지 않지만 CartApiTest 와 같은 대역 구성으로 두어 Spring 컨텍스트를 함께 쓴다. */
     @MockitoSpyBean CartStore store;
@@ -106,7 +120,7 @@ class BuyNowOrderApiTest {
     }
 
     @Test
-    @DisplayName("누를 때마다 새 주문이다 — 같은 요청이어도 기존 주문을 돌려주지 않고 앞 주문도 취소하지 않는다")
+    @DisplayName("누를 때마다(키가 다르면) 새 주문이다 — 같은 내용이어도 기존 주문을 돌려주지 않고 앞 주문도 취소하지 않는다")
     void everyRequestCreatesNewOrder() throws Exception {
         UUID phone = sellable(10);
 
@@ -116,6 +130,151 @@ class BuyNowOrderApiTest {
         assertThat(second).isNotEqualTo(first);
         assertThat(orderStatus(first)).isEqualTo("AWAITING_PAYMENT");
         assertThat(reserved(phone)).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("같은 키 · 같은 내용의 재전송은 200 reused 와 같은 주문 — 주문 · 확보는 한 번. 그사이 값이 바뀌었어도 가격은 대조하지 않는다")
+    void sameKeySameRequestReplaysOrder() throws Exception {
+        UUID phone = sellable(10);
+        UUID key = UUID.randomUUID();
+        JsonNode first = data(placeWith(key, item(phone, 2, false), item(phone, 1, true)).andExpect(status().isCreated()));
+        catalog.put(phone, copy(catalog.get(phone), "PAUSED", true));
+
+        JsonNode again = data(placeWith(key, item(phone, 1, true), item(phone, 2, false)).andExpect(status().isOk()));
+
+        assertThat(again.get("reused").asBoolean()).isTrue();
+        assertThat(again.get("orderId").asString()).isEqualTo(first.get("orderId").asString());
+        assertThat(again.get("status").asString()).isEqualTo("AWAITING_PAYMENT");
+        assertThat(orderCount()).isEqualTo(1);
+        assertThat(reserved(phone)).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("같은 키인데 내용(수량 · 보증 수량 · 옵션 · 배송지)이 다르면 422 KEY_PAYLOAD_MISMATCH — 앞 주문 · 확보는 그대로")
+    void sameKeyDifferentRequestIs422() throws Exception {
+        UUID phone = sellable(10);
+        UUID watch = sellable(10);
+        UUID key = UUID.randomUUID();
+        String first = data(placeWith(key, item(phone, 2, false)).andExpect(status().isCreated())).get("orderId").asString();
+
+        expectError(placeWith(key, item(phone, 3, false)), 422, "KEY_PAYLOAD_MISMATCH");
+        expectError(placeWith(key, item(phone, 1, false), item(phone, 1, true)), 422, "KEY_PAYLOAD_MISMATCH");
+        expectError(placeWith(key, item(watch, 2, false)), 422, "KEY_PAYLOAD_MISMATCH");
+        expectError(perform("""
+                {"source":"BUY_NOW","items":[%s],"shipTo":%s}""".formatted(item(phone, 2, false), OTHER_SHIP_TO), key), 422, "KEY_PAYLOAD_MISMATCH");
+
+        assertThat(orderCount()).isEqualTo(1);
+        assertThat(orderStatus(first)).isEqualTo("AWAITING_PAYMENT");
+        assertThat(reserved(phone)).isEqualTo(2);
+        assertThat(reserved(watch)).isZero();
+    }
+
+    /**
+     * 같은 키가 동시에 오면 하나만 만들고 다른 하나는 그 주문을 돌려받는다 — 결정적으로 본다: 다른 트랜잭션이 재고 행을 잠근 채, 두 요청이 모두
+     * 앞의 찾기를 지나 확보에서 기다리는 것을 확인한 뒤 놓는다. 뒤의 것은 재고가 남으면 유일 키 중복으로, 마지막 재고였으면 재고 부족으로
+     * 끝나는데 — 어느 쪽이든 그 키의 주문이 있으므로 200 reused 다.
+     */
+    @ParameterizedTest
+    @ValueSource(ints = {2, 10})
+    void concurrentSameKeyCreatesOneOrder(int stock) throws Exception {
+        UUID phone = sellable(stock);
+        UUID key = UUID.randomUUID();
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CompletableFuture<Void> holder = CompletableFuture.runAsync(() -> new TransactionTemplate(transactionManager).executeWithoutResult(s -> {
+            jdbcTemplate.queryForList("SELECT option_id FROM option_inventories WHERE option_id = ? FOR UPDATE", (Object) bytes(phone));
+            locked.countDown();
+            await(release);
+        }));
+        await(locked);
+        List<CompletableFuture<Integer>> requests = IntStream.range(0, 2).mapToObj(i -> CompletableFuture.supplyAsync(() -> {
+            try {
+                return placeWith(key, item(phone, 2, false)).andReturn().getResponse().getStatus();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        })).toList();
+        Awaitility.await("두 요청이 확보에서 기다리지 않았다").atMost(Duration.ofSeconds(10)).until(() -> jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.PROCESSLIST
+                 WHERE COMMAND = 'Query' AND INFO LIKE 'UPDATE option_inventories SET stock_reserved = stock_reserved +%'""", Long.class) >= 2);
+        release.countDown();
+        holder.get(20, TimeUnit.SECONDS);
+
+        List<Integer> statuses = new ArrayList<>();
+        for (CompletableFuture<Integer> request : requests) {
+            statuses.add(request.get(20, TimeUnit.SECONDS));
+        }
+        assertThat(statuses).containsExactlyInAnyOrder(201, 200);
+        assertThat(orderCount()).isEqualTo(1);
+        assertThat(reserved(phone)).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("앞 요청이 실패해(재고 부족 — 롤백) 그 키의 주문이 없으면 같은 키의 다음 요청이 새로 만든다")
+    void sameKeyAfterFailedAttemptCreatesOrder() throws Exception {
+        UUID phone = sellable(1);
+        UUID key = UUID.randomUUID();
+        expectError(placeWith(key, item(phone, 2, false)), 409, "INSUFFICIENT_STOCK");
+        jdbcTemplate.update("UPDATE option_inventories SET stock_total = 5 WHERE option_id = ?", (Object) bytes(phone));
+
+        placeWith(key, item(phone, 2, false)).andExpect(status().isCreated());
+
+        assertThat(orderCount()).isEqualTo(1);
+        assertThat(reserved(phone)).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("키는 회원 안에서 유일하다 — 다른 회원의 같은 키는 다른 주문")
+    void sameKeyOfAnotherCustomerIsAnotherOrder() throws Exception {
+        UUID phone = sellable(10);
+        UUID key = UUID.randomUUID();
+        String mine = data(placeWith(key, item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
+
+        String others = data(mockMvc.perform(post("/api/v1/orders").with(TestAuth.customer(fixtures.customer()))
+                .contentType(MediaType.APPLICATION_JSON).header("Idempotency-Key", key.toString())
+                .content("""
+                        {"source":"BUY_NOW","items":[%s],"shipTo":%s}""".formatted(item(phone, 1, false), SHIP_TO)))
+                .andExpect(status().isCreated())).get("orderId").asString();
+
+        assertThat(others).isNotEqualTo(mine);
+        assertThat(reserved(phone)).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("Idempotency-Key 가 없으면 400 IDEMPOTENCY_KEY_REQUIRED, UUID 가 아니면 400 VALIDATION_FAILED — 주문 · 확보 없음")
+    void keyIsRequiredAsUuid() throws Exception {
+        UUID phone = sellable(10);
+        String body = """
+                {"source":"BUY_NOW","items":[%s],"shipTo":%s}""".formatted(item(phone, 1, false), SHIP_TO);
+
+        expectError(perform(body, null), 400, "IDEMPOTENCY_KEY_REQUIRED");
+        expectViolation(mockMvc.perform(post("/api/v1/orders").with(TestAuth.customer(customerId)).contentType(MediaType.APPLICATION_JSON)
+                .header("Idempotency-Key", "not-a-uuid").content(body)), "Idempotency-Key");
+        expectViolation(mockMvc.perform(post("/api/v1/orders").with(TestAuth.customer(customerId)).contentType(MediaType.APPLICATION_JSON)
+                .header("Idempotency-Key", "1-1-1-1-1").content(body)), "Idempotency-Key");
+
+        assertThat(orderCount()).isZero();
+        assertThat(reserved(phone)).isZero();
+    }
+
+    @Test
+    @DisplayName("장바구니 주문은 Idempotency-Key 를 보지 않는다 — 같은 키를 실어도 장바구니 규칙대로이고, 그 키는 바로 구매에서 새로 쓸 수 있다")
+    void cartOrderIgnoresKey() throws Exception {
+        UUID phone = sellable(10);
+        UUID watch = sellable(10);
+        UUID key = UUID.randomUUID();
+        cartLine(customerId, phone, false, 1);
+        cartLine(customerId, watch, false, 1);
+        String cartBody = """
+                {"source":"CART","items":[%s],"shipTo":%s}""";
+
+        String first = data(perform(cartBody.formatted(item(phone, 1, false), SHIP_TO), key).andExpect(status().isCreated())).get("orderId").asString();
+        perform(cartBody.formatted(item(watch, 1, false), SHIP_TO), key).andExpect(status().isCreated());
+        placeWith(key, item(phone, 1, false)).andExpect(status().isCreated());
+
+        assertThat(orderStatus(first)).as("장바구니 규칙(회원당 미결제 하나)대로 바뀌었다").isEqualTo("CANCELED");
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM orders WHERE customer_id = ? AND idempotency_key IS NOT NULL", Long.class,
+                (Object) bytes(customerId))).as("키는 바로 구매 주문에만").isEqualTo(1);
     }
 
     @Test
@@ -323,14 +482,24 @@ class BuyNowOrderApiTest {
                   {"variantId":"%s","quantity":%d,"expectedUnitPrice":1250000}""".formatted(option, quantity);
     }
 
+    /** 누름 한 번 — 새 키. */
     private ResultActions place(String... items) throws Exception {
+        return placeWith(UUID.randomUUID(), items);
+    }
+
+    private ResultActions placeWith(UUID key, String... items) throws Exception {
         return perform("""
-                {"source":"BUY_NOW","items":[%s],"shipTo":%s}""".formatted(String.join(",", items), SHIP_TO));
+                {"source":"BUY_NOW","items":[%s],"shipTo":%s}""".formatted(String.join(",", items), SHIP_TO), key);
     }
 
     private ResultActions perform(String body) throws Exception {
-        return mockMvc.perform(post("/api/v1/orders").with(TestAuth.customer(customerId))
-                .contentType(MediaType.APPLICATION_JSON).content(body));
+        return perform(body, UUID.randomUUID());
+    }
+
+    /** @param key null 이면 헤더를 싣지 않는다 */
+    private ResultActions perform(String body, UUID key) throws Exception {
+        var request = post("/api/v1/orders").with(TestAuth.customer(customerId)).contentType(MediaType.APPLICATION_JSON).content(body);
+        return mockMvc.perform(key == null ? request : request.header("Idempotency-Key", key.toString()));
     }
 
     private ResultActions cancel(String orderId) throws Exception {
@@ -389,5 +558,16 @@ class BuyNowOrderApiTest {
         actions.andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
                 .andExpect(jsonPath("$.error.details.violations[0].field").value(field));
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(20, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("기다리다 시간 초과");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 }

@@ -48,14 +48,15 @@ final class SelectionRules {
     /**
      * 살 수 있는가 · 가격이 그대로인가를 본 뒤 옵션마다 한 줄로 합친 초안. 금액은 catalog 의 지금 값으로 계산한다.
      *
+     * @param idempotencyKey 바로 구매 주문이면 요청의 멱등 키, 장바구니 주문이면 null
      * @throws BusinessException 409 STATE_CONFLICT(살 수 없는 줄, details.items 에 줄마다 이유) · PRICE_CHANGED(details.items 에 지금 값),
      *                           400(금액 칸을 넘음)
      */
-    static OrderDraft draft(UUID customerId, OrderSource source, List<CartSelection> selections, Map<UUID, CartOption> options,
-                            PlaceOrderCommand.Address shipTo) {
+    static OrderDraft draft(UUID customerId, OrderSource source, UUID idempotencyKey, List<CartSelection> selections,
+                            Map<UUID, CartOption> options, PlaceOrderCommand.Address shipTo) {
         requirePurchasable(selections, options);
         requireSamePrices(selections, options);
-        PlaceOrderCommand command = toCommand(customerId, source, selections, options, shipTo);
+        PlaceOrderCommand command = toCommand(customerId, source, idempotencyKey, selections, options, shipTo);
         requireWithinTotalLimit(command);
         return command.toDraft();
     }
@@ -115,7 +116,7 @@ final class SelectionRules {
     }
 
     /** 옵션마다 한 줄 — 보증 포함 · 미포함 줄을 합친다(수량 = 합, 보증 수량 = 보증 줄의 수량). 이름 · 단가 · 보증가는 catalog 의 지금 값이다. */
-    private static PlaceOrderCommand toCommand(UUID customerId, OrderSource source, List<CartSelection> selections,
+    private static PlaceOrderCommand toCommand(UUID customerId, OrderSource source, UUID idempotencyKey, List<CartSelection> selections,
                                                Map<UUID, CartOption> options, PlaceOrderCommand.Address shipTo) {
         Map<UUID, int[]> counts = new LinkedHashMap<>();   // [수량, 보증 수량]
         for (CartSelection selection : selections) {
@@ -131,6 +132,6 @@ final class SelectionRules {
             lines.add(new PlaceOrderCommand.Line(option.productId(), optionId, count[0], option.price(), count[1],
                     count[1] == 0 ? BigDecimal.ZERO : option.warrantySurcharge(), option.productTitle(), option.optionTitle()));
         });
-        return new PlaceOrderCommand(customerId, source, null, null, shipTo, lines);
+        return new PlaceOrderCommand(customerId, source, null, null, idempotencyKey, shipTo, lines);
     }
 }

@@ -151,7 +151,7 @@ public class DrawSettlement {
             throw new IllegalStateException("잠근 회차의 반영 표식이 이미 있다: drawId=" + campaign.id());
         }
         for (DrawEntry winner : winners) {
-            Order order = orders.place(new OrderDraft(winner.customerId(), OrderSource.DRAW, null, null, winner.shipTo(),
+            Order order = orders.place(new OrderDraft(winner.customerId(), OrderSource.DRAW, null, null, null, winner.shipTo(),
                     List.of(OrderLine.withoutWarranty(campaign.productId(), campaign.optionId(), Quantity.ONE, Money.ZERO,
                             campaign.productTitle(), campaign.optionTitle()))), EventCause.system(WON_REASON));
             if (!entries.markWon(campaign.id(), winner.id(), order.id(), now)) {

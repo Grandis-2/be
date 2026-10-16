@@ -20,7 +20,8 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * 주문 생성 요청. 경로는 하나이고 source 로 가른다 — PREORDER(preorderId) · CART · BUY_NOW(items). DRAW 는 받지 않는다.
+ * 주문 생성 요청 본문. 경로는 하나이고 source 로 가른다 — PREORDER(preorderId) · CART · BUY_NOW(items). DRAW 는 받지 않는다.
+ * BUY_NOW 는 본문 밖 Idempotency-Key 헤더(누름마다 하나, 재전송은 같은 키)도 요구한다(OrderController).
  * 금액 칸이 없다. 금액은 서버가 계산한다(사전예약은 예약 스냅샷, 장바구니 · 바로 구매는 catalog 의 지금 값). 줄의 기대 가격은 대조에만 쓴다.
  *
  * 배송지 길이 규칙은 {@link com.grandis.nova.order.order.vo.ShipTo} 와 같다. VO 가 던지는 IllegalArgumentException 은

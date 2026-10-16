@@ -109,6 +109,20 @@ class PlaceOrderApiTest {
                 """, bytes(preorderId))).isEqualTo(1);
     }
 
+    /** Idempotency-Key 는 바로 구매만 본다 — 사전예약 주문은 모양이 틀린 키가 와도 그대로 만든다. */
+    @Test
+    void preorderOrderIgnoresIdempotencyKey() throws Exception {
+        stubPayable();
+
+        mockMvc.perform(post("/api/v1/orders").contentType(MediaType.APPLICATION_JSON).content(body("PREORDER", token))
+                        .header(BearerTokens.HEADER, BearerTokens.value(SESSION)).header("Idempotency-Key", "not-a-uuid")
+                        .with(TestAuth.customer(customerId)))
+                .andExpect(status().isCreated());
+
+        assertThat(jdbcTemplate.queryForObject("SELECT idempotency_key IS NULL FROM orders WHERE customer_id = ?", Boolean.class,
+                (Object) OrderFixtures.bytes(customerId))).isTrue();
+    }
+
     @Test
     void repeatedRequestReturnsSameOrderWith200() throws Exception {
         stubPayable();

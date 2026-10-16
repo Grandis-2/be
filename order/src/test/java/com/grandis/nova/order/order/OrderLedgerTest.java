@@ -137,7 +137,7 @@ class OrderLedgerTest {
         UUID second = preorder();
         OrderDraft borrowed = draft(second);
         OrderDraft mismatched = new OrderDraft(borrowed.customerId(), borrowed.source(), second,
-                OrderFixtures.preorderToken(first), borrowed.shipTo(), borrowed.lines());
+                OrderFixtures.preorderToken(first), null, borrowed.shipTo(), borrowed.lines());
 
         assertThatThrownBy(() -> ledger.place(mismatched, EventCause.user()))
                 .isInstanceOf(OrderAlreadyPlacedException.class)
@@ -159,7 +159,7 @@ class OrderLedgerTest {
     @Test
     void draftOutsideAcceptanceRuleIsRejectedBeforeWriting() {
         OrderDraft preorder = draft(preorder());
-        OrderDraft paidDraw = new OrderDraft(customerId, OrderSource.DRAW, null, null, preorder.shipTo(), preorder.lines());
+        OrderDraft paidDraw = new OrderDraft(customerId, OrderSource.DRAW, null, null, null, preorder.shipTo(), preorder.lines());
 
         assertThatThrownBy(() -> ledger.place(paidDraw, EventCause.user()))
                 .isInstanceOf(IllegalArgumentException.class);

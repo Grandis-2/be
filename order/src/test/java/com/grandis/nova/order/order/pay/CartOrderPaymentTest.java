@@ -271,7 +271,8 @@ class CartOrderPaymentTest {
     }
 
     private Order place(OrderSource source, List<PlaceOrderCommand.Line> lines) {
-        PlaceOrderCommand command = new PlaceOrderCommand(customerId, source, null, null, OrderFixtures.ADDRESS, lines);
+        PlaceOrderCommand command = new PlaceOrderCommand(customerId, source, null, null,
+                source == OrderSource.BUY_NOW ? UUID.randomUUID() : null, OrderFixtures.ADDRESS, lines);
         Map<UUID, Integer> quantities = new HashMap<>();
         lines.forEach(line -> quantities.put(line.optionId(), line.quantity()));
         return new TransactionTemplate(transactionManager).execute(status -> {

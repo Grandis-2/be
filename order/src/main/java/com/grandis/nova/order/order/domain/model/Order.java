@@ -27,6 +27,7 @@ import java.util.UUID;
  * @param id              저장 전이면 null
  * @param preorderToken   사전예약 주문이 가리키는 예약의 공개 UUID. 같이 도는 구버전이 읽어 새 주문에도 채운다 — 판정에는 쓰지 않는다.
  *                        읽은 주문에서는 비어 있을 수 있다
+ * @param idempotencyKey  바로 구매 주문 생성 요청의 멱등 키. 바로 구매 주문만, 그리고 반드시 갖는다(ck_order_idempotency)
  * @param authorizingProviderOrderId 승인을 기다리는 결제창(결제사 주문 번호). AUTHORIZING 일 때만 있다 — 거절 · 되돌림은 이 결제창의
  *                        것일 때만 반영한다(늦게 온 이전 결제창의 거절이 새 결제창의 승인 중에 주문을 되돌리지 않게)
  * @param paymentDueAt    일반 주문의 10분 기한. 사전예약 주문은 예약의 24시간 기한을 따르므로 늘 null
@@ -41,6 +42,7 @@ public record Order(
         OrderSource source,
         UUID preorderId,
         String preorderToken,
+        UUID idempotencyKey,
         OrderStatus status,
         String authorizingProviderOrderId,
         Money totalAmount,
@@ -65,6 +67,7 @@ public record Order(
             throw new IllegalArgumentException("사전예약 주문만 preorderId 를 가진다: source=" + source);
         }
         PreorderTokens.requireReadable(source, preorderToken);
+        requireIdempotencyKey(source, idempotencyKey);
         // ck_order_due — 사전예약(예약의 기한을 따름) · 드로우 당첨(결제 없음)은 기한이 없다
         if ((preorder || source == OrderSource.DRAW) != (paymentDueAt == null)) {
             throw new IllegalArgumentException("결제 기한은 장바구니 · 바로 구매 주문에만 있고, 이 둘은 반드시 있다: source=" + source);
@@ -124,8 +127,15 @@ public record Order(
             }
         };
         return new Order(null, draft.customerId(), draft.source(), draft.preorderId(),
-                draft.preorderToken(), initialStatus(draft.source()), null, draft.totalAmount(), paymentDueAt, null, null, draft.shipTo(),
+                draft.preorderToken(), draft.idempotencyKey(), initialStatus(draft.source()), null, draft.totalAmount(), paymentDueAt, null, null, draft.shipTo(),
                 OrderEvent.FIRST_SEQUENCE, null, null);
+    }
+
+    /** ck_order_idempotency — 멱등 키는 바로 구매 주문에만 있고, 바로 구매 주문은 반드시 갖는다. */
+    static void requireIdempotencyKey(OrderSource source, UUID idempotencyKey) {
+        if ((source == OrderSource.BUY_NOW) != (idempotencyKey != null)) {
+            throw new IllegalArgumentException("멱등 키는 바로 구매 주문에만 있고, 바로 구매 주문은 반드시 갖는다: source=" + source);
+        }
     }
 
     /** 처음 상태. 드로우 당첨 주문은 결제가 없어(응모비로 이미 냈다) 결제 완료 — 결제 확인 대기로 생긴다. 나머지는 결제 대기다. */

@@ -437,6 +437,7 @@ class CartOrderCancelTest {
 
     private String placeBuyNowOrder(UUID option, int quantity) throws Exception {
         String body = mockMvc.perform(post("/api/v1/orders").with(TestAuth.customer(customerId)).contentType(MediaType.APPLICATION_JSON)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
                         .content("""
                                 {"source":"BUY_NOW","items":[%s],"shipTo":%s}""".formatted(item(option, quantity), SHIP_TO)))
                 .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();

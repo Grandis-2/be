@@ -109,7 +109,7 @@ public class PlaceCartOrderService {
         SelectionRules.requireDistinctSlots(selections);
         Set<UUID> optionIds = selections.stream().map(CartSelection::optionId).collect(Collectors.toCollection(LinkedHashSet::new));
         Map<UUID, CartOption> options = catalog.find(optionIds, sessionToken);
-        OrderDraft draft = SelectionRules.draft(customerId, OrderSource.CART, selections, options, shipTo);
+        OrderDraft draft = SelectionRules.draft(customerId, OrderSource.CART, null, selections, options, shipTo);
         EventCause cause = EventCause.user();
         for (int attempt = 1; ; attempt++) {
             try {

@@ -55,7 +55,9 @@ public enum OrderErrorCode implements ErrorCode {
     /** 장바구니 주문: 보낸 (옵션, 보증, 수량)이 지금 장바구니의 줄과 다르다(명세). 다시 조회해 확인한다. */
     CART_CHANGED(409, "선택한 장바구니 구성이 변경되었습니다."),
     /** 장바구니 · 바로 구매 주문: 화면에서 본 단가 · 보증가가 지금 값과 다르다. details.items 에 지금 값을 싣는다 — 확인 뒤 다시 주문한다. */
-    PRICE_CHANGED(409, "가격이 변경되었습니다. 변경된 가격을 확인해 주세요.");
+    PRICE_CHANGED(409, "가격이 변경되었습니다. 변경된 가격을 확인해 주세요."),
+    /** 바로 구매 주문: 같은 Idempotency-Key 의 앞 주문과 구성(옵션 · 수량 · 보증 수량) · 배송지가 다르다. 이름 · 코드는 preorder 의 같은 코드와 같다. */
+    KEY_PAYLOAD_MISMATCH(422, "이전 요청과 내용이 다릅니다. 새 주문으로 다시 시도해 주세요.");
 
     private final int status;
     private final String message;

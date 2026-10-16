@@ -24,6 +24,9 @@ public interface OrderReader {
     /** 예약의 주문. 예약당 주문은 평생 하나라(uq_order_preorder) 0~1건이다. */
     Optional<Order> findByPreorderId(UUID preorderId);
 
+    /** 그 회원이 그 멱등 키로 만든 바로 구매 주문. 회원 안에서 키당 하나라(uq_order_idempotency) 0~1건이다. */
+    Optional<Order> findByIdempotencyKey(UUID customerId, UUID idempotencyKey);
+
     /** 주문상품 하나. 주인 확인은 부르는 쪽이 그 주문으로 한다. */
     Optional<OrderItem> findItem(UUID orderItemId);
 
