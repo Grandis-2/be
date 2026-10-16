@@ -361,11 +361,11 @@ class ImageAttachmentApiTest {
         expectValidation(createPromotion(promotionBody(png, List.of(jpg), preorder())), "thumbnailUrl");
         expectValidation(createPromotion(promotionBody(jpg, List.of(png), preorder())), "detailImageUrls[0]");
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM promotions", Long.class)).as("홍보가 생기지 않았다").isEqualTo(promotions);
-        assertThat(statuses(jpg)).as("올린 사진도 붙지 않았다(롤백)").containsOnly("UNUSED");
+        assertThat(statuses(jpg)).as("올린 사진도 붙지 않았다").containsOnly("UNUSED");
 
         String b0 = uploaded(ImagePurpose.PRODUCT);
         expectValidation(register(colorBody(b0.replace(".jpg", ".png"), b0, uploaded(ImagePurpose.PRODUCT))), "images.gallery[0].items[0].url");
-        assertThat(statuses(b0)).as("등록도 롤백 — 올린 사진이 붙지 않았다").containsOnly("UNUSED");
+        assertThat(statuses(b0)).as("등록도 올린 사진이 붙지 않았다").containsOnly("UNUSED");
     }
 
     @Test
