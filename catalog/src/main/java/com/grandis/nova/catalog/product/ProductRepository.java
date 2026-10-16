@@ -6,6 +6,8 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -23,4 +25,12 @@ public interface ProductRepository extends JpaRepository<Product, UUID> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select p from Product p where p.id = :productId and p.deletedAt is null")
     Optional<Product> findForUpdate(@Param("productId") UUID productId);
+
+    /**
+     * 상품 행들을 공유 잠금(FOR SHARE)으로 읽는다 — 홍보 묶기 검증용. 삭제(상품 행 FOR UPDATE)가 커밋 전이면 기다렸다가 커밋된 값(삭제됨)을 본다.
+     * 잠그지 않고 읽으면 커밋 전 값으로 통과해 삭제된 상품이 묶인다(실측). 상품 수정 · 삭제는 홍보 행을 잡지 않으므로 홍보 잠금 → 상품 공유 잠금 순서와 엇갈리지 않는다.
+     */
+    @Lock(LockModeType.PESSIMISTIC_READ)
+    @Query("select p from Product p where p.id in :ids")
+    List<Product> findAllForShare(@Param("ids") Collection<UUID> ids);
 }

@@ -185,7 +185,8 @@ public class PromotionService {
                 throw ValidationFailures.of("productIds[" + i + "]", "같은 상품이 두 번 왔습니다.");
             }
         }
-        Map<UUID, Product> found = productsOf(request.productIds());
+        Map<UUID, Product> found = new HashMap<>();   // 공유 잠금으로 읽는다 — 겹친 삭제의 커밋을 기다려 삭제된 상품을 400 으로 거른다
+        products.findAllForShare(request.productIds()).forEach(product -> found.put(product.getId(), product));
         for (int i = 0; i < request.productIds().size(); i++) {
             UUID productId = request.productIds().get(i);
             Product product = found.get(productId);

@@ -42,6 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -193,7 +194,7 @@ class ProductDeleteApiTest {
     }
 
     @Test
-    @DisplayName("반영 전 드로우의 증정품이면 409 · order 장애는 503 · 물은 상품과 다른 응답은 500 — 셋 다 아무것도 바뀌지 않는다. 없는 상품은 order 를 부르지 않고 404")
+    @DisplayName("반영 전 드로우의 증정품이면 409 · order 장애는 503 · 물은 상품과 다른 응답은 500 — 셋 다 아무것도 바뀌지 않는다. 없는 상품 · 이미 삭제한 상품은 order 를 부르지 않고 404")
     void drawGiftCheck() throws Exception {
         UUID inDraw = registerInStock("dr" + ShopFixtures.unique());
         given(drawGifts.getGift(inDraw)).willReturn(ApiResponse.ok(new DrawGiftClient.DrawGift(inDraw, true)));
@@ -214,6 +215,10 @@ class ProductDeleteApiTest {
         UUID missing = UUID.randomUUID();
         deleteProduct(missing).andExpect(status().isNotFound());
         verify(drawGifts, never()).getGift(missing);
+        UUID gone = registerInStock("dr" + ShopFixtures.unique());
+        deleteProduct(gone).andExpect(status().isNoContent());
+        deleteProduct(gone).andExpect(status().isNotFound());
+        verify(drawGifts, times(1)).getGift(gone);   // 이미 삭제한 상품도 order 를 다시 부르지 않는다
     }
 
     @Test
@@ -270,6 +275,41 @@ class ProductDeleteApiTest {
                 } else {
                     assertThat(result).as("대조군").isNull();
                 }
+            } finally {
+                release.countDown();
+                pool.shutdownNow();
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("삭제가 커밋되기를 기다린 홍보 저장은 그 상품을 400 으로 거른다 — 검증이 상품 행을 공유 잠금으로 읽는다. 대조군: 잠그기만 하고 삭제하지 않으면 200")
+    void promotionSaveWaitingBehindDeleteRejectsIt() throws Exception {
+        for (boolean deleteWhileHolding : List.of(false, true)) {
+            UUID productId = registerPreorder(Instant.now().plus(Duration.ofDays(2)));
+            UUID promotionId = promotionWith(productId);
+            CountDownLatch locked = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                Future<?> holder = pool.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                    jdbcTemplate.queryForList("SELECT id FROM products WHERE id = ? FOR UPDATE", (Object) UuidBinary.toBytes(productId));
+                    if (deleteWhileHolding) {
+                        jdbcTemplate.update("UPDATE products SET visible = 0, deleted_at = UTC_TIMESTAMP(6) WHERE id = ?", (Object) UuidBinary.toBytes(productId));
+                    }
+                    locked.countDown();
+                    await(release);
+                }));
+                await(locked);
+                Future<Integer> save = pool.submit(() -> mockMvc.perform(admin(put("/api/v1/admin/promotions/{id}", promotionId)).content("""
+                                { "name": "홍보", "startDate": "2026-10-01", "endDate": "2026-12-31", "thumbnailUrl": "https://img/t.jpg",
+                                  "detailImageUrls": [], "productIds": ["%s"] }""".formatted(productId)))
+                        .andReturn().getResponse().getStatus());
+                Thread.sleep(300);
+                assertThat(save.isDone()).as("홍보 저장은 상품 행을 기다린다").isFalse();
+                release.countDown();
+                holder.get(10, TimeUnit.SECONDS);
+                assertThat(save.get(10, TimeUnit.SECONDS)).isEqualTo(deleteWhileHolding ? 400 : 200);
             } finally {
                 release.countDown();
                 pool.shutdownNow();
