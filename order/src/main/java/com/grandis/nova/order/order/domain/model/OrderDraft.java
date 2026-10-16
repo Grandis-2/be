@@ -13,17 +13,19 @@ import java.util.UUID;
 /**
  * 아직 저장하지 않은 주문. 금액 칸이 없다 — 받은 금액을 믿지 않도록 {@link #totalAmount()} 로만 계산한다.
  *
- * 여기서 거르는 것은 어느 출처든 지켜야 하는 규칙이다(ck_order_preorder_link · uq_order_item_option 과 같다).
+ * 여기서 거르는 것은 어느 출처든 지켜야 하는 규칙이다(ck_order_preorder_link · ck_order_idempotency · uq_order_item_option 과 같다).
  * 지금 어떤 출처를 받아 줄지는 {@link Order#place} 가 정한다.
  *
- * @param preorderId    사전예약 주문이면 그 예약의 내부 id, 아니면 null
- * @param preorderToken 사전예약 주문이면 그 예약의 공개 UUID(preorder_id 와 같은 예약), 아니면 null. 같이 도는 구버전이 읽어 채운다
+ * @param preorderId     사전예약 주문이면 그 예약의 내부 id, 아니면 null
+ * @param preorderToken  사전예약 주문이면 그 예약의 공개 UUID(preorder_id 와 같은 예약), 아니면 null. 같이 도는 구버전이 읽어 채운다
+ * @param idempotencyKey 바로 구매 주문이면 요청의 멱등 키(회원 안에서 유일, uq_order_idempotency), 아니면 null
  */
 public record OrderDraft(
         UUID customerId,
         OrderSource source,
         UUID preorderId,
         String preorderToken,
+        UUID idempotencyKey,
         ShipTo shipTo,
         List<OrderLine> lines
 ) {
@@ -38,6 +40,7 @@ public record OrderDraft(
             throw new IllegalArgumentException("사전예약 주문만 preorderId 를 가진다: source=" + source);
         }
         PreorderTokens.requireLinked(source, preorderToken);
+        Order.requireIdempotencyKey(source, idempotencyKey);
         if (lines.isEmpty()) {
             throw new IllegalArgumentException("주문상품이 없다");
         }

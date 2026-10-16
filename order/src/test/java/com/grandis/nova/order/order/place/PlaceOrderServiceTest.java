@@ -120,7 +120,7 @@ class PlaceOrderServiceTest {
     @Test
     void existingOrderOfAnotherCustomerIsHidden() {
         payable();
-        Order foreign = new Order(TestIds.id(100), TestIds.id(999), OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID,
+        Order foreign = new Order(TestIds.id(100), TestIds.id(999), OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID, null,
                 OrderStatus.AWAITING_PAYMENT, null, Money.won(1_250_000), null, null, null,
                 new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 1, NOW, NOW);
         given(orderReader.findByPreorderId(PREORDER_ID)).willReturn(Optional.of(foreign));
@@ -162,7 +162,7 @@ class PlaceOrderServiceTest {
     @Test
     void existingOrderIsFoundByPreorderIdWhateverItsStoredToken() {
         payable();
-        Order stored = new Order(TestIds.id(100), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID, null,
+        Order stored = new Order(TestIds.id(100), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID, null, null,
                 OrderStatus.AWAITING_PAYMENT, null, Money.won(1_250_000), null, null, null,
                 new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 1, NOW, NOW);
         given(orderReader.findByPreorderId(PREORDER_ID)).willReturn(Optional.of(stored));
@@ -251,7 +251,7 @@ class PlaceOrderServiceTest {
     }
 
     private static Order order(OrderStatus status) {
-        return new Order(TestIds.id(100), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID, status, null,
+        return new Order(TestIds.id(100), CUSTOMER_ID, OrderSource.PREORDER, PREORDER_ID, PREORDER_UUID, null, status, null,
                 Money.won(1_250_000), null, null, null,
                 new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 1, NOW, NOW);
     }

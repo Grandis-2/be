@@ -11,8 +11,8 @@
 # 4) 학습한 그 이미지에 캐시를 얹는다(docker/Dockerfile.aot → <FINAL_REPO>:<서비스>). 다시 빌드한 이미지에 얹으면 안 된다 —
 #    JVM 은 jar 가 학습 때와 같은지 보지 않아, 어긋나면 거절 대신 캐시의 옛 클래스를 실행한다(JDK 25 실측).
 # 5) 검증: 최종 이미지를 그 ENTRYPOINT 에 -XX:AOTMode=on 을 더해 띄운다 — JDK · 캐시 경로 · 모듈 구성이 어긋나 캐시를 받지 못하면
-#    JVM 이 실패한다(운영의 기본 auto 는 조용히 캐시 없이 뜬다). 운영처럼 OTel 에이전트를 붙여 한 번 더 띄우고,
-#    기동 로그가 OTel 로그 레코드로 나왔는지 본다(에이전트가 JDK 와 맞지 않으면 경고 없이 아무것도 내보내지 않는다).
+#    JVM 이 실패한다(운영의 기본 auto 는 조용히 캐시 없이 뜬다). 운영처럼 OTel 에이전트와 프로파일 확장을 붙여 한 번 더 띄우고,
+#    기동 로그가 OTel 로그 레코드로 나왔는지 · 프로파일러가 시작했는지 본다(어느 쪽이든 어긋나면 조용히 빠질 수 있다).
 #    기반 이미지(지금의 운영과 같은 기본 CDS)를 띄운 시간과 함께 표로 남긴다(SUMMARY, 없으면 표준 출력).
 #
 # 학습 환경은 이번 실행에서만 쓰고 버린다. 비밀값(DB · 관리자 비밀번호 · JWT 키 · 입장권 · Toss 키)은 모두 매번 새로 만든다.
@@ -385,12 +385,21 @@ startup_seconds() {
   python3 -c "print(f'{$(now) - $start:.1f}')"
 }
 
-# 운영처럼 에이전트를 켠다 — nova-infra 작업 정의(otel.tf)와 같이 계측은 전부. 로그만 표준 출력(console)으로 내보내
-# 기동 로그가 OTel 로그 레코드로 찍혔는지 본다. 그 줄의 모양: <시각> INFO 'Starting …' : <trace id> <span id> [scopeInfo: …] {…}
-# 검증 실행은 onRefresh 에서 끝나 "Started …" 는 찍히지 않는다 — 맨 앞의 "Starting …" 을 본다.
+# 운영처럼 에이전트와 프로파일 확장을 켠다 — 켜는 방식과 프로파일러 설정(event · format · alloc · lock)은 nova-infra 작업 정의
+# (otel.tf 의 otel_env · profiling_env)와 같고, 이름 · 보낼 곳 · 라벨 · 올리는 주기는 다르다(캐시를 받는지와 무관하다).
+# 둘 다 부트 클래스 경로를 늘리는 구성이라 JEP 483 이 캐시를 보장하지 않는다 — 그래서 캐시를 받는지 여기서 매번 본다.
+#   에이전트: 로그만 표준 출력(console)으로 내보내 기동 로그가 OTel 로그 레코드로 찍혔는지 본다.
+#             그 줄의 모양: <시각> INFO 'Starting …' : <trace id> <span id> [scopeInfo: …] {…}
+#             검증 실행은 onRefresh 에서 끝나 "Started …" 는 찍히지 않는다 — 맨 앞의 "Starting …" 을 본다.
+#   확장: 프로파일러가 시작했는지 본다. 확장이 아닌 jar 를 주면 오류 없이 이 줄만 빠진다.
+#         보낼 곳은 닿지 않는 주소라 올리기가 실패해 오류 줄이 남을 수 있다(판정과 무관).
 AGENT_OPTIONS="-javaagent:/otel/javaagent.jar"
-AGENT_ENV=(-e OTEL_SERVICE_NAME=aot-training -e OTEL_TRACES_EXPORTER=none -e OTEL_METRICS_EXPORTER=none -e OTEL_LOGS_EXPORTER=console)
+AGENT_ENV=(-e OTEL_SERVICE_NAME=aot-training -e OTEL_TRACES_EXPORTER=none -e OTEL_METRICS_EXPORTER=none -e OTEL_LOGS_EXPORTER=console
+  -e OTEL_JAVAAGENT_EXTENSIONS=/otel/pyroscope-otel.jar -e OTEL_PYROSCOPE_START_PROFILING=true
+  -e PYROSCOPE_APPLICATION_NAME=aot-training -e PYROSCOPE_SERVER_ADDRESS=http://127.0.0.1:4040
+  -e PYROSCOPE_PROFILER_EVENT=itimer -e PYROSCOPE_FORMAT=jfr -e PYROSCOPE_PROFILER_ALLOC=512k -e PYROSCOPE_PROFILER_LOCK=10ms)
 AGENT_LOG_RECORD="^[^ ]+ INFO 'Starting .*' : [0-9a-f]{32} [0-9a-f]{16} \[scopeInfo: "
+PROFILER_STARTED="Profiling started"
 
 mb() { python3 -c "print(f'{$1 / 1048576:.0f}')"; }
 
@@ -398,7 +407,7 @@ mb() { python3 -c "print(f'{$1 / 1048576:.0f}')"; }
   echo "## AOT 캐시"
   echo "베이스 \`$BASE_IMAGE\` · 측정 자원 cpu $TRAIN_CPUS / 메모리 $TRAIN_MEMORY · 기동은 빈 생성 완료(onRefresh)까지"
   echo
-  echo "| 서비스 | 학습 | 기동(캐시 없음) | 기동(캐시) | 단축 | 기동(캐시 + 에이전트) | app.aot | 이미지 증가 |"
+  echo "| 서비스 | 학습 | 기동(캐시 없음) | 기동(캐시) | 단축 | 기동(캐시 + 에이전트 · 프로파일) | app.aot | 이미지 증가 |"
   echo "|---|---|---|---|---|---|---|---|"
 } >> "$SUMMARY"
 
@@ -411,10 +420,12 @@ for s in "${services[@]}"; do
   with_agent=$(startup_seconds "$FINAL_REPO:$s" "$s" "-XX:AOTMode=on $AGENT_OPTIONS" "${AGENT_ENV[@]}")
   grep -qE "$AGENT_LOG_RECORD" "$WORK/$s.measure.log" \
     || { log "$s: 에이전트가 기동 로그를 OTel 로그 레코드로 내보내지 않았다"; tail -n 60 "$WORK/$s.measure.log" >&2; exit 1; }
+  grep -qF "$PROFILER_STARTED" "$WORK/$s.measure.log" \
+    || { log "$s: 프로파일 확장이 프로파일러를 시작하지 않았다"; tail -n 60 "$WORK/$s.measure.log" >&2; exit 1; }
   without=$(startup_seconds "$PROJECT/$s:base" "$s")
   aot=$(wc -c < "$DIST/$s/app.aot" | tr -d ' ')
   grown=$(( $(docker image inspect -f '{{.Size}}' "$FINAL_REPO:$s") - $(docker image inspect -f '{{.Size}}' "$PROJECT/$s:base") ))
   cut=$(python3 -c "print(f'{(1 - $with / $without) * 100:.0f}%')")
   echo "| $s | $(mode_of "$s") | ${without}s | ${with}s | $cut | ${with_agent}s | $(mb "$aot") MB | $(mb "$grown") MB |" >> "$SUMMARY"
-  log "$s 검증 통과 — ${without}s → ${with}s(에이전트 ${with_agent}s)"
+  log "$s 검증 통과 — ${without}s → ${with}s(에이전트 · 프로파일 ${with_agent}s)"
 done

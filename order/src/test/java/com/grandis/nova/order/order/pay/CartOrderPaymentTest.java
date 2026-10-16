@@ -130,6 +130,21 @@ class CartOrderPaymentTest {
     }
 
     @Test
+    @DisplayName("결제 준비는 바로 구매 주문도 같은 기한(만든 때 + 10분)으로 받는다 — 기한이 지나면 409 PAYMENT_WINDOW_EXPIRED")
+    void prepareAcceptsBuyNowOrderWithinWindow() throws Exception {
+        order = place(OrderSource.BUY_NOW, List.of(
+                new PlaceOrderCommand.Line(fixtures.inStockProduct(1).productId(), phone, 1, PRICE, 0, BigDecimal.ZERO, "아이폰 17", "블랙")));
+        given(paymentClient.openCapture(any(), eq(BearerTokens.value(SESSION))))
+                .willReturn(ApiResponse.ok(new PaymentAttempt(PROVIDER_ORDER_ID, PRICE)));
+
+        prepare().andExpect(status().isCreated()).andExpect(jsonPath("$.data.amount").value(PRICE.intValue()));
+
+        jdbcTemplate.update("UPDATE orders SET payment_due_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ?", (Object) bytes(order.id()));
+        prepare().andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("PAYMENT_WINDOW_EXPIRED"));
+        verifyNoInteractions(preorderClient);
+    }
+
+    @Test
     @DisplayName("승인 반영은 판매 확정(확보 → 판매) · 장바구니 차감(0 이하면 삭제)을 같이 하고, 승인이 또 와도(응답 · 이벤트 겹침) 한 번뿐")
     void approvalSellsStockAndDeductsCartOnce(CapturedOutput output) {
         fixtures.forceAuthorizing(order.id(), PROVIDER_ORDER_ID);
@@ -252,7 +267,12 @@ class CartOrderPaymentTest {
     }
 
     private Order place(List<PlaceOrderCommand.Line> lines) {
-        PlaceOrderCommand command = new PlaceOrderCommand(customerId, OrderSource.CART, null, null, OrderFixtures.ADDRESS, lines);
+        return place(OrderSource.CART, lines);
+    }
+
+    private Order place(OrderSource source, List<PlaceOrderCommand.Line> lines) {
+        PlaceOrderCommand command = new PlaceOrderCommand(customerId, source, null, null,
+                source == OrderSource.BUY_NOW ? UUID.randomUUID() : null, OrderFixtures.ADDRESS, lines);
         Map<UUID, Integer> quantities = new HashMap<>();
         lines.forEach(line -> quantities.put(line.optionId(), line.quantity()));
         return new TransactionTemplate(transactionManager).execute(status -> {

@@ -52,7 +52,8 @@ order 와 catalog 가 서로 부르는 내부 API 를 담는다(preorder 가 부
 
 **판정은 catalog 가 한다.** 배송 완료 여부, 사전예약 주문 · 드로우 당첨 주문 제외, 주문상품 1건당 리뷰 1개는 catalog 가 가린다. order 는 판정하지 않고 사실만 돌려준다 — 배송 전 주문상품도 200 이다.
 
-**현재 order 가 만드는 주문은 PREORDER · CART · DRAW 다.** BUY_NOW 주문은 아직 생기지 않는다. 리뷰를 쓸 수 있는 주문상품은 배송 완료된 CART 주문의 것뿐이다.
+**현재 order 가 만드는 주문은 PREORDER · BUY_NOW · CART · DRAW 다.** 리뷰를 쓸 수 있는 주문상품은 배송 완료된 CART · BUY_NOW 주문의 것이다.
+BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, 옵션 하나). 만들 때(`POST /api/v1/orders`, `source=BUY_NOW`) `Idempotency-Key` 헤더(UUID)가 필요하다 — 화면이 누름마다 하나 만들고 재전송에는 같은 키를 싣는다. 같은 회원 · 같은 키에 같은 내용(옵션 · 수량 · 보증 수량 · 배송지)이면 200 `reused=true` 와 먼저 만든 주문(지금 상태 그대로 — 이미 취소 · 만료 · 결제됐을 수 있으니 화면은 `status` 를 보고 결제로 넘긴다), 내용이 다르면 422 `KEY_PAYLOAD_MISMATCH`, 헤더가 없으면 400 `IDEMPOTENCY_KEY_REQUIRED`, UUID 가 아니면 400 `VALIDATION_FAILED` 다. 나중에 CORS 를 켜면(NV-407) 허용 헤더에 `Idempotency-Key` 를 넣는다.
 
 **오류.** 공통 봉투 그대로.
 
