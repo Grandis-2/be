@@ -470,7 +470,8 @@ class BuyNowOrderApiTest {
 
     private PaymentSettlement settlement(String orderId, String providerOrderId, PaymentSettlement.Result result, DeclineReason reason) {
         BigDecimal amount = orderReader.findById(UUID.fromString(orderId)).orElseThrow().totalAmount().amount();
-        return new PaymentSettlement(UUID.fromString(orderId), providerOrderId, result, amount, reason);
+        Instant approvedAt = result == PaymentSettlement.Result.APPROVED ? Instant.parse("2026-10-16T03:00:00Z") : null;
+        return new PaymentSettlement(UUID.fromString(orderId), providerOrderId, result, amount, approvedAt, reason);
     }
 
     private static String item(UUID option, int quantity, boolean warranty) {

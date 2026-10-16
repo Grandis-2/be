@@ -21,6 +21,13 @@ public interface OrderReader {
 
     Optional<Order> findById(UUID orderId);
 
+    /**
+     * 결제 시각을 DB 에서 바로 읽는다(같은 트랜잭션에서 앞서 읽어 둔 주문을 거치지 않는다). 원장이 행을 잠근 뒤 부르면 그사이 커밋된
+     * 승인까지 본다 — 잠그기 전에 읽은 주문의 paidAt 은 그 전 값이다. paid_at 이 비었으면(이 칸을 모르는 구버전이 반영한 승인) 승인 반영
+     * 이력의 시각이다. 승인을 반영한 적이 없거나 주문이 없으면 비어 있다.
+     */
+    Optional<Instant> findPaidAt(UUID orderId);
+
     /** 예약의 주문. 예약당 주문은 평생 하나라(uq_order_preorder) 0~1건이다. */
     Optional<Order> findByPreorderId(UUID preorderId);
 

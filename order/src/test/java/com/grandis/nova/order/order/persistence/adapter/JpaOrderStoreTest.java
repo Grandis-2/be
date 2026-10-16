@@ -105,7 +105,7 @@ class JpaOrderStoreTest {
     void insertAcceptsOnlyNewAwaitingPaymentOrders() {
         Order placed = Order.place(preorderCommand(customerId, preorderId, product).toDraft(), Instant.EPOCH);
         Order delivered = new Order(null, customerId, OrderSource.PREORDER, preorderId,
-                placed.preorderToken(), null, OrderStatus.DELIVERED, null, placed.totalAmount(), null, null, null, placed.shipTo(), 5, null, null);
+                placed.preorderToken(), null, OrderStatus.DELIVERED, null, placed.totalAmount(), null, null, null, null, placed.shipTo(), 5, null, null);
         Order stored = writer.insert(placed);
 
         assertThatThrownBy(() -> writer.insert(delivered))

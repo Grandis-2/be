@@ -23,6 +23,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.EnumSet;
 import java.util.List;
@@ -166,7 +167,7 @@ class RefundResultsTest {
         refundResults.settle(refunded(order));
 
         paymentResults.settle(new PaymentSettlement(order.id(), "toss-late", PaymentSettlement.Result.APPROVED,
-                order.totalAmount().amount(), null));
+                order.totalAmount().amount(), Instant.parse("2026-10-16T03:00:00Z"), null));
 
         assertThat(statusOf(order)).isEqualTo("CANCELED");
         assertThat(output.getAll()).doesNotContain("결제가 승인됐는데 주문이 받지 못했다");
@@ -179,7 +180,7 @@ class RefundResultsTest {
         orders.cancel(order.id(), "EXPIRY");
 
         paymentResults.settle(new PaymentSettlement(order.id(), "toss-late", PaymentSettlement.Result.APPROVED,
-                order.totalAmount().amount(), null));
+                order.totalAmount().amount(), Instant.parse("2026-10-16T03:00:00Z"), null));
 
         assertThat(output.getAll()).contains("결제가 승인됐는데 주문이 받지 못했다");
     }

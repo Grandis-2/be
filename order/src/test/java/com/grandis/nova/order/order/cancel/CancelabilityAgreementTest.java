@@ -39,7 +39,7 @@ class CancelabilityAgreementTest {
         CancelSettlement settlement;
         try {
             settlement = SettlePreorderCancelService.settledFor(status,
-                    new SettlePreorderCancelCommand(TestIds.id(50231), "9f1c-preorder", TestIds.id(1024), reason, 3L));
+                    new SettlePreorderCancelCommand(TestIds.id(50231), "9f1c-preorder", TestIds.id(1024), reason, 3L), null);
         } catch (IllegalStateException e) {
             return false;
         }
