@@ -96,6 +96,20 @@ public enum OrderStatus {
     }
 
     /**
+     * 이 상태의 주문이 재고 장부에서 쥐는 몫. 재고 장부 대조의 기대 수량이 이 분류로 센다.
+     *
+     * 재고를 옮기는 전이는 미결제 취소(확보 반환)와 결제 승인(확보 → 판매) 둘뿐이다. 그 밖의 전이에서 분류가 바뀌면 재고는 그대로인데 기대
+     * 수량만 바뀌어 대조가 어긋남으로 본다 — 상태를 더하거나 전이를 바꿀 때 OrderStatusStockHoldTest 가 맞물림을 본다.
+     */
+    public StockHold stockHold() {
+        return switch (this) {
+            case AWAITING_PAYMENT, AUTHORIZING -> StockHold.RESERVED;
+            case AWAITING_CONFIRMATION, PREPARING_ITEMS, READY_TO_SHIP, SHIPPED, DELIVERED, CANCELING -> StockHold.SOLD;
+            case CANCELED -> StockHold.NONE;
+        };
+    }
+
+    /**
      * 취소를 받아들일 수 있는가. 출고 뒤(SHIPPED · DELIVERED)만 아니다.
      * 취소 가능 조회 API 가 쓴다. 예약 취소 수신의 배송 거절(SettlePreorderCancelService.settledFor)은 상태 switch 로
      * 따로 적혀 있다 — 두 곳이 어긋나면 조회는 "가능" 이라 하고 실제 취소는 거절하므로 CancelabilityAgreementTest 가 맞물림을 본다.

@@ -8,6 +8,7 @@ import com.grandis.nova.order.order.domain.model.OrderItem;
 import com.grandis.nova.order.order.domain.model.OrderLine;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.stock.StockLedger;
+import com.grandis.nova.order.stock.StockMismatches;
 import com.grandis.nova.order.stock.domain.repository.StockReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,7 +31,7 @@ import java.util.UUID;
  * 사전예약 주문은 재고 · 장바구니가 없어 아무것도 하지 않는다.
  *
  * 판매 확정에서 재고 장부가 어긋나 있으면(확보가 모자람) 그 옵션은 옮기지 않고 전용 ERROR 로 알린다 — 돈은 나갔으니 주문은 결제됨으로,
- * 장바구니도 뺀다(2026-10-10 결정, 돈을 따른다). 운영자는 그 로그의 주문 · 옵션으로 재고 장부를 고친다.
+ * 장바구니도 뺀다(2026-10-10 결정, 돈을 따른다). 운영자는 그 옵션을 관리자 재고 보정(주문 기준으로 다시 맞추기)으로 고친다.
  */
 @Component
 @Transactional(propagation = Propagation.MANDATORY)
@@ -42,12 +43,15 @@ class CartOrderFulfillment {
     private final CartDeduction cart;
     private final StockLedger stock;
     private final StockReader stockReader;
+    private final StockMismatches mismatches;
 
-    CartOrderFulfillment(OrderReader orderReader, CartDeduction cart, StockLedger stock, StockReader stockReader) {
+    CartOrderFulfillment(OrderReader orderReader, CartDeduction cart, StockLedger stock, StockReader stockReader,
+                         StockMismatches mismatches) {
         this.orderReader = orderReader;
         this.cart = cart;
         this.stock = stock;
         this.stockReader = stockReader;
+        this.mismatches = mismatches;
     }
 
     /** @param providerOrderId 승인된 결제창 — 재고 어긋남 경보에 싣는다(운영자가 결제와 맞춰 볼 수 있게) */
@@ -82,13 +86,15 @@ class CartOrderFulfillment {
         cart.deduct(order.customerId(), purchased);
         List<UUID> mismatched = stock.sell(sold);
         if (!mismatched.isEmpty()) {
-            // 경보 규칙이 이 문구("재고 어긋남")로 잡는다 — 바꾸지 않는다. 복구에 필요한 것: 판매로 옮기지 못한 수량과 그때의 확보
+            // 경보는 어긋남 지표(StockMismatches)로 건다. 문구("재고 어긋남")는 로그를 찾는 열쇠라 바꾸지 않는다. 복구에 필요한 것: 판매로 옮기지 못한
+            // 수량과 그때의 확보
             Map<UUID, Integer> unsold = new LinkedHashMap<>();
             mismatched.forEach(option -> unsold.put(option, sold.get(option)));
             Map<UUID, Integer> reservedNow = new LinkedHashMap<>();
             stockReader.findByOptionIds(mismatched).forEach(level -> reservedNow.put(level.optionId(), level.reserved()));
             log.error("재고 어긋남 — 결제는 반영했지만 판매 확정을 못 했다, 재고 장부 확인 필요 orderId={} providerOrderId={} unsold={} reservedNow={}",
                     orderId, providerOrderId, unsold, reservedNow);
+            mismatches.record(StockMismatches.Site.CART_PAYMENT);
         }
     }
 }

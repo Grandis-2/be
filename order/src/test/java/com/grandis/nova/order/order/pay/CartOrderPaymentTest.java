@@ -15,6 +15,7 @@ import com.grandis.nova.order.stock.StockLedger;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -76,6 +77,7 @@ class CartOrderPaymentTest {
     @Autowired StockLedger stock;
     @Autowired PaymentResults results;
     @Autowired PlatformTransactionManager transactionManager;
+    @Autowired MeterRegistry registry;
     @MockitoBean PreorderClient preorderClient;
     @MockitoBean PaymentClient paymentClient;
 
@@ -157,7 +159,8 @@ class CartOrderPaymentTest {
     }
 
     /**
-     * 재고 장부가 어긋나 판매 확정을 못 해도(확보가 모자람) 돈은 나갔으니 주문은 결제됨 · 장바구니도 뺀다 — 어긋난 옵션만 옮기지 않고 전용 ERROR.
+     * 재고 장부가 어긋나 판매 확정을 못 해도(확보가 모자람) 돈은 나갔으니 주문은 결제됨 · 장바구니도 뺀다 — 어긋난 옵션만 옮기지 않고 전용 ERROR 와
+     * 어긋남 지표(order.stock.mismatch, site=cart-payment) 한 번.
      * 잠금 순서의 앞 옵션 · 뒤 옵션이 어긋난 경우를 모두 본다 — 앞에서 어긋나도 뒤 옵션은 판매로 옮겨야 한다(첫 어긋남에서 멈추지 않는다).
      */
     @ParameterizedTest
@@ -171,6 +174,7 @@ class CartOrderPaymentTest {
         int healthyQuantity = healthy.equals(phone) ? 4 : 1;
         fixtures.forceAuthorizing(order.id(), PROVIDER_ORDER_ID);
         jdbcTemplate.update("UPDATE option_inventories SET stock_reserved = 0 WHERE option_id = ?", (Object) bytes(broken));
+        double mismatches = registry.get("order.stock.mismatch").tag("site", "cart-payment").counter().count();
 
         assertThat(results.settle(approved()).applied()).isTrue();
 
@@ -180,6 +184,7 @@ class CartOrderPaymentTest {
         assertThat(stockOf(broken)).as("어긋난 옵션은 그대로").containsExactly(10, 0, 0);
         List<String> alerts = output.getAll().lines().filter(line -> line.contains("재고 어긋남")).toList();
         assertThat(alerts).hasSize(1);
+        assertThat(registry.get("order.stock.mismatch").tag("site", "cart-payment").counter().count()).isEqualTo(mismatches + 1);
         assertThat(alerts.getFirst()).contains("ERROR").contains(order.id().toString()).contains(PROVIDER_ORDER_ID)
                 .contains(broken + "=" + brokenQuantity).doesNotContain(healthy.toString());
     }

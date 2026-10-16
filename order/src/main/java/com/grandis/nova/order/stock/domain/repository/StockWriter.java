@@ -49,6 +49,14 @@ public interface StockWriter {
     int sell(UUID optionId, int quantity, Instant now);
 
     /**
+     * 확보 · 판매를 절대값으로 덮는다(관리자 보정). 잠가 읽은 값 그대로일 때만 — 행을 잠근 채 부르므로 0 이면 잠금 규칙이 깨진 것이다.
+     * 총량은 바꾸지 않는다. 확보 + 판매가 총량을 넘으면 ck_inventory_capacity 에 걸린다 — 부르는 쪽이 먼저 막는다.
+     *
+     * @return 조건에 맞은 행 수(0 또는 1)
+     */
+    int overwrite(UUID optionId, int beforeReserved, int beforeSold, int reserved, int sold, Instant now);
+
+    /**
      * 확보 · 판매 0 인 새 행을 만든다.
      *
      * @throws StockAlreadyCreatedException 다른 트랜잭션이 같은 옵션의 행을 먼저 만들었다

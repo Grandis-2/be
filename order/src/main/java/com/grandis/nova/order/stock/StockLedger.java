@@ -4,8 +4,12 @@ import com.grandis.nova.order.stock.domain.exception.StockAlreadyCreatedExceptio
 import com.grandis.nova.order.stock.domain.exception.StockBelowCommittedException;
 import com.grandis.nova.order.stock.domain.exception.StockReleaseMismatchException;
 import com.grandis.nova.order.stock.domain.exception.StockShortageException;
+import com.grandis.nova.order.stock.domain.exception.StockTotalBelowExpectedException;
+import com.grandis.nova.order.stock.domain.model.StockBalance;
+import com.grandis.nova.order.stock.domain.model.StockCorrection;
 import com.grandis.nova.order.stock.domain.model.StockLevel;
 import com.grandis.nova.order.stock.domain.model.StockSetting;
+import com.grandis.nova.order.stock.domain.repository.StockExpectations;
 import com.grandis.nova.order.stock.domain.repository.StockReader;
 import com.grandis.nova.order.stock.domain.repository.StockWriter;
 import org.springframework.stereotype.Component;
@@ -40,6 +44,7 @@ import java.util.stream.Collectors;
  *       "반환 옵션들 → 확보 옵션들" 순서가 되어 전역 순서가 깨진다.</li>
  *   <li>판매 확정({@link #sell}): 옵션마다 조건부 UPDATE 한 번(확보 ≥ 수량일 때만 확보 → 판매). 모자란 옵션은 옮기지 않고 돌려준다 — 던지지
  *       않으므로 아래 "모두 되거나 모두 안 된다" · "예외면 롤백" 의 예외다(돈이 나간 뒤라 결제 반영을 막지 않는다).</li>
+ *   <li>보정({@link #correct}): 옵션 하나의 행을 잠근 뒤 주문 기준 수량을 읽어 확보 · 판매를 그 값으로 덮는다(관리자).</li>
  * </ul>
  * 잠금 순서가 요청 순서와 무관해, 옵션 순서가 다른 요청끼리 서로 기다리며 교착하지 않는다. 동시 삽입이 부르는 PK 중복
  * 확인의 S 잠금은 이 순서 밖이라 드물게 교착할 수 있고, 그건 호출하는 쪽의 다시 하기가 흡수한다.
@@ -67,11 +72,13 @@ public class StockLedger {
 
     private final StockWriter writer;
     private final StockReader reader;
+    private final StockExpectations expectations;
     private final Clock clock;
 
-    public StockLedger(StockWriter writer, StockReader reader, Clock clock) {
+    public StockLedger(StockWriter writer, StockReader reader, StockExpectations expectations, Clock clock) {
         this.writer = writer;
         this.reader = reader;
+        this.expectations = expectations;
         this.clock = clock;
     }
 
@@ -120,7 +127,7 @@ public class StockLedger {
      * @param released 옵션 id → 되돌릴 수량(앞 주문들이 확보해 둔 것)
      * @param reserved 옵션 id → 새로 확보할 수량
      * @throws StockShortageException  순증을 확보할 가용 재고가 모자란 옵션이 있다. 호출자가 롤백한다(반환도 되돌아간다)
-     * @throws IllegalStateException   순감을 되돌릴 확보가 모자란다 — 데이터가 어긋난 것이다
+     * @throws StockReleaseMismatchException 순감을 되돌릴 확보가 모자란다(처음 걸린 하나) — 데이터가 어긋난 것이다
      * @throws IllegalArgumentException 1 미만 수량이 있다 — 호출하는 코드의 잘못이다
      */
     public void releaseAndReserve(Map<UUID, Integer> released, Map<UUID, Integer> reserved) {
@@ -136,7 +143,7 @@ public class StockLedger {
             if (delta > 0 && writer.reserve(entry.getKey(), delta, now) != 1) {
                 shortages.add(entry.getKey());
             } else if (delta < 0 && writer.release(entry.getKey(), -delta, now) != 1) {
-                throw new IllegalStateException("반환할 확보가 모자란다: optionId=" + entry.getKey() + ", quantity=" + -delta);
+                throw new StockReleaseMismatchException(entry.getKey(), -delta);
             }
         }
         if (!shortages.isEmpty()) {
@@ -181,6 +188,40 @@ public class StockLedger {
             }
         }
         return mismatched;
+    }
+
+    /**
+     * 확보 · 판매를 주문 기준 수량(재고 장부 대조와 같은 식 — {@link StockBalance})으로 다시 맞춘다. 총량은 그대로다.
+     *
+     * 재고 행을 잠근 <b>뒤</b> 주문 기준을 읽는다. 재고를 옮기는 쓰기는 주문 · 회차 행과 같은 트랜잭션에서 이 행을 바꾸므로, 행을 쥔 동안
+     * 이 옵션의 커밋된 주문 기준은 바뀌지 않는다 — 읽은 값(READ COMMITTED 라 잠근 뒤의 최신 커밋)이 덮는 순간에도 맞다. 기다리는 트랜잭션의
+     * 증감은 덮은 값 위에 얹힌다. 주문 · 회차 행은 잠그지 않고 읽으므로 이 순서가 새 교착을 만들지 않는다.
+     * 예외는 이미 어긋난 행이다 — 조건부 증감(확보 ≥ 수량)이 커밋된 값에 맞지 않으면 READ COMMITTED 는 기다리지 않고 0행으로 넘긴다.
+     * 반환 쪽은 던져 롤백하지만, 판매 확정(결제 승인 · 드로우 당첨)은 주문 행만 바꿔 커밋한다("재고 어긋남"). 그 커밋을 못 본 보정은 어긋남을
+     * 하나 남기고, 다음 대조가 잡는다.
+     *
+     * @throws StockTotalBelowExpectedException 주문 기준 확보 + 판매가 총량을 넘는다(행이 없으면 총량 0). 아무것도 바꾸지 않는다(롤백)
+     * @throws IllegalStateException            잠가 읽은 값이 덮을 때 달랐다 — 잠금 규칙이 깨진 것이다
+     */
+    public StockCorrection correct(UUID optionId) {
+        StockLevel locked = writer.lockByOptionIds(List.of(optionId)).stream().findFirst().orElse(null);
+        StockBalance expected = expectations.balanceOf(optionId);
+        int total = locked == null ? 0 : locked.total();
+        if (expected.expectedReserved() + expected.expectedSold() > total) {
+            throw new StockTotalBelowExpectedException(optionId, locked != null, total, expected.expectedReserved(), expected.expectedSold());
+        }
+        // 총량 이하라 int 에 든다
+        int reserved = (int) expected.expectedReserved();
+        int sold = (int) expected.expectedSold();
+        if (locked == null) {
+            return new StockCorrection(optionId, false, 0, 0, 0, 0, 0);
+        }
+        StockCorrection correction = new StockCorrection(optionId, true, total, locked.reserved(), locked.sold(), reserved, sold);
+        if (correction.changed()
+                && writer.overwrite(optionId, locked.reserved(), locked.sold(), reserved, sold, clock.instant()) != 1) {
+            throw new IllegalStateException("잠근 재고 행이 바뀌었다: optionId=" + optionId);
+        }
+        return correction;
     }
 
     /** @param existing 이미 읽은(설정이면 잠근) 행. 그 뒤의 시각을 찍어야 기다린 다른 쓰기보다 앞선 시각이 남지 않는다 */

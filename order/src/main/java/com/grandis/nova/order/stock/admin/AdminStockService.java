@@ -2,7 +2,6 @@ package com.grandis.nova.order.stock.admin;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
-import com.grandis.nova.common.web.ApiError;
 import com.grandis.nova.order.MySqlLockFailures;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.stock.StockLedger;
@@ -21,7 +20,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -51,6 +49,7 @@ public class AdminStockService {
     private final StockLedger ledger;
     private final StockReader stockReader;
     private final CatalogOptions catalog;
+    private final StockTargets targets;
     private final TransactionTemplate writeTransaction;
     private final TransactionTemplate readTransaction;
 
@@ -59,6 +58,7 @@ public class AdminStockService {
         this.ledger = ledger;
         this.stockReader = stockReader;
         this.catalog = catalog;
+        this.targets = new StockTargets(catalog);
         this.writeTransaction = new TransactionTemplate(transactionManager);
         this.readTransaction = new TransactionTemplate(transactionManager);
         this.readTransaction.setReadOnly(true);
@@ -112,8 +112,8 @@ public class AdminStockService {
         for (int attempt = 1; ; attempt++) {
             try {
                 return writeTransaction.execute(status -> {
-                    requireStockedProduct(productId);
-                    requireOwnedOptions(productId, optionIds);
+                    targets.requireStockedProduct(productId);
+                    targets.requireOwnedOptions(productId, optionIds);
                     Set<UUID> created = change.get();
                     return new StockResult(productId, stockReader.findByOptionIds(optionIds), created);
                 });
@@ -137,14 +137,6 @@ public class AdminStockService {
         }
     }
 
-    private void requireStockedProduct(UUID productId) {
-        SaleMode saleMode = catalog.findSaleMode(productId)
-                .orElseThrow(() -> new BusinessException(OrderErrorCode.PRODUCT_NOT_FOUND));
-        if (saleMode != SaleMode.IN_STOCK) {
-            throw new BusinessException(OrderErrorCode.STOCK_NOT_TRACKED);
-        }
-    }
-
     /**
      * 같은 옵션이 두 번 오면 어느 값을 쓸지 모르므로 400 이다. 어느 경로로 불리든 여기서 막는다 — 원장까지 가면
      * 같은 행을 두 번 INSERT 해 PK 중복이 나고, 동시 생성으로 오인해 다시 하다 503 이 된다.
@@ -155,20 +147,6 @@ public class AdminStockService {
             if (!seen.add(optionIds.get(i))) {
                 throw ValidationFailures.of("items[%d].optionId".formatted(i), "같은 옵션이 두 번 있습니다.");
             }
-        }
-    }
-
-    /** 없는 옵션 · 다른 상품의 옵션은 계약 오류라 400 이다. 요청 순서의 위치(items[i])로 모두 알린다. */
-    private void requireOwnedOptions(UUID productId, List<UUID> optionIds) {
-        Set<UUID> owned = catalog.findOwnedOptionIds(productId, optionIds);
-        List<ApiError.Violation> violations = new ArrayList<>();
-        for (int i = 0; i < optionIds.size(); i++) {
-            if (!owned.contains(optionIds.get(i))) {
-                violations.add(new ApiError.Violation("items[%d].optionId".formatted(i), "이 상품의 옵션이 아닙니다."));
-            }
-        }
-        if (!violations.isEmpty()) {
-            throw ValidationFailures.of(violations);
         }
     }
 }

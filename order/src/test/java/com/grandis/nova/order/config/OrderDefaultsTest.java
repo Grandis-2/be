@@ -17,7 +17,7 @@ class OrderDefaultsTest {
     void 설정에_없으면_관리_포트와_readiness_기본값을_쓰고_설정이_주면_그_값이_이긴다() {
         StandardEnvironment empty = apply(new StandardEnvironment());
         assertThat(empty.getProperty("management.server.port")).isEqualTo("9084");
-        assertThat(empty.getProperty("management.endpoints.web.exposure.include")).isEqualTo("health");
+        assertThat(empty.getProperty("management.endpoints.web.exposure.include")).isEqualTo("health,prometheus");
         assertThat(empty.getProperty("management.endpoint.health.probes.enabled")).isEqualTo("true");
         assertThat(empty.getProperty("management.endpoint.health.group.readiness.include")).isEqualTo("readinessState");
 
