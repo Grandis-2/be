@@ -20,6 +20,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -116,10 +117,12 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
     @Override
     public OffsetPage<DrawCampaign> findNewestFirst(DrawPhase phase, Instant now, int page, int size) {
         PageRequest request = PageRequest.of(page, size, NEWEST_FIRST);
+        // µs 로 내린다 — MySQL 은 µs 아래 파라미터를 반올림해, 시작 400ns 전이 예정에서 빠졌다. 저장 시각은 µs 라 내림이 phaseAt 과 같다
+        Instant at = now.truncatedTo(ChronoUnit.MICROS);
         return toPage(switch (phase) {
-            case SCHEDULED -> campaigns.findScheduled(now, request);
-            case OPEN -> campaigns.findOpen(now, request);
-            case CLOSED -> campaigns.findClosed(now, request);
+            case SCHEDULED -> campaigns.findScheduled(at, request);
+            case OPEN -> campaigns.findOpen(at, request);
+            case CLOSED -> campaigns.findClosed(at, request);
         }, page, size);
     }
 

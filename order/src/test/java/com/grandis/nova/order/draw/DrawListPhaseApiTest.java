@@ -107,13 +107,14 @@ class DrawListPhaseApiTest {
     }
 
     @Test
-    @DisplayName("경계는 단계 칸(phaseAt)과 같다 — 시작 시각 그 순간부터 응모 중(1µs 전은 예정), 마감 시각 그 순간부터 마감(1µs 전은 응모 중)")
+    @DisplayName("경계는 단계 칸(phaseAt)과 같다 — 시작 시각 그 순간부터 응모 중(1µs · 1ns 전은 예정), 마감 시각 그 순간부터 마감(1µs · 1ns 전은 응모 중). now 가 µs 아래를 가져도 같다")
     void boundariesMatchPhaseAt() {
         Instant opensAt = Instant.now().plus(Duration.ofDays(30)).truncatedTo(ChronoUnit.MICROS);
         Instant closesAt = opensAt.plus(Duration.ofHours(1));
         UUID drawId = create(opensAt, closesAt);
         DrawCampaign campaign = campaigns.findById(drawId).orElseThrow();
-        for (Instant now : List.of(opensAt.minusNanos(1_000), opensAt, closesAt.minusNanos(1_000), closesAt)) {
+        for (Instant now : List.of(opensAt.minusNanos(1_000), opensAt.minusNanos(400), opensAt.minusNanos(1), opensAt,
+                closesAt.minusNanos(1_000), closesAt.minusNanos(1), closesAt)) {
             DrawPhase expected = campaign.phaseAt(now);
             for (DrawPhase phase : DrawPhase.values()) {
                 boolean listed = new TransactionTemplate(transactionManager).execute(status -> campaigns.findNewestFirst(phase, now, 0, 100))
