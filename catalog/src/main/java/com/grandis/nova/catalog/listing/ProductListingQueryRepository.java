@@ -126,11 +126,11 @@ public class ProductListingQueryRepository {
              WHERE p.id IN (:ids)
             """.formatted(BY_PRODUCT);
 
-    /** 관리자 목록 — 노출 규칙 없이 전부. */
+    /** 관리자 목록 — 노출 규칙 없이 전부. 삭제한 상품만 뺀다. */
     private static final String FROM_ALL = """
               FROM products p
               LEFT JOIN preorder_campaigns c ON c.product_id = p.id
-             WHERE 1 = 1
+             WHERE p.deleted_at IS NULL
             """;
 
     private static final String ADMIN_COLUMNS = """
@@ -142,7 +142,7 @@ public class ProductListingQueryRepository {
     /** 건수는 products 와 필터만 본다 — 회차는 건수에 영향이 없다(product_id 가 PRIMARY KEY 라 행이 안 는다). */
     private static final String COUNT_FROM = """
               FROM products p
-             WHERE 1 = 1
+             WHERE p.deleted_at IS NULL
             """;
 
     private static final Logger log = LoggerFactory.getLogger(ProductListingQueryRepository.class);
@@ -316,10 +316,10 @@ public class ProductListingQueryRepository {
             SELECT /*+ NO_SEMIJOIN() JOIN_ORDER(go, gi) */ 1 FROM product_options go %s JOIN option_inventories gi %s ON gi.option_id = go.id
              WHERE go.product_id = p.id AND go.status = 'ACTIVE'""".formatted(BY_PRODUCT, INVENTORY_BY_OPTION);
 
-    /** 증정품 후보 상품 — 일반 판매 · 판매 중이고 후보 옵션이 하나 이상. 공개 여부는 보지 않는다. */
+    /** 증정품 후보 상품 — 일반 판매 · 판매 중이고 후보 옵션이 하나 이상. 공개 여부는 보지 않는다. 삭제한 상품은 뺀다. */
     private static final String GIFT_PRODUCTS = """
               FROM products p
-             WHERE p.sale_mode = 'IN_STOCK' AND p.status = 'ACTIVE'
+             WHERE p.sale_mode = 'IN_STOCK' AND p.status = 'ACTIVE' AND p.deleted_at IS NULL
                AND EXISTS (%s)
             """.formatted(GIFT_OPTION);
 
@@ -401,14 +401,16 @@ public class ProductListingQueryRepository {
     /**
      * 홍보에 묶을 수 있는 상품 — 회차가 취소되지 않은 사전예약 상품 중 다른 홍보에 묶이지 않은 것. promotionId 를 주면(수정) 그 홍보에 이미 묶인
      * 상품도 판매 방식과 상관없이 싣는다(일반으로 바꾼 상품도 수정 화면에서 풀 수 있게). 공개 여부 · 준비와는 상관없다(관리자 화면). 최신 등록순.
+     * 삭제한 상품은 어느 쪽으로도 싣지 않는다.
      */
     public OffsetPage<LinkableRow> findLinkable(UUID promotionId, int page, int size) {
         MapSqlParameterSource params = new MapSqlParameterSource("promotionId", promotionId == null ? null : UuidBinary.toBytes(promotionId));
         String where = """
-                 WHERE (p.sale_mode = 'PREORDER' AND p.campaign_canceled_at IS NULL
-                        AND NOT EXISTS (SELECT 1 FROM promotion_products other WHERE other.product_id = p.id
-                                         AND (:promotionId IS NULL OR other.promotion_id <> :promotionId)))
-                    OR EXISTS (SELECT 1 FROM promotion_products mine WHERE mine.product_id = p.id AND mine.promotion_id = :promotionId)
+                 WHERE p.deleted_at IS NULL
+                   AND ((p.sale_mode = 'PREORDER' AND p.campaign_canceled_at IS NULL
+                         AND NOT EXISTS (SELECT 1 FROM promotion_products other WHERE other.product_id = p.id
+                                          AND (:promotionId IS NULL OR other.promotion_id <> :promotionId)))
+                        OR EXISTS (SELECT 1 FROM promotion_products mine WHERE mine.product_id = p.id AND mine.promotion_id = :promotionId))
                 """;
         Long total = jdbc.queryForObject("SELECT COUNT(*) FROM products p" + where, params, Long.class);
         params.addValue("limit", size).addValue("offset", (long) page * size);

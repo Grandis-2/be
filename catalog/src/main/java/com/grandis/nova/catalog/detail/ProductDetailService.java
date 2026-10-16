@@ -109,11 +109,12 @@ public class ProductDetailService {
     }
 
     /**
-     * 관리자 상세 — 노출 규칙 없이 어떤 상품이든(비공개 · 미완료 · 판매 중지 · 오래된 마감) 상세와 등록 상태를 준다. 없는 상품만 404.
+     * 관리자 상세 — 노출 규칙 없이 어떤 상품이든(비공개 · 미완료 · 판매 중지 · 오래된 마감) 상세와 등록 상태를 준다. 없는 상품 · 삭제한 상품만 404.
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public AdminProductDetail findAdminProduct(UUID productId) {
-        Product product = products.findById(productId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
+        Product product = products.findById(productId).filter(found -> !found.isDeleted())
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
         // 관리자 목록 · 상세의 visible 은 products.visible 칸 그대로 — 판매 방식별 준비는 registrationCompleted 가 따로 말한다
         ProductDetailView body = body(product, product.isVisible());
         ProductDetailView detail = product.getSaleMode() == SaleMode.PREORDER

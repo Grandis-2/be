@@ -110,6 +110,11 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
     }
 
     @Override
+    public boolean existsUnsettledByProductId(UUID productId) {
+        return campaigns.existsUnsettledByProductId(productId) == 1;
+    }
+
+    @Override
     public OffsetPage<DrawCampaign> findNewestFirst(int page, int size) {
         return toPage(campaigns.findAll(PageRequest.of(page, size, NEWEST_FIRST)), page, size);
     }

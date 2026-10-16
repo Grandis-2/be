@@ -3,12 +3,14 @@ package com.grandis.nova.catalog.edit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.doThrow;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.grandis.nova.catalog.CatalogErrorCode;
+import com.grandis.nova.catalog.integration.DrawGiftClient;
 import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.registration.ProductRegistrationService;
@@ -16,6 +18,7 @@ import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.jpa.StorageClock;
+import com.grandis.nova.common.web.ApiResponse;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
@@ -43,6 +46,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.test.context.bean.override.convention.TestBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -66,6 +70,8 @@ class ProductEditRaceTest {
     @MockitoSpyBean ProductEditService editService;
     @MockitoSpyBean ProductRegistrationService registrationService;
     @Autowired ProductImageEditService imageEditService;
+    @Autowired ProductDeleteService deleteService;
+    @MockitoBean DrawGiftClient drawGifts;
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired PlatformTransactionManager transactionManager;
@@ -285,6 +291,23 @@ class ProductEditRaceTest {
         assertStateConflict(() -> editService.editProduct(productId, titleOnly("오픈을 넘긴 수정")));
         assertThat(reads.get()).as("시계를 두 번 이상 읽었다 — 첫 판정은 통과했다").isGreaterThanOrEqualTo(2);
         assertThat(title(productId)).isEqualTo("Race");
+    }
+
+    @Test
+    @DisplayName("삭제도 같다 — 첫 판정 뒤 잠금 시각(오픈 3분 전)이 지나면 커밋하지 않는다: 409, deleted_at 그대로 비어 있다")
+    void openingDuringTheDeleteRejectsTheCommit() throws Exception {
+        UUID productId = registerPreorder();
+        Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.MICROS);
+        fixtures.campaign(productId, opensAt, opensAt.plus(Duration.ofDays(1)));
+        given(drawGifts.getGift(productId)).willReturn(ApiResponse.ok(new DrawGiftClient.DrawGift(productId, false)));
+
+        AtomicInteger reads = new AtomicInteger();
+        Instant freezesAt = opensAt.minus(ProductEditService.FREEZE_BEFORE_OPEN);
+        CLOCK.next = () -> reads.getAndIncrement() == 0 ? freezesAt.minusMillis(1) : freezesAt;   // 첫 판정 뒤 시간이 잠금 시각을 넘는다
+        assertStateConflict(() -> deleteService.delete(productId));
+        assertThat(reads.get()).as("첫 판정은 통과했다").isGreaterThanOrEqualTo(2);
+        assertThat(jdbcTemplate.queryForObject("SELECT deleted_at IS NULL FROM products WHERE id = ?", Boolean.class,
+                (Object) UuidBinary.toBytes(productId))).isTrue();
     }
 
     @Test

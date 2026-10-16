@@ -58,6 +58,11 @@ public class DrawQueryService {
                 .orElseThrow(() -> new BusinessException(OrderErrorCode.DRAW_NOT_FOUND));
     }
 
+    /** 그 상품이 아직 반영되지 않은 회차의 증정품인가 — catalog 의 상품 삭제가 묻는다(contracts/order-internal.md). */
+    public boolean giftInProgress(UUID productId) {
+        return Boolean.TRUE.equals(readTransaction.execute(status -> campaigns.existsUnsettledByProductId(productId)));
+    }
+
     public Instant now() {
         return clock.instant();
     }

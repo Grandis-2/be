@@ -3,6 +3,7 @@ package com.grandis.nova.catalog.api;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -83,7 +84,7 @@ class AdminProductImageEditApiTest {
     }
 
     @Test
-    @DisplayName("넣기 검사 — 이미 있는 주소 · 묶음 11장째 · 없는 색상 · color 상품에 색상 빠짐 · 상세에 영역 빠짐 · 모르는 kind 는 400 이고 아무것도 바뀌지 않는다")
+    @DisplayName("넣기 검사 — 이미 있는 주소 · 묶음 11장째 · 상세 영역 4장째 · 없는 색상 · color 상품에 색상 빠짐 · 상세에 영역 빠짐 · 모르는 kind 는 400 이고 아무것도 바뀌지 않는다")
     void addRules() throws Exception {
         UUID productId = registerColorProduct();
         String before = options(productId);
@@ -98,9 +99,33 @@ class AdminProductImageEditApiTest {
         for (int i = 1; i < 10; i++) {
             add(productId, "GALLERY", "실버", "https://img/s-more-" + i + ".jpg").andExpect(status().isCreated());
         }
+        add(productId, "DETAIL", "유의사항", "https://img/notice1.jpg").andExpect(status().isCreated());
+        add(productId, "DETAIL", "유의사항", "https://img/notice2.jpg").andExpect(status().isCreated());
         String full = options(productId);
         expectValidation(add(productId, "GALLERY", "실버", "https://img/s-more-10.jpg"), "url");
-        assertThat(options(productId)).as("거절된 넣기는 문서를 바꾸지 않는다").isEqualTo(full).isNotEqualTo(before);
+        expectValidation(add(productId, "DETAIL", "유의사항", "https://img/notice3.jpg"), "url");
+        add(productId, "DETAIL", "새 영역", "https://img/new0.jpg").andExpect(status().isCreated());   // 대조군 — 다른 영역은 넣는다
+        assertThat(detailOf(productId, "유의사항")).as("거절된 넣기는 그 영역을 바꾸지 않는다")
+                .containsExactly("https://img/notice0.jpg", "https://img/notice1.jpg", "https://img/notice2.jpg");
+        assertThat(full).isNotEqualTo(before);
+    }
+
+    @Test
+    @DisplayName("제한 전에 4장이 된 상세 영역 — 더 넣기만 400 이고, 바꾸기 · 빼기는 된다(줄여서 맞출 수 있다)")
+    void overLimitSectionCanStillBeEditedDown() throws Exception {
+        UUID productId = registerColorProduct();
+        jdbcTemplate.update("""
+                UPDATE products SET options = JSON_SET(options, '$.detailImages[1].images', JSON_ARRAY(
+                    JSON_OBJECT('url', 'https://img/old0.jpg', 'primary', false), JSON_OBJECT('url', 'https://img/old1.jpg', 'primary', false),
+                    JSON_OBJECT('url', 'https://img/old2.jpg', 'primary', false), JSON_OBJECT('url', 'https://img/old3.jpg', 'primary', false)))
+                 WHERE id = UUID_TO_BIN(?)""", productId.toString());
+        assertThat(detailOf(productId, "유의사항")).as("대조군 — 4장인 영역").hasSize(4);
+
+        expectValidation(add(productId, "DETAIL", "유의사항", "https://img/old4.jpg"), "url");
+        mockMvc.perform(admin(patch(PATH + "/{id}/images", productId)).content("{ \"url\": \"https://img/old0.jpg\", \"newUrl\": \"https://img/old0-new.jpg\" }"))
+                .andExpect(status().isOk());
+        mockMvc.perform(admin(delete(PATH + "/{id}/images", productId)).param("url", "https://img/old3.jpg")).andExpect(status().isOk());
+        assertThat(detailOf(productId, "유의사항")).containsExactly("https://img/old0-new.jpg", "https://img/old1.jpg", "https://img/old2.jpg");
     }
 
     @Test
@@ -278,6 +303,11 @@ class AdminProductImageEditApiTest {
         List<String> out = new ArrayList<>();
         product.get("images").get("detail").forEach(section -> out.add(section.get("bundleKey").asString()));
         return out;
+    }
+
+    /** 관리자 상세로 읽은 그 상세 영역의 주소 목록. */
+    private List<String> detailOf(UUID productId, String section) throws Exception {
+        return detail(data(mockMvc.perform(admin(get(PATH + "/{id}", productId))).andExpect(status().isOk())).get("product"), section);
     }
 
     private static List<String> detail(JsonNode product, String section) {

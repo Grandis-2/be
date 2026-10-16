@@ -133,6 +133,10 @@ public class ProductImageEditService {
         boolean added = false;
         for (Section existing : document.detailImages()) {
             if (!added && sameSection(existing.section(), section, key)) {
+                if (existing.images().size() >= ProductRegistrationValidator.MAX_DETAIL_IMAGES_PER_SECTION) {
+                    // 이미 상한을 넘은 영역(제한 전에 올린 상품)도 더 넣지만 않으면 된다 — 바꾸기 · 빼기는 그대로 된다
+                    throw ValidationFailures.of("url", "상세 영역당 최대 %d장입니다.".formatted(ProductRegistrationValidator.MAX_DETAIL_IMAGES_PER_SECTION));
+                }
                 List<Image> images = new ArrayList<>(existing.images());
                 images.add(new Image(url, false));
                 detail.add(new Section(existing.section(), images));

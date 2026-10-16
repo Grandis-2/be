@@ -277,7 +277,11 @@ reviews:
           리뷰를 쓸 자격(내 주문상품 · 배송 완료 · 일반 주문)과 작성자 이름(실명 우선)은 order · member 내부 API 로 묻는다(contracts/order-internal.md ·
           member-internal.md). orders · order_items · customers 를 읽어 판정하면 지적한다.
         - sku 는 모델 안에서 유일하다. 중복 검사를 애플리케이션 조회로만 하면 UNIQUE 제약을 함께 쓰도록 제안한다.
-        - 상품 · 옵션의 물리 삭제는 지적한다. 신청 이력이 있으므로 상태로 숨긴다.
+        - 상품 · 옵션의 물리 삭제는 지적한다. 신청 이력이 있으므로 상태로 숨긴다. 상품 삭제는 소프트 삭제(products.deleted_at, ProductDeleteService)다.
+          삭제한 상품은 비공개다(ck_product_deleted_hidden) — 회원 쪽 경로는 공개 여부로 이미 거른다. 공개 여부를 보지 않는 경로(관리자 목록 · 상세 · 수정,
+          증정품 후보 · 홍보 연결 후보, 내부 조회 API)가 deleted_at 을 거르지 않으면 지적한다. 수정 경로는 ProductRepository.findForUpdate 가 거른다.
+          예외: 등록 재생 · 등록 상태 조회는 같은 멱등 키에 그 상품 id 를 그대로 돌려준다(키는 다시 쓸 수 없다 — 삭제해도 새 상품을 만들지 않는다).
+          홍보 묶기 검증은 상품을 공유 잠금(ProductRepository.findAllForShare)으로 읽는다 — 잠그지 않고 읽으면 겹친 삭제의 커밋 전 값으로 통과한다.
         - 모집 오픈 이후 모집 일정 · 배송 기준을 바꾸는 경로는 지적한다.
         - 가격 · 이름 변경이 과거 예약에 소급되는 구조라면 지적한다. 예약은 접수 시점 값을 복사해 쓴다.
         - 카테고리 parent_id 를 쓰는 경로가 순환(자기 자신 포함) · 3단계를 검사하지 않으면 지적한다. DB 는 못 막는다.
@@ -294,7 +298,8 @@ reviews:
           이벤트 payload 에 상품 id 를 다시 넣으면 지적한다 — 봉투의 aggregateId 로만 싣는다. 예외는 PREORDER_CAMPAIGN_CANCELED 하나다
           (preorder 가 먼저 정의한 레코드가 payload 의 productId 로 읽는다 — 이 이벤트에서 productId 를 빼면 지적한다).
         - /internal/** 은 USER · ADMIN 만 허용하고 비공개 · 미완료 상품도 200 으로 준다. 여기서 먼저 숨기면 지적한다 — 숨김 판정은 호출자다.
-        - 사진 주소를 바꾸는 저장(상품 등록 · 사진 넣기/바꾸기/빼기 · 홍보 만들기/고치기, 앞으로의 상품 삭제)이 ImageAttachments.sync 를 같은
+          예외는 삭제한 상품 하나다 — 숨김이 아니라 없는 상품이라 상품 옵션 조회는 404 PRODUCT_NOT_FOUND, 옵션 묶음 조회에서는 빠진다.
+        - 사진 주소를 바꾸는 저장(상품 등록 · 사진 넣기/바꾸기/빼기 · 홍보 만들기/고치기 · 상품 삭제)이 ImageAttachments.sync 를 같은
           트랜잭션에서 부르지 않으면 지적한다 — 빠진 사진이 USED 로 남거나 붙인 사진이 UNUSED 로 남아 정리 배치가 쓰는 사진을 지운다.
           붙이기는 멱등 키 INSERT 뒤에 부른다(앞에서 부르면 같은 키 동시 재전송이 앞 요청이 붙인 USED 를 보고 400 이 된다).
         - images 를 잠그거나 고치는 문장이 id(PRIMARY) 가 아닌 object_key 로 걸리면 지적한다(정리 배치의 id 삭제와 교착).

@@ -1,9 +1,11 @@
 package com.grandis.nova.catalog.image;
 
+import com.grandis.nova.catalog.integration.DrawGiftClient;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ImageAttachmentsTestConfig;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.common.UuidBinary;
+import com.grandis.nova.common.web.ApiResponse;
 import org.hibernate.id.uuid.UuidVersion7Strategy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -14,6 +16,7 @@ import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -34,6 +37,7 @@ import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.BDDMockito.given;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -61,6 +65,7 @@ class ImageAttachmentApiTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired ImageStore store;
     @Autowired ImageAttachments attachments;
+    @MockitoBean DrawGiftClient drawGifts;
 
     ShopFixtures fixtures;
     UUID categoryId;
@@ -327,10 +332,11 @@ class ImageAttachmentApiTest {
         try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
             for (int round = 0; round < 10; round++) {
                 String url = uploaded(ImagePurpose.PRODUCT);
+                String section = "추가 " + round;   // 반복마다 새 영역 — 상세 영역은 3장까지라 한 영역에 쌓으면 장수 상한이 먼저 걸린다
                 List<Future<Integer>> results = new ArrayList<>();
                 for (UUID productId : List.of(first, second)) {
                     Callable<Integer> add = () -> mockMvc.perform(admin(post(PRODUCTS + "/{id}/images", productId))
-                            .content("{ \"kind\": \"DETAIL\", \"bundle\": \"추가\", \"url\": \"%s\" }".formatted(url)))
+                            .content("{ \"kind\": \"DETAIL\", \"bundle\": \"%s\", \"url\": \"%s\" }".formatted(section, url)))
                             .andReturn().getResponse().getStatus();
                     results.add(pool.submit(add));
                 }
@@ -357,6 +363,23 @@ class ImageAttachmentApiTest {
                 .as("이미 USED").isInstanceOf(InvalidDataAccessApiUsageException.class).hasMessageContaining("0 of 1 rows");
         assertThatThrownBy(() -> store.transition(List.of(idA, UUID.randomUUID()), ImageStore.Status.USED, ImageStore.Status.UNUSED, Instant.now()))
                 .as("없는 행이 섞임").isInstanceOf(InvalidDataAccessApiUsageException.class).hasMessageContaining("1 of 2 rows");
+    }
+
+    @Test
+    @DisplayName("상품 삭제 — 문서의 사진이 전부 UNUSED. 대조군: 드로우 증정품이라 409 로 거절되면 그대로 USED")
+    void productDeleteDetachesEveryImage() throws Exception {
+        String b0 = uploaded(ImagePurpose.PRODUCT);
+        String b1 = uploaded(ImagePurpose.PRODUCT);
+        String spec = uploaded(ImagePurpose.PRODUCT);
+        UUID productId = productId(register(colorBody(b0, b1, spec)).andExpect(status().isCreated()));
+
+        given(drawGifts.getGift(productId)).willReturn(ApiResponse.ok(new DrawGiftClient.DrawGift(productId, true)));
+        mockMvc.perform(admin(delete(PRODUCTS + "/{id}", productId))).andExpect(status().isConflict());
+        assertThat(statuses(b0, b1, spec)).containsOnly("USED");
+
+        given(drawGifts.getGift(productId)).willReturn(ApiResponse.ok(new DrawGiftClient.DrawGift(productId, false)));
+        mockMvc.perform(admin(delete(PRODUCTS + "/{id}", productId))).andExpect(status().isNoContent());
+        assertThat(statuses(b0, b1, spec)).containsOnly("UNUSED");
     }
 
     // ── 도우미 ─────────────────────────────────────────────

@@ -111,6 +111,9 @@ public class PromotionService {
                 throw linkedElsewhere(ownedByOthers(request.productIds(), null));
             }
             throw e;
+        } catch (BusinessException e) {
+            // 같은 키의 겹친 요청이 위 키 확인 뒤 · 이 검증 전에 커밋하면 검증이 먼저 걸린다(그 상품이 "다른 홍보" 에 묶였다) — 키로 다시 찾아 그 홍보를 준다
+            return promotions.findByIdempotencyKey(idempotencyKey).map(found -> new Created(view(found.getId()), true)).orElseThrow(() -> e);
         } catch (PessimisticLockingFailureException e) {
             throw retryable();
         }
@@ -185,11 +188,12 @@ public class PromotionService {
                 throw ValidationFailures.of("productIds[" + i + "]", "같은 상품이 두 번 왔습니다.");
             }
         }
-        Map<UUID, Product> found = productsOf(request.productIds());
+        Map<UUID, Product> found = new HashMap<>();   // 공유 잠금으로 읽는다 — 겹친 삭제의 커밋을 기다려 삭제된 상품을 400 으로 거른다
+        products.findAllForShare(request.productIds()).forEach(product -> found.put(product.getId(), product));
         for (int i = 0; i < request.productIds().size(); i++) {
             UUID productId = request.productIds().get(i);
             Product product = found.get(productId);
-            if (product == null) {
+            if (product == null || product.isDeleted()) {   // 삭제한 상품은 없는 상품이다 — 묶여 있었어도 다시 보내면 400
                 throw ValidationFailures.of("productIds[" + i + "]", "없는 상품입니다.");
             }
             if (!current.contains(productId) && (product.getSaleMode() != SaleMode.PREORDER || product.getCampaignCanceledAt() != null)) {
@@ -249,6 +253,7 @@ public class PromotionService {
         return new AdminPromotionView(promotion.getId(), promotion.getName(), promotion.statusOn(today), promotion.getStartDate(),
                 promotion.getEndDate(), promotion.getThumbnailUrl(), promotion.getDetailImageUrls(),
                 linked.stream().map(productsById::get)
+                        .filter(product -> !product.isDeleted())   // 삭제한 상품은 빼고 보인다 — 화면이 그대로 저장하면 묶음에서도 빠진다
                         .map(product -> new AdminPromotionView.LinkedProduct(product.getId(), product.getTitle(), product.getSaleMode()))
                         .toList(),
                 promotion.getCreatedAt(), promotion.getUpdatedAt());

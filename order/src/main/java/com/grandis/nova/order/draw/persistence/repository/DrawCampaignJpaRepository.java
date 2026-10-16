@@ -67,6 +67,10 @@ public interface DrawCampaignJpaRepository extends JpaRepository<DrawCampaignJpa
     @Query(value = "UPDATE draw_campaigns SET settled_at = :now, updated_at = :now WHERE id = :id AND settled_at IS NULL", nativeQuery = true)
     int markSettled(@Param("id") UUID id, @Param("now") Instant now);
 
+    /** fk_draw_campaign_option (product_id, option_id) 의 인덱스로 찾는다. */
+    @Query(value = "SELECT EXISTS (SELECT 1 FROM draw_campaigns WHERE product_id = :productId AND settled_at IS NULL)", nativeQuery = true)
+    long existsUnsettledByProductId(@Param("productId") UUID productId);
+
     @Query(value = """
             SELECT COALESCE(SUM(e.status = 'PAID'), 0) AS paidEntries,
                    COALESCE(SUM(e.status = 'AUTHORIZING'), 0) AS authorizingEntries,

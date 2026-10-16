@@ -24,6 +24,9 @@ public interface DrawCampaignStore {
 
     Optional<DrawCampaign> findById(UUID id);
 
+    /** 그 상품을 증정품으로 둔 회차 중 아직 반영(settled_at)되지 않은 것이 있는가 — 마감 뒤 추첨 · 반영 전도 진행 중이다. */
+    boolean existsUnsettledByProductId(UUID productId);
+
     Optional<DrawCampaign> findByIdempotencyKey(String idempotencyKey);
 
     /** 최신순(만든 시각 · id 내림차순). page 는 0 부터. */

@@ -6,6 +6,7 @@ import com.grandis.nova.catalog.edit.InStockConversionRequest;
 import com.grandis.nova.catalog.edit.OptionValueAddRequest;
 import com.grandis.nova.catalog.edit.OptionValueEditRequest;
 import com.grandis.nova.catalog.edit.ProductEditRequest;
+import com.grandis.nova.catalog.edit.ProductDeleteService;
 import com.grandis.nova.catalog.edit.ProductEditService;
 import com.grandis.nova.catalog.edit.ProductImageAddRequest;
 import com.grandis.nova.catalog.edit.ProductImageEditService;
@@ -59,7 +60,7 @@ import org.springframework.web.bind.annotation.RestController;
  * 수정 규칙(사전예약 오픈 뒤 금지 · 재계산 · 구성 불변)은 {@link ProductEditService}.
  *
  * 목록 · 상세에는 노출 규칙이 없다 — 비공개 · 준비 전 · 판매 중지 · 오래된 마감도 전부 나오고, 공개 여부 · 등록 완료(판매 방식별 준비)가 같이 실린다.
- * 배송 차수는 싣지 않는다(회원 상세와 같은 이유 — catalog 는 shipment_batches 를 읽지 않는다). 없는 상품만 404.
+ * 배송 차수는 싣지 않는다(회원 상세와 같은 이유 — catalog 는 shipment_batches 를 읽지 않는다). 없는 상품 · 삭제한 상품만 404.
  *
  * 응답 코드가 결과 갈래를 말한다 — 201 새로 저장(미리보기 포함), 200 준비가 끝난 등록의 재생, 202 아직 준비 전인 등록의 재생.
  * 200 · 202 는 등록 상태(고정 필드)만 싣는다 — 미리보기는 상세 API 로 따로 본다.
@@ -77,18 +78,20 @@ public class AdminProductController {
     private final ProductDetailService detailService;
     private final ProductEditService editService;
     private final ProductImageEditService imageEditService;
+    private final ProductDeleteService deleteService;
     private final RegistrationRequestParser parser;
     private final StrictBodies bodies;
 
     public AdminProductController(ProductRegistrationService registrationService, ProductListingService listingService,
                                   ProductDetailService detailService, ProductEditService editService,
-                                  ProductImageEditService imageEditService,
+                                  ProductImageEditService imageEditService, ProductDeleteService deleteService,
                                   RegistrationRequestParser parser, StrictBodies bodies) {
         this.registrationService = registrationService;
         this.listingService = listingService;
         this.detailService = detailService;
         this.editService = editService;
         this.imageEditService = imageEditService;
+        this.deleteService = deleteService;
         this.bodies = bodies;
         this.parser = parser;
     }
@@ -149,6 +152,18 @@ public class AdminProductController {
         return ApiResponse.ok(AdminProductResponse.from(serialized(() -> editService.editProduct(productId, bodies.parse(body, ProductEditRequest.class)))));
     }
 
+    /** 소프트 삭제. 되살리기는 없다. 삭제한 상품은 목록 · 상세 · 수정에서 없는 상품(404)이고, 지난 주문 · 예약 · 드로우는 그대로다. */
+    @Operation(summary = "상품 삭제(소프트 삭제)",
+            description = "204. 없거나 이미 삭제한 상품은 404. 사전예약 오픈 3분 전부터 마감 전(회차 취소 전) · 반영 전 드로우의 증정품이면 409 — 판매 중지 · 드로우 종료가 먼저")
+    @DeleteMapping("/{productId}")
+    public ResponseEntity<Void> delete(@PathVariable UUID productId) {
+        serialized(() -> {
+            deleteService.delete(productId);
+            return null;
+        });
+        return ResponseEntity.noContent().build();
+    }
+
     /** 축에 값 추가(새 색상 · 용량). 옵션은 만들지 않는다 — 조합은 아래 variants 로. */
     @Operation(summary = "옵션 값 추가")
     @PostMapping("/{productId}/option-values")
@@ -169,7 +184,7 @@ public class AdminProductController {
 
     /** 사진 한 장을 그 묶음 맨 뒤에 넣는다(상품 사진 · 상세 영역). 사전예약 오픈 뒤에도 된다. */
     @Operation(summary = "사진 한 장 넣기", description = "kind: GALLERY(bundle = color 값, color 축이 없으면 비움) · DETAIL(bundle = 영역 이름, 없으면 새 영역). "
-            + "url 은 업로드 API 의 imageUrl — 이 상품에 이미 있는 주소 · CDN 밖 주소는 400, 상품 사진 묶음은 최대 10장. 빈 묶음에 넣은 첫 장은 대표")
+            + "url 은 업로드 API 의 imageUrl — 이 상품에 이미 있는 주소 · CDN 밖 주소는 400, 상품 사진 묶음은 최대 10장 · 상세 영역은 최대 3장. 빈 묶음에 넣은 첫 장은 대표")
     @PostMapping("/{productId}/images")
     public ResponseEntity<ApiResponse<AdminProductResponse>> addImage(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ProductImageAddRequest.class))) @RequestBody String body) {
         AdminProductResponse response = AdminProductResponse.from(
