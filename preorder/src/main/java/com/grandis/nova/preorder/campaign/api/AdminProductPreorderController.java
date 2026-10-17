@@ -64,7 +64,8 @@ class AdminProductPreorderController {
 
     /** 마감된 회차를 새 마감 시각까지 다시 연다. 발급한 순번은 이어진다. */
     @Operation(summary = "마감한 접수 다시 열기",
-            description = "오픈 전 · 아직 접수 중 · 지금 판매 중인 사전예약 상품이 아니면 409, 마감 시각이 지금 이전이면 400. "
+            description = "오픈 전 · 아직 접수 중 · 오픈 전에 판매 중지로 닫힘 · 지금 판매 중인 사전예약 상품이 아니면 409, "
+                    + "마감 시각이 지금 이전이면 400. "
                     + "새 접수는 순번을 이어 받는다")
     @PostMapping("/campaign/reopen")
     public ApiResponse<PreorderCampaignResponse> reopenCampaign(@PathVariable UUID productId,

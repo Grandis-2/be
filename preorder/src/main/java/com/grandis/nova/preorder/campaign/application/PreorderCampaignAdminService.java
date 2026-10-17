@@ -93,7 +93,7 @@ public class PreorderCampaignAdminService {
      *
      * @param reopenedBy 다시 연 관리자. 회차에는 이력이 없어 로그에만 남긴다
      * @throws BusinessException PRODUCT_NOT_FOUND — 회차 · 상품이 없다, SALE_NOT_OPEN — 오픈 전이다,
-     *                           CAMPAIGN_NOT_REOPENABLE — 아직 접수 중이거나 지금 판매 중인 사전예약 상품이 아니다
+     *                           CAMPAIGN_NOT_REOPENABLE — 아직 접수 중 · 한 번도 열린 적 없음 · 지금 판매 중인 사전예약 상품이 아님
      */
     public PreorderCampaign reopenCampaign(UUID productId, Instant closesAt, String reopenedBy) {
         if (!liveProduct(productId).orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND))
@@ -105,13 +105,14 @@ public class PreorderCampaignAdminService {
         boolean stillOnSale;
         try {
             stillOnSale = liveProduct(productId).filter(ProductCatalog::isOnPreorderSale).isPresent();
-        } catch (BusinessException e) {
+        } catch (BusinessException | IllegalStateException e) {
+            // 일시 장애 · 연동 오류 모두. 다시 열기는 이미 커밋됐으므로 실패로 답하지 않는다
             log.warn("다시 연 뒤 상품 판매 상태를 다시 확인하지 못했다 — 연 채로 둔다 productId={} error={}", productId,
-                    e.errorCode());
+                    e.getMessage());
             return reopened;
         }
         if (!stillOnSale) {
-            writer.closeEarly(productId, reopenedBy);
+            writer.closeReopened(productId, reopened.getScheduleVersion(), reopenedBy);
             throw notOnSale();
         }
         return reopened;

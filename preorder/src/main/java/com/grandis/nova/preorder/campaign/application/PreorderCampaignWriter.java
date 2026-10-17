@@ -111,6 +111,10 @@ class PreorderCampaignWriter {
         if (campaign.isAccepting(now)) {
             throw new BusinessException(PreorderErrorCode.CAMPAIGN_NOT_REOPENABLE, Map.of("reason", "ACCEPTING"));
         }
+        // 한 번도 열린 적 없는 회차를 지금 열면 원래 오픈 시각을 건너뛰고 바로 접수한다
+        if (campaign.wasClosedBeforeOpen()) {
+            throw new BusinessException(PreorderErrorCode.CAMPAIGN_NOT_REOPENABLE, Map.of("reason", "NEVER_OPENED"));
+        }
         if (!closesAt.isAfter(now)) {
             throw ValidationFailures.of("closesAt", "현재 시각보다 뒤여야 합니다.");
         }
@@ -120,6 +124,22 @@ class PreorderCampaignWriter {
         log.info("마감한 접수를 다시 열었다 productId={} reopenedBy={} closedAt={} closesAt={}", productId, reopenedBy,
                 closedAt, closesAt);
         return campaign;
+    }
+
+    /**
+     * 다시 연 회차를 지금 마감한다. 그 뒤 다른 변경(다른 관리자의 마감 · 다시 열기 등)이 있었으면 그 결과를 지키려고 그대로 둔다.
+     *
+     * @param scheduleVersion 다시 열었을 때의 일정 번호
+     */
+    @Transactional
+    void closeReopened(UUID productId, long scheduleVersion, String closedBy) {
+        campaigns.findForUpdate(productId)
+                .filter(campaign -> campaign.getScheduleVersion() == scheduleVersion)
+                .filter(campaign -> campaign.closeNow(clock.instant()))
+                .ifPresent(campaign -> {
+                    changePublisher.publish(campaign, CampaignChange.CLOSED);
+                    log.warn("다시 연 뒤 판매 중지가 보여 다시 마감했다 productId={} closedBy={}", productId, closedBy);
+                });
     }
 
     private PreorderCampaign reschedule(PreorderCampaign campaign, Instant opensAt, Instant closesAt) {

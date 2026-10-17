@@ -171,6 +171,11 @@ public class PreorderCampaign {
         return true;
     }
 
+    /** 오픈 전에 판매 중지로 닫혔는가 — {@link #closeNow} 가 기간을 이 간격으로 남긴다. 원래 오픈 시각은 남아 있지 않다. */
+    public boolean wasClosedBeforeOpen() {
+        return Duration.between(opensAt, closesAt).equals(CLOSED_BEFORE_OPEN);
+    }
+
     /** 마감된 회차를 새 마감 시각까지 다시 연다(일정 번호가 오른다). 판정은 호출하는 쪽이 잠근 행에서 한다. */
     public void reopen(Instant closesAt) {
         this.closesAt = closesAt;

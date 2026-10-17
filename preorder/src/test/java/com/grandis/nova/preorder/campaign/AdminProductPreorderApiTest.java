@@ -5,7 +5,9 @@ import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
+import com.grandis.nova.preorder.campaign.application.PreorderCampaignAdminService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
+import com.grandis.nova.preorder.integration.catalog.CatalogReader;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.CatalogStubs;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
@@ -16,17 +18,24 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.web.client.HttpClientErrorException;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
@@ -34,6 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willAnswer;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -66,8 +76,18 @@ class AdminProductPreorderApiTest {
     @Autowired
     PreorderAcceptService acceptService;
 
+    @Autowired
+    PreorderCampaignAdminService campaignService;
+
+    @Autowired
+    Campaigns campaigns;
+
     @MockitoBean
     CatalogClient catalogClient;
+
+    /** 다시 연 뒤 재확인 사이에 끼어들려고 상품 읽기만 가로챈다(실제 동작은 그대로). */
+    @MockitoSpyBean
+    CatalogReader catalogReader;
 
     ShopFixtures fixtures;
 
@@ -426,6 +446,62 @@ class AdminProductPreorderApiTest {
                 .andExpect(jsonPath("$.data.saleStatus").value("CLOSED"));
         assertThat(fixtures.outboxEvents(CAMPAIGN_CHANGED, product.productId())).as("다시 열기 · 다시 마감")
                 .isEqualTo(events + 2);
+    }
+
+    /** 오픈 전에 판매 중지로 닫힌 회차는 원래 오픈 시각이 남아 있지 않다. 지금 열면 그 시각을 건너뛴다. */
+    @Test
+    void 한_번도_열린_적_없는_회차는_다시_열_수_없다() throws Exception {
+        Instant opensAt = Instant.now().plusSeconds(3600);
+        PreorderProduct product = fixtures.preorderProduct(opensAt, opensAt.plusSeconds(3600));
+        CatalogStubs.stubPreorderProduct(catalogClient, product.productId(), CatalogStubs.activeOption(product.optionId()));
+        campaigns.closeNow(product.productId(), Instant.now());
+
+        reopenCampaign(product.productId(), Instant.now().plusSeconds(7200))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("CAMPAIGN_NOT_REOPENABLE"))
+                .andExpect(jsonPath("$.error.details.reason").value("NEVER_OPENED"));
+    }
+
+    /** 재확인을 기다리는 동안 다른 관리자가 마감하고 다시 열었다. 앞선 요청의 보정은 그 뒤의 다시 열기를 닫지 않는다. */
+    @Test
+    void 다시_연_뒤_보정은_그_사이의_다른_다시_열기를_닫지_않는다() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        closeCampaign(product.productId()).andExpect(status().isOk());
+        Instant closesAt = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.MICROS);
+        CatalogStubs.stubPreorderProduct(catalogClient, product.productId(), CatalogStubs.activeOption(product.optionId()));
+        AtomicInteger calls = new AtomicInteger();
+        // 두 번째 읽기(앞선 요청의 재확인) 직전에 다른 관리자가 끼어들고, 앞선 요청에는 판매 중지로 보인다
+        willAnswer(invocation -> {
+            if (calls.incrementAndGet() != 2) {
+                return invocation.callRealMethod();
+            }
+            campaignService.closeCampaign(product.productId(), "other-admin");
+            campaignService.reopenCampaign(product.productId(), closesAt.plusSeconds(600), "other-admin");
+            return Optional.of(CatalogStubs.product(product.productId(), "PREORDER", "PAUSED",
+                    CatalogStubs.activeOption(product.optionId())).data());
+        }).given(catalogReader).findProduct(product.productId());
+
+        reopenCampaign(product.productId(), closesAt)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.details.reason").value("NOT_ON_SALE"));
+
+        mockMvc.perform(get("/api/v1/admin/preorders/products/{id}/campaign", product.productId()).with(admin()))
+                .andExpect(jsonPath("$.data.saleStatus").value("OPEN"));
+        assertThat(closesAtOf(product.productId())).isEqualTo(closesAt.plusSeconds(600));
+    }
+
+    /** 재확인에서 catalog 연동 오류가 나도 이미 커밋한 다시 열기를 실패로 답하지 않는다. */
+    @Test
+    void 다시_연_뒤_재확인이_연동_오류여도_열린_일정을_돌려준다() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        closeCampaign(product.productId()).andExpect(status().isOk());
+        given(catalogClient.getProduct(product.productId()))
+                .willReturn(CatalogStubs.preorderProduct(product.productId(), CatalogStubs.activeOption(product.optionId())))
+                .willThrow(HttpClientErrorException.create(HttpStatus.CONFLICT, "conflict", HttpHeaders.EMPTY, null, null));
+
+        reopenCampaign(product.productId(), Instant.now().plusSeconds(3600))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.saleStatus").value("OPEN"));
     }
 
     @Test
