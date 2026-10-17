@@ -125,7 +125,7 @@ public class AdminProductController {
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         AdminProductListFilter filter = new AdminProductListFilter(q, saleMode, status, brand);
         return ApiResponse.ok(ProductPageResponse.from(
-                listingService.listForAdmin(filter, PageSizes.requirePage(page), PageSizes.require(size))));
+                listingService.listForAdmin(filter, PageSizes.requirePage(page, PageSizes.require(size)), size)));
     }
 
     @Operation(summary = "럭키 드로우 증정품 후보", description = "회차 만들기 화면용 — 일반 판매 · 판매 중이고 재고를 등록한 옵션이 있는 상품(비공개 포함)과 "
@@ -136,7 +136,7 @@ public class AdminProductController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         return ApiResponse.ok(ProductPageResponse.from(
-                listingService.listGiftCandidates(q, PageSizes.requirePage(page), PageSizes.require(size))));
+                listingService.listGiftCandidates(q, PageSizes.requirePage(page, PageSizes.require(size)), size)));
     }
 
     @Operation(summary = "상품 상세")

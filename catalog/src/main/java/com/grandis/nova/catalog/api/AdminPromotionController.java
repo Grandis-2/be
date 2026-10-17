@@ -57,7 +57,7 @@ public class AdminPromotionController {
     @GetMapping
     public ApiResponse<ProductPageResponse<AdminPromotionView>> list(@RequestParam(defaultValue = "0") int page,
                                                                      @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        return ApiResponse.ok(ProductPageResponse.from(promotions.list(PageSizes.requirePage(page), PageSizes.require(size))));
+        return ApiResponse.ok(ProductPageResponse.from(promotions.list(PageSizes.requirePage(page, PageSizes.require(size)), size)));
     }
 
     @Operation(summary = "홍보 상세")
@@ -71,6 +71,6 @@ public class AdminPromotionController {
     public ApiResponse<ProductPageResponse<LinkableProduct>> linkable(@RequestParam(required = false) UUID promotionId,
                                                                       @RequestParam(defaultValue = "0") int page,
                                                                       @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        return ApiResponse.ok(ProductPageResponse.from(promotions.linkable(promotionId, PageSizes.requirePage(page), PageSizes.require(size))));
+        return ApiResponse.ok(ProductPageResponse.from(promotions.linkable(promotionId, PageSizes.requirePage(page, PageSizes.require(size)), size)));
     }
 }

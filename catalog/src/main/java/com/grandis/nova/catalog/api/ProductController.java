@@ -69,7 +69,7 @@ public class ProductController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         ProductListFilter filter = new ProductListFilter(q, categoryId, saleMode, brand, color, storage);
-        return PublicCache.ok(cache.products(filter, sort, PageSizes.requirePage(page), PageSizes.require(size)).map(ProductPageResponse::from),
+        return PublicCache.ok(cache.products(filter, sort, PageSizes.requirePage(page, PageSizes.require(size)), size).map(ProductPageResponse::from),
                 CatalogReadCache.PRODUCT_TTL, PublicCache.PRODUCT, clock);
     }
 }

@@ -452,6 +452,20 @@ class ProductListApiTest {
             }
             perform(new String[] {"saleMode", "RENTAL"}).andExpect(status().isBadRequest());
         }
+
+        @Test
+        @DisplayName("앞에서 10,000개까지 — (page + 1) × size 가 10,000 이면 200, 넘으면 400 VALIDATION_FAILED(page). 아주 큰 page 도 같은 400")
+        void capsListDepth() throws Exception {
+            data(perform("size", "100", "page", "99"));
+            data(perform("size", "20", "page", "499"));
+            for (String[] bad : new String[][] {{"size", "100", "page", "100"}, {"size", "20", "page", "500"}, {"size", "1", "page", "10000"},
+                    {"size", "100", "page", "2147483647"}}) {
+                perform(bad)
+                        .andExpect(status().isBadRequest())
+                        .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+                        .andExpect(jsonPath("$.error.details.violations[0].field").value("page"));
+            }
+        }
     }
 
     @Nested

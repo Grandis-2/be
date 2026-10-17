@@ -78,7 +78,7 @@ public class ReviewController {
             @PathVariable UUID productId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        return PublicCache.ok(cache.productReviews(productId, PageSizes.requirePage(page), PageSizes.require(size)).map(ProductPageResponse::from),
+        return PublicCache.ok(cache.productReviews(productId, PageSizes.requirePage(page, PageSizes.require(size)), size).map(ProductPageResponse::from),
                 CatalogReadCache.REVIEW_TTL, PublicCache.REVIEW, clock);
     }
 
@@ -90,7 +90,7 @@ public class ReviewController {
             @RequestParam(required = false) UUID categoryId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        return PublicCache.ok(cache.visibleReviews(categoryId, PageSizes.requirePage(page), PageSizes.require(size)).map(ProductPageResponse::from),
+        return PublicCache.ok(cache.visibleReviews(categoryId, PageSizes.requirePage(page, PageSizes.require(size)), size).map(ProductPageResponse::from),
                 CatalogReadCache.REVIEW_TTL, PublicCache.REVIEW, clock);
     }
 
@@ -103,6 +103,6 @@ public class ReviewController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         return ApiResponse.ok(ProductPageResponse.from(
-                reviews.myReviews(customerId, orderItemId, PageSizes.requirePage(page), PageSizes.require(size))));
+                reviews.myReviews(customerId, orderItemId, PageSizes.requirePage(page, PageSizes.require(size)), size)));
     }
 }
