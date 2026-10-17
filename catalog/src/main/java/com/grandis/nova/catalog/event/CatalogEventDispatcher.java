@@ -32,7 +32,7 @@ public class CatalogEventDispatcher {
 
     /**
      * @throws IllegalArgumentException 봉투가 아니거나 eventType · payload 가 없음 · 받지 않는 이벤트 종류 · aggregate 가 다르거나 id 가 없음
-     * @throws tools.jackson.core.JacksonException 본문이 JSON 이 아님
+     * @throws tools.jackson.core.JacksonException 본문이 JSON 이 아니거나 봉투 모양이 아님(배열 · 문자열 등) · 칸의 형이 틀림(aggregateId · occurredAt)
      */
     public void dispatch(String body) {
         EventEnvelope envelope = jsonMapper.readValue(body, EventEnvelope.class);

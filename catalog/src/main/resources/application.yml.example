@@ -96,6 +96,7 @@ nova:
     #   preorder-events: preorder-events
     #   order-events: order-events
     # 받는 큐(catalog-events) 소비기 — contracts/catalog-inbound-events.md. 기본은 꺼짐 — 인프라가 큐를 만들고 보내는 쪽이 준비된 뒤 켠다.
+    # 로컬에서 켜려면 catalog-events 와 catalog-events-dlq 를 Floci 에 직접 만든다(docker/floci/create-queues.sh 에는 아직 없다)
     # 켠 채 큐가 없으면 기동은 되고, 받기 실패를 WARN 으로 남기며 늦춰 다시 시도한다(실측. 대기 상한 30초는 common:sqs QueuePoller)
     # consumer:
     #   enabled: true
