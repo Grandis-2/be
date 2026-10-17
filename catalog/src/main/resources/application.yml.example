@@ -88,13 +88,23 @@ nova:
     # relay-after: 1m       # 만든 지 이만큼 지난 미발행 행만 릴레이가 가져간다
     # relay-lease: 1m       # 가져간 행을 다른 인스턴스가 건너뛰는 시간. 행마다 보내기 직전에 연장한다
     #                       # 전송 한 번은 sqs.api-call-timeout × 2(큐 URL 조회 + 전송)이고, 리스는 그것 + 5s 보다 길어야 한다(아니면 기동 실패)
-  # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다 — preorder-events · order-events 에 보내기 권한이 필요하다
+  # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다 — preorder-events · order-events 에 보내기, catalog-events 에 GetQueueUrl · ReceiveMessage · DeleteMessage · ChangeMessageVisibility 권한이 필요하다
   sqs:
     region: ap-northeast-2
     endpoint: http://localhost:4566
-    # queues:               # 논리 목적지 → 실제 큐 이름. 없으면 논리 이름(preorder-events · order-events)을 그대로 쓴다
+    # queues:               # 논리 목적지 → 실제 큐 이름. 없으면 논리 이름(preorder-events · order-events · 받는 catalog-events)을 그대로 쓴다
     #   preorder-events: preorder-events
     #   order-events: order-events
+    # 받는 큐(catalog-events) 소비기 — contracts/catalog-inbound-events.md. 기본은 꺼짐 — 인프라가 큐를 만들고 보내는 쪽이 준비된 뒤 켠다.
+    # 켠 채 큐가 없으면 기동은 되고, 받기 실패를 WARN 으로 남기며 늦춰 다시 시도한다(실측. 대기 상한 30초는 common:sqs QueuePoller)
+    # consumer:
+    #   enabled: true
+    #   queue: catalog-events
+    #   concurrency: 1
+    #   wait-seconds: 20
+    #   visibility: 5m       # 처리 한 건보다 길게
+    #   backoff-base: 30s
+    #   backoff-max: 5m
   # 관리자 사진 업로드(POST /api/v1/admin/images). 서버가 받은 사진을 검사 · 다시 인코딩해 버킷에 올리고 조회는 CDN 으로 한다.
   # bucket · cdn-base-url 이 없으면 기동하지 않는다. 상품 · 홍보 저장은 cdn-base-url 아래 새 사진 주소만 받는다(다른 주소는 400).
   # 배포 환경은 인프라가 uploads: true 인 서비스에 bucket · cdn-base-url · region 을 넣으므로 운영 설정에 적지 않는다.
