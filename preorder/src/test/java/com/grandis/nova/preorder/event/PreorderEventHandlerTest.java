@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.List;
@@ -50,6 +51,9 @@ class PreorderEventHandlerTest {
 
     @Autowired
     MeterRegistry meterRegistry;
+
+    @Autowired
+    TransactionTemplate transactionTemplate;
 
     @MockitoBean
     CatalogClient catalogClient;
@@ -190,6 +194,27 @@ class PreorderEventHandlerTest {
         handler.onPaymentConfirmed(confirmed);
         handler.onPaymentConfirmed(confirmed);
 
+        assertThat(paymentAfterCancel() - before).isEqualTo(1);
+        assertThat(anomalies()).isEqualTo(1);
+    }
+
+    /** 커밋 전에 세면 롤백된 결제를 세고, 재수신이 다시 남길 때 또 센다. */
+    @Test
+    void 이상_결제를_남긴_트랜잭션이_롤백되면_세지_않고_재수신이_한_번_센다() {
+        register();
+        startCancel(EventActor.USER);
+        completeCancel(PreorderOrderSettled.Result.NO_ORDER);
+        PreorderPaymentConfirmed confirmed = new PreorderPaymentConfirmed(token, "o-1", Instant.now());
+        double before = paymentAfterCancel();
+
+        transactionTemplate.executeWithoutResult(status -> {
+            handler.onPaymentConfirmed(confirmed);
+            status.setRollbackOnly();
+        });
+        assertThat(paymentAfterCancel() - before).isZero();
+        assertThat(anomalies()).isZero();
+
+        handler.onPaymentConfirmed(confirmed);
         assertThat(paymentAfterCancel() - before).isEqualTo(1);
         assertThat(anomalies()).isEqualTo(1);
     }

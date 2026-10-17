@@ -22,6 +22,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
@@ -226,7 +228,7 @@ public class PreorderEventHandler {
     /**
      * 결제 확인 → 예약 확정. 취소 중이면 시각만 남겨 거절됐을 때 확정으로 돌아갈 근거로 둔다.
      * 취소가 끝난 예약에 남긴 결제 시각이 없거나 다른 결제 확인이 오면 order 가 취소한 주문을 승인한 것이다 — 상태는 그대로 두고
-     * 이상 결제로 남겨 경보로 드러낸다. 같은 결제는 다시 · 겹쳐 와도 처음 남길 때만 센다.
+     * 이상 결제로 남겨 경보로 드러낸다. 같은 결제는 다시 · 겹쳐 와도 처음 남긴 행이 커밋될 때만 센다.
      * 결제 확인이 큐에서 늦어 환불 · 외부 취소 뒤에 처음 닿은 경우도 여기에 든다.
      */
     @Transactional
@@ -242,9 +244,15 @@ public class PreorderEventHandler {
             log.info("이미 남긴 이상 결제를 다시 받았다 preorderId={} paidAt={}", message.preorderId(), paid.paidAt());
             return;
         }
-        paymentAfterCancel.increment();
-        log.error("취소가 끝난 예약에 결제 확인이 왔다 — order 에서 환불 여부를 확인한다 preorderId={} orderId={} paidAt={}",
-                message.preorderId(), message.orderId(), message.paidAt());
+        // 이상 결제 행이 커밋된 뒤에만 알린다 — 롤백되면 재수신이 다시 남기고 그때 센다
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                paymentAfterCancel.increment();
+                log.error("취소가 끝난 예약에 결제 확인이 왔다 — order 에서 환불 여부를 확인한다 preorderId={} orderId={} paidAt={}",
+                        message.preorderId(), message.orderId(), message.paidAt());
+            }
+        });
     }
 
     /** 이미 남긴 결제 시각과 같은가. 같으면 취소 전에 반영한 결제 확인이 다시 온 것이다. 둘 다 저장 정밀도로 맞춘 값이다. */
