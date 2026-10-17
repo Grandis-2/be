@@ -14,6 +14,8 @@ import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
 import com.grandis.nova.preorder.web.ValidationFailures;
 import org.hibernate.exception.ConstraintViolationException;
 import org.hibernate.exception.ConstraintViolationException.ConstraintKind;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,6 +23,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -28,10 +32,12 @@ import java.util.UUID;
  * 바꾸는 일은 {@link PreorderCampaignWriter} 가 회차 행을 잠근 채 한다.
  *
  * 오픈 뒤에는 일정도 차수도 바꾸지 않는다(ERD 결정 29 · 30) — 이미 배정된 순번의 뜻이 달라진다.
- * 접수를 지금 멈추는 조기 마감만 예외다 — 마감을 앞당길 뿐이라 배정된 순번은 그대로다.
+ * 마감을 옮기는 조기 마감 · 다시 열기만 예외다 — 오픈 시각 · 차수가 그대로라 배정된 순번의 뜻이 바뀌지 않는다.
  */
 @Service
 public class PreorderCampaignAdminService {
+
+    private static final Logger log = LoggerFactory.getLogger(PreorderCampaignAdminService.class);
 
     private final PreorderCampaignRepository campaigns;
     private final ShipmentBatchRepository batches;
@@ -81,6 +87,38 @@ public class PreorderCampaignAdminService {
         return writer.closeEarly(productId, closedBy);
     }
 
+    /**
+     * 마감된 회차를 새 마감 시각까지 다시 연다. 판매 중지로 마감한 회차(회차 취소)는 열지 않는다 — 회차에는 두 마감을 가르는 칸이
+     * 없으므로 catalog 의 지금 상품 상태로 가른다(접수와 같은 기준). 캐시를 비우고 읽어 이벤트를 놓친 옛 값으로 판정하지 않는다.
+     *
+     * @param reopenedBy 다시 연 관리자. 회차에는 이력이 없어 로그에만 남긴다
+     * @throws BusinessException PRODUCT_NOT_FOUND — 회차 · 상품이 없다, SALE_NOT_OPEN — 오픈 전이다,
+     *                           CAMPAIGN_NOT_REOPENABLE — 아직 접수 중 · 한 번도 열린 적 없음 · 지금 판매 중인 사전예약 상품이 아님,
+     *                           DEPENDENCY_UNAVAILABLE — catalog 가 응답하지 않는다(다시 열었으면 되돌린다)
+     */
+    public PreorderCampaign reopenCampaign(UUID productId, Instant closesAt, String reopenedBy) {
+        if (!liveProduct(productId).orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND))
+                .isOnPreorderSale()) {
+            throw notOnSale();
+        }
+        PreorderCampaign reopened = writer.reopen(productId, closesAt, reopenedBy);
+        // 확인과 잠금 사이에 판매 중지(회차 취소)가 먼저 끝났으면 그 마감은 다시 연 회차를 보지 못했다. 커밋 뒤 다시 읽어,
+        // 판매 중이 아니거나 확인하지 못하면 되돌린다 — 판매 중임을 확인한 회차만 열려 있게
+        boolean stillOnSale;
+        try {
+            stillOnSale = liveProduct(productId).filter(ProductCatalog::isOnPreorderSale).isPresent();
+        } catch (BusinessException | IllegalStateException e) {
+            writer.closeReopened(productId, reopened.getClosesAt(), reopenedBy);
+            log.warn("다시 연 뒤 상품 판매 상태를 확인하지 못해 되돌렸다 productId={} error={}", productId, e.getMessage());
+            throw e;
+        }
+        if (!stillOnSale) {
+            writer.closeReopened(productId, reopened.getClosesAt(), reopenedBy);
+            throw notOnSale();
+        }
+        return reopened;
+    }
+
     @Transactional(readOnly = true)
     public List<ShipmentBatch> findBatches(UUID productId) {
         findCampaign(productId);
@@ -89,6 +127,16 @@ public class PreorderCampaignAdminService {
 
     public List<ShipmentBatch> replaceBatches(UUID productId, ShipmentBatchPlan plan) {
         return writer.replaceBatches(productId, plan);
+    }
+
+    /** catalog 의 지금 상품 값. 캐시를 비우고 읽는다. */
+    private Optional<ProductCatalog> liveProduct(UUID productId) {
+        catalogReader.evict(productId);
+        return catalogReader.findProduct(productId);
+    }
+
+    private static BusinessException notOnSale() {
+        return new BusinessException(PreorderErrorCode.CAMPAIGN_NOT_REOPENABLE, Map.of("reason", "NOT_ON_SALE"));
     }
 
     /** 회차 행의 유일 제약은 PK 하나라, 유일 제약 위반이면 동시 생성이다. */
