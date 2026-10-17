@@ -1,8 +1,6 @@
 package com.grandis.nova.preorder.event;
 
 import com.grandis.nova.common.UuidBinary;
-import com.grandis.nova.common.testing.Concurrently;
-import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.cancel.application.CancelStarter;
@@ -10,6 +8,7 @@ import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
+import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.support.AcceptFixtures;
@@ -18,12 +17,17 @@ import com.grandis.nova.preorder.support.ShopFixtures;
 import com.grandis.nova.preorder.syncjob.NewSyncAttempt;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.stubbing.Answer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.test.util.AopTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -33,12 +37,21 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.BDDMockito.willAnswer;
+import static org.mockito.Mockito.mockingDetails;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -67,6 +80,10 @@ class CancelJobGiveUpTest {
 
     @Autowired
     Preorders preorders;
+
+    /** 두 경로가 같은 예약 잠금에서 겹치는지 보려고 잠금 호출만 가로챈다(실제 동작은 그대로). */
+    @MockitoSpyBean
+    PreorderLedger ledger;
 
     @Autowired
     JdbcTemplate jdbcTemplate;
@@ -157,21 +174,43 @@ class CancelJobGiveUpTest {
         assertThat(canceledNotifications()).as("다시 보내도 알림은 그대로").isEqualTo(1);
     }
 
-    /** 둘 다 예약 행을 먼저 잠가 한 줄로 선다. 어느 쪽이 먼저든 CANCELED 는 한 번, 알림은 한 건이다. */
-    @Test
-    void 수동_완료와_늦게_온_외부_취소_성공이_동시에_와도_취소_완료는_한_번이다() throws Exception {
+    /** 먼저 잠근 쪽이 커밋하기 전에 다른 쪽이 같은 예약 잠금을 기다린다. 어느 쪽이 먼저든 CANCELED 는 한 번, 알림은 한 건이다. */
+    @ParameterizedTest(name = "수동 완료가 먼저 잠금={0}")
+    @ValueSource(booleans = {true, false})
+    void 수동_완료와_늦게_온_외부_취소_성공이_동시에_와도_취소_완료는_한_번이다(boolean resolveFirst) throws Exception {
         giveUp(cancelJobId, token, 1);
+        Callable<Integer> resolving = () -> resolve(cancelJobId, "외부 콘솔에서 취소 확인").andReturn().getResponse()
+                .getStatus();
+        Callable<Integer> succeeding = () -> {
+            handler.onExternalJobSucceeded(ShopFixtures.unique(),
+                    ShopFixtures.succeeded(cancelJobId, token, "CANCEL", null));
+            return 0;
+        };
+        CountDownLatch firstLocked = new CountDownLatch(1);
+        CountDownLatch secondLocking = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        holdFirstLock(firstLocked, secondLocking, release);
 
-        List<Outcome<Integer>> outcomes = Concurrently.run(2, i -> i == 0
-                ? () -> resolve(cancelJobId, "외부 콘솔에서 취소 확인").andReturn().getResponse().getStatus()
-                : () -> {
-                    handler.onExternalJobSucceeded(ShopFixtures.unique(),
-                            ShopFixtures.succeeded(cancelJobId, token, "CANCEL", null));
-                    return 0;
-                });
+        Future<Integer> resolved;
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            Future<Integer> first = executor.submit(resolveFirst ? resolving : succeeding);
+            Future<Integer> second;
+            try {
+                assertThat(firstLocked.await(10, TimeUnit.SECONDS)).isTrue();
+                second = executor.submit(resolveFirst ? succeeding : resolving);
+                assertThat(secondLocking.await(10, TimeUnit.SECONDS)).isTrue();
+                await().alias("먼저 잠근 쪽이 끝나기 전에는 다른 쪽도 끝나지 않는다")
+                        .during(Duration.ofMillis(300)).atMost(Duration.ofSeconds(5))
+                        .until(() -> !second.isDone());
+            } finally {
+                release.countDown();
+            }
+            first.get(10, TimeUnit.SECONDS);
+            second.get(10, TimeUnit.SECONDS);
+            resolved = resolveFirst ? first : second;
+        }
 
-        assertThat(outcomes).allMatch(Outcome::succeeded);
-        assertThat(outcomes.getFirst().value()).as("수동 완료는 이기면 200, 지면 409").isIn(200, 409);
+        assertThat(resolved.get()).as("수동 완료는 먼저 잠그면 200, 늦으면 409").isEqualTo(resolveFirst ? 200 : 409);
         assertThat(job(cancelJobId)).containsEntry("status", "SUCCEEDED");
         assertThat(preorderStatus()).isEqualTo(PreorderStatus.CANCELED);
         assertThat(preorders.history(preorderId)).filteredOn(entry -> entry.toStatus() == PreorderStatus.CANCELED)
@@ -277,6 +316,34 @@ class CancelJobGiveUpTest {
 
     private PreorderStatus preorderStatus() {
         return preorders.getById(preorderId).status();
+    }
+
+    /** 예약을 처음 잠근 스레드는 잠근 채 release 까지 멈추고, 다른 스레드는 잠그러 들어갈 때 secondLocking 을 연다. */
+    private void holdFirstLock(CountDownLatch firstLocked, CountDownLatch secondLocking, CountDownLatch release) {
+        PreorderLedger target = AopTestUtils.getUltimateTargetObject(ledger);
+        Answer<?> delegate = mockingDetails(target).getMockCreationSettings().getDefaultAnswer();
+        AtomicReference<Thread> holder = new AtomicReference<>();
+        willAnswer(invocation -> {
+            Thread current = Thread.currentThread();
+            if (holder.compareAndSet(null, current)) {
+                Object locked = delegate.answer(invocation);
+                firstLocked.countDown();
+                awaitQuietly(release);
+                return locked;
+            }
+            if (holder.get() != current) {
+                secondLocking.countDown();
+            }
+            return delegate.answer(invocation);
+        }).given(target).lockStatus(preorderId);
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /** 이 작업으로 보낸 취소 메시지(보낸 순). */
