@@ -1,13 +1,12 @@
 # nova 리뷰 규칙
 
-Qodo 리뷰 에이전트용 지시문이다. 0~2절은 모든 변경에, 3절은 diff 경로에 맞는 절만 적용한다.
+Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 · 3절은 운영 코드(`src/main`)에 적용한다(3절은 diff 경로에 맞는 절만). 시험 코드(`src/test`)에는 2 · 3절 대신 5절을 적용한다. 4 · 6절은 적힌 경로에, 7절은 PR 제목 · 설명에 적용한다.
 "차단급"은 반드시 심각도 High 로 지적한다는 뜻이다. 근거(이 문서 · 코드 위치 · 마이그레이션)를 대지 못하면 지적하지 않는다.
 스키마 정본은 `flyway-project/migrations` 다.
 
 ## 0. 리뷰 태도
 - 한국어로 쓴다. 근거를 먼저 말하고, 확실하지 않으면 질문으로 남긴다.
 - 지적하지 말 것: 포맷 · import 순서 · 줄바꿈 · 이름 취향 · 주석 유무(린터 · 취향의 영역), 테스트가 없다는 사실 자체.
-- 테스트 규칙은 바뀐 시험 파일에만 5절로 본다.
 
 ## 1. 시스템 목표와 소유 경계
 - 오픈 순간 신청이 몰려도 유실 0 · 외부 중복 등록 0 · 모든 예약이 최종 상태에 닿는다.
@@ -18,12 +17,12 @@ Qodo 리뷰 에이전트용 지시문이다. 0~2절은 모든 변경에, 3절은
 | member | customers · refresh_tokens · notifications | 없음 |
 | catalog | categories · products · product_options · product_reviews · promotions · promotion_products · catalog_outbox_events · images | 읽기: preorder_campaigns(opens_at · closes_at · 행 유무) · option_inventories(재고 집계 · 행 유무), `ProductListingQueryRepository` 한 곳 |
 | preorder | preorders · preorder_events · preorder_campaigns · shipment_batches · preorder_outbox_events · preorder_dead_letter_events · preorder_sync_jobs · preorder_sync_attempts · preorder_open_alerts · preorder_open_alert_dispatches | (epic/NV-441 머지 뒤) reconciliation_runs 읽기 · 관리자 실행 요청(REQUESTED) INSERT, reconciliation_findings 읽기 · 조치 칸(action_*) UPDATE |
-| order | orders · order_items · order_events · cart_items · option_inventories · draw_campaigns · draw_entries · order_outbox_events · stock_adjustments · stock_reconcile_runs | 읽기: products · product_options(옵션 소속 · 판매 방식) |
+| order | orders · order_items · order_events · cart_items · option_inventories · draw_campaigns · draw_entries · order_outbox_events · stock_adjustments · stock_reconcile_runs · stock_reconcile_lock | 읽기: products · product_options(옵션 소속 · 판매 방식) |
 | payment | payments · payment_transactions · payment_outbox_events | 없음 |
 | worker · waitingroom | 없음(worker 는 결과를 이벤트로, waitingroom 은 전용 Redis) | 없음 |
 | batch | (epic/NV-441 · NV-583 머지 뒤) reconciliation_runs · reconciliation_findings · image_deletions | 읽기: 전부. 쓰기: images 의 UNUSED 행 삭제(3.5) |
 
-## 2. 전역 규칙 — 적용 경로: `**/*.java`
+## 2. 전역 규칙 — 적용 경로: `**/src/main/**/*.java`
 
 ### 2.1 정확성 · 결과 불명 · 시각 · 금액 · 로그
 - 사용자 요청 경로(@RestController → @Service)에서 외부 HTTP 응답을 기다리면 지적한다. 외부 등록 · 취소는 worker 몫이다. 허용된 동기 호출:
