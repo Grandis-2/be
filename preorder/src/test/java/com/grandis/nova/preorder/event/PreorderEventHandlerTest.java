@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** 이벤트 처리. SQS 없이 메서드를 직접 부른다(계획서 P5-1). 같은 메시지를 두 번 받아도 결과가 같아야 한다. */
 @PreorderIntegrationTest
@@ -209,6 +210,22 @@ class PreorderEventHandlerTest {
         assertThat(outcomes).allMatch(Outcome::succeeded);
         assertThat(paymentAfterCancel() - before).isEqualTo(1);
         assertThat(anomalies()).isEqualTo(1);
+    }
+
+    /** 어느 결제인지 가를 수 없는 메시지다. 예외로 끝내 재시도 뒤 DLQ 로 보낸다 — 삼키면 경보 없이 사라진다. */
+    @Test
+    void 취소가_끝난_예약에_결제_시각_없는_결제_확인이_오면_세지_않고_실패한다() {
+        register();
+        startCancel(EventActor.USER);
+        completeCancel(PreorderOrderSettled.Result.NO_ORDER);
+        double before = paymentAfterCancel();
+
+        assertThatThrownBy(() -> handler.onPaymentConfirmed(new PreorderPaymentConfirmed(token, "o-1", null)))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(row()).containsEntry("status", "CANCELED");
+        assertThat(paymentAfterCancel() - before).isZero();
+        assertThat(anomalies()).isZero();
     }
 
     /** 결제 → 환불로 취소된 예약에 취소 전 결제 확인이 다시 왔다. 마이크로초 아래 자리는 저장 전에 잘라 같은 시각이다. */
