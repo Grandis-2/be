@@ -18,15 +18,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
-import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.ResourceAccessException;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -490,18 +488,47 @@ class AdminProductPreorderApiTest {
         assertThat(closesAtOf(product.productId())).isEqualTo(closesAt.plusSeconds(600));
     }
 
-    /** 재확인에서 catalog 연동 오류가 나도 이미 커밋한 다시 열기를 실패로 답하지 않는다. */
+    /** 재확인을 하지 못하면 판매 중임을 확인하지 못한 회차라 되돌리고 실패로 답한다. 관리자는 다시 시도한다. */
     @Test
-    void 다시_연_뒤_재확인이_연동_오류여도_열린_일정을_돌려준다() throws Exception {
+    void 다시_연_뒤_재확인을_못_하면_되돌리고_503() throws Exception {
         PreorderProduct product = fixtures.openPreorderProduct();
         closeCampaign(product.productId()).andExpect(status().isOk());
+        int events = fixtures.outboxEvents(CAMPAIGN_CHANGED, product.productId());
         given(catalogClient.getProduct(product.productId()))
                 .willReturn(CatalogStubs.preorderProduct(product.productId(), CatalogStubs.activeOption(product.optionId())))
-                .willThrow(HttpClientErrorException.create(HttpStatus.CONFLICT, "conflict", HttpHeaders.EMPTY, null, null));
+                .willThrow(new ResourceAccessException("catalog timeout"));
 
         reopenCampaign(product.productId(), Instant.now().plusSeconds(3600))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.saleStatus").value("OPEN"));
+                .andExpect(status().isServiceUnavailable());
+
+        mockMvc.perform(get("/api/v1/admin/preorders/products/{id}/campaign", product.productId()).with(admin()))
+                .andExpect(jsonPath("$.data.saleStatus").value("CLOSED"));
+        assertThat(fixtures.outboxEvents(CAMPAIGN_CHANGED, product.productId())).as("다시 열기 · 되돌리기")
+                .isEqualTo(events + 2);
+    }
+
+    /** 공개 여부 변경도 일정 번호를 올린다. 그 사이 공개 여부가 바뀌어도 판매 중지를 본 보정은 회차를 닫는다. */
+    @Test
+    void 다시_연_뒤_공개_여부가_바뀌어도_판매_중지면_다시_마감한다() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        closeCampaign(product.productId()).andExpect(status().isOk());
+        CatalogStubs.stubPreorderProduct(catalogClient, product.productId(), CatalogStubs.activeOption(product.optionId()));
+        AtomicInteger calls = new AtomicInteger();
+        willAnswer(invocation -> {
+            if (calls.incrementAndGet() != 2) {
+                return invocation.callRealMethod();
+            }
+            campaigns.applyListing(product.productId(), new ProductListing("Nova 1", ProductStatus.PAUSED, false, 1));
+            return Optional.of(CatalogStubs.product(product.productId(), "PREORDER", "PAUSED",
+                    CatalogStubs.activeOption(product.optionId())).data());
+        }).given(catalogReader).findProduct(product.productId());
+
+        reopenCampaign(product.productId(), Instant.now().plusSeconds(3600))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.details.reason").value("NOT_ON_SALE"));
+
+        mockMvc.perform(get("/api/v1/admin/preorders/products/{id}/campaign", product.productId()).with(admin()))
+                .andExpect(jsonPath("$.data.saleStatus").value("CLOSED"));
     }
 
     @Test

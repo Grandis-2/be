@@ -93,7 +93,8 @@ public class PreorderCampaignAdminService {
      *
      * @param reopenedBy 다시 연 관리자. 회차에는 이력이 없어 로그에만 남긴다
      * @throws BusinessException PRODUCT_NOT_FOUND — 회차 · 상품이 없다, SALE_NOT_OPEN — 오픈 전이다,
-     *                           CAMPAIGN_NOT_REOPENABLE — 아직 접수 중 · 한 번도 열린 적 없음 · 지금 판매 중인 사전예약 상품이 아님
+     *                           CAMPAIGN_NOT_REOPENABLE — 아직 접수 중 · 한 번도 열린 적 없음 · 지금 판매 중인 사전예약 상품이 아님,
+     *                           DEPENDENCY_UNAVAILABLE — catalog 가 응답하지 않는다(다시 열었으면 되돌린다)
      */
     public PreorderCampaign reopenCampaign(UUID productId, Instant closesAt, String reopenedBy) {
         if (!liveProduct(productId).orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND))
@@ -101,18 +102,18 @@ public class PreorderCampaignAdminService {
             throw notOnSale();
         }
         PreorderCampaign reopened = writer.reopen(productId, closesAt, reopenedBy);
-        // 확인과 잠금 사이에 판매 중지(회차 취소)가 먼저 끝났으면 그 마감은 다시 연 회차를 보지 못했다. 커밋 뒤 다시 읽어 되돌린다
+        // 확인과 잠금 사이에 판매 중지(회차 취소)가 먼저 끝났으면 그 마감은 다시 연 회차를 보지 못했다. 커밋 뒤 다시 읽어,
+        // 판매 중이 아니거나 확인하지 못하면 되돌린다 — 판매 중임을 확인한 회차만 열려 있게
         boolean stillOnSale;
         try {
             stillOnSale = liveProduct(productId).filter(ProductCatalog::isOnPreorderSale).isPresent();
         } catch (BusinessException | IllegalStateException e) {
-            // 일시 장애 · 연동 오류 모두. 다시 열기는 이미 커밋됐으므로 실패로 답하지 않는다
-            log.warn("다시 연 뒤 상품 판매 상태를 다시 확인하지 못했다 — 연 채로 둔다 productId={} error={}", productId,
-                    e.getMessage());
-            return reopened;
+            writer.closeReopened(productId, reopened.getClosesAt(), reopenedBy);
+            log.warn("다시 연 뒤 상품 판매 상태를 확인하지 못해 되돌렸다 productId={} error={}", productId, e.getMessage());
+            throw e;
         }
         if (!stillOnSale) {
-            writer.closeReopened(productId, reopened.getScheduleVersion(), reopenedBy);
+            writer.closeReopened(productId, reopened.getClosesAt(), reopenedBy);
             throw notOnSale();
         }
         return reopened;

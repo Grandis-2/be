@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -119,7 +120,8 @@ class PreorderCampaignWriter {
             throw ValidationFailures.of("closesAt", "현재 시각보다 뒤여야 합니다.");
         }
         Instant closedAt = campaign.getClosesAt();
-        campaign.reopen(closesAt);
+        // 저장 정밀도로 맞춰 둔다 — 보정 마감이 이 값으로 "그 사이 바뀌지 않았는가" 를 본다
+        campaign.reopen(closesAt.truncatedTo(ChronoUnit.MICROS));
         changePublisher.publish(campaign, CampaignChange.REOPENED);
         log.info("마감한 접수를 다시 열었다 productId={} reopenedBy={} closedAt={} closesAt={}", productId, reopenedBy,
                 closedAt, closesAt);
@@ -127,18 +129,17 @@ class PreorderCampaignWriter {
     }
 
     /**
-     * 다시 연 회차를 지금 마감한다. 그 뒤 다른 변경(다른 관리자의 마감 · 다시 열기 등)이 있었으면 그 결과를 지키려고 그대로 둔다.
-     *
-     * @param scheduleVersion 다시 열었을 때의 일정 번호
+     * 다시 연 회차를 지금 마감한다. 마감 시각이 다시 열 때의 값과 다르면 그 뒤 다른 관리자가 마감 · 다시 열기를 한 것이라 그대로 둔다.
+     * 일정 번호로 가르지 않는다 — 공개 여부가 바뀌어도 번호가 오른다.
      */
     @Transactional
-    void closeReopened(UUID productId, long scheduleVersion, String closedBy) {
+    void closeReopened(UUID productId, Instant reopenedClosesAt, String closedBy) {
         campaigns.findForUpdate(productId)
-                .filter(campaign -> campaign.getScheduleVersion() == scheduleVersion)
+                .filter(campaign -> campaign.getClosesAt().equals(reopenedClosesAt))
                 .filter(campaign -> campaign.closeNow(clock.instant()))
                 .ifPresent(campaign -> {
                     changePublisher.publish(campaign, CampaignChange.CLOSED);
-                    log.warn("다시 연 뒤 판매 중지가 보여 다시 마감했다 productId={} closedBy={}", productId, closedBy);
+                    log.warn("다시 연 회차를 되돌려 마감했다 productId={} closedBy={}", productId, closedBy);
                 });
     }
 
