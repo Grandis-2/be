@@ -21,9 +21,10 @@ class ImageCleanupStore {
 
     // 드로우 회차는 만들 때 증정품 사진 주소를 복사해 두고 바꾸지 않는다(예정 · 진행 · 마감 모두 화면에 보인다). 주소 전체가 아니라 객체 키로
     // 비교한다 — CDN 도메인이 바뀌어도 옛 주소를 든 회차를 놓치지 않는다. 서버가 만든 키에는 LIKE 와일드카드(% · _)가 없고,
-    // 있더라도 더 많은 회차와 맞아 지우지 않는 쪽으로 틀린다
-    private static final String DRAWN =
-            "EXISTS (SELECT 1 FROM draw_campaigns d WHERE d.image_url_snapshot LIKE CONCAT('%/', i.object_key))";
+    // 있더라도 더 많은 회차와 맞아 지우지 않는 쪽으로 틀린다. 주소 뒤의 쿼리 · 조각(? · #)은 떼고 비교한다 — catalog 는 새로 붙이는 사진
+    // 주소에 쿼리 · 조각을 받지 않지만, 붙어 있어도 같은 객체라 지우지 않는 쪽으로 본다(catalog 의 키 구하기도 URI 경로로 한다)
+    private static final String DRAWN = "EXISTS (SELECT 1 FROM draw_campaigns d"
+            + " WHERE SUBSTRING_INDEX(SUBSTRING_INDEX(d.image_url_snapshot, '#', 1), '?', 1) LIKE CONCAT('%/', i.object_key))";
 
     // (status, updated_at) 인덱스를 탄다. InnoDB 보조 인덱스 끝에 기본 키가 붙어 (updated_at, id) 순서도 인덱스 순서다
     private static final String CANDIDATES = """
@@ -99,6 +100,17 @@ class ImageCleanupStore {
         return jdbc.sql("SELECT COUNT(*) FROM image_deletions").query(Long.class).single();
     }
 
+    /** 삭제 대기 중 before 보다 먼저 넣은 행 수와 그중 가장 오래된 시각. 없으면 0건 · null */
+    StalePending stalePending(Instant before) {
+        return jdbc.sql("SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM image_deletions WHERE created_at < :before")
+                .param("before", utc(before))
+                .query((rs, row) -> {
+                    LocalDateTime oldest = rs.getObject("oldest", LocalDateTime.class);
+                    return new StalePending(rs.getLong("n"), oldest == null ? null : oldest.toInstant(ZoneOffset.UTC));
+                })
+                .single();
+    }
+
     private static Candidate candidate(ResultSet rs, int row) throws SQLException {
         return new Candidate(UuidBinary.fromBytes(rs.getBytes("id")), rs.getString("object_key"),
                 rs.getObject("updated_at", LocalDateTime.class).toInstant(ZoneOffset.UTC), rs.getBoolean("drawn"));
@@ -118,5 +130,9 @@ class ImageCleanupStore {
 
     /** 이어 읽는 자리. id 는 같은 시각의 사진(한 저장이 뗀 여러 장은 updated_at 이 같다) 사이의 순서다 */
     record Position(Instant updatedAt, UUID id) {
+    }
+
+    /** 오래 남은 삭제 대기 */
+    record StalePending(long count, Instant oldest) {
     }
 }

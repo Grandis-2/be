@@ -27,11 +27,17 @@ final class S3ImageObjects implements ImageObjects {
         this.bucket = bucket;
     }
 
-    /** 버킷이 없으면 기동하지 않는다 — 실제 삭제를 켰는데 지울 곳이 없으면 실행마다 실패하는 대신 배포에서 드러난다 */
+    /**
+     * 버킷이 없거나 예시 값(CHANGE_ME, catalog 와 같은 검사)이면 기동하지 않는다 — 실제 삭제를 켰는데 지울 곳이 틀리면 행을 지운 뒤에야
+     * S3 실패로 드러나는 대신 배포에서 드러난다.
+     */
     static S3ImageObjects create(UploadBucketProperties properties) {
         if (properties.bucket() == null || properties.bucket().isBlank()) {
             throw new IllegalArgumentException(
                     "nova.upload.bucket 이 없다 — nova.batch.image-cleanup.dry-run 을 끄려면 사진을 지울 업로드 버킷이 있어야 한다");
+        }
+        if (properties.bucket().startsWith("CHANGE_ME")) {
+            throw new IllegalArgumentException("nova.upload.bucket 이 아직 예시 값이다: " + properties.bucket());
         }
         S3ClientBuilder builder = S3Client.builder()
                 .httpClientBuilder(UrlConnectionHttpClient.builder())

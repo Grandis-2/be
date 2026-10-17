@@ -21,7 +21,10 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
@@ -38,6 +41,7 @@ import org.testcontainers.mysql.MySQLContainer;
         "nova.upload.bucket=" + ImageCleanupTest.BUCKET,
         "nova.upload.region=ap-northeast-2"
 })
+@ExtendWith(OutputCaptureExtension.class)
 class ImageCleanupTest extends BatchIntegrationTest {
 
     static final String BUCKET = "test-uploads";
@@ -108,6 +112,23 @@ class ImageCleanupTest extends BatchIntegrationTest {
         assertThat(exists(drawn)).isTrue();
         assertThat(exists(plain)).isFalse();
         assertThat(S3.deleted()).containsExactly(plain.key());
+    }
+
+    /** catalog 는 새로 붙이는 주소에 쿼리 · 조각을 받지 않지만, 붙어 있어도 같은 객체라 지우지 않는다 */
+    @Test
+    void 드로우_주소에_쿼리나_조각이_붙어도_남긴다() {
+        ImageRow withQuery = data.image("products", "UNUSED", OLD);
+        data.draw("폰", "https://cdn.example.com/" + withQuery.key() + "?v=2");
+        ImageRow withFragment = data.image("products", "UNUSED", OLD);
+        data.draw("폰", "https://cdn.example.com/" + withFragment.key() + "#top");
+
+        assertThat(store.deleteIfStillUnused(withQuery.id(), CUTOFF)).isFalse();
+        assertThat(store.deleteIfStillUnused(withFragment.id(), CUTOFF)).isFalse();
+        service.run();
+
+        assertThat(exists(withQuery)).isTrue();
+        assertThat(exists(withFragment)).isTrue();
+        assertThat(S3.requests()).isEmpty();
     }
 
     /** 드로우가 가리키는 사진 3장이 오래된 쪽에서 청크(2건)를 채운다 — 처음부터 다시 고르면 뒤의 사진에 닿지 못하고 끝나지 않는다 */
@@ -187,6 +208,29 @@ class ImageCleanupTest extends BatchIntegrationTest {
 
         assertThat(S3.deleted()).containsExactly(key);
         assertThat(pending()).isZero();
+    }
+
+    /** 하루 한 번 돌므로 3일이면 세 번 연속 실패다 — 한 번 실패(경고)와 며칠째 막힌 정리(오류)를 로그로 가른다 */
+    @Test
+    void 삭제_대기가_3일_넘게_남으면_오류_로그를_남긴다(CapturedOutput output) {
+        String stuck = "products/" + UUID.randomUUID() + ".jpg";
+        data.pendingDeletion(stuck, NOW.minus(Duration.ofDays(4)));
+        S3.failDelete(stuck, 500, S3ImageObjects.MAX_ATTEMPTS);
+
+        service.run();
+
+        assertThat(output).contains("사진 정리가 막혀 있다 — 삭제 대기 1건이 " + NOW.minus(Duration.ofDays(4)) + " 부터 남아 있다");
+    }
+
+    @Test
+    void 삭제_대기가_3일_안이면_오류_로그를_남기지_않는다(CapturedOutput output) {
+        String recent = "products/" + UUID.randomUUID() + ".jpg";
+        data.pendingDeletion(recent, NOW.minus(Duration.ofDays(2)));
+        S3.failDelete(recent, 500, S3ImageObjects.MAX_ATTEMPTS);
+
+        service.run();
+
+        assertThat(output).contains("S3 삭제 실패로 멈춤").doesNotContain("사진 정리가 막혀 있다");
     }
 
     /** 고를 때 본 조건을 지울 때 다시 건다 — 그 사이 catalog 가 붙였거나 다시 뗐거나 드로우가 가리키게 된 사진은 0행이다 */

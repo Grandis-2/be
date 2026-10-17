@@ -56,6 +56,15 @@ class ImageCleanupSettingsTest {
                         .hasMessage("nova.upload.bucket 이 없다 — nova.batch.image-cleanup.dry-run 을 끄려면 사진을 지울 업로드 버킷이 있어야 한다"));
     }
 
+    /** 예시 설정을 그대로 복사해 켜면 행을 지운 뒤에야 S3 실패로 드러난다 — catalog 와 같은 검사로 기동에서 막는다 */
+    @Test
+    void dry_run_을_끄면서_업로드_버킷이_예시_값이면_뜨지_않는다() {
+        runner.withPropertyValues("nova.batch.image-cleanup.dry-run=false", "nova.upload.bucket=CHANGE_ME",
+                        "nova.upload.region=ap-northeast-2")
+                .run(context -> assertThat(context).hasFailed().getFailure().rootCause()
+                        .hasMessage("nova.upload.bucket 이 아직 예시 값이다: CHANGE_ME"));
+    }
+
     @Test
     void dry_run_을_끄고_업로드_버킷이_있으면_S3_로_지운다() {
         runner.withPropertyValues("nova.batch.image-cleanup.dry-run=false", "nova.upload.bucket=uploads",
