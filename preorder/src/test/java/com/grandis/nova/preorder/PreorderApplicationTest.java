@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 
@@ -20,10 +21,25 @@ class PreorderApplicationTest {
     @Autowired
     ApplicationContext context;
 
+    @Autowired
+    TransactionTemplate transactionTemplate;
+
     @Test
     void 컨텍스트가_뜨고_세션_격리_수준이_READ_COMMITTED() {
         assertThat(jdbcTemplate.queryForObject("SELECT @@transaction_isolation", String.class))
                 .isEqualTo("READ-COMMITTED");
+    }
+
+    /** 코드 기본값의 드라이버 옵션이 연결까지 닿았다 — 읽기 전용 트랜잭션을 서버에 알리지 않는다. */
+    @Test
+    void 읽기_전용_트랜잭션을_서버에_알리지_않는다() {
+        TransactionTemplate readOnly = new TransactionTemplate(transactionTemplate.getTransactionManager());
+        readOnly.setReadOnly(true);
+
+        Integer serverReadOnly = readOnly.execute(
+                status -> jdbcTemplate.queryForObject("SELECT @@session.transaction_read_only", Integer.class));
+
+        assertThat(serverReadOnly).isZero();
     }
 
     @Test
