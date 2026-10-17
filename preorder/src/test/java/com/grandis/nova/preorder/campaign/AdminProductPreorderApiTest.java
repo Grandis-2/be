@@ -33,6 +33,7 @@ import static com.grandis.nova.preorder.support.AccessTokens.customer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
+import static org.mockito.BDDMockito.given;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -337,6 +338,114 @@ class AdminProductPreorderApiTest {
     }
 
     @Test
+    void 마감한_회차를_다시_열면_접수가_순번을_이어_받고_기존_예약은_그대로다() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        AcceptFixtures accepts = new AcceptFixtures(acceptService, fixtures, catalogClient);
+        AcceptResult first = accepts.accept(fixtures.customer(), product);
+        closeCampaign(product.productId()).andExpect(status().isOk());
+        Instant closesAt = Instant.now().plusSeconds(3600);
+
+        reopenCampaign(product.productId(), closesAt)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.saleStatus").value("OPEN"))
+                .andExpect(jsonPath("$.data.issuedCount").value(1));
+
+        AcceptResult second = accepts.accept(fixtures.customer(), product);
+        assertThat(second.preorder().queuePosition()).isEqualTo(first.preorder().queuePosition() + 1);
+        mockMvc.perform(get("/api/v1/admin/preorders/" + AcceptFixtures.tokenOf(first)).with(admin()))
+                .andExpect(jsonPath("$.data.status").value("PENDING_SYNC"));
+    }
+
+    @Test
+    void 오픈_전이거나_아직_접수_중이면_409_마감_시각이_지금_이전이면_400_회차가_없으면_404() throws Exception {
+        Instant now = Instant.now();
+        PreorderProduct notOpened = fixtures.preorderProduct(now.plusSeconds(3600), now.plusSeconds(7200));
+        PreorderProduct open = fixtures.openPreorderProduct();
+        PreorderProduct closed = fixtures.preorderProduct(now.minusSeconds(7200), now.minusSeconds(3600));
+        for (PreorderProduct product : new PreorderProduct[]{notOpened, open, closed}) {
+            CatalogStubs.stubPreorderProduct(catalogClient, product.productId(), CatalogStubs.activeOption(product.optionId()));
+        }
+        UUID missing = UUID.randomUUID();
+        CatalogStubs.stubPreorderProduct(catalogClient, missing, CatalogStubs.activeOption(UUID.randomUUID()));
+
+        reopenCampaign(notOpened.productId(), now.plusSeconds(10_800))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("SALE_NOT_OPEN"));
+        reopenCampaign(open.productId(), now.plusSeconds(10_800))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("CAMPAIGN_NOT_REOPENABLE"))
+                .andExpect(jsonPath("$.error.details.reason").value("ACCEPTING"));
+        reopenCampaign(closed.productId(), now.minusSeconds(60))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.details.violations[0].field").value("closesAt"));
+        reopenCampaign(missing, now.plusSeconds(10_800))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
+        assertThat(fixtures.outboxEvents(CAMPAIGN_CHANGED, closed.productId())).as("거절하면 이벤트가 없다").isZero();
+    }
+
+    /** 회차 취소(판매 중지)로 마감한 회차는 열지 않는다. 캐시에 판매 중으로 남아 있어도 catalog 의 지금 값으로 가른다. */
+    @Test
+    void 지금_판매_중인_사전예약_상품이_아니면_다시_열_수_없다() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        AcceptFixtures accepts = new AcceptFixtures(acceptService, fixtures, catalogClient);
+        accepts.accept(fixtures.customer(), product);
+        closeCampaign(product.productId()).andExpect(status().isOk());
+        CatalogStubs.stubProduct(catalogClient, product.productId(), "PREORDER", "PAUSED",
+                CatalogStubs.activeOption(product.optionId()));
+
+        reopenCampaign(product.productId(), Instant.now().plusSeconds(3600))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("CAMPAIGN_NOT_REOPENABLE"))
+                .andExpect(jsonPath("$.error.details.reason").value("NOT_ON_SALE"));
+        CatalogStubs.stubProduct(catalogClient, product.productId(), "IN_STOCK", "ACTIVE",
+                CatalogStubs.activeOption(product.optionId()));
+        reopenCampaign(product.productId(), Instant.now().plusSeconds(3600))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.details.reason").value("NOT_ON_SALE"));
+        mockMvc.perform(get("/api/v1/admin/preorders/products/{id}/campaign", product.productId()).with(admin()))
+                .andExpect(jsonPath("$.data.saleStatus").value("CLOSED"));
+    }
+
+    /** 확인한 뒤 잠그기 전에 판매 중지가 끝까지 처리됐다. 커밋 뒤 다시 읽어 판매 중지면 다시 마감한다. */
+    @Test
+    void 다시_연_뒤_판매_중지가_보이면_다시_마감하고_409() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        closeCampaign(product.productId()).andExpect(status().isOk());
+        given(catalogClient.getProduct(product.productId())).willReturn(
+                CatalogStubs.preorderProduct(product.productId(), CatalogStubs.activeOption(product.optionId())),
+                CatalogStubs.product(product.productId(), "PREORDER", "PAUSED",
+                        CatalogStubs.activeOption(product.optionId())));
+        int events = fixtures.outboxEvents(CAMPAIGN_CHANGED, product.productId());
+
+        reopenCampaign(product.productId(), Instant.now().plusSeconds(3600))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.details.reason").value("NOT_ON_SALE"));
+
+        mockMvc.perform(get("/api/v1/admin/preorders/products/{id}/campaign", product.productId()).with(admin()))
+                .andExpect(jsonPath("$.data.saleStatus").value("CLOSED"));
+        assertThat(fixtures.outboxEvents(CAMPAIGN_CHANGED, product.productId())).as("다시 열기 · 다시 마감")
+                .isEqualTo(events + 2);
+    }
+
+    @Test
+    void 다시_열기는_관리자만_한다() throws Exception {
+        PreorderProduct product = fixtures.preorderProduct(Instant.now().minusSeconds(7200),
+                Instant.now().minusSeconds(3600));
+        String path = "/api/v1/admin/preorders/products/{id}/campaign/reopen";
+        String body = "{\"closesAt\":\"%s\"}".formatted(Instant.now().plusSeconds(3600));
+
+        mockMvc.perform(post(path, product.productId()).with(customer(UUID.randomUUID()))
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post(path, product.productId()).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post(path, product.productId()).with(admin()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void 조기_마감은_관리자만_한다() throws Exception {
         PreorderProduct product = fixtures.openPreorderProduct();
         String path = "/api/v1/admin/preorders/products/{id}/campaign/close";
@@ -373,6 +482,13 @@ class AdminProductPreorderApiTest {
 
     private ResultActions closeCampaign(UUID productId) throws Exception {
         return mockMvc.perform(post("/api/v1/admin/preorders/products/{id}/campaign/close", productId).with(admin()));
+    }
+
+    private ResultActions reopenCampaign(UUID productId, Instant closesAt) throws Exception {
+        return mockMvc.perform(post("/api/v1/admin/preorders/products/{id}/campaign/reopen", productId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"closesAt\":\"%s\"}".formatted(closesAt))
+                .with(admin()));
     }
 
     /** 응답으로 본 지금의 마감 시각. */

@@ -18,6 +18,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -78,7 +79,7 @@ class PreorderCampaignWriter {
 
     /**
      * 접수 중인 회차를 지금 마감한다. 기존 예약은 그대로이고 새 접수만 막힌다 — 접수도 이 행을 잠그므로 마감 뒤의 접수는 거절된다.
-     * 이미 마감이면 그대로 돌려준다(이벤트 없음). 오픈 뒤에는 일정을 바꿀 수 없어 다시 열 수 없다.
+     * 이미 마감이면 그대로 돌려준다(이벤트 없음). 다시 여는 것은 {@link #reopen} 이다.
      */
     @Transactional
     PreorderCampaign closeEarly(UUID productId, String closedBy) {
@@ -92,6 +93,32 @@ class PreorderCampaignWriter {
             changePublisher.publish(campaign, CampaignChange.CLOSED);
             log.info("접수 조기 마감 productId={} closedBy={} closesAt={}", productId, closedBy, now);
         }
+        return campaign;
+    }
+
+    /**
+     * 마감된 회차를 새 마감 시각까지 다시 연다. 오픈 시각 · 차수 · 발급한 순번은 그대로라 새 접수는 순번을 이어 받는다.
+     * 접수 · 마감도 이 행을 잠그므로 판정과 경합하지 않는다.
+     */
+    @Transactional
+    PreorderCampaign reopen(UUID productId, Instant closesAt, String reopenedBy) {
+        PreorderCampaign campaign = campaigns.findForUpdate(productId)
+                .orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND));
+        Instant now = clock.instant();
+        if (!campaign.isOpened(now)) {
+            throw new BusinessException(PreorderErrorCode.SALE_NOT_OPEN);
+        }
+        if (campaign.isAccepting(now)) {
+            throw new BusinessException(PreorderErrorCode.CAMPAIGN_NOT_REOPENABLE, Map.of("reason", "ACCEPTING"));
+        }
+        if (!closesAt.isAfter(now)) {
+            throw ValidationFailures.of("closesAt", "현재 시각보다 뒤여야 합니다.");
+        }
+        Instant closedAt = campaign.getClosesAt();
+        campaign.reopen(closesAt);
+        changePublisher.publish(campaign, CampaignChange.REOPENED);
+        log.info("마감한 접수를 다시 열었다 productId={} reopenedBy={} closedAt={} closesAt={}", productId, reopenedBy,
+                closedAt, closesAt);
         return campaign;
     }
 

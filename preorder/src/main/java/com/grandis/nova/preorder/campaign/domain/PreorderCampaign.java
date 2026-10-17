@@ -171,6 +171,12 @@ public class PreorderCampaign {
         return true;
     }
 
+    /** 마감된 회차를 새 마감 시각까지 다시 연다(일정 번호가 오른다). 판정은 호출하는 쪽이 잠근 행에서 한다. */
+    public void reopen(Instant closesAt) {
+        this.closesAt = closesAt;
+        this.scheduleVersion++;
+    }
+
     /** 오픈 시각 이상, 마감 시각 미만일 때 접수를 받는다. */
     public boolean isAccepting(Instant now) {
         return !now.isBefore(opensAt) && now.isBefore(closesAt);
