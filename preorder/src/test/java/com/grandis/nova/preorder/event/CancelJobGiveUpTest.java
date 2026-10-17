@@ -1,6 +1,8 @@
 package com.grandis.nova.preorder.event;
 
 import com.grandis.nova.common.UuidBinary;
+import com.grandis.nova.common.testing.Concurrently;
+import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.cancel.application.CancelStarter;
@@ -153,6 +155,28 @@ class CancelJobGiveUpTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("SYNC_JOB_NOT_RESOLVABLE"));
         assertThat(canceledNotifications()).as("다시 보내도 알림은 그대로").isEqualTo(1);
+    }
+
+    /** 둘 다 예약 행을 먼저 잠가 한 줄로 선다. 어느 쪽이 먼저든 CANCELED 는 한 번, 알림은 한 건이다. */
+    @Test
+    void 수동_완료와_늦게_온_외부_취소_성공이_동시에_와도_취소_완료는_한_번이다() throws Exception {
+        giveUp(cancelJobId, token, 1);
+
+        List<Outcome<Integer>> outcomes = Concurrently.run(2, i -> i == 0
+                ? () -> resolve(cancelJobId, "외부 콘솔에서 취소 확인").andReturn().getResponse().getStatus()
+                : () -> {
+                    handler.onExternalJobSucceeded(ShopFixtures.unique(),
+                            ShopFixtures.succeeded(cancelJobId, token, "CANCEL", null));
+                    return 0;
+                });
+
+        assertThat(outcomes).allMatch(Outcome::succeeded);
+        assertThat(outcomes.getFirst().value()).as("수동 완료는 이기면 200, 지면 409").isIn(200, 409);
+        assertThat(job(cancelJobId)).containsEntry("status", "SUCCEEDED");
+        assertThat(preorderStatus()).isEqualTo(PreorderStatus.CANCELED);
+        assertThat(preorders.history(preorderId)).filteredOn(entry -> entry.toStatus() == PreorderStatus.CANCELED)
+                .hasSize(1);
+        assertThat(canceledNotifications()).isEqualTo(1);
     }
 
     @Test
