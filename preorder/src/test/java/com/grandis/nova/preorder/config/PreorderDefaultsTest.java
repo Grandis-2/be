@@ -27,6 +27,10 @@ class PreorderDefaultsTest {
                 .isEqualTo("false");
         assertThat(environment.getProperty("spring.datasource.hikari.data-source-properties.useLocalSessionState"))
                 .isEqualTo("true");
+        assertThat(environment.getProperty("spring.datasource.hikari.data-source-properties.useLocalTransactionState"))
+                .isEqualTo("true");
+        assertThat(environment.getProperty("spring.datasource.hikari.data-source-properties.cacheServerConfiguration"))
+                .isEqualTo("true");
         assertThat(environment.getProperty("auth.revocation-check.fail-closed-paths"))
                 .isEqualTo("/api/v1/admin/**,/api/v1/preorders/*/cancel");
         assertThat(environment.getProperty("nova.outbox.metrics-prefix")).isEqualTo("preorder.outbox");
