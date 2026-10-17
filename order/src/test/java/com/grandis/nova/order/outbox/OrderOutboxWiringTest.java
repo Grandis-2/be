@@ -136,6 +136,31 @@ class OrderOutboxWiringTest {
         assertThat(body.get("payload").get("preorderId").asString()).isEqualTo(token);
     }
 
+    /**
+     * 판매 준비는 catalog-events 로, catalog 가 보내는 봉투(contracts/catalog-events.md "봉투")와 같은 칸으로 간다.
+     * payload 는 빈 객체다 — 칸이 없는 record 라도 직렬화가 실패하지 않는다.
+     */
+    @Test
+    void 판매_준비는_catalog_events_로_catalog_와_같은_봉투에_빈_payload_로_간다() {
+        UUID productId = UUID.randomUUID();
+        Long id = transactionTemplate.execute(status -> writer.append(new InStockProductReady(productId)));
+        String eventId = eventIdOf(id);
+
+        await().atMost(TIMEOUT).until(() -> sentOf(eventId).isPresent());
+
+        OutboundMessage message = sentOf(eventId).orElseThrow();
+        assertThat(message.destination()).isEqualTo("catalog-events");
+        JsonNode body = jsonMapper.readTree(message.body());
+        assertThat(body.propertyNames())
+                .containsExactlyInAnyOrder("eventId", "eventType", "aggregateType", "aggregateId", "occurredAt", "payload");
+        assertThat(body.get("eventId").asString()).isEqualTo(eventId);
+        assertThat(body.get("eventType").asString()).isEqualTo("IN_STOCK_PRODUCT_READY");
+        assertThat(body.get("aggregateType").asString()).isEqualTo("PRODUCT");
+        assertThat(body.get("aggregateId").asString()).isEqualTo(productId.toString());
+        assertThat(body.get("payload").isObject()).isTrue();
+        assertThat(body.get("payload").isEmpty()).isTrue();
+    }
+
     /** 커밋 직후 발행을 놓친 행(만든 지 2분)을 order 의 릴레이가 전용 실행기에서 집어 보낸다. */
     @Test
     void 릴레이가_order_아웃박스의_오래된_미발행_행을_집어_보낸다() {
