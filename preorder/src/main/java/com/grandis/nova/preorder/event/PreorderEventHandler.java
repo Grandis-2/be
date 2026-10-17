@@ -9,20 +9,25 @@ import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
+import com.grandis.nova.preorder.preorder.PreorderTransition;
 import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.syncjob.NewSyncAttempt;
 import com.grandis.nova.preorder.syncjob.SyncJobSnapshot;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 import com.grandis.nova.preorder.syncjob.SyncJobType;
 import com.grandis.nova.preorder.syncjob.SyncJobs;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -40,6 +45,7 @@ public class PreorderEventHandler {
     private static final Logger log = LoggerFactory.getLogger(PreorderEventHandler.class);
 
     static final String FAILED_METRIC = "preorder.sync.failed";
+    static final String PAYMENT_AFTER_CANCEL_METRIC = "preorder.payment.after_cancel";
 
     private static final String REJECTED_BY_ORDER = "ORDER_REJECTED";
 
@@ -61,6 +67,7 @@ public class PreorderEventHandler {
     private final OutboxWriter outboxWriter;
     private final JsonMapper jsonMapper;
     private final MeterRegistry meterRegistry;
+    private final Counter paymentAfterCancel;
     private final Clock clock;
 
     public PreorderEventHandler(Preorders preorders,
@@ -72,6 +79,7 @@ public class PreorderEventHandler {
         this.outboxWriter = outboxWriter;
         this.jsonMapper = jsonMapper;
         this.meterRegistry = meterRegistry;
+        this.paymentAfterCancel = meterRegistry.counter(PAYMENT_AFTER_CANCEL_METRIC);
         this.clock = clock;
     }
 
@@ -217,10 +225,39 @@ public class PreorderEventHandler {
                 new PreorderFact.PaymentStarted(message.startedAt()));
     }
 
-    /** 결제 확인 → 예약 확정. 취소 중이면 시각만 남겨 거절됐을 때 확정으로 돌아갈 근거로 둔다. */
+    /**
+     * 결제 확인 → 예약 확정. 취소 중이면 시각만 남겨 거절됐을 때 확정으로 돌아갈 근거로 둔다.
+     * 취소가 끝난 예약에 남긴 결제 시각이 없거나 다른 결제 확인이 오면 order 가 취소한 주문을 승인한 것이다 — 상태는 그대로 두고
+     * 이상 결제로 남겨 경보로 드러낸다. 같은 결제는 다시 · 겹쳐 와도 처음 남긴 행이 커밋될 때만 센다.
+     * 결제 확인이 큐에서 늦어 환불 · 외부 취소 뒤에 처음 닿은 경우도 여기에 든다.
+     */
     @Transactional
     public void onPaymentConfirmed(PreorderPaymentConfirmed message) {
-        ledger.fire(requirePreorder(message.preorderId()).id(), new PreorderFact.PaymentConfirmed(message.paidAt()));
+        UUID preorderId = requirePreorder(message.preorderId()).id();
+        PreorderFact.PaymentConfirmed paid = new PreorderFact.PaymentConfirmed(message.paidAt());
+        PreorderTransition transition = ledger.fire(preorderId, paid);
+        if (transition.applied() || transition.status() != PreorderStatus.CANCELED
+                || isRecordedPayment(preorderId, paid.paidAt())) {
+            return;
+        }
+        if (!ledger.recordPaymentAfterCancel(preorderId, message.orderId(), paid.paidAt())) {
+            log.info("이미 남긴 이상 결제를 다시 받았다 preorderId={} paidAt={}", message.preorderId(), paid.paidAt());
+            return;
+        }
+        // 이상 결제 행이 커밋된 뒤에만 알린다 — 롤백되면 재수신이 다시 남기고 그때 센다
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                paymentAfterCancel.increment();
+                log.error("취소가 끝난 예약에 결제 확인이 왔다 — order 에서 환불 여부를 확인한다 preorderId={} orderId={} paidAt={}",
+                        message.preorderId(), message.orderId(), message.paidAt());
+            }
+        });
+    }
+
+    /** 이미 남긴 결제 시각과 같은가. 같으면 취소 전에 반영한 결제 확인이 다시 온 것이다. 둘 다 저장 정밀도로 맞춘 값이다. */
+    private boolean isRecordedPayment(UUID preorderId, Instant paidAt) {
+        return paidAt != null && preorders.findReservedAt(preorderId).filter(paidAt::equals).isPresent();
     }
 
     /**
