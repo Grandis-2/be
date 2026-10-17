@@ -7,10 +7,10 @@ import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.campaign.application.CampaignChange;
 import com.grandis.nova.preorder.campaign.application.PreorderCampaignChanged;
 import com.grandis.nova.preorder.cancel.application.PreorderCancelRequested;
-import com.grandis.nova.preorder.event.CancelJobReady;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
+import com.grandis.nova.preorder.syncjob.CancelJobReady;
 import com.grandis.nova.preorder.syncjob.RegisterJobReady;
 import com.grandis.nova.preorder.syncjob.SyncActor;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -184,16 +184,25 @@ class PreorderOutboxWiringTest {
     /** 작업 종류(jobType)는 record 칸이 아니라 이벤트가 정한 고정값이다. */
     @Test
     void 취소_작업은_preorder_cancel_로_작업_종류_CANCEL_로_보낸다() {
-        String eventId = append(new CancelJobReady(aggregateId, "9f1c2d3e", REQUEST));
+        String eventId = append(new CancelJobReady(aggregateId, "9f1c2d3e", REQUEST, SyncActor.SYSTEM, 1));
 
         OutboundMessage message = sentFor(eventId);
 
         assertThat(message.destination()).isEqualTo("preorder-cancel");
         assertThat(jsonMapper.readTree(message.body()).get("payload")).isEqualTo(json(
                 "{\"syncJobId\":\"" + aggregateId + "\",\"preorderId\":\"9f1c2d3e\",\"request\":" + REQUEST
-                        + ",\"jobType\":\"CANCEL\"}"));
+                        + ",\"actor\":\"SYSTEM\",\"run\":1,\"jobType\":\"CANCEL\"}"));
         assertThat(message.attributes())
                 .isEqualTo(Map.of("attempt", "1", "generation", "1", "run", "1", "actor", "SYSTEM"));
+    }
+
+    /** 재처리한 취소는 run 을 올려 보낸다 — 결과가 지난 실행의 것으로 버려지지 않게 worker 가 그대로 돌려준다. */
+    @Test
+    void 재처리한_취소_작업은_실행_회차와_주체를_속성으로_싣는다() {
+        String eventId = append(new CancelJobReady(aggregateId, "9f1c2d3e", REQUEST, SyncActor.ADMIN, 2));
+
+        assertThat(sentFor(eventId).attributes())
+                .isEqualTo(Map.of("attempt", "1", "generation", "1", "run", "2", "actor", "ADMIN"));
     }
 
     /** 대기열은 payload 의 일정을 그대로 믿는다 — 시각 형식도 계약이다. */

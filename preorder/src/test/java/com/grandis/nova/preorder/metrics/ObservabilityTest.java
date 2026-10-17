@@ -22,6 +22,7 @@ import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import com.grandis.nova.preorder.syncjob.RegisterJobReady;
+import com.grandis.nova.preorder.syncjob.SyncJobs;
 import com.grandis.nova.preorder.syncjob.SyncActor;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
@@ -91,6 +92,9 @@ class ObservabilityTest {
 
     @Autowired
     OpenAlertBacklog openAlertBacklog;
+
+    @Autowired
+    SyncJobs syncJobs;
 
     @Autowired
     TransactionTemplate transactionTemplate;
@@ -194,9 +198,24 @@ class ObservabilityTest {
         assertThat(campaigns.countAccepting(now)).as("오픈 전 · 마감 · 비공개 · 판매 중지는 빠진다").isEqualTo(expected);
         // 기대값과 같은 시각으로 세도록 시계를 고정한 인스턴스로 갱신한다
         SimpleMeterRegistry gauges = new SimpleMeterRegistry();
-        new StateGauges(preorders, deadLetterBacklog, openAlertBacklog, campaigns, gauges,
+        new StateGauges(preorders, deadLetterBacklog, openAlertBacklog, campaigns, syncJobs, gauges,
                 Clock.fixed(now, ZoneOffset.UTC)).refresh();
         assertThat(gauges.get(StateGauges.ACCEPTING_CAMPAIGNS_METRIC).gauge().value()).isEqualTo(expected);
+    }
+
+    @Test
+    void 포기한_외부_작업을_종류별로_센다() {
+        SimpleMeterRegistry gauges = new SimpleMeterRegistry();
+        StateGauges counting = new StateGauges(preorders, deadLetterBacklog, openAlertBacklog, campaigns, syncJobs,
+                gauges, Clock.systemUTC());
+        counting.refresh();
+        double before = deadLetterJobs(gauges, "REGISTER");
+
+        fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
+        counting.refresh();
+
+        assertThat(deadLetterJobs(gauges, "REGISTER")).isEqualTo(before + 1);
+        assertThat(deadLetterJobs(gauges, "CANCEL")).as("기동 때부터 종류마다 있다").isNotNegative();
     }
 
     @Test
@@ -344,5 +363,9 @@ class ObservabilityTest {
     private double gauge(String name, String tag, String value) {
         Gauge gauge = registry.get(name).tag(tag, value).gauge();
         return gauge.value();
+    }
+
+    private static double deadLetterJobs(SimpleMeterRegistry gauges, String jobType) {
+        return gauges.get(StateGauges.DEAD_LETTER_JOBS_METRIC).tag("jobType", jobType).gauge().value();
     }
 }

@@ -28,6 +28,7 @@ public enum PreorderErrorCode implements ErrorCode {
     /** catalog 에서 판매 중지한 상품. 접수는 이 경우를 404 로 숨기지만, 상세 화면에 판매 중지로 보이는 상품의 오픈 알림 신청은 이유를 알린다. */
     PRODUCT_PAUSED(409, "판매가 중지된 상품입니다."),
     SYNC_JOB_NOT_REPROCESSABLE(409, "재처리할 수 없는 작업입니다."),
+    SYNC_JOB_NOT_RESOLVABLE(409, "수동으로 끝낼 수 없는 작업입니다."),
     DEAD_LETTER_NOT_REDRIVABLE(409, "되돌릴 수 없는 메시지입니다."),
     DEAD_LETTER_NOT_DISCARDABLE(409, "버릴 수 없는 메시지입니다."),
     PREORDER_FIELD_IMMUTABLE(409, "내부 메모 외에는 바꿀 수 없습니다."),

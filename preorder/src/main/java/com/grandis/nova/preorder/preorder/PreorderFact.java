@@ -113,22 +113,15 @@ public sealed interface PreorderFact {
         }
     }
 
-    /** 외부 취소와 (있으면) 주문 취소가 모두 끝났다. */
-    record CancelCompleted() implements PreorderFact {
+    /**
+     * 외부 취소와 (있으면) 주문 취소가 모두 끝났다. worker 의 외부 취소 성공이면 SYSTEM, 포기한 취소를 관리자가 외부에서 확인하고
+     * 끝냈으면 ADMIN 과 그 사유다.
+     */
+    record CancelCompleted(EventActor actor, String reason) implements PreorderFact {
 
         @Override
         public PreorderTrigger trigger() {
             return PreorderTrigger.CANCEL_COMPLETED;
-        }
-
-        @Override
-        public EventActor actor() {
-            return EventActor.SYSTEM;
-        }
-
-        @Override
-        public String reason() {
-            return null;
         }
     }
 }
