@@ -89,7 +89,7 @@ class PreorderLedgerTest {
     void 지금_상태에서_의미_없는_사건이면_아무것도_바꾸지_않는다() {
         UUID id = ledger.accept(draft(customerId), EventActor.USER, null).id();
 
-        PreorderTransition result = ledger.fire(id, new CancelCompleted());
+        PreorderTransition result = ledger.fire(id, new CancelCompleted(EventActor.SYSTEM, null));
 
         assertThat(result).isEqualTo(new PreorderTransition(false, PENDING_SYNC));
         assertThat(row(id)).containsEntry("status", "PENDING_SYNC").containsEntry("event_sequence", 1L);
@@ -210,7 +210,7 @@ class PreorderLedgerTest {
     void 취소가_끝나면_활성_표식이_사라져_같은_모델을_다시_신청할_수_있다() {
         UUID id = ledger.accept(draft(customerId), EventActor.USER, null).id();
         ledger.fire(id, new CancelRequested(EventActor.USER, null));
-        ledger.fire(id, new CancelCompleted());
+        ledger.fire(id, new CancelCompleted(EventActor.SYSTEM, null));
 
         PreorderSnapshot again = ledger.accept(draft(customerId), EventActor.USER, null);
 

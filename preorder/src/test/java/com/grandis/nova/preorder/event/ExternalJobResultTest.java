@@ -270,9 +270,9 @@ class ExternalJobResultTest {
         assertThat(jobStatus()).isEqualTo("SUCCEEDED");
     }
 
-    /** 취소 작업은 포기 상태가 없다(DB CHECK). 외부에 예약이 남으므로 지표와 로그로 알린다. */
+    /** 외부에 예약이 남았을 수 있어 예약은 취소 중에 둔다. 관리자 재처리 · 수동 완료를 기다린다. */
     @Test
-    void 취소_작업의_포기는_작업을_바꾸지_않고_동시에_두_번_받아도_지표는_한_번만_센다() throws InterruptedException {
+    void 취소_작업의_포기는_작업을_DEAD_LETTER_로_두고_동시에_두_번_받아도_지표는_한_번만_센다() throws InterruptedException {
         handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(jobId, token, "REGISTER", external()));
         cancelStarter.start(preorders.findById(preorderId).orElseThrow(), EventActor.USER, null, CancelReason.USER);
         handler.onOrderSettled(new PreorderOrderSettled(token, PreorderOrderSettled.Result.NO_ORDER, null,
@@ -294,7 +294,7 @@ class ExternalJobResultTest {
         assertThat(outcomes).allSatisfy(outcome -> assertThat(outcome.error()).isNull());
 
         assertThat(jdbcTemplate.queryForObject("SELECT status FROM preorder_sync_jobs WHERE id = ?", String.class,
-                (Object) UuidBinary.toBytes(cancelJobId))).isEqualTo("PENDING");
+                (Object) UuidBinary.toBytes(cancelJobId))).isEqualTo("DEAD_LETTER");
         assertThat(preorderStatus()).isEqualTo("CANCELING");
         assertThat(failedCount("CANCEL", reason)).isEqualTo(1);
     }

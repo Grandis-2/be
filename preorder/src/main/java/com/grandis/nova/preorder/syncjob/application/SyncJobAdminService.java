@@ -88,15 +88,15 @@ public class SyncJobAdminService {
 
     /**
      * 대상을 골라 바로 돌려주고, 이 인스턴스가 초당 ratePerSecond 건씩 재처리 요청을 기록한다(한 번에 최대 MAX_BATCH_SIZE).
-     * syncJobIds 를 비우면 DEAD_LETTER 인 REGISTER 를 만든 순으로. 남은 것은 다시 요청하면 이어진다.
+     * syncJobIds 를 비우면 DEAD_LETTER 인 jobType 작업을 만든 순으로. 남은 것은 다시 요청하면 이어진다.
      * 재처리 조건 밖이거나 없는 작업은 건너뛴 수로 세고, errorCodeFilter 에 맞지 않는 작업은 세지 않는다.
      */
-    public BatchReprocess reprocessBatch(List<UUID> syncJobIds, String errorCodeFilter, int ratePerSecond,
-                                         String requestedBy) {
+    public BatchReprocess reprocessBatch(List<UUID> syncJobIds, SyncJobType jobType, String errorCodeFilter,
+                                         int ratePerSecond, String requestedBy) {
         List<ReprocessCandidate> candidates;
         int missing = 0;
         if (syncJobIds == null || syncJobIds.isEmpty()) {
-            candidates = candidateReader.findDeadLetters(errorCodeFilter, MAX_BATCH_SIZE);
+            candidates = candidateReader.findDeadLetters(jobType, errorCodeFilter, MAX_BATCH_SIZE);
         } else {
             List<UUID> ids = syncJobIds.stream().distinct().toList();
             if (ids.size() > MAX_BATCH_SIZE) {
