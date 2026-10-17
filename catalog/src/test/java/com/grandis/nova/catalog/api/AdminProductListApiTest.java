@@ -23,6 +23,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -233,6 +234,28 @@ class AdminProductListApiTest {
             perform("size", "101").andExpect(status().isBadRequest());
             perform("page", "-1").andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.error.details.violations[0].field").value("page"));
+        }
+
+        @Test
+        @DisplayName("회원 목록과 같은 상한 — q 는 정규화한 뒤 50자, brand 는 20개, 목록은 앞에서 10,000개까지. 넘으면 그 칸의 400")
+        void sharesListLimits() throws Exception {
+            String fifty = tag + " " + "가".repeat(50 - tag.length() - 1);
+            UUID found = completed(fifty, "IN_STOCK");
+            assertThat(ids(list("q", fifty))).containsExactly(found);
+            data(perform("size", "100", "page", "99"));
+
+            String[] twentyOne = new String[42];
+            for (int i = 0; i < 21; i++) {
+                twentyOne[i * 2] = "brand";
+                twentyOne[i * 2 + 1] = "LG";
+            }
+            Map<String, String[]> rejected = Map.of(
+                    "q", new String[] {"q", fifty + "가"}, "brand", twentyOne, "page", new String[] {"size", "100", "page", "100"});
+            for (var bad : rejected.entrySet()) {
+                perform(bad.getValue()).andExpect(status().isBadRequest())
+                        .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+                        .andExpect(jsonPath("$.error.details.violations[0].field").value(bad.getKey()));
+            }
         }
     }
 

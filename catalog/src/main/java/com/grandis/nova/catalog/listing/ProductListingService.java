@@ -37,7 +37,7 @@ public class ProductListingService {
     /**
      * 럭키 드로우 증정품 후보(관리자 회차 만들기 화면) — 상품마다 후보 옵션과 지금 확보할 수 있는 수량. 건수 · 상품 · 옵션이 한 스냅샷이다.
      *
-     * @param q 상품명 · tags 부분 일치. 관리자 목록과 같은 정규화. 비면 전부
+     * @param q 상품명 · tags · 모델명 · 브랜드 부분 일치. 관리자 목록과 같은 정규화 · 50자 상한. 비면 전부
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public OffsetPage<GiftCandidate> listGiftCandidates(String q, int page, int size) {

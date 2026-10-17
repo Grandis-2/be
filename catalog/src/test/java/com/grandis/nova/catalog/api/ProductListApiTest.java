@@ -522,6 +522,68 @@ class ProductListApiTest {
         }
     }
 
+    // ── 검색 조건 상한 ──────────────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("검색 조건 상한")
+    class QueryLimits {
+
+        @Test
+        @DisplayName("q 는 정규화(NFC · 트림 · 공백 접기)한 뒤 50자(코드 포인트)까지 — 50자는 찾고, 51자는 400 VALIDATION_FAILED(q)")
+        void capsKeywordLength() throws Exception {
+            String fifty = tag + " " + "가".repeat(50 - tag.length() - 1);
+            UUID found = visibleInStock(fifty);
+
+            assertThat(ids(list("q", fifty))).containsExactly(found);
+            assertThat(ids(list("q", "   " + fifty.replace(" ", "     ") + "   "))).as("공백은 접은 뒤 센다").containsExactly(found);
+            assertThat(ids(list("q", Normalizer.normalize(fifty, Normalizer.Form.NFD)))).as("NFD 로 오면 NFC 로 바꾼 뒤 센다")
+                    .containsExactly(found);
+            perform("q", "😀".repeat(50)).andExpect(status().isOk());   // UTF-16 으로는 100 이지만 50자
+            for (String bad : new String[] {fifty + "가", "😀".repeat(51)}) {
+                perform("q", bad)
+                        .andExpect(status().isBadRequest())
+                        .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+                        .andExpect(jsonPath("$.error.details.violations[0].field").value("q"));
+            }
+        }
+
+        @Test
+        @DisplayName("brand · color · storage 는 보낸 개수로 각 20개까지 — 21개는 400(그 칸). 중복 · 쉼표로 이어 보낸 값도 하나씩 센다")
+        void capsRepeatedValues() throws Exception {
+            String[] colors = new String[21];
+            String[] storages = new String[21];
+            for (int i = 0; i < 21; i++) {
+                colors[i] = "색" + i;
+                storages[i] = i + "GB";
+            }
+            assertThat(data(perform(repeated("color", 20, colors))).get("total").asLong()).isZero();
+            perform(repeated("storage", 20, storages)).andExpect(status().isOk());
+            perform(repeated("brand", 20, "APPLE")).andExpect(status().isOk());
+
+            assertRejected("color", repeated("color", 21, colors));
+            assertRejected("storage", repeated("storage", 21, storages));
+            assertRejected("brand", repeated("brand", 21, "APPLE"));
+            assertRejected("color", "color", String.join(",", colors));
+        }
+
+        /** name 을 n 번 반복한 이름 · 값 쌍. 값이 하나면 같은 값을 반복한다. */
+        private static String[] repeated(String name, int n, String... values) {
+            String[] params = new String[n * 2];
+            for (int i = 0; i < n; i++) {
+                params[i * 2] = name;
+                params[i * 2 + 1] = values.length == 1 ? values[0] : values[i];
+            }
+            return params;
+        }
+
+        private void assertRejected(String field, String... params) throws Exception {
+            perform(params)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+                    .andExpect(jsonPath("$.error.details.violations[0].field").value(field));
+        }
+    }
+
     // ── 도우미 ──────────────────────────────────────────────────────────────
 
     /**

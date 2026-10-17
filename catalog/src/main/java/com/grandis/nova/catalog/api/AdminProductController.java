@@ -114,7 +114,8 @@ public class AdminProductController {
     }
 
     @Operation(summary = "상품 목록", description = "노출 규칙 없이 비공개 · 준비 전 · 판매 중지 · 마감도 전부. "
-            + "q 는 상품명 · 태그 · 모델명 · 브랜드 코드 부분 일치, brand 는 이름을 반복해 여러 값(OR — brand=APPLE&brand=LG)")
+            + "q 는 상품명 · 태그 · 모델명 · 브랜드 코드 부분 일치, brand 는 이름을 반복해 여러 값(OR — brand=APPLE&brand=LG)."
+            + " q 는 50자, 반복 값은 각 20개까지. 목록은 앞에서 10,000개까지((page + 1) × size ≤ 10,000)")
     @GetMapping
     public ApiResponse<ProductPageResponse<AdminProductListItem>> list(
             @RequestParam(required = false) String q,
@@ -129,7 +130,7 @@ public class AdminProductController {
     }
 
     @Operation(summary = "럭키 드로우 증정품 후보", description = "회차 만들기 화면용 — 일반 판매 · 판매 중이고 재고를 등록한 옵션이 있는 상품(비공개 포함)과 "
-            + "그 옵션별 지금 확보할 수 있는 수량(available). q 는 상품명 · 태그 · 모델명 · 브랜드 검색. 최신순, page 는 0 부터")
+            + "그 옵션별 지금 확보할 수 있는 수량(available). q 는 상품명 · 태그 · 모델명 · 브랜드 검색(50자까지). 최신순, page 는 0 부터, 앞에서 10,000개까지")
     @GetMapping("/gift-candidates")
     public ApiResponse<ProductPageResponse<GiftCandidate>> giftCandidates(
             @RequestParam(required = false) String q,
