@@ -11,7 +11,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
- * 검사에 필요한 최소 업무 행을 넣는다(시험 전용 — 운영 batch 는 업무 표에 쓰지 않는다).
+ * 검사 · 정리에 필요한 최소 업무 행을 넣는다(시험 전용 — 운영 batch 는 업무 표에 쓰지 않는다. 사진 정리의 images 삭제만 예외다).
  * 예약마다 회원을 새로 만든다 — 같은 회원 · 상품의 진행 중 예약은 하나뿐이다(uq_preorder_active).
  * 기본은 정상 데이터다 — 순번은 상품마다 1부터, 이력은 지금 상태 하나, 외부 번호는 등록 작업이 성공일 때만.
  * 어긋난 데이터는 시험이 따로 만든다.
@@ -186,9 +186,47 @@ public final class TestData {
                 .update();
     }
 
+    /** catalog 가 올린 사진 행. 키는 서버가 만드는 모양({prefix}/{id}.jpg)이다 */
+    public ImageRow image(String prefix, String status, Instant updatedAt) {
+        UUID id = UUID.randomUUID();
+        String key = prefix + "/" + id + ".jpg";
+        jdbc.sql("""
+                        INSERT INTO images (id, object_key, status, created_at, updated_at)
+                        VALUES (UUID_TO_BIN(:id), :key, :status, :at, :at)
+                        """)
+                .param("id", id.toString()).param("key", key).param("status", status).param("at", utc(updatedAt))
+                .update();
+        return new ImageRow(id, key);
+    }
+
+    /** 드로우 회차. 증정품은 이름별 상품의 옵션이고, imageUrl 은 회차를 만들 때 복사해 둔 증정품 사진 주소다 */
+    public void draw(String productName, String imageUrl) {
+        UUID[] product = productRow(productName);
+        LocalDateTime at = utc(Instant.now());
+        jdbc.sql("""
+                        INSERT INTO draw_campaigns (id, idempotency_key, product_id, option_id, title, product_title_snapshot,
+                                                    option_title_snapshot, image_url_snapshot, entry_fee, winner_count,
+                                                    opens_at, closes_at, created_at, updated_at)
+                        VALUES (UUID_TO_BIN(:id), :key, UUID_TO_BIN(:product), UUID_TO_BIN(:option), '증정 회차', :name,
+                                '실버 / 256GB', :image, 1000, 1, :at, :closes, :at, :at)
+                        """)
+                .param("id", UUID.randomUUID().toString()).param("key", "draw-" + UUID.randomUUID())
+                .param("product", product[0].toString()).param("option", product[1].toString()).param("name", productName)
+                .param("image", imageUrl).param("at", at).param("closes", at.plusDays(1))
+                .update();
+    }
+
+    /** 지난 실행이 남긴 삭제 대기 */
+    public void pendingDeletion(String objectKey, Instant at) {
+        jdbc.sql("INSERT INTO image_deletions (object_key, created_at) VALUES (:key, :at)")
+                .param("key", objectKey).param("at", utc(at))
+                .update();
+    }
+
     /** 시험이 넣은 결과 · 업무 행을 지운다. 외래 키 순서대로 */
     public void clear() {
-        for (String table : new String[]{"reconciliation_findings", "reconciliation_runs", "payments", "orders",
+        for (String table : new String[]{"reconciliation_findings", "reconciliation_runs", "image_deletions", "images",
+                "draw_campaigns", "payments", "orders",
                 "preorder_outbox_events",
                 "preorder_sync_attempts", "preorder_sync_jobs", "preorder_events", "preorders", "shipment_batches",
                 "preorder_campaigns", "customers", "product_options", "products", "categories"}) {
@@ -261,5 +299,9 @@ public final class TestData {
      */
     public record BePreorderRow(UUID id, String token, UUID customerId, UUID productId, UUID registerJobId,
                                 String externalNumber) {
+    }
+
+    /** 사진 행의 id 와 객체 키 */
+    public record ImageRow(UUID id, String key) {
     }
 }
