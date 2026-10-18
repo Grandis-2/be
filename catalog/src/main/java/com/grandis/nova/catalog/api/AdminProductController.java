@@ -150,7 +150,7 @@ public class AdminProductController {
     @Operation(summary = "표시 정보 · 기본 가격 · 보증 수정", description = "보낸 칸만 바꾼다 — 하나도 없으면 400. 사전예약은 오픈 3분 전부터 409")
     @PatchMapping("/{productId}")
     public ApiResponse<AdminProductResponse> edit(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ProductEditRequest.class))) @RequestBody String body) {
-        return ApiResponse.ok(AdminProductResponse.from(serialized(() -> editService.editProduct(productId, bodies.parse(body, ProductEditRequest.class)))));
+        return ApiResponse.ok(AdminProductResponse.from(detailService.withStock(serialized(() -> editService.editProduct(productId, bodies.parse(body, ProductEditRequest.class))))));
     }
 
     /** 소프트 삭제. 되살리기는 없다. 삭제한 상품은 목록 · 상세 · 수정에서 없는 상품(404)이고, 지난 주문 · 예약 · 드로우는 그대로다. */
@@ -169,8 +169,8 @@ public class AdminProductController {
     @Operation(summary = "옵션 값 추가")
     @PostMapping("/{productId}/option-values")
     public ResponseEntity<ApiResponse<AdminProductResponse>> addOptionValue(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = OptionValueAddRequest.class))) @RequestBody String body) {
-        AdminProductResponse response = AdminProductResponse.from(
-                serialized(() -> editService.addOptionValue(productId, bodies.parse(body, OptionValueAddRequest.class))));
+        AdminProductResponse response = AdminProductResponse.from(detailService.withStock(
+                serialized(() -> editService.addOptionValue(productId, bodies.parse(body, OptionValueAddRequest.class)))));
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response));
     }
 
@@ -179,8 +179,8 @@ public class AdminProductController {
     @PatchMapping("/{productId}/option-values/{valueId}")
     public ApiResponse<AdminProductResponse> editOptionValue(@PathVariable UUID productId, @PathVariable String valueId,
                                                              @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = OptionValueEditRequest.class))) @RequestBody String body) {
-        return ApiResponse.ok(AdminProductResponse.from(
-                serialized(() -> editService.editOptionValue(productId, valueId, bodies.parse(body, OptionValueEditRequest.class)))));
+        return ApiResponse.ok(AdminProductResponse.from(detailService.withStock(
+                serialized(() -> editService.editOptionValue(productId, valueId, bodies.parse(body, OptionValueEditRequest.class))))));
     }
 
     /** 사진 한 장을 그 묶음 맨 뒤에 넣는다(상품 사진 · 상세 영역). 사전예약 오픈 뒤에도 된다. */
@@ -188,8 +188,8 @@ public class AdminProductController {
             + "url 은 업로드 API 의 imageUrl — 이 상품에 이미 있는 주소 · CDN 밖 주소는 400, 상품 사진 묶음은 최대 10장 · 상세 영역은 최대 3장. 빈 묶음에 넣은 첫 장은 대표")
     @PostMapping("/{productId}/images")
     public ResponseEntity<ApiResponse<AdminProductResponse>> addImage(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ProductImageAddRequest.class))) @RequestBody String body) {
-        AdminProductResponse response = AdminProductResponse.from(
-                serialized(() -> imageEditService.add(productId, bodies.parse(body, ProductImageAddRequest.class))));
+        AdminProductResponse response = AdminProductResponse.from(detailService.withStock(
+                serialized(() -> imageEditService.add(productId, bodies.parse(body, ProductImageAddRequest.class)))));
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response));
     }
 
@@ -197,15 +197,15 @@ public class AdminProductController {
     @Operation(summary = "사진 한 장 바꾸기", description = "url 은 이 상품에 있는 사진, newUrl 은 업로드 API 의 새 imageUrl — 없는 사진 · 이미 있는 새 주소 · CDN 밖 주소는 400")
     @PatchMapping("/{productId}/images")
     public ApiResponse<AdminProductResponse> replaceImage(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ProductImageReplaceRequest.class))) @RequestBody String body) {
-        return ApiResponse.ok(AdminProductResponse.from(
-                serialized(() -> imageEditService.replace(productId, bodies.parse(body, ProductImageReplaceRequest.class)))));
+        return ApiResponse.ok(AdminProductResponse.from(detailService.withStock(
+                serialized(() -> imageEditService.replace(productId, bodies.parse(body, ProductImageReplaceRequest.class))))));
     }
 
     /** 사진 한 장을 뺀다. 대표를 빼면 남은 첫 장이 대표, 상세 영역이 비면 영역째 없앤다. 마지막 한 장도 뺄 수 있다. 사전예약 오픈 뒤에도 된다. */
     @Operation(summary = "사진 한 장 빼기", description = "url 은 이 상품에 있는 사진 — 없으면 400")
     @DeleteMapping("/{productId}/images")
     public ApiResponse<AdminProductResponse> removeImage(@PathVariable UUID productId, @RequestParam(required = false) String url) {
-        return ApiResponse.ok(AdminProductResponse.from(serialized(() -> imageEditService.remove(productId, url))));
+        return ApiResponse.ok(AdminProductResponse.from(detailService.withStock(serialized(() -> imageEditService.remove(productId, url)))));
     }
 
     /** 아직 없는 조합을 옵션으로. 바로 판매 중(ACTIVE). 일반 상품의 재고는 order 의 재고 API 로 따로 넣는다. */
@@ -213,7 +213,7 @@ public class AdminProductController {
     @PostMapping("/{productId}/variants")
     public ResponseEntity<ApiResponse<ProductDetailView.Variant>> addVariant(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = VariantAddRequest.class))) @RequestBody String body) {
         ProductDetailView.Variant variant = serialized(() -> editService.addVariant(productId, bodies.parse(body, VariantAddRequest.class)));
-        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(variant));
+        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(withStock(productId, variant)));
     }
 
     /** 옵션의 판매 상태. 사전예약은 오픈 3분 전부터 409. */
@@ -221,7 +221,7 @@ public class AdminProductController {
     @PatchMapping("/{productId}/variants/{variantId}")
     public ApiResponse<ProductDetailView.Variant> editVariant(@PathVariable UUID productId, @PathVariable UUID variantId,
                                                              @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = VariantEditRequest.class))) @RequestBody String body) {
-        return ApiResponse.ok(serialized(() -> editService.editVariant(productId, variantId, bodies.parse(body, VariantEditRequest.class))));
+        return ApiResponse.ok(withStock(productId, serialized(() -> editService.editVariant(productId, variantId, bodies.parse(body, VariantEditRequest.class)))));
     }
 
     /**
@@ -259,6 +259,15 @@ public class AdminProductController {
     @GetMapping("/registrations/{idempotencyKey}")
     public ApiResponse<RegistrationStatusView> registration(@PathVariable String idempotencyKey) {
         return ApiResponse.ok(registrationService.status(idempotencyKey));
+    }
+
+    /**
+     * 수정한 옵션 하나에 남은 수량을 채운다 — 수정 트랜잭션은 수량을 묻지 않고(상품 행을 잠근 채 order 를 부르지 않게) 커밋 뒤 관리자 상세에서
+     * 그 옵션을 다시 읽는다.
+     */
+    private ProductDetailView.Variant withStock(UUID productId, ProductDetailView.Variant edited) {
+        return detailService.findAdminProduct(productId).product().variants().stream()
+                .filter(variant -> variant.variantId().equals(edited.variantId())).findFirst().orElse(edited);
     }
 
     /**
