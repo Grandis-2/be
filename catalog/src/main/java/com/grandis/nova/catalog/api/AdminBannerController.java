@@ -45,28 +45,28 @@ public class AdminBannerController {
         return ApiResponse.ok(new Items<>(banners.list()));
     }
 
-    @Operation(summary = "배너 만들기", description = "맨 뒤에 붙는다. icon 은 lucide 이름 허용 목록만, target 은 일반 판매 상품(PRODUCT) 또는 홍보(PROMOTION), 사진은 업로드 API(purpose=BANNER) 주소만 — 아니면 400. 줄바꿈(\\n)은 그대로 담는다")
+    @Operation(summary = "배너 만들기", description = "맨 뒤에 붙는다. icon 은 lucide 이름 허용 목록만, target 은 일반 판매 상품(PRODUCT) 또는 홍보(PROMOTION), 사진은 업로드 API(purpose=BANNER) 주소만 — 아니면 400. 줄바꿈(\\n)은 그대로 담는다. 다른 만들기 · 순서 바꾸기 · 고치기 · 지우기와 겹쳐 잠금에 실패하면 409 retryable")
     @PostMapping
     public ResponseEntity<ApiResponse<BannerViews.Admin>> create(
             @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = BannerRequest.class))) @RequestBody String body) {
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(banners.create(bodies.parse(body, BannerRequest.class))));
     }
 
-    @Operation(summary = "배너 고치기", description = "모든 칸을 보낸다. 순서는 바꾸지 않는다(순서 바꾸기 API). 대상도 다시 검사한다 — 대상 상품을 지웠으면 글만 고쳐도 400(target.id). 없으면 404. 다른 고치기 · 순서 바꾸기와 겹쳐 잠금에 실패하면 409 retryable")
+    @Operation(summary = "배너 고치기", description = "모든 칸을 보낸다. 순서는 바꾸지 않는다(순서 바꾸기 API). 대상도 다시 검사한다 — 대상 상품을 지웠으면 글만 고쳐도 400(target.id). 없으면 404. 다른 만들기 · 순서 바꾸기 · 고치기 · 지우기와 겹쳐 잠금에 실패하면 409 retryable")
     @PutMapping("/{bannerId}")
     public ApiResponse<BannerViews.Admin> replace(@PathVariable UUID bannerId,
             @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = BannerRequest.class))) @RequestBody String body) {
         return ApiResponse.ok(banners.update(bannerId, bodies.parse(body, BannerRequest.class)));
     }
 
-    @Operation(summary = "배너 지우기", description = "204. 되살릴 수 없다. 없으면 404, 겹친 작업과 잠금에 실패하면 409 retryable")
+    @Operation(summary = "배너 지우기", description = "204. 되살릴 수 없다. 없으면 404, 다른 만들기 · 순서 바꾸기 · 고치기 · 지우기와 겹쳐 잠금에 실패하면 409 retryable")
     @DeleteMapping("/{bannerId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable UUID bannerId) {
         banners.delete(bannerId);
     }
 
-    @Operation(summary = "배너 순서 바꾸기", description = "모든 배너 id 를 보이는 순서대로 한 번씩 보낸다. 빠지거나 남는 id 가 있으면 400(bannerIds) — 목록을 새로 읽고 다시 보낸다")
+    @Operation(summary = "배너 순서 바꾸기", description = "모든 배너 id 를 보이는 순서대로 한 번씩 보낸다. 빠지거나 남는 id 가 있으면 400(bannerIds) — 목록을 새로 읽고 다시 보낸다. 다른 만들기 · 순서 바꾸기 · 고치기 · 지우기와 겹쳐 잠금에 실패하면 409 retryable")
     @PutMapping("/order")
     public ApiResponse<Items<BannerViews.Admin>> reorder(
             @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = OrderRequest.class))) @RequestBody String body) {

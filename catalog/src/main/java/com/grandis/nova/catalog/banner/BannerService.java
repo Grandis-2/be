@@ -33,7 +33,8 @@ import java.util.stream.Collectors;
  *   <li>사진은 업로드 API 로 올린 배너 사진(banners/)만 — 붙이기 · 떼기는 {@link ImageAttachments}.</li>
  *   <li>새 배너는 맨 뒤에 붙는다. 순서 바꾸기는 모든 배너 id 를 원하는 순서로 한 번에 보낸다(빠지거나 남는 id 가 있으면 400).</li>
  *   <li>바꾸면 커밋 뒤 고객 조회 캐시의 배너 세대를 올린다({@link BannerQueryService#BANNERS}).</li>
- *   <li>잠금은 배너 행이 먼저, 사진 행이 나중이다(만들기 · 순서 바꾸기는 전부, 고치기 · 지우기는 그 배너 하나). 잠금 대기 초과 · 교착은 409 retryable.</li>
+ *   <li>잠금은 배너 행이 먼저, 사진 행이 나중이다(만들기 · 순서 바꾸기는 전부, 고치기 · 지우기는 그 배너 하나). 전부 잠그기는 보조 인덱스를 타지 않는다
+ *       — 실측(배너 3행, ANALYZE 앞뒤 같음): type=ALL · Using filesort, PK 행만 잠근다. 잠금 대기 초과 · 교착은 409 retryable.</li>
  * </ul>
  */
 @Service
