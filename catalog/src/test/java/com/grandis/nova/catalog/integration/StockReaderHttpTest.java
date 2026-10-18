@@ -132,7 +132,7 @@ class StockReaderHttpTest {
     }
 
     @Test
-    @DisplayName("묻지 않은 옵션 · 빈 수량이 오면 연동 오류(500), 그 밖의 4xx 도 연동 오류, 5xx 는 일시 장애(503)")
+    @DisplayName("묻지 않은 옵션 · 빈 수량 · 음수 · 같은 옵션 두 번이 오면 연동 오류(500), 401 을 포함한 그 밖의 4xx 도 연동 오류, 5xx 는 일시 장애(503)")
     void contractViolationsAndFailures() {
         UUID asked = UUID.randomUUID();
         override = requested -> "{\"success\":true,\"data\":{\"items\":[{\"optionId\":\"%s\",\"available\":1}]}}".formatted(UUID.randomUUID());
@@ -141,10 +141,20 @@ class StockReaderHttpTest {
         override = requested -> "{\"success\":true,\"data\":{\"items\":[{\"optionId\":\"%s\",\"available\":null}]}}".formatted(asked);
         assertThatThrownBy(() -> reader.available(List.of(asked))).isInstanceOfSatisfying(BusinessException.class,
                 e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.INTERNAL_ERROR));
+        override = requested -> "{\"success\":true,\"data\":{\"items\":[{\"optionId\":\"%s\",\"available\":-1}]}}".formatted(asked);
+        assertThatThrownBy(() -> reader.available(List.of(asked))).as("음수").isInstanceOfSatisfying(BusinessException.class,
+                e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.INTERNAL_ERROR));
+        override = requested -> "{\"success\":true,\"data\":{\"items\":[{\"optionId\":\"%1$s\",\"available\":1},{\"optionId\":\"%1$s\",\"available\":2}]}}"
+                .formatted(asked);
+        assertThatThrownBy(() -> reader.available(List.of(asked))).as("같은 옵션 두 번").isInstanceOfSatisfying(BusinessException.class,
+                e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.INTERNAL_ERROR));
         override = null;
         failStatus = 404;
         assertThatThrownBy(() -> reader.available(List.of(asked))).isInstanceOfSatisfying(BusinessException.class,
                 e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.INTERNAL_ERROR));
+        failStatus = 401;
+        assertThatThrownBy(() -> reader.available(List.of(asked))).as("토큰을 싣지 않는 호출의 401 은 사용자 토큰 문제가 아니다")
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.INTERNAL_ERROR));
         failStatus = 500;
         assertThatThrownBy(() -> reader.available(List.of(asked))).isInstanceOfSatisfying(BusinessException.class,
                 e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.DEPENDENCY_UNAVAILABLE));

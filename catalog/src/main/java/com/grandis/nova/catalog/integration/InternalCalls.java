@@ -19,7 +19,7 @@ import java.util.function.Supplier;
  *   <li>403 — 연동 오류. catalog 는 그 API 가 받는 역할의 토큰을 싣고(리뷰 자격은 회원, 상품 삭제의 드로우 증정품 확인은 관리자), 받는 쪽은
  *       남의 대상도 "대상 없음" 404 로 답한다(contracts/order-internal.md) — 403 은 다른 역할의 토큰이 실렸거나 경로 · 권한 설정이 어긋난 것이라
  *       정상 업무 응답이 아니다.</li>
- *   <li>401 — 사용자 토큰 문제라 그대로 401. 그 밖의 4xx · 읽을 수 없는 응답 · 빈 data 는 연동 오류(500).</li>
+ *   <li>401 — 토큰을 싣는 그룹({@link Dependencies#ALL})이면 사용자 토큰 문제라 그대로 401, 싣지 않는 그룹이면 연동 오류. 그 밖의 4xx · 읽을 수 없는 응답 · 빈 data 는 연동 오류(500).</li>
  *   <li>연결 실패 · 시간 초과 · 5xx 는 일시 장애(503).</li>
  * </ul>
  */
@@ -52,6 +52,10 @@ public final class InternalCalls {
             }
             throw integrationError(dependency, "대상 없음이 아닌 404(경로 없음 · 주소 오류)", e);
         } catch (HttpClientErrorException.Unauthorized e) {
+            if (!Dependencies.ALL.contains(dependency)) {
+                // 토큰을 싣지 않는 그룹 — 받는 쪽이 토큰을 요구하면 사용자 토큰 문제가 아니라 경로 · 권한 설정이 어긋난 것이다
+                throw integrationError(dependency, "토큰 없는 호출에 401", e);
+            }
             throw new BusinessException(CommonErrorCode.UNAUTHENTICATED);
         } catch (HttpClientErrorException e) {
             throw integrationError(dependency, e.getStatusCode().toString(), e);

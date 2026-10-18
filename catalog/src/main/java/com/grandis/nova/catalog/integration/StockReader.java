@@ -11,8 +11,8 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * 옵션별 남은 수량을 order 에 묻는다({@link StockClient}). 한 번에 {@value #BATCH}개씩 나눠 부른다(계약 상한). DB 트랜잭션 밖에서 부른다 — 응답을 기다리는
- * 동안 연결을 붙잡지 않게.
+ * 옵션별 남은 수량을 order 에 묻는다({@link StockClient}). 한 번에 {@value #BATCH}개씩 차례로 부른다(계약 상한) — 묶음마다의 응답 시간이 그대로
+ * 더해진다. DB 트랜잭션 밖에서 부른다 — 응답을 기다리는 동안 연결 · 행 잠금을 붙잡지 않게(시험용 대역이 트랜잭션 안의 호출을 센다).
  */
 @Component
 public class StockReader {
@@ -29,7 +29,7 @@ public class StockReader {
     /**
      * @return 옵션 id → 남은 수량. 재고 행이 없는 옵션은 빠진다(판매 불가로 본다). 빈 묶음이면 부르지 않는다
      * @throws com.grandis.nova.common.BusinessException DEPENDENCY_UNAVAILABLE — 연결 실패 · 시간 초과 · 5xx. INTERNAL_ERROR — 연동 오류(그 밖의 4xx ·
-     *                                                   읽을 수 없는 응답 · 묻지 않은 옵션 · 빈 수량, ERROR 로그를 남긴다 — {@link InternalCalls})
+     *                                                   읽을 수 없는 응답 · 묻지 않은 옵션 · 겹친 옵션 · 비었거나 음수인 수량, ERROR 로그를 남긴다 — {@link InternalCalls})
      */
     public Map<UUID, Integer> available(Collection<UUID> optionIds) {
         Map<UUID, Integer> available = new HashMap<>();
@@ -38,10 +38,11 @@ public class StockReader {
             List<UUID> batch = ids.subList(from, Math.min(ids.size(), from + BATCH));
             StockClient.Stocks stocks = InternalCalls.call(Dependencies.ORDER_STOCKS, () -> client.getStocks(batch));
             for (StockClient.Stock stock : stocks.items() == null ? List.<StockClient.Stock>of() : stocks.items()) {
-                if (stock.optionId() == null || stock.available() == null || !batch.contains(stock.optionId())) {
-                    throw InternalCalls.contractViolation(Dependencies.ORDER_STOCKS, "묻지 않은 옵션이거나 수량이 빈 응답");
+                // order 는 옵션마다 한 번, 0 이상으로 답한다(계약) — 어긋나면 수량을 지어내지 않고 연동 오류로 본다
+                if (stock.optionId() == null || stock.available() == null || stock.available() < 0 || !batch.contains(stock.optionId())
+                        || available.put(stock.optionId(), stock.available()) != null) {
+                    throw InternalCalls.contractViolation(Dependencies.ORDER_STOCKS, "묻지 않은 옵션 · 겹친 옵션 · 비었거나 음수인 수량");
                 }
-                available.put(stock.optionId(), Math.max(0, stock.available()));
             }
         }
         return available;
