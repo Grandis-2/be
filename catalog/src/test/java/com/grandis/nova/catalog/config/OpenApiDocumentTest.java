@@ -115,7 +115,8 @@ class OpenApiDocumentTest {
                 "GET /api/v1/products", "GET /api/v1/products/{productId}", "GET /api/v1/products/{productId}/variants/{variantId}",
                 "GET /api/v1/products/{productId}/reviews", "GET /api/v1/categories", "GET /api/v1/reviews",
                 "GET /api/v1/promotions", "GET /api/v1/promotions/{promotionId}",
-                "GET /api/v1/products/ranking", "POST /api/v1/products/{productId}/views");
+                "GET /api/v1/products/ranking", "POST /api/v1/products/{productId}/views",
+                "GET /api/v1/products/searches/popular", "POST /api/v1/products/searches");
     }
 
     @Test
@@ -138,6 +139,7 @@ class OpenApiDocumentTest {
         expected.put("POST /api/v1/reviews", "ReviewCreateRequest");
         expected.put("PATCH /api/v1/reviews/{reviewId}", "ReviewUpdateRequest");
         expected.put("POST /api/v1/products/{productId}/views", "ViewRequest");
+        expected.put("POST /api/v1/products/searches", "SearchRequest");
 
         Map<String, String> documented = new LinkedHashMap<>();
         operations().forEach((name, operation) -> {
