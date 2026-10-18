@@ -49,8 +49,8 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
 
     private static final Logger log = LoggerFactory.getLogger(DbRefreshTokenStore.class);
 
-    /** 교체 뒤 같은 옛 원문을 재사용이 아니라 다시 회전으로 받아 주는 시간. 위 회전 유예. */
-    static final Duration ROTATION_GRACE = Duration.ofSeconds(30);
+    /** 교체 뒤 같은 옛 원문을 재사용이 아니라 다시 회전으로 받아 주는 시간. 위 회전 유예. 관리자 저장소와 같은 값. */
+    static final Duration ROTATION_GRACE = RefreshTokens.ROTATION_GRACE;
 
     private final RefreshTokenRepository rows;
     private final Clock clock;

@@ -19,6 +19,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.security.BearerTokens;
+import com.grandis.nova.common.security.JwtTokenProvider;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import com.grandis.nova.member.auth.application.AdminLoginService;
 import com.grandis.nova.common.security.AuthRedisKeys;
@@ -79,6 +80,7 @@ class AuthFlowIntegrationTest {
     @Autowired KakaoLoginService loginService;
     @Autowired StringRedisTemplate redis;
     @Autowired JdbcTemplate jdbc;
+    @Autowired JwtTokenProvider jwtProvider;
     @MockitoBean KakaoOAuthClient kakao;
 
     private MockMvc mvc;
@@ -319,7 +321,7 @@ class AuthFlowIntegrationTest {
         java.util.Map<String, String> pems = new java.util.LinkedHashMap<>();
         publicKeys.forEach((kid, key) -> pems.put(kid, com.grandis.nova.common.security.PemKeys.toPem(key)));
         var verifierProps = new com.grandis.nova.common.security.JwtProperties("nova-test", java.time.Duration.ofHours(1), java.time.Duration.ofDays(14), null, null, null, pems, null, null);
-        var verifier = new com.grandis.nova.common.security.JwtTokenProvider(verifierProps,
+        var verifier = new JwtTokenProvider(verifierProps,
                 new com.grandis.nova.common.security.JwtKeyRing(verifierProps, java.time.Clock.systemUTC(), org.springframework.web.client.RestClient.create(), Runnable::run), java.time.Clock.systemUTC());
         assertThat(verifier.parse(access).role()).isEqualTo(com.grandis.nova.common.security.Role.USER);
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> verifier.create("1", com.grandis.nova.common.security.Role.USER, UUID.randomUUID(), com.grandis.nova.common.security.TokenType.ACCESS))
@@ -368,19 +370,16 @@ class AuthFlowIntegrationTest {
     }
 
     @Test
-    @DisplayName("관리자 리프레시도 한 번만 쓴다: 교체된 쿠키를 다시 내면 401, 세션이 끊겨 새 쿠키도 죽는다")
+    @DisplayName("관리자 리프레시도 한 번만 쓴다: 교체 뒤 유예(30초)가 지나 옛 쿠키를 다시 내면 401, 세션이 끊겨 새 쿠키도 죽는다")
     void adminRefreshCookieIsSingleUse() throws Exception {
-        MvcResult login = mvc.perform(post("/api/v1/admin/session").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"username\":\"admin\",\"password\":\"" + ADMIN_PASSWORD + "\"}"))
-                .andExpect(status().isOk())
-                .andReturn();
-        Cookie first = login.getResponse().getCookie(AuthCookies.ADMIN_REFRESH_TOKEN);
+        Cookie first = adminLoginOk().getResponse().getCookie(AuthCookies.ADMIN_REFRESH_TOKEN);
 
         MvcResult rotated = mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(first))
                 .andExpect(status().isOk())
                 .andReturn();
         Cookie second = rotated.getResponse().getCookie(AuthCookies.ADMIN_REFRESH_TOKEN);
         assertThat(second.getValue()).isNotEqualTo(first.getValue());
+        endAdminGrace(first);
 
         // 옛 쿠키 재사용 → 401. 회원 쪽과 같은 규칙인데 저장소가 다르다(관리자는 Redis 비교교환, 회원은 DB 행 잠금).
         mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(first))
@@ -391,6 +390,34 @@ class AuthFlowIntegrationTest {
         mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(second))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
+    }
+
+    @Test
+    @DisplayName("관리자 새로고침 연타: 같은 옛 쿠키로 세 번 와도 전부 200, 마지막에 받은 쿠키와 그 액세스 토큰이 산다")
+    void adminRapidReloadsWithTheSameOldCookieStayLoggedIn() throws Exception {
+        Cookie old = adminLoginOk().getResponse().getCookie(AuthCookies.ADMIN_REFRESH_TOKEN);
+        MvcResult last = null;
+        for (int i = 0; i < 3; i++) {
+            last = mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(old))
+                    .andExpect(status().isOk())
+                    .andReturn();
+        }
+        String access = json(last, "/data/sessionToken");
+
+        mvc.perform(get("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(access)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.role").value("ADMIN"));
+        mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(last.getResponse().getCookie(AuthCookies.ADMIN_REFRESH_TOKEN)))
+                .andExpect(status().isOk());
+    }
+
+    /** 관리자 세션 키의 유예 끝을 지금(Redis 시각)으로 당긴다 — 값 모양은 지금jti|바로앞jti|유예끝. */
+    private void endAdminGrace(Cookie adminRefresh) {
+        UUID sid = jwtProvider.parse(adminRefresh.getValue()).sessionId();
+        String key = AuthRedisKeys.refresh(sid);
+        String[] value = redis.opsForValue().get(key).split("\\|");
+        long redisNow = redis.execute((org.springframework.data.redis.core.RedisCallback<Long>) c -> c.serverCommands().time());
+        redis.opsForValue().set(key, value[0] + "|" + value[1] + "|" + redisNow, java.time.Duration.ofDays(1));
     }
 
     @Test

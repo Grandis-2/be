@@ -98,14 +98,17 @@ class RedisStoresTest {
         }
 
         @Test
-        @DisplayName("저장된 jti 와 같으면 새 jti 로 바꾸고 true (TTL 은 넘긴 값으로 다시)")
+        @DisplayName("저장된 jti 와 같으면 새 jti 로 바꾸고 true — 값은 지금|바로 앞|유예 끝(약 30초 뒤), TTL 은 넘긴 값으로 다시")
         void rotateSucceedsWhenExpectedMatches() {
             UUID current = UUID.randomUUID();
             UUID next = UUID.randomUUID();
             refreshStore.save(sid, current, REFRESH);
 
             assertThat(refreshStore.rotate(sid, current, next, Duration.ofDays(10))).isTrue();
-            assertThat(redis.opsForValue().get(AuthRedisKeys.refresh(sid))).isEqualTo(next.toString());
+            String[] value = stored();
+            assertThat(value[0]).isEqualTo(next.toString());
+            assertThat(value[1]).isEqualTo(current.toString());
+            assertThat(Long.parseLong(value[2]) - redisNowMillis()).isBetween(29_000L, 30_000L);
             assertThat(redis.getExpire(AuthRedisKeys.refresh(sid), TimeUnit.SECONDS)).isBetween(Duration.ofDays(10).toSeconds() - 5, Duration.ofDays(10).toSeconds());
         }
 
@@ -120,6 +123,48 @@ class RedisStoresTest {
         }
 
         @Test
+        @DisplayName("유예: 교체 뒤 30초 안에 바로 앞 jti 가 다시 오면(다음 토큰 안 쓰임) 다시 회전한다 — 버려진 다음 jti 는 더 못 쓰고, 유예 끝은 그대로다")
+        void rotatesAgainWithinGrace() {
+            UUID first = UUID.randomUUID();
+            UUID lost = UUID.randomUUID();
+            UUID retried = UUID.randomUUID();
+            refreshStore.save(sid, first, REFRESH);
+            refreshStore.rotate(sid, first, lost, REFRESH);
+            String graceUntil = stored()[2];
+
+            assertThat(refreshStore.rotate(sid, first, retried, REFRESH)).isTrue();
+            assertThat(stored()).containsExactly(retried.toString(), first.toString(), graceUntil);
+            assertThat(refreshStore.rotate(sid, lost, UUID.randomUUID(), REFRESH)).as("버려진 다음 jti").isFalse();
+            assertThat(refreshStore.rotate(sid, retried, UUID.randomUUID(), REFRESH)).isTrue();
+        }
+
+        @Test
+        @DisplayName("유예 안이어도 다음 토큰이 이미 쓰였으면(그 뒤로 회전) 바로 앞이 아니라 false — 받아 주는 건 바로 앞 jti 뿐이다")
+        void graceOnlyForTheImmediatePredecessor() {
+            UUID first = UUID.randomUUID();
+            UUID second = UUID.randomUUID();
+            refreshStore.save(sid, first, REFRESH);
+            refreshStore.rotate(sid, first, second, REFRESH);
+            refreshStore.rotate(sid, second, UUID.randomUUID(), REFRESH);
+
+            assertThat(refreshStore.rotate(sid, first, UUID.randomUUID(), REFRESH)).isFalse();
+        }
+
+        @Test
+        @DisplayName("유예 끝이 지났으면(Redis 시각 기준) 바로 앞 jti 도 false, 유예 끝 전이면 다시 회전한다 — 같은 밀리초의 경계는 시험으로 만들 수 없어 고정하지 않는다")
+        void graceEnds() {
+            UUID first = UUID.randomUUID();
+            UUID second = UUID.randomUUID();
+            refreshStore.save(sid, first, REFRESH);
+            refreshStore.rotate(sid, first, second, REFRESH);
+            redis.opsForValue().set(AuthRedisKeys.refresh(sid), second + "|" + first + "|" + redisNowMillis(), REFRESH);
+
+            assertThat(refreshStore.rotate(sid, first, UUID.randomUUID(), REFRESH)).isFalse();
+            redis.opsForValue().set(AuthRedisKeys.refresh(sid), second + "|" + first + "|" + (redisNowMillis() + 5_000), REFRESH);
+            assertThat(refreshStore.rotate(sid, first, UUID.randomUUID(), REFRESH)).isTrue();
+        }
+
+        @Test
         @DisplayName("키가 없으면(로그아웃·만료) false 이고 키를 만들지 않는다")
         void rotateFailsWhenMissing() {
             assertThat(refreshStore.rotate(sid, UUID.randomUUID(), UUID.randomUUID(), REFRESH)).isFalse();
@@ -127,16 +172,25 @@ class RedisStoresTest {
         }
 
         @Test
-        @DisplayName("같은 리프레시로 동시에 회전 8개 → 정확히 1개만 성공 (Lua 가 비교·교체를 원자적으로)")
-        void concurrentRotationsOnlyOneWins() throws Exception {
+        @DisplayName("같은 리프레시로 동시에 회전 8개(새로고침 연타) → Lua 가 하나씩 처리해 전부 회전하고, 남는 건 마지막 jti 하나 · 바로 앞은 처음 jti")
+        void concurrentRotationsAllRotateOneSurvives() throws Exception {
             UUID current = UUID.randomUUID();
             refreshStore.save(sid, current, REFRESH);
             int n = 8;
-            List<Concurrently.Outcome<Boolean>> results =
-                    Concurrently.run(n, i -> () -> refreshStore.rotate(sid, current, UUID.randomUUID(), REFRESH));
+            List<UUID> issued = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+            List<Concurrently.Outcome<Boolean>> results = Concurrently.run(n, i -> () -> {
+                UUID next = UUID.randomUUID();
+                issued.add(next);
+                return refreshStore.rotate(sid, current, next, REFRESH);
+            });
 
             assertThat(results).allSatisfy(r -> assertThat(r.error()).isNull());
-            assertThat(results).filteredOn(r -> r.value()).hasSize(1);
+            assertThat(results).allMatch(Concurrently.Outcome::value);
+            String[] value = stored();
+            assertThat(issued).contains(UUID.fromString(value[0]));
+            assertThat(value[1]).isEqualTo(current.toString());
+            assertThat(issued.stream().filter(jti -> !jti.toString().equals(value[0])))
+                    .allSatisfy(jti -> assertThat(refreshStore.rotate(sid, jti, UUID.randomUUID(), REFRESH)).as("앞 회전들이 만든 jti").isFalse());
         }
 
         @Test
@@ -149,6 +203,15 @@ class RedisStoresTest {
 
             assertThat(refreshStore.rotate(sid, current, UUID.randomUUID(), REFRESH)).isFalse();
         }
+    }
+
+    private String[] stored() {
+        return redis.opsForValue().get(AuthRedisKeys.refresh(sid)).split("\\|");
+    }
+
+    /** 유예 판정과 같은 시계(Redis TIME) — 앱 시계와 어긋나도 경계를 같은 쪽에서 잰다. */
+    private long redisNowMillis() {
+        return redis.execute((org.springframework.data.redis.core.RedisCallback<Long>) connection -> connection.serverCommands().time());
     }
 
     @Nested
