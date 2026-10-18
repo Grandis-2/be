@@ -92,7 +92,7 @@ public class ProductOptionsQueryService {
             }
             ProductOptions document = documents.computeIfAbsent(product.getId(), id -> product.getOptions());
             ProductOptions.Warranty warranty = document.warranty();
-            views.add(new OptionLookupView(option.getId(), product.getId(), product.getTitle(), option.getTitle(), option.getSku(),
+            views.add(new OptionLookupView(option.getId(), product.getId(), product.getTitle(), product.getModelName(), option.getTitle(), option.getSku(),
                     product.salePrice(option.getPrice()), option.getStatus(), product.getSaleMode(), exposure.status(), exposure.visible(), exposure.ready(),
                     new OptionLookupView.Warranty(warranty.offered(), warranty.surcharge()),
                     document.imageUrlOf(OptionCombination.valueIdsOf(option.getCombinationKey()))));
