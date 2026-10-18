@@ -28,7 +28,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/orders/**").authenticated()
                 .requestMatchers("/api/v1/cart", "/api/v1/cart/**").hasRole("USER")                  // 내 장바구니 — 회원만(관리자는 회원 id 가 없다)
                 .requestMatchers(HttpMethod.GET, "/api/v1/draws", "/api/v1/draws/*").permitAll()     // 드로우 회차 목록 · 상세 — 로그인 없이 본다
-                .requestMatchers("/api/v1/draws/*/entries", "/api/v1/draws/*/entries/**").hasRole("USER") // 응모 · 내 응모 · 응모비 결제 — 회원만
+                .requestMatchers("/api/v1/draws/entries/me", "/api/v1/draws/*/entries", "/api/v1/draws/*/entries/**").hasRole("USER") // 내 응모 목록 · 응모 · 내 응모 · 응모비 결제 — 회원만
                 // 서비스 간 내부 API. 호출자(preorder · catalog)가 사용자 토큰을 Authorization: Bearer 로 그대로 싣고, 경로는 인증만
                 // 요구한다 — 역할 · 주인은 엔드포인트가 정한다(@CurrentViewer · @CurrentCustomerId). 재고 조회만 토큰 없이 연다:
                 // 공개 화면의 값이고 비회원 목록에는 실을 토큰이 없다(/internal 이 공개 라우팅에 없다는 전제 — contracts/order-internal.md).

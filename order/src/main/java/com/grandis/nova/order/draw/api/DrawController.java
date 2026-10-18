@@ -96,6 +96,20 @@ public class DrawController {
         return ResponseEntity.created(URI.create(BASE_PATH + "/" + drawId + "/entries/me")).body(body);
     }
 
+    @GetMapping("/entries/me")
+    @Operation(summary = "내 응모 목록", description = "응모 최신순. filter: ALL(기본, 전부 — 결제 대기 · 미결제 마감 포함) · WON(당첨만). "
+            + "page 는 0 부터, size 1~100. total 은 고른 탭의 건수, counts 는 두 탭의 건수. state: AWAITING_PAYMENT · AWAITING_RESULT · WON · LOST · "
+            + "CLOSED_UNPAID. 모르는 filter 는 400")
+    public ApiResponse<MyDrawEntriesResponse> myEntries(@CurrentCustomerId UUID customerId,
+                                                        @RequestParam(defaultValue = "ALL") MyDrawEntryFilter filter,
+                                                        @RequestParam(defaultValue = "0") int page,
+                                                        @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
+        int checkedSize = PageSizes.require(size);
+        DrawEntryService.MyEntries mine = entries.myEntries(customerId, filter == MyDrawEntryFilter.WON,
+                PageSizes.requirePage(page, checkedSize), checkedSize);
+        return ApiResponse.ok(MyDrawEntriesResponse.of(mine, queries.now()));
+    }
+
     @GetMapping("/{drawId}/entries/me")
     @Operation(summary = "내 응모", description = "그 회차(draw, 회차 상세와 같은 모양)를 같이 준다. 결과(result)는 추첨 반영 뒤 결제 완료(PAID) 응모만 WON · LOST, 반영 전이거나 결제 완료가 아니면 null. 응모하지 않았으면 404 DRAW_ENTRY_NOT_FOUND")
     public ApiResponse<DrawEntryResponse> mine(@CurrentCustomerId UUID customerId, @PathVariable UUID drawId) {
