@@ -123,6 +123,34 @@ class RefreshTokenDbStoreTest {
         }
     }
 
+    /** 시험이 앞으로 옮기는 시계(UTC). 여러 스레드가 읽어 volatile 이다. */
+    private static final class MovableClock extends Clock {
+        private volatile Instant now;
+
+        MovableClock(Instant start) {
+            this.now = start;
+        }
+
+        void advance(long seconds) {
+            now = now.plusSeconds(seconds);
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
+
+        @Override
+        public java.time.ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(java.time.ZoneId zone) {
+            return this;
+        }
+    }
+
     private static void sleep(long millis) {
         try {
             Thread.sleep(millis);
@@ -512,12 +540,15 @@ class RefreshTokenDbStoreTest {
     @Test
     @DisplayName("다음 토큰의 잠금을 기다리는 동안 유예가 끝나면 재사용이다 — 판정 시각은 잠근 뒤에 읽는다(교체 28초 뒤 도착, 3초 넘게 기다림)")
     void graceEndingWhileWaitingForTheLockIsReuse() throws Exception {
+        // 실제 경과 시간에 기대지 않게 이 시험만 조종하는 시계를 쓴다 — 잠금에 닿기 전에 실행이 늦어도 판정이 같다
+        MovableClock clock = new MovableClock(nowSeconds());
+        DbRefreshTokenStore clocked = new DbRefreshTokenStore(rows, clock, jwt);
         UUID customerId = newCustomer();
         UUID sessionId = UUID.randomUUID();
         String first = login(customerId, sessionId);
         String second = RefreshTokens.newToken();
-        store.rotate(first, second);
-        shiftRotatedAt(first, 28);
+        transactions.executeWithoutResult(status -> clocked.rotate(first, second));      // 교체 시각 = 시계
+        clock.advance(28);                                                                // 유예 안에 도착
         CountDownLatch locked = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         ExecutorService pool = Executors.newFixedThreadPool(2);
@@ -528,9 +559,9 @@ class RefreshTokenDbStoreTest {
                 await(release);                                       // 다음 토큰을 쓰지는 않는다 — 잠금만 쥔다
             }));
             assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
-            Future<Rotation> retried = pool.submit(() -> store.rotate(first, RefreshTokens.newToken()));
+            Future<Rotation> retried = pool.submit(() -> transactions.execute(status -> clocked.rotate(first, RefreshTokens.newToken())));
             awaitRefreshLockWait();
-            sleep(3_000);                                             // 기다리는 동안 처음 교체 뒤 30초를 넘긴다
+            clock.advance(3);                                         // 기다리는 동안 처음 교체 뒤 31초가 된다
             release.countDown();
             holder.get(10, TimeUnit.SECONDS);
 
