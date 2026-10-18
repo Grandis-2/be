@@ -8,6 +8,7 @@ import com.grandis.nova.order.draw.domain.model.DrawProgress;
 import com.grandis.nova.order.draw.domain.model.NewDrawCampaign;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -23,6 +24,9 @@ public interface DrawCampaignStore {
     DrawCampaign insert(NewDrawCampaign campaign);
 
     Optional<DrawCampaign> findById(UUID id);
+
+    /** 없는 id 는 빠진다. 순서는 정하지 않는다. */
+    List<DrawCampaign> findAllById(Collection<UUID> ids);
 
     /** 그 상품을 증정품으로 둔 회차 중 아직 반영(settled_at)되지 않은 것이 있는가 — 마감 뒤 추첨 · 반영 전도 진행 중이다. */
     boolean existsUnsettledByProductId(UUID productId);

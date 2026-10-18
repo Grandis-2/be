@@ -24,6 +24,20 @@ public interface DrawEntryJpaRepository extends JpaRepository<DrawEntryJpaEntity
 
     List<DrawEntryJpaEntity> findByCampaignIdAndStatusAndIdIn(UUID campaignId, DrawEntryStatus status, Collection<UUID> ids);
 
+    /** 응모와 그 회차의 반영 시각을 한 문장으로 — 같은 스냅샷이라 반영과 당첨 주문 연결(같은 커밋)이 어긋나 보이지 않는다(READ COMMITTED). */
+    @Query(value = """
+            SELECT e.id AS id, e.campaign_id AS campaignId, e.status AS status, e.created_at AS createdAt, e.won_order_id AS wonOrderId,
+                   c.settled_at AS settledAt
+              FROM draw_entries e JOIN draw_campaigns c ON c.id = e.campaign_id
+             WHERE e.customer_id = :customerId AND (:wonOnly = FALSE OR e.won_order_id IS NOT NULL)
+             ORDER BY e.created_at DESC, e.id DESC
+             LIMIT :limit OFFSET :offset""", nativeQuery = true)
+    List<MyEntryRow> findByCustomerNewestFirst(@Param("customerId") UUID customerId, @Param("wonOnly") boolean wonOnly,
+                                               @Param("offset") int offset, @Param("limit") int limit);
+
+    @Query(value = "SELECT COUNT(*) AS total, COUNT(won_order_id) AS won FROM draw_entries WHERE customer_id = :customerId", nativeQuery = true)
+    CountsRow countByCustomer(@Param("customerId") UUID customerId);
+
     @Query(value = "SELECT id FROM draw_entries WHERE campaign_id = :campaignId AND won_order_id IS NOT NULL", nativeQuery = true)
     List<byte[]> findWinnerIds(@Param("campaignId") UUID campaignId);
 
@@ -62,4 +76,24 @@ public interface DrawEntryJpaRepository extends JpaRepository<DrawEntryJpaEntity
             UPDATE draw_entries SET status = 'AWAITING_PAYMENT', authorizing_provider_order_id = NULL, updated_at = :now
              WHERE id = :id AND status = 'AUTHORIZING' AND authorizing_provider_order_id = :providerOrderId""", nativeQuery = true)
     int revert(@Param("id") UUID id, @Param("providerOrderId") String providerOrderId, @Param("now") Instant now);
+
+    interface MyEntryRow {
+        byte[] getId();
+
+        byte[] getCampaignId();
+
+        String getStatus();
+
+        Instant getCreatedAt();
+
+        byte[] getWonOrderId();
+
+        Instant getSettledAt();
+    }
+
+    interface CountsRow {
+        long getTotal();
+
+        long getWon();
+    }
 }
