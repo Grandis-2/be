@@ -25,6 +25,7 @@ import com.grandis.nova.common.security.AuthRedisKeys;
 import com.grandis.nova.common.web.RequestIdFilter;
 import com.grandis.nova.member.auth.api.AuthCookies;
 import com.grandis.nova.member.auth.application.KakaoLoginService;
+import com.grandis.nova.member.auth.application.RefreshTokens;
 import com.grandis.nova.member.auth.infrastructure.kakao.KakaoOAuthClient;
 import com.grandis.nova.member.auth.infrastructure.kakao.KakaoUserInfo;
 import com.grandis.nova.member.customer.Customer;
@@ -260,7 +261,7 @@ class AuthFlowIntegrationTest {
     }
 
     @Test
-    @DisplayName("재발급: 쿠키만으로 200, 새 sessionToken 과 새 refresh 쿠키. 옛 리프레시를 다시 내면 재사용 탐지로 401")
+    @DisplayName("재발급: 쿠키만으로 200, 새 sessionToken 과 새 refresh 쿠키. 교체 뒤 유예(30초)가 지나 옛 리프레시를 다시 내면 재사용 탐지로 401")
     void refreshRotatesAndDetectsReuse() throws Exception {
         MvcResult r = login();
         Cookie first = refreshCookie(r);
@@ -272,6 +273,8 @@ class AuthFlowIntegrationTest {
                 .andExpect(cookie().exists(AuthCookies.REFRESH_TOKEN))
                 .andReturn();
         assertThat(refreshCookie(rotated).getValue()).isNotEqualTo(first.getValue());
+        jdbc.update("UPDATE refresh_tokens SET rotated_at = rotated_at - INTERVAL 30 SECOND WHERE token_hash = ?",
+                (Object) RefreshTokens.hash(first.getValue()));
 
         mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(first))
                 .andExpect(status().isUnauthorized())
@@ -280,6 +283,24 @@ class AuthFlowIntegrationTest {
         mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(refreshCookie(rotated)))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
+    }
+
+    @Test
+    @DisplayName("새로고침 연타: 앞 응답의 새 쿠키를 받지 못해 같은 옛 쿠키로 세 번 와도 전부 200 이고, 마지막에 받은 쿠키와 그 액세스 토큰이 산다")
+    void rapidReloadsWithTheSameOldCookieStayLoggedIn() throws Exception {
+        MvcResult r = login();
+        Cookie old = refreshCookie(r);
+        MvcResult last = null;
+        for (int i = 0; i < 3; i++) {
+            last = mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(old))
+                    .andExpect(status().isOk())
+                    .andExpect(cookie().exists(AuthCookies.REFRESH_TOKEN))
+                    .andReturn();
+        }
+        String access = json(last, "/data/sessionToken");
+
+        mvc.perform(get("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(access))).andExpect(status().isOk());
+        mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(refreshCookie(last))).andExpect(status().isOk());
     }
 
     @Test

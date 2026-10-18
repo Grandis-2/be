@@ -66,6 +66,41 @@ class RefreshTokenDbStoreTest {
         return raw;
     }
 
+    /**
+     * 그 원문의 행이 교체된 시각을 seconds 초 앞으로 당긴다 — 유예 창을 시계 없이 넘긴다. 저장된 값에서 빼는 이유: 자바 시각을 써 넣으면 JVM 시간대로
+     * 바뀌어(앱은 UTC 로 저장) 9시간 어긋났다(실측).
+     */
+    private void shiftRotatedAt(String raw, int seconds) {
+        jdbc.update("UPDATE refresh_tokens SET rotated_at = rotated_at - INTERVAL ? SECOND WHERE token_hash = ?",
+                seconds, RefreshTokens.hash(raw));
+    }
+
+    private UUID idOf(String raw) {
+        return UuidBinary.fromBytes(jdbc.queryForObject("SELECT id FROM refresh_tokens WHERE token_hash = ?", byte[].class,
+                (Object) RefreshTokens.hash(raw)));
+    }
+
+    private UUID successorOf(String raw) {
+        byte[] to = jdbc.queryForObject("SELECT rotated_to FROM refresh_tokens WHERE token_hash = ?", byte[].class,
+                (Object) RefreshTokens.hash(raw));
+        return to == null ? null : UuidBinary.fromBytes(to);
+    }
+
+    /** 교체도 폐기도 안 된 행 — 지금 쓸 수 있는 토큰. */
+    private List<UUID> liveRows(UUID sessionId) {
+        return jdbc.queryForList("SELECT id FROM refresh_tokens WHERE family_id = ? AND rotated_at IS NULL AND revoked_at IS NULL",
+                byte[].class, sessionId.toString()).stream().map(UuidBinary::fromBytes).toList();
+    }
+
+    private static void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
     private List<String> familyRows(UUID sessionId) {
         return jdbc.queryForList(
                 "SELECT CONCAT(id, ':', IF(rotated_at IS NULL, '-', 'rotated'), ':', IF(revoked_at IS NULL, '-', 'revoked')) "
@@ -180,13 +215,14 @@ class RefreshTokenDbStoreTest {
     }
 
     @Test
-    @DisplayName("rotate 재사용: 이미 교체된 원문이 다시 오면 그 체인의 살아 있는 행이 **전부** 폐기되고, 그 폐기는 커밋된다")
+    @DisplayName("rotate 재사용: 교체 뒤 유예(30초)가 지나 같은 원문이 다시 오면 그 체인의 살아 있는 행이 **전부** 폐기되고, 그 폐기는 커밋된다")
     void reuseRevokesTheWholeFamilyAndCommits() {
         UUID customerId = newCustomer();
         UUID sessionId = UUID.randomUUID();
         String first = login(customerId, sessionId);
         String second = RefreshTokens.newToken();
         assertThat(store.rotate(first, second).status()).isEqualTo(Rotation.Status.ROTATED);
+        shiftRotatedAt(first, 30);
 
         Rotation reuse = store.rotate(first, RefreshTokens.newToken());
 
@@ -197,6 +233,131 @@ class RefreshTokenDbStoreTest {
                 Integer.class, sessionId.toString())).isZero();
         // 살아남은 토큰이 없다 — 탈취자도 원 소유자도 더 못 쓴다
         assertThat(store.rotate(second, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.REVOKED);
+    }
+
+    // ────────────────────────────── 회전 유예
+
+    @Test
+    @DisplayName("유예: 교체 뒤 30초 안에 같은 옛 원문이 오고 다음 토큰이 아직 안 쓰였으면 다시 회전한다 — 안 쓰인 다음 토큰은 폐기, 체인은 산다")
+    void rotatesAgainWithinGraceWhenSuccessorIsUnused() {
+        UUID customerId = newCustomer();
+        UUID sessionId = UUID.randomUUID();
+        String first = login(customerId, sessionId);
+        String lost = RefreshTokens.newToken();                 // 브라우저가 응답을 버려 저장되지 못한 쿠키
+        assertThat(store.rotate(first, lost).status()).isEqualTo(Rotation.Status.ROTATED);
+        assertThat(successorOf(first)).isEqualTo(idOf(lost));
+
+        String retried = RefreshTokens.newToken();
+        Rotation again = store.rotate(first, retried);
+
+        assertThat(again.status()).isEqualTo(Rotation.Status.ROTATED);
+        assertThat(again.sessionId()).isEqualTo(sessionId);
+        assertThat(successorOf(first)).as("옛 행은 새 토큰을 가리킨다").isEqualTo(idOf(retried));
+        assertThat(liveRows(sessionId)).as("살아 있는(교체 · 폐기 안 된) 토큰은 늘 하나").containsExactly(idOf(retried));
+        assertThat(store.rotate(lost, RefreshTokens.newToken()).status()).as("버려진 다음 토큰은 폐기됐다 — 체인을 끊지는 않는다")
+                .isEqualTo(Rotation.Status.REVOKED);
+        assertThat(store.rotate(retried, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.ROTATED);
+    }
+
+    @Test
+    @DisplayName("유예 안이어도 다음 토큰이 이미 쓰였으면(그 뒤로 회전했으면) 재사용이다 — 체인 전체 폐기. 받아 주는 건 바로 앞 토큰뿐이다")
+    void reuseWithinGraceWhenSuccessorWasUsed() {
+        UUID customerId = newCustomer();
+        UUID sessionId = UUID.randomUUID();
+        String first = login(customerId, sessionId);
+        String second = RefreshTokens.newToken();
+        assertThat(store.rotate(first, second).status()).isEqualTo(Rotation.Status.ROTATED);
+        assertThat(store.rotate(second, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.ROTATED);
+
+        assertThat(store.rotate(first, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.REUSED);
+        assertThat(liveRows(sessionId)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("유예 경계: 교체 뒤 28초면 다시 회전, 30초면 재사용 — 초 단위 시각이라 시험 도중 한 초가 넘어가도 판정이 같은 쪽에 남는 값")
+    void graceBoundary() {
+        UUID customerId = newCustomer();
+        UUID inside = UUID.randomUUID();
+        String a = login(customerId, inside);
+        store.rotate(a, RefreshTokens.newToken());
+        shiftRotatedAt(a, 28);
+        assertThat(store.rotate(a, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.ROTATED);
+
+        UUID outside = UUID.randomUUID();
+        String b = login(newCustomer(), outside);
+        store.rotate(b, RefreshTokens.newToken());
+        shiftRotatedAt(b, 30);
+        assertThat(store.rotate(b, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.REUSED);
+    }
+
+    @Test
+    @DisplayName("유예 창은 처음 교체 시각부터다 — 유예 안에서 다시 회전해도 늘지 않아, 처음 교체 뒤 30초가 지나면 같은 옛 원문은 재사용이다")
+    void graceWindowDoesNotSlide() {
+        UUID customerId = newCustomer();
+        UUID sessionId = UUID.randomUUID();
+        String first = login(customerId, sessionId);
+        store.rotate(first, RefreshTokens.newToken());
+        shiftRotatedAt(first, 20);
+        assertThat(store.rotate(first, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.ROTATED);
+        shiftRotatedAt(first, 10);                                // 처음 교체 뒤 30초
+
+        assertThat(store.rotate(first, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.REUSED);
+    }
+
+    @Test
+    @DisplayName("유예 안이어도 절대 만료가 지난 체인은 다시 회전하지 않는다 — 재사용으로 끊고 500(만료가 발급보다 앞선 행) 없이 끝난다")
+    void expiredChainIsNotRotatedAgainWithinGrace() {
+        UUID customerId = newCustomer();
+        UUID sessionId = UUID.randomUUID();
+        String first = login(customerId, sessionId);
+        store.rotate(first, RefreshTokens.newToken());
+        // 체인을 10초 앞으로 옮기고 만료를 발급 5초 뒤로 — 교체는 10초 전(유예 안), 만료는 5초 전
+        jdbc.update("UPDATE refresh_tokens SET created_at = created_at - INTERVAL 10 SECOND, rotated_at = rotated_at - INTERVAL 10 SECOND, "
+                + "expires_at = created_at + INTERVAL 5 SECOND WHERE family_id = ?", sessionId.toString());
+
+        assertThat(store.rotate(first, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.REUSED);
+        assertThat(liveRows(sessionId)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("이 칸이 생기기 전에 교체된 행(rotated_to 가 비었음)은 유예 없이 재사용이다 — 배포 직후의 옛 행")
+    void legacyRotatedRowHasNoGrace() {
+        UUID customerId = newCustomer();
+        UUID sessionId = UUID.randomUUID();
+        String first = login(customerId, sessionId);
+        store.rotate(first, RefreshTokens.newToken());
+        jdbc.update("UPDATE refresh_tokens SET rotated_to = NULL WHERE token_hash = ?", (Object) RefreshTokens.hash(first));
+
+        assertThat(store.rotate(first, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.REUSED);
+    }
+
+    @Test
+    @DisplayName("다음 토큰이 회전 중(행 잠금, 커밋 전)이면 유예 요청은 그 커밋을 기다렸다가 쓰인 것을 보고 재사용이다 — 살아 있는 토큰이 둘이 되지 않는다")
+    void graceWaitsForSuccessorRotationInFlight() throws Exception {
+        UUID customerId = newCustomer();
+        UUID sessionId = UUID.randomUUID();
+        String first = login(customerId, sessionId);
+        String second = RefreshTokens.newToken();
+        store.rotate(first, second);
+        CountDownLatch locked = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> holder = pool.submit(() -> transactions.executeWithoutResult(status -> {
+                jdbc.queryForList("SELECT id FROM refresh_tokens WHERE token_hash = ? FOR UPDATE", RefreshTokens.hash(second));
+                locked.countDown();
+                sleep(1500);
+                jdbc.update("UPDATE refresh_tokens SET rotated_at = created_at WHERE token_hash = ?", (Object) RefreshTokens.hash(second));
+            }));
+            assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+            long started = System.nanoTime();
+            Rotation retried = pool.submit(() -> store.rotate(first, RefreshTokens.newToken())).get(20, TimeUnit.SECONDS);
+            holder.get(10, TimeUnit.SECONDS);
+
+            assertThat(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)).as("다음 토큰의 잠금을 기다렸다").isGreaterThan(1000);
+            assertThat(retried.status()).isEqualTo(Rotation.Status.REUSED);
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     @Test
@@ -381,8 +542,8 @@ class RefreshTokenDbStoreTest {
     }
 
     @Test
-    @DisplayName("같은 원문으로 8개가 동시에 회전하면 정확히 하나만 성공한다 — 행 잠금이 직렬화하고 나머지는 재사용으로 본다")
-    void concurrentRotationLetsExactlyOneThrough() throws Exception {
+    @DisplayName("같은 원문으로 8개가 동시에 오면(새로고침 연타) 행 잠금이 줄 세우고 전부 회전한다 — 앞 것이 만든 다음 토큰은 매번 폐기돼 살아 있는 토큰은 하나")
+    void concurrentRotationLeavesExactlyOneLiveToken() throws Exception {
         UUID customerId = newCustomer();
         UUID sessionId = UUID.randomUUID();
         String raw = login(customerId, sessionId);
@@ -391,16 +552,9 @@ class RefreshTokenDbStoreTest {
                 Concurrently.run(n, i -> () -> store.rotate(raw, RefreshTokens.newToken()));
 
         assertThat(results).allSatisfy(r -> assertThat(r.error()).isNull());
-        List<Rotation.Status> outcomes = results.stream().map(r -> r.value().status()).toList();
-        // 하나만 통과한다. 진 쪽 중 첫 번째는 "이미 교체됨"(REUSED)을 보고 체인을 끊고, 그 뒤에 잠금을 얻은 쪽들은
-        // 이미 끊긴 행을 보므로 REVOKED 다. 둘 다 401 로 끝나는 같은 사건의 앞뒤다.
-        assertThat(outcomes).filteredOn(s -> s == Rotation.Status.ROTATED).hasSize(1);
-        assertThat(outcomes).filteredOn(s -> s == Rotation.Status.REUSED).isNotEmpty();
-        assertThat(outcomes).allMatch(s -> s == Rotation.Status.ROTATED || s == Rotation.Status.REUSED || s == Rotation.Status.REVOKED);
-        // 진 쪽들이 재사용으로 판정해 체인을 끊었다 — 이긴 쪽의 새 토큰도 함께 죽는다(정상 동작, RFC 9700)
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE family_id = ? AND revoked_at IS NULL",
-                Integer.class, sessionId.toString())).isZero();
-        assertThat(familyRows(sessionId)).hasSize(2);   // 첫 발급 + 이긴 회전 하나
+        assertThat(results.stream().map(r -> r.value().status()).toList()).containsOnly(Rotation.Status.ROTATED);
+        assertThat(familyRows(sessionId)).hasSize(1 + n);   // 첫 발급 + 회전 8
+        assertThat(liveRows(sessionId)).as("살아 있는 토큰은 마지막 회전 하나 — 옛 행이 가리키는 것").containsExactly(successorOf(raw));
     }
 
     // ────────────────────────────── 폐기

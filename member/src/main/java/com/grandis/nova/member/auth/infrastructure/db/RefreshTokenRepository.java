@@ -26,6 +26,15 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, UUID
     @Query("select t from RefreshToken t where t.tokenHash = :hash")
     Optional<RefreshToken> findByTokenHashForUpdate(@Param("hash") byte[] hash);
 
+    /**
+     * 유예 안의 다시 회전용 — 옛 행이 가리키는 다음 토큰을 X 로 잠근다. 옛 행을 먼저 잠근 뒤 부른다. 다음 토큰의 정상 회전은 그 행만 잠그므로 순서가
+     * 엇갈리지 않는다. 잠근 뒤에 본 rotated_at 으로 "아직 안 쓰였다" 를 판정한다 — 잠그지 않고 읽으면 그 토큰의 회전이 진행 중일 때(커밋 전)
+     * 안 쓰였다고 보고 다시 회전해, 살아 있는 토큰이 둘이 된다.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select t from RefreshToken t where t.id = :id")
+    Optional<RefreshToken> findByIdForUpdate(@Param("id") UUID id);
+
     /** 체인 전체 폐기. 이미 폐기된 행은 시각을 덮지 않는다 — 처음 끊긴 시각이 남아야 조사할 수 있다. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("update RefreshToken t set t.revokedAt = :now where t.familyId = :familyId and t.revokedAt is null")
