@@ -14,9 +14,10 @@ import org.springframework.security.web.SecurityFilterChain;
  * 경로별 권한만 정한다. 토큰 검증(`Authorization: Bearer`, JWKS) · 폐기 조회 · 401/403 봉투는 common:security 의 체인이 맡는다(NV-139 채택).
  * 폐기 조회가 실패했을 때 닫는 경로는 공통 기본값(`/api/v1/admin/**` · 재발급 · 내 정보)에 리뷰 쓰기(작성 · 수정 · 삭제)를 더한다 — CatalogDefaults.
  *
- * 공개 조회는 **명시한 GET 만** 열고 나머지는 거부한다(preorder 와 같은 규약). anyRequest().permitAll() 이면 /admin · /internal 밖에 새로 생기는
+ * 공개 경로는 **명시한 것만** 연다 — 조회는 GET, 그 밖에는 집계 신호 POST 하나(preorder 와 같은 규약). anyRequest().permitAll() 이면 /admin · /internal 밖에 새로 생기는
  * 엔드포인트가 기본으로 공개되는데 그걸 잡는 시험이 없다 — 공개로 열 엔드포인트는 여기 목록에 더한다.
- * 공개 조회는 토큰을 보지 않는다 — 관리자 미리보기는 관리자 상세(/api/v1/admin/products/{id})로 옮겼다(2026-09-29).
+ * 공개 조회는 토큰을 보지 않는다 — 관리자 미리보기는 관리자 상세(/api/v1/admin/products/{id})로 옮겼다(2026-09-29). 예외는 조회 신호(POST
+ * /api/v1/products/{id}/views)다 — 로그인 없이 받지만 회원 토큰이면 회원으로 센다(토큰이 무효면 비회원).
  */
 @Configuration(proxyBeanMethods = false)
 public class SecurityConfig {
@@ -27,6 +28,7 @@ public class SecurityConfig {
                 .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()                                     // 오류 페이지 디스패치
                 .requestMatchers(EndpointRequest.to("health")).permitAll()                                    // 헬스 체크(관리 포트의 readiness · liveness)
                 .requestMatchers(HttpMethod.GET, "/api/v1/products/**", "/api/v1/categories/**").permitAll()   // 상품 목록 · 상세 · 옵션 상세 · 상품 리뷰 · 카테고리 트리
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/*/views").permitAll()                       // 상세 화면의 조회 신호 — 비회원도 보낸다(익명 id)
                 .requestMatchers(HttpMethod.GET, "/api/v1/promotions", "/api/v1/promotions/*").permitAll()     // 사전예약 홍보 목록 · 상세
                 .requestMatchers(HttpMethod.GET, "/api/v1/reviews/mine").hasRole("USER")                        // 내 리뷰
                 .requestMatchers(HttpMethod.GET, "/api/v1/reviews").permitAll()                                 // 구매후기 모아보기

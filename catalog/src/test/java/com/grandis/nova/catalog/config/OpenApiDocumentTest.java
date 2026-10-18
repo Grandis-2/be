@@ -114,7 +114,8 @@ class OpenApiDocumentTest {
         assertThat(marked).containsExactlyInAnyOrder(
                 "GET /api/v1/products", "GET /api/v1/products/{productId}", "GET /api/v1/products/{productId}/variants/{variantId}",
                 "GET /api/v1/products/{productId}/reviews", "GET /api/v1/categories", "GET /api/v1/reviews",
-                "GET /api/v1/promotions", "GET /api/v1/promotions/{promotionId}");
+                "GET /api/v1/promotions", "GET /api/v1/promotions/{promotionId}",
+                "GET /api/v1/products/ranking", "POST /api/v1/products/{productId}/views");
     }
 
     @Test
@@ -136,6 +137,7 @@ class OpenApiDocumentTest {
         expected.put("PATCH /api/v1/admin/products/{productId}/images", "ProductImageReplaceRequest");
         expected.put("POST /api/v1/reviews", "ReviewCreateRequest");
         expected.put("PATCH /api/v1/reviews/{reviewId}", "ReviewUpdateRequest");
+        expected.put("POST /api/v1/products/{productId}/views", "ViewRequest");
 
         Map<String, String> documented = new LinkedHashMap<>();
         operations().forEach((name, operation) -> {

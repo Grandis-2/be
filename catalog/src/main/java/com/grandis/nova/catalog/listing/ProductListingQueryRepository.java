@@ -384,6 +384,21 @@ public class ProductListingQueryRepository {
         return withColors ? withColors(cards) : cards;
     }
 
+    /**
+     * 목록 카드를 고른 상품만 — 회원 목록과 같은 노출 규칙(공개 · 판매 중 · 준비 끝 · 사전예약은 접수 중)과 같은 칸(색상칩 포함). 순서는 ids 순서,
+     * 규칙에 맞지 않는 상품은 빠진다. 조회수 랭킹이 쓴다.
+     */
+    public List<ProductListItem> findListedCards(List<UUID> ids, Instant now) {
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        MapSqlParameterSource params = baseParams(now).addValue("ids", ids.stream().map(UuidBinary::toBytes).toList());
+        Map<UUID, ProductListItem> byId = new HashMap<>();
+        jdbc.query(SELECT_ITEMS + FROM_VISIBLE + " AND p.id IN (:ids)", params, (rs, rowNum) -> toItem(rs, now))
+                .forEach(item -> byId.put(item.productId(), item));
+        return withColors(ids.stream().map(byId::get).filter(java.util.Objects::nonNull).toList());
+    }
+
     /** 고른 상품들에 색상칩을 붙인다 — 칩 칸({@link #CHIP_COLUMNS})을 그 상품 id 로 한 번에 읽는다. 순서는 그대로. */
     private List<ProductListItem> withColors(List<ProductListItem> items) {
         if (items.isEmpty()) {
