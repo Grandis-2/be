@@ -108,7 +108,14 @@ public class PreorderCampaignAdminService {
         try {
             stillOnSale = liveProduct(productId).filter(ProductCatalog::isOnPreorderSale).isPresent();
         } catch (BusinessException | IllegalStateException e) {
-            writer.closeReopened(productId, reopened.getClosesAt(), reopenedBy);
+            try {
+                writer.closeReopened(productId, reopened.getClosesAt(), reopenedBy);
+            } catch (RuntimeException closeFailure) {
+                // 되돌리기 실패가 catalog 오류를 덮지 않게 붙여 두고 원래 오류로 답한다
+                log.error("다시 연 회차를 되돌리지 못했다 — 열린 채로 남았다 productId={}", productId, closeFailure);
+                e.addSuppressed(closeFailure);
+                throw e;
+            }
             log.warn("다시 연 뒤 상품 판매 상태를 확인하지 못해 되돌렸다 productId={} error={}", productId, e.getMessage());
             throw e;
         }
