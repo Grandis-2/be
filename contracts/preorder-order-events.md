@@ -66,6 +66,7 @@ order 의 보내는 쪽은 `order/outbox`(표 `order_outbox_events`), 받는 쪽
 - **언제.** 사전예약 주문의 결제 승인을 반영한 트랜잭션에서 적는다(`PaymentResults`). 반영이 되돌아가면 알림도 없다.
 - **중복.** 승인은 주문이 승인 중(AUTHORIZING)일 때만 반영되고 행 잠금 뒤 판정하므로, 승인 API 응답과 결과 이벤트가 겹치거나 결과 이벤트가 여러 번 와도 반영 · 알림은 한 번이다. 아웃박스 재전송으로 같은 메시지가 다시 가도 preorder 는 RESERVED 에서 무시한다.
 - **순서.** 예약이 취소 중(CANCELING)일 때 오면 preorder 는 결제 시각만 남긴다 — 그 취소가 거절되면 확정으로 돌아갈 근거다.
+- **취소가 끝난(CANCELED) 예약에 오면** preorder 는 확정하지 않고 이상 결제로 한 번 기록해(`preorder_payment_anomalies`, 같은 예약 · 결제 시각은 한 번) 지표 `preorder.payment.after_cancel` 과 ERROR 로그로 알린다. 아래 "보장" 이 지켜지면 생기지 않는다 — 생기면 order 의 보장이 깨진 것이다. 환불 대상은 payment 의 운영 대조가 찾는다.
 
 ### 결제 시각
 

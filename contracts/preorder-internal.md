@@ -1,6 +1,9 @@
 # preorder ↔ catalog 내부 API 계약
 
-양쪽 구현의 기준이다. catalog 가 응답을 만들고(`InternalProductController` · `ProductOptionsQueryService`), preorder 의 `CatalogClient` · `ProductCatalog` · `CatalogReader` 가 소비한다. 문서와 어긋나는 쪽이 고친다.
+양쪽 구현의 기준이다. 문서와 어긋나는 쪽이 고친다.
+
+- 1.3: catalog 가 응답을 만들고(`InternalProductController` · `ProductOptionsQueryService`), preorder 의 `CatalogClient` · `ProductCatalog` · `CatalogReader` 가 소비한다.
+- 2.1 · 2.2: preorder 가 응답을 만들고(`InternalCampaignController` · `CampaignScheduleQuery`), catalog 가 `preorder_campaigns` 를 직접 읽던 자리에서 소비한다.
 
 ## 1.3 `GET /internal/products/{productId}/options` — 상품과 옵션 (내부 전용)
 
@@ -87,6 +90,63 @@ preorder 는 dev(NV-281)에서 판정을 갈랐다 — 회차 설정은 `Product
 3. preorder: 판정 메서드 분리 — 설정용은 `saleMode` 만, 접수용은 네 조건 + 옵션 조건.
 4. preorder: 캐시 무효화 방식 적용.
 5. 양쪽 배포와 캐시 갱신을 확인한 뒤 통합 등록·접수를 활성화한다. 기존 상품이 있다면 실제 등록 완료 여부를 확인해 이관하며 일괄 완료 처리하지 않는다.
+
+## 2. catalog → preorder — 회차 일정
+
+catalog 가 `preorder_campaigns` 를 직접 읽던 것(목록 · 검색 · 랭킹의 접수 중 조건, 카드 · 상세의 오픈 · 마감 시각, 판매 준비, 관리자 수정 동결 · 삭제 거절, 홍보 후보)을 이 두 API 로 바꾼다.
+
+**공통**
+
+- **인증 없음.** 두 GET 은 토큰을 받지 않는다(preorder `SecurityConfig`) — 오픈 · 마감 시각은 공개 화면의 값이고 비회원 목록에는 실을 토큰이 없다. order `GET /internal/stocks` 와 같은 근거이고, 그 전제로 `/internal/**` 는 공개 라우팅에 두지 않는다. 나머지 preorder `/internal/**` 는 지금처럼 토큰이 필요하다.
+- **응답 봉투**는 `common:web` 의 `ApiResponse`. 회차 한 건은 `{ "productId", "opensAt", "closesAt" }`(UUID · ISO-8601 UTC).
+- **거르지 않는 것.** 공개 여부 · 판매 중지(`products.status`)는 preorder 가 거르지 않는다 — catalog 가 원장이므로 catalog 값으로 판단한다.
+- **시각이 바뀌는 때.** 조기 마감 · 판매 중지 마감(`PREORDER_CAMPAIGN_CANCELED`)은 `closesAt` 을 그 시각으로 당기고, 다시 열기는 `closesAt` 을 새 마감 시각으로 바꾼다 — 접수 중인지는 `closesAt` 만 봐도 맞다. 오픈 전에 판매 중지로 닫힌 회차는 `opensAt` 도 "닫은 시각 − 1ms" 가 되어 둘 다 지난 회차로 보인다(원래 오픈 시각은 남지 않는다). 오픈 3분 전부터의 수정 동결은 catalog 규칙이고 preorder 는 오픈 뒤 일정 변경을 막는다(조기 마감 · 다시 열기 제외).
+- **회차 행은 지워지지 않는다.** 차수(`shipment_batches`)만 오픈 전에 통째로 바뀐다.
+- **preorder 가 응답하지 않을 때**의 동작은 catalog 가 정한다(목록: 마지막 값 또는 사전예약 제외, 수정 · 삭제 판정: 확인하지 못하면 거절 권장).
+- **1.3 응답을 만들 때는 부르지 않는다.** 1.3 은 preorder 접수가 동기로 부르므로, 그 안에서 이 API 를 부르면 접수 한 건이 preorder → catalog → preorder 로 서로를 기다린다. 사전예약 상품의 `registrationCompleted` 는 이 API 로 계산하지 않는다(1.3 의 칸 정의).
+
+### 2.1 `GET /internal/preorders/campaigns/open` — 접수 중 · 곧 열릴 회차
+
+- 마감 전(`closesAt > now`)이고 이미 열렸거나 10분 안에 열리는(`opensAt ≤ now + 10분`) 회차를 **오픈이 이른 순**(`opensAt`, `productId`)으로 준다.
+- **접수 중인지는 받는 쪽이 요청마다 자기 시각으로 판정한다**(`opensAt ≤ now < closesAt`). 그래서 받은 값을 몇 초 캐시해도 오픈 · 마감 경계가 정확하다. 10분은 그 캐시보다 훨씬 길게 잡은 여유다(preorder 설정 `nova.campaign.internal-lookahead`).
+- **상한 500건**(`nova.campaign.internal-open-limit`). 넘으면 앞 500건만 주고 preorder 가 지표 `preorder.internal.campaigns.truncated` 와 ERROR 로그(10분에 한 번)로 알린다 — 오픈이 이른 순이라 이미 열린 회차가 남고 곧 열릴 회차부터 빠진다. 실제 규모는 수십 건이다.
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [
+      { "productId": "0199a3f2-8a10-7b21-9c32-4d5e6f708192", "opensAt": "2026-10-20T01:00:00Z", "closesAt": "2026-10-27T01:00:00Z" }
+    ],
+    "serverTime": "2026-10-20T01:00:03.120Z"
+  },
+  "error": null,
+  "timestamp": "2026-10-20T01:00:03.121Z",
+  "traceId": "…"
+}
+```
+
+| 칸 | 뜻 |
+| --- | --- |
+| `items` | 위 조건의 회차. 없으면 `[]` |
+| `serverTime` | 응답을 만든 preorder 시각. 받는 쪽이 자기 시계와의 차이를 확인하는 용도다 |
+
+### 2.2 `GET /internal/preorders/campaigns?productIds=a,b,…` — 상품별 회차
+
+- `productIds` 는 1~100개(쉼표로 잇거나 반복, 같은 id 는 한 번). 넘으면 catalog 가 나눠 부른다.
+- **회차가 없는 상품은 `items` 에서 빠진다** — 받는 쪽은 "회차 없음 = 판매 준비 전" 으로 본다. 순서는 정하지 않는다(productId 로 맞춘다).
+- 캐시하지 않고 그때그때 DB 에서 읽는다 — 수정 · 삭제 판정에 그대로 써도 된다.
+
+```json
+{ "success": true, "data": { "items": [ { "productId": "…", "opensAt": "…", "closesAt": "…" } ] }, "error": null, "timestamp": "…", "traceId": "…" }
+```
+
+**오류**(2.1 · 2.2)
+
+| 상태 | `error.code` | 언제 |
+| --- | --- | --- |
+| 400 | `VALIDATION_FAILED` | 2.2 의 `productIds` 가 없음 · 비었음 · 빈 원소(`a,`) · 100개 초과 · UUID 가 아님(`details.violations[0].field = productIds`) |
+| 405 · 500 · 503 | `METHOD_NOT_ALLOWED` · `INTERNAL_ERROR` · `DEPENDENCY_UNAVAILABLE` | 공통 처리기의 봉투. 503 은 DB 연결을 얻지 못했을 때 |
 
 ## 상태
 

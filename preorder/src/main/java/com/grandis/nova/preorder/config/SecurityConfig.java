@@ -27,6 +27,10 @@ class SecurityConfig {
                         "/api/v1/preorders/products/*/progress").permitAll()
                 // API 문서. 켠 환경에서만 있고, 꺼진 환경에는 경로가 없어 404 다
                 .requestMatchers(HttpMethod.GET, OpenApiPaths.docs()).permitAll()
+                // catalog 의 회차 일정 조회는 토큰 없이 연다 — 공개 화면의 값이고 비회원 목록에는 실을 토큰이 없다.
+                // 그 전제로 /internal 은 공개 라우팅(ALB)에 두지 않는다
+                .requestMatchers(HttpMethod.GET, "/internal/preorders/campaigns", "/internal/preorders/campaigns/open")
+                .permitAll()
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                 .requestMatchers("/api/v1/preorders/**", "/internal/**").authenticated()
                 .anyRequest().denyAll());
