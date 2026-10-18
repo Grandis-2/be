@@ -64,10 +64,16 @@ public class SyncJobs {
         return syncJobs.markRetryScheduled(syncJobId, now);
     }
 
-    /** worker 가 등록을 포기했다. 등록 작업에만 쓴다. @return 바뀐 행 수(끝난 작업이면 0) */
+    /** worker 가 포기했다(등록 · 취소). @return 바뀐 행 수(끝난 작업이면 0) */
     @Transactional(propagation = Propagation.MANDATORY)
     public int deadLetter(UUID syncJobId, Instant now) {
         return syncJobs.markDeadLetter(syncJobId, now);
+    }
+
+    /** 포기한 작업을 관리자가 외부에서 확인하고 끝냈다. @return 바뀐 행 수(포기한 작업이 아니면 0) */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public int resolve(UUID syncJobId, Instant now) {
+        return syncJobs.markResolved(syncJobId, now);
     }
 
     /** 결과 이벤트에 실려 온 외부 호출 한 번을 남긴다. @return 새로 남겼으면 true, 이미 받은 이벤트면 false */

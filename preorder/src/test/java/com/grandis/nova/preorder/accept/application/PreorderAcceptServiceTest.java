@@ -89,15 +89,6 @@ class PreorderAcceptServiceTest {
     }
 
     @Test
-    void 회원_FK_충돌이면_404_MEMBER_NOT_FOUND() {
-        violates("fk_preorder_customer");
-
-        assertThatThrownBy(this::acceptByAdmin)
-                .extracting(e -> ((BusinessException) e).errorCode())
-                .isEqualTo(PreorderErrorCode.MEMBER_NOT_FOUND);
-    }
-
-    @Test
     void 모르는_제약이면_삼키지_않고_그대로_올린다() {
         DataIntegrityViolationException violation = violates("uq_something_else");
 

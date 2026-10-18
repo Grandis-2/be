@@ -23,6 +23,14 @@ class PreorderDefaultsTest {
         assertThat(environment.getProperty("spring.http.serviceclient.order.connect-timeout")).isEqualTo("300ms");
         assertThat(environment.getProperty("spring.application.name")).isEqualTo("preorder");
         assertThat(environment.getProperty("spring.datasource.hikari.connection-timeout")).isEqualTo("2000");
+        assertThat(environment.getProperty("spring.datasource.hikari.data-source-properties.readOnlyPropagatesToServer"))
+                .isEqualTo("false");
+        assertThat(environment.getProperty("spring.datasource.hikari.data-source-properties.useLocalSessionState"))
+                .isEqualTo("true");
+        assertThat(environment.getProperty("spring.datasource.hikari.data-source-properties.useLocalTransactionState"))
+                .isEqualTo("true");
+        assertThat(environment.getProperty("spring.datasource.hikari.data-source-properties.cacheServerConfiguration"))
+                .isEqualTo("true");
         assertThat(environment.getProperty("auth.revocation-check.fail-closed-paths"))
                 .isEqualTo("/api/v1/admin/**,/api/v1/preorders/*/cancel");
         assertThat(environment.getProperty("nova.outbox.metrics-prefix")).isEqualTo("preorder.outbox");
@@ -57,10 +65,13 @@ class PreorderDefaultsTest {
     void 설정_파일의_값이_기본값을_이긴다() {
         StandardEnvironment environment = new StandardEnvironment();
         environment.getPropertySources().addFirst(new MapPropertySource("application.yml",
-                Map.of("resilience4j.bulkhead.configs.default.max-concurrent-calls", "5")));
+                Map.of("resilience4j.bulkhead.configs.default.max-concurrent-calls", "5",
+                        "spring.datasource.hikari.data-source-properties.readOnlyPropagatesToServer", "true")));
 
         assertThat(apply(environment).getProperty("resilience4j.bulkhead.configs.default.max-concurrent-calls"))
                 .isEqualTo("5");
+        assertThat(environment.getProperty("spring.datasource.hikari.data-source-properties.readOnlyPropagatesToServer"))
+                .isEqualTo("true");
     }
 
 

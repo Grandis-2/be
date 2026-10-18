@@ -2,7 +2,7 @@ package com.grandis.nova.preorder.syncjob;
 
 /**
  * 작업 진행 상태. worker 가 보낸 결과 이벤트를 받아 preorder 가 바꾼다. PROCESSING 은 쓰지 않는다.
- * DEAD_LETTER · CANCELED 는 REGISTER 전용이다(DB CHECK).
+ * CANCELED 는 REGISTER 전용이다(DB CHECK) — 취소가 등록을 무효화할 때만 쓴다. DEAD_LETTER 는 두 종류 모두 worker 가 포기한 것이다.
  */
 public enum SyncJobStatus {
     PENDING,

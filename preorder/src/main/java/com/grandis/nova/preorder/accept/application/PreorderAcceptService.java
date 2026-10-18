@@ -33,7 +33,6 @@ public class PreorderAcceptService {
     static final String UQ_ACTIVE = "uq_preorder_active";
     static final String UQ_ADMISSION = "uq_preorder_admission";
     static final String UQ_IDEMPOTENCY = "uq_preorder_idempotency";
-    static final String FK_CUSTOMER = "fk_preorder_customer";
 
     /** 접수 시간 · 결과(accepted · replayed · 오류 코드)별 건수. */
     static final String ACCEPT_METRIC = "preorder.accept";
@@ -147,7 +146,6 @@ public class PreorderAcceptService {
                             .map(existing -> Map.<String, Object>of("existingPreorderId", existing.preorderToken()))
                             .orElse(null));
             case UQ_ADMISSION -> throw new BusinessException(PreorderErrorCode.ADMISSION_TICKET_USED);
-            case FK_CUSTOMER -> throw new BusinessException(PreorderErrorCode.MEMBER_NOT_FOUND);
             default -> throw e;
         };
     }

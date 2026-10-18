@@ -323,7 +323,7 @@ class AdminSyncJobApiTest {
         UUID second = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
         fixtures.syncAttempt(second, 1, "REJECTED", 422, code);
 
-        assertThat(candidateReader.findDeadLetters(code, 1))
+        assertThat(candidateReader.findDeadLetters(SyncJobType.REGISTER, code, 1))
                 .extracting(ReprocessCandidate::syncJobId)
                 .containsExactly(first);
     }
@@ -337,7 +337,7 @@ class AdminSyncJobApiTest {
         UUID reprocessable = fixtures.deadLetter(accepts.accept(fixtures.customer()).preorder().id());
         fixtures.syncAttempt(reprocessable, 1, "REJECTED", 422, code);
 
-        assertThat(candidateReader.findDeadLetters(code, 1))
+        assertThat(candidateReader.findDeadLetters(SyncJobType.REGISTER, code, 1))
                 .extracting(ReprocessCandidate::syncJobId)
                 .containsExactly(reprocessable);
     }
