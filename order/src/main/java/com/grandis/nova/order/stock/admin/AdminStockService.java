@@ -2,8 +2,10 @@ package com.grandis.nova.order.stock.admin;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.order.MySqlLockFailures;
 import com.grandis.nova.order.OrderErrorCode;
+import com.grandis.nova.order.outbox.InStockProductReady;
 import com.grandis.nova.order.stock.StockLedger;
 import com.grandis.nova.order.stock.domain.enums.SaleMode;
 import com.grandis.nova.order.stock.domain.exception.StockAlreadyCreatedException;
@@ -30,8 +32,9 @@ import java.util.function.Supplier;
 /**
  * 관리자 재고 조회 · 설정 · 초기화(order 의 유스케이스). 대상은 일반 판매 상품의 옵션이고, 요청 하나의 옵션은 모두 되거나 모두 안 된다.
  *
- * 한 트랜잭션: 상품 판매 방식 확인 → 옵션 소속 확인 → 원장 반영 → 결과 재조회.
- * 상품 · 옵션은 catalog 표를 잠그지 않고 읽는다({@link CatalogOptions} 의 전제).
+ * 한 트랜잭션: 상품 판매 방식 확인 → 옵션 소속 확인 → 원장 반영 → 판매 준비 이벤트(새로 만든 행이 있을 때) → 결과 재조회.
+ * 상품 · 옵션은 catalog 표를 잠그지 않고 읽는다({@link CatalogOptions} 의 전제). 재고 행을 만드는 원장 호출은 이 서비스뿐이라
+ * (관리자 설정 · 초기화 · 상품 등록 이벤트 — StockArchitectureTest 가 지킨다) 판매 준비 이벤트가 빠지는 경로가 없다.
  *
  * - 트랜잭션은 여기서 직접 연다. 원장 예외 뒤의 다시 하기가 새 트랜잭션이어야 해서, 바깥 트랜잭션 안에서 부르면 바로 실패한다.
  * - 다시 하기는 둘만: 같은 옵션의 행을 동시에 처음 만든 경우(PK 중복 — 다음 시도에서 그 행은 "있는 행"이다)와
@@ -50,15 +53,17 @@ public class AdminStockService {
     private final StockReader stockReader;
     private final CatalogOptions catalog;
     private final StockTargets targets;
+    private final OutboxWriter outboxWriter;
     private final TransactionTemplate writeTransaction;
     private final TransactionTemplate readTransaction;
 
-    public AdminStockService(StockLedger ledger, StockReader stockReader, CatalogOptions catalog,
+    public AdminStockService(StockLedger ledger, StockReader stockReader, CatalogOptions catalog, OutboxWriter outboxWriter,
                              PlatformTransactionManager transactionManager) {
         this.ledger = ledger;
         this.stockReader = stockReader;
         this.catalog = catalog;
         this.targets = new StockTargets(catalog);
+        this.outboxWriter = outboxWriter;
         this.writeTransaction = new TransactionTemplate(transactionManager);
         this.readTransaction = new TransactionTemplate(transactionManager);
         this.readTransaction.setReadOnly(true);
@@ -115,6 +120,9 @@ public class AdminStockService {
                     targets.requireStockedProduct(productId);
                     targets.requireOwnedOptions(productId, optionIds);
                     Set<UUID> created = change.get();
+                    if (!created.isEmpty()) {
+                        outboxWriter.append(new InStockProductReady(productId));
+                    }
                     return new StockResult(productId, stockReader.findByOptionIds(optionIds), created);
                 });
             } catch (StockBelowCommittedException e) {

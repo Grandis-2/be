@@ -1,5 +1,6 @@
 package com.grandis.nova.order.stock.admin;
 
+import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.order.stock.StockLedger;
@@ -54,6 +55,9 @@ class AdminStockServiceConcurrencyTest {
     StockExpectations expectations;
 
     @Autowired
+    OutboxWriter outboxWriter;
+
+    @Autowired
     PlatformTransactionManager transactionManager;
 
     @Autowired
@@ -73,7 +77,7 @@ class AdminStockServiceConcurrencyTest {
         RacingWriter racing = new RacingWriter(writer, () -> transactionTemplate.executeWithoutResult(
                 status -> writer.insert(option, 99, clock.instant())));
         AdminStockService service = new AdminStockService(new StockLedger(racing, reader, expectations, clock), reader, catalog,
-                transactionManager);
+                outboxWriter, transactionManager);
 
         StockResult result = service.set(product.productId(), List.of(new StockSetting(option, 10)));
 
@@ -93,7 +97,7 @@ class AdminStockServiceConcurrencyTest {
         RacingReader racing = new RacingReader(reader, () -> transactionTemplate.executeWithoutResult(
                 status -> writer.insert(option, 99, clock.instant())));
         AdminStockService service = new AdminStockService(new StockLedger(writer, racing, expectations, clock), reader, catalog,
-                transactionManager);
+                outboxWriter, transactionManager);
 
         StockResult result = service.initialize(product.productId(), List.of(new StockSetting(option, 10)));
 

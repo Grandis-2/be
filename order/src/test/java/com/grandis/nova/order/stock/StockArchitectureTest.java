@@ -53,6 +53,18 @@ class StockArchitectureTest {
             .should().dependOnClassesThat().areAssignableTo(StockLedger.class)
             .because("재고 장부 대조의 불변식이 모든 재고 이동 경로를 알아야 한다");
 
+    /**
+     * 재고 행을 만드는 원장 호출(설정 · 초기화)은 AdminStockService 만 한다. 그 서비스가 같은 트랜잭션에서 판매 준비 이벤트를 적으므로
+     * (contracts/order-catalog-events.md), 다른 곳에서 부르면 catalog 가 그 상품을 판매 준비로 알지 못한다.
+     */
+    @ArchTest
+    static final ArchRule onlyAdminStockServiceCreatesStockRows = noClasses()
+            .that().doNotHaveFullyQualifiedName("com.grandis.nova.order.stock.admin.AdminStockService")
+            .should().callMethodWhere(DescribedPredicate.describe("StockLedger.set · initialize", call ->
+                    call.getTargetOwner().isEquivalentTo(StockLedger.class)
+                            && Set.of("set", "initialize").contains(call.getName())))
+            .because("재고 행을 만들면 판매 준비 이벤트를 같은 트랜잭션에 적어야 한다");
+
     /** 엔티티 · JPA 저장소 · catalog 표 읽기는 영속 계층 밖으로 나가지 않는다. 밖에서는 포트만 쓴다. */
     @ArchTest
     static final ArchRule persistenceIsEncapsulated = noClasses()
