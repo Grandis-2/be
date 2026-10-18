@@ -51,6 +51,7 @@ class PopularSearchApiTest {
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired StringRedisTemplate redis;
     @Autowired SearchTermCounter counter;
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean com.grandis.nova.catalog.listing.ProductListingQueryRepository listings;
 
     ShopFixtures fixtures;
     String tag;
@@ -235,6 +236,23 @@ class PopularSearchApiTest {
         mockMvc.perform(json(post("/api/v1/products/searches").header("X-Forwarded-For", "203.0.113.21, 130.176.0.1"),
                 JSON.writeValueAsString(new PopularSearchController.SearchRequest(tag, UUID.randomUUID())))).andExpect(status().isNoContent());
         assertThat(score(tag)).as("대조군 — 다른 IP").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("이미 센 사람 · 검색어를 되풀이하면 결과 수를 세지 않는다(DB 를 타지 않는다)")
+    void repeatedSignalSkipsResultCount() throws Exception {
+        listed("Nova " + tag, "x");
+        UUID anonymous = UUID.randomUUID();
+        search(tag, anonymous).andExpect(status().isNoContent());
+        org.mockito.Mockito.clearInvocations(listings);
+
+        search(tag, anonymous).andExpect(status().isNoContent());
+        search(tag.toUpperCase(), anonymous).andExpect(status().isNoContent());
+
+        org.mockito.Mockito.verify(listings, org.mockito.Mockito.never()).count(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        search(tag, UUID.randomUUID()).andExpect(status().isNoContent());
+        org.mockito.Mockito.verify(listings).count(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        assertThat(score(tag.toLowerCase())).isEqualTo(2);
     }
 
     @Test

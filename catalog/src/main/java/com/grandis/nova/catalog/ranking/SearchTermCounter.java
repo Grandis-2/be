@@ -82,13 +82,21 @@ public class SearchTermCounter {
         this.redis = redis;
     }
 
+    /** 그 사람이 그날(KST) 이 검색어를 이미 셌는가 — 결과 수를 세기(DB) 전에 되풀이한 신호를 돌려보낸다. */
+    public boolean counted(SearchTerm term, ProductViewer searcher, Instant now) {
+        return Boolean.TRUE.equals(redis.opsForSet().isMember(seenKey(term, now), searcher.key()));
+    }
+
     /** @return 이번에 셌으면 true(그 사람이 그날 처음 낸 검색어), 이미 셌으면 false */
     public boolean record(SearchTerm term, ProductViewer searcher, Instant now) {
-        String day = LocalDate.ofInstant(now, ProductViewCounter.KOREA).format(DAY);
         String hour = HOUR.format(now);
-        Long added = redis.execute(RECORD, List.of(SEEN_PREFIX + day + ":" + term.key(), HOUR_PREFIX + hour, DISPLAY_PREFIX + hour),
+        Long added = redis.execute(RECORD, List.of(seenKey(term, now), HOUR_PREFIX + hour, DISPLAY_PREFIX + hour),
                 searcher.key(), term.key(), term.display(), String.valueOf(SEEN_TTL.toMillis()), String.valueOf(HOUR_TTL.toMillis()));
         return added != null && added == 1;
+    }
+
+    private static String seenKey(SearchTerm term, Instant now) {
+        return SEEN_PREFIX + LocalDate.ofInstant(now, ProductViewCounter.KOREA).format(DAY) + ":" + term.key();
     }
 
     /** 최근 24시간(시간 표 {@link #TABLES}개) 검색 수 순으로 앞 limit 개의 화면 표기. */

@@ -73,7 +73,8 @@ public class PopularSearchService {
         // 상한을 결과 수보다 먼저 본다 — 상한을 넘은 익명 id 는 DB(앞 와일드카드 LIKE 4칸 count)를 타지 않는다. 대신 0건 검색도 상한 한 자리를 쓴다
         // (같은 브라우저는 같은 익명 id 라 자리가 늘지 않는다). 받아 둔 id 하나가 q 를 바꿔 가며 보내는 것은 요청 수 문제라 앞단(WAF) 몫이다.
         try {
-            if (!quota.admit(searcher, now)) {
+            // 이미 센 사람 · 검색어는 결과 수(DB)를 세지 않고 돌려보낸다 — 같은 q 를 되풀이해 보내도 DB 를 타지 않는다
+            if (counter.counted(term, searcher, now) || !quota.admit(searcher, now)) {
                 return;
             }
         } catch (DataAccessException e) {
