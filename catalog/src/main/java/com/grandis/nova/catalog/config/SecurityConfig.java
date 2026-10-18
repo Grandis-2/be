@@ -27,6 +27,7 @@ public class SecurityConfig {
                 .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()                                     // 오류 페이지 디스패치
                 .requestMatchers(EndpointRequest.to("health")).permitAll()                                    // 헬스 체크(관리 포트의 readiness · liveness)
                 .requestMatchers(HttpMethod.GET, "/api/v1/products/**", "/api/v1/categories/**").permitAll()   // 상품 목록 · 상세 · 옵션 상세 · 상품 리뷰 · 카테고리 트리
+                .requestMatchers(HttpMethod.POST, "/api/v1/products/*/views").permitAll()                       // 상세 화면의 조회 신호 — 비회원도 보낸다(익명 id)
                 .requestMatchers(HttpMethod.GET, "/api/v1/promotions", "/api/v1/promotions/*").permitAll()     // 사전예약 홍보 목록 · 상세
                 .requestMatchers(HttpMethod.GET, "/api/v1/reviews/mine").hasRole("USER")                        // 내 리뷰
                 .requestMatchers(HttpMethod.GET, "/api/v1/reviews").permitAll()                                 // 구매후기 모아보기
