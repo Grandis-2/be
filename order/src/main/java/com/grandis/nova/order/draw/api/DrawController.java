@@ -98,8 +98,8 @@ public class DrawController {
 
     @GetMapping("/entries/me")
     @Operation(summary = "내 응모 목록", description = "응모 최신순. filter: ALL(기본, 전부 — 결제 대기 · 미결제 마감 포함) · WON(당첨만). "
-            + "page 는 0 부터, size 1~100. total 은 고른 탭의 건수, counts 는 두 탭의 건수. state: AWAITING_PAYMENT · AWAITING_RESULT · WON · LOST · "
-            + "CLOSED_UNPAID. 모르는 filter 는 400")
+            + "page 는 0 부터, size 1~100. total 은 고른 탭의 건수, counts 는 두 탭의 건수. state: AWAITING_PAYMENT · PAYMENT_CONFIRMING(결제 확인 중 — 마감 뒤에도) · "
+            + "AWAITING_RESULT · WON · LOST · CLOSED_UNPAID. 모르는 filter 는 400")
     public ApiResponse<MyDrawEntriesResponse> myEntries(@CurrentCustomerId UUID customerId,
                                                         @RequestParam(defaultValue = "ALL") MyDrawEntryFilter filter,
                                                         @RequestParam(defaultValue = "0") int page,

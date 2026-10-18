@@ -16,13 +16,20 @@ class MyDrawEntryTest {
     static final Instant CLOSES = Instant.parse("2026-10-18T12:00:00Z");
 
     @Test
-    @DisplayName("결제 안 한 응모는 마감 전까지 결제 대기, 마감 시각부터 미결제 마감 — 승인 중도 같다")
+    @DisplayName("결제 대기 응모는 마감 전까지 결제 대기, 마감 시각부터 미결제 마감")
     void unpaidTurnsClosedAtCloseInstant() {
-        for (DrawEntryStatus status : new DrawEntryStatus[]{DrawEntryStatus.AWAITING_PAYMENT, DrawEntryStatus.AUTHORIZING}) {
-            MyDrawEntry entry = entry(status, false, false);
-            assertThat(entry.stateAt(CLOSES, CLOSES.minusNanos(1000))).isEqualTo(MyDrawEntryState.AWAITING_PAYMENT);
-            assertThat(entry.stateAt(CLOSES, CLOSES)).as("마감 == now 는 마감").isEqualTo(MyDrawEntryState.CLOSED_UNPAID);
-        }
+        MyDrawEntry entry = entry(DrawEntryStatus.AWAITING_PAYMENT, false, false);
+        assertThat(entry.stateAt(CLOSES, CLOSES.minusNanos(1000))).isEqualTo(MyDrawEntryState.AWAITING_PAYMENT);
+        assertThat(entry.stateAt(CLOSES, CLOSES)).as("마감 == now 는 마감").isEqualTo(MyDrawEntryState.CLOSED_UNPAID);
+    }
+
+    @Test
+    @DisplayName("승인 중은 마감 전후와 상관없이 결제 확인 중 — 마감 전에 시작한 결제는 마감 뒤에 승인돼도 추첨 대상이다")
+    void authorizingIsConfirmingEvenAfterClose() {
+        MyDrawEntry entry = entry(DrawEntryStatus.AUTHORIZING, false, false);
+        assertThat(entry.stateAt(CLOSES, CLOSES.minusSeconds(60))).isEqualTo(MyDrawEntryState.PAYMENT_CONFIRMING);
+        assertThat(entry.stateAt(CLOSES, CLOSES)).isEqualTo(MyDrawEntryState.PAYMENT_CONFIRMING);
+        assertThat(entry.stateAt(CLOSES, CLOSES.plusSeconds(3600))).isEqualTo(MyDrawEntryState.PAYMENT_CONFIRMING);
     }
 
     @Test

@@ -23,8 +23,8 @@ public record MyDrawEntriesResponse(List<Item> items, int page, int size, long t
     }
 
     /**
-     * @param state      AWAITING_PAYMENT(결제 대기 · 응모 기간 안) · AWAITING_RESULT(결제 완료 · 결과 전) · WON · LOST ·
-     *                   CLOSED_UNPAID(결제 안 하고 마감) — 응모 상태 · 회차 마감 · 결과 반영을 now 로 합친 것
+     * @param state      AWAITING_PAYMENT(결제 대기 · 응모 기간 안) · PAYMENT_CONFIRMING(결제 확인 중 — 마감 뒤에도) · AWAITING_RESULT(결제 완료 ·
+     *                   결과 전) · WON · LOST · CLOSED_UNPAID(결제 대기인 채로 마감) — 응모 상태 · 회차 마감 · 결과 반영을 now 로 합친 것
      * @param enteredAt  응모한 시각
      * @param wonOrderId 당첨이면 증정 0원 주문(내 주문 목록의 source DRAW), 아니면 null
      * @param draw       그 회차(회차 상세와 같은 모양) — 증정품 · 응모비 · 마감 시각

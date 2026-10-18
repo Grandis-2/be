@@ -54,7 +54,7 @@ class MyDrawEntriesApiTest {
     }
 
     @Test
-    @DisplayName("전체 탭은 내 응모 전부를 응모 최신순으로 — 결제 대기(승인 중 포함) · 미결제 마감 · 결과 대기 · 낙첨 · 당첨 배지, 건수, 남의 응모는 빠진다")
+    @DisplayName("전체 탭은 내 응모 전부를 응모 최신순으로 — 결제 대기 · 결제 확인 중(마감 뒤) · 미결제 마감 · 결과 대기 · 낙첨 · 당첨 배지, 건수, 남의 응모는 빠진다")
     void allTabListsEveryEntryNewestFirstWithState() throws Exception {
         Entries e = sixEntries();
         UUID other = fixtures.customer();
@@ -70,7 +70,7 @@ class MyDrawEntriesApiTest {
         });
         assertThat(ids).as("응모 최신순").containsExactly(e.won.entry.toString(), e.lost.entry.toString(), e.result.entry.toString(),
                 e.closedUnpaid.entry.toString(), e.authorizing.entry.toString(), e.awaiting.entry.toString());
-        assertThat(states).containsExactly("WON", "LOST", "AWAITING_RESULT", "CLOSED_UNPAID", "AWAITING_PAYMENT", "AWAITING_PAYMENT");
+        assertThat(states).containsExactly("WON", "LOST", "AWAITING_RESULT", "CLOSED_UNPAID", "PAYMENT_CONFIRMING", "AWAITING_PAYMENT");
         assertThat(data.get("total").asLong()).isEqualTo(6);
         assertThat(data.get("counts").get("all").asLong()).isEqualTo(6);
         assertThat(data.get("counts").get("won").asLong()).isEqualTo(1);
@@ -102,6 +102,23 @@ class MyDrawEntriesApiTest {
         assertThat(second.get("total").asLong()).isEqualTo(6);
         assertThat(List.of(second.get("items").get(0).get("entryId").asString(), second.get("items").get(1).get("entryId").asString()))
                 .containsExactly(e.result.entry.toString(), e.closedUnpaid.entry.toString());
+    }
+
+    @Test
+    @DisplayName("응모 시각이 같으면 응모 id 역순 — 쪽을 넘겨도 순서가 흔들리지 않는다")
+    void sameEnteredAtFallsBackToIdDescending() throws Exception {
+        Instant at = base.plus(Duration.ofHours(1));
+        UUID low = UUID.fromString("00000000-0000-7000-8000-000000000001");
+        UUID high = UUID.fromString("ffffffff-ffff-7fff-bfff-ffffffffffff");
+        UUID first = draw(base.minus(Duration.ofDays(1)), Instant.now().plus(Duration.ofDays(1)), 1);
+        UUID second = draw(base.minus(Duration.ofDays(1)), Instant.now().plus(Duration.ofDays(1)), 1);
+        entry(low, first, customerId, at);
+        entry(high, second, customerId, at);
+
+        JsonNode data = data(list(customerId, "").andExpect(status().isOk()));
+
+        assertThat(List.of(data.get("items").get(0).get("entryId").asString(), data.get("items").get(1).get("entryId").asString()))
+                .containsExactly(high.toString(), low.toString());
     }
 
     @Test
@@ -138,7 +155,7 @@ class MyDrawEntriesApiTest {
         Instant past = Instant.now().minus(Duration.ofMinutes(1));
         Instant future = Instant.now().plus(Duration.ofDays(1));
         Placed awaiting = placed(future, 1, "AWAITING_PAYMENT", null, 1);
-        Placed authorizing = placed(future, 1, "AUTHORIZING", "draw_window_1", 2);
+        Placed authorizing = placed(past, 1, "AUTHORIZING", "draw_window_1", 2);   // 마감 전에 시작해 마감 뒤에도 승인 중
         Placed closedUnpaid = placed(past, 1, "AWAITING_PAYMENT", null, 3);
         Placed result = placed(past, 1, "PAID", null, 4);
         Placed lost = placed(past, 1, "PAID", null, 5);
@@ -176,6 +193,14 @@ class MyDrawEntriesApiTest {
                 VALUES (?, ?, ?, ?, ?, '홍길동', '010-0000-0000', '04524', '서울시 중구', ?, UTC_TIMESTAMP(6))""",
                 bytes(id), bytes(draw), bytes(customer), status, window, utc(createdAt));
         return id;
+    }
+
+    private void entry(UUID id, UUID draw, UUID customer, Instant createdAt) {
+        jdbcTemplate.update("""
+                INSERT INTO draw_entries (id, campaign_id, customer_id, status, ship_to_name, ship_to_phone, ship_to_postal_code, ship_to_line1,
+                                          created_at, updated_at)
+                VALUES (?, ?, ?, 'AWAITING_PAYMENT', '홍길동', '010-0000-0000', '04524', '서울시 중구', ?, UTC_TIMESTAMP(6))""",
+                bytes(id), bytes(draw), bytes(customer), utc(createdAt));
     }
 
     private UUID wonOrder(UUID entry) {
