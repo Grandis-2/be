@@ -538,7 +538,7 @@ class RefreshTokenDbStoreTest {
     }
 
     @Test
-    @DisplayName("다음 토큰의 잠금을 기다리는 동안 유예가 끝나면 재사용이다 — 판정 시각은 잠근 뒤에 읽는다(교체 28초 뒤 도착, 3초 넘게 기다림)")
+    @DisplayName("다음 토큰의 잠금을 기다리는 동안 유예가 끝나면 재사용이다 — 판정 시각은 잠근 뒤에 읽는다(교체 28초 뒤 도착, 기다리는 동안 시계를 3초 옮김)")
     void graceEndingWhileWaitingForTheLockIsReuse() throws Exception {
         // 실제 경과 시간에 기대지 않게 이 시험만 조종하는 시계를 쓴다 — 잠금에 닿기 전에 실행이 늦어도 판정이 같다
         MovableClock clock = new MovableClock(nowSeconds());
@@ -572,13 +572,15 @@ class RefreshTokenDbStoreTest {
     }
 
     @Test
-    @DisplayName("원문 행의 잠금을 기다리는 동안 만료가 지나면 만료다 — 판정 시각은 원문 잠금 뒤에 읽는다(만료 2초 앞 도착, 3초 넘게 기다림)")
+    @DisplayName("원문 행의 잠금을 기다리는 동안 만료가 지나면 만료다 — 판정 시각은 원문 잠금 뒤에 읽는다(만료 2초 앞 도착, 기다리는 동안 시계를 3초 옮김)")
     void expiryPassingWhileWaitingForTheTokenLockIsExpired() throws Exception {
+        MovableClock clock = new MovableClock(nowSeconds());
+        DbRefreshTokenStore clocked = new DbRefreshTokenStore(rows, clock, jwt);
         UUID customerId = newCustomer();
         UUID sessionId = UUID.randomUUID();
         String token = login(customerId, sessionId);
-        jdbc.update("UPDATE refresh_tokens SET created_at = UTC_TIMESTAMP(6) - INTERVAL 1 DAY, expires_at = UTC_TIMESTAMP(6) + INTERVAL 2 SECOND "
-                + "WHERE family_id = ?", sessionId.toString());
+        jdbc.update("UPDATE refresh_tokens SET created_at = ? - INTERVAL 1 DAY, expires_at = ? + INTERVAL 2 SECOND WHERE family_id = ?",
+                LocalDateTime.ofInstant(clock.instant(), ZoneOffset.UTC), LocalDateTime.ofInstant(clock.instant(), ZoneOffset.UTC), sessionId.toString());
         CountDownLatch locked = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         ExecutorService pool = Executors.newFixedThreadPool(2);
@@ -589,9 +591,9 @@ class RefreshTokenDbStoreTest {
                 await(release);
             }));
             assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
-            Future<Rotation> rotation = pool.submit(() -> store.rotate(token, RefreshTokens.newToken()));
+            Future<Rotation> rotation = pool.submit(() -> transactions.execute(status -> clocked.rotate(token, RefreshTokens.newToken())));
             awaitRefreshLockWait();
-            sleep(3_000);                                             // 기다리는 동안 만료를 넘긴다
+            clock.advance(3);                                         // 기다리는 동안 만료를 넘긴다
             release.countDown();
             holder.get(10, TimeUnit.SECONDS);
 

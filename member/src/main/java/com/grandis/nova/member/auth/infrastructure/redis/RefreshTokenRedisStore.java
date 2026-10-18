@@ -20,7 +20,8 @@ import org.springframework.stereotype.Repository;
  * 롤백해도 관리자 세션이 끊기지 않는다). 유예 키(`auth:refresh-grace:{sid}`)는 회전 때 `바로앞jti|다음jti|유예끝(Redis 서버 시각, epoch ms)` 을 유예
  * 시간만큼 둔다. 바로 앞 jti 가 다시 오면 <b>지금 jti 가 그 회전이 만든 다음 jti 와 같을 때만</b>(다음 토큰이 아직 안 쓰였을 때만) 다시 회전하고, 유예
  * 키의 다음 jti 를 새 jti 로 바꾼다(유예 끝은 그대로라 창이 늘지 않는다). 지금 jti 가 다르면 다음 토큰이 이미 쓰인 것이다 — 이 형식을 모르는 옛 버전이
- * 회전해 유예 키를 고치지 않은 경우(배포 중 섞임)도 여기서 재사용으로 걸린다. 시각은 앱이 아니라 Redis 의 TIME 으로 잰다 — 인스턴스마다 시계가
+ * 회전해 유예 키를 고치지 않은 경우(배포 중 섞임)도 여기서 재사용으로 걸린다 — 세션이 끊겨 옛 버전이 준 토큰의 보유자도 401 이고, 버전이 하나일 때의
+ * 재사용 탐지와 같은 결과다. 시각은 앱이 아니라 Redis 의 TIME 으로 잰다 — 인스턴스마다 시계가
  * 달라도 한 곳에서 판정한다. 유예 값에 구분자가 모자라거나 유예 끝이 숫자로 읽히지 않으면 유예 없이 지금 jti 만 비교한다(스크립트 오류 500 이 나지
  * 않게 — Lua tonumber 가 읽는 값(inf 등)은 유예가 된다. 유예 키는 서버만 쓰고 30초 뒤 사라진다). 두 키를 한 스크립트에서 쓰므로 같은 슬롯이어야 한다 —
  * 운영 Valkey 는 클러스터 모드가 아니다(nova-infra 복제 그룹, 샤드 하나). 클러스터로 바꾸면 두 키에 해시 태그가 필요하다.
@@ -56,6 +57,7 @@ public class RefreshTokenRedisStore implements AdminRefreshTokenStore {
                     local graceUntil = tonumber(string.sub(grace, second + 1)) or 0
                     if previous == ARGV[1] and successor == current and now < graceUntil then
                         redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])
+                        -- 유예 판정은 값의 유예 끝이 정한다. KEEPTTL 은 키가 늦게까지 남지 않게 하는 정리용이다
                         redis.call('SET', KEYS[2], previous .. '|' .. ARGV[2] .. '|' .. string.format('%.0f', graceUntil), 'KEEPTTL')
                         return 2
                     end
