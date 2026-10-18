@@ -84,6 +84,31 @@ class BannerRaceTest {
     }
 
     @Test
+    @DisplayName("만들기의 대상 검사는 저장과 같은 트랜잭션에서 상품을 공유 잠금으로 읽는다 — 겹친 상품 삭제가 먼저 커밋하면 지워진 상품에 배너가 붙지 않고 400")
+    void createSeesConcurrentProductDelete() throws Exception {
+        CountDownLatch deleting = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        Future<?> create;
+        try {
+            Future<?> delete = pool.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                int waitsBefore = lockWaits();
+                jdbcTemplate.update("UPDATE products SET visible = 0, deleted_at = UTC_TIMESTAMP(6) WHERE id = ?", (Object) UuidBinary.toBytes(product));
+                deleting.countDown();
+                awaitLockWaitsAbove(waitsBefore);
+            }));
+            assertThat(deleting.await(30, TimeUnit.SECONDS)).isTrue();
+            create = pool.submit(() -> service.create(request("지워지는 상품")));
+            delete.get(30, TimeUnit.SECONDS);
+            Future<?> created = create;
+            assertThatThrownBy(() -> created.get(30, TimeUnit.SECONDS)).hasCauseInstanceOf(BusinessException.class)
+                    .cause().satisfies(e -> assertThat(((BusinessException) e).errorCode().name()).isEqualTo("VALIDATION_FAILED"));
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM banners", Integer.class)).isZero();
+    }
+
+    @Test
     @DisplayName("잠금 대기가 넘치면 409 STATE_CONFLICT · retryable — 500 이 아니다(잠금 실패의 응답 매핑을 본다 — 어느 문장에서 기다리는지는 위 시험이 본다)")
     void lockWaitTimeoutIsRetryableConflict() throws Exception {
         UUID a = service.create(request("a")).bannerId();
