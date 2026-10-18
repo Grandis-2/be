@@ -213,7 +213,7 @@ public class AdminProductController {
     @PostMapping("/{productId}/variants")
     public ResponseEntity<ApiResponse<ProductDetailView.Variant>> addVariant(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = VariantAddRequest.class))) @RequestBody String body) {
         ProductDetailView.Variant variant = serialized(() -> editService.addVariant(productId, bodies.parse(body, VariantAddRequest.class)));
-        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(withStock(productId, variant)));
+        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(detailService.withStock(productId, variant)));
     }
 
     /** 옵션의 판매 상태. 사전예약은 오픈 3분 전부터 409. */
@@ -221,7 +221,7 @@ public class AdminProductController {
     @PatchMapping("/{productId}/variants/{variantId}")
     public ApiResponse<ProductDetailView.Variant> editVariant(@PathVariable UUID productId, @PathVariable UUID variantId,
                                                              @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = VariantEditRequest.class))) @RequestBody String body) {
-        return ApiResponse.ok(withStock(productId, serialized(() -> editService.editVariant(productId, variantId, bodies.parse(body, VariantEditRequest.class)))));
+        return ApiResponse.ok(detailService.withStock(productId, serialized(() -> editService.editVariant(productId, variantId, bodies.parse(body, VariantEditRequest.class)))));
     }
 
     /**
@@ -259,15 +259,6 @@ public class AdminProductController {
     @GetMapping("/registrations/{idempotencyKey}")
     public ApiResponse<RegistrationStatusView> registration(@PathVariable String idempotencyKey) {
         return ApiResponse.ok(registrationService.status(idempotencyKey));
-    }
-
-    /**
-     * 수정한 옵션 하나에 남은 수량을 채운다 — 수정 트랜잭션은 수량을 묻지 않고(상품 행을 잠근 채 order 를 부르지 않게) 커밋 뒤 관리자 상세에서
-     * 그 옵션을 다시 읽는다.
-     */
-    private ProductDetailView.Variant withStock(UUID productId, ProductDetailView.Variant edited) {
-        return detailService.findAdminProduct(productId).product().variants().stream()
-                .filter(variant -> variant.variantId().equals(edited.variantId())).findFirst().orElse(edited);
     }
 
     /**

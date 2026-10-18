@@ -133,7 +133,8 @@ public class ProductDetailService {
 
     /**
      * 관리자 상세의 DB 부분 — 일반 상품의 남은 수량은 비운 채(null · 품절 아님)다. 상품 행을 잠근 쓰기 흐름이 응답을 만들 때 쓴다: 잠금 · 연결을
-     * 쥔 채 order 를 부르지 않게, 수량은 커밋 뒤에 {@link #withStock} 이나 {@link #beforeStockReady} 로 채운다.
+     * 쥔 채 order 를 부르지 않게, 수량은 커밋 뒤에 {@link #withStock} 이나 {@link #beforeStockReady} 로 채운다. 혼자 불리면(GET) REPEATABLE READ 한
+     * 스냅샷이고, 쓰기 트랜잭션 안에서는 그 트랜잭션에 합류한다(격리 수준은 바깥 것 — 상품 · 옵션 행은 그 쓰기가 잠가 두었다).
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public AdminProductDetail findAdminSnapshot(UUID productId) {
@@ -155,6 +156,23 @@ public class ProductDetailService {
         }
         return new AdminProductDetail(live(product, null, availableOrUnknown(product)), detail.tags(), detail.registrationKey(),
                 detail.registrationCompleted());
+    }
+
+    /**
+     * 수정한 옵션 하나에 남은 수량을 채운다 — 수정 트랜잭션은 수량을 묻지 않으므로(상품 행을 잠근 채 order 를 부르지 않게) 커밋 뒤에 그 옵션 하나만
+     * order 에 묻는다. 사전예약은 그대로(null). order 가 답하지 않으면 수량 null.
+     */
+    public Variant withStock(UUID productId, Variant variant) {
+        boolean preorder = products.findById(productId).map(product -> product.getSaleMode() == SaleMode.PREORDER).orElse(true);
+        if (preorder) {
+            return variant;
+        }
+        try {
+            return variant.withAvailableQuantity(stocks.available(List.of(variant.variantId())).getOrDefault(variant.variantId(), 0));
+        } catch (BusinessException e) {
+            log.warn("수정한 옵션의 남은 수량을 order 에 묻지 못했다 — 수량을 비워 보낸다 variantId={}", variant.variantId(), e);
+            return variant.withAvailableQuantity(null);
+        }
     }
 
     /**
