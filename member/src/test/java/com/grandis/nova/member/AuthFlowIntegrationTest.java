@@ -427,13 +427,13 @@ class AuthFlowIntegrationTest {
                 .andExpect(status().isOk());
     }
 
-    /** 관리자 유예 키의 유예 끝을 지금(Redis 시각)으로 당긴다 — 유예 키 모양은 바로앞jti|유예끝. */
+    /** 관리자 유예 키의 유예 끝을 지금(Redis 시각)으로 당긴다 — 유예 키 모양은 바로앞jti|다음jti|유예끝. */
     private void endAdminGrace(Cookie adminRefresh) {
         UUID sid = jwtProvider.parse(adminRefresh.getValue()).sessionId();
         String key = AuthRedisKeys.refreshGrace(sid);
-        String previous = redis.opsForValue().get(key).split("\\|")[0];
+        String[] grace = redis.opsForValue().get(key).split("\\|");
         long redisNow = redis.execute((org.springframework.data.redis.core.RedisCallback<Long>) c -> c.serverCommands().time());
-        redis.opsForValue().set(key, previous + "|" + redisNow, java.time.Duration.ofDays(1));
+        redis.opsForValue().set(key, grace[0] + "|" + grace[1] + "|" + redisNow, java.time.Duration.ofDays(1));
     }
 
     @Test

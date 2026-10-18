@@ -12,7 +12,7 @@ public final class AuthRedisKeys {
     /** 관리자 리프레시의 지금 jti. TTL = 리프레시 만료. 발급·회전·로그아웃이 쓴다. */
     public static final String REFRESH_PREFIX = "auth:refresh:";
 
-    /** 관리자 리프레시 회전 유예 — `바로앞jti|유예끝(epoch ms)`. TTL = 유예 시간. 회전이 쓰고 로그아웃이 지운다. */
+    /** 관리자 리프레시 회전 유예 — `바로앞jti|다음jti|유예끝(epoch ms)`. TTL = 유예 시간. 회전이 쓰고 로그아웃이 지운다. */
     public static final String REFRESH_GRACE_PREFIX = "auth:refresh-grace:";
 
     /**
