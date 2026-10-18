@@ -115,7 +115,7 @@ public class ProductRankingService {
                 break;
             }
         }
-        // 품절은 순위를 정한 뒤 order 재고로 채운다(트랜잭션 밖)
+        // 품절은 순위를 정한 뒤 order 재고로 채운다(트랜잭션 밖). 이 결과째 캐시되므로, order 가 답하지 않아 품절 표시를 뺀 순위도 캐시 수명만큼 남는다
         return soldOut.mark(byId.values().stream().limit(SIZE).toList());
     }
 }
