@@ -17,13 +17,13 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * products.stock_ready_at 을 만드는 마이그레이션의 기존 상품 채우기. 빈 DB 에서는 고칠 행이 없어 Flyway 실행으로는 재지 못한다 — 행을 넣고 그
+ * products.stock_ready_at 기존 상품 채우기 마이그레이션. 빈 DB 에서는 고칠 행이 없어 Flyway 실행으로는 재지 못한다 — 행을 넣고 그
  * 마이그레이션 파일의 UPDATE 문장을 그대로 다시 돌린다.
  */
 @CatalogIntegrationTest
 class StockReadyBackfillTest {
 
-    static final String MIGRATION = "V202610190013__catalog_product_stock_ready.sql";
+    static final String MIGRATION = "V202610190156__catalog_product_stock_ready_fill.sql";
 
     @Autowired JdbcTemplate jdbcTemplate;
     @Value("${nova.migrations-path}") String migrations;
@@ -50,7 +50,7 @@ class StockReadyBackfillTest {
         assertThat(readyAt(already)).hasToString("2026-01-01 00:00:00.0");
     }
 
-    /** 마이그레이션의 두 번째 문장(UPDATE). 스키마 이름(shop.)은 시험 연결의 기본 스키마와 같다. */
+    /** 채우기 마이그레이션의 UPDATE 문장. 스키마 이름(shop.)은 시험 연결의 기본 스키마와 같다. */
     private String backfill() throws Exception {
         String sql = Files.readString(Path.of(migrations, MIGRATION));
         int start = sql.indexOf("UPDATE shop.products");
