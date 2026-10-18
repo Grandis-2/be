@@ -187,6 +187,19 @@ class ProductRankingApiTest {
     }
 
     @Test
+    @DisplayName("키는 만료가 걸린다 — 그날 본 사람 집합 2일, 그날 조회수 표 4일(3일 창 + 하루)")
+    void keysExpire() throws Exception {
+        UUID product = listed();
+        view(product, UUID.randomUUID()).andExpect(status().isNoContent());
+
+        String day = LocalDate.now(KOREA).format(DateTimeFormatter.BASIC_ISO_DATE);
+        Long seen = redis.getExpire("catalog:views:seen:" + day + ":" + product, java.util.concurrent.TimeUnit.SECONDS);
+        Long counts = redis.getExpire(dayKey(0), java.util.concurrent.TimeUnit.SECONDS);
+        assertThat(seen).isBetween(Duration.ofDays(2).minusMinutes(1).toSeconds(), Duration.ofDays(2).toSeconds());
+        assertThat(counts).isBetween(Duration.ofDays(4).minusMinutes(1).toSeconds(), Duration.ofDays(4).toSeconds());
+    }
+
+    @Test
     @DisplayName("조회가 없으면 빈 랭킹")
     void emptyRanking() throws Exception {
         assertThat(ranking()).isEmpty();
