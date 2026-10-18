@@ -471,6 +471,20 @@ class ReviewApiTest {
                 .with(AccessTokens.customer(customer)));
     }
 
+    @Test
+    @DisplayName("리뷰 목록 셋 다 쪽은 앞 10,000개 안에서 시작 — page × size 가 10,000 이상이면 400 VALIDATION_FAILED(page)")
+    void capsListDepth() throws Exception {
+        mockMvc.perform(get("/api/v1/reviews").param("size", "100").param("page", "99")).andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/reviews/mine").param("size", "100").param("page", "99").with(AccessTokens.customer(nextId())))
+                .andExpect(status().isOk());
+
+        expectValidation(mockMvc.perform(get("/api/v1/reviews").param("size", "100").param("page", "100")), "page");
+        expectValidation(mockMvc.perform(get("/api/v1/reviews/mine").param("size", "100").param("page", "100")
+                .with(AccessTokens.customer(nextId()))), "page");
+        expectValidation(mockMvc.perform(get("/api/v1/products/{id}/reviews", UUID.randomUUID()).param("size", "100").param("page", "100")),
+                "page");
+    }
+
     private static java.util.List<String> bodies(JsonNode page) {
         java.util.List<String> out = new java.util.ArrayList<>();
         page.get("items").forEach(item -> out.add(item.get("body").asString()));

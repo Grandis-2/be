@@ -10,6 +10,7 @@ import com.grandis.nova.common.security.Role;
 import com.grandis.nova.common.security.SessionReplacedException;
 import com.grandis.nova.common.security.TokenClaims;
 import com.grandis.nova.common.security.TokenType;
+import com.grandis.nova.member.MySqlLockFailures;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -20,6 +21,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 
 /**
@@ -56,6 +58,9 @@ public class TokenService {
     private static final UUID NO_TOKEN_ID = new UUID(0L, 0L);
 
     private final JwtTokenProvider provider;
+    /** 재사용 세션의 체인 폐기를 교착에서 다시 하는 최대 횟수. */
+    static final int REVOKE_ATTEMPTS = 3;
+
     private final JwtProperties properties;
     private final RefreshTokenStore refreshTokens;
     private final AdminRefreshTokenStore adminRefreshTokens;
@@ -134,8 +139,7 @@ public class TokenService {
         String newRefresh = RefreshTokens.newToken();
         RefreshTokenStore.Rotation rotation = refreshTokens.rotate(presented, newRefresh);
         if (rotation.status() == RefreshTokenStore.Rotation.Status.REUSED) {
-            // 저장소가 체인을 이미 폐기하고 커밋했다. 남은 것은 액세스 토큰이고 그건 Redis 표식이 끊는다.
-            revokeSessionBestEffort(rotation.sessionId(), "refresh reuse");
+            cutReusedSession(rotation.sessionId(), Role.USER);
             log.warn("refresh reuse detected, session revoked sid={}", shortSid(rotation.sessionId()));
             throw new InvalidTokenException("refresh reuse sid=" + shortSid(rotation.sessionId()));
         }
@@ -176,7 +180,7 @@ public class TokenService {
         String newRefresh = provider.create(claims.subject(), claims.role(), claims.sessionId(), TokenType.REFRESH, claims.expiresAt());
         UUID newTokenId = provider.parse(newRefresh).tokenId();
         if (!adminRefreshTokens.rotate(claims.sessionId(), claims.tokenId(), newTokenId, remaining)) {
-            revokeSessionBestEffort(claims.sessionId(), "refresh reuse");
+            cutReusedSession(claims.sessionId(), Role.ADMIN);
             log.warn("refresh reuse detected, session revoked sid={}", shortSid(claims.sessionId()));
             throw new InvalidTokenException("refresh reuse sid=" + shortSid(claims.sessionId()));
         }
@@ -226,6 +230,59 @@ public class TokenService {
         } catch (DataAccessException e) {
             log.warn("auth.login.replaced_mark_failed — replaced session's access token lives until expiry sid={} cause={}",
                     shortSid(sessionId), e.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * 재사용으로 판정된 세션을 끊는다. 저장소는 판정만 하고 체인을 폐기하지 않는다(교착을 피해 따로 커밋 — DbRefreshTokenStore 클래스 주석).
+     * <ol>
+     *   <li>표식을 <b>리프레시 수명</b>만큼 심는다(로그아웃은 액세스 수명). 재발급은 회전 전에 이 표식을 보므로, 표식이 섰다면 아래 체인 폐기가
+     *       끝내 실패해도 그 체인은 수명 내내 재발급되지 않는다. 같은 세션의 로그아웃 표식이 먼저 있으면 덮지 않아 그 액세스 TTL 이다
+     *       (RevocationStore.revokeSession). 표식 쓰기와 체인 폐기가 <b>둘 다</b> 실패하면 체인이 절대 만료까지 산다 — 회전 전
+     *       읽기는 성공하고 바로 뒤 쓰기만 실패해야 하는 좁은 경우다(Redis 가 아예 죽어 있으면 회전 전 검사에서 닫힌다).</li>
+     *   <li>체인 폐기 — 교착(1213)이면 {@value #REVOKE_ATTEMPTS} 번까지 다시 한다. 잠금 대기 초과(1205)는 다시 하지 않는다 — 표식이 이미 섰고, 대기
+     *       초과를 거듭 기다리면 요청이 수 분 묶인다(리뷰 실측 150초). 로그인 · 로그아웃 · 다른 재사용 탐지 · 정리와 겹쳐 잰 교착은 0 이었다
+     *       (리뷰 실측 — 회원 행 → 체인으로 같은 순서다). 재시도는 혹시 남은 교착에 대한 방어다.</li>
+     *   <li>관리자 키 삭제.</li>
+     * </ol>
+     * 저장소 예외는 WARN 으로만 — 호출자가 어차피 401 을 낼 자리다.
+     */
+    private void cutReusedSession(UUID sessionId, Role role) {
+        boolean marked = false;
+        boolean chainRevoked = false;
+        try {
+            revocations.revokeSession(sessionId, properties.refreshTokenValidity());
+            marked = true;
+        } catch (DataAccessException e) {
+            log.warn("refresh reuse: revocation mark not written sid={}", shortSid(sessionId), e);
+        }
+        for (int attempt = 1; ; attempt++) {
+            try {
+                refreshTokens.revokeSession(sessionId);
+                chainRevoked = true;
+                break;
+            } catch (PessimisticLockingFailureException e) {
+                if (!MySqlLockFailures.isDeadlock(e) || attempt >= REVOKE_ATTEMPTS) {
+                    log.warn("refresh reuse: refresh rows not revoked after {} attempts sid={}", attempt, shortSid(sessionId), e);
+                    break;
+                }
+            } catch (DataAccessException e) {
+                log.warn("refresh reuse: refresh rows not revoked sid={}", shortSid(sessionId), e);
+                break;
+            }
+        }
+        boolean adminKeyDeleted = false;
+        try {
+            adminRefreshTokens.delete(sessionId);
+            adminKeyDeleted = true;
+        } catch (DataAccessException e) {
+            log.warn("refresh reuse: admin refresh not deleted sid={}", shortSid(sessionId), e);
+        }
+        // 체인을 실제로 끊는 곳은 역할마다 다르다 — 회원은 DB 체인 폐기, 관리자는 Redis 키 삭제(관리자 sid 는 DB 행이 없어 DB 폐기는 늘 성공한다)
+        boolean chainCut = role == Role.ADMIN ? adminKeyDeleted : chainRevoked;
+        if (!marked && !chainCut) {
+            // 표식도 체인 끊기도 없다 — 재사용된 체인이 절대 만료까지 재발급된다. 다른 WARN 과 갈라 경보할 수 있게 고정 이벤트 키로 남긴다
+            log.error("auth.refresh.reuse_chain_alive — reused refresh chain left alive until absolute expiry sid={} role={}", shortSid(sessionId), role);
         }
     }
 

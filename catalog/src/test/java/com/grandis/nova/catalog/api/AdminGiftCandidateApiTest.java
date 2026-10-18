@@ -18,6 +18,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -117,6 +118,21 @@ class AdminGiftCandidateApiTest {
         return JSON.readTree(mockMvc.perform(get(PATH).queryParam("q", tag).queryParam("page", page).queryParam("size", size)
                         .with(user("admin").roles("ADMIN")))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).get("data");
+    }
+
+    @Test
+    @DisplayName("q 는 정규화한 뒤 50자까지, 쪽은 앞 10,000개 안에서 시작 — 넘으면 그 칸의 400 VALIDATION_FAILED")
+    void sharesListLimits() throws Exception {
+        String fifty = tag + " " + "가".repeat(50 - tag.length() - 1);
+        list(fifty);
+        page("99", "100");
+        for (String[] bad : new String[][] {{"q", fifty + "가"}, {"page", "100"}}) {
+            var request = get(PATH).queryParam("size", "100").with(user("admin").roles("ADMIN"));
+            mockMvc.perform(request.queryParam(bad[0], bad[1]))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+                    .andExpect(jsonPath("$.error.details.violations[0].field").value(bad[0]));
+        }
     }
 
     @Test

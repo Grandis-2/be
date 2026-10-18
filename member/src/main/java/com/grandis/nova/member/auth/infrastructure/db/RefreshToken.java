@@ -41,9 +41,13 @@ public class RefreshToken {
     @Column(name = "expires_at", nullable = false, updatable = false)
     private Instant expiresAt;
 
-    /** 새 토큰으로 교체된 시각. 이 값이 있는 토큰이 다시 오면 탈취로 본다. */
+    /** 새 토큰으로 교체된 시각. 이 값이 있는 토큰이 다시 오면 탈취로 본다 — 교체 뒤 30초 유예 안이고 다음 토큰이 아직 안 쓰였으면 다시 회전한다. */
     @Column(name = "rotated_at")
     private Instant rotatedAt;
+
+    /** 이 토큰을 회전해 만든 다음 토큰의 id. 유예 안에 다시 회전하면 새 토큰으로 바뀐다. 이 칸이 생기기 전에 회전한 행은 null. */
+    @Column(name = "rotated_to")
+    private UUID rotatedTo;
 
     /** 폐기 시각. 로그아웃·재사용 탐지·전체 폐기가 찍는다. */
     @Column(name = "revoked_at")
@@ -66,9 +70,15 @@ public class RefreshToken {
         return token;
     }
 
-    /** 회전. 교체 시각은 한 번만 찍는다 — 두 번째 호출은 재사용이라 여기까지 오지 않는다. */
-    void markRotated(Instant when) {
+    /** 회전. 교체 시각은 한 번만 찍는다 — 유예 안의 다시 회전은 다음 토큰만 바꾸고({@link #replaceSuccessor}) 시각은 그대로 둔다. */
+    void markRotated(Instant when, UUID successor) {
         this.rotatedAt = when;
+        this.rotatedTo = successor;
+    }
+
+    /** 유예 안의 다시 회전 — 쓰이지 않은 다음 토큰 대신 새로 만든 토큰을 가리킨다. 유예 창은 처음 교체 시각부터라 늘어나지 않는다. */
+    void replaceSuccessor(UUID successor) {
+        this.rotatedTo = successor;
     }
 
     UUID getId() {
@@ -93,6 +103,10 @@ public class RefreshToken {
 
     Instant getRotatedAt() {
         return rotatedAt;
+    }
+
+    UUID getRotatedTo() {
+        return rotatedTo;
     }
 
     Instant getRevokedAt() {

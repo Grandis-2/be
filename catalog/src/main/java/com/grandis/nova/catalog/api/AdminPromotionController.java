@@ -53,11 +53,11 @@ public class AdminPromotionController {
         return ApiResponse.ok(promotions.replace(promotionId, bodies.parse(body, PromotionRequest.class)));
     }
 
-    @Operation(summary = "홍보 목록", description = "최신순. status 는 오늘(한국 날짜)과 홍보 기간으로 가른다")
+    @Operation(summary = "홍보 목록", description = "최신순. status 는 오늘(한국 날짜)과 홍보 기간으로 가른다. 쪽은 앞 10,000개 안에서 시작해야 한다(page × size < 10,000)")
     @GetMapping
     public ApiResponse<ProductPageResponse<AdminPromotionView>> list(@RequestParam(defaultValue = "0") int page,
                                                                      @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        return ApiResponse.ok(ProductPageResponse.from(promotions.list(PageSizes.requirePage(page), PageSizes.require(size))));
+        return ApiResponse.ok(ProductPageResponse.from(promotions.list(PageSizes.requirePage(page, PageSizes.require(size)), size)));
     }
 
     @Operation(summary = "홍보 상세")
@@ -66,11 +66,11 @@ public class AdminPromotionController {
         return ApiResponse.ok(promotions.get(promotionId));
     }
 
-    @Operation(summary = "묶을 수 있는 상품", description = "회차가 취소되지 않은 사전예약 중 다른 홍보에 묶이지 않은 것. promotionId 를 주면(수정 화면) 그 홍보에 묶인 상품도 싣는다")
+    @Operation(summary = "묶을 수 있는 상품", description = "회차가 취소되지 않은 사전예약 중 다른 홍보에 묶이지 않은 것. promotionId 를 주면(수정 화면) 그 홍보에 묶인 상품도 싣는다. 쪽은 앞 10,000개 안에서 시작해야 한다(page × size < 10,000)")
     @GetMapping("/linkable-products")
     public ApiResponse<ProductPageResponse<LinkableProduct>> linkable(@RequestParam(required = false) UUID promotionId,
                                                                       @RequestParam(defaultValue = "0") int page,
                                                                       @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        return ApiResponse.ok(ProductPageResponse.from(promotions.linkable(promotionId, PageSizes.requirePage(page), PageSizes.require(size))));
+        return ApiResponse.ok(ProductPageResponse.from(promotions.linkable(promotionId, PageSizes.requirePage(page, PageSizes.require(size)), size)));
     }
 }

@@ -3,12 +3,14 @@ package com.grandis.nova.catalog.api;
 import com.grandis.nova.catalog.web.ValidationFailures;
 import com.grandis.nova.common.BusinessException;
 
-/** 목록 크기 규칙(계약: page 0 이상, size 1~100). */
+/** 목록 크기 규칙(계약: page 0 이상, size 1~100, 쪽은 앞 10,000개 안에서 시작 — page × size < 10,000). */
 final class PageSizes {
 
     static final int DEFAULT = 20;
     static final int MIN = 1;
     static final int MAX = 100;
+    /** 목록을 볼 수 있는 깊이. offset 페이징이라 깊은 쪽은 건너뛴 행을 다 읽고 버린다. */
+    static final int MAX_WINDOW = 10_000;
 
     private PageSizes() {
     }
@@ -21,9 +23,19 @@ final class PageSizes {
         return size;
     }
 
-    static int requirePage(int page) {
+    /**
+     * 크기와 함께 본다 — 그 쪽이 건너뛸 행 수(page × size)가 10,000 이상이면 거절한다. 쪽의 끝이 아니라 시작으로 재는 이유: 전체가 10,000개
+     * 이하이면 어떤 size 로 나눠도 마지막 쪽까지 열린다(끝으로 재면 9,997개를 12개씩 나눈 마지막 쪽이 걸렸다). 건너뛸 행 수가 int 를 넘으면
+     * Spring Data 페이징(관리자 홍보 목록)이 500 을 냈다(실측) — 이 상한이 그 전에 막는다. size 를 먼저 검사한 뒤 부른다.
+     *
+     * @throws BusinessException VALIDATION_FAILED(page) — 음수 · 너무 깊음
+     */
+    static int requirePage(int page, int size) {
         if (page < 0) {
             throw ValidationFailures.of("page", "0 이상이어야 합니다.");
+        }
+        if ((long) page * size >= MAX_WINDOW) {
+            throw ValidationFailures.of("page", "앞 10,000개 안에서 시작하는 쪽만 볼 수 있습니다.");
         }
         return page;
     }

@@ -45,6 +45,7 @@ import org.springframework.data.redis.RedisConnectionFailureException;
  * RefreshTokenDbStoreTest 가 실제 MySQL 로 본다. 여기서 보는 것은 "판정마다 서비스가 무엇을 하는가" 다.
  */
 @DisplayName("TokenService")
+@org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
 class TokenServiceTest {
 
     private static final String CUSTOMER = "0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d";
@@ -152,7 +153,7 @@ class TokenServiceTest {
     }
 
     @Test
-    @DisplayName("rotate: 저장소가 재사용으로 판정하면 sid 표식 먼저 → DB 체인 폐기 → 관리자 키 삭제, 그리고 401")
+    @DisplayName("rotate: 저장소가 재사용으로 판정하면 sid 표식(리프레시 수명 — 체인 폐기가 실패해도 재발급을 막는다) → DB 체인 폐기 → 관리자 키 삭제, 그리고 401")
     void reuseRevokesSession() {
         Session session = loggedIn(UUID.randomUUID());
         when(refreshTokens.rotate(any(), any()))
@@ -161,9 +162,80 @@ class TokenServiceTest {
         assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
 
         InOrder order = Mockito.inOrder(revocations, refreshTokens, adminRefreshTokens);
-        order.verify(revocations).revokeSession(session.sessionId(), ACCESS);   // 필터가 읽는 표식이 먼저
+        order.verify(revocations).revokeSession(session.sessionId(), REFRESH);   // 필터 · 회전 전 검사가 읽는 표식이 먼저
         order.verify(refreshTokens).revokeSession(session.sessionId());
         order.verify(adminRefreshTokens).delete(session.sessionId());
+    }
+
+    @Test
+    @DisplayName("rotate 재사용 분기: 체인 폐기가 교착(1213)이면 3번까지 다시 한다 — 세 번 다 실패해도 401 이고 500 으로 안 올린다. 잠금 대기 초과(1205)는 한 번으로 끝낸다")
+    void reuseRetriesChainRevocationOnLockFailure() {
+        Session session = loggedIn(UUID.randomUUID());
+        when(refreshTokens.rotate(any(), any()))
+                .thenReturn(Rotation.rejected(Rotation.Status.REUSED, session.sessionId(), session.subject()));
+        doThrow(lockFailure(1213)).doNothing().when(refreshTokens).revokeSession(any());
+
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        verify(refreshTokens, Mockito.times(2)).revokeSession(session.sessionId());
+
+        Mockito.reset(refreshTokens);
+        Session again = loggedIn(UUID.randomUUID());
+        when(refreshTokens.rotate(any(), any()))
+                .thenReturn(Rotation.rejected(Rotation.Status.REUSED, again.sessionId(), again.subject()));
+        doThrow(lockFailure(1213)).when(refreshTokens).revokeSession(any());
+
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        verify(refreshTokens, Mockito.times(TokenService.REVOKE_ATTEMPTS)).revokeSession(again.sessionId());
+        verify(adminRefreshTokens).delete(again.sessionId());
+
+        Mockito.reset(refreshTokens);
+        Session waited = loggedIn(UUID.randomUUID());
+        when(refreshTokens.rotate(any(), any()))
+                .thenReturn(Rotation.rejected(Rotation.Status.REUSED, waited.sessionId(), waited.subject()));
+        doThrow(lockFailure(1205)).when(refreshTokens).revokeSession(any());
+
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        verify(refreshTokens, Mockito.times(1)).revokeSession(waited.sessionId());
+    }
+
+    /** ERROR 수준 로그 줄 — 단독 실행(logback 기본)과 전체 실행(Spring Boot 형식)의 줄 모양이 달라 수준 낱말로 고른다. */
+    private static java.util.List<String> errorLines(org.springframework.boot.test.system.CapturedOutput output) {
+        return (output.getOut() + output.getErr()).lines().filter(line -> line.matches(".*\\bERROR\\b.*")).toList();
+    }
+
+    /** 1213 · 1205 는 같은 Spring 예외로 올라온다 — 벤더 코드만 다르다(order 의 LockFailureClassificationTest 가 진짜 오류로 확인). */
+    private static org.springframework.dao.CannotAcquireLockException lockFailure(int vendorCode) {
+        return new org.springframework.dao.CannotAcquireLockException("lock",
+                new java.sql.SQLException("lock", "40001", vendorCode));
+    }
+
+    @Test
+    @DisplayName("rotate 재사용 분기: 표식 쓰기와 체인 폐기가 둘 다 실패하면 고정 이벤트 키로 ERROR(auth.refresh.reuse_chain_alive) — 하나만 실패하면 남기지 않는다")
+    void reuseWithBothRevocationsFailingIsAnError(org.springframework.boot.test.system.CapturedOutput output) {
+        Session session = loggedIn(UUID.randomUUID());
+        when(refreshTokens.rotate(any(), any()))
+                .thenReturn(Rotation.rejected(Rotation.Status.REUSED, session.sessionId(), session.subject()));
+        doThrow(new RedisConnectionFailureException("down")).when(revocations).revokeSession(any(), any());
+
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        assertThat(output.getOut() + output.getErr()).as("표식만 실패 — 체인은 끊었다").doesNotContain("auth.refresh.reuse_chain_alive");
+
+        doThrow(lockFailure(1205)).when(refreshTokens).revokeSession(any());
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        assertThat(errorLines(output)).anyMatch(line -> line.contains("auth.refresh.reuse_chain_alive"));
+        assertThat(output.getOut() + output.getErr()).as("실패 원인 사슬(벤더 예외)이 로그에 남는다").contains("Caused by: java.sql.SQLException");
+    }
+
+    @Test
+    @DisplayName("관리자 재사용: 표식 쓰기와 Redis 키 삭제가 둘 다 실패하면 ERROR — 관리자는 DB 행이 없어 체인을 끊는 것이 키 삭제다")
+    void adminReuseWithBothRevocationsFailingIsAnError(org.springframework.boot.test.system.CapturedOutput output) {
+        TokenService.IssuedTokens first = service.issue("admin", Role.ADMIN);
+        when(adminRefreshTokens.rotate(any(), any(), any(), any())).thenReturn(false);
+        doThrow(new RedisConnectionFailureException("down")).when(revocations).revokeSession(any(), any());
+        doThrow(new RedisConnectionFailureException("down")).when(adminRefreshTokens).delete(any());
+
+        assertThatThrownBy(() -> service.rotate(first.refreshToken(), Role.ADMIN)).isInstanceOf(InvalidTokenException.class);
+        assertThat(errorLines(output)).anyMatch(line -> line.contains("auth.refresh.reuse_chain_alive") && line.contains("role=ADMIN"));
     }
 
     @Test
@@ -331,7 +403,7 @@ class TokenServiceTest {
 
         when(adminRefreshTokens.rotate(any(), any(), any(), any())).thenReturn(false);
         assertThatThrownBy(() -> service.rotate(first.refreshToken(), Role.ADMIN)).isInstanceOf(InvalidTokenException.class);
-        verify(revocations).revokeSession(refresh.sessionId(), ACCESS);
+        verify(revocations).revokeSession(refresh.sessionId(), REFRESH);   // 재사용 표식은 리프레시 수명
     }
 
     @Test
