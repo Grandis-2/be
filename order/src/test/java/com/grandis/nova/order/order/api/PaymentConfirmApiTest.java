@@ -679,7 +679,7 @@ class PaymentConfirmApiTest {
                 """, bytes(UUID.randomUUID()), bytes(customerId), bytes(cartOption), quantity);
         PlaceOrderCommand command = new PlaceOrderCommand(customerId, OrderSource.CART, null, null, null, OrderFixtures.ADDRESS, List.of(
                 new PlaceOrderCommand.Line(stocked.productId(), cartOption, quantity, new BigDecimal("1250000"), 0, BigDecimal.ZERO,
-                        "아이폰 17", "블랙")));
+                        "아이폰 17", null, "블랙")));
         return new TransactionTemplate(transactionManager).execute(status -> {
             stock.reserve(Map.of(cartOption, quantity));
             return ledger.place(command.toDraft(), EventCause.user());

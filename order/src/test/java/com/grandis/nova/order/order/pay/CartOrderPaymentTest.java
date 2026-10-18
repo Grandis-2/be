@@ -106,8 +106,8 @@ class CartOrderPaymentTest {
         cartLine(phone, false, 3);
         cartLine(watch, false, 1);
         order = place(List.of(
-                new PlaceOrderCommand.Line(product.productId(), phone, 4, PRICE, 2, WARRANTY, "아이폰 17", "블랙"),
-                new PlaceOrderCommand.Line(product.productId(), watch, 1, PRICE, 0, BigDecimal.ZERO, "워치", "실버")));
+                new PlaceOrderCommand.Line(product.productId(), phone, 4, PRICE, 2, WARRANTY, "아이폰 17", null, "블랙"),
+                new PlaceOrderCommand.Line(product.productId(), watch, 1, PRICE, 0, BigDecimal.ZERO, "워치", null, "실버")));
     }
 
     @Test
@@ -139,7 +139,7 @@ class CartOrderPaymentTest {
     @DisplayName("결제 준비는 바로 구매 주문도 같은 기한(만든 때 + 10분)으로 받는다 — 기한이 지나면 409 PAYMENT_WINDOW_EXPIRED")
     void prepareAcceptsBuyNowOrderWithinWindow() throws Exception {
         order = place(OrderSource.BUY_NOW, List.of(
-                new PlaceOrderCommand.Line(fixtures.inStockProduct(1).productId(), phone, 1, PRICE, 0, BigDecimal.ZERO, "아이폰 17", "블랙")));
+                new PlaceOrderCommand.Line(fixtures.inStockProduct(1).productId(), phone, 1, PRICE, 0, BigDecimal.ZERO, "아이폰 17", null, "블랙")));
         given(paymentClient.openCapture(any(), eq(BearerTokens.value(SESSION))))
                 .willReturn(ApiResponse.ok(new PaymentAttempt(PROVIDER_ORDER_ID, PRICE)));
 

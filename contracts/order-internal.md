@@ -79,7 +79,9 @@ BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, �
 
 | 언제 | 누가 | 실린 JWT | 목적 |
 | --- | --- | --- | --- |
-| 장바구니 조회 · 담기 · 장바구니 주문 생성 | order 장바구니 | 회원(USER) | 줄마다 표시할 상품 · 옵션 정보와 "살 수 있는가" 를 가릴 사실, 주문 스냅샷(가격 · 이름 · 보증) |
+| 장바구니 조회 · 담기 · 장바구니 주문 생성 | order 장바구니 | 회원(USER) | 줄마다 표시할 상품 · 옵션 정보와 "살 수 있는가" 를 가릴 사실, 주문 스냅샷(가격 · 이름 · 모델명 · 보증) |
+| 바로 구매 주문 생성 | order 주문 | 회원(USER) | 장바구니 주문과 같은 판정 · 주문 스냅샷 |
+| 럭키 드로우 회차 만들기 | order 드로우(관리자) | 관리자(ADMIN) | 증정품 옵션이 줄 수 있는 것인가, 회차 스냅샷(이름 · 모델명 · 사진) |
 
 **인증.** 호출자가 받은 회원 토큰을 그대로 싣는다(`Authorization: Bearer {accessToken}`). catalog 는 `common:security` 필터로 검증하고 USER · ADMIN 을 받는다(`/internal/**` 규칙 — 그 밖의 역할은 403).
 
@@ -97,6 +99,7 @@ BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, �
         "optionId": "0199a3f2-8a11-7c22-8d33-5e6f70819203",
         "productId": "0199a3f2-8a10-7b21-9c32-4d5e6f708192",
         "productTitle": "아이폰 17",
+        "modelName": "A3104",
         "optionTitle": "블랙 / 256GB",
         "sku": "BLK-256",
         "price": 1250000,
@@ -121,6 +124,7 @@ BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, �
 | `optionId` | string(UUID) | `product_options.id` |
 | `productId` | string(UUID) | 옵션의 상품 |
 | `productTitle` | string | 상품 이름(지금 값) |
+| `modelName` | string | 상품 모델명(지금 값, 예: A3104). 장바구니 표시 · 주문 스냅샷(`order_items.model_name_snapshot`) · 드로우 회차 스냅샷(`draw_campaigns.model_name_snapshot`, 당첨 주문이 옮긴다)에 쓴다 |
 | `optionTitle` | string | 옵션 표시명(지금 값, 예: 블랙 / 256GB) |
 | `sku` | string | 옵션 SKU |
 | `price` | number | 회원이 내는 옵션 가격(정수 원) — 정가(기본가 + 고른 값의 추가금)에 상품 할인율을 걸어 100원 단위로 버린 값. 할인율 0 이면 정가. 보증 추가금은 할인하지 않는다 |

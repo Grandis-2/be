@@ -107,6 +107,8 @@ class AdminDrawApiTest {
         assertThat(draw.get("title").asString()).isEqualTo("한정판 드로우");
         assertThat(draw.get("gift").get("variantId").asString()).isEqualTo(option.toString());
         assertThat(draw.get("gift").get("productTitle").asString()).isEqualTo("콜라보 굿즈");
+        assertThat(jdbcTemplate.queryForObject("SELECT model_name_snapshot FROM draw_campaigns WHERE id = ?", String.class,
+                (Object) bytes(UUID.fromString(draw.get("drawId").asString())))).as("당첨 주문이 옮길 모델명").isEqualTo("M-1");
         assertThat(draw.get("entryFee").decimalValue()).isEqualByComparingTo("100");
         assertThat(draw.get("winnerCount").asInt()).isEqualTo(3);
         assertThat(draw.get("phase").asString()).isEqualTo("OPEN");
@@ -289,7 +291,7 @@ class AdminDrawApiTest {
         TransactionTemplate tx = new TransactionTemplate(transactionManager);
         CompletableFuture<UUID> first = CompletableFuture.supplyAsync(() -> tx.execute(status -> {
             stockLedger.reserve(Map.of(option, 3));
-            UUID id = campaignStore.insert(new NewDrawCampaign(key, gift.productId(), option, "먼저", gift.productTitle(), gift.optionTitle(),
+            UUID id = campaignStore.insert(new NewDrawCampaign(key, gift.productId(), option, "먼저", gift.productTitle(), gift.modelName(), gift.optionTitle(),
                     gift.imageUrl(), new BigDecimal("100"), 3, Instant.now(), closes)).id();
             inserted.countDown();
             await(commit);
@@ -390,13 +392,13 @@ class AdminDrawApiTest {
         OrderFixtures.StockProduct product = fixtures.inStockProduct(1);
         UUID option = product.optionIds().getFirst();
         fixtures.stock(option, stock, 0, 0);
-        catalog.put(option, new CatalogOption(option, product.productId(), "콜라보 굿즈", "블랙", "SKU-" + option, new BigDecimal("50000"),
+        catalog.put(option, new CatalogOption(option, product.productId(), "콜라보 굿즈", "M-1", "블랙", "SKU-" + option, new BigDecimal("50000"),
                 "ACTIVE", "IN_STOCK", "ACTIVE", visible, true, new CatalogOption.Warranty(false, BigDecimal.ZERO), "https://img/gift.jpg"));
         return option;
     }
 
     private static CatalogOption with(CatalogOption o, String saleMode, String productStatus, String optionStatus, boolean registered) {
-        return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.optionTitle(), o.sku(), o.price(), optionStatus, saleMode,
+        return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.modelName(), o.optionTitle(), o.sku(), o.price(), optionStatus, saleMode,
                 productStatus, o.visible(), registered, o.warranty(), o.imageUrl());
     }
 

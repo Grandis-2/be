@@ -172,6 +172,6 @@ public class PlaceOrderService {
         return new PlaceOrderCommand(customerId, OrderSource.PREORDER, preorder.preorderInternalId(),
                 preorder.preorderId(), null, shipTo, List.of(
                 new PlaceOrderCommand.Line(preorder.productId(), preorder.optionId(), 1, preorder.unitPrice(),
-                        0, BigDecimal.ZERO, preorder.productTitle(), preorder.optionTitle())));
+                        0, BigDecimal.ZERO, preorder.productTitle(), null, preorder.optionTitle())));
     }
 }

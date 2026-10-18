@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class PayableTargetTest {
 
     static final Instant AT = Instant.parse("2026-10-11T00:00:00Z");
-    static final DrawCampaign CAMPAIGN = new DrawCampaign(TestIds.id(1), TestIds.id(2), TestIds.id(3), "t", "p", "o", null,
+    static final DrawCampaign CAMPAIGN = new DrawCampaign(TestIds.id(1), TestIds.id(2), TestIds.id(3), "t", "p", null, "o", null,
             new BigDecimal("300"), 1, AT, AT.plusSeconds(600), AT);
 
     /** 응모의 결제 금액은 그 회차의 응모비다. 다른 회차를 넘기면 그 회차의 금액으로 결제창이 열리므로 거절한다. */

@@ -411,7 +411,7 @@ class StockReconcilerTest {
         UUID productId = jdbcTemplate.queryForObject("SELECT BIN_TO_UUID(product_id) FROM product_options WHERE id = ?",
                 (rs, n) -> UUID.fromString(rs.getString(1)), (Object) bytes(option));
         PlaceOrderCommand command = new PlaceOrderCommand(fixtures.customer(), OrderSource.CART, null, null, null, OrderFixtures.ADDRESS,
-                List.of(new PlaceOrderCommand.Line(productId, option, quantity, PRICE, 0, BigDecimal.ZERO, "아이폰 17", "블랙")));
+                List.of(new PlaceOrderCommand.Line(productId, option, quantity, PRICE, 0, BigDecimal.ZERO, "아이폰 17", null, "블랙")));
         tx.executeWithoutResult(status -> {
             if (reserve) {
                 stockLedger.reserve(Map.of(option, quantity));
@@ -467,7 +467,7 @@ class StockReconcilerTest {
         OrderFixtures.StockProduct product = fixtures.inStockProduct(1);
         UUID option = product.optionIds().getFirst();
         fixtures.stock(option, stock, 0, 0);
-        catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "블랙 / 256GB", "SKU-" + option, PRICE,
+        catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "A3104", "블랙 / 256GB", "SKU-" + option, PRICE,
                 "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(false, BigDecimal.ZERO), null));
         return option;
     }

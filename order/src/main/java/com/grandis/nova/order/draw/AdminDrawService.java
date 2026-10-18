@@ -135,7 +135,7 @@ public class AdminDrawService {
         }
         requireGiftable(option);
         NewDrawCampaign draft = new NewDrawCampaign(key, option.productId(), option.optionId(), command.title(), option.productTitle(),
-                option.optionTitle(), option.imageUrl(), command.entryFee(), command.winnerCount(), command.opensAt(), command.closesAt());
+                option.modelName(), option.optionTitle(), option.imageUrl(), command.entryFee(), command.winnerCount(), command.opensAt(), command.closesAt());
         for (int attempt = 1; ; attempt++) {
             TransactionTemplate transaction = writeTransaction(deadline);
             try {

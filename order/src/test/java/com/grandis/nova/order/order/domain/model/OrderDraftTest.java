@@ -91,6 +91,6 @@ class OrderDraftTest {
     }
 
     static OrderLine line(UUID optionId, int quantity, long unitPrice) {
-        return OrderLine.withoutWarranty(TestIds.id(100), optionId, new Quantity(quantity), Money.won(unitPrice), "Nova 1", "블랙 / 256GB");
+        return OrderLine.withoutWarranty(TestIds.id(100), optionId, new Quantity(quantity), Money.won(unitPrice), "Nova 1", null, "블랙 / 256GB");
     }
 }

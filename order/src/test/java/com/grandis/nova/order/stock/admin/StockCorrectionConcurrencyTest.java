@@ -124,7 +124,7 @@ class StockCorrectionConcurrencyTest {
 
     private Order place(int quantity) {
         PlaceOrderCommand command = new PlaceOrderCommand(fixtures.customer(), OrderSource.CART, null, null, null, OrderFixtures.ADDRESS,
-                List.of(new PlaceOrderCommand.Line(product.productId(), option, quantity, PRICE, 0, BigDecimal.ZERO, "아이폰 17", "블랙")));
+                List.of(new PlaceOrderCommand.Line(product.productId(), option, quantity, PRICE, 0, BigDecimal.ZERO, "아이폰 17", null, "블랙")));
         return tx.execute(status -> {
             stockLedger.reserve(Map.of(option, quantity));
             return orderLedger.place(command.toDraft(), EventCause.user());

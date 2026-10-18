@@ -101,7 +101,7 @@ class DrawListPhaseClockTest {
     private UUID create(Instant opensAt, Instant closesAt) {
         OrderFixtures.StockProduct gift = new OrderFixtures(jdbcTemplate).inStockProduct(1);
         UUID id = new TransactionTemplate(transactionManager).execute(status -> campaigns.insert(new NewDrawCampaign(UUID.randomUUID().toString(),
-                gift.productId(), gift.optionIds().getFirst(), "시계 시험", "증정품", "기본", null, new BigDecimal("100"), 1, opensAt, closesAt)).id());
+                gift.productId(), gift.optionIds().getFirst(), "시계 시험", "증정품", null, "기본", null, new BigDecimal("100"), 1, opensAt, closesAt)).id());
         created.add(id);
         return id;
     }

@@ -162,7 +162,7 @@ class OrderTest {
     void cartOrderHasPaymentWindowAndManyLinesWithWarranty() {
         Instant now = Instant.parse("2026-10-10T06:00:00Z");
         OrderDraft cart = new OrderDraft(TestIds.id(1), OrderSource.CART, null, null, null, SHIP_TO, List.of(
-                new OrderLine(TestIds.id(100), TestIds.id(10), new Quantity(2), Money.won(1_000), 1, Money.won(300), "상품", "옵션 1"),
+                new OrderLine(TestIds.id(100), TestIds.id(10), new Quantity(2), Money.won(1_000), 1, Money.won(300), "상품", null, "옵션 1"),
                 line(TestIds.id(11), 3, 500)));
 
         Order order = Order.place(cart, now);
@@ -176,7 +176,7 @@ class OrderTest {
     @Test
     void preorderOrderCannotCarryWarranty() {
         OrderDraft withWarranty = new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, null, SHIP_TO, List.of(
-                new OrderLine(TestIds.id(100), TestIds.id(10), Quantity.ONE, Money.won(1_000), 1, Money.won(300), "상품", "옵션")));
+                new OrderLine(TestIds.id(100), TestIds.id(10), Quantity.ONE, Money.won(1_000), 1, Money.won(300), "상품", null, "옵션")));
 
         assertThatThrownBy(() -> Order.place(withWarranty, Instant.EPOCH)).isInstanceOf(IllegalArgumentException.class);
     }
