@@ -16,16 +16,17 @@ public record CartResponse(List<Item> items) {
 
     /**
      * @param productId         옵션이 없어졌으면(unavailableReason=DISCONTINUED) null — 이름 · 가격 칸도 null
+     * @param modelName         상품 모델명(지금 값). 옵션이 없어졌으면 null
      * @param warrantyPrice     보증을 골랐고 지금도 제공하면 그 추가금, 아니면 0
      * @param lineAmount        (unitPrice + warrantyPrice) × quantity
      * @param unavailableReason 살 수 있으면 null. DISCONTINUED · HIDDEN · PAUSED · WARRANTY_UNAVAILABLE · OUT_OF_STOCK · INSUFFICIENT_STOCK 중 하나
      */
-    public record Item(UUID cartItemId, UUID productId, UUID variantId, String productTitle, String optionTitle, String imageUrl,
+    public record Item(UUID cartItemId, UUID productId, UUID variantId, String productTitle, String modelName, String optionTitle, String imageUrl,
                        boolean warranty, int quantity, BigDecimal unitPrice, BigDecimal warrantyPrice, BigDecimal lineAmount,
                        int availableQuantity, boolean purchasable, Unavailability unavailableReason) {
 
         static Item from(CartView.Line line) {
-            return new Item(line.cartItemId(), line.productId(), line.variantId(), line.productTitle(), line.optionTitle(),
+            return new Item(line.cartItemId(), line.productId(), line.variantId(), line.productTitle(), line.modelName(), line.optionTitle(),
                     line.imageUrl(), line.warranty(), line.quantity(), line.unitPrice(), line.warrantyPrice(), line.lineAmount(),
                     line.availableQuantity(), line.purchasable(), line.unavailableReason());
         }

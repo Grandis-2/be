@@ -11,6 +11,7 @@ import java.util.UUID;
  * order 의 장바구니 표시 · 장바구니 주문 스냅샷이 쓴다. 살 수 있는지는 판정하지 않는다 — 호출자가 칸들로 가린다(비공개 · 판매 중지 · 준비 전도 그대로 싣는다).
  * visible · registrationCompleted 는 primitive 라 늘 실린다(ProductOptionsView 와 같은 이유).
  *
+ * @param modelName             상품 모델명(지금 값, 예: A3104) — products.model_name
  * @param price                 회원이 내는 옵션 가격(정수 원) — 정가에 상품 할인율을 건 할인가. 보증 추가금은 따로다(할인 없음)
  * @param registrationCompleted 판매 방식별 준비 — 일반은 order 재고 행, 사전예약은 preorder 회차 행이 있다
  * @param warranty              상품의 보증 설정(옵션 문서의 warranty). 제공하지 않으면 offered false · surcharge 0
@@ -20,6 +21,7 @@ public record OptionLookupView(
         UUID optionId,
         UUID productId,
         String productTitle,
+        String modelName,
         String optionTitle,
         String sku,
         BigDecimal price,

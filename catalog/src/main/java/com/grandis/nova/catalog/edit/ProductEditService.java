@@ -142,7 +142,7 @@ public class ProductEditService {
             requireSellablePrices(product);
         }
         products.flush();
-        AdminProductDetail edited = detailService.findAdminProduct(productId);
+        AdminProductDetail edited = detailService.findAdminSnapshot(productId);
         requireNotOpenedAtCommit(product);
         notifyPreorder(product);
         return edited;
@@ -169,7 +169,7 @@ public class ProductEditService {
                 Amounts.requireWholeWon(surcharge, "surcharge"), List.of()));
         product.replaceOptions(document.withAxis(new ProductOptions.Axis(axis.key(), axis.label(), values)));
         products.flush();
-        AdminProductDetail edited = detailService.findAdminProduct(product.getId());
+        AdminProductDetail edited = detailService.findAdminSnapshot(product.getId());
         requireNotOpenedAtCommit(product);
         notifyPreorder(product);
         return edited;
@@ -215,7 +215,7 @@ public class ProductEditService {
             recomputePrices(product, next, valueId, "surcharge");
         }
         products.flush();
-        AdminProductDetail result = detailService.findAdminProduct(productId);
+        AdminProductDetail result = detailService.findAdminSnapshot(productId);
         requireNotOpenedAtCommit(product);
         notifyPreorder(product);
         return result;
@@ -387,8 +387,8 @@ public class ProductEditService {
 
     /**
      * 마감된 사전예약 상품을 같은 상품 그대로 일반 상품으로 바꾼다(2026-10-14 결정). 판매 중(ACTIVE)이 되고, 할인율은 요청 값(비우면 0)이다.
-     * 옵션별 초기 재고는 등록과 같은 이벤트(IN_STOCK_PRODUCT_REGISTERED)로 order 에 넘긴다 — order 가 재고 행을 만들면 판매 준비가 끝나 목록 · 장바구니에
-     * 나온다(그 전에는 노출되지 않는다). preorder 의 접수용 사본도 비운다(PREORDER_PRODUCT_CHANGED — 판매 방식이 바뀌었다).
+     * 옵션별 초기 재고는 등록과 같은 이벤트(IN_STOCK_PRODUCT_REGISTERED)로 order 에 넘긴다 — order 가 재고 행을 만들고 보낸 판매 준비 이벤트
+     * (IN_STOCK_PRODUCT_READY)가 catalog 에 닿으면 목록 · 장바구니에 나온다(그 전에는 노출되지 않는다). preorder 의 접수용 사본도 비운다(PREORDER_PRODUCT_CHANGED — 판매 방식이 바뀌었다).
      *
      * <ul>
      *   <li>409 STATE_CONFLICT: 사전예약이 아님(이미 바꿨음 포함) · 회차가 취소됨 · 회차가 없음 · 마감 전(closes_at &gt; 지금)</li>
@@ -422,7 +422,8 @@ public class ProductEditService {
                 .map(option -> new InStockProductRegistered.Item(option.getId(), stockByOption.get(option.getId())))
                 .toList()));
         outbox.append(PreorderProductChanged.of(product));
-        return detailService.findAdminProduct(productId);
+        // 재고는 커밋 뒤 나가는 이벤트로 order 가 만든다 — 이 트랜잭션 안에서 order 에 물을 것이 없다
+        return detailService.beforeStockReady(detailService.findAdminSnapshot(productId));
     }
 
     /** 재고가 옵션을 빠짐없이 한 번씩 덮는가 — 모르는 옵션 · 같은 옵션 두 번 · 빠진 옵션은 stocks 의 400. */
@@ -620,7 +621,7 @@ public class ProductEditService {
     }
 
     private ProductDetailView.Variant variantOf(UUID productId, UUID variantId) {
-        return detailService.findAdminProduct(productId).product().variants().stream()
+        return detailService.findAdminSnapshot(productId).product().variants().stream()
                 .filter(v -> v.variantId().equals(variantId)).findFirst()
                 .orElseThrow(() -> new IllegalStateException("variant " + variantId + " vanished"));
     }

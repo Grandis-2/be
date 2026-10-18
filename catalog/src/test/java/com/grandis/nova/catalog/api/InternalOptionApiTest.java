@@ -77,6 +77,7 @@ class InternalOptionApiTest {
                 .andExpect(jsonPath("$.data.items[1].optionId").value(black.toString()))
                 .andExpect(jsonPath("$.data.items[1].productId").value(phone.toString()))
                 .andExpect(jsonPath("$.data.items[1].productTitle").value("Nova 1"))
+                .andExpect(jsonPath("$.data.items[1].modelName").value("A0001"))
                 .andExpect(jsonPath("$.data.items[1].optionTitle").value("옵션"))
                 .andExpect(jsonPath("$.data.items[1].sku").isString())
                 .andExpect(jsonPath("$.data.items[1].price").value(1250000))

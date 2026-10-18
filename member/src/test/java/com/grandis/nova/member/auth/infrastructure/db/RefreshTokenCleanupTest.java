@@ -114,7 +114,7 @@ class RefreshTokenCleanupTest {
     }
 
     @Test
-    @DisplayName("만료 직후 교체된 토큰이 재사용되면 정리 뒤에도 재사용으로 잡힌다 — 행이 유예 동안 남아 체인 폐기 · 액세스 폐기 표식이 선다")
+    @DisplayName("만료 직후 교체된 토큰이 재사용되면 정리 뒤에도 재사용(REUSED)으로 잡힌다 — 행이 탐지 창 동안 남아 있어 호출자가 세션을 끊을 수 있다")
     void reuseIsStillDetectedJustAfterExpiry() {
         String first = RefreshTokens.newToken();
         String second = RefreshTokens.newToken();

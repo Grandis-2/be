@@ -94,6 +94,19 @@ class PlaceOrderServiceTest {
         assertThat(draft.getValue().preorderToken()).isEqualTo(PREORDER_UUID);
     }
 
+    // 사전예약 주문은 모델명을 남기지 않는다 — 예약 접수 때 스냅샷에 모델명이 없다(장바구니 · 바로 구매 · 드로우 당첨만 남긴다)
+    @Test
+    void preorderLineHasNoModelName() {
+        payable();
+        given(ledger.place(any(), any())).willReturn(order(OrderStatus.AWAITING_PAYMENT));
+
+        service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS);
+
+        ArgumentCaptor<OrderDraft> draft = ArgumentCaptor.forClass(OrderDraft.class);
+        verify(ledger).place(draft.capture(), any());
+        assertThat(draft.getValue().lines()).singleElement().satisfies(line -> assertThat(line.modelName()).isNull());
+    }
+
     @Test
     void deadlockGivesUpAfterMaxAttempts() {
         payable();

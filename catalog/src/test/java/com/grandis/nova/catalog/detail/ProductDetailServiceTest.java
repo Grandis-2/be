@@ -48,7 +48,7 @@ class ProductDetailServiceTest {
     }
 
     @Test
-    @DisplayName("상세를 읽는 도중 커밋된 가격 · 재고 변경은 이번 응답에 섞이지 않는다")
+    @DisplayName("상세를 읽는 도중 커밋된 가격 변경은 이번 응답에 섞이지 않는다 — 재고는 스냅샷 밖(order 가 답한 시점의 값)이다")
     void detailReadsOneSnapshot() {
         UUID productId = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "스냅샷", null);
         fixtures.registration(productId);
@@ -65,8 +65,8 @@ class ProductDetailServiceTest {
 
         assertThat(hookRan[0]).as("훅이 첫 문장 뒤 · 옵션 문장 앞에서 돌았다").isTrue();
         assertThat(view.variants().getFirst().price()).isEqualByComparingTo("1000");
-        assertThat(view.variants().getFirst().availableQuantity()).isEqualTo(5);
-        assertThat(view.soldOut()).isFalse();
+        assertThat(view.variants().getFirst().availableQuantity()).as("본문을 읽은 뒤 order 에 묻는다 — 그 사이 팔린 재고가 보인다").isZero();
+        assertThat(view.soldOut()).isTrue();
         // 트랜잭션이 끝난 뒤에는 새 값이 보인다 — 대조군
         ProductDetailView after = service.findProduct(productId);
         assertThat(after.variants().getFirst().price()).isEqualByComparingTo("2000");

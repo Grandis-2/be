@@ -36,6 +36,6 @@ class DrawCampaignTest {
     }
 
     private static DrawCampaign draw(BigDecimal fee, int winners, Instant opens, Instant closes) {
-        return new DrawCampaign(TestIds.id(1), TestIds.id(2), TestIds.id(3), "t", "p", "o", null, fee, winners, opens, closes, opens);
+        return new DrawCampaign(TestIds.id(1), TestIds.id(2), TestIds.id(3), "t", "p", null, "o", null, fee, winners, opens, closes, opens);
     }
 }

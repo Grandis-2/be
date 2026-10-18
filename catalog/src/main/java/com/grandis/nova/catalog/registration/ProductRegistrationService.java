@@ -137,7 +137,7 @@ public class ProductRegistrationService {
                 : new InStockProductRegistered(productId, initialStock));
         // 미리보기는 커밋 전에 같은 트랜잭션에서 읽는다 — 커밋 전엔 남이 이 상품을 못 건드려 저장한 그대로가 실린다.
         // 준비는 아직이다: 이벤트는 커밋 뒤에 나가므로 회차 · 재고 행이 이 시점에 있을 수 없다
-        ProductDetailView preview = detailService.findAdminProduct(productId).product();
+        ProductDetailView preview = detailService.beforeStockReady(detailService.findAdminSnapshot(productId)).product();
         return new RegistrationOutcome(RegistrationOutcome.Kind.CREATED, RegistrationStatusView.of(product, false), preview);
     }
 

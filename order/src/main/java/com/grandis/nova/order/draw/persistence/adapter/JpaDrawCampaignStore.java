@@ -21,6 +21,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -45,7 +46,7 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
     @Override
     public DrawCampaign insert(NewDrawCampaign c) {
         DrawCampaignJpaEntity entity = new DrawCampaignJpaEntity(c.idempotencyKey(), c.productId(), c.optionId(), c.title(), c.productTitle(),
-                c.optionTitle(), c.imageUrl(), c.entryFee(), c.winnerCount(), c.opensAt(), c.closesAt());
+                c.modelName(), c.optionTitle(), c.imageUrl(), c.entryFee(), c.winnerCount(), c.opensAt(), c.closesAt());
         try {
             entityManager.persist(entity);
             entityManager.flush();
@@ -61,6 +62,11 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
     @Override
     public Optional<DrawCampaign> findById(UUID id) {
         return campaigns.findById(id).map(JpaDrawCampaignStore::toDomain);
+    }
+
+    @Override
+    public List<DrawCampaign> findAllById(Collection<UUID> ids) {
+        return campaigns.findAllById(ids).stream().map(JpaDrawCampaignStore::toDomain).toList();
     }
 
     @Override
@@ -149,7 +155,7 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
 
     private static DrawCampaign toDomain(DrawCampaignJpaEntity e) {
         return new DrawCampaign(e.getId(), e.getProductId(), e.getOptionId(), e.getTitle(), e.getProductTitleSnapshot(),
-                e.getOptionTitleSnapshot(), e.getImageUrlSnapshot(), e.getEntryFee(), e.getWinnerCount(), e.getOpensAt(), e.getClosesAt(),
+                e.getModelNameSnapshot(), e.getOptionTitleSnapshot(), e.getImageUrlSnapshot(), e.getEntryFee(), e.getWinnerCount(), e.getOpensAt(), e.getClosesAt(),
                 e.getCreatedAt());
     }
 }

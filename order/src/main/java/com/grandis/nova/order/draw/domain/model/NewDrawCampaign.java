@@ -9,6 +9,6 @@ import java.util.UUID;
  *
  * @param idempotencyKey 관리자 만들기의 Idempotency-Key — 같은 키는 한 회차다(uq_draw_campaign_idempotency)
  */
-public record NewDrawCampaign(String idempotencyKey, UUID productId, UUID optionId, String title, String productTitle, String optionTitle, String imageUrl,
+public record NewDrawCampaign(String idempotencyKey, UUID productId, UUID optionId, String title, String productTitle, String modelName, String optionTitle, String imageUrl,
                               BigDecimal entryFee, int winnerCount, Instant opensAt, Instant closesAt) {
 }

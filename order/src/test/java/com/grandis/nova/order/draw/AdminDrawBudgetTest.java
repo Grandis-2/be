@@ -69,12 +69,12 @@ class AdminDrawBudgetTest {
     final NoOpTransactionManager transactions = new NoOpTransactionManager();
     final MovableClock clock = new MovableClock();
     final AdminDrawService service = new AdminDrawService(catalog, stock, campaigns, transactions, clock, BUDGET);
-    final DrawCampaign draw = new DrawCampaign(TestIds.id(3), TestIds.id(1), TestIds.id(2), "t", "p", "o", "https://img/products/a.jpg",
+    final DrawCampaign draw = new DrawCampaign(TestIds.id(3), TestIds.id(1), TestIds.id(2), "t", "p", null, "o", "https://img/products/a.jpg",
             new BigDecimal("100"), 1, NOW, NOW.plusSeconds(3600), NOW);
 
     @BeforeEach
     void setUp() {
-        given(catalog.find(any(), any())).willReturn(Map.of(TestIds.id(2), new CatalogOption(TestIds.id(2), TestIds.id(1), "p", "o", "SKU",
+        given(catalog.find(any(), any())).willReturn(Map.of(TestIds.id(2), new CatalogOption(TestIds.id(2), TestIds.id(1), "p", "M-1", "o", "SKU",
                 new BigDecimal("1000"), "ACTIVE", "IN_STOCK", "ACTIVE", false, true, new CatalogOption.Warranty(false, BigDecimal.ZERO),
                 "https://img/products/a.jpg")));
         given(campaigns.insert(any())).willReturn(draw);
@@ -93,7 +93,7 @@ class AdminDrawBudgetTest {
     void budgetSpentOnCatalogReadNeverStartsTheTransaction() {
         given(catalog.find(any(), any())).willAnswer(invocation -> {
             clock.now = NOW.plus(BUDGET);
-            return Map.of(TestIds.id(2), new CatalogOption(TestIds.id(2), TestIds.id(1), "p", "o", "SKU", new BigDecimal("1000"), "ACTIVE",
+            return Map.of(TestIds.id(2), new CatalogOption(TestIds.id(2), TestIds.id(1), "p", "M-1", "o", "SKU", new BigDecimal("1000"), "ACTIVE",
                     "IN_STOCK", "ACTIVE", false, true, new CatalogOption.Warranty(false, BigDecimal.ZERO), "https://img/products/a.jpg"));
         });
 

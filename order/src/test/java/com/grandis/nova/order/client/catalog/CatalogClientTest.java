@@ -72,7 +72,7 @@ class CatalogClientTest {
                         {"success":true,
                          "data":{"items":[
                            {"optionId":"%s","productId":"0199a3f2-8a10-7b21-9c32-4d5e6f708192","productTitle":"아이폰 17",
-                            "optionTitle":"블랙 / 256GB","sku":"BLK-256","price":1250000,"optionStatus":"ACTIVE","saleMode":"IN_STOCK",
+                            "modelName":"A3104","optionTitle":"블랙 / 256GB","sku":"BLK-256","price":1250000,"optionStatus":"ACTIVE","saleMode":"IN_STOCK",
                             "productStatus":"ACTIVE","visible":true,"registrationCompleted":true,
                             "warranty":{"offered":true,"surcharge":199000},"imageUrl":"https://img.example/black-0.jpg"}
                          ]},
@@ -83,6 +83,7 @@ class CatalogClientTest {
 
         assertThat(found).containsOnlyKeys(FIRST);
         CatalogOption option = found.get(FIRST);
+        assertThat(option.modelName()).isEqualTo("A3104");
         assertThat(option.price()).isEqualByComparingTo("1250000");
         assertThat(option.saleMode()).isEqualTo("IN_STOCK");
         assertThat(option.visible()).isTrue();
@@ -90,6 +91,18 @@ class CatalogClientTest {
         assertThat(option.warranty()).isEqualTo(new CatalogOption.Warranty(true, new BigDecimal("199000")));
         assertThat(option.imageUrl()).isEqualTo("https://img.example/black-0.jpg");
         server.verify();
+    }
+
+    @Test
+    @DisplayName("modelName 이 빠진 옵션(모델명을 싣기 전 catalog)도 읽는다 — 판정에 쓰지 않으니 null 로 두고 연동 오류로 보지 않는다")
+    void missingModelNameReadsAsNull() {
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("http://catalog/internal/options?")))
+                .andRespond(withSuccess(envelope(item(FIRST)), MediaType.APPLICATION_JSON));
+
+        CatalogOption option = reader.find(List.of(FIRST), SESSION).get(FIRST);
+
+        assertThat(option.modelName()).isNull();
+        assertThat(option.productTitle()).isEqualTo("아이폰 17");
     }
 
     @Test

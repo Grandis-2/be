@@ -51,8 +51,11 @@ import java.lang.annotation.Target;
         "nova.upload.region=ap-northeast-2",
         // 읽기 캐시는 끈다 — 시험 픽스처가 DB 를 JDBC 로 바로 고쳐(캐시 세대를 안 올림) 다음 조회가 옛 값을 받는다. 캐시 동작은
         // 켠 채로 도는 캐시 시험(ReadCache · CatalogReadCache 시험)이 본다
-        "nova.read-cache.enabled=false"
+        "nova.read-cache.enabled=false",
+        // catalog-events 소비기는 운영 기본값(CatalogDefaults)으로 켜져 있다 — 시험은 끈다. 소비기를 보는 시험(CatalogEventConsumerFlowTest · InStockProductReadyFlowTest)이 켠다
+        "nova.sqs.consumer.enabled=false"
 })
-@Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class, ImageAttachmentsTestConfig.class})
+@Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class, ImageAttachmentsTestConfig.class,
+        OrderStocksTestConfig.class})
 public @interface CatalogIntegrationTest {
 }
