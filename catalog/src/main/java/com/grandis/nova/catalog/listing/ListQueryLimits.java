@@ -12,11 +12,15 @@ import java.util.List;
  */
 public final class ListQueryLimits {
 
-    /** 검색어 최대 길이(코드 포인트, 정규화 뒤). 프론트 검색창의 maxLength(50, UTF-16 단위)와 같아 프론트가 보낸 값은 걸리지 않는다. */
+    /**
+     * 검색어 최대 길이(코드 포인트, 정규화 뒤). 회원 검색창의 maxLength(50, UTF-16 단위)와 같아 보통 입력은 걸리지 않는다 — NFC 가 길이를
+     * 늘리는 드문 문자(U+0958 은 2, U+FB2C 는 3 코드 포인트가 된다)는 50 안이어도 넘을 수 있다(실측). 관리자 검색창에도 같은 50자를 두기로
+     * 했다(2026-10-18 결정, 프론트 반영 전에는 51자부터 400).
+     */
     public static final int MAX_QUERY_LENGTH = 50;
     /**
      * brand · color · storage 를 한 요청에 보낼 수 있는 최대 개수 — IN 목록의 크기를 묶는다. 여러 상품에 걸친 OR 이라 카탈로그 전체의
-     * 서로 다른 색상 · 용량은 20개를 넘을 수 있다. 지금 프론트(develop 10-17)는 color · storage 필터를 보내지 않는다.
+     * 서로 다른 색상 · 용량은 20개를 넘을 수 있다. 프론트(2026-10-18 develop)는 color · storage 필터를 보내지 않는다.
      */
     public static final int MAX_VALUES = 20;
 
