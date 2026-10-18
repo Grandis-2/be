@@ -274,7 +274,11 @@ jobs:
       - name: jar 키 계산
         run: |
           set -euo pipefail
-          for jar in dist/*/app.jar; do echo "$jar $(python3 .github/scripts/jar_content_key.py "$jar")"; done
+          for jar in dist/*/app.jar; do
+            # 대입으로 먼저 받아 스크립트 실패가 set -e 에 걸리게 한다
+            key=$(python3 .github/scripts/jar_content_key.py "$jar")
+            echo "$jar $key"
+          done
 
   secrets:
     runs-on: ubuntu-latest
