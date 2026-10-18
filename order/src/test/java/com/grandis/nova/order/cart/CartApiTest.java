@@ -112,6 +112,7 @@ class CartApiTest {
         JsonNode plain = items.get(0);
         assertThat(plain.get("variantId").asString()).isEqualTo(option.toString());
         assertThat(plain.get("productTitle").asString()).isEqualTo("아이폰 17");
+        assertThat(plain.get("modelName").asString()).as("모델명은 catalog 의 지금 값").isEqualTo("A3104");
         assertThat(plain.get("warranty").asBoolean()).isFalse();
         assertThat(plain.get("quantity").asInt()).isEqualTo(5);
         assertThat(plain.get("unitPrice").decimalValue()).isEqualByComparingTo(PRICE);
@@ -313,7 +314,7 @@ class CartApiTest {
         if (stock >= 0) {
             fixtures.stock(option, stock, 0, 0);
         }
-        catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "블랙 / 256GB", "SKU-" + option, PRICE,
+        catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "A3104", "블랙 / 256GB", "SKU-" + option, PRICE,
                 "ACTIVE", "IN_STOCK", "ACTIVE", true, true,
                 new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), "https://img/black-0.jpg"));
         return option;
@@ -321,7 +322,7 @@ class CartApiTest {
 
     private static CatalogOption copy(CatalogOption o, String saleMode, String productStatus, String optionStatus, boolean visible,
                                       boolean ready, boolean warrantyOffered) {
-        return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.optionTitle(), o.sku(), o.price(), optionStatus, saleMode,
+        return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.modelName(), o.optionTitle(), o.sku(), o.price(), optionStatus, saleMode,
                 productStatus, visible, ready, new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), o.imageUrl());
     }
 
