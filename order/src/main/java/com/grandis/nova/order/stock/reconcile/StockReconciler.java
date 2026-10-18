@@ -24,11 +24,11 @@ import java.util.Optional;
  * - 하루 한 번 새벽 4시(KST), 실패하면 5시에 한 번 더(nova.stock.reconcile.cron — "-" 면 끈다). 표 전체를 읽는 문장이라 사전예약 피크를 피한다.
  *   경보는 마지막 성공 뒤 26시간이라, 4시 한 번의 일시 실패(배포 재시작 · DB 순단)는 5시가 메우고 이틀째 두 번 다 실패해야 울린다
  *   (Prometheus 권고 — 한 번의 실패를 견딜 수 없으면 더 자주 돌린다).
- * - 인스턴스가 여럿이면 DB 이름 잠금({@link ReconcileLock})을 잡은 하나만 돈다 — 기다리지 않고, 못 잡으면 건너뛴다. 잠금은 동시 실행만 막으므로,
- *   잠근 뒤 {@link #SCHEDULED_GAP} 안에 끝난 대조가 있으면 주기 실행은 건너뛴다 — 인스턴스마다 발화 시각이 조금씩 달라 연달아 도는 것과,
+ * - 인스턴스가 여럿이면 대조 트랜잭션 안에서 잠금({@link ReconcileLock})을 잡은 하나만 돈다 — 기다리지 않고, 못 잡으면 건너뛴다. 잠금은 동시 실행만
+ *   막으므로, 잠근 뒤 {@link #SCHEDULED_GAP} 안에 끝난 대조가 있으면 주기 실행은 건너뛴다 — 인스턴스마다 발화 시각이 조금씩 달라 연달아 도는 것과,
  *   4시가 성공한 날의 5시 회차를 함께 막는다. 실패는 기록하지 않으므로 4시가 실패한 날의 5시 회차는 돈다.
- *   잠금은 트랜잭션 바깥에서 잡고 커밋이 끝난 뒤 놓는다 — 놓은 뒤 잡은 인스턴스는 간격 판정에서 앞 기록을 반드시 본다(Rails 마이그레이션이
- *   잠근 뒤 이력을 다시 읽는 것과 같다). 읽기는 SQL 한 문장이라 잠금 없이도 그 시점에서 정확하다.
+ *   잠금은 기록과 같은 트랜잭션이라 커밋으로 함께 풀린다 — 풀린 뒤 잡은 인스턴스는 간격 판정에서 앞 기록을 반드시 보고, 앞 대조의 연결이 끊기면
+ *   그 대조는 기록 없이 롤백된다. 읽기는 SQL 한 문장이라 그 시점에서 정확하다.
  * - ERROR 는 기록에 싣는 옵션(앞 {@link StockReconcileRun#DETAIL_LIMIT}개)만 옵션마다 남기고 나머지는 수만 한 줄로 — 처음 켤 때 과거 데이터로
  *   어긋남이 많아도 로그가 넘치지 않게.
  * - 실패(문장 시간 상한 · DB 오류)는 기록하지 않는다 — 마지막 성공 시각 지표(StockGauges)가 멈춰 경보로 드러난다.
@@ -72,12 +72,13 @@ public class StockReconciler {
 
     /** @param gap 이 안에 끝난 대조가 있으면 건너뛴다. ZERO 면 보지 않는다 */
     Optional<StockReconcileRun> run(Duration gap) {
-        Optional<Optional<StockReconcileRun>> locked = lock.runExclusively(() -> transaction.execute(status -> reconcileLocked(gap)));
-        if (locked.isEmpty()) {
-            log.info("재고 장부 대조 건너뜀 — 다른 인스턴스가 도는 중");
-            return Optional.empty();
-        }
-        return locked.get();
+        return transaction.execute(status -> {
+            if (!lock.tryLock()) {
+                log.info("재고 장부 대조 건너뜀 — 다른 인스턴스가 도는 중");
+                return Optional.empty();
+            }
+            return reconcileLocked(gap);
+        });
     }
 
     private Optional<StockReconcileRun> reconcileLocked(Duration gap) {

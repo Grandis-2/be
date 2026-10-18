@@ -5,6 +5,7 @@ order 와 catalog 가 서로 부르는 내부 API 를 담는다(preorder 가 부
 - catalog → order: `GET /internal/order-items/{orderItemId}` — 리뷰 작성용 주문상품. order 가 응답을 만들고(`InternalOrderItemController` · `OrderQueryService.findItem`), catalog 의 리뷰 작성이 소비한다.
 - order → catalog: `GET /internal/options` — 장바구니용 옵션 일괄 조회. catalog 가 응답을 만들고(`InternalOptionController` · `ProductOptionsQueryService.findOptions`), order 의 장바구니가 소비한다.
 - catalog → order: `GET /internal/draws/gift-products/{productId}` — 상품 삭제의 드로우 증정품 확인. order 가 응답을 만들고(`InternalDrawController` · `DrawQueryService.giftInProgress`), catalog 의 상품 삭제(`ProductDeleteService`)가 소비한다.
+- catalog → order: `GET /internal/stocks` — 옵션별 남은 수량. order 가 응답을 만들고(`InternalStockController` · `StockQueryService.findAvailable`), catalog 의 상품 목록(품절) · 상세(남은 수량) · 관리자 증정품 후보(수량)가 소비한다. **토큰 없이 부른다.** 판매 준비(재고 행 유무)는 이 API 가 아니라 이벤트로 받는다(`order-catalog-events.md`).
 
 ## `GET /internal/order-items/{orderItemId}` — 리뷰 작성용 주문상품 (내부 전용)
 
@@ -191,3 +192,55 @@ BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, �
 | 400 | `VALIDATION_FAILED` | `productId` 가 UUID 가 아님 |
 | 401 | `UNAUTHENTICATED` | 토큰 없음 · 만료 · 서명 · 폐기된 토큰 |
 | 403 | `FORBIDDEN` | ADMIN 이 아닌 토큰 |
+
+## `GET /internal/stocks` — 옵션별 남은 수량 (내부 전용, 토큰 없음)
+
+**노출.** 다른 `/internal/**` 와 같이 공개 라우팅에 두지 않고, OpenAPI 문서에서도 기본으로 빠진다. 이 API 는 토큰을 받지 않으므로 **공개 경로에 없다는 것이 유일한 차단**이다. 공개 ALB 가 order 로 보내는 경로는 모두 `/api/v1/` 아래다(nova-infra `terraform/application/order/service.yml` 의 `routes`, 10/17 기준 주문 · 장바구니 · 재고 관리 · 드로우). 그 목록에 `/internal` 을 넣으면 안 된다. 새어도 보이는 것은 상세 화면에 이미 공개되는 남은 수량뿐이다.
+
+**호출 주체.**
+
+| 언제 | 누가 | 실린 JWT | 목적 |
+| --- | --- | --- | --- |
+| 상품 목록 한 쪽을 고른 뒤 | catalog 목록 · 검색 | 없음(회원이면 있어도 된다) | 쪽에 실린 상품의 품절 칸 |
+| 상품 상세를 볼 때 | catalog 상세 | 없음(회원이면 있어도 된다) | 옵션별 남은 수량 |
+| 관리자가 증정품 후보를 볼 때 | catalog 관리자 | 관리자(있어도 된다) | 후보 옵션의 남은 수량 |
+
+**인증.** 없다 — `SecurityConfig` 가 `GET /internal/stocks` 만 `/internal/**` 보다 앞에서 연다. 남은 수량은 회원 · 비회원 모두에게 상세 화면으로 이미 공개되는 값이고, 비회원 목록에는 실을 토큰이 없다. 토큰을 실어도 결과는 같고, 만료 · 폐기 · 위조 토큰도 401 이 아니라 익명으로 통과한다(`JwtAuthenticationFilter` 는 공개 경로에서 거부하지 않는다). 그래서 catalog 의 토큰 중계(`BearerTokenRelayInterceptor`)를 이 호출에서 꺼야만 하는 것은 아니다. 다만 끄는 편이 낫다 — 토큰을 실으면 유효한 토큰은 호출마다 order 의 폐기 조회(Redis)를 거치고, 만료된 토큰은 호출마다 WARN 로그(`auth rejected`)를 남긴다. 같은 경로의 다른 메서드와 하위 경로는 열지 않았다(401).
+
+**요청.** 본문 없음. `optionIds` 에 옵션 id(`product_options.id`, UUID)를 쉼표로 잇거나(`optionIds=a,b`) 파라미터를 반복한다(`optionIds=a&optionIds=b`) — 둘은 같다. 규칙은 `GET /internal/options` 의 `ids` 와 같다.
+- 같은 id 는 한 번으로 센다. 중복을 뺀 개수가 1~100 이어야 한다. 비었거나 · 없거나 · 101개 이상 · UUID 가 아니거나 · 빈 원소(`optionIds=a,` 의 끝 쉼표)가 있으면 400(`field=optionIds`).
+- 상한 100 은 URL 길이로 정했다 — UUID 100개를 쉼표로 이으면 약 3.7KB 로, Tomcat 요청 헤더 기본 상한(8KB) 안이다. 더 많이 물어야 하면 catalog 가 100개씩 나눠 부른다.
+
+**응답 200.** 봉투는 `common:web` 의 `ApiResponse` 그대로. 결과는 **요청 순서**(같은 id 는 처음 자리에 한 번)이고, **재고 행이 없는 옵션은 빠진다**.
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [
+      { "optionId": "0199a3f2-8a11-7c22-8d33-5e6f70819203", "available": 7 },
+      { "optionId": "0199a3f2-8a11-7c22-8d33-5e6f70819204", "available": 0 }
+    ]
+  },
+  "error": null,
+  "timestamp": "2026-10-17T06:00:00Z",
+  "traceId": "…"
+}
+```
+
+| 칸 | 타입 | 뜻 |
+| --- | --- | --- |
+| `optionId` | string(UUID) | 물은 옵션 |
+| `available` | number | 지금 주문할 수 있는 수량 = `stock_total − stock_reserved − stock_sold`, 0 이상. 표의 CHECK(`ck_inventory_capacity`)가 음수를 막고, order 도 음수를 0 으로 잘라 낸다 |
+
+**빠진 옵션 = 판매 불가.** 재고 행이 없는 옵션은 재고를 아직 넣지 않았거나 사전예약 옵션이다. catalog 의 지금 해석("행 없음 = 판매 불가")과 같다. order 는 옵션이 어느 상품 · 판매 방식인지 보지 않고, 없는 옵션 id 도 400 이 아니라 결과에서 빠질 뿐이다.
+
+**읽기.** 읽기 전용 트랜잭션에서 잠그지 않고 PK 로 읽는다. 화면 표시용 값이라 그 사이 주문이 확보하면 바로 낡는다 — 주문 생성은 이 값과 상관없이 확보 UPDATE 로 다시 판정한다.
+
+**배포 순서.** order 를 catalog 보다 먼저 낸다. 그 전의 order 에서는 이 경로가 `/internal/**` 규칙에 걸려, 토큰 없이 부르면 401 이고 토큰을 실으면 매핑이 없어 404 다.
+
+**오류.** 공통 봉투 그대로.
+
+| 상태 | 코드 | 언제 |
+| --- | --- | --- |
+| 400 | `VALIDATION_FAILED` | `optionIds` 가 비었거나 · 없거나 · 중복을 뺀 개수가 100 을 넘거나 · UUID 가 아니거나 · 빈 원소가 있음(`field=optionIds`) |

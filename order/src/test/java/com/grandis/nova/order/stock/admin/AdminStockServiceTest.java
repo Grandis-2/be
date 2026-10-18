@@ -3,7 +3,9 @@ package com.grandis.nova.order.stock.admin;
 import com.grandis.nova.order.MySqlLockFailures;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.common.web.ApiError;
+import com.grandis.nova.order.outbox.InStockProductReady;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.stock.StockLedger;
 import com.grandis.nova.order.stock.domain.enums.SaleMode;
@@ -48,8 +50,9 @@ class AdminStockServiceTest {
     StockLedger ledger = mock(StockLedger.class);
     StockReader reader = mock(StockReader.class);
     CatalogOptions catalog = mock(CatalogOptions.class);
+    OutboxWriter outboxWriter = mock(OutboxWriter.class);
     PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
-    AdminStockService service = new AdminStockService(ledger, reader, catalog, transactionManager);
+    AdminStockService service = new AdminStockService(ledger, reader, catalog, outboxWriter, transactionManager);
 
     @BeforeEach
     void setUp() {
@@ -57,6 +60,25 @@ class AdminStockServiceTest {
         given(catalog.findSaleMode(PRODUCT_ID)).willReturn(Optional.of(SaleMode.IN_STOCK));
         given(catalog.findOwnedOptionIds(PRODUCT_ID, List.of(TestIds.id(11), TestIds.id(12)))).willReturn(Set.of(TestIds.id(11), TestIds.id(12)));
         given(reader.findByOptionIds(any())).willReturn(List.of());
+    }
+
+    /** 행을 하나라도 만들면 판매 준비 이벤트를 한 건 적는다(옵션 수와 상관없이). 만든 행이 없으면 적지 않는다. */
+    @Test
+    void readyEventIsAppendedOnceWhenRowsAreCreated() {
+        given(ledger.set(SETTINGS)).willReturn(Set.of(TestIds.id(11), TestIds.id(12)));
+
+        service.set(PRODUCT_ID, SETTINGS);
+
+        verify(outboxWriter, times(1)).append(new InStockProductReady(PRODUCT_ID));
+    }
+
+    @Test
+    void noReadyEventWhenEveryRowAlreadyExists() {
+        given(ledger.initialize(SETTINGS)).willReturn(Set.of());
+
+        service.initialize(PRODUCT_ID, SETTINGS);
+
+        verify(outboxWriter, never()).append(any());
     }
 
     @Test
