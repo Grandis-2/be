@@ -341,6 +341,28 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
+    @DisplayName("메인 배너는 읽기 캐시에 둔다 — DB 를 직접 고치면 옛 목록, 관리자가 배너를 만들면(세대) 다음 조회부터 새 목록")
+    void bannersAreCachedAndDroppedOnAdminWrite() throws Exception {
+        jdbcTemplate.update("DELETE FROM banners");
+        UUID product = registerInStock("배너 대상");
+        String body = """
+                {"badge":"b","title":"%s","description":"d","tabLabel":"t","icon":"Smartphone","imageUrl":"https://img/banner.png","imageAlt":"a",
+                 "target":{"type":"PRODUCT","id":"%s"},"visible":true}""";
+        admin(post("/api/v1/admin/banners"), body.formatted("첫 배너", product)).andExpect(status().isCreated());
+        assertThat(bannerTitles()).containsExactly("첫 배너");
+        jdbcTemplate.update("UPDATE banners SET title = '직접 고침'");
+
+        assertThat(bannerTitles()).as("캐시의 옛 목록 — 캐시가 켜져 있다").containsExactly("첫 배너");
+        admin(post("/api/v1/admin/banners"), body.formatted("둘째 배너", product)).andExpect(status().isCreated());
+        assertThat(bannerTitles()).as("세대가 올라 다시 읽었다").containsExactly("직접 고침", "둘째 배너");
+    }
+
+    private java.util.List<String> bannerTitles() throws Exception {
+        return data(mockMvc.perform(get("/api/v1/banners")).andExpect(status().isOk())).get("items").findValues("title").stream()
+                .map(JsonNode::asString).toList();
+    }
+
+    @Test
     @DisplayName("사전예약 → 일반 전환도 세대를 올린다 — 캐시된 마감 상세가 다음 조회부터 일반 상품")
     void conversionInvalidates() throws Exception {
         UUID productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", "전환", "t" + ShopFixtures.unique());
