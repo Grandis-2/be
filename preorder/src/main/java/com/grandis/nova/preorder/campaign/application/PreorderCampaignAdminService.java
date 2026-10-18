@@ -107,7 +107,7 @@ public class PreorderCampaignAdminService {
         boolean stillOnSale;
         try {
             stillOnSale = liveProduct(productId).filter(ProductCatalog::isOnPreorderSale).isPresent();
-        } catch (BusinessException | IllegalStateException e) {
+        } catch (RuntimeException e) {
             try {
                 writer.closeReopened(productId, reopened.getClosesAt(), reopenedBy);
             } catch (RuntimeException closeFailure) {

@@ -3,6 +3,7 @@ package com.grandis.nova.preorder.accept;
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
+import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.support.AdmissionTickets;
 import com.grandis.nova.preorder.support.CatalogStubs;
 import com.grandis.nova.preorder.support.PreorderCancels;
@@ -49,6 +50,9 @@ class AcceptPreorderApiTest {
 
     @Autowired
     PreorderLedger ledger;
+
+    @Autowired
+    Preorders preorders;
 
     @Autowired
     TransactionTemplate transactionTemplate;
@@ -386,6 +390,18 @@ class AcceptPreorderApiTest {
                 .containsEntry("internal_note", "VIP")
                 .containsEntry("actor", "ADMIN")
                 .containsEntry("reason", "전화 접수");
+    }
+
+    /** 회원 외래 키가 없어 대리 접수는 회원을 확인하지 않는다 — 관리자 입력을 믿고 그대로 받는다. */
+    @Test
+    void 관리자_대신_접수는_없는_회원이어도_받는다() throws Exception {
+        UUID unknown = UUID.randomUUID();
+
+        String preorderId = body(mockMvc.perform(adminRequest(unknown, "key-admin-0002", "전화 접수"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.data.status").value("PENDING_SYNC")));
+
+        assertThat(preorders.getByToken(preorderId).customerId()).isEqualTo(unknown);
     }
 
     @Test
