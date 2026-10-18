@@ -66,9 +66,14 @@ public interface PreorderSyncJobRepository extends JpaRepository<PreorderSyncJob
                 SyncJobStatus.RETRY_SCHEDULED, null, now);
     }
 
-    /** worker 가 포기했다. REGISTER 에만 쓴다(DB CHECK). 이미 끝난 작업은 0. */
+    /** worker 가 포기했다. 이미 끝난 작업은 0. */
     default int markDeadLetter(UUID id, Instant now) {
         return transit(id, IN_PROGRESS, SyncJobStatus.DEAD_LETTER, now, now);
+    }
+
+    /** 관리자가 외부에서 확인하고 끝냈다. 포기한 작업만 바꾼다 — 그 사이 재처리 · 늦은 성공이 바꿨으면 0. */
+    default int markResolved(UUID id, Instant now) {
+        return transit(id, List.of(SyncJobStatus.DEAD_LETTER), SyncJobStatus.SUCCEEDED, null, now);
     }
 
     /** 관리자 재처리. 포기한 작업만 되돌리고 실행 회차를 올린다 — 여러 번 불러도 한 번만 1. */

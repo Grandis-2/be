@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.event;
 
 import com.grandis.nova.common.outbox.OutboxWriter;
+import com.grandis.nova.preorder.cancel.CancelCompletion;
 import com.grandis.nova.preorder.cancel.CancelRequestPayload;
 import com.grandis.nova.preorder.outbox.NotificationRequested;
 import com.grandis.nova.preorder.preorder.EventActor;
@@ -9,20 +10,27 @@ import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
+import com.grandis.nova.preorder.preorder.PreorderTransition;
 import com.grandis.nova.preorder.preorder.Preorders;
+import com.grandis.nova.preorder.syncjob.CancelJobReady;
 import com.grandis.nova.preorder.syncjob.NewSyncAttempt;
+import com.grandis.nova.preorder.syncjob.SyncActor;
 import com.grandis.nova.preorder.syncjob.SyncJobSnapshot;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 import com.grandis.nova.preorder.syncjob.SyncJobType;
 import com.grandis.nova.preorder.syncjob.SyncJobs;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -40,6 +48,7 @@ public class PreorderEventHandler {
     private static final Logger log = LoggerFactory.getLogger(PreorderEventHandler.class);
 
     static final String FAILED_METRIC = "preorder.sync.failed";
+    static final String PAYMENT_AFTER_CANCEL_METRIC = "preorder.payment.after_cancel";
 
     private static final String REJECTED_BY_ORDER = "ORDER_REJECTED";
 
@@ -49,29 +58,28 @@ public class PreorderEventHandler {
             EventActor.ADMIN, "ADMIN_CANCEL",
             EventActor.SYSTEM, "DEADLINE_EXCEEDED");
 
-    /** 취소를 시작한 주체 → 취소 알림 문구. 관리자 취소와 회차 판매 중지는 둘 다 ADMIN 이고 문구도 같다. */
-    private static final Map<EventActor, NotificationRequested.CancelCause> CANCEL_CAUSES = Map.of(
-            EventActor.USER, NotificationRequested.CancelCause.USER,
-            EventActor.ADMIN, NotificationRequested.CancelCause.OTHER,
-            EventActor.SYSTEM, NotificationRequested.CancelCause.EXPIRY);
-
     private final Preorders preorders;
     private final SyncJobs syncJobs;
     private final PreorderLedger ledger;
+    private final CancelCompletion cancelCompletion;
     private final OutboxWriter outboxWriter;
     private final JsonMapper jsonMapper;
     private final MeterRegistry meterRegistry;
+    private final Counter paymentAfterCancel;
     private final Clock clock;
 
     public PreorderEventHandler(Preorders preorders,
-                                SyncJobs syncJobs, PreorderLedger ledger, OutboxWriter outboxWriter,
-                                JsonMapper jsonMapper, MeterRegistry meterRegistry, Clock clock) {
+                                SyncJobs syncJobs, PreorderLedger ledger, CancelCompletion cancelCompletion,
+                                OutboxWriter outboxWriter, JsonMapper jsonMapper, MeterRegistry meterRegistry,
+                                Clock clock) {
         this.preorders = preorders;
         this.syncJobs = syncJobs;
         this.ledger = ledger;
+        this.cancelCompletion = cancelCompletion;
         this.outboxWriter = outboxWriter;
         this.jsonMapper = jsonMapper;
         this.meterRegistry = meterRegistry;
+        this.paymentAfterCancel = meterRegistry.counter(PAYMENT_AFTER_CANCEL_METRIC);
         this.clock = clock;
     }
 
@@ -79,7 +87,7 @@ public class PreorderEventHandler {
      * 외부 등록 · 취소 성공. 작업을 SUCCEEDED 로 바꾸고 예약에 반영한다. 포기한 뒤(DEAD_LETTER) 늦게 온 성공도 받는다.
      * 취소가 무효화한 등록 작업(CANCELED)이면 반영하지 않는다 — 외부 쪽은 CANCEL 작업이 정리한다.
      * 회원 알림은 예약 상태가 실제로 바뀐 때만 적는다. member 는 eventId 로만 중복을 거르는데 아웃박스 행마다 새 eventId 라,
-     * 같은 결과를 다시 받을 때 또 적으면 알림이 두 건이 된다. CANCEL 작업 성공은 예약이 CANCELED 가 되는 유일한 길이다.
+     * 같은 결과를 다시 받을 때 또 적으면 알림이 두 건이 된다. 예약이 CANCELED 가 되는 길은 CANCEL 작업 성공과 관리자 수동 완료뿐이다.
      *
      * @param eventId 받은 이벤트의 id. 차례 기록을 한 번만 남기는 데 쓴다. 성공은 다시 반영해도 같아 차례 기록이 없어도 받는다
      */
@@ -105,8 +113,8 @@ public class PreorderEventHandler {
             if (ledger.fire(job.preorderId(), new PreorderFact.RegisterConfirmed(message.externalNumber())).applied()) {
                 notifyRegistered(job.preorderId());
             }
-        } else if (ledger.fire(job.preorderId(), new PreorderFact.CancelCompleted()).applied()) {
-            notifyCanceled(job.preorderId());
+        } else {
+            cancelCompletion.complete(job.preorderId(), EventActor.SYSTEM, null);
         }
     }
 
@@ -114,20 +122,6 @@ public class PreorderEventHandler {
         PreorderSnapshot preorder = preorders.getById(preorderId);
         outboxWriter.append(NotificationRequested.preorderRegistered(preorder.id(), preorder.preorderToken(),
                 preorder.customerId()));
-    }
-
-    /**
-     * 까닭은 이번 취소 시도의 CANCELING 진입 이력 주체로 정한다(예약 행에 사유 칸이 없다). 결제 여부는 결제 확인 시각으로 본다 —
-     * 결제 확인 이벤트가 취소 완료보다 늦게 오면 환불 문장이 빠지지만, 그런 순서는 드물고 문구만 덜 자세할 뿐이다.
-     */
-    private void notifyCanceled(UUID preorderId) {
-        PreorderSnapshot preorder = preorders.getById(preorderId);
-        NotificationRequested.CancelCause cause = preorders.lastTransitionTo(preorderId, PreorderStatus.CANCELING)
-                .map(PreorderHistoryEntry::actor)
-                .map(CANCEL_CAUSES::get)
-                .orElse(NotificationRequested.CancelCause.OTHER);
-        outboxWriter.append(NotificationRequested.preorderCanceled(preorder.id(), preorder.preorderToken(),
-                preorder.customerId(), cause, preorder.reservedAt() != null));
     }
 
     /** 실패한 차례가 있었고 worker 가 다시 시도한다. 차례를 남기고, 아직 끝나지 않은 작업이면 재시도 대기로 표시한다. */
@@ -143,8 +137,8 @@ public class PreorderEventHandler {
     }
 
     /**
-     * worker 가 포기했다. 등록 작업은 DEAD_LETTER 로 두고 관리자 재처리를 기다린다 — 예약은 그대로 둔다.
-     * 취소 작업은 포기 상태가 없어(DB CHECK) 작업은 그대로 두고 로그로 알린다. 둘 다 지표로 센다.
+     * worker 가 포기했다. 작업을 DEAD_LETTER 로 두고 관리자 재처리를 기다린다 — 예약은 그대로 둔다(취소면 CANCELING).
+     * 취소를 포기해도 CANCELED 로 보내지 않는다 — 외부에 예약이 남아 있을 수 있다. 관리자가 재처리하거나 외부에서 확인하고 끝낸다.
      * 이미 받은 이벤트 · 지난 실행의 결과면 작업을 바꾸지 않는다 — 재처리로 되돌린 작업을 늦은 결과가 다시 포기시키지 않게.
      */
     @Transactional
@@ -156,17 +150,16 @@ public class PreorderEventHandler {
             return;
         }
         SyncJobSnapshot job = found.get();
-        if (job.jobType() == SyncJobType.CANCEL) {
-            countFailed(job, message.reason());
-            log.error("외부 취소를 끝내지 못했다 — 외부에는 예약이 남아 있다 syncJobId={} preorderId={} reason={}",
-                    job.id(), message.preorderId(), message.reason());
-            return;
-        }
         if (syncJobs.deadLetter(job.id(), clock.instant()) == 0) {
             log.warn("이미 끝난 작업의 실패 이벤트를 무시한다 syncJobId={} status={}", job.id(), job.status());
             return;
         }
         countFailed(job, message.reason());
+        if (job.jobType() == SyncJobType.CANCEL) {
+            log.error("외부 취소를 포기했다 — 외부에 예약이 남아 있을 수 있다. 관리자 재처리 · 수동 완료를 기다린다 "
+                    + "syncJobId={} preorderId={} reason={}", job.id(), message.preorderId(), message.reason());
+            return;
+        }
         log.warn("외부 등록을 포기했다 — 관리자 재처리를 기다린다 syncJobId={} preorderId={} reason={}",
                 job.id(), message.preorderId(), message.reason());
     }
@@ -217,10 +210,39 @@ public class PreorderEventHandler {
                 new PreorderFact.PaymentStarted(message.startedAt()));
     }
 
-    /** 결제 확인 → 예약 확정. 취소 중이면 시각만 남겨 거절됐을 때 확정으로 돌아갈 근거로 둔다. */
+    /**
+     * 결제 확인 → 예약 확정. 취소 중이면 시각만 남겨 거절됐을 때 확정으로 돌아갈 근거로 둔다.
+     * 취소가 끝난 예약에 남긴 결제 시각이 없거나 다른 결제 확인이 오면 order 가 취소한 주문을 승인한 것이다 — 상태는 그대로 두고
+     * 이상 결제로 남겨 경보로 드러낸다. 같은 결제는 다시 · 겹쳐 와도 처음 남긴 행이 커밋될 때만 센다.
+     * 결제 확인이 큐에서 늦어 환불 · 외부 취소 뒤에 처음 닿은 경우도 여기에 든다.
+     */
     @Transactional
     public void onPaymentConfirmed(PreorderPaymentConfirmed message) {
-        ledger.fire(requirePreorder(message.preorderId()).id(), new PreorderFact.PaymentConfirmed(message.paidAt()));
+        UUID preorderId = requirePreorder(message.preorderId()).id();
+        PreorderFact.PaymentConfirmed paid = new PreorderFact.PaymentConfirmed(message.paidAt());
+        PreorderTransition transition = ledger.fire(preorderId, paid);
+        if (transition.applied() || transition.status() != PreorderStatus.CANCELED
+                || isRecordedPayment(preorderId, paid.paidAt())) {
+            return;
+        }
+        if (!ledger.recordPaymentAfterCancel(preorderId, message.orderId(), paid.paidAt())) {
+            log.info("이미 남긴 이상 결제를 다시 받았다 preorderId={} paidAt={}", message.preorderId(), paid.paidAt());
+            return;
+        }
+        // 이상 결제 행이 커밋된 뒤에만 알린다 — 롤백되면 재수신이 다시 남기고 그때 센다
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                paymentAfterCancel.increment();
+                log.error("취소가 끝난 예약에 결제 확인이 왔다 — order 에서 환불 여부를 확인한다 preorderId={} orderId={} paidAt={}",
+                        message.preorderId(), message.orderId(), message.paidAt());
+            }
+        });
+    }
+
+    /** 이미 남긴 결제 시각과 같은가. 같으면 취소 전에 반영한 결제 확인이 다시 온 것이다. 둘 다 저장 정밀도로 맞춘 값이다. */
+    private boolean isRecordedPayment(UUID preorderId, Instant paidAt) {
+        return paidAt != null && preorders.findReservedAt(preorderId).filter(paidAt::equals).isPresent();
     }
 
     /**
@@ -271,7 +293,7 @@ public class PreorderEventHandler {
         String payload = jsonMapper.writeValueAsString(new CancelRequestPayload(preorder.preorderToken(),
                 preorder.externalReference(), mockCancelReason(preorder.id())));
         UUID jobId = syncJobs.createCancel(preorder.id(), payload);
-        outboxWriter.append(new CancelJobReady(jobId, preorder.preorderToken(), payload));
+        outboxWriter.append(new CancelJobReady(jobId, preorder.preorderToken(), payload, SyncActor.SYSTEM, 1));
     }
 
     /** 이력에 남길 거절 사유. order 가 사유를 주지 않았으면 결과만 남긴다. */

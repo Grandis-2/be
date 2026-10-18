@@ -16,7 +16,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -24,9 +26,15 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /** 회차 일정이 바뀔 때마다 같은 트랜잭션에서 대기열용 회차 변경 이벤트가 적힌다. */
 @PreorderIntegrationTest
@@ -43,6 +51,9 @@ class CampaignChangeEventTest {
 
     @Autowired
     JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    TransactionTemplate transactionTemplate;
 
     @MockitoBean
     CatalogClient catalogClient;
@@ -194,6 +205,65 @@ class CampaignChangeEventTest {
                         + " WHERE product_id = ?", String.class, (Object) UuidBinary.toBytes(productId)))
                 .isEqualTo("Nova 1|PAUSED|0|0");
         assertThat(events(productId)).extracting(event -> event.get("change")).containsExactly("VISIBILITY");
+    }
+
+    @Test
+    void 다시_열면_새_마감_시각과_오른_번호로_적는다() {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        CatalogStubs.stubPreorderProduct(catalogClient, product.productId(), CatalogStubs.activeOption(product.optionId()));
+        service.closeCampaign(product.productId(), "admin");
+        Instant closesAt = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.MICROS);
+
+        service.reopenCampaign(product.productId(), closesAt, "admin");
+
+        List<Map<String, Object>> events = events(product.productId());
+        assertThat(events).extracting(event -> event.get("change")).containsExactly("CLOSED", "REOPENED");
+        assertThat(events).extracting(event -> event.get("version")).containsExactly(1L, 2L);
+        assertThat(events.getLast().get("closesAt")).isEqualTo(closesAt.toString());
+        assertThat(utc(product.productId(), "closes_at")).isEqualTo(closesAt);
+    }
+
+    /** 접수 · 마감처럼 회차 행을 잠근 트랜잭션이 끝나기 전에는 다시 열기가 판정하지 않고 기다린다. */
+    @Test
+    void 회차_행을_잠근_동안_다시_열기는_기다렸다가_그_뒤의_상태로_연다() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        CatalogStubs.stubPreorderProduct(catalogClient, product.productId(), CatalogStubs.activeOption(product.optionId()));
+        service.closeCampaign(product.productId(), "admin");
+        Instant closesAt = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.MICROS);
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            Future<?> holding = executor.submit(() -> transactionTemplate.executeWithoutResult(status -> {
+                campaigns.lockForAccept(product.productId());
+                locked.countDown();
+                awaitQuietly(release);
+            }));
+            Future<?> reopening;
+            try {
+                assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+                reopening = executor.submit(() -> service.reopenCampaign(product.productId(), closesAt, "admin"));
+                await().alias("회차 행을 잠근 동안 다시 열기는 끝나지 않는다")
+                        .during(Duration.ofMillis(300)).atMost(Duration.ofSeconds(5))
+                        .until(() -> !reopening.isDone());
+            } finally {
+                release.countDown();
+            }
+            holding.get(10, TimeUnit.SECONDS);
+            reopening.get(10, TimeUnit.SECONDS);
+        }
+
+        assertThat(utc(product.productId(), "closes_at")).isEqualTo(closesAt);
+        assertThat(events(product.productId())).extracting(event -> event.get("change"))
+                .containsExactly("CLOSED", "REOPENED");
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private List<Map<String, Object>> events(UUID productId) {

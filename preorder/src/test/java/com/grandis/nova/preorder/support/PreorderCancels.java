@@ -25,7 +25,7 @@ public class PreorderCancels {
     public void complete(UUID preorderId) {
         transactionTemplate.executeWithoutResult(status -> {
             ledger.fire(preorderId, new PreorderFact.CancelRequested(EventActor.USER, null));
-            ledger.fire(preorderId, new PreorderFact.CancelCompleted());
+            ledger.fire(preorderId, new PreorderFact.CancelCompleted(EventActor.SYSTEM, null));
         });
     }
 }

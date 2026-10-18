@@ -82,9 +82,18 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
     /**
      * 커넥션을 기다리는 상한(ms). 가상 스레드라 요청이 풀 앞에 줄을 서는데, 기본 30초면 과부하 때 요청을 오래 붙잡는다.
      * 빨리 실패시켜 503 + Retry-After 로 돌려보낸다.
+     * 드라이버 옵션은 DB 왕복(약 35ms)을 줄인다. 실측: 읽기 전용 트랜잭션 6 → 4문장, 새 연결 6 → 2~3문장.
      */
     private void databasePool(Map<String, Object> defaults) {
         defaults.put("spring.datasource.hikari.connection-timeout", 2000);
+        String driver = "spring.datasource.hikari.data-source-properties.";
+        // 읽기 전용을 서버에 알리는 SET SESSION TRANSACTION READ ONLY · READ WRITE 를 보내지 않는다. 읽기 전용 중 쓰기는
+        // 서버가 거절하지 않게 되지만, Hibernate 가 읽기 전용 트랜잭션에서 flush 하지 않고 JDBC 쓰기는 그 안에 두지 않는다
+        defaults.put(driver + "readOnlyPropagatesToServer", false);
+        // member 와 같다. 이미 같은 상태면 SET 을 보내지 않고 상태를 묻지 않는다 — 세션 상태를 SQL 로 바꾸는 코드가 없어야 한다
+        defaults.put(driver + "useLocalSessionState", true);
+        defaults.put(driver + "useLocalTransactionState", true);
+        defaults.put(driver + "cacheServerConfiguration", true);
     }
 
     /**

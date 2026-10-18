@@ -3,6 +3,7 @@ package com.grandis.nova.preorder.accept;
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
+import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.support.AdmissionTickets;
 import com.grandis.nova.preorder.support.CatalogStubs;
 import com.grandis.nova.preorder.support.PreorderCancels;
@@ -49,6 +50,9 @@ class AcceptPreorderApiTest {
 
     @Autowired
     PreorderLedger ledger;
+
+    @Autowired
+    Preorders preorders;
 
     @Autowired
     TransactionTemplate transactionTemplate;
@@ -388,11 +392,20 @@ class AcceptPreorderApiTest {
                 .containsEntry("reason", "전화 접수");
     }
 
+    /** 회원 외래 키가 없어 대리 접수는 회원을 확인하지 않는다 — 관리자 입력을 믿고 그대로 받는다. */
     @Test
-    void 관리자_대신_접수에서_없는_회원이면_404_사용자는_403() throws Exception {
-        mockMvc.perform(adminRequest(UUID.randomUUID(), "key-admin-0002", "전화 접수"))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error.code").value("MEMBER_NOT_FOUND"));
+    void 관리자_대신_접수는_없는_회원이어도_받는다() throws Exception {
+        UUID unknown = UUID.randomUUID();
+
+        String preorderId = body(mockMvc.perform(adminRequest(unknown, "key-admin-0002", "전화 접수"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.data.status").value("PENDING_SYNC")));
+
+        assertThat(preorders.getByToken(preorderId).customerId()).isEqualTo(unknown);
+    }
+
+    @Test
+    void 관리자_대신_접수는_사용자_토큰이면_403() throws Exception {
         mockMvc.perform(adminRequest(customerId, "key-admin-0003", "전화 접수")
                         .with(customer(customerId)))
                 .andExpect(status().isForbidden());
