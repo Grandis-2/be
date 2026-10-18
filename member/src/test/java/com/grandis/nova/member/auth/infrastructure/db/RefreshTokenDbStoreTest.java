@@ -92,14 +92,18 @@ class RefreshTokenDbStoreTest {
                 byte[].class, sessionId.toString()).stream().map(UuidBinary::fromBytes).toList();
     }
 
-    /** 남의 트랜잭션 상태(information_schema.innodb_trx)는 PROCESS 권한이 있어야 보인다 — 시험 계정에는 없어 root 로 본다(Testcontainers 는 root 비밀번호가 같다). */
+    /** 남의 잠금 대기(performance_schema.data_lock_waits)는 시험 계정에 권한이 없어 root 로 본다(Testcontainers 는 root 비밀번호가 같다). */
     private static final JdbcTemplate ROOT = new JdbcTemplate(new org.springframework.jdbc.datasource.DriverManagerDataSource(
             com.grandis.nova.member.support.Containers.MYSQL.getJdbcUrl(), "root", com.grandis.nova.member.support.Containers.MYSQL.getPassword()));
 
-    /** 리프레시 표에 대한 잠금 대기가 InnoDB 에 실제로 생길 때까지 기다린다 — 고정 sleep 으로는 상대가 대기에 들어갔는지 보장하지 못한다. */
+    /**
+     * refresh_tokens 의 잠금 대기가 실제로 생길 때까지 기다린다 — 고정 sleep 으로는 상대가 대기에 들어갔는지 보장하지 못한다. information_schema.innodb_trx
+     * 는 쓰지 않는다 — 0.1초 안에 다시 읽으면 앞 값을 그대로 돌려줘(리뷰 실측) 대기가 없어도 통과하거나 있어도 실패했다.
+     */
     private void awaitRefreshLockWait() {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-        while (ROOT.queryForObject("SELECT COUNT(*) FROM information_schema.innodb_trx WHERE trx_state = 'LOCK WAIT' AND trx_query LIKE '%refresh_tokens%'",
+        while (ROOT.queryForObject("SELECT COUNT(*) FROM performance_schema.data_lock_waits w JOIN performance_schema.data_locks l "
+                + "ON l.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID WHERE l.OBJECT_SCHEMA = 'shop' AND l.OBJECT_NAME = 'refresh_tokens'",
                 Integer.class) == 0) {
             if (System.nanoTime() > deadline) {
                 throw new AssertionError("refresh_tokens 잠금 대기가 생기지 않았다");
@@ -531,6 +535,36 @@ class RefreshTokenDbStoreTest {
             holder.get(10, TimeUnit.SECONDS);
 
             assertThat(retried.get(20, TimeUnit.SECONDS).status()).isEqualTo(Rotation.Status.REUSED);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("원문 행의 잠금을 기다리는 동안 만료가 지나면 만료다 — 판정 시각은 원문 잠금 뒤에 읽는다(만료 2초 앞 도착, 3초 넘게 기다림)")
+    void expiryPassingWhileWaitingForTheTokenLockIsExpired() throws Exception {
+        UUID customerId = newCustomer();
+        UUID sessionId = UUID.randomUUID();
+        String token = login(customerId, sessionId);
+        jdbc.update("UPDATE refresh_tokens SET created_at = UTC_TIMESTAMP(6) - INTERVAL 1 DAY, expires_at = UTC_TIMESTAMP(6) + INTERVAL 2 SECOND "
+                + "WHERE family_id = ?", sessionId.toString());
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> holder = pool.submit(() -> transactions.executeWithoutResult(status -> {
+                jdbc.queryForList("SELECT id FROM refresh_tokens WHERE token_hash = ? FOR UPDATE", RefreshTokens.hash(token));
+                locked.countDown();
+                await(release);
+            }));
+            assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+            Future<Rotation> rotation = pool.submit(() -> store.rotate(token, RefreshTokens.newToken()));
+            awaitRefreshLockWait();
+            sleep(3_000);                                             // 기다리는 동안 만료를 넘긴다
+            release.countDown();
+            holder.get(10, TimeUnit.SECONDS);
+
+            assertThat(rotation.get(20, TimeUnit.SECONDS).status()).isEqualTo(Rotation.Status.EXPIRED);
         } finally {
             pool.shutdownNow();
         }

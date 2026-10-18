@@ -139,7 +139,7 @@ public class TokenService {
         String newRefresh = RefreshTokens.newToken();
         RefreshTokenStore.Rotation rotation = refreshTokens.rotate(presented, newRefresh);
         if (rotation.status() == RefreshTokenStore.Rotation.Status.REUSED) {
-            cutReusedSession(rotation.sessionId());
+            cutReusedSession(rotation.sessionId(), Role.USER);
             log.warn("refresh reuse detected, session revoked sid={}", shortSid(rotation.sessionId()));
             throw new InvalidTokenException("refresh reuse sid=" + shortSid(rotation.sessionId()));
         }
@@ -180,7 +180,7 @@ public class TokenService {
         String newRefresh = provider.create(claims.subject(), claims.role(), claims.sessionId(), TokenType.REFRESH, claims.expiresAt());
         UUID newTokenId = provider.parse(newRefresh).tokenId();
         if (!adminRefreshTokens.rotate(claims.sessionId(), claims.tokenId(), newTokenId, remaining)) {
-            cutReusedSession(claims.sessionId());
+            cutReusedSession(claims.sessionId(), Role.ADMIN);
             log.warn("refresh reuse detected, session revoked sid={}", shortSid(claims.sessionId()));
             throw new InvalidTokenException("refresh reuse sid=" + shortSid(claims.sessionId()));
         }
@@ -247,7 +247,7 @@ public class TokenService {
      * </ol>
      * 저장소 예외는 WARN 으로만 — 호출자가 어차피 401 을 낼 자리다.
      */
-    private void cutReusedSession(UUID sessionId) {
+    private void cutReusedSession(UUID sessionId, Role role) {
         boolean marked = false;
         boolean chainRevoked = false;
         try {
@@ -271,14 +271,18 @@ public class TokenService {
                 break;
             }
         }
-        if (!marked && !chainRevoked) {
-            // 표식도 체인 폐기도 없다 — 재사용된 체인이 절대 만료까지 재발급된다. 다른 WARN 과 갈라 경보할 수 있게 고정 이벤트 키로 남긴다
-            log.error("auth.refresh.reuse_chain_alive — reused refresh chain left alive until absolute expiry sid={}", shortSid(sessionId));
-        }
+        boolean adminKeyDeleted = false;
         try {
             adminRefreshTokens.delete(sessionId);
+            adminKeyDeleted = true;
         } catch (DataAccessException e) {
             log.warn("refresh reuse: admin refresh not deleted sid={}", shortSid(sessionId), e);
+        }
+        // 체인을 실제로 끊는 곳은 역할마다 다르다 — 회원은 DB 체인 폐기, 관리자는 Redis 키 삭제(관리자 sid 는 DB 행이 없어 DB 폐기는 늘 성공한다)
+        boolean chainCut = role == Role.ADMIN ? adminKeyDeleted : chainRevoked;
+        if (!marked && !chainCut) {
+            // 표식도 체인 끊기도 없다 — 재사용된 체인이 절대 만료까지 재발급된다. 다른 WARN 과 갈라 경보할 수 있게 고정 이벤트 키로 남긴다
+            log.error("auth.refresh.reuse_chain_alive — reused refresh chain left alive until absolute expiry sid={} role={}", shortSid(sessionId), role);
         }
     }
 

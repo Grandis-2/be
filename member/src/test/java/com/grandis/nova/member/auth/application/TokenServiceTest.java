@@ -217,8 +217,21 @@ class TokenServiceTest {
 
         doThrow(lockFailure(1205)).when(refreshTokens).revokeSession(any());
         assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
-        assertThat(output.getOut() + output.getErr()).contains("auth.refresh.reuse_chain_alive")
+        assertThat(output.getOut() + output.getErr()).contains("ERROR " + TokenService.class.getName() + " -- auth.refresh.reuse_chain_alive")
                 .as("실패 원인 사슬(벤더 예외)이 로그에 남는다").contains("Caused by: java.sql.SQLException");
+    }
+
+    @Test
+    @DisplayName("관리자 재사용: 표식 쓰기와 Redis 키 삭제가 둘 다 실패하면 ERROR — 관리자는 DB 행이 없어 체인을 끊는 것이 키 삭제다")
+    void adminReuseWithBothRevocationsFailingIsAnError(org.springframework.boot.test.system.CapturedOutput output) {
+        TokenService.IssuedTokens first = service.issue("admin", Role.ADMIN);
+        when(adminRefreshTokens.rotate(any(), any(), any(), any())).thenReturn(false);
+        doThrow(new RedisConnectionFailureException("down")).when(revocations).revokeSession(any(), any());
+        doThrow(new RedisConnectionFailureException("down")).when(adminRefreshTokens).delete(any());
+
+        assertThatThrownBy(() -> service.rotate(first.refreshToken(), Role.ADMIN)).isInstanceOf(InvalidTokenException.class);
+        assertThat(output.getOut() + output.getErr()).contains("ERROR " + TokenService.class.getName() + " -- auth.refresh.reuse_chain_alive")
+                .contains("role=ADMIN");
     }
 
     @Test
