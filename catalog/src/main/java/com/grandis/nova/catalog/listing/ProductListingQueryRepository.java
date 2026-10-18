@@ -326,7 +326,7 @@ public class ProductListingQueryRepository {
 
     /**
      * 증정품 후보 상품 한 쪽과 그 판매 중 옵션들. 상품은 관리자 목록과 같은 최신순, 옵션은 등록 순. 같은 스냅샷이 되게 REPEATABLE READ 안에서 부른다.
-     * 옵션의 남은 수량은 비워 둔다(0) — 호출자가 order 에 물어 채우고 재고 행이 없는 옵션을 뺀다.
+     * 옵션의 남은 수량은 비워 둔다(0) — 호출자가 order 에 물어 채운다(재고 행이 없는 옵션은 0 으로 남는다).
      */
     public List<GiftCandidate> findGiftCandidates(String q, int page, int size) {
         StringBuilder sql = new StringBuilder("SELECT p.id, p.title, p.thumbnail_url, p.visible").append(GIFT_PRODUCTS);
