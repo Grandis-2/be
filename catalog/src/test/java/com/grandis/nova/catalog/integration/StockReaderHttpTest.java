@@ -132,7 +132,7 @@ class StockReaderHttpTest {
     }
 
     @Test
-    @DisplayName("묻지 않은 옵션 · 빈 수량 · 음수 · 같은 옵션 두 번이 오면 연동 오류(500), 401 을 포함한 그 밖의 4xx 도 연동 오류, 5xx 는 일시 장애(503)")
+    @DisplayName("items 없음 · 묻지 않은 옵션 · 빈 수량 · 음수 · 같은 옵션 두 번이 오면 연동 오류(500), 401 을 포함한 그 밖의 4xx 도 연동 오류, 5xx 는 일시 장애(503)")
     void contractViolationsAndFailures() {
         UUID asked = UUID.randomUUID();
         override = requested -> "{\"success\":true,\"data\":{\"items\":[{\"optionId\":\"%s\",\"available\":1}]}}".formatted(UUID.randomUUID());
@@ -141,6 +141,11 @@ class StockReaderHttpTest {
         override = requested -> "{\"success\":true,\"data\":{\"items\":[{\"optionId\":\"%s\",\"available\":null}]}}".formatted(asked);
         assertThatThrownBy(() -> reader.available(List.of(asked))).isInstanceOfSatisfying(BusinessException.class,
                 e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.INTERNAL_ERROR));
+        override = requested -> "{\"success\":true,\"data\":{}}";
+        assertThatThrownBy(() -> reader.available(List.of(asked))).as("items 없음 — 빈 목록이 아니다").isInstanceOfSatisfying(BusinessException.class,
+                e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.INTERNAL_ERROR));
+        override = requested -> "{\"success\":true,\"data\":{\"items\":[]}}";
+        assertThat(reader.available(List.of(asked))).as("대조군 — 빈 목록은 재고 행 없음").isEmpty();
         override = requested -> "{\"success\":true,\"data\":{\"items\":[{\"optionId\":\"%s\",\"available\":-1}]}}".formatted(asked);
         assertThatThrownBy(() -> reader.available(List.of(asked))).as("음수").isInstanceOfSatisfying(BusinessException.class,
                 e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.INTERNAL_ERROR));

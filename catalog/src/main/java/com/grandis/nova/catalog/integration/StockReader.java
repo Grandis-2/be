@@ -30,7 +30,7 @@ public class StockReader {
     /**
      * @return 옵션 id → 남은 수량. 재고 행이 없는 옵션은 빠진다(판매 불가로 본다). 빈 묶음이면 부르지 않는다
      * @throws com.grandis.nova.common.BusinessException DEPENDENCY_UNAVAILABLE — 연결 실패 · 시간 초과 · 5xx. INTERNAL_ERROR — 연동 오류(그 밖의 4xx ·
-     *                                                   읽을 수 없는 응답 · 묻지 않은 옵션 · 겹친 옵션 · 비었거나 음수인 수량, ERROR 로그를 남긴다 — {@link InternalCalls})
+     *                                                   읽을 수 없는 응답 · items 없음 · 묻지 않은 옵션 · 겹친 옵션 · 비었거나 음수인 수량, ERROR 로그를 남긴다 — {@link InternalCalls})
      */
     public Map<UUID, Integer> available(Collection<UUID> optionIds) {
         Map<UUID, Integer> available = new HashMap<>();
@@ -38,7 +38,11 @@ public class StockReader {
         for (int from = 0; from < ids.size(); from += BATCH) {
             List<UUID> batch = ids.subList(from, Math.min(ids.size(), from + BATCH));
             StockClient.Stocks stocks = InternalCalls.call(Dependencies.ORDER_STOCKS, () -> client.getStocks(batch));
-            for (StockClient.Stock stock : stocks.items() == null ? List.<StockClient.Stock>of() : stocks.items()) {
+            if (stocks.items() == null) {
+                // 빈 목록과 다르다 — 지어낸 0 으로 품절을 보이지 않게 연동 오류로 본다
+                throw InternalCalls.contractViolation(Dependencies.ORDER_STOCKS, "items 가 없는 응답");
+            }
+            for (StockClient.Stock stock : stocks.items()) {
                 // order 는 옵션마다 한 번, 0 이상으로 답한다(계약) — 어긋나면 수량을 지어내지 않고 연동 오류로 본다
                 if (stock.optionId() == null || stock.available() == null || stock.available() < 0 || !batch.contains(stock.optionId())
                         || available.put(stock.optionId(), stock.available()) != null) {
