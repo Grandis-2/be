@@ -12,6 +12,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -125,6 +126,21 @@ class PreorderApplicationTest {
 
         assertThat(uniques).as("대조군 — 활성 예약 유일 키").contains("PRIMARY", "uq_preorder_active");
         assertThat(uniques).doesNotContain("uq_preorder_id_customer");
+    }
+
+    /** preorder 표의 외래 키는 preorder 표만 가리킨다 — 회원 · 상품 · 옵션은 앱이 확인한다. */
+    @Test
+    void preorder_표의_외래_키는_다른_서비스_표를_가리키지_않는다() {
+        List<Map<String, Object>> foreignKeys = jdbcTemplate.queryForList("""
+                SELECT constraint_name, table_name, referenced_table_name FROM information_schema.referential_constraints
+                 WHERE constraint_schema = 'shop'
+                   AND (table_name IN ('preorders', 'shipment_batches') OR table_name LIKE 'preorder\\_%')
+                """);
+
+        assertThat(foreignKeys).extracting(row -> row.get("constraint_name"))
+                .as("대조군 — preorder 표끼리의 외래 키").contains("fk_preorder_batch", "fk_sync_job_preorder");
+        assertThat(foreignKeys).allSatisfy(row -> assertThat((String) row.get("referenced_table_name"))
+                .as("%s", row.get("constraint_name")).matches("preorders|preorder_.*|shipment_batches"));
     }
 
     /** 꺼지면 기동은 되고 @Scheduled 작업(상태 지표 갱신 등)만 조용히 멈춘다. */

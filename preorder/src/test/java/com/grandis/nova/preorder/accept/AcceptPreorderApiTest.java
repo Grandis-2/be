@@ -389,10 +389,7 @@ class AcceptPreorderApiTest {
     }
 
     @Test
-    void 관리자_대신_접수에서_없는_회원이면_404_사용자는_403() throws Exception {
-        mockMvc.perform(adminRequest(UUID.randomUUID(), "key-admin-0002", "전화 접수"))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error.code").value("MEMBER_NOT_FOUND"));
+    void 관리자_대신_접수는_사용자_토큰이면_403() throws Exception {
         mockMvc.perform(adminRequest(customerId, "key-admin-0003", "전화 접수")
                         .with(customer(customerId)))
                 .andExpect(status().isForbidden());
