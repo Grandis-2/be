@@ -52,7 +52,10 @@ class CatalogDefaults implements EnvironmentPostProcessor, Ordered {
             // 집계 신호의 IP 판정(ClientIps)이 X-Forwarded-For 를 받은 그대로 센다. 비워 두면 Boot 가 ECS 를 감지해 RemoteIpValve 를 켜고 헤더를 고쳐 써서
             // 가드(ClientIpsConfiguration)가 기동을 멈춘다 — 운영 설정에 빠져도 뜨도록 여기 둔다. 배포 설정이 켜면(native · framework) 가드가 그대로 막는다.
             // catalog 는 요청의 스킴 · 호스트를 쓰지 않아 끄더라도 바뀌는 응답이 없다
-            Map.entry("server.forward-headers-strategy", "none")));
+            Map.entry("server.forward-headers-strategy", "none"),
+            // catalog-events 소비기(판매 준비 이벤트). 목록 · 노출의 판매 준비가 이 이벤트로 채운 칸을 보므로 꺼져 있으면 새 일반 상품이 보이지 않는다 —
+            // 운영 설정에 빠져도 켜지게 여기 둔다(큐 · 권한은 nova-infra #118). 배포 설정이 false 를 주면 그 값이 이긴다
+            Map.entry("nova.sqs.consumer.enabled", "true")));
 
     /**
      * 폐기 조회가 실패하면 닫는 경로. 목록을 적으면 공통 기본값(관리자 · 재발급 · 내 정보)을 대체하므로, 공통 목록을 그대로 가져와

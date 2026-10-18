@@ -7,7 +7,7 @@ catalog 가 **받는** 이벤트의 기준이다. catalog 가 보내는 이벤�
 - 큐 `catalog-events`, DLQ `catalog-events-dlq`(재수신 한도를 넘은 메시지를 큐의 재드라이브 정책이 옮긴다). 큐 · DLQ · 권한은 인프라가 만든다.
   - catalog 역할: `GetQueueUrl` · `ReceiveMessage` · `DeleteMessage` · `ChangeMessageVisibility`
   - 보내는 쪽 역할: `GetQueueUrl` · `SendMessage`
-- 소비기는 **기본 꺼짐**이다(`nova.sqs.consumer.enabled`). 큐와 보내는 쪽이 준비된 뒤 설정으로 켠다. 켠 채 큐가 없으면 기동은 되고, 받기 실패를 WARN 으로 남기며 늦춰 다시 시도한다 — readiness 는 UP 이라 로그로만 드러난다.
+- 소비기는 **기본 켬**이다(`nova.sqs.consumer.enabled`, 코드 기본값 `CatalogDefaults`) — 목록 · 노출의 판매 준비가 이 큐의 이벤트로 정해져서, 꺼져 있으면 새 일반 상품이 보이지 않는다. 배포 설정이 `false` 를 주면 그 값이 이긴다. SQS 클라이언트(`nova.sqs.region`)가 없는 설정에서 켜져 있으면 기동하지 않는다. 켠 채 큐가 없으면 기동은 되고, 받기 실패를 WARN 으로 남기며 늦춰 다시 시도한다 — readiness 는 UP 이라 로그로만 드러난다.
 - 봉투는 다른 서비스와 같은 `EventEnvelope`(`eventId` · `eventType` · `aggregateType` · `aggregateId` · `occurredAt` · `payload`)다.
 - **보내는 쪽 의무:** `payload` 칸을 늘 싣는다(빈 객체라도). 보내는 쪽 JSON 매퍼가 빈 값을 빼는 설정(NON_EMPTY)이면 `{}` 가 빠져 DLQ 로 간다.
 
@@ -15,7 +15,7 @@ catalog 가 **받는** 이벤트의 기준이다. catalog 가 보내는 이벤�
 
 | 이벤트 | aggregate | 보내는 쪽 | catalog 가 하는 일 |
 | --- | --- | --- | --- |
-| (아직 없음) | | | |
+| `IN_STOCK_PRODUCT_READY` | `PRODUCT` | order | 그 상품을 판매 준비로 남긴다(`products.stock_ready_at` 이 비었을 때만) — 계약은 `order-catalog-events.md` |
 
 종류를 더할 때는 이 표를 먼저 고치고, 처리기(`CatalogEventHandler` 빈)를 하나 더한다. 받는 쪽(catalog)이 먼저 배포된다 — 모르는 종류는 재시도 뒤 DLQ 로 간다.
 
