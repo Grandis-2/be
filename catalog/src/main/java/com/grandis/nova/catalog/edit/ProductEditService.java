@@ -142,7 +142,7 @@ public class ProductEditService {
             requireSellablePrices(product);
         }
         products.flush();
-        AdminProductDetail edited = detailService.findAdminProduct(productId);
+        AdminProductDetail edited = detailService.findAdminSnapshot(productId);
         requireNotOpenedAtCommit(product);
         notifyPreorder(product);
         return edited;
@@ -169,7 +169,7 @@ public class ProductEditService {
                 Amounts.requireWholeWon(surcharge, "surcharge"), List.of()));
         product.replaceOptions(document.withAxis(new ProductOptions.Axis(axis.key(), axis.label(), values)));
         products.flush();
-        AdminProductDetail edited = detailService.findAdminProduct(product.getId());
+        AdminProductDetail edited = detailService.findAdminSnapshot(product.getId());
         requireNotOpenedAtCommit(product);
         notifyPreorder(product);
         return edited;
@@ -215,7 +215,7 @@ public class ProductEditService {
             recomputePrices(product, next, valueId, "surcharge");
         }
         products.flush();
-        AdminProductDetail result = detailService.findAdminProduct(productId);
+        AdminProductDetail result = detailService.findAdminSnapshot(productId);
         requireNotOpenedAtCommit(product);
         notifyPreorder(product);
         return result;
@@ -422,7 +422,8 @@ public class ProductEditService {
                 .map(option -> new InStockProductRegistered.Item(option.getId(), stockByOption.get(option.getId())))
                 .toList()));
         outbox.append(PreorderProductChanged.of(product));
-        return detailService.findAdminProduct(productId);
+        // 재고는 커밋 뒤 나가는 이벤트로 order 가 만든다 — 이 트랜잭션 안에서 order 에 물을 것이 없다
+        return detailService.beforeStockReady(detailService.findAdminSnapshot(productId));
     }
 
     /** 재고가 옵션을 빠짐없이 한 번씩 덮는가 — 모르는 옵션 · 같은 옵션 두 번 · 빠진 옵션은 stocks 의 400. */
@@ -620,7 +621,7 @@ public class ProductEditService {
     }
 
     private ProductDetailView.Variant variantOf(UUID productId, UUID variantId) {
-        return detailService.findAdminProduct(productId).product().variants().stream()
+        return detailService.findAdminSnapshot(productId).product().variants().stream()
                 .filter(v -> v.variantId().equals(variantId)).findFirst()
                 .orElseThrow(() -> new IllegalStateException("variant " + variantId + " vanished"));
     }

@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
+import com.grandis.nova.catalog.support.OrderStocksTestConfig;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.common.UuidBinary;
 import java.time.Duration;
@@ -892,6 +893,37 @@ class AdminProductEditApiTest {
                 .with(user("657").roles("USER"))).andExpect(status().isForbidden());
         mockMvc.perform(patch(PATH + "/{id}", productId).contentType(MediaType.APPLICATION_JSON).content("{ \"title\": \"x\" }"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("쓰기 흐름은 상품 행을 잠근 트랜잭션 안에서 order 재고를 묻지 않는다 — 응답의 남은 수량은 커밋 뒤에 채운다(상품 · 값 · 조합 · 옵션 상태 수정)")
+    void writesAskStockOnlyAfterCommit() throws Exception {
+        UUID productId = registerInStock();
+        UUID black256 = variantIdOf(productId, "블랙 / 256GB");
+        fixtures.inventory(black256, 7, 0, 0);
+        int before = OrderStocksTestConfig.CALLS_IN_TRANSACTION.get();
+
+        assertThat(quantity(data(edit(productId, "{ \"title\": \"Nova 1 Pro\" }").andExpect(status().isOk())).get("product"), black256)).isEqualTo(7);
+        assertThat(quantity(data(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId))
+                .content("{ \"axisKey\": \"color\", \"value\": \"블루\" }")).andExpect(status().isCreated())).get("product"), black256)).isEqualTo(7);
+        assertThat(quantity(data(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, valueIdOf(productId, "color", "화이트")))
+                .content("{ \"surcharge\": 1000 }")).andExpect(status().isOk())).get("product"), black256)).isEqualTo(7);
+        JsonNode added = data(mockMvc.perform(admin(post(PATH + "/{id}/variants", productId))
+                .content("{ \"selections\": { \"color\": \"블루\", \"storage\": \"256GB\" } }")).andExpect(status().isCreated()));
+        assertThat(added.get("availableQuantity").asInt()).as("재고 행이 없는 새 조합 — 커밋 뒤 order 답(빠짐 = 0)").isZero();
+        JsonNode paused = data(editVariant(productId, black256, "{ \"status\": \"PAUSED\" }").andExpect(status().isOk()));
+        assertThat(paused.get("availableQuantity").asInt()).isEqualTo(7);
+
+        assertThat(OrderStocksTestConfig.CALLS_IN_TRANSACTION.get()).as("트랜잭션 안의 재고 호출").isEqualTo(before);
+    }
+
+    private static int quantity(JsonNode product, UUID variantId) {
+        for (JsonNode variant : product.get("variants")) {
+            if (variant.get("variantId").asString().equals(variantId.toString())) {
+                return variant.get("availableQuantity").asInt();
+            }
+        }
+        throw new AssertionError("옵션이 없다: " + variantId);
     }
 
     // ── 도우미 ─────────────────────────────────────────────────────────────

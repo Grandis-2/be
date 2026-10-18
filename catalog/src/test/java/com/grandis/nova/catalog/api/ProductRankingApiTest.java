@@ -83,6 +83,7 @@ class ProductRankingApiTest {
         JsonNode items = ranking();
         assertThat(ids(items)).containsExactly(popular.toString(), second.toString());
         assertThat(items.get(0).get("title").asString()).isEqualTo("Nova 1");
+        assertThat(items.get(0).get("soldOut").asBoolean()).as("재고 0 — order 재고로 품절을 채운다").isTrue();
         assertThat(items.get(0).get("minPrice").decimalValue()).isEqualByComparingTo(ShopFixtures.OPTION_PRICE);
     }
 

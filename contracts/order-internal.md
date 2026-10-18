@@ -213,7 +213,7 @@ BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, �
 
 **요청.** 본문 없음. `optionIds` 에 옵션 id(`product_options.id`, UUID)를 쉼표로 잇거나(`optionIds=a,b`) 파라미터를 반복한다(`optionIds=a&optionIds=b`) — 둘은 같다. 규칙은 `GET /internal/options` 의 `ids` 와 같다.
 - 같은 id 는 한 번으로 센다. 중복을 뺀 개수가 1~100 이어야 한다. 비었거나 · 없거나 · 101개 이상 · UUID 가 아니거나 · 빈 원소(`optionIds=a,` 의 끝 쉼표)가 있으면 400(`field=optionIds`).
-- 상한 100 은 URL 길이로 정했다 — UUID 100개를 쉼표로 이으면 약 3.7KB 로, Tomcat 요청 헤더 기본 상한(8KB) 안이다. 더 많이 물어야 하면 catalog 가 100개씩 나눠 부른다.
+- 상한 100 은 URL 길이로 정했다 — UUID 100개를 쉼표로 이으면 약 3.7KB, 파라미터를 반복하면(`optionIds=` 10자 + UUID 36자 + `&` = 47자 × 100) 약 4.7KB 로, 둘 다 Tomcat 요청 헤더 기본 상한(8KB) 안이다. catalog 의 HTTP 인터페이스(`StockClient`)는 반복 모양으로 보낸다. 더 많이 물어야 하면 catalog 가 100개씩 나눠 부른다.
 
 **응답 200.** 봉투는 `common:web` 의 `ApiResponse` 그대로. 결과는 **요청 순서**(같은 id 는 처음 자리에 한 번)이고, **재고 행이 없는 옵션은 빠진다**.
 

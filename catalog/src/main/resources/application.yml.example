@@ -23,9 +23,11 @@ spring:
     open-in-view: false
   http:
     serviceclient:
-      # 리뷰 작성 때만 부른다(조회 · 수정 · 삭제는 부르지 않는다). 회원 토큰을 그대로 싣는다.
-      # 타임아웃(연결 300ms · 읽기 1s)은 CatalogDefaults 가 준다. 주소가 없으면 리뷰 작성이 500 이다.
-      order:      # 내 주문상품(GET /internal/order-items/{id}) — contracts/order-internal.md
+      # 타임아웃(연결 300ms · 읽기 1s)은 CatalogDefaults 가 준다.
+      # order: 리뷰 작성 때 부른다(회원 토큰을 그대로 싣는다). 주소가 없으면 리뷰 작성이 500 이다.
+      # order-stocks: 목록 · 상세 · 증정품 후보가 요청마다 남은 수량을 묻는다(토큰 없음). 주소는 따로 주지 않으면 order 와 같다 — 없으면
+      #   order 장애와 같이 목록은 품절 표시 없이, 상세는 수량 없이 나가고, 증정품 후보는 503 이다.
+      order:      # 내 주문상품(GET /internal/order-items/{id}) · 재고(GET /internal/stocks) — contracts/order-internal.md
         base-url: http://localhost:8084
       member:     # 작성자 표시명(GET /internal/customers/me) — contracts/member-internal.md
         base-url: http://localhost:8080

@@ -4,6 +4,7 @@ import com.grandis.nova.catalog.cache.CatalogLocalCaches;
 import com.grandis.nova.catalog.cache.LocalReadCache;
 import com.grandis.nova.catalog.listing.ProductListItem;
 import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
+import com.grandis.nova.catalog.listing.SoldOutMarker;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.redis.cache.ReadCache;
@@ -38,15 +39,17 @@ public class ProductRankingService {
     private final ProductViewCounter counter;
     private final AnonymousQuota quota;
     private final ProductListingQueryRepository listings;
+    private final SoldOutMarker soldOut;
     private final TransactionTemplate readTransaction;
     private final LocalReadCache<String, List<ProductListItem>> cache;
     private final Clock clock;
 
-    public ProductRankingService(ProductViewCounter counter, AnonymousQuota quota, ProductListingQueryRepository listings, PlatformTransactionManager transactionManager,
+    public ProductRankingService(ProductViewCounter counter, AnonymousQuota quota, ProductListingQueryRepository listings, SoldOutMarker soldOut, PlatformTransactionManager transactionManager,
                                  CatalogLocalCaches local, Clock clock) {
         this.counter = counter;
         this.quota = quota;
         this.listings = listings;
+        this.soldOut = soldOut;
         this.readTransaction = new TransactionTemplate(transactionManager);
         this.readTransaction.setReadOnly(true);
         // 카드 본문과 색상칩을 두 문장으로 읽는다 — 회원 목록과 같이 한 스냅샷으로
@@ -112,6 +115,7 @@ public class ProductRankingService {
                 break;
             }
         }
-        return byId.values().stream().limit(SIZE).toList();
+        // 품절은 순위를 정한 뒤 order 재고로 채운다(트랜잭션 밖). 이 결과째 캐시되므로, order 가 답하지 않아 품절 표시를 뺀 순위도 캐시 수명만큼 남는다
+        return soldOut.mark(byId.values().stream().limit(SIZE).toList());
     }
 }

@@ -342,6 +342,8 @@ class PromotionApiTest {
         assertThat(detail.get("detailImageUrls").toString()).isEqualTo("[\"https://img/d.jpg\"]");
         JsonNode products = detail.get("products");
         assertThat(ids(products)).containsExactly(open.toString(), closed.toString(), converted.toString());
+        assertThat(products.get(2).get("soldOut").asBoolean()).as("일반 전환한 상품은 재고 0 이라 품절 — order 재고로 채운다").isTrue();
+        assertThat(products.get(0).get("soldOut").asBoolean()).as("사전예약은 품절이 없다").isFalse();
         assertThat(products.get(0).get("preorderStatus").asString()).isEqualTo("OPEN");
         assertThat(products.get(0).get("colors").get(0).get("label").asString()).as("홍보 상세 카드에도 색상칩").isEqualTo("화이트");
         assertThat(products.get(0).get("colors").get(0).get("imageUrls").toString()).isEqualTo("[\"https://img/w.jpg\"]");

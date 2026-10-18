@@ -225,6 +225,6 @@ public class ProductImageEditService {
         images.sync(ImagePurpose.PRODUCT, product.getOptions().imageUrls(), next.imageUrls(), url -> field);
         product.replaceOptions(next);
         products.flush();
-        return detailService.findAdminProduct(product.getId());
+        return detailService.findAdminSnapshot(product.getId());
     }
 }

@@ -41,6 +41,10 @@ class CatalogDefaults implements EnvironmentPostProcessor, Ordered {
             // 주소(base-url)는 환경마다 달라 여기 두지 않는다 — application.yml.example 의 spring.http.serviceclient
             Map.entry("spring.http.serviceclient." + Dependencies.ORDER + ".connect-timeout", "300ms"),
             Map.entry("spring.http.serviceclient." + Dependencies.ORDER + ".read-timeout", "1s"),
+            // 재고 조회는 order 와 같은 서비스다 — 주소는 order 그룹 값을 따른다(운영 설정에 따로 적지 않는다). 목록 · 상세가 요청마다 부른다
+            Map.entry("spring.http.serviceclient." + Dependencies.ORDER_STOCKS + ".base-url", "${spring.http.serviceclient." + Dependencies.ORDER + ".base-url:}"),
+            Map.entry("spring.http.serviceclient." + Dependencies.ORDER_STOCKS + ".connect-timeout", "300ms"),
+            Map.entry("spring.http.serviceclient." + Dependencies.ORDER_STOCKS + ".read-timeout", "1s"),
             Map.entry("spring.http.serviceclient." + Dependencies.MEMBER + ".connect-timeout", "300ms"),
             Map.entry("spring.http.serviceclient." + Dependencies.MEMBER + ".read-timeout", "1s"),
             // 사진 업로드(POST /api/v1/admin/images)의 멀티파트 상한. 넘으면 컨트롤러 전에 413 이다(크기 초과와 파트 수 초과는 구별되지 않는다).

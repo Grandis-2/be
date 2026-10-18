@@ -55,6 +55,7 @@ import java.lang.annotation.Target;
         // catalog-events 소비기는 운영 기본값(CatalogDefaults)으로 켜져 있다 — 시험은 끈다. 소비기를 보는 시험(CatalogEventConsumerFlowTest · InStockProductReadyFlowTest)이 켠다
         "nova.sqs.consumer.enabled=false"
 })
-@Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class, ImageAttachmentsTestConfig.class})
+@Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class, ImageAttachmentsTestConfig.class,
+        OrderStocksTestConfig.class})
 public @interface CatalogIntegrationTest {
 }
