@@ -70,6 +70,16 @@ public class PopularSearchService {
             return;
         }
         Instant now = clock.instant();
+        // 상한을 결과 수보다 먼저 본다 — 상한을 넘은 익명 id 는 DB(앞 와일드카드 LIKE 4칸 count)를 타지 않는다. 대신 0건 검색도 상한 한 자리를 쓴다
+        // (같은 브라우저는 같은 익명 id 라 자리가 늘지 않는다). 받아 둔 id 하나가 q 를 바꿔 가며 보내는 것은 요청 수 문제라 앞단(WAF) 몫이다.
+        try {
+            if (!quota.admit(searcher, now)) {
+                return;
+            }
+        } catch (DataAccessException e) {
+            log.warn("검색어를 세지 못했다(Redis)", e);
+            return;
+        }
         try {
             if (listings.count(new ProductListFilter(term.display(), null, null, null, null, null), now) == 0) {
                 return;
@@ -79,9 +89,7 @@ public class PopularSearchService {
             return;
         }
         try {
-            if (quota.admit(searcher, now)) {
-                counter.record(term, searcher, now);
-            }
+            counter.record(term, searcher, now);
         } catch (DataAccessException e) {
             log.warn("검색어를 세지 못했다(Redis)", e);
         }

@@ -193,15 +193,19 @@ class PopularSearchApiTest {
     }
 
     @Test
-    @DisplayName("금칙어는 공백을 남긴 표기에서 찾는다 — \"갤럭시 발매일\" 은 센다, \"시발\" 은 안 센다")
+    @DisplayName("금칙어는 공백을 남긴 표기에서 찾는다 — \"갤럭시 발매일\" 은 센다, 결과가 있어도 \"시발\" 이 든 표기 · 붙여 쓴 \"갤럭시발매일\" 은 안 센다")
     void bannedWordsRespectWordBoundaries() throws Exception {
         listed("갤럭시 발매일 " + tag, "x");
+        listed("시발 노트 " + tag, "갤럭시발매일" + tag);
 
         search("갤럭시 발매일 " + tag, UUID.randomUUID()).andExpect(status().isNoContent());
-        search("시발 " + tag, UUID.randomUUID()).andExpect(status().isNoContent());
+        search("시발 노트 " + tag, UUID.randomUUID()).andExpect(status().isNoContent());
+        search("갤럭시발매일" + tag, UUID.randomUUID()).andExpect(status().isNoContent());
+        search("노트 " + tag, UUID.randomUUID()).andExpect(status().isNoContent());
 
-        assertThat(score(("갤럭시발매일" + tag).toLowerCase())).isEqualTo(1);
-        assertThat(score(("시발" + tag).toLowerCase())).isZero();
+        assertThat(score(("갤럭시발매일" + tag).toLowerCase())).as("띄어 쓴 표기만 셌다").isEqualTo(1);
+        assertThat(score(("시발노트" + tag).toLowerCase())).isZero();
+        assertThat(score(("노트" + tag).toLowerCase())).as("대조군 — 같은 상품에 걸리는 다른 검색어는 센다").isEqualTo(1);
     }
 
     @Test
