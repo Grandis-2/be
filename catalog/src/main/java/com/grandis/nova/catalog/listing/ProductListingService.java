@@ -63,12 +63,12 @@ public class ProductListingService {
             List<GiftCandidate> items = total == 0 ? List.of() : repository.findGiftCandidates(text, page, size);
             return OffsetPage.of(items, page, size, total);
         });
-        // 남은 수량은 order 에 묻는다 — 재고 행이 없는 옵션은 후보에서 뺀다. 관리자 화면이라 order 가 답하지 않으면 503 이다
+        // 남은 수량은 order 에 묻는다 — 재고 행이 없는 옵션은 0 으로 둔다(빼면 옵션 없는 후보가 생겨 화면의 기본 선택이 깨진다). 관리자 화면이라
+        // order 가 답하지 않으면 503 이다
         Map<UUID, Integer> available = stocks.available(found.items().stream().flatMap(c -> c.options().stream()).map(GiftCandidate.Option::optionId).toList());
         List<GiftCandidate> items = found.items().stream()
                 .map(c -> new GiftCandidate(c.productId(), c.title(), c.imageUrl(), c.visible(), c.options().stream()
-                        .filter(option -> available.containsKey(option.optionId()))
-                        .map(option -> new GiftCandidate.Option(option.optionId(), option.sku(), option.title(), available.get(option.optionId())))
+                        .map(option -> new GiftCandidate.Option(option.optionId(), option.sku(), option.title(), available.getOrDefault(option.optionId(), 0)))
                         .toList()))
                 .toList();
         return OffsetPage.of(items, page, size, found.total());

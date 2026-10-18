@@ -129,8 +129,8 @@ public class AdminProductController {
                 listingService.listForAdmin(filter, PageSizes.requirePage(page, PageSizes.require(size)), size)));
     }
 
-    @Operation(summary = "럭키 드로우 증정품 후보", description = "회차 만들기 화면용 — 일반 판매 · 판매 중이고 재고를 등록한 옵션이 있는 상품(비공개 포함)과 "
-            + "그 옵션별 지금 확보할 수 있는 수량(available). q 는 상품명 · 태그 · 모델명 · 브랜드 검색(50자까지). 최신순, page 는 0 부터, 쪽은 앞 10,000개 안에서 시작")
+    @Operation(summary = "럭키 드로우 증정품 후보", description = "회차 만들기 화면용 — 일반 판매 · 판매 준비가 끝났고 판매 중 옵션이 있는 상품(비공개 포함)과 "
+            + "그 옵션별 지금 확보할 수 있는 수량(available, 재고 행이 없으면 0). order 재고 API 가 답하지 않으면 503. q 는 상품명 · 태그 · 모델명 · 브랜드 검색(50자까지). 최신순, page 는 0 부터, 쪽은 앞 10,000개 안에서 시작")
     @GetMapping("/gift-candidates")
     public ApiResponse<ProductPageResponse<GiftCandidate>> giftCandidates(
             @RequestParam(required = false) String q,
