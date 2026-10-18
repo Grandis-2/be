@@ -5,6 +5,8 @@ import com.grandis.nova.order.draw.domain.exception.DrawEntryTakenException;
 import com.grandis.nova.order.draw.domain.model.DrawEntry;
 import com.grandis.nova.order.draw.domain.model.DrawEntryStatus;
 import com.grandis.nova.order.draw.domain.model.EntryTransition;
+import com.grandis.nova.order.draw.domain.model.MyDrawEntry;
+import com.grandis.nova.order.draw.domain.model.MyDrawEntryCounts;
 import com.grandis.nova.order.draw.domain.model.NewDrawEntry;
 import com.grandis.nova.order.draw.domain.repository.DrawEntryStore;
 import com.grandis.nova.order.draw.persistence.entity.DrawEntryJpaEntity;
@@ -62,6 +64,21 @@ class JpaDrawEntryStore implements DrawEntryStore {
     @Override
     public Optional<DrawEntry> findByCampaignAndCustomer(UUID campaignId, UUID customerId) {
         return entries.findByCampaignIdAndCustomerId(campaignId, customerId).map(JpaDrawEntryStore::toDomain);
+    }
+
+    @Override
+    public List<MyDrawEntry> findByCustomerNewestFirst(UUID customerId, boolean wonOnly, int offset, int limit) {
+        return entries.findByCustomerNewestFirst(customerId, wonOnly, offset, limit).stream()
+                .map(row -> new MyDrawEntry(UuidBinary.fromBytes(row.getId()), UuidBinary.fromBytes(row.getCampaignId()),
+                        DrawEntryStatus.valueOf(row.getStatus()), row.getCreatedAt(),
+                        row.getWonOrderId() == null ? null : UuidBinary.fromBytes(row.getWonOrderId()), row.getSettledAt() != null))
+                .toList();
+    }
+
+    @Override
+    public MyDrawEntryCounts countByCustomer(UUID customerId) {
+        DrawEntryJpaRepository.CountsRow row = entries.countByCustomer(customerId);
+        return new MyDrawEntryCounts(row.getTotal(), row.getWon());
     }
 
     @Override

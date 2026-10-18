@@ -21,6 +21,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -61,6 +62,11 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
     @Override
     public Optional<DrawCampaign> findById(UUID id) {
         return campaigns.findById(id).map(JpaDrawCampaignStore::toDomain);
+    }
+
+    @Override
+    public List<DrawCampaign> findAllById(Collection<UUID> ids) {
+        return campaigns.findAllById(ids).stream().map(JpaDrawCampaignStore::toDomain).toList();
     }
 
     @Override
