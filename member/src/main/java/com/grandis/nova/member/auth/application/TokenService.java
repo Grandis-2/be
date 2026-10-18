@@ -10,6 +10,7 @@ import com.grandis.nova.common.security.Role;
 import com.grandis.nova.common.security.SessionReplacedException;
 import com.grandis.nova.common.security.TokenClaims;
 import com.grandis.nova.common.security.TokenType;
+import com.grandis.nova.member.MySqlLockFailures;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -57,7 +58,7 @@ public class TokenService {
     private static final UUID NO_TOKEN_ID = new UUID(0L, 0L);
 
     private final JwtTokenProvider provider;
-    /** 재사용 세션의 체인 폐기를 잠금 실패에서 다시 하는 최대 횟수. */
+    /** 재사용 세션의 체인 폐기를 교착에서 다시 하는 최대 횟수. */
     static final int REVOKE_ATTEMPTS = 3;
 
     private final JwtProperties properties;
@@ -235,10 +236,12 @@ public class TokenService {
     /**
      * 재사용으로 판정된 세션을 끊는다. 저장소는 판정만 하고 체인을 폐기하지 않는다(교착을 피해 따로 커밋 — DbRefreshTokenStore 클래스 주석).
      * <ol>
-     *   <li>표식을 <b>리프레시 수명</b>만큼 심는다(로그아웃은 액세스 수명). 재발급은 회전 전에 이 표식을 보므로, 아래 체인 폐기가 끝내 실패해도 그
-     *       체인은 수명 내내 재발급되지 않는다.</li>
-     *   <li>체인 폐기 — 잠금 실패(교착 · 대기 초과)면 {@value #REVOKE_ATTEMPTS} 번까지 다시 한다. 다른 폐기(로그아웃 · 다른 재사용 탐지)와 같은
-     *       체인을 같은 순서로 잠가 교착은 드물지만, 정리 · 로그인과는 맞물릴 수 있다.</li>
+     *   <li>표식을 <b>리프레시 수명</b>만큼 심는다(로그아웃은 액세스 수명). 재발급은 회전 전에 이 표식을 보므로, 표식이 섰다면 아래 체인 폐기가
+     *       끝내 실패해도 그 체인은 수명 내내 재발급되지 않는다. 표식 쓰기와 체인 폐기가 <b>둘 다</b> 실패하면 체인이 절대 만료까지 산다 — 회전 전
+     *       읽기는 성공하고 바로 뒤 쓰기만 실패해야 하는 좁은 경우다(Redis 가 아예 죽어 있으면 회전 전 검사에서 닫힌다).</li>
+     *   <li>체인 폐기 — 교착(1213)이면 {@value #REVOKE_ATTEMPTS} 번까지 다시 한다. 잠금 대기 초과(1205)는 다시 하지 않는다 — 표식이 이미 섰고, 대기
+     *       초과를 거듭 기다리면 요청이 수 분 묶인다(리뷰 실측 150초). 로그인 · 로그아웃 · 다른 재사용 탐지 · 정리와 겹쳐 잰 교착은 0 이었다
+     *       (리뷰 실측 — 회원 행 → 체인으로 같은 순서다). 재시도는 혹시 남은 교착에 대한 방어다.</li>
      *   <li>관리자 키 삭제.</li>
      * </ol>
      * 저장소 예외는 WARN 으로만 — 호출자가 어차피 401 을 낼 자리다.
@@ -254,7 +257,7 @@ public class TokenService {
                 refreshTokens.revokeSession(sessionId);
                 break;
             } catch (PessimisticLockingFailureException e) {
-                if (attempt >= REVOKE_ATTEMPTS) {
+                if (!MySqlLockFailures.isDeadlock(e) || attempt >= REVOKE_ATTEMPTS) {
                     log.warn("refresh reuse: refresh rows not revoked after {} attempts sid={} cause={}", attempt, shortSid(sessionId),
                             e.getClass().getSimpleName());
                     break;

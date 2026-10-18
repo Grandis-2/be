@@ -9,10 +9,13 @@ import java.util.UUID;
 public interface RevocationStore {
 
     /**
-     * 세션 하나를 끊는다(로그아웃·리프레시 재사용 탐지). TTL 은 액세스 만료 — 그 뒤엔 토큰이 어차피 죽는다.
-     * 이미 표식이 있으면 덮지 않는다 — 새 로그인에 밀린 세션의 표식(이유 · 리프레시 만료 TTL)을 그 기기의 로그아웃이 지우지 않게.
+     * 세션 하나를 끊는다. TTL 은 부르는 쪽이 정한다 — 로그아웃은 액세스 만료(그 뒤엔 토큰이 어차피 죽는다), 리프레시 재사용 탐지는 리프레시
+     * 만료(체인 폐기가 실패해도 재발급을 막는다 — TokenService).
+     * 이미 표식이 있으면 덮지 않는다 — 새 로그인에 밀린 세션의 표식(이유 · 리프레시 만료 TTL)을 그 기기의 로그아웃이 지우지 않게. 그래서 짧은 로그아웃
+     * 표식이 먼저 있으면 재사용 표식으로 늘어나지 않는다 — 로그아웃은 체인을 통째로 끊어 그 뒤의 재제시는 재사용이 아니라 REVOKED 라, 지금 경로에서는
+     * 그 순서가 생기지 않는다.
      */
-    void revokeSession(UUID sessionId, Duration accessTokenTtl);
+    void revokeSession(UUID sessionId, Duration ttl);
 
     /**
      * 같은 회원의 새 로그인에 밀린 세션을 끊는다. 표식 값이 달라 401 에 이유(SESSION_REPLACED)가 실린다.

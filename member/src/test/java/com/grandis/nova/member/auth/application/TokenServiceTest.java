@@ -167,12 +167,12 @@ class TokenServiceTest {
     }
 
     @Test
-    @DisplayName("rotate 재사용 분기: 체인 폐기가 잠금 실패(교착)면 3번까지 다시 한다 — 세 번 다 실패해도 401 이고 500 으로 안 올린다")
+    @DisplayName("rotate 재사용 분기: 체인 폐기가 교착(1213)이면 3번까지 다시 한다 — 세 번 다 실패해도 401 이고 500 으로 안 올린다. 잠금 대기 초과(1205)는 한 번으로 끝낸다")
     void reuseRetriesChainRevocationOnLockFailure() {
         Session session = loggedIn(UUID.randomUUID());
         when(refreshTokens.rotate(any(), any()))
                 .thenReturn(Rotation.rejected(Rotation.Status.REUSED, session.sessionId(), session.subject()));
-        doThrow(new org.springframework.dao.CannotAcquireLockException("1213")).doNothing().when(refreshTokens).revokeSession(any());
+        doThrow(lockFailure(1213)).doNothing().when(refreshTokens).revokeSession(any());
 
         assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
         verify(refreshTokens, Mockito.times(2)).revokeSession(session.sessionId());
@@ -181,11 +181,26 @@ class TokenServiceTest {
         Session again = loggedIn(UUID.randomUUID());
         when(refreshTokens.rotate(any(), any()))
                 .thenReturn(Rotation.rejected(Rotation.Status.REUSED, again.sessionId(), again.subject()));
-        doThrow(new org.springframework.dao.CannotAcquireLockException("1213")).when(refreshTokens).revokeSession(any());
+        doThrow(lockFailure(1213)).when(refreshTokens).revokeSession(any());
 
         assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
         verify(refreshTokens, Mockito.times(TokenService.REVOKE_ATTEMPTS)).revokeSession(again.sessionId());
         verify(adminRefreshTokens).delete(again.sessionId());
+
+        Mockito.reset(refreshTokens);
+        Session waited = loggedIn(UUID.randomUUID());
+        when(refreshTokens.rotate(any(), any()))
+                .thenReturn(Rotation.rejected(Rotation.Status.REUSED, waited.sessionId(), waited.subject()));
+        doThrow(lockFailure(1205)).when(refreshTokens).revokeSession(any());
+
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        verify(refreshTokens, Mockito.times(1)).revokeSession(waited.sessionId());
+    }
+
+    /** 1213 · 1205 는 같은 Spring 예외로 올라온다 — 벤더 코드만 다르다(order 의 LockFailureClassificationTest 가 진짜 오류로 확인). */
+    private static org.springframework.dao.CannotAcquireLockException lockFailure(int vendorCode) {
+        return new org.springframework.dao.CannotAcquireLockException("lock",
+                new java.sql.SQLException("lock", "40001", vendorCode));
     }
 
     @Test

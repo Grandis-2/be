@@ -216,7 +216,7 @@ class RefreshTokenDbStoreTest {
 
     @Test
     @DisplayName("rotate 재사용: 교체 뒤 유예(30초)가 지나 같은 원문이 다시 오면 REUSED 만 돌려주고 체인은 건드리지 않는다 — 끊는 것은 호출자의 세션 폐기다")
-    void reuseRevokesTheWholeFamilyAndCommits() {
+    void reuseOnlyDecidesAndSessionRevokeEndsTheChain() {
         UUID customerId = newCustomer();
         UUID sessionId = UUID.randomUUID();
         String first = login(customerId, sessionId);
@@ -276,7 +276,7 @@ class RefreshTokenDbStoreTest {
     }
 
     @Test
-    @DisplayName("버려진 토큰의 재사용과 로그아웃이 동시에 와도 교착(1213) · 예외 없이 끝나고 체인은 죽는다 — 원문 행을 쥐지 않고 체인을 로그아웃과 같은 순서로 잠근다(20회)")
+    @DisplayName("버려진 토큰의 재사용과 로그아웃이 동시에 와도 교착(1213) · 예외 없이 끝나고 체인은 죽는다 — 회전은 판정만 하고 체인을 잠그지 않는다(20회)")
     void abandonedReuseAndLogoutDoNotDeadlock() throws Exception {
         for (int round = 0; round < 20; round++) {
             UUID customerId = newCustomer();

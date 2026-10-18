@@ -13,7 +13,7 @@ public final class AuthRedisKeys {
     public static final String REFRESH_PREFIX = "auth:refresh:";
 
     /**
-     * 세션(sid) 폐기 표식. 값은 {@link #REVOKED_SESSION_MARK}(로그아웃 · 재사용 탐지, TTL = 액세스 만료) 또는
+     * 세션(sid) 폐기 표식. 값은 {@link #REVOKED_SESSION_MARK}(로그아웃 TTL = 액세스 만료 · 리프레시 재사용 탐지 TTL = 리프레시 만료) 또는
      * {@link #REPLACED_SESSION_MARK}(같은 회원이 다른 곳에서 새로 로그인해 끊긴 세션, TTL = 리프레시 만료 — 재발급 401 에도 이유를 싣는다).
      * member 가 심고 필터가 읽는다. 값과 상관없이 키가 있으면 폐기다.
      */
