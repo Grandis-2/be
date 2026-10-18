@@ -32,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 배너 고치기 · 지우기가 겹친 작업과 엇갈릴 때 — 두 트랜잭션을 실제 커넥션 둘로 태운다. 한쪽이 모든 배너를 잠근 채, 다른 쪽이 잠금을 기다리는 것
- * (innodb_trx 의 LOCK WAIT, root 연결)을 본 뒤 커밋한다.
+ * (performance_schema.data_lock_waits, root 연결)을 본 뒤 커밋한다.
  */
 @CatalogIntegrationTest
 @DisplayName("배너 고치기 · 순서 바꾸기가 겹칠 때")
@@ -63,9 +63,10 @@ class BannerRaceTest {
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
             Future<?> reorder = pool.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                int waitsBefore = lockWaits();
                 jdbcTemplate.queryForList("SELECT id FROM banners FOR UPDATE");
                 locked.countDown();
-                awaitLockWait();
+                awaitLockWaitsAbove(waitsBefore);
                 jdbcTemplate.update("UPDATE banners SET position = CASE id WHEN ? THEN 1 ELSE 0 END", (Object) UuidBinary.toBytes(a));
             }));
             assertThat(locked.await(30, TimeUnit.SECONDS)).isTrue();
@@ -83,7 +84,7 @@ class BannerRaceTest {
     }
 
     @Test
-    @DisplayName("잠금 대기가 넘치면 409 STATE_CONFLICT · retryable — 500 이 아니다")
+    @DisplayName("잠금 대기가 넘치면 409 STATE_CONFLICT · retryable — 500 이 아니다(잠금 실패의 응답 매핑을 본다 — 어느 문장에서 기다리는지는 위 시험이 본다)")
     void lockWaitTimeoutIsRetryableConflict() throws Exception {
         UUID a = service.create(request("a")).bannerId();
         CountDownLatch locked = new CountDownLatch(1);
@@ -121,29 +122,36 @@ class BannerRaceTest {
         return jdbcTemplate.queryForObject("SELECT position FROM banners WHERE id = ?", Integer.class, (Object) UuidBinary.toBytes(banner));
     }
 
-    /** 앱 계정은 PROCESS 권한이 없어 innodb_trx 를 못 읽는다 — root 로 본다. */
-    private static void awaitLockWait() {
+    /**
+     * 서버 전체의 잠금 대기 수(performance_schema.data_lock_waits) — 앱 계정은 권한이 없어 root 로 본다. information_schema.innodb_trx 의
+     * LOCK WAIT 는 쓰지 않는다: 실측(2026-10-19) 고치기가 FOR UPDATE 에서 기다리는(processlist state=statistics, data_locks 7행) 동안에도
+     * innodb_trx 가 0행으로 나온 적이 있다.
+     */
+    static int lockWaits() {
         MySQLContainer mysql = MySqlContainerConfig.get();
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
         try (Connection root = DriverManager.getConnection(mysql.getJdbcUrl(), "root", mysql.getPassword());
-             Statement statement = root.createStatement()) {
-            while (true) {
-                try (ResultSet rs = statement.executeQuery("SELECT COUNT(*) FROM information_schema.innodb_trx WHERE trx_state = 'LOCK WAIT'")) {
-                    rs.next();
-                    if (rs.getInt(1) > 0) {
-                        return;
-                    }
-                }
-                if (System.nanoTime() > deadline) {
-                    throw new AssertionError("고치기가 잠금을 기다리지 않았다");
-                }
-                Thread.sleep(20);
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException(e);
+             Statement statement = root.createStatement();
+             ResultSet rs = statement.executeQuery("SELECT COUNT(*) FROM performance_schema.data_lock_waits")) {
+            rs.next();
+            return rs.getInt(1);
         } catch (SQLException e) {
             throw new IllegalStateException(e);
+        }
+    }
+
+    /** 대기 수가 baseline 을 넘을 때까지 — 앞 시험이 남긴 서버 쪽 대기에 속지 않게 시작 전 수와 견준다. */
+    static void awaitLockWaitsAbove(int baseline) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        while (lockWaits() <= baseline) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("잠금을 기다리지 않았다");
+            }
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
         }
     }
 
