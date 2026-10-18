@@ -71,7 +71,7 @@ public class ReviewController {
     }
 
     /** 상품 상세의 구매 후기 탭. */
-    @Operation(summary = "상품 리뷰(로그인 없이)")
+    @Operation(summary = "상품 리뷰(로그인 없이)", description = "최신순. 목록은 앞에서 10,000개까지((page + 1) × size ≤ 10,000)")
     @SecurityRequirements
     @GetMapping("/api/v1/products/{productId}/reviews")
     public ResponseEntity<ApiResponse<ProductPageResponse<ReviewView>>> productReviews(
@@ -83,7 +83,7 @@ public class ReviewController {
     }
 
     /** 구매후기 모아보기. categoryId 는 상위면 하위 포함. */
-    @Operation(summary = "구매후기 모아보기(로그인 없이)")
+    @Operation(summary = "구매후기 모아보기(로그인 없이)", description = "최신순. 목록은 앞에서 10,000개까지((page + 1) × size ≤ 10,000)")
     @SecurityRequirements
     @GetMapping("/api/v1/reviews")
     public ResponseEntity<ApiResponse<ProductPageResponse<ReviewView>>> visibleReviews(
@@ -95,7 +95,7 @@ public class ReviewController {
     }
 
     /** 내 리뷰. orderItemId 를 주면 그 주문상품의 리뷰만 — 주문 내역의 "리뷰 쓰기 / 내가 쓴 리뷰 보기" 를 가른다. */
-    @Operation(summary = "내 리뷰")
+    @Operation(summary = "내 리뷰", description = "최신순. 목록은 앞에서 10,000개까지((page + 1) × size ≤ 10,000)")
     @GetMapping("/api/v1/reviews/mine")
     public ApiResponse<ProductPageResponse<ReviewView>> myReviews(
             @CurrentCustomerId UUID customerId,

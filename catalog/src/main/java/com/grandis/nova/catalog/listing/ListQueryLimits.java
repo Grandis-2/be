@@ -12,9 +12,12 @@ import java.util.List;
  */
 public final class ListQueryLimits {
 
-    /** 검색어 최대 길이(코드 포인트, 정규화 뒤). 프론트 입력창(50자)과 같다. */
+    /** 검색어 최대 길이(코드 포인트, 정규화 뒤). 프론트 검색창의 maxLength(50, UTF-16 단위)와 같아 프론트가 보낸 값은 걸리지 않는다. */
     public static final int MAX_QUERY_LENGTH = 50;
-    /** brand · color · storage 를 한 요청에 보낼 수 있는 최대 개수. 등록 때 한 축의 값이 20개까지라 그보다 많을 일이 없다. */
+    /**
+     * brand · color · storage 를 한 요청에 보낼 수 있는 최대 개수 — IN 목록의 크기를 묶는다. 여러 상품에 걸친 OR 이라 카탈로그 전체의
+     * 서로 다른 색상 · 용량은 20개를 넘을 수 있다. 지금 프론트(develop 10-17)는 color · storage 필터를 보내지 않는다.
+     */
     public static final int MAX_VALUES = 20;
 
     private ListQueryLimits() {
@@ -29,7 +32,8 @@ public final class ListQueryLimits {
     }
 
     /**
-     * 보낸 개수 그대로 센다(빈 값 · 중복을 거르기 전). 쉼표로 이어 보낸 값(color=a,b)도 스프링이 나눈 뒤라 하나씩 센다.
+     * 보낸 개수 그대로 센다(빈 값 · 중복을 거르기 전). 이름을 한 번만 보내면 쉼표로 이은 값(color=a,b)을 스프링이 나눠 하나씩 센다 —
+     * 같은 이름을 여러 번 보내면 나누지 않고 그 개수로 센다(실측). IN 목록에 들어가는 값도 같은 방식으로 정해져 상한을 돌아갈 수는 없다.
      *
      * @throws BusinessException VALIDATION_FAILED(field) — 20개를 넘음
      */
