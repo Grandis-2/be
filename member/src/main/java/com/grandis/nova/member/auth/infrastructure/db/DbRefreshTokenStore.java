@@ -114,7 +114,6 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
     @Override
     @Transactional
     public Rotation rotate(String presentedRawToken, String newRawToken) {
-        Instant now = now();
         byte[] hash = RefreshTokens.hash(presentedRawToken);
         // 회원 행 → 리프레시 행 순서로 잠근다(로그인 replace 와 같은 순서). 새 행 INSERT 의 외래키 검사가 회원 행에 공유 잠금을 거는데, 리프레시 행을
         // 먼저 잠그면 로그인(회원 행 → 이 리프레시 행 폐기)과 서로 기다려 교착한다(실측 1213 — 로그인이 희생됐다)
@@ -123,6 +122,8 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
             return Rotation.rejected(Rotation.Status.NOT_FOUND, null, null);
         }
         Optional<RefreshToken> found = rows.findByTokenHashForUpdate(hash);
+        // 판정 시각은 행 잠금을 얻은 뒤에 읽는다 — 잠금을 기다린 동안 유예 · 만료 경계를 넘었으면 넘은 쪽으로 판정한다
+        Instant now = now();
         if (found.isEmpty()) {
             return Rotation.rejected(Rotation.Status.NOT_FOUND, null, null);
         }
@@ -169,6 +170,11 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
             return Optional.empty();
         }
         Optional<RefreshToken> successor = rows.findByIdForUpdate(row.getRotatedTo());
+        // 다음 토큰의 잠금을 기다린 동안 유예가 끝났을 수 있다 — 잠근 뒤 시각으로 다시 본다
+        now = now();
+        if (!now.isBefore(row.getRotatedAt().plus(ROTATION_GRACE)) || !row.getExpiresAt().isAfter(now)) {
+            return Optional.empty();
+        }
         // revokedAt 은 방어다 — 옛 행이 살아 있는데 다음 토큰만 폐기된 상태는 유예 경로가 만들고, 그때 옛 행은 새 토큰을 가리킨다
         if (successor.isEmpty() || successor.get().getRotatedAt() != null || successor.get().getRevokedAt() != null) {
             return Optional.empty();

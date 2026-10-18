@@ -92,6 +92,33 @@ class RefreshTokenDbStoreTest {
                 byte[].class, sessionId.toString()).stream().map(UuidBinary::fromBytes).toList();
     }
 
+    /** 남의 트랜잭션 상태(information_schema.innodb_trx)는 PROCESS 권한이 있어야 보인다 — 시험 계정에는 없어 root 로 본다(Testcontainers 는 root 비밀번호가 같다). */
+    private static final JdbcTemplate ROOT = new JdbcTemplate(new org.springframework.jdbc.datasource.DriverManagerDataSource(
+            com.grandis.nova.member.support.Containers.MYSQL.getJdbcUrl(), "root", com.grandis.nova.member.support.Containers.MYSQL.getPassword()));
+
+    /** 리프레시 표에 대한 잠금 대기가 InnoDB 에 실제로 생길 때까지 기다린다 — 고정 sleep 으로는 상대가 대기에 들어갔는지 보장하지 못한다. */
+    private void awaitRefreshLockWait() {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (ROOT.queryForObject("SELECT COUNT(*) FROM information_schema.innodb_trx WHERE trx_state = 'LOCK WAIT' AND trx_query LIKE '%refresh_tokens%'",
+                Integer.class) == 0) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("refresh_tokens 잠금 대기가 생기지 않았다");
+            }
+            sleep(20);
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(20, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("release 를 받지 못했다");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
     private static void sleep(long millis) {
         try {
             Thread.sleep(millis);
@@ -309,19 +336,22 @@ class RefreshTokenDbStoreTest {
         String owners = RefreshTokens.newToken();
         store.rotate(first, owners);
         CountDownLatch thiefInside = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
             Future<Rotation.Status> thief = pool.submit(() -> transactions.execute(status -> {
                 Rotation.Status s = store.rotate(first, RefreshTokens.newToken()).status();   // 소유자 토큰을 폐기하고 아직 커밋 전
                 thiefInside.countDown();
-                sleep(800);
+                await(release);
                 return s;
             }));
             assertThat(thiefInside.await(10, TimeUnit.SECONDS)).isTrue();
-            Rotation owner = pool.submit(() -> store.rotate(owners, RefreshTokens.newToken())).get(20, TimeUnit.SECONDS);
+            Future<Rotation> owner = pool.submit(() -> store.rotate(owners, RefreshTokens.newToken()));
+            awaitRefreshLockWait();                                   // 소유자가 탈취 쪽 커밋을 실제로 기다린다
+            release.countDown();
 
             assertThat(thief.get(10, TimeUnit.SECONDS)).isEqualTo(Rotation.Status.ROTATED);
-            assertThat(owner.status()).isEqualTo(Rotation.Status.REUSED);
+            assertThat(owner.get(20, TimeUnit.SECONDS).status()).isEqualTo(Rotation.Status.REUSED);
         } finally {
             pool.shutdownNow();
         }
@@ -454,21 +484,53 @@ class RefreshTokenDbStoreTest {
         String second = RefreshTokens.newToken();
         store.rotate(first, second);
         CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
             Future<?> holder = pool.submit(() -> transactions.executeWithoutResult(status -> {
                 jdbc.queryForList("SELECT id FROM refresh_tokens WHERE token_hash = ? FOR UPDATE", RefreshTokens.hash(second));
                 locked.countDown();
-                sleep(1500);
+                await(release);
                 jdbc.update("UPDATE refresh_tokens SET rotated_at = created_at WHERE token_hash = ?", (Object) RefreshTokens.hash(second));
             }));
             assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
-            long started = System.nanoTime();
-            Rotation retried = pool.submit(() -> store.rotate(first, RefreshTokens.newToken())).get(20, TimeUnit.SECONDS);
+            Future<Rotation> retried = pool.submit(() -> store.rotate(first, RefreshTokens.newToken()));
+            awaitRefreshLockWait();                                   // 유예 요청이 다음 토큰의 잠금을 실제로 기다린다
+            release.countDown();
             holder.get(10, TimeUnit.SECONDS);
 
-            assertThat(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)).as("다음 토큰의 잠금을 기다렸다").isGreaterThan(1000);
-            assertThat(retried.status()).isEqualTo(Rotation.Status.REUSED);
+            assertThat(retried.get(20, TimeUnit.SECONDS).status()).isEqualTo(Rotation.Status.REUSED);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("다음 토큰의 잠금을 기다리는 동안 유예가 끝나면 재사용이다 — 판정 시각은 잠근 뒤에 읽는다(교체 28초 뒤 도착, 3초 넘게 기다림)")
+    void graceEndingWhileWaitingForTheLockIsReuse() throws Exception {
+        UUID customerId = newCustomer();
+        UUID sessionId = UUID.randomUUID();
+        String first = login(customerId, sessionId);
+        String second = RefreshTokens.newToken();
+        store.rotate(first, second);
+        shiftRotatedAt(first, 28);
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> holder = pool.submit(() -> transactions.executeWithoutResult(status -> {
+                jdbc.queryForList("SELECT id FROM refresh_tokens WHERE token_hash = ? FOR UPDATE", RefreshTokens.hash(second));
+                locked.countDown();
+                await(release);                                       // 다음 토큰을 쓰지는 않는다 — 잠금만 쥔다
+            }));
+            assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+            Future<Rotation> retried = pool.submit(() -> store.rotate(first, RefreshTokens.newToken()));
+            awaitRefreshLockWait();
+            sleep(3_000);                                             // 기다리는 동안 처음 교체 뒤 30초를 넘긴다
+            release.countDown();
+            holder.get(10, TimeUnit.SECONDS);
+
+            assertThat(retried.get(20, TimeUnit.SECONDS).status()).isEqualTo(Rotation.Status.REUSED);
         } finally {
             pool.shutdownNow();
         }
