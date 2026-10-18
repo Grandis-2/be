@@ -308,18 +308,20 @@ public class ProductListingQueryRepository {
     }
 
     /**
-     * 증정품 후보 옵션 — 판매 중이고 재고 행이 있는 옵션. 상품 쪽 조건(일반 판매 · 판매 중)은 {@link #GIFT_PRODUCTS} 가 건다.
-     * 판매 준비({@link #READY} — stock_ready_at)는 보지 않는다: 재고 행은 있는데 판매 준비 이벤트가 아직 닿지 않은 상품은 목록에는 없고 후보에는
-     * 나온다(관리자가 증정품을 고르는 화면이라 재고 행이 기준이다).
+     * 증정품 후보 옵션 — 판매 중이고 재고 행이 있는 옵션. 상품 쪽 조건(일반 판매 · 판매 중 · 판매 준비)은 {@link #GIFT_PRODUCTS} 가 건다.
      */
     private static final String GIFT_OPTION = """
             SELECT /*+ NO_SEMIJOIN() JOIN_ORDER(go, gi) */ 1 FROM product_options go %s JOIN option_inventories gi %s ON gi.option_id = go.id
              WHERE go.product_id = p.id AND go.status = 'ACTIVE'""".formatted(BY_PRODUCT, INVENTORY_BY_OPTION);
 
-    /** 증정품 후보 상품 — 일반 판매 · 판매 중이고 후보 옵션이 하나 이상. 공개 여부는 보지 않는다. 삭제한 상품은 뺀다. */
+    /**
+     * 증정품 후보 상품 — 일반 판매 · 판매 중 · 판매 준비(stock_ready_at)이고 후보 옵션이 하나 이상. 공개 여부는 보지 않는다. 삭제한 상품은 뺀다.
+     * 판매 준비를 같이 보는 것은 회차 만들기(order)가 내부 옵션 조회의 registrationCompleted(= 이 판매 준비)로 막기 때문이다 — 빼면 재고 행은 있는데
+     * 판매 준비 이벤트가 아직 닿지 않은 상품이 후보에 뜨고, 골라서 만들면 order 가 400 이다.
+     */
     private static final String GIFT_PRODUCTS = """
               FROM products p
-             WHERE p.sale_mode = 'IN_STOCK' AND p.status = 'ACTIVE' AND p.deleted_at IS NULL
+             WHERE p.sale_mode = 'IN_STOCK' AND p.status = 'ACTIVE' AND p.deleted_at IS NULL AND p.stock_ready_at IS NOT NULL
                AND EXISTS (%s)
             """.formatted(GIFT_OPTION);
 

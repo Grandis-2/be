@@ -47,7 +47,7 @@ class AdminGiftCandidateApiTest {
     }
 
     @Test
-    @DisplayName("일반 판매 · 판매 중이고 재고를 등록한 판매 중 옵션이 있는 상품만, 그 옵션과 확보할 수 있는 수량을 — 비공개 상품도 나온다")
+    @DisplayName("일반 판매 · 판매 중 · 판매 준비이고 재고를 등록한 판매 중 옵션이 있는 상품만, 그 옵션과 확보할 수 있는 수량을 — 비공개 상품도 나온다. 재고 행만 있고 판매 준비 전이면 빠진다")
     void listsGiftableProductsWithTheirOptions() throws Exception {
         UUID shown = product("IN_STOCK", "ACTIVE", "증정 상품");
         UUID giftable = fixtures.option(shown, "ACTIVE");
@@ -66,6 +66,8 @@ class AdminGiftCandidateApiTest {
         fixtures.inventory(fixtures.option(pausedProduct, "ACTIVE"), 5, 0, 0);
         UUID noStock = product("IN_STOCK", "ACTIVE", "재고 미등록");
         fixtures.option(noStock, "ACTIVE");
+        UUID notReady = product("IN_STOCK", "ACTIVE", "판매 준비 전");               // 재고 행은 있지만 판매 준비 이벤트 전 — 회차를 못 만드니 후보 아님
+        fixtures.inventoryOnly(fixtures.option(notReady, "ACTIVE"), 5, 0, 0);
         UUID onlyPausedStocked = product("IN_STOCK", "ACTIVE", "재고 옵션이 판매 중지");
         fixtures.inventory(fixtures.option(onlyPausedStocked, "PAUSED"), 5, 0, 0);
         fixtures.option(onlyPausedStocked, "ACTIVE");
