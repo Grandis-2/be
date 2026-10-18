@@ -10,7 +10,8 @@ import java.util.UUID;
  * 공개 전 · 등록 미완료 상품도 그대로 온다 — 숨길지는 목적별로 여기서 가른다.
  *
  * @param visible               회원에게 공개했는가. 칸이 없으면(이 칸을 모르는 catalog) null — 숨기지 않는다
- * @param registrationCompleted 등록의 모든 단계가 끝났는가. 칸이 없으면 null — 숨기지 않는다
+ * @param registrationCompleted 등록의 모든 단계가 끝났는가. 판정에 쓰지 않는다 — 사전예약의 준비는 접수가 잠그는 회차 행으로 본다.
+ *                              catalog 가 이 값을 preorder 에 물어 만들면 접수가 preorder → catalog → preorder 로 돈다
  */
 public record ProductCatalog(
         UUID productId,
@@ -32,12 +33,11 @@ public record ProductCatalog(
     }
 
     /**
-     * 지금 접수를 받는 사전예약 상품인가 — 판매 중이고 공개됐고 등록이 끝났다. 옵션 판매 여부는 {@link OptionSnapshot#isOnSale} 이 본다.
-     * 공개 전 상품은 존재를 알리지 않도록 호출하는 쪽이 "상품 없음" 으로 답한다.
+     * 지금 접수를 받는 사전예약 상품인가 — 판매 중이고 공개됐다. 옵션 판매 여부는 {@link OptionSnapshot#isOnSale} 이, 등록이 끝났는지(회차 행)는
+     * 접수 트랜잭션이 본다. 공개 전 상품은 존재를 알리지 않도록 호출하는 쪽이 "상품 없음" 으로 답한다.
      */
     public boolean isOnPreorderSale() {
-        return isPreorderProduct() && OptionSnapshot.ACTIVE.equals(status)
-                && isVisible() && !Boolean.FALSE.equals(registrationCompleted);
+        return isPreorderProduct() && OptionSnapshot.ACTIVE.equals(status) && isVisible();
     }
 
     /** 회원에게 공개했는가. 칸이 없으면(이 칸을 모르는 catalog) 숨기지 않는다. */

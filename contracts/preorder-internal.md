@@ -50,9 +50,9 @@
 | `saleMode` | `PREORDER` \| `IN_STOCK` | `products.sale_mode` |
 | `status` | `ACTIVE` \| `PAUSED` | `products.status`. PAUSED 는 판매 중지 — 소비자는 신규 접수 · 주문을 막는다. 사전예약 상품은 오픈 3분 전부터 이 칸이 바뀌지 않는다(2026-10-04 결정). 오픈 전에 PAUSED 로 둔 채 오픈을 넘긴 상품도 판매 중지일 뿐 회차 취소가 아니다 — 회차 취소는 이 칸으로 알리지 않고 `PREORDER_CAMPAIGN_CANCELED` 이벤트로 따로 알린다(contracts/catalog-events.md — 오픈 뒤 관리자 판매 중지 · 사유) |
 | `visible` | boolean | 공개 여부 — 관리자가 등록 때 고른 값이 그대로 들어간다(2026-10-02 이벤트 방식 전환부터). 준비 전 상품도 true 일 수 있으므로 소비자는 visible 로 준비를 추론하지 말고 **두 칸을 모두 본다** |
-| `registrationCompleted` | boolean | 판매 방식별 준비 — 등록 이벤트를 받은 서비스가 행을 만들었는가. 사전예약은 `preorder_campaigns` 에 그 상품 행이 있다, 일반은 `option_inventories` 에 그 상품 옵션의 행이 있다(contracts/catalog-events.md) |
+| `registrationCompleted` | boolean | 판매 방식별 준비 — 등록 이벤트를 받은 서비스가 행을 만들었는가. 일반은 `option_inventories` 에 그 상품 옵션의 행이 있다(contracts/catalog-events.md). **preorder 는 이 칸을 판정에 쓰지 않는다**(NV-643) — 사전예약의 준비는 접수가 잠그는 회차 행으로 본다. 그래서 catalog 는 사전예약 상품의 이 값을 preorder API(2절)로 계산하지 않는다 — 이 응답은 접수가 동기로 부르므로 그 안에서 preorder 를 부르면 서로를 기다린다 |
 
-`visible` · `status` · `registrationCompleted` 는 **한 문장**으로 읽어 같은 스냅샷에서 나온다(`ProductListingQueryRepository.findExposure`). 둘은 서로 다른 트랜잭션(관리자 공개 전환 · preorder/order 의 등록 이벤트 처리)이 바꾸지만, READ COMMITTED 에서 따로 읽으면 두 문장 사이에 둘 다 커밋돼 한순간도 없던 조합(공개 · 준비)이 나온다. 접수가 이 셋으로 판정하므로 한 문장이어야 한다.
+`visible` · `status` · `registrationCompleted` 는 **한 문장**으로 읽어 같은 스냅샷에서 나온다(`ProductListingQueryRepository.findExposure`). 둘은 서로 다른 트랜잭션(관리자 공개 전환 · preorder/order 의 등록 이벤트 처리)이 바꾸지만, READ COMMITTED 에서 따로 읽으면 두 문장 사이에 둘 다 커밋돼 한순간도 없던 조합(공개 · 준비)이 나온다. 이 응답을 판정에 쓰는 쪽이 있으므로 한 문장이어야 한다.
 | `options[].optionId` | string(UUID) | `product_options.id` |
 | `options[].sku` | string | 모델 안 유일 |
 | `options[].title` | string | 옵션 표시명. 스냅샷 원본 |
@@ -77,11 +77,11 @@ preorder `CatalogReader` 는 401 을 사용자 토큰 문제(401)로, 404 외 �
 | 목적 | 조건 |
 | --- | --- |
 | 회차·차수 수정 | `saleMode = PREORDER`. **`status`·`visible`·`registrationCompleted` 는 보지 않는다** — 회차 행이 아직 없는 상품(등록 이벤트를 DLQ 에서 고치는 경우)도 설정할 수 있어야 한다. 등록 때의 회차 · 차수는 이 API 가 아니라 `PREORDER_PRODUCT_REGISTERED` 이벤트로 만든다 |
-| 사용자 접수 | `saleMode = PREORDER AND status = ACTIVE AND visible AND registrationCompleted`, 그리고 선택한 `optionId` 가 이 상품의 `options` 에 있고 `options[].status = ACTIVE` |
+| 사용자 접수 | `saleMode = PREORDER AND status = ACTIVE AND visible`, 그리고 선택한 `optionId` 가 이 상품의 `options` 에 있고 `options[].status = ACTIVE`. 등록이 끝났는지는 `registrationCompleted` 가 아니라 접수 트랜잭션이 잠근 회차 행으로 본다 — 없으면 404 `PRODUCT_NOT_FOUND`(공개 전처럼 숨긴다) |
 
-preorder 는 dev(NV-281)에서 판정을 갈랐다 — 회차 설정은 `ProductCatalog.isPreorderProduct()`(`saleMode` 만), 접수는 `isOnPreorderSale()`(네 조건). preorder 는 두 칸을 `Boolean` 래퍼로 받아 칸이 빠지거나 null 이면 숨기지 않는다. **catalog 는 두 칸을 primitive `boolean` 으로 늘 싣는다** — null 이 될 수 없고, `false` 도 빠지지 않고 실리는 것을 `InternalProductApiTest` 가 고정한다. 그래서 preorder 의 래퍼가 접수 판정을 비우지 않는다.
+preorder 는 dev(NV-281)에서 판정을 갈랐다 — 회차 설정은 `ProductCatalog.isPreorderProduct()`(`saleMode` 만), 접수는 `isOnPreorderSale()`(세 조건, NV-643 에서 `registrationCompleted` 를 뺐다). preorder 는 두 칸을 `Boolean` 래퍼로 받아 칸이 빠지거나 null 이면 숨기지 않는다. **catalog 는 두 칸을 primitive `boolean` 으로 늘 싣는다** — null 이 될 수 없고, `false` 도 빠지지 않고 실리는 것을 `InternalProductApiTest` 가 고정한다. 그래서 preorder 의 래퍼가 접수 판정을 비우지 않는다.
 
-**캐시.** 현재 코드(dev, NV-281 뒤)의 사실: `CatalogReader` 는 값의 나이와 상관없이 가진 값을 그 조회에 바로 돌려주고, 1분이 지났으면 그 조회 요청의 보안 맥락(토큰)으로 뒤에서 한 번 다시 받기를 시작할 뿐이다. `expireAfterWrite` 30분 · 최대 1,000건이다. 값이 바뀌면 catalog 가 이벤트로 알린다 — 사전예약 상품의 관리자 수정은 `PREORDER_PRODUCT_CHANGED`, 오픈 뒤 판매 중지는 `PREORDER_CAMPAIGN_CANCELED`(`contracts/catalog-events.md`). preorder 는 받은 인스턴스가 자기 캐시를 비우고 Redis 채널로 다른 인스턴스에 알린다(`CatalogCacheInvalidation`). 그래서 수정이 접수에 닿기까지는 아웃박스 릴레이 · SQS 전달 시간만큼 늦다. 비운 뒤 첫 조회는 catalog 를 그 요청 안에서 동기로 부르고, 실패는 캐시하지 않는다 — 그 순간 catalog 가 응답하지 않으면 그 상품의 접수는 옛 값 대신 503 이다. Redis 로 알리기가 끝내 실패하거나, Redis 채널(pub/sub)은 구독이 끊긴 동안 보낸 알림을 다시 주지 않으므로 그 사이 알림을 놓친 인스턴스는 위의 다시 받기로만 따라온다 — **그 경우 응답 값이 묵을 수 있는 상한은 30분**이다(조회가 뜸하면 다시 받기가 성공해도 그 첫 조회는 옛 값으로 판정된다). TTL 로 차단 지연을 허용하는 정책은 미확정이다. 등록 직후에는 회차 행이 아직 없어 내부 조회가 `registrationCompleted=false` 를 돌려주고 preorder 는 이 값을 캐시한다. 회차 행은 preorder 가 등록 이벤트로 직접 만드는데 그때 캐시를 비우지 않으므로(`CampaignRegistrar`), 그 사이 누가 조회했으면 등록이 끝난 뒤에도 "미완료" 로 남을 수 있다 — 상한은 위와 같다. 캐시 히트에서도 요청 인증·폐기 검사는 수행한다.
+**캐시.** 현재 코드(dev, NV-281 뒤)의 사실: `CatalogReader` 는 값의 나이와 상관없이 가진 값을 그 조회에 바로 돌려주고, 1분이 지났으면 그 조회 요청의 보안 맥락(토큰)으로 뒤에서 한 번 다시 받기를 시작할 뿐이다. `expireAfterWrite` 30분 · 최대 1,000건이다. 값이 바뀌면 catalog 가 이벤트로 알린다 — 사전예약 상품의 관리자 수정은 `PREORDER_PRODUCT_CHANGED`, 오픈 뒤 판매 중지는 `PREORDER_CAMPAIGN_CANCELED`(`contracts/catalog-events.md`). preorder 는 받은 인스턴스가 자기 캐시를 비우고 Redis 채널로 다른 인스턴스에 알린다(`CatalogCacheInvalidation`). 그래서 수정이 접수에 닿기까지는 아웃박스 릴레이 · SQS 전달 시간만큼 늦다. 비운 뒤 첫 조회는 catalog 를 그 요청 안에서 동기로 부르고, 실패는 캐시하지 않는다 — 그 순간 catalog 가 응답하지 않으면 그 상품의 접수는 옛 값 대신 503 이다. Redis 로 알리기가 끝내 실패하거나, Redis 채널(pub/sub)은 구독이 끊긴 동안 보낸 알림을 다시 주지 않으므로 그 사이 알림을 놓친 인스턴스는 위의 다시 받기로만 따라온다 — **그 경우 응답 값이 묵을 수 있는 상한은 30분**이다(조회가 뜸하면 다시 받기가 성공해도 그 첫 조회는 옛 값으로 판정된다). TTL 로 차단 지연을 허용하는 정책은 미확정이다. 등록 직후 캐시된 `registrationCompleted=false` 는 접수를 막지 않는다 — preorder 는 이 칸을 판정에 쓰지 않고 회차 행으로 본다(NV-643). 캐시 히트에서도 요청 인증·폐기 검사는 수행한다.
 
 **하위 호환과 배포 순서.** 지금 접수 경로가 깨지지 않게 이 순서로 간다.
 
@@ -152,4 +152,4 @@ catalog 가 `preorder_campaigns` 를 직접 읽던 것(목록 · 검색 · 랭�
 
 1. 인증 — 호출자 JWT 전달(위 "인증"). catalog 는 `/internal/**` 을 USER · ADMIN 만 허용하고 **common:security 필터가 토큰을 검증한다**(NV-139). preorder 쪽은 `CatalogClient` 가 보안 맥락(SecurityContext)에 있는 사용자 토큰을 `Authorization` 헤더로 실어 보낸다(NV-277). 보안 맥락이 없으면(스케줄러 · 큐 소비) 헤더 없이 가므로 401 이다.
 2. `/internal/**` 공개 라우팅 차단 — 인프라에서 병행하되 운영 활성화 전 검증한다.
-3. catalog 쪽: 응답 칸 · 404 · 빈 옵션 목록 · 역할 규칙 · 인증 필터까지 구현됐다. 판정 분리 · 다중 인스턴스 캐시 비우기는 preorder 에 들어갔다(NV-281). preorder 쪽 남은 일: `CampaignRegistrar` 가 회차 행을 만든 뒤 상품 캐시 비우기(`evictEverywhere`) · **`PRODUCT_NOT_FOUND` 일 때만 빈 결과로 바꾸고 그 밖의 404 는 연동 오류로 분류**.
+3. catalog 쪽: 응답 칸 · 404 · 빈 옵션 목록 · 역할 규칙 · 인증 필터까지 구현됐다. 판정 분리 · 다중 인스턴스 캐시 비우기는 preorder 에 들어갔다(NV-281). preorder 쪽 남은 일: **`PRODUCT_NOT_FOUND` 일 때만 빈 결과로 바꾸고 그 밖의 404 는 연동 오류로 분류**. 등록 직후 "미완료" 캐시는 NV-643 에서 판정이 회차 행으로 바뀌어 비울 필요가 없어졌다.
