@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog.api;
 
+import com.grandis.nova.catalog.cache.CatalogLocalCaches;
 import com.grandis.nova.catalog.listing.ProductListItem;
 import com.grandis.nova.catalog.ranking.ProductRankingService;
 import com.grandis.nova.catalog.ranking.ProductViewer;
@@ -44,12 +45,13 @@ public class ProductRankingController {
     @SecurityRequirements
     @GetMapping("/ranking")
     public ResponseEntity<ApiResponse<Items<ProductListItem>>> ranking() {
-        return PublicCache.ok(rankings.ranking().map(Items::new), ProductRankingService.TTL, PublicCache.PRODUCT, clock);
+        return PublicCache.ok(rankings.ranking().map(Items::new), CatalogLocalCaches.PRODUCT_RANKING_TTL, PublicCache.PRODUCT, clock);
     }
 
     @Operation(summary = "상품 조회 신호(로그인 없이)", description = "상세 화면이 뜰 때 한 번 보낸다 — 204. 같은 사람 · 같은 상품은 하루(KST) 한 번만 센다. "
-            + "로그인했으면 회원으로 세고 본문은 없어도 된다. 로그인하지 않았으면 본문 anonymousId(브라우저가 만들어 두고 계속 쓰는 UUID)가 필요하다 — 없으면 400. "
-            + "관리자 토큰이면 세지 않는다. 공개가 아니거나 없는 상품은 404")
+            + "본문 anonymousId(브라우저가 만들어 두고 계속 쓰는 UUID)는 로그인 여부와 상관없이 늘 같이 보낸다 — 유효한 회원 토큰이면 회원으로 세고 이 값은 보지 않지만, "
+            + "만료 · 폐기된 토큰은 공개 경로에서 비회원으로 처리돼 이 값이 없으면 400 이다. 관리자 토큰이면 상품도 확인하지 않고 204(세지 않음). "
+            + "공개가 아니거나 없는 상품은 404. 세는 중 DB · Redis 가 실패해도 204(신호를 놓친다)")
     @SecurityRequirements
     @PostMapping("/{productId}/views")
     @ResponseStatus(HttpStatus.NO_CONTENT)

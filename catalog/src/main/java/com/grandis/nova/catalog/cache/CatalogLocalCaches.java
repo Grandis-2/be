@@ -8,10 +8,11 @@ import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
 
 /**
- * 인스턴스 메모리에 두는 공개 조회 캐시 — 상품 목록 · 카테고리 트리. 나머지(상세 본문 · 리뷰 · 홍보)는 Redis({@link CatalogReadCache})다.
+ * 인스턴스 메모리에 두는 공개 조회 캐시 — 상품 목록 · 조회수 랭킹 · 카테고리 트리. 나머지(상세 본문 · 리뷰 · 홍보)는 Redis({@link CatalogReadCache})다.
  * 고른 기준(2026-10-16 실측 — Testcontainers MySQL 8.4 · Redis 8, p50): 목록 20개 한 쪽은 30.6KB · DB 4.2ms · Redis 적중 1.05ms · 메모리 적중 0.002ms,
  * 카테고리 트리는 4.7KB · DB 1.5ms · Redis 적중 0.40ms. 둘 다 다른 인스턴스가 늦어도 되는 조회다 — 목록은 TTL(5초)이 원래 지연이고, 카테고리는
  * 고치는 API 가 없다. 상세 본문 · 리뷰 · 홍보는 TTL 이 길거나 쓴 사람이 바로 봐야 해 모든 인스턴스를 같이 비우는 Redis 세대가 필요하다.
@@ -24,17 +25,24 @@ public class CatalogLocalCaches {
 
     /** 목록 캐시의 인스턴스당 상한(JSON 바이트). 한 쪽이 약 30KB(20개 · 색상칩) — 약 500쪽. */
     static final long PRODUCT_LIST_MAX_BYTES = 16L * 1024 * 1024;
+    /** 조회수 랭킹은 키 하나 · 카드 10개(약 15KB). */
+    static final long PRODUCT_RANKING_MAX_BYTES = 1024 * 1024;
+    /** 조회수 랭킹을 메모리에 두는 시간 — 메인 화면마다 Redis 합치기 · DB 카드 조회를 하지 않게. 상품이 바뀌면 이 인스턴스의 것은 바로 버린다. */
+    public static final Duration PRODUCT_RANKING_TTL = Duration.ofSeconds(30);
     /** 카테고리 트리는 키 하나(약 5KB). */
     static final long CATEGORY_TREE_MAX_BYTES = 1024 * 1024;
 
     private final LocalReadCache<CatalogReadCache.ListKey, OffsetPage<ProductListItem>> productList;
     private final LocalReadCache<String, List<CategoryNode>> categoryTree;
+    private final LocalReadCache<String, List<ProductListItem>> productRanking;
 
     /** nova.read-cache.enabled=false 면 끈다(늘 DB) — Redis 캐시와 같은 설정이다. */
     public CatalogLocalCaches(JsonMapper json, Clock clock, @Value("${nova.read-cache.enabled:true}") boolean enabled) {
         this.productList = new LocalReadCache<>("catalog.product-list", CatalogReadCache.PRODUCT_TTL, PRODUCT_LIST_MAX_BYTES,
                 value -> json.writeValueAsBytes(value).length, clock, enabled);
         this.categoryTree = new LocalReadCache<>("catalog.category-tree", CatalogReadCache.CATEGORY_TTL, CATEGORY_TREE_MAX_BYTES,
+                value -> json.writeValueAsBytes(value).length, clock, enabled);
+        this.productRanking = new LocalReadCache<>("catalog.product-ranking", PRODUCT_RANKING_TTL, PRODUCT_RANKING_MAX_BYTES,
                 value -> json.writeValueAsBytes(value).length, clock, enabled);
     }
 
@@ -44,5 +52,9 @@ public class CatalogLocalCaches {
 
     public LocalReadCache<String, List<CategoryNode>> categoryTree() {
         return categoryTree;
+    }
+
+    public LocalReadCache<String, List<ProductListItem>> productRanking() {
+        return productRanking;
     }
 }

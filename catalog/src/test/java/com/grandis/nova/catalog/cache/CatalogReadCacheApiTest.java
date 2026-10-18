@@ -57,10 +57,12 @@ class CatalogReadCacheApiTest {
         fixtures = new ShopFixtures(jdbcTemplate);
         categoryId = fixtures.category();
         Set<String> keys = redis.keys("catalog:cache:*");
+        keys.addAll(redis.keys("catalog:views:*"));
         if (!keys.isEmpty()) {
             redis.delete(keys);
         }
         local.productList().invalidateAll();
+        local.productRanking().invalidateAll();
         local.categoryTree().invalidateAll();
     }
 
@@ -294,6 +296,28 @@ class CatalogReadCacheApiTest {
         mockMvc.perform(get("/api/v1/products/{id}", hidden)).andExpect(status().isOk());
         admin(patch(ADMIN + "/{id}/visibility", hidden), "{ \"visible\": false }").andExpect(status().isOk());
         mockMvc.perform(get("/api/v1/products/{id}", hidden)).andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("조회수 랭킹은 메모리에 둔다 — DB 를 직접 고치면 옛 카드, 관리자가 상품을 숨기면(JPA) 이 인스턴스는 바로 빠진다")
+    void productRankingIsDroppedWhenProductChanges() throws Exception {
+        UUID kept = registerInStock("랭킹 유지");
+        UUID hidden = registerInStock("랭킹 숨김");
+        for (UUID product : new UUID[]{kept, hidden}) {
+            mockMvc.perform(post("/api/v1/products/{id}/views", product).contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"anonymousId\":\"%s\"}".formatted(UUID.randomUUID()))).andExpect(status().isNoContent());
+        }
+        assertThat(rankingTitles()).containsExactlyInAnyOrder("랭킹 유지", "랭킹 숨김");
+        jdbcTemplate.update("UPDATE products SET title = '직접 고침' WHERE id = ?", (Object) UuidBinary.toBytes(kept));
+
+        assertThat(rankingTitles()).as("메모리의 옛 카드 — 캐시가 켜져 있다").containsExactlyInAnyOrder("랭킹 유지", "랭킹 숨김");
+        admin(patch(ADMIN + "/{id}/visibility", hidden), "{ \"visible\": false }").andExpect(status().isOk());
+        assertThat(rankingTitles()).as("숨긴 상품은 바로 빠지고, 다시 읽어 직접 고친 값도 보인다").containsExactly("직접 고침");
+    }
+
+    private java.util.List<String> rankingTitles() throws Exception {
+        return data(mockMvc.perform(get("/api/v1/products/ranking")).andExpect(status().isOk())).get("items").findValues("title").stream()
+                .map(JsonNode::asString).toList();
     }
 
     @Test
