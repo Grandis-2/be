@@ -3,18 +3,12 @@ package com.grandis.nova.catalog.api;
 import com.grandis.nova.catalog.cache.CatalogLocalCaches;
 import com.grandis.nova.catalog.listing.ProductListItem;
 import com.grandis.nova.catalog.ranking.ProductRankingService;
-import com.grandis.nova.catalog.ranking.ProductViewer;
-import com.grandis.nova.catalog.web.ValidationFailures;
-import com.grandis.nova.common.security.NovaAuthentication;
-import com.grandis.nova.common.security.Role;
 import com.grandis.nova.common.web.ApiResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -56,17 +50,7 @@ public class ProductRankingController {
     @PostMapping("/{productId}/views")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void view(@PathVariable UUID productId, @RequestBody(required = false) ViewRequest request) {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication instanceof NovaAuthentication nova) {
-            if (nova.getPrincipal().role() == Role.USER) {
-                rankings.recordView(productId, ProductViewer.customer(nova.getPrincipal().customerId()));
-            }
-            return;
-        }
-        if (request == null || request.anonymousId() == null) {
-            throw ValidationFailures.of("anonymousId", "로그인하지 않았으면 익명 id 가 필요합니다.");
-        }
-        rankings.recordView(productId, ProductViewer.anonymous(request.anonymousId()));
+        Visitors.resolve(request == null ? null : request.anonymousId()).ifPresent(viewer -> rankings.recordView(productId, viewer));
     }
 
     /** @param anonymousId 로그인하지 않은 브라우저의 익명 id(UUID). 로그인했으면 보지 않는다 */
