@@ -1,5 +1,9 @@
 package com.grandis.nova.catalog.config;
 
+import com.grandis.nova.catalog.web.ClientIps;
+import com.grandis.nova.catalog.web.ClientIpsConfiguration;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.EnvironmentPostProcessor;
@@ -33,6 +37,18 @@ class CatalogDefaultsTest {
         overridden.getPropertySources().addFirst(new MapPropertySource("deployed", Map.of("management.server.port", "9999")));
         new CatalogDefaults().postProcessEnvironment(overridden, new SpringApplication());
         assertThat(overridden.getProperty("management.server.port")).isEqualTo("9999");
+    }
+
+    @Test
+    @DisplayName("ECS 에서 운영 설정에 forward-headers 전략이 없어도 기본값(none)으로 뜬다 — 배포 설정이 켜면(native) 가드가 막는다")
+    void forwardHeadersOffByDefaultSoTheIpGuardPassesOnEcs() {
+        ApplicationContextRunner runner = new ApplicationContextRunner()
+                .withInitializer(context -> new CatalogDefaults().postProcessEnvironment(context.getEnvironment(), new SpringApplication()))
+                .withUserConfiguration(ClientIpsConfiguration.class);
+
+        runner.withPropertyValues("AWS_EXECUTION_ENV=AWS_ECS_FARGATE").run(ctx -> assertThat(ctx).hasNotFailed().hasSingleBean(ClientIps.class));
+        runner.withPropertyValues("AWS_EXECUTION_ENV=AWS_ECS_FARGATE", "server.forward-headers-strategy=native")
+                .run(ctx -> assertThat(ctx).hasFailed());
     }
 
     @Test

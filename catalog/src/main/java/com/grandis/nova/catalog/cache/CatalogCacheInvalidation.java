@@ -12,7 +12,8 @@ import org.springframework.stereotype.Component;
  * ({@link ReadCache#bumpAfterCommit} · {@link LocalReadCache#invalidateAfterCommit}).
  * 서비스 메서드마다 부르지 않고 엔티티에 건다 — 쓰기 경로가 늘어도 빠지지 않게. catalog 의 상품 쓰기는 전부 JPA 를 거친다(JDBC 쓰기 없음).
  * 리뷰 노출은 상품 공개 여부를 따르므로 상품 · 옵션이 바뀌면 리뷰 세대도 올린다. 상품 목록 · 랭킹(인스턴스 메모리)은 커밋 뒤 이 인스턴스의 것을
- * 버린다 — 다른 인스턴스는 목록 TTL(5초) · 랭킹 TTL(30초) 안에 새 값이다.
+ * 버린다 — 다른 인스턴스는 목록 TTL(5초) · 랭킹 TTL(30초) 안에 새 값이다. 엔티티 변경이 아닌 것(시각이 지나 사전예약이 마감 · 접수 시작, 다른 서비스의
+ * 재고 · 회차 표 변경)은 TTL 로만 따라간다.
  */
 @Component
 public class CatalogCacheInvalidation {

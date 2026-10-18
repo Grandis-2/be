@@ -58,6 +58,7 @@ class CatalogReadCacheApiTest {
         categoryId = fixtures.category();
         Set<String> keys = redis.keys("catalog:cache:*");
         keys.addAll(redis.keys("catalog:views:*"));
+        keys.addAll(redis.keys("catalog:signals:*"));
         if (!keys.isEmpty()) {
             redis.delete(keys);
         }

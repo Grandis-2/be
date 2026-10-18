@@ -49,6 +49,7 @@ class ProductRankingApiTest {
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired StringRedisTemplate redis;
     @Autowired ProductViewCounter counter;
+    @Autowired io.micrometer.core.instrument.MeterRegistry meters;
 
     ShopFixtures fixtures;
 
@@ -56,6 +57,7 @@ class ProductRankingApiTest {
     void setUp() {
         fixtures = new ShopFixtures(jdbcTemplate);
         Set<String> keys = redis.keys("catalog:views:*");
+        keys.addAll(redis.keys("catalog:signals:*"));
         if (keys != null && !keys.isEmpty()) {
             redis.delete(keys);
         }
@@ -190,7 +192,7 @@ class ProductRankingApiTest {
     @DisplayName("날짜는 KST 로 가른다 — UTC 16:00(KST 다음 날 01:00)의 조회는 KST 날짜 표에, 같은 사람이 KST 하루 안에 다시 보면 안 센다")
     void daysAreKoreanDates() {
         UUID product = UUID.randomUUID();
-        ProductViewer viewer = ProductViewer.anonymous(UUID.randomUUID());
+        ProductViewer viewer = ProductViewer.anonymous(UUID.randomUUID(), "198.51.100.1");
         Instant kstNextDay = Instant.parse("2026-10-18T16:00:00Z");
 
         assertThat(counter.record(product, viewer, kstNextDay)).isTrue();
@@ -218,6 +220,47 @@ class ProductRankingApiTest {
     }
 
     @Test
+    @DisplayName("비회원은 IP 하나가 하루에 익명 id 20개까지 — 21번째 새 id 는 세지 않고, 받아 둔 id · 다른 IP · 회원은 센다. IP 는 X-Forwarded-For 오른쪽 두 번째")
+    void anonymousIdsPerIpAreCapped() throws Exception {
+        UUID product = listed();
+        UUID other = listed();
+        List<UUID> ids = new ArrayList<>();
+        for (int i = 0; i < 21; i++) {
+            UUID id = UUID.randomUUID();
+            ids.add(id);
+            viewFrom(product, id, "10.9.9.9, 203.0.113.7, 130.176.0.1").andExpect(status().isNoContent());
+        }
+        assertThat(score(product, 0)).as("21번째 새 id 는 세지 않는다").isEqualTo(20);
+
+        viewFrom(other, ids.getFirst(), "1.1.1.1, 203.0.113.7, 130.176.0.2").andExpect(status().isNoContent());
+        viewFrom(other, ids.getLast(), "203.0.113.7, 130.176.0.1").andExpect(status().isNoContent());
+        viewFrom(product, ids.getLast(), "203.0.113.8, 130.176.0.1").andExpect(status().isNoContent());
+        mockMvc.perform(post("/api/v1/products/{id}/views", product).with(AccessTokens.customer(UUID.randomUUID()))
+                .header("X-Forwarded-For", "203.0.113.7, 130.176.0.1")).andExpect(status().isNoContent());
+
+        assertThat(score(other, 0)).as("받아 둔 id 는 다른 상품에도 센다(맨 왼쪽 위조 칸은 보지 않는다), 넘친 id 는 여전히 안 센다").isEqualTo(1);
+        assertThat(score(product, 0)).as("다른 IP 에서 온 넘친 id 와 회원은 센다").isEqualTo(22);
+    }
+
+    @Test
+    @DisplayName("IPv6 는 /64 하나가 한 IP — 같은 /64 안에서 주소를 바꿔도 새 익명 id 는 20개까지, 넘친 신호는 지표로 센다")
+    void ipv6AddressesInOne64ShareTheCap() throws Exception {
+        UUID product = listed();
+        double before = rejected();
+        for (int i = 1; i <= 21; i++) {
+            viewFrom(product, UUID.randomUUID(), "2001:db8:0:1::%x, 130.176.0.1".formatted(i)).andExpect(status().isNoContent());
+        }
+
+        assertThat(score(product, 0)).isEqualTo(20);
+        assertThat(rejected() - before).isEqualTo(1);
+    }
+
+    private double rejected() {
+        io.micrometer.core.instrument.Counter counter = meters.find("catalog.signals.anonymous.rejected").counter();
+        return counter == null ? 0 : counter.count();
+    }
+
+    @Test
     @DisplayName("조회가 없으면 빈 랭킹")
     void emptyRanking() throws Exception {
         assertThat(ranking()).isEmpty();
@@ -236,6 +279,11 @@ class ProductRankingApiTest {
     private ResultActions view(UUID product, UUID anonymousId) throws Exception {
         return mockMvc.perform(post("/api/v1/products/{id}/views", product).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"anonymousId\":\"%s\"}".formatted(anonymousId)));
+    }
+
+    private ResultActions viewFrom(UUID product, UUID anonymousId, String forwardedFor) throws Exception {
+        return mockMvc.perform(post("/api/v1/products/{id}/views", product).header("X-Forwarded-For", forwardedFor)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"anonymousId\":\"%s\"}".formatted(anonymousId)));
     }
 
     private JsonNode ranking() throws Exception {
