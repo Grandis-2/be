@@ -20,6 +20,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 
 /**
@@ -56,6 +57,9 @@ public class TokenService {
     private static final UUID NO_TOKEN_ID = new UUID(0L, 0L);
 
     private final JwtTokenProvider provider;
+    /** 재사용 세션의 체인 폐기를 잠금 실패에서 다시 하는 최대 횟수. */
+    static final int REVOKE_ATTEMPTS = 3;
+
     private final JwtProperties properties;
     private final RefreshTokenStore refreshTokens;
     private final AdminRefreshTokenStore adminRefreshTokens;
@@ -134,8 +138,7 @@ public class TokenService {
         String newRefresh = RefreshTokens.newToken();
         RefreshTokenStore.Rotation rotation = refreshTokens.rotate(presented, newRefresh);
         if (rotation.status() == RefreshTokenStore.Rotation.Status.REUSED) {
-            // 저장소가 체인을 이미 폐기하고 커밋했다. 남은 것은 액세스 토큰이고 그건 Redis 표식이 끊는다.
-            revokeSessionBestEffort(rotation.sessionId(), "refresh reuse");
+            cutReusedSession(rotation.sessionId());
             log.warn("refresh reuse detected, session revoked sid={}", shortSid(rotation.sessionId()));
             throw new InvalidTokenException("refresh reuse sid=" + shortSid(rotation.sessionId()));
         }
@@ -176,7 +179,7 @@ public class TokenService {
         String newRefresh = provider.create(claims.subject(), claims.role(), claims.sessionId(), TokenType.REFRESH, claims.expiresAt());
         UUID newTokenId = provider.parse(newRefresh).tokenId();
         if (!adminRefreshTokens.rotate(claims.sessionId(), claims.tokenId(), newTokenId, remaining)) {
-            revokeSessionBestEffort(claims.sessionId(), "refresh reuse");
+            cutReusedSession(claims.sessionId());
             log.warn("refresh reuse detected, session revoked sid={}", shortSid(claims.sessionId()));
             throw new InvalidTokenException("refresh reuse sid=" + shortSid(claims.sessionId()));
         }
@@ -226,6 +229,45 @@ public class TokenService {
         } catch (DataAccessException e) {
             log.warn("auth.login.replaced_mark_failed — replaced session's access token lives until expiry sid={} cause={}",
                     shortSid(sessionId), e.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * 재사용으로 판정된 세션을 끊는다. 저장소는 판정만 하고 체인을 폐기하지 않는다(교착을 피해 따로 커밋 — DbRefreshTokenStore 클래스 주석).
+     * <ol>
+     *   <li>표식을 <b>리프레시 수명</b>만큼 심는다(로그아웃은 액세스 수명). 재발급은 회전 전에 이 표식을 보므로, 아래 체인 폐기가 끝내 실패해도 그
+     *       체인은 수명 내내 재발급되지 않는다.</li>
+     *   <li>체인 폐기 — 잠금 실패(교착 · 대기 초과)면 {@value #REVOKE_ATTEMPTS} 번까지 다시 한다. 다른 폐기(로그아웃 · 다른 재사용 탐지)와 같은
+     *       체인을 같은 순서로 잠가 교착은 드물지만, 정리 · 로그인과는 맞물릴 수 있다.</li>
+     *   <li>관리자 키 삭제.</li>
+     * </ol>
+     * 저장소 예외는 WARN 으로만 — 호출자가 어차피 401 을 낼 자리다.
+     */
+    private void cutReusedSession(UUID sessionId) {
+        try {
+            revocations.revokeSession(sessionId, properties.refreshTokenValidity());
+        } catch (DataAccessException e) {
+            log.warn("refresh reuse: revocation mark not written sid={} cause={}", shortSid(sessionId), e.getClass().getSimpleName());
+        }
+        for (int attempt = 1; ; attempt++) {
+            try {
+                refreshTokens.revokeSession(sessionId);
+                break;
+            } catch (PessimisticLockingFailureException e) {
+                if (attempt >= REVOKE_ATTEMPTS) {
+                    log.warn("refresh reuse: refresh rows not revoked after {} attempts sid={} cause={}", attempt, shortSid(sessionId),
+                            e.getClass().getSimpleName());
+                    break;
+                }
+            } catch (DataAccessException e) {
+                log.warn("refresh reuse: refresh rows not revoked sid={} cause={}", shortSid(sessionId), e.getClass().getSimpleName());
+                break;
+            }
+        }
+        try {
+            adminRefreshTokens.delete(sessionId);
+        } catch (DataAccessException e) {
+            log.warn("refresh reuse: admin refresh not deleted sid={} cause={}", shortSid(sessionId), e.getClass().getSimpleName());
         }
     }
 

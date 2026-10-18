@@ -152,7 +152,7 @@ class TokenServiceTest {
     }
 
     @Test
-    @DisplayName("rotate: 저장소가 재사용으로 판정하면 sid 표식 먼저 → DB 체인 폐기 → 관리자 키 삭제, 그리고 401")
+    @DisplayName("rotate: 저장소가 재사용으로 판정하면 sid 표식(리프레시 수명 — 체인 폐기가 실패해도 재발급을 막는다) → DB 체인 폐기 → 관리자 키 삭제, 그리고 401")
     void reuseRevokesSession() {
         Session session = loggedIn(UUID.randomUUID());
         when(refreshTokens.rotate(any(), any()))
@@ -161,9 +161,31 @@ class TokenServiceTest {
         assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
 
         InOrder order = Mockito.inOrder(revocations, refreshTokens, adminRefreshTokens);
-        order.verify(revocations).revokeSession(session.sessionId(), ACCESS);   // 필터가 읽는 표식이 먼저
+        order.verify(revocations).revokeSession(session.sessionId(), REFRESH);   // 필터 · 회전 전 검사가 읽는 표식이 먼저
         order.verify(refreshTokens).revokeSession(session.sessionId());
         order.verify(adminRefreshTokens).delete(session.sessionId());
+    }
+
+    @Test
+    @DisplayName("rotate 재사용 분기: 체인 폐기가 잠금 실패(교착)면 3번까지 다시 한다 — 세 번 다 실패해도 401 이고 500 으로 안 올린다")
+    void reuseRetriesChainRevocationOnLockFailure() {
+        Session session = loggedIn(UUID.randomUUID());
+        when(refreshTokens.rotate(any(), any()))
+                .thenReturn(Rotation.rejected(Rotation.Status.REUSED, session.sessionId(), session.subject()));
+        doThrow(new org.springframework.dao.CannotAcquireLockException("1213")).doNothing().when(refreshTokens).revokeSession(any());
+
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        verify(refreshTokens, Mockito.times(2)).revokeSession(session.sessionId());
+
+        Mockito.reset(refreshTokens);
+        Session again = loggedIn(UUID.randomUUID());
+        when(refreshTokens.rotate(any(), any()))
+                .thenReturn(Rotation.rejected(Rotation.Status.REUSED, again.sessionId(), again.subject()));
+        doThrow(new org.springframework.dao.CannotAcquireLockException("1213")).when(refreshTokens).revokeSession(any());
+
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        verify(refreshTokens, Mockito.times(TokenService.REVOKE_ATTEMPTS)).revokeSession(again.sessionId());
+        verify(adminRefreshTokens).delete(again.sessionId());
     }
 
     @Test
@@ -331,7 +353,7 @@ class TokenServiceTest {
 
         when(adminRefreshTokens.rotate(any(), any(), any(), any())).thenReturn(false);
         assertThatThrownBy(() -> service.rotate(first.refreshToken(), Role.ADMIN)).isInstanceOf(InvalidTokenException.class);
-        verify(revocations).revokeSession(refresh.sessionId(), ACCESS);
+        verify(revocations).revokeSession(refresh.sessionId(), REFRESH);   // 재사용 표식은 리프레시 수명
     }
 
     @Test

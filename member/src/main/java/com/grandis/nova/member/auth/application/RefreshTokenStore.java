@@ -35,9 +35,9 @@ public interface RefreshTokenStore {
      *
      * 교체 뒤 30초 안에 같은 옛 원문이 다시 오고 그 원문이 만든 다음 토큰이 아직 안 쓰였으면 다음 토큰을 폐기하고 다시 회전한다(ROTATED) — 새로고침
      * 연타로 새 쿠키를 받지 못한 경우다.
-     * 그 밖의 재사용(이미 교체된 원문)이면 같은 체인의 살아 있는 행을 전부 폐기하고 {@link Rotation.Status#REUSED} 를 돌려준다. 단 만료 뒤 액세스 유효기간
-     * (탐지 창)도 지난 토큰은 재사용이어도 체인을 건드리지 않고 {@link Rotation.Status#EXPIRED} 다 — 막을 액세스 토큰이 없고, 정리와 잠금이 맞물린다.
-     * **예외가 아니라 값으로 돌려주는 이유**: 예외로 빠져나가면 그 폐기가 롤백된다. 폐기는 커밋되어야 한다.
+     * 그 밖의 재사용 — 이미 교체된 원문, 또는 유예가 버린 다음 토큰(그 행만 폐기되고 체인은 삶) — 이면 {@link Rotation.Status#REUSED} 를
+     * 돌려준다. <b>체인은 여기서 폐기하지 않는다</b> — 호출자가 {@link #revokeSession} 으로 끊는다(교착을 피하려고 따로 커밋한다). 단 만료 뒤 액세스
+     * 유효기간(탐지 창)도 지난 토큰은 재사용이어도 {@link Rotation.Status#EXPIRED} 다 — 막을 액세스 토큰이 없고, 정리와 잠금이 맞물린다.
      */
     Rotation rotate(String presentedRawToken, String newRawToken);
 
