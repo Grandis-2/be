@@ -206,6 +206,24 @@ class CartOrderApiTest {
         assertThat(reserved(phone)).isEqualTo(1);
     }
 
+    @Test
+    @DisplayName("주문 줄의 모델명은 주문 때 값 — catalog 모델명이 바뀌면 장바구니는 새 값, 이미 만든 주문 상세는 옛 값")
+    void orderKeepsModelNameOfOrderTime() throws Exception {
+        UUID phone = sellable(10);
+        cartLine(phone, false, 1);
+        String orderId = data(place(item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
+
+        CatalogOption current = catalog.get(phone);
+        catalog.put(phone, new CatalogOption(current.optionId(), current.productId(), current.productTitle(), "A3105", current.optionTitle(),
+                current.sku(), current.price(), current.optionStatus(), current.saleMode(), current.productStatus(), current.visible(),
+                current.registrationCompleted(), current.warranty(), current.imageUrl()));
+
+        JsonNode cart = data(mockMvc.perform(get("/api/v1/cart").with(TestAuth.customer(customerId))).andExpect(status().isOk()));
+        assertThat(cart.get("items").get(0).get("modelName").asString()).as("장바구니는 지금 값").isEqualTo("A3105");
+        JsonNode detail = data(mockMvc.perform(get("/api/v1/orders/{id}", orderId).with(TestAuth.customer(customerId))).andExpect(status().isOk()));
+        assertThat(detail.get("items").get(0).get("modelName").asString()).as("주문은 주문 때 값").isEqualTo("A3104");
+    }
+
     /**
      * 열린 주문은 잠그지 않고 읽는다 — 읽은 뒤 잠그기 전에 결제 시작(주문 행만 잠근다)이 앞 주문을 승인 중으로 바꾸면, 잠근 뒤 다시 보고 409 다.
      * 결정적으로 본다: 다른 트랜잭션이 앞 주문을 승인 중으로 바꾼 채 커밋하지 않고, 값이 다른 재주문이 그 행 잠금에서 기다리는 것을 확인한 뒤 커밋한다.
