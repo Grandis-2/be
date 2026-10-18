@@ -45,6 +45,10 @@ public class RefreshToken {
     @Column(name = "rotated_at")
     private Instant rotatedAt;
 
+    /** 이 토큰을 회전해 만든 다음 토큰의 id. 이 칸이 생기기 전에 회전한 행은 null. */
+    @Column(name = "rotated_to")
+    private UUID rotatedTo;
+
     /** 폐기 시각. 로그아웃·재사용 탐지·전체 폐기가 찍는다. */
     @Column(name = "revoked_at")
     private Instant revokedAt;
@@ -67,8 +71,9 @@ public class RefreshToken {
     }
 
     /** 회전. 교체 시각은 한 번만 찍는다 — 두 번째 호출은 재사용이라 여기까지 오지 않는다. */
-    void markRotated(Instant when) {
+    void markRotated(Instant when, UUID successor) {
         this.rotatedAt = when;
+        this.rotatedTo = successor;
     }
 
     UUID getId() {
@@ -93,6 +98,10 @@ public class RefreshToken {
 
     Instant getRotatedAt() {
         return rotatedAt;
+    }
+
+    UUID getRotatedTo() {
+        return rotatedTo;
     }
 
     Instant getRevokedAt() {

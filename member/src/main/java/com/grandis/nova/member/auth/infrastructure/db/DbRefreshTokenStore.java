@@ -121,9 +121,9 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
         if (!row.getExpiresAt().isAfter(now)) {
             return Rotation.rejected(Rotation.Status.EXPIRED, sessionId, subject);
         }
-        row.markRotated(now);
-        rows.save(RefreshToken.issue(row.getCustomerId(), sessionId, RefreshTokens.hash(newRawToken),
+        RefreshToken next = rows.save(RefreshToken.issue(row.getCustomerId(), sessionId, RefreshTokens.hash(newRawToken),
                 now, row.getExpiresAt()));
+        row.markRotated(now, next.getId());
         return new Rotation(Rotation.Status.ROTATED, sessionId, subject, row.getExpiresAt());
     }
 
