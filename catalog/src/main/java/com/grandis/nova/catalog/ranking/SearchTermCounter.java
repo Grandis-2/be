@@ -16,7 +16,8 @@ import java.util.List;
 
 /**
  * 인기 검색어 집계(Redis). 같은 사람이 같은 검색어(합침 키)를 하루(KST)에 여러 번 검색해도 한 번만 센다. 시간(UTC 정시)마다 검색어별 수를 두고,
- * 순위는 지금 시간을 포함한 최근 {@link #WINDOW_HOURS}개 시간 표를 합친다 — 최근 24시간(시간 단위로 끊어 최대 1시간 더 길다).
+ * 순위는 지금 시간을 포함한 시간 표 {@link #TABLES}개를 합친다 — 지금 시간 표가 덜 찼으므로 덮는 범위는 24~25시간이다(10:30 이면 전날 10:00 부터).
+ * 최근 24시간을 빠짐없이 덮도록 한 시간 길게 잡았다.
  *
  * 키: 시간별 수 {@code catalog:search:hour:{yyyyMMddHH}}(정렬 집합, 멤버 = 합침 키) · 그날 그 검색어를 센 사람
  * {@code catalog:search:seen:{KST yyyyMMdd}:{합침 키}}(집합) · 그 시간의 화면 표기 {@code catalog:search:display:{yyyyMMddHH}}(해시, 합침 키 → 그 시간에
@@ -26,12 +27,14 @@ import java.util.List;
 public class SearchTermCounter {
 
     static final int WINDOW_HOURS = 24;
+    /** 합치는 시간 표 수 — 지금 시간 표가 덜 찼으므로 24시간을 다 덮으려면 하나 더. */
+    static final int TABLES = WINDOW_HOURS + 1;
     static final String HOUR_PREFIX = "catalog:search:hour:";
     static final String SEEN_PREFIX = "catalog:search:seen:";
     static final String DISPLAY_PREFIX = "catalog:search:display:";
     static final String UNION_KEY = "catalog:search:union";
-    /** 시간 표는 창(24시간)보다 한 시간 더 둔다. */
-    static final Duration HOUR_TTL = Duration.ofHours(WINDOW_HOURS + 1);
+    /** 시간 표 · 표기 해시는 합치는 범위(최대 25시간)보다 한 시간 더 둔다. */
+    static final Duration HOUR_TTL = Duration.ofHours(TABLES + 1);
     static final Duration SEEN_TTL = Duration.ofDays(2);
 
     private static final DateTimeFormatter HOUR = DateTimeFormatter.ofPattern("yyyyMMddHH").withZone(ZoneOffset.UTC);
@@ -88,11 +91,11 @@ public class SearchTermCounter {
         return added != null && added == 1;
     }
 
-    /** 최근 24시간 검색 수 순으로 앞 limit 개의 화면 표기. */
+    /** 최근 24시간(시간 표 {@link #TABLES}개) 검색 수 순으로 앞 limit 개의 화면 표기. */
     public List<String> top(Instant now, int limit) {
         List<String> hours = new ArrayList<>();
         Instant hour = now.truncatedTo(ChronoUnit.HOURS);
-        for (int i = 0; i < WINDOW_HOURS; i++) {
+        for (int i = 0; i < TABLES; i++) {
             hours.add(HOUR.format(hour.minus(Duration.ofHours(i))));
         }
         List<String> keys = new ArrayList<>();

@@ -1,9 +1,11 @@
 package com.grandis.nova.catalog.ranking;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
- * 인기 검색어에서 빼는 말 — 코드 목록만 둔다(2026-10-17 결정, 관리 화면 없음). 합침 키(공백 없음 · 소문자)에 이 말이 들어 있으면 세지 않는다.
+ * 인기 검색어에서 빼는 말 — 코드 목록만 둔다(2026-10-17 결정, 관리 화면 없음). 표기(공백을 남긴 정규화 값)를 소문자로 바꿔 이 말이 들어 있으면
+ * 세지 않는다. 공백을 뺀 합침 키로 찾으면 단어 경계를 넘어 걸린다("갤럭시 발매일" → "시발", "push it" → "shit").
  * 고치면 다음 배포부터 새 검색만 거른다 — 이미 센 검색어는 24시간 창에서 빠질 때까지 남는다.
  */
 final class BannedSearchTerms {
@@ -14,6 +16,7 @@ final class BannedSearchTerms {
     }
 
     static boolean contains(SearchTerm term) {
-        return WORDS.stream().anyMatch(term.key()::contains);
+        String text = term.display().toLowerCase(Locale.ROOT);
+        return WORDS.stream().anyMatch(text::contains);
     }
 }

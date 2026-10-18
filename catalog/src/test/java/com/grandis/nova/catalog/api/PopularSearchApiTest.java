@@ -59,6 +59,7 @@ class PopularSearchApiTest {
     void setUp() {
         fixtures = new ShopFixtures(jdbcTemplate);
         Set<String> keys = redis.keys("catalog:search:*");
+        keys.addAll(redis.keys("catalog:signals:*"));
         if (keys != null && !keys.isEmpty()) {
             redis.delete(keys);
         }
@@ -100,11 +101,11 @@ class PopularSearchApiTest {
     }
 
     @Test
-    @DisplayName("최근 24시간 — 지금 시간을 포함한 시간 표 24개를 합친다. 24시간 전 시간 표는 빠지고, 앞 10개까지")
+    @DisplayName("최근 24시간 — 지금 시간을 포함한 시간 표 25개(24~25시간)를 합친다. 25시간 전 시간 표는 빠지고, 앞 10개까지")
     void windowIsLast24HourlyTablesTopTen() throws Exception {
         Instant hour = Instant.now().truncatedTo(ChronoUnit.HOURS);
-        seed("old", hour.minus(Duration.ofHours(24)), 1000);
-        seed("edge", hour.minus(Duration.ofHours(23)), 500);
+        seed("old", hour.minus(Duration.ofHours(25)), 1000);
+        seed("edge", hour.minus(Duration.ofHours(24)), 500);
         List<String> expected = new ArrayList<>(List.of("edge"));
         for (int i = 0; i < 10; i++) {
             seed("k" + i, hour, 100 - i);
@@ -118,12 +119,13 @@ class PopularSearchApiTest {
     @DisplayName("날짜는 KST 로 가른다 — KST 하루 안의 같은 사람 · 같은 검색어는 한 번, KST 자정이 지나면 다시 센다")
     void daysAreKoreanDates() {
         SearchTerm term = SearchTerm.of("Nova");
-        ProductViewer searcher = ProductViewer.anonymous(UUID.randomUUID());
+        ProductViewer searcher = ProductViewer.anonymous(UUID.randomUUID(), "198.51.100.1");
 
         assertThat(counter.record(term, searcher, Instant.parse("2026-10-18T15:00:00Z"))).as("KST 19일 00:00").isTrue();
         assertThat(counter.record(term, searcher, Instant.parse("2026-10-19T14:59:59Z"))).as("KST 19일 23:59:59 — 같은 날").isFalse();
         assertThat(counter.record(term, searcher, Instant.parse("2026-10-19T15:00:00Z"))).as("KST 20일 00:00 — 새 날").isTrue();
-        assertThat(counter.top(Instant.parse("2026-10-19T15:30:00Z"), 10)).as("KST 19일 00:00 의 시간 표는 25시간 전이라 빠지고 20일 것만").containsExactly("Nova");
+        assertThat(counter.top(Instant.parse("2026-10-19T15:30:00Z"), 10)).as("24~25시간 창 — 두 시간 표 모두").containsExactly("Nova");
+        assertThat(counter.top(Instant.parse("2026-10-19T16:30:00Z"), 10)).as("한 시간 뒤 — 앞 시간 표는 창 밖, 그래도 남은 표의 1").containsExactly("Nova");
         assertThat(redis.opsForZSet().score("catalog:search:hour:2026101915", "nova")).isEqualTo(1);
         assertThat(redis.opsForZSet().score("catalog:search:hour:2026101815", "nova")).isEqualTo(1);
     }
@@ -139,6 +141,8 @@ class PopularSearchApiTest {
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
         mockMvc.perform(json(post("/api/v1/products/searches"), "{\"q\":\"%s\"}".formatted(tag)).with(AccessTokens.admin()))
                 .andExpect(status().isNoContent());
+        // 관리자 토큰이어도 q 는 검사한다
+        mockMvc.perform(json(post("/api/v1/products/searches"), "{\"q\":\"  \"}").with(AccessTokens.admin())).andExpect(status().isBadRequest());
 
         assertThat(score(tag)).isZero();
     }
@@ -160,6 +164,56 @@ class PopularSearchApiTest {
         double before = score(tag);
         search(tag, UUID.randomUUID()).andExpect(status().isNoContent());
         assertThat(score(tag)).as("대조군 — 풀리면 센다").isEqualTo(before + 1);
+    }
+
+    @Test
+    @DisplayName("표기는 가장 최근 시간의 것 — 앞 시간에 더 많이 쓰인 표기가 있어도")
+    void displayIsFromTheLatestHour() {
+        Instant hour = Instant.now().truncatedTo(ChronoUnit.HOURS);
+        redis.opsForZSet().incrementScore("catalog:search:hour:" + HOUR.format(hour.minus(Duration.ofHours(3))), "nova", 5);
+        redis.opsForHash().put("catalog:search:display:" + HOUR.format(hour.minus(Duration.ofHours(3))), "nova", "NOVA");
+        redis.opsForZSet().incrementScore("catalog:search:hour:" + HOUR.format(hour.minus(Duration.ofHours(1))), "nova", 1);
+        redis.opsForHash().put("catalog:search:display:" + HOUR.format(hour.minus(Duration.ofHours(1))), "nova", "Nova");
+
+        assertThat(counter.top(Instant.now(), 10)).containsExactly("Nova");
+    }
+
+    @Test
+    @DisplayName("키는 만료가 걸린다 — 시간 표 · 그 시간 표기 26시간, 그날 센 사람 2일, IP 별 익명 id 2일")
+    void keysExpire() throws Exception {
+        listed("Nova " + tag, "x");
+        search(tag, UUID.randomUUID()).andExpect(status().isNoContent());
+
+        String hour = HOUR.format(Instant.now());
+        String day = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul")).format(DateTimeFormatter.BASIC_ISO_DATE);
+        assertThat(ttl("catalog:search:hour:" + hour)).isBetween(Duration.ofHours(26).minusMinutes(1).toSeconds(), Duration.ofHours(26).toSeconds());
+        assertThat(ttl("catalog:search:display:" + hour)).isBetween(Duration.ofHours(26).minusMinutes(1).toSeconds(), Duration.ofHours(26).toSeconds());
+        assertThat(ttl("catalog:search:seen:" + day + ":" + tag.toLowerCase())).isBetween(Duration.ofDays(2).minusMinutes(1).toSeconds(), Duration.ofDays(2).toSeconds());
+        assertThat(ttl("catalog:signals:anon:" + day + ":127.0.0.1")).isBetween(Duration.ofDays(2).minusMinutes(1).toSeconds(), Duration.ofDays(2).toSeconds());
+    }
+
+    @Test
+    @DisplayName("금칙어는 공백을 남긴 표기에서 찾는다 — \"갤럭시 발매일\" 은 센다, \"시발\" 은 안 센다")
+    void bannedWordsRespectWordBoundaries() throws Exception {
+        listed("갤럭시 발매일 " + tag, "x");
+
+        search("갤럭시 발매일 " + tag, UUID.randomUUID()).andExpect(status().isNoContent());
+        search("시발 " + tag, UUID.randomUUID()).andExpect(status().isNoContent());
+
+        assertThat(score(("갤럭시발매일" + tag).toLowerCase())).isEqualTo(1);
+        assertThat(score(("시발" + tag).toLowerCase())).isZero();
+    }
+
+    @Test
+    @DisplayName("검색 신호도 IP 하나가 하루에 익명 id 20개까지 — 21번째 새 id 는 세지 않는다")
+    void anonymousIdsPerIpAreCapped() throws Exception {
+        listed("Nova " + tag, "x");
+        for (int i = 0; i < 21; i++) {
+            mockMvc.perform(json(post("/api/v1/products/searches").header("X-Forwarded-For", "203.0.113.9, 130.176.0.1"),
+                    JSON.writeValueAsString(new PopularSearchController.SearchRequest(tag, UUID.randomUUID())))).andExpect(status().isNoContent());
+        }
+
+        assertThat(score(tag)).isEqualTo(20);
     }
 
     @Test
@@ -190,6 +244,11 @@ class PopularSearchApiTest {
         List<String> keywords = new ArrayList<>();
         JSON.readTree(body).get("data").get("keywords").forEach(k -> keywords.add(k.asString()));
         return keywords;
+    }
+
+    private long ttl(String key) {
+        Long seconds = redis.getExpire(key, java.util.concurrent.TimeUnit.SECONDS);
+        return seconds == null ? -2 : seconds;
     }
 
     /** 지금 시간 표에서 그 합침 키의 수. */

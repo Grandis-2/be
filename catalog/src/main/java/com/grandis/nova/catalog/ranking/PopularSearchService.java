@@ -34,44 +34,61 @@ public class PopularSearchService {
     static final long MAX_BYTES = 64 * 1024;
 
     private final SearchTermCounter counter;
+    private final AnonymousQuota quota;
     private final ProductListingQueryRepository listings;
     private final LocalReadCache<String, List<String>> cache;
     private final Clock clock;
 
-    public PopularSearchService(SearchTermCounter counter, ProductListingQueryRepository listings, JsonMapper json, Clock clock,
+    public PopularSearchService(SearchTermCounter counter, AnonymousQuota quota, ProductListingQueryRepository listings, JsonMapper json, Clock clock,
                                 @Value("${nova.read-cache.enabled:true}") boolean cacheEnabled) {
         this.counter = counter;
+        this.quota = quota;
         this.listings = listings;
         this.cache = new LocalReadCache<>("catalog.popular-searches", TTL, MAX_BYTES, value -> json.writeValueAsBytes(value).length, clock, cacheEnabled);
         this.clock = clock;
     }
 
     /**
-     * 검색 한 번. 같은 사람 · 같은 검색어(대소문자 · 공백만 다른 표기 포함)는 하루(KST) 한 번만 센다. Redis 가 실패하면 경고만 남기고 넘어간다.
+     * 신호의 검색어 — 세는 사람과 상관없이(관리자 토큰이어도) 먼저 검사한다.
      *
      * @throws BusinessException VALIDATION_FAILED(q) — 비었거나 정규화한 검색어가 50자를 넘음
      */
-    public void recordSearch(String q, ProductViewer searcher) {
+    public static SearchTerm term(String q) {
         SearchTerm term = SearchTerm.of(q);
         if (term == null) {
             throw ValidationFailures.of("q", "검색어가 비었습니다.");
         }
+        return term;
+    }
+
+    /**
+     * 검색 한 번. 같은 사람 · 같은 검색어(대소문자 · 공백만 다른 표기 포함)는 하루(KST) 한 번만 센다. 익명이면 IP 별 익명 id 상한({@link AnonymousQuota})을
+     * 넘은 새 id 는 세지 않는다. DB · Redis 가 실패하면 경고만 남기고 넘어간다(신호를 놓친다).
+     */
+    public void recordSearch(SearchTerm term, ProductViewer searcher) {
         if (BannedSearchTerms.contains(term)) {
             return;
         }
         Instant now = clock.instant();
-        if (listings.count(new ProductListFilter(term.display(), null, null, null, null, null), now) == 0) {
+        try {
+            if (listings.count(new ProductListFilter(term.display(), null, null, null, null, null), now) == 0) {
+                return;
+            }
+        } catch (DataAccessException e) {
+            log.warn("검색 신호의 결과 수를 세지 못했다(DB) — 세지 않는다", e);
             return;
         }
         try {
-            counter.record(term, searcher, now);
+            if (quota.admit(searcher, now)) {
+                counter.record(term, searcher, now);
+            }
         } catch (DataAccessException e) {
             log.warn("검색어를 세지 못했다(Redis)", e);
         }
     }
 
     /**
-     * 최근 24시간 검색 수 순 앞 {@link #SIZE}개의 표기. 같은 수면 합침 키 역순이다.
+     * 최근 24시간(24~25시간, {@link SearchTermCounter}) 검색 수 순 앞 {@link #SIZE}개의 표기. 같은 수면 합침 키 역순이다.
      *
      * @throws BusinessException DEPENDENCY_UNAVAILABLE — 읽을 수 없다(Redis 장애)
      */
