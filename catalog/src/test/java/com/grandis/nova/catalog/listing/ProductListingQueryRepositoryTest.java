@@ -1,6 +1,7 @@
 package com.grandis.nova.catalog.listing;
 
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
+import com.grandis.nova.catalog.support.MySqlContainerConfig;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -32,7 +33,7 @@ class ProductListingQueryRepositoryTest {
 
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired ProductListingQueryRepository repository;
-    @Autowired MySQLContainer mysql;
+    MySQLContainer mysql = MySqlContainerConfig.get();
 
     ShopFixtures fixtures;
     String tag;
