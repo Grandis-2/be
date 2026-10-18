@@ -198,6 +198,11 @@ class TokenServiceTest {
         verify(refreshTokens, Mockito.times(1)).revokeSession(waited.sessionId());
     }
 
+    /** ERROR 수준 로그 줄 — 단독 실행(logback 기본)과 전체 실행(Spring Boot 형식)의 줄 모양이 달라 수준 낱말로 고른다. */
+    private static java.util.List<String> errorLines(org.springframework.boot.test.system.CapturedOutput output) {
+        return (output.getOut() + output.getErr()).lines().filter(line -> line.matches(".*\\bERROR\\b.*")).toList();
+    }
+
     /** 1213 · 1205 는 같은 Spring 예외로 올라온다 — 벤더 코드만 다르다(order 의 LockFailureClassificationTest 가 진짜 오류로 확인). */
     private static org.springframework.dao.CannotAcquireLockException lockFailure(int vendorCode) {
         return new org.springframework.dao.CannotAcquireLockException("lock",
@@ -217,8 +222,8 @@ class TokenServiceTest {
 
         doThrow(lockFailure(1205)).when(refreshTokens).revokeSession(any());
         assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
-        assertThat(output.getOut() + output.getErr()).contains("ERROR " + TokenService.class.getName() + " -- auth.refresh.reuse_chain_alive")
-                .as("실패 원인 사슬(벤더 예외)이 로그에 남는다").contains("Caused by: java.sql.SQLException");
+        assertThat(errorLines(output)).anyMatch(line -> line.contains("auth.refresh.reuse_chain_alive"));
+        assertThat(output.getOut() + output.getErr()).as("실패 원인 사슬(벤더 예외)이 로그에 남는다").contains("Caused by: java.sql.SQLException");
     }
 
     @Test
@@ -230,8 +235,7 @@ class TokenServiceTest {
         doThrow(new RedisConnectionFailureException("down")).when(adminRefreshTokens).delete(any());
 
         assertThatThrownBy(() -> service.rotate(first.refreshToken(), Role.ADMIN)).isInstanceOf(InvalidTokenException.class);
-        assertThat(output.getOut() + output.getErr()).contains("ERROR " + TokenService.class.getName() + " -- auth.refresh.reuse_chain_alive")
-                .contains("role=ADMIN");
+        assertThat(errorLines(output)).anyMatch(line -> line.contains("auth.refresh.reuse_chain_alive") && line.contains("role=ADMIN"));
     }
 
     @Test
