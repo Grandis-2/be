@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.preorder;
 
+import com.grandis.nova.preorder.preorder.domain.PaymentAnomalyStore;
 import com.grandis.nova.preorder.preorder.domain.Preorder;
 import com.grandis.nova.preorder.preorder.domain.PreorderEvent;
 import com.grandis.nova.preorder.preorder.domain.PreorderRepository;
@@ -29,11 +30,14 @@ import java.util.UUID;
 public class PreorderLedger {
 
     private final PreorderRepository preorders;
+    private final PaymentAnomalyStore paymentAnomalies;
     private final EntityManager entityManager;
     private final Clock clock;
 
-    PreorderLedger(PreorderRepository preorders, EntityManager entityManager, Clock clock) {
+    PreorderLedger(PreorderRepository preorders, PaymentAnomalyStore paymentAnomalies, EntityManager entityManager,
+                   Clock clock) {
         this.preorders = preorders;
+        this.paymentAnomalies = paymentAnomalies;
         this.entityManager = entityManager;
         this.clock = clock;
     }
@@ -103,6 +107,19 @@ public class PreorderLedger {
                     requireOneRow(preorders.changeStatus(preorderId, from, to, now), preorderId);
         }
         return to;
+    }
+
+    /**
+     * 취소가 끝난 예약에 온 결제 확인을 남긴다. 예약 행을 잠근 트랜잭션에서 부른다 — 같은 결제가 겹쳐 와도 한쪽만 새로 남긴다.
+     *
+     * @return 처음 받은 결제면 true, 이미 남긴 결제면 false
+     * @throws IllegalArgumentException 결제 시각이 없다 — 어느 결제인지 가를 수 없다
+     */
+    public boolean recordPaymentAfterCancel(UUID preorderId, String orderId, Instant paidAt) {
+        if (paidAt == null) {
+            throw new IllegalArgumentException("결제 시각이 없는 결제 확인: preorderId=" + preorderId);
+        }
+        return paymentAnomalies.record(preorderId, paidAt, orderId, clock.instant());
     }
 
     /**

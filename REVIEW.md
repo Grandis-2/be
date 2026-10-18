@@ -16,7 +16,7 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 | --- | --- | --- |
 | member | customers · refresh_tokens · notifications | 없음 |
 | catalog | categories · products · product_options · product_reviews · promotions · promotion_products · catalog_outbox_events · images | 읽기: preorder_campaigns(opens_at · closes_at · 행 유무) · option_inventories(재고 집계 · 행 유무), `ProductListingQueryRepository` 한 곳 |
-| preorder | preorders · preorder_events · preorder_campaigns · shipment_batches · preorder_outbox_events · preorder_dead_letter_events · preorder_sync_jobs · preorder_sync_attempts · preorder_open_alerts · preorder_open_alert_dispatches | (epic/NV-441 머지 뒤) reconciliation_runs 읽기 · 관리자 실행 요청(REQUESTED) INSERT, reconciliation_findings 읽기 · 조치 칸(action_*) UPDATE |
+| preorder | preorders · preorder_events · preorder_campaigns · shipment_batches · preorder_outbox_events · preorder_dead_letter_events · preorder_sync_jobs · preorder_sync_attempts · preorder_open_alerts · preorder_open_alert_dispatches · preorder_payment_anomalies | (epic/NV-441 머지 뒤) reconciliation_runs 읽기 · 관리자 실행 요청(REQUESTED) INSERT, reconciliation_findings 읽기 · 조치 칸(action_*) UPDATE |
 | order | orders · order_items · order_events · cart_items · option_inventories · draw_campaigns · draw_entries · order_outbox_events · stock_adjustments · stock_reconcile_runs · stock_reconcile_lock | 읽기: products · product_options(옵션 소속 · 판매 방식) |
 | payment | payments · payment_transactions · payment_outbox_events | 없음 |
 | worker · waitingroom | 없음(worker 는 결과를 이벤트로, waitingroom 은 전용 Redis) | 없음 |
@@ -67,9 +67,9 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 - 끝난 작업(SUCCEEDED · CANCELED)을 늦은 결과가 되돌리면 지적. DEAD_LETTER 뒤의 성공은 받는다.
 - 시도 기록은 eventId 로 한 번(uq_sync_attempt_event 위반으로 판정). 조회 후 INSERT · (작업 · 세대 · 차례) 거르기는 지적.
 - attempt · run 없는 ATTEMPTED · FAILED 는 조용히 처리하지 않는다. 받은 이벤트 · 이전 run 은 기록만 남긴다. SUCCEEDED 는 run 으로 거르지 않는다.
-- 재처리는 DEAD_LETTER → PENDING(run + 1)이 1행일 때만 REGISTER_JOB_READY 를 다시 적는다.
+- 재처리는 DEAD_LETTER → PENDING(run + 1)이 1행일 때만 작업 종류에 맞는 REGISTER_JOB_READY · CANCEL_JOB_READY 를 올린 run 으로 다시 적는다. 0행인데 발행하거나 run 을 싣지 않으면 지적.
 - 작업 메시지의 request 는 저장한 request_payload 그대로다. 본문을 새로 만들거나 키를 바꾸면 차단급.
-- CANCEL 에는 포기 상태가 없다(DB CHECK). FAILED 를 DEAD_LETTER 로 바꾸거나 즉시 재발행하면 지적. CANCEL FAILED 는 로그 · 지표로 알린다.
+- CANCEL 의 FAILED 도 작업을 DEAD_LETTER 로 두고 예약은 CANCELING 에 남긴다. 받은 자리에서 다시 발행하거나 예약을 CANCELED 로 보내면 지적. 끝내는 길은 재처리 뒤 성공 · 늦게 온 성공 · 관리자 수동 완료(CANCEL · DEAD_LETTER · 예약 CANCELING 일 때만)뿐이다.
 
 **경계**
 - 상품은 `GET /internal/products/{productId}/options` 로 묻고 캐시한다. 이름 · 가격은 접수 때 예약 행에 복사한다 — 표시용 이름 · 가격을 매번 카탈로그 조회로 만들면 지적한다.

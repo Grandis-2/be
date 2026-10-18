@@ -24,7 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
 
-/** 외부 동기화 작업 조회와 DEAD_LETTER 재처리. 재처리는 작업을 PENDING 으로 되돌리고 등록 메시지를 다시 보낸다. */
+/** 외부 동기화 작업 조회와 DEAD_LETTER 재처리. 재처리는 작업을 PENDING 으로 되돌리고 등록 · 취소 메시지를 다시 보낸다. */
 @Tag(name = "관리자 · 동기화 작업")
 @RestController
 @RequestMapping("/api/v1/admin/preorders/sync-jobs")
@@ -66,8 +66,8 @@ class AdminSyncJobController {
     @PostMapping("/reprocess-batch")
     public ResponseEntity<ApiResponse<BatchReprocess>> reprocessBatch(
             @Valid @RequestBody ReprocessBatchRequest request, Authentication admin) {
-        return accepted(syncJobAdminService.reprocessBatch(request.syncJobIds(), request.errorCodeFilter(),
-                request.rateOrDefault(), admin.getName()));
+        return accepted(syncJobAdminService.reprocessBatch(request.syncJobIds(), request.jobTypeOrDefault(),
+                request.errorCodeFilter(), request.rateOrDefault(), admin.getName()));
     }
 
     private SyncJobResponse detail(SyncJobView view) {

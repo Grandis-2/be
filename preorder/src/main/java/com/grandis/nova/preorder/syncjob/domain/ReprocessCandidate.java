@@ -17,12 +17,13 @@ public record ReprocessCandidate(UUID syncJobId, SyncJobType jobType, SyncJobSta
 
     /** 재처리할 수 없는 까닭. 할 수 있으면 비어 있다. */
     public Optional<String> blocker() {
-        if (jobType != SyncJobType.REGISTER || status != SyncJobStatus.DEAD_LETTER) {
+        if (status != SyncJobStatus.DEAD_LETTER) {
             return Optional.of("jobType=%s, status=%s".formatted(jobType, status));
         }
-        if (preorderStatus == PreorderStatus.CANCELING || preorderStatus == PreorderStatus.CANCELED) {
-            return Optional.of("preorderStatus=" + preorderStatus);
-        }
-        return Optional.empty();
+        // 등록은 취소가 시작되면 되살리지 않고, 취소는 예약이 아직 취소 중일 때만 다시 보낸다
+        boolean preorderAllows = jobType == SyncJobType.REGISTER
+                ? preorderStatus != PreorderStatus.CANCELING && preorderStatus != PreorderStatus.CANCELED
+                : preorderStatus == PreorderStatus.CANCELING;
+        return preorderAllows ? Optional.empty() : Optional.of("preorderStatus=" + preorderStatus);
     }
 }
