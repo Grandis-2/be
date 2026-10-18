@@ -30,8 +30,10 @@ public class ProductRankingService {
     private static final Logger log = LoggerFactory.getLogger(ProductRankingService.class);
 
     static final int SIZE = 10;
-    /** 노출 규칙으로 걸러도 {@link #SIZE}개가 차도록 앞에서 넉넉히 읽는다. 앞 50개 중 노출되는 상품이 10개보다 적으면 그만큼만 낸다. */
+    /** 후보를 이만큼씩 읽어 노출 규칙으로 거른다 — {@link #SIZE}개가 찰 때까지 다음 묶음을 읽는다. */
     static final int CANDIDATES = 50;
+    /** 읽는 후보의 상한 — 조회수가 높은 상품이 한꺼번에 숨김 · 판매 중지 · 접수 마감이 돼도 그 아래에서 채우되, 끝없이 읽지 않는다. */
+    static final int MAX_CANDIDATES = 500;
 
     private final ProductViewCounter counter;
     private final ProductListingQueryRepository listings;
@@ -89,14 +91,21 @@ public class ProductRankingService {
 
     private List<ProductListItem> load() {
         Instant now = clock.instant();
-        List<UUID> candidates;
-        try {
-            candidates = counter.top(now, CANDIDATES);
-        } catch (DataAccessException e) {
-            log.warn("조회수 랭킹을 읽지 못했다(Redis)", e);
-            throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+        // 묶음마다 날마다의 표를 다시 합치므로 그 사이 조회로 순위가 바뀌면 같은 상품이 두 묶음에 올 수 있다 — 상품 id 로 한 번만 담는다
+        java.util.Map<UUID, ProductListItem> byId = new java.util.LinkedHashMap<>();
+        for (int offset = 0; offset < MAX_CANDIDATES && byId.size() < SIZE; offset += CANDIDATES) {
+            List<UUID> candidates;
+            try {
+                candidates = counter.top(now, offset, CANDIDATES);
+            } catch (DataAccessException e) {
+                log.warn("조회수 랭킹을 읽지 못했다(Redis)", e);
+                throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+            }
+            readTransaction.execute(status -> listings.findListedCards(candidates, now)).forEach(card -> byId.putIfAbsent(card.productId(), card));
+            if (candidates.size() < CANDIDATES) {
+                break;
+            }
         }
-        List<ProductListItem> cards = readTransaction.execute(status -> listings.findListedCards(candidates, now));
-        return cards.size() > SIZE ? List.copyOf(cards.subList(0, SIZE)) : cards;
+        return byId.values().stream().limit(SIZE).toList();
     }
 }

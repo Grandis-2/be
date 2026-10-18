@@ -131,6 +131,24 @@ class ProductRankingApiTest {
     }
 
     @Test
+    @DisplayName("앞 50개가 모두 목록에 안 나와도 그 아래 순위로 10개를 채운다")
+    void fillsFromLaterCandidatesWhenTopOnesAreHidden() throws Exception {
+        UUID hiddenCategory = fixtures.category();
+        for (int i = 0; i < 55; i++) {
+            UUID hidden = fixtures.product(hiddenCategory, "IN_STOCK", "PAUSED");
+            seed(hidden, 0, 1000 - i);
+        }
+        List<String> expected = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            UUID product = listed();
+            seed(product, 0, 100 - i);
+            expected.add(product.toString());
+        }
+
+        assertThat(ids(ranking())).containsExactlyElementsOf(expected);
+    }
+
+    @Test
     @DisplayName("조회 신호 — 없거나 숨긴 상품 404, 비회원이 익명 id 없이 보내면 400, 관리자 토큰은 세지 않고 204")
     void signalRefusals() throws Exception {
         UUID product = listed();
