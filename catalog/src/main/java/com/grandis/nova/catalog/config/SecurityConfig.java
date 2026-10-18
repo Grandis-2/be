@@ -31,6 +31,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/*/views").permitAll()                       // 상세 화면의 조회 신호 — 비회원도 보낸다(익명 id)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/searches").permitAll()                      // 검색 신호 — 비회원도 보낸다(익명 id)
                 .requestMatchers(HttpMethod.GET, "/api/v1/promotions", "/api/v1/promotions/*").permitAll()     // 사전예약 홍보 목록 · 상세
+                .requestMatchers(HttpMethod.GET, "/api/v1/banners").permitAll()                                // 메인 배너
                 .requestMatchers(HttpMethod.GET, "/api/v1/reviews/mine").hasRole("USER")                        // 내 리뷰
                 .requestMatchers(HttpMethod.GET, "/api/v1/reviews").permitAll()                                 // 구매후기 모아보기
                 .requestMatchers("/api/v1/reviews", "/api/v1/reviews/*").hasRole("USER")                        // 리뷰 작성 · 수정 · 삭제 — 위 두 GET 규칙보다 뒤에 둔다

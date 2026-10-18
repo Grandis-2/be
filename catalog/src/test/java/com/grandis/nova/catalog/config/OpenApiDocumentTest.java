@@ -116,7 +116,7 @@ class OpenApiDocumentTest {
                 "GET /api/v1/products/{productId}/reviews", "GET /api/v1/categories", "GET /api/v1/reviews",
                 "GET /api/v1/promotions", "GET /api/v1/promotions/{promotionId}",
                 "GET /api/v1/products/ranking", "POST /api/v1/products/{productId}/views",
-                "GET /api/v1/products/searches/popular", "POST /api/v1/products/searches");
+                "GET /api/v1/products/searches/popular", "POST /api/v1/products/searches", "GET /api/v1/banners");
     }
 
     @Test
@@ -140,6 +140,9 @@ class OpenApiDocumentTest {
         expected.put("PATCH /api/v1/reviews/{reviewId}", "ReviewUpdateRequest");
         expected.put("POST /api/v1/products/{productId}/views", "ViewRequest");
         expected.put("POST /api/v1/products/searches", "SearchRequest");
+        expected.put("POST /api/v1/admin/banners", "BannerRequest");
+        expected.put("PUT /api/v1/admin/banners/{bannerId}", "BannerRequest");
+        expected.put("PUT /api/v1/admin/banners/order", "OrderRequest");
 
         Map<String, String> documented = new LinkedHashMap<>();
         operations().forEach((name, operation) -> {
@@ -155,14 +158,14 @@ class OpenApiDocumentTest {
     }
 
     @Test
-    @DisplayName("사진 업로드는 멀티파트 본문의 파일 파트 file(binary)과 purpose(PRODUCT · PROMOTION)를 싣는다")
+    @DisplayName("사진 업로드는 멀티파트 본문의 파일 파트 file(binary)과 purpose(PRODUCT · PROMOTION · BANNER)를 싣는다")
     void multipartUploadDocumentsFileAndPurpose() {
         JsonNode upload = operations().get("POST /api/v1/admin/images");
         assertThat(upload.path("requestBody").path("content").path("multipart/form-data").path("schema").path("properties")
                 .path("file").path("format").asString()).isEqualTo("binary");
         JsonNode purpose = upload.path("parameters").get(0);
         assertThat(purpose.path("name").asString()).isEqualTo("purpose");
-        assertThat(purpose.path("schema").path("enum").toString()).isEqualTo("[\"PRODUCT\",\"PROMOTION\"]");
+        assertThat(purpose.path("schema").path("enum").toString()).isEqualTo("[\"PRODUCT\",\"PROMOTION\",\"BANNER\"]");
     }
 
     @Test

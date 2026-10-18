@@ -47,7 +47,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 사진 붙이기 · 떼기(진짜 구현) — 사진 주소를 바꾸는 저장 경로마다 "저장 뒤 문서의 사진은 USED · 빠진 사진은 UNUSED" 이고, 사진을 바꾸지 않는
+ * 사진 붙이기 · 떼기(진짜 구현) — 사진 주소를 바꾸는 저장 경로(상품 · 홍보 · 배너)마다 "저장 뒤 문서의 사진은 USED · 빠진 사진은 UNUSED" 이고, 사진을 바꾸지 않는
  * 경로는 상태가 그대로다. 올린 사진은 업로드 API 가 넣는 행과 같은 모양(UNUSED · {prefix}/{v7}.jpg)으로 직접 넣는다.
  */
 @CatalogIntegrationTest
@@ -59,6 +59,7 @@ class ImageAttachmentApiTest {
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final String PRODUCTS = "/api/v1/admin/products";
     private static final String PROMOTIONS = "/api/v1/admin/promotions";
+    private static final String BANNERS = "/api/v1/admin/banners";
     private static final String CDN = "https://img/";
 
     @Autowired MockMvc mockMvc;
@@ -415,6 +416,32 @@ class ImageAttachmentApiTest {
         assertThat(statuses(b0, b1, spec)).containsOnly("UNUSED");
     }
 
+    @Test
+    @DisplayName("배너 — 만들면 USED, 사진을 바꾸면 옛것 UNUSED · 새것 USED, 사진을 두고 글만 고치면 그대로, 지우면 UNUSED. 홍보 접두 · CDN 밖은 400(imageUrl)")
+    void bannerAttachesAndDetaches() throws Exception {
+        UUID product = fixtures.product("IN_STOCK", "ACTIVE");
+        fixtures.option(product, "ACTIVE", ShopFixtures.OPTION_PRICE);
+        fixtures.stockReady(product);
+        String first = uploaded(ImagePurpose.BANNER);
+        UUID bannerId = UUID.fromString(data(mockMvc.perform(admin(post(BANNERS)).content(bannerBody(first, product)))
+                .andExpect(status().isCreated())).get("bannerId").asString());
+        assertThat(statuses(first)).containsOnly("USED");
+
+        String second = uploaded(ImagePurpose.BANNER);
+        mockMvc.perform(admin(put(BANNERS + "/{id}", bannerId)).content(bannerBody(second, product))).andExpect(status().isOk());
+        assertThat(statuses(first)).containsOnly("UNUSED");
+        assertThat(statuses(second)).containsOnly("USED");
+        mockMvc.perform(admin(put(BANNERS + "/{id}", bannerId)).content(bannerBody(second, product).replace("\"배너\"", "\"배너 고침\"")))
+                .andExpect(status().isOk());
+        assertThat(statuses(second)).as("사진을 그대로 두면 상태도 그대로").containsOnly("USED");
+
+        expectValidation(mockMvc.perform(admin(post(BANNERS)).content(bannerBody(uploaded(ImagePurpose.PROMOTION), product))), "imageUrl");
+        expectValidation(mockMvc.perform(admin(post(BANNERS)).content(bannerBody("https://elsewhere.example/x.jpg", product))), "imageUrl");
+
+        mockMvc.perform(admin(delete(BANNERS + "/{id}", bannerId))).andExpect(status().isNoContent());
+        assertThat(statuses(second)).containsOnly("UNUSED");
+    }
+
     // ── 도우미 ─────────────────────────────────────────────
 
     /** 업로드 API 가 넣는 행과 같은 모양의 올린 사진 하나. */
@@ -479,6 +506,13 @@ class ImageAttachmentApiTest {
         return """
                 { "name": "홍보", "startDate": "%s", "endDate": "%s", "thumbnailUrl": "%s", "detailImageUrls": [%s], "productIds": ["%s"] }
                 """.formatted(today, today, thumbnail, String.join(", ", quoted), productId);
+    }
+
+    private static String bannerBody(String imageUrl, UUID productId) {
+        return """
+                { "badge": "사전예약", "title": "배너", "description": "설명", "tabLabel": "탭", "icon": "Smartphone", "imageUrl": "%s",
+                  "imageAlt": "대체 글", "target": { "type": "PRODUCT", "id": "%s" }, "visible": true }
+                """.formatted(imageUrl, productId);
     }
 
     private ResultActions createPromotion(String body) throws Exception {

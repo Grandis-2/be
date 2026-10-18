@@ -44,7 +44,7 @@ public class AdminImageController {
         this.uploads = uploads;
     }
 
-    @Operation(summary = "사진 올리기", description = "multipart/form-data — 파일 파트 file 하나 · purpose(PRODUCT 상품 · PROMOTION 홍보). "
+    @Operation(summary = "사진 올리기", description = "multipart/form-data — 파일 파트 file 하나 · purpose(PRODUCT 상품 · PROMOTION 홍보 · BANNER 메인 배너). "
             + "201 imageUrl. JPEG · PNG(RGB · 회색조)만, 1 ~ 10MiB, 가로 · 세로 8,000 픽셀 이하 · 전체 2,500만 픽셀 이하 — 어긋나면 400(file). "
             + "파일 · 요청이 상한을 넘으면 413. 동시에 올리는 사진이 많으면 503 + Retry-After(초), 사진 저장소가 실패하면 503 — 같은 파일을 다시 올린다. "
             + "EXIF 등 메타데이터는 지우고 JPEG 의 방향은 픽셀에 반영한다")
