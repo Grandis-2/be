@@ -454,11 +454,13 @@ class ProductListApiTest {
         }
 
         @Test
-        @DisplayName("앞에서 10,000개까지 — (page + 1) × size 가 10,000 이면 200, 넘으면 400 VALIDATION_FAILED(page). 아주 큰 page 도 같은 400")
+        @DisplayName("쪽은 앞 10,000개 안에서 시작 — page × size 가 10,000 미만이면 200, 이상이면 400 VALIDATION_FAILED(page). 전체 10,000개 안의 마지막 쪽은 어떤 size 로도 열린다. 아주 큰 page 도 같은 400")
         void capsListDepth() throws Exception {
             data(perform("size", "100", "page", "99"));
             data(perform("size", "20", "page", "499"));
+            data(perform("size", "12", "page", "833"));     // 9,996 부터 — 9,997개를 12개씩 나눈 마지막 쪽(끝은 10,008)
             for (String[] bad : new String[][] {{"size", "100", "page", "100"}, {"size", "20", "page", "500"}, {"size", "1", "page", "10000"},
+                    {"size", "12", "page", "834"},
                     {"size", "100", "page", "2147483647"}}) {
                 perform(bad)
                         .andExpect(status().isBadRequest())

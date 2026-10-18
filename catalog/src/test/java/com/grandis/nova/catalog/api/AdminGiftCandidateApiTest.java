@@ -121,7 +121,7 @@ class AdminGiftCandidateApiTest {
     }
 
     @Test
-    @DisplayName("q 는 정규화한 뒤 50자까지, 목록은 앞에서 10,000개까지 — 넘으면 그 칸의 400 VALIDATION_FAILED")
+    @DisplayName("q 는 정규화한 뒤 50자까지, 쪽은 앞 10,000개 안에서 시작 — 넘으면 그 칸의 400 VALIDATION_FAILED")
     void sharesListLimits() throws Exception {
         String fifty = tag + " " + "가".repeat(50 - tag.length() - 1);
         list(fifty);

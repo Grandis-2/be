@@ -433,7 +433,7 @@ class PromotionApiTest {
     }
 
     @Test
-    @DisplayName("관리자 목록 · 묶을 수 있는 상품도 앞에서 10,000개까지 — 넘으면 400 VALIDATION_FAILED(page). 아주 큰 page 가 500 이던 것도 같은 400")
+    @DisplayName("관리자 목록 · 묶을 수 있는 상품도 앞 10,000개 안에서 시작하는 쪽까지 — 넘으면 400 VALIDATION_FAILED(page). 아주 큰 page 가 500 이던 것도 같은 400")
     void capsListDepth() throws Exception {
         for (String path : new String[] {ADMIN, ADMIN + "/linkable-products"}) {
             mockMvc.perform(get(path).param("size", "100").param("page", "99").with(admin())).andExpect(status().isOk());

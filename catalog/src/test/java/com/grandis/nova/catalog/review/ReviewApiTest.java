@@ -472,7 +472,7 @@ class ReviewApiTest {
     }
 
     @Test
-    @DisplayName("리뷰 목록 셋 다 앞에서 10,000개까지 — (page + 1) × size 가 10,000 을 넘으면 400 VALIDATION_FAILED(page)")
+    @DisplayName("리뷰 목록 셋 다 쪽은 앞 10,000개 안에서 시작 — page × size 가 10,000 이상이면 400 VALIDATION_FAILED(page)")
     void capsListDepth() throws Exception {
         mockMvc.perform(get("/api/v1/reviews").param("size", "100").param("page", "99")).andExpect(status().isOk());
         mockMvc.perform(get("/api/v1/reviews/mine").param("size", "100").param("page", "99").with(AccessTokens.customer(nextId())))

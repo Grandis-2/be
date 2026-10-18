@@ -237,7 +237,7 @@ class AdminProductListApiTest {
         }
 
         @Test
-        @DisplayName("회원 목록과 같은 상한 — q 는 정규화한 뒤 50자, brand 는 20개, 목록은 앞에서 10,000개까지. 넘으면 그 칸의 400")
+        @DisplayName("회원 목록과 같은 상한 — q 는 정규화한 뒤 50자, brand 는 20개, 쪽은 앞 10,000개 안에서 시작. 넘으면 그 칸의 400")
         void sharesListLimits() throws Exception {
             String fifty = tag + " " + "가".repeat(50 - tag.length() - 1);
             UUID found = completed(fifty, "IN_STOCK");
