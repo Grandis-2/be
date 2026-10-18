@@ -52,14 +52,14 @@ public class AdminBannerController {
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(banners.create(bodies.parse(body, BannerRequest.class))));
     }
 
-    @Operation(summary = "배너 고치기", description = "모든 칸을 보낸다. 순서는 바꾸지 않는다(순서 바꾸기 API). 없으면 404")
+    @Operation(summary = "배너 고치기", description = "모든 칸을 보낸다. 순서는 바꾸지 않는다(순서 바꾸기 API). 대상도 다시 검사한다 — 대상 상품을 지웠으면 글만 고쳐도 400(target.id). 없으면 404. 다른 고치기 · 순서 바꾸기와 겹쳐 잠금에 실패하면 409 retryable")
     @PutMapping("/{bannerId}")
     public ApiResponse<BannerViews.Admin> replace(@PathVariable UUID bannerId,
             @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = BannerRequest.class))) @RequestBody String body) {
         return ApiResponse.ok(banners.update(bannerId, bodies.parse(body, BannerRequest.class)));
     }
 
-    @Operation(summary = "배너 지우기", description = "204. 되살릴 수 없다. 없으면 404")
+    @Operation(summary = "배너 지우기", description = "204. 되살릴 수 없다. 없으면 404, 겹친 작업과 잠금에 실패하면 409 retryable")
     @DeleteMapping("/{bannerId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable UUID bannerId) {

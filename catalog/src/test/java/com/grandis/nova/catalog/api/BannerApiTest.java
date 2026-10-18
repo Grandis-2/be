@@ -137,7 +137,7 @@ class BannerApiTest {
     }
 
     @Test
-    @DisplayName("고치면 모든 칸이 바뀌고 순서는 그대로, 지우면 204 · 고객 조회에서 빠진다. 없는 배너는 404")
+    @DisplayName("고치면 모든 칸이 바뀌고 순서는 그대로, 지우면 204 · 고객 조회에서 빠진다. 없는 배너는 404, 대상 상품을 지웠으면 글만 고쳐도 400")
     void updateAndDelete() throws Exception {
         UUID product = listedProduct();
         UUID promotion = promotion(today(), today());
@@ -155,6 +155,10 @@ class BannerApiTest {
         mockMvc.perform(delete(ADMIN + "/{id}", second).with(AccessTokens.admin())).andExpect(status().isNotFound());
         mockMvc.perform(put(ADMIN + "/{id}", UUID.randomUUID()).with(AccessTokens.admin()).contentType(MediaType.APPLICATION_JSON)
                 .content(body("x", "PRODUCT", product, true))).andExpect(status().isNotFound());
+        String toProduct = id(create(body("상품으로", "PRODUCT", product, true)));
+        jdbcTemplate.update("UPDATE products SET visible = 0, deleted_at = UTC_TIMESTAMP(6) WHERE id = ?", (Object) UuidBinary.toBytes(product));
+        expectField(mockMvc.perform(put(ADMIN + "/{id}", toProduct).with(AccessTokens.admin())
+                .contentType(MediaType.APPLICATION_JSON).content(body("글만 고침", "PRODUCT", product, true))), "target.id");
     }
 
     @Test
