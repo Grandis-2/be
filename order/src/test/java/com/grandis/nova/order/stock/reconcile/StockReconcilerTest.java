@@ -25,8 +25,6 @@ import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.MutableClock;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
-import com.zaxxer.hikari.HikariDataSource;
-import com.zaxxer.hikari.HikariPoolMXBean;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,6 +32,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -46,7 +45,7 @@ import tools.jackson.databind.json.JsonMapper;
 import javax.sql.DataSource;
 import java.math.BigDecimal;
 import java.sql.Connection;
-import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Clock;
 import java.time.Duration;
@@ -57,8 +56,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.function.Supplier;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -80,6 +79,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class StockReconcilerTest {
 
+    static final String LOCK_ROW = "SELECT id FROM stock_reconcile_lock WHERE id = 1 FOR UPDATE NOWAIT";
     static final JsonMapper JSON = JsonMapper.builder().build();
     static final BigDecimal PRICE = new BigDecimal("1250000");
     static final String SHIP_TO = """
@@ -278,25 +278,23 @@ class StockReconcilerTest {
                 .hasMessageContaining("문장 시간 상한 초과");
 
         assertThat(runCount()).isEqualTo(runs);
-        assertThat(jdbcTemplate.queryForObject("SELECT IS_FREE_LOCK(CONCAT(DATABASE(), '.order-stock-reconcile'))", Integer.class))
-                .isEqualTo(1);
+        assertThat(lockIsFree()).isTrue();
         assertThat(reconciler.reconcile()).as("다음 대조는 돈다").isPresent();
         assertThat(runCount()).isEqualTo(runs + 1);
     }
 
     @Test
-    @DisplayName("다른 인스턴스(연결)가 대조 잠금을 쥐고 있으면 기다리지 않고 건너뛴다 — 기록을 남기지 않는다")
+    @DisplayName("다른 인스턴스(트랜잭션)가 대조 잠금을 쥐고 있으면 기다리지 않고 건너뛴다 — 기록을 남기지 않는다")
     void skipsWhileAnotherInstanceHoldsTheLock() throws Exception {
         long runs = runCount();
         try (Connection other = dataSource.getConnection(); Statement statement = other.createStatement()) {
-            try (ResultSet got = statement.executeQuery("SELECT GET_LOCK(CONCAT(DATABASE(), '.order-stock-reconcile'), 0)")) {
-                got.next();
-                assertThat(got.getInt(1)).isEqualTo(1);
-            }
+            other.setAutoCommit(false);
             try {
+                statement.executeQuery(LOCK_ROW).close();
                 assertThat(reconciler.reconcile()).isEmpty();
             } finally {
-                statement.execute("SELECT RELEASE_LOCK(CONCAT(DATABASE(), '.order-stock-reconcile'))");
+                other.rollback();
+                other.setAutoCommit(true);
             }
         }
         assertThat(runCount()).isEqualTo(runs);
@@ -306,61 +304,71 @@ class StockReconcilerTest {
     }
 
     @Test
-    @DisplayName("잠금은 기록이 커밋된 뒤에 놓는다 — 그 사이 다른 인스턴스(연결)는 잠금을 못 잡고, 기록은 이미 다른 연결에서 보인다")
-    void holdsTheLockUntilTheRunIsCommitted() {
+    @DisplayName("잠금은 대조하는 동안 쥐고 끝나면 놓는다 — 놓인 뒤에는 기록이 다른 연결에서 보인다")
+    void holdsTheLockWhileReconciling() throws Exception {
         long runs = runCount();
-        Integer[] freeAfterCommit = new Integer[1];
-        long[] visibleAfterCommit = new long[1];
-        ReconcileLock probing = new ReconcileLock() {
+        boolean[] freeWhileScanning = new boolean[1];
+        StockExpectations probing = new StockExpectations() {
             @Override
-            public <T> Optional<T> runExclusively(Supplier<T> work) {
-                return lock.runExclusively(() -> {
-                    T result = work.get();
-                    // 일(트랜잭션)은 끝났고 잠금은 아직 쥔 순간 — 트랜잭션 밖이라 jdbcTemplate 은 풀의 다른 연결을 쓴다
-                    freeAfterCommit[0] = jdbcTemplate.queryForObject("SELECT IS_FREE_LOCK(CONCAT(DATABASE(), '.order-stock-reconcile'))",
-                            Integer.class);
-                    visibleAfterCommit[0] = runCount();
-                    return result;
-                });
+            public Drifts findDrifted(int limit) {
+                freeWhileScanning[0] = lockIsFree();
+                return expectations.findDrifted(limit);
+            }
+
+            @Override
+            public StockBalance balanceOf(UUID optionId) {
+                throw new UnsupportedOperationException();
             }
         };
 
-        new StockReconciler(expectations, reconcileRuns, probing, transactionManager, clock).reconcile().orElseThrow();
+        new StockReconciler(probing, reconcileRuns, lock, transactionManager, clock).reconcile().orElseThrow();
 
-        assertThat(freeAfterCommit[0]).as("커밋 뒤에도 쥐고 있다").isZero();
-        assertThat(visibleAfterCommit[0]).as("놓기 전에 이미 커밋됐다").isEqualTo(runs + 1);
-        assertThat(jdbcTemplate.queryForObject("SELECT IS_FREE_LOCK(CONCAT(DATABASE(), '.order-stock-reconcile'))", Integer.class))
-                .as("끝나면 놓는다").isEqualTo(1);
+        assertThat(freeWhileScanning[0]).as("읽는 동안 쥐고 있다").isFalse();
+        assertThat(lockIsFree()).as("끝나면 놓는다").isTrue();
+        assertThat(runCount()).isEqualTo(runs + 1);
     }
 
     @Test
-    @DisplayName("일하는 동안 잠금 연결이 끊기면(DB 순단) 그 연결을 풀에서 내보낸다 — 풀 슬롯이 새지 않고, 잠금은 서버가 풀어 다음 대조가 돈다")
-    void evictsTheLockConnectionWhenItDies() throws Exception {
-        HikariPoolMXBean poolStats = dataSource.unwrap(HikariDataSource.class).getHikariPoolMXBean();
-        int activeBefore = poolStats.getActiveConnections();
+    @DisplayName("대조하는 동안 그 연결이 끊기면(DB 순단) 잠금과 함께 대조도 롤백된다 — 그 사이 잠금을 잡은 다른 인스턴스의 기록 하나만 남는다")
+    // 서버 쪽에서 끊는다(KILL). 소켓만 끊긴 반쯤 열린 연결은 서버가 알아챌 때까지(wait_timeout) 잠금을 쥔다 — 그동안은 건너뛰기만 하고 기록은 겹치지 않는다
+    void aRunWhoseConnectionDiesRecordsNothing() throws Exception {
+        long runs = runCount();
+        Optional<?>[] other = new Optional<?>[1];
+        StockExpectations killedMidScan = new StockExpectations() {
+            @Override
+            public Drifts findDrifted(int limit) {
+                // 트랜잭션 안이라 jdbcTemplate 은 대조 트랜잭션의 연결을 쓴다 — 그 세션을 다른 연결에서 끊는다
+                long self = jdbcTemplate.queryForObject("SELECT CONNECTION_ID()", Long.class);
+                try (Connection killer = dataSource.getConnection(); Statement statement = killer.createStatement()) {
+                    statement.execute("KILL CONNECTION " + self);
+                } catch (SQLException e) {
+                    throw new IllegalStateException(e);
+                }
+                // KILL 은 비동기라 서버가 세션을 정리하며 롤백할 때까지 잠깐 걸릴 수 있다
+                Awaitility.await("끊긴 대조의 잠금 풀림").atMost(Duration.ofSeconds(5)).until(StockReconcilerTest.this::lockIsFree);
+                // 다른 인스턴스 — 다른 스레드라 이 트랜잭션에 합류하지 않는다
+                other[0] = CompletableFuture.supplyAsync(reconciler::reconcile).join();
+                return new Drifts(0, List.of());
+            }
 
-        Optional<Integer> result = lock.runExclusively(() -> {
-            // 잠금을 쥔 세션을 다른 연결에서 끊는다 — 놓기가 실패한다
-            Long holder = jdbcTemplate.queryForObject("SELECT IS_USED_LOCK(CONCAT(DATABASE(), '.order-stock-reconcile'))", Long.class);
-            jdbcTemplate.execute("KILL CONNECTION " + holder);
-            return 1;
-        });
+            @Override
+            public StockBalance balanceOf(UUID optionId) {
+                throw new UnsupportedOperationException();
+            }
+        };
 
-        assertThat(result).contains(1);
-        assertThat(poolStats.getActiveConnections()).as("빌린 연결이 모두 돌아왔다").isEqualTo(activeBefore);
-        // KILL 은 비동기라 서버가 세션을 정리하며 잠금을 풀 때까지 잠깐 걸릴 수 있다
-        Awaitility.await("끊긴 세션의 잠금 풀림").atMost(Duration.ofSeconds(5)).until(() -> Integer.valueOf(1).equals(
-                jdbcTemplate.queryForObject("SELECT IS_FREE_LOCK(CONCAT(DATABASE(), '.order-stock-reconcile'))", Integer.class)));
-        assertThat(reconciler.reconcile()).as("다음 대조는 돈다").isPresent();
+        assertThatThrownBy(() -> new StockReconciler(killedMidScan, reconcileRuns, lock, transactionManager, clock).reconcile())
+                .as("끊긴 연결로는 기록하지 못한다 — 커밋 · 롤백이 연결 오류로 끝난다").isInstanceOf(DataAccessException.class);
+
+        assertThat(other[0]).as("다른 인스턴스는 잠금을 잡아 돌았다").isPresent();
+        assertThat(runCount()).as("기록은 하나만").isEqualTo(runs + 1);
+        assertThat(lockIsFree()).isTrue();
     }
 
     @Test
-    @DisplayName("트랜잭션 안에서 잠그면 거절한다 — 일의 커밋이 잠금을 놓은 뒤로 밀리는 것을 막는다")
-    void refusesToLockInsideATransaction() {
-        assertThatThrownBy(() -> tx.executeWithoutResult(status -> lock.runExclusively(() -> 1)))
-                .hasMessageContaining("트랜잭션 밖에서 잡는다");
-        assertThat(jdbcTemplate.queryForObject("SELECT IS_FREE_LOCK(CONCAT(DATABASE(), '.order-stock-reconcile'))", Integer.class))
-                .isEqualTo(1);
+    @DisplayName("트랜잭션 밖에서 잠그면 거절한다 — 행 잠금이 문장과 함께 바로 풀려 아무것도 막지 못한다")
+    void refusesToLockOutsideATransaction() {
+        assertThatThrownBy(lock::tryLock).hasMessageContaining("대조 트랜잭션 안에서 잡는다");
     }
 
     @Test
@@ -371,6 +379,27 @@ class StockReconcilerTest {
 
         assertThat(reconciler.run(StockReconciler.SCHEDULED_GAP)).isEmpty();
         assertThat(runCount()).isEqualTo(runs);
+    }
+
+    /** 다른 연결에서 잠금 행을 기다리지 않고 잠가 본다 — 잡았으면 바로 롤백해 놓는다. */
+    private boolean lockIsFree() {
+        try (Connection probe = dataSource.getConnection(); Statement statement = probe.createStatement()) {
+            probe.setAutoCommit(false);
+            try {
+                statement.executeQuery(LOCK_ROW).close();
+                return true;
+            } catch (SQLException e) {
+                if (e.getErrorCode() == 3572) {
+                    return false;
+                }
+                throw e;
+            } finally {
+                probe.rollback();
+                probe.setAutoCommit(true);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private long runCount() {

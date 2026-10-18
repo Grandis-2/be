@@ -1,0 +1,108 @@
+# nova 코드 리뷰 동작 설정 (Qodo v2, GitHub 앱 qodo-code-review)
+#
+# 이 파일은 "언제 · 어디에 · 얼마나" 리뷰할지만 정한다. 무엇을 지적할지(규칙)는 루트의 REVIEW.md 에 있다.
+# 키는 v2 문서에 있는 것만 쓴다: https://docs.qodo.ai/configuration/configuration-and-command-reference
+#
+# 기본 브랜치(dev) 루트의 파일을 읽는다. 머지 뒤 새로 연 PR 부터 적용된다 — 열려 있던 PR 은 그대로다.
+#   https://docs.qodo.ai/configuration/configuration-file#repository-root-configuration
+# 같은 키가 여러 곳에 있으면 위가 이긴다: 저장소 위키 > 이 파일 > org 의 pr-agent-settings 저장소 > Qodo 포털.
+#   https://docs.qodo.ai/configuration#configuration-precedence
+# 포털에서 바꿔도 이 파일에 적힌 키는 바뀌지 않는다. 포털만 있는 설정(파일 제외 경로 · Jira 연결 · 프리셋)은 포털에서 한다.
+
+[github_app]
+# 열기 · 다시 열기 · 초안 해제(ready_for_review) 때 요약과 리뷰를 단다. 세 시점은 앱 기본 동작이라 따로 적지 않는다
+pr_commands = ["/agentic_describe", "/agentic_review"]
+# 초안은 리뷰하지 않는다. 초안을 해제하면 그때 리뷰한다
+feedback_on_draft_pr = false
+# 푸시마다 다시 리뷰한다(CodeRabbit auto_incremental_review). 범위는 아래 enable_incremental_review 가 정한다
+handle_push_trigger = true
+push_commands = ["/agentic_review"]
+# 봇 · GitHub App 이 연 PR 은 건너뛴다(기본값을 명시). 사람이 /agentic_review 로 부르면 리뷰한다
+ignore_bot_pr = true
+
+[config]
+# 제목 정규식(OSS 기준 re.search · 대소문자 구분이라 (?i)). 목록을 적으면 기본값이 바뀌는 것으로 보고 기본값 두 개도 남긴다
+# wip 는 영단어 안(swipe)은 빼고, 한글이 바로 붙은 "wip작업" 은 잡는다
+ignore_pr_title = [
+  '^\[Auto\]',
+  '^Auto',
+  '(?i)(^|[^a-z])wip([^a-z]|$)',
+  '(?i)\[skip review\]',
+]
+# 정확히 일치 · 대소문자 구분
+ignore_pr_labels = ["skip-review"]
+# 제목 · 라벨을 바꿔 제외를 풀어도 자동으로 다시 돌지 않는다 — PR 에 /agentic_review 댓글로 부른다
+# main 은 promote.yml 이 App 토큰으로 dev 커밋을 fast-forward 할 뿐 PR 을 열지 않고, 사람이 dev → main PR 을 여는 것은 금지다.
+# 그래도 main 을 향한 PR 이 생기면 이미 리뷰한 코드의 승격이거나 규칙 위반이라 리뷰하지 않는다
+ignore_pr_target_branches = ['^main$']
+# 경로 제외(build/ · .gradle/ · gradle/ · gradlew* · *.lock · 이미지): v2 파일 키 없음 — 포털 Workflow > Ignore Files 에서 한다
+
+[review_agent]
+enable_review_md = true
+# 푸시 뒤 리뷰는 지난 리뷰 이후 바뀐 부분만 본다. 에픽 브랜치는 커밋이 길게 쌓여 전체를 다시 보면 같은 지적이 반복된다
+enable_incremental_review = true
+# 리뷰 댓글은 한 개를 고쳐 쓴다. 푸시마다 "갱신됨" 댓글이 따로 달리면 에픽 PR 이 알림으로 덮인다.
+# 대가: 다시 리뷰했다는 알림이 없다 — 새 지적은 인라인 댓글로 알 수 있다
+persistent_comment_notification = false
+# 강도(CodeRabbit assertive 에 맞춤): High · Medium 은 인라인, Low 는 요약 댓글에만(버리지 않는다).
+# 1 로 내리면 사소한 지적까지 인라인에 붙어 리뷰를 안 읽게 되고, 3 으로 올리면 Medium(경계 · 누락 검증)이 요약에 묻힌다
+inline_comments_severity_threshold = 2
+# 깊이는 Auto(override_effort 미설정)로 둔다 — 위험해 보이는 변경은 Deep 으로 올라간다.
+# "extended" 로 고정하면 모든 PR 이 Deep 이 되어 느려지고, 문서상 Research Preview 에서는 Deep 이 꺼져 있다
+smart_router_extra_instructions = "접수 · 재고 · 작업 선점 · 결제 반영 코드와 flyway-project/migrations 변경은 위험이 높은 것으로 본다."
+# 한 파일 · 5줄 이하 인라인 지적에만 붙는 한 번 클릭 수정안(CodeRabbit 의 committable suggestion).
+# 범위가 좁아 위험이 작다. 대가: 적용하면 커밋이 생겨 다시 리뷰가 돈다
+enable_commitable_suggestions = true
+# 출력 언어 키는 v2 에 없다. 말투와 함께 리뷰 에이전트 지침으로 준다(규칙 본문은 REVIEW.md, 여기는 말투만)
+issues_user_guidelines = """
+모든 지적 · 설명 · 수정안은 한국어로 쓴다. 코드 · 식별자 · 로그 문구는 원문 그대로 둔다.
+근거(코드 위치 · 실행 경로)를 먼저 말하고 수정안을 제시한다.
+추측이면 추측이라고 밝히고, 확실하지 않은 지적은 질문으로 남긴다.
+취향 차이(네이밍 선호 · 줄바꿈 · 주석 스타일)는 지적하지 않는다.
+"""
+# 규칙 검사 에이전트에도 같은 말투를 준다(TOML 은 값을 참조할 수 없어 같은 문장을 다시 적는다)
+compliance_user_guidelines = """
+모든 지적 · 설명 · 수정안은 한국어로 쓴다. 코드 · 식별자 · 로그 문구는 원문 그대로 둔다.
+근거(코드 위치 · 실행 경로)를 먼저 말하고 수정안을 제시한다.
+추측이면 추측이라고 밝히고, 확실하지 않은 지적은 질문으로 남긴다.
+취향 차이(네이밍 선호 · 줄바꿈 · 주석 스타일)는 지적하지 않는다.
+"""
+# 대응 없음: request_changes_workflow(Request changes 로 머지 차단) — Qodo 는 댓글만 단다. 차단은 사람 리뷰 · 브랜치 규칙으로
+# 대응 없음: auto_pause_after_reviewed_commits — Qodo 는 푸시마다 리뷰하고 멈추지 않는다
+
+[qodo_describe_agent]
+# 요약 · 워크스루 · 파일 변경 · 다이어그램 · 시간 추정은 요약 댓글에 기본으로 들어간다(켜고 끄는 키 없음).
+# 본문은 PR 템플릿대로 사람이 쓰므로 건드리지 않고 별도 댓글로 단다
+publish_mode = "comment"
+# 리뷰 시간 추정을 라벨로도 단다(CodeRabbit estimate_code_review_effort) — PR 목록에서 큰 PR 을 먼저 고를 수 있다
+publish_review_time_estimate_labels = true
+# 요약 · 채팅 언어 키는 v2 에 없다 — 요약 · 채팅 답은 영어로 나올 수 있다
+
+[review_agent_ux]
+# CodeRabbit poem · in_progress_fortune: false 와 같은 뜻 — 리뷰와 상관없는 문구를 뺀다
+show_daily_tips = false
+
+[chat_agent]
+# 댓글 맨 앞에 @qodo · qodo · /qodo 를 붙이면 답한다(기본값을 명시)
+enabled = true
+
+[pr_code_suggestions]
+# 질문으로 보이는 PR 댓글에 @qodo 없이 답한다(CodeRabbit chat.auto_reply, 기본값 명시).
+# chat 문서는 태그 없는 답글을 무시한다고 해 두 문서가 어긋난다 — 실제 동작은 첫 PR 에서 확인
+enable_chat_in_code_suggestions = true
+
+[jira]
+# 브랜치 이름(feature/NV-123)에서 티켓을 찾으려면 Jira Cloud 주소가 필요하다. Jira 앱 연결은 포털 Integrations 에서 한다.
+# 티켓 요구 사항과 변경을 맞춰 보는 검사(CodeRabbit assess_linked_issues)는 기본으로 켜져 있다
+#   https://docs.qodo.ai/integrations/ticketing-integrations/jira#jira-base-url
+jira_base_url = "https://shseol.atlassian.net"
+
+# 대응 없음(키를 만들지 않는다):
+# - language "ko-KR" — 위 *_user_guidelines 로 대신한다
+# - sequence_diagrams · collapse_walkthrough · changed_files_summary · poem — 요약 구성은 고정
+# - suggested_reviewers · auto_assign_reviewers — 리뷰어 추천 기능 없음
+# - labeling_instructions — 원래 제안만 했고(auto_apply_labels: false) v2 의 라벨은 위험도 · 시간 라벨뿐이라 옮기지 않는다
+# - tools(gitleaks · actionlint · zizmor · osvScanner 등) — 외부 분석기 연동 없음. 시크릿은 CI 의 gitleaks 가 잡는다.
+#   [checks] 는 CI 실패 때 원인 댓글을 다는 다른 기능이라 켜지 않는다
+# - code_generation(독스트링 · 단위 테스트 생성) — 대응 없음. [fixer_agent] 는 지적을 고치는 PR 을 여는 다른 기능이라 켜지 않는다
+# - knowledge_base(learnings · issues · PR, scope local) — 파일 키 없음. PR 이력 학습과 규칙 채굴은 포털 Context 탭에서 돈다

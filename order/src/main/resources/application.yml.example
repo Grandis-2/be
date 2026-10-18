@@ -87,6 +87,7 @@ nova:
     # 논리 목적지 → 실제 큐 이름(환경마다 접두어를 붙일 때만)
     # queues:
     #   preorder-events: dev-preorder-events
+    #   catalog-events: dev-catalog-events
     consumer:
       enabled: true
       queue: order-events

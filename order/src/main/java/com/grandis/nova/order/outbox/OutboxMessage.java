@@ -7,7 +7,7 @@ package com.grandis.nova.order.outbox;
  * 종류와 본문이 어긋난 메시지를 만들 수 없다. payload 에는 받는 쪽 계약에 있는 칸만 담고 민감정보는 넣지 않는다.
  */
 public sealed interface OutboxMessage extends com.grandis.nova.common.outbox.OutboxMessage permits PreorderOrderSettled, PreorderPaymentStarted, PreorderPaymentConfirmed, OrderRefundRequested, DrawEntryPaid, DrawRequested,
-        NotificationRequested {
+        NotificationRequested, InStockProductReady {
 
     @Override
     OutboundEventType eventType();
