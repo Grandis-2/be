@@ -36,14 +36,16 @@ public class ProductRankingService {
     static final int MAX_CANDIDATES = 500;
 
     private final ProductViewCounter counter;
+    private final AnonymousQuota quota;
     private final ProductListingQueryRepository listings;
     private final TransactionTemplate readTransaction;
     private final LocalReadCache<String, List<ProductListItem>> cache;
     private final Clock clock;
 
-    public ProductRankingService(ProductViewCounter counter, ProductListingQueryRepository listings, PlatformTransactionManager transactionManager,
+    public ProductRankingService(ProductViewCounter counter, AnonymousQuota quota, ProductListingQueryRepository listings, PlatformTransactionManager transactionManager,
                                  CatalogLocalCaches local, Clock clock) {
         this.counter = counter;
+        this.quota = quota;
         this.listings = listings;
         this.readTransaction = new TransactionTemplate(transactionManager);
         this.readTransaction.setReadOnly(true);
@@ -55,6 +57,7 @@ public class ProductRankingService {
 
     /**
      * 상세 화면 조회 한 번. 상세처럼 공개 · 준비 끝난 상품만 받는다(아니면 404 — 없는 상품과 같은 응답). 같은 사람 · 같은 상품은 하루(KST) 한 번만 센다.
+     * 익명이면 IP 별 익명 id 상한({@link AnonymousQuota})을 넘은 새 id 는 세지 않는다.
      * DB · Redis 가 실패하면(장애 · 시간 초과) 경고만 남기고 넘어간다 — 조회 신호 하나를 놓치는 것이 상세 화면을 막는 것보다 낫다. 시간 초과된 쓰기는
      * 뒤늦게 반영될 수도 있다(시험에서 컨테이너를 멈췄다 풀 때 실측).
      *
@@ -72,7 +75,10 @@ public class ProductRankingService {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
         try {
-            counter.record(productId, viewer, clock.instant());
+            Instant now = clock.instant();
+            if (quota.admit(viewer, now)) {
+                counter.record(productId, viewer, now);
+            }
         } catch (DataAccessException e) {
             log.warn("조회수를 세지 못했다(Redis) productId={}", productId, e);
         }

@@ -16,8 +16,11 @@ final class Visitors {
     private Visitors() {
     }
 
-    /** @throws com.grandis.nova.common.BusinessException VALIDATION_FAILED(anonymousId) — 토큰도 익명 id 도 없다 */
-    static Optional<ProductViewer> resolve(UUID anonymousId) {
+    /**
+     * @param ip 요청을 보낸 IP({@link com.grandis.nova.catalog.web.ClientIps}) — 익명이면 IP 별 익명 id 상한에 쓴다
+     * @throws com.grandis.nova.common.BusinessException VALIDATION_FAILED(anonymousId) — 토큰도 익명 id 도 없다
+     */
+    static Optional<ProductViewer> resolve(UUID anonymousId, String ip) {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication instanceof NovaAuthentication nova) {
             return nova.getPrincipal().role() == Role.USER ? Optional.of(ProductViewer.customer(nova.getPrincipal().customerId())) : Optional.empty();
@@ -25,6 +28,6 @@ final class Visitors {
         if (anonymousId == null) {
             throw ValidationFailures.of("anonymousId", "로그인하지 않았으면 익명 id 가 필요합니다.");
         }
-        return Optional.of(ProductViewer.anonymous(anonymousId));
+        return Optional.of(ProductViewer.anonymous(anonymousId, ip));
     }
 }
