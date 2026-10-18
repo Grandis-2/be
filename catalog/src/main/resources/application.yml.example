@@ -45,7 +45,7 @@ spring:
 server:
   port: 8082
   # 켜지 않는다 — 조회 · 검색 신호의 IP 별 익명 id 상한이 X-Forwarded-For 를 받은 그대로 센다(nova.signals.trusted-proxy-hops, member 와 같은 방식).
-  # 비워 두면 Spring Boot 가 AWS ECS 를 감지해 스스로 켜고(RemoteIpValve), 헤더를 고쳐 써서 IP 판정이 틀어진다. 켜진 채로 hops > 0 이면 기동 실패
+  # 비워 둬도 코드 기본값(CatalogDefaults)이 none 이다. native · framework 로 켜면 hops > 0 일 때 기동 실패
   forward-headers-strategy: none
 
 # 헬스 체크(ALB 대상 그룹): 관리 포트 9082 의 GET /actuator/health/readiness — 토큰 없이 200 {"status":"UP"}. 서비스 포트(8082)로는 actuator 가 나가지 않는다.
@@ -80,7 +80,7 @@ jwt:
 
 # 다른 서비스로 가는 이벤트(상품 등록 → preorder 회차 · 차수, order 초기 재고)는 아웃박스(catalog_outbox_events)에 적고 커밋 뒤 보낸다.
 nova:
-  # 조회 · 검색 신호(랭킹 · 인기 검색어). 비회원은 IP 하나가 하루(KST)에 익명 id 를 anonymous-ids-per-ip 개까지만 센다.
+  # 조회 · 검색 신호(랭킹 · 인기 검색어). 비회원은 IP 하나(IPv6 는 /64)가 하루(KST)에 익명 id 를 anonymous-ids-per-ip 개까지만 센다(1 이상).
   # trusted-proxy-hops: X-Forwarded-For 에서 믿는 프록시 수 — 운영은 CloudFront → ALB 라 2(오른쪽에서 두 번째 칸). 로컬 · 프록시 없음이면 칸이 모자라 remoteAddr
   signals:
     trusted-proxy-hops: 2

@@ -59,7 +59,8 @@ public class AnonymousQuota {
         }
         this.redis = redis;
         this.perIp = perIp;
-        this.rejected = Counter.builder(REJECTED).description("IP 별 하루 익명 id 상한으로 세지 않은 신호").register(meters);
+        // 조회 · 검색을 가르지 않는다. 검색은 결과 수를 세기 전에 상한을 보므로 어차피 0건이라 세지 않을 검색도 거절로 센다
+        this.rejected = Counter.builder(REJECTED).description("IP 별 하루 익명 id 상한으로 세지 않은 조회 · 검색 신호").register(meters);
     }
 
     /** @return 이 사람의 신호를 세도 되는가. 회원이면 늘 true */
@@ -77,7 +78,8 @@ public class AnonymousQuota {
     }
 
     /**
-     * 상한을 세는 단위 — IPv4 는 주소 그대로, IPv6 는 앞 64비트(예: 2001:db8:0:1::/64). IP 모양이 아니면 원문 그대로다(DNS 를 찾지 않는다).
+     * 상한을 세는 단위 — IPv4 는 주소 그대로, IPv6 는 앞 64비트(키 모양 예: {@code 2001:db8:0:1:0:0:0:0/64}), IPv4 대응 IPv6(::ffff:1.2.3.4)는 그 IPv4.
+     * 리터럴로만 읽는다({@link InetAddress#ofLiteral} — 이름 조회가 없다). IP 리터럴이 아니면 원문 그대로다.
      */
     static String network(String ip) {
         if (ip.indexOf(':') < 0) {
@@ -86,14 +88,15 @@ public class AnonymousQuota {
         try {
             String literal = ip.startsWith("[") && ip.endsWith("]") ? ip.substring(1, ip.length() - 1) : ip;
             int zone = literal.indexOf('%');
-            byte[] address = InetAddress.getByName(zone < 0 ? literal : literal.substring(0, zone)).getAddress();
-            if (address.length != 16) {
-                return ip;
+            InetAddress address = InetAddress.ofLiteral(zone < 0 ? literal : literal.substring(0, zone));
+            byte[] bytes = address.getAddress();
+            if (bytes.length == 4) {
+                return address.getHostAddress();
             }
             byte[] prefix = new byte[16];
-            System.arraycopy(address, 0, prefix, 0, 8);
+            System.arraycopy(bytes, 0, prefix, 0, 8);
             return InetAddress.getByAddress(prefix).getHostAddress() + "/64";
-        } catch (UnknownHostException e) {
+        } catch (IllegalArgumentException | UnknownHostException e) {
             return ip;
         }
     }

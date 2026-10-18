@@ -16,6 +16,15 @@ class AnonymousQuotaTest {
         assertThat(AnonymousQuota.network("[2001:db8:0:1::15]")).isEqualTo("2001:db8:0:1:0:0:0:0/64");
         assertThat(AnonymousQuota.network("fe80::1%eth0")).isEqualTo("fe80:0:0:0:0:0:0:0/64");
         assertThat(AnonymousQuota.network("2001:db8:0:2::1")).as("다른 /64").isEqualTo("2001:db8:0:2:0:0:0:0/64");
+        assertThat(AnonymousQuota.network("::ffff:203.0.113.7")).as("IPv4 대응 주소는 그 IPv4").isEqualTo("203.0.113.7");
         assertThat(AnonymousQuota.network("not:an:ip:zz")).isEqualTo("not:an:ip:zz");
+        assertThat(AnonymousQuota.network("localhost:x")).as("이름처럼 보여도 조회하지 않고 원문").isEqualTo("localhost:x");
+    }
+
+    @Test
+    @DisplayName("상한은 1 이상 — 0 이하면 비회원을 하나도 못 세므로 기동을 막는다")
+    void capMustBePositive() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> new AnonymousQuota(null, new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), 0))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }
