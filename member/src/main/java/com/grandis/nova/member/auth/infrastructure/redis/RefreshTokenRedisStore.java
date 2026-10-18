@@ -16,12 +16,13 @@ import org.springframework.stereotype.Repository;
  * 관리자 세션의 리프레시 jti 를 두는 Lua 비교교환 저장소. 회원 리프레시는 여기가 아니라 `shop.refresh_tokens` 가 정본이다.
  * 회전은 GET → 비교 → SET 을 서버 안에서 한 번에 한다. 클라이언트에서 GET 하고 SET 하면 그 사이에 다른 요청이 끼어 둘 다 성공한다.
  *
- * <p>값은 발급 직후 `지금jti` 하나, 회전 뒤에는 `지금jti|바로앞jti|유예끝(Redis 서버 시각, epoch ms)` 이다. 회전 유예를 키 하나에 담는다 — 키를 둘로
- * 나누면 클러스터에서 슬롯이 갈려 한 스크립트로 묶을 수 없다. 바로 앞 jti 가 맞으면 지금 jti 는 그것이 만든 다음 토큰이고 아직 안 쓰였다(쓰였으면
- * 바로 앞 자리가 그것으로 바뀌었다). 유예 안의 다시 회전은 유예 끝을 그대로 두어 창이 늘지 않는다. 시각은 앱이 아니라 Redis 의 TIME 으로 잰다 —
- * 인스턴스마다 시계가 달라도 한 곳에서 판정한다. 값 모양이 깨졌으면(구분자 · 시각 누락) 유예 없이 지금 jti 만 비교한다 — 스크립트 오류(500)가
- * 나지 않게. 대가: 이 모양을 모르는 옛 버전은 회전된 세션을 재사용으로 끊는다 — 배포 중 옛 인스턴스에 간 재발급, 그리고 롤백하면 한 번이라도
- * 회전한 관리자 세션의 다음 재발급(새 버전은 옛 값을 그대로 읽는다).
+ * <p>회전 유예는 세션 키와 따로 둔다 — 세션 키(`auth:refresh:{sid}`)는 늘 지금 jti 하나라 이 형식을 모르는 옛 버전도 그대로 읽는다(배포 중 섞여도 ·
+ * 롤백해도 관리자 세션이 끊기지 않는다). 유예 키(`auth:refresh-grace:{sid}`)는 회전 때 `바로앞jti|유예끝(Redis 서버 시각, epoch ms)` 을 유예 시간만큼
+ * 둔다. 바로 앞 jti 가 맞으면 지금 jti 는 그것이 만든 다음 토큰이고 아직 안 쓰였다(쓰였으면 그 회전이 유예 키를 자기 것으로 바꿨다). 유예 안의 다시
+ * 회전은 유예 키를 건드리지 않아 창이 늘지 않는다. 시각은 앱이 아니라 Redis 의 TIME 으로 잰다 — 인스턴스마다 시계가 달라도 한 곳에서 판정한다.
+ * 유예 값 모양이 깨졌으면 유예 없이 지금 jti 만 비교한다(스크립트 오류 500 이 나지 않게). 두 키를 한 스크립트에서 쓰므로 같은 슬롯이어야 한다 — 운영
+ * Valkey 는 클러스터 모드가 아니다(nova-infra 복제 그룹, 샤드 하나). 클러스터로 바꾸면 두 키에 해시 태그가 필요하다.
+ * 배포 중 옛 버전이 회전하면 유예 키를 고치지 않아, 그 30초 안에는 바로 앞 jti 를 다음 토큰이 쓰인 뒤에도 받아 줄 수 있다(섞인 동안만).
  */
 @Repository
 public class RefreshTokenRedisStore implements AdminRefreshTokenStore {
@@ -29,33 +30,32 @@ public class RefreshTokenRedisStore implements AdminRefreshTokenStore {
     private static final Logger log = LoggerFactory.getLogger(RefreshTokenRedisStore.class);
 
     /**
-     * KEYS[1]=세션 키, ARGV[1]=기대 jti, ARGV[2]=새 jti, ARGV[3]=TTL(ms), ARGV[4]=유예(ms).
+     * KEYS[1]=세션 키, KEYS[2]=유예 키, ARGV[1]=기대 jti, ARGV[2]=새 jti, ARGV[3]=TTL(ms), ARGV[4]=유예(ms).
      * 1 이면 교체됨, 2 면 유예 안의 다시 회전, 0 이면 키 없음 또는 그 밖의 재사용.
      */
     static final DefaultRedisScript<Long> ROTATE = new DefaultRedisScript<>("""
-            local value = redis.call('GET', KEYS[1])
-            if value == false then
+            local current = redis.call('GET', KEYS[1])
+            if current == false then
                 return 0
-            end
-            local current, previous, graceUntil = value, nil, 0
-            local first = string.find(value, '|', 1, true)
-            if first then
-                current = string.sub(value, 1, first - 1)
-                local second = string.find(value, '|', first + 1, true)
-                if second then
-                    previous = string.sub(value, first + 1, second - 1)
-                    graceUntil = tonumber(string.sub(value, second + 1)) or 0
-                end
             end
             local time = redis.call('TIME')
             local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
             if current == ARGV[1] then
-                redis.call('SET', KEYS[1], ARGV[2] .. '|' .. ARGV[1] .. '|' .. string.format('%.0f', now + tonumber(ARGV[4])), 'PX', ARGV[3])
+                redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])
+                redis.call('SET', KEYS[2], ARGV[1] .. '|' .. string.format('%.0f', now + tonumber(ARGV[4])), 'PX', ARGV[4])
                 return 1
             end
-            if previous == ARGV[1] and now < graceUntil then
-                redis.call('SET', KEYS[1], ARGV[2] .. '|' .. previous .. '|' .. string.format('%.0f', graceUntil), 'PX', ARGV[3])
-                return 2
+            local grace = redis.call('GET', KEYS[2])
+            if grace then
+                local separator = string.find(grace, '|', 1, true)
+                if separator then
+                    local previous = string.sub(grace, 1, separator - 1)
+                    local graceUntil = tonumber(string.sub(grace, separator + 1)) or 0
+                    if previous == ARGV[1] and now < graceUntil then
+                        redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])
+                        return 2
+                    end
+                end
             end
             return 0
             """, Long.class);
@@ -75,7 +75,7 @@ public class RefreshTokenRedisStore implements AdminRefreshTokenStore {
     public boolean rotate(UUID sessionId, UUID expectedRefreshTokenId, UUID newRefreshTokenId, Duration ttl) {
         // toMillis 는 내림이라 1ms 미만이면 PX 0 이 되고 Redis 가 "invalid expire time" 으로 거절해 500 이 된다. 하한 1ms.
         long ttlMillis = Math.max(1, ttl.toMillis());
-        Long result = redis.execute(ROTATE, List.of(AuthRedisKeys.refresh(sessionId)),
+        Long result = redis.execute(ROTATE, List.of(AuthRedisKeys.refresh(sessionId), AuthRedisKeys.refreshGrace(sessionId)),
                 expectedRefreshTokenId.toString(), newRefreshTokenId.toString(), String.valueOf(ttlMillis),
                 String.valueOf(RefreshTokens.ROTATION_GRACE.toMillis()));
         if (Long.valueOf(2L).equals(result)) {
@@ -86,6 +86,6 @@ public class RefreshTokenRedisStore implements AdminRefreshTokenStore {
 
     @Override
     public void delete(UUID sessionId) {
-        redis.delete(AuthRedisKeys.refresh(sessionId));
+        redis.delete(List.of(AuthRedisKeys.refresh(sessionId), AuthRedisKeys.refreshGrace(sessionId)));
     }
 }

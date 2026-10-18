@@ -75,7 +75,8 @@ class RedisStoresTest {
 
     @AfterEach
     void cleanUp() {
-        redis.delete(List.of(AuthRedisKeys.refresh(sid), AuthRedisKeys.revokedSession(sid), AuthRedisKeys.notBefore(subject)));
+        redis.delete(List.of(AuthRedisKeys.refresh(sid), AuthRedisKeys.refreshGrace(sid), AuthRedisKeys.revokedSession(sid),
+                AuthRedisKeys.notBefore(subject)));
     }
 
     private TokenClaims claimsIssuedAt(Instant iat) {
@@ -98,7 +99,7 @@ class RedisStoresTest {
         }
 
         @Test
-        @DisplayName("저장된 jti 와 같으면 새 jti 로 바꾸고 true — 값은 지금|바로 앞|유예 끝(약 30초 뒤), TTL 은 넘긴 값으로 다시")
+        @DisplayName("저장된 jti 와 같으면 새 jti 로 바꾸고 true — 세션 키는 jti 하나 그대로(옛 버전도 읽는다), 유예 키에 바로 앞|유예 끝(약 30초 뒤, TTL 30초)")
         void rotateSucceedsWhenExpectedMatches() {
             UUID current = UUID.randomUUID();
             UUID next = UUID.randomUUID();
@@ -109,6 +110,8 @@ class RedisStoresTest {
             assertThat(value[0]).isEqualTo(next.toString());
             assertThat(value[1]).isEqualTo(current.toString());
             assertThat(Long.parseLong(value[2]) - redisNowMillis()).isBetween(29_000L, 30_000L);
+            assertThat(redis.opsForValue().get(AuthRedisKeys.refresh(sid))).as("옛 버전이 그대로 비교하는 모양").isEqualTo(next.toString());
+            assertThat(redis.getExpire(AuthRedisKeys.refreshGrace(sid), TimeUnit.SECONDS)).isBetween(25L, 30L);
             assertThat(redis.getExpire(AuthRedisKeys.refresh(sid), TimeUnit.SECONDS)).isBetween(Duration.ofDays(10).toSeconds() - 5, Duration.ofDays(10).toSeconds());
         }
 
@@ -157,10 +160,10 @@ class RedisStoresTest {
             UUID second = UUID.randomUUID();
             refreshStore.save(sid, first, REFRESH);
             refreshStore.rotate(sid, first, second, REFRESH);
-            redis.opsForValue().set(AuthRedisKeys.refresh(sid), second + "|" + first + "|" + redisNowMillis(), REFRESH);
+            redis.opsForValue().set(AuthRedisKeys.refreshGrace(sid), first + "|" + redisNowMillis(), REFRESH);
 
             assertThat(refreshStore.rotate(sid, first, UUID.randomUUID(), REFRESH)).isFalse();
-            redis.opsForValue().set(AuthRedisKeys.refresh(sid), second + "|" + first + "|" + (redisNowMillis() + 5_000), REFRESH);
+            redis.opsForValue().set(AuthRedisKeys.refreshGrace(sid), first + "|" + (redisNowMillis() + 5_000), REFRESH);
             assertThat(refreshStore.rotate(sid, first, UUID.randomUUID(), REFRESH)).isTrue();
         }
 
@@ -172,12 +175,13 @@ class RedisStoresTest {
         }
 
         @Test
-        @DisplayName("값 모양이 깨졌으면(구분자 · 시각 누락) 스크립트 오류 없이 유예 없음 — 지금 jti 는 회전, 바로 앞 jti 는 false")
+        @DisplayName("유예 값 모양이 깨졌으면(구분자 · 시각 누락) 스크립트 오류 없이 유예 없음 — 지금 jti 는 회전, 바로 앞 jti 는 false")
         void malformedValueMeansNoGrace() {
-            UUID current = UUID.randomUUID();
             UUID previous = UUID.randomUUID();
-            for (String broken : new String[] {current + "|" + previous, current + "|" + previous + "|abc", current + "|" + previous + "|"}) {
-                redis.opsForValue().set(AuthRedisKeys.refresh(sid), broken, REFRESH);
+            for (String broken : new String[] {previous.toString(), previous + "|abc", previous + "|"}) {
+                UUID current = UUID.randomUUID();
+                refreshStore.save(sid, current, REFRESH);
+                redis.opsForValue().set(AuthRedisKeys.refreshGrace(sid), broken, REFRESH);
                 assertThat(refreshStore.rotate(sid, previous, UUID.randomUUID(), REFRESH)).as(broken).isFalse();
                 assertThat(refreshStore.rotate(sid, current, UUID.randomUUID(), REFRESH)).as(broken).isTrue();
             }
@@ -208,17 +212,25 @@ class RedisStoresTest {
         @Test
         @DisplayName("delete 뒤에는 회전이 실패한다")
         void deleteRemovesKey() {
+            UUID first = UUID.randomUUID();
             UUID current = UUID.randomUUID();
-            refreshStore.save(sid, current, REFRESH);
+            refreshStore.save(sid, first, REFRESH);
+            refreshStore.rotate(sid, first, current, REFRESH);
+            assertThat(redis.hasKey(AuthRedisKeys.refreshGrace(sid))).as("회전이 유예 키를 만들었다").isTrue();
 
             refreshStore.delete(sid);
+            assertThat(redis.hasKey(AuthRedisKeys.refreshGrace(sid))).as("유예 키도 지운다").isFalse();
 
             assertThat(refreshStore.rotate(sid, current, UUID.randomUUID(), REFRESH)).isFalse();
+            assertThat(refreshStore.rotate(sid, first, UUID.randomUUID(), REFRESH)).as("바로 앞 jti 도 유예가 없다").isFalse();
         }
     }
 
+    /** [지금 jti, 바로 앞 jti, 유예 끝] — 세션 키와 유예 키를 합쳐 읽는다. 유예 키가 없으면 [지금 jti]. */
     private String[] stored() {
-        return redis.opsForValue().get(AuthRedisKeys.refresh(sid)).split("\\|");
+        String current = redis.opsForValue().get(AuthRedisKeys.refresh(sid));
+        String grace = redis.opsForValue().get(AuthRedisKeys.refreshGrace(sid));
+        return grace == null ? new String[] {current} : (current + "|" + grace).split("\\|");
     }
 
     /** 유예 판정과 같은 시계(Redis TIME) — 앱 시계와 어긋나도 경계를 같은 쪽에서 잰다. */

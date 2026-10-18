@@ -5,12 +5,15 @@ import java.util.UUID;
 /**
  * 인증이 쓰는 Redis 키의 단일 출처. 쓰는 쪽(member)과 읽는 쪽(필터, HTTP 서비스 4개)이 같은 상수를 본다.
  * 대기열과 Redis 한 대를 같이 쓰므로 접두 `auth:` 로 가른다. 클러스터 모드는 SELECT 로 논리 DB 를 못 나눠 접두가 유일한 경계다.
- * 인증이 쓰는 키는 이 다섯뿐이다.
+ * 인증이 쓰는 키는 이 여섯뿐이다.
  */
 public final class AuthRedisKeys {
 
-    /** 관리자 리프레시 jti(발급 직후 `jti`, 회전 뒤 `지금jti|바로앞jti|유예끝`). TTL = 리프레시 만료. 발급·회전·로그아웃이 쓴다. */
+    /** 관리자 리프레시의 지금 jti. TTL = 리프레시 만료. 발급·회전·로그아웃이 쓴다. */
     public static final String REFRESH_PREFIX = "auth:refresh:";
+
+    /** 관리자 리프레시 회전 유예 — `바로앞jti|유예끝(epoch ms)`. TTL = 유예 시간. 회전이 쓰고 로그아웃이 지운다. */
+    public static final String REFRESH_GRACE_PREFIX = "auth:refresh-grace:";
 
     /**
      * 세션(sid) 폐기 표식. 값은 {@link #REVOKED_SESSION_MARK}(로그아웃 TTL = 액세스 만료 · 리프레시 재사용 탐지 TTL = 리프레시 만료) 또는
@@ -39,6 +42,10 @@ public final class AuthRedisKeys {
 
     public static String refresh(UUID sessionId) {
         return REFRESH_PREFIX + sessionId;
+    }
+
+    public static String refreshGrace(UUID sessionId) {
+        return REFRESH_GRACE_PREFIX + sessionId;
     }
 
     public static String revokedSession(UUID sessionId) {
