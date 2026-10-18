@@ -221,6 +221,23 @@ class PopularSearchApiTest {
     }
 
     @Test
+    @DisplayName("상한은 결과 수보다 먼저 본다 — 0건 검색으로 자리를 다 쓴 IP 의 새 id 는 결과 있는 검색도 세지 않는다, 다른 IP 는 센다")
+    void quotaIsCheckedBeforeResultCount() throws Exception {
+        listed("Nova " + tag, "x");
+        for (int i = 0; i < 20; i++) {
+            mockMvc.perform(json(post("/api/v1/products/searches").header("X-Forwarded-For", "203.0.113.20, 130.176.0.1"),
+                    JSON.writeValueAsString(new PopularSearchController.SearchRequest("없는상품" + tag, UUID.randomUUID())))).andExpect(status().isNoContent());
+        }
+
+        mockMvc.perform(json(post("/api/v1/products/searches").header("X-Forwarded-For", "203.0.113.20, 130.176.0.1"),
+                JSON.writeValueAsString(new PopularSearchController.SearchRequest(tag, UUID.randomUUID())))).andExpect(status().isNoContent());
+        assertThat(score(tag)).isZero();
+        mockMvc.perform(json(post("/api/v1/products/searches").header("X-Forwarded-For", "203.0.113.21, 130.176.0.1"),
+                JSON.writeValueAsString(new PopularSearchController.SearchRequest(tag, UUID.randomUUID())))).andExpect(status().isNoContent());
+        assertThat(score(tag)).as("대조군 — 다른 IP").isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("검색이 없으면 빈 목록")
     void emptyPopular() throws Exception {
         assertThat(popular()).isEmpty();
