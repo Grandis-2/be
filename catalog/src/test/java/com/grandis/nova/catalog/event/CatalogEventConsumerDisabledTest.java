@@ -21,7 +21,7 @@ import org.springframework.test.context.TestPropertySource;
 @TestPropertySource(properties = "nova.sqs.region=" + FlociTestContainer.REGION)
 @Import(SqsTestConfig.class)
 @DisplayName("catalog-events 소비기는 끄면 없다")
-class CatalogEventConsumerOffByDefaultTest {
+class CatalogEventConsumerDisabledTest {
 
     @Autowired ApplicationContext context;
 

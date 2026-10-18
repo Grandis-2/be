@@ -25,6 +25,7 @@ import java.util.UUID;
 import java.util.function.BooleanSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -52,6 +53,7 @@ class InStockProductReadyFlowTest {
     @Autowired TestQueues queues;
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired MockMvc mockMvc;
+    @Autowired InStockProductReadyHandler handler;
 
     ShopFixtures fixtures;
 
@@ -82,6 +84,23 @@ class InStockProductReadyFlowTest {
         queues.send(QUEUE, body(product));
         await(() -> queues.messagesIn(QUEUE) == 0, "다시 온 메시지가 지워지지 않았다");
         assertThat(readyAt(product)).as("다시 와도 처음 시각").isEqualTo(first);
+        assertThat(queues.receive(QUEUE + "-dlq", message -> message.body().contains(product.toString()), Duration.ofSeconds(3)))
+                .as("다시 온 메시지는 처리돼 지워졌다 — 실패로 DLQ 에 간 것이 아니다").isEmpty();
+    }
+
+    @Test
+    @DisplayName("처리기를 같은 상품으로 두 번 불러도 예외 없이 끝나고, 사전예약 상품 · 없는 상품이면 실패로 올린다(사전예약 상품은 채우지 않는다)")
+    void handlerIsIdempotentAndRejectsNonInStock() {
+        UUID product = fixtures.product("IN_STOCK", "ACTIVE");
+        handler.handle(product, null);
+        Timestamp first = readyAt(product);
+        handler.handle(product, null);
+        assertThat(readyAt(product)).isEqualTo(first);
+
+        UUID preorder = fixtures.product("PREORDER", "ACTIVE");
+        assertThatThrownBy(() -> handler.handle(preorder, null)).isInstanceOf(IllegalStateException.class).hasMessageContaining("일반 판매가 아니다");
+        assertThat(readyAt(preorder)).isNull();
+        assertThatThrownBy(() -> handler.handle(UUID.randomUUID(), null)).isInstanceOf(IllegalStateException.class).hasMessageContaining("상품이 없다");
     }
 
     @Test

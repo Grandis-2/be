@@ -387,8 +387,8 @@ public class ProductEditService {
 
     /**
      * 마감된 사전예약 상품을 같은 상품 그대로 일반 상품으로 바꾼다(2026-10-14 결정). 판매 중(ACTIVE)이 되고, 할인율은 요청 값(비우면 0)이다.
-     * 옵션별 초기 재고는 등록과 같은 이벤트(IN_STOCK_PRODUCT_REGISTERED)로 order 에 넘긴다 — order 가 재고 행을 만들면 판매 준비가 끝나 목록 · 장바구니에
-     * 나온다(그 전에는 노출되지 않는다). preorder 의 접수용 사본도 비운다(PREORDER_PRODUCT_CHANGED — 판매 방식이 바뀌었다).
+     * 옵션별 초기 재고는 등록과 같은 이벤트(IN_STOCK_PRODUCT_REGISTERED)로 order 에 넘긴다 — order 가 재고 행을 만들고 보낸 판매 준비 이벤트
+     * (IN_STOCK_PRODUCT_READY)가 catalog 에 닿으면 목록 · 장바구니에 나온다(그 전에는 노출되지 않는다). preorder 의 접수용 사본도 비운다(PREORDER_PRODUCT_CHANGED — 판매 방식이 바뀌었다).
      *
      * <ul>
      *   <li>409 STATE_CONFLICT: 사전예약이 아님(이미 바꿨음 포함) · 회차가 취소됨 · 회차가 없음 · 마감 전(closes_at &gt; 지금)</li>

@@ -309,7 +309,8 @@ public class ProductListingQueryRepository {
 
     /**
      * 증정품 후보 옵션 — 판매 중이고 재고 행이 있는 옵션. 상품 쪽 조건(일반 판매 · 판매 중)은 {@link #GIFT_PRODUCTS} 가 건다.
-     * 재고 행이 있으면 판매 방식별 준비({@link #READY})도 참이다(일반 상품의 준비가 곧 재고 행의 유무).
+     * 판매 준비({@link #READY} — stock_ready_at)는 보지 않는다: 재고 행은 있는데 판매 준비 이벤트가 아직 닿지 않은 상품은 목록에는 없고 후보에는
+     * 나온다(관리자가 증정품을 고르는 화면이라 재고 행이 기준이다).
      */
     private static final String GIFT_OPTION = """
             SELECT /*+ NO_SEMIJOIN() JOIN_ORDER(go, gi) */ 1 FROM product_options go %s JOIN option_inventories gi %s ON gi.option_id = go.id
