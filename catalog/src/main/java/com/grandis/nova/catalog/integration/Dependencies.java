@@ -7,6 +7,11 @@ public final class Dependencies {
 
     public static final String ORDER = "order";
     public static final String MEMBER = "member";
+    /**
+     * order 의 재고 조회(GET /internal/stocks) — 토큰을 싣지 않는 그룹. 주소 · 타임아웃 기본값은 order 와 같다(CatalogDefaults). 토큰 릴레이 대상
+     * ({@link #ALL})에 넣지 않는다.
+     */
+    public static final String ORDER_STOCKS = "order-stocks";
     public static final List<String> ALL = List.of(ORDER, MEMBER);
 
     private Dependencies() {
