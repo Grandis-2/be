@@ -35,6 +35,10 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, UUID
     @Query("select t from RefreshToken t where t.id = :id")
     Optional<RefreshToken> findByIdForUpdate(@Param("id") UUID id);
 
+    /** 체인에 아직 폐기되지 않은 행 수(탐지 창 안). 폐기된 원문이 왔을 때 체인 전체가 끊긴 것인지, 그 행만 버려진 것인지 가른다. 잠그지 않는 읽기. */
+    @Query("select count(t) from RefreshToken t where t.familyId = :familyId and t.revokedAt is null and t.expiresAt > :windowStart")
+    long countLiveInFamily(@Param("familyId") String familyId, @Param("windowStart") Instant windowStart);
+
     /** 체인 전체 폐기. 이미 폐기된 행은 시각을 덮지 않는다 — 처음 끊긴 시각이 남아야 조사할 수 있다. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("update RefreshToken t set t.revokedAt = :now where t.familyId = :familyId and t.revokedAt is null")

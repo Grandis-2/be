@@ -306,6 +306,22 @@ class AuthFlowIntegrationTest {
     }
 
     @Test
+    @DisplayName("유예 탈취: 옛 쿠키로 유예 회전한 쪽이 있어도, 원 소유자가 자기 새 쿠키를 내면 401 이고 탈취 쪽 액세스 · 리프레시도 함께 끊긴다")
+    void graceTakeoverIsCutWhenOwnerComesBack() throws Exception {
+        Cookie old = refreshCookie(login());
+        MvcResult owner = mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(old)).andExpect(status().isOk()).andReturn();
+        MvcResult thief = mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(old)).andExpect(status().isOk()).andReturn();
+
+        mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(refreshCookie(owner)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
+        mvc.perform(get("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(json(thief, "/data/sessionToken"))))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/v1/session/refresh").header("Origin", ORIGIN).cookie(refreshCookie(thief)))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     @DisplayName("JWKS: GET /.well-known/jwks.json 은 공개이고, 그 문서만으로 만든 검증 전용 provider 가 로그인 토큰을 검증한다 — 다른 서비스가 받을 계약")
     void jwksEndpointServesVerifiableKeys() throws Exception {
         MvcResult r = login();

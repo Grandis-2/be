@@ -21,7 +21,8 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <pre>
  *   재발급 요청 → 받은 원문을 해시해 행을 찾는다(행 잠금)
- *     · 없음 · 폐기됨           → 거절
+ *     · 없음                    → 거절
+ *     · 폐기됨                  → 같은 체인에 살아 있는 행이 있으면(유예가 버린 다음 토큰이 다시 옴) 재사용, 아니면 거절
  *     · 만료 뒤 탐지 창도 지남   → 만료로 거절(체인은 건드리지 않는다)
  *     · 이미 교체된 토큰         → 교체 뒤 30초 안이고 그 다음 토큰이 아직 안 쓰였으면 다시 회전(아래 유예)
  *                                 아니면 탈취로 판단. 같은 체인의 살아 있는 행을 전부 폐기하고 거절
@@ -36,8 +37,16 @@ import org.springframework.transaction.annotation.Transactional;
  * <p><b>회전 유예.</b> 새로고침을 연타하면 브라우저가 앞 페이지의 재발급 응답을 버려, 서버는 회전했는데 새 쿠키가 저장되지 않고 다음 페이지가 옛
  * 원문으로 다시 온다. 그래서 교체 뒤 {@link #ROTATION_GRACE} 안에 같은 옛 원문이 오면, 그 원문이 만든 다음 토큰(rotated_to)이 아직 한 번도
  * 쓰이지 않았을 때에 한해 다음 토큰을 폐기하고 새로 회전한다 — 살아 있는 토큰은 늘 하나다. 다음 토큰이 이미 쓰였으면(그 뒤로 회전했으면) 지금처럼
- * 재사용이다. 유예 창은 처음 교체 시각부터라 다시 회전해도 늘지 않는다. 30초는 Okta 의 기본 유예(0~60초), "바로 앞 토큰만" 은 Auth0 의 재사용
- * 간격 규칙과 같다. 대가: 옛 원문을 훔친 쪽이 교체 뒤 30초 안에 쓰면 통과한다.
+ * 재사용이다. 유예 창은 처음 교체 시각부터라 다시 회전해도 늘지 않는다. 시각을 초로 잘라 저장하므로 실제 창은 29~30초다(교체 시각의 소수부만큼
+ * 짧다). 30초는 Okta 의 기본 유예(0~60초)다.
+ * <ul>
+ *   <li>유예가 버린 다음 토큰이 다시 오면 재사용으로 체인을 끊는다 — 정상 연타에서는 버려진 토큰이 다시 오지 않고(브라우저가 받지 못했다), 온다면
+ *       두 주체가 같은 체인을 쓰고 있다는 뜻이다. 그래서 옛 원문을 훔친 쪽이 교체 뒤 30초 안에 먼저 써도, 원 소유자가 자기 토큰을 내는 순간 양쪽이 끊기고
+ *       WARN 이 남는다(Auth0 도 무효화된 토큰이 다시 오면 그 체인을 폐기한다).</li>
+ *   <li>한계: 같은 옛 원문이 <b>동시에</b> 여럿 오면 행 잠금이 줄 세워 커밋 순서상 마지막 토큰만 산다. 응답이 커밋 순서와 다르게 도착해 브라우저에
+ *       앞 토큰이 남으면 다음 재발급이 위 재사용으로 끊긴다. 서버는 원문을 갖지 않아 같은 토큰을 다시 줄 수 없다. 앞 페이지의 요청이 먼저 잠금을 잡는
+ *       보통의 새로고침 연타는 마지막 응답이 마지막 토큰이다.</li>
+ * </ul>
  *
  * <p><b>탐지 창.</b> 재사용 판정은 만료 판정보다 먼저다 — 만료 직후 교체된 토큰이 다시 오면 체인을 끊고 그 세션의 액세스 토큰도 폐기 표식으로 죽여야
  * 하기 때문이다. 그 필요는 만료 뒤 액세스 유효기간까지다(그 뒤엔 체인이 낸 액세스 토큰이 다 죽었다). 창이 지난 토큰은 재사용이어도 체인 폐기 없이
@@ -115,6 +124,13 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
         UUID sessionId = row.getSessionId();
         String subject = String.valueOf(row.getCustomerId());
         if (row.getRevokedAt() != null) {
+            if (rows.countLiveInFamily(row.getFamilyId(), now.minus(detectionWindow)) > 0) {
+                // 이 행만 폐기됐고 체인은 산다 — 유예 회전이 버린 다음 토큰이다(로그아웃 · 새 로그인 · 전체 폐기는 체인을 통째로 끊는다).
+                // 그 토큰이 다시 왔다는 건 두 주체가 같은 체인을 쓴다는 뜻이라 재사용으로 끊는다.
+                int revoked = rows.revokeFamily(row.getFamilyId(), now);
+                log.warn("refresh reuse: abandoned successor came back, family revoked sid={} rows={}", shortSid(sessionId), revoked);
+                return Rotation.rejected(Rotation.Status.REUSED, sessionId, subject);
+            }
             return Rotation.rejected(Rotation.Status.REVOKED, sessionId, subject);
         }
         if (!row.getExpiresAt().isAfter(now.minus(detectionWindow))) {
@@ -150,6 +166,7 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
             return Optional.empty();
         }
         Optional<RefreshToken> successor = rows.findByIdForUpdate(row.getRotatedTo());
+        // revokedAt 은 방어다 — 옛 행이 살아 있는데 다음 토큰만 폐기된 상태는 유예 경로가 만들고, 그때 옛 행은 새 토큰을 가리킨다
         if (successor.isEmpty() || successor.get().getRotatedAt() != null || successor.get().getRevokedAt() != null) {
             return Optional.empty();
         }

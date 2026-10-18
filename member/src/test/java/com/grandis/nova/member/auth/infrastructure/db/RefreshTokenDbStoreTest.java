@@ -254,9 +254,27 @@ class RefreshTokenDbStoreTest {
         assertThat(again.sessionId()).isEqualTo(sessionId);
         assertThat(successorOf(first)).as("옛 행은 새 토큰을 가리킨다").isEqualTo(idOf(retried));
         assertThat(liveRows(sessionId)).as("살아 있는(교체 · 폐기 안 된) 토큰은 늘 하나").containsExactly(idOf(retried));
-        assertThat(store.rotate(lost, RefreshTokens.newToken()).status()).as("버려진 다음 토큰은 폐기됐다 — 체인을 끊지는 않는다")
-                .isEqualTo(Rotation.Status.REVOKED);
         assertThat(store.rotate(retried, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.ROTATED);
+    }
+
+    @Test
+    @DisplayName("유예가 버린 다음 토큰이 다시 오면 재사용이다 — 탈취자가 옛 원문으로 유예 회전을 먼저 해도, 원 소유자가 자기 토큰을 내면 체인 전체가 끊긴다")
+    void abandonedSuccessorComingBackIsReuse() {
+        UUID customerId = newCustomer();
+        UUID sessionId = UUID.randomUUID();
+        String first = login(customerId, sessionId);
+        String owners = RefreshTokens.newToken();
+        assertThat(store.rotate(first, owners).status()).isEqualTo(Rotation.Status.ROTATED);        // 소유자는 새 쿠키를 받았다
+        String thiefs = RefreshTokens.newToken();
+        assertThat(store.rotate(first, thiefs).status()).isEqualTo(Rotation.Status.ROTATED);        // 훔친 옛 원문으로 유예 회전
+
+        Rotation owner = store.rotate(owners, RefreshTokens.newToken());
+
+        assertThat(owner.status()).isEqualTo(Rotation.Status.REUSED);
+        assertThat(owner.sessionId()).isEqualTo(sessionId);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE family_id = ? AND revoked_at IS NULL",
+                Integer.class, sessionId.toString())).as("체인 전체 폐기 — 탈취 체인도 죽는다").isZero();
+        assertThat(store.rotate(thiefs, RefreshTokens.newToken()).status()).isEqualTo(Rotation.Status.REVOKED);
     }
 
     @Test
