@@ -33,9 +33,10 @@ import java.util.UUID;
 
 /**
  * 상품 목록 · 검색 · 상세 · 관리자 목록의 읽기 전용 저장소. **catalog 가 다른 서비스의 표를 읽는 유일한 자리**다 —
- * preorder 소유 preorder_campaigns(opens_at · closes_at · 행의 유무)와 order 소유 option_inventories(재고 집계 · 행의 유무)를
- * 여기서만, SELECT 로만 읽는다.
- * 판매 방식별 준비({@link #READY})도 여기서 판정한다 — 등록 이벤트를 받은 preorder · order 가 자기 표에 행을 만들어야 노출된다.
+ * preorder 소유 preorder_campaigns(opens_at · closes_at · 행의 유무)와 order 소유 option_inventories(재고 집계 — 품절 · 남은 수량 · 증정품
+ * 후보)를 여기서만, SELECT 로만 읽는다.
+ * 판매 방식별 준비({@link #READY})도 여기서 판정한다 — 사전예약은 preorder 의 회차 행, 일반은 order 가 재고 행을 만들었다고 알린 이벤트로 채운
+ * products.stock_ready_at 이다(재고 표의 행 유무는 보지 않는다).
  * 노출 조건(판매 방식별 준비 · 공개 · 판매 중 · 사전예약은 접수 중일 때만)이 페이징 조건이라 쿼리 안에 있어야 한다. HTTP 로 받아 거르면 페이지가 깨진다.
  * 판매 중(ACTIVE) 옵션이 하나도 없는 상품(전부 판매 중지)은 목록에 남기고 sellable=false 로 알린다 — 화면이 "판매 중지" 를 그린다.
  * 옵션이 아예 없는 상품은 등록으로 생기지 않는다(조합 0 은 400, 옵션 삭제 경로 없음). 일반 상품이면 재고 행을 만들 옵션이 없어 준비될 수 없다
@@ -60,7 +61,7 @@ public class ProductListingQueryRepository {
      * 통계가 실제와 다르면(데이터를 한꺼번에 넣은 직후 — 자동 재계산으로 영구 통계가 바뀐 뒤에도 계획은 ANALYZE TABLE 전까지 그대로였다) 옵티마이저가
      * 상품마다 옵션 표나 재고 표 전체를 훑는다. 실측(MySQL 8.4.11, 한 카테고리 상품 300 · 옵션 600, 목록 20개 + 건수): 데이터를 넣은 직후 힌트 없이
      * 120~143ms → 힌트로 5.6~6.3ms, ANALYZE TABLE 뒤에는 둘 다 4.5~5.8ms. 시험이 틀린 통계 세 모양(구분값만 · 옵션 · 재고 행 수까지 · 재고 표만)에서
-     * 옵션 · 재고 접근이 전부 ref/eq_ref 인지 본다. 위치별로 잰 것: READY 의 순서 · 필터와 증정품의 NO_SEMIJOIN · 칩의 인덱스는 하나씩 빼면 시험이
+     * 옵션 · 재고 접근이 전부 ref/eq_ref 인지 본다. 위치별로 잰 것(READY 가 재고 표를 읽던 때 포함): 필터와 증정품의 NO_SEMIJOIN · 칩의 인덱스는 하나씩 빼면 시험이
      * 잡는다. 재고 쪽의 JOIN_ORDER 와 재고 PRIMARY 는 둘 다 있어야 한다 — 구분값 0 에 재고 표 행 수까지 0 인 모양에서 JOIN_ORDER 만이면 품절이
      * 재고 표를 다 읽고(16ms), 재고 PRIMARY 만이면 품절 · 증정품이 재고부터 읽는다(36 · 28ms, 둘 다면 5.6 · 1.1ms — 리뷰 실측). 시험에 그 모양이
      * 있어 하나씩 빼면 잡힌다. 관리자 옵션 수(oc)는 어느 모양에서도 힌트 없이 ref 였다 — 같은 꼴이라 같은 힌트를 건다(일관성).
@@ -72,15 +73,13 @@ public class ProductListingQueryRepository {
     private static final String INVENTORY_BY_OPTION = "FORCE INDEX (PRIMARY)";
 
     /**
-     * 판매 방식별 준비 — 등록 이벤트를 받은 서비스가 자기 표에 행을 만들었는가. 사전예약은 preorder 회차 행, 일반은 그 상품 옵션의
-     * order 재고 행(초기화는 한 상품의 옵션을 한 트랜잭션에서 모두 만들므로 하나라도 있으면 등록분은 다 있다). products 를 p 로 둔 문장에 넣는다.
+     * 판매 방식별 준비 — 등록 이벤트를 받은 서비스가 자기 표에 행을 만들었는가. 사전예약은 preorder 회차 행, 일반은 order 가 재고 행을 만들었다고
+     * 알린 시각(products.stock_ready_at — InStockProductReadyHandler. order 의 재고 표는 읽지 않는다). products 를 p 로 둔 문장에 넣는다.
      */
     static final String READY = """
             (CASE WHEN p.sale_mode = 'PREORDER'
                   THEN EXISTS (SELECT 1 FROM preorder_campaigns rc WHERE rc.product_id = p.id)
-                  ELSE EXISTS (SELECT /*+ JOIN_ORDER(ro, ri) */ 1 FROM product_options ro %s
-                                 JOIN option_inventories ri %s ON ri.option_id = ro.id
-                                WHERE ro.product_id = p.id) END)""".formatted(BY_PRODUCT, INVENTORY_BY_OPTION);
+                  ELSE p.stock_ready_at IS NOT NULL END)""";
 
     private static final String FROM_VISIBLE = """
               FROM products p

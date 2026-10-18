@@ -101,7 +101,21 @@ public class ShopFixtures {
     }
 
     /** order 소유 표. 가용 = total - reserved - sold. */
+    /**
+     * order 소유 재고 행. order 는 재고 행을 만들 때 판매 준비 이벤트를 보내고 catalog 가 받아 상품에 표시하므로(InStockProductReadyHandler),
+     * 그 결과(그 옵션 상품의 products.stock_ready_at)도 함께 남긴다. 이벤트가 아직 닿지 않은 상태를 보려면 {@link #inventoryOnly} 를 쓴다.
+     */
     public void inventory(UUID optionId, int total, int reserved, int sold) {
+        inventoryOnly(optionId, total, reserved, sold);
+        update("""
+                UPDATE products p JOIN product_options o ON o.product_id = p.id
+                   SET p.stock_ready_at = COALESCE(p.stock_ready_at, UTC_TIMESTAMP(6))
+                 WHERE o.id = ? AND p.sale_mode = 'IN_STOCK'
+                """, optionId);
+    }
+
+    /** 재고 행만 — 판매 준비 이벤트가 아직 catalog 에 닿지 않은 상태. */
+    public void inventoryOnly(UUID optionId, int total, int reserved, int sold) {
         update("""
                 INSERT INTO option_inventories (option_id, stock_total, stock_reserved, stock_sold, updated_at)
                 VALUES (?, ?, ?, ?, UTC_TIMESTAMP(6))
@@ -129,7 +143,8 @@ public class ShopFixtures {
     }
 
     /**
-     * 일반 상품의 판매 방식별 준비 — order 가 등록 이벤트로 만드는 초기 재고 행을 옵션마다 재고 0 으로 넣는다.
+     * 일반 상품의 판매 방식별 준비 — order 가 등록 이벤트로 만드는 초기 재고 행을 옵션마다 재고 0 으로 넣고, order 가 보낸 판매 준비 이벤트를 받은
+     * 결과(products.stock_ready_at)도 남긴다.
      * 이미 재고 행이 하나라도 있으면(시험이 재고를 직접 넣었으면) 이미 준비된 것이라 아무것도 하지 않는다 — 시험이 일부러 비워 둔 옵션의
      * "재고 행 없음" 을 지키기 위해서다. 재고 0 행은 재고 행이 없을 때와 품절 판정이 같다(가용 0).
      * 옵션이 없는 상품은 준비될 수 없다 — 실제 등록은 조합이 하나도 없으면 400 이라 그런 상품이 생기지 않는다. 그래서 오류로 알린다.
@@ -139,6 +154,7 @@ public class ShopFixtures {
                 SELECT COUNT(*) FROM option_inventories i JOIN product_options o ON o.id = i.option_id WHERE o.product_id = ?
                 """, Integer.class, productId);
         if (inventoryRows != null && inventoryRows > 0) {
+            markStockReady(productId);
             return;
         }
         int inserted = update("""
@@ -148,7 +164,14 @@ public class ShopFixtures {
         if (inserted == 0) {
             throw new IllegalStateException("옵션 없는 일반 상품 " + productId + " 은 준비될 수 없다 — 시험이 옵션을 먼저 넣는다");
         }
+        markStockReady(productId);
     }
+
+    /** 판매 준비 이벤트를 받은 결과 — 일반 판매 상품의 products.stock_ready_at(이미 있으면 그대로). */
+    public void markStockReady(UUID productId) {
+        update("UPDATE products SET stock_ready_at = COALESCE(stock_ready_at, UTC_TIMESTAMP(6)) WHERE id = ? AND sale_mode = 'IN_STOCK'", productId);
+    }
+
 
     public UUID option(UUID productId, String status) {
         return insert("""
