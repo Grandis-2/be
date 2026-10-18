@@ -33,8 +33,8 @@ import java.util.UUID;
 
 /**
  * 상품 목록 · 검색 · 상세 · 관리자 목록의 읽기 전용 저장소. **catalog 가 다른 서비스의 표를 읽는 유일한 자리**다 —
- * preorder 소유 preorder_campaigns(opens_at · closes_at · 행의 유무)와 order 소유 option_inventories(재고 집계 — 품절 · 남은 수량 · 증정품
- * 후보)를 여기서만, SELECT 로만 읽는다.
+ * preorder 소유 preorder_campaigns(opens_at · closes_at · 행의 유무)를 여기서만, SELECT 로만 읽는다. order 의 재고는 읽지 않는다 — 판매 준비는
+ * 이벤트로 받은 칸, 품절 · 남은 수량은 order 재고 API(SoldOutMarker · StockReader)다.
  * 판매 방식별 준비({@link #READY})도 여기서 판정한다 — 사전예약은 preorder 의 회차 행, 일반은 order 가 재고 행을 만들었다고 알린 이벤트로 채운
  * products.stock_ready_at 이다(재고 표의 행 유무는 보지 않는다).
  * 노출 조건(판매 방식별 준비 · 공개 · 판매 중 · 사전예약은 접수 중일 때만)이 페이징 조건이라 쿼리 안에 있어야 한다. HTTP 로 받아 거르면 페이지가 깨진다.
@@ -53,24 +53,19 @@ public class ProductListingQueryRepository {
      * 상품마다 그 상품의 옵션을 찾는 서브쿼리의 계획을 통계와 상관없이 고정한다.
      * <ul>
      *   <li>옵션은 {@link #BY_PRODUCT} — (product_id, id) 로 찾는다.</li>
-     *   <li>옵션 · 재고를 잇는 조인은 옵션부터 읽고({@code JOIN_ORDER}) 재고는 {@link #INVENTORY_BY_OPTION} 으로 붙인다 — 안 그러면 재고 표 통계만
-     *       틀릴 때 "재고 전부 → 옵션을 uq_option_product 로" 가 FORCE INDEX 아래에서도 허용된다.</li>
      *   <li>WHERE 의 EXISTS(색상 · 용량 필터 · 증정품 후보)는 세미조인으로 바꾸지 않는다({@code NO_SEMIJOIN}) — 바꾸면 옵션 표가 맨 앞에 와 인덱스
      *       힌트가 소용없다. 대가: 통계가 맞고 다른 상품이 아주 많으면 세미조인이 더 빠를 수 있다(리뷰 실측: 다른 카테고리 5000 상품에서 18ms 대 6ms).</li>
      * </ul>
      * 통계가 실제와 다르면(데이터를 한꺼번에 넣은 직후 — 자동 재계산으로 영구 통계가 바뀐 뒤에도 계획은 ANALYZE TABLE 전까지 그대로였다) 옵티마이저가
-     * 상품마다 옵션 표나 재고 표 전체를 훑는다. 실측(MySQL 8.4.11, 한 카테고리 상품 300 · 옵션 600, 목록 20개 + 건수): 데이터를 넣은 직후 힌트 없이
-     * 120~143ms → 힌트로 5.6~6.3ms, ANALYZE TABLE 뒤에는 둘 다 4.5~5.8ms. 시험이 틀린 통계 세 모양(구분값만 · 옵션 · 재고 행 수까지 · 재고 표만)에서
-     * 옵션 · 재고 접근이 전부 ref/eq_ref 인지 본다. 위치별로 잰 것(READY 가 재고 표를 읽던 때 포함): 필터와 증정품의 NO_SEMIJOIN · 칩의 인덱스는 하나씩 빼면 시험이
-     * 잡는다. 재고 쪽의 JOIN_ORDER 와 재고 PRIMARY 는 둘 다 있어야 한다 — 구분값 0 에 재고 표 행 수까지 0 인 모양에서 JOIN_ORDER 만이면 품절이
-     * 재고 표를 다 읽고(16ms), 재고 PRIMARY 만이면 품절 · 증정품이 재고부터 읽는다(36 · 28ms, 둘 다면 5.6 · 1.1ms — 리뷰 실측). 시험에 그 모양이
-     * 있어 하나씩 빼면 잡힌다. 관리자 옵션 수(oc)는 어느 모양에서도 힌트 없이 ref 였다 — 같은 꼴이라 같은 힌트를 건다(일관성).
+     * 상품마다 옵션 표 전체를 훑는다. 실측(MySQL 8.4.11, 한 카테고리 상품 300 · 옵션 600, 목록 20개 + 건수 — 품절 · 판매 준비가 아직 재고 표를 읽던
+     * 때): 데이터를 넣은 직후 힌트 없이 120~143ms → 힌트로 5.6~6.3ms, ANALYZE TABLE 뒤에는 둘 다 4.5~5.8ms. 시험이 틀린 통계 모양에서 옵션 접근이
+     * ref/eq_ref 인지 본다. 필터와 증정품의 NO_SEMIJOIN · 칩의 인덱스는 하나씩 빼면 시험이 잡는다(그때 잰 것). 관리자 옵션 수(oc)는 어느 모양에서도
+     * 힌트 없이 ref 였다 — 같은 꼴이라 같은 힌트를 건다(일관성).
      * <p>인덱스 이름은 마이그레이션의 이름과 맞아야 한다. 힌트 이름은 접두사로도 맞는다(리뷰 실측: uq_option_product_id 로 바꿔도 오류 없이 걸린다) —
      * 이름이 바뀌면 오류(1176)가 날 수도, 다른 인덱스에 조용히 걸릴 수도 있다. 이 표에 커버링 인덱스(예: product_id · status · price)를 더하면 이
      * 힌트가 그 인덱스를 막으니 같이 바꾼다.
      */
     private static final String BY_PRODUCT = "FORCE INDEX (uq_option_product)";
-    private static final String INVENTORY_BY_OPTION = "FORCE INDEX (PRIMARY)";
 
     /**
      * 판매 방식별 준비 — 등록 이벤트를 받은 서비스가 자기 표에 행을 만들었는가. 사전예약은 preorder 회차 행, 일반은 order 가 재고 행을 만들었다고
@@ -103,14 +98,8 @@ public class ProductListingQueryRepository {
                    %2$s AS min_price,
                    EXISTS (SELECT 1 FROM product_options po %3$s
                             WHERE po.product_id = p.id AND po.status = 'ACTIVE') AS sellable,
-                   p.thumbnail_url AS image_url,
-                   CASE WHEN p.sale_mode = 'IN_STOCK' AND NOT EXISTS (
-                            SELECT /*+ JOIN_ORDER(o, inv) */ 1 FROM product_options o %3$s
-                              JOIN option_inventories inv %4$s ON inv.option_id = o.id
-                             WHERE o.product_id = p.id AND o.status = 'ACTIVE'
-                               AND inv.stock_total - inv.stock_reserved - inv.stock_sold > 0)
-                        THEN 1 ELSE 0 END AS sold_out
-            """.formatted(MIN_LIST_PRICE, Discount.sql(MIN_LIST_PRICE, "p.discount_rate"), BY_PRODUCT, INVENTORY_BY_OPTION);
+                   p.thumbnail_url AS image_url
+            """.formatted(MIN_LIST_PRICE, Discount.sql(MIN_LIST_PRICE, "p.discount_rate"), BY_PRODUCT);
 
     /**
      * 색상칩에 쓰는 칸 — 옵션 문서와, 판매 중 옵션이 고른 색상(정규화값, 목록의 color 필터가 보는 값). 칩을 내보내는 회원 목록 · 홍보 상세만,
@@ -308,14 +297,16 @@ public class ProductListingQueryRepository {
     }
 
     /**
-     * 증정품 후보 옵션 — 판매 중이고 재고 행이 있는 옵션. 상품 쪽 조건(일반 판매 · 판매 중 · 판매 준비)은 {@link #GIFT_PRODUCTS} 가 건다.
+     * 증정품 후보 옵션 — 판매 중인 옵션. 재고 행이 있는지(남은 수량)는 쪽을 고른 뒤 order 에 묻는다({@link ProductListingService#listGiftCandidates}).
+     * 상품 쪽 조건(일반 판매 · 판매 중 · 판매 준비)은 {@link #GIFT_PRODUCTS} 가 건다.
      */
     private static final String GIFT_OPTION = """
-            SELECT /*+ NO_SEMIJOIN() JOIN_ORDER(go, gi) */ 1 FROM product_options go %s JOIN option_inventories gi %s ON gi.option_id = go.id
-             WHERE go.product_id = p.id AND go.status = 'ACTIVE'""".formatted(BY_PRODUCT, INVENTORY_BY_OPTION);
+            SELECT /*+ NO_SEMIJOIN() */ 1 FROM product_options go %s
+             WHERE go.product_id = p.id AND go.status = 'ACTIVE'""".formatted(BY_PRODUCT);
 
     /**
-     * 증정품 후보 상품 — 일반 판매 · 판매 중 · 판매 준비(stock_ready_at)이고 후보 옵션이 하나 이상. 공개 여부는 보지 않는다. 삭제한 상품은 뺀다.
+     * 증정품 후보 상품 — 일반 판매 · 판매 중 · 판매 준비(order 가 재고 행을 만들었다고 알림 — stock_ready_at)이고 판매 중 옵션이 하나 이상. 공개 여부는
+     * 보지 않는다. 삭제한 상품은 뺀다.
      * 판매 준비를 같이 보는 것은 회차 만들기(order)가 내부 옵션 조회의 registrationCompleted(= 이 판매 준비)로 막기 때문이다 — 빼면 재고 행은 있는데
      * 판매 준비 이벤트가 아직 닿지 않은 상품이 후보에 뜨고, 골라서 만들면 order 가 400 이다.
      */
@@ -333,7 +324,10 @@ public class ProductListingQueryRepository {
         return count == null ? 0 : count;
     }
 
-    /** 증정품 후보 상품 한 쪽과 그 후보 옵션들. 상품은 관리자 목록과 같은 최신순, 옵션은 등록 순. 같은 스냅샷이 되게 REPEATABLE READ 안에서 부른다. */
+    /**
+     * 증정품 후보 상품 한 쪽과 그 판매 중 옵션들. 상품은 관리자 목록과 같은 최신순, 옵션은 등록 순. 같은 스냅샷이 되게 REPEATABLE READ 안에서 부른다.
+     * 옵션의 남은 수량은 비워 둔다(0) — 호출자가 order 에 물어 채우고 재고 행이 없는 옵션을 뺀다.
+     */
     public List<GiftCandidate> findGiftCandidates(String q, int page, int size) {
         StringBuilder sql = new StringBuilder("SELECT p.id, p.title, p.thumbnail_url, p.visible").append(GIFT_PRODUCTS);
         MapSqlParameterSource params = new MapSqlParameterSource();
@@ -347,16 +341,14 @@ public class ProductListingQueryRepository {
         }
         Map<UUID, List<GiftCandidate.Option>> options = new HashMap<>();
         jdbc.query("""
-                SELECT o.product_id, o.id, o.sku, o.title, inv.stock_total - inv.stock_reserved - inv.stock_sold AS available
+                SELECT o.product_id, o.id, o.sku, o.title
                   FROM product_options o
-                  JOIN option_inventories inv ON inv.option_id = o.id
                  WHERE o.product_id IN (:productIds) AND o.status = 'ACTIVE'
                  ORDER BY o.product_id, o.created_at, o.id
                 """, new MapSqlParameterSource("productIds", products.stream().map(c -> UuidBinary.toBytes(c.productId())).toList()),
                 rs -> {
                     options.computeIfAbsent(UuidBinary.fromBytes(rs.getBytes("product_id")), id -> new ArrayList<>())
-                            .add(new GiftCandidate.Option(UuidBinary.fromBytes(rs.getBytes("id")), rs.getString("sku"), rs.getString("title"),
-                                    rs.getInt("available")));
+                            .add(new GiftCandidate.Option(UuidBinary.fromBytes(rs.getBytes("id")), rs.getString("sku"), rs.getString("title"), 0));
                 });
         return products.stream()
                 .map(c -> new GiftCandidate(c.productId(), c.title(), c.imageUrl(), c.visible(), List.copyOf(options.getOrDefault(c.productId(), List.of()))))
@@ -445,17 +437,18 @@ public class ProductListingQueryRepository {
     public record LinkableRow(UUID productId, String title, SaleMode saleMode, Instant opensAt) {
     }
 
-    /** 옵션별 가용 수량(총량 − 선점 − 판매). 재고 행이 없는 옵션은 빠진다 — 판매 불가로 읽는다. */
-    public Map<UUID, Integer> findAvailableQuantities(UUID productId) {
-        Map<UUID, Integer> available = new HashMap<>();
-        jdbc.query("""
-                SELECT o.id, inv.stock_total - inv.stock_reserved - inv.stock_sold AS available
-                  FROM product_options o
-                  JOIN option_inventories inv ON inv.option_id = o.id
-                 WHERE o.product_id = :productId
-                """, new MapSqlParameterSource("productId", UuidBinary.toBytes(productId)),
-                (rs, rowNum) -> available.put(UuidBinary.fromBytes(rs.getBytes("id")), rs.getInt("available")));
-        return available;
+    /** 상품마다 판매 중(ACTIVE) 옵션 id — 목록 카드의 품절을 order 재고로 가를 때 쓴다({@link SoldOutMarker}). 판매 중 옵션이 없는 상품은 빠진다. */
+    public Map<UUID, List<UUID>> findActiveOptionIds(Collection<UUID> productIds) {
+        Map<UUID, List<UUID>> options = new HashMap<>();
+        if (productIds.isEmpty()) {
+            return options;
+        }
+        jdbc.query("SELECT o.product_id, o.id FROM product_options o " + BY_PRODUCT + " WHERE o.product_id IN (:productIds) AND o.status = 'ACTIVE'",
+                new MapSqlParameterSource("productIds", productIds.stream().map(UuidBinary::toBytes).toList()),
+                (org.springframework.jdbc.core.RowCallbackHandler) rs -> options
+                        .computeIfAbsent(UuidBinary.fromBytes(rs.getBytes("product_id")), id -> new ArrayList<>())
+                        .add(UuidBinary.fromBytes(rs.getBytes("id"))));
+        return options;
     }
 
     /** LIKE 의 와일드카드(% _ \)를 문자로 취급한다. */
@@ -463,7 +456,7 @@ public class ProductListingQueryRepository {
         return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
-    /** 색상칩은 비운다 — 칩을 내보내는 곳은 {@link #withColors} 로 붙인다. */
+    /** 색상칩은 비운다 — 칩을 내보내는 곳은 {@link #withColors} 로 붙인다. 품절은 false 로 두고 {@link SoldOutMarker} 가 order 재고로 채운다. */
     private static ProductListItem toItem(ResultSet rs, Instant now) throws SQLException {
         UUID productId = UuidBinary.fromBytes(rs.getBytes("id"));
         SaleMode saleMode = SaleMode.valueOf(rs.getString("sale_mode"));
@@ -475,7 +468,7 @@ public class ProductListingQueryRepository {
         return new ProductListItem(productId, saleMode, rs.getString("title"),
                 Brand.valueOf(rs.getString("brand")), rs.getString("model_name"), rs.getString("image_url"),
                 List.of(),
-                SaleStatus.valueOf(rs.getString("status")), minPrice, minListPrice, rs.getInt("discount_rate"), rs.getBoolean("sellable"), rs.getBoolean("sold_out"),
+                SaleStatus.valueOf(rs.getString("status")), minPrice, minListPrice, rs.getInt("discount_rate"), rs.getBoolean("sellable"), false,
                 null, opensAt, closesAt).at(now);   // 접수 단계는 캐시에서 꺼낼 때와 같은 규칙(ProductListItem#at)으로
     }
 

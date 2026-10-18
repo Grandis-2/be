@@ -38,6 +38,12 @@ public record AdminProductListItem(
         Instant closesAt
 ) {
 
+    /** 품절만 바꾼 사본({@link SoldOutMarker}). */
+    AdminProductListItem withSoldOut(boolean replaced) {
+        return new AdminProductListItem(productId, saleMode, title, brand, modelName, imageUrl, status, visible, registrationCompleted, optionCount,
+                minPrice, minListPrice, discountRate, sellable, replaced, preorderStatus, opensAt, closesAt);
+    }
+
     static AdminProductListItem of(ProductListItem item, boolean visible, boolean registrationCompleted, int optionCount) {
         return new AdminProductListItem(item.productId(), item.saleMode(), item.title(), item.brand(), item.modelName(), item.imageUrl(), item.status(),
                 visible, registrationCompleted, optionCount, item.minPrice(), item.minListPrice(), item.discountRate(), item.sellable(), item.soldOut(),

@@ -47,7 +47,7 @@ class AdminGiftCandidateApiTest {
     }
 
     @Test
-    @DisplayName("일반 판매 · 판매 중 · 판매 준비이고 재고를 등록한 판매 중 옵션이 있는 상품만, 그 옵션과 확보할 수 있는 수량을 — 비공개 상품도 나온다. 재고 행만 있고 판매 준비 전이면 빠진다")
+    @DisplayName("일반 판매 · 판매 중 · 판매 준비이고 판매 중 옵션이 있는 상품만, 재고 행이 있는 판매 중 옵션과 확보할 수 있는 수량을(order 재고) — 비공개 상품도 나온다. 판매 중 옵션에 재고 행이 아직 없으면 옵션 없이 나오고, 재고 행만 있고 판매 준비 전이면 빠진다")
     void listsGiftableProductsWithTheirOptions() throws Exception {
         UUID shown = product("IN_STOCK", "ACTIVE", "증정 상품");
         UUID giftable = fixtures.option(shown, "ACTIVE");
@@ -74,8 +74,9 @@ class AdminGiftCandidateApiTest {
 
         JsonNode data = list(tag);
 
-        assertThat(ids(data.get("items"))).containsExactlyInAnyOrder(shown, hidden);
-        assertThat(data.get("total").asLong()).isEqualTo(2);
+        assertThat(ids(data.get("items"))).containsExactlyInAnyOrder(shown, hidden, onlyPausedStocked);
+        assertThat(data.get("total").asLong()).isEqualTo(3);
+        assertThat(find(data.get("items"), onlyPausedStocked).get("options")).as("판매 중 옵션의 재고 행이 아직 없다 — 고를 옵션 없음").isEmpty();
         JsonNode shownItem = find(data.get("items"), shown);
         assertThat(shownItem.get("visible").asBoolean()).isTrue();
         assertThat(shownItem.get("title").asString()).isEqualTo("증정 상품");

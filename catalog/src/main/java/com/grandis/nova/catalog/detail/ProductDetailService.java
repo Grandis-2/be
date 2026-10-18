@@ -8,6 +8,7 @@ import com.grandis.nova.catalog.detail.ProductDetailView.OptionAxis;
 import com.grandis.nova.catalog.detail.ProductDetailView.OptionValue;
 import com.grandis.nova.catalog.detail.ProductDetailView.Variant;
 import com.grandis.nova.catalog.detail.ProductDetailView.Warranty;
+import com.grandis.nova.catalog.integration.StockReader;
 import com.grandis.nova.catalog.listing.CampaignWindow;
 import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
 import com.grandis.nova.catalog.option.OptionCombination;
@@ -21,6 +22,8 @@ import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
@@ -48,6 +51,7 @@ import java.util.UUID;
 @Service
 public class ProductDetailService {
 
+    private static final Logger log = LoggerFactory.getLogger(ProductDetailService.class);
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final TypeReference<Map<String, String>> ATTRIBUTES = new TypeReference<>() {
     };
@@ -55,13 +59,15 @@ public class ProductDetailService {
     private final ProductRepository products;
     private final ProductOptionRepository options;
     private final ProductListingQueryRepository crossReads;
+    private final StockReader stocks;
     private final Clock clock;
 
     public ProductDetailService(ProductRepository products, ProductOptionRepository options,
-                                ProductListingQueryRepository crossReads, Clock clock) {
+                                ProductListingQueryRepository crossReads, StockReader stocks, Clock clock) {
         this.products = products;
         this.options = options;
         this.crossReads = crossReads;
+        this.stocks = stocks;
         this.clock = clock;
     }
 
@@ -92,9 +98,9 @@ public class ProductDetailService {
     /**
      * 본문에 실시간 칸을 채운다. 사전예약은 회차 행(판매 준비 · 회차 시각 · 접수 단계), 일반은 판매 준비(products.stock_ready_at)와 그 상품 옵션의
      * 재고 행(옵션별 가용 수량 · 품절). 판매 준비 전이면 404 — 목록의 판매 방식별 준비(READY)와 같은 정의다.
-     * 캐시된 본문에도 요청마다 부르므로 재고 · 조기 마감 · 판매 준비가 늦게 보이지 않는다.
+     * 캐시된 본문에도 요청마다 부르므로 재고 · 조기 마감 · 판매 준비가 늦게 보이지 않는다. 트랜잭션 없이 돈다 — DB 읽기는 한 문장씩이고, order 재고를
+     * 묻는 동안 DB 연결을 붙잡지 않게.
      */
-    @Transactional(readOnly = true)
     public ProductDetailView withLiveParts(ProductDetailView body) {
         if (body.saleMode() == SaleMode.PREORDER) {
             CampaignWindow window = crossReads.findCampaign(body.productId())
@@ -105,7 +111,7 @@ public class ProductDetailService {
         if (!crossReads.isReady(body.productId())) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
-        return live(body, null, crossReads.findAvailableQuantities(body.productId()));
+        return live(body, null, availableOrUnknown(body));
     }
 
     /**
@@ -119,7 +125,7 @@ public class ProductDetailService {
         ProductDetailView body = body(product, product.isVisible());
         ProductDetailView detail = product.getSaleMode() == SaleMode.PREORDER
                 ? live(body, crossReads.findCampaign(productId).orElse(null), Map.of())
-                : live(body, null, crossReads.findAvailableQuantities(productId));
+                : live(body, null, availableOrUnknown(body));
         return new AdminProductDetail(detail, product.getTags(), product.getIdempotencyKey(), crossReads.isReady(productId));
     }
 
@@ -143,10 +149,26 @@ public class ProductDetailService {
      * 본문 + 실시간 칸. 일반 상품은 옵션마다 가용 수량(재고 행이 없으면 0)과 품절(판매 중 옵션의 가용이 전부 0 이하 — 목록 SQL 과 같은 규칙),
      * 사전예약은 회차(window 가 없으면 null)와 지금 시각의 접수 단계. 사전예약은 재고 행이 없으므로 품절이 되지 않는다.
      */
+    /**
+     * 옵션별 남은 수량을 order 에 묻는다(재고 행이 없는 옵션은 빠진다). order 가 답하지 않으면 null — 수량을 모름(2026-10-19 결정: 상세는 뜨고 수량만 비운다).
+     */
+    private Map<UUID, Integer> availableOrUnknown(ProductDetailView body) {
+        try {
+            return stocks.available(body.variants().stream().map(Variant::variantId).toList());
+        } catch (BusinessException e) {
+            log.warn("상세의 남은 수량을 order 에 묻지 못했다 — 수량을 비워 보낸다 productId={}", body.productId(), e);
+            return null;
+        }
+    }
+
+    /** @param available 옵션 id → 남은 수량. null 이면 order 가 답하지 않았다 — 옵션 수량은 null, 품절은 false */
     private ProductDetailView live(ProductDetailView body, CampaignWindow window, Map<UUID, Integer> available) {
         if (body.saleMode() == SaleMode.PREORDER) {
             Campaign campaign = window == null ? null : new Campaign(window.opensAt(), window.closesAt(), window.statusAt(clock.instant()));
             return body.withLive(campaign, body.variants(), false);
+        }
+        if (available == null) {
+            return body.withLive(null, body.variants().stream().map(variant -> variant.withAvailableQuantity(null)).toList(), false);
         }
         List<Variant> variants = new ArrayList<>();
         boolean purchasable = false;
