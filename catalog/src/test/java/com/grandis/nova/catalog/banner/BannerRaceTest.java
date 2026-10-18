@@ -1,0 +1,162 @@
+package com.grandis.nova.catalog.banner;
+
+import com.grandis.nova.catalog.CatalogErrorCode;
+import com.grandis.nova.catalog.support.CatalogIntegrationTest;
+import com.grandis.nova.catalog.support.MySqlContainerConfig;
+import com.grandis.nova.catalog.support.ShopFixtures;
+import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.UuidBinary;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.testcontainers.mysql.MySQLContainer;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * 배너 고치기 · 지우기가 겹친 작업과 엇갈릴 때 — 두 트랜잭션을 실제 커넥션 둘로 태운다. 한쪽이 모든 배너를 잠근 채, 다른 쪽이 잠금을 기다리는 것
+ * (innodb_trx 의 LOCK WAIT, root 연결)을 본 뒤 커밋한다.
+ */
+@CatalogIntegrationTest
+@DisplayName("배너 고치기 · 순서 바꾸기가 겹칠 때")
+class BannerRaceTest {
+
+    @Autowired BannerService service;
+    @Autowired JdbcTemplate jdbcTemplate;
+    @Autowired PlatformTransactionManager transactionManager;
+
+    ShopFixtures fixtures;
+    UUID product;
+
+    @BeforeEach
+    void setUp() {
+        fixtures = new ShopFixtures(jdbcTemplate);
+        jdbcTemplate.update("DELETE FROM banners");
+        product = fixtures.product("IN_STOCK", "ACTIVE");
+        fixtures.option(product, "ACTIVE", ShopFixtures.OPTION_PRICE);
+        fixtures.stockReady(product);
+    }
+
+    @Test
+    @DisplayName("고치기는 배너 행을 잠그고 읽는다 — 겹친 순서 바꾸기가 먼저 커밋하면 그 번호 위에서 고쳐, 순서가 되돌아가거나 번호가 겹치지 않는다")
+    void updateDoesNotUndoConcurrentReorder() throws Exception {
+        UUID a = service.create(request("a")).bannerId();
+        UUID b = service.create(request("b")).bannerId();
+        CountDownLatch locked = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> reorder = pool.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                jdbcTemplate.queryForList("SELECT id FROM banners FOR UPDATE");
+                locked.countDown();
+                awaitLockWait();
+                jdbcTemplate.update("UPDATE banners SET position = CASE id WHEN ? THEN 1 ELSE 0 END", (Object) UuidBinary.toBytes(a));
+            }));
+            assertThat(locked.await(30, TimeUnit.SECONDS)).isTrue();
+            Future<?> update = pool.submit(() -> service.update(a, request("a 고침")));
+            reorder.get(30, TimeUnit.SECONDS);
+            update.get(30, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(position(a)).as("순서 바꾸기가 a 를 뒤로 보냈다").isEqualTo(1);
+        assertThat(position(b)).isZero();
+        assertThat(jdbcTemplate.queryForObject("SELECT title FROM banners WHERE id = ?", String.class, (Object) UuidBinary.toBytes(a)))
+                .isEqualTo("a 고침");
+    }
+
+    @Test
+    @DisplayName("잠금 대기가 넘치면 409 STATE_CONFLICT · retryable — 500 이 아니다")
+    void lockWaitTimeoutIsRetryableConflict() throws Exception {
+        UUID a = service.create(request("a")).bannerId();
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(1);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> holder = pool.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                jdbcTemplate.queryForList("SELECT id FROM banners FOR UPDATE");
+                locked.countDown();
+                await(done);
+            }));
+            assertThat(locked.await(30, TimeUnit.SECONDS)).isTrue();
+            // 고치기는 이 트랜잭션에 합류한다 — 같은 커넥션에 잠금 대기 1초를 걸고, 풀에 돌려주기 전에 되돌린다
+            new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                jdbcTemplate.execute("SET SESSION innodb_lock_wait_timeout = 1");
+                try {
+                    assertThatThrownBy(() -> service.update(a, request("a 고침"))).isInstanceOfSatisfying(BusinessException.class, e -> {
+                        assertThat(e.errorCode()).isEqualTo(CatalogErrorCode.STATE_CONFLICT);
+                        assertThat(e.details()).containsEntry("retryable", true);
+                    });
+                } finally {
+                    jdbcTemplate.execute("SET SESSION innodb_lock_wait_timeout = DEFAULT");
+                    status.setRollbackOnly();
+                }
+            });
+            done.countDown();
+            holder.get(30, TimeUnit.SECONDS);
+        } finally {
+            done.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    private int position(UUID banner) {
+        return jdbcTemplate.queryForObject("SELECT position FROM banners WHERE id = ?", Integer.class, (Object) UuidBinary.toBytes(banner));
+    }
+
+    /** 앱 계정은 PROCESS 권한이 없어 innodb_trx 를 못 읽는다 — root 로 본다. */
+    private static void awaitLockWait() {
+        MySQLContainer mysql = MySqlContainerConfig.get();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        try (Connection root = DriverManager.getConnection(mysql.getJdbcUrl(), "root", mysql.getPassword());
+             Statement statement = root.createStatement()) {
+            while (true) {
+                try (ResultSet rs = statement.executeQuery("SELECT COUNT(*) FROM information_schema.innodb_trx WHERE trx_state = 'LOCK WAIT'")) {
+                    rs.next();
+                    if (rs.getInt(1) > 0) {
+                        return;
+                    }
+                }
+                if (System.nanoTime() > deadline) {
+                    throw new AssertionError("고치기가 잠금을 기다리지 않았다");
+                }
+                Thread.sleep(20);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            latch.await(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private BannerRequest request(String title) {
+        return new BannerRequest("사전예약", title, "설명", "탭", "Smartphone", "https://img/banner.png", "대체 글",
+                new BannerRequest.Target(BannerTargetType.PRODUCT, product), true);
+    }
+}
