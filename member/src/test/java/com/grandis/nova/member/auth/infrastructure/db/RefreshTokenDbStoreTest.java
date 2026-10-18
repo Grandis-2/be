@@ -278,6 +278,49 @@ class RefreshTokenDbStoreTest {
     }
 
     @Test
+    @DisplayName("버려진 토큰의 재사용과 로그아웃이 동시에 와도 교착(1213) · 예외 없이 끝나고 체인은 죽는다 — 원문 행을 쥐지 않고 체인을 로그아웃과 같은 순서로 잠근다(20회)")
+    void abandonedReuseAndLogoutDoNotDeadlock() throws Exception {
+        for (int round = 0; round < 20; round++) {
+            UUID customerId = newCustomer();
+            UUID sessionId = UUID.randomUUID();
+            String first = login(customerId, sessionId);
+            String abandoned = RefreshTokens.newToken();
+            store.rotate(first, abandoned);
+            store.rotate(first, RefreshTokens.newToken());
+
+            List<Concurrently.Outcome<Object>> results = Concurrently.run(2, i -> i == 0
+                    ? () -> store.rotate(abandoned, RefreshTokens.newToken()).status()
+                    : () -> {
+                        store.revokeSession(sessionId);
+                        return "logout";
+                    });
+
+            assertThat(results).as("round %d", round).allSatisfy(r -> assertThat(r.error()).isNull());
+            assertThat(results.get(0).value()).isIn(Rotation.Status.REUSED, Rotation.Status.REVOKED);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE family_id = ? AND revoked_at IS NULL",
+                    Integer.class, sessionId.toString())).isZero();
+        }
+    }
+
+    @Test
+    @DisplayName("버려진 토큰이라도 체인이 탐지 창(만료 + 액세스 유효기간)을 지났으면 체인을 건드리지 않고 거절(REVOKED) — 창 안이면 재사용")
+    void abandonedReuseHonoursTheDetectionWindow() {
+        java.time.Duration window = jwt.accessTokenValidity();
+        for (boolean inside : new boolean[] {true, false}) {
+            UUID customerId = newCustomer();
+            UUID sessionId = UUID.randomUUID();
+            String first = login(customerId, sessionId);
+            String abandoned = RefreshTokens.newToken();
+            store.rotate(first, abandoned);
+            store.rotate(first, RefreshTokens.newToken());
+            pullChainExpiry(customerId, inside ? window.minusSeconds(60) : window.plusSeconds(5));
+
+            assertThat(store.rotate(abandoned, RefreshTokens.newToken()).status()).as(inside ? "창 안" : "창 밖")
+                    .isEqualTo(inside ? Rotation.Status.REUSED : Rotation.Status.REVOKED);
+        }
+    }
+
+    @Test
     @DisplayName("유예 안이어도 다음 토큰이 이미 쓰였으면(그 뒤로 회전했으면) 재사용이다 — 체인 전체 폐기. 받아 주는 건 바로 앞 토큰뿐이다")
     void reuseWithinGraceWhenSuccessorWasUsed() {
         UUID customerId = newCustomer();

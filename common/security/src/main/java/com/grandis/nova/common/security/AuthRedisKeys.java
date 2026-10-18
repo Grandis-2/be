@@ -9,7 +9,7 @@ import java.util.UUID;
  */
 public final class AuthRedisKeys {
 
-    /** 현재 리프레시 jti. TTL = 리프레시 만료. 발급·회전·로그아웃이 쓴다. */
+    /** 관리자 리프레시 jti(발급 직후 `jti`, 회전 뒤 `지금jti|바로앞jti|유예끝`). TTL = 리프레시 만료. 발급·회전·로그아웃이 쓴다. */
     public static final String REFRESH_PREFIX = "auth:refresh:";
 
     /**

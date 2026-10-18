@@ -172,6 +172,18 @@ class RedisStoresTest {
         }
 
         @Test
+        @DisplayName("값 모양이 깨졌으면(구분자 · 시각 누락) 스크립트 오류 없이 유예 없음 — 지금 jti 는 회전, 바로 앞 jti 는 false")
+        void malformedValueMeansNoGrace() {
+            UUID current = UUID.randomUUID();
+            UUID previous = UUID.randomUUID();
+            for (String broken : new String[] {current + "|" + previous, current + "|" + previous + "|abc", current + "|" + previous + "|"}) {
+                redis.opsForValue().set(AuthRedisKeys.refresh(sid), broken, REFRESH);
+                assertThat(refreshStore.rotate(sid, previous, UUID.randomUUID(), REFRESH)).as(broken).isFalse();
+                assertThat(refreshStore.rotate(sid, current, UUID.randomUUID(), REFRESH)).as(broken).isTrue();
+            }
+        }
+
+        @Test
         @DisplayName("같은 리프레시로 동시에 회전 8개(새로고침 연타) → Lua 가 하나씩 처리해 전부 회전하고, 남는 건 마지막 jti 하나 · 바로 앞은 처음 jti")
         void concurrentRotationsAllRotateOneSurvives() throws Exception {
             UUID current = UUID.randomUUID();

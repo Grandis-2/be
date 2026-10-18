@@ -6,6 +6,8 @@ import com.grandis.nova.member.auth.application.RefreshTokens;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Repository;
@@ -17,11 +19,14 @@ import org.springframework.stereotype.Repository;
  * <p>값은 발급 직후 `지금jti` 하나, 회전 뒤에는 `지금jti|바로앞jti|유예끝(Redis 서버 시각, epoch ms)` 이다. 회전 유예를 키 하나에 담는다 — 키를 둘로
  * 나누면 클러스터에서 슬롯이 갈려 한 스크립트로 묶을 수 없다. 바로 앞 jti 가 맞으면 지금 jti 는 그것이 만든 다음 토큰이고 아직 안 쓰였다(쓰였으면
  * 바로 앞 자리가 그것으로 바뀌었다). 유예 안의 다시 회전은 유예 끝을 그대로 두어 창이 늘지 않는다. 시각은 앱이 아니라 Redis 의 TIME 으로 잰다 —
- * 인스턴스마다 시계가 달라도 한 곳에서 판정한다. 대가: 배포 중 옛 버전 인스턴스는 이 모양을 읽지 못해(지금 jti 와 다르다고 본다) 회전된 세션을
- * 재사용으로 끊는다.
+ * 인스턴스마다 시계가 달라도 한 곳에서 판정한다. 값 모양이 깨졌으면(구분자 · 시각 누락) 유예 없이 지금 jti 만 비교한다 — 스크립트 오류(500)가
+ * 나지 않게. 대가: 이 모양을 모르는 옛 버전은 회전된 세션을 재사용으로 끊는다 — 배포 중 옛 인스턴스에 간 재발급, 그리고 롤백하면 한 번이라도
+ * 회전한 관리자 세션의 다음 재발급(새 버전은 옛 값을 그대로 읽는다).
  */
 @Repository
 public class RefreshTokenRedisStore implements AdminRefreshTokenStore {
+
+    private static final Logger log = LoggerFactory.getLogger(RefreshTokenRedisStore.class);
 
     /**
      * KEYS[1]=세션 키, ARGV[1]=기대 jti, ARGV[2]=새 jti, ARGV[3]=TTL(ms), ARGV[4]=유예(ms).
@@ -35,10 +40,12 @@ public class RefreshTokenRedisStore implements AdminRefreshTokenStore {
             local current, previous, graceUntil = value, nil, 0
             local first = string.find(value, '|', 1, true)
             if first then
-                local second = string.find(value, '|', first + 1, true)
                 current = string.sub(value, 1, first - 1)
-                previous = string.sub(value, first + 1, second - 1)
-                graceUntil = tonumber(string.sub(value, second + 1))
+                local second = string.find(value, '|', first + 1, true)
+                if second then
+                    previous = string.sub(value, first + 1, second - 1)
+                    graceUntil = tonumber(string.sub(value, second + 1)) or 0
+                end
             end
             local time = redis.call('TIME')
             local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
@@ -71,6 +78,9 @@ public class RefreshTokenRedisStore implements AdminRefreshTokenStore {
         Long result = redis.execute(ROTATE, List.of(AuthRedisKeys.refresh(sessionId)),
                 expectedRefreshTokenId.toString(), newRefreshTokenId.toString(), String.valueOf(ttlMillis),
                 String.valueOf(RefreshTokens.ROTATION_GRACE.toMillis()));
+        if (Long.valueOf(2L).equals(result)) {
+            log.info("admin refresh rotated again within grace sid={}", sessionId.toString().substring(0, 8));
+        }
         return result != null && result > 0;
     }
 
