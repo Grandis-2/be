@@ -168,7 +168,7 @@ class DrawReadCacheApiTest {
         OrderFixtures.StockProduct gift = fixtures.inStockProduct(1);
         TransactionTemplate tx = new TransactionTemplate(transactionManager);
         return tx.execute(status -> campaigns.insert(new NewDrawCampaign(UUID.randomUUID().toString(), gift.productId(), gift.optionIds().getFirst(),
-                title, "증정품", "기본", null, new BigDecimal("100"), 1, opensAt, closesAt)).id());
+                title, "증정품", null, "기본", null, new BigDecimal("100"), 1, opensAt, closesAt)).id());
     }
 
     private static List<String> ids(ResultActions actions) throws Exception {

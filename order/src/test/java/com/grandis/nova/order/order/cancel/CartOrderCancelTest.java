@@ -416,7 +416,7 @@ class CartOrderCancelTest {
         OrderFixtures.StockProduct product = fixtures.inStockProduct(1);
         UUID option = product.optionIds().getFirst();
         fixtures.stock(option, stock, 0, 0);
-        catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "블랙 / 256GB", "SKU-" + option, PRICE,
+        catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "A3104", "블랙 / 256GB", "SKU-" + option, PRICE,
                 "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(false, BigDecimal.ZERO), null));
         return option;
     }

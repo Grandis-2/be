@@ -49,6 +49,6 @@ class DrawOrderRulesTest {
 
     private static OrderDraft draft(Money price) {
         return new OrderDraft(TestIds.id(9), OrderSource.DRAW, null, null, null, SHIP_TO,
-                List.of(OrderLine.withoutWarranty(TestIds.id(7), TestIds.id(8), Quantity.ONE, price, "증정품", "블랙")));
+                List.of(OrderLine.withoutWarranty(TestIds.id(7), TestIds.id(8), Quantity.ONE, price, "증정품", null, "블랙")));
     }
 }

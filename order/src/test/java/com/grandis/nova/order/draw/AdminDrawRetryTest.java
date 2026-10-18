@@ -49,12 +49,12 @@ class AdminDrawRetryTest {
     final DrawCampaignStore campaigns = mock(DrawCampaignStore.class);
     final AdminDrawService service = new AdminDrawService(catalog, stock, campaigns, new NoOpTransactionManager(),
             Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofSeconds(60));
-    final DrawCampaign draw = new DrawCampaign(TestIds.id(3), PRODUCT, OPTION, "t", "p", "o", null, new BigDecimal("100"), 1, NOW,
+    final DrawCampaign draw = new DrawCampaign(TestIds.id(3), PRODUCT, OPTION, "t", "p", null, "o", null, new BigDecimal("100"), 1, NOW,
             NOW.plusSeconds(600), NOW);
 
     @BeforeEach
     void setUp() {
-        given(catalog.find(any(), any())).willReturn(Map.of(OPTION, new CatalogOption(OPTION, PRODUCT, "p", "o", "SKU", new BigDecimal("1000"),
+        given(catalog.find(any(), any())).willReturn(Map.of(OPTION, new CatalogOption(OPTION, PRODUCT, "p", "M-1", "o", "SKU", new BigDecimal("1000"),
                 "ACTIVE", "IN_STOCK", "ACTIVE", false, true, new CatalogOption.Warranty(false, BigDecimal.ZERO), null)));
         given(campaigns.insert(any())).willReturn(draw);
     }

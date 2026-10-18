@@ -121,6 +121,7 @@ class CartOrderApiTest {
         assertThat(merged.get("warrantyQuantity").asInt()).isEqualTo(1);
         assertThat(merged.get("warrantyUnitPrice").decimalValue()).isEqualByComparingTo(WARRANTY);
         assertThat(merged.get("lineAmount").decimalValue()).isEqualByComparingTo(PRICE.multiply(BigDecimal.valueOf(3)).add(WARRANTY));
+        assertThat(merged.get("modelName").asString()).as("모델명은 주문 때 catalog 값").isEqualTo("A3104");
         assertThat(items.get(watch.toString()).get("warrantyQuantity").asInt()).isZero();
         assertThat(items.get(watch.toString()).get("warrantyUnitPrice").decimalValue()).isEqualByComparingTo("0");
 
@@ -132,6 +133,7 @@ class CartOrderApiTest {
         JsonNode detail = data(mockMvc.perform(get("/api/v1/orders/{id}", order.get("orderId").asString())
                 .with(TestAuth.customer(customerId))).andExpect(status().isOk()));
         assertThat(byVariant(detail.get("items")).get(phone.toString()).get("warrantyQuantity").asInt()).isEqualTo(1);
+        assertThat(byVariant(detail.get("items")).get(phone.toString()).get("modelName").asString()).as("저장한 모델명을 다시 읽는다").isEqualTo("A3104");
         assertThat(detail.get("paymentDueAt").asString()).isEqualTo(order.get("paymentDueAt").asString());
     }
 
@@ -191,7 +193,7 @@ class CartOrderApiTest {
         String first = data(place(item(phone, 1, true)).andExpect(status().isCreated())).get("orderId").asString();
 
         CatalogOption current = catalog.get(phone);
-        catalog.put(phone, new CatalogOption(current.optionId(), current.productId(), current.productTitle(), current.optionTitle(), current.sku(),
+        catalog.put(phone, new CatalogOption(current.optionId(), current.productId(), current.productTitle(), current.modelName(), current.optionTitle(), current.sku(),
                 current.price(), current.optionStatus(), current.saleMode(), current.productStatus(), current.visible(),
                 current.registrationCompleted(), new CatalogOption.Warranty(true, new BigDecimal("149000")), current.imageUrl()));
         String second = data(place("""
@@ -602,13 +604,13 @@ class CartOrderApiTest {
         if (stock >= 0) {
             fixtures.stock(option, stock, 0, 0);
         }
-        catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "블랙 / 256GB", "SKU-" + option, PRICE,
+        catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "A3104", "블랙 / 256GB", "SKU-" + option, PRICE,
                 "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(true, WARRANTY), null));
         return option;
     }
 
     private static CatalogOption copy(CatalogOption o, String productStatus, String optionStatus, boolean visible, boolean warrantyOffered) {
-        return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.optionTitle(), o.sku(), o.price(), optionStatus,
+        return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.modelName(), o.optionTitle(), o.sku(), o.price(), optionStatus,
                 o.saleMode(), productStatus, visible, true,
                 new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), o.imageUrl());
     }
@@ -626,7 +628,7 @@ class CartOrderApiTest {
     }
 
     private static CatalogOption copyPrice(CatalogOption o, BigDecimal price) {
-        return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.optionTitle(), o.sku(), price, o.optionStatus(),
+        return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.modelName(), o.optionTitle(), o.sku(), price, o.optionStatus(),
                 o.saleMode(), o.productStatus(), o.visible(), o.registrationCompleted(), o.warranty(), o.imageUrl());
     }
 
