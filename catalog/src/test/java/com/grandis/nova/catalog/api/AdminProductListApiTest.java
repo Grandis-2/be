@@ -242,6 +242,8 @@ class AdminProductListApiTest {
             String fifty = tag + " " + "가".repeat(50 - tag.length() - 1);
             UUID found = completed(fifty, "IN_STOCK");
             assertThat(ids(list("q", fifty))).containsExactly(found);
+            assertThat(ids(list("q", java.text.Normalizer.normalize(fifty, java.text.Normalizer.Form.NFD))))
+                    .as("NFD 로 오면(정규화 전 66자) NFC 로 바꾼 뒤 센다").containsExactly(found);
             data(perform("size", "100", "page", "99"));
 
             String[] twentyOne = new String[42];

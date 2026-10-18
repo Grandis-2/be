@@ -564,6 +564,10 @@ class ProductListApiTest {
             assertRejected("storage", repeated("storage", 21, storages));
             assertRejected("brand", repeated("brand", 21, "APPLE"));
             assertRejected("color", "color", String.join(",", colors));
+            assertRejected("color", repeated("color", 21, "블랙"));                   // 같은 값 21번 — 거르면 1개
+            String[] blankAtEnd = repeated("storage", 21, storages);
+            blankAtEnd[41] = " ";
+            assertRejected("storage", blankAtEnd);                                      // 20개 + 공백 1개 — 거르면 20개
         }
 
         /** name 을 n 번 반복한 이름 · 값 쌍. 값이 하나면 같은 값을 반복한다. */
