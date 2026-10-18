@@ -248,30 +248,37 @@ public class TokenService {
      * 저장소 예외는 WARN 으로만 — 호출자가 어차피 401 을 낼 자리다.
      */
     private void cutReusedSession(UUID sessionId) {
+        boolean marked = false;
+        boolean chainRevoked = false;
         try {
             revocations.revokeSession(sessionId, properties.refreshTokenValidity());
+            marked = true;
         } catch (DataAccessException e) {
-            log.warn("refresh reuse: revocation mark not written sid={} cause={}", shortSid(sessionId), e.getClass().getSimpleName());
+            log.warn("refresh reuse: revocation mark not written sid={}", shortSid(sessionId), e);
         }
         for (int attempt = 1; ; attempt++) {
             try {
                 refreshTokens.revokeSession(sessionId);
+                chainRevoked = true;
                 break;
             } catch (PessimisticLockingFailureException e) {
                 if (!MySqlLockFailures.isDeadlock(e) || attempt >= REVOKE_ATTEMPTS) {
-                    log.warn("refresh reuse: refresh rows not revoked after {} attempts sid={} cause={}", attempt, shortSid(sessionId),
-                            e.getClass().getSimpleName());
+                    log.warn("refresh reuse: refresh rows not revoked after {} attempts sid={}", attempt, shortSid(sessionId), e);
                     break;
                 }
             } catch (DataAccessException e) {
-                log.warn("refresh reuse: refresh rows not revoked sid={} cause={}", shortSid(sessionId), e.getClass().getSimpleName());
+                log.warn("refresh reuse: refresh rows not revoked sid={}", shortSid(sessionId), e);
                 break;
             }
+        }
+        if (!marked && !chainRevoked) {
+            // 표식도 체인 폐기도 없다 — 재사용된 체인이 절대 만료까지 재발급된다. 다른 WARN 과 갈라 경보할 수 있게 고정 이벤트 키로 남긴다
+            log.error("auth.refresh.reuse_chain_alive — reused refresh chain left alive until absolute expiry sid={}", shortSid(sessionId));
         }
         try {
             adminRefreshTokens.delete(sessionId);
         } catch (DataAccessException e) {
-            log.warn("refresh reuse: admin refresh not deleted sid={} cause={}", shortSid(sessionId), e.getClass().getSimpleName());
+            log.warn("refresh reuse: admin refresh not deleted sid={}", shortSid(sessionId), e);
         }
     }
 

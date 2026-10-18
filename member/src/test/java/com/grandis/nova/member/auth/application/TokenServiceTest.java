@@ -45,6 +45,7 @@ import org.springframework.data.redis.RedisConnectionFailureException;
  * RefreshTokenDbStoreTest 가 실제 MySQL 로 본다. 여기서 보는 것은 "판정마다 서비스가 무엇을 하는가" 다.
  */
 @DisplayName("TokenService")
+@org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
 class TokenServiceTest {
 
     private static final String CUSTOMER = "0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c8d";
@@ -201,6 +202,23 @@ class TokenServiceTest {
     private static org.springframework.dao.CannotAcquireLockException lockFailure(int vendorCode) {
         return new org.springframework.dao.CannotAcquireLockException("lock",
                 new java.sql.SQLException("lock", "40001", vendorCode));
+    }
+
+    @Test
+    @DisplayName("rotate 재사용 분기: 표식 쓰기와 체인 폐기가 둘 다 실패하면 고정 이벤트 키로 ERROR(auth.refresh.reuse_chain_alive) — 하나만 실패하면 남기지 않는다")
+    void reuseWithBothRevocationsFailingIsAnError(org.springframework.boot.test.system.CapturedOutput output) {
+        Session session = loggedIn(UUID.randomUUID());
+        when(refreshTokens.rotate(any(), any()))
+                .thenReturn(Rotation.rejected(Rotation.Status.REUSED, session.sessionId(), session.subject()));
+        doThrow(new RedisConnectionFailureException("down")).when(revocations).revokeSession(any(), any());
+
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        assertThat(output.getOut() + output.getErr()).as("표식만 실패 — 체인은 끊었다").doesNotContain("auth.refresh.reuse_chain_alive");
+
+        doThrow(lockFailure(1205)).when(refreshTokens).revokeSession(any());
+        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        assertThat(output.getOut() + output.getErr()).contains("auth.refresh.reuse_chain_alive")
+                .as("실패 원인 사슬(벤더 예외)이 로그에 남는다").contains("Caused by: java.sql.SQLException");
     }
 
     @Test
