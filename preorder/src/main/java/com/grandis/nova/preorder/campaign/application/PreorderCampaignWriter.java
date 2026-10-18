@@ -116,15 +116,16 @@ class PreorderCampaignWriter {
         if (campaign.wasClosedBeforeOpen()) {
             throw new BusinessException(PreorderErrorCode.CAMPAIGN_NOT_REOPENABLE, Map.of("reason", "NEVER_OPENED"));
         }
-        if (!closesAt.isAfter(now)) {
+        // 저장 정밀도로 맞춘 값으로 판정 · 저장한다 — 보정 마감이 이 값으로 "그 사이 바뀌지 않았는가" 를 본다
+        Instant stored = closesAt.truncatedTo(ChronoUnit.MICROS);
+        if (!stored.isAfter(now)) {
             throw ValidationFailures.of("closesAt", "현재 시각보다 뒤여야 합니다.");
         }
         Instant closedAt = campaign.getClosesAt();
-        // 저장 정밀도로 맞춰 둔다 — 보정 마감이 이 값으로 "그 사이 바뀌지 않았는가" 를 본다
-        campaign.reopen(closesAt.truncatedTo(ChronoUnit.MICROS));
+        campaign.reopen(stored);
         changePublisher.publish(campaign, CampaignChange.REOPENED);
         log.info("마감한 접수를 다시 열었다 productId={} reopenedBy={} closedAt={} closesAt={}", productId, reopenedBy,
-                closedAt, closesAt);
+                closedAt, stored);
         return campaign;
     }
 
