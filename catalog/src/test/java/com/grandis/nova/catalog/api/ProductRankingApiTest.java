@@ -49,6 +49,7 @@ class ProductRankingApiTest {
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired StringRedisTemplate redis;
     @Autowired ProductViewCounter counter;
+    @Autowired io.micrometer.core.instrument.MeterRegistry meters;
 
     ShopFixtures fixtures;
 
@@ -239,6 +240,24 @@ class ProductRankingApiTest {
 
         assertThat(score(other, 0)).as("받아 둔 id 는 다른 상품에도 센다(맨 왼쪽 위조 칸은 보지 않는다), 넘친 id 는 여전히 안 센다").isEqualTo(1);
         assertThat(score(product, 0)).as("다른 IP 에서 온 넘친 id 와 회원은 센다").isEqualTo(22);
+    }
+
+    @Test
+    @DisplayName("IPv6 는 /64 하나가 한 IP — 같은 /64 안에서 주소를 바꿔도 새 익명 id 는 20개까지, 넘친 신호는 지표로 센다")
+    void ipv6AddressesInOne64ShareTheCap() throws Exception {
+        UUID product = listed();
+        double before = rejected();
+        for (int i = 1; i <= 21; i++) {
+            viewFrom(product, UUID.randomUUID(), "2001:db8:0:1::%x, 130.176.0.1".formatted(i)).andExpect(status().isNoContent());
+        }
+
+        assertThat(score(product, 0)).isEqualTo(20);
+        assertThat(rejected() - before).isEqualTo(1);
+    }
+
+    private double rejected() {
+        io.micrometer.core.instrument.Counter counter = meters.find("catalog.signals.anonymous.rejected").counter();
+        return counter == null ? 0 : counter.count();
     }
 
     @Test

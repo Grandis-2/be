@@ -48,7 +48,7 @@ public class PopularSearchController {
     @Operation(summary = "검색 신호(로그인 없이)", description = "검색창에서 검색을 낼 때 한 번 보낸다 — 204. 같은 사람 · 같은 검색어는 하루(KST) 한 번만 센다. "
             + "결과가 0건인 검색어와 금칙어는 세지 않는다(그래도 204). q 는 목록 검색과 같은 정규화 · 50자 상한(비거나 넘으면 400). "
             + "anonymousId(조회 신호와 같은 브라우저 UUID)는 늘 같이 보낸다 — 유효한 회원 토큰이면 회원으로 세고, 아니면(만료 토큰 포함) 이 값이 없을 때 400. "
-            + "관리자 토큰이면 q 만 검사하고 세지 않는다. 비회원은 IP 하나가 하루(KST)에 익명 id 20개까지만 센다")
+            + "관리자 토큰이면 q 만 검사하고 세지 않는다. 비회원은 IP 하나(IPv6 는 /64)가 하루(KST)에 익명 id 20개까지만 센다 — 조회 · 검색 신호가 같은 상한을 나눠 쓴다")
     @SecurityRequirements
     @PostMapping
     @ResponseStatus(HttpStatus.NO_CONTENT)
