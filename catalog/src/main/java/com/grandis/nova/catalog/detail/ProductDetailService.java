@@ -90,8 +90,8 @@ public class ProductDetailService {
     }
 
     /**
-     * 본문에 실시간 칸을 채운다 — 판매 방식마다 한 번 읽는다. 사전예약은 회차 행(판매 준비 · 회차 시각 · 접수 단계), 일반은 그 상품 옵션의 재고 행
-     * (판매 준비 · 옵션별 가용 수량 · 품절). 행이 없으면 판매 준비 전이라 404 — 목록의 판매 방식별 준비(READY)와 같은 정의다.
+     * 본문에 실시간 칸을 채운다. 사전예약은 회차 행(판매 준비 · 회차 시각 · 접수 단계), 일반은 판매 준비(products.stock_ready_at)와 그 상품 옵션의
+     * 재고 행(옵션별 가용 수량 · 품절). 판매 준비 전이면 404 — 목록의 판매 방식별 준비(READY)와 같은 정의다.
      * 캐시된 본문에도 요청마다 부르므로 재고 · 조기 마감 · 판매 준비가 늦게 보이지 않는다.
      */
     @Transactional(readOnly = true)
@@ -101,11 +101,11 @@ public class ProductDetailService {
                     .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
             return live(body, window, Map.of());
         }
-        Map<UUID, Integer> available = crossReads.findAvailableQuantities(body.productId());
-        if (available.isEmpty()) {
+        // 판매 준비는 목록과 같은 판정(products.stock_ready_at — order 의 판매 준비 이벤트)이다. 재고 행의 유무로 따로 가르면 목록에 없는 상품이 상세에 보인다
+        if (!crossReads.isReady(body.productId())) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
-        return live(body, null, available);
+        return live(body, null, crossReads.findAvailableQuantities(body.productId()));
     }
 
     /**

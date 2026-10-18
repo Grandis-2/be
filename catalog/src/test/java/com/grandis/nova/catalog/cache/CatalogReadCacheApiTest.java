@@ -48,6 +48,7 @@ class CatalogReadCacheApiTest {
     @Autowired StringRedisTemplate redis;
     @Autowired ProductReviewRepository reviews;
     @Autowired CatalogLocalCaches local;
+    @Autowired java.util.List<com.grandis.nova.catalog.event.CatalogEventHandler> handlers;
 
     ShopFixtures fixtures;
     UUID categoryId;
@@ -297,6 +298,24 @@ class CatalogReadCacheApiTest {
         mockMvc.perform(get("/api/v1/products/{id}", hidden)).andExpect(status().isOk());
         admin(patch(ADMIN + "/{id}/visibility", hidden), "{ \"visible\": false }").andExpect(status().isOk());
         mockMvc.perform(get("/api/v1/products/{id}", hidden)).andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("판매 준비 이벤트를 처리하면(엔티티를 거치지 않는 쓰기) 이 인스턴스의 메모리 목록을 바로 버린다 — 새 상품이 TTL 을 기다리지 않고 나온다")
+    void stockReadyEventDropsMemoryList() throws Exception {
+        // 빈 목록은 메모리에 넣지 않는다 — 같은 카테고리에 이미 보이는 상품을 두어 이벤트 전 목록이 메모리에 들어가게 한다
+        UUID shown = registerInStock("이미 보임");
+        String title = "준비 이벤트 " + ShopFixtures.unique();
+        UUID product = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", title, "t" + ShopFixtures.unique());
+        fixtures.inventoryOnly(fixtures.option(product, "ACTIVE", ShopFixtures.OPTION_PRICE), 3, 0, 0);
+        assertThat(list("").findValues("title").stream().map(JsonNode::asString).toList()).as("이벤트 전 — 준비 전이라 없다")
+                .contains("이미 보임").doesNotContain(title);
+        jdbcTemplate.update("UPDATE products SET title = '직접 고침' WHERE id = ?", (Object) UuidBinary.toBytes(shown));
+        assertThat(list("").findValues("title").stream().map(JsonNode::asString).toList()).as("대조군 — 메모리의 옛 목록이다").contains("이미 보임");
+
+        handlers.stream().filter(h -> h.eventType().equals("IN_STOCK_PRODUCT_READY")).findFirst().orElseThrow().handle(product, null);
+
+        assertThat(list("").findValues("title").stream().map(JsonNode::asString).toList()).as("버리고 다시 읽었다").contains(title, "직접 고침");
     }
 
     @Test

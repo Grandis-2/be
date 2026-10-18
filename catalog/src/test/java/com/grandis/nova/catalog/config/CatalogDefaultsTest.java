@@ -52,6 +52,19 @@ class CatalogDefaultsTest {
     }
 
     @Test
+    @DisplayName("catalog-events 소비기는 기본으로 켠다(판매 준비가 이 이벤트로 정해진다) — 배포 설정이 끄면 그 값이 이긴다")
+    void eventConsumerIsOnByDefault() {
+        MockEnvironment empty = new MockEnvironment();
+        new CatalogDefaults().postProcessEnvironment(empty, new SpringApplication());
+        assertThat(empty.getProperty("nova.sqs.consumer.enabled")).isEqualTo("true");
+
+        MockEnvironment off = new MockEnvironment();
+        off.getPropertySources().addFirst(new MapPropertySource("deployed", Map.of("nova.sqs.consumer.enabled", "false")));
+        new CatalogDefaults().postProcessEnvironment(off, new SpringApplication());
+        assertThat(off.getProperty("nova.sqs.consumer.enabled")).isEqualTo("false");
+    }
+
+    @Test
     @DisplayName("Boot 가 읽도록 spring.factories 에 등록돼 있다 — 빠지면 관리 포트가 서비스 포트와 같아져 health 가 서비스 포트로 나간다")
     void registeredForBootToPickUp() {
         // 부트 자신의 후처리기 일부는 생성자 인자가 필요해 못 만든다 — 건너뛰되 이유는 모아 실패 메시지에 싣는다

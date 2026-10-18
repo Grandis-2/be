@@ -103,7 +103,8 @@ nova:
     # queues:               # 논리 목적지 → 실제 큐 이름. 없으면 논리 이름(preorder-events · order-events · 받는 catalog-events)을 그대로 쓴다
     #   preorder-events: preorder-events
     #   order-events: order-events
-    # 받는 큐(catalog-events) 소비기 — contracts/catalog-inbound-events.md. 기본은 꺼짐 — 인프라가 큐를 만들고 보내는 쪽이 준비된 뒤 켠다.
+    # 받는 큐(catalog-events) 소비기 — contracts/catalog-inbound-events.md. 코드 기본값은 켬(판매 준비가 이 큐의 이벤트로 정해진다).
+    # 끄면 새 일반 상품이 목록 · 상세에 나오지 않는다. 아래 값을 바꿀 때만 적는다
     # 로컬 Floci 는 docker/floci/create-queues.sh 가 catalog-events · catalog-events-dlq 를 만든다
     # 켠 채 큐가 없으면 기동은 되고, 받기 실패를 WARN 으로 남기며 늦춰 다시 시도한다(실측. 대기 상한 30초는 common:sqs QueuePoller)
     # consumer:

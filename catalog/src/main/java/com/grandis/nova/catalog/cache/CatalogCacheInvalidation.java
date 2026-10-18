@@ -31,10 +31,20 @@ public class CatalogCacheInvalidation {
     @PostRemove
     void changed(Object entity) {
         if (!(entity instanceof ProductReview)) {
-            cache.bumpAfterCommit(CatalogReadCache.PRODUCTS);
-            local.productList().invalidateAfterCommit();
-            local.productRanking().invalidateAfterCommit();
+            productsChanged();
+            return;
         }
+        cache.bumpAfterCommit(CatalogReadCache.REVIEWS);
+    }
+
+    /**
+     * 상품의 노출이 바뀌었다 — 엔티티를 거치지 않는 쓰기(받은 이벤트의 JDBC 갱신)도 부른다. 상품 · 리뷰 세대를 올리고 이 인스턴스의 목록 · 랭킹을
+     * 버린다. 커밋 뒤에 한 번이다 — 트랜잭션 안에서 부른다.
+     */
+    public void productsChanged() {
+        cache.bumpAfterCommit(CatalogReadCache.PRODUCTS);
+        local.productList().invalidateAfterCommit();
+        local.productRanking().invalidateAfterCommit();
         cache.bumpAfterCommit(CatalogReadCache.REVIEWS);
     }
 }

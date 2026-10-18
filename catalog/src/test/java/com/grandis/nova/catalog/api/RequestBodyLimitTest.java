@@ -48,6 +48,8 @@ import static org.assertj.core.api.Assertions.assertThat;
         "nova.outbox.transport=log",
         "nova.outbox.log-transport-allowed=true",
         "nova.outbox.relay-interval=1h",
+        // catalog-events 소비기는 운영 기본값(CatalogDefaults)으로 켜진다 — 아웃박스를 로그로 보내 SqsClient 가 없는 이 시험은 끈다
+        "nova.sqs.consumer.enabled=false",
         "nova.upload.bucket=catalog-test-images",
         "nova.upload.cdn-base-url=https://img",
         "nova.upload.region=ap-northeast-2",
