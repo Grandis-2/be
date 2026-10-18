@@ -17,7 +17,7 @@ catalog 가 **받는** 이벤트의 기준이다. catalog 가 보내는 이벤�
 | --- | --- | --- | --- |
 | `IN_STOCK_PRODUCT_READY` | `PRODUCT` | order | 그 상품을 판매 준비로 남긴다(`products.stock_ready_at` 이 비었을 때만) — 계약은 `order-catalog-events.md` |
 
-종류를 더할 때는 이 표를 먼저 고치고, 처리기(`CatalogEventHandler` 빈)를 하나 더한다. 받는 쪽(catalog)이 먼저 배포된다 — 모르는 종류는 재시도 뒤 DLQ 로 간다.
+종류를 더할 때는 이 표를 먼저 고치고, 처리기(`CatalogEventHandler` 빈)를 하나 더한다. 받는 쪽(catalog)이 먼저 배포된다 — 모르는 종류는 재시도 뒤 DLQ 로 간다. 예외: `IN_STOCK_PRODUCT_READY` 는 보내는 쪽(order, NV-630)이 먼저 나갔다. 그동안 catalog 소비기가 꺼져 있어(옛 이미지는 기본 꺼짐) 메시지가 큐에 쌓여 있다가 새 이미지가 받는다 — 옛 이미지의 소비기를 켜 두면 이 예외가 성립하지 않는다(`order-catalog-events.md` "배포 순서").
 
 ## 처리 규칙 (`CatalogEventDispatcher`)
 
