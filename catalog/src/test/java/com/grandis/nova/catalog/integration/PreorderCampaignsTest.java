@@ -140,6 +140,36 @@ class PreorderCampaignsTest {
     }
 
     @Test
+    @DisplayName("기동 직후 첫 조회가 실패하면 기다리던 요청은 다시 묻지 않고 빈 값을 받는다 — preorder 는 한 번만 부른다")
+    void waitersDoNotRetryWhenFirstFetchFails() throws Exception {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        client.open = () -> {
+            entered.countDown();
+            await(release);
+            throw new ResourceAccessException("preorder down");
+        };
+        ExecutorService pool = Executors.newFixedThreadPool(4);
+        try {
+            Future<Map<UUID, CampaignWindow>> first = pool.submit(campaigns::open);
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+            List<Future<Map<UUID, CampaignWindow>>> waiters = new ArrayList<>();
+            for (int i = 0; i < 3; i++) {
+                waiters.add(pool.submit(campaigns::open));
+            }
+            Thread.sleep(200);
+            release.countDown();
+            assertThat(first.get(5, TimeUnit.SECONDS)).isEmpty();
+            for (Future<Map<UUID, CampaignWindow>> waiter : waiters) {
+                assertThat(waiter.get(5, TimeUnit.SECONDS)).isEmpty();
+            }
+            assertThat(client.openCalls).as("기다리던 요청이 실패 유예 안에서 다시 묻지 않는다").hasValue(1);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
     @DisplayName("마지막 값이 10분을 넘은 뒤 다시 받는 동안 같이 들어온 요청은 기다리지 않고 빈 값을 받는다 — 장애 중 요청을 줄 세우지 않는다")
     void concurrentCallersDoNotWaitAfterStale() throws Exception {
         UUID product = UUID.randomUUID();
