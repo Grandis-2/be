@@ -31,7 +31,7 @@ public class HttpClientConfig {
         return ClientHttpRequestFactoryBuilder.jdk();
     }
 
-    /** 스프링 부트가 모든 RestClient 의 관측에 이 규칙을 쓴다(없으면 기본 규칙). */
+    /** 스프링 부트가 RestClient.Builder · HTTP 서비스 그룹 클라이언트의 관측에 이 규칙을 쓴다(없으면 기본 규칙). 같은 타입 빈이 둘이면 기동이 실패한다. */
     @Bean
     PathOnlyUriTagConvention pathOnlyUriTagConvention() {
         return new PathOnlyUriTagConvention();
