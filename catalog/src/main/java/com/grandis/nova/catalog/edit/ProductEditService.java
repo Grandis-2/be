@@ -107,11 +107,7 @@ public class ProductEditService {
     }
 
     public AdminProductDetail editProduct(UUID productId, ProductEditRequest request) {
-        Optional<CampaignWindow> window = scheduleBeforeLock(productId);
-        return transaction.execute(status -> editProductLocked(productId, request, window));
-    }
-
-    private AdminProductDetail editProductLocked(UUID productId, ProductEditRequest request, Optional<CampaignWindow> window) {
+        // 본문 검증은 회차를 묻기 전에 — 잘못된 요청은 preorder 와 상관없이 400 이다
         if (request.isEmpty()) {
             throw ValidationFailures.of("body", "바꿀 칸이 하나도 없습니다.");
         }
@@ -131,6 +127,12 @@ public class ProductEditService {
                 throw ValidationFailures.of("warranty.surcharge", "보증을 제공하지 않으면 추가금은 0 이어야 합니다.");
             }
         }
+        Optional<CampaignWindow> window = scheduleBeforeLock(productId);
+        return transaction.execute(status -> editProductLocked(productId, request, window));
+    }
+
+    private AdminProductDetail editProductLocked(UUID productId, ProductEditRequest request, Optional<CampaignWindow> window) {
+        ProductEditRequest.Warranty warranty = request.warranty();
         Product product = requireEditable(productId, window);
         String titleBefore = product.getTitle();
         product.edit(request.title(), request.brand(), request.modelName(), request.description(), request.tags());
@@ -158,13 +160,13 @@ public class ProductEditService {
     }
 
     public AdminProductDetail addOptionValue(UUID productId, OptionValueAddRequest request) {
-        Optional<CampaignWindow> window = scheduleBeforeLock(productId);
-        return transaction.execute(status -> addOptionValueLocked(productId, request, window));
-    }
-
-    private AdminProductDetail addOptionValueLocked(UUID productId, OptionValueAddRequest request, Optional<CampaignWindow> window) {
         BigDecimal surcharge = request.surcharge() == null ? BigDecimal.ZERO
                 : ProductRegistrationValidator.requireWholeWon(request.surcharge(), "surcharge");
+        Optional<CampaignWindow> window = scheduleBeforeLock(productId);
+        return transaction.execute(status -> addOptionValueLocked(productId, request, surcharge, window));
+    }
+
+    private AdminProductDetail addOptionValueLocked(UUID productId, OptionValueAddRequest request, BigDecimal surcharge, Optional<CampaignWindow> window) {
         Product product = requireEditable(productId, window);
         ProductOptions document = product.getOptions();
         String axisKey = request.axisKey().strip().toLowerCase(Locale.ROOT);
@@ -189,17 +191,17 @@ public class ProductEditService {
     }
 
     public AdminProductDetail editOptionValue(UUID productId, String valueId, OptionValueEditRequest request) {
-        Optional<CampaignWindow> window = scheduleBeforeLock(productId);
-        return transaction.execute(status -> editOptionValueLocked(productId, valueId, request, window));
-    }
-
-    private AdminProductDetail editOptionValueLocked(UUID productId, String valueId, OptionValueEditRequest request, Optional<CampaignWindow> window) {
         if (request.isEmpty()) {
             throw ValidationFailures.of("body", "바꿀 칸이 하나도 없습니다.");
         }
         if (request.surcharge() != null) {
             ProductRegistrationValidator.requireWholeWon(request.surcharge(), "surcharge");
         }
+        Optional<CampaignWindow> window = scheduleBeforeLock(productId);
+        return transaction.execute(status -> editOptionValueLocked(productId, valueId, request, window));
+    }
+
+    private AdminProductDetail editOptionValueLocked(UUID productId, String valueId, OptionValueEditRequest request, Optional<CampaignWindow> window) {
         Product product = requireEditable(productId, window);
         ProductOptions document = product.getOptions();
         Pick located = document.pickOf(valueId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
@@ -239,11 +241,6 @@ public class ProductEditService {
     }
 
     public ProductDetailView.Variant addVariant(UUID productId, VariantAddRequest request) {
-        Optional<CampaignWindow> window = scheduleBeforeLock(productId);
-        return transaction.execute(status -> addVariantLocked(productId, request, window));
-    }
-
-    private ProductDetailView.Variant addVariantLocked(UUID productId, VariantAddRequest request, Optional<CampaignWindow> window) {
         Map<String, String> given = new LinkedHashMap<>();
         for (Map.Entry<String, String> entry : request.selections().entrySet()) {
             String axisKey = entry.getKey() == null ? "" : entry.getKey().strip().toLowerCase(Locale.ROOT);
@@ -252,6 +249,12 @@ public class ProductEditService {
                 throw ValidationFailures.of("selections", "같은 축이 두 번 왔습니다(키는 대소문자를 가리지 않습니다): " + axisKey);
             }
         }
+        Optional<CampaignWindow> window = scheduleBeforeLock(productId);
+        return transaction.execute(status -> addVariantLocked(productId, request, given, window));
+    }
+
+    /** @param given 축 키(소문자) → 고른 값. 잠금 안에서 축마다 꺼내 남은 것이 있으면 400 이다 */
+    private ProductDetailView.Variant addVariantLocked(UUID productId, VariantAddRequest request, Map<String, String> given, Optional<CampaignWindow> window) {
         Product product = requireEditable(productId, window);
         ProductOptions document = product.getOptions();
         List<Pick> picks = new ArrayList<>();
@@ -308,14 +311,14 @@ public class ProductEditService {
     }
 
     public ProductDetailView.Variant editVariant(UUID productId, UUID variantId, VariantEditRequest request) {
+        if (request.isEmpty()) {
+            throw ValidationFailures.of("body", "바꿀 칸이 하나도 없습니다.");
+        }
         Optional<CampaignWindow> window = scheduleBeforeLock(productId);
         return transaction.execute(status -> editVariantLocked(productId, variantId, request, window));
     }
 
     private ProductDetailView.Variant editVariantLocked(UUID productId, UUID variantId, VariantEditRequest request, Optional<CampaignWindow> window) {
-        if (request.isEmpty()) {
-            throw ValidationFailures.of("body", "바꿀 칸이 하나도 없습니다.");
-        }
         Product product = requireEditable(productId, window);   // 판매 상태도 사전예약 오픈 3분 전부터는 못 바꾼다
         ProductOption option = options.findById(variantId)
                 .filter(o -> o.getProductId().equals(productId))
