@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       services:
-        description: 'jar 가 같아도 다시 올릴 서비스 (쉼표 구분, all 은 전부). 베이스 이미지를 갱신할 때 쓴다'
+        description: 'jar 가 같아도 다시 올릴 서비스 (쉼표 구분, all 은 전부). 베이스 이미지를 갱신할 때 쓴다. jar 가 같으면 리비전만 오른다'
         required: false
         default: ''
 
@@ -81,9 +81,22 @@ jobs:
           EXPECTED_DIGEST: ${{ steps.push.outputs.digest }}
         run: bash .github/scripts/ecs-migrate.sh run
 
-  # ── 1단계: jar 를 전부 만들고, 내용이 바뀐 서비스만 고른다 ─────────────
-  # 바뀐 파일로 짐작하지 않는다. 내용 키가 ECR 에 이미 있으면 그 이미지에 태그만 옮기고, 없으면 2단계에서 이미지를 만든다.
-  # 내용 키 = jar + 이미지를 만드는 입력(Dockerfile 둘 · .dockerignore · OTel 에이전트 설정 · AOT 학습 디렉터리 · 큐 스크립트). jar 는 재현 가능하게 만들어진다.
+  # ── 1단계: jar 를 전부 만들고, 서비스마다 판정과 버전을 정한다 ─────────────
+  # 바뀐 파일로 짐작하지 않는다. 키 둘을 jar 와 이미지 입력에서 계산하고, 그 서비스 ECR 저장소의 태그와 맞춰 본다.
+  #   jar 키  = 버전 · 커밋이 드는 곳을 빼고 계산한 jar 의 해시(.github/scripts/jar_content_key.py) — build-info.properties 는 빼고,
+  #             MANIFEST 의 Implementation-Version 은 프로젝트 버전(service-graph.json 의 version)으로 되돌린다. 버전을 넣지 않은 jar 는 그대로다.
+  #   내용 키 = jar 키 + 이미지를 만드는 입력(Dockerfile 둘 · .dockerignore · OTel 에이전트 설정 · AOT 학습 디렉터리 · 큐 스크립트).
+  # 버전은 Bitnami 방식이다. jar 는 0.0.N, 이미지는 0.0.N-rM(jar 버전 + 리비전, v 없음)이고 서비스마다 따로 센다(.github/scripts/release_version.py).
+  #   | 경우                              | jar 버전       | 이미지                     |
+  #   | 내용 키가 ECR 에 있음              | 그대로          | 새로 만들지 않고 태그만 옮김  |
+  #   | jar 키는 있고 이미지 입력만 바뀜     | 그대로          | 0.0.N-rM+1                |
+  #   | jar 키가 없음(코드 · 의존성 · common) | 0.0.N+1       | 0.0.N+1-r1                |
+  # 번호는 ECR 태그에서만 읽는다. 태그는 불변(latest 만 예외)이라 표지도 이미지마다 이름이 다르다 — jar-<jar 키>-rM · content-<내용 키>-rM.
+  # 버전은 판정 뒤에야 알아서, 새로 올릴 서비스만 그 버전을 넣어 jar 를 다시 만든다. 버전이 드는 두 곳만 달라 jar 키는 같아야 하고, 다르면 실패한다.
+  # 한계 — ECR 은 서비스마다 최근 이미지만 남긴다(인프라 ecr 스택의 수명 정책, 기본 15개 · untagged 는 3일).
+  #   어떤 jar 키의 이미지가 모두 지워진 뒤 그 jar 가 다시 오면 새 버전을 받는다. 최대 N 의 이미지가 모두 지워지면 그 번호를 다시 줄 수 있다.
+  #   번호를 영구히 지켜야 하면 수명 정책에서 jar-*-r1 이미지를 남긴다(이미지가 쌓인다).
+  # 같은 코드가 같은 jar 를 낸다는 전제다(Gradle 9 기본 · build-info 의 time 제외). 깨지면 변경이 없는 서비스도 버전이 오른다 — 판정 요약에서 보인다.
   # AOT 캐시 자체는 키에 넣지 않는다 — 학습할 때마다 바이트가 달라지지만, 같은 입력에서 나온 캐시는 같은 일을 한다.
   # 이미지에 들어가는 것이 이것뿐이라는 전제다. Dockerfile 이 다른 파일을 COPY 하면 그 파일도 키에 넣는다.
   package:
@@ -103,7 +116,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       # 여기서 빨간불이면 코드 문제다. 테스트는 승격 전에 promote.yml 이 build.yml 로 이미 돌렸다.
+      # GIT_SHA 는 build-info.properties 의 build.commit 이 된다(build.gradle). 버전은 아직 모른다 — 판정 뒤에 다시 만든다.
       - name: jar 만들기
+        env:
+          GIT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           ./gradlew serviceGraph -q --no-daemon > /dev/null
@@ -114,17 +130,23 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # ECR 을 읽기만 한다. 태그가 없다는 답(ImageNotFound)만 "새 내용"이고,
+      # ECR 을 읽기만 한다. 저장소의 태그 목록을 받아 판정 스크립트에 넘긴다.
       # 저장소가 없거나 권한이 없는 오류는 그대로 실패한다 — 전부 다시 올리는 쪽으로 넘기지 않는다.
-      # 찾은 이미지의 매니페스트는 다음 스텝이 태그를 옮길 때 그대로 쓴다. 형식을 바꿔 받지 않도록 받을 형식을 모두 적는다.
-      - name: 내용 키 판정
+      # 강제로 올리는 서비스는 내용 키가 있어도 리비전을 하나 올린다(jar 가 같으면 버전은 그대로).
+      # 그대로인 서비스는 옮길 이미지의 매니페스트를 받아 두고 다음 스텝이 그대로 쓴다. 형식을 바꿔 받지 않도록 받을 형식을 모두 적는다.
+      # 조회는 digest 와 그 이미지의 버전 태그로 한다 — digest 만 주면 ECR 은 그 이미지에 붙은 태그마다 한 건씩 돌려준다.
+      # 둘이 어긋나면(그사이 태그가 옮겨짐) ECR 은 0건 · ImageTagDoesNotMatchDigest 를 돌려주고, 판정과 다른 digest 가 오면 실패한다.
+      - name: 판정
         id: plan
         env:
           FORCED: ${{ inputs.services }}
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           shopt -s nullglob
           graph=build/service-graph.json
+          # jar 키가 MANIFEST 의 버전을 되돌릴 프로젝트 버전. 없으면 멈춘다(-e)
+          base=$(jq -er .version "$graph")
 
           forced=$(echo "$FORCED" | tr ',' '\n' | tr -d ' ' | grep -v '^$' || true)
           if [ "$forced" = "all" ]; then
@@ -144,44 +166,44 @@ jobs:
             for f in "$s"/build/libs/*.jar; do [[ $f == *-plain.jar ]] || jars+=("$f"); done
             [ "${#jars[@]}" -eq 1 ] || { echo "::error::$s 의 jar 가 하나가 아니다: ${jars[*]}"; exit 1; }
             jar=${jars[0]}
-            key=$(printf '%s%s' "$(sha256sum "$jar" | cut -d' ' -f1)" "$image_inputs" | sha256sum | cut -d' ' -f1)
+            # 대입으로 먼저 받아 스크립트 실패가 set -e 에 걸리게 한다
+            # 여기 jar 는 버전을 넣지 않았다 — MANIFEST 전제가 깨졌으면(Boot 업그레이드 등) 모든 버전이 오르기 전에 멈춘다
+            jar_key=$(python3 .github/scripts/jar_content_key.py "$jar" "$base" --unversioned)
+            key=$(printf '%s%s' "$jar_key" "$image_inputs" | sha256sum | cut -d' ' -f1)
             # AOT 학습은 서비스 사이를 오가므로 올리지 않는 서비스의 jar 도 함께 넘긴다
             mkdir -p "dist/$s"
             cp "$jar" "dist/$s/app.jar"
 
+            aws ecr describe-images --repository-name "$ECR_NAMESPACE/$s" --output json > images.json
+            mode=normal
+            if grep -qxF -- "$s" <<< "$forced"; then mode=forced; fi
+            decision=$(python3 .github/scripts/release_version.py images.json "$jar_key" "$key" "$SHA" "$mode")
+
             image=null
-            if grep -qxF -- "$s" <<< "$forced"; then
-              action=publish
-            else
+            if [ "$(echo "$decision" | jq -r .kind)" = same ]; then
               found=$(aws ecr batch-get-image --repository-name "$ECR_NAMESPACE/$s" \
-                --image-ids "imageTag=content-$key" \
+                --image-ids "imageDigest=$(echo "$decision" | jq -r .digest),imageTag=$(echo "$decision" | jq -r .tag)" \
                 --accepted-media-types \
                   application/vnd.docker.distribution.manifest.v2+json \
                   application/vnd.docker.distribution.manifest.list.v2+json \
                   application/vnd.oci.image.manifest.v1+json \
                   application/vnd.oci.image.index.v1+json \
                 --output json)
-              if [ "$(echo "$found" | jq '.images | length')" -gt 0 ]; then
-                action=move
-                image=$(echo "$found" | jq -c '.images[0]')
-              elif echo "$found" | jq -e '[.failures[].failureCode] == ["ImageNotFound"]' > /dev/null; then
-                action=publish
-              else
-                echo "::error::$ECR_NAMESPACE/$s 조회 실패: $(echo "$found" | jq -c '.failures')"
-                exit 1
-              fi
+              [ "$(echo "$found" | jq --arg d "$(echo "$decision" | jq -r .digest)" '[.images[].imageId.imageDigest] == [$d]')" = true ] \
+                || { echo "::error::$ECR_NAMESPACE/$s 매니페스트 조회 실패: $(echo "$found" | jq -c '{images: [.images[].imageId], failures}')"; exit 1; }
+              image=$(echo "$found" | jq -c '.images[0]')
             fi
 
             # && 로 잇지 않는다 — && 목록 앞쪽의 실패는 set -e 로 멈추지 않아, 판정이 빈 채로 초록이 된다
-            jq --arg s "$s" --arg k "$key" --arg a "$action" --argjson i "$image" \
-              '. + [{service: $s, key: $k, action: $a, image: $i}]' plan.json > plan.tmp
+            jq --arg s "$s" --arg k "$key" --arg j "$jar_key" --argjson d "$decision" --argjson i "$image" \
+              '. + [$d + {service: $s, key: $k, jar_key: $j, image: $i}]' plan.json > plan.tmp
             mv plan.tmp plan.json
           done
           # 서비스마다 판정이 하나씩 있어야 한다. 빠지면 그 서비스는 올라가지도 태그가 옮겨지지도 않은 채 초록이 된다
           [ "$(jq length plan.json)" -eq "$(jq '.services | length' "$graph")" ] \
             || { echo "::error::판정이 서비스 수와 다르다"; exit 1; }
 
-          publish=$(jq -c '[.[] | select(.action == "publish") | {service, key}]' plan.json)
+          publish=$(jq -c '[.[] | select(.kind != "same") | {service, key, jar_key, version, revision, tag, push_sha}]' plan.json)
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           [ "$(echo "$publish" | jq 'length')" -gt 0 ] \
             && echo "any=true" >> "$GITHUB_OUTPUT" \
@@ -189,13 +211,49 @@ jobs:
 
           {
             echo "## 판정"
-            echo "| 서비스 | 판정 | 내용 키 |"
-            echo "|---|---|---|"
-            jq -r '.[] | "| \(.service) | \(if .action == "move" then "그대로 (태그만 옮김)" else "새로 올림" end) | `\(.key[:12])` |"' plan.json
+            echo "| 서비스 | 판정 | 버전 | 내용 키 |"
+            echo "|---|---|---|---|"
+            jq -r '.[] | "| \(.service) | \({same: "그대로 (태그만 옮김)", revision: "리비전만", new: "새 버전"}[.kind]) | `\(.tag)` | `\(.key[:12])` |"' plan.json
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # 새로 올릴 서비스만 판정한 버전을 넣어 다시 만든다. 컴파일은 그대로이고 build-info 와 bootJar 만 다시 돈다.
+      # jar 키는 같아야 한다. 다르면 버전이 두 곳 밖으로 샌 것이라, 판정한 키와 올리는 jar 가 어긋나기 전에 멈춘다.
+      # 버전이 두 곳 모두에 들었는지도 본다 — build.version 은 OTel · actuator, Implementation-Version 은 콘솔 로그 · 시작 로그가 읽는다.
+      - name: 버전 넣어 jar 다시 만들기
+        if: steps.plan.outputs.any == 'true'
+        env:
+          GIT_SHA: ${{ github.sha }}
+          PUBLISH: ${{ steps.plan.outputs.publish }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          echo "$PUBLISH" | jq -r '.[] | ":" + .service + ":bootJar", "-PreleaseVersion." + .service + "=" + .version' \
+            | xargs ./gradlew --no-daemon
+          base=$(jq -er .version build/service-graph.json)
+          rows=$(echo "$PUBLISH" | jq -c '.[]')
+          while read -r row; do
+            s=$(echo "$row" | jq -r .service)
+            jars=()
+            for f in "$s"/build/libs/*.jar; do [[ $f == *-plain.jar ]] || jars+=("$f"); done
+            [ "${#jars[@]}" -eq 1 ] || { echo "::error::$s 의 jar 가 하나가 아니다: ${jars[*]}"; exit 1; }
+            jar_key=$(python3 .github/scripts/jar_content_key.py "${jars[0]}" "$base")
+            [ "$jar_key" = "$(echo "$row" | jq -r .jar_key)" ] \
+              || { echo "::error::$s 를 버전을 넣어 다시 만들었더니 jar 키가 달라졌다"; exit 1; }
+            version=$(unzip -p "${jars[0]}" META-INF/build-info.properties BOOT-INF/classes/META-INF/build-info.properties 2> /dev/null \
+              | sed -n 's/^build\.version=//p' || true)
+            [ "$version" = "$(echo "$row" | jq -r .version)" ] \
+              || { echo "::error::$s 의 build.version 이 $version 이다"; exit 1; }
+            # 주 섹션(첫 빈 줄 전)만 본다 — Boot 가 읽고 jar 키가 되돌리는 것이 그 속성이다
+            manifest=$(unzip -p "${jars[0]}" META-INF/MANIFEST.MF 2> /dev/null | tr -d '\r' | sed -n '/^$/q; s/^Implementation-Version: //p' || true)
+            [ "$manifest" = "$version" ] \
+              || { echo "::error::$s 의 MANIFEST Implementation-Version 이 $manifest 이다"; exit 1; }
+            cp "${jars[0]}" "dist/$s/app.jar"
+            echo "$s: $version"
+          done <<< "$rows"
+
       # 건너뛰는 서비스도 sha · latest 를 지금 내용의 이미지로 옮긴다. 되돌림 커밋으로 예전 내용이 되면
-      # latest 가 직전 이미지에 남아 있기 때문이다. 매니페스트에 태그만 붙이므로 레이어는 오가지 않는다.
+      # latest 가 직전 이미지에 남아 있기 때문이다. 매니페스트에 태그만 붙이므로 레이어는 오가지 않는다. 버전 태그는 그 이미지의 것을 그대로 쓴다.
+      # 커밋 태그가 이미 다른 이미지에 있으면(같은 커밋을 다시 돌림) 불변이라 붙일 수 없어 건너뛴다.
       # 다이제스트를 함께 넘겨, 매니페스트가 원본과 다르면 새 이미지를 만들지 않고 실패한다.
       # latest 가 실제로 다른 이미지로 옮겨진 서비스는 그 자리에서 바로 배포한다 — 뒤 서비스가 실패해도 앞 배포는 남는다.
       # 재실행이면 이전 시도에서 latest 만 옮기고 배포 전에 끊겼을 수 있어, 옮길 대상 서비스를 모두 다시 배포한다.
@@ -207,14 +265,16 @@ jobs:
         run: |
           set -euo pipefail
           # 대입으로 먼저 받아 jq 실패가 set -e 에 걸리게 한다
-          rows=$(jq -c '.[] | select(.action == "move")' plan.json)
+          rows=$(jq -c '.[] | select(.kind == "same")' plan.json)
           while read -r row; do
             [ -n "$row" ] || continue
             s=$(echo "$row" | jq -r .service)
             key=$(echo "$row" | jq -r .key)
             image=$(echo "$row" | jq -c .image)
             latest="latest 는 이미 같음"
-            for tag in "$SHA" latest; do
+            tags=(latest)
+            if [ "$(echo "$row" | jq -r .push_sha)" = true ]; then tags=("$SHA" latest); fi
+            for tag in "${tags[@]}"; do
               # 이미 같은 이미지에 붙어 있으면 ImageAlreadyExistsException 이다. 할 일이 없으니 넘어간다.
               if out=$(aws ecr put-image --repository-name "$ECR_NAMESPACE/$s" --image-tag "$tag" \
                     --image-manifest "$(echo "$image" | jq -r .imageManifest)" \
@@ -225,13 +285,13 @@ jobs:
                 grep -qF ImageAlreadyExistsException <<< "$out" || { echo "$out"; exit 1; }
               fi
             done
-            echo "$ECR_NAMESPACE/$s: content-${key:0:12} → $SHA ($latest)"
+            echo "$ECR_NAMESPACE/$s: $(echo "$row" | jq -r .tag) 그대로, content-${key:0:12} → ${tags[*]} ($latest)"
             if [ "$latest" = "latest 옮김" ] || [ "$RUN_ATTEMPT" -gt 1 ]; then
               bash .github/scripts/ecs-deploy.sh "$s"
             fi
           done <<< "$rows"
 
-      # 2단계가 같은 jar 를 쓰도록 넘긴다. gradle 을 다시 돌리지 않는다.
+      # 2단계가 이 jar 를 쓰도록 넘긴다. 새로 올릴 서비스는 버전을 넣어 다시 만든 jar 다.
       - uses: actions/upload-artifact@v4
         if: steps.plan.outputs.any == 'true'
         with:
@@ -330,21 +390,32 @@ jobs:
       - uses: aws-actions/amazon-ecr-login@v2
         id: ecr
 
-      # content 태그를 마지막에 붙인다. 이 태그가 있으면 1단계가 이 이미지를 다시 쓴다.
+      # 버전 태그를 먼저, content 태그를 마지막에 붙인다. content 태그가 있으면 1단계가 이 이미지를 다시 쓴다.
+      # 중간에 끊기면 content 태그가 없는 이미지가 남는다. 다시 돌리면 그 번호를 건너뛰고 새로 만든다 — jar 태그까지 붙었으면 M 만,
+      # 버전 태그만 붙었으면 그 이미지의 jar 를 알 수 없어 새 버전이면 N 이 하나 빈다(불변 태그와 겹치지 않게). 남은 것은 수명 정책이 지운다.
+      # 커밋 태그가 이미 있으면(같은 커밋을 다시 돌림) 불변이라 붙이지 않는다 — 그 커밋 태그는 jar 가 같은 이전 이미지에 남는다.
+      # 그래서 이 이미지를 고정 배포(인프라 service.yml 의 image_tag)하려면 커밋이 아니라 버전 태그를 쓴다.
       - name: 올리기
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           REPO: ${{ env.ECR_NAMESPACE }}/${{ matrix.service }}
           SHA: ${{ github.sha }}
+          PUSH_SHA: ${{ matrix.push_sha }}
           KEY: ${{ matrix.key }}
+          JAR_KEY: ${{ matrix.jar_key }}
+          TAG: ${{ matrix.tag }}
+          REVISION: ${{ matrix.revision }}
         run: |
           set -euo pipefail
-          for tag in "$SHA" latest "content-$KEY"; do
+          tags=("$TAG" "jar-$JAR_KEY-r$REVISION")
+          if [ "$PUSH_SHA" = true ]; then tags+=("$SHA"); fi
+          tags+=(latest "content-$KEY-r$REVISION")
+          for tag in "${tags[@]}"; do
             docker tag release:${{ matrix.service }} "$REGISTRY/$REPO:$tag"
             docker push "$REGISTRY/$REPO:$tag"
           done
           echo "### $REPO" >> "$GITHUB_STEP_SUMMARY"
-          echo '`'"$REGISTRY/$REPO:$SHA"'`' >> "$GITHUB_STEP_SUMMARY"
+          echo '`'"$REGISTRY/$REPO:$TAG"'`' >> "$GITHUB_STEP_SUMMARY"
 
       # 올린 직후 이 서비스만 배포한다. 다른 서비스의 올리기가 실패해도 이 배포는 남고, 올리지 못한 서비스는 배포하지 않는다.
       - name: 배포

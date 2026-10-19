@@ -9,6 +9,7 @@ import java.util.UUID;
  * 럭키 드로우 회차. 응모비를 결제한 응모자 중 추첨해 당첨자에게 증정품(일반 상품의 옵션 하나)을 준다.
  * 증정품 이름 · 사진은 만든 때의 catalog 값 스냅샷이다. 회차를 만들 때 당첨 인원만큼 그 옵션의 재고를 확보해 둔다.
  *
+ * @param modelName 증정품 상품의 모델명. 이 칸 전에 만든 회차는 null — 당첨 주문에도 그대로 null 로 간다
  * @param imageUrl 증정품 옵션의 사진(고른 색상의 첫 장 — catalog 내부 조회의 imageUrl). 없으면 null
  */
 public record DrawCampaign(
@@ -17,6 +18,7 @@ public record DrawCampaign(
         UUID optionId,
         String title,
         String productTitle,
+        String modelName,
         String optionTitle,
         String imageUrl,
         BigDecimal entryFee,

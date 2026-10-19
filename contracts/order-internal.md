@@ -79,7 +79,9 @@ BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, �
 
 | 언제 | 누가 | 실린 JWT | 목적 |
 | --- | --- | --- | --- |
-| 장바구니 조회 · 담기 · 장바구니 주문 생성 | order 장바구니 | 회원(USER) | 줄마다 표시할 상품 · 옵션 정보와 "살 수 있는가" 를 가릴 사실, 주문 스냅샷(가격 · 이름 · 보증) |
+| 장바구니 조회 · 담기 · 장바구니 주문 생성 | order 장바구니 | 회원(USER) | 줄마다 표시할 상품 · 옵션 정보와 "살 수 있는가" 를 가릴 사실, 주문 스냅샷(가격 · 이름 · 모델명 · 보증) |
+| 바로 구매 주문 생성 | order 주문 | 회원(USER) | 장바구니 주문과 같은 판정 · 주문 스냅샷 |
+| 럭키 드로우 회차 만들기 | order 드로우(관리자) | 관리자(ADMIN) | 증정품 옵션이 줄 수 있는 것인가, 회차 스냅샷(이름 · 모델명 · 사진) |
 
 **인증.** 호출자가 받은 회원 토큰을 그대로 싣는다(`Authorization: Bearer {accessToken}`). catalog 는 `common:security` 필터로 검증하고 USER · ADMIN 을 받는다(`/internal/**` 규칙 — 그 밖의 역할은 403).
 
@@ -97,6 +99,7 @@ BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, �
         "optionId": "0199a3f2-8a11-7c22-8d33-5e6f70819203",
         "productId": "0199a3f2-8a10-7b21-9c32-4d5e6f708192",
         "productTitle": "아이폰 17",
+        "modelName": "A3104",
         "optionTitle": "블랙 / 256GB",
         "sku": "BLK-256",
         "price": 1250000,
@@ -121,6 +124,7 @@ BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, �
 | `optionId` | string(UUID) | `product_options.id` |
 | `productId` | string(UUID) | 옵션의 상품 |
 | `productTitle` | string | 상품 이름(지금 값) |
+| `modelName` | string | 상품 모델명(지금 값, 예: A3104). 장바구니 표시 · 주문 스냅샷(`order_items.model_name_snapshot`) · 드로우 회차 스냅샷(`draw_campaigns.model_name_snapshot`, 당첨 주문이 옮긴다)에 쓴다 |
 | `optionTitle` | string | 옵션 표시명(지금 값, 예: 블랙 / 256GB) |
 | `sku` | string | 옵션 SKU |
 | `price` | number | 회원이 내는 옵션 가격(정수 원) — 정가(기본가 + 고른 값의 추가금)에 상품 할인율을 걸어 100원 단위로 버린 값. 할인율 0 이면 정가. 보증 추가금은 할인하지 않는다 |
@@ -209,7 +213,7 @@ BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, �
 
 **요청.** 본문 없음. `optionIds` 에 옵션 id(`product_options.id`, UUID)를 쉼표로 잇거나(`optionIds=a,b`) 파라미터를 반복한다(`optionIds=a&optionIds=b`) — 둘은 같다. 규칙은 `GET /internal/options` 의 `ids` 와 같다.
 - 같은 id 는 한 번으로 센다. 중복을 뺀 개수가 1~100 이어야 한다. 비었거나 · 없거나 · 101개 이상 · UUID 가 아니거나 · 빈 원소(`optionIds=a,` 의 끝 쉼표)가 있으면 400(`field=optionIds`).
-- 상한 100 은 URL 길이로 정했다 — UUID 100개를 쉼표로 이으면 약 3.7KB 로, Tomcat 요청 헤더 기본 상한(8KB) 안이다. 더 많이 물어야 하면 catalog 가 100개씩 나눠 부른다.
+- 상한 100 은 URL 길이로 정했다 — UUID 100개를 쉼표로 이으면 약 3.7KB, 파라미터를 반복하면(`optionIds=` 10자 + UUID 36자 + `&` = 47자 × 100) 약 4.7KB 로, 둘 다 Tomcat 요청 헤더 기본 상한(8KB) 안이다. catalog 의 HTTP 인터페이스(`StockClient`)는 반복 모양으로 보낸다. 더 많이 물어야 하면 catalog 가 100개씩 나눠 부른다.
 
 **응답 200.** 봉투는 `common:web` 의 `ApiResponse` 그대로. 결과는 **요청 순서**(같은 id 는 처음 자리에 한 번)이고, **재고 행이 없는 옵션은 빠진다**.
 

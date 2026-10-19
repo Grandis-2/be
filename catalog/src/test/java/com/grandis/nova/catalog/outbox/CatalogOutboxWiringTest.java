@@ -46,6 +46,8 @@ import static org.mockito.BDDMockito.willAnswer;
  * 옮긴 뒤에는 앱의 JsonMapper 빈이 쓴다 — 받는 쪽 계약이라 글자까지 같아야 한다.
  *
  * 릴레이는 전용 실행기가 짧은 주기로 돌게 한다(배선까지 본다). 다른 시험이 이 주기를 물려받지 않게 끝나면 컨텍스트를 닫는다.
+ * DB 는 모든 시험 컨텍스트가 같이 쓰는 싱글턴이라(MySqlContainerConfig), 이 릴레이는 다른 시험이 남긴 1분 지난 미발행 행도 집어 대역 전송으로
+ * 발행 완료로 적는다 — 시험은 한 JVM 에서 차례로 돌아 끝난 시험의 단언에는 닿지 않는다.
  */
 @CatalogIntegrationTest
 @TestPropertySource(properties = "nova.outbox.relay-interval=200ms")

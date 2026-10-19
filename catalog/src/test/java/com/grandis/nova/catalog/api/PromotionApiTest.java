@@ -342,6 +342,8 @@ class PromotionApiTest {
         assertThat(detail.get("detailImageUrls").toString()).isEqualTo("[\"https://img/d.jpg\"]");
         JsonNode products = detail.get("products");
         assertThat(ids(products)).containsExactly(open.toString(), closed.toString(), converted.toString());
+        assertThat(products.get(2).get("soldOut").asBoolean()).as("일반 전환한 상품은 재고 0 이라 품절 — order 재고로 채운다").isTrue();
+        assertThat(products.get(0).get("soldOut").asBoolean()).as("사전예약은 품절이 없다").isFalse();
         assertThat(products.get(0).get("preorderStatus").asString()).isEqualTo("OPEN");
         assertThat(products.get(0).get("colors").get(0).get("label").asString()).as("홍보 상세 카드에도 색상칩").isEqualTo("화이트");
         assertThat(products.get(0).get("colors").get(0).get("imageUrls").toString()).isEqualTo("[\"https://img/w.jpg\"]");
@@ -430,6 +432,20 @@ class PromotionApiTest {
             request.param("promotionId", promotionId.toString());
         }
         return data(mockMvc.perform(request).andExpect(status().isOk())).get("items");
+    }
+
+    @Test
+    @DisplayName("관리자 목록 · 묶을 수 있는 상품도 앞 10,000개 안에서 시작하는 쪽까지 — 넘으면 400 VALIDATION_FAILED(page). 아주 큰 page 가 500 이던 것도 같은 400")
+    void capsListDepth() throws Exception {
+        for (String path : new String[] {ADMIN, ADMIN + "/linkable-products"}) {
+            mockMvc.perform(get(path).param("size", "100").param("page", "99").with(admin())).andExpect(status().isOk());
+            for (String page : new String[] {"100", "2147483647"}) {
+                mockMvc.perform(get(path).param("size", "100").param("page", page).with(admin()))
+                        .andExpect(status().isBadRequest())
+                        .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+                        .andExpect(jsonPath("$.error.details.violations[0].field").value("page"));
+            }
+        }
     }
 
     private static org.springframework.test.web.servlet.request.RequestPostProcessor admin() {

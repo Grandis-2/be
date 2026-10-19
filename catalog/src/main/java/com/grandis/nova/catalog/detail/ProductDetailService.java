@@ -8,6 +8,7 @@ import com.grandis.nova.catalog.detail.ProductDetailView.OptionAxis;
 import com.grandis.nova.catalog.detail.ProductDetailView.OptionValue;
 import com.grandis.nova.catalog.detail.ProductDetailView.Variant;
 import com.grandis.nova.catalog.detail.ProductDetailView.Warranty;
+import com.grandis.nova.catalog.integration.StockReader;
 import com.grandis.nova.catalog.listing.CampaignWindow;
 import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
 import com.grandis.nova.catalog.option.OptionCombination;
@@ -21,9 +22,14 @@ import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -48,6 +54,7 @@ import java.util.UUID;
 @Service
 public class ProductDetailService {
 
+    private static final Logger log = LoggerFactory.getLogger(ProductDetailService.class);
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final TypeReference<Map<String, String>> ATTRIBUTES = new TypeReference<>() {
     };
@@ -55,23 +62,30 @@ public class ProductDetailService {
     private final ProductRepository products;
     private final ProductOptionRepository options;
     private final ProductListingQueryRepository crossReads;
+    private final StockReader stocks;
     private final Clock clock;
+    /** DB 를 읽는 부분만 감싼다 — order 재고를 묻는 동안 DB 연결을 붙잡지 않게. */
+    private final TransactionTemplate snapshot;
 
     public ProductDetailService(ProductRepository products, ProductOptionRepository options,
-                                ProductListingQueryRepository crossReads, Clock clock) {
+                                ProductListingQueryRepository crossReads, StockReader stocks, Clock clock,
+                                PlatformTransactionManager transactionManager) {
         this.products = products;
         this.options = options;
         this.crossReads = crossReads;
+        this.stocks = stocks;
         this.clock = clock;
+        this.snapshot = new TransactionTemplate(transactionManager);
+        this.snapshot.setReadOnly(true);
+        this.snapshot.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
     }
 
     /**
-     * 회원 상세 = 상품 본문({@link #findProductBody}) + 실시간 칸({@link #withLiveParts}), 한 스냅샷. 같은 객체 안의 호출이라 두 메서드의
-     * 트랜잭션 설정은 프록시를 거치지 않는다 — 여기서 한 트랜잭션으로 묶는다. 캐시를 거치는 공개 상세는 CatalogReadCache 가 둘을 따로 부른다.
+     * 회원 상세 = 상품 본문({@link #findProductBody}) + 실시간 칸({@link #withLiveParts}). 본문은 한 트랜잭션에서 읽고, 실시간 칸은 그 뒤에 채운다
+     * (재고 수량은 order 가 답한 시점의 값이다). 캐시를 거치는 공개 상세는 CatalogReadCache 가 둘을 따로 부른다 — 이 메서드는 시험이 쓴다.
      */
-    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public ProductDetailView findProduct(UUID productId) {
-        return withLiveParts(findProductBody(productId));
+        return withLiveParts(snapshot.execute(status -> findProductBody(productId)));
     }
 
     /**
@@ -90,37 +104,87 @@ public class ProductDetailService {
     }
 
     /**
-     * 본문에 실시간 칸을 채운다 — 판매 방식마다 한 번 읽는다. 사전예약은 회차 행(판매 준비 · 회차 시각 · 접수 단계), 일반은 그 상품 옵션의 재고 행
-     * (판매 준비 · 옵션별 가용 수량 · 품절). 행이 없으면 판매 준비 전이라 404 — 목록의 판매 방식별 준비(READY)와 같은 정의다.
-     * 캐시된 본문에도 요청마다 부르므로 재고 · 조기 마감 · 판매 준비가 늦게 보이지 않는다.
+     * 본문에 실시간 칸을 채운다. 사전예약은 회차 행(판매 준비 · 회차 시각 · 접수 단계), 일반은 판매 준비(products.stock_ready_at)와 그 상품 옵션의
+     * 재고 행(옵션별 가용 수량 · 품절). 판매 준비 전이면 404 — 목록의 판매 방식별 준비(READY)와 같은 정의다.
+     * 캐시된 본문에도 요청마다 부르므로 재고 · 조기 마감 · 판매 준비가 늦게 보이지 않는다. 트랜잭션 없이 돈다 — DB 읽기는 한 문장씩이고, order 재고를
+     * 묻는 동안 DB 연결을 붙잡지 않게.
      */
-    @Transactional(readOnly = true)
     public ProductDetailView withLiveParts(ProductDetailView body) {
         if (body.saleMode() == SaleMode.PREORDER) {
             CampaignWindow window = crossReads.findCampaign(body.productId())
                     .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
             return live(body, window, Map.of());
         }
-        Map<UUID, Integer> available = crossReads.findAvailableQuantities(body.productId());
-        if (available.isEmpty()) {
+        // 판매 준비는 목록과 같은 판정(products.stock_ready_at — order 의 판매 준비 이벤트)이다. 재고 행의 유무로 따로 가르면 목록에 없는 상품이 상세에 보인다
+        if (!crossReads.isReady(body.productId())) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
-        return live(body, null, available);
+        return live(body, null, availableOrUnknown(body));
     }
 
     /**
      * 관리자 상세 — 노출 규칙 없이 어떤 상품이든(비공개 · 미완료 · 판매 중지 · 오래된 마감) 상세와 등록 상태를 준다. 없는 상품 · 삭제한 상품만 404.
+     * DB 는 한 트랜잭션에서 읽고({@link #findAdminSnapshot}), 일반 상품의 남은 수량은 그 뒤에 order 에 묻는다({@link #withStock}).
+     * 쓰기 트랜잭션 안에서 부르지 않는다 — 그 안에서는 {@link #findAdminSnapshot} 을 쓰고, 수량은 커밋 뒤에 채운다.
+     */
+    public AdminProductDetail findAdminProduct(UUID productId) {
+        return withStock(snapshot.execute(status -> findAdminSnapshot(productId)));
+    }
+
+    /**
+     * 관리자 상세의 DB 부분 — 일반 상품의 남은 수량은 비운 채(null · 품절 아님)다. 상품 행을 잠근 쓰기 흐름이 응답을 만들 때 쓴다: 잠금 · 연결을
+     * 쥔 채 order 를 부르지 않게, 수량은 커밋 뒤에 {@link #withStock} 이나 {@link #beforeStockReady} 로 채운다. 혼자 불리면(GET) REPEATABLE READ 한
+     * 스냅샷이고, 쓰기 트랜잭션 안에서는 그 트랜잭션에 합류한다(격리 수준은 바깥 것 — 상품 · 옵션 행은 그 쓰기가 잠가 두었다).
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public AdminProductDetail findAdminProduct(UUID productId) {
+    public AdminProductDetail findAdminSnapshot(UUID productId) {
         Product product = products.findById(productId).filter(found -> !found.isDeleted())
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
         // 관리자 목록 · 상세의 visible 은 products.visible 칸 그대로 — 판매 방식별 준비는 registrationCompleted 가 따로 말한다
         ProductDetailView body = body(product, product.isVisible());
         ProductDetailView detail = product.getSaleMode() == SaleMode.PREORDER
                 ? live(body, crossReads.findCampaign(productId).orElse(null), Map.of())
-                : live(body, null, crossReads.findAvailableQuantities(productId));
+                : live(body, null, null);
         return new AdminProductDetail(detail, product.getTags(), product.getIdempotencyKey(), crossReads.isReady(productId));
+    }
+
+    /** 일반 상품이면 옵션별 남은 수량을 order 에 물어 채운다(답하지 않으면 수량 null). 사전예약은 그대로. 트랜잭션 밖에서 부른다. */
+    public AdminProductDetail withStock(AdminProductDetail detail) {
+        ProductDetailView product = detail.product();
+        if (product.saleMode() == SaleMode.PREORDER) {
+            return detail;
+        }
+        return new AdminProductDetail(live(product, null, availableOrUnknown(product)), detail.tags(), detail.registrationKey(),
+                detail.registrationCompleted());
+    }
+
+    /**
+     * 수정한 옵션 하나에 남은 수량을 채운다 — 수정 트랜잭션은 수량을 묻지 않으므로(상품 행을 잠근 채 order 를 부르지 않게) 커밋 뒤에 그 옵션 하나만
+     * order 에 묻는다. 사전예약은 그대로(null). order 가 답하지 않으면 수량 null.
+     */
+    public Variant withStock(UUID productId, Variant variant) {
+        boolean preorder = products.findById(productId).map(product -> product.getSaleMode() == SaleMode.PREORDER).orElse(true);
+        if (preorder) {
+            return variant;
+        }
+        try {
+            return variant.withAvailableQuantity(stocks.available(List.of(variant.variantId())).getOrDefault(variant.variantId(), 0));
+        } catch (BusinessException e) {
+            log.warn("수정한 옵션의 남은 수량을 order 에 묻지 못했다 — 수량을 비워 보낸다 variantId={}", variant.variantId(), e);
+            return variant.withAvailableQuantity(null);
+        }
+    }
+
+    /**
+     * 재고가 아직 없는 일반 상품 — 옵션 수량 0 · 품절. 등록 · 사전예약 전환의 응답이 쓴다: 재고는 커밋 뒤 나가는 이벤트로 order 가 만드므로, 그
+     * 트랜잭션 안에서는 order 에 물을 것이 없다.
+     */
+    public AdminProductDetail beforeStockReady(AdminProductDetail detail) {
+        ProductDetailView product = detail.product();
+        if (product.saleMode() == SaleMode.PREORDER) {
+            return detail;
+        }
+        return new AdminProductDetail(live(product, null, Map.of()), detail.tags(), detail.registrationKey(), detail.registrationCompleted());
     }
 
     /** @param visible 응답에 실을 visible — 회원 상세는 노출 규칙을 지났으니 늘 true, 관리자 상세는 칸 그대로 */
@@ -140,13 +204,30 @@ public class ProductDetailService {
     }
 
     /**
-     * 본문 + 실시간 칸. 일반 상품은 옵션마다 가용 수량(재고 행이 없으면 0)과 품절(판매 중 옵션의 가용이 전부 0 이하 — 목록 SQL 과 같은 규칙),
-     * 사전예약은 회차(window 가 없으면 null)와 지금 시각의 접수 단계. 사전예약은 재고 행이 없으므로 품절이 되지 않는다.
+     * 옵션별 남은 수량을 order 에 묻는다(재고 행이 없는 옵션은 빠진다). order 가 답하지 않으면 null — 수량을 모름(2026-10-19 결정: 상세는 뜨고 수량만 비운다).
+     */
+    private Map<UUID, Integer> availableOrUnknown(ProductDetailView body) {
+        try {
+            return stocks.available(body.variants().stream().map(Variant::variantId).toList());
+        } catch (BusinessException e) {
+            log.warn("상세의 남은 수량을 order 에 묻지 못했다 — 수량을 비워 보낸다 productId={}", body.productId(), e);
+            return null;
+        }
+    }
+
+    /**
+     * 본문 + 실시간 칸. 일반 상품은 옵션마다 남은 수량(order 답에 없으면 0)과 품절(판매 중 옵션의 남은 수량이 전부 0), 사전예약은 회차(window 가
+     * 없으면 null)와 지금 시각의 접수 단계. 사전예약은 재고가 없으므로 품절이 되지 않는다.
+     *
+     * @param available 옵션 id → 남은 수량. null 이면 수량을 모른다(order 가 답하지 않았거나 아직 묻지 않았다) — 옵션 수량은 null, 품절은 false
      */
     private ProductDetailView live(ProductDetailView body, CampaignWindow window, Map<UUID, Integer> available) {
         if (body.saleMode() == SaleMode.PREORDER) {
             Campaign campaign = window == null ? null : new Campaign(window.opensAt(), window.closesAt(), window.statusAt(clock.instant()));
             return body.withLive(campaign, body.variants(), false);
+        }
+        if (available == null) {
+            return body.withLive(null, body.variants().stream().map(variant -> variant.withAvailableQuantity(null)).toList(), false);
         }
         List<Variant> variants = new ArrayList<>();
         boolean purchasable = false;
@@ -159,7 +240,6 @@ public class ProductDetailService {
     }
 
     /** 옵션이 그 상품 소속이 아니면 404. 상품의 노출 규칙을 먼저 적용한다. */
-    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public Variant findVariant(UUID productId, UUID variantId) {
         return findProduct(productId).variants().stream()
                 .filter(variant -> variant.variantId().equals(variantId))

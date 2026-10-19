@@ -15,7 +15,7 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 | 모듈 | 쓰는 표 | 허용된 남의 표 |
 | --- | --- | --- |
 | member | customers · refresh_tokens · notifications | 없음 |
-| catalog | categories · products · product_options · product_reviews · promotions · promotion_products · catalog_outbox_events · images | 읽기: preorder_campaigns(opens_at · closes_at · 행 유무) · option_inventories(재고 집계 · 행 유무), `ProductListingQueryRepository` 한 곳 |
+| catalog | categories · products · product_options · product_reviews · promotions · promotion_products · banners · catalog_outbox_events · images | 읽기: preorder_campaigns(opens_at · closes_at · 행 유무), `ProductListingQueryRepository` 한 곳. 재고는 order 의 `GET /internal/stocks` 로 묻는다 |
 | preorder | preorders · preorder_events · preorder_campaigns · shipment_batches · preorder_outbox_events · preorder_dead_letter_events · preorder_sync_jobs · preorder_sync_attempts · preorder_open_alerts · preorder_open_alert_dispatches · preorder_payment_anomalies | (epic/NV-441 머지 뒤) reconciliation_runs 읽기 · 관리자 실행 요청(REQUESTED) INSERT, reconciliation_findings 읽기 · 조치 칸(action_*) UPDATE |
 | order | orders · order_items · order_events · cart_items · option_inventories · draw_campaigns · draw_entries · order_outbox_events · stock_adjustments · stock_reconcile_runs · stock_reconcile_lock | 읽기: products · product_options(옵션 소속 · 판매 방식) |
 | payment | payments · payment_transactions · payment_outbox_events | 없음 |

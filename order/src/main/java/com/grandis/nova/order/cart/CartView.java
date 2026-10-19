@@ -13,12 +13,13 @@ public record CartView(List<Line> lines) {
 
     /**
      * @param productId         옵션이 없어졌으면(DISCONTINUED) null — 이름 · 가격 칸도 null 이다
+     * @param modelName         상품 모델명(지금 값)
      * @param unitPrice         옵션의 지금 가격(정수 원)
      * @param warrantyPrice     보증을 골랐으면 보증 추가금, 아니면 0
      * @param lineAmount        (unitPrice + warrantyPrice) × quantity
      * @param availableQuantity 지금 가용 재고(재고 행이 없으면 0)
      */
-    public record Line(UUID cartItemId, UUID variantId, UUID productId, String productTitle, String optionTitle,
+    public record Line(UUID cartItemId, UUID variantId, UUID productId, String productTitle, String modelName, String optionTitle,
                        String imageUrl, boolean warranty, int quantity, BigDecimal unitPrice, BigDecimal warrantyPrice,
                        BigDecimal lineAmount, int availableQuantity, Unavailability unavailableReason) {
 

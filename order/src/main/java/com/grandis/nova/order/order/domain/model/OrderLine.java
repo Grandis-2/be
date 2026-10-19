@@ -15,8 +15,10 @@ import java.util.UUID;
  * 보증 수량은 0 ~ 수량이다(ck_order_item_warranty_quantity). 보증을 사지 않았으면 보증가도 0 이다 — 이건 DB 가 아니라 여기만 지킨다
  * (ck_order_item_warranty_price 는 0 이상만 본다).
  *
- * 이름 길이는 DB 칸(product_title_snapshot 100 · option_title_snapshot 120)과 같다. MySQL 은 글자 수로 세므로
+ * 이름 길이는 DB 칸(product_title_snapshot 100 · option_title_snapshot 120 · model_name_snapshot 40)과 같다. MySQL 은 글자 수로 세므로
  * 코드 포인트로 센다.
+ *
+ * @param modelName 주문 때 상품 모델명. 장바구니 · 바로 구매 · 드로우 당첨만 싣고, 사전예약 · 이 칸 전에 만든 주문은 null 이다
  */
 public record OrderLine(
         UUID productId,
@@ -26,6 +28,7 @@ public record OrderLine(
         int warrantyQuantity,
         Money warrantyUnitPrice,
         String productTitle,
+        String modelName,
         String optionTitle
 ) {
 
@@ -43,12 +46,15 @@ public record OrderLine(
         }
         requireLength(productTitle, "productTitle", 100);
         requireLength(optionTitle, "optionTitle", 120);
+        if (modelName != null) {
+            requireLength(modelName, "modelName", 40);
+        }
     }
 
-    /** 사전예약 · 보증 없는 줄. */
+    /** 사전예약 · 드로우 당첨 · 보증 없는 줄. */
     public static OrderLine withoutWarranty(UUID productId, UUID optionId, Quantity quantity, Money unitPrice,
-                                            String productTitle, String optionTitle) {
-        return new OrderLine(productId, optionId, quantity, unitPrice, 0, Money.ZERO, productTitle, optionTitle);
+                                            String productTitle, String modelName, String optionTitle) {
+        return new OrderLine(productId, optionId, quantity, unitPrice, 0, Money.ZERO, productTitle, modelName, optionTitle);
     }
 
     /** 줄 금액 = 단가 × 수량 + 보증가 × 보증 수량. */

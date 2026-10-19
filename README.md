@@ -273,7 +273,7 @@ worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이
 | 서비스 | 표 |
 | --- | --- |
 | `member` | `customers` · `refresh_tokens` · `notifications` |
-| `catalog` | `categories` · `products` · `product_options` · `product_reviews` · `promotions` · `promotion_products` · `catalog_outbox_events` · `images` |
+| `catalog` | `categories` · `products` · `product_options` · `product_reviews` · `promotions` · `promotion_products` · `banners` · `catalog_outbox_events` · `images` |
 | `preorder` | `preorders` · `preorder_events` · `preorder_campaigns` · `shipment_batches` · `preorder_outbox_events` · `dead_letter_events`<br>`preorder_sync_jobs` · `preorder_sync_attempts` (외부 작업 · 시도 원장) · `preorder_open_alerts` · `preorder_open_alert_dispatches` (오픈 알림 신청 · 발송 진행) |
 | `order` | `orders` · `order_items` · `order_events` · `cart_items` · `option_inventories` · `draw_campaigns` · `draw_entries` |
 | `payment` | `payments` · `payment_transactions` |

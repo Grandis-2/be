@@ -169,19 +169,31 @@ jobs:
           path: '**/build/reports/tests/'
           retention-days: 7
 
+  # release 가 쓰는 스크립트(.github/scripts)의 시험. 버전 판정 · jar 키가 여기서 깨지면 release 에서 번호가 틀린다.
+  scripts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+
   # 필수 체크로 거는 고정 이름. 매트릭스 잡 이름은 변경분에 따라 들쭉날쭉하므로
-  # 여기 하나로 모은다. 돌릴 모듈이 없으면 통과다.
+  # 여기 하나로 모은다. 돌릴 모듈이 없으면 통과다. 스크립트 시험도 여기서 함께 본다.
   tests:
-    needs: [graph, test]
+    needs: [graph, test, scripts]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: 매트릭스 결과 판정
         run: |
           set -euo pipefail
-          echo "graph=${{ needs.graph.result }} test=${{ needs.test.result }}"
+          echo "graph=${{ needs.graph.result }} test=${{ needs.test.result }} scripts=${{ needs.scripts.result }}"
           [ "${{ needs.graph.result }}" = "success" ] \
             || { echo "::error::의존 그래프 추출이 실패했다"; exit 1; }
+          [ "${{ needs.scripts.result }}" = "success" ] \
+            || { echo "::error::스크립트 시험(.github/scripts)이 실패했다"; exit 1; }
           case "${{ needs.test.result }}" in
             success)  echo "테스트 통과" ;;
             skipped)  echo "테스트할 모듈이 없다" ;;
@@ -257,6 +269,20 @@ jobs:
 
       - name: 끈 계측 확인
         run: python3 .github/scripts/otel_agent_config.py dist
+
+      # 실제 bootJar 에서 release 의 jar 키를 계산해 본다(.github/scripts/jar_content_key.py) — build-info 위치가 바뀌었거나,
+      # MANIFEST 의 Implementation-Version 이 Boot 가 두던 자리 · 값이 아니면 빨개진다(키 스크립트의 가정이 깨짐).
+      # 이 잡은 PR 필수 체크가 아니라 머지는 막지 않는다. 승격(promote.yml)이 build 전체를 기다려 main · release 로는 가지 않고,
+      # release 의 판정도 같은 검사(--unversioned)를 한다.
+      - name: jar 키 계산
+        run: |
+          set -euo pipefail
+          base=$(jq -er .version build/service-graph.json)
+          for jar in dist/*/app.jar; do
+            # 대입으로 먼저 받아 스크립트 실패가 set -e 에 걸리게 한다
+            key=$(python3 .github/scripts/jar_content_key.py "$jar" "$base" --unversioned)
+            echo "$jar $key"
+          done
 
   secrets:
     runs-on: ubuntu-latest

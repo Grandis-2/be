@@ -35,6 +35,10 @@ public class DrawCampaignJpaEntity extends BaseEntity {
     @Column(nullable = false, updatable = false, length = 120)
     private String optionTitleSnapshot;
 
+    /** 증정품 상품의 모델명. 이 칸 전에 만든 회차는 null 이다. */
+    @Column(updatable = false, length = 40)
+    private String modelNameSnapshot;
+
     @Column(updatable = false, length = 1000)
     private String imageUrlSnapshot;
 
@@ -53,7 +57,7 @@ public class DrawCampaignJpaEntity extends BaseEntity {
     protected DrawCampaignJpaEntity() {
     }
 
-    public DrawCampaignJpaEntity(String idempotencyKey, UUID productId, UUID optionId, String title, String productTitleSnapshot, String optionTitleSnapshot,
+    public DrawCampaignJpaEntity(String idempotencyKey, UUID productId, UUID optionId, String title, String productTitleSnapshot, String modelNameSnapshot, String optionTitleSnapshot,
                                  String imageUrlSnapshot, BigDecimal entryFee, int winnerCount, Instant opensAt, Instant closesAt) {
         this.idempotencyKey = idempotencyKey;
         this.productId = productId;
@@ -61,6 +65,7 @@ public class DrawCampaignJpaEntity extends BaseEntity {
         this.title = title;
         this.productTitleSnapshot = productTitleSnapshot;
         this.optionTitleSnapshot = optionTitleSnapshot;
+        this.modelNameSnapshot = modelNameSnapshot;
         this.imageUrlSnapshot = imageUrlSnapshot;
         this.entryFee = entryFee;
         this.winnerCount = winnerCount;
@@ -86,6 +91,10 @@ public class DrawCampaignJpaEntity extends BaseEntity {
 
     public String getOptionTitleSnapshot() {
         return optionTitleSnapshot;
+    }
+
+    public String getModelNameSnapshot() {
+        return modelNameSnapshot;
     }
 
     public String getImageUrlSnapshot() {

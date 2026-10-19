@@ -71,31 +71,31 @@ public class ReviewController {
     }
 
     /** 상품 상세의 구매 후기 탭. */
-    @Operation(summary = "상품 리뷰(로그인 없이)")
+    @Operation(summary = "상품 리뷰(로그인 없이)", description = "최신순. 쪽은 앞 10,000개 안에서 시작해야 한다(page × size < 10,000)")
     @SecurityRequirements
     @GetMapping("/api/v1/products/{productId}/reviews")
     public ResponseEntity<ApiResponse<ProductPageResponse<ReviewView>>> productReviews(
             @PathVariable UUID productId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        return PublicCache.ok(cache.productReviews(productId, PageSizes.requirePage(page), PageSizes.require(size)).map(ProductPageResponse::from),
+        return PublicCache.ok(cache.productReviews(productId, PageSizes.requirePage(page, PageSizes.require(size)), size).map(ProductPageResponse::from),
                 CatalogReadCache.REVIEW_TTL, PublicCache.REVIEW, clock);
     }
 
     /** 구매후기 모아보기. categoryId 는 상위면 하위 포함. */
-    @Operation(summary = "구매후기 모아보기(로그인 없이)")
+    @Operation(summary = "구매후기 모아보기(로그인 없이)", description = "최신순. 쪽은 앞 10,000개 안에서 시작해야 한다(page × size < 10,000)")
     @SecurityRequirements
     @GetMapping("/api/v1/reviews")
     public ResponseEntity<ApiResponse<ProductPageResponse<ReviewView>>> visibleReviews(
             @RequestParam(required = false) UUID categoryId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        return PublicCache.ok(cache.visibleReviews(categoryId, PageSizes.requirePage(page), PageSizes.require(size)).map(ProductPageResponse::from),
+        return PublicCache.ok(cache.visibleReviews(categoryId, PageSizes.requirePage(page, PageSizes.require(size)), size).map(ProductPageResponse::from),
                 CatalogReadCache.REVIEW_TTL, PublicCache.REVIEW, clock);
     }
 
     /** 내 리뷰. orderItemId 를 주면 그 주문상품의 리뷰만 — 주문 내역의 "리뷰 쓰기 / 내가 쓴 리뷰 보기" 를 가른다. */
-    @Operation(summary = "내 리뷰")
+    @Operation(summary = "내 리뷰", description = "최신순. 쪽은 앞 10,000개 안에서 시작해야 한다(page × size < 10,000)")
     @GetMapping("/api/v1/reviews/mine")
     public ApiResponse<ProductPageResponse<ReviewView>> myReviews(
             @CurrentCustomerId UUID customerId,
@@ -103,6 +103,6 @@ public class ReviewController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         return ApiResponse.ok(ProductPageResponse.from(
-                reviews.myReviews(customerId, orderItemId, PageSizes.requirePage(page), PageSizes.require(size))));
+                reviews.myReviews(customerId, orderItemId, PageSizes.requirePage(page, PageSizes.require(size)), size)));
     }
 }

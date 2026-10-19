@@ -2,6 +2,7 @@ package com.grandis.nova.catalog.promotion;
 
 import com.grandis.nova.catalog.listing.ProductListItem;
 import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
+import com.grandis.nova.catalog.listing.SoldOutMarker;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
@@ -41,16 +42,18 @@ public class PromotionQueryService {
     private final PromotionRepository promotions;
     private final PromotionProducts links;
     private final ProductListingQueryRepository crossReads;
+    private final SoldOutMarker soldOut;
     private final ReadCache cache;
     private final Clock clock;
     private final ReadCache.Spec<Body> bodySpec;
     private final ReadCache.Spec<List<Body>> shownSpec;
 
     public PromotionQueryService(PromotionRepository promotions, PromotionProducts links, ProductListingQueryRepository crossReads,
-                                 ReadCache cache, Clock clock) {
+                                 SoldOutMarker soldOut, ReadCache cache, Clock clock) {
         this.promotions = promotions;
         this.links = links;
         this.crossReads = crossReads;
+        this.soldOut = soldOut;
         this.cache = cache;
         this.clock = clock;
         this.bodySpec = cache.spec("promotion-body", Body.class, BODY_TTL);
@@ -78,7 +81,7 @@ public class PromotionQueryService {
         if (today.isBefore(body.value().startDate()) || today.isAfter(body.value().endDate())) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
-        List<ProductListItem> cards = crossReads.findCards(body.value().productIds(), clock.instant(), true);
+        List<ProductListItem> cards = soldOut.mark(crossReads.findCards(body.value().productIds(), clock.instant(), true));
         return body.map(b -> new PromotionViews.Detail(b.promotionId(), b.name(), b.thumbnailUrl(), b.detailImageUrls(), b.startDate(),
                 b.endDate(), earliestOpen(cards), latestClose(cards), cards));
     }

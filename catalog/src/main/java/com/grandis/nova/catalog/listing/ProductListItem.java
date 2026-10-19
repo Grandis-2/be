@@ -24,7 +24,8 @@ import java.util.UUID;
  * @param discountRate   할인율(정수 %, 0~99)
  * @param sellable       판매 중(ACTIVE) 옵션이 하나 이상 있다. false 면 옵션이 없거나 전부 판매 중지 — 화면이 "판매 중지" 를 그린다.
  *                       상품 자체의 판매 중지(status PAUSED)와 달리 목록에 남는다
- * @param soldOut        일반 상품에서 판매 중 옵션의 가용 재고가 전부 0 이하(재고 행이 없는 옵션은 판매 불가). 사전예약은 재고 행이 없으므로
+ * @param soldOut        일반 상품에서 판매 중 옵션의 가용 재고가 전부 0 이하(재고 행이 없는 옵션은 판매 불가 — order 재고 API, {@link SoldOutMarker}).
+ *                       order 가 답하지 않으면 false 다(품절 표시만 뺀다). 사전예약은 재고 행이 없으므로
  *                       품절이 되지 않는다 — 옵션이 전부 판매 중지여도 false(사용자 결정 2026-09-27, 제안서 §2)
  * @param preorderStatus 사전예약의 접수 단계. 일반 상품은 null
  */
@@ -51,6 +52,12 @@ public record ProductListItem(
     public ProductListItem withColors(List<ProductOptions.ColorChip> replaced) {
         return new ProductListItem(productId, saleMode, title, brand, modelName, imageUrl, replaced, status, minPrice, minListPrice, discountRate,
                 sellable, soldOut, preorderStatus, opensAt, closesAt);
+    }
+
+    /** 품절만 바꾼 사본({@link SoldOutMarker}). */
+    public ProductListItem withSoldOut(boolean replaced) {
+        return new ProductListItem(productId, saleMode, title, brand, modelName, imageUrl, colors, status, minPrice, minListPrice, discountRate,
+                sellable, replaced, preorderStatus, opensAt, closesAt);
     }
 
     /** 시각으로 정하는 칸(접수 단계)을 now 로 다시 계산한 사본 — 캐시에 든 값이 만든 때의 단계를 내보내지 않게. 계산 규칙은 목록 쿼리와 같다. */

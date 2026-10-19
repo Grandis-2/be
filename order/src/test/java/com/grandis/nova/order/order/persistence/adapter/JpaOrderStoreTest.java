@@ -151,7 +151,7 @@ class JpaOrderStoreTest {
         UUID option = stocked.optionIds().getFirst();
         OrderDraft draft = new OrderDraft(customerId, OrderSource.CART, null, null, null,
                 new ShipTo("홍길동", "010-0000-0000", "04524", "세종대로 110", null), List.of(
-                new OrderLine(stocked.productId(), option, new Quantity(3), Money.won(1_000), 2, Money.won(300), "상품", "옵션")));
+                new OrderLine(stocked.productId(), option, new Quantity(3), Money.won(1_000), 2, Money.won(300), "상품", null, "옵션")));
         Order stored = writer.insert(Order.place(draft, placedAt));
         writer.insertItems(stored.id(), draft.lines());
         entityManager.flush();
@@ -189,7 +189,7 @@ class JpaOrderStoreTest {
         Instant placedAt = Instant.parse("2000-01-01T00:00:00Z");
         OrderFixtures.StockProduct stocked = fixtures.inStockProduct(1);
         List<OrderLine> lines = List.of(new OrderLine(stocked.productId(), stocked.optionIds().getFirst(), new Quantity(1), Money.won(1_000), 0,
-                Money.ZERO, "상품", "옵션"));
+                Money.ZERO, "상품", null, "옵션"));
         ShipTo shipTo = new ShipTo("홍길동", "010-0000-0000", "04524", "세종대로 110", null);
         Order cart = writer.insert(Order.place(new OrderDraft(customerId, OrderSource.CART, null, null, null, shipTo, lines), placedAt));
         writer.insertItems(cart.id(), lines);

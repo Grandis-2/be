@@ -158,7 +158,7 @@ class DrawListPhaseApiTest {
     private UUID create(Instant opensAt, Instant closesAt) {
         OrderFixtures.StockProduct gift = fixtures.inStockProduct(1);
         return new TransactionTemplate(transactionManager).execute(status -> campaigns.insert(new NewDrawCampaign(UUID.randomUUID().toString(),
-                gift.productId(), gift.optionIds().getFirst(), "단계 시험", "증정품", "기본", null, new BigDecimal("100"), 1, opensAt, closesAt)).id());
+                gift.productId(), gift.optionIds().getFirst(), "단계 시험", "증정품", null, "기본", null, new BigDecimal("100"), 1, opensAt, closesAt)).id());
     }
 
     private static JsonNode data(ResultActions actions) throws Exception {

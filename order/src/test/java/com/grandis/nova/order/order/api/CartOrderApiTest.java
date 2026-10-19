@@ -121,6 +121,7 @@ class CartOrderApiTest {
         assertThat(merged.get("warrantyQuantity").asInt()).isEqualTo(1);
         assertThat(merged.get("warrantyUnitPrice").decimalValue()).isEqualByComparingTo(WARRANTY);
         assertThat(merged.get("lineAmount").decimalValue()).isEqualByComparingTo(PRICE.multiply(BigDecimal.valueOf(3)).add(WARRANTY));
+        assertThat(merged.get("modelName").asString()).as("모델명은 주문 때 catalog 값").isEqualTo("A3104");
         assertThat(items.get(watch.toString()).get("warrantyQuantity").asInt()).isZero();
         assertThat(items.get(watch.toString()).get("warrantyUnitPrice").decimalValue()).isEqualByComparingTo("0");
 
@@ -132,6 +133,7 @@ class CartOrderApiTest {
         JsonNode detail = data(mockMvc.perform(get("/api/v1/orders/{id}", order.get("orderId").asString())
                 .with(TestAuth.customer(customerId))).andExpect(status().isOk()));
         assertThat(byVariant(detail.get("items")).get(phone.toString()).get("warrantyQuantity").asInt()).isEqualTo(1);
+        assertThat(byVariant(detail.get("items")).get(phone.toString()).get("modelName").asString()).as("저장한 모델명을 다시 읽는다").isEqualTo("A3104");
         assertThat(detail.get("paymentDueAt").asString()).isEqualTo(order.get("paymentDueAt").asString());
     }
 
@@ -191,7 +193,7 @@ class CartOrderApiTest {
         String first = data(place(item(phone, 1, true)).andExpect(status().isCreated())).get("orderId").asString();
 
         CatalogOption current = catalog.get(phone);
-        catalog.put(phone, new CatalogOption(current.optionId(), current.productId(), current.productTitle(), current.optionTitle(), current.sku(),
+        catalog.put(phone, new CatalogOption(current.optionId(), current.productId(), current.productTitle(), current.modelName(), current.optionTitle(), current.sku(),
                 current.price(), current.optionStatus(), current.saleMode(), current.productStatus(), current.visible(),
                 current.registrationCompleted(), new CatalogOption.Warranty(true, new BigDecimal("149000")), current.imageUrl()));
         String second = data(place("""
@@ -202,6 +204,24 @@ class CartOrderApiTest {
         assertThat(orderStatus(first)).isEqualTo("CANCELED");
         assertThat(orderTotal(second)).isEqualByComparingTo("1399000");
         assertThat(reserved(phone)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("주문 줄의 모델명은 주문 때 값 — catalog 모델명이 바뀌면 장바구니는 새 값, 이미 만든 주문 상세는 옛 값")
+    void orderKeepsModelNameOfOrderTime() throws Exception {
+        UUID phone = sellable(10);
+        cartLine(phone, false, 1);
+        String orderId = data(place(item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
+
+        CatalogOption current = catalog.get(phone);
+        catalog.put(phone, new CatalogOption(current.optionId(), current.productId(), current.productTitle(), "A3105", current.optionTitle(),
+                current.sku(), current.price(), current.optionStatus(), current.saleMode(), current.productStatus(), current.visible(),
+                current.registrationCompleted(), current.warranty(), current.imageUrl()));
+
+        JsonNode cart = data(mockMvc.perform(get("/api/v1/cart").with(TestAuth.customer(customerId))).andExpect(status().isOk()));
+        assertThat(cart.get("items").get(0).get("modelName").asString()).as("장바구니는 지금 값").isEqualTo("A3105");
+        JsonNode detail = data(mockMvc.perform(get("/api/v1/orders/{id}", orderId).with(TestAuth.customer(customerId))).andExpect(status().isOk()));
+        assertThat(detail.get("items").get(0).get("modelName").asString()).as("주문은 주문 때 값").isEqualTo("A3104");
     }
 
     /**
@@ -602,13 +622,13 @@ class CartOrderApiTest {
         if (stock >= 0) {
             fixtures.stock(option, stock, 0, 0);
         }
-        catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "블랙 / 256GB", "SKU-" + option, PRICE,
+        catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "A3104", "블랙 / 256GB", "SKU-" + option, PRICE,
                 "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(true, WARRANTY), null));
         return option;
     }
 
     private static CatalogOption copy(CatalogOption o, String productStatus, String optionStatus, boolean visible, boolean warrantyOffered) {
-        return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.optionTitle(), o.sku(), o.price(), optionStatus,
+        return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.modelName(), o.optionTitle(), o.sku(), o.price(), optionStatus,
                 o.saleMode(), productStatus, visible, true,
                 new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), o.imageUrl());
     }
@@ -626,7 +646,7 @@ class CartOrderApiTest {
     }
 
     private static CatalogOption copyPrice(CatalogOption o, BigDecimal price) {
-        return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.optionTitle(), o.sku(), price, o.optionStatus(),
+        return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.modelName(), o.optionTitle(), o.sku(), price, o.optionStatus(),
                 o.saleMode(), o.productStatus(), o.visible(), o.registrationCompleted(), o.warranty(), o.imageUrl());
     }
 

@@ -72,7 +72,8 @@ public record ProductDetailView(
      * @param price             회원이 내는 값 — 정가에 할인율을 걸어 100원 단위로 버린 할인가. 할인율이 0 이면 정가와 같다
      * @param listPrice         정가(기본가 + 고른 값의 추가금). 화면의 취소선 가격
      * @param selections        축 키 → 고른 값의 정규화값. 선택기가 조합을 찾는 키
-     * @param availableQuantity 일반 상품의 가용 수량(총량 − 선점 − 판매, 재고 행이 없으면 0). 사전예약은 null(무제한 접수)
+     * @param availableQuantity 일반 상품의 남은 수량(order 재고 API 의 답, 재고 행이 없으면 0). null 은 판매 방식으로 뜻이 갈린다 — 사전예약은 무제한
+     *                          접수, 일반 상품은 수량을 모름(order 가 답하지 않음 — 품절도 false). 주문 · 장바구니의 수량 한도는 order 가 따로 지킨다
      */
     public record Variant(
             UUID variantId,
