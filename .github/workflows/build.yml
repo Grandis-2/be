@@ -270,13 +270,17 @@ jobs:
       - name: 끈 계측 확인
         run: python3 .github/scripts/otel_agent_config.py dist
 
-      # 실제 bootJar 에서 release 의 jar 키를 계산해 본다. build-info 위치가 바뀌면 release 가 아니라 여기서 빨개진다(.github/scripts/jar_content_key.py).
+      # 실제 bootJar 에서 release 의 jar 키를 계산해 본다(.github/scripts/jar_content_key.py) — build-info 위치가 바뀌었거나,
+      # MANIFEST 의 Implementation-Version 이 Boot 가 두던 자리 · 값이 아니면 빨개진다(키 스크립트의 가정이 깨짐).
+      # 이 잡은 PR 필수 체크가 아니라 머지는 막지 않는다. 승격(promote.yml)이 build 전체를 기다려 main · release 로는 가지 않고,
+      # release 의 판정도 같은 검사(--unversioned)를 한다.
       - name: jar 키 계산
         run: |
           set -euo pipefail
+          base=$(jq -er .version build/service-graph.json)
           for jar in dist/*/app.jar; do
             # 대입으로 먼저 받아 스크립트 실패가 set -e 에 걸리게 한다
-            key=$(python3 .github/scripts/jar_content_key.py "$jar")
+            key=$(python3 .github/scripts/jar_content_key.py "$jar" "$base" --unversioned)
             echo "$jar $key"
           done
 

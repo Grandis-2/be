@@ -48,16 +48,29 @@ subprojects {
             implementation project(':common:aws')
         }
 
-        // META-INF/build-info.properties 의 build.version 을 OTel 에이전트가 service.version 으로 올린다(SpringBootServiceVersionDetector).
-        // release 는 판정 뒤 새로 올릴 서비스만 -PreleaseVersion.<서비스>=0.0.N 으로 다시 만들고, GIT_SHA 는 build.commit(actuator info.build.commit)이 된다.
-        // 둘 다 없으면(로컬 · PR) 프로젝트 버전만 든다. 태스크 정의 · 환경 변수는 바꾸지 않는다.
-        // time 을 빼야 jar 가 재현 가능하게 남는다 — release 의 jar 키가 build-info 를 뺀 jar 를 해시한다(.github/scripts/jar_content_key.py).
+        // 서비스 버전은 jar 의 두 곳에 같은 값으로 든다. release 는 판정 뒤 새로 올릴 서비스만 -PreleaseVersion.<서비스>=0.0.N 으로 다시 만든다.
+        //   META-INF/build-info.properties 의 build.version — OTel 에이전트의 service.version(SpringBootServiceVersionDetector) · actuator info
+        //   MANIFEST 의 Implementation-Version — spring.application.version, 곧 콘솔 ECS 로그의 service.version · 시작 로그
+        // GIT_SHA 는 build.commit(actuator info.build.commit)이 된다. 둘 다 없으면(로컬 · PR) 프로젝트 버전만 든다. 태스크 정의 · 환경 변수는 바꾸지 않는다.
+        // release 의 jar 키는 build-info 를 빼고, MANIFEST 의 버전은 주 섹션 끝에 프로젝트 버전으로 다시 놓고 해시한다(.github/scripts/jar_content_key.py).
+        // MANIFEST 는 release 버전이 있을 때만 건드린다 — 지정하면 그 속성이 Boot 가 두는 자리(주 섹션 끝)가 아니라 앞쪽에 들어가,
+        // 버전 없는 jar 까지 바이트가 바뀌고 jar 키가 흔들린다. 버전 없는 jar 는 Boot 가 프로젝트 버전을 넣은 그대로 둔다.
+        // build-info 의 time 을 빼야 jar 가 재현 가능하게 남는다.
+        def releaseVersion = providers.gradleProperty("releaseVersion.${project.name}")
+        def serviceVersion = releaseVersion.orElse(project.version.toString())
         springBoot {
             buildInfo {
                 excludes = ['time']
                 properties {
-                    version = providers.gradleProperty("releaseVersion.${project.name}").orElse(project.version.toString())
+                    version = serviceVersion
                     additional.put('commit', providers.environmentVariable('GIT_SHA'))
+                }
+            }
+        }
+        if (releaseVersion.present) {
+            tasks.named('bootJar') {
+                manifest {
+                    attributes('Implementation-Version': releaseVersion.get())
                 }
             }
         }
@@ -126,8 +139,9 @@ tasks.register('serviceGraph') {
             closures[path] = closed.toList()
         }
 
+        // version 은 프로젝트 버전이다. release 의 jar 키가 MANIFEST 의 버전을 이 값으로 되돌려 해시한다(.github/scripts/jar_content_key.py).
         def json = groovy.json.JsonOutput.toJson(
-                [projects: dirs, services: services, modules: modules, closures: closures])
+                [projects: dirs, services: services, modules: modules, closures: closures, version: rootProject.version.toString()])
         def out = new File(rootProject.buildDir, 'service-graph.json')
         out.parentFile.mkdirs()
         out.text = groovy.json.JsonOutput.prettyPrint(json)

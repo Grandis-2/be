@@ -83,7 +83,8 @@ jobs:
 
   # ── 1단계: jar 를 전부 만들고, 서비스마다 판정과 버전을 정한다 ─────────────
   # 바뀐 파일로 짐작하지 않는다. 키 둘을 jar 와 이미지 입력에서 계산하고, 그 서비스 ECR 저장소의 태그와 맞춰 본다.
-  #   jar 키  = build-info.properties 를 뺀 jar 의 해시(.github/scripts/jar_content_key.py). 버전 · 커밋이 든 파일이라 넣으면 커밋마다 바뀐다.
+  #   jar 키  = 버전 · 커밋이 드는 곳을 빼고 계산한 jar 의 해시(.github/scripts/jar_content_key.py) — build-info.properties 는 빼고,
+  #             MANIFEST 의 Implementation-Version 은 프로젝트 버전(service-graph.json 의 version)으로 되돌린다. 버전을 넣지 않은 jar 는 그대로다.
   #   내용 키 = jar 키 + 이미지를 만드는 입력(Dockerfile 둘 · .dockerignore · OTel 에이전트 설정 · AOT 학습 디렉터리 · 큐 스크립트).
   # 버전은 Bitnami 방식이다. jar 는 0.0.N, 이미지는 0.0.N-rM(jar 버전 + 리비전, v 없음)이고 서비스마다 따로 센다(.github/scripts/release_version.py).
   #   | 경우                              | jar 버전       | 이미지                     |
@@ -91,7 +92,7 @@ jobs:
   #   | jar 키는 있고 이미지 입력만 바뀜     | 그대로          | 0.0.N-rM+1                |
   #   | jar 키가 없음(코드 · 의존성 · common) | 0.0.N+1       | 0.0.N+1-r1                |
   # 번호는 ECR 태그에서만 읽는다. 태그는 불변(latest 만 예외)이라 표지도 이미지마다 이름이 다르다 — jar-<jar 키>-rM · content-<내용 키>-rM.
-  # 버전은 판정 뒤에야 알아서, 새로 올릴 서비스만 그 버전을 넣어 jar 를 다시 만든다. build-info 만 달라 jar 키는 같아야 하고, 다르면 실패한다.
+  # 버전은 판정 뒤에야 알아서, 새로 올릴 서비스만 그 버전을 넣어 jar 를 다시 만든다. 버전이 드는 두 곳만 달라 jar 키는 같아야 하고, 다르면 실패한다.
   # 한계 — ECR 은 서비스마다 최근 이미지만 남긴다(인프라 ecr 스택의 수명 정책, 기본 15개 · untagged 는 3일).
   #   어떤 jar 키의 이미지가 모두 지워진 뒤 그 jar 가 다시 오면 새 버전을 받는다. 최대 N 의 이미지가 모두 지워지면 그 번호를 다시 줄 수 있다.
   #   번호를 영구히 지켜야 하면 수명 정책에서 jar-*-r1 이미지를 남긴다(이미지가 쌓인다).
@@ -144,6 +145,8 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           graph=build/service-graph.json
+          # jar 키가 MANIFEST 의 버전을 되돌릴 프로젝트 버전. 없으면 멈춘다(-e)
+          base=$(jq -er .version "$graph")
 
           forced=$(echo "$FORCED" | tr ',' '\n' | tr -d ' ' | grep -v '^$' || true)
           if [ "$forced" = "all" ]; then
@@ -164,7 +167,8 @@ jobs:
             [ "${#jars[@]}" -eq 1 ] || { echo "::error::$s 의 jar 가 하나가 아니다: ${jars[*]}"; exit 1; }
             jar=${jars[0]}
             # 대입으로 먼저 받아 스크립트 실패가 set -e 에 걸리게 한다
-            jar_key=$(python3 .github/scripts/jar_content_key.py "$jar")
+            # 여기 jar 는 버전을 넣지 않았다 — MANIFEST 전제가 깨졌으면(Boot 업그레이드 등) 모든 버전이 오르기 전에 멈춘다
+            jar_key=$(python3 .github/scripts/jar_content_key.py "$jar" "$base" --unversioned)
             key=$(printf '%s%s' "$jar_key" "$image_inputs" | sha256sum | cut -d' ' -f1)
             # AOT 학습은 서비스 사이를 오가므로 올리지 않는 서비스의 jar 도 함께 넘긴다
             mkdir -p "dist/$s"
@@ -213,7 +217,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # 새로 올릴 서비스만 판정한 버전을 넣어 다시 만든다. 컴파일은 그대로이고 build-info 와 bootJar 만 다시 돈다.
-      # build-info 를 뺀 내용은 같아야 한다. 다르면 버전이 build-info 밖으로 샌 것이라, 판정한 키와 올리는 jar 가 어긋나기 전에 멈춘다.
+      # jar 키는 같아야 한다. 다르면 버전이 두 곳 밖으로 샌 것이라, 판정한 키와 올리는 jar 가 어긋나기 전에 멈춘다.
+      # 버전이 두 곳 모두에 들었는지도 본다 — build.version 은 OTel · actuator, Implementation-Version 은 콘솔 로그 · 시작 로그가 읽는다.
       - name: 버전 넣어 jar 다시 만들기
         if: steps.plan.outputs.any == 'true'
         env:
@@ -224,19 +229,24 @@ jobs:
           shopt -s nullglob
           echo "$PUBLISH" | jq -r '.[] | ":" + .service + ":bootJar", "-PreleaseVersion." + .service + "=" + .version' \
             | xargs ./gradlew --no-daemon
+          base=$(jq -er .version build/service-graph.json)
           rows=$(echo "$PUBLISH" | jq -c '.[]')
           while read -r row; do
             s=$(echo "$row" | jq -r .service)
             jars=()
             for f in "$s"/build/libs/*.jar; do [[ $f == *-plain.jar ]] || jars+=("$f"); done
             [ "${#jars[@]}" -eq 1 ] || { echo "::error::$s 의 jar 가 하나가 아니다: ${jars[*]}"; exit 1; }
-            jar_key=$(python3 .github/scripts/jar_content_key.py "${jars[0]}")
+            jar_key=$(python3 .github/scripts/jar_content_key.py "${jars[0]}" "$base")
             [ "$jar_key" = "$(echo "$row" | jq -r .jar_key)" ] \
               || { echo "::error::$s 를 버전을 넣어 다시 만들었더니 jar 키가 달라졌다"; exit 1; }
             version=$(unzip -p "${jars[0]}" META-INF/build-info.properties BOOT-INF/classes/META-INF/build-info.properties 2> /dev/null \
               | sed -n 's/^build\.version=//p' || true)
             [ "$version" = "$(echo "$row" | jq -r .version)" ] \
               || { echo "::error::$s 의 build.version 이 $version 이다"; exit 1; }
+            # 주 섹션(첫 빈 줄 전)만 본다 — Boot 가 읽고 jar 키가 되돌리는 것이 그 속성이다
+            manifest=$(unzip -p "${jars[0]}" META-INF/MANIFEST.MF 2> /dev/null | tr -d '\r' | sed -n '/^$/q; s/^Implementation-Version: //p' || true)
+            [ "$manifest" = "$version" ] \
+              || { echo "::error::$s 의 MANIFEST Implementation-Version 이 $manifest 이다"; exit 1; }
             cp "${jars[0]}" "dist/$s/app.jar"
             echo "$s: $version"
           done <<< "$rows"
