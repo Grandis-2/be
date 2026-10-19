@@ -87,7 +87,7 @@ preorder 는 dev(NV-281)에서 판정을 갈랐다 — 회차 설정은 `Product
 
 1. catalog: 응답에 `visible`·`registrationCompleted` 추가(기존 칸 불변). 기존 preorder 는 모르는 칸을 무시한다. `registrationCompleted` 는 판매 방식별 준비다(위 칸 정의).
 2. preorder: `ProductCatalog` DTO 에 두 칸을 받는다(NV-281, `Boolean` 래퍼). 누락 · null 을 따로 검사하지 않는다 — catalog 가 두 칸을 늘 싣는다(위 "호출 목적별 판정 조건" 아래).
-3. preorder: 판정 메서드 분리 — 설정용은 `saleMode` 만, 접수용은 네 조건 + 옵션 조건.
+3. preorder: 판정 메서드 분리 — 설정용은 `saleMode` 만, 접수용은 세 조건(`saleMode` · `status` · `visible`) + 옵션 조건. 등록 완료는 회차 행으로 본다(NV-643).
 4. preorder: 캐시 무효화 방식 적용.
 5. 양쪽 배포와 캐시 갱신을 확인한 뒤 통합 등록·접수를 활성화한다. 기존 상품이 있다면 실제 등록 완료 여부를 확인해 이관하며 일괄 완료 처리하지 않는다.
 
