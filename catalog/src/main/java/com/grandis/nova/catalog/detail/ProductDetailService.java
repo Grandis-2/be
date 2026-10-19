@@ -171,6 +171,22 @@ public class ProductDetailService {
     }
 
     /**
+     * 관리자 쓰기의 응답 — {@link #withLive} 와 같되, 사전예약의 회차를 preorder 에 묻지 못하면 회차 null · 준비 false(DB 부분 그대로)로 낸다. 쓰기는
+     * 이미 커밋됐으므로 503 으로 끝내지 않는다 — 일반 상품의 남은 수량을 비우는 것과 같은 방식(2026-10-19 결정). 관리자 상세 조회는 503 이다.
+     */
+    public AdminProductDetail afterWrite(AdminProductDetail detail) {
+        if (detail.product().saleMode() != SaleMode.PREORDER) {
+            return withLive(detail);
+        }
+        try {
+            return withLive(detail);
+        } catch (BusinessException e) {
+            log.warn("수정한 사전예약 상품의 회차를 preorder 에 묻지 못했다 — 회차를 비워 보낸다 productId={}", detail.product().productId(), e);
+            return detail;
+        }
+    }
+
+    /**
      * 수정한 옵션 하나에 남은 수량을 채운다 — 수정 트랜잭션은 수량을 묻지 않으므로(상품 행을 잠근 채 order 를 부르지 않게) 커밋 뒤에 그 옵션 하나만
      * order 에 묻는다. 사전예약은 그대로(null). order 가 답하지 않으면 수량 null.
      */
