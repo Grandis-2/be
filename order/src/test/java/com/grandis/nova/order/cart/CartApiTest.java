@@ -61,6 +61,8 @@ class CartApiTest {
 
     static final JsonMapper JSON = JsonMapper.builder().build();
     static final BigDecimal PRICE = new BigDecimal("1250000");
+    /** catalog 가 준 정가 — 할인가(PRICE)와 다른 값이라야 정가 칸이 할인가를 베끼는 결함이 드러난다. */
+    static final BigDecimal LIST_PRICE = new BigDecimal("1390000");
     static final BigDecimal WARRANTY = new BigDecimal("199000");
 
     @Autowired MockMvc mockMvc;
@@ -116,6 +118,7 @@ class CartApiTest {
         assertThat(plain.get("warranty").asBoolean()).isFalse();
         assertThat(plain.get("quantity").asInt()).isEqualTo(5);
         assertThat(plain.get("unitPrice").decimalValue()).isEqualByComparingTo(PRICE);
+        assertThat(plain.get("listPrice").decimalValue()).as("정가는 catalog 의 지금 값 그대로 — 보증 제외").isEqualByComparingTo(LIST_PRICE);
         assertThat(plain.get("warrantyPrice").decimalValue()).isEqualByComparingTo("0");
         assertThat(plain.get("lineAmount").decimalValue()).isEqualByComparingTo(PRICE.multiply(BigDecimal.valueOf(5)));
         assertThat(plain.get("availableQuantity").asInt()).isEqualTo(10);
@@ -124,6 +127,7 @@ class CartApiTest {
         JsonNode warranty = items.get(1);
         assertThat(warranty.get("warranty").asBoolean()).isTrue();
         assertThat(warranty.get("warrantyPrice").decimalValue()).isEqualByComparingTo(WARRANTY);
+        assertThat(warranty.get("listPrice").decimalValue()).as("보증을 골라도 정가에 보증가를 더하지 않는다").isEqualByComparingTo(LIST_PRICE);
         assertThat(warranty.get("lineAmount").decimalValue()).isEqualByComparingTo(PRICE.add(WARRANTY));
         assertThat(data(asCustomer(get("/api/v1/cart/count"))).get("count").asLong()).isEqualTo(2);
     }
@@ -218,6 +222,7 @@ class CartApiTest {
         assertThat(byVariant).hasSize(12);
         expectReason(byVariant.get(discontinued.toString()), "DISCONTINUED");
         assertThat(byVariant.get(discontinued.toString()).get("productTitle").isNull()).as("없어진 옵션은 상품 칸이 비어 있다").isTrue();
+        assertThat(byVariant.get(discontinued.toString()).get("listPrice").isNull()).as("없어진 옵션은 정가도 비어 있다").isTrue();
         expectReason(byVariant.get(hidden.toString()), "HIDDEN");
         expectReason(byVariant.get(paused.toString()), "PAUSED");
         expectReason(byVariant.get(warrantyStopped.toString()), "WARRANTY_UNAVAILABLE");
@@ -316,14 +321,14 @@ class CartApiTest {
         }
         catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "A3104", "블랙 / 256GB", "SKU-" + option, PRICE,
                 "ACTIVE", "IN_STOCK", "ACTIVE", true, true,
-                new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), "https://img/black-0.jpg"));
+                new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), "https://img/black-0.jpg", LIST_PRICE));
         return option;
     }
 
     private static CatalogOption copy(CatalogOption o, String saleMode, String productStatus, String optionStatus, boolean visible,
                                       boolean ready, boolean warrantyOffered) {
         return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.modelName(), o.optionTitle(), o.sku(), o.price(), optionStatus, saleMode,
-                productStatus, visible, ready, new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), o.imageUrl());
+                productStatus, visible, ready, new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), o.imageUrl(), o.listPrice());
     }
 
     /** 수량은 JSON 정수만 — Jackson 기본값은 1.9 를 1 로 잘라 다른 수량이 조용히 담긴다. */

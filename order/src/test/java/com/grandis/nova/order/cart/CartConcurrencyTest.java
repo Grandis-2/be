@@ -352,7 +352,7 @@ class CartConcurrencyTest {
 
     private static CatalogOption sellable(UUID optionId) {
         return new CatalogOption(optionId, UUID.randomUUID(), "아이폰 17", "A3104", "블랙 / 256GB", "SKU-" + optionId, new BigDecimal("1250000"),
-                "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(false, BigDecimal.ZERO), null);
+                "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(false, BigDecimal.ZERO), null, null);
     }
 
     private static void awaitQuietly(CountDownLatch latch) {

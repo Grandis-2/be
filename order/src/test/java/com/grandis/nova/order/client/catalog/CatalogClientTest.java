@@ -72,7 +72,7 @@ class CatalogClientTest {
                         {"success":true,
                          "data":{"items":[
                            {"optionId":"%s","productId":"0199a3f2-8a10-7b21-9c32-4d5e6f708192","productTitle":"아이폰 17",
-                            "modelName":"A3104","optionTitle":"블랙 / 256GB","sku":"BLK-256","price":1250000,"optionStatus":"ACTIVE","saleMode":"IN_STOCK",
+                            "modelName":"A3104","optionTitle":"블랙 / 256GB","sku":"BLK-256","price":1250000,"listPrice":1390000,"optionStatus":"ACTIVE","saleMode":"IN_STOCK",
                             "productStatus":"ACTIVE","visible":true,"registrationCompleted":true,
                             "warranty":{"offered":true,"surcharge":199000},"imageUrl":"https://img.example/black-0.jpg"}
                          ]},
@@ -85,6 +85,7 @@ class CatalogClientTest {
         CatalogOption option = found.get(FIRST);
         assertThat(option.modelName()).isEqualTo("A3104");
         assertThat(option.price()).isEqualByComparingTo("1250000");
+        assertThat(option.listPrice()).isEqualByComparingTo("1390000");
         assertThat(option.saleMode()).isEqualTo("IN_STOCK");
         assertThat(option.visible()).isTrue();
         assertThat(option.registrationCompleted()).isTrue();
@@ -94,7 +95,7 @@ class CatalogClientTest {
     }
 
     @Test
-    @DisplayName("modelName 이 빠진 옵션(모델명을 싣기 전 catalog)도 읽는다 — 판정에 쓰지 않으니 null 로 두고 연동 오류로 보지 않는다")
+    @DisplayName("modelName · listPrice 가 빠진 옵션(그 칸을 싣기 전 catalog)도 읽는다 — 판정에 쓰지 않으니 null 로 두고 연동 오류로 보지 않는다")
     void missingModelNameReadsAsNull() {
         server.expect(requestTo(org.hamcrest.Matchers.startsWith("http://catalog/internal/options?")))
                 .andRespond(withSuccess(envelope(item(FIRST)), MediaType.APPLICATION_JSON));
@@ -102,6 +103,7 @@ class CatalogClientTest {
         CatalogOption option = reader.find(List.of(FIRST), SESSION).get(FIRST);
 
         assertThat(option.modelName()).isNull();
+        assertThat(option.listPrice()).isNull();
         assertThat(option.productTitle()).isEqualTo("아이폰 17");
     }
 

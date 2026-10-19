@@ -345,7 +345,7 @@ class BuyNowOrderApiTest {
         UUID option = sellable(10);
         CatalogOption o = catalog.get(option);
         catalog.put(option, new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.modelName(), o.optionTitle(), o.sku(), o.price(), o.optionStatus(),
-                "PREORDER", o.productStatus(), o.visible(), o.registrationCompleted(), o.warranty(), o.imageUrl()));
+                "PREORDER", o.productStatus(), o.visible(), o.registrationCompleted(), o.warranty(), o.imageUrl(), o.listPrice()));
 
         expectError(place(item(option, 1, false)), 409, "STATE_CONFLICT")
                 .andExpect(jsonPath("$.error.details.items[0].reason").value("HIDDEN"));
@@ -461,14 +461,14 @@ class BuyNowOrderApiTest {
         UUID option = product.optionIds().getFirst();
         fixtures.stock(option, stock, 0, 0);
         catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "A3104", "블랙 / 256GB", "SKU-" + option, PRICE,
-                "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(true, WARRANTY), null));
+                "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(true, WARRANTY), null, null));
         return option;
     }
 
     private static CatalogOption copy(CatalogOption o, String optionStatus, boolean warrantyOffered) {
         return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.modelName(), o.optionTitle(), o.sku(), o.price(), optionStatus,
                 o.saleMode(), o.productStatus(), o.visible(), o.registrationCompleted(),
-                new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), o.imageUrl());
+                new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), o.imageUrl(), o.listPrice());
     }
 
     private PaymentSettlement settlement(String orderId, String providerOrderId, PaymentSettlement.Result result, DeclineReason reason) {

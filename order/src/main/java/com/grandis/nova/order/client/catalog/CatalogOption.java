@@ -10,6 +10,7 @@ import java.util.UUID;
  * @param modelName             상품 모델명. 판정에 쓰지 않아 빠져도(배포 순서) null 로 읽는다 — 표시 · 주문 스냅샷만 비는다
  * @param visible               래퍼라 빠지면 null — 판정에서 공개가 아니라고 본다
  * @param registrationCompleted 래퍼라 빠지면 null — 판정에서 준비 전이라고 본다
+ * @param listPrice             옵션 정가(할인 전). 판정 · 금액에 쓰지 않아 빠져도(배포 순서) null 로 읽는다 — 장바구니 표시의 정가만 비는다
  */
 public record CatalogOption(
         UUID optionId,
@@ -25,7 +26,8 @@ public record CatalogOption(
         Boolean visible,
         Boolean registrationCompleted,
         Warranty warranty,
-        String imageUrl
+        String imageUrl,
+        BigDecimal listPrice
 ) {
 
     public record Warranty(boolean offered, BigDecimal surcharge) {

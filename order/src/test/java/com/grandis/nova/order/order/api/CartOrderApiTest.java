@@ -195,7 +195,7 @@ class CartOrderApiTest {
         CatalogOption current = catalog.get(phone);
         catalog.put(phone, new CatalogOption(current.optionId(), current.productId(), current.productTitle(), current.modelName(), current.optionTitle(), current.sku(),
                 current.price(), current.optionStatus(), current.saleMode(), current.productStatus(), current.visible(),
-                current.registrationCompleted(), new CatalogOption.Warranty(true, new BigDecimal("149000")), current.imageUrl()));
+                current.registrationCompleted(), new CatalogOption.Warranty(true, new BigDecimal("149000")), current.imageUrl(), current.listPrice()));
         String second = data(place("""
                 {"variantId":"%s","quantity":1,"warranty":true,"expectedUnitPrice":1250000,"expectedWarrantyPrice":149000}""".formatted(phone))
                 .andExpect(status().isCreated())).get("orderId").asString();
@@ -216,7 +216,7 @@ class CartOrderApiTest {
         CatalogOption current = catalog.get(phone);
         catalog.put(phone, new CatalogOption(current.optionId(), current.productId(), current.productTitle(), "A3105", current.optionTitle(),
                 current.sku(), current.price(), current.optionStatus(), current.saleMode(), current.productStatus(), current.visible(),
-                current.registrationCompleted(), current.warranty(), current.imageUrl()));
+                current.registrationCompleted(), current.warranty(), current.imageUrl(), current.listPrice()));
 
         JsonNode cart = data(mockMvc.perform(get("/api/v1/cart").with(TestAuth.customer(customerId))).andExpect(status().isOk()));
         assertThat(cart.get("items").get(0).get("modelName").asString()).as("장바구니는 지금 값").isEqualTo("A3105");
@@ -623,14 +623,14 @@ class CartOrderApiTest {
             fixtures.stock(option, stock, 0, 0);
         }
         catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "A3104", "블랙 / 256GB", "SKU-" + option, PRICE,
-                "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(true, WARRANTY), null));
+                "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(true, WARRANTY), null, null));
         return option;
     }
 
     private static CatalogOption copy(CatalogOption o, String productStatus, String optionStatus, boolean visible, boolean warrantyOffered) {
         return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.modelName(), o.optionTitle(), o.sku(), o.price(), optionStatus,
                 o.saleMode(), productStatus, visible, true,
-                new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), o.imageUrl());
+                new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), o.imageUrl(), o.listPrice());
     }
 
     private static void expectBlockedBy(ResultActions actions, String orderId) throws Exception {
@@ -647,7 +647,7 @@ class CartOrderApiTest {
 
     private static CatalogOption copyPrice(CatalogOption o, BigDecimal price) {
         return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.modelName(), o.optionTitle(), o.sku(), price, o.optionStatus(),
-                o.saleMode(), o.productStatus(), o.visible(), o.registrationCompleted(), o.warranty(), o.imageUrl());
+                o.saleMode(), o.productStatus(), o.visible(), o.registrationCompleted(), o.warranty(), o.imageUrl(), o.listPrice());
     }
 
     /** 그 모양의 문장이 실행 중일 때까지(최대 10초) — 같은 계정의 연결이 보이는 PROCESSLIST 로. 잠금이 없으면 바로 끝나는 문장만 쓴다. */

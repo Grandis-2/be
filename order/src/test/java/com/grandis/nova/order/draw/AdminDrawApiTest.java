@@ -393,13 +393,13 @@ class AdminDrawApiTest {
         UUID option = product.optionIds().getFirst();
         fixtures.stock(option, stock, 0, 0);
         catalog.put(option, new CatalogOption(option, product.productId(), "콜라보 굿즈", "M-1", "블랙", "SKU-" + option, new BigDecimal("50000"),
-                "ACTIVE", "IN_STOCK", "ACTIVE", visible, true, new CatalogOption.Warranty(false, BigDecimal.ZERO), "https://img/gift.jpg"));
+                "ACTIVE", "IN_STOCK", "ACTIVE", visible, true, new CatalogOption.Warranty(false, BigDecimal.ZERO), "https://img/gift.jpg", null));
         return option;
     }
 
     private static CatalogOption with(CatalogOption o, String saleMode, String productStatus, String optionStatus, boolean registered) {
         return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.modelName(), o.optionTitle(), o.sku(), o.price(), optionStatus, saleMode,
-                productStatus, o.visible(), registered, o.warranty(), o.imageUrl());
+                productStatus, o.visible(), registered, o.warranty(), o.imageUrl(), o.listPrice());
     }
 
     private String body(UUID option, int winners, Instant opens, Instant closes) {
