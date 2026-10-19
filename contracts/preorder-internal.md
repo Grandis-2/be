@@ -98,6 +98,7 @@ catalog 가 `preorder_campaigns` 를 직접 읽던 것(목록 · 검색 · 랭�
 **공통**
 
 - **인증 없음.** 두 GET 은 토큰을 받지 않는다(preorder `SecurityConfig`) — 오픈 · 마감 시각은 공개 화면의 값이고 비회원 목록에는 실을 토큰이 없다. order `GET /internal/stocks` 와 같은 근거이고, 그 전제로 `/internal/**` 는 공개 라우팅에 두지 않는다. 나머지 preorder `/internal/**` 는 지금처럼 토큰이 필요하다.
+  - **비공개 상품의 회차도 나온다**(아래 "거르지 않는 것"). 그래서 막는 것은 `/internal/**` 공개 라우팅 차단 하나다 — 아래 "상태" 2항의 차단을 검증한 뒤 운영에서 켠다.
 - **응답 봉투**는 `common:web` 의 `ApiResponse`. 회차 한 건은 `{ "productId", "opensAt", "closesAt" }`(UUID · ISO-8601 UTC).
 - **거르지 않는 것.** 공개 여부 · 판매 중지(`products.status`)는 preorder 가 거르지 않는다 — catalog 가 원장이므로 catalog 값으로 판단한다.
 - **시각이 바뀌는 때.** 조기 마감 · 판매 중지 마감(`PREORDER_CAMPAIGN_CANCELED`)은 `closesAt` 을 그 시각으로 당기고, 다시 열기는 `closesAt` 을 새 마감 시각으로 바꾼다 — 접수 중인지는 `closesAt` 만 봐도 맞다. 오픈 전에 판매 중지로 닫힌 회차는 `opensAt` 도 "닫은 시각 − 1ms" 가 되어 둘 다 지난 회차로 보인다(원래 오픈 시각은 남지 않는다). 오픈 3분 전부터의 수정 동결은 catalog 규칙이고 preorder 는 오픈 뒤 일정 변경을 막는다(조기 마감 · 다시 열기 제외).
