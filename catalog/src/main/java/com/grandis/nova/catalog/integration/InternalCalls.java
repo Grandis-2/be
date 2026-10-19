@@ -20,7 +20,8 @@ import java.util.function.Supplier;
  *       남의 대상도 "대상 없음" 404 로 답한다(contracts/order-internal.md) — 403 은 다른 역할의 토큰이 실렸거나 경로 · 권한 설정이 어긋난 것이라
  *       정상 업무 응답이 아니다.</li>
  *   <li>401 — 토큰을 싣는 그룹({@link Dependencies#ALL})이면 사용자 토큰 문제라 그대로 401, 싣지 않는 그룹이면 연동 오류. 그 밖의 4xx · 읽을 수 없는 응답 · 빈 data 는 연동 오류(500).</li>
- *   <li>연결 실패 · 시간 초과 · 5xx 는 일시 장애(503).</li>
+ *   <li>연결 실패 · 시간 초과 · 5xx 는 일시 장애(503). 주소(base-url)가 비었거나 잘못돼 보낼 수 없는 호출도 일시 장애다 — 그 서비스가 답하지 않는 것과
+ *       같게 강등한다(application.yml.example). 설정 문제라 ERROR 로 남긴다.</li>
  * </ul>
  */
 public final class InternalCalls {
@@ -64,6 +65,15 @@ public final class InternalCalls {
                 throw integrationError(dependency, "읽을 수 없는 응답", e);
             }
             log.warn("{} 내부 호출 실패 — 일시 장애로 본다", dependency, e);
+            throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+        } catch (IllegalArgumentException e) {
+            // JDK HTTP 구현은 스킴 없는 주소를 이 예외로 거절한다(실측: base-url 이 비면 "URI with undefined scheme") — RestClientException 이 아니다.
+            // 그 경우만 일시 장애로 강등하고, 다른 인자 오류(템플릿 확장 · 인자 해석)는 코드 결함이라 연동 오류로 둔다
+            if (e.getMessage() == null || !e.getMessage().contains("undefined scheme")) {
+                throw integrationError(dependency, "요청을 만들지 못했다", e);
+            }
+            // 장애 동안 요청마다 남으므로 스택 없이
+            log.error("{} 내부 호출 주소가 비었다 — 일시 장애로 본다(spring.http.serviceclient.{}.base-url 확인): {}", dependency, dependency, e.toString());
             throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
         }
         if (response == null || response.data() == null) {

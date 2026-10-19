@@ -193,6 +193,7 @@ app_json() {
     + ({
         catalog: {"spring.http.serviceclient.order.base-url": url("order"),
                   "spring.http.serviceclient.member.base-url": url("member"),
+                  "spring.http.serviceclient.preorder.base-url": url("preorder"),
                   "catalog.registration.min-open-lead": $lead,
                   # 운영은 인프라가 uploads: true 로 넣는 값. 서명기만 만들고 버킷에는 붙지 않는다(학습 부하에 업로드가 없다)
                   "nova.upload.bucket": "aot-training",

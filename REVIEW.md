@@ -15,7 +15,7 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 | 모듈 | 쓰는 표 | 허용된 남의 표 |
 | --- | --- | --- |
 | member | customers · refresh_tokens · notifications | 없음 |
-| catalog | categories · products · product_options · product_reviews · promotions · promotion_products · banners · catalog_outbox_events · images | 읽기: preorder_campaigns(opens_at · closes_at · 행 유무), `ProductListingQueryRepository` 한 곳. 재고는 order 의 `GET /internal/stocks` 로 묻는다 |
+| catalog | categories · products · product_options · product_reviews · promotions · promotion_products · banners · catalog_outbox_events · images | 다른 서비스 표는 읽지 않는다 — 회차(시각 · 행 유무)는 preorder 의 `GET /internal/preorders/campaigns/**`(`PreorderCampaigns`), 재고는 order 의 `GET /internal/stocks` 로 묻는다 |
 | preorder | preorders · preorder_events · preorder_campaigns · shipment_batches · preorder_outbox_events · preorder_dead_letter_events · preorder_sync_jobs · preorder_sync_attempts · preorder_open_alerts · preorder_open_alert_dispatches · preorder_payment_anomalies | (epic/NV-441 머지 뒤) reconciliation_runs 읽기 · 관리자 실행 요청(REQUESTED) INSERT, reconciliation_findings 읽기 · 조치 칸(action_*) UPDATE |
 | order | orders · order_items · order_events · cart_items · option_inventories · draw_campaigns · draw_entries · order_outbox_events · stock_adjustments · stock_reconcile_runs · stock_reconcile_lock | 읽기: products · product_options(옵션 소속 · 판매 방식) |
 | payment | payments · payment_transactions · payment_outbox_events | 없음 |
@@ -27,7 +27,7 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 ### 2.1 정확성 · 결과 불명 · 시각 · 금액 · 로그
 - 사용자 요청 경로(@RestController → @Service)에서 외부 HTTP 응답을 기다리면 지적한다. 외부 등록 · 취소는 worker 몫이다. 허용된 동기 호출:
   - 타임아웃 · 서킷 브레이커 · 동시 상한 필수: preorder → catalog 옵션(캐시 미스만) · order 취소 사전 확인(`DependencyGuard`), order → catalog 옵션 일괄 조회(`CatalogReader`).
-  - 타임아웃만: catalog → order · member(리뷰 작성, 2026-10-06 결정 · 상품 삭제의 드로우 증정품 확인 `ProductDeleteService` → `DrawGiftClient`, `CatalogDefaults`), order → preorder 결제 가능 확인 · payment 결제 준비, member → 카카오 로그인(`KakaoOAuthClient`).
+  - 타임아웃만: catalog → order · member(리뷰 작성, 2026-10-06 결정 · 상품 삭제의 드로우 증정품 확인 `ProductDeleteService` → `DrawGiftClient`, `CatalogDefaults`), catalog → order 재고(`StockReader` — 목록 · 상세 · 증정품 후보) · preorder 회차 일정(`PreorderCampaigns` — 목록 · 상세 · 관리자 · 수정 판정, 2026-10-19 결정. 수정 판정도 트랜잭션 전에 받는다), order → preorder 결제 가능 확인 · payment 결제 준비, member → 카카오 로그인(`KakaoOAuthClient`).
   - 결제 승인: order → payment(읽기 70초, `PaymentConfirmSlots`), payment → 토스(3.3).
 - 차단급: @Transactional 안의 HTTP 호출 · SQS 전송 · Thread.sleep · 외부 락 대기.
 - 차단급: 응답을 못 받은 외부 호출을 "실패" · "미등록"으로 단정. 결과 불명은 별도 상태로 두고 같은 키로 조회해 확정한다.

@@ -26,9 +26,9 @@ import java.util.UUID;
 /**
  * 다른 서비스가 묻는 상품 · 옵션 읽기. catalog 소유 표 셋만 읽는다 — 회차 · 재고는 싣지 않는다(preorder · order 소유).
  *
- * registrationCompleted 는 판매 방식별 준비다 — 회차 · 재고 표를 읽는 유일한 자리({@link ProductListingQueryRepository})에 묻는다.
- * 사전예약 접수는 visible · status · registrationCompleted 를 함께 보고 판정하므로 셋은 한 문장으로 읽는다({@link ProductListingQueryRepository#findExposure}).
- * READ COMMITTED 에서 따로 읽으면 사이에 공개 전환과 회차 생성이 커밋돼 한순간도 없던 조합(공개 · 준비)이 나온다.
+ * registrationCompleted 는 DB 로 아는 판매 방식별 준비다({@link ProductListingQueryRepository#READY}) — 일반은 판매 준비 이벤트로 채운 칸, 사전예약은 늘
+ * true(preorder 를 부르지 않는다 — 접수가 이 응답을 동기로 부르므로 순환 호출이 된다). 노출 칸은 한 문장으로 읽는다({@link ProductListingQueryRepository#findExposure}) —
+ * READ COMMITTED 에서 따로 읽으면 사이에 공개 전환과 판매 준비가 커밋돼 한순간도 없던 조합(공개 · 준비)이 나온다.
  * 옵션(판매 상태 · 가격)도 접수 판정에 쓰이므로(옵션이 ACTIVE 인가) 노출 칸과 한 스냅샷으로 읽는다 — REPEATABLE READ 트랜잭션.
  */
 @Service

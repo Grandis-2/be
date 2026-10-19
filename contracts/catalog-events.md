@@ -156,14 +156,14 @@ preorder 는 사전예약 상품의 상품명 · 판매 상태 · 공개 여부�
 
 ## 판매 방식별 준비 — catalog 가 읽는 결과
 
-catalog 는 완료 이벤트를 돌려받지 않는다. 받는 쪽이 만든 행을 읽어 등록이 끝났는지 판정한다(`ProductListingQueryRepository.isReady` — catalog 가 다른 서비스 표를 읽는 유일한 자리).
+사전예약은 완료 이벤트를 돌려받지 않는다 — preorder 의 회차 일정 API(`contracts/preorder-internal.md` 2절)에 회차가 있는지 묻는다(`PreorderCampaigns`). 일반은 order 의 판매 준비 이벤트를 받아 적는다. catalog 는 다른 서비스의 표를 읽지 않는다.
 
 | 판매 방식 | 준비 | 회원 노출 |
 | --- | --- | --- |
-| 사전예약 | `preorder_campaigns` 에 그 상품 행이 있다 | 준비 · 공개 · 판매 중일 때만 상세에 보인다. 목록 · 검색에는 그중 접수 중(오픈 시각 ~ 마감 시각)일 때만 |
+| 사전예약 | preorder 회차 일정 API 에 그 상품의 회차가 있다(= `preorder_campaigns` 행) | 준비 · 공개 · 판매 중일 때만 상세에 보인다. 목록 · 검색에는 그중 접수 중(오픈 시각 ~ 마감 시각)일 때만 |
 | 일반 | `products.stock_ready_at` 이 있다 — order 가 재고 행(옵션 전부를 한 트랜잭션에)을 만든 뒤 보내는 판매 준비 이벤트를 catalog 가 받아 적는다 | 준비 · 공개 · 판매 중일 때만 목록 · 상세에 보인다. 재고 0 행은 품절로 보인다 |
 
-이 판정이 관리자 목록 · 상세 · 등록 상태 조회(`registration.completed`)와 내부 조회 API 의 `registrationCompleted` 다.
+이 판정이 관리자 목록 · 상세 · 등록 상태 조회(`registration.completed`)다. 내부 조회 API(1.3 · `/internal/options`)의 `registrationCompleted` 는 일반만 이 판정이고 사전예약은 늘 `true` 다 — 그 응답을 만들며 preorder 를 부르지 않는다(`contracts/order-internal.md`).
 
 **준비가 안 될 때 원인은 둘이다.** catalog 가 아직 보내지 못했거나, 받는 쪽이 거절했다(DLQ).
 - catalog 쪽: `catalog_outbox_events.published_at IS NULL` 인 행이 남는다. 보낼 때마다 실패하면 `아웃박스 발행 실패 — 릴레이가 다시 보낸다 outboxEventId=… eventType=…` 경고 로그가 남는다(커밋 직후 발행 · 릴레이 모두 — catalog 에는 지표 수집이 없어 미발행 건수 지표는 없다). 큐 보내기 권한(IAM)이 빠졌거나 큐가 없으면 모든 등록이 여기서 멈춘다.

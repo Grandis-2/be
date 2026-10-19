@@ -14,6 +14,7 @@ import com.grandis.nova.catalog.integration.DrawGiftClient;
 import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.registration.ProductRegistrationService;
+import com.grandis.nova.catalog.support.PreorderCampaignsTestConfig;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.BusinessException;
@@ -328,27 +329,6 @@ class ProductEditRaceTest {
     }
 
     @Test
-    @DisplayName("수정 중에 preorder 가 회차 오픈을 앞당겨 이미 잠금 시각이 지났으면 커밋하지 않는다 — 커밋 직전 판정은 그때까지 커밋된 회차를 본다")
-    void campaignMovedEarlierDuringTheEditRejectsTheCommit() throws Exception {
-        UUID productId = registerPreorder();
-        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
-        fixtures.campaign(productId, now.plus(Duration.ofHours(1)), now.plus(Duration.ofDays(1)));
-
-        AtomicInteger reads = new AtomicInteger();
-        CLOCK.next = () -> {
-            if (reads.getAndIncrement() == 0) {
-                // 첫 판정 순간, 다른 커넥션(preorder)이 오픈을 1분 전으로 옮겨 커밋한다. 회차를 새로 넣는 것은 수정 중에 못 한다 —
-                // preorder_campaigns → products 외래키 확인이 수정이 잡은 상품 행 잠금을 기다린다(실측: 30초 대기 뒤 수정이 먼저 커밋)
-                onAnotherConnection(() -> fixtures.moveCampaignOpensAt(productId, now.minus(Duration.ofMinutes(1))));
-            }
-            return now;
-        };
-        assertStateConflict(() -> editService.editProduct(productId, titleOnly("회차가 옮겨진 수정")));
-        assertThat(reads.get()).as("첫 판정은 옮기기 전 회차로 통과했다").isGreaterThanOrEqualTo(2);
-        assertThat(title(productId)).isEqualTo("Race");
-    }
-
-    @Test
     @DisplayName("정보 수정이 커밋되기 전에 판매 상태 전환이 들어오면 기다렸다가 새 정보 위에 적는다 — 제목도 상태도 남는다")
     void saleStatusChangeSerializesWithEdit() throws Exception {
         UUID productId = registerInStock();
@@ -401,25 +381,6 @@ class ProductEditRaceTest {
     }
 
     @Test
-    @DisplayName("판매 상태 전환 중에 preorder 가 회차 오픈을 앞당겨 잠금 시각이 지났으면 커밋하지 않는다 — 409, 상태 그대로")
-    void campaignMovedEarlierDuringTheSaleStatusChangeRejectsTheCommit() throws Exception {
-        UUID productId = registerPreorder();
-        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
-        fixtures.campaign(productId, now.plus(Duration.ofHours(1)), now.plus(Duration.ofDays(1)));
-
-        AtomicInteger reads = new AtomicInteger();
-        CLOCK.next = () -> {
-            if (reads.getAndIncrement() == 0) {
-                onAnotherConnection(() -> fixtures.moveCampaignOpensAt(productId, now.minus(Duration.ofMinutes(1))));
-            }
-            return now;
-        };
-        assertStateConflict(() -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED)));
-        assertThat(reads.get()).as("첫 판정은 옮기기 전 회차로 통과했다").isGreaterThanOrEqualTo(2);
-        assertThat(jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, UuidBinary.toBytes(productId))).isEqualTo("ACTIVE");
-    }
-
-    @Test
     @DisplayName("오픈 그 순간(지금 == opens_at)부터 회차 취소다 — 사유와 함께 판매 중지를 보내면 취소 접수. 1마이크로초 전은 잠금 구간이라 409")
     void campaignCancelStartsAtOpensAt() throws Exception {
         UUID productId = registerPreorder();
@@ -461,8 +422,9 @@ class ProductEditRaceTest {
         TransactionTemplate transaction = new TransactionTemplate(transactionManager);
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
+            // 바깥 트랜잭션은 커밋을 붙잡으려는 시험 장치다(운영에 없다) — 수정이 트랜잭션 전에 preorder 에 묻는 것을 대역이 막지 않게 이 스레드만 푼다
             Future<?> firstRun = pool.submit(() -> transaction.executeWithoutResult(status -> {
-                first.run();
+                PreorderCampaignsTestConfig.insideHarnessTransaction(first);
                 firstDone.countDown();
                 await(releaseFirst);
             }));
@@ -585,32 +547,6 @@ class ProductEditRaceTest {
             Thread.sleep(20);
         }
         throw new AssertionError("수정이 30초 안에 옵션 UPDATE 에서 기다리지도 끝나지도 않았다");
-    }
-
-    /** 다른 커넥션(자동 커밋)에서 실행하고 끝날 때까지 기다린다 — 다른 모듈의 쓰기를 흉내 낸다. */
-    private static void onAnotherConnection(Runnable write) {
-        // 쓰기가 실패하거나 끝나지 않으면 그 자리에서 실패한다 — 전제(회차가 옮겨졌다) 없이 뒤 단언이 엉뚱하게 깨지지 않게
-        java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
-        Thread writer = new Thread(() -> {
-            try {
-                write.run();
-            } catch (Throwable t) {
-                failure.set(t);
-            }
-        });
-        writer.start();
-        try {
-            writer.join(TimeUnit.SECONDS.toMillis(30));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException(e);
-        }
-        if (writer.isAlive()) {
-            throw new AssertionError("다른 커넥션의 쓰기가 30초 안에 끝나지 않았다(잠금 대기)");
-        }
-        if (failure.get() != null) {
-            throw new AssertionError("다른 커넥션의 쓰기가 실패했다", failure.get());
-        }
     }
 
     private static void await(CountDownLatch latch) {

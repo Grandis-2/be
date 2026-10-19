@@ -40,7 +40,8 @@ class BannerTargets {
         Instant now = clock.instant();
         List<UUID> productIds = banners.stream().filter(b -> b.getTargetType() == BannerTargetType.PRODUCT).map(Banner::getTargetId).distinct().toList();
         Set<UUID> live = new HashSet<>();
-        listings.findListedCards(productIds, now).stream().filter(card -> card.saleMode() == SaleMode.IN_STOCK)
+        // 대상은 일반 상품만 — 사전예약의 접수 중을 넘기지 않으므로(빈 목록) preorder 를 부르지 않는다
+        listings.findListedCards(productIds, List.of()).stream().filter(card -> card.saleMode() == SaleMode.IN_STOCK)
                 .forEach(card -> live.add(card.productId()));
         if (banners.stream().anyMatch(b -> b.getTargetType() == BannerTargetType.PROMOTION)) {
             promotions.findShownOn(LocalDate.ofInstant(now, KOREA)).stream().map(Promotion::getId).forEach(live::add);

@@ -8,6 +8,7 @@ import com.grandis.nova.catalog.detail.ProductDetailView.OptionAxis;
 import com.grandis.nova.catalog.detail.ProductDetailView.OptionValue;
 import com.grandis.nova.catalog.detail.ProductDetailView.Variant;
 import com.grandis.nova.catalog.detail.ProductDetailView.Warranty;
+import com.grandis.nova.catalog.integration.PreorderCampaigns;
 import com.grandis.nova.catalog.integration.StockReader;
 import com.grandis.nova.catalog.listing.CampaignWindow;
 import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
@@ -63,17 +64,19 @@ public class ProductDetailService {
     private final ProductOptionRepository options;
     private final ProductListingQueryRepository crossReads;
     private final StockReader stocks;
+    private final PreorderCampaigns campaigns;
     private final Clock clock;
-    /** DB 를 읽는 부분만 감싼다 — order 재고를 묻는 동안 DB 연결을 붙잡지 않게. */
+    /** DB 를 읽는 부분만 감싼다 — order 재고 · preorder 회차를 묻는 동안 DB 연결을 붙잡지 않게. */
     private final TransactionTemplate snapshot;
 
     public ProductDetailService(ProductRepository products, ProductOptionRepository options,
-                                ProductListingQueryRepository crossReads, StockReader stocks, Clock clock,
+                                ProductListingQueryRepository crossReads, StockReader stocks, PreorderCampaigns campaigns, Clock clock,
                                 PlatformTransactionManager transactionManager) {
         this.products = products;
         this.options = options;
         this.crossReads = crossReads;
         this.stocks = stocks;
+        this.campaigns = campaigns;
         this.clock = clock;
         this.snapshot = new TransactionTemplate(transactionManager);
         this.snapshot.setReadOnly(true);
@@ -104,19 +107,21 @@ public class ProductDetailService {
     }
 
     /**
-     * 본문에 실시간 칸을 채운다. 사전예약은 회차 행(판매 준비 · 회차 시각 · 접수 단계), 일반은 판매 준비(products.stock_ready_at)와 그 상품 옵션의
-     * 재고 행(옵션별 가용 수량 · 품절). 판매 준비 전이면 404 — 목록의 판매 방식별 준비(READY)와 같은 정의다.
-     * 캐시된 본문에도 요청마다 부르므로 재고 · 조기 마감 · 판매 준비가 늦게 보이지 않는다. 트랜잭션 없이 돈다 — DB 읽기는 한 문장씩이고, order 재고를
-     * 묻는 동안 DB 연결을 붙잡지 않게.
+     * 본문에 실시간 칸을 채운다. 사전예약은 preorder 의 회차(판매 준비 · 회차 시각 · 접수 단계), 일반은 판매 준비(products.stock_ready_at)와 그 상품
+     * 옵션의 재고 행(옵션별 가용 수량 · 품절). 판매 준비 전이면 404 — 목록의 판매 방식별 준비와 같은 정의다.
+     * 캐시된 본문에도 요청마다 부르므로 재고 · 조기 마감 · 판매 준비가 늦게 보이지 않는다. 트랜잭션 없이 돈다 — DB 읽기는 한 문장씩이고, order 재고 ·
+     * preorder 회차를 묻는 동안 DB 연결을 붙잡지 않게.
+     *
+     * @throws BusinessException 사전예약인데 preorder 가 답하지 않으면 503 — 접수 단계를 가를 수 없다(2026-10-19 결정)
      */
     public ProductDetailView withLiveParts(ProductDetailView body) {
         if (body.saleMode() == SaleMode.PREORDER) {
-            CampaignWindow window = crossReads.findCampaign(body.productId())
+            CampaignWindow window = campaigns.find(body.productId())
                     .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
             return live(body, window, Map.of());
         }
         // 판매 준비는 목록과 같은 판정(products.stock_ready_at — order 의 판매 준비 이벤트)이다. 재고 행의 유무로 따로 가르면 목록에 없는 상품이 상세에 보인다
-        if (!crossReads.isReady(body.productId())) {
+        if (!crossReads.isStockReady(body.productId())) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
         return live(body, null, availableOrUnknown(body));
@@ -124,16 +129,17 @@ public class ProductDetailService {
 
     /**
      * 관리자 상세 — 노출 규칙 없이 어떤 상품이든(비공개 · 미완료 · 판매 중지 · 오래된 마감) 상세와 등록 상태를 준다. 없는 상품 · 삭제한 상품만 404.
-     * DB 는 한 트랜잭션에서 읽고({@link #findAdminSnapshot}), 일반 상품의 남은 수량은 그 뒤에 order 에 묻는다({@link #withStock}).
-     * 쓰기 트랜잭션 안에서 부르지 않는다 — 그 안에서는 {@link #findAdminSnapshot} 을 쓰고, 수량은 커밋 뒤에 채운다.
+     * DB 는 한 트랜잭션에서 읽고({@link #findAdminSnapshot}), 다른 서비스의 칸(일반 상품의 남은 수량 · 사전예약의 회차)은 그 뒤에 묻는다({@link #withLive}).
+     * 쓰기 트랜잭션 안에서 부르지 않는다 — 그 안에서는 {@link #findAdminSnapshot} 을 쓰고, 그 칸은 커밋 뒤에 채운다.
      */
     public AdminProductDetail findAdminProduct(UUID productId) {
-        return withStock(snapshot.execute(status -> findAdminSnapshot(productId)));
+        return withLive(snapshot.execute(status -> findAdminSnapshot(productId)));
     }
 
     /**
-     * 관리자 상세의 DB 부분 — 일반 상품의 남은 수량은 비운 채(null · 품절 아님)다. 상품 행을 잠근 쓰기 흐름이 응답을 만들 때 쓴다: 잠금 · 연결을
-     * 쥔 채 order 를 부르지 않게, 수량은 커밋 뒤에 {@link #withStock} 이나 {@link #beforeStockReady} 로 채운다. 혼자 불리면(GET) REPEATABLE READ 한
+     * 관리자 상세의 DB 부분 — 일반 상품의 남은 수량은 비운 채(null · 품절 아님), 사전예약은 회차 없이 준비 전(registrationCompleted=false)이다.
+     * 상품 행을 잠근 쓰기 흐름이 응답을 만들 때 쓴다: 잠금 · 연결을 쥔 채 order · preorder 를 부르지 않게, 그 칸은 커밋 뒤에 {@link #withLive} 나
+     * {@link #beforeStockReady} 로 채운다. 혼자 불리면(GET) REPEATABLE READ 한
      * 스냅샷이고, 쓰기 트랜잭션 안에서는 그 트랜잭션에 합류한다(격리 수준은 바깥 것 — 상품 · 옵션 행은 그 쓰기가 잠가 두었다).
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
@@ -142,20 +148,46 @@ public class ProductDetailService {
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
         // 관리자 목록 · 상세의 visible 은 products.visible 칸 그대로 — 판매 방식별 준비는 registrationCompleted 가 따로 말한다
         ProductDetailView body = body(product, product.isVisible());
-        ProductDetailView detail = product.getSaleMode() == SaleMode.PREORDER
-                ? live(body, crossReads.findCampaign(productId).orElse(null), Map.of())
-                : live(body, null, null);
-        return new AdminProductDetail(detail, product.getTags(), product.getIdempotencyKey(), crossReads.isReady(productId));
+        boolean preorder = product.getSaleMode() == SaleMode.PREORDER;
+        ProductDetailView detail = live(body, null, preorder ? Map.of() : null);
+        return new AdminProductDetail(detail, product.getTags(), product.getIdempotencyKey(), !preorder && crossReads.isStockReady(productId));
     }
 
-    /** 일반 상품이면 옵션별 남은 수량을 order 에 물어 채운다(답하지 않으면 수량 null). 사전예약은 그대로. 트랜잭션 밖에서 부른다. */
-    public AdminProductDetail withStock(AdminProductDetail detail) {
+    /**
+     * 다른 서비스의 칸을 채운다. 트랜잭션 밖에서 부른다.
+     * <ul>
+     *   <li>사전예약 — preorder 의 회차(시각 · 접수 단계)와 판매 준비(회차가 있다). 관리자 화면이라 preorder 가 답하지 않으면 503 이다.</li>
+     *   <li>일반 — 옵션별 남은 수량을 order 에 묻는다(답하지 않으면 수량 null).</li>
+     * </ul>
+     */
+    public AdminProductDetail withLive(AdminProductDetail detail) {
         ProductDetailView product = detail.product();
         if (product.saleMode() == SaleMode.PREORDER) {
-            return detail;
+            CampaignWindow window = campaigns.find(product.productId()).orElse(null);
+            return new AdminProductDetail(live(product, window, Map.of()), detail.tags(), detail.registrationKey(), window != null);
         }
         return new AdminProductDetail(live(product, null, availableOrUnknown(product)), detail.tags(), detail.registrationKey(),
                 detail.registrationCompleted());
+    }
+
+    /**
+     * 관리자 쓰기의 응답 — {@link #withLive} 와 같되, 사전예약의 회차를 preorder 에 묻지 못하면(일시 장애) 회차 null · 준비 false(DB 부분 그대로)로 낸다 —
+     * 이때 준비 false 는 "준비 전" 이 아니라 "모름" 이다. 쓰기는
+     * 이미 커밋됐으므로 503 으로 끝내지 않는다 — 일반 상품의 남은 수량을 비우는 것과 같은 방식(2026-10-19 결정). 관리자 상세 조회는 503 이다.
+     */
+    public AdminProductDetail afterWrite(AdminProductDetail detail) {
+        if (detail.product().saleMode() != SaleMode.PREORDER) {
+            return withLive(detail);
+        }
+        try {
+            return withLive(detail);
+        } catch (BusinessException e) {
+            if (e.errorCode() != CommonErrorCode.DEPENDENCY_UNAVAILABLE) {
+                throw e;   // 계약 위반 등 연동 오류는 그대로 — "답하지 않을 때" 만 비운다
+            }
+            log.warn("수정한 사전예약 상품의 회차를 preorder 에 묻지 못했다 — 회차를 비워 보낸다 productId={}", detail.product().productId(), e);
+            return detail;
+        }
     }
 
     /**

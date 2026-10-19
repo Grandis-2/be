@@ -1,6 +1,8 @@
 package com.grandis.nova.catalog.ranking;
 
 import com.grandis.nova.catalog.cache.LocalReadCache;
+import com.grandis.nova.catalog.integration.PreorderCampaigns;
+import com.grandis.nova.catalog.listing.CampaignWindow;
 import com.grandis.nova.catalog.listing.ProductListFilter;
 import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
 import com.grandis.nova.catalog.web.ValidationFailures;
@@ -36,14 +38,16 @@ public class PopularSearchService {
     private final SearchTermCounter counter;
     private final AnonymousQuota quota;
     private final ProductListingQueryRepository listings;
+    private final PreorderCampaigns campaigns;
     private final LocalReadCache<String, List<String>> cache;
     private final Clock clock;
 
-    public PopularSearchService(SearchTermCounter counter, AnonymousQuota quota, ProductListingQueryRepository listings, JsonMapper json, Clock clock,
-                                @Value("${nova.read-cache.enabled:true}") boolean cacheEnabled) {
+    public PopularSearchService(SearchTermCounter counter, AnonymousQuota quota, ProductListingQueryRepository listings, PreorderCampaigns campaigns,
+                                JsonMapper json, Clock clock, @Value("${nova.read-cache.enabled:true}") boolean cacheEnabled) {
         this.counter = counter;
         this.quota = quota;
         this.listings = listings;
+        this.campaigns = campaigns;
         this.cache = new LocalReadCache<>("catalog.popular-searches", TTL, MAX_BYTES, value -> json.writeValueAsBytes(value).length, clock, cacheEnabled);
         this.clock = clock;
     }
@@ -82,7 +86,8 @@ public class PopularSearchService {
             return;
         }
         try {
-            if (listings.count(new ProductListFilter(term.display(), null, null, null, null, null), now) == 0) {
+            // 결과 수는 회원 검색과 같은 노출 규칙 — 사전예약은 지금 접수 중인 것만(preorder 가 답하지 않으면 마지막 값, 오래됐으면 사전예약 없이)
+            if (listings.count(new ProductListFilter(term.display(), null, null, null, null, null), CampaignWindow.acceptingAt(campaigns.open(), now)) == 0) {
                 return;
             }
         } catch (DataAccessException e) {

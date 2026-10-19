@@ -13,7 +13,8 @@ import java.util.UUID;
  *
  * @param modelName             상품 모델명(지금 값, 예: A3104) — products.model_name
  * @param price                 회원이 내는 옵션 가격(정수 원) — 정가에 상품 할인율을 건 할인가. 보증 추가금은 따로다(할인 없음)
- * @param registrationCompleted 판매 방식별 준비 — 일반은 order 재고 행, 사전예약은 preorder 회차 행이 있다
+ * @param registrationCompleted 판매 방식별 준비 — 일반은 order 의 판매 준비 이벤트를 받았다(products.stock_ready_at). 사전예약은 늘 true 다 — 이 응답을 만들며
+ *                              preorder 를 부르지 않는다(contracts/order-internal.md)
  * @param warranty              상품의 보증 설정(옵션 문서의 warranty). 제공하지 않으면 offered false · surcharge 0
  * @param imageUrl              그 옵션의 사진 — 고른 색상의 첫 장, 색상이 없거나 그 색상에 사진이 없으면 상품 썸네일(첫 색상의 첫 장). 없으면 null
  */

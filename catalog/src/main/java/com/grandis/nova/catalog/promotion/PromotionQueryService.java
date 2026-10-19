@@ -1,5 +1,7 @@
 package com.grandis.nova.catalog.promotion;
 
+import com.grandis.nova.catalog.integration.PreorderCampaigns;
+import com.grandis.nova.catalog.listing.CampaignWindow;
 import com.grandis.nova.catalog.listing.ProductListItem;
 import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
 import com.grandis.nova.catalog.listing.SoldOutMarker;
@@ -7,6 +9,8 @@ import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.redis.cache.ReadCache;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import tools.jackson.core.type.TypeReference;
 
@@ -24,7 +28,8 @@ import java.util.UUID;
 /**
  * 고객 사전예약 페이지의 홍보 목록 · 상세(로그인 없이). 오늘(한국 날짜)이 홍보 기간 안인 홍보만 보인다 — 밖이면 상세도 404.
  * 홍보 내용(이름 · 사진 · 기간 · 묶인 상품 id)은 읽기 캐시에 {@link #BODY_TTL} 두고 고치면 세대로 비운다. 상품 카드(가격 · 회차 · 재고)는 다른 서비스가
- * 바꾸는 값이 섞여 요청마다 읽는다 — 상품 상세와 같은 나눔이다.
+ * 바꾸는 값이 섞여 요청마다 읽는다 — 상품 상세와 같은 나눔이다. 사전예약 카드의 회차(준비 · 시각)는 preorder 에 묻는다 — 답하지 않으면 페이지는
+ * 그대로 내고 사전예약 카드의 시각 · 접수 단계만 비운다(2026-10-19 결정).
  */
 @Service
 public class PromotionQueryService {
@@ -39,21 +44,25 @@ public class PromotionQueryService {
                 List<UUID> productIds) {
     }
 
+    private static final Logger log = LoggerFactory.getLogger(PromotionQueryService.class);
+
     private final PromotionRepository promotions;
     private final PromotionProducts links;
     private final ProductListingQueryRepository crossReads;
     private final SoldOutMarker soldOut;
+    private final PreorderCampaigns campaigns;
     private final ReadCache cache;
     private final Clock clock;
     private final ReadCache.Spec<Body> bodySpec;
     private final ReadCache.Spec<List<Body>> shownSpec;
 
     public PromotionQueryService(PromotionRepository promotions, PromotionProducts links, ProductListingQueryRepository crossReads,
-                                 SoldOutMarker soldOut, ReadCache cache, Clock clock) {
+                                 SoldOutMarker soldOut, PreorderCampaigns campaigns, ReadCache cache, Clock clock) {
         this.promotions = promotions;
         this.links = links;
         this.crossReads = crossReads;
         this.soldOut = soldOut;
+        this.campaigns = campaigns;
         this.cache = cache;
         this.clock = clock;
         this.bodySpec = cache.spec("promotion-body", Body.class, BODY_TTL);
@@ -66,7 +75,7 @@ public class PromotionQueryService {
         ReadCache.Entry<List<Body>> bodies = cache.entry(shownSpec, PROMOTIONS, today.toString(), () -> loadShown(today));
         List<UUID> allIds = bodies.value().stream().flatMap(body -> body.productIds().stream()).toList();
         Map<UUID, ProductListItem> cards = new HashMap<>();
-        crossReads.findCards(allIds, clock.instant(), false).forEach(card -> cards.put(card.productId(), card));
+        cards(allIds, false).forEach(card -> cards.put(card.productId(), card));
         return bodies.map(list -> list.stream().map(body -> {
             List<ProductListItem> mine = body.productIds().stream().map(cards::get).filter(Objects::nonNull).toList();
             return new PromotionViews.Summary(body.promotionId(), body.name(), body.thumbnailUrl(), body.startDate(), body.endDate(),
@@ -81,9 +90,28 @@ public class PromotionQueryService {
         if (today.isBefore(body.value().startDate()) || today.isAfter(body.value().endDate())) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
-        List<ProductListItem> cards = soldOut.mark(crossReads.findCards(body.value().productIds(), clock.instant(), true));
+        List<ProductListItem> cards = soldOut.mark(cards(body.value().productIds(), true));
         return body.map(b -> new PromotionViews.Detail(b.promotionId(), b.name(), b.thumbnailUrl(), b.detailImageUrls(), b.startDate(),
                 b.endDate(), earliestOpen(cards), latestClose(cards), cards));
+    }
+
+    /**
+     * 홍보 카드에 사전예약 회차를 채운다 — 회차가 없는 사전예약 상품(판매 준비 전)은 뺀다. preorder 가 답하지 않으면 준비를 가르지 못하므로 빼지 않고,
+     * 시각 · 접수 단계를 비워 낸다.
+     */
+    private List<ProductListItem> cards(List<UUID> productIds, boolean withColors) {
+        List<ProductListItem> cards = crossReads.findCards(productIds, withColors);
+        List<UUID> preorderIds = cards.stream().filter(card -> card.saleMode() == SaleMode.PREORDER).map(ProductListItem::productId).toList();
+        Instant now = clock.instant();
+        Map<UUID, CampaignWindow> windows;
+        try {
+            windows = campaigns.find(preorderIds);
+        } catch (BusinessException e) {
+            log.warn("홍보 카드의 회차를 preorder 에 묻지 못했다 — 사전예약 카드의 시각을 비우고 보낸다 products={}", preorderIds.size(), e);
+            return cards.stream().map(card -> card.withCampaign(null, now)).toList();
+        }
+        return cards.stream().filter(card -> card.saleMode() != SaleMode.PREORDER || windows.containsKey(card.productId()))
+                .map(card -> card.withCampaign(windows.get(card.productId()), now)).toList();
     }
 
     // 홍보 · 묶음 두 문장 — 트랜잭션 없이 읽는다(늦게 묶인 상품이 이번 응답에 빠져도 다음 세대에서 보인다)
