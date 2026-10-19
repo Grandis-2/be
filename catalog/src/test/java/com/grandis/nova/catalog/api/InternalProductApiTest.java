@@ -53,7 +53,7 @@ class InternalProductApiTest {
                 .andExpect(jsonPath("$.data.saleMode").value("PREORDER"))
                 .andExpect(jsonPath("$.data.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.data.visible").value(true))
-                .andExpect(jsonPath("$.data.registrationCompleted").value(false))
+                .andExpect(jsonPath("$.data.registrationCompleted").value(true))   // 사전예약은 늘 true — 회차 행이 없어도(아래 시험)
                 .andExpect(jsonPath("$.data.options", hasSize(2)))
                 .andExpect(jsonPath("$.data.options[0].optionId").value(active.toString()))
                 .andExpect(jsonPath("$.data.options[0].title").value("블랙 / 256GB"))
@@ -66,9 +66,9 @@ class InternalProductApiTest {
     }
 
     @Test
-    @DisplayName("비공개 · 준비 전 상품도 200 으로 돌려주고 두 칸이 그 상태를 말한다 — 숨김 판정은 호출자 몫. 사전예약의 준비는 회차 행")
+    @DisplayName("비공개 · 준비 전 상품도 200 으로 돌려주고 두 칸이 그 상태를 말한다 — 숨김 판정은 호출자 몫. 일반의 준비는 판매 준비 이벤트, 사전예약은 늘 true")
     void hiddenAndIncompleteProductsAreStillReturned() throws Exception {
-        UUID productId = fixtures.product("PREORDER", "ACTIVE");
+        UUID productId = fixtures.product("IN_STOCK", "ACTIVE");
         jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", (Object) UuidBinary.toBytes(productId));
         fixtures.registration(productId, ShopFixtures.unique());
 
@@ -77,8 +77,15 @@ class InternalProductApiTest {
                 .andExpect(jsonPath("$.data.visible").value(false))
                 .andExpect(jsonPath("$.data.registrationCompleted").value(false));
 
-        fixtures.campaign(productId, java.time.Instant.now().plusSeconds(3600), java.time.Instant.now().plusSeconds(7200));
+        fixtures.markStockReady(productId);
         asUser(productId)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.registrationCompleted").value(true));
+
+        // 사전예약은 회차 행이 없어도 true — 이 응답은 preorder 접수가 동기로 부르므로 preorder 에 묻지 않는다(순환 호출). preorder 는 이 칸을 판정에 쓰지 않는다
+        UUID preorder = fixtures.product("PREORDER", "ACTIVE");
+        fixtures.registration(preorder, ShopFixtures.unique());
+        asUser(preorder)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.registrationCompleted").value(true));
     }

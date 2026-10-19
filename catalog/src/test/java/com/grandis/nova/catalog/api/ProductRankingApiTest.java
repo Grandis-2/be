@@ -152,7 +152,7 @@ class ProductRankingApiTest {
     }
 
     @Test
-    @DisplayName("조회 신호 — 없거나 숨긴 상품 404, 비회원이 익명 id 없이 보내면 400, 관리자 토큰은 세지 않고 204")
+    @DisplayName("조회 신호 — 없거나 숨긴 상품 · 회차가 없는(준비 전) 사전예약 404, 비회원이 익명 id 없이 보내면 400, 관리자 토큰은 세지 않고 204")
     void signalRefusals() throws Exception {
         UUID product = listed();
         UUID hidden = listed();
@@ -160,6 +160,11 @@ class ProductRankingApiTest {
 
         view(UUID.randomUUID(), UUID.randomUUID()).andExpect(status().isNotFound());
         view(hidden, UUID.randomUUID()).andExpect(status().isNotFound());
+        UUID unready = fixtures.product("PREORDER", "ACTIVE");
+        view(unready, UUID.randomUUID()).andExpect(status().isNotFound());
+        // 대조군 — 회차가 생기면(오픈 전이어도) 상세처럼 센다
+        fixtures.campaign(unready, Instant.now().plus(Duration.ofDays(1)), Instant.now().plus(Duration.ofDays(2)));
+        view(unready, UUID.randomUUID()).andExpect(status().isNoContent());
         mockMvc.perform(post("/api/v1/products/{id}/views", product)).andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
         mockMvc.perform(post("/api/v1/products/{id}/views", product).contentType(MediaType.APPLICATION_JSON).content("{}"))

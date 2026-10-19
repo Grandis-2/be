@@ -56,6 +56,6 @@ import java.lang.annotation.Target;
         "nova.sqs.consumer.enabled=false"
 })
 @Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class, ImageAttachmentsTestConfig.class,
-        OrderStocksTestConfig.class})
+        OrderStocksTestConfig.class, PreorderCampaignsTestConfig.class})
 public @interface CatalogIntegrationTest {
 }

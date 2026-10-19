@@ -19,13 +19,13 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 저장소에 시각을 직접 넘겨 경계를 재고, MySQL general_log 로 실행 SQL 을 잡아 비소유 표에 쓰기가 없음을 못 박는다.
+ * 접수 중 판정(CampaignWindow#acceptingAt)에 시각을 직접 넘겨 경계를 재고, MySQL general_log 로 실행 SQL 을 잡아 다른 서비스의 표를 읽지 않음을 못 박는다.
  * JdbcTemplate 의 SQL 은 Hibernate 인스펙터를 거치지 않으므로 서버 쪽 로그로 본다.
  */
 @CatalogIntegrationTest
@@ -45,35 +45,46 @@ class ProductListingQueryRepositoryTest {
     }
 
     @Test
-    @DisplayName("사전예약은 오픈 시각부터 보이고 마감 시각부터 숨는다 — 접수 단계(OPEN)와 같은 경계, 1µs 앞뒤로 목록 · 건수가 같이 바뀐다")
+    @DisplayName("사전예약은 오픈 시각부터 보이고 마감 시각부터 숨는다 — 접수 단계(OPEN)와 같은 경계, 1ns 앞뒤로 목록 · 건수가 같이 바뀐다")
     void listedFromOpenUntilClose() {
         Instant opensAt = Instant.parse("2026-10-01T00:00:00Z");
         Instant closesAt = opensAt.plus(Duration.ofHours(1));
         UUID productId = fixtures.product(fixtures.category(), "PREORDER", "ACTIVE", "경계", tag);
         fixtures.registration(productId);
-        fixtures.campaign(productId, opensAt, closesAt);
+        Map<UUID, CampaignWindow> open = Map.of(productId, new CampaignWindow(opensAt, closesAt));
         ProductListFilter filter = new ProductListFilter(tag, null, null, null, null, null);
-        Duration micro = Duration.ofNanos(1_000);   // datetime(6) 의 한 칸
 
-        for (Instant hidden : List.of(opensAt.minus(micro), closesAt)) {
-            assertThat(ids(repository.find(filter, ProductSort.NEWEST, hidden, 0, 10))).as("%s", hidden).isEmpty();
-            assertThat(repository.count(filter, hidden)).as("%s", hidden).isZero();
+        for (Instant hidden : List.of(opensAt.minusNanos(1), closesAt)) {
+            Set<UUID> accepting = CampaignWindow.acceptingAt(open, hidden);
+            assertThat(ids(repository.find(filter, ProductSort.NEWEST, accepting, 0, 10))).as("%s", hidden).isEmpty();
+            assertThat(repository.count(filter, accepting)).as("%s", hidden).isZero();
             assertThat(PreorderSaleStatus.of(opensAt, closesAt, hidden)).as("%s", hidden).isNotEqualTo(PreorderSaleStatus.OPEN);
         }
-        // µs 아래가 붙은 시각도 접수 단계와 같은 쪽 — 마감 1ns 전은 OPEN 이고 목록에도 있다
-        Instant lastNano = closesAt.minusNanos(1);
-        assertThat(PreorderSaleStatus.of(opensAt, closesAt, lastNano)).isEqualTo(PreorderSaleStatus.OPEN);
-        assertThat(repository.count(filter, lastNano)).isEqualTo(1);
-        for (Instant shown : List.of(opensAt, closesAt.minus(micro))) {
-            assertThat(ids(repository.find(filter, ProductSort.NEWEST, shown, 0, 10))).as("%s", shown).containsExactly(productId);
-            assertThat(repository.count(filter, shown)).as("%s", shown).isEqualTo(1);
+        for (Instant shown : List.of(opensAt, closesAt.minusNanos(1))) {
+            Set<UUID> accepting = CampaignWindow.acceptingAt(open, shown);
+            assertThat(ids(repository.find(filter, ProductSort.NEWEST, accepting, 0, 10))).as("%s", shown).containsExactly(productId);
+            assertThat(repository.count(filter, accepting)).as("%s", shown).isEqualTo(1);
             assertThat(PreorderSaleStatus.of(opensAt, closesAt, shown)).isEqualTo(PreorderSaleStatus.OPEN);
         }
     }
 
     @Test
-    @DisplayName("목록 · 검색은 preorder 표(preorder_campaigns)를 읽기만 하고, order 재고 표(option_inventories)는 읽지 않는다 — 품절 · 수량은 order 재고 API 다")
-    void readsButNeverWritesForeignTables() throws Exception {
+    @DisplayName("접수 중 id 는 사전예약 상품에만 먹는다 — 일반 상품은 판매 준비로만 보이고, 접수 중이 아닌 사전예약은 숨는다")
+    void acceptingAppliesToPreorderOnly() {
+        UUID category = fixtures.category();
+        UUID unready = fixtures.product(category, "IN_STOCK", "ACTIVE", "준비 전 일반", tag);
+        UUID preorder = fixtures.product(category, "PREORDER", "ACTIVE", "사전예약", tag);
+        fixtures.registration(preorder);
+        ProductListFilter filter = new ProductListFilter(tag, null, null, null, null, null);
+
+        assertThat(repository.count(filter, List.of(unready))).as("일반 상품은 접수 중 id 로 보이지 않는다").isZero();
+        assertThat(repository.count(filter, List.of())).as("접수 중이 아니면 숨는다").isZero();
+        assertThat(ids(repository.find(filter, ProductSort.NEWEST, List.of(preorder), 0, 10))).as("대조군").containsExactly(preorder);
+    }
+
+    @Test
+    @DisplayName("저장소는 preorder 회차 표(preorder_campaigns) · order 재고 표(option_inventories)를 읽지 않는다 — 회차는 preorder API, 품절 · 수량은 order 재고 API 다")
+    void neverReadsForeignTables() throws Exception {
         UUID productId = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "읽기만", tag);
         fixtures.registration(productId);
         ShopFixtures.AxisRef axis = fixtures.axis(productId, "color", 0);
@@ -89,9 +100,18 @@ class ProductListingQueryRepositoryTest {
             statement.execute("SET GLOBAL general_log = 'ON'");
             statement.execute("TRUNCATE TABLE mysql.general_log");
             try {
-                repository.count(filter, Instant.now());
-                repository.find(filter, ProductSort.NEWEST, Instant.now(), 0, 10);
+                repository.count(filter, List.of(productId));
+                repository.find(filter, ProductSort.NEWEST, List.of(productId), 0, 10);
+                repository.findListedCards(List.of(productId), List.of(productId));
+                repository.findCards(List.of(productId), true);
+                repository.countForAdmin(new AdminProductListFilter(tag, null, null, null));
+                repository.findForAdmin(new AdminProductListFilter(tag, null, null, null), 0, 10);
+                repository.findLinkable(null, 0, 10);
+                repository.findExposure(productId);
+                repository.findExposures(List.of(productId));
+                repository.isStockReady(productId);
                 repository.findActiveOptionIds(List.of(productId));
+                repository.countGiftCandidates(tag);
                 repository.findGiftCandidates(tag, 0, 10);
             } finally {
                 statement.execute("SET GLOBAL general_log = 'OFF'");
@@ -104,18 +124,10 @@ class ProductListingQueryRepositoryTest {
             }
         }
 
-        List<String> foreign = statements.stream()
-                .filter(sql -> sql.contains("preorder_campaigns") || sql.contains("option_inventories"))
-                .toList();
-        // 양성 대조군 — 로그가 실제로 우리 조회를 잡았다
-        assertThat(foreign).as("preorder 표를 읽는 SELECT 가 잡혀야 한다").isNotEmpty();
+        // 양성 대조군 — 로그가 실제로 우리 조회를 잡았다(상품 표를 읽는 문장이 부른 메서드 수만큼은 있다)
+        assertThat(statements.stream().filter(sql -> sql.contains("FROM products p")).count()).as("우리 조회가 잡혀야 한다").isGreaterThanOrEqualTo(10);
+        assertThat(statements).as("preorder 회차 표는 읽지 않는다").noneMatch(sql -> sql.contains("preorder_campaigns"));
         assertThat(statements).as("order 재고 표는 읽지 않는다").noneMatch(sql -> sql.contains("option_inventories"));
-        assertThat(foreign).allSatisfy(sql -> assertThat(sql.strip().toUpperCase(Locale.ROOT)).startsWith("SELECT"));
-        assertThat(statements).noneMatch(sql -> {
-            String upper = sql.strip().toUpperCase(Locale.ROOT);
-            return (upper.startsWith("INSERT") || upper.startsWith("UPDATE") || upper.startsWith("DELETE"))
-                    && (sql.contains("preorder_campaigns") || sql.contains("option_inventories"));
-        });
     }
 
     @Test
@@ -136,9 +148,9 @@ class ProductListingQueryRepositoryTest {
             List<UUID> productIds = jdbcTemplate.queryForList("SELECT BIN_TO_UUID(id) FROM products WHERE category_id = UUID_TO_BIN(?)", String.class,
                     category.toString()).stream().map(UUID::fromString).toList();
             List<String> statements = List.of(
-                    capture(statement, "%min_price%NO_SEMIJOIN%LIMIT%", () -> repository.find(filter, ProductSort.PRICE_ASC, Instant.now(), 0, 20)),
-                    capture(statement, "%sellable_colors%", () -> repository.find(filter, ProductSort.PRICE_ASC, Instant.now(), 0, 20)),
-                    capture(statement, "%option_count%LIMIT%", () -> repository.findForAdmin(new AdminProductListFilter(tag, null, null, null), Instant.now(), 0, 20)),
+                    capture(statement, "%min_price%NO_SEMIJOIN%LIMIT%", () -> repository.find(filter, ProductSort.PRICE_ASC, List.of(), 0, 20)),
+                    capture(statement, "%sellable_colors%", () -> repository.find(filter, ProductSort.PRICE_ASC, List.of(), 0, 20)),
+                    capture(statement, "%option_count%LIMIT%", () -> repository.findForAdmin(new AdminProductListFilter(tag, null, null, null), 0, 20)),
                     capture(statement, "%stock_ready_at IS NOT NULL%NO_SEMIJOIN%LIMIT%", () -> repository.findGiftCandidates(tag, 0, 20)),
                     capture(statement, "SELECT o.product_id, o.id FROM product_options o%", () -> repository.findActiveOptionIds(productIds)));
             try {
