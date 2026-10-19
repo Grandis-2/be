@@ -110,7 +110,7 @@ catalog 가 `preorder_campaigns` 를 직접 읽던 것(목록 · 검색 · 랭�
 
 - 마감 전(`closesAt > now`)이고 이미 열렸거나 10분 안에 열리는(`opensAt ≤ now + 10분`) 회차를 **오픈이 이른 순**(`opensAt`, `productId`)으로 준다.
 - **접수 중인지는 받는 쪽이 요청마다 자기 시각으로 판정한다**(`opensAt ≤ now < closesAt`). 그래서 받은 값을 몇 초 캐시해도 오픈 · 마감 경계가 정확하다. 10분은 그 캐시보다 훨씬 길게 잡은 여유다(preorder 설정 `nova.campaign.internal-lookahead`).
-- **상한 500건**(`nova.campaign.internal-open-limit`, 1~10,000). 넘으면 앞 500건만 주고 preorder 가 지표 `preorder.internal.campaigns.truncated` 와 ERROR 로그(10분에 한 번)로 알린다 — 오픈이 이른 순이라 이미 열린 회차가 남고 곧 열릴 회차부터 빠진다. 실제 규모는 수십 건이다.
+- **상한은 설정 `nova.campaign.internal-open-limit`**(기본 500, 1~10,000). 넘으면 상한만큼만 주고 preorder 가 지표 `preorder.internal.campaigns.truncated` 와 ERROR 로그(10분에 한 번)로 알린다 — 오픈이 이른 순이라 이미 열린 회차가 남고 곧 열릴 회차부터 빠진다. 실제 규모는 수십 건이다.
 
 ```json
 {
