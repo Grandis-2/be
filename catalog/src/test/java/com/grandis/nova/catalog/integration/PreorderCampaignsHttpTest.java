@@ -74,6 +74,7 @@ class PreorderCampaignsHttpTest {
 
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
+    @Autowired PreorderCampaigns campaigns;
     /** 삭제가 먼저 묻는 order 의 드로우 증정품 확인 — 늘 "진행 중 드로우 없음" 으로 답해, 삭제의 503 이 preorder 에서 온 것만 남긴다. */
     @MockitoBean DrawGiftClient drawGifts;
 
@@ -220,6 +221,46 @@ class PreorderCampaignsHttpTest {
         failStatus = 0;
         mockMvc.perform(patch("/api/v1/admin/products/{id}/sale-status", product).with(AccessTokens.admin())
                 .contentType(MediaType.APPLICATION_JSON).content("{ \"status\": \"PAUSED\" }")).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("오픈 판정이 없는 관리자 쓰기(사진 넣기)는 preorder 가 답하지 않아도 저장하고 201 — 응답의 회차는 null · 준비 false. 관리자 상세 조회는 503")
+    void writeResponseLeavesCampaignEmptyWhenPreorderDown() throws Exception {
+        Instant opensAt = Instant.now().plus(Duration.ofHours(2));
+        String registered = mockMvc.perform(post("/api/v1/admin/products").with(AccessTokens.admin()).contentType(MediaType.APPLICATION_JSON)
+                .header("Idempotency-Key", "k-" + ShopFixtures.unique()).content("""
+                        { "categoryId": "%s", "saleMode": "PREORDER", "title": "쓰기 응답", "brand": "APPLE", "modelName": "A0001", "visible": false, "basePrice": 1000000,
+                          "optionAxes": [ { "key": "storage", "label": "용량", "values": [ { "value": "256GB" } ] } ],
+                          "combinations": [ { "selections": { "storage": "256GB" } } ],
+                          "campaign": { "opensAt": "%s", "closesAt": "%s" },
+                          "shipmentBatches": [ { "batchNumber": 1, "positionFrom": 1, "positionTo": null, "estimatedShipStart": "2026-11-01", "estimatedShipEnd": "2026-11-07" } ] }
+                        """.formatted(category, opensAt, opensAt.plus(Duration.ofDays(3))))).andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        UUID product = UUID.fromString(JSON.readTree(registered).get("data").get("registration").get("productId").asString());
+        campaign(product, opensAt, opensAt.plus(Duration.ofDays(3)));
+        failStatus = 503;
+
+        mockMvc.perform(post("/api/v1/admin/products/{id}/images", product).with(AccessTokens.admin()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{ \"kind\": \"DETAIL\", \"bundle\": \"유의사항\", \"url\": \"https://img/after-write.jpg\" }"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.product.campaign").isEmpty())
+                .andExpect(jsonPath("$.data.registration.completed").value(false));
+        assertThat(jdbcTemplate.queryForObject("SELECT JSON_SEARCH(options, 'one', 'https://img/after-write.jpg') IS NOT NULL FROM products WHERE id = UUID_TO_BIN(?)",
+                Boolean.class, product.toString())).as("저장은 됐다").isTrue();
+        mockMvc.perform(get("/api/v1/admin/products/{id}", product).with(AccessTokens.admin())).andExpect(status().isServiceUnavailable());
+    }
+
+    @Test
+    @DisplayName("상품별 회차는 한 번에 100개까지 실제 HTTP 로 묻는다 — productIds 를 반복해 실은 URL(약 4.8KB)도 받는다")
+    void hundredProductIdsInOneRequest() {
+        List<UUID> ids = new ArrayList<>();
+        for (int i = 0; i < 100; i++) {
+            ids.add(UUID.randomUUID());
+        }
+
+        assertThat(campaigns.find(ids)).isEmpty();
+
+        assertThat(SEEN_PATHS).hasSize(1);
+        assertThat(SEEN_PATHS.getFirst().split("productIds=", -1)).hasSize(101);
     }
 
     @Test
