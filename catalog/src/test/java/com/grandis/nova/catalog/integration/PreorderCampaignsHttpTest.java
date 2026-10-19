@@ -118,6 +118,11 @@ class PreorderCampaignsHttpTest {
         assertThat(items.get(0).get("opensAt").isNull()).isFalse();
         assertThat(SEEN_PATHS).contains("/internal/preorders/campaigns/open");
         assertThat(SEEN_AUTHORIZATION).isNotEmpty().allMatch("null"::equals);
+
+        // 일반 상품만 거른 목록은 회차를 쓰지 않으므로 preorder 를 부르지 않는다
+        SEEN_PATHS.clear();
+        mockMvc.perform(get("/api/v1/products").param("categoryId", category.toString()).param("saleMode", "IN_STOCK")).andExpect(status().isOk());
+        assertThat(SEEN_PATHS).isEmpty();
     }
 
     @Test
