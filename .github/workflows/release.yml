@@ -167,7 +167,8 @@ jobs:
             [ "${#jars[@]}" -eq 1 ] || { echo "::error::$s 의 jar 가 하나가 아니다: ${jars[*]}"; exit 1; }
             jar=${jars[0]}
             # 대입으로 먼저 받아 스크립트 실패가 set -e 에 걸리게 한다
-            jar_key=$(python3 .github/scripts/jar_content_key.py "$jar" "$base")
+            # 여기 jar 는 버전을 넣지 않았다 — MANIFEST 전제가 깨졌으면(Boot 업그레이드 등) 모든 버전이 오르기 전에 멈춘다
+            jar_key=$(python3 .github/scripts/jar_content_key.py "$jar" "$base" --unversioned)
             key=$(printf '%s%s' "$jar_key" "$image_inputs" | sha256sum | cut -d' ' -f1)
             # AOT 학습은 서비스 사이를 오가므로 올리지 않는 서비스의 jar 도 함께 넘긴다
             mkdir -p "dist/$s"
