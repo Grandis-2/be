@@ -274,9 +274,10 @@ jobs:
       - name: jar 키 계산
         run: |
           set -euo pipefail
+          base=$(jq -er .version build/service-graph.json)
           for jar in dist/*/app.jar; do
             # 대입으로 먼저 받아 스크립트 실패가 set -e 에 걸리게 한다
-            key=$(python3 .github/scripts/jar_content_key.py "$jar")
+            key=$(python3 .github/scripts/jar_content_key.py "$jar" "$base")
             echo "$jar $key"
           done
 
