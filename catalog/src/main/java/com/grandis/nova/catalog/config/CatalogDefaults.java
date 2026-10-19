@@ -45,7 +45,7 @@ class CatalogDefaults implements EnvironmentPostProcessor, Ordered {
             Map.entry("spring.http.serviceclient." + Dependencies.ORDER_STOCKS + ".base-url", "${spring.http.serviceclient." + Dependencies.ORDER + ".base-url:}"),
             Map.entry("spring.http.serviceclient." + Dependencies.ORDER_STOCKS + ".connect-timeout", "300ms"),
             Map.entry("spring.http.serviceclient." + Dependencies.ORDER_STOCKS + ".read-timeout", "1s"),
-            // 회차 일정(preorder). 목록 · 상세 · 관리자 수정 판정이 부른다 — 수정 판정은 상품 행을 잠근 채 부르므로 짧게 둔다
+            // 회차 일정(preorder). 목록 · 상세 · 관리자 수정 판정이 요청마다 부른다
             Map.entry("spring.http.serviceclient." + Dependencies.PREORDER + ".connect-timeout", "300ms"),
             Map.entry("spring.http.serviceclient." + Dependencies.PREORDER + ".read-timeout", "1s"),
             Map.entry("spring.http.serviceclient." + Dependencies.MEMBER + ".connect-timeout", "300ms"),

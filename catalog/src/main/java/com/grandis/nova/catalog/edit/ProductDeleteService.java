@@ -7,6 +7,7 @@ import com.grandis.nova.catalog.integration.Dependencies;
 import com.grandis.nova.catalog.integration.DrawGiftClient;
 import com.grandis.nova.catalog.integration.InternalCalls;
 import com.grandis.nova.catalog.integration.PreorderCampaigns;
+import com.grandis.nova.catalog.listing.CampaignWindow;
 import com.grandis.nova.catalog.product.Product;
 import com.grandis.nova.catalog.product.ProductRepository;
 import com.grandis.nova.catalog.product.SaleMode;
@@ -20,6 +21,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -67,28 +69,32 @@ public class ProductDeleteService {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);   // 없는 상품에 order 를 부르지 않는다
         }
         requireNoDrawInProgress(productId);
-        transaction.executeWithoutResult(status -> deleteLocked(productId));
+        // 사전예약 회차는 트랜잭션 전에 받는다 — 상품 행을 잠근 채 preorder 를 기다리지 않는다(REVIEW 2.1). 판정은 잠금 아래의 시각으로(ProductEditService 와 같다)
+        Optional<CampaignWindow> window = products.findById(productId)
+                .filter(product -> product.getSaleMode() == SaleMode.PREORDER && product.getCampaignCanceledAt() == null)
+                .flatMap(product -> campaigns.find(productId));
+        transaction.executeWithoutResult(status -> deleteLocked(productId, window));
     }
 
-    private void deleteLocked(UUID productId) {
+    private void deleteLocked(UUID productId, Optional<CampaignWindow> window) {
         Product product = products.findForUpdate(productId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
-        requireNoPreorderInProgress(product);
+        requireNoPreorderInProgress(product, window);
         images.sync(ImagePurpose.PRODUCT, product.getOptions().imageUrls(), List.of(), url -> "images");
         product.delete(clock.instant());
         products.flush();   // UPDATE 를 먼저 내려 제약(CHECK) 위반이 이벤트를 적기 전에 드러나게 한다
         if (product.getSaleMode() == SaleMode.PREORDER) {
             outbox.append(PreorderProductChanged.of(product));
         }
-        requireNoPreorderInProgress(product);   // 커밋 직전에 다시 — 잠금 대기 중에 오픈 3분 전이 됐거나 preorder 가 회차를 앞당겼을 수 있다
+        requireNoPreorderInProgress(product, window);   // 커밋 직전에 다시 — 잠금 대기 중에 오픈 3분 전이 됐을 수 있다
     }
 
-    private void requireNoPreorderInProgress(Product product) {
+    private void requireNoPreorderInProgress(Product product, Optional<CampaignWindow> window) {
         if (product.getSaleMode() != SaleMode.PREORDER || product.getCampaignCanceledAt() != null) {
             return;
         }
         Instant now = clock.instant();
-        boolean inProgress = campaigns.find(product.getId())
-                .map(window -> !now.isBefore(window.opensAt().minus(ProductEditService.FREEZE_BEFORE_OPEN)) && now.isBefore(window.closesAt()))
+        boolean inProgress = window
+                .map(campaign -> !now.isBefore(campaign.opensAt().minus(ProductEditService.FREEZE_BEFORE_OPEN)) && now.isBefore(campaign.closesAt()))
                 .orElse(false);
         if (inProgress) {
             throw new BusinessException(CatalogErrorCode.STATE_CONFLICT,
