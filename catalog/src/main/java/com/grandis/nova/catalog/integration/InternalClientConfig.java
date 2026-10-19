@@ -1,6 +1,7 @@
 package com.grandis.nova.catalog.integration;
 
 import com.grandis.nova.common.security.BearerTokenRelayInterceptor;
+import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.micrometer.observation.autoconfigure.ObservationProperties;
 import org.springframework.context.annotation.Bean;
