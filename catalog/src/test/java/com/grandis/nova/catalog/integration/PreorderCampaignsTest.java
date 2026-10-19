@@ -18,6 +18,11 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
@@ -105,6 +110,75 @@ class PreorderCampaignsTest {
         client.open = () -> ApiResponse.ok(new PreorderCampaignClient.OpenCampaigns(List.of(), NOW));
         clock.advance(REFRESH);
         assertThat(campaigns.open()).as("대조군 — 빈 목록은 열린 회차 없음").isEmpty();
+    }
+
+    @Test
+    @DisplayName("쓸 값이 없을 때(첫 조회 · 마지막 값이 10분을 넘음) 같이 들어온 요청은 받는 쪽을 기다려 그 값을 쓴다 — 빈 값으로 사전예약을 빼지 않고, preorder 는 한 번만 부른다")
+    void concurrentCallersWaitWhenNothingUsable() throws Exception {
+        UUID product = UUID.randomUUID();
+        for (boolean expired : new boolean[]{false, true}) {
+            if (expired) {
+                client.open = () -> open(product);
+                clock.advance(PreorderCampaigns.MAX_STALE.plusNanos(1));   // 앞 바퀴에 받은 값이 10분을 넘었다
+            }
+            int callsBefore = client.openCalls.get();
+            CountDownLatch entered = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            client.open = () -> {
+                entered.countDown();
+                await(release);
+                return open(product);
+            };
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                Future<Map<UUID, CampaignWindow>> first = pool.submit(campaigns::open);
+                assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+                Future<Map<UUID, CampaignWindow>> second = pool.submit(campaigns::open);
+                Thread.sleep(200);
+                assertThat(second.isDone()).as("%s — 쓸 값이 없으면 기다린다", expired ? "10분 넘음" : "첫 조회").isFalse();
+                release.countDown();
+                assertThat(first.get(5, TimeUnit.SECONDS)).containsOnlyKeys(product);
+                assertThat(second.get(5, TimeUnit.SECONDS)).as("%s — 받는 쪽의 값", expired ? "10분 넘음" : "첫 조회").containsOnlyKeys(product);
+                assertThat(client.openCalls.get() - callsBefore).isEqualTo(1);
+            } finally {
+                pool.shutdownNow();
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("쓸 수 있는 마지막 값이 있으면 같이 들어온 요청은 새로 받는 쪽을 기다리지 않는다")
+    void concurrentCallersUseLastValueWhileRefreshing() throws Exception {
+        UUID product = UUID.randomUUID();
+        client.open = () -> open(product);
+        campaigns.open();
+        clock.advance(REFRESH);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        client.open = () -> {
+            entered.countDown();
+            await(release);
+            return open(product);
+        };
+        ExecutorService pool = Executors.newFixedThreadPool(1);
+        try {
+            Future<Map<UUID, CampaignWindow>> refreshing = pool.submit(campaigns::open);
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(campaigns.open()).as("새로 받는 중 — 마지막 값을 바로 쓴다").containsOnlyKeys(product);
+            release.countDown();
+            refreshing.get(5, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     @Test

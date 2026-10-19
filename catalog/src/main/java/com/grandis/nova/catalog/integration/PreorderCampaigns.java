@@ -46,7 +46,8 @@ public class PreorderCampaigns {
     private final Duration refresh;
     private final ReentrantLock refreshing = new ReentrantLock();
     private volatile Snapshot last;
-    private volatile Instant lastAttempt;
+    /** 마지막으로 묻다가 실패한 시각 — 받는 중에는 적지 않는다(그동안 들어온 요청이 실패로 보고 빈 값을 받지 않게). */
+    private volatile Instant lastFailure;
 
     /** @param cacheEnabled 읽기 캐시를 끄면(시험) /open 을 매번 새로 받는다. 켜면 5초 동안 받은 값을 쓴다 — 목록 읽기 캐시(5초)와 같은 수명 */
     @Autowired
@@ -106,7 +107,6 @@ public class PreorderCampaigns {
             if (current != null && fresh(current.fetchedAt(), now) || recentlyFailed(now)) {
                 return usableOrEmpty(current, now);
             }
-            lastAttempt = now;
             try {
                 PreorderCampaignClient.OpenCampaigns open = InternalCalls.call(Dependencies.PREORDER, client::getOpen);
                 Map<UUID, CampaignWindow> windows = new HashMap<>();
@@ -114,7 +114,9 @@ public class PreorderCampaigns {
                 last = new Snapshot(Map.copyOf(windows), now);
                 return last.windows();
             } catch (BusinessException e) {
-                log.warn("preorder 에 접수 중 회차를 묻지 못했다 — 마지막 값(받은 지 {} 이하)을 쓰고, 없으면 목록에서 사전예약을 뺀다", MAX_STALE, e);
+                lastFailure = now;
+                // 원인 · 스택은 InternalCalls 가 남긴다
+                log.warn("preorder 에 접수 중 회차를 묻지 못했다 — 마지막 값(받은 지 {} 이하)을 쓰고, 없으면 목록에서 사전예약을 뺀다: {}", MAX_STALE, e.toString());
                 return usableOrEmpty(current, now);
             }
         } finally {
@@ -126,12 +128,12 @@ public class PreorderCampaigns {
         return now.isBefore(fetchedAt.plus(refresh));
     }
 
-    /** 마지막 시도가 실패했고 아직 다시 물을 때가 아니다 — 장애 동안 요청마다 타임아웃을 기다리지 않게. */
+    /** 마지막 시도가 실패했고(그 뒤 받은 값이 없다) 아직 다시 물을 때가 아니다 — 장애 동안 요청마다 타임아웃을 기다리지 않게. */
     private boolean recentlyFailed(Instant now) {
-        Instant attempt = lastAttempt;
+        Instant failure = lastFailure;
         Snapshot current = last;
-        boolean failed = attempt != null && (current == null || current.fetchedAt().isBefore(attempt));
-        return failed && fresh(attempt, now);
+        boolean failed = failure != null && (current == null || current.fetchedAt().isBefore(failure));
+        return failed && fresh(failure, now);
     }
 
     private static boolean usable(Snapshot snapshot, Instant now) {
