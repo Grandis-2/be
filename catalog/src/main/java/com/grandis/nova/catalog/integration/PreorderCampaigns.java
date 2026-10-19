@@ -114,8 +114,11 @@ public class PreorderCampaigns {
                 collect(open.items(), null, windows);
                 last = new Snapshot(Map.copyOf(windows), now);
                 return last.windows();
-            } catch (BusinessException e) {
+            } catch (RuntimeException e) {
                 lastFailure = now;
+                if (!(e instanceof BusinessException)) {
+                    throw e;   // 분류되지 않은 실패 — 다시 묻는 것은 미루되(위 실패 시각) 숨기지 않는다
+                }
                 // 원인 · 스택은 InternalCalls 가 남긴다
                 log.warn("preorder 에 접수 중 회차를 묻지 못했다 — 마지막 값(받은 지 {} 이하)을 쓰고, 없으면 목록에서 사전예약을 뺀다: {}", MAX_STALE, e.toString());
                 return usableOrEmpty(current, now);

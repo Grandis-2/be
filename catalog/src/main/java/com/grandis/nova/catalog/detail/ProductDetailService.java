@@ -171,7 +171,8 @@ public class ProductDetailService {
     }
 
     /**
-     * 관리자 쓰기의 응답 — {@link #withLive} 와 같되, 사전예약의 회차를 preorder 에 묻지 못하면 회차 null · 준비 false(DB 부분 그대로)로 낸다. 쓰기는
+     * 관리자 쓰기의 응답 — {@link #withLive} 와 같되, 사전예약의 회차를 preorder 에 묻지 못하면(일시 장애) 회차 null · 준비 false(DB 부분 그대로)로 낸다 —
+     * 이때 준비 false 는 "준비 전" 이 아니라 "모름" 이다. 쓰기는
      * 이미 커밋됐으므로 503 으로 끝내지 않는다 — 일반 상품의 남은 수량을 비우는 것과 같은 방식(2026-10-19 결정). 관리자 상세 조회는 503 이다.
      */
     public AdminProductDetail afterWrite(AdminProductDetail detail) {
@@ -181,6 +182,9 @@ public class ProductDetailService {
         try {
             return withLive(detail);
         } catch (BusinessException e) {
+            if (e.errorCode() != CommonErrorCode.DEPENDENCY_UNAVAILABLE) {
+                throw e;   // 계약 위반 등 연동 오류는 그대로 — "답하지 않을 때" 만 비운다
+            }
             log.warn("수정한 사전예약 상품의 회차를 preorder 에 묻지 못했다 — 회차를 비워 보낸다 productId={}", detail.product().productId(), e);
             return detail;
         }

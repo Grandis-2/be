@@ -67,8 +67,13 @@ public final class InternalCalls {
             log.warn("{} 내부 호출 실패 — 일시 장애로 본다", dependency, e);
             throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
         } catch (IllegalArgumentException e) {
-            // JDK HTTP 구현은 스킴 없는 주소를 이 예외로 거절한다(실측: base-url 이 비면 "URI with undefined scheme") — RestClientException 이 아니다
-            log.error("{} 내부 호출 주소가 비었거나 잘못됐다 — 일시 장애로 본다(spring.http.serviceclient.{}.base-url 확인)", dependency, dependency, e);
+            // JDK HTTP 구현은 스킴 없는 주소를 이 예외로 거절한다(실측: base-url 이 비면 "URI with undefined scheme") — RestClientException 이 아니다.
+            // 그 경우만 일시 장애로 강등하고, 다른 인자 오류(템플릿 확장 · 인자 해석)는 코드 결함이라 연동 오류로 둔다
+            if (e.getMessage() == null || !e.getMessage().contains("undefined scheme")) {
+                throw integrationError(dependency, "요청을 만들지 못했다", e);
+            }
+            // 장애 동안 요청마다 남으므로 스택 없이
+            log.error("{} 내부 호출 주소가 비었다 — 일시 장애로 본다(spring.http.serviceclient.{}.base-url 확인): {}", dependency, dependency, e.toString());
             throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
         }
         if (response == null || response.data() == null) {
