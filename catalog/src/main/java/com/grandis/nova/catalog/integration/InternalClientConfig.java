@@ -1,6 +1,8 @@
 package com.grandis.nova.catalog.integration;
 
 import com.grandis.nova.common.security.BearerTokenRelayInterceptor;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.micrometer.observation.autoconfigure.ObservationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.client.support.RestClientHttpServiceGroupConfigurer;
@@ -25,7 +27,8 @@ class InternalClientConfig {
 
     /** 스프링 부트가 RestClient.Builder · HTTP 서비스 그룹 클라이언트의 관측에 이 규칙을 쓴다(없으면 기본 규칙). 같은 타입 빈이 둘이면 기동이 실패한다. */
     @Bean
-    PathOnlyUriTagConvention pathOnlyUriTagConvention() {
-        return new PathOnlyUriTagConvention();
+    PathOnlyUriTagConvention pathOnlyUriTagConvention(ObjectProvider<ObservationProperties> properties) {
+        return new PathOnlyUriTagConvention(
+                properties.getIfAvailable(ObservationProperties::new).getHttp().getClient().getRequests().getName());
     }
 }
