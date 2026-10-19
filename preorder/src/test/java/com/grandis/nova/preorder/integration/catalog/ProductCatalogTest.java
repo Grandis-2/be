@@ -7,14 +7,14 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** 회차 설정은 사전예약 상품이면 되고, 접수는 판매 중 · 공개 · 등록 완료까지 본다. */
+/** 회차 설정은 사전예약 상품이면 되고, 접수는 판매 중 · 공개까지 본다(등록 완료는 접수가 회차 행으로 본다). */
 class ProductCatalogTest {
 
     @Test
-    void 접수는_판매_중이고_공개됐고_등록이_끝난_사전예약_상품만_받는다() {
+    void 접수는_판매_중이고_공개된_사전예약_상품만_받고_등록_완료_칸은_보지_않는다() {
         assertThat(product("PREORDER", "ACTIVE", true, true).isOnPreorderSale()).isTrue();
         assertThat(product("PREORDER", "ACTIVE", false, true).isOnPreorderSale()).isFalse();
-        assertThat(product("PREORDER", "ACTIVE", true, false).isOnPreorderSale()).isFalse();
+        assertThat(product("PREORDER", "ACTIVE", true, false).isOnPreorderSale()).as("회차 행으로 본다").isTrue();
         assertThat(product("PREORDER", "PAUSED", true, true).isOnPreorderSale()).isFalse();
         assertThat(product("IN_STOCK", "ACTIVE", true, true).isOnPreorderSale()).isFalse();
     }
