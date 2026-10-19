@@ -158,7 +158,7 @@ class HttpClientConfigTest {
     }
 
     // 지표(http.client.requests)의 uri 태그는 경로만 — 목록 파라미터를 원소마다 펼친 템플릿이면 묻는 옵션 수마다 다른 값이 된다.
-    // 쿼리 없는 경로 변수 템플릿은 그대로 남는다
+    // 쿼리 없는 경로 변수 템플릿은 그대로 남고, 지표 이름 설정도 그대로 먹는다
     @Test
     void uriTagIsPathOnly() throws IOException {
         int closedPort;
@@ -174,21 +174,22 @@ class HttpClientConfigTest {
 
             @Override
             public void onStop(ClientRequestObservationContext context) {
-                uriTags.add(context.getLowCardinalityKeyValue("uri").getValue());
+                uriTags.add(context.getName() + " " + context.getLowCardinalityKeyValue("uri").getValue());
             }
         };
         runner("http://127.0.0.1:" + closedPort)
                 .withConfiguration(AutoConfigurations.of(ObservationAutoConfiguration.class,
                         RestClientObservationAutoConfiguration.class))
                 .withBean(ObservationHandler.class, () -> recorder)
+                .withPropertyValues("management.observations.http.client.requests.name=internal.calls")
                 .run(context -> {
                     CatalogClient client = context.getBean(CatalogClient.class);
                     catchThrowable(() -> client.getOptions(List.of(UUID.randomUUID()), null));
                     catchThrowable(() -> client.getOptions(IntStream.range(0, 50).mapToObj(i -> UUID.randomUUID()).toList(), null));
                     catchThrowable(() -> context.getBean(PreorderClient.class).getPayability("9f1c2d3e-0000-4000-8000-000000000001", null));
 
-                    assertThat(uriTags).containsExactly("/internal/options", "/internal/options",
-                            "/internal/preorders/{preorderId}/payability");
+                    assertThat(uriTags).containsExactly("internal.calls /internal/options", "internal.calls /internal/options",
+                            "internal.calls /internal/preorders/{preorderId}/payability");
                 });
     }
 
