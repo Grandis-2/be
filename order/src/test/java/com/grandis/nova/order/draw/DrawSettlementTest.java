@@ -93,12 +93,13 @@ class DrawSettlementTest {
                 .containsEntry("ship_to_name", "당첨자");
         assertThat(((Number) order.get("total_amount")).intValue()).isZero();
         Map<String, Object> item = jdbcTemplate.queryForMap("""
-                SELECT option_id, quantity, unit_price_snapshot, product_title_snapshot, model_name_snapshot FROM order_items WHERE order_id = ?""",
+                SELECT option_id, quantity, unit_price_snapshot, product_title_snapshot, model_name_snapshot, image_url_snapshot FROM order_items WHERE order_id = ?""",
                 (Object) wonOrder(first));
         assertThat(item.get("option_id")).isEqualTo(bytes(option));
         assertThat(((Number) item.get("quantity")).intValue()).isEqualTo(1);
         assertThat(((Number) item.get("unit_price_snapshot")).intValue()).isZero();
-        assertThat(item).containsEntry("product_title_snapshot", "증정품").containsEntry("model_name_snapshot", "A3104");
+        assertThat(item).containsEntry("product_title_snapshot", "증정품").containsEntry("model_name_snapshot", "A3104")
+                .as("당첨 주문은 회차의 사진 스냅샷을 옮긴다").containsEntry("image_url_snapshot", "https://img/gift-0.jpg");
         assertThat(stock()).containsEntry("stock_reserved", 0).containsEntry("stock_sold", 2);
         assertThat(campaign(draw).get("settled_at")).isNotNull();
         assertThat(campaign(draw).get("draw_requested_at")).isNull();
@@ -534,8 +535,8 @@ class DrawSettlementTest {
         UUID id = UUID.randomUUID();
         jdbcTemplate.update("""
                 INSERT INTO draw_campaigns (id, idempotency_key, product_id, option_id, title, product_title_snapshot, model_name_snapshot,
-                                            option_title_snapshot, entry_fee, winner_count, opens_at, closes_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, '드로우', '증정품', 'A3104', '블랙', 100, ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""",
+                                            option_title_snapshot, image_url_snapshot, entry_fee, winner_count, opens_at, closes_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, '드로우', '증정품', 'A3104', '블랙', 'https://img/gift-0.jpg', 100, ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""",
                 bytes(id), id.toString(), bytes(product), bytes(option), winners, utc(opens), utc(closes));
         jdbcTemplate.update("""
                 INSERT INTO option_inventories (option_id, stock_total, stock_reserved, stock_sold, updated_at)

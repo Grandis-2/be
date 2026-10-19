@@ -411,7 +411,7 @@ class StockReconcilerTest {
         UUID productId = jdbcTemplate.queryForObject("SELECT BIN_TO_UUID(product_id) FROM product_options WHERE id = ?",
                 (rs, n) -> UUID.fromString(rs.getString(1)), (Object) bytes(option));
         PlaceOrderCommand command = new PlaceOrderCommand(fixtures.customer(), OrderSource.CART, null, null, null, OrderFixtures.ADDRESS,
-                List.of(new PlaceOrderCommand.Line(productId, option, quantity, PRICE, 0, BigDecimal.ZERO, "아이폰 17", null, "블랙")));
+                List.of(new PlaceOrderCommand.Line(productId, option, quantity, PRICE, 0, BigDecimal.ZERO, "아이폰 17", null, "블랙", null)));
         tx.executeWithoutResult(status -> {
             if (reserve) {
                 stockLedger.reserve(Map.of(option, quantity));

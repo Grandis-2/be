@@ -122,6 +122,7 @@ class CartOrderApiTest {
         assertThat(merged.get("warrantyUnitPrice").decimalValue()).isEqualByComparingTo(WARRANTY);
         assertThat(merged.get("lineAmount").decimalValue()).isEqualByComparingTo(PRICE.multiply(BigDecimal.valueOf(3)).add(WARRANTY));
         assertThat(merged.get("modelName").asString()).as("모델명은 주문 때 catalog 값").isEqualTo("A3104");
+        assertThat(merged.get("imageUrl").asString()).as("사진은 주문 때 catalog 값").isEqualTo("https://img/black-0.jpg");
         assertThat(items.get(watch.toString()).get("warrantyQuantity").asInt()).isZero();
         assertThat(items.get(watch.toString()).get("warrantyUnitPrice").decimalValue()).isEqualByComparingTo("0");
 
@@ -134,6 +135,7 @@ class CartOrderApiTest {
                 .with(TestAuth.customer(customerId))).andExpect(status().isOk()));
         assertThat(byVariant(detail.get("items")).get(phone.toString()).get("warrantyQuantity").asInt()).isEqualTo(1);
         assertThat(byVariant(detail.get("items")).get(phone.toString()).get("modelName").asString()).as("저장한 모델명을 다시 읽는다").isEqualTo("A3104");
+        assertThat(byVariant(detail.get("items")).get(phone.toString()).get("imageUrl").asString()).as("저장한 사진을 다시 읽는다").isEqualTo("https://img/black-0.jpg");
         assertThat(detail.get("paymentDueAt").asString()).isEqualTo(order.get("paymentDueAt").asString());
     }
 
@@ -207,7 +209,7 @@ class CartOrderApiTest {
     }
 
     @Test
-    @DisplayName("주문 줄의 모델명은 주문 때 값 — catalog 모델명이 바뀌면 장바구니는 새 값, 이미 만든 주문 상세는 옛 값")
+    @DisplayName("주문 줄의 모델명 · 사진은 주문 때 값 — catalog 값이 바뀌면 장바구니는 새 값, 이미 만든 주문 상세는 옛 값")
     void orderKeepsModelNameOfOrderTime() throws Exception {
         UUID phone = sellable(10);
         cartLine(phone, false, 1);
@@ -216,12 +218,14 @@ class CartOrderApiTest {
         CatalogOption current = catalog.get(phone);
         catalog.put(phone, new CatalogOption(current.optionId(), current.productId(), current.productTitle(), "A3105", current.optionTitle(),
                 current.sku(), current.price(), current.optionStatus(), current.saleMode(), current.productStatus(), current.visible(),
-                current.registrationCompleted(), current.warranty(), current.imageUrl(), current.listPrice()));
+                current.registrationCompleted(), current.warranty(), "https://img/white-0.jpg", current.listPrice()));
 
         JsonNode cart = data(mockMvc.perform(get("/api/v1/cart").with(TestAuth.customer(customerId))).andExpect(status().isOk()));
         assertThat(cart.get("items").get(0).get("modelName").asString()).as("장바구니는 지금 값").isEqualTo("A3105");
+        assertThat(cart.get("items").get(0).get("imageUrl").asString()).as("장바구니는 지금 사진").isEqualTo("https://img/white-0.jpg");
         JsonNode detail = data(mockMvc.perform(get("/api/v1/orders/{id}", orderId).with(TestAuth.customer(customerId))).andExpect(status().isOk()));
         assertThat(detail.get("items").get(0).get("modelName").asString()).as("주문은 주문 때 값").isEqualTo("A3104");
+        assertThat(detail.get("items").get(0).get("imageUrl").asString()).as("주문은 주문 때 사진").isEqualTo("https://img/black-0.jpg");
     }
 
     /**
@@ -623,7 +627,7 @@ class CartOrderApiTest {
             fixtures.stock(option, stock, 0, 0);
         }
         catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "A3104", "블랙 / 256GB", "SKU-" + option, PRICE,
-                "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(true, WARRANTY), null, null));
+                "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(true, WARRANTY), "https://img/black-0.jpg", null));
         return option;
     }
 

@@ -66,7 +66,7 @@ public class OrderFixtures {
                                                     UUID optionId, int quantity) {
         return new PlaceOrderCommand(customerId, OrderSource.PREORDER, preorderId, preorderToken(preorderId), null, ADDRESS,
                 List.of(new PlaceOrderCommand.Line(product.productId(), optionId, quantity, UNIT_PRICE, 0, BigDecimal.ZERO,
-                        PRODUCT_TITLE, null, OPTION_TITLE)));
+                        PRODUCT_TITLE, null, OPTION_TITLE, null)));
     }
 
     /** 일반 판매 상품 하나와 옵션 optionCount 개. 재고 행은 만들지 않는다. 만든 순서 = option_id 오름차순. */

@@ -233,7 +233,7 @@ class StockCorrectionTest {
     /** 장바구니 주문 하나를 원장으로 만든다. reserve=false 면 확보 없이 — 장부 밖에서 생긴 주문(수동 SQL 등)을 흉내 낸다. */
     private Order place(UUID optionId, int quantity, boolean reserve) {
         PlaceOrderCommand command = new PlaceOrderCommand(fixtures.customer(), OrderSource.CART, null, null, null, OrderFixtures.ADDRESS,
-                List.of(new PlaceOrderCommand.Line(product.productId(), optionId, quantity, PRICE, 0, BigDecimal.ZERO, "아이폰 17", null, "블랙")));
+                List.of(new PlaceOrderCommand.Line(product.productId(), optionId, quantity, PRICE, 0, BigDecimal.ZERO, "아이폰 17", null, "블랙", null)));
         return tx.execute(status -> {
             if (reserve) {
                 stockLedger.reserve(Map.of(optionId, quantity));

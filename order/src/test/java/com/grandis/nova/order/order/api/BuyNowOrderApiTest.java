@@ -118,6 +118,9 @@ class BuyNowOrderApiTest {
         assertThat(items.get(0).get("modelName").asString()).isEqualTo("A3104");
         assertThat(jdbcTemplate.queryForObject("SELECT model_name_snapshot FROM order_items WHERE order_id = ?", String.class,
                 (Object) bytes(UUID.fromString(order.get("orderId").asString())))).as("주문 줄에 모델명을 남긴다").isEqualTo("A3104");
+        assertThat(items.get(0).get("imageUrl").asString()).isEqualTo("https://img/black-0.jpg");
+        assertThat(jdbcTemplate.queryForObject("SELECT image_url_snapshot FROM order_items WHERE order_id = ?", String.class,
+                (Object) bytes(UUID.fromString(order.get("orderId").asString())))).as("주문 줄에 사진을 남긴다").isEqualTo("https://img/black-0.jpg");
         assertThat(reserved(phone)).isEqualTo(3);
         assertThat(cart(customerId)).as("장바구니는 그대로").containsExactlyEntriesOf(Map.of(phone + "/false", 1));
     }
@@ -461,7 +464,7 @@ class BuyNowOrderApiTest {
         UUID option = product.optionIds().getFirst();
         fixtures.stock(option, stock, 0, 0);
         catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "A3104", "블랙 / 256GB", "SKU-" + option, PRICE,
-                "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(true, WARRANTY), null, null));
+                "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(true, WARRANTY), "https://img/black-0.jpg", null));
         return option;
     }
 
