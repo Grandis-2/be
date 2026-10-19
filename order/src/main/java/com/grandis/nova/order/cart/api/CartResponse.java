@@ -19,7 +19,7 @@ public record CartResponse(List<Item> items) {
      * @param modelName         상품 모델명(지금 값). 옵션이 없어졌으면 null
      * @param unitPrice         옵션 1개의 지금 가격 — 할인가(정수 원)
      * @param listPrice         옵션 1개의 지금 정가(정수 원) — 보증 제외, 할인율 0 이면 unitPrice 와 같다. unitPrice 와 같은 시점의 값이다(catalog 한 번의 응답).
-     *                          옵션이 없어졌으면(DISCONTINUED) null
+     *                          옵션이 없어졌으면(DISCONTINUED) null. catalog 가 이 칸을 싣지 않으면(배포 중) 살 수 있는 줄도 null 이다
      * @param warrantyPrice     보증을 골랐고 지금도 제공하면 그 추가금, 아니면 0
      * @param lineAmount        (unitPrice + warrantyPrice) × quantity
      * @param unavailableReason 살 수 있으면 null. DISCONTINUED · HIDDEN · PAUSED · WARRANTY_UNAVAILABLE · OUT_OF_STOCK · INSUFFICIENT_STOCK 중 하나
