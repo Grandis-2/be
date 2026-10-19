@@ -62,7 +62,7 @@ class CatalogClientTest {
     }
 
     @Test
-    @DisplayName("옵션 id 를 ids 로 보내고 사용자 토큰을 Authorization: Bearer 로 싣는다 — 응답 items 를 옵션 id 로 읽는다")
+    @DisplayName("옵션 id 를 ids 로 보내고 사용자 토큰을 Authorization: Bearer 로 싣는다 — 응답 items 를 옵션 id 로 읽고, 모르는 칸은 무시한다")
     void sendsIdsAndTokenAndReadsItems() {
         server.expect(requestTo(org.hamcrest.Matchers.startsWith("http://catalog/internal/options?")))
                 .andExpect(method(HttpMethod.GET))
@@ -74,7 +74,8 @@ class CatalogClientTest {
                            {"optionId":"%s","productId":"0199a3f2-8a10-7b21-9c32-4d5e6f708192","productTitle":"아이폰 17",
                             "modelName":"A3104","optionTitle":"블랙 / 256GB","sku":"BLK-256","price":1250000,"listPrice":1390000,"optionStatus":"ACTIVE","saleMode":"IN_STOCK",
                             "productStatus":"ACTIVE","visible":true,"registrationCompleted":true,
-                            "warranty":{"offered":true,"surcharge":199000},"imageUrl":"https://img.example/black-0.jpg"}
+                            "warranty":{"offered":true,"surcharge":199000},"imageUrl":"https://img.example/black-0.jpg",
+                            "fieldAddedLater":"catalog 가 나중에 더한 칸 — 옛 order 처럼 모르는 칸은 무시한다"}
                          ]},
                          "error":null,"timestamp":"2026-10-09T06:00:00Z","traceId":"t-1"}
                         """.formatted(FIRST), MediaType.APPLICATION_JSON));

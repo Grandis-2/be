@@ -133,6 +133,21 @@ class CartApiTest {
     }
 
     @Test
+    @DisplayName("catalog 가 정가를 싣지 않으면(배포 중) 그 줄의 listPrice 만 null 이고 살 수 있다 — 단가 · 금액은 그대로")
+    void missingListPriceLeavesLineSellable() throws Exception {
+        UUID option = sellable(false, 10);
+        CatalogOption o = catalog.get(option);
+        catalog.put(option, new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.modelName(), o.optionTitle(), o.sku(), o.price(), o.optionStatus(),
+                o.saleMode(), o.productStatus(), o.visible(), o.registrationCompleted(), o.warranty(), o.imageUrl(), null));
+        add(option, 2, false).andExpect(status().isOk());
+
+        JsonNode line = data(asCustomer(get("/api/v1/cart")).andExpect(status().isOk())).get("items").get(0);
+        assertThat(line.get("listPrice").isNull()).isTrue();
+        assertThat(line.get("unitPrice").decimalValue()).isEqualByComparingTo(PRICE);
+        assertThat(line.get("purchasable").asBoolean()).isTrue();
+    }
+
+    @Test
     @DisplayName("담기 거절 — 없는 · 비공개 · 준비 전 404, 사전예약 409 PREORDER_NOT_CARTABLE, 판매 중지 409 STATE_CONFLICT, 보증 미제공에 보증 400, 재고 초과 409 INSUFFICIENT_STOCK")
     void addRejections() throws Exception {
         expectError(add(UUID.randomUUID(), 1, false), HttpStatus.NOT_FOUND, "NOT_FOUND");
