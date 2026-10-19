@@ -11,7 +11,12 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationHandler;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.http.client.observation.ClientRequestObservationContext;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -57,6 +62,8 @@ class StockReaderHttpTest {
     private static final Map<String, Integer> STOCK = new ConcurrentHashMap<>();
     private static volatile int failStatus;
     private static volatile Function<List<String>, String> override;
+    /** 끝난 클라이언트 요청 관측의 uri 태그 값 — 지표(http.client.requests)가 그대로 쓴다. */
+    private static final List<String> SEEN_URI_TAGS = new CopyOnWriteArrayList<>();
     private static final HttpServer SERVER = start();
 
     @Autowired MockMvc mockMvc;
@@ -80,6 +87,7 @@ class StockReaderHttpTest {
         fixtures = new ShopFixtures(jdbcTemplate);
         SEEN_AUTHORIZATION.clear();
         SEEN_IDS.clear();
+        SEEN_URI_TAGS.clear();
         STOCK.clear();
         failStatus = 0;
         override = null;
@@ -129,6 +137,20 @@ class StockReaderHttpTest {
 
         assertThat(reader.available(ids)).isEmpty();
         assertThat(SEEN_IDS).extracting(List::size).containsExactly(100, 100, 50);
+    }
+
+    @Test
+    @DisplayName("지표의 uri 태그는 경로만 — 묻는 옵션 수가 달라도 같은 값이고, 100개여도 2048자 한도를 넘지 않는다")
+    void uriTagIsPathOnly() {
+        List<UUID> hundred = new ArrayList<>();
+        for (int i = 0; i < 100; i++) {
+            hundred.add(UUID.randomUUID());
+        }
+
+        reader.available(List.of(UUID.randomUUID()));
+        reader.available(hundred);
+
+        assertThat(SEEN_URI_TAGS).containsExactly("/internal/stocks", "/internal/stocks");
     }
 
     @Test
@@ -200,6 +222,25 @@ class StockReaderHttpTest {
             }
         }
         throw new AssertionError("옵션이 없다: " + option);
+    }
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class UriTags {
+
+        @Bean
+        ObservationHandler<ClientRequestObservationContext> uriTagRecorder() {
+            return new ObservationHandler<>() {
+                @Override
+                public boolean supportsContext(Observation.Context context) {
+                    return context instanceof ClientRequestObservationContext;
+                }
+
+                @Override
+                public void onStop(ClientRequestObservationContext context) {
+                    SEEN_URI_TAGS.add(context.getLowCardinalityKeyValue("uri").getValue());
+                }
+            };
+        }
     }
 
     private static HttpServer start() {
