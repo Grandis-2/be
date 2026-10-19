@@ -203,13 +203,16 @@ class PreorderCampaignsHttpTest {
     }
 
     @Test
-    @DisplayName("오픈 판정이 필요한 수정 · 삭제는 preorder 가 답하지 않으면 503 으로 거절하고 아무것도 바꾸지 않는다")
+    @DisplayName("오픈 판정이 필요한 수정 · 삭제는 preorder 가 답하지 않으면 503 으로 거절하고 아무것도 바꾸지 않는다 — 잘못된 본문은 그 전에 400")
     void editAndDeleteRejectWhenPreorderDown() throws Exception {
         Instant now = Instant.now();
         UUID product = preorder("수정");
         campaign(product, now.plus(Duration.ofDays(1)), now.plus(Duration.ofDays(2)));
         failStatus = 503;
 
+        // 본문 검증은 회차를 묻기 전 — 잘못된 요청은 preorder 장애와 상관없이 400 이고 preorder 를 부르지 않는다
+        mockMvc.perform(patch("/api/v1/admin/products/{id}", product).with(AccessTokens.admin())
+                .contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isBadRequest());
         mockMvc.perform(patch("/api/v1/admin/products/{id}/sale-status", product).with(AccessTokens.admin())
                 .contentType(MediaType.APPLICATION_JSON).content("{ \"status\": \"PAUSED\" }")).andExpect(status().isServiceUnavailable());
         mockMvc.perform(delete("/api/v1/admin/products/{id}", product).with(AccessTokens.admin())).andExpect(status().isServiceUnavailable());
