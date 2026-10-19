@@ -12,6 +12,8 @@ public final class Dependencies {
      * ({@link #ALL})에 넣지 않는다.
      */
     public static final String ORDER_STOCKS = "order-stocks";
+    /** preorder 의 회차 일정 조회(GET /internal/preorders/campaigns/**) — 토큰을 싣지 않는 그룹. 토큰 릴레이 대상({@link #ALL})에 넣지 않는다. */
+    public static final String PREORDER = "preorder";
     /** 토큰 릴레이 그룹 — 받는 쪽의 401 을 사용자 토큰 문제로 보는 것도 이 그룹뿐이다(InternalCalls). */
     public static final List<String> ALL = List.of(ORDER, MEMBER);
 

@@ -31,6 +31,9 @@ spring:
         base-url: http://localhost:8084
       member:     # 작성자 표시명(GET /internal/customers/me) — contracts/member-internal.md
         base-url: http://localhost:8080
+      # preorder: 회차 일정(토큰 없음). 주소가 없으면 preorder 장애와 같다 — 목록은 사전예약 상품을 빼고, 사전예약 상세 · 관리자 화면 · 수정은 503 이다.
+      preorder:   # 회차 일정(GET /internal/preorders/campaigns/open · ?productIds=) — contracts/preorder-internal.md 2절
+        base-url: http://localhost:8083
   data:
     redis:
       host: localhost
