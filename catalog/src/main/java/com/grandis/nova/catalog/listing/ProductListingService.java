@@ -53,7 +53,8 @@ public class ProductListingService {
      */
     public OffsetPage<ProductListItem> list(ProductListFilter filter, ProductSort sort, int page, int size) {
         Instant now = clock.instant();
-        Map<UUID, CampaignWindow> open = campaigns.open();
+        // 일반 상품만 거르면 회차가 쓰이지 않는다 — preorder 를 부르지 않아 그 장애에 늦어지지 않는다
+        Map<UUID, CampaignWindow> open = filter.saleMode() == SaleMode.IN_STOCK ? Map.of() : campaigns.open();
         Set<UUID> accepting = CampaignWindow.acceptingAt(open, now);
         OffsetPage<ProductListItem> found = snapshot.execute(status -> {
             long total = repository.count(filter, accepting);
