@@ -36,6 +36,7 @@ public class PreorderCampaigns {
     /**
      * /open 응답을 쓸 수 있는 최대 나이. preorder 는 지금부터 10분 안에 열릴 회차까지 주고, 접수 중인지는 받는 쪽이 자기 시각으로 판정하므로 받은 뒤
      * 10분 동안은 오픈 · 마감 경계가 맞다(놓치는 것은 그사이의 조기 마감 · 다시 열기뿐). 그보다 오래되면 새로 열린 회차가 빠진다.
+     * preorder 설정 nova.campaign.internal-lookahead(기본 10분)와 같아야 한다 — 응답에 실려 오지 않으므로 그 값을 줄이면 여기도 같이 줄인다.
      */
     static final Duration MAX_STALE = Duration.ofMinutes(10);
 

@@ -132,7 +132,7 @@ BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, �
 | `saleMode` | string | 상품 판매 방식(IN_STOCK · PREORDER) |
 | `productStatus` | string | 상품 판매 상태(ACTIVE · PAUSED) |
 | `visible` | boolean | 상품 공개 여부. 늘 실린다 |
-| `registrationCompleted` | boolean | 판매 방식별 준비 — 일반은 order 의 판매 준비 이벤트를 catalog 가 받았다(`products.stock_ready_at`). 사전예약은 늘 `true` 다 — catalog 는 이 응답을 만들며 preorder 를 부르지 않는다(preorder 접수가 같은 칸을 담은 1.3 을 동기로 부르므로 순환 호출이 된다). order 는 장바구니 · 드로우 증정품에서 사전예약을 판매 방식으로 따로 거절하므로 담기 · 증정은 그대로 막힌다 — 다만 준비 전 사전예약 옵션의 장바구니 담기는 404 대신 `PREORDER_NOT_CARTABLE` 이 된다(노출을 먼저 본다). 늘 실린다 |
+| `registrationCompleted` | boolean | 판매 방식별 준비 — 일반은 order 의 판매 준비 이벤트를 catalog 가 받았다(`products.stock_ready_at`). 사전예약은 늘 `true` 다 — catalog 는 이 응답을 만들며 preorder 를 부르지 않는다(preorder 접수가 같은 칸을 담은 1.3 을 동기로 부르므로 순환 호출이 된다). order 는 장바구니 · 드로우 증정품에서 사전예약을 판매 방식으로 따로 거절하므로 담기 · 증정은 그대로 막힌다 — 다만 준비 전 사전예약 옵션의 장바구니 담기는 404 대신 `PREORDER_NOT_CARTABLE` 이 된다(노출을 먼저 본다) — 공개됐지만 준비 전인 사전예약 상품이 옵션 id 로 있다는 것이 드러난다(둘 다 거절이라 받아들였다). 늘 실린다 |
 | `warranty.offered` · `warranty.surcharge` | boolean · number | 상품의 보증 설정(옵션 문서의 `warranty`). 제공하지 않으면 `false` · `0` |
 | `imageUrl` | string \| null | 그 옵션의 사진 — 옵션이 고른 색상의 첫 장. 색상 축이 없거나 그 색상에 사진이 없으면 상품 썸네일(첫 색상의 첫 장, 색상이 없으면 기본 사진의 첫 장). 없으면 null |
 
