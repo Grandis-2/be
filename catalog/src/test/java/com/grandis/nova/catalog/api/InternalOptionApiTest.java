@@ -52,7 +52,7 @@ class InternalOptionApiTest {
     }
 
     @Test
-    @DisplayName("옵션마다 상품의 사실을 계약의 칸 이름으로 — 요청 순서, 없는 id 는 빠지고 같은 id 는 한 번. 보증 · 썸네일은 옵션 문서 · 상품 칸에서")
+    @DisplayName("옵션마다 상품의 사실을 계약의 칸 이름으로 — 요청 순서, 없는 id 는 빠지고 같은 id 는 한 번. 보증 · 썸네일은 옵션 문서 · 상품 칸에서. price 는 할인가, listPrice 는 정가")
     void returnsFactsInRequestOrder() throws Exception {
         UUID phone = fixtures.product("IN_STOCK", "ACTIVE");
         fixtures.image(phone, "GALLERY", "블랙", 0, false, "https://img/black-0.jpg");
@@ -60,6 +60,8 @@ class InternalOptionApiTest {
         transaction.executeWithoutResult(status -> products.findForUpdate(phone).orElseThrow()
                 .setWarranty(true, new BigDecimal("199000")));
         UUID black = fixtures.option(phone, "ACTIVE", new BigDecimal("1250000"));
+        // 할인율이 있어야 정가와 할인가가 갈린다 — 같으면 정가 칸에 할인가를 실어도 통과한다
+        jdbcTemplate.update("UPDATE products SET discount_rate = 10 WHERE id = ?", (Object) UuidBinary.toBytes(phone));
         fixtures.inventory(black, 5, 0, 0);
         UUID cable = fixtures.product("IN_STOCK", "ACTIVE");
         UUID cableOption = fixtures.option(cable, "ACTIVE", new BigDecimal("9000"));
@@ -70,6 +72,8 @@ class InternalOptionApiTest {
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.items", hasSize(2)))
                 .andExpect(jsonPath("$.data.items[0].optionId").value(cableOption.toString()))
+                .andExpect(jsonPath("$.data.items[0].price").value(9000))
+                .andExpect(jsonPath("$.data.items[0].listPrice").value(9000))   // 할인율 0 이면 같다
                 .andExpect(jsonPath("$.data.items[0].warranty.offered").value(false))
                 .andExpect(jsonPath("$.data.items[0].warranty.surcharge").value(0))
                 .andExpect(jsonPath("$.data.items[0].imageUrl").doesNotExist())
@@ -80,7 +84,8 @@ class InternalOptionApiTest {
                 .andExpect(jsonPath("$.data.items[1].modelName").value("A0001"))
                 .andExpect(jsonPath("$.data.items[1].optionTitle").value("옵션"))
                 .andExpect(jsonPath("$.data.items[1].sku").isString())
-                .andExpect(jsonPath("$.data.items[1].price").value(1250000))
+                .andExpect(jsonPath("$.data.items[1].price").value(1125000))
+                .andExpect(jsonPath("$.data.items[1].listPrice").value(1250000))
                 .andExpect(jsonPath("$.data.items[1].optionStatus").value("ACTIVE"))
                 .andExpect(jsonPath("$.data.items[1].saleMode").value("IN_STOCK"))
                 .andExpect(jsonPath("$.data.items[1].productStatus").value("ACTIVE"))
