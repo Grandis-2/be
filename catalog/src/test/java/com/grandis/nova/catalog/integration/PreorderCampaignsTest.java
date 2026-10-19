@@ -113,36 +113,55 @@ class PreorderCampaignsTest {
     }
 
     @Test
-    @DisplayName("쓸 값이 없을 때(첫 조회 · 마지막 값이 10분을 넘음) 같이 들어온 요청은 받는 쪽을 기다려 그 값을 쓴다 — 빈 값으로 사전예약을 빼지 않고, preorder 는 한 번만 부른다")
-    void concurrentCallersWaitWhenNothingUsable() throws Exception {
+    @DisplayName("기동 직후 첫 조회 동안 같이 들어온 요청은 받는 쪽을 기다려 그 값을 쓴다 — 빈 값으로 사전예약을 빼지 않고, preorder 는 한 번만 부른다")
+    void concurrentCallersWaitForFirstFetch() throws Exception {
         UUID product = UUID.randomUUID();
-        for (boolean expired : new boolean[]{false, true}) {
-            if (expired) {
-                client.open = () -> open(product);
-                clock.advance(PreorderCampaigns.MAX_STALE.plusNanos(1));   // 앞 바퀴에 받은 값이 10분을 넘었다
-            }
-            int callsBefore = client.openCalls.get();
-            CountDownLatch entered = new CountDownLatch(1);
-            CountDownLatch release = new CountDownLatch(1);
-            client.open = () -> {
-                entered.countDown();
-                await(release);
-                return open(product);
-            };
-            ExecutorService pool = Executors.newFixedThreadPool(2);
-            try {
-                Future<Map<UUID, CampaignWindow>> first = pool.submit(campaigns::open);
-                assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
-                Future<Map<UUID, CampaignWindow>> second = pool.submit(campaigns::open);
-                Thread.sleep(200);
-                assertThat(second.isDone()).as("%s — 쓸 값이 없으면 기다린다", expired ? "10분 넘음" : "첫 조회").isFalse();
-                release.countDown();
-                assertThat(first.get(5, TimeUnit.SECONDS)).containsOnlyKeys(product);
-                assertThat(second.get(5, TimeUnit.SECONDS)).as("%s — 받는 쪽의 값", expired ? "10분 넘음" : "첫 조회").containsOnlyKeys(product);
-                assertThat(client.openCalls.get() - callsBefore).isEqualTo(1);
-            } finally {
-                pool.shutdownNow();
-            }
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        client.open = () -> {
+            entered.countDown();
+            await(release);
+            return open(product);
+        };
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Map<UUID, CampaignWindow>> first = pool.submit(campaigns::open);
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+            Future<Map<UUID, CampaignWindow>> second = pool.submit(campaigns::open);
+            Thread.sleep(200);
+            assertThat(second.isDone()).as("쓸 값이 없는 첫 조회 — 기다린다").isFalse();
+            release.countDown();
+            assertThat(first.get(5, TimeUnit.SECONDS)).containsOnlyKeys(product);
+            assertThat(second.get(5, TimeUnit.SECONDS)).as("받는 쪽의 값").containsOnlyKeys(product);
+            assertThat(client.openCalls).hasValue(1);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("마지막 값이 10분을 넘은 뒤 다시 받는 동안 같이 들어온 요청은 기다리지 않고 빈 값을 받는다 — 장애 중 요청을 줄 세우지 않는다")
+    void concurrentCallersDoNotWaitAfterStale() throws Exception {
+        UUID product = UUID.randomUUID();
+        client.open = () -> open(product);
+        campaigns.open();
+        clock.advance(PreorderCampaigns.MAX_STALE.plusNanos(1));
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        client.open = () -> {
+            entered.countDown();
+            await(release);
+            return open(product);
+        };
+        ExecutorService pool = Executors.newFixedThreadPool(1);
+        try {
+            Future<Map<UUID, CampaignWindow>> refreshing = pool.submit(campaigns::open);
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(campaigns.open()).as("새로 받는 중 · 마지막 값은 10분을 넘음 — 바로 빈 값").isEmpty();
+            release.countDown();
+            assertThat(refreshing.get(5, TimeUnit.SECONDS)).containsOnlyKeys(product);
+        } finally {
+            pool.shutdownNow();
         }
     }
 

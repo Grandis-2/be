@@ -89,7 +89,7 @@ public class PreorderCampaigns {
      * 마감 전이고 이미 열렸거나 곧 열릴 회차(2.1) — 회원 목록 · 검색 · 랭킹의 "접수 중" 조건과 카드의 시각. 접수 중인지는 호출자가 자기 시각으로 가른다.
      * 받은 값을 잠깐(읽기 캐시를 켜면 5초) 쓴다. preorder 가 답하지 않으면 다시 묻는 것도 그만큼 미루고, 그동안 마지막으로 받은 값을
      * {@link #MAX_STALE} 까지 쓴다. 그보다 오래됐거나 받은 적이 없으면 빈 값이다 — 목록은 사전예약 상품을 빼고 나간다(2026-10-19 결정).
-     * 이미 누가 새로 받는 중이면 기다리지 않고 쓸 수 있는 마지막 값을 쓴다.
+     * 이미 누가 새로 받는 중이면 기다리지 않고 쓸 수 있는 마지막 값(없으면 빈 값)을 쓴다. 기다리는 것은 받은 적도 실패한 적도 없는 기동 직후뿐이다.
      */
     public Map<UUID, CampaignWindow> open() {
         Instant now = clock.instant();
@@ -98,10 +98,10 @@ public class PreorderCampaigns {
             return usableOrEmpty(current, now);
         }
         if (!refreshing.tryLock()) {
-            if (current != null && usable(current, now)) {
-                return current.windows();   // 누가 새로 받는 중 — 기다리지 않는다
+            if (current != null || lastFailure != null) {
+                return usableOrEmpty(current, now);   // 누가 새로 받는 중 — 기다리지 않는다(오래된 값이면 빈 값 — 장애 중 요청을 줄 세우지 않게)
             }
-            refreshing.lock();   // 쓸 값이 없다 — 받는 쪽을 기다린다
+            refreshing.lock();   // 기동 직후 첫 조회 — 받는 쪽을 기다린다(빈 값으로 사전예약을 빼지 않게)
         }
         try {
             current = last;
