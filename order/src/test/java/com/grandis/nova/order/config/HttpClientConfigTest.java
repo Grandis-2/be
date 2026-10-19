@@ -157,7 +157,8 @@ class HttpClientConfigTest {
                         .isInstanceOf(PaymentConfirmation.Unanswered.class));
     }
 
-    // 지표(http.client.requests)의 uri 태그는 경로만 — 목록 파라미터를 원소마다 펼친 템플릿이면 묻는 옵션 수마다 다른 값이 된다
+    // 지표(http.client.requests)의 uri 태그는 경로만 — 목록 파라미터를 원소마다 펼친 템플릿이면 묻는 옵션 수마다 다른 값이 된다.
+    // 쿼리 없는 경로 변수 템플릿은 그대로 남는다
     @Test
     void uriTagIsPathOnly() throws IOException {
         int closedPort;
@@ -184,8 +185,10 @@ class HttpClientConfigTest {
                     CatalogClient client = context.getBean(CatalogClient.class);
                     catchThrowable(() -> client.getOptions(List.of(UUID.randomUUID()), null));
                     catchThrowable(() -> client.getOptions(IntStream.range(0, 50).mapToObj(i -> UUID.randomUUID()).toList(), null));
+                    catchThrowable(() -> context.getBean(PreorderClient.class).getPayability("9f1c2d3e-0000-4000-8000-000000000001", null));
 
-                    assertThat(uriTags).containsExactly("/internal/options", "/internal/options");
+                    assertThat(uriTags).containsExactly("/internal/options", "/internal/options",
+                            "/internal/preorders/{preorderId}/payability");
                 });
     }
 
