@@ -209,6 +209,21 @@ class CartOrderApiTest {
     }
 
     @Test
+    @DisplayName("사진이 없는 옵션도 주문된다 — 주문 줄의 사진은 null")
+    void optionWithoutImageOrdersWithNullImage() throws Exception {
+        UUID phone = sellable(10);
+        CatalogOption current = catalog.get(phone);
+        catalog.put(phone, new CatalogOption(current.optionId(), current.productId(), current.productTitle(), current.modelName(), current.optionTitle(),
+                current.sku(), current.price(), current.optionStatus(), current.saleMode(), current.productStatus(), current.visible(),
+                current.registrationCompleted(), current.warranty(), null, current.listPrice()));
+        cartLine(phone, false, 1);
+
+        JsonNode order = data(place(item(phone, 1, false)).andExpect(status().isCreated()));
+
+        assertThat(order.get("items").get(0).get("imageUrl").isNull()).isTrue();
+    }
+
+    @Test
     @DisplayName("주문 줄의 모델명 · 사진은 주문 때 값 — catalog 값이 바뀌면 장바구니는 새 값, 이미 만든 주문 상세는 옛 값")
     void orderKeepsModelNameOfOrderTime() throws Exception {
         UUID phone = sellable(10);

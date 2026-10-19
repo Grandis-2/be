@@ -30,8 +30,8 @@ class OrderLineTest {
     @Test
     void imageUrlIsOptionalAndFitsDatabaseColumn() {
         assertThat(lineWithImage(null).imageUrl()).isNull();
-        assertThat(lineWithImage("a".repeat(1000)).imageUrl()).hasSize(1000);
-        assertThatThrownBy(() -> lineWithImage("a".repeat(1001))).isInstanceOf(IllegalArgumentException.class);
+        assertThat(lineWithImage("가".repeat(1000)).imageUrl()).as("글자 수로 센다(MySQL varchar)").hasSize(1000);
+        assertThatThrownBy(() -> lineWithImage("가".repeat(1001))).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

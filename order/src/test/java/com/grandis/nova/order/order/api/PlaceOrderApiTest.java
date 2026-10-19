@@ -92,6 +92,8 @@ class PlaceOrderApiTest {
                 .andExpect(jsonPath("$.data.items[0].productTitle").value(OrderFixtures.PRODUCT_TITLE))
                 .andExpect(jsonPath("$.data.items[0].unitPrice").value(1250000))
                 .andExpect(jsonPath("$.data.items[0].quantity").value(1))
+                // 사전예약은 접수 때의 preorder 스냅샷을 옮긴다 — 사진 칸이 없어 비운다(주문 때 catalog 사진을 섞지 않는다)
+                .andExpect(jsonPath("$.data.items[0].imageUrl").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.data.shipTo.name").value("홍길동"))
                 .andExpect(jsonPath("$.data.shipTo.line2").doesNotExist())
                 .andExpect(jsonPath("$.data.createdAt").isNotEmpty())
