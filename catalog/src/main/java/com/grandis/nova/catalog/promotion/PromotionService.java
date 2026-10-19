@@ -3,6 +3,8 @@ package com.grandis.nova.catalog.promotion;
 import com.grandis.nova.catalog.image.ImageAttachments;
 import com.grandis.nova.catalog.image.ImagePurpose;
 import com.grandis.nova.catalog.CatalogErrorCode;
+import com.grandis.nova.catalog.integration.PreorderCampaigns;
+import com.grandis.nova.catalog.listing.CampaignWindow;
 import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
 import com.grandis.nova.catalog.option.OptionText;
 import com.grandis.nova.catalog.option.ProductOptions;
@@ -60,18 +62,20 @@ public class PromotionService {
     private final PromotionProducts links;
     private final ProductRepository products;
     private final ProductListingQueryRepository crossReads;
+    private final PreorderCampaigns campaigns;
     private final ImageAttachments images;
     private final ReadCache cache;
     private final TransactionTemplate tx;
     private final Clock clock;
 
     public PromotionService(PromotionRepository promotions, PromotionProducts links, ProductRepository products,
-                            ProductListingQueryRepository crossReads, ImageAttachments images, ReadCache cache,
+                            ProductListingQueryRepository crossReads, PreorderCampaigns campaigns, ImageAttachments images, ReadCache cache,
                             PlatformTransactionManager transactionManager, Clock clock) {
         this.promotions = promotions;
         this.links = links;
         this.products = products;
         this.crossReads = crossReads;
+        this.campaigns = campaigns;
         this.images = images;
         this.cache = cache;
         this.tx = new TransactionTemplate(transactionManager);
@@ -156,14 +160,19 @@ public class PromotionService {
                 page, size, found.getTotalElements());
     }
 
-    /** 묶을 수 있는 상품. promotionId 를 주면 그 홍보에 이미 묶인 상품도 싣는다(수정 화면). */
+    /**
+     * 묶을 수 있는 상품. promotionId 를 주면 그 홍보에 이미 묶인 상품도 싣는다(수정 화면). 회차 오픈 시각은 그 쪽의 상품만 preorder 에 묻는다 —
+     * 일반으로 바꾼 상품도 회차가 남아 있으면 싣는다. 관리자 화면이라 답하지 않으면 503 이다.
+     */
     public OffsetPage<LinkableProduct> linkable(UUID promotionId, int page, int size) {
         OffsetPage<ProductListingQueryRepository.LinkableRow> rows = crossReads.findLinkable(promotionId, page, size);
         Map<UUID, Product> productsById = productsOf(rows.items().stream().map(ProductListingQueryRepository.LinkableRow::productId).toList());
+        Map<UUID, CampaignWindow> windows = campaigns.find(rows.items().stream().map(ProductListingQueryRepository.LinkableRow::productId).toList());
         return rows.map(row -> {
             ProductOptions options = productsById.get(row.productId()).getOptions();
-            return new LinkableProduct(row.productId(), row.title(), row.saleMode(), row.opensAt(), values(options, OptionText.COLOR),
-                    values(options, OptionText.STORAGE));
+            CampaignWindow window = windows.get(row.productId());
+            return new LinkableProduct(row.productId(), row.title(), row.saleMode(), window == null ? null : window.opensAt(),
+                    values(options, OptionText.COLOR), values(options, OptionText.STORAGE));
         });
     }
 

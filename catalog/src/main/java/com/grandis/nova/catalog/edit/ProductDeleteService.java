@@ -6,7 +6,7 @@ import com.grandis.nova.catalog.image.ImagePurpose;
 import com.grandis.nova.catalog.integration.Dependencies;
 import com.grandis.nova.catalog.integration.DrawGiftClient;
 import com.grandis.nova.catalog.integration.InternalCalls;
-import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
+import com.grandis.nova.catalog.integration.PreorderCampaigns;
 import com.grandis.nova.catalog.product.Product;
 import com.grandis.nova.catalog.product.ProductRepository;
 import com.grandis.nova.catalog.product.SaleMode;
@@ -40,17 +40,17 @@ import java.util.UUID;
 public class ProductDeleteService {
 
     private final ProductRepository products;
-    private final ProductListingQueryRepository crossReads;
+    private final PreorderCampaigns campaigns;
     private final ImageAttachments images;
     private final OutboxWriter outbox;
     private final DrawGiftClient drawGifts;
     private final TransactionTemplate transaction;
     private final Clock clock;
 
-    public ProductDeleteService(ProductRepository products, ProductListingQueryRepository crossReads, ImageAttachments images,
+    public ProductDeleteService(ProductRepository products, PreorderCampaigns campaigns, ImageAttachments images,
                                 OutboxWriter outbox, DrawGiftClient drawGifts, PlatformTransactionManager transactionManager, Clock clock) {
         this.products = products;
-        this.crossReads = crossReads;
+        this.campaigns = campaigns;
         this.images = images;
         this.outbox = outbox;
         this.drawGifts = drawGifts;
@@ -87,7 +87,7 @@ public class ProductDeleteService {
             return;
         }
         Instant now = clock.instant();
-        boolean inProgress = crossReads.findCampaign(product.getId())
+        boolean inProgress = campaigns.find(product.getId())
                 .map(window -> !now.isBefore(window.opensAt().minus(ProductEditService.FREEZE_BEFORE_OPEN)) && now.isBefore(window.closesAt()))
                 .orElse(false);
         if (inProgress) {

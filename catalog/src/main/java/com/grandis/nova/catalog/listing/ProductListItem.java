@@ -60,6 +60,16 @@ public record ProductListItem(
                 sellable, replaced, preorderStatus, opensAt, closesAt);
     }
 
+    /**
+     * 회차 시각을 채운 사본 — 사전예약만(일반 전환한 상품에도 preorder 회차가 남아 있어 그대로 싣지 않는다). window 가 null 이면(회차를 모름) 시각 ·
+     * 접수 단계가 빈다. 접수 단계는 now 로 계산한다({@link #at}).
+     */
+    public ProductListItem withCampaign(CampaignWindow window, Instant now) {
+        boolean preorder = saleMode == SaleMode.PREORDER && window != null;
+        return new ProductListItem(productId, saleMode, title, brand, modelName, imageUrl, colors, status, minPrice, minListPrice, discountRate,
+                sellable, soldOut, preorderStatus, preorder ? window.opensAt() : null, preorder ? window.closesAt() : null).at(now);
+    }
+
     /** 시각으로 정하는 칸(접수 단계)을 now 로 다시 계산한 사본 — 캐시에 든 값이 만든 때의 단계를 내보내지 않게. 계산 규칙은 목록 쿼리와 같다. */
     public ProductListItem at(Instant now) {
         PreorderSaleStatus current = saleMode == SaleMode.PREORDER && opensAt != null && closesAt != null

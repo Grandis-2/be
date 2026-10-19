@@ -4,8 +4,8 @@ import com.grandis.nova.catalog.CatalogErrorCode;
 import com.grandis.nova.catalog.detail.AdminProductDetail;
 import com.grandis.nova.catalog.detail.ProductDetailService;
 import com.grandis.nova.catalog.detail.ProductDetailView;
+import com.grandis.nova.catalog.integration.PreorderCampaigns;
 import com.grandis.nova.catalog.listing.CampaignWindow;
-import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
 import com.grandis.nova.catalog.option.CollationDuplicates;
 import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.catalog.option.OptionText;
@@ -83,18 +83,18 @@ public class ProductEditService {
 
     private final ProductRepository products;
     private final ProductOptionRepository options;
-    private final ProductListingQueryRepository crossReads;
+    private final PreorderCampaigns campaigns;
     private final CollationDuplicates duplicates;
     private final ProductDetailService detailService;
     private final OutboxWriter outbox;
     private final Clock clock;
 
     public ProductEditService(ProductRepository products, ProductOptionRepository options,
-                              ProductListingQueryRepository crossReads, CollationDuplicates duplicates,
+                              PreorderCampaigns campaigns, CollationDuplicates duplicates,
                               ProductDetailService detailService, OutboxWriter outbox, Clock clock) {
         this.products = products;
         this.options = options;
-        this.crossReads = crossReads;
+        this.campaigns = campaigns;
         this.duplicates = duplicates;
         this.detailService = detailService;
         this.outbox = outbox;
@@ -363,7 +363,7 @@ public class ProductEditService {
 
     /** 사전예약 회차가 열렸는가(opens_at ≤ 지금). 회차가 없으면(등록 이벤트 처리 전) 열리지 않았다. */
     private boolean opened(Product product) {
-        return crossReads.findCampaign(product.getId())
+        return campaigns.find(product.getId())
                 .map(window -> !clock.instant().isBefore(window.opensAt()))
                 .orElse(false);
     }
@@ -405,7 +405,7 @@ public class ProductEditService {
         if (product.getCampaignCanceledAt() != null) {
             throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "회차가 취소된 상품은 일반 상품으로 바꿀 수 없습니다.");
         }
-        CampaignWindow window = crossReads.findCampaign(productId)
+        CampaignWindow window = campaigns.find(productId)
                 .orElseThrow(() -> new BusinessException(CatalogErrorCode.STATE_CONFLICT, "회차가 없는 사전예약 상품은 일반 상품으로 바꿀 수 없습니다."));
         if (clock.instant().isBefore(window.closesAt())) {
             throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "사전예약이 마감된 뒤에만 일반 상품으로 바꿀 수 있습니다.");
@@ -474,7 +474,7 @@ public class ProductEditService {
             // 회차가 취소된 상품은 더 바꿀 것이 없다 — 회차 시각과 상관없이(취소 뒤 오픈이 미래로 옮겨져도) 409
             throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "회차가 취소된 상품은 바꿀 수 없습니다.");
         }
-        boolean frozen = crossReads.findCampaign(product.getId())
+        boolean frozen = campaigns.find(product.getId())
                 .map(window -> !clock.instant().isBefore(window.opensAt().minus(FREEZE_BEFORE_OPEN)))
                 .orElse(false);
         if (frozen) {
@@ -495,7 +495,9 @@ public class ProductEditService {
 
     /**
      * 커밋 직전에 다시 판정한다. 시작 때만 보면 그 뒤 오픈 시각이 지나거나(잠금 대기 · 재계산에 걸린 시간) preorder 가 회차 시각을 앞당겨도
-     * 오픈 뒤에 커밋된다. 이 조회는 READ COMMITTED 라 그때까지 커밋된 회차를 본다. 남는 틈은 이 판정과 커밋 사이뿐이다.
+     * 오픈 뒤에 커밋된다. 회차는 preorder 에 다시 묻는다(캐시 없음 — 그때 preorder 의 값). 남는 틈은 이 판정과 커밋 사이뿐이다.
+     * 상품 행을 잠근 채 preorder 를 부르는 유일한 자리들이다(이 판정 · 시작 판정 · 회차 취소 판정) — 판정이 잠금 아래여야 겹친 수정이 줄 서므로 밖으로
+     * 빼지 않는다. 기다림은 preorder 그룹 타임아웃(연결 300ms · 읽기 1s)까지이고, 답하지 않으면 503 으로 수정을 거절한다(되돌린다).
      */
     private void requireNotOpenedAtCommit(Product product) {
         requireNotOpened(product);

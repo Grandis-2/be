@@ -4,7 +4,7 @@ import com.grandis.nova.catalog.CatalogErrorCode;
 import com.grandis.nova.catalog.category.CategoryRepository;
 import com.grandis.nova.catalog.detail.ProductDetailService;
 import com.grandis.nova.catalog.detail.ProductDetailView;
-import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
+import com.grandis.nova.catalog.listing.ProductReadiness;
 import com.grandis.nova.catalog.image.ImageAttachments;
 import com.grandis.nova.catalog.image.ImagePurpose;
 import com.grandis.nova.catalog.option.CollationDuplicates;
@@ -59,7 +59,7 @@ public class ProductRegistrationService {
     private final ProductRegistrationValidator validator;
     private final CollationDuplicates duplicates;
     private final ProductDetailService detailService;
-    private final ProductListingQueryRepository crossReads;
+    private final ProductReadiness readiness;
     private final OutboxWriter outbox;
     private final ImageAttachments images;
     private final Clock clock;
@@ -67,7 +67,7 @@ public class ProductRegistrationService {
 
     public ProductRegistrationService(CategoryRepository categories, ProductRepository products, ProductOptionRepository options,
                                       ProductRegistrationValidator validator, CollationDuplicates duplicates,
-                                      ProductDetailService detailService, ProductListingQueryRepository crossReads,
+                                      ProductDetailService detailService, ProductReadiness readiness,
                                       OutboxWriter outbox, ImageAttachments images, Clock clock,
                                       @org.springframework.beans.factory.annotation.Value("${catalog.registration.min-open-lead:PT30M}")
                                       Duration minOpenLead) {
@@ -77,7 +77,7 @@ public class ProductRegistrationService {
         this.validator = validator;
         this.duplicates = duplicates;
         this.detailService = detailService;
-        this.crossReads = crossReads;
+        this.readiness = readiness;
         this.outbox = outbox;
         this.images = images;
         this.clock = clock;
@@ -101,7 +101,7 @@ public class ProductRegistrationService {
         Optional<Product> existing = products.findByIdempotencyKey(key);
         if (existing.isPresent()) {
             Product registered = existing.get();
-            boolean ready = crossReads.isReady(registered.getId());
+            boolean ready = readiness.isReady(registered);
             RegistrationOutcome.Kind kind = ready ? RegistrationOutcome.Kind.REPLAYED : RegistrationOutcome.Kind.IN_PROGRESS;
             return new RegistrationOutcome(kind, RegistrationStatusView.of(registered, ready), null);
         }
@@ -144,7 +144,7 @@ public class ProductRegistrationService {
     @Transactional(readOnly = true)
     public RegistrationStatusView status(String idempotencyKey) {
         return products.findByIdempotencyKey(idempotencyKey == null ? "" : idempotencyKey.strip())
-                .map(product -> RegistrationStatusView.of(product, crossReads.isReady(product.getId())))
+                .map(product -> RegistrationStatusView.of(product, readiness.isReady(product)))
                 .orElseThrow(() -> new BusinessException(CatalogErrorCode.REGISTRATION_NOT_FOUND));
     }
 

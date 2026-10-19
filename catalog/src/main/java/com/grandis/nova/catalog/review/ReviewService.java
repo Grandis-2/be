@@ -5,7 +5,7 @@ import com.grandis.nova.catalog.integration.Dependencies;
 import com.grandis.nova.catalog.integration.InternalCalls;
 import com.grandis.nova.catalog.integration.MemberClient;
 import com.grandis.nova.catalog.integration.OrderClient;
-import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
+import com.grandis.nova.catalog.listing.ProductReadiness;
 import com.grandis.nova.catalog.product.Product;
 import com.grandis.nova.catalog.product.ProductRepository;
 import com.grandis.nova.catalog.product.SaleMode;
@@ -46,16 +46,16 @@ public class ReviewService {
     private final ProductReviewRepository reviews;
     private final ReviewQueryRepository queries;
     private final ProductRepository products;
-    private final ProductListingQueryRepository crossReads;
+    private final ProductReadiness readiness;
     private final OrderClient orders;
     private final MemberClient members;
 
     public ReviewService(ProductReviewRepository reviews, ReviewQueryRepository queries, ProductRepository products,
-                         ProductListingQueryRepository crossReads, OrderClient orders, MemberClient members) {
+                         ProductReadiness readiness, OrderClient orders, MemberClient members) {
         this.reviews = reviews;
         this.queries = queries;
         this.products = products;
-        this.crossReads = crossReads;
+        this.readiness = readiness;
         this.orders = orders;
         this.members = members;
     }
@@ -119,7 +119,7 @@ public class ReviewService {
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public OffsetPage<ReviewView> productReviews(UUID productId, int page, int size) {
         Product product = products.findById(productId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
-        if (!(product.isVisible() && crossReads.isReady(productId))) {
+        if (!(product.isVisible() && readiness.isReady(product))) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
         return new OffsetPage<>(queries.findByProduct(productId, page, size), page, size, queries.countByProduct(productId));
