@@ -1,5 +1,6 @@
 package com.grandis.nova.order.config;
 
+import com.grandis.nova.order.client.catalog.CatalogClient;
 import com.grandis.nova.order.client.payment.CaptureRequest;
 import com.grandis.nova.order.client.payment.ConfirmRequest;
 import com.grandis.nova.order.client.payment.PayableTarget;
@@ -15,6 +16,8 @@ import com.grandis.nova.order.order.vo.Money;
 import com.grandis.nova.order.order.vo.ShipTo;
 import com.grandis.nova.order.support.TestIds;
 import com.sun.net.httpserver.HttpServer;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationHandler;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,9 +29,12 @@ import org.springframework.boot.http.client.autoconfigure.imperative.ImperativeH
 import org.springframework.boot.http.client.autoconfigure.service.HttpServiceClientPropertiesAutoConfiguration;
 import org.springframework.boot.http.converter.autoconfigure.HttpMessageConvertersAutoConfiguration;
 import org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration;
+import org.springframework.boot.micrometer.observation.autoconfigure.ObservationAutoConfiguration;
 import org.springframework.boot.restclient.autoconfigure.RestClientAutoConfiguration;
+import org.springframework.boot.restclient.autoconfigure.RestClientObservationAutoConfiguration;
 import org.springframework.boot.restclient.autoconfigure.service.HttpServiceClientAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.http.client.observation.ClientRequestObservationContext;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -36,6 +42,10 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.http.HttpTimeoutException;
 import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -88,7 +98,8 @@ class HttpClientConfigTest {
                 .withBean(PaymentConfirmer.class)
                 .withPropertyValues(group("payment-confirm", baseUrl))
                 .withPropertyValues(group("payment", baseUrl))
-                .withPropertyValues(group("preorder", baseUrl));
+                .withPropertyValues(group("preorder", baseUrl))
+                .withPropertyValues(group("catalog", baseUrl));
     }
 
     private static String[] group(String name, String baseUrl) {
@@ -144,6 +155,38 @@ class HttpClientConfigTest {
                 assertThat(context.getBean(PaymentConfirmer.class)
                         .confirm(PayableTarget.of(ORDER), PROVIDER_ORDER_ID, "tgen_wiring", "wiring-session", true))
                         .isInstanceOf(PaymentConfirmation.Unanswered.class));
+    }
+
+    // 지표(http.client.requests)의 uri 태그는 경로만 — 목록 파라미터를 원소마다 펼친 템플릿이면 묻는 옵션 수마다 다른 값이 된다
+    @Test
+    void uriTagIsPathOnly() throws IOException {
+        int closedPort;
+        try (ServerSocket socket = new ServerSocket(0)) {
+            closedPort = socket.getLocalPort();
+        }
+        List<String> uriTags = new CopyOnWriteArrayList<>();
+        ObservationHandler<ClientRequestObservationContext> recorder = new ObservationHandler<>() {
+            @Override
+            public boolean supportsContext(Observation.Context context) {
+                return context instanceof ClientRequestObservationContext;
+            }
+
+            @Override
+            public void onStop(ClientRequestObservationContext context) {
+                uriTags.add(context.getLowCardinalityKeyValue("uri").getValue());
+            }
+        };
+        runner("http://127.0.0.1:" + closedPort)
+                .withConfiguration(AutoConfigurations.of(ObservationAutoConfiguration.class,
+                        RestClientObservationAutoConfiguration.class))
+                .withBean(ObservationHandler.class, () -> recorder)
+                .run(context -> {
+                    CatalogClient client = context.getBean(CatalogClient.class);
+                    catchThrowable(() -> client.getOptions(List.of(UUID.randomUUID()), null));
+                    catchThrowable(() -> client.getOptions(IntStream.range(0, 50).mapToObj(i -> UUID.randomUUID()).toList(), null));
+
+                    assertThat(uriTags).containsExactly("/internal/options", "/internal/options");
+                });
     }
 
     private static Throwable rootCause(Throwable e) {
