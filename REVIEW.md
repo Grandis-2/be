@@ -143,7 +143,7 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 - 조회 실패 · 권한 오류가 난 실행을 "불일치 0"으로 집계하면 지적한다. 검사 미완료로 남긴다.
 - 정상 처리 중인 차이(접수 직후 · 등록 진행 중)를 불일치로 세면 지적한다. 기준 시각이 필요하다.
 - 전체를 읽어 메모리에서 처리하면 지적한다. 커서 · 청크로 끊는다.
-- 업무 표 쓰기 예외는 사진 정리(images) 하나다. 기준 시간이 지난 UNUSED 행만 id 로 지운다(object_key 로 지우면 catalog 붙이기와 잠금 순서가 달라 교착). 같은 문장에서 어떤 draw_campaigns.image_url_snapshot 도 그 키로 끝나지 않을 때만 지운다. 같은 트랜잭션에 image_deletions 를 넣고, S3 객체는 커밋 뒤 지운 행이 1개일 때만 지운다. 조건을 빼거나 USED 행 · images · image_deletions 밖 표를 지우면 지적한다.
+- 업무 표 쓰기 예외는 사진 정리(images) 하나다. 기준 시간이 지난 UNUSED 행만 id 로 지운다(object_key 로 지우면 catalog 붙이기와 잠금 순서가 달라 교착). 같은 문장에서 어떤 draw_campaigns.image_url_snapshot · order_items.image_url_snapshot(지난 주문의 사진)도 그 키로 끝나지 않을 때만 지운다. 같은 트랜잭션에 image_deletions 를 넣고, S3 객체는 커밋 뒤 지운 행이 1개일 때만 지운다. 조건을 빼거나 USED 행 · images · image_deletions 밖 표를 지우면 지적한다.
 - 결제 기한 만료 취소는 preorder PaymentExpiryJob · order CartOrderExpiry(일반 주문)가 한다. batch 에 같은 만료 취소 · 예약 · 주문 상태 변경을 만들면 지적한다.
 
 ### 3.6 catalog — 적용 경로: `catalog/**`
