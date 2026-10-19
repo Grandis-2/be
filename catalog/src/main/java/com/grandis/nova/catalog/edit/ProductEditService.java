@@ -402,13 +402,13 @@ public class ProductEditService {
      * 사전예약이면 회차를 트랜잭션 전에 받는다 — 상품 행을 잠근 트랜잭션 안에서 preorder 를 기다리지 않는다(REVIEW 2.1 — @Transactional 안의 HTTP 는
      * 차단급). 판정은 잠금 아래에서 그때의 시각으로 한다: 잠금 대기 · 재계산 중에 오픈 3분 전을 넘기는 것은 커밋 직전 판정이 잡는다. 상품 행 잠금은
      * preorder 의 일정 변경을 원래 막지 못한다 — 회차를 받은 뒤 커밋 전에 preorder 관리자가 오픈을 앞당기면 그 변경은 이 판정에 보이지 않는다.
-     * 일반 상품 · 회차가 취소된 상품 · 없는 상품은 부르지 않는다(판정에 회차를 쓰지 않는다).
+     * 일반 상품 · 회차가 취소된 상품 · 없거나 삭제한 상품은 부르지 않는다(판정에 회차를 쓰지 않는다 — 삭제한 상품은 잠금에서 404).
      *
      * @throws BusinessException preorder 가 답하지 않으면 503 — 오픈 여부를 모르는 채 고치지 않는다
      */
     private Optional<CampaignWindow> scheduleBeforeLock(UUID productId) {
         boolean asks = products.findById(productId)
-                .map(product -> product.getSaleMode() == SaleMode.PREORDER && product.getCampaignCanceledAt() == null).orElse(false);
+                .map(product -> !product.isDeleted() && product.getSaleMode() == SaleMode.PREORDER && product.getCampaignCanceledAt() == null).orElse(false);
         return asks ? campaigns.find(productId) : Optional.empty();
     }
 
