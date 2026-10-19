@@ -40,9 +40,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class PreorderCampaignsTestConfig {
 
     public static final AtomicInteger CALLS_IN_TRANSACTION = new AtomicInteger();
-    /** 상품 행을 잠근 채 오픈을 판정하는 자리 — 트랜잭션 안에서 불러도 된다. */
-    private static final Set<String> LOCKED_JUDGMENTS = Set.of("com.grandis.nova.catalog.edit.ProductEditService",
-            "com.grandis.nova.catalog.edit.ProductDeleteService");
+    /** 상품 행을 잠근 채 오픈을 판정하는 자리(클래스#메서드) — 트랜잭션 안에서 불러도 된다. 같은 클래스의 다른 메서드는 허용하지 않는다. */
+    private static final Set<String> LOCKED_JUDGMENTS = Set.of(
+            "com.grandis.nova.catalog.edit.ProductEditService#requireNotOpened",
+            "com.grandis.nova.catalog.edit.ProductEditService#opened",
+            "com.grandis.nova.catalog.edit.ProductEditService#convertToInStock",
+            "com.grandis.nova.catalog.edit.ProductDeleteService#requireNoPreorderInProgress");
 
     static final Duration LOOKAHEAD = Duration.ofMinutes(10);
     static final int OPEN_LIMIT = 500;
@@ -85,7 +88,7 @@ public class PreorderCampaignsTestConfig {
         if (!TransactionSynchronizationManager.isActualTransactionActive()) {
             return;
         }
-        boolean lockedJudgment = StackWalker.getInstance().walk(frames -> frames.anyMatch(frame -> LOCKED_JUDGMENTS.contains(frame.getClassName())));
+        boolean lockedJudgment = StackWalker.getInstance().walk(frames -> frames.anyMatch(frame -> LOCKED_JUDGMENTS.contains(frame.getClassName() + "#" + frame.getMethodName())));
         if (!lockedJudgment) {
             CALLS_IN_TRANSACTION.incrementAndGet();
             throw new IllegalStateException("DB 트랜잭션 안에서 preorder 회차를 물었다 — 연결을 쥔 채 HTTP 를 기다린다");
