@@ -158,9 +158,9 @@ class PreorderAcceptTransaction {
                 });
     }
 
-    /** 회차가 없는 사전예약 상품은 아직 열리지 않은 것으로 본다. */
+    /** 회차 행이 없으면 등록이 끝나지 않은 상품이다 — 공개 전 상품처럼 존재를 알리지 않는다. */
     private void requireAccepting(Optional<CampaignSchedule> campaign) {
-        CampaignSchedule found = campaign.orElseThrow(() -> new BusinessException(PreorderErrorCode.SALE_NOT_OPEN));
+        CampaignSchedule found = campaign.orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND));
         Instant now = clock.instant();
         if (now.isBefore(found.opensAt())) {
             throw new BusinessException(PreorderErrorCode.SALE_NOT_OPEN,

@@ -32,6 +32,13 @@ public interface PreorderCampaignRepository extends JpaRepository<PreorderCampai
     List<PreorderCampaign> findNotClosedAfter(@Param("now") Instant now, @Param("afterProductId") UUID afterProductId,
                                               Limit limit);
 
+    /** 마감 전이고 horizon 까지 열리는 회차(이미 열린 것 포함). 오픈이 이른 순. 잠그지 않는다. */
+    @Query("""
+            select c from PreorderCampaign c
+             where c.closesAt > :now and c.opensAt <= :horizon
+             order by c.opensAt, c.productId""")
+    List<PreorderCampaign> findOpenBy(@Param("now") Instant now, @Param("horizon") Instant horizon, Limit limit);
+
     /**
      * 회차 행을 SELECT … FOR SHARE 로 잠근다. 오픈 알림 신청이 "아직 표시 전인가" 를 본 뒤 신청 행을 커밋할 때까지 오픈 표시({@link #markOpenNotified})가
      * 기다린다. 신청끼리는 서로 막지 않는다.
