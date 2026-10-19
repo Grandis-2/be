@@ -210,6 +210,11 @@ class PreorderCampaignsHttpTest {
         campaign(product, now.plus(Duration.ofDays(1)), now.plus(Duration.ofDays(2)));
         failStatus = 503;
 
+        // 삭제한 상품은 회차를 묻지 않고 404 — preorder 장애와 상관없다
+        UUID deleted = preorder("삭제함");
+        jdbcTemplate.update("UPDATE products SET visible = 0, deleted_at = UTC_TIMESTAMP(6) WHERE id = UUID_TO_BIN(?)", deleted.toString());
+        mockMvc.perform(patch("/api/v1/admin/products/{id}", deleted).with(AccessTokens.admin())
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"title\": \"고침\" }")).andExpect(status().isNotFound());
         // 본문 검증은 회차를 묻기 전 — 잘못된 요청은 preorder 장애와 상관없이 400 이고 preorder 를 부르지 않는다
         mockMvc.perform(patch("/api/v1/admin/products/{id}", product).with(AccessTokens.admin())
                 .contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isBadRequest());
