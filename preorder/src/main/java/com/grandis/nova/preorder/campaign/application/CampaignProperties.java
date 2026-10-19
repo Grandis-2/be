@@ -18,6 +18,9 @@ record CampaignProperties(
         @DefaultValue("10m") Duration internalLookahead,
         @DefaultValue("500") int internalOpenLimit
 ) {
+
+    static final int MAX_INTERNAL_OPEN_LIMIT = 10_000;
+
     CampaignProperties {
         if (minLeadTime.isNegative()) {
             throw new IllegalArgumentException("nova.campaign.min-lead-time 은 0 이상이어야 한다");
@@ -25,8 +28,10 @@ record CampaignProperties(
         if (internalLookahead.isNegative()) {
             throw new IllegalArgumentException("nova.campaign.internal-lookahead 는 0 이상이어야 한다");
         }
-        if (internalOpenLimit < 1) {
-            throw new IllegalArgumentException("nova.campaign.internal-open-limit 은 1 이상이어야 한다");
+        // 위쪽 한계는 응답 · catalog 의 IN 조건이 감당할 크기다(실제 규모는 수십 건). 조회가 상한 + 1 건을 읽으므로 넘침도 막는다
+        if (internalOpenLimit < 1 || internalOpenLimit > MAX_INTERNAL_OPEN_LIMIT) {
+            throw new IllegalArgumentException(
+                    "nova.campaign.internal-open-limit 은 1~" + MAX_INTERNAL_OPEN_LIMIT + " 이어야 한다");
         }
     }
 }
