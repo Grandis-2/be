@@ -67,7 +67,7 @@ class AdminDrawBudgetLockWaitTest {
         fixtures.stock(option, 10, 0, 0);
         given(catalogClient.getOptions(any(), any())).willReturn(ApiResponse.ok(new CatalogOptions(List.of(new CatalogOption(option,
                 product.productId(), "굿즈", "M-1", "블랙", "SKU", new BigDecimal("50000"), "ACTIVE", "IN_STOCK", "ACTIVE", false, true,
-                new CatalogOption.Warranty(false, BigDecimal.ZERO), "https://img/products/gift.jpg")))));
+                new CatalogOption.Warranty(false, BigDecimal.ZERO), "https://img/products/gift.jpg", null)))));
 
         CountDownLatch locked = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);

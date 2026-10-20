@@ -51,16 +51,17 @@ public record PlaceOrderCommand(
      * 가격 · 이름은 스냅샷을 그대로 옮긴다(사전예약은 예약 접수 때, 장바구니는 주문 때 catalog 값).
      *
      * @param modelName         주문 때 상품 모델명(장바구니 · 바로 구매). 사전예약은 null
+     * @param imageUrl          주문 때 그 옵션의 사진(장바구니 · 바로 구매 — catalog 의 imageUrl). 사전예약 · 사진이 없는 옵션은 null
      * @param warrantyQuantity  그중 보증을 산 수량(0 이면 보증 없음)
      * @param warrantyUnitPrice 보증 1개 가격. 보증 수량이 0 이면 0
      */
     public record Line(UUID productId, UUID optionId, int quantity, BigDecimal unitPrice,
                        int warrantyQuantity, BigDecimal warrantyUnitPrice,
-                       String productTitle, String modelName, String optionTitle) {
+                       String productTitle, String modelName, String optionTitle, String imageUrl) {
 
         OrderLine toOrderLine() {
             return new OrderLine(productId, optionId, new Quantity(quantity), new Money(unitPrice),
-                    warrantyQuantity, new Money(warrantyUnitPrice), productTitle, modelName, optionTitle);
+                    warrantyQuantity, new Money(warrantyUnitPrice), productTitle, modelName, optionTitle, imageUrl);
         }
     }
 }

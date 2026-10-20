@@ -157,7 +157,7 @@ public class DrawSettlement {
         for (DrawEntry winner : winners) {
             Order order = orders.place(new OrderDraft(winner.customerId(), OrderSource.DRAW, null, null, null, winner.shipTo(),
                     List.of(OrderLine.withoutWarranty(campaign.productId(), campaign.optionId(), Quantity.ONE, Money.ZERO,
-                            campaign.productTitle(), campaign.modelName(), campaign.optionTitle()))), EventCause.system(WON_REASON));
+                            campaign.productTitle(), campaign.modelName(), campaign.optionTitle(), campaign.imageUrl()))), EventCause.system(WON_REASON));
             if (!entries.markWon(campaign.id(), winner.id(), order.id(), now)) {
                 throw new IllegalStateException("당첨 주문을 잇지 못했다: drawId=" + campaign.id() + ", entryId=" + winner.id());
             }

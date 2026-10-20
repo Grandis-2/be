@@ -45,6 +45,6 @@ public class CartCatalog {
         boolean warrantyOffered = option.warranty() != null && option.warranty().offered();
         BigDecimal surcharge = warrantyOffered && option.warranty().surcharge() != null ? option.warranty().surcharge() : BigDecimal.ZERO;
         return new CartOption(option.optionId(), option.productId(), option.productTitle(), option.modelName(), option.optionTitle(), option.imageUrl(),
-                option.price(), IN_STOCK.equals(option.saleMode()), exposed, sellable, warrantyOffered, surcharge);
+                option.price(), option.listPrice(), IN_STOCK.equals(option.saleMode()), exposed, sellable, warrantyOffered, surcharge);
     }
 }

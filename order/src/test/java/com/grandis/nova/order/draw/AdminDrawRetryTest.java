@@ -55,7 +55,7 @@ class AdminDrawRetryTest {
     @BeforeEach
     void setUp() {
         given(catalog.find(any(), any())).willReturn(Map.of(OPTION, new CatalogOption(OPTION, PRODUCT, "p", "M-1", "o", "SKU", new BigDecimal("1000"),
-                "ACTIVE", "IN_STOCK", "ACTIVE", false, true, new CatalogOption.Warranty(false, BigDecimal.ZERO), null)));
+                "ACTIVE", "IN_STOCK", "ACTIVE", false, true, new CatalogOption.Warranty(false, BigDecimal.ZERO), null, null)));
         given(campaigns.insert(any())).willReturn(draw);
     }
 

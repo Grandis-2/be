@@ -76,7 +76,7 @@ class AdminDrawBudgetTest {
     void setUp() {
         given(catalog.find(any(), any())).willReturn(Map.of(TestIds.id(2), new CatalogOption(TestIds.id(2), TestIds.id(1), "p", "M-1", "o", "SKU",
                 new BigDecimal("1000"), "ACTIVE", "IN_STOCK", "ACTIVE", false, true, new CatalogOption.Warranty(false, BigDecimal.ZERO),
-                "https://img/products/a.jpg")));
+                "https://img/products/a.jpg", null)));
         given(campaigns.insert(any())).willReturn(draw);
     }
 
@@ -94,7 +94,7 @@ class AdminDrawBudgetTest {
         given(catalog.find(any(), any())).willAnswer(invocation -> {
             clock.now = NOW.plus(BUDGET);
             return Map.of(TestIds.id(2), new CatalogOption(TestIds.id(2), TestIds.id(1), "p", "M-1", "o", "SKU", new BigDecimal("1000"), "ACTIVE",
-                    "IN_STOCK", "ACTIVE", false, true, new CatalogOption.Warranty(false, BigDecimal.ZERO), "https://img/products/a.jpg"));
+                    "IN_STOCK", "ACTIVE", false, true, new CatalogOption.Warranty(false, BigDecimal.ZERO), "https://img/products/a.jpg", null));
         });
 
         assertBudgetExceeded();
