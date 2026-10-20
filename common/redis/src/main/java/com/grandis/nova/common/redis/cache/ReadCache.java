@@ -48,7 +48,8 @@ import java.util.function.Supplier;
  *       대상 요청이 그 대기로 목록 0.3~1.4초 · 리뷰 0.2~2.2초 걸렸다). 요청이 없는 키는 갱신하지 않는다. 갱신은 몰림의 "한 번만 읽기" 자리를 같이 써서, 갱신이 끝나기 전에
  *       값이 만료되면 그 뒤 요청은 기다리는 쪽이 된다(상한 그대로). 갱신이 실패해도 들고 있던 값의 만료는 늘지 않는다. 실행기가 차면 맡기지 않고, 그 값이 만료될 때까지
  *       그 키는 다시 맡기지 않는다.
- *       갱신한 값은 읽기 시작할 때의 세대 키에 들어가, 그사이 세대가 올랐으면 새 세대 조회에는 안 보인다. 인스턴스마다 따로라 같은 키를 인스턴스 수만큼
+ *       갱신한 값은 읽기 시작할 때의 세대 키에 들어가, 그사이 세대가 올랐으면 새 세대 조회에는 안 보인다. 돌 차례가 왔을 때 Redis 의
+ *       지금 세대가 맡길 때와 다르면(올랐거나 세대 키가 지워져 0 으로 돌아갔으면) 읽지 않는다. 인스턴스마다 따로라 같은 키를 인스턴스 수만큼
  *       갱신할 수 있다(만료 때 인스턴스마다 한 번 읽던 것과 같다). 같은 세대 키에는 마지막에 넣은 쪽이 남는다(직접 읽기와 같다) — 세대가 덮지
  *       않는 데이터를 읽는 loader(배너가 읽는 상품 노출 · 홍보 기간)는 늦게 넣은 인스턴스의 값으로 되돌아갈 수 있고, 그 값의 나이도 읽은
  *       시각 + TTL 안이다. 큐에서 늦게 돈 갱신은 그사이 더 새 값이 들어왔으면 읽지 않는다. 갱신 결과를
@@ -467,9 +468,11 @@ public final class ReadCache {
      */
     private <T> void refresh(String key, Spec<T> spec, Instant seenLoadedAt, Supplier<T> loader, Predicate<T> storable, String generation,
                              long generationNumber) {
-        Long seenGeneration = seenGenerations.get(spec.name() + "|" + generation);
-        if (seenGeneration != null && seenGeneration > generationNumber) {
-            events.refreshed(spec.name(), RefreshResult.SKIPPED_NEWER);   // 큐에서 기다리는 사이 세대가 올랐다 — 옛 세대 키는 아무도 읽지 않는다
+        // 지금 세대를 Redis 에서 다시 읽는다 — 이 인스턴스가 본 가장 큰 번호와 비교하면, 세대 키가 지워져(재시작 · 교체) 0 으로 돌아간 뒤
+        // 모든 갱신이 건너뛰어진다. 못 읽으면 그대로 한다(newerStored 와 같다)
+        Long current = call(() -> currentGeneration(generation));
+        if (current != null && current != generationNumber) {
+            events.refreshed(spec.name(), RefreshResult.SKIPPED_NEWER);   // 큐에서 기다리는 사이 세대가 바뀌었다 — 그 세대 키는 아무도 읽지 않는다
             return;
         }
         if (newerStored(key, seenLoadedAt)) {

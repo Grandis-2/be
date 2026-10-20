@@ -282,11 +282,28 @@ class ReadCacheRefreshTest {
         cache.entry(spec, "g", "k", () -> load("v1"));
         clock.advance(Duration.ofSeconds(24));
         cache.entry(spec, "g", "k", () -> load("갱신"));
-        cache.bumpAfterCommit("g");
-        cache.entry(spec, "g", "k", () -> load("새 세대"));   // 이 인스턴스가 오른 세대를 본다
+        cache.bumpAfterCommit("g");   // 이 인스턴스는 오른 세대로 아직 조회하지 않았다 — 갱신이 Redis 의 지금 세대를 본다
         tasks.runAll();
         assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_NEWER);
-        assertThat(loads.get()).as("처음 읽기 + 새 세대 읽기 — 갱신은 읽지 않았다").isEqualTo(2);
+        assertThat(loads.get()).as("처음 읽기뿐 — 갱신은 읽지 않았다").isEqualTo(1);
+        cache.entry(spec, "g", "k", () -> load("새 세대"));
+        clock.advance(Duration.ofSeconds(24));
+        cache.entry(spec, "g", "k", () -> load("새 세대 갱신"));
+        assertThat(tasks.pending()).as("건너뛴 뒤 자리가 풀려 다음 주기에 다시 맡긴다").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Redis 가 비워져 세대가 0 으로 돌아가도 미리 갱신은 계속 넣는다 — 이 인스턴스가 전에 본 더 큰 번호로 건너뛰지 않는다")
+    void refreshKeepsWorkingAfterGenerationReset() {
+        cache.bumpAfterCommit("g");
+        cache.entry(spec, "g", "k", () -> load("v1"));   // 이 인스턴스가 세대 1 을 본다
+        redis.getConnectionFactory().getConnection().serverCommands().flushAll();   // Redis 재시작 · 교체 · 사람이 지움 — 세대 키가 없어 0
+        cache.entry(spec, "g", "k", () -> load("v2"));
+        clock.advance(Duration.ofSeconds(24));
+        cache.entry(spec, "g", "k", () -> load("v3"));
+        tasks.runAll();
+        assertThat(events.refreshes).containsExactly(RefreshResult.STORED);
+        assertThat(cache.entry(spec, "g", "k", () -> load("v4")).value()).isEqualTo("v3");
     }
 
     @Test
