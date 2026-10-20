@@ -25,6 +25,12 @@ public interface DrawCampaignStore {
 
     Optional<DrawCampaign> findById(UUID id);
 
+    /**
+     * 트랜잭션 밖에서 회차 하나를 문장 하나로 읽는다 — {@link #findById} 는 트랜잭션 밖에서 부르면 읽기 전용 트랜잭션을 따로 열어 준비 · 정리 문장 5개가
+     * 더 붙는다(실측). 쿼리라 트랜잭션 안에서 부르면 그 전에 쌓인 변경을 내보낼 수 있어, 트랜잭션 안의 쓰기 흐름은 {@link #findById} 를 쓴다.
+     */
+    Optional<DrawCampaign> lookup(UUID id);
+
     /** 없는 id 는 빠진다. 순서는 정하지 않는다. */
     List<DrawCampaign> findAllById(Collection<UUID> ids);
 

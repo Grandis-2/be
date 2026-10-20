@@ -65,6 +65,11 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
     }
 
     @Override
+    public Optional<DrawCampaign> lookup(UUID id) {
+        return campaigns.lookup(id).map(JpaDrawCampaignStore::toDomain);
+    }
+
+    @Override
     public List<DrawCampaign> findAllById(Collection<UUID> ids) {
         return campaigns.findAllById(ids).stream().map(JpaDrawCampaignStore::toDomain).toList();
     }

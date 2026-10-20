@@ -83,18 +83,20 @@ public class DrawEntryService {
     /**
      * 내 응모와 추첨 결과, 그 회차. 결과를 반영하기 전이거나 응모비를 결제하지 않았으면(추첨 대상이 아니다) 결과가 없다(null) — 반영 뒤 결제 완료
      * 응모에 당첨 주문이 이어져 있으면 당첨, 아니면 낙첨이다. 회차는 화면이 다시 조회하지 않게 같이 준다(만든 뒤 바뀌지 않아 읽는 순서와 무관하다).
+     * 세 문장을 트랜잭션 없이 차례로 읽는다 — 문장마다 그때 커밋된 값을 본다(READ COMMITTED). 트랜잭션을 열면 문장마다 준비 · 정리 5개가 더 붙었다.
      *
      * @throws BusinessException 404 DRAW_ENTRY_NOT_FOUND
      */
     public MyEntry view(UUID customerId, UUID drawId) {
         // 반영 표식을 먼저 읽는다 — 반영(당첨 주문 연결과 같은 커밋)이 보였으면 그 뒤에 읽는 응모에도 당첨이 보인다. 반대 순서면 그 사이 반영이
         // 커밋될 때 당첨자에게 낙첨이 보인다
-        boolean settled = readTransaction.execute(status -> campaigns.findCloseState(drawId)).map(c -> c.settledAt() != null).orElse(false);
-        DrawEntry entry = mine(customerId, drawId);
+        boolean settled = campaigns.findCloseState(drawId).map(c -> c.settledAt() != null).orElse(false);
+        DrawEntry entry = entries.findByCampaignAndCustomer(drawId, customerId)
+                .orElseThrow(() -> new BusinessException(OrderErrorCode.DRAW_ENTRY_NOT_FOUND));
         DrawEntryResult result = !settled || entry.status() != DrawEntryStatus.PAID ? null
                 : entry.wonOrderId() != null ? DrawEntryResult.WON : DrawEntryResult.LOST;
         // 응모가 회차를 외래 키로 가리키고 회차는 지우지 않으므로 응모가 있으면 회차도 있다
-        DrawCampaign campaign = readTransaction.execute(status -> campaigns.findById(drawId))
+        DrawCampaign campaign = campaigns.lookup(drawId)
                 .orElseThrow(() -> new IllegalStateException("응모의 회차가 없다: drawId=" + drawId));
         return new MyEntry(entry, result, campaign);
     }

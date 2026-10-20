@@ -18,6 +18,13 @@ public interface DrawCampaignJpaRepository extends JpaRepository<DrawCampaignJpa
 
     Optional<DrawCampaignJpaEntity> findByIdempotencyKey(String idempotencyKey);
 
+    /**
+     * 회차 하나. 직접 선언한 쿼리라 트랜잭션 밖에서 부르면 문장 하나다 — 상속한 findById 는 저장소가 읽기 전용 트랜잭션을 열어 준비 · 정리 문장
+     * 5개가 더 붙는다(실측 MySQL 8.4 일반 로그).
+     */
+    @Query("SELECT c FROM DrawCampaignJpaEntity c WHERE c.id = :id")
+    Optional<DrawCampaignJpaEntity> lookup(@Param("id") UUID id);
+
     // 단계 필터 셋은 인덱스 없이 표를 훑는다 — 실측(MySQL 8.4, 회차 5,000 · 응모 중 30 · 예정 100): 목록 100건 1.7 ~ 2.9ms, 건수 0.75ms.
     // 거르지 않은 최신순 목록도 이 크기에서 표를 훑고 2.3ms 다. 회차는 관리자가 만드는 것이라 이 크기를 넘기 어렵다
 
