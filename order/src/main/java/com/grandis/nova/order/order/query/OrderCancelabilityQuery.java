@@ -5,17 +5,16 @@ import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.web.Viewer;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
 
 /**
  * 예약 취소 가능 여부. preorder 가 사용자 · 관리자 취소를 시작하기 전에 묻는다. 읽기만 한다({@link OrderReader}).
  *
- * 잠그지 않고 읽는 참고값이다. 이 답과 실제 취소 사이에 배송이 시작되면 예약 취소 수신이 REJECTED(SHIPPED) 로 돌려준다.
+ * 트랜잭션 없이 잠그지 않는 조회 한 문장으로 읽는 참고값이다. 이 답과 실제 취소 사이에 배송이 시작되면 예약 취소 수신이
+ * REJECTED(SHIPPED) 로 돌려준다. 트랜잭션을 두지 않는 이유와 깨지는 조건은 StockQueryService 와 같다(엔티티에 연관도 없다).
  */
 @Service
-@Transactional(readOnly = true)
 public class OrderCancelabilityQuery {
 
     private final OrderReader reader;
