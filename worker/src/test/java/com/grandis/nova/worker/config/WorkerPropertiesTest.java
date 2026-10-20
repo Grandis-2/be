@@ -93,6 +93,7 @@ class WorkerPropertiesTest {
                 Map.of("nova.worker.reject-guard.pause", "16m"),
                 Map.of("nova.worker.reject-guard.give-up-after", "0s"),
                 Map.of("nova.worker.retry.cancel-generations", "0"),
+                Map.of("nova.worker.retry.cancel-generations", "2"),
                 Map.of("nova.worker.concurrency.per-mock", "65536", "nova.worker.concurrency.mock-max-instances", "65536"),
                 Map.of("nova.worker.concurrency.rate-per-second", "2147483647",
                         "nova.worker.concurrency.mock-max-instances", "2"),

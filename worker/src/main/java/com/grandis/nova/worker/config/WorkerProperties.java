@@ -151,7 +151,7 @@ public record WorkerProperties(
      * @param inRoundDelayMin 곧바로 다시 보내기 전에 쉬는 시간의 아래 끝. 위 끝(inRoundDelayMax)까지 고르게 흩는다
      * @param backoff         다음 차례까지의 지연. 차례 사이마다 하나씩이라 roundsPerGeneration − 1 개
      * @param generations     REGISTER 가 최종 실패하기까지의 세대 수
-     * @param cancelGenerations CANCEL 이 포기하기까지의 세대 수. 등록보다 길게 버틴다 — 포기하면 preorder 가 작업을 DEAD_LETTER 로 두고
+     * @param cancelGenerations CANCEL 이 포기하기까지의 세대 수. generations 이상이다 — 포기하면 preorder 가 작업을 DEAD_LETTER 로 두고
      *                        관리자가 재처리하거나 외부를 확인해 끝낸다. 기본 8 은 세대 간격 12m 로 약 1시간 45분
      * @param generationGap   세대 사이 지연. 기본 12m 은 흩은 위쪽 끝(14.4m)이 SQS 지연 상한 15m 안이라 잘리지 않는다 —
      *                        잘리면 그만큼이 정확히 15m 에 한꺼번에 돌아온다
@@ -173,6 +173,9 @@ public record WorkerProperties(
             backoff = List.copyOf(backoff);
             require(inRound >= 0 && roundsPerGeneration >= 1 && generations >= 1 && cancelGenerations >= 1,
                     "retry 는 in-round >= 0, rounds-per-generation >= 1, generations · cancel-generations >= 1 이어야 한다");
+            // 취소를 먼저 포기하면 등록은 살아 있는데 취소만 관리자에게 넘어간다
+            require(cancelGenerations >= generations, "retry.cancel-generations 는 generations 이상이어야 한다: "
+                    + cancelGenerations + " < " + generations);
             require(backoff.size() == roundsPerGeneration - 1,
                     "retry.backoff 는 rounds-per-generation − 1 개여야 한다: " + backoff);
             require(backoff.stream().allMatch(delay -> positive(delay) && delay.compareTo(MAX_DELAY) <= 0)
