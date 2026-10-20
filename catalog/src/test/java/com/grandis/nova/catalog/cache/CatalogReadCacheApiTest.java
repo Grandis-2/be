@@ -196,6 +196,7 @@ class CatalogReadCacheApiTest {
     @DisplayName("일반 상품 상세가 캐시에서 나갈 때 DB 의 상품 표를 읽지 않는다 — 판매 준비는 본문과 같이 캐시된다(준비 표식이 세대를 올린다)")
     void cachedInStockDetailDoesNotReadProducts() throws Exception {
         UUID productId = registerInStock("준비캐시");
+        UUID uncached = registerInStock("캐시 없음");
         mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk());   // 본문을 채운다
 
         java.util.List<String> statements = new java.util.ArrayList<>();
@@ -207,6 +208,7 @@ class CatalogReadCacheApiTest {
             statement.execute("TRUNCATE TABLE mysql.general_log");
             try {
                 mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk());
+                mockMvc.perform(get("/api/v1/products/{id}", uncached)).andExpect(status().isOk());   // 양성 대조군 — 캐시에 없는 상세는 상품 표를 읽는다
             } finally {
                 statement.execute("SET GLOBAL general_log = 'OFF'");
             }
@@ -217,7 +219,12 @@ class CatalogReadCacheApiTest {
                 }
             }
         }
-        assertThat(statements).as("상품 표를 읽은 문장").noneMatch(sql -> java.util.regex.Pattern.compile("\\bproducts\\b").matcher(sql).find());
+        java.util.regex.Pattern products = java.util.regex.Pattern.compile("\\bproducts\\b");
+        String cachedId = java.util.HexFormat.of().formatHex(UuidBinary.toBytes(productId));
+        String uncachedId = java.util.HexFormat.of().formatHex(UuidBinary.toBytes(uncached));
+        assertThat(statements).as("대조군 — 캐시에 없는 상세가 상품 표를 읽은 문장이 잡힌다")
+                .anyMatch(sql -> products.matcher(sql).find() && sql.contains(uncachedId));
+        assertThat(statements).as("캐시된 상세가 상품 표를 읽은 문장").noneMatch(sql -> products.matcher(sql).find() && sql.contains(cachedId));
     }
 
     @Test
@@ -347,24 +354,25 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
-    @DisplayName("판매 준비 전에 캐시된 상세 본문은 판매 준비 이벤트가 비운다 — DB 만 고치면(세대 안 올림) 계속 404 이고, 같은 이벤트가 다시 와도 그대로 200")
-    void stockReadyEventRefreshesCachedDetail() throws Exception {
-        UUID ready = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "준비 상세", "t" + ShopFixtures.unique());
-        fixtures.inventoryOnly(fixtures.option(ready, "ACTIVE", ShopFixtures.OPTION_PRICE), 3, 0, 0);
-        UUID control = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "대조 상세", "t" + ShopFixtures.unique());
-        fixtures.inventoryOnly(fixtures.option(control, "ACTIVE", ShopFixtures.OPTION_PRICE), 3, 0, 0);
-        mockMvc.perform(get("/api/v1/products/{id}", ready)).andExpect(status().isNotFound());
-        mockMvc.perform(get("/api/v1/products/{id}", control)).andExpect(status().isNotFound());
-        assertThat(redis.keys("catalog:cache:product-detail-body:*")).as("준비 전 본문도 캐시된다").hasSize(2);
+    @DisplayName("판매 준비 전인 일반 상품의 상세 본문은 캐시에 넣지 않는다 — 준비되면(이벤트든 DB 든) 바로 200, 준비된 본문은 캐시에 들고 같은 이벤트가 다시 와도 200")
+    void notReadyDetailIsNotCached() throws Exception {
+        UUID product = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "준비 상세", "t" + ShopFixtures.unique());
+        fixtures.inventoryOnly(fixtures.option(product, "ACTIVE", ShopFixtures.OPTION_PRICE), 3, 0, 0);
+        UUID direct = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "직접 준비", "t" + ShopFixtures.unique());
+        fixtures.inventoryOnly(fixtures.option(direct, "ACTIVE", ShopFixtures.OPTION_PRICE), 3, 0, 0);
+        mockMvc.perform(get("/api/v1/products/{id}", product)).andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/products/{id}", direct)).andExpect(status().isNotFound());
+        assertThat(redis.keys("catalog:cache:product-detail-body:*")).as("준비 전 본문은 넣지 않는다").isEmpty();
 
-        fixtures.stockReady(control);   // DB 만 — 세대를 올리지 않는다
-        mockMvc.perform(get("/api/v1/products/{id}", control)).andExpect(status().isNotFound());   // 대조군 — 캐시의 판매 준비를 쓴다
+        fixtures.stockReady(direct);   // 세대를 올리지 않는 쓰기(예: 마이그레이션)여도 묵은 404 가 없다
+        mockMvc.perform(get("/api/v1/products/{id}", direct)).andExpect(status().isOk());
 
         var handler = handlers.stream().filter(h -> h.eventType().equals("IN_STOCK_PRODUCT_READY")).findFirst().orElseThrow();
-        handler.handle(ready, null);
-        mockMvc.perform(get("/api/v1/products/{id}", ready)).andExpect(status().isOk());
-        handler.handle(ready, null);   // 같은 이벤트가 다시 와도(중복 · 재전송)
-        mockMvc.perform(get("/api/v1/products/{id}", ready)).andExpect(status().isOk());
+        handler.handle(product, null);
+        mockMvc.perform(get("/api/v1/products/{id}", product)).andExpect(status().isOk());
+        assertThat(redis.keys("catalog:cache:product-detail-body:*" + product)).as("준비된 본문은 캐시에 든다").hasSize(1);
+        handler.handle(product, null);   // 같은 이벤트가 다시 와도(중복 · 재전송)
+        mockMvc.perform(get("/api/v1/products/{id}", product)).andExpect(status().isOk());
     }
 
     @Test
