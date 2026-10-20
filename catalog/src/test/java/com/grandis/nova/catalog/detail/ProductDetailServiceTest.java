@@ -48,6 +48,23 @@ class ProductDetailServiceTest {
     }
 
     @Test
+    @DisplayName("준비 전에 읽은 본문이어도 그 뒤 판매 준비가 커밋됐으면 404 가 아니다 — 준비 이벤트 커밋 전에 시작한 본문 조회를 같이 기다린 요청")
+    void notReadyBodyRechecksReadinessBeforeNotFound() {
+        UUID productId = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "준비 직후", null);
+        fixtures.inventoryOnly(fixtures.option(productId, "ACTIVE", new BigDecimal("1000")), 3, 0, 0);
+        UUID never = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "끝내 준비 전", null);
+        fixtures.inventoryOnly(fixtures.option(never, "ACTIVE", new BigDecimal("1000")), 3, 0, 0);
+        ProductDetailBody body = service.findProductBody(productId);
+        ProductDetailBody neverBody = service.findProductBody(never);
+        assertThat(body.stockReady()).as("준비 전에 읽었다").isFalse();
+
+        fixtures.stockReady(productId);   // 본문을 읽은 뒤 준비가 커밋됐다
+
+        assertThat(service.withLiveParts(body).productId()).isEqualTo(productId);
+        assertThatThrownBy(() -> service.withLiveParts(neverBody)).as("대조군 — 준비 전이면 그대로 404").isInstanceOf(BusinessException.class);
+    }
+
+    @Test
     @DisplayName("상세를 읽는 도중 커밋된 가격 변경은 이번 응답에 섞이지 않는다 — 재고는 스냅샷 밖(order 가 답한 시점의 값)이다")
     void detailReadsOneSnapshot() {
         UUID productId = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "스냅샷", null);
