@@ -45,6 +45,8 @@ class AcceptBulkheadTest {
                         assertThat(e.retryAfter()).isBetween(Duration.ofSeconds(1), Duration.ofSeconds(3)));
         assertThat(registry.get(AcceptBulkhead.REJECTED_METRIC).tag("limit", "product").counter().count())
                 .isEqualTo(1);
+        assertThat(registry.get(AcceptBulkhead.WAIT_METRIC).tag("outcome", "rejected").timer()
+                .totalTime(TimeUnit.MILLISECONDS)).as("거절도 기다린 시간을 남긴다").isGreaterThanOrEqualTo(150);
     }
 
     @Test
@@ -103,6 +105,13 @@ class AcceptBulkheadTest {
     }
 
     @Test
+    void 직접_준_전체_상한이_풀_크기보다_작지_않으면_기동에서_막는다() {
+        assertThatThrownBy(() -> properties(2, 10).instanceLimit(10)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AcceptBulkhead(properties(2, 11), 10, registry))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void 잘못된_설정은_기동에서_막는다() {
         assertThatThrownBy(() -> new AcceptBulkheadProperties(0, 0.5, 0, SHORT_WAIT, Duration.ofSeconds(1),
                 Duration.ofSeconds(3))).isInstanceOf(IllegalArgumentException.class);
@@ -132,7 +141,7 @@ class AcceptBulkheadTest {
     }
 
     private AcceptBulkhead bulkhead(int productPermits, int instanceLimit) {
-        return new AcceptBulkhead(properties(productPermits, instanceLimit), 10, registry);
+        return new AcceptBulkhead(properties(productPermits, instanceLimit), 20, registry);
     }
 
     private static AcceptBulkheadProperties properties(int productPermits, int instanceLimit) {

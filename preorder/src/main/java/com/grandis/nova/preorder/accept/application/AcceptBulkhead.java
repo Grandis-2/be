@@ -30,14 +30,16 @@ class AcceptBulkhead {
     /** 쓰는 요청이 없으면 사라진다(약한 참조). 시간으로 지우면 쓰는 중인 세마포어 대신 새 것이 생겨 상품 상한이 깨진다. */
     private final Cache<UUID, Semaphore> productPermits = Caffeine.newBuilder().weakValues().build();
     private final Semaphore instancePermits;
-    private final Timer waitTimer;
+    private final Timer acquiredWait;
+    private final Timer rejectedWait;
     private final Counter productRejected;
     private final Counter instanceRejected;
 
     AcceptBulkhead(AcceptBulkheadProperties properties, int poolSize, MeterRegistry meterRegistry) {
         this.properties = properties;
         this.instancePermits = new Semaphore(properties.instanceLimit(poolSize), true);
-        this.waitTimer = Timer.builder(WAIT_METRIC).publishPercentileHistogram().register(meterRegistry);
+        this.acquiredWait = waitTimer("acquired", meterRegistry);
+        this.rejectedWait = waitTimer("rejected", meterRegistry);
         this.productRejected = meterRegistry.counter(REJECTED_METRIC, "limit", "product");
         this.instanceRejected = meterRegistry.counter(REJECTED_METRIC, "limit", "instance");
     }
@@ -47,14 +49,14 @@ class AcceptBulkhead {
         long deadline = started + properties.maxWait().toNanos();
         Semaphore product = productPermits.get(productId, id -> new Semaphore(properties.productPermits(), true));
         if (!acquire(product, deadline)) {
-            throw rejected(productRejected);
+            throw rejected(productRejected, started);
         }
         try {
             if (!acquire(instancePermits, deadline)) {
-                throw rejected(instanceRejected);
+                throw rejected(instanceRejected, started);
             }
             try {
-                waitTimer.record(System.nanoTime() - started, TimeUnit.NANOSECONDS);
+                acquiredWait.record(System.nanoTime() - started, TimeUnit.NANOSECONDS);
                 return work.get();
             } finally {
                 instancePermits.release();
@@ -73,10 +75,17 @@ class AcceptBulkhead {
         }
     }
 
-    private DependencyUnavailableException rejected(Counter counter) {
+    /** 기다린 시간은 거절도 따로 남긴다 — 허가를 얻은 요청만 세면 넘칠 때 대기가 낮게 보인다. */
+    private DependencyUnavailableException rejected(Counter counter, long started) {
+        rejectedWait.record(System.nanoTime() - started, TimeUnit.NANOSECONDS);
         counter.increment();
         long min = properties.retryAfterMin().toSeconds();
         long max = properties.retryAfterMax().toSeconds();
-        return new DependencyUnavailableException(Duration.ofSeconds(ThreadLocalRandom.current().nextLong(min, max + 1)));
+        return DependencyUnavailableException.overloaded(
+                Duration.ofSeconds(ThreadLocalRandom.current().nextLong(min, max + 1)));
+    }
+
+    private static Timer waitTimer(String outcome, MeterRegistry meterRegistry) {
+        return Timer.builder(WAIT_METRIC).tag("outcome", outcome).publishPercentileHistogram().register(meterRegistry);
     }
 }

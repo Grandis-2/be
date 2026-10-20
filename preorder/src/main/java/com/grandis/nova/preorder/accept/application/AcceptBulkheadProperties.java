@@ -12,7 +12,8 @@ import java.time.Duration;
  *                       처리량은 그대로고 잠금을 기다리며 커넥션만 쥔다
  * @param poolShare      인스턴스 전체 동시 접수 상한을 커넥션 풀의 이 비율로 정한다. 0.5 면 풀 10 중 5 — 나머지를 아웃박스 발행 ·
  *                       SQS 소비기 · 조회가 쓴다(풀은 하나다)
- * @param instanceLimit  전체 상한을 직접 준다. 0 이면 poolShare 로 계산한다
+ * @param instanceLimit  전체 상한을 직접 준다. 0 이면 poolShare 로 계산한다. 풀 크기보다 작아야 한다 — 같거나 크면 접수가 풀을
+ *                       다 쥘 수 있어 격벽이 조회를 지키지 못한다
  * @param maxWait        두 허가를 합쳐 기다리는 상한. 커넥션 대기 상한(2초)과 비슷하게 짧게 두고 503 + Retry-After 로 돌려보낸다 —
  *                       입장권은 발급 뒤 90~120초 쓸 수 있고 거절된 접수는 입장권을 쓰지 않아 다시 보내면 된다
  * @param retryAfterMin  거절 응답의 Retry-After 아래 끝
@@ -50,6 +51,10 @@ record AcceptBulkheadProperties(
     /** 전체 상한. 직접 준 값이 없으면 풀 크기의 poolShare(내림, 최소 1). */
     int instanceLimit(int poolSize) {
         if (instanceLimit > 0) {
+            if (instanceLimit >= poolSize) {
+                throw new IllegalArgumentException("nova.accept.bulkhead.instance-limit(" + instanceLimit
+                        + ") 은 커넥션 풀 크기(" + poolSize + ")보다 작아야 한다");
+            }
             return instanceLimit;
         }
         return Math.max(1, (int) Math.floor(poolSize * poolShare));

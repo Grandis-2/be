@@ -417,7 +417,7 @@ class PreorderAcceptConcurrencyTest {
     }
 
     private long bulkheadEntered() {
-        return meterRegistry.get("preorder.accept.bulkhead.wait").timer().count();
+        return meterRegistry.get("preorder.accept.bulkhead.wait").tag("outcome", "acquired").timer().count();
     }
 
     private double bulkheadRejected() {
