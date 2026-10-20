@@ -101,6 +101,8 @@ public class CatalogReadCache {
         // (준비는 되돌아가지 않으므로 넣은 본문의 준비는 낡지 않는다). 준비 전 상품의 상세는 요청마다 DB 로 간다
         ReadCache.Entry<ProductDetailBody> body = cache.entry(detailSpec, PRODUCTS, productId.toString(), () -> details.findProductBody(productId),
                 found -> found.view().saleMode() != SaleMode.IN_STOCK || found.stockReady());
+        // 실시간 칸은 loader 밖, 요청마다 자기 스레드에서 채운다 — 같이 기다린 요청도 여기서 채우므로, 준비 전 본문의 판매 준비 다시 읽기
+        // (ProductDetailService#withLiveParts)가 커밋 뒤 요청에 새 값을 준다. loader 안으로 옮기면 그 다시 읽기가 무력해진다
         return body.map(details::withLiveParts);
     }
 

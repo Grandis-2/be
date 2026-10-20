@@ -127,7 +127,7 @@ public class ProductDetailService {
         }
         // 판매 준비는 목록과 같은 판정(products.stock_ready_at — order 의 판매 준비 이벤트)이다. 재고 행의 유무로 따로 가르면 목록에 없는 상품이 상세에 보인다.
         // 준비 전 본문이면 404 직전에 한 번 더 본다 — 준비 이벤트 커밋 전에 시작한 본문 조회를 커밋 뒤 요청이 같이 기다렸으면 그 본문은 옛 값이다.
-        // 준비 전 본문은 캐시에 넣지 않으므로(CatalogReadCache) 이 갈래는 원래 DB 로 가는 요청이고, 캐시에서 나가는 준비된 본문은 다시 읽지 않는다
+        // 캐시 히트로는 이 갈래에 오지 않는다(준비 전 본문은 저장하지 않는다 — CatalogReadCache). 캐시에서 나가는 준비된 본문은 다시 읽지 않는다
         if (!body.stockReady() && !crossReads.isStockReady(view.productId())) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
