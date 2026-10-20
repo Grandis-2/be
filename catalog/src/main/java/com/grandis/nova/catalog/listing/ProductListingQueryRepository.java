@@ -67,7 +67,7 @@ public class ProductListingQueryRepository {
      * 재고 표는 읽지 않는다). 사전예약의 준비(preorder 회차 행이 있는가)는 catalog DB 에 없어 이 식에서는 참이다 — 회차를 보는 자리는 preorder 에
      * 묻고(PreorderCampaigns), 내부 상품 조회(1.3 · /internal/options)는 묻지 않고 참으로 싣는다(contracts/order-internal.md). products 를 p 로 둔 문장에 넣는다.
      */
-    static final String READY = "(p.sale_mode = 'PREORDER' OR p.stock_ready_at IS NOT NULL)";
+    public static final String READY = "(p.sale_mode = 'PREORDER' OR p.stock_ready_at IS NOT NULL)";
 
     /**
      * 판매 중 옵션의 최저 정가. 할인가는 정가에 대해 줄지 않으므로(같은 상품은 할인율이 하나) 최저 정가에 할인을 건 값이 최저 할인가다 —
