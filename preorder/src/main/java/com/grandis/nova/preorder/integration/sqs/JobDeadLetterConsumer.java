@@ -19,7 +19,7 @@ import java.util.UUID;
 /**
  * worker 로 보낸 작업 메시지(등록 · 취소)의 DLQ 를 받아, 그 작업을 DEAD_LETTER 로 둔다. 보낸 쪽인 preorder 가 자기 작업 표에 결과를
  * 남길 뿐 다시 보내지 않는다 — 다시 돌리는 일은 관리자 재처리가 실행 회차를 올려 새 메시지로 한다. 반영이 커밋된 뒤에만 지운다.
- * 어느 작업인지 읽을 수 없거나, 없는 작업 · 작업보다 앞선 실행 회차의 메시지는 지우지 않는다 — DLQ 에 남아 DLQ 경보로 사람이 본다.
+ * 어느 작업 · 실행 회차인지 읽을 수 없거나, 없는 작업 · 작업보다 앞선 실행 회차의 메시지는 지우지 않는다 — DLQ 에 남아 DLQ 경보로 사람이 본다.
  */
 class JobDeadLetterConsumer extends QueuePoller {
 
@@ -44,6 +44,12 @@ class JobDeadLetterConsumer extends QueuePoller {
         if (job.isEmpty()) {
             log.error("어느 작업인지 읽을 수 없는 작업 DLQ 메시지다 — 지우지 않는다 queue={} messageId={}", settings.queue(),
                     message.messageId());
+            return;
+        }
+        if (job.get().run() == null) {
+            // 첫 실행으로 읽으면 재처리로 회차가 오른 작업의 메시지를 지난 실행으로 보고 지워, 작업이 PENDING 에 남는다
+            log.error("실행 회차를 읽을 수 없는 작업 DLQ 메시지다 — 지우지 않는다 queue={} syncJobId={} messageId={}",
+                    settings.queue(), job.get().syncJobId(), message.messageId());
             return;
         }
         try {
@@ -72,23 +78,31 @@ class JobDeadLetterConsumer extends QueuePoller {
             if (syncJobId == null || !syncJobId.isString()) {
                 return Optional.empty();
             }
+            UUID id = UUID.fromString(syncJobId.stringValue());
             JsonNode run = payload.get(RUN);
-            return Optional.of(new DeadJob(UUID.fromString(syncJobId.stringValue()),
-                    run != null && run.isInt() ? run.intValue() : runAttribute(message)));
+            if (run != null) {
+                return Optional.of(new DeadJob(id, run.isInt() ? run.intValue() : null));
+            }
+            return Optional.of(new DeadJob(id, runAttribute(message)));
         } catch (JacksonException | IllegalArgumentException e) {
             return Optional.empty();
         }
     }
 
-    private static int runAttribute(Message message) {
+    /** 실행 회차가 본문에 없을 때. 속성도 없으면 첫 실행이고, 있는데 읽을 수 없으면 null(모름)이다. */
+    private static Integer runAttribute(Message message) {
         MessageAttributeValue value = message.messageAttributes().get(RUN);
-        try {
-            return value == null ? FIRST_RUN : Integer.parseInt(value.stringValue());
-        } catch (NumberFormatException e) {
+        if (value == null) {
             return FIRST_RUN;
+        }
+        try {
+            return Integer.parseInt(value.stringValue());
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 
-    private record DeadJob(UUID syncJobId, int run) {
+    /** @param run 실행 회차. 읽을 수 없으면 null */
+    private record DeadJob(UUID syncJobId, Integer run) {
     }
 }

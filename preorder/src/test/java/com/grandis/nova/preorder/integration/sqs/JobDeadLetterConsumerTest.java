@@ -124,6 +124,29 @@ class JobDeadLetterConsumerTest {
                 .filter(line -> line.contains(kept) && line.contains("syncJobId=" + syncJobId)).count() >= 2);
     }
 
+    /**
+     * 재처리로 실행 회차가 오른 작업이다. 회차를 읽을 수 없는 메시지를 첫 실행으로 읽으면 지난 실행으로 보고 지워 작업이 PENDING 에
+     * 남는다 — 지우지 않고 DLQ 에 남겨 사람이 본다.
+     */
+    @Test
+    void 실행_회차를_읽을_수_없는_메시지는_지난_실행으로_보지_않고_지우지_않는다(CapturedOutput output) {
+        Message job = registerJobReady();
+        UUID syncJobId = syncJobIdOf(job);
+        jdbcTemplate.update("UPDATE preorder_sync_jobs SET run = 2 WHERE id = ?",
+                (Object) UuidBinary.toBytes(syncJobId));
+        String unreadableRun = job.body().replace("\"run\":1", "\"run\":\"2\"");
+        assertThat(unreadableRun).as("payload 의 실행 회차를 문자열로 바꿨다").contains("\"run\":\"2\"");
+
+        queues.send(JobDeadLetterConsumerConfig.REGISTER_DLQ, unreadableRun);
+
+        // 지웠으면 가시성 시간(2초) 뒤 다시 받지 않는다 — 두 번 남았으면 지우지 않은 것이다
+        String kept = "실행 회차를 읽을 수 없는 작업 DLQ 메시지다 — 지우지 않는다";
+        await().atMost(TIMEOUT).until(() -> output.getOut().lines()
+                .filter(line -> line.contains(kept) && line.contains("syncJobId=" + syncJobId)).count() >= 2);
+        assertThat(output.getOut()).doesNotContain("지난 실행의 작업 메시지가 DLQ 로 갔다 — 작업은 그대로 둔다 syncJobId=" + syncJobId);
+        assertThat(jobStatus(syncJobId)).isEqualTo("PENDING");
+    }
+
     /** 작업보다 앞선 실행 회차는 정상 흐름에서 생기지 않는다. 계약이 어긋난 것이라 작업을 바꾸지 않고 메시지를 남긴다. */
     @Test
     void 작업보다_앞선_실행_회차의_메시지면_작업을_바꾸지_않고_지우지_않는다(CapturedOutput output) {
