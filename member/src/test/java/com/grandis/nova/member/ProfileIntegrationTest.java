@@ -1,6 +1,7 @@
 package com.grandis.nova.member;
 
 import com.grandis.nova.common.UuidBinary;
+import com.grandis.nova.member.support.Containers;
 import com.grandis.nova.member.support.MemberIntegrationTest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -17,6 +18,13 @@ import com.grandis.nova.member.customer.Customer;
 import com.grandis.nova.member.customer.CodePointSize;
 import com.grandis.nova.member.customer.ProfileRequest;
 import com.grandis.nova.member.customer.CustomerRepository;
+import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -162,6 +170,32 @@ class ProfileIntegrationTest {
                 .andExpect(jsonPath("$.data.name").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.data.email").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.data.phoneNumber").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    @Test
+    @DisplayName("GET 은 회원 행 한 문장만 보낸다 — 트랜잭션을 열지 않는다(읽기 전용 · autocommit 전환 문장이 없다)")
+    void getReadsOneStatementWithoutTransaction() throws Exception {
+        mvc.perform(get(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken))).andExpect(status().isOk());
+        List<String> statements = new ArrayList<>();
+        try (Connection root = DriverManager.getConnection(Containers.MYSQL.getJdbcUrl(), "root", Containers.MYSQL.getPassword());
+             Statement statement = root.createStatement()) {
+            statement.execute("SET GLOBAL log_output = 'TABLE'");
+            statement.execute("SET GLOBAL general_log = 'ON'");
+            statement.execute("TRUNCATE TABLE mysql.general_log");
+            try {
+                mvc.perform(get(PATH).header(BearerTokens.HEADER, BearerTokens.value(userToken))).andExpect(status().isOk());
+            } finally {
+                statement.execute("SET GLOBAL general_log = 'OFF'");
+            }
+            // 회원 행을 읽은 연결의 문장만 — 같은 서버를 쓰는 다른 작업의 문장을 섞지 않는다. 트랜잭션을 열었다면 준비 문장도 이 연결로 간다
+            try (ResultSet rs = statement.executeQuery("SELECT argument FROM mysql.general_log WHERE command_type = 'Query' AND thread_id IN"
+                    + " (SELECT thread_id FROM mysql.general_log WHERE argument LIKE '%from customers c1_0 where c1_0.id%') ORDER BY event_time")) {
+                while (rs.next()) {
+                    statements.add(new String(rs.getBytes(1), StandardCharsets.UTF_8));
+                }
+            }
+        }
+        assertThat(statements).as("회원 행 한 문장").singleElement().satisfies(sql -> assertThat(sql).contains("from customers c1_0 where c1_0.id"));
     }
 
     @Test

@@ -17,6 +17,13 @@ public interface CustomerRepository extends JpaRepository<Customer, UUID> {
     Optional<Customer> findByKakaoId(String kakaoId);
 
     /**
+     * 회원 행 하나를 잠그지 않고 읽는다. 직접 선언한 쿼리라 트랜잭션 밖에서 부르면 문장 하나다 — 상속한 findById 는 저장소가 읽기 전용 트랜잭션을
+     * 열어 준비 · 정리 문장 5개가 더 붙는다(실측 MySQL 8.4 일반 로그: findById 6문장, 선언한 쿼리 1문장).
+     */
+    @Query("select c from Customer c where c.id = :id")
+    Optional<Customer> lookup(@Param("id") UUID id);
+
+    /**
      * 회원 행을 SELECT … FOR UPDATE 로 읽는다. 내 정보 · 기본 배송지 쓰기는 이것부터 잡는다 — 바뀐 칸만 쓰는 UPDATE(@DynamicUpdate)는
      * 잠그지 않고 읽으면 같은 자원의 PUT 두 개가 칸마다 섞인다(이름은 한쪽, 이메일은 다른 쪽 — 재현: ProfileIntegrationTest).
      * 잠근 뒤 읽으므로 앞 트랜잭션이 커밋한 값을 보고, 늦은 PUT 의 본문이 그대로 남는다.

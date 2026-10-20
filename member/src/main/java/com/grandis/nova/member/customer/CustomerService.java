@@ -27,7 +27,7 @@ public class CustomerService {
         this.customers = customers;
     }
 
-    @Transactional(readOnly = true)
+    /** 한 행을 읽기만 한다 — 트랜잭션을 열지 않는다({@link CustomerRepository#lookup}). */
     public ProfileView profile(UUID customerId) {
         Customer customer = find(customerId);
         return new ProfileView(customer.getDisplayName(), customer.profile());
@@ -40,7 +40,7 @@ public class CustomerService {
         return new ProfileView(customer.getDisplayName(), customer.profile());
     }
 
-    @Transactional(readOnly = true)
+    /** 한 행을 읽기만 한다 — 트랜잭션을 열지 않는다({@link CustomerRepository#lookup}). */
     public ShippingAddress defaultAddress(UUID customerId) {
         return find(customerId).defaultAddress();
     }
@@ -96,6 +96,6 @@ public class CustomerService {
     }
 
     private Customer find(UUID customerId) {
-        return customers.findById(customerId).orElseThrow(() -> new BusinessException(CommonErrorCode.UNAUTHENTICATED));
+        return customers.lookup(customerId).orElseThrow(() -> new BusinessException(CommonErrorCode.UNAUTHENTICATED));
     }
 }

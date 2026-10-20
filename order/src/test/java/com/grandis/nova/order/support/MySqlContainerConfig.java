@@ -35,6 +35,11 @@ public class MySqlContainerConfig {
         SHARED.start();
     }
 
+    /** 싱글턴 컨테이너 — root 연결(일반 로그로 보낸 문장 보기)이 필요한 시험이 쓴다({@link GeneralLog}). */
+    public static MySQLContainer get() {
+        return SHARED;
+    }
+
     @Bean
     DynamicPropertyRegistrar mysqlConnection() {
         return registry -> {
