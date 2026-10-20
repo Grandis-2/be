@@ -19,7 +19,7 @@ import java.util.UUID;
 /**
  * worker 로 보낸 작업 메시지(등록 · 취소)의 DLQ 를 받아, 그 작업을 DEAD_LETTER 로 둔다. 보낸 쪽인 preorder 가 자기 작업 표에 결과를
  * 남길 뿐 다시 보내지 않는다 — 다시 돌리는 일은 관리자 재처리가 실행 회차를 올려 새 메시지로 한다. 반영이 커밋된 뒤에만 지운다.
- * 어느 작업인지 읽을 수 없는 메시지는 지우지 않는다 — DLQ 에 남아 DLQ 경보로 사람이 본다.
+ * 어느 작업인지 읽을 수 없거나 없는 작업의 메시지는 지우지 않는다 — DLQ 에 남아 DLQ 경보로 사람이 본다.
  */
 class JobDeadLetterConsumer extends QueuePoller {
 
@@ -47,7 +47,11 @@ class JobDeadLetterConsumer extends QueuePoller {
             return;
         }
         try {
-            handler.onJobMessageDeadLettered(job.get().syncJobId(), job.get().run());
+            if (!handler.onJobMessageDeadLettered(job.get().syncJobId(), job.get().run())) {
+                log.error("없는 작업의 메시지가 DLQ 로 왔다 — 지우지 않는다 queue={} syncJobId={} messageId={}", settings.queue(),
+                        job.get().syncJobId(), message.messageId());
+                return;
+            }
         } catch (RuntimeException e) {
             log.warn("작업 DLQ 메시지를 반영하지 못했다 — 가시성 시간 뒤 다시 받는다 syncJobId={} messageId={}",
                     job.get().syncJobId(), message.messageId(), e);

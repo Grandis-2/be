@@ -70,7 +70,7 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 - 재처리는 DEAD_LETTER → PENDING(run + 1)이 1행일 때만 작업 종류에 맞는 REGISTER_JOB_READY · CANCEL_JOB_READY 를 올린 run 으로 다시 적는다. 0행인데 발행하거나 run 을 싣지 않으면 지적.
 - 작업 메시지의 request 는 저장한 request_payload 그대로다. 본문을 새로 만들거나 키를 바꾸면 차단급.
 - CANCEL 의 FAILED 도 작업을 DEAD_LETTER 로 두고 예약은 CANCELING 에 남긴다. 받은 자리에서 다시 발행하거나 예약을 CANCELED 로 보내면 지적. 끝내는 길은 재처리 뒤 성공 · 늦게 온 성공 · 관리자 수동 완료(CANCEL · DEAD_LETTER · 예약 CANCELING 일 때만)뿐이다.
-- 작업 DLQ(preorder-register-dlq · preorder-cancel-dlq)의 메시지는 FAILED 와 같게 작업을 DEAD_LETTER 로 두고 지운다(JobDeadLetterConsumer). 메시지 run 이 작업 run 보다 작으면 바꾸지 않는다. 원본 큐로 다시 보내거나 예약 상태를 바꾸면 지적. 어느 작업인지 읽을 수 없는 메시지는 지우지 않는다(DLQ 경보).
+- 작업 DLQ(preorder-register-dlq · preorder-cancel-dlq)의 메시지는 FAILED 와 같게 작업을 DEAD_LETTER 로 두고 지운다(JobDeadLetterConsumer). 메시지 run 이 작업 run 보다 작으면 바꾸지 않는다. 원본 큐로 다시 보내거나 예약 상태를 바꾸면 지적. 어느 작업인지 읽을 수 없거나 없는 작업의 메시지는 지우지 않는다(DLQ 경보).
 
 **경계**
 - 상품은 `GET /internal/products/{productId}/options` 로 묻고 캐시한다. 이름 · 가격은 접수 때 예약 행에 복사한다 — 표시용 이름 · 가격을 매번 카탈로그 조회로 만들면 지적한다.

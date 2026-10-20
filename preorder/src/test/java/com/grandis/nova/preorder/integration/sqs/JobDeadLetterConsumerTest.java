@@ -63,7 +63,7 @@ class JobDeadLetterConsumerTest {
     }
 
     @Test
-    void 등록_작업_메시지가_DLQ_로_가면_작업을_DEAD_LETTER_로_두고_DLQ_에서_지운다() {
+    void 등록_작업_메시지가_DLQ_로_가면_작업을_DEAD_LETTER_로_두고_DLQ_에서_지운다(CapturedOutput output) {
         Message job = registerJobReady();
         UUID syncJobId = syncJobIdOf(job);
         double before = failed("REGISTER");
@@ -72,19 +72,24 @@ class JobDeadLetterConsumerTest {
 
         await().atMost(TIMEOUT).until(() -> "DEAD_LETTER".equals(jobStatus(syncJobId)));
         assertThat(failed("REGISTER") - before).isEqualTo(1);
-        await().atMost(TIMEOUT).until(() -> queues.messagesIn(JobDeadLetterConsumerConfig.REGISTER_DLQ) == 0);
+        // 지우지 않았으면 가시성 시간(2초) 뒤 다시 받아 "이미 끝난 작업" 으로 남긴다
+        String again = "이미 끝난 작업의 메시지가 DLQ 로 갔다 — 작업은 그대로 둔다 syncJobId=" + syncJobId;
+        await().during(Duration.ofSeconds(5)).atMost(Duration.ofSeconds(8)).until(() -> !output.getOut().contains(again));
     }
 
     /** 관리자 재처리로 실행 회차가 오른 작업이다. 지난 실행의 메시지가 늦게 DLQ 로 와도 다시 포기시키지 않는다. */
     @Test
-    void 지난_실행의_메시지면_작업을_바꾸지_않고_지운다() {
+    void 지난_실행의_메시지면_작업을_바꾸지_않고_지운다(CapturedOutput output) {
         Message job = registerJobReady();
         UUID syncJobId = syncJobIdOf(job);
         jdbcTemplate.update("UPDATE preorder_sync_jobs SET run = 2 WHERE id = ?", (Object) UuidBinary.toBytes(syncJobId));
 
         queues.send(JobDeadLetterConsumerConfig.REGISTER_DLQ, job.body());
 
-        await().atMost(TIMEOUT).until(() -> queues.messagesIn(JobDeadLetterConsumerConfig.REGISTER_DLQ) == 0);
+        String stale = "지난 실행의 작업 메시지가 DLQ 로 갔다 — 작업은 그대로 둔다 syncJobId=" + syncJobId;
+        await().atMost(TIMEOUT).until(() -> output.getOut().contains(stale));
+        await().during(Duration.ofSeconds(5)).atMost(Duration.ofSeconds(8))
+                .until(() -> output.getOut().lines().filter(line -> line.contains(stale)).count() == 1);
         assertThat(jobStatus(syncJobId)).isEqualTo("PENDING");
     }
 
@@ -100,12 +105,29 @@ class JobDeadLetterConsumerTest {
 
         await().atMost(TIMEOUT).until(() -> unreadable(output).distinct().count() == 1
                 && unreadable(output).count() >= 2);
-        assertThat(queues.messagesIn(JobDeadLetterConsumerConfig.CANCEL_DLQ)).isPositive();
     }
 
-    /** 이 시험이 넣은 메시지의 "읽을 수 없다" 로그에 찍힌 messageId 들. */
+    /** 지우면 흔적이 사라진다. 작업이 지워졌거나 다른 환경의 메시지일 수 있어 사람이 본다. */
+    @Test
+    void 없는_작업의_메시지는_지우지_않는다(CapturedOutput output) {
+        UUID syncJobId = UUID.randomUUID();
+
+        queues.send(JobDeadLetterConsumerConfig.REGISTER_DLQ, """
+                {"eventId":"%s","eventType":"REGISTER_JOB_READY","aggregateType":"PREORDER_SYNC_JOB","aggregateId":"%s",
+                 "occurredAt":"2026-10-20T01:00:00Z","payload":{"syncJobId":"%s"}}""".formatted(UUID.randomUUID(),
+                syncJobId, syncJobId));
+
+        await().atMost(TIMEOUT).until(() -> logged(output, "없는 작업의 메시지가 DLQ 로 왔다").distinct().count() == 1
+                && logged(output, "없는 작업의 메시지가 DLQ 로 왔다").count() >= 2);
+    }
+
     private static Stream<String> unreadable(CapturedOutput output) {
-        return output.getOut().lines().filter(line -> line.contains("어느 작업인지 읽을 수 없는"))
+        return logged(output, "어느 작업인지 읽을 수 없는");
+    }
+
+    /** 이 시험이 넣은 메시지에 대해 그 로그가 찍힌 messageId 들. 소비기가 다시 받을 때마다 한 줄씩 는다. */
+    private static Stream<String> logged(CapturedOutput output, String text) {
+        return output.getOut().lines().filter(line -> line.contains(text))
                 .map(line -> line.substring(line.indexOf("messageId=")));
     }
 

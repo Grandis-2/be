@@ -169,26 +169,29 @@ public class PreorderEventHandler {
     /**
      * 작업 메시지가 SQS DLQ 로 갔다 — worker 가 결과를 알리지 못한 채 재수신 한도를 넘겼다. 포기와 같게 DEAD_LETTER 로 두어
      * 관리자 재처리 · 수동 완료로 넘긴다. 메시지의 실행 회차가 지난 것이면 바꾸지 않는다 — 재처리한 작업을 다시 포기시키지 않게.
+     *
+     * @return 작업을 찾았으면 true(바꿨든 그대로 뒀든). 없는 작업이면 false — 메시지를 남겨 사람이 보게 한다
      */
     @Transactional
-    public void onJobMessageDeadLettered(UUID syncJobId, int run) {
+    public boolean onJobMessageDeadLettered(UUID syncJobId, int run) {
         Optional<SyncJobSnapshot> found = lockJob(syncJobId);
         if (found.isEmpty()) {
-            return;
+            return false;
         }
         SyncJobSnapshot job = found.get();
         if (run < job.run()) {
             log.warn("지난 실행의 작업 메시지가 DLQ 로 갔다 — 작업은 그대로 둔다 syncJobId={} run={} currentRun={}", job.id(), run,
                     job.run());
-            return;
+            return true;
         }
         if (syncJobs.deadLetter(job.id(), clock.instant()) == 0) {
             log.info("이미 끝난 작업의 메시지가 DLQ 로 갔다 — 작업은 그대로 둔다 syncJobId={} status={}", job.id(), job.status());
-            return;
+            return true;
         }
         countFailed(job, DEAD_LETTER_QUEUE);
         log.error("worker 가 결과를 알리지 못해 작업 메시지가 DLQ 로 갔다 — 관리자 재처리 · 수동 완료를 기다린다 jobType={} syncJobId={} "
                 + "preorderId={} run={}", job.jobType(), job.id(), job.preorderId(), run);
+        return true;
     }
 
     private void countFailed(SyncJobSnapshot job, String reason) {
