@@ -6,6 +6,9 @@ import com.github.benmanes.caffeine.cache.Expiry;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.redis.cache.ReadCache;
+import com.grandis.nova.common.redis.cache.ReadCacheEvents;
+import com.grandis.nova.common.redis.cache.ReadCacheEvents.Outcome;
+import com.grandis.nova.common.redis.cache.ReadCacheEvents.RefreshResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -14,9 +17,13 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
@@ -35,6 +42,15 @@ import java.util.function.ToIntFunction;
  *       런타임 예외는 같은 객체가 기다린 쪽에도 던져진다(스택은 처음 읽은 스레드의 것). 그 밖(Error · 몰래 던진 검사 예외)은 원인으로 감싼
  *       IllegalStateException 이다 — 이 경로만은 Redis 판과 다르다(Redis 판은 런타임 예외 · Error 만 넘겨, 몰래 던진 검사 예외면 기다린 쪽이 상한 뒤 503).
  *       기다리는 쪽은 {@link #WAIT_FOR_LOAD} 까지만 — 넘으면 503(다시 시도). loader 는 Caffeine 의 계산 밖에서 돌아 다른 키를 막지 않는다.</li>
+ *   <li>미리 갱신: 읽은 지 TTL 의 {@link #REFRESH_AFTER_PERCENT}% 가 지난 값을 꺼낸 요청은 그 값을 바로 받고, 같은 키 · 세대의 다시 읽기를 갱신
+ *       실행기에 하나만 맡긴다(요청이 없는 키는 갱신하지 않는다). 갱신은 위의 "한 번만 읽기" 자리를 같이 써서, 갱신이 끝나기 전에 값이 만료되면 그 뒤
+ *       요청은 기다리는 쪽이 된다(상한 그대로). 갱신이 실패해도 들고 있던 값의 만료는 늘지 않는다 — 만료 뒤 요청이 직접 읽는다. 실행기가 차면
+ *       맡기지 않고, 그 값이 만료될 때까지 그 키는 다시 맡기지 않는다(만료 때 지금처럼 읽는다). 갱신한 값도 읽기 시작할 때의 세대를 들어, 그사이
+ *       비웠으면 꺼낼 때 버린다. 넣을 때 더 새 세대의 값이 이미 있으면 덮지 않는다(직접 읽기도 같다).
+ *       큐에서 늦게 돈 갱신은 그사이 더 새 값이 들어왔으면 읽지 않는다. 갱신 결과를 넣지 못했으면(storable 거짓 · 무게 실패 · 남은 시간 없음 · 더 새 세대 값) 그 값이
+ *       만료될 때까지 그 키는 다시 맡기지 않는다(실패도 같다). 갱신 실행기가 없으면(시험 · 끈 캐시) 미리 갱신하지 않는다.
+ *       loader 는 요청 맥락(SecurityContext · RequestContextHolder)이 없는 실행기 스레드에서도 돌 수 있어야 한다 — 토큰을 릴레이하는 호출을
+ *       loader 에 넣으면 갱신이 401 로 실패하고 그 실패가 기다린 요청에 퍼진다.</li>
  *   <li>꺼 두면 늘 loader 다.</li>
  * </ul>
  * Redis 와 다른 점은 비우기가 이 인스턴스에만 닿는다는 것이다 — 다른 인스턴스는 TTL 이 지나야 새 값이다. 그래서 TTL 이 짧거나(상품 목록 5초)
@@ -48,6 +64,10 @@ public final class LocalReadCache<K, V> {
 
     /** 같은 키의 진행 중 조회를 같이 받는 쪽이 기다리는 상한 — Redis 읽기 캐시와 같다. */
     static final Duration WAIT_FOR_LOAD = Duration.ofSeconds(5);
+    /** 읽은 지 TTL 의 이만큼(%)이 지난 값을 꺼내면 미리 갱신한다 — 상품 목록(5초)이면 4초, 카테고리(10분)면 8분. */
+    static final int REFRESH_AFTER_PERCENT = 80;
+    /** 넣지 못했거나 맡기지 못한 갱신을 기억하는 자리 수 상한 — 넘으면 지난 것을 지우고, 그래도 차 있으면 더 기억하지 않는다(그 키는 다시 맡겨질 수 있다). */
+    static final int NOT_STORED_LIMIT = 10_000;
 
     private static final Logger log = LoggerFactory.getLogger(LocalReadCache.class);
 
@@ -57,6 +77,14 @@ public final class LocalReadCache<K, V> {
     private final boolean enabled;
     private final ToIntFunction<V> weigher;
     private final Duration waitForLoad;
+    private final Duration refreshAfter;
+    /** 미리 갱신을 맡는 실행기 — null 이면 미리 갱신하지 않는다. */
+    private final Executor refresher;
+    private final ReadCacheEvents events;
+    /** 실행기에 맡겨 둔 갱신의 자리 — 같은 키 · 세대를 두 번 맡기지 않는다. */
+    private final Set<Slot<K>> refreshing = ConcurrentHashMap.newKeySet();
+    /** 갱신 결과를 넣지 못했거나 갱신을 맡기지 못한 자리와 그때 들고 있던 값의 만료 시각 — 그때까지 다시 맡기지 않는다. 만료된 것은 꺼낼 때 · 넘칠 때 지운다. */
+    private final ConcurrentHashMap<Slot<K>, Instant> notStoredUntil = new ConcurrentHashMap<>();
     private final Cache<K, Loaded<V>> cache;
     private final ConcurrentHashMap<Slot<K>, CompletableFuture<ReadCache.Entry<V>>> loading = new ConcurrentHashMap<>();
     private final AtomicLong generation = new AtomicLong();
@@ -66,16 +94,33 @@ public final class LocalReadCache<K, V> {
      * @param weigher       값 하나의 무게. 넣기 전에 한 번 부른다
      */
     public LocalReadCache(String name, Duration ttl, long maximumWeight, ToIntFunction<V> weigher, Clock clock, boolean enabled) {
-        this(name, ttl, maximumWeight, weigher, clock, enabled, WAIT_FOR_LOAD);
+        this(name, ttl, maximumWeight, weigher, clock, enabled, WAIT_FOR_LOAD, null, ReadCacheEvents.NONE);
+    }
+
+    /**
+     * @param refresher 미리 갱신을 맡는 실행기(크기가 정해진 것) — null 이면 미리 갱신하지 않는다
+     * @param events    요청마다의 결과(지표)
+     */
+    public LocalReadCache(String name, Duration ttl, long maximumWeight, ToIntFunction<V> weigher, Clock clock, boolean enabled,
+                          Executor refresher, ReadCacheEvents events) {
+        this(name, ttl, maximumWeight, weigher, clock, enabled, WAIT_FOR_LOAD, refresher, events);
     }
 
     LocalReadCache(String name, Duration ttl, long maximumWeight, ToIntFunction<V> weigher, Clock clock, boolean enabled, Duration waitForLoad) {
+        this(name, ttl, maximumWeight, weigher, clock, enabled, waitForLoad, null, ReadCacheEvents.NONE);
+    }
+
+    LocalReadCache(String name, Duration ttl, long maximumWeight, ToIntFunction<V> weigher, Clock clock, boolean enabled, Duration waitForLoad,
+                   Executor refresher, ReadCacheEvents events) {
         this.name = name;
         this.ttl = ttl;
         this.clock = clock;
         this.enabled = enabled;
         this.weigher = weigher;
         this.waitForLoad = waitForLoad;
+        this.refreshAfter = ttl.multipliedBy(REFRESH_AFTER_PERCENT).dividedBy(100);
+        this.refresher = refresher;
+        this.events = events;
         this.cache = Caffeine.newBuilder()
                 .expireAfter(new UntilStale<K, V>())
                 .maximumWeight(maximumWeight)
@@ -117,6 +162,10 @@ public final class LocalReadCache<K, V> {
         Loaded<V> found = cache.getIfPresent(key);
         if (found != null) {
             if (found.generation() >= current && fresh(found.entry())) {
+                // 이 요청보다 새 세대의 값이면 그 세대로 맡긴다 — 낮은 세대 자리로 넣으면 새 세대 값을 덮고 다음 요청이 다시 읽는다
+                boolean submitted = refresher != null && !clock.instant().isBefore(found.entry().loadedAt().plus(refreshAfter))
+                        && refreshAhead(key, Math.max(found.generation(), current), found.entry(), loader, storable);
+                events.served(name, submitted ? Outcome.HIT_REFRESH : Outcome.HIT);
                 return found.entry();   // 이 요청보다 새 세대의 값도 준다(이 요청이 시작된 뒤 비우기가 있었다)
             }
             cache.asMap().remove(key, found);   // 비우기 전 세대 · 시계로 지난 값
@@ -164,6 +213,8 @@ public final class LocalReadCache<K, V> {
         CompletableFuture<ReadCache.Entry<V>> mine = new CompletableFuture<>();
         CompletableFuture<ReadCache.Entry<V>> running = loading.putIfAbsent(slot, mine);
         if (running != null) {
+            events.served(name, Outcome.WAIT);
+            long started = System.nanoTime();
             try {
                 return running.get(waitForLoad.toMillis(), TimeUnit.MILLISECONDS);
             } catch (ExecutionException e) {
@@ -174,8 +225,11 @@ public final class LocalReadCache<K, V> {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+            } finally {
+                events.waited(name, Duration.ofNanos(System.nanoTime() - started));
             }
         }
+        events.served(name, Outcome.LOAD);
         try {
             Instant loadedAt = clock.instant();   // 읽기 전 시각 — 응답의 나이를 짧게 잡지 않게
             ReadCache.Entry<V> entry = new ReadCache.Entry<>(loader.get(), loadedAt);
@@ -192,17 +246,138 @@ public final class LocalReadCache<K, V> {
         }
     }
 
-    private void store(K key, ReadCache.Entry<V> entry, long started) {
+    /**
+     * 같은 키 · 세대의 다시 읽기를 실행기에 하나만 맡긴다. 이미 맡겼거나 누가 읽는 중이거나, 앞 갱신이 넣지 못했거나 맡기지 못한 값이 아직 살아 있으면 맡기지 않는다.
+     *
+     * @param seen 이 요청이 꺼낸 값 — 갱신이 돌 때 이보다 새 값이 들어와 있으면 읽지 않는다
+     * @return 맡겼으면 true
+     */
+    private boolean refreshAhead(K key, long generation, ReadCache.Entry<V> seen, Supplier<V> loader, Predicate<V> storable) {
+        Slot<K> slot = new Slot<>(key, generation);
+        Instant blockedUntil = notStoredUntil.get(slot);
+        if (blockedUntil != null) {
+            if (clock.instant().isBefore(blockedUntil)) {
+                return false;
+            }
+            notStoredUntil.remove(slot, blockedUntil);
+        }
+        if (loading.containsKey(slot) || !refreshing.add(slot)) {
+            return false;
+        }
+        try {
+            refresher.execute(() -> {
+                try {
+                    refresh(slot, seen, loader, storable);
+                } finally {
+                    refreshing.remove(slot);
+                }
+            });
+            return true;
+        } catch (RejectedExecutionException e) {
+            refreshing.remove(slot);
+            // 실행기가 찬 동안 그 키의 히트마다 다시 맡기며 예외를 만들고 거절을 요청 수만큼 세지 않게, 그 값이 만료될 때까지 다시 맡기지 않는다
+            rememberNotStored(slot, seen.loadedAt().plus(ttl));
+            events.refreshed(name, RefreshResult.REJECTED);
+            return false;
+        } catch (RuntimeException e) {
+            refreshing.remove(slot);   // 맡기지 못했다 — 표식을 남기면 그 키는 다시 맡겨지지 않는다. 요청은 들고 있던 값으로 답한다
+            rememberNotStored(slot, seen.loadedAt().plus(ttl));
+            log.warn("메모리 읽기 캐시 미리 갱신을 맡기지 못했다 cache={}", name, e);
+            events.refreshed(name, RefreshResult.REJECTED);
+            return false;
+        } catch (Error e) {
+            refreshing.remove(slot);
+            throw e;
+        }
+    }
+
+    /**
+     * 실행기에서 도는 다시 읽기 — "한 번만 읽기" 자리를 같이 써서, 그사이 만료돼 들어온 요청은 이 결과를 기다린다. 실패하면 기다린 쪽도 같은 예외를
+     * 받고(직접 읽기와 같다) 들고 있던 값은 그대로 만료된다.
+     */
+    private void refresh(Slot<K> slot, ReadCache.Entry<V> seen, Supplier<V> loader, Predicate<V> storable) {
+        if (generation.get() > slot.generation()) {
+            events.refreshed(name, RefreshResult.SKIPPED_NEWER);   // 큐에서 기다리는 사이 비웠다 — 이 세대의 값은 꺼낼 때 버려진다
+            return;
+        }
+        Loaded<V> now = cache.getIfPresent(slot.key());
+        if (now != null && now.generation() >= slot.generation() && now.entry().loadedAt().isAfter(seen.loadedAt())) {
+            events.refreshed(name, RefreshResult.SKIPPED_NEWER);   // 큐에서 기다리는 사이 만료돼 요청이 더 새 값을 넣었다
+            return;
+        }
+        CompletableFuture<ReadCache.Entry<V>> mine = new CompletableFuture<>();
+        if (loading.putIfAbsent(slot, mine) != null) {
+            events.refreshed(name, RefreshResult.SKIPPED_NEWER);   // 그사이 만료돼 요청이 직접 읽는 중이다
+            return;
+        }
+        try {
+            Instant loadedAt = clock.instant();
+            ReadCache.Entry<V> entry = new ReadCache.Entry<>(loader.get(), loadedAt);
+            mine.complete(entry);
+            boolean stored = entry.value() != null && storable.test(entry.value()) && store(slot.key(), entry, slot.generation());
+            if (stored) {
+                events.refreshed(name, RefreshResult.STORED);
+            } else {
+                rememberNotStored(slot, seen.loadedAt().plus(ttl));
+                events.refreshed(name, RefreshResult.NOT_STORED);
+            }
+        } catch (Throwable e) {
+            mine.completeExceptionally(e);
+            // 실패도 그 값이 만료될 때까지 다시 맡기지 않는다 — DB 가 느리게 실패하는 동안 TTL 마지막 구간 내내 같은 키로 실행기를 묶지 않게
+            rememberNotStored(slot, seen.loadedAt().plus(ttl));
+            events.refreshed(name, RefreshResult.FAILED);
+            if (e instanceof BusinessException) {
+                log.debug("메모리 읽기 캐시 미리 갱신이 업무 오류로 끝났다 — 만료 뒤 요청이 직접 읽는다 cache={}: {}", name, e.toString());
+            } else {
+                log.warn("메모리 읽기 캐시 미리 갱신 실패 — 만료 뒤 요청이 직접 읽는다 cache={}", name, e);
+            }
+            if (e instanceof Error error) {
+                throw error;   // 기다린 쪽에는 알렸다 — 메모리 부족 같은 것은 삼키지 않는다
+            }
+        } finally {
+            loading.remove(slot, mine);
+        }
+    }
+
+    /** 넣지 못했거나 맡기지 못한 갱신의 자리 — 들고 있던 값이 만료될 때까지. 많이 쌓이면(요청이 다시 오지 않은 키) 지난 것부터 지운다. */
+    private void rememberNotStored(Slot<K> slot, Instant until) {
+        if (notStoredUntil.size() >= NOT_STORED_LIMIT) {
+            Instant now = clock.instant();
+            notStoredUntil.values().removeIf(expiry -> !now.isBefore(expiry));
+        }
+        if (notStoredUntil.size() < NOT_STORED_LIMIT) {
+            notStoredUntil.put(slot, until);
+        }
+    }
+
+    /**
+     * 더 새 세대의 값이 이미 있으면 덮지 않는다 — 읽는 사이 비우기와 새 세대 적재가 있었으면 옛 세대 값으로 덮어 다음 요청이 다시 읽게 된다.
+     * compute 로 기존 값을 그대로 두면 Caffeine 이 갱신으로 보고 만료를 다시 잡으므로(재 봤다) 비교 후 교체로 넣는다.
+     *
+     * @return 넣었으면 true — 무게를 못 셌거나 남은 시간이 없거나 더 새 세대 값이 있으면 넣지 않는다
+     */
+    private boolean store(K key, ReadCache.Entry<V> entry, long started) {
         int weight;
         try {
             weight = Math.max(1, weigher.applyAsInt(entry.value()));
         } catch (RuntimeException e) {
             log.warn("메모리 읽기 캐시에 넣을 값의 무게를 못 셌다 — 넣지 않는다 cache={}", name, e);
-            return;
+            return false;
         }
         Duration left = ttl.minus(Duration.between(entry.loadedAt(), clock.instant()));
-        if (!left.isNegative() && !left.isZero()) {
-            cache.put(key, new Loaded<>(entry, started, weight, left.toNanos()));
+        if (left.isNegative() || left.isZero()) {
+            return false;
+        }
+        Loaded<V> mine = new Loaded<>(entry, started, weight, left.toNanos());
+        ConcurrentMap<K, Loaded<V>> map = cache.asMap();
+        while (true) {
+            Loaded<V> existing = map.get(key);
+            if (existing != null && existing.generation() > started) {
+                return false;
+            }
+            if (existing == null ? map.putIfAbsent(key, mine) == null : map.replace(key, existing, mine)) {
+                return true;
+            }
         }
     }
 

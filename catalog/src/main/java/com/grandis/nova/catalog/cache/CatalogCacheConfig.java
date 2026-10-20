@@ -13,8 +13,8 @@ class CatalogCacheConfig {
 
     /** nova.read-cache.enabled=false 면 끈다(늘 DB) — 운영 기본은 켬. */
     @Bean
-    ReadCache catalogReadCacheStore(StringRedisTemplate redis, JsonMapper json,
+    ReadCache catalogReadCacheStore(StringRedisTemplate redis, JsonMapper json, ReadCacheRefresher refresher, ReadCacheMetrics metrics,
                                     @Value("${nova.read-cache.enabled:true}") boolean enabled) {
-        return enabled ? new ReadCache(redis, json, "catalog") : ReadCache.off(json, "catalog");
+        return enabled ? new ReadCache(redis, json, "catalog", refresher, metrics) : ReadCache.off(json, "catalog");
     }
 }

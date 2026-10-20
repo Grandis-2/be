@@ -1,6 +1,8 @@
 package com.grandis.nova.catalog.ranking;
 
 import com.grandis.nova.catalog.cache.LocalReadCache;
+import com.grandis.nova.catalog.cache.ReadCacheMetrics;
+import com.grandis.nova.catalog.cache.ReadCacheRefresher;
 import com.grandis.nova.catalog.integration.PreorderCampaigns;
 import com.grandis.nova.catalog.listing.CampaignWindow;
 import com.grandis.nova.catalog.listing.ProductListFilter;
@@ -43,12 +45,14 @@ public class PopularSearchService {
     private final Clock clock;
 
     public PopularSearchService(SearchTermCounter counter, AnonymousQuota quota, ProductListingQueryRepository listings, PreorderCampaigns campaigns,
-                                JsonMapper json, Clock clock, @Value("${nova.read-cache.enabled:true}") boolean cacheEnabled) {
+                                JsonMapper json, Clock clock, @Value("${nova.read-cache.enabled:true}") boolean cacheEnabled, ReadCacheRefresher refresher,
+                                ReadCacheMetrics metrics) {
         this.counter = counter;
         this.quota = quota;
         this.listings = listings;
         this.campaigns = campaigns;
-        this.cache = new LocalReadCache<>("catalog.popular-searches", TTL, MAX_BYTES, value -> json.writeValueAsBytes(value).length, clock, cacheEnabled);
+        this.cache = new LocalReadCache<>("catalog.popular-searches", TTL, MAX_BYTES, value -> json.writeValueAsBytes(value).length, clock, cacheEnabled,
+                refresher, metrics);
         this.clock = clock;
     }
 

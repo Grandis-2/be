@@ -36,14 +36,18 @@ public class CatalogLocalCaches {
     private final LocalReadCache<String, List<CategoryNode>> categoryTree;
     private final LocalReadCache<String, List<ProductListItem>> productRanking;
 
-    /** nova.read-cache.enabled=false 면 끈다(늘 DB) — Redis 캐시와 같은 설정이다. */
-    public CatalogLocalCaches(JsonMapper json, Clock clock, @Value("${nova.read-cache.enabled:true}") boolean enabled) {
+    /**
+     * nova.read-cache.enabled=false 면 끈다(늘 DB) — Redis 캐시와 같은 설정이다. 미리 갱신은 {@link ReadCacheRefresher} 가 맡는다(크기를 묶은 실행기) —
+     * {@link LocalReadCache} 참고.
+     */
+    public CatalogLocalCaches(JsonMapper json, Clock clock, @Value("${nova.read-cache.enabled:true}") boolean enabled, ReadCacheRefresher refresher,
+                              ReadCacheMetrics metrics) {
         this.productList = new LocalReadCache<>("catalog.product-list", CatalogReadCache.PRODUCT_TTL, PRODUCT_LIST_MAX_BYTES,
-                value -> json.writeValueAsBytes(value).length, clock, enabled);
+                value -> json.writeValueAsBytes(value).length, clock, enabled, refresher, metrics);
         this.categoryTree = new LocalReadCache<>("catalog.category-tree", CatalogReadCache.CATEGORY_TTL, CATEGORY_TREE_MAX_BYTES,
-                value -> json.writeValueAsBytes(value).length, clock, enabled);
+                value -> json.writeValueAsBytes(value).length, clock, enabled, refresher, metrics);
         this.productRanking = new LocalReadCache<>("catalog.product-ranking", PRODUCT_RANKING_TTL, PRODUCT_RANKING_MAX_BYTES,
-                value -> json.writeValueAsBytes(value).length, clock, enabled);
+                value -> json.writeValueAsBytes(value).length, clock, enabled, refresher, metrics);
     }
 
     public LocalReadCache<CatalogReadCache.ListKey, OffsetPage<ProductListItem>> productList() {
