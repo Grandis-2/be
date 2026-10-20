@@ -48,6 +48,8 @@ public class PreorderEventHandler {
     private static final Logger log = LoggerFactory.getLogger(PreorderEventHandler.class);
 
     static final String FAILED_METRIC = "preorder.sync.failed";
+    /** {@link #FAILED_METRIC} 의 reason — worker 가 알리지 못하고 작업 메시지가 SQS DLQ 로 갔다. */
+    static final String DEAD_LETTER_QUEUE = "DEAD_LETTER_QUEUE";
     static final String PAYMENT_AFTER_CANCEL_METRIC = "preorder.payment.after_cancel";
 
     private static final String REJECTED_BY_ORDER = "ORDER_REJECTED";
@@ -162,6 +164,31 @@ public class PreorderEventHandler {
         }
         log.warn("외부 등록을 포기했다 — 관리자 재처리를 기다린다 syncJobId={} preorderId={} reason={}",
                 job.id(), message.preorderId(), message.reason());
+    }
+
+    /**
+     * 작업 메시지가 SQS DLQ 로 갔다 — worker 가 결과를 알리지 못한 채 재수신 한도를 넘겼다. 포기와 같게 DEAD_LETTER 로 두어
+     * 관리자 재처리 · 수동 완료로 넘긴다. 메시지의 실행 회차가 지난 것이면 바꾸지 않는다 — 재처리한 작업을 다시 포기시키지 않게.
+     */
+    @Transactional
+    public void onJobMessageDeadLettered(UUID syncJobId, int run) {
+        Optional<SyncJobSnapshot> found = lockJob(syncJobId);
+        if (found.isEmpty()) {
+            return;
+        }
+        SyncJobSnapshot job = found.get();
+        if (run < job.run()) {
+            log.warn("지난 실행의 작업 메시지가 DLQ 로 갔다 — 작업은 그대로 둔다 syncJobId={} run={} currentRun={}", job.id(), run,
+                    job.run());
+            return;
+        }
+        if (syncJobs.deadLetter(job.id(), clock.instant()) == 0) {
+            log.info("이미 끝난 작업의 메시지가 DLQ 로 갔다 — 작업은 그대로 둔다 syncJobId={} status={}", job.id(), job.status());
+            return;
+        }
+        countFailed(job, DEAD_LETTER_QUEUE);
+        log.error("worker 가 결과를 알리지 못해 작업 메시지가 DLQ 로 갔다 — 관리자 재처리 · 수동 완료를 기다린다 jobType={} syncJobId={} "
+                + "preorderId={} run={}", job.jobType(), job.id(), job.preorderId(), run);
     }
 
     private void countFailed(SyncJobSnapshot job, String reason) {

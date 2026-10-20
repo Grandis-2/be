@@ -49,6 +49,9 @@ class PreorderDefaultsTest {
                 .getProperty("nova.sqs.dead-letter.enabled")).isEqualTo("true");
         assertThat(apply(with(Map.of("nova.sqs.consumer.enabled", "true", "nova.sqs.dead-letter.enabled", "false")))
                 .getProperty("nova.sqs.dead-letter.enabled")).isEqualTo("false");
+        assertThat(apply(new StandardEnvironment()).getProperty("nova.sqs.job-dead-letter.enabled")).isEqualTo("false");
+        assertThat(apply(with(Map.of("nova.sqs.consumer.enabled", "true")))
+                .getProperty("nova.sqs.job-dead-letter.enabled")).isEqualTo("true");
     }
 
     @Test
