@@ -109,6 +109,19 @@ class LocalReadCacheRefreshTest {
     }
 
     @Test
+    @DisplayName("큐에서 기다리는 사이 비웠으면(세대가 올랐으면) 갱신은 읽지 않는다")
+    void lateRefreshSkipsAfterInvalidation() {
+        LocalReadCache<String, String> cache = cache();
+        cache.entry("k", () -> load("v1"));
+        clock.advance(Duration.ofSeconds(4));
+        cache.entry("k", () -> load("갱신"));
+        cache.invalidateAll();
+        tasks.runAll();
+        assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_NEWER);
+        assertThat(loads.get()).as("갱신은 읽지 않았다").isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("갱신이 도는 중에 값이 만료되면 그 뒤 요청은 갱신을 기다린다 — loader 는 갱신의 한 번뿐")
     void expiredWhileRefreshingWaitsForIt() throws Exception {
         CountDownLatch started = new CountDownLatch(1);
@@ -178,7 +191,7 @@ class LocalReadCacheRefreshTest {
     }
 
     @Test
-    @DisplayName("갱신이 끝나면(성공 · 실패) 그 자리가 풀려 다음 주기에 다시 맡긴다")
+    @DisplayName("갱신이 성공하면 다음 주기에 다시 맡긴다. 실패하면 그 값이 만료될 때까지 맡기지 않고, 만료 뒤 직접 읽은 새 값의 주기에는 다시 맡긴다")
     void refreshSlotIsReleasedAfterEachRun() {
         LocalReadCache<String, String> cache = cache();
         cache.entry("k", () -> load("v1"));
@@ -192,7 +205,12 @@ class LocalReadCacheRefreshTest {
         assertThat(tasks.pending()).as("성공 뒤 다음 주기").isEqualTo(1);
         tasks.runAll();   // 실패
         cache.entry("k", () -> load("v3"));
-        assertThat(tasks.pending()).as("실패 뒤에도 다시 맡긴다").isEqualTo(1);
+        assertThat(tasks.pending()).as("실패 뒤 — 그 값이 만료될 때까지 다시 맡기지 않는다").isZero();
+        clock.advance(Duration.ofSeconds(1));
+        assertThat(cache.entry("k", () -> load("v4")).value()).as("만료 — 직접 읽는다").isEqualTo("v4");
+        clock.advance(Duration.ofSeconds(4));
+        cache.entry("k", () -> load("v5"));
+        assertThat(tasks.pending()).as("새 값의 주기에는 다시 맡긴다(차단이 풀렸다)").isEqualTo(1);
     }
 
     @Test
@@ -210,6 +228,9 @@ class LocalReadCacheRefreshTest {
         assertThat(tasks.pending()).as("만료 전에는 다시 맡기지 않는다").isZero();
         clock.advance(Duration.ofSeconds(1));
         assertThat(cache.entry("k", () -> load("v2"), value -> !value.isEmpty()).value()).as("만료 뒤 직접 읽기").isEqualTo("v2");
+        clock.advance(Duration.ofSeconds(4));
+        cache.entry("k", () -> load("v3"), value -> !value.isEmpty());
+        assertThat(tasks.pending()).as("새 값의 주기에는 다시 맡긴다(차단이 풀렸다)").isEqualTo(1);
     }
 
     @Test

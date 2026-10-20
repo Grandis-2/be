@@ -38,6 +38,26 @@ class ReadCacheRefresherTest {
     }
 
     @Test
+    @DisplayName("내려갈 때 도는 갱신이 끝나기를 기다린다 — 바로 끊지 않는다")
+    void shutdownWaitsForRunningRefresh() throws Exception {
+        ReadCacheRefresher refresher = new ReadCacheRefresher();
+        CountDownLatch started = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicBoolean finished = new java.util.concurrent.atomic.AtomicBoolean();
+        refresher.execute(() -> {
+            started.countDown();
+            try {
+                Thread.sleep(300);
+                finished.set(true);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+        refresher.shutdown();
+        assertThat(finished).as("도는 갱신이 끊기지 않고 끝났다").isTrue();
+    }
+
+    @Test
     @DisplayName("내려간 뒤에는 거절한다")
     void rejectsAfterShutdown() {
         ReadCacheRefresher refresher = new ReadCacheRefresher();

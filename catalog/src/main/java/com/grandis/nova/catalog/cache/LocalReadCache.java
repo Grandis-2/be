@@ -46,7 +46,7 @@ import java.util.function.ToIntFunction;
  *       요청은 기다리는 쪽이 된다(상한 그대로). 갱신이 실패해도 들고 있던 값의 만료는 늘지 않는다 — 만료 뒤 요청이 직접 읽는다. 실행기가 차면
  *       맡기지 않는다(그 키는 만료 때 지금처럼 읽는다). 갱신한 값도 읽기 시작할 때의 세대를 들어, 그사이 비웠으면 꺼낼 때 버린다.
  *       큐에서 늦게 돈 갱신은 그사이 더 새 값이 들어왔으면 읽지 않는다. 갱신 결과를 넣지 못했으면(storable 거짓 · 무게 실패 · 남은 시간 없음) 그 값이
- *       만료될 때까지 그 키는 다시 맡기지 않는다. 갱신 실행기가 없으면(시험 · 끈 캐시) 미리 갱신하지 않는다.
+ *       만료될 때까지 그 키는 다시 맡기지 않는다(실패도 같다). 갱신 실행기가 없으면(시험 · 끈 캐시) 미리 갱신하지 않는다.
  *       loader 는 요청 맥락(SecurityContext · RequestContextHolder)이 없는 실행기 스레드에서도 돌 수 있어야 한다 — 토큰을 릴레이하는 호출을
  *       loader 에 넣으면 갱신이 401 로 실패하고 그 실패가 기다린 요청에 퍼진다.</li>
  *   <li>꺼 두면 늘 loader 다.</li>
@@ -278,6 +278,7 @@ public final class LocalReadCache<K, V> {
         } catch (RuntimeException e) {
             refreshing.remove(slot);   // 맡기지 못했다 — 표식을 남기면 그 키는 다시 맡겨지지 않는다. 요청은 들고 있던 값으로 답한다
             log.warn("메모리 읽기 캐시 미리 갱신을 맡기지 못했다 cache={}", name, e);
+            events.refreshed(name, RefreshResult.REJECTED);
             return false;
         } catch (Error e) {
             refreshing.remove(slot);
@@ -290,6 +291,10 @@ public final class LocalReadCache<K, V> {
      * 받고(직접 읽기와 같다) 들고 있던 값은 그대로 만료된다.
      */
     private void refresh(Slot<K> slot, ReadCache.Entry<V> seen, Supplier<V> loader, Predicate<V> storable) {
+        if (generation.get() > slot.generation()) {
+            events.refreshed(name, RefreshResult.SKIPPED_NEWER);   // 큐에서 기다리는 사이 비웠다 — 이 세대의 값은 꺼낼 때 버려진다
+            return;
+        }
         Loaded<V> now = cache.getIfPresent(slot.key());
         if (now != null && now.generation() >= slot.generation() && now.entry().loadedAt().isAfter(seen.loadedAt())) {
             events.refreshed(name, RefreshResult.SKIPPED_NEWER);   // 큐에서 기다리는 사이 만료돼 요청이 더 새 값을 넣었다
@@ -313,6 +318,8 @@ public final class LocalReadCache<K, V> {
             }
         } catch (Throwable e) {
             mine.completeExceptionally(e);
+            // 실패도 그 값이 만료될 때까지 다시 맡기지 않는다 — DB 가 느리게 실패하는 동안 TTL 마지막 구간 내내 같은 키로 실행기를 묶지 않게
+            rememberNotStored(slot, seen.loadedAt().plus(ttl));
             events.refreshed(name, RefreshResult.FAILED);
             if (e instanceof BusinessException) {
                 log.debug("메모리 읽기 캐시 미리 갱신이 업무 오류로 끝났다 — 만료 뒤 요청이 직접 읽는다 cache={}: {}", name, e.toString());
