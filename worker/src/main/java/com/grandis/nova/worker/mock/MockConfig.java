@@ -1,6 +1,7 @@
 package com.grandis.nova.worker.mock;
 
 import com.grandis.nova.worker.config.WorkerProperties;
+import com.grandis.nova.worker.job.JobType;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterConfig;
@@ -59,23 +60,26 @@ class MockConfig {
     }
 
     @Bean
-    RejectGuard rejectGuard(WorkerProperties properties, Clock clock, MeterRegistry meters) {
-        RejectGuard guard = new RejectGuard(properties.rejectGuard(), clock);
-        Gauge.builder(BLOCKED_METRIC, guard, g -> g.blocked() ? 1 : 0).register(meters);
-        return guard;
+    RejectGuards rejectGuards(WorkerProperties properties, Clock clock, MeterRegistry meters) {
+        RejectGuards guards = new RejectGuards(properties.rejectGuard(), clock);
+        for (JobType type : JobType.values()) {
+            Gauge.builder(BLOCKED_METRIC, guards.of(type), g -> g.blocked() ? 1 : 0).tag("jobType", type.name())
+                    .register(meters);
+        }
+        return guards;
     }
 
     @Bean
     MockGateway mockGateway(MockClient client, MockCircuit circuit, RateLimiterRegistry registry,
-                            ConcurrencyLimiter limiter, RejectGuard rejectGuard, WorkerProperties properties,
+                            ConcurrencyLimiter limiter, RejectGuards rejectGuards, WorkerProperties properties,
                             MeterRegistry meters, Clock clock) {
         RateLimiter rateLimiter = registry.rateLimiter(MockCircuit.NAME, rateLimit(properties.concurrency()));
-        return new MockGateway(client, circuit, rateLimiter, limiter, rejectGuard, meters, clock);
+        return new MockGateway(client, circuit, rateLimiter, limiter, rejectGuards, meters, clock);
     }
 
     @Bean
-    ReceiveGate receiveGate(MockCircuit circuit, ConcurrencyLimiter limiter, RejectGuard rejectGuard) {
-        return new ReceiveGate(circuit, limiter, rejectGuard);
+    ReceiveGate receiveGate(MockCircuit circuit, ConcurrencyLimiter limiter, RejectGuards rejectGuards) {
+        return new ReceiveGate(circuit, limiter, rejectGuards);
     }
 
     /** 초당 상한. mock 이 아주 빠를 때만 걸린다. 자리가 날 때까지 permitWait 만 기다린다. */

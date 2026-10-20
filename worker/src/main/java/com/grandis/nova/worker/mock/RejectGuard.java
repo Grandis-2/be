@@ -1,6 +1,7 @@
 package com.grandis.nova.worker.mock;
 
 import com.grandis.nova.worker.config.WorkerProperties;
+import com.grandis.nova.worker.job.JobType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -18,12 +19,14 @@ public final class RejectGuard {
 
     private static final Logger log = LoggerFactory.getLogger(RejectGuard.class);
 
+    private final JobType type;
     private final WorkerProperties.RejectGuard settings;
     private final Clock clock;
     private final Deque<Instant> recent = new ArrayDeque<>();
     private Instant blockedUntil = Instant.EPOCH;
 
-    RejectGuard(WorkerProperties.RejectGuard settings, Clock clock) {
+    RejectGuard(JobType type, WorkerProperties.RejectGuard settings, Clock clock) {
+        this.type = type;
         this.settings = settings;
         this.clock = clock;
     }
@@ -42,8 +45,8 @@ public final class RejectGuard {
         if (recent.size() >= settings.invalidRequests()) {
             blockedUntil = now.plus(settings.pause());
             recent.clear();
-            log.error("외부 mock 이 요청을 연달아 거절한다 — 사람 확인 필요. {} 동안 받기를 멈춘다 reason={} count={}",
-                    settings.pause(), reason, settings.invalidRequests());
+            log.error("외부 mock 이 요청을 연달아 거절한다 — 사람 확인 필요. {} 동안 이 종류의 받기를 멈춘다 "
+                    + "jobType={} reason={} count={}", settings.pause(), type, reason, settings.invalidRequests());
         }
     }
 

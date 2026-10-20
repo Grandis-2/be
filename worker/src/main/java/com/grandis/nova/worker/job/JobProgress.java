@@ -3,9 +3,12 @@ package com.grandis.nova.worker.job;
 import software.amazon.awssdk.services.sqs.model.Message;
 import software.amazon.awssdk.services.sqs.model.MessageAttributeValue;
 
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * 작업이 어디까지 왔는지. worker 는 상태를 저장하지 않고 메시지 속성에 싣고 다닌다.
@@ -22,9 +25,11 @@ public record JobProgress(int run, int attempt, int generation, AttemptResult la
     static final String GENERATION = "generation";
     static final String LAST_OUTCOME = "lastOutcome";
     static final String ACTOR = "actor";
+    /** 설정 오류로 처음 돌려보낸 시각(ISO-8601). 차례가 아니라 시간으로 포기를 정한다 — 작업 · 드로우 메시지가 함께 쓴다. */
+    public static final String MISCONFIGURED_SINCE = "misconfiguredSince";
     /** 소비기가 받아 올 속성 이름. 적지 않은 속성은 받은 메시지에 없고 지연 재전송 때 이어지지 않는다. */
     public static final List<String> ATTRIBUTE_NAMES =
-            List.of(RUN, ATTEMPT, GENERATION, LAST_OUTCOME, ACTOR, "eventType", "eventId");
+            List.of(RUN, ATTEMPT, GENERATION, LAST_OUTCOME, ACTOR, MISCONFIGURED_SINCE, "eventType", "eventId");
 
     public JobProgress {
         if (run < 1 || attempt < 1 || generation < 1 || actor == null) {
@@ -45,7 +50,17 @@ public record JobProgress(int run, int attempt, int generation, AttemptResult la
                 named(Actor.class, attributes, ACTOR, Actor.SYSTEM));
     }
 
-    /** 지연 재전송에 넘길 속성. 직전 결과가 없으면 그 속성을 뺀다(값 null). */
+    /** 설정 오류로 처음 돌려보낸 시각. 없거나 읽을 수 없으면 비어 있다(지금 처음 본 것으로 한다). */
+    public static Optional<Instant> misconfiguredSince(Message message) {
+        String value = text(message.messageAttributes(), MISCONFIGURED_SINCE);
+        try {
+            return value == null ? Optional.empty() : Optional.of(Instant.parse(value));
+        } catch (DateTimeParseException e) {
+            return Optional.empty();
+        }
+    }
+
+    /** 지연 재전송에 넘길 속성. 직전 결과가 없으면 그 속성을 뺀다(값 null). 차례를 썼으니 설정 오류 시각도 뺀다. */
     public Map<String, String> toAttributes() {
         Map<String, String> attributes = new HashMap<>();
         attributes.put(RUN, Integer.toString(run));
@@ -53,6 +68,7 @@ public record JobProgress(int run, int attempt, int generation, AttemptResult la
         attributes.put(GENERATION, Integer.toString(generation));
         attributes.put(LAST_OUTCOME, lastOutcome == null ? null : lastOutcome.name());
         attributes.put(ACTOR, actor.name());
+        attributes.put(MISCONFIGURED_SINCE, null);
         return attributes;
     }
 
