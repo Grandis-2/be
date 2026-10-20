@@ -2,6 +2,7 @@ package com.grandis.nova.common.redis.cache;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.redis.cache.ReadCacheEvents.Outcome;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
@@ -24,6 +25,8 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.LongSupplier;
@@ -39,6 +42,12 @@ import java.util.function.Supplier;
  *   <li><b>몰림</b>: 같은 키(세대 번호 포함)를 동시에 찾는 요청은 이 인스턴스 안에서 loader 를 한 번만 부르고 나머지는 그 결과를 받는다 —
  *       인기 키가 비는 순간(만료 · Redis 복구 직후) DB 로 한꺼번에 가지 않게. loader 의 예외(404 등)도 같이 받는다. 같이 받는 쪽은
  *       {@link #WAIT_FOR_LOAD} 까지만 기다린다(넘으면 503).</li>
+ *   <li><b>미리 갱신</b>: 읽은 지 TTL 의 {@link #REFRESH_AFTER_PERCENT}% 가 지난 값을 꺼낸 요청은 그 값을 바로 받고, 같은 키(세대 번호 포함)의
+ *       다시 읽기를 갱신 실행기에 이 인스턴스에서 하나만 맡긴다 — 만료 순간 모든 요청이 한 건의 읽기를 기다리지 않게(부하 시험에서 목록 · 리뷰의 캐시
+ *       대상 요청이 그 대기로 0.3~2초 걸렸다). 요청이 없는 키는 갱신하지 않는다. 갱신은 몰림의 "한 번만 읽기" 자리를 같이 써서, 갱신이 끝나기 전에
+ *       값이 만료되면 그 뒤 요청은 기다리는 쪽이 된다(상한 그대로). 갱신이 실패해도 들고 있던 값의 만료는 늘지 않는다. 실행기가 차면 맡기지 않는다.
+ *       갱신한 값은 읽기 시작할 때의 세대 키에 들어가, 그사이 세대가 올랐으면 새 세대 조회에는 안 보인다. 인스턴스마다 따로라 같은 키를 인스턴스 수만큼
+ *       갱신할 수 있다(만료 때 인스턴스마다 한 번 읽던 것과 같다). 갱신 실행기가 없으면 미리 갱신하지 않는다.</li>
  *   <li><b>무효화</b>: 키에 세대 번호를 넣고, 바뀐 쪽이 {@link #bumpAfterCommit} 으로 번호를 올린다 — 조건마다 다른 키(목록 · 검색)를 하나씩
  *       찾아 지우지 않는다. 올리기는 트랜잭션 커밋 뒤라 롤백된 수정으로 비우지 않는다. 올리기가 실패하거나 차단기가 열려 있으면 미뤄 두었다가 이 인스턴스가
  *       Redis 를 다시 읽는 첫 조회에서 올린다 — 미룬 것은 메모리에만 있어 그 전에 인스턴스가 내려가면 사라지고, 그때 최악은 그 캐시의 TTL 이다.
@@ -66,6 +75,8 @@ public final class ReadCache {
     static final Duration CLOCK_SKEW_MARGIN = Duration.ofSeconds(2);
     /** 캐시 하나가 인스턴스 하나에서 Redis 에 동시에 들고 있는 양의 기본 상한({@link StoreBudget}). */
     static final long DEFAULT_BUDGET_BYTES = 4L * 1024 * 1024;
+    /** 읽은 지 TTL 의 이만큼(%)이 지난 값을 꺼내면 미리 갱신한다 — 리뷰(60초)면 48초, 상세 본문(10분)이면 8분. */
+    static final int REFRESH_AFTER_PERCENT = 80;
     /** Redis 에 넣는 모양({@link Stored})의 버전 — 키에 들어간다. */
     static final String FORMAT = "f1";
 
@@ -82,10 +93,27 @@ public final class ReadCache {
     private final Set<String> pendingBumps = ConcurrentHashMap.newKeySet();
     /** 세대마다 이 인스턴스가 마지막으로 본 번호 — 오른 것을 처음 보면 옛 세대로 넣은 키를 지우고 저장 몫을 돌려준다. */
     private final ConcurrentHashMap<String, Long> seenGenerations = new ConcurrentHashMap<>();
+    /** 미리 갱신을 맡는 실행기 — null 이면 미리 갱신하지 않는다. */
+    private final Executor refresher;
+    private final ReadCacheEvents events;
+    /** 실행기에 맡겨 둔 갱신의 자리 — 같은 키를 두 번 맡기지 않는다. */
+    private final Set<String> refreshing = ConcurrentHashMap.newKeySet();
 
     /** @param service 키 앞에 붙는 서비스 이름(catalog · order) — 같은 Redis 를 나눠 쓰는 서비스끼리 키가 겹치지 않게 */
     public ReadCache(StringRedisTemplate redis, JsonMapper json, String service) {
-        this(redis, json, service, CircuitBreakerConfig.custom()
+        this(redis, json, service, null, ReadCacheEvents.NONE);
+    }
+
+    /**
+     * @param refresher 미리 갱신을 맡는 실행기(크기가 정해진 것) — null 이면 미리 갱신하지 않는다
+     * @param events    요청마다의 결과(지표)
+     */
+    public ReadCache(StringRedisTemplate redis, JsonMapper json, String service, Executor refresher, ReadCacheEvents events) {
+        this(redis, json, service, defaultBreaker(), true, Clock.systemUTC(), WAIT_FOR_LOAD, refresher, events);
+    }
+
+    private static CircuitBreakerConfig defaultBreaker() {
+        return CircuitBreakerConfig.custom()
                 .slidingWindowType(CircuitBreakerConfig.SlidingWindowType.COUNT_BASED)
                 .slidingWindowSize(20)
                 .minimumNumberOfCalls(5)
@@ -93,7 +121,7 @@ public final class ReadCache {
                 .waitDurationInOpenState(OPEN_FOR)
                 .permittedNumberOfCallsInHalfOpenState(3)
                 .automaticTransitionFromOpenToHalfOpenEnabled(false)
-                .build());
+                .build();
     }
 
     ReadCache(StringRedisTemplate redis, JsonMapper json, String service, CircuitBreakerConfig breakerConfig) {
@@ -102,6 +130,13 @@ public final class ReadCache {
 
     ReadCache(StringRedisTemplate redis, JsonMapper json, String service, CircuitBreakerConfig breakerConfig, boolean enabled, Clock clock,
               Duration waitForLoad) {
+        this(redis, json, service, breakerConfig, enabled, clock, waitForLoad, null, ReadCacheEvents.NONE);
+    }
+
+    ReadCache(StringRedisTemplate redis, JsonMapper json, String service, CircuitBreakerConfig breakerConfig, boolean enabled, Clock clock,
+              Duration waitForLoad, Executor refresher, ReadCacheEvents events) {
+        this.refresher = refresher;
+        this.events = Objects.requireNonNull(events, "events");
         this.enabled = enabled;
         this.clock = Objects.requireNonNull(clock, "clock");
         this.waitForLoad = Objects.requireNonNull(waitForLoad, "waitForLoad");
@@ -188,7 +223,14 @@ public final class ReadCache {
         if (cached != null) {
             try {
                 Stored<T> stored = json.readValue(cached, json.getTypeFactory().constructParametricType(Stored.class, spec.type()));
-                return new Entry<>(stored.value(), Instant.ofEpochMilli(stored.loadedAt()));
+                Entry<T> entry = new Entry<>(stored.value(), Instant.ofEpochMilli(stored.loadedAt()));
+                if (refresher != null && !clock.instant().isBefore(entry.loadedAt().plus(spec.ttl().multipliedBy(REFRESH_AFTER_PERCENT).dividedBy(100)))) {
+                    refreshAhead(key, spec, loader, storable, generation, current);
+                    events.served(spec.name(), Outcome.HIT_REFRESH);
+                } else {
+                    events.served(spec.name(), Outcome.HIT);
+                }
+                return entry;
             } catch (JacksonException e) {
                 log.warn("읽기 캐시 값을 읽지 못해 다시 채운다 key={}", key, e);
             }
@@ -332,6 +374,8 @@ public final class ReadCache {
         CompletableFuture<Object> mine = new CompletableFuture<>();
         CompletableFuture<Object> running = loading.putIfAbsent(slot, mine);
         if (running != null) {
+            events.served(spec.name(), Outcome.WAIT);
+            long started = System.nanoTime();
             try {
                 return (Entry<T>) running.get(waitForLoad.toMillis(), TimeUnit.MILLISECONDS);
             } catch (ExecutionException e) {
@@ -342,8 +386,11 @@ public final class ReadCache {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+            } finally {
+                events.waited(spec.name(), Duration.ofNanos(System.nanoTime() - started));
             }
         }
+        events.served(spec.name(), Outcome.LOAD);
         try {
             Instant loadedAt = clock.instant();   // 읽기 전 시각 — 응답의 나이를 짧게 잡지 않게
             Entry<T> entry = new Entry<>(loader.get(), loadedAt);
@@ -357,6 +404,58 @@ public final class ReadCache {
             throw e;
         } finally {
             loading.remove(slot, mine);
+        }
+    }
+
+    /** 같은 키의 다시 읽기를 실행기에 하나만 맡긴다. 이미 맡겼거나 누가 읽는 중이면 맡기지 않는다. */
+    private <T> void refreshAhead(String key, Spec<T> spec, Supplier<T> loader, Predicate<T> storable, String generation, long generationNumber) {
+        if (loading.containsKey(key) || !refreshing.add(key)) {
+            return;
+        }
+        try {
+            refresher.execute(() -> {
+                try {
+                    refresh(key, spec, loader, storable, generation, generationNumber);
+                } finally {
+                    refreshing.remove(key);
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            refreshing.remove(key);
+            events.served(spec.name(), Outcome.REFRESH_REJECTED);
+        }
+    }
+
+    /**
+     * 실행기에서 도는 다시 읽기 — "한 번만 읽기" 자리({@link #load} 의 slot = 완성된 키)를 같이 써서, 그사이 만료돼 들어온 요청은 이 결과를 기다린다.
+     * 실패하면 기다린 쪽도 같은 예외를 받고(직접 읽기와 같다) Redis 의 값은 그대로 만료된다.
+     */
+    private <T> void refresh(String key, Spec<T> spec, Supplier<T> loader, Predicate<T> storable, String generation, long generationNumber) {
+        CompletableFuture<Object> mine = new CompletableFuture<>();
+        if (loading.putIfAbsent(key, mine) != null) {
+            return;   // 그사이 만료돼 요청이 직접 읽는 중이다
+        }
+        try {
+            Instant loadedAt = clock.instant();
+            Entry<T> entry = new Entry<>(loader.get(), loadedAt);
+            mine.complete(entry);
+            if (entry.value() != null && storable.test(entry.value())) {
+                store(key, spec, entry, generation, generationNumber);
+            }
+            events.served(spec.name(), Outcome.REFRESHED);
+        } catch (RuntimeException | Error e) {
+            mine.completeExceptionally(e);
+            events.served(spec.name(), Outcome.REFRESH_FAILED);
+            if (e instanceof BusinessException) {
+                log.debug("읽기 캐시 미리 갱신이 업무 오류로 끝났다 — 만료 뒤 요청이 직접 읽는다 cache={}: {}", spec.name(), e.toString());
+            } else {
+                log.warn("읽기 캐시 미리 갱신 실패 — 만료 뒤 요청이 직접 읽는다 cache={}", spec.name(), e);
+            }
+            if (e instanceof Error error) {
+                throw error;   // 기다린 쪽에는 알렸다 — 메모리 부족 같은 것은 삼키지 않는다
+            }
+        } finally {
+            loading.remove(key, mine);
         }
     }
 
