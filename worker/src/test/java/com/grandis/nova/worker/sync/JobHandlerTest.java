@@ -271,16 +271,16 @@ class JobHandlerTest {
         assertThat(job.calls(MOCK)).isEmpty();
     }
 
-    /** 누구의 작업인지 알 수 없어 결과를 알릴 수도 없다. 다시 받아도 같으므로 지우고 지표 · 로그로 알린다. */
+    /** 누구의 작업인지 알 수 없어 결과를 알릴 수도 없다. 지우면 원본이 사라지므로 남겨 두어 끝내 DLQ 로 가게 한다. */
     @Test
-    void 읽을_수_없는_메시지는_지우고_지표로_알린다() {
+    void 읽을_수_없는_메시지는_지우지_않고_지표로_알린다() {
         double before = count("unreadable");
 
         assertThat(handler.handle(job.message(Map.of()).toBuilder().body("not-json").build()))
-                .isEqualTo(MessageOutcome.delete());
+                .isEqualTo(MessageOutcome.keep());
         assertThat(handler.handle(job.message(Map.of()).toBuilder()
                 .body("{\"eventType\":\"REGISTER_JOB_READY\",\"payload\":{\"preorderId\":\"x\"}}").build()))
-                .isEqualTo(MessageOutcome.delete());
+                .isEqualTo(MessageOutcome.keep());
 
         assertThat(count("unreadable") - before).isEqualTo(2);
     }

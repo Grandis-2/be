@@ -101,7 +101,9 @@ final class JobHandler implements BatchMessageHandler {
         JobProgress progress = JobProgress.of(message);
         Optional<JsonNode> payload = payloadOf(message);
         if (payload.isEmpty()) {
-            return done("unreadable");
+            // 지우면 원본이 사라진다. 남겨 두면 최대 수신 횟수를 넘긴 뒤 SQS 가 DLQ 로 옮겨 사람이 볼 수 있다
+            meters.counter(JOBS_METRIC, "jobType", type.name(), "outcome", "unreadable").increment();
+            return MessageOutcome.keep();
         }
         UUID syncJobId = UUID.fromString(payload.get().get("syncJobId").asString());
         Optional<JobReady> job = jobOf(payload.get());
@@ -213,7 +215,7 @@ final class JobHandler implements BatchMessageHandler {
 
     /**
      * 봉투에서 payload 를 꺼낸다. 작업을 가리킬 수 없으면(봉투가 깨짐 · syncJobId 없음) 비어 있다 — 누구의 작업인지 몰라
-     * 결과를 알릴 수도 없으므로 경보만 남기고 지운다.
+     * 결과를 알릴 수도 없으므로 지우지 않고 남겨 DLQ 로 가게 한다.
      */
     private Optional<JsonNode> payloadOf(Message message) {
         try {
@@ -223,11 +225,11 @@ final class JobHandler implements BatchMessageHandler {
                 UUID.fromString(syncJobId);
                 return Optional.of(payload);
             }
-            log.error("작업을 가리키지 않는 메시지를 버린다 — 보낸 쪽의 계약 확인 필요 jobType={} messageId={}", type,
-                    message.messageId());
+            log.error("작업을 가리키지 않는 메시지라 지우지 않고 남긴다(끝내 DLQ) — 보낸 쪽의 계약 확인 필요 jobType={} messageId={}",
+                    type, message.messageId());
         } catch (JacksonException | IllegalArgumentException e) {
-            log.error("읽을 수 없는 작업 메시지를 버린다 — 보낸 쪽의 계약 확인 필요 jobType={} messageId={}", type,
-                    message.messageId(), e);
+            log.error("읽을 수 없는 작업 메시지라 지우지 않고 남긴다(끝내 DLQ) — 보낸 쪽의 계약 확인 필요 jobType={} messageId={}",
+                    type, message.messageId(), e);
         }
         return Optional.empty();
     }

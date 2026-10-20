@@ -22,7 +22,7 @@ final class Settings {
 
     /** 최근 4건 중 절반이 실패하면 열리고, 0.2초(다시 열리면 0.4초) 뒤 반쯤 열려 3건을 시험한다. */
     static WorkerProperties.Circuit circuit() {
-        return new WorkerProperties.Circuit(4, 4, 50, 80, Duration.ofMillis(200), Duration.ofMillis(400), 2, 3);
+        return new WorkerProperties.Circuit(4, 4, 50, Duration.ofMillis(200), Duration.ofMillis(400), 2, 3);
     }
 
     /** 상한 6 · 시작 3 · 최소 2 · CANCEL 전용 1, 10초 창. */
