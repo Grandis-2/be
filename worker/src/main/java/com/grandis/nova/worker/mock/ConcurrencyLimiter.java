@@ -19,7 +19,8 @@ import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 동시에 나가 있는 요청 수를 묶는 벌크헤드. mock 은 몰려도 거절하지 않고 느려지기만 해서, 자리 수를 묶으면 느려질수록 덜 보낸다.
- * 자리 수는 스스로 조절한다(AIMD): 창마다 빠르고 실패가 적으면 조금 늘리고, 느리거나 실패가 많으면 크게 줄인다.
+ * 자리 수는 스스로 조절한다(AIMD): 창마다 빠르고 실패가 적으면 늘리고, 느리거나 실패가 많으면 크게 줄인다. 늘릴 때는 기준점까지
+ * 두 배씩(slow start), 넘으면 조금씩 늘린다. 기준점은 처음엔 상한이고, 줄일 때마다 낮춘다 — 장애 뒤에도 빨리 돌아오되 다시 몰리지 않게.
  * 자리 일부는 CANCEL 전용이다 — 등록 · 드로우가 밀려도 취소는 나간다.
  */
 public final class ConcurrencyLimiter {
@@ -41,6 +42,8 @@ public final class ConcurrencyLimiter {
     private final Condition freed = lock.newCondition();
     private final List<Long> latencies = new ArrayList<>();
     private volatile int limit;
+    /** 두 배씩 늘리는 데까지(TCP 의 ssthresh). 처음엔 상한이라 첫 감소 전까지 두 배씩 는다. */
+    private int threshold;
     private volatile int inUse;
     private int failures;
     /** 이번 창에서 가장 많이 쓴 자리 수. 등록이 쓸 수 있는 만큼도 못 채웠으면 늘리지 않는다. */
@@ -53,6 +56,7 @@ public final class ConcurrencyLimiter {
         this.clock = clock;
         this.max = settings.limit();
         this.limit = settings.initial();
+        this.threshold = max;
         this.windowStart = clock.instant();
     }
 
@@ -114,12 +118,16 @@ public final class ConcurrencyLimiter {
         }
     }
 
-    /** 차단기가 열렸다. 다시 열릴 때 조심스럽게 시작하도록 가장 적은 자리로 줄인다. */
+    /**
+     * 차단기가 열렸다. 다시 열릴 때 조심스럽게 시작하도록 가장 적은 자리로 줄이고, 줄이기 전 자리의 절반까지는 두 배씩 돌아오게 한다.
+     * 이미 최소면 기준점을 그대로 둔다 — 반쯤 열림 시험이 실패해 다시 열려도 장애 전의 기억을 잃지 않게.
+     */
     void shrinkToMin() {
         lock.lock();
         try {
             if (limit != settings.min()) {
-                log.info("동시 요청 자리를 최소로 줄인다 {} → {}", limit, settings.min());
+                threshold = Math.max(settings.min(), limit / 2);
+                log.info("동시 요청 자리를 최소로 줄인다 {} → {} (두 배씩 {} 까지 돌아온다)", limit, settings.min(), threshold);
                 limit = settings.min();
             }
             startWindow(clock.instant());
@@ -136,16 +144,28 @@ public final class ConcurrencyLimiter {
         Duration p95 = Duration.ofNanos(latencies.get((int) Math.ceil(latencies.size() * 0.95) - 1));
         int failureRate = failures * 100 / latencies.size();
         int before = limit;
-        if (p95.compareTo(slowCallThreshold) >= 0 || failureRate >= settings.unhealthyFailureRate()) {
-            limit = Math.max(settings.min(), (int) (limit * settings.decreaseFactor()));
-        } else if (p95.compareTo(settings.healthyP95()) < 0 && failureRate < settings.healthyFailureRate()
-                && peak >= allowed(JobType.REGISTER) && limit < max) {
-            limit = Math.min(max, limit + settings.increaseStep());
+        boolean slow = p95.compareTo(slowCallThreshold) >= 0;
+        boolean failing = failureRate >= settings.unhealthyFailureRate();
+        boolean enoughCalls = latencies.size() >= settings.minimumCalls();
+        boolean busy = peak >= allowed(JobType.REGISTER);
+        // 호출이 적은 창은 한두 건으로 비율이 크게 흔들린다. 다만 느리면 끝나는 호출 자체가 줄므로, 자리를 다 쓴 채 느리면 줄인다
+        if (failing && enoughCalls || slow && (enoughCalls || busy)) {
+            int reduced = Math.max(settings.min(), (int) (limit * settings.decreaseFactor()));
+            // 실제로 줄였을 때만 기준점을 낮춘다 — 최소에서 느린 시험 호출 하나가 차단기 뒤의 회복 기준점을 지우지 않게
+            if (reduced < limit) {
+                limit = reduced;
+                threshold = reduced;
+            }
+        } else if (!slow && !failing && p95.compareTo(settings.healthyP95()) < 0
+                && failureRate < settings.healthyFailureRate() && busy && limit < max) {
+            // 두 배는 기준점에서, 더하기는 상한에서 멈춘다 — 넘치지 않게 더하거나 곱하기 전에 견준다
+            limit = limit >= threshold ? limit + Math.min(settings.increaseStep(), max - limit)
+                    : limit > threshold / 2 ? threshold : limit * 2;
             freed.signalAll();
         }
         if (limit != before) {
-            log.info("동시 요청 자리를 조절한다 {} → {} p95={} failureRate={}% calls={}",
-                    before, limit, p95, failureRate, latencies.size());
+            log.info("동시 요청 자리를 조절한다 {} → {} threshold={} p95={} failureRate={}% calls={}",
+                    before, limit, threshold, p95, failureRate, latencies.size());
         }
     }
 

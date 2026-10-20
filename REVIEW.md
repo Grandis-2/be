@@ -70,6 +70,7 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 - 재처리는 DEAD_LETTER → PENDING(run + 1)이 1행일 때만 작업 종류에 맞는 REGISTER_JOB_READY · CANCEL_JOB_READY 를 올린 run 으로 다시 적는다. 0행인데 발행하거나 run 을 싣지 않으면 지적.
 - 작업 메시지의 request 는 저장한 request_payload 그대로다. 본문을 새로 만들거나 키를 바꾸면 차단급.
 - CANCEL 의 FAILED 도 작업을 DEAD_LETTER 로 두고 예약은 CANCELING 에 남긴다. 받은 자리에서 다시 발행하거나 예약을 CANCELED 로 보내면 지적. 끝내는 길은 재처리 뒤 성공 · 늦게 온 성공 · 관리자 수동 완료(CANCEL · DEAD_LETTER · 예약 CANCELING 일 때만)뿐이다.
+- 작업 DLQ(preorder-register-dlq · preorder-cancel-dlq)의 메시지는 FAILED 와 같게 작업을 DEAD_LETTER 로 두고 지운다(JobDeadLetterConsumer). 메시지 run 이 작업 run 과 같을 때만 바꾼다 — 작으면(지난 실행) 그대로 두고 지우고, 크면 계약 위반이라 지우지 않는다. 원본 큐로 다시 보내거나 예약 상태를 바꾸면 지적. 어느 작업인지 읽을 수 없거나 없는 작업의 메시지는 지우지 않는다(DLQ 경보).
 
 **경계**
 - 상품은 `GET /internal/products/{productId}/options` 로 묻고 캐시한다. 이름 · 가격은 접수 때 예약 행에 복사한다 — 표시용 이름 · 가격을 매번 카탈로그 조회로 만들면 지적한다.
@@ -110,14 +111,23 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 메시지
 - SQS 중복 전달은 정상이다. 같은 메시지를 두 번 받아 외부에 다른 키로 두 번 보낼 수 있으면 지적한다.
 - 결과 이벤트 · 지연 재전송을 보내기 전에 원본을 지우면 지적한다. 못 보내면 던져 원본을 둔다.
-- 처리 못 한 메시지를 결과 이벤트 · DLQ 없이 지우면 지적한다(예외: 읽을 수 없는 작업 봉투 — 지표 + 삭제).
+- 처리 못 한 메시지를 결과 이벤트 · DLQ 없이 지우면 지적한다. 읽을 수 없는 작업 봉투도 지우지 않는다(지표 + 남겨 SQS 가 DLQ 로).
 - 빈 자리 없이 꺼내 worker 안에 줄 세우면 지적한다(꺼낸 순간 가시성 시간이 흐른다). CANCEL 전용 자리를 없애면 지적한다.
 - 지금 부를 수 없으면(차단기 · 거절 이어짐 · 자리 없음 · 내려가는 중) 차례 · 받은 횟수를 쓰지 않고 돌려보낸다. 호출하지 않고 attempt 를 올리면 지적한다.
+- 결과 이벤트 id 는 (종류 · 작업 · run · 세대 · 차례), 추첨 결과는 회차로 정한다(ResultPublisher). 보낼 때마다 새로 만들거나 run 을 빼면 지적한다 — 재처리한 실행의 결과가 지난 실행으로 가려진다.
 
 외부 호출
-- 판정은 HTTP 상태보다 errorCode 가 먼저다(MockJudge). errorCode 없는 404 를 "등록 없음" · "응모 0건"으로 읽으면 지적한다 — 경로 오류라 DLQ 로 보내지 않고 RejectGuard 가 받기를 멈춘다.
+- 판정은 HTTP 상태보다 errorCode 가 먼저다(MockJudge). errorCode 없는 404 를 "등록 없음" · "응모 0건"으로 읽으면 지적한다 — 경로 오류라 차례를 쓰지 않고 돌려보내고, 처음 본 때(속성 misconfiguredSince)부터 reject-guard.give-up-after 뒤에만 포기한다(작업 FAILED · 드로우 DLQ).
+- 거절 이어짐(RejectGuard)은 작업 종류마다 센다. 한 종류의 오류로 다른 큐의 받기를 멈추면 지적한다.
+- 차단기는 걸린 시간을 보지 않는다(느림은 ConcurrencyLimiter 가 다룬다). 차단기에 경과 시간을 넘기거나 느린 호출 비율로 열면 지적한다.
+- 자리 조절(ConcurrencyLimiter)은 기준점까지 두 배, 넘으면 increase-step 으로 늘린다. 줄일 때 기준점을 낮추고(차단기가 열리면 직전의 절반), 창의 호출이 minimum-calls 미만이면 줄이지 않는다(느림은 자리를 다 쓴 창이면 적어도 줄인다 — 느리면 끝나는 호출이 준다). 기준점 없이 늘 +1 이거나 한두 건으로 줄이면 지적한다.
 - 타임아웃(연결 · 읽기) 없는 HTTP 클라이언트는 지적한다.
 - 확정 4xx 를 차단기 실패로 세면 지적한다. 일시 실패 · 결과 모름만 센다.
+
+관측 · 연결
+- readiness 는 readinessState 와 consumers(받기 · 삭제 스레드 생존)만 본다. 외부 mock · SQS 상태를 넣으면 지적한다 — 그쪽 장애 한 번에 모든 태스크가 바뀐다.
+- 설정 오류로 돌려보낼 때는 처음 본 때부터 지난 시간을 worker.misconfigured 에 남긴다. 돌려보낸 메시지는 큐 나이 경보에 잡히지 않는다.
+- SQS 는 연결 수를 정한 HTTP 클라이언트(SyncConfig.sqsHttpClient, 동시 요청 상한 + 큐마다 넘칠 수 있는 한 묶음 · 받기 · 삭제)로 보낸다. 연결 수가 동시 요청 상한을 따라가지 않게 바꾸면 지적한다.
 - 차례 안 즉시 재시도(InRoundRetry)는 저장 안 된 게 확실한 일시 실패만 한다.
 
 사전예약 작업(REGISTER · CANCEL, JobHandler)
@@ -125,7 +135,7 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 - 응답 없음 · 도중 끊김 · 본문 없는 5xx 를 미등록으로 단정하지 않는다. UNKNOWN 으로 두고 다음 차례에 같은 키로 조회해 확정한다.
 - EXTERNAL_JOB_ATTEMPTED · EXTERNAL_JOB_FAILED 에 차례 기록(Attempt, run 포함)이 없으면 지적한다. preorder 가 그것으로 중복 · 지난 실행을 가린다.
 - 차례 사이 지연이 고정이면 지적한다. 늘어나는 지연 + 지터, 상한 15분(RetrySchedule).
-- REGISTER 재시도 소진은 EXTERNAL_JOB_FAILED 로 알린다. CANCEL 을 포기하고 버리면 지적한다.
+- 재시도 소진은 EXTERNAL_JOB_FAILED 로 알린다. CANCEL 은 retry.cancel-generations(generations 이상)까지 버틴다. 알리지 않고 버리면 지적한다.
 
 드로우(DRAW_ENTRY_PAID · DRAW_REQUESTED, DrawHandler — contracts/draw-entry-sync.md)
 - 작업 표가 없어 재시도 · 보관은 SQS 가 한다. 일시 실패 · 기다림은 지우지 않고 늦춰 다시 받는다(최대 수신 횟수를 넘으면 draw-register-dlq). 다시 보내도 같은 거절(확정 4xx · 계약과 다른 메시지 · 추첨 결과)만 DeadLetterSender 로 바로 DLQ 에 넣고 지운다. 일시 실패를 바로 DLQ 로 보내거나 확정 거절을 헛돌리면 지적한다.

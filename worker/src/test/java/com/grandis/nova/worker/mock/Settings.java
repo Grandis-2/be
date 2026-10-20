@@ -16,22 +16,27 @@ final class Settings {
 
     /** 연결 · 응답 0.3초. */
     static WorkerProperties.Mock mock(URI baseUrl) {
+        return mock(baseUrl, Duration.ofMillis(300));
+    }
+
+    /** 연결 · 응답 제한을 정한다. 시간 초과를 보지 않는 시험은 넉넉히 둔다 — 느린 CI 의 첫 요청이 시간 초과로 읽히지 않게. */
+    static WorkerProperties.Mock mock(URI baseUrl, Duration timeout) {
         return new WorkerProperties.Mock(baseUrl, Duration.ofSeconds(30), Duration.ofSeconds(1), DataSize.ofKilobytes(64),
-                Duration.ofMillis(300), Duration.ofMillis(300), SLOW_CALL);
+                timeout, timeout, SLOW_CALL);
     }
 
     /** 최근 4건 중 절반이 실패하면 열리고, 0.2초(다시 열리면 0.4초) 뒤 반쯤 열려 3건을 시험한다. */
     static WorkerProperties.Circuit circuit() {
-        return new WorkerProperties.Circuit(4, 4, 50, 80, Duration.ofMillis(200), Duration.ofMillis(400), 2, 3);
+        return new WorkerProperties.Circuit(4, 4, 50, Duration.ofMillis(200), Duration.ofMillis(400), 2, 3);
     }
 
-    /** 상한 6 · 시작 3 · 최소 2 · CANCEL 전용 1, 10초 창. */
+    /** 상한 6 · 시작 3 · 최소 2 · CANCEL 전용 1, 10초 창, 줄이려면 창에 10건 이상. */
     static WorkerProperties.Concurrency concurrency() {
         return new WorkerProperties.Concurrency(6, 1, 3, 2, 1, Duration.ofMillis(100), 40, Duration.ofSeconds(10),
-                Duration.ofSeconds(1), 5, 20, 1, 0.5);
+                Duration.ofSeconds(1), 5, 20, 10, 1, 0.5);
     }
 
     static WorkerProperties.RejectGuard rejectGuard() {
-        return new WorkerProperties.RejectGuard(5, Duration.ofMinutes(1), Duration.ofMinutes(3));
+        return new WorkerProperties.RejectGuard(5, Duration.ofMinutes(1), Duration.ofMinutes(3), Duration.ofMinutes(30));
     }
 }

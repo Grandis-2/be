@@ -4,23 +4,23 @@ import com.grandis.nova.worker.job.JobType;
 
 /**
  * 큐에서 지금 몇 건을 더 받아도 되는가. 받은 메시지는 곧 자리를 잡으러 오므로 자리 수를 넘겨 받지 않고, 호출할 수 없는 동안
- * (차단기가 열림 · 거절이 이어짐)은 받지 않는다 — 메시지가 받은 횟수 · 가시성 시간을 쓰지 않고 큐에서 기다린다.
+ * (차단기가 열림 · 이 종류의 거절이 이어짐)은 받지 않는다 — 메시지가 받은 횟수 · 가시성 시간을 쓰지 않고 큐에서 기다린다.
  */
 public class ReceiveGate {
 
     private final MockCircuit circuit;
     private final ConcurrencyLimiter limiter;
-    private final RejectGuard rejectGuard;
+    private final RejectGuards rejectGuards;
 
-    ReceiveGate(MockCircuit circuit, ConcurrencyLimiter limiter, RejectGuard rejectGuard) {
+    ReceiveGate(MockCircuit circuit, ConcurrencyLimiter limiter, RejectGuards rejectGuards) {
         this.circuit = circuit;
         this.limiter = limiter;
-        this.rejectGuard = rejectGuard;
+        this.rejectGuards = rejectGuards;
     }
 
     /** @param inFlight 받아서 아직 처리 중인 건수(모든 큐의 합). 이만큼은 이미 자리를 쓰고 있거나 곧 쓴다 */
     public int receivable(JobType type, int inFlight) {
-        if (circuit.isOpen() || rejectGuard.blocked()) {
+        if (circuit.isOpen() || rejectGuards.of(type).blocked()) {
             return 0;
         }
         int slots = limiter.allowed(type);

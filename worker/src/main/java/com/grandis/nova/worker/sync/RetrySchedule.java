@@ -12,7 +12,7 @@ import java.util.function.DoubleSupplier;
 
 /**
  * 실패한 차례 다음에 언제 · 몇 번째로 다시 할지 정한다. 한 세대 안에서는 지연을 늘려 가고, 세대를 다 쓰면 길게 쉰 뒤
- * 다음 세대를 연다. REGISTER 는 세대를 다 쓰면 포기하고 CANCEL 은 포기하지 않는다.
+ * 다음 세대를 연다. 정한 세대를 다 쓰면 포기한다 — CANCEL 은 외부에 예약이 남지 않게 REGISTER 보다 오래 버틴다.
  */
 final class RetrySchedule {
 
@@ -40,7 +40,8 @@ final class RetrySchedule {
             return Optional.of(new Next(new JobProgress(progress.run(), progress.attempt() + 1, progress.generation(),
                     outcome, progress.actor()), atLeast(spread(backoff), retryAfter)));
         }
-        if (type == JobType.REGISTER && progress.generation() >= settings.generations()) {
+        int generations = type == JobType.REGISTER ? settings.generations() : settings.cancelGenerations();
+        if (progress.generation() >= generations) {
             return Optional.empty();
         }
         return Optional.of(new Next(new JobProgress(progress.run(), 1, progress.generation() + 1, outcome,

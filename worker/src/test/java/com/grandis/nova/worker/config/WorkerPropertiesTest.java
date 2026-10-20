@@ -24,13 +24,16 @@ class WorkerPropertiesTest {
         assertThat(properties.mock().slowCallThreshold()).isEqualTo(Duration.ofMillis(1500));
         assertThat(properties.concurrency().limit()).isEqualTo(16);
         assertThat(properties.concurrency().rateLimit()).isEqualTo(40);
-        assertThat(properties.concurrency().initial()).isEqualTo(8);
+        assertThat(properties.concurrency().initial()).isEqualTo(2);
+        assertThat(properties.concurrency().healthyFailureRate()).isEqualTo(10);
+        assertThat(properties.concurrency().minimumCalls()).isEqualTo(10);
         assertThat(properties.circuit().openFirst()).isEqualTo(Duration.ofSeconds(10));
         assertThat(properties.circuit().openMax()).isEqualTo(Duration.ofMinutes(2));
         assertThat(properties.retry().backoff())
                 .containsExactly(Duration.ofSeconds(10), Duration.ofSeconds(20), Duration.ofSeconds(40));
         assertThat(properties.retry().generations()).isEqualTo(3);
-        assertThat(properties.retry().generationGap()).isEqualTo(Duration.ofMinutes(15));
+        assertThat(properties.retry().cancelGenerations()).isEqualTo(8);
+        assertThat(properties.retry().generationGap()).isEqualTo(Duration.ofMinutes(12));
         assertThat(properties.retry().inRoundDelayMin()).isEqualTo(Duration.ofMillis(200));
         assertThat(properties.retry().inRoundDelayMax()).isEqualTo(Duration.ofMillis(500));
         assertThat(properties.retry().jitterRatio()).isEqualTo(0.2);
@@ -39,6 +42,7 @@ class WorkerPropertiesTest {
         assertThat(properties.consumer().settings("preorder-cancel").visibility()).isEqualTo(Duration.ofSeconds(120));
         assertThat(properties.rejectGuard().invalidRequests()).isEqualTo(5);
         assertThat(properties.rejectGuard().pause()).isEqualTo(Duration.ofMinutes(1));
+        assertThat(properties.rejectGuard().giveUpAfter()).isEqualTo(Duration.ofMinutes(30));
         assertThat(properties.mock().validateAfterInactivity()).isEqualTo(Duration.ofSeconds(1));
         assertThat(properties.mock().maxResponseBody().toBytes()).isEqualTo(64 * 1024);
         assertThat(properties.concurrency().increaseStep()).isEqualTo(1);
@@ -82,12 +86,17 @@ class WorkerPropertiesTest {
                 Map.of("nova.worker.concurrency.unhealthy-failure-rate", "5"),
                 Map.of("nova.worker.concurrency.unhealthy-failure-rate", "101"),
                 Map.of("nova.worker.concurrency.increase-step", "0"),
+                Map.of("nova.worker.concurrency.minimum-calls", "0"),
                 Map.of("nova.worker.concurrency.decrease-factor", "1"),
                 Map.of("nova.worker.circuit.open-multiplier", "0.5"),
                 Map.of("nova.worker.mock.max-response-body", "10B"),
                 Map.of("nova.worker.mock.max-response-body", "2GB"),
                 Map.of("nova.worker.mock.validate-after-inactivity", "0s"),
                 Map.of("nova.worker.reject-guard.pause", "0s"),
+                Map.of("nova.worker.reject-guard.pause", "16m"),
+                Map.of("nova.worker.reject-guard.give-up-after", "0s"),
+                Map.of("nova.worker.retry.cancel-generations", "0"),
+                Map.of("nova.worker.retry.cancel-generations", "2"),
                 Map.of("nova.worker.concurrency.per-mock", "65536", "nova.worker.concurrency.mock-max-instances", "65536"),
                 Map.of("nova.worker.concurrency.rate-per-second", "2147483647",
                         "nova.worker.concurrency.mock-max-instances", "2"),

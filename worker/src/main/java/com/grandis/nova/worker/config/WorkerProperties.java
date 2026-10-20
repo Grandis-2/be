@@ -42,7 +42,8 @@ public record WorkerProperties(
     /**
      * @param connectionMaxLifetime   연결 하나를 다시 쓰는 최대 시간. 짧게 두어 새로 뜬 mock 에도 요청이 가게 한다
      * @param validateAfterInactivity 이보다 오래 쉰 연결은 다시 쓰기 전에 끊겼는지 확인한다
-     * @param slowCallThreshold       성공했어도 이보다 느리면 차단기가 느린 호출로 센다
+     * @param slowCallThreshold       자동 조절이 창의 p95 를 견주는 기준. 넘으면 자리를 줄인다(차단기는 느림을 보지 않는다).
+     *                                응답 제한의 절반 — mock 평소 지연(평균 0.5초)과 거리를 두고, 제한에 닿기 전에 줄인다
      */
     public record Mock(
             URI baseUrl,
@@ -68,21 +69,28 @@ public record WorkerProperties(
 
     /**
      * 동시에 나가 있는 요청 수. 상한 = perMock × mockMaxInstances(인프라가 넘기는 mock 최대 대수)이고 그 안에서 자동 조절한다.
-     * 창(adjustEvery)마다 p95 가 healthyP95 미만 · 실패율이 healthyFailureRate 미만이면 increaseStep 만큼 늘리고,
-     * 느린 호출 기준을 넘거나 실패율이 unhealthyFailureRate 이상이면 decreaseFactor 를 곱해 줄인다.
+     * 창(adjustEvery)마다 p95 가 healthyP95 미만 · 실패율이 healthyFailureRate 미만이면 늘리고(기준점까지 두 배, 넘으면 increaseStep),
+     * 느린 호출 기준을 넘거나 실패율이 unhealthyFailureRate 이상이면 decreaseFactor 를 곱해 줄인다(창의 호출이 minimumCalls 이상일 때만,
+     * 느림은 자리를 다 쓴 창이면 호출이 적어도).
+     *
+     * @param initial            시작 자리. 최소와 같게 두고 두 배씩 늘린다 — 장애 중 새로 뜬 태스크가 많이 보내지 않게(2 → 80 약 1분)
+     * @param healthyFailureRate 늘리는 실패율 문턱(%). mock 의 기본 실패 주입(5%)보다 넉넉히 둔다 — 같으면 창마다 늘리기가 반쯤 막힌다
+     * @param minimumCalls       줄이기 전에 창에 있어야 하는 호출 수. 차단기의 최소 호출 수와 같다. 느리면 끝나는 호출이 줄어서,
+     *                           자리를 다 쓴 채 느린 창은 이보다 적어도 줄인다
      */
     public record Concurrency(
             @DefaultValue("16") int perMock,
             @DefaultValue("1") int mockMaxInstances,
-            @DefaultValue("8") int initial,
+            @DefaultValue("2") int initial,
             @DefaultValue("2") int min,
             @DefaultValue("1") int cancelReserved,
             @DefaultValue("100ms") Duration permitWait,
             @DefaultValue("40") int ratePerSecond,
             @DefaultValue("10s") Duration adjustEvery,
             @DefaultValue("1s") Duration healthyP95,
-            @DefaultValue("5") int healthyFailureRate,
+            @DefaultValue("10") int healthyFailureRate,
             @DefaultValue("20") int unhealthyFailureRate,
+            @DefaultValue("10") int minimumCalls,
             @DefaultValue("1") int increaseStep,
             @DefaultValue("0.5") double decreaseFactor
     ) {
@@ -106,6 +114,7 @@ public record WorkerProperties(
                     "concurrency 는 1 <= healthy-failure-rate < unhealthy-failure-rate <= 100 이어야 한다");
             require(increaseStep >= 1 && decreaseFactor > 0 && decreaseFactor < 1,
                     "concurrency 는 increase-step >= 1, 0 < decrease-factor < 1 이어야 한다");
+            require(minimumCalls >= 1, "concurrency.minimum-calls 는 1 이상이어야 한다: " + minimumCalls);
         }
 
         /** worker 하나의 동시 요청 상한. */
@@ -128,7 +137,6 @@ public record WorkerProperties(
             @DefaultValue("20") int window,
             @DefaultValue("10") int minimumCalls,
             @DefaultValue("50") int failureRate,
-            @DefaultValue("80") int slowCallRate,
             @DefaultValue("10s") Duration openFirst,
             @DefaultValue("2m") Duration openMax,
             @DefaultValue("2") double openMultiplier,
@@ -138,8 +146,7 @@ public record WorkerProperties(
         public Circuit {
             require(minimumCalls >= 1 && minimumCalls <= window,
                     "circuit 는 1 <= minimum-calls <= window 여야 한다: minimum-calls=" + minimumCalls);
-            require(percent(failureRate) && percent(slowCallRate),
-                    "circuit 의 failure-rate · slow-call-rate 는 1 ~ 100 이어야 한다");
+            require(percent(failureRate), "circuit.failure-rate 는 1 ~ 100 이어야 한다");
             require(positive(openFirst) && openFirst.compareTo(openMax) <= 0 && openMax.compareTo(MAX_DELAY) <= 0,
                     "circuit 는 0 < open-first <= open-max <= 15m 여야 한다(열린 동안 지연 재전송한다): " + openMax);
             require(openMultiplier >= 1, "circuit.open-multiplier 는 1 이상이어야 한다: " + openMultiplier);
@@ -151,7 +158,11 @@ public record WorkerProperties(
      * @param inRound         한 차례 안에서 곧바로 다시 보내는 횟수(일시 실패만)
      * @param inRoundDelayMin 곧바로 다시 보내기 전에 쉬는 시간의 아래 끝. 위 끝(inRoundDelayMax)까지 고르게 흩는다
      * @param backoff         다음 차례까지의 지연. 차례 사이마다 하나씩이라 roundsPerGeneration − 1 개
-     * @param generations     REGISTER 가 최종 실패하기까지의 세대 수. CANCEL 은 제한이 없다
+     * @param generations     REGISTER 가 최종 실패하기까지의 세대 수
+     * @param cancelGenerations CANCEL 이 포기하기까지의 세대 수. generations 이상이다 — 포기하면 preorder 가 작업을 DEAD_LETTER 로 두고
+     *                        관리자가 재처리하거나 외부를 확인해 끝낸다. 기본 8 은 세대 간격 12m 로 약 1시간 45분
+     * @param generationGap   세대 사이 지연. 기본 12m 은 흩은 위쪽 끝(14.4m)이 SQS 지연 상한 15m 안이라 잘리지 않는다 —
+     *                        잘리면 그만큼이 정확히 15m 에 한꺼번에 돌아온다
      * @param jitterRatio     지연을 흩는 폭. 0.2 면 ±20% — 여러 worker 의 재시도가 한 순간에 몰리지 않게 한다
      */
     public record Retry(
@@ -161,14 +172,18 @@ public record WorkerProperties(
             @DefaultValue({"10s", "20s", "40s"}) List<Duration> backoff,
             @DefaultValue("4") int roundsPerGeneration,
             @DefaultValue("3") int generations,
-            @DefaultValue("15m") Duration generationGap,
+            @DefaultValue("8") int cancelGenerations,
+            @DefaultValue("12m") Duration generationGap,
             @DefaultValue("0.2") double jitterRatio
     ) {
 
         public Retry {
             backoff = List.copyOf(backoff);
-            require(inRound >= 0 && roundsPerGeneration >= 1 && generations >= 1,
-                    "retry 는 in-round >= 0, rounds-per-generation >= 1, generations >= 1 이어야 한다");
+            require(inRound >= 0 && roundsPerGeneration >= 1 && generations >= 1 && cancelGenerations >= 1,
+                    "retry 는 in-round >= 0, rounds-per-generation >= 1, generations · cancel-generations >= 1 이어야 한다");
+            // 취소를 먼저 포기하면 등록은 살아 있는데 취소만 관리자에게 넘어간다
+            require(cancelGenerations >= generations, "retry.cancel-generations 는 generations 이상이어야 한다: "
+                    + cancelGenerations + " < " + generations);
             require(backoff.size() == roundsPerGeneration - 1,
                     "retry.backoff 는 rounds-per-generation − 1 개여야 한다: " + backoff);
             require(backoff.stream().allMatch(delay -> positive(delay) && delay.compareTo(MAX_DELAY) <= 0)
@@ -210,20 +225,26 @@ public record WorkerProperties(
     }
 
     /**
-     * 우리 요청이 잘못돼 거절이 이어질 때 받기를 멈추는 기준.
+     * 우리 요청이 잘못돼 거절이 이어질 때 받기를 멈추는 기준. 작업 종류(등록 · 취소 · 드로우)마다 따로 센다 — 한 경로의 오류가
+     * 다른 큐의 받기를 멈추지 않게.
      *
      * @param invalidRequests per 동안 이만큼 거절되면 멈춘다
      * @param pause           멈춰 있는 시간. 지나면 다시 받아 본다
+     * @param giveUpAfter     설정 오류(mock 이 아닌 곳의 응답)로 돌려보낸 메시지를 처음 본 때부터 이만큼 지나면 포기한다. 고치는 동안
+     *                        작업을 한꺼번에 포기하지 않게 mock 배포 · 되돌리기보다 길게 둔다. 포기한 작업은 관리자가 다시 돌린다
      */
     public record RejectGuard(
             @DefaultValue("5") int invalidRequests,
             @DefaultValue("1m") Duration per,
-            @DefaultValue("1m") Duration pause
+            @DefaultValue("1m") Duration pause,
+            @DefaultValue("30m") Duration giveUpAfter
     ) {
 
         public RejectGuard {
-            require(invalidRequests >= 1 && positive(per) && positive(pause),
-                    "reject-guard 는 invalid-requests >= 1, per > 0, pause > 0 이어야 한다");
+            require(invalidRequests >= 1 && positive(per) && positive(pause) && positive(giveUpAfter),
+                    "reject-guard 는 invalid-requests >= 1, per · pause · give-up-after > 0 이어야 한다");
+            // 멈춘 동안 받은 메시지를 남은 시간만큼 지연 재전송한다
+            require(pause.compareTo(MAX_DELAY) <= 0, "reject-guard.pause 는 15m 이하여야 한다: " + pause);
         }
     }
 

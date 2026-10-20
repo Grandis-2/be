@@ -56,14 +56,16 @@ class HealthEndpointTest {
         assertThat(metrics).containsPattern("resilience4j_circuitbreaker_state\\{[^}]*name=\"mock\"[^}]*state=\"closed\"[^}]*} 1");
         assertThat(metrics).containsPattern("resilience4j_circuitbreaker_not_permitted_calls_total\\{[^}]*name=\"mock\"");
         assertThat(metrics).containsPattern("resilience4j_ratelimiter_available_permissions\\{[^}]*name=\"mock\"");
-        assertThat(metrics).containsPattern("worker_concurrency_limit(\\{[^}]*})? 8");
+        assertThat(metrics).containsPattern("worker_concurrency_limit(\\{[^}]*})? 2");
         assertThat(metrics).containsPattern("worker_concurrency_in_use(\\{[^}]*})? 0");
         assertThat(metrics).containsPattern("worker_receive_blocked(\\{[^}]*})? 0");
     }
 
+    /** 소비를 끈 구성에도 "consumers" 는 있다(볼 소비기가 없어 UP) — 그룹에 없는 이름이 들어 있으면 기동이 실패한다. */
     @Test
-    void readiness_는_앱의_준비_상태만_본다() {
+    void readiness_는_앱의_준비_상태와_소비_스레드만_본다() {
         assertThat(groups.get("readiness").isMember("readinessState")).isTrue();
+        assertThat(groups.get("readiness").isMember("consumers")).isTrue();
         assertThat(groups.get("readiness").isMember("diskSpace")).isFalse();
     }
 

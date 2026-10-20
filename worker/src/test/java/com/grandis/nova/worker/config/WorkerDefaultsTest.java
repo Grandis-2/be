@@ -20,7 +20,8 @@ class WorkerDefaultsTest {
         assertThat(empty.getProperty("server.port")).isEqualTo("9087");
         assertThat(empty.getProperty("management.endpoints.web.exposure.include")).isEqualTo("health,prometheus");
         assertThat(empty.getProperty("management.endpoint.health.probes.enabled")).isEqualTo("true");
-        assertThat(empty.getProperty("management.endpoint.health.group.readiness.include")).isEqualTo("readinessState");
+        assertThat(empty.getProperty("management.endpoint.health.group.readiness.include"))
+                .isEqualTo("readinessState,consumers");
         assertThat(empty.getProperty("management.metrics.distribution.percentiles-histogram.worker.mock.latency"))
                 .isEqualTo("true");
 

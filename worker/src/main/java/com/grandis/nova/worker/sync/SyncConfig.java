@@ -2,6 +2,7 @@ package com.grandis.nova.worker.sync;
 
 import com.grandis.nova.common.sqs.BatchQueueConsumer;
 import com.grandis.nova.common.sqs.DelayedResend;
+import com.grandis.nova.common.sqs.SqsAutoConfiguration;
 import com.grandis.nova.common.sqs.SqsQueueUrls;
 import com.grandis.nova.worker.config.WorkerProperties;
 import com.grandis.nova.worker.job.DrawEventType;
@@ -12,12 +13,14 @@ import com.grandis.nova.worker.mock.ConcurrencyLimiter;
 import com.grandis.nova.worker.mock.MockCircuit;
 import com.grandis.nova.worker.mock.MockGateway;
 import com.grandis.nova.worker.mock.ReceiveGate;
-import com.grandis.nova.worker.mock.RejectGuard;
+import com.grandis.nova.worker.mock.RejectGuards;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import software.amazon.awssdk.http.SdkHttpClient;
+import software.amazon.awssdk.http.apache5.Apache5HttpClient;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -34,7 +37,23 @@ import java.util.concurrent.ThreadLocalRandom;
 class SyncConfig {
 
     /** 드로우 메시지에서 받아 올 속성. 돌려보내기 · DLQ 에 넣을 때 그대로 잇는다. */
-    private static final List<String> DRAW_ATTRIBUTE_NAMES = List.of("eventType", "eventId");
+    private static final List<String> DRAW_ATTRIBUTE_NAMES =
+            List.of("eventType", "eventId", JobProgress.MISCONFIGURED_SINCE);
+    /** 소비하는 큐 수(예약 등록 · 취소, 럭키드로우). 큐마다 받기 스레드와 삭제 스레드가 SQS 연결을 하나씩 쥔다. */
+    private static final int QUEUES = 3;
+    /** SQS 가 한 번에 주는 메시지 상한. 큐마다 받기 전에 빈 자리를 세므로, 롱 폴링이 겹치면 큐마다 이만큼 넘칠 수 있다. */
+    private static final int RECEIVE_BATCH = 10;
+
+    /**
+     * SQS 연결 풀. 처리 중인 메시지(동시 요청 상한 + 큐마다 넘친 한 묶음)가 결과를 알리거나 다시 보내고, 받기 · 삭제가 큐마다 하나씩 쥔다.
+     * 기본 URLConnection 은 쉬는 연결을 5개만 남겨, 넘는 호출은 매번 새로 연결한다(TLS 포함). 자동설정의 SqsClient 가 이것으로 보낸다
+     */
+    @Bean(name = SqsAutoConfiguration.HTTP_CLIENT_BEAN, destroyMethod = "close")
+    SdkHttpClient sqsHttpClient(WorkerProperties properties) {
+        return Apache5HttpClient.builder()
+                .maxConnections(properties.concurrency().limit() + QUEUES * (RECEIVE_BATCH + 2))
+                .build();
+    }
 
     @Bean
     ResultPublisher resultPublisher(SqsClient sqs, SqsQueueUrls queueUrls, JsonMapper json, Clock clock) {
@@ -68,20 +87,20 @@ class SyncConfig {
 
     @Bean
     JobHandler registerJobHandler(MockGateway mock, InRoundRetry inRound, RetrySchedule schedule,
-                                  ConcurrencyLimiter limiter, MockCircuit circuit, RejectGuard rejectGuard,
+                                  ConcurrencyLimiter limiter, MockCircuit circuit, RejectGuards rejectGuards,
                                   ResultPublisher publisher, DelayedResend registerResend, WorkerProperties properties,
                                   JsonMapper json, MeterRegistry meters, Clock clock, ShutdownSignal shutdown) {
         return new JobHandler(JobType.REGISTER, new RegisterTurn(mock, inRound), schedule, limiter, circuit,
-                rejectGuard, publisher, registerResend, properties, json, meters, clock, shutdown);
+                rejectGuards.of(JobType.REGISTER), publisher, registerResend, properties, json, meters, clock, shutdown);
     }
 
     @Bean
     JobHandler cancelJobHandler(MockGateway mock, InRoundRetry inRound, RetrySchedule schedule,
-                                ConcurrencyLimiter limiter, MockCircuit circuit, RejectGuard rejectGuard,
+                                ConcurrencyLimiter limiter, MockCircuit circuit, RejectGuards rejectGuards,
                                 ResultPublisher publisher, DelayedResend cancelResend, WorkerProperties properties,
                                 JsonMapper json, MeterRegistry meters, Clock clock, ShutdownSignal shutdown) {
-        return new JobHandler(JobType.CANCEL, new CancelTurn(mock, inRound), schedule, limiter, circuit, rejectGuard,
-                publisher, cancelResend, properties, json, meters, clock, shutdown);
+        return new JobHandler(JobType.CANCEL, new CancelTurn(mock, inRound), schedule, limiter, circuit,
+                rejectGuards.of(JobType.CANCEL), publisher, cancelResend, properties, json, meters, clock, shutdown);
     }
 
     @Bean
@@ -91,11 +110,11 @@ class SyncConfig {
 
     @Bean
     DrawHandler drawHandler(MockGateway mock, InRoundRetry inRound, ConcurrencyLimiter limiter, MockCircuit circuit,
-                            RejectGuard rejectGuard, ResultPublisher publisher, DelayedResend drawResend,
+                            RejectGuards rejectGuards, ResultPublisher publisher, DelayedResend drawResend,
                             SqsClient sqs, SqsQueueUrls queueUrls, WorkerProperties properties, JsonMapper json,
-                            MeterRegistry meters, ShutdownSignal shutdown) {
-        return new DrawHandler(mock, inRound, limiter, circuit, rejectGuard, publisher, drawResend,
-                new DeadLetterSender(sqs, queueUrls, DrawEventType.QUEUE), properties, json, meters, shutdown);
+                            MeterRegistry meters, Clock clock, ShutdownSignal shutdown) {
+        return new DrawHandler(mock, inRound, limiter, circuit, rejectGuards.of(JobType.DRAW), publisher, drawResend,
+                new DeadLetterSender(sqs, queueUrls, DrawEventType.QUEUE), properties, json, meters, clock, shutdown);
     }
 
     @Bean
