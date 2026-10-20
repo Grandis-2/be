@@ -22,7 +22,7 @@ import software.amazon.awssdk.core.exception.SdkException;
  * 멈출 때 행이 되살아나(UNUSED) 파일 없는 사진을 붙일 수 있다. S3 삭제가 성공하면 삭제 대기를 지우고, 남은 삭제 대기(S3 실패 · 그 사이
  * 멈춤)는 다음 실행이 처음에 마저 지운다.
  *
- * 대상은 (updated_at, id) 로 이어 읽는다 — 드로우가 가리켜 못 지운 행은 남는데, 매번 처음부터 고르면(LIMIT 만) 그런 행이 청크를
+ * 대상은 (updated_at, id) 로 이어 읽는다 — 드로우 · 주문이 가리켜 못 지운 행은 남는데, 매번 처음부터 고르면(LIMIT 만) 그런 행이 청크를
  * 채웠을 때 뒤의 사진에 닿지 못한다.
  *
  * S3 삭제가 재시도 뒤에도 실패하면 이번 실행을 멈춘다. S3 가 멈췄으면 남은 대상도 실패할 것이고, 한 건마다 시간 상한까지 기다리면
@@ -73,9 +73,9 @@ public class ImageCleanupService {
         }
         Tally tally = new Tally();
         boolean stopped = !deletePending(tally) || !deleteUnused(cutoff, tally);
-        log.info("사진 정리 — 지난 실행의 삭제 대기 {}건 지움 · 기준 시각 {} 전에 UNUSED 가 된 사진 {}건: 지움 {} · 드로우가 가리켜 남김 {} · "
+        log.info("사진 정리 — 지난 실행의 삭제 대기 {}건 지움 · 기준 시각 {} 전에 UNUSED 가 된 사진 {}건: 지움 {} · 드로우 · 지난 주문이 가리켜 남김 {} · "
                         + "그 사이 바뀌어 건너뜀 {}{}",
-                tally.pendingDeleted, cutoff, tally.candidates, tally.deleted, tally.drawn, tally.changed,
+                tally.pendingDeleted, cutoff, tally.candidates, tally.deleted, tally.referenced, tally.changed,
                 stopped ? " — S3 삭제 실패로 멈춤(남은 대상은 다음 실행에)" : "");
         warnStalePending();
     }
@@ -114,8 +114,8 @@ public class ImageCleanupService {
             List<Candidate> chunk = store.candidates(cutoff, after, properties.chunkSize());
             for (Candidate image : chunk) {
                 tally.candidates++;
-                if (image.drawn()) {
-                    tally.drawn++;
+                if (image.referenced()) {
+                    tally.referenced++;
                 } else if (!deleteRow(image, cutoff)) {
                     tally.changed++;
                 } else if (deleteObject(image.objectKey())) {
@@ -156,15 +156,15 @@ public class ImageCleanupService {
 
     private void preview(Instant cutoff) {
         int candidates = 0;
-        int drawn = 0;
+        int referenced = 0;
         List<String> oldest = new ArrayList<>();
         Position after = null;
         while (true) {
             List<Candidate> chunk = store.candidates(cutoff, after, properties.chunkSize());
             for (Candidate image : chunk) {
                 candidates++;
-                if (image.drawn()) {
-                    drawn++;
+                if (image.referenced()) {
+                    referenced++;
                 } else if (oldest.size() < PREVIEW_KEYS) {
                     oldest.add(image.objectKey() + "(" + image.updatedAt() + ")");
                 }
@@ -174,9 +174,9 @@ public class ImageCleanupService {
             }
             after = chunk.getLast().position();
         }
-        log.info("사진 정리(dry-run, 지우지 않음) — 기준 시각 {} 전에 UNUSED 가 된 사진 {}건: 지울 대상 {} · 드로우가 가리켜 남김 {} · "
+        log.info("사진 정리(dry-run, 지우지 않음) — 기준 시각 {} 전에 UNUSED 가 된 사진 {}건: 지울 대상 {} · 드로우 · 지난 주문이 가리켜 남김 {} · "
                         + "지난 실행의 삭제 대기 {}건. 오래된 순 {}",
-                cutoff, candidates, candidates - drawn, drawn, store.pendingCount(), oldest);
+                cutoff, candidates, candidates - referenced, referenced, store.pendingCount(), oldest);
     }
 
     /** 한 실행에서 센 건수 */
@@ -185,7 +185,7 @@ public class ImageCleanupService {
         int pendingDeleted;
         int candidates;
         int deleted;
-        int drawn;
+        int referenced;
         int changed;
     }
 }

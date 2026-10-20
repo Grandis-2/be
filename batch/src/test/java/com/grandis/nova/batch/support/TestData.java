@@ -216,6 +216,40 @@ public final class TestData {
                 .update();
     }
 
+    /** 장바구니 주문 한 줄. 상품은 이름별 상품의 옵션이고, imageUrl 은 주문 때 복사해 둔 옵션 사진 주소다 */
+    public void orderItem(String productName, String imageUrl) {
+        UUID[] product = productRow(productName);
+        int n = sequence.incrementAndGet();
+        UUID customerId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        LocalDateTime at = utc(Instant.now());
+        jdbc.sql("""
+                        INSERT INTO customers (id, kakao_id, display_name, created_at, updated_at)
+                        VALUES (UUID_TO_BIN(:id), :kakao, :name, :at, :at)
+                        """)
+                .param("id", customerId.toString()).param("kakao", "test-order-" + n).param("name", "주문회원" + n).param("at", at)
+                .update();
+        jdbc.sql("""
+                        INSERT INTO orders (id, customer_id, source, status, total_amount, payment_due_at, ship_to_name,
+                                            ship_to_phone, ship_to_postal_code, ship_to_line1, created_at, updated_at)
+                        VALUES (UUID_TO_BIN(:id), UUID_TO_BIN(:customer), 'CART', 'AWAITING_CONFIRMATION', 1000, :due,
+                                '받는 사람', '010-0000-0000', '00000', '주소', :at, :at)
+                        """)
+                .param("id", orderId.toString()).param("customer", customerId.toString()).param("due", at.plusMinutes(30))
+                .param("at", at)
+                .update();
+        jdbc.sql("""
+                        INSERT INTO order_items (id, order_id, product_id, option_id, quantity, unit_price_snapshot,
+                                                 product_title_snapshot, option_title_snapshot, image_url_snapshot)
+                        VALUES (UUID_TO_BIN(:id), UUID_TO_BIN(:order), UUID_TO_BIN(:product), UUID_TO_BIN(:option), 1, 1000,
+                                :name, '실버 / 256GB', :image)
+                        """)
+                .param("id", UUID.randomUUID().toString()).param("order", orderId.toString())
+                .param("product", product[0].toString()).param("option", product[1].toString()).param("name", productName)
+                .param("image", imageUrl)
+                .update();
+    }
+
     /** 지난 실행이 남긴 삭제 대기 */
     public void pendingDeletion(String objectKey, Instant at) {
         jdbc.sql("INSERT INTO image_deletions (object_key, created_at) VALUES (:key, :at)")
@@ -226,7 +260,7 @@ public final class TestData {
     /** 시험이 넣은 결과 · 업무 행을 지운다. 외래 키 순서대로 */
     public void clear() {
         for (String table : new String[]{"reconciliation_findings", "reconciliation_runs", "image_deletions", "images",
-                "draw_campaigns", "payments", "orders",
+                "draw_campaigns", "payments", "order_items", "orders",
                 "preorder_outbox_events",
                 "preorder_sync_attempts", "preorder_sync_jobs", "preorder_events", "preorders", "shipment_batches",
                 "preorder_campaigns", "customers", "product_options", "products", "categories"}) {

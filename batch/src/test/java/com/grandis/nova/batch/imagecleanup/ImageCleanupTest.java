@@ -114,6 +114,20 @@ class ImageCleanupTest extends BatchIntegrationTest {
         assertThat(S3.deleted()).containsExactly(plain.key());
     }
 
+    /** 주문 줄은 주문 때 옵션 사진 주소를 남긴다 — 상품 사진을 바꾼 뒤에도 지난 주문 상세가 그 사진을 보여 준다 */
+    @Test
+    void 지난_주문이_가리키는_사진은_CDN_주소가_달라도_남긴다() {
+        ImageRow ordered = data.image("products", "UNUSED", OLD);
+        data.orderItem("노트북", "https://old-cdn.example.com/" + ordered.key() + "?v=1");
+        ImageRow plain = data.image("products", "UNUSED", OLD);
+
+        service.run();
+
+        assertThat(exists(ordered)).isTrue();
+        assertThat(exists(plain)).isFalse();
+        assertThat(S3.deleted()).containsExactly(plain.key());
+    }
+
     /** catalog 는 새로 붙이는 주소에 쿼리 · 조각을 받지 않지만, 붙어 있어도 같은 객체라 지우지 않는다 */
     @Test
     void 드로우_주소에_쿼리나_조각이_붙어도_남긴다() {
@@ -233,20 +247,23 @@ class ImageCleanupTest extends BatchIntegrationTest {
         assertThat(output).contains("S3 삭제 실패로 멈춤").doesNotContain("사진 정리가 막혀 있다");
     }
 
-    /** 고를 때 본 조건을 지울 때 다시 건다 — 그 사이 catalog 가 붙였거나 다시 뗐거나 드로우가 가리키게 된 사진은 0행이다 */
+    /** 고를 때 본 조건을 지울 때 다시 건다 — 그 사이 catalog 가 붙였거나 다시 뗐거나 드로우 · 주문이 가리키게 된 사진은 0행이다 */
     @Test
     void 고른_뒤_바뀐_사진은_행을_지우지_않는다() {
         ImageRow used = data.image("products", "USED", OLD);
         ImageRow detachedAgain = data.image("products", "UNUSED", RECENT);
         ImageRow drawn = data.image("products", "UNUSED", OLD);
         data.draw("폰", "https://cdn.example.com/" + drawn.key());
+        ImageRow ordered = data.image("products", "UNUSED", OLD);
+        data.orderItem("노트북", "https://cdn.example.com/" + ordered.key());
         ImageRow plain = data.image("products", "UNUSED", OLD);
 
+        assertThat(store.deleteIfStillUnused(ordered.id(), CUTOFF)).isFalse();
         assertThat(store.deleteIfStillUnused(used.id(), CUTOFF)).isFalse();
         assertThat(store.deleteIfStillUnused(detachedAgain.id(), CUTOFF)).isFalse();
         assertThat(store.deleteIfStillUnused(drawn.id(), CUTOFF)).isFalse();
         assertThat(store.deleteIfStillUnused(plain.id(), CUTOFF)).isTrue();
-        assertThat(count("SELECT COUNT(*) FROM images")).isEqualTo(3);
+        assertThat(count("SELECT COUNT(*) FROM images")).isEqualTo(4);
     }
 
     @Test

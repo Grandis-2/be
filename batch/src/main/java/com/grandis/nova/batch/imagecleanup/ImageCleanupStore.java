@@ -8,6 +8,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -19,19 +20,26 @@ import org.springframework.stereotype.Repository;
 @Repository
 class ImageCleanupStore {
 
-    // 드로우 회차는 만들 때 증정품 사진 주소를 복사해 두고 바꾸지 않는다(예정 · 진행 · 마감 모두 화면에 보인다). 주소 전체가 아니라 객체 키로
-    // 비교한다 — CDN 도메인이 바뀌어도 옛 주소를 든 회차를 놓치지 않는다. 서버가 만든 키에는 LIKE 와일드카드(% · _)가 없고,
-    // 있더라도 더 많은 회차와 맞아 지우지 않는 쪽으로 틀린다. 주소 뒤의 쿼리 · 조각(? · #)은 떼고 비교한다 — catalog 는 새로 붙이는 사진
-    // 주소에 쿼리 · 조각을 받지 않지만, 붙어 있어도 같은 객체라 지우지 않는 쪽으로 본다(catalog 의 키 구하기도 URI 경로로 한다)
-    private static final String DRAWN = "EXISTS (SELECT 1 FROM draw_campaigns d"
-            + " WHERE SUBSTRING_INDEX(SUBSTRING_INDEX(d.image_url_snapshot, '#', 1), '?', 1) LIKE CONCAT('%/', i.object_key))";
+    // 사진 주소를 복사해 두고 바꾸지 않는 곳 — 이 주소가 가리키는 사진은 UNUSED 여도 지우지 않는다.
+    // 드로우 회차는 만들 때 증정품 사진을(예정 · 진행 · 마감 모두 화면에 보인다), 주문 줄은 주문 때 옵션 사진을(지난 주문 상세) 남긴다.
+    // 새로 생기면 catalog 가 알리고 여기에 더한다.
+    // 주소 전체가 아니라 객체 키로 비교한다 — CDN 도메인이 바뀌어도 옛 주소를 놓치지 않는다. 서버가 만든 키에는 LIKE 와일드카드(% · _)가
+    // 없고, 있더라도 더 많은 행과 맞아 지우지 않는 쪽으로 틀린다. 주소 뒤의 쿼리 · 조각(? · #)은 떼고 비교한다 — catalog 는 새로 붙이는
+    // 사진 주소에 쿼리 · 조각을 받지 않지만, 붙어 있어도 같은 객체라 지우지 않는 쪽으로 본다(catalog 의 키 구하기도 URI 경로로 한다).
+    // 끝부분 비교라 인덱스를 못 타고 대상 한 장마다 두 테이블을 훑는다 — 하루 한 번 · 대상이 적어 받아들인다
+    private static final List<String> SNAPSHOTS = List.of("draw_campaigns", "order_items");
+
+    private static final String REFERENCED = SNAPSHOTS.stream()
+            .map(table -> "EXISTS (SELECT 1 FROM " + table + " s WHERE SUBSTRING_INDEX(SUBSTRING_INDEX(s.image_url_snapshot, '#', 1), '?', 1)"
+                    + " LIKE CONCAT('%/', i.object_key))")
+            .collect(Collectors.joining(" OR ", "(", ")"));
 
     // (status, updated_at) 인덱스를 탄다. InnoDB 보조 인덱스 끝에 기본 키가 붙어 (updated_at, id) 순서도 인덱스 순서다
     private static final String CANDIDATES = """
-            SELECT i.id, i.object_key, i.updated_at, %s AS drawn
+            SELECT i.id, i.object_key, i.updated_at, %s AS referenced
               FROM images i
              WHERE i.status = 'UNUSED' AND i.updated_at < :cutoff
-            """.formatted(DRAWN);
+            """.formatted(REFERENCED);
 
     private static final String AFTER = " AND (i.updated_at > :afterAt OR (i.updated_at = :afterAt AND i.id > :afterId))";
 
@@ -42,7 +50,7 @@ class ImageCleanupStore {
     }
 
     /**
-     * 기준 시각 전에 UNUSED 가 된 사진을 (updated_at, id) 순서로 after 다음부터 읽는다. 못 지운 행(드로우가 가리킴 · 그 사이 바뀜)이
+     * 기준 시각 전에 UNUSED 가 된 사진을 (updated_at, id) 순서로 after 다음부터 읽는다. 못 지운 행(드로우 · 주문이 가리킴 · 그 사이 바뀜)이
      * 남아도 다시 고르지 않는다.
      *
      * @param after 앞 청크의 마지막 사진. null 이면 처음부터
@@ -57,8 +65,8 @@ class ImageCleanupStore {
     }
 
     /**
-     * 고를 때의 조건을 한 문장에 다시 걸어 id 로 지운다. 고른 뒤 catalog 가 붙였거나(USED) 다시 뗐거나(updated_at 이 새것) 드로우가
-     * 가리키게 됐으면 0행이다.
+     * 고를 때의 조건을 한 문장에 다시 걸어 id 로 지운다. 고른 뒤 catalog 가 붙였거나(USED) 다시 뗐거나(updated_at 이 새것) 드로우 ·
+     * 주문이 가리키게 됐으면 0행이다.
      *
      * @return 지웠으면 true
      */
@@ -69,7 +77,7 @@ class ImageCleanupStore {
                            AND i.status = 'UNUSED'
                            AND i.updated_at < :cutoff
                            AND NOT %s
-                        """.formatted(DRAWN))
+                        """.formatted(REFERENCED))
                 .param("id", UuidBinary.toBytes(id))
                 .param("cutoff", utc(cutoff))
                 .update() == 1;
@@ -113,15 +121,15 @@ class ImageCleanupStore {
 
     private static Candidate candidate(ResultSet rs, int row) throws SQLException {
         return new Candidate(UuidBinary.fromBytes(rs.getBytes("id")), rs.getString("object_key"),
-                rs.getObject("updated_at", LocalDateTime.class).toInstant(ZoneOffset.UTC), rs.getBoolean("drawn"));
+                rs.getObject("updated_at", LocalDateTime.class).toInstant(ZoneOffset.UTC), rs.getBoolean("referenced"));
     }
 
     private static LocalDateTime utc(Instant instant) {
         return LocalDateTime.ofInstant(instant, ZoneOffset.UTC);
     }
 
-    /** 기준 시간이 지난 UNUSED 사진. drawn 이면 드로우 회차가 그 키를 가리켜 지우지 않는다 */
-    record Candidate(UUID id, String objectKey, Instant updatedAt, boolean drawn) {
+    /** 기준 시간이 지난 UNUSED 사진. referenced 면 드로우 회차 · 주문 줄이 그 키를 가리켜 지우지 않는다 */
+    record Candidate(UUID id, String objectKey, Instant updatedAt, boolean referenced) {
 
         Position position() {
             return new Position(updatedAt, id);
