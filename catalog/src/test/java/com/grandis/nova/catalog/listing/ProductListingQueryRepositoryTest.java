@@ -3,6 +3,7 @@ package com.grandis.nova.catalog.listing;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.MySqlContainerConfig;
 import com.grandis.nova.catalog.support.ShopFixtures;
+import com.grandis.nova.common.OffsetPage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -10,12 +11,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.mysql.MySQLContainer;
 
+import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -139,10 +142,10 @@ class ProductListingQueryRepositoryTest {
         int[] prices = {3000, 1000, 5000, 2000, 0};
         for (int i = 0; i < prices.length; i++) {
             UUID productId = fixtures.product(category, "IN_STOCK", "ACTIVE", "쪽 " + i, tag);
-            fixtures.option(productId, prices[i] == 0 ? "PAUSED" : "ACTIVE", new java.math.BigDecimal(prices[i] == 0 ? 9999 : prices[i]));
+            fixtures.option(productId, prices[i] == 0 ? "PAUSED" : "ACTIVE", new BigDecimal(prices[i] == 0 ? 9999 : prices[i]));
             fixtures.stockReady(productId);
             jdbcTemplate.update("UPDATE products SET created_at = ? WHERE id = UUID_TO_BIN(?)",
-                    java.time.LocalDateTime.of(2026, 10, 1, 0, 0).plusMinutes(i), productId.toString());
+                    LocalDateTime.of(2026, 10, 1, 0, 0).plusMinutes(i), productId.toString());
             byAge.add(productId);
         }
         ProductListFilter filter = new ProductListFilter(tag, null, null, null, null, null);
@@ -152,21 +155,21 @@ class ProductListingQueryRepositoryTest {
                 ProductSort.PRICE_DESC, List.of(byAge.get(2), byAge.get(0), byAge.get(3), byAge.get(1), byAge.get(4)));
 
         for (ProductSort sort : ProductSort.values()) {
-            com.grandis.nova.common.OffsetPage<ProductListItem> whole = repository.findPage(filter, sort, List.of(), 0, 10);
+            OffsetPage<ProductListItem> whole = repository.findPage(filter, sort, List.of(), 0, 10);
             assertThat(ids(whole.items())).as("%s 한 번에", sort).containsExactlyElementsOf(expected.get(sort));
             assertThat(whole.total()).isEqualTo(5);
             List<UUID> joined = new ArrayList<>();
             for (int page = 0; page < 3; page++) {
-                com.grandis.nova.common.OffsetPage<ProductListItem> part = repository.findPage(filter, sort, List.of(), page, 2);
+                OffsetPage<ProductListItem> part = repository.findPage(filter, sort, List.of(), page, 2);
                 assertThat(part.total()).as("%s %d쪽", sort, page).isEqualTo(5);
                 joined.addAll(ids(part.items()));
             }
             assertThat(joined).as("%s 쪽을 이으면", sort).containsExactlyElementsOf(expected.get(sort));
-            com.grandis.nova.common.OffsetPage<ProductListItem> beyond = repository.findPage(filter, sort, List.of(), 3, 2);
+            OffsetPage<ProductListItem> beyond = repository.findPage(filter, sort, List.of(), 3, 2);
             assertThat(beyond.items()).as("%s 범위 밖", sort).isEmpty();
             assertThat(beyond.total()).as("%s 범위 밖 total", sort).isEqualTo(5);
         }
-        com.grandis.nova.common.OffsetPage<ProductListItem> none = repository.findPage(new ProductListFilter(tag + "없음", null, null, null, null, null),
+        OffsetPage<ProductListItem> none = repository.findPage(new ProductListFilter(tag + "없음", null, null, null, null, null),
                 ProductSort.NEWEST, List.of(), 0, 10);
         assertThat(none.items()).isEmpty();
         assertThat(none.total()).isZero();

@@ -19,7 +19,7 @@ import java.util.UUID;
 /**
  * 사용자 목록 · 검색. 시각은 앱 시계 하나에서 한 번 읽어 건수와 목록에 같이 쓴다 — 두 번 읽으면 마감 경계에서 둘이 어긋난다.
  * 건수와 목록을 두 문장으로 읽으면 READ COMMITTED 에서는 사이에 끼어든 커밋으로 total 과 items 가 어긋난다(실측 total=1 · items=2). 회원 목록은
- * 둘을 한 문장으로 읽는다({@link ProductListingQueryRepository#findPage}) — 트랜잭션 없이 한 시점이다. 관리자 목록 · 증정품 후보는 여러 문장이라
+ * 둘을 한 문장으로 읽는다({@link ProductListingQueryRepository#findPage}) — 트랜잭션 없이 건수와 쪽이 한 시점이다(색상칩은 다음 문장이라 다를 수 있다). 관리자 목록 · 증정품 후보는 여러 문장이라
  * 그 읽기만 REPEATABLE READ 로 올려 한 스냅샷을 쓴다. 트랜잭션이 끝나면 커넥션은 RC 로 돌아간다(실측).
  * order 재고(품절 · 증정품 후보 수량)는 DB 읽기가 끝난 뒤 묻는다 — 응답을 기다리는 동안 DB 연결을 붙잡지 않게. preorder 회차는 회원 목록이면
  * 읽기 전에(접수 중이 쿼리 조건이다), 관리자 목록이면 트랜잭션 뒤에 묻는다.

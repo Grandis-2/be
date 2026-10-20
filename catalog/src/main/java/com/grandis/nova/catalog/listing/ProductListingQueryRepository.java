@@ -139,7 +139,8 @@ public class ProductListingQueryRepository {
      * 한 쪽과 전체 건수를 한 문장으로 읽는다 — 건수 한 행에 그 쪽을 LATERAL 로 붙인다. 한 문장이라 READ COMMITTED 에서도 건수와 쪽이 같은 시점이다
      * (트랜잭션을 열지 않는다 — 운영 DB 왕복이 수십 ms 라 읽기 전용 REPEATABLE READ 트랜잭션의 준비 · 정리 문장 8개가 쿼리보다 비쌌다).
      * 쪽이 범위 밖이어도 건수 행은 남아 total 이 그대로다(COUNT(*) OVER() 는 빈 쪽에서 total 을 잃는다). 실측(MySQL 8.4.11, 상품 3,000 중 검색 일치 300,
-     * 20개 쪽): 두 문장 3.7~6.4ms, 이 모양 3.2~5.9ms. 색상칩은 쪽을 고른 뒤 따로 읽는다({@link #withColors}).
+     * 20개 쪽): 두 문장 3.7~6.4ms, 이 모양 3.2~5.9ms. 색상칩은 쪽을 고른 뒤 다음 문장으로 읽는다({@link #withColors}) — 쪽과 시점이 다를 수
+     * 있다(그사이 판매 중지된 옵션이면 카드의 최저가 · 판매 가능은 앞 값, 칩은 뒤 값). 표시 칸이고 목록 캐시도 지난 값을 주므로 받아들인다.
      *
      * @param accepting {@link #count} 와 같다. 카드의 회차 시각은 비어 있다
      */
@@ -263,8 +264,8 @@ public class ProductListingQueryRepository {
     }
 
     /**
-     * 공개 여부 · 판매 상태 · DB 로 아는 판매 방식별 준비({@link #READY} — 사전예약은 참)를 한 문장으로 읽는다. 내부 조회 API(1.3)가 쓴다 — 이 응답을
-     * 판정에 쓰는 쪽이 있으므로 같은 스냅샷이어야 한다. 상품이 없으면 비어 있다.
+     * 공개 여부 · 판매 상태 · DB 로 아는 판매 방식별 준비({@link #READY} — 사전예약은 참)를 한 문장으로 읽는다. 내부 조회 API(1.3)와 상품 리뷰 목록의
+     * 노출 판정이 쓴다 — 이 응답을 판정에 쓰는 쪽이 있으므로 같은 스냅샷이어야 한다. 상품이 없으면 비어 있다.
      */
     public Optional<Exposure> findExposure(UUID productId) {
         List<Exposure> rows = jdbc.query("SELECT p.sale_mode, p.visible, p.status, " + READY + " AS ready FROM products p WHERE p.id = :productId",

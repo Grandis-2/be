@@ -20,7 +20,8 @@ import java.util.UUID;
  * 리뷰 목록 읽기. catalog 표(product_reviews · products · categories)만 읽는다.
  * 정렬은 최신순(작성 시각 내림차순, 같으면 id 내림차순) 고정, 오프셋 페이징이다. 인덱스 ix_review_product · ix_review_customer
  * ((상품 · 회원, created_at) + PK)의 순서와 같아 따로 정렬하지 않는다(실측 EXPLAIN: id 만으로 정렬하면 Using filesort, 이 순서면
- * Backward index scan). 상품별 · 내 리뷰가 그렇고, 모아보기(공개 상품 전체 · 카테고리)는 정렬한다 — 상품 조건이 리뷰 표 밖에 있다.
+ * Backward index scan). 건수와 한 문장으로 읽는 쪽({@link #pageByProduct})은 안쪽이 이 인덱스 순서이고, 바깥이 쪽 크기만큼의 행만 같은 순서로
+ * 다시 정렬한다(실측 EXPLAIN, 리뷰 2만: 안쪽 계획은 단독 문장과 같고 바깥은 Sort). 상품별 · 내 리뷰가 그렇고, 모아보기(공개 상품 전체 · 카테고리)는 정렬한다 — 상품 조건이 리뷰 표 밖에 있다.
  * 시각은 datetime(6) UTC 벽시계라 UTC LocalDateTime 으로 읽는다. id 는 BINARY(16) 이라 {@link UuidBinary} 로 바인딩하고 읽는다.
  */
 @Repository
@@ -36,6 +37,13 @@ public class ReviewQueryRepository {
 
     private static final String COUNT = """
             SELECT COUNT(*)
+              FROM product_reviews r
+              JOIN products p ON p.id = r.product_id
+            """;
+
+    /** 건수를 쪽과 한 문장으로 읽을 때의 건수 파생 표({@link #page}). */
+    private static final String COUNT_TOTAL = """
+            SELECT COUNT(*) AS total
               FROM product_reviews r
               JOIN products p ON p.id = r.product_id
             """;
@@ -102,7 +110,7 @@ public class ReviewQueryRepository {
      */
     private OffsetPage<ReviewView> page(String where, MapSqlParameterSource params, int page, int size) {
         params.addValue("limit", size).addValue("offset", (long) page * size);
-        String sql = "SELECT c.total, x.* FROM (" + COUNT.replace("COUNT(*)", "COUNT(*) AS total") + where + ") c"
+        String sql = "SELECT c.total, x.* FROM (" + COUNT_TOTAL + where + ") c"
                 + " LEFT JOIN LATERAL (" + SELECT + where + " ORDER BY r.created_at DESC, r.id DESC LIMIT :limit OFFSET :offset) x ON TRUE"
                 + " ORDER BY x.created_at DESC, x.id DESC";
         long[] total = {0};

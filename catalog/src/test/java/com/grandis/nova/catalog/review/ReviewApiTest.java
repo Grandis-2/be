@@ -4,6 +4,7 @@ import com.grandis.nova.catalog.integration.MemberClient;
 import com.grandis.nova.catalog.integration.OrderClient;
 import com.grandis.nova.catalog.support.AccessTokens;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
+import com.grandis.nova.catalog.support.MySqlContainerConfig;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.security.RevocationCheckProperties;
@@ -31,7 +32,14 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.Statement;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -327,10 +335,10 @@ class ReviewApiTest {
     @DisplayName("상품 리뷰 — 상품 확인 · 준비 한 문장, 후기 목록 · 건수 한 문장. 트랜잭션을 열지 않는다(격리 · 읽기 전용 전환 문장이 없다)")
     void productReviewsReadWithoutTransaction() throws Exception {
         write(customerId, deliveredItem(productId), 5, "한 문장").andExpect(status().isCreated());
-        var mysql = com.grandis.nova.catalog.support.MySqlContainerConfig.get();
-        java.util.List<String> statements = new java.util.ArrayList<>();
-        try (java.sql.Connection root = java.sql.DriverManager.getConnection(mysql.getJdbcUrl(), "root", mysql.getPassword());
-             java.sql.Statement statement = root.createStatement()) {
+        var mysql = MySqlContainerConfig.get();
+        List<String> statements = new ArrayList<>();
+        try (Connection root = DriverManager.getConnection(mysql.getJdbcUrl(), "root", mysql.getPassword());
+             Statement statement = root.createStatement()) {
             statement.execute("SET GLOBAL log_output = 'TABLE'");
             statement.execute("SET GLOBAL general_log = 'ON'");
             statement.execute("TRUNCATE TABLE mysql.general_log");
@@ -339,12 +347,12 @@ class ReviewApiTest {
             } finally {
                 statement.execute("SET GLOBAL general_log = 'OFF'");
             }
-            // 이 상품을 읽은 연결의 문장만 — 같은 서버를 쓰는 다른 작업의 문장을 섞지 않는다. 트랜잭션을 열었다면 준비 문장도 이 연결로 간다
-            try (java.sql.ResultSet rs = statement.executeQuery("SELECT argument FROM mysql.general_log WHERE command_type = 'Query' AND thread_id IN"
-                    + " (SELECT thread_id FROM mysql.general_log WHERE argument LIKE '%FROM products p%' OR argument LIKE '%product_reviews%')"
+            // 노출 판정 · 후기 쪽 문장을 보낸 연결의 문장만 — 같은 서버를 쓰는 다른 작업의 문장을 섞지 않는다. 트랜잭션을 열었다면 준비 문장도 이 연결로 간다
+            try (ResultSet rs = statement.executeQuery("SELECT argument FROM mysql.general_log WHERE command_type = 'Query' AND thread_id IN"
+                    + " (SELECT thread_id FROM mysql.general_log WHERE argument LIKE 'SELECT p.sale_mode, p.visible%' OR argument LIKE '%LEFT JOIN LATERAL%')"
                     + " ORDER BY event_time")) {
                 while (rs.next()) {
-                    statements.add(new String(rs.getBytes(1), java.nio.charset.StandardCharsets.UTF_8));
+                    statements.add(new String(rs.getBytes(1), StandardCharsets.UTF_8));
                 }
             }
         }
