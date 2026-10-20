@@ -28,7 +28,11 @@ class DependencyUnavailableHandler {
     @ExceptionHandler(DependencyUnavailableException.class)
     ResponseEntity<ApiResponse<Void>> handle(DependencyUnavailableException e) {
         ErrorCode code = e.errorCode();
-        log.warn("업무 오류 {}: {}", code.name(), e.getMessage());
+        if (e.overloaded()) {
+            log.debug("넘친 요청을 돌려보냄 {}: {}", code.name(), e.getMessage());
+        } else {
+            log.warn("업무 오류 {}: {}", code.name(), e.getMessage());
+        }
         return ResponseEntity.status(code.status())
                 .header(HttpHeaders.RETRY_AFTER, Long.toString(Math.max(1, e.retryAfter().toSeconds())))
                 .body(ApiResponse.fail(code, code.defaultMessage(), e.details()));
