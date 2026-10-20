@@ -125,8 +125,8 @@ public class RunStore {
     private Map<String, Instant> firstDetectedInPrevious(ReconciliationRun run) {
         Map<String, Instant> earlier = new HashMap<>();
         runs.findPreviousCompleted(run.getCreatedAt(), run.getProductId(), Limit.of(1)).stream().findFirst()
-                .ifPresent(previous -> findings.findAllByRunId(previous.getId()).forEach(f ->
-                        earlier.put(key(f.getCheckCode(), f.getTargetKey()), f.getFirstDetectedAt())));
+                .ifPresent(previous -> findings.findFirstDetected(previous.getId()).forEach(f ->
+                        earlier.put(key(f.checkCode(), f.targetKey()), f.firstDetectedAt())));
         return earlier;
     }
 
