@@ -33,7 +33,7 @@ CREATE TABLE shop.reconciliation_runs (
     held_count         int          NULL,       -- 판정 보류 — 기준 시각 뒤에 바뀐 키
     pending_sync_count int          NULL,       -- 처리 중 — 등록 대기(등록 작업 PENDING · PROCESSING · RETRY_SCHEDULED)
     canceling_count    int          NULL,       -- 처리 중 — 취소 중
-    dead_letter_count  int          NULL,       -- 관리자 대기 — 등록 대기인데 등록 작업이 DEAD_LETTER
+    dead_letter_count  int          NULL,       -- 관리자 대기 — 등록 · 취소 작업이 DEAD_LETTER
     created_at         datetime(6)  NOT NULL,   -- 관리자 실행은 요청한 시각, 정기 실행은 시작한 시각
     updated_at         datetime(6)  NOT NULL,
     PRIMARY KEY (id),
