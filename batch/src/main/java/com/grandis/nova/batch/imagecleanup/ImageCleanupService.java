@@ -66,16 +66,17 @@ public class ImageCleanupService {
     }
 
     private void cleanUp() {
+        long started = System.nanoTime();
         Instant cutoff = clock.instant().minus(properties.retention());
         if (properties.dryRun()) {
-            preview(cutoff);
+            preview(cutoff, started);
             return;
         }
         Tally tally = new Tally();
         boolean stopped = !deletePending(tally) || !deleteUnused(cutoff, tally);
         log.info("사진 정리 — 지난 실행의 삭제 대기 {}건 지움 · 기준 시각 {} 전에 UNUSED 가 된 사진 {}건: 지움 {} · 드로우 · 지난 주문이 가리켜 남김 {} · "
-                        + "그 사이 바뀌어 건너뜀 {}{}",
-                tally.pendingDeleted, cutoff, tally.candidates, tally.deleted, tally.referenced, tally.changed,
+                        + "그 사이 바뀌어 건너뜀 {} · 걸린 시간 {}{}",
+                tally.pendingDeleted, cutoff, tally.candidates, tally.deleted, tally.referenced, tally.changed, elapsed(started),
                 stopped ? " — S3 삭제 실패로 멈춤(남은 대상은 다음 실행에)" : "");
         warnStalePending();
     }
@@ -154,7 +155,7 @@ public class ImageCleanupService {
         return true;
     }
 
-    private void preview(Instant cutoff) {
+    private void preview(Instant cutoff, long started) {
         int candidates = 0;
         int referenced = 0;
         List<String> oldest = new ArrayList<>();
@@ -175,8 +176,13 @@ public class ImageCleanupService {
             after = chunk.getLast().position();
         }
         log.info("사진 정리(dry-run, 지우지 않음) — 기준 시각 {} 전에 UNUSED 가 된 사진 {}건: 지울 대상 {} · 드로우 · 지난 주문이 가리켜 남김 {} · "
-                        + "지난 실행의 삭제 대기 {}건. 오래된 순 {}",
-                cutoff, candidates, candidates - referenced, referenced, store.pendingCount(), oldest);
+                        + "지난 실행의 삭제 대기 {}건 · 걸린 시간 {}. 오래된 순 {}",
+                cutoff, candidates, candidates - referenced, referenced, store.pendingCount(), elapsed(started), oldest);
+    }
+
+    /** 실행에 걸린 시간 — 드로우 · 주문 줄을 훑는 확인 비용이 데이터와 함께 늘어나는지 로그로 본다 */
+    private static String elapsed(long startedNanos) {
+        return "%.1f초".formatted((System.nanoTime() - startedNanos) / 1_000_000_000.0);
     }
 
     /** 한 실행에서 센 건수 */

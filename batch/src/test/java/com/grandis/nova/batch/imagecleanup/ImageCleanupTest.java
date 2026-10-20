@@ -244,7 +244,7 @@ class ImageCleanupTest extends BatchIntegrationTest {
 
         service.run();
 
-        assertThat(output).contains("S3 삭제 실패로 멈춤").doesNotContain("사진 정리가 막혀 있다");
+        assertThat(output).contains("그 사이 바뀌어 건너뜀 0 · 걸린 시간 ").contains("S3 삭제 실패로 멈춤").doesNotContain("사진 정리가 막혀 있다");
     }
 
     /** 고를 때 본 조건을 지울 때 다시 건다 — 그 사이 catalog 가 붙였거나 다시 뗐거나 드로우 · 주문이 가리키게 된 사진은 0행이다 */

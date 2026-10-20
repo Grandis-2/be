@@ -56,7 +56,7 @@ class ImageCleanupDryRunTest extends BatchIntegrationTest {
         assertThat(jdbc.sql("SELECT COUNT(*) FROM images").query(Long.class).single()).isEqualTo(5);
         assertThat(jdbc.sql("SELECT COUNT(*) FROM image_deletions").query(Long.class).single()).isEqualTo(1);
         assertThat(output).contains("사진 정리(dry-run, 지우지 않음)")
-                .contains("UNUSED 가 된 사진 4건: 지울 대상 2 · 드로우 · 지난 주문이 가리켜 남김 2 · 지난 실행의 삭제 대기 1건")
+                .contains("UNUSED 가 된 사진 4건: 지울 대상 2 · 드로우 · 지난 주문이 가리켜 남김 2 · 지난 실행의 삭제 대기 1건 · 걸린 시간 ")
                 .contains("오래된 순 [" + oldest.key());
     }
 }

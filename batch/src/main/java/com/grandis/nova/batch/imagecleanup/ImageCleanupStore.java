@@ -26,7 +26,8 @@ class ImageCleanupStore {
     // 주소 전체가 아니라 객체 키로 비교한다 — CDN 도메인이 바뀌어도 옛 주소를 놓치지 않는다. 서버가 만든 키에는 LIKE 와일드카드(% · _)가
     // 없고, 있더라도 더 많은 행과 맞아 지우지 않는 쪽으로 틀린다. 주소 뒤의 쿼리 · 조각(? · #)은 떼고 비교한다 — catalog 는 새로 붙이는
     // 사진 주소에 쿼리 · 조각을 받지 않지만, 붙어 있어도 같은 객체라 지우지 않는 쪽으로 본다(catalog 의 키 구하기도 URI 경로로 한다).
-    // 끝부분 비교라 인덱스를 못 타고 대상 한 장마다 두 테이블을 훑는다 — 하루 한 번 · 대상이 적어 받아들인다
+    // 끝부분 비교라 인덱스를 못 타고 대상 한 장마다 두 테이블을 훑는다 — 하루 한 번 · 대상이 적어 받아들인다. 늘어나는지는 요약 로그의
+    // 걸린 시간으로 보고, 커지면 스냅샷 테이블에 객체 키 컬럼과 인덱스를 두는 것을 그 테이블 담당과 정한다
     private static final List<String> SNAPSHOTS = List.of("draw_campaigns", "order_items");
 
     private static final String REFERENCED = SNAPSHOTS.stream()
