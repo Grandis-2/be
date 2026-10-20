@@ -1,7 +1,11 @@
 package com.grandis.nova.member;
 
 import com.grandis.nova.common.web.RequestIdFilter;
+import com.grandis.nova.common.security.InvalidTokenException;
+import com.grandis.nova.common.security.Role;
+import com.grandis.nova.common.security.SessionReplacedException;
 import com.grandis.nova.member.auth.api.AuthCookies;
+import com.grandis.nova.member.auth.application.TokenService;
 import com.grandis.nova.member.auth.infrastructure.kakao.KakaoOAuthClient;
 import com.grandis.nova.member.auth.infrastructure.kakao.KakaoUserInfo;
 import com.grandis.nova.member.support.Containers;
@@ -28,6 +32,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
@@ -49,6 +54,7 @@ class RefreshRoundTripTest {
     @Autowired WebApplicationContext context;
     @Autowired FilterChainProxy springSecurityFilterChain;
     @Autowired RequestIdFilter requestIdFilter;
+    @Autowired TokenService tokens;
     @MockitoBean KakaoOAuthClient kakao;
 
     MockMvc mvc;
@@ -81,7 +87,7 @@ class RefreshRoundTripTest {
             } finally {
                 statement.execute("SET GLOBAL general_log = 'OFF'");
             }
-            // 토큰 행을 읽은 연결의 문장만 — 같은 서버를 쓰는 다른 작업(정리 배치 등)의 문장을 섞지 않는다
+            // 토큰 행을 읽은 연결의 문장만 — 다른 연결의 문장(정리 배치 등)을 섞지 않는다. 회원 이름 조회도 같은 연결에 실린다(연결 풀의 재사용 — 어긋나면 이 시험이 실패한다)
             try (ResultSet rs = statement.executeQuery("SELECT argument FROM mysql.general_log WHERE command_type = 'Query' AND thread_id IN"
                     + " (SELECT thread_id FROM mysql.general_log WHERE argument LIKE '%from refresh_tokens rt1_0 where rt1_0.token_hash%')"
                     + " ORDER BY event_time")) {
@@ -96,5 +102,32 @@ class RefreshRoundTripTest {
                 .filteredOn(sql -> sql.startsWith("select rt1_0.id,") && sql.contains("from refresh_tokens rt1_0")).hasSize(2);
         assertThat(statements).as("회원 이름 한 문장").filteredOn(sql -> sql.contains("from customers c1_0 where c1_0.id")).hasSize(1);
         assertThat(statements).as("주인 찾기 · 회원 이름 2 + 회전 트랜잭션 8").hasSize(10);
+    }
+
+    @Test
+    @DisplayName("주인을 찾은 뒤 회전 전에 새 로그인이 그 세션을 끊으면 SESSION_REPLACED — 처음 읽은 행을 다시 쓰지만 판정은 잠근 행 · 표식으로 한다")
+    void loginBetweenTargetAndRotationReplacesSession() throws Exception {
+        String raw = loginCookie().getValue();
+        TokenService.RefreshTarget target = tokens.refreshTarget(raw, Role.USER);
+        tokens.issue(target.subject(), Role.USER);   // 다른 기기의 새 로그인
+
+        assertThatThrownBy(() -> tokens.rotate(raw, target)).isInstanceOf(SessionReplacedException.class);
+    }
+
+    @Test
+    @DisplayName("주인을 찾은 뒤 회전 전에 로그아웃이 그 세션을 끊으면 401 — 이유(SESSION_REPLACED) 없이")
+    void logoutBetweenTargetAndRotationRejects() throws Exception {
+        String raw = loginCookie().getValue();
+        TokenService.RefreshTarget target = tokens.refreshTarget(raw, Role.USER);
+        tokens.revoke(target.session().sessionId());
+
+        assertThatThrownBy(() -> tokens.rotate(raw, target)).isInstanceOf(InvalidTokenException.class)
+                .isNotInstanceOf(SessionReplacedException.class);
+    }
+
+    private Cookie loginCookie() throws Exception {
+        return mvc.perform(post("/api/v1/auth/kakao/callback").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"c\",\"redirectUri\":\"" + REDIRECT + "\"}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getCookie(AuthCookies.REFRESH_TOKEN);
     }
 }
