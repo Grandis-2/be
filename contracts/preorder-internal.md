@@ -52,7 +52,7 @@
 | `visible` | boolean | 공개 여부 — 관리자가 등록 때 고른 값이 그대로 들어간다(2026-10-02 이벤트 방식 전환부터). 준비 전 상품도 true 일 수 있으므로 소비자는 visible 로 준비를 추론하지 말고 **두 칸을 모두 본다** |
 | `registrationCompleted` | boolean | 판매 방식별 준비. 일반은 order 의 판매 준비 이벤트를 받았다(`products.stock_ready_at`, contracts/catalog-events.md). **사전예약은 늘 `true`** — catalog 는 이 응답을 만들며 preorder 를 부르지 않는다(이 응답은 접수가 동기로 부르므로 그 안에서 preorder API(2절)를 부르면 서로를 기다린다). **preorder 는 이 칸을 판정에 쓰지 않는다**(NV-643) — 사전예약의 준비는 접수가 잠그는 회차 행으로 본다 |
 
-`visible` · `status` · `registrationCompleted` 는 **한 문장**으로 읽어 같은 스냅샷에서 나온다(`ProductListingQueryRepository.findExposure`). 둘은 서로 다른 트랜잭션(관리자 공개 전환 · preorder/order 의 등록 이벤트 처리)이 바꾸지만, READ COMMITTED 에서 따로 읽으면 두 문장 사이에 둘 다 커밋돼 한순간도 없던 조합(공개 · 준비)이 나온다. 이 응답을 판정에 쓰는 쪽이 있으므로 한 문장이어야 한다.
+`visible` · `status` · `registrationCompleted` 와 `options[]`(판매 상태 · 가격)는 **한 문장**으로 읽어 같은 시점에서 나온다(`ProductOptionsQueryRepository.findProductWithOptions` — 상품에 옵션을 붙인 조회, 트랜잭션 없음). 노출 칸과 옵션은 서로 다른 트랜잭션(관리자 공개 전환 · 판매 중지 · preorder/order 의 등록 이벤트 처리)이 바꾸지만, READ COMMITTED 에서 따로 읽으면 두 문장 사이에 커밋돼 한순간도 없던 조합(공개 · 준비 · 옵션 판매 중)이 나온다. 접수 판정이 노출 칸과 `options[].status` 를 같이 쓰므로 한 문장이어야 한다. 칸을 더할 때도 같은 문장에 더한다.
 | `options[].optionId` | string(UUID) | `product_options.id` |
 | `options[].sku` | string | 모델 안 유일 |
 | `options[].title` | string | 옵션 표시명. 스냅샷 원본 |
