@@ -2,6 +2,7 @@ package com.grandis.nova.order.order.api;
 
 import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.domain.model.Order;
+import com.grandis.nova.order.support.GeneralLog;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.PlacedOrders;
@@ -18,8 +19,10 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.List;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -168,6 +171,19 @@ class OrderCancelabilityApiTest {
         mockMvc.perform(get("/api/v1/orders").with(me())).andExpect(status().isOk());
         mockMvc.perform(get("/api/v1/admin/orders").with(me())).andExpect(status().isForbidden());
         mockMvc.perform(get("/api/v1/admin/orders").with(TestAuth.admin())).andExpect(status().isOk());
+    }
+
+    /* 트랜잭션을 열지 않는다 — 서버에 보내는 문장이 주문 SELECT 하나이고 준비 · 정리 문장이 없다(OrderCancelabilityQuery). */
+    @Test
+    void readsWithOneStatementWithoutTransaction() throws Exception {
+        Order order = orders.place(customerId);
+
+        List<String> statements = GeneralLog.statements("%from orders%where%preorder_id%",
+                () -> mockMvc.perform(cancelability(order.preorderId()).with(me())).andExpect(status().isOk()));
+
+        assertThat(statements).as("주문 SELECT — 양성 대조군").anyMatch(sql -> sql.contains("from orders"));
+        assertThat(statements).as("준비 · 정리 문장").noneMatch(GeneralLog::isTransactionHousekeeping);
+        assertThat(statements).as("문장 하나").singleElement();
     }
 
     private static MockHttpServletRequestBuilder cancelability(UUID preorderId) {

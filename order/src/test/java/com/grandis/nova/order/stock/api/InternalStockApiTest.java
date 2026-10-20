@@ -1,5 +1,6 @@
 package com.grandis.nova.order.stock.api;
 
+import com.grandis.nova.order.support.GeneralLog;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderFixtures.StockProduct;
 import com.grandis.nova.order.support.OrderIntegrationTest;
@@ -14,10 +15,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
+import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -112,6 +115,17 @@ class InternalStockApiTest {
         mockMvc.perform(get("/internal/stocks").param("optionIds", first.toString()).header("Authorization", "Bearer broken"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items[0].available").value(5));
+    }
+
+    /** 트랜잭션을 열지 않는다 — 서버에 보내는 문장이 재고 SELECT 하나이고 준비 · 정리 문장이 없다(StockQueryService). */
+    @Test
+    void readsWithOneStatementWithoutTransaction() throws Exception {
+        List<String> statements = GeneralLog.statements("%FROM option_inventories%WHERE option_id IN%",
+                () -> stocks("%s,%s".formatted(first, second)).andExpect(status().isOk()));
+
+        assertThat(statements).as("재고 SELECT — 양성 대조군").anyMatch(sql -> sql.contains("FROM option_inventories"));
+        assertThat(statements).as("준비 · 정리 문장").noneMatch(GeneralLog::isTransactionHousekeeping);
+        assertThat(statements).as("문장 하나").singleElement();
     }
 
     private ResultActions stocks(String optionIds) throws Exception {
