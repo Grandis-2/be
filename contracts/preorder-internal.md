@@ -51,13 +51,13 @@
 | `status` | `ACTIVE` \| `PAUSED` | `products.status`. PAUSED 는 판매 중지 — 소비자는 신규 접수 · 주문을 막는다. 사전예약 상품은 오픈 3분 전부터 이 칸이 바뀌지 않는다(2026-10-04 결정). 오픈 전에 PAUSED 로 둔 채 오픈을 넘긴 상품도 판매 중지일 뿐 회차 취소가 아니다 — 회차 취소는 이 칸으로 알리지 않고 `PREORDER_CAMPAIGN_CANCELED` 이벤트로 따로 알린다(contracts/catalog-events.md — 오픈 뒤 관리자 판매 중지 · 사유) |
 | `visible` | boolean | 공개 여부 — 관리자가 등록 때 고른 값이 그대로 들어간다(2026-10-02 이벤트 방식 전환부터). 준비 전 상품도 true 일 수 있으므로 소비자는 visible 로 준비를 추론하지 말고 **두 칸을 모두 본다** |
 | `registrationCompleted` | boolean | 판매 방식별 준비. 일반은 order 의 판매 준비 이벤트를 받았다(`products.stock_ready_at`, contracts/catalog-events.md). **사전예약은 늘 `true`** — catalog 는 이 응답을 만들며 preorder 를 부르지 않는다(이 응답은 접수가 동기로 부르므로 그 안에서 preorder API(2절)를 부르면 서로를 기다린다). **preorder 는 이 칸을 판정에 쓰지 않는다**(NV-643) — 사전예약의 준비는 접수가 잠그는 회차 행으로 본다 |
-
-`visible` · `status` · `registrationCompleted` 와 `options[]`(판매 상태 · 가격)는 **한 문장**으로 읽어 같은 시점에서 나온다(`ProductOptionsQueryRepository.findProductWithOptions` — 상품에 옵션을 붙인 조회, 트랜잭션 없음). 노출 칸과 옵션은 서로 다른 트랜잭션(관리자 공개 전환 · 판매 중지 · preorder/order 의 등록 이벤트 처리)이 바꾸지만, READ COMMITTED 에서 따로 읽으면 두 문장 사이에 커밋돼 한순간도 없던 조합(공개 · 준비 · 옵션 판매 중)이 나온다. 접수 판정이 노출 칸과 `options[].status` 를 같이 쓰므로 한 문장이어야 한다. 칸을 더할 때도 같은 문장에 더한다.
 | `options[].optionId` | string(UUID) | `product_options.id` |
 | `options[].sku` | string | 모델 안 유일 |
 | `options[].title` | string | 옵션 표시명. 스냅샷 원본 |
 | `options[].price` | number(정수 원) | 회원이 내는 값 — 정가에 상품 할인율을 걸어 100원 단위로 버린 할인가(할인율 0 이면 정가). 스냅샷 원본 |
 | `options[].status` | `ACTIVE` \| `PAUSED` | 옵션 판매 상태 |
+
+`visible` · `status` · `registrationCompleted` 와 `options[]`(판매 상태 · 가격)는 **한 문장**으로 읽어 같은 시점에서 나온다(`ProductOptionsQueryRepository.findProductWithOptions` — 상품에 옵션을 붙인 조회, 트랜잭션 없음). 노출 칸과 옵션은 서로 다른 트랜잭션(관리자 공개 전환 · 판매 중지 · preorder/order 의 등록 이벤트 처리)이 바꾸지만, READ COMMITTED 에서 따로 읽으면 두 문장 사이에 커밋돼 한순간도 없던 조합(공개 · 준비 · 옵션 판매 중)이 나온다. 접수 판정이 노출 칸과 `options[].status` 를 같이 쓰므로 한 문장이어야 한다. 칸을 더할 때도 같은 문장에 더한다.
 
 **비공개·미완료 상품도 200 으로 준다.** 숨기는 판정은 목적별로 호출자가 한다(아래). 이 API 가 먼저 숨기면 관리자 등록 흐름이 자기 상품을 못 본다. 삭제한 상품(소프트 삭제)은 숨김이 아니라 없는 상품이라 404 `PRODUCT_NOT_FOUND` 다 — 관리자 화면에서도 없는 상품이다.
 
