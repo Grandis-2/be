@@ -64,7 +64,7 @@ worker 는 메시지를 아래 중 하나로 끝낸다. 재시도 · 실패 보�
 | 일시 실패 | 408 · 429 · 5xx · 시간 초과 | 지우지 않고 늦춰 다시 받는다 — 받은 횟수에 따라 10초에서 15분까지(`nova.worker.draw.retry-delays`) |
 | 기다림 | 받은 응모 수 ≠ `paidEntries` · 추첨 409 `ENTRY_COUNT_MISMATCH` · 404 `NOT_FOUND` | 지우지 않고 늦춰 다시 받는다 — 1분에서 1시간까지(`wait-delays`). 합(약 1시간 51분)이 아래 "결과 반영 지연" 경보보다 길어 사람이 먼저 본다 |
 | 확정 거절 | 400 · 409 `CUSTOMER_ALREADY_ENTERED` · `DRAW_CLOSED` · 422 `KEY_PAYLOAD_MISMATCH` · `INVALID_WINNER_COUNT`, 계약과 다른 메시지 · 추첨 결과 | DLQ 에 바로 넣고(속성 `deadLetterReason`) 지운다. ERROR 로그 |
-| 지금 부를 수 없음 | Mock 차단기 열림 · 거절 이어짐 · 동시 요청 자리 없음 · 내려가는 중 · 주소 설정 오류(404 `NO_SUCH_ENDPOINT` — 응모 0건으로 읽지 않는다 — 와 errorCode 없는 3xx · 4xx, 즉 Mock 이 아닌 앞단의 응답) | 받은 횟수를 쓰지 않게 같은 큐에 새 메시지로 돌려보낸다. 주소 설정 오류는 고칠 때까지 DLQ 로 보내지 않는다 — 이어지면 받기를 멈추고 ERROR 로 알린다(사전예약과 같은 거절 이어짐 차단) |
+| 지금 부를 수 없음 | Mock 차단기 열림 · 거절 이어짐 · 동시 요청 자리 없음 · 내려가는 중 · 주소 설정 오류(404 `NO_SUCH_ENDPOINT` — 응모 0건으로 읽지 않는다 — 와 errorCode 없는 3xx · 4xx, 즉 Mock 이 아닌 앞단의 응답) | 받은 횟수를 쓰지 않게 같은 큐에 새 메시지로 돌려보낸다. 주소 설정 오류는 처음 본 때부터 30분(`nova.worker.reject-guard.give-up-after`)까지 돌려보내고, 그 뒤에도 그대로면 DLQ 에 넣는다(`deadLetterReason` = `MISCONFIGURED`) — 이어지면 드로우 받기만 멈추고 ERROR 로 알린다(사전예약과 같은 거절 이어짐 차단, 작업 종류마다 따로) |
 | 모르는 종류 | eventType 이 위 둘이 아님 | 지우지 않는다 — 그 종류를 아는 worker 가 받거나 재시도 뒤 DLQ |
 
 - worker 는 마감을 보지 않는다(위 "마감 뒤에도 온다"). 추첨 뒤에 닿은 응모는 Mock 이 409 `DRAW_CLOSED` 로 거절해 DLQ 로 간다 — order 의 `드로우 추첨 뒤 결제 완료` ERROR 와 같은 응모다.
