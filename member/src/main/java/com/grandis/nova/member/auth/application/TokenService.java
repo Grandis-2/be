@@ -128,8 +128,8 @@ public class TokenService {
 
     /**
      * 재발급. 토큰의 실패는 전부 401 이다 — 재사용 탐지면 세션을 끊고 401, 폐기 조회 불가면 retryable 401. target 은 같은 토큰의 {@link #refreshTarget} 이다.
-     * 다른 토큰의 대상이나 세션 없는 회원 대상을 넘기는 것은 프로그래밍 오류라 회전하기 전에 500 으로 막는다 — 회전한 뒤 막으면 그 체인이 이미 넘어가
-     * 같은 쿠키가 유예 뒤 재사용으로 찍힌다.
+     * 회원 대상은, 해시가 제시한 토큰의 것이 아니거나 세션이 없으면 프로그래밍 오류라 회전하기 전에 500 으로 막는다 — 회전한 뒤 막으면 그 체인이 이미
+     * 넘어가 같은 쿠키가 유예 뒤 재사용으로 찍힌다. 새 토큰의 주인 · 세션은 대상이 아니라 회전이 잠근 행의 것이다. 관리자는 대상을 보지 않고 제시한 토큰을 푼다.
      */
     public Rotated rotate(String presentedRefreshToken, RefreshTarget target) {
         if (target.role() == Role.ADMIN) {
@@ -170,9 +170,10 @@ public class TokenService {
             // 회전 커밋 뒤 새 로그인이 이 세션을 끊었으면 이유를 싣는다(표식은 덮지 않는다 — RevocationStore.revokeSession)
             throw rejectRevoked(asClaims, "session revoked during rotation sid=" + shortSid(session.sessionId()));
         }
-        String access = provider.create(session.subject(), Role.USER, session.sessionId(), TokenType.ACCESS);
+        // 주인 · 세션은 잠근 행이 돌려준 값으로 — 대상이 어떻게 만들어졌든 나가는 토큰은 회전한 체인의 것이다
+        String access = provider.create(rotation.subject(), Role.USER, rotation.sessionId(), TokenType.ACCESS);
         Duration remaining = Duration.between(clock.instant(), rotation.expiresAt());
-        return new Rotated(new IssuedTokens(access, newRefresh, remaining), session.subject(), session.sessionId());
+        return new Rotated(new IssuedTokens(access, newRefresh, remaining), rotation.subject(), rotation.sessionId());
     }
 
     /** 관리자 세션. 리프레시는 JWT 이고 현재 jti 하나를 Redis 가 비교교환으로 든다. */
@@ -375,7 +376,8 @@ public class TokenService {
 
     /**
      * @param session   회원 리프레시면 찾은 행, 관리자면 null(관리자 리프레시는 JWT 라 회전이 직접 푼다)
-     * @param tokenHash 회원 리프레시면 이 대상을 만든 원문의 해시 — 회전이 같은 토큰인지 DB 를 다시 읽지 않고 확인한다. 관리자면 null
+     * @param tokenHash 회원 리프레시면 이 대상을 만든 원문의 해시 — 회전이 이 해시가 제시한 토큰의 것인지 DB 를 다시 읽지 않고 확인한다. 관리자면 null.
+     *                  배열이라 레코드의 equals · hashCode · toString 이 내용을 보지 않는다 — 비교 · 키로 쓰지 않는다
      */
     public record RefreshTarget(Role role, String subject, RefreshTokenStore.Session session, byte[] tokenHash) {
     }
