@@ -249,6 +249,7 @@ class DrawHandlerTest {
     @Test
     void 없는_경로_응답이면_추첨하지_않고_받은_횟수를_쓰지_않게_돌려보낸다() {
         MOCK.respond(routes(error(404, "NO_SUCH_ENDPOINT"), drawn(winners(1))));
+        long held = misconfigured();
 
         assertThat(handler.handle(draw.requested(3, 1))).isEqualTo(MessageOutcome.delete());
 
@@ -257,6 +258,7 @@ class DrawHandlerTest {
                 .as("처음 본 시각을 싣는다").containsKey("misconfiguredSince");
         assertThat(draw.calls(MOCK)).containsOnly("GET /external/draws/{drawId}");
         assertThat(draw.deadLetter(queues, NONE)).isEmpty();
+        assertThat(misconfigured() - held).as("설정 오류로 돌려보낸 지표").isEqualTo(1);
     }
 
     /** 끝없이 돌려보내면 사람이 볼 곳이 없다. 처음 본 때부터 정한 시간(기본 30분)이 지나면 DLQ 에 넣는다. */
@@ -311,5 +313,10 @@ class DrawHandlerTest {
                         .as(type + " " + outcome).isNotNull();
             }
         }
+        assertThat(meters.find(JobHandler.MISCONFIGURED_METRIC).tags("jobType", "DRAW").timer()).isNotNull();
+    }
+
+    private long misconfigured() {
+        return meters.timer(JobHandler.MISCONFIGURED_METRIC, "jobType", "DRAW").count();
     }
 }

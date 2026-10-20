@@ -48,6 +48,11 @@ final class JobHandler implements BatchMessageHandler {
     static final String JOBS_METRIC = "worker.jobs";
     /** 한 세대를 다 쓰고 다음 세대로 넘어간 횟수. 오래 버티는 CANCEL 은 이 값이 "계속 실패 중"의 신호다. */
     static final String GENERATIONS_METRIC = "worker.jobs.generations";
+    /**
+     * 설정 오류로 돌려보낸 메시지가 처음 본 때부터 지난 시간. 돌려보낸 메시지는 새 메시지라 큐 나이 경보에 잡히지 않는다 —
+     * 포기(reject-guard.give-up-after)하기 전에 이 지표로 사람이 먼저 본다. 작업 종류마다 처음부터 0 으로 내보낸다.
+     */
+    static final String MISCONFIGURED_METRIC = "worker.misconfigured";
     static final String MISCONFIGURED = "MISCONFIGURED";
     static final String PAYLOAD_INVALID = "PAYLOAD_INVALID";
     static final String GENERATION_EXHAUSTED = "GENERATION_EXHAUSTED";
@@ -95,6 +100,7 @@ final class JobHandler implements BatchMessageHandler {
         this.shutdown = shutdown;
         OUTCOMES.forEach(outcome -> meters.counter(JOBS_METRIC, "jobType", type.name(), "outcome", outcome));
         meters.counter(GENERATIONS_METRIC, "jobType", type.name());
+        meters.timer(MISCONFIGURED_METRIC, "jobType", type.name());
     }
 
     @Override
@@ -192,6 +198,7 @@ final class JobHandler implements BatchMessageHandler {
                     "외부 mock 이 아닌 곳의 응답이 " + misconfiguredGiveUp + " 넘게 이어졌다 — 주소 · 경로 설정 확인 필요",
                     outcome.startedAt(), last.finishedAt()), MISCONFIGURED);
         }
+        meters.timer(MISCONFIGURED_METRIC, "jobType", type.name()).record(Duration.between(since, now));
         Duration delay = longer(schedule.past(rejectGuard.remaining()), misconfiguredDelay);
         log.debug("설정 오류로 보여 차례를 쓰지 않고 돌려보낸다 jobType={} messageId={} since={} delay={}", type,
                 message.messageId(), since, delay);

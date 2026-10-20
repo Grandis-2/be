@@ -2,6 +2,7 @@ package com.grandis.nova.worker.sync;
 
 import com.grandis.nova.common.sqs.BatchQueueConsumer;
 import com.grandis.nova.common.sqs.DelayedResend;
+import com.grandis.nova.common.sqs.SqsAutoConfiguration;
 import com.grandis.nova.common.sqs.SqsQueueUrls;
 import com.grandis.nova.worker.config.WorkerProperties;
 import com.grandis.nova.worker.job.DrawEventType;
@@ -18,6 +19,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import software.amazon.awssdk.http.SdkHttpClient;
+import software.amazon.awssdk.http.apache5.Apache5HttpClient;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -36,6 +39,19 @@ class SyncConfig {
     /** 드로우 메시지에서 받아 올 속성. 돌려보내기 · DLQ 에 넣을 때 그대로 잇는다. */
     private static final List<String> DRAW_ATTRIBUTE_NAMES =
             List.of("eventType", "eventId", JobProgress.MISCONFIGURED_SINCE);
+    /** 소비하는 큐 수(예약 등록 · 취소, 럭키드로우). 큐마다 받기 스레드와 삭제 스레드가 SQS 연결을 하나씩 쥔다. */
+    private static final int QUEUES = 3;
+
+    /**
+     * SQS 연결 풀. 받기 · 삭제가 큐마다 하나씩 붙들고, 처리 중인 메시지(최대 동시 요청 상한만큼)가 결과를 알리거나 다시 보낸다.
+     * 기본 URLConnection 은 쉬는 연결을 5개만 남겨, 넘는 호출은 매번 새로 연결한다(TLS 포함). 자동설정의 SqsClient 가 이것으로 보낸다
+     */
+    @Bean(name = SqsAutoConfiguration.HTTP_CLIENT_BEAN, destroyMethod = "close")
+    SdkHttpClient sqsHttpClient(WorkerProperties properties) {
+        return Apache5HttpClient.builder()
+                .maxConnections(properties.concurrency().limit() + 2 * QUEUES)
+                .build();
+    }
 
     @Bean
     ResultPublisher resultPublisher(SqsClient sqs, SqsQueueUrls queueUrls, JsonMapper json, Clock clock) {

@@ -109,6 +109,7 @@ final class DrawHandler implements BatchMessageHandler {
         for (DrawEventType type : DrawEventType.values()) {
             OUTCOMES.forEach(outcome -> meters.counter(METRIC, "eventType", type.name(), "outcome", outcome));
         }
+        meters.timer(JobHandler.MISCONFIGURED_METRIC, "jobType", JobType.DRAW.name());
         // 종류를 모르는 메시지가 끝나는 길: 모르는 종류 · 읽을 수 없는 본문(DLQ) · 내려가는 중 돌려보냄
         List.of("unknown-type", "dead-lettered", "returned")
                 .forEach(outcome -> meters.counter(METRIC, "eventType", UNKNOWN_EVENT, "outcome", outcome));
@@ -257,6 +258,8 @@ final class DrawHandler implements BatchMessageHandler {
                     misconfiguredGiveUp, call.type(), call.id());
             return deadLetter(message, call.type().name(), MISCONFIGURED);
         }
+        meters.timer(JobHandler.MISCONFIGURED_METRIC, "jobType", JobType.DRAW.name())
+                .record(Duration.between(since, now));
         return hold(message, call, longer(rejectGuard.remaining(), misconfiguredDelay),
                 Map.of(JobProgress.MISCONFIGURED_SINCE, since.toString()));
     }
