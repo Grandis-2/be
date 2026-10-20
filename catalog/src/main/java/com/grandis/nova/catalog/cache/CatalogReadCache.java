@@ -9,6 +9,7 @@ import com.grandis.nova.catalog.listing.ProductListFilter;
 import com.grandis.nova.catalog.listing.ProductListItem;
 import com.grandis.nova.catalog.listing.ProductListingService;
 import com.grandis.nova.catalog.listing.ProductSort;
+import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.review.ReviewService;
 import com.grandis.nova.catalog.review.ReviewView;
 import com.grandis.nova.common.CommonErrorCode;
@@ -96,7 +97,10 @@ public class CatalogReadCache {
      * 돌려주는 읽은 시각은 본문의 것이다 — 앞단 HTTP 캐시의 상한은 PublicCache 가 실시간 칸에 맞춰 짧게 묶는다.
      */
     public ReadCache.Entry<ProductDetailView> product(UUID productId) {
-        ReadCache.Entry<ProductDetailBody> body = cache.entry(detailSpec, PRODUCTS, productId.toString(), () -> details.findProductBody(productId));
+        // 판매 준비 전인 일반 상품의 본문은 넣지 않는다 — 준비 이벤트의 세대 올리기가 실패해도 "목록에는 있는데 상세는 404" 가 TTL 동안 남지 않게
+        // (준비는 되돌아가지 않으므로 넣은 본문의 준비는 낡지 않는다). 준비 전 상품의 상세는 요청마다 DB 로 간다
+        ReadCache.Entry<ProductDetailBody> body = cache.entry(detailSpec, PRODUCTS, productId.toString(), () -> details.findProductBody(productId),
+                found -> found.view().saleMode() != SaleMode.IN_STOCK || found.stockReady());
         return body.map(details::withLiveParts);
     }
 
