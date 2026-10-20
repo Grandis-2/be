@@ -18,10 +18,11 @@ import java.util.UUID;
 
 /**
  * 사용자 목록 · 검색. 시각은 앱 시계 하나에서 한 번 읽어 건수와 목록에 같이 쓴다 — 두 번 읽으면 마감 경계에서 둘이 어긋난다.
- * 그래도 count 와 find 는 두 문장이라 READ COMMITTED 에서는 사이에 끼어든 커밋으로 total 과 items 가 어긋난다(실측 total=1 · items=2).
- * 비잠금 SELECT 뿐이라 건수 · 목록 읽기만 REPEATABLE READ 로 올려 한 스냅샷을 쓴다. 트랜잭션이 끝나면 커넥션은 RC 로 돌아간다(실측).
- * order 재고(품절 · 증정품 후보 수량)는 그 트랜잭션이 끝난 뒤 묻는다 — 응답을 기다리는 동안 DB 연결을 붙잡지 않게. preorder 회차는 회원 목록이면
- * 트랜잭션 전에(접수 중이 쿼리 조건이다), 관리자 목록이면 트랜잭션 뒤에 묻는다.
+ * 건수와 목록을 두 문장으로 읽으면 READ COMMITTED 에서는 사이에 끼어든 커밋으로 total 과 items 가 어긋난다(실측 total=1 · items=2). 회원 목록은
+ * 둘을 한 문장으로 읽는다({@link ProductListingQueryRepository#findPage}) — 트랜잭션 없이 건수와 쪽이 한 시점이다(색상칩은 다음 문장이라 다를 수 있다). 관리자 목록 · 증정품 후보는 여러 문장이라
+ * 그 읽기만 REPEATABLE READ 로 올려 한 스냅샷을 쓴다. 트랜잭션이 끝나면 커넥션은 RC 로 돌아간다(실측).
+ * order 재고(품절 · 증정품 후보 수량)는 DB 읽기가 끝난 뒤 묻는다 — 응답을 기다리는 동안 DB 연결을 붙잡지 않게. preorder 회차는 회원 목록이면
+ * 읽기 전에(접수 중이 쿼리 조건이다), 관리자 목록이면 트랜잭션 뒤에 묻는다.
  * 오프셋 페이징은 계약(page · size · total · hasNext)이 요구한다. 상품 목록은 접수 목록처럼 매초 늘어나지 않는다.
  */
 @Service
@@ -48,7 +49,7 @@ public class ProductListingService {
 
     /**
      * 사전예약은 지금 접수 중인 것만 — preorder 의 접수 중 · 곧 열릴 회차({@link PreorderCampaigns#open})를 이 시각으로 갈라 쿼리에 넣는다. preorder 가
-     * 답하지 않으면 마지막 값을 쓰고, 그것도 오래됐으면 사전예약 없이 나간다. 건수 · 목록은 한 스냅샷에서 읽고, 품절은 트랜잭션이 끝난 뒤 order 재고로
+     * 답하지 않으면 마지막 값을 쓰고, 그것도 오래됐으면 사전예약 없이 나간다. 건수 · 목록은 한 문장으로 읽고, 품절은 그 뒤 order 재고로
      * 채운다({@link SoldOutMarker}).
      */
     public OffsetPage<ProductListItem> list(ProductListFilter filter, ProductSort sort, int page, int size) {
@@ -56,11 +57,7 @@ public class ProductListingService {
         // 일반 상품만 거르면 회차가 쓰이지 않는다 — preorder 를 부르지 않아 그 장애에 늦어지지 않는다
         Map<UUID, CampaignWindow> open = filter.saleMode() == SaleMode.IN_STOCK ? Map.of() : campaigns.open();
         Set<UUID> accepting = CampaignWindow.acceptingAt(open, now);
-        OffsetPage<ProductListItem> found = snapshot.execute(status -> {
-            long total = repository.count(filter, accepting);
-            List<ProductListItem> items = total == 0 ? List.of() : repository.find(filter, sort, accepting, page, size);
-            return OffsetPage.of(items, page, size, total);
-        });
+        OffsetPage<ProductListItem> found = repository.findPage(filter, sort, accepting, page, size);
         List<ProductListItem> items = found.items().stream().map(item -> item.withCampaign(open.get(item.productId()), now)).toList();
         return OffsetPage.of(soldOut.mark(items), page, size, found.total());
     }

@@ -3,6 +3,7 @@ package com.grandis.nova.catalog.listing;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.MySqlContainerConfig;
 import com.grandis.nova.catalog.support.ShopFixtures;
+import com.grandis.nova.common.OffsetPage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -10,12 +11,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.mysql.MySQLContainer;
 
+import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -56,14 +59,16 @@ class ProductListingQueryRepositoryTest {
 
         for (Instant hidden : List.of(opensAt.minusNanos(1), closesAt)) {
             Set<UUID> accepting = CampaignWindow.acceptingAt(open, hidden);
-            assertThat(ids(repository.find(filter, ProductSort.NEWEST, accepting, 0, 10))).as("%s", hidden).isEmpty();
+            assertThat(ids(repository.findPage(filter, ProductSort.NEWEST, accepting, 0, 10).items())).as("%s", hidden).isEmpty();
             assertThat(repository.count(filter, accepting)).as("%s", hidden).isZero();
+            assertThat(repository.findPage(filter, ProductSort.NEWEST, accepting, 0, 10).total()).as("%s 회원 목록 total", hidden).isZero();
             assertThat(PreorderSaleStatus.of(opensAt, closesAt, hidden)).as("%s", hidden).isNotEqualTo(PreorderSaleStatus.OPEN);
         }
         for (Instant shown : List.of(opensAt, closesAt.minusNanos(1))) {
             Set<UUID> accepting = CampaignWindow.acceptingAt(open, shown);
-            assertThat(ids(repository.find(filter, ProductSort.NEWEST, accepting, 0, 10))).as("%s", shown).containsExactly(productId);
+            assertThat(ids(repository.findPage(filter, ProductSort.NEWEST, accepting, 0, 10).items())).as("%s", shown).containsExactly(productId);
             assertThat(repository.count(filter, accepting)).as("%s", shown).isEqualTo(1);
+            assertThat(repository.findPage(filter, ProductSort.NEWEST, accepting, 0, 10).total()).as("%s 회원 목록 total", shown).isEqualTo(1);
             assertThat(PreorderSaleStatus.of(opensAt, closesAt, shown)).isEqualTo(PreorderSaleStatus.OPEN);
         }
     }
@@ -79,7 +84,8 @@ class ProductListingQueryRepositoryTest {
 
         assertThat(repository.count(filter, List.of(unready))).as("일반 상품은 접수 중 id 로 보이지 않는다").isZero();
         assertThat(repository.count(filter, List.of())).as("접수 중이 아니면 숨는다").isZero();
-        assertThat(ids(repository.find(filter, ProductSort.NEWEST, List.of(preorder), 0, 10))).as("대조군").containsExactly(preorder);
+        assertThat(repository.findPage(filter, ProductSort.NEWEST, List.of(unready), 0, 10).total()).as("회원 목록 total — 일반 상품은 접수 중 id 로 보이지 않는다").isZero();
+        assertThat(ids(repository.findPage(filter, ProductSort.NEWEST, List.of(preorder), 0, 10).items())).as("대조군").containsExactly(preorder);
     }
 
     @Test
@@ -101,7 +107,7 @@ class ProductListingQueryRepositoryTest {
             statement.execute("TRUNCATE TABLE mysql.general_log");
             try {
                 repository.count(filter, List.of(productId));
-                repository.find(filter, ProductSort.NEWEST, List.of(productId), 0, 10);
+                repository.findPage(filter, ProductSort.NEWEST, List.of(productId), 0, 10).items();
                 repository.findListedCards(List.of(productId), List.of(productId));
                 repository.findCards(List.of(productId), true);
                 repository.countForAdmin(new AdminProductListFilter(tag, null, null, null));
@@ -131,6 +137,48 @@ class ProductListingQueryRepositoryTest {
     }
 
     @Test
+    @DisplayName("한 쪽과 전체 건수는 한 문장 — 쪽을 나눠 이으면 한 번에 읽은 순서와 같고(정렬 셋), 범위 밖 쪽은 빈 목록에 total 을 그대로 준다")
+    void pagesKeepOrderAndTotal() {
+        UUID category = fixtures.category();
+        // 등록 순서(최신이 마지막)와 최저가가 엇갈리게, 판매 중 옵션이 없는 상품(최저가 없음 — 가격순 둘 다 맨 뒤)도 하나
+        List<UUID> byAge = new ArrayList<>();
+        int[] prices = {3000, 1000, 5000, 2000, 0};
+        for (int i = 0; i < prices.length; i++) {
+            UUID productId = fixtures.product(category, "IN_STOCK", "ACTIVE", "쪽 " + i, tag);
+            fixtures.option(productId, prices[i] == 0 ? "PAUSED" : "ACTIVE", new BigDecimal(prices[i] == 0 ? 9999 : prices[i]));
+            fixtures.stockReady(productId);
+            jdbcTemplate.update("UPDATE products SET created_at = ? WHERE id = UUID_TO_BIN(?)",
+                    LocalDateTime.of(2026, 10, 1, 0, 0).plusMinutes(i), productId.toString());
+            byAge.add(productId);
+        }
+        ProductListFilter filter = new ProductListFilter(tag, null, null, null, null, null);
+        Map<ProductSort, List<UUID>> expected = Map.of(
+                ProductSort.NEWEST, List.of(byAge.get(4), byAge.get(3), byAge.get(2), byAge.get(1), byAge.get(0)),
+                ProductSort.PRICE_ASC, List.of(byAge.get(1), byAge.get(3), byAge.get(0), byAge.get(2), byAge.get(4)),
+                ProductSort.PRICE_DESC, List.of(byAge.get(2), byAge.get(0), byAge.get(3), byAge.get(1), byAge.get(4)));
+
+        for (ProductSort sort : ProductSort.values()) {
+            OffsetPage<ProductListItem> whole = repository.findPage(filter, sort, List.of(), 0, 10);
+            assertThat(ids(whole.items())).as("%s 한 번에", sort).containsExactlyElementsOf(expected.get(sort));
+            assertThat(whole.total()).isEqualTo(5);
+            List<UUID> joined = new ArrayList<>();
+            for (int page = 0; page < 3; page++) {
+                OffsetPage<ProductListItem> part = repository.findPage(filter, sort, List.of(), page, 2);
+                assertThat(part.total()).as("%s %d쪽", sort, page).isEqualTo(5);
+                joined.addAll(ids(part.items()));
+            }
+            assertThat(joined).as("%s 쪽을 이으면", sort).containsExactlyElementsOf(expected.get(sort));
+            OffsetPage<ProductListItem> beyond = repository.findPage(filter, sort, List.of(), 3, 2);
+            assertThat(beyond.items()).as("%s 범위 밖", sort).isEmpty();
+            assertThat(beyond.total()).as("%s 범위 밖 total", sort).isEqualTo(5);
+        }
+        OffsetPage<ProductListItem> none = repository.findPage(new ProductListFilter(tag + "없음", null, null, null, null, null),
+                ProductSort.NEWEST, List.of(), 0, 10);
+        assertThat(none.items()).isEmpty();
+        assertThat(none.total()).isZero();
+    }
+
+    @Test
     @DisplayName("통계가 실제와 달라도 목록 · 색상칩 · 관리자 목록 · 증정품 후보 · 판매 중 옵션 조회는 상품마다 옵션을 인덱스로 찾는다 — 옵션 표 전체를 훑지 않는다")
     void planDoesNotDependOnStatistics() throws Exception {
         UUID category = fixtures.category();
@@ -148,8 +196,8 @@ class ProductListingQueryRepositoryTest {
             List<UUID> productIds = jdbcTemplate.queryForList("SELECT BIN_TO_UUID(id) FROM products WHERE category_id = UUID_TO_BIN(?)", String.class,
                     category.toString()).stream().map(UUID::fromString).toList();
             List<String> statements = List.of(
-                    capture(statement, "%min_price%NO_SEMIJOIN%LIMIT%", () -> repository.find(filter, ProductSort.PRICE_ASC, List.of(), 0, 20)),
-                    capture(statement, "%sellable_colors%", () -> repository.find(filter, ProductSort.PRICE_ASC, List.of(), 0, 20)),
+                    capture(statement, "%min_price%NO_SEMIJOIN%LIMIT%", () -> repository.findPage(filter, ProductSort.PRICE_ASC, List.of(), 0, 20).items()),
+                    capture(statement, "%sellable_colors%", () -> repository.findPage(filter, ProductSort.PRICE_ASC, List.of(), 0, 20).items()),
                     capture(statement, "%option_count%LIMIT%", () -> repository.findForAdmin(new AdminProductListFilter(tag, null, null, null), 0, 20)),
                     capture(statement, "%stock_ready_at IS NOT NULL%NO_SEMIJOIN%LIMIT%", () -> repository.findGiftCandidates(tag, 0, 20)),
                     capture(statement, "SELECT o.product_id, o.id FROM product_options o%", () -> repository.findActiveOptionIds(productIds)));
