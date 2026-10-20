@@ -1,9 +1,11 @@
 package com.grandis.nova.catalog.cache;
 
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.redis.cache.ReadCache;
 import com.grandis.nova.common.redis.cache.ReadCacheEvents;
 import com.grandis.nova.common.redis.cache.ReadCacheEvents.Outcome;
+import com.grandis.nova.common.redis.cache.ReadCacheEvents.RefreshResult;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -19,6 +21,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 메모리 읽기 캐시의 미리 갱신. 갱신 실행기는 맡긴 일을 모아 두었다가 시험이 정한 때 돌린다 — 요청이 갱신을 기다리지 않는지, 갱신이 언제 값을 바꾸는지를
@@ -54,7 +57,8 @@ class LocalReadCacheRefreshTest {
         ReadCache.Entry<String> refreshed = cache.entry("k", () -> load("v3"));
         assertThat(refreshed.value()).isEqualTo("v2");
         assertThat(refreshed.loadedAt()).as("갱신을 시작한 시각").isEqualTo(NOW.plusSeconds(4));
-        assertThat(events.outcomes).containsExactly(Outcome.LOAD, Outcome.HIT, Outcome.HIT_REFRESH, Outcome.REFRESHED, Outcome.HIT);
+        assertThat(events.outcomes).as("요청마다 하나").containsExactly(Outcome.LOAD, Outcome.HIT, Outcome.HIT_REFRESH, Outcome.HIT);
+        assertThat(events.refreshes).as("갱신 작업마다 하나").containsExactly(RefreshResult.STORED);
     }
 
     @Test
@@ -86,7 +90,7 @@ class LocalReadCacheRefreshTest {
 
         clock.advance(Duration.ofSeconds(1));
         assertThat(cache.entry("k", () -> load("v3")).value()).as("만료 — 요청이 직접 읽는다").isEqualTo("v3");
-        assertThat(events.outcomes).contains(Outcome.REFRESH_FAILED);
+        assertThat(events.refreshes).containsExactly(RefreshResult.FAILED);
         assertThat(events.outcomes.getLast()).isEqualTo(Outcome.LOAD);
     }
 
@@ -101,7 +105,7 @@ class LocalReadCacheRefreshTest {
         });
         tasks.runAll();
         assertThat(cache.entry("k", () -> load("v2")).value()).isEqualTo("v1");
-        assertThat(events.outcomes).contains(Outcome.REFRESH_FAILED);
+        assertThat(events.refreshes).containsExactly(RefreshResult.FAILED);
     }
 
     @Test
@@ -155,7 +159,8 @@ class LocalReadCacheRefreshTest {
         cache.entry("k", () -> load("v1"));
         clock.advance(Duration.ofSeconds(4));
         assertThat(cache.entry("k", () -> load("v2")).value()).isEqualTo("v1");
-        assertThat(events.outcomes).contains(Outcome.REFRESH_REJECTED);
+        assertThat(events.refreshes).containsExactly(RefreshResult.REJECTED);
+        assertThat(events.outcomes.getLast()).as("맡기지 못한 요청은 바로 받음으로 센다").isEqualTo(Outcome.HIT);
 
         reject[0] = false;
         cache.entry("k", () -> load("v2"));
@@ -170,6 +175,105 @@ class LocalReadCacheRefreshTest {
         clock.advance(Duration.ofSeconds(4));
         assertThat(cache.entry("k", () -> load("v2")).value()).isEqualTo("v1");
         assertThat(loads.get()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("갱신이 끝나면(성공 · 실패) 그 자리가 풀려 다음 주기에 다시 맡긴다")
+    void refreshSlotIsReleasedAfterEachRun() {
+        LocalReadCache<String, String> cache = cache();
+        cache.entry("k", () -> load("v1"));
+        clock.advance(Duration.ofSeconds(4));
+        cache.entry("k", () -> load("v2"));
+        tasks.runAll();   // 성공 — v2(읽은 시각 4초)
+        clock.advance(Duration.ofSeconds(4));
+        cache.entry("k", () -> {
+            throw new IllegalStateException("DB");
+        });
+        assertThat(tasks.pending()).as("성공 뒤 다음 주기").isEqualTo(1);
+        tasks.runAll();   // 실패
+        cache.entry("k", () -> load("v3"));
+        assertThat(tasks.pending()).as("실패 뒤에도 다시 맡긴다").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("넣지 못한 갱신(넣지 않는 값)은 그 값이 만료될 때까지 다시 맡기지 않는다 — 만료되면 요청이 직접 읽는다")
+    void notStoredRefreshIsNotRepeated() {
+        LocalReadCache<String, String> cache = cache();
+        cache.entry("k", () -> load("v1"), value -> !value.isEmpty());
+        clock.advance(Duration.ofSeconds(4));
+        cache.entry("k", () -> load(""), value -> !value.isEmpty());
+        tasks.runAll();
+        assertThat(events.refreshes).containsExactly(RefreshResult.NOT_STORED);
+        for (int i = 0; i < 3; i++) {
+            assertThat(cache.entry("k", () -> load(""), value -> !value.isEmpty()).value()).isEqualTo("v1");
+        }
+        assertThat(tasks.pending()).as("만료 전에는 다시 맡기지 않는다").isZero();
+        clock.advance(Duration.ofSeconds(1));
+        assertThat(cache.entry("k", () -> load("v2"), value -> !value.isEmpty()).value()).as("만료 뒤 직접 읽기").isEqualTo("v2");
+    }
+
+    @Test
+    @DisplayName("큐에서 늦게 돈 갱신은 그사이 더 새 값이 들어왔으면 읽지 않는다")
+    void lateRefreshSkipsWhenNewerValueExists() {
+        LocalReadCache<String, String> cache = cache();
+        cache.entry("k", () -> load("v1"));
+        clock.advance(Duration.ofSeconds(4));
+        cache.entry("k", () -> load("갱신"));
+        clock.advance(Duration.ofSeconds(1));
+        assertThat(cache.entry("k", () -> load("직접")).value()).as("만료 — 요청이 직접 읽었다").isEqualTo("직접");
+        tasks.runAll();
+        assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_NEWER);
+        assertThat(loads.get()).as("갱신은 읽지 않았다").isEqualTo(2);
+        assertThat(cache.entry("k", () -> load("다른 값")).value()).isEqualTo("직접");
+    }
+
+    @Test
+    @DisplayName("실패한 갱신을 기다린 요청은 같은 예외를 받는다 — 직접 읽기가 실패했을 때와 같다")
+    void waiterOnFailedRefreshGetsSameException() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        IllegalStateException failure = new IllegalStateException("DB");
+        LocalReadCache<String, String> cache = new LocalReadCache<>("test", TTL, 1024, String::length, clock, true, Duration.ofSeconds(5),
+                command -> new Thread(command).start(), events);
+        cache.entry("k", () -> load("v1"));
+        clock.advance(Duration.ofSeconds(4));
+        cache.entry("k", () -> {
+            started.countDown();
+            await(release);
+            throw failure;
+        });
+        assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+        clock.advance(Duration.ofSeconds(1));
+        CompletableFuture<ReadCache.Entry<String>> waiting = CompletableFuture.supplyAsync(() -> cache.entry("k", () -> load("직접")));
+        awaitWaiting(cache);
+        release.countDown();
+
+        assertThat(waiting).failsWithin(Duration.ofSeconds(5)).withThrowableThat().havingRootCause().isSameAs(failure);
+    }
+
+    @Test
+    @DisplayName("멈춘 갱신을 기다린 요청은 상한까지만 기다리고 503 — 직접 읽기를 기다릴 때와 같다")
+    void waiterOnStuckRefreshGivesUpAfterTheCap() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        LocalReadCache<String, String> cache = new LocalReadCache<>("test", TTL, 1024, String::length, clock, true, Duration.ofMillis(200),
+                command -> new Thread(command).start(), events);
+        cache.entry("k", () -> load("v1"));
+        clock.advance(Duration.ofSeconds(4));
+        cache.entry("k", () -> {
+            started.countDown();
+            await(release);
+            return load("v2");
+        });
+        try {
+            assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+            clock.advance(Duration.ofSeconds(1));
+            assertThatThrownBy(() -> cache.entry("k", () -> load("직접")))
+                    .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
+            assertThat(loads.get()).as("기다린 요청은 읽지 않았다").isEqualTo(1);
+        } finally {
+            release.countDown();
+        }
     }
 
     private LocalReadCache<String, String> cache() {
@@ -222,6 +326,12 @@ class LocalReadCacheRefreshTest {
 
     static final class Events implements ReadCacheEvents {
         final List<Outcome> outcomes = java.util.Collections.synchronizedList(new ArrayList<>());
+        final List<RefreshResult> refreshes = java.util.Collections.synchronizedList(new ArrayList<>());
+
+        @Override
+        public void refreshed(String cache, RefreshResult result) {
+            refreshes.add(result);
+        }
 
         @Override
         public void served(String cache, Outcome outcome) {

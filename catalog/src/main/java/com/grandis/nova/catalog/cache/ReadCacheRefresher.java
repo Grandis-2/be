@@ -3,6 +3,7 @@ package com.grandis.nova.catalog.cache;
 import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -19,6 +20,8 @@ public class ReadCacheRefresher implements Executor {
 
     static final int THREADS = 2;
     static final int QUEUE = 64;
+    /** 내려갈 때 도는 갱신을 기다리는 시간 — 넘으면 끊는다(끊긴 갱신은 실패로 끝나고, 값은 다음 기동에서 다시 읽는다). */
+    static final Duration SHUTDOWN_WAIT = Duration.ofSeconds(2);
 
     private final ThreadPoolExecutor executor;
 
@@ -38,8 +41,17 @@ public class ReadCacheRefresher implements Executor {
         executor.execute(command);
     }
 
+    /** 새 갱신은 받지 않고, 도는 갱신은 잠깐 끝나기를 기다린다 — DB 연결이 먼저 닫혀 "closed" 경고가 남지 않게. 넘으면 끊는다. */
     @PreDestroy
     void shutdown() {
-        executor.shutdownNow();
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(SHUTDOWN_WAIT.toMillis(), TimeUnit.MILLISECONDS)) {
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 }
