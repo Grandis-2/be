@@ -203,7 +203,7 @@ class ReadCacheRefreshTest {
     }
 
     @Test
-    @DisplayName("갱신이 끝나면(성공 · 실패) 그 자리가 풀려 다음 주기에 다시 맡긴다")
+    @DisplayName("갱신이 성공하면 다음 주기에 다시 맡긴다. 실패하면 그 값이 만료될 때까지 맡기지 않고, 만료 뒤 직접 읽은 새 값의 주기에는 다시 맡긴다")
     void refreshSlotIsReleasedAfterEachRun() {
         cache.entry(spec, "g", "k", () -> load("v1"));
         clock.advance(Duration.ofSeconds(24));
@@ -216,7 +216,13 @@ class ReadCacheRefreshTest {
         assertThat(tasks.pending()).as("성공 뒤 다음 주기").isEqualTo(1);
         tasks.runAll();   // 실패
         cache.entry(spec, "g", "k", () -> load("v3"));
-        assertThat(tasks.pending()).as("실패 뒤에도 다시 맡긴다").isEqualTo(1);
+        assertThat(tasks.pending()).as("실패 뒤 — 그 값이 만료될 때까지 다시 맡기지 않는다").isZero();
+        redis.delete(onlyKey());   // 만료
+        clock.advance(Duration.ofSeconds(6));
+        assertThat(cache.entry(spec, "g", "k", () -> load("v4")).value()).as("직접 읽는다").isEqualTo("v4");
+        clock.advance(Duration.ofSeconds(24));
+        cache.entry(spec, "g", "k", () -> load("v5"));
+        assertThat(tasks.pending()).as("새 값의 주기에는 다시 맡긴다(차단이 풀렸다)").isEqualTo(1);
     }
 
     @Test
@@ -231,6 +237,25 @@ class ReadCacheRefreshTest {
             assertThat(cache.entry(spec, "g", "k", () -> load(""), value -> !value.isEmpty()).value()).isEqualTo("v1");
         }
         assertThat(tasks.pending()).as("만료 전에는 다시 맡기지 않는다").isZero();
+        redis.delete(onlyKey());   // 만료
+        clock.advance(Duration.ofSeconds(6));
+        assertThat(cache.entry(spec, "g", "k", () -> load("v2"), value -> !value.isEmpty()).value()).isEqualTo("v2");
+        clock.advance(Duration.ofSeconds(24));
+        cache.entry(spec, "g", "k", () -> load("v3"), value -> !value.isEmpty());
+        assertThat(tasks.pending()).as("새 값의 주기에는 다시 맡긴다(차단이 풀렸다)").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("큐에서 기다리는 사이 세대가 올랐으면 갱신은 읽지 않는다 — 옛 세대 키는 아무도 읽지 않는다")
+    void lateRefreshSkipsAfterBump() {
+        cache.entry(spec, "g", "k", () -> load("v1"));
+        clock.advance(Duration.ofSeconds(24));
+        cache.entry(spec, "g", "k", () -> load("갱신"));
+        cache.bumpAfterCommit("g");
+        cache.entry(spec, "g", "k", () -> load("새 세대"));   // 이 인스턴스가 오른 세대를 본다
+        tasks.runAll();
+        assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_NEWER);
+        assertThat(loads.get()).as("처음 읽기 + 새 세대 읽기 — 갱신은 읽지 않았다").isEqualTo(2);
     }
 
     @Test

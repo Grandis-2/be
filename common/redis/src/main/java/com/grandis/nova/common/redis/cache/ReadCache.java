@@ -49,7 +49,7 @@ import java.util.function.Supplier;
  *       값이 만료되면 그 뒤 요청은 기다리는 쪽이 된다(상한 그대로). 갱신이 실패해도 들고 있던 값의 만료는 늘지 않는다. 실행기가 차면 맡기지 않는다.
  *       갱신한 값은 읽기 시작할 때의 세대 키에 들어가, 그사이 세대가 올랐으면 새 세대 조회에는 안 보인다. 인스턴스마다 따로라 같은 키를 인스턴스 수만큼
  *       갱신할 수 있다(만료 때 인스턴스마다 한 번 읽던 것과 같다). 큐에서 늦게 돈 갱신은 그사이 더 새 값이 들어왔으면 읽지 않는다. 갱신 결과를
- *       넣지 못했으면(넣지 않는 값 · 저장 상한 · 차단기 · 남은 시간 없음) 들고 있던 값이 만료될 때까지 그 키는 다시 맡기지 않는다.
+ *       넣지 못했으면(넣지 않는 값 · 저장 상한 · 차단기 · 남은 시간 없음) 들고 있던 값이 만료될 때까지 그 키는 다시 맡기지 않는다(실패도 같다).
  *       갱신 실행기가 없으면 미리 갱신하지 않는다. loader 는 요청 맥락(SecurityContext · RequestContextHolder)이 없는 실행기 스레드에서도 돌 수
  *       있어야 한다 — 토큰을 릴레이하는 호출을 loader 에 넣으면 갱신이 401 로 실패하고 그 실패가 기다린 요청에 퍼진다.</li>
  *   <li><b>무효화</b>: 키에 세대 번호를 넣고, 바뀐 쪽이 {@link #bumpAfterCommit} 으로 번호를 올린다 — 조건마다 다른 키(목록 · 검색)를 하나씩
@@ -447,6 +447,7 @@ public final class ReadCache {
         } catch (RuntimeException e) {
             refreshing.remove(key);   // 맡기지 못했다 — 표식을 남기면 그 키는 다시 맡겨지지 않는다. 요청은 들고 있던 값으로 답한다
             log.warn("읽기 캐시 미리 갱신을 맡기지 못했다 cache={}", spec.name(), e);
+            events.refreshed(spec.name(), RefreshResult.REJECTED);
             return false;
         } catch (Error e) {
             refreshing.remove(key);
@@ -460,6 +461,11 @@ public final class ReadCache {
      */
     private <T> void refresh(String key, Spec<T> spec, Instant seenLoadedAt, Supplier<T> loader, Predicate<T> storable, String generation,
                              long generationNumber) {
+        Long seenGeneration = seenGenerations.get(spec.name() + "|" + generation);
+        if (seenGeneration != null && seenGeneration > generationNumber) {
+            events.refreshed(spec.name(), RefreshResult.SKIPPED_NEWER);   // 큐에서 기다리는 사이 세대가 올랐다 — 옛 세대 키는 아무도 읽지 않는다
+            return;
+        }
         if (newerStored(key, seenLoadedAt)) {
             events.refreshed(spec.name(), RefreshResult.SKIPPED_NEWER);   // 큐에서 기다리는 사이 만료돼 요청이 더 새 값을 넣었다
             return;
@@ -482,6 +488,8 @@ public final class ReadCache {
             }
         } catch (RuntimeException | Error e) {
             mine.completeExceptionally(e);
+            // 실패도 그 값이 만료될 때까지 다시 맡기지 않는다 — DB 가 느리게 실패하는 동안 TTL 마지막 구간 내내 같은 키로 실행기를 묶지 않게
+            rememberNotStored(key, seenLoadedAt.plus(spec.ttl()));
             events.refreshed(spec.name(), RefreshResult.FAILED);
             if (e instanceof BusinessException) {
                 log.debug("읽기 캐시 미리 갱신이 업무 오류로 끝났다 — 만료 뒤 요청이 직접 읽는다 cache={}: {}", spec.name(), e.toString());
