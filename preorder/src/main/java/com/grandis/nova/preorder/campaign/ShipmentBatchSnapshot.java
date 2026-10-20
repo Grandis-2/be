@@ -12,4 +12,9 @@ public record ShipmentBatchSnapshot(
         LocalDate estimatedShipStart,
         LocalDate estimatedShipEnd
 ) {
+
+    /** 그 순번이 이 차수에 드는가. */
+    public boolean covers(long position) {
+        return positionFrom <= position && (positionTo == null || position <= positionTo);
+    }
 }

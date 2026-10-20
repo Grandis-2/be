@@ -11,6 +11,7 @@ import java.util.UUID;
 /**
  * 상품의 접수 현황 공개 조회. 로그인 없이 많이 불리므로 인스턴스 안에 잠깐 둔다 — Redis 를 거치지 않아
  * 그 장애와 무관하게 답한다. 일정 · 차수만 두고 접수 상태는 물을 때의 시각으로 정해 오픈 · 마감 순간에도 맞는다.
+ * 일정 · 차수는 회차 캐시에서 오고, 여기 두는 이유는 다음 순번(DB) 때문이다.
  */
 @Service
 public class CampaignProgressService {
@@ -32,5 +33,10 @@ public class CampaignProgressService {
     /** @throws BusinessException PRODUCT_NOT_FOUND — 회차 · 배송 차수가 없거나 아직 공개하지 않은 상품(캐시에 남기지 않는다) */
     public CampaignProgress find(UUID productId) {
         return cache.get(productId, reader::read).at(clock.instant());
+    }
+
+    /** 회차가 바뀌면 회차 캐시와 함께 비운다({@link CampaignCacheInvalidation}). */
+    void evict(UUID productId) {
+        cache.invalidate(productId);
     }
 }

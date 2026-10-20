@@ -92,7 +92,7 @@ class PreorderAcceptTransaction {
 
         requireTicketAfterLastAccept(command);
         OptionSnapshot option = requireOnSale(command, product);
-        requireAccepting(campaign);
+        requireAccepting(campaign, clock.instant());
         IssuedPosition issued = campaigns.issuePosition(command.productId());
 
         String preorderToken = UUID.randomUUID().toString();
@@ -114,6 +114,33 @@ class PreorderAcceptTransaction {
      * UNIQUE 충돌 뒤 다시 확인할 때도 쓴다.
      */
     @Transactional(readOnly = true)
+    /**
+     * 잠그기 전 판정 — 캐시가 접수 중이 아니라 한 회차를 잠금 뒤와 같은 우선순위로 거절한다. 오픈 전 · 회차 없음이면 예약이 있을 수
+     * 없어(일정은 오픈 전에만 바뀐다) 재전송 · 입장권 확인을 DB 없이 지나간다. 마감이면 잠그지 않고 읽어 확인한다.
+     *
+     * @param cached 회차 캐시의 일정
+     * @return 같은 접수 키의 재전송이면 그 결과. 판정을 다 지나면(캐시가 늦음) 비어 있다 — 호출한 쪽이 잠그고 다시 판정한다
+     */
+    Optional<AcceptResult> settleBeforeLock(AcceptCommand command, Optional<ProductCatalog> product,
+                                            Optional<CampaignSchedule> cached) {
+        Instant now = clock.instant();
+        if (opened(cached, now)) {
+            Optional<AcceptResult> replay = findReplay(command);
+            if (replay.isPresent()) {
+                return replay;
+            }
+            requireTicketAfterLastAccept(command);
+        }
+        requireOnSale(command, product);
+        requireAccepting(cached, now);
+        return Optional.empty();
+    }
+
+    /** 열린 적 있는 회차인가 — 예약이 있을 수 있다. */
+    private static boolean opened(Optional<CampaignSchedule> campaign, Instant now) {
+        return campaign.filter(found -> !now.isBefore(found.opensAt())).isPresent();
+    }
+
     public Optional<AcceptResult> findReplay(AcceptCommand command) {
         return preorders.findByIdempotencyKey(command.customerId(), command.idempotencyKey())
                 .map(existing -> replay(existing, command));
@@ -159,9 +186,8 @@ class PreorderAcceptTransaction {
     }
 
     /** 회차 행이 없으면 등록이 끝나지 않은 상품이다 — 공개 전 상품처럼 존재를 알리지 않는다. */
-    private void requireAccepting(Optional<CampaignSchedule> campaign) {
+    private static void requireAccepting(Optional<CampaignSchedule> campaign, Instant now) {
         CampaignSchedule found = campaign.orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND));
-        Instant now = clock.instant();
         if (now.isBefore(found.opensAt())) {
             throw new BusinessException(PreorderErrorCode.SALE_NOT_OPEN,
                     Map.of("reason", "opensAt=" + found.opensAt()));

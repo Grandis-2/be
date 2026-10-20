@@ -121,6 +121,8 @@ nova:
     refresh-interval: 30s
   # 오픈 알림(회차가 열리면 신청자에게 회원 알림)을 찾는 주기 작업. 기본값은 코드에 있다:
   # campaign.open-alert.interval: 30s · window: 1h(연 지 이보다 오래된 회차는 보내지 않는다) · batch-size: 100
+  # 회차 캐시(일정 · 공개 · 차수, 인스턴스 안). 바뀌면 커밋 뒤 모든 인스턴스에서 비우고 수명은 놓쳤을 때의 상한이다. 기본값은 코드에 있다:
+  # campaign.cache.ttl: 30s · max-products: 1000 · missing-ttl: 5s(회차 없음) · missing-max-products: 10000
   # 외부 예약 Mock 등록 요청의 scope(시험 실행 범위). 접수 때 request_payload 에 고정된다
   external-mock:
     scope: preorder

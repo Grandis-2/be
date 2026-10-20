@@ -4,6 +4,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -11,6 +12,9 @@ import java.util.UUID;
 public interface ShipmentBatchRepository extends JpaRepository<ShipmentBatch, UUID> {
 
     List<ShipmentBatch> findByProductIdOrderByBatchNumber(UUID productId);
+
+    /** 여러 상품의 차수를 한 번에 — 상품 · 차수 번호 순. */
+    List<ShipmentBatch> findByProductIdInOrderByProductIdAscBatchNumberAsc(Collection<UUID> productIds);
 
     /** 오픈 전 전체 교체에서 쓴다. 오픈 뒤에는 부르지 않는다(예약이 차수를 가리킨다). */
     void deleteByProductId(UUID productId);

@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.campaign.application;
 
+import com.grandis.nova.preorder.campaign.CachedCampaign;
 import com.grandis.nova.preorder.campaign.CampaignSchedule;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository;
@@ -29,13 +30,15 @@ public class CampaignScheduleQuery {
     private static final Logger log = LoggerFactory.getLogger(CampaignScheduleQuery.class);
 
     private final PreorderCampaignRepository campaigns;
+    private final CampaignCache cache;
     private final CampaignProperties properties;
     private final Counter truncated;
     private final AtomicReference<Instant> truncatedLoggedAt = new AtomicReference<>();
 
-    CampaignScheduleQuery(PreorderCampaignRepository campaigns, CampaignProperties properties,
+    CampaignScheduleQuery(PreorderCampaignRepository campaigns, CampaignCache cache, CampaignProperties properties,
                           MeterRegistry meterRegistry) {
         this.campaigns = campaigns;
+        this.cache = cache;
         this.properties = properties;
         this.truncated = meterRegistry.counter(TRUNCATED_METRIC);
     }
@@ -54,10 +57,15 @@ public class CampaignScheduleQuery {
         return found.stream().map(PreorderCampaign::toSchedule).toList();
     }
 
-    /** 그 상품들의 회차. 회차가 없는 상품은 빠진다. */
-    @Transactional(readOnly = true)
-    public List<CampaignSchedule> findSchedules(Collection<UUID> productIds) {
-        return campaigns.findAllById(productIds).stream().map(PreorderCampaign::toSchedule).toList();
+    /**
+     * 그 상품들의 회차. 회차가 없는 상품은 빠진다. 기본은 회차 캐시(바뀌면 커밋 뒤 비운다 — 놓쳤을 때만 캐시 수명만큼 늦다)이고,
+     * 판정에 쓰는 호출은 fresh 로 DB 를 읽는다.
+     */
+    public List<CampaignSchedule> findSchedules(Collection<UUID> productIds, boolean fresh) {
+        if (fresh) {
+            return campaigns.findAllById(productIds).stream().map(PreorderCampaign::toSchedule).toList();
+        }
+        return cache.findAll(productIds).stream().map(CachedCampaign::schedule).toList();
     }
 
     private void logTruncated(Instant now, int limit) {

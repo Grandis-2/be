@@ -33,6 +33,9 @@ class CampaignScheduleQueryTest {
     @Autowired
     JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    CampaignCache cache;
+
     @MockitoBean
     CatalogClient catalogClient;
 
@@ -73,7 +76,7 @@ class CampaignScheduleQueryTest {
     }
 
     private CampaignScheduleQuery query(int limit) {
-        return new CampaignScheduleQuery(repository, new CampaignProperties(Duration.ofMinutes(10), LOOKAHEAD, limit),
+        return new CampaignScheduleQuery(repository, cache, new CampaignProperties(Duration.ofMinutes(10), LOOKAHEAD, limit),
                 meterRegistry);
     }
 

@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.campaign;
 
+import com.grandis.nova.preorder.campaign.application.CampaignCache;
 import com.grandis.nova.preorder.campaign.application.CampaignChange;
 import com.grandis.nova.preorder.campaign.application.CampaignChangePublisher;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
@@ -28,12 +29,19 @@ public class Campaigns {
     private final PreorderCampaignRepository campaigns;
     private final ShipmentBatchRepository batches;
     private final CampaignChangePublisher changePublisher;
+    private final CampaignCache cache;
 
     Campaigns(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
-              CampaignChangePublisher changePublisher) {
+              CampaignChangePublisher changePublisher, CampaignCache cache) {
         this.campaigns = campaigns;
         this.batches = batches;
         this.changePublisher = changePublisher;
+        this.cache = cache;
+    }
+
+    /** 회차 캐시의 회차 — 잠그기 전 판정용. 비우기를 놓쳤을 때만 캐시 수명만큼 늦으므로 최종 판정은 {@link #lockForAccept} 로 한다. */
+    public Optional<CachedCampaign> findCached(UUID productId) {
+        return cache.find(productId);
     }
 
     /** 회차 행을 잠그고 일정을 읽는다. 잠금은 호출한 트랜잭션이 끝날 때까지다. 회차가 없으면 비어 있다. */
@@ -112,9 +120,7 @@ public class Campaigns {
             return false;
         }
         PreorderCampaign campaign = found.get();
-        if (campaign.applyListing(listing)) {
-            changePublisher.publish(campaign, CampaignChange.VISIBILITY);
-        }
+        changePublisher.listingApplied(campaign, campaign.applyListing(listing));
         return true;
     }
 }

@@ -75,7 +75,9 @@ class PreorderCampaignWriter {
         requireBeforeOpen(campaign);
         batches.deleteByProductId(productId);
         batches.flush();
-        return batches.saveAll(plan.toBatches(productId));
+        List<ShipmentBatch> saved = batches.saveAll(plan.toBatches(productId));
+        changePublisher.batchesReplaced(productId);
+        return saved;
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.campaign;
 
 import com.grandis.nova.common.UuidBinary;
+import com.grandis.nova.preorder.support.CampaignRowLock;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import org.junit.jupiter.api.BeforeEach;
@@ -13,6 +14,8 @@ import org.springframework.test.web.servlet.ResultActions;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import javax.sql.DataSource;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -44,6 +47,9 @@ class OpenAlertApiTest {
 
     @Autowired
     JsonMapper jsonMapper;
+
+    @Autowired
+    DataSource dataSource;
 
     ShopFixtures fixtures;
     UUID customerId;
@@ -116,6 +122,19 @@ class OpenAlertApiTest {
 
         expectError(subscribe(productId), 409, "PRODUCT_ALREADY_OPEN");
         assertThat(rows(productId)).isZero();
+    }
+
+    /** 열린 뒤의 신청은 어차피 409 다 — 회차 캐시로 잠그기 전에 거절해 접수가 쥔 회차 잠금 뒤에 줄 서지 않는다. */
+    @Test
+    void 열린_회차는_회차_잠금이_쥐어져도_기다리지_않고_409() throws Exception {
+        UUID opened = fixtures.openPreorderProduct().productId();
+
+        try (CampaignRowLock ignored = CampaignRowLock.hold(dataSource, opened)) {
+            long started = System.nanoTime();
+            expectError(subscribe(opened), 409, "PRODUCT_ALREADY_OPEN");
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(2));
+        }
+        assertThat(rows(opened)).isZero();
     }
 
     /** 판매 상태 사본을 아직 받지 못한 회차(catalog 값 전)는 막지 않는다 — 목록에는 상품명 대신 대체 문구가 간다. */
