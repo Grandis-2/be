@@ -4,6 +4,7 @@ import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.catalog.support.SqlHookInspector;
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.CommonErrorCode;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -61,7 +62,8 @@ class ProductDetailServiceTest {
         fixtures.stockReady(productId);   // 본문을 읽은 뒤 준비가 커밋됐다
 
         assertThat(service.withLiveParts(body).productId()).isEqualTo(productId);
-        assertThatThrownBy(() -> service.withLiveParts(neverBody)).as("대조군 — 준비 전이면 그대로 404").isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.withLiveParts(neverBody)).as("대조군 — 준비 전이면 그대로 404").isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode()).isEqualTo(CommonErrorCode.NOT_FOUND);
     }
 
     @Test
