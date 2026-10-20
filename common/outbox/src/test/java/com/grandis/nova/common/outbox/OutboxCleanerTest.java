@@ -241,7 +241,7 @@ class OutboxCleanerTest {
     }
 
     private OutboxCleaner cleaner(OutboxStore target, int batch, Duration interval) {
-        OutboxProperties properties = new OutboxProperties(32, MINUTE, 100, MINUTE, Duration.ofSeconds(10), "outbox",
+        OutboxProperties properties = new OutboxProperties(32, 1000, MINUTE, 100, MINUTE, Duration.ofSeconds(10), "outbox",
                 RETENTION, interval, batch);
         OutboxMetrics metrics = new OutboxMetrics() {
             @Override

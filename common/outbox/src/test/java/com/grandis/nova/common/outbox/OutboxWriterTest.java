@@ -54,6 +54,9 @@ class OutboxWriterTest {
     CommittedEvents committedEvents;
 
     @Autowired
+    OutboxStore store;
+
+    @Autowired
     Clock clock;
 
     UUID itemId;
@@ -99,11 +102,19 @@ class OutboxWriterTest {
         assertThat(jsonMapper.readTree(payload).propertyNames()).containsExactlyInAnyOrder("result", "sequence");
     }
 
+    /** 신호가 적은 행을 그대로 싣는다 — 커밋 직후 발행이 다시 읽지 않아도 릴레이가 읽은 행과 같은 봉투가 나간다. */
     @Test
-    void 커밋하면_기록_신호가_한_번_간다() {
+    void 커밋하면_적은_행을_실은_신호가_한_번_간다() {
         Long id = transactionTemplate.execute(status -> writer.append(settled()));
 
-        assertThat(committedEvents.received).containsExactly(new OutboxAppended(id));
+        OutboxRow stored = store.find(id).orElseThrow();
+        assertThat(committedEvents.received).singleElement()
+                .extracting(OutboxAppended::row)
+                // JSON 칸은 공백을 다시 써서 저장한다 — 내용은 트리로 비교한다
+                .usingRecursiveComparison().ignoringFields("publishedAt", "payload")
+                .isEqualTo(stored);
+        assertThat(jsonMapper.readTree(committedEvents.received.getFirst().row().payload()))
+                .isEqualTo(jsonMapper.readTree(stored.payload()));
     }
 
     @Test
@@ -145,7 +156,8 @@ class OutboxWriterTest {
 
         assertThat(businessRows(name)).isOne();
         assertThat(rowsOf(itemId)).isOne();
-        assertThat(committedEvents.received).containsExactly(new OutboxAppended(id));
+        assertThat(committedEvents.received).singleElement()
+                .extracting(appended -> appended.row().id()).isEqualTo(id);
     }
 
     @Test

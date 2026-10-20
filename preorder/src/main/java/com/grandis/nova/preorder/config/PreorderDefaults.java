@@ -73,10 +73,13 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
 
     /**
      * 아웃박스 지표 이름(preorder.outbox.publish · unpublished · unpublished.max.attempts). 대시보드 · 경보가 이 이름을 본다 —
-     * 운영 설정에서 빠져도 공통 기본값(outbox.*)으로 조용히 바뀌지 않게 코드에 둔다.
+     * 운영 설정에서 빠져도 공통 기본값(outbox.*)으로 조용히 바뀌지 않게 코드에 둔다. 발행 스레드 수도 여기 둔다.
      */
     private void outboxMetrics(Map<String, Object> defaults) {
         defaults.put("nova.outbox.metrics-prefix", "preorder.outbox");
+        // 커밋 직후 발행 스레드 수 = 발행이 쥐는 커넥션 상한. 풀(10)을 접수(5) · SQS 소비기 · 조회와 나눈다 — 오픈 순간 접수 커밋마다
+        // 발행이 커넥션을 빌려 조회 몫을 말리지 않게. 묶음 전송(10건)이라 둘로도 접수 처리량을 따라간다
+        defaults.put("nova.outbox.concurrency", 2);
     }
 
     /**

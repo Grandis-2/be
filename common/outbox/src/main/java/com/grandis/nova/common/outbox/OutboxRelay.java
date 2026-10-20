@@ -6,14 +6,17 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 커밋 직후 발행이 실패했거나 그 사이 죽어 남은 행을 다시 보낸다. 표가 서비스 것이라 종류로 거르지 않는다.
  * 짧은 트랜잭션에서 오래된 행에 리스를 걸어 가져가고, 트랜잭션 밖에서 보낸다(잠금 · 커넥션을 쥐지 않는다).
  * 늘 실패하는 행은 실패가 적은 행 뒤로 가 다른 행을 막지 않는다. 그런 행은 publish_attempts 로 드러난다.
- * 멈추라고 하면 보내던 행만 마치고, 남은 행의 리스를 풀어 다른 인스턴스가 곧바로 가져가게 한다.
+ * 가져간 행은 목적지별 묶음(전송 한 번 크기)으로 보낸다 — 묶음마다 리스 연장 · 전송 · 발행 표시가 한 번씩이다.
+ * 멈추라고 하면 보내던 묶음만 마치고, 남은 행의 리스를 풀어 다른 인스턴스가 곧바로 가져가게 한다.
  */
 class OutboxRelay {
 
@@ -59,28 +62,27 @@ class OutboxRelay {
         Instant now = clock.instant();
         Instant lease = now.plus(properties.relayLease());
         List<OutboxRow> rows = transactionTemplate.execute(status -> claim(now, lease));
+        List<List<OutboxRow>> batches = publisher.batches(rows);
         int published = 0;
         int skipped = 0;
-        for (int i = 0; i < rows.size(); i++) {
+        for (int i = 0; i < batches.size(); i++) {
             if (stopping || generation.get() != started) {
-                log.info("아웃박스 릴레이를 멈춘다 — 보내지 않은 {}건의 리스를 푼다", releaseFrom(rows, i, lease));
+                log.info("아웃박스 릴레이를 멈춘다 — 보내지 않은 {}건의 리스를 푼다", releaseFrom(batches, i, lease));
                 break;
             }
-            OutboxRow row = rows.get(i);
+            List<OutboxRow> batch = batches.get(i);
             try {
                 // 보내기 직전에 내 리스인지 확인하며 연장한다. 연장한 리스 동안은 다른 인스턴스가 이 행을 가져가지 못한다
-                Instant renewed = clock.instant().plus(properties.relayLease());
-                if (store.renewLease(row.id(), lease, renewed) != 1) {
-                    skipped++;
-                    continue;
-                }
-                if (publisher.publish(row, renewed)) {
-                    published++;
+                Instant renewedLease = clock.instant().plus(properties.relayLease());
+                List<OutboxRow> renewed = renew(batch, lease, renewedLease);
+                skipped += batch.size() - renewed.size();
+                if (!renewed.isEmpty()) {
+                    published += publisher.publishAll(renewed, renewedLease);
                 }
             } catch (RuntimeException e) {
                 // DB 오류로 이 묶음을 끝낸다. 남은 행이 리스가 끝날 때까지 묶이지 않게 바로 푼다
                 try {
-                    releaseFrom(rows, i, lease);
+                    releaseFrom(batches, i, lease);
                 } catch (RuntimeException suppressed) {
                     e.addSuppressed(suppressed);
                 }
@@ -93,13 +95,25 @@ class OutboxRelay {
         return published;
     }
 
+    /** 묶음의 리스를 연장하고 연장된(아직 내 것인) 행만 돌려준다. 모두 연장됐으면 다시 읽지 않는다. */
+    private List<OutboxRow> renew(List<OutboxRow> batch, Instant lease, Instant renewedLease) {
+        List<Long> ids = batch.stream().map(OutboxRow::id).toList();
+        if (store.renewLeases(ids, lease, renewedLease) == ids.size()) {
+            return batch;
+        }
+        Set<Long> mine = new HashSet<>(store.findLeased(ids, renewedLease));
+        return batch.stream().filter(row -> mine.contains(row.id())).toList();
+    }
+
     /**
-     * i 번째부터 남은 행의 리스를 푼다. 가져갈 때 건 리스로 푸므로, 이미 연장한 행(i 번째일 수 있다)은 리스 값이 달라 그대로 남는다.
+     * i 번째 묶음부터 남은 행의 리스를 푼다. 가져갈 때 건 리스로 푸므로, 이미 연장한 행(i 번째 묶음일 수 있다)은 리스 값이 달라
+     * 그대로 남는다.
      *
      * @return 푼 행 수
      */
-    private int releaseFrom(List<OutboxRow> rows, int i, Instant lease) {
-        return store.releaseLeases(rows.subList(i, rows.size()).stream().map(OutboxRow::id).toList(), lease);
+    private int releaseFrom(List<List<OutboxRow>> batches, int i, Instant lease) {
+        List<Long> ids = batches.subList(i, batches.size()).stream().flatMap(List::stream).map(OutboxRow::id).toList();
+        return ids.isEmpty() ? 0 : store.releaseLeases(ids, lease);
     }
 
     private List<OutboxRow> claim(Instant now, Instant lease) {

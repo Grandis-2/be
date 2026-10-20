@@ -64,7 +64,7 @@ public class OutboxAutoConfiguration {
 
     @Bean
     OutboxAfterCommitPublisher outboxAfterCommitPublisher(OutboxPublisher publisher, OutboxProperties properties) {
-        return new OutboxAfterCommitPublisher(publisher, OutboxAfterCommitPublisher.executor(properties.concurrency()));
+        return new OutboxAfterCommitPublisher(publisher, properties.concurrency(), properties.buffer());
     }
 
     @Bean

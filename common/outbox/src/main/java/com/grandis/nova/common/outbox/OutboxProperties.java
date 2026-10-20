@@ -8,7 +8,8 @@ import java.time.Duration;
 /**
  * nova.outbox.transport(전송 구현 선택)는 여기 없다 — 구현 빈의 조건으로만 읽는다. 없으면 전송 구현이 없어 기동이 실패한다.
  *
- * @param concurrency   커밋 직후 발행 동시 실행 상한
+ * @param concurrency   커밋 직후 발행 스레드 수 — 발행이 동시에 쥐는 DB 커넥션 상한이기도 하다
+ * @param buffer        커밋 직후 발행을 기다리는 행의 상한. 넘치면 그 행은 릴레이가 보낸다
  * @param relayAfter    만든 지 이만큼 지난 미발행 행만 릴레이가 가져간다
  * @param relayBatch    릴레이 한 번에 가져가 보내는 최대 행 수
  * @param relayLease    릴레이가 가져간 행을 다른 인스턴스가 건드리지 않는 시간. 행마다 보내기 직전에 연장하므로
@@ -22,6 +23,7 @@ import java.time.Duration;
 @ConfigurationProperties("nova.outbox")
 record OutboxProperties(
         @DefaultValue("32") int concurrency,
+        @DefaultValue("1000") int buffer,
         @DefaultValue("1m") Duration relayAfter,
         @DefaultValue("100") int relayBatch,
         @DefaultValue("1m") Duration relayLease,
@@ -33,8 +35,8 @@ record OutboxProperties(
 ) {
 
     OutboxProperties {
-        if (concurrency < 1 || relayBatch < 1) {
-            throw new IllegalArgumentException("nova.outbox.concurrency · relay-batch 는 1 이상이어야 한다");
+        if (concurrency < 1 || buffer < 1 || relayBatch < 1) {
+            throw new IllegalArgumentException("nova.outbox.concurrency · buffer · relay-batch 는 1 이상이어야 한다");
         }
         // 주기는 밀리초로 예약한다 — 1ms 미만이면 0 이 되어 예약이 거절되고 기동이 실패한다
         if (!relayAfter.isPositive() || !relayLease.isPositive() || relayInterval.toMillis() < 1) {
