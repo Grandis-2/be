@@ -1,6 +1,8 @@
 package com.grandis.nova.catalog.review;
 
+import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.common.UuidBinary;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -10,6 +12,7 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -48,13 +51,8 @@ public class ReviewQueryRepository {
     }
 
     /** 한 상품의 리뷰. 상품을 보여 줄지는 호출자가 먼저 판정한다(상품 상세와 같은 규칙). */
-    public long countByProduct(UUID productId) {
-        return count(" WHERE r.product_id = :productId", new MapSqlParameterSource("productId", UuidBinary.toBytes(productId)));
-    }
-
-    public List<ReviewView> findByProduct(UUID productId, int page, int size) {
-        return find(" WHERE r.product_id = :productId", new MapSqlParameterSource("productId", UuidBinary.toBytes(productId)),
-                page, size, false);
+    public OffsetPage<ReviewView> pageByProduct(UUID productId, int page, int size) {
+        return page(" WHERE r.product_id = :productId", new MapSqlParameterSource("productId", UuidBinary.toBytes(productId)), page, size);
     }
 
     /** 모아보기 — 공개된 상품의 리뷰만. categoryId 가 null 이면 전체. */
@@ -95,6 +93,27 @@ public class ReviewQueryRepository {
     private long count(String where, MapSqlParameterSource params) {
         Long count = jdbc.queryForObject(COUNT + where, params, Long.class);
         return count == null ? 0 : count;
+    }
+
+    /**
+     * 한 쪽과 전체 건수를 한 문장으로 — 건수 한 행에 그 쪽을 LATERAL 로 붙인다(상품 목록 findPage 와 같은 모양). 한 문장이라 READ COMMITTED 에서도
+     * 건수와 쪽이 같은 시점이고 트랜잭션을 열지 않는다. 쪽이 범위 밖이어도 건수 행이 남아 total 이 그대로다. 쪽 안은 인덱스 순서로 읽고, 파생 표의
+     * 순서는 바깥 문장이 보장하지 않아 같은 순서로 다시 세운다.
+     */
+    private OffsetPage<ReviewView> page(String where, MapSqlParameterSource params, int page, int size) {
+        params.addValue("limit", size).addValue("offset", (long) page * size);
+        String sql = "SELECT c.total, x.* FROM (" + COUNT.replace("COUNT(*)", "COUNT(*) AS total") + where + ") c"
+                + " LEFT JOIN LATERAL (" + SELECT + where + " ORDER BY r.created_at DESC, r.id DESC LIMIT :limit OFFSET :offset) x ON TRUE"
+                + " ORDER BY x.created_at DESC, x.id DESC";
+        long[] total = {0};
+        List<ReviewView> items = new ArrayList<>();
+        jdbc.query(sql, params, (RowCallbackHandler) rs -> {
+            total[0] = rs.getLong("total");
+            if (rs.getBytes("id") != null) {   // 빈 쪽이면 건수 행 하나만 온다(x 의 칸은 NULL)
+                items.add(toView(rs, false));
+            }
+        });
+        return OffsetPage.of(items, page, size, total[0]);
     }
 
     private List<ReviewView> find(String where, MapSqlParameterSource params, int page, int size, boolean withOrderItem) {

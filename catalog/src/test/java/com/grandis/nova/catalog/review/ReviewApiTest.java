@@ -298,6 +298,16 @@ class ReviewApiTest {
         assertThat(page.get("items").get(0).get("body").asString()).isEqualTo("셋째");
         assertThat(page.get("items").get(1).get("body").asString()).isEqualTo("둘째");
         assertThat(page.get("items").get(0).get("orderItemId").isNull()).isTrue();
+        JsonNode second = data(mockMvc.perform(get("/api/v1/products/{id}/reviews", productId).param("size", "2").param("page", "1"))
+                .andExpect(status().isOk()));
+        assertThat(second.get("items")).extracting(item -> item.get("body").asString()).containsExactly("첫째");
+        assertThat(second.get("total").asLong()).isEqualTo(3);
+        // 범위 밖 쪽 — 빈 목록이어도 total 은 그대로다(건수와 쪽을 한 문장으로 읽는다)
+        JsonNode beyond = data(mockMvc.perform(get("/api/v1/products/{id}/reviews", productId).param("size", "2").param("page", "5"))
+                .andExpect(status().isOk()));
+        assertThat(beyond.get("items")).isEmpty();
+        assertThat(beyond.get("total").asLong()).isEqualTo(3);
+        assertThat(beyond.get("hasNext").asBoolean()).isFalse();
 
         jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", UuidBinary.toBytes(productId));
         mockMvc.perform(get("/api/v1/products/{id}/reviews", productId)).andExpect(status().isNotFound());
@@ -311,6 +321,39 @@ class ReviewApiTest {
         mockMvc.perform(get("/api/v1/products/{id}/reviews", preorder)).andExpect(status().isNotFound());
         fixtures.campaign(preorder, java.time.Instant.now().plus(Duration.ofDays(1)), java.time.Instant.now().plus(Duration.ofDays(2)));
         mockMvc.perform(get("/api/v1/products/{id}/reviews", preorder)).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("상품 리뷰 — 상품 확인 · 준비 한 문장, 후기 목록 · 건수 한 문장. 트랜잭션을 열지 않는다(격리 · 읽기 전용 전환 문장이 없다)")
+    void productReviewsReadWithoutTransaction() throws Exception {
+        write(customerId, deliveredItem(productId), 5, "한 문장").andExpect(status().isCreated());
+        var mysql = com.grandis.nova.catalog.support.MySqlContainerConfig.get();
+        java.util.List<String> statements = new java.util.ArrayList<>();
+        try (java.sql.Connection root = java.sql.DriverManager.getConnection(mysql.getJdbcUrl(), "root", mysql.getPassword());
+             java.sql.Statement statement = root.createStatement()) {
+            statement.execute("SET GLOBAL log_output = 'TABLE'");
+            statement.execute("SET GLOBAL general_log = 'ON'");
+            statement.execute("TRUNCATE TABLE mysql.general_log");
+            try {
+                mockMvc.perform(get("/api/v1/products/{id}/reviews", productId)).andExpect(status().isOk());
+            } finally {
+                statement.execute("SET GLOBAL general_log = 'OFF'");
+            }
+            // 이 상품을 읽은 연결의 문장만 — 같은 서버를 쓰는 다른 작업의 문장을 섞지 않는다. 트랜잭션을 열었다면 준비 문장도 이 연결로 간다
+            try (java.sql.ResultSet rs = statement.executeQuery("SELECT argument FROM mysql.general_log WHERE command_type = 'Query' AND thread_id IN"
+                    + " (SELECT thread_id FROM mysql.general_log WHERE argument LIKE '%FROM products p%' OR argument LIKE '%product_reviews%')"
+                    + " ORDER BY event_time")) {
+                while (rs.next()) {
+                    statements.add(new String(rs.getBytes(1), java.nio.charset.StandardCharsets.UTF_8));
+                }
+            }
+        }
+
+        // 양성 대조군 — 로그가 이 조회를 잡았다
+        assertThat(statements).as("상품 확인 · 준비").filteredOn(sql -> sql.contains("FROM products p WHERE p.id")).hasSize(1);
+        assertThat(statements).as("후기 목록 · 건수").filteredOn(sql -> sql.contains("product_reviews")).hasSize(1);
+        assertThat(statements).as("트랜잭션 준비 · 정리 문장")
+                .noneMatch(sql -> sql.contains("TRANSACTION ISOLATION") || sql.contains("READ ONLY") || sql.startsWith("SET autocommit"));
     }
 
     @Test

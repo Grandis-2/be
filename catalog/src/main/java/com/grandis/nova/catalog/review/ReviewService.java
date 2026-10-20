@@ -5,6 +5,7 @@ import com.grandis.nova.catalog.integration.Dependencies;
 import com.grandis.nova.catalog.integration.InternalCalls;
 import com.grandis.nova.catalog.integration.MemberClient;
 import com.grandis.nova.catalog.integration.OrderClient;
+import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
 import com.grandis.nova.catalog.listing.ProductReadiness;
 import com.grandis.nova.catalog.product.Product;
 import com.grandis.nova.catalog.product.ProductRepository;
@@ -16,11 +17,8 @@ import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.OffsetPage;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.UUID;
 
@@ -49,23 +47,20 @@ public class ReviewService {
     private final ProductReviewRepository reviews;
     private final ReviewQueryRepository queries;
     private final ProductRepository products;
+    private final ProductListingQueryRepository listings;
     private final ProductReadiness readiness;
     private final OrderClient orders;
     private final MemberClient members;
-    /** 후기 목록 · 건수를 한 스냅샷으로 — 사전예약의 준비는 그 밖에서 preorder 에 묻는다(연결을 쥔 채 HTTP 를 기다리지 않게). */
-    private final TransactionTemplate snapshot;
 
     public ReviewService(ProductReviewRepository reviews, ReviewQueryRepository queries, ProductRepository products,
-                         ProductReadiness readiness, OrderClient orders, MemberClient members, PlatformTransactionManager transactionManager) {
+                         ProductListingQueryRepository listings, ProductReadiness readiness, OrderClient orders, MemberClient members) {
         this.reviews = reviews;
         this.queries = queries;
         this.products = products;
+        this.listings = listings;
         this.readiness = readiness;
         this.orders = orders;
         this.members = members;
-        this.snapshot = new TransactionTemplate(transactionManager);
-        this.snapshot.setReadOnly(true);
-        this.snapshot.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
     }
 
     /** @throws BusinessException NOT_FOUND(내 주문상품이 아님) · REVIEW_NOT_ALLOWED · REVIEW_ALREADY_WRITTEN · VALIDATION_FAILED */
@@ -125,14 +120,16 @@ public class ReviewService {
 
     /**
      * 상품 상세의 후기 탭. 상품을 보여 주지 않는 경우(없음 · 비공개 · 준비 전)는 상품 상세처럼 404. 사전예약의 준비를 preorder 에 묻지 못하면 503 —
-     * 사전예약 상세와 같다.
+     * 사전예약 상세와 같다. 공개 여부와 일반 상품의 준비는 한 문장(노출 판정 재료)으로 읽고, 사전예약의 준비는 preorder 에 묻는다. 후기 목록 · 건수는
+     * 한 문장이다({@link ReviewQueryRepository#pageByProduct}) — 어느 쪽도 트랜잭션을 열지 않는다(연결을 쥔 채 preorder 를 기다리지도 않는다).
      */
     public OffsetPage<ReviewView> productReviews(UUID productId, int page, int size) {
-        Product product = products.findById(productId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
-        if (!(product.isVisible() && readiness.isReady(product))) {
+        ProductListingQueryRepository.Exposure product = listings.findExposure(productId)
+                .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
+        if (!(product.visible() && readiness.isReady(productId, product))) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
-        return snapshot.execute(status -> new OffsetPage<>(queries.findByProduct(productId, page, size), page, size, queries.countByProduct(productId)));
+        return queries.pageByProduct(productId, page, size);
     }
 
     /** 모아보기. 비공개 상품의 리뷰는 빠진다. */
