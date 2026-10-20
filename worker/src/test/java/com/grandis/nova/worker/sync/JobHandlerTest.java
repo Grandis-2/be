@@ -285,23 +285,58 @@ class JobHandlerTest {
         assertThat(count("unreadable") - before).isEqualTo(2);
     }
 
-    /** mock 이 아닌 곳의 응답(주소 · 경로 설정 오류)이다. 우리 쪽을 고치면 되므로 차례를 쓰지 않는다. */
+    /** mock 이 아닌 곳의 응답(주소 · 경로 설정 오류)이다. 우리 쪽을 고치면 되므로 차례를 쓰지 않고, 처음 본 시각을 남긴다. */
     @Test
-    void 설정_오류면_차례를_쓰지_않고_속성_그대로_다시_보낸다() {
+    void 설정_오류면_차례를_쓰지_않고_처음_본_시각을_실어_다시_보낸다() {
         MOCK.respond(html(404));
+        Instant before = Instant.now();
 
         handler.handle(job.message(Map.of("attempt", "2", "generation", "2", "lastOutcome", "TRANSIENT_FAILURE")));
 
-        assertThat(job.resent(queues)).isEqualTo(Map.of("attempt", "2", "generation", "2",
-                "lastOutcome", "TRANSIENT_FAILURE", "eventType", "REGISTER_JOB_READY"));
+        Map<String, String> resent = job.resent(queues);
+        assertThat(resent).containsEntry("attempt", "2").containsEntry("generation", "2")
+                .containsEntry("lastOutcome", "TRANSIENT_FAILURE").containsEntry("eventType", "REGISTER_JOB_READY");
+        Instant since = Instant.parse(resent.get("misconfiguredSince"));
+        assertThat(since).isAfterOrEqualTo(before.minusSeconds(1));
         assertThat(job.event(queues, Duration.ofSeconds(2))).as("시도로 세지 않는다").isEmpty();
+
+        handler.handle(job.message(resent));
+
+        assertThat(job.resent(queues)).as("처음 본 시각을 그대로 잇는다").containsEntry("misconfiguredSince", since.toString());
+    }
+
+    /** 끝없이 돌면 작업이 PENDING 에 남은 채 아무 경보에도 잡히지 않는다. 정한 시간(기본 30분)이 지나면 포기를 알린다. */
+    @Test
+    void 설정_오류가_정한_시간_넘게_이어지면_포기를_알린다() {
+        MOCK.respond(html(404));
+        String since = Instant.now().minus(Duration.ofMinutes(31)).toString();
+
+        MessageOutcome outcome = handler.handle(job.message(Map.of("run", "2", "attempt", "3",
+                "misconfiguredSince", since)));
+
+        assertThat(outcome).isEqualTo(MessageOutcome.delete());
+        JsonNode event = job.event(queues);
+        assertThat(event.get("eventType").asString()).isEqualTo("EXTERNAL_JOB_FAILED");
+        assertThat(event.get("payload").get("reason").asString()).isEqualTo("MISCONFIGURED");
+        assertThat(attempt(event.get("payload"))).isEqualTo("run=2 1-3 SYSTEM REJECTED 404 MISCONFIGURED");
+        assertThat(job.resent(queues, Duration.ofSeconds(2))).isEmpty();
+    }
+
+    /** 차례를 쓰면 설정 오류는 풀린 것이다. 시각을 이으면 다음 설정 오류에서 바로 포기한다. */
+    @Test
+    void 차례를_쓰고_다시_보낼_때는_설정_오류_시각을_뺀다() {
+        MOCK.respond(html(503));
+
+        handler.handle(job.message(Map.of("misconfiguredSince", Instant.now().toString())));
+
+        assertThat(job.resent(queues)).doesNotContainKey("misconfiguredSince").containsEntry("attempt", "2");
     }
 
     /** 결과를 알리지 못했는데 다음으로 넘어가면 preorder 는 그 차례를 영영 모른다. 던져서 원본을 남긴다. */
     @Test
     void 결과_이벤트를_보내지_못하면_다시_보내지도_지우지도_않는다() {
         MOCK.respond(html(503));
-        willThrow(new IllegalStateException("sqs down")).given(publisher).publish(any(), any(), any());
+        willThrow(new IllegalStateException("sqs down")).given(publisher).publish(any(), any());
 
         assertThatThrownBy(() -> handler.handle(job.message(Map.of()))).isInstanceOf(IllegalStateException.class);
 
@@ -325,6 +360,8 @@ class JobHandlerTest {
 
         assertThat(attempt(first.get("payload"))).isEqualTo("run=2 1-1 SYSTEM TRANSIENT_FAILURE 503 null");
         assertThat(attempt(second.get("payload"))).isEqualTo(attempt(first.get("payload")));
+        assertThat(second.get("eventId").asString()).as("같은 차례의 같은 결과라 preorder 가 이미 받은 것으로 가린다")
+                .isEqualTo(first.get("eventId").asString());
         assertThat(second.get("eventType").asString()).isEqualTo("EXTERNAL_JOB_ATTEMPTED");
         assertThat(job.resent(queues)).containsEntry("run", "2").containsEntry("generation", "1")
                 .containsEntry("attempt", "2");

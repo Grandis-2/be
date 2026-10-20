@@ -1,5 +1,6 @@
 package com.grandis.nova.worker.mock;
 
+import com.grandis.nova.worker.job.JobType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.boot.test.system.CapturedOutput;
@@ -14,7 +15,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RejectGuardTest {
 
     final MutableClock clock = new MutableClock();
-    final RejectGuard guard = new RejectGuard(Settings.rejectGuard(), clock);
+    final RejectGuard guard = new RejectGuard(JobType.REGISTER, Settings.rejectGuard(), clock);
 
     @Test
     void 거절이_기준만큼_이어지면_받기를_멈추고_경보를_남긴다(CapturedOutput output) {
@@ -27,7 +28,7 @@ class RejectGuardTest {
 
         assertThat(guard.blocked()).isTrue();
         assertThat(guard.remaining()).isEqualTo(Duration.ofMinutes(3));
-        assertThat(output.getOut()).contains("ERROR").contains("받기를 멈춘다 reason=INVALID_REQUEST");
+        assertThat(output.getOut()).contains("ERROR").contains("받기를 멈춘다 jobType=REGISTER reason=INVALID_REQUEST");
     }
 
     @Test

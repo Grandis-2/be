@@ -33,7 +33,7 @@ class MockGatewayTest {
     CloseableHttpClient http;
     ConcurrencyLimiter limiter;
     MockCircuit circuit;
-    RejectGuard rejectGuard;
+    RejectGuards rejectGuards;
     MockGateway gateway;
     ReceiveGate gate;
 
@@ -122,7 +122,7 @@ class MockGatewayTest {
             assertThat(gateway.register("K-1", REQUEST).verdict()).isEqualTo(Verdict.REJECTED);
         }
 
-        assertThat(rejectGuard.blocked()).isTrue();
+        assertThat(rejectGuards.of(JobType.REGISTER).blocked()).isTrue();
         assertThat(gate.receivable(JobType.REGISTER, 0)).isZero();
         assertThat(circuit.isOpen()).isFalse();
     }
@@ -135,11 +135,11 @@ class MockGatewayTest {
             gateway.register("K-1", REQUEST);
         }
 
-        assertThat(rejectGuard.blocked()).isFalse();
+        assertThat(rejectGuards.of(JobType.REGISTER).blocked()).isFalse();
     }
 
     @Test
-    void mock_이_아닌_곳의_응답은_설정_오류이고_이어지면_받기를_멈춘다() {
+    void mock_이_아닌_곳의_응답은_설정_오류이고_이어지면_그_종류의_받기만_멈춘다() {
         mock.respond(FakeMock.html(404));
 
         for (int i = 0; i < 5; i++) {
@@ -148,7 +148,10 @@ class MockGatewayTest {
             assertThat(result.attemptResult()).isNull();
         }
 
-        assertThat(rejectGuard.blocked()).isTrue();
+        assertThat(rejectGuards.of(JobType.CANCEL).blocked()).isTrue();
+        assertThat(gate.receivable(JobType.CANCEL, 0)).isZero();
+        assertThat(gate.receivable(JobType.REGISTER, 0)).as("다른 경로는 계속 받는다").isPositive();
+        assertThat(gate.receivable(JobType.DRAW, 0)).isPositive();
         assertThat(circuit.isOpen()).isFalse();
     }
 
@@ -179,9 +182,9 @@ class MockGatewayTest {
         limiter = new ConcurrencyLimiter(Settings.concurrency(), Settings.SLOW_CALL, clock);
         circuit = new MockCircuit(Settings.circuit(), clock, config -> CircuitBreaker.of(MockCircuit.NAME, config),
                 limiter::shrinkToMin);
-        rejectGuard = new RejectGuard(Settings.rejectGuard(), clock);
-        gateway = new MockGateway(client, circuit, RateLimiter.of(MockCircuit.NAME, rateLimit), limiter, rejectGuard,
+        rejectGuards = new RejectGuards(Settings.rejectGuard(), clock);
+        gateway = new MockGateway(client, circuit, RateLimiter.of(MockCircuit.NAME, rateLimit), limiter, rejectGuards,
                 meters, clock);
-        gate = new ReceiveGate(circuit, limiter, rejectGuard);
+        gate = new ReceiveGate(circuit, limiter, rejectGuards);
     }
 }

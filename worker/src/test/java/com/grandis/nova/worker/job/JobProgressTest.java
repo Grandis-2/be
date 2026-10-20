@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.services.sqs.model.Message;
 import software.amazon.awssdk.services.sqs.model.MessageAttributeValue;
 
+import java.util.AbstractMap.SimpleEntry;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -37,7 +38,8 @@ class JobProgressTest {
     void 지연_재전송에_넘길_속성으로_바꾸고_직전_결과가_없으면_그_속성을_뺀다() {
         assertThat(new JobProgress(3, 2, 1, AttemptResult.TRANSIENT_FAILURE, Actor.SYSTEM).toAttributes())
                 .containsOnly(Map.entry("run", "3"), Map.entry("attempt", "2"), Map.entry("generation", "1"),
-                        Map.entry("lastOutcome", "TRANSIENT_FAILURE"), Map.entry("actor", "SYSTEM"));
+                        Map.entry("lastOutcome", "TRANSIENT_FAILURE"), Map.entry("actor", "SYSTEM"),
+                        new SimpleEntry<>("misconfiguredSince", null));
 
         Map<String, String> first = new JobProgress(1, 1, 2, null, Actor.ADMIN).toAttributes();
         assertThat(first).containsEntry("lastOutcome", null).containsEntry("actor", "ADMIN");

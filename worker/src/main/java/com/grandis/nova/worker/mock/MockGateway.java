@@ -1,5 +1,6 @@
 package com.grandis.nova.worker.mock;
 
+import com.grandis.nova.worker.job.JobType;
 import com.grandis.nova.worker.mock.MockResult.Skipped;
 import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -28,51 +29,53 @@ public class MockGateway {
     private final MockCircuit circuit;
     private final RateLimiter rateLimiter;
     private final ConcurrencyLimiter limiter;
-    private final RejectGuard rejectGuard;
+    private final RejectGuards rejectGuards;
     private final MeterRegistry meters;
     private final Clock clock;
 
     MockGateway(MockClient client, MockCircuit circuit, RateLimiter rateLimiter, ConcurrencyLimiter limiter,
-                RejectGuard rejectGuard, MeterRegistry meters, Clock clock) {
+                RejectGuards rejectGuards, MeterRegistry meters, Clock clock) {
         this.client = client;
         this.circuit = circuit;
         this.rateLimiter = rateLimiter;
         this.limiter = limiter;
-        this.rejectGuard = rejectGuard;
+        this.rejectGuards = rejectGuards;
         this.meters = meters;
         this.clock = clock;
     }
 
     /** @param key 멱등 키. 다시 보낼 때도 같은 키 · 같은 본문을 쓴다 */
     public MockResult register(String key, JsonNode request) {
-        return call("register", () -> client.register(key, request), MockJudge::register);
+        return call(JobType.REGISTER, "register", () -> client.register(key, request), MockJudge::register);
     }
 
     /** 결과를 모르는 등록을 같은 키로 확인한다. */
     public MockResult lookup(String key) {
-        return call("lookup", () -> client.lookup(key), MockJudge::lookup);
+        return call(JobType.REGISTER, "lookup", () -> client.lookup(key), MockJudge::lookup);
     }
 
     public MockResult cancel(JsonNode request) {
-        return call("cancel", () -> client.cancel(request), MockJudge::cancel);
+        return call(JobType.CANCEL, "cancel", () -> client.cancel(request), MockJudge::cancel);
     }
 
     /** 드로우 응모. 다시 보낼 때도 같은 키(응모 id) · 같은 본문을 쓴다. */
     public MockResult enterDraw(String entryId, JsonNode request) {
-        return call("draw-entry", () -> client.enterDraw(entryId, request), MockJudge::drawEntry);
+        return call(JobType.DRAW, "draw-entry", () -> client.enterDraw(entryId, request), MockJudge::drawEntry);
     }
 
     /** 드로우 회차 — 받은 응모 수 · 추첨 결과. 응모가 아직 없으면 ABSENT. */
     public MockResult drawStatus(String drawId) {
-        return call("draw-status", () -> client.drawStatus(drawId), MockJudge::drawStatus);
+        return call(JobType.DRAW, "draw-status", () -> client.drawStatus(drawId), MockJudge::drawStatus);
     }
 
     /** 추첨. 회차 id 가 멱등 키라 같은 요청을 다시 보내면 처음 결과가 온다. */
     public MockResult draw(String drawId, JsonNode request) {
-        return call("draw", () -> client.draw(drawId, request), MockJudge::draw);
+        return call(JobType.DRAW, "draw", () -> client.draw(drawId, request), MockJudge::draw);
     }
 
-    private MockResult call(String operation, Supplier<MockReply> send, Function<MockReply, Judgement> judge) {
+    /** @param type 거절이 이어지는지는 작업 종류마다 따로 센다 */
+    private MockResult call(JobType type, String operation, Supplier<MockReply> send,
+                            Function<MockReply, Judgement> judge) {
         if (!circuit.tryAcquire()) {
             return skipped(operation, Skipped.CIRCUIT_OPEN);
         }
@@ -101,7 +104,8 @@ public class MockGateway {
         }
         if (verdict == Verdict.MISCONFIGURED
                 || verdict == Verdict.REJECTED && MockJudge.INVALID_REQUEST.equals(judgement.errorCode())) {
-            rejectGuard.record(verdict == Verdict.MISCONFIGURED ? "MISCONFIGURED" : MockJudge.INVALID_REQUEST);
+            rejectGuards.of(type)
+                    .record(verdict == Verdict.MISCONFIGURED ? "MISCONFIGURED" : MockJudge.INVALID_REQUEST);
         }
         if (verdict == Verdict.MISCONFIGURED || verdict == Verdict.UNKNOWN && reply.responded() && reply.status() < 300) {
             log.warn("외부 mock 의 응답이 계약과 다르다 — 주소 · 경로 설정이나 계약 변경 확인 필요 operation={} status={} verdict={}",

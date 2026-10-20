@@ -17,10 +17,14 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import software.amazon.awssdk.services.sqs.model.Message;
+import software.amazon.awssdk.services.sqs.model.MessageAttributeValue;
 import tools.jackson.databind.JsonNode;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static com.grandis.nova.worker.mock.FakeMock.html;
 import static com.grandis.nova.worker.mock.FakeMock.json;
@@ -249,9 +253,27 @@ class DrawHandlerTest {
         assertThat(handler.handle(draw.requested(3, 1))).isEqualTo(MessageOutcome.delete());
 
         Message resent = draw.resent(queues, Duration.ofSeconds(30)).orElseThrow(() -> new AssertionError("돌려보내지 않았다"));
-        assertThat(Draws.attributes(resent)).containsEntry("eventType", "DRAW_REQUESTED");
+        assertThat(Draws.attributes(resent)).containsEntry("eventType", "DRAW_REQUESTED")
+                .as("처음 본 시각을 싣는다").containsKey("misconfiguredSince");
         assertThat(draw.calls(MOCK)).containsOnly("GET /external/draws/{drawId}");
         assertThat(draw.deadLetter(queues, NONE)).isEmpty();
+    }
+
+    /** 끝없이 돌려보내면 사람이 볼 곳이 없다. 처음 본 때부터 정한 시간(기본 30분)이 지나면 DLQ 에 넣는다. */
+    @Test
+    void 없는_경로_응답이_정한_시간_넘게_이어지면_DLQ_에_넣는다() {
+        MOCK.respond(routes(error(404, "NO_SUCH_ENDPOINT"), drawn(winners(1))));
+        Message message = draw.requested(3, 1);
+        Map<String, MessageAttributeValue> attributes = new HashMap<>(message.messageAttributes());
+        attributes.put("misconfiguredSince", MessageAttributeValue.builder().dataType("String")
+                .stringValue(Instant.now().minus(Duration.ofMinutes(31)).toString()).build());
+
+        assertThat(handler.handle(message.toBuilder().messageAttributes(attributes).build()))
+                .isEqualTo(MessageOutcome.delete());
+
+        Message dead = draw.deadLetter(queues, Draws.TIMEOUT).orElseThrow(() -> new AssertionError("DLQ 로 가지 않았다"));
+        assertThat(Draws.attributes(dead)).containsEntry("deadLetterReason", "MISCONFIGURED");
+        assertThat(draw.resent(queues, NONE)).isEmpty();
     }
 
     @Test

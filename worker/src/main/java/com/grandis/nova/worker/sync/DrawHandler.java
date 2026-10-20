@@ -9,6 +9,7 @@ import com.grandis.nova.worker.event.DrawResultReady;
 import com.grandis.nova.worker.job.DrawEntryPaid;
 import com.grandis.nova.worker.job.DrawEventType;
 import com.grandis.nova.worker.job.DrawRequested;
+import com.grandis.nova.worker.job.JobProgress;
 import com.grandis.nova.worker.job.JobType;
 import com.grandis.nova.worker.mock.ConcurrencyLimiter;
 import com.grandis.nova.worker.mock.ConcurrencyLimiter.Permit;
@@ -28,7 +29,9 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -46,7 +49,8 @@ import java.util.UUID;
  * </ul>
  * 끝내는 길은 넷이다. 일시 실패 · 기다림은 지우지 않고 늦춰 다시 받는다(큐의 최대 수신 횟수를 넘으면 SQS 가 DLQ 로 옮긴다).
  * 다시 보내도 같은 거절은 DLQ 에 바로 넣고 지운다. 지금 부를 수 없으면(차단기 · 거절 이어짐 · 자리 없음 · 내려가는 중) 받은 횟수를
- * 쓰지 않게 새 메시지로 돌려보낸다. 모르는 종류는 지우지 않는다 — 그 종류를 아는 worker 가 받거나 끝내 DLQ 로 간다.
+ * 쓰지 않게 새 메시지로 돌려보낸다(설정 오류는 정한 시간이 지나면 DLQ). 모르는 종류는 지우지 않는다 — 그 종류를 아는 worker 가 받거나
+ * 끝내 DLQ 로 간다.
  */
 final class DrawHandler implements BatchMessageHandler {
 
@@ -58,6 +62,7 @@ final class DrawHandler implements BatchMessageHandler {
     private static final String INVALID_MESSAGE = "INVALID_MESSAGE";
     private static final String INVALID_DRAW_RESULT = "INVALID_DRAW_RESULT";
     private static final String REJECTED = "REJECTED";
+    private static final String MISCONFIGURED = "MISCONFIGURED";
     private static final String ENTRY_AGGREGATE = "DRAW_ENTRY";
     private static final int LOGGED_BODY = 500;
     private static final Logger log = LoggerFactory.getLogger(DrawHandler.class);
@@ -74,14 +79,16 @@ final class DrawHandler implements BatchMessageHandler {
     private final Duration permitWait;
     private final Duration requeueDelay;
     private final Duration misconfiguredDelay;
+    private final Duration misconfiguredGiveUp;
     private final JsonMapper json;
     private final MeterRegistry meters;
+    private final Clock clock;
     private final ShutdownSignal shutdown;
 
     DrawHandler(MockGateway mock, InRoundRetry inRound, ConcurrencyLimiter limiter, MockCircuit circuit,
                 RejectGuard rejectGuard, ResultPublisher publisher, DelayedResend resend,
                 DeadLetterSender deadLetterSender, WorkerProperties properties, JsonMapper json, MeterRegistry meters,
-                ShutdownSignal shutdown) {
+                Clock clock, ShutdownSignal shutdown) {
         this.mock = mock;
         this.inRound = inRound;
         this.limiter = limiter;
@@ -94,8 +101,10 @@ final class DrawHandler implements BatchMessageHandler {
         this.permitWait = properties.concurrency().permitWait();
         this.requeueDelay = properties.consumer().requeueDelay();
         this.misconfiguredDelay = properties.retry().backoff().getFirst();
+        this.misconfiguredGiveUp = properties.rejectGuard().giveUpAfter();
         this.json = json;
         this.meters = meters;
+        this.clock = clock;
         this.shutdown = shutdown;
         for (DrawEventType type : DrawEventType.values()) {
             OUTCOMES.forEach(outcome -> meters.counter(METRIC, "eventType", type.name(), "outcome", outcome));
@@ -183,7 +192,7 @@ final class DrawHandler implements BatchMessageHandler {
         return switch (last.verdict()) {
             case NOT_CALLED -> hold(message, call, last.skipped() == Skipped.CIRCUIT_OPEN
                     ? longer(circuit.openRemaining(), requeueDelay) : requeueDelay);
-            case MISCONFIGURED -> hold(message, call, longer(rejectGuard.remaining(), misconfiguredDelay));
+            case MISCONFIGURED -> misconfigured(message, call);
             case SUCCESS -> switch (call) {
                 case Entry _ -> done(call, "succeeded");
                 case Campaign campaign -> publish(message, campaign, last);
@@ -236,11 +245,32 @@ final class DrawHandler implements BatchMessageHandler {
         return MessageOutcome.returnAfter(delay);
     }
 
+    /**
+     * 설정 오류(mock 이 아닌 곳의 응답)는 돌려보내고, 처음 본 때부터 정한 시간이 지나도 그대로면 DLQ 에 넣어 사람이 보게 한다.
+     * 늦춰 다시 받는 길은 속성을 고칠 수 없어 시각이 남는다 — 같은 메시지가 설정 오류를 두 번 겪으면 일찍 DLQ 로 간다(되돌릴 수 있다).
+     */
+    private MessageOutcome misconfigured(Message message, Call call) {
+        Instant now = clock.instant();
+        Instant since = JobProgress.misconfiguredSince(message).orElse(now);
+        if (!now.isBefore(since.plus(misconfiguredGiveUp))) {
+            log.error("Mock 이 아닌 곳의 응답이 {} 넘게 이어져 드로우 메시지를 DLQ 에 넣는다 — 주소 · 경로 설정 확인 필요 eventType={} id={}",
+                    misconfiguredGiveUp, call.type(), call.id());
+            return deadLetter(message, call.type().name(), MISCONFIGURED);
+        }
+        return hold(message, call, longer(rejectGuard.remaining(), misconfiguredDelay),
+                Map.of(JobProgress.MISCONFIGURED_SINCE, since.toString()));
+    }
+
     /** 차례를 쓰지 않고 돌려보낸다. 받은 횟수를 쓰지 않게 가시성 시간 대신 새 메시지로 보낸다. */
     private MessageOutcome hold(Message message, Call call, Duration delay) {
+        return hold(message, call, delay, Map.of());
+    }
+
+    /** @param attributes 덮어쓸 속성(값이 null 이면 뺀다) */
+    private MessageOutcome hold(Message message, Call call, Duration delay, Map<String, String> attributes) {
         log.debug("지금 부를 수 없어 드로우 메시지를 돌려보낸다 eventType={} messageId={} delay={}", call.type(),
                 message.messageId(), delay);
-        resend.resend(message, Map.of(), delay);
+        resend.resend(message, attributes, delay);
         return done(call, "held");
     }
 

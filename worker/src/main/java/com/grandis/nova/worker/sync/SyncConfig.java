@@ -12,7 +12,7 @@ import com.grandis.nova.worker.mock.ConcurrencyLimiter;
 import com.grandis.nova.worker.mock.MockCircuit;
 import com.grandis.nova.worker.mock.MockGateway;
 import com.grandis.nova.worker.mock.ReceiveGate;
-import com.grandis.nova.worker.mock.RejectGuard;
+import com.grandis.nova.worker.mock.RejectGuards;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ApplicationContext;
@@ -34,7 +34,8 @@ import java.util.concurrent.ThreadLocalRandom;
 class SyncConfig {
 
     /** 드로우 메시지에서 받아 올 속성. 돌려보내기 · DLQ 에 넣을 때 그대로 잇는다. */
-    private static final List<String> DRAW_ATTRIBUTE_NAMES = List.of("eventType", "eventId");
+    private static final List<String> DRAW_ATTRIBUTE_NAMES =
+            List.of("eventType", "eventId", JobProgress.MISCONFIGURED_SINCE);
 
     @Bean
     ResultPublisher resultPublisher(SqsClient sqs, SqsQueueUrls queueUrls, JsonMapper json, Clock clock) {
@@ -68,20 +69,20 @@ class SyncConfig {
 
     @Bean
     JobHandler registerJobHandler(MockGateway mock, InRoundRetry inRound, RetrySchedule schedule,
-                                  ConcurrencyLimiter limiter, MockCircuit circuit, RejectGuard rejectGuard,
+                                  ConcurrencyLimiter limiter, MockCircuit circuit, RejectGuards rejectGuards,
                                   ResultPublisher publisher, DelayedResend registerResend, WorkerProperties properties,
                                   JsonMapper json, MeterRegistry meters, Clock clock, ShutdownSignal shutdown) {
         return new JobHandler(JobType.REGISTER, new RegisterTurn(mock, inRound), schedule, limiter, circuit,
-                rejectGuard, publisher, registerResend, properties, json, meters, clock, shutdown);
+                rejectGuards.of(JobType.REGISTER), publisher, registerResend, properties, json, meters, clock, shutdown);
     }
 
     @Bean
     JobHandler cancelJobHandler(MockGateway mock, InRoundRetry inRound, RetrySchedule schedule,
-                                ConcurrencyLimiter limiter, MockCircuit circuit, RejectGuard rejectGuard,
+                                ConcurrencyLimiter limiter, MockCircuit circuit, RejectGuards rejectGuards,
                                 ResultPublisher publisher, DelayedResend cancelResend, WorkerProperties properties,
                                 JsonMapper json, MeterRegistry meters, Clock clock, ShutdownSignal shutdown) {
-        return new JobHandler(JobType.CANCEL, new CancelTurn(mock, inRound), schedule, limiter, circuit, rejectGuard,
-                publisher, cancelResend, properties, json, meters, clock, shutdown);
+        return new JobHandler(JobType.CANCEL, new CancelTurn(mock, inRound), schedule, limiter, circuit,
+                rejectGuards.of(JobType.CANCEL), publisher, cancelResend, properties, json, meters, clock, shutdown);
     }
 
     @Bean
@@ -91,11 +92,11 @@ class SyncConfig {
 
     @Bean
     DrawHandler drawHandler(MockGateway mock, InRoundRetry inRound, ConcurrencyLimiter limiter, MockCircuit circuit,
-                            RejectGuard rejectGuard, ResultPublisher publisher, DelayedResend drawResend,
+                            RejectGuards rejectGuards, ResultPublisher publisher, DelayedResend drawResend,
                             SqsClient sqs, SqsQueueUrls queueUrls, WorkerProperties properties, JsonMapper json,
-                            MeterRegistry meters, ShutdownSignal shutdown) {
-        return new DrawHandler(mock, inRound, limiter, circuit, rejectGuard, publisher, drawResend,
-                new DeadLetterSender(sqs, queueUrls, DrawEventType.QUEUE), properties, json, meters, shutdown);
+                            MeterRegistry meters, Clock clock, ShutdownSignal shutdown) {
+        return new DrawHandler(mock, inRound, limiter, circuit, rejectGuards.of(JobType.DRAW), publisher, drawResend,
+                new DeadLetterSender(sqs, queueUrls, DrawEventType.QUEUE), properties, json, meters, clock, shutdown);
     }
 
     @Bean

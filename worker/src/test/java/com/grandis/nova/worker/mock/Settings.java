@@ -32,6 +32,6 @@ final class Settings {
     }
 
     static WorkerProperties.RejectGuard rejectGuard() {
-        return new WorkerProperties.RejectGuard(5, Duration.ofMinutes(1), Duration.ofMinutes(3));
+        return new WorkerProperties.RejectGuard(5, Duration.ofMinutes(1), Duration.ofMinutes(3), Duration.ofMinutes(30));
     }
 }

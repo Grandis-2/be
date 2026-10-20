@@ -28,7 +28,7 @@ import static com.grandis.nova.worker.sync.Jobs.attempt;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 취소 작업 메시지 하나의 한 차례. 등록과 달리 결과를 몰라도 조회하지 않고, 세대를 다 써도 포기하지 않는다.
+ * 취소 작업 메시지 하나의 한 차례. 등록과 달리 결과를 몰라도 조회하지 않고, 등록보다 많은 세대(기본 8)를 버틴 뒤 포기한다.
  * 큐 소비기는 대역으로 바꾸고 처리기를 직접 부른다.
  */
 @SpringBootTest(properties = {
@@ -177,9 +177,9 @@ class CancelJobHandlerTest {
         assertThat(attempt(job.event(queues).get("payload"))).isEqualTo("run=1 1-2 SYSTEM SUCCESS 200 null");
     }
 
-    /** 등록이라면 포기했을 자리다. 취소는 외부에 등록을 남길 수 없으므로 다음 세대로 넘기고 지표로 알린다. */
+    /** 등록이라면 포기했을 자리다. 취소는 외부에 등록을 남기지 않게 더 버틴다 — 다음 세대로 넘기고 지표로 알린다. */
     @Test
-    void 마지막_세대의_마지막_차례가_실패해도_포기하지_않고_다음_세대로_넘긴다() {
+    void 등록이_포기할_세대에서도_다음_세대로_넘긴다() {
         MOCK.respond(html(503));
         double before = meters.counter(JobHandler.GENERATIONS_METRIC, "jobType", "CANCEL").count();
 
@@ -192,14 +192,29 @@ class CancelJobHandlerTest {
         assertThat(meters.counter(JobHandler.GENERATIONS_METRIC, "jobType", "CANCEL").count() - before).isEqualTo(1);
     }
 
+    /** 포기하면 preorder 가 작업을 DEAD_LETTER 로 두고 관리자가 재처리하거나 외부를 확인해 끝낸다. */
+    @Test
+    void 마지막_세대의_마지막_차례가_실패하면_포기를_알린다() {
+        MOCK.respond(html(503));
+
+        assertThat(handler.handle(job.message(Map.of("attempt", "4", "generation", "8"))))
+                .isEqualTo(MessageOutcome.delete());
+
+        JsonNode event = job.event(queues);
+        assertThat(event.get("eventType").asString()).isEqualTo("EXTERNAL_JOB_FAILED");
+        assertThat(event.get("payload").get("reason").asString()).isEqualTo("GENERATION_EXHAUSTED");
+        assertThat(attempt(event.get("payload"))).isEqualTo("run=1 8-4 SYSTEM TRANSIENT_FAILURE 503 null");
+        assertThat(job.resent(queues, Duration.ofSeconds(2))).isEmpty();
+    }
+
     @Test
     void 설정_오류면_차례를_쓰지_않고_속성_그대로_다시_보낸다() {
         MOCK.respond(html(404));
 
         handler.handle(job.message(Map.of("attempt", "2", "generation", "5")));
 
-        assertThat(job.resent(queues)).isEqualTo(Map.of("attempt", "2", "generation", "5",
-                "eventType", "CANCEL_JOB_READY"));
+        assertThat(job.resent(queues)).containsEntry("attempt", "2").containsEntry("generation", "5")
+                .containsEntry("eventType", "CANCEL_JOB_READY").containsKey("misconfiguredSince");
         assertThat(job.event(queues, Duration.ofSeconds(2))).as("시도로 세지 않는다").isEmpty();
     }
 }

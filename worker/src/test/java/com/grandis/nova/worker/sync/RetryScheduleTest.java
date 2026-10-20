@@ -18,7 +18,7 @@ class RetryScheduleTest {
 
     static final WorkerProperties.Retry SETTINGS = new WorkerProperties.Retry(1, Duration.ofMillis(200),
             Duration.ofMillis(500), List.of(Duration.ofSeconds(10), Duration.ofSeconds(20), Duration.ofSeconds(40)), 4, 3,
-            Duration.ofMinutes(15), 0.2);
+            5, Duration.ofMinutes(15), 0.2);
 
     final RetrySchedule schedule = new RetrySchedule(SETTINGS, () -> 0.5);
 
@@ -37,11 +37,12 @@ class RetryScheduleTest {
     }
 
     @Test
-    void 등록은_세대를_다_쓰면_포기하고_취소는_포기하지_않는다() {
+    void 세대를_다_쓰면_포기하고_취소는_등록보다_오래_버틴다() {
         assertThat(next(JobType.REGISTER, 4, 3)).isEmpty();
         assertThat(next(JobType.CANCEL, 4, 3).orElseThrow().progress())
                 .isEqualTo(new JobProgress(2, 1, 4, AttemptResult.TRANSIENT_FAILURE, Actor.ADMIN));
-        assertThat(next(JobType.CANCEL, 4, 30)).isPresent();
+        assertThat(next(JobType.CANCEL, 4, 4)).isPresent();
+        assertThat(next(JobType.CANCEL, 4, 5)).isEmpty();
     }
 
     /** 실행 회차 · 시작한 쪽은 worker 가 바꾸지 않는다. 결과는 다음 차례가 조회부터 할지를 정한다. */

@@ -150,7 +150,9 @@ public record WorkerProperties(
      * @param inRound         한 차례 안에서 곧바로 다시 보내는 횟수(일시 실패만)
      * @param inRoundDelayMin 곧바로 다시 보내기 전에 쉬는 시간의 아래 끝. 위 끝(inRoundDelayMax)까지 고르게 흩는다
      * @param backoff         다음 차례까지의 지연. 차례 사이마다 하나씩이라 roundsPerGeneration − 1 개
-     * @param generations     REGISTER 가 최종 실패하기까지의 세대 수. CANCEL 은 제한이 없다
+     * @param generations     REGISTER 가 최종 실패하기까지의 세대 수
+     * @param cancelGenerations CANCEL 이 포기하기까지의 세대 수. 등록보다 길게 버틴다 — 포기하면 preorder 가 작업을 DEAD_LETTER 로 두고
+     *                        관리자가 재처리하거나 외부를 확인해 끝낸다. 기본 8 은 세대 간격 12m 로 약 1시간 45분
      * @param generationGap   세대 사이 지연. 기본 12m 은 흩은 위쪽 끝(14.4m)이 SQS 지연 상한 15m 안이라 잘리지 않는다 —
      *                        잘리면 그만큼이 정확히 15m 에 한꺼번에 돌아온다
      * @param jitterRatio     지연을 흩는 폭. 0.2 면 ±20% — 여러 worker 의 재시도가 한 순간에 몰리지 않게 한다
@@ -162,14 +164,15 @@ public record WorkerProperties(
             @DefaultValue({"10s", "20s", "40s"}) List<Duration> backoff,
             @DefaultValue("4") int roundsPerGeneration,
             @DefaultValue("3") int generations,
+            @DefaultValue("8") int cancelGenerations,
             @DefaultValue("12m") Duration generationGap,
             @DefaultValue("0.2") double jitterRatio
     ) {
 
         public Retry {
             backoff = List.copyOf(backoff);
-            require(inRound >= 0 && roundsPerGeneration >= 1 && generations >= 1,
-                    "retry 는 in-round >= 0, rounds-per-generation >= 1, generations >= 1 이어야 한다");
+            require(inRound >= 0 && roundsPerGeneration >= 1 && generations >= 1 && cancelGenerations >= 1,
+                    "retry 는 in-round >= 0, rounds-per-generation >= 1, generations · cancel-generations >= 1 이어야 한다");
             require(backoff.size() == roundsPerGeneration - 1,
                     "retry.backoff 는 rounds-per-generation − 1 개여야 한다: " + backoff);
             require(backoff.stream().allMatch(delay -> positive(delay) && delay.compareTo(MAX_DELAY) <= 0)
@@ -211,20 +214,24 @@ public record WorkerProperties(
     }
 
     /**
-     * 우리 요청이 잘못돼 거절이 이어질 때 받기를 멈추는 기준.
+     * 우리 요청이 잘못돼 거절이 이어질 때 받기를 멈추는 기준. 작업 종류(등록 · 취소 · 드로우)마다 따로 센다 — 한 경로의 오류가
+     * 다른 큐의 받기를 멈추지 않게.
      *
      * @param invalidRequests per 동안 이만큼 거절되면 멈춘다
      * @param pause           멈춰 있는 시간. 지나면 다시 받아 본다
+     * @param giveUpAfter     설정 오류(mock 이 아닌 곳의 응답)로 돌려보낸 메시지를 처음 본 때부터 이만큼 지나면 포기한다. 고치는 동안
+     *                        작업을 한꺼번에 포기하지 않게 mock 배포 · 되돌리기보다 길게 둔다. 포기한 작업은 관리자가 다시 돌린다
      */
     public record RejectGuard(
             @DefaultValue("5") int invalidRequests,
             @DefaultValue("1m") Duration per,
-            @DefaultValue("1m") Duration pause
+            @DefaultValue("1m") Duration pause,
+            @DefaultValue("30m") Duration giveUpAfter
     ) {
 
         public RejectGuard {
-            require(invalidRequests >= 1 && positive(per) && positive(pause),
-                    "reject-guard 는 invalid-requests >= 1, per > 0, pause > 0 이어야 한다");
+            require(invalidRequests >= 1 && positive(per) && positive(pause) && positive(giveUpAfter),
+                    "reject-guard 는 invalid-requests >= 1, per · pause · give-up-after > 0 이어야 한다");
             // 멈춘 동안 받은 메시지를 남은 시간만큼 지연 재전송한다
             require(pause.compareTo(MAX_DELAY) <= 0, "reject-guard.pause 는 15m 이하여야 한다: " + pause);
         }
