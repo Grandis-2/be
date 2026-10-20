@@ -2,6 +2,8 @@ package com.grandis.nova.member;
 
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.member.support.MemberIntegrationTest;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -9,6 +11,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.grandis.nova.common.security.AuthRedisKeys;
 import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.web.RequestIdFilter;
 import com.grandis.nova.member.auth.infrastructure.db.DbRefreshTokenStore;
@@ -24,10 +27,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.HttpHeaders;
 import org.springframework.security.web.FilterChainProxy;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 
@@ -49,6 +55,7 @@ class RefreshDbFailureTest {
     @Autowired TokenService tokens;
     @MockitoBean CustomerRepository customers;
     @MockitoSpyBean DbRefreshTokenStore store;
+    @Autowired StringRedisTemplate redis;
 
     @org.springframework.beans.factory.annotation.Autowired
     org.springframework.jdbc.core.JdbcTemplate jdbc;
@@ -81,19 +88,37 @@ class RefreshDbFailureTest {
     }
 
     @Test
-    @DisplayName("로그아웃이 회원 리프레시의 주인을 찾다 저장소 오류(DataAccessException)면 503 retryable — 헤더의 세션은 끊는다")
+    @DisplayName("로그아웃이 회원 리프레시의 주인을 찾다 저장소 오류(DataAccessException)면 503 retryable — 헤더의 세션은 끊고 두 쿠키는 지운다")
     void logoutWithRefreshLookupFailureIsIncomplete() throws Exception {
         MockMvc mvc = MockMvcBuilders.webAppContextSetup(context).addFilters(requestIdFilter, springSecurityFilterChain).build();
-        TokenService.IssuedTokens issued = tokens.issue(String.valueOf(newCustomer()), Role.USER);
+        UUID loggedOut = newCustomer();
+        UUID untouched = newCustomer();
+        when(customers.lookup(any())).thenReturn(Optional.of(Customer.fromKakao("k", "홍길동")));   // 재발급이 회전까지 가게
+        TokenService.IssuedTokens issued = tokens.issue(String.valueOf(loggedOut), Role.USER);
+        TokenService.IssuedTokens control = tokens.issue(String.valueOf(untouched), Role.USER);
+        UUID sid = tokens.refreshTarget(issued.refreshToken(), Role.USER).session().sessionId();
         doThrow(new DataAccessResourceFailureException("db down")).when(store).find("broken-cookie");
 
-        mvc.perform(delete("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(issued.accessToken()))
+        MvcResult result = mvc.perform(delete("/api/v1/session").header(BearerTokens.HEADER, BearerTokens.value(issued.accessToken()))
                         .cookie(new Cookie(AuthCookies.REFRESH_TOKEN, "broken-cookie")))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.error.code").value("DEPENDENCY_UNAVAILABLE"))
-                .andExpect(jsonPath("$.error.details.retryable").value(true));
+                .andExpect(jsonPath("$.error.details.retryable").value(true))
+                .andReturn();
+        assertThat(result.getResponse().getHeaders(HttpHeaders.SET_COOKIE)).as("두 쿠키 만료")
+                .anyMatch(c -> c.startsWith(AuthCookies.REFRESH_TOKEN + "=") && c.contains("Max-Age=0"))
+                .anyMatch(c -> c.startsWith(AuthCookies.ADMIN_REFRESH_TOKEN + "=") && c.contains("Max-Age=0"));
+        assertThat(redis.hasKey(AuthRedisKeys.REVOKED_SESSION_PREFIX + sid)).as("헤더 세션의 폐기 표식").isTrue();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE family_id = ?", Integer.class, sid.toString()))
+                .as("대조 — 헤더 세션의 리프레시 행이 있다(family_id 는 문자열)").isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE family_id = ? AND revoked_at IS NULL", Integer.class,
+                sid.toString())).as("헤더 세션의 살아 있는 리프레시 행").isZero();
+
+        mvc.perform(post("/api/v1/session/refresh").header("Origin", "http://localhost:3000")
+                        .cookie(new Cookie(AuthCookies.REFRESH_TOKEN, control.refreshToken())))
+                .andExpect(status().isOk());   // 대조군 — 로그아웃하지 않은 세션은 같은 셋업에서 재발급된다
         mvc.perform(post("/api/v1/session/refresh").header("Origin", "http://localhost:3000")
                         .cookie(new Cookie(AuthCookies.REFRESH_TOKEN, issued.refreshToken())))
-                .andExpect(status().isUnauthorized());   // 헤더의 세션은 끊겼다
+                .andExpect(status().isUnauthorized());
     }
 }
