@@ -37,21 +37,21 @@ class ProductOptionsQueryRepository {
 
     /** 상품 하나와 그 옵션 전부(만든 순서). 상품이 없으면 비어 있다. 옵션이 없는 상품은 옵션 목록이 비어 있다(LEFT JOIN). */
     Optional<ProductWithOptions> findProductWithOptions(UUID productId) {
-        ProductWithOptions[] product = {null};
+        ProductRow[] product = {null};
         List<OptionRow> options = new ArrayList<>();
         jdbc.query("SELECT " + PRODUCT_COLUMNS + ", o.id AS option_id, o.sku, o.title AS option_title, o.price, o.status AS option_status"
                         + " FROM products p LEFT JOIN product_options o ON o.product_id = p.id"
                         + " WHERE p.id = :productId ORDER BY o.created_at, o.id",
                 new MapSqlParameterSource("productId", UuidBinary.toBytes(productId)), (RowCallbackHandler) rs -> {
                     if (product[0] == null) {
-                        product[0] = new ProductWithOptions(product(rs), options);   // 옵션 목록은 아래에서 채운다 — 돌려주기 전에 닫는다
+                        product[0] = product(rs);
                     }
                     if (rs.getBytes("option_id") != null) {
                         options.add(new OptionRow(UuidBinary.fromBytes(rs.getBytes("option_id")), rs.getString("sku"), rs.getString("option_title"),
                                 rs.getBigDecimal("price"), SaleStatus.valueOf(rs.getString("option_status")), null));
                     }
                 });
-        return Optional.ofNullable(product[0]).map(found -> new ProductWithOptions(found.product(), List.copyOf(options)));
+        return Optional.ofNullable(product[0]).map(found -> new ProductWithOptions(found, List.copyOf(options)));
     }
 
     /**
