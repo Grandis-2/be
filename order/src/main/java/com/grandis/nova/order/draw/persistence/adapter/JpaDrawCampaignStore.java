@@ -4,6 +4,7 @@ import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.order.draw.domain.exception.DrawKeyTakenException;
 import com.grandis.nova.order.draw.domain.model.DrawCampaign;
+import com.grandis.nova.order.draw.domain.model.DrawPhase;
 import com.grandis.nova.order.draw.domain.model.DrawCloseState;
 import com.grandis.nova.order.draw.domain.model.DrawProgress;
 import com.grandis.nova.order.draw.domain.model.NewDrawCampaign;
@@ -19,6 +20,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -43,7 +46,7 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
     @Override
     public DrawCampaign insert(NewDrawCampaign c) {
         DrawCampaignJpaEntity entity = new DrawCampaignJpaEntity(c.idempotencyKey(), c.productId(), c.optionId(), c.title(), c.productTitle(),
-                c.optionTitle(), c.imageUrl(), c.entryFee(), c.winnerCount(), c.opensAt(), c.closesAt());
+                c.modelName(), c.optionTitle(), c.imageUrl(), c.entryFee(), c.winnerCount(), c.opensAt(), c.closesAt());
         try {
             entityManager.persist(entity);
             entityManager.flush();
@@ -59,6 +62,11 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
     @Override
     public Optional<DrawCampaign> findById(UUID id) {
         return campaigns.findById(id).map(JpaDrawCampaignStore::toDomain);
+    }
+
+    @Override
+    public List<DrawCampaign> findAllById(Collection<UUID> ids) {
+        return campaigns.findAllById(ids).stream().map(JpaDrawCampaignStore::toDomain).toList();
     }
 
     @Override
@@ -108,8 +116,28 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
     }
 
     @Override
+    public boolean existsUnsettledByProductId(UUID productId) {
+        return campaigns.existsUnsettledByProductId(productId) == 1;
+    }
+
+    @Override
     public OffsetPage<DrawCampaign> findNewestFirst(int page, int size) {
-        Page<DrawCampaignJpaEntity> found = campaigns.findAll(PageRequest.of(page, size, NEWEST_FIRST));
+        return toPage(campaigns.findAll(PageRequest.of(page, size, NEWEST_FIRST)), page, size);
+    }
+
+    @Override
+    public OffsetPage<DrawCampaign> findNewestFirst(DrawPhase phase, Instant now, int page, int size) {
+        PageRequest request = PageRequest.of(page, size, NEWEST_FIRST);
+        // µs 로 내린다 — MySQL 은 µs 아래 파라미터를 반올림해, 시작 400ns 전이 예정에서 빠졌다. 저장 시각은 µs 라 내림이 phaseAt 과 같다
+        Instant at = now.truncatedTo(ChronoUnit.MICROS);
+        return toPage(switch (phase) {
+            case SCHEDULED -> campaigns.findScheduled(at, request);
+            case OPEN -> campaigns.findOpen(at, request);
+            case CLOSED -> campaigns.findClosed(at, request);
+        }, page, size);
+    }
+
+    private static OffsetPage<DrawCampaign> toPage(Page<DrawCampaignJpaEntity> found, int page, int size) {
         return OffsetPage.of(found.getContent().stream().map(JpaDrawCampaignStore::toDomain).toList(), page, size, found.getTotalElements());
     }
 
@@ -127,7 +155,7 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
 
     private static DrawCampaign toDomain(DrawCampaignJpaEntity e) {
         return new DrawCampaign(e.getId(), e.getProductId(), e.getOptionId(), e.getTitle(), e.getProductTitleSnapshot(),
-                e.getOptionTitleSnapshot(), e.getImageUrlSnapshot(), e.getEntryFee(), e.getWinnerCount(), e.getOpensAt(), e.getClosesAt(),
+                e.getModelNameSnapshot(), e.getOptionTitleSnapshot(), e.getImageUrlSnapshot(), e.getEntryFee(), e.getWinnerCount(), e.getOpensAt(), e.getClosesAt(),
                 e.getCreatedAt());
     }
 }

@@ -3,6 +3,8 @@ package com.grandis.nova.order.draw.domain.repository;
 import com.grandis.nova.order.draw.domain.model.DrawEntry;
 import com.grandis.nova.order.draw.domain.model.DrawEntryStatus;
 import com.grandis.nova.order.draw.domain.model.EntryTransition;
+import com.grandis.nova.order.draw.domain.model.MyDrawEntry;
+import com.grandis.nova.order.draw.domain.model.MyDrawEntryCounts;
 import com.grandis.nova.order.draw.domain.model.NewDrawEntry;
 
 import java.time.Instant;
@@ -27,6 +29,15 @@ public interface DrawEntryStore {
     Optional<DrawEntry> findById(UUID id);
 
     Optional<DrawEntry> findByCampaignAndCustomer(UUID campaignId, UUID customerId);
+
+    /**
+     * 회원의 응모를 응모 최신순(같은 시각이면 id 내림차순)으로, 그 회차의 반영 여부와 함께 한 문장으로 읽는다.
+     *
+     * @param wonOnly 당첨 주문이 이어진 응모만
+     */
+    List<MyDrawEntry> findByCustomerNewestFirst(UUID customerId, boolean wonOnly, int offset, int limit);
+
+    MyDrawEntryCounts countByCustomer(UUID customerId);
 
     /** 결제 대기 → 승인 중(그 결제창). */
     EntryTransition requestPayment(UUID entryId, String providerOrderId, Instant now);

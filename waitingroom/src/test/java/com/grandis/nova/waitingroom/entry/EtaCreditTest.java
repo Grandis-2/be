@@ -37,6 +37,14 @@ class EtaCreditTest {
         assertThat(EtaCredit.of(ProductState.withQueue(0, 10, WINDOW, 150), meta(0))).isZero();
     }
 
+    @Test
+    void 비공개이거나_전체_입장을_멈췄으면_멈춤이고_느려진_것만으로는_아니다() {
+        assertThat(EtaCredit.paused(ProductState.hidden(10, WINDOW, 150), meta(500))).isTrue();
+        assertThat(EtaCredit.paused(ProductState.withQueue(40, 10, WINDOW, 150), meta(0))).isTrue();
+        assertThat(EtaCredit.paused(ProductState.withQueue(0, 10, WINDOW, 150), meta(1))).isFalse();
+        assertThat(EtaCredit.paused(ProductState.idle(WINDOW, 150), meta(500))).isFalse();
+    }
+
     private static SnapshotMeta meta(long globalCredit) {
         return new SnapshotMeta(globalCredit, 1, MaxWait.unlimited());
     }

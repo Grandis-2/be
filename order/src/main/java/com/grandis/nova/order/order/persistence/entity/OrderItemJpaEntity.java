@@ -45,12 +45,20 @@ public class OrderItemJpaEntity {
     @Column(nullable = false, updatable = false, length = 120)
     private String optionTitleSnapshot;
 
+    /** 주문 때 상품 모델명. 사전예약 · 이 칸 전에 만든 주문은 null 이다. */
+    @Column(updatable = false, length = 40)
+    private String modelNameSnapshot;
+
+    /** 주문 때 그 옵션의 사진. 사전예약 · 이 칸 전에 만든 주문 · 사진이 없는 옵션은 null 이다. */
+    @Column(updatable = false, length = 1000)
+    private String imageUrlSnapshot;
+
     protected OrderItemJpaEntity() {
     }
 
     public OrderItemJpaEntity(UUID orderId, UUID productId, UUID optionId, int quantity, BigDecimal unitPriceSnapshot,
                               int warrantyQuantity, BigDecimal warrantyPriceSnapshot,
-                              String productTitleSnapshot, String optionTitleSnapshot) {
+                              String productTitleSnapshot, String modelNameSnapshot, String optionTitleSnapshot, String imageUrlSnapshot) {
         this.orderId = orderId;
         this.productId = productId;
         this.optionId = optionId;
@@ -60,6 +68,8 @@ public class OrderItemJpaEntity {
         this.warrantyPriceSnapshot = warrantyPriceSnapshot;
         this.productTitleSnapshot = productTitleSnapshot;
         this.optionTitleSnapshot = optionTitleSnapshot;
+        this.modelNameSnapshot = modelNameSnapshot;
+        this.imageUrlSnapshot = imageUrlSnapshot;
     }
 
     public UUID getId() {
@@ -100,5 +110,13 @@ public class OrderItemJpaEntity {
 
     public String getOptionTitleSnapshot() {
         return optionTitleSnapshot;
+    }
+
+    public String getModelNameSnapshot() {
+        return modelNameSnapshot;
+    }
+
+    public String getImageUrlSnapshot() {
+        return imageUrlSnapshot;
     }
 }

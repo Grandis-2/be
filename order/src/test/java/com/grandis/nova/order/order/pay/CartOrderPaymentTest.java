@@ -15,6 +15,7 @@ import com.grandis.nova.order.stock.StockLedger;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -35,6 +36,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -69,6 +73,7 @@ class CartOrderPaymentTest {
     static final String PROVIDER_ORDER_ID = "7a1c2d3e-4b5a-4c7d-8e9f-0a1b2c3d4e5f";
     static final BigDecimal PRICE = new BigDecimal("1250000");
     static final BigDecimal WARRANTY = new BigDecimal("199000");
+    static final Instant APPROVED_AT = Instant.parse("2026-10-16T03:00:00Z");
 
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
@@ -76,6 +81,7 @@ class CartOrderPaymentTest {
     @Autowired StockLedger stock;
     @Autowired PaymentResults results;
     @Autowired PlatformTransactionManager transactionManager;
+    @Autowired MeterRegistry registry;
     @MockitoBean PreorderClient preorderClient;
     @MockitoBean PaymentClient paymentClient;
 
@@ -100,8 +106,8 @@ class CartOrderPaymentTest {
         cartLine(phone, false, 3);
         cartLine(watch, false, 1);
         order = place(List.of(
-                new PlaceOrderCommand.Line(product.productId(), phone, 4, PRICE, 2, WARRANTY, "아이폰 17", "블랙"),
-                new PlaceOrderCommand.Line(product.productId(), watch, 1, PRICE, 0, BigDecimal.ZERO, "워치", "실버")));
+                new PlaceOrderCommand.Line(product.productId(), phone, 4, PRICE, 2, WARRANTY, "아이폰 17", null, "블랙", null),
+                new PlaceOrderCommand.Line(product.productId(), watch, 1, PRICE, 0, BigDecimal.ZERO, "워치", null, "실버", null)));
     }
 
     @Test
@@ -130,6 +136,21 @@ class CartOrderPaymentTest {
     }
 
     @Test
+    @DisplayName("결제 준비는 바로 구매 주문도 같은 기한(만든 때 + 10분)으로 받는다 — 기한이 지나면 409 PAYMENT_WINDOW_EXPIRED")
+    void prepareAcceptsBuyNowOrderWithinWindow() throws Exception {
+        order = place(OrderSource.BUY_NOW, List.of(
+                new PlaceOrderCommand.Line(fixtures.inStockProduct(1).productId(), phone, 1, PRICE, 0, BigDecimal.ZERO, "아이폰 17", null, "블랙", null)));
+        given(paymentClient.openCapture(any(), eq(BearerTokens.value(SESSION))))
+                .willReturn(ApiResponse.ok(new PaymentAttempt(PROVIDER_ORDER_ID, PRICE)));
+
+        prepare().andExpect(status().isCreated()).andExpect(jsonPath("$.data.amount").value(PRICE.intValue()));
+
+        jdbcTemplate.update("UPDATE orders SET payment_due_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ?", (Object) bytes(order.id()));
+        prepare().andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("PAYMENT_WINDOW_EXPIRED"));
+        verifyNoInteractions(preorderClient);
+    }
+
+    @Test
     @DisplayName("승인 반영은 판매 확정(확보 → 판매) · 장바구니 차감(0 이하면 삭제)을 같이 하고, 승인이 또 와도(응답 · 이벤트 겹침) 한 번뿐")
     void approvalSellsStockAndDeductsCartOnce(CapturedOutput output) {
         fixtures.forceAuthorizing(order.id(), PROVIDER_ORDER_ID);
@@ -141,6 +162,12 @@ class CartOrderPaymentTest {
         assertThat(stockOf(phone)).containsExactly(10, 0, 4);
         assertThat(stockOf(watch)).containsExactly(10, 0, 1);
         assertThat(cart()).containsExactlyInAnyOrderEntriesOf(Map.of(phone + "/false", 1));
+        assertThat(jdbcTemplate.queryForObject("SELECT paid_at FROM orders WHERE id = ?", LocalDateTime.class, (Object) bytes(order.id())))
+                .as("결제 시각은 출처와 상관없이 적는다").isEqualTo(LocalDateTime.ofInstant(APPROVED_AT, ZoneOffset.UTC));
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM order_outbox_events
+                 WHERE event_type = 'PREORDER_PAYMENT_CONFIRMED' AND payload->>'$.orderId' = ?
+                """, Integer.class, order.id().toString())).as("결제 승인 알림은 사전예약 주문만").isZero();
     }
 
     @Test
@@ -149,7 +176,7 @@ class CartOrderPaymentTest {
         fixtures.forceAuthorizing(order.id(), PROVIDER_ORDER_ID);
 
         results.settle(new PaymentSettlement(order.id(), PROVIDER_ORDER_ID, PaymentSettlement.Result.DECLINED, order.totalAmount().amount(),
-                DeclineReason.CARD_REJECTED));
+                null, DeclineReason.CARD_REJECTED));
 
         assertThat(stockOf(phone)).containsExactly(10, 4, 0);
         assertThat(cart()).hasSize(3);
@@ -157,7 +184,8 @@ class CartOrderPaymentTest {
     }
 
     /**
-     * 재고 장부가 어긋나 판매 확정을 못 해도(확보가 모자람) 돈은 나갔으니 주문은 결제됨 · 장바구니도 뺀다 — 어긋난 옵션만 옮기지 않고 전용 ERROR.
+     * 재고 장부가 어긋나 판매 확정을 못 해도(확보가 모자람) 돈은 나갔으니 주문은 결제됨 · 장바구니도 뺀다 — 어긋난 옵션만 옮기지 않고 전용 ERROR 와
+     * 어긋남 지표(order.stock.mismatch, site=cart-payment) 한 번.
      * 잠금 순서의 앞 옵션 · 뒤 옵션이 어긋난 경우를 모두 본다 — 앞에서 어긋나도 뒤 옵션은 판매로 옮겨야 한다(첫 어긋남에서 멈추지 않는다).
      */
     @ParameterizedTest
@@ -171,6 +199,7 @@ class CartOrderPaymentTest {
         int healthyQuantity = healthy.equals(phone) ? 4 : 1;
         fixtures.forceAuthorizing(order.id(), PROVIDER_ORDER_ID);
         jdbcTemplate.update("UPDATE option_inventories SET stock_reserved = 0 WHERE option_id = ?", (Object) bytes(broken));
+        double mismatches = registry.get("order.stock.mismatch").tag("site", "cart-payment").counter().count();
 
         assertThat(results.settle(approved()).applied()).isTrue();
 
@@ -180,6 +209,7 @@ class CartOrderPaymentTest {
         assertThat(stockOf(broken)).as("어긋난 옵션은 그대로").containsExactly(10, 0, 0);
         List<String> alerts = output.getAll().lines().filter(line -> line.contains("재고 어긋남")).toList();
         assertThat(alerts).hasSize(1);
+        assertThat(registry.get("order.stock.mismatch").tag("site", "cart-payment").counter().count()).isEqualTo(mismatches + 1);
         assertThat(alerts.getFirst()).contains("ERROR").contains(order.id().toString()).contains(PROVIDER_ORDER_ID)
                 .contains(broken + "=" + brokenQuantity).doesNotContain(healthy.toString());
     }
@@ -252,7 +282,12 @@ class CartOrderPaymentTest {
     }
 
     private Order place(List<PlaceOrderCommand.Line> lines) {
-        PlaceOrderCommand command = new PlaceOrderCommand(customerId, OrderSource.CART, null, null, OrderFixtures.ADDRESS, lines);
+        return place(OrderSource.CART, lines);
+    }
+
+    private Order place(OrderSource source, List<PlaceOrderCommand.Line> lines) {
+        PlaceOrderCommand command = new PlaceOrderCommand(customerId, source, null, null,
+                source == OrderSource.BUY_NOW ? UUID.randomUUID() : null, OrderFixtures.ADDRESS, lines);
         Map<UUID, Integer> quantities = new HashMap<>();
         lines.forEach(line -> quantities.put(line.optionId(), line.quantity()));
         return new TransactionTemplate(transactionManager).execute(status -> {
@@ -262,7 +297,8 @@ class CartOrderPaymentTest {
     }
 
     private PaymentSettlement approved() {
-        return new PaymentSettlement(order.id(), PROVIDER_ORDER_ID, PaymentSettlement.Result.APPROVED, order.totalAmount().amount(), null);
+        return new PaymentSettlement(order.id(), PROVIDER_ORDER_ID, PaymentSettlement.Result.APPROVED, order.totalAmount().amount(),
+                APPROVED_AT, null);
     }
 
     private void cartLine(UUID option, boolean warranty, int quantity) {

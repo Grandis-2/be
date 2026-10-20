@@ -14,7 +14,7 @@ import org.springframework.security.web.SecurityFilterChain;
  *
  * 이 서비스가 가진 경로만 적고 나머지는 거부한다(denyAll). 규칙 없이 추가된 엔드포인트가 열린 채 배포되지 않게 —
  * 새 경로는 여기 규칙을 더해야 테스트가 통과한다. 매핑 없는 경로도 404 가 아니라 401(익명) · 403(인증)이다.
- * 예외는 OpenAPI 문서 경로다 — GET 으로 열려 있고 문서가 꺼진 환경에서는 404 다. 헬스는 관리 포트에서만 토큰 없이 열린다.
+ * 예외는 OpenAPI 문서 경로다 — GET 으로 열려 있고 문서가 꺼진 환경에서는 404 다. 헬스 · 지표는 관리 포트에서만 토큰 없이 열린다.
  *
  * 폐기 조회 실패 때 닫는 경로(auth.revocation-check.fail-closed-paths)는 설정에 있다 — application.yml.example.
  */
@@ -28,11 +28,13 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/orders/**").authenticated()
                 .requestMatchers("/api/v1/cart", "/api/v1/cart/**").hasRole("USER")                  // 내 장바구니 — 회원만(관리자는 회원 id 가 없다)
                 .requestMatchers(HttpMethod.GET, "/api/v1/draws", "/api/v1/draws/*").permitAll()     // 드로우 회차 목록 · 상세 — 로그인 없이 본다
-                .requestMatchers("/api/v1/draws/*/entries", "/api/v1/draws/*/entries/**").hasRole("USER") // 응모 · 내 응모 · 응모비 결제 — 회원만
-                // 서비스 간 내부 API. 호출자(preorder · catalog)가 사용자 토큰을 Authorization: Bearer 로 그대로 싣는다 —
-                // 경로는 인증만 요구하고, 역할 · 주인은 엔드포인트가 정한다(@CurrentViewer · @CurrentCustomerId).
+                .requestMatchers("/api/v1/draws/entries/me", "/api/v1/draws/*/entries", "/api/v1/draws/*/entries/**").hasRole("USER") // 내 응모 목록 · 응모 · 내 응모 · 응모비 결제 — 회원만
+                // 서비스 간 내부 API. 호출자(preorder · catalog)가 사용자 토큰을 Authorization: Bearer 로 그대로 싣고, 경로는 인증만
+                // 요구한다 — 역할 · 주인은 엔드포인트가 정한다(@CurrentViewer · @CurrentCustomerId). 재고 조회만 토큰 없이 연다:
+                // 공개 화면의 값이고 비회원 목록에는 실을 토큰이 없다(/internal 이 공개 라우팅에 없다는 전제 — contracts/order-internal.md).
+                .requestMatchers(HttpMethod.GET, "/internal/stocks").permitAll()
                 .requestMatchers("/internal/**").authenticated()
-                .requestMatchers(EndpointRequest.to("health")).permitAll()                          // 헬스 체크(관리 포트의 readiness · liveness)
+                .requestMatchers(EndpointRequest.to("health", "prometheus")).permitAll()            // 헬스 체크 · 지표 수집(관리 포트)
                 .requestMatchers(HttpMethod.GET, OpenApiPaths.docs()).permitAll()                   // OpenAPI 문서
                 .anyRequest().denyAll());
     }

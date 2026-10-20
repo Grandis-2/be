@@ -13,7 +13,6 @@ public enum PreorderErrorCode implements ErrorCode {
     ADMISSION_TICKET_INVALID(403, "대기열에 다시 입장해 주세요."),
     /** 그 회원 · 그 모델의 마지막 접수보다 먼저 발급된 입장권. 재접수는 진입부터 다시 한다. */
     ADMISSION_TICKET_STALE(403, "대기열에 다시 입장해 주세요."),
-    MEMBER_NOT_FOUND(404, "회원을 찾을 수 없습니다."),
     PREORDER_NOT_FOUND(404, "예약을 찾을 수 없습니다."),
     PRODUCT_NOT_FOUND(404, "상품을 찾을 수 없습니다."),
     PRODUCT_OPTION_NOT_FOUND(404, "옵션을 찾을 수 없습니다."),
@@ -27,7 +26,11 @@ public enum PreorderErrorCode implements ErrorCode {
     ADMISSION_TICKET_USED(409, "대기열에 다시 입장해 주세요."),
     PREORDER_NOT_CANCELABLE(409, "배송이 시작되어 취소할 수 없습니다."),
     PRODUCT_ALREADY_OPEN(409, "사전예약이 이미 오픈되어 바꿀 수 없습니다."),
+    CAMPAIGN_NOT_REOPENABLE(409, "다시 열 수 없는 모집입니다."),
+    /** catalog 에서 판매 중지한 상품. 접수는 이 경우를 404 로 숨기지만, 상세 화면에 판매 중지로 보이는 상품의 오픈 알림 신청은 이유를 알린다. */
+    PRODUCT_PAUSED(409, "판매가 중지된 상품입니다."),
     SYNC_JOB_NOT_REPROCESSABLE(409, "재처리할 수 없는 작업입니다."),
+    SYNC_JOB_NOT_RESOLVABLE(409, "수동으로 끝낼 수 없는 작업입니다."),
     DEAD_LETTER_NOT_REDRIVABLE(409, "되돌릴 수 없는 메시지입니다."),
     DEAD_LETTER_NOT_DISCARDABLE(409, "버릴 수 없는 메시지입니다."),
     PREORDER_FIELD_IMMUTABLE(409, "내부 메모 외에는 바꿀 수 없습니다."),

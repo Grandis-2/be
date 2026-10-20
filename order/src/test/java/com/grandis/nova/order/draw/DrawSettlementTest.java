@@ -2,6 +2,7 @@ package com.grandis.nova.order.draw;
 
 import com.grandis.nova.order.draw.domain.repository.DrawCampaignStore;
 import com.grandis.nova.order.event.OrderEventDispatcher;
+import com.grandis.nova.order.outbox.OutboundEventType;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
@@ -41,7 +42,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 추첨할 차례 · 추첨 요청 · 결과 반영(당첨 0원 주문 · 재고). 회차 · 응모 · 재고는 표에 직접 심고, 주기 작업은 직접 부른다.
+ * 추첨할 차례 · 추첨 요청 · 결과 반영(당첨 0원 주문 · 재고 · 당첨 알림). 회차 · 응모 · 재고는 표에 직접 심고, 주기 작업은 직접 부른다.
  */
 @OrderIntegrationTest
 @AutoConfigureMockMvc
@@ -92,12 +93,13 @@ class DrawSettlementTest {
                 .containsEntry("ship_to_name", "당첨자");
         assertThat(((Number) order.get("total_amount")).intValue()).isZero();
         Map<String, Object> item = jdbcTemplate.queryForMap("""
-                SELECT option_id, quantity, unit_price_snapshot, product_title_snapshot FROM order_items WHERE order_id = ?""",
+                SELECT option_id, quantity, unit_price_snapshot, product_title_snapshot, model_name_snapshot, image_url_snapshot FROM order_items WHERE order_id = ?""",
                 (Object) wonOrder(first));
         assertThat(item.get("option_id")).isEqualTo(bytes(option));
         assertThat(((Number) item.get("quantity")).intValue()).isEqualTo(1);
         assertThat(((Number) item.get("unit_price_snapshot")).intValue()).isZero();
-        assertThat(item).containsEntry("product_title_snapshot", "증정품");
+        assertThat(item).containsEntry("product_title_snapshot", "증정품").containsEntry("model_name_snapshot", "A3104")
+                .as("당첨 주문은 회차의 사진 스냅샷을 옮긴다").containsEntry("image_url_snapshot", "https://img/gift-0.jpg");
         assertThat(stock()).containsEntry("stock_reserved", 0).containsEntry("stock_sold", 2);
         assertThat(campaign(draw).get("settled_at")).isNotNull();
         assertThat(campaign(draw).get("draw_requested_at")).isNull();
@@ -105,6 +107,8 @@ class DrawSettlementTest {
         assertThat(orderCount(draw)).isEqualTo(2);
         assertThat(jdbcTemplate.queryForObject("SELECT to_status FROM order_events WHERE order_id = ? AND event_sequence = 1", String.class,
                 (Object) wonOrder(first))).as("첫 이력도 결제 확인 대기").isEqualTo("AWAITING_CONFIRMATION");
+        assertThat(notifications(draw)).as("다시 돌아도 한 번 · 결제하지 않은 응모는 없음")
+                .containsOnlyKeys(first, second).allSatisfy((entry, payload) -> assertThat(payload.get("kind").asString()).isEqualTo("DRAW_WON"));
     }
 
     @Test
@@ -188,6 +192,7 @@ class DrawSettlementTest {
 
         assertThatThrownBy(() -> settlement.close(allWin)).isInstanceOf(RuntimeException.class);
         assertThat(wonOrder(lone)).isNull();
+        assertThat(notifications(allWin)).as("알림도 함께 롤백").isEmpty();
         assertThat(campaign(allWin).get("settled_at")).isNull();
         assertThat(stock()).containsEntry("stock_reserved", 1).containsEntry("stock_sold", 0);
     }
@@ -204,6 +209,7 @@ class DrawSettlementTest {
         dispatcher.dispatch(approvedEvent(late));
 
         assertThat(output.getAll()).contains("드로우 추첨 뒤 결제 완료").contains(late.toString());
+        assertThat(notifications(draw)).as("반영 전이라 알림 없음").isEmpty();
     }
 
     @Test
@@ -221,6 +227,7 @@ class DrawSettlementTest {
 
         assertThat(output.getAll()).contains("이미 반영한 드로우에 다른 당첨 목록이 왔다");
         assertThat(wonOrder(b)).isNull();
+        assertThat(notifications(draw)).as("처음 반영한 당첨자의 알림뿐").containsOnlyKeys(a);
     }
 
     /**
@@ -255,13 +262,14 @@ class DrawSettlementTest {
     @DisplayName("전원 당첨으로 반영한 뒤 결제 완료가 돼도 경보한다")
     void paidAfterAllWinIsAlarmed(CapturedOutput output) {
         UUID draw = closedDraw(2);
-        entry(draw, "PAID", null);
+        UUID paid = entry(draw, "PAID", null);
         UUID late = entry(draw, "AWAITING_PAYMENT", null);
         settlement.close(draw);
 
         dispatcher.dispatch(approvedEvent(late));
 
         assertThat(output.getAll()).contains("드로우 추첨 뒤 결제 완료").contains(late.toString());
+        assertThat(notifications(draw)).as("반영 뒤 결제 완료에는 알림 없음").containsOnlyKeys(paid);
     }
 
     @Test
@@ -421,6 +429,33 @@ class DrawSettlementTest {
     }
 
     @Test
+    @DisplayName("결과를 반영하면 당첨 응모에만 알림 한 건 — 낙첨 · 결제하지 않은 응모는 없고, 같은 결과를 또 받아도 그대로")
+    void drawResultNotifiesWinnersOnce() {
+        UUID draw = closedDraw(1);
+        UUID winner = fixtures.customer();
+        UUID a = entry(draw, winner, "PAID", null);
+        UUID loser = fixtures.customer();
+        UUID b = entry(draw, loser, "PAID", null);
+        UUID unpaid = entry(draw, "AWAITING_PAYMENT", null);
+        settlement.close(draw);
+        assertThat(notifications(draw)).as("추첨 요청에는 알림 없음").isEmpty();
+
+        dispatcher.dispatch(result(draw, a));
+        dispatcher.dispatch(result(draw, a));
+
+        Map<UUID, JsonNode> sent = notifications(draw);
+        assertThat(sent).containsOnlyKeys(a).doesNotContainKeys(b, unpaid);
+        assertThat(sent.get(a).propertyNames()).containsExactlyInAnyOrder("recipientIds", "kind", "title", "body", "target");
+        assertThat(sent.get(a).get("recipientIds").valueStream().map(JsonNode::asString)).containsExactly(winner.toString());
+        assertThat(sent.get(a).get("kind").asString()).isEqualTo("DRAW_WON");
+        assertThat(sent.get(a).get("title").asString()).isEqualTo("럭키 드로우 당첨");
+        assertThat(sent.get(a).get("body").asString()).isEqualTo("축하해요! 럭키 드로우에 당첨됐어요.");
+        assertThat(sent.get(a).get("target").get("type").asString()).isEqualTo("DRAW");
+        assertThat(sent.get(a).get("target").get("id").asString()).isEqualTo(draw.toString());
+        assertThat(OutboundEventType.NOTIFICATION_REQUESTED.destination()).isEqualTo("notification");
+    }
+
+    @Test
     @DisplayName("계약에 맞지 않는 결과는 반영하지 않는다 — 요청 안 한 회차 · 당첨 수가 다름 · 같은 응모 두 번 · 그 회차의 결제 완료가 아님")
     void invalidResultsChangeNothing() {
         UUID notRequested = closedDraw(1);
@@ -443,6 +478,7 @@ class DrawSettlementTest {
 
         assertThat(campaign(draw).get("settled_at")).isNull();
         assertThat(orderCount(draw)).isZero();
+        assertThat(notifications(draw)).isEmpty();
         assertThat(stock()).containsEntry("stock_reserved", 3).containsEntry("stock_sold", 0);
         settlement.settle(draw, List.of(a, b));
         assertThat(orderCount(draw)).isEqualTo(2);
@@ -472,6 +508,7 @@ class DrawSettlementTest {
 
         assertThat(later.get(20, TimeUnit.SECONDS)).isFalse();
         assertThat(orderCount(draw)).isEqualTo(1);
+        assertThat(notifications(draw)).hasSize(1);
         assertThat(stock()).containsEntry("stock_reserved", 0).containsEntry("stock_sold", 1);
     }
 
@@ -497,9 +534,9 @@ class DrawSettlementTest {
     private UUID draw(Instant opens, Instant closes, int winners) {
         UUID id = UUID.randomUUID();
         jdbcTemplate.update("""
-                INSERT INTO draw_campaigns (id, idempotency_key, product_id, option_id, title, product_title_snapshot, option_title_snapshot,
-                                            entry_fee, winner_count, opens_at, closes_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, '드로우', '증정품', '블랙', 100, ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""",
+                INSERT INTO draw_campaigns (id, idempotency_key, product_id, option_id, title, product_title_snapshot, model_name_snapshot,
+                                            option_title_snapshot, image_url_snapshot, entry_fee, winner_count, opens_at, closes_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, '드로우', '증정품', 'A3104', '블랙', 'https://img/gift-0.jpg', 100, ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""",
                 bytes(id), id.toString(), bytes(product), bytes(option), winners, utc(opens), utc(closes));
         jdbcTemplate.update("""
                 INSERT INTO option_inventories (option_id, stock_total, stock_reserved, stock_sold, updated_at)
@@ -556,6 +593,16 @@ class DrawSettlementTest {
     private long outboxCount(UUID draw, String type) {
         return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM order_outbox_events WHERE aggregate_id = ? AND event_type = ?", Long.class,
                 bytes(draw), type);
+    }
+
+    /** 그 회차 응모들에 적힌 알림 — 응모 id → payload. 응모마다 한 건이어야 한다(두 건이면 실패). */
+    private Map<UUID, JsonNode> notifications(UUID draw) {
+        return jdbcTemplate.queryForList("""
+                SELECT BIN_TO_UUID(o.aggregate_id) AS entry_id, o.payload FROM order_outbox_events o
+                  JOIN draw_entries e ON e.id = o.aggregate_id
+                 WHERE o.event_type = 'NOTIFICATION_REQUESTED' AND o.aggregate_type = 'DRAW_ENTRY' AND e.campaign_id = ?""",
+                (Object) bytes(draw)).stream().collect(Collectors.toMap(row -> UUID.fromString((String) row.get("entry_id")),
+                row -> JSON.readTree(row.get("payload").toString())));
     }
 
     private static String utc(Instant at) {

@@ -62,7 +62,7 @@ class CatalogClientTest {
     }
 
     @Test
-    @DisplayName("옵션 id 를 ids 로 보내고 사용자 토큰을 Authorization: Bearer 로 싣는다 — 응답 items 를 옵션 id 로 읽는다")
+    @DisplayName("옵션 id 를 ids 로 보내고 사용자 토큰을 Authorization: Bearer 로 싣는다 — 응답 items 를 옵션 id 로 읽고, 모르는 칸은 무시한다")
     void sendsIdsAndTokenAndReadsItems() {
         server.expect(requestTo(org.hamcrest.Matchers.startsWith("http://catalog/internal/options?")))
                 .andExpect(method(HttpMethod.GET))
@@ -72,9 +72,10 @@ class CatalogClientTest {
                         {"success":true,
                          "data":{"items":[
                            {"optionId":"%s","productId":"0199a3f2-8a10-7b21-9c32-4d5e6f708192","productTitle":"아이폰 17",
-                            "optionTitle":"블랙 / 256GB","sku":"BLK-256","price":1250000,"optionStatus":"ACTIVE","saleMode":"IN_STOCK",
+                            "modelName":"A3104","optionTitle":"블랙 / 256GB","sku":"BLK-256","price":1250000,"listPrice":1390000,"optionStatus":"ACTIVE","saleMode":"IN_STOCK",
                             "productStatus":"ACTIVE","visible":true,"registrationCompleted":true,
-                            "warranty":{"offered":true,"surcharge":199000},"imageUrl":"https://img.example/black-0.jpg"}
+                            "warranty":{"offered":true,"surcharge":199000},"imageUrl":"https://img.example/black-0.jpg",
+                            "fieldAddedLater":"catalog 가 나중에 더한 칸 — 옛 order 처럼 모르는 칸은 무시한다"}
                          ]},
                          "error":null,"timestamp":"2026-10-09T06:00:00Z","traceId":"t-1"}
                         """.formatted(FIRST), MediaType.APPLICATION_JSON));
@@ -83,13 +84,28 @@ class CatalogClientTest {
 
         assertThat(found).containsOnlyKeys(FIRST);
         CatalogOption option = found.get(FIRST);
+        assertThat(option.modelName()).isEqualTo("A3104");
         assertThat(option.price()).isEqualByComparingTo("1250000");
+        assertThat(option.listPrice()).isEqualByComparingTo("1390000");
         assertThat(option.saleMode()).isEqualTo("IN_STOCK");
         assertThat(option.visible()).isTrue();
         assertThat(option.registrationCompleted()).isTrue();
         assertThat(option.warranty()).isEqualTo(new CatalogOption.Warranty(true, new BigDecimal("199000")));
         assertThat(option.imageUrl()).isEqualTo("https://img.example/black-0.jpg");
         server.verify();
+    }
+
+    @Test
+    @DisplayName("modelName · listPrice 가 빠진 옵션(그 칸을 싣기 전 catalog)도 읽는다 — 판정에 쓰지 않으니 null 로 두고 연동 오류로 보지 않는다")
+    void missingModelNameReadsAsNull() {
+        server.expect(requestTo(org.hamcrest.Matchers.startsWith("http://catalog/internal/options?")))
+                .andRespond(withSuccess(envelope(item(FIRST)), MediaType.APPLICATION_JSON));
+
+        CatalogOption option = reader.find(List.of(FIRST), SESSION).get(FIRST);
+
+        assertThat(option.modelName()).isNull();
+        assertThat(option.listPrice()).isNull();
+        assertThat(option.productTitle()).isEqualTo("아이폰 17");
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.grandis.nova.waitingroom.relay;
 
+import com.grandis.nova.waitingroom.web.RequestIdFilter;
 import org.springframework.cloud.gateway.filter.NettyWriteResponseFilter;
 import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
@@ -12,6 +13,7 @@ import org.springframework.http.HttpMethod;
  * 접수 POST 만 preorder 로 전달한다. 본문 · Idempotency-Key · 요청 ID · 액세스 토큰은 그대로 넘기고(preorder 가 다시
  * 검증한다), 대기열 안에서만 쓰는 대기 토큰은 뗀다.
  * Origin 도 뗀다 — CORS 는 여기서 답하므로, preorder 까지 CORS 헤더를 붙이면 Access-Control-Allow-Origin 이 둘이 되어 브라우저가 거절한다.
+ * 요청 ID 는 여기서도 preorder 도 응답에 실으므로 하나만 남긴다 — 둘이면 브라우저가 "id, id" 로 읽는다.
  */
 @Configuration(proxyBeanMethods = false)
 class AcceptRoute {
@@ -34,7 +36,8 @@ class AcceptRoute {
                                 .filter(watch, WATCH_ORDER)
                                 .filter(check, CHECK_ORDER)
                                 .removeRequestHeader(QUEUE_TOKEN)
-                                .removeRequestHeader(HttpHeaders.ORIGIN))
+                                .removeRequestHeader(HttpHeaders.ORIGIN)
+                                .dedupeResponseHeader(RequestIdFilter.HEADER, "RETAIN_FIRST"))
                         .uri(properties.preorderUri()))
                 .build();
     }

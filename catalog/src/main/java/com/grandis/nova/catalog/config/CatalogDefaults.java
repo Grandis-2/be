@@ -41,8 +41,28 @@ class CatalogDefaults implements EnvironmentPostProcessor, Ordered {
             // 주소(base-url)는 환경마다 달라 여기 두지 않는다 — application.yml.example 의 spring.http.serviceclient
             Map.entry("spring.http.serviceclient." + Dependencies.ORDER + ".connect-timeout", "300ms"),
             Map.entry("spring.http.serviceclient." + Dependencies.ORDER + ".read-timeout", "1s"),
+            // 재고 조회는 order 와 같은 서비스다 — 주소는 order 그룹 값을 따른다(운영 설정에 따로 적지 않는다). 목록 · 상세가 요청마다 부른다
+            Map.entry("spring.http.serviceclient." + Dependencies.ORDER_STOCKS + ".base-url", "${spring.http.serviceclient." + Dependencies.ORDER + ".base-url:}"),
+            Map.entry("spring.http.serviceclient." + Dependencies.ORDER_STOCKS + ".connect-timeout", "300ms"),
+            Map.entry("spring.http.serviceclient." + Dependencies.ORDER_STOCKS + ".read-timeout", "1s"),
+            // 회차 일정(preorder). 목록 · 상세 · 관리자 수정 판정이 요청마다 부른다
+            Map.entry("spring.http.serviceclient." + Dependencies.PREORDER + ".connect-timeout", "300ms"),
+            Map.entry("spring.http.serviceclient." + Dependencies.PREORDER + ".read-timeout", "1s"),
             Map.entry("spring.http.serviceclient." + Dependencies.MEMBER + ".connect-timeout", "300ms"),
-            Map.entry("spring.http.serviceclient." + Dependencies.MEMBER + ".read-timeout", "1s")));
+            Map.entry("spring.http.serviceclient." + Dependencies.MEMBER + ".read-timeout", "1s"),
+            // 사진 업로드(POST /api/v1/admin/images)의 멀티파트 상한. 넘으면 컨트롤러 전에 413 이다(크기 초과와 파트 수 초과는 구별되지 않는다).
+            // 파일은 사진 상한(10MiB — Spring 의 MB 는 1024²)과 같고, 요청은 그 위에 파트 머리 · purpose 칸만큼 여유를 둔다.
+            // 파트 수는 일반 칸도 센다 — 업로드는 file · purpose 둘이다. file-size-threshold 는 기본값 0 그대로 둔다(파일을 처음부터 디스크에 쓴다)
+            Map.entry("spring.servlet.multipart.max-file-size", "10MB"),
+            Map.entry("spring.servlet.multipart.max-request-size", "11MB"),
+            Map.entry("server.tomcat.max-part-count", "5"),
+            // 집계 신호의 IP 판정(ClientIps)이 X-Forwarded-For 를 받은 그대로 센다. 비워 두면 Boot 가 ECS 를 감지해 RemoteIpValve 를 켜고 헤더를 고쳐 써서
+            // 가드(ClientIpsConfiguration)가 기동을 멈춘다 — 운영 설정에 빠져도 뜨도록 여기 둔다. 배포 설정이 켜면(native · framework) 가드가 그대로 막는다.
+            // catalog 는 요청의 스킴 · 호스트를 쓰지 않아 끄더라도 바뀌는 응답이 없다
+            Map.entry("server.forward-headers-strategy", "none"),
+            // catalog-events 소비기(판매 준비 이벤트). 목록 · 노출의 판매 준비가 이 이벤트로 채운 칸을 보므로 꺼져 있으면 새 일반 상품이 보이지 않는다 —
+            // 운영 설정에 빠져도 켜지게 여기 둔다(큐 · 권한은 nova-infra #118). 배포 설정이 false 를 주면 그 값이 이긴다
+            Map.entry("nova.sqs.consumer.enabled", "true")));
 
     /**
      * 폐기 조회가 실패하면 닫는 경로. 목록을 적으면 공통 기본값(관리자 · 재발급 · 내 정보)을 대체하므로, 공통 목록을 그대로 가져와

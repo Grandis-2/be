@@ -18,6 +18,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -46,14 +47,14 @@ class AdminGiftCandidateApiTest {
     }
 
     @Test
-    @DisplayName("일반 판매 · 판매 중이고 재고를 등록한 판매 중 옵션이 있는 상품만, 그 옵션과 확보할 수 있는 수량을 — 비공개 상품도 나온다")
+    @DisplayName("일반 판매 · 판매 중 · 판매 준비이고 판매 중 옵션이 있는 상품만, 판매 중 옵션과 확보할 수 있는 수량을(order 재고, 재고 행이 없으면 0) — 비공개 상품도 나온다. 재고 행만 있고 판매 준비 전이면 빠진다")
     void listsGiftableProductsWithTheirOptions() throws Exception {
         UUID shown = product("IN_STOCK", "ACTIVE", "증정 상품");
         UUID giftable = fixtures.option(shown, "ACTIVE");
         fixtures.inventory(giftable, 10, 3, 2);
         UUID paused = fixtures.option(shown, "PAUSED");
         fixtures.inventory(paused, 5, 0, 0);
-        fixtures.option(shown, "ACTIVE");                              // 재고 행 없음 — 후보 아님
+        UUID unstocked = fixtures.option(shown, "ACTIVE");             // 재고 행 없음 — 후보로 나오고 available 0
         UUID hidden = product("IN_STOCK", "ACTIVE", "비공개 증정 상품");
         jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", (Object) UuidBinary.toBytes(hidden));
         UUID hiddenOption = fixtures.option(hidden, "ACTIVE");
@@ -65,18 +66,25 @@ class AdminGiftCandidateApiTest {
         fixtures.inventory(fixtures.option(pausedProduct, "ACTIVE"), 5, 0, 0);
         UUID noStock = product("IN_STOCK", "ACTIVE", "재고 미등록");
         fixtures.option(noStock, "ACTIVE");
+        UUID notReady = product("IN_STOCK", "ACTIVE", "판매 준비 전");               // 재고 행은 있지만 판매 준비 이벤트 전 — 회차를 못 만드니 후보 아님
+        fixtures.inventoryOnly(fixtures.option(notReady, "ACTIVE"), 5, 0, 0);
         UUID onlyPausedStocked = product("IN_STOCK", "ACTIVE", "재고 옵션이 판매 중지");
         fixtures.inventory(fixtures.option(onlyPausedStocked, "PAUSED"), 5, 0, 0);
         fixtures.option(onlyPausedStocked, "ACTIVE");
 
         JsonNode data = list(tag);
 
-        assertThat(ids(data.get("items"))).containsExactlyInAnyOrder(shown, hidden);
-        assertThat(data.get("total").asLong()).isEqualTo(2);
+        assertThat(ids(data.get("items"))).containsExactlyInAnyOrder(shown, hidden, onlyPausedStocked);
+        assertThat(data.get("total").asLong()).isEqualTo(3);
+        JsonNode pausedStockedOptions = find(data.get("items"), onlyPausedStocked).get("options");
+        assertThat(pausedStockedOptions).as("판매 중 옵션의 재고 행이 아직 없다 — 옵션은 남기고 수량 0").hasSize(1);
+        assertThat(pausedStockedOptions.get(0).get("available").asInt()).isZero();
         JsonNode shownItem = find(data.get("items"), shown);
         assertThat(shownItem.get("visible").asBoolean()).isTrue();
         assertThat(shownItem.get("title").asString()).isEqualTo("증정 상품");
-        assertThat(shownItem.get("options")).hasSize(1);
+        assertThat(shownItem.get("options")).as("판매 중 옵션만, 등록 순").hasSize(2);
+        assertThat(shownItem.get("options").get(1).get("optionId").asString()).isEqualTo(unstocked.toString());
+        assertThat(shownItem.get("options").get(1).get("available").asInt()).isZero();
         JsonNode option = shownItem.get("options").get(0);
         assertThat(option.get("optionId").asString()).isEqualTo(giftable.toString());
         assertThat(option.get("title").asString()).isEqualTo("블랙 / 256GB");
@@ -117,6 +125,21 @@ class AdminGiftCandidateApiTest {
         return JSON.readTree(mockMvc.perform(get(PATH).queryParam("q", tag).queryParam("page", page).queryParam("size", size)
                         .with(user("admin").roles("ADMIN")))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).get("data");
+    }
+
+    @Test
+    @DisplayName("q 는 정규화한 뒤 50자까지, 쪽은 앞 10,000개 안에서 시작 — 넘으면 그 칸의 400 VALIDATION_FAILED")
+    void sharesListLimits() throws Exception {
+        String fifty = tag + " " + "가".repeat(50 - tag.length() - 1);
+        list(fifty);
+        page("99", "100");
+        for (String[] bad : new String[][] {{"q", fifty + "가"}, {"page", "100"}}) {
+            var request = get(PATH).queryParam("size", "100").with(user("admin").roles("ADMIN"));
+            mockMvc.perform(request.queryParam(bad[0], bad[1]))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+                    .andExpect(jsonPath("$.error.details.violations[0].field").value(bad[0]));
+        }
     }
 
     @Test

@@ -77,6 +77,26 @@ class MockClientTest {
     }
 
     @Test
+    void 드로우는_응모_id_를_멱등_키로_보내고_추첨은_회차_경로로만_보낸다() {
+        mock.respond(FakeMock.json(200, "{}"));
+        JsonNode entry = JSON.readTree("{\"entryId\":\"E-1\",\"drawId\":\"D-1\",\"customerId\":\"C-1\"}");
+        JsonNode draw = JSON.readTree("{\"winnerCount\":2,\"expectedEntryCount\":5}");
+
+        client.enterDraw("E-1", entry);
+        client.drawStatus("D-1");
+        client.draw("D-1", draw);
+
+        assertThat(mock.requests()).extracting(Received::method, Received::path, Received::idempotencyKey)
+                .containsExactly(
+                        tuple("POST", "/external/draw-entries", "E-1"),
+                        tuple("GET", "/external/draws/D-1", null),
+                        tuple("POST", "/external/draws/D-1/draw", null));
+        assertThat(JSON.readTree(mock.requests().get(0).body())).isEqualTo(entry);
+        assertThat(JSON.readTree(mock.requests().get(2).body())).isEqualTo(draw);
+        assertThat(mock.requests().get(2).contentType()).startsWith("application/json");
+    }
+
+    @Test
     void 오류_응답도_던지지_않고_상태와_errorCode_를_건넨다() {
         mock.respond(FakeMock.json(409, "{\"errorCode\":\"KEY_CANCELED\",\"errorMessage\":\"취소된 키\"}"));
 

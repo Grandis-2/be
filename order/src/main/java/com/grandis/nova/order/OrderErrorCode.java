@@ -31,11 +31,18 @@ public enum OrderErrorCode implements ErrorCode {
     STOCK_NOT_TRACKED(409, "사전예약 상품은 재고를 두지 않습니다."),
     /** details.options 에 걸린 옵션과 줄일 수 있는 하한(committed)을 모두 싣는다. */
     STOCK_BELOW_COMMITTED(409, "확보 · 판매된 수량보다 적게 줄일 수 없습니다."),
+    /**
+     * 재고 보정: 주문 기준 확보 + 판매가 총량을 넘는다(재고 행이 없으면 총량 0). details 에 optionId · registered · total ·
+     * expectedReserved · expectedSold — 총량을 먼저 늘린 뒤 다시 한다.
+     */
+    STOCK_TOTAL_BELOW_EXPECTED(409, "주문 기준 수량이 총량을 넘어 맞출 수 없습니다. 총량을 먼저 늘려 주세요."),
+    /** 재고 장부 대조가 아직 한 번도 끝나지 않았다. */
+    STOCK_RECONCILE_RUN_NOT_FOUND(404, "재고 장부 대조 결과가 아직 없습니다."),
     /** 사전예약 상품은 장바구니에 담지 않는다(명세 F-U-07). */
     PREORDER_NOT_CARTABLE(409, "사전예약은 장바구니에 담을 수 없습니다."),
     /**
-     * 가용 재고가 모자란다. 장바구니 담기 · 수량 변경(확인만, 확보 없음 — 이 기본 문구)과 장바구니 주문(전량 확보 — 하나라도 모자라면
-     * 주문을 만들지 않는다, 문구 "주문 전체 수량을 확보할 수 없습니다." · details.variantIds)이 쓴다(명세의 두 문구).
+     * 가용 재고가 모자란다. 장바구니 담기 · 수량 변경(확인만, 확보 없음 — 이 기본 문구)과 장바구니 · 바로 구매 주문(전량 확보 — 하나라도
+     * 모자라면 주문을 만들지 않는다, 문구 "주문 전체 수량을 확보할 수 없습니다." · details.variantIds)이 쓴다(명세의 두 문구).
      */
     INSUFFICIENT_STOCK(409, "가용 재고보다 많이 담을 수 없습니다."),
     /** 지금 상태로는 할 수 없다 — 판매 중지 상품 담기 등. 이름 · 문구는 catalog 의 같은 코드와 같다. */
@@ -54,8 +61,10 @@ public enum OrderErrorCode implements ErrorCode {
     PAYMENT_IN_PROGRESS(409, "승인 결과를 확인 중입니다."),
     /** 장바구니 주문: 보낸 (옵션, 보증, 수량)이 지금 장바구니의 줄과 다르다(명세). 다시 조회해 확인한다. */
     CART_CHANGED(409, "선택한 장바구니 구성이 변경되었습니다."),
-    /** 장바구니 주문: 화면에서 본 단가 · 보증가가 지금 값과 다르다. details.items 에 지금 값을 싣는다 — 확인 뒤 다시 주문한다. */
-    PRICE_CHANGED(409, "가격이 변경되었습니다. 변경된 가격을 확인해 주세요.");
+    /** 장바구니 · 바로 구매 주문: 화면에서 본 단가 · 보증가가 지금 값과 다르다. details.items 에 지금 값을 싣는다 — 확인 뒤 다시 주문한다. */
+    PRICE_CHANGED(409, "가격이 변경되었습니다. 변경된 가격을 확인해 주세요."),
+    /** 바로 구매 주문: 같은 Idempotency-Key 의 앞 주문과 구성(옵션 · 수량 · 보증 수량) · 배송지가 다르다. 이름 · 코드는 preorder 의 같은 코드와 같다. */
+    KEY_PAYLOAD_MISMATCH(422, "이전 요청과 내용이 다릅니다. 새 주문으로 다시 시도해 주세요.");
 
     private final int status;
     private final String message;

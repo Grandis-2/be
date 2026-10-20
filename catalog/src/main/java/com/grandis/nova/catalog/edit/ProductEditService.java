@@ -4,7 +4,8 @@ import com.grandis.nova.catalog.CatalogErrorCode;
 import com.grandis.nova.catalog.detail.AdminProductDetail;
 import com.grandis.nova.catalog.detail.ProductDetailService;
 import com.grandis.nova.catalog.detail.ProductDetailView;
-import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
+import com.grandis.nova.catalog.integration.PreorderCampaigns;
+import com.grandis.nova.catalog.listing.CampaignWindow;
 import com.grandis.nova.catalog.option.CollationDuplicates;
 import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.catalog.option.OptionText;
@@ -17,6 +18,7 @@ import com.grandis.nova.catalog.product.ProductOptionRepository;
 import com.grandis.nova.catalog.product.ProductRepository;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
+import com.grandis.nova.catalog.registration.InStockProductRegistered;
 import com.grandis.nova.catalog.registration.ProductRegistrationValidator;
 import com.grandis.nova.catalog.web.ConstraintViolations;
 import com.grandis.nova.catalog.web.ValidationFailures;
@@ -32,15 +34,21 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 관리자 상품 수정 — 표시 정보 · 기본 가격 · 보증, 옵션 값 추가 · 수정, 옵션(조합) 추가 · 수정, 상품 판매 상태 · 공개 여부.
  *
- * <p><b>사전예약은 오픈 3분 전부터 공개 여부 말고는 아무것도 못 바꾼다.</b> 표시 정보 · 가격 · 추가금 · 값 · 조합 추가 · 옵션 판매 상태 · 상품 판매 상태 전부
+ * <p><b>사전예약은 오픈 3분 전부터 공개 여부 말고는 아무것도 못 바꾼다</b>(사진은 따로 — {@link ProductImageEditService}). 표시 정보 · 가격 · 추가금 · 값 · 조합 추가 · 옵션 판매 상태 · 상품 판매 상태 전부
  * 409 STATE_CONFLICT(2026-09-29 결정 — 판매 상태도 막는다. preorder 는 접수용 상품 사본을 캐시해 두고 그 값으로 판정한다. 사전예약 상품을
  * 고치면 PREORDER_PRODUCT_CHANGED 로 알려 preorder 가 모든 인스턴스의 사본을 비우지만, 비우기는 아웃박스 릴레이 · SQS 전달만큼 늦고
  * preorder 의 인스턴스 간 알림이 실패하면 사본은 최대 30분(캐시 만료) 묵을 수 있다 — contracts/preorder-internal.md "캐시". 그래서 오픈
@@ -78,31 +86,36 @@ public class ProductEditService {
 
     private final ProductRepository products;
     private final ProductOptionRepository options;
-    private final ProductListingQueryRepository crossReads;
+    private final PreorderCampaigns campaigns;
     private final CollationDuplicates duplicates;
     private final ProductDetailService detailService;
     private final OutboxWriter outbox;
     private final Clock clock;
+    private final TransactionTemplate transaction;
 
     public ProductEditService(ProductRepository products, ProductOptionRepository options,
-                              ProductListingQueryRepository crossReads, CollationDuplicates duplicates,
-                              ProductDetailService detailService, OutboxWriter outbox, Clock clock) {
+                              PreorderCampaigns campaigns, CollationDuplicates duplicates,
+                              ProductDetailService detailService, OutboxWriter outbox, Clock clock, PlatformTransactionManager transactionManager) {
         this.products = products;
         this.options = options;
-        this.crossReads = crossReads;
+        this.campaigns = campaigns;
         this.duplicates = duplicates;
         this.detailService = detailService;
         this.outbox = outbox;
         this.clock = clock;
+        this.transaction = new TransactionTemplate(transactionManager);
     }
 
-    @Transactional
     public AdminProductDetail editProduct(UUID productId, ProductEditRequest request) {
+        // 본문 검증은 회차를 묻기 전에 — 잘못된 요청은 preorder 와 상관없이 400 이다
         if (request.isEmpty()) {
             throw ValidationFailures.of("body", "바꿀 칸이 하나도 없습니다.");
         }
         if (request.title() != null && request.title().isBlank()) {
             throw ValidationFailures.of("title", "제목이 비었습니다.");
+        }
+        if (request.modelName() != null && request.modelName().isBlank()) {
+            throw ValidationFailures.of("modelName", "모델명이 비었습니다.");
         }
         if (request.basePrice() != null) {
             ProductRegistrationValidator.requireWholeWon(request.basePrice(), "basePrice");
@@ -114,9 +127,15 @@ public class ProductEditService {
                 throw ValidationFailures.of("warranty.surcharge", "보증을 제공하지 않으면 추가금은 0 이어야 합니다.");
             }
         }
-        Product product = requireEditable(productId);
+        Optional<CampaignWindow> window = scheduleBeforeLock(productId);
+        return transaction.execute(status -> editProductLocked(productId, request, window));
+    }
+
+    private AdminProductDetail editProductLocked(UUID productId, ProductEditRequest request, Optional<CampaignWindow> window) {
+        ProductEditRequest.Warranty warranty = request.warranty();
+        Product product = requireEditable(productId, window);
         String titleBefore = product.getTitle();
-        product.edit(request.title(), request.description(), request.tags());
+        product.edit(request.title(), request.brand(), request.modelName(), request.description(), request.tags());
         if (!product.getTitle().equals(titleBefore)) {
             retitleStandaloneOptions(product);   // 축 없는 상품의 옵션 표시명은 상품 제목이다
         }
@@ -124,21 +143,31 @@ public class ProductEditService {
             // 보낸 칸만 바뀐다 — 제공만 보내면 기존 추가금을 유지한다. 제공하지 않으면 추가금은 0 이다(엔티티가 지킨다)
             product.setWarranty(warranty.offered(), warranty.surcharge() == null ? product.getWarrantySurcharge() : warranty.surcharge());
         }
+        if (request.discountRate() != null) {
+            product.changeDiscountRate(request.discountRate());   // 재계산보다 먼저 — 바뀐 정가의 하한 판정이 새 할인율로 돈다
+        }
         if (request.basePrice() != null && product.reprice(request.basePrice())) {
             recomputePrices(product, product.getOptions(), null, "basePrice");
         }
+        if (request.discountRate() != null) {
+            requireSellablePrices(product);
+        }
         products.flush();
-        AdminProductDetail edited = detailService.findAdminProduct(productId);
-        requireNotOpenedAtCommit(product);
+        AdminProductDetail edited = detailService.findAdminSnapshot(productId);
+        requireNotOpenedAtCommit(product, window);
         notifyPreorder(product);
         return edited;
     }
 
-    @Transactional
     public AdminProductDetail addOptionValue(UUID productId, OptionValueAddRequest request) {
         BigDecimal surcharge = request.surcharge() == null ? BigDecimal.ZERO
                 : ProductRegistrationValidator.requireWholeWon(request.surcharge(), "surcharge");
-        Product product = requireEditable(productId);
+        Optional<CampaignWindow> window = scheduleBeforeLock(productId);
+        return transaction.execute(status -> addOptionValueLocked(productId, request, surcharge, window));
+    }
+
+    private AdminProductDetail addOptionValueLocked(UUID productId, OptionValueAddRequest request, BigDecimal surcharge, Optional<CampaignWindow> window) {
+        Product product = requireEditable(productId, window);
         ProductOptions document = product.getOptions();
         String axisKey = request.axisKey().strip().toLowerCase(Locale.ROOT);
         ProductOptions.Axis axis = document.axis(axisKey)
@@ -155,13 +184,12 @@ public class ProductEditService {
                 Amounts.requireWholeWon(surcharge, "surcharge"), List.of()));
         product.replaceOptions(document.withAxis(new ProductOptions.Axis(axis.key(), axis.label(), values)));
         products.flush();
-        AdminProductDetail edited = detailService.findAdminProduct(product.getId());
-        requireNotOpenedAtCommit(product);
+        AdminProductDetail edited = detailService.findAdminSnapshot(product.getId());
+        requireNotOpenedAtCommit(product, window);
         notifyPreorder(product);
         return edited;
     }
 
-    @Transactional
     public AdminProductDetail editOptionValue(UUID productId, String valueId, OptionValueEditRequest request) {
         if (request.isEmpty()) {
             throw ValidationFailures.of("body", "바꿀 칸이 하나도 없습니다.");
@@ -169,7 +197,12 @@ public class ProductEditService {
         if (request.surcharge() != null) {
             ProductRegistrationValidator.requireWholeWon(request.surcharge(), "surcharge");
         }
-        Product product = requireEditable(productId);
+        Optional<CampaignWindow> window = scheduleBeforeLock(productId);
+        return transaction.execute(status -> editOptionValueLocked(productId, valueId, request, window));
+    }
+
+    private AdminProductDetail editOptionValueLocked(UUID productId, String valueId, OptionValueEditRequest request, Optional<CampaignWindow> window) {
+        Product product = requireEditable(productId, window);
         ProductOptions document = product.getOptions();
         Pick located = document.pickOf(valueId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
         ProductOptions.Axis axis = located.axis();
@@ -201,13 +234,12 @@ public class ProductEditService {
             recomputePrices(product, next, valueId, "surcharge");
         }
         products.flush();
-        AdminProductDetail result = detailService.findAdminProduct(productId);
-        requireNotOpenedAtCommit(product);
+        AdminProductDetail result = detailService.findAdminSnapshot(productId);
+        requireNotOpenedAtCommit(product, window);
         notifyPreorder(product);
         return result;
     }
 
-    @Transactional
     public ProductDetailView.Variant addVariant(UUID productId, VariantAddRequest request) {
         Map<String, String> given = new LinkedHashMap<>();
         for (Map.Entry<String, String> entry : request.selections().entrySet()) {
@@ -217,7 +249,13 @@ public class ProductEditService {
                 throw ValidationFailures.of("selections", "같은 축이 두 번 왔습니다(키는 대소문자를 가리지 않습니다): " + axisKey);
             }
         }
-        Product product = requireEditable(productId);
+        Optional<CampaignWindow> window = scheduleBeforeLock(productId);
+        return transaction.execute(status -> addVariantLocked(productId, request, given, window));
+    }
+
+    /** @param given 축 키(소문자) → 고른 값. 잠금 안에서 축마다 꺼내 남은 것이 있으면 400 이다 */
+    private ProductDetailView.Variant addVariantLocked(UUID productId, VariantAddRequest request, Map<String, String> given, Optional<CampaignWindow> window) {
+        Product product = requireEditable(productId, window);
         ProductOptions document = product.getOptions();
         List<Pick> picks = new ArrayList<>();
         for (ProductOptions.Axis axis : document.axes()) {
@@ -252,6 +290,7 @@ public class ProductEditService {
             throw ValidationFailures.of("selections", "옵션 표시명이 %d자를 넘습니다.".formatted(ProductRegistrationValidator.MAX_OPTION_TITLE_LENGTH));
         }
         BigDecimal price = ProductRegistrationValidator.requireStorablePrice(computedPrice(product, picks), "selections");
+        ProductRegistrationValidator.requireSellablePrice(price, product.getDiscountRate(), "selections");
         ProductOption option;
         try {
             option = options.saveAndFlush(ProductOption.of(sku, price, combination));
@@ -266,24 +305,28 @@ public class ProductEditService {
             throw e;
         }
         ProductDetailView.Variant added = variantOf(productId, option.getId());
-        requireNotOpenedAtCommit(product);
+        requireNotOpenedAtCommit(product, window);
         notifyPreorder(product);
         return added;
     }
 
-    @Transactional
     public ProductDetailView.Variant editVariant(UUID productId, UUID variantId, VariantEditRequest request) {
         if (request.isEmpty()) {
             throw ValidationFailures.of("body", "바꿀 칸이 하나도 없습니다.");
         }
-        Product product = requireEditable(productId);   // 판매 상태도 사전예약 오픈 3분 전부터는 못 바꾼다
+        Optional<CampaignWindow> window = scheduleBeforeLock(productId);
+        return transaction.execute(status -> editVariantLocked(productId, variantId, request, window));
+    }
+
+    private ProductDetailView.Variant editVariantLocked(UUID productId, UUID variantId, VariantEditRequest request, Optional<CampaignWindow> window) {
+        Product product = requireEditable(productId, window);   // 판매 상태도 사전예약 오픈 3분 전부터는 못 바꾼다
         ProductOption option = options.findById(variantId)
                 .filter(o -> o.getProductId().equals(productId))
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
         option.changeStatus(request.status());
         options.flush();
         ProductDetailView.Variant edited = variantOf(productId, variantId);
-        requireNotOpenedAtCommit(product);
+        requireNotOpenedAtCommit(product, window);
         notifyPreorder(product);
         return edited;
     }
@@ -295,23 +338,27 @@ public class ProductEditService {
      *
      * <p>사전예약 <b>오픈 뒤</b>(회차 opens_at ≤ 지금)의 PAUSED 는 회차 취소다 — {@link #cancelCampaign}. 사유는 그때만 받는다.
      */
-    @Transactional
     public SaleStatusView changeSaleStatus(UUID productId, SaleStatusChangeRequest request) {
+        Optional<CampaignWindow> window = scheduleBeforeLock(productId);
+        return transaction.execute(status -> changeSaleStatusLocked(productId, request, window));
+    }
+
+    private SaleStatusView changeSaleStatusLocked(UUID productId, SaleStatusChangeRequest request, Optional<CampaignWindow> window) {
         Product product = lockProduct(productId);
         // 빈 사유는 보내지 않은 것으로 본다 — 화면이 늘 칸을 채워 보내도 일반 전환이 막히지 않게. 회차 취소에서는 필수다
         String reason = request.reason() == null || request.reason().isBlank() ? null : request.reason().strip();
         // 이미 회차가 취소된 상품은 취소 갈래로만 — 취소 뒤 preorder 가 오픈을 미래로 옮겨도 되돌리기 · 일반 전환이 되지 않는다
-        if (product.getSaleMode() == SaleMode.PREORDER && (product.getCampaignCanceledAt() != null || opened(product))) {
+        if (product.getSaleMode() == SaleMode.PREORDER && (product.getCampaignCanceledAt() != null || opened(window))) {
             return cancelCampaign(product, request.status(), reason);
         }
-        requireNotOpened(product, STATUS_FROZEN);   // 잠금 판정이 먼저다 — 오픈 3분 전 구간에서는 사유가 와도 409
+        requireNotOpened(product, window, STATUS_FROZEN);   // 잠금 판정이 먼저다 — 오픈 3분 전 구간에서는 사유가 와도 409
         if (reason != null) {
             throw ValidationFailures.of("reason", "사유는 사전예약 오픈 뒤 판매 중지(회차 취소)에만 받습니다.");
         }
         SaleStatus before = product.getStatus();
         product.changeStatus(request.status());
         products.flush();
-        requireNotOpened(product, STATUS_FROZEN);   // 커밋 직전 — 잠금 대기 중에 오픈 3분 전을 넘겼을 수 있다
+        requireNotOpened(product, window, STATUS_FROZEN);   // 커밋 직전 — 잠금 대기 중에 오픈 3분 전을 넘겼을 수 있다
         if (product.getStatus() != before) {
             notifyPreorder(product);
         }
@@ -320,7 +367,8 @@ public class ProductEditService {
 
     /**
      * 사전예약 오픈 뒤 판매 중지 = 회차 취소. 판매 중지로 두고 취소 시각을 남기고, 같은 트랜잭션에서 PREORDER_CAMPAIGN_CANCELED 를 아웃박스에 적는다.
-     * preorder 가 받아 회차를 지금 마감하고 진행 중 예약의 취소를 시작한다. 되돌릴 수 없다 — 오픈 뒤 ACTIVE 는 409.
+     * preorder 가 받아 회차를 지금 마감하고 진행 중 예약의 취소를 시작한다. 판매 상태가 실제로 바뀌었으면 PREORDER_PRODUCT_CHANGED 도 적는다.
+     * 되돌릴 수 없다 — 오픈 뒤 ACTIVE 는 409.
      * 이미 취소된 상품에 다시 보내면 이벤트를 다시 적지 않고 같은 답(접수됨)을 준다. 오픈 판정은 상품 행 잠금 아래에서 했다 — 같은 상품의 취소는 줄 서므로
      * 이벤트는 한 번만 적힌다.
      */
@@ -334,18 +382,34 @@ public class ProductEditService {
         if (reason.length() > REASON_MAX_LENGTH) {
             throw ValidationFailures.of("reason", "사유는 앞뒤 공백을 뺀 %d자 이하입니다.".formatted(REASON_MAX_LENGTH));
         }
+        long listingBefore = product.getListingVersion();
         if (product.cancelCampaign(clock.instant())) {
             products.flush();   // 표식 UPDATE 를 먼저 내려 제약(CHECK) 위반이 이벤트를 적기 전에 이 자리에서 드러나게 한다
             outbox.append(new PreorderCampaignCanceled(product.getId(), reason));
+            if (product.getListingVersion() != listingBefore) {
+                notifyPreorder(product);   // 판매 중이던 상품이면 판매 상태가 바뀌었다 — preorder 의 사본도 따라가게
+            }
         }
         return new SaleStatusView(product.getId(), product.getStatus(), true);
     }
 
-    /** 사전예약 회차가 열렸는가(opens_at ≤ 지금). 회차가 없으면(등록 이벤트 처리 전) 열리지 않았다. */
-    private boolean opened(Product product) {
-        return crossReads.findCampaign(product.getId())
-                .map(window -> !clock.instant().isBefore(window.opensAt()))
-                .orElse(false);
+    /** 사전예약 회차가 열렸는가(opens_at ≤ 지금 — 잠금 아래의 시각). 회차가 없으면(등록 이벤트 처리 전) 열리지 않았다. */
+    private boolean opened(Optional<CampaignWindow> window) {
+        return window.map(campaign -> !clock.instant().isBefore(campaign.opensAt())).orElse(false);
+    }
+
+    /**
+     * 사전예약이면 회차를 트랜잭션 전에 받는다 — 상품 행을 잠근 트랜잭션 안에서 preorder 를 기다리지 않는다(REVIEW 2.1 — @Transactional 안의 HTTP 는
+     * 차단급). 판정은 잠금 아래에서 그때의 시각으로 한다: 잠금 대기 · 재계산 중에 오픈 3분 전을 넘기는 것은 커밋 직전 판정이 잡는다. 상품 행 잠금은
+     * preorder 의 일정 변경을 원래 막지 못한다 — 회차를 받은 뒤 커밋 전에 preorder 관리자가 오픈을 앞당기면 그 변경은 이 판정에 보이지 않는다.
+     * 일반 상품 · 회차가 취소된 상품 · 없거나 삭제한 상품은 부르지 않는다(판정에 회차를 쓰지 않는다 — 삭제한 상품은 잠금에서 404).
+     *
+     * @throws BusinessException preorder 가 답하지 않으면 503 — 오픈 여부를 모르는 채 고치지 않는다
+     */
+    private Optional<CampaignWindow> scheduleBeforeLock(UUID productId) {
+        boolean asks = products.findById(productId)
+                .map(product -> !product.isDeleted() && product.getSaleMode() == SaleMode.PREORDER && product.getCampaignCanceledAt() == null).orElse(false);
+        return asks ? campaigns.find(productId) : Optional.empty();
     }
 
     /** 공개 ↔ 비공개. 언제든 바꾼다 — 오픈 판정을 하지 않는다. 다른 수정과 줄 서도록 상품 행은 잠근다. 바뀌었으면 PREORDER_PRODUCT_CHANGED 를 적는다. */
@@ -366,6 +430,72 @@ public class ProductEditService {
     }
 
     /**
+     * 마감된 사전예약 상품을 같은 상품 그대로 일반 상품으로 바꾼다(2026-10-14 결정). 판매 중(ACTIVE)이 되고, 할인율은 요청 값(비우면 0)이다.
+     * 옵션별 초기 재고는 등록과 같은 이벤트(IN_STOCK_PRODUCT_REGISTERED)로 order 에 넘긴다 — order 가 재고 행을 만들고 보낸 판매 준비 이벤트
+     * (IN_STOCK_PRODUCT_READY)가 catalog 에 닿으면 목록 · 장바구니에 나온다(그 전에는 노출되지 않는다). preorder 의 접수용 사본도 비운다(PREORDER_PRODUCT_CHANGED — 판매 방식이 바뀌었다).
+     *
+     * <ul>
+     *   <li>409 STATE_CONFLICT: 사전예약이 아님(이미 바꿨음 포함) · 회차가 취소됨 · 회차가 없음 · 마감 전(closes_at &gt; 지금)</li>
+     *   <li>400: 재고가 그 상품의 옵션을 빠짐없이 한 번씩 덮지 않음(stocks) · 할인가가 100원보다 작아지는 옵션(discountRate)</li>
+     * </ul>
+     * 이미 접수된 예약 · 주문은 자기 스냅샷 가격으로 그대로 진행한다 — 마감 뒤 결제 기간 중에 바꿔도 preorder 결제는 catalog 를 다시 읽지 않는다.
+     */
+    public AdminProductDetail convertToInStock(UUID productId, InStockConversionRequest request) {
+        Optional<CampaignWindow> window = scheduleBeforeLock(productId);
+        return transaction.execute(status -> convertToInStockLocked(productId, request, window));
+    }
+
+    private AdminProductDetail convertToInStockLocked(UUID productId, InStockConversionRequest request, Optional<CampaignWindow> window) {
+        Product product = lockProduct(productId);
+        if (product.getSaleMode() != SaleMode.PREORDER) {
+            throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "사전예약 상품만 일반 상품으로 바꿀 수 있습니다.");
+        }
+        if (product.getCampaignCanceledAt() != null) {
+            throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "회차가 취소된 상품은 일반 상품으로 바꿀 수 없습니다.");
+        }
+        CampaignWindow campaign = window
+                .orElseThrow(() -> new BusinessException(CatalogErrorCode.STATE_CONFLICT, "회차가 없는 사전예약 상품은 일반 상품으로 바꿀 수 없습니다."));
+        if (clock.instant().isBefore(campaign.closesAt())) {
+            throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "사전예약이 마감된 뒤에만 일반 상품으로 바꿀 수 있습니다.");
+        }
+        List<ProductOption> all = options.findByProductIdOrderByCreatedAtAscIdAsc(productId);
+        Map<UUID, Integer> stockByOption = requireEveryOption(all, request.stocks());
+        int rate = request.discountRate();
+        for (ProductOption option : all) {
+            ProductRegistrationValidator.requireSellablePrice(option.getPrice(), rate, "discountRate");
+        }
+        product.convertToInStock(rate);
+        products.flush();   // 판매 방식 UPDATE 를 먼저 내려 제약(CHECK) 위반이 이벤트를 적기 전에 드러나게 한다
+        outbox.append(new InStockProductRegistered(productId, all.stream()
+                .map(option -> new InStockProductRegistered.Item(option.getId(), stockByOption.get(option.getId())))
+                .toList()));
+        outbox.append(PreorderProductChanged.of(product));
+        // 재고는 커밋 뒤 나가는 이벤트로 order 가 만든다 — 이 트랜잭션 안에서 order 에 물을 것이 없다
+        return detailService.beforeStockReady(detailService.findAdminSnapshot(productId));
+    }
+
+    /** 재고가 옵션을 빠짐없이 한 번씩 덮는가 — 모르는 옵션 · 같은 옵션 두 번 · 빠진 옵션은 stocks 의 400. */
+    private static Map<UUID, Integer> requireEveryOption(List<ProductOption> all, List<InStockConversionRequest.Stock> stocks) {
+        Set<UUID> optionIds = new HashSet<>();
+        all.forEach(option -> optionIds.add(option.getId()));
+        Map<UUID, Integer> stockByOption = new HashMap<>();
+        for (int i = 0; i < stocks.size(); i++) {
+            InStockConversionRequest.Stock stock = stocks.get(i);
+            if (!optionIds.contains(stock.variantId())) {
+                throw ValidationFailures.of("stocks[" + i + "].variantId", "이 상품의 옵션이 아닙니다: " + stock.variantId());
+            }
+            if (stockByOption.put(stock.variantId(), stock.stock()) != null) {
+                throw ValidationFailures.of("stocks[" + i + "].variantId", "같은 옵션이 두 번 있습니다: " + stock.variantId());
+            }
+        }
+        if (stockByOption.size() != optionIds.size()) {
+            List<UUID> missing = all.stream().map(ProductOption::getId).filter(id -> !stockByOption.containsKey(id)).toList();
+            throw ValidationFailures.of("stocks", "모든 옵션의 재고가 필요합니다(0 허용, 판매 중지 옵션 포함). 빠진 옵션: " + missing);
+        }
+        return stockByOption;
+    }
+
+    /**
      * 상품 행을 잠그고 읽는다 — 한 상품에 대한 수정을 줄 세운다. 이 뒤의 읽기(기본가 · 추가금 · 선택)는 앞 수정이 커밋한 값을 본다.
      * 잠그지 않으면 겹친 두 수정이 서로의 커밋 전 값으로 옵션 가격을 계산해 덮는다(ProductRepository#findForUpdate).
      */
@@ -374,17 +504,17 @@ public class ProductEditService {
     }
 
     /** 상품이 있고 지금 고칠 수 있는 상태인가 — 사전예약 오픈 뒤면 409. */
-    private Product requireEditable(UUID productId) {
+    private Product requireEditable(UUID productId, Optional<CampaignWindow> window) {
         Product product = lockProduct(productId);
-        requireNotOpened(product);
+        requireNotOpened(product, window);
         return product;
     }
 
-    private void requireNotOpened(Product product) {
-        requireNotOpened(product, EDIT_FROZEN);
+    private void requireNotOpened(Product product, Optional<CampaignWindow> window) {
+        requireNotOpened(product, window, EDIT_FROZEN);
     }
 
-    private void requireNotOpened(Product product, String message) {
+    private void requireNotOpened(Product product, Optional<CampaignWindow> window, String message) {
         if (product.getSaleMode() != SaleMode.PREORDER) {
             return;
         }
@@ -392,31 +522,29 @@ public class ProductEditService {
             // 회차가 취소된 상품은 더 바꿀 것이 없다 — 회차 시각과 상관없이(취소 뒤 오픈이 미래로 옮겨져도) 409
             throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, "회차가 취소된 상품은 바꿀 수 없습니다.");
         }
-        boolean frozen = crossReads.findCampaign(product.getId())
-                .map(window -> !clock.instant().isBefore(window.opensAt().minus(FREEZE_BEFORE_OPEN)))
-                .orElse(false);
+        boolean frozen = window.map(campaign -> !clock.instant().isBefore(campaign.opensAt().minus(FREEZE_BEFORE_OPEN))).orElse(false);
         if (frozen) {
             throw new BusinessException(CatalogErrorCode.STATE_CONFLICT, message);
         }
     }
 
     /**
-     * 사전예약 상품이면 PREORDER_PRODUCT_CHANGED 를 같은 트랜잭션의 아웃박스에 적는다 — preorder 가 모든 인스턴스의 접수용 상품 사본(캐시)을 비워
-     * 다음 접수가 바뀐 값으로 판정하게 한다. 수정이 되돌려지면 이벤트도 남지 않는다. 일반 상품은 preorder 가 읽지 않으므로 적지 않는다.
-     * 회차 취소는 자기 이벤트(PREORDER_CAMPAIGN_CANCELED)로 preorder 가 비우므로 여기를 거치지 않는다.
+     * 사전예약 상품이면 PREORDER_PRODUCT_CHANGED 를 같은 트랜잭션의 아웃박스에 적는다 — preorder 가 모든 인스턴스의 접수용 상품 사본(캐시)을 비우고,
+     * 회차 행의 상품명 · 판매 상태 · 공개 여부 사본을 번호가 더 클 때 덮는다. 번호는 상품 행을 잠근 이 트랜잭션에서 올랐으므로 커밋 순서와 같다.
+     * 수정이 되돌려지면 이벤트도 남지 않는다. 일반 상품은 preorder 가 읽지 않으므로 적지 않는다.
      */
     private void notifyPreorder(Product product) {
         if (product.getSaleMode() == SaleMode.PREORDER) {
-            outbox.append(new PreorderProductChanged(product.getId()));
+            outbox.append(PreorderProductChanged.of(product));
         }
     }
 
     /**
-     * 커밋 직전에 다시 판정한다. 시작 때만 보면 그 뒤 오픈 시각이 지나거나(잠금 대기 · 재계산에 걸린 시간) preorder 가 회차 시각을 앞당겨도
-     * 오픈 뒤에 커밋된다. 이 조회는 READ COMMITTED 라 그때까지 커밋된 회차를 본다. 남는 틈은 이 판정과 커밋 사이뿐이다.
+     * 커밋 직전에 다시 판정한다. 시작 때만 보면 그 뒤 오픈 시각이 지나(잠금 대기 · 재계산에 걸린 시간) 오픈 뒤에 커밋된다. 회차는 트랜잭션 전에 받은
+     * 값({@link #scheduleBeforeLock}), 시각은 지금이다. 남는 틈은 이 판정과 커밋 사이, 그리고 회차를 받은 뒤의 preorder 쪽 일정 변경이다.
      */
-    private void requireNotOpenedAtCommit(Product product) {
-        requireNotOpened(product);
+    private void requireNotOpenedAtCommit(Product product, Optional<CampaignWindow> window) {
+        requireNotOpened(product, window);
     }
 
     /** 옵션 가격을 `기본가 + Σ추가금` 으로 다시 계산한다. valueId 를 주면 그 값을 고른 옵션만, null 이면 전부. */
@@ -426,8 +554,16 @@ public class ProductEditService {
             if (valueId != null && !valueIds.contains(valueId)) {
                 continue;
             }
-            option.recomputePrice(ProductRegistrationValidator.requireStorablePrice(
-                    computedPrice(product, document.picksOf(valueIds)), cause));
+            BigDecimal price = ProductRegistrationValidator.requireStorablePrice(computedPrice(product, document.picksOf(valueIds)), cause);
+            ProductRegistrationValidator.requireSellablePrice(price, product.getDiscountRate(), cause);
+            option.recomputePrice(price);
+        }
+    }
+
+    /** 지금 할인율로 모든 옵션의 할인가가 하한 이상인가. 아니면 discountRate 의 400. */
+    private void requireSellablePrices(Product product) {
+        for (ProductOption option : options.findByProductIdOrderByCreatedAtAscIdAsc(product.getId())) {
+            ProductRegistrationValidator.requireSellablePrice(option.getPrice(), product.getDiscountRate(), "discountRate");
         }
     }
 
@@ -531,7 +667,7 @@ public class ProductEditService {
     }
 
     private ProductDetailView.Variant variantOf(UUID productId, UUID variantId) {
-        return detailService.findAdminProduct(productId).product().variants().stream()
+        return detailService.findAdminSnapshot(productId).product().variants().stream()
                 .filter(v -> v.variantId().equals(variantId)).findFirst()
                 .orElseThrow(() -> new IllegalStateException("variant " + variantId + " vanished"));
     }

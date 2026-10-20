@@ -15,7 +15,8 @@ import java.util.UUID;
  * 숨기지 않으므로, 이 칸을 null 이 될 수 있는 타입으로 바꾸지 않는다.
  * 여기서 먼저 숨기면 관리자 등록 흐름이 자기 상품을 못 본다. visible 로 완료를 추론하지 않는다 — 두 칸을 모두 본다.
  *
- * @param registrationCompleted 판매 방식별 준비 — 사전예약은 preorder 회차 행, 일반은 order 재고 행이 있다(등록 이벤트가 처리됐다)
+ * @param registrationCompleted 판매 방식별 준비 — 일반은 order 의 판매 준비 이벤트를 받았다(products.stock_ready_at). 사전예약은 늘 true 다 — preorder 접수가
+ *                              이 응답을 동기로 부르므로 그 안에서 preorder 를 부르면 서로를 기다린다. preorder 는 이 칸 대신 접수가 잠근 회차 행으로 본다
  */
 public record ProductOptionsView(
         UUID productId,
@@ -31,7 +32,7 @@ public record ProductOptionsView(
         options = options == null ? List.of() : List.copyOf(options);
     }
 
-    /** @param price 최종가(정수 원). 스냅샷 원본 */
+    /** @param price 회원이 내는 값(정수 원) — 정가에 상품 할인율을 건 할인가. 스냅샷 원본 */
     public record Option(UUID optionId, String sku, String title, BigDecimal price, SaleStatus status) {
     }
 }

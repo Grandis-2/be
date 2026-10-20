@@ -14,6 +14,7 @@ import io.micrometer.core.instrument.Timer;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -32,10 +33,13 @@ public class PreorderAcceptService {
     static final String UQ_ACTIVE = "uq_preorder_active";
     static final String UQ_ADMISSION = "uq_preorder_admission";
     static final String UQ_IDEMPOTENCY = "uq_preorder_idempotency";
-    static final String FK_CUSTOMER = "fk_preorder_customer";
 
     /** 접수 시간 · 결과(accepted · replayed · 오류 코드)별 건수. */
     static final String ACCEPT_METRIC = "preorder.accept";
+    /** 업무 지표 — 새 예약(success) · 업무 거절(4xx, rejected) · 그 밖의 실패(5xx · 예외, error)를 접수 경로(user · admin)별로 센다. */
+    static final String CREATED_METRIC = "nova.preorder.created";
+    static final String USER_CHANNEL = "user";
+    static final String ADMIN_CHANNEL = "admin";
 
     private final AdmissionTicketVerifier ticketVerifier;
     private final CatalogReader catalogReader;
@@ -51,6 +55,12 @@ public class PreorderAcceptService {
         this.transaction = transaction;
         this.preorders = preorders;
         this.meterRegistry = meterRegistry;
+        // 처음부터 0 으로 내놓는다 — 시계열이 없으면 "접수 중인데 새 예약 0건" 경보가 값 없음으로 빠진다
+        for (String channel : List.of(USER_CHANNEL, ADMIN_CHANNEL)) {
+            for (String result : List.of("success", "rejected", "error")) {
+                meterRegistry.counter(CREATED_METRIC, "result", result, "channel", channel);
+            }
+        }
     }
 
     /**
@@ -60,15 +70,15 @@ public class PreorderAcceptService {
      */
     public AcceptResult acceptByCustomer(UUID customerId, UUID queryProductId, UUID productId, UUID optionId,
                                          String idempotencyKey, String admissionTicket) {
-        return measured(() -> acceptVerified(customerId, queryProductId, productId, optionId, idempotencyKey,
-                admissionTicket));
+        return measured(USER_CHANNEL, () -> acceptVerified(customerId, queryProductId, productId, optionId,
+                idempotencyKey, admissionTicket));
     }
 
     /** 관리자 대신 접수. 같은 트랜잭션 · 같은 규칙이고 입장권만 없다. */
     public AcceptResult acceptByAdmin(UUID customerId, UUID productId, UUID optionId, String idempotencyKey,
                                       String reason, String internalNote) {
-        return measured(() -> accept(new AcceptCommand(customerId, productId, optionId, idempotencyKey, null,
-                EventActor.ADMIN, reason, internalNote)));
+        return measured(ADMIN_CHANNEL, () -> accept(new AcceptCommand(customerId, productId, optionId, idempotencyKey,
+                null, EventActor.ADMIN, reason, internalNote)));
     }
 
     private AcceptResult acceptVerified(UUID customerId, UUID queryProductId, UUID productId, UUID optionId,
@@ -91,19 +101,29 @@ public class PreorderAcceptService {
         return accept(command);
     }
 
-    /** 결과 태그는 accepted · replayed · 오류 코드(유한한 값)이고, 그 밖의 예외는 error 로 센다. */
-    private AcceptResult measured(Supplier<AcceptResult> accept) {
+    /**
+     * 결과 태그는 accepted · replayed · 오류 코드(유한한 값)이고, 그 밖의 예외는 error 로 센다.
+     * 업무 지표는 접수 트랜잭션이 끝난 뒤 세고, 같은 접수 키의 재전송은 새 예약이 아니라 세지 않는다.
+     */
+    private AcceptResult measured(String channel, Supplier<AcceptResult> accept) {
         Timer.Sample sample = Timer.start(meterRegistry);
         String outcome = "error";
+        String result = "error";
         try {
-            AcceptResult result = accept.get();
-            outcome = result.replayed() ? "replayed" : "accepted";
-            return result;
+            AcceptResult accepted = accept.get();
+            outcome = accepted.replayed() ? "replayed" : "accepted";
+            result = accepted.replayed() ? null : "success";
+            return accepted;
         } catch (BusinessException e) {
             outcome = e.errorCode().name();
+            // 다른 서비스 장애(503) 같은 5xx 는 업무 거절이 아니다
+            result = e.errorCode().status() < 500 ? "rejected" : "error";
             throw e;
         } finally {
             sample.stop(meterRegistry.timer(ACCEPT_METRIC, "outcome", outcome));
+            if (result != null) {
+                meterRegistry.counter(CREATED_METRIC, "result", result, "channel", channel).increment();
+            }
         }
     }
 
@@ -126,7 +146,6 @@ public class PreorderAcceptService {
                             .map(existing -> Map.<String, Object>of("existingPreorderId", existing.preorderToken()))
                             .orElse(null));
             case UQ_ADMISSION -> throw new BusinessException(PreorderErrorCode.ADMISSION_TICKET_USED);
-            case FK_CUSTOMER -> throw new BusinessException(PreorderErrorCode.MEMBER_NOT_FOUND);
             default -> throw e;
         };
     }

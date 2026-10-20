@@ -64,9 +64,9 @@ public class OrderFixtures {
 
     public static PlaceOrderCommand preorderCommand(UUID customerId, UUID preorderId, PreorderProduct product,
                                                     UUID optionId, int quantity) {
-        return new PlaceOrderCommand(customerId, OrderSource.PREORDER, preorderId, preorderToken(preorderId), ADDRESS,
+        return new PlaceOrderCommand(customerId, OrderSource.PREORDER, preorderId, preorderToken(preorderId), null, ADDRESS,
                 List.of(new PlaceOrderCommand.Line(product.productId(), optionId, quantity, UNIT_PRICE, 0, BigDecimal.ZERO,
-                        PRODUCT_TITLE, OPTION_TITLE)));
+                        PRODUCT_TITLE, null, OPTION_TITLE, null)));
     }
 
     /** 일반 판매 상품 하나와 옵션 optionCount 개. 재고 행은 만들지 않는다. 만든 순서 = option_id 오름차순. */
@@ -112,8 +112,8 @@ public class OrderFixtures {
                 VALUES (?, '스마트폰', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
                 """);
         return insert("""
-                INSERT INTO products (id, category_id, sale_mode, title, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 'ACTIVE', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                INSERT INTO products (id, category_id, sale_mode, title, brand, model_name, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'APPLE', 'A0001', 'ACTIVE', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
                 """, bytes(categoryId), saleMode, PRODUCT_TITLE);
     }
 

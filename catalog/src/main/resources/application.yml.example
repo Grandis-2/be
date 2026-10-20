@@ -23,12 +23,17 @@ spring:
     open-in-view: false
   http:
     serviceclient:
-      # 리뷰 작성 때만 부른다(조회 · 수정 · 삭제는 부르지 않는다). 회원 토큰을 그대로 싣는다.
-      # 타임아웃(연결 300ms · 읽기 1s)은 CatalogDefaults 가 준다. 주소가 없으면 리뷰 작성이 500 이다.
-      order:      # 내 주문상품(GET /internal/order-items/{id}) — contracts/order-internal.md
+      # 타임아웃(연결 300ms · 읽기 1s)은 CatalogDefaults 가 준다.
+      # order: 리뷰 작성 때 부른다(회원 토큰을 그대로 싣는다). 주소가 없으면 리뷰 작성이 500 이다.
+      # order-stocks: 목록 · 상세 · 증정품 후보가 요청마다 남은 수량을 묻는다(토큰 없음). 주소는 따로 주지 않으면 order 와 같다 — 없으면
+      #   order 장애와 같이 목록은 품절 표시 없이, 상세는 수량 없이 나가고, 증정품 후보는 503 이다.
+      order:      # 내 주문상품(GET /internal/order-items/{id}) · 재고(GET /internal/stocks) — contracts/order-internal.md
         base-url: http://localhost:8084
       member:     # 작성자 표시명(GET /internal/customers/me) — contracts/member-internal.md
         base-url: http://localhost:8080
+      # preorder: 회차 일정(토큰 없음). 주소가 없으면 preorder 장애와 같다 — 목록은 사전예약 상품을 빼고, 사전예약 상세 · 관리자 화면 · 수정은 503 이다.
+      preorder:   # 회차 일정(GET /internal/preorders/campaigns/open · ?productIds=) — contracts/preorder-internal.md 2절
+        base-url: http://localhost:8083
   data:
     redis:
       host: localhost
@@ -44,6 +49,9 @@ spring:
 
 server:
   port: 8082
+  # 켜지 않는다 — 조회 · 검색 신호의 IP 별 익명 id 상한이 X-Forwarded-For 를 받은 그대로 센다(nova.signals.trusted-proxy-hops, member 와 같은 방식).
+  # 비워 둬도 코드 기본값(CatalogDefaults)이 none 이다. native · framework 로 켜면 hops > 0 일 때 기동 실패
+  forward-headers-strategy: none
 
 # 헬스 체크(ALB 대상 그룹): 관리 포트 9082 의 GET /actuator/health/readiness — 토큰 없이 200 {"status":"UP"}. 서비스 포트(8082)로는 actuator 가 나가지 않는다.
 # 관리 포트 · 노출(health 만) · probes · readiness 구성(앱 준비 상태만, DB · Redis 제외)은 CatalogDefaults 가 코드 기본값으로 준다.
@@ -77,6 +85,11 @@ jwt:
 
 # 다른 서비스로 가는 이벤트(상품 등록 → preorder 회차 · 차수, order 초기 재고)는 아웃박스(catalog_outbox_events)에 적고 커밋 뒤 보낸다.
 nova:
+  # 조회 · 검색 신호(랭킹 · 인기 검색어). 비회원은 IP 하나(IPv6 는 /64)가 하루(KST)에 익명 id 를 anonymous-ids-per-ip 개까지만 센다(1 이상).
+  # trusted-proxy-hops: X-Forwarded-For 에서 믿는 프록시 수 — 운영은 CloudFront → ALB 라 2(오른쪽에서 두 번째 칸). 로컬 · 프록시 없음이면 칸이 모자라 remoteAddr
+  signals:
+    trusted-proxy-hops: 2
+    anonymous-ids-per-ip: 20
   # 아웃박스 발행(common:outbox). transport 는 필수(없으면 기동 실패)이고 운영 값은 sqs 다.
   # log 는 보내지 않고 행을 발행 완료로 표시하는 로컬 · 테스트 전용 전송이라, log-transport-allowed: true 를 함께 적어야 뜬다.
   # 그 허용 줄은 이 예시에 적지 않는다 — 여기서 만든 운영 설정이 실수로 log 로 뜨지 않게
@@ -88,21 +101,33 @@ nova:
     # relay-after: 1m       # 만든 지 이만큼 지난 미발행 행만 릴레이가 가져간다
     # relay-lease: 1m       # 가져간 행을 다른 인스턴스가 건너뛰는 시간. 행마다 보내기 직전에 연장한다
     #                       # 전송 한 번은 sqs.api-call-timeout × 2(큐 URL 조회 + 전송)이고, 리스는 그것 + 5s 보다 길어야 한다(아니면 기동 실패)
-  # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다 — preorder-events · order-events 에 보내기 권한이 필요하다
+  # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다 — preorder-events · order-events 에 보내기, catalog-events 에 GetQueueUrl · ReceiveMessage · DeleteMessage · ChangeMessageVisibility 권한이 필요하다
   sqs:
     region: ap-northeast-2
     endpoint: http://localhost:4566
-    # queues:               # 논리 목적지 → 실제 큐 이름. 없으면 논리 이름(preorder-events · order-events)을 그대로 쓴다
+    # queues:               # 논리 목적지 → 실제 큐 이름. 없으면 논리 이름(preorder-events · order-events · 받는 catalog-events)을 그대로 쓴다
     #   preorder-events: preorder-events
     #   order-events: order-events
-  # 관리자 상품 사진 업로드(POST /api/v1/admin/products/image-uploads). 브라우저가 presigned URL 로 버킷에 직접 PUT 하고 조회는 CDN 으로 한다.
-  # bucket · cdn-base-url 이 없으면 기동하지 않는다. 상품 등록은 cdn-base-url 아래 사진 주소만 받는다(다른 주소는 400).
+    # 받는 큐(catalog-events) 소비기 — contracts/catalog-inbound-events.md. 코드 기본값은 켬(판매 준비가 이 큐의 이벤트로 정해진다).
+    # 끄면 새 일반 상품이 목록 · 상세에 나오지 않는다. 아래 값을 바꿀 때만 적는다
+    # 로컬 Floci 는 docker/floci/create-queues.sh 가 catalog-events · catalog-events-dlq 를 만든다
+    # 켠 채 큐가 없으면 기동은 되고, 받기 실패를 WARN 으로 남기며 늦춰 다시 시도한다(실측. 대기 상한 30초는 common:sqs QueuePoller)
+    # consumer:
+    #   enabled: true
+    #   queue: catalog-events
+    #   concurrency: 1
+    #   wait-seconds: 20
+    #   visibility: 5m       # 처리 한 건보다 길게
+    #   backoff-base: 30s
+    #   backoff-max: 5m
+  # 관리자 사진 업로드(POST /api/v1/admin/images). 서버가 받은 사진을 검사 · 다시 인코딩해 버킷에 올리고 조회는 CDN 으로 한다.
+  # bucket · cdn-base-url 이 없으면 기동하지 않는다. 상품 · 홍보 저장은 cdn-base-url 아래 새 사진 주소만 받는다(다른 주소는 400).
   # 배포 환경은 인프라가 uploads: true 인 서비스에 bucket · cdn-base-url · region 을 넣으므로 운영 설정에 적지 않는다.
   # endpoint 도 적지 않는다 — 자격 증명은 태스크 역할(업로드 버킷 PutObject 권한)을 쓴다.
   upload:
     bucket: CHANGE_ME                           # 업로드 버킷 이름
     cdn-base-url: https://cdn.grandis-nova.link  # 그 버킷을 내놓는 CDN(https, 경로 없음)
-    # 로컬 에뮬레이터(Floci)에 올려 볼 때만 연다. 버킷은 미리 만들어 둔다. Floci 는 서명을 검사하지 않아 크기 · 형식이 달라도 받는다
+    # 로컬 에뮬레이터(Floci)에 올려 볼 때만 연다. 버킷은 미리 만들어 둔다
     # region: ap-northeast-2
     # endpoint: http://localhost:4566
   # 브라우저 호출을 허용할 프론트 오리진(scheme://host[:port], 정확 일치). 적으면 기본값(운영 프론트 두 도메인 · API 도메인)이 통째로 바뀐다.

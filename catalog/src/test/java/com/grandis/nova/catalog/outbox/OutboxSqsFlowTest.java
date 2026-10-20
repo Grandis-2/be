@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog.outbox;
 
+import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.registration.ProductRegistrationRequest;
 import com.grandis.nova.catalog.registration.ProductRegistrationService;
@@ -28,6 +29,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * 실제 SQS 프로토콜(Floci) 위에서 등록 → 아웃박스 → 큐. 받는 쪽(preorder · order)이 푸는 봉투 모양과 메시지 속성까지 본다.
@@ -50,12 +52,12 @@ class OutboxSqsFlowTest {
     void registrationEventsReachTheirQueues() {
         UUID categoryId = new ShopFixtures(jdbcTemplate).category();
         UUID inStock = registrations.register("k-" + ShopFixtures.unique(), new ProductRegistrationRequest(categoryId, SaleMode.IN_STOCK,
-                "케이블", null, null, true, new BigDecimal("9000"), null, null,
+                "케이블", Brand.APPLE, "A0001", null, null, true, new BigDecimal("9000"), null, null, null,
                 List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, 3)), null, null, null))
                 .registration().productId();
         Instant opensAt = Instant.now().plus(Duration.ofHours(1));
         UUID preorder = registrations.register("k-" + ShopFixtures.unique(), new ProductRegistrationRequest(categoryId, SaleMode.PREORDER,
-                "Nova", null, null, false, new BigDecimal("1000"), null, null,
+                "Nova", Brand.APPLE, "A0001", null, null, false, new BigDecimal("1000"), null, null, null,
                 List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, null)), null,
                 new ProductRegistrationRequest.Campaign(opensAt, opensAt.plus(Duration.ofDays(1))),
                 List.of(new ProductRegistrationRequest.ShipmentBatch(1, 1L, null, LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 7)))))
@@ -76,8 +78,10 @@ class OutboxSqsFlowTest {
         assertThat(campaignEnvelope.get("eventType").asString()).isEqualTo("PREORDER_PRODUCT_REGISTERED");
         assertThat(campaignEnvelope.get("payload").get("shipmentBatches")).hasSize(1);
 
-        assertThat(jdbcTemplate.queryForList("SELECT published_at FROM catalog_outbox_events WHERE aggregate_id IN (?, ?)",
-                Object.class, UuidBinary.toBytes(inStock), UuidBinary.toBytes(preorder))).as("둘 다 발행 완료로 표시").hasSize(2).doesNotContainNull();
+        // 발행기는 SQS 로 보낸 뒤에 발행 완료를 적는다 — 메시지를 받은 순간에는 아직 비어 있을 수 있어(CI 에서 가끔 실패) 적힐 때까지 기다린다
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(jdbcTemplate.queryForList(
+                "SELECT published_at FROM catalog_outbox_events WHERE aggregate_id IN (?, ?)", Object.class, UuidBinary.toBytes(inStock),
+                UuidBinary.toBytes(preorder))).as("둘 다 발행 완료로 표시").hasSize(2).doesNotContainNull());
     }
 
     /** 그 상품의 메시지만 받아 지운다. 큐를 시험끼리 공유하므로 다른 메시지는 건드리지 않는다. */

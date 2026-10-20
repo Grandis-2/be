@@ -18,10 +18,26 @@ class OrderLineTest {
         assertThatThrownBy(() -> line("상품", "나".repeat(121))).isInstanceOf(IllegalArgumentException.class);
     }
 
+    // model_name_snapshot varchar(40) NULL — 사전예약 · 옛 주문은 비어 있다
+    @Test
+    void modelNameIsOptionalAndFitsDatabaseColumn() {
+        assertThat(lineWithModel(null).modelName()).isNull();
+        assertThat(lineWithModel("가".repeat(40)).modelName()).hasSize(40);
+        assertThatThrownBy(() -> lineWithModel("가".repeat(41))).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    // image_url_snapshot varchar(1000) NULL — 사전예약 · 옛 주문 · 사진 없는 옵션은 비어 있다
+    @Test
+    void imageUrlIsOptionalAndFitsDatabaseColumn() {
+        assertThat(lineWithImage(null).imageUrl()).isNull();
+        assertThat(lineWithImage("가".repeat(1000)).imageUrl()).as("글자 수로 센다(MySQL varchar)").hasSize(1000);
+        assertThatThrownBy(() -> lineWithImage("가".repeat(1001))).isInstanceOf(IllegalArgumentException.class);
+    }
+
     @Test
     void subtotalAddsWarrantyPriceTimesWarrantyQuantity() {
         OrderLine line = new OrderLine(TestIds.id(1), TestIds.id(2), new Quantity(3), Money.won(1_250_000), 2, Money.won(199_000),
-                "상품", "옵션");
+                "상품", null, "옵션", null);
 
         assertThat(line.subtotal()).isEqualTo(Money.won(3 * 1_250_000 + 2 * 199_000));
         assertThat(line("상품", "옵션").subtotal()).isEqualTo(Money.won(1000));
@@ -30,17 +46,25 @@ class OrderLineTest {
     // ck_order_item_warranty_quantity(0 ~ 수량) · 보증을 사지 않았으면 보증가 0
     @Test
     void warrantyQuantityStaysWithinQuantityAndUnboughtWarrantyIsFree() {
-        assertThatThrownBy(() -> new OrderLine(TestIds.id(1), TestIds.id(2), new Quantity(2), Money.won(1000), 3, Money.won(10), "상품", "옵션"))
+        assertThatThrownBy(() -> new OrderLine(TestIds.id(1), TestIds.id(2), new Quantity(2), Money.won(1000), 3, Money.won(10), "상품", null, "옵션", null))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new OrderLine(TestIds.id(1), TestIds.id(2), new Quantity(2), Money.won(1000), -1, Money.won(10), "상품", "옵션"))
+        assertThatThrownBy(() -> new OrderLine(TestIds.id(1), TestIds.id(2), new Quantity(2), Money.won(1000), -1, Money.won(10), "상품", null, "옵션", null))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new OrderLine(TestIds.id(1), TestIds.id(2), new Quantity(2), Money.won(1000), 0, Money.won(10), "상품", "옵션"))
+        assertThatThrownBy(() -> new OrderLine(TestIds.id(1), TestIds.id(2), new Quantity(2), Money.won(1000), 0, Money.won(10), "상품", null, "옵션", null))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThat(new OrderLine(TestIds.id(1), TestIds.id(2), new Quantity(2), Money.won(1000), 2, Money.won(10), "상품", "옵션")
+        assertThat(new OrderLine(TestIds.id(1), TestIds.id(2), new Quantity(2), Money.won(1000), 2, Money.won(10), "상품", null, "옵션", null)
                 .warrantyQuantity()).isEqualTo(2);
     }
 
+    private static OrderLine lineWithImage(String imageUrl) {
+        return OrderLine.withoutWarranty(TestIds.id(1), TestIds.id(2), Quantity.ONE, Money.won(1000), "상품", null, "옵션", imageUrl);
+    }
+
+    private static OrderLine lineWithModel(String modelName) {
+        return OrderLine.withoutWarranty(TestIds.id(1), TestIds.id(2), Quantity.ONE, Money.won(1000), "상품", modelName, "옵션", null);
+    }
+
     private static OrderLine line(String productTitle, String optionTitle) {
-        return OrderLine.withoutWarranty(TestIds.id(1), TestIds.id(2), Quantity.ONE, Money.won(1000), productTitle, optionTitle);
+        return OrderLine.withoutWarranty(TestIds.id(1), TestIds.id(2), Quantity.ONE, Money.won(1000), productTitle, null, optionTitle, null);
     }
 }

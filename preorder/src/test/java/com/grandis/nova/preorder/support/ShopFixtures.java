@@ -42,15 +42,25 @@ public class ShopFixtures {
         return preorderProduct(now.minusSeconds(3600), now.plusSeconds(3600));
     }
 
+    /** 지금 접수 중이고 첫 차수가 그 순번까지인 상품. 몇 건만 접수해도 다음 차수로 넘어가게 할 때 쓴다. */
+    public PreorderProduct openPreorderProduct(long firstBatchLastPosition) {
+        Instant now = Instant.now();
+        return preorderProduct(now.minusSeconds(3600), now.plusSeconds(3600), firstBatchLastPosition);
+    }
+
     public PreorderProduct preorderProduct(Instant opensAt, Instant closesAt) {
+        return preorderProduct(opensAt, closesAt, FIRST_BATCH_LAST_POSITION);
+    }
+
+    private PreorderProduct preorderProduct(Instant opensAt, Instant closesAt, long firstBatchLastPosition) {
         UUID productId = product("PREORDER", "ACTIVE");
         UUID optionId = option(productId, "ACTIVE");
         jdbcTemplate.update("""
                 INSERT INTO preorder_campaigns (product_id, opens_at, closes_at, created_at, updated_at)
                 VALUES (?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
                 """, UuidBinary.toBytes(productId), utc(opensAt), utc(closesAt));
-        UUID firstBatchId = batch(productId, 1, 1, FIRST_BATCH_LAST_POSITION);
-        UUID lastBatchId = batch(productId, 2, FIRST_BATCH_LAST_POSITION + 1, null);
+        UUID firstBatchId = batch(productId, 1, 1, firstBatchLastPosition);
+        UUID lastBatchId = batch(productId, 2, firstBatchLastPosition + 1, null);
         return new PreorderProduct(productId, optionId, firstBatchId, lastBatchId);
     }
 
@@ -60,8 +70,8 @@ public class ShopFixtures {
                 VALUES (?, '스마트폰', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
                 """);
         return insert("""
-                INSERT INTO products (id, category_id, sale_mode, title, status, created_at, updated_at)
-                VALUES (?, ?, ?, 'Nova 1', ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+                INSERT INTO products (id, category_id, sale_mode, title, brand, model_name, status, created_at, updated_at)
+                VALUES (?, ?, ?, 'Nova 1', 'APPLE', 'A0001', ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
                 """, UuidBinary.toBytes(categoryId), saleMode, status);
     }
 
@@ -139,9 +149,28 @@ public class ShopFixtures {
         return jobId;
     }
 
+    /** 결제 기한이 지난 예약으로 만든다. 결제 가능 시작을 기한(24시간)보다 더 앞으로 당긴다. */
+    public void passPaymentDue(UUID preorderId) {
+        jdbcTemplate.update("UPDATE preorders SET payable_from = payable_from - INTERVAL 25 HOUR WHERE id = ?",
+                (Object) UuidBinary.toBytes(preorderId));
+    }
+
+    /** 그 대상에 대해 아웃박스에 적힌 그 종류의 이벤트 수. */
+    public int outboxEvents(String eventType, UUID aggregateId) {
+        return count("SELECT COUNT(*) FROM preorder_outbox_events WHERE event_type = ? AND aggregate_id = ?",
+                eventType, UuidBinary.toBytes(aggregateId));
+    }
+
     /** 확인용 건수 조회. */
     public int count(String sql, Object... args) {
         return jdbcTemplate.queryForObject(sql, Integer.class, args);
+    }
+
+    /** 회차 행의 catalog 상품 사본(상품명 · 판매 상태 · 공개 여부). 번호는 그대로 둔다. */
+    public void listing(UUID productId, String title, String status, boolean visible) {
+        jdbcTemplate.update("""
+                UPDATE preorder_campaigns SET product_title = ?, product_status = ?, visible = ? WHERE product_id = ?
+                """, title, status, visible, UuidBinary.toBytes(productId));
     }
 
     /** 회차의 다음 순번 카운터. */

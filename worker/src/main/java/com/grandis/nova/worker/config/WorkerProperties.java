@@ -21,18 +21,22 @@ public record WorkerProperties(
         @DefaultValue Circuit circuit,
         @DefaultValue Retry retry,
         @DefaultValue Consumer consumer,
-        @DefaultValue RejectGuard rejectGuard
+        @DefaultValue RejectGuard rejectGuard,
+        @DefaultValue Draw draw
 ) {
 
     /** SQS DelaySeconds 상한. 지연 재전송의 지연은 이보다 길 수 없다. */
     private static final Duration MAX_DELAY = Duration.ofMinutes(15);
+    /** SQS 가시성 시간 상한. 받은 메시지를 늦춰 다시 보이게 할 때의 지연은 이보다 길 수 없다. */
+    private static final Duration MAX_VISIBILITY = Duration.ofHours(12);
 
     public WorkerProperties {
-        // 한 차례(조회 + 호출 + 즉시 재시도)가 가시성 시간 안에 끝나야 같은 메시지를 다른 worker 가 또 받지 않는다
-        Duration round = mock.connectTimeout().plus(mock.readTimeout()).multipliedBy(retry.inRound() + 2L)
-                .plus(retry.inRoundDelayMax().multipliedBy(retry.inRound()));
+        // 한 차례가 가시성 시간 안에 끝나야 같은 메시지를 다른 worker 가 또 받지 않는다. 가장 긴 차례는 드로우 추첨이다 —
+        // 회차 조회와 추첨을 각각 즉시 재시도까지 부른다(예약 등록의 조회 + 호출 + 즉시 재시도보다 길거나 같다)
+        Duration round = mock.connectTimeout().plus(mock.readTimeout()).multipliedBy(2L * (retry.inRound() + 1))
+                .plus(retry.inRoundDelayMax().multipliedBy(2L * retry.inRound()));
         require(consumer.visibility().compareTo(round) > 0,
-                "consumer.visibility 는 한 차례(조회 + 호출 + 즉시 재시도)보다 길어야 한다: " + consumer.visibility());
+                "consumer.visibility 는 한 차례(조회 + 호출, 각각 즉시 재시도까지)보다 길어야 한다: " + consumer.visibility());
     }
 
     /**
@@ -220,6 +224,51 @@ public record WorkerProperties(
         public RejectGuard {
             require(invalidRequests >= 1 && positive(per) && positive(pause),
                     "reject-guard 는 invalid-requests >= 1, per > 0, pause > 0 이어야 한다");
+        }
+    }
+
+    /**
+     * 럭키드로우(draw-register) 메시지를 늦춰 다시 받는 간격. 메시지를 지우지 않고 가시성 시간만 늘리므로 받은 횟수가 쌓이고,
+     * 큐의 최대 수신 횟수(운영 5)를 넘으면 SQS 가 DLQ 로 옮긴다. n 번째로 받은 메시지는 n 번째 값을 쓰고, 넘으면 마지막 값을 쓴다.
+     *
+     * @param retryDelays 일시 실패(408 · 429 · 5xx · 시간 초과) 뒤 — 같은 요청을 다시 보낸다(Mock 이 재생한다)
+     * @param waitDelays  추첨할 차례가 아님(받은 응모 수가 다름 · 회차에 응모가 없음) 뒤 — 늦은 응모가 닿기를 기다린다.
+     *                    DLQ 로 가기 전 기다리는 시간의 합이 order 의 "드로우 결과 반영 지연" 경보(마감 뒤 1시간)보다 길어야 사람이 먼저 본다
+     */
+    public record Draw(
+            @DefaultValue({"10s", "30s", "1m", "5m", "15m"}) List<Duration> retryDelays,
+            @DefaultValue({"1m", "5m", "15m", "30m", "1h"}) List<Duration> waitDelays
+    ) {
+
+        public Draw {
+            retryDelays = List.copyOf(retryDelays);
+            waitDelays = List.copyOf(waitDelays);
+            require(!retryDelays.isEmpty() && !waitDelays.isEmpty(), "draw 의 retry-delays · wait-delays 는 비울 수 없다");
+            require(retryDelays.stream().allMatch(Draw::visibilityDelay) && waitDelays.stream().allMatch(Draw::visibilityDelay),
+                    "draw 의 retry-delays · wait-delays 는 0 보다 크고 12h 이하여야 한다");
+        }
+
+        /** @param receiveCount 이 메시지를 받은 횟수(1부터) */
+        public Duration retryDelay(int receiveCount) {
+            return pick(retryDelays, receiveCount);
+        }
+
+        /** @param receiveCount 이 메시지를 받은 횟수(1부터) */
+        public Duration waitDelay(int receiveCount) {
+            return pick(waitDelays, receiveCount);
+        }
+
+        /** 일시 실패 뒤 가장 긴 간격. 응답의 Retry-After 가 더 길어도 여기까지만 늦춘다. */
+        public Duration maxRetryDelay() {
+            return retryDelays.stream().max(Duration::compareTo).orElseThrow();
+        }
+
+        private static Duration pick(List<Duration> delays, int receiveCount) {
+            return delays.get(Math.clamp(receiveCount - 1L, 0, delays.size() - 1));
+        }
+
+        private static boolean visibilityDelay(Duration delay) {
+            return positive(delay) && delay.compareTo(MAX_VISIBILITY) <= 0;
         }
     }
 

@@ -13,7 +13,7 @@ import java.util.UUID;
  *
  * 칸이 빠지거나 결과와 맞지 않으면 풀 때 실패시킨다(재수신 한도를 넘으면 DLQ).
  *
- * @param approvedAt    승인일 때만. 주문은 저장하지 않는다
+ * @param approvedAt    승인일 때만. 이 결과로 승인을 반영하면 주문의 결제 시각(orders.paid_at)이 된다
  * @param declineReason 거절일 때만
  */
 public record OrderPaymentSettled(String providerOrderId, PaymentSettlement.Result result, BigDecimal amount,
@@ -29,6 +29,6 @@ public record OrderPaymentSettled(String providerOrderId, PaymentSettlement.Resu
     }
 
     PaymentSettlement toSettlement(UUID orderId) {
-        return new PaymentSettlement(orderId, providerOrderId, result, amount, declineReason);
+        return new PaymentSettlement(orderId, providerOrderId, result, amount, approvedAt, declineReason);
     }
 }

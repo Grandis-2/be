@@ -138,7 +138,7 @@ class AdminProductRegistrationApiTest {
         void registersInStockProductWithoutAxes() throws Exception {
             String body = """
                     {
-                      "categoryId": "%s", "saleMode": "IN_STOCK", "title": "케이블", "visible": false, "basePrice": 9000,
+                      "categoryId": "%s", "saleMode": "IN_STOCK", "title": "케이블", "brand": "APPLE", "modelName": "A0001", "visible": false, "basePrice": 9000,
                       "combinations": [ { "selections": {}, "stock": 7 } ]
                     }
                     """.formatted(categoryId);
@@ -297,7 +297,7 @@ class AdminProductRegistrationApiTest {
         }
 
         @Test
-        @DisplayName("용량 형식 · 축에 없는 값 · 같은 SKU · 묶음 11장 · 소수 금액은 400")
+        @DisplayName("용량 형식 · 축에 없는 값 · 같은 SKU · 묶음 11장 · 상세 영역 4장 · 소수 금액은 400")
         void optionAndImageRules() throws Exception {
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("").replace("\"value\": \"512 GB\"", "\"value\": \"512\"")),
                     "optionAxes[1].values[1].value");
@@ -314,10 +314,11 @@ class AdminProductRegistrationApiTest {
             }
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody(
                     "\"images\": { \"gallery\": [ { \"color\": \"블랙\", \"items\": [" + eleven + "] } ] },")), "images.gallery[0].items");
-            // 상세 영역에는 상한이 없다
-            register("k-" + ShopFixtures.unique(), preorderBody(
-                    "\"images\": { \"detail\": [ { \"section\": \"유의사항\", \"items\": [" + eleven + "] } ] },"))
-                    .andExpect(status().isCreated());
+            // 상세 영역은 영역마다 3장까지 — 3장은 저장되고 4장은 그 영역의 400
+            String detailOf = "\"images\": { \"detail\": [ { \"section\": \"구매 혜택\", \"items\": [ { \"url\": \"https://img/x.jpg\" } ] }, "
+                    + "{ \"section\": \"유의사항\", \"items\": [%s] } ] },";
+            register("k-" + ShopFixtures.unique(), preorderBody(detailOf.formatted(urls(3)))).andExpect(status().isCreated());
+            expectValidation(register("k-" + ShopFixtures.unique(), preorderBody(detailOf.formatted(urls(4)))), "images.detail[1].items");
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("").replace("\"basePrice\": 1000000", "\"basePrice\": 1000000.5")),
                     "basePrice");
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("").replace("\"title\": \"Nova 1\"", "\"title\": \"\"")),
@@ -337,7 +338,7 @@ class AdminProductRegistrationApiTest {
                     "combinations": [ { "selections": { "color": "블랙", "storage": "256GB" }, "stock": 0 } ],
                     """)), "combinations[color=블랙, storage=256GB].stock");
             String inStock = """
-                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "케이스", "visible": true, "basePrice": 10000,
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "케이스", "brand": "APPLE", "modelName": "A0001", "visible": true, "basePrice": 10000,
                       "optionAxes": [ { "key": "color", "label": "색상", "values": [ { "value": "블랙" }, { "value": "화이트" } ] } ],
                       "combinations": [ { "selections": { "color": "블랙" }, "stock": 5 } %s ] }
                     """;
@@ -368,7 +369,7 @@ class AdminProductRegistrationApiTest {
                     "images": { "detail": [ { "section": "Spec", "items": [ { "url": "https://img/1.jpg" } ] }, { "section": "spec", "items": [ { "url": "https://img/2.jpg" } ] } ] },
                     """)), "images.detail[1].section");
             String noColorAxis = """
-                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "케이블", "visible": true, "basePrice": 9000,
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "케이블", "brand": "APPLE", "modelName": "A0001", "visible": true, "basePrice": 9000,
                       "combinations": [ { "selections": {}, "stock": 1 } ],
                       "images": { "gallery": [ { "color": "블랙", "items": [ { "url": "https://img/1.jpg" } ] } ] } }
                     """.formatted(categoryId);
@@ -376,14 +377,38 @@ class AdminProductRegistrationApiTest {
         }
 
         @Test
-        @DisplayName("사진 주소는 설정한 CDN 주소 아래만 — 바깥 주소 · 비슷한 호스트는 그 칸의 400(시험 CDN 은 https://img)")
-        void imageUrlsMustBeUploaded() throws Exception {
+        @DisplayName("한 상품 안에서 같은 사진 주소는 한 번 — 묶음 · 상세 영역을 건너도 두 번째 자리의 400(사진 수정 API 가 주소로 한 장을 가리킨다)")
+        void imageUrlsAreUniqueWithinProduct() throws Exception {
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("""
-                    "images": { "gallery": [ { "color": "블랙", "items": [ { "url": "https://img/ok.jpg" }, { "url": "https://elsewhere.example/x.jpg" } ] } ] },
-                    """)), "images.gallery[0].items[1].url");
+                    "images": { "gallery": [ { "color": "블랙", "items": [ { "url": "https://img/same.jpg" } ] },
+                                             { "color": "화이트", "items": [ { "url": "https://img/same.jpg" } ] } ] },
+                    """)), "images.gallery[1].items[0].url");
             expectValidation(register("k-" + ShopFixtures.unique(), preorderBody("""
-                    "images": { "detail": [ { "section": "사양", "items": [ { "url": "https://img.evil.test/x.jpg" } ] } ] },
+                    "images": { "gallery": [ { "color": "블랙", "items": [ { "url": "https://img/same.jpg" } ] } ],
+                                "detail": [ { "section": "사양", "items": [ { "url": "https://img/same.jpg" } ] } ] },
                     """)), "images.detail[0].items[0].url");
+            assertThat(productsInCategory()).isZero();
+        }
+
+        @Test
+        @DisplayName("브랜드는 SAMSUNG · APPLE · LG 중 하나, 모델명은 1~40자 필수 — 없거나 · 목록 밖(대소문자 다름 포함) · 비었거나 · 길면 그 칸의 400. 모델명은 앞뒤 공백을 지워 저장한다")
+        void brandAndModelNameRules() throws Exception {
+            String body = preorderBody("");
+            expectValidation(register("k-" + ShopFixtures.unique(), body.replace("\"brand\": \"APPLE\", ", "")), "brand");
+            expectValidation(register("k-" + ShopFixtures.unique(), body.replace("\"brand\": \"APPLE\"", "\"brand\": \"Apple\"")), "brand");
+            expectValidation(register("k-" + ShopFixtures.unique(), body.replace("\"brand\": \"APPLE\"", "\"brand\": \"SONY\"")), "brand");
+            expectValidation(register("k-" + ShopFixtures.unique(), body.replace("\"modelName\": \"A0001\", ", "")), "modelName");
+            expectValidation(register("k-" + ShopFixtures.unique(), body.replace("\"A0001\"", "\"   \"")), "modelName");
+            expectValidation(register("k-" + ShopFixtures.unique(), body.replace("\"A0001\"", "\"" + "A".repeat(41) + "\"")), "modelName");
+            assertThat(productsInCategory()).as("거절된 등록은 상품을 만들지 않는다").isZero();
+
+            JsonNode product = data(register("k-" + ShopFixtures.unique(), body.replace("\"brand\": \"APPLE\"", "\"brand\": \"LG\"")
+                    .replace("\"A0001\"", "\" " + "A".repeat(38) + " \"")).andExpect(status().isCreated())).get("product");
+            assertThat(product.get("brand").asString()).isEqualTo("LG");
+            assertThat(product.get("modelName").asString()).as("앞뒤 공백 포함 40자는 받고, 공백을 지운 값을 저장한다").isEqualTo("A".repeat(38));
+            assertThat(jdbcTemplate.queryForMap("SELECT brand, model_name FROM products WHERE id = ?",
+                    UuidBinary.toBytes(UUID.fromString(product.get("productId").asString()))))
+                    .containsEntry("brand", "LG").containsEntry("model_name", "A".repeat(38));
         }
 
         @Test
@@ -587,7 +612,7 @@ class AdminProductRegistrationApiTest {
         /** 축 없는 일반 상품 하나(조합 하나). 조합 칸 경로는 선택 키로 만든다 — 축이 없으면 combinations[], storage 축이면 combinations[storage=512GB]. */
         private String inStockBody(String basePrice, String stock) {
             return """
-                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Limit", "visible": true, "basePrice": %s,
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Limit", "brand": "APPLE", "modelName": "A0001", "visible": true, "basePrice": %s,
                       "combinations": [ { "selections": {}, "stock": %s } ] }
                     """.formatted(categoryId, basePrice, stock);
         }
@@ -595,7 +620,7 @@ class AdminProductRegistrationApiTest {
         /** 축 하나(값 하나)의 일반 상품. 표시명이 값 그대로라 표시명 상한(120)보다 값 칼럼(60)이 먼저 걸린다. */
         private String singleAxisBody(String key, String value) {
             return """
-                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Limit", "visible": true, "basePrice": 1000,
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Limit", "brand": "APPLE", "modelName": "A0001", "visible": true, "basePrice": 1000,
                       "optionAxes": [ { "key": "%s", "label": "축", "values": [ { "value": "%s" } ] } ],
                       "combinations": [ { "selections": { "%s": "%s" }, "sku": "C1", "stock": 1 } ] }
                     """.formatted(categoryId, key, value, key, value);
@@ -603,7 +628,7 @@ class AdminProductRegistrationApiTest {
 
         private String detailSectionBody(String section) {
             return """
-                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Limit", "visible": true, "basePrice": 1000,
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Limit", "brand": "APPLE", "modelName": "A0001", "visible": true, "basePrice": 1000,
                       "images": { "detail": [ { "section": "%s", "items": [ { "url": "https://img/1.jpg" } ] } ] },
                       "combinations": [ { "selections": {}, "stock": 1 } ] }
                     """.formatted(categoryId, section);
@@ -678,7 +703,7 @@ class AdminProductRegistrationApiTest {
                 {
                   "categoryId": "%s",
                   "saleMode": "PREORDER",
-                  "title": "Nova 1", "description": "설명", "tags": "nova",
+                  "title": "Nova 1", "brand": "APPLE", "modelName": "A0001", "description": "설명", "tags": "nova",
                   "visible": true,
                   "basePrice": 1000000,
                   "warranty": { "offered": true, "surcharge": 150000 },
@@ -744,5 +769,14 @@ class AdminProductRegistrationApiTest {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    /** 사진 n 장의 items 배열 내용(https://img/d0.jpg …). */
+    private static String urls(int n) {
+        StringBuilder items = new StringBuilder();
+        for (int i = 0; i < n; i++) {
+            items.append(i > 0 ? "," : "").append("{ \"url\": \"https://img/d%d.jpg\" }".formatted(i));
+        }
+        return items.toString();
     }
 }

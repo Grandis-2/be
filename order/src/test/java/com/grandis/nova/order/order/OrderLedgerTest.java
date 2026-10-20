@@ -25,6 +25,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -137,7 +140,7 @@ class OrderLedgerTest {
         UUID second = preorder();
         OrderDraft borrowed = draft(second);
         OrderDraft mismatched = new OrderDraft(borrowed.customerId(), borrowed.source(), second,
-                OrderFixtures.preorderToken(first), borrowed.shipTo(), borrowed.lines());
+                OrderFixtures.preorderToken(first), null, borrowed.shipTo(), borrowed.lines());
 
         assertThatThrownBy(() -> ledger.place(mismatched, EventCause.user()))
                 .isInstanceOf(OrderAlreadyPlacedException.class)
@@ -157,11 +160,11 @@ class OrderLedgerTest {
     }
 
     @Test
-    void nonPreorderSourceIsRejectedBeforeWriting() {
+    void draftOutsideAcceptanceRuleIsRejectedBeforeWriting() {
         OrderDraft preorder = draft(preorder());
-        OrderDraft buyNow = new OrderDraft(customerId, OrderSource.BUY_NOW, null, null, preorder.shipTo(), preorder.lines());
+        OrderDraft paidDraw = new OrderDraft(customerId, OrderSource.DRAW, null, null, null, preorder.shipTo(), preorder.lines());
 
-        assertThatThrownBy(() -> ledger.place(buyNow, EventCause.user()))
+        assertThatThrownBy(() -> ledger.place(paidDraw, EventCause.user()))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(ordersOf(customerId)).isZero();
     }
@@ -294,11 +297,45 @@ class OrderLedgerTest {
                 .isEqualTo(new OrderTransition(true, AUTHORIZING));
         assertThat(attemptOf(id)).isEqualTo(ATTEMPT);
 
-        assertThat(ledger.settlePayment(id, PAYMENT_APPROVED, ATTEMPT, EventCause.system("PAYMENT_APPROVED")))
+        assertThat(ledger.settlePayment(id, PAYMENT_APPROVED, ATTEMPT, null, EventCause.system("PAYMENT_APPROVED")))
                 .isEqualTo(new OrderTransition(true, AWAITING_CONFIRMATION));
         assertThat(attemptOf(id)).isNull();
         assertThat(history(id)).containsExactly("1:null>AWAITING_PAYMENT:USER", "2:AWAITING_PAYMENT>AUTHORIZING:USER",
                 "3:AUTHORIZING>AWAITING_CONFIRMATION:SYSTEM");
+    }
+
+    /** 결제 시각은 승인과 같은 트랜잭션에 적는다 — 결과 이벤트의 승인 시각, 없으면(승인 응답) 승인 반영 이력의 시각. */
+    @Test
+    void approvalRecordsPaidAt() {
+        Instant approvedAt = Instant.parse("2026-10-16T03:00:00.123456Z");
+        UUID fromEvent = ledger.place(draft(preorder()), EventCause.user()).id();
+        UUID fromReply = ledger.place(draft(preorder()), EventCause.user()).id();
+        ledger.requestPayment(fromEvent, ATTEMPT, EventCause.user());
+        ledger.requestPayment(fromReply, ATTEMPT, EventCause.user());
+
+        ledger.settlePayment(fromEvent, PAYMENT_APPROVED, ATTEMPT, approvedAt, EventCause.system("PAYMENT_APPROVED"));
+        ledger.settlePayment(fromReply, PAYMENT_APPROVED, ATTEMPT, null, EventCause.system("PAYMENT_APPROVED"));
+
+        assertThat(paidAtOf(fromEvent)).isEqualTo(LocalDateTime.ofInstant(approvedAt, ZoneOffset.UTC));
+        assertThat(paidAtOf(fromReply)).isEqualTo(jdbcTemplate.queryForObject(
+                "SELECT created_at FROM order_events WHERE order_id = ? AND event_sequence = 3", LocalDateTime.class,
+                bytes(fromReply)));
+        assertThat(ledger.settlePayment(fromEvent, PAYMENT_APPROVED, ATTEMPT, Instant.EPOCH, EventCause.system("dup")))
+                .isEqualTo(new OrderTransition(false, AWAITING_CONFIRMATION));
+        assertThat(paidAtOf(fromEvent)).as("중복 승인은 결제 시각을 바꾸지 않는다")
+                .isEqualTo(LocalDateTime.ofInstant(approvedAt, ZoneOffset.UTC));
+    }
+
+    @Test
+    void declineRecordsNoPaidAtAndCarriesNoApprovalTime() {
+        UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
+        ledger.requestPayment(id, ATTEMPT, EventCause.user());
+
+        assertThatThrownBy(() -> ledger.settlePayment(id, PAYMENT_DECLINED, ATTEMPT, Instant.EPOCH, EventCause.system("x")))
+                .isInstanceOf(IllegalArgumentException.class);
+        ledger.settlePayment(id, PAYMENT_DECLINED, ATTEMPT, null, EventCause.system("PAYMENT_DECLINED"));
+
+        assertThat(paidAtOf(id)).isNull();
     }
 
     @Test
@@ -317,11 +354,11 @@ class OrderLedgerTest {
         UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
         ledger.requestPayment(id, ATTEMPT, EventCause.user());
 
-        OrderTransition stale = ledger.settlePayment(id, PAYMENT_DECLINED, EARLIER_ATTEMPT, EventCause.system("late"));
+        OrderTransition stale = ledger.settlePayment(id, PAYMENT_DECLINED, EARLIER_ATTEMPT, null, EventCause.system("late"));
 
         assertThat(stale).isEqualTo(new OrderTransition(false, AUTHORIZING));
         assertThat(attemptOf(id)).isEqualTo(ATTEMPT);
-        assertThat(ledger.settlePayment(id, PAYMENT_DECLINED, ATTEMPT, EventCause.system("now")))
+        assertThat(ledger.settlePayment(id, PAYMENT_DECLINED, ATTEMPT, null, EventCause.system("now")))
                 .isEqualTo(new OrderTransition(true, AWAITING_PAYMENT));
         assertThat(attemptOf(id)).isNull();
     }
@@ -332,7 +369,7 @@ class OrderLedgerTest {
         UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
         ledger.requestPayment(id, ATTEMPT, EventCause.user());
 
-        assertThat(ledger.settlePayment(id, PAYMENT_APPROVED, EARLIER_ATTEMPT, EventCause.system("x")))
+        assertThat(ledger.settlePayment(id, PAYMENT_APPROVED, EARLIER_ATTEMPT, null, EventCause.system("x")))
                 .isEqualTo(new OrderTransition(true, AWAITING_CONFIRMATION));
     }
 
@@ -340,7 +377,7 @@ class OrderLedgerTest {
     void paymentResultOutsideAuthorizingChangesNothing() {
         UUID id = ledger.place(draft(preorder()), EventCause.user()).id();
 
-        assertThat(ledger.settlePayment(id, PAYMENT_APPROVED, ATTEMPT, EventCause.system("x")))
+        assertThat(ledger.settlePayment(id, PAYMENT_APPROVED, ATTEMPT, null, EventCause.system("x")))
                 .isEqualTo(new OrderTransition(false, AWAITING_PAYMENT));
         assertThat(history(id)).hasSize(1);
     }
@@ -353,7 +390,7 @@ class OrderLedgerTest {
             assertThatThrownBy(() -> ledger.fire(id, trigger, ANY, EventCause.user()))
                     .isInstanceOf(IllegalArgumentException.class);
         }
-        assertThatThrownBy(() -> ledger.settlePayment(id, CANCEL_REQUESTED, ATTEMPT, EventCause.user()))
+        assertThatThrownBy(() -> ledger.settlePayment(id, CANCEL_REQUESTED, ATTEMPT, null, EventCause.user()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -381,6 +418,10 @@ class OrderLedgerTest {
     private String attemptOf(UUID id) {
         return jdbcTemplate.queryForObject("SELECT authorizing_provider_order_id FROM orders WHERE id = ?",
                 String.class, bytes(id));
+    }
+
+    private LocalDateTime paidAtOf(UUID id) {
+        return jdbcTemplate.queryForObject("SELECT paid_at FROM orders WHERE id = ?", LocalDateTime.class, bytes(id));
     }
 
     private UUID preorder() {

@@ -54,8 +54,8 @@ class PaymentPreparerTest {
     static final BigDecimal AMOUNT = new BigDecimal("1250000");
     static final String PROVIDER_ORDER_ID = "6f1c2d3e-4b5a-4c7d-8e9f-0a1b2c3d4e5f";
     static final PayableTarget TARGET = PayableTarget.of(new Order(ORDER_ID, TestIds.id(7), OrderSource.PREORDER,
-            TestIds.id(5), "9f1c2d3e-0000-4000-8000-000000000001", OrderStatus.AWAITING_PAYMENT, null, new Money(AMOUNT), null, null, null,
-            new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 1, Instant.EPOCH, Instant.EPOCH));
+            TestIds.id(5), "9f1c2d3e-0000-4000-8000-000000000001", null, OrderStatus.AWAITING_PAYMENT, null, new Money(AMOUNT), null, null, null,
+            null, new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null), 1, Instant.EPOCH, Instant.EPOCH));
     // 전달할 액세스 토큰 자리(접두어 없음). 로그 검사에도 쓴다. 실제 토큰 모양이 아니다.
     static final String SESSION = "payment-client-test-user-7";
 

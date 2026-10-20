@@ -6,6 +6,7 @@ import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -153,8 +154,17 @@ public record ProductOptions(List<Axis> axes, List<Image> defaultImages, List<Se
         return new ProductOptions(axes, defaultImages, detailImages, replaced);
     }
 
+    /** 문서의 사진 주소 전부(기본 묶음 → 축 값 → 상세 영역 순, 중복 없이). 사진 붙이기 · 떼기가 저장 전후를 비교한다. */
+    public Set<String> imageUrls() {
+        Set<String> urls = new LinkedHashSet<>();
+        defaultImages.forEach(image -> urls.add(image.url()));
+        axes.forEach(axis -> axis.values().forEach(value -> value.images().forEach(image -> urls.add(image.url()))));
+        detailImages.forEach(section -> section.images().forEach(image -> urls.add(image.url())));
+        return urls;
+    }
+
     /**
-     * 목록 · 장바구니 · 리뷰 카드의 썸네일 — 첫 색상(관리자가 넣은 순서)의 첫 장, 색상 축이 없으면 기본 묶음의 첫 장. 첫 색상에 사진이 없으면 null 이다
+     * 목록 · 리뷰 카드의 썸네일 — 첫 색상(관리자가 넣은 순서)의 첫 장, 색상 축이 없으면 기본 묶음의 첫 장. 첫 색상에 사진이 없으면 null 이다
      * (다음 색상으로 넘어가지 않는다). 대표 표시는 보지 않는다. 프론트 카드가 첫 색상을 골라 그 색상의 사진을 첫 장부터 보여 주는 것과 같은 규칙이다.
      */
     public String thumbnailUrl() {
@@ -162,5 +172,42 @@ public record ProductOptions(List<Axis> axes, List<Image> defaultImages, List<Se
                 .map(color -> color.values().isEmpty() ? List.<Image>of() : color.values().getFirst().images())
                 .orElse(defaultImages);
         return first.isEmpty() ? null : first.getFirst().url();
+    }
+
+    /**
+     * 목록 카드의 색상칩 — 색상 축의 값 중 판매 중 옵션이 고르는 것만, 관리자가 넣은 순서로 표시값 · hex · 그 색상의 사진 주소(넣은 순서).
+     * 판매 중지 옵션만 고르는 색상은 뺀다(2026-10-15 결정 — 목록의 색상 필터가 판매 중 옵션만 보므로, 칩과 필터가 어긋나지 않게).
+     * 색상 축이 없으면 빈 목록이다. 상세는 이 규칙 없이 색상 축 값 전부를 싣는다.
+     *
+     * @param sellable 판매 중 옵션이 고른 색상의 정규화값(product_options.filter_attributes 의 color)
+     */
+    public List<ColorChip> colorChips(Collection<String> sellable) {
+        return axis(OptionText.COLOR)
+                .map(color -> color.values().stream()
+                        .filter(value -> sellable.contains(value.normalized()))
+                        .map(value -> new ColorChip(value.value(), value.hex(), value.images().stream().map(Image::url).toList()))
+                        .toList())
+                .orElse(List.of());
+    }
+
+    /** 색상칩 하나. hex 는 넣지 않았으면 null. */
+    public record ColorChip(String label, String hex, List<String> imageUrls) {
+        public ColorChip {
+            imageUrls = imageUrls == null ? List.of() : List.copyOf(imageUrls);
+        }
+    }
+
+    /**
+     * 옵션(조합) 하나의 사진 — 장바구니 · 증정품처럼 고른 옵션을 보여 주는 자리. 그 조합이 고른 색상 값의 첫 장이고, 색상 축이 없거나
+     * 그 색상에 사진이 없으면 {@link #thumbnailUrl()} 이다. 대표 표시는 보지 않는다(썸네일과 같은 "첫 장" 규칙).
+     *
+     * @param valueIds 그 옵션의 조합 키가 고른 값 id
+     */
+    public String imageUrlOf(Collection<String> valueIds) {
+        return axis(OptionText.COLOR)
+                .flatMap(color -> color.values().stream().filter(value -> valueIds.contains(value.id())).findFirst())
+                .filter(value -> !value.images().isEmpty())
+                .map(value -> value.images().getFirst().url())
+                .orElseGet(this::thumbnailUrl);
     }
 }

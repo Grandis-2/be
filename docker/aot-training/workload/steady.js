@@ -155,7 +155,7 @@ const READS = [
   (ctx, u) => {
     // 쓰기: 일반 상품 등록(→ order 재고 초기화 이벤트)
     call('POST', `${URL.catalog}/api/v1/admin/products`,
-      { categoryId: data.categoryId, saleMode: 'IN_STOCK', title: `AOT 학습 액세서리 ${uuid().slice(0, 8)}`, visible: true,
+      { categoryId: data.categoryId, saleMode: 'IN_STOCK', title: `AOT 학습 액세서리 ${uuid().slice(0, 8)}`, brand: 'APPLE', modelName: 'AOT-A', visible: true,
         basePrice: 15000, combinations: [{ selections: {}, stock: 50 }] },
       { headers: headers(ctx.admin, { 'Idempotency-Key': uuid() }) }, 201, 'catalog register');
   },

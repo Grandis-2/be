@@ -2,24 +2,27 @@ package com.grandis.nova.catalog.api;
 
 import com.grandis.nova.catalog.detail.ProductDetailService;
 import com.grandis.nova.catalog.detail.ProductDetailView;
+import com.grandis.nova.catalog.edit.InStockConversionRequest;
 import com.grandis.nova.catalog.edit.OptionValueAddRequest;
 import com.grandis.nova.catalog.edit.OptionValueEditRequest;
 import com.grandis.nova.catalog.edit.ProductEditRequest;
+import com.grandis.nova.catalog.edit.ProductDeleteService;
 import com.grandis.nova.catalog.edit.ProductEditService;
+import com.grandis.nova.catalog.edit.ProductImageAddRequest;
+import com.grandis.nova.catalog.edit.ProductImageEditService;
+import com.grandis.nova.catalog.edit.ProductImageReplaceRequest;
 import com.grandis.nova.catalog.edit.SaleStatusChangeRequest;
 import com.grandis.nova.catalog.edit.SaleStatusView;
 import com.grandis.nova.catalog.edit.VariantAddRequest;
 import com.grandis.nova.catalog.edit.VariantEditRequest;
 import com.grandis.nova.catalog.edit.VisibilityChangeRequest;
 import com.grandis.nova.catalog.edit.VisibilityView;
-import com.grandis.nova.catalog.image.ImageUpload;
-import com.grandis.nova.catalog.image.ImageUploadRequest;
-import com.grandis.nova.catalog.image.ImageUploadService;
 import com.grandis.nova.catalog.web.StrictBodies;
 import com.grandis.nova.catalog.listing.AdminProductListFilter;
 import com.grandis.nova.catalog.listing.AdminProductListItem;
 import com.grandis.nova.catalog.listing.GiftCandidate;
 import com.grandis.nova.catalog.listing.ProductListingService;
+import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.catalog.registration.ProductRegistrationRequest;
@@ -34,12 +37,14 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Supplier;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -51,11 +56,11 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 관리자 상품 등록 · 목록 · 상세 · 수정(표시 정보 · 가격 · 보증 · 옵션 값 · 옵션) · 사진 업로드 URL 발급. 권한은 보안 설정이 경로로 막는다(ADMIN).
+ * 관리자 상품 등록 · 목록 · 상세 · 수정(표시 정보 · 가격 · 보증 · 옵션 값 · 옵션 · 사진 한 장씩). 사진 파일은 {@link AdminImageController} 로 올린다. 권한은 보안 설정이 경로로 막는다(ADMIN).
  * 수정 규칙(사전예약 오픈 뒤 금지 · 재계산 · 구성 불변)은 {@link ProductEditService}.
  *
  * 목록 · 상세에는 노출 규칙이 없다 — 비공개 · 준비 전 · 판매 중지 · 오래된 마감도 전부 나오고, 공개 여부 · 등록 완료(판매 방식별 준비)가 같이 실린다.
- * 배송 차수는 싣지 않는다(회원 상세와 같은 이유 — catalog 는 shipment_batches 를 읽지 않는다). 없는 상품만 404.
+ * 배송 차수는 싣지 않는다(회원 상세와 같은 이유 — catalog 는 shipment_batches 를 읽지 않는다). 없는 상품 · 삭제한 상품만 404.
  *
  * 응답 코드가 결과 갈래를 말한다 — 201 새로 저장(미리보기 포함), 200 준비가 끝난 등록의 재생, 202 아직 준비 전인 등록의 재생.
  * 200 · 202 는 등록 상태(고정 필드)만 싣는다 — 미리보기는 상세 API 로 따로 본다.
@@ -72,18 +77,21 @@ public class AdminProductController {
     private final ProductListingService listingService;
     private final ProductDetailService detailService;
     private final ProductEditService editService;
-    private final ImageUploadService imageUploadService;
+    private final ProductImageEditService imageEditService;
+    private final ProductDeleteService deleteService;
     private final RegistrationRequestParser parser;
     private final StrictBodies bodies;
 
     public AdminProductController(ProductRegistrationService registrationService, ProductListingService listingService,
                                   ProductDetailService detailService, ProductEditService editService,
-                                  ImageUploadService imageUploadService, RegistrationRequestParser parser, StrictBodies bodies) {
+                                  ProductImageEditService imageEditService, ProductDeleteService deleteService,
+                                  RegistrationRequestParser parser, StrictBodies bodies) {
         this.registrationService = registrationService;
         this.listingService = listingService;
         this.detailService = detailService;
         this.editService = editService;
-        this.imageUploadService = imageUploadService;
+        this.imageEditService = imageEditService;
+        this.deleteService = deleteService;
         this.bodies = bodies;
         this.parser = parser;
     }
@@ -94,7 +102,8 @@ public class AdminProductController {
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ProductRegistrationRequest.class))) @RequestBody String body) {
         ProductRegistrationRequest request = parser.parse(body);
-        RegistrationOutcome outcome = registrationService.register(idempotencyKey, request);
+        // 사진 붙이기가 이미지 행을 잠근다 — 다른 저장 · 정리 배치와 겹쳐 교착하면 다른 수정처럼 409 retryable
+        RegistrationOutcome outcome = serialized(() -> registrationService.register(idempotencyKey, request));
         return switch (outcome.kind()) {
             case CREATED -> ResponseEntity.status(HttpStatus.CREATED)
                     .body(ApiResponse.ok(new ProductRegistrationResponse(outcome.registration(), outcome.preview())));
@@ -104,38 +113,31 @@ public class AdminProductController {
         };
     }
 
-    @Operation(summary = "상품 목록", description = "노출 규칙 없이 비공개 · 준비 전 · 판매 중지 · 마감도 전부")
+    @Operation(summary = "상품 목록", description = "노출 규칙 없이 비공개 · 준비 전 · 판매 중지 · 마감도 전부. "
+            + "q 는 상품명 · 태그 · 모델명 · 브랜드 코드 부분 일치, brand 는 이름을 반복해 여러 값(OR — brand=APPLE&brand=LG)."
+            + " q 는 50자, brand 는 20개까지. 쪽은 앞 10,000개 안에서 시작해야 한다(page × size < 10,000)")
     @GetMapping
     public ApiResponse<ProductPageResponse<AdminProductListItem>> list(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) SaleMode saleMode,
             @RequestParam(required = false) SaleStatus status,
+            @RequestParam(required = false) List<Brand> brand,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        AdminProductListFilter filter = new AdminProductListFilter(q, saleMode, status);
+        AdminProductListFilter filter = new AdminProductListFilter(q, saleMode, status, brand);
         return ApiResponse.ok(ProductPageResponse.from(
-                listingService.listForAdmin(filter, PageSizes.requirePage(page), PageSizes.require(size))));
+                listingService.listForAdmin(filter, PageSizes.requirePage(page, PageSizes.require(size)), size)));
     }
 
-    @Operation(summary = "럭키 드로우 증정품 후보", description = "회차 만들기 화면용 — 일반 판매 · 판매 중이고 재고를 등록한 옵션이 있는 상품(비공개 포함)과 "
-            + "그 옵션별 지금 확보할 수 있는 수량(available). q 는 상품명 · 태그 검색. 최신순, page 는 0 부터")
+    @Operation(summary = "럭키 드로우 증정품 후보", description = "회차 만들기 화면용 — 일반 판매 · 판매 준비가 끝났고 판매 중 옵션이 있는 상품(비공개 포함)과 "
+            + "그 옵션별 지금 확보할 수 있는 수량(available, 재고 행이 없으면 0). order 재고 API 가 답하지 않으면 503. q 는 상품명 · 태그 · 모델명 · 브랜드 검색(50자까지). 최신순, page 는 0 부터, 쪽은 앞 10,000개 안에서 시작")
     @GetMapping("/gift-candidates")
     public ApiResponse<ProductPageResponse<GiftCandidate>> giftCandidates(
             @RequestParam(required = false) String q,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         return ApiResponse.ok(ProductPageResponse.from(
-                listingService.listGiftCandidates(q, PageSizes.requirePage(page), PageSizes.require(size))));
-    }
-
-    /** 상품 사진 업로드 URL. 경로가 /products 아래인 것은 ALB 가 catalog 로 보내는 경로(/api/v1/admin/products*) 안이어야 해서다. */
-    @Operation(summary = "상품 사진 업로드 URL 발급", description = "201 브라우저가 파일을 PUT 할 uploadUrl(5분 유효) · 실어야 할 headers · 올린 뒤의 imageUrl. "
-            + "형식은 image/jpeg · image/png · image/webp, 크기는 1 ~ 10MiB(10,485,760 바이트) — 다르면 400. 발급받은 형식 · 크기와 다른 파일을 PUT 하면 S3 가 403 이다. "
-            + "상품 등록의 이미지 url 에는 imageUrl 을 넣는다")
-    @PostMapping("/image-uploads")
-    public ResponseEntity<ApiResponse<ImageUpload>> imageUpload(@io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ImageUploadRequest.class))) @RequestBody String body) {
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResponse.ok(imageUploadService.prepare(bodies.parse(body, ImageUploadRequest.class))));
+                listingService.listGiftCandidates(q, PageSizes.requirePage(page, PageSizes.require(size)), size)));
     }
 
     @Operation(summary = "상품 상세")
@@ -148,15 +150,27 @@ public class AdminProductController {
     @Operation(summary = "표시 정보 · 기본 가격 · 보증 수정", description = "보낸 칸만 바꾼다 — 하나도 없으면 400. 사전예약은 오픈 3분 전부터 409")
     @PatchMapping("/{productId}")
     public ApiResponse<AdminProductResponse> edit(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ProductEditRequest.class))) @RequestBody String body) {
-        return ApiResponse.ok(AdminProductResponse.from(serialized(() -> editService.editProduct(productId, bodies.parse(body, ProductEditRequest.class)))));
+        return ApiResponse.ok(AdminProductResponse.from(detailService.afterWrite(serialized(() -> editService.editProduct(productId, bodies.parse(body, ProductEditRequest.class))))));
+    }
+
+    /** 소프트 삭제. 되살리기는 없다. 삭제한 상품은 목록 · 상세 · 수정에서 없는 상품(404)이고, 지난 주문 · 예약 · 드로우는 그대로다. */
+    @Operation(summary = "상품 삭제(소프트 삭제)",
+            description = "204. 없거나 이미 삭제한 상품은 404. 사전예약 오픈 3분 전부터 마감 전(회차 취소 전) · 반영 전 드로우의 증정품이면 409 — 판매 중지 · 드로우 종료가 먼저")
+    @DeleteMapping("/{productId}")
+    public ResponseEntity<Void> delete(@PathVariable UUID productId) {
+        serialized(() -> {
+            deleteService.delete(productId);
+            return null;
+        });
+        return ResponseEntity.noContent().build();
     }
 
     /** 축에 값 추가(새 색상 · 용량). 옵션은 만들지 않는다 — 조합은 아래 variants 로. */
     @Operation(summary = "옵션 값 추가")
     @PostMapping("/{productId}/option-values")
     public ResponseEntity<ApiResponse<AdminProductResponse>> addOptionValue(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = OptionValueAddRequest.class))) @RequestBody String body) {
-        AdminProductResponse response = AdminProductResponse.from(
-                serialized(() -> editService.addOptionValue(productId, bodies.parse(body, OptionValueAddRequest.class))));
+        AdminProductResponse response = AdminProductResponse.from(detailService.afterWrite(
+                serialized(() -> editService.addOptionValue(productId, bodies.parse(body, OptionValueAddRequest.class)))));
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response));
     }
 
@@ -165,8 +179,33 @@ public class AdminProductController {
     @PatchMapping("/{productId}/option-values/{valueId}")
     public ApiResponse<AdminProductResponse> editOptionValue(@PathVariable UUID productId, @PathVariable String valueId,
                                                              @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = OptionValueEditRequest.class))) @RequestBody String body) {
-        return ApiResponse.ok(AdminProductResponse.from(
-                serialized(() -> editService.editOptionValue(productId, valueId, bodies.parse(body, OptionValueEditRequest.class)))));
+        return ApiResponse.ok(AdminProductResponse.from(detailService.afterWrite(
+                serialized(() -> editService.editOptionValue(productId, valueId, bodies.parse(body, OptionValueEditRequest.class))))));
+    }
+
+    /** 사진 한 장을 그 묶음 맨 뒤에 넣는다(상품 사진 · 상세 영역). 사전예약 오픈 뒤에도 된다. */
+    @Operation(summary = "사진 한 장 넣기", description = "kind: GALLERY(bundle = color 값, color 축이 없으면 비움) · DETAIL(bundle = 영역 이름, 없으면 새 영역). "
+            + "url 은 업로드 API 의 imageUrl — 이 상품에 이미 있는 주소 · CDN 밖 주소는 400, 상품 사진 묶음은 최대 10장 · 상세 영역은 최대 3장. 빈 묶음에 넣은 첫 장은 대표")
+    @PostMapping("/{productId}/images")
+    public ResponseEntity<ApiResponse<AdminProductResponse>> addImage(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ProductImageAddRequest.class))) @RequestBody String body) {
+        AdminProductResponse response = AdminProductResponse.from(detailService.afterWrite(
+                serialized(() -> imageEditService.add(productId, bodies.parse(body, ProductImageAddRequest.class)))));
+        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response));
+    }
+
+    /** 사진 한 장을 다른 사진으로 바꾼다. 자리 · 대표 여부는 그대로. 사전예약 오픈 뒤에도 된다. */
+    @Operation(summary = "사진 한 장 바꾸기", description = "url 은 이 상품에 있는 사진, newUrl 은 업로드 API 의 새 imageUrl — 없는 사진 · 이미 있는 새 주소 · CDN 밖 주소는 400")
+    @PatchMapping("/{productId}/images")
+    public ApiResponse<AdminProductResponse> replaceImage(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = ProductImageReplaceRequest.class))) @RequestBody String body) {
+        return ApiResponse.ok(AdminProductResponse.from(detailService.afterWrite(
+                serialized(() -> imageEditService.replace(productId, bodies.parse(body, ProductImageReplaceRequest.class))))));
+    }
+
+    /** 사진 한 장을 뺀다. 대표를 빼면 남은 첫 장이 대표, 상세 영역이 비면 영역째 없앤다. 마지막 한 장도 뺄 수 있다. 사전예약 오픈 뒤에도 된다. */
+    @Operation(summary = "사진 한 장 빼기", description = "url 은 이 상품에 있는 사진 — 없으면 400")
+    @DeleteMapping("/{productId}/images")
+    public ApiResponse<AdminProductResponse> removeImage(@PathVariable UUID productId, @RequestParam(required = false) String url) {
+        return ApiResponse.ok(AdminProductResponse.from(detailService.afterWrite(serialized(() -> imageEditService.remove(productId, url)))));
     }
 
     /** 아직 없는 조합을 옵션으로. 바로 판매 중(ACTIVE). 일반 상품의 재고는 order 의 재고 API 로 따로 넣는다. */
@@ -174,7 +213,7 @@ public class AdminProductController {
     @PostMapping("/{productId}/variants")
     public ResponseEntity<ApiResponse<ProductDetailView.Variant>> addVariant(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = VariantAddRequest.class))) @RequestBody String body) {
         ProductDetailView.Variant variant = serialized(() -> editService.addVariant(productId, bodies.parse(body, VariantAddRequest.class)));
-        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(variant));
+        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(detailService.withStock(productId, variant)));
     }
 
     /** 옵션의 판매 상태. 사전예약은 오픈 3분 전부터 409. */
@@ -182,7 +221,7 @@ public class AdminProductController {
     @PatchMapping("/{productId}/variants/{variantId}")
     public ApiResponse<ProductDetailView.Variant> editVariant(@PathVariable UUID productId, @PathVariable UUID variantId,
                                                              @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = VariantEditRequest.class))) @RequestBody String body) {
-        return ApiResponse.ok(serialized(() -> editService.editVariant(productId, variantId, bodies.parse(body, VariantEditRequest.class))));
+        return ApiResponse.ok(detailService.withStock(productId, serialized(() -> editService.editVariant(productId, variantId, bodies.parse(body, VariantEditRequest.class)))));
     }
 
     /**
@@ -205,6 +244,16 @@ public class AdminProductController {
         return ApiResponse.ok(serialized(() -> editService.changeVisibility(productId, bodies.parse(body, VisibilityChangeRequest.class))));
     }
 
+    /**
+     * 마감된 사전예약 상품을 같은 상품 그대로 일반 상품으로 바꾼다 — 판매 중이 되고, 옵션마다 초기 재고 · 할인율(비우면 0)을 받는다.
+     * order 가 재고를 만들면 목록 · 장바구니에 나온다. 마감 전 · 회차 취소 · 이미 일반 상품이면 409.
+     */
+    @Operation(summary = "사전예약 → 일반 상품 전환", description = "마감 뒤에만. stocks 는 그 상품의 옵션(판매 중지 포함)을 빠짐없이 한 번씩(0 허용). 할인가가 100원보다 작아지면 400(discountRate)")
+    @PostMapping("/{productId}/conversion")
+    public ApiResponse<AdminProductResponse> convertToInStock(@PathVariable UUID productId, @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(schema = @Schema(implementation = InStockConversionRequest.class))) @RequestBody String body) {
+        return ApiResponse.ok(AdminProductResponse.from(serialized(() -> editService.convertToInStock(productId, bodies.parse(body, InStockConversionRequest.class)))));
+    }
+
     /** 키로 상태만 묻는다. 응답이 유실된 클라이언트가 productId 와 진행 상태를 되찾는 데 쓴다. */
     @Operation(summary = "등록 상태 조회(Idempotency-Key)")
     @GetMapping("/registrations/{idempotencyKey}")
@@ -213,7 +262,7 @@ public class AdminProductController {
     }
 
     /**
-     * 수정 트랜잭션이 DB 교착의 희생자가 되면 409 STATE_CONFLICT + `details.retryable=true`. 수정은 옵션 행을 생성 순으로 잠그는데, 다른 모듈의
+     * 등록 · 수정 트랜잭션이 DB 교착의 희생자가 되면 409 STATE_CONFLICT + `details.retryable=true`. 수정은 옵션 행을 생성 순으로 잠그는데, 다른 모듈의
      * 외래키 확인(장바구니 · 주문 · 예약 행 INSERT 가 옵션 행에 거는 공유 잠금)은 순서를 catalog 가 정하지 못한다(실측: 역순 INSERT 와 교착 →
      * 500). 수정은 통째로 되돌려졌으니 같은 요청을 다시 보내면 된다. 한 상품의 수정끼리는 상품 행 잠금으로 줄 서므로 교착하지 않는다.
      */

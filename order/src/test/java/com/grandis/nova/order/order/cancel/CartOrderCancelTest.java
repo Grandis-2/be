@@ -56,7 +56,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 미결제 장바구니 주문 취소 — 사용자 취소(POST /api/v1/orders/{id}/cancel)와 결제 기한 만료. 반환은 한 번이다(취소와 같은 UPDATE 의 반환 표식).
+ * 미결제 장바구니 · 바로 구매 주문 취소 — 사용자 취소(POST /api/v1/orders/{id}/cancel)와 결제 기한 만료. 반환은 한 번이다(취소와 같은 UPDATE 의 반환 표식).
  * 대역 구성은 CartApiTest · CartOrderApiTest 와 같다 — Spring 컨텍스트(와 MySQL 컨테이너)를 함께 쓴다. 장바구니 주문은 API 로 만든다.
  */
 @OrderIntegrationTest
@@ -170,6 +170,41 @@ class CartOrderCancelTest {
         assertThat(reserved(phone)).isEqualTo(3 + 4);
         expiry.expireDue(now);
         assertThat(reserved(phone)).as("두 번 돌아도 다시 반환하지 않는다").isEqualTo(7);
+    }
+
+    @Test
+    @DisplayName("결제 기한이 지난 결제 대기 바로 구매 주문도 만료 처리가 취소 · 반환한다 — 두 번 돌아도 반환은 한 번")
+    void expiryCancelsDueBuyNowOrder() throws Exception {
+        UUID phone = sellable(10);
+        String order = placeBuyNowOrder(phone, 2);
+        Instant now = dueAt(order);
+
+        expiry.expireDue(now);
+        expiry.expireDue(now);
+
+        assertThat(column(order, "status", String.class)).isEqualTo("CANCELED");
+        assertThat(lastEvent(order)).containsEntry("actor", "SYSTEM").containsEntry("reason", "PAYMENT_EXPIRED");
+        assertThat(reserved(phone)).isZero();
+    }
+
+    @Test
+    @DisplayName("바로 구매 주문도 사용자 취소와 만료가 겹쳐도 반환은 한 번")
+    void concurrentUserCancelAndExpiryReleaseBuyNowOnce() throws Exception {
+        UUID phone = sellable(10);
+        String order = placeBuyNowOrder(phone, 2);
+        Instant now = dueAt(order);
+
+        List<Concurrently.Outcome<Integer>> outcomes = Concurrently.run(4, i -> () -> i % 2 == 0
+                ? cancel(customerId, order).andReturn().getResponse().getStatus()
+                : expiry.expireDue(now));
+
+        assertThat(outcomes).allSatisfy(o -> assertThat(o.error()).isNull());
+        assertThat(List.of(outcomes.get(0).value(), outcomes.get(2).value())).as("사용자 취소는 모두 200").containsOnly(200);
+        assertThat(reserved(phone)).isZero();
+        assertThat(column(order, "status", String.class)).isEqualTo("CANCELED");
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM order_events e JOIN orders o ON o.id = e.order_id WHERE o.id = UUID_TO_BIN(?) AND e.to_status = 'CANCELED'""",
+                Long.class, order)).as("취소 이력도 하나").isEqualTo(1);
     }
 
     @Test
@@ -381,8 +416,8 @@ class CartOrderCancelTest {
         OrderFixtures.StockProduct product = fixtures.inStockProduct(1);
         UUID option = product.optionIds().getFirst();
         fixtures.stock(option, stock, 0, 0);
-        catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "블랙 / 256GB", "SKU-" + option, PRICE,
-                "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(false, BigDecimal.ZERO), null));
+        catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "A3104", "블랙 / 256GB", "SKU-" + option, PRICE,
+                "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(false, BigDecimal.ZERO), null, null));
         return option;
     }
 
@@ -398,6 +433,15 @@ class CartOrderCancelTest {
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    private String placeBuyNowOrder(UUID option, int quantity) throws Exception {
+        String body = mockMvc.perform(post("/api/v1/orders").with(TestAuth.customer(customerId)).contentType(MediaType.APPLICATION_JSON)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .content("""
+                                {"source":"BUY_NOW","items":[%s],"shipTo":%s}""".formatted(item(option, quantity), SHIP_TO)))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        return JSON.readTree(body).get("data").get("orderId").asString();
     }
 
     private void cartLine(UUID customer, UUID option, int quantity) {

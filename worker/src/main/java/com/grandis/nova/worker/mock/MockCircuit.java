@@ -88,7 +88,7 @@ public final class MockCircuit {
     void record(Verdict verdict, Duration elapsed) {
         switch (verdict) {
             // 느린 성공은 차단기가 걸린 시간으로 가른다
-            case SUCCESS, ABSENT -> breaker.onSuccess(elapsed.toNanos(), TimeUnit.NANOSECONDS);
+            case SUCCESS, ABSENT, PENDING -> breaker.onSuccess(elapsed.toNanos(), TimeUnit.NANOSECONDS);
             case TRANSIENT, UNKNOWN -> breaker.onError(elapsed.toNanos(), TimeUnit.NANOSECONDS,
                     new IllegalStateException(verdict.name()));
             case REJECTED, MISCONFIGURED, NOT_CALLED -> breaker.releasePermission();

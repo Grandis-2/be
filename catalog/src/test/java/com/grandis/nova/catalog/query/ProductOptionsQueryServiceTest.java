@@ -49,13 +49,11 @@ class ProductOptionsQueryServiceTest {
     }
 
     @Test
-    @DisplayName("사전예약은 회차 행이 생기면 registrationCompleted=true — 회차 전에는 등록 기록이 있어도 false")
-    void preorderCompletionFollowsCampaignRow() {
+    @DisplayName("사전예약은 회차 행이 없어도 registrationCompleted=true — 이 조회는 preorder 를 부르지 않는다(preorder 접수가 동기로 부른다)")
+    void preorderIsAlwaysCompleted() {
         UUID productId = fixtures.product("PREORDER", "ACTIVE");
         fixtures.registration(productId);
-        assertThat(service.findProductOptions(productId).registrationCompleted()).isFalse();
 
-        fixtures.campaign(productId, Instant.now().plus(Duration.ofDays(1)), Instant.now().plus(Duration.ofDays(2)));
         ProductOptionsView view = service.findProductOptions(productId);
         assertThat(view.registrationCompleted()).isTrue();
         assertThat(view.visible()).as("visible 은 칸 그대로(픽스처 기본값 1)").isTrue();

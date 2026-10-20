@@ -4,6 +4,7 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.draw.domain.model.DrawCampaign;
+import com.grandis.nova.order.draw.domain.model.DrawPhase;
 import com.grandis.nova.order.draw.domain.model.DrawProgress;
 import com.grandis.nova.order.draw.domain.repository.DrawCampaignStore;
 import org.springframework.stereotype.Service;
@@ -34,6 +35,17 @@ public class DrawQueryService {
         return readTransaction.execute(status -> campaigns.findNewestFirst(page, size));
     }
 
+    /**
+     * 그 단계의 회차만, 최신순. 단계는 now 로 가른다 — 응답의 단계 칸도 같은 now 로 만들어야 한 응답 안에서 필터와 칸이 어긋나지 않는다.
+     * phase 가 null 이면 전부.
+     */
+    public OffsetPage<DrawCampaign> list(DrawPhase phase, Instant now, int page, int size) {
+        if (phase == null) {
+            return list(page, size);
+        }
+        return readTransaction.execute(status -> campaigns.findNewestFirst(phase, now, page, size));
+    }
+
     /** @throws BusinessException 404 DRAW_NOT_FOUND */
     public DrawCampaign get(UUID drawId) {
         return readTransaction.execute(status -> campaigns.findById(drawId))
@@ -44,6 +56,11 @@ public class DrawQueryService {
     public DrawProgress progress(UUID drawId) {
         return readTransaction.execute(status -> campaigns.findProgress(drawId))
                 .orElseThrow(() -> new BusinessException(OrderErrorCode.DRAW_NOT_FOUND));
+    }
+
+    /** 그 상품이 아직 반영되지 않은 회차의 증정품인가 — catalog 의 상품 삭제가 묻는다(contracts/order-internal.md). */
+    public boolean giftInProgress(UUID productId) {
+        return Boolean.TRUE.equals(readTransaction.execute(status -> campaigns.existsUnsettledByProductId(productId)));
     }
 
     public Instant now() {

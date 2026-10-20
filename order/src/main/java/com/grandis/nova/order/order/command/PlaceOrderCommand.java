@@ -15,20 +15,22 @@ import java.util.UUID;
  * 주문 생성 입력. 유스케이스가 요청 · 외부 조회 결과를 모아 만든다. 값만 옮기고 규칙은 모른다 —
  * {@link #toDraft()} 가 VO · 도메인으로 바꾸면서 검사한다. 금액 칸이 없다.
  *
- * @param preorderId    사전예약 주문이면 그 예약의 내부 id
- * @param preorderToken 사전예약 주문이면 그 예약의 공개 UUID
+ * @param preorderId     사전예약 주문이면 그 예약의 내부 id
+ * @param preorderToken  사전예약 주문이면 그 예약의 공개 UUID
+ * @param idempotencyKey 바로 구매 주문이면 요청의 멱등 키
  */
 public record PlaceOrderCommand(
         UUID customerId,
         OrderSource source,
         UUID preorderId,
         String preorderToken,
+        UUID idempotencyKey,
         Address shipTo,
         List<Line> lines
 ) {
 
     public OrderDraft toDraft() {
-        return new OrderDraft(customerId, source, preorderId, preorderToken, shipTo.toShipTo(),
+        return new OrderDraft(customerId, source, preorderId, preorderToken, idempotencyKey, shipTo.toShipTo(),
                 lines.stream().map(Line::toOrderLine).toList());
     }
 
@@ -48,16 +50,18 @@ public record PlaceOrderCommand(
     /**
      * 가격 · 이름은 스냅샷을 그대로 옮긴다(사전예약은 예약 접수 때, 장바구니는 주문 때 catalog 값).
      *
+     * @param modelName         주문 때 상품 모델명(장바구니 · 바로 구매). 사전예약은 null
+     * @param imageUrl          주문 때 그 옵션의 사진(장바구니 · 바로 구매 — catalog 의 imageUrl). 사전예약 · 사진이 없는 옵션은 null
      * @param warrantyQuantity  그중 보증을 산 수량(0 이면 보증 없음)
      * @param warrantyUnitPrice 보증 1개 가격. 보증 수량이 0 이면 0
      */
     public record Line(UUID productId, UUID optionId, int quantity, BigDecimal unitPrice,
                        int warrantyQuantity, BigDecimal warrantyUnitPrice,
-                       String productTitle, String optionTitle) {
+                       String productTitle, String modelName, String optionTitle, String imageUrl) {
 
         OrderLine toOrderLine() {
             return new OrderLine(productId, optionId, new Quantity(quantity), new Money(unitPrice),
-                    warrantyQuantity, new Money(warrantyUnitPrice), productTitle, optionTitle);
+                    warrantyQuantity, new Money(warrantyUnitPrice), productTitle, modelName, optionTitle, imageUrl);
         }
     }
 }

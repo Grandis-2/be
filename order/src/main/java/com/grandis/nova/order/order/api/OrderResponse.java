@@ -15,10 +15,10 @@ import java.util.UUID;
  * 주문 응답. 생성 · 조회가 함께 쓴다.
  *
  * 주문 번호(orderId)는 orders.id 다. 예약 내부 id 는 싣지 않는다.
- * 결제 기한은 장바구니 주문만 싣는다(만든 때 + 10분). 사전예약 주문은 null — 그 기한은 preorder 상세가 계산해 준다.
+ * 결제 기한은 장바구니 · 바로 구매 주문만 싣는다(만든 때 + 10분). 사전예약 주문은 null — 그 기한은 preorder 상세가 계산해 준다.
  *
  * @param orderId      orders.id
- * @param paymentDueAt 장바구니 주문의 결제 기한. 사전예약 주문은 null
+ * @param paymentDueAt 장바구니 · 바로 구매 주문의 결제 기한. 사전예약 · 드로우 당첨 주문은 null
  */
 public record OrderResponse(
         UUID orderId,
@@ -42,18 +42,20 @@ public record OrderResponse(
     /**
      * 주문상품. 이름 · 단가 · 보증가는 주문 시점의 스냅샷이다(사전예약은 예약 접수 때).
      *
+     * @param modelName         주문 때 상품 모델명. 사전예약 · 모델명을 남기기 전에 만든 주문은 null
+     * @param imageUrl          주문 때 그 옵션의 사진. 사전예약 · 사진을 남기기 전에 만든 주문 · 사진이 없는 옵션은 null
      * @param warrantyQuantity  그중 보증을 산 수량(사전예약은 0)
      * @param warrantyUnitPrice 보증 1개 가격(보증을 사지 않았으면 0)
      * @param lineAmount        단가 × 수량 + 보증가 × 보증 수량
      */
-    public record Item(UUID productId, UUID optionId, String productTitle, String optionTitle,
+    public record Item(UUID productId, UUID optionId, String productTitle, String modelName, String optionTitle,
                        BigDecimal unitPrice, int quantity, int warrantyQuantity, BigDecimal warrantyUnitPrice,
-                       BigDecimal lineAmount) {
+                       BigDecimal lineAmount, String imageUrl) {
 
         static Item of(OrderLine line) {
-            return new Item(line.productId(), line.optionId(), line.productTitle(), line.optionTitle(),
+            return new Item(line.productId(), line.optionId(), line.productTitle(), line.modelName(), line.optionTitle(),
                     line.unitPrice().amount(), line.quantity().value(), line.warrantyQuantity(),
-                    line.warrantyUnitPrice().amount(), line.subtotal().amount());
+                    line.warrantyUnitPrice().amount(), line.subtotal().amount(), line.imageUrl());
         }
     }
 

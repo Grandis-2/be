@@ -2,6 +2,7 @@ package com.grandis.nova.order.order.place;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.client.preorder.PreorderPayability;
 import com.grandis.nova.order.client.preorder.PreorderReader;
@@ -14,6 +15,7 @@ import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderDraft;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
+import com.grandis.nova.order.outbox.PreorderPaymentStarted;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.PessimisticLockingFailureException;
@@ -28,10 +30,13 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * 주문 생성(order 의 유스케이스). 지금은 사전예약 출처(source=PREORDER)만 받는다 — 다른 출처가 생기면 여기서 나눈다.
+ * 사전예약 주문 생성(source=PREORDER). 장바구니 · 바로 구매 주문은 {@link PlaceCartOrderService} · {@link PlaceBuyNowOrderService} 가 만든다.
  * PAYABLE 예약 하나에 주문 하나(uq_order_preorder)를 만든다. 예약 정보는 preorder 서비스에 HTTP 로 묻는다(client.preorder).
  *
- * 순서: 결제 가능 확인(preorder, 트랜잭션 밖) → 본인 재대조 → 기존 주문 확인 → preorder 판정 적용 → 원장 place(트랜잭션).
+ * 순서: 결제 가능 확인(preorder, 트랜잭션 밖) → 본인 재대조 → 기존 주문 확인 → preorder 판정 적용 → 원장 place + 결제 시작 알림(트랜잭션).
+ *
+ * 결제 시작 알림(PREORDER_PAYMENT_STARTED)은 주문을 새로 만든 트랜잭션에서만 아웃박스에 적는다 — 예약 화면의 "결제 진행 중" 단계다.
+ * 기존 주문을 돌려준 재요청(먼저 확인했든 중복 키로 부딪혔든)에는 적지 않는다. 예약당 주문은 하나라 알림도 예약당 한 번이다.
  *
  * 결제 가능 여부(기한 · 등록 · 취소)는 preorder 가 판정한다. order 는 그 결과(payable · reason)만 따르고 기한을 다시 계산하지
  * 않는다 — 같은 규칙을 두 곳에 두지 않는다.
@@ -68,14 +73,16 @@ public class PlaceOrderService {
     private final PreorderReader preorderReader;
     private final OrderLedger ledger;
     private final OrderReader orderReader;
+    private final OutboxWriter outboxWriter;
     private final TransactionTemplate writeTransaction;
     private final TransactionTemplate readTransaction;
 
     public PlaceOrderService(PreorderReader preorderReader, OrderLedger ledger, OrderReader orderReader,
-                                PlatformTransactionManager transactionManager) {
+                             OutboxWriter outboxWriter, PlatformTransactionManager transactionManager) {
         this.preorderReader = preorderReader;
         this.ledger = ledger;
         this.orderReader = orderReader;
+        this.outboxWriter = outboxWriter;
         this.writeTransaction = new TransactionTemplate(transactionManager);
         this.readTransaction = new TransactionTemplate(transactionManager);
         this.readTransaction.setReadOnly(true);
@@ -117,6 +124,8 @@ public class PlaceOrderService {
             try {
                 return writeTransaction.execute(status -> {
                     Order order = ledger.place(draft, cause);
+                    outboxWriter.append(new PreorderPaymentStarted(order.preorderId(), order.preorderToken(), order.id(),
+                            order.createdAt()));
                     return new PlaceResult(order, orderReader.findItems(order.id()), true);
                 });
             } catch (OrderAlreadyPlacedException e) {
@@ -161,8 +170,8 @@ public class PlaceOrderService {
     private static PlaceOrderCommand toCommand(UUID customerId, PreorderPayability preorder,
                                                PlaceOrderCommand.Address shipTo) {
         return new PlaceOrderCommand(customerId, OrderSource.PREORDER, preorder.preorderInternalId(),
-                preorder.preorderId(), shipTo, List.of(
+                preorder.preorderId(), null, shipTo, List.of(
                 new PlaceOrderCommand.Line(preorder.productId(), preorder.optionId(), 1, preorder.unitPrice(),
-                        0, BigDecimal.ZERO, preorder.productTitle(), preorder.optionTitle())));
+                        0, BigDecimal.ZERO, preorder.productTitle(), null, preorder.optionTitle(), null)));
     }
 }

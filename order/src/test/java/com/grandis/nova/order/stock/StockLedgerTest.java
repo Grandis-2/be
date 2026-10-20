@@ -5,6 +5,7 @@ import com.grandis.nova.order.stock.domain.exception.StockBelowCommittedExceptio
 import com.grandis.nova.order.stock.domain.exception.StockShortageException;
 import com.grandis.nova.order.stock.domain.model.StockLevel;
 import com.grandis.nova.order.stock.domain.model.StockSetting;
+import com.grandis.nova.order.stock.domain.repository.StockExpectations;
 import com.grandis.nova.order.stock.domain.repository.StockReader;
 import com.grandis.nova.order.stock.domain.repository.StockWriter;
 import com.grandis.nova.order.support.OrderFixtures;
@@ -42,6 +43,9 @@ class StockLedgerTest {
 
     @Autowired
     StockWriter writer;
+
+    @Autowired
+    StockExpectations expectations;
 
     @Autowired
     JdbcTemplate jdbcTemplate;
@@ -89,7 +93,7 @@ class StockLedgerTest {
         assertThat(writer.changeTotal(first, 10, FIXED)).isEqualTo(1);
         assertThat(writer.changeTotal(first, 10, FIXED)).isEqualTo(1);
 
-        StockLedger fixedClockLedger = new StockLedger(writer, reader, Clock.fixed(FIXED, ZoneOffset.UTC));
+        StockLedger fixedClockLedger = new StockLedger(writer, reader, expectations, Clock.fixed(FIXED, ZoneOffset.UTC));
         fixedClockLedger.set(List.of(new StockSetting(first, 10)));
         assertThat(reader.findByOptionIds(List.of(first))).containsExactly(new StockLevel(first, 10, 3, 2));
     }
@@ -184,6 +188,19 @@ class StockLedgerTest {
         assertThatThrownBy(() -> ledger.releaseAndReserve(Map.of(first, 0), Map.of())).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> ledger.releaseAndReserve(Map.of(), Map.of(first, -1))).isInstanceOf(IllegalArgumentException.class);
         assertThat(reader.findByOptionIds(List.of(first))).containsExactly(new StockLevel(first, 10, 1, 0));
+    }
+
+    /** 보정의 덮기는 잠가 읽은 값 그대로일 때만 맞는다 — 확보 · 판매 중 하나라도 다르면 0행이고 아무것도 바꾸지 않는다. 총량은 건드리지 않는다. */
+    @Test
+    void overwriteMatchesOnlyTheValuesItWasGiven() {
+        fixtures.stock(first, 10, 3, 2);
+
+        assertThat(writer.overwrite(first, 3, 1, 0, 0, FIXED)).as("판매가 다름").isZero();
+        assertThat(writer.overwrite(first, 2, 2, 0, 0, FIXED)).as("확보가 다름").isZero();
+        assertThat(reader.findByOptionIds(List.of(first))).containsExactly(new StockLevel(first, 10, 3, 2));
+
+        assertThat(writer.overwrite(first, 3, 2, 1, 4, FIXED)).isEqualTo(1);
+        assertThat(reader.findByOptionIds(List.of(first))).containsExactly(new StockLevel(first, 10, 1, 4));
     }
 
 }

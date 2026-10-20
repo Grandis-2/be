@@ -8,8 +8,10 @@ import com.grandis.nova.preorder.web.Items;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -49,6 +51,28 @@ class AdminProductPreorderController {
                                                              @Valid @RequestBody PreorderCampaignRequest request) {
         return ApiResponse.ok(PreorderCampaignResponse.from(
                 campaignService.upsertCampaign(productId, request.opensAt(), request.closesAt()), clock.instant()));
+    }
+
+    /** 접수 중인 회차를 지금 마감한다. 새 접수만 막고 기존 예약은 그대로다. 다시 열기로 되돌린다. */
+    @Operation(summary = "접수 조기 마감(오픈 전 409)",
+            description = "새 접수만 막고 기존 예약은 그대로 둔다. 이미 마감이면 현재 일정을 그대로 준다. 다시 열기로 되돌린다")
+    @PostMapping("/campaign/close")
+    public ApiResponse<PreorderCampaignResponse> closeCampaign(@PathVariable UUID productId, Authentication admin) {
+        return ApiResponse.ok(PreorderCampaignResponse.from(
+                campaignService.closeCampaign(productId, admin.getName()), clock.instant()));
+    }
+
+    /** 마감된 회차를 새 마감 시각까지 다시 연다. 발급한 순번은 이어진다. */
+    @Operation(summary = "마감한 접수 다시 열기",
+            description = "오픈 전 · 아직 접수 중 · 오픈 전에 판매 중지로 닫힘 · 지금 판매 중인 사전예약 상품이 아니면 409, "
+                    + "마감 시각이 지금 이전이면 400. "
+                    + "새 접수는 순번을 이어 받는다")
+    @PostMapping("/campaign/reopen")
+    public ApiResponse<PreorderCampaignResponse> reopenCampaign(@PathVariable UUID productId,
+                                                                @Valid @RequestBody ReopenCampaignRequest request,
+                                                                Authentication admin) {
+        return ApiResponse.ok(PreorderCampaignResponse.from(
+                campaignService.reopenCampaign(productId, request.closesAt(), admin.getName()), clock.instant()));
     }
 
     @Operation(summary = "배송 차수 조회")

@@ -147,7 +147,9 @@ final class JobHandler implements BatchMessageHandler {
             }
             case REJECTED -> fail(job, progress, outcome, last.errorCode() == null ? REJECTED : last.errorCode());
             case TRANSIENT, UNKNOWN -> retry(message, job, progress, outcome);
-            case ABSENT -> throw new IllegalStateException("조회 결과만으로 차례를 끝낼 수 없다: syncJobId=" + job.syncJobId());
+            // 조회의 "등록 없음"만으로는 차례를 끝낼 수 없고, 기다림은 드로우에만 나온다
+            case ABSENT, PENDING -> throw new IllegalStateException(
+                    "예약 작업의 차례를 끝낼 수 없는 판정이다: verdict=" + last.verdict() + " syncJobId=" + job.syncJobId());
         };
     }
 

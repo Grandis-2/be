@@ -1,9 +1,11 @@
 package com.grandis.nova.catalog.listing;
 
 import com.grandis.nova.catalog.option.OptionText;
+import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.SaleMode;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -11,20 +13,24 @@ import java.util.UUID;
  * (블랙 · 화이트 + 256GB → 블랙 256GB 또는 화이트 256GB 인 실제 옵션이 있어야 한다).
  * 값은 저장과 같은 메서드({@link OptionText#normalizeFor})로 정규화한다 — 용량은 공백 제거 · 대문자, 색상은 NFC · 트림 · 공백 접기.
  * q 도 NFC · 트림 · 공백 접기를 거친다. 콜레이션은 `=` 에서 NFD 를 같게 보지만 LIKE 는 아니다(실측) — 맥 한글 입력기는 NFD 를 흔히 보낸다.
+ * 크기 상한은 {@link ListQueryLimits} — q 는 정규화한 뒤 50자, brand · color · storage 는 보낸 개수로 각 20개.
  *
- * @param q          상품명 · 관리자 tags 부분 일치(대소문자 무시). 비면 null
+ * @param q          상품명 · 관리자 tags · 모델명 · 브랜드 코드(APPLE 등) 부분 일치(대소문자 무시). 비면 null
  * @param categoryId 상위면 하위에 배정된 상품까지 포함
+ * @param brands     브랜드 OR. 비면 거르지 않는다
  */
-public record ProductListFilter(String q, UUID categoryId, SaleMode saleMode, List<String> colors, List<String> storages) {
+public record ProductListFilter(String q, UUID categoryId, SaleMode saleMode, List<Brand> brands, List<String> colors,
+                                List<String> storages) {
 
     public ProductListFilter {
-        q = q == null || q.isBlank() ? null : OptionText.normalize(q);
-        colors = normalize(OptionText.COLOR, colors);
-        storages = normalize(OptionText.STORAGE, storages);
+        q = ListQueryLimits.query(q == null || q.isBlank() ? null : OptionText.normalize(q));
+        brands = brands == null ? List.of() : ListQueryLimits.values("brand", brands).stream().filter(Objects::nonNull).distinct().toList();
+        colors = normalize(OptionText.COLOR, ListQueryLimits.values("color", colors));
+        storages = normalize(OptionText.STORAGE, ListQueryLimits.values("storage", storages));
     }
 
     public static ProductListFilter none() {
-        return new ProductListFilter(null, null, null, List.of(), List.of());
+        return new ProductListFilter(null, null, null, List.of(), List.of(), List.of());
     }
 
     private static List<String> normalize(String axisKey, List<String> values) {

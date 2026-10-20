@@ -1,9 +1,9 @@
 package com.grandis.nova.catalog.registration;
 
-import com.grandis.nova.catalog.image.ImageUploadProperties;
 import com.grandis.nova.catalog.option.OptionText;
 import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.catalog.product.Amounts;
+import com.grandis.nova.catalog.product.Discount;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.registration.ProductRegistrationRequest.Combination;
 import com.grandis.nova.catalog.registration.ProductRegistrationRequest.GalleryBundle;
@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -37,13 +38,15 @@ import java.util.regex.Pattern;
  * 용량은 숫자+단위 · 조합은 축 전부를 덮고 값이 그 축에 있어야 하며 같은 조합 둘 금지 · 조합 상한 · SKU 는 상품 안 유일(비면 값을 '-' 로 잇는다) ·
  * 표시명 120자 · 가격은 정수 원 · 재고는 일반 상품에서 조합마다 필수이고 사전예약은 받지 않는다 · 가격은 기본가 + 추가금 합만(수동 가격 없음, 2026-10-06 결정) ·
  * 사진 묶음은 color 축이 있으면 색상별만(사용자 결정 2026-09-28), 없으면 기본 묶음 하나 · GALLERY 묶음당 10장 · 대표는 하나(없으면 첫 장) ·
- * DETAIL 은 상한과 대표 자동 지정이 없다 · 사진 주소는 설정한 CDN 주소(nova.upload.cdn-base-url) 아래만 · 사전예약은 회차 + 차수 필수이고
+ * DETAIL 은 영역당 3장이고 대표 자동 지정이 없다 · 사진 주소는 상품 안에서 한 번(올린 사진인지는 저장 단계의 ImageAttachments) · 사전예약은 회차 + 차수 필수이고
  * 오픈은 지금 + 여유 이후 · 일반은 회차 · 차수를 받지 않는다.
  */
 @Component
 public class ProductRegistrationValidator {
 
-    static final int MAX_GALLERY_IMAGES_PER_BUNDLE = 10;
+    public static final int MAX_GALLERY_IMAGES_PER_BUNDLE = 10;
+    /** 상세 영역(구매 혜택 · 유의사항 등) 하나의 사진 상한(2026-10-16 결정). 영역 수에는 상한이 없다. */
+    public static final int MAX_DETAIL_IMAGES_PER_SECTION = 3;
     /** 사전예약 배송 차수 최대 개수(2026-10-04 결정). 등록 이벤트 한 통에 싣는다. */
     public static final int MAX_SHIPMENT_BATCHES = 100;
     /** MySQL 문서의 date · datetime 지원 범위. 상한을 넘는 값은 preorder 가 저장하지 못한다(9999-12-31 23:59:59.999999 까지 들어간다 — 실측). */
@@ -84,44 +87,54 @@ public class ProductRegistrationValidator {
     public record Draft(List<Axis> axes, List<Combo> combos, List<GalleryDraft> gallery, List<DetailDraft> detail) {
     }
 
-    /** 사진 주소가 시작해야 하는 접두(CDN 주소 + "/"). */
-    private final String imageUrlPrefix;
-
-    public ProductRegistrationValidator(ImageUploadProperties images) {
-        this.imageUrlPrefix = images.imageUrlPrefix();
-    }
-
     public Draft validate(ProductRegistrationRequest request, Instant now, Duration minOpenLead) {
         requireSaleModeShape(request, now, minOpenLead);
         List<Axis> axes = normalizeAxes(request.optionAxes());
         List<Combo> combos = buildCombos(request, axes);
         List<GalleryDraft> gallery = normalizeGallery(request, axes);
         List<DetailDraft> detail = normalizeDetail(request);
-        requireUploadedImages(request);
+        requireDistinctImages(request);
         return new Draft(axes, combos, gallery, detail);
     }
 
     /**
-     * 사진 주소는 설정한 CDN 주소 아래만 — 바깥 주소(추적 픽셀 · 지워질 수 있는 남의 이미지)가 상품 화면에 실리지 않게 한다.
-     * 접두 끝의 "/" 까지 대조하므로 cdn 주소를 앞에 붙인 다른 호스트(cdn.example.com.evil.test)는 걸린다.
-     * 주소만 본다 — 그 객체가 실제로 올라가 있는지, 이 서비스가 발급한 키인지는 확인하지 않는다.
+     * 한 상품 안에서 같은 주소는 한 번 — 사진 수정 API 가 주소로 사진 한 장을 가리킨다. 업로드 API 는 파일마다 새 주소를 준다.
+     * 주소가 올린 사진인지(CDN · 용도 접두 · 표의 UNUSED)는 저장 단계의 붙이기가 본다({@code ImageAttachments}).
      */
-    private void requireUploadedImages(ProductRegistrationRequest request) {
+    private static void requireDistinctImages(ProductRegistrationRequest request) {
+        Set<String> seen = new HashSet<>();
         for (int i = 0; i < request.images().gallery().size(); i++) {
-            requireUploaded(request.images().gallery().get(i).items(), "images.gallery[%d]".formatted(i));
+            requireDistinct(request.images().gallery().get(i).items(), "images.gallery[%d]".formatted(i), seen);
         }
         for (int i = 0; i < request.images().detail().size(); i++) {
-            requireUploaded(request.images().detail().get(i).items(), "images.detail[%d]".formatted(i));
+            requireDistinct(request.images().detail().get(i).items(), "images.detail[%d]".formatted(i), seen);
         }
     }
 
-    private void requireUploaded(List<Image> items, String field) {
+    private static void requireDistinct(List<Image> items, String field, Set<String> seen) {
         for (int j = 0; j < items.size(); j++) {
-            String url = items.get(j).url();
-            if (!url.startsWith(imageUrlPrefix) || url.length() == imageUrlPrefix.length()) {
-                throw ValidationFailures.of(field + ".items[%d].url".formatted(j), "이미지 주소는 " + imageUrlPrefix + " 아래만 받습니다.");
+            if (!seen.add(items.get(j).url())) {
+                throw ValidationFailures.of(field + ".items[%d].url".formatted(j), "같은 사진 주소가 두 번 왔습니다.");
             }
         }
+    }
+
+    /** 요청의 사진 주소 → 칸 이름(images.gallery[i].items[j].url · images.detail[i].items[j].url). 붙이기의 400 이 가리킨다. */
+    public static Map<String, String> imageFields(ProductRegistrationRequest request) {
+        Map<String, String> fields = new HashMap<>();
+        for (int i = 0; i < request.images().gallery().size(); i++) {
+            List<Image> items = request.images().gallery().get(i).items();
+            for (int j = 0; j < items.size(); j++) {
+                fields.putIfAbsent(items.get(j).url(), "images.gallery[%d].items[%d].url".formatted(i, j));
+            }
+        }
+        for (int i = 0; i < request.images().detail().size(); i++) {
+            List<Image> items = request.images().detail().get(i).items();
+            for (int j = 0; j < items.size(); j++) {
+                fields.putIfAbsent(items.get(j).url(), "images.detail[%d].items[%d].url".formatted(i, j));
+            }
+        }
+        return fields;
     }
 
     /**
@@ -305,6 +318,7 @@ public class ProductRegistrationValidator {
                 computed = computed.add(axis.value(selections.get(axis.key())).surcharge());
             }
             BigDecimal price = requireStorablePrice(computed, field);
+            requireSellablePrice(price, request.discountRate(), field);
             Integer stock = setting == null ? null : setting.stock();
             if (request.saleMode() == SaleMode.IN_STOCK) {
                 if (stock == null) {
@@ -360,14 +374,18 @@ public class ProductRegistrationValidator {
         return settings;
     }
 
+    /**
+     * 조합 전부. 각 조합의 selections 는 축을 넣은 순서다 — 기본 SKU 가 이 순서로 값을 잇는다. 옵션 추가(ProductEditService)와 표시명도
+     * 축 순이라 같은 조합이면 어느 경로로 만들어도 같은 SKU 다(전에는 여기만 키 사전순이었다). 설정과 대조하는 키는 {@link #selectionKey} 가 순서를 지운다.
+     */
     private static List<Map<String, String>> cartesian(List<Axis> axes) {
         List<Map<String, String>> result = new ArrayList<>();
-        result.add(new TreeMap<>());
+        result.add(new LinkedHashMap<>());
         for (Axis axis : axes) {
             List<Map<String, String>> next = new ArrayList<>();
             for (Map<String, String> partial : result) {
                 for (Value value : axis.values()) {
-                    Map<String, String> extended = new TreeMap<>(partial);
+                    Map<String, String> extended = new LinkedHashMap<>(partial);
                     extended.put(axis.key(), value.normalized());
                     next.add(extended);
                 }
@@ -438,7 +456,10 @@ public class ProductRegistrationValidator {
             if (!names.add(collationKey(section))) {
                 throw ValidationFailures.of(field + ".section", "같은 영역이 두 번 왔습니다.");
             }
-            // 상세 영역: 상한 · 대표 자동 지정 없음. 대표를 둘 이상 찍는 것만 막는다(DB UNIQUE)
+            if (bundle.items().size() > MAX_DETAIL_IMAGES_PER_SECTION) {
+                throw ValidationFailures.of(field + ".items", "상세 영역당 최대 %d장입니다.".formatted(MAX_DETAIL_IMAGES_PER_SECTION));
+            }
+            // 상세 영역: 대표 자동 지정 없음. 대표를 둘 이상 찍는 것만 막는다(DB UNIQUE)
             sections.add(new DetailDraft(section, requireAtMostOnePrimary(bundle.items(), field)));
         }
         return sections;
@@ -486,6 +507,18 @@ public class ProductRegistrationValidator {
             throw ValidationFailures.of(field, "옵션 가격(기본가 + 추가금 %s)이 999,999,999,999 를 넘습니다.".formatted(computed.toPlainString()));
         }
         return computed;
+    }
+
+    /**
+     * 회원이 내는 값(정가에 할인율을 건 할인가)이 {@link Discount#MIN_SALE_PRICE} 이상인가. 아니면 원인 칸(field)의 400 — 그대로 두면 그 옵션은
+     * 결제 승인에서 거절돼 살 수 없다. 할인율 0 이면 정가를 본다. 판매 중지 옵션도 본다(다시 판매할 수 있다).
+     */
+    public static void requireSellablePrice(BigDecimal listPrice, int discountRate, String field) {
+        BigDecimal salePrice = Discount.apply(listPrice, discountRate);
+        if (salePrice.compareTo(Discount.MIN_SALE_PRICE) < 0) {
+            throw ValidationFailures.of(field, "옵션 가격(정가 %s원, 할인율 %d%%)의 할인가 %s원이 %s원보다 작습니다.".formatted(
+                    listPrice.toPlainString(), discountRate, salePrice.toPlainString(), Discount.MIN_SALE_PRICE.toPlainString()));
+        }
     }
 
     /**

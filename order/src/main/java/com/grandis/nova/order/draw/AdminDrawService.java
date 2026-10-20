@@ -15,14 +15,21 @@ import com.grandis.nova.order.stock.domain.exception.StockShortageException;
 import com.grandis.nova.order.web.ValidationFailures;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionException;
+import org.springframework.transaction.TransactionTimedOutException;
+import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +50,20 @@ import java.util.UUID;
  * - 재고는 조건부 UPDATE 로 확보한다({@link StockLedger#reserve}) — 모자라면 409 INSUFFICIENT_STOCK 이고 회차를 만들지 않는다.
  *   확보한 재고는 당첨자의 증정(0원 주문)에 쓰인다.
  * - 응모 마감은 지금보다 뒤여야 한다. 시작은 지금보다 앞이어도 된다(바로 응모 중).
+ * - <b>시간 예산</b>: catalog 조회를 시작한 때부터 회차 저장의 커밋까지를 {@link #budget}(기본 60초) 안에 끝낸다. 회차는 증정품 사진 주소를
+ *   스냅샷하는데, catalog 의 정리 배치는 아무 회차도 가리키지 않는 안 쓰는 사진을 지운다 — 읽어 둔 채 오래 멈춘 생성이 그 사이 빠지고 지워진
+ *   사진을 저장하지 않게, 배치의 기준 시간(하한 1시간)보다 훨씬 짧은 예산을 둔다. 넘으면 롤백(확보 포함)하고 409 retryable 이다 —
+ *   다시 보내면 지금 사진을 다시 읽는다.
+ *   <ul>
+ *     <li>예산이 보장하는 것은 커밋 직전 확인(beforeCommit)까지다 — 그 시각이 예산 안이어야 커밋으로 간다. 회차 INSERT 는 그 전에 flush 하므로
+ *         확인 뒤에 남는 것은 COMMIT 문 하나다(그 문장 자체에는 시간 상한이 없다).</li>
+ *     <li>저장 트랜잭션의 시간 상한(남은 예산을 초로 올림)은 스레드를 붙잡지 않게 하는 장치다 — 재고 행 잠금을 기다리는 문장이 잠금 대기 기본값(50초)
+ *         대신 그 상한에서 끊긴다(실측: 예산 2초에 2.2초에 끝남). 상한이 올림이라 예산을 조금 넘겨 끊길 수 있고, 그 몫은 커밋 직전 확인이 막는다.</li>
+ *     <li>예산을 넘긴 뒤의 DB · 트랜잭션 · 잠금 실패는 예외 종류와 상관없이 409 다 — 끊는 지점에 따라 QueryTimeoutException(잠금 대기 중) · JpaSystemException
+ *         (Hibernate 의 "Transaction timeout expired" — 상한 직전에 잠금을 얻고 INSERT 를 준비할 때)으로 달리 온다(리뷰 실측).</li>
+ *     <li>재고 부족은 기한 뒤라도 409 INSUFFICIENT_STOCK 그대로다 — 시간 탓이 아닌 실제 상태라 다시 보내도 같고(retryable 이 아니다),
+ *         트랜잭션은 롤백돼 사진 주소를 저장하지 않는다.</li>
+ *   </ul>
  */
 @Service
 public class AdminDrawService {
@@ -53,23 +74,36 @@ public class AdminDrawService {
     static final int MAX_KEY_LENGTH = 100;
     static final int MAX_ATTEMPTS = 2;
     static final String ACTIVE = "ACTIVE";
+    /** 시간 예산의 상한. 정리 배치의 기준 시간 하한(1시간)과 거리를 둔다. */
+    static final Duration MAX_BUDGET = Duration.ofMinutes(10);
 
     private final CatalogReader catalog;
     private final StockLedger stock;
     private final DrawCampaignStore campaigns;
-    private final TransactionTemplate writeTransaction;
+    private final PlatformTransactionManager transactionManager;
     private final TransactionTemplate readTransaction;
     private final Clock clock;
+    private final Duration budget;
 
     public AdminDrawService(CatalogReader catalog, StockLedger stock, DrawCampaignStore campaigns,
-                            PlatformTransactionManager transactionManager, Clock clock) {
+                            PlatformTransactionManager transactionManager, Clock clock,
+                            @Value("${nova.draw.create-budget:PT60S}") Duration budget) {
         this.catalog = catalog;
         this.stock = stock;
         this.campaigns = campaigns;
-        this.writeTransaction = new TransactionTemplate(transactionManager);
+        this.transactionManager = transactionManager;
         this.readTransaction = new TransactionTemplate(transactionManager);
         this.readTransaction.setReadOnly(true);
         this.clock = clock;
+        this.budget = requireBudget(budget);
+    }
+
+    /** 0 보다 크고 10분 이하 — 정리 배치의 기준 시간 하한(1시간)보다 충분히 짧아야 한다. 0 이하면 모든 생성이 409 다. */
+    static Duration requireBudget(Duration budget) {
+        if (budget == null || budget.isNegative() || budget.isZero() || budget.compareTo(MAX_BUDGET) > 0) {
+            throw new IllegalArgumentException("nova.draw.create-budget must be in (0, " + MAX_BUDGET + "]: " + budget);
+        }
+        return budget;
     }
 
     /**
@@ -93,19 +127,34 @@ public class AdminDrawService {
         if (!command.closesAt().isAfter(clock.instant())) {
             throw ValidationFailures.of("closesAt", "응모 마감은 지금보다 뒤여야 합니다.");
         }
+        // 예산은 사진 주소를 읽기 시작할 때부터 센다
+        Instant deadline = clock.instant().plus(budget);
         CatalogOption option = catalog.find(List.of(command.optionId()), sessionToken).get(command.optionId());
         if (option == null || !option.productId().equals(command.productId())) {
             throw new BusinessException(OrderErrorCode.PRODUCT_NOT_FOUND);
         }
         requireGiftable(option);
         NewDrawCampaign draft = new NewDrawCampaign(key, option.productId(), option.optionId(), command.title(), option.productTitle(),
-                option.optionTitle(), option.imageUrl(), command.entryFee(), command.winnerCount(), command.opensAt(), command.closesAt());
+                option.modelName(), option.optionTitle(), option.imageUrl(), command.entryFee(), command.winnerCount(), command.opensAt(), command.closesAt());
         for (int attempt = 1; ; attempt++) {
+            TransactionTemplate transaction = writeTransaction(deadline);
             try {
-                return new Created(writeTransaction.execute(status -> {
+                return new Created(transaction.execute(status -> {
+                    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                        @Override
+                        public void beforeCommit(boolean readOnly) {
+                            if (!clock.instant().isBefore(deadline)) {
+                                throw new BudgetExceededException();
+                            }
+                        }
+                    });
                     stock.reserve(Map.of(option.optionId(), command.winnerCount()));
                     return campaigns.insert(draft);
                 }), true);
+            } catch (BudgetExceededException | TransactionTimedOutException | QueryTimeoutException e) {
+                // 트랜잭션 상한에 끊긴 것 — 잠금 대기 중이면 QueryTimeoutException 이다(실측, AdminDrawBudgetLockWaitTest)
+                log.info("드로우 회차 만들기 시간 예산 초과 optionId={} budget={}", option.optionId(), budget);
+                throw budgetExceeded();
             } catch (DrawKeyTakenException e) {
                 // 같은 새 키가 동시에 왔다. 이 트랜잭션(확보 포함)은 롤백됐으므로 새 트랜잭션에서 먼저 들어간 회차를 읽는다
                 return new Created(findByKey(key).orElseThrow(() -> new IllegalStateException("키 충돌인데 그 키의 회차가 없다: " + key, e)),
@@ -117,6 +166,15 @@ public class AdminDrawService {
                 }
                 throw new BusinessException(OrderErrorCode.INSUFFICIENT_STOCK, "당첨 인원만큼 재고가 없습니다.", Map.of("variantIds", e.optionIds()));
             } catch (PessimisticLockingFailureException e) {
+                // 기한 뒤의 잠금 실패(대기 초과 · 교착)도 다른 실패처럼 409 — 그 사이 같은 키의 회차가 들어갔으면 그것을 돌려준다
+                if (!clock.instant().isBefore(deadline)) {
+                    Optional<DrawCampaign> winner = findByKey(key);
+                    if (winner.isPresent()) {
+                        return new Created(winner.get(), false);
+                    }
+                    log.warn("드로우 회차 만들기 시간 예산 초과(잠금 실패) optionId={} budget={}", option.optionId(), budget, e);
+                    throw budgetExceeded();
+                }
                 // 재고 원장의 계약 — 동시 삽입이 부르는 S 잠금(중복 키 확인 · 외래 키 부모)의 드문 교착은 호출하는 쪽이 한 번 더 한다(장바구니 주문과 같다)
                 if (!MySqlLockFailures.isDeadlock(e) || attempt >= MAX_ATTEMPTS) {
                     Optional<DrawCampaign> winner = findByKey(key);
@@ -127,7 +185,39 @@ public class AdminDrawService {
                     throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
                 }
                 log.info("드로우 회차 만들기 교착, 다시 시도 {}/{} optionId={}", attempt, MAX_ATTEMPTS, option.optionId());
+            } catch (DataAccessException | TransactionException e) {
+                // 예산을 넘긴 뒤의 DB · 트랜잭션 실패는 시각으로 가른다 — 상한에 끊긴 예외가 위 목록 밖 종류(JpaSystemException 등)로도 온다.
+                // 그 밖의 예외(코드 결함)는 기한 뒤라도 덮지 않는다. 원인은 스택과 함께 남긴다
+                if (!clock.instant().isBefore(deadline)) {
+                    log.warn("드로우 회차 만들기 시간 예산 초과 optionId={} budget={}", option.optionId(), budget, e);
+                    throw budgetExceeded();
+                }
+                throw e;
             }
+        }
+    }
+
+    /** 남은 예산을 시간 상한으로 건 저장 트랜잭션. 이미 다 썼으면 시작하지 않는다. 상한은 초 단위라 올림한다 — 넘친 몫은 커밋 직전 확인이 막는다. */
+    private TransactionTemplate writeTransaction(Instant deadline) {
+        Duration remaining = Duration.between(clock.instant(), deadline);
+        if (remaining.isNegative() || remaining.isZero()) {
+            log.info("드로우 회차 만들기 시간 예산 초과(저장 전) budget={}", budget);
+            throw budgetExceeded();
+        }
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setTimeout((int) Math.max(1, (remaining.toMillis() + 999) / 1000));
+        return template;
+    }
+
+    private static BusinessException budgetExceeded() {
+        return new BusinessException(OrderErrorCode.STATE_CONFLICT, "회차를 만드는 데 시간이 너무 걸렸습니다. 다시 시도해 주세요.",
+                Map.of("retryable", true));
+    }
+
+    /** 커밋 직전 확인에서 예산을 넘었다 — 트랜잭션은 롤백된다. */
+    private static final class BudgetExceededException extends RuntimeException {
+        BudgetExceededException() {
+            super("draw create budget exceeded", null, false, false);
         }
     }
 

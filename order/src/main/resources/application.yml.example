@@ -74,6 +74,11 @@ nova:
   # 결제 기한(10분)이 지난 결제 대기 장바구니 주문을 취소 · 재고 반환하는 주기(앞 실행이 끝난 뒤부터 잰다). 기본 30s
   # cart-order:
   #   expiry-interval: 30s
+  # 재고 장부 대조(새벽 4시, 실패하면 5시에 한 번 더 — KST, "-" 면 끈다)와 대조 지표를 DB 에서 다시 읽는 주기
+  # stock:
+  #   reconcile:
+  #     cron: "0 0 4,5 * * *"
+  #   gauge-refresh-interval: 60s
   # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다
   sqs:
     region: ap-northeast-2
@@ -82,13 +87,14 @@ nova:
     # 논리 목적지 → 실제 큐 이름(환경마다 접두어를 붙일 때만)
     # queues:
     #   preorder-events: dev-preorder-events
+    #   catalog-events: dev-catalog-events
     consumer:
       enabled: true
       queue: order-events
       concurrency: 1
       wait-seconds: 20
       visibility: 5m       # 처리 한 건보다 길게
-      backoff-base: 5s
+      backoff-base: 30s    # 실패는 대개 DB 장애 — 재수신 5회(DLQ 전)가 장애 조치보다 길게(약 7분)
       backoff-max: 5m
       # 결과를 정할 수 없는 예약 취소(승인 확인 중 · 환불 중 · 환불 실패로 사람 대기)는 같은 큐에 지연을 두고 다시 보낸다.
       # 보류할 때마다 두 배, 최대 15분(SQS 상한). 포기하지 않는다 — 처음 보류한 뒤 alert-after 가 지나면 ERROR 를 한 번 남긴다.

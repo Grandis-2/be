@@ -8,7 +8,6 @@ import com.grandis.nova.order.cart.CartCatalog;
 import com.grandis.nova.order.cart.domain.model.CartLine;
 import com.grandis.nova.order.cart.domain.model.CartOption;
 import com.grandis.nova.order.cart.domain.model.CartSlot;
-import com.grandis.nova.order.cart.domain.model.Unavailability;
 import com.grandis.nova.order.cart.domain.repository.CartStore;
 import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.command.PlaceOrderCommand;
@@ -22,8 +21,9 @@ import com.grandis.nova.order.order.domain.model.OrderLine;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
 import com.grandis.nova.order.stock.StockLedger;
+import com.grandis.nova.order.stock.StockMismatches;
+import com.grandis.nova.order.stock.domain.exception.StockReleaseMismatchException;
 import com.grandis.nova.order.stock.domain.exception.StockShortageException;
-import com.grandis.nova.order.web.ValidationFailures;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.PessimisticLockingFailureException;
@@ -32,13 +32,10 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -51,10 +48,10 @@ import java.util.stream.Collectors;
  * 장바구니 주문 생성(source=CART). 고른 장바구니 줄로 주문을 만들고 재고를 전량 확보한다 — 하나라도 모자라면 주문을 만들지 않는다.
  *
  * 순서:
- * 1. 트랜잭션 밖: catalog 일괄 조회({@link CartCatalog}). 살 수 없는 줄이 있으면 409 STATE_CONFLICT(details.items 에 줄마다 이유),
- *    화면에서 본 단가 · 보증가가 지금 값과 다르면 409 PRICE_CHANGED(details.items 에 지금 값). 금액은 catalog 의 지금 값으로 계산한다.
+ * 1. 트랜잭션 밖: catalog 일괄 조회({@link CartCatalog}) → 살 수 없는 줄 · 가격 다름 판정과 금액 계산({@link SelectionRules}, 바로 구매와 같다).
  * 2. 트랜잭션: 그 회원의 장바구니 줄을 잠그고({@link CartStore#lockByCustomer}) 고른 줄이 모두 그대로 있는지 대조 → 아니면 409 CART_CHANGED.
- *    그 회원의 결제 안 된 장바구니 주문(결제 대기 · 승인 중 — 기한과 상관없이 전부)을 본다. 결제 안 된 장바구니 주문은 회원당 하나다(2026-10-10 결정):
+ *    그 회원의 결제 안 된 장바구니 주문(결제 대기 · 승인 중 — 기한과 상관없이 전부)을 본다. 결제 안 된 장바구니 주문은 회원당 하나다(2026-10-10 결정,
+ *    바로 구매 주문은 세지도 취소하지도 않는다 — 2026-10-15 결정):
  *    - 기한 안이고({@link Order#acceptsPaymentAt}) 구성(옵션마다 수량 · 보증 수량) · 단가 · 보증가 · 배송지가 모두 같은 주문이 있으면 그것을
  *      돌려준다(200, reused — 기한 연장 없음). 두 번 누른 요청이 여기로 온다.
  *    - 아니면 결제 대기인 앞 주문을 모두(구성 · 기한과 상관없이) 취소하고 새로 만든다 — 재고를 여러 주문으로 잡아 두지 못한다.
@@ -79,24 +76,22 @@ public class PlaceCartOrderService {
     static final int MAX_ATTEMPTS = 2;
     /** 새 장바구니 주문이 결제 안 된 앞 장바구니 주문을 취소할 때의 이력 사유(회원당 하나). */
     static final String REPLACED_REASON = "REPLACED_BY_NEW_ORDER";
-    /** 주문의 재고 부족 문구(명세 POST /orders). 같은 코드의 기본 문구는 장바구니 담기의 것이다. */
-    static final String SHORTAGE_MESSAGE = "주문 전체 수량을 확보할 수 없습니다.";
-    /** 주문 금액 상한(orders.total_amount decimal(12,0)). */
-    static final BigDecimal MAX_TOTAL = new BigDecimal("999999999999");
 
     private final CartCatalog catalog;
     private final CartStore cart;
     private final StockLedger stock;
+    private final StockMismatches mismatches;
     private final OrderLedger ledger;
     private final OrderReader orderReader;
     private final TransactionTemplate writeTransaction;
     private final Clock clock;
 
-    public PlaceCartOrderService(CartCatalog catalog, CartStore cart, StockLedger stock, OrderLedger ledger, OrderReader orderReader,
-                                 PlatformTransactionManager transactionManager, Clock clock) {
+    public PlaceCartOrderService(CartCatalog catalog, CartStore cart, StockLedger stock, StockMismatches mismatches, OrderLedger ledger,
+                                 OrderReader orderReader, PlatformTransactionManager transactionManager, Clock clock) {
         this.catalog = catalog;
         this.cart = cart;
         this.stock = stock;
+        this.mismatches = mismatches;
         this.ledger = ledger;
         this.orderReader = orderReader;
         this.writeTransaction = new TransactionTemplate(transactionManager);
@@ -115,22 +110,16 @@ public class PlaceCartOrderService {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("장바구니 주문 생성은 트랜잭션 밖에서 불러야 한다 — catalog 호출 동안 잠금을 쥐지 않고, 다시 하기가 새 트랜잭션이게");
         }
-        requireDistinctSlots(selections);
+        SelectionRules.requireDistinctSlots(selections);
         Set<UUID> optionIds = selections.stream().map(CartSelection::optionId).collect(Collectors.toCollection(LinkedHashSet::new));
         Map<UUID, CartOption> options = catalog.find(optionIds, sessionToken);
-        requirePurchasable(selections, options);
-        requireSamePrices(selections, options);
-
-        // 입력 검증 · 금액 계산은 트랜잭션 전에 끝낸다. 원장 안에서 던지면 트랜잭션이 rollback-only 가 된다.
-        PlaceOrderCommand command = toCommand(customerId, selections, options, shipTo);
-        requireWithinTotalLimit(command);
-        OrderDraft draft = command.toDraft();
+        OrderDraft draft = SelectionRules.draft(customerId, OrderSource.CART, null, selections, options, shipTo);
         EventCause cause = EventCause.user();
         for (int attempt = 1; ; attempt++) {
             try {
                 return writeTransaction.execute(status -> placeLocked(customerId, selections, draft, cause));
             } catch (StockShortageException e) {
-                throw new BusinessException(OrderErrorCode.INSUFFICIENT_STOCK, SHORTAGE_MESSAGE, Map.of("variantIds", e.optionIds()));
+                throw new BusinessException(OrderErrorCode.INSUFFICIENT_STOCK, SelectionRules.SHORTAGE_MESSAGE, Map.of("variantIds", e.optionIds()));
             } catch (PessimisticLockingFailureException e) {
                 if (!MySqlLockFailures.isDeadlock(e)) {
                     log.warn("장바구니 주문 생성 잠금 대기 초과, 다시 하지 않음 customerId={}", customerId, e);
@@ -182,78 +171,17 @@ public class PlaceCartOrderService {
         }
         // 반환과 확보를 옵션별 증감 하나로 합쳐 잠금 순서대로 한 번에 — 따로 돌면 재고 행 잠금 순서가 깨진다
         try {
-            stock.releaseAndReserve(released, quantities(draft.lines()));
-        } catch (IllegalStateException e) {
-            // 경보 규칙이 이 문구("재고 어긋남")로 잡는다 — 결제 반영의 판매 확정 경보(CartOrderFulfillment)와 같은 문구다. 바꾸지 않는다.
+            stock.releaseAndReserve(released, SelectionRules.quantities(draft.lines()));
+        } catch (StockReleaseMismatchException e) {
+            // 경보는 어긋남 지표(StockMismatches)로 건다. 문구("재고 어긋남")는 결제 반영의 판매 확정(CartOrderFulfillment)과 같아 로그를 한 번에 찾는
+            // 열쇠다 — 바꾸지 않는다.
             log.error("재고 어긋남 — 앞 장바구니 주문의 확보를 반환하지 못해 새 주문을 만들지 않았다, 재고 장부 확인 필요 customerId={} orderIds={} released={}",
                     customerId, canceledOrders, released, e);
+            mismatches.record(StockMismatches.Site.CART_REPLACE);
             throw new IllegalStateException("바꾸는 앞 주문의 확보를 반환하지 못했다: orderIds=" + canceledOrders, e);
         }
         Order order = ledger.place(draft, cause);
         return new PlaceResult(order, orderReader.findItems(order.id()), true);
-    }
-
-    private static Map<UUID, Integer> quantities(List<OrderLine> lines) {
-        return lines.stream().collect(Collectors.toMap(OrderLine::optionId, line -> line.quantity().value()));
-    }
-
-    /** 금액 칸(12자리)을 넘는 주문은 만들 수 없다 — 400(그대로 두면 Money 가 IllegalArgumentException 으로 500). */
-    private static void requireWithinTotalLimit(PlaceOrderCommand command) {
-        BigDecimal total = BigDecimal.ZERO;
-        for (PlaceOrderCommand.Line line : command.lines()) {
-            total = total.add(line.unitPrice().multiply(BigDecimal.valueOf(line.quantity())))
-                    .add(line.warrantyUnitPrice().multiply(BigDecimal.valueOf(line.warrantyQuantity())));
-        }
-        if (total.compareTo(MAX_TOTAL) > 0) {
-            throw ValidationFailures.of("items", "한 번에 주문할 수 있는 금액을 넘었습니다.");
-        }
-    }
-
-    /** 같은 (옵션, 보증)을 두 번 고르면 어느 수량인지 모른다 — 400. */
-    private static void requireDistinctSlots(List<CartSelection> selections) {
-        Set<CartSlot> seen = new HashSet<>();
-        for (CartSelection selection : selections) {
-            if (!seen.add(selection.slot())) {
-                throw ValidationFailures.of("items", "같은 옵션 · 보증 줄을 두 번 고를 수 없습니다.");
-            }
-        }
-    }
-
-    /** 살 수 있는가는 장바구니 조회와 같은 판정이다. 재고는 여기서 보지 않는다 — 확보가 조건부 UPDATE 로 가른다. */
-    private static void requirePurchasable(List<CartSelection> selections, Map<UUID, CartOption> options) {
-        List<Map<String, Object>> unavailable = new ArrayList<>();
-        for (CartSelection selection : selections) {
-            Unavailability reason = Unavailability.of(options.get(selection.optionId()), selection.warranty(), selection.quantity(),
-                    Integer.MAX_VALUE);
-            if (reason != null) {
-                unavailable.add(Map.of("variantId", selection.optionId(), "warranty", selection.warranty(), "reason", reason.name()));
-            }
-        }
-        if (!unavailable.isEmpty()) {
-            throw new BusinessException(OrderErrorCode.STATE_CONFLICT, Map.of("items", unavailable));
-        }
-    }
-
-    /** 화면에서 본 값과 지금 값이 다르면 주문하지 않고 지금 값을 알린다. 비교는 값으로(scale 무시). */
-    private static void requireSamePrices(List<CartSelection> selections, Map<UUID, CartOption> options) {
-        List<Map<String, Object>> changed = new ArrayList<>();
-        for (CartSelection selection : selections) {
-            CartOption option = options.get(selection.optionId());
-            boolean unitChanged = selection.expectedUnitPrice().compareTo(option.price()) != 0;
-            boolean warrantyChanged = selection.warranty()
-                    && (selection.expectedWarrantyPrice() == null || selection.expectedWarrantyPrice().compareTo(option.warrantySurcharge()) != 0);
-            if (unitChanged || warrantyChanged) {
-                Map<String, Object> item = new LinkedHashMap<>();
-                item.put("variantId", selection.optionId());
-                item.put("warranty", selection.warranty());
-                item.put("unitPrice", option.price());
-                item.put("warrantyPrice", selection.warranty() ? option.warrantySurcharge() : BigDecimal.ZERO);
-                changed.add(item);
-            }
-        }
-        if (!changed.isEmpty()) {
-            throw new BusinessException(OrderErrorCode.PRICE_CHANGED, Map.of("items", changed));
-        }
     }
 
     /** 고른 줄마다 지금 장바구니에 (옵션, 보증, 수량)이 같은 줄이 있어야 한다. 장바구니의 다른 줄은 고르지 않아도 된다. */
@@ -292,25 +220,5 @@ public class PlaceCartOrderService {
             }
         }
         return true;
-    }
-
-    /** 옵션마다 한 줄 — 보증 포함 · 미포함 줄을 합친다. 이름 · 단가 · 보증가는 catalog 의 지금 값이다. */
-    private static PlaceOrderCommand toCommand(UUID customerId, List<CartSelection> selections, Map<UUID, CartOption> options,
-                                               PlaceOrderCommand.Address shipTo) {
-        Map<UUID, int[]> counts = new LinkedHashMap<>();   // [수량, 보증 수량]
-        for (CartSelection selection : selections) {
-            int[] count = counts.computeIfAbsent(selection.optionId(), id -> new int[2]);
-            count[0] += selection.quantity();
-            if (selection.warranty()) {
-                count[1] += selection.quantity();
-            }
-        }
-        List<PlaceOrderCommand.Line> lines = new ArrayList<>();
-        counts.forEach((optionId, count) -> {
-            CartOption option = options.get(optionId);
-            lines.add(new PlaceOrderCommand.Line(option.productId(), optionId, count[0], option.price(), count[1],
-                    count[1] == 0 ? BigDecimal.ZERO : option.warrantySurcharge(), option.productTitle(), option.optionTitle()));
-        });
-        return new PlaceOrderCommand(customerId, OrderSource.CART, null, null, shipTo, lines);
     }
 }

@@ -37,19 +37,28 @@ public class ReprocessCandidateReader {
     }
 
     /**
-     * 재처리할 수 있는 DEAD_LETTER REGISTER(예약이 취소 중 · 취소가 아닌 것)를 만든 순으로 최대 limit 건.
-     * 조건을 쿼리에 넣어 재처리 불가인 작업이 상한을 차지하지 않게 한다. errorCode 가 있으면 마지막 시도가 그 값인 것만.
+     * 재처리할 수 있는 DEAD_LETTER 작업을 만든 순으로 최대 limit 건 — 등록은 예약이 취소 중 · 취소가 아닌 것, 취소는 예약이 취소 중인 것.
+     * 조건을 쿼리에 넣어 재처리 불가인 작업이 상한을 차지하지 않게 한다({@link ReprocessCandidate#blocker} 와 같은 조건).
+     * errorCode 가 있으면 마지막 시도가 그 값인 것만.
      */
-    public List<ReprocessCandidate> findDeadLetters(String errorCode, int limit) {
-        List<Object> args = new ArrayList<>(List.of(SyncJobType.REGISTER.name(), SyncJobStatus.DEAD_LETTER.name(),
-                PreorderStatus.CANCELING.name(), PreorderStatus.CANCELED.name()));
+    public List<ReprocessCandidate> findDeadLetters(SyncJobType jobType, String errorCode, int limit) {
+        List<Object> args = new ArrayList<>(List.of(jobType.name(), SyncJobStatus.DEAD_LETTER.name()));
+        String preorderCondition;
+        if (jobType == SyncJobType.REGISTER) {
+            preorderCondition = " AND p.status NOT IN (?, ?)";
+            args.add(PreorderStatus.CANCELING.name());
+            args.add(PreorderStatus.CANCELED.name());
+        } else {
+            preorderCondition = " AND p.status = ?";
+            args.add(PreorderStatus.CANCELING.name());
+        }
         String errorCondition = "";
         if (errorCode != null) {
             errorCondition = " AND a.error_code = ?";
             args.add(errorCode);
         }
         args.add(limit);
-        return jdbcTemplate.query(SELECT + " WHERE j.job_type = ? AND j.status = ? AND p.status NOT IN (?, ?)"
+        return jdbcTemplate.query(SELECT + " WHERE j.job_type = ? AND j.status = ?" + preorderCondition
                 + errorCondition
                 + " ORDER BY j.created_at, j.id LIMIT ?", CANDIDATE, args.toArray());
     }

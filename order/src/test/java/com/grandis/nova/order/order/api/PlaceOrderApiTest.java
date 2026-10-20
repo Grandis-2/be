@@ -24,7 +24,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static com.grandis.nova.order.support.OrderFixtures.bytes;
@@ -90,6 +92,8 @@ class PlaceOrderApiTest {
                 .andExpect(jsonPath("$.data.items[0].productTitle").value(OrderFixtures.PRODUCT_TITLE))
                 .andExpect(jsonPath("$.data.items[0].unitPrice").value(1250000))
                 .andExpect(jsonPath("$.data.items[0].quantity").value(1))
+                // 사전예약은 접수 때의 preorder 스냅샷을 옮긴다 — 사진 칸이 없어 비운다(주문 때 catalog 사진을 섞지 않는다)
+                .andExpect(jsonPath("$.data.items[0].imageUrl").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.data.shipTo.name").value("홍길동"))
                 .andExpect(jsonPath("$.data.shipTo.line2").doesNotExist())
                 .andExpect(jsonPath("$.data.createdAt").isNotEmpty())
@@ -107,6 +111,31 @@ class PlaceOrderApiTest {
                 SELECT COUNT(*) FROM order_events e JOIN orders o ON o.id = e.order_id
                 WHERE o.preorder_id = ? AND e.actor = 'USER' AND e.from_status IS NULL
                 """, bytes(preorderId))).isEqualTo(1);
+        // 결제 시작 알림 — 주문 생성과 같은 트랜잭션, 시각은 주문을 만든 때
+        Map<String, Object> started = jdbcTemplate.queryForMap("""
+                SELECT s.payload, DATE_FORMAT(o.created_at, '%Y-%m-%dT%H:%i:%s.%fZ') AS created_at
+                  FROM order_outbox_events s JOIN orders o ON o.preorder_id = s.aggregate_id
+                 WHERE s.aggregate_type = 'PREORDER' AND s.aggregate_id = ? AND s.event_type = 'PREORDER_PAYMENT_STARTED'
+                """, bytes(preorderId));
+        String payload = (String) started.get("payload");
+        assertThat((String) JsonPath.read(payload, "$.preorderId")).isEqualTo(token);
+        assertThat((String) JsonPath.read(payload, "$.orderId")).isEqualTo(orderId);
+        assertThat(Instant.parse(JsonPath.read(payload, "$.startedAt")))
+                .isEqualTo(Instant.parse((String) started.get("created_at")));
+    }
+
+    /** Idempotency-Key 는 바로 구매만 본다 — 사전예약 주문은 모양이 틀린 키가 와도 그대로 만든다. */
+    @Test
+    void preorderOrderIgnoresIdempotencyKey() throws Exception {
+        stubPayable();
+
+        mockMvc.perform(post("/api/v1/orders").contentType(MediaType.APPLICATION_JSON).content(body("PREORDER", token))
+                        .header(BearerTokens.HEADER, BearerTokens.value(SESSION)).header("Idempotency-Key", "not-a-uuid")
+                        .with(TestAuth.customer(customerId)))
+                .andExpect(status().isCreated());
+
+        assertThat(jdbcTemplate.queryForObject("SELECT idempotency_key IS NULL FROM orders WHERE customer_id = ?", Boolean.class,
+                (Object) OrderFixtures.bytes(customerId))).isTrue();
     }
 
     @Test
@@ -121,6 +150,7 @@ class PlaceOrderApiTest {
                 .andExpect(jsonPath("$.data.items.length()").value(1));
 
         assertThat(orderCount()).isEqualTo(1);
+        assertThat(startedCount()).as("기존 주문을 돌려준 재요청은 결제 시작을 다시 알리지 않는다").isEqualTo(1);
     }
 
     // 주문한 뒤 기한이 지나도(preorder 가 DUE_PASSED 로 답해도) 재요청은 같은 주문이다. 응답이 시간에 흔들리지 않는다.
@@ -149,6 +179,7 @@ class PlaceOrderApiTest {
         List<String> orderIds = outcomes.stream().map(o -> orderIdOf(o.value())).distinct().toList();
         assertThat(orderIds).hasSize(1);
         assertThat(orderCount()).isEqualTo(1);
+        assertThat(startedCount()).as("중복 키로 부딪혀 기존 주문을 돌려준 요청도 알리지 않는다").isEqualTo(1);
     }
 
     // preorder 는 남의 예약을 403 으로 거절한다. 사용자에게는 존재를 숨겨 404 다.
@@ -339,7 +370,7 @@ class PlaceOrderApiTest {
 
     @Test
     void otherSourcesAreRejected() throws Exception {
-        perform(customerId, body("BUY_NOW", token))
+        perform(customerId, body("DRAW", token))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
                 .andExpect(jsonPath("$.error.details.violations[0].field").value("source"));
@@ -408,6 +439,13 @@ class PlaceOrderApiTest {
 
     private int orderCount() {
         return count("SELECT COUNT(*) FROM orders WHERE preorder_id = ?", bytes(preorderId));
+    }
+
+    private int startedCount() {
+        return count("""
+                SELECT COUNT(*) FROM order_outbox_events
+                 WHERE aggregate_type = 'PREORDER' AND aggregate_id = ? AND event_type = 'PREORDER_PAYMENT_STARTED'
+                """, bytes(preorderId));
     }
 
     private int count(String sql, Object... args) {

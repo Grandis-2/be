@@ -3,6 +3,7 @@ package com.grandis.nova.preorder.accept;
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
+import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.support.AdmissionTickets;
 import com.grandis.nova.preorder.support.CatalogStubs;
 import com.grandis.nova.preorder.support.PreorderCancels;
@@ -23,6 +24,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Map;
@@ -48,6 +50,9 @@ class AcceptPreorderApiTest {
 
     @Autowired
     PreorderLedger ledger;
+
+    @Autowired
+    Preorders preorders;
 
     @Autowired
     TransactionTemplate transactionTemplate;
@@ -239,6 +244,30 @@ class AcceptPreorderApiTest {
                 .andExpect(jsonPath("$.error.code").value("SALE_CLOSED"));
     }
 
+    /** 등록이 끝났는지는 catalog 의 registrationCompleted 가 아니라 회차 행으로 본다. 없으면 공개 전처럼 숨긴다. */
+    @Test
+    void 회차_행이_없는_상품은_catalog_가_등록_완료라고_해도_404() throws Exception {
+        UUID productId = fixtures.product("PREORDER", "ACTIVE");
+        UUID optionId = fixtures.option(productId, "ACTIVE");
+        catalogReturns(productId, "PREORDER", "ACTIVE", optionId, "ACTIVE");
+
+        accept(customerId, productId, optionId, "key-no-campaign", ticket(productId, customerId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
+    }
+
+    /** catalog 가 등록 미완료라고 해도 회차 행이 있으면 받는다 — 등록 직후 캐시된 "미완료" 가 접수를 막지 않는다. */
+    @Test
+    void 회차_행이_있으면_catalog_가_등록_미완료라고_해도_받는다() throws Exception {
+        PreorderProduct registered = fixtures.openPreorderProduct();
+        CatalogStubs.stubPreorderProduct(catalogClient, registered.productId(), true, false,
+                CatalogStubs.activeOption(registered.optionId()));
+
+        accept(customerId, registered.productId(), registered.optionId(), "key-registered",
+                ticket(registered.productId(), customerId))
+                .andExpect(status().isAccepted());
+    }
+
     @Test
     void 없는_상품_판매_중지_옵션_다른_상품의_옵션은_404() throws Exception {
         UUID missing = fixtures.product("PREORDER", "ACTIVE");
@@ -260,18 +289,11 @@ class AcceptPreorderApiTest {
     }
 
     @Test
-    void 공개_전이거나_등록이_끝나지_않은_상품은_없는_상품으로_404() throws Exception {
+    void 공개_전_상품은_없는_상품으로_404() throws Exception {
         CatalogStubs.stubPreorderProduct(catalogClient, product.productId(), false, true,
                 CatalogStubs.activeOption(product.optionId()));
         accept(customerId, product.productId(), product.optionId(), "key-hidden",
                 ticket(product.productId(), customerId))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
-
-        PreorderProduct other = fixtures.openPreorderProduct();
-        CatalogStubs.stubPreorderProduct(catalogClient, other.productId(), true, false,
-                CatalogStubs.activeOption(other.optionId()));
-        accept(customerId, other.productId(), other.optionId(), "key-incomplete", ticket(other.productId(), customerId))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
         assertThat(fixtures.count("SELECT COUNT(*) FROM preorders WHERE customer_id = ?",
@@ -325,6 +347,25 @@ class AcceptPreorderApiTest {
                 .andExpect(status().isAccepted());
     }
 
+    /** 수명이 설정(120초)보다 길어도 발급 시각 칸으로 가린다. 만료에서 거꾸로 세면 접수 뒤에 발급된 것으로 보여 통과한다. */
+    @Test
+    void 발급_시각을_실은_입장권은_수명과_상관없이_발급_시각으로_마지막_접수_전후를_가린다() throws Exception {
+        Duration longTtl = Duration.ofSeconds(4 * AdmissionTickets.TTL_SECONDS);
+        String ticket = AdmissionTickets.issueWithIssuedAt(product.productId(), customerId, Instant.now(), longTtl);
+        String first = body(accept(customerId, product.productId(), product.optionId(), "key-iat-1", ticket)
+                .andExpect(status().isAccepted()));
+        cancels.complete(preorderIdOf(first));
+        String sameAdmission = AdmissionTickets.issueWithIssuedAt(product.productId(), customerId,
+                Instant.now().minusSeconds(1), longTtl);
+
+        accept(customerId, product.productId(), product.optionId(), "key-iat-2", sameAdmission)
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("ADMISSION_TICKET_STALE"));
+        accept(customerId, product.productId(), product.optionId(), "key-iat-3",
+                AdmissionTickets.issueWithIssuedAt(product.productId(), customerId, laterWindow(), longTtl))
+                .andExpect(status().isAccepted());
+    }
+
     @Test
     void 순번이_첫_차수를_넘으면_다음_차수에_배정된다() throws Exception {
         jdbcTemplate.update("UPDATE preorder_campaigns SET next_queue_position = ? WHERE product_id = ?",
@@ -368,11 +409,20 @@ class AcceptPreorderApiTest {
                 .containsEntry("reason", "전화 접수");
     }
 
+    /** 회원 외래 키가 없어 대리 접수는 회원을 확인하지 않는다 — 관리자 입력을 믿고 그대로 받는다. */
     @Test
-    void 관리자_대신_접수에서_없는_회원이면_404_사용자는_403() throws Exception {
-        mockMvc.perform(adminRequest(UUID.randomUUID(), "key-admin-0002", "전화 접수"))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error.code").value("MEMBER_NOT_FOUND"));
+    void 관리자_대신_접수는_없는_회원이어도_받는다() throws Exception {
+        UUID unknown = UUID.randomUUID();
+
+        String preorderId = body(mockMvc.perform(adminRequest(unknown, "key-admin-0002", "전화 접수"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.data.status").value("PENDING_SYNC")));
+
+        assertThat(preorders.getByToken(preorderId).customerId()).isEqualTo(unknown);
+    }
+
+    @Test
+    void 관리자_대신_접수는_사용자_토큰이면_403() throws Exception {
         mockMvc.perform(adminRequest(customerId, "key-admin-0003", "전화 접수")
                         .with(customer(customerId)))
                 .andExpect(status().isForbidden());

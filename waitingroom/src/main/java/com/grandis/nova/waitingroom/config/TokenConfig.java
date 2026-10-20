@@ -11,7 +11,8 @@ class TokenConfig {
 
     @Bean
     AdmissionTicket admissionTicket(TokenProperties properties) {
-        return AdmissionTicket.of(properties.secret(), properties.previous(), properties.rolloutEndsAt());
+        return AdmissionTicket.of(properties.secret(), properties.previous(), properties.rolloutEndsAt(),
+                properties.admissionTtl());
     }
 
     @Bean

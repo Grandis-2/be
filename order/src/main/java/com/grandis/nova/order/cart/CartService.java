@@ -202,13 +202,13 @@ public class CartService {
 
     private static CartView.Line toView(CartLine line, CartOption option, int available, Unavailability reason) {
         if (option == null) {
-            return new CartView.Line(line.id(), line.optionId(), null, null, null, null, line.warranty(), line.quantity(),
-                    null, null, null, available, reason);
+            return new CartView.Line(line.id(), line.optionId(), null, null, null, null, null, line.warranty(), line.quantity(),
+                    null, null, null, null, available, reason);
         }
         BigDecimal warrantyPrice = line.warranty() && option.warrantyOffered() ? option.warrantySurcharge() : BigDecimal.ZERO;
         BigDecimal lineAmount = option.price().add(warrantyPrice).multiply(BigDecimal.valueOf(line.quantity()));
-        return new CartView.Line(line.id(), line.optionId(), option.productId(), option.productTitle(), option.optionTitle(),
-                option.imageUrl(), line.warranty(), line.quantity(), option.price(), warrantyPrice, lineAmount, available, reason);
+        return new CartView.Line(line.id(), line.optionId(), option.productId(), option.productTitle(), option.modelName(), option.optionTitle(),
+                option.imageUrl(), line.warranty(), line.quantity(), option.price(), option.listPrice(), warrantyPrice, lineAmount, available, reason);
     }
 
     /**

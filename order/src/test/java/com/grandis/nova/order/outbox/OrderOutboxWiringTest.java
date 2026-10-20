@@ -54,6 +54,8 @@ import static org.mockito.BDDMockito.willAnswer;
 class OrderOutboxWiringTest {
 
     static final Duration TIMEOUT = Duration.ofSeconds(10);
+    static final Instant PAID_AT = Instant.parse("2026-10-16T03:00:00.123456Z");
+    static final String PAID_AT_JSON = "2026-10-16T03:00:00.123456Z";
 
     @Autowired
     OutboxWriter writer;
@@ -120,7 +122,7 @@ class OrderOutboxWiringTest {
         UUID preorderId = preorder();
         String token = tokenOf(preorderId);
         Long id = transactionTemplate.execute(status ->
-                writer.append(PreorderOrderSettled.rejected(preorderId, token, RejectReason.SHIPPED, 7L)));
+                writer.append(PreorderOrderSettled.rejected(preorderId, token, RejectReason.SHIPPED, 7L, null)));
         String eventId = eventIdOf(id);
 
         await().atMost(TIMEOUT).until(() -> sentOf(eventId).isPresent());
@@ -132,6 +134,31 @@ class OrderOutboxWiringTest {
         assertThat(body.get("aggregateType").asString()).isEqualTo("PREORDER");
         assertThat(body.get("aggregateId").asString()).isEqualTo(preorderId.toString());
         assertThat(body.get("payload").get("preorderId").asString()).isEqualTo(token);
+    }
+
+    /**
+     * 판매 준비는 catalog-events 로, catalog 가 보내는 봉투(contracts/catalog-events.md "봉투")와 같은 칸으로 간다.
+     * payload 는 빈 객체다 — 칸이 없는 record 라도 직렬화가 실패하지 않는다.
+     */
+    @Test
+    void 판매_준비는_catalog_events_로_catalog_와_같은_봉투에_빈_payload_로_간다() {
+        UUID productId = UUID.randomUUID();
+        Long id = transactionTemplate.execute(status -> writer.append(new InStockProductReady(productId)));
+        String eventId = eventIdOf(id);
+
+        await().atMost(TIMEOUT).until(() -> sentOf(eventId).isPresent());
+
+        OutboundMessage message = sentOf(eventId).orElseThrow();
+        assertThat(message.destination()).isEqualTo("catalog-events");
+        JsonNode body = jsonMapper.readTree(message.body());
+        assertThat(body.propertyNames())
+                .containsExactlyInAnyOrder("eventId", "eventType", "aggregateType", "aggregateId", "occurredAt", "payload");
+        assertThat(body.get("eventId").asString()).isEqualTo(eventId);
+        assertThat(body.get("eventType").asString()).isEqualTo("IN_STOCK_PRODUCT_READY");
+        assertThat(body.get("aggregateType").asString()).isEqualTo("PRODUCT");
+        assertThat(body.get("aggregateId").asString()).isEqualTo(productId.toString());
+        assertThat(body.get("payload").isObject()).isTrue();
+        assertThat(body.get("payload").isEmpty()).isTrue();
     }
 
     /** 커밋 직후 발행을 놓친 행(만든 지 2분)을 order 의 릴레이가 전용 실행기에서 집어 보낸다. */
@@ -162,15 +189,43 @@ class OrderOutboxWiringTest {
         String noOrderToken = tokenOf(noOrderPreorder);
 
         List<Long> ids = transactionTemplate.execute(status -> List.of(
-                writer.append(PreorderOrderSettled.rejected(rejectedPreorder, rejectedToken, RejectReason.SHIPPED, 7L)),
+                writer.append(PreorderOrderSettled.rejected(rejectedPreorder, rejectedToken, RejectReason.SHIPPED, 7L, PAID_AT)),
                 writer.append(PreorderOrderSettled.noOrder(noOrderPreorder, noOrderToken, 2L))));
 
         assertThat(jsonMapper.readTree(payload(ids.get(0))).propertyNames())
-                .containsExactlyInAnyOrder("preorderId", "result", "reason", "cancelSequence");
-        assertThat(receivedByPreorder(ids.get(0))).isEqualTo(new PreorderSideSettled(
-                rejectedToken, PreorderSideSettled.Result.REJECTED, "SHIPPED", 7L));
-        assertThat(receivedByPreorder(ids.get(1))).isEqualTo(new PreorderSideSettled(
-                noOrderToken, PreorderSideSettled.Result.NO_ORDER, null, 2L));
+                .containsExactlyInAnyOrder("preorderId", "result", "reason", "cancelSequence", "paidAt");
+        assertThat(jsonMapper.readTree(payload(ids.get(0))).get("paidAt").asString()).isEqualTo(PAID_AT_JSON);
+        assertThat(jsonMapper.readValue(payload(ids.get(0)), PreorderSideSettled.class)).isEqualTo(new PreorderSideSettled(
+                rejectedToken, PreorderSideSettled.Result.REJECTED, "SHIPPED", 7L, PAID_AT));
+        assertThat(jsonMapper.readValue(payload(ids.get(1)), PreorderSideSettled.class)).isEqualTo(new PreorderSideSettled(
+                noOrderToken, PreorderSideSettled.Result.NO_ORDER, null, 2L, null));
+    }
+
+    /** 결제 시작 · 승인 알림도 같은 방식으로 본다. 시각은 ISO-8601 UTC 문자열이다(preorder 계약). */
+    @Test
+    void 결제_시작_승인_payload_는_preorder_가_받는_계약과_같다() {
+        UUID preorderId = preorder();
+        String token = tokenOf(preorderId);
+        UUID orderId = UUID.randomUUID();
+
+        List<Long> ids = transactionTemplate.execute(status -> List.of(
+                writer.append(new PreorderPaymentStarted(preorderId, token, orderId, PAID_AT)),
+                writer.append(new PreorderPaymentConfirmed(preorderId, token, orderId, PAID_AT))));
+
+        JsonNode started = jsonMapper.readTree(payload(ids.get(0)));
+        assertThat(started.propertyNames()).containsExactlyInAnyOrder("preorderId", "orderId", "startedAt");
+        assertThat(started.get("startedAt").asString()).isEqualTo(PAID_AT_JSON);
+        assertThat(jsonMapper.readValue(payload(ids.get(0)), PreorderSidePaymentStarted.class))
+                .isEqualTo(new PreorderSidePaymentStarted(token, orderId.toString(), PAID_AT));
+        JsonNode confirmed = jsonMapper.readTree(payload(ids.get(1)));
+        assertThat(confirmed.propertyNames()).containsExactlyInAnyOrder("preorderId", "orderId", "paidAt");
+        assertThat(confirmed.get("paidAt").asString()).isEqualTo(PAID_AT_JSON);
+        assertThat(jsonMapper.readValue(payload(ids.get(1)), PreorderSidePaymentConfirmed.class))
+                .isEqualTo(new PreorderSidePaymentConfirmed(token, orderId.toString(), PAID_AT));
+        assertThat(jdbcTemplate.queryForList("""
+                SELECT event_type FROM order_outbox_events WHERE aggregate_type = 'PREORDER' AND aggregate_id = ? ORDER BY id
+                """, String.class, bytes(preorderId)))
+                .containsExactly("PREORDER_PAYMENT_STARTED", "PREORDER_PAYMENT_CONFIRMED");
     }
 
     /** 주문 전이 · 이력 · 아웃박스가 한 트랜잭션. 그 뒤 실패하면 셋 다 남지 않는다. */
@@ -246,19 +301,17 @@ class OrderOutboxWiringTest {
         return jdbcTemplate.queryForObject("SELECT payload FROM order_outbox_events WHERE id = ?", String.class, id);
     }
 
-    private PreorderSideSettled receivedByPreorder(Long id) {
-        return jsonMapper.readValue(payload(id), PreorderSideSettled.class);
-    }
-
     private Optional<OutboundMessage> sentOf(String eventId) {
         return sent.stream().filter(message -> message.eventId().equals(eventId)).findFirst();
     }
 
-    /**
-     * preorder {@code event.PreorderOrderSettled} 를 그대로 옮긴 것(모듈 간 의존 금지라 참조할 수 없다).
+    /*
+     * 아래 record 들은 preorder {@code event} 패키지의 받는 쪽 record 를 그대로 옮긴 것이다(모듈 간 의존 금지라 참조할 수 없다).
      * 원본이 바뀌면 이것도 맞춘다. 계약을 common:message 로 옮기면 지운다.
      */
-    record PreorderSideSettled(String preorderId, Result result, String reason, Long cancelSequence) {
+
+    /** preorder {@code event.PreorderOrderSettled}. */
+    record PreorderSideSettled(String preorderId, Result result, String reason, Long cancelSequence, Instant paidAt) {
 
         PreorderSideSettled {
             if (cancelSequence == null) {
@@ -271,5 +324,13 @@ class OrderOutboxWiringTest {
             CANCELED,
             REJECTED
         }
+    }
+
+    /** preorder {@code event.PreorderPaymentStarted}. */
+    record PreorderSidePaymentStarted(String preorderId, String orderId, Instant startedAt) {
+    }
+
+    /** preorder {@code event.PreorderPaymentConfirmed}. */
+    record PreorderSidePaymentConfirmed(String preorderId, String orderId, Instant paidAt) {
     }
 }

@@ -44,12 +44,18 @@ import java.lang.annotation.Target;
         "nova.outbox.transport=log",
         "nova.outbox.log-transport-allowed=true",
         "nova.outbox.relay-interval=1h",
-        // 이미지 업로드(필수 설정). 서명은 네트워크를 타지 않아 버킷이 없어도 발급까지는 돈다 — 실제 PUT 은 ImageUploadApiTest 가 MinIO 로 본다.
+        // 이미지 업로드(필수 설정). 클라이언트는 만들 때 버킷에 닿지 않는다 — 실제로 올리는 시험은 ImageUploadApiTest 가 MinIO 로 본다.
         // CDN 주소는 기존 시험 본문의 사진 주소(https://img/…)가 그대로 통과하도록 https://img 로 둔다
         "nova.upload.bucket=catalog-test-images",
         "nova.upload.cdn-base-url=https://img",
-        "nova.upload.region=ap-northeast-2"
+        "nova.upload.region=ap-northeast-2",
+        // 읽기 캐시는 끈다 — 시험 픽스처가 DB 를 JDBC 로 바로 고쳐(캐시 세대를 안 올림) 다음 조회가 옛 값을 받는다. 캐시 동작은
+        // 켠 채로 도는 캐시 시험(ReadCache · CatalogReadCache 시험)이 본다
+        "nova.read-cache.enabled=false",
+        // catalog-events 소비기는 운영 기본값(CatalogDefaults)으로 켜져 있다 — 시험은 끈다. 소비기를 보는 시험(CatalogEventConsumerFlowTest · InStockProductReadyFlowTest)이 켠다
+        "nova.sqs.consumer.enabled=false"
 })
-@Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class})
+@Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class, ImageAttachmentsTestConfig.class,
+        OrderStocksTestConfig.class, PreorderCampaignsTestConfig.class})
 public @interface CatalogIntegrationTest {
 }

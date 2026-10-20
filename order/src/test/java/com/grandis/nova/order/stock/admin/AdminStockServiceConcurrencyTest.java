@@ -1,11 +1,13 @@
 package com.grandis.nova.order.stock.admin;
 
+import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.order.stock.StockLedger;
 import com.grandis.nova.order.stock.domain.model.StockLevel;
 import com.grandis.nova.order.stock.domain.model.StockSetting;
 import com.grandis.nova.order.stock.domain.repository.CatalogOptions;
+import com.grandis.nova.order.stock.domain.repository.StockExpectations;
 import com.grandis.nova.order.stock.domain.repository.StockReader;
 import com.grandis.nova.order.stock.domain.repository.StockWriter;
 import com.grandis.nova.order.support.OrderFixtures;
@@ -50,6 +52,12 @@ class AdminStockServiceConcurrencyTest {
     CatalogOptions catalog;
 
     @Autowired
+    StockExpectations expectations;
+
+    @Autowired
+    OutboxWriter outboxWriter;
+
+    @Autowired
     PlatformTransactionManager transactionManager;
 
     @Autowired
@@ -68,8 +76,8 @@ class AdminStockServiceConcurrencyTest {
         UUID option = product.optionIds().getFirst();
         RacingWriter racing = new RacingWriter(writer, () -> transactionTemplate.executeWithoutResult(
                 status -> writer.insert(option, 99, clock.instant())));
-        AdminStockService service = new AdminStockService(new StockLedger(racing, reader, clock), reader, catalog,
-                transactionManager);
+        AdminStockService service = new AdminStockService(new StockLedger(racing, reader, expectations, clock), reader, catalog,
+                outboxWriter, transactionManager);
 
         StockResult result = service.set(product.productId(), List.of(new StockSetting(option, 10)));
 
@@ -88,8 +96,8 @@ class AdminStockServiceConcurrencyTest {
         UUID option = product.optionIds().getFirst();
         RacingReader racing = new RacingReader(reader, () -> transactionTemplate.executeWithoutResult(
                 status -> writer.insert(option, 99, clock.instant())));
-        AdminStockService service = new AdminStockService(new StockLedger(writer, racing, clock), reader, catalog,
-                transactionManager);
+        AdminStockService service = new AdminStockService(new StockLedger(writer, racing, expectations, clock), reader, catalog,
+                outboxWriter, transactionManager);
 
         StockResult result = service.initialize(product.productId(), List.of(new StockSetting(option, 10)));
 
@@ -172,6 +180,11 @@ class AdminStockServiceConcurrencyTest {
         @Override
         public int sell(UUID optionId, int quantity, Instant now) {
             return delegate.sell(optionId, quantity, now);
+        }
+
+        @Override
+        public int overwrite(UUID optionId, int beforeReserved, int beforeSold, int reserved, int sold, Instant now) {
+            return delegate.overwrite(optionId, beforeReserved, beforeSold, reserved, sold, now);
         }
 
         @Override

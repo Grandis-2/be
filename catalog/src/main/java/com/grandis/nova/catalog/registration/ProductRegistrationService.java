@@ -4,7 +4,9 @@ import com.grandis.nova.catalog.CatalogErrorCode;
 import com.grandis.nova.catalog.category.CategoryRepository;
 import com.grandis.nova.catalog.detail.ProductDetailService;
 import com.grandis.nova.catalog.detail.ProductDetailView;
-import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
+import com.grandis.nova.catalog.listing.ProductReadiness;
+import com.grandis.nova.catalog.image.ImageAttachments;
+import com.grandis.nova.catalog.image.ImagePurpose;
 import com.grandis.nova.catalog.option.CollationDuplicates;
 import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.catalog.option.OptionText;
@@ -27,7 +29,8 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -57,15 +60,17 @@ public class ProductRegistrationService {
     private final ProductRegistrationValidator validator;
     private final CollationDuplicates duplicates;
     private final ProductDetailService detailService;
-    private final ProductListingQueryRepository crossReads;
+    private final ProductReadiness readiness;
     private final OutboxWriter outbox;
+    private final ImageAttachments images;
     private final Clock clock;
     private final Duration minOpenLead;
+    private final TransactionTemplate transaction;
 
     public ProductRegistrationService(CategoryRepository categories, ProductRepository products, ProductOptionRepository options,
                                       ProductRegistrationValidator validator, CollationDuplicates duplicates,
-                                      ProductDetailService detailService, ProductListingQueryRepository crossReads,
-                                      OutboxWriter outbox, Clock clock,
+                                      ProductDetailService detailService, ProductReadiness readiness,
+                                      OutboxWriter outbox, ImageAttachments images, Clock clock, PlatformTransactionManager transactionManager,
                                       @org.springframework.beans.factory.annotation.Value("${catalog.registration.min-open-lead:PT30M}")
                                       Duration minOpenLead) {
         this.categories = categories;
@@ -74,10 +79,12 @@ public class ProductRegistrationService {
         this.validator = validator;
         this.duplicates = duplicates;
         this.detailService = detailService;
-        this.crossReads = crossReads;
+        this.readiness = readiness;
         this.outbox = outbox;
+        this.images = images;
         this.clock = clock;
         this.minOpenLead = minOpenLead;
+        this.transaction = new TransactionTemplate(transactionManager);
     }
 
     /**
@@ -88,20 +95,24 @@ public class ProductRegistrationService {
      *         재전송 판정 뒤에 돈다 — 응답을 잃고 늦게 다시 보내도 productId 를 받는다. 같은 키에 다른 본문은 프론트 버그일 때뿐이다(2026-09-30 결정)
      * @throws BusinessException REGISTRATION_IN_PROGRESS(같은 새 키가 동시에 와서 다른 요청이 먼저 저장했다)
      */
-    @Transactional
     public RegistrationOutcome register(String idempotencyKey, ProductRegistrationRequest request) {
         String key = idempotencyKey == null ? "" : idempotencyKey.strip();
         if (key.isEmpty() || key.length() > 100) {
             throw ValidationFailures.of("Idempotency-Key", "1~100자여야 합니다.");
         }
+        // 같은 키의 재전송은 트랜잭션 밖에서 판정한다 — 사전예약의 준비는 preorder 에 묻는다(연결을 쥔 채 HTTP 를 기다리지 않게)
         Optional<Product> existing = products.findByIdempotencyKey(key);
         if (existing.isPresent()) {
             Product registered = existing.get();
-            boolean ready = crossReads.isReady(registered.getId());
+            boolean ready = readiness.isReady(registered);
             RegistrationOutcome.Kind kind = ready ? RegistrationOutcome.Kind.REPLAYED : RegistrationOutcome.Kind.IN_PROGRESS;
             return new RegistrationOutcome(kind, RegistrationStatusView.of(registered, ready), null);
         }
+        return transaction.execute(status -> create(key, request));
+    }
 
+    /** 새 등록 — 저장 · 사진 붙이기 · 이벤트 · 미리보기가 한 트랜잭션이다. */
+    private RegistrationOutcome create(String key, ProductRegistrationRequest request) {
         if (!categories.existsById(request.categoryId())) {
             throw ValidationFailures.of("categoryId", "없는 카테고리입니다.");
         }
@@ -110,9 +121,13 @@ public class ProductRegistrationService {
         requireNoCollationDuplicates(draft);
         ProductOptions document = documentOf(draft);
         Product product = saveProduct(Product.register(key, request.categoryId(), request.saleMode(), request.title(),
-                request.basePrice(), request.description(), request.tags(), request.visible(), request.warranty().offered(),
-                request.warranty().surcharge(), document));
+                request.brand(), request.modelName(), request.basePrice(), request.discountRate(), request.description(), request.tags(), request.visible(),
+                request.warranty().offered(), request.warranty().surcharge(), document));
         UUID productId = product.getId();
+        // 사진 붙이기는 멱등 키 INSERT(saveProduct) 뒤에 — 같은 키를 동시에 다시 보낸 요청은 위 INSERT 에서 기다렸다가 IN_PROGRESS 로 끝나고,
+        // 앞 요청이 붙인 USED 를 보고 400 이 되지 않는다
+        Map<String, String> imageFields = ProductRegistrationValidator.imageFields(request);
+        images.sync(ImagePurpose.PRODUCT, List.of(), document.imageUrls(), imageFields::get);
 
         List<InStockProductRegistered.Item> initialStock = new ArrayList<>();
         for (Combo combo : draft.combos()) {
@@ -125,18 +140,18 @@ public class ProductRegistrationService {
 
         // 다른 서비스가 만들 값은 같은 트랜잭션의 아웃박스로 보낸다. 롤백되면 이벤트도 없다
         outbox.append(request.saleMode() == SaleMode.PREORDER
-                ? PreorderProductRegistered.of(productId, request.campaign(), request.shipmentBatches())
+                ? PreorderProductRegistered.of(product, request.campaign(), request.shipmentBatches())
                 : new InStockProductRegistered(productId, initialStock));
         // 미리보기는 커밋 전에 같은 트랜잭션에서 읽는다 — 커밋 전엔 남이 이 상품을 못 건드려 저장한 그대로가 실린다.
         // 준비는 아직이다: 이벤트는 커밋 뒤에 나가므로 회차 · 재고 행이 이 시점에 있을 수 없다
-        ProductDetailView preview = detailService.findAdminProduct(productId).product();
+        ProductDetailView preview = detailService.beforeStockReady(detailService.findAdminSnapshot(productId)).product();
         return new RegistrationOutcome(RegistrationOutcome.Kind.CREATED, RegistrationStatusView.of(product, false), preview);
     }
 
-    @Transactional(readOnly = true)
+    /** 트랜잭션 없이 — 상품은 한 문장으로 읽고, 사전예약의 준비는 preorder 에 묻는다. */
     public RegistrationStatusView status(String idempotencyKey) {
         return products.findByIdempotencyKey(idempotencyKey == null ? "" : idempotencyKey.strip())
-                .map(product -> RegistrationStatusView.of(product, crossReads.isReady(product.getId())))
+                .map(product -> RegistrationStatusView.of(product, readiness.isReady(product)))
                 .orElseThrow(() -> new BusinessException(CatalogErrorCode.REGISTRATION_NOT_FOUND));
     }
 

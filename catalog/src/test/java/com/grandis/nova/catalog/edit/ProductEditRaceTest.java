@@ -3,18 +3,23 @@ package com.grandis.nova.catalog.edit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.doThrow;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.grandis.nova.catalog.CatalogErrorCode;
+import com.grandis.nova.catalog.integration.DrawGiftClient;
 import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
+import com.grandis.nova.catalog.registration.ProductRegistrationService;
+import com.grandis.nova.catalog.support.PreorderCampaignsTestConfig;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.jpa.StorageClock;
+import com.grandis.nova.common.web.ApiResponse;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
@@ -22,6 +27,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -41,6 +47,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.test.context.bean.override.convention.TestBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -62,6 +69,10 @@ class ProductEditRaceTest {
     Clock clock;
 
     @MockitoSpyBean ProductEditService editService;
+    @MockitoSpyBean ProductRegistrationService registrationService;
+    @Autowired ProductImageEditService imageEditService;
+    @Autowired ProductDeleteService deleteService;
+    @MockitoBean DrawGiftClient drawGifts;
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired PlatformTransactionManager transactionManager;
@@ -91,7 +102,7 @@ class ProductEditRaceTest {
         UUID productId = registerInStock();
         String storage512 = fixtures.valueId(productId, "storage", "512GB");
         // 첫 수정: 기본가 1,000,000 → 1,100,000. 둘째 수정: 512GB 추가금 200,000 → 300,000 — 첫 수정이 커밋되기 전에 시작한다
-        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)),
+        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null, null)),
                 () -> editService.editOptionValue(productId, storage512, new OptionValueEditRequest(null, new BigDecimal("300000"), null)));
 
         assertThat(price(productId, "256GB")).isEqualByComparingTo("1100000");
@@ -104,7 +115,7 @@ class ProductEditRaceTest {
     void variantEditAfterRecomputeKeepsTheNewPrice() throws Exception {
         UUID productId = registerInStock();
         UUID option512 = optionId(productId, "512GB");
-        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)),
+        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null, null)),
                 () -> editService.editVariant(productId, option512, new VariantEditRequest(SaleStatus.PAUSED)));
 
         assertThat(optionStatus(option512)).isEqualTo("PAUSED");
@@ -118,7 +129,7 @@ class ProductEditRaceTest {
         UUID productId = registerInStock();
         UUID option512 = optionId(productId, "512GB");
         interleave(() -> editService.editVariant(productId, option512, new VariantEditRequest(SaleStatus.PAUSED)),
-                () -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)));
+                () -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null, null)));
 
         assertThat(optionStatus(option512)).as("옛 상태를 읽어 두고 쓰면 ACTIVE 로 되돌아간다").isEqualTo("PAUSED");
         assertThat(price(productId, "512GB")).isEqualByComparingTo("1300000");
@@ -137,6 +148,32 @@ class ProductEditRaceTest {
                            NESTED PATH '$.values[*]' COLUMNS (v VARCHAR(60) PATH '$.normalized'))) j
                  WHERE p.id = ? AND j.k = 'storage'
                 """, String.class, UuidBinary.toBytes(productId))).containsExactlyInAnyOrder("256GB", "512GB", "1TB", "2TB");
+    }
+
+    /** 사진 수정도 문서를 통째로 다시 쓴다 — 잠그지 않고 읽으면 앞 수정이 커밋되기 전의 문서를 써서 앞의 변경을 지운다. 두 순서 모두 본다. */
+    @Test
+    @DisplayName("사진 넣기와 옵션 값 추가가 겹쳐도 둘 다 남는다 — 어느 쪽이 먼저든 뒤의 것은 앞의 것이 커밋된 문서를 읽는다")
+    void imageAddAndValueAddBothSurvive() throws Exception {
+        UUID imageFirst = registerInStock();
+        interleave(() -> imageEditService.add(imageFirst, imageAdd("https://img/race-a.jpg")),
+                () -> editService.addOptionValue(imageFirst, new OptionValueAddRequest("storage", "1TB", null, null)));
+        assertThat(storageValues(imageFirst)).contains("1TB");
+        assertThat(defaultImages(imageFirst)).containsExactly("https://img/race-a.jpg");
+
+        UUID valueFirst = registerInStock();
+        interleave(() -> editService.addOptionValue(valueFirst, new OptionValueAddRequest("storage", "1TB", null, null)),
+                () -> imageEditService.add(valueFirst, imageAdd("https://img/race-b.jpg")));
+        assertThat(storageValues(valueFirst)).contains("1TB");
+        assertThat(defaultImages(valueFirst)).containsExactly("https://img/race-b.jpg");
+    }
+
+    @Test
+    @DisplayName("사진 넣기 둘이 겹쳐도 둘 다 남는다")
+    void concurrentImageAddsBothSurvive() throws Exception {
+        UUID productId = registerInStock();
+        interleave(() -> imageEditService.add(productId, imageAdd("https://img/race-1.jpg")),
+                () -> imageEditService.add(productId, imageAdd("https://img/race-2.jpg")));
+        assertThat(defaultImages(productId)).containsExactly("https://img/race-1.jpg", "https://img/race-2.jpg");
     }
 
     @Test
@@ -210,6 +247,21 @@ class ProductEditRaceTest {
     }
 
     @Test
+    @DisplayName("등록도 잠금 실패(교착 희생 · 잠금 대기 초과)로 끝나면 409 STATE_CONFLICT · retryable — 사진 붙이기가 이미지 행을 잠근다")
+    void mappingOfLockFailureOnRegistration() throws Exception {
+        doThrow(new CannotAcquireLockException("Deadlock found when trying to get lock"))
+                .when(registrationService).register(any(), any());
+
+        String body = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/v1/admin/products")
+                        .header("Idempotency-Key", "k-" + ShopFixtures.unique())
+                        .contentType(MediaType.APPLICATION_JSON).with(user("admin").roles("ADMIN")).content(inStockBody()))
+                .andExpect(status().isConflict()).andReturn().getResponse().getContentAsString();
+        var error = JSON.readTree(body).get("error");
+        assertThat(error.get("code").asString()).isEqualTo("STATE_CONFLICT");
+        assertThat(error.get("details").get("retryable").asBoolean()).isTrue();
+    }
+
+    @Test
     @DisplayName("오픈 3분 전 그 순간(지금 == opens_at − 3분)부터 잠긴다 — 409. 1마이크로초 전은 고칠 수 있다")
     void freezeBoundaryIsInclusive() throws Exception {
         UUID productId = registerPreorder();
@@ -243,6 +295,23 @@ class ProductEditRaceTest {
     }
 
     @Test
+    @DisplayName("삭제도 같다 — 첫 판정 뒤 잠금 시각(오픈 3분 전)이 지나면 커밋하지 않는다: 409, deleted_at 그대로 비어 있다")
+    void openingDuringTheDeleteRejectsTheCommit() throws Exception {
+        UUID productId = registerPreorder();
+        Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.MICROS);
+        fixtures.campaign(productId, opensAt, opensAt.plus(Duration.ofDays(1)));
+        given(drawGifts.getGift(productId)).willReturn(ApiResponse.ok(new DrawGiftClient.DrawGift(productId, false)));
+
+        AtomicInteger reads = new AtomicInteger();
+        Instant freezesAt = opensAt.minus(ProductEditService.FREEZE_BEFORE_OPEN);
+        CLOCK.next = () -> reads.getAndIncrement() == 0 ? freezesAt.minusMillis(1) : freezesAt;   // 첫 판정 뒤 시간이 잠금 시각을 넘는다
+        assertStateConflict(() -> deleteService.delete(productId));
+        assertThat(reads.get()).as("첫 판정은 통과했다").isGreaterThanOrEqualTo(2);
+        assertThat(jdbcTemplate.queryForObject("SELECT deleted_at IS NULL FROM products WHERE id = ?", Boolean.class,
+                (Object) UuidBinary.toBytes(productId))).isTrue();
+    }
+
+    @Test
     @DisplayName("옵션 판매 상태를 바꾸는 중에 잠금 시각이 지나도 커밋하지 않는다 — 커밋 직전에 다시 본다")
     void openingDuringTheOptionStatusChangeRejectsTheCommit() throws Exception {
         UUID productId = registerPreorder();
@@ -260,27 +329,6 @@ class ProductEditRaceTest {
     }
 
     @Test
-    @DisplayName("수정 중에 preorder 가 회차 오픈을 앞당겨 이미 잠금 시각이 지났으면 커밋하지 않는다 — 커밋 직전 판정은 그때까지 커밋된 회차를 본다")
-    void campaignMovedEarlierDuringTheEditRejectsTheCommit() throws Exception {
-        UUID productId = registerPreorder();
-        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
-        fixtures.campaign(productId, now.plus(Duration.ofHours(1)), now.plus(Duration.ofDays(1)));
-
-        AtomicInteger reads = new AtomicInteger();
-        CLOCK.next = () -> {
-            if (reads.getAndIncrement() == 0) {
-                // 첫 판정 순간, 다른 커넥션(preorder)이 오픈을 1분 전으로 옮겨 커밋한다. 회차를 새로 넣는 것은 수정 중에 못 한다 —
-                // preorder_campaigns → products 외래키 확인이 수정이 잡은 상품 행 잠금을 기다린다(실측: 30초 대기 뒤 수정이 먼저 커밋)
-                onAnotherConnection(() -> fixtures.moveCampaignOpensAt(productId, now.minus(Duration.ofMinutes(1))));
-            }
-            return now;
-        };
-        assertStateConflict(() -> editService.editProduct(productId, titleOnly("회차가 옮겨진 수정")));
-        assertThat(reads.get()).as("첫 판정은 옮기기 전 회차로 통과했다").isGreaterThanOrEqualTo(2);
-        assertThat(title(productId)).isEqualTo("Race");
-    }
-
-    @Test
     @DisplayName("정보 수정이 커밋되기 전에 판매 상태 전환이 들어오면 기다렸다가 새 정보 위에 적는다 — 제목도 상태도 남는다")
     void saleStatusChangeSerializesWithEdit() throws Exception {
         UUID productId = registerInStock();
@@ -295,7 +343,7 @@ class ProductEditRaceTest {
     @DisplayName("기본가 수정이 커밋되기 전에 공개 전환이 들어오면 기다렸다가 새 기본가 위에 적는다 — 기본가 · 옵션 가격 · 공개 여부가 모두 새 값")
     void visibilityChangeSerializesWithEdit() throws Exception {
         UUID productId = registerInStock();
-        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, new BigDecimal("1100000"), null)),
+        interleave(() -> editService.editProduct(productId, new ProductEditRequest(null, null, null, null, null, new BigDecimal("1100000"), null, null)),
                 () -> editService.changeVisibility(productId, new VisibilityChangeRequest(true)));
 
         assertThat(jdbcTemplate.queryForObject("SELECT base_price FROM products WHERE id = ?", BigDecimal.class, UuidBinary.toBytes(productId)))
@@ -329,25 +377,6 @@ class ProductEditRaceTest {
         CLOCK.next = () -> reads.getAndIncrement() == 0 ? freezesAt.minusMillis(1) : freezesAt;
         assertStateConflict(() -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED)));
         assertThat(reads.get()).as("첫 판정은 통과했다").isGreaterThanOrEqualTo(2);
-        assertThat(jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, UuidBinary.toBytes(productId))).isEqualTo("ACTIVE");
-    }
-
-    @Test
-    @DisplayName("판매 상태 전환 중에 preorder 가 회차 오픈을 앞당겨 잠금 시각이 지났으면 커밋하지 않는다 — 409, 상태 그대로")
-    void campaignMovedEarlierDuringTheSaleStatusChangeRejectsTheCommit() throws Exception {
-        UUID productId = registerPreorder();
-        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
-        fixtures.campaign(productId, now.plus(Duration.ofHours(1)), now.plus(Duration.ofDays(1)));
-
-        AtomicInteger reads = new AtomicInteger();
-        CLOCK.next = () -> {
-            if (reads.getAndIncrement() == 0) {
-                onAnotherConnection(() -> fixtures.moveCampaignOpensAt(productId, now.minus(Duration.ofMinutes(1))));
-            }
-            return now;
-        };
-        assertStateConflict(() -> editService.changeSaleStatus(productId, new SaleStatusChangeRequest(SaleStatus.PAUSED)));
-        assertThat(reads.get()).as("첫 판정은 옮기기 전 회차로 통과했다").isGreaterThanOrEqualTo(2);
         assertThat(jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, UuidBinary.toBytes(productId))).isEqualTo("ACTIVE");
     }
 
@@ -393,8 +422,9 @@ class ProductEditRaceTest {
         TransactionTemplate transaction = new TransactionTemplate(transactionManager);
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
+            // 바깥 트랜잭션은 커밋을 붙잡으려는 시험 장치다(운영에 없다) — 수정이 트랜잭션 전에 preorder 에 묻는 것을 대역이 막지 않게 이 스레드만 푼다
             Future<?> firstRun = pool.submit(() -> transaction.executeWithoutResult(status -> {
-                first.run();
+                PreorderCampaignsTestConfig.insideHarnessTransaction(first);
                 firstDone.countDown();
                 await(releaseFirst);
             }));
@@ -418,6 +448,26 @@ class ProductEditRaceTest {
         return String.valueOf(root.getMessage());
     }
 
+    private static ProductImageAddRequest imageAdd(String url) {
+        return new ProductImageAddRequest(ProductImageAddRequest.Kind.GALLERY, null, url);
+    }
+
+    private List<String> storageValues(UUID productId) {
+        return jdbcTemplate.queryForList("""
+                SELECT j.v FROM products p,
+                       JSON_TABLE(p.options, '$.axes[*]' COLUMNS (k VARCHAR(40) PATH '$.key',
+                           NESTED PATH '$.values[*]' COLUMNS (v VARCHAR(60) PATH '$.normalized'))) j
+                 WHERE p.id = ? AND j.k = 'storage'
+                """, String.class, UuidBinary.toBytes(productId));
+    }
+
+    private List<String> defaultImages(UUID productId) {
+        return jdbcTemplate.queryForList("""
+                SELECT j.url FROM products p, JSON_TABLE(p.options, '$.defaultImages[*]' COLUMNS (url VARCHAR(1000) PATH '$.url')) j
+                 WHERE p.id = ?
+                """, String.class, UuidBinary.toBytes(productId));
+    }
+
     private UUID optionId(UUID productId, String title) {
         return UuidBinary.fromBytes(jdbcTemplate.queryForObject("SELECT id FROM product_options WHERE product_id = ? AND title = ?",
                 byte[].class, UuidBinary.toBytes(productId), title));
@@ -438,7 +488,7 @@ class ProductEditRaceTest {
     }
 
     private static ProductEditRequest titleOnly(String title) {
-        return new ProductEditRequest(title, null, null, null, null);
+        return new ProductEditRequest(title, null, null, null, null, null, null, null);
     }
 
     private static void assertStateConflict(Runnable edit) {
@@ -499,32 +549,6 @@ class ProductEditRaceTest {
         throw new AssertionError("수정이 30초 안에 옵션 UPDATE 에서 기다리지도 끝나지도 않았다");
     }
 
-    /** 다른 커넥션(자동 커밋)에서 실행하고 끝날 때까지 기다린다 — 다른 모듈의 쓰기를 흉내 낸다. */
-    private static void onAnotherConnection(Runnable write) {
-        // 쓰기가 실패하거나 끝나지 않으면 그 자리에서 실패한다 — 전제(회차가 옮겨졌다) 없이 뒤 단언이 엉뚱하게 깨지지 않게
-        java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
-        Thread writer = new Thread(() -> {
-            try {
-                write.run();
-            } catch (Throwable t) {
-                failure.set(t);
-            }
-        });
-        writer.start();
-        try {
-            writer.join(TimeUnit.SECONDS.toMillis(30));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException(e);
-        }
-        if (writer.isAlive()) {
-            throw new AssertionError("다른 커넥션의 쓰기가 30초 안에 끝나지 않았다(잠금 대기)");
-        }
-        if (failure.get() != null) {
-            throw new AssertionError("다른 커넥션의 쓰기가 실패했다", failure.get());
-        }
-    }
-
     private static void await(CountDownLatch latch) {
         try {
             if (!latch.await(60, TimeUnit.SECONDS)) {
@@ -556,17 +580,21 @@ class ProductEditRaceTest {
 
     /** 축 storage 하나(256GB +0 · 512GB +200,000), 기본가 1,000,000. */
     private UUID registerInStock() throws Exception {
-        return register("""
-                { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Race", "visible": false, "basePrice": 1000000,
+        return register(inStockBody());
+    }
+
+    private String inStockBody() {
+        return """
+                { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Race", "brand": "APPLE", "modelName": "A0001", "visible": false, "basePrice": 1000000,
                   "optionAxes": [ { "key": "storage", "label": "용량", "values": [ { "value": "256GB" }, { "value": "512GB", "surcharge": 200000 } ] } ],
                   "combinations": [ { "selections": { "storage": "256GB" }, "stock": 1 }, { "selections": { "storage": "512GB" }, "stock": 1 } ] }
-                """.formatted(categoryId));
+                """.formatted(categoryId);
     }
 
     private UUID registerPreorder() throws Exception {
         Instant opensAt = Instant.now().plus(Duration.ofHours(2));
         return register("""
-                { "categoryId": "%s", "saleMode": "PREORDER", "title": "Race", "visible": false, "basePrice": 1000000,
+                { "categoryId": "%s", "saleMode": "PREORDER", "title": "Race", "brand": "APPLE", "modelName": "A0001", "visible": false, "basePrice": 1000000,
                   "optionAxes": [ { "key": "storage", "label": "용량", "values": [ { "value": "256GB" } ] } ],
                   "combinations": [ { "selections": { "storage": "256GB" } } ],
                   "campaign": { "opensAt": "%s", "closesAt": "%s" },

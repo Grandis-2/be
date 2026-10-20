@@ -35,8 +35,8 @@ import java.util.UUID;
  *       기존 주문 재조회 같은 후속 작업은 새 트랜잭션에서 한다. 그래서 사용자 입력 검증(OrderDraft · EventCause
  *       생성)은 원장을 부르기 전에 끝나 있어야 한다.</li>
  *   <li>원장 안에서 나는 IllegalArgumentException 은 모두 호출하는 코드의 잘못이다 — 없는 주문, 빈 기대 상태,
- *       그리고 지금 받지 않는 주문({@link Order#place} 의 수락 규칙: 사전예약은 옵션 하나 · 수량 1 · 보증 없음, 바로 구매는 아직
- *       없음). 수락 규칙은 사용자 입력이 아니라 만들 수 있는 주문의 범위라, 초안을 만드는 생성 유스케이스는 어길 수 없다.</li>
+ *       그리고 지금 받지 않는 주문({@link Order#place} 의 수락 규칙: 사전예약은 옵션 하나 · 수량 1 · 보증 없음, 바로 구매는 옵션
+ *       하나). 수락 규칙은 사용자 입력이 아니라 만들 수 있는 주문의 범위라, 초안을 만드는 생성 유스케이스는 어길 수 없다.</li>
  *   <li>같은 예약으로 동시에 생성하다 먼저 들어간 쪽이 롤백되면 기다리던 쪽끼리 교착할 수 있다(InnoDB 중복 키 S 잠금 →
  *       삽입 의도 잠금). 생성 유스케이스는 교착 예외를 재시도 대상으로 둔다.</li>
  * </ul>
@@ -99,7 +99,7 @@ public class OrderLedger {
         if (!expectedFrom.contains(from)) {
             return new OrderTransition(false, from);
         }
-        return transition(orderId, from, trigger, null, cause);
+        return transition(orderId, from, trigger, null, cause, clock.instant());
     }
 
     /**
@@ -115,21 +115,26 @@ public class OrderLedger {
         if (from != OrderStatus.AWAITING_PAYMENT) {
             return new OrderTransition(false, from);
         }
-        return transition(orderId, from, OrderTrigger.PAYMENT_REQUESTED, providerOrderId, cause);
+        return transition(orderId, from, OrderTrigger.PAYMENT_REQUESTED, providerOrderId, cause, clock.instant());
     }
 
     /**
-     * 결제 결과를 반영한다. 승인 중일 때만 바꾸고 결제창 번호를 지운다.
+     * 결제 결과를 반영한다. 승인 중일 때만 바꾸고 결제창 번호를 지운다. 승인이면 같은 트랜잭션에서 결제 시각을 적는다.
      *
      * 거절(되돌림 포함)은 그 결제창의 승인 중일 때만 반영한다 — 늦게 온 이전 결제창의 거절이 새 결제창의 승인 중에 주문을
      * 결제 대기로 되돌리면, 새 결제창의 승인은 전제가 맞지 않아 반영되지 못한다(돈은 나갔는데 미결제).
      * 승인은 결제창을 대조하지 않는다 — 대상당 성공 결제는 하나라(payment D13) 언제 와도 그 주문의 결제다.
      *
-     * @param result PAYMENT_APPROVED · PAYMENT_DECLINED
+     * @param result     PAYMENT_APPROVED · PAYMENT_DECLINED
+     * @param approvedAt 결제사 승인 시각. 승인 API 응답에는 없어 null 이면 반영한 시각(이력의 시각)을 결제 시각으로 적는다. 거절이면 null
      */
-    public OrderTransition settlePayment(UUID orderId, OrderTrigger result, String providerOrderId, EventCause cause) {
+    public OrderTransition settlePayment(UUID orderId, OrderTrigger result, String providerOrderId, Instant approvedAt,
+                                         EventCause cause) {
         if (result != OrderTrigger.PAYMENT_APPROVED && result != OrderTrigger.PAYMENT_DECLINED) {
             throw new IllegalArgumentException("결제 결과가 아니다: " + result);
+        }
+        if (result == OrderTrigger.PAYMENT_DECLINED && approvedAt != null) {
+            throw new IllegalArgumentException("거절에는 승인 시각이 없다");
         }
         OrderStatus from = lock(orderId);
         if (from != OrderStatus.AUTHORIZING) {
@@ -139,7 +144,14 @@ public class OrderLedger {
                 && !writer.authorizingProviderOrderId(orderId).orElseThrow().equals(providerOrderId)) {
             return new OrderTransition(false, from);
         }
-        return transition(orderId, from, result, null, cause);
+        Instant now = clock.instant();
+        OrderTransition settled = transition(orderId, from, result, null, cause, now);
+        // 잠근 채 방금 결제 확인 대기로 바꿨으므로 늘 1행이다
+        if (result == OrderTrigger.PAYMENT_APPROVED
+                && writer.markPaid(orderId, approvedAt != null ? approvedAt : now) != 1) {
+            throw new IllegalStateException("승인을 반영한 주문에 결제 시각을 적지 못했다: orderId=" + orderId);
+        }
+        return settled;
     }
 
     /**
@@ -202,12 +214,11 @@ public class OrderLedger {
 
     /** 잠근 주문을 사건대로 바꾼다. 상태 머신이 받지 않는 사건이면 그대로 둔다. */
     private OrderTransition transition(UUID orderId, OrderStatus from, OrderTrigger trigger,
-                                       String authorizingProviderOrderId, EventCause cause) {
+                                       String authorizingProviderOrderId, EventCause cause, Instant now) {
         OrderStatus to = from.next(trigger).orElse(null);
         if (to == null) {
             return new OrderTransition(false, from);
         }
-        Instant now = clock.instant();
         // 행을 잠근 채 읽은 상태를 조건으로 하므로 늘 1행이다. 0 이면 잠금 규칙이 깨진 것이다.
         if (writer.changeStatus(orderId, from, to, authorizingProviderOrderId, now) != 1) {
             throw new IllegalStateException("잠근 주문의 상태가 바뀌었다: orderId=" + orderId);

@@ -1,6 +1,8 @@
 package com.grandis.nova.preorder.event;
 
 import com.grandis.nova.common.UuidBinary;
+import com.grandis.nova.common.testing.Concurrently;
+import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.cancel.application.CancelStarter;
@@ -12,16 +14,21 @@ import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** 이벤트 처리. SQS 없이 메서드를 직접 부른다(계획서 P5-1). 같은 메시지를 두 번 받아도 결과가 같아야 한다. */
 @PreorderIntegrationTest
@@ -41,6 +48,12 @@ class PreorderEventHandlerTest {
 
     @Autowired
     JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    MeterRegistry meterRegistry;
+
+    @Autowired
+    TransactionTemplate transactionTemplate;
 
     @MockitoBean
     CatalogClient catalogClient;
@@ -113,8 +126,7 @@ class PreorderEventHandlerTest {
 
     @Test
     void 주문이_취소를_거절하면_결제_가능으로_되돌리고_사유를_남긴다() {
-        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
-                token, "REGISTER", "R-" + ShopFixtures.unique()));
+        register();
         startCancel(EventActor.USER);
 
         handler.onOrderSettled(settled(PreorderOrderSettled.Result.REJECTED, "SHIPPED"));
@@ -142,8 +154,7 @@ class PreorderEventHandlerTest {
      */
     @Test
     void 이전_취소_시도의_결과가_다시_와도_지금_취소에는_반영하지_않는다() {
-        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
-                token, "REGISTER", "R-" + ShopFixtures.unique()));
+        register();
         startCancel(EventActor.SYSTEM);
         PreorderOrderSettled firstRejected = settled(PreorderOrderSettled.Result.REJECTED, "PAID");
         handler.onOrderSettled(firstRejected);
@@ -155,6 +166,158 @@ class PreorderEventHandlerTest {
         handler.onOrderSettled(settled(PreorderOrderSettled.Result.CANCELED, null));
         assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_sync_jobs WHERE preorder_id = ? AND job_type = 'CANCEL'",
                 (Object) UuidBinary.toBytes(preorderId))).isEqualTo(1);
+    }
+
+    @Test
+    void 취소가_끝난_예약에_결제_확인이_오면_상태는_그대로_두고_경보로_센다() {
+        register();
+        startCancel(EventActor.USER);
+        completeCancel(PreorderOrderSettled.Result.NO_ORDER);
+        double before = paymentAfterCancel();
+
+        handler.onPaymentConfirmed(new PreorderPaymentConfirmed(token, "o-1", Instant.now()));
+
+        assertThat(row()).containsEntry("status", "CANCELED");
+        assertThat(preorders.findReservedAt(preorderId)).isEmpty();
+        assertThat(paymentAfterCancel() - before).isEqualTo(1);
+    }
+
+    /** SQS 중복 전달 · 아웃박스 재발행. 같은 결제는 이상 결제 한 행이고 한 번만 센다. */
+    @Test
+    void 취소가_끝난_예약에_같은_결제_확인을_다시_받아도_한_번만_센다() {
+        register();
+        startCancel(EventActor.USER);
+        completeCancel(PreorderOrderSettled.Result.NO_ORDER);
+        PreorderPaymentConfirmed confirmed = new PreorderPaymentConfirmed(token, "o-1", Instant.now());
+        double before = paymentAfterCancel();
+
+        handler.onPaymentConfirmed(confirmed);
+        handler.onPaymentConfirmed(confirmed);
+
+        assertThat(paymentAfterCancel() - before).isEqualTo(1);
+        assertThat(anomalies()).isEqualTo(1);
+    }
+
+    /** 커밋 전에 세면 롤백된 결제를 세고, 재수신이 다시 남길 때 또 센다. */
+    @Test
+    void 이상_결제를_남긴_트랜잭션이_롤백되면_세지_않고_재수신이_한_번_센다() {
+        register();
+        startCancel(EventActor.USER);
+        completeCancel(PreorderOrderSettled.Result.NO_ORDER);
+        PreorderPaymentConfirmed confirmed = new PreorderPaymentConfirmed(token, "o-1", Instant.now());
+        double before = paymentAfterCancel();
+
+        transactionTemplate.executeWithoutResult(status -> {
+            handler.onPaymentConfirmed(confirmed);
+            status.setRollbackOnly();
+        });
+        assertThat(paymentAfterCancel() - before).isZero();
+        assertThat(anomalies()).isZero();
+
+        handler.onPaymentConfirmed(confirmed);
+        assertThat(paymentAfterCancel() - before).isEqualTo(1);
+        assertThat(anomalies()).isEqualTo(1);
+    }
+
+    @Test
+    void 취소가_끝난_예약에_같은_결제_확인이_동시에_와도_한_번만_센다() throws Exception {
+        register();
+        startCancel(EventActor.USER);
+        completeCancel(PreorderOrderSettled.Result.NO_ORDER);
+        PreorderPaymentConfirmed confirmed = new PreorderPaymentConfirmed(token, "o-1", Instant.now());
+        double before = paymentAfterCancel();
+
+        List<Outcome<Void>> outcomes = Concurrently.run(2, i -> () -> {
+            handler.onPaymentConfirmed(confirmed);
+            return null;
+        });
+
+        assertThat(outcomes).allMatch(Outcome::succeeded);
+        assertThat(paymentAfterCancel() - before).isEqualTo(1);
+        assertThat(anomalies()).isEqualTo(1);
+    }
+
+    /** 어느 결제인지 가를 수 없는 메시지다. 예외로 끝내 재시도 뒤 DLQ 로 보낸다 — 삼키면 경보 없이 사라진다. */
+    @Test
+    void 취소가_끝난_예약에_결제_시각_없는_결제_확인이_오면_세지_않고_실패한다() {
+        register();
+        startCancel(EventActor.USER);
+        completeCancel(PreorderOrderSettled.Result.NO_ORDER);
+        double before = paymentAfterCancel();
+
+        assertThatThrownBy(() -> handler.onPaymentConfirmed(new PreorderPaymentConfirmed(token, "o-1", null)))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(row()).containsEntry("status", "CANCELED");
+        assertThat(paymentAfterCancel() - before).isZero();
+        assertThat(anomalies()).isZero();
+    }
+
+    /** 결제 → 환불로 취소된 예약에 취소 전 결제 확인이 다시 왔다. 마이크로초 아래 자리는 저장 전에 잘라 같은 시각이다. */
+    @Test
+    void 환불로_취소된_예약에_같은_결제_확인이_다시_오면_세지_않는다() {
+        register();
+        PreorderPaymentConfirmed confirmed =
+                new PreorderPaymentConfirmed(token, "o-1", Instant.parse("2026-10-04T01:02:00.123456789Z"));
+        handler.onPaymentConfirmed(confirmed);
+        startCancel(EventActor.USER);
+        completeCancel(PreorderOrderSettled.Result.CANCELED);
+        double before = paymentAfterCancel();
+
+        handler.onPaymentConfirmed(confirmed);
+
+        assertThat(row()).containsEntry("status", "CANCELED");
+        assertThat(paymentAfterCancel() - before).isZero();
+    }
+
+    /** 마이크로초 경계 양쪽으로 1ns 다른 시각은 다른 결제다. */
+    @Test
+    void 환불로_취소된_예약에_마이크로초가_다른_결제_확인이_오면_센다() {
+        register();
+        handler.onPaymentConfirmed(new PreorderPaymentConfirmed(token, "o-1", Instant.parse("2026-10-04T01:02:00.123456Z")));
+        startCancel(EventActor.USER);
+        completeCancel(PreorderOrderSettled.Result.CANCELED);
+        double before = paymentAfterCancel();
+
+        handler.onPaymentConfirmed(new PreorderPaymentConfirmed(token, "o-1", Instant.parse("2026-10-04T01:02:00.123455999Z")));
+        handler.onPaymentConfirmed(new PreorderPaymentConfirmed(token, "o-1", Instant.parse("2026-10-04T01:02:00.123457Z")));
+
+        assertThat(paymentAfterCancel() - before).isEqualTo(2);
+    }
+
+    @Test
+    void 취소_중에_온_결제_확인은_시각만_남기고_세지_않는다() {
+        register();
+        startCancel(EventActor.USER);
+        double before = paymentAfterCancel();
+
+        handler.onPaymentConfirmed(new PreorderPaymentConfirmed(token, "o-1", Instant.parse("2026-10-04T01:02:00Z")));
+
+        assertThat(row()).containsEntry("status", "CANCELING");
+        assertThat(preorders.findReservedAt(preorderId)).contains(Instant.parse("2026-10-04T01:02:00Z"));
+        assertThat(paymentAfterCancel() - before).isZero();
+    }
+
+    private void register() {
+        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
+                token, "REGISTER", "R-" + ShopFixtures.unique()));
+    }
+
+    /** 주문 정리 결과 → 외부 취소 성공으로 CANCELED 까지 간다. */
+    private void completeCancel(PreorderOrderSettled.Result result) {
+        handler.onOrderSettled(settled(result, null));
+        handler.onExternalJobSucceeded(ShopFixtures.unique(),
+                ShopFixtures.succeeded(fixtures.workerSucceeds(preorderId, "CANCEL"), token, "CANCEL", null));
+    }
+
+    private int anomalies() {
+        return fixtures.count("SELECT COUNT(*) FROM preorder_payment_anomalies WHERE preorder_id = ?",
+                (Object) UuidBinary.toBytes(preorderId));
+    }
+
+    /** 기동 때 등록돼 있어야 한다 — 없으면 get 이 실패한다. 공유 컨텍스트라 앞뒤 차이로 본다. */
+    private double paymentAfterCancel() {
+        return meterRegistry.get(PreorderEventHandler.PAYMENT_AFTER_CANCEL_METRIC).counter().count();
     }
 
     private void startCancel(EventActor actor) {

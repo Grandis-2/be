@@ -23,6 +23,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -117,7 +118,7 @@ class AdminProductListApiTest {
         @DisplayName("등록 API 로 고른 visible 이 목록에 바로 실린다 — 등록 완료는 order 가 재고 행을 만들어야 true")
         void chosenVisibilityIsStoredAndCompletionFollowsStock() throws Exception {
             String body = """
-                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "등록 중", "tags": "%s", "visible": true, "basePrice": 10000,
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "등록 중", "brand": "APPLE", "modelName": "A0001", "tags": "%s", "visible": true, "basePrice": 10000,
                       "combinations": [ { "selections": {}, "stock": 3 } ] }
                     """.formatted(categoryId, tag);
             ResultActions created = mockMvc.perform(post(PATH).header("Idempotency-Key", "k-" + ShopFixtures.unique())
@@ -189,6 +190,31 @@ class AdminProductListApiTest {
         }
 
         @Test
+        @DisplayName("brand 는 여러 값(OR)이고 건수도 같은 필터를 탄다, q 는 모델명 · 브랜드 코드도 찾는다, 항목에 brand · modelName — 목록 밖 brand 는 그 칸의 400")
+        void brandFilterAndModelNameSearch() throws Exception {
+            UUID apple = completed("애플", "IN_STOCK");
+            UUID samsung = completed("삼성", "IN_STOCK");
+            fixtures.brand(samsung, "SAMSUNG", "SM-" + tag);
+            UUID lg = completed("엘지", "PREORDER");
+            fixtures.brand(lg, "LG", "L1");
+
+            JsonNode page = data(perform("brand", "SAMSUNG", "brand", "LG"));
+            assertThat(ids(page.get("items"))).containsExactlyInAnyOrder(samsung, lg);
+            assertThat(page.get("total").asLong()).isEqualTo(2);
+            assertThat(ids(list("brand", "APPLE"))).containsExactly(apple);
+            JsonNode item = find(list(), samsung);
+            assertThat(item.get("brand").asString()).isEqualTo("SAMSUNG");
+            assertThat(item.get("modelName").asString()).isEqualTo("SM-" + tag);
+
+            assertThat(ids(list("q", "sm-" + tag))).as("모델명 — 제목 · 태그에는 없다").containsExactly(samsung);
+            fixtures.brand(lg, "LG", tag);
+            assertThat(ids(list("q", "lg"))).as("브랜드 코드 — 다른 시험 상품도 섞이니 포함만 본다").contains(lg).doesNotContain(apple, samsung);
+            perform("brand", "SONY").andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+                    .andExpect(jsonPath("$.error.details.violations[0].field").value("brand"));
+        }
+
+        @Test
         @DisplayName("page · size · total · hasNext, size 는 1~100 · page 는 0 이상")
         void paging() throws Exception {
             UUID first = completed("1", "IN_STOCK");
@@ -208,6 +234,30 @@ class AdminProductListApiTest {
             perform("size", "101").andExpect(status().isBadRequest());
             perform("page", "-1").andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.error.details.violations[0].field").value("page"));
+        }
+
+        @Test
+        @DisplayName("회원 목록과 같은 상한 — q 는 정규화한 뒤 50자, brand 는 20개, 쪽은 앞 10,000개 안에서 시작. 넘으면 그 칸의 400")
+        void sharesListLimits() throws Exception {
+            String fifty = tag + " " + "가".repeat(50 - tag.length() - 1);
+            UUID found = completed(fifty, "IN_STOCK");
+            assertThat(ids(list("q", fifty))).containsExactly(found);
+            assertThat(ids(list("q", java.text.Normalizer.normalize(fifty, java.text.Normalizer.Form.NFD))))
+                    .as("NFD 로 오면(정규화 전 66자) NFC 로 바꾼 뒤 센다").containsExactly(found);
+            data(perform("size", "100", "page", "99"));
+
+            String[] twentyOne = new String[42];
+            for (int i = 0; i < 21; i++) {
+                twentyOne[i * 2] = "brand";
+                twentyOne[i * 2 + 1] = "LG";
+            }
+            Map<String, String[]> rejected = Map.of(
+                    "q", new String[] {"q", fifty + "가"}, "brand", twentyOne, "page", new String[] {"size", "100", "page", "100"});
+            for (var bad : rejected.entrySet()) {
+                perform(bad.getValue()).andExpect(status().isBadRequest())
+                        .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+                        .andExpect(jsonPath("$.error.details.violations[0].field").value(bad.getKey()));
+            }
         }
     }
 

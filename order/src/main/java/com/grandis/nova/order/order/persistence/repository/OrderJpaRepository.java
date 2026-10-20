@@ -27,6 +27,8 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
 
     Optional<OrderJpaEntity> findByPreorderId(UUID preorderId);
 
+    Optional<OrderJpaEntity> findByCustomerIdAndIdempotencyKey(UUID customerId, UUID idempotencyKey);
+
     List<OrderJpaEntity> findByCustomerIdAndSourceAndStatusIn(UUID customerId, OrderSource source, Collection<OrderStatus> statuses);
 
     /**
@@ -35,11 +37,11 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
      */
     @Query("""
             select o from OrderJpaEntity o
-             where o.source = :source and o.status = :status and o.paymentDueAt <= :now
+             where o.source in :sources and o.status = :status and o.paymentDueAt <= :now
                and (o.paymentDueAt > :afterDue or (o.paymentDueAt = :afterDue and o.id > :afterId))
              order by o.paymentDueAt asc, o.id asc
             """)
-    List<OrderJpaEntity> findExpiredAfter(@Param("source") OrderSource source, @Param("status") OrderStatus status,
+    List<OrderJpaEntity> findExpiredAfter(@Param("sources") Collection<OrderSource> sources, @Param("status") OrderStatus status,
                                           @Param("now") Instant now, @Param("afterDue") Instant afterDue, @Param("afterId") UUID afterId,
                                           Limit limit);
 
@@ -72,9 +74,32 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
             """)
     int markRefundFailed(@Param("id") UUID id, @Param("now") Instant now);
 
+    @Modifying(flushAutomatically = true)
+    @Query("""
+            update OrderJpaEntity o
+               set o.paidAt = :paidAt
+             where o.id = :id and o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.AWAITING_CONFIRMATION
+               and o.paidAt is null
+            """)
+    int markPaid(@Param("id") UUID id, @Param("paidAt") Instant paidAt);
+
     /** 스칼라 조회라 영속성 컨텍스트의 엔티티가 아니라 DB 값을 읽는다. 행을 잠근 트랜잭션에서 부른다. */
     @Query("select o.authorizingProviderOrderId from OrderJpaEntity o where o.id = :id")
     Optional<String> findAuthorizingProviderOrderId(@Param("id") UUID id);
+
+    /**
+     * 스칼라 조회라 영속성 컨텍스트의 엔티티가 아니라 DB 값을 읽는다. 칸이 비었으면 승인 반영 이력(승인 중 → 결제 확인 대기, 주문당 하나)의
+     * 시각을 대신 읽는다 — 마이그레이션이 채운 값과 같은 규칙이다.
+     */
+    @Query("""
+            select coalesce(o.paidAt,
+                   (select e.createdAt from OrderEventJpaEntity e
+                     where e.orderId = o.id
+                       and e.fromStatus = com.grandis.nova.order.order.domain.enums.OrderStatus.AUTHORIZING
+                       and e.toStatus = com.grandis.nova.order.order.domain.enums.OrderStatus.AWAITING_CONFIRMATION))
+              from OrderJpaEntity o where o.id = :id
+            """)
+    Optional<Instant> findPaidAt(@Param("id") UUID id);
 
     @Query(value = "SELECT status FROM orders WHERE id = :id FOR UPDATE", nativeQuery = true)
     Optional<OrderStatus> findStatusForUpdate(@Param("id") UUID id);

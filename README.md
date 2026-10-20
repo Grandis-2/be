@@ -62,7 +62,8 @@ flowchart LR
     PO -- outbox --> Q[(SQS)]
     O -- outbox --> Q
     C -- outbox --> Q
-    Q --> W[worker<br/>외부 등록 · 알림]
+    Q --> W[worker<br/>외부 등록 · 드로우]
+    Q -- 알림 --> M
     W --> X[외부 예약 Mock]
 
     B[batch<br/>정합성 검사] -.읽기 · 결과 기록.-> DB[(MySQL)]
@@ -164,8 +165,8 @@ sequenceDiagram
     O-->>U: 당첨 · 미당첨
 ```
 
-사전예약의 worker 구간은 동작한다. 럭키 드로우의 worker 구간(응모 등록 · 추첨)은 아직 구현 중이라,
-그림은 서비스 사이 계약([`contracts/draw-entry-sync.md`](contracts/draw-entry-sync.md))에 정해 둔 동작이다.
+worker 는 응모 수가 다르면 추첨하지 않고 메시지를 늦춰 다시 받으며 늦은 응모를 기다린다.
+응답별 처리와 DLQ 는 서비스 사이 계약([`contracts/draw-entry-sync.md`](contracts/draw-entry-sync.md))에 있다.
 
 ## 핵심 설계
 
@@ -204,6 +205,8 @@ worker 는 DB 를 쓰지 않는다. 외부에 보낼 내용과 몇 번째 시도
 실패하면 지연을 늘려 가며(+지터) 같은 큐에 다시 보낸다. 차례마다 결과를 이벤트로 알리면 preorder 가 시도 기록과 작업 상태를 남긴다.
 정해진 횟수를 다 쓰면 포기(DEAD_LETTER)로 기록하고 관리자가 확인 · 재처리한다.
 **포기로 기록된 것 자체를 예약 실패로 보지 않는다.**
+드로우는 기록할 작업 표가 없어 SQS 에 맡긴다 — 실패한 메시지는 지우지 않고 늦춰 다시 받다가 최대 수신 횟수를 넘으면 DLQ 로 가고,
+다시 보내도 같은 거절만 worker 가 DLQ 에 바로 넣는다.
 
 외부에 두 번 등록되지 않도록, 예약 하나에 등록 작업은 하나만 만들고(유니크 키), 재시도마다 접수 때 고정한 같은 요청과 같은 멱등 키를 보낸다.
 결과가 불분명하면 다시 등록하지 않고 같은 키로 먼저 조회한다.
@@ -255,14 +258,14 @@ worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이
 
 | 모듈 | 하는 일 | 상태 |
 | --- | --- | --- |
-| `member` | 카카오 로그인 · JWT 발급 · 회원 · 기본 배송지 | 동작 |
+| `member` | 카카오 로그인 · JWT 발급 · 회원 · 기본 배송지 · 알림 저장 · 조회 | 동작 |
 | `catalog` | 상품 · 옵션 · 리뷰 · 관리자 등록/편집 | 동작 |
 | `waitingroom` | 입장 대기열 — 줄 서기 · 입장권 · 접수 전달 | 동작 |
 | `preorder` | 사전예약 접수 · 순번 · 회차 · 배송 차수 · 취소 · 외부 작업 원장 · DLQ 관리 | 동작 |
 | `order` | 주문 · 재고 · 장바구니 · 드로우 | 동작 |
 | `payment` | 토스 결제 · 결제 원장 · 복구 · 환불 (내부 전용) | 동작 |
-| `worker` | SQS 를 받아 외부 예약 등록 · 취소, 드로우 응모 · 추첨, 알림 (DB 없음) | 예약 등록 · 취소 동작, 드로우 · 알림 구현 중 |
-| `batch` | 정합성 검사 — 우리 DB 와 Mock 원장(목록 조회 API)을 대조해 결과를 남긴다 · 안 쓰는 사진 정리 | 골격 — 구현 중 |
+| `worker` | SQS 를 받아 외부 예약 등록 · 취소, 드로우 응모 · 추첨 (DB 없음) | 예약 등록 · 취소 · 드로우 동작 |
+| `batch` | 정합성 검사 — 우리 DB 와 Mock 원장(목록 조회 API)을 대조해 결과를 남긴다 · 안 쓰는 사진 정리 | 정합성 검사 · 사진 정리 동작 |
 | `common:*` | 서비스가 함께 쓰는 라이브러리 (응답 · 보안 · outbox · SQS · Redis 등) | — |
 
 <details>
@@ -270,12 +273,12 @@ worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이
 
 | 서비스 | 표 |
 | --- | --- |
-| `member` | `customers` · `refresh_tokens` |
-| `catalog` | `categories` · `products` · `product_options` · `product_reviews` · `catalog_outbox_events` · `images` |
-| `preorder` | `preorders` · `preorder_events` · `preorder_campaigns` · `shipment_batches` · `preorder_outbox_events` · `dead_letter_events`<br>`preorder_sync_jobs` · `preorder_sync_attempts` (외부 작업 · 시도 원장) |
+| `member` | `customers` · `refresh_tokens` · `notifications` |
+| `catalog` | `categories` · `products` · `product_options` · `product_reviews` · `promotions` · `promotion_products` · `banners` · `catalog_outbox_events` · `images` |
+| `preorder` | `preorders` · `preorder_events` · `preorder_campaigns` · `shipment_batches` · `preorder_outbox_events` · `dead_letter_events`<br>`preorder_sync_jobs` · `preorder_sync_attempts` (외부 작업 · 시도 원장) · `preorder_open_alerts` · `preorder_open_alert_dispatches` (오픈 알림 신청 · 발송 진행) |
 | `order` | `orders` · `order_items` · `order_events` · `cart_items` · `option_inventories` · `draw_campaigns` · `draw_entries` |
 | `payment` | `payments` · `payment_transactions` |
-| `worker` | (없음 — DB 를 쓰지 않는다. 결과는 이벤트로 preorder 에 알린다) |
+| `worker` | (없음 — DB 를 쓰지 않는다. 결과는 이벤트로 preorder · order 에 알린다) |
 | `batch` | `reconciliation_runs` · `reconciliation_findings` (정합성 검사 결과. 업무 표는 읽기만) · `image_deletions` (사진 정리의 S3 삭제 대기) |
 | `waitingroom` | (없음 — 전용 Redis) |
 

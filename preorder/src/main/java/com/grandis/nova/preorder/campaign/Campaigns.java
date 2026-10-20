@@ -59,6 +59,18 @@ public class Campaigns {
         return new IssuedPosition(position, batch.toSnapshot());
     }
 
+    /** 그 상품에 사전예약 회차가 있는가. */
+    /** 지금 접수 중인(오픈 뒤 · 마감 전 · 공개 · 판매 중지 아님) 회차 수. */
+    @Transactional(readOnly = true)
+    public long countAccepting(Instant now) {
+        return campaigns.countAccepting(now, ProductStatus.PAUSED);
+    }
+
+    @Transactional(readOnly = true)
+    public boolean exists(UUID productId) {
+        return campaigns.existsById(productId);
+    }
+
     /** 예약에 배정된 차수. 없으면 IllegalStateException(오픈 전 검사를 지나친 데이터). */
     @Transactional(readOnly = true)
     public ShipmentBatchSnapshot getBatch(UUID shipmentBatchId) {
@@ -70,12 +82,6 @@ public class Campaigns {
     public Map<UUID, ShipmentBatchSnapshot> findBatches(Collection<UUID> shipmentBatchIds) {
         return batches.findAllById(shipmentBatchIds).stream()
                 .collect(Collectors.toMap(ShipmentBatch::getId, ShipmentBatch::toSnapshot));
-    }
-
-    /** 회차가 있는 상품(사전예약 상품)인가 */
-    @Transactional(readOnly = true)
-    public boolean exists(UUID productId) {
-        return campaigns.existsById(productId);
     }
 
     /** 오픈한 지 window 가 안 된 회차가 있는가 — 신청이 몰리는 구간이다 */
@@ -93,19 +99,20 @@ public class Campaigns {
     }
 
     /**
-     * catalog 의 상품 공개 여부를 회차에 반영한다. 번호가 지금보다 클 때만 쓰고, 값이 바뀌었을 때만 회차 변경 이벤트를 적는다.
+     * catalog 의 상품명 · 판매 상태 · 공개 여부를 회차의 사본에 반영한다. 번호가 지금보다 클 때만 쓰고, 공개 여부가 바뀌었을 때만
+     * 회차 변경 이벤트를 적는다(대기열은 상품명 · 판매 상태를 보지 않는다).
      *
      * @return 회차가 있어 반영을 판정했으면 true. 아직 없으면 false — 등록 이벤트보다 먼저 왔으므로 호출한 쪽이 늦춰 다시 받는다
      *         (버리면 늦게 온 등록의 옛 값이 굳는다)
      */
     @Transactional
-    public boolean applyVisibility(UUID productId, boolean visible, long visibilityVersion) {
+    public boolean applyListing(UUID productId, ProductListing listing) {
         Optional<PreorderCampaign> found = campaigns.findForUpdate(productId);
         if (found.isEmpty()) {
             return false;
         }
         PreorderCampaign campaign = found.get();
-        if (campaign.applyVisibility(visible, visibilityVersion)) {
+        if (campaign.applyListing(listing)) {
             changePublisher.publish(campaign, CampaignChange.VISIBILITY);
         }
         return true;

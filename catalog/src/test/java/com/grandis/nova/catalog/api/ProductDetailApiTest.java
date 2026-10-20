@@ -84,6 +84,8 @@ class ProductDetailApiTest {
             assertThat(data.get("categoryId").asString()).isEqualTo(categoryId.toString());
             assertThat(data.get("saleMode").asString()).isEqualTo("PREORDER");
             assertThat(data.get("title").asString()).isEqualTo("Nova 1");
+            assertThat(data.get("brand").asString()).isEqualTo("APPLE");
+            assertThat(data.get("modelName").asString()).isEqualTo("A0001");
             assertThat(data.get("description").asString()).isEqualTo("설명");
             assertThat(data.get("status").asString()).isEqualTo("ACTIVE");
             assertThat(data.get("visible").asBoolean()).isTrue();
@@ -236,7 +238,7 @@ class ProductDetailApiTest {
         }
 
         @Test
-        @DisplayName("판매 중지는 200 에 상태 그대로, 마감 뒤 120시간이 지난 사전예약도 직접 링크로는 보인다")
+        @DisplayName("판매 중지는 200 에 상태 그대로, 목록에서 빠진 마감 사전예약도 직접 링크로는 보인다")
         void pausedAndLongClosedAreStillViewable() throws Exception {
             UUID paused = visibleInStock();
             fixtures.option(paused, "ACTIVE");

@@ -13,7 +13,8 @@ import java.util.List;
  * @param secret        현재 키. 16자 이상
  * @param previous      키 교체 중에만 받아 주는 이전 키. 최대 2개
  * @param rolloutEndsAt 키 교체 배포가 끝나는 시각. 이전 키를 받으려면 필수
- * @param ttl           게이트웨이가 정한 입장권 수명. 이전 키를 받아 주는 기간을 계산하는 데만 쓴다
+ * @param ttl           게이트웨이가 정한 입장권 수명. 발급 시각이 없는 입장권의 발급 시각 역산과 이전 키를 받아 주는 기간 계산에 쓴다.
+ *                      게이트웨이가 수명을 늘리면 그 이상으로 맞춘다(짧으면 키 교체 때 이전 키 입장권을 일찍 거절한다)
  * @param window        게이트웨이가 만료를 끊는 단위
  * @param clockSkew     서버 시각 오차 허용
  */

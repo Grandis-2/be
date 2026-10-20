@@ -3,7 +3,7 @@
 -- 입장 커서 · 바닥값 · 입장 표시는 남긴다 — 지우면 입장한 사람이 입장권을 못 다시 받고, 재오픈 때 순서가 역행한다.
 -- KEYS  1 queue  2 alive  3 closefence  4 grace
 -- ARGV  1 임기  2 지움(1) 또는 표만 세움(0)  3 표 수명(ms)  4 지워도 되는 시각(초, 마감 + 유예)  5 입장 표시 수명(초)
--- 반환  1 지웠다 · 0 안 지웠다 · -1 옛 임기라 막았다 · -2 표가 없어 막았다
+-- 반환  1 지웠다 · 0 안 지웠다(유예 중이거나 생존 신호가 남음) · -1 옛 임기라 막았다 · -2 표가 없어 막았다
 
 local fence = tonumber(ARGV[1])
 if fence == nil or fence ~= fence or fence ~= math.floor(fence) then
@@ -37,6 +37,11 @@ if seen == nil or seen ~= seen then
     return -2
 end
 if tonumber(redis.call('TIME')[1]) < after then
+    return 0
+end
+-- 청소가 아직 걷지 않은 생존 신호가 있으면 기다린다. 이탈 유예를 줄여도 이미 쓴 신호는 옛 시간 그대로라,
+-- 지우면 입장하고 조회를 놓친 사람을 '입장 미통지'로 옮기지 못한다. 마감 뒤에는 신호를 새로 쓰지 않는다
+if redis.call('ZCARD', KEYS[2]) > 0 then
     return 0
 end
 redis.call('DEL', KEYS[1], KEYS[2])

@@ -1,5 +1,6 @@
 package com.grandis.nova.catalog.registration;
 
+import com.grandis.nova.catalog.product.Brand;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
@@ -85,15 +86,15 @@ class ProductRegistrationServiceTest {
     }
 
     private ProductRegistrationRequest inStockRequest() {
-        return new ProductRegistrationRequest(categoryId, SaleMode.IN_STOCK, "케이블", null, null, true, new BigDecimal("9000"), null,
+        return new ProductRegistrationRequest(categoryId, SaleMode.IN_STOCK, "케이블", Brand.APPLE, "A0001", null, null, true, new BigDecimal("9000"), null, null,
                 null, List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, 3)), null, null, null);
     }
 
     @Test
     @DisplayName("일반 상품 등록은 order 로 갈 초기 재고 이벤트 하나를 적는다 — items 는 저장한 옵션 id 와 요청한 재고, 상품 id 는 봉투로만")
     void inStockRegistrationAppendsInitialStockEvent() {
-        ProductRegistrationRequest inStock = new ProductRegistrationRequest(categoryId, SaleMode.IN_STOCK, "케이스", null, null,
-                true, new BigDecimal("10000"), null,
+        ProductRegistrationRequest inStock = new ProductRegistrationRequest(categoryId, SaleMode.IN_STOCK, "케이스", Brand.APPLE, "A0001", null, null,
+                true, new BigDecimal("10000"), null, null,
                 List.of(new ProductRegistrationRequest.OptionAxis("color", "색상",
                         List.of(new ProductRegistrationRequest.OptionValue("블랙", null, null), new ProductRegistrationRequest.OptionValue("화이트", null, null)))),
                 List.of(new ProductRegistrationRequest.Combination(Map.of("color", "블랙"), false, null, 5),
@@ -115,7 +116,7 @@ class ProductRegistrationServiceTest {
     }
 
     @Test
-    @DisplayName("사전예약 등록은 preorder 로 갈 회차 · 차수 이벤트 하나를 적는다 — 회차 시각은 마이크로초로 자른다")
+    @DisplayName("사전예약 등록은 preorder 로 갈 회차 · 차수 이벤트 하나를 적는다 — 회차 시각은 마이크로초로 자르고, 상품명 · 판매 상태 · 공개 여부 · 번호 1 을 싣는다")
     void preorderRegistrationAppendsCampaignEvent() {
         Instant opensAt = Instant.now().plus(Duration.ofHours(1)).truncatedTo(ChronoUnit.SECONDS).plusNanos(123_456_789);
         RegistrationOutcome created = service.register("k-" + ShopFixtures.unique(), preorderRequest(opensAt));
@@ -134,6 +135,20 @@ class ProductRegistrationServiceTest {
         assertThat(last.get("positionFrom").asLong()).isEqualTo(101L);
         assertThat(last.get("positionTo").isNull()).isTrue();
         assertThat(last.get("estimatedShipEnd").asString()).isEqualTo("2026-11-14");
+        assertThat(payload.get("title").asString()).isEqualTo("Nova");
+        assertThat(payload.get("status").asString()).isEqualTo("ACTIVE");
+        assertThat(payload.get("visible").asBoolean()).as("관리자가 고른 비공개 그대로").isFalse();
+        assertThat(payload.get("listingVersion").asLong()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("공개로 등록하면 이벤트의 공개 여부도 공개 — 위 시험(비공개)과 짝이라 한쪽 값으로 고정된 구현을 잡는다")
+    void preorderRegistrationCarriesVisibleTrue() {
+        UUID productId = service.register("k-" + ShopFixtures.unique(), preorderRequest(Instant.now().plus(Duration.ofHours(1)), true))
+                .registration().productId();
+
+        JsonNode payload = JSON.readTree((String) singleEventOf(productId).get("payload"));
+        assertThat(payload.get("visible").asBoolean()).isTrue();
     }
 
     @Test
@@ -165,8 +180,12 @@ class ProductRegistrationServiceTest {
     }
 
     private ProductRegistrationRequest preorderRequest(Instant opensAt) {
-        return new ProductRegistrationRequest(categoryId, SaleMode.PREORDER, "Nova", null, null,
-                false, new BigDecimal("1000"), null, null, List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, null)),
+        return preorderRequest(opensAt, false);
+    }
+
+    private ProductRegistrationRequest preorderRequest(Instant opensAt, boolean visible) {
+        return new ProductRegistrationRequest(categoryId, SaleMode.PREORDER, "Nova", Brand.APPLE, "A0001", null, null,
+                visible, new BigDecimal("1000"), null, null, null, List.of(new ProductRegistrationRequest.Combination(Map.of(), false, null, null)),
                 null, new ProductRegistrationRequest.Campaign(opensAt, opensAt.plus(Duration.ofDays(1))),
                 List.of(new ProductRegistrationRequest.ShipmentBatch(1, 1L, 100L, LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 7)),
                         new ProductRegistrationRequest.ShipmentBatch(2, 101L, null, LocalDate.of(2026, 11, 8), LocalDate.of(2026, 11, 14))));

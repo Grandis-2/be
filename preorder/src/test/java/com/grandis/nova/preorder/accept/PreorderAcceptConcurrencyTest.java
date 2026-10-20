@@ -7,6 +7,7 @@ import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
+import com.grandis.nova.preorder.campaign.application.PreorderCampaignAdminService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.support.AdmissionTickets;
@@ -23,13 +24,16 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntFunction;
 import java.util.stream.LongStream;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.BDDMockito.given;
@@ -45,6 +49,9 @@ class PreorderAcceptConcurrencyTest {
 
     @Autowired
     PreorderAcceptService acceptService;
+
+    @Autowired
+    PreorderCampaignAdminService campaignAdmin;
 
     @Autowired
     PreorderLedger ledger;
@@ -271,6 +278,53 @@ class PreorderAcceptConcurrencyTest {
         assertThat(committedPositions()).containsExactly(1L);
     }
 
+    /** 대기열 교체 배포 중에는 옛 노드와 새 노드가 같은 입장에 발급 시각 칸이 없는 것 · 있는 것을 한 장씩 낼 수 있다. */
+    @RepeatedTest(3)
+    void 같은_입장의_발급_시각이_없는_입장권과_있는_입장권을_동시에_보내면_하나만_받고_나머지는_STALE() throws Exception {
+        UUID customerId = fixtures.customer();
+        Instant admittedAt = Instant.now();
+        List<String> tickets = List.of(
+                AdmissionTickets.issue(product.productId(), customerId, admittedAt),
+                AdmissionTickets.issueWithIssuedAt(product.productId(), customerId, admittedAt,
+                        Duration.ofSeconds(AdmissionTickets.TTL_SECONDS)));
+
+        List<Outcome> outcomes = concurrently(tickets.size(), i -> () -> acceptService.acceptByCustomer(customerId,
+                product.productId(), product.productId(), product.optionId(), "mixed-admission-" + i, tickets.get(i)));
+
+        assertThat(outcomes.stream().filter(Outcome::accepted)).hasSize(1);
+        assertThat(outcomes.stream().filter(o -> !o.accepted()))
+                .singleElement().extracting(Outcome::error).isEqualTo(PreorderErrorCode.ADMISSION_TICKET_STALE);
+        assertThat(committedPositions()).containsExactly(1L);
+    }
+
+    /** 접수와 마감은 같은 회차 행을 잠근다. 어느 쪽이 먼저 잠그든 마감 시각 뒤에 들어간 예약이 없어야 한다. */
+    @RepeatedTest(3)
+    void 접수와_조기_마감이_겹쳐도_마감_뒤에_들어간_예약이_없고_순번에_빈틈이_없다() throws Exception {
+        int accepts = 8;
+        List<UUID> customers = Stream.generate(fixtures::customer).limit(accepts).toList();
+        AtomicReference<Instant> closedAt = new AtomicReference<>();
+
+        List<Outcome> outcomes = concurrently(accepts + 1, i -> () -> {
+            if (i == accepts) {
+                closedAt.set(campaignAdmin.closeCampaign(product.productId(), "admin").getClosesAt());
+                return null;
+            }
+            return acceptByCustomer(customers.get(i), "close-race-" + i);
+        }).subList(0, accepts);
+
+        assertThat(closedAt.get()).as("마감은 성공했다").isNotNull();
+        List<Outcome> accepted = outcomes.stream().filter(Outcome::accepted).toList();
+        assertThat(outcomes.stream().filter(o -> !o.accepted()))
+                .allMatch(o -> o.error() == PreorderErrorCode.SALE_CLOSED);
+        assertThat(accepted).allSatisfy(o ->
+                assertThat(o.result().preorder().createdAt()).isBeforeOrEqualTo(closedAt.get()));
+        assertThat(committedPositions())
+                .containsExactlyElementsOf(LongStream.rangeClosed(1, accepted.size()).boxed().toList());
+        assertThat(nextQueuePosition()).as("거절된 접수의 순번은 롤백된다").isEqualTo(accepted.size() + 1);
+        assertThat(Outcome.of(() -> acceptByCustomer(fixtures.customer(), "close-race-late")).error())
+                .isEqualTo(PreorderErrorCode.SALE_CLOSED);
+    }
+
     /** 지금 접수보다 나중에 발급된 것으로 보이는 입장권의 발급 시각(다시 진입해 새로 받은 입장권). */
     private Instant laterWindow() {
         return Instant.now().plusSeconds(3 * AdmissionTickets.WINDOW_SECONDS);
@@ -298,6 +352,14 @@ class PreorderAcceptConcurrencyTest {
     }
 
     record Outcome(AcceptResult result, ErrorCode error) {
+
+        static Outcome of(Callable<AcceptResult> task) throws Exception {
+            try {
+                return new Outcome(task.call(), null);
+            } catch (BusinessException e) {
+                return new Outcome(null, e.errorCode());
+            }
+        }
 
         static Outcome of(Concurrently.Outcome<AcceptResult> outcome) {
             if (outcome.succeeded()) {

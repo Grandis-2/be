@@ -2,15 +2,18 @@ package com.grandis.nova.order.order.pay;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.order.MySqlLockFailures;
 import com.grandis.nova.order.client.payment.DeclineReason;
 import com.grandis.nova.order.order.OrderLedger;
+import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.enums.OrderTrigger;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderTransition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
+import com.grandis.nova.order.outbox.PreorderPaymentConfirmed;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.PessimisticLockingFailureException;
@@ -19,6 +22,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Instant;
 import java.util.EnumSet;
 import java.util.Set;
 import java.util.UUID;
@@ -27,7 +31,9 @@ import java.util.UUID;
  * 결제 결과를 주문에 반영한다 — 승인 API 의 동기 응답과 결과 이벤트 소비가 같은 길을 쓴다. 둘 다 오거나 순서가 바뀌어도
  * 원장 전제(승인 중)로 한 번만 반영된다. 거절 · 되돌림은 그 결제창의 승인 중일 때만 반영한다(OrderLedger#settlePayment).
  *
- * 결과 하나 = 트랜잭션 하나. 장바구니 주문의 승인은 같은 트랜잭션에서 판매 확정 · 장바구니 차감까지 한다({@link CartOrderFulfillment}).
+ * 결과 하나 = 트랜잭션 하나. 승인을 반영하면 같은 트랜잭션에서 출처별 뒷일을 한다 — 장바구니 · 바로 구매 주문은 판매 확정(장바구니 주문은
+ * 장바구니 차감도, {@link CartOrderFulfillment}), 사전예약 주문은 preorder 에 결제 승인 알림(PREORDER_PAYMENT_CONFIRMED)을 아웃박스에 적는다.
+ * 반영이 되돌아가면 뒷일도 없고, 승인은 원장의 승인 중 전제로 한 번만 반영되므로 뒷일도 한 번이다 — 승인 응답과 결과 이벤트가 겹쳐도.
  *
  * 승인이 반영되지 못했는데 주문이 결제되지 않은 상태(결제 대기 · 취소됨)면 돈이 나간 채 주문이 받지 못한 것이다. 상태 머신으로는
  * 갈 수 없는 경우다 — 승인 중에는 취소를 받지 않고, 되돌림은 그 결제창의 거절 · "앞으로도 시작될 수 없다" 확언으로만 일어난다.
@@ -51,13 +57,15 @@ public class PaymentResults {
     private final OrderLedger ledger;
     private final OrderReader orderReader;
     private final CartOrderFulfillment fulfillment;
+    private final OutboxWriter outboxWriter;
     private final TransactionTemplate writeTransaction;
 
     public PaymentResults(OrderLedger ledger, OrderReader orderReader, CartOrderFulfillment fulfillment,
-                          PlatformTransactionManager transactionManager) {
+                          OutboxWriter outboxWriter, PlatformTransactionManager transactionManager) {
         this.ledger = ledger;
         this.orderReader = orderReader;
         this.fulfillment = fulfillment;
+        this.outboxWriter = outboxWriter;
         this.writeTransaction = new TransactionTemplate(transactionManager);
     }
 
@@ -70,13 +78,19 @@ public class PaymentResults {
                     order.id(), settlement.providerOrderId(), settlement.amount(), order.totalAmount().amount());
         }
         return switch (settlement.result()) {
-            case APPROVED -> approved(order.id(), settlement.providerOrderId());
+            case APPROVED -> approved(order.id(), settlement.providerOrderId(), settlement.approvedAt());
             case DECLINED -> declined(order.id(), settlement.providerOrderId(), settlement.declineReason());
         };
     }
 
+    /** 승인 API 응답 — 승인 시각이 없어 반영한 시각이 결제 시각이 된다. */
     OrderTransition approved(UUID orderId, String providerOrderId) {
-        OrderTransition transition = apply(orderId, OrderTrigger.PAYMENT_APPROVED, providerOrderId,
+        return approved(orderId, providerOrderId, null);
+    }
+
+    /** @param approvedAt 결제사 승인 시각(결과 이벤트). null 이면 반영한 시각 */
+    private OrderTransition approved(UUID orderId, String providerOrderId, Instant approvedAt) {
+        OrderTransition transition = apply(orderId, OrderTrigger.PAYMENT_APPROVED, providerOrderId, approvedAt,
                 EventCause.system("PAYMENT_APPROVED"));
         if (!transition.applied() && !PAID.contains(transition.status())) {
             if (transition.status() == OrderStatus.CANCELED && refunded(orderId)) {
@@ -90,8 +104,23 @@ public class PaymentResults {
     }
 
     OrderTransition declined(UUID orderId, String providerOrderId, DeclineReason reason) {
-        return apply(orderId, OrderTrigger.PAYMENT_DECLINED, providerOrderId,
+        return apply(orderId, OrderTrigger.PAYMENT_DECLINED, providerOrderId, null,
                 EventCause.system("PAYMENT_DECLINED:" + reason));
+    }
+
+    /**
+     * 승인을 이번에 반영했을 때만, 그 트랜잭션에서. 재고 장부 어긋남은 반영을 막지 않고 ERROR 로 알린다(돈을 따른다). 장바구니 차감의
+     * 잠근 줄 갱신이 1행이 아니면(잠금 규칙이 깨짐) · 알림을 적지 못하면 승인 반영도 되돌아가 다시 받는다.
+     * 원장이 바꾼 주문 엔티티를 떼어 냈으므로 여기서 읽는 주문은 결제 시각까지 반영된 DB 값이다.
+     */
+    private void onApproved(UUID orderId, String providerOrderId) {
+        Order paid = orderReader.findById(orderId).orElseThrow(() -> new IllegalStateException("주문이 사라졌다: " + orderId));
+        if (paid.source() == OrderSource.PREORDER) {
+            outboxWriter.append(new PreorderPaymentConfirmed(paid.preorderId(), paid.preorderToken(), paid.id(),
+                    paid.paidAt()));
+            return;
+        }
+        fulfillment.onApproved(paid, providerOrderId);
     }
 
     /** 환불을 거쳐 취소됐는가(이력에 취소 중 → 취소). 취소 중은 결제된 주문만 들어간다. */
@@ -102,7 +131,7 @@ public class PaymentResults {
 
     /** payment 가 이 결제창은 앞으로도 시작될 수 없다고 확언했다 — 결제 대기로 되돌린다. 이력에서 거절과 가른다. */
     OrderTransition notStarted(UUID orderId, String providerOrderId) {
-        return apply(orderId, OrderTrigger.PAYMENT_DECLINED, providerOrderId, EventCause.system("PAYMENT_NOT_STARTED"));
+        return apply(orderId, OrderTrigger.PAYMENT_DECLINED, providerOrderId, null, EventCause.system("PAYMENT_NOT_STARTED"));
     }
 
     /**
@@ -110,17 +139,16 @@ public class PaymentResults {
      * 잠그는데, 같은 회원의 장바구니 주문 생성은 장바구니 줄 → 앞 주문 행 순서라 결제 반영 순간 다시 주문하면 서로 기다릴 수 있다. 다시 하기는
      * 원장의 승인 중 전제로 한 번만 반영된다. 바깥 트랜잭션 안에서 불리면 새 트랜잭션을 열 수 없으므로 다시 하지 않는다.
      */
-    private OrderTransition apply(UUID orderId, OrderTrigger result, String providerOrderId, EventCause cause) {
+    private OrderTransition apply(UUID orderId, OrderTrigger result, String providerOrderId, Instant approvedAt,
+                                  EventCause cause) {
         int attempts = TransactionSynchronizationManager.isActualTransactionActive() ? 1 : MAX_ATTEMPTS;
         OrderTransition transition;
         for (int attempt = 1; ; attempt++) {
             try {
                 transition = writeTransaction.execute(status -> {
-                    OrderTransition settled = ledger.settlePayment(orderId, result, providerOrderId, cause);
-                    // 승인이 이번에 반영됐을 때만 — 같은 트랜잭션이다. 재고 장부 어긋남은 반영을 막지 않고 ERROR 로 알린다(돈을 따른다).
-                    // 장바구니 차감의 잠근 줄 갱신이 1행이 아니면(잠금 규칙이 깨짐) 승인 반영도 되돌아가 다시 받는다
+                    OrderTransition settled = ledger.settlePayment(orderId, result, providerOrderId, approvedAt, cause);
                     if (settled.applied() && result == OrderTrigger.PAYMENT_APPROVED) {
-                        fulfillment.onApproved(orderId, providerOrderId);
+                        onApproved(orderId, providerOrderId);
                     }
                     return settled;
                 });

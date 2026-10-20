@@ -1,6 +1,7 @@
 package com.grandis.nova.order.draw;
 
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.draw.domain.exception.DrawEntryTakenException;
 import com.grandis.nova.order.draw.domain.model.DrawCampaign;
@@ -8,6 +9,8 @@ import com.grandis.nova.order.draw.domain.model.DrawEntry;
 import com.grandis.nova.order.draw.domain.model.DrawEntryResult;
 import com.grandis.nova.order.draw.domain.model.DrawEntryStatus;
 import com.grandis.nova.order.draw.domain.model.DrawPhase;
+import com.grandis.nova.order.draw.domain.model.MyDrawEntry;
+import com.grandis.nova.order.draw.domain.model.MyDrawEntryCounts;
 import com.grandis.nova.order.draw.domain.model.NewDrawEntry;
 import com.grandis.nova.order.draw.domain.repository.DrawCampaignStore;
 import com.grandis.nova.order.draw.domain.repository.DrawEntryStore;
@@ -18,6 +21,9 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -93,12 +99,38 @@ public class DrawEntryService {
         return new MyEntry(entry, result, campaign);
     }
 
+    /**
+     * 내 응모 목록 — 응모 최신순. total 은 고른 탭(전체 · 당첨)의 건수다. 응모 · 반영 여부는 한 문장으로 읽는다({@link MyDrawEntry}).
+     * 탭 건수는 목록과 다른 문장이라, 그 사이 반영이 커밋되면 한 응답 안에서 건수와 목록이 한순간 어긋날 수 있다(다음 조회에서 맞는다).
+     *
+     * @param wonOnly 당첨 주문이 이어진 응모만
+     */
+    public MyEntries myEntries(UUID customerId, boolean wonOnly, int page, int size) {
+        return readTransaction.execute(status -> {
+            MyDrawEntryCounts counts = entries.countByCustomer(customerId);
+            List<MyDrawEntry> found = entries.findByCustomerNewestFirst(customerId, wonOnly, page * size, size);
+            Map<UUID, DrawCampaign> byId = new HashMap<>();
+            campaigns.findAllById(found.stream().map(MyDrawEntry::campaignId).distinct().toList()).forEach(c -> byId.put(c.id(), c));
+            // 응모가 회차를 외래 키로 가리키고 회차는 지우지 않으므로 응모가 있으면 회차도 있다
+            found.forEach(entry -> {
+                if (!byId.containsKey(entry.campaignId())) {
+                    throw new IllegalStateException("응모의 회차가 없다: drawId=" + entry.campaignId());
+                }
+            });
+            return new MyEntries(OffsetPage.of(found, page, size, wonOnly ? counts.won() : counts.all()), counts, byId);
+        });
+    }
+
     private Optional<DrawEntry> find(UUID drawId, UUID customerId) {
         return readTransaction.execute(status -> entries.findByCampaignAndCustomer(drawId, customerId));
     }
 
     /** @param result 결과 반영 전이면 null */
     public record MyEntry(DrawEntry entry, DrawEntryResult result, DrawCampaign campaign) {
+    }
+
+    /** @param campaigns 목록에 나온 응모의 회차(회차 id → 회차) */
+    public record MyEntries(OffsetPage<MyDrawEntry> entries, MyDrawEntryCounts counts, Map<UUID, DrawCampaign> campaigns) {
     }
 
     /** @param created 이번 요청이 만들었으면 true, 이미 있던 응모면 false */

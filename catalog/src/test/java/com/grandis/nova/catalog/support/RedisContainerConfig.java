@@ -24,6 +24,15 @@ public class RedisContainerConfig {
         return container;
     }
 
+    /** Redis 를 멈춘다(명령이 응답 없이 제한 시간까지 걸린다) — 장애 시험용. 반드시 {@link #unpause()} 로 되돌린다(JVM 에 하나뿐인 컨테이너다). */
+    public static void pause() {
+        REDIS.getDockerClient().pauseContainerCmd(REDIS.getContainerId()).exec();
+    }
+
+    public static void unpause() {
+        REDIS.getDockerClient().unpauseContainerCmd(REDIS.getContainerId()).exec();
+    }
+
     @Bean
     DynamicPropertyRegistrar redisProperties() {
         return registry -> {

@@ -17,6 +17,7 @@ import com.grandis.nova.preorder.syncjob.SyncJobSnapshot;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 import com.grandis.nova.preorder.syncjob.SyncJobType;
 import com.grandis.nova.preorder.syncjob.SyncJobs;
+import com.grandis.nova.preorder.web.ValidationFailures;
 import com.grandis.nova.preorder.web.Viewer;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,14 +44,16 @@ public class PreorderQueryService {
     private final Campaigns campaigns;
     private final SyncJobs syncJobs;
     private final SyncAttemptReader syncAttempts;
+    private final PreorderQueryProperties properties;
     private final Clock clock;
 
     PreorderQueryService(Preorders preorders, Campaigns campaigns, SyncJobs syncJobs,
-                         SyncAttemptReader syncAttempts, Clock clock) {
+                         SyncAttemptReader syncAttempts, PreorderQueryProperties properties, Clock clock) {
         this.preorders = preorders;
         this.campaigns = campaigns;
         this.syncJobs = syncJobs;
         this.syncAttempts = syncAttempts;
+        this.properties = properties;
         this.clock = clock;
     }
 
@@ -60,19 +63,29 @@ public class PreorderQueryService {
         Position position = Position.of(cursor);
         List<PreorderSnapshot> found = new ArrayList<>(preorders.findForCustomer(customerId, status, productId,
                 position.createdAt(), position.id(), size + 1));
-        boolean hasNext = found.size() > size;
-        if (hasNext) {
-            found.removeLast();
-        }
+        String nextCursor = trimToPage(found, size);
         Map<UUID, SyncJobStatus> registerStatuses = registerJobStatuses(found);
         Instant now = clock.instant();
         List<PreorderView.Summary> items = withBatches(found, (preorder, batch) -> new PreorderView.Summary(
                 preorder, batch, displayStatus(preorder, registerStatuses.get(preorder.id()), now)));
-        if (!hasNext) {
-            return CursorPage.last(items);
-        }
-        PreorderSnapshot last = found.getLast();
-        return CursorPage.of(items, Cursor.encode(last.createdAt().toString(), last.id()));
+        return nextCursor == null ? CursorPage.last(items) : CursorPage.of(items, nextCursor);
+    }
+
+    /**
+     * 내 진행 중인 예약(최신순). 상품마다 많아야 한 건이라 보통 한 페이지에 다 담긴다 —
+     * 넘치면 잘라 버리지 않고 다음 커서를 준다(빠진 상품은 예약하지 않은 것으로 보인다).
+     */
+    public CursorPage<PreorderView.Active> findMyActive(UUID customerId, String cursor) {
+        Position position = Position.of(cursor);
+        int size = properties.activePageSize();
+        List<PreorderSnapshot> found = new ArrayList<>(preorders.findActiveForCustomer(customerId,
+                position.createdAt(), position.id(), size + 1));
+        String nextCursor = trimToPage(found, size);
+        Map<UUID, SyncJobStatus> registerStatuses = registerJobStatuses(found);
+        Instant now = clock.instant();
+        List<PreorderView.Active> items = found.stream().map(preorder -> new PreorderView.Active(
+                preorder, displayStatus(preorder, registerStatuses.get(preorder.id()), now))).toList();
+        return nextCursor == null ? CursorPage.last(items) : CursorPage.of(items, nextCursor);
     }
 
     /** 예약 하나. 본인과 관리자만 볼 수 있고, 남의 예약은 존재를 알리지 않는다(404). */
@@ -88,17 +101,43 @@ public class PreorderQueryService {
         return preorders.history(require(viewer, preorderToken).id());
     }
 
+    /** @throws BusinessException VALIDATION_FAILED — 옵션 · 배송 차수를 상품 없이 물었다 */
     public OffsetPage<PreorderView.AdminSummary> findForAdmin(AdminPreorderFilter filter, int page, int size) {
-        SyncJobStatus jobStatus = filter.registerJobStatus();
-        OffsetPage<PreorderSnapshot> found = preorders.searchForAdmin(new AdminPreorderSearch(filter.status(),
-                filter.customerId(), filter.productId(), filter.from(), filter.to(),
-                jobStatus == null ? null : jobStatus.name()), page, size);
-        Map<UUID, SyncJobStatus> registerStatuses = registerJobStatuses(found.items());
+        requireProductScope(filter);
         Instant now = clock.instant();
+        PreorderStatus status = filter.status();
+        AdminPreorderSearch.Progress progress = null;
+        if (filter.displayStatus() != null) {
+            PreorderStatus shown = statusOf(filter.displayStatus());
+            if (status != null && status != shown) {
+                return OffsetPage.of(List.of(), page, size, 0);
+            }
+            status = shown;
+            progress = progressOf(filter.displayStatus(), now);
+        }
+        SyncJobStatus jobStatus = filter.registerJobStatus();
+        OffsetPage<PreorderSnapshot> found = preorders.searchForAdmin(new AdminPreorderSearch(status,
+                filter.customerId(), filter.productId(), filter.from(), filter.to(),
+                jobStatus == null ? null : jobStatus.name(), filter.externalReference(), filter.optionId(),
+                filter.batchNumber(), progress), page, size);
+        Map<UUID, SyncJobStatus> registerStatuses = registerJobStatuses(found.items());
         List<PreorderView.AdminSummary> items = withBatches(found.items(), (preorder, batch) ->
                 new PreorderView.AdminSummary(preorder, batch, registerStatuses.get(preorder.id()),
                         displayStatus(preorder, registerStatuses.get(preorder.id()), now)));
         return OffsetPage.of(items, page, size, found.total());
+    }
+
+    /** 옵션 · 차수 색인은 상품 id 로 시작하고, 차수 번호는 상품마다 따로 매긴다. */
+    private void requireProductScope(AdminPreorderFilter filter) {
+        if (filter.productId() != null) {
+            return;
+        }
+        if (filter.optionId() != null) {
+            throw ValidationFailures.of("optionId", "productId 와 함께 보내야 합니다.");
+        }
+        if (filter.batchNumber() != null) {
+            throw ValidationFailures.of("batchNumber", "productId 와 함께 보내야 합니다.");
+        }
     }
 
     /** 관리자 상세. 작업 · 시도 · 이력까지 함께 읽는다. */
@@ -131,6 +170,40 @@ public class PreorderQueryService {
             case CANCELING -> PreorderDisplayStatus.CANCELING;
             case CANCELED -> PreorderDisplayStatus.CANCELED;
         };
+    }
+
+    /** 그 화면 단계로 보이는 원장 상태. {@link #displayStatus} 를 거꾸로 푼 것이라 함께 고친다. */
+    private static PreorderStatus statusOf(PreorderDisplayStatus displayStatus) {
+        return switch (displayStatus) {
+            case RECEIVED, PROCESSING -> PreorderStatus.PENDING_SYNC;
+            case PAYABLE, PAYMENT_IN_PROGRESS, PAYMENT_EXPIRED -> PreorderStatus.REGISTERED;
+            case RESERVED -> PreorderStatus.RESERVED;
+            case CANCELING -> PreorderStatus.CANCELING;
+            case CANCELED -> PreorderStatus.CANCELED;
+        };
+    }
+
+    /** 원장 상태가 같은 화면 단계들을 가르는 조건. 상태만으로 정해지는 단계는 null 이다. */
+    private static AdminPreorderSearch.Progress progressOf(PreorderDisplayStatus displayStatus, Instant now) {
+        Instant dueCutoff = now.minus(PreorderSnapshot.PAYMENT_WINDOW);
+        return switch (displayStatus) {
+            case RECEIVED -> AdminPreorderSearch.Progress.registerAttempted(false);
+            case PROCESSING -> AdminPreorderSearch.Progress.registerAttempted(true);
+            case PAYABLE -> AdminPreorderSearch.Progress.payableAfter(dueCutoff, false);
+            case PAYMENT_IN_PROGRESS -> AdminPreorderSearch.Progress.payableAfter(dueCutoff, true);
+            case PAYMENT_EXPIRED -> AdminPreorderSearch.Progress.payableUntil(dueCutoff);
+            case RESERVED, CANCELING, CANCELED -> null;
+        };
+    }
+
+    /** 한 건 더 읽은 목록을 페이지 크기로 줄인다. 다음 페이지가 있으면 그 커서를, 없으면 null 을 준다. */
+    private static String trimToPage(List<PreorderSnapshot> found, int size) {
+        if (found.size() <= size) {
+            return null;
+        }
+        found.removeLast();
+        PreorderSnapshot last = found.getLast();
+        return Cursor.encode(last.createdAt().toString(), last.id());
     }
 
     private PreorderSnapshot require(Viewer viewer, String preorderToken) {

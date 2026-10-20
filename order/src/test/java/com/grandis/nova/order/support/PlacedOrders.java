@@ -38,7 +38,7 @@ public class PlacedOrders {
     public void pay(UUID orderId) {
         transactionTemplate.executeWithoutResult(status -> {
             ledger.requestPayment(orderId, UUID.randomUUID().toString(), EventCause.user());
-            ledger.settlePayment(orderId, OrderTrigger.PAYMENT_APPROVED, null, EventCause.system("PAYMENT_APPROVED"));
+            ledger.settlePayment(orderId, OrderTrigger.PAYMENT_APPROVED, null, null, EventCause.system("PAYMENT_APPROVED"));
         });
     }
 

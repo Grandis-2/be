@@ -15,7 +15,10 @@ import com.grandis.nova.order.order.vo.EventCause;
 import com.grandis.nova.order.order.vo.Money;
 import com.grandis.nova.order.order.vo.Quantity;
 import com.grandis.nova.order.outbox.DrawRequested;
+import com.grandis.nova.order.outbox.NotificationRequested;
 import com.grandis.nova.order.stock.StockLedger;
+import com.grandis.nova.order.stock.StockMismatches;
+import com.grandis.nova.order.stock.domain.exception.StockReleaseMismatchException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -46,6 +49,7 @@ import java.util.stream.Collectors;
  * 반영(한 트랜잭션): 당첨 응모마다 응모 때 배송지로 0원 주문(결제 확인 대기로 생긴다 — 이 뒤로 일반 배송 단계), 당첨분 재고를 확보 → 판매로,
  * 남은 확보(당첨 인원 − 당첨 수 — 전원 당첨일 때만 생긴다, Mock 결과는 늘 당첨 인원만큼이다)는 반납. 판매로 옮기지 못하면 "재고 어긋남" ERROR 를
  * 남기고, 반납할 확보가 모자라면(장부 어긋남) 반영 전체를 롤백한다 — 전원 당첨에서 판매가 모자랐다면 반납도 모자라 결국 롤백된다.
+ * 당첨 응모마다 당첨 알림도 이 트랜잭션에 적는다. 낙첨에는 보내지 않는다 — 결과는 드로우 상세에서 본다(알림을 응모 수가 아니라 당첨 인원만큼 둔다).
  */
 @Service
 public class DrawSettlement {
@@ -60,16 +64,18 @@ public class DrawSettlement {
     private final DrawEntryStore entries;
     private final OrderLedger orders;
     private final StockLedger stock;
+    private final StockMismatches mismatches;
     private final OutboxWriter outbox;
     private final TransactionTemplate writeTransaction;
     private final Clock clock;
 
-    public DrawSettlement(DrawCampaignStore campaigns, DrawEntryStore entries, OrderLedger orders, StockLedger stock, OutboxWriter outbox,
-                          PlatformTransactionManager transactionManager, Clock clock) {
+    public DrawSettlement(DrawCampaignStore campaigns, DrawEntryStore entries, OrderLedger orders, StockLedger stock,
+                          StockMismatches mismatches, OutboxWriter outbox, PlatformTransactionManager transactionManager, Clock clock) {
         this.campaigns = campaigns;
         this.entries = entries;
         this.orders = orders;
         this.stock = stock;
+        this.mismatches = mismatches;
         this.outbox = outbox;
         this.writeTransaction = new TransactionTemplate(transactionManager);
         this.clock = clock;
@@ -149,23 +155,32 @@ public class DrawSettlement {
             throw new IllegalStateException("잠근 회차의 반영 표식이 이미 있다: drawId=" + campaign.id());
         }
         for (DrawEntry winner : winners) {
-            Order order = orders.place(new OrderDraft(winner.customerId(), OrderSource.DRAW, null, null, winner.shipTo(),
+            Order order = orders.place(new OrderDraft(winner.customerId(), OrderSource.DRAW, null, null, null, winner.shipTo(),
                     List.of(OrderLine.withoutWarranty(campaign.productId(), campaign.optionId(), Quantity.ONE, Money.ZERO,
-                            campaign.productTitle(), campaign.optionTitle()))), EventCause.system(WON_REASON));
+                            campaign.productTitle(), campaign.modelName(), campaign.optionTitle(), campaign.imageUrl()))), EventCause.system(WON_REASON));
             if (!entries.markWon(campaign.id(), winner.id(), order.id(), now)) {
                 throw new IllegalStateException("당첨 주문을 잇지 못했다: drawId=" + campaign.id() + ", entryId=" + winner.id());
             }
+            // 반영 표식을 이번에 적은 트랜잭션에서만 온다 — 다시 받기는 표식 앞에서 돌아가 알림이 두 번 가지 않는다
+            outbox.append(NotificationRequested.drawWon(winner.id(), winner.customerId(), campaign.id()));
         }
         if (!winners.isEmpty()) {
             List<UUID> mismatched = stock.sell(Map.of(campaign.optionId(), winners.size()));
             if (!mismatched.isEmpty()) {
                 log.error("재고 어긋남 — 드로우 당첨분을 판매로 옮기지 못했다(당첨 주문은 만든다) drawId={} optionId={} quantity={}",
                         campaign.id(), campaign.optionId(), winners.size());
+                mismatches.record(StockMismatches.Site.DRAW_SALE);
             }
         }
         int leftover = campaign.winnerCount() - winners.size();
         if (leftover > 0) {
-            stock.release(Map.of(campaign.optionId(), leftover));
+            try {
+                stock.release(Map.of(campaign.optionId(), leftover));
+            } catch (StockReleaseMismatchException e) {
+                // 여기서는 세기만 한다. 추첨 주기(DrawCloser)는 "재고 어긋남" ERROR 를 남기고, 결과 소비는 다시 받기 · DLQ 로 간다
+                mismatches.record(StockMismatches.Site.DRAW_RELEASE);
+                throw e;
+            }
         }
     }
 }

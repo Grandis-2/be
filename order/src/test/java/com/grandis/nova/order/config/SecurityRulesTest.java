@@ -84,6 +84,18 @@ class SecurityRulesTest {
                 .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
     }
 
+    // 재고 조회만 토큰 없이 컨트롤러에 닿는다(401 이 아니라 파라미터 검증의 400). 열린 것은 GET 하나다 — 같은 경로의 다른 메서드는 여전히 401
+    @Test
+    void stockLookupIsOpenWithoutTokenOnlyForGet() throws Exception {
+        mockMvc.perform(get("/internal/stocks"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
+        mockMvc.perform(post("/internal/stocks"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/internal/stocks/anything"))
+                .andExpect(status().isUnauthorized());
+    }
+
     // ── 헤더(NV-137) ──────────────────────────────────────────────────────────────
 
     // 옛 헤더는 더 이상 읽지 않는다 — 토큰이 없는 것과 같다.
@@ -115,6 +127,9 @@ class SecurityRulesTest {
             "GET,   /api/v1/admin/products/1/stock,               admin",
             "PUT,   /api/v1/admin/products/1/stock,               admin",
             "POST,  /api/v1/admin/products/1/stock,               admin",
+            "GET,   /api/v1/admin/products/1/stock/options/2/reconcile, admin",
+            "POST,  /api/v1/admin/products/1/stock/options/2/reconcile, admin",
+            "GET,   /api/v1/admin/stock/reconcile-runs/latest,    admin",
             "GET,   /api/v1/admin/draws,                          admin",
             "POST,  /api/v1/admin/draws,                          admin",
             "POST,  /api/v1/draws/d-1/entries/me/payment-attempts, user",

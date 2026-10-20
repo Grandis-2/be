@@ -299,8 +299,8 @@ public final class TestData {
         jdbc.sql("INSERT INTO categories (id, name, created_at, updated_at) VALUES (UUID_TO_BIN(:id), :name, :at, :at)")
                 .param("id", categoryId.toString()).param("name", "분류-" + name).param("at", at).update();
         jdbc.sql("""
-                        INSERT INTO products (id, category_id, sale_mode, title, status, created_at, updated_at)
-                        VALUES (UUID_TO_BIN(:id), UUID_TO_BIN(:category), 'PREORDER', :title, 'ACTIVE', :at, :at)
+                        INSERT INTO products (id, category_id, sale_mode, title, brand, model_name, status, created_at, updated_at)
+                        VALUES (UUID_TO_BIN(:id), UUID_TO_BIN(:category), 'PREORDER', :title, 'APPLE', 'A0000', 'ACTIVE', :at, :at)
                         """)
                 .param("id", productId.toString()).param("category", categoryId.toString()).param("title", name)
                 .param("at", at).update();

@@ -184,6 +184,72 @@ class MockJudgeTest {
         assertThat(MockJudge.cancel(MockReply.response(429, null, null)).retryNow()).isFalse();
     }
 
+    /** 드로우 응모는 같은 키로 다시 보내면 처음 결과가 온다(재생). 결과를 모르는 실패도 조회 없이 다시 보낸다. */
+    @Test
+    void 드로우_응모_201_은_재생이어도_성공이다() {
+        assertThat(MockJudge.drawEntry(json(201, """
+                {"entryId":"e","drawId":"d","customerId":"c","receivedAt":"2026-10-14T00:00:00Z"}""")).verdict())
+                .isEqualTo(Verdict.SUCCESS);
+        assertThat(MockJudge.drawEntry(json(200, "{}")).verdict()).as("201 이 아닌 2xx").isEqualTo(Verdict.UNKNOWN);
+    }
+
+    @Test
+    void 드로우_응모의_확정_거절은_거절이고_마감은_따로_보지_않는다() {
+        for (String code : new String[]{"CUSTOMER_ALREADY_ENTERED", "DRAW_CLOSED"}) {
+            assertThat(MockJudge.drawEntry(error(409, code)).verdict()).as(code).isEqualTo(Verdict.REJECTED);
+        }
+        assertThat(MockJudge.drawEntry(error(400, "INVALID_REQUEST")).verdict()).isEqualTo(Verdict.REJECTED);
+        assertThat(MockJudge.drawEntry(error(422, "KEY_PAYLOAD_MISMATCH")).verdict()).isEqualTo(Verdict.REJECTED);
+    }
+
+    @Test
+    void 드로우의_408_429_5xx_응답_없음은_모두_일시_실패다() {
+        assertThat(MockJudge.drawEntry(error(500, "UPSTREAM_UNAVAILABLE")).verdict()).isEqualTo(Verdict.TRANSIENT);
+        for (int status : new int[]{408, 429, 500, 502, 503, 504}) {
+            assertThat(MockJudge.drawEntry(reply(status)).verdict()).as("%d", status).isEqualTo(Verdict.TRANSIENT);
+            assertThat(MockJudge.draw(reply(status)).verdict()).as("추첨 %d", status).isEqualTo(Verdict.TRANSIENT);
+        }
+        for (TransportFailure failure : TransportFailure.values()) {
+            assertThat(MockJudge.drawEntry(MockReply.failed(failure)).verdict()).as(failure.name())
+                    .isEqualTo(Verdict.TRANSIENT);
+            assertThat(MockJudge.drawStatus(MockReply.failed(failure)).verdict()).as("조회 " + failure.name())
+                    .isEqualTo(Verdict.TRANSIENT);
+        }
+    }
+
+    @Test
+    void 없는_경로와_errorCode_없는_4xx_는_설정_오류다() {
+        assertThat(MockJudge.drawEntry(error(404, "NO_SUCH_ENDPOINT")).verdict()).isEqualTo(Verdict.MISCONFIGURED);
+        assertThat(MockJudge.drawStatus(error(404, "NO_SUCH_ENDPOINT")).verdict()).as("응모 0건으로 읽지 않는다")
+                .isEqualTo(Verdict.MISCONFIGURED);
+        assertThat(MockJudge.draw(reply(404)).verdict()).isEqualTo(Verdict.MISCONFIGURED);
+    }
+
+    @Test
+    void 회차_조회는_받은_응모_수가_있어야_성공이고_NOT_FOUND_는_응모_없음이다() {
+        assertThat(MockJudge.drawStatus(json(200, """
+                {"drawId":"d","status":"OPEN","entryCount":3,"winnerCount":null,"winnerEntryIds":[],"drawnAt":null}"""))
+                .verdict()).isEqualTo(Verdict.SUCCESS);
+        assertThat(MockJudge.drawStatus(json(200, "{\"status\":\"OPEN\"}")).verdict()).isEqualTo(Verdict.UNKNOWN);
+        assertThat(MockJudge.drawStatus(error(404, "NOT_FOUND")).verdict()).isEqualTo(Verdict.ABSENT);
+    }
+
+    @Test
+    void 추첨의_응모_수_불일치와_응모_없음은_기다림이다() {
+        assertThat(MockJudge.draw(error(409, "ENTRY_COUNT_MISMATCH")).verdict()).isEqualTo(Verdict.PENDING);
+        assertThat(MockJudge.draw(error(404, "NOT_FOUND")).verdict()).isEqualTo(Verdict.PENDING);
+        assertThat(MockJudge.draw(error(422, "INVALID_WINNER_COUNT")).verdict()).isEqualTo(Verdict.REJECTED);
+        assertThat(MockJudge.draw(error(422, "KEY_PAYLOAD_MISMATCH")).verdict()).isEqualTo(Verdict.REJECTED);
+        assertThat(MockJudge.draw(error(400, "INVALID_REQUEST")).verdict()).isEqualTo(Verdict.REJECTED);
+    }
+
+    @Test
+    void 추첨_200_은_당첨_목록이_있어야_성공이다() {
+        assertThat(MockJudge.draw(json(200, "{\"status\":\"DRAWN\",\"winnerEntryIds\":[\"a\"]}")).verdict())
+                .isEqualTo(Verdict.SUCCESS);
+        assertThat(MockJudge.draw(json(200, "{\"status\":\"DRAWN\"}")).verdict()).isEqualTo(Verdict.UNKNOWN);
+    }
+
     private static MockReply json(int status, String body) {
         return MockReply.response(status, JSON.readTree(body), null);
     }

@@ -2,6 +2,7 @@ package com.grandis.nova.catalog.outbox;
 
 import com.grandis.nova.catalog.edit.PreorderCampaignCanceled;
 import com.grandis.nova.catalog.edit.PreorderProductChanged;
+import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.catalog.registration.InStockProductRegistered;
 import com.grandis.nova.catalog.registration.PreorderProductRegistered;
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
@@ -45,6 +46,8 @@ import static org.mockito.BDDMockito.willAnswer;
  * 옮긴 뒤에는 앱의 JsonMapper 빈이 쓴다 — 받는 쪽 계약이라 글자까지 같아야 한다.
  *
  * 릴레이는 전용 실행기가 짧은 주기로 돌게 한다(배선까지 본다). 다른 시험이 이 주기를 물려받지 않게 끝나면 컨텍스트를 닫는다.
+ * DB 는 모든 시험 컨텍스트가 같이 쓰는 싱글턴이라(MySqlContainerConfig), 이 릴레이는 다른 시험이 남긴 1분 지난 미발행 행도 집어 대역 전송으로
+ * 발행 완료로 적는다 — 시험은 한 JVM 에서 차례로 돌아 끝난 시험의 단언에는 닿지 않는다.
  */
 @CatalogIntegrationTest
 @TestPropertySource(properties = "nova.outbox.relay-interval=200ms")
@@ -54,7 +57,8 @@ class CatalogOutboxWiringTest {
     static final Duration TIMEOUT = Duration.ofSeconds(10);
     static final String PREORDER_PAYLOAD = "{\"campaign\":{\"opensAt\":\"2026-10-10T03:00:00.123456Z\",\"closesAt\":\"2026-10-13T03:00:00Z\"},"
             + "\"shipmentBatches\":[{\"batchNumber\":1,\"positionFrom\":1,\"positionTo\":100,\"estimatedShipStart\":\"2026-11-01\",\"estimatedShipEnd\":\"2026-11-07\"},"
-            + "{\"batchNumber\":2,\"positionFrom\":101,\"positionTo\":null,\"estimatedShipStart\":\"2026-11-08\",\"estimatedShipEnd\":\"2026-11-14\"}]}";
+            + "{\"batchNumber\":2,\"positionFrom\":101,\"positionTo\":null,\"estimatedShipStart\":\"2026-11-08\",\"estimatedShipEnd\":\"2026-11-14\"}],"
+            + "\"title\":\"Nova 1\",\"status\":\"ACTIVE\",\"visible\":true,\"listingVersion\":1}";
     static final UUID FIRST_OPTION = UUID.fromString("0199b2c4-0000-7000-8000-000000000101");
     static final UUID SECOND_OPTION = UUID.fromString("0199b2c4-0000-7000-8000-000000000102");
     static final String IN_STOCK_PAYLOAD = "{\"items\":[{\"optionId\":\"" + FIRST_OPTION + "\",\"stockTotal\":5},"
@@ -98,17 +102,19 @@ class CatalogOutboxWiringTest {
     }
 
     @Test
-    @DisplayName("사전예약 상품 변경은 preorder-events 로 가고 payload 는 빈 객체, 상품 id 는 봉투의 aggregateId 다")
-    void productChangeGoesToPreorderWithEmptyPayload() {
+    @DisplayName("사전예약 상품 변경은 preorder-events 로 가고 payload 는 상품명 · 판매 상태 · 공개 여부 · 번호, 상품 id 는 봉투의 aggregateId 다")
+    void productChangeGoesToPreorderWithListing() {
         UUID productId = UUID.randomUUID();
-        String eventId = eventIdOf(transactionTemplate.execute(status -> writer.append(new PreorderProductChanged(productId))));
+        String eventId = eventIdOf(transactionTemplate.execute(status -> writer.append(
+                new PreorderProductChanged(productId, "Nova 1 Pro", SaleStatus.PAUSED, false, 3))));
 
         await().atMost(TIMEOUT).until(() -> sentOf(eventId).isPresent());
         OutboundMessage message = sentOf(eventId).orElseThrow();
         assertThat(message.destination()).isEqualTo("preorder-events");
         assertThat(message.eventType()).isEqualTo("PREORDER_PRODUCT_CHANGED");
         JsonNode envelope = jsonMapper.readTree(message.body());
-        assertThat(envelope.get("payload")).isEqualTo(jsonMapper.readTree("{}"));
+        assertThat(envelope.get("payload")).isEqualTo(jsonMapper.readTree(
+                "{\"title\":\"Nova 1 Pro\",\"status\":\"PAUSED\",\"visible\":false,\"listingVersion\":3}"));
         assertThat(envelope.get("aggregateType").asString()).isEqualTo("PRODUCT");
         assertThat(envelope.get("aggregateId").asString()).isEqualTo(productId.toString());
     }
@@ -197,7 +203,8 @@ class CatalogOutboxWiringTest {
         return new PreorderProductRegistered(productId,
                 new PreorderProductRegistered.Campaign(Instant.parse("2026-10-10T03:00:00.123456Z"), Instant.parse("2026-10-13T03:00:00Z")),
                 List.of(new PreorderProductRegistered.ShipmentBatch(1, 1, 100L, LocalDate.parse("2026-11-01"), LocalDate.parse("2026-11-07")),
-                        new PreorderProductRegistered.ShipmentBatch(2, 101, null, LocalDate.parse("2026-11-08"), LocalDate.parse("2026-11-14"))));
+                        new PreorderProductRegistered.ShipmentBatch(2, 101, null, LocalDate.parse("2026-11-08"), LocalDate.parse("2026-11-14"))),
+                "Nova 1", SaleStatus.ACTIVE, true, 1);
     }
 
     private static InStockProductRegistered inStock(UUID productId) {

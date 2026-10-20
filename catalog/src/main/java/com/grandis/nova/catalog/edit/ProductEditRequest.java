@@ -1,21 +1,29 @@
 package com.grandis.nova.catalog.edit;
 
+import com.grandis.nova.catalog.product.Brand;
+import com.grandis.nova.catalog.product.Discount;
+import com.grandis.nova.catalog.registration.ProductRegistrationRequest;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 
 /**
  * PATCH /admin/products/{id} 본문. null 은 "보내지 않음" 이고 그 칸은 그대로다. 전부 null 이면 400.
- * 길이 · 금액 규칙은 등록과 같다. saleMode · 판매 상태 · 공개 여부는 여기서 못 바꾼다(별도 명령).
+ * 길이 · 금액 · 할인율 규칙은 등록과 같다. saleMode · 판매 상태 · 공개 여부는 여기서 못 바꾼다(별도 명령).
  */
 public record ProductEditRequest(
         @Size(min = 1, max = 100) String title,
+        Brand brand,
+        @Size(min = 1, max = ProductRegistrationRequest.MAX_MODEL_NAME_LENGTH) String modelName,
         @Size(max = 5000) String description,
         @Size(max = 500) String tags,
         @DecimalMin("0") BigDecimal basePrice,
+        @Min(Discount.MIN_RATE) @Max(Discount.MAX_RATE) Integer discountRate,
         @Valid Warranty warranty
 ) {
 
@@ -25,6 +33,7 @@ public record ProductEditRequest(
 
     @Schema(hidden = true)   // 문서 전용 — 없으면 swagger 가 getter 꼴 메서드를 empty 칸으로 그린다
     public boolean isEmpty() {
-        return title == null && description == null && tags == null && basePrice == null && warranty == null;
+        return title == null && brand == null && modelName == null && description == null && tags == null && basePrice == null && discountRate == null
+                && warranty == null;
     }
 }

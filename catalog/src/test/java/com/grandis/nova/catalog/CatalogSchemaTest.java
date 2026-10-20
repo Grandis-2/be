@@ -84,6 +84,20 @@ class CatalogSchemaTest {
             jdbcTemplate.update("UPDATE categories SET sort_order = 0 WHERE id = ?", UuidBinary.toBytes(id));   // 대조군 — 경계는 들어간다
             assertThat(columnExists("categories", "code")).isFalse();
         }
+
+        @Test
+        @DisplayName("기본 옵션 축은 넣지 않으면 [], 배열이 아닌 값 · NULL 은 거절한다")
+        void optionAxesDefaultsToEmptyArray() {
+            UUID id = fixtures.category();
+            assertThat(jdbcTemplate.queryForObject("SELECT CAST(option_axes AS CHAR) FROM categories WHERE id = ?", String.class, UuidBinary.toBytes(id)))
+                    .isEqualTo("[]");
+            assertThatThrownBy(() -> jdbcTemplate.update("UPDATE categories SET option_axes = JSON_OBJECT('key', 'color') WHERE id = ?", UuidBinary.toBytes(id)))
+                    .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_category_option_axes");
+            assertThatThrownBy(() -> jdbcTemplate.update("UPDATE categories SET option_axes = NULL WHERE id = ?", UuidBinary.toBytes(id)))
+                    .isInstanceOf(DataAccessException.class);
+            // 대조군 — 배열은 들어간다
+            jdbcTemplate.update("UPDATE categories SET option_axes = JSON_ARRAY(JSON_OBJECT('key', 'color', 'label', '색상')) WHERE id = ?", UuidBinary.toBytes(id));
+        }
     }
 
     @Nested
@@ -110,6 +124,26 @@ class CatalogSchemaTest {
             assertThat(columnExists("product_options", "price_overridden")).isFalse();
             // 표시 속성은 없앴다(2026-10-07) — 축 → 값은 조합 키(값 id)와 상품의 옵션 문서가 정본이다
             assertThat(columnExists("product_options", "display_attributes")).isFalse();
+        }
+
+        @Test
+        @DisplayName("브랜드 · 모델명은 기본값이 없어 빠뜨린 INSERT 를 거절하고(1364), 브랜드는 SAMSUNG · APPLE · LG 만 받는다")
+        void brandAndModelNameAreRequired() {
+            UUID categoryId = fixtures.category();
+            assertThatThrownBy(() -> jdbcTemplate.update("""
+                    INSERT INTO products (id, category_id, sale_mode, title, model_name, status, created_at, updated_at)
+                    VALUES (UUID_TO_BIN(UUID()), ?, 'IN_STOCK', 'x', 'A1', 'ACTIVE', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""", UuidBinary.toBytes(categoryId)))
+                    .isInstanceOf(DataAccessException.class).hasMessageContaining("brand");
+            assertThatThrownBy(() -> jdbcTemplate.update("""
+                    INSERT INTO products (id, category_id, sale_mode, title, brand, status, created_at, updated_at)
+                    VALUES (UUID_TO_BIN(UUID()), ?, 'IN_STOCK', 'x', 'APPLE', 'ACTIVE', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""", UuidBinary.toBytes(categoryId)))
+                    .isInstanceOf(DataAccessException.class).hasMessageContaining("model_name");
+            UUID productId = fixtures.product(categoryId, "IN_STOCK", "ACTIVE");   // 대조군 — 두 칸을 넣은 행은 들어간다
+            assertThatThrownBy(() -> jdbcTemplate.update("UPDATE products SET brand = 'SONY' WHERE id = ?", UuidBinary.toBytes(productId)))
+                    .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_product_brand");
+            assertThatThrownBy(() -> jdbcTemplate.update("UPDATE products SET brand = '' WHERE id = ?", UuidBinary.toBytes(productId)))
+                    .isInstanceOf(DataAccessException.class).hasMessageContaining("ck_product_brand");
+            jdbcTemplate.update("UPDATE products SET brand = 'LG' WHERE id = ?", UuidBinary.toBytes(productId));
         }
 
         @Test

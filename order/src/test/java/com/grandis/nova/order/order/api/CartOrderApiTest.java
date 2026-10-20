@@ -121,6 +121,8 @@ class CartOrderApiTest {
         assertThat(merged.get("warrantyQuantity").asInt()).isEqualTo(1);
         assertThat(merged.get("warrantyUnitPrice").decimalValue()).isEqualByComparingTo(WARRANTY);
         assertThat(merged.get("lineAmount").decimalValue()).isEqualByComparingTo(PRICE.multiply(BigDecimal.valueOf(3)).add(WARRANTY));
+        assertThat(merged.get("modelName").asString()).as("모델명은 주문 때 catalog 값").isEqualTo("A3104");
+        assertThat(merged.get("imageUrl").asString()).as("사진은 주문 때 catalog 값").isEqualTo("https://img/black-0.jpg");
         assertThat(items.get(watch.toString()).get("warrantyQuantity").asInt()).isZero();
         assertThat(items.get(watch.toString()).get("warrantyUnitPrice").decimalValue()).isEqualByComparingTo("0");
 
@@ -132,6 +134,8 @@ class CartOrderApiTest {
         JsonNode detail = data(mockMvc.perform(get("/api/v1/orders/{id}", order.get("orderId").asString())
                 .with(TestAuth.customer(customerId))).andExpect(status().isOk()));
         assertThat(byVariant(detail.get("items")).get(phone.toString()).get("warrantyQuantity").asInt()).isEqualTo(1);
+        assertThat(byVariant(detail.get("items")).get(phone.toString()).get("modelName").asString()).as("저장한 모델명을 다시 읽는다").isEqualTo("A3104");
+        assertThat(byVariant(detail.get("items")).get(phone.toString()).get("imageUrl").asString()).as("저장한 사진을 다시 읽는다").isEqualTo("https://img/black-0.jpg");
         assertThat(detail.get("paymentDueAt").asString()).isEqualTo(order.get("paymentDueAt").asString());
     }
 
@@ -191,9 +195,9 @@ class CartOrderApiTest {
         String first = data(place(item(phone, 1, true)).andExpect(status().isCreated())).get("orderId").asString();
 
         CatalogOption current = catalog.get(phone);
-        catalog.put(phone, new CatalogOption(current.optionId(), current.productId(), current.productTitle(), current.optionTitle(), current.sku(),
+        catalog.put(phone, new CatalogOption(current.optionId(), current.productId(), current.productTitle(), current.modelName(), current.optionTitle(), current.sku(),
                 current.price(), current.optionStatus(), current.saleMode(), current.productStatus(), current.visible(),
-                current.registrationCompleted(), new CatalogOption.Warranty(true, new BigDecimal("149000")), current.imageUrl()));
+                current.registrationCompleted(), new CatalogOption.Warranty(true, new BigDecimal("149000")), current.imageUrl(), current.listPrice()));
         String second = data(place("""
                 {"variantId":"%s","quantity":1,"warranty":true,"expectedUnitPrice":1250000,"expectedWarrantyPrice":149000}""".formatted(phone))
                 .andExpect(status().isCreated())).get("orderId").asString();
@@ -202,6 +206,41 @@ class CartOrderApiTest {
         assertThat(orderStatus(first)).isEqualTo("CANCELED");
         assertThat(orderTotal(second)).isEqualByComparingTo("1399000");
         assertThat(reserved(phone)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("사진이 없는 옵션도 주문된다 — 주문 줄의 사진은 null")
+    void optionWithoutImageOrdersWithNullImage() throws Exception {
+        UUID phone = sellable(10);
+        CatalogOption current = catalog.get(phone);
+        catalog.put(phone, new CatalogOption(current.optionId(), current.productId(), current.productTitle(), current.modelName(), current.optionTitle(),
+                current.sku(), current.price(), current.optionStatus(), current.saleMode(), current.productStatus(), current.visible(),
+                current.registrationCompleted(), current.warranty(), null, current.listPrice()));
+        cartLine(phone, false, 1);
+
+        JsonNode order = data(place(item(phone, 1, false)).andExpect(status().isCreated()));
+
+        assertThat(order.get("items").get(0).get("imageUrl").isNull()).isTrue();
+    }
+
+    @Test
+    @DisplayName("주문 줄의 모델명 · 사진은 주문 때 값 — catalog 값이 바뀌면 장바구니는 새 값, 이미 만든 주문 상세는 옛 값")
+    void orderKeepsModelNameOfOrderTime() throws Exception {
+        UUID phone = sellable(10);
+        cartLine(phone, false, 1);
+        String orderId = data(place(item(phone, 1, false)).andExpect(status().isCreated())).get("orderId").asString();
+
+        CatalogOption current = catalog.get(phone);
+        catalog.put(phone, new CatalogOption(current.optionId(), current.productId(), current.productTitle(), "A3105", current.optionTitle(),
+                current.sku(), current.price(), current.optionStatus(), current.saleMode(), current.productStatus(), current.visible(),
+                current.registrationCompleted(), current.warranty(), "https://img/white-0.jpg", current.listPrice()));
+
+        JsonNode cart = data(mockMvc.perform(get("/api/v1/cart").with(TestAuth.customer(customerId))).andExpect(status().isOk()));
+        assertThat(cart.get("items").get(0).get("modelName").asString()).as("장바구니는 지금 값").isEqualTo("A3105");
+        assertThat(cart.get("items").get(0).get("imageUrl").asString()).as("장바구니는 지금 사진").isEqualTo("https://img/white-0.jpg");
+        JsonNode detail = data(mockMvc.perform(get("/api/v1/orders/{id}", orderId).with(TestAuth.customer(customerId))).andExpect(status().isOk()));
+        assertThat(detail.get("items").get(0).get("modelName").asString()).as("주문은 주문 때 값").isEqualTo("A3104");
+        assertThat(detail.get("items").get(0).get("imageUrl").asString()).as("주문은 주문 때 사진").isEqualTo("https://img/black-0.jpg");
     }
 
     /**
@@ -484,7 +523,7 @@ class CartOrderApiTest {
     }
 
     @Test
-    @DisplayName("요청 검증 — 줄 없음 · 같은 줄 두 번 · 보증 줄의 보증가 없음 · 수량 0 · 51줄 · 다른 출처의 칸은 400, 바로 구매는 아직 400")
+    @DisplayName("요청 검증 — 줄 없음 · 같은 줄 두 번 · 보증 줄의 보증가 없음 · 수량 0 · 51줄 · 다른 출처의 칸은 400")
     void invalidRequestsAreRejected() throws Exception {
         UUID phone = sellable(10);
         cartLine(phone, false, 1);
@@ -497,8 +536,6 @@ class CartOrderApiTest {
         expectViolation(place(item(phone, 0, false)), "items[0].quantity");
         expectViolation(place(IntStream.range(0, 51).mapToObj(i -> item(UUID.randomUUID(), 1, false)).toArray(String[]::new)),
                 "items");
-        expectViolation(perform("""
-                {"source":"BUY_NOW","items":[%s],"shipTo":%s}""".formatted(item(phone, 1, false), SHIP_TO)), "source");
         expectViolation(perform("""
                 {"source":"CART","preorderId":"%s","items":[%s],"shipTo":%s}""".formatted(UUID.randomUUID(), item(phone, 1, false), SHIP_TO)),
                 "preorderId");
@@ -604,15 +641,15 @@ class CartOrderApiTest {
         if (stock >= 0) {
             fixtures.stock(option, stock, 0, 0);
         }
-        catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "블랙 / 256GB", "SKU-" + option, PRICE,
-                "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(true, WARRANTY), null));
+        catalog.put(option, new CatalogOption(option, product.productId(), "아이폰 17", "A3104", "블랙 / 256GB", "SKU-" + option, PRICE,
+                "ACTIVE", "IN_STOCK", "ACTIVE", true, true, new CatalogOption.Warranty(true, WARRANTY), "https://img/black-0.jpg", null));
         return option;
     }
 
     private static CatalogOption copy(CatalogOption o, String productStatus, String optionStatus, boolean visible, boolean warrantyOffered) {
-        return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.optionTitle(), o.sku(), o.price(), optionStatus,
+        return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.modelName(), o.optionTitle(), o.sku(), o.price(), optionStatus,
                 o.saleMode(), productStatus, visible, true,
-                new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), o.imageUrl());
+                new CatalogOption.Warranty(warrantyOffered, warrantyOffered ? WARRANTY : BigDecimal.ZERO), o.imageUrl(), o.listPrice());
     }
 
     private static void expectBlockedBy(ResultActions actions, String orderId) throws Exception {
@@ -628,8 +665,8 @@ class CartOrderApiTest {
     }
 
     private static CatalogOption copyPrice(CatalogOption o, BigDecimal price) {
-        return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.optionTitle(), o.sku(), price, o.optionStatus(),
-                o.saleMode(), o.productStatus(), o.visible(), o.registrationCompleted(), o.warranty(), o.imageUrl());
+        return new CatalogOption(o.optionId(), o.productId(), o.productTitle(), o.modelName(), o.optionTitle(), o.sku(), price, o.optionStatus(),
+                o.saleMode(), o.productStatus(), o.visible(), o.registrationCompleted(), o.warranty(), o.imageUrl(), o.listPrice());
     }
 
     /** 그 모양의 문장이 실행 중일 때까지(최대 10초) — 같은 계정의 연결이 보이는 PROCESSLIST 로. 잠금이 없으면 바로 끝나는 문장만 쓴다. */

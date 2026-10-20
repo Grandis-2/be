@@ -4,8 +4,8 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 
 /**
- * JVM 에 하나뿐인 MinIO — presigned PUT 의 서명을 **검사하는** S3 호환 서버. Floci 는 서명을 보지 않아(실측: 서명을 바꾼 PUT 도 200)
- * "다른 크기 · 형식이면 거절" 을 잴 수 없다. 테스트 컨텍스트가 닫혀도 멈추지 않는다.
+ * JVM 에 하나뿐인 MinIO — 사진 업로드가 실제로 올린 객체(형식 · 내용)를 보는 S3 호환 서버. 서명도 검사한다(Floci 는 서명을 보지 않는다 —
+ * 실측: 서명을 바꾼 PUT 도 200). 테스트 컨텍스트가 닫혀도 멈추지 않는다.
  * 이미지는 bitnamilegacy 다 — minio/minio 는 Docker Hub 에서 받을 수 없다(실측: pull access denied).
  */
 public final class MinioContainer {

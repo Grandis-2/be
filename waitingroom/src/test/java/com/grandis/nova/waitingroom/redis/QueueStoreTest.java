@@ -2,10 +2,12 @@ package com.grandis.nova.waitingroom.redis;
 
 import com.grandis.nova.waitingroom.domain.queue.AdmissionTicket;
 import com.grandis.nova.waitingroom.domain.queue.GraceRetention;
+import com.grandis.nova.waitingroom.domain.queue.LeaveGrace;
 import com.grandis.nova.waitingroom.domain.queue.QueueEntry;
 import com.grandis.nova.waitingroom.domain.queue.QueueState;
 import com.grandis.nova.waitingroom.redis.QueueStore.QueueStatus;
 import com.grandis.nova.waitingroom.support.RedisContainer;
+import com.grandis.nova.waitingroom.support.TestJwts;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -38,17 +40,17 @@ class QueueStoreTest {
     void setUp() {
         redis = RedisContainer.fresh();
         LuaScripts scripts = new LuaScripts(redis);
-        queue = new QueueStore(scripts);
+        queue = new QueueStore(scripts, AdmissionTicket.of(TestJwts.TOKEN_SECRET, List.of(), null));
         control = new ControlStore(scripts, redis);
         now = Instant.now();
     }
 
     private QueueEntry enqueue(String customer) {
-        return queue.enqueue(PRODUCT, customer, QueueStore.UNLIMITED, now).block(WAIT).entry();
+        return queue.enqueue(PRODUCT, customer, QueueStore.UNLIMITED, now, LeaveGrace.MIN).block(WAIT).entry();
     }
 
     private QueueStatus status(String customer) {
-        return queue.status(PRODUCT, customer, now).block(WAIT);
+        return queue.status(PRODUCT, customer, now, LeaveGrace.MIN).block(WAIT);
     }
 
     private void admit(long count) {
@@ -74,7 +76,7 @@ class QueueStoreTest {
         @Test
         void 같은_고객이_동시에_여러_번_서도_한_자리만_잡는다() {
             List<QueueEntry> entries = Flux.range(0, 32)
-                    .flatMap(i -> queue.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, now).map(QueueStatus::entry), 32)
+                    .flatMap(i -> queue.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, now, LeaveGrace.MIN).map(QueueStatus::entry), 32)
                     .collectList().block(WAIT);
 
             assertThat(redis.opsForZSet().size("wr:queue:{" + PRODUCT + "}").block(WAIT)).isEqualTo(1);
@@ -96,17 +98,29 @@ class QueueStoreTest {
 
         @Test
         void 상한을_정하면_기다리는_사람만_세어_넘치면_거절하고_이미_선_사람은_그대로다() {
-            assertThat(queue.enqueue(PRODUCT, "a", 1, now).block(WAIT).entry().accepted()).isTrue();
-            assertThat(queue.enqueue(PRODUCT, "b", 1, now).block(WAIT).entry().accepted()).isFalse();
-            assertThat(queue.enqueue(PRODUCT, "a", 1, now).block(WAIT).entry().alreadyQueued()).isTrue();
+            assertThat(queue.enqueue(PRODUCT, "a", 1, now, LeaveGrace.MIN).block(WAIT).entry().accepted()).isTrue();
+            assertThat(queue.enqueue(PRODUCT, "b", 1, now, LeaveGrace.MIN).block(WAIT).entry().accepted()).isFalse();
+            assertThat(queue.enqueue(PRODUCT, "a", 1, now, LeaveGrace.MIN).block(WAIT).entry().alreadyQueued()).isTrue();
 
             admit(1);
-            assertThat(queue.enqueue(PRODUCT, "b", 1, now).block(WAIT).entry().accepted()).as("입장한 사람은 세지 않는다").isTrue();
+            assertThat(queue.enqueue(PRODUCT, "b", 1, now, LeaveGrace.MIN).block(WAIT).entry().accepted()).as("입장한 사람은 세지 않는다").isTrue();
         }
     }
 
     @Nested
     class 조회 {
+
+        @Test
+        void 진입과_조회는_받은_이탈_유예만큼_생존_신호를_쓴다() {
+            String alive = "wr:alive:{" + PRODUCT + "}";
+
+            queue.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, now, Duration.ofSeconds(600)).block(WAIT);
+            assertThat(redis.opsForZSet().score(alive, "a").block(WAIT)).isEqualTo(now.getEpochSecond() + 600.0);
+
+            queue.status(PRODUCT, "a", now, LeaveGrace.MIN).block(WAIT);
+            assertThat(redis.opsForZSet().score(alive, "a").block(WAIT)).as("바꾼 값은 다음 조회부터")
+                    .isEqualTo(now.getEpochSecond() + 250.0);
+        }
 
         @Test
         void 줄에_없으면_맨_앞과_구분해_NOT_QUEUED_다() {
@@ -133,7 +147,7 @@ class QueueStoreTest {
 
             QueueStatus admitted = status("a");
             Instant later = now.plusSeconds(45);
-            QueueStatus again = queue.status(PRODUCT, "a", later).block(WAIT);
+            QueueStatus again = queue.status(PRODUCT, "a", later, LeaveGrace.MIN).block(WAIT);
 
             assertThat(admitted.entry().state()).isEqualTo(QueueState.ADMITTED);
             assertThat(admitted.admittedAt()).isEqualTo(Instant.ofEpochSecond(now.getEpochSecond()));
@@ -148,7 +162,7 @@ class QueueStoreTest {
             admit(1);
             QueueStatus admitted = status("a");
 
-            QueueStatus again = queue.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, now.plusSeconds(30)).block(WAIT);
+            QueueStatus again = queue.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, now.plusSeconds(30), LeaveGrace.MIN).block(WAIT);
 
             assertThat(again.entry().state()).isEqualTo(QueueState.ADMITTED);
             assertThat(again.admittedAt()).isEqualTo(admitted.admittedAt());
@@ -160,7 +174,7 @@ class QueueStoreTest {
             enqueue("a");
             admit(1);
 
-            QueueStatus again = queue.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, now).block(WAIT);
+            QueueStatus again = queue.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, now, LeaveGrace.MIN).block(WAIT);
 
             assertThat(again.entry().state()).isEqualTo(QueueState.ADMITTED);
             assertThat(status("a").admittedAt()).isEqualTo(again.admittedAt());
@@ -171,11 +185,10 @@ class QueueStoreTest {
             enqueue("a");
             admit(1);
             Instant admittedAt = status("a").admittedAt();
-            Instant expiresAt = Instant.ofEpochSecond(admittedAt.getEpochSecond() / AdmissionTicket.WINDOW_SEC
-                    * AdmissionTicket.WINDOW_SEC + AdmissionTicket.TTL_SEC);
+            Instant expiresAt = admittedAt.plus(AdmissionTicket.DEFAULT_TTL);
 
-            assertThat(queue.status(PRODUCT, "a", expiresAt.minusSeconds(1)).block(WAIT).admittedAt()).isEqualTo(admittedAt);
-            assertThat(queue.status(PRODUCT, "a", expiresAt).block(WAIT).entry().state()).as("입장권과 같은 식으로 만료")
+            assertThat(queue.status(PRODUCT, "a", expiresAt.minusSeconds(1), LeaveGrace.MIN).block(WAIT).admittedAt()).isEqualTo(admittedAt);
+            assertThat(queue.status(PRODUCT, "a", expiresAt, LeaveGrace.MIN).block(WAIT).entry().state()).as("입장권과 같은 식으로 만료")
                     .isEqualTo(QueueState.NOT_QUEUED);
         }
 
@@ -186,16 +199,16 @@ class QueueStoreTest {
             enqueue("c");
             admit(2);
             long later = now.getEpochSecond() + 1_000;
-            queue.status(PRODUCT, "c", Instant.ofEpochSecond(later)).block(WAIT);
+            queue.status(PRODUCT, "c", Instant.ofEpochSecond(later), LeaveGrace.MIN).block(WAIT);
             control.sweep(PRODUCT, 100, later, 3_000, 100, "0", true, 1).block(WAIT);
 
-            QueueStatus byStatus = queue.status(PRODUCT, "a", Instant.ofEpochSecond(later)).block(WAIT);
-            QueueStatus byEnqueue = queue.enqueue(PRODUCT, "b", QueueStore.UNLIMITED, Instant.ofEpochSecond(later)).block(WAIT);
+            QueueStatus byStatus = queue.status(PRODUCT, "a", Instant.ofEpochSecond(later), LeaveGrace.MIN).block(WAIT);
+            QueueStatus byEnqueue = queue.enqueue(PRODUCT, "b", QueueStore.UNLIMITED, Instant.ofEpochSecond(later), LeaveGrace.MIN).block(WAIT);
 
             assertThat(byStatus.entry().state()).isEqualTo(QueueState.ADMITTED);
             assertThat(byStatus.admittedAt()).isEqualTo(Instant.ofEpochSecond(later));
             assertThat(byEnqueue.entry().state()).isEqualTo(QueueState.ADMITTED);
-            assertThat(queue.status(PRODUCT, "c", Instant.ofEpochSecond(later)).block(WAIT).entry().rank()).isZero();
+            assertThat(queue.status(PRODUCT, "c", Instant.ofEpochSecond(later), LeaveGrace.MIN).block(WAIT).entry().rank()).isZero();
         }
 
         @Test
@@ -204,15 +217,29 @@ class QueueStoreTest {
             enqueue("b");
             admit(1);
             long later = now.getEpochSecond() + 1_000;
-            queue.status(PRODUCT, "b", Instant.ofEpochSecond(later)).block(WAIT);
+            queue.status(PRODUCT, "b", Instant.ofEpochSecond(later), LeaveGrace.MIN).block(WAIT);
             control.sweep(PRODUCT, 100, later, 3_000, 100, "0", true, 1).block(WAIT);
-            Instant expired = Instant.ofEpochSecond(later + GraceRetention.SECONDS + 1);
+            Instant expired = Instant.ofEpochSecond(later + GraceRetention.seconds(AdmissionTicket.DEFAULT_TTL.toSeconds()) + 1);
 
-            assertThat(queue.status(PRODUCT, "a", expired).block(WAIT).entry().state()).isEqualTo(QueueState.NOT_QUEUED);
-            QueueEntry back = queue.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, expired).block(WAIT).entry();
+            assertThat(queue.status(PRODUCT, "a", expired, LeaveGrace.MIN).block(WAIT).entry().state()).isEqualTo(QueueState.NOT_QUEUED);
+            QueueEntry back = queue.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, expired, LeaveGrace.MIN).block(WAIT).entry();
             assertThat(back.state()).isEqualTo(QueueState.WAITING);
             assertThat(back.rank()).isEqualTo(1);
             assertThat(redis.opsForHash().get("wr:grace:{" + PRODUCT + "}", "a").block(WAIT)).as("낡은 기록은 지웠다").isNull();
+        }
+
+        @Test
+        void 입장권_수명을_바꾸면_입장_기록도_그_수명이_지나면_끝난다() {
+            QueueStore shortLived = new QueueStore(new LuaScripts(redis),
+                    AdmissionTicket.of(TestJwts.TOKEN_SECRET, List.of(), null, Duration.ofSeconds(60)));
+            shortLived.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, now, LeaveGrace.MIN).block(WAIT);
+            admit(1);
+            Instant admittedAt = shortLived.status(PRODUCT, "a", now, LeaveGrace.MIN).block(WAIT).admittedAt();
+
+            assertThat(shortLived.status(PRODUCT, "a", admittedAt.plusSeconds(59), LeaveGrace.MIN).block(WAIT).admittedAt())
+                    .isEqualTo(admittedAt);
+            assertThat(shortLived.status(PRODUCT, "a", admittedAt.plusSeconds(60), LeaveGrace.MIN).block(WAIT).entry().state())
+                    .isEqualTo(QueueState.NOT_QUEUED);
         }
 
         @Test
@@ -221,10 +248,10 @@ class QueueStoreTest {
             enqueue("b");
             admit(1);
             status("a");
-            Instant expired = now.plusSeconds(AdmissionTicket.TTL_SEC);
+            Instant expired = now.plus(AdmissionTicket.DEFAULT_TTL);
 
-            assertThat(queue.status(PRODUCT, "a", expired).block(WAIT).entry().state()).isEqualTo(QueueState.NOT_QUEUED);
-            QueueEntry back = queue.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, expired).block(WAIT).entry();
+            assertThat(queue.status(PRODUCT, "a", expired, LeaveGrace.MIN).block(WAIT).entry().state()).isEqualTo(QueueState.NOT_QUEUED);
+            QueueEntry back = queue.enqueue(PRODUCT, "a", QueueStore.UNLIMITED, expired, LeaveGrace.MIN).block(WAIT).entry();
             assertThat(back.state()).isEqualTo(QueueState.WAITING);
             assertThat(back.rank()).isEqualTo(1);
         }

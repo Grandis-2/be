@@ -11,6 +11,7 @@ import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.SynchronousSink;
+import reactor.util.retry.Retry;
 
 import java.text.ParseException;
 import java.time.Clock;
@@ -23,7 +24,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 /**
- * member 의 JWKS 를 기동 때와 주기마다 뒤에서 받아 둔다. 요청은 받아 둔 키로만 답하고 받기를 기다리지 않는다 —
+ * member 의 JWKS 를 기동 때(받을 때까지)와 주기마다 뒤에서 받아 둔다. 요청은 받아 둔 키로만 답하고 받기를 기다리지 않는다 —
  * 모르는 kid 는 바로 401 이고 갱신은 뒤에서 한다. 갱신은 {@link #MIN_INTERVAL} 에 한 번까지라 위조 kid 로 member 를 두드리지 못한다.
  */
 final class JwkSetCache implements Function<SignedJWT, Flux<JWK>>, SmartLifecycle {
@@ -35,6 +36,9 @@ final class JwkSetCache implements Function<SignedJWT, Flux<JWK>>, SmartLifecycl
 
     /** 갱신 시도 사이 최소 간격. 실패한 시도도 센다. */
     static final Duration MIN_INTERVAL = Duration.ofSeconds(10);
+
+    /** 기동 뒤 처음 받을 때까지 다시 받는 간격의 시작. 두 배씩 늘려 MIN_INTERVAL 까지 — member 가 함께 뜨는 수십 초를 넘긴다. */
+    static final Duration STARTUP_RETRY_MIN = Duration.ofSeconds(1);
 
     static final Duration TIMEOUT = Duration.ofSeconds(3);
 
@@ -92,6 +96,8 @@ final class JwkSetCache implements Function<SignedJWT, Flux<JWK>>, SmartLifecycl
     /** 한 번 받는다. 실패는 failed 가 기록하고 오류로 끝난다. */
     Mono<JWKSet> refresh() {
         return fetch.timeout(TIMEOUT)
+                // 본문 없는 응답은 값 없이 끝나 재시도 · 실패 기록을 건너뛴다 — 실패로 본다
+                .switchIfEmpty(Mono.error(() -> new IllegalStateException("JWKS 응답 본문이 비었다")))
                 .handle(this::parse)
                 .doOnNext(this::stored)
                 .doOnError(this::failed);
@@ -99,12 +105,27 @@ final class JwkSetCache implements Function<SignedJWT, Flux<JWK>>, SmartLifecycl
 
     @Override
     public void start() {
-        periodic = Flux.interval(Duration.ZERO, REFRESH_INTERVAL)
-                .concatMap(tick -> {
-                    lastAttempt.set(clock.instant());
-                    return refresh().onErrorResume(e -> Mono.empty());
-                })
+        periodic = firstLoad()
+                .thenMany(Flux.interval(REFRESH_INTERVAL))
+                .concatMap(tick -> attempt().onErrorResume(e -> Mono.empty()))
                 .subscribe();
+    }
+
+    /**
+     * 한 번 받을 때까지 다시 받는다. 못 받은 태스크는 readiness 가 내려가 요청이 오지 않으므로,
+     * 요청 경로의 갱신을 기다리면 다음 주기까지 준비되지 못하고 헬스 체크에 내려간다.
+     */
+    private Mono<Void> firstLoad() {
+        return Mono.defer(() -> loadedOnce() ? Mono.<JWKSet>empty() : attempt())
+                .retryWhen(Retry.backoff(Long.MAX_VALUE, STARTUP_RETRY_MIN).maxBackoff(MIN_INTERVAL))
+                .then();
+    }
+
+    private Mono<JWKSet> attempt() {
+        return Mono.defer(() -> {
+            lastAttempt.set(clock.instant());
+            return refresh();
+        });
     }
 
     @Override

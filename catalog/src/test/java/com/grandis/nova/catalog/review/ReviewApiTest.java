@@ -285,7 +285,7 @@ class ReviewApiTest {
     }
 
     @Test
-    @DisplayName("상품 리뷰는 비로그인도 본다 — 최신순 · 페이징, 공개 목록에는 주문상품 id 가 없다. 보이지 않는 상품은 상세처럼 404")
+    @DisplayName("상품 리뷰는 비로그인도 본다 — 최신순 · 페이징, 공개 목록에는 주문상품 id 가 없다. 보이지 않는 상품(준비 전 사전예약 포함)은 상세처럼 404")
     void productReviewsArePublicNewestFirst() throws Exception {
         write(customerId, deliveredItem(productId), 4, "첫째").andExpect(status().isCreated());
         write(customerId, deliveredItem(productId), 5, "둘째").andExpect(status().isCreated());
@@ -306,6 +306,11 @@ class ReviewApiTest {
         fixtures.option(notReady, "ACTIVE", new BigDecimal("1000"));
         mockMvc.perform(get("/api/v1/products/{id}/reviews", notReady)).andExpect(status().isNotFound());
         mockMvc.perform(get("/api/v1/products/{id}/reviews", UUID.randomUUID())).andExpect(status().isNotFound());
+        // 사전예약은 preorder 회차가 있어야 준비다 — 회차 전 404, 회차가 생기면 200(준비는 트랜잭션 밖에서 preorder 에 묻는다)
+        UUID preorder = fixtures.product("PREORDER", "ACTIVE");
+        mockMvc.perform(get("/api/v1/products/{id}/reviews", preorder)).andExpect(status().isNotFound());
+        fixtures.campaign(preorder, java.time.Instant.now().plus(Duration.ofDays(1)), java.time.Instant.now().plus(Duration.ofDays(2)));
+        mockMvc.perform(get("/api/v1/products/{id}/reviews", preorder)).andExpect(status().isOk());
     }
 
     @Test
@@ -469,6 +474,20 @@ class ReviewApiTest {
     private ResultActions revise(UUID customer, UUID reviewId, String body) throws Exception {
         return mockMvc.perform(patch("/api/v1/reviews/{id}", reviewId).contentType(MediaType.APPLICATION_JSON).content(body)
                 .with(AccessTokens.customer(customer)));
+    }
+
+    @Test
+    @DisplayName("리뷰 목록 셋 다 쪽은 앞 10,000개 안에서 시작 — page × size 가 10,000 이상이면 400 VALIDATION_FAILED(page)")
+    void capsListDepth() throws Exception {
+        mockMvc.perform(get("/api/v1/reviews").param("size", "100").param("page", "99")).andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/reviews/mine").param("size", "100").param("page", "99").with(AccessTokens.customer(nextId())))
+                .andExpect(status().isOk());
+
+        expectValidation(mockMvc.perform(get("/api/v1/reviews").param("size", "100").param("page", "100")), "page");
+        expectValidation(mockMvc.perform(get("/api/v1/reviews/mine").param("size", "100").param("page", "100")
+                .with(AccessTokens.customer(nextId()))), "page");
+        expectValidation(mockMvc.perform(get("/api/v1/products/{id}/reviews", UUID.randomUUID()).param("size", "100").param("page", "100")),
+                "page");
     }
 
     private static java.util.List<String> bodies(JsonNode page) {

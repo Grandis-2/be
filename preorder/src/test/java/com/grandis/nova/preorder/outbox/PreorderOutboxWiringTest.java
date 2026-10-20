@@ -7,10 +7,10 @@ import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.campaign.application.CampaignChange;
 import com.grandis.nova.preorder.campaign.application.PreorderCampaignChanged;
 import com.grandis.nova.preorder.cancel.application.PreorderCancelRequested;
-import com.grandis.nova.preorder.event.CancelJobReady;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
+import com.grandis.nova.preorder.syncjob.CancelJobReady;
 import com.grandis.nova.preorder.syncjob.RegisterJobReady;
 import com.grandis.nova.preorder.syncjob.SyncActor;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -184,16 +184,25 @@ class PreorderOutboxWiringTest {
     /** 작업 종류(jobType)는 record 칸이 아니라 이벤트가 정한 고정값이다. */
     @Test
     void 취소_작업은_preorder_cancel_로_작업_종류_CANCEL_로_보낸다() {
-        String eventId = append(new CancelJobReady(aggregateId, "9f1c2d3e", REQUEST));
+        String eventId = append(new CancelJobReady(aggregateId, "9f1c2d3e", REQUEST, SyncActor.SYSTEM, 1));
 
         OutboundMessage message = sentFor(eventId);
 
         assertThat(message.destination()).isEqualTo("preorder-cancel");
         assertThat(jsonMapper.readTree(message.body()).get("payload")).isEqualTo(json(
                 "{\"syncJobId\":\"" + aggregateId + "\",\"preorderId\":\"9f1c2d3e\",\"request\":" + REQUEST
-                        + ",\"jobType\":\"CANCEL\"}"));
+                        + ",\"actor\":\"SYSTEM\",\"run\":1,\"jobType\":\"CANCEL\"}"));
         assertThat(message.attributes())
                 .isEqualTo(Map.of("attempt", "1", "generation", "1", "run", "1", "actor", "SYSTEM"));
+    }
+
+    /** 재처리한 취소는 run 을 올려 보낸다 — 결과가 지난 실행의 것으로 버려지지 않게 worker 가 그대로 돌려준다. */
+    @Test
+    void 재처리한_취소_작업은_실행_회차와_주체를_속성으로_싣는다() {
+        String eventId = append(new CancelJobReady(aggregateId, "9f1c2d3e", REQUEST, SyncActor.ADMIN, 2));
+
+        assertThat(sentFor(eventId).attributes())
+                .isEqualTo(Map.of("attempt", "1", "generation", "1", "run", "2", "actor", "ADMIN"));
     }
 
     /** 대기열은 payload 의 일정을 그대로 믿는다 — 시각 형식도 계약이다. */
@@ -212,13 +221,49 @@ class PreorderOutboxWiringTest {
                         + "\"changedAt\":\"2026-10-02T02:03:04.123456Z\",\"change\":\"RESCHEDULED\"}"));
     }
 
-    /** 커밋 직후 발행을 놓친 행(오래된 미발행)을 릴레이가 종류의 목적지로 보낸다. 종류 넷 모두. */
+    /** member 는 원장을 읽지 못해 payload 를 그대로 저장한다 — 문구와 이동할 곳까지 싣고 aggregate 는 봉투로만 보낸다. */
+    @Test
+    void 알림은_notification_으로_aggregate_없이_문구와_이동할_곳을_싣는다() {
+        String eventId = append(NotificationRequested.preorderRegistered(aggregateId, "9f1c2d3e", CUSTOMER_ID));
+
+        OutboundMessage message = sentFor(eventId);
+        JsonNode envelope = jsonMapper.readTree(message.body());
+
+        assertThat(message.destination()).isEqualTo("notification");
+        assertThat(message.attributes()).isEmpty();
+        assertThat(envelope.get("aggregateType").asString()).isEqualTo("PREORDER");
+        assertThat(envelope.get("aggregateId").asString()).isEqualTo(aggregateId.toString());
+        assertThat(envelope.get("payload")).isEqualTo(json(
+                "{\"recipientIds\":[\"" + CUSTOMER_ID + "\"],\"kind\":\"PREORDER_REGISTERED\","
+                        + "\"title\":\"사전예약 등록 완료\",\"body\":\"사전예약 등록이 완료됐어요. 24시간 안에 결제해 주세요.\","
+                        + "\"target\":{\"type\":\"PREORDER\",\"id\":\"9f1c2d3e\"}}"));
+    }
+
+    @Test
+    void 오픈_알림은_신청자_목록과_상품으로_가는_곳을_싣고_원인은_회차다() {
+        UUID other = UUID.fromString("00000000-0000-7000-8000-000000001025");
+        String eventId = append(NotificationRequested.preorderOpened(aggregateId, "아이폰 Duo", List.of(CUSTOMER_ID, other)));
+
+        OutboundMessage message = sentFor(eventId);
+        JsonNode envelope = jsonMapper.readTree(message.body());
+
+        assertThat(message.destination()).isEqualTo("notification");
+        assertThat(envelope.get("aggregateType").asString()).isEqualTo("PREORDER_CAMPAIGN");
+        assertThat(envelope.get("aggregateId").asString()).isEqualTo(aggregateId.toString());
+        assertThat(envelope.get("payload")).isEqualTo(json(
+                "{\"recipientIds\":[\"" + CUSTOMER_ID + "\",\"" + other + "\"],\"kind\":\"PREORDER_OPENED\","
+                        + "\"title\":\"사전예약 오픈\",\"body\":\"알림 신청하신 아이폰 Duo 사전예약이 시작됐어요.\","
+                        + "\"target\":{\"type\":\"PRODUCT\",\"id\":\"" + aggregateId + "\"}}"));
+    }
+
+    /** 커밋 직후 발행을 놓친 행(오래된 미발행)을 릴레이가 종류의 목적지로 보낸다. 종류마다 본다. */
     @ParameterizedTest
     @CsvSource({
             "REGISTER_JOB_READY, PREORDER_SYNC_JOB, preorder-register",
             "CANCEL_JOB_READY, PREORDER_SYNC_JOB, preorder-cancel",
             "PREORDER_CANCEL_REQUESTED, PREORDER, order-events",
-            "PREORDER_CAMPAIGN_CHANGED, PREORDER_CAMPAIGN, waitingroom-events"
+            "PREORDER_CAMPAIGN_CHANGED, PREORDER_CAMPAIGN, waitingroom-events",
+            "NOTIFICATION_REQUESTED, PREORDER, notification"
     })
     void 릴레이는_오래된_미발행_행을_종류의_목적지로_보낸다(String eventType, String aggregateType, String destination) {
         String eventId = ShopFixtures.unique();

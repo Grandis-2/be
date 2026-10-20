@@ -21,7 +21,7 @@ class OrderTest {
 
     @Test
     void newPreorderOrderAwaitsPaymentWithFirstSequenceAndNoDueDate() {
-        Order order = Order.place(new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, SHIP_TO,
+        Order order = Order.place(new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, null, SHIP_TO,
                 List.of(line(TestIds.id(10), 1, 1_250_000))), Instant.EPOCH);
 
         assertThat(order.id()).isNull();
@@ -33,18 +33,24 @@ class OrderTest {
     }
 
     @Test
-    void buyNowOrdersCannotBePlacedYet() {
-        OrderDraft buyNow = new OrderDraft(TestIds.id(1), OrderSource.BUY_NOW, null, null, SHIP_TO, List.of(line(TestIds.id(10), 1, 1000)));
+    void buyNowOrderHasOneOptionAndPaymentWindow() {
+        OrderDraft buyNow = new OrderDraft(TestIds.id(1), OrderSource.BUY_NOW, null, null, TestIds.id(50), SHIP_TO, List.of(line(TestIds.id(10), 2, 1000)));
 
-        assertThatThrownBy(() -> Order.place(buyNow, Instant.EPOCH))
+        Order order = Order.place(buyNow, Instant.EPOCH);
+
+        assertThat(order.status()).isEqualTo(OrderStatus.AWAITING_PAYMENT);
+        assertThat(order.paymentDueAt()).isEqualTo(Instant.EPOCH.plus(Order.PAYMENT_WINDOW));
+        OrderDraft twoOptions = new OrderDraft(TestIds.id(1), OrderSource.BUY_NOW, null, null, TestIds.id(50), SHIP_TO,
+                List.of(line(TestIds.id(10), 1, 1000), line(TestIds.id(11), 1, 1000)));
+        assertThatThrownBy(() -> Order.place(twoOptions, Instant.EPOCH))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("BUY_NOW");
+                .hasMessageContaining("옵션 하나");
     }
 
     @Test
     void preorderOrderHasExactlyOneUnitOfOneOption() {
-        OrderDraft twoUnits = new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, SHIP_TO, List.of(line(TestIds.id(10), 2, 1000)));
-        OrderDraft twoOptions = new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, SHIP_TO,
+        OrderDraft twoUnits = new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, null, SHIP_TO, List.of(line(TestIds.id(10), 2, 1000)));
+        OrderDraft twoOptions = new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, null, SHIP_TO,
                 List.of(line(TestIds.id(10), 1, 1000), line(TestIds.id(11), 1, 1000)));
 
         assertThatThrownBy(() -> Order.place(twoUnits, Instant.EPOCH)).isInstanceOf(IllegalArgumentException.class);
@@ -86,14 +92,14 @@ class OrderTest {
     // 읽은 사전예약 주문은 예약 UUID 가 비어도 받는다(이 칸을 채우지 않는 버전과 같이 돈다). 있으면 사전예약 주문의 36자여야 한다.
     @Test
     void constructorAcceptsPreorderOrderWithoutPreorderTokenButChecksPresentOne() {
-        assertThat(new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), null, OrderStatus.AWAITING_PAYMENT, null,
-                Money.won(1000), null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH).preorderToken()).isNull();
-        assertThatThrownBy(() -> new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), "0b8f6a3e",
-                OrderStatus.AWAITING_PAYMENT, null, Money.won(1000), null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH))
+        assertThat(new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), null, null, OrderStatus.AWAITING_PAYMENT, null,
+                Money.won(1000), null, null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH).preorderToken()).isNull();
+        assertThatThrownBy(() -> new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), "0b8f6a3e", null,
+                OrderStatus.AWAITING_PAYMENT, null, Money.won(1000), null, null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("36");
-        assertThatThrownBy(() -> new Order(TestIds.id(1), TestIds.id(1), OrderSource.CART, null, PREORDER_UUID,
-                OrderStatus.AWAITING_PAYMENT, null, Money.won(1000), Instant.EPOCH, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH))
+        assertThatThrownBy(() -> new Order(TestIds.id(1), TestIds.id(1), OrderSource.CART, null, PREORDER_UUID, null,
+                OrderStatus.AWAITING_PAYMENT, null, Money.won(1000), Instant.EPOCH, null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("preorderToken");
     }
@@ -107,8 +113,8 @@ class OrderTest {
     // 배송지에는 개인정보가 들어 있다. 로그 · 예외 메시지로 새지 않게 식별 · 상태만 싣는다.
     @Test
     void toStringCarriesNoPersonalData() {
-        Order order = new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, OrderStatus.AWAITING_PAYMENT, null,
-                Money.won(1000), null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH);
+        Order order = new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, null, OrderStatus.AWAITING_PAYMENT, null,
+                Money.won(1000), null, null, null, null, SHIP_TO, 1, Instant.EPOCH, Instant.EPOCH);
 
         assertThat(order.toString())
                 .contains("status=AWAITING_PAYMENT")
@@ -131,31 +137,32 @@ class OrderTest {
     void onlyAuthorizingOrderCarriesAttempt() {
         assertThatThrownBy(() -> order(OrderSource.PREORDER, TestIds.id(7), OrderStatus.AUTHORIZING, null, null, 2))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID,
-                OrderStatus.AWAITING_PAYMENT, "attempt-0001", Money.won(1000), null, null, null, SHIP_TO, 1,
+        assertThatThrownBy(() -> new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, null,
+                OrderStatus.AWAITING_PAYMENT, "attempt-0001", Money.won(1000), null, null, null, null, SHIP_TO, 1,
                 Instant.EPOCH, Instant.EPOCH)).isInstanceOf(IllegalArgumentException.class);
-        assertThat(new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, OrderStatus.AUTHORIZING,
-                "attempt-0001", Money.won(1000), null, null, null, SHIP_TO, 2, Instant.EPOCH, Instant.EPOCH)
+        assertThat(new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, null, OrderStatus.AUTHORIZING,
+                "attempt-0001", Money.won(1000), null, null, null, null, SHIP_TO, 2, Instant.EPOCH, Instant.EPOCH)
                 .authorizingProviderOrderId()).isEqualTo("attempt-0001");
     }
 
     private static Order order(OrderSource source, UUID preorderId, OrderStatus status, Instant paymentDueAt,
                                Instant stockReleasedAt, long eventSequence) {
         String preorderToken = source == OrderSource.PREORDER ? PREORDER_UUID : null;
-        return new Order(TestIds.id(1), TestIds.id(1), source, preorderId, preorderToken, status, null, Money.won(1000), paymentDueAt, stockReleasedAt, null,
-                SHIP_TO, eventSequence, Instant.EPOCH, Instant.EPOCH);
+        UUID idempotencyKey = source == OrderSource.BUY_NOW ? TestIds.id(50) : null;
+        return new Order(TestIds.id(1), TestIds.id(1), source, preorderId, preorderToken, idempotencyKey, status, null, Money.won(1000), paymentDueAt, stockReleasedAt, null,
+                null, SHIP_TO, eventSequence, Instant.EPOCH, Instant.EPOCH);
     }
 
     private static Order refundFailed(OrderStatus status) {
-        return new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, status, null,
-                Money.won(1000), null, null, Instant.EPOCH, SHIP_TO, 3, Instant.EPOCH, Instant.EPOCH);
+        return new Order(TestIds.id(1), TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, null, status, null,
+                Money.won(1000), null, null, Instant.EPOCH, null, SHIP_TO, 3, Instant.EPOCH, Instant.EPOCH);
     }
 
     @Test
     void cartOrderHasPaymentWindowAndManyLinesWithWarranty() {
         Instant now = Instant.parse("2026-10-10T06:00:00Z");
-        OrderDraft cart = new OrderDraft(TestIds.id(1), OrderSource.CART, null, null, SHIP_TO, List.of(
-                new OrderLine(TestIds.id(100), TestIds.id(10), new Quantity(2), Money.won(1_000), 1, Money.won(300), "상품", "옵션 1"),
+        OrderDraft cart = new OrderDraft(TestIds.id(1), OrderSource.CART, null, null, null, SHIP_TO, List.of(
+                new OrderLine(TestIds.id(100), TestIds.id(10), new Quantity(2), Money.won(1_000), 1, Money.won(300), "상품", null, "옵션 1", null),
                 line(TestIds.id(11), 3, 500)));
 
         Order order = Order.place(cart, now);
@@ -168,8 +175,8 @@ class OrderTest {
 
     @Test
     void preorderOrderCannotCarryWarranty() {
-        OrderDraft withWarranty = new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, SHIP_TO, List.of(
-                new OrderLine(TestIds.id(100), TestIds.id(10), Quantity.ONE, Money.won(1_000), 1, Money.won(300), "상품", "옵션")));
+        OrderDraft withWarranty = new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, null, SHIP_TO, List.of(
+                new OrderLine(TestIds.id(100), TestIds.id(10), Quantity.ONE, Money.won(1_000), 1, Money.won(300), "상품", null, "옵션", null)));
 
         assertThatThrownBy(() -> Order.place(withWarranty, Instant.EPOCH)).isInstanceOf(IllegalArgumentException.class);
     }
@@ -178,13 +185,13 @@ class OrderTest {
     @Test
     void cartOrderAcceptsPaymentStrictlyBeforeDue() {
         Instant now = Instant.parse("2026-10-10T06:00:00Z");
-        Order order = Order.place(new OrderDraft(TestIds.id(1), OrderSource.CART, null, null, SHIP_TO, List.of(line(TestIds.id(10), 1, 1000))),
+        Order order = Order.place(new OrderDraft(TestIds.id(1), OrderSource.CART, null, null, null, SHIP_TO, List.of(line(TestIds.id(10), 1, 1000))),
                 now);
         Instant due = now.plus(Order.PAYMENT_WINDOW);
 
         assertThat(order.acceptsPaymentAt(due.minusNanos(1))).isTrue();
         assertThat(order.acceptsPaymentAt(due)).isFalse();
-        assertThatThrownBy(() -> Order.place(new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, SHIP_TO,
+        assertThatThrownBy(() -> Order.place(new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, null, SHIP_TO,
                 List.of(line(TestIds.id(10), 1, 1000))), now).acceptsPaymentAt(now))
                 .isInstanceOf(IllegalStateException.class);
     }

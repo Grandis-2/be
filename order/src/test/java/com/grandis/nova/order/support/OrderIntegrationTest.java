@@ -39,6 +39,9 @@ import java.lang.annotation.Target;
         // 드로우 추첨 주기 작업도 시험이 직접 부른다(DrawCloser.closeDue) — 다른 시험의 마감 회차를 처리하지 않게
         "nova.draw.close-interval=1h",
         "nova.draw.stall-check-interval=1h",
+        // 재고 장부 대조 · 지표 갱신도 시험이 직접 부른다(StockReconciler.reconcile · StockGauges.refresh)
+        "nova.stock.reconcile.cron=-",
+        "nova.stock.gauge-refresh-interval=1h",
         // 관리 포트는 코드 기본값이 고정 포트라, 실제 포트로 띄우는 컨텍스트끼리 겹치지 않게 빈 포트로 둔다
         "management.server.port=0",
         "jwt.issuer=nova-test",
@@ -50,7 +53,9 @@ import java.lang.annotation.Target;
         "auth.revocation-check.fail-closed-paths[3]=/api/v1/orders/*/payment-attempts/**",
         "auth.revocation-check.fail-closed-paths[4]=POST /api/v1/orders/*/cancel",
         "auth.revocation-check.fail-closed-paths[5]=PATCH /api/v1/orders/*/shipping-address",
-        "auth.revocation-check.fail-closed-paths[6]=/api/v1/draws/*/entries/me/payment-attempts/**"
+        "auth.revocation-check.fail-closed-paths[6]=/api/v1/draws/*/entries/me/payment-attempts/**",
+        // 읽기 캐시는 끈다 — Redis 를 띄우지 않고, 시험 픽스처가 DB 를 JDBC 로 바로 넣어 캐시 세대를 안 올린다. 켠 동작은 DrawReadCacheApiTest 가 본다
+        "nova.read-cache.enabled=false"
 })
 @Import({MySqlContainerConfig.class, TestJwt.class})
 public @interface OrderIntegrationTest {

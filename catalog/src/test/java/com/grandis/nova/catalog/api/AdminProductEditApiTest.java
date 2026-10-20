@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
+import com.grandis.nova.catalog.support.OrderStocksTestConfig;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.common.UuidBinary;
 import java.time.Duration;
@@ -75,6 +76,27 @@ class AdminProductEditApiTest {
             expectValidation(edit(productId, "{ \"title\": \"" + "가".repeat(101) + "\" }"), "title");
             expectValidation(edit(productId, "{ \"warranty\": { \"offered\": false, \"surcharge\": 1000 } }"), "warranty.surcharge");
             edit(UUID.randomUUID(), "{ \"title\": \"x\" }").andExpect(status().isNotFound()).andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
+        }
+
+        @Test
+        @DisplayName("브랜드 · 모델명도 보낸 것만 바뀐다 — 모델명은 앞뒤 공백을 지운다. 목록 밖 브랜드 · 빈 모델명 · 41자는 그 칸의 400 이고 아무것도 바뀌지 않는다")
+        void brandAndModelNameEdit() throws Exception {
+            UUID productId = registerInStock();
+
+            JsonNode product = data(edit(productId, "{ \"brand\": \"SAMSUNG\" }").andExpect(status().isOk())).get("product");
+            assertThat(product.get("brand").asString()).isEqualTo("SAMSUNG");
+            assertThat(product.get("modelName").asString()).as("보내지 않은 모델명은 그대로").isEqualTo("A0001");
+
+            product = data(edit(productId, "{ \"modelName\": \"  A5390 \" }").andExpect(status().isOk())).get("product");
+            assertThat(product.get("modelName").asString()).isEqualTo("A5390");
+            assertThat(product.get("brand").asString()).as("보내지 않은 브랜드는 그대로").isEqualTo("SAMSUNG");
+
+            expectValidation(edit(productId, "{ \"brand\": \"Samsung\" }"), "brand");
+            expectValidation(edit(productId, "{ \"modelName\": \"   \" }"), "modelName");
+            expectValidation(edit(productId, "{ \"modelName\": \"\" }"), "modelName");
+            expectValidation(edit(productId, "{ \"modelName\": \"" + "A".repeat(41) + "\" }"), "modelName");
+            assertThat(jdbcTemplate.queryForMap("SELECT brand, model_name FROM products WHERE id = ?", UuidBinary.toBytes(productId)))
+                    .containsEntry("brand", "SAMSUNG").containsEntry("model_name", "A5390");
         }
 
         @Test
@@ -159,7 +181,7 @@ class AdminProductEditApiTest {
         @DisplayName("축 없는 상품은 옵션 표시명이 상품 제목이다 — 제목을 고치면 옵션 표시명도 따라간다(preorder 가 읽는 내부 옵션 조회도 같은 값)")
         void standaloneOptionFollowsProductTitle() throws Exception {
             UUID productId = registerRaw("""
-                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Solo Case", "visible": false, "basePrice": 9000,
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Solo Case", "brand": "APPLE", "modelName": "A0001", "visible": false, "basePrice": 9000,
                       "combinations": [ { "selections": {}, "stock": 7 } ] }
                     """.formatted(categoryId));
             edit(productId, "{ \"title\": \"Solo Case Pro\" }").andExpect(status().isOk());
@@ -306,13 +328,35 @@ class AdminProductEditApiTest {
                     .content("{ \"selections\": { \"Color\": \"화이트\", \"color\": \"퍼플\", \"storage\": \"256GB\" } }")), "selections");
         }
 
+        /** 축 키가 사전순이 아닌 상품이어야 두 경로의 차이가 보인다 — color · storage 순이면 사전순과 같아 반대 구현도 통과한다. */
+        @Test
+        @DisplayName("기본 SKU 는 등록 · 옵션 추가 모두 축을 넣은 순서로 값을 잇는다 — storage 를 먼저 넣으면 256GB-블랙(사전순의 블랙-256GB 가 아니다)")
+        void defaultSkuFollowsAxisOrderOnBothPaths() throws Exception {
+            UUID productId = registerRaw("""
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Order", "brand": "APPLE", "modelName": "A0001", "visible": false, "basePrice": 1000,
+                      "optionAxes": [
+                        { "key": "storage", "label": "용량", "values": [ { "value": "256GB" }, { "value": "512GB" } ] },
+                        { "key": "color", "label": "색상", "values": [ { "value": "블랙" } ] } ],
+                      "combinations": [
+                        { "selections": { "color": "블랙", "storage": "256GB" }, "stock": 1 },
+                        { "selections": { "color": "블랙", "storage": "512GB" }, "excluded": true } ],
+                      "images": { "gallery": [ { "color": "블랙", "items": [ { "url": "https://img/b.jpg" } ] } ] } }
+                    """.formatted(categoryId));
+            assertThat(skus(productId)).as("등록 경로").containsExactly("256GB-블랙");
+
+            JsonNode added = data(mockMvc.perform(admin(post(PATH + "/{id}/variants", productId))
+                    .content("{ \"selections\": { \"color\": \"블랙\", \"storage\": \"512GB\" } }")).andExpect(status().isCreated()));
+            assertThat(added.get("sku").asString()).as("옵션 추가 경로도 같은 순서").isEqualTo("512GB-블랙");
+            assertThat(added.get("title").asString()).as("표시명과 같은 순서다").isEqualTo("512GB / 블랙");
+        }
+
         @Test
         @DisplayName("값에서 만들어지는 칸이 상한을 넘으면 400 — 기본 SKU 80자, 값 문구를 고쳐 길어진 옵션 표시명 120자")
         void derivedLengthsAreBounded() throws Exception {
             String finish = "가".repeat(60);
             String size = "나".repeat(49);   // 60 + " / " + 49 + " / " + "256GB" = 120 — 상한 그대로
             UUID productId = registerRaw("""
-                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "UUID", "visible": false, "basePrice": 1000,
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "UUID", "brand": "APPLE", "modelName": "A0001", "visible": false, "basePrice": 1000,
                       "optionAxes": [
                         { "key": "finish", "label": "마감", "values": [ { "value": "%s" } ] },
                         { "key": "size", "label": "크기", "values": [ { "value": "%s" } ] },
@@ -351,7 +395,7 @@ class AdminProductEditApiTest {
                     .content("{ \"axisKey\": \"storage\", \"value\": \"%s\" }".formatted("ß".repeat(60)))), "value");
 
             UUID solo = registerRaw("""
-                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Solo", "visible": false, "basePrice": 9000,
+                    { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Solo", "brand": "APPLE", "modelName": "A0001", "visible": false, "basePrice": 9000,
                       "combinations": [ { "selections": {}, "stock": 1 } ] }
                     """.formatted(categoryId));
             expectValidation(edit(solo, "{ \"title\": \"%s\" }".formatted("\u0958".repeat(100))), "title");
@@ -674,7 +718,7 @@ class AdminProductEditApiTest {
         }
 
         @Test
-        @DisplayName("사전예약 상품을 고치면 수정마다 PREORDER_PRODUCT_CHANGED 하나(빈 payload · aggregateId 상품 id) — 같은 상태 · 같은 공개 여부 · 400 · 오픈 3분 전의 409 는 없고, 그때도 공개 전환은 보낸다")
+        @DisplayName("사전예약 상품을 고치면 수정마다 PREORDER_PRODUCT_CHANGED 하나(aggregateId 상품 id) — 같은 상태 · 같은 공개 여부 · 400 · 오픈 3분 전의 409 는 없고, 그때도 공개 전환은 보낸다")
         void preorderEditsNotifyPreorder() throws Exception {
             UUID productId = registerPreorder();
             assertThat(changedEvents(productId)).as("등록은 이 이벤트가 아니다").isEmpty();
@@ -683,7 +727,6 @@ class AdminProductEditApiTest {
             List<java.util.Map<String, Object>> events = changedEvents(productId);
             assertThat(events).hasSize(1);
             assertThat(events.get(0)).containsEntry("aggregate_type", "PRODUCT").containsEntry("aggregate_id", productId.toString());
-            assertThat(JSON.readTree((String) events.get(0).get("payload")).isEmpty()).as("payload 는 빈 객체 — 상품 id 는 봉투에만").isTrue();
 
             mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"color\", \"value\": \"레드\" }"))
                     .andExpect(status().isCreated());
@@ -711,26 +754,63 @@ class AdminProductEditApiTest {
             assertThat(changedEvents(productId)).hasSize(8);
 
             fixtures.campaign(productId, Instant.now().plus(Duration.ofMinutes(2)), Instant.now().plus(HOUR));
+            long versionBeforeConflict = listingVersionOf(productId);
             edit(productId, "{ \"title\": \"Nova 1 Max\" }").andExpect(status().isConflict());
             assertThat(changedEvents(productId)).hasSize(8);
+            // 오픈 3분 전이라 시작 판정에서 409 — 고치기 전에 거절되므로 번호도 오르지 않는다
+            assertThat(listingVersionOf(productId)).isEqualTo(versionBeforeConflict);
             visibility(productId, true).andExpect(status().isOk());
             assertThat(changedEvents(productId)).as("오픈 3분 전에도 공개 전환은 바로 알린다").hasSize(9);
         }
 
         @Test
-        @DisplayName("일반 상품 수정과 사전예약 회차 취소는 PREORDER_PRODUCT_CHANGED 를 적지 않는다 — 회차 취소는 자기 이벤트로 preorder 가 캐시를 비운다")
-        void inStockEditsAndCampaignCancelDoNotNotifyChange() throws Exception {
+        @DisplayName("PREORDER_PRODUCT_CHANGED 는 지금 상품명 · 판매 상태 · 공개 여부와 번호를 싣는다 — 번호는 셋이 실제로 바뀔 때만 오르고 등록은 1 이다")
+        void changedPayloadCarriesListingAndVersionBumpsOnlyOnListingChange() throws Exception {
+            UUID productId = registerPreorder();
+            assertThat(listingVersionOf(productId)).as("등록은 1").isEqualTo(1);
+
+            edit(productId, "{ \"title\": \"  Nova 1 Pro \" }").andExpect(status().isOk());
+            edit(productId, "{ \"title\": \"Nova 1 Pro\", \"description\": \"새 설명\" }").andExpect(status().isOk());
+            mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId)).content("{ \"axisKey\": \"color\", \"value\": \"레드\" }"))
+                    .andExpect(status().isCreated());
+            saleStatus(productId, "PAUSED").andExpect(status().isOk());
+            visibility(productId, false).andExpect(status().isOk());
+            saleStatus(productId, "ACTIVE").andExpect(status().isOk());
+
+            assertThat(changedPayloads(productId)).containsExactly(
+                    listing("Nova 1 Pro", "ACTIVE", true, 2),
+                    listing("Nova 1 Pro", "ACTIVE", true, 2),   // 같은 제목 · 설명만 — 번호 그대로
+                    listing("Nova 1 Pro", "ACTIVE", true, 2),   // 옵션 값 추가 — 번호 그대로
+                    listing("Nova 1 Pro", "PAUSED", true, 3),
+                    listing("Nova 1 Pro", "PAUSED", false, 4),
+                    listing("Nova 1 Pro", "ACTIVE", false, 5));
+            assertThat(listingVersionOf(productId)).isEqualTo(5);
+        }
+
+        @Test
+        @DisplayName("일반 상품 수정은 PREORDER_PRODUCT_CHANGED 를 적지 않는다. 회차 취소는 판매 상태가 바뀌면 PREORDER_CAMPAIGN_CANCELED 와 함께 적는다")
+        void inStockEditsDoNotNotifyAndCampaignCancelNotifiesStatus() throws Exception {
             UUID inStock = registerInStock();
             edit(inStock, "{ \"title\": \"Nova 1 Pro\" }").andExpect(status().isOk());
             saleStatus(inStock, "PAUSED").andExpect(status().isOk());
             visibility(inStock, false).andExpect(status().isOk());
             assertThat(changedEvents(inStock)).isEmpty();
+            assertThat(listingVersionOf(inStock)).as("일반 상품도 번호는 오른다(보내지 않을 뿐)").isEqualTo(4);
 
             UUID canceled = registerPreorder();
             fixtures.campaign(canceled, Instant.now().minus(HOUR), Instant.now().plus(HOUR));
             saleStatusBody(canceled, "{ \"status\": \"PAUSED\", \"reason\": \"공급 중단\" }").andExpect(status().isAccepted());
+            saleStatusBody(canceled, "{ \"status\": \"PAUSED\", \"reason\": \"공급 중단\" }").andExpect(status().isAccepted());
             assertThat(cancelEvents(canceled)).hasSize(1);
-            assertThat(changedEvents(canceled)).isEmpty();
+            assertThat(changedPayloads(canceled)).as("다시 보낸 취소는 아무것도 적지 않는다").containsExactly(listing("Nova 1", "PAUSED", true, 2));
+
+            UUID pausedBeforeOpen = registerPreorder();
+            saleStatus(pausedBeforeOpen, "PAUSED").andExpect(status().isOk());
+            fixtures.campaign(pausedBeforeOpen, Instant.now().minus(HOUR), Instant.now().plus(HOUR));
+            saleStatusBody(pausedBeforeOpen, "{ \"status\": \"PAUSED\", \"reason\": \"공급 중단\" }").andExpect(status().isAccepted());
+            assertThat(cancelEvents(pausedBeforeOpen)).hasSize(1);
+            assertThat(changedPayloads(pausedBeforeOpen)).as("이미 판매 중지였으면 취소로 바뀐 사본 값이 없다")
+                    .containsExactly(listing("Nova 1", "PAUSED", true, 2));
         }
 
         /** 공개 · 판매 중 · 재고 행이 있는(준비된) 일반 상품. 회원 목록에서 이 상품만 고르도록 고유 태그를 붙인다. */
@@ -768,6 +848,19 @@ class AdminProductEditApiTest {
                     """, UuidBinary.toBytes(productId));
         }
 
+        private List<JsonNode> changedPayloads(UUID productId) {
+            return changedEvents(productId).stream().map(event -> JSON.readTree((String) event.get("payload"))).toList();
+        }
+
+        private JsonNode listing(String title, String status, boolean visible, long listingVersion) {
+            return JSON.readTree("{ \"title\": \"%s\", \"status\": \"%s\", \"visible\": %s, \"listingVersion\": %d }"
+                    .formatted(title, status, visible, listingVersion));
+        }
+
+        private long listingVersionOf(UUID productId) {
+            return jdbcTemplate.queryForObject("SELECT listing_version FROM products WHERE id = ?", Long.class, UuidBinary.toBytes(productId));
+        }
+
         private List<java.util.Map<String, Object>> changedEvents(UUID productId) {
             return jdbcTemplate.queryForList("""
                     SELECT aggregate_type, BIN_TO_UUID(aggregate_id) AS aggregate_id, payload FROM catalog_outbox_events
@@ -802,6 +895,37 @@ class AdminProductEditApiTest {
                 .andExpect(status().isUnauthorized());
     }
 
+    @Test
+    @DisplayName("쓰기 흐름은 상품 행을 잠근 트랜잭션 안에서 order 재고를 묻지 않는다 — 응답의 남은 수량은 커밋 뒤에 채운다(상품 · 값 · 조합 · 옵션 상태 수정)")
+    void writesAskStockOnlyAfterCommit() throws Exception {
+        UUID productId = registerInStock();
+        UUID black256 = variantIdOf(productId, "블랙 / 256GB");
+        fixtures.inventory(black256, 7, 0, 0);
+        int before = OrderStocksTestConfig.CALLS_IN_TRANSACTION.get();
+
+        assertThat(quantity(data(edit(productId, "{ \"title\": \"Nova 1 Pro\" }").andExpect(status().isOk())).get("product"), black256)).isEqualTo(7);
+        assertThat(quantity(data(mockMvc.perform(admin(post(PATH + "/{id}/option-values", productId))
+                .content("{ \"axisKey\": \"color\", \"value\": \"블루\" }")).andExpect(status().isCreated())).get("product"), black256)).isEqualTo(7);
+        assertThat(quantity(data(mockMvc.perform(admin(patch(PATH + "/{id}/option-values/{v}", productId, valueIdOf(productId, "color", "화이트")))
+                .content("{ \"surcharge\": 1000 }")).andExpect(status().isOk())).get("product"), black256)).isEqualTo(7);
+        JsonNode added = data(mockMvc.perform(admin(post(PATH + "/{id}/variants", productId))
+                .content("{ \"selections\": { \"color\": \"블루\", \"storage\": \"256GB\" } }")).andExpect(status().isCreated()));
+        assertThat(added.get("availableQuantity").asInt()).as("재고 행이 없는 새 조합 — 커밋 뒤 order 답(빠짐 = 0)").isZero();
+        JsonNode paused = data(editVariant(productId, black256, "{ \"status\": \"PAUSED\" }").andExpect(status().isOk()));
+        assertThat(paused.get("availableQuantity").asInt()).isEqualTo(7);
+
+        assertThat(OrderStocksTestConfig.CALLS_IN_TRANSACTION.get()).as("트랜잭션 안의 재고 호출").isEqualTo(before);
+    }
+
+    private static int quantity(JsonNode product, UUID variantId) {
+        for (JsonNode variant : product.get("variants")) {
+            if (variant.get("variantId").asString().equals(variantId.toString())) {
+                return variant.get("availableQuantity").asInt();
+            }
+        }
+        throw new AssertionError("옵션이 없다: " + variantId);
+    }
+
     // ── 도우미 ─────────────────────────────────────────────────────────────
 
     /** 축 color(블랙 · 화이트) · storage(256GB +0 · 512GB +200000), 기본가 1,000,000 — 256GB 는 1,000,000, 512GB 는 1,200,000. 재고 각 3. */
@@ -828,7 +952,7 @@ class AdminProductEditApiTest {
     private UUID register(String saleMode, String extra) throws Exception {
         String body = """
                 {
-                  "categoryId": "%s", "saleMode": "%s", "title": "Nova 1", "description": "설명", "tags": "nova", "visible": true,
+                  "categoryId": "%s", "saleMode": "%s", "title": "Nova 1", "brand": "APPLE", "modelName": "A0001", "description": "설명", "tags": "nova", "visible": true,
                   "basePrice": 1000000,
                   "optionAxes": [
                     { "key": "color", "label": "색상", "values": [ { "value": "블랙" }, { "value": "화이트" } ] },
@@ -858,6 +982,12 @@ class AdminProductEditApiTest {
 
     private ResultActions editVariant(UUID productId, UUID variantId, String body) throws Exception {
         return mockMvc.perform(admin(patch(PATH + "/{id}/variants/{v}", productId, variantId)).content(body));
+    }
+
+    private List<String> skus(UUID productId) throws Exception {
+        List<String> out = new ArrayList<>();
+        data(adminDetail(productId)).get("product").get("variants").forEach(variant -> out.add(variant.get("sku").asString()));
+        return out;
     }
 
     private ResultActions adminDetail(UUID productId) throws Exception {

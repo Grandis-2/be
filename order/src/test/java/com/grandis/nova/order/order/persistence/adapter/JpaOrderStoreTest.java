@@ -6,6 +6,7 @@ import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderDraft;
 import com.grandis.nova.order.order.domain.model.OrderItem;
 import com.grandis.nova.order.order.domain.model.OrderLine;
+import com.grandis.nova.order.order.domain.repository.ExpiredOrderPosition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.domain.repository.OrderWriter;
 import com.grandis.nova.order.order.persistence.entity.OrderItemJpaEntity;
@@ -70,7 +71,7 @@ class JpaOrderStoreTest {
      */
     @Test
     void storedOrderAndItemsReadBackFromDatabaseUnchanged() {
-        OrderDraft draft = new OrderDraft(customerId, OrderSource.PREORDER, preorderId, OrderFixtures.preorderToken(preorderId),
+        OrderDraft draft = new OrderDraft(customerId, OrderSource.PREORDER, preorderId, OrderFixtures.preorderToken(preorderId), null,
                 new ShipTo("홍길동", "010-0000-0000", "04524", "세종대로 110", "3층"),
                 preorderCommand(customerId, preorderId, product).toDraft().lines());
         Order placed = Order.place(draft, Instant.EPOCH);
@@ -104,7 +105,7 @@ class JpaOrderStoreTest {
     void insertAcceptsOnlyNewAwaitingPaymentOrders() {
         Order placed = Order.place(preorderCommand(customerId, preorderId, product).toDraft(), Instant.EPOCH);
         Order delivered = new Order(null, customerId, OrderSource.PREORDER, preorderId,
-                placed.preorderToken(), OrderStatus.DELIVERED, null, placed.totalAmount(), null, null, null, placed.shipTo(), 5, null, null);
+                placed.preorderToken(), null, OrderStatus.DELIVERED, null, placed.totalAmount(), null, null, null, null, placed.shipTo(), 5, null, null);
         Order stored = writer.insert(placed);
 
         assertThatThrownBy(() -> writer.insert(delivered))
@@ -148,9 +149,9 @@ class JpaOrderStoreTest {
         Instant placedAt = Instant.parse("2026-10-10T06:00:00.123456Z");
         OrderFixtures.StockProduct stocked = fixtures.inStockProduct(1);
         UUID option = stocked.optionIds().getFirst();
-        OrderDraft draft = new OrderDraft(customerId, OrderSource.CART, null, null,
+        OrderDraft draft = new OrderDraft(customerId, OrderSource.CART, null, null, null,
                 new ShipTo("홍길동", "010-0000-0000", "04524", "세종대로 110", null), List.of(
-                new OrderLine(stocked.productId(), option, new Quantity(3), Money.won(1_000), 2, Money.won(300), "상품", "옵션")));
+                new OrderLine(stocked.productId(), option, new Quantity(3), Money.won(1_000), 2, Money.won(300), "상품", null, "옵션", null)));
         Order stored = writer.insert(Order.place(draft, placedAt));
         writer.insertItems(stored.id(), draft.lines());
         entityManager.flush();
@@ -162,7 +163,7 @@ class JpaOrderStoreTest {
         Order future = writer.insert(Order.place(draft, Instant.now().plusSeconds(3_600)));
         writer.insertItems(future.id(), draft.lines());
         UUID other = fixtures.customer();
-        Order othersOrder = writer.insert(Order.place(new OrderDraft(other, OrderSource.CART, null, null, draft.shipTo(), draft.lines()),
+        Order othersOrder = writer.insert(Order.place(new OrderDraft(other, OrderSource.CART, null, null, null, draft.shipTo(), draft.lines()),
                 placedAt));
         writer.insertItems(othersOrder.id(), draft.lines());
         Order preorder = writer.insert(Order.place(preorderCommand(customerId, preorderId, product).toDraft(), placedAt));
@@ -179,4 +180,29 @@ class JpaOrderStoreTest {
         assertThat(reader.findUnpaidCartOrders(customerId)).isEmpty();
     }
 
+    /**
+     * 기한 만료는 결제 대기인 장바구니 · 바로 구매 주문을 고르고(기한 없는 사전예약은 아니다), "회원당 하나" 는 장바구니 주문만 센다.
+     * 공유 DB 의 다른 주문(지금 시각대 기한)이 섞이지 않게 아주 옛 시각에 만들어 그 기한으로 묻는다.
+     */
+    @Test
+    void expiredAwaitingIncludesBuyNowButUnpaidCartOrdersDoNot() {
+        Instant placedAt = Instant.parse("2000-01-01T00:00:00Z");
+        OrderFixtures.StockProduct stocked = fixtures.inStockProduct(1);
+        List<OrderLine> lines = List.of(new OrderLine(stocked.productId(), stocked.optionIds().getFirst(), new Quantity(1), Money.won(1_000), 0,
+                Money.ZERO, "상품", null, "옵션", null));
+        ShipTo shipTo = new ShipTo("홍길동", "010-0000-0000", "04524", "세종대로 110", null);
+        Order cart = writer.insert(Order.place(new OrderDraft(customerId, OrderSource.CART, null, null, null, shipTo, lines), placedAt));
+        writer.insertItems(cart.id(), lines);
+        Order buyNow = writer.insert(Order.place(new OrderDraft(customerId, OrderSource.BUY_NOW, null, null, UUID.randomUUID(), shipTo, lines), placedAt));
+        writer.insertItems(buyNow.id(), lines);
+        Order preorder = writer.insert(Order.place(preorderCommand(customerId, preorderId, product).toDraft(), placedAt));
+        writer.insertItems(preorder.id(), preorderCommand(customerId, preorderId, product).toDraft().lines());
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(reader.findExpiredAwaitingOrders(placedAt.plus(Order.PAYMENT_WINDOW), ExpiredOrderPosition.START, 100))
+                .extracting(Order::id).containsExactlyInAnyOrder(cart.id(), buyNow.id());
+        assertThat(reader.findUnpaidCartOrders(customerId)).as("바로 구매 주문은 회원당 하나 규칙 밖")
+                .extracting(Order::id).containsExactly(cart.id());
+    }
 }

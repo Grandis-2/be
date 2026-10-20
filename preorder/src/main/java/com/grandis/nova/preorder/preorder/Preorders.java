@@ -5,6 +5,8 @@ import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.preorder.domain.AdminPreorderSearchQuery;
 import com.grandis.nova.preorder.preorder.domain.Preorder;
+import com.grandis.nova.preorder.preorder.domain.PaymentOverdueQuery;
+import com.grandis.nova.preorder.preorder.domain.PreorderBacklogQuery;
 import com.grandis.nova.preorder.preorder.domain.PreorderEvent;
 import com.grandis.nova.preorder.preorder.domain.PreorderEventRepository;
 import com.grandis.nova.preorder.preorder.domain.PreorderRepository;
@@ -20,6 +22,7 @@ import java.util.Collection;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
@@ -35,11 +38,16 @@ public class Preorders {
     private final PreorderRepository preorders;
     private final PreorderEventRepository events;
     private final AdminPreorderSearchQuery adminSearch;
+    private final PreorderBacklogQuery backlog;
+    private final PaymentOverdueQuery paymentOverdue;
 
-    Preorders(PreorderRepository preorders, PreorderEventRepository events, AdminPreorderSearchQuery adminSearch) {
+    Preorders(PreorderRepository preorders, PreorderEventRepository events, AdminPreorderSearchQuery adminSearch,
+              PreorderBacklogQuery backlog, PaymentOverdueQuery paymentOverdue) {
         this.preorders = preorders;
         this.events = events;
         this.adminSearch = adminSearch;
+        this.backlog = backlog;
+        this.paymentOverdue = paymentOverdue;
     }
 
     public Optional<PreorderSnapshot> findByToken(String preorderToken) {
@@ -95,6 +103,17 @@ public class Preorders {
                 .map(PreorderEvent::toHistoryEntry);
     }
 
+    /** 결제 확인 시각. 영속성 컨텍스트를 거치지 않고 DB 에서 읽는다 — 예약 행을 잠근 트랜잭션에서 부른다. */
+    public Optional<Instant> findReservedAt(UUID preorderId) {
+        return preorders.findReservedAt(preorderId);
+    }
+
+    /** 주문 쪽에서 취소가 거절돼 결제 가능(REGISTERED)으로 돌아온 적이 있는가. */
+    public boolean wasCancelRejectedToRegistered(UUID preorderId) {
+        return events.existsByPreorderIdAndFromStatusAndToStatus(preorderId, PreorderStatus.CANCELING,
+                PreorderStatus.REGISTERED);
+    }
+
     /** 이력(번호 순). */
     public List<PreorderHistoryEntry> history(UUID preorderId) {
         return events.findByPreorderIdOrderByEventSequence(preorderId).stream()
@@ -108,6 +127,22 @@ public class Preorders {
         return counts;
     }
 
+    /** 운영 현황용 예약 수. productId 가 null 이면 전체를 센다. */
+    public PreorderBacklog backlog(UUID productId, Instant now) {
+        return new PreorderBacklog(backlog.countByStatus(productId),
+                backlog.countRegisteredPayableUntil(now.minus(PreorderSnapshot.PAYMENT_WINDOW), productId),
+                backlog.findOldestCreatedAt(PreorderStatus.PENDING_SYNC, productId).orElse(null));
+    }
+
+    /** 결제 기한이 지나 만료할 예약의 공개 UUID. 기한이 오래된 것부터 limit 건. */
+    public List<String> findPaymentOverdue(Instant now, int limit) {
+        return paymentOverdue.findTokens(now.minus(PreorderSnapshot.PAYMENT_WINDOW), limit);
+    }
+
+    public PaymentOverdue countPaymentOverdue(Instant now) {
+        return paymentOverdue.count(now.minus(PreorderSnapshot.PAYMENT_WINDOW));
+    }
+
     /** 회원의 예약(최신순)을 커서 자리 다음부터 최대 limit 건. 커서가 없으면 처음부터다. */
     public List<PreorderSnapshot> findForCustomer(UUID customerId, PreorderStatus status, UUID productId,
                                                   Instant afterCreatedAt, UUID afterId, int limit) {
@@ -117,6 +152,18 @@ public class Preorders {
                 PreorderSpecifications.product(productId),
                 PreorderSpecifications.after(afterCreatedAt, afterId));
         // 총계를 세지 않는다. findAll(Specification, Pageable) 은 쓰지 않는 COUNT 까지 돌린다.
+        return preorders.findBy(specification, query -> query.sortBy(NEWEST_FIRST).limit(limit).all()).stream()
+                .map(Preorder::toSnapshot)
+                .toList();
+    }
+
+    /** 회원의 진행 중인 예약(최신순)을 커서 자리 다음부터 최대 limit 건. 상품마다 많아야 한 건이다. */
+    public List<PreorderSnapshot> findActiveForCustomer(UUID customerId, Instant afterCreatedAt, UUID afterId,
+                                                        int limit) {
+        Specification<Preorder> specification = PreorderSpecifications.allOf(
+                PreorderSpecifications.customer(Objects.requireNonNull(customerId)),
+                PreorderSpecifications.active(),
+                PreorderSpecifications.after(afterCreatedAt, afterId));
         return preorders.findBy(specification, query -> query.sortBy(NEWEST_FIRST).limit(limit).all()).stream()
                 .map(Preorder::toSnapshot)
                 .toList();

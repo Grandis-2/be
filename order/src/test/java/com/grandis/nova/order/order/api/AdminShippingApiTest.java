@@ -309,7 +309,7 @@ class AdminShippingApiTest {
 
         assertThat(cancelSettlement.settle(cancel)).isEqualTo(new CancelSettlement.Deferred(OrderStatus.AUTHORIZING));
         transactionTemplate.executeWithoutResult(status -> ledger.settlePayment(order.id(),
-                OrderTrigger.PAYMENT_APPROVED, null, EventCause.system("PAYMENT_APPROVED")));
+                OrderTrigger.PAYMENT_APPROVED, null, null, EventCause.system("PAYMENT_APPROVED")));
         advance(order, "PREPARATION_STARTED", "준비").andExpect(status().isOk());
         advance(order, "PACKED", "포장").andExpect(status().isOk());
         advance(order, "SHIPPED", "출고").andExpect(status().isOk());

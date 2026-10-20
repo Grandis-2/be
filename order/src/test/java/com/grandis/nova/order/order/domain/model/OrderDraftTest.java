@@ -21,7 +21,7 @@ class OrderDraftTest {
 
     @Test
     void totalIsSumOfUnitPriceTimesQuantity() {
-        OrderDraft draft = new OrderDraft(TestIds.id(1), OrderSource.CART, null, null, SHIP_TO, List.of(
+        OrderDraft draft = new OrderDraft(TestIds.id(1), OrderSource.CART, null, null, null, SHIP_TO, List.of(
                 line(TestIds.id(10), 2, 1000),
                 line(TestIds.id(11), 3, 250)));
 
@@ -30,7 +30,7 @@ class OrderDraftTest {
 
     @Test
     void rejectsSameOptionTwice() {
-        assertThatThrownBy(() -> new OrderDraft(TestIds.id(1), OrderSource.CART, null, null, SHIP_TO, List.of(
+        assertThatThrownBy(() -> new OrderDraft(TestIds.id(1), OrderSource.CART, null, null, null, SHIP_TO, List.of(
                 line(TestIds.id(10), 1, 1000),
                 line(TestIds.id(10), 1, 1000))))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -39,39 +39,50 @@ class OrderDraftTest {
 
     @Test
     void rejectsEmptyLines() {
-        assertThatThrownBy(() -> new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, SHIP_TO, List.of()))
+        assertThatThrownBy(() -> new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), PREORDER_UUID, null, SHIP_TO, List.of()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     // ck_order_preorder_link 와 같은 규칙: 사전예약 주문 ⇔ preorderId 있음
     @Test
     void preorderIdIsRequiredOnlyForPreorderSource() {
-        assertThatThrownBy(() -> new OrderDraft(TestIds.id(1), OrderSource.PREORDER, null, PREORDER_UUID, SHIP_TO, List.of(line(TestIds.id(10), 1, 1))))
+        assertThatThrownBy(() -> new OrderDraft(TestIds.id(1), OrderSource.PREORDER, null, PREORDER_UUID, null, SHIP_TO, List.of(line(TestIds.id(10), 1, 1))))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new OrderDraft(TestIds.id(1), OrderSource.BUY_NOW, TestIds.id(7), null, SHIP_TO, List.of(line(TestIds.id(10), 1, 1))))
+        assertThatThrownBy(() -> new OrderDraft(TestIds.id(1), OrderSource.BUY_NOW, TestIds.id(7), null, TestIds.id(50), SHIP_TO, List.of(line(TestIds.id(10), 1, 1))))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     // ck_order_preorder_token 과 같은 규칙: 사전예약 주문 ⇔ 예약 UUID 있음. 길이는 preorders.preorder_token(char(36))과 같다.
     @Test
     void preorderTokenIsRequiredOnlyForPreorderSource() {
-        assertThatThrownBy(() -> new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), null, SHIP_TO, List.of(line(TestIds.id(10), 1, 1))))
+        assertThatThrownBy(() -> new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), null, null, SHIP_TO, List.of(line(TestIds.id(10), 1, 1))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("preorderToken");
-        assertThatThrownBy(() -> new OrderDraft(TestIds.id(1), OrderSource.BUY_NOW, null, PREORDER_UUID, SHIP_TO,
+        assertThatThrownBy(() -> new OrderDraft(TestIds.id(1), OrderSource.BUY_NOW, null, PREORDER_UUID, TestIds.id(50), SHIP_TO,
                 List.of(line(TestIds.id(10), 1, 1))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("preorderToken");
-        assertThatThrownBy(() -> new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), "0b8f6a3e", SHIP_TO,
+        assertThatThrownBy(() -> new OrderDraft(TestIds.id(1), OrderSource.PREORDER, TestIds.id(7), "0b8f6a3e", null, SHIP_TO,
                 List.of(line(TestIds.id(10), 1, 1))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("36");
     }
 
+    // ck_order_idempotency 와 같은 규칙: 바로 구매 주문 ⇔ 멱등 키 있음
+    @Test
+    void idempotencyKeyIsRequiredOnlyForBuyNowSource() {
+        assertThatThrownBy(() -> new OrderDraft(TestIds.id(1), OrderSource.BUY_NOW, null, null, null, SHIP_TO, List.of(line(TestIds.id(10), 1, 1))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("멱등 키");
+        assertThatThrownBy(() -> new OrderDraft(TestIds.id(1), OrderSource.CART, null, null, TestIds.id(50), SHIP_TO, List.of(line(TestIds.id(10), 1, 1))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("멱등 키");
+    }
+
     @Test
     void linesAreCopiedSoCallerCannotChangeThemLater() {
         List<OrderLine> lines = new ArrayList<>(List.of(line(TestIds.id(10), 1, 1000)));
-        OrderDraft draft = new OrderDraft(TestIds.id(1), OrderSource.CART, null, null, SHIP_TO, lines);
+        OrderDraft draft = new OrderDraft(TestIds.id(1), OrderSource.CART, null, null, null, SHIP_TO, lines);
 
         lines.add(line(TestIds.id(11), 1, 9999));
 
@@ -80,6 +91,6 @@ class OrderDraftTest {
     }
 
     static OrderLine line(UUID optionId, int quantity, long unitPrice) {
-        return OrderLine.withoutWarranty(TestIds.id(100), optionId, new Quantity(quantity), Money.won(unitPrice), "Nova 1", "블랙 / 256GB");
+        return OrderLine.withoutWarranty(TestIds.id(100), optionId, new Quantity(quantity), Money.won(unitPrice), "Nova 1", null, "블랙 / 256GB", null);
     }
 }
