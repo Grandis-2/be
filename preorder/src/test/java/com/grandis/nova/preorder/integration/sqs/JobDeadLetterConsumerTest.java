@@ -74,7 +74,8 @@ class JobDeadLetterConsumerTest {
         assertThat(failed("REGISTER") - before).isEqualTo(1);
         // 지우지 않았으면 가시성 시간(2초) 뒤 다시 받아 "이미 끝난 작업" 으로 남긴다
         String again = "이미 끝난 작업의 메시지가 DLQ 로 갔다 — 작업은 그대로 둔다 syncJobId=" + syncJobId;
-        await().during(Duration.ofSeconds(5)).atMost(Duration.ofSeconds(8)).until(() -> !output.getOut().contains(again));
+        await().during(Duration.ofSeconds(5)).atMost(Duration.ofSeconds(8))
+                .until(() -> !output.getOut().contains(again));
     }
 
     /** 관리자 재처리로 실행 회차가 오른 작업이다. 지난 실행의 메시지가 늦게 DLQ 로 와도 다시 포기시키지 않는다. */
@@ -82,7 +83,8 @@ class JobDeadLetterConsumerTest {
     void 지난_실행의_메시지면_작업을_바꾸지_않고_지운다(CapturedOutput output) {
         Message job = registerJobReady();
         UUID syncJobId = syncJobIdOf(job);
-        jdbcTemplate.update("UPDATE preorder_sync_jobs SET run = 2 WHERE id = ?", (Object) UuidBinary.toBytes(syncJobId));
+        jdbcTemplate.update("UPDATE preorder_sync_jobs SET run = 2 WHERE id = ?",
+                (Object) UuidBinary.toBytes(syncJobId));
 
         queues.send(JobDeadLetterConsumerConfig.REGISTER_DLQ, job.body());
 
@@ -117,8 +119,25 @@ class JobDeadLetterConsumerTest {
                  "occurredAt":"2026-10-20T01:00:00Z","payload":{"syncJobId":"%s"}}""".formatted(UUID.randomUUID(),
                 syncJobId, syncJobId));
 
-        await().atMost(TIMEOUT).until(() -> logged(output, "없는 작업의 메시지가 DLQ 로 왔다").distinct().count() == 1
-                && logged(output, "없는 작업의 메시지가 DLQ 로 왔다").count() >= 2);
+        String kept = "작업에 반영할 수 없는 DLQ 메시지다(없는 작업 · 앞선 실행 회차) — 지우지 않는다";
+        await().atMost(TIMEOUT).until(() -> output.getOut().lines()
+                .filter(line -> line.contains(kept) && line.contains("syncJobId=" + syncJobId)).count() >= 2);
+    }
+
+    /** 작업보다 앞선 실행 회차는 정상 흐름에서 생기지 않는다. 계약이 어긋난 것이라 작업을 바꾸지 않고 메시지를 남긴다. */
+    @Test
+    void 작업보다_앞선_실행_회차의_메시지면_작업을_바꾸지_않고_지우지_않는다(CapturedOutput output) {
+        Message job = registerJobReady();
+        UUID syncJobId = syncJobIdOf(job);
+        String future = job.body().replace("\"run\":1", "\"run\":2");
+        assertThat(future).as("payload 의 실행 회차를 올렸다").contains("\"run\":2");
+
+        queues.send(JobDeadLetterConsumerConfig.REGISTER_DLQ, future);
+
+        String contract = "계약 확인 필요, 작업은 그대로 둔다 syncJobId=" + syncJobId;
+        await().atMost(TIMEOUT)
+                .until(() -> output.getOut().lines().filter(line -> line.contains(contract)).count() >= 2);
+        assertThat(jobStatus(syncJobId)).isEqualTo("PENDING");
     }
 
     private static Stream<String> unreadable(CapturedOutput output) {

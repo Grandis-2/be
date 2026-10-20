@@ -170,7 +170,7 @@ public class PreorderEventHandler {
      * 작업 메시지가 SQS DLQ 로 갔다 — worker 가 결과를 알리지 못한 채 재수신 한도를 넘겼다. 포기와 같게 DEAD_LETTER 로 두어
      * 관리자 재처리 · 수동 완료로 넘긴다. 메시지의 실행 회차가 지난 것이면 바꾸지 않는다 — 재처리한 작업을 다시 포기시키지 않게.
      *
-     * @return 작업을 찾았으면 true(바꿨든 그대로 뒀든). 없는 작업이면 false — 메시지를 남겨 사람이 보게 한다
+     * @return 반영을 마쳤으면 true(바꿨든 그대로 뒀든). 없는 작업 · 작업보다 앞선 실행 회차면 false — 메시지를 남겨 사람이 보게 한다
      */
     @Transactional
     public boolean onJobMessageDeadLettered(UUID syncJobId, int run) {
@@ -179,6 +179,11 @@ public class PreorderEventHandler {
             return false;
         }
         SyncJobSnapshot job = found.get();
+        if (run > job.run()) {
+            log.error("작업보다 앞선 실행 회차의 메시지가 DLQ 로 왔다 — 계약 확인 필요, 작업은 그대로 둔다 syncJobId={} run={} currentRun={}",
+                    job.id(), run, job.run());
+            return false;
+        }
         if (run < job.run()) {
             log.warn("지난 실행의 작업 메시지가 DLQ 로 갔다 — 작업은 그대로 둔다 syncJobId={} run={} currentRun={}", job.id(), run,
                     job.run());
