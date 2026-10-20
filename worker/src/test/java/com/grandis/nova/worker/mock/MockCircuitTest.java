@@ -14,8 +14,6 @@ import static org.awaitility.Awaitility.await;
 /** 최근 4건 중 절반이 실패하면 열리고(느린 성공은 세지 않는다), 0.2초(다시 열리면 0.4초) 뒤 스스로 반쯤 열려 3건을 시험한다. */
 class MockCircuitTest {
 
-    static final Duration FAST = Duration.ofMillis(10);
-
     final AtomicInteger opened = new AtomicInteger();
     MockCircuit circuit;
 
@@ -45,12 +43,12 @@ class MockCircuitTest {
         assertThat(circuit.openRemaining()).isZero();
     }
 
-    /** 느리기만 한 mock 에 열고 닫기를 되풀이하면 처리량이 0 이 된다. 느림은 자동 조절이 자리를 줄여 다룬다. */
+    /** 걸린 시간을 받지 않으므로 느린 성공도 느린 호출로 세지 않는다. 느림은 자동 조절이 자리를 줄여 다룬다. */
     @Test
-    void 느린_성공만으로는_열리지_않는다() {
+    void 성공이_이어지면_얼마나_걸렸든_열리지_않는다() {
         for (int i = 0; i < 20; i++) {
             assertThat(circuit.tryAcquire()).isTrue();
-            circuit.record(Verdict.SUCCESS, Duration.ofSeconds(6));
+            circuit.record(Verdict.SUCCESS);
         }
 
         assertThat(circuit.isOpen()).isFalse();
@@ -86,7 +84,7 @@ class MockCircuitTest {
     private void record(Verdict... verdicts) {
         for (Verdict verdict : verdicts) {
             assertThat(circuit.tryAcquire()).as("호출 허용").isTrue();
-            circuit.record(verdict, FAST);
+            circuit.record(verdict);
         }
     }
 }

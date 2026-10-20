@@ -22,11 +22,6 @@ public final class MockCircuit {
 
     private static final Logger log = LoggerFactory.getLogger(MockCircuit.class);
     static final String NAME = "mock";
-    /**
-     * 느린 성공으로는 열지 않는다 — 느리기만 한 mock 에 열고 닫기를 되풀이하면 처리량이 0 이 된다. 느림은 자동 조절이 다룬다.
-     * 한 호출의 최대 시간(연결 + 응답 제한)보다 훨씬 길게 두어 느린 호출이 생기지 않게 한다.
-     */
-    private static final Duration NEVER_SLOW = Duration.ofHours(1);
 
     private final CircuitBreaker breaker;
     private final Clock clock;
@@ -54,7 +49,6 @@ public final class MockCircuit {
                 .slidingWindowSize(settings.window())
                 .minimumNumberOfCalls(settings.minimumCalls())
                 .failureRateThreshold(settings.failureRate())
-                .slowCallDurationThreshold(NEVER_SLOW)
                 .permittedNumberOfCallsInHalfOpenState(settings.halfOpenCalls())
                 .waitIntervalFunctionInOpenState(opens -> openFor(opens).toMillis())
                 // 열린 동안은 받기를 멈춰 호출이 없다. 호출이 와야 반쯤 열리게 두면 영영 열려 있는다
@@ -89,11 +83,14 @@ public final class MockCircuit {
         breaker.releasePermission();
     }
 
-    void record(Verdict verdict, Duration elapsed) {
+    /**
+     * 걸린 시간은 넘기지 않는다 — 느리기만 한 mock 에 열고 닫기를 되풀이하면 처리량이 0 이 된다. 느림은 자동 조절이 다룬다.
+     * 응답 제한은 읽기마다 새로 재므로 한 호출이 끝내 걸리는 시간에는 상한이 없어, 문턱을 길게 두는 것으로는 막지 못한다.
+     */
+    void record(Verdict verdict) {
         switch (verdict) {
-            case SUCCESS, ABSENT, PENDING -> breaker.onSuccess(elapsed.toNanos(), TimeUnit.NANOSECONDS);
-            case TRANSIENT, UNKNOWN -> breaker.onError(elapsed.toNanos(), TimeUnit.NANOSECONDS,
-                    new IllegalStateException(verdict.name()));
+            case SUCCESS, ABSENT, PENDING -> breaker.onSuccess(0, TimeUnit.NANOSECONDS);
+            case TRANSIENT, UNKNOWN -> breaker.onError(0, TimeUnit.NANOSECONDS, new IllegalStateException(verdict.name()));
             case REJECTED, MISCONFIGURED, NOT_CALLED -> breaker.releasePermission();
         }
     }

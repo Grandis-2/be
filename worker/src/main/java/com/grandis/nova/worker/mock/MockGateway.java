@@ -95,7 +95,7 @@ public class MockGateway {
             throw e;
         }
         Verdict verdict = judgement.verdict();
-        circuit.record(verdict, elapsed);
+        circuit.record(verdict);
         if (verdict != Verdict.MISCONFIGURED) {
             limiter.record(elapsed, verdict == Verdict.TRANSIENT || verdict == Verdict.UNKNOWN);
         }
