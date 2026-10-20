@@ -34,6 +34,7 @@ class PreorderDefaultsTest {
         assertThat(environment.getProperty("auth.revocation-check.fail-closed-paths"))
                 .isEqualTo("/api/v1/admin/**,/api/v1/preorders/*/cancel");
         assertThat(environment.getProperty("nova.outbox.metrics-prefix")).isEqualTo("preorder.outbox");
+        assertThat(environment.getProperty("nova.outbox.concurrency")).isEqualTo("2");
         assertThat(environment.getProperty("management.server.port")).isEqualTo("9083");
         assertThat(environment.getProperty("management.endpoints.web.exposure.include")).isEqualTo("health,prometheus");
         assertThat(environment.getProperty("management.endpoint.health.group.readiness.include"))
