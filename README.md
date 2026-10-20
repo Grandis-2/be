@@ -262,7 +262,7 @@ worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이
 | `order` | 주문 · 재고 · 장바구니 · 드로우 | 동작 |
 | `payment` | 토스 결제 · 결제 원장 · 복구 · 환불 (내부 전용) | 동작 |
 | `worker` | SQS 를 받아 외부 예약 등록 · 취소, 드로우 응모 · 추첨, 알림 (DB 없음) | 예약 등록 · 취소 동작, 드로우 · 알림 구현 중 |
-| `batch` | 정합성 검사 — 우리 DB 와 Mock 원장(목록 조회 API)을 대조해 결과를 남긴다 | 골격 — 구현 중 |
+| `batch` | 정합성 검사 — 우리 DB 와 Mock 원장(목록 조회 API)을 대조해 결과를 남긴다 · 안 쓰는 사진 정리 | 골격 — 구현 중 |
 | `common:*` | 서비스가 함께 쓰는 라이브러리 (응답 · 보안 · outbox · SQS · Redis 등) | — |
 
 <details>
@@ -271,17 +271,17 @@ worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch(시간이
 | 서비스 | 표 |
 | --- | --- |
 | `member` | `customers` · `refresh_tokens` |
-| `catalog` | `categories` · `products` · `product_options` · `product_reviews` · `catalog_outbox_events` |
+| `catalog` | `categories` · `products` · `product_options` · `product_reviews` · `catalog_outbox_events` · `images` |
 | `preorder` | `preorders` · `preorder_events` · `preorder_campaigns` · `shipment_batches` · `preorder_outbox_events` · `dead_letter_events`<br>`preorder_sync_jobs` · `preorder_sync_attempts` (외부 작업 · 시도 원장) |
 | `order` | `orders` · `order_items` · `order_events` · `cart_items` · `option_inventories` · `draw_campaigns` · `draw_entries` |
 | `payment` | `payments` · `payment_transactions` |
 | `worker` | (없음 — DB 를 쓰지 않는다. 결과는 이벤트로 preorder 에 알린다) |
-| `batch` | `reconciliation_runs` · `reconciliation_findings` (정합성 검사 결과. 업무 표는 읽기만) |
+| `batch` | `reconciliation_runs` · `reconciliation_findings` (정합성 검사 결과. 업무 표는 읽기만) · `image_deletions` (사진 정리의 S3 삭제 대기) |
 | `waitingroom` | (없음 — 전용 Redis) |
 
 표는 소유한 서비스만 쓴다. 다른 서비스의 데이터는 그 서비스의 API 로 묻는 것이 원칙이고,
 예외는 목록 화면의 페이징 조건처럼 쿼리 안에 있어야 하는 읽기뿐이다.
-정합성 검사 결과는 예외로 preorder 도 쓴다 — 관리자 화면 API 가 preorder 에 있어, `reconciliation_runs` 에 실행 요청을 넣고 `reconciliation_findings` 의 조치 칸을 바꾼다.
+쓰기 예외는 둘이다 — 정합성 검사 결과는 preorder 도 쓴다(관리자 화면 API 가 preorder 에 있어, `reconciliation_runs` 에 실행 요청을 넣고 `reconciliation_findings` 의 조치 칸을 바꾼다). 정리 배치(`batch`)는 `images` 의 오래된 `UNUSED` 행(아무 데도 안 붙은 사진)과 그 S3 객체를 지운다.
 표 사이 관계는 [ERD](https://dbdiagram.io/d/Copy-of-Untitled-Diagram-6aa66499957fec6d5bdd9189)에 있다.
 
 </details>

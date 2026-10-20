@@ -8,14 +8,16 @@
 #
 # 소유 경계(README 기준)
 #   member    customers · refresh_tokens
-#   catalog   categories · products · product_options · product_reviews · catalog_outbox_events
+#   catalog   categories · products · product_options · product_reviews · catalog_outbox_events · images
 #   preorder  preorders · preorder_events · preorder_campaigns · shipment_batches · dead_letter_events
 #             preorder_sync_jobs · preorder_sync_attempts (작업 · 시도 원장. worker 의 결과 이벤트를 받아 기록)
 #   order     orders · order_items · order_events · cart_items · payments · payment_transactions
 #             option_inventories (재고. 옵션당 1행, 일반 판매 옵션만)
 #   worker    없음 (DB 를 쓰지 않는다. 작업 내용 · 재시도 횟수는 메시지에 싣는다)
 #   batch     reconciliation_runs · reconciliation_findings (정합성 검사 결과. 업무 표는 읽기만)
+#             image_deletions (안 쓰는 사진 정리의 S3 삭제 대기)
 #             예외로 preorder 가 관리자 실행 요청(runs)을 넣고 건별 조치 칸(findings)을 바꾼다
+#             업무 표 쓰기 예외: images 의 오래된 UNUSED 행 삭제 · 그 S3 객체 삭제 — 안 쓰는 사진 정리
 #
 # 테이블 이름이 바뀌면 이 주석과 아래 모듈 지시문을 함께 고친다.
 
@@ -242,13 +244,20 @@ reviews:
         - 같은 사건의 중복 발송을 막는 키가 없으면 지적한다.
 
     # ─────────────────────────────────────────────────────────────
-    # 4. batch — 정합성 검사. 단일 실행 전제
+    # 4. batch — 정합성 검사 · 안 쓰는 사진 정리. 단일 실행 전제
     # ─────────────────────────────────────────────────────────────
     - path: "batch/**/*.java"
       instructions: |
         - 동시 실행 방지 장치(락 · 단일 실행 표식)가 없으면 지적한다. desired 1 전제로 설계돼 있다.
-        - 업무 테이블에는 읽기만 한다. 쓰는 표는 reconciliation_runs · reconciliation_findings 뿐이고, 그 밖의 표에 쓰면 지적한다.
+        - 업무 테이블에는 읽기만 한다. 쓰는 표는 reconciliation_runs · reconciliation_findings · image_deletions 뿐이고, 그 밖의 표에 쓰면 지적한다.
           조치는 정상 업무 경로(API · 이벤트)로 한다.
+        - 예외 하나: 안 쓰는 사진 정리는 images 행을 지운다. 기준 시간이 지난 UNUSED 행만, id 로(object_key 로 지우면 catalog 의 붙이기와
+          다른 인덱스 순서로 잠가 교착한다), 같은 문장에서 어떤 draw_campaigns.image_url_snapshot · order_items.image_url_snapshot(지난 주문의 사진)도
+          그 키로 끝나지 않을 때만 지운다.
+          S3 객체는 행 삭제를 커밋한 뒤 지운다(지워진 행이 1개일 때만). 이 조건을 빼거나 USED 행 · images 밖의 표를 지우면 지적한다.
+          기준 시간이 하한(1시간)보다 짧아도 실행되면 지적한다 — 드로우 생성의 시간 예산(order, 60초)보다 충분히 길어야 한다.
+        - image_deletions 는 사진 정리의 S3 삭제 대기다. images 행 삭제와 같은 트랜잭션에 넣고, S3 삭제가 성공한 뒤 지운다.
+          따로 커밋하거나 S3 를 행 삭제 커밋 전에 지우면 지적한다.
         - reconciliation_findings 는 넣기만 한다. batch 가 UPDATE · DELETE 하면 지적한다(조치 칸은 preorder 가 바꾼다).
         - Mock 원장은 목록 조회 API 로 읽는다. external_mock 스키마를 직접 읽거나 쓰면 지적한다.
         - 검사 트랜잭션(REPEATABLE READ · 읽기 전용, 한 스냅샷) 안에서 Mock 목록 조회(HTTP)를 기다리는 것은 한 스냅샷을 위한 예외다.
@@ -423,6 +432,7 @@ reviews:
 
           허용된 쓰기 — 소유가 아닌 테이블에 쓰는 것 중 이것만 실패가 아니다.
           - preorder → reconciliation_runs(관리자 실행 요청 INSERT) · reconciliation_findings(조치 칸 UPDATE)
+          - batch → images (기준 시간이 지난 UNUSED 행 삭제 — id 로, 드로우 · 주문 줄 스냅샷이 가리키지 않을 때만. 그 S3 객체 삭제는 행 삭제 커밋 뒤)
 
           위 조건에 해당하지 않으면 통과로 표시한다.
       - name: "동시성 안전"
