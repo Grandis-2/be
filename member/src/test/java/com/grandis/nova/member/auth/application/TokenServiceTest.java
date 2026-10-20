@@ -138,7 +138,7 @@ class TokenServiceTest {
         rotationSucceeds(session);
         clock.set(NOW.plus(Duration.ofDays(3)));
 
-        TokenService.Rotated rotated = service.rotate(PRESENTED, Role.USER);
+        TokenService.Rotated rotated = rotate(PRESENTED, Role.USER);
 
         assertThat(rotated.tokens().refreshToken()).isNotEqualTo(PRESENTED).hasSize(43);
         assertThat(rotated.tokens().refreshTokenMaxAge()).isEqualTo(Duration.ofDays(11));
@@ -159,7 +159,7 @@ class TokenServiceTest {
         when(refreshTokens.rotate(any(), any()))
                 .thenReturn(Rotation.rejected(Rotation.Status.REUSED, session.sessionId(), session.subject()));
 
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
 
         InOrder order = Mockito.inOrder(revocations, refreshTokens, adminRefreshTokens);
         order.verify(revocations).revokeSession(session.sessionId(), REFRESH);   // 필터 · 회전 전 검사가 읽는 표식이 먼저
@@ -175,7 +175,7 @@ class TokenServiceTest {
                 .thenReturn(Rotation.rejected(Rotation.Status.REUSED, session.sessionId(), session.subject()));
         doThrow(lockFailure(1213)).doNothing().when(refreshTokens).revokeSession(any());
 
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
         verify(refreshTokens, Mockito.times(2)).revokeSession(session.sessionId());
 
         Mockito.reset(refreshTokens);
@@ -184,7 +184,7 @@ class TokenServiceTest {
                 .thenReturn(Rotation.rejected(Rotation.Status.REUSED, again.sessionId(), again.subject()));
         doThrow(lockFailure(1213)).when(refreshTokens).revokeSession(any());
 
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
         verify(refreshTokens, Mockito.times(TokenService.REVOKE_ATTEMPTS)).revokeSession(again.sessionId());
         verify(adminRefreshTokens).delete(again.sessionId());
 
@@ -194,7 +194,7 @@ class TokenServiceTest {
                 .thenReturn(Rotation.rejected(Rotation.Status.REUSED, waited.sessionId(), waited.subject()));
         doThrow(lockFailure(1205)).when(refreshTokens).revokeSession(any());
 
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
         verify(refreshTokens, Mockito.times(1)).revokeSession(waited.sessionId());
     }
 
@@ -217,11 +217,11 @@ class TokenServiceTest {
                 .thenReturn(Rotation.rejected(Rotation.Status.REUSED, session.sessionId(), session.subject()));
         doThrow(new RedisConnectionFailureException("down")).when(revocations).revokeSession(any(), any());
 
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
         assertThat(output.getOut() + output.getErr()).as("표식만 실패 — 체인은 끊었다").doesNotContain("auth.refresh.reuse_chain_alive");
 
         doThrow(lockFailure(1205)).when(refreshTokens).revokeSession(any());
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
         assertThat(errorLines(output)).anyMatch(line -> line.contains("auth.refresh.reuse_chain_alive"));
         assertThat(output.getOut() + output.getErr()).as("실패 원인 사슬(벤더 예외)이 로그에 남는다").contains("Caused by: java.sql.SQLException");
     }
@@ -234,7 +234,7 @@ class TokenServiceTest {
         doThrow(new RedisConnectionFailureException("down")).when(revocations).revokeSession(any(), any());
         doThrow(new RedisConnectionFailureException("down")).when(adminRefreshTokens).delete(any());
 
-        assertThatThrownBy(() -> service.rotate(first.refreshToken(), Role.ADMIN)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> rotate(first.refreshToken(), Role.ADMIN)).isInstanceOf(InvalidTokenException.class);
         assertThat(errorLines(output)).anyMatch(line -> line.contains("auth.refresh.reuse_chain_alive") && line.contains("role=ADMIN"));
     }
 
@@ -246,7 +246,7 @@ class TokenServiceTest {
                 .thenReturn(Rotation.rejected(Rotation.Status.REUSED, session.sessionId(), session.subject()));
         doThrow(new RedisConnectionFailureException("down")).when(revocations).revokeSession(any(), any());
 
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
         verify(refreshTokens).revokeSession(session.sessionId());
     }
 
@@ -260,7 +260,7 @@ class TokenServiceTest {
             Session session = loggedIn(UUID.randomUUID());
             when(refreshTokens.rotate(any(), any())).thenReturn(Rotation.rejected(status, session.sessionId(), session.subject()));
 
-            assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER))
+            assertThatThrownBy(() -> rotate(PRESENTED, Role.USER))
                     .as("%s", status).isInstanceOf(InvalidTokenException.class);
             verify(revocations, never()).revokeSession(any(), any());
         }
@@ -289,7 +289,7 @@ class TokenServiceTest {
         loggedIn(UUID.randomUUID());
         when(checker.isRevoked(any())).thenReturn(true);
         when(checker.isReplaced(any())).thenReturn(true);
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(SessionReplacedException.class);
+        assertThatThrownBy(() -> rotate(PRESENTED, Role.USER)).isInstanceOf(SessionReplacedException.class);
 
         // 회전 전 검사는 통과, 저장소가 행을 잠그고 보니 폐기(그사이 로그인 커밋)
         Mockito.reset(refreshTokens, checker);
@@ -297,7 +297,7 @@ class TokenServiceTest {
         when(checker.isRevoked(any())).thenReturn(false);
         when(checker.isReplaced(any())).thenReturn(true);
         when(refreshTokens.rotate(any(), any())).thenReturn(Rotation.rejected(Rotation.Status.REVOKED, session.sessionId(), session.subject()));
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(SessionReplacedException.class);
+        assertThatThrownBy(() -> rotate(PRESENTED, Role.USER)).isInstanceOf(SessionReplacedException.class);
 
         // 회전은 됐고, 회전 뒤 검사에서 폐기(회전 커밋 뒤 로그인)
         Mockito.reset(refreshTokens, checker);
@@ -305,7 +305,7 @@ class TokenServiceTest {
         rotationSucceeds(session);
         when(checker.isRevoked(any())).thenReturn(false, true);
         when(checker.isReplaced(any())).thenReturn(true);
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(SessionReplacedException.class);
+        assertThatThrownBy(() -> rotate(PRESENTED, Role.USER)).isInstanceOf(SessionReplacedException.class);
     }
 
     @Test
@@ -313,7 +313,7 @@ class TokenServiceTest {
     void unknownRefreshTokenIsRejectedBeforeRotation() {
         when(refreshTokens.find(any())).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.rotate("nonexistent", Role.USER)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> rotate("nonexistent", Role.USER)).isInstanceOf(InvalidTokenException.class);
         verify(refreshTokens, never()).rotate(any(), any());
     }
 
@@ -323,7 +323,7 @@ class TokenServiceTest {
         loggedIn(UUID.randomUUID());
         when(checker.isRevoked(any())).thenReturn(true);
 
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
         verify(refreshTokens, never()).rotate(any(), any());
     }
 
@@ -333,7 +333,7 @@ class TokenServiceTest {
         loggedIn(UUID.randomUUID());
         when(checker.isRevoked(any())).thenThrow(new RevocationCheckFailedException(new RuntimeException("down")));
 
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(RevocationLookupUnavailableException.class);
+        assertThatThrownBy(() -> rotate(PRESENTED, Role.USER)).isInstanceOf(RevocationLookupUnavailableException.class);
         verify(refreshTokens, never()).rotate(any(), any());
     }
 
@@ -344,7 +344,7 @@ class TokenServiceTest {
         rotationSucceeds(session);
         when(checker.isRevoked(any())).thenReturn(false, true);   // 회전 전 false, 회전 후 true
 
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
 
         verify(checker, Mockito.times(2)).isRevoked(any());
         verify(revocations).revokeSession(session.sessionId(), ACCESS);
@@ -358,7 +358,7 @@ class TokenServiceTest {
         rotationSucceeds(session);
         when(checker.isRevoked(any())).thenReturn(false).thenThrow(new RevocationCheckFailedException(new RuntimeException("down")));
 
-        assertThatThrownBy(() -> service.rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> rotate(PRESENTED, Role.USER)).isInstanceOf(InvalidTokenException.class);
         verify(revocations).revokeSession(session.sessionId(), ACCESS);
     }
 
@@ -368,7 +368,7 @@ class TokenServiceTest {
         Session session = loggedIn(UUID.randomUUID());
         rotationSucceeds(session);
 
-        service.rotate(PRESENTED, Role.USER);
+        rotate(PRESENTED, Role.USER);
 
         ArgumentCaptor<TokenClaims> claims = ArgumentCaptor.forClass(TokenClaims.class);
         verify(checker, Mockito.atLeastOnce()).isRevoked(claims.capture());
@@ -398,11 +398,11 @@ class TokenServiceTest {
         TokenClaims refresh = provider.parse(first.refreshToken());
         when(adminRefreshTokens.rotate(eq(refresh.sessionId()), eq(refresh.tokenId()), any(), any())).thenReturn(true);
 
-        TokenService.Rotated rotated = service.rotate(first.refreshToken(), Role.ADMIN);
+        TokenService.Rotated rotated = rotate(first.refreshToken(), Role.ADMIN);
         assertThat(provider.parse(rotated.tokens().refreshToken()).expiresAt()).isEqualTo(refresh.expiresAt());
 
         when(adminRefreshTokens.rotate(any(), any(), any(), any())).thenReturn(false);
-        assertThatThrownBy(() -> service.rotate(first.refreshToken(), Role.ADMIN)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> rotate(first.refreshToken(), Role.ADMIN)).isInstanceOf(InvalidTokenException.class);
         verify(revocations).revokeSession(refresh.sessionId(), REFRESH);   // 재사용 표식은 리프레시 수명
     }
 
@@ -411,7 +411,7 @@ class TokenServiceTest {
     void adminRotateRejectsUserRoleToken() {
         String userRefreshJwt = provider.create(CUSTOMER, Role.USER, UUID.randomUUID(), TokenType.REFRESH);
 
-        assertThatThrownBy(() -> service.rotate(userRefreshJwt, Role.ADMIN)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> rotate(userRefreshJwt, Role.ADMIN)).isInstanceOf(InvalidTokenException.class);
         verify(adminRefreshTokens, never()).rotate(any(), any(), any(), any());
     }
 
@@ -420,20 +420,30 @@ class TokenServiceTest {
     void adminRotateRejectsAccessToken() {
         TokenService.IssuedTokens first = service.issue("admin", Role.ADMIN);
 
-        assertThatThrownBy(() -> service.rotate(first.accessToken(), Role.ADMIN)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> rotate(first.accessToken(), Role.ADMIN)).isInstanceOf(InvalidTokenException.class);
         verify(adminRefreshTokens, never()).rotate(any(), any(), any(), any());
     }
 
     // ────────────────────────────── 조회·폐기
 
     @Test
-    @DisplayName("subjectOf: 불투명 리프레시의 주인은 저장소가 알려 준다. 없는 원문이면 401")
-    void subjectOfReadsTheStore() {
-        loggedIn(UUID.randomUUID());
-        assertThat(service.subjectOf(PRESENTED, Role.USER)).isEqualTo(CUSTOMER);
+    @DisplayName("refreshTarget: 불투명 리프레시의 주인은 저장소가 알려 준다. 없는 원문이면 401")
+    void refreshTargetReadsTheStore() {
+        Session session = loggedIn(UUID.randomUUID());
+        TokenService.RefreshTarget target = service.refreshTarget(PRESENTED, Role.USER);
+        assertThat(target.subject()).isEqualTo(CUSTOMER);
+        assertThat(target.session()).isEqualTo(session);
 
         when(refreshTokens.find("gone")).thenReturn(Optional.empty());
-        assertThatThrownBy(() -> service.subjectOf("gone", Role.USER)).isInstanceOf(InvalidTokenException.class);
+        assertThatThrownBy(() -> service.refreshTarget("gone", Role.USER)).isInstanceOf(InvalidTokenException.class);
+    }
+
+    @Test
+    @DisplayName("회원 재발급은 refreshTarget 이 찾은 행으로 회전한다 — 저장소에서 같은 행을 다시 찾지 않는다")
+    void rotateReusesTheTargetSession() {
+        rotationSucceeds(loggedIn(UUID.randomUUID()));
+        rotate(PRESENTED, Role.USER);
+        verify(refreshTokens, Mockito.times(1)).find(PRESENTED);
     }
 
     @Test
@@ -492,5 +502,10 @@ class TokenServiceTest {
         InOrder order = Mockito.inOrder(revocations, refreshTokens);
         order.verify(revocations).revokeAll(CUSTOMER, REFRESH);
         order.verify(refreshTokens).revokeAllOf(CUSTOMER);
+    }
+
+    /** 컨트롤러와 같은 순서 — 주인을 먼저 찾고 그 행으로 회전한다. */
+    private TokenService.Rotated rotate(String presented, Role role) {
+        return service.rotate(presented, service.refreshTarget(presented, role));
     }
 }

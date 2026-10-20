@@ -106,14 +106,17 @@ public class TokenService {
         return new IssuedTokens(access, refresh, validity);
     }
 
-    /** 재발급 전에 회원 이름을 읽으려면 주인을 먼저 알아야 한다. 판정은 하지 않는다 — 여기서 통과해도 회전은 따로 검사한다. */
-    public String subjectOf(String rawRefreshToken, Role role) {
+    /**
+     * 재발급 전에 회원 이름을 읽으려면 주인을 먼저 알아야 한다. 판정은 하지 않는다 — 여기서 통과해도 회전은 따로 검사한다.
+     * 회원 리프레시는 여기서 찾은 행을 {@link #rotate} 가 그대로 쓴다 — 같은 행을 두 번 읽지 않는다(회전은 잠근 행으로 다시 판정한다).
+     */
+    public RefreshTarget refreshTarget(String rawRefreshToken, Role role) {
         if (role == Role.ADMIN) {
-            return provider.parse(rawRefreshToken).subject();
+            return new RefreshTarget(role, provider.parse(rawRefreshToken).subject(), null);
         }
-        return refreshTokens.find(rawRefreshToken)
-                .orElseThrow(() -> new InvalidTokenException("refresh token not found"))
-                .subject();
+        RefreshTokenStore.Session session = refreshTokens.find(rawRefreshToken)
+                .orElseThrow(() -> new InvalidTokenException("refresh token not found"));
+        return new RefreshTarget(role, session.subject(), session);
     }
 
     /** 로그아웃이 회원 리프레시 쿠키만 들고 왔을 때 그 쿠키가 가리키는 세션. 폐기·만료된 것도 찾는다. */
@@ -121,16 +124,14 @@ public class TokenService {
         return refreshTokens.find(rawRefreshToken).map(RefreshTokenStore.Session::sessionId);
     }
 
-    /** 재발급. 실패는 전부 401 이다. 재사용 탐지면 세션을 끊고 401, 폐기 조회 불가면 retryable 401. */
-    public Rotated rotate(String presentedRefreshToken, Role role) {
-        return role == Role.ADMIN
+    /** 재발급. 실패는 전부 401 이다. 재사용 탐지면 세션을 끊고 401, 폐기 조회 불가면 retryable 401. target 은 같은 토큰의 {@link #refreshTarget}. */
+    public Rotated rotate(String presentedRefreshToken, RefreshTarget target) {
+        return target.role() == Role.ADMIN
                 ? rotateAdmin(presentedRefreshToken)
-                : rotateUser(presentedRefreshToken);
+                : rotateUser(presentedRefreshToken, target.session());
     }
 
-    private Rotated rotateUser(String presented) {
-        RefreshTokenStore.Session session = refreshTokens.find(presented)
-                .orElseThrow(() -> new InvalidTokenException("refresh token not found"));
+    private Rotated rotateUser(String presented, RefreshTokenStore.Session session) {
         TokenClaims asClaims = claimsOf(session);
         if (revokedBeforeRotation(asClaims)) {
             throw rejectRevoked(asClaims, "refresh of revoked session sid=" + shortSid(session.sessionId()));
@@ -357,5 +358,9 @@ public class TokenService {
 
     /** 회전 결과. subject·sessionId 는 응답을 만들 때 쓴다 — 불투명 리프레시에는 주인이 적혀 있지 않다. */
     public record Rotated(IssuedTokens tokens, String subject, UUID sessionId) {
+    }
+
+    /** @param session 회원 리프레시면 찾은 행, 관리자면 null(관리자 리프레시는 JWT 라 회전이 직접 푼다) */
+    public record RefreshTarget(Role role, String subject, RefreshTokenStore.Session session) {
     }
 }
