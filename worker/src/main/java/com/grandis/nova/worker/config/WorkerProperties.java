@@ -69,21 +69,28 @@ public record WorkerProperties(
 
     /**
      * 동시에 나가 있는 요청 수. 상한 = perMock × mockMaxInstances(인프라가 넘기는 mock 최대 대수)이고 그 안에서 자동 조절한다.
-     * 창(adjustEvery)마다 p95 가 healthyP95 미만 · 실패율이 healthyFailureRate 미만이면 increaseStep 만큼 늘리고,
-     * 느린 호출 기준을 넘거나 실패율이 unhealthyFailureRate 이상이면 decreaseFactor 를 곱해 줄인다.
+     * 창(adjustEvery)마다 p95 가 healthyP95 미만 · 실패율이 healthyFailureRate 미만이면 늘리고(기준점까지 두 배, 넘으면 increaseStep),
+     * 느린 호출 기준을 넘거나 실패율이 unhealthyFailureRate 이상이면 decreaseFactor 를 곱해 줄인다(창의 호출이 minimumCalls 이상일 때만,
+     * 느림은 자리를 다 쓴 창이면 호출이 적어도).
+     *
+     * @param initial            시작 자리. 최소와 같게 두고 두 배씩 늘린다 — 장애 중 새로 뜬 태스크가 많이 보내지 않게(2 → 80 약 1분)
+     * @param healthyFailureRate 늘리는 실패율 문턱(%). mock 의 기본 실패 주입(5%)보다 넉넉히 둔다 — 같으면 창마다 늘리기가 반쯤 막힌다
+     * @param minimumCalls       줄이기 전에 창에 있어야 하는 호출 수. 차단기의 최소 호출 수와 같다. 느리면 끝나는 호출이 줄어서,
+     *                           자리를 다 쓴 채 느린 창은 이보다 적어도 줄인다
      */
     public record Concurrency(
             @DefaultValue("16") int perMock,
             @DefaultValue("1") int mockMaxInstances,
-            @DefaultValue("8") int initial,
+            @DefaultValue("2") int initial,
             @DefaultValue("2") int min,
             @DefaultValue("1") int cancelReserved,
             @DefaultValue("100ms") Duration permitWait,
             @DefaultValue("40") int ratePerSecond,
             @DefaultValue("10s") Duration adjustEvery,
             @DefaultValue("1s") Duration healthyP95,
-            @DefaultValue("5") int healthyFailureRate,
+            @DefaultValue("10") int healthyFailureRate,
             @DefaultValue("20") int unhealthyFailureRate,
+            @DefaultValue("10") int minimumCalls,
             @DefaultValue("1") int increaseStep,
             @DefaultValue("0.5") double decreaseFactor
     ) {
@@ -107,6 +114,7 @@ public record WorkerProperties(
                     "concurrency 는 1 <= healthy-failure-rate < unhealthy-failure-rate <= 100 이어야 한다");
             require(increaseStep >= 1 && decreaseFactor > 0 && decreaseFactor < 1,
                     "concurrency 는 increase-step >= 1, 0 < decrease-factor < 1 이어야 한다");
+            require(minimumCalls >= 1, "concurrency.minimum-calls 는 1 이상이어야 한다: " + minimumCalls);
         }
 
         /** worker 하나의 동시 요청 상한. */

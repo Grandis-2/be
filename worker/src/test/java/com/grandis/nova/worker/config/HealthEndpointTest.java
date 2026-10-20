@@ -56,7 +56,7 @@ class HealthEndpointTest {
         assertThat(metrics).containsPattern("resilience4j_circuitbreaker_state\\{[^}]*name=\"mock\"[^}]*state=\"closed\"[^}]*} 1");
         assertThat(metrics).containsPattern("resilience4j_circuitbreaker_not_permitted_calls_total\\{[^}]*name=\"mock\"");
         assertThat(metrics).containsPattern("resilience4j_ratelimiter_available_permissions\\{[^}]*name=\"mock\"");
-        assertThat(metrics).containsPattern("worker_concurrency_limit(\\{[^}]*})? 8");
+        assertThat(metrics).containsPattern("worker_concurrency_limit(\\{[^}]*})? 2");
         assertThat(metrics).containsPattern("worker_concurrency_in_use(\\{[^}]*})? 0");
         assertThat(metrics).containsPattern("worker_receive_blocked(\\{[^}]*})? 0");
     }
