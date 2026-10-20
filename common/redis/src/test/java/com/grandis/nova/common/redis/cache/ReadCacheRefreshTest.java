@@ -1,6 +1,7 @@
 package com.grandis.nova.common.redis.cache;
 
 import com.grandis.nova.common.redis.cache.ReadCacheEvents.Outcome;
+import com.grandis.nova.common.redis.cache.ReadCacheEvents.RefreshResult;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -95,7 +96,8 @@ class ReadCacheRefreshTest {
         ReadCache.Entry<String> refreshed = cache.entry(spec, "g", "k", () -> load("v3"));
         assertThat(refreshed.value()).isEqualTo("v2");
         assertThat(refreshed.loadedAt()).as("갱신을 시작한 시각").isEqualTo(start.plusSeconds(24));
-        assertThat(events.outcomes).containsExactly(Outcome.LOAD, Outcome.HIT, Outcome.HIT_REFRESH, Outcome.REFRESHED, Outcome.HIT);
+        assertThat(events.outcomes).as("요청마다 하나").containsExactly(Outcome.LOAD, Outcome.HIT, Outcome.HIT_REFRESH, Outcome.HIT);
+        assertThat(events.refreshes).as("갱신 작업마다 하나").containsExactly(RefreshResult.STORED);
     }
 
     @Test
@@ -126,7 +128,7 @@ class ReadCacheRefreshTest {
 
         assertThat(cache.entry(spec, "g", "k", () -> load("v2")).value()).isEqualTo("v1");
         assertThat(redis.getExpire(key, TimeUnit.MILLISECONDS)).as("만료가 늘지 않았다").isLessThanOrEqualTo(before);
-        assertThat(events.outcomes).contains(Outcome.REFRESH_FAILED);
+        assertThat(events.refreshes).containsExactly(RefreshResult.FAILED);
     }
 
     @Test
@@ -182,7 +184,8 @@ class ReadCacheRefreshTest {
         rejecting.entry(s, "g", "k", () -> load("v1"));
         clock.advance(Duration.ofSeconds(24));
         assertThat(rejecting.entry(s, "g", "k", () -> load("v2")).value()).isEqualTo("v1");
-        assertThat(events.outcomes).contains(Outcome.REFRESH_REJECTED);
+        assertThat(events.refreshes).containsExactly(RefreshResult.REJECTED);
+        assertThat(events.outcomes.getLast()).as("맡기지 못한 요청은 바로 받음으로 센다").isEqualTo(Outcome.HIT);
         reject[0] = false;
         rejecting.entry(s, "g", "k", () -> load("v2"));
         assertThat(tasks.pending()).isEqualTo(1);
@@ -197,6 +200,52 @@ class ReadCacheRefreshTest {
         clock.advance(Duration.ofSeconds(24));
         assertThat(plain.entry(s, "g", "k", () -> load("v2")).value()).isEqualTo("v1");
         assertThat(loads.get()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("갱신이 끝나면(성공 · 실패) 그 자리가 풀려 다음 주기에 다시 맡긴다")
+    void refreshSlotIsReleasedAfterEachRun() {
+        cache.entry(spec, "g", "k", () -> load("v1"));
+        clock.advance(Duration.ofSeconds(24));
+        cache.entry(spec, "g", "k", () -> load("v2"));
+        tasks.runAll();   // 성공 — v2(읽은 시각 24초)
+        clock.advance(Duration.ofSeconds(24));
+        cache.entry(spec, "g", "k", () -> {
+            throw new IllegalStateException("DB");
+        });
+        assertThat(tasks.pending()).as("성공 뒤 다음 주기").isEqualTo(1);
+        tasks.runAll();   // 실패
+        cache.entry(spec, "g", "k", () -> load("v3"));
+        assertThat(tasks.pending()).as("실패 뒤에도 다시 맡긴다").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("넣지 못한 갱신(넣지 않는 값)은 들고 있던 값이 만료될 때까지 다시 맡기지 않는다")
+    void notStoredRefreshIsNotRepeated() {
+        cache.entry(spec, "g", "k", () -> load("v1"), value -> !value.isEmpty());
+        clock.advance(Duration.ofSeconds(24));
+        cache.entry(spec, "g", "k", () -> load(""), value -> !value.isEmpty());
+        tasks.runAll();
+        assertThat(events.refreshes).containsExactly(RefreshResult.NOT_STORED);
+        for (int i = 0; i < 3; i++) {
+            assertThat(cache.entry(spec, "g", "k", () -> load(""), value -> !value.isEmpty()).value()).isEqualTo("v1");
+        }
+        assertThat(tasks.pending()).as("만료 전에는 다시 맡기지 않는다").isZero();
+    }
+
+    @Test
+    @DisplayName("큐에서 늦게 돈 갱신은 그사이 더 새 값이 Redis 에 들어왔으면 읽지 않는다")
+    void lateRefreshSkipsWhenNewerValueExists() {
+        cache.entry(spec, "g", "k", () -> load("v1"));
+        clock.advance(Duration.ofSeconds(24));
+        cache.entry(spec, "g", "k", () -> load("갱신"));
+        redis.delete(onlyKey());   // 만료(또는 밀려남)
+        clock.advance(Duration.ofSeconds(1));
+        assertThat(cache.entry(spec, "g", "k", () -> load("직접")).value()).as("요청이 직접 읽었다").isEqualTo("직접");
+        tasks.runAll();
+        assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_NEWER);
+        assertThat(loads.get()).as("갱신은 읽지 않았다").isEqualTo(2);
+        assertThat(cache.entry(spec, "g", "k", () -> load("다른 값")).value()).isEqualTo("직접");
     }
 
     private ReadCache cache(Executor refresher) {
@@ -247,6 +296,12 @@ class ReadCacheRefreshTest {
 
     static final class Events implements ReadCacheEvents {
         final List<Outcome> outcomes = Collections.synchronizedList(new ArrayList<>());
+        final List<RefreshResult> refreshes = Collections.synchronizedList(new ArrayList<>());
+
+        @Override
+        public void refreshed(String cache, RefreshResult result) {
+            refreshes.add(result);
+        }
 
         @Override
         public void served(String cache, Outcome outcome) {
