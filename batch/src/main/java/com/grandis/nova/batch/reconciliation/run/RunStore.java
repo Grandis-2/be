@@ -93,6 +93,7 @@ public class RunStore {
      * 찾은 불일치를 넣고 실행을 완료로 바꾼다. 둘이 한 트랜잭션이다 — 완료로 보이는 실행에는 결과가 다 들어 있다.
      * 실행 중이 아니면(기동 정리가 먼저 실패로 바꿈 등) 결과를 넣지 않고 {@link RunNotRunning} 을 던진다.
      * 처음 발견 시각은 범위가 같은 앞 완료 실행에 같은 (코드, 대상)이 있으면 그 값을, 없으면 이 실행의 시작 시각이다.
+     * 불일치는 한 행씩 INSERT 한다(최대 1만 건, 하루 한 번 꼴). 묶어 보내려면 JDBC 주소에 rewriteBatchedStatements 가 필요해 지금은 두지 않는다.
      */
     public void complete(UUID runId, Instant now, RunCounts counts, List<NewFinding> found) {
         tx.executeWithoutResult(status -> {

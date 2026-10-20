@@ -105,7 +105,11 @@ public class ReconciliationService {
         runs.startScheduled(now, properties.holdMargin()).ifPresent(this::execute);
     }
 
-    /** 회차가 마감되고 멈춤 기준만큼 지났는데 그 뒤에 시작한 실행이 없으면 한 번 돌린다 — 마감 직전 신청의 처리가 끝난 뒤에 본다 */
+    /**
+     * 회차가 마감되고 멈춤 기준만큼 지났는데 그 뒤에 시작한 실행이 없으면 한 번 돌린다 — 마감 직전 신청의 처리가 끝난 뒤에 본다.
+     * 그 실행이 판정 불가로 끝나도 다시 돌지 않는다(시작한 실행으로 센다). 실패한 실행을 빼고 세면 Mock 이 계속 안 될 때 확인 주기마다
+     * 다시 돌기 때문이다 — 다음은 정기 실행이고, 급하면 관리자가 실행을 요청한다.
+     */
     public void runAfterCampaignClose() {
         Instant now = clock.instant();
         calendar.latestCloseReadyAt(now, properties.stuckAfter(), properties.campaignCloseLookback())
