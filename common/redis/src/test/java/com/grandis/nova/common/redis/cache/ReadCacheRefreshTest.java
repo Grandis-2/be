@@ -289,7 +289,7 @@ class ReadCacheRefreshTest {
         cache.entry(spec, "g", "k", () -> load("새 세대"));
         clock.advance(Duration.ofSeconds(24));
         cache.entry(spec, "g", "k", () -> load("새 세대 갱신"));
-        assertThat(tasks.pending()).as("건너뛴 뒤 자리가 풀려 다음 주기에 다시 맡긴다").isEqualTo(1);
+        assertThat(tasks.pending()).as("새 세대 키의 갱신은 막히지 않는다").isEqualTo(1);
     }
 
     @Test
@@ -304,6 +304,35 @@ class ReadCacheRefreshTest {
         tasks.runAll();
         assertThat(events.refreshes).containsExactly(RefreshResult.STORED);
         assertThat(cache.entry(spec, "g", "k", () -> load("v4")).value()).isEqualTo("v3");
+    }
+
+    @Test
+    @DisplayName("맡긴 뒤 세대 키가 지워져 지금 세대가 맡길 때보다 작아지면 갱신은 읽지 않는다 — 그 세대 키는 아무도 읽지 않는다")
+    void lateRefreshSkipsAfterGenerationKeyDeleted() {
+        cache.bumpAfterCommit("g");
+        cache.entry(spec, "g", "k", () -> load("v1"));   // 세대 1
+        clock.advance(Duration.ofSeconds(24));
+        cache.entry(spec, "g", "k", () -> load("갱신"));   // 세대 1 로 맡김
+        redis.delete("svc:cache:gen:g");   // 지금 세대 0
+        tasks.runAll();
+        assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_NEWER);
+        assertThat(loads.get()).as("갱신은 읽지 않았다").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("지금 세대를 못 읽으면(차단기 열림) 갱신은 그대로 읽는다 — 넣지는 못한다")
+    void refreshProceedsWhenGenerationUnreadable() {
+        cache.entry(spec, "g", "k", () -> load("v1"));
+        clock.advance(Duration.ofSeconds(24));
+        cache.entry(spec, "g", "k", () -> load("v2"));
+        cache.breaker().transitionToForcedOpenState();
+        try {
+            tasks.runAll();
+        } finally {
+            cache.breaker().transitionToClosedState();
+        }
+        assertThat(loads.get()).as("처음 읽기 + 갱신 읽기").isEqualTo(2);
+        assertThat(events.refreshes).containsExactly(RefreshResult.NOT_STORED);
     }
 
     @Test

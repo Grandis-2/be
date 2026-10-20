@@ -122,7 +122,7 @@ class LocalReadCacheRefreshTest {
         cache.entry("k", () -> load("새 세대"));
         clock.advance(Duration.ofSeconds(4));
         cache.entry("k", () -> load("새 세대 갱신"));
-        assertThat(tasks.pending()).as("건너뛴 뒤 자리가 풀려 다음 주기에 다시 맡긴다").isEqualTo(1);
+        assertThat(tasks.pending()).as("새 세대 자리의 갱신은 막히지 않는다").isEqualTo(1);
     }
 
     @Test
