@@ -10,7 +10,7 @@ import java.time.Duration;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 설정 키는 nova.sqs.consumer.* · nova.sqs.dead-letter.* 다. 범위 검증은 QueuePollerSettings 가 하고,
+ * 설정 키는 nova.sqs.consumer.* · nova.sqs.dead-letter.* · nova.sqs.job-dead-letter.* 다. 범위 검증은 QueuePollerSettings 가 하고,
  * 꺼 둔 환경에서도 바인딩할 때 막힌다(범위 표 전체는 common:sqs 의 시험이 본다).
  */
 class ConsumerPropertiesTest {
@@ -35,6 +35,12 @@ class ConsumerPropertiesTest {
             assertThat(deadLetter.toSettings().concurrency()).isEqualTo(1);
             assertThat(deadLetter.toSettings().maxMessages()).isEqualTo(10);
             assertThat(deadLetter.toSettings().visibility()).isEqualTo(Duration.ofMinutes(1));
+            JobDeadLetterConsumerProperties jobDeadLetter = ctx.getBean(JobDeadLetterConsumerProperties.class);
+            assertThat(jobDeadLetter.enabled()).isFalse();
+            assertThat(jobDeadLetter.toSettings(JobDeadLetterConsumerConfig.REGISTER_DLQ).queue())
+                    .isEqualTo("preorder-register-dlq");
+            assertThat(jobDeadLetter.toSettings(JobDeadLetterConsumerConfig.CANCEL_DLQ).visibility())
+                    .isEqualTo(Duration.ofMinutes(1));
         });
     }
 
@@ -56,8 +62,15 @@ class ConsumerPropertiesTest {
                 assertThat(ctx).getFailure().rootCause().hasMessageContaining("wait-seconds"));
     }
 
+    @Test
+    void 꺼_둔_환경에서도_작업_DLQ_소비기_설정이_범위_밖이면_받지_않는다() {
+        runner.withPropertyValues("nova.sqs.job-dead-letter.wait-seconds=21").run(ctx ->
+                assertThat(ctx).getFailure().rootCause().hasMessageContaining("wait-seconds"));
+    }
+
     @Configuration(proxyBeanMethods = false)
-    @EnableConfigurationProperties({PreorderEventConsumerProperties.class, DeadLetterConsumerProperties.class})
+    @EnableConfigurationProperties({PreorderEventConsumerProperties.class, DeadLetterConsumerProperties.class,
+            JobDeadLetterConsumerProperties.class})
     static class Properties {
     }
 }
