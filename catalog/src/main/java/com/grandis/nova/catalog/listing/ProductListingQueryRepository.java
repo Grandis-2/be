@@ -67,7 +67,7 @@ public class ProductListingQueryRepository {
      * 재고 표는 읽지 않는다). 사전예약의 준비(preorder 회차 행이 있는가)는 catalog DB 에 없어 이 식에서는 참이다 — 회차를 보는 자리는 preorder 에
      * 묻고(PreorderCampaigns), 내부 상품 조회(1.3 · /internal/options)는 묻지 않고 참으로 싣는다(contracts/order-internal.md). products 를 p 로 둔 문장에 넣는다.
      */
-    static final String READY = "(p.sale_mode = 'PREORDER' OR p.stock_ready_at IS NOT NULL)";
+    public static final String READY = "(p.sale_mode = 'PREORDER' OR p.stock_ready_at IS NOT NULL)";
 
     /**
      * 판매 중 옵션의 최저 정가. 할인가는 정가에 대해 줄지 않으므로(같은 상품은 할인율이 하나) 최저 정가에 할인을 건 값이 최저 할인가다 —
@@ -264,30 +264,13 @@ public class ProductListingQueryRepository {
     }
 
     /**
-     * 공개 여부 · 판매 상태 · DB 로 아는 판매 방식별 준비({@link #READY} — 사전예약은 참)를 한 문장으로 읽는다. 내부 조회 API(1.3)와 상품 리뷰 목록의
-     * 노출 판정이 쓴다 — 이 응답을 판정에 쓰는 쪽이 있으므로 같은 스냅샷이어야 한다. 상품이 없으면 비어 있다.
+     * 공개 여부 · 판매 상태 · DB 로 아는 판매 방식별 준비({@link #READY} — 사전예약은 참)를 한 문장으로 읽는다. 상품 리뷰 목록과
+     * 조회수 랭킹의 노출 판정이 쓴다 — 판정에 쓰는 칸이 같은 시점이어야 해서 한 문장이다. 상품이 없으면 비어 있다.
      */
     public Optional<Exposure> findExposure(UUID productId) {
         List<Exposure> rows = jdbc.query("SELECT p.sale_mode, p.visible, p.status, " + READY + " AS ready FROM products p WHERE p.id = :productId",
                 new MapSqlParameterSource("productId", UuidBinary.toBytes(productId)), (rs, rowNum) -> exposure(rs));
         return rows.stream().findFirst();
-    }
-
-    /**
-     * 여러 상품의 공개 여부 · 판매 상태 · DB 로 아는 판매 방식별 준비를 한 문장으로 읽는다({@link #findExposure} 의 일괄판). 없는 상품은 빠진다.
-     * 호출자가 옵션과 같은 스냅샷으로 읽도록 REPEATABLE READ 트랜잭션 안에서 부른다.
-     */
-    public Map<UUID, Exposure> findExposures(Collection<UUID> productIds) {
-        Map<UUID, Exposure> exposures = new HashMap<>();
-        if (productIds.isEmpty()) {
-            return exposures;
-        }
-        jdbc.query("SELECT p.id, p.sale_mode, p.visible, p.status, " + READY + " AS ready FROM products p WHERE p.id IN (:productIds)",
-                new MapSqlParameterSource("productIds", productIds.stream().map(UuidBinary::toBytes).toList()),
-                rs -> {
-                    exposures.put(UuidBinary.fromBytes(rs.getBytes("id")), exposure(rs));
-                });
-        return exposures;
     }
 
     private static Exposure exposure(ResultSet rs) throws SQLException {

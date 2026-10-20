@@ -140,7 +140,7 @@ BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, �
 
 **판정은 order 가 한다.** 사전예약 제외 · 판매 중지 · 비공개 · 재고 · 보증 미제공 여부를 order 가 이 칸들로 가린다. catalog 는 비공개 · 판매 중지 · 사전예약 옵션도 200 으로 사실만 돌려준다.
 
-**한 스냅샷.** 옵션 · 상품 · 노출 칸(`visible` · `productStatus` · `registrationCompleted`)은 한 트랜잭션(REPEATABLE READ)에서 읽는다 — 따로 읽으면 사이에 커밋된 판매 중지 · 공개 전환이 섞여 한순간도 없던 조합이 나온다.
+**한 시점.** 옵션 · 상품 · 노출 칸(`visible` · `productStatus` · `registrationCompleted`)은 한 문장으로 읽는다(`ProductOptionsQueryRepository.findOptionsWithProducts`) — 트랜잭션 없이 한 시점이다. 따로 읽으면 사이에 커밋된 판매 중지 · 공개 전환이 섞여 한순간도 없던 조합이 나온다. 두 번째 읽기를 더하면 이 보장이 깨지므로, 칸을 더할 때도 같은 문장에 더한다.
 
 **오류.** 공통 봉투 그대로.
 
