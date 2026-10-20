@@ -6,6 +6,7 @@ import com.grandis.nova.order.client.catalog.CatalogClient;
 import com.grandis.nova.order.client.catalog.CatalogOption;
 import com.grandis.nova.order.client.catalog.CatalogOptions;
 import com.grandis.nova.order.client.catalog.CatalogReader;
+import com.grandis.nova.order.support.GeneralLog;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
@@ -95,6 +96,20 @@ class CartApiTest {
         assertThat(data.get("items").size()).isZero();
         assertThat(data(asCustomer(get("/api/v1/cart/count"))).get("count").asLong()).isZero();
         verify(catalogClient, never()).getOptions(any(), any());
+    }
+
+    @Test
+    @DisplayName("조회 · 개수는 트랜잭션을 열지 않는다 — 장바구니 줄 한 문장 · 재고 한 문장, 개수 한 문장(준비 · 정리 문장이 없다)")
+    void viewAndCountReadWithoutTransaction() throws Exception {
+        UUID option = sellable(false, 10);
+        add(option, 1, false).andExpect(status().isOk());
+
+        List<String> view = GeneralLog.statements("%FROM cart_items WHERE customer_id%", () -> asCustomer(get("/api/v1/cart")).andExpect(status().isOk()));
+        List<String> count = GeneralLog.statements("SELECT COUNT(*) FROM cart_items%", () -> asCustomer(get("/api/v1/cart/count")).andExpect(status().isOk()));
+
+        assertThat(view).as("조회 — 양성 대조군").anyMatch(sql -> sql.contains("FROM cart_items WHERE customer_id"));
+        assertThat(view).as("조회의 준비 · 정리 문장").noneMatch(GeneralLog::isTransactionHousekeeping);
+        assertThat(count).as("개수").singleElement().satisfies(sql -> assertThat(sql).startsWith("SELECT COUNT(*) FROM cart_items"));
     }
 
     @Test

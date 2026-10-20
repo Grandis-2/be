@@ -70,7 +70,8 @@ public class CartService {
     /** 내 장바구니. 살 수 없는 줄도 그대로 싣고 이유를 단다. 비어 있으면 catalog 를 부르지 않는다. */
     public CartView view(UUID customerId, String sessionToken) {
         requireNoTransaction();
-        List<CartLine> lines = transaction.execute(status -> store.findByCustomer(customerId));
+        // 잠그지 않는 한 문장이라 트랜잭션을 열지 않는다 — 열면 준비 · 정리 문장 3개가 더 붙는다(실측 MySQL 8.4 일반 로그)
+        List<CartLine> lines = store.findByCustomer(customerId);
         if (lines.isEmpty()) {
             return new CartView(List.of());
         }
@@ -91,7 +92,7 @@ public class CartService {
 
     /** 헤더 배지 — 줄 수. */
     public long count(UUID customerId) {
-        return transaction.execute(status -> store.countByCustomer(customerId));
+        return store.countByCustomer(customerId);   // 한 문장 — 트랜잭션을 열지 않는다(view 와 같다)
     }
 
     /**
