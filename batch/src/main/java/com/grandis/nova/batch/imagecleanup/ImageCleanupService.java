@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import software.amazon.awssdk.core.exception.SdkException;
 
@@ -56,6 +57,13 @@ public class ImageCleanupService {
         this.properties = properties;
         this.clock = clock;
         this.transaction = new TransactionTemplate(transactionManager);
+        // 행 삭제는 드로우 회차 · 주문 줄을 끝까지 훑는 하위 조회를 품고, MySQL 은 DELETE 안의 하위 조회가 훑는 행을 공유 잠금으로 읽는다.
+        // REPEATABLE READ(MySQL 기본값)면 훑은 행과 그 사이(갭)를 커밋까지 쥐어 그동안 새 주문 넣기 · 주문 줄 고치기가 기다린다.
+        // READ COMMITTED 면 조건에 안 맞는 행의 잠금을 바로 놓고 갭을 잠그지 않아 주문을 막지 않는다. 다만 훑다가 주문이 쓰는 중인(커밋 전)
+        // 행을 만나면 그 주문이 커밋할 때까지 정리가 기다린다 — 기다림은 주문 트랜잭션 길이만큼이다.
+        // 연결 설정(hikari.transaction-isolation)을 빠뜨려도 READ COMMITTED 로 돌도록 코드로 정한다 — 정합성 검사가 REPEATABLE READ 를
+        // 직접 거는 것과 같은 방식이다
+        this.transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
     }
 
     /** 정기 실행. 다른 실행이 잠금을 쥐고 있으면 건너뛴다 */
