@@ -61,12 +61,14 @@ class ProductListingQueryRepositoryTest {
             Set<UUID> accepting = CampaignWindow.acceptingAt(open, hidden);
             assertThat(ids(repository.findPage(filter, ProductSort.NEWEST, accepting, 0, 10).items())).as("%s", hidden).isEmpty();
             assertThat(repository.count(filter, accepting)).as("%s", hidden).isZero();
+            assertThat(repository.findPage(filter, ProductSort.NEWEST, accepting, 0, 10).total()).as("%s 회원 목록 total", hidden).isZero();
             assertThat(PreorderSaleStatus.of(opensAt, closesAt, hidden)).as("%s", hidden).isNotEqualTo(PreorderSaleStatus.OPEN);
         }
         for (Instant shown : List.of(opensAt, closesAt.minusNanos(1))) {
             Set<UUID> accepting = CampaignWindow.acceptingAt(open, shown);
             assertThat(ids(repository.findPage(filter, ProductSort.NEWEST, accepting, 0, 10).items())).as("%s", shown).containsExactly(productId);
             assertThat(repository.count(filter, accepting)).as("%s", shown).isEqualTo(1);
+            assertThat(repository.findPage(filter, ProductSort.NEWEST, accepting, 0, 10).total()).as("%s 회원 목록 total", shown).isEqualTo(1);
             assertThat(PreorderSaleStatus.of(opensAt, closesAt, shown)).isEqualTo(PreorderSaleStatus.OPEN);
         }
     }
@@ -82,6 +84,7 @@ class ProductListingQueryRepositoryTest {
 
         assertThat(repository.count(filter, List.of(unready))).as("일반 상품은 접수 중 id 로 보이지 않는다").isZero();
         assertThat(repository.count(filter, List.of())).as("접수 중이 아니면 숨는다").isZero();
+        assertThat(repository.findPage(filter, ProductSort.NEWEST, List.of(unready), 0, 10).total()).as("회원 목록 total — 일반 상품은 접수 중 id 로 보이지 않는다").isZero();
         assertThat(ids(repository.findPage(filter, ProductSort.NEWEST, List.of(preorder), 0, 10).items())).as("대조군").containsExactly(preorder);
     }
 
