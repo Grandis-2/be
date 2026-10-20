@@ -249,6 +249,7 @@ class DrawHandlerTest {
     @Test
     void 없는_경로_응답이면_추첨하지_않고_받은_횟수를_쓰지_않게_돌려보낸다() {
         MOCK.respond(routes(error(404, "NO_SUCH_ENDPOINT"), drawn(winners(1))));
+        long held = misconfigured();
 
         assertThat(handler.handle(draw.requested(3, 1))).isEqualTo(MessageOutcome.delete());
 
@@ -257,6 +258,7 @@ class DrawHandlerTest {
                 .as("처음 본 시각을 싣는다").containsKey("misconfiguredSince");
         assertThat(draw.calls(MOCK)).containsOnly("GET /external/draws/{drawId}");
         assertThat(draw.deadLetter(queues, NONE)).isEmpty();
+        assertThat(misconfigured() - held).as("설정 오류로 돌려보낸 지표").isEqualTo(1);
     }
 
     /** 끝없이 돌려보내면 사람이 볼 곳이 없다. 처음 본 때부터 정한 시간(기본 30분)이 지나면 DLQ 에 넣는다. */
@@ -267,6 +269,7 @@ class DrawHandlerTest {
         Map<String, MessageAttributeValue> attributes = new HashMap<>(message.messageAttributes());
         attributes.put("misconfiguredSince", MessageAttributeValue.builder().dataType("String")
                 .stringValue(Instant.now().minus(Duration.ofMinutes(31)).toString()).build());
+        long held = misconfigured();
 
         assertThat(handler.handle(message.toBuilder().messageAttributes(attributes).build()))
                 .isEqualTo(MessageOutcome.delete());
@@ -274,6 +277,7 @@ class DrawHandlerTest {
         Message dead = draw.deadLetter(queues, Draws.TIMEOUT).orElseThrow(() -> new AssertionError("DLQ 로 가지 않았다"));
         assertThat(Draws.attributes(dead)).containsEntry("deadLetterReason", "MISCONFIGURED");
         assertThat(draw.resent(queues, NONE)).isEmpty();
+        assertThat(misconfigured() - held).as("포기하는 번도 지표에 남는다").isEqualTo(1);
     }
 
     @Test
@@ -311,5 +315,10 @@ class DrawHandlerTest {
                         .as(type + " " + outcome).isNotNull();
             }
         }
+        assertThat(meters.find(JobHandler.MISCONFIGURED_METRIC).tags("jobType", "DRAW").timer()).isNotNull();
+    }
+
+    private long misconfigured() {
+        return meters.timer(JobHandler.MISCONFIGURED_METRIC, "jobType", "DRAW").count();
     }
 }

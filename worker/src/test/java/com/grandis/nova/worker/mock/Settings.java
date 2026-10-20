@@ -16,8 +16,13 @@ final class Settings {
 
     /** 연결 · 응답 0.3초. */
     static WorkerProperties.Mock mock(URI baseUrl) {
+        return mock(baseUrl, Duration.ofMillis(300));
+    }
+
+    /** 연결 · 응답 제한을 정한다. 시간 초과를 보지 않는 시험은 넉넉히 둔다 — 느린 CI 의 첫 요청이 시간 초과로 읽히지 않게. */
+    static WorkerProperties.Mock mock(URI baseUrl, Duration timeout) {
         return new WorkerProperties.Mock(baseUrl, Duration.ofSeconds(30), Duration.ofSeconds(1), DataSize.ofKilobytes(64),
-                Duration.ofMillis(300), Duration.ofMillis(300), SLOW_CALL);
+                timeout, timeout, SLOW_CALL);
     }
 
     /** 최근 4건 중 절반이 실패하면 열리고, 0.2초(다시 열리면 0.4초) 뒤 반쯤 열려 3건을 시험한다. */

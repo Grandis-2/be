@@ -26,6 +26,9 @@ import static org.assertj.core.api.Assertions.tuple;
 class MockClientTest {
 
     static final JsonMapper JSON = JsonMapper.builder().build();
+    /** 응답 시간 초과를 보는 시험 밖에서는 넉넉히 둔다. 짧으면 느린 CI 의 첫 요청이 응답 대신 시간 초과로 읽힌다. */
+    static final Duration TIMEOUT = Duration.ofSeconds(5);
+    static final Duration SHORT_TIMEOUT = Duration.ofMillis(300);
     static final JsonNode REGISTER = JSON.readTree("""
             {"ourReservationId":"K-1","customerRef":"c","itemCode":"i","optionCode":"o","qty":1,"scope":"preorder"}""");
 
@@ -36,7 +39,7 @@ class MockClientTest {
     @BeforeEach
     void setUp() {
         mock = new FakeMock();
-        client = clientFor(mock.baseUrl());
+        client = clientFor(mock.baseUrl(), TIMEOUT);
     }
 
     @AfterEach
@@ -159,7 +162,7 @@ class MockClientTest {
         URI closed = mock.baseUrl();
         mock.close();
         http.close();
-        client = clientFor(closed);
+        client = clientFor(closed, TIMEOUT);
 
         MockReply reply = client.register("K-1", REGISTER);
 
@@ -183,7 +186,9 @@ class MockClientTest {
     }
 
     @Test
-    void 응답이_제한_시간_안에_오지_않으면_응답_시간_초과다() {
+    void 응답이_제한_시간_안에_오지_않으면_응답_시간_초과다() throws Exception {
+        http.close();
+        client = clientFor(mock.baseUrl(), SHORT_TIMEOUT);
         mock.respond(FakeMock.after(Duration.ofSeconds(1), FakeMock.json(201, "{\"externalNumber\":\"R-1\"}")));
 
         assertThat(client.register("K-1", REGISTER).failure()).isEqualTo(TransportFailure.READ_TIMEOUT);
@@ -197,8 +202,8 @@ class MockClientTest {
         assertThat(mock.requests()).as("끊겨도 다시 보내지 않는다").hasSize(1);
     }
 
-    private MockClient clientFor(URI baseUrl) {
-        http = MockConfig.httpClient(Settings.mock(baseUrl), 4);
-        return new MockClient(MockConfig.restClient(http, Settings.mock(baseUrl)), JSON, 1024);
+    private MockClient clientFor(URI baseUrl, Duration timeout) {
+        http = MockConfig.httpClient(Settings.mock(baseUrl, timeout), 4);
+        return new MockClient(MockConfig.restClient(http, Settings.mock(baseUrl, timeout)), JSON, 1024);
     }
 }

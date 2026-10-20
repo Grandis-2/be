@@ -7,6 +7,7 @@ import com.grandis.nova.common.sqs.testing.SqsTestConfig;
 import com.grandis.nova.common.sqs.testing.TestQueues;
 import com.grandis.nova.worker.mock.FakeMock;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,6 +26,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static com.grandis.nova.worker.mock.FakeMock.empty;
 import static com.grandis.nova.worker.mock.FakeMock.html;
@@ -305,10 +307,27 @@ class JobHandlerTest {
         assertThat(job.resent(queues)).as("처음 본 시각을 그대로 잇는다").containsEntry("misconfiguredSince", since.toString());
     }
 
+    /** 돌려보낸 메시지는 새 메시지라 큐 나이 경보에 잡히지 않는다. 처음 본 때부터 지난 시간을 지표로 내 포기 전에 본다. */
+    @Test
+    void 설정_오류로_돌려보낼_때마다_처음_본_때부터_지난_시간을_지표로_낸다() {
+        MOCK.respond(html(404));
+        Timer held = meters.timer(JobHandler.MISCONFIGURED_METRIC, "jobType", "REGISTER");
+        long before = held.count();
+        Instant since = Instant.now().minus(Duration.ofMinutes(10));
+
+        handler.handle(job.message(Map.of("misconfiguredSince", since.toString())));
+
+        assertThat(job.resent(queues)).containsKey("misconfiguredSince");
+        assertThat(held.count() - before).isEqualTo(1);
+        assertThat(held.max(TimeUnit.MINUTES)).isGreaterThanOrEqualTo(10);
+    }
+
     /** 끝없이 돌면 작업이 PENDING 에 남은 채 아무 경보에도 잡히지 않는다. 정한 시간(기본 30분)이 지나면 포기를 알린다. */
     @Test
     void 설정_오류가_정한_시간_넘게_이어지면_포기를_알린다() {
         MOCK.respond(html(404));
+        Timer held = meters.timer(JobHandler.MISCONFIGURED_METRIC, "jobType", "REGISTER");
+        long before = held.count();
         String since = Instant.now().minus(Duration.ofMinutes(31)).toString();
 
         MessageOutcome outcome = handler.handle(job.message(Map.of("run", "2", "attempt", "3",
@@ -320,6 +339,8 @@ class JobHandlerTest {
         assertThat(event.get("payload").get("reason").asString()).isEqualTo("MISCONFIGURED");
         assertThat(attempt(event.get("payload"))).isEqualTo("run=2 1-3 SYSTEM REJECTED 404 MISCONFIGURED");
         assertThat(job.resent(queues, Duration.ofSeconds(2))).isEmpty();
+        assertThat(held.count() - before).as("포기하는 번도 지표에 남는다").isEqualTo(1);
+        assertThat(held.max(TimeUnit.MINUTES)).isGreaterThanOrEqualTo(31);
     }
 
     /** 차례를 쓰면 설정 오류는 풀린 것이다. 시각을 이으면 다음 설정 오류에서 바로 포기한다. */
@@ -393,6 +414,7 @@ class JobHandlerTest {
                         .as(jobType + " " + outcome).isNotNull();
             }
             assertThat(meters.find(JobHandler.GENERATIONS_METRIC).tags("jobType", jobType).counter()).isNotNull();
+            assertThat(meters.find(JobHandler.MISCONFIGURED_METRIC).tags("jobType", jobType).timer()).isNotNull();
         }
     }
 

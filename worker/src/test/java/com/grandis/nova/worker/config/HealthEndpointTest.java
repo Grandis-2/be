@@ -61,9 +61,11 @@ class HealthEndpointTest {
         assertThat(metrics).containsPattern("worker_receive_blocked(\\{[^}]*})? 0");
     }
 
+    /** 소비를 끈 구성에도 "consumers" 는 있다(볼 소비기가 없어 UP) — 그룹에 없는 이름이 들어 있으면 기동이 실패한다. */
     @Test
-    void readiness_는_앱의_준비_상태만_본다() {
+    void readiness_는_앱의_준비_상태와_소비_스레드만_본다() {
         assertThat(groups.get("readiness").isMember("readinessState")).isTrue();
+        assertThat(groups.get("readiness").isMember("consumers")).isTrue();
         assertThat(groups.get("readiness").isMember("diskSpace")).isFalse();
     }
 

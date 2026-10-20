@@ -1,5 +1,7 @@
 package com.grandis.nova.common.sqs;
 
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -10,6 +12,7 @@ import org.springframework.context.annotation.Configuration;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.http.SdkHttpClient;
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.sqs.SqsClient;
@@ -25,14 +28,27 @@ import software.amazon.awssdk.services.sqs.SqsClientBuilder;
 @EnableConfigurationProperties(SqsClientProperties.class)
 public class SqsAutoConfiguration {
 
+    /** 서비스가 SQS 에 쓸 HTTP 클라이언트를 둘 때의 빈 이름. 이름으로 찾아 다른 용도(S3 등)의 클라이언트를 집어 오지 않는다. */
+    public static final String HTTP_CLIENT_BEAN = "sqsHttpClient";
+
+    /**
+     * HTTP 는 서비스가 {@link #HTTP_CLIENT_BEAN} 빈을 두면 그것으로(동시 호출이 많아 연결 수를 정해야 하는 서비스), 없으면 URLConnection
+     * 으로 보낸다. 넘겨받은 HTTP 클라이언트는 이 클라이언트를 닫아도 닫히지 않는다 — 그 빈이 스스로 닫는다.
+     */
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "nova.sqs", name = "region")
-    SqsClient sqsClient(SqsClientProperties properties) {
+    SqsClient sqsClient(SqsClientProperties properties,
+                        @Qualifier(HTTP_CLIENT_BEAN) ObjectProvider<SdkHttpClient> httpClient) {
         SqsClientBuilder builder = SqsClient.builder()
                 .region(Region.of(properties.region()))
-                .httpClientBuilder(UrlConnectionHttpClient.builder())
                 .overrideConfiguration(config -> config.apiCallTimeout(properties.apiCallTimeout()));
+        SdkHttpClient http = httpClient.getIfUnique();
+        if (http == null) {
+            builder.httpClientBuilder(UrlConnectionHttpClient.builder());
+        } else {
+            builder.httpClient(http);
+        }
         if (properties.endpoint() == null) {
             return builder.credentialsProvider(DefaultCredentialsProvider.builder().build()).build();
         }

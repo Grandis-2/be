@@ -5,12 +5,18 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import software.amazon.awssdk.http.ExecutableHttpRequest;
+import software.amazon.awssdk.http.HttpExecuteRequest;
+import software.amazon.awssdk.http.SdkHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.sqs.SqsClient;
 
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /** 클라이언트는 지역이 있을 때만, 아웃박스 전송은 아웃박스가 있고 transport=sqs 일 때만 켜진다. */
 class SqsAutoConfigurationTest {
@@ -83,5 +89,42 @@ class SqsAutoConfigurationTest {
         withRegion.withBean(SqsClient.class, () -> own).run(ctx ->
                 assertThat(ctx.getBean(SqsClient.class)).isSameAs(own));
         own.close();
+    }
+
+    /** 서비스가 HTTP 클라이언트만 두면 자동설정의 클라이언트가 그것으로 보낸다(주소 · 자격 증명은 그대로 자동설정이 정한다). */
+    @Test
+    void 서비스가_SQS_용_HTTP_클라이언트를_두면_그것으로_보낸다() {
+        RecordingHttpClient http = new RecordingHttpClient();
+        withRegion.withBean(SqsAutoConfiguration.HTTP_CLIENT_BEAN, SdkHttpClient.class, () -> http).run(ctx -> {
+            assertThatThrownBy(() -> ctx.getBean(SqsClient.class).listQueues()).hasMessageContaining("보내지 않는다");
+            assertThat(http.requests).hasPositiveValue();
+        });
+    }
+
+    /** 다른 용도(S3 등)로 둔 HTTP 클라이언트는 쓰지 않는다. */
+    @Test
+    void 이름이_다른_HTTP_클라이언트는_쓰지_않는다() {
+        RecordingHttpClient http = new RecordingHttpClient();
+        withRegion.withBean("s3HttpClient", SdkHttpClient.class, () -> http).run(ctx -> {
+            // 에뮬레이터 주소로 보내 본다. 떠 있지 않으면 실패하지만 이 시험은 어느 클라이언트로 보냈는지만 본다
+            catchThrowable(() -> ctx.getBean(SqsClient.class).listQueues());
+            assertThat(http.requests).hasValue(0);
+        });
+    }
+
+    /** 보내지 않고 받은 요청 수만 센다. */
+    static final class RecordingHttpClient implements SdkHttpClient {
+
+        final AtomicInteger requests = new AtomicInteger();
+
+        @Override
+        public ExecutableHttpRequest prepareRequest(HttpExecuteRequest request) {
+            requests.incrementAndGet();
+            throw new IllegalStateException("보내지 않는다");
+        }
+
+        @Override
+        public void close() {
+        }
     }
 }

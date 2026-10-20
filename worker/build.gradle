@@ -13,6 +13,8 @@ dependencies {
     implementation project(':common:message')
     // SQS 클라이언트 · 묶음 소비기 · 지연 재전송. AWS SDK 와 그 버전도 여기서 온다.
     implementation project(':common:sqs')
+    // SQS 는 받기 · 삭제 · 결과 알림이 동시에 많아 연결 수를 정할 수 있는 Apache 클라이언트로 보낸다(SyncConfig.sqsHttpClient)
+    implementation 'software.amazon.awssdk:apache5-client'
     // 서비스 API 는 없다. health · 지표를 내놓을 웹 서버만 쓴다(웹 서버가 없으면 actuator 가 HTTP 로 열리지 않는다)
     implementation 'org.springframework.boot:spring-boot-starter-web'
     // 외부 mock 은 RestClient 로 부른다. 연결 최대 수명을 정하려고 Apache HttpClient 를 쓴다(버전은 Boot 가 관리)

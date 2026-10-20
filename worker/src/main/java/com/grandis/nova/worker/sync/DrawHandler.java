@@ -109,6 +109,7 @@ final class DrawHandler implements BatchMessageHandler {
         for (DrawEventType type : DrawEventType.values()) {
             OUTCOMES.forEach(outcome -> meters.counter(METRIC, "eventType", type.name(), "outcome", outcome));
         }
+        meters.timer(JobHandler.MISCONFIGURED_METRIC, "jobType", JobType.DRAW.name());
         // 종류를 모르는 메시지가 끝나는 길: 모르는 종류 · 읽을 수 없는 본문(DLQ) · 내려가는 중 돌려보냄
         List.of("unknown-type", "dead-lettered", "returned")
                 .forEach(outcome -> meters.counter(METRIC, "eventType", UNKNOWN_EVENT, "outcome", outcome));
@@ -252,6 +253,9 @@ final class DrawHandler implements BatchMessageHandler {
     private MessageOutcome misconfigured(Message message, Call call) {
         Instant now = clock.instant();
         Instant since = JobProgress.misconfiguredSince(message).orElse(now);
+        // 포기하는 마지막 번도 남긴다 — 그래야 최대 경과 시간이 포기 시점까지 닿는다
+        meters.timer(JobHandler.MISCONFIGURED_METRIC, "jobType", JobType.DRAW.name())
+                .record(Duration.between(since, now));
         if (!now.isBefore(since.plus(misconfiguredGiveUp))) {
             log.error("Mock 이 아닌 곳의 응답이 {} 넘게 이어져 드로우 메시지를 DLQ 에 넣는다 — 주소 · 경로 설정 확인 필요 eventType={} id={}",
                     misconfiguredGiveUp, call.type(), call.id());

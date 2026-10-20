@@ -48,6 +48,11 @@ final class JobHandler implements BatchMessageHandler {
     static final String JOBS_METRIC = "worker.jobs";
     /** 한 세대를 다 쓰고 다음 세대로 넘어간 횟수. 오래 버티는 CANCEL 은 이 값이 "계속 실패 중"의 신호다. */
     static final String GENERATIONS_METRIC = "worker.jobs.generations";
+    /**
+     * 설정 오류를 겪은 메시지가 처음 본 때부터 지난 시간. 돌려보낸 메시지는 새 메시지라 큐 나이 경보에 잡히지 않는다 —
+     * 포기(reject-guard.give-up-after)하기 전에 이 지표로 사람이 먼저 본다. 작업 종류마다 처음부터 0 으로 내보낸다.
+     */
+    static final String MISCONFIGURED_METRIC = "worker.misconfigured";
     static final String MISCONFIGURED = "MISCONFIGURED";
     static final String PAYLOAD_INVALID = "PAYLOAD_INVALID";
     static final String GENERATION_EXHAUSTED = "GENERATION_EXHAUSTED";
@@ -95,6 +100,7 @@ final class JobHandler implements BatchMessageHandler {
         this.shutdown = shutdown;
         OUTCOMES.forEach(outcome -> meters.counter(JOBS_METRIC, "jobType", type.name(), "outcome", outcome));
         meters.counter(GENERATIONS_METRIC, "jobType", type.name());
+        meters.timer(MISCONFIGURED_METRIC, "jobType", type.name());
     }
 
     @Override
@@ -184,6 +190,8 @@ final class JobHandler implements BatchMessageHandler {
     private MessageOutcome misconfigured(Message message, JobReady job, JobProgress progress, Turn.Outcome outcome) {
         Instant now = clock.instant();
         Instant since = JobProgress.misconfiguredSince(message).orElse(now);
+        // 포기하는 마지막 번도 남긴다 — 그래야 최대 경과 시간이 포기 시점까지 닿는다
+        meters.timer(MISCONFIGURED_METRIC, "jobType", type.name()).record(Duration.between(since, now));
         if (!now.isBefore(since.plus(misconfiguredGiveUp))) {
             MockResult last = outcome.last();
             // preorder 는 포기에 차례 기록을 요구하고, 시도 결과는 정해진 값만 받는다 — 우리 쪽을 고쳐야 하는 거절로 남긴다
