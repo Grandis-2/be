@@ -83,14 +83,17 @@ public class MockGateway {
         Instant startedAt = clock.instant();
         long startNanos = System.nanoTime();
         MockReply reply;
+        Duration elapsed;
+        Judgement judgement;
+        // 차단기에 결과를 알리기 전에 빠져나가면 자리를 돌려준다. 반쯤 열린 동안 시험 자리가 새면 다시 닫히지 못한다
         try {
             reply = send.get();
+            elapsed = Duration.ofNanos(System.nanoTime() - startNanos);
+            judgement = judge.apply(reply);
         } catch (RuntimeException | Error e) {
             circuit.release();
             throw e;
         }
-        Duration elapsed = Duration.ofNanos(System.nanoTime() - startNanos);
-        Judgement judgement = judge.apply(reply);
         Verdict verdict = judgement.verdict();
         circuit.record(verdict, elapsed);
         if (verdict != Verdict.MISCONFIGURED) {

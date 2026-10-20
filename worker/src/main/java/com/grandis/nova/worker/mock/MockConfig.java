@@ -54,8 +54,8 @@ class MockConfig {
     @Bean
     MockCircuit mockCircuit(WorkerProperties properties, Clock clock, CircuitBreakerRegistry registry,
                             ConcurrencyLimiter limiter) {
-        return new MockCircuit(properties.circuit(), properties.mock().slowCallThreshold(), clock,
-                config -> registry.circuitBreaker(MockCircuit.NAME, config), limiter::shrinkToMin);
+        return new MockCircuit(properties.circuit(), clock, config -> registry.circuitBreaker(MockCircuit.NAME, config),
+                limiter::shrinkToMin);
     }
 
     @Bean

@@ -177,8 +177,8 @@ class MockGatewayTest {
         http = MockConfig.httpClient(Settings.mock(mock.baseUrl()), 4);
         MockClient client = new MockClient(MockConfig.restClient(http, Settings.mock(mock.baseUrl())), JSON, 65536);
         limiter = new ConcurrencyLimiter(Settings.concurrency(), Settings.SLOW_CALL, clock);
-        circuit = new MockCircuit(Settings.circuit(), Settings.SLOW_CALL, clock,
-                config -> CircuitBreaker.of(MockCircuit.NAME, config), limiter::shrinkToMin);
+        circuit = new MockCircuit(Settings.circuit(), clock, config -> CircuitBreaker.of(MockCircuit.NAME, config),
+                limiter::shrinkToMin);
         rejectGuard = new RejectGuard(Settings.rejectGuard(), clock);
         gateway = new MockGateway(client, circuit, RateLimiter.of(MockCircuit.NAME, rateLimit), limiter, rejectGuard,
                 meters, clock);

@@ -11,7 +11,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
-/** 최근 4건 중 절반이 실패 · 느리면 열리고, 0.2초(다시 열리면 0.4초) 뒤 스스로 반쯤 열려 3건을 시험한다. */
+/** 최근 4건 중 절반이 실패하면 열리고(느린 성공은 세지 않는다), 0.2초(다시 열리면 0.4초) 뒤 스스로 반쯤 열려 3건을 시험한다. */
 class MockCircuitTest {
 
     static final Duration FAST = Duration.ofMillis(10);
@@ -21,8 +21,8 @@ class MockCircuitTest {
 
     @BeforeEach
     void setUp() {
-        circuit = new MockCircuit(Settings.circuit(), Settings.SLOW_CALL, Clock.systemUTC(),
-                config -> CircuitBreaker.of(MockCircuit.NAME, config), opened::incrementAndGet);
+        circuit = new MockCircuit(Settings.circuit(), Clock.systemUTC(), config -> CircuitBreaker.of(MockCircuit.NAME, config),
+                opened::incrementAndGet);
     }
 
     @Test
@@ -45,14 +45,16 @@ class MockCircuitTest {
         assertThat(circuit.openRemaining()).isZero();
     }
 
+    /** 느리기만 한 mock 에 열고 닫기를 되풀이하면 처리량이 0 이 된다. 느림은 자동 조절이 자리를 줄여 다룬다. */
     @Test
-    void 성공해도_느린_호출이_많으면_열린다() {
-        for (int i = 0; i < 4; i++) {
+    void 느린_성공만으로는_열리지_않는다() {
+        for (int i = 0; i < 20; i++) {
             assertThat(circuit.tryAcquire()).isTrue();
-            circuit.record(Verdict.SUCCESS, Settings.SLOW_CALL.plusMillis(50));
+            circuit.record(Verdict.SUCCESS, Duration.ofSeconds(6));
         }
 
-        assertThat(circuit.isOpen()).isTrue();
+        assertThat(circuit.isOpen()).isFalse();
+        assertThat(opened).hasValue(0);
     }
 
     @Test

@@ -15,13 +15,18 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 /**
- * 외부 mock 차단기. worker 마다 따로 판단한다. 일시 실패 · 결과 모름만 실패로 세고, 외부가 거절한 요청과 설정 오류는 세지 않는다.
+ * 외부 mock 차단기. worker 마다 따로 판단한다. 일시 실패 · 결과 모름만 실패로 세고, 외부가 거절한 요청 · 설정 오류 · 느린 성공은 세지 않는다.
  * 열려 있는 시간은 다시 열릴 때마다 늘고, 시간이 지나면 스스로 반쯤 열려 시험 호출을 받는다.
  */
 public final class MockCircuit {
 
     private static final Logger log = LoggerFactory.getLogger(MockCircuit.class);
     static final String NAME = "mock";
+    /**
+     * 느린 성공으로는 열지 않는다 — 느리기만 한 mock 에 열고 닫기를 되풀이하면 처리량이 0 이 된다. 느림은 자동 조절이 다룬다.
+     * 한 호출의 최대 시간(연결 + 응답 제한)보다 훨씬 길게 두어 느린 호출이 생기지 않게 한다.
+     */
+    private static final Duration NEVER_SLOW = Duration.ofHours(1);
 
     private final CircuitBreaker breaker;
     private final Clock clock;
@@ -37,8 +42,8 @@ public final class MockCircuit {
      * @param create 설정으로 차단기를 만든다. 지표를 내려면 레지스트리가 만들게 한다
      * @param onOpen 열릴 때마다 불린다
      */
-    MockCircuit(WorkerProperties.Circuit settings, Duration slowCallThreshold, Clock clock,
-                Function<CircuitBreakerConfig, CircuitBreaker> create, Runnable onOpen) {
+    MockCircuit(WorkerProperties.Circuit settings, Clock clock, Function<CircuitBreakerConfig, CircuitBreaker> create,
+                Runnable onOpen) {
         this.clock = clock;
         this.openFirst = settings.openFirst();
         this.openMax = settings.openMax();
@@ -49,8 +54,7 @@ public final class MockCircuit {
                 .slidingWindowSize(settings.window())
                 .minimumNumberOfCalls(settings.minimumCalls())
                 .failureRateThreshold(settings.failureRate())
-                .slowCallRateThreshold(settings.slowCallRate())
-                .slowCallDurationThreshold(slowCallThreshold)
+                .slowCallDurationThreshold(NEVER_SLOW)
                 .permittedNumberOfCallsInHalfOpenState(settings.halfOpenCalls())
                 .waitIntervalFunctionInOpenState(opens -> openFor(opens).toMillis())
                 // 열린 동안은 받기를 멈춰 호출이 없다. 호출이 와야 반쯤 열리게 두면 영영 열려 있는다
@@ -87,7 +91,6 @@ public final class MockCircuit {
 
     void record(Verdict verdict, Duration elapsed) {
         switch (verdict) {
-            // 느린 성공은 차단기가 걸린 시간으로 가른다
             case SUCCESS, ABSENT, PENDING -> breaker.onSuccess(elapsed.toNanos(), TimeUnit.NANOSECONDS);
             case TRANSIENT, UNKNOWN -> breaker.onError(elapsed.toNanos(), TimeUnit.NANOSECONDS,
                     new IllegalStateException(verdict.name()));

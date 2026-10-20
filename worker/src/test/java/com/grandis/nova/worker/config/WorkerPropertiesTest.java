@@ -30,7 +30,7 @@ class WorkerPropertiesTest {
         assertThat(properties.retry().backoff())
                 .containsExactly(Duration.ofSeconds(10), Duration.ofSeconds(20), Duration.ofSeconds(40));
         assertThat(properties.retry().generations()).isEqualTo(3);
-        assertThat(properties.retry().generationGap()).isEqualTo(Duration.ofMinutes(15));
+        assertThat(properties.retry().generationGap()).isEqualTo(Duration.ofMinutes(12));
         assertThat(properties.retry().inRoundDelayMin()).isEqualTo(Duration.ofMillis(200));
         assertThat(properties.retry().inRoundDelayMax()).isEqualTo(Duration.ofMillis(500));
         assertThat(properties.retry().jitterRatio()).isEqualTo(0.2);
@@ -88,6 +88,7 @@ class WorkerPropertiesTest {
                 Map.of("nova.worker.mock.max-response-body", "2GB"),
                 Map.of("nova.worker.mock.validate-after-inactivity", "0s"),
                 Map.of("nova.worker.reject-guard.pause", "0s"),
+                Map.of("nova.worker.reject-guard.pause", "16m"),
                 Map.of("nova.worker.concurrency.per-mock", "65536", "nova.worker.concurrency.mock-max-instances", "65536"),
                 Map.of("nova.worker.concurrency.rate-per-second", "2147483647",
                         "nova.worker.concurrency.mock-max-instances", "2"),

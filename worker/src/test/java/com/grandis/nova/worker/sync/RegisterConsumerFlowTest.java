@@ -1,5 +1,6 @@
 package com.grandis.nova.worker.sync;
 
+import com.grandis.nova.common.sqs.testing.FlociTestContainer;
 import com.grandis.nova.common.sqs.testing.SqsTestConfig;
 import com.grandis.nova.common.sqs.testing.TestQueues;
 import com.grandis.nova.worker.mock.FakeMock;
@@ -94,6 +95,19 @@ class RegisterConsumerFlowTest {
 
         assertThat(job.event(queues).get("eventType").asString()).isEqualTo("EXTERNAL_JOB_SUCCEEDED");
         await().during(Duration.ofSeconds(5)).atMost(Duration.ofSeconds(8)).until(() -> job.calls(MOCK).size() == 1);
+    }
+
+    /** 누구의 작업인지 몰라 결과를 알릴 수 없는 메시지도 지우지 않는다 — 최대 수신 횟수를 넘기면 SQS 가 DLQ 로 옮겨 사람이 본다. */
+    @Test
+    void 읽을_수_없는_메시지는_지우지_않아_최대_수신_횟수를_넘긴_뒤_DLQ_로_간다() {
+        String url = sqs.getQueueUrl(request -> request.queueName(Jobs.REGISTER_QUEUE)).queueUrl();
+        String body = "not-json-" + job.key;
+        sqs.sendMessage(request -> request.queueUrl(url).messageBody(body));
+
+        assertThat(queues.receive(Jobs.REGISTER_QUEUE + "-dlq", message -> message.body().equals(body),
+                Duration.ofSeconds(3L * FlociTestContainer.MAX_RECEIVE_COUNT + 10)))
+                .as("DLQ 로 갔다").isPresent();
+        assertThat(job.calls(MOCK)).isEmpty();
     }
 
     private void send(Map<String, String> attributes) {
