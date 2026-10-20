@@ -264,30 +264,13 @@ public class ProductListingQueryRepository {
     }
 
     /**
-     * 공개 여부 · 판매 상태 · DB 로 아는 판매 방식별 준비({@link #READY} — 사전예약은 참)를 한 문장으로 읽는다. 내부 조회 API(1.3)와 상품 리뷰 목록의
-     * 노출 판정이 쓴다 — 이 응답을 판정에 쓰는 쪽이 있으므로 같은 스냅샷이어야 한다. 상품이 없으면 비어 있다.
+     * 공개 여부 · 판매 상태 · DB 로 아는 판매 방식별 준비({@link #READY} — 사전예약은 참)를 한 문장으로 읽는다. 상품 리뷰 목록과
+     * 조회수 랭킹의 노출 판정이 쓴다 — 판정에 쓰는 칸이 같은 시점이어야 해서 한 문장이다. 상품이 없으면 비어 있다.
      */
     public Optional<Exposure> findExposure(UUID productId) {
         List<Exposure> rows = jdbc.query("SELECT p.sale_mode, p.visible, p.status, " + READY + " AS ready FROM products p WHERE p.id = :productId",
                 new MapSqlParameterSource("productId", UuidBinary.toBytes(productId)), (rs, rowNum) -> exposure(rs));
         return rows.stream().findFirst();
-    }
-
-    /**
-     * 여러 상품의 공개 여부 · 판매 상태 · DB 로 아는 판매 방식별 준비를 한 문장으로 읽는다({@link #findExposure} 의 일괄판). 없는 상품은 빠진다.
-     * 호출자가 옵션과 같은 스냅샷으로 읽도록 REPEATABLE READ 트랜잭션 안에서 부른다.
-     */
-    public Map<UUID, Exposure> findExposures(Collection<UUID> productIds) {
-        Map<UUID, Exposure> exposures = new HashMap<>();
-        if (productIds.isEmpty()) {
-            return exposures;
-        }
-        jdbc.query("SELECT p.id, p.sale_mode, p.visible, p.status, " + READY + " AS ready FROM products p WHERE p.id IN (:productIds)",
-                new MapSqlParameterSource("productIds", productIds.stream().map(UuidBinary::toBytes).toList()),
-                rs -> {
-                    exposures.put(UuidBinary.fromBytes(rs.getBytes("id")), exposure(rs));
-                });
-        return exposures;
     }
 
     private static Exposure exposure(ResultSet rs) throws SQLException {

@@ -44,17 +44,20 @@ class ProductOptionsQueryRepository {
                         + " WHERE p.id = :productId ORDER BY o.created_at, o.id",
                 new MapSqlParameterSource("productId", UuidBinary.toBytes(productId)), (RowCallbackHandler) rs -> {
                     if (product[0] == null) {
-                        product[0] = new ProductWithOptions(product(rs), options);
+                        product[0] = new ProductWithOptions(product(rs), options);   // 옵션 목록은 아래에서 채운다 — 돌려주기 전에 닫는다
                     }
                     if (rs.getBytes("option_id") != null) {
                         options.add(new OptionRow(UuidBinary.fromBytes(rs.getBytes("option_id")), rs.getString("sku"), rs.getString("option_title"),
                                 rs.getBigDecimal("price"), SaleStatus.valueOf(rs.getString("option_status")), null));
                     }
                 });
-        return Optional.ofNullable(product[0]);
+        return Optional.ofNullable(product[0]).map(found -> new ProductWithOptions(found.product(), List.copyOf(options)));
     }
 
-    /** 옵션들과 그 상품(상품 문서 포함). 없는 옵션은 빠진다. 순서는 정하지 않는다. */
+    /**
+     * 옵션들과 그 상품(상품 문서 포함). 없는 옵션은 빠진다. 순서는 정하지 않는다. 옵션 행마다 상품 문서가 다시 실려 오지만(호출자 상한 50개)
+     * 따로 읽으면 두 문장이 되어 한 시점이 깨지므로 받아들인다 — 푸는 것은 호출자가 상품마다 한 번 한다.
+     */
     List<OptionWithProduct> findOptionsWithProducts(Collection<UUID> optionIds) {
         if (optionIds.isEmpty()) {
             return List.of();
