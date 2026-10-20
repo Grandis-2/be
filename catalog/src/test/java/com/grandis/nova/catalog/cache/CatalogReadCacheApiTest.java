@@ -193,6 +193,50 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
+    @DisplayName("일반 상품 상세가 캐시에서 나갈 때 DB 의 상품 표를 읽지 않는다 — 판매 준비는 본문과 같이 캐시된다")
+    void cachedInStockDetailDoesNotReadProducts() throws Exception {
+        UUID productId = registerInStock("준비캐시");
+        UUID uncached = registerInStock("캐시 없음");
+        mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk());   // 본문을 채운다
+
+        java.util.regex.Pattern products = java.util.regex.Pattern.compile("\\bproducts\\b");
+        String uncachedId = java.util.HexFormat.of().formatHex(UuidBinary.toBytes(uncached));
+        assertThat(appStatements(() -> mockMvc.perform(get("/api/v1/products/{id}", uncached)).andExpect(status().isOk())))
+                .as("대조군 — 캐시에 없는 상세는 상품 표를 읽는다(같은 계기로 잡힌다)")
+                .anyMatch(sql -> products.matcher(sql).find() && sql.contains(uncachedId));
+        assertThat(appStatements(() -> mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk())))
+                .as("캐시된 상세의 요청 동안 상품 표를 읽은 문장").noneMatch(sql -> products.matcher(sql).find());
+    }
+
+    interface ThrowingRunnable {
+        void run() throws Exception;
+    }
+
+    /** 호출 동안 앱 사용자(root 아님)가 보낸 문장(일반 로그). 창마다 로그를 비우고 잰다. */
+    private static java.util.List<String> appStatements(ThrowingRunnable call) throws Exception {
+        java.util.List<String> statements = new java.util.ArrayList<>();
+        var mysql = com.grandis.nova.catalog.support.MySqlContainerConfig.get();
+        try (java.sql.Connection root = java.sql.DriverManager.getConnection(mysql.getJdbcUrl(), "root", mysql.getPassword());
+             java.sql.Statement statement = root.createStatement()) {
+            statement.execute("SET GLOBAL log_output = 'TABLE'");
+            statement.execute("SET GLOBAL general_log = 'ON'");
+            statement.execute("TRUNCATE TABLE mysql.general_log");
+            try {
+                call.run();
+            } finally {
+                statement.execute("SET GLOBAL general_log = 'OFF'");
+            }
+            try (java.sql.ResultSet rs = statement.executeQuery("SELECT argument FROM mysql.general_log WHERE command_type = 'Query'"
+                    + " AND user_host NOT LIKE 'root%' ORDER BY event_time")) {
+                while (rs.next()) {
+                    statements.add(new String(rs.getBytes(1), java.nio.charset.StandardCharsets.UTF_8));
+                }
+            }
+        }
+        return statements;
+    }
+
+    @Test
     @DisplayName("상세 본문의 Redis TTL 은 10분 — 응답 max-age 는 실시간 칸 때문에 5초 상한")
     void detailBodyTtlIsLong() throws Exception {
         UUID productId = registerInStock("길게");
@@ -316,6 +360,28 @@ class CatalogReadCacheApiTest {
         handlers.stream().filter(h -> h.eventType().equals("IN_STOCK_PRODUCT_READY")).findFirst().orElseThrow().handle(product, null);
 
         assertThat(list("").findValues("title").stream().map(JsonNode::asString).toList()).as("버리고 다시 읽었다").contains(title, "직접 고침");
+    }
+
+    @Test
+    @DisplayName("판매 준비 전인 일반 상품의 상세 본문은 캐시에 넣지 않는다 — 준비되면(이벤트든 DB 든) 바로 200, 준비된 본문은 캐시에 들고 같은 이벤트가 다시 와도 200")
+    void notReadyDetailIsNotCached() throws Exception {
+        UUID product = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "준비 상세", "t" + ShopFixtures.unique());
+        fixtures.inventoryOnly(fixtures.option(product, "ACTIVE", ShopFixtures.OPTION_PRICE), 3, 0, 0);
+        UUID direct = fixtures.product(categoryId, "IN_STOCK", "ACTIVE", "직접 준비", "t" + ShopFixtures.unique());
+        fixtures.inventoryOnly(fixtures.option(direct, "ACTIVE", ShopFixtures.OPTION_PRICE), 3, 0, 0);
+        mockMvc.perform(get("/api/v1/products/{id}", product)).andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/products/{id}", direct)).andExpect(status().isNotFound());
+        assertThat(redis.keys("catalog:cache:product-detail-body:*")).as("준비 전 본문은 넣지 않는다").isEmpty();
+
+        fixtures.stockReady(direct);   // 세대를 올리지 않는 쓰기(예: 마이그레이션)여도 묵은 404 가 없다
+        mockMvc.perform(get("/api/v1/products/{id}", direct)).andExpect(status().isOk());
+
+        var handler = handlers.stream().filter(h -> h.eventType().equals("IN_STOCK_PRODUCT_READY")).findFirst().orElseThrow();
+        handler.handle(product, null);
+        mockMvc.perform(get("/api/v1/products/{id}", product)).andExpect(status().isOk());
+        assertThat(redis.keys("catalog:cache:product-detail-body:*" + product)).as("준비된 본문은 캐시에 든다").hasSize(1);
+        handler.handle(product, null);   // 같은 이벤트가 다시 와도(중복 · 재전송)
+        mockMvc.perform(get("/api/v1/products/{id}", product)).andExpect(status().isOk());
     }
 
     @Test

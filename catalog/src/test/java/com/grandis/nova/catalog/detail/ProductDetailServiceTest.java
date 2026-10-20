@@ -4,6 +4,7 @@ import com.grandis.nova.catalog.support.CatalogIntegrationTest;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.catalog.support.SqlHookInspector;
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.CommonErrorCode;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -45,6 +46,24 @@ class ProductDetailServiceTest {
     @AfterEach
     void tearDown() {
         SqlHookInspector.reset();
+    }
+
+    @Test
+    @DisplayName("준비 전에 읽은 본문이어도 그 뒤 판매 준비가 커밋됐으면 404 가 아니다 — 준비 이벤트 커밋 전에 시작한 본문 조회를 같이 기다린 요청")
+    void notReadyBodyRechecksReadinessBeforeNotFound() {
+        UUID productId = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "준비 직후", null);
+        fixtures.inventoryOnly(fixtures.option(productId, "ACTIVE", new BigDecimal("1000")), 3, 0, 0);
+        UUID never = fixtures.product(fixtures.category(), "IN_STOCK", "ACTIVE", "끝내 준비 전", null);
+        fixtures.inventoryOnly(fixtures.option(never, "ACTIVE", new BigDecimal("1000")), 3, 0, 0);
+        ProductDetailBody body = service.findProductBody(productId);
+        ProductDetailBody neverBody = service.findProductBody(never);
+        assertThat(body.stockReady()).as("준비 전에 읽었다").isFalse();
+
+        fixtures.stockReady(productId);   // 본문을 읽은 뒤 준비가 커밋됐다
+
+        assertThat(service.withLiveParts(body).productId()).isEqualTo(productId);
+        assertThatThrownBy(() -> service.withLiveParts(neverBody)).as("대조군 — 준비 전이면 그대로 404").isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode()).isEqualTo(CommonErrorCode.NOT_FOUND);
     }
 
     @Test
