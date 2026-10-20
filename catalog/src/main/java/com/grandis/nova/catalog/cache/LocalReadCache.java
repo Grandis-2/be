@@ -246,7 +246,7 @@ public final class LocalReadCache<K, V> {
     }
 
     /**
-     * 같은 키 · 세대의 다시 읽기를 실행기에 하나만 맡긴다. 이미 맡겼거나 누가 읽는 중이거나, 앞 갱신이 넣지 못한 값이 아직 살아 있으면 맡기지 않는다.
+     * 같은 키 · 세대의 다시 읽기를 실행기에 하나만 맡긴다. 이미 맡겼거나 누가 읽는 중이거나, 앞 갱신이 넣지 못했거나 맡기지 못한 값이 아직 살아 있으면 맡기지 않는다.
      *
      * @param seen 이 요청이 꺼낸 값 — 갱신이 돌 때 이보다 새 값이 들어와 있으면 읽지 않는다
      * @return 맡겼으면 true
@@ -274,10 +274,13 @@ public final class LocalReadCache<K, V> {
             return true;
         } catch (RejectedExecutionException e) {
             refreshing.remove(slot);
+            // 실행기가 찬 동안 그 키의 히트마다 다시 맡기며 예외를 만들고 거절을 요청 수만큼 세지 않게, 그 값이 만료될 때까지 다시 맡기지 않는다
+            rememberNotStored(slot, seen.loadedAt().plus(ttl));
             events.refreshed(name, RefreshResult.REJECTED);
             return false;
         } catch (RuntimeException e) {
             refreshing.remove(slot);   // 맡기지 못했다 — 표식을 남기면 그 키는 다시 맡겨지지 않는다. 요청은 들고 있던 값으로 답한다
+            rememberNotStored(slot, seen.loadedAt().plus(ttl));
             log.warn("메모리 읽기 캐시 미리 갱신을 맡기지 못했다 cache={}", name, e);
             events.refreshed(name, RefreshResult.REJECTED);
             return false;
@@ -335,7 +338,7 @@ public final class LocalReadCache<K, V> {
         }
     }
 
-    /** 넣지 못한 갱신의 자리 — 들고 있던 값이 만료될 때까지. 많이 쌓이면(요청이 다시 오지 않은 키) 지난 것부터 지운다. */
+    /** 넣지 못했거나 맡기지 못한 갱신의 자리 — 들고 있던 값이 만료될 때까지. 많이 쌓이면(요청이 다시 오지 않은 키) 지난 것부터 지운다. */
     private void rememberNotStored(Slot<K> slot, Instant until) {
         if (notStoredUntil.size() >= NOT_STORED_LIMIT) {
             Instant now = clock.instant();
