@@ -284,12 +284,13 @@ complete_register_jobs() {
   ids=$(awk -F'\t' -v q="'" '{printf "%sUUID_TO_BIN(%s%s%s)", (NR > 1 ? "," : ""), q, $1, q}' "$WORK/jobs.tsv")
   mysql_root shop -e "UPDATE preorder_sync_jobs SET status = 'SUCCEEDED', updated_at = NOW(6) WHERE id IN ($ids)"
   mkdir -p "$WORK/sqs"
+  # send-message-batch 는 10건까지라 10건씩 자른다 — jq 1.8 에 내부 함수 _nwise 가 없어 슬라이스로 자른다
   awk -F'\t' '{print $1 "\t" $2}' "$WORK/jobs.tsv" | while IFS=$'\t' read -r job token; do
     jq -nc --arg job "$job" --arg token "$token" --arg id "$(python3 -c 'import uuid; print(uuid.uuid4())')" \
       --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       '{eventId:$id, eventType:"EXTERNAL_JOB_SUCCEEDED", aggregateType:"PREORDER_SYNC_JOB", aggregateId:$job, occurredAt:$at,
         payload:{syncJobId:$job, preorderId:$token, jobType:"REGISTER", externalNumber:("AOT-" + $job)}}'
-  done | jq -s '[to_entries[] | {Id: (.key | tostring), MessageBody: (.value | tojson)}] | _nwise(10)' -c \
+  done | jq -s '[to_entries[] | {Id: (.key | tostring), MessageBody: (.value | tojson)}] | . as $a | range(0; $a | length; 10) | $a[.:. + 10]' -c \
     | split -l 1 - "$WORK/sqs/batch-"
   chmod -R a+rX "$WORK/sqs"
   compose run --rm --no-deps -v "$WORK/sqs:/batches:ro" --entrypoint sh floci-init -c '
