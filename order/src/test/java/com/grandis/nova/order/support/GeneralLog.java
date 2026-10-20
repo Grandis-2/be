@@ -50,6 +50,6 @@ public final class GeneralLog {
     /** 트랜잭션 준비 · 정리 문장인가 — 이 문장이 보이면 그 호출이 트랜잭션을 열었다. */
     public static boolean isTransactionHousekeeping(String sql) {
         return sql.startsWith("SET autocommit") || sql.contains("TRANSACTION ISOLATION") || sql.contains("READ ONLY")
-                || sql.contains("READ WRITE") || sql.equals("COMMIT");
+                || sql.contains("READ WRITE") || sql.equalsIgnoreCase("COMMIT");
     }
 }

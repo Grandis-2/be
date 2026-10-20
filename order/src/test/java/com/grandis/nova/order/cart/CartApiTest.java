@@ -99,7 +99,7 @@ class CartApiTest {
     }
 
     @Test
-    @DisplayName("조회 · 개수는 트랜잭션을 열지 않는다 — 장바구니 줄 한 문장 · 재고 한 문장, 개수 한 문장(준비 · 정리 문장이 없다)")
+    @DisplayName("조회 · 개수는 트랜잭션을 열지 않는다 — 장바구니 줄을 읽은 연결에 준비 · 정리 문장이 없고, 개수는 한 문장이다")
     void viewAndCountReadWithoutTransaction() throws Exception {
         UUID option = sellable(false, 10);
         add(option, 1, false).andExpect(status().isOk());
