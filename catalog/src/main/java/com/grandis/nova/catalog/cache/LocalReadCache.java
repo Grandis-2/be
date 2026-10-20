@@ -45,8 +45,9 @@ import java.util.function.ToIntFunction;
  *   <li>미리 갱신: 읽은 지 TTL 의 {@link #REFRESH_AFTER_PERCENT}% 가 지난 값을 꺼낸 요청은 그 값을 바로 받고, 같은 키 · 세대의 다시 읽기를 갱신
  *       실행기에 하나만 맡긴다(요청이 없는 키는 갱신하지 않는다). 갱신은 위의 "한 번만 읽기" 자리를 같이 써서, 갱신이 끝나기 전에 값이 만료되면 그 뒤
  *       요청은 기다리는 쪽이 된다(상한 그대로). 갱신이 실패해도 들고 있던 값의 만료는 늘지 않는다 — 만료 뒤 요청이 직접 읽는다. 실행기가 차면
- *       맡기지 않는다(그 키는 만료 때 지금처럼 읽는다). 갱신한 값도 읽기 시작할 때의 세대를 들어, 그사이 비웠으면 꺼낼 때 버린다.
- *       큐에서 늦게 돈 갱신은 그사이 더 새 값이 들어왔으면 읽지 않는다. 갱신 결과를 넣지 못했으면(storable 거짓 · 무게 실패 · 남은 시간 없음) 그 값이
+ *       맡기지 않고, 그 값이 만료될 때까지 그 키는 다시 맡기지 않는다(만료 때 지금처럼 읽는다). 갱신한 값도 읽기 시작할 때의 세대를 들어, 그사이
+ *       비웠으면 꺼낼 때 버린다. 넣을 때 더 새 세대의 값이 이미 있으면 덮지 않는다(직접 읽기도 같다).
+ *       큐에서 늦게 돈 갱신은 그사이 더 새 값이 들어왔으면 읽지 않는다. 갱신 결과를 넣지 못했으면(storable 거짓 · 무게 실패 · 남은 시간 없음 · 더 새 세대 값) 그 값이
  *       만료될 때까지 그 키는 다시 맡기지 않는다(실패도 같다). 갱신 실행기가 없으면(시험 · 끈 캐시) 미리 갱신하지 않는다.
  *       loader 는 요청 맥락(SecurityContext · RequestContextHolder)이 없는 실행기 스레드에서도 돌 수 있어야 한다 — 토큰을 릴레이하는 호출을
  *       loader 에 넣으면 갱신이 401 로 실패하고 그 실패가 기다린 요청에 퍼진다.</li>
@@ -65,7 +66,7 @@ public final class LocalReadCache<K, V> {
     static final Duration WAIT_FOR_LOAD = Duration.ofSeconds(5);
     /** 읽은 지 TTL 의 이만큼(%)이 지난 값을 꺼내면 미리 갱신한다 — 상품 목록(5초)이면 4초, 카테고리(10분)면 8분. */
     static final int REFRESH_AFTER_PERCENT = 80;
-    /** 넣지 못한 갱신을 기억하는 자리 수 상한 — 넘으면 지난 것을 지우고, 그래도 차 있으면 더 기억하지 않는다(그 키는 다시 맡겨질 수 있다). */
+    /** 넣지 못했거나 맡기지 못한 갱신을 기억하는 자리 수 상한 — 넘으면 지난 것을 지우고, 그래도 차 있으면 더 기억하지 않는다(그 키는 다시 맡겨질 수 있다). */
     static final int NOT_STORED_LIMIT = 10_000;
 
     private static final Logger log = LoggerFactory.getLogger(LocalReadCache.class);
@@ -82,7 +83,7 @@ public final class LocalReadCache<K, V> {
     private final ReadCacheEvents events;
     /** 실행기에 맡겨 둔 갱신의 자리 — 같은 키 · 세대를 두 번 맡기지 않는다. */
     private final Set<Slot<K>> refreshing = ConcurrentHashMap.newKeySet();
-    /** 갱신 결과를 넣지 못한 자리와 그때 들고 있던 값의 만료 시각 — 그때까지 다시 맡기지 않는다. 만료된 것은 꺼낼 때 · 넘칠 때 지운다. */
+    /** 갱신 결과를 넣지 못했거나 갱신을 맡기지 못한 자리와 그때 들고 있던 값의 만료 시각 — 그때까지 다시 맡기지 않는다. 만료된 것은 꺼낼 때 · 넘칠 때 지운다. */
     private final ConcurrentHashMap<Slot<K>, Instant> notStoredUntil = new ConcurrentHashMap<>();
     private final Cache<K, Loaded<V>> cache;
     private final ConcurrentHashMap<Slot<K>, CompletableFuture<ReadCache.Entry<V>>> loading = new ConcurrentHashMap<>();
