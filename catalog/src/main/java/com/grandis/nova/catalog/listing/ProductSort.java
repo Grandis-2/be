@@ -7,20 +7,29 @@ package com.grandis.nova.catalog.listing;
 public enum ProductSort {
 
     /** 최신순(기본) — 등록 시각 내림차순. id 는 생성 순서를 보장하지 않아 동점 깨기로만 쓴다. */
-    NEWEST(" ORDER BY p.created_at DESC, p.id DESC"),
+    NEWEST(" ORDER BY p.created_at DESC, p.id DESC", " ORDER BY x.created_at DESC, x.id DESC"),
     /** 낮은 가격순. */
-    PRICE_ASC(" ORDER BY (min_price IS NULL), min_price ASC, p.created_at DESC, p.id DESC"),
+    PRICE_ASC(" ORDER BY (min_price IS NULL), min_price ASC, p.created_at DESC, p.id DESC",
+            " ORDER BY (x.min_price IS NULL), x.min_price ASC, x.created_at DESC, x.id DESC"),
     /** 높은 가격순. */
-    PRICE_DESC(" ORDER BY (min_price IS NULL), min_price DESC, p.created_at DESC, p.id DESC");
+    PRICE_DESC(" ORDER BY (min_price IS NULL), min_price DESC, p.created_at DESC, p.id DESC",
+            " ORDER BY (x.min_price IS NULL), x.min_price DESC, x.created_at DESC, x.id DESC");
 
     private final String orderBy;
+    private final String pageOrderBy;
 
-    ProductSort(String orderBy) {
+    ProductSort(String orderBy, String pageOrderBy) {
         this.orderBy = orderBy;
+        this.pageOrderBy = pageOrderBy;
     }
 
     /** 목록 문장에 붙일 ORDER BY. min_price 는 SELECT 의 별칭이다. */
     String orderBy() {
         return orderBy;
+    }
+
+    /** 쪽을 고른 파생 표(x — SELECT 칸에 created_at 을 더한)를 같은 순서로 다시 세우는 ORDER BY. 파생 표의 순서는 바깥 문장에서 보장되지 않는다. */
+    String pageOrderBy() {
+        return pageOrderBy;
     }
 }

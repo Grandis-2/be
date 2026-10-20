@@ -135,14 +135,31 @@ public class ProductListingQueryRepository {
         return count == null ? 0 : count;
     }
 
-    /** @param accepting {@link #count} 와 같다. 카드의 회차 시각은 비어 있다 */
-    public List<ProductListItem> find(ProductListFilter filter, ProductSort sort, Collection<UUID> accepting, int page, int size) {
+    /**
+     * 한 쪽과 전체 건수를 한 문장으로 읽는다 — 건수 한 행에 그 쪽을 LATERAL 로 붙인다. 한 문장이라 READ COMMITTED 에서도 건수와 쪽이 같은 시점이다
+     * (트랜잭션을 열지 않는다 — 운영 DB 왕복이 수십 ms 라 읽기 전용 REPEATABLE READ 트랜잭션의 준비 · 정리 문장 8개가 쿼리보다 비쌌다).
+     * 쪽이 범위 밖이어도 건수 행은 남아 total 이 그대로다(COUNT(*) OVER() 는 빈 쪽에서 total 을 잃는다). 실측(MySQL 8.4.11, 상품 3,000 중 검색 일치 300,
+     * 20개 쪽): 두 문장 3.7~6.4ms, 이 모양 3.2~5.9ms. 색상칩은 쪽을 고른 뒤 따로 읽는다({@link #withColors}).
+     *
+     * @param accepting {@link #count} 와 같다. 카드의 회차 시각은 비어 있다
+     */
+    public OffsetPage<ProductListItem> findPage(ProductListFilter filter, ProductSort sort, Collection<UUID> accepting, int page, int size) {
         MapSqlParameterSource params = new MapSqlParameterSource();
-        StringBuilder sql = new StringBuilder(SELECT_ITEMS).append(fromVisible(accepting, params));
-        appendFilters(sql, params, filter);
-        sql.append(sort.orderBy()).append(" LIMIT :limit OFFSET :offset");
+        StringBuilder where = new StringBuilder(fromVisible(accepting, params));
+        appendFilters(where, params, filter);
+        String sql = "SELECT c.total, x.* FROM (SELECT COUNT(*) AS total" + where + ") c"
+                + " LEFT JOIN LATERAL (" + SELECT_ITEMS + ", p.created_at" + where + sort.orderBy() + " LIMIT :limit OFFSET :offset) x ON TRUE"
+                + sort.pageOrderBy();
         params.addValue("limit", size).addValue("offset", (long) page * size);
-        return withColors(jdbc.query(sql.toString(), params, (rs, rowNum) -> toItem(rs)));
+        long[] total = {0};
+        List<ProductListItem> items = new ArrayList<>();
+        jdbc.query(sql, params, (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+            total[0] = rs.getLong("total");
+            if (rs.getBytes("id") != null) {   // 빈 쪽이면 건수 행 하나만 온다(x 의 칸은 NULL)
+                items.add(toItem(rs));
+            }
+        });
+        return OffsetPage.of(withColors(items), page, size, total[0]);
     }
 
     /**
