@@ -11,6 +11,7 @@ import com.grandis.nova.common.security.SessionReplacedException;
 import com.grandis.nova.common.security.TokenClaims;
 import com.grandis.nova.common.security.TokenType;
 import com.grandis.nova.member.MySqlLockFailures;
+import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -113,11 +114,11 @@ public class TokenService {
      */
     public RefreshTarget refreshTarget(String rawRefreshToken, Role role) {
         if (role == Role.ADMIN) {
-            return new RefreshTarget(role, provider.parse(rawRefreshToken).subject(), null);
+            return new RefreshTarget(role, provider.parse(rawRefreshToken).subject(), null, null);
         }
         RefreshTokenStore.Session session = refreshTokens.find(rawRefreshToken)
                 .orElseThrow(() -> new InvalidTokenException("refresh token not found"));
-        return new RefreshTarget(role, session.subject(), session);
+        return new RefreshTarget(role, session.subject(), session, RefreshTokens.hash(rawRefreshToken));
     }
 
     /** 로그아웃이 회원 리프레시 쿠키만 들고 왔을 때 그 쿠키가 가리키는 세션. 폐기·만료된 것도 찾는다. */
@@ -125,13 +126,20 @@ public class TokenService {
         return refreshTokens.find(rawRefreshToken).map(RefreshTokenStore.Session::sessionId);
     }
 
-    /** 재발급. 실패는 전부 401 이다. 재사용 탐지면 세션을 끊고 401, 폐기 조회 불가면 retryable 401. target 은 같은 토큰의 {@link #refreshTarget}. */
+    /**
+     * 재발급. 토큰의 실패는 전부 401 이다 — 재사용 탐지면 세션을 끊고 401, 폐기 조회 불가면 retryable 401. target 은 같은 토큰의 {@link #refreshTarget} 이다.
+     * 다른 토큰의 대상이나 세션 없는 회원 대상을 넘기는 것은 프로그래밍 오류라 회전하기 전에 500 으로 막는다 — 회전한 뒤 막으면 그 체인이 이미 넘어가
+     * 같은 쿠키가 유예 뒤 재사용으로 찍힌다.
+     */
     public Rotated rotate(String presentedRefreshToken, RefreshTarget target) {
         if (target.role() == Role.ADMIN) {
             return rotateAdmin(presentedRefreshToken);
         }
-        if (target.session() == null) {
+        if (target.session() == null || target.tokenHash() == null) {
             throw new IllegalArgumentException("회원 재발급 대상에 세션이 없다 — refreshTarget 으로 만든다");
+        }
+        if (!MessageDigest.isEqual(target.tokenHash(), RefreshTokens.hash(presentedRefreshToken))) {
+            throw new IllegalArgumentException("재발급 대상이 제시한 토큰의 것이 아니다");
         }
         return rotateUser(presentedRefreshToken, target.session());
     }
@@ -155,10 +163,6 @@ public class TokenService {
         }
         if (rotation.status() != RefreshTokenStore.Rotation.Status.ROTATED) {
             throw new InvalidTokenException("refresh rejected: " + rotation.status());
-        }
-        if (!session.sessionId().equals(rotation.sessionId())) {
-            // 다른 토큰의 대상을 넘겼다 — 폐기 검사는 그 세션으로, 회전은 이 토큰의 체인으로 해 주인이 어긋난 토큰 쌍이 나간다. 내주지 않는다
-            throw new IllegalStateException("재발급 대상과 회전한 세션이 다르다 sid=" + shortSid(rotation.sessionId()));
         }
 
         if (revokedDuringRotation(asClaims)) {
@@ -369,7 +373,10 @@ public class TokenService {
     public record Rotated(IssuedTokens tokens, String subject, UUID sessionId) {
     }
 
-    /** @param session 회원 리프레시면 찾은 행, 관리자면 null(관리자 리프레시는 JWT 라 회전이 직접 푼다) */
-    public record RefreshTarget(Role role, String subject, RefreshTokenStore.Session session) {
+    /**
+     * @param session   회원 리프레시면 찾은 행, 관리자면 null(관리자 리프레시는 JWT 라 회전이 직접 푼다)
+     * @param tokenHash 회원 리프레시면 이 대상을 만든 원문의 해시 — 회전이 같은 토큰인지 DB 를 다시 읽지 않고 확인한다. 관리자면 null
+     */
+    public record RefreshTarget(Role role, String subject, RefreshTokenStore.Session session, byte[] tokenHash) {
     }
 }

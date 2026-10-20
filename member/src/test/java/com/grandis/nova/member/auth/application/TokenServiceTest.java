@@ -439,17 +439,18 @@ class TokenServiceTest {
     }
 
     @Test
-    @DisplayName("다른 토큰의 재발급 대상을 넘기면 토큰을 내주지 않는다 — 폐기 검사 세션과 회전한 세션이 다르면 주인이 어긋난 쌍이 된다")
+    @DisplayName("다른 토큰의 재발급 대상이나 세션 없는 회원 대상을 넘기면 회전하기 전에 막는다 — 회전한 뒤 막으면 그 체인이 넘어가 같은 쿠키가 재사용으로 찍힌다")
     void rotateRejectsTargetOfAnotherToken() {
         Session presented = loggedIn(UUID.randomUUID());
         rotationSucceeds(presented);
         Session other = new Session(UUID.randomUUID(), "other-customer", NOW, NOW.plus(REFRESH));
+        when(refreshTokens.find("other-token")).thenReturn(Optional.of(other));
+        TokenService.RefreshTarget otherTarget = service.refreshTarget("other-token", Role.USER);
 
-        assertThatThrownBy(() -> service.rotate(PRESENTED, new TokenService.RefreshTarget(Role.USER, other.subject(), other)))
-                .isInstanceOf(IllegalStateException.class);
-        assertThatThrownBy(() -> service.rotate(PRESENTED, new TokenService.RefreshTarget(Role.USER, CUSTOMER, null)))
+        assertThatThrownBy(() -> service.rotate(PRESENTED, otherTarget)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.rotate(PRESENTED, new TokenService.RefreshTarget(Role.USER, CUSTOMER, null, null)))
                 .as("회원 대상에 세션이 없으면 회전하지 않는다").isInstanceOf(IllegalArgumentException.class);
-        verify(refreshTokens, Mockito.times(1)).rotate(eq(PRESENTED), any());
+        verify(refreshTokens, never()).rotate(any(), any());
     }
 
     @Test
