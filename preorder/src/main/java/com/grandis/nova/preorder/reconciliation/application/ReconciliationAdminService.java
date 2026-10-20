@@ -21,6 +21,8 @@ import com.grandis.nova.preorder.reconciliation.domain.ReconciliationRuns;
 import com.grandis.nova.preorder.reconciliation.domain.RunRow;
 import com.grandis.nova.preorder.reconciliation.domain.RunStatus;
 import com.grandis.nova.preorder.syncjob.SyncJobReprocessing;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -44,6 +46,8 @@ import java.util.UUID;
  */
 @Service
 public class ReconciliationAdminService {
+
+    private static final Logger log = LoggerFactory.getLogger(ReconciliationAdminService.class);
 
     /** 대기 · 실행 중 표식의 UNIQUE. 이것에 걸린 넣기만 409 로 바꾼다 */
     static final String ACTIVE_RUN_CONSTRAINT = "uq_reconciliation_run_active";
@@ -278,6 +282,11 @@ public class ReconciliationAdminService {
                     state == MockKeyState.ACTIVE ? "Mock 등록을 취소함" : "Mock 에 취소 표식을 남김");
         } catch (ExternalMockUnavailable e) {
             return new ExternalCancelResult(ActionStatus.FAILED, e.getMessage());
+        } catch (RuntimeException e) {
+            // 예상 밖 예외로 끊겨도 REQUESTED 로 남기지 않는다 — 남으면 다음 검사까지 다시 누를 수 없다. 보낸 뒤에 끊겼을 수 있지만
+            // 다시 누르면 키로 먼저 보고 이미 취소됐으면 보내지 않는다
+            log.error("키로 Mock 취소 중 예상 밖 오류 — FAILED 로 남긴다: findingId={}, key={}", finding.id(), key, e);
+            return new ExternalCancelResult(ActionStatus.FAILED, "예상 밖 오류(" + e.getClass().getSimpleName() + ") — 서버 로그 확인");
         }
     }
 

@@ -7,6 +7,8 @@ import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.reset;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -19,6 +21,7 @@ import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
+import com.grandis.nova.preorder.integration.mock.ExternalMock;
 import com.grandis.nova.preorder.integration.order.Cancelability;
 import com.grandis.nova.preorder.integration.order.OrderClient;
 import com.grandis.nova.preorder.support.AcceptFixtures;
@@ -35,6 +38,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -73,6 +77,9 @@ class ReconciliationAdminApiTest {
 
     @MockitoBean
     OrderClient orderClient;
+
+    @MockitoSpyBean
+    ExternalMock externalMock;
 
     ShopFixtures fixtures;
     AcceptFixtures accepts;
@@ -465,6 +472,25 @@ class ReconciliationAdminApiTest {
         asAdmin(post(FINDINGS + "/{id}/external-cancel", findingId))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("RECONCILIATION_ACTION_TAKEN"));
+    }
+
+    @Test
+    void 예상_밖_예외로_끊겨도_요청됨으로_남지_않고_FAILED_라_다시_누를_수_있다() throws Exception {
+        String key = AcceptFixtures.tokenOf(canceledPreorder());
+        MOCK.active(key);
+        UUID findingId = finding(run("COMPLETED", null, TWO_HOURS_AGO), "CANCELED_BUT_MOCK_ACTIVE", key);
+        willThrow(new IllegalStateException("응답 해석 중 오류")).given(externalMock).lookup(key);
+
+        asAdmin(post(FINDINGS + "/{id}/external-cancel", findingId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.actionStatus").value("FAILED"))
+                .andExpect(jsonPath("$.data.actionNote").value("예상 밖 오류(IllegalStateException) — 서버 로그 확인"));
+
+        reset(externalMock);
+        asAdmin(post(FINDINGS + "/{id}/external-cancel", findingId))
+                .andExpect(jsonPath("$.data.actionStatus").value("SUCCEEDED"))
+                .andExpect(jsonPath("$.data.actionNote").value("Mock 등록을 취소함"));
+        assertThat(MOCK.cancels()).hasSize(1);
     }
 
     @Test
