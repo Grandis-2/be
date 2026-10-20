@@ -35,7 +35,8 @@ import java.util.UUID;
 /**
  * 결제 승인: 거래를 시작하고(리스) 토스 승인을 부른 뒤 결과 · 결제 기록 · 결과 이벤트를 한 트랜잭션으로 남긴다({@link CaptureSettlement}).
  *
- * 순서: [tx] 시작(대상 · 금액 대조, 대상당 하나 — D13 · D15) → 토스 승인(트랜잭션 밖, 거래의 멱등 키) → [tx] 반영 + 결과 이벤트.
+ * 순서: [tx] 시작(대상 · 금액 대조, 대상당 하나 — D13 · D15) → 토스 승인(트랜잭션 밖, 거래의 멱등 키) → 결과 집계
+ * ({@link ConfirmOutcomeMetrics}) → [tx] 반영 + 결과 이벤트.
  * 거래 하나 = 트랜잭션 하나(원장 계약)이고 원장 예외는 트랜잭션 경계 밖에서 잡는다.
  *
  * 응답 약속(호출자가 대상을 결제 전으로 되돌려도 되는지가 여기 달렸다):
@@ -58,16 +59,18 @@ public class ConfirmPaymentService {
     private final PaymentLedger ledger;
     private final TossPaymentClient toss;
     private final CaptureSettlement settlement;
+    private final ConfirmOutcomeMetrics outcomeMetrics;
     private final TransactionTemplate writeTransaction;
 
     public ConfirmPaymentService(PaymentTransactionReader reader, PaymentReader paymentReader, PaymentLedger ledger,
-                                 TossPaymentClient toss, CaptureSettlement settlement,
+                                 TossPaymentClient toss, CaptureSettlement settlement, ConfirmOutcomeMetrics outcomeMetrics,
                                  PlatformTransactionManager transactionManager) {
         this.reader = reader;
         this.paymentReader = paymentReader;
         this.ledger = ledger;
         this.toss = toss;
         this.settlement = settlement;
+        this.outcomeMetrics = outcomeMetrics;
         this.writeTransaction = new TransactionTemplate(transactionManager);
     }
 
@@ -138,6 +141,8 @@ public class ConfirmPaymentService {
         PaymentTransaction held = claimed.transaction();
         TossCommandResult result = toss.confirm(request, new TossIdempotencyKey(held.idempotencyKey().value()));
         Outcome outcome = TossOutcomes.of(result, held);
+        // 반영 전에 센다 — 리스를 잃어도 토스가 첫 요청에 준 답은 그대로다
+        outcomeMetrics.record(outcome);
         try {
             settlement.settle(claimed, outcome);
         } catch (LeaseLostException e) {
