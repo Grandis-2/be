@@ -33,8 +33,9 @@ record AcceptBulkheadProperties(
         if (productPermits < 1) {
             throw new IllegalArgumentException("nova.accept.bulkhead.product-permits 는 1 이상이어야 한다");
         }
-        if (!(poolShare > 0 && poolShare <= 1)) {
-            throw new IllegalArgumentException("nova.accept.bulkhead.pool-share 는 0 초과 1 이하여야 한다");
+        // 1 이면 접수가 풀을 다 쥘 수 있다(직접 준 상한과 같은 규칙)
+        if (!(poolShare > 0 && poolShare < 1)) {
+            throw new IllegalArgumentException("nova.accept.bulkhead.pool-share 는 0 초과 1 미만이어야 한다");
         }
         if (instanceLimit < 0) {
             throw new IllegalArgumentException("nova.accept.bulkhead.instance-limit 은 0 이상이어야 한다");

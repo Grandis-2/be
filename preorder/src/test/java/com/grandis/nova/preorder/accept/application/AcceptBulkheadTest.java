@@ -117,6 +117,8 @@ class AcceptBulkheadTest {
                 Duration.ofSeconds(3))).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new AcceptBulkheadProperties(2, 0, 0, SHORT_WAIT, Duration.ofSeconds(1),
                 Duration.ofSeconds(3))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AcceptBulkheadProperties(2, 1, 0, SHORT_WAIT, Duration.ofSeconds(1),
+                Duration.ofSeconds(3))).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new AcceptBulkheadProperties(2, 0.5, 0, SHORT_WAIT, Duration.ofSeconds(3),
                 Duration.ofSeconds(1))).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new AcceptBulkheadProperties(2, 0.5, 0, SHORT_WAIT, Duration.ZERO,
