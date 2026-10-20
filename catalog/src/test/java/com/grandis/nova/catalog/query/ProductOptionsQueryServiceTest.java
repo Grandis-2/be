@@ -149,7 +149,7 @@ class ProductOptionsQueryServiceTest {
         void run() throws Exception;
     }
 
-    /** 상품 · 옵션 표 이름 — 단어로만 맞춘다(preorder_products 같은 다른 표 이름의 일부는 아니다). */
+    /** 상품 · 옵션 표 이름 — 단어로만 맞춘다(promotion_products 같은 다른 표 이름의 일부는 아니다). */
     private static final Pattern CATALOG_TABLE = Pattern.compile("\\b(products|product_options)\\b");
 
     record Log(List<String> all, List<String> onMarkerConnection) {
