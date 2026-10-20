@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
@@ -345,7 +346,12 @@ public final class LocalReadCache<K, V> {
         }
     }
 
-    /** @return 넣었으면 true — 무게를 못 셌거나 남은 시간이 없으면 넣지 않는다 */
+    /**
+     * 더 새 세대의 값이 이미 있으면 덮지 않는다 — 읽는 사이 비우기와 새 세대 적재가 있었으면 옛 세대 값으로 덮어 다음 요청이 다시 읽게 된다.
+     * compute 로 기존 값을 그대로 두면 Caffeine 이 갱신으로 보고 만료를 다시 잡으므로(재 봤다) 비교 후 교체로 넣는다.
+     *
+     * @return 넣었으면 true — 무게를 못 셌거나 남은 시간이 없거나 더 새 세대 값이 있으면 넣지 않는다
+     */
     private boolean store(K key, ReadCache.Entry<V> entry, long started) {
         int weight;
         try {
@@ -358,8 +364,17 @@ public final class LocalReadCache<K, V> {
         if (left.isNegative() || left.isZero()) {
             return false;
         }
-        cache.put(key, new Loaded<>(entry, started, weight, left.toNanos()));
-        return true;
+        Loaded<V> mine = new Loaded<>(entry, started, weight, left.toNanos());
+        ConcurrentMap<K, Loaded<V>> map = cache.asMap();
+        while (true) {
+            Loaded<V> existing = map.get(key);
+            if (existing != null && existing.generation() > started) {
+                return false;
+            }
+            if (existing == null ? map.putIfAbsent(key, mine) == null : map.replace(key, existing, mine)) {
+                return true;
+            }
+        }
     }
 
     /** 진행 중 조회의 자리 — 키와 그 요청의 세대. */

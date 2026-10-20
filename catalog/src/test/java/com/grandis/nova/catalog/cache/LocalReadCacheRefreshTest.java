@@ -159,6 +159,24 @@ class LocalReadCacheRefreshTest {
     }
 
     @Test
+    @DisplayName("갱신이 읽는 사이 비우기와 새 세대 적재가 있었으면 갱신은 그 값을 덮지 않는다 — 덮으면 다음 요청이 다시 읽는다")
+    void refreshDoesNotOverwriteNewerGeneration() {
+        LocalReadCache<String, String> cache = cache();
+        cache.entry("k", () -> load("옛"));
+        clock.advance(Duration.ofSeconds(4));
+        cache.entry("k", () -> {
+            cache.invalidateAll();   // 갱신이 DB 를 읽는 사이 상품이 바뀌어 비웠고
+            cache.entry("k", () -> load("새"));   // 그 뒤 요청이 새 세대 값을 넣었다
+            return load("갱신(옛 세대)");
+        });
+        tasks.runAll();
+        assertThat(events.refreshes).containsExactly(RefreshResult.NOT_STORED);
+        int before = loads.get();
+        assertThat(cache.entry("k", () -> load("또")).value()).isEqualTo("새");
+        assertThat(loads.get()).as("새 세대 값이 남아 다시 읽지 않는다").isEqualTo(before);
+    }
+
+    @Test
     @DisplayName("실행기가 차면 맡기지 않는다 — 요청은 들고 있던 값을 받고, 다음 요청이 다시 맡긴다")
     void rejectedRefreshIsSkipped() {
         boolean[] reject = {true};
