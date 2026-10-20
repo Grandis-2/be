@@ -146,6 +146,18 @@ class ConcurrencyLimiterTest {
         assertThat(limiter.limit()).as("10건이면 줄인다").isEqualTo(2);
     }
 
+    /** 느리면 창 안에 끝나는 호출 자체가 준다. 자리를 다 쓴 채 느리면 호출이 적어도 줄인다 — 실패율은 그대로 10건을 본다. */
+    @Test
+    void 자리를_다_쓴_채_느리면_호출이_적어도_줄이고_실패는_10건을_기다린다() {
+        fill();
+        window(FAST, 3, 1);
+        assertThat(limiter.limit()).as("자리를 다 썼어도 4건 중 1건 실패로는 줄이지 않는다").isEqualTo(3);
+
+        fill();
+        window(Settings.SLOW_CALL.plusMillis(10), 4, 0);
+        assertThat(limiter.limit()).as("5건이지만 자리를 다 쓴 채 느리다").isEqualTo(2);
+    }
+
     @Test
     void 조금_느리거나_실패가_조금_있으면_그대로_둔다() {
         fill();
