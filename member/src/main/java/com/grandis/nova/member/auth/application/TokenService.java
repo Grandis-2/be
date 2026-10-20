@@ -107,8 +107,9 @@ public class TokenService {
     }
 
     /**
-     * 재발급 전에 회원 이름을 읽으려면 주인을 먼저 알아야 한다. 판정은 하지 않는다 — 여기서 통과해도 회전은 따로 검사한다.
-     * 회원 리프레시는 여기서 찾은 행을 {@link #rotate} 가 그대로 쓴다 — 같은 행을 두 번 읽지 않는다(회전은 잠근 행으로 다시 판정한다).
+     * 재발급 전에 회원 이름을 읽으려면 주인을 먼저 알아야 한다. 회원 리프레시는 여기서 찾은(잠그지 않은) 행을 {@link #rotate} 가 그대로 쓴다 — 같은
+     * 행을 두 번 읽지 않는다. 이 행은 회전 전 폐기 검사의 입력이다(그 칸 — 세션 · 주인 · 발급 · 만료 시각 — 은 행이 사는 동안 바뀌지 않는다). 상태 판정
+     * (재사용 · 폐기 · 만료)은 회전이 잠근 행으로 한다.
      */
     public RefreshTarget refreshTarget(String rawRefreshToken, Role role) {
         if (role == Role.ADMIN) {
@@ -126,9 +127,13 @@ public class TokenService {
 
     /** 재발급. 실패는 전부 401 이다. 재사용 탐지면 세션을 끊고 401, 폐기 조회 불가면 retryable 401. target 은 같은 토큰의 {@link #refreshTarget}. */
     public Rotated rotate(String presentedRefreshToken, RefreshTarget target) {
-        return target.role() == Role.ADMIN
-                ? rotateAdmin(presentedRefreshToken)
-                : rotateUser(presentedRefreshToken, target.session());
+        if (target.role() == Role.ADMIN) {
+            return rotateAdmin(presentedRefreshToken);
+        }
+        if (target.session() == null) {
+            throw new IllegalArgumentException("회원 재발급 대상에 세션이 없다 — refreshTarget 으로 만든다");
+        }
+        return rotateUser(presentedRefreshToken, target.session());
     }
 
     private Rotated rotateUser(String presented, RefreshTokenStore.Session session) {
@@ -150,6 +155,10 @@ public class TokenService {
         }
         if (rotation.status() != RefreshTokenStore.Rotation.Status.ROTATED) {
             throw new InvalidTokenException("refresh rejected: " + rotation.status());
+        }
+        if (!session.sessionId().equals(rotation.sessionId())) {
+            // 다른 토큰의 대상을 넘겼다 — 폐기 검사는 그 세션으로, 회전은 이 토큰의 체인으로 해 주인이 어긋난 토큰 쌍이 나간다. 내주지 않는다
+            throw new IllegalStateException("재발급 대상과 회전한 세션이 다르다 sid=" + shortSid(rotation.sessionId()));
         }
 
         if (revokedDuringRotation(asClaims)) {
