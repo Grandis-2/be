@@ -14,7 +14,10 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
-/** 상한 6 · 시작 3 · 최소 2 · CANCEL 전용 1, 10초 창. p95 1초 미만 · 실패 5% 미만이면 +1, p95 0.15초 이상 · 실패 20% 이상이면 절반. */
+/**
+ * 상한 6 · 시작 3 · 최소 2 · CANCEL 전용 1, 10초 창. p95 1초 미만 · 실패 5% 미만이면 늘리고(첫 감소 전까지 두 배, 그 뒤 +1),
+ * p95 0.15초 이상 · 실패 20% 이상이면 절반(창에 10건 이상일 때만).
+ */
 class ConcurrencyLimiterTest {
 
     static final Duration NO_WAIT = Duration.ZERO;
@@ -70,16 +73,31 @@ class ConcurrencyLimiterTest {
         assertThat(waited.get()).isPresent();
     }
 
+    /** 장애가 없었으면 빨리 늘린다 — 시작 2 에서 상한 80 까지 창 여섯 개(약 1분). */
     @Test
-    void 자리를_다_쓰면서_빠르고_실패가_적으면_창마다_하나씩_늘고_상한을_넘지_않는다() {
+    void 첫_감소_전까지는_두_배씩_늘고_상한을_넘지_않는다() {
+        fill();
+        window(FAST, 20, 0);
+        assertThat(limiter.limit()).as("3 × 2").isEqualTo(6);
+
+        fill();
+        window(FAST, 20, 0);
+        assertThat(limiter.limit()).as("상한").isEqualTo(6);
+    }
+
+    /** 한 번 줄였으면 그 자리가 mock 이 견딜 만큼에 가깝다 — 그 뒤로는 조금씩 늘린다. */
+    @Test
+    void 줄인_뒤에는_창마다_하나씩_는다() {
+        fill();
+        window(FAST, 20, 0);
+        window(Settings.SLOW_CALL.plusMillis(10), 20, 0);
+        assertThat(limiter.limit()).as("6 의 절반").isEqualTo(3);
+
         for (int expected = 4; expected <= 6; expected++) {
             fill();
             window(FAST, 20, 0);
             assertThat(limiter.limit()).isEqualTo(expected);
         }
-        fill();
-        window(FAST, 20, 0);
-        assertThat(limiter.limit()).as("상한").isEqualTo(6);
     }
 
     /** 등록만 오면 CANCEL 전용 자리는 비어 있다. 그래도 등록 자리를 다 썼으면 늘린다. */
@@ -89,7 +107,7 @@ class ConcurrencyLimiterTest {
 
         window(FAST, 20, 0);
 
-        assertThat(limiter.limit()).isEqualTo(4);
+        assertThat(limiter.limit()).isEqualTo(6);
     }
 
     @Test
@@ -111,11 +129,21 @@ class ConcurrencyLimiterTest {
         record(failing, FAST, 20, 0);
         clock.advance(WINDOW);
         failing.record(FAST, false);
-        assertThat(failing.limit()).isEqualTo(4);
+        assertThat(failing.limit()).isEqualTo(6);
         record(failing, FAST, 15, 5);
         clock.advance(WINDOW);
         failing.record(FAST, false);
-        assertThat(failing.limit()).as("21건 중 5건 실패(23%)").isEqualTo(2);
+        assertThat(failing.limit()).as("21건 중 5건 실패(23%)").isEqualTo(3);
+    }
+
+    /** 한산할 때 한두 건의 실패 · 느림으로 비율이 크게 흔들린다. 그것만으로는 줄이지 않는다. */
+    @Test
+    void 창의_호출이_적으면_느리거나_실패해도_줄이지_않는다() {
+        window(Settings.SLOW_CALL.plusMillis(10), 3, 1);
+        assertThat(limiter.limit()).as("4건 — 최소 10건 미만").isEqualTo(3);
+
+        window(Settings.SLOW_CALL.plusMillis(10), 9, 0);
+        assertThat(limiter.limit()).as("10건이면 줄인다").isEqualTo(2);
     }
 
     @Test
@@ -129,29 +157,43 @@ class ConcurrencyLimiterTest {
     @Test
     void 늘리는_폭과_줄이는_비율은_설정을_따른다() {
         ConcurrencyLimiter tuned = new ConcurrencyLimiter(new WorkerProperties.Concurrency(20, 1, 10, 2, 1,
-                Duration.ofMillis(100), 40, WINDOW, Duration.ofSeconds(1), 5, 20, 3, 0.8), Settings.SLOW_CALL, clock);
+                Duration.ofMillis(100), 40, WINDOW, Duration.ofSeconds(1), 5, 20, 10, 3, 0.8), Settings.SLOW_CALL, clock);
 
         fill(tuned);
         record(tuned, FAST, 20, 0);
         clock.advance(WINDOW);
         tuned.record(FAST, false);
-        assertThat(tuned.limit()).as("+3").isEqualTo(13);
+        assertThat(tuned.limit()).as("두 배, 상한 20").isEqualTo(20);
 
         record(tuned, Settings.SLOW_CALL, 20, 0);
         clock.advance(WINDOW);
         tuned.record(Settings.SLOW_CALL, false);
-        assertThat(tuned.limit()).as("× 0.8").isEqualTo(10);
+        assertThat(tuned.limit()).as("× 0.8").isEqualTo(16);
+
+        fill(tuned);
+        record(tuned, FAST, 20, 0);
+        clock.advance(WINDOW);
+        tuned.record(FAST, false);
+        assertThat(tuned.limit()).as("줄인 뒤 +3").isEqualTo(19);
     }
 
+    /** 장애가 지나면 빨리 돌아오되, 장애 직전의 절반까지만 두 배로 늘린다 — 다시 몰려 또 열리지 않게. */
     @Test
-    void 차단기가_열리면_최소로_줄인다() {
+    void 차단기가_열리면_최소로_줄이고_직전의_절반까지는_두_배씩_돌아온다() {
         fill();
         window(FAST, 20, 0);
-        assertThat(limiter.limit()).isEqualTo(4);
+        assertThat(limiter.limit()).isEqualTo(6);
 
         limiter.shrinkToMin();
-
         assertThat(limiter.limit()).isEqualTo(2);
+        limiter.shrinkToMin();
+
+        fill();
+        window(FAST, 20, 0);
+        assertThat(limiter.limit()).as("6 의 절반까지 — 최소에서 다시 열려도 기억한다").isEqualTo(3);
+        fill();
+        window(FAST, 20, 0);
+        assertThat(limiter.limit()).as("그 뒤로는 +1").isEqualTo(4);
     }
 
     /** 창 하나를 채우고 넘긴다. 마지막 기록이 창을 닫으며 자리 수를 조절한다. */

@@ -25,10 +25,10 @@ final class Settings {
         return new WorkerProperties.Circuit(4, 4, 50, Duration.ofMillis(200), Duration.ofMillis(400), 2, 3);
     }
 
-    /** 상한 6 · 시작 3 · 최소 2 · CANCEL 전용 1, 10초 창. */
+    /** 상한 6 · 시작 3 · 최소 2 · CANCEL 전용 1, 10초 창, 줄이려면 창에 10건 이상. */
     static WorkerProperties.Concurrency concurrency() {
         return new WorkerProperties.Concurrency(6, 1, 3, 2, 1, Duration.ofMillis(100), 40, Duration.ofSeconds(10),
-                Duration.ofSeconds(1), 5, 20, 1, 0.5);
+                Duration.ofSeconds(1), 5, 20, 10, 1, 0.5);
     }
 
     static WorkerProperties.RejectGuard rejectGuard() {

@@ -24,7 +24,9 @@ class WorkerPropertiesTest {
         assertThat(properties.mock().slowCallThreshold()).isEqualTo(Duration.ofMillis(1500));
         assertThat(properties.concurrency().limit()).isEqualTo(16);
         assertThat(properties.concurrency().rateLimit()).isEqualTo(40);
-        assertThat(properties.concurrency().initial()).isEqualTo(8);
+        assertThat(properties.concurrency().initial()).isEqualTo(2);
+        assertThat(properties.concurrency().healthyFailureRate()).isEqualTo(10);
+        assertThat(properties.concurrency().minimumCalls()).isEqualTo(10);
         assertThat(properties.circuit().openFirst()).isEqualTo(Duration.ofSeconds(10));
         assertThat(properties.circuit().openMax()).isEqualTo(Duration.ofMinutes(2));
         assertThat(properties.retry().backoff())
@@ -84,6 +86,7 @@ class WorkerPropertiesTest {
                 Map.of("nova.worker.concurrency.unhealthy-failure-rate", "5"),
                 Map.of("nova.worker.concurrency.unhealthy-failure-rate", "101"),
                 Map.of("nova.worker.concurrency.increase-step", "0"),
+                Map.of("nova.worker.concurrency.minimum-calls", "0"),
                 Map.of("nova.worker.concurrency.decrease-factor", "1"),
                 Map.of("nova.worker.circuit.open-multiplier", "0.5"),
                 Map.of("nova.worker.mock.max-response-body", "10B"),
