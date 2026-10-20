@@ -1,9 +1,11 @@
 package com.grandis.nova.payment.client.toss;
 
+import java.util.Set;
+
 /**
- * 승인 오류 코드 판정 중 이 패키지 밖(복구)이 쓰는 것. 분류표({@link TossErrorCatalog}) 자체는 이 패키지에 닫혀 있다.
+ * 승인 오류 코드 판정 중 이 패키지 밖(복구 · 승인 결과 지표)이 쓰는 것. 분류표({@link TossErrorCatalog}) 자체는 이 패키지에 닫혀 있다.
  *
- * 둘 다 분류는 "처리 중"이지만 단위가 다르다. 토스는 오류 응답도 멱등 키에 캐시하므로(2026-10-03 샌드박스 확인), 결제 단위 신호를 받은
+ * 처리 중 코드 둘({@link #isSameKeyInFlight} · {@link #isOtherRequestInFlight})은 단위가 다르다. 토스는 오류 응답도 멱등 키에 캐시하므로(2026-10-03 샌드박스 확인), 결제 단위 신호를 받은
  * 키로 다시 보내면 같은 오류만 돌아온다.
  */
 public final class TossConfirmCodes {
@@ -32,5 +34,27 @@ public final class TossConfirmCodes {
      */
     public static boolean isOtherRequestInFlight(String code) {
         return ALREADY_PROCESSING_REQUEST.equals(code);
+    }
+
+    /**
+     * 분류표에서 승인 결과가 그 종류(거절 · 일시 오류 · 처리 중 · 불명)로 나오는 코드 전부. 표에 없는 코드는 들어 있지 않다 — 그것은
+     * {@link UnknownReason#UNLISTED_CODE} 불명이다. 승인 결과 지표가 시계열을 미리 등록할 때 쓴다.
+     *
+     * @throws IllegalArgumentException 거절 · 일시 오류 · 처리 중 · 불명이 아니다(성공에는 오류 코드가 없다)
+     */
+    public static Set<String> listedCodes(Class<? extends TossCommandResult> result) {
+        if (result == TossCommandResult.Rejected.class) {
+            return TossErrorCatalog.confirmCodes(TossErrorCatalog.Command.REJECTED);
+        }
+        if (result == TossCommandResult.Transient.class) {
+            return TossErrorCatalog.confirmCodes(TossErrorCatalog.Command.TRANSIENT);
+        }
+        if (result == TossCommandResult.Processing.class) {
+            return TossErrorCatalog.confirmCodes(TossErrorCatalog.Command.PROCESSING);
+        }
+        if (result == TossCommandResult.Unknown.class) {
+            return TossErrorCatalog.confirmCodes(TossErrorCatalog.Command.UNKNOWN);
+        }
+        throw new IllegalArgumentException("오류 코드가 없는 결과다: " + result.getSimpleName());
     }
 }

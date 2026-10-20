@@ -93,6 +93,8 @@ class TossErrorTableTest {
         TossCommandResult result = client.confirm(TossStubs.confirmRequest(), TossStubs.idempotencyKey());
 
         expected.assertCommand(result, code);
+        // 승인 결과 지표는 이 목록으로 시계열을 미리 등록한다 — 클라이언트가 실제로 낸 종류의 목록에 그 코드가 있어야 한다
+        assertThat(TossConfirmCodes.listedCodes(result.getClass())).contains(code);
         assertThat(output.getAll()).doesNotContain("표에 없는 코드");
         server.verify();
     }

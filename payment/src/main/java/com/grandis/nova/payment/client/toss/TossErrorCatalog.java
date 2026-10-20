@@ -4,6 +4,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 토스 오류 코드 → 분류(D8). HTTP 상태로 가르지 않는다 — PROVIDER_ERROR 는 400 인데 일시 오류다.
@@ -95,6 +96,14 @@ final class TossErrorCatalog {
 
     static Optional<Command> confirm(String code) {
         return Optional.ofNullable(CONFIRM.get(code));
+    }
+
+    /** 승인 분류표에서 그 분류인 코드 전부. */
+    static Set<String> confirmCodes(Command verdict) {
+        return CONFIRM.entrySet().stream()
+                .filter(entry -> entry.getValue() == verdict)
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     static Optional<Command> cancel(String code) {
