@@ -119,6 +119,10 @@ class LocalReadCacheRefreshTest {
         tasks.runAll();
         assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_NEWER);
         assertThat(loads.get()).as("갱신은 읽지 않았다").isEqualTo(1);
+        cache.entry("k", () -> load("새 세대"));
+        clock.advance(Duration.ofSeconds(4));
+        cache.entry("k", () -> load("새 세대 갱신"));
+        assertThat(tasks.pending()).as("건너뛴 뒤 자리가 풀려 다음 주기에 다시 맡긴다").isEqualTo(1);
     }
 
     @Test
@@ -190,7 +194,7 @@ class LocalReadCacheRefreshTest {
                     tasks.execute(command);
                 }, events);
         cache.entry("k", () -> load("v1"));
-        clock.advance(Duration.ofSeconds(4));
+        clock.advance(Duration.ofMillis(4500));   // 80%(4초)보다 늦게 — 차단이 거절 시각이 아니라 값의 만료(5초)까지인지 가른다
         for (int i = 0; i < 3; i++) {
             assertThat(cache.entry("k", () -> load("v2")).value()).isEqualTo("v1");
         }
@@ -199,7 +203,7 @@ class LocalReadCacheRefreshTest {
         assertThat(events.outcomes.getLast()).as("맡기지 못한 요청은 바로 받음으로 센다").isEqualTo(Outcome.HIT);
 
         reject[0] = false;
-        clock.advance(Duration.ofMillis(999));   // 만료 직전 — 차단은 그 값이 만료될 때까지다
+        clock.advance(Duration.ofMillis(499));   // 만료 직전 — 차단은 그 값이 만료될 때까지다
         assertThat(cache.entry("k", () -> load("v2")).value()).as("아직 들고 있던 값").isEqualTo("v1");
         assertThat(tasks.pending()).as("실행기가 비어도 그 값이 만료되기 전에는 다시 맡기지 않는다").isZero();
         clock.advance(Duration.ofMillis(1));
@@ -245,7 +249,7 @@ class LocalReadCacheRefreshTest {
         clock.advance(Duration.ofSeconds(4));
         cache.entry("k", () -> load("v2"));
         tasks.runAll();   // 성공 — v2(읽은 시각 4초)
-        clock.advance(Duration.ofSeconds(4));
+        clock.advance(Duration.ofMillis(4500));   // 8.5초 — 80%(8초)보다 늦게 실패시켜, 차단이 값의 만료(9초)까지인지 가른다
         cache.entry("k", () -> {
             throw new IllegalStateException("DB");
         });
@@ -253,7 +257,7 @@ class LocalReadCacheRefreshTest {
         tasks.runAll();   // 실패
         cache.entry("k", () -> load("v3"));
         assertThat(tasks.pending()).as("실패 뒤 — 그 값이 만료될 때까지 다시 맡기지 않는다").isZero();
-        clock.advance(Duration.ofSeconds(1));
+        clock.advance(Duration.ofMillis(500));
         assertThat(cache.entry("k", () -> load("v4")).value()).as("만료 — 직접 읽는다").isEqualTo("v4");
         clock.advance(Duration.ofSeconds(4));
         cache.entry("k", () -> load("v5"));

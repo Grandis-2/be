@@ -184,7 +184,7 @@ class ReadCacheRefreshTest {
         });
         ReadCache.Spec<String> s = rejecting.spec("s", String.class, Duration.ofSeconds(30));
         rejecting.entry(s, "g", "k", () -> load("v1"));
-        clock.advance(Duration.ofSeconds(24));
+        clock.advance(Duration.ofSeconds(27));   // 80%(24초)보다 늦게 — 차단이 거절 시각이 아니라 값의 만료(30초)까지인지 가른다
         for (int i = 0; i < 3; i++) {
             assertThat(rejecting.entry(s, "g", "k", () -> load("v2")).value()).isEqualTo("v1");
         }
@@ -193,7 +193,7 @@ class ReadCacheRefreshTest {
         assertThat(events.outcomes.getLast()).as("맡기지 못한 요청은 바로 받음으로 센다").isEqualTo(Outcome.HIT);
 
         reject[0] = false;
-        clock.advance(Duration.ofMillis(5999));   // 만료 직전 — 차단은 그 값이 만료될 때까지다
+        clock.advance(Duration.ofMillis(2999));   // 만료 직전 — 차단은 그 값이 만료될 때까지다
         assertThat(rejecting.entry(s, "g", "k", () -> load("v2")).value()).as("아직 들고 있던 값").isEqualTo("v1");
         assertThat(tasks.pending()).as("실행기가 비어도 그 값이 만료되기 전에는 다시 맡기지 않는다").isZero();
         redis.delete(onlyKey());   // 만료
@@ -240,7 +240,7 @@ class ReadCacheRefreshTest {
         clock.advance(Duration.ofSeconds(24));
         cache.entry(spec, "g", "k", () -> load("v2"));
         tasks.runAll();   // 성공 — v2(읽은 시각 24초)
-        clock.advance(Duration.ofSeconds(24));
+        clock.advance(Duration.ofSeconds(27));   // 51초 — 80%(48초)보다 늦게 실패시켜, 차단이 값의 만료(54초)까지인지 가른다
         cache.entry(spec, "g", "k", () -> {
             throw new IllegalStateException("DB");
         });
@@ -249,7 +249,7 @@ class ReadCacheRefreshTest {
         cache.entry(spec, "g", "k", () -> load("v3"));
         assertThat(tasks.pending()).as("실패 뒤 — 그 값이 만료될 때까지 다시 맡기지 않는다").isZero();
         redis.delete(onlyKey());   // 만료
-        clock.advance(Duration.ofSeconds(6));
+        clock.advance(Duration.ofSeconds(3));
         assertThat(cache.entry(spec, "g", "k", () -> load("v4")).value()).as("직접 읽는다").isEqualTo("v4");
         clock.advance(Duration.ofSeconds(24));
         cache.entry(spec, "g", "k", () -> load("v5"));
