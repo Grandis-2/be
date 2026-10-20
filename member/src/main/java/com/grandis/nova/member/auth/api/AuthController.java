@@ -280,7 +280,7 @@ public class AuthController {
             throw new InvalidTokenException("non-uuid subject for USER");
         }
         // 행이 없으면 401 — CustomerService 와 같은 규칙. 탈퇴가 없어 지금은 도달하지 않는 갈래다.
-        return customers.findById(customerId)
+        return customers.lookup(customerId)   // 선언한 쿼리 — 상속한 findById 는 저장소가 읽기 전용 트랜잭션을 연다
                 .map(c -> new SessionOwner(c.getDisplayName(), c.profile().isComplete()))
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.UNAUTHENTICATED));
     }

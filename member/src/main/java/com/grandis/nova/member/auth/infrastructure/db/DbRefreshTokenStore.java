@@ -103,8 +103,8 @@ public class DbRefreshTokenStore implements RefreshTokenStore {
         return replaced;
     }
 
+    /** 트랜잭션 없이 한 문장 — 선언한 쿼리라 저장소가 트랜잭션을 열지 않는다. 읽기 전용 트랜잭션이면 준비 · 정리 문장 5개가 더 붙는다. */
     @Override
-    @Transactional(readOnly = true)
     public Optional<Session> find(String rawToken) {
         return rows.findByTokenHash(RefreshTokens.hash(rawToken))
                 .map(row -> new Session(row.getSessionId(), String.valueOf(row.getCustomerId()),

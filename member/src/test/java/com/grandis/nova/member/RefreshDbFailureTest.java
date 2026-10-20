@@ -62,7 +62,7 @@ class RefreshDbFailureTest {
         UUID customerId = newCustomer();
         TokenService.IssuedTokens issued = tokens.issue(String.valueOf(customerId), Role.USER);
         Cookie refresh = new Cookie(AuthCookies.REFRESH_TOKEN, issued.refreshToken());
-        when(customers.findById(customerId))
+        when(customers.lookup(customerId))
                 .thenThrow(new DataAccessResourceFailureException("db down"))
                 .thenReturn(Optional.of(Customer.fromKakao("k", "홍길동")));
 
