@@ -22,8 +22,8 @@ import java.util.Map;
  * 호출마다 클라이언트의 apiCallTimeout 이 걸린다. 목적지를 처음 보낼 때(또는 큐 URL 을 못 받아 기억하지 못한 동안)는
  * 큐 URL 조회와 전송, 두 번 부른다 — 그래서 한 번 보내는 최대 시간은 제한 시간의 두 배다.
  *
- * 묶음은 SendMessageBatch 한 번(10건 · 합계 크기 한도까지)이다. 한도를 넘는 묶음은 나눠 부르고, 결과는 건마다 돌려준다.
- * 아웃박스 메시지는 수 KB 라 실제로는 한 번이다.
+ * 묶음은 SendMessageBatch 한 번(10건 · 합계 크기 한도까지)이다. 한도를 넘는 묶음은 나눠 부르되 {@link #maxSendTime()} 안에서만 —
+ * 시간이 모자라면 남은 건은 실패로 돌려 릴레이에 맡긴다(리스가 끝난 뒤 보내지 않게). 메시지는 수 KB 라 실제로는 한 번이다.
  */
 class SqsMessageTransport implements MessageTransport {
 
@@ -79,6 +79,8 @@ class SqsMessageTransport implements MessageTransport {
             return failures;
         }
         String destination = messages.getFirst().destination();
+        long deadline = System.nanoTime() + maxSendTime().toNanos();
+        boolean called = false;
         List<Integer> indexes = new ArrayList<>();
         List<SendMessageBatchRequestEntry> entries = new ArrayList<>();
         long bytes = 0;
@@ -96,7 +98,7 @@ class SqsMessageTransport implements MessageTransport {
             }
             long size = sizeOf(message.body(), attributes);
             if (!entries.isEmpty() && (entries.size() == MAX_BATCH || bytes + size > maxBatchBytes)) {
-                sendBatch(destination, indexes, entries, failures);
+                called |= sendBatch(destination, indexes, entries, failures, called ? deadline : Long.MAX_VALUE);
                 indexes = new ArrayList<>();
                 entries = new ArrayList<>();
                 bytes = 0;
@@ -110,26 +112,37 @@ class SqsMessageTransport implements MessageTransport {
             bytes += size;
         }
         if (!entries.isEmpty()) {
-            sendBatch(destination, indexes, entries, failures);
+            sendBatch(destination, indexes, entries, failures, called ? deadline : Long.MAX_VALUE);
         }
         return failures;
     }
 
-    /** 한 번 부른다. 호출이 실패하면 그 묶음의 건이 모두 실패고, 앞서 보낸 묶음은 그대로 성공이다. */
-    private void sendBatch(String destination, List<Integer> indexes, List<SendMessageBatchRequestEntry> entries,
-                           Map<Integer, RuntimeException> failures) {
+    /**
+     * 한 번 부른다. 호출이 실패하면 그 묶음의 건이 모두 실패고, 앞서 보낸 묶음은 그대로 성공이다.
+     * 남은 시간(deadline, 첫 호출은 제한 없음)이 호출 한 번보다 짧으면 부르지 않고 실패로 돌린다.
+     *
+     * @return 불렀으면 true
+     */
+    private boolean sendBatch(String destination, List<Integer> indexes, List<SendMessageBatchRequestEntry> entries,
+                              Map<Integer, RuntimeException> failures, long deadline) {
+        if (deadline != Long.MAX_VALUE && deadline - System.nanoTime() < apiCallTimeout.toNanos()) {
+            RuntimeException deferred = new IllegalStateException("전송 시간 안에 보내지 못해 릴레이에 맡긴다");
+            indexes.forEach(index -> failures.put(index, deferred));
+            return false;
+        }
         SendMessageBatchResponse response;
         try {
             response = sqs.sendMessageBatch(request -> request.queueUrl(queueUrls.of(destination)).entries(entries));
         } catch (RuntimeException e) {
             indexes.forEach(index -> failures.put(index, e));
-            return;
+            return true;
         }
         for (BatchResultErrorEntry failed : response.failed()) {
             failures.put(Integer.parseInt(failed.id()), new IllegalStateException(
                     "SQS 묶음 전송 실패 code=" + failed.code() + " senderFault=" + failed.senderFault()
                             + " message=" + failed.message()));
         }
+        return true;
     }
 
     /** SQS 가 세는 크기 — 본문과 속성 이름 · 형 · 값. */

@@ -120,6 +120,22 @@ class SqsMessageTransportTest {
         });
     }
 
+    /** 나눠 부르다 전송 시간이 다하면 남은 건은 부르지 않고 실패로 돌린다 — 리스가 끝난 뒤 보내지 않게. */
+    @Test
+    void 나눠_부르다_시간이_다하면_남은_건은_실패로_돌린다() {
+        runner.run(ctx -> {
+            SqsClient sqs = ctx.getBean(SqsClient.class);
+            MessageTransport hurried = new SqsMessageTransport(sqs, ctx.getBean(SqsQueueUrls.class), Duration.ofNanos(1),
+                    200);
+            List<OutboundMessage> messages = messages(3);
+
+            Map<Integer, RuntimeException> failures = hurried.sendAll(messages);
+
+            assertThat(failures).as("첫 호출은 부른다").containsOnlyKeys(1, 2);
+            receiveAll(sqs, messages.subList(0, 1));
+        });
+    }
+
     /** 속성이 잘못된 건은 그 건만 실패다 — 나머지는 보낸다. */
     @Test
     void 속성이_잘못된_건만_실패로_돌려준다() {
