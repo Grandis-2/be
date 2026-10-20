@@ -114,7 +114,6 @@ class ProductListingQueryRepositoryTest {
                 repository.findForAdmin(new AdminProductListFilter(tag, null, null, null), 0, 10);
                 repository.findLinkable(null, 0, 10);
                 repository.findExposure(productId);
-                repository.findExposures(List.of(productId));
                 repository.isStockReady(productId);
                 repository.findActiveOptionIds(List.of(productId));
                 repository.countGiftCandidates(tag);

@@ -32,6 +32,7 @@ class ProductOptionsQueryServiceTest {
 
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired ProductOptionsQueryService service;
+    @Autowired ProductOptionsQueryRepository queries;
 
     ShopFixtures fixtures;
 
@@ -71,10 +72,11 @@ class ProductOptionsQueryServiceTest {
         UUID productId = fixtures.product("IN_STOCK", "ACTIVE");
         fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
 
-        List<String> statements = statements("%FROM products p LEFT JOIN product_options%", () -> service.findProductOptions(productId));
+        Log log = capture("%FROM products p LEFT JOIN product_options%", () -> service.findProductOptions(productId));
 
-        assertThat(statements).as("노출 · 상품 · 옵션 한 문장, 트랜잭션 준비 · 정리 문장 없음").singleElement()
+        assertThat(log.readingCatalog()).as("모든 연결에서 상품 · 옵션 표를 읽은 문장 — 한 문장").singleElement()
                 .satisfies(sql -> assertThat(sql).contains("FROM products p LEFT JOIN product_options"));
+        assertThat(log.onMarkerConnection()).as("그 연결의 트랜잭션 준비 · 정리 문장").containsExactlyElementsOf(log.readingCatalog());
     }
 
     @Test
@@ -84,19 +86,38 @@ class ProductOptionsQueryServiceTest {
         UUID first = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
         UUID second = fixtures.option(productId, "ACTIVE", new BigDecimal("2000"));
 
-        List<String> statements = statements("%FROM product_options o JOIN products p%", () -> service.findOptions(List.of(first, second)));
+        Log log = capture("%FROM product_options o JOIN products p%", () -> service.findOptions(List.of(first, second)));
 
-        assertThat(statements).as("옵션 · 상품 · 노출 한 문장, 트랜잭션 준비 · 정리 문장 없음").singleElement()
+        assertThat(log.readingCatalog()).as("모든 연결에서 상품 · 옵션 표를 읽은 문장 — 한 문장").singleElement()
                 .satisfies(sql -> assertThat(sql).contains("FROM product_options o JOIN products p"));
+        assertThat(log.onMarkerConnection()).as("그 연결의 트랜잭션 준비 · 정리 문장").containsExactlyElementsOf(log.readingCatalog());
+    }
+
+    @Test
+    @DisplayName("내부 상품 · 옵션 조회는 catalog 표(products · product_options)만 읽는다 — 회차 · 재고 표를 읽지 않는다")
+    void readsOnlyCatalogTables() throws Exception {
+        UUID productId = fixtures.product("IN_STOCK", "ACTIVE");
+        UUID option = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
+
+        Log log = capture("%product_options%", () -> {
+            queries.findProductWithOptions(productId);
+            queries.findOptionsWithProducts(List.of(option));
+        });
+
+        assertThat(log.readingCatalog()).as("양성 대조군 — 두 조회가 잡혔다").hasSize(2);
+        assertThat(log.all()).as("preorder 회차 표").noneMatch(sql -> sql.contains("preorder_campaigns"));
+        assertThat(log.all()).as("order 재고 표").noneMatch(sql -> sql.contains("option_inventories"));
     }
 
     /**
-     * 표식 문장을 보낸 연결이 이 호출에서 보낸 문장(일반 로그). 드라이버가 새 연결에 보내는 설정 조회(주석으로 시작)는 뺀다. 트랜잭션을 열었다면 그 준비 ·
-     * 정리 문장도 같은 연결로 가 여기 잡힌다.
+     * 호출 구간 동안 앱 사용자(root 아님)가 보낸 문장(일반 로그). 드라이버가 새 연결에 보내는 설정 조회(주석으로 시작)는 뺀다.
+     * {@link Log#readingCatalog} 는 연결과 상관없이 상품 · 옵션 표를 읽은 문장이고(두 문장으로 쪼개 다른 연결로 보내도 잡힌다),
+     * {@link Log#onMarkerConnection} 은 표식 문장을 보낸 연결의 문장이다(트랜잭션을 열었다면 그 준비 · 정리 문장도 이 연결로 간다).
      */
-    private static List<String> statements(String markerLike, Runnable call) throws Exception {
+    private static Log capture(String markerLike, ThrowingRunnable call) throws Exception {
         var mysql = MySqlContainerConfig.get();
-        List<String> statements = new ArrayList<>();
+        List<String> all = new ArrayList<>();
+        List<String> onMarker = new ArrayList<>();
         try (Connection root = DriverManager.getConnection(mysql.getJdbcUrl(), "root", mysql.getPassword());
              Statement statement = root.createStatement()) {
             statement.execute("SET GLOBAL log_output = 'TABLE'");
@@ -107,16 +128,30 @@ class ProductOptionsQueryServiceTest {
             } finally {
                 statement.execute("SET GLOBAL general_log = 'OFF'");
             }
-            try (ResultSet rs = statement.executeQuery("SELECT argument FROM mysql.general_log WHERE command_type = 'Query' AND thread_id IN"
-                    + " (SELECT thread_id FROM mysql.general_log WHERE argument LIKE '" + markerLike + "') ORDER BY event_time")) {
+            try (ResultSet rs = statement.executeQuery("SELECT argument, thread_id IN (SELECT thread_id FROM mysql.general_log WHERE argument LIKE '"
+                    + markerLike + "') AS on_marker FROM mysql.general_log WHERE command_type = 'Query' AND user_host NOT LIKE 'root%' ORDER BY event_time")) {
                 while (rs.next()) {
                     String sql = new String(rs.getBytes(1), StandardCharsets.UTF_8);
-                    if (!sql.startsWith("/* mysql-connector")) {
-                        statements.add(sql);
+                    if (sql.startsWith("/* mysql-connector")) {
+                        continue;
+                    }
+                    all.add(sql);
+                    if (rs.getBoolean(2)) {
+                        onMarker.add(sql);
                     }
                 }
             }
         }
-        return statements;
+        return new Log(all, onMarker);
+    }
+
+    interface ThrowingRunnable {
+        void run() throws Exception;
+    }
+
+    record Log(List<String> all, List<String> onMarkerConnection) {
+        List<String> readingCatalog() {
+            return all.stream().filter(sql -> sql.contains("products") || sql.contains("product_options")).toList();
+        }
     }
 }
