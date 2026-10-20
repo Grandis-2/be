@@ -16,20 +16,20 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 | --- | --- | --- |
 | member | customers · refresh_tokens · notifications | 없음 |
 | catalog | categories · products · product_options · product_reviews · promotions · promotion_products · banners · catalog_outbox_events · images | 다른 서비스 표는 읽지 않는다 — 회차(시각 · 행 유무)는 preorder 의 `GET /internal/preorders/campaigns/**`(`PreorderCampaigns`), 재고는 order 의 `GET /internal/stocks` 로 묻는다 |
-| preorder | preorders · preorder_events · preorder_campaigns · shipment_batches · preorder_outbox_events · preorder_dead_letter_events · preorder_sync_jobs · preorder_sync_attempts · preorder_open_alerts · preorder_open_alert_dispatches · preorder_payment_anomalies | (epic/NV-441 머지 뒤) reconciliation_runs 읽기 · 관리자 실행 요청(REQUESTED) INSERT, reconciliation_findings 읽기 · 조치 칸(action_*) UPDATE |
+| preorder | preorders · preorder_events · preorder_campaigns · shipment_batches · preorder_outbox_events · preorder_dead_letter_events · preorder_sync_jobs · preorder_sync_attempts · preorder_open_alerts · preorder_open_alert_dispatches · preorder_payment_anomalies | reconciliation_runs 읽기 · 관리자 실행 요청(REQUESTED) INSERT, reconciliation_findings 읽기 · 조치 칸(action_*) UPDATE |
 | order | orders · order_items · order_events · cart_items · option_inventories · draw_campaigns · draw_entries · order_outbox_events · stock_adjustments · stock_reconcile_runs · stock_reconcile_lock | 읽기: products · product_options(옵션 소속 · 판매 방식) |
 | payment | payments · payment_transactions · payment_outbox_events | 없음 |
 | worker · waitingroom | 없음(worker 는 결과를 이벤트로, waitingroom 은 전용 Redis) | 없음 |
-| batch | (epic/NV-441 · NV-583 머지 뒤) reconciliation_runs · reconciliation_findings · image_deletions | 읽기: 전부. 쓰기: images 의 UNUSED 행 삭제(3.5) |
+| batch | reconciliation_runs · reconciliation_findings · image_deletions | 읽기: 전부. 쓰기: images 의 UNUSED 행 삭제(3.5) |
 
 ## 2. 전역 규칙 — 적용 경로: `**/src/main/**/*.java`
 
 ### 2.1 정확성 · 결과 불명 · 시각 · 금액 · 로그
 - 사용자 요청 경로(@RestController → @Service)에서 외부 HTTP 응답을 기다리면 지적한다. 외부 등록 · 취소는 worker 몫이다. 허용된 동기 호출:
-  - 타임아웃 · 서킷 브레이커 · 동시 상한 필수: preorder → catalog 옵션(캐시 미스만) · order 취소 사전 확인(`DependencyGuard`), order → catalog 옵션 일괄 조회(`CatalogReader`).
+  - 타임아웃 · 서킷 브레이커 · 동시 상한 필수: preorder → catalog 옵션(캐시 미스만) · order 취소 사전 확인 · Mock 키로 조회 · 취소(정합성 조치 `ExternalMock` — 관리자가 결과를 기다리고, 일괄은 마감 시간 안에서만 시작한다)(`DependencyGuard`), order → catalog 옵션 일괄 조회(`CatalogReader`).
   - 타임아웃만: catalog → order · member(리뷰 작성, 2026-10-06 결정 · 상품 삭제의 드로우 증정품 확인 `ProductDeleteService` → `DrawGiftClient`, `CatalogDefaults`), catalog → order 재고(`StockReader` — 목록 · 상세 · 증정품 후보) · preorder 회차 일정(`PreorderCampaigns` — 목록 · 상세 · 관리자 · 수정 판정, 2026-10-19 결정. 수정 판정도 트랜잭션 전에 받는다), order → preorder 결제 가능 확인 · payment 결제 준비, member → 카카오 로그인(`KakaoOAuthClient`).
   - 결제 승인: order → payment(읽기 70초, `PaymentConfirmSlots`), payment → 토스(3.3).
-- 차단급: @Transactional 안의 HTTP 호출 · SQS 전송 · Thread.sleep · 외부 락 대기.
+- 차단급: @Transactional 안의 HTTP 호출 · SQS 전송 · Thread.sleep · 외부 락 대기. 예외는 batch 정합성 검사 하나다 — be 를 한 스냅샷으로 읽는 검사 트랜잭션 안에서 Mock 목록(읽기)을 받는다(3.5).
 - 차단급: 응답을 못 받은 외부 호출을 "실패" · "미등록"으로 단정. 결과 불명은 별도 상태로 두고 같은 키로 조회해 확정한다.
 - 차단급: 토큰 · 카카오 식별자 · 결제 키를 로그 · 예외 메시지에 남김.
 - 예외를 삼키거나 로그만 남기고 흘리는 catch, 내부 예외 · 스택트레이스 · SQL 을 사용자 응답에 싣는 코드를 지적한다.
@@ -137,13 +137,14 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 
 ### 3.5 batch — 적용 경로: `batch/**`
 
-정합성 검사(epic/NV-441) · 사진 정리(feature/NV-583)가 들어올 때 적용한다.
 - desired 1 전제다. 동시 실행 방지(락 · 단일 실행 표식)가 없으면 지적한다.
 - 정합성 검사는 읽기 · 비교 · 결과 기록(reconciliation_runs, reconciliation_findings 는 INSERT 만)만 한다. 업무 표나 external_mock 에 쓰면 지적한다. 조치는 정상 업무 경로(관리자 → API · 이벤트)다.
 - 조회 실패 · 권한 오류가 난 실행을 "불일치 0"으로 집계하면 지적한다. 검사 미완료로 남긴다.
+- 검사 트랜잭션 안의 Mock 목록 받기(2.1 의 예외)는 목록 전체 기한(external.mock.max-duration)과 트랜잭션 제한 시간(run-timeout ≥ 목록 기한, 기동 때 검사) 안에서만 한다. 기한 없이 받거나 두 값의 관계 검사를 빼면 지적한다.
 - 정상 처리 중인 차이(접수 직후 · 등록 진행 중)를 불일치로 세면 지적한다. 기준 시각이 필요하다.
 - 전체를 읽어 메모리에서 처리하면 지적한다. 커서 · 청크로 끊는다.
 - 업무 표 쓰기 예외는 사진 정리(images) 하나다. 기준 시간이 지난 UNUSED 행만 id 로 지운다(object_key 로 지우면 catalog 붙이기와 잠금 순서가 달라 교착). 같은 문장에서 어떤 draw_campaigns.image_url_snapshot · order_items.image_url_snapshot(지난 주문의 사진)도 그 키로 끝나지 않을 때만 지운다. 같은 트랜잭션에 image_deletions 를 넣고, S3 객체는 커밋 뒤 지운 행이 1개일 때만 지운다. 조건을 빼거나 USED 행 · images · image_deletions 밖 표를 지우면 지적한다.
+- 사진 정리 기준 시간(retention)은 설정으로 바꾸지만 1시간보다 짧으면 기동하지 않는다(ImageCleanupProperties.MIN_RETENTION) — 저장 중인 드로우 회차가 고른 사진이 커밋 전에 지워지지 않게 드로우 생성 시간 예산보다 길게 둔다. 하한을 빼거나 낮추면 지적한다.
 - 결제 기한 만료 취소는 preorder PaymentExpiryJob · order CartOrderExpiry(일반 주문)가 한다. batch 에 같은 만료 취소 · 예약 · 주문 상태 변경을 만들면 지적한다.
 
 ### 3.6 catalog — 적용 경로: `catalog/**`

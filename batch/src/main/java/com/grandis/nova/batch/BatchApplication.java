@@ -1,16 +1,16 @@
 package com.grandis.nova.batch;
 
-import org.springframework.boot.SpringApplication;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
- * 만료 스캔 · 정합성 검사.
+ * 정합성 검사 — be 예약 · Mock 원장 · be 내부 데이터를 대조해 reconciliation_runs · reconciliation_findings 에 남긴다.
+ * 안 쓰는 사진 정리 — 기준 시간이 지난 UNUSED 사진(images)의 행과 S3 객체를 지운다.
  *
- * ECS desired 1 로 고정한다. 여러 개가 뜨면 같은 스캔이 중복 실행되고,
- * 정합성 검사는 중복 실행 자체가 요구사항 위반이다(FR-C-10).
+ * ECS desired 1 로 고정한다. 대기 · 실행 중인 실행은 DB 가 하나로 막지만(active_marker), 여러 개가 뜨면
+ * 기동 정리가 다른 인스턴스의 실행 중을 실패로 바꾼다. 만료 스캔은 batch 에 넣지 않는다(10-12 결정).
  */
 @SpringBootApplication(scanBasePackages = "com.grandis.nova")
 @EnableScheduling

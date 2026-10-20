@@ -25,4 +25,4 @@ include 'payment'     // 결제 — 토스 연동 · 결제 원장 · 복구 · 
 
 // 비 HTTP 진입점 — ECS 서비스
 include 'worker'      // SQS 소비 — 외부 예약 등록 · 드로우
-include 'batch'       // 만료 스캔 · 정합성 검사 (desired 1)
+include 'batch'       // 정합성 검사 · 안 쓰는 사진 정리 (desired 1)
