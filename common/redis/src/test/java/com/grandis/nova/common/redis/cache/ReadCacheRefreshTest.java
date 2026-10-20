@@ -193,14 +193,33 @@ class ReadCacheRefreshTest {
         assertThat(events.outcomes.getLast()).as("맡기지 못한 요청은 바로 받음으로 센다").isEqualTo(Outcome.HIT);
 
         reject[0] = false;
-        rejecting.entry(s, "g", "k", () -> load("v2"));
+        clock.advance(Duration.ofMillis(5999));   // 만료 직전 — 차단은 그 값이 만료될 때까지다
+        assertThat(rejecting.entry(s, "g", "k", () -> load("v2")).value()).as("아직 들고 있던 값").isEqualTo("v1");
         assertThat(tasks.pending()).as("실행기가 비어도 그 값이 만료되기 전에는 다시 맡기지 않는다").isZero();
         redis.delete(onlyKey());   // 만료
-        clock.advance(Duration.ofSeconds(6));
+        clock.advance(Duration.ofMillis(1));
         assertThat(rejecting.entry(s, "g", "k", () -> load("v2")).value()).as("만료 뒤 직접 읽기").isEqualTo("v2");
         clock.advance(Duration.ofSeconds(24));
         rejecting.entry(s, "g", "k", () -> load("v3"));
         assertThat(tasks.pending()).as("새 값의 주기에는 다시 맡긴다(차단이 풀렸다)").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("실행기가 거절 아닌 예외로 맡기지 못해도 그 값이 만료될 때까지 다시 맡기지 않는다")
+    void failedSubmitIsNotRepeated() {
+        AtomicInteger attempts = new AtomicInteger();
+        ReadCache broken = cache(command -> {
+            attempts.incrementAndGet();
+            throw new IllegalStateException("broken");
+        });
+        ReadCache.Spec<String> s = broken.spec("s", String.class, Duration.ofSeconds(30));
+        broken.entry(s, "g", "k", () -> load("v1"));
+        clock.advance(Duration.ofSeconds(24));
+        for (int i = 0; i < 3; i++) {
+            assertThat(broken.entry(s, "g", "k", () -> load("v2")).value()).isEqualTo("v1");
+        }
+        assertThat(attempts.get()).as("실행기에는 한 번만 맡기려 했다").isEqualTo(1);
+        assertThat(events.refreshes).containsExactly(RefreshResult.REJECTED);
     }
 
     @Test
