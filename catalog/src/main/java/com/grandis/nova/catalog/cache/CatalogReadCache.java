@@ -2,6 +2,7 @@ package com.grandis.nova.catalog.cache;
 
 import com.grandis.nova.catalog.category.CategoryNode;
 import com.grandis.nova.catalog.category.CategoryTreeService;
+import com.grandis.nova.catalog.detail.ProductDetailBody;
 import com.grandis.nova.catalog.detail.ProductDetailService;
 import com.grandis.nova.catalog.detail.ProductDetailView;
 import com.grandis.nova.catalog.listing.ProductListFilter;
@@ -73,7 +74,7 @@ public class CatalogReadCache {
     private final CategoryTreeService categories;
     private final ReviewService reviews;
 
-    private final ReadCache.Spec<ProductDetailView> detailSpec;
+    private final ReadCache.Spec<ProductDetailBody> detailSpec;
     private final ReadCache.Spec<OffsetPage<ReviewView>> reviewSpec;
 
     public CatalogReadCache(ReadCache cache, CatalogLocalCaches local, Clock clock, ProductDetailService details, ProductListingService listings,
@@ -85,17 +86,17 @@ public class CatalogReadCache {
         this.listings = listings;
         this.categories = categories;
         this.reviews = reviews;
-        this.detailSpec = cache.spec("product-detail-body", ProductDetailView.class, DETAIL_TTL);
+        this.detailSpec = cache.spec("product-detail-body", ProductDetailBody.class, DETAIL_TTL);
         this.reviewSpec = cache.spec("reviews", new TypeReference<OffsetPage<ReviewView>>() { }, REVIEW_TTL);
     }
 
     /**
-     * 상품 상세. 본문(catalog 가 정하는 칸)만 {@link #DETAIL_TTL} 동안 캐시하고, 실시간 칸(판매 준비 · 회차 · 재고)은 요청마다 읽어 채운다 — 가격 · 재고를
+     * 상품 상세. 본문(catalog 가 정하는 칸 — 일반 상품의 판매 준비 포함)만 {@link #DETAIL_TTL} 동안 캐시하고, 실시간 칸(회차 · 재고)은 요청마다 읽어 채운다 — 가격 · 재고를
      * 상품 정보와 따로 다루는 커머스 플랫폼들의 방식(본문은 길게, 가격 · 재고는 실시간)을 따른다. 가격 · 할인율은 catalog 가 바꾸므로 본문에 두고 세대로 비운다.
      * 돌려주는 읽은 시각은 본문의 것이다 — 앞단 HTTP 캐시의 상한은 PublicCache 가 실시간 칸에 맞춰 짧게 묶는다.
      */
     public ReadCache.Entry<ProductDetailView> product(UUID productId) {
-        ReadCache.Entry<ProductDetailView> body = cache.entry(detailSpec, PRODUCTS, productId.toString(), () -> details.findProductBody(productId));
+        ReadCache.Entry<ProductDetailBody> body = cache.entry(detailSpec, PRODUCTS, productId.toString(), () -> details.findProductBody(productId));
         return body.map(details::withLiveParts);
     }
 

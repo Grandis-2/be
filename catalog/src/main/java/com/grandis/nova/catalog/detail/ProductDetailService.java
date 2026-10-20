@@ -49,8 +49,9 @@ import java.util.UUID;
  * 사전예약은 목록에 접수 중일 때만 나오지만, 오픈 전 · 마감 뒤에도 직접 링크(홍보 페이지의 "예약하기")로는 보인다.
  *
  * 공개용 404 코드는 명세대로 공통 NOT_FOUND 다(내부 API 의 PRODUCT_NOT_FOUND 와 다르다). 비공개 상품과 없는 상품을 회원이 구분하지 못하게 같은 응답이다.
- * 상세는 본문(catalog 의 칸 — 한 스냅샷으로 REPEATABLE READ)과 실시간 칸(다른 서비스가 바꾸는 판매 준비 · 회차 · 재고 — 요청마다 한 번)으로 나뉜다.
- * 본문은 읽기 캐시에 길게 두고, 실시간 칸은 캐시하지 않는다(CatalogReadCache).
+ * 상세는 본문(catalog 의 칸 — 한 스냅샷으로 REPEATABLE READ)과 실시간 칸(다른 서비스가 바꾸는 회차 · 재고 — 요청마다 한 번)으로 나뉜다.
+ * 본문은 읽기 캐시에 길게 두고, 실시간 칸은 캐시하지 않는다(CatalogReadCache). 일반 상품의 판매 준비(products.stock_ready_at)는 catalog 의 칸이라
+ * 본문에 싣는다 — 판매 준비 이벤트가 채울 때 상품 세대를 올린다(InStockProductReadyHandler).
  */
 @Service
 public class ProductDetailService {
@@ -92,39 +93,42 @@ public class ProductDetailService {
     }
 
     /**
-     * 회원 상세의 본문 — catalog 가 정하는 칸만 채운다(상품 · 옵션 · 가격 · 할인율 · 사진 · 보증 · 판매 상태). 다른 서비스가 바꾸는 칸(재고 수량 · 품절 ·
-     * 회차)은 비운 채 두고 {@link #withLiveParts} 가 요청마다 채운다. 그래서 길게 캐시해도 된다 — catalog 가 고치면 읽기 캐시 세대가 오른다.
+     * 회원 상세의 본문 — catalog 가 정하는 칸만 채운다(상품 · 옵션 · 가격 · 할인율 · 사진 · 보증 · 판매 상태 · 일반 상품의 판매 준비). 다른 서비스가 바꾸는
+     * 칸(재고 수량 · 품절 · 회차)은 비운 채 두고 {@link #withLiveParts} 가 요청마다 채운다. 그래서 길게 캐시해도 된다 — catalog 가 고치면(판매 준비 이벤트
+     * 포함) 읽기 캐시 세대가 오른다. 판매 준비는 같은 스냅샷에서 읽는다.
      * 공개가 아니면 누구에게나 404(관리자도). 관리자 미리보기는 없다(2026-09-29 결정) — 관리자는 관리자 상세({@link #findAdminProduct})로 본다.
      * 공개 경로는 폐기 조회 실패에 열리는 경로라 관리자 토큰을 여기서 더 믿지 않는다.
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public ProductDetailView findProductBody(UUID productId) {
+    public ProductDetailBody findProductBody(UUID productId) {
         Product product = products.findById(productId).orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
         if (!product.isVisible()) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
-        return body(product, true);
+        boolean stockReady = product.getSaleMode() == SaleMode.IN_STOCK && crossReads.isStockReady(productId);
+        return new ProductDetailBody(body(product, true), stockReady);
     }
 
     /**
-     * 본문에 실시간 칸을 채운다. 사전예약은 preorder 의 회차(판매 준비 · 회차 시각 · 접수 단계), 일반은 판매 준비(products.stock_ready_at)와 그 상품
-     * 옵션의 재고 행(옵션별 가용 수량 · 품절). 판매 준비 전이면 404 — 목록의 판매 방식별 준비와 같은 정의다.
-     * 캐시된 본문에도 요청마다 부르므로 재고 · 조기 마감 · 판매 준비가 늦게 보이지 않는다. 트랜잭션 없이 돈다 — DB 읽기는 한 문장씩이고, order 재고 ·
-     * preorder 회차를 묻는 동안 DB 연결을 붙잡지 않게.
+     * 본문에 실시간 칸을 채운다. 사전예약은 preorder 의 회차(판매 준비 · 회차 시각 · 접수 단계), 일반은 그 상품 옵션의 재고 행(옵션별 가용 수량 · 품절).
+     * 판매 준비 전이면 404 — 목록의 판매 방식별 준비와 같은 정의다. 일반 상품의 판매 준비는 본문에 실린 값이다(DB 를 다시 읽지 않는다).
+     * 캐시된 본문에도 요청마다 부르므로 재고 · 조기 마감이 늦게 보이지 않는다. 트랜잭션 없이 돈다 — order 재고 · preorder 회차를 묻는 동안 DB 연결을
+     * 붙잡지 않게.
      *
      * @throws BusinessException 사전예약인데 preorder 가 답하지 않으면 503 — 접수 단계를 가를 수 없다(2026-10-19 결정)
      */
-    public ProductDetailView withLiveParts(ProductDetailView body) {
-        if (body.saleMode() == SaleMode.PREORDER) {
-            CampaignWindow window = campaigns.find(body.productId())
+    public ProductDetailView withLiveParts(ProductDetailBody body) {
+        ProductDetailView view = body.view();
+        if (view.saleMode() == SaleMode.PREORDER) {
+            CampaignWindow window = campaigns.find(view.productId())
                     .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
-            return live(body, window, Map.of());
+            return live(view, window, Map.of());
         }
         // 판매 준비는 목록과 같은 판정(products.stock_ready_at — order 의 판매 준비 이벤트)이다. 재고 행의 유무로 따로 가르면 목록에 없는 상품이 상세에 보인다
-        if (!crossReads.isStockReady(body.productId())) {
+        if (!body.stockReady()) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
-        return live(body, null, availableOrUnknown(body));
+        return live(view, null, availableOrUnknown(view));
     }
 
     /**
