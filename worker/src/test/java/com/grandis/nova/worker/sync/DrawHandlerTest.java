@@ -269,6 +269,7 @@ class DrawHandlerTest {
         Map<String, MessageAttributeValue> attributes = new HashMap<>(message.messageAttributes());
         attributes.put("misconfiguredSince", MessageAttributeValue.builder().dataType("String")
                 .stringValue(Instant.now().minus(Duration.ofMinutes(31)).toString()).build());
+        long held = misconfigured();
 
         assertThat(handler.handle(message.toBuilder().messageAttributes(attributes).build()))
                 .isEqualTo(MessageOutcome.delete());
@@ -276,6 +277,7 @@ class DrawHandlerTest {
         Message dead = draw.deadLetter(queues, Draws.TIMEOUT).orElseThrow(() -> new AssertionError("DLQ 로 가지 않았다"));
         assertThat(Draws.attributes(dead)).containsEntry("deadLetterReason", "MISCONFIGURED");
         assertThat(draw.resent(queues, NONE)).isEmpty();
+        assertThat(misconfigured() - held).as("포기하는 번도 지표에 남는다").isEqualTo(1);
     }
 
     @Test

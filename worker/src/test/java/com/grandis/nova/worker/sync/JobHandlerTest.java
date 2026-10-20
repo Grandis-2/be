@@ -326,6 +326,8 @@ class JobHandlerTest {
     @Test
     void 설정_오류가_정한_시간_넘게_이어지면_포기를_알린다() {
         MOCK.respond(html(404));
+        Timer held = meters.timer(JobHandler.MISCONFIGURED_METRIC, "jobType", "REGISTER");
+        long before = held.count();
         String since = Instant.now().minus(Duration.ofMinutes(31)).toString();
 
         MessageOutcome outcome = handler.handle(job.message(Map.of("run", "2", "attempt", "3",
@@ -337,6 +339,8 @@ class JobHandlerTest {
         assertThat(event.get("payload").get("reason").asString()).isEqualTo("MISCONFIGURED");
         assertThat(attempt(event.get("payload"))).isEqualTo("run=2 1-3 SYSTEM REJECTED 404 MISCONFIGURED");
         assertThat(job.resent(queues, Duration.ofSeconds(2))).isEmpty();
+        assertThat(held.count() - before).as("포기하는 번도 지표에 남는다").isEqualTo(1);
+        assertThat(held.max(TimeUnit.MINUTES)).isGreaterThanOrEqualTo(31);
     }
 
     /** 차례를 쓰면 설정 오류는 풀린 것이다. 시각을 이으면 다음 설정 오류에서 바로 포기한다. */

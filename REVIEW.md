@@ -127,7 +127,7 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 관측 · 연결
 - readiness 는 readinessState 와 consumers(받기 · 삭제 스레드 생존)만 본다. 외부 mock · SQS 상태를 넣으면 지적한다 — 그쪽 장애 한 번에 모든 태스크가 바뀐다.
 - 설정 오류로 돌려보낼 때는 처음 본 때부터 지난 시간을 worker.misconfigured 에 남긴다. 돌려보낸 메시지는 큐 나이 경보에 잡히지 않는다.
-- SQS 는 연결 수를 정한 HTTP 클라이언트(SyncConfig.sqsHttpClient, 최대 동시 요청 + 큐마다 받기 · 삭제)로 보낸다. 연결 수가 동시 요청 상한을 따라가지 않게 바꾸면 지적한다.
+- SQS 는 연결 수를 정한 HTTP 클라이언트(SyncConfig.sqsHttpClient, 동시 요청 상한 + 큐마다 넘칠 수 있는 한 묶음 · 받기 · 삭제)로 보낸다. 연결 수가 동시 요청 상한을 따라가지 않게 바꾸면 지적한다.
 - 차례 안 즉시 재시도(InRoundRetry)는 저장 안 된 게 확실한 일시 실패만 한다.
 
 사전예약 작업(REGISTER · CANCEL, JobHandler)

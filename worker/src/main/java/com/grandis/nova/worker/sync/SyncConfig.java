@@ -41,15 +41,17 @@ class SyncConfig {
             List.of("eventType", "eventId", JobProgress.MISCONFIGURED_SINCE);
     /** 소비하는 큐 수(예약 등록 · 취소, 럭키드로우). 큐마다 받기 스레드와 삭제 스레드가 SQS 연결을 하나씩 쥔다. */
     private static final int QUEUES = 3;
+    /** SQS 가 한 번에 주는 메시지 상한. 큐마다 받기 전에 빈 자리를 세므로, 롱 폴링이 겹치면 큐마다 이만큼 넘칠 수 있다. */
+    private static final int RECEIVE_BATCH = 10;
 
     /**
-     * SQS 연결 풀. 받기 · 삭제가 큐마다 하나씩 붙들고, 처리 중인 메시지(최대 동시 요청 상한만큼)가 결과를 알리거나 다시 보낸다.
+     * SQS 연결 풀. 처리 중인 메시지(동시 요청 상한 + 큐마다 넘친 한 묶음)가 결과를 알리거나 다시 보내고, 받기 · 삭제가 큐마다 하나씩 쥔다.
      * 기본 URLConnection 은 쉬는 연결을 5개만 남겨, 넘는 호출은 매번 새로 연결한다(TLS 포함). 자동설정의 SqsClient 가 이것으로 보낸다
      */
     @Bean(name = SqsAutoConfiguration.HTTP_CLIENT_BEAN, destroyMethod = "close")
     SdkHttpClient sqsHttpClient(WorkerProperties properties) {
         return Apache5HttpClient.builder()
-                .maxConnections(properties.concurrency().limit() + 2 * QUEUES)
+                .maxConnections(properties.concurrency().limit() + QUEUES * (RECEIVE_BATCH + 2))
                 .build();
     }
 
