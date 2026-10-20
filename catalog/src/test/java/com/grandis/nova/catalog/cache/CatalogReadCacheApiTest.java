@@ -193,12 +193,27 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
-    @DisplayName("일반 상품 상세가 캐시에서 나갈 때 DB 의 상품 표를 읽지 않는다 — 판매 준비는 본문과 같이 캐시된다(준비 표식이 세대를 올린다)")
+    @DisplayName("일반 상품 상세가 캐시에서 나갈 때 DB 의 상품 표를 읽지 않는다 — 판매 준비는 본문과 같이 캐시된다")
     void cachedInStockDetailDoesNotReadProducts() throws Exception {
         UUID productId = registerInStock("준비캐시");
         UUID uncached = registerInStock("캐시 없음");
         mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk());   // 본문을 채운다
 
+        java.util.regex.Pattern products = java.util.regex.Pattern.compile("\\bproducts\\b");
+        String uncachedId = java.util.HexFormat.of().formatHex(UuidBinary.toBytes(uncached));
+        assertThat(appStatements(() -> mockMvc.perform(get("/api/v1/products/{id}", uncached)).andExpect(status().isOk())))
+                .as("대조군 — 캐시에 없는 상세는 상품 표를 읽는다(같은 계기로 잡힌다)")
+                .anyMatch(sql -> products.matcher(sql).find() && sql.contains(uncachedId));
+        assertThat(appStatements(() -> mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk())))
+                .as("캐시된 상세의 요청 동안 상품 표를 읽은 문장").noneMatch(sql -> products.matcher(sql).find());
+    }
+
+    interface ThrowingRunnable {
+        void run() throws Exception;
+    }
+
+    /** 호출 동안 앱 사용자(root 아님)가 보낸 문장(일반 로그). 창마다 로그를 비우고 잰다. */
+    private static java.util.List<String> appStatements(ThrowingRunnable call) throws Exception {
         java.util.List<String> statements = new java.util.ArrayList<>();
         var mysql = com.grandis.nova.catalog.support.MySqlContainerConfig.get();
         try (java.sql.Connection root = java.sql.DriverManager.getConnection(mysql.getJdbcUrl(), "root", mysql.getPassword());
@@ -207,8 +222,7 @@ class CatalogReadCacheApiTest {
             statement.execute("SET GLOBAL general_log = 'ON'");
             statement.execute("TRUNCATE TABLE mysql.general_log");
             try {
-                mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk());
-                mockMvc.perform(get("/api/v1/products/{id}", uncached)).andExpect(status().isOk());   // 양성 대조군 — 캐시에 없는 상세는 상품 표를 읽는다
+                call.run();
             } finally {
                 statement.execute("SET GLOBAL general_log = 'OFF'");
             }
@@ -219,12 +233,7 @@ class CatalogReadCacheApiTest {
                 }
             }
         }
-        java.util.regex.Pattern products = java.util.regex.Pattern.compile("\\bproducts\\b");
-        String cachedId = java.util.HexFormat.of().formatHex(UuidBinary.toBytes(productId));
-        String uncachedId = java.util.HexFormat.of().formatHex(UuidBinary.toBytes(uncached));
-        assertThat(statements).as("대조군 — 캐시에 없는 상세가 상품 표를 읽은 문장이 잡힌다")
-                .anyMatch(sql -> products.matcher(sql).find() && sql.contains(uncachedId));
-        assertThat(statements).as("캐시된 상세가 상품 표를 읽은 문장").noneMatch(sql -> products.matcher(sql).find() && sql.contains(cachedId));
+        return statements;
     }
 
     @Test
