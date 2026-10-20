@@ -5,8 +5,8 @@ package com.grandis.nova.batch.reconciliation.run;
  *
  * @param held        판정 보류 — 기준 시각 뒤에 바뀐 키
  * @param pendingSync 처리 중 — 등록 대기(등록 작업이 DEAD_LETTER 가 아님)
- * @param canceling   처리 중 — 취소 중
- * @param deadLetter  관리자 대기 — 등록 대기인데 등록 작업이 DEAD_LETTER
+ * @param canceling   처리 중 — 취소 중(취소 작업이 DEAD_LETTER 가 아님)
+ * @param deadLetter  관리자 대기 — 등록 대기인데 등록 작업이, 또는 취소 중인데 취소 작업이 DEAD_LETTER
  */
 public record RunCounts(int held, int pendingSync, int canceling, int deadLetter) {
 

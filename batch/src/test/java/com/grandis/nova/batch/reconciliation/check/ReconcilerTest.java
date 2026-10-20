@@ -68,10 +68,12 @@ class ReconcilerTest {
         // a 는 검사 도중 Mock 에 등록돼 판정 보류지만 등록 대기로 센다
         ReconcileResult result = reconciler.reconcile(
                 List.of(be("a", "PENDING_SYNC", "PENDING", AFTER), be("b", "PENDING_SYNC", "DEAD_LETTER", BEFORE),
-                        be("c", "CANCELING", "SUCCEEDED", BEFORE), be("d", "RESERVED", "SUCCEEDED", BEFORE)).iterator(),
+                        be("c", "CANCELING", "SUCCEEDED", BEFORE), be("d", "RESERVED", "SUCCEEDED", BEFORE),
+                        canceling("e", "DEAD_LETTER")).iterator(),
                 List.of(mock("a", PRODUCT, AFTER)).iterator(), scope(null));
 
-        assertThat(result.counts()).isEqualTo(new RunCounts(1, 1, 1, 1));
+        // 관리자 대기 = 등록 작업 DEAD_LETTER(b) + 취소 작업 DEAD_LETTER(e)
+        assertThat(result.counts()).isEqualTo(new RunCounts(1, 1, 1, 2));
     }
 
     @Test
@@ -119,6 +121,11 @@ class ReconcilerTest {
     private static BePreorder be(String token, String status, String registerJob, Instant changedAt) {
         return new BePreorder(token, UUID.randomUUID().toString(), status, null, UUID.randomUUID().toString(), PRODUCT,
                 "SKU", registerJob, null, status, 1, 1, null, changedAt);
+    }
+
+    private static BePreorder canceling(String token, String cancelJob) {
+        return new BePreorder(token, UUID.randomUUID().toString(), "CANCELING", "R-1", UUID.randomUUID().toString(), PRODUCT,
+                "SKU", "SUCCEEDED", cancelJob, "CANCELING", 1, 1, null, BEFORE);
     }
 
     private static MockLedgerEntry mock(String key, String productId, Instant confirmedAt) {

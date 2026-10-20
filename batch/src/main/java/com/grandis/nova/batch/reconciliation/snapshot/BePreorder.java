@@ -51,8 +51,14 @@ public record BePreorder(String token, String id, String status, String external
         return REGISTERED.equals(status) || RESERVED.equals(status);
     }
 
+    /** 취소 중이고 아직 처리 중이다(취소 작업이 포기되지 않음) */
     public boolean canceling() {
-        return CANCELING.equals(status);
+        return CANCELING.equals(status) && !DEAD_LETTER.equals(cancelJobStatus);
+    }
+
+    /** 취소 중인데 취소 작업이 포기(DEAD_LETTER)됐다 — 관리자 대기. 관리자가 재처리하거나 수동 완료한다 */
+    public boolean cancelDeadLettered() {
+        return CANCELING.equals(status) && DEAD_LETTER.equals(cancelJobStatus);
     }
 
     public boolean canceled() {

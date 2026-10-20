@@ -115,7 +115,7 @@ public class Reconciler {
         void count(BePreorder preorder) {
             if (preorder.registering()) {
                 pendingSync++;
-            } else if (preorder.registerDeadLettered()) {
+            } else if (preorder.registerDeadLettered() || preorder.cancelDeadLettered()) {
                 deadLetter++;
             } else if (preorder.canceling()) {
                 canceling++;

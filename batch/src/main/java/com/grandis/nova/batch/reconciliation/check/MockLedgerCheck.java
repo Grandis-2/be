@@ -22,7 +22,7 @@ import org.springframework.stereotype.Component;
  * </pre>
  *
  * 그 밖에는 불일치가 아니다. 등록 대기 · 취소 중은 Mock 과 달라도 처리 중이다 — 오래 멈췄으면 {@link PreorderRowCheck} 의 STUCK 이
- * 잡는다. 취소 완료 예약의 Mock 행은 취소(번호 있음 · 표식 모두)면 맞다.
+ * 잡고, 작업이 DEAD_LETTER 면 실행 행의 관리자 대기로 센다. 취소 완료 예약의 Mock 행은 취소(번호 있음 · 표식 모두)면 맞다.
  */
 @Component
 class MockLedgerCheck implements Check {

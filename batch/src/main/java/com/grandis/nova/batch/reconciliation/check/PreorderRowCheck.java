@@ -48,7 +48,7 @@ class PreorderRowCheck implements Check {
         if (be.canceled() && !BePreorder.SUCCEEDED.equals(be.cancelJobStatus())) {
             findings.add(CheckCode.CANCEL_JOB_INCOMPLETE, key, be, null);
         }
-        // 등록 작업 DEAD_LETTER 는 멈춤이 아니라 관리자 대기다(실행 행의 건수). 취소 작업은 포기하지 않아 기준 시간을 넘기면 멈춤이다
+        // 등록 · 취소 작업 DEAD_LETTER 는 멈춤이 아니라 관리자 대기다(실행 행의 건수). 포기되지 않은 처리 중만 기준 시간을 넘기면 멈춤이다
         if ((be.registering() || be.canceling()) && !be.changedAt().isAfter(scope.stuckBefore())) {
             findings.add(CheckCode.STUCK, key, be, null);
         }

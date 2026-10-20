@@ -26,7 +26,9 @@ class PreorderRowCheckTest {
             "RESERVED,     SUCCEEDED,   NONE",
             "CANCELED,     SUCCEEDED,   SUCCEEDED",
             "CANCELED,     CANCELED,    SUCCEEDED",
-            "PENDING_SYNC, DEAD_LETTER, NONE"})
+            "PENDING_SYNC, DEAD_LETTER, NONE",
+            "CANCELING,    SUCCEEDED,   DEAD_LETTER",
+            "CANCELING,    CANCELED,    DEAD_LETTER"})
     void 정상_예약은_남기지_않는다(String status, String registerJob, String cancelJob) {
         assertThat(inspect(preorder(status, registerJob, cancelJob))).isEmpty();
     }
@@ -82,6 +84,7 @@ class PreorderRowCheckTest {
         assertThat(codes(preorder("CANCELED", "SUCCEEDED", "RETRY_SCHEDULED"))).containsExactly("CANCEL_JOB_INCOMPLETE");
     }
 
+    // 포기한 작업은 관리자 대기로 세고(실행 행의 건수) 멈춤으로 남기지 않는다 — 오래 바뀌지 않아도 그렇다. 위 정상 예약의 DEAD_LETTER 줄들
     @Test
     void 기준_시간을_넘긴_등록_대기_취소_중은_멈춤이다() {
         assertThat(codes(preorder("PENDING_SYNC", "RETRY_SCHEDULED", null))).containsExactly("STUCK");
