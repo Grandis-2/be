@@ -150,8 +150,12 @@ public final class ConcurrencyLimiter {
         boolean busy = peak >= allowed(JobType.REGISTER);
         // 호출이 적은 창은 한두 건으로 비율이 크게 흔들린다. 다만 느리면 끝나는 호출 자체가 줄므로, 자리를 다 쓴 채 느리면 줄인다
         if (failing && enoughCalls || slow && (enoughCalls || busy)) {
-            limit = Math.max(settings.min(), (int) (limit * settings.decreaseFactor()));
-            threshold = limit;
+            int reduced = Math.max(settings.min(), (int) (limit * settings.decreaseFactor()));
+            // 실제로 줄였을 때만 기준점을 낮춘다 — 최소에서 느린 시험 호출 하나가 차단기 뒤의 회복 기준점을 지우지 않게
+            if (reduced < limit) {
+                limit = reduced;
+                threshold = reduced;
+            }
         } else if (!slow && !failing && p95.compareTo(settings.healthyP95()) < 0
                 && failureRate < settings.healthyFailureRate() && busy && limit < max) {
             // 두 배는 기준점에서, 더하기는 상한에서 멈춘다 — 넘치지 않게 더하거나 곱하기 전에 견준다

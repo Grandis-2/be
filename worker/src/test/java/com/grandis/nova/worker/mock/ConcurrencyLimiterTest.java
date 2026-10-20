@@ -208,6 +208,31 @@ class ConcurrencyLimiterTest {
         assertThat(limiter.limit()).as("그 뒤로는 +1").isEqualTo(4);
     }
 
+    /** 차단기가 닫힌 직후의 시험 호출은 느릴 수 있다. 최소라 더 줄일 수 없으면 기준점도 그대로 두어 빠른 회복을 지킨다. */
+    @Test
+    void 최소에서_느린_호출이_와도_차단기_뒤의_기준점을_지우지_않는다() {
+        ConcurrencyLimiter wide = new ConcurrencyLimiter(new WorkerProperties.Concurrency(20, 1, 10, 2, 1,
+                Duration.ofMillis(100), 40, WINDOW, Duration.ofSeconds(1), 5, 20, 10, 1, 0.5), Settings.SLOW_CALL, clock);
+        fill(wide);
+        record(wide, FAST, 20, 0);
+        clock.advance(WINDOW);
+        wide.record(FAST, false);
+        assertThat(wide.limit()).isEqualTo(20);
+        wide.shrinkToMin();
+
+        fill(wide);
+        wide.record(Settings.SLOW_CALL.plusMillis(10), false);
+        clock.advance(WINDOW);
+        wide.record(Settings.SLOW_CALL.plusMillis(10), false);
+        assertThat(wide.limit()).as("자리를 다 쓴 채 느리지만 이미 최소").isEqualTo(2);
+
+        fill(wide);
+        record(wide, FAST, 20, 0);
+        clock.advance(WINDOW);
+        wide.record(FAST, false);
+        assertThat(wide.limit()).as("기준점 10 까지 두 배 — 기준점을 지웠다면 +1 로 3").isEqualTo(4);
+    }
+
     /** 창 하나를 채우고 넘긴다. 마지막 기록이 창을 닫으며 자리 수를 조절한다. */
     private void window(Duration latency, int calls, int failures) {
         record(limiter, latency, calls - failures, failures);
