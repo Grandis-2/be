@@ -1,6 +1,7 @@
 package com.grandis.nova.member;
 
 import com.grandis.nova.common.web.RequestIdFilter;
+import com.grandis.nova.common.security.AuthRedisKeys;
 import com.grandis.nova.common.security.InvalidTokenException;
 import com.grandis.nova.common.security.Role;
 import com.grandis.nova.common.security.SessionReplacedException;
@@ -15,7 +16,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.web.FilterChainProxy;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -55,6 +58,8 @@ class RefreshRoundTripTest {
     @Autowired FilterChainProxy springSecurityFilterChain;
     @Autowired RequestIdFilter requestIdFilter;
     @Autowired TokenService tokens;
+    @Autowired StringRedisTemplate redis;
+    @Autowired JdbcTemplate jdbc;
     @MockitoBean KakaoOAuthClient kakao;
 
     MockMvc mvc;
@@ -105,7 +110,7 @@ class RefreshRoundTripTest {
     }
 
     @Test
-    @DisplayName("주인을 찾은 뒤 회전 전에 새 로그인이 그 세션을 끊으면 SESSION_REPLACED — 처음 읽은 행을 다시 쓰지만 판정은 잠근 행 · 표식으로 한다")
+    @DisplayName("주인을 찾은 뒤 회전 전에 새 로그인이 그 세션을 끊으면 SESSION_REPLACED — 처음 읽은 행의 세션으로 폐기 표식을 본다")
     void loginBetweenTargetAndRotationReplacesSession() throws Exception {
         String raw = loginCookie().getValue();
         TokenService.RefreshTarget target = tokens.refreshTarget(raw, Role.USER);
@@ -123,6 +128,27 @@ class RefreshRoundTripTest {
 
         assertThatThrownBy(() -> tokens.rotate(raw, target)).isInstanceOf(InvalidTokenException.class)
                 .isNotInstanceOf(SessionReplacedException.class);
+    }
+
+    @Test
+    @DisplayName("주인을 찾은 뒤 회전 전에 새 로그인 · 로그아웃이 끼고 폐기 표식이 없어도(못 심었거나 아직) 잠근 행이 REVOKED 라 401 — 그 체인에 새 행이 생기지 않는다")
+    void lockedRowRejectsWhenMarkIsMissing() throws Exception {
+        for (boolean byLogin : new boolean[] {true, false}) {
+            String raw = loginCookie().getValue();
+            TokenService.RefreshTarget target = tokens.refreshTarget(raw, Role.USER);
+            UUID sid = target.session().sessionId();
+            if (byLogin) {
+                tokens.issue(target.subject(), Role.USER);
+            } else {
+                tokens.revoke(sid);
+            }
+            redis.delete(AuthRedisKeys.REVOKED_SESSION_PREFIX + sid);   // 표식이 없는 경우 — 판정은 잠근 행으로 간다
+
+            assertThatThrownBy(() -> tokens.rotate(raw, target)).as(byLogin ? "새 로그인" : "로그아웃")
+                    .isInstanceOf(InvalidTokenException.class).isNotInstanceOf(SessionReplacedException.class);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE family_id = ?", Integer.class, sid.toString()))
+                    .as(byLogin ? "새 로그인 — 그 체인의 행은 처음 하나" : "로그아웃 — 그 체인의 행은 처음 하나").isEqualTo(1);
+        }
     }
 
     private Cookie loginCookie() throws Exception {
