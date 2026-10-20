@@ -111,7 +111,8 @@ public class ProductDetailService {
 
     /**
      * 본문에 실시간 칸을 채운다. 사전예약은 preorder 의 회차(판매 준비 · 회차 시각 · 접수 단계), 일반은 그 상품 옵션의 재고 행(옵션별 가용 수량 · 품절).
-     * 판매 준비 전이면 404 — 목록의 판매 방식별 준비와 같은 정의다. 일반 상품의 판매 준비는 본문에 실린 값이다(DB 를 다시 읽지 않는다).
+     * 판매 준비 전이면 404 — 목록의 판매 방식별 준비와 같은 정의다. 일반 상품의 판매 준비는 본문에 실린 값이다 — 준비된 본문이면 DB 를 다시 읽지 않고,
+     * 준비 전 본문이면 404 를 내기 전에 한 번 더 읽는다.
      * 캐시된 본문에도 요청마다 부르므로 재고 · 조기 마감이 늦게 보이지 않는다. 트랜잭션 없이 돈다 — order 재고 · preorder 회차를 묻는 동안 DB 연결을
      * 붙잡지 않게.
      *
@@ -124,8 +125,10 @@ public class ProductDetailService {
                     .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
             return live(view, window, Map.of());
         }
-        // 판매 준비는 목록과 같은 판정(products.stock_ready_at — order 의 판매 준비 이벤트)이다. 재고 행의 유무로 따로 가르면 목록에 없는 상품이 상세에 보인다
-        if (!body.stockReady()) {
+        // 판매 준비는 목록과 같은 판정(products.stock_ready_at — order 의 판매 준비 이벤트)이다. 재고 행의 유무로 따로 가르면 목록에 없는 상품이 상세에 보인다.
+        // 준비 전 본문이면 404 직전에 한 번 더 본다 — 준비 이벤트 커밋 전에 시작한 본문 조회를 커밋 뒤 요청이 같이 기다렸으면 그 본문은 옛 값이다.
+        // 준비 전 본문은 캐시에 넣지 않으므로(CatalogReadCache) 이 갈래는 원래 DB 로 가는 요청이고, 캐시에서 나가는 준비된 본문은 다시 읽지 않는다
+        if (!body.stockReady() && !crossReads.isStockReady(view.productId())) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
         return live(view, null, availableOrUnknown(view));
