@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -32,7 +33,6 @@ class ProductOptionsQueryServiceTest {
 
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired ProductOptionsQueryService service;
-    @Autowired ProductOptionsQueryRepository queries;
 
     ShopFixtures fixtures;
 
@@ -100,8 +100,8 @@ class ProductOptionsQueryServiceTest {
         UUID option = fixtures.option(productId, "ACTIVE", new BigDecimal("1000"));
 
         Log log = capture("%product_options%", () -> {
-            queries.findProductWithOptions(productId);
-            queries.findOptionsWithProducts(List.of(option));
+            service.findProductOptions(productId);
+            service.findOptions(List.of(option));
         });
 
         assertThat(log.readingCatalog()).as("양성 대조군 — 두 조회가 잡혔다").hasSize(2);
@@ -149,9 +149,12 @@ class ProductOptionsQueryServiceTest {
         void run() throws Exception;
     }
 
+    /** 상품 · 옵션 표 이름 — 단어로만 맞춘다(preorder_products 같은 다른 표 이름의 일부는 아니다). */
+    private static final Pattern CATALOG_TABLE = Pattern.compile("\\b(products|product_options)\\b");
+
     record Log(List<String> all, List<String> onMarkerConnection) {
         List<String> readingCatalog() {
-            return all.stream().filter(sql -> sql.contains("products") || sql.contains("product_options")).toList();
+            return all.stream().filter(sql -> CATALOG_TABLE.matcher(sql).find()).toList();
         }
     }
 }
