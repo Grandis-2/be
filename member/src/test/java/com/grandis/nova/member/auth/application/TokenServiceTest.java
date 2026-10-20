@@ -454,6 +454,23 @@ class TokenServiceTest {
     }
 
     @Test
+    @DisplayName("대상의 세션이 다른 행이어도(해시는 제시한 토큰의 것) 새 토큰의 주인 · 세션은 회전이 잠근 행의 것이다")
+    void rotatedTokensFollowTheLockedRow() {
+        Session presented = loggedIn(UUID.randomUUID());
+        rotationSucceeds(presented);
+        Session other = new Session(UUID.randomUUID(), "other-customer", NOW, NOW.plus(REFRESH));
+
+        TokenService.Rotated rotated = service.rotate(PRESENTED,
+                new TokenService.RefreshTarget(Role.USER, other.subject(), other, RefreshTokens.hash(PRESENTED)));
+
+        assertThat(rotated.subject()).isEqualTo(CUSTOMER);
+        assertThat(rotated.sessionId()).isEqualTo(presented.sessionId());
+        TokenClaims access = provider.parse(rotated.tokens().accessToken());
+        assertThat(access.subject()).isEqualTo(CUSTOMER);
+        assertThat(access.sessionId()).isEqualTo(presented.sessionId());
+    }
+
+    @Test
     @DisplayName("회원 재발급은 refreshTarget 이 찾은 행으로 회전한다 — 저장소에서 같은 행을 다시 찾지 않는다")
     void rotateReusesTheTargetSession() {
         rotationSucceeds(loggedIn(UUID.randomUUID()));

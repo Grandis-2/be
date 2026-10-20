@@ -146,6 +146,8 @@ class RefreshRoundTripTest {
 
             assertThatThrownBy(() -> tokens.rotate(raw, target)).as(byLogin ? "새 로그인" : "로그아웃")
                     .isInstanceOf(InvalidTokenException.class).isNotInstanceOf(SessionReplacedException.class);
+            assertThat(redis.hasKey(AuthRedisKeys.REVOKED_SESSION_PREFIX + sid)).as("REVOKED 다 — 재사용(REUSED)이면 세션을 끊으며 표식을 심는다")
+                    .isFalse();
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM refresh_tokens WHERE family_id = ?", Integer.class, sid.toString()))
                     .as(byLogin ? "새 로그인 — 그 체인의 행은 처음 하나" : "로그아웃 — 그 체인의 행은 처음 하나").isEqualTo(1);
         }
