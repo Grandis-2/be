@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.accept;
 
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.ErrorCode;
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.testing.Concurrently;
@@ -16,6 +17,7 @@ import com.grandis.nova.preorder.support.PreorderCancels;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 import com.grandis.nova.preorder.support.ShopFixtures;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
@@ -24,18 +26,27 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import javax.sql.DataSource;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntFunction;
 import java.util.stream.LongStream;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.BDDMockito.given;
 
 /**
@@ -61,6 +72,12 @@ class PreorderAcceptConcurrencyTest {
 
     @Autowired
     JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    DataSource dataSource;
+
+    @Autowired
+    MeterRegistry meterRegistry;
 
     @MockitoBean
     CatalogClient catalogClient;
@@ -325,6 +342,47 @@ class PreorderAcceptConcurrencyTest {
                 .isEqualTo(PreorderErrorCode.SALE_CLOSED);
     }
 
+    /**
+     * 회차 잠금이 오래 쥐어져도 같은 상품은 허가 수(2)만 트랜잭션에 들어가 커넥션을 쥔다. 나머지는 커넥션 없이 기다리다 상한 뒤 503 이고,
+     * 그동안 다른 상품은 접수된다 — 격벽이 없으면 12건이 풀(10)을 다 쥐어 다른 상품도 커넥션 대기 끝에 503 이다.
+     */
+    @Test
+    void 회차_잠금이_길어져도_넘친_접수는_503_이고_그동안_다른_상품은_접수된다() throws Exception {
+        PreorderProduct other = fixtures.openPreorderProduct();
+        given(catalogClient.getProduct(other.productId())).willReturn(
+                CatalogStubs.preorderProduct(other.productId(), CatalogStubs.activeOption(other.optionId())));
+        int requests = 12;
+        List<UUID> customers = Stream.generate(fixtures::customer).limit(requests).toList();
+        long enteredBefore = bulkheadEntered();
+        double rejectedBefore = bulkheadRejected();
+
+        CompletableFuture<List<Outcome>> burst;
+        try (Connection holder = dataSource.getConnection()) {
+            holder.setAutoCommit(false);
+            lockCampaign(holder, product.productId());
+            burst = CompletableFuture.supplyAsync(() -> concurrentlyUnchecked(requests,
+                    i -> () -> acceptByCustomer(customers.get(i), "bulkhead-key-" + i)));
+            await().atMost(Duration.ofSeconds(10)).until(() -> bulkheadEntered() - enteredBefore == 2);
+
+            UUID otherCustomer = fixtures.customer();
+            AcceptResult otherAccepted = acceptService.acceptByCustomer(otherCustomer, other.productId(),
+                    other.productId(), other.optionId(), "bulkhead-other",
+                    AdmissionTickets.issue(other.productId(), otherCustomer, Instant.now()));
+            assertThat(otherAccepted.replayed()).isFalse();
+
+            await().atMost(Duration.ofSeconds(10)).until(() -> bulkheadRejected() - rejectedBefore == requests - 2);
+            holder.rollback();
+        }
+
+        List<Outcome> outcomes = burst.get(30, TimeUnit.SECONDS);
+        assertThat(outcomes.stream().filter(Outcome::accepted)).hasSize(2);
+        assertThat(outcomes.stream().filter(o -> !o.accepted()))
+                .hasSize(requests - 2)
+                .allMatch(o -> o.error() == CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+        assertThat(committedPositions()).containsExactly(1L, 2L);
+        assertThat(nextQueuePosition()).isEqualTo(3);
+    }
+
     /** 지금 접수보다 나중에 발급된 것으로 보이는 입장권의 발급 시각(다시 진입해 새로 받은 입장권). */
     private Instant laterWindow() {
         return Instant.now().plusSeconds(3 * AdmissionTickets.WINDOW_SECONDS);
@@ -339,6 +397,31 @@ class PreorderAcceptConcurrencyTest {
     private static List<Outcome> concurrently(int requests, IntFunction<Callable<AcceptResult>> tasks)
             throws InterruptedException {
         return Concurrently.run(requests, tasks).stream().map(Outcome::of).toList();
+    }
+
+    private static List<Outcome> concurrentlyUnchecked(int requests, IntFunction<Callable<AcceptResult>> tasks) {
+        try {
+            return concurrently(requests, tasks);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new CompletionException(e);
+        }
+    }
+
+    private static void lockCampaign(Connection connection, UUID productId) throws SQLException {
+        try (PreparedStatement lock = connection.prepareStatement(
+                "SELECT product_id FROM preorder_campaigns WHERE product_id = ? FOR UPDATE")) {
+            lock.setBytes(1, UuidBinary.toBytes(productId));
+            lock.executeQuery().close();
+        }
+    }
+
+    private long bulkheadEntered() {
+        return meterRegistry.get("preorder.accept.bulkhead.wait").timer().count();
+    }
+
+    private double bulkheadRejected() {
+        return meterRegistry.get("preorder.accept.bulkhead.rejected").tag("limit", "product").counter().count();
     }
 
     private List<Long> committedPositions() {

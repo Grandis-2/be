@@ -26,6 +26,7 @@ import java.util.function.Supplier;
  *
  * 카탈로그 조회는 캐시가 비었으면 catalog 를 HTTP 로 부르므로 트랜잭션 밖에서 한다.
  * UNIQUE 충돌은 트랜잭션이 롤백된 뒤 제약 이름으로 가른다 — 삼키지 않고 계약의 오류로 바꾼다.
+ * 트랜잭션은 격벽({@link AcceptBulkhead}) 안에서만 연다 — 넘친 접수는 커넥션을 잡기 전에 503 으로 돌려보낸다.
  */
 @Service
 public class PreorderAcceptService {
@@ -44,15 +45,17 @@ public class PreorderAcceptService {
     private final AdmissionTicketVerifier ticketVerifier;
     private final CatalogReader catalogReader;
     private final PreorderAcceptTransaction transaction;
+    private final AcceptBulkhead bulkhead;
     private final Preorders preorders;
     private final MeterRegistry meterRegistry;
 
     public PreorderAcceptService(AdmissionTicketVerifier ticketVerifier, CatalogReader catalogReader,
-                                 PreorderAcceptTransaction transaction, Preorders preorders,
+                                 PreorderAcceptTransaction transaction, AcceptBulkhead bulkhead, Preorders preorders,
                                  MeterRegistry meterRegistry) {
         this.ticketVerifier = ticketVerifier;
         this.catalogReader = catalogReader;
         this.transaction = transaction;
+        this.bulkhead = bulkhead;
         this.preorders = preorders;
         this.meterRegistry = meterRegistry;
         // 처음부터 0 으로 내놓는다 — 시계열이 없으면 "접수 중인데 새 예약 0건" 경보가 값 없음으로 빠진다
@@ -130,7 +133,7 @@ public class PreorderAcceptService {
     private AcceptResult accept(AcceptCommand command) {
         Optional<ProductCatalog> product = catalogReader.findProduct(command.productId());
         try {
-            return transaction.accept(command, product);
+            return bulkhead.call(command.productId(), () -> transaction.accept(command, product));
         } catch (DataIntegrityViolationException e) {
             return resolveConflict(command, e);
         }

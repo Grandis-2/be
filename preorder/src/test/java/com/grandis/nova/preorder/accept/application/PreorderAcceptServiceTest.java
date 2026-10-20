@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -42,8 +43,11 @@ class PreorderAcceptServiceTest {
         preorders = mock(Preorders.class);
         CatalogReader catalogReader = mock(CatalogReader.class);
         given(catalogReader.findProduct(PRODUCT_ID)).willReturn(Optional.empty());
-        service = new PreorderAcceptService(mock(AdmissionTicketVerifier.class), catalogReader, transaction, preorders,
-                new SimpleMeterRegistry());
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        AcceptBulkhead bulkhead = new AcceptBulkhead(new AcceptBulkheadProperties(2, 0.5, 0, Duration.ofSeconds(3),
+                Duration.ofSeconds(1), Duration.ofSeconds(3)), 10, registry);
+        service = new PreorderAcceptService(mock(AdmissionTicketVerifier.class), catalogReader, transaction, bulkhead,
+                preorders, registry);
     }
 
     @Test
