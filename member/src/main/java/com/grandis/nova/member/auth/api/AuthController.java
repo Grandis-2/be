@@ -115,9 +115,9 @@ public class AuthController {
             throw new InvalidTokenException("refresh cookie missing");
         }
         // 실패할 수 있는 DB 조회(회원 이름)를 회전 **앞**에 둔다. 여기서 던지면 리프레시가 아직 교체되지 않아 같은 쿠키로 다시 올 수 있다.
-        String subject = tokens.subjectOf(refreshToken, role);
-        SessionOwner owner = ownerOf(new AuthenticatedPrincipal(subject, role));
-        TokenService.Rotated rotated = tokens.rotate(refreshToken, role);
+        TokenService.RefreshTarget target = tokens.refreshTarget(refreshToken, role);
+        SessionOwner owner = ownerOf(new AuthenticatedPrincipal(target.subject(), role));
+        TokenService.Rotated rotated = tokens.rotate(refreshToken, target);
         return withRefreshCookie(rotated.tokens(), role,
                 new LoginResponse(rotated.tokens().accessToken(), owner.displayName(), role, owner.profileComplete()));
     }
@@ -280,7 +280,7 @@ public class AuthController {
             throw new InvalidTokenException("non-uuid subject for USER");
         }
         // 행이 없으면 401 — CustomerService 와 같은 규칙. 탈퇴가 없어 지금은 도달하지 않는 갈래다.
-        return customers.findById(customerId)
+        return customers.lookup(customerId)   // 선언한 쿼리 — 상속한 findById 는 저장소가 읽기 전용 트랜잭션을 연다
                 .map(c -> new SessionOwner(c.getDisplayName(), c.profile().isComplete()))
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.UNAUTHENTICATED));
     }
