@@ -90,6 +90,11 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
     }
 
     @Override
+    public boolean tryLock(UUID campaignId) {
+        return campaigns.tryLockRow(campaignId).isPresent();
+    }
+
+    @Override
     public boolean markDrawRequested(UUID campaignId, Instant now) {
         return campaigns.markDrawRequested(campaignId, now) == 1;
     }

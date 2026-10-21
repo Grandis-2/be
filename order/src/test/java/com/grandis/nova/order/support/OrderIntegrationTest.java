@@ -42,6 +42,8 @@ import java.lang.annotation.Target;
         // 재고 장부 대조 · 지표 갱신도 시험이 직접 부른다(StockReconciler.reconcile · StockGauges.refresh)
         "nova.stock.reconcile.cron=-",
         "nova.stock.gauge-refresh-interval=1h",
+        // 주문 상태 지표는 기동 때 한 번 읽고 그 뒤는 시험이 부른다(OrderStatusGauges.refresh) — 문장을 세는 시험에 주기 실행이 끼지 않게
+        "nova.metrics.refresh-interval=1h",
         // 관리 포트는 코드 기본값이 고정 포트라, 실제 포트로 띄우는 컨텍스트끼리 겹치지 않게 빈 포트로 둔다
         "management.server.port=0",
         "jwt.issuer=nova-test",

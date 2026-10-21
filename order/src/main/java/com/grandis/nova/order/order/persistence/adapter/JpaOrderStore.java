@@ -30,7 +30,9 @@ import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
 import java.util.Collection;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -230,6 +232,13 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     public List<OrderEvent> findEvents(UUID orderId, long upToSequence) {
         return events.findByOrderIdAndEventSequenceLessThanEqualOrderByEventSequence(orderId, upToSequence).stream()
                 .map(OrderMapper::toDomain).toList();
+    }
+
+    @Override
+    public Map<OrderStatus, Long> countByStatus(Set<OrderStatus> statuses) {
+        Map<OrderStatus, Long> counts = new EnumMap<>(OrderStatus.class);
+        orders.countByStatusIn(statuses).forEach(row -> counts.put(row.getStatus(), row.getCount()));
+        return counts;
     }
 
     /**

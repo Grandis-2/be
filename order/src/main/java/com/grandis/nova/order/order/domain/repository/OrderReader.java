@@ -1,6 +1,7 @@
 package com.grandis.nova.order.order.domain.repository;
 
 import com.grandis.nova.common.OffsetPage;
+import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderEvent;
 import com.grandis.nova.order.order.domain.model.OrderItem;
@@ -8,7 +9,9 @@ import com.grandis.nova.order.order.domain.model.OrderItem;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -80,4 +83,7 @@ public interface OrderReader {
      * 읽어 둔 주문의 eventSequence 를 넘긴다.
      */
     List<OrderEvent> findEvents(UUID orderId, long upToSequence);
+
+    /** 그 상태들의 주문 수. 주문이 없는 상태는 빠진다. 트랜잭션 밖에서 부르면 트랜잭션을 열지 않는다. */
+    Map<OrderStatus, Long> countByStatus(Set<OrderStatus> statuses);
 }

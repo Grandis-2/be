@@ -79,6 +79,9 @@ nova:
   #   reconcile:
   #     cron: "0 0 4,5 * * *"
   #   gauge-refresh-interval: 60s
+  # 배송 대기 주문 수 지표(order.status.count)를 DB 에서 다시 세는 주기. 기본 30s
+  # metrics:
+  #   refresh-interval: 30s
   # SQS(AWS SDK v2). 로컬은 Floci(docker/floci). 배포 환경은 endpoint 를 지우고 IAM 역할을 쓴다
   sqs:
     region: ap-northeast-2
@@ -88,6 +91,7 @@ nova:
     # queues:
     #   preorder-events: dev-preorder-events
     #   catalog-events: dev-catalog-events
+    #   admin-alert: dev-admin-alert
     consumer:
       enabled: true
       queue: order-events

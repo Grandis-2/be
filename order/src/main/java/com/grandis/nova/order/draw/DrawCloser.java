@@ -51,17 +51,26 @@ public class DrawCloser {
     }
 
     /**
-     * 마감 뒤 {@link #STALL_AFTER} 가 지나도 결과를 반영하지 못한 회차를 ERROR 로 알린다 — 추첨 요청이 DLQ 로 갔거나 worker 가 없으면 "요청됨 ·
-     * 미반영" 에, 결제가 끝나지 않으면(payment 에스컬레이션) "결제 확인 중" 에 머문다. 저절로 풀리지 않을 수 있어 사람이 본다. 경보는 마감 뒤
-     * {@link #ALARM_UNTIL} 까지만 낸다 — 그 뒤로는 관리자 진행 조회로 본다(같은 회차가 끝없이 경보를 채우지 않게).
+     * 마감 뒤 {@link #STALL_AFTER} 가 지나도 결과를 반영하지 못한 회차를 ERROR 와 관리자 알림(DRAW_DELAYED, {@link DrawSettlement#reportStalled})으로
+     * 알린다 — 추첨 요청이 DLQ 로 갔거나 worker 가 없으면 "요청됨 · 미반영" 에, 결제가 끝나지 않으면(payment 에스컬레이션) "결제 확인 중" 에
+     * 머문다. 저절로 풀리지 않을 수 있어 사람이 본다. 경보는 마감 뒤 {@link #ALARM_UNTIL} 까지만 낸다 — 그 뒤로는 관리자 진행 조회로 본다(같은
+     * 회차가 끝없이 경보를 채우지 않게).
+     *
+     * 리더를 두지 않아 인스턴스마다 알린다 — 허브가 같은 회차의 지연 알림을 한 건으로 묶는다. 한 회차의 실패는 그 회차만 건너뛴다.
      */
     @Scheduled(fixedDelayString = "${nova.draw.stall-check-interval:10m}", initialDelayString = "${nova.draw.stall-check-interval:10m}")
     void checkStalled() {
         Instant now = clock.instant();
         for (UUID campaignId : campaigns.findUnsettled(now.minus(ALARM_UNTIL), now.minus(STALL_AFTER), BATCH)) {
-            campaigns.findProgress(campaignId).ifPresent(progress -> log.error(
-                    "드로우 결과 반영 지연 — 마감 뒤 {} 넘게 반영 못 함 drawId={} drawRequestedAt={} authorizingEntries={} paidEntries={}",
-                    STALL_AFTER, campaignId, progress.drawRequestedAt(), progress.authorizingEntries(), progress.paidEntries()));
+            try {
+                settlement.reportStalled(campaignId).ifPresent(progress -> log.error(
+                        "드로우 결과 반영 지연 — 마감 뒤 {} 넘게 반영 못 함 drawId={} drawRequestedAt={} authorizingEntries={} paidEntries={}",
+                        STALL_AFTER, campaignId, progress.drawRequestedAt(), progress.authorizingEntries(), progress.paidEntries()));
+            } catch (PessimisticLockingFailureException e) {
+                log.warn("드로우 반영 지연 검사 잠금 실패(교착={}), 다음 주기에 다시 drawId={}", MySqlLockFailures.isDeadlock(e), campaignId, e);
+            } catch (RuntimeException e) {
+                log.error("드로우 반영 지연 검사 실패, 다음 주기에 다시 drawId={}", campaignId, e);
+            }
         }
     }
 

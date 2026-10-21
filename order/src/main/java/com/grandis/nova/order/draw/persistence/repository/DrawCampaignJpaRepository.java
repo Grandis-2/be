@@ -64,6 +64,9 @@ public interface DrawCampaignJpaRepository extends JpaRepository<DrawCampaignJpa
     @Query(value = "SELECT id FROM draw_campaigns WHERE id = :id FOR UPDATE", nativeQuery = true)
     Optional<byte[]> lockRow(@Param("id") UUID id);
 
+    @Query(value = "SELECT id FROM draw_campaigns WHERE id = :id FOR UPDATE SKIP LOCKED", nativeQuery = true)
+    Optional<byte[]> tryLockRow(@Param("id") UUID id);
+
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query(value = """
             UPDATE draw_campaigns SET draw_requested_at = :now, updated_at = :now

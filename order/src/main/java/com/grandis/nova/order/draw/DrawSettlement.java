@@ -14,6 +14,7 @@ import com.grandis.nova.order.order.domain.model.OrderLine;
 import com.grandis.nova.order.order.vo.EventCause;
 import com.grandis.nova.order.order.vo.Money;
 import com.grandis.nova.order.order.vo.Quantity;
+import com.grandis.nova.order.outbox.AdminAlertRequested;
 import com.grandis.nova.order.outbox.DrawRequested;
 import com.grandis.nova.order.outbox.NotificationRequested;
 import com.grandis.nova.order.stock.StockLedger;
@@ -28,10 +29,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -49,7 +52,11 @@ import java.util.stream.Collectors;
  * 반영(한 트랜잭션): 당첨 응모마다 응모 때 배송지로 0원 주문(결제 확인 대기로 생긴다 — 이 뒤로 일반 배송 단계), 당첨분 재고를 확보 → 판매로,
  * 남은 확보(당첨 인원 − 당첨 수 — 전원 당첨일 때만 생긴다, Mock 결과는 늘 당첨 인원만큼이다)는 반납. 판매로 옮기지 못하면 "재고 어긋남" ERROR 를
  * 남기고, 반납할 확보가 모자라면(장부 어긋남) 반영 전체를 롤백한다 — 전원 당첨에서 판매가 모자랐다면 반납도 모자라 결국 롤백된다.
- * 당첨 응모마다 당첨 알림도 이 트랜잭션에 적는다. 낙첨에는 보내지 않는다 — 결과는 드로우 상세에서 본다(알림을 응모 수가 아니라 당첨 인원만큼 둔다).
+ * 알림도 이 트랜잭션에 적는다 — 당첨 응모마다 회원 당첨 알림, 회차에 관리자 알림(DRAW_SETTLED) 하나. 낙첨에는 보내지 않는다 — 결과는 드로우
+ * 상세에서 본다(알림을 응모 수가 아니라 당첨 인원만큼 둔다).
+ *
+ * 반영이 늦은 회차의 관리자 알림(DRAW_DELAYED, {@link #reportStalled})도 회차를 잠그고 적는다 — 반영과 줄을 서야 지연 알림이 반영 알림보다
+ * 늦게 찍히지 않는다.
  */
 @Service
 public class DrawSettlement {
@@ -149,8 +156,33 @@ public class DrawSettlement {
         });
     }
 
-    /** 반영 — 회차를 잠근 트랜잭션 안에서 부른다. */
-    private void apply(DrawCampaign campaign, List<DrawEntry> winners, Instant now) {
+    /**
+     * 마감 뒤 오래 반영하지 못한 회차에 관리자 알림(DRAW_DELAYED)을 적는다. 회차를 잠근 뒤 반영 여부를 다시 본다 — 고른 뒤 반영이 커밋됐는데
+     * 지연 알림을 적으면, 허브가 반영 알림으로 해소한 지연 알림을 다시 연다. 다른 트랜잭션(반영 · 추첨 요청 · 응모 결제 승인)이 회차를 쥐고 있으면 기다리지 않고
+     * 이번 검사에서 건너뛴다 — 검사는 스케줄러 스레드 하나를 나눠 쓰고(OrderSchedulingConfig) 주기마다 다시 고르므로, 반영이 끝나지 않았으면 다음
+     * 검사가 알린다.
+     *
+     * @return 알렸으면 그때 읽은 진행. 이미 반영했거나 회차를 다른 트랜잭션이 쥐고 있으면 empty
+     */
+    public Optional<DrawProgress> reportStalled(UUID campaignId) {
+        return writeTransaction.execute(status -> {
+            if (!campaigns.tryLock(campaignId)) {
+                return Optional.empty();
+            }
+            DrawProgress progress = campaigns.findProgress(campaignId).orElseThrow();
+            if (progress.settledAt() != null) {
+                return Optional.empty();
+            }
+            DrawCampaign campaign = campaigns.findById(campaignId).orElseThrow(() -> new IllegalStateException("회차가 없다: " + campaignId));
+            outbox.append(AdminAlertRequested.drawDelayed(campaignId, campaign.closesAt(), progress.drawRequestedAt(),
+                    progress.authorizingEntries(), progress.paidEntries()));
+            return Optional.of(progress);
+        });
+    }
+
+    /** 반영 — 회차를 잠근 트랜잭션 안에서 부른다. 시각은 µs 로 내린다 — DB(µs)에 적는 반영 시각과 관리자 알림의 settledAt 이 같게. */
+    private void apply(DrawCampaign campaign, List<DrawEntry> winners, Instant at) {
+        Instant now = at.truncatedTo(ChronoUnit.MICROS);
         if (!campaigns.markSettled(campaign.id(), now)) {
             throw new IllegalStateException("잠근 회차의 반영 표식이 이미 있다: drawId=" + campaign.id());
         }
@@ -182,5 +214,6 @@ public class DrawSettlement {
                 throw e;
             }
         }
+        outbox.append(AdminAlertRequested.drawSettled(campaign.id(), winners.size(), campaign.winnerCount(), campaign.closesAt(), now));
     }
 }

@@ -58,6 +58,9 @@ public interface DrawCampaignStore {
     /** 회차 행을 잠근다(SELECT … FOR UPDATE) — 추첨 요청 · 결과 반영을 회차마다 하나씩 줄 세운다. */
     void lock(UUID campaignId);
 
+    /** 회차 행을 기다리지 않고 잠근다(SELECT … FOR UPDATE SKIP LOCKED). @return 잠갔으면 true, 다른 트랜잭션이 쥐고 있으면 false */
+    boolean tryLock(UUID campaignId);
+
     /** @return 이번에 요청 표식을 적었으면 true(요청 · 반영 전일 때만) */
     boolean markDrawRequested(UUID campaignId, Instant now);
 

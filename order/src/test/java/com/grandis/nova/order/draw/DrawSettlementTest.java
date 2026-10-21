@@ -26,6 +26,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -193,6 +194,7 @@ class DrawSettlementTest {
         assertThatThrownBy(() -> settlement.close(allWin)).isInstanceOf(RuntimeException.class);
         assertThat(wonOrder(lone)).isNull();
         assertThat(notifications(allWin)).as("알림도 함께 롤백").isEmpty();
+        assertThat(adminAlerts(allWin)).as("관리자 알림도 함께 롤백").isEmpty();
         assertThat(campaign(allWin).get("settled_at")).isNull();
         assertThat(stock()).containsEntry("stock_reserved", 1).containsEntry("stock_sold", 0);
     }
@@ -288,6 +290,179 @@ class DrawSettlementTest {
         assertThat(output.getAll()).contains("드로우 결과 반영 지연").contains(stalled.toString());
         assertThat(output.getAll()).as("막 마감한 회차는 아직 경보하지 않는다").doesNotContain(recent.toString());
         assertThat(output.getAll()).as("마감 뒤 하루가 지나면 경보를 그친다").doesNotContain(old.toString());
+    }
+
+    // ── 관리자 알림 ──
+
+    @Test
+    @DisplayName("전원 당첨으로 반영하면 DRAW_SETTLED 하나(실제 당첨 수 · 당첨 인원 · 마감 · 반영 시각) — 다시 돌아도 한 번")
+    void allWinSendsSettledAlertOnce() {
+        Instant closes = Instant.now().minus(Duration.ofMinutes(1)).truncatedTo(ChronoUnit.MICROS);
+        UUID draw = draw(Instant.now().minus(Duration.ofDays(2)), closes, 3);
+        entry(draw, "PAID", null);
+        entry(draw, "PAID", null);
+
+        settlement.close(draw);
+        settlement.close(draw);
+
+        assertThat(adminAlerts(draw)).singleElement().satisfies(alert -> {
+            assertThat(alert.propertyNames()).as("원인 id 는 봉투로만 나간다").containsExactlyInAnyOrder("type", "target", "metrics");
+            assertThat(alert.get("type").asString()).isEqualTo("DRAW_SETTLED");
+            assertThat(alert.get("target").get("kind").asString()).isEqualTo("DRAW");
+            assertThat(alert.get("target").get("id").asString()).isEqualTo(draw.toString());
+            JsonNode metrics = alert.get("metrics");
+            assertThat(metrics.propertyNames()).containsExactlyInAnyOrder("winners", "winnerCount", "closesAt", "settledAt");
+            assertThat(metrics.get("winners").asLong()).isEqualTo(2);
+            assertThat(metrics.get("winnerCount").asInt()).isEqualTo(3);
+            assertThat(Instant.parse(metrics.get("closesAt").asString())).isEqualTo(closes);
+            assertThat(Instant.parse(metrics.get("settledAt").asString())).as("DB 의 반영 시각과 같다").isEqualTo(settledAt(draw));
+        });
+        assertThat(outboxCount(draw, "ADMIN_ALERT_REQUESTED")).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject("SELECT aggregate_type FROM order_outbox_events WHERE aggregate_id = ? AND event_type = ?",
+                String.class, bytes(draw), "ADMIN_ALERT_REQUESTED")).isEqualTo("DRAW_CAMPAIGN");
+    }
+
+    @Test
+    @DisplayName("추첨 결과를 반영하면 DRAW_SETTLED 하나 — 같은 결과를 또 받아도 그대로")
+    void drawResultSendsSettledAlertOnce() {
+        UUID draw = closedDraw(1);
+        UUID a = entry(draw, "PAID", null);
+        entry(draw, "PAID", null);
+        settlement.close(draw);
+        assertThat(adminAlerts(draw)).as("추첨 요청만으로는 보내지 않는다").isEmpty();
+
+        settlement.settle(draw, List.of(a));
+        settlement.settle(draw, List.of(a));
+
+        assertThat(adminAlerts(draw)).singleElement().satisfies(alert -> {
+            assertThat(alert.get("type").asString()).isEqualTo("DRAW_SETTLED");
+            assertThat(alert.get("metrics").get("winners").asLong()).isEqualTo(1);
+            assertThat(alert.get("metrics").get("winnerCount").asInt()).isEqualTo(1);
+        });
+    }
+
+    @Test
+    @DisplayName("결제 완료가 0건인 회차도 DRAW_SETTLED — 당첨 0명")
+    void noPaidEntriesSendsSettledAlertWithZeroWinners() {
+        UUID draw = closedDraw(3);
+
+        settlement.close(draw);
+
+        assertThat(adminAlerts(draw)).singleElement().satisfies(alert -> {
+            assertThat(alert.get("metrics").get("winners").asLong()).isZero();
+            assertThat(alert.get("metrics").get("winnerCount").asInt()).isEqualTo(3);
+        });
+    }
+
+    @Test
+    @DisplayName("마감 뒤 1시간 넘게 반영하지 못한 회차는 DRAW_DELAYED — 없는 값은 칸을 두고 null, 반영한 회차 · 범위 밖 회차는 보내지 않는다")
+    void stalledDrawSendsDelayedAlert() {
+        Instant closes = Instant.now().minus(Duration.ofHours(2)).truncatedTo(ChronoUnit.MICROS);
+        UUID authorizing = draw(Instant.now().minus(Duration.ofDays(2)), closes, 1);
+        entry(authorizing, "AUTHORIZING", "window_delay_1");
+        entry(authorizing, "PAID", null);
+        UUID requested = draw(Instant.now().minus(Duration.ofDays(2)), closes, 1);
+        entry(requested, "PAID", null);
+        entry(requested, "PAID", null);
+        settlement.close(requested);
+        UUID settled = draw(Instant.now().minus(Duration.ofDays(2)), closes, 1);
+        settlement.close(settled);
+        UUID recent = draw(Instant.now().minus(Duration.ofDays(1)), Instant.now().minus(Duration.ofMinutes(5)), 1);
+        entry(recent, "AUTHORIZING", "window_delay_2");
+        UUID old = draw(Instant.now().minus(Duration.ofDays(5)), Instant.now().minus(Duration.ofDays(2)), 1);
+        entry(old, "AUTHORIZING", "window_delay_3");
+
+        closer.checkStalled();
+
+        assertThat(adminAlerts(authorizing)).singleElement().satisfies(alert -> {
+            assertThat(alert.get("type").asString()).isEqualTo("DRAW_DELAYED");
+            assertThat(alert.get("target").get("id").asString()).isEqualTo(authorizing.toString());
+            JsonNode metrics = alert.get("metrics");
+            assertThat(metrics.propertyNames()).containsExactlyInAnyOrder("closesAt", "drawRequestedAt", "authorizingEntries", "paidEntries");
+            assertThat(Instant.parse(metrics.get("closesAt").asString())).isEqualTo(closes);
+            assertThat(metrics.get("drawRequestedAt").isNull()).as("요청 전이면 칸은 두고 null").isTrue();
+            assertThat(metrics.get("authorizingEntries").asLong()).isEqualTo(1);
+            assertThat(metrics.get("paidEntries").asLong()).isEqualTo(1);
+        });
+        assertThat(adminAlerts(requested)).singleElement().satisfies(alert -> {
+            assertThat(alert.get("metrics").get("drawRequestedAt").isNull()).isFalse();
+            assertThat(alert.get("metrics").get("paidEntries").asLong()).isEqualTo(2);
+        });
+        assertThat(adminAlerts(settled)).as("반영한 회차는 DRAW_SETTLED 뿐").singleElement()
+                .satisfies(alert -> assertThat(alert.get("type").asString()).isEqualTo("DRAW_SETTLED"));
+        assertThat(adminAlerts(recent)).isEmpty();
+        assertThat(adminAlerts(old)).isEmpty();
+
+        closer.checkStalled();
+        assertThat(adminAlerts(authorizing)).as("검사마다 다시 보낸다 — 허브가 묶는다").hasSize(2);
+    }
+
+    /** 고른 뒤 잠그기 전에 반영이 커밋된 회차 — 잠근 뒤 반영 표식을 다시 보고 보내지 않는다. */
+    @Test
+    @DisplayName("이미 반영한 회차는 잠근 뒤 다시 보고 DRAW_DELAYED 를 보내지 않는다")
+    void reportStalledSkipsSettledDraw() {
+        UUID draw = draw(Instant.now().minus(Duration.ofDays(2)), Instant.now().minus(Duration.ofHours(2)), 1);
+        settlement.close(draw);
+
+        assertThat(settlement.reportStalled(draw)).isEmpty();
+        assertThat(adminAlerts(draw)).singleElement()
+                .satisfies(alert -> assertThat(alert.get("type").asString()).isEqualTo("DRAW_SETTLED"));
+    }
+
+    /**
+     * 반영이 회차를 잠근 동안 검사는 기다리지 않고 그 회차를 건너뛴다 — 스케줄러 스레드가 남의 잠금에 묶이지 않는다. 반영이 커밋된 뒤의 검사는
+     * 반영 표식을 보고 보내지 않는다. 그 사이에 지연 알림을 적었다면 반영 알림보다 늦게 찍혀 허브가 해소한 알림을 다시 연다.
+     */
+    @Test
+    @DisplayName("반영이 진행 중인 회차는 기다리지 않고 건너뛰고, 반영된 뒤에도 DRAW_DELAYED 를 보내지 않는다")
+    void stallCheckSkipsDrawBeingSettled() throws Exception {
+        UUID draw = draw(Instant.now().minus(Duration.ofDays(2)), Instant.now().minus(Duration.ofHours(2)), 1);
+        entry(draw, "PAID", null);
+        CountDownLatch settledLatch = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
+        CompletableFuture<Void> settling = CompletableFuture.runAsync(() -> new TransactionTemplate(transactionManager).executeWithoutResult(s -> {
+            assertThat(settlement.close(draw)).isTrue();
+            settledLatch.countDown();
+            await(commit);
+        }));
+        try {
+            await(settledLatch);
+            CompletableFuture.runAsync(closer::checkStalled).get(10, TimeUnit.SECONDS);
+            assertThat(adminAlerts(draw)).as("잠긴 회차는 건너뛴다").isEmpty();
+        } finally {
+            commit.countDown();
+        }
+        settling.get(20, TimeUnit.SECONDS);
+        closer.checkStalled();
+
+        assertThat(adminAlerts(draw)).singleElement()
+                .satisfies(alert -> assertThat(alert.get("type").asString()).isEqualTo("DRAW_SETTLED"));
+    }
+
+    @Test
+    @DisplayName("잠겨 있어 건너뛴 회차도 반영되지 않았으면 다음 검사가 DRAW_DELAYED 를 보낸다")
+    void skippedDrawIsReportedByNextCheck() throws Exception {
+        UUID draw = draw(Instant.now().minus(Duration.ofDays(2)), Instant.now().minus(Duration.ofHours(2)), 1);
+        entry(draw, "AUTHORIZING", "window_delay_lock");
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CompletableFuture<Void> holding = CompletableFuture.runAsync(() -> new TransactionTemplate(transactionManager).executeWithoutResult(s -> {
+            campaignStore.lock(draw);
+            locked.countDown();
+            await(release);
+        }));
+        try {
+            await(locked);
+            CompletableFuture.runAsync(closer::checkStalled).get(10, TimeUnit.SECONDS);
+            assertThat(adminAlerts(draw)).isEmpty();
+        } finally {
+            release.countDown();
+        }
+        holding.get(20, TimeUnit.SECONDS);
+        closer.checkStalled();
+
+        assertThat(adminAlerts(draw)).singleElement()
+                .satisfies(alert -> assertThat(alert.get("type").asString()).isEqualTo("DRAW_DELAYED"));
     }
 
     @Test
@@ -603,6 +778,18 @@ class DrawSettlementTest {
                  WHERE o.event_type = 'NOTIFICATION_REQUESTED' AND o.aggregate_type = 'DRAW_ENTRY' AND e.campaign_id = ?""",
                 (Object) bytes(draw)).stream().collect(Collectors.toMap(row -> UUID.fromString((String) row.get("entry_id")),
                 row -> JSON.readTree(row.get("payload").toString())));
+    }
+
+    /** 그 회차의 관리자 알림 payload, 적은 순. */
+    private List<JsonNode> adminAlerts(UUID draw) {
+        return jdbcTemplate.queryForList("""
+                SELECT payload FROM order_outbox_events WHERE event_type = 'ADMIN_ALERT_REQUESTED' AND aggregate_id = ? ORDER BY id""",
+                (Object) bytes(draw)).stream().map(row -> JSON.readTree(row.get("payload").toString())).toList();
+    }
+
+    private Instant settledAt(UUID draw) {
+        return Instant.parse(jdbcTemplate.queryForObject("SELECT DATE_FORMAT(settled_at, '%Y-%m-%dT%H:%i:%s.%fZ') FROM draw_campaigns WHERE id = ?",
+                String.class, (Object) bytes(draw)));
     }
 
     private static String utc(Instant at) {
