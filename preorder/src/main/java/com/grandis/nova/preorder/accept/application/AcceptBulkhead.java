@@ -12,6 +12,7 @@ import java.util.UUID;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -32,16 +33,21 @@ class AcceptBulkhead {
     private final Semaphore instancePermits;
     private final Timer acquiredWait;
     private final Timer rejectedWait;
-    private final Counter productRejected;
-    private final Counter instanceRejected;
+    private final MeterRegistry meterRegistry;
+    /** 거절 건수의 상품 라벨 — 접수 중인 회차만 상품 id, 나머지는 하나로 묶는다. */
+    private final Function<UUID, String> productTag;
 
-    AcceptBulkhead(AcceptBulkheadProperties properties, int poolSize, MeterRegistry meterRegistry) {
+    AcceptBulkhead(AcceptBulkheadProperties properties, int poolSize, MeterRegistry meterRegistry,
+                   Function<UUID, String> productTag) {
         this.properties = properties;
         this.instancePermits = new Semaphore(properties.instanceLimit(poolSize), true);
         this.acquiredWait = waitTimer("acquired", meterRegistry);
         this.rejectedWait = waitTimer("rejected", meterRegistry);
-        this.productRejected = meterRegistry.counter(REJECTED_METRIC, "limit", "product");
-        this.instanceRejected = meterRegistry.counter(REJECTED_METRIC, "limit", "instance");
+        this.meterRegistry = meterRegistry;
+        this.productTag = productTag;
+        // 거절이 없어도 0 으로 내놓는다
+        rejectedCounter("product", AcceptProductTags.OTHER);
+        rejectedCounter("instance", AcceptProductTags.OTHER);
     }
 
     <T> T call(UUID productId, Supplier<T> work) {
@@ -49,11 +55,11 @@ class AcceptBulkhead {
         long deadline = started + properties.maxWait().toNanos();
         Semaphore product = productPermits.get(productId, id -> new Semaphore(properties.productPermits(), true));
         if (!acquire(product, deadline)) {
-            throw rejected(productRejected, started);
+            throw rejected("product", productId, started);
         }
         try {
             if (!acquire(instancePermits, deadline)) {
-                throw rejected(instanceRejected, started);
+                throw rejected("instance", productId, started);
             }
             try {
                 acquiredWait.record(System.nanoTime() - started, TimeUnit.NANOSECONDS);
@@ -76,13 +82,17 @@ class AcceptBulkhead {
     }
 
     /** 기다린 시간은 거절도 따로 남긴다 — 허가를 얻은 요청만 세면 넘칠 때 대기가 낮게 보인다. */
-    private DependencyUnavailableException rejected(Counter counter, long started) {
+    private DependencyUnavailableException rejected(String limit, UUID productId, long started) {
         rejectedWait.record(System.nanoTime() - started, TimeUnit.NANOSECONDS);
-        counter.increment();
+        rejectedCounter(limit, productTag.apply(productId)).increment();
         long min = properties.retryAfterMin().toSeconds();
         long max = properties.retryAfterMax().toSeconds();
         return DependencyUnavailableException.overloaded(
                 Duration.ofSeconds(ThreadLocalRandom.current().nextLong(min, max + 1)));
+    }
+
+    private Counter rejectedCounter(String limit, String product) {
+        return meterRegistry.counter(REJECTED_METRIC, "limit", limit, AcceptProductTags.PRODUCT_TAG, product);
     }
 
     private static Timer waitTimer(String outcome, MeterRegistry meterRegistry) {

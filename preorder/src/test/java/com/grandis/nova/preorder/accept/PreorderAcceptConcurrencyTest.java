@@ -18,6 +18,7 @@ import com.grandis.nova.preorder.support.PreorderCancels;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 import com.grandis.nova.preorder.support.ShopFixtures;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.RepeatedTest;
@@ -490,7 +491,8 @@ class PreorderAcceptConcurrencyTest {
     }
 
     private double bulkheadRejected() {
-        return meterRegistry.get("preorder.accept.bulkhead.rejected").tag("limit", "product").counter().count();
+        return meterRegistry.find("preorder.accept.bulkhead.rejected").tag("limit", "product").counters().stream()
+                .mapToDouble(Counter::count).sum();
     }
 
     private List<Long> committedPositions() {

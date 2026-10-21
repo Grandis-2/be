@@ -16,6 +16,7 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -80,6 +81,12 @@ public class Campaigns {
     @Transactional(readOnly = true)
     public long countAccepting(Instant now) {
         return campaigns.countAccepting(now, ProductStatus.PAUSED);
+    }
+
+    /** 지금 접수 중인 회차의 상품 id. 접수 중인 회차 수만큼이다. */
+    @Transactional(readOnly = true)
+    public Set<UUID> findAcceptingProductIds(Instant now) {
+        return Set.copyOf(campaigns.findAcceptingProductIds(now, ProductStatus.PAUSED));
     }
 
     /** 그 상품에 사전예약 회차가 있는가. */

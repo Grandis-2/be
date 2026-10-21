@@ -12,6 +12,7 @@ import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.web.ValidationFailures;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
@@ -45,7 +46,10 @@ public class PreorderAcceptService {
 
     /** 접수 시간 · 결과(accepted · replayed · 오류 코드)별 건수. */
     static final String ACCEPT_METRIC = "preorder.accept";
-    /** 업무 지표 — 새 예약(success) · 업무 거절(4xx, rejected) · 그 밖의 실패(5xx · 예외, error)를 접수 경로(user · admin)별로 센다. */
+    /**
+     * 업무 지표 — 새 예약(success) · 업무 거절(4xx, rejected) · 그 밖의 실패(5xx · 예외, error)를 접수 경로(user · admin) · 상품별로 센다.
+     * 상품 라벨은 {@link AcceptProductTags} 가 정한다.
+     */
     static final String CREATED_METRIC = "nova.preorder.created";
     static final String USER_CHANNEL = "user";
     static final String ADMIN_CHANNEL = "admin";
@@ -58,27 +62,40 @@ public class PreorderAcceptService {
     private final AcceptBulkhead bulkhead;
     private final Campaigns campaigns;
     private final Preorders preorders;
+    private final AcceptProductTags productTags;
     private final MeterRegistry meterRegistry;
     private final Clock clock;
 
     public PreorderAcceptService(AdmissionTicketVerifier ticketVerifier, CatalogReader catalogReader,
                                  PreorderAcceptTransaction transaction, AcceptBulkhead bulkhead,
-                                 Campaigns campaigns, Preorders preorders, MeterRegistry meterRegistry,
-                                 Clock clock) {
+                                 Campaigns campaigns, Preorders preorders, AcceptProductTags productTags,
+                                 MeterRegistry meterRegistry, Clock clock) {
         this.ticketVerifier = ticketVerifier;
         this.catalogReader = catalogReader;
         this.transaction = transaction;
         this.bulkhead = bulkhead;
         this.campaigns = campaigns;
         this.preorders = preorders;
+        this.productTags = productTags;
         this.meterRegistry = meterRegistry;
         this.clock = clock;
         // 처음부터 0 으로 내놓는다 — 시계열이 없으면 "접수 중인데 새 예약 0건" 경보가 값 없음으로 빠진다
+        registerCreated(meterRegistry, AcceptProductTags.OTHER);
+    }
+
+    /** 그 상품 라벨의 업무 지표를 결과 · 경로 조합마다 0 으로 만들어 둔다. */
+    static void registerCreated(MeterRegistry meterRegistry, String productTag) {
         for (String channel : List.of(USER_CHANNEL, ADMIN_CHANNEL)) {
             for (String result : List.of("success", "rejected", "error")) {
-                meterRegistry.counter(CREATED_METRIC, "result", result, "channel", channel);
+                createdCounter(meterRegistry, result, channel, productTag);
             }
         }
+    }
+
+    private static Counter createdCounter(MeterRegistry meterRegistry, String result, String channel,
+                                          String productTag) {
+        return meterRegistry.counter(CREATED_METRIC, "result", result, "channel", channel,
+                AcceptProductTags.PRODUCT_TAG, productTag);
     }
 
     /**
@@ -88,14 +105,14 @@ public class PreorderAcceptService {
      */
     public AcceptResult acceptByCustomer(UUID customerId, UUID queryProductId, UUID productId, UUID optionId,
                                          String idempotencyKey, String admissionTicket) {
-        return measured(USER_CHANNEL, () -> acceptVerified(customerId, queryProductId, productId, optionId,
+        return measured(USER_CHANNEL, productId, () -> acceptVerified(customerId, queryProductId, productId, optionId,
                 idempotencyKey, admissionTicket));
     }
 
     /** 관리자 대신 접수. 같은 트랜잭션 · 같은 규칙이고 입장권만 없다. */
     public AcceptResult acceptByAdmin(UUID customerId, UUID productId, UUID optionId, String idempotencyKey,
                                       String reason, String internalNote) {
-        return measured(ADMIN_CHANNEL, () -> accept(new AcceptCommand(customerId, productId, optionId, idempotencyKey,
+        return measured(ADMIN_CHANNEL, productId, () -> accept(new AcceptCommand(customerId, productId, optionId, idempotencyKey,
                 null, EventActor.ADMIN, reason, internalNote)));
     }
 
@@ -123,7 +140,7 @@ public class PreorderAcceptService {
      * 결과 태그는 accepted · replayed · 오류 코드(유한한 값)이고, 그 밖의 예외는 error 로 센다.
      * 업무 지표는 접수 트랜잭션이 끝난 뒤 세고, 같은 접수 키의 재전송은 새 예약이 아니라 세지 않는다.
      */
-    private AcceptResult measured(String channel, Supplier<AcceptResult> accept) {
+    private AcceptResult measured(String channel, UUID productId, Supplier<AcceptResult> accept) {
         Timer.Sample sample = Timer.start(meterRegistry);
         String outcome = "error";
         String result = "error";
@@ -140,7 +157,7 @@ public class PreorderAcceptService {
         } finally {
             sample.stop(meterRegistry.timer(ACCEPT_METRIC, "outcome", outcome));
             if (result != null) {
-                meterRegistry.counter(CREATED_METRIC, "result", result, "channel", channel).increment();
+                createdCounter(meterRegistry, result, channel, productTags.of(productId)).increment();
             }
         }
     }

@@ -55,7 +55,8 @@ class PreorderAcceptServiceTest {
         given(catalogReader.findProduct(PRODUCT_ID)).willReturn(Optional.empty());
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         AcceptBulkhead bulkhead = new AcceptBulkhead(new AcceptBulkheadProperties(2, 0.5, 0, Duration.ofSeconds(3),
-                Duration.ofSeconds(1), Duration.ofSeconds(3)), 10, registry);
+                Duration.ofSeconds(1), Duration.ofSeconds(3)), 10, registry,
+                productId -> AcceptProductTags.OTHER);
         // 회차 캐시가 접수 중이라 하면 잠금 전 판정 없이 접수 트랜잭션으로 간다
         campaigns = mock(Campaigns.class);
         Instant now = Instant.now();
@@ -63,7 +64,8 @@ class PreorderAcceptServiceTest {
                 new CampaignSchedule(PRODUCT_ID, now.minusSeconds(3600), now.plusSeconds(3600)), true,
                 ProductStatus.ACTIVE, List.of())));
         service = new PreorderAcceptService(mock(AdmissionTicketVerifier.class), catalogReader, transaction, bulkhead,
-                campaigns, preorders, registry, Clock.systemUTC());
+                campaigns, preorders, new AcceptProductTags(campaigns, registry, Clock.systemUTC()), registry,
+                Clock.systemUTC());
     }
 
     @Test
