@@ -162,7 +162,17 @@ public final class ReadCache {
      * 끈 캐시 — 늘 loader 로 답하고 Redis 를 부르지 않는다. 시험이 DB 를 JDBC 로 직접 고치는 경우처럼 세대를 올리지 않는 쓰기를 쓰는 곳에서 쓴다.
      */
     public static ReadCache off(JsonMapper json, String service) {
-        return new ReadCache(null, json, service, CircuitBreakerConfig.ofDefaults(), false, Clock.systemUTC(), WAIT_FOR_LOAD);
+        return off(null, json, service);
+    }
+
+    /**
+     * 끈 캐시 — 조회는 {@link #off(JsonMapper, String)} 와 같고, {@link #bumpNow} 만 이 Redis 로 세대를 올린다. 운영에서 캐시를 끈 인스턴스용이다 —
+     * 같은 큐를 받는 다른 인스턴스는 켜져 있을 수 있어, 끈 쪽이 받은 변경을 버리면 켠 쪽의 캐시가 비워지지 않는다.
+     *
+     * @param redis null 이면 {@link #off(JsonMapper, String)} 와 같다
+     */
+    public static ReadCache off(StringRedisTemplate redis, JsonMapper json, String service) {
+        return new ReadCache(redis, json, service, CircuitBreakerConfig.ofDefaults(), false, Clock.systemUTC(), WAIT_FOR_LOAD);
     }
 
     /** 캐시 하나의 이름 · 값 타입 · TTL. 이름과 타입 지문이 키에 들어간다. 메모리 예산은 {@link #DEFAULT_BUDGET_BYTES}. */
@@ -276,12 +286,13 @@ public final class ReadCache {
     /**
      * 세대 번호를 지금 올리고, 못 올렸으면 던진다 — 다른 서비스의 변경을 메시지로 받아 올리는 처리기용이다(던지면 메시지를 지우지 않아 다시 받아
      * 다시 올린다). 트랜잭션과 상관없이 바로 한다. 못 올린 것은 {@link #bumpAfterCommit} 처럼 미뤄도 둔다 — 다시 받기 전에 이 인스턴스의 조회가
-     * 먼저 올릴 수 있고, 그러면 두 번 오른다(값을 한 번 더 채울 뿐이다). 끈 캐시면 아무것도 하지 않는다.
+     * 먼저 올릴 수 있고, 그러면 두 번 오른다(값을 한 번 더 채울 뿐이다). 끈 캐시도 Redis 를 받았으면({@link #off(StringRedisTemplate, JsonMapper, String)})
+     * 올린다 — 받은 메시지는 한 인스턴스만 처리하므로, 끈 인스턴스가 버리면 켠 인스턴스의 캐시가 비워지지 않는다. Redis 가 없는 끈 캐시면 아무것도 하지 않는다.
      *
      * @throws IllegalStateException 올리지 못했다(차단기가 열렸거나 Redis 실패)
      */
     public void bumpNow(String generation) {
-        if (enabled && !bump(generation)) {
+        if (redis != null && !bump(generation)) {
             throw new IllegalStateException("읽기 캐시 세대를 올리지 못했다 generation=" + generation);
         }
     }

@@ -232,7 +232,7 @@ class ReadCacheTest {
     }
 
     @Test
-    @DisplayName("bumpNow 는 트랜잭션 안에서도 바로 올리고, 못 올리면 던지면서 미뤄도 둔다 — 복구 뒤 이 인스턴스의 첫 조회가 올린다")
+    @DisplayName("bumpNow 는 트랜잭션 안에서도 바로 올리고, 못 올리면 던지면서 미뤄도 둔다 — 복구 뒤 이 인스턴스의 첫 조회가 올린다. 끈 캐시도 Redis 가 있으면 올린다")
     void bumpNowThrowsAndDefers() {
         new TransactionTemplate(new NoOpTransactionManager()).executeWithoutResult(status -> {
             cache.bumpNow("products");
@@ -250,7 +250,9 @@ class ReadCacheTest {
         cache.breaker().transitionToClosedState();
 
         ReadCache.off(JSON, "svc").bumpNow("off");
-        assertThat(redis.opsForValue().get("svc:cache:gen:off")).as("끈 캐시는 아무것도 안 한다").isNull();
+        assertThat(redis.opsForValue().get("svc:cache:gen:off")).as("Redis 없는 끈 캐시는 아무것도 안 한다").isNull();
+        ReadCache.off(redis, JSON, "svc").bumpNow("off");
+        assertThat(redis.opsForValue().get("svc:cache:gen:off")).as("Redis 를 받은 끈 캐시는 올린다 — 같은 큐의 켠 인스턴스를 위해").isEqualTo("1");
     }
 
     @Test

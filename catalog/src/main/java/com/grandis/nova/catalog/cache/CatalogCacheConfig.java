@@ -11,10 +11,10 @@ import tools.jackson.databind.json.JsonMapper;
 @Configuration(proxyBeanMethods = false)
 class CatalogCacheConfig {
 
-    /** nova.read-cache.enabled=false 면 끈다(늘 DB) — 운영 기본은 켬. */
+    /** nova.read-cache.enabled=false 면 끈다(늘 DB) — 운영 기본은 켬. 꺼도 받은 이벤트의 세대 올리기(ReadCache#bumpNow)는 한다. */
     @Bean
     ReadCache catalogReadCacheStore(StringRedisTemplate redis, JsonMapper json, ReadCacheRefresher refresher, ReadCacheMetrics metrics,
                                     @Value("${nova.read-cache.enabled:true}") boolean enabled) {
-        return enabled ? new ReadCache(redis, json, "catalog", refresher, metrics) : ReadCache.off(json, "catalog");
+        return enabled ? new ReadCache(redis, json, "catalog", refresher, metrics) : ReadCache.off(redis, json, "catalog");
     }
 }
