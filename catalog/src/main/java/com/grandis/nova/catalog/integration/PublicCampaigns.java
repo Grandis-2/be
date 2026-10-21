@@ -36,6 +36,9 @@ import java.util.stream.Collectors;
  *   <li><b>회차가 있을 때만 넣는다</b> — 등록은 커밋 뒤 preorder 가 회차를 만들기 전까지 "공개인데 회차 없음" 이다. 그때의 "없음" 을 넣으면 회차가
  *       생겨도 TTL 동안 상세가 404 다. 회차 없는 상품(묶음이면 그런 상품이 하나라도 있는 묶음)은 요청마다 preorder 에 묻는다 — 홍보 목록은 그날 보이는 모든 홍보의
  *       상품이 한 묶음이라, 회차 없는 사전예약 상품이 어느 홍보에 하나만 묶여 있어도 목록 전체가 요청마다 묻는다.</li>
+ *   <li><b>preorder 에 묻는 방식</b> — 켜면 채울 때 fresh(preorder 의 회차 캐시를 건너뛰고 DB)로 묻는다. 이벤트를 받아 세대를 올린 직후, 아직 자기
+ *       캐시를 비우지 않은 preorder 인스턴스가 옛 값을 주면 그 값을 TTL 동안 두게 되기 때문이다. 끄면 fresh 없이 묻는다 — 요청마다 묻는 공개 조회까지
+ *       preorder DB 로 보내지 않게(그 값은 이 요청에만 쓴다).</li>
  *   <li>접수 단계는 넣지 않는다 — 호출자가 꺼낸 시각으로 계산하므로 오픈 · 마감 시각이 지나는 것은 캐시와 상관없이 바로 보인다.</li>
  *   <li>preorder 가 답하지 않으면 넣지 않고 {@link PreorderCampaigns#find} 와 같이 던진다. 켜 두면 하나 더 — 같은 키를 이 인스턴스에서 먼저 묻고 있는
  *       요청을 기다리는 쪽은 ReadCache 의 기다림 상한(5초)을 넘으면 같은 DEPENDENCY_UNAVAILABLE 을 던진다(그것을 어떻게 답할지는 호출자 몫이다).</li>
@@ -65,10 +68,10 @@ public class PublicCampaigns {
     /** 한 상품의 회차. 없으면(판매 준비 전) 비어 있다 — 없음은 넣지 않는다. 실패는 위 목록의 마지막 항목. */
     public Optional<CampaignWindow> find(UUID productId) {
         if (oneSpec == null) {
-            return campaigns.find(productId);
+            return campaigns.find(productId, false);
         }
         // loader 가 null(회차 없음)이면 ReadCache 는 넣지 않는다
-        return Optional.ofNullable(cache.get(oneSpec, CAMPAIGNS, productId.toString(), () -> campaigns.find(productId).orElse(null)));
+        return Optional.ofNullable(cache.get(oneSpec, CAMPAIGNS, productId.toString(), () -> campaigns.find(productId, true).orElse(null)));
     }
 
     /**
@@ -80,10 +83,10 @@ public class PublicCampaigns {
             return Map.of();
         }
         if (manySpec == null) {
-            return campaigns.find(productIds);
+            return campaigns.find(productIds, false);
         }
         List<UUID> ids = productIds.stream().distinct().sorted().toList();
-        return cache.entry(manySpec, CAMPAIGNS, setKey(ids), () -> Map.copyOf(campaigns.find(ids)), found -> found.keySet().containsAll(ids)).value();
+        return cache.entry(manySpec, CAMPAIGNS, setKey(ids), () -> Map.copyOf(campaigns.find(ids, true)), found -> found.keySet().containsAll(ids)).value();
     }
 
     /** 정렬한 id 들의 SHA-256 — 홍보 하나에 상품 20개(전체 목록이면 더)라 그대로 이으면 키가 길다. */

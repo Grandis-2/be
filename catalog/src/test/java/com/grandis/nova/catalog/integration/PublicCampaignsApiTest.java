@@ -30,9 +30,11 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -82,7 +84,7 @@ class PublicCampaignsApiTest {
         mockMvc.perform(post("/api/v1/products/{id}/views", productId).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"anonymousId\":\"%s\"}".formatted(UUID.randomUUID()))).andExpect(status().isNoContent());
         assertThat(detailStatus(productId)).isEqualTo("OPEN");
-        verify(client, times(1)).getCampaigns(any(), anyBoolean());
+        verify(client, times(1)).getCampaigns(any(), eq(true));
 
         closeNow(productId);   // preorder 가 조기 마감했다 — catalog 는 아직 모른다
         assertThat(detailStatus(productId)).as("세대를 올리기 전에는 캐시 값").isEqualTo("OPEN");
@@ -92,6 +94,7 @@ class PublicCampaignsApiTest {
 
         redis.opsForValue().increment("catalog:cache:gen:" + PublicCampaigns.CAMPAIGNS);
         assertThat(detailStatus(productId)).isEqualTo("CLOSED");
+        verify(client, never()).getCampaigns(any(), eq(false));   // 캐시에 넣을 값은 preorder 의 회차 캐시를 거치지 않는다
     }
 
     @Test
@@ -130,7 +133,7 @@ class PublicCampaignsApiTest {
         clearInvocations(client);
         assertThat(publicCampaigns.find(java.util.List.of(first, second))).containsOnlyKeys(first, second);
         assertThat(publicCampaigns.find(java.util.List.of(second, first, first))).containsOnlyKeys(first, second);
-        verify(client, times(1)).getCampaigns(any(), anyBoolean());
+        verify(client, times(1)).getCampaigns(any(), eq(true));
     }
 
     @Test
@@ -143,7 +146,7 @@ class PublicCampaignsApiTest {
         doCallRealMethod().when(client).getCampaigns(any(), anyBoolean());
         clearInvocations(client);
         assertThat(detailStatus(productId)).isEqualTo("OPEN");
-        verify(client, times(1)).getCampaigns(any(), anyBoolean());
+        verify(client, times(1)).getCampaigns(any(), eq(true));
     }
 
     @Test
@@ -156,7 +159,7 @@ class PublicCampaignsApiTest {
 
         assertThat(cardStatuses(promotionId)).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(first, "OPEN", second, "OPEN"));
         assertThat(cardStatuses(promotionId)).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(first, "OPEN", second, "OPEN"));
-        verify(client, times(1)).getCampaigns(any(), anyBoolean());
+        verify(client, times(1)).getCampaigns(any(), eq(true));
 
         closeNow(second);
         assertThat(cardStatuses(promotionId)).as("세대를 올리기 전에는 캐시 값").containsExactlyInAnyOrderEntriesOf(java.util.Map.of(first, "OPEN", second, "OPEN"));
