@@ -86,12 +86,21 @@ public class PreorderCampaign {
 
     private Instant openNotifiedAt;
 
+    /** 관리자가 넣은 예상 방문자 수. 인프라가 오픈 전 미리 늘릴 규모를 잡는 데 쓴다. null = 넣지 않았다. */
+    private Integer expectedVisitors;
+
     protected PreorderCampaign() {
     }
 
     /** 사전예약 상품에 회차를 연다. 순번은 1번부터 시작한다. */
     public PreorderCampaign(UUID productId, Instant opensAt, Instant closesAt, ProductListing listing) {
+        this(productId, opensAt, closesAt, listing, null);
+    }
+
+    public PreorderCampaign(UUID productId, Instant opensAt, Instant closesAt, ProductListing listing,
+                            Integer expectedVisitors) {
         this.productId = productId;
+        this.expectedVisitors = expectedVisitors;
         this.opensAt = opensAt;
         this.closesAt = closesAt;
         this.visible = listing.visible();
@@ -112,10 +121,21 @@ public class PreorderCampaign {
         return this.opensAt.equals(opensAt) && this.closesAt.equals(closesAt);
     }
 
-    /** 일정 변경(일정 번호가 오른다). 오픈 뒤에는 부르지 않는다 — 판정은 호출하는 쪽이 회차 행을 잠근 채 한다. */
-    public void reschedule(Instant opensAt, Instant closesAt) {
+    /** 예상 방문자 수가 이것과 같은가. null 은 "그대로" 라 늘 같다. */
+    public boolean hasExpectedVisitors(Integer expectedVisitors) {
+        return expectedVisitors == null || expectedVisitors.equals(this.expectedVisitors);
+    }
+
+    /**
+     * 일정 · 예상 방문자 수 변경(일정 번호가 오른다 — 일정 이벤트를 받는 쪽이 번호로 새 값을 판정한다). expectedVisitors 가 null 이면 그대로 둔다.
+     * 오픈 뒤에는 부르지 않는다 — 판정은 호출하는 쪽이 회차 행을 잠근 채 한다.
+     */
+    public void reschedule(Instant opensAt, Instant closesAt, Integer expectedVisitors) {
         this.opensAt = opensAt;
         this.closesAt = closesAt;
+        if (expectedVisitors != null) {
+            this.expectedVisitors = expectedVisitors;
+        }
         this.scheduleVersion++;
     }
 
@@ -241,6 +261,10 @@ public class PreorderCampaign {
 
     public long getNextQueuePosition() {
         return nextQueuePosition;
+    }
+
+    public Integer getExpectedVisitors() {
+        return expectedVisitors;
     }
 
     public Instant getOpenNotifiedAt() {
