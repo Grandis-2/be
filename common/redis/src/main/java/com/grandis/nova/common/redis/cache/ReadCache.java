@@ -168,6 +168,8 @@ public final class ReadCache {
     /**
      * 끈 캐시 — 조회는 {@link #off(JsonMapper, String)} 와 같고, {@link #bumpNow} 만 이 Redis 로 세대를 올린다. 운영에서 캐시를 끈 인스턴스용이다 —
      * 같은 큐를 받는 다른 인스턴스는 켜져 있을 수 있어, 끈 쪽이 받은 변경을 버리면 켠 쪽의 캐시가 비워지지 않는다.
+     * {@link #bumpAfterCommit}(이 서비스 자신의 쓰기)은 끈 캐시에서 여전히 아무것도 하지 않는다 — 켠 인스턴스와 섞여 도는 동안 · 다시 켠 직후에는
+     * 끈 인스턴스가 받은 쓰기의 옛 값이 그 캐시의 TTL 동안 보일 수 있다.
      *
      * @param redis null 이면 {@link #off(JsonMapper, String)} 와 같다
      */
@@ -286,10 +288,12 @@ public final class ReadCache {
     /**
      * 세대 번호를 지금 올리고, 못 올렸으면 던진다 — 다른 서비스의 변경을 메시지로 받아 올리는 처리기용이다(던지면 메시지를 지우지 않아 다시 받아
      * 다시 올린다). 트랜잭션과 상관없이 바로 한다. 못 올린 것은 {@link #bumpAfterCommit} 처럼 미뤄도 둔다 — 다시 받기 전에 이 인스턴스의 조회가
-     * 먼저 올릴 수 있고, 그러면 두 번 오른다(값을 한 번 더 채울 뿐이다). 끈 캐시도 Redis 를 받았으면({@link #off(StringRedisTemplate, JsonMapper, String)})
+     * 먼저 올릴 수 있고, 그러면 두 번 오른다(값을 한 번 더 채울 뿐이다 — 끈 캐시는 조회가 Redis 를 읽지 않으므로 다시 받은 메시지로만 올린다).
+     * 끈 캐시도 Redis 를 받았으면({@link #off(StringRedisTemplate, JsonMapper, String)})
      * 올린다 — 받은 메시지는 한 인스턴스만 처리하므로, 끈 인스턴스가 버리면 켠 인스턴스의 캐시가 비워지지 않는다. Redis 가 없는 끈 캐시면 아무것도 하지 않는다.
      *
-     * @throws IllegalStateException 올리지 못했다(차단기가 열렸거나 Redis 실패)
+     * @throws IllegalStateException 올리지 못했다(차단기가 열렸거나 Redis 실패). 끈 캐시의 차단기는 결과를 세지 않아 열리지 않는다 — Redis 장애 중에는
+     *                               부를 때마다 Redis 제한 시간을 기다린 뒤 던진다
      */
     public void bumpNow(String generation) {
         if (redis != null && !bump(generation)) {

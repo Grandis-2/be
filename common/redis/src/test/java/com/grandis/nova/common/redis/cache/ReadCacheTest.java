@@ -253,6 +253,15 @@ class ReadCacheTest {
         assertThat(redis.opsForValue().get("svc:cache:gen:off")).as("Redis 없는 끈 캐시는 아무것도 안 한다").isNull();
         ReadCache.off(redis, JSON, "svc").bumpNow("off");
         assertThat(redis.opsForValue().get("svc:cache:gen:off")).as("Redis 를 받은 끈 캐시는 올린다 — 같은 큐의 켠 인스턴스를 위해").isEqualTo("1");
+
+        ReadCache offWithRedis = ReadCache.off(redis, JSON, "offsvc");
+        ReadCache.Spec<Item> offItems = offWithRedis.spec("item", Item.class, Duration.ofSeconds(30));
+        AtomicInteger loads = new AtomicInteger();
+        offWithRedis.get(offItems, "products", "1", () -> item("v", loads));
+        offWithRedis.get(offItems, "products", "1", () -> item("v", loads));
+        offWithRedis.bumpAfterCommit("products");
+        assertThat(loads).as("조회는 늘 loader").hasValue(2);
+        assertThat(redis.keys("offsvc:cache:*")).as("조회 · 커밋 뒤 올리기는 Redis 를 부르지 않는다").isEmpty();
     }
 
     @Test
