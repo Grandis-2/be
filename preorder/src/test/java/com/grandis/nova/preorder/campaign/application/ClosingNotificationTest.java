@@ -6,6 +6,7 @@ import com.grandis.nova.preorder.campaign.domain.CloseNoticeStore;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.outbox.OutboundEventType;
 import com.grandis.nova.preorder.support.AcceptFixtures;
+import com.grandis.nova.preorder.support.CatalogStubs;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
@@ -13,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -32,6 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 공유 DB 에는 다른 시험의 회차도 있어, 주기 작업은 한 번에 집는 수를 넉넉히 둔 인스턴스로 부른다.
  */
 @PreorderIntegrationTest
+@TestPropertySource(properties = {"nova.campaign.close-notice.enabled=true", "nova.campaign.close-notice.interval=1h"})
 class ClosingNotificationTest {
 
     static final String CLOSED = "PREORDER_CAMPAIGN_CLOSED";
@@ -44,6 +47,9 @@ class ClosingNotificationTest {
 
     @Autowired
     PreorderAcceptService acceptService;
+
+    @Autowired
+    PreorderCampaignAdminService campaignService;
 
     @Autowired
     JdbcTemplate jdbcTemplate;
@@ -101,6 +107,21 @@ class ClosingNotificationTest {
         job.notifyClosedCampaigns();
 
         assertThat(closedEvents(productId)).hasSize(2);
+    }
+
+    /** 주기 작업이 돌기 전에 다시 열면 마감 시각이 덮인다 — 다시 열기가 덮기 전에 그 마감을 적는다. */
+    @Test
+    void 주기_작업보다_먼저_다시_열어도_그_마감을_알린다() {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        CatalogStubs.stubPreorderProduct(catalogClient, product.productId(), CatalogStubs.activeOption(product.optionId()));
+        Instant closedAt = campaignService.closeCampaign(product.productId(), "admin").getClosesAt();
+
+        campaignService.reopenCampaign(product.productId(), clock.instant().plus(Duration.ofHours(1)), "admin");
+        job.notifyClosedCampaigns();
+
+        List<JsonNode> payloads = closedEvents(product.productId());
+        assertThat(payloads).hasSize(1);
+        assertThat(Instant.parse(payloads.getFirst().get("closesAt").asString())).isEqualTo(closedAt);
     }
 
     @Test

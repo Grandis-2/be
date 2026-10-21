@@ -46,7 +46,7 @@ catalog 가 **받는** 이벤트의 기준이다. catalog 가 보내는 이벤�
 | `activeCount` | 지금 유효한 예약 수(취소 중 · 취소 완료 제외). 회차 행을 공유 잠금으로 읽은 뒤 세어 마감 직전 접수까지 들어간다. 마감 뒤 취소는 다시 알리지 않는다 |
 
 - **늦을 수 있다.** 마감 시각보다 주기(30초)까지 늦게 나간다. 마감한 지 1시간이 넘은 회차는 보내지 않는다(첫 배포 · 긴 장애 뒤 몰림 방지) — 놓친 마감은 preorder 내부 회차 조회(`contracts/preorder-internal.md`)로 맞춘다.
-- **배포 순서.** catalog 처리기가 먼저 나간다. preorder 의 보내기는 기본 꺼짐(`nova.campaign.close-notice.enabled`)이고, 처리기 배포 뒤 켠다 — 꺼진 동안의 마감은 켠 뒤 보내지 않는다(창 안의 것만).
+- **배포 순서.** catalog 처리기가 먼저 나간다. preorder 의 보내기는 기본 꺼짐(`nova.campaign.close-notice.enabled`)이고, 처리기 배포와 preorder 역할의 `catalog-events` 발송 권한(인프라 `queues.send`) 뒤 켠다 — 꺼진 동안의 마감은 켠 뒤 보내지 않는다(창 안의 것만). 다시 열기는 아직 알리지 않은 지금 마감을 덮기 전에 같은 트랜잭션에서 적는다.
 - 보내는 쪽 구현: preorder `CampaignClosingJob`.
 
 ## 처리 규칙 (`CatalogEventDispatcher`)
