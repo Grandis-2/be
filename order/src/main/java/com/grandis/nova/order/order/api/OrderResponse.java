@@ -34,7 +34,7 @@ public record OrderResponse(
     public static OrderResponse of(Order order, List<OrderItem> items) {
         com.grandis.nova.order.order.vo.ShipTo shipTo = order.shipTo();
         return new OrderResponse(order.id(), order.status(), order.source(),
-                order.totalAmount().amount(), order.paymentDueAt(), items.stream().map(item -> Item.of(item.line())).toList(),
+                order.totalAmount().amount(), order.paymentDueAt(), items.stream().map(Item::of).toList(),
                 new ShipTo(shipTo.name(), shipTo.phone(), shipTo.postalCode(), shipTo.line1(), shipTo.line2()),
                 order.createdAt());
     }
@@ -42,18 +42,20 @@ public record OrderResponse(
     /**
      * 주문상품. 이름 · 단가 · 보증가는 주문 시점의 스냅샷이다(사전예약은 예약 접수 때).
      *
+     * @param orderItemId       order_items.id — /internal/order-items/{orderItemId} 의 키와 같다
      * @param modelName         주문 때 상품 모델명. 사전예약 · 모델명을 남기기 전에 만든 주문은 null
      * @param imageUrl          주문 때 그 옵션의 사진. 사전예약 · 사진을 남기기 전에 만든 주문 · 사진이 없는 옵션은 null
      * @param warrantyQuantity  그중 보증을 산 수량(사전예약은 0)
      * @param warrantyUnitPrice 보증 1개 가격(보증을 사지 않았으면 0)
      * @param lineAmount        단가 × 수량 + 보증가 × 보증 수량
      */
-    public record Item(UUID productId, UUID optionId, String productTitle, String modelName, String optionTitle,
+    public record Item(UUID orderItemId, UUID productId, UUID optionId, String productTitle, String modelName, String optionTitle,
                        BigDecimal unitPrice, int quantity, int warrantyQuantity, BigDecimal warrantyUnitPrice,
                        BigDecimal lineAmount, String imageUrl) {
 
-        static Item of(OrderLine line) {
-            return new Item(line.productId(), line.optionId(), line.productTitle(), line.modelName(), line.optionTitle(),
+        static Item of(OrderItem item) {
+            OrderLine line = item.line();
+            return new Item(item.id(), line.productId(), line.optionId(), line.productTitle(), line.modelName(), line.optionTitle(),
                     line.unitPrice().amount(), line.quantity().value(), line.warrantyQuantity(),
                     line.warrantyUnitPrice().amount(), line.subtotal().amount(), line.imageUrl());
         }

@@ -1,5 +1,6 @@
 package com.grandis.nova.order.order.api;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.command.PlaceOrderCommand;
 import com.grandis.nova.order.order.domain.enums.OrderSource;
@@ -246,6 +247,21 @@ class AdminOrderQueryApiTest {
         assertListed(list("customerId", customer.toString(), "from", after.toString()));
         // 오프셋이 있는 시각도 받는다
         assertListed(list("customerId", customer.toString(), "from", before.atOffset(ZoneOffset.ofHours(9)).toString()), second, first);
+    }
+
+    /** 주문상품이 여럿이면 줄마다 제 order_items.id 가 나간다 — 관리자 상세 · 목록. */
+    @Test
+    void eachItemCarriesItsOwnOrderItemId() throws Exception {
+        Order cart = placeCart(customerId, "홍길동", fixtures.inStockProduct(2), fixtures.inStockProduct(1));
+        List<String> stored = jdbcTemplate.queryForList("SELECT id FROM order_items WHERE order_id = ?", byte[].class,
+                (Object) OrderFixtures.bytes(cart.id())).stream().map(id -> UuidBinary.fromBytes(id).toString()).toList();
+        assertThat(stored).hasSize(3).doesNotHaveDuplicates();
+
+        String detail = mockMvc.perform(get("/api/v1/admin/orders/" + cart.id()).with(admin()))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(JsonPath.<List<String>>read(detail, "$.data.items[*].orderItemId")).containsExactlyInAnyOrderElementsOf(stored);
+        assertThat(JsonPath.<List<String>>read(list("q", cart.id().toString()), "$.data.items[0].items[*].orderItemId"))
+                .containsExactlyInAnyOrderElementsOf(stored);
     }
 
     @Test
