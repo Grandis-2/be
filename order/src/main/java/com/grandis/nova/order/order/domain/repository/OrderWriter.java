@@ -69,6 +69,25 @@ public interface OrderWriter {
      */
     int markPaid(UUID orderId, Instant paidAt);
 
+    /**
+     * 취소 중인 사전예약 주문에 그 취소 시도의 순번을 적는다(ck_order_preorder_cancel_sequence). 이력 번호는 올리지 않는다 — 같은
+     * 트랜잭션의 취소 전이가 이미 올렸다. 이미 적혀 있으면 바꾸지 않는다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다.
+     *
+     * @return 바뀐 행 수(0 또는 1)
+     */
+    int markPreorderCancelSequence(UUID orderId, long cancelSequence);
+
+    /**
+     * 순번이 있는 취소된 주문에 그 취소 결과를 알린 시각을 적는다(ck_order_preorder_cancel_reported). 이미 적혀 있으면 바꾸지 않는다.
+     * {@link #lockStatus} 로 행을 잠근 뒤에 부른다.
+     *
+     * @return 바뀐 행 수(0 또는 1)
+     */
+    int markPreorderCancelReported(UUID orderId, Instant now);
+
+    /** 저장한 취소 시도 순번. 없으면 비어 있다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다. */
+    Optional<Long> preorderCancelSequence(UUID orderId);
+
     /** 승인 중 결제창 번호. 승인 중이 아니면 비어 있다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다. */
     Optional<String> authorizingProviderOrderId(UUID orderId);
 

@@ -49,6 +49,9 @@ class SettlePreorderCancelServiceTest {
     OrderLedger ledger;
 
     @Autowired
+    RefundResults refundResults;
+
+    @Autowired
     TransactionTemplate transactionTemplate;
 
     @Autowired
@@ -106,6 +109,7 @@ class SettlePreorderCancelServiceTest {
                 .containsEntry("actor", "SYSTEM")
                 .containsEntry("reason", "PREORDER_CANCEL:EXPIRY");
         assertThat(results(order)).containsExactly("CANCELED");
+        assertThat(cancelSequenceOf(order)).as("결과를 이 트랜잭션에서 보냈으니 적지 않는다").isNull();
     }
 
     /** SQS 는 최소 1회 전달이다. 전이는 한 번, 결과는 받을 때마다 같은 값으로 다시 적는다(응답 2개 이하). */
@@ -204,7 +208,7 @@ class SettlePreorderCancelServiceTest {
         });
     }
 
-    /** 결제됨 + 만료 외: 취소 중으로 바꾸고 같은 트랜잭션에서 환불을 요청한다. 결과는 환불이 끝난 뒤 다시 받은 메시지가 적는다. */
+    /** 결제됨 + 만료 외: 취소 중으로 바꾸며 순번을 적고 같은 트랜잭션에서 환불을 요청한다. 결과는 환불을 마친 트랜잭션이 알린다. */
     @ParameterizedTest
     @ValueSource(strings = {"AWAITING_CONFIRMATION", "PREPARING_ITEMS", "READY_TO_SHIP"})
     void 결제된_주문은_취소_중으로_바꾸고_환불을_요청하며_결과는_미룬다(String status) {
@@ -215,6 +219,7 @@ class SettlePreorderCancelServiceTest {
 
         assertThat(result).isEqualTo(new CancelSettlement.Deferred(OrderStatus.CANCELING));
         assertThat(statusOf(order)).isEqualTo("CANCELING");
+        assertThat(cancelSequenceOf(order)).isEqualTo(CANCEL_SEQUENCE);
         assertThat(eventCount(order)).isEqualTo(2);
         assertThat(refundRequests(order)).singleElement().satisfies(payload ->
                 assertThat(payload.get("amount").decimalValue()).isEqualByComparingTo(order.totalAmount().amount()));
@@ -237,9 +242,40 @@ class SettlePreorderCancelServiceTest {
         assertThat(outboxRows(order.preorderId())).isEmpty();
     }
 
-    /** 환불이 끝나 취소되면 다시 받은 메시지가 CANCELED 를 적는다. */
+    /** 환불을 마친 트랜잭션이 알렸으면 늦춰 다시 받은 요청은 결과를 또 적지 않는다 — 결제된 취소의 결과는 한 번 간다. */
     @Test
-    void 환불이_끝난_뒤_다시_받으면_CANCELED_를_적는다() {
+    void 환불을_마치며_알렸으면_다시_받은_요청은_적지_않는다() {
+        Order order = placedOrders.place(customerId);
+        fixtures.forceStatus(order.id(), "AWAITING_CONFIRMATION");
+        SettlePreorderCancelCommand cancel = cancel(order, CancelReason.USER);
+        settlement.settle(cancel);
+        refundResults.settle(new RefundSettlement(order.id(), RefundSettlement.Result.REFUNDED, order.totalAmount().amount()));
+
+        CancelSettlement result = settlement.settle(cancel);
+
+        assertThat(result).isEqualTo(new CancelSettlement.AlreadyReported());
+        assertThat(results(order)).containsExactly("CANCELED");
+    }
+
+    /** 알린 순번과 다른 시도의 요청이면 이미 알린 것으로 보지 않고 그 시도의 결과를 적는다. */
+    @Test
+    void 알린_순번과_다른_시도면_CANCELED_를_적는다() {
+        Order order = placedOrders.place(customerId);
+        fixtures.forceStatus(order.id(), "AWAITING_CONFIRMATION");
+        settlement.settle(cancel(order, CancelReason.USER));
+        refundResults.settle(new RefundSettlement(order.id(), RefundSettlement.Result.REFUNDED, order.totalAmount().amount()));
+
+        CancelSettlement result = settlement.settle(new SettlePreorderCancelCommand(order.preorderId(),
+                uuidOf(order.preorderId()), customerId, CancelReason.USER, CANCEL_SEQUENCE + 1));
+
+        assertThat(resultOf(result)).isEqualTo(Result.CANCELED);
+        assertThat(outboxRows(order.preorderId())).extracting(row -> payloadOf(row).get("cancelSequence").asLong())
+                .containsExactly(CANCEL_SEQUENCE, CANCEL_SEQUENCE + 1);
+    }
+
+    /** 환불을 마치며 알리지 못했으면(구버전이 환불을 마침 — 표식 없음) 다시 받은 요청이 CANCELED 를 적는다. */
+    @Test
+    void 환불을_마치며_알리지_못했으면_다시_받은_요청이_CANCELED_를_적는다() {
         Order order = placedOrders.place(customerId);
         fixtures.forceStatus(order.id(), "AWAITING_CONFIRMATION");
         SettlePreorderCancelCommand cancel = cancel(order, CancelReason.USER);
@@ -325,6 +361,11 @@ class SettlePreorderCancelServiceTest {
 
     private String statusOf(Order order) {
         return jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, bytes(order.id()));
+    }
+
+    private Long cancelSequenceOf(Order order) {
+        return jdbcTemplate.queryForObject("SELECT preorder_cancel_sequence FROM orders WHERE id = ?", Long.class,
+                bytes(order.id()));
     }
 
     private int eventCount(Order order) {

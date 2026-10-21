@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.EnumSet;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -100,6 +101,41 @@ public class OrderLedger {
             return new OrderTransition(false, from);
         }
         return transition(orderId, from, trigger, null, cause, clock.instant());
+    }
+
+    /**
+     * 예약 취소 요청: {@link #fire} 의 CANCEL_REQUESTED 와 같고, 취소 중으로 바꿨으면(결제된 주문) 같은 잠금 안에서 그 취소 시도의
+     * 순번을 적는다. 환불이 끝나면 그 순번으로 preorder 에 결과를 알린다({@link #notePreorderCancelReported}).
+     * 미결제라 바로 취소했으면 적지 않는다 — 결과는 호출하는 쪽이 같은 트랜잭션에서 보낸다.
+     *
+     * @param expectedFrom 비어 있으면 안 된다
+     * @throws IllegalArgumentException 주문이 없다
+     * @throws IllegalStateException    취소 중으로 바꾼 주문에 순번을 적지 못했다 — 사전예약 주문이 아니다(호출하는 코드의 잘못)
+     */
+    public OrderTransition requestPreorderCancel(UUID orderId, Set<OrderStatus> expectedFrom, long cancelSequence,
+                                                 EventCause cause) {
+        OrderTransition transition = fire(orderId, OrderTrigger.CANCEL_REQUESTED, expectedFrom, cause);
+        // 잠근 채 방금 취소 중으로 바꿨으므로 사전예약 주문이면 늘 1행이다
+        if (transition.applied() && transition.status() == OrderStatus.CANCELING
+                && writer.markPreorderCancelSequence(orderId, cancelSequence) != 1) {
+            throw new IllegalStateException("취소 중으로 바꾼 주문에 취소 시도 순번을 적지 못했다: orderId=" + orderId);
+        }
+        return transition;
+    }
+
+    /**
+     * 환불이 끝나 취소된 사전예약 주문의 결과를 preorder 에 알린다고 적고, 결과에 실을 순번을 돌려준다. 이 표식이 있으면 다시 받은 예약
+     * 취소 요청은 결과를 적지 않으므로, 순번을 돌려받으면 호출하는 쪽은 반드시 같은 트랜잭션에서 그 순번으로 결과를 아웃박스에 적는다 —
+     * 적지 않고 커밋하면 결과가 사라진다. 이 주문을 방금 취소로 바꾼 트랜잭션(환불 완료 전이가 적용된 때)에서만 부른다.
+     *
+     * 순번이 없거나(미결제 취소 · 구버전이 취소 중으로 바꾼 주문 · 사전예약이 아님) 이미 적었으면 아무것도 바꾸지 않고 비어 있다.
+     */
+    public Optional<Long> notePreorderCancelReported(UUID orderId) {
+        // UPDATE 가 취소됨 · 순번 있음 · 아직 안 적음을 조건으로 행을 잠그므로, 1행이면 이어 읽는 순번은 늘 있다
+        if (writer.markPreorderCancelReported(orderId, clock.instant()) == 0) {
+            return Optional.empty();
+        }
+        return Optional.of(writer.preorderCancelSequence(orderId).orElseThrow());
     }
 
     /**

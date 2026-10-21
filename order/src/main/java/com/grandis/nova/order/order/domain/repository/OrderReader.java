@@ -31,6 +31,12 @@ public interface OrderReader {
      */
     Optional<Instant> findPaidAt(UUID orderId);
 
+    /**
+     * 환불을 마치며 preorder 에 취소 결과를 알린 주문이면 그때 실은 취소 시도 순번. DB 에서 바로 읽는다 — 원장이 행을 잠근 뒤 부르면
+     * 그사이 커밋된 알림까지 본다. 알리지 않았거나(미결제 취소 · 구버전이 마친 환불 · 순번 없음) 주문이 없으면 비어 있다.
+     */
+    Optional<Long> findReportedPreorderCancelSequence(UUID orderId);
+
     /** 예약의 주문. 예약당 주문은 평생 하나라(uq_order_preorder) 0~1건이다. */
     Optional<Order> findByPreorderId(UUID preorderId);
 

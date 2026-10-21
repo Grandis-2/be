@@ -87,7 +87,7 @@ order 의 보내는 쪽은 `order/outbox`(표 `order_outbox_events`), 받는 쪽
 | 칸 | 뜻 |
 | --- | --- |
 | `reason` | `USER` · `ADMIN` · `EXPIRY` · `CAMPAIGN_CANCELED`. order 가 판정에 쓰는 것은 `EXPIRY` 하나다 |
-| `cancelSequence` | 이 취소 시도의 번호. order 는 저장하지 않고 정리 결과에 그대로 돌려준다 |
+| `cancelSequence` | 이 취소 시도의 번호. order 는 정리 결과에 그대로 돌려준다. 결제된 주문을 취소 중으로 바꿀 때는 주문에 저장하고, 환불이 끝나면 그 값으로 결과를 알린다 |
 
 order 가 하는 일(`SettlePreorderCancelService`, 주문 행을 잠근 뒤 판정):
 
@@ -96,13 +96,13 @@ order 가 하는 일(`SettlePreorderCancelService`, 주문 행을 잠근 뒤 판
 | 없음 | NO_ORDER | NO_ORDER |
 | 결제 대기 | 취소 → CANCELED | 취소 → CANCELED |
 | 승인 중(결과 모름) | 보류 — 늦춰 다시 받는다 | 보류 |
-| 결제됨(출고 전) | REJECTED(`PAID`) — 환불하지 않는다(만료 경합) | 취소 중 + 환불 요청, 환불이 끝나면 CANCELED |
+| 결제됨(출고 전) | REJECTED(`PAID`) — 환불하지 않는다(만료 경합) | 취소 중 + 환불 요청, 환불이 끝나면 그 트랜잭션이 CANCELED |
 | 취소 중(환불 중 · 환불 실패) | 보류 | 보류 |
 | 출고됨 · 배송 완료 | REJECTED(`SHIPPED`) | REJECTED(`SHIPPED`) |
-| 취소됨 | CANCELED | CANCELED |
+| 취소됨 | CANCELED | CANCELED — 환불을 마치며 이 시도의 결과를 이미 알렸으면 적지 않는다 |
 
-- **중복.** 전이 · 환불 요청은 상태 머신이 한 번만 하고, 정리 결과는 받을 때마다 다시 적는다. preorder 는 `cancelSequence` 로 지금 시도의 결과만 반영한다.
-- **보류.** 결과를 정할 수 없으면 같은 큐에 지연을 두고 다시 보낸다(최대 15분 간격, 포기하지 않는다).
+- **중복.** 전이 · 환불 요청은 상태 머신이 한 번만 하고, 정리 결과는 받을 때마다 다시 적는다. 단, 환불을 마친 트랜잭션이 이 시도(같은 `cancelSequence`)의 결과를 이미 알렸으면 다시 적지 않는다. 전달은 최소 1회라 같은 결과가 드물게 두 번 닿을 수 있고, preorder 는 `cancelSequence` · 예약 상태로 지금 시도의 결과만 반영한다.
+- **보류.** 결과를 정할 수 없으면 같은 큐에 지연을 두고 다시 보낸다(첫 지연 5초, 보류할 때마다 두 배, 최대 15분 간격, 포기하지 않는다). 환불 중인 취소에서 재수신은 안전망이다 — 환불을 마친 트랜잭션이 알리지 못했을 때(구버전이 환불을 마침 · 순번이 저장되기 전의 주문)만 결과를 적는다.
 
 ## `PREORDER_ORDER_SETTLED` (order → preorder)
 
@@ -114,9 +114,10 @@ order 가 하는 일(`SettlePreorderCancelService`, 주문 행을 잠근 뒤 판
 | --- | --- |
 | `result` | `NO_ORDER` · `CANCELED` · `REJECTED`. 미결제 취소와 결제 주문의 환불 완료는 둘 다 `CANCELED` |
 | `reason` | `REJECTED` 일 때만: `SHIPPED`(출고됨) · `PAID`(만료 취소인데 그사이 결제됨) |
-| `cancelSequence` | 받은 값 그대로 |
+| `cancelSequence` | 받은 값 그대로(환불 완료 알림은 취소 중으로 바꿀 때 저장한 값) |
 | `paidAt` | `REJECTED` 이고 주문이 결제됐으면 **사유와 상관없이** 주문의 결제 시각. 결제되지 않았으면 `null`. 다른 결과에는 늘 `null` |
 
+- **언제 보내나.** 두 곳이다. ① 취소 요청을 정리한 트랜잭션(`SettlePreorderCancelService`): NO_ORDER · 미결제 취소의 CANCELED · REJECTED, 그리고 환불이 끝났는데 알리지 못한 주문의 CANCELED. ② 결제된 주문의 환불이 끝난 트랜잭션(`RefundResults`): 저장한 순번으로 CANCELED 하나, 알렸다는 표식과 함께 적는다. 표식이 있으면 ①은 같은 `cancelSequence` 의 결과를 다시 적지 않는다. 단, 배포 중 표식을 모르는 구버전이 다시 받은 요청은 결과를 한 번 더 적을 수 있다.
 - **paidAt 을 왜 싣나.** preorder 는 거절을 받으면 실려 온 결제 시각을 먼저 남기고, 결제 확인된 예약(확정 시각이 있음)은 확정(RESERVED)으로, 아니면 REGISTERED 로 되돌린다. 거절이 승인 알림보다 먼저 닿아도 결제된 예약이 미결제로 돌아가 다시 만료되지 않게 한다.
 - **읽는 때.** 주문 행을 잠근 뒤 DB 에서 다시 읽는다 — 그사이 반영된 승인(만료 경합)까지 본다.
 - **비어 있는 경우.** 승인을 반영한 적이 없는 주문이다(위 "결제 시각" — 칸이 비어도 이력으로 읽는다).

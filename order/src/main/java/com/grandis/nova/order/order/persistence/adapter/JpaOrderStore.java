@@ -139,6 +139,25 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     @Override
+    public int markPreorderCancelSequence(UUID orderId, long cancelSequence) {
+        int updated = orders.markPreorderCancelSequence(orderId, cancelSequence);
+        entityManager.detach(entityManager.getReference(OrderJpaEntity.class, orderId));
+        return updated;
+    }
+
+    @Override
+    public int markPreorderCancelReported(UUID orderId, Instant now) {
+        int updated = orders.markPreorderCancelReported(orderId, now);
+        entityManager.detach(entityManager.getReference(OrderJpaEntity.class, orderId));
+        return updated;
+    }
+
+    @Override
+    public Optional<Long> preorderCancelSequence(UUID orderId) {
+        return orders.findPreorderCancelSequence(orderId);
+    }
+
+    @Override
     public int changeStatus(UUID orderId, OrderStatus from, OrderStatus to, String authorizingProviderOrderId,
                             Instant now) {
         int updated = orders.changeStatus(orderId, from, to, authorizingProviderOrderId, now);
@@ -161,6 +180,11 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     @Override
     public Optional<Instant> findPaidAt(UUID orderId) {
         return orders.findPaidAt(orderId);
+    }
+
+    @Override
+    public Optional<Long> findReportedPreorderCancelSequence(UUID orderId) {
+        return orders.findReportedPreorderCancelSequence(orderId);
     }
 
     @Override

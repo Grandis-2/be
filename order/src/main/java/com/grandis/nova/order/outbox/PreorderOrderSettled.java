@@ -16,7 +16,7 @@ import java.util.UUID;
  * @param preorderInternalId 예약 내부 id. 봉투의 aggregateId 로만 나가고 payload 에는 싣지 않는다
  * @param preorderId         공개 UUID(preorder_token). 받는 쪽이 이것으로 예약을 찾는다
  * @param reason             REJECTED 일 때만 있다
- * @param cancelSequence     PREORDER_CANCEL_REQUESTED 에서 받은 값 그대로. order 는 저장하지 않는다
+ * @param cancelSequence     PREORDER_CANCEL_REQUESTED 에서 받은 값 그대로. 환불을 마치며 알릴 때는 취소 중으로 바꿀 때 주문에 적은 값
  * @param paidAt             REJECTED 이고 주문이 결제됐으면 사유와 상관없이 그 결제 시각. 받는 쪽은 이것이 있으면 예약을 확정(RESERVED)으로
  *                           되돌린다 — 승인 알림보다 먼저 와도 결제된 예약이 미결제로 돌아가 만료되지 않게
  */

@@ -9,7 +9,8 @@ import java.util.UUID;
  * @param preorderInternalId 봉투의 aggregateId(예약 내부 id = orders.preorder_id). 주문은 이것으로만 찾는다
  * @param preorderId         payload 의 공개 UUID. 찾는 데 쓰지 않고 결과에 그대로 돌려준다(preorder 가 이것으로 예약을 찾는다)
  * @param customerId         예약의 회원. 주문의 회원과 다르면 데이터가 어긋난 것이다
- * @param cancelSequence     어느 취소 시도인지. 저장하지 않고 결과에 그대로 돌려준다
+ * @param cancelSequence     어느 취소 시도인지. 결과에 그대로 돌려주고, 결제된 주문을 취소 중으로 바꾸면 주문에 적어 환불이 끝날 때
+ *                           알리는 결과에 싣는다
  */
 public record SettlePreorderCancelCommand(UUID preorderInternalId, String preorderId, UUID customerId,
                                           CancelReason reason, Long cancelSequence) {

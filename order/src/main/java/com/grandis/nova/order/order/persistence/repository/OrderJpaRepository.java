@@ -90,6 +90,36 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
             """)
     int markPaid(@Param("id") UUID id, @Param("paidAt") Instant paidAt);
 
+    @Modifying(flushAutomatically = true)
+    @Query("""
+            update OrderJpaEntity o
+               set o.preorderCancelSequence = :cancelSequence
+             where o.id = :id and o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.CANCELING
+               and o.source = com.grandis.nova.order.order.domain.enums.OrderSource.PREORDER
+               and o.preorderCancelSequence is null
+            """)
+    int markPreorderCancelSequence(@Param("id") UUID id, @Param("cancelSequence") long cancelSequence);
+
+    @Modifying(flushAutomatically = true)
+    @Query("""
+            update OrderJpaEntity o
+               set o.preorderCancelReportedAt = :now
+             where o.id = :id and o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.CANCELED
+               and o.preorderCancelSequence is not null and o.preorderCancelReportedAt is null
+            """)
+    int markPreorderCancelReported(@Param("id") UUID id, @Param("now") Instant now);
+
+    /** 스칼라 조회라 영속성 컨텍스트의 엔티티가 아니라 DB 값을 읽는다. */
+    @Query("select o.preorderCancelSequence from OrderJpaEntity o where o.id = :id")
+    Optional<Long> findPreorderCancelSequence(@Param("id") UUID id);
+
+    /** 스칼라 조회라 영속성 컨텍스트의 엔티티가 아니라 DB 값을 읽는다. */
+    @Query("""
+            select o.preorderCancelSequence from OrderJpaEntity o
+             where o.id = :id and o.preorderCancelReportedAt is not null
+            """)
+    Optional<Long> findReportedPreorderCancelSequence(@Param("id") UUID id);
+
     /** 스칼라 조회라 영속성 컨텍스트의 엔티티가 아니라 DB 값을 읽는다. 행을 잠근 트랜잭션에서 부른다. */
     @Query("select o.authorizingProviderOrderId from OrderJpaEntity o where o.id = :id")
     Optional<String> findAuthorizingProviderOrderId(@Param("id") UUID id);

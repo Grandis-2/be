@@ -24,6 +24,8 @@ class OrderEventConsumerPropertiesTest {
             assertThat(properties.toSettings().visibility()).isEqualTo(Duration.ofMinutes(5));
             // 운영 값(NV-580)과 같다 — DB 장애 조치보다 길게 버틴다
             assertThat(properties.toSettings().backoffBase()).isEqualTo(Duration.ofSeconds(30));
+            // 운영에는 이 설정이 없어 기본값이 쓰인다 — 환불 중인 취소는 환불 완료가 바로 알리고, 재수신은 안전망이다
+            assertThat(properties.toDeferSettings().firstDelay()).isEqualTo(Duration.ofSeconds(5));
         });
     }
 
