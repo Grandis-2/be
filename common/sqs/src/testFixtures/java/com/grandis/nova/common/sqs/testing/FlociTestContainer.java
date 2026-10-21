@@ -22,8 +22,8 @@ public final class FlociTestContainer {
     public static final String REGION = "ap-northeast-2";
     public static final List<String> QUEUES =
             List.of("preorder-register", "preorder-cancel", "preorder-events", "order-events", "payment-events",
-                    "draw-register", "notification", "waitingroom-events", "catalog-events", "admin-alert", "test-events",
-                    "test-consumer-events", "test-batch-events");
+                    "draw-register", "notification", "waitingroom-events", "catalog-events", "scaling-events",
+                    "admin-alert", "test-events", "test-consumer-events", "test-batch-events");
     public static final int MAX_RECEIVE_COUNT = 2;
 
     private static final FlociContainer INSTANCE = start();
