@@ -214,6 +214,20 @@ class AdminProductPreorderApiTest {
         putCampaign(productId, enough, enough.plusSeconds(7200)).andExpect(status().isOk());
     }
 
+    /** 인프라가 오픈 전에 새 규모로 늘릴 시간이 있어야 해서 예상 방문자 수만 바꿔도 준비 시간을 본다. */
+    @Test
+    void 오픈이_가까우면_예상_방문자_수만_바꿔도_400() throws Exception {
+        UUID productId = preorderProduct();
+        Instant opensAt = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.SECONDS);
+        putCampaign(productId, opensAt, opensAt.plusSeconds(3600)).andExpect(status().isOk());
+        Instant soon = Instant.now().plus(Duration.ofMinutes(9)).truncatedTo(ChronoUnit.SECONDS);
+        fixtures.schedule(productId, soon, opensAt.plusSeconds(3600));
+
+        putCampaign(productId, soon, opensAt.plusSeconds(3600), 5000)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.details.violations[0].field").value("expectedVisitors"));
+    }
+
     @Test
     void 차수_목록에_빈_항목이_있으면_400() throws Exception {
         UUID productId = preorderProduct();

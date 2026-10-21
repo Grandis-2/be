@@ -66,7 +66,7 @@ class PreorderCampaignWriter {
 
     private PreorderCampaign create(UUID productId, Instant opensAt, Instant closesAt, Integer expectedVisitors,
                                     ProductListing listing) {
-        requireLeadTime(opensAt);
+        requireLeadTime(opensAt, "opensAt");
         PreorderCampaign campaign = campaigns.save(new PreorderCampaign(productId, opensAt, closesAt, listing,
                 expectedVisitors));
         changePublisher.publish(campaign, CampaignChange.CREATED);
@@ -161,10 +161,8 @@ class PreorderCampaignWriter {
         if (sameSchedule && campaign.hasExpectedVisitors(expectedVisitors)) {
             return campaign;
         }
-        // 예상 방문자 수만 바꾸면 오픈 시각이 그대로라 준비 시간을 다시 보지 않는다
-        if (!sameSchedule) {
-            requireLeadTime(opensAt);
-        }
+        // 예상 방문자 수만 바꿔도 준비 시간을 본다 — 인프라가 오픈 전에 새 규모로 늘릴 시간이 있어야 한다
+        requireLeadTime(opensAt, sameSchedule ? "expectedVisitors" : "opensAt");
         campaign.reschedule(opensAt, closesAt, expectedVisitors);
         changePublisher.publish(campaign, CampaignChange.RESCHEDULED);
         return campaign;
@@ -174,10 +172,10 @@ class PreorderCampaignWriter {
      * 오픈 시각은 최소 준비 시간 뒤여야 한다. 지난 시각으로 열면 배송 차수를 더 넣을 수 없고(오픈 뒤 변경 금지),
      * 너무 가까우면 대기열이 일정 이벤트를 받기 전에 열릴 수 있다.
      */
-    private void requireLeadTime(Instant opensAt) {
+    private void requireLeadTime(Instant opensAt, String field) {
         Duration minLeadTime = properties.minLeadTime();
         if (opensAt.isBefore(clock.instant().plus(minLeadTime))) {
-            throw ValidationFailures.of("opensAt", "현재 시각부터 %d분 뒤 이후여야 합니다.".formatted(minLeadTime.toMinutes()));
+            throw ValidationFailures.of(field, "오픈 시각이 현재 시각부터 %d분 뒤 이후여야 합니다.".formatted(minLeadTime.toMinutes()));
         }
     }
 

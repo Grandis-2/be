@@ -89,6 +89,12 @@ public class Campaigns {
         return Set.copyOf(campaigns.findAcceptingProductIds(now, now.plus(window), ProductStatus.PAUSED));
     }
 
+    /** 증설을 맞출 회차 — 회원에게 보이고 판매 중지가 아닌, 마감 전이고 오픈이 (since, horizon] 안인 회차. 개수와 상관없이 한 행으로 센다. */
+    @Transactional(readOnly = true)
+    public ScalingDemand findScalingDemand(Instant now, Instant since, Instant horizon) {
+        return campaigns.findScalingDemand(now, since, horizon, ProductStatus.PAUSED);
+    }
+
     /** 그 상품에 사전예약 회차가 있는가. */
     @Transactional(readOnly = true)
     public boolean exists(UUID productId) {

@@ -125,6 +125,9 @@ nova:
   # campaign.open-alert.interval: 30s · window: 1h(연 지 이보다 오래된 회차는 보내지 않는다) · batch-size: 100
   # 회차 캐시(일정 · 공개 · 차수, 인스턴스 안). 바뀌면 커밋 뒤 모든 인스턴스에서 비우고 수명은 놓쳤을 때의 상한이다. 기본값은 코드에 있다:
   # campaign.cache.ttl: 30s · max-products: 1000 · missing-ttl: 5s(회차 없음) · missing-max-products: 10000
+  # 회차 일정에 맞춘 대기열 · preorder 최소 대수(contracts/preorder-capacity-scaling.md). 기본은 꺼짐(계산만 해 로그). 켤 때:
+  # scaling.enabled: true · cluster: nova-prod · waitingroom.service: nova-prod-waitingroom · preorder.service: nova-prod-preorder
+  # · waitingroom.max · preorder.max 는 Terraform 의 max 와 같게
   # 외부 예약 Mock 등록 요청의 scope(시험 실행 범위). 접수 때 request_payload 에 고정된다
   external-mock:
     scope: preorder
