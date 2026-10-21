@@ -402,6 +402,23 @@ class PreorderAcceptConcurrencyTest {
         }
     }
 
+    /** 잠그기 전 판정도 같은 접수 키 확인이 먼저다 — 다른 상품에 쓴 키를 오픈 전 상품에 보내면 오픈 전이 아니라 키 불일치다. */
+    @Test
+    void 다른_상품에_쓴_접수_키로_오픈_전_상품을_보내면_키_불일치다() throws Exception {
+        Instant now = Instant.now();
+        PreorderProduct upcoming = fixtures.preorderProduct(now.plusSeconds(3600), now.plusSeconds(7200));
+        given(catalogClient.getProduct(upcoming.productId())).willReturn(
+                CatalogStubs.preorderProduct(upcoming.productId(), CatalogStubs.activeOption(upcoming.optionId())));
+        UUID customerId = fixtures.customer();
+        acceptByCustomer(customerId, "reused-key");
+
+        Outcome outcome = Outcome.of(() -> acceptService.acceptByCustomer(customerId, upcoming.productId(),
+                upcoming.productId(), upcoming.optionId(), "reused-key",
+                AdmissionTickets.issue(upcoming.productId(), customerId, now)));
+
+        assertThat(outcome.error()).isEqualTo(PreorderErrorCode.KEY_PAYLOAD_MISMATCH);
+    }
+
     /** 마감 뒤에도 잠그지 않고 판정하되 우선순위는 같다 — 같은 접수 키 재전송은 기존 예약, 새 접수는 SALE_CLOSED. */
     @Test
     void 마감_뒤에는_잠금을_기다리지_않고_재전송은_기존_예약을_새_접수는_거절을_준다() throws Exception {

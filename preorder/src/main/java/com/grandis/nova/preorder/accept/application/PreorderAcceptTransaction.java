@@ -110,25 +110,21 @@ class PreorderAcceptTransaction {
     }
 
     /**
-     * 같은 접수 키의 기존 예약. 같은 내용이면 그대로 돌려주고(새 순번 없음), 다르면 어느 필드가 다른지 알려 거절한다.
-     * UNIQUE 충돌 뒤 다시 확인할 때도 쓴다.
-     */
-    @Transactional(readOnly = true)
-    /**
-     * 잠그기 전 판정 — 캐시가 접수 중이 아니라 한 회차를 잠금 뒤와 같은 우선순위로 거절한다. 오픈 전 · 회차 없음이면 예약이 있을 수
-     * 없어(일정은 오픈 전에만 바뀐다) 재전송 · 입장권 확인을 DB 없이 지나간다. 마감이면 잠그지 않고 읽어 확인한다.
+     * 잠그기 전 판정 — 캐시가 접수 중이 아니라 한 회차를 잠금 뒤와 같은 우선순위로 거절한다. 트랜잭션 없이 잠그지 않고 읽는다.
+     * 같은 접수 키 확인은 늘 한다(다른 상품에 쓴 키일 수 있다). 마지막 접수 뒤 입장권 확인은 열린 적 있는 회차에서만 한다 —
+     * 오픈 전 · 회차 없음이면 그 상품의 예약이 있을 수 없다(일정은 오픈 전에만 바뀐다).
      *
      * @param cached 회차 캐시의 일정
      * @return 같은 접수 키의 재전송이면 그 결과. 판정을 다 지나면(캐시가 늦음) 비어 있다 — 호출한 쪽이 잠그고 다시 판정한다
      */
     Optional<AcceptResult> settleBeforeLock(AcceptCommand command, Optional<ProductCatalog> product,
                                             Optional<CampaignSchedule> cached) {
+        Optional<AcceptResult> replay = findReplay(command);
+        if (replay.isPresent()) {
+            return replay;
+        }
         Instant now = clock.instant();
         if (opened(cached, now)) {
-            Optional<AcceptResult> replay = findReplay(command);
-            if (replay.isPresent()) {
-                return replay;
-            }
             requireTicketAfterLastAccept(command);
         }
         requireOnSale(command, product);
@@ -141,6 +137,11 @@ class PreorderAcceptTransaction {
         return campaign.filter(found -> !now.isBefore(found.opensAt())).isPresent();
     }
 
+    /**
+     * 같은 접수 키의 기존 예약. 같은 내용이면 그대로 돌려주고(새 순번 없음), 다르면 어느 필드가 다른지 알려 거절한다.
+     * UNIQUE 충돌 뒤 다시 확인할 때도 쓴다.
+     */
+    @Transactional(readOnly = true)
     public Optional<AcceptResult> findReplay(AcceptCommand command) {
         return preorders.findByIdempotencyKey(command.customerId(), command.idempotencyKey())
                 .map(existing -> replay(existing, command));

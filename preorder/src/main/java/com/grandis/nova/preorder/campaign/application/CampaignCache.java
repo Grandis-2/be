@@ -73,16 +73,14 @@ public class CampaignCache {
         if (!toLoad.isEmpty()) {
             long before = evictions.get();
             Map<UUID, CachedCampaign> loaded = loadAll(toLoad);
-            if (evictions.get() == before) {
-                found.putAll(loaded);
-            }
+            loaded.forEach((id, campaign) -> putUnlessEvicted(found, id, campaign, before));
             rememberMissing(toLoad.stream().filter(id -> !loaded.containsKey(id)).toList(), before);
             result.putAll(loaded);
         }
         return productIds.stream().distinct().map(result::get).filter(Objects::nonNull).toList();
     }
 
-    /** 이 인스턴스에서만 비운다. 모든 인스턴스는 {@link CampaignCacheInvalidation}. */
+    /** 이 인스턴스에서만 비운다. 모든 인스턴스는 {@link CampaignCacheInvalidation}. 횟수를 먼저 올린다 — {@link #putUnlessEvicted}. */
     void evict(UUID productId) {
         evictions.incrementAndGet();
         found.invalidate(productId);
@@ -90,9 +88,15 @@ public class CampaignCache {
     }
 
     private void rememberMissing(List<UUID> productIds, long before) {
-        if (!productIds.isEmpty() && evictions.get() == before) {
-            productIds.forEach(id -> missing.put(id, Boolean.TRUE));
-        }
+        productIds.forEach(id -> putUnlessEvicted(missing, id, Boolean.TRUE, before));
+    }
+
+    /**
+     * 읽기 시작한 뒤 비우기가 없었을 때만 둔다. 확인과 저장을 그 키의 compute 안에서 한다 — 비우기는 횟수를 올린 뒤 같은 키를 지우므로,
+     * 확인이 먼저면 지우기가 뒤따라 지우고, 올리기가 먼저면 확인이 막는다. 그사이 다른 요청이 둔 값은 그대로다.
+     */
+    private <V> void putUnlessEvicted(Cache<UUID, V> cache, UUID id, V value, long before) {
+        cache.asMap().compute(id, (key, current) -> evictions.get() == before ? value : current);
     }
 
     private CachedCampaign load(UUID productId) {

@@ -142,28 +142,30 @@ public class PreorderAcceptService {
 
     /**
      * 회차 캐시가 접수 중이 아니라 하면(회차 없음 · 오픈 전 · 마감) 회차를 잠그지 않고 판정한다 — 오픈 직전에 몰린 접수가 잠금 줄에
-     * 서거나 커넥션을 쥐지 않게. 캐시는 회차가 바뀌면 커밋 뒤 비우므로 비우기를 놓쳤을 때만 수명만큼 옛 판정이다.
+     * 서서 커넥션을 오래 쥐지 않게. 캐시는 회차가 바뀌면 커밋 뒤 비우므로 비우기를 놓쳤을 때만 수명만큼 옛 판정이다.
      * 접수 중이면(또는 판정을 지나면) 잠근 뒤 회차 행으로 다시 판정한다.
      */
     private AcceptResult accept(AcceptCommand command) {
         Optional<ProductCatalog> product = catalogReader.findProduct(command.productId());
+        try {
+            // 캐시 미스 · 잠금 전 판정의 DB 읽기도 격벽 몫이다 — 허가 하나로 판정부터 접수까지 한다
+            return bulkhead.call(command.productId(), () -> settleThenAccept(command, product));
+        } catch (DataIntegrityViolationException e) {
+            return resolveConflict(command, e);
+        }
+    }
+
+    private AcceptResult settleThenAccept(AcceptCommand command, Optional<ProductCatalog> product) {
         Optional<CachedCampaign> cached = campaigns.findCached(command.productId());
         Instant now = clock.instant();
         if (cached.filter(campaign -> campaign.accepting(now)).isEmpty()) {
-            Optional<CampaignSchedule> schedule = cached.map(CachedCampaign::schedule);
-            // 마감이면 재전송 · 입장권 확인에 DB 를 읽는다 — 그 커넥션도 격벽 몫이다
-            Optional<AcceptResult> settled = cached.filter(campaign -> campaign.opened(now)).isPresent()
-                    ? bulkhead.call(command.productId(), () -> transaction.settleBeforeLock(command, product, schedule))
-                    : transaction.settleBeforeLock(command, product, schedule);
+            Optional<AcceptResult> settled = transaction.settleBeforeLock(command, product,
+                    cached.map(CachedCampaign::schedule));
             if (settled.isPresent()) {
                 return settled.get();
             }
         }
-        try {
-            return bulkhead.call(command.productId(), () -> transaction.accept(command, product));
-        } catch (DataIntegrityViolationException e) {
-            return resolveConflict(command, e);
-        }
+        return transaction.accept(command, product);
     }
 
     private AcceptResult resolveConflict(AcceptCommand command, DataIntegrityViolationException e) {
