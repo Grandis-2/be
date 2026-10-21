@@ -294,7 +294,7 @@ class ReadCacheTest {
     }
 
     @Test
-    @DisplayName("세대는 읽었는데 값을 못 읽으면 우회 — 없음으로 보고 채우기로 가지 않는다")
+    @DisplayName("세대는 읽었는데 값을 못 읽으면 우회 — 없음으로 보지 않고 우회한다")
     void valueReadFailureBypasses() {
         cache.get(items, "products", "1", () -> item("v", new AtomicInteger()));
         String key = onlyKey("svc:cache:item:*");
@@ -308,7 +308,7 @@ class ReadCacheTest {
     }
 
     @Test
-    @DisplayName("세대를 읽은 뒤 값을 읽기 직전에 차단기가 열려도 우회 — 없음으로 보고 채우지 않는다")
+    @DisplayName("세대를 읽은 뒤 값을 읽기 직전에 차단기가 열려도 우회 — 없음으로 보지 않고 우회한다")
     void breakerOpeningBeforeValueReadBypasses() {
         StringRedisTemplate spied = org.mockito.Mockito.spy(redis);
         org.springframework.data.redis.core.ValueOperations<String, String> ops = org.mockito.Mockito.spy(redis.opsForValue());
@@ -327,8 +327,7 @@ class ReadCacheTest {
         opening.get(openingItems, "products", "1", path -> { paths.add(path); return item("v", new AtomicInteger()); });
         opening.breaker().transitionToClosedState();
 
-        assertThat(paths).containsExactly(ReadCache.LoadPath.BYPASS);
-        assertThat(redis.keys("svc:cache:item:*")).isEmpty();
+        assertThat(paths).as("가르는 단언 — 저장은 채우기여도 열린 차단기가 막아 비어 있다").containsExactly(ReadCache.LoadPath.BYPASS);
     }
 
     @Test

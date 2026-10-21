@@ -114,7 +114,7 @@ class ReadCacheRefreshTest {
     }
 
     @Test
-    @DisplayName("돌 차례에 세대를 못 읽으면 갱신하지 않는다 — Redis 를 못 쓰는 동안 넣지도 못할 값을 원천에 묻지 않고, 그 값이 만료될 때까지 다시 맡기지 않는다")
+    @DisplayName("돌 차례에 세대를 못 읽으면 갱신하지 않는다 — 넣지도 못할 값을 원천에 묻지 않고, 그 키를 막아 두지 않아 복구 뒤 다음 히트가 다시 맡긴다")
     void refreshSkipsWhenGenerationUnreadable() {
         cache.entry(spec, "g", "k", () -> load("v1"));
         clock.advance(Duration.ofSeconds(24));
@@ -124,7 +124,25 @@ class ReadCacheRefreshTest {
         redis.opsForValue().set("svc:cache:gen:g", "not-a-number");   // 맡긴 뒤 · 돌기 전에 세대를 못 읽게
         tasks.runAll();
         assertThat(loads.get()).as("원천을 다시 읽지 않았다").isEqualTo(1);
-        assertThat(events.refreshes).containsExactly(RefreshResult.FAILED);
+        assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_UNAVAILABLE);
+
+        redis.delete("svc:cache:gen:g");   // 복구 — 세대 0, 값 키는 그대로
+        cache.entry(spec, "g", "k", () -> load("v3"));
+        assertThat(tasks.pending()).as("막아 두지 않았다 — 다음 히트가 다시 맡긴다").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("돌 차례에 값을 못 읽어도 갱신하지 않는다 — 세대를 못 읽을 때와 같다")
+    void refreshSkipsWhenValueUnreadable() {
+        cache.entry(spec, "g", "k", () -> load("v1"));
+        clock.advance(Duration.ofSeconds(24));
+        cache.entry(spec, "g", "k", () -> load("v2"));
+        String key = onlyKey();
+        redis.delete(key);
+        redis.opsForList().rightPush(key, "x");   // GET 이 WRONGTYPE 으로 실패한다
+        tasks.runAll();
+        assertThat(loads.get()).as("원천을 다시 읽지 않았다").isEqualTo(1);
+        assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_UNAVAILABLE);
     }
 
     @Test
@@ -347,7 +365,7 @@ class ReadCacheRefreshTest {
     }
 
     @Test
-    @DisplayName("지금 세대를 못 읽으면(차단기 열림) 갱신은 읽지 않는다 — 넣지도 못할 값을 원천에 묻지 않게")
+    @DisplayName("지금 세대를 못 읽으면(차단기 열림) 갱신은 읽지 않는다 — 넣지도 못할 값을 원천에 묻지 않게. 원천 실패와 따로 센다")
     void refreshSkipsWhenBreakerOpen() {
         cache.entry(spec, "g", "k", () -> load("v1"));
         clock.advance(Duration.ofSeconds(24));
@@ -359,7 +377,7 @@ class ReadCacheRefreshTest {
             cache.breaker().transitionToClosedState();
         }
         assertThat(loads.get()).as("처음 읽기뿐").isEqualTo(1);
-        assertThat(events.refreshes).containsExactly(RefreshResult.FAILED);
+        assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_UNAVAILABLE);
     }
 
     @Test

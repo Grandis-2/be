@@ -42,7 +42,8 @@ import java.util.function.Supplier;
  *   <li><b>장애</b>: Redis 읽기 · 쓰기가 실패하면 캐시 없이 loader(DB)로 답한다. 실패가 이어지면 차단기가 열려 {@link #OPEN_FOR} 동안
  *       Redis 를 부르지 않는다 — 요청마다 Redis 제한 시간만큼 기다리지 않게. 그 뒤 몇 번 불러 보고 되면 다시 쓴다. 세대나 값을 못 읽으면 loader 는
  *       우회({@link LoadPath#BYPASS})를 받고 그 결과는 넣지 않는다. 값 키가 다른 타입으로 오염되면(키는 접두사 · 지문 · 세대라 이 클래스만 쓴다)
- *       세대가 오르거나 그 키가 만료될 때까지 우회하고, 그때마다 차단기에 실패로 센다.</li>
+ *       세대가 오르거나 그 키가 만료될 때까지(밖에서 쓴 키는 TTL 이 없어 세대가 오를 때까지) 우회하고, 그때마다 차단기에 실패로 센다 — 차단기는
+ *       인스턴스에 하나라 모든 캐시가 같이 쓰므로, 인기 키가 오염되면 차단기가 열려 그 인스턴스의 캐시 전체가 {@link #OPEN_FOR} 마다 우회할 수 있다.</li>
  *   <li><b>몰림</b>: 같은 키(세대 번호 포함)를 동시에 찾는 요청은 이 인스턴스 안에서 loader 를 한 번만 부르고 나머지는 그 결과를 받는다 —
  *       인기 키가 비는 순간(만료 · Redis 복구 직후) DB 로 한꺼번에 가지 않게. loader 의 예외(404 등)도 같이 받는다. 같이 받는 쪽은
  *       {@link #WAIT_FOR_LOAD} 까지만 기다린다(넘으면 503). 우회는 우회끼리만 같이 받는다(세대를 읽었으면 그 번호까지 같은 것끼리) — 같은 키를
@@ -53,7 +54,8 @@ import java.util.function.Supplier;
  *       값이 만료되면 그 뒤 요청은 기다리는 쪽이 된다(상한 그대로). 갱신이 실패해도 들고 있던 값의 만료는 늘지 않는다. 실행기가 차면 맡기지 않고, 그 값이 만료될 때까지
  *       그 키는 다시 맡기지 않는다.
  *       갱신한 값은 읽기 시작할 때의 세대 키에 들어가, 그사이 세대가 올랐으면 새 세대 조회에는 안 보인다. 돌 차례가 왔을 때 Redis 의
- *       지금 세대가 맡길 때와 다르면(올랐거나 세대 키가 지워져 0 으로 돌아갔으면) 읽지 않는다. 지금 세대를 못 읽으면(차단기 · 장애) 읽지 않는다 — 넣지 못할 값을 원천에 묻지 않게. 인스턴스마다 따로라 같은 키를 인스턴스 수만큼
+ *       지금 세대가 맡길 때와 다르면(올랐거나 세대 키가 지워져 0 으로 돌아갔으면) 읽지 않는다. 돌 차례에 지금 세대나 값을 Redis 에서 못 읽으면(차단기 · 장애) 읽지 않는다 — 넣지 못할 값을 원천에 묻지 않게. 그 키는 막아 두지 않아 다음 히트가 다시
+ *       맡긴다(한 번의 시간 초과로 만료까지 미리 갱신이 멈추지 않게). 인스턴스마다 따로라 같은 키를 인스턴스 수만큼
  *       갱신할 수 있다(만료 때 인스턴스마다 한 번 읽던 것과 같다). 같은 세대 키에는 마지막에 넣은 쪽이 남는다(직접 읽기와 같다) — 세대가 덮지
  *       않는 데이터를 읽는 loader(배너가 읽는 상품 노출 · 홍보 기간)는 늦게 넣은 인스턴스의 값으로 되돌아갈 수 있고, 그 값의 나이도 읽은
  *       시각 + TTL 안이다. 큐에서 늦게 돈 갱신은 그사이 더 새 값이 들어왔으면 읽지 않는다. 갱신 결과를
@@ -233,7 +235,7 @@ public final class ReadCache {
     /**
      * 세대 {@code generation} 의 키 {@code id} 값과 그 값을 DB 에서 읽은 시각. 없으면 loader 로 만들어 넣는다. loader 가 null 을 주면 넣지 않는다.
      * 세대 번호를 못 읽으면(Redis 장애) 캐시를 건너뛰고 loader 로 답한다 — 아무 번호나 쓰면 옛 값을 줄 수 있다. 세대는 읽었는데 값을 못 읽어도
-     * (실패 · 차단기 열림) 같다 — 없는 것으로 보고 채우지 않는다.
+     * (실패 · 차단기 열림) 같다 — 없음으로 보지 않고 우회한다.
      * 읽은 시각은 응답의 HTTP 캐시 시간({@link Entry#remaining})을 정하는 데 쓴다 — 앞단 캐시가 이 값을 TTL 넘게 들고 있지 않게.
      */
     public <T> Entry<T> entry(Spec<T> spec, String generation, String id, Supplier<T> loader, Predicate<T> storable) {
@@ -550,18 +552,26 @@ public final class ReadCache {
     private <T> void refresh(String key, Spec<T> spec, Instant seenLoadedAt, Function<LoadPath, T> loader, Predicate<T> storable, String generation,
                              long generationNumber) {
         // 지금 세대를 Redis 에서 다시 읽는다 — 이 인스턴스가 본 가장 큰 번호와 비교하면, 세대 키가 지워져(재시작 · 교체) 0 으로 돌아간 뒤
-        // 세대가 옛 최대값을 넘을 때까지 갱신이 모두 건너뛰어진다. 못 읽으면 읽지 않는다 — Redis 를 못 쓰는 동안 넣지도 못할 값을 원천에 묻지 않게
+        // 세대가 옛 최대값을 넘을 때까지 갱신이 모두 건너뛰어진다. 못 읽으면 읽지 않는다 — Redis 를 못 쓰는 동안 넣지도 못할 값을 원천에 묻지 않게.
+        // 그 키는 막아 두지 않는다 — 한 번의 시간 초과로 값이 만료될 때까지 미리 갱신이 멈추지 않게(Redis 를 못 쓰는 동안은 조회가 우회라 히트가 없다)
         Long current = call(() -> currentGeneration(generation));
         if (current == null) {
-            rememberNotStored(key, seenLoadedAt.plus(spec.ttl()));
-            events.refreshed(spec.name(), RefreshResult.FAILED);
+            events.refreshed(spec.name(), RefreshResult.SKIPPED_UNAVAILABLE);
             return;
         }
         if (current != generationNumber) {
             events.refreshed(spec.name(), RefreshResult.SKIPPED_NEWER);   // 큐에서 기다리는 사이 세대가 바뀌었다 — 그 세대 키는 아무도 읽지 않는다
             return;
         }
-        if (newerStored(key, seenLoadedAt)) {
+        String held;
+        try {
+            held = breaker.executeSupplier(() -> redis.opsForValue().get(key));
+        } catch (RuntimeException e) {
+            log.warn("읽기 캐시 Redis 호출 실패 — 미리 갱신을 건너뛴다: {}", e.toString());
+            events.refreshed(spec.name(), RefreshResult.SKIPPED_UNAVAILABLE);   // 세대를 못 읽을 때와 같다
+            return;
+        }
+        if (newerThan(held, seenLoadedAt)) {
             events.refreshed(spec.name(), RefreshResult.SKIPPED_NEWER);   // 큐에서 기다리는 사이 만료돼 요청이 더 새 값을 넣었다
             return;
         }
@@ -599,9 +609,8 @@ public final class ReadCache {
         }
     }
 
-    /** Redis 에 지금 있는 값이 seen 보다 나중에 읽은 값인가. 못 읽으면(장애 · 없음 · 모양이 다름) 아니라고 본다 — 갱신을 그대로 한다. */
-    private boolean newerStored(String key, Instant seen) {
-        String cached = call(() -> redis.opsForValue().get(key));
+    /** Redis 에 있던 값(cached)이 seen 보다 나중에 읽은 값인가. 없거나 모양이 다르면 아니라고 본다 — 갱신을 그대로 한다. */
+    private boolean newerThan(String cached, Instant seen) {
         if (cached == null) {
             return false;
         }
