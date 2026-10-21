@@ -71,6 +71,12 @@ import java.util.function.Supplier;
  *       커밋 전에 DB 를 읽은 요청의 옛 값은 그때 정한 옛 세대 키에 들어가 새 세대 조회에는 안 보인다.
  *       세대 키가 없으면(처음 · 지워짐 · 새 캐시) 0 이 아니라 지금 시각(epoch ms)으로 시작한다 — 사라졌다 다시 생긴 키가 늘 예전보다 큰 번호가
  *       되게(memcached 의 namespace 키 권장과 같다). 그래서 옛 세대의 값을 다시 집지 않는다.</li>
+ *   <li><b>복원</b>: Redis 를 스냅샷으로 되돌리면 세대 키도 그때 번호로 돌아가고, 그 번호의 옛 값이 같이 돌아온다. 떠 있는 인스턴스는 본 번호보다 작은
+ *       세대를 보면 그 세대를 본 번호 + 1 로 올리고 그 번호로 읽는다(복원된 Redis 에는 그보다 큰 세대의 값이 없다) — 돌아온 옛 값을 내지 않고, 옛 세대로 넣은 몫도 정리한다.
+ *       스냅샷보다 큰 번호를 본 적 없는 인스턴스(복원 뒤 새로 뜸 · 스냅샷 뒤 그 세대를 읽지 않음)는 알아채지 못하고 돌아온 옛 값을 TTL 동안 낸다. 그래서 복원(또는 세대 키를 손댄) 뒤에는 운영자가 세대 키를 지우지 말고 지금 시각보다
+ *       작으면 지금 시각으로 올린다 — {@code <서비스>:cache:gen:*} 키마다
+ *       {@code EVAL "local v=tonumber(redis.call('GET',KEYS[1]) or '0') if v<tonumber(ARGV[1]) then redis.call('SET',KEYS[1],ARGV[1]) end" 1 <키> <epoch ms>}.
+ *       값 키는 지우지 않아도 된다(새 세대에는 안 보이고 TTL 로 사라진다). 같은 Redis 의 다른 키(대기열 · 토큰 표식)는 건드리지 않는다.</li>
  *   <li><b>시계</b>: 값의 만료는 앱 벽시계로 정한 절대 시각(PXAT)이다 — 앱 시계가 Redis 보다 빠르면 그만큼 더 살고, 느리면 덜 산다. 그래서 신선도의
  *       최악은 TTL + 앱 · Redis 시계 차다(둘 다 AWS 시간 동기화를 쓴다는 가정).</li>
  *   <li><b>배포</b>: 값은 JSON 이고 키에 그 타입 모양의 지문({@link Shape})을 넣는다. 모양이 다른 버전(blue/green 이 겹치는 동안)은 서로의 키를
@@ -110,6 +116,16 @@ public final class ReadCache {
     private static final RedisScript<Long> BUMP_GENERATION = new DefaultRedisScript<>("""
             if redis.call('EXISTS', KEYS[1]) == 0 then redis.call('SET', KEYS[1], ARGV[1]) end
             return redis.call('INCR', KEYS[1])
+            """, Long.class);
+    /** 세대를 ARGV[1] 보다 작으면 ARGV[1] 로 올리고 지금 값을 돌려준다 — 여러 인스턴스가 함께 해도 줄지 않는다. */
+    private static final RedisScript<Long> RAISE_GENERATION = new DefaultRedisScript<>("""
+            local v = tonumber(redis.call('GET', KEYS[1]) or '0')
+            local floor = tonumber(ARGV[1])
+            if v < floor then
+              redis.call('SET', KEYS[1], ARGV[1])
+              return floor
+            end
+            return v
             """, Long.class);
 
     private final StringRedisTemplate redis;
@@ -276,6 +292,10 @@ public final class ReadCache {
             if (current == null) {
                 return bypass(spec, generation, null, id, loader, storable);
             }
+        }
+        current = raiseIfRolledBack(spec, generation, current);
+        if (current == null) {
+            return bypass(spec, generation, null, id, loader, storable);
         }
         releaseOlderGenerations(spec, generation, current);
         String key = prefix + spec.name() + ":" + FORMAT + "." + spec.fingerprint() + ":" + generation + "." + current + ":" + id;
@@ -480,6 +500,21 @@ public final class ReadCache {
         redis.execute(BUMP_GENERATION, List.of(prefix + "gen:" + generation), String.valueOf(clock.millis()));
     }
 
+    /**
+     * 이 인스턴스가 본 번호보다 작은 세대(스냅샷 복원 · 세대 키를 손댐)를 보면 본 번호 + 1 로 올리고 그 번호를 돌려준다 — 돌아온 옛 세대 키의
+     * 값을 내지 않게. 다른 인스턴스와 겹쳐도 줄지 않는다(작을 때만 올린다 — 본 번호가 더 큰 인스턴스는 다시 알아채 더 올린다). 못 올리면 null(우회).
+     */
+    private Long raiseIfRolledBack(Spec<?> spec, String generation, long current) {
+        Long seen = seenGenerations.get(spec.name() + "|" + generation);
+        if (seen == null || current >= seen) {
+            return current;
+        }
+        long floor = seen + 1;
+        Long raised = call(() -> redis.execute(RAISE_GENERATION, List.of(prefix + "gen:" + generation), String.valueOf(floor)));
+        log.warn("읽기 캐시 세대가 본 번호보다 작다(복원 · 세대 키를 손댐) — 올려서 읽는다 generation={} seen={} current={} raised={}",
+                generation, seen, current, raised);
+        return raised;
+    }
 
     /**
      * 같은 자리(slot)의 loader 를 이 인스턴스에서 한 번만 부르고, 나머지는 그 결과(또는 예외)를 같이 받는다. key 가 null 이면 넣지 않는다.
