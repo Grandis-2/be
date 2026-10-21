@@ -62,6 +62,14 @@ public class OrderJpaEntity extends BaseEntity {
     @Column(updatable = false)
     private Instant paidAt;
 
+    /** 원장의 벌크 UPDATE 로만 적고 스칼라 조회로만 읽는다(ck_order_preorder_cancel_sequence). 도메인 주문에는 싣지 않는다. */
+    @Column(updatable = false)
+    private Long preorderCancelSequence;
+
+    /** 원장의 벌크 UPDATE 로만 적고 스칼라 조회로만 읽는다(ck_order_preorder_cancel_reported). 도메인 주문에는 싣지 않는다. */
+    @Column(updatable = false)
+    private Instant preorderCancelReportedAt;
+
     @Column(name = "ship_to_name", nullable = false, updatable = false, length = 50)
     private String shipToName;
 

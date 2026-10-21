@@ -102,8 +102,9 @@ nova:
       backoff-max: 5m
       # 결과를 정할 수 없는 예약 취소(승인 확인 중 · 환불 중 · 환불 실패로 사람 대기)는 같은 큐에 지연을 두고 다시 보낸다.
       # 보류할 때마다 두 배, 최대 15분(SQS 상한). 포기하지 않는다 — 처음 보류한 뒤 alert-after 가 지나면 ERROR 를 한 번 남긴다.
-      # 다시 보내려면 order 역할에 order-events 의 sqs:SendMessage 권한이 있어야 한다
-      defer-first-delay: 60s
+      # 환불 중인 취소의 결과는 환불을 마친 트랜잭션이 바로 알리고, 재수신은 그것을 확인하는 안전망이다. 첫 지연은 승인 중에 겹친
+      # 취소가 승인 결과 직후 정리되도록 짧게 둔다. 다시 보내려면 order 역할에 order-events 의 sqs:SendMessage 권한이 있어야 한다
+      defer-first-delay: 5s
       defer-max-delay: 15m
       defer-alert-after: 24h
   # 아웃박스 발행. transport 는 필수(없으면 기동 실패)이고 운영 값은 sqs 다.

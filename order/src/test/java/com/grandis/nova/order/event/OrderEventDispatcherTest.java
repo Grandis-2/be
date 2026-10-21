@@ -117,6 +117,17 @@ class OrderEventDispatcherTest {
         assertThat(handling).isEqualTo(MessageHandling.DEFER);
     }
 
+    /** 환불을 마치며 이미 알린 취소는 끝난 메시지다 — 늦춰 다시 받으면 같은 결과로 끝없이 돈다. */
+    @Test
+    void 이미_알린_취소는_끝낸다() {
+        given(settlement.settle(any())).willReturn(new CancelSettlement.AlreadyReported());
+
+        MessageHandling handling = dispatcher.dispatch(
+                envelope("PREORDER_CANCEL_REQUESTED", "PREORDER", PREORDER_INTERNAL_ID, cancelRequested()));
+
+        assertThat(handling).isEqualTo(MessageHandling.DONE);
+    }
+
     /** 환불 결과는 봉투의 aggregateId(주문 id)로 반영한다. 본문은 payment outbox.OrderRefundSettled 의 칸 이름 그대로다. */
     @Test
     void 환불_결과는_봉투의_aggregateId_로_환불_반영에_넘긴다() {

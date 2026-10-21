@@ -6,10 +6,13 @@ import com.grandis.nova.order.order.domain.enums.OrderTrigger;
 import com.grandis.nova.order.order.domain.exception.OrderAlreadyPlacedException;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderDraft;
+import com.grandis.nova.order.order.domain.model.OrderLine;
 import com.grandis.nova.order.order.domain.model.OrderTransition;
 import com.grandis.nova.order.order.domain.repository.OrderWriter;
 import com.grandis.nova.order.order.vo.EventCause;
 import com.grandis.nova.order.order.vo.Money;
+import com.grandis.nova.order.order.vo.Quantity;
+import com.grandis.nova.order.order.vo.ShipTo;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderFixtures.PreorderProduct;
 import com.grandis.nova.order.support.OrderIntegrationTest;
@@ -413,6 +416,89 @@ class OrderLedgerTest {
         assertThatThrownBy(() -> jdbcTemplate.update(
                 "UPDATE orders SET authorizing_provider_order_id = 'x' WHERE id = ?", bytes(id)))
                 .hasMessageContaining("ck_order_authorizing_attempt");
+    }
+
+    // 결제된 사전예약 주문을 취소 중으로 바꾸면 같은 잠금 안에서 순번을 적는다. 미결제 취소 · 이미 취소 중이면 적지 않는다(처음 시도의 값이 남는다)
+    @Test
+    void preorderCancelStoresSequenceOnlyWhenMovedToCanceling() {
+        UUID paid = ledger.place(draft(preorder()), EventCause.user()).id();
+        fixtures.forceStatus(paid, "AWAITING_CONFIRMATION");
+        UUID unpaid = ledger.place(draft(preorder()), EventCause.user()).id();
+
+        assertThat(ledger.requestPreorderCancel(paid, ANY, 3L, EventCause.system("PREORDER_CANCEL:USER")))
+                .isEqualTo(new OrderTransition(true, OrderStatus.CANCELING));
+        assertThat(ledger.requestPreorderCancel(paid, ANY, 4L, EventCause.system("PREORDER_CANCEL:USER")))
+                .isEqualTo(new OrderTransition(false, OrderStatus.CANCELING));
+        assertThat(ledger.requestPreorderCancel(unpaid, UNPAID, 3L, EventCause.system("PREORDER_CANCEL:EXPIRY")))
+                .isEqualTo(new OrderTransition(true, CANCELED));
+
+        assertThat(cancelSequenceOf(paid)).isEqualTo(3L);
+        assertThat(cancelSequenceOf(unpaid)).isNull();
+    }
+
+    // 사전예약 주문이 아니면 순번을 적을 수 없다 — 취소 중으로 바꾼 채 넘어가지 않고 트랜잭션을 실패시킨다
+    @Test
+    void preorderCancelOfCartOrderFails() {
+        UUID cart = ledger.place(cartDraft(), EventCause.user()).id();
+        fixtures.forceStatus(cart, "AWAITING_CONFIRMATION");
+
+        assertThatThrownBy(() -> ledger.requestPreorderCancel(cart, ANY, 3L, EventCause.system("PREORDER_CANCEL:USER")))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    // 환불이 끝나 취소된 주문의 알림 표식은 순번이 있을 때 한 번만 적고 그 순번을 돌려준다
+    @Test
+    void preorderCancelReportIsNotedOnceForStoredSequence() {
+        UUID stored = ledger.place(draft(preorder()), EventCause.user()).id();
+        fixtures.forceStatus(stored, "AWAITING_CONFIRMATION");
+        ledger.requestPreorderCancel(stored, ANY, 3L, EventCause.system("PREORDER_CANCEL:USER"));
+        UUID missing = ledger.place(draft(preorder()), EventCause.user()).id();
+        fixtures.forceStatus(missing, "CANCELING");
+
+        assertThat(ledger.notePreorderCancelReported(stored)).as("아직 취소 중").isEmpty();
+        for (UUID id : List.of(stored, missing)) {
+            ledger.fire(id, OrderTrigger.REFUND_COMPLETED, EnumSet.of(OrderStatus.CANCELING), EventCause.system("REFUND_COMPLETED"));
+        }
+
+        assertThat(ledger.notePreorderCancelReported(stored)).contains(3L);
+        assertThat(ledger.notePreorderCancelReported(stored)).as("이미 적음").isEmpty();
+        assertThat(ledger.notePreorderCancelReported(missing)).as("순번 없음(구버전이 취소 중으로 바꿈)").isEmpty();
+    }
+
+    // 순번은 사전예약 주문의 취소 중 · 취소에만, 알림 표식은 순번이 있는 취소에만 있다 — 원장을 거치지 않은 쓰기도 DB 가 막는다
+    @Test
+    void preorderCancelColumnsOutsideTheirStatesAreRejectedByDatabase() {
+        UUID unpaid = ledger.place(draft(preorder()), EventCause.user()).id();
+        UUID cart = ledger.place(cartDraft(), EventCause.user()).id();
+        fixtures.forceStatus(cart, "CANCELING");
+        UUID canceled = ledger.place(draft(preorder()), EventCause.user()).id();
+        fixtures.forceStatus(canceled, "CANCELED");
+        UUID canceling = ledger.place(draft(preorder()), EventCause.user()).id();
+        fixtures.forceStatus(canceling, "AWAITING_CONFIRMATION");
+        ledger.requestPreorderCancel(canceling, ANY, 3L, EventCause.system("PREORDER_CANCEL:USER"));
+
+        assertThatThrownBy(() -> jdbcTemplate.update("UPDATE orders SET preorder_cancel_sequence = 3 WHERE id = ?", bytes(unpaid)))
+                .hasMessageContaining("ck_order_preorder_cancel_sequence");
+        assertThatThrownBy(() -> jdbcTemplate.update("UPDATE orders SET preorder_cancel_sequence = 3 WHERE id = ?", bytes(cart)))
+                .hasMessageContaining("ck_order_preorder_cancel_sequence");
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                "UPDATE orders SET preorder_cancel_reported_at = UTC_TIMESTAMP(6) WHERE id = ?", bytes(canceled)))
+                .as("순번 없음").hasMessageContaining("ck_order_preorder_cancel_reported");
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                "UPDATE orders SET preorder_cancel_reported_at = UTC_TIMESTAMP(6) WHERE id = ?", bytes(canceling)))
+                .as("아직 취소 중").hasMessageContaining("ck_order_preorder_cancel_reported");
+    }
+
+    private Long cancelSequenceOf(UUID id) {
+        return jdbcTemplate.queryForObject("SELECT preorder_cancel_sequence FROM orders WHERE id = ?", Long.class, bytes(id));
+    }
+
+    private OrderDraft cartDraft() {
+        OrderFixtures.StockProduct stocked = fixtures.inStockProduct(1);
+        return new OrderDraft(customerId, OrderSource.CART, null, null, null,
+                new ShipTo("홍길동", "010-0000-0000", "04524", "세종대로 110", null),
+                List.of(new OrderLine(stocked.productId(), stocked.optionIds().getFirst(), new Quantity(1), Money.won(1_000), 0,
+                        Money.ZERO, "상품", null, "옵션", null)));
     }
 
     private String attemptOf(UUID id) {

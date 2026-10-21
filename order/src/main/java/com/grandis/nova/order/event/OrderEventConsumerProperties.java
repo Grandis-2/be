@@ -14,7 +14,9 @@ import java.time.Duration;
  * @param visibility       받은 메시지를 다른 소비자에게 숨기는 시간. 처리 한 건보다 길게 둔다
  * @param backoffBase      처리 실패 후 다시 보이기까지의 첫 대기. 실패할수록 두 배, backoffMax 까지. 실패는 대개 DB 장애라 장애 조치
  *                         (1~2분)보다 길게 버티도록 둔다 — 재수신 5회면 약 7분(payment · member 와 같은 값)
- * @param deferFirstDelay  결과를 정할 수 없는 메시지를 다시 보낼 때의 첫 지연. 보류할 때마다 두 배, deferMaxDelay 까지(에픽 U7)
+ * @param deferFirstDelay  결과를 정할 수 없는 메시지를 다시 보낼 때의 첫 지연. 보류할 때마다 두 배, deferMaxDelay 까지(에픽 U7).
+ *                         환불 중인 취소는 환불을 마친 트랜잭션이 결과를 알리므로 재수신은 안전망이다 — 짧게 두는 것은 승인 중에
+ *                         겹친 취소(회차 일괄 취소 · 만료 경합)가 승인 결과 직후 정리되게 하려는 것이다
  * @param deferAlertAfter  처음 보류한 뒤 이만큼 지나면 ERROR 를 한 번 남긴다(계속 늦춰 다시 받는다)
  */
 @ConfigurationProperties("nova.sqs.consumer")
@@ -27,7 +29,7 @@ record OrderEventConsumerProperties(
         @DefaultValue("5m") Duration visibility,
         @DefaultValue("30s") Duration backoffBase,
         @DefaultValue("5m") Duration backoffMax,
-        @DefaultValue("60s") Duration deferFirstDelay,
+        @DefaultValue("5s") Duration deferFirstDelay,
         @DefaultValue("15m") Duration deferMaxDelay,
         @DefaultValue("24h") Duration deferAlertAfter
 ) {

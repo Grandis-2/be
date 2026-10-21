@@ -3,11 +3,15 @@ package com.grandis.nova.order.order.cancel;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.outbox.PreorderOrderSettled;
 
-/** 예약 취소 수신의 처리 결과. 결과를 적었거나, 아직 정할 수 없어 나중에 다시 받아야 한다. */
+/** 예약 취소 수신의 처리 결과. 결과를 적었거나, 이미 알렸거나, 아직 정할 수 없어 나중에 다시 받아야 한다. */
 public sealed interface CancelSettlement {
 
     /** 정리 결과를 아웃박스에 적었다. */
     record Settled(PreorderOrderSettled result) implements CancelSettlement {
+    }
+
+    /** 환불을 마친 트랜잭션이 이 시도의 결과(CANCELED)를 이미 알렸다. 다시 적지 않는다. */
+    record AlreadyReported() implements CancelSettlement {
     }
 
     /**
