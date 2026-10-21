@@ -7,6 +7,7 @@ import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.web.client.InternalCallFailures;
 import com.grandis.nova.preorder.integration.Dependencies;
 import com.grandis.nova.preorder.integration.DependencyGuard;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -27,6 +28,9 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * 접수에 쓸 상품 · 옵션 값을 상품 단위로 캐시한다 — 오픈 순간의 몰림이 catalog 로 번지지 않게(같은 상품의 첫 조회는 한 번만 부른다).
@@ -41,6 +45,8 @@ public class CatalogReader {
     static final String REFRESH_EXECUTOR = "catalogRefreshExecutor";
 
     static final long MAXIMUM_PRODUCTS = 1_000;
+    /** 묵은 값 상한을 넘었는데 새 값을 받지 못해 가진 값을 준 횟수. */
+    static final String STALE_SERVED_METRIC = "preorder.catalog.cache.stale_served";
 
     private static final Logger log = LoggerFactory.getLogger(CatalogReader.class);
 
@@ -48,6 +54,7 @@ public class CatalogReader {
     private final DependencyGuard dependencyGuard;
     private final TaskExecutor refreshExecutor;
     private final CatalogCacheProperties properties;
+    private final MeterRegistry meterRegistry;
     private final Clock clock;
     private final Cache<UUID, Loaded> products;
     /** 그 요청에서 다시 받기가 실패해 잠시 묻지 않는 상품. */
@@ -59,12 +66,13 @@ public class CatalogReader {
 
     public CatalogReader(CatalogClient catalogClient, DependencyGuard dependencyGuard,
                          @Qualifier(REFRESH_EXECUTOR) TaskExecutor refreshExecutor, CatalogCacheProperties properties,
-                         Clock clock) {
+                         MeterRegistry meterRegistry, Clock clock) {
         this.catalogClient = catalogClient;
         this.dependencyGuard = dependencyGuard;
         // 다시 받기는 다른 스레드에서 돈다. 맡긴 요청의 보안 맥락(토큰)을 옮겨 가야 catalog 가 받는다
         this.refreshExecutor = new DelegatingSecurityContextTaskExecutor(refreshExecutor);
         this.properties = properties;
+        this.meterRegistry = meterRegistry;
         this.clock = clock;
         this.products = Caffeine.newBuilder()
                 .expireAfterWrite(properties.expireAfter())
@@ -133,34 +141,71 @@ public class CatalogReader {
     }
 
     /**
-     * 그 요청에서 다시 받는다. 같은 상품을 동시에 다시 받는 요청은 앞 요청의 결과를 기다린다 — 캐시의 키 잠금을 잡은 채 부르지 않는다
-     * (같은 칸의 다른 상품까지 막는다). 실패하면 가진 값을 주고, 사용자 토큰 문제(401)가 아니면 그 상품을 잠시 묻지 않는다 —
-     * 한 사람의 토큰이 남을 막지 않게. 받는 사이 비워졌으면 덮지 않고 처음 받기로 간다.
+     * 그 요청에서 다시 받는다. 받기는 다시 받기 실행기에서 돌고, 같은 상품의 요청은 한 번의 받기를 함께 기다린다. 기다림은 상한까지만 —
+     * 넘거나 실패하면 가진 값을 준다(받기는 뒤에서 마저 한다). 실패한 상품은 잠시 묻지 않는다. 401 은 그 토큰만의 문제라 막지 않고,
+     * 남의 받기가 401 이면 자기 토큰으로 한 번 더 받는다. 받는 사이 비워졌으면 덮지 않고 처음 받기로 간다.
      */
     private Loaded refreshNow(UUID productId, Loaded stale) {
+        return refreshNow(productId, stale, true);
+    }
+
+    private Loaded refreshNow(UUID productId, Loaded stale, boolean retryOthersUnauthorized) {
         if (backingOff.getIfPresent(productId) != null) {
-            return stale;
+            return servedStale(stale, StaleReason.BACKOFF);
         }
         CompletableFuture<Loaded> mine = new CompletableFuture<>();
         CompletableFuture<Loaded> running = refreshingNow.putIfAbsent(productId, mine);
-        if (running != null) {
-            Loaded refreshed = running.join();
-            return refreshed != null ? refreshed : get(productId);
-        }
-        Loaded refreshed = stale;
-        try {
-            Loaded fresh = load(productId);
-            refreshed = products.asMap().replace(productId, stale, fresh) ? fresh : products.getIfPresent(productId);
-        } catch (RuntimeException e) {
-            if (!(e instanceof HttpClientErrorException.Unauthorized)) {
-                backingOff.put(productId, Boolean.TRUE);
+        if (running == null) {
+            running = mine;
+            try {
+                refreshExecutor.execute(() -> loadNow(productId, stale, mine));
+            } catch (TaskRejectedException e) {
+                refreshingNow.remove(productId, mine);
+                mine.complete(stale);
+                return servedStale(stale, StaleReason.REJECTED);
             }
-            log.warn("catalog 상품을 다시 받지 못해 가진 값을 쓴다 productId={}: {}", productId, e.toString());
-        } finally {
-            refreshingNow.remove(productId, mine);
-            mine.complete(refreshed);
+        }
+        Loaded refreshed;
+        try {
+            refreshed = running.get(properties.refreshWait().toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            return servedStale(stale, StaleReason.TIMEOUT);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return servedStale(stale, StaleReason.TIMEOUT);
+        } catch (ExecutionException e) {
+            if (running != mine && retryOthersUnauthorized) {
+                return refreshNow(productId, stale, false);
+            }
+            return servedStale(stale, StaleReason.UNAUTHORIZED);
+        }
+        if (refreshed == stale) {
+            return servedStale(stale, StaleReason.FAILED);
         }
         return refreshed != null ? refreshed : get(productId);
+    }
+
+    /** 다시 받기 실행기에서 돈다. 401 은 예외로 끝내 기다리는 쪽이 가르고, 그 밖의 실패는 가진 값으로 끝낸다. */
+    private void loadNow(UUID productId, Loaded stale, CompletableFuture<Loaded> result) {
+        try {
+            Loaded fresh = load(productId);
+            Loaded current = products.asMap().replace(productId, stale, fresh) ? fresh : products.getIfPresent(productId);
+            refreshingNow.remove(productId, result);
+            result.complete(current);
+        } catch (HttpClientErrorException.Unauthorized e) {
+            refreshingNow.remove(productId, result);
+            result.completeExceptionally(e);
+        } catch (RuntimeException e) {
+            backingOff.put(productId, Boolean.TRUE);
+            log.warn("catalog 상품을 그 요청에서 다시 받지 못해 가진 값을 쓴다 productId={}", productId, e);
+            refreshingNow.remove(productId, result);
+            result.complete(stale);
+        }
+    }
+
+    private Loaded servedStale(Loaded stale, StaleReason reason) {
+        meterRegistry.counter(STALE_SERVED_METRIC, "reason", reason.name()).increment();
+        return stale;
     }
 
     /**
@@ -195,6 +240,19 @@ public class CatalogReader {
             product = Optional.empty();
         }
         return new Loaded(product, clock.instant());
+    }
+
+    enum StaleReason {
+        /** 받기가 실패했다. */
+        FAILED,
+        /** 앞선 실패로 잠시 묻지 않는다. */
+        BACKOFF,
+        /** 기다림 상한을 넘었다. */
+        TIMEOUT,
+        /** 다시 받기 실행기가 꽉 찼다. */
+        REJECTED,
+        /** catalog 가 토큰을 받지 않았다. */
+        UNAUTHORIZED
     }
 
     /** 받은 값과 받은 시각. 없는 상품(404)도 비어 있는 값으로 둔다. */
