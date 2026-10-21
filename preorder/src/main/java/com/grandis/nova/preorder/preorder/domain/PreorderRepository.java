@@ -156,6 +156,11 @@ public interface PreorderRepository extends JpaRepository<Preorder, UUID>, JpaSp
     List<Preorder> findByProductIdAndStatusInOrderByQueuePosition(UUID productId, Collection<PreorderStatus> statuses,
                                                                    Limit limit);
 
+    /** 상품의 유효 예약 수(주어진 상태 제외). ix_preorder_product_status 로 인덱스만 읽는다. */
+    @Query("select count(p) from Preorder p where p.productId = :productId and p.status not in :excluded")
+    long countByProductExcluding(@Param("productId") UUID productId,
+                                 @Param("excluded") Collection<PreorderStatus> excluded);
+
     /** 상태별 예약 수. ix_preorder_payable(status, payable_from) 로 인덱스만 읽는다. */
     @Query("select p.status as status, count(p) as count from Preorder p group by p.status")
     List<StatusCount> countByStatus();
