@@ -63,7 +63,8 @@ public class PreorderCampaigns {
     }
 
     /**
-     * 상품별 회차(2.2). 캐시하지 않는다 — 수정 · 삭제 판정에 그대로 쓴다. 한 번에 {@value #BATCH}개씩 차례로 부른다.
+     * 상품별 회차(2.2). 캐시하지 않는다 — 수정 · 삭제 · 등록 재전송 · 관리자 화면이 그대로 쓴다. 공개 조회는 {@link PublicCampaigns} 를 거친다.
+     * 한 번에 {@value #BATCH}개씩 차례로 부른다.
      *
      * @return 상품 id → 회차. 회차가 없는 상품(판매 준비 전)은 빠진다. 빈 목록이면 부르지 않는다
      * @throws BusinessException DEPENDENCY_UNAVAILABLE — 연결 실패 · 시간 초과 · 5xx. INTERNAL_ERROR — 연동 오류(그 밖의 4xx · 읽을 수 없는 응답 ·
