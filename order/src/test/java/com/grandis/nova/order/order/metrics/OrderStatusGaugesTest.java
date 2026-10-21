@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * 배송 대기 주문 수 지표 — 실제 주문 수와 같고, 관리 포트의 /actuator/prometheus 로 나가며(이름 · 태그는 Grafana 규칙이 쓴다), 갱신은
- * 트랜잭션 없이 문장 하나로 ix_order_due 를 탄다. 다른 시험의 주문이 같은 DB 에 남아 있으므로 갱신 전후의 차이와 DB 의 수를 함께 본다.
+ * 트랜잭션 없이 문장 하나로 상태로 시작하는 색인만 읽는다. 다른 시험의 주문이 같은 DB 에 남아 있으므로 갱신 전후의 차이와 DB 의 수를 함께 본다.
  */
 @OrderIntegrationTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @AutoConfigureMetrics
@@ -86,13 +86,14 @@ class OrderStatusGaugesTest {
     }
 
     @Test
-    void 갱신은_트랜잭션_없이_문장_하나이고_ix_order_due_로_센다() throws Exception {
+    void 갱신은_트랜잭션_없이_문장_하나이고_상태로_시작하는_색인만_읽어_센다() throws Exception {
         List<String> statements = GeneralLog.statements("%from orders%group by%", gauges::refresh);
 
         assertThat(statements).as("트랜잭션 준비 · 정리 없이 세는 문장 하나").singleElement()
                 .satisfies(sql -> assertThat(GeneralLog.isTransactionHousekeeping(sql)).isFalse());
         Map<String, Object> plan = jdbcTemplate.queryForMap("EXPLAIN " + statements.getFirst());
-        assertThat(plan).containsEntry("key", "ix_order_due");
+        // 상태로 시작하는 색인이 둘이다(결제 기한 · 만든 시각) — 어느 쪽이든 그 앞 칸만 읽고 행은 읽지 않는다
+        assertThat(plan.get("key")).isIn("ix_order_due", "ix_order_status_created");
         assertThat((String) plan.get("Extra")).contains("Using index");
     }
 

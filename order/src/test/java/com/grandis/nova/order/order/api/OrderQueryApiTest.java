@@ -1,5 +1,6 @@
 package com.grandis.nova.order.order.api;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.support.OrderFixtures;
@@ -23,6 +24,7 @@ import java.util.UUID;
 
 import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -172,6 +174,21 @@ class OrderQueryApiTest {
                 .andExpect(jsonPath("$.data.id").doesNotExist())
                 .andExpect(jsonPath("$.data.paymentDueAt").doesNotExist())
                 .andExpect(jsonPath("$.data.customerId").doesNotExist());
+    }
+
+    /** 주문상품마다 order_items.id 가 orderItemId 로 나간다 — 목록 · 상세 모두. 리뷰 작성 등 주문상품 하나를 가리킬 때 쓴다. */
+    @Test
+    void itemsCarryOrderItemId() throws Exception {
+        Order order = orders.place(customerId);
+        String orderItemId = UuidBinary.fromBytes(jdbcTemplate.queryForObject("SELECT id FROM order_items WHERE order_id = ?", byte[].class,
+                (Object) OrderFixtures.bytes(order.id()))).toString();
+
+        mockMvc.perform(get("/api/v1/orders/" + order.id()).with(me()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].orderItemId").value(orderItemId));
+        mockMvc.perform(get("/api/v1/orders").with(me()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[?(@.orderId == '%s')].items[*].orderItemId".formatted(order.id()), contains(orderItemId)));
     }
 
     @Test

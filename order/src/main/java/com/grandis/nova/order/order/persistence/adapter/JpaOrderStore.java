@@ -246,8 +246,15 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     public OffsetPage<Order> findForAdmin(AdminOrderFilter filter, int page, int size) {
         Page<OrderJpaEntity> found = orders.findAll(OrderSpecifications.allOf(
                         OrderSpecifications.status(filter.status()),
-                        OrderSpecifications.source(filter.source())),
-                PageRequest.of(page, size, OrderSpecifications.NEWEST_FIRST));
+                        OrderSpecifications.source(filter.source()),
+                        OrderSpecifications.idStartsWith(filter.orderIdPrefix()),
+                        OrderSpecifications.customerIfGiven(filter.customerId()),
+                        OrderSpecifications.shipToName(filter.shipToName()),
+                        OrderSpecifications.shipToPhoneLast4(filter.shipToPhoneLast4()),
+                        OrderSpecifications.preorderToken(filter.preorderToken()),
+                        OrderSpecifications.containsItem(filter.productId(), filter.optionId()),
+                        OrderSpecifications.createdBetween(filter.createdFrom(), filter.createdTo())),
+                PageRequest.of(page, size, filter.narrowing() ? OrderSpecifications.NEWEST_FIRST_FILTERED : OrderSpecifications.NEWEST_FIRST));
         return OffsetPage.of(found.getContent().stream().map(OrderMapper::toDomain).toList(), page, size,
                 found.getTotalElements());
     }
@@ -262,6 +269,13 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     public Map<OrderStatus, Long> countByStatus(Set<OrderStatus> statuses) {
         Map<OrderStatus, Long> counts = new EnumMap<>(OrderStatus.class);
         orders.countByStatusIn(statuses).forEach(row -> counts.put(row.getStatus(), row.getCount()));
+        return counts;
+    }
+
+    @Override
+    public Map<OrderStatus, Long> countByStatusOfProduct(UUID productId) {
+        Map<OrderStatus, Long> counts = new EnumMap<>(OrderStatus.class);
+        orders.countByStatusOfProduct(productId).forEach(row -> counts.put(row.getStatus(), row.getCount()));
         return counts;
     }
 

@@ -92,4 +92,7 @@ public interface OrderReader {
 
     /** 그 상태들의 주문 수. 주문이 없는 상태는 빠진다. 트랜잭션 밖에서 부르면 트랜잭션을 열지 않는다. */
     Map<OrderStatus, Long> countByStatus(Set<OrderStatus> statuses);
+
+    /** 그 상품이 든 주문의 상태별 수. 주문이 없는 상태는 빠진다. 트랜잭션 밖에서 부르면 트랜잭션을 열지 않는다. */
+    Map<OrderStatus, Long> countByStatusOfProduct(UUID productId);
 }

@@ -13,6 +13,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 /** 회차 목록 · 상세. 관리자 화면과 회원 화면이 같이 쓴다 — 단계(예정 · 응모 중 · 마감)는 {@link #now()} 로 가른다. */
@@ -46,6 +48,20 @@ public class DrawQueryService {
         return readTransaction.execute(status -> campaigns.findNewestFirst(phase, now, page, size));
     }
 
+    /**
+     * 관리자 목록 — {@link #list(DrawPhase, Instant, int, int)} 에 회차마다 진행을 붙인다. 진행은 그 쪽의 회차 id 를 묶어 한 문장으로 센다.
+     * 목록과 진행을 한 읽기 트랜잭션에서 읽는다. 회차는 지우지 않으므로 목록에 있는 회차는 진행도 있다.
+     */
+    public OffsetPage<WithProgress> listWithProgress(DrawPhase phase, Instant now, int page, int size) {
+        return readTransaction.execute(status -> {
+            OffsetPage<DrawCampaign> found = phase == null ? campaigns.findNewestFirst(page, size)
+                    : campaigns.findNewestFirst(phase, now, page, size);
+            Map<UUID, DrawProgress> progress = campaigns.findProgress(found.items().stream().map(DrawCampaign::id).toList());
+            return found.map(campaign -> new WithProgress(campaign,
+                    Objects.requireNonNull(progress.get(campaign.id()), () -> "진행이 없는 회차: " + campaign.id())));
+        });
+    }
+
     /** @throws BusinessException 404 DRAW_NOT_FOUND */
     public DrawCampaign get(UUID drawId) {
         return readTransaction.execute(status -> campaigns.findById(drawId))
@@ -65,5 +81,8 @@ public class DrawQueryService {
 
     public Instant now() {
         return clock.instant();
+    }
+
+    public record WithProgress(DrawCampaign campaign, DrawProgress progress) {
     }
 }

@@ -55,13 +55,16 @@ public class AdminDrawController {
 
     @GetMapping
     @Operation(summary = "회차 목록", description = "최신순. page 는 0 부터, size 1~100. phase(선택): SCHEDULED 예정 · OPEN 응모 중 · CLOSED 마감 — "
-            + "주면 그 단계만, 비우면 전부. 모르는 값은 400")
-    public ApiResponse<OffsetPage<DrawResponse>> list(@RequestParam(required = false) DrawPhase phase,
-                                                      @RequestParam(defaultValue = "0") int page,
-                                                      @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
+            + "주면 그 단계만, 비우면 전부. 모르는 값은 400. 줄마다 진행 요약이 붙는다 — entryCount(결제 완료 + 확인 중 응모), winners, settledAt, "
+            + "stage(SCHEDULED 시작 전 · ENTRY_OPEN 응모 중 · DRAWING 마감 뒤 1시간 안 반영 전 · STUCK 마감 뒤 1시간이 지나도 반영 전 · "
+            + "WINNERS_ANNOUNCED 반영 끝)")
+    public ApiResponse<OffsetPage<AdminDrawSummaryResponse>> list(@RequestParam(required = false) DrawPhase phase,
+                                                                  @RequestParam(defaultValue = "0") int page,
+                                                                  @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         int checkedSize = PageSizes.require(size);
         Instant now = queries.now();
-        return ApiResponse.ok(queries.list(phase, now, PageSizes.requirePage(page, checkedSize), checkedSize).map(c -> DrawResponse.of(c, now)));
+        return ApiResponse.ok(queries.listWithProgress(phase, now, PageSizes.requirePage(page, checkedSize), checkedSize)
+                .map(row -> AdminDrawSummaryResponse.of(row, now)));
     }
 
     @GetMapping("/{drawId}/progress")

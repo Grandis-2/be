@@ -22,7 +22,9 @@ import org.springframework.stereotype.Repository;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -108,6 +110,18 @@ class JpaDrawCampaignStore implements DrawCampaignStore {
     public Optional<DrawProgress> findProgress(UUID campaignId) {
         return campaigns.findProgress(campaignId).map(row -> new DrawProgress(row.getPaidEntries(), row.getAuthorizingEntries(),
                 row.getAwaitingEntries(), row.getWinners(), row.getDrawRequestedAt(), row.getSettledAt()));
+    }
+
+    @Override
+    public Map<UUID, DrawProgress> findProgress(Collection<UUID> campaignIds) {
+        if (campaignIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, DrawProgress> progress = new HashMap<>();
+        campaigns.findProgressIn(campaignIds).forEach(row -> progress.put(UuidBinary.fromBytes(row.getCampaignId()),
+                new DrawProgress(row.getPaidEntries(), row.getAuthorizingEntries(), row.getAwaitingEntries(), row.getWinners(),
+                        row.getDrawRequestedAt(), row.getSettledAt())));
+        return progress;
     }
 
     @Override

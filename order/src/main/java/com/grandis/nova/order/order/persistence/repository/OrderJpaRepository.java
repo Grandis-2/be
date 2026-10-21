@@ -29,10 +29,20 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
 
     /**
      * 선언 쿼리라 트랜잭션을 열지 않는다 — JpaRepository 의 기본 메서드는 읽기 전용 트랜잭션을 따로 열어 준비 · 정리 문장이 붙는다.
-     * ix_order_due 의 앞 칸(status)만 읽는다(EXPLAIN: key=ix_order_due, Using index).
+     * 상태로 시작하는 색인(ix_order_due · ix_order_status_created 중 옵티마이저가 고른 것)의 앞 칸만 읽는다(EXPLAIN: Using index).
      */
     @Query("select o.status as status, count(o) as count from OrderJpaEntity o where o.status in :statuses group by o.status")
     List<StatusCountRow> countByStatusIn(@Param("statuses") Collection<OrderStatus> statuses);
+
+    /**
+     * 그 상품이 든 주문의 상태별 수. 상품 줄이 여럿인 주문도 한 번만 세도록 EXISTS 로 건다 — ix_order_item_product 로 그 상품의 주문상품부터
+     * 읽고 주문은 기본 키로 읽는다. 비용은 그 상품의 주문 수에 비례한다. 트랜잭션은 {@link #countByStatusIn} 과 같다.
+     */
+    @Query("""
+            select o.status as status, count(o) as count from OrderJpaEntity o
+             where exists (select 1 from OrderItemJpaEntity i where i.orderId = o.id and i.productId = :productId)
+             group by o.status""")
+    List<StatusCountRow> countByStatusOfProduct(@Param("productId") UUID productId);
 
     Optional<OrderJpaEntity> findByCustomerIdAndIdempotencyKey(UUID customerId, UUID idempotencyKey);
 
