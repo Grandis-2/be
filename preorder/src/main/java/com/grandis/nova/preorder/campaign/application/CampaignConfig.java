@@ -11,8 +11,7 @@ import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties({CampaignProperties.class, CampaignProgressProperties.class, OpenAlertProperties.class,
-        CampaignCacheProperties.class, CloseNoticeProperties.class, ScheduleNoticeProperties.class,
-        ScalingNoticeProperties.class})
+        CampaignCacheProperties.class, CloseNoticeProperties.class, ScheduleNoticeProperties.class})
 class CampaignConfig {
 
     /** 회차 원천과 그 위의 접수 현황을 함께 비운다. */

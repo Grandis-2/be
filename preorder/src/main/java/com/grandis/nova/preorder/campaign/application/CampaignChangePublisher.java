@@ -1,7 +1,9 @@
 package com.grandis.nova.preorder.campaign.application;
 
 import com.grandis.nova.common.outbox.OutboxWriter;
+import com.grandis.nova.preorder.campaign.CampaignScheduleTouched;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
@@ -9,8 +11,8 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * 회차의 지금 일정을 회차 변경 이벤트로 아웃박스에 적고(대기열 · 켜 두면 catalog · 인프라), 커밋 뒤 회차 캐시를 비운다.
- * 회차를 바꾼 트랜잭션 안에서 부른다.
+ * 회차의 지금 일정을 회차 변경 이벤트로 아웃박스에 적고(대기열 · 켜 두면 catalog), 커밋 뒤 회차 캐시를 비운다.
+ * 회차를 바꾼 트랜잭션 안에서 부른다. 프로세스 안에도 {@link CampaignScheduleTouched} 를 알린다(증설 맞추기를 바로 한 번 돌린다).
  * 전체 재발행(RESYNC)은 회차를 바꾸지 않으므로 비우지 않는다.
  */
 @Component
@@ -19,16 +21,15 @@ public class CampaignChangePublisher {
     private final OutboxWriter outboxWriter;
     private final CampaignCacheInvalidation cacheInvalidation;
     private final ScheduleNoticeProperties scheduleNotice;
-    private final ScalingNoticeProperties scalingNotice;
+    private final ApplicationEventPublisher events;
     private final Clock clock;
 
     CampaignChangePublisher(OutboxWriter outboxWriter, CampaignCacheInvalidation cacheInvalidation,
-                            ScheduleNoticeProperties scheduleNotice, ScalingNoticeProperties scalingNotice,
-                            Clock clock) {
+                            ScheduleNoticeProperties scheduleNotice, ApplicationEventPublisher events, Clock clock) {
         this.outboxWriter = outboxWriter;
         this.cacheInvalidation = cacheInvalidation;
         this.scheduleNotice = scheduleNotice;
-        this.scalingNotice = scalingNotice;
+        this.events = events;
         this.clock = clock;
     }
 
@@ -40,14 +41,10 @@ public class CampaignChangePublisher {
             outboxWriter.append(new PreorderCampaignScheduleChanged(campaign.getProductId(),
                     campaign.getScheduleVersion(), campaign.getOpensAt(), campaign.getClosesAt(), now, change));
         }
-        if (scalingNotice.enabled()) {
-            outboxWriter.append(new PreorderCampaignScalingPlanned(campaign.getProductId(),
-                    campaign.getScheduleVersion(), campaign.getOpensAt(), campaign.getClosesAt(), campaign.isVisible(),
-                    campaign.getExpectedVisitors(), now, change));
-        }
         if (change != CampaignChange.RESYNC) {
             cacheInvalidation.evictAfterCommit(campaign.getProductId());
         }
+        events.publishEvent(new CampaignScheduleTouched(campaign.getProductId()));
     }
 
     /**
@@ -59,6 +56,8 @@ public class CampaignChangePublisher {
             publish(campaign, CampaignChange.VISIBILITY);
         } else {
             cacheInvalidation.evictAfterCommit(campaign.getProductId());
+            // 판매 중지 여부도 증설 대상을 가른다
+            events.publishEvent(new CampaignScheduleTouched(campaign.getProductId()));
         }
     }
 

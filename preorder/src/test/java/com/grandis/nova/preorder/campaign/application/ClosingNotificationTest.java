@@ -36,8 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @PreorderIntegrationTest
 // catalog 알림 시험(CatalogScheduleNoticeTest)과 같은 설정이라 스프링 컨텍스트를 함께 쓴다
 @TestPropertySource(properties = {"nova.campaign.close-notice.enabled=true", "nova.campaign.close-notice.interval=1h",
-        "nova.campaign.schedule-notice.enabled=true",
-        "nova.campaign.scaling-notice.enabled=true"})
+        "nova.campaign.schedule-notice.enabled=true"})
 class ClosingNotificationTest {
 
     static final String CLOSED = "PREORDER_CAMPAIGN_CLOSED";

@@ -18,6 +18,11 @@ dependencies {
     implementation project(':common:outbox')
     // SQS 클라이언트 · 아웃박스 SQS 전송 · 큐 소비 폴러. AWS SDK 와 그 버전도 여기서 온다.
     implementation project(':common:sqs')
+    // 회차 일정에 맞춰 ECS 서비스의 최소 대수를 바꾼다(scaling). 버전은 common:sqs 의 AWS SDK BOM, HTTP 는 그 URLConnection 구현을 쓴다
+    implementation('software.amazon.awssdk:applicationautoscaling') {
+        exclude group: 'software.amazon.awssdk', module: 'apache-client'
+        exclude group: 'software.amazon.awssdk', module: 'netty-nio-client'
+    }
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     // 다른 서비스 내부 API 는 HTTP Interface(@HttpExchange) + RestClient 로 부른다.

@@ -11,7 +11,6 @@ public enum OutboundEventType implements OutboxEventType {
     PREORDER_CAMPAIGN_CHANGED("waitingroom-events"),
     PREORDER_CAMPAIGN_CLOSED("catalog-events"),
     PREORDER_CAMPAIGN_SCHEDULE_CHANGED("catalog-events"),
-    PREORDER_CAMPAIGN_SCALING_PLANNED("scaling-events"),
     NOTIFICATION_REQUESTED("notification");
 
     private final String destination;
