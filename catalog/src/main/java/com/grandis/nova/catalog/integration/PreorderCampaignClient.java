@@ -21,9 +21,15 @@ public interface PreorderCampaignClient {
     @GetExchange("/open")
     ApiResponse<OpenCampaigns> getOpen();
 
-    /** 2.2 — @param productIds 1~100개. 회차가 없는 상품은 결과에서 빠진다(= 판매 준비 전). 캐시 없이 DB 에서 읽는다 */
+    /**
+     * 2.2 — @param productIds 1~100개. 회차가 없는 상품은 결과에서 빠진다(= 판매 준비 전).
+     * @param fresh true 면 preorder 가 자기 회차 캐시를 거치지 않고 DB 에서 읽는다. false 면 그 캐시로 답해 옛 값일 수 있다 — preorder 는 회차를
+     *              바꾸면 커밋 뒤 Redis 채널로 모든 인스턴스의 캐시를 비우는데, 그 비우기와 catalog-events 의 전달 사이에 순서가 없어 변경 이벤트를 받은
+     *              직후에도 아직 안 비운 인스턴스가 답할 수 있고, 비우기를 놓친 인스턴스는 캐시 TTL(preorder 설정 nova.campaign.cache.ttl, 30초)까지
+     *              옛 값을 준다. 이 파라미터를 모르는 preorder 는 무시하고 DB 에서 읽는다(실측)
+     */
     @GetExchange
-    ApiResponse<Campaigns> getCampaigns(@RequestParam("productIds") Collection<UUID> productIds);
+    ApiResponse<Campaigns> getCampaigns(@RequestParam("productIds") Collection<UUID> productIds, @RequestParam("fresh") boolean fresh);
 
     record OpenCampaigns(List<Campaign> items, Instant serverTime) {
     }

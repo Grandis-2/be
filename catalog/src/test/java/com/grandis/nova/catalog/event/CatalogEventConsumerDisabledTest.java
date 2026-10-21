@@ -26,11 +26,11 @@ class CatalogEventConsumerDisabledTest {
     @Autowired ApplicationContext context;
 
     @Test
-    @DisplayName("소비기 빈이 없고, 분배기와 판매 준비 처리기는 떠 있다")
+    @DisplayName("소비기 빈이 없고, 분배기와 처리기(판매 준비 · 회차 일정 변경)는 떠 있다")
     void noConsumerWhenDisabled() {
         assertThat(context.getBeansOfType(RetryingQueueConsumer.class)).isEmpty();
         assertThat(context.getBeansOfType(CatalogEventDispatcher.class)).hasSize(1);
         assertThat(context.getBeansOfType(CatalogEventHandler.class).values()).extracting(CatalogEventHandler::eventType)
-                .containsExactly(InStockProductReadyHandler.EVENT_TYPE);
+                .containsExactlyInAnyOrder(InStockProductReadyHandler.EVENT_TYPE, PreorderCampaignScheduleChangedHandler.EVENT_TYPE);
     }
 }

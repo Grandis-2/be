@@ -101,6 +101,57 @@ class ReadCacheRefreshTest {
     }
 
     @Test
+    @DisplayName("미리 갱신의 loader 도 채우기(FILL)를 받는다 — 넣을 값을 원천에 지금 값으로 묻게")
+    void refreshLoadsWithFillPath() {
+        List<ReadCache.LoadPath> paths = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.function.Function<ReadCache.LoadPath, String> loader = path -> { paths.add(path); return load("v"); };
+        cache.entry(spec, "g", "k", loader, value -> true);
+        clock.advance(Duration.ofSeconds(24));
+        cache.entry(spec, "g", "k", loader, value -> true);
+        tasks.runAll();
+        assertThat(paths).containsExactly(ReadCache.LoadPath.FILL, ReadCache.LoadPath.FILL);
+        assertThat(events.refreshes).containsExactly(RefreshResult.STORED);
+    }
+
+    @Test
+    @DisplayName("돌 차례에 세대를 못 읽으면 갱신하지 않는다 — 넣지도 못할 값을 원천에 묻지 않고, 그 키를 막아 두지 않아 복구 뒤 다음 히트가 다시 맡긴다")
+    void refreshSkipsWhenGenerationUnreadable() {
+        cache.entry(spec, "g", "k", () -> load("v1"));
+        clock.advance(Duration.ofSeconds(24));
+        cache.entry(spec, "g", "k", () -> load("v2"));
+        assertThat(tasks.pending()).isEqualTo(1);
+
+        redis.opsForValue().set("svc:cache:gen:g", "not-a-number");   // 맡긴 뒤 · 돌기 전에 세대를 못 읽게
+        tasks.runAll();
+        assertThat(loads.get()).as("원천을 다시 읽지 않았다").isEqualTo(1);
+        assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_UNAVAILABLE);
+
+        redis.delete("svc:cache:gen:g");   // 복구 — 세대 0, 값 키는 그대로
+        cache.entry(spec, "g", "k", () -> load("v3"));
+        assertThat(tasks.pending()).as("막아 두지 않았다 — 다음 히트가 다시 맡긴다").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("돌 차례에 값을 못 읽어도 갱신하지 않는다 — 세대를 못 읽을 때와 같고, 막아 두지 않아 복구 뒤 다음 히트가 다시 맡긴다")
+    void refreshSkipsWhenValueUnreadable() {
+        cache.entry(spec, "g", "k", () -> load("v1"));
+        clock.advance(Duration.ofSeconds(24));
+        cache.entry(spec, "g", "k", () -> load("v2"));
+        String key = onlyKey();
+        String stored = redis.opsForValue().get(key);
+        redis.delete(key);
+        redis.opsForList().rightPush(key, "x");   // GET 이 WRONGTYPE 으로 실패한다
+        tasks.runAll();
+        assertThat(loads.get()).as("원천을 다시 읽지 않았다").isEqualTo(1);
+        assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_UNAVAILABLE);
+
+        redis.delete(key);
+        redis.opsForValue().set(key, stored, Duration.ofSeconds(6));   // 복구 — 같은 값(읽은 시각 그대로)
+        cache.entry(spec, "g", "k", () -> load("v3"));
+        assertThat(tasks.pending()).as("막아 두지 않았다 — 다음 히트가 다시 맡긴다").isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("같은 키의 갱신은 이 인스턴스에서 하나만 맡긴다")
     void oneRefreshPerKey() {
         cache.entry(spec, "g", "k", () -> load("v1"));
@@ -320,8 +371,8 @@ class ReadCacheRefreshTest {
     }
 
     @Test
-    @DisplayName("지금 세대를 못 읽으면(차단기 열림) 갱신은 그대로 읽는다 — 넣지는 못한다")
-    void refreshProceedsWhenGenerationUnreadable() {
+    @DisplayName("지금 세대를 못 읽으면(차단기 열림) 갱신은 읽지 않는다 — 넣지도 못할 값을 원천에 묻지 않게. 원천 실패와 따로 센다")
+    void refreshSkipsWhenBreakerOpen() {
         cache.entry(spec, "g", "k", () -> load("v1"));
         clock.advance(Duration.ofSeconds(24));
         cache.entry(spec, "g", "k", () -> load("v2"));
@@ -331,8 +382,8 @@ class ReadCacheRefreshTest {
         } finally {
             cache.breaker().transitionToClosedState();
         }
-        assertThat(loads.get()).as("처음 읽기 + 갱신 읽기").isEqualTo(2);
-        assertThat(events.refreshes).containsExactly(RefreshResult.NOT_STORED);
+        assertThat(loads.get()).as("처음 읽기뿐").isEqualTo(1);
+        assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_UNAVAILABLE);
     }
 
     @Test

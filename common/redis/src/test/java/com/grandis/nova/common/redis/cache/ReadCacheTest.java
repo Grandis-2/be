@@ -232,6 +232,117 @@ class ReadCacheTest {
     }
 
     @Test
+    @DisplayName("bumpNow 는 트랜잭션 안에서도 바로 올리고, 못 올리면 던지면서 미뤄도 둔다 — 복구 뒤 이 인스턴스의 첫 조회가 올린다. 끈 캐시도 Redis 가 있으면 올린다")
+    void bumpNowThrowsAndDefers() {
+        new TransactionTemplate(new NoOpTransactionManager()).executeWithoutResult(status -> {
+            cache.bumpNow("products");
+            assertThat(redis.opsForValue().get("svc:cache:gen:products")).as("커밋을 기다리지 않는다").isEqualTo("1");
+        });
+
+        redis.opsForValue().set("svc:cache:gen:products", "not-a-number");
+        assertThatThrownBy(() -> cache.bumpNow("products")).isInstanceOf(IllegalStateException.class);
+        redis.delete("svc:cache:gen:products");
+        cache.get(items, "reviews", "x", () -> item("x", new AtomicInteger()));
+        assertThat(redis.opsForValue().get("svc:cache:gen:products")).as("미룬 것").isEqualTo("1");
+
+        cache.breaker().transitionToForcedOpenState();
+        assertThatThrownBy(() -> cache.bumpNow("products")).as("차단기가 열려도 던진다").isInstanceOf(IllegalStateException.class);
+        cache.breaker().transitionToClosedState();
+
+        ReadCache.off(JSON, "svc").bumpNow("off");
+        assertThat(redis.opsForValue().get("svc:cache:gen:off")).as("Redis 없는 끈 캐시는 아무것도 안 한다").isNull();
+        ReadCache.off(redis, JSON, "svc").bumpNow("off");
+        assertThat(redis.opsForValue().get("svc:cache:gen:off")).as("Redis 를 받은 끈 캐시는 올린다 — 같은 큐의 켠 인스턴스를 위해").isEqualTo("1");
+
+        ReadCache offWithRedis = ReadCache.off(redis, JSON, "offsvc");
+        ReadCache.Spec<Item> offItems = offWithRedis.spec("item", Item.class, Duration.ofSeconds(30));
+        AtomicInteger loads = new AtomicInteger();
+        offWithRedis.get(offItems, "products", "1", () -> item("v", loads));
+        offWithRedis.get(offItems, "products", "1", () -> item("v", loads));
+        offWithRedis.bumpAfterCommit("products");
+        assertThat(loads).as("조회는 늘 loader").hasValue(2);
+        assertThat(redis.keys("offsvc:cache:*")).as("조회 · 커밋 뒤 올리기는 Redis 를 부르지 않는다").isEmpty();
+    }
+
+    @Test
+    @DisplayName("빈 캐시 · 끈 캐시 — loader 는 채우기(FILL)를 받아 넣고, 끈 캐시는 우회(BYPASS)를 받는다")
+    void loadPathFillAndOff() {
+        List<ReadCache.LoadPath> paths = new java.util.ArrayList<>();
+        cache.get(items, "products", "1", path -> { paths.add(path); return item("v", new AtomicInteger()); });
+        assertThat(paths).containsExactly(ReadCache.LoadPath.FILL);
+        assertThat(redis.keys("svc:cache:item:*")).hasSize(1);
+
+        ReadCache.off(redis, JSON, "offsvc").get(items, "products", "1", path -> { paths.add(path); return item("v", new AtomicInteger()); });
+        assertThat(paths).containsExactly(ReadCache.LoadPath.FILL, ReadCache.LoadPath.BYPASS);
+    }
+
+    @Test
+    @DisplayName("세대를 못 읽으면 우회 — loader 는 BYPASS 를 받고 넣지 않는다. 그 loader 가 도는 사이 Redis 가 돌아와도 넣지 않는다")
+    void generationReadFailureBypassesEvenIfRedisRecovers() {
+        redis.opsForValue().set("svc:cache:gen:products", "not-a-number");   // GET 은 되지만 번호로 못 읽는다 — 세대 조회 실패
+        List<ReadCache.LoadPath> paths = new java.util.ArrayList<>();
+        cache.get(items, "products", "1", path -> {
+            paths.add(path);
+            redis.delete("svc:cache:gen:products");   // 우회 조회 도중 복구
+            return item("v", new AtomicInteger());
+        });
+        assertThat(paths).containsExactly(ReadCache.LoadPath.BYPASS);
+        assertThat(redis.keys("svc:cache:item:*")).as("우회 결과는 넣지 않는다").isEmpty();
+
+        cache.get(items, "products", "1", path -> { paths.add(path); return item("v", new AtomicInteger()); });
+        assertThat(paths).as("복구 뒤 다음 조회는 채우기").containsExactly(ReadCache.LoadPath.BYPASS, ReadCache.LoadPath.FILL);
+    }
+
+    @Test
+    @DisplayName("세대는 읽었는데 값을 못 읽으면 우회 — 없음으로 보지 않고 우회한다")
+    void valueReadFailureBypasses() {
+        cache.get(items, "products", "1", () -> item("v", new AtomicInteger()));
+        String key = onlyKey("svc:cache:item:*");
+        redis.delete(key);
+        redis.opsForList().rightPush(key, "x");   // 같은 키를 목록으로 — GET 이 WRONGTYPE 으로 실패한다
+
+        List<ReadCache.LoadPath> paths = new java.util.ArrayList<>();
+        cache.get(items, "products", "1", path -> { paths.add(path); return item("v", new AtomicInteger()); });
+        assertThat(paths).containsExactly(ReadCache.LoadPath.BYPASS);
+        assertThat(redis.type(key).code()).as("우회 결과로 덮지 않는다").isEqualTo("list");
+    }
+
+    @Test
+    @DisplayName("세대를 읽은 뒤 값을 읽기 직전에 차단기가 열려도 우회 — 없음으로 보지 않고 우회한다")
+    void breakerOpeningBeforeValueReadBypasses() {
+        StringRedisTemplate spied = org.mockito.Mockito.spy(redis);
+        org.springframework.data.redis.core.ValueOperations<String, String> ops = org.mockito.Mockito.spy(redis.opsForValue());
+        org.mockito.Mockito.doReturn(ops).when(spied).opsForValue();
+        ReadCache opening = new ReadCache(spied, JSON, "svc");
+        ReadCache.Spec<Item> openingItems = opening.spec("item", Item.class, Duration.ofSeconds(30));
+        org.mockito.Mockito.doAnswer(call -> {
+            Object value = call.callRealMethod();
+            if (((String) call.getArgument(0)).contains(":gen:")) {
+                opening.breaker().transitionToForcedOpenState();   // 세대는 읽었다 — 값 읽기는 차단기에 막힌다
+            }
+            return value;
+        }).when(ops).get(org.mockito.ArgumentMatchers.anyString());
+
+        List<ReadCache.LoadPath> paths = new java.util.ArrayList<>();
+        opening.get(openingItems, "products", "1", path -> { paths.add(path); return item("v", new AtomicInteger()); });
+        opening.breaker().transitionToClosedState();
+
+        assertThat(paths).as("가르는 단언 — 저장은 채우기여도 열린 차단기가 막아 비어 있다").containsExactly(ReadCache.LoadPath.BYPASS);
+    }
+
+    @Test
+    @DisplayName("차단기가 열려 있으면 우회 — loader 는 BYPASS 를 받고 넣지 않는다")
+    void openBreakerBypasses() {
+        cache.breaker().transitionToForcedOpenState();
+        List<ReadCache.LoadPath> paths = new java.util.ArrayList<>();
+        cache.get(items, "products", "1", path -> { paths.add(path); return item("v", new AtomicInteger()); });
+        cache.breaker().transitionToClosedState();
+
+        assertThat(paths).containsExactly(ReadCache.LoadPath.BYPASS);
+        assertThat(redis.keys("svc:cache:item:*")).isEmpty();
+    }
+
+    @Test
     @DisplayName("세대가 오르면 이 인스턴스가 옛 세대로 넣은 키를 지우고 저장 몫을 돌려준다 — 예산이 찬 캐시도 새 세대 값을 바로 넣는다")
     void bumpReleasesOldGenerationBudget() {
         ReadCache.Spec<Item> small = cache.spec("small", Item.class, Duration.ofSeconds(30), 500);   // 값 하나(약 360)만 들어간다

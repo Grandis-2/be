@@ -63,27 +63,41 @@ public class PreorderCampaigns {
     }
 
     /**
-     * 상품별 회차(2.2). 캐시하지 않는다 — 수정 · 삭제 · 등록 재전송 · 관리자 화면이 그대로 쓴다. 공개 조회는 {@link PublicCampaigns} 를 거친다.
-     * 한 번에 {@value #BATCH}개씩 차례로 부른다.
+     * 상품별 회차(2.2) — 지금 값. 캐시하지 않고 preorder 에도 캐시 없이(fresh) 묻는다 — 수정 · 삭제 · 등록 재전송 · 관리자 화면 · 일반 전환의 판정이
+     * 그대로 쓴다. 공개 조회는 {@link PublicCampaigns} 를 거친다. 한 번에 {@value #BATCH}개씩 차례로 부른다.
      *
      * @return 상품 id → 회차. 회차가 없는 상품(판매 준비 전)은 빠진다. 빈 목록이면 부르지 않는다
      * @throws BusinessException DEPENDENCY_UNAVAILABLE — 연결 실패 · 시간 초과 · 5xx. INTERNAL_ERROR — 연동 오류(그 밖의 4xx · 읽을 수 없는 응답 ·
      *                           items 없음 · 묻지 않은 상품 · 겹친 상품 · 빈 시각, {@link InternalCalls})
      */
     public Map<UUID, CampaignWindow> find(Collection<UUID> productIds) {
+        return find(productIds, true);
+    }
+
+    /**
+     * 상품별 회차(2.2). @param fresh false 면 preorder 가 자기 회차 캐시로 답해도 된다(옛 값일 수 있다 — {@link PreorderCampaignClient#getCampaigns}).
+     * 판정이 아니고 받은 값을 오래 두지 않는 호출만 false 로 부른다 — {@link PublicCampaigns} 가 캐시를 끈 조회와, 켰을 때 넣을 값인지 먼저 가리는 조회.
+     * 나머지는 {@link #find(Collection)} 와 같다
+     */
+    public Map<UUID, CampaignWindow> find(Collection<UUID> productIds, boolean fresh) {
         Map<UUID, CampaignWindow> found = new HashMap<>();
         List<UUID> ids = new ArrayList<>(new LinkedHashSet<>(productIds));
         for (int from = 0; from < ids.size(); from += BATCH) {
             List<UUID> batch = ids.subList(from, Math.min(ids.size(), from + BATCH));
-            PreorderCampaignClient.Campaigns campaigns = InternalCalls.call(Dependencies.PREORDER, () -> client.getCampaigns(batch));
+            PreorderCampaignClient.Campaigns campaigns = InternalCalls.call(Dependencies.PREORDER, () -> client.getCampaigns(batch, fresh));
             collect(campaigns.items(), batch, found);
         }
         return found;
     }
 
-    /** 한 상품의 회차(2.2). 없으면(판매 준비 전) 비어 있다. 실패는 {@link #find(Collection)} 와 같다. */
+    /** 한 상품의 회차(2.2) — 지금 값. 없으면(판매 준비 전) 비어 있다. 실패는 {@link #find(Collection)} 와 같다. */
     public Optional<CampaignWindow> find(UUID productId) {
-        return Optional.ofNullable(find(List.of(productId)).get(productId));
+        return find(productId, true);
+    }
+
+    /** 한 상품의 회차(2.2). fresh 는 {@link #find(Collection, boolean)} 와 같다. */
+    public Optional<CampaignWindow> find(UUID productId, boolean fresh) {
+        return Optional.ofNullable(find(List.of(productId), fresh).get(productId));
     }
 
     /**

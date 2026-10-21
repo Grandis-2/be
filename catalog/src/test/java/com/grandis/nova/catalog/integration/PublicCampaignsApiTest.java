@@ -5,6 +5,7 @@ import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.UuidBinary;
+import com.grandis.nova.common.web.ApiResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -24,14 +25,19 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doCallRealMethod;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -81,7 +87,7 @@ class PublicCampaignsApiTest {
         mockMvc.perform(post("/api/v1/products/{id}/views", productId).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"anonymousId\":\"%s\"}".formatted(UUID.randomUUID()))).andExpect(status().isNoContent());
         assertThat(detailStatus(productId)).isEqualTo("OPEN");
-        verify(client, times(1)).getCampaigns(any());
+        verify(client, times(1)).getCampaigns(any(), eq(true));
 
         closeNow(productId);   // preorder 가 조기 마감했다 — catalog 는 아직 모른다
         assertThat(detailStatus(productId)).as("세대를 올리기 전에는 캐시 값").isEqualTo("OPEN");
@@ -89,8 +95,35 @@ class PublicCampaignsApiTest {
                 .andExpect(status().isOk())).get("product").get("campaign").get("status").asString())
                 .as("관리자 상세는 캐시를 거치지 않는다").isEqualTo("CLOSED");
 
+        // 세대를 올린 직후 아직 자기 캐시를 비우지 않은 preorder 인스턴스 — fresh 없이 물으면 마감 전 값을 준다
+        Instant now = Instant.now();
+        doReturn(ApiResponse.ok(new PreorderCampaignClient.Campaigns(List.of(
+                new PreorderCampaignClient.Campaign(productId, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)))))))
+                .when(client).getCampaigns(any(), eq(false));
         redis.opsForValue().increment("catalog:cache:gen:" + PublicCampaigns.CAMPAIGNS);
-        assertThat(detailStatus(productId)).isEqualTo("CLOSED");
+        assertThat(detailStatus(productId)).as("넣는 값은 fresh 로 받는다").isEqualTo("CLOSED");
+        clearInvocations(client);
+        assertThat(detailStatus(productId)).as("넣은 값도 fresh 로 받은 값").isEqualTo("CLOSED");
+        verify(client, never()).getCampaigns(any(), anyBoolean());   // 캐시에서 나왔다
+    }
+
+    @Test
+    @DisplayName("Redis 를 못 쓰면(세대를 못 읽음) 회원 상세 · 홍보 카드는 preorder 에 fresh 없이 한 번만 묻고 넣지 않는다 — 장애 동안 preorder DB 로 보내지 않게")
+    void redisFailureAsksOnceWithoutFresh() throws Exception {
+        UUID productId = openPreorder("장애 우회");
+        UUID promotionId = promotion(productId);
+        String generation = "catalog:cache:gen:" + PublicCampaigns.CAMPAIGNS;
+        redis.opsForValue().set(generation, "not-a-number");   // 세대 조회 실패
+        try {
+            clearInvocations(client);
+            assertThat(detailStatus(productId)).isEqualTo("OPEN");
+            assertThat(cardStatuses(promotionId)).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(productId, "OPEN"));
+            verify(client, times(2)).getCampaigns(any(), eq(false));
+            verify(client, never()).getCampaigns(any(), eq(true));
+        } finally {
+            redis.delete(generation);
+        }
+        assertThat(redis.keys("catalog:cache:preorder-campaign*")).as("우회 결과는 넣지 않는다").isEmpty();
     }
 
     @Test
@@ -99,7 +132,9 @@ class PublicCampaignsApiTest {
         UUID productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", "준비 전", "t");
         fixtures.registration(productId);
         fixtures.option(productId, "ACTIVE");
+        clearInvocations(client);
         mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isNotFound());
+        verify(client, never()).getCampaigns(any(), eq(true));   // 넣지 않을 값은 preorder DB 로 묻지 않는다
 
         Instant now = Instant.now();
         fixtures.campaign(productId, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));   // preorder 가 등록 이벤트를 처리했다
@@ -114,7 +149,9 @@ class PublicCampaignsApiTest {
         fixtures.registration(pending);
         fixtures.option(pending, "ACTIVE");
         UUID promotionId = promotion(ready, pending);
+        clearInvocations(client);
         assertThat(cardStatuses(promotionId)).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(ready, "OPEN"));
+        verify(client, never()).getCampaigns(any(), eq(true));   // 넣지 않을 묶음은 preorder DB 로 묻지 않는다
 
         Instant now = Instant.now();
         fixtures.campaign(pending, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
@@ -129,20 +166,20 @@ class PublicCampaignsApiTest {
         clearInvocations(client);
         assertThat(publicCampaigns.find(java.util.List.of(first, second))).containsOnlyKeys(first, second);
         assertThat(publicCampaigns.find(java.util.List.of(second, first, first))).containsOnlyKeys(first, second);
-        verify(client, times(1)).getCampaigns(any());
+        verify(client, times(1)).getCampaigns(any(), eq(true));
     }
 
     @Test
     @DisplayName("preorder 가 답하지 않으면 넣지 않는다 — 그 요청은 503, 다음 요청은 다시 물어 200")
     void failureIsNotCached() throws Exception {
         UUID productId = openPreorder("장애 회차");
-        doThrow(new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE)).when(client).getCampaigns(any());
+        doThrow(new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE)).when(client).getCampaigns(any(), anyBoolean());
         mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isServiceUnavailable());
 
-        doCallRealMethod().when(client).getCampaigns(any());
+        doCallRealMethod().when(client).getCampaigns(any(), anyBoolean());
         clearInvocations(client);
         assertThat(detailStatus(productId)).isEqualTo("OPEN");
-        verify(client, times(1)).getCampaigns(any());
+        verify(client, times(1)).getCampaigns(any(), eq(true));
     }
 
     @Test
@@ -155,12 +192,20 @@ class PublicCampaignsApiTest {
 
         assertThat(cardStatuses(promotionId)).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(first, "OPEN", second, "OPEN"));
         assertThat(cardStatuses(promotionId)).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(first, "OPEN", second, "OPEN"));
-        verify(client, times(1)).getCampaigns(any());
+        verify(client, times(1)).getCampaigns(any(), eq(true));
 
         closeNow(second);
         assertThat(cardStatuses(promotionId)).as("세대를 올리기 전에는 캐시 값").containsExactlyInAnyOrderEntriesOf(java.util.Map.of(first, "OPEN", second, "OPEN"));
+        Instant now = Instant.now();   // 아직 자기 캐시를 비우지 않은 preorder 인스턴스 — fresh 없이 물으면 두 회차 모두 마감 전 값
+        doReturn(ApiResponse.ok(new PreorderCampaignClient.Campaigns(List.of(
+                new PreorderCampaignClient.Campaign(first, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1))),
+                new PreorderCampaignClient.Campaign(second, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)))))))
+                .when(client).getCampaigns(any(), eq(false));
         redis.opsForValue().increment("catalog:cache:gen:" + PublicCampaigns.CAMPAIGNS);
-        assertThat(cardStatuses(promotionId)).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(first, "OPEN", second, "CLOSED"));
+        assertThat(cardStatuses(promotionId)).as("넣는 묶음은 fresh 로 받는다").containsExactlyInAnyOrderEntriesOf(java.util.Map.of(first, "OPEN", second, "CLOSED"));
+        clearInvocations(client);
+        assertThat(cardStatuses(promotionId)).as("넣은 묶음도 fresh 로 받은 값").containsExactlyInAnyOrderEntriesOf(java.util.Map.of(first, "OPEN", second, "CLOSED"));
+        verify(client, never()).getCampaigns(any(), anyBoolean());   // 캐시에서 나왔다
     }
 
     /** 접수 중인 사전예약 상품 하나(공개 · 옵션 하나 · 1시간 전 오픈 · 1시간 뒤 마감). */

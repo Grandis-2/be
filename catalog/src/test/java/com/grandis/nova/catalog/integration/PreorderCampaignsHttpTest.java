@@ -151,7 +151,9 @@ class PreorderCampaignsHttpTest {
 
         mockMvc.perform(get("/api/v1/products/{id}", product).with(AccessTokens.customer(UUID.randomUUID()))).andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.campaign.status").value("OPEN"));
-        assertThat(SEEN_PATHS).contains("/internal/preorders/campaigns?productIds=" + product);
+        assertThat(SEEN_PATHS).as("공개 회차 캐시를 끈 공개 상세는 preorder 의 회차 캐시로 답해도 된다")
+                .contains("/internal/preorders/campaigns?productIds=" + product + "&fresh=false")
+                .noneMatch(path -> path.endsWith("&fresh=true"));
         assertThat(SEEN_AUTHORIZATION).allMatch("null"::equals);
 
         failStatus = 503;
@@ -176,6 +178,9 @@ class PreorderCampaignsHttpTest {
         assertThat(cards).hasSize(1);
         assertThat(cards.get(0).get("productId").asString()).isEqualTo(withCampaign.toString());
         assertThat(cards.get(0).get("preorderStatus").asString()).isEqualTo("OPEN");
+        assertThat(SEEN_PATHS).as("공개 회차 캐시를 끈 홍보 카드는 preorder 의 회차 캐시로 답해도 된다")
+                .anyMatch(path -> path.contains(withCampaign.toString()) && path.endsWith("&fresh=false"))
+                .noneMatch(path -> path.endsWith("&fresh=true"));
 
         failStatus = 503;
         JsonNode degraded = promotionCards(promotion);
@@ -197,6 +202,8 @@ class PreorderCampaignsHttpTest {
                 .andExpect(jsonPath("$.data.registration.completed").value(true))
                 .andExpect(jsonPath("$.data.product.campaign.status").value("BEFORE_OPEN"));
         mockMvc.perform(get("/api/v1/admin/products").param("q", "관리자").with(AccessTokens.admin())).andExpect(status().isOk());
+        assertThat(SEEN_PATHS).as("관리자 화면은 지금 값").contains("/internal/preorders/campaigns?productIds=" + product + "&fresh=true")
+                .noneMatch(path -> path.endsWith("&fresh=false"));
 
         failStatus = 503;
         mockMvc.perform(get("/api/v1/admin/products/{id}", product).with(AccessTokens.admin())).andExpect(status().isServiceUnavailable());
@@ -226,7 +233,7 @@ class PreorderCampaignsHttpTest {
         mockMvc.perform(patch("/api/v1/admin/products/{id}/sale-status", product).with(AccessTokens.admin())
                 .contentType(MediaType.APPLICATION_JSON).content("{ \"status\": \"PAUSED\" }")).andExpect(status().isServiceUnavailable());
         mockMvc.perform(delete("/api/v1/admin/products/{id}", product).with(AccessTokens.admin())).andExpect(status().isServiceUnavailable());
-        assertThat(SEEN_PATHS).as("두 요청 모두 preorder 에 회차를 한 번씩 물었다 — 503 을 다시 보내지 않는다(JDK HTTP 구현 고정, Apache 기본 재시도면 4번)").filteredOn(("/internal/preorders/campaigns?productIds=" + product)::equals).hasSize(2);
+        assertThat(SEEN_PATHS).as("두 요청 모두 preorder 에 회차를 한 번씩 물었다 — 503 을 다시 보내지 않는다(JDK HTTP 구현 고정, Apache 기본 재시도면 4번)").filteredOn(("/internal/preorders/campaigns?productIds=" + product + "&fresh=true")::equals).hasSize(2);
 
         assertThat(jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = UUID_TO_BIN(?)", String.class, product.toString())).isEqualTo("ACTIVE");
         assertThat(jdbcTemplate.queryForObject("SELECT deleted_at IS NULL FROM products WHERE id = UUID_TO_BIN(?)", Boolean.class, product.toString())).isTrue();

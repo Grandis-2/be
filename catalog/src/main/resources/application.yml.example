@@ -91,8 +91,8 @@ nova:
     trusted-proxy-hops: 2
     anonymous-ids-per-ip: 20
   # 공개 조회(회원 상세 · 홍보 카드 · 후기 · 조회 신호)의 사전예약 회차 캐시. 없으면 끔 — 요청마다 preorder 에 묻는다.
-  # catalog 는 아직 preorder 의 회차 변경 이벤트를 받지 않아, 켜면 조기 마감 · 다시 열기 · 일정 변경이 이만큼 늦게 보인다.
-  # 아래 3h 는 그 이벤트 처리기를 붙인 뒤의 값이다 — 처리기 전에는 켜지 않는다
+  # 회차 변경은 preorder 의 일정 변경 이벤트(catalog-events)를 받아 비운다 — preorder 의 보내기(nova.campaign.schedule-notice.enabled)를 켠 뒤에 켠다.
+  # 안 켠 채 켜면 조기 마감 · 다시 열기 · 일정 변경이 이만큼 늦게 보인다. 이벤트를 놓쳤을 때도 이만큼이 상한이다
   # read-cache:
   #   preorder-campaign-ttl: 3h
   # 아웃박스 발행(common:outbox). transport 는 필수(없으면 기동 실패)이고 운영 값은 sqs 다.

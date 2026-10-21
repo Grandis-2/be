@@ -30,6 +30,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -39,17 +40,23 @@ import java.util.function.Supplier;
  *
  * <ul>
  *   <li><b>장애</b>: Redis 읽기 · 쓰기가 실패하면 캐시 없이 loader(DB)로 답한다. 실패가 이어지면 차단기가 열려 {@link #OPEN_FOR} 동안
- *       Redis 를 부르지 않는다 — 요청마다 Redis 제한 시간만큼 기다리지 않게. 그 뒤 몇 번 불러 보고 되면 다시 쓴다.</li>
+ *       Redis 를 부르지 않는다 — 요청마다 Redis 제한 시간만큼 기다리지 않게. 그 뒤 몇 번 불러 보고 되면 다시 쓴다. 세대나 값을 못 읽으면 loader 는
+ *       우회({@link LoadPath#BYPASS})를 받고 그 결과는 넣지 않는다. 값 키가 다른 타입으로 오염되면(키는 접두사 · 지문 · 세대라 이 클래스만 쓴다)
+ *       세대가 오르거나 그 키가 만료될 때까지(밖에서 쓴 키는 TTL 이 없어 세대가 오를 때까지) 우회하고, 그때마다 차단기에 실패로 센다 — 차단기는
+ *       인스턴스에 하나라 모든 캐시가 같이 쓰므로, 인기 키가 오염되면 차단기가 열려 그 인스턴스의 캐시 전체가 {@link #OPEN_FOR} 마다 우회할 수 있다.</li>
  *   <li><b>몰림</b>: 같은 키(세대 번호 포함)를 동시에 찾는 요청은 이 인스턴스 안에서 loader 를 한 번만 부르고 나머지는 그 결과를 받는다 —
  *       인기 키가 비는 순간(만료 · Redis 복구 직후) DB 로 한꺼번에 가지 않게. loader 의 예외(404 등)도 같이 받는다. 같이 받는 쪽은
- *       {@link #WAIT_FOR_LOAD} 까지만 기다린다(넘으면 503).</li>
+ *       {@link #WAIT_FOR_LOAD} 까지만 기다린다(넘으면 503). 우회는 우회끼리만 같이 받는다(세대를 읽었으면 그 번호까지 같은 것끼리) — 같은 키를
+ *       채우기와 우회가 동시에 찾으면 loader 를 각각 한 번 부른다.</li>
  *   <li><b>미리 갱신</b>: 읽은 지 TTL 의 {@link #REFRESH_AFTER_PERCENT}% 가 지난 값을 꺼낸 요청은 그 값을 바로 받고, 같은 키(세대 번호 포함)의
  *       다시 읽기를 갱신 실행기에 이 인스턴스에서 하나만 맡긴다 — 만료 순간 모든 요청이 한 건의 읽기를 기다리지 않게(부하 시험에서 목록 · 리뷰의 캐시
  *       대상 요청이 그 대기로 목록 0.3~1.4초 · 리뷰 0.2~2.2초 걸렸다). 요청이 없는 키는 갱신하지 않는다. 갱신은 몰림의 "한 번만 읽기" 자리를 같이 써서, 갱신이 끝나기 전에
  *       값이 만료되면 그 뒤 요청은 기다리는 쪽이 된다(상한 그대로). 갱신이 실패해도 들고 있던 값의 만료는 늘지 않는다. 실행기가 차면 맡기지 않고, 그 값이 만료될 때까지
  *       그 키는 다시 맡기지 않는다.
  *       갱신한 값은 읽기 시작할 때의 세대 키에 들어가, 그사이 세대가 올랐으면 새 세대 조회에는 안 보인다. 돌 차례가 왔을 때 Redis 의
- *       지금 세대가 맡길 때와 다르면(올랐거나 세대 키가 지워져 0 으로 돌아갔으면) 읽지 않는다. 지금 세대를 못 읽으면(차단기 · 장애) 그대로 읽는다. 인스턴스마다 따로라 같은 키를 인스턴스 수만큼
+ *       지금 세대가 맡길 때와 다르면(올랐거나 세대 키가 지워져 0 으로 돌아갔으면) 읽지 않는다. 돌 차례에 지금 세대나 값을 Redis 에서 못 읽으면(차단기 · 장애) 읽지 않는다 — 넣지 못할 값을 원천에 묻지 않게. 그 키는 막아 두지 않아 다음 히트가 다시
+ *       맡긴다(한 번의 시간 초과로 만료까지 미리 갱신이 멈추지 않게 — 간헐 실패에서는 히트마다 키당 하나씩 다시 맡긴다). 원천을 읽은 뒤 못 넣으면
+ *       (아래) 막는다 — 원천을 읽기 전에 Redis 를 못 쓰면 안 막고, 읽은 뒤 못 넣으면 막는다. 인스턴스마다 따로라 같은 키를 인스턴스 수만큼
  *       갱신할 수 있다(만료 때 인스턴스마다 한 번 읽던 것과 같다). 같은 세대 키에는 마지막에 넣은 쪽이 남는다(직접 읽기와 같다) — 세대가 덮지
  *       않는 데이터를 읽는 loader(배너가 읽는 상품 노출 · 홍보 기간)는 늦게 넣은 인스턴스의 값으로 되돌아갈 수 있고, 그 값의 나이도 읽은
  *       시각 + TTL 안이다. 큐에서 늦게 돈 갱신은 그사이 더 새 값이 들어왔으면 읽지 않는다. 갱신 결과를
@@ -162,7 +169,19 @@ public final class ReadCache {
      * 끈 캐시 — 늘 loader 로 답하고 Redis 를 부르지 않는다. 시험이 DB 를 JDBC 로 직접 고치는 경우처럼 세대를 올리지 않는 쓰기를 쓰는 곳에서 쓴다.
      */
     public static ReadCache off(JsonMapper json, String service) {
-        return new ReadCache(null, json, service, CircuitBreakerConfig.ofDefaults(), false, Clock.systemUTC(), WAIT_FOR_LOAD);
+        return off(null, json, service);
+    }
+
+    /**
+     * 끈 캐시 — 조회는 {@link #off(JsonMapper, String)} 와 같고, {@link #bumpNow} 만 이 Redis 로 세대를 올린다. 운영에서 캐시를 끈 인스턴스용이다 —
+     * 같은 큐를 받는 다른 인스턴스는 켜져 있을 수 있어, 끈 쪽이 받은 변경을 버리면 켠 쪽의 캐시가 비워지지 않는다.
+     * {@link #bumpAfterCommit}(이 서비스 자신의 쓰기)은 끈 캐시에서 여전히 아무것도 하지 않는다 — 켠 인스턴스와 섞여 도는 동안 · 다시 켠 직후에는
+     * 끈 인스턴스가 받은 쓰기의 옛 값이 그 캐시의 TTL 동안 보일 수 있다.
+     *
+     * @param redis null 이면 {@link #off(JsonMapper, String)} 와 같다
+     */
+    public static ReadCache off(StringRedisTemplate redis, JsonMapper json, String service) {
+        return new ReadCache(redis, json, service, CircuitBreakerConfig.ofDefaults(), false, Clock.systemUTC(), WAIT_FOR_LOAD);
     }
 
     /** 캐시 하나의 이름 · 값 타입 · TTL. 이름과 타입 지문이 키에 들어간다. 메모리 예산은 {@link #DEFAULT_BUDGET_BYTES}. */
@@ -204,6 +223,11 @@ public final class ReadCache {
         return entry(spec, generation, id, loader).value();
     }
 
+    /** 조회 경로를 받는 loader 로 — {@link #entry(Spec, String, String, Function, Predicate)} 의 값만. null 이 아닌 값은 넣는다. */
+    public <T> T get(Spec<T> spec, String generation, String id, Function<LoadPath, T> loader) {
+        return entry(spec, generation, id, loader, value -> true).value();
+    }
+
     /** null 이 아닌 값은 넣는다. */
     public <T> Entry<T> entry(Spec<T> spec, String generation, String id, Supplier<T> loader) {
         return entry(spec, generation, id, loader, value -> true);
@@ -211,27 +235,45 @@ public final class ReadCache {
 
     /**
      * 세대 {@code generation} 의 키 {@code id} 값과 그 값을 DB 에서 읽은 시각. 없으면 loader 로 만들어 넣는다. loader 가 null 을 주면 넣지 않는다.
-     * 세대 번호를 못 읽으면(Redis 장애) 캐시를 건너뛰고 loader 로 답한다 — 아무 번호나 쓰면 옛 값을 줄 수 있다.
+     * 세대 번호를 못 읽으면(Redis 장애) 캐시를 건너뛰고 loader 로 답한다 — 아무 번호나 쓰면 옛 값을 줄 수 있다. 세대는 읽었는데 값을 못 읽어도
+     * (실패 · 차단기 열림) 같다 — 없음으로 보지 않고 우회한다.
      * 읽은 시각은 응답의 HTTP 캐시 시간({@link Entry#remaining})을 정하는 데 쓴다 — 앞단 캐시가 이 값을 TTL 넘게 들고 있지 않게.
      */
     public <T> Entry<T> entry(Spec<T> spec, String generation, String id, Supplier<T> loader, Predicate<T> storable) {
+        return entry(spec, generation, id, path -> loader.get(), storable);
+    }
+
+    /**
+     * {@link #entry(Spec, String, String, Supplier, Predicate)} 와 같고, loader 가 이번 조회의 경로({@link LoadPath})를 받는다 — 넣을 수도 있는
+     * 채우기(FILL)와 넣지 않는 우회(BYPASS)에 원천을 다르게 물을 때 쓴다. 세대나 값을 Redis 에서 못 읽으면(실패 · 차단기 열림) 우회다.
+     */
+    public <T> Entry<T> entry(Spec<T> spec, String generation, String id, Function<LoadPath, T> loader, Predicate<T> storable) {
         if (!enabled) {
-            return uncached(loader);
+            Instant start = clock.instant();
+            return new Entry<>(loader.apply(LoadPath.BYPASS), start);
         }
         Long current = call(() -> currentGeneration(generation));
         if (current == null) {
-            // 세대를 모르면 장애 중인 요청끼리만 같이 받는다 — 정상 세대의 진행 중 조회와 섞이지 않게
-            return load("down|" + spec.name() + ":" + generation + ":" + id, null, spec, loader, storable, generation, -1);
+            return bypass(spec, generation, null, id, loader, storable);
         }
         if (!pendingBumps.isEmpty() && retryPendingBumps(generation)) {
             current = call(() -> currentGeneration(generation));   // 방금 올린 세대 — 새 번호로 읽는다
             if (current == null) {
-                return load("down|" + spec.name() + ":" + generation + ":" + id, null, spec, loader, storable, generation, -1);
+                return bypass(spec, generation, null, id, loader, storable);
             }
         }
         releaseOlderGenerations(spec, generation, current);
         String key = prefix + spec.name() + ":" + FORMAT + "." + spec.fingerprint() + ":" + generation + "." + current + ":" + id;
-        String cached = call(() -> redis.opsForValue().get(key));
+        String cached;
+        try {
+            cached = breaker.executeSupplier(() -> redis.opsForValue().get(key));
+        } catch (CallNotPermittedException e) {
+            return bypass(spec, generation, current, id, loader, storable);
+        } catch (RuntimeException e) {
+            // 값을 못 읽은 것은 "없음" 이 아니다 — 채우기로 가면 넣지도 못할 값을 원천에 지금 값으로 묻는다
+            log.warn("읽기 캐시 Redis 호출 실패 — 캐시 없이 간다: {}", e.toString());
+            return bypass(spec, generation, current, id, loader, storable);
+        }
         if (cached != null) {
             try {
                 Stored<T> stored = json.readValue(cached, json.getTypeFactory().constructParametricType(Stored.class, spec.type()));
@@ -247,6 +289,28 @@ public final class ReadCache {
         }
         // 완성된 키(세대 번호 포함)로 줄 세운다 — 세대가 오른 뒤 온 요청이 옛 세대의 진행 중 조회를 같이 받지 않게
         return load(key, key, spec, loader, storable, generation, current);
+    }
+
+    /**
+     * Redis 를 못 쓸 때 — 넣지 않고 loader 로 답한다(우회). 우회끼리만 같이 받는다 — 정상 세대의 진행 중 조회와 섞이지 않게. 세대를 읽었으면 그
+     * 번호까지 자리에 넣는다 — 옛 세대에서 시작한 우회를 새 세대를 읽은 요청이 같이 받지 않게.
+     *
+     * @param current 읽은 세대 번호, 못 읽었으면 null
+     */
+    private <T> Entry<T> bypass(Spec<T> spec, String generation, Long current, String id, Function<LoadPath, T> loader, Predicate<T> storable) {
+        String slot = "down|" + spec.name() + ":" + generation + (current == null ? "" : "." + current) + ":" + id;
+        return load(slot, null, spec, loader, storable, generation, -1);
+    }
+
+    /**
+     * loader 가 받는 조회 경로. 넣을지는 loader 가 끝난 뒤 정해지고(저장 조건 · 예산 · Redis 실패로 못 넣을 수 있다) 이것은 그 약속이 아니다 —
+     * 어느 길로 원천에 묻는지만 말한다.
+     */
+    public enum LoadPath {
+        /** 캐시가 비었거나 미리 갱신 — 결과가 저장 조건을 지나면 넣으려 한다. */
+        FILL,
+        /** 캐시를 쓸 수 없다(끔 · Redis 실패 · 차단기 열림) — 결과는 이 요청에만 쓰고 넣지 않는다. 그 사이 Redis 가 돌아와도 넣지 않는다. */
+        BYPASS
     }
 
     /**
@@ -273,6 +337,22 @@ public final class ReadCache {
         TransactionSynchronizationManager.registerSynchronization(created);
     }
 
+    /**
+     * 세대 번호를 지금 올리고, 못 올렸으면 던진다 — 다른 서비스의 변경을 메시지로 받아 올리는 처리기용이다(던지면 메시지를 지우지 않아 다시 받아
+     * 다시 올린다). 트랜잭션과 상관없이 바로 한다. 못 올린 것은 {@link #bumpAfterCommit} 처럼 미뤄도 둔다 — 다시 받기 전에 이 인스턴스의 조회가
+     * 먼저 올릴 수 있고, 그러면 두 번 오른다(값을 한 번 더 채울 뿐이다 — 끈 캐시는 조회가 Redis 를 읽지 않으므로 다시 받은 메시지로만 올린다).
+     * 끈 캐시도 Redis 를 받았으면({@link #off(StringRedisTemplate, JsonMapper, String)})
+     * 올린다 — 받은 메시지는 한 인스턴스만 처리하므로, 끈 인스턴스가 버리면 켠 인스턴스의 캐시가 비워지지 않는다. Redis 가 없는 끈 캐시면 아무것도 하지 않는다.
+     *
+     * @throws IllegalStateException 올리지 못했다(차단기가 열렸거나 Redis 실패). 끈 캐시의 차단기는 결과를 세지 않아 열리지 않는다 — Redis 장애 중에는
+     *                               부를 때마다 Redis 제한 시간을 기다린 뒤 던진다
+     */
+    public void bumpNow(String generation) {
+        if (redis != null && !bump(generation)) {
+            throw new IllegalStateException("읽기 캐시 세대를 올리지 못했다 generation=" + generation);
+        }
+    }
+
     /** 한 트랜잭션의 커밋 뒤에 그 트랜잭션에서 부른 세대를 한 번씩 올린다. */
     private static final class BumpOnCommit implements TransactionSynchronization {
 
@@ -295,20 +375,24 @@ public final class ReadCache {
      * 부르지 않고 바로 미룬다 — 커밋 뒤 콜백은 DB 커넥션을 쥔 채 돌므로(spring-tx 는 afterCommit 뒤에 커넥션을 돌려준다) 멈춘 Redis 를 기다리지 않게.
      * 시간 초과는 결과를 모르는 실패다 — 서버가 늦게 실행해 한 번 더 오를 수 있다(실측: 멈춘 Redis 를 풀자 시간 초과된 INCR 이 들어갔다).
      * 더 오르는 것은 값을 한 번 더 채울 뿐이라 그대로 둔다.
+     *
+     * @return 이번에 올렸으면 true, 미뤘으면 false
      */
-    private void bump(String generation) {
+    private boolean bump(String generation) {
         if (!breaker.tryAcquirePermission()) {
             pendingBumps.add(generation);
             log.error("읽기 캐시 차단기가 열려 세대 올리기를 미룬다 — 그때까지 옛 값이 보일 수 있다 generation={}", generation);
-            return;
+            return false;
         }
         breaker.releasePermission();   // 허락만 물었다 — 결과는 차단기에 세지 않는다
         try {
             redis.opsForValue().increment(prefix + "gen:" + generation);
             pendingBumps.remove(generation);
+            return true;
         } catch (RuntimeException e) {
             pendingBumps.add(generation);
             log.error("읽기 캐시 세대를 올리지 못해 나중에 다시 올린다 — 그때까지 옛 값이 보일 수 있다 generation={}", generation, e);
+            return false;
         }
     }
 
@@ -379,7 +463,7 @@ public final class ReadCache {
      * 넘었다고 각자 DB 로 가게 풀지 않는다(DB 가 느린 때 부하가 그만큼 는다). 진행 중인 조회는 그대로 두고 끝나면 자리가 빈다.
      */
     @SuppressWarnings("unchecked")
-    private <T> Entry<T> load(String slot, String key, Spec<T> spec, Supplier<T> loader, Predicate<T> storable, String generation,
+    private <T> Entry<T> load(String slot, String key, Spec<T> spec, Function<LoadPath, T> loader, Predicate<T> storable, String generation,
                               long generationNumber) {
         CompletableFuture<Object> mine = new CompletableFuture<>();
         CompletableFuture<Object> running = loading.putIfAbsent(slot, mine);
@@ -403,7 +487,7 @@ public final class ReadCache {
         events.served(spec.name(), Outcome.LOAD);
         try {
             Instant loadedAt = clock.instant();   // 읽기 전 시각 — 응답의 나이를 짧게 잡지 않게
-            Entry<T> entry = new Entry<>(loader.get(), loadedAt);
+            Entry<T> entry = new Entry<>(loader.apply(key == null ? LoadPath.BYPASS : LoadPath.FILL), loadedAt);
             mine.complete(entry);
             if (key != null && entry.value() != null && storable.test(entry.value())) {
                 store(key, spec, entry, generation, generationNumber);
@@ -423,7 +507,7 @@ public final class ReadCache {
      * @param seenLoadedAt 이 요청이 꺼낸 값의 읽은 시각 — 갱신이 돌 때 이보다 새 값이 들어와 있으면 읽지 않는다
      * @return 맡겼으면 true
      */
-    private <T> boolean refreshAhead(String key, Spec<T> spec, Instant seenLoadedAt, Supplier<T> loader, Predicate<T> storable, String generation,
+    private <T> boolean refreshAhead(String key, Spec<T> spec, Instant seenLoadedAt, Function<LoadPath, T> loader, Predicate<T> storable, String generation,
                                      long generationNumber) {
         Instant blockedUntil = notStoredUntil.get(key);
         if (blockedUntil != null) {
@@ -466,16 +550,33 @@ public final class ReadCache {
      * 실행기에서 도는 다시 읽기 — "한 번만 읽기" 자리({@link #load} 의 slot = 완성된 키)를 같이 써서, 그사이 만료돼 들어온 요청은 이 결과를 기다린다.
      * 실패하면 기다린 쪽도 같은 예외를 받고(직접 읽기와 같다) Redis 의 값은 그대로 만료된다.
      */
-    private <T> void refresh(String key, Spec<T> spec, Instant seenLoadedAt, Supplier<T> loader, Predicate<T> storable, String generation,
+    private <T> void refresh(String key, Spec<T> spec, Instant seenLoadedAt, Function<LoadPath, T> loader, Predicate<T> storable, String generation,
                              long generationNumber) {
         // 지금 세대를 Redis 에서 다시 읽는다 — 이 인스턴스가 본 가장 큰 번호와 비교하면, 세대 키가 지워져(재시작 · 교체) 0 으로 돌아간 뒤
-        // 세대가 옛 최대값을 넘을 때까지 갱신이 모두 건너뛰어진다. 못 읽으면 그대로 한다(newerStored 와 같다)
+        // 세대가 옛 최대값을 넘을 때까지 갱신이 모두 건너뛰어진다. 못 읽으면 읽지 않는다 — Redis 를 못 쓰는 동안 넣지도 못할 값을 원천에 묻지 않게.
+        // 그 키는 막아 두지 않는다 — 한 번의 시간 초과로 값이 만료될 때까지 미리 갱신이 멈추지 않게. 차단기가 열린 장애 동안은 조회가 우회라 히트가
+        // 없지만, 간헐 실패(차단기가 닫힌 채)에서는 히트마다 다시 맡긴다 — 키당 하나씩이고, 늘어나는 실행기 점유는 실패 횟수 × Redis 제한 시간이다
         Long current = call(() -> currentGeneration(generation));
-        if (current != null && current != generationNumber) {
+        if (current == null) {
+            events.refreshed(spec.name(), RefreshResult.SKIPPED_UNAVAILABLE);
+            return;
+        }
+        if (current != generationNumber) {
             events.refreshed(spec.name(), RefreshResult.SKIPPED_NEWER);   // 큐에서 기다리는 사이 세대가 바뀌었다 — 그 세대 키는 아무도 읽지 않는다
             return;
         }
-        if (newerStored(key, seenLoadedAt)) {
+        String held;
+        try {
+            held = breaker.executeSupplier(() -> redis.opsForValue().get(key));
+        } catch (CallNotPermittedException e) {
+            events.refreshed(spec.name(), RefreshResult.SKIPPED_UNAVAILABLE);   // 차단기가 열렸다 — call() 처럼 조용히
+            return;
+        } catch (RuntimeException e) {
+            log.warn("읽기 캐시 Redis 호출 실패 — 미리 갱신을 건너뛴다: {}", e.toString());
+            events.refreshed(spec.name(), RefreshResult.SKIPPED_UNAVAILABLE);   // 세대를 못 읽을 때와 같다
+            return;
+        }
+        if (newerThan(held, seenLoadedAt)) {
             events.refreshed(spec.name(), RefreshResult.SKIPPED_NEWER);   // 큐에서 기다리는 사이 만료돼 요청이 더 새 값을 넣었다
             return;
         }
@@ -486,7 +587,7 @@ public final class ReadCache {
         }
         try {
             Instant loadedAt = clock.instant();
-            Entry<T> entry = new Entry<>(loader.get(), loadedAt);
+            Entry<T> entry = new Entry<>(loader.apply(LoadPath.FILL), loadedAt);
             mine.complete(entry);
             boolean stored = entry.value() != null && storable.test(entry.value()) && store(key, spec, entry, generation, generationNumber);
             if (stored) {
@@ -513,9 +614,8 @@ public final class ReadCache {
         }
     }
 
-    /** Redis 에 지금 있는 값이 seen 보다 나중에 읽은 값인가. 못 읽으면(장애 · 없음 · 모양이 다름) 아니라고 본다 — 갱신을 그대로 한다. */
-    private boolean newerStored(String key, Instant seen) {
-        String cached = call(() -> redis.opsForValue().get(key));
+    /** Redis 에 있던 값(cached)이 seen 보다 나중에 읽은 값인가. 없거나 모양이 다르면 아니라고 본다 — 갱신을 그대로 한다. */
+    private boolean newerThan(String cached, Instant seen) {
         if (cached == null) {
             return false;
         }

@@ -295,7 +295,7 @@ class PreorderCampaignsTest {
         }
 
         @Override
-        public ApiResponse<Campaigns> getCampaigns(Collection<UUID> productIds) {
+        public ApiResponse<Campaigns> getCampaigns(Collection<UUID> productIds, boolean fresh) {
             List<UUID> ids = List.copyOf(productIds);
             asked.add(ids);
             return ApiResponse.ok(new Campaigns(campaigns.apply(ids)));
