@@ -14,6 +14,8 @@ import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.web.ValidationFailures;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
@@ -39,6 +41,7 @@ public class PreorderAcceptService {
     static final String UQ_ACTIVE = "uq_preorder_active";
     static final String UQ_ADMISSION = "uq_preorder_admission";
     static final String UQ_IDEMPOTENCY = "uq_preorder_idempotency";
+    static final String FK_BATCH = "fk_preorder_batch";
 
     /** 접수 시간 · 결과(accepted · replayed · 오류 코드)별 건수. */
     static final String ACCEPT_METRIC = "preorder.accept";
@@ -46,6 +49,8 @@ public class PreorderAcceptService {
     static final String CREATED_METRIC = "nova.preorder.created";
     static final String USER_CHANNEL = "user";
     static final String ADMIN_CHANNEL = "admin";
+
+    private static final Logger log = LoggerFactory.getLogger(PreorderAcceptService.class);
 
     private final AdmissionTicketVerifier ticketVerifier;
     private final CatalogReader catalogReader;
@@ -151,7 +156,17 @@ public class PreorderAcceptService {
             // 캐시 미스 · 잠금 전 판정의 DB 읽기도 격벽 몫이다 — 허가 하나로 판정부터 접수까지 한다
             return bulkhead.call(command.productId(), () -> settleThenAccept(command, product));
         } catch (DataIntegrityViolationException e) {
-            return resolveConflict(command, e);
+            if (ConstraintNames.of(e).filter(FK_BATCH::equals).isEmpty()) {
+                return resolveConflict(command, e);
+            }
+            // 캐시에서 고른 차수가 그사이 교체됐다(오픈을 넘겨 커밋된 교체 · 비우기 놓침). 비우고 한 번만 다시 — 다시는 DB 에서 고른다
+            log.warn("캐시의 배송 차수가 교체돼 비우고 다시 접수한다 productId={}", command.productId());
+            campaigns.evictCached(command.productId());
+            try {
+                return bulkhead.call(command.productId(), () -> transaction.accept(command, product));
+            } catch (DataIntegrityViolationException retried) {
+                return resolveConflict(command, retried);
+            }
         }
     }
 

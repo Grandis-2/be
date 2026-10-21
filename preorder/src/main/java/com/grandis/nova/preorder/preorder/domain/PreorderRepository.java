@@ -127,9 +127,9 @@ public interface PreorderRepository extends JpaRepository<Preorder, UUID>, JpaSp
      * 그 회원의 행만 읽는다 — 회원 · 모델당 몇 건이다.
      */
     @Query("""
-            select p from Preorder p
+            select p, case when p.idempotencyKey = :idempotencyKey then true else false end from Preorder p
              where p.customerId = :customerId and (p.idempotencyKey = :idempotencyKey or p.productId = :productId)""")
-    List<Preorder> findAcceptHistory(@Param("customerId") UUID customerId, @Param("productId") UUID productId,
+    List<Object[]> findAcceptHistory(@Param("customerId") UUID customerId, @Param("productId") UUID productId,
                                      @Param("idempotencyKey") String idempotencyKey);
 
     /** 같은 모델의 진행 중 예약(취소 완료 제외). 활성 예약 UNIQUE 충돌 때 기존 예약을 알려 주려고 쓴다. */

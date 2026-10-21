@@ -101,7 +101,7 @@ public class CampaignCache {
     }
 
     /** 이 인스턴스에서만 비운다. 모든 인스턴스는 {@link CampaignCacheInvalidation}. 횟수를 먼저 올린다 — {@link #putUnlessEvicted}. */
-    void evict(UUID productId) {
+    public void evict(UUID productId) {
         evictions.incrementAndGet();
         found.invalidate(productId);
         missing.invalidate(productId);

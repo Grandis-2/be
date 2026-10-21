@@ -85,15 +85,18 @@ public class Preorders {
         return preorders.findByCustomerIdAndIdempotencyKey(customerId, idempotencyKey).map(Preorder::toSnapshot);
     }
 
-    /** 같은 접수 키의 예약과 그 모델의 마지막 접수 시각 — 접수 잠금 안에서 두 번 읽지 않게 한 문장으로. */
+    /**
+     * 같은 접수 키의 예약과 그 모델의 마지막 접수 시각 — 접수 잠금 안에서 두 번 읽지 않게 한 문장으로.
+     * 같은 키인지는 DB 가 비교한 결과로 가른다 — 칸의 콜레이션(끝 공백 무시)과 String.equals 가 다르다.
+     */
     public AcceptHistory findAcceptHistory(UUID customerId, UUID productId, String idempotencyKey) {
-        List<PreorderSnapshot> rows = preorders.findAcceptHistory(customerId, productId, idempotencyKey).stream()
-                .map(Preorder::toSnapshot)
-                .toList();
+        List<Object[]> rows = preorders.findAcceptHistory(customerId, productId, idempotencyKey);
         Optional<PreorderSnapshot> sameKey = rows.stream()
-                .filter(row -> row.idempotencyKey().equals(idempotencyKey))
+                .filter(row -> (Boolean) row[1])
+                .map(row -> ((Preorder) row[0]).toSnapshot())
                 .findFirst();
         Optional<Instant> lastAcceptedAt = rows.stream()
+                .map(row -> ((Preorder) row[0]).toSnapshot())
                 .filter(row -> row.productId().equals(productId))
                 .map(PreorderSnapshot::createdAt)
                 .max(Comparator.naturalOrder());

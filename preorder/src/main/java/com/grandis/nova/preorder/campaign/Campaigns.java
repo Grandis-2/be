@@ -39,6 +39,11 @@ public class Campaigns {
         this.cache = cache;
     }
 
+    /** 이 인스턴스의 회차 캐시에서 그 상품을 비운다 — 캐시에서 고른 차수가 외래 키에 막혔을 때 다음 시도가 DB 에서 읽게. */
+    public void evictCached(UUID productId) {
+        cache.evict(productId);
+    }
+
     /** 회차 캐시의 회차 — 잠그기 전 판정용. 비우기를 놓쳤을 때만 캐시 수명만큼 늦으므로 최종 판정은 {@link #lockForAccept} 로 한다. */
     public Optional<CachedCampaign> findCached(UUID productId) {
         return cache.find(productId);
