@@ -20,7 +20,6 @@ import com.grandis.nova.preorder.syncjob.SyncJobs;
 import com.grandis.nova.preorder.web.ValidationFailures;
 import com.grandis.nova.preorder.web.Viewer;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -31,13 +30,12 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * 예약 조회. 쓰기가 없어 읽기 전용 트랜잭션이다.
+ * 예약 조회. 트랜잭션을 열지 않는다 — 잠그지 않는 읽기라 READ COMMITTED 에서는 트랜잭션으로 묶어도 문장마다 따로 본다.
  *
  * 목록은 예약을 먼저 읽고 배송 차수 · 작업을 id 묶음으로 한 번에 읽는다(행마다 다시 묻지 않는다).
  * 사용자 목록은 커서, 관리자 목록은 오프셋이다 — 접수가 계속 들어오는 사용자 목록에서 오프셋은 항목이 밀린다.
  */
 @Service
-@Transactional(readOnly = true)
 public class PreorderQueryService {
 
     private final Preorders preorders;
@@ -64,7 +62,7 @@ public class PreorderQueryService {
         List<PreorderSnapshot> found = new ArrayList<>(preorders.findForCustomer(customerId, status, productId,
                 position.createdAt(), position.id(), size + 1));
         String nextCursor = trimToPage(found, size);
-        Map<UUID, SyncJobStatus> registerStatuses = registerJobStatuses(found);
+        Map<UUID, SyncJobStatus> registerStatuses = pendingRegisterStatuses(found);
         Instant now = clock.instant();
         List<PreorderView.Summary> items = withBatches(found, (preorder, batch) -> new PreorderView.Summary(
                 preorder, batch, displayStatus(preorder, registerStatuses.get(preorder.id()), now)));
@@ -81,7 +79,7 @@ public class PreorderQueryService {
         List<PreorderSnapshot> found = new ArrayList<>(preorders.findActiveForCustomer(customerId,
                 position.createdAt(), position.id(), size + 1));
         String nextCursor = trimToPage(found, size);
-        Map<UUID, SyncJobStatus> registerStatuses = registerJobStatuses(found);
+        Map<UUID, SyncJobStatus> registerStatuses = pendingRegisterStatuses(found);
         Instant now = clock.instant();
         List<PreorderView.Active> items = found.stream().map(preorder -> new PreorderView.Active(
                 preorder, displayStatus(preorder, registerStatuses.get(preorder.id()), now))).toList();
@@ -91,7 +89,7 @@ public class PreorderQueryService {
     /** 예약 하나. 본인과 관리자만 볼 수 있고, 남의 예약은 존재를 알리지 않는다(404). */
     public PreorderView.Summary findOne(Viewer viewer, String preorderToken) {
         PreorderSnapshot preorder = require(viewer, preorderToken);
-        SyncJobStatus registerStatus = registerJobStatuses(List.of(preorder)).get(preorder.id());
+        SyncJobStatus registerStatus = pendingRegisterStatuses(List.of(preorder)).get(preorder.id());
         return new PreorderView.Summary(preorder, campaigns.getBatch(preorder.shipmentBatchId()),
                 displayStatus(preorder, registerStatus, clock.instant()));
     }
@@ -222,6 +220,12 @@ public class PreorderQueryService {
 
     private Map<UUID, SyncJobStatus> registerJobStatuses(Collection<PreorderSnapshot> found) {
         return syncJobs.registerStatuses(found.stream().map(PreorderSnapshot::id).toList());
+    }
+
+    /** 화면 단계에 쓰는 등록 작업 상태 — {@link #displayStatus} 는 PENDING_SYNC 에서만 본다. 그런 행이 없으면 읽지 않는다. */
+    private Map<UUID, SyncJobStatus> pendingRegisterStatuses(Collection<PreorderSnapshot> found) {
+        return registerJobStatuses(found.stream().filter(preorder -> preorder.status() == PreorderStatus.PENDING_SYNC)
+                .toList());
     }
 
     @FunctionalInterface

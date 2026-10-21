@@ -33,6 +33,17 @@ public interface PreorderRepository extends JpaRepository<Preorder, UUID>, JpaSp
     Optional<Preorder> findByPreorderToken(String preorderToken);
 
     /**
+     * 잠그지 않고 읽는다. 직접 선언한 쿼리라 트랜잭션 밖에서 부르면 문장 하나다 — 상속한 findById · findAllById 는 저장소가
+     * 읽기 전용 트랜잭션을 열어 준비 · 정리 문장이 붙는다. 영속성 컨텍스트를 먼저 보지 않으니 잠근 행은 findById 로 읽는다.
+     */
+    @Query("select p from Preorder p where p.id = :id")
+    Optional<Preorder> lookup(@Param("id") UUID id);
+
+    /** {@link #lookup} 의 여럿. 빈 목록은 부르지 않는다. */
+    @Query("select p from Preorder p where p.id in :ids")
+    List<Preorder> lookupAll(@Param("ids") Collection<UUID> ids);
+
+    /**
      * API 가 받은 공개 UUID 의 예약. 없으면 404 다.
      * 이벤트처럼 "없으면 메시지가 잘못된 것" 인 곳은 이것 대신 {@link #findByPreorderToken} 을 쓴다.
      */

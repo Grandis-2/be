@@ -6,7 +6,6 @@ import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.web.Viewer;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.util.UUID;
@@ -31,7 +30,6 @@ class PayabilityService {
      *
      * @throws BusinessException PREORDER_NOT_FOUND · FORBIDDEN
      */
-    @Transactional(readOnly = true)
     public Payability check(Viewer viewer, String preorderToken) {
         return check(viewer, preorders.getByToken(preorderToken));
     }
@@ -41,7 +39,6 @@ class PayabilityService {
      *
      * @throws BusinessException PREORDER_NOT_FOUND · FORBIDDEN
      */
-    @Transactional(readOnly = true)
     public Payability checkById(Viewer viewer, UUID preorderId) {
         return check(viewer, preorders.getById(preorderId));
     }
