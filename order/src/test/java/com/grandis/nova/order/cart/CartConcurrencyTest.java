@@ -165,13 +165,24 @@ class CartConcurrencyTest {
 
     /**
      * 빈 장바구니에 다른 줄 담기 둘이 겹치면 넣은 뒤 다시 세기가 서로의 커밋 전 줄에서 기다려 교착하고, 한쪽이 새 트랜잭션에서 다시 해 둘 다
-     * 담긴다. 결정적으로 본다: 두 담기가 각자 넣은 뒤 장벽에서 만난 다음 다시 센다. 다시 세기가 잠그지 않는 셈이면 교착이 없어 다시 하기도 없다 —
-     * 그래서 "넣기 세 번(한쪽 다시 하기)" 이 다시 세기가 잠그는지를 본다.
+     * 담긴다. 결정적으로 본다: 두 담기가 빈 장바구니를 각자 잠가 읽은 뒤 장벽에서 만나고, 각자 넣은 뒤 다시 만난 다음 다시 센다. 앞 장벽이 없으면
+     * 늦게 출발한 쪽의 첫 잠금 읽기가 먼저 넣은 줄에서 기다려 넣기에 닿지 못한다(교착이 아니라 뒤 장벽의 시간 초과). 다시 세기가 잠그지 않는
+     * 셈이면 교착이 없어 다시 하기도 없다 — 그래서 "넣기 세 번(한쪽 다시 하기)" 이 다시 세기가 잠그는지를 본다.
      */
     @Test
     void twoAddsToEmptyCartDeadlockOnRecountAndBothSucceed() throws Exception {
         List<UUID> options = fixtures.inStockProduct(2).optionIds();
         options.forEach(option -> fixtures.stock(option, 10, 0, 0));
+        CyclicBarrier read = new CyclicBarrier(2);
+        AtomicInteger reads = new AtomicInteger();
+        willAnswer(invocation -> {
+            Object lines = invocation.callRealMethod();
+            // 처음 두 번은 두 담기의 첫 잠금 읽기다 — 다시 세기는 뒤 장벽(둘 다 넣음)을 지나야 오므로 그 전에 올 수 없다
+            if (reads.incrementAndGet() <= 2) {
+                read.await(10, TimeUnit.SECONDS);
+            }
+            return lines;
+        }).given(store).lockByCustomer(customerId);
         CyclicBarrier inserted = new CyclicBarrier(2);
         AtomicInteger inserts = new AtomicInteger();
         willAnswer(invocation -> {
