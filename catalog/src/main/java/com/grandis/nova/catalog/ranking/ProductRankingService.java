@@ -3,6 +3,7 @@ package com.grandis.nova.catalog.ranking;
 import com.grandis.nova.catalog.cache.CatalogLocalCaches;
 import com.grandis.nova.catalog.cache.LocalReadCache;
 import com.grandis.nova.catalog.integration.PreorderCampaigns;
+import com.grandis.nova.catalog.integration.PublicCampaigns;
 import com.grandis.nova.catalog.listing.CampaignWindow;
 import com.grandis.nova.catalog.listing.ProductListItem;
 import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
@@ -46,17 +47,20 @@ public class ProductRankingService {
     private final ProductListingQueryRepository listings;
     private final SoldOutMarker soldOut;
     private final PreorderCampaigns campaigns;
+    private final PublicCampaigns publicCampaigns;
     private final TransactionTemplate readTransaction;
     private final LocalReadCache<String, List<ProductListItem>> cache;
     private final Clock clock;
 
     public ProductRankingService(ProductViewCounter counter, AnonymousQuota quota, ProductListingQueryRepository listings, SoldOutMarker soldOut,
-                                 PreorderCampaigns campaigns, PlatformTransactionManager transactionManager, CatalogLocalCaches local, Clock clock) {
+                                 PreorderCampaigns campaigns, PublicCampaigns publicCampaigns, PlatformTransactionManager transactionManager,
+                                 CatalogLocalCaches local, Clock clock) {
         this.counter = counter;
         this.quota = quota;
         this.listings = listings;
         this.soldOut = soldOut;
         this.campaigns = campaigns;
+        this.publicCampaigns = publicCampaigns;
         this.readTransaction = new TransactionTemplate(transactionManager);
         this.readTransaction.setReadOnly(true);
         // 카드 본문과 색상칩을 두 문장으로 읽는다 — 회원 목록과 같이 한 스냅샷으로
@@ -68,7 +72,7 @@ public class ProductRankingService {
     /**
      * 상세 화면 조회 한 번. 상세처럼 공개 · 준비 끝난 상품만 받는다(아니면 404 — 없는 상품과 같은 응답). 같은 사람 · 같은 상품은 하루(KST) 한 번만 센다.
      * 익명이면 IP 별 익명 id 상한({@link AnonymousQuota})을 넘은 새 id 는 세지 않는다.
-     * 사전예약의 준비(회차가 있는가)는 preorder 에 묻는다. DB · Redis · preorder 가 실패하면(장애 · 시간 초과) 경고만 남기고 넘어간다 — 조회 신호 하나를 놓치는 것이 상세 화면을 막는 것보다 낫다. 시간 초과된 쓰기는
+     * 사전예약의 준비(회차가 있는가)는 상세와 같이 {@link PublicCampaigns} 로 본다. DB · Redis · preorder 가 실패하면(장애 · 시간 초과) 경고만 남기고 넘어간다 — 조회 신호 하나를 놓치는 것이 상세 화면을 막는 것보다 낫다. 시간 초과된 쓰기는
      * 뒤늦게 반영될 수도 있다(시험에서 컨테이너를 멈췄다 풀 때 실측).
      *
      * @throws BusinessException NOT_FOUND — 없거나 공개가 아니거나 준비 전인 상품
@@ -79,7 +83,7 @@ public class ProductRankingService {
             ProductListingQueryRepository.Exposure exposure = listings.findExposure(productId).orElse(null);
             exposed = exposure != null && exposure.visible() && exposure.ready();
             if (exposed && exposure.saleMode() == SaleMode.PREORDER) {
-                exposed = campaigns.find(productId).isPresent();
+                exposed = publicCampaigns.find(productId).isPresent();
             }
         } catch (DataAccessException | BusinessException e) {
             log.warn("조회 신호의 상품을 확인하지 못했다(DB · preorder) — 세지 않는다 productId={}", productId, e);

@@ -1,6 +1,7 @@
 package com.grandis.nova.catalog.listing;
 
 import com.grandis.nova.catalog.integration.PreorderCampaigns;
+import com.grandis.nova.catalog.integration.PublicCampaigns;
 import com.grandis.nova.catalog.product.Product;
 import com.grandis.nova.catalog.product.SaleMode;
 import org.springframework.stereotype.Component;
@@ -15,22 +16,29 @@ import java.util.UUID;
 public class ProductReadiness {
 
     private final PreorderCampaigns campaigns;
+    private final PublicCampaigns publicCampaigns;
     private final ProductListingQueryRepository listings;
 
-    public ProductReadiness(PreorderCampaigns campaigns, ProductListingQueryRepository listings) {
+    public ProductReadiness(PreorderCampaigns campaigns, PublicCampaigns publicCampaigns, ProductListingQueryRepository listings) {
         this.campaigns = campaigns;
+        this.publicCampaigns = publicCampaigns;
         this.listings = listings;
     }
 
-    /** @throws com.grandis.nova.common.BusinessException 사전예약인데 preorder 가 답하지 않으면 503 · 연동 오류면 500({@link PreorderCampaigns#find}) */
+    /**
+     * 등록 재전송 판정용 — 사전예약은 preorder 에 바로 묻는다(낡은 "회차 없음" 으로 끝난 등록을 진행 중이라 답하지 않게).
+     *
+     * @throws com.grandis.nova.common.BusinessException 사전예약인데 preorder 가 답하지 않으면 503 · 연동 오류면 500({@link PreorderCampaigns#find})
+     */
     public boolean isReady(Product product) {
         return product.getSaleMode() == SaleMode.PREORDER ? campaigns.find(product.getId()).isPresent() : listings.isStockReady(product.getId());
     }
 
     /**
-     * 한 문장으로 이미 읽은 노출 판정 재료로 — 일반은 그 문장의 준비 칸(products.stock_ready_at), 사전예약은 preorder 에 묻는다. 실패는 {@link #isReady(Product)} 와 같다.
+     * 공개 조회용 — 한 문장으로 이미 읽은 노출 판정 재료로. 일반은 그 문장의 준비 칸(products.stock_ready_at), 사전예약은 상세와 같이
+     * {@link PublicCampaigns} 로 본다. 실패는 {@link #isReady(Product)} 와 같다.
      */
-    public boolean isReady(UUID productId, ProductListingQueryRepository.Exposure exposure) {
-        return exposure.saleMode() == SaleMode.PREORDER ? campaigns.find(productId).isPresent() : exposure.ready();
+    public boolean isPubliclyReady(UUID productId, ProductListingQueryRepository.Exposure exposure) {
+        return exposure.saleMode() == SaleMode.PREORDER ? publicCampaigns.find(productId).isPresent() : exposure.ready();
     }
 }

@@ -1,6 +1,6 @@
 package com.grandis.nova.catalog.promotion;
 
-import com.grandis.nova.catalog.integration.PreorderCampaigns;
+import com.grandis.nova.catalog.integration.PublicCampaigns;
 import com.grandis.nova.catalog.listing.CampaignWindow;
 import com.grandis.nova.catalog.listing.ProductListItem;
 import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
@@ -28,8 +28,8 @@ import java.util.UUID;
 /**
  * 고객 사전예약 페이지의 홍보 목록 · 상세(로그인 없이). 오늘(한국 날짜)이 홍보 기간 안인 홍보만 보인다 — 밖이면 상세도 404.
  * 홍보 내용(이름 · 사진 · 기간 · 묶인 상품 id)은 읽기 캐시에 {@link #BODY_TTL} 두고 고치면 세대로 비운다. 상품 카드(가격 · 회차 · 재고)는 다른 서비스가
- * 바꾸는 값이 섞여 요청마다 읽는다 — 상품 상세와 같은 나눔이다. 사전예약 카드의 회차(준비 · 시각)는 preorder 에 묻는다 — 답하지 않으면 페이지는
- * 그대로 내고 사전예약 카드의 시각 · 접수 단계만 비운다(2026-10-19 결정).
+ * 바꾸는 값이 섞여 요청마다 읽는다 — 상품 상세와 같은 나눔이다. 사전예약 카드의 회차(준비 · 시각)는 상세와 같이 {@link PublicCampaigns} 로 본다 —
+ * preorder 가 답하지 않으면 페이지는 그대로 내고 사전예약 카드의 시각 · 접수 단계만 비운다(2026-10-19 결정).
  */
 @Service
 public class PromotionQueryService {
@@ -50,14 +50,14 @@ public class PromotionQueryService {
     private final PromotionProducts links;
     private final ProductListingQueryRepository crossReads;
     private final SoldOutMarker soldOut;
-    private final PreorderCampaigns campaigns;
+    private final PublicCampaigns campaigns;
     private final ReadCache cache;
     private final Clock clock;
     private final ReadCache.Spec<Body> bodySpec;
     private final ReadCache.Spec<List<Body>> shownSpec;
 
     public PromotionQueryService(PromotionRepository promotions, PromotionProducts links, ProductListingQueryRepository crossReads,
-                                 SoldOutMarker soldOut, PreorderCampaigns campaigns, ReadCache cache, Clock clock) {
+                                 SoldOutMarker soldOut, PublicCampaigns campaigns, ReadCache cache, Clock clock) {
         this.promotions = promotions;
         this.links = links;
         this.crossReads = crossReads;
