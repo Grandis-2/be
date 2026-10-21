@@ -95,7 +95,8 @@ public class CatalogReadCache {
      * 상품 상세. 본문(catalog 가 정하는 칸 — 일반 상품의 판매 준비 포함, 준비 전 일반 상품은 넣지 않는다)만 {@link #DETAIL_TTL} 동안 캐시하고, 실시간 칸(회차 · 재고)은 요청마다 채운다
      * (회차는 PublicCampaigns 를 거친다 — 켜 두면 그 캐시에서) — 가격 · 재고를
      * 상품 정보와 따로 다루는 커머스 플랫폼들의 방식(본문은 길게, 가격 · 재고는 실시간)을 따른다. 가격 · 할인율은 catalog 가 바꾸므로 본문에 두고 세대로 비운다.
-     * 돌려주는 읽은 시각은 본문의 것이다 — 앞단 HTTP 캐시의 상한은 PublicCache 가 실시간 칸에 맞춰 짧게 묶는다.
+     * 돌려주는 읽은 시각은 본문의 것이다 — 앞단 HTTP 캐시는 PublicCache 의 상한(5초)으로 짧게 묶는다. 회차 캐시를 켜 두면 회차는 그 캐시의 나이에
+     * 이 상한만큼 더 늦을 수 있다(회차의 읽은 시각은 max-age 에 넣지 않는다).
      */
     public ReadCache.Entry<ProductDetailView> product(UUID productId) {
         // 판매 준비 전인 일반 상품의 본문은 넣지 않는다 — 준비 이벤트의 세대 올리기가 실패해도 "목록에는 있는데 상세는 404" 가 TTL 동안 남지 않게
