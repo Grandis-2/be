@@ -16,7 +16,10 @@ import java.util.UUID;
  * 회차를 바꾼 트랜잭션의 아웃박스에 적어 커밋 뒤 보내므로, 받았을 때 그 값은 이미 preorder 에 있다. 그래서 같은 메시지가 두 번 오거나 순서가 뒤집혀도
  * 결과가 같다(세대가 한 번 더 오를 뿐이다).
  * 세대를 못 올리면 던진다 — 메시지를 지우지 않아 다시 받고, 재수신 한도를 넘으면 DLQ 로 간다(그때 늦게 보이는 상한은 공개 회차 캐시의 TTL).
- * 읽기 캐시 전체를 끄면(nova.read-cache.enabled=false) 아무것도 하지 않고 지운다. 공개 회차 캐시만 끈(nova.read-cache.preorder-campaign-ttl 없음)
+ * 읽기 캐시 전체를 끄면(nova.read-cache.enabled=false) 아무것도 하지 않고 지운다 — 그 인스턴스에는 세대를 올릴 Redis 가 없다. 그래서 끈 동안(그 설정을
+ * 바꾸는 배포 중 섞여 도는 동안 포함) 받은 변경은 Redis 에 남은 공개 회차 캐시에 반영되지 않는다 — 다시 켤 때 세대 키
+ * (catalog:cache:gen:preorder-campaigns)를 한 번 INCR 한다. preorder 전체 재발행은 마감 전 회차가 있을 때만 이 이벤트를 보내므로 대신이 되지 못한다.
+ * 공개 회차 캐시만 끈(nova.read-cache.preorder-campaign-ttl 없음)
  * 인스턴스도 세대를 올린다 — 켠 인스턴스와 끈 인스턴스가 섞여 도는 동안 끈 쪽이 메시지를 받아 지우면 켠 쪽의 캐시가 비워지지 않으므로. 그래서 그
  * 설정에서도 Redis 가 실패하면 던지고 결국 DLQ 로 간다.
  */
