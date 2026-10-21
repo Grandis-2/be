@@ -25,12 +25,14 @@ import java.util.stream.Collectors;
  * 관리자 화면 · 등록 재전송 · 수정 · 삭제 · 일반 전환의 판정은 이것을 쓰지 않고 {@link PreorderCampaigns#find} 로 바로 묻는다 — 낡은 "회차 없음" 으로 판정하지 않게.
  *
  * <ul>
- *   <li><b>기본은 끔</b> — nova.read-cache.preorder-campaign-ttl 이 없으면 늘 preorder 에 묻는다(지금과 같다). preorder 는 회차가 바뀌면
- *       PREORDER_CAMPAIGN_CHANGED 를 내지만 catalog 는 아직 받지 않아, 켜면 조기 마감 · 다시 열기 · 일정 변경이 TTL 만큼 늦게 보인다. 그래서 그 변경을
- *       받아 {@link #CAMPAIGNS} 를 올리는 처리기를 붙이기 전에는 켜지 않는다 — 세대는 preorder 의 변경이 회차 API 로 읽히게 된 뒤(그 이벤트를 받았을 때) 올린다.
- *       catalog 의 커밋 때(판매 중지) 올리면 preorder 가 회차를 닫기 전 요청이 옛 회차를 새 세대에 다시 넣는다.</li>
+ *   <li><b>기본은 끔</b> — nova.read-cache.preorder-campaign-ttl 이 없으면 늘 preorder 에 묻는다. 켜면 회차 변경은 preorder 의
+ *       PREORDER_CAMPAIGN_SCHEDULE_CHANGED(catalog-events)를 받아 {@link #CAMPAIGNS} 를 올려 따라간다(PreorderCampaignScheduleChangedHandler).
+ *       preorder 의 그 보내기(nova.campaign.schedule-notice.enabled)는 기본 꺼짐이라 그것을 켠 뒤에 켠다 — 안 켠 채 켜면 조기 마감 · 다시 열기 ·
+ *       일정 변경이 TTL 만큼 늦게 보인다. 이벤트를 놓쳤을 때(DLQ)도 TTL 이 늦게 보이는 상한이다.
+ *       세대는 preorder 의 변경이 회차 API 로 읽히게 된 뒤(그 이벤트를 받았을 때) 올린다 — catalog 의 커밋 때(판매 중지) 올리면 preorder 가 회차를
+ *       닫기 전 요청이 옛 회차를 새 세대에 다시 넣는다.</li>
  *   <li><b>세대는 회차 전체에 하나</b>({@link #CAMPAIGNS}) — 묶음(홍보 카드)을 한 키에 넣으려면 그 묶음의 세대를 조회 전에 하나로 읽어야 한다.
- *       넣은 회차가 바뀌는 것은 관리자 조작(조기 마감 · 다시 열기 · 일정 변경 · 판매 중지)뿐이라 드물다 — 하나가 바뀌면 전부 다시 묻는다.</li>
+ *       preorder 가 그 이벤트를 보내는 때(회차 생성 · 오픈 전 일정 변경 · 조기 마감 · 판매 중지 · 다시 열기 · 공개 여부 · 전체 재발행)마다 전부 다시 묻는다.</li>
  *   <li><b>회차가 있을 때만 넣는다</b> — 등록은 커밋 뒤 preorder 가 회차를 만들기 전까지 "공개인데 회차 없음" 이다. 그때의 "없음" 을 넣으면 회차가
  *       생겨도 TTL 동안 상세가 404 다. 회차 없는 상품(묶음이면 그런 상품이 하나라도 있는 묶음)은 요청마다 preorder 에 묻는다 — 홍보 목록은 그날 보이는 모든 홍보의
  *       상품이 한 묶음이라, 회차 없는 사전예약 상품이 어느 홍보에 하나만 묶여 있어도 목록 전체가 요청마다 묻는다.</li>
