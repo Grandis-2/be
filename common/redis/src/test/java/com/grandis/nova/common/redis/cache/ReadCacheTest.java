@@ -308,6 +308,30 @@ class ReadCacheTest {
     }
 
     @Test
+    @DisplayName("세대를 읽은 뒤 값을 읽기 직전에 차단기가 열려도 우회 — 없음으로 보고 채우지 않는다")
+    void breakerOpeningBeforeValueReadBypasses() {
+        StringRedisTemplate spied = org.mockito.Mockito.spy(redis);
+        org.springframework.data.redis.core.ValueOperations<String, String> ops = org.mockito.Mockito.spy(redis.opsForValue());
+        org.mockito.Mockito.doReturn(ops).when(spied).opsForValue();
+        ReadCache opening = new ReadCache(spied, JSON, "svc");
+        ReadCache.Spec<Item> openingItems = opening.spec("item", Item.class, Duration.ofSeconds(30));
+        org.mockito.Mockito.doAnswer(call -> {
+            Object value = call.callRealMethod();
+            if (((String) call.getArgument(0)).contains(":gen:")) {
+                opening.breaker().transitionToForcedOpenState();   // 세대는 읽었다 — 값 읽기는 차단기에 막힌다
+            }
+            return value;
+        }).when(ops).get(org.mockito.ArgumentMatchers.anyString());
+
+        List<ReadCache.LoadPath> paths = new java.util.ArrayList<>();
+        opening.get(openingItems, "products", "1", path -> { paths.add(path); return item("v", new AtomicInteger()); });
+        opening.breaker().transitionToClosedState();
+
+        assertThat(paths).containsExactly(ReadCache.LoadPath.BYPASS);
+        assertThat(redis.keys("svc:cache:item:*")).isEmpty();
+    }
+
+    @Test
     @DisplayName("차단기가 열려 있으면 우회 — loader 는 BYPASS 를 받고 넣지 않는다")
     void openBreakerBypasses() {
         cache.breaker().transitionToForcedOpenState();

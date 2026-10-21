@@ -114,6 +114,20 @@ class ReadCacheRefreshTest {
     }
 
     @Test
+    @DisplayName("돌 차례에 세대를 못 읽으면 갱신하지 않는다 — Redis 를 못 쓰는 동안 넣지도 못할 값을 원천에 묻지 않고, 그 값이 만료될 때까지 다시 맡기지 않는다")
+    void refreshSkipsWhenGenerationUnreadable() {
+        cache.entry(spec, "g", "k", () -> load("v1"));
+        clock.advance(Duration.ofSeconds(24));
+        cache.entry(spec, "g", "k", () -> load("v2"));
+        assertThat(tasks.pending()).isEqualTo(1);
+
+        redis.opsForValue().set("svc:cache:gen:g", "not-a-number");   // 맡긴 뒤 · 돌기 전에 세대를 못 읽게
+        tasks.runAll();
+        assertThat(loads.get()).as("원천을 다시 읽지 않았다").isEqualTo(1);
+        assertThat(events.refreshes).containsExactly(RefreshResult.FAILED);
+    }
+
+    @Test
     @DisplayName("같은 키의 갱신은 이 인스턴스에서 하나만 맡긴다")
     void oneRefreshPerKey() {
         cache.entry(spec, "g", "k", () -> load("v1"));
@@ -333,8 +347,8 @@ class ReadCacheRefreshTest {
     }
 
     @Test
-    @DisplayName("지금 세대를 못 읽으면(차단기 열림) 갱신은 그대로 읽는다 — 넣지는 못한다")
-    void refreshProceedsWhenGenerationUnreadable() {
+    @DisplayName("지금 세대를 못 읽으면(차단기 열림) 갱신은 읽지 않는다 — 넣지도 못할 값을 원천에 묻지 않게")
+    void refreshSkipsWhenBreakerOpen() {
         cache.entry(spec, "g", "k", () -> load("v1"));
         clock.advance(Duration.ofSeconds(24));
         cache.entry(spec, "g", "k", () -> load("v2"));
@@ -344,8 +358,8 @@ class ReadCacheRefreshTest {
         } finally {
             cache.breaker().transitionToClosedState();
         }
-        assertThat(loads.get()).as("처음 읽기 + 갱신 읽기").isEqualTo(2);
-        assertThat(events.refreshes).containsExactly(RefreshResult.NOT_STORED);
+        assertThat(loads.get()).as("처음 읽기뿐").isEqualTo(1);
+        assertThat(events.refreshes).containsExactly(RefreshResult.FAILED);
     }
 
     @Test
