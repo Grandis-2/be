@@ -6,6 +6,7 @@ import org.mockito.ArgumentCaptor;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.Message;
 import software.amazon.awssdk.services.sqs.model.MessageAttributeValue;
+import software.amazon.awssdk.services.sqs.model.MessageSystemAttributeName;
 import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
 import software.amazon.awssdk.services.sqs.model.SqsException;
 
@@ -62,6 +63,22 @@ class DelayedResendTest {
         assertThat(sent.messageAttributes().get("attempt").dataType()).isEqualTo("String");
         assertThat(sent.messageAttributes().get("generation").stringValue()).isEqualTo("1");
         assertThat(sent.messageAttributes().get("eventType").stringValue()).isEqualTo("REGISTER_JOB_READY");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void 받은_묶음_id_를_잇고_없으면_싣지_않는다() {
+        Message grouped = message().toBuilder()
+                .attributes(Map.of(MessageSystemAttributeName.MESSAGE_GROUP_ID, "product-a")).build();
+        clearInvocations(sqs);
+        resend.resend(grouped, Map.of(), Duration.ofSeconds(5));
+        ArgumentCaptor<Consumer<SendMessageRequest.Builder>> captor = ArgumentCaptor.forClass(Consumer.class);
+        verify(sqs).sendMessage(captor.capture());
+        SendMessageRequest.Builder builder = SendMessageRequest.builder();
+        captor.getValue().accept(builder);
+
+        assertThat(builder.build().messageGroupId()).isEqualTo("product-a");
+        assertThat(resend(Map.of(), Duration.ofSeconds(5)).messageGroupId()).isNull();
     }
 
     @Test

@@ -13,6 +13,7 @@ public record LockedPreorder(
         UUID id,
         String preorderToken,
         UUID customerId,
+        UUID productId,
         PreorderStatus status,
         Instant payableFrom,
         Instant reservedAt,

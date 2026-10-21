@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.Message;
 import software.amazon.awssdk.services.sqs.model.MessageAttributeValue;
+import software.amazon.awssdk.services.sqs.model.MessageSystemAttributeName;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -12,6 +13,7 @@ import java.util.Map;
 
 /**
  * 받은 메시지를 같은 큐에 지연을 두고 다시 보낸다. 본문은 그대로, 받은 속성에 호출자가 준 변경(재시도 횟수 등)을 덮어쓴다.
+ * 받은 MessageGroupId 도 잇는다 — 빠지면 다시 보낸 메시지가 공정 큐의 묶음에서 벗어난다.
  * 원본은 지우지 않는다 — 다시 보낸 뒤 호출자가 지우고, 보내지 못하면 던지므로 원본이 남아 다시 받는다.
  * 원본을 지우지 못하면 사본이 하나 더 돈다. 받는 쪽 처리는 멱등이어야 한다.
  */
@@ -55,7 +57,8 @@ public class DelayedResend {
             sqs.sendMessage(request -> request.queueUrl(queueUrls.of(queue))
                     .messageBody(message.body())
                     .delaySeconds(delaySeconds)
-                    .messageAttributes(carried));
+                    .messageAttributes(carried)
+                    .messageGroupId(message.attributes().get(MessageSystemAttributeName.MESSAGE_GROUP_ID)));
         } catch (RuntimeException e) {
             log.error("지연을 두고 다시 보내지 못했다 — 큐 권한 · 설정 확인 필요(원본을 다시 받는다) queue={} messageId={}",
                     queue, message.messageId(), e);

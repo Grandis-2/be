@@ -55,6 +55,7 @@ class PreorderOutboxWiringTest {
 
     static final Duration TIMEOUT = Duration.ofSeconds(10);
     static final UUID CUSTOMER_ID = UUID.fromString("00000000-0000-7000-8000-000000001024");
+    static final UUID PRODUCT_ID = UUID.fromString("00000000-0000-7000-8000-000000000101");
     static final String REQUEST = "{\"ourReservationId\":\"9f1c2d3e\",\"qty\":1}";
     static final List<String> ENVELOPE_FIELDS =
             List.of("eventId", "eventType", "aggregateType", "aggregateId", "occurredAt", "payload");
@@ -89,7 +90,8 @@ class PreorderOutboxWiringTest {
         Instant before = Instant.now();
         Long id = transactionTemplate.execute(status -> {
             // 커밋 직후 발행이 published_at 을 채우기 전에 읽도록 같은 트랜잭션에서 본다
-            Long appended = idOf(new RegisterJobReady(aggregateId, "9f1c2d3e", REQUEST, SyncActor.SYSTEM, 1));
+            Long appended = idOf(new RegisterJobReady(aggregateId, "9f1c2d3e", PRODUCT_ID, REQUEST,
+                    SyncActor.SYSTEM, 1));
             Map<String, Object> row = jdbcTemplate.queryForMap("""
                     SELECT event_type, aggregate_type, BIN_TO_UUID(aggregate_id) AS aggregate_id, publish_attempts,
                            published_at,
@@ -114,7 +116,7 @@ class PreorderOutboxWiringTest {
     @Test
     void 업무가_롤백되면_행도_메시지도_남지_않는다() {
         String eventId = transactionTemplate.execute(status -> {
-            Long id = idOf(new RegisterJobReady(aggregateId, "9f1c2d3e", REQUEST, SyncActor.SYSTEM, 1));
+            Long id = idOf(new RegisterJobReady(aggregateId, "9f1c2d3e", PRODUCT_ID, REQUEST, SyncActor.SYSTEM, 1));
             status.setRollbackOnly();
             return jdbcTemplate.queryForObject(
                     "SELECT event_id FROM preorder_outbox_events WHERE id = ?", String.class, id);
@@ -129,7 +131,8 @@ class PreorderOutboxWiringTest {
 
     @Test
     void 커밋하면_봉투를_계약한_칸_순서로_preorder_register_에_보낸다() {
-        String eventId = append(new RegisterJobReady(aggregateId, "9f1c2d3e", REQUEST, SyncActor.SYSTEM, 1));
+        String eventId = append(new RegisterJobReady(aggregateId, "9f1c2d3e", PRODUCT_ID, REQUEST,
+                SyncActor.SYSTEM, 1));
 
         OutboundMessage message = sentFor(eventId);
         JsonNode envelope = jsonMapper.readTree(message.body());
@@ -147,17 +150,19 @@ class PreorderOutboxWiringTest {
                         "SELECT DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%s.%fZ') FROM preorder_outbox_events WHERE event_id = ?",
                         String.class, eventId)));
         assertThat(envelope.get("payload")).isEqualTo(json(
-                "{\"syncJobId\":\"" + aggregateId + "\",\"preorderId\":\"9f1c2d3e\",\"request\":" + REQUEST
+                "{\"syncJobId\":\"" + aggregateId + "\",\"preorderId\":\"9f1c2d3e\",\"productId\":\"" + PRODUCT_ID
+                        + "\",\"request\":" + REQUEST
                         + ",\"actor\":\"SYSTEM\",\"run\":1,\"jobType\":\"REGISTER\"}"));
         assertThat(envelope.get("payload").get("request").isObject()).as("보낼 내용은 문자열이 아니라 객체로 싣는다").isTrue();
         assertThat(message.attributes())
                 .isEqualTo(Map.of("attempt", "1", "generation", "1", "run", "1", "actor", "SYSTEM"));
+        assertThat(message.messageGroupId()).as("공정 큐의 묶음은 사전예약 상품").isEqualTo(PRODUCT_ID.toString());
     }
 
     /** worker 는 이 값을 결과에 그대로 싣는다 — 관리자가 다시 보낸 것은 ADMIN 이고 실행 회차가 오른다. */
     @Test
     void 관리자_재처리로_다시_보낸_등록_작업은_actor_속성이_ADMIN_이고_실행_회차를_싣는다() {
-        String eventId = append(new RegisterJobReady(aggregateId, "9f1c2d3e", REQUEST, SyncActor.ADMIN, 2));
+        String eventId = append(new RegisterJobReady(aggregateId, "9f1c2d3e", PRODUCT_ID, REQUEST, SyncActor.ADMIN, 2));
 
         assertThat(sentFor(eventId).attributes())
                 .isEqualTo(Map.of("attempt", "1", "generation", "1", "run", "2", "actor", "ADMIN"));
@@ -174,6 +179,7 @@ class PreorderOutboxWiringTest {
 
         assertThat(message.destination()).isEqualTo("order-events");
         assertThat(message.attributes()).as("작업 메시지가 아니면 진행 속성을 싣지 않는다").isEmpty();
+        assertThat(message.messageGroupId()).isNull();
         assertThat(envelope.get("aggregateType").asString()).isEqualTo("PREORDER");
         assertThat(envelope.get("aggregateId").asString()).isEqualTo(aggregateId.toString());
         assertThat(envelope.get("payload")).isEqualTo(json(
@@ -184,22 +190,24 @@ class PreorderOutboxWiringTest {
     /** 작업 종류(jobType)는 record 칸이 아니라 이벤트가 정한 고정값이다. */
     @Test
     void 취소_작업은_preorder_cancel_로_작업_종류_CANCEL_로_보낸다() {
-        String eventId = append(new CancelJobReady(aggregateId, "9f1c2d3e", REQUEST, SyncActor.SYSTEM, 1));
+        String eventId = append(new CancelJobReady(aggregateId, "9f1c2d3e", PRODUCT_ID, REQUEST, SyncActor.SYSTEM, 1));
 
         OutboundMessage message = sentFor(eventId);
 
         assertThat(message.destination()).isEqualTo("preorder-cancel");
         assertThat(jsonMapper.readTree(message.body()).get("payload")).isEqualTo(json(
-                "{\"syncJobId\":\"" + aggregateId + "\",\"preorderId\":\"9f1c2d3e\",\"request\":" + REQUEST
+                "{\"syncJobId\":\"" + aggregateId + "\",\"preorderId\":\"9f1c2d3e\",\"productId\":\"" + PRODUCT_ID
+                        + "\",\"request\":" + REQUEST
                         + ",\"actor\":\"SYSTEM\",\"run\":1,\"jobType\":\"CANCEL\"}"));
         assertThat(message.attributes())
                 .isEqualTo(Map.of("attempt", "1", "generation", "1", "run", "1", "actor", "SYSTEM"));
+        assertThat(message.messageGroupId()).as("공정 큐의 묶음은 사전예약 상품").isEqualTo(PRODUCT_ID.toString());
     }
 
     /** 재처리한 취소는 run 을 올려 보낸다 — 결과가 지난 실행의 것으로 버려지지 않게 worker 가 그대로 돌려준다. */
     @Test
     void 재처리한_취소_작업은_실행_회차와_주체를_속성으로_싣는다() {
-        String eventId = append(new CancelJobReady(aggregateId, "9f1c2d3e", REQUEST, SyncActor.ADMIN, 2));
+        String eventId = append(new CancelJobReady(aggregateId, "9f1c2d3e", PRODUCT_ID, REQUEST, SyncActor.ADMIN, 2));
 
         assertThat(sentFor(eventId).attributes())
                 .isEqualTo(Map.of("attempt", "1", "generation", "1", "run", "2", "actor", "ADMIN"));

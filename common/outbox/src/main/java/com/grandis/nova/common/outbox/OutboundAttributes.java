@@ -15,4 +15,13 @@ public interface OutboundAttributes {
 
     /** @return 실을 속성(없으면 빈 맵). eventType · eventId 는 전송 구현이 싣는 이름이라 쓸 수 없다 */
     Map<String, String> of(String eventType, JsonNode payload);
+
+    /**
+     * 받는 큐가 공정하게 나눠 줄 묶음(SQS 표준 큐의 MessageGroupId). 한 묶음이 쌓여도 다른 묶음이 밀리지 않는다.
+     *
+     * @return 묶음 id(없으면 null — 묶지 않는다)
+     */
+    default String messageGroupId(String eventType, JsonNode payload) {
+        return null;
+    }
 }
