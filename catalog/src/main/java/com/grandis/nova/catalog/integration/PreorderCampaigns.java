@@ -64,6 +64,7 @@ public class PreorderCampaigns {
 
     /**
      * 상품별 회차(2.2). 캐시하지 않는다 — 수정 · 삭제 · 등록 재전송 · 관리자 화면이 그대로 쓴다. 공개 조회는 {@link PublicCampaigns} 를 거친다.
+     * preorder 에도 캐시 없이(fresh) 묻는다 — 판정은 지금 값이어야 하고, {@link PublicCampaigns} 는 받은 값을 오래 둔다.
      * 한 번에 {@value #BATCH}개씩 차례로 부른다.
      *
      * @return 상품 id → 회차. 회차가 없는 상품(판매 준비 전)은 빠진다. 빈 목록이면 부르지 않는다
@@ -75,7 +76,7 @@ public class PreorderCampaigns {
         List<UUID> ids = new ArrayList<>(new LinkedHashSet<>(productIds));
         for (int from = 0; from < ids.size(); from += BATCH) {
             List<UUID> batch = ids.subList(from, Math.min(ids.size(), from + BATCH));
-            PreorderCampaignClient.Campaigns campaigns = InternalCalls.call(Dependencies.PREORDER, () -> client.getCampaigns(batch));
+            PreorderCampaignClient.Campaigns campaigns = InternalCalls.call(Dependencies.PREORDER, () -> client.getCampaigns(batch, true));
             collect(campaigns.items(), batch, found);
         }
         return found;

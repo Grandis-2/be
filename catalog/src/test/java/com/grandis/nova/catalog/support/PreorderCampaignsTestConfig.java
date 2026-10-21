@@ -63,7 +63,7 @@ public class PreorderCampaignsTestConfig {
             }
 
             @Override
-            public ApiResponse<Campaigns> getCampaigns(Collection<UUID> productIds) {
+            public ApiResponse<Campaigns> getCampaigns(Collection<UUID> productIds, boolean fresh) {
                 requireOutsideTransaction();
                 List<Campaign> items = new ArrayList<>();
                 outside.executeWithoutResult(status -> {

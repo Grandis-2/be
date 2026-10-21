@@ -151,7 +151,7 @@ class PreorderCampaignsHttpTest {
 
         mockMvc.perform(get("/api/v1/products/{id}", product).with(AccessTokens.customer(UUID.randomUUID()))).andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.campaign.status").value("OPEN"));
-        assertThat(SEEN_PATHS).contains("/internal/preorders/campaigns?productIds=" + product);
+        assertThat(SEEN_PATHS).contains("/internal/preorders/campaigns?productIds=" + product + "&fresh=true");
         assertThat(SEEN_AUTHORIZATION).allMatch("null"::equals);
 
         failStatus = 503;
@@ -226,7 +226,7 @@ class PreorderCampaignsHttpTest {
         mockMvc.perform(patch("/api/v1/admin/products/{id}/sale-status", product).with(AccessTokens.admin())
                 .contentType(MediaType.APPLICATION_JSON).content("{ \"status\": \"PAUSED\" }")).andExpect(status().isServiceUnavailable());
         mockMvc.perform(delete("/api/v1/admin/products/{id}", product).with(AccessTokens.admin())).andExpect(status().isServiceUnavailable());
-        assertThat(SEEN_PATHS).as("두 요청 모두 preorder 에 회차를 한 번씩 물었다 — 503 을 다시 보내지 않는다(JDK HTTP 구현 고정, Apache 기본 재시도면 4번)").filteredOn(("/internal/preorders/campaigns?productIds=" + product)::equals).hasSize(2);
+        assertThat(SEEN_PATHS).as("두 요청 모두 preorder 에 회차를 한 번씩 물었다 — 503 을 다시 보내지 않는다(JDK HTTP 구현 고정, Apache 기본 재시도면 4번)").filteredOn(("/internal/preorders/campaigns?productIds=" + product + "&fresh=true")::equals).hasSize(2);
 
         assertThat(jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = UUID_TO_BIN(?)", String.class, product.toString())).isEqualTo("ACTIVE");
         assertThat(jdbcTemplate.queryForObject("SELECT deleted_at IS NULL FROM products WHERE id = UUID_TO_BIN(?)", Boolean.class, product.toString())).isTrue();
