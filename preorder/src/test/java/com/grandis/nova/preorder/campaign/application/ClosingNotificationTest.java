@@ -34,7 +34,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 공유 DB 에는 다른 시험의 회차도 있어, 주기 작업은 한 번에 집는 수를 넉넉히 둔 인스턴스로 부른다.
  */
 @PreorderIntegrationTest
-@TestPropertySource(properties = {"nova.campaign.close-notice.enabled=true", "nova.campaign.close-notice.interval=1h"})
+// catalog 알림 시험(CatalogScheduleNoticeTest)과 같은 설정이라 스프링 컨텍스트를 함께 쓴다
+@TestPropertySource(properties = {"nova.campaign.close-notice.enabled=true", "nova.campaign.close-notice.interval=1h",
+        "nova.campaign.schedule-notice.enabled=true"})
 class ClosingNotificationTest {
 
     static final String CLOSED = "PREORDER_CAMPAIGN_CLOSED";
