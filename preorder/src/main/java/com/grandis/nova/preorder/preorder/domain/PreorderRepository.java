@@ -34,7 +34,8 @@ public interface PreorderRepository extends JpaRepository<Preorder, UUID>, JpaSp
 
     /**
      * 잠그지 않고 읽는다. 직접 선언한 쿼리라 트랜잭션 밖에서 부르면 문장 하나다 — 상속한 findById · findAllById 는 저장소가
-     * 읽기 전용 트랜잭션을 열어 준비 · 정리 문장이 붙는다. 영속성 컨텍스트를 먼저 보지 않으니 잠근 행은 findById 로 읽는다.
+     * 읽기 전용 트랜잭션을 열어 준비 · 정리 문장이 붙는다. 트랜잭션 안에서는 자동 flush 뒤 영속성 컨텍스트의 같은 객체를 받는다
+     * (값은 findById 와 같고, 이미 읽은 행이어도 문장 하나가 나간다).
      */
     @Query("select p from Preorder p where p.id = :id")
     Optional<Preorder> lookup(@Param("id") UUID id);
