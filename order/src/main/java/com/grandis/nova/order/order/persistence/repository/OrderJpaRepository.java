@@ -27,6 +27,13 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
 
     Optional<OrderJpaEntity> findByPreorderId(UUID preorderId);
 
+    /**
+     * 선언 쿼리라 트랜잭션을 열지 않는다 — JpaRepository 의 기본 메서드는 읽기 전용 트랜잭션을 따로 열어 준비 · 정리 문장이 붙는다.
+     * ix_order_due 의 앞 칸(status)만 읽는다(EXPLAIN: key=ix_order_due, Using index).
+     */
+    @Query("select o.status as status, count(o) as count from OrderJpaEntity o where o.status in :statuses group by o.status")
+    List<StatusCountRow> countByStatusIn(@Param("statuses") Collection<OrderStatus> statuses);
+
     Optional<OrderJpaEntity> findByCustomerIdAndIdempotencyKey(UUID customerId, UUID idempotencyKey);
 
     List<OrderJpaEntity> findByCustomerIdAndSourceAndStatusIn(UUID customerId, OrderSource source, Collection<OrderStatus> statuses);
@@ -106,4 +113,10 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
 
     @Query("select o.eventSequence from OrderJpaEntity o where o.id = :id")
     long findEventSequence(@Param("id") UUID id);
+
+    interface StatusCountRow {
+        OrderStatus getStatus();
+
+        long getCount();
+    }
 }
