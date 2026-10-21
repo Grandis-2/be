@@ -12,7 +12,7 @@ order 의 보내는 쪽은 `order/outbox`(표 `order_outbox_events`), 받는 쪽
 | `PREORDER_CANCEL_REQUESTED` | preorder → `order-events` | 그 예약의 주문을 정리한다(미결제 취소 · 결제됨 환불 · 거절) |
 | `PREORDER_ORDER_SETTLED` | order → `preorder-events` | 정리 결과로 외부 취소를 시작하거나(NO_ORDER · CANCELED) 예약을 되돌린다(REJECTED) |
 
-`PREORDER_EXPIRY_REQUESTED`(batch → preorder)는 이 문서 밖이다 — preorder 안에서 만료 취소를 시작하고, 주문 정리는 위 취소 요청(사유 `EXPIRY`)으로 온다.
+결제 기한 만료는 이벤트로 받지 않는다 — preorder 주기 작업이 만료 취소를 시작하고, 주문 정리는 위 취소 요청(사유 `EXPIRY`)으로 간다.
 
 - **최소 한 번.** 보내는 쪽은 업무 변경과 같은 트랜잭션에서 아웃박스에 적고, 커밋 직후 한 번 보내며 못 보냈으면 릴레이가 다시 보낸다. 같은 메시지가 두 번 갈 수 있다 — 받는 쪽은 두 번 받아도 결과가 같다(이벤트마다 아래).
 - **순서 보장 없음.** 표준 큐다. 이벤트마다 순서가 뒤집혀도 되는 근거를 아래에 적는다.

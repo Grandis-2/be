@@ -118,4 +118,9 @@ public class SyncJobs {
     public Map<SyncJobType, Map<SyncJobStatus, Long>> countUnfinished(UUID productId) {
         return unfinished.count(productId);
     }
+
+    /** 포기한(DEAD_LETTER) 작업 수. 종류 → 상품 → 수, 0 인 상품은 없다. 트랜잭션 없이 문장 하나다. */
+    public Map<SyncJobType, Map<UUID, Long>> countDeadLetterByProduct() {
+        return unfinished.countDeadLetterByProduct();
+    }
 }

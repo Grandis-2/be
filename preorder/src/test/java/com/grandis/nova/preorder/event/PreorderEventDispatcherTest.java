@@ -148,19 +148,6 @@ class PreorderEventDispatcherTest {
     }
 
     @Test
-    void 만료_요청_메시지를_만료_취소로_보낸다() {
-        handler.onExternalJobSucceeded(ShopFixtures.unique(), ShopFixtures.succeeded(fixtures.workerSucceeds(preorderId, "REGISTER"),
-                token, "REGISTER", "R-" + ShopFixtures.unique()));
-        jdbcTemplate.update("UPDATE preorders SET payable_from = UTC_TIMESTAMP(6) - INTERVAL 25 HOUR WHERE id = ?",
-                (Object) UuidBinary.toBytes(preorderId));
-
-        dispatcher.dispatch(envelope("PREORDER_EXPIRY_REQUESTED", "PREORDER", preorderId,
-                payload().put("preorderId", token)));
-
-        assertThat(status()).isEqualTo("CANCELING");
-    }
-
-    @Test
     void 판매_중지_메시지를_회차_취소로_보낸다() {
         UUID productId = preorders.findById(preorderId).orElseThrow().productId();
 

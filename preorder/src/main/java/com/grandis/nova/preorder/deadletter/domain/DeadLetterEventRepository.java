@@ -83,12 +83,9 @@ public interface DeadLetterEventRepository extends JpaRepository<DeadLetterEvent
         return findWaitingIds(OPEN, REDRIVING, staleBefore, eventType, failureReason, Limit.of(limit));
     }
 
-    default long countWaiting(Instant staleBefore) {
-        return countWaiting(OPEN, REDRIVING, staleBefore);
-    }
-
-    default Optional<Instant> findOldestWaitingCreatedAt(Instant staleBefore) {
-        return findOldestWaitingCreatedAt(OPEN, REDRIVING, staleBefore);
+    /** 기다리는 행을 종류 · 사유별로 센다(수와 가장 오래된 시각). 합계 · 가장 오래된 것도 이 한 문장에서 낸다. */
+    default List<WaitingGroup> countWaitingByKind(Instant staleBefore) {
+        return countWaitingByKind(OPEN, REDRIVING, staleBefore);
     }
 
     @Modifying(flushAutomatically = true, clearAutomatically = true)
@@ -139,17 +136,26 @@ public interface DeadLetterEventRepository extends JpaRepository<DeadLetterEvent
                               @Param("failureReason") FailureReason failureReason, Limit limit);
 
     @Query("""
-            select count(d) from DeadLetterEvent d
-             where d.status = :open or (d.status = :redriving and d.redriveStartedAt < :staleBefore)""")
-    long countWaiting(@Param("open") DeadLetterStatus open, @Param("redriving") DeadLetterStatus redriving,
-                      @Param("staleBefore") Instant staleBefore);
+            select d.eventType as eventType, d.failureReason as failureReason, count(d) as count,
+                   min(d.createdAt) as oldestAt
+              from DeadLetterEvent d
+             where d.status = :open or (d.status = :redriving and d.redriveStartedAt < :staleBefore)
+             group by d.eventType, d.failureReason""")
+    List<WaitingGroup> countWaitingByKind(@Param("open") DeadLetterStatus open,
+                                          @Param("redriving") DeadLetterStatus redriving,
+                                          @Param("staleBefore") Instant staleBefore);
 
-    @Query("""
-            select min(d.createdAt) from DeadLetterEvent d
-             where d.status = :open or (d.status = :redriving and d.redriveStartedAt < :staleBefore)""")
-    Optional<Instant> findOldestWaitingCreatedAt(@Param("open") DeadLetterStatus open,
-                                                 @Param("redriving") DeadLetterStatus redriving,
-                                                 @Param("staleBefore") Instant staleBefore);
+    interface WaitingGroup {
+
+        /** 보낸 쪽이 적은 종류. 읽지 못한 메시지면 null 이다. */
+        String getEventType();
+
+        FailureReason getFailureReason();
+
+        long getCount();
+
+        Instant getOldestAt();
+    }
 
     default long countWaitingOfProduct(UUID productId, Instant staleBefore) {
         return countWaitingOfProduct(OPEN, REDRIVING, staleBefore, productId);
