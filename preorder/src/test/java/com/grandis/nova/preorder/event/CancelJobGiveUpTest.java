@@ -335,7 +335,7 @@ class CancelJobGiveUpTest {
                 secondLocking.countDown();
             }
             return delegate.answer(invocation);
-        }).given(target).lockStatus(preorderId);
+        }).given(target).lock(preorderId);
     }
 
     private static void awaitQuietly(CountDownLatch latch) {

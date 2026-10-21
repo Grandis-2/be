@@ -3,8 +3,8 @@ package com.grandis.nova.preorder.cancel;
 import com.grandis.nova.preorder.cancel.application.CancelStarter;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
+import com.grandis.nova.preorder.preorder.LockedPreorder;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
-import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.preorder.Preorders;
 import org.slf4j.Logger;
@@ -36,7 +36,7 @@ public class ExpiryCancelService {
     /** @return 이번에 취소를 시작했으면 true. 대상이 아니면(결제 · 취소됨 · 기한 전 · 주문 쪽 거절 이력) false */
     @Transactional
     public boolean expire(String preorderToken) {
-        PreorderSnapshot preorder = ledger.lockByToken(preorderToken)
+        LockedPreorder preorder = ledger.lockByToken(preorderToken)
                 .orElseThrow(() -> new IllegalArgumentException("예약이 없다: " + preorderToken));
         Instant dueAt = preorder.paymentDueAt();
         if (preorder.status() != PreorderStatus.REGISTERED || clock.instant().isBefore(dueAt)) {

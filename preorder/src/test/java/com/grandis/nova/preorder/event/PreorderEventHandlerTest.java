@@ -178,7 +178,7 @@ class PreorderEventHandlerTest {
         handler.onPaymentConfirmed(new PreorderPaymentConfirmed(token, "o-1", Instant.now()));
 
         assertThat(row()).containsEntry("status", "CANCELED");
-        assertThat(preorders.findReservedAt(preorderId)).isEmpty();
+        assertThat(preorders.getById(preorderId).reservedAt()).isNull();
         assertThat(paymentAfterCancel() - before).isEqualTo(1);
     }
 
@@ -294,7 +294,7 @@ class PreorderEventHandlerTest {
         handler.onPaymentConfirmed(new PreorderPaymentConfirmed(token, "o-1", Instant.parse("2026-10-04T01:02:00Z")));
 
         assertThat(row()).containsEntry("status", "CANCELING");
-        assertThat(preorders.findReservedAt(preorderId)).contains(Instant.parse("2026-10-04T01:02:00Z"));
+        assertThat(preorders.getById(preorderId).reservedAt()).isEqualTo(Instant.parse("2026-10-04T01:02:00Z"));
         assertThat(paymentAfterCancel() - before).isZero();
     }
 

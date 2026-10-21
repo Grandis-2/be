@@ -5,10 +5,10 @@ import com.grandis.nova.preorder.cancel.CancelCompletion;
 import com.grandis.nova.preorder.cancel.CancelRequestPayload;
 import com.grandis.nova.preorder.outbox.NotificationRequested;
 import com.grandis.nova.preorder.preorder.EventActor;
+import com.grandis.nova.preorder.preorder.LockedPreorder;
 import com.grandis.nova.preorder.preorder.PreorderFact;
 import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
-import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.preorder.PreorderTransition;
 import com.grandis.nova.preorder.preorder.Preorders;
@@ -95,11 +95,13 @@ public class PreorderEventHandler {
      */
     @Transactional
     public void onExternalJobSucceeded(String eventId, ExternalJobSucceeded message) {
-        Optional<SyncJobSnapshot> found = lockJob(message.syncJobId());
+        Optional<LockedPreorder> locked = lockPreorderOf(message.syncJobId());
+        Optional<SyncJobSnapshot> found = locked.flatMap(preorder -> syncJobs.findById(message.syncJobId()));
         if (found.isEmpty()) {
             return;
         }
         SyncJobSnapshot job = found.get();
+        LockedPreorder preorder = locked.get();
         if (message.attempt() != null) {
             syncJobs.recordAttempt(job.id(), eventId, message.attempt());
         }
@@ -112,16 +114,15 @@ public class PreorderEventHandler {
             return;
         }
         if (job.jobType() == SyncJobType.REGISTER) {
-            if (ledger.fire(job.preorderId(), new PreorderFact.RegisterConfirmed(message.externalNumber())).applied()) {
-                notifyRegistered(job.preorderId());
+            if (ledger.fire(preorder, new PreorderFact.RegisterConfirmed(message.externalNumber())).applied()) {
+                notifyRegistered(preorder);
             }
         } else {
-            cancelCompletion.complete(job.preorderId(), EventActor.SYSTEM, null);
+            cancelCompletion.complete(preorder, EventActor.SYSTEM, null);
         }
     }
 
-    private void notifyRegistered(UUID preorderId) {
-        PreorderSnapshot preorder = preorders.getById(preorderId);
+    private void notifyRegistered(LockedPreorder preorder) {
         outboxWriter.append(NotificationRequested.preorderRegistered(preorder.id(), preorder.preorderToken(),
                 preorder.customerId()));
     }
@@ -209,13 +210,17 @@ public class PreorderEventHandler {
      * 모르는 작업이면 비어 있다 — 다시 받아도 생기지 않으므로 버린다.
      */
     private Optional<SyncJobSnapshot> lockJob(UUID syncJobId) {
+        return lockPreorderOf(syncJobId).flatMap(preorder -> syncJobs.findById(syncJobId));
+    }
+
+    /** 작업의 예약 행을 잠그며 읽는다. 모르는 작업이면 비어 있다. */
+    private Optional<LockedPreorder> lockPreorderOf(UUID syncJobId) {
         Optional<UUID> preorderId = syncJobs.findPreorderId(syncJobId);
         if (preorderId.isEmpty()) {
             log.warn("모르는 작업의 결과 이벤트를 무시한다 syncJobId={}", syncJobId);
             return Optional.empty();
         }
-        ledger.lockStatus(preorderId.get());
-        return syncJobs.findById(syncJobId);
+        return Optional.of(ledger.lock(preorderId.get()));
     }
 
     /**
@@ -241,8 +246,7 @@ public class PreorderEventHandler {
     /** 결제 시작. 화면의 "결제 진행 중" 표시용 시각만 남긴다 — 결제 가능 상태가 아니면 무시된다. */
     @Transactional
     public void onPaymentStarted(PreorderPaymentStarted message) {
-        ledger.fire(requirePreorder(message.preorderId()).id(),
-                new PreorderFact.PaymentStarted(message.startedAt()));
+        ledger.fire(lockPreorder(message.preorderId()), new PreorderFact.PaymentStarted(message.startedAt()));
     }
 
     /**
@@ -253,14 +257,14 @@ public class PreorderEventHandler {
      */
     @Transactional
     public void onPaymentConfirmed(PreorderPaymentConfirmed message) {
-        UUID preorderId = requirePreorder(message.preorderId()).id();
+        LockedPreorder preorder = lockPreorder(message.preorderId());
         PreorderFact.PaymentConfirmed paid = new PreorderFact.PaymentConfirmed(message.paidAt());
-        PreorderTransition transition = ledger.fire(preorderId, paid);
+        PreorderTransition transition = ledger.fire(preorder, paid);
         if (transition.applied() || transition.status() != PreorderStatus.CANCELED
-                || isRecordedPayment(preorderId, paid.paidAt())) {
+                || isRecordedPayment(preorder, paid.paidAt())) {
             return;
         }
-        if (!ledger.recordPaymentAfterCancel(preorderId, message.orderId(), paid.paidAt())) {
+        if (!ledger.recordPaymentAfterCancel(preorder.id(), message.orderId(), paid.paidAt())) {
             log.info("이미 남긴 이상 결제를 다시 받았다 preorderId={} paidAt={}", message.preorderId(), paid.paidAt());
             return;
         }
@@ -275,9 +279,12 @@ public class PreorderEventHandler {
         });
     }
 
-    /** 이미 남긴 결제 시각과 같은가. 같으면 취소 전에 반영한 결제 확인이 다시 온 것이다. 둘 다 저장 정밀도로 맞춘 값이다. */
-    private boolean isRecordedPayment(UUID preorderId, Instant paidAt) {
-        return paidAt != null && preorders.findReservedAt(preorderId).filter(paidAt::equals).isPresent();
+    /**
+     * 잠글 때 읽은 결제 시각과 같은가. 같으면 취소 전에 반영한 결제 확인이 다시 온 것이다. 둘 다 저장 정밀도로 맞춘 값이다.
+     * 취소가 끝난 예약에는 전이가 없어 잠글 때의 값이 지금 값이다.
+     */
+    private static boolean isRecordedPayment(LockedPreorder preorder, Instant paidAt) {
+        return paidAt != null && paidAt.equals(preorder.reservedAt());
     }
 
     /**
@@ -289,39 +296,36 @@ public class PreorderEventHandler {
      */
     @Transactional
     public void onOrderSettled(PreorderOrderSettled message) {
-        PreorderSnapshot preorder = requirePreorder(message.preorderId());
-        if (!isCurrentCancel(preorder.id(), message.cancelSequence())) {
+        LockedPreorder preorder = lockPreorder(message.preorderId());
+        if (!isCurrentCancel(preorder, message.cancelSequence())) {
             log.warn("지금 취소 시도의 결과가 아니라 무시한다 preorderId={} cancelSequence={}",
                     message.preorderId(), message.cancelSequence());
             return;
         }
         switch (message.result()) {
             case NO_ORDER, CANCELED -> requestExternalCancel(preorder);
-            case REJECTED -> ledger.fire(preorder.id(),
+            case REJECTED -> ledger.fire(preorder,
                     new PreorderFact.CancelRejected(rejectionReason(message.reason()), message.paidAt()));
         }
     }
 
-    private PreorderSnapshot requirePreorder(String preorderToken) {
-        return preorders.findByToken(preorderToken)
+    /** 예약 행을 잠그며 읽는다. 잠금은 이 트랜잭션 끝까지 유지되므로 뒤이은 판단 사이에 새 취소가 끼어들지 못한다. */
+    private LockedPreorder lockPreorder(String preorderToken) {
+        return ledger.lockByToken(preorderToken)
                 .orElseThrow(() -> new IllegalArgumentException("예약이 없다: " + preorderToken));
     }
 
-    /**
-     * 예약 행을 잠근 채 취소 중인지, 결과의 시도 순번이 마지막 CANCELING 진입 이력과 같은지 본다.
-     * 잠금은 이 트랜잭션 끝까지 유지되므로 뒤이은 판단 사이에 새 취소가 끼어들지 못한다.
-     */
-    private boolean isCurrentCancel(UUID preorderId, Long cancelSequence) {
-        PreorderStatus status = ledger.lockStatus(preorderId);
-        return status == PreorderStatus.CANCELING
-                && preorders.lastTransitionTo(preorderId, PreorderStatus.CANCELING)
+    /** 잠근 예약이 취소 중인지, 결과의 시도 순번이 마지막 CANCELING 진입 이력과 같은지 본다. */
+    private boolean isCurrentCancel(LockedPreorder preorder, Long cancelSequence) {
+        return preorder.status() == PreorderStatus.CANCELING
+                && preorders.lastTransitionTo(preorder.id(), PreorderStatus.CANCELING)
                         .map(PreorderHistoryEntry::eventSequence)
                         .filter(cancelSequence::equals)
                         .isPresent();
     }
 
     /** 예약 행은 이미 잠겨 있다. CANCEL 작업이 이미 있으면 만들지 않는다 — 같은 결과를 두 번 받아도 작업은 하나다. */
-    private void requestExternalCancel(PreorderSnapshot preorder) {
+    private void requestExternalCancel(LockedPreorder preorder) {
         if (syncJobs.exists(preorder.id(), SyncJobType.CANCEL)) {
             return;
         }
