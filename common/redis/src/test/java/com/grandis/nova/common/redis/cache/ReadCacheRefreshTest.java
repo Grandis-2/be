@@ -70,6 +70,7 @@ class ReadCacheRefreshTest {
     @BeforeEach
     void setUp() {
         redis.getConnectionFactory().getConnection().serverCommands().flushAll();
+        redis.opsForValue().set("svc:cache:gen:g", "0");   // 세대 시작점을 정해 둔다(없으면 지금 시각으로 시작한다)
         clock = new ReadCacheTest.MutableClock(Instant.now().truncatedTo(ChronoUnit.MILLIS));
         tasks = new Tasks();
         events = new Events();
@@ -126,7 +127,7 @@ class ReadCacheRefreshTest {
         assertThat(loads.get()).as("원천을 다시 읽지 않았다").isEqualTo(1);
         assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_UNAVAILABLE);
 
-        redis.delete("svc:cache:gen:g");   // 복구 — 세대 0, 값 키는 그대로
+        redis.opsForValue().set("svc:cache:gen:g", "0");   // 복구 — 세대 0, 값 키는 그대로
         cache.entry(spec, "g", "k", () -> load("v3"));
         assertThat(tasks.pending()).as("막아 두지 않았다 — 다음 히트가 다시 맡긴다").isEqualTo(1);
     }

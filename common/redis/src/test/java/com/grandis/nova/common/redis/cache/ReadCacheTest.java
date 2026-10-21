@@ -81,6 +81,10 @@ class ReadCacheTest {
     @BeforeEach
     void setUp() {
         redis.getConnectionFactory().getConnection().serverCommands().flushAll();
+        // 세대를 0 에서 세게 심어 둔다 — 없는 세대는 지금 시각으로 시작하므로(복원 · 삭제 대비) 몇 번 올렸는지 세는 시험은 시작점을 정해 둔다
+        for (String generation : List.of("svc:cache:gen:products", "svc:cache:gen:reviews", "svc:cache:gen:off", "other:cache:gen:products")) {
+            redis.opsForValue().set(generation, "0");
+        }
         cache = new ReadCache(redis, JSON, "svc");
         items = cache.spec("item", Item.class, Duration.ofSeconds(30));
     }
@@ -149,7 +153,7 @@ class ReadCacheTest {
             status.setRollbackOnly();
         });
         assertThat(redis.opsForValue().get("svc:cache:gen:products")).isEqualTo("1");
-        assertThat(redis.opsForValue().get("svc:cache:gen:reviews")).as("롤백된 바깥은 올리지 않는다").isNull();
+        assertThat(redis.opsForValue().get("svc:cache:gen:reviews")).as("롤백된 바깥은 올리지 않는다").isEqualTo("0");
     }
 
     @Test
@@ -161,7 +165,7 @@ class ReadCacheTest {
 
         cache.breaker().transitionToForcedOpenState();
         cache.bumpAfterCommit("products");
-        assertThat(redis.opsForValue().get("svc:cache:gen:products")).as("열린 동안은 부르지 않는다").isNull();
+        assertThat(redis.opsForValue().get("svc:cache:gen:products")).as("열린 동안은 부르지 않는다").isEqualTo("0");
         cache.breaker().transitionToClosedState();
 
         cache.get(items, "reviews", "x", () -> item("x", new AtomicInteger()));   // 다른 세대의 조회여도 미룬 것을 올린다
@@ -174,7 +178,7 @@ class ReadCacheTest {
     void successfulBumpClearsPending() {
         redis.opsForValue().set("svc:cache:gen:products", "not-a-number");
         cache.bumpAfterCommit("products");   // 실패 — 미룬다
-        redis.delete("svc:cache:gen:products");
+        redis.opsForValue().set("svc:cache:gen:products", "0");   // 복구
         cache.bumpAfterCommit("products");   // 성공
 
         cache.get(items, "products", "1", () -> item("v", new AtomicInteger()));
@@ -187,7 +191,7 @@ class ReadCacheTest {
         redis.opsForValue().set("svc:cache:gen:products", "not-a-number");
         cache.bumpAfterCommit("products");
         cache.get(items, "reviews", "x", () -> item("x", new AtomicInteger()));   // 다른 세대 조회 — 다시 해 보지만 또 실패
-        redis.delete("svc:cache:gen:products");
+        redis.opsForValue().set("svc:cache:gen:products", "0");   // 복구
 
         cache.get(items, "reviews", "x", () -> item("x", new AtomicInteger()));
         assertThat(redis.opsForValue().get("svc:cache:gen:products")).isEqualTo("1");
@@ -198,7 +202,7 @@ class ReadCacheTest {
     void pendingBumpRetriedOnceUnderConcurrency() throws Exception {
         redis.opsForValue().set("svc:cache:gen:products", "not-a-number");
         cache.bumpAfterCommit("products");
-        redis.delete("svc:cache:gen:products");
+        redis.opsForValue().set("svc:cache:gen:products", "0");   // 복구
 
         concurrently(32, () -> cache.get(items, "reviews", "x", () -> item("x", new AtomicInteger())));
         assertThat(redis.opsForValue().get("svc:cache:gen:products")).isEqualTo("1");
@@ -223,7 +227,7 @@ class ReadCacheTest {
         // INCR 이 확실히 실패하게(정수가 아닌 값). 멈춘 Redis(PAUSE)로는 못 잰다 — 시간 초과된 INCR 이 풀린 뒤 서버에서 실행돼 세대가 올라 버린다
         redis.opsForValue().set("svc:cache:gen:products", "not-a-number");
         cache.bumpAfterCommit("products");   // 던지지 않는다
-        redis.delete("svc:cache:gen:products");   // 복구 — 세대는 다시 0 이고 옛 값(0 세대 키)이 그대로 있다
+        redis.opsForValue().set("svc:cache:gen:products", "0");   // 복구 — 세대는 다시 0 이고 옛 값(0 세대 키)이 그대로 있다
 
         assertThat(cache.get(items, "products", "1", () -> item("new", new AtomicInteger())).name()).isEqualTo("new");
         assertThat(redis.opsForValue().get("svc:cache:gen:products")).isEqualTo("1");
@@ -241,7 +245,7 @@ class ReadCacheTest {
 
         redis.opsForValue().set("svc:cache:gen:products", "not-a-number");
         assertThatThrownBy(() -> cache.bumpNow("products")).isInstanceOf(IllegalStateException.class);
-        redis.delete("svc:cache:gen:products");
+        redis.opsForValue().set("svc:cache:gen:products", "0");   // 복구
         cache.get(items, "reviews", "x", () -> item("x", new AtomicInteger()));
         assertThat(redis.opsForValue().get("svc:cache:gen:products")).as("미룬 것").isEqualTo("1");
 
@@ -250,7 +254,7 @@ class ReadCacheTest {
         cache.breaker().transitionToClosedState();
 
         ReadCache.off(JSON, "svc").bumpNow("off");
-        assertThat(redis.opsForValue().get("svc:cache:gen:off")).as("Redis 없는 끈 캐시는 아무것도 안 한다").isNull();
+        assertThat(redis.opsForValue().get("svc:cache:gen:off")).as("Redis 없는 끈 캐시는 아무것도 안 한다").isEqualTo("0");
         ReadCache.off(redis, JSON, "svc").bumpNow("off");
         assertThat(redis.opsForValue().get("svc:cache:gen:off")).as("Redis 를 받은 끈 캐시는 올린다 — 같은 큐의 켠 인스턴스를 위해").isEqualTo("1");
 
