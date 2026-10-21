@@ -141,9 +141,9 @@ public class PreorderAcceptService {
     }
 
     /**
-     * 회차 캐시가 접수 중이 아니라 하면(회차 없음 · 오픈 전 · 마감) 회차를 잠그지 않고 판정한다 — 오픈 직전에 몰린 접수가 잠금 줄에
+     * 회차 캐시가 회차 없음 · 오픈 전이라 하면 회차를 잠그지 않고 판정한다 — 오픈 직전에 몰린 접수가 잠금 줄에
      * 서서 커넥션을 오래 쥐지 않게. 캐시는 회차가 바뀌면 커밋 뒤 비우므로 비우기를 놓쳤을 때만 수명만큼 옛 판정이다.
-     * 접수 중이면(또는 판정을 지나면) 잠근 뒤 회차 행으로 다시 판정한다.
+     * 그 밖(접수 중 · 마감, 또는 판정을 지나면)은 잠근 뒤 회차 행으로 판정한다.
      */
     private AcceptResult accept(AcceptCommand command) {
         Optional<ProductCatalog> product = catalogReader.findProduct(command.productId());
@@ -158,7 +158,7 @@ public class PreorderAcceptService {
     private AcceptResult settleThenAccept(AcceptCommand command, Optional<ProductCatalog> product) {
         Optional<CachedCampaign> cached = campaigns.findCached(command.productId());
         Instant now = clock.instant();
-        if (cached.filter(campaign -> campaign.accepting(now)).isEmpty()) {
+        if (cached.filter(campaign -> campaign.opened(now)).isEmpty()) {
             Optional<AcceptResult> settled = transaction.settleBeforeLock(command, product,
                     cached.map(CachedCampaign::schedule));
             if (settled.isPresent()) {

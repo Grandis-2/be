@@ -8,7 +8,6 @@ import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
-import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.campaign.application.PreorderCampaignAdminService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
@@ -37,6 +36,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -62,9 +62,6 @@ class PreorderAcceptConcurrencyTest {
 
     @Autowired
     PreorderCampaignAdminService campaignAdmin;
-
-    @Autowired
-    Campaigns campaigns;
 
     @Autowired
     PreorderLedger ledger;
@@ -419,26 +416,47 @@ class PreorderAcceptConcurrencyTest {
         assertThat(outcome.error()).isEqualTo(PreorderErrorCode.KEY_PAYLOAD_MISMATCH);
     }
 
-    /** 마감 뒤에도 잠그지 않고 판정하되 우선순위는 같다 — 같은 접수 키 재전송은 기존 예약, 새 접수는 SALE_CLOSED. */
+    /**
+     * 마감 직전 접수가 커밋되기 전에 마감 시각이 지나고 같은 키 재전송이 오면, 재전송은 잠금 뒤에 그 예약을 받아야 한다 —
+     * 마감은 잠그기 전에 판정하지 않는다(잠그지 않고 읽으면 커밋 전 예약이 안 보여 SALE_CLOSED 다).
+     */
     @Test
-    void 마감_뒤에는_잠금을_기다리지_않고_재전송은_기존_예약을_새_접수는_거절을_준다() throws Exception {
+    void 마감_직전_접수가_커밋되기_전_재전송은_잠금_뒤에_기존_예약을_받는다() throws Exception {
+        Instant closesAt = Instant.now().plusSeconds(2);
+        PreorderProduct closing = fixtures.preorderProduct(closesAt.minusSeconds(3600), closesAt);
+        given(catalogClient.getProduct(closing.productId())).willReturn(
+                CatalogStubs.preorderProduct(closing.productId(), CatalogStubs.activeOption(closing.optionId())));
         UUID customerId = fixtures.customer();
-        String ticket = AdmissionTickets.issue(product.productId(), customerId, Instant.now());
-        AcceptResult accepted = acceptService.acceptByCustomer(customerId, product.productId(), product.productId(),
-                product.optionId(), "closed-replay", ticket);
-        campaigns.closeNow(product.productId(), Instant.now());
+        String ticket = AdmissionTickets.issue(closing.productId(), customerId, Instant.now());
+        CountDownLatch inserted = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
+        // 첫 접수는 마감 전에 판정을 지나 예약을 넣고(회차 행을 쥔 채), 마감 시각 뒤에 커밋한다
+        CompletableFuture<AcceptResult> first = CompletableFuture.supplyAsync(() -> transactionTemplate.execute(status -> {
+            AcceptResult accepted = acceptService.acceptByCustomer(customerId, closing.productId(),
+                    closing.productId(), closing.optionId(), "close-inflight", ticket);
+            inserted.countDown();
+            awaitQuietly(commit);
+            return accepted;
+        }));
+        assertThat(inserted.await(10, TimeUnit.SECONDS)).isTrue();
+        await().atMost(Duration.ofSeconds(5)).until(() -> Instant.now().isAfter(closesAt));
 
-        try (CampaignRowLock ignored = CampaignRowLock.hold(dataSource, product.productId())) {
-            long started = System.nanoTime();
-            AcceptResult replayed = acceptService.acceptByCustomer(customerId, product.productId(),
-                    product.productId(), product.optionId(), "closed-replay", ticket);
-            UUID lateCustomer = fixtures.customer();
-            Outcome late = Outcome.of(() -> acceptByCustomer(lateCustomer, "closed-late"));
+        CompletableFuture<AcceptResult> replay = CompletableFuture.supplyAsync(() -> acceptService.acceptByCustomer(
+                customerId, closing.productId(), closing.productId(), closing.optionId(), "close-inflight", ticket));
+        Thread.sleep(300);
+        commit.countDown();
 
-            assertThat(replayed.replayed()).isTrue();
-            assertThat(replayed.preorder().preorderToken()).isEqualTo(accepted.preorder().preorderToken());
-            assertThat(late.error()).isEqualTo(PreorderErrorCode.SALE_CLOSED);
-            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(2));
+        AcceptResult replayed = replay.get(30, TimeUnit.SECONDS);
+        assertThat(replayed.replayed()).isTrue();
+        assertThat(replayed.preorder().preorderToken())
+                .isEqualTo(first.get(30, TimeUnit.SECONDS).preorder().preorderToken());
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
