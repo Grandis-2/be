@@ -38,7 +38,8 @@ import java.util.stream.Collectors;
  *       상품이 한 묶음이라, 회차 없는 사전예약 상품이 어느 홍보에 하나만 묶여 있어도 목록 전체가 요청마다 묻는다.</li>
  *   <li><b>preorder 에 묻는 방식</b> — 켜면 채울 때 fresh(preorder 의 회차 캐시를 건너뛰고 DB)로 묻는다. 이벤트를 받아 세대를 올린 직후, 아직 자기
  *       캐시를 비우지 않은 preorder 인스턴스가 옛 값을 주면 그 값을 TTL 동안 두게 되기 때문이다. 끄면 fresh 없이 묻는다 — 요청마다 묻는 공개 조회까지
- *       preorder DB 로 보내지 않게(그 값은 이 요청에만 쓴다).</li>
+ *       preorder DB 로 보내지 않게(그 값은 이 요청에만 쓴다). 켠 채 읽기 캐시를 쓸 수 없으면(nova.read-cache.enabled=false · Redis 장애로 세대를 못
+ *       읽음) 넣지 않으면서도 요청마다 fresh 로 묻는다 — 그동안 공개 조회가 preorder DB 를 읽는다(상품 캐시 등 다른 읽기 캐시도 그동안 DB 로 간다).</li>
  *   <li>접수 단계는 넣지 않는다 — 호출자가 꺼낸 시각으로 계산하므로 오픈 · 마감 시각이 지나는 것은 캐시와 상관없이 바로 보인다.</li>
  *   <li>preorder 가 답하지 않으면 넣지 않고 {@link PreorderCampaigns#find} 와 같이 던진다. 켜 두면 하나 더 — 같은 키를 이 인스턴스에서 먼저 묻고 있는
  *       요청을 기다리는 쪽은 ReadCache 의 기다림 상한(5초)을 넘으면 같은 DEPENDENCY_UNAVAILABLE 을 던진다(그것을 어떻게 답할지는 호출자 몫이다).</li>
