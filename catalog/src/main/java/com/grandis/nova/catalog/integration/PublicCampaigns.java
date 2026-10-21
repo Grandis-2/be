@@ -2,6 +2,7 @@ package com.grandis.nova.catalog.integration;
 
 import com.grandis.nova.catalog.listing.CampaignWindow;
 import com.grandis.nova.common.redis.cache.ReadCache;
+import com.grandis.nova.common.redis.cache.ReadCache.LoadPath;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.type.TypeReference;
@@ -41,8 +42,8 @@ import java.util.stream.Collectors;
  *       인스턴스가 옛 값을 주면 그 값을 TTL 동안 두게 되기 때문이다. 넣지 않을 값(회차 없는 상품 · 그런 상품이 든 묶음)은 이 요청에만 쓰므로 fresh 로
  *       묻지 않는다 — 요청마다 묻는 그 갈래를 preorder DB 로 보내지 않게. 그래서 넣지 않을 값은 preorder 캐시의 값이라 옛 값일 수 있다(preorder 의
  *       "회차 없음" 캐시 최대 5초 — 그동안 막 생긴 회차의 상세가 404, 묶음 속 회차 있는 상품은 비우기를 놓친 preorder 인스턴스면 최대 30초).
- *       끄면 fresh 없이 한 번 묻는다. 켠 채 Redis 장애로 세대를 못 읽으면 넣지 않으면서도 요청마다 위처럼 묻는다 — 그동안 회차 있는 공개 조회는 두 번
- *       묻고 그중 한 번은 preorder DB 를 읽는다(상품 캐시 등 다른 읽기 캐시도 그동안 DB 로 간다).</li>
+ *       끄면 fresh 없이 한 번 묻는다. 켠 채 Redis 를 못 쓰면(세대 · 값을 못 읽음 · 차단기 열림 — ReadCache 의 우회) 넣지 않으므로 fresh 없이 한 번만
+ *       묻는다 — 그동안 공개 조회는 요청마다 preorder 에 묻고, 받은 값은 위와 같이 옛 값일 수 있다.</li>
  *   <li>접수 단계는 넣지 않는다 — 호출자가 꺼낸 시각으로 계산하므로 오픈 · 마감 시각이 지나는 것은 캐시와 상관없이 바로 보인다.</li>
  *   <li>preorder 가 답하지 않으면 넣지 않고 {@link PreorderCampaigns#find} 와 같이 던진다. 켜 두면 하나 더 — 같은 키를 이 인스턴스에서 먼저 묻고 있는
  *       요청을 기다리는 쪽은 ReadCache 의 기다림 상한(5초)을 넘으면 같은 DEPENDENCY_UNAVAILABLE 을 던진다(그것을 어떻게 답할지는 호출자 몫이다).</li>
@@ -75,9 +76,11 @@ public class PublicCampaigns {
         if (oneSpec == null) {
             return campaigns.find(productId, false);
         }
-        // loader 가 null(회차 없음)이면 ReadCache 는 넣지 않는다 — 넣을 값(회차 있음)일 때만 fresh 로 다시 묻는다
-        return Optional.ofNullable(cache.get(oneSpec, CAMPAIGNS, productId.toString(),
-                () -> campaigns.find(productId, false).isEmpty() ? null : campaigns.find(productId, true).orElse(null)));
+        // loader 가 null(회차 없음)이면 ReadCache 는 넣지 않는다 — 채우기에서 넣을 값(회차 있음)일 때만 fresh 로 다시 묻는다
+        return Optional.ofNullable(cache.get(oneSpec, CAMPAIGNS, productId.toString(), path -> {
+            Optional<CampaignWindow> found = campaigns.find(productId, false);
+            return path == LoadPath.FILL && found.isPresent() ? campaigns.find(productId, true).orElse(null) : found.orElse(null);
+        }));
     }
 
     /**
@@ -92,10 +95,10 @@ public class PublicCampaigns {
             return campaigns.find(productIds, false);
         }
         List<UUID> ids = productIds.stream().distinct().sorted().toList();
-        return cache.entry(manySpec, CAMPAIGNS, setKey(ids), () -> {
+        return cache.entry(manySpec, CAMPAIGNS, setKey(ids), path -> {
             Map<UUID, CampaignWindow> found = campaigns.find(ids, false);
-            // 넣을 묶음(모든 상품에 회차)일 때만 fresh 로 다시 묻는다 — 넣지 않을 묶음은 이 요청에만 쓰므로 preorder DB 로 보내지 않는다
-            return Map.copyOf(found.keySet().containsAll(ids) ? campaigns.find(ids, true) : found);
+            // 채우기에서 넣을 묶음(모든 상품에 회차)일 때만 fresh 로 다시 묻는다 — 우회 · 넣지 않을 묶음은 이 요청에만 쓰므로 preorder DB 로 보내지 않는다
+            return Map.copyOf(path == LoadPath.FILL && found.keySet().containsAll(ids) ? campaigns.find(ids, true) : found);
         }, found -> found.keySet().containsAll(ids)).value();
     }
 

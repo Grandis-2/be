@@ -108,6 +108,25 @@ class PublicCampaignsApiTest {
     }
 
     @Test
+    @DisplayName("Redis 를 못 쓰면(세대를 못 읽음) 회원 상세 · 홍보 카드는 preorder 에 fresh 없이 한 번만 묻고 넣지 않는다 — 장애 동안 preorder DB 로 보내지 않게")
+    void redisFailureAsksOnceWithoutFresh() throws Exception {
+        UUID productId = openPreorder("장애 우회");
+        UUID promotionId = promotion(productId);
+        String generation = "catalog:cache:gen:" + PublicCampaigns.CAMPAIGNS;
+        redis.opsForValue().set(generation, "not-a-number");   // 세대 조회 실패
+        try {
+            clearInvocations(client);
+            assertThat(detailStatus(productId)).isEqualTo("OPEN");
+            assertThat(cardStatuses(promotionId)).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(productId, "OPEN"));
+            verify(client, times(2)).getCampaigns(any(), eq(false));
+            verify(client, never()).getCampaigns(any(), eq(true));
+        } finally {
+            redis.delete(generation);
+        }
+        assertThat(redis.keys("catalog:cache:preorder-campaign*")).as("우회 결과는 넣지 않는다").isEmpty();
+    }
+
+    @Test
     @DisplayName("회차 없음(판매 준비 전)은 넣지 않는다 — 등록 뒤 회차가 생기면 세대를 올리지 않아도 바로 200")
     void missingCampaignIsNotCached() throws Exception {
         UUID productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", "준비 전", "t");
