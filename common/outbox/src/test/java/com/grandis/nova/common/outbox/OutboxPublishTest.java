@@ -39,10 +39,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mockingDetails;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 
 /**
@@ -230,7 +236,6 @@ class OutboxPublishTest {
         Object before = publishedAt(id);
 
         relay.relay();
-        publisher.publishById(id);
 
         assertThat(sentOf(eventIdOf(id))).isEmpty();
         assertThat(publishedAt(id)).isEqualTo(before);
@@ -242,8 +247,28 @@ class OutboxPublishTest {
         Long id = insertUnpublished("ITEM_SETTLED", true);
         Object before = publishedAt(id);
 
-        assertThat(store.markPublished(id, Instant.now().plusSeconds(60))).isZero();
+        assertThat(store.markPublished(List.of(id), Instant.now().plusSeconds(60))).isZero();
         assertThat(publishedAt(id)).isEqualTo(before);
+    }
+
+    /** 묶어 보내는 전송이면 릴레이도 같은 목적지 행을 한 번에 보내고 리스 연장 · 발행 표시도 묶음마다 한 번이다. */
+    @Test
+    void 릴레이는_같은_목적지_행을_묶어_한_번에_보낸다() {
+        given(transport.maxBatchSize()).willReturn(10);
+        given(transport.sendAll(anyList())).willAnswer(invocation -> {
+            List<OutboundMessage> messages = invocation.getArgument(0);
+            sent.addAll(messages);
+            return Map.of();
+        });
+        List<Long> ids = IntStream.range(0, 3).mapToObj(i -> insertUnpublished("ITEM_SETTLED", false)).toList();
+
+        relay.relay();
+
+        assertThat(ids).allSatisfy(id -> assertThat(publishedAt(id)).isNotNull());
+        then(transport).should(atLeastOnce()).sendAll(argThat(messages -> messages.stream()
+                .map(OutboundMessage::eventId).toList().containsAll(ids.stream().map(this::eventIdOf).toList())));
+        then(transport).should(never()).send(argThat(message -> ids.stream().map(this::eventIdOf).toList()
+                .contains(message.eventId())));
     }
 
     /** 표가 서비스 것이라 종류로 거르지 않는다. 행마다 자기 종류의 목적지로 간다. */
@@ -421,7 +446,8 @@ class OutboxPublishTest {
         Long failing = insertUnpublished("ITEM_SETTLED", false);
         List<Long> rest = List.of(insertUnpublished("ITEM_SETTLED", false), insertUnpublished("ITEM_SETTLED", false));
         OutboxStore failingStore = spy(store);
-        willThrow(new DataAccessResourceFailureException("db down")).given(failingStore).markPublished(eq(failing), any());
+        willThrow(new DataAccessResourceFailureException("db down")).given(failingStore)
+                .markPublished(eq(List.of(failing)), any());
         OutboxPublisher failingPublisher = new OutboxPublisher(failingStore, definition, transport, jsonMapper, clock,
                 OutboxMetrics.NONE);
 
@@ -546,7 +572,7 @@ class OutboxPublishTest {
     private long onAppendedCalls(Long id) {
         return mockingDetails(afterCommit).getInvocations().stream()
                 .filter(invocation -> invocation.getMethod().getName().equals("onAppended"))
-                .filter(invocation -> new OutboxAppended(id).equals(invocation.getArgument(0)))
+                .filter(invocation -> id.equals(((OutboxAppended) invocation.getArgument(0)).row().id()))
                 .count();
     }
 

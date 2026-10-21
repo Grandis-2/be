@@ -5,6 +5,7 @@ import com.grandis.nova.preorder.campaign.application.OpenAlertNotifier.Chunk;
 import com.grandis.nova.preorder.campaign.domain.OpenAlertDispatchStore;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository;
+import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository.OpenAlertSkipped;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -86,10 +87,9 @@ class CampaignOpeningJob {
 
     /** 창 안에서 건너뛰는 회차를 이유별로 센다. 표시 대상 조회와 따로 세 상한에 걸리지 않는다. */
     private void countSkipped(Instant now, Instant since) {
-        long hidden = campaigns.countOpenAlertWindowHidden(now, since);
-        long paused = campaigns.countOpenAlertWindowPaused(now, since, ProductStatus.PAUSED);
-        meterRegistry.counter(SKIPPED_METRIC, "reason", SkipReason.HIDDEN.name()).increment(hidden);
-        meterRegistry.counter(SKIPPED_METRIC, "reason", SkipReason.PAUSED.name()).increment(paused);
+        OpenAlertSkipped skipped = campaigns.countOpenAlertWindowSkipped(now, since, ProductStatus.PAUSED);
+        meterRegistry.counter(SKIPPED_METRIC, "reason", SkipReason.HIDDEN.name()).increment(skipped.getHidden());
+        meterRegistry.counter(SKIPPED_METRIC, "reason", SkipReason.PAUSED.name()).increment(skipped.getPaused());
     }
 
     /** 보내지 못한 채 창을 벗어난 회차를 이유와 함께 남긴다. 주기마다 지난 주기 뒤로 벗어난 것만 봐 회차당 한 번이다. */

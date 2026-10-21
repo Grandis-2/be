@@ -3,10 +3,10 @@ package com.grandis.nova.preorder.cancel;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.outbox.NotificationRequested;
 import com.grandis.nova.preorder.preorder.EventActor;
+import com.grandis.nova.preorder.preorder.LockedPreorder;
 import com.grandis.nova.preorder.preorder.PreorderFact;
 import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
-import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.preorder.Preorders;
 import org.springframework.stereotype.Component;
@@ -47,10 +47,15 @@ public class CancelCompletion {
      * @return CANCELED 로 바꿨으면 true, 이미 끝났거나 취소 중이 아니면 false
      */
     public boolean complete(UUID preorderId, EventActor actor, String reason) {
-        if (!ledger.fire(preorderId, new PreorderFact.CancelCompleted(actor, reason)).applied()) {
+        return complete(ledger.lock(preorderId), actor, reason);
+    }
+
+    /** 이미 잠근 예약의 취소를 끝낸다. 알림 값도 잠글 때 읽은 값으로 만든다 — 취소 완료는 결제 시각을 바꾸지 않는다. */
+    public boolean complete(LockedPreorder preorder, EventActor actor, String reason) {
+        if (!ledger.fire(preorder, new PreorderFact.CancelCompleted(actor, reason)).applied()) {
             return false;
         }
-        notifyCanceled(preorderId);
+        notifyCanceled(preorder);
         return true;
     }
 
@@ -58,9 +63,8 @@ public class CancelCompletion {
      * 까닭은 이번 취소 시도의 CANCELING 진입 이력 주체로 정한다(예약 행에 사유 칸이 없다). 결제 여부는 결제 확인 시각으로 본다 —
      * 결제 확인 이벤트가 취소 완료보다 늦게 오면 환불 문장이 빠지지만, 그런 순서는 드물고 문구만 덜 자세할 뿐이다.
      */
-    private void notifyCanceled(UUID preorderId) {
-        PreorderSnapshot preorder = preorders.getById(preorderId);
-        NotificationRequested.CancelCause cause = preorders.lastTransitionTo(preorderId, PreorderStatus.CANCELING)
+    private void notifyCanceled(LockedPreorder preorder) {
+        NotificationRequested.CancelCause cause = preorders.lastTransitionTo(preorder.id(), PreorderStatus.CANCELING)
                 .map(PreorderHistoryEntry::actor)
                 .map(CANCEL_CAUSES::get)
                 .orElse(NotificationRequested.CancelCause.OTHER);

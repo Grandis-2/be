@@ -101,11 +101,15 @@ nova:
     # 켜기는 코드 기본값(PreorderDefaults)이 받기 소비기(consumer.enabled)를 따른다. 끄려면 enabled: false
     dead-letter:
       queue: preorder-events-dlq
+  # 접수 격벽 — 같은 상품의 접수를 커넥션 밖에서 줄 세운다. 기본값은 코드(AcceptBulkheadProperties)에 있다:
+  # accept.bulkhead: product-permits 2 · pool-share 0.5(풀 10 → 전체 5) · instance-limit 0(풀에서 계산)
+  #                  · max-wait 3s · retry-after-min 1s · retry-after-max 3s(넘치면 503 + 그 사이 Retry-After)
   # 아웃박스 발행(common:outbox). transport 는 필수(없으면 기동 실패)다. 배포 환경은 sqs 다(log 는 로컬 · 시험 전용)
   # 지표 이름 접두어(metrics-prefix: preorder.outbox)는 코드(PreorderDefaults)에 기본값이 있다
   outbox:
     transport: sqs
-    concurrency: 32        # 커밋 직후 발행 동시 실행 상한(가상 스레드). 넘치면 릴레이가 보낸다
+    # 커밋 직후 발행 스레드 수(= 발행이 쥐는 커넥션 상한)는 코드 기본값 2(PreorderDefaults) — 덮지 않는다. 32 로 두면 풀을 접수와 다툰다
+    # buffer: 1000         # 발행을 기다리는 행 상한. 넘치면 릴레이가 보낸다
     relay-interval: 10s    # 릴레이 주기. 미발행 현황 지표(preorder.outbox.unpublished*)도 이 주기로 센다
     relay-after: 1m        # 만든 지 이만큼 지난 미발행 행만 재발행
     relay-batch: 100
@@ -117,6 +121,8 @@ nova:
     refresh-interval: 30s
   # 오픈 알림(회차가 열리면 신청자에게 회원 알림)을 찾는 주기 작업. 기본값은 코드에 있다:
   # campaign.open-alert.interval: 30s · window: 1h(연 지 이보다 오래된 회차는 보내지 않는다) · batch-size: 100
+  # 회차 캐시(일정 · 공개 · 차수, 인스턴스 안). 바뀌면 커밋 뒤 모든 인스턴스에서 비우고 수명은 놓쳤을 때의 상한이다. 기본값은 코드에 있다:
+  # campaign.cache.ttl: 30s · max-products: 1000 · missing-ttl: 5s(회차 없음) · missing-max-products: 10000
   # 외부 예약 Mock 등록 요청의 scope(시험 실행 범위). 접수 때 request_payload 에 고정된다
   external-mock:
     scope: preorder

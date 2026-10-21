@@ -9,6 +9,7 @@ import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.campaign.IssuedPosition;
 import com.grandis.nova.preorder.integration.catalog.OptionSnapshot;
 import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
+import com.grandis.nova.preorder.preorder.AcceptHistory;
 import com.grandis.nova.preorder.preorder.NewPreorder;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
@@ -35,7 +36,8 @@ import java.util.UUID;
  * 접수 트랜잭션. 순서를 바꾸지 않는다(ERD preorders Note).
  *
  * 1. 회차 행 잠금 — 같은 모델의 접수는 여기서 한 줄로 선다
- * 2. 같은 접수 키 재전송 확인 — 잠금 뒤라서 같은 키의 동시 재전송이 순번을 두 번 쓰지 않는다
+ * 2. 같은 접수 키 재전송 확인 — 잠금 뒤라서 같은 키의 동시 재전송이 순번을 두 번 쓰지 않는다.
+ *    마지막 접수 시각(입장권 확인)도 같은 문장에서 읽는다
  * 3. 상품 · 옵션 · 접수 기간 확인
  * 4. 순번 발급 · 차수 배정
  * 5. 예약 + 첫 이력 → REGISTER 작업 → 아웃박스(REGISTER_JOB_READY)
@@ -84,15 +86,15 @@ class PreorderAcceptTransaction {
         Optional<CampaignSchedule> campaign =
                 campaignLockWait.record(() -> campaigns.lockForAccept(command.productId()));
 
-        Optional<PreorderSnapshot> existing = preorders.findByIdempotencyKey(
-                command.customerId(), command.idempotencyKey());
-        if (existing.isPresent()) {
-            return replay(existing.get(), command);
+        AcceptHistory history = preorders.findAcceptHistory(command.customerId(), command.productId(),
+                command.idempotencyKey());
+        if (history.sameKey().isPresent()) {
+            return replay(history.sameKey().get(), command);
         }
 
-        requireTicketAfterLastAccept(command);
+        requireTicketAfterLastAccept(command, history.lastAcceptedAt());
         OptionSnapshot option = requireOnSale(command, product);
-        requireAccepting(campaign);
+        requireAccepting(campaign, clock.instant());
         IssuedPosition issued = campaigns.issuePosition(command.productId());
 
         String preorderToken = UUID.randomUUID().toString();
@@ -107,6 +109,31 @@ class PreorderAcceptTransaction {
         outboxWriter.append(new RegisterJobReady(jobId, preorderToken, payload, SyncActor.SYSTEM, 1));
 
         return new AcceptResult(preorder, issued.batch(), false);
+    }
+
+    /**
+     * 잠그기 전 판정 — 캐시가 오픈 전 · 회차 없음이라 한 접수를 잠금 뒤와 같은 우선순위로 거절한다. 트랜잭션 없이 잠그지 않고 읽는다.
+     * 그 상품의 예약은 있을 수 없어(일정은 오픈 전에만 바뀐다) 마지막 접수 뒤 입장권 확인은 할 일이 없고, 같은 접수 키 확인만 한다
+     * (다른 상품에 쓴 키일 수 있다). 열린 적 있는 회차(마감 포함)는 판정하지 않는다 — 마감 직전 접수가 커밋되기 전에 온 같은 키
+     * 재전송은 잠금 뒤에야 그 예약을 본다.
+     *
+     * @param cached 회차 캐시의 일정
+     * @return 같은 접수 키의 재전송이면 그 결과. 판정하지 않거나 판정을 다 지나면(캐시가 늦음) 비어 있다 — 호출한 쪽이 잠그고
+     *         다시 판정한다
+     */
+    Optional<AcceptResult> settleBeforeLock(AcceptCommand command, Optional<ProductCatalog> product,
+                                            Optional<CampaignSchedule> cached) {
+        Instant now = clock.instant();
+        if (cached.filter(found -> !now.isBefore(found.opensAt())).isPresent()) {
+            return Optional.empty();
+        }
+        Optional<AcceptResult> replay = findReplay(command);
+        if (replay.isPresent()) {
+            return replay;
+        }
+        requireOnSale(command, product);
+        requireAccepting(cached, now);
+        return Optional.empty();
     }
 
     /**
@@ -146,22 +173,21 @@ class PreorderAcceptTransaction {
      * 입장권은 그 회원 · 그 모델의 마지막 접수 뒤에 발급된 것만 받는다 — 같은 입장에서 받은 다른 창의 입장권으로
      * 취소 뒤 줄을 다시 서지 않고 재접수하지 못하게. 회차 잠금 뒤라 동시 접수도 서로의 접수를 본다.
      */
-    private void requireTicketAfterLastAccept(AcceptCommand command) {
+    private static void requireTicketAfterLastAccept(AcceptCommand command, Optional<Instant> lastAcceptedAt) {
         AdmissionTicket ticket = command.admissionTicket();
         if (ticket == null) {
             return;
         }
-        preorders.findLastAcceptedAt(command.customerId(), command.productId())
-                .filter(lastAcceptedAt -> !lastAcceptedAt.isBefore(ticket.issuedNoEarlierThan()))
-                .ifPresent(lastAcceptedAt -> {
+        lastAcceptedAt
+                .filter(acceptedAt -> !acceptedAt.isBefore(ticket.issuedNoEarlierThan()))
+                .ifPresent(acceptedAt -> {
                     throw new BusinessException(PreorderErrorCode.ADMISSION_TICKET_STALE);
                 });
     }
 
     /** 회차 행이 없으면 등록이 끝나지 않은 상품이다 — 공개 전 상품처럼 존재를 알리지 않는다. */
-    private void requireAccepting(Optional<CampaignSchedule> campaign) {
+    private static void requireAccepting(Optional<CampaignSchedule> campaign, Instant now) {
         CampaignSchedule found = campaign.orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND));
-        Instant now = clock.instant();
         if (now.isBefore(found.opensAt())) {
             throw new BusinessException(PreorderErrorCode.SALE_NOT_OPEN,
                     Map.of("reason", "opensAt=" + found.opensAt()));

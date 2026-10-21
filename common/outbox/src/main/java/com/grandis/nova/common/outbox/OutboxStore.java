@@ -75,7 +75,6 @@ class OutboxStore implements InitializingBean {
                 .optional();
     }
 
-    /** 발행 완료 표시. 이미 채워졌으면 바꾸지 않는다. */
     /**
      * 발행이 끝나고 cutoff 보다 먼저 발행한 행을 limit 건까지 지운다. 미발행 행은 건드리지 않는다.
      * 정렬을 미발행 인덱스(published_at, publish_attempts, id) 순서와 맞춰 그 범위만 읽는다 — id 순이면 기본 키를 훑어
@@ -91,10 +90,11 @@ class OutboxStore implements InitializingBean {
                 .update();
     }
 
-    int markPublished(Long id, Instant now) {
-        return jdbc.sql("UPDATE " + table + " SET published_at = :now WHERE id = :id AND published_at IS NULL")
+    /** 여러 행을 한 문장으로 발행 완료 표시한다. 이미 채워진 행은 바꾸지 않고 세지 않는다. */
+    int markPublished(Collection<Long> ids, Instant now) {
+        return jdbc.sql("UPDATE " + table + " SET published_at = :now WHERE id IN (:ids) AND published_at IS NULL")
                 .param("now", utc(now))
-                .param("id", id)
+                .param("ids", ids)
                 .update();
     }
 
@@ -149,6 +149,25 @@ class OutboxStore implements InitializingBean {
                 .update();
     }
 
+    /** {@link #renewLease} 를 여러 행에 한 문장으로. 어느 행을 연장했는지는 {@link #findLeased} 로 본다. */
+    int renewLeases(Collection<Long> ids, Instant lease, Instant renewed) {
+        return jdbc.sql("UPDATE " + table + " SET lease_until = :renewed"
+                        + " WHERE id IN (:ids) AND lease_until = :lease AND published_at IS NULL")
+                .param("renewed", utc(renewed))
+                .param("ids", ids)
+                .param("lease", utc(lease))
+                .update();
+    }
+
+    /** ids 가운데 지금 이 리스(lease)가 걸린 미발행 행. */
+    List<Long> findLeased(Collection<Long> ids, Instant lease) {
+        return jdbc.sql("SELECT id FROM " + table + " WHERE id IN (:ids) AND lease_until = :lease AND published_at IS NULL")
+                .param("ids", ids)
+                .param("lease", utc(lease))
+                .query(Long.class)
+                .list();
+    }
+
     /** 가져갔지만 보내지 않을 행의 리스를 푼다. 아직 내 리스이고 미발행인 행만 — 다음 릴레이가 곧바로 다시 가져간다. */
     int releaseLeases(Collection<Long> ids, Instant lease) {
         return jdbc.sql("UPDATE " + table + " SET lease_until = NULL"
@@ -158,15 +177,18 @@ class OutboxStore implements InitializingBean {
                 .update();
     }
 
-    /** 아직 보내지 못한 행 수. 늘어나면 전송이 막힌 것이다. */
-    long countUnpublished() {
-        return jdbc.sql("SELECT COUNT(*) FROM " + table + " WHERE published_at IS NULL").query(Long.class).single();
+    /** 미발행 현황을 한 문장으로 — 수와 그 가운데 가장 많이 실패한 횟수. */
+    UnpublishedBacklog unpublishedBacklog() {
+        return jdbc.sql("SELECT COUNT(*), COALESCE(MAX(publish_attempts), 0) FROM " + table + " WHERE published_at IS NULL")
+                .query((rs, rowNum) -> new UnpublishedBacklog(rs.getLong(1), rs.getInt(2)))
+                .single();
     }
 
-    /** 미발행 행 가운데 가장 많이 실패한 횟수. 한 행만 계속 실패하는 것(독이 든 메시지)을 드러낸다. */
-    int maxUnpublishedAttempts() {
-        return jdbc.sql("SELECT COALESCE(MAX(publish_attempts), 0) FROM " + table + " WHERE published_at IS NULL")
-                .query(Integer.class).single();
+    /**
+     * @param count       아직 보내지 못한 행 수. 늘어나면 전송이 막힌 것이다
+     * @param maxAttempts 그 가운데 가장 많이 실패한 횟수. 한 행만 계속 실패하는 것(독이 든 메시지)을 드러낸다
+     */
+    record UnpublishedBacklog(long count, int maxAttempts) {
     }
 
     static LocalDateTime utc(Instant instant) {

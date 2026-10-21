@@ -7,7 +7,6 @@ import com.grandis.nova.preorder.campaign.CampaignRepublisher;
 import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.campaign.ProductListing;
 import com.grandis.nova.preorder.cancel.CampaignCancelService;
-import com.grandis.nova.preorder.cancel.ExpiryCancelService;
 import com.grandis.nova.preorder.integration.catalog.CatalogCacheInvalidation;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -36,7 +35,6 @@ public class PreorderEventDispatcher {
     private static final Logger log = LoggerFactory.getLogger(PreorderEventDispatcher.class);
 
     private final PreorderEventHandler handler;
-    private final ExpiryCancelService expiryCancelService;
     private final CampaignCancelService campaignCancelService;
     private final CampaignRepublisher campaignRepublisher;
     private final CampaignRegistrar campaignRegistrar;
@@ -46,13 +44,11 @@ public class PreorderEventDispatcher {
     private final MeterRegistry meterRegistry;
     private final Clock clock;
 
-    public PreorderEventDispatcher(PreorderEventHandler handler, ExpiryCancelService expiryCancelService,
-                                   CampaignCancelService campaignCancelService, CampaignRepublisher campaignRepublisher,
-                                   CampaignRegistrar campaignRegistrar, Campaigns campaigns,
-                                   CatalogCacheInvalidation catalogCache, JsonMapper jsonMapper,
+    public PreorderEventDispatcher(PreorderEventHandler handler, CampaignCancelService campaignCancelService,
+                                   CampaignRepublisher campaignRepublisher, CampaignRegistrar campaignRegistrar,
+                                   Campaigns campaigns, CatalogCacheInvalidation catalogCache, JsonMapper jsonMapper,
                                    MeterRegistry meterRegistry, Clock clock) {
         this.handler = handler;
-        this.expiryCancelService = expiryCancelService;
         this.campaignCancelService = campaignCancelService;
         this.campaignRepublisher = campaignRepublisher;
         this.campaignRegistrar = campaignRegistrar;
@@ -109,8 +105,6 @@ public class PreorderEventDispatcher {
                     jsonMapper.treeToValue(envelope.payload(), PreorderPaymentStarted.class));
             case PREORDER_PAYMENT_CONFIRMED -> handler.onPaymentConfirmed(
                     jsonMapper.treeToValue(envelope.payload(), PreorderPaymentConfirmed.class));
-            case PREORDER_EXPIRY_REQUESTED -> expiryCancelService.expire(
-                    jsonMapper.treeToValue(envelope.payload(), PreorderExpiryRequested.class).preorderId());
             case PREORDER_CAMPAIGN_CANCELED -> {
                 PreorderCampaignCanceled canceled =
                         jsonMapper.treeToValue(envelope.payload(), PreorderCampaignCanceled.class);

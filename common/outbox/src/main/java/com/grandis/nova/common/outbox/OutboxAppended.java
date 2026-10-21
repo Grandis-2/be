@@ -1,8 +1,8 @@
 package com.grandis.nova.common.outbox;
 
 /**
- * 아웃박스에 메시지를 적었다는 이벤트. 발행기가 커밋 직후 받아 보낸다.
+ * 아웃박스에 메시지를 적었다는 이벤트. 발행기가 커밋 직후 받아 보낸다 — 적은 행을 그대로 실어 다시 읽지 않는다.
  * 롤백되면 전달되지 않는다. 커밋 직후 죽어 사라지면 릴레이가 다시 보낸다.
  */
-record OutboxAppended(Long outboxEventId) {
+record OutboxAppended(OutboxRow row) {
 }

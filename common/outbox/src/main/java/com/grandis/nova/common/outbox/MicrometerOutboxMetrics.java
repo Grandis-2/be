@@ -52,10 +52,9 @@ class MicrometerOutboxMetrics implements OutboxMetrics {
 
     @Override
     public void refreshBacklog() {
-        // 둘 다 센 뒤에 바꾼다 — DB 를 묻는 동안에는 수집이 이전 값 짝을 읽는다
-        long count = store.countUnpublished();
-        int maxAttempts = store.maxUnpublishedAttempts();
-        unpublished.set(count);
-        maxUnpublishedAttempts.set(maxAttempts);
+        // 한 문장으로 센 뒤에 바꾼다 — DB 를 묻는 동안에는 수집이 이전 값 짝을 읽는다
+        OutboxStore.UnpublishedBacklog backlog = store.unpublishedBacklog();
+        unpublished.set(backlog.count());
+        maxUnpublishedAttempts.set(backlog.maxAttempts());
     }
 }

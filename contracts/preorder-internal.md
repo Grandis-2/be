@@ -81,7 +81,7 @@ preorder `CatalogReader` 는 401 을 사용자 토큰 문제(401)로, 404 외 �
 
 preorder 는 dev(NV-281)에서 판정을 갈랐다 — 회차 설정은 `ProductCatalog.isPreorderProduct()`(`saleMode` 만), 접수는 `isOnPreorderSale()`(세 조건, NV-643 에서 `registrationCompleted` 를 뺐다). preorder 는 두 칸을 `Boolean` 래퍼로 받아 칸이 빠지거나 null 이면 숨기지 않는다. **catalog 는 두 칸을 primitive `boolean` 으로 늘 싣는다** — null 이 될 수 없고, `false` 도 빠지지 않고 실리는 것을 `InternalProductApiTest` 가 고정한다. 그래서 preorder 의 래퍼가 접수 판정을 비우지 않는다.
 
-**캐시.** 현재 코드(dev, NV-281 뒤)의 사실: `CatalogReader` 는 값의 나이와 상관없이 가진 값을 그 조회에 바로 돌려주고, 1분이 지났으면 그 조회 요청의 보안 맥락(토큰)으로 뒤에서 한 번 다시 받기를 시작할 뿐이다. `expireAfterWrite` 30분 · 최대 1,000건이다. 값이 바뀌면 catalog 가 이벤트로 알린다 — 사전예약 상품의 관리자 수정은 `PREORDER_PRODUCT_CHANGED`, 오픈 뒤 판매 중지는 `PREORDER_CAMPAIGN_CANCELED`(`contracts/catalog-events.md`). preorder 는 받은 인스턴스가 자기 캐시를 비우고 Redis 채널로 다른 인스턴스에 알린다(`CatalogCacheInvalidation`). 그래서 수정이 접수에 닿기까지는 아웃박스 릴레이 · SQS 전달 시간만큼 늦다. 비운 뒤 첫 조회는 catalog 를 그 요청 안에서 동기로 부르고, 실패는 캐시하지 않는다 — 그 순간 catalog 가 응답하지 않으면 그 상품의 접수는 옛 값 대신 503 이다. Redis 로 알리기가 끝내 실패하거나, Redis 채널(pub/sub)은 구독이 끊긴 동안 보낸 알림을 다시 주지 않으므로 그 사이 알림을 놓친 인스턴스는 위의 다시 받기로만 따라온다 — **그 경우 응답 값이 묵을 수 있는 상한은 30분**이다(조회가 뜸하면 다시 받기가 성공해도 그 첫 조회는 옛 값으로 판정된다). TTL 로 차단 지연을 허용하는 정책은 미확정이다. 등록 직후 캐시된 `registrationCompleted=false` 는 접수를 막지 않는다 — preorder 는 이 칸을 판정에 쓰지 않고 회차 행으로 본다(NV-643). 캐시 히트에서도 요청 인증·폐기 검사는 수행한다.
+**캐시.** 현재 코드(dev, NV-281 뒤)의 사실: `CatalogReader` 는 1분이 지난 값을 그 조회에 그대로 돌려주고 그 조회 요청의 보안 맥락(토큰)으로 뒤에서 한 번 다시 받는다. 5분이 지난 값은 그 조회 안에서 같은 토큰으로 다시 받는다(같은 상품은 한 번만, 기다림은 1초까지 — 넘으면 가진 값을 주고 받기는 뒤에서 마저 한다). 그 다시 받기가 실패하면 가진 값을 주고, 401 이 아니면 그 상품을 10초 동안 동기로 묻지 않는다 — catalog 장애 때 요청마다 호출 시간 초과를 기다리지 않게. `expireAfterWrite` 30분 · 최대 1,000건이다. 기준은 preorder 설정 `nova.catalog.cache`. 값이 바뀌면 catalog 가 이벤트로 알린다 — 사전예약 상품의 관리자 수정은 `PREORDER_PRODUCT_CHANGED`, 오픈 뒤 판매 중지는 `PREORDER_CAMPAIGN_CANCELED`(`contracts/catalog-events.md`). preorder 는 받은 인스턴스가 자기 캐시를 비우고 Redis 채널로 다른 인스턴스에 알린다(`CatalogCacheInvalidation`). 그래서 수정이 접수에 닿기까지는 아웃박스 릴레이 · SQS 전달 시간만큼 늦다. 비운 뒤 첫 조회는 catalog 를 그 요청 안에서 동기로 부르고, 실패는 캐시하지 않는다 — 그 순간 catalog 가 응답하지 않으면 그 상품의 접수는 옛 값 대신 503 이다. Redis 로 알리기가 끝내 실패하거나, Redis 채널(pub/sub)은 구독이 끊긴 동안 보낸 알림을 다시 주지 않으므로 그 사이 알림을 놓친 인스턴스는 위의 다시 받기로만 따라온다 — **그 경우 응답 값이 묵을 수 있는 상한은 catalog 가 응답하는 동안 5분**이다. catalog 가 응답하지 않으면 가진 값을 30분까지 쓴다. TTL 로 차단 지연을 허용하는 정책은 미확정이다. 등록 직후 캐시된 `registrationCompleted=false` 는 접수를 막지 않는다 — preorder 는 이 칸을 판정에 쓰지 않고 회차 행으로 본다(NV-643). 캐시 히트에서도 요청 인증·폐기 검사는 수행한다.
 
 **하위 호환과 배포 순서.** 지금 접수 경로가 깨지지 않게 이 순서로 간다.
 
@@ -136,7 +136,7 @@ catalog 가 `preorder_campaigns` 를 직접 읽던 것(목록 · 검색 · 랭�
 
 - `productIds` 는 1~100개(쉼표로 잇거나 반복, 같은 id 는 한 번). 넘으면 catalog 가 나눠 부른다.
 - **회차가 없는 상품은 `items` 에서 빠진다** — 받는 쪽은 "회차 없음 = 판매 준비 전" 으로 본다. 순서는 정하지 않는다(productId 로 맞춘다).
-- 캐시하지 않고 그때그때 DB 에서 읽는다 — 수정 · 삭제 판정에 그대로 써도 된다.
+- `fresh` (선택, 기본 `false`): 기본은 preorder 인스턴스 안의 회차 캐시로 답한다. 회차가 바뀌면 그 트랜잭션의 커밋 뒤 모든 인스턴스에서 비우므로 보통은 지금 값이고, 비우기 알림을 놓친 인스턴스만 최대 30초 옛 값을 준다. **수정 · 삭제 판정처럼 지금 값이 필요한 호출은 `fresh=true`** 로 부른다 — 캐시 없이 DB 에서 읽는다.
 
 ```json
 { "success": true, "data": { "items": [ { "productId": "…", "opensAt": "…", "closesAt": "…" } ] }, "error": null, "timestamp": "…", "traceId": "…" }

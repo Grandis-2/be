@@ -6,6 +6,8 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -41,9 +43,14 @@ public class OutboxWriter {
         Objects.requireNonNull(message.aggregateId(), "aggregateId");
         String eventType = message.eventType().name();
         definition.destinationOf(eventType);
-        Long id = store.insert(UUID.randomUUID().toString(), message.aggregateType().name(), message.aggregateId(),
-                eventType, jsonMapper.writeValueAsString(message), clock.instant());
-        eventPublisher.publishEvent(new OutboxAppended(id));
+        String eventId = UUID.randomUUID().toString();
+        String aggregateType = message.aggregateType().name();
+        String payload = jsonMapper.writeValueAsString(message);
+        // 칸 해상도(마이크로초)로 내린다 — 다시 읽은 행과 같은 값이어야 봉투의 occurredAt 이 릴레이와 같다
+        Instant createdAt = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        Long id = store.insert(eventId, aggregateType, message.aggregateId(), eventType, payload, createdAt);
+        eventPublisher.publishEvent(new OutboxAppended(new OutboxRow(id, eventId, aggregateType, message.aggregateId(),
+                eventType, payload, 0, createdAt, null)));
         return id;
     }
 }

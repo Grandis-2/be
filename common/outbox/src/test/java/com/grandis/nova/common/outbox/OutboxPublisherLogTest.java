@@ -63,7 +63,7 @@ class OutboxPublisherLogTest {
 
     @Test
     void 보내면_이벤트를_찾는_값을_키_값으로_단_INFO_한_줄을_남긴다() {
-        given(store.markPublished(eq(7L), any())).willReturn(1);
+        given(store.markPublished(eq(List.of(7L)), any())).willReturn(1);
 
         assertThat(publisher.publish(row, null)).isTrue();
 
@@ -83,7 +83,7 @@ class OutboxPublisherLogTest {
     /** 다른 쪽(릴레이 · 커밋 직후 발행)이 먼저 표시했어도 이쪽도 보냈으므로 한 줄을 남긴다. */
     @Test
     void 이미_표시된_행이어도_보냈으면_남긴다() {
-        given(store.markPublished(eq(7L), any())).willReturn(0);
+        given(store.markPublished(eq(List.of(7L)), any())).willReturn(0);
 
         assertThat(publisher.publish(row, null)).isFalse();
 

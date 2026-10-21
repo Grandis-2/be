@@ -8,6 +8,7 @@ import tools.jackson.databind.json.JsonMapper;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -32,7 +33,7 @@ class OutboxPublisherAttributesTest {
 
     @Test
     void 서비스가_정하지_않으면_추가_속성_없이_보낸다() {
-        given(store.markPublished(eq(7L), any())).willReturn(1);
+        given(store.markPublished(eq(List.of(7L)), any())).willReturn(1);
 
         assertThat(publisher(null).publish(row, null)).isTrue();
 
@@ -41,7 +42,7 @@ class OutboxPublisherAttributesTest {
 
     @Test
     void 서비스가_정한_속성을_행의_종류와_payload_로_만들어_싣는다() {
-        given(store.markPublished(eq(7L), any())).willReturn(1);
+        given(store.markPublished(eq(List.of(7L)), any())).willReturn(1);
         OutboundAttributes attributes = (eventType, payload) ->
                 Map.of("actor", payload.get("actor").asString(), "kind", eventType);
 

@@ -4,6 +4,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -12,15 +13,26 @@ public interface ShipmentBatchRepository extends JpaRepository<ShipmentBatch, UU
 
     List<ShipmentBatch> findByProductIdOrderByBatchNumber(UUID productId);
 
+    /** 여러 상품의 차수를 한 번에 — 상품 · 차수 번호 순. */
+    List<ShipmentBatch> findByProductIdInOrderByProductIdAscBatchNumberAsc(Collection<UUID> productIds);
+
     /** 오픈 전 전체 교체에서 쓴다. 오픈 뒤에는 부르지 않는다(예약이 차수를 가리킨다). */
     void deleteByProductId(UUID productId);
+
+    /** 잠그지 않고 읽는다 — 선언한 쿼리라 트랜잭션 밖에서 부르면 문장 하나다(상속한 findById 는 저장소가 트랜잭션을 연다). */
+    @Query("select b from ShipmentBatch b where b.id = :id")
+    Optional<ShipmentBatch> lookup(@Param("id") UUID id);
+
+    /** {@link #lookup} 의 여럿. 빈 목록은 부르지 않는다. */
+    @Query("select b from ShipmentBatch b where b.id in :ids")
+    List<ShipmentBatch> lookupAll(@Param("ids") Collection<UUID> ids);
 
     /**
      * 예약에 배정된 차수. 접수 때 정해지고 바뀌지 않으므로 없을 수 없다 —
      * 없으면 오픈 전 검사를 지나친 데이터다.
      */
     default ShipmentBatch getAssigned(UUID shipmentBatchId) {
-        return findById(shipmentBatchId)
+        return lookup(shipmentBatchId)
                 .orElseThrow(() -> new IllegalStateException("예약의 배송 차수가 없다: shipmentBatchId=" + shipmentBatchId));
     }
 

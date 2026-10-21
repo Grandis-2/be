@@ -16,8 +16,72 @@ catalog 가 **받는** 이벤트의 기준이다. catalog 가 보내는 이벤�
 | 이벤트 | aggregate | 보내는 쪽 | catalog 가 하는 일 |
 | --- | --- | --- | --- |
 | `IN_STOCK_PRODUCT_READY` | `PRODUCT` | order | 그 상품을 판매 준비로 남긴다(`products.stock_ready_at` 이 비었을 때만) — 계약은 `order-catalog-events.md` |
+| `PREORDER_CAMPAIGN_CLOSED` | `PREORDER_CAMPAIGN`(상품 id) | preorder | 사전예약 접수 마감을 반영한다 — 아래 "사전예약 마감" |
+| `PREORDER_CAMPAIGN_SCHEDULE_CHANGED` | `PREORDER_CAMPAIGN`(상품 id) | preorder | 회차의 오픈 · 마감 시각을 반영한다(캐시 비우기) — 아래 "회차 일정 변경" |
 
 종류를 더할 때는 이 표를 먼저 고치고, 처리기(`CatalogEventHandler` 빈)를 하나 더한다. 받는 쪽(catalog)이 먼저 배포된다 — 모르는 종류는 재시도 뒤 DLQ 로 간다. 예외: `IN_STOCK_PRODUCT_READY` 는 보내는 쪽(order, NV-630)이 먼저 나갔다. 그동안 catalog 소비기가 꺼져 있어(옛 이미지는 기본 꺼짐) 메시지가 큐에 쌓여 있다가 새 이미지가 받는다 — 옛 이미지의 소비기를 켜 두면 이 예외가 성립하지 않는다(`order-catalog-events.md` "배포 순서").
+
+## 사전예약 마감 (`PREORDER_CAMPAIGN_CLOSED`)
+
+예약 상태는 preorder 가 관리하므로 마감도 preorder 가 알린다. preorder 의 주기 작업(30초)이 마감 시각이 지난 회차를 찾아, 마감 하나(상품 · 그 마감 시각)마다 한 번 아웃박스에 적는다. 조기 마감 · 판매 중지로 닫기도 마감 시각을 지금으로 바꾸므로 같은 길이다. 다시 열었다 닫히면 마감 시각이 바뀌어 한 번 더 나간다.
+
+```json
+{
+  "eventType": "PREORDER_CAMPAIGN_CLOSED",
+  "aggregateType": "PREORDER_CAMPAIGN",
+  "aggregateId": "0199a3f2-8a10-7b21-9c32-4d5e6f708192",
+  "payload": {
+    "productId": "0199a3f2-8a10-7b21-9c32-4d5e6f708192",
+    "closesAt": "2026-10-21T03:00:00Z",
+    "issuedCount": 1520,
+    "activeCount": 1388
+  }
+}
+```
+
+| 칸 | 뜻 |
+| --- | --- |
+| `productId` | 상품 id. `aggregateId` 와 같다 |
+| `closesAt` | 이번 마감 시각. **더 늦은 값이 최신이다** — 다시 열었다 닫은 두 메시지가 뒤집혀 와도 늦은 `closesAt` 을 남긴다 |
+| `issuedCount` | 발급한 순번 수(취소된 예약 포함) |
+| `activeCount` | 지금 유효한 예약 수(취소 중 · 취소 완료 제외). 회차 행을 공유 잠금으로 읽은 뒤 세어 마감 직전 접수까지 들어간다. 마감 뒤 취소는 다시 알리지 않는다 |
+
+- **늦을 수 있다.** 마감 시각보다 주기(30초)까지 늦게 나간다. 마감한 지 1시간이 넘은 회차는 보내지 않는다(첫 배포 · 긴 장애 뒤 몰림 방지) — 놓친 마감은 preorder 내부 회차 조회(`contracts/preorder-internal.md`)로 맞춘다.
+- **배포 순서.** catalog 처리기가 먼저 나간다. preorder 의 보내기는 기본 꺼짐(`nova.campaign.close-notice.enabled`)이고, 처리기 배포와 preorder 역할의 `catalog-events` 발송 권한(인프라 `queues.send`) 뒤 켠다 — 꺼진 동안의 마감은 켠 뒤 보내지 않는다(창 안의 것만). 다시 열기는 아직 알리지 않은 지금 마감을 덮기 전에 같은 트랜잭션에서 적는다. 다시 연 사실(새 마감 시각)은 아래 "회차 일정 변경" 으로 나간다.
+- 보내는 쪽 구현: preorder `CampaignClosingJob`.
+
+## 회차 일정 변경 (`PREORDER_CAMPAIGN_SCHEDULE_CHANGED`)
+
+회차의 일정 번호(`scheduleVersion`)가 오르는 변경마다 그 트랜잭션에서 한 번 적는다 — 생성 · 오픈 전 일정 변경 · 조기 마감 · 판매 중지 마감 · 다시 열기 · 다시 열기 되돌림 · 공개 여부 변경. 관리자 전체 재발행(`RESYNC`)은 번호를 올리지 않고 마감 전 회차의 지금 일정을 다시 보낸다. 대기열이 받는 `PREORDER_CAMPAIGN_CHANGED`(waitingroom-events)와 같은 때 · 같은 값이다. 마감 건수는 이 이벤트에 없고 위 "사전예약 마감" 으로 따로 나간다.
+
+```json
+{
+  "eventType": "PREORDER_CAMPAIGN_SCHEDULE_CHANGED",
+  "aggregateType": "PREORDER_CAMPAIGN",
+  "aggregateId": "0199a3f2-8a10-7b21-9c32-4d5e6f708192",
+  "payload": {
+    "productId": "0199a3f2-8a10-7b21-9c32-4d5e6f708192",
+    "scheduleVersion": 3,
+    "opensAt": "2026-11-01T01:00:00Z",
+    "closesAt": "2026-11-03T01:00:00Z",
+    "changedAt": "2026-10-21T05:10:00Z",
+    "change": "REOPENED"
+  }
+}
+```
+
+| 칸 | 뜻 |
+| --- | --- |
+| `productId` | 상품 id. `aggregateId` 와 같다 |
+| `scheduleVersion` | 회차의 일정 번호. **더 큰 값이 최신이다** — 같거나 작은 번호는 버린다(재발행은 같은 번호로 다시 온다) |
+| `opensAt` · `closesAt` | 그 번호의 오픈 · 마감 시각. 회차 행을 잠근 채 확정한 값이다 |
+| `changedAt` | preorder 가 적은 시각 |
+| `change` | 까닭(`CREATED` · `RESCHEDULED` · `CLOSED` · `REOPENED` · `VISIBILITY` · `RESYNC`). 로그 · 추적용이고 판정은 번호로 한다 |
+
+- **일정 값은 이 이벤트로만 정한다.** "사전예약 마감" 의 `closesAt` 은 그 마감의 건수가 어느 마감 것인지 가리킬 뿐이다 — 그 값으로 일정을 덮으면 다시 열기 뒤 늦게 온 마감 알림이 새 마감 시각을 지난 시각으로 되돌린다.
+
+- **배포 순서.** catalog 처리기가 먼저 나간다. preorder 의 보내기는 기본 꺼짐(`nova.campaign.schedule-notice.enabled`)이고, 처리기 배포와 preorder 역할의 `catalog-events` 발송 권한 뒤 켠다. 꺼진 동안의 변경은 켠 뒤 보내지 않는다 — 켠 뒤 관리자 전체 재발행으로 마감 전 회차를 맞춘다.
+- 보내는 쪽 구현: preorder `CampaignChangePublisher`.
 
 ## 처리 규칙 (`CatalogEventDispatcher`)
 

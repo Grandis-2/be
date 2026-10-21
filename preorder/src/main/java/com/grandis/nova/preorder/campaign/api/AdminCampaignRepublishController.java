@@ -23,7 +23,7 @@ class AdminCampaignRepublishController {
     }
 
     /** 이벤트는 아웃박스에 적힌 뒤 발행기가 보낸다. 여러 번 불러도 된다. */
-    @Operation(summary = "회차 일정 전체 재발행 — 마감 전 회차마다 지금 일정을 대기열로 다시 보냄")
+    @Operation(summary = "회차 일정 전체 재발행 — 마감 전 회차마다 지금 일정을 대기열(켜 두면 catalog 도)로 다시 보냄")
     @PostMapping("/republish")
     public ResponseEntity<ApiResponse<CampaignRepublishResponse>> republish() {
         return ResponseEntity.status(HttpStatus.ACCEPTED)

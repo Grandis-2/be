@@ -16,8 +16,6 @@ public enum InboundEventType {
     EXTERNAL_JOB_FAILED,
     /** order: 예약 취소에 따른 주문 정리 결과. */
     PREORDER_ORDER_SETTLED,
-    /** batch: 결제 기한 만료. */
-    PREORDER_EXPIRY_REQUESTED,
     /** catalog: 회차 판매 중지. */
     PREORDER_CAMPAIGN_CANCELED,
     /** waitingroom: 회차 일정 전체 재발행 요청. */

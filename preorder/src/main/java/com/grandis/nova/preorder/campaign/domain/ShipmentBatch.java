@@ -65,7 +65,7 @@ public class ShipmentBatch {
     }
 
     public boolean covers(long position) {
-        return positionFrom <= position && (positionTo == null || position <= positionTo);
+        return toSnapshot().covers(position);
     }
 
     /** 다른 모듈에 넘기는 읽기 전용 값. */

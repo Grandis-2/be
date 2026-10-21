@@ -4,6 +4,9 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.admission.AdmissionTicket;
 import com.grandis.nova.preorder.admission.AdmissionTicketVerifier;
+import com.grandis.nova.preorder.campaign.CachedCampaign;
+import com.grandis.nova.preorder.campaign.CampaignSchedule;
+import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.integration.catalog.CatalogReader;
 import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
 import com.grandis.nova.preorder.preorder.EventActor;
@@ -11,9 +14,13 @@ import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.web.ValidationFailures;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -26,6 +33,7 @@ import java.util.function.Supplier;
  *
  * 카탈로그 조회는 캐시가 비었으면 catalog 를 HTTP 로 부르므로 트랜잭션 밖에서 한다.
  * UNIQUE 충돌은 트랜잭션이 롤백된 뒤 제약 이름으로 가른다 — 삼키지 않고 계약의 오류로 바꾼다.
+ * 트랜잭션은 격벽({@link AcceptBulkhead}) 안에서만 연다 — 넘친 접수는 커넥션을 잡기 전에 503 으로 돌려보낸다.
  */
 @Service
 public class PreorderAcceptService {
@@ -33,6 +41,7 @@ public class PreorderAcceptService {
     static final String UQ_ACTIVE = "uq_preorder_active";
     static final String UQ_ADMISSION = "uq_preorder_admission";
     static final String UQ_IDEMPOTENCY = "uq_preorder_idempotency";
+    static final String FK_BATCH = "fk_preorder_batch";
 
     /** 접수 시간 · 결과(accepted · replayed · 오류 코드)별 건수. */
     static final String ACCEPT_METRIC = "preorder.accept";
@@ -41,20 +50,29 @@ public class PreorderAcceptService {
     static final String USER_CHANNEL = "user";
     static final String ADMIN_CHANNEL = "admin";
 
+    private static final Logger log = LoggerFactory.getLogger(PreorderAcceptService.class);
+
     private final AdmissionTicketVerifier ticketVerifier;
     private final CatalogReader catalogReader;
     private final PreorderAcceptTransaction transaction;
+    private final AcceptBulkhead bulkhead;
+    private final Campaigns campaigns;
     private final Preorders preorders;
     private final MeterRegistry meterRegistry;
+    private final Clock clock;
 
     public PreorderAcceptService(AdmissionTicketVerifier ticketVerifier, CatalogReader catalogReader,
-                                 PreorderAcceptTransaction transaction, Preorders preorders,
-                                 MeterRegistry meterRegistry) {
+                                 PreorderAcceptTransaction transaction, AcceptBulkhead bulkhead,
+                                 Campaigns campaigns, Preorders preorders, MeterRegistry meterRegistry,
+                                 Clock clock) {
         this.ticketVerifier = ticketVerifier;
         this.catalogReader = catalogReader;
         this.transaction = transaction;
+        this.bulkhead = bulkhead;
+        this.campaigns = campaigns;
         this.preorders = preorders;
         this.meterRegistry = meterRegistry;
+        this.clock = clock;
         // 처음부터 0 으로 내놓는다 — 시계열이 없으면 "접수 중인데 새 예약 0건" 경보가 값 없음으로 빠진다
         for (String channel : List.of(USER_CHANNEL, ADMIN_CHANNEL)) {
             for (String result : List.of("success", "rejected", "error")) {
@@ -127,13 +145,42 @@ public class PreorderAcceptService {
         }
     }
 
+    /**
+     * 회차 캐시가 회차 없음 · 오픈 전이라 하면 회차를 잠그지 않고 판정한다 — 오픈 직전에 몰린 접수가 잠금 줄에
+     * 서서 커넥션을 오래 쥐지 않게. 캐시는 회차가 바뀌면 커밋 뒤 비우므로 비우기를 놓쳤을 때만 수명만큼 옛 판정이다.
+     * 그 밖(접수 중 · 마감, 또는 판정을 지나면)은 잠근 뒤 회차 행으로 판정한다.
+     */
     private AcceptResult accept(AcceptCommand command) {
         Optional<ProductCatalog> product = catalogReader.findProduct(command.productId());
         try {
-            return transaction.accept(command, product);
+            // 캐시 미스 · 잠금 전 판정의 DB 읽기도 격벽 몫이다 — 허가 하나로 판정부터 접수까지 한다
+            return bulkhead.call(command.productId(), () -> settleThenAccept(command, product));
         } catch (DataIntegrityViolationException e) {
-            return resolveConflict(command, e);
+            if (ConstraintNames.of(e).filter(FK_BATCH::equals).isEmpty()) {
+                return resolveConflict(command, e);
+            }
+            // 캐시에서 고른 차수가 그사이 교체됐다(오픈을 넘겨 커밋된 교체 · 비우기 놓침). 비우고 한 번만 다시 — 다시는 DB 에서 고른다
+            log.warn("캐시의 배송 차수가 교체돼 비우고 다시 접수한다 productId={}", command.productId());
+            campaigns.evictCached(command.productId());
+            try {
+                return bulkhead.call(command.productId(), () -> transaction.accept(command, product));
+            } catch (DataIntegrityViolationException retried) {
+                return resolveConflict(command, retried);
+            }
         }
+    }
+
+    private AcceptResult settleThenAccept(AcceptCommand command, Optional<ProductCatalog> product) {
+        Optional<CachedCampaign> cached = campaigns.findCached(command.productId());
+        Instant now = clock.instant();
+        if (cached.filter(campaign -> campaign.opened(now)).isEmpty()) {
+            Optional<AcceptResult> settled = transaction.settleBeforeLock(command, product,
+                    cached.map(CachedCampaign::schedule));
+            if (settled.isPresent()) {
+                return settled.get();
+            }
+        }
+        return transaction.accept(command, product);
     }
 
     private AcceptResult resolveConflict(AcceptCommand command, DataIntegrityViolationException e) {

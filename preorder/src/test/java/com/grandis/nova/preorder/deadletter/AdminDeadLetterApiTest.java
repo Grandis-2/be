@@ -210,12 +210,12 @@ class AdminDeadLetterApiTest {
 
     @Test
     void id_없이_조건만_주면_그_조건의_OPEN_을_되돌린다() throws Exception {
-        UUID expiry = record(event("PREORDER_EXPIRY_REQUESTED"));
+        UUID started = record(event("PREORDER_PAYMENT_STARTED"));
         UUID settled = record(event("PREORDER_ORDER_SETTLED"));
 
         mockMvc.perform(post("/api/v1/admin/preorders/dead-letters/redrive-batch").with(admin())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"eventType\":\"PREORDER_EXPIRY_REQUESTED\",\"ratePerSecond\":200}"))
+                        .content("{\"eventType\":\"PREORDER_PAYMENT_STARTED\",\"ratePerSecond\":200}"))
                 .andExpect(status().isAccepted());
         mockMvc.perform(post("/api/v1/admin/preorders/dead-letters/redrive-batch").with(admin())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -223,7 +223,7 @@ class AdminDeadLetterApiTest {
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.data.targetCount").value(0));
 
-        await().atMost(Duration.ofSeconds(10)).until(() -> !redriver.sentFor(expiry).isEmpty());
+        await().atMost(Duration.ofSeconds(10)).until(() -> !redriver.sentFor(started).isEmpty());
         assertThat(redriver.sentFor(settled)).isEmpty();
     }
 

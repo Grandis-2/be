@@ -104,8 +104,7 @@ public class SyncJobs {
         return syncJobs.findByPreorderIdOrderByJobType(preorderId).stream().map(PreorderSyncJob::toSnapshot).toList();
     }
 
-    /** 예약 id → 등록 작업 상태. 작업이 없는 예약은 빠진다. */
-    @Transactional(readOnly = true)
+    /** 예약 id → 등록 작업 상태. 작업이 없는 예약은 빠진다. 트랜잭션 없이 문장 하나다(빈 목록이면 읽지 않는다). */
     public Map<UUID, SyncJobStatus> registerStatuses(Collection<UUID> preorderIds) {
         if (preorderIds.isEmpty()) {
             return Map.of();
@@ -118,5 +117,10 @@ public class SyncJobs {
     @Transactional(readOnly = true)
     public Map<SyncJobType, Map<SyncJobStatus, Long>> countUnfinished(UUID productId) {
         return unfinished.count(productId);
+    }
+
+    /** 포기한(DEAD_LETTER) 작업 수. 종류 → 상품 → 수, 0 인 상품은 없다. 트랜잭션 없이 문장 하나다. */
+    public Map<SyncJobType, Map<UUID, Long>> countDeadLetterByProduct() {
+        return unfinished.countDeadLetterByProduct();
     }
 }

@@ -173,6 +173,12 @@ public class ShopFixtures {
                 """, title, status, visible, UuidBinary.toBytes(productId));
     }
 
+    /** 회차 일정을 이벤트 · 캐시 비우기 없이 바꾼다 — 캐시가 DB 를 다시 읽는지 볼 때 쓴다. */
+    public void schedule(UUID productId, Instant opensAt, Instant closesAt) {
+        jdbcTemplate.update("UPDATE preorder_campaigns SET opens_at = ?, closes_at = ? WHERE product_id = ?",
+                utc(opensAt), utc(closesAt), UuidBinary.toBytes(productId));
+    }
+
     /** 회차의 다음 순번 카운터. */
     public long nextQueuePosition(UUID productId) {
         return jdbcTemplate.queryForObject("SELECT next_queue_position FROM preorder_campaigns WHERE product_id = ?",

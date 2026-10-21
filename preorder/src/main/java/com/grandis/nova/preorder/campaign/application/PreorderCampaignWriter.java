@@ -36,14 +36,17 @@ class PreorderCampaignWriter {
     private final PreorderCampaignRepository campaigns;
     private final ShipmentBatchRepository batches;
     private final CampaignChangePublisher changePublisher;
+    private final CloseNoticeNotifier closeNotices;
     private final CampaignProperties properties;
     private final Clock clock;
 
     PreorderCampaignWriter(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
-                           CampaignChangePublisher changePublisher, CampaignProperties properties, Clock clock) {
+                           CampaignChangePublisher changePublisher, CloseNoticeNotifier closeNotices,
+                           CampaignProperties properties, Clock clock) {
         this.campaigns = campaigns;
         this.batches = batches;
         this.changePublisher = changePublisher;
+        this.closeNotices = closeNotices;
         this.properties = properties;
         this.clock = clock;
     }
@@ -75,7 +78,9 @@ class PreorderCampaignWriter {
         requireBeforeOpen(campaign);
         batches.deleteByProductId(productId);
         batches.flush();
-        return batches.saveAll(plan.toBatches(productId));
+        List<ShipmentBatch> saved = batches.saveAll(plan.toBatches(productId));
+        changePublisher.batchesReplaced(productId);
+        return saved;
     }
 
     /**
@@ -122,6 +127,7 @@ class PreorderCampaignWriter {
             throw ValidationFailures.of("closesAt", "현재 시각보다 뒤여야 합니다.");
         }
         Instant closedAt = campaign.getClosesAt();
+        closeNotices.notifyBeforeReopen(campaign, now);
         campaign.reopen(stored);
         changePublisher.publish(campaign, CampaignChange.REOPENED);
         log.info("마감한 접수를 다시 열었다 productId={} reopenedBy={} closedAt={} closesAt={}", productId, reopenedBy,

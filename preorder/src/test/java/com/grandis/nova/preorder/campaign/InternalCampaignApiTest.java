@@ -150,6 +150,21 @@ class InternalCampaignApiTest {
                 .andExpect(status().isUnauthorized());
     }
 
+    /** 기본은 회차 캐시로 답한다(바뀌면 커밋 뒤 비운다). 판정용 fresh=true 는 DB 의 지금 값이다. */
+    @Test
+    void 기본은_캐시로_답하고_fresh_면_DB_를_읽는다() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        Instant closesAt = closesAt(product.productId());
+        Instant moved = closesAt.plus(1, ChronoUnit.DAYS);
+        fixtures.schedule(product.productId(), opensAt(product.productId()), moved);
+
+        assertThat(closesAt(product.productId())).as("비우기 전에는 캐시 값").isEqualTo(closesAt);
+        String fresh = mockMvc.perform(get(BY_PRODUCT).param("productIds", product.productId().toString())
+                        .param("fresh", "true"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertThat(Instant.parse(JsonPath.read(fresh, "$.data.items[0].closesAt"))).isEqualTo(moved);
+    }
+
     private ResultActions byIds(String productIds) throws Exception {
         return mockMvc.perform(get(BY_PRODUCT).param("productIds", productIds));
     }

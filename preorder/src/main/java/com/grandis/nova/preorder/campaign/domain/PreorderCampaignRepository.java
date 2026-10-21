@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -23,6 +24,22 @@ public interface PreorderCampaignRepository extends JpaRepository<PreorderCampai
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select c from PreorderCampaign c where c.productId = :productId")
     Optional<PreorderCampaign> findForUpdate(@Param("productId") UUID productId);
+
+    /**
+     * 잠그지 않고 읽는다. 직접 선언한 쿼리라 트랜잭션 밖에서 부르면 문장 하나다 — 상속한 findById · findAllById 는 저장소가
+     * 읽기 전용 트랜잭션을 열어 준비 · 정리 문장이 붙는다. 트랜잭션 안에서는 자동 flush 뒤 영속성 컨텍스트의 같은 객체를 받는다
+     * (값은 findById 와 같고, 이미 읽은 행이어도 문장 하나가 나간다).
+     */
+    @Query("select c from PreorderCampaign c where c.productId = :productId")
+    Optional<PreorderCampaign> lookup(@Param("productId") UUID productId);
+
+    /** {@link #lookup} 의 여럿. 빈 목록은 부르지 않는다. */
+    @Query("select c from PreorderCampaign c where c.productId in :productIds")
+    List<PreorderCampaign> lookupAll(@Param("productIds") Collection<UUID> productIds);
+
+    /** 다음에 발급할 순번만 읽는다. 잠그지 않는다 — 접수가 그사이 가져가도 안내가 한 건 늦을 뿐이다. */
+    @Query("select c.nextQueuePosition from PreorderCampaign c where c.productId = :productId")
+    Optional<Long> findNextQueuePosition(@Param("productId") UUID productId);
 
     /** 마감 전 회차를 상품 id 순으로 afterProductId 다음부터 읽는다(전체 재발행의 한 묶음). 잠그지 않는다. */
     @Query("""
@@ -70,20 +87,21 @@ public interface PreorderCampaignRepository extends JpaRepository<PreorderCampai
                and c.visible = true and (c.productStatus is null or c.productStatus <> :paused)""")
     long countAccepting(@Param("now") Instant now, @Param("paused") ProductStatus paused);
 
-    /** 오픈 알림 창 안에서 비공개라 표시하지 않은 회차 수. 지표용. */
+    /** 오픈 알림 창 안에서 표시하지 않은 회차 수 — 비공개, 공개지만 판매 중지. 지표용이고 한 문장으로 둘 다 센다. */
     @Query("""
-            select count(c) from PreorderCampaign c
-             where c.openNotifiedAt is null and c.opensAt <= :now and c.opensAt > :since and c.closesAt > :now
-               and c.visible = false""")
-    long countOpenAlertWindowHidden(@Param("now") Instant now, @Param("since") Instant since);
+            select coalesce(sum(case when c.visible = false then 1 else 0 end), 0) as hidden,
+                   coalesce(sum(case when c.visible = true and c.productStatus = :paused then 1 else 0 end), 0) as paused
+              from PreorderCampaign c
+             where c.openNotifiedAt is null and c.opensAt <= :now and c.opensAt > :since and c.closesAt > :now""")
+    OpenAlertSkipped countOpenAlertWindowSkipped(@Param("now") Instant now, @Param("since") Instant since,
+                                                 @Param("paused") ProductStatus paused);
 
-    /** 오픈 알림 창 안에서 공개지만 판매 중지라 표시하지 않은 회차 수. 지표용. */
-    @Query("""
-            select count(c) from PreorderCampaign c
-             where c.openNotifiedAt is null and c.opensAt <= :now and c.opensAt > :since and c.closesAt > :now
-               and c.visible = true and c.productStatus = :paused""")
-    long countOpenAlertWindowPaused(@Param("now") Instant now, @Param("since") Instant since,
-                                    @Param("paused") ProductStatus paused);
+    interface OpenAlertSkipped {
+
+        long getHidden();
+
+        long getPaused();
+    }
 
     /** 표시하지 못한 채 오픈 알림 창이 (after, upTo] 사이에 끝난 회차. 잠그지 않는다. */
     @Query("""
