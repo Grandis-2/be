@@ -42,7 +42,8 @@ class AdminProductPreorderController {
     @Operation(summary = "모집 일정 조회")
     @GetMapping("/campaign")
     public ApiResponse<PreorderCampaignResponse> getCampaign(@PathVariable UUID productId) {
-        return response(campaignService.findCampaign(productId));
+        return ApiResponse.ok(PreorderCampaignResponse.from(campaignService.findCampaign(productId),
+                campaignService.countOpenAlertSubscribers(productId), clock.instant()));
     }
 
     /** 없으면 만들고 있으면 바꾼다. 오픈 뒤에는 409. */
@@ -89,9 +90,9 @@ class AdminProductPreorderController {
                 toResponses(campaignService.replaceBatches(productId, request.toPlan()))));
     }
 
+    /** 바꾼 뒤의 응답에는 신청 수를 세지 않는다 — 세다 실패하면 이미 반영된 변경이 오류로 보인다. */
     private ApiResponse<PreorderCampaignResponse> response(PreorderCampaign campaign) {
-        return ApiResponse.ok(PreorderCampaignResponse.from(campaign,
-                campaignService.countOpenAlertSubscribers(campaign.getProductId()), clock.instant()));
+        return ApiResponse.ok(PreorderCampaignResponse.from(campaign, null, clock.instant()));
     }
 
     private List<ShipmentBatchResponse> toResponses(List<ShipmentBatch> batches) {

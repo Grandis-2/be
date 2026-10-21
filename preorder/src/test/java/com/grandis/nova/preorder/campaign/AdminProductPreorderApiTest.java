@@ -151,10 +151,12 @@ class AdminProductPreorderApiTest {
     }
 
     @Test
-    void 일정_조회는_오픈_알림_신청_수를_함께_준다() throws Exception {
+    void 일정_조회는_오픈_알림_신청_수를_함께_주고_바꾼_뒤의_응답에는_세지_않는다() throws Exception {
         UUID productId = preorderProduct();
         Instant opensAt = Instant.now().plusSeconds(3600);
-        putCampaign(productId, opensAt, opensAt.plusSeconds(3600)).andExpect(status().isOk());
+        putCampaign(productId, opensAt, opensAt.plusSeconds(3600))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.openAlertSubscribers").doesNotExist());
         openAlerts.subscribe(productId, UUID.randomUUID(), Instant.now());
         openAlerts.subscribe(productId, UUID.randomUUID(), Instant.now());
 
