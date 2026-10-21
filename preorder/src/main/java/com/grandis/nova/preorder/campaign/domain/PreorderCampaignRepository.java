@@ -87,6 +87,14 @@ public interface PreorderCampaignRepository extends JpaRepository<PreorderCampai
                and c.visible = true and (c.productStatus is null or c.productStatus <> :paused)""")
     long countAccepting(@Param("now") Instant now, @Param("paused") ProductStatus paused);
 
+    /** horizon 까지 열리고 아직 마감 전인 회차의 상품 id — 공개 · 판매 중지 조건은 {@link #countAccepting} 과 같다. 지표 라벨용. */
+    @Query("""
+            select c.productId from PreorderCampaign c
+             where c.opensAt <= :horizon and c.closesAt > :now
+               and c.visible = true and (c.productStatus is null or c.productStatus <> :paused)""")
+    List<UUID> findAcceptingProductIds(@Param("now") Instant now, @Param("horizon") Instant horizon,
+                                       @Param("paused") ProductStatus paused);
+
     /** 오픈 알림 창 안에서 표시하지 않은 회차 수 — 비공개, 공개지만 판매 중지. 지표용이고 한 문장으로 둘 다 센다. */
     @Query("""
             select coalesce(sum(case when c.visible = false then 1 else 0 end), 0) as hidden,

@@ -14,7 +14,7 @@ class AcceptBulkheadConfig {
     @Bean
     AcceptBulkhead acceptBulkhead(AcceptBulkheadProperties properties,
                                   @Value("${spring.datasource.hikari.maximum-pool-size:10}") int poolSize,
-                                  MeterRegistry meterRegistry) {
-        return new AcceptBulkhead(properties, poolSize, meterRegistry);
+                                  MeterRegistry meterRegistry, AcceptProductTags productTags) {
+        return new AcceptBulkhead(properties, poolSize, meterRegistry, productTags::of);
     }
 }

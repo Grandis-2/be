@@ -389,10 +389,10 @@ class ObservabilityTest {
                 "resilience4j_bulkhead_available_concurrent_calls");
     }
 
+    /** 상품 라벨을 모두 더한다. */
     private double created(String result, String channel) {
-        Counter counter = registry.find("nova.preorder.created").tag("result", result).tag("channel", channel)
-                .counter();
-        return counter == null ? 0 : counter.count();
+        return registry.find("nova.preorder.created").tag("result", result).tag("channel", channel).counters()
+                .stream().mapToDouble(Counter::count).sum();
     }
 
     private long timerCount(String name, String tag, String value) {
