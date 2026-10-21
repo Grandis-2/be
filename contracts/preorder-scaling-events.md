@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | `PREORDER_CAMPAIGN_SCALING_PLANNED` | `scaling-events` | preorder | 인프라(예약 증설) |
 
-- **기본 꺼짐.** `nova.campaign.scaling-notice.enabled=true` 로 켠다. 큐와 preorder 의 보내기 권한(`queues.send`)이 생긴 뒤 켠다. 꺼진 동안의 변경은 켠 뒤 보내지 않는다 — 켠 뒤 관리자 전체 재발행(`POST /api/v1/admin/preorders/campaigns/republish`)으로 마감 전 회차를 맞춘다.
+- **기본 꺼짐.** `nova.campaign.scaling-notice.enabled=true` 로 켠다. 큐와 preorder 의 보내기 권한(`queues.send`)이 생긴 뒤 켠다. 꺼진 동안의 변경은 켠 뒤 보내지 않는다 — 켠 뒤 관리자 전체 재발행(`POST /api/v1/admin/preorders/campaigns/republish`)으로 마감 전 회차를 맞춘다. 재발행은 마감 전 회차만 보내므로, 한 번 켠 뒤 껐다가 다시 켤 때는 인프라가 가진 증설 예약을 먼저 지우고 재발행한다(꺼진 동안 마감한 회차의 `CLOSED` 는 다시 오지 않는다).
 - **최소 한 번 · 순서 보장 없음.** 받는 쪽은 `eventId` 로 중복을 막고, 회차(`productId`)마다 `scheduleVersion` 이 지금 아는 것보다 클 때만 반영한다.
 - **보내는 때.** 대기열용 `PREORDER_CAMPAIGN_CHANGED` 와 같은 때 · 같은 일정 번호다 — 생성 · 일정 변경(예상 방문자 수만 바꾼 것 포함) · 마감 · 다시 열기 · 공개 여부 · 재발행.
 - **메시지 속성.** `eventType` · `eventId`(문자열). 다른 이벤트와 같다.
@@ -33,10 +33,10 @@
 | 칸 | 뜻 |
 | --- | --- |
 | `scheduleVersion` | 회차의 일정 번호. 바뀔 때마다 오른다 |
-| `opensAt` · `closesAt` | 접수를 여는 · 닫는 시각(ISO-8601 UTC). 오픈 전에만 바뀐다(조기 마감 · 다시 열기는 `closesAt` 만) |
+| `opensAt` · `closesAt` | 접수를 여는 · 닫는 시각(ISO-8601 UTC). 일정 변경은 오픈 전에만 한다. 오픈 뒤 조기 마감 · 다시 열기는 `closesAt` 만, 오픈 전 마감은 `opensAt` 도 `closesAt` 바로 앞으로 바꾼다 |
 | `visible` | 회원에게 공개한 회차인가. false 면 증설하지 않는다 |
 | `expectedVisitors` | 관리자가 넣은 예상 방문자 수. 넣지 않았으면 `null` — 인프라의 기본 증설 규모를 쓴다 |
 | `change` | `CREATED` · `RESCHEDULED` · `CLOSED` · `REOPENED` · `VISIBILITY` · `RESYNC`. 판정은 일정 번호로 하고 이 값은 기록용이다 |
 
-- 오픈 전 일정 변경은 오픈 10분 전까지 가능하다. 증설은 늦어도 그 전에 끝나야 하므로, 인프라는 받은 `opensAt` 보다 증설에 걸리는 시간만큼 앞서 시작한다.
-- 오픈 전 마감(판매 중지 · 조기 마감)도 `CLOSED` 로 온다 — `closesAt` 이 지금 이전이면 증설 예약을 지운다.
+- 일정 · 예상 방문자 수 변경은 오픈 10분 전까지 가능하다(`nova.campaign.min-lead-time`). 마지막 변경도 오픈 10분 전에 오므로, 인프라는 증설을 10분 안에 끝낼 수 있게 잡는다.
+- 오픈 전 마감(판매 중지)도 `CLOSED` 로 온다. 증설 예약을 지우는 판정은 `closesAt` 이 지금 이전인지로 한다 — `opensAt` 은 보지 않는다.
