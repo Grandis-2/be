@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -129,6 +130,11 @@ public class Preorders {
         Map<PreorderStatus, Long> counts = new EnumMap<>(PreorderStatus.class);
         preorders.countByStatus().forEach(row -> counts.put(row.getStatus(), row.getCount()));
         return counts;
+    }
+
+    /** 상품의 유효 예약 수 — 취소 중 · 취소 완료를 뺀다. */
+    public long countActive(UUID productId) {
+        return preorders.countByProductExcluding(productId, EnumSet.of(PreorderStatus.CANCELING, PreorderStatus.CANCELED));
     }
 
     /** 운영 현황용 예약 수. productId 가 null 이면 전체를 센다. */
