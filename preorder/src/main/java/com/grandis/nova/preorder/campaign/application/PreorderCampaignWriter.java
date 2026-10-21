@@ -57,15 +57,18 @@ class PreorderCampaignWriter {
      * @param listing 새로 만들 때만 쓰는 catalog 상품 값. 번호는 0 이어서 catalog 이벤트가 이긴다
      */
     @Transactional
-    PreorderCampaign upsert(UUID productId, Instant opensAt, Instant closesAt, ProductListing listing) {
+    PreorderCampaign upsert(UUID productId, Instant opensAt, Instant closesAt, Integer expectedVisitors,
+                            ProductListing listing) {
         return campaigns.findForUpdate(productId)
-                .map(campaign -> reschedule(campaign, opensAt, closesAt))
-                .orElseGet(() -> create(productId, opensAt, closesAt, listing));
+                .map(campaign -> reschedule(campaign, opensAt, closesAt, expectedVisitors))
+                .orElseGet(() -> create(productId, opensAt, closesAt, expectedVisitors, listing));
     }
 
-    private PreorderCampaign create(UUID productId, Instant opensAt, Instant closesAt, ProductListing listing) {
+    private PreorderCampaign create(UUID productId, Instant opensAt, Instant closesAt, Integer expectedVisitors,
+                                    ProductListing listing) {
         requireLeadTime(opensAt);
-        PreorderCampaign campaign = campaigns.save(new PreorderCampaign(productId, opensAt, closesAt, listing));
+        PreorderCampaign campaign = campaigns.save(new PreorderCampaign(productId, opensAt, closesAt, listing,
+                expectedVisitors));
         changePublisher.publish(campaign, CampaignChange.CREATED);
         return campaign;
     }
@@ -150,14 +153,19 @@ class PreorderCampaignWriter {
                 });
     }
 
-    private PreorderCampaign reschedule(PreorderCampaign campaign, Instant opensAt, Instant closesAt) {
+    private PreorderCampaign reschedule(PreorderCampaign campaign, Instant opensAt, Instant closesAt,
+                                        Integer expectedVisitors) {
         requireBeforeOpen(campaign);
-        // 같은 일정으로 다시 저장하면 바뀐 것이 없으므로 준비 시간 검사도 이벤트도 없다
-        if (campaign.hasSchedule(opensAt, closesAt)) {
+        boolean sameSchedule = campaign.hasSchedule(opensAt, closesAt);
+        // 같은 값으로 다시 저장하면 바뀐 것이 없으므로 준비 시간 검사도 이벤트도 없다
+        if (sameSchedule && campaign.hasExpectedVisitors(expectedVisitors)) {
             return campaign;
         }
-        requireLeadTime(opensAt);
-        campaign.reschedule(opensAt, closesAt);
+        // 예상 방문자 수만 바꾸면 오픈 시각이 그대로라 준비 시간을 다시 보지 않는다
+        if (!sameSchedule) {
+            requireLeadTime(opensAt);
+        }
+        campaign.reschedule(opensAt, closesAt, expectedVisitors);
         changePublisher.publish(campaign, CampaignChange.RESCHEDULED);
         return campaign;
     }

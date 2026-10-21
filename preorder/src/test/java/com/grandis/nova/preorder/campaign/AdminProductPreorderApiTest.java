@@ -6,6 +6,7 @@ import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.campaign.application.PreorderCampaignAdminService;
+import com.grandis.nova.preorder.campaign.domain.OpenAlertStore;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.integration.catalog.CatalogReader;
 import com.grandis.nova.preorder.support.AcceptFixtures;
@@ -80,6 +81,9 @@ class AdminProductPreorderApiTest {
     @Autowired
     Campaigns campaigns;
 
+    @Autowired
+    OpenAlertStore openAlerts;
+
     @MockitoBean
     CatalogClient catalogClient;
 
@@ -112,6 +116,54 @@ class AdminProductPreorderApiTest {
                 .andExpect(jsonPath("$.data.opensAt").value(changed.toString()));
         assertThat(fixtures.count("SELECT COUNT(*) FROM preorder_campaigns WHERE product_id = ?",
                 (Object) UuidBinary.toBytes(productId))).isEqualTo(1);
+    }
+
+    /** 빼고 저장하면 그대로다 — 이 칸을 모르는 화면이 저장해도 지워지지 않게. 바꾸면 일정 번호가 올라 받는 쪽이 새 값을 안다. */
+    @Test
+    void 예상_방문자_수를_넣고_빼고_저장하면_그대로이며_바꾸면_일정_번호가_오른다() throws Exception {
+        UUID productId = preorderProduct();
+        // 저장 정밀도(마이크로초)보다 거친 값이어야 같은 일정으로 다시 저장된다
+        Instant opensAt = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.SECONDS);
+
+        putCampaign(productId, opensAt, opensAt.plusSeconds(3600), 5000)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.expectedVisitors").value(5000));
+        long version = scheduleVersion(productId);
+        putCampaign(productId, opensAt, opensAt.plusSeconds(3600))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.expectedVisitors").value(5000));
+        assertThat(scheduleVersion(productId)).as("바뀐 것이 없다").isEqualTo(version);
+
+        putCampaign(productId, opensAt, opensAt.plusSeconds(3600), 8000)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.expectedVisitors").value(8000))
+                .andExpect(jsonPath("$.data.opensAt").value(opensAt.toString()));
+        assertThat(scheduleVersion(productId)).isEqualTo(version + 1);
+    }
+
+    @Test
+    void 예상_방문자_수가_1_미만이거나_상한을_넘으면_400() throws Exception {
+        UUID productId = preorderProduct();
+        Instant opensAt = Instant.now().plusSeconds(3600);
+
+        putCampaign(productId, opensAt, opensAt.plusSeconds(3600), 0).andExpect(status().isBadRequest());
+        putCampaign(productId, opensAt, opensAt.plusSeconds(3600), 100_000_001).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void 일정_조회는_오픈_알림_신청_수를_함께_주고_바꾼_뒤의_응답에는_세지_않는다() throws Exception {
+        UUID productId = preorderProduct();
+        Instant opensAt = Instant.now().plusSeconds(3600);
+        putCampaign(productId, opensAt, opensAt.plusSeconds(3600))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.openAlertSubscribers").doesNotExist());
+        openAlerts.subscribe(productId, UUID.randomUUID(), Instant.now());
+        openAlerts.subscribe(productId, UUID.randomUUID(), Instant.now());
+
+        mockMvc.perform(get("/api/v1/admin/preorders/products/{id}/campaign", productId).with(admin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.openAlertSubscribers").value(2))
+                .andExpect(jsonPath("$.data.expectedVisitors").doesNotExist());
     }
 
     @Test
@@ -599,6 +651,19 @@ class AdminProductPreorderApiTest {
         String body = mockMvc.perform(get("/api/v1/admin/preorders/products/{id}/campaign", productId).with(admin()))
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         return Instant.parse(JsonPath.<String>read(body, "$.data.closesAt"));
+    }
+
+    private ResultActions putCampaign(UUID productId, Instant opensAt, Instant closesAt, int expectedVisitors)
+            throws Exception {
+        return mockMvc.perform(put("/api/v1/admin/preorders/products/{id}/campaign", productId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"opensAt\":\"%s\",\"closesAt\":\"%s\",\"expectedVisitors\":%d}"
+                        .formatted(opensAt, closesAt, expectedVisitors))
+                .with(admin()));
+    }
+
+    private long scheduleVersion(UUID productId) {
+        return campaignService.findCampaign(productId).getScheduleVersion();
     }
 
     private ResultActions putCampaign(UUID productId, Instant opensAt, Instant closesAt) throws Exception {
