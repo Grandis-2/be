@@ -9,7 +9,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * 회차의 지금 일정을 회차 변경 이벤트로 아웃박스에 적고(대기열 · 켜 두면 catalog), 커밋 뒤 회차 캐시를 비운다.
+ * 회차의 지금 일정을 회차 변경 이벤트로 아웃박스에 적고(대기열 · 켜 두면 catalog · 인프라), 커밋 뒤 회차 캐시를 비운다.
  * 회차를 바꾼 트랜잭션 안에서 부른다.
  * 전체 재발행(RESYNC)은 회차를 바꾸지 않으므로 비우지 않는다.
  */
@@ -19,13 +19,16 @@ public class CampaignChangePublisher {
     private final OutboxWriter outboxWriter;
     private final CampaignCacheInvalidation cacheInvalidation;
     private final ScheduleNoticeProperties scheduleNotice;
+    private final ScalingNoticeProperties scalingNotice;
     private final Clock clock;
 
     CampaignChangePublisher(OutboxWriter outboxWriter, CampaignCacheInvalidation cacheInvalidation,
-                            ScheduleNoticeProperties scheduleNotice, Clock clock) {
+                            ScheduleNoticeProperties scheduleNotice, ScalingNoticeProperties scalingNotice,
+                            Clock clock) {
         this.outboxWriter = outboxWriter;
         this.cacheInvalidation = cacheInvalidation;
         this.scheduleNotice = scheduleNotice;
+        this.scalingNotice = scalingNotice;
         this.clock = clock;
     }
 
@@ -36,6 +39,11 @@ public class CampaignChangePublisher {
         if (scheduleNotice.enabled()) {
             outboxWriter.append(new PreorderCampaignScheduleChanged(campaign.getProductId(),
                     campaign.getScheduleVersion(), campaign.getOpensAt(), campaign.getClosesAt(), now, change));
+        }
+        if (scalingNotice.enabled()) {
+            outboxWriter.append(new PreorderCampaignScalingPlanned(campaign.getProductId(),
+                    campaign.getScheduleVersion(), campaign.getOpensAt(), campaign.getClosesAt(), campaign.isVisible(),
+                    campaign.getExpectedVisitors(), now, change));
         }
         if (change != CampaignChange.RESYNC) {
             cacheInvalidation.evictAfterCommit(campaign.getProductId());
