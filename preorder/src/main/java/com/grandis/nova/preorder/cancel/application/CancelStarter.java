@@ -4,18 +4,15 @@ import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.PreorderFact;
-import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
+import com.grandis.nova.preorder.preorder.LockedPreorder;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
-import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.preorder.PreorderTransition;
-import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.syncjob.SyncJobs;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
-import java.util.UUID;
 
 /**
  * 취소 시작 트랜잭션. 사용자 · 관리자 · 만료 · 회차 취소가 모두 이 경로를 탄다.
@@ -28,15 +25,12 @@ import java.util.UUID;
 public class CancelStarter {
 
     private final PreorderLedger ledger;
-    private final Preorders preorders;
     private final SyncJobs syncJobs;
     private final OutboxWriter outboxWriter;
     private final Clock clock;
 
-    public CancelStarter(PreorderLedger ledger, Preorders preorders, SyncJobs syncJobs,
-                         OutboxWriter outboxWriter, Clock clock) {
+    public CancelStarter(PreorderLedger ledger, SyncJobs syncJobs, OutboxWriter outboxWriter, Clock clock) {
         this.ledger = ledger;
-        this.preorders = preorders;
         this.syncJobs = syncJobs;
         this.outboxWriter = outboxWriter;
         this.clock = clock;
@@ -45,19 +39,21 @@ public class CancelStarter {
     /** 이미 취소 중 · 취소 완료면 아무것도 만들지 않고 지금 상태를 돌려준다. */
     @Transactional
     public PreorderTransition start(PreorderSnapshot preorder, EventActor actor, String reason, CancelReason cancelReason) {
-        PreorderTransition transition = ledger.fire(preorder.id(), new PreorderFact.CancelRequested(actor, reason));
+        return start(ledger.lock(preorder.id()), actor, reason, cancelReason);
+    }
+
+    /**
+     * 이미 잠근 예약의 취소를 시작한다. 시도 순번은 이번에 남기는 CANCELING 진입 이력의 순번이다(잠글 때 순번 + 1).
+     */
+    @Transactional
+    public PreorderTransition start(LockedPreorder preorder, EventActor actor, String reason,
+                                    CancelReason cancelReason) {
+        PreorderTransition transition = ledger.fire(preorder, new PreorderFact.CancelRequested(actor, reason));
         if (transition.applied()) {
             syncJobs.cancelRegister(preorder.id(), clock.instant());
             outboxWriter.append(new PreorderCancelRequested(preorder.id(), preorder.preorderToken(),
-                    preorder.customerId(), cancelReason, cancelSequence(preorder.id())));
+                    preorder.customerId(), cancelReason, preorder.nextEventSequence()));
         }
         return transition;
-    }
-
-    /** 방금 남긴 CANCELING 진입 이력의 순번. 예약 행을 잠그고 있으므로 가장 최근 것이 이번 시도다. */
-    private Long cancelSequence(UUID preorderId) {
-        return preorders.lastTransitionTo(preorderId, PreorderStatus.CANCELING)
-                .map(PreorderHistoryEntry::eventSequence)
-                .orElseThrow(() -> new IllegalStateException("취소 시작 이력이 없다: preorderId=" + preorderId));
     }
 }

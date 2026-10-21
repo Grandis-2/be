@@ -4,11 +4,9 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
-import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Limit;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
-import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -106,10 +104,6 @@ public interface PreorderRepository extends JpaRepository<Preorder, UUID>, JpaSp
     int recordPaid(@Param("id") UUID id, @Param("paidAt") Instant paidAt, @Param("now") Instant now,
                    @Param("from") PreorderStatus from);
 
-    /** 결제 확인 시각(취소 거절 때 어디로 돌아갈지 가른다). 행을 잠근 트랜잭션에서 부른다. */
-    @Query("select p.reservedAt from Preorder p where p.id = :id")
-    Optional<Instant> findReservedAt(@Param("id") UUID id);
-
     /** 등록 확인 반영. payable_from 은 처음 한 번만 찍는다(여기서 24시간이 결제 기한). */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("""
@@ -135,22 +129,6 @@ public interface PreorderRepository extends JpaRepository<Preorder, UUID>, JpaSp
     /** 같은 모델의 진행 중 예약(취소 완료 제외). 활성 예약 UNIQUE 충돌 때 기존 예약을 알려 주려고 쓴다. */
     Optional<Preorder> findFirstByCustomerIdAndProductIdAndStatusNot(UUID customerId, UUID productId,
                                                                     PreorderStatus status);
-
-    /**
-     * 상태를 읽으며 예약 행을 잠근다. 사건을 판정하고 반영할 때까지 다른 트랜잭션이 상태를 바꾸지 못한다.
-     * 잠금 순서는 예약 행 → 그 예약의 작업 행이다. 작업 행을 먼저 잠근 뒤 이걸 부르지 않는다(교착).
-     */
-    @Query(value = "SELECT status FROM preorders WHERE id = :id FOR UPDATE", nativeQuery = true)
-    Optional<PreorderStatus> findStatusForUpdate(@Param("id") UUID id);
-
-    /** 방금 올린 이력 번호. 같은 트랜잭션의 UPDATE 가 행을 잠그고 있으므로 다른 트랜잭션이 끼어들 수 없다. */
-    @Query("select p.eventSequence from Preorder p where p.id = :id")
-    long findEventSequence(@Param("id") UUID id);
-
-    /** 예약 행을 잠그고 읽는다. 트랜잭션에서 처음 읽을 때 불러야 잠근 뒤의 최신 값을 받는다. */
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("select p from Preorder p where p.preorderToken = :token")
-    Optional<Preorder> findForUpdateByPreorderToken(@Param("token") String token);
 
     /** 상품의 예약을 순번 순으로 읽는다. uq_preorder_position(product_id, queue_position) 을 탄다. */
     List<Preorder> findByProductIdAndStatusInOrderByQueuePosition(UUID productId, Collection<PreorderStatus> statuses,

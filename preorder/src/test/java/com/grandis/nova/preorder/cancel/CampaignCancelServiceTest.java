@@ -12,6 +12,7 @@ import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.CancelReason;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
+import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
@@ -147,7 +148,7 @@ class CampaignCancelServiceTest {
                 throw new IllegalStateException("두 번째 묶음에서 한 번 멈춤");
             }
             return invocation.callRealMethod();
-        }).given(AopTestUtils.<CancelStarter>getUltimateTargetObject(cancelStarter)).start(any(), any(), any(), any());
+        }).given(AopTestUtils.<CancelStarter>getUltimateTargetObject(cancelStarter)).start(any(PreorderSnapshot.class), any(), any(), any());
 
         assertThatThrownBy(() -> campaignCancelService.cancel(product.productId(), "공급 차질"))
                 .isInstanceOf(IllegalStateException.class);

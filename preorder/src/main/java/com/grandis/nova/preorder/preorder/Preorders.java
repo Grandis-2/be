@@ -108,10 +108,6 @@ public class Preorders {
                 .map(PreorderEvent::toHistoryEntry);
     }
 
-    /** 결제 확인 시각. 영속성 컨텍스트를 거치지 않고 DB 에서 읽는다 — 예약 행을 잠근 트랜잭션에서 부른다. */
-    public Optional<Instant> findReservedAt(UUID preorderId) {
-        return preorders.findReservedAt(preorderId);
-    }
 
     /** 주문 쪽에서 취소가 거절돼 결제 가능(REGISTERED)으로 돌아온 적이 있는가. */
     public boolean wasCancelRejectedToRegistered(UUID preorderId) {
