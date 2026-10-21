@@ -41,6 +41,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * 공개 회차 캐시를 켠 채 — 회원 상세 · 후기 · 조회 신호 · 홍보 카드는 회차를 캐시에서 꺼내고(preorder 를 다시 부르지 않는다), 세대를 올리면 다시 묻고,
+ * 회차 없음은 넣지 않고,
  * 관리자 상세는 캐시를 거치지 않는다. preorder 의 회차 변경은 시험 DB 의 회차 행을 직접 고쳐 흉내 낸다(대역 클라이언트가 그 행을 읽는다).
  */
 @CatalogIntegrationTest
@@ -54,6 +55,7 @@ class PublicCampaignsApiTest {
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired StringRedisTemplate redis;
     @MockitoSpyBean PreorderCampaignClient client;
+    @Autowired PublicCampaigns publicCampaigns;
 
     ShopFixtures fixtures;
     UUID categoryId;
@@ -92,19 +94,42 @@ class PublicCampaignsApiTest {
     }
 
     @Test
-    @DisplayName("회차 없음(판매 준비 전)도 캐시한다 — 회차 행이 생겨도 세대를 올리기 전에는 404, 올리면 200")
-    void missingCampaignIsCached() throws Exception {
+    @DisplayName("회차 없음(판매 준비 전)은 넣지 않는다 — 등록 뒤 회차가 생기면 세대를 올리지 않아도 바로 200")
+    void missingCampaignIsNotCached() throws Exception {
         UUID productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", "준비 전", "t");
         fixtures.registration(productId);
         fixtures.option(productId, "ACTIVE");
         mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isNotFound());
 
         Instant now = Instant.now();
-        fixtures.campaign(productId, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
-        mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isNotFound());
-
-        redis.opsForValue().increment("catalog:cache:gen:" + PublicCampaigns.CAMPAIGNS);
+        fixtures.campaign(productId, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));   // preorder 가 등록 이벤트를 처리했다
         assertThat(detailStatus(productId)).isEqualTo("OPEN");
+    }
+
+    @Test
+    @DisplayName("회차 없는 상품이 든 묶음은 넣지 않는다 — 그 상품의 회차가 생기면 세대를 올리지 않아도 홍보 카드에 바로 나온다")
+    void setWithMissingCampaignIsNotCached() throws Exception {
+        UUID ready = openPreorder("준비 끝");
+        UUID pending = fixtures.product(categoryId, "PREORDER", "ACTIVE", "준비 전", "t");
+        fixtures.registration(pending);
+        fixtures.option(pending, "ACTIVE");
+        UUID promotionId = promotion(ready, pending);
+        assertThat(cardStatuses(promotionId)).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(ready, "OPEN"));
+
+        Instant now = Instant.now();
+        fixtures.campaign(pending, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
+        assertThat(cardStatuses(promotionId)).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(ready, "OPEN", pending, "OPEN"));
+    }
+
+    @Test
+    @DisplayName("묶음의 키는 상품 id 집합이다 — 순서를 바꾸고 겹쳐 물어도 같은 키라 preorder 를 한 번만 부른다")
+    void setKeyIgnoresOrderAndDuplicates() {
+        UUID first = openPreorder("집합 하나");
+        UUID second = openPreorder("집합 둘");
+        clearInvocations(client);
+        assertThat(publicCampaigns.find(java.util.List.of(first, second))).containsOnlyKeys(first, second);
+        assertThat(publicCampaigns.find(java.util.List.of(second, first, first))).containsOnlyKeys(first, second);
+        verify(client, times(1)).getCampaigns(any());
     }
 
     @Test
@@ -125,14 +150,7 @@ class PublicCampaignsApiTest {
     void promotionCardsAreCachedAsOneSet() throws Exception {
         UUID first = openPreorder("홍보 하나");
         UUID second = openPreorder("홍보 둘");
-        LocalDate today = LocalDate.now(ZoneId.of("Asia/Seoul"));
-        String body = """
-                { "name": "회차 홍보", "startDate": "%s", "endDate": "%s", "thumbnailUrl": "https://img/t.jpg", "detailImageUrls": [],
-                  "productIds": ["%s", "%s"] }
-                """.formatted(today, today, first, second);
-        UUID promotionId = UUID.fromString(data(mockMvc.perform(post("/api/v1/admin/promotions")
-                .header("Idempotency-Key", "k-" + ShopFixtures.unique()).contentType(MediaType.APPLICATION_JSON).content(body)
-                .with(user("admin").roles("ADMIN"))).andExpect(status().isCreated())).get("promotionId").asString());
+        UUID promotionId = promotion(first, second);
         clearInvocations(client);
 
         assertThat(cardStatuses(promotionId)).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(first, "OPEN", second, "OPEN"));
@@ -153,6 +171,19 @@ class PublicCampaignsApiTest {
         Instant now = Instant.now();
         fixtures.campaign(productId, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
         return productId;
+    }
+
+    /** 오늘 하루 보이는 홍보 하나 — 관리자 API 로 만든다. */
+    private UUID promotion(UUID... productIds) throws Exception {
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Seoul"));
+        String ids = java.util.Arrays.stream(productIds).map(id -> "\"" + id + "\"").collect(java.util.stream.Collectors.joining(", "));
+        String body = """
+                { "name": "회차 홍보", "startDate": "%s", "endDate": "%s", "thumbnailUrl": "https://img/t.jpg", "detailImageUrls": [],
+                  "productIds": [%s] }
+                """.formatted(today, today, ids);
+        return UUID.fromString(data(mockMvc.perform(post("/api/v1/admin/promotions")
+                .header("Idempotency-Key", "k-" + ShopFixtures.unique()).contentType(MediaType.APPLICATION_JSON).content(body)
+                .with(user("admin").roles("ADMIN"))).andExpect(status().isCreated())).get("promotionId").asString());
     }
 
     private void closeNow(UUID productId) {
