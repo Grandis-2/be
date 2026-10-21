@@ -26,7 +26,6 @@ import java.util.UUID;
 import java.util.function.BooleanSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -58,7 +57,6 @@ class PreorderCampaignScheduleChangedFlowTest {
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired StringRedisTemplate redis;
     @Autowired MockMvc mockMvc;
-    @Autowired PreorderCampaignScheduleChangedHandler handler;
 
     ShopFixtures fixtures;
 
@@ -89,16 +87,17 @@ class PreorderCampaignScheduleChangedFlowTest {
     }
 
     @Test
-    @DisplayName("세대를 못 올리면 던진다(메시지를 다시 받는다) — 올라가면 끝난다")
-    void failedBumpThrows() {
+    @DisplayName("세대를 못 올리면 메시지를 지우지 않아 다시 받고, 재수신 한도 뒤 DLQ 로 간다 — 조용히 지우지 않는다")
+    void failedBumpIsRedeliveredThenDeadLettered() {
+        UUID product = UUID.randomUUID();
         redis.opsForValue().set(GENERATION, "not-a-number");   // INCR 이 확실히 실패하게
         try {
-            assertThatThrownBy(() -> handler.handle(UUID.randomUUID(), null)).isInstanceOf(IllegalStateException.class);
+            queues.send(QUEUE, body(product));
+            // DLQ 는 FlociTestContainer.MAX_RECEIVE_COUNT(2)번 받고도 지우지 못한 메시지만 받는다 — 한 번 던지고 지웠다면 오지 않는다
+            assertThat(queues.receive(QUEUE + "-dlq", message -> message.body().contains(product.toString()), TIMEOUT)).isPresent();
         } finally {
             redis.delete(GENERATION);
         }
-        handler.handle(UUID.randomUUID(), null);
-        assertThat(redis.opsForValue().get(GENERATION)).isNotNull();
     }
 
     private String detailStatus(UUID product) {
