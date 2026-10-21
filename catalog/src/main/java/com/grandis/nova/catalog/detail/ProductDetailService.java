@@ -9,6 +9,7 @@ import com.grandis.nova.catalog.detail.ProductDetailView.OptionValue;
 import com.grandis.nova.catalog.detail.ProductDetailView.Variant;
 import com.grandis.nova.catalog.detail.ProductDetailView.Warranty;
 import com.grandis.nova.catalog.integration.PreorderCampaigns;
+import com.grandis.nova.catalog.integration.PublicCampaigns;
 import com.grandis.nova.catalog.integration.StockReader;
 import com.grandis.nova.catalog.listing.CampaignWindow;
 import com.grandis.nova.catalog.listing.ProductListingQueryRepository;
@@ -66,18 +67,21 @@ public class ProductDetailService {
     private final ProductListingQueryRepository crossReads;
     private final StockReader stocks;
     private final PreorderCampaigns campaigns;
+    /** 회원 상세의 회차 — 관리자 상세({@link #withLive})는 {@link #campaigns} 로 바로 묻는다. */
+    private final PublicCampaigns publicCampaigns;
     private final Clock clock;
     /** DB 를 읽는 부분만 감싼다 — order 재고 · preorder 회차를 묻는 동안 DB 연결을 붙잡지 않게. */
     private final TransactionTemplate snapshot;
 
     public ProductDetailService(ProductRepository products, ProductOptionRepository options,
-                                ProductListingQueryRepository crossReads, StockReader stocks, PreorderCampaigns campaigns, Clock clock,
-                                PlatformTransactionManager transactionManager) {
+                                ProductListingQueryRepository crossReads, StockReader stocks, PreorderCampaigns campaigns,
+                                PublicCampaigns publicCampaigns, Clock clock, PlatformTransactionManager transactionManager) {
         this.products = products;
         this.options = options;
         this.crossReads = crossReads;
         this.stocks = stocks;
         this.campaigns = campaigns;
+        this.publicCampaigns = publicCampaigns;
         this.clock = clock;
         this.snapshot = new TransactionTemplate(transactionManager);
         this.snapshot.setReadOnly(true);
@@ -113,15 +117,15 @@ public class ProductDetailService {
      * 본문에 실시간 칸을 채운다. 사전예약은 preorder 의 회차(판매 준비 · 회차 시각 · 접수 단계), 일반은 그 상품 옵션의 재고 행(옵션별 가용 수량 · 품절).
      * 판매 준비 전이면 404 — 목록의 판매 방식별 준비와 같은 정의다. 일반 상품의 판매 준비는 본문에 실린 값이다 — 준비된 본문이면 DB 를 다시 읽지 않고,
      * 준비 전 본문이면 404 를 내기 전에 한 번 더 읽는다.
-     * 캐시된 본문에도 요청마다 부르므로 재고 · 조기 마감이 늦게 보이지 않는다. 트랜잭션 없이 돈다 — order 재고 · preorder 회차를 묻는 동안 DB 연결을
-     * 붙잡지 않게.
+     * 캐시된 본문에도 요청마다 부르므로 재고가 늦게 보이지 않는다. 회차는 {@link PublicCampaigns} 를 거친다 — 켜 두면 조기 마감 · 다시 열기가 그 캐시만큼
+     * 늦을 수 있고, 꺼 두면(기본) 요청마다 preorder 에 묻는다. 트랜잭션 없이 돈다 — order 재고 · preorder 회차를 묻는 동안 DB 연결을 붙잡지 않게.
      *
      * @throws BusinessException 사전예약인데 preorder 가 답하지 않으면 503 — 접수 단계를 가를 수 없다(2026-10-19 결정)
      */
     public ProductDetailView withLiveParts(ProductDetailBody body) {
         ProductDetailView view = body.view();
         if (view.saleMode() == SaleMode.PREORDER) {
-            CampaignWindow window = campaigns.find(view.productId())
+            CampaignWindow window = publicCampaigns.find(view.productId())
                     .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
             return live(view, window, Map.of());
         }
