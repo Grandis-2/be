@@ -100,13 +100,13 @@ public class CampaignCache {
     }
 
     private CachedCampaign load(UUID productId) {
-        return campaigns.findById(productId)
+        return campaigns.lookup(productId)
                 .map(campaign -> toCached(campaign, batches.findByProductIdOrderByBatchNumber(productId)))
                 .orElse(null);
     }
 
     private Map<UUID, CachedCampaign> loadAll(List<UUID> productIds) {
-        List<PreorderCampaign> rows = campaigns.findAllById(productIds);
+        List<PreorderCampaign> rows = campaigns.lookupAll(productIds);
         if (rows.isEmpty()) {
             return Map.of();
         }

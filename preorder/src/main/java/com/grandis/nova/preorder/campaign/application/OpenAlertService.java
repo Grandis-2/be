@@ -9,7 +9,6 @@ import com.grandis.nova.preorder.campaign.domain.OpenAlertStore.MyOpenAlert;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
@@ -81,19 +80,16 @@ public class OpenAlertService {
         return new BusinessException(PreorderErrorCode.PRODUCT_ALREADY_OPEN, "이미 오픈한 사전예약은 알림을 신청할 수 없습니다.");
     }
 
-    /** 신청을 끈다. 신청이 없거나 회차가 없어도 그대로 끝난다. */
-    @Transactional
+    /** 신청을 끈다. 신청이 없거나 회차가 없어도 그대로 끝난다. 문장 하나라 트랜잭션 없이 쓴다. */
     public void unsubscribe(UUID customerId, UUID productId) {
         alerts.unsubscribe(productId, customerId);
     }
 
-    @Transactional(readOnly = true)
     public boolean isSubscribed(UUID customerId, UUID productId) {
         return alerts.exists(productId, customerId);
     }
 
     /** 내가 신청한 오픈 전 공개 회차. 오픈이 이른 순으로 {@value #MY_ALERTS_LIMIT}개까지. */
-    @Transactional(readOnly = true)
     public List<MyOpenAlert> findMine(UUID customerId) {
         return alerts.findMine(customerId, clock.instant(), MY_ALERTS_LIMIT);
     }

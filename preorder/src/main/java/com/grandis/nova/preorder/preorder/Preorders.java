@@ -4,6 +4,7 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.preorder.domain.AdminPreorderSearchQuery;
+import com.grandis.nova.preorder.preorder.domain.CustomerPreorderListQuery;
 import com.grandis.nova.preorder.preorder.domain.Preorder;
 import com.grandis.nova.preorder.preorder.domain.PaymentOverdueQuery;
 import com.grandis.nova.preorder.preorder.domain.PreorderBacklogQuery;
@@ -12,10 +13,8 @@ import com.grandis.nova.preorder.preorder.domain.PreorderEventRepository;
 import com.grandis.nova.preorder.preorder.domain.PreorderRepository;
 import com.grandis.nova.preorder.preorder.domain.PreorderSpecifications;
 import org.springframework.data.domain.Limit;
-import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.Collection;
@@ -28,26 +27,28 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-/** 예약 조회(모듈 공개 API). 값은 {@link PreorderSnapshot} 으로만 내준다. 바꾸는 일은 {@link PreorderLedger} 가 한다. */
+/**
+ * 예약 조회(모듈 공개 API). 값은 {@link PreorderSnapshot} 으로만 내준다. 바꾸는 일은 {@link PreorderLedger} 가 한다.
+ * 트랜잭션을 열지 않는다 — 잠그지 않는 읽기라 READ COMMITTED 에서는 묶어도 문장마다 따로 본다. 부른 쪽 트랜잭션이 있으면 그 안에서 읽는다.
+ */
 @Service
-@Transactional(readOnly = true)
 public class Preorders {
-
-    static final Sort NEWEST_FIRST = Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by(Sort.Direction.DESC, "id"));
 
     private final PreorderRepository preorders;
     private final PreorderEventRepository events;
     private final AdminPreorderSearchQuery adminSearch;
     private final PreorderBacklogQuery backlog;
     private final PaymentOverdueQuery paymentOverdue;
+    private final CustomerPreorderListQuery customerList;
 
     Preorders(PreorderRepository preorders, PreorderEventRepository events, AdminPreorderSearchQuery adminSearch,
-              PreorderBacklogQuery backlog, PaymentOverdueQuery paymentOverdue) {
+              PreorderBacklogQuery backlog, PaymentOverdueQuery paymentOverdue, CustomerPreorderListQuery customerList) {
         this.preorders = preorders;
         this.events = events;
         this.adminSearch = adminSearch;
         this.backlog = backlog;
         this.paymentOverdue = paymentOverdue;
+        this.customerList = customerList;
     }
 
     public Optional<PreorderSnapshot> findByToken(String preorderToken) {
@@ -60,7 +61,7 @@ public class Preorders {
     }
 
     public Optional<PreorderSnapshot> findById(UUID preorderId) {
-        return preorders.findById(preorderId).map(Preorder::toSnapshot);
+        return preorders.lookup(preorderId).map(Preorder::toSnapshot);
     }
 
     /** @throws BusinessException PREORDER_NOT_FOUND */
@@ -70,7 +71,10 @@ public class Preorders {
 
     /** id → 예약. 없는 id 는 빠진다. */
     public Map<UUID, PreorderSnapshot> findAllById(Collection<UUID> preorderIds) {
-        return preorders.findAllById(preorderIds).stream()
+        if (preorderIds.isEmpty()) {
+            return Map.of();
+        }
+        return preorders.lookupAll(preorderIds).stream()
                 .collect(Collectors.toMap(Preorder::getId, Preorder::toSnapshot));
     }
 
@@ -151,8 +155,7 @@ public class Preorders {
                 PreorderSpecifications.status(status),
                 PreorderSpecifications.product(productId),
                 PreorderSpecifications.after(afterCreatedAt, afterId));
-        // 총계를 세지 않는다. findAll(Specification, Pageable) 은 쓰지 않는 COUNT 까지 돌린다.
-        return preorders.findBy(specification, query -> query.sortBy(NEWEST_FIRST).limit(limit).all()).stream()
+        return customerList.findNewestFirst(specification, limit).stream()
                 .map(Preorder::toSnapshot)
                 .toList();
     }
@@ -164,7 +167,7 @@ public class Preorders {
                 PreorderSpecifications.customer(Objects.requireNonNull(customerId)),
                 PreorderSpecifications.active(),
                 PreorderSpecifications.after(afterCreatedAt, afterId));
-        return preorders.findBy(specification, query -> query.sortBy(NEWEST_FIRST).limit(limit).all()).stream()
+        return customerList.findNewestFirst(specification, limit).stream()
                 .map(Preorder::toSnapshot)
                 .toList();
     }
@@ -172,7 +175,7 @@ public class Preorders {
     /** 관리자 검색(최신순 오프셋 페이지). */
     public OffsetPage<PreorderSnapshot> searchForAdmin(AdminPreorderSearch search, int page, int size) {
         List<UUID> ids = adminSearch.findIds(search, page, size);
-        Map<UUID, Preorder> byId = preorders.findAllById(ids).stream()
+        Map<UUID, Preorder> byId = (ids.isEmpty() ? List.<Preorder>of() : preorders.lookupAll(ids)).stream()
                 .collect(Collectors.toMap(Preorder::getId, Function.identity()));
         List<PreorderSnapshot> items = ids.stream().map(byId::get).map(Preorder::toSnapshot).toList();
         return OffsetPage.of(items, page, size, adminSearch.count(search));

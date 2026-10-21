@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -23,6 +24,18 @@ public interface PreorderCampaignRepository extends JpaRepository<PreorderCampai
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select c from PreorderCampaign c where c.productId = :productId")
     Optional<PreorderCampaign> findForUpdate(@Param("productId") UUID productId);
+
+    /**
+     * 잠그지 않고 읽는다. 직접 선언한 쿼리라 트랜잭션 밖에서 부르면 문장 하나다 — 상속한 findById · findAllById 는 저장소가
+     * 읽기 전용 트랜잭션을 열어 준비 · 정리 문장이 붙는다. 트랜잭션 안에서는 자동 flush 뒤 영속성 컨텍스트의 같은 객체를 받는다
+     * (값은 findById 와 같고, 이미 읽은 행이어도 문장 하나가 나간다).
+     */
+    @Query("select c from PreorderCampaign c where c.productId = :productId")
+    Optional<PreorderCampaign> lookup(@Param("productId") UUID productId);
+
+    /** {@link #lookup} 의 여럿. 빈 목록은 부르지 않는다. */
+    @Query("select c from PreorderCampaign c where c.productId in :productIds")
+    List<PreorderCampaign> lookupAll(@Param("productIds") Collection<UUID> productIds);
 
     /** 다음에 발급할 순번만 읽는다. 잠그지 않는다 — 접수가 그사이 가져가도 안내가 한 건 늦을 뿐이다. */
     @Query("select c.nextQueuePosition from PreorderCampaign c where c.productId = :productId")

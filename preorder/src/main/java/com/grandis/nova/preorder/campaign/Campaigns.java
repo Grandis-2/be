@@ -67,28 +67,29 @@ public class Campaigns {
         return new IssuedPosition(position, batch.toSnapshot());
     }
 
-    /** 그 상품에 사전예약 회차가 있는가. */
     /** 지금 접수 중인(오픈 뒤 · 마감 전 · 공개 · 판매 중지 아님) 회차 수. */
     @Transactional(readOnly = true)
     public long countAccepting(Instant now) {
         return campaigns.countAccepting(now, ProductStatus.PAUSED);
     }
 
+    /** 그 상품에 사전예약 회차가 있는가. */
     @Transactional(readOnly = true)
     public boolean exists(UUID productId) {
         return campaigns.existsById(productId);
     }
 
-    /** 예약에 배정된 차수. 없으면 IllegalStateException(오픈 전 검사를 지나친 데이터). */
-    @Transactional(readOnly = true)
+    /** 예약에 배정된 차수. 없으면 IllegalStateException(오픈 전 검사를 지나친 데이터). 트랜잭션 없이 문장 하나다. */
     public ShipmentBatchSnapshot getBatch(UUID shipmentBatchId) {
         return batches.getAssigned(shipmentBatchId).toSnapshot();
     }
 
-    /** id → 차수. 없는 id 는 빠진다. */
-    @Transactional(readOnly = true)
+    /** id → 차수. 없는 id 는 빠진다. 트랜잭션 없이 문장 하나다. */
     public Map<UUID, ShipmentBatchSnapshot> findBatches(Collection<UUID> shipmentBatchIds) {
-        return batches.findAllById(shipmentBatchIds).stream()
+        if (shipmentBatchIds.isEmpty()) {
+            return Map.of();
+        }
+        return batches.lookupAll(shipmentBatchIds).stream()
                 .collect(Collectors.toMap(ShipmentBatch::getId, ShipmentBatch::toSnapshot));
     }
 

@@ -35,41 +35,41 @@ class CampaignCacheTest {
     @Test
     void 같은_상품은_수명_안에_다시_읽지_않는다() {
         UUID productId = UUID.randomUUID();
-        given(campaigns.findById(productId)).willReturn(Optional.of(campaign(productId)));
+        given(campaigns.lookup(productId)).willReturn(Optional.of(campaign(productId)));
         CampaignCache cache = cache(10, 10);
 
         assertThat(cache.find(productId)).isPresent();
         assertThat(cache.find(productId)).isPresent();
 
-        verify(campaigns, times(1)).findById(productId);
+        verify(campaigns, times(1)).lookup(productId);
     }
 
     /** 무작위 id 로 물어도 진짜 회차가 밀려나지 않는다 — "없음" 은 따로 세고 따로 둔다. */
     @Test
     void 회차_없음은_따로_두어_진짜_회차를_밀어내지_않는다() {
         UUID productId = UUID.randomUUID();
-        given(campaigns.findById(productId)).willReturn(Optional.of(campaign(productId)));
+        given(campaigns.lookup(productId)).willReturn(Optional.of(campaign(productId)));
         CampaignCache cache = cache(1, 5);
         cache.find(productId);
 
         IntStream.range(0, 50).forEach(i -> assertThat(cache.find(UUID.randomUUID())).isEmpty());
 
         assertThat(cache.find(productId)).isPresent();
-        verify(campaigns, times(1)).findById(productId);
+        verify(campaigns, times(1)).lookup(productId);
     }
 
     @Test
     void 회차_없음도_수명_안에_다시_읽지_않고_비우면_다시_읽는다() {
         UUID productId = UUID.randomUUID();
-        given(campaigns.findById(productId)).willReturn(Optional.empty());
+        given(campaigns.lookup(productId)).willReturn(Optional.empty());
         CampaignCache cache = cache(10, 10);
 
         assertThat(cache.find(productId)).isEmpty();
         assertThat(cache.find(productId)).isEmpty();
-        verify(campaigns, times(1)).findById(productId);
+        verify(campaigns, times(1)).lookup(productId);
 
         cache.evict(productId);
-        given(campaigns.findById(productId)).willReturn(Optional.of(campaign(productId)));
+        given(campaigns.lookup(productId)).willReturn(Optional.of(campaign(productId)));
         assertThat(cache.find(productId)).isPresent();
     }
 
@@ -78,17 +78,17 @@ class CampaignCacheTest {
         UUID cached = UUID.randomUUID();
         UUID loaded = UUID.randomUUID();
         UUID absent = UUID.randomUUID();
-        given(campaigns.findById(cached)).willReturn(Optional.of(campaign(cached)));
-        given(campaigns.findAllById(anyCollection())).willReturn(List.of(campaign(loaded)));
+        given(campaigns.lookup(cached)).willReturn(Optional.of(campaign(cached)));
+        given(campaigns.lookupAll(anyCollection())).willReturn(List.of(campaign(loaded)));
         CampaignCache cache = cache(10, 10);
         cache.find(cached);
 
         List<CachedCampaign> found = cache.findAll(List.of(cached, loaded, absent, loaded));
 
         assertThat(found).extracting(campaign -> campaign.schedule().productId()).containsExactly(cached, loaded);
-        verify(campaigns).findAllById(argThat(ids -> List.of(loaded, absent).equals(ids)));
+        verify(campaigns).lookupAll(argThat(ids -> List.of(loaded, absent).equals(ids)));
         assertThat(cache.findAll(List.of(loaded, absent))).hasSize(1);
-        verify(campaigns, times(1)).findAllById(anyCollection());
+        verify(campaigns, times(1)).lookupAll(anyCollection());
     }
 
     /** 읽는 사이 커밋되고 비웠다면 읽은 값은 비우기 전의 값일 수 있다 — 두지 않는다. */
@@ -99,12 +99,12 @@ class CampaignCacheTest {
         willAnswer(invocation -> {
             cache.evict(productId);
             return List.of(campaign(productId));
-        }).given(campaigns).findAllById(anyCollection());
+        }).given(campaigns).lookupAll(anyCollection());
 
         assertThat(cache.findAll(List.of(productId))).hasSize(1);
         cache.findAll(List.of(productId));
 
-        verify(campaigns, times(2)).findAllById(anyCollection());
+        verify(campaigns, times(2)).lookupAll(anyCollection());
     }
 
     private CampaignCache cache(int maxProducts, int missingMax) {
