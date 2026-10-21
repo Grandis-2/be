@@ -24,6 +24,10 @@ public interface PreorderCampaignRepository extends JpaRepository<PreorderCampai
     @Query("select c from PreorderCampaign c where c.productId = :productId")
     Optional<PreorderCampaign> findForUpdate(@Param("productId") UUID productId);
 
+    /** 다음에 발급할 순번만 읽는다. 잠그지 않는다 — 접수가 그사이 가져가도 안내가 한 건 늦을 뿐이다. */
+    @Query("select c.nextQueuePosition from PreorderCampaign c where c.productId = :productId")
+    Optional<Long> findNextQueuePosition(@Param("productId") UUID productId);
+
     /** 마감 전 회차를 상품 id 순으로 afterProductId 다음부터 읽는다(전체 재발행의 한 묶음). 잠그지 않는다. */
     @Query("""
             select c from PreorderCampaign c

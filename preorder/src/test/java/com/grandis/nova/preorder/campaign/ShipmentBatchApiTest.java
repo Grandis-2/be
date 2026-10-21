@@ -7,6 +7,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -14,6 +15,7 @@ import java.util.UUID;
 
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -47,6 +49,26 @@ class ShipmentBatchApiTest {
                 .andExpect(jsonPath("$.data.items[0].estimatedShipStart").value("2026-11-01"))
                 .andExpect(jsonPath("$.data.items[1].batchNumber").value(2))
                 .andExpect(jsonPath("$.data.items[1].positionTo").doesNotExist());
+    }
+
+    @Test
+    void 잠깐_들고_있어도_되게_공개_캐시_헤더를_단다() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+
+        mockMvc.perform(get("/api/v1/preorders/products/{productId}/shipment-batches", product.productId()))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "max-age=60, public"));
+    }
+
+    /** 접수 현황과 같은 기준 — 비공개 상품은 있는지도 알리지 않는다. */
+    @Test
+    void 비공개_상품은_404() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        fixtures.listing(product.productId(), "숨김", "ACTIVE", false);
+
+        mockMvc.perform(get("/api/v1/preorders/products/{productId}/shipment-batches", product.productId()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
     }
 
     @Test

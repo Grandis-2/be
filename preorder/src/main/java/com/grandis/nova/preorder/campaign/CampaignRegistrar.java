@@ -67,9 +67,7 @@ public class CampaignRegistrar {
         if (existing.isPresent()) {
             log.info("회차가 이미 있어 등록 이벤트의 일정 · 차수를 건너뛴다 productId={}", productId);
             PreorderCampaign campaign = existing.get();
-            if (campaign.applyListing(registration.listing())) {
-                changePublisher.publish(campaign, CampaignChange.VISIBILITY);
-            }
+            changePublisher.listingApplied(campaign, campaign.applyListing(registration.listing()));
             return false;
         }
         requireSchedule(registration.opensAt(), registration.closesAt());

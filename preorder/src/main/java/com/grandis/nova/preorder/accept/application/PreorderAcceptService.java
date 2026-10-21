@@ -4,6 +4,9 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.admission.AdmissionTicket;
 import com.grandis.nova.preorder.admission.AdmissionTicketVerifier;
+import com.grandis.nova.preorder.campaign.CachedCampaign;
+import com.grandis.nova.preorder.campaign.CampaignSchedule;
+import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.integration.catalog.CatalogReader;
 import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
 import com.grandis.nova.preorder.preorder.EventActor;
@@ -14,6 +17,8 @@ import io.micrometer.core.instrument.Timer;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -46,18 +51,23 @@ public class PreorderAcceptService {
     private final CatalogReader catalogReader;
     private final PreorderAcceptTransaction transaction;
     private final AcceptBulkhead bulkhead;
+    private final Campaigns campaigns;
     private final Preorders preorders;
     private final MeterRegistry meterRegistry;
+    private final Clock clock;
 
     public PreorderAcceptService(AdmissionTicketVerifier ticketVerifier, CatalogReader catalogReader,
-                                 PreorderAcceptTransaction transaction, AcceptBulkhead bulkhead, Preorders preorders,
-                                 MeterRegistry meterRegistry) {
+                                 PreorderAcceptTransaction transaction, AcceptBulkhead bulkhead,
+                                 Campaigns campaigns, Preorders preorders, MeterRegistry meterRegistry,
+                                 Clock clock) {
         this.ticketVerifier = ticketVerifier;
         this.catalogReader = catalogReader;
         this.transaction = transaction;
         this.bulkhead = bulkhead;
+        this.campaigns = campaigns;
         this.preorders = preorders;
         this.meterRegistry = meterRegistry;
+        this.clock = clock;
         // 처음부터 0 으로 내놓는다 — 시계열이 없으면 "접수 중인데 새 예약 0건" 경보가 값 없음으로 빠진다
         for (String channel : List.of(USER_CHANNEL, ADMIN_CHANNEL)) {
             for (String result : List.of("success", "rejected", "error")) {
@@ -130,13 +140,32 @@ public class PreorderAcceptService {
         }
     }
 
+    /**
+     * 회차 캐시가 회차 없음 · 오픈 전이라 하면 회차를 잠그지 않고 판정한다 — 오픈 직전에 몰린 접수가 잠금 줄에
+     * 서서 커넥션을 오래 쥐지 않게. 캐시는 회차가 바뀌면 커밋 뒤 비우므로 비우기를 놓쳤을 때만 수명만큼 옛 판정이다.
+     * 그 밖(접수 중 · 마감, 또는 판정을 지나면)은 잠근 뒤 회차 행으로 판정한다.
+     */
     private AcceptResult accept(AcceptCommand command) {
         Optional<ProductCatalog> product = catalogReader.findProduct(command.productId());
         try {
-            return bulkhead.call(command.productId(), () -> transaction.accept(command, product));
+            // 캐시 미스 · 잠금 전 판정의 DB 읽기도 격벽 몫이다 — 허가 하나로 판정부터 접수까지 한다
+            return bulkhead.call(command.productId(), () -> settleThenAccept(command, product));
         } catch (DataIntegrityViolationException e) {
             return resolveConflict(command, e);
         }
+    }
+
+    private AcceptResult settleThenAccept(AcceptCommand command, Optional<ProductCatalog> product) {
+        Optional<CachedCampaign> cached = campaigns.findCached(command.productId());
+        Instant now = clock.instant();
+        if (cached.filter(campaign -> campaign.opened(now)).isEmpty()) {
+            Optional<AcceptResult> settled = transaction.settleBeforeLock(command, product,
+                    cached.map(CachedCampaign::schedule));
+            if (settled.isPresent()) {
+                return settled.get();
+            }
+        }
+        return transaction.accept(command, product);
     }
 
     private AcceptResult resolveConflict(AcceptCommand command, DataIntegrityViolationException e) {

@@ -92,7 +92,7 @@ class PreorderAcceptTransaction {
 
         requireTicketAfterLastAccept(command);
         OptionSnapshot option = requireOnSale(command, product);
-        requireAccepting(campaign);
+        requireAccepting(campaign, clock.instant());
         IssuedPosition issued = campaigns.issuePosition(command.productId());
 
         String preorderToken = UUID.randomUUID().toString();
@@ -107,6 +107,31 @@ class PreorderAcceptTransaction {
         outboxWriter.append(new RegisterJobReady(jobId, preorderToken, payload, SyncActor.SYSTEM, 1));
 
         return new AcceptResult(preorder, issued.batch(), false);
+    }
+
+    /**
+     * 잠그기 전 판정 — 캐시가 오픈 전 · 회차 없음이라 한 접수를 잠금 뒤와 같은 우선순위로 거절한다. 트랜잭션 없이 잠그지 않고 읽는다.
+     * 그 상품의 예약은 있을 수 없어(일정은 오픈 전에만 바뀐다) 마지막 접수 뒤 입장권 확인은 할 일이 없고, 같은 접수 키 확인만 한다
+     * (다른 상품에 쓴 키일 수 있다). 열린 적 있는 회차(마감 포함)는 판정하지 않는다 — 마감 직전 접수가 커밋되기 전에 온 같은 키
+     * 재전송은 잠금 뒤에야 그 예약을 본다.
+     *
+     * @param cached 회차 캐시의 일정
+     * @return 같은 접수 키의 재전송이면 그 결과. 판정하지 않거나 판정을 다 지나면(캐시가 늦음) 비어 있다 — 호출한 쪽이 잠그고
+     *         다시 판정한다
+     */
+    Optional<AcceptResult> settleBeforeLock(AcceptCommand command, Optional<ProductCatalog> product,
+                                            Optional<CampaignSchedule> cached) {
+        Instant now = clock.instant();
+        if (cached.filter(found -> !now.isBefore(found.opensAt())).isPresent()) {
+            return Optional.empty();
+        }
+        Optional<AcceptResult> replay = findReplay(command);
+        if (replay.isPresent()) {
+            return replay;
+        }
+        requireOnSale(command, product);
+        requireAccepting(cached, now);
+        return Optional.empty();
     }
 
     /**
@@ -159,9 +184,8 @@ class PreorderAcceptTransaction {
     }
 
     /** 회차 행이 없으면 등록이 끝나지 않은 상품이다 — 공개 전 상품처럼 존재를 알리지 않는다. */
-    private void requireAccepting(Optional<CampaignSchedule> campaign) {
+    private static void requireAccepting(Optional<CampaignSchedule> campaign, Instant now) {
         CampaignSchedule found = campaign.orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND));
-        Instant now = clock.instant();
         if (now.isBefore(found.opensAt())) {
             throw new BusinessException(PreorderErrorCode.SALE_NOT_OPEN,
                     Map.of("reason", "opensAt=" + found.opensAt()));

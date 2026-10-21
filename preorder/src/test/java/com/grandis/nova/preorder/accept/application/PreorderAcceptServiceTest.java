@@ -3,6 +3,10 @@ package com.grandis.nova.preorder.accept.application;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.admission.AdmissionTicketVerifier;
+import com.grandis.nova.preorder.campaign.CachedCampaign;
+import com.grandis.nova.preorder.campaign.CampaignSchedule;
+import com.grandis.nova.preorder.campaign.Campaigns;
+import com.grandis.nova.preorder.campaign.ProductStatus;
 import com.grandis.nova.preorder.integration.catalog.CatalogReader;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.Preorders;
@@ -13,7 +17,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import java.sql.SQLException;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -46,8 +53,14 @@ class PreorderAcceptServiceTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         AcceptBulkhead bulkhead = new AcceptBulkhead(new AcceptBulkheadProperties(2, 0.5, 0, Duration.ofSeconds(3),
                 Duration.ofSeconds(1), Duration.ofSeconds(3)), 10, registry);
+        // 회차 캐시가 접수 중이라 하면 잠금 전 판정 없이 접수 트랜잭션으로 간다
+        Campaigns campaigns = mock(Campaigns.class);
+        Instant now = Instant.now();
+        given(campaigns.findCached(PRODUCT_ID)).willReturn(Optional.of(new CachedCampaign(
+                new CampaignSchedule(PRODUCT_ID, now.minusSeconds(3600), now.plusSeconds(3600)), true,
+                ProductStatus.ACTIVE, List.of())));
         service = new PreorderAcceptService(mock(AdmissionTicketVerifier.class), catalogReader, transaction, bulkhead,
-                preorders, registry);
+                campaigns, preorders, registry, Clock.systemUTC());
     }
 
     @Test

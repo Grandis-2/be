@@ -12,6 +12,7 @@ import com.grandis.nova.preorder.campaign.application.PreorderCampaignAdminServi
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.support.AdmissionTickets;
+import com.grandis.nova.preorder.support.CampaignRowLock;
 import com.grandis.nova.preorder.support.CatalogStubs;
 import com.grandis.nova.preorder.support.PreorderCancels;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
@@ -28,9 +29,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -38,6 +36,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -357,9 +356,7 @@ class PreorderAcceptConcurrencyTest {
         double rejectedBefore = bulkheadRejected();
 
         CompletableFuture<List<Outcome>> burst;
-        try (Connection holder = dataSource.getConnection()) {
-            holder.setAutoCommit(false);
-            lockCampaign(holder, product.productId());
+        try (CampaignRowLock ignored = CampaignRowLock.hold(dataSource, product.productId())) {
             burst = CompletableFuture.supplyAsync(() -> concurrentlyUnchecked(requests,
                     i -> () -> acceptByCustomer(customers.get(i), "bulkhead-key-" + i)));
             await().atMost(Duration.ofSeconds(10)).until(() -> bulkheadEntered() - enteredBefore == 2);
@@ -371,7 +368,6 @@ class PreorderAcceptConcurrencyTest {
             assertThat(otherAccepted.replayed()).isFalse();
 
             await().atMost(Duration.ofSeconds(10)).until(() -> bulkheadRejected() - rejectedBefore == requests - 2);
-            holder.rollback();
         }
 
         List<Outcome> outcomes = burst.get(30, TimeUnit.SECONDS);
@@ -381,6 +377,87 @@ class PreorderAcceptConcurrencyTest {
                 .allMatch(o -> o.error() == CommonErrorCode.DEPENDENCY_UNAVAILABLE);
         assertThat(committedPositions()).containsExactly(1L, 2L);
         assertThat(nextQueuePosition()).isEqualTo(3);
+    }
+
+    /** 오픈 전에 몰린 접수는 회차 캐시로 잠그기 전에 거절한다 — 회차 잠금이 쥐어져 있어도 그 뒤에 줄 서지 않는다. */
+    @Test
+    void 오픈_전이면_회차_잠금을_기다리지_않고_바로_거절한다() throws Exception {
+        Instant now = Instant.now();
+        PreorderProduct upcoming = fixtures.preorderProduct(now.plusSeconds(3600), now.plusSeconds(7200));
+        given(catalogClient.getProduct(upcoming.productId())).willReturn(
+                CatalogStubs.preorderProduct(upcoming.productId(), CatalogStubs.activeOption(upcoming.optionId())));
+        UUID customerId = fixtures.customer();
+
+        try (CampaignRowLock ignored = CampaignRowLock.hold(dataSource, upcoming.productId())) {
+            long started = System.nanoTime();
+            Outcome outcome = Outcome.of(() -> acceptService.acceptByCustomer(customerId, upcoming.productId(),
+                    upcoming.productId(), upcoming.optionId(), "before-open",
+                    AdmissionTickets.issue(upcoming.productId(), customerId, now)));
+
+            assertThat(outcome.error()).isEqualTo(PreorderErrorCode.SALE_NOT_OPEN);
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(2));
+        }
+    }
+
+    /** 잠그기 전 판정도 같은 접수 키 확인이 먼저다 — 다른 상품에 쓴 키를 오픈 전 상품에 보내면 오픈 전이 아니라 키 불일치다. */
+    @Test
+    void 다른_상품에_쓴_접수_키로_오픈_전_상품을_보내면_키_불일치다() throws Exception {
+        Instant now = Instant.now();
+        PreorderProduct upcoming = fixtures.preorderProduct(now.plusSeconds(3600), now.plusSeconds(7200));
+        given(catalogClient.getProduct(upcoming.productId())).willReturn(
+                CatalogStubs.preorderProduct(upcoming.productId(), CatalogStubs.activeOption(upcoming.optionId())));
+        UUID customerId = fixtures.customer();
+        acceptByCustomer(customerId, "reused-key");
+
+        Outcome outcome = Outcome.of(() -> acceptService.acceptByCustomer(customerId, upcoming.productId(),
+                upcoming.productId(), upcoming.optionId(), "reused-key",
+                AdmissionTickets.issue(upcoming.productId(), customerId, now)));
+
+        assertThat(outcome.error()).isEqualTo(PreorderErrorCode.KEY_PAYLOAD_MISMATCH);
+    }
+
+    /**
+     * 마감 직전 접수가 커밋되기 전에 마감 시각이 지나고 같은 키 재전송이 오면, 재전송은 잠금 뒤에 그 예약을 받아야 한다 —
+     * 마감은 잠그기 전에 판정하지 않는다(잠그지 않고 읽으면 커밋 전 예약이 안 보여 SALE_CLOSED 다).
+     */
+    @Test
+    void 마감_직전_접수가_커밋되기_전_재전송은_잠금_뒤에_기존_예약을_받는다() throws Exception {
+        Instant closesAt = Instant.now().plusSeconds(2);
+        PreorderProduct closing = fixtures.preorderProduct(closesAt.minusSeconds(3600), closesAt);
+        given(catalogClient.getProduct(closing.productId())).willReturn(
+                CatalogStubs.preorderProduct(closing.productId(), CatalogStubs.activeOption(closing.optionId())));
+        UUID customerId = fixtures.customer();
+        String ticket = AdmissionTickets.issue(closing.productId(), customerId, Instant.now());
+        CountDownLatch inserted = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
+        // 첫 접수는 마감 전에 판정을 지나 예약을 넣고(회차 행을 쥔 채), 마감 시각 뒤에 커밋한다
+        CompletableFuture<AcceptResult> first = CompletableFuture.supplyAsync(() -> transactionTemplate.execute(status -> {
+            AcceptResult accepted = acceptService.acceptByCustomer(customerId, closing.productId(),
+                    closing.productId(), closing.optionId(), "close-inflight", ticket);
+            inserted.countDown();
+            awaitQuietly(commit);
+            return accepted;
+        }));
+        assertThat(inserted.await(10, TimeUnit.SECONDS)).isTrue();
+        await().atMost(Duration.ofSeconds(5)).until(() -> Instant.now().isAfter(closesAt));
+
+        CompletableFuture<AcceptResult> replay = CompletableFuture.supplyAsync(() -> acceptService.acceptByCustomer(
+                customerId, closing.productId(), closing.productId(), closing.optionId(), "close-inflight", ticket));
+        Thread.sleep(300);
+        commit.countDown();
+
+        AcceptResult replayed = replay.get(30, TimeUnit.SECONDS);
+        assertThat(replayed.replayed()).isTrue();
+        assertThat(replayed.preorder().preorderToken())
+                .isEqualTo(first.get(30, TimeUnit.SECONDS).preorder().preorderToken());
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /** 지금 접수보다 나중에 발급된 것으로 보이는 입장권의 발급 시각(다시 진입해 새로 받은 입장권). */
@@ -405,14 +482,6 @@ class PreorderAcceptConcurrencyTest {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new CompletionException(e);
-        }
-    }
-
-    private static void lockCampaign(Connection connection, UUID productId) throws SQLException {
-        try (PreparedStatement lock = connection.prepareStatement(
-                "SELECT product_id FROM preorder_campaigns WHERE product_id = ? FOR UPDATE")) {
-            lock.setBytes(1, UuidBinary.toBytes(productId));
-            lock.executeQuery().close();
         }
     }
 

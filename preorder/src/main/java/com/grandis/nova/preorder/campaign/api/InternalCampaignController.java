@@ -45,10 +45,14 @@ class InternalCampaignController {
         return ApiResponse.ok(new OpenCampaignsResponse(toResponses(query.findOpenOrOpeningSoon(now)), now));
     }
 
-    /** productIds 1~100개(쉼표로 잇거나 반복, 같은 id 는 한 번). 회차가 없는 상품은 결과에서 빠진다. */
-    @Operation(summary = "상품별 회차 — 회차가 없는 상품은 빠진다")
+    /**
+     * productIds 1~100개(쉼표로 잇거나 반복, 같은 id 는 한 번). 회차가 없는 상품은 결과에서 빠진다.
+     * 기본은 캐시로 답한다. 관리자 수정 · 삭제 판정처럼 지금 값이 필요하면 fresh=true 로 DB 를 읽는다.
+     */
+    @Operation(summary = "상품별 회차 — 회차가 없는 상품은 빠진다. 판정용은 fresh=true")
     @GetMapping
-    public ApiResponse<Items<InternalCampaignResponse>> find(@RequestParam List<UUID> productIds) {
+    public ApiResponse<Items<InternalCampaignResponse>> find(@RequestParam List<UUID> productIds,
+                                                            @RequestParam(defaultValue = "false") boolean fresh) {
         // productIds=a, 처럼 빈 원소는 null 로 들어온다 — 세지도 넘기지도 않고 400 이다
         if (productIds.stream().anyMatch(Objects::isNull)) {
             throw ValidationFailures.of("productIds", "빈 상품 id 가 있습니다.");
@@ -57,7 +61,7 @@ class InternalCampaignController {
         if (distinct.isEmpty() || distinct.size() > MAX_IDS) {
             throw ValidationFailures.of("productIds", "상품 id 는 1~%d개입니다.".formatted(MAX_IDS));
         }
-        return ApiResponse.ok(new Items<>(toResponses(query.findSchedules(distinct))));
+        return ApiResponse.ok(new Items<>(toResponses(query.findSchedules(distinct, fresh))));
     }
 
     private static List<InternalCampaignResponse> toResponses(List<CampaignSchedule> schedules) {

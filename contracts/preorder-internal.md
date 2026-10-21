@@ -136,7 +136,7 @@ catalog 가 `preorder_campaigns` 를 직접 읽던 것(목록 · 검색 · 랭�
 
 - `productIds` 는 1~100개(쉼표로 잇거나 반복, 같은 id 는 한 번). 넘으면 catalog 가 나눠 부른다.
 - **회차가 없는 상품은 `items` 에서 빠진다** — 받는 쪽은 "회차 없음 = 판매 준비 전" 으로 본다. 순서는 정하지 않는다(productId 로 맞춘다).
-- 캐시하지 않고 그때그때 DB 에서 읽는다 — 수정 · 삭제 판정에 그대로 써도 된다.
+- `fresh` (선택, 기본 `false`): 기본은 preorder 인스턴스 안의 회차 캐시로 답한다. 회차가 바뀌면 그 트랜잭션의 커밋 뒤 모든 인스턴스에서 비우므로 보통은 지금 값이고, 비우기 알림을 놓친 인스턴스만 최대 30초 옛 값을 준다. **수정 · 삭제 판정처럼 지금 값이 필요한 호출은 `fresh=true`** 로 부른다 — 캐시 없이 DB 에서 읽는다.
 
 ```json
 { "success": true, "data": { "items": [ { "productId": "…", "opensAt": "…", "closesAt": "…" } ] }, "error": null, "timestamp": "…", "traceId": "…" }
