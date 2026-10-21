@@ -177,15 +177,18 @@ class OutboxStore implements InitializingBean {
                 .update();
     }
 
-    /** 아직 보내지 못한 행 수. 늘어나면 전송이 막힌 것이다. */
-    long countUnpublished() {
-        return jdbc.sql("SELECT COUNT(*) FROM " + table + " WHERE published_at IS NULL").query(Long.class).single();
+    /** 미발행 현황을 한 문장으로 — 수와 그 가운데 가장 많이 실패한 횟수. */
+    UnpublishedBacklog unpublishedBacklog() {
+        return jdbc.sql("SELECT COUNT(*), COALESCE(MAX(publish_attempts), 0) FROM " + table + " WHERE published_at IS NULL")
+                .query((rs, rowNum) -> new UnpublishedBacklog(rs.getLong(1), rs.getInt(2)))
+                .single();
     }
 
-    /** 미발행 행 가운데 가장 많이 실패한 횟수. 한 행만 계속 실패하는 것(독이 든 메시지)을 드러낸다. */
-    int maxUnpublishedAttempts() {
-        return jdbc.sql("SELECT COALESCE(MAX(publish_attempts), 0) FROM " + table + " WHERE published_at IS NULL")
-                .query(Integer.class).single();
+    /**
+     * @param count       아직 보내지 못한 행 수. 늘어나면 전송이 막힌 것이다
+     * @param maxAttempts 그 가운데 가장 많이 실패한 횟수. 한 행만 계속 실패하는 것(독이 든 메시지)을 드러낸다
+     */
+    record UnpublishedBacklog(long count, int maxAttempts) {
     }
 
     static LocalDateTime utc(Instant instant) {

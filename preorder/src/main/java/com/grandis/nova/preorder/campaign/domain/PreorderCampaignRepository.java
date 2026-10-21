@@ -87,20 +87,21 @@ public interface PreorderCampaignRepository extends JpaRepository<PreorderCampai
                and c.visible = true and (c.productStatus is null or c.productStatus <> :paused)""")
     long countAccepting(@Param("now") Instant now, @Param("paused") ProductStatus paused);
 
-    /** 오픈 알림 창 안에서 비공개라 표시하지 않은 회차 수. 지표용. */
+    /** 오픈 알림 창 안에서 표시하지 않은 회차 수 — 비공개, 공개지만 판매 중지. 지표용이고 한 문장으로 둘 다 센다. */
     @Query("""
-            select count(c) from PreorderCampaign c
-             where c.openNotifiedAt is null and c.opensAt <= :now and c.opensAt > :since and c.closesAt > :now
-               and c.visible = false""")
-    long countOpenAlertWindowHidden(@Param("now") Instant now, @Param("since") Instant since);
+            select coalesce(sum(case when c.visible = false then 1 else 0 end), 0) as hidden,
+                   coalesce(sum(case when c.visible = true and c.productStatus = :paused then 1 else 0 end), 0) as paused
+              from PreorderCampaign c
+             where c.openNotifiedAt is null and c.opensAt <= :now and c.opensAt > :since and c.closesAt > :now""")
+    OpenAlertSkipped countOpenAlertWindowSkipped(@Param("now") Instant now, @Param("since") Instant since,
+                                                 @Param("paused") ProductStatus paused);
 
-    /** 오픈 알림 창 안에서 공개지만 판매 중지라 표시하지 않은 회차 수. 지표용. */
-    @Query("""
-            select count(c) from PreorderCampaign c
-             where c.openNotifiedAt is null and c.opensAt <= :now and c.opensAt > :since and c.closesAt > :now
-               and c.visible = true and c.productStatus = :paused""")
-    long countOpenAlertWindowPaused(@Param("now") Instant now, @Param("since") Instant since,
-                                    @Param("paused") ProductStatus paused);
+    interface OpenAlertSkipped {
+
+        long getHidden();
+
+        long getPaused();
+    }
 
     /** 표시하지 못한 채 오픈 알림 창이 (after, upTo] 사이에 끝난 회차. 잠그지 않는다. */
     @Query("""

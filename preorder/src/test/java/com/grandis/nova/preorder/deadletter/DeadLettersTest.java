@@ -7,6 +7,8 @@ import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.deadletter.domain.DeadLetterEvent;
 import com.grandis.nova.preorder.deadletter.domain.DeadLetterEventRepository;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterWaitingQuery;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterWaitingQuery.WaitingGroup;
 import com.grandis.nova.preorder.deadletter.domain.DeadLetterStatus;
 import com.grandis.nova.preorder.deadletter.domain.FailureReason;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
@@ -38,6 +40,9 @@ class DeadLettersTest {
 
     @Autowired
     DeadLetterEventRepository events;
+
+    @Autowired
+    DeadLetterWaitingQuery waitingQuery;
 
     @Autowired
     PreorderAcceptService acceptService;
@@ -182,10 +187,10 @@ class DeadLettersTest {
         assertThat(waiting).contains(stale).doesNotContain(recent);
         assertThat(events.findById(stale).orElseThrow().waitingForRedrive(staleBefore)).isTrue();
         assertThat(events.findById(recent).orElseThrow().waitingForRedrive(staleBefore)).isFalse();
-        long before = events.countWaiting(staleBefore);
+        long before = countWaiting(staleBefore);
         jdbcTemplate.update("UPDATE preorder_dead_letter_events SET redrive_started_at = redrive_started_at - INTERVAL 2 MINUTE"
                 + " WHERE id = ?", (Object) UuidBinary.toBytes(recent));
-        assertThat(events.countWaiting(staleBefore)).isEqualTo(before + 1);
+        assertThat(countWaiting(staleBefore)).isEqualTo(before + 1);
     }
 
     @Test
@@ -230,5 +235,9 @@ class DeadLettersTest {
                  "payload":{"syncJobId":"00000000-0000-7000-8000-000000000001",
                             "preorderId":"%s","jobType":"REGISTER","externalNumber":"R-1"}}
                 """.formatted(ShopFixtures.unique(), token);
+    }
+
+    private long countWaiting(Instant staleBefore) {
+        return waitingQuery.countByKind(staleBefore).stream().mapToLong(WaitingGroup::count).sum();
     }
 }

@@ -9,6 +9,8 @@ import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.campaign.OpenAlertBacklog;
 import com.grandis.nova.preorder.cancel.ExpiryCancelService;
 import com.grandis.nova.preorder.deadletter.DeadLetterBacklog;
+import com.grandis.nova.preorder.deadletter.DeadLetters;
+import com.grandis.nova.preorder.deadletter.IncomingDeadLetter;
 import com.grandis.nova.preorder.event.PreorderEventDispatcher;
 import com.grandis.nova.preorder.event.PreorderEventHandler;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
@@ -89,6 +91,9 @@ class ObservabilityTest {
 
     @Autowired
     DeadLetterBacklog deadLetterBacklog;
+
+    @Autowired
+    DeadLetters deadLetters;
 
     @Autowired
     OpenAlertBacklog openAlertBacklog;
@@ -216,6 +221,46 @@ class ObservabilityTest {
 
         assertThat(deadLetterJobs(gauges, "REGISTER")).isEqualTo(before + 1);
         assertThat(deadLetterJobs(gauges, "CANCEL")).as("기동 때부터 종류마다 있다").isNotNegative();
+    }
+
+    /** 어느 상품이 막혔는지 상품별로 낸다. 포기한 작업이 없는 상품은 시계열이 없다. */
+    @Test
+    void 포기한_외부_작업을_상품별로_나눠_센다() {
+        SimpleMeterRegistry gauges = new SimpleMeterRegistry();
+        StateGauges counting = new StateGauges(preorders, deadLetterBacklog, openAlertBacklog, campaigns, syncJobs,
+                gauges, Clock.systemUTC());
+        AcceptResult blocked = accepts.accept(fixtures.customer());
+        AcceptResult fine = accepts.accept(fixtures.customer());
+        fixtures.deadLetter(blocked.preorder().id());
+
+        counting.refresh();
+
+        assertThat(gauges.get(StateGauges.DEAD_LETTER_JOBS_BY_PRODUCT_METRIC).tag("jobType", "REGISTER")
+                .tag("productId", blocked.preorder().productId().toString()).gauge().value()).isEqualTo(1);
+        assertThat(gauges.find(StateGauges.DEAD_LETTER_JOBS_BY_PRODUCT_METRIC)
+                .tag("productId", fine.preorder().productId().toString()).gauges()).isEmpty();
+    }
+
+    /** 무엇이 쌓였는지 종류 · 사유별로 낸다. 받지 않는 종류는 OTHER 하나로 모은다 — 시계열이 끝없이 늘지 않게. */
+    @Test
+    void 기다리는_DLQ_를_종류와_사유별로_나눠_센다() {
+        SimpleMeterRegistry gauges = new SimpleMeterRegistry();
+        StateGauges counting = new StateGauges(preorders, deadLetterBacklog, openAlertBacklog, campaigns, syncJobs,
+                gauges, Clock.systemUTC());
+        counting.refresh();
+        double processingBefore = waitingDeadLetters(gauges, "PREORDER_PAYMENT_STARTED", "PROCESSING_FAILED");
+        double otherBefore = waitingDeadLetters(gauges, "OTHER", "UNKNOWN_EVENT_TYPE");
+        double totalBefore = gauges.get("preorder.dlq.waiting").gauge().value();
+
+        recordDeadLetter("PREORDER_PAYMENT_STARTED");
+        recordDeadLetter("SOMETHING_NEW_" + ShopFixtures.unique());
+        recordDeadLetter("SOMETHING_ELSE_" + ShopFixtures.unique());
+        counting.refresh();
+
+        assertThat(waitingDeadLetters(gauges, "PREORDER_PAYMENT_STARTED", "PROCESSING_FAILED"))
+                .isEqualTo(processingBefore + 1);
+        assertThat(waitingDeadLetters(gauges, "OTHER", "UNKNOWN_EVENT_TYPE")).isEqualTo(otherBefore + 2);
+        assertThat(gauges.get("preorder.dlq.waiting").gauge().value()).as("합계는 그대로").isEqualTo(totalBefore + 3);
     }
 
     @Test
@@ -363,6 +408,20 @@ class ObservabilityTest {
     private double gauge(String name, String tag, String value) {
         Gauge gauge = registry.get(name).tag(tag, value).gauge();
         return gauge.value();
+    }
+
+    private void recordDeadLetter(String eventType) {
+        deadLetters.record(new IncomingDeadLetter("preorder-events", ShopFixtures.unique(), """
+                {"eventId":"%s","eventType":"%s","aggregateType":"PREORDER",
+                 "aggregateId":"00000000-0000-7000-8000-000000000001",
+                 "occurredAt":"2026-09-03T01:00:03.470Z","payload":{}}
+                """.formatted(ShopFixtures.unique(), eventType), 5, null, null));
+    }
+
+    private static double waitingDeadLetters(SimpleMeterRegistry gauges, String eventType, String reason) {
+        Gauge gauge = gauges.find(StateGauges.WAITING_DEAD_LETTERS_BY_TYPE_METRIC).tag("eventType", eventType)
+                .tag("reason", reason).gauge();
+        return gauge == null ? 0 : gauge.value();
     }
 
     private static double deadLetterJobs(SimpleMeterRegistry gauges, String jobType) {
