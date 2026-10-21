@@ -3,5 +3,5 @@
 *
 !dist/*/app.jar
 !dist/*/app.aot
-!*/build/libs/*.jar
+!**/build/libs/*.jar
 !docker/otel/agent.properties

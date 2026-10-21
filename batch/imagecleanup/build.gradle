@@ -1,0 +1,28 @@
+apply plugin: 'org.springframework.boot'
+
+// 안 쓰는 사진 정리. ECS 에 1개만 띄운다 — 겹친 실행은 MySQL 이름 잠금이 막는다.
+dependencies {
+    implementation project(':common:types')
+    // 저장 시계(Clock)는 common:jpa 의 자동설정에서만 온다. 이 자동설정이 JPA Auditing 을 켜므로 엔티티가 없어도 data-jpa 를 둔다
+    implementation project(':common:jpa')
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    // S3 객체 삭제. 버전은 루트의 AWS SDK BOM 이 정하고, HTTP 클라이언트는 catalog 업로드와 같은 동기 구현을 쓴다
+    implementation('software.amazon.awssdk:s3') {
+        exclude group: 'software.amazon.awssdk', module: 'apache-client'
+        exclude group: 'software.amazon.awssdk', module: 'netty-nio-client'
+    }
+    implementation 'software.amazon.awssdk:url-connection-client'
+    runtimeOnly 'com.mysql:mysql-connector-j'
+
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    testImplementation 'org.testcontainers:testcontainers-mysql'
+    // 시험 DB 는 운영과 같은 flyway-project/migrations 로 만든다
+    testImplementation 'org.springframework.boot:spring-boot-starter-flyway'
+    testRuntimeOnly 'org.flywaydb:flyway-mysql'
+}
+
+tasks.named('test') {
+    // 모듈 작업 디렉터리에 기대지 않고 절대 경로로 넘긴다.
+    systemProperty 'nova.migrations-path', rootProject.file('flyway-project/migrations').absolutePath
+}

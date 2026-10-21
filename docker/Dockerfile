@@ -1,11 +1,11 @@
-# 서비스 8개가 같이 쓴다. 다른 건 어느 모듈의 jar 를 넣느냐뿐이다.
+# 서비스가 모두 같이 쓴다. 다른 건 어느 모듈의 jar 를 넣느냐뿐이다.
 # jar 는 CI 가 이미 ./gradlew :<module>:bootJar 로 만들어 둔 것을 받는다.
-# 여기서 gradle 을 다시 돌리지 않는다 — 8번 반복되면 빌드 시간이 8배가 된다.
+# 여기서 gradle 을 다시 돌리지 않는다 — 서비스마다 반복되면 빌드 시간이 서비스 수만큼 늘어난다.
 #
 # jar 를 풀어 둔 형태(app.jar + lib/)로 싣는다. fat jar 의 중첩 jar 에서 읽은 클래스는 JVM AOT 캐시에 들어가지 않는다.
 # 이 이미지는 캐시가 없는 기반이다. 학습(docker/aot-training/train.sh)이 이 이미지를 띄워 학습한 뒤 그 위에 Dockerfile.aot 로
 # 캐시를 얹는다 — 그래서 학습한 JDK 와 실행할 JDK 가 같다. BASE_IMAGE 는 train.sh 가 다이제스트로 고정해 넘겨, 한 번의 학습에서
-# 서비스 8개가 같은 베이스를 쓴다.
+# 모든 서비스가 같은 베이스를 쓴다.
 ARG BASE_IMAGE=eclipse-temurin:25-jre
 
 # OpenTelemetry Java 에이전트 · 그 설정(docker/otel/agent.properties — 쓰지 않는 계측을 끈다) · Pyroscope 프로파일 확장을 싣는다.
@@ -14,7 +14,7 @@ ARG BASE_IMAGE=eclipse-temurin:25-jre
 # JAVA_TOOL_OPTIONS 로 켜지 않는다 — 아래 ENV 의 힙 옵션이 그 변수에 있어, 작업 정의가 덮으면 힙 옵션이 조용히 사라진다.
 # 둘을 붙여도 AOT 캐시가 받아지도록 Dockerfile.aot 와 학습(train.sh)이 java.instrument 모듈을 늘 더하고, train.sh 가 둘을 켠 채 검증한다.
 # 외부에서 받는 것은 모두 버전과 다이제스트를 같이 고정한다. 이 파일과 설정 파일은 release.yml 의 내용 키에 들어 있어, 바꾸면 서비스
-# 8개가 모두 다시 만들어진다.
+# 이미지가 모두 다시 만들어진다.
 FROM ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-java:2.32.0@sha256:9dad1c6e3e2ecee48fc164a19bcfde703510bee972c8cb421689fde89b5f89e9 AS otel
 
 # 확장은 이미지로 나오지 않아 릴리스 파일을 받는다. 릴리스 파일은 다시 올려질 수 있어(immutable 아님) sha256 이 다르면 빌드가 실패한다.

@@ -20,7 +20,8 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 | order | orders · order_items · order_events · cart_items · option_inventories · draw_campaigns · draw_entries · order_outbox_events · stock_adjustments · stock_reconcile_runs · stock_reconcile_lock | 읽기: products · product_options(옵션 소속 · 판매 방식) |
 | payment | payments · payment_transactions · payment_outbox_events | 없음 |
 | worker · waitingroom | 없음(worker 는 결과를 이벤트로, waitingroom 은 전용 Redis) | 없음 |
-| batch | reconciliation_runs · reconciliation_findings · image_deletions | 읽기: 전부. 쓰기: images 의 UNUSED 행 삭제(3.5) |
+| batch:reconciliation | reconciliation_runs · reconciliation_findings | 읽기: 전부 |
+| batch:imagecleanup | image_deletions | 읽기: 전부. 쓰기: images 의 UNUSED 행 삭제(3.5) |
 
 ## 2. 전역 규칙 — 적용 경로: `**/src/main/**/*.java`
 
@@ -148,6 +149,7 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 ### 3.5 batch — 적용 경로: `batch/**`
 
 - desired 1 전제다. 동시 실행 방지(락 · 단일 실행 표식)가 없으면 지적한다.
+- 운영 계정 권한은 모듈별 계정 시험(ReconciliationAccountTest · ImageCleanupAccountTest)의 GRANT 와 같다. 쓰는 표가 늘면 시험의 GRANT 와 함께 운영 계정도 바꿔야 한다고 PR 설명에 적게 요청한다.
 - 정합성 검사는 읽기 · 비교 · 결과 기록(reconciliation_runs, reconciliation_findings 는 INSERT 만)만 한다. 업무 표나 external_mock 에 쓰면 지적한다. 조치는 정상 업무 경로(관리자 → API · 이벤트)다.
 - 조회 실패 · 권한 오류가 난 실행을 "불일치 0"으로 집계하면 지적한다. 검사 미완료로 남긴다.
 - 검사 트랜잭션 안의 Mock 목록 받기(2.1 의 예외)는 목록 전체 기한(external.mock.max-duration)과 트랜잭션 제한 시간(run-timeout ≥ 목록 기한, 기동 때 검사) 안에서만 한다. 기한 없이 받거나 두 값의 관계 검사를 빼면 지적한다.
@@ -230,7 +232,7 @@ Redis
 ### 3.9 common — 적용 경로: `common/**`
 
 - 도메인 개념(예약 · 주문 · 결제 · 상품)이 들어오면 지적한다. 공통은 응답 · 예외 · 커서 · 메시지 봉투 · 인증 검증 · outbox · SQS · Redis · CORS · 설정 읽기 · 시험 도구까지다.
-- 서비스 모듈(member · catalog · preorder · order · payment · waitingroom · worker · batch)을 참조하면 지적한다.
+- 서비스 모듈(member · catalog · preorder · order · payment · waitingroom · worker · batch:reconciliation · batch:imagecleanup)을 참조하면 지적한다.
 - 쓰는 서비스가 모듈마다 다르다(각 build.gradle 로 확인). 서블릿과 waitingroom 이 함께 쓰는 common:cors 에 한쪽 스택 전용 타입을 넣으면 지적한다.
 - common:types 는 모두가 의존한다. spring-web · security · JPA 구현(hibernate 를 compileOnly 밖으로)이 들어오면 지적한다.
 - 공통 예외 · 에러 코드 · EventEnvelope · 자동설정 기본값을 바꾸면 영향 범위를 PR 설명에 적게 요청한다.

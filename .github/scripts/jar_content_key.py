@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """bootJar 의 내용 해시(jar 키)를 출력한다. release.yml 이 버전을 올릴지와 내용 키를 이 값으로 정한다.
 
-  python3 .github/scripts/jar_content_key.py <서비스>/build/libs/<이름>.jar <프로젝트 버전> [--unversioned]
+  python3 .github/scripts/jar_content_key.py <모듈 디렉터리>/build/libs/<이름>.jar <프로젝트 버전> [--unversioned]
 
 --unversioned: 버전을 넣지 않은 jar 라고 단언한다. MANIFEST 를 맞춰서 바이트가 바뀌면(전제가 깨지면) 키를 내지 않고 실패한다.
 
