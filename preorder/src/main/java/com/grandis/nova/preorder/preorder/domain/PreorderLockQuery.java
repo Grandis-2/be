@@ -22,14 +22,16 @@ import java.util.UUID;
 public class PreorderLockQuery {
 
     private static final String COLUMNS = """
-            SELECT id, preorder_token, customer_id, status, payable_from, reserved_at, external_reference, event_sequence
+            SELECT id, preorder_token, customer_id, product_id, status, payable_from, reserved_at, external_reference,
+                   event_sequence
               FROM preorders
             """;
 
     private static final RowMapper<LockedPreorder> MAPPER = (rs, rowNum) -> new LockedPreorder(
             UuidBinary.fromBytes(rs.getBytes(1)), rs.getString(2), UuidBinary.fromBytes(rs.getBytes(3)),
-            PreorderStatus.valueOf(rs.getString(4)), instant(rs.getObject(5, LocalDateTime.class)),
-            instant(rs.getObject(6, LocalDateTime.class)), rs.getString(7), rs.getLong(8));
+            UuidBinary.fromBytes(rs.getBytes(4)), PreorderStatus.valueOf(rs.getString(5)),
+            instant(rs.getObject(6, LocalDateTime.class)), instant(rs.getObject(7, LocalDateTime.class)),
+            rs.getString(8), rs.getLong(9));
 
     private final JdbcTemplate jdbcTemplate;
 
