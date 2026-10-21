@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -92,10 +93,30 @@ public interface DrawCampaignJpaRepository extends JpaRepository<DrawCampaignJpa
              GROUP BY c.id, c.draw_requested_at, c.settled_at""", nativeQuery = true)
     Optional<ProgressRow> findProgress(@Param("id") UUID id);
 
+    /**
+     * 회차 여러 개의 진행(관리자 목록 한 쪽). 회차마다 따로 세지 않고 한 문장으로 센다 — 집계는 {@link #findProgress} 와 같다.
+     * 없는 id 는 줄이 없다. 비용은 그 쪽 회차들의 응모 수에 비례한다(캐시하지 않는다 — 회차별 진행 API 를 쪽 크기만큼 부르는 것과 같은 양).
+     */
+    @Query(value = """
+            SELECT c.id AS campaignId,
+                   COALESCE(SUM(e.status = 'PAID'), 0) AS paidEntries,
+                   COALESCE(SUM(e.status = 'AUTHORIZING'), 0) AS authorizingEntries,
+                   COALESCE(SUM(e.status = 'AWAITING_PAYMENT'), 0) AS awaitingEntries,
+                   COALESCE(SUM(e.won_order_id IS NOT NULL), 0) AS winners,
+                   c.draw_requested_at AS drawRequestedAt, c.settled_at AS settledAt
+              FROM draw_campaigns c LEFT JOIN draw_entries e ON e.campaign_id = c.id
+             WHERE c.id IN (:ids)
+             GROUP BY c.id, c.draw_requested_at, c.settled_at""", nativeQuery = true)
+    List<CampaignProgressRow> findProgressIn(@Param("ids") Collection<UUID> ids);
+
     interface CloseStateRow {
         Instant getDrawRequestedAt();
 
         Instant getSettledAt();
+    }
+
+    interface CampaignProgressRow extends ProgressRow {
+        byte[] getCampaignId();
     }
 
     interface ProgressRow {

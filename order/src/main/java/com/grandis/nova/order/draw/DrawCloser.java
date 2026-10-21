@@ -1,6 +1,7 @@
 package com.grandis.nova.order.draw;
 
 import com.grandis.nova.order.MySqlLockFailures;
+import com.grandis.nova.order.draw.domain.model.DrawStage;
 import com.grandis.nova.order.draw.domain.repository.DrawCampaignStore;
 import com.grandis.nova.order.stock.domain.exception.StockReleaseMismatchException;
 import org.slf4j.Logger;
@@ -27,8 +28,8 @@ public class DrawCloser {
     private static final Logger log = LoggerFactory.getLogger(DrawCloser.class);
 
     static final int BATCH = 100;
-    /** 마감 뒤 이만큼 지나도 반영하지 못하면 경보 — 시작 금지로 남은 결제 확인 중이 풀리는 시간(결제창 만료 35분)보다 넉넉하게. */
-    static final Duration STALL_AFTER = Duration.ofHours(1);
+    /** 마감 뒤 이만큼 지나도 반영하지 못하면 경보 — 관리자 화면이 멈춘 회차로 보는 기준과 같다. */
+    static final Duration STALL_AFTER = DrawStage.STALL_AFTER;
     /** 마감 뒤 이만큼까지만 경보한다. */
     static final Duration ALARM_UNTIL = Duration.ofDays(1);
 

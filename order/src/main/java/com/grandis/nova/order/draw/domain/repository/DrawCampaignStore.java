@@ -10,6 +10,7 @@ import com.grandis.nova.order.draw.domain.model.NewDrawCampaign;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -68,6 +69,9 @@ public interface DrawCampaignStore {
     boolean markSettled(UUID campaignId, Instant now);
 
     Optional<DrawProgress> findProgress(UUID campaignId);
+
+    /** 회차 여러 개의 진행을 한 번에 센다(관리자 목록 한 쪽). 없는 회차는 빠진다. */
+    Map<UUID, DrawProgress> findProgress(Collection<UUID> campaignIds);
 
     Optional<DrawCloseState> findCloseState(UUID campaignId);
 
