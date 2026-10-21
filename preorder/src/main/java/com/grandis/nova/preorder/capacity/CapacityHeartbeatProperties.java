@@ -23,8 +23,10 @@ record CapacityHeartbeatProperties(
 ) {
 
     CapacityHeartbeatProperties {
-        if (interval.toSeconds() < 1) {
-            throw new IllegalArgumentException("nova.capacity.heartbeat.interval 은 1초 이상이어야 한다");
+        // 판정은 Redis 에 초로 적는다 — 소수 초를 받으면 내림돼 살아 있는 태스크가 판정보다 일찍 지워진다
+        if (interval.toSeconds() < 1 || interval.toNanosPart() != 0 || staleAfter.toNanosPart() != 0) {
+            throw new IllegalArgumentException(
+                    "nova.capacity.heartbeat.interval 은 1초 이상, interval · stale-after 는 초 단위여야 한다");
         }
         if (staleAfter.compareTo(interval.multipliedBy(2)) < 0) {
             throw new IllegalArgumentException("nova.capacity.heartbeat.stale-after 는 interval 의 두 배 이상이어야 한다");
