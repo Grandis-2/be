@@ -102,7 +102,9 @@ class PublicCampaignsApiTest {
                 .when(client).getCampaigns(any(), eq(false));
         redis.opsForValue().increment("catalog:cache:gen:" + PublicCampaigns.CAMPAIGNS);
         assertThat(detailStatus(productId)).as("넣는 값은 fresh 로 받는다").isEqualTo("CLOSED");
+        clearInvocations(client);
         assertThat(detailStatus(productId)).as("넣은 값도 fresh 로 받은 값").isEqualTo("CLOSED");
+        verify(client, never()).getCampaigns(any(), anyBoolean());   // 캐시에서 나왔다
     }
 
     @Test
@@ -182,7 +184,9 @@ class PublicCampaignsApiTest {
                 .when(client).getCampaigns(any(), eq(false));
         redis.opsForValue().increment("catalog:cache:gen:" + PublicCampaigns.CAMPAIGNS);
         assertThat(cardStatuses(promotionId)).as("넣는 묶음은 fresh 로 받는다").containsExactlyInAnyOrderEntriesOf(java.util.Map.of(first, "OPEN", second, "CLOSED"));
+        clearInvocations(client);
         assertThat(cardStatuses(promotionId)).as("넣은 묶음도 fresh 로 받은 값").containsExactlyInAnyOrderEntriesOf(java.util.Map.of(first, "OPEN", second, "CLOSED"));
+        verify(client, never()).getCampaigns(any(), anyBoolean());   // 캐시에서 나왔다
     }
 
     /** 접수 중인 사전예약 상품 하나(공개 · 옵션 하나 · 1시간 전 오픈 · 1시간 뒤 마감). */

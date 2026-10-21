@@ -25,7 +25,7 @@ import java.util.stream.Collectors;
  * 관리자 화면 · 등록 재전송 · 수정 · 삭제 · 일반 전환의 판정은 이것을 쓰지 않고 {@link PreorderCampaigns#find} 로 바로 묻는다 — 낡은 "회차 없음" 으로 판정하지 않게.
  *
  * <ul>
- *   <li><b>기본은 끔</b> — nova.read-cache.preorder-campaign-ttl 이 없으면 늘 preorder 에 묻는다. 켜면 회차 변경은 preorder 의
+ *   <li><b>기본은 끔</b> — nova.read-cache.preorder-campaign-ttl 이 없거나 읽기 캐시 전체를 끄면(nova.read-cache.enabled=false) 늘 preorder 에 묻는다. 켜면 회차 변경은 preorder 의
  *       PREORDER_CAMPAIGN_SCHEDULE_CHANGED(catalog-events)를 받아 {@link #CAMPAIGNS} 를 올려 따라간다(PreorderCampaignScheduleChangedHandler).
  *       preorder 의 그 보내기(nova.campaign.schedule-notice.enabled)는 기본 꺼짐이라 그것을 켠 뒤에 켠다 — 안 켠 채 켜면 조기 마감 · 다시 열기 ·
  *       일정 변경이 TTL 만큼 늦게 보인다. 이벤트를 놓쳤을 때(DLQ)도 TTL 이 늦게 보이는 상한이다.
@@ -39,9 +39,10 @@ import java.util.stream.Collectors;
  *   <li><b>preorder 에 묻는 방식</b> — 먼저 fresh 없이(preorder 의 회차 캐시로) 묻고, 그 결과가 넣을 값(회차 있음 · 묶음이면 모든 상품에 회차)일 때만
  *       fresh(preorder 의 회차 캐시를 건너뛰고 DB)로 다시 물어 그 값을 넣는다. 이벤트를 받아 세대를 올린 직후, 아직 자기 캐시를 비우지 않은 preorder
  *       인스턴스가 옛 값을 주면 그 값을 TTL 동안 두게 되기 때문이다. 넣지 않을 값(회차 없는 상품 · 그런 상품이 든 묶음)은 이 요청에만 쓰므로 fresh 로
- *       묻지 않는다 — 요청마다 묻는 그 갈래를 preorder DB 로 보내지 않게. 끄면 fresh 없이 한 번 묻는다. 켠 채 읽기 캐시를 쓸 수 없으면
- *       (nova.read-cache.enabled=false · Redis 장애로 세대를 못 읽음) 넣지 않으면서도 요청마다 위처럼 묻는다 — 그동안 회차 있는 공개 조회는 두 번 묻고
- *       그중 한 번은 preorder DB 를 읽는다(상품 캐시 등 다른 읽기 캐시도 그동안 DB 로 간다).</li>
+ *       묻지 않는다 — 요청마다 묻는 그 갈래를 preorder DB 로 보내지 않게. 그래서 넣지 않을 값은 preorder 캐시의 값이라 옛 값일 수 있다(preorder 의
+ *       "회차 없음" 캐시 최대 5초 — 그동안 막 생긴 회차의 상세가 404, 묶음 속 회차 있는 상품은 비우기를 놓친 preorder 인스턴스면 최대 30초).
+ *       끄면 fresh 없이 한 번 묻는다. 켠 채 Redis 장애로 세대를 못 읽으면 넣지 않으면서도 요청마다 위처럼 묻는다 — 그동안 회차 있는 공개 조회는 두 번
+ *       묻고 그중 한 번은 preorder DB 를 읽는다(상품 캐시 등 다른 읽기 캐시도 그동안 DB 로 간다).</li>
  *   <li>접수 단계는 넣지 않는다 — 호출자가 꺼낸 시각으로 계산하므로 오픈 · 마감 시각이 지나는 것은 캐시와 상관없이 바로 보인다.</li>
  *   <li>preorder 가 답하지 않으면 넣지 않고 {@link PreorderCampaigns#find} 와 같이 던진다. 켜 두면 하나 더 — 같은 키를 이 인스턴스에서 먼저 묻고 있는
  *       요청을 기다리는 쪽은 ReadCache 의 기다림 상한(5초)을 넘으면 같은 DEPENDENCY_UNAVAILABLE 을 던진다(그것을 어떻게 답할지는 호출자 몫이다).</li>
@@ -59,11 +60,12 @@ public class PublicCampaigns {
     private final ReadCache.Spec<CampaignWindow> oneSpec;
     private final ReadCache.Spec<Map<UUID, CampaignWindow>> manySpec;
 
-    /** @param ttl 0 이하면 끈다 */
-    public PublicCampaigns(PreorderCampaigns campaigns, ReadCache cache, @Value("${nova.read-cache.preorder-campaign-ttl:0s}") Duration ttl) {
+    /** @param ttl 0 이하면 끈다. @param cacheEnabled 읽기 캐시 전체(nova.read-cache.enabled)를 끄면 ttl 과 상관없이 끈다 */
+    public PublicCampaigns(PreorderCampaigns campaigns, ReadCache cache, @Value("${nova.read-cache.preorder-campaign-ttl:0s}") Duration ttl,
+                           @Value("${nova.read-cache.enabled:true}") boolean cacheEnabled) {
         this.campaigns = campaigns;
         this.cache = cache;
-        boolean on = ttl.isPositive();
+        boolean on = cacheEnabled && ttl.isPositive();
         this.oneSpec = on ? cache.spec("preorder-campaign", CampaignWindow.class, ttl) : null;
         this.manySpec = on ? cache.spec("preorder-campaign-set", new TypeReference<Map<UUID, CampaignWindow>>() { }, ttl) : null;
     }

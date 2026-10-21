@@ -76,7 +76,8 @@ public class PreorderCampaigns {
 
     /**
      * 상품별 회차(2.2). @param fresh false 면 preorder 가 자기 회차 캐시로 답해도 된다(옛 값일 수 있다 — {@link PreorderCampaignClient#getCampaigns}).
-     * 판정이 아니고 받은 값을 오래 두지 않는 호출(캐시를 끈 공개 조회)만 false 로 부른다. 나머지는 {@link #find(Collection)} 와 같다
+     * 판정이 아니고 받은 값을 오래 두지 않는 호출만 false 로 부른다 — {@link PublicCampaigns} 가 캐시를 끈 조회와, 켰을 때 넣을 값인지 먼저 가리는 조회.
+     * 나머지는 {@link #find(Collection)} 와 같다
      */
     public Map<UUID, CampaignWindow> find(Collection<UUID> productIds, boolean fresh) {
         Map<UUID, CampaignWindow> found = new HashMap<>();
