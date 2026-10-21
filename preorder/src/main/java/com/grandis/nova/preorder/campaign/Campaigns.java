@@ -7,7 +7,6 @@ import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatch;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatchRepository;
-import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,7 +14,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -91,15 +89,10 @@ public class Campaigns {
         return Set.copyOf(campaigns.findAcceptingProductIds(now, now.plus(window), ProductStatus.PAUSED));
     }
 
-    /**
-     * 증설을 맞출 회차 — 회원에게 보이고 판매 중지가 아닌, 마감 전이고 오픈이 (since, horizon] 안인 회차. 오픈이 이른 순으로 limit 까지.
-     */
+    /** 증설을 맞출 회차 — 회원에게 보이고 판매 중지가 아닌, 마감 전이고 오픈이 (since, horizon] 안인 회차. 개수와 상관없이 한 행으로 센다. */
     @Transactional(readOnly = true)
-    public List<ScalingPlan> findScalingPlans(Instant now, Instant since, Instant horizon, int limit) {
-        return campaigns.findScalingPlans(now, since, horizon, ProductStatus.PAUSED, Limit.of(limit)).stream()
-                .map(campaign -> new ScalingPlan(campaign.getProductId(), campaign.getOpensAt(), campaign.getClosesAt(),
-                        campaign.getExpectedVisitors()))
-                .toList();
+    public ScalingDemand findScalingDemand(Instant now, Instant since, Instant horizon) {
+        return campaigns.findScalingDemand(now, since, horizon, ProductStatus.PAUSED);
     }
 
     /** 그 상품에 사전예약 회차가 있는가. */

@@ -5,8 +5,9 @@ preorder 가 회차 일정과 예상 방문자 수를 보고 대기열 · preord
 ## 동작
 
 - preorder 태스크마다 1분마다(`nova.scaling.interval`), 그리고 관리자가 회차를 바꾸면 커밋 뒤 바로 한 번 다시 계산한다. 매번 지금 상태 전체로 계산하므로 놓친 변경 · 실패한 호출은 다음 주기에 맞춰진다.
+- 맞추기는 태스크 안 전용 스레드 하나에서 돌고, 태스크 사이에서는 공유 Redis 잠금(`preorder:scaling:lock`)으로 한 번에 하나다 — 먼저 읽은 태스크의 늦은 호출이 나중에 읽은 값을 덮지 않는다. AWS 호출은 5초에서 끊는다.
 - 대수를 직접 정하지 않는다. Application Auto Scaling 대상의 `MinCapacity` 만 바꾼다 — 지금 대수가 그보다 적으면 AWS 가 늘리고, 이미 많으면 그대로 둔다. 최소를 내리면 기존 오토스케일링 정책(CPU · 요청 수)이 부하를 보고 줄인다.
-- 지금 값과 같으면 부르지 않는다(`DescribeScalableTargets` 로 보고 다를 때만 `RegisterScalableTarget`). 태스크 여러 대가 같은 값을 넣으므로 결과가 같다.
+- 지금 값과 같으면 부르지 않는다(`DescribeScalableTargets` 로 보고 다를 때만 `RegisterScalableTarget`).
 - 꺼져 있으면(기본) AWS 를 부르지 않고 계산한 값이 바뀔 때 로그(`최소 대수를 바꿀 때다`)만 남긴다.
 
 ## 계산
@@ -27,7 +28,16 @@ preorder 가 회차 일정과 예상 방문자 수를 보고 대기열 · preord
 1. **preorder 태스크 역할 권한.** `application-autoscaling:DescribeScalableTargets` · `application-autoscaling:RegisterScalableTarget`, 그리고 ECS 대상 등록에 함께 필요한 `ecs:DescribeServices` · `ecs:UpdateService`(대기열 · preorder 두 서비스로 한정). Application Auto Scaling 쪽을 대상 단위로 좁힐 수 있는지(대상 ARN · 태그 조건)는 인프라가 정한다.
 2. **Terraform 이 최소 대수를 되돌리지 않게.** ECS 서비스 모듈의 `aws_appautoscaling_target` 에 `lifecycle { ignore_changes = [min_capacity] }`. 없으면 다음 apply 가 preorder 가 올린 최소를 평소 값으로 되돌린다.
 3. **최대 대수.** 지금 두 서비스 모두 5대다. 예상 방문자에 맞추려면 대기열 max 를 올리고, 같은 값을 `nova.scaling.waitingroom.max` 에 넣는다.
-4. **preorder 설정**(Parameter Store): `nova.scaling.enabled=true` · `nova.scaling.cluster=<ECS 클러스터 이름>` · 서비스 이름이 `waitingroom` · `preorder` 가 아니면 `nova.scaling.waitingroom.service` · `nova.scaling.preorder.service`. `baseline` · `max` 는 Terraform 값과 같게.
+4. **preorder 설정.** 운영 설정이 들어가는 `terraform/application/preorder/application.yml` 에 넣는다. 클러스터 · 서비스 이름은 환경마다 달라 기본값이 없고, 켤 때 셋 다 넣어야 기동한다. `baseline` · `max` 는 Terraform 값과 같게 둔다.
+
+   ```yaml
+   nova:
+     scaling:
+       enabled: true
+       cluster: nova-prod
+       waitingroom: { service: nova-prod-waitingroom, baseline: 1, max: 5 }
+       preorder: { service: nova-prod-preorder, baseline: 1, max: 5 }
+   ```
 5. **켜는 순서.** 1 → 2 → 3 을 먼저 반영하고 4 로 켠다. 켜기 전에도 꺼진 상태의 로그로 계산을 미리 볼 수 있다.
 
 ## 지표

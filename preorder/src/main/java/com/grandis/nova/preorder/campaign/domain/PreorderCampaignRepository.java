@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.campaign.domain;
 
 import com.grandis.nova.preorder.campaign.ProductStatus;
+import com.grandis.nova.preorder.campaign.ScalingDemand;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Limit;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -95,15 +96,14 @@ public interface PreorderCampaignRepository extends JpaRepository<PreorderCampai
     List<UUID> findAcceptingProductIds(@Param("now") Instant now, @Param("horizon") Instant horizon,
                                        @Param("paused") ProductStatus paused);
 
-    /** 증설 대상 — 공개 · 판매 중지 조건은 {@link #countAccepting} 과 같고, 오픈이 (since, horizon] 안이다. 오픈이 이른 순. */
+    /** 증설 대상의 수와 가장 큰 예상 방문자 수 — 공개 · 판매 중지 조건은 {@link #countAccepting} 과 같고, 오픈이 (since, horizon] 안이다. */
     @Query("""
-            select c from PreorderCampaign c
+            select new com.grandis.nova.preorder.campaign.ScalingDemand(count(c), max(c.expectedVisitors))
+              from PreorderCampaign c
              where c.opensAt > :since and c.opensAt <= :horizon and c.closesAt > :now
-               and c.visible = true and (c.productStatus is null or c.productStatus <> :paused)
-             order by c.opensAt, c.productId""")
-    List<PreorderCampaign> findScalingPlans(@Param("now") Instant now, @Param("since") Instant since,
-                                            @Param("horizon") Instant horizon, @Param("paused") ProductStatus paused,
-                                            Limit limit);
+               and c.visible = true and (c.productStatus is null or c.productStatus <> :paused)""")
+    ScalingDemand findScalingDemand(@Param("now") Instant now, @Param("since") Instant since,
+                                    @Param("horizon") Instant horizon, @Param("paused") ProductStatus paused);
 
     /** 오픈 알림 창 안에서 표시하지 않은 회차 수 — 비공개, 공개지만 판매 중지. 지표용이고 한 문장으로 둘 다 센다. */
     @Query("""
