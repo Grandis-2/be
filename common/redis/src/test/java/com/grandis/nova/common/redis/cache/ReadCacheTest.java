@@ -232,6 +232,28 @@ class ReadCacheTest {
     }
 
     @Test
+    @DisplayName("bumpNow 는 트랜잭션 안에서도 바로 올리고, 못 올리면 던지면서 미뤄도 둔다 — 복구 뒤 이 인스턴스의 첫 조회가 올린다")
+    void bumpNowThrowsAndDefers() {
+        new TransactionTemplate(new NoOpTransactionManager()).executeWithoutResult(status -> {
+            cache.bumpNow("products");
+            assertThat(redis.opsForValue().get("svc:cache:gen:products")).as("커밋을 기다리지 않는다").isEqualTo("1");
+        });
+
+        redis.opsForValue().set("svc:cache:gen:products", "not-a-number");
+        assertThatThrownBy(() -> cache.bumpNow("products")).isInstanceOf(IllegalStateException.class);
+        redis.delete("svc:cache:gen:products");
+        cache.get(items, "reviews", "x", () -> item("x", new AtomicInteger()));
+        assertThat(redis.opsForValue().get("svc:cache:gen:products")).as("미룬 것").isEqualTo("1");
+
+        cache.breaker().transitionToForcedOpenState();
+        assertThatThrownBy(() -> cache.bumpNow("products")).as("차단기가 열려도 던진다").isInstanceOf(IllegalStateException.class);
+        cache.breaker().transitionToClosedState();
+
+        ReadCache.off(JSON, "svc").bumpNow("off");
+        assertThat(redis.opsForValue().get("svc:cache:gen:off")).as("끈 캐시는 아무것도 안 한다").isNull();
+    }
+
+    @Test
     @DisplayName("세대가 오르면 이 인스턴스가 옛 세대로 넣은 키를 지우고 저장 몫을 돌려준다 — 예산이 찬 캐시도 새 세대 값을 바로 넣는다")
     void bumpReleasesOldGenerationBudget() {
         ReadCache.Spec<Item> small = cache.spec("small", Item.class, Duration.ofSeconds(30), 500);   // 값 하나(약 360)만 들어간다

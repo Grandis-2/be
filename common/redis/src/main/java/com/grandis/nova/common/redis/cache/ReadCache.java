@@ -273,6 +273,19 @@ public final class ReadCache {
         TransactionSynchronizationManager.registerSynchronization(created);
     }
 
+    /**
+     * 세대 번호를 지금 올리고, 못 올렸으면 던진다 — 다른 서비스의 변경을 메시지로 받아 올리는 처리기용이다(던지면 메시지를 지우지 않아 다시 받아
+     * 다시 올린다). 트랜잭션과 상관없이 바로 한다. 못 올린 것은 {@link #bumpAfterCommit} 처럼 미뤄도 둔다 — 다시 받기 전에 이 인스턴스의 조회가
+     * 먼저 올릴 수 있고, 그러면 두 번 오른다(값을 한 번 더 채울 뿐이다). 끈 캐시면 아무것도 하지 않는다.
+     *
+     * @throws IllegalStateException 올리지 못했다(차단기가 열렸거나 Redis 실패)
+     */
+    public void bumpNow(String generation) {
+        if (enabled && !bump(generation)) {
+            throw new IllegalStateException("읽기 캐시 세대를 올리지 못했다 generation=" + generation);
+        }
+    }
+
     /** 한 트랜잭션의 커밋 뒤에 그 트랜잭션에서 부른 세대를 한 번씩 올린다. */
     private static final class BumpOnCommit implements TransactionSynchronization {
 
@@ -295,20 +308,24 @@ public final class ReadCache {
      * 부르지 않고 바로 미룬다 — 커밋 뒤 콜백은 DB 커넥션을 쥔 채 돌므로(spring-tx 는 afterCommit 뒤에 커넥션을 돌려준다) 멈춘 Redis 를 기다리지 않게.
      * 시간 초과는 결과를 모르는 실패다 — 서버가 늦게 실행해 한 번 더 오를 수 있다(실측: 멈춘 Redis 를 풀자 시간 초과된 INCR 이 들어갔다).
      * 더 오르는 것은 값을 한 번 더 채울 뿐이라 그대로 둔다.
+     *
+     * @return 이번에 올렸으면 true, 미뤘으면 false
      */
-    private void bump(String generation) {
+    private boolean bump(String generation) {
         if (!breaker.tryAcquirePermission()) {
             pendingBumps.add(generation);
             log.error("읽기 캐시 차단기가 열려 세대 올리기를 미룬다 — 그때까지 옛 값이 보일 수 있다 generation={}", generation);
-            return;
+            return false;
         }
         breaker.releasePermission();   // 허락만 물었다 — 결과는 차단기에 세지 않는다
         try {
             redis.opsForValue().increment(prefix + "gen:" + generation);
             pendingBumps.remove(generation);
+            return true;
         } catch (RuntimeException e) {
             pendingBumps.add(generation);
             log.error("읽기 캐시 세대를 올리지 못해 나중에 다시 올린다 — 그때까지 옛 값이 보일 수 있다 generation={}", generation, e);
+            return false;
         }
     }
 
