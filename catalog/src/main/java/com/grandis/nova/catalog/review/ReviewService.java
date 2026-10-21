@@ -120,13 +120,13 @@ public class ReviewService {
 
     /**
      * 상품 상세의 후기 탭. 상품을 보여 주지 않는 경우(없음 · 비공개 · 준비 전)는 상품 상세처럼 404. 사전예약의 준비를 preorder 에 묻지 못하면 503 —
-     * 사전예약 상세와 같다. 공개 여부와 일반 상품의 준비는 한 문장(노출 판정 재료)으로 읽고, 사전예약의 준비는 preorder 에 묻는다. 후기 목록 · 건수는
+     * 사전예약 상세와 같다. 공개 여부와 일반 상품의 준비는 한 문장(노출 판정 재료)으로 읽고, 사전예약의 준비는 상세와 같이 PublicCampaigns 로 본다. 후기 목록 · 건수는
      * 한 문장이다({@link ReviewQueryRepository#pageByProduct}) — 어느 쪽도 트랜잭션을 열지 않는다(연결을 쥔 채 preorder 를 기다리지도 않는다).
      */
     public OffsetPage<ReviewView> productReviews(UUID productId, int page, int size) {
         ProductListingQueryRepository.Exposure product = listings.findExposure(productId)
                 .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
-        if (!(product.visible() && readiness.isReady(productId, product))) {
+        if (!(product.visible() && readiness.isPubliclyReady(productId, product))) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
         return queries.pageByProduct(productId, page, size);
