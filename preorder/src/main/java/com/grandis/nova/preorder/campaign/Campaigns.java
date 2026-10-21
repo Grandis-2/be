@@ -83,10 +83,10 @@ public class Campaigns {
         return campaigns.countAccepting(now, ProductStatus.PAUSED);
     }
 
-    /** 지금 접수 중인 회차의 상품 id. 접수 중인 회차 수만큼이다. */
+    /** 접수 중이거나 window 안에 열릴 회차의 상품 id. */
     @Transactional(readOnly = true)
-    public Set<UUID> findAcceptingProductIds(Instant now) {
-        return Set.copyOf(campaigns.findAcceptingProductIds(now, ProductStatus.PAUSED));
+    public Set<UUID> findAcceptingProductIds(Instant now, Duration window) {
+        return Set.copyOf(campaigns.findAcceptingProductIds(now, now.plus(window), ProductStatus.PAUSED));
     }
 
     /** 그 상품에 사전예약 회차가 있는가. */

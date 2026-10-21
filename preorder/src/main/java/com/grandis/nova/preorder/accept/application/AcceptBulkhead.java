@@ -8,6 +8,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadLocalRandom;
@@ -45,9 +46,14 @@ class AcceptBulkhead {
         this.rejectedWait = waitTimer("rejected", meterRegistry);
         this.meterRegistry = meterRegistry;
         this.productTag = productTag;
-        // 거절이 없어도 0 으로 내놓는다
-        rejectedCounter("product", AcceptProductTags.OTHER);
-        rejectedCounter("instance", AcceptProductTags.OTHER);
+        registerRejected(meterRegistry, AcceptProductTags.OTHER);
+    }
+
+    /** 그 상품 라벨의 거절 건수를 0 으로 만들어 둔다 — 첫 거절이 시계열의 시작이 되면 rate 가 그 한 건을 놓친다. */
+    static void registerRejected(MeterRegistry meterRegistry, String productTag) {
+        for (String limit : List.of("product", "instance")) {
+            meterRegistry.counter(REJECTED_METRIC, "limit", limit, AcceptProductTags.PRODUCT_TAG, productTag);
+        }
     }
 
     <T> T call(UUID productId, Supplier<T> work) {

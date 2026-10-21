@@ -64,7 +64,8 @@ class PreorderAcceptServiceTest {
                 new CampaignSchedule(PRODUCT_ID, now.minusSeconds(3600), now.plusSeconds(3600)), true,
                 ProductStatus.ACTIVE, List.of())));
         service = new PreorderAcceptService(mock(AdmissionTicketVerifier.class), catalogReader, transaction, bulkhead,
-                campaigns, preorders, new AcceptProductTags(campaigns, registry, Clock.systemUTC()), registry,
+                campaigns, preorders, new AcceptProductTags(campaigns, registry, Clock.systemUTC(), Duration.ofSeconds(30)),
+                registry,
                 Clock.systemUTC());
     }
 

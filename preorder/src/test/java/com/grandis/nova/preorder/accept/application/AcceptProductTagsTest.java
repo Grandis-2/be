@@ -6,6 +6,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Set;
@@ -15,6 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 class AcceptProductTagsTest {
 
@@ -29,7 +31,7 @@ class AcceptProductTagsTest {
     void setUp() {
         campaigns = mock(Campaigns.class);
         tags = new AcceptProductTags(campaigns, registry,
-                Clock.fixed(Instant.parse("2026-10-22T00:00:00Z"), ZoneOffset.UTC));
+                Clock.fixed(Instant.parse("2026-10-22T00:00:00Z"), ZoneOffset.UTC), Duration.ofSeconds(30));
     }
 
     @Test
@@ -41,11 +43,21 @@ class AcceptProductTagsTest {
     }
 
     @Test
-    void 새로_접수를_시작한_상품은_업무_지표를_0_부터_낸다() {
+    void 다음_갱신_전에_열릴_회차까지_두_주기_앞을_묻는다() {
+        accepting(PRODUCT_A);
+
+        verify(campaigns).findAcceptingProductIds(Instant.parse("2026-10-22T00:00:00Z"), Duration.ofSeconds(60));
+    }
+
+    @Test
+    void 새로_접수를_시작한_상품은_업무_지표와_거절_건수를_0_부터_낸다() {
         accepting(PRODUCT_A);
 
         assertThat(registry.find(PreorderAcceptService.CREATED_METRIC)
                 .tag(AcceptProductTags.PRODUCT_TAG, PRODUCT_A.toString()).counters()).hasSize(6)
+                .allSatisfy(counter -> assertThat(counter.count()).isZero());
+        assertThat(registry.find(AcceptBulkhead.REJECTED_METRIC)
+                .tag(AcceptProductTags.PRODUCT_TAG, PRODUCT_A.toString()).counters()).hasSize(2)
                 .allSatisfy(counter -> assertThat(counter.count()).isZero());
     }
 
@@ -57,7 +69,7 @@ class AcceptProductTagsTest {
 
         accepting();
         assertThat(tags.of(PRODUCT_A)).isEqualTo(AcceptProductTags.OTHER);
-        assertThat(productMeters(PRODUCT_A)).as("마지막 증가분이 수집되게 한 주기 둔다").isEqualTo(7);
+        assertThat(productMeters(PRODUCT_A)).as("마지막 증가분이 수집되게 한 주기 둔다").isEqualTo(8);
 
         accepting();
         assertThat(productMeters(PRODUCT_A)).isZero();
@@ -71,11 +83,25 @@ class AcceptProductTagsTest {
         accepting(PRODUCT_A);
 
         assertThat(tags.of(PRODUCT_A)).isEqualTo(PRODUCT_A.toString());
-        assertThat(productMeters(PRODUCT_A)).isEqualTo(6);
+        assertThat(productMeters(PRODUCT_A)).isEqualTo(8);
+    }
+
+    /** 정리 직전에 라벨을 읽은 요청이 지운 시계열을 다시 만들어도 남지 않는다. */
+    @Test
+    void 정리_뒤에_다시_생긴_마감_상품의_시계열도_다음_갱신에_지운다() {
+        accepting(PRODUCT_A);
+        accepting();
+        accepting();
+        registry.counter(PreorderAcceptService.CREATED_METRIC, "result", "success", "channel", "user",
+                AcceptProductTags.PRODUCT_TAG, PRODUCT_A.toString()).increment();
+
+        accepting();
+
+        assertThat(productMeters(PRODUCT_A)).isZero();
     }
 
     private void accepting(UUID... productIds) {
-        given(campaigns.findAcceptingProductIds(any())).willReturn(Set.of(productIds));
+        given(campaigns.findAcceptingProductIds(any(), any())).willReturn(Set.of(productIds));
         tags.refresh();
     }
 
