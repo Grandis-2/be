@@ -179,6 +179,6 @@ class OutboxPublisher {
         EventEnvelope envelope = new EventEnvelope(row.eventId(), row.eventType(), row.aggregateType(),
                 row.aggregateId(), row.createdAt(), payload);
         return new OutboundMessage(destination, row.eventId(), row.eventType(), jsonMapper.writeValueAsString(envelope),
-                attributes.of(row.eventType(), payload));
+                attributes.of(row.eventType(), payload), attributes.messageGroupId(row.eventType(), payload));
     }
 }

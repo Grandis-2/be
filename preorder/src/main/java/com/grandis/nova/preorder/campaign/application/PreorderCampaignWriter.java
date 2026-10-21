@@ -57,15 +57,18 @@ class PreorderCampaignWriter {
      * @param listing 새로 만들 때만 쓰는 catalog 상품 값. 번호는 0 이어서 catalog 이벤트가 이긴다
      */
     @Transactional
-    PreorderCampaign upsert(UUID productId, Instant opensAt, Instant closesAt, ProductListing listing) {
+    PreorderCampaign upsert(UUID productId, Instant opensAt, Instant closesAt, Integer expectedVisitors,
+                            ProductListing listing) {
         return campaigns.findForUpdate(productId)
-                .map(campaign -> reschedule(campaign, opensAt, closesAt))
-                .orElseGet(() -> create(productId, opensAt, closesAt, listing));
+                .map(campaign -> reschedule(campaign, opensAt, closesAt, expectedVisitors))
+                .orElseGet(() -> create(productId, opensAt, closesAt, expectedVisitors, listing));
     }
 
-    private PreorderCampaign create(UUID productId, Instant opensAt, Instant closesAt, ProductListing listing) {
-        requireLeadTime(opensAt);
-        PreorderCampaign campaign = campaigns.save(new PreorderCampaign(productId, opensAt, closesAt, listing));
+    private PreorderCampaign create(UUID productId, Instant opensAt, Instant closesAt, Integer expectedVisitors,
+                                    ProductListing listing) {
+        requireLeadTime(opensAt, "opensAt");
+        PreorderCampaign campaign = campaigns.save(new PreorderCampaign(productId, opensAt, closesAt, listing,
+                expectedVisitors));
         changePublisher.publish(campaign, CampaignChange.CREATED);
         return campaign;
     }
@@ -150,14 +153,17 @@ class PreorderCampaignWriter {
                 });
     }
 
-    private PreorderCampaign reschedule(PreorderCampaign campaign, Instant opensAt, Instant closesAt) {
+    private PreorderCampaign reschedule(PreorderCampaign campaign, Instant opensAt, Instant closesAt,
+                                        Integer expectedVisitors) {
         requireBeforeOpen(campaign);
-        // 같은 일정으로 다시 저장하면 바뀐 것이 없으므로 준비 시간 검사도 이벤트도 없다
-        if (campaign.hasSchedule(opensAt, closesAt)) {
+        boolean sameSchedule = campaign.hasSchedule(opensAt, closesAt);
+        // 같은 값으로 다시 저장하면 바뀐 것이 없으므로 준비 시간 검사도 이벤트도 없다
+        if (sameSchedule && campaign.hasExpectedVisitors(expectedVisitors)) {
             return campaign;
         }
-        requireLeadTime(opensAt);
-        campaign.reschedule(opensAt, closesAt);
+        // 예상 방문자 수만 바꿔도 준비 시간을 본다 — 인프라가 오픈 전에 새 규모로 늘릴 시간이 있어야 한다
+        requireLeadTime(opensAt, sameSchedule ? "expectedVisitors" : "opensAt");
+        campaign.reschedule(opensAt, closesAt, expectedVisitors);
         changePublisher.publish(campaign, CampaignChange.RESCHEDULED);
         return campaign;
     }
@@ -166,10 +172,10 @@ class PreorderCampaignWriter {
      * 오픈 시각은 최소 준비 시간 뒤여야 한다. 지난 시각으로 열면 배송 차수를 더 넣을 수 없고(오픈 뒤 변경 금지),
      * 너무 가까우면 대기열이 일정 이벤트를 받기 전에 열릴 수 있다.
      */
-    private void requireLeadTime(Instant opensAt) {
+    private void requireLeadTime(Instant opensAt, String field) {
         Duration minLeadTime = properties.minLeadTime();
         if (opensAt.isBefore(clock.instant().plus(minLeadTime))) {
-            throw ValidationFailures.of("opensAt", "현재 시각부터 %d분 뒤 이후여야 합니다.".formatted(minLeadTime.toMinutes()));
+            throw ValidationFailures.of(field, "오픈 시각이 현재 시각부터 %d분 뒤 이후여야 합니다.".formatted(minLeadTime.toMinutes()));
         }
     }
 

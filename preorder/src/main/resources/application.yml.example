@@ -104,6 +104,8 @@ nova:
   # 접수 격벽 — 같은 상품의 접수를 커넥션 밖에서 줄 세운다. 기본값은 코드(AcceptBulkheadProperties)에 있다:
   # accept.bulkhead: product-permits 2 · pool-share 0.5(풀 10 → 전체 5) · instance-limit 0(풀에서 계산)
   #                  · max-wait 3s · retry-after-min 1s · retry-after-max 3s(넘치면 503 + 그 사이 Retry-After)
+  # 태스크 용량 하트비트(공유 Redis, contracts/preorder-capacity-heartbeat.md). 기본값은 코드(CapacityHeartbeatProperties)에 있다:
+  # capacity.heartbeat: enabled true · interval 5s · stale-after 15s · accept-per-second 100(운영 실측으로 바꾼다)
   # 아웃박스 발행(common:outbox). transport 는 필수(없으면 기동 실패)다. 배포 환경은 sqs 다(log 는 로컬 · 시험 전용)
   # 지표 이름 접두어(metrics-prefix: preorder.outbox)는 코드(PreorderDefaults)에 기본값이 있다
   outbox:
@@ -123,6 +125,9 @@ nova:
   # campaign.open-alert.interval: 30s · window: 1h(연 지 이보다 오래된 회차는 보내지 않는다) · batch-size: 100
   # 회차 캐시(일정 · 공개 · 차수, 인스턴스 안). 바뀌면 커밋 뒤 모든 인스턴스에서 비우고 수명은 놓쳤을 때의 상한이다. 기본값은 코드에 있다:
   # campaign.cache.ttl: 30s · max-products: 1000 · missing-ttl: 5s(회차 없음) · missing-max-products: 10000
+  # 회차 일정에 맞춘 대기열 · preorder 최소 대수(contracts/preorder-capacity-scaling.md). 기본은 꺼짐(계산만 해 로그). 켤 때:
+  # scaling.enabled: true · cluster: nova-prod · waitingroom.service: nova-prod-waitingroom · preorder.service: nova-prod-preorder
+  # · waitingroom.max · preorder.max 는 Terraform 의 max 와 같게
   # 외부 예약 Mock 등록 요청의 scope(시험 실행 범위). 접수 때 request_payload 에 고정된다
   external-mock:
     scope: preorder

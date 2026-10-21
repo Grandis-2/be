@@ -118,7 +118,7 @@ class SqsMessagingTest {
     @Test
     void 커밋되면_목적지_큐로_봉투를_보낸다() {
         UUID syncJobId = UUID.randomUUID();
-        Long id = transactionTemplate.execute(status -> writer.append(new RegisterJobReady(syncJobId, "9f1c2d3e",
+        Long id = transactionTemplate.execute(status -> writer.append(new RegisterJobReady(syncJobId, "9f1c2d3e", UUID.randomUUID(),
                 "{\"ourReservationId\":\"9f1c2d3e\"}", SyncActor.SYSTEM, 1)));
         String eventId = jdbcTemplate.queryForObject(
                 "SELECT event_id FROM preorder_outbox_events WHERE id = ?", String.class, id);

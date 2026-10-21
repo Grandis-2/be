@@ -16,6 +16,7 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -80,6 +81,18 @@ public class Campaigns {
     @Transactional(readOnly = true)
     public long countAccepting(Instant now) {
         return campaigns.countAccepting(now, ProductStatus.PAUSED);
+    }
+
+    /** 접수 중이거나 window 안에 열릴 회차의 상품 id. */
+    @Transactional(readOnly = true)
+    public Set<UUID> findAcceptingProductIds(Instant now, Duration window) {
+        return Set.copyOf(campaigns.findAcceptingProductIds(now, now.plus(window), ProductStatus.PAUSED));
+    }
+
+    /** 증설을 맞출 회차 — 회원에게 보이고 판매 중지가 아닌, 마감 전이고 오픈이 (since, horizon] 안인 회차. 개수와 상관없이 한 행으로 센다. */
+    @Transactional(readOnly = true)
+    public ScalingDemand findScalingDemand(Instant now, Instant since, Instant horizon) {
+        return campaigns.findScalingDemand(now, since, horizon, ProductStatus.PAUSED);
     }
 
     /** 그 상품에 사전예약 회차가 있는가. */

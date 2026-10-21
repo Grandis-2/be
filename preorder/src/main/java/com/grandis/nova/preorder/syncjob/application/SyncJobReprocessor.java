@@ -4,6 +4,7 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
+import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.preorder.Preorders;
 import com.grandis.nova.preorder.syncjob.CancelJobReady;
@@ -63,12 +64,12 @@ class SyncJobReprocessor {
                     Map.of("reason", blocker.orElse("status=" + job.getStatus())));
         }
         PreorderSyncJob reopened = syncJobs.findById(syncJobId).orElseThrow();
-        String preorderToken = preorders.getById(preorderId).preorderToken();
+        PreorderSnapshot preorder = preorders.getById(preorderId);
         outboxWriter.append(reopened.getJobType() == SyncJobType.REGISTER
-                ? new RegisterJobReady(syncJobId, preorderToken, reopened.getRequestPayload(), SyncActor.ADMIN,
-                        reopened.getRun())
-                : new CancelJobReady(syncJobId, preorderToken, reopened.getRequestPayload(), SyncActor.ADMIN,
-                        reopened.getRun()));
+                ? new RegisterJobReady(syncJobId, preorder.preorderToken(), preorder.productId(),
+                        reopened.getRequestPayload(), SyncActor.ADMIN, reopened.getRun())
+                : new CancelJobReady(syncJobId, preorder.preorderToken(), preorder.productId(),
+                        reopened.getRequestPayload(), SyncActor.ADMIN, reopened.getRun()));
         log.info("외부 작업을 재처리한다 syncJobId={} jobType={} run={} requestedBy={}", syncJobId,
                 reopened.getJobType(), reopened.getRun(), requestedBy);
         return reopened;

@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.Message;
+import software.amazon.awssdk.services.sqs.model.MessageSystemAttributeName;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -67,6 +68,29 @@ class SqsMessageTransportTest {
                     && m.messageAttributes().get("eventType").stringValue().equals("ITEM_PLAIN"),
                     Duration.ofSeconds(10)).orElseThrow();
             assertThat(plain.messageAttributes().keySet()).containsExactlyInAnyOrder("eventType", "eventId");
+        });
+    }
+
+    /** 표준 큐에 묶음 id 를 실어 보낸다(공정 큐). 하나 · 묶음 전송 모두, 묶음 id 가 없는 건은 싣지 않는다. */
+    @Test
+    void 묶음_id_가_있으면_MessageGroupId_로_싣는다() {
+        runner.run(ctx -> {
+            MessageTransport transport = ctx.getBean(MessageTransport.class);
+            String single = UUID.randomUUID().toString();
+            String batched = UUID.randomUUID().toString();
+            String plain = UUID.randomUUID().toString();
+
+            transport.send(new OutboundMessage("test-events", single, "ITEM_SETTLED", single, Map.of(), "product-a"));
+            assertThat(transport.sendAll(List.of(
+                    new OutboundMessage("test-events", batched, "ITEM_SETTLED", batched, Map.of(), "product-b"),
+                    new OutboundMessage("test-events", plain, "ITEM_SETTLED", plain)))).isEmpty();
+
+            Map<String, Message> received = receiveWithGroup(ctx.getBean(SqsClient.class), Set.of(single, batched, plain));
+            assertThat(received.get(single).attributes()).containsEntry(MessageSystemAttributeName.MESSAGE_GROUP_ID,
+                    "product-a");
+            assertThat(received.get(batched).attributes()).containsEntry(MessageSystemAttributeName.MESSAGE_GROUP_ID,
+                    "product-b");
+            assertThat(received.get(plain).attributes()).doesNotContainKey(MessageSystemAttributeName.MESSAGE_GROUP_ID);
         });
     }
 
@@ -165,6 +189,24 @@ class SqsMessageTransportTest {
         while (received.size() < bodies.size() && Instant.now().isBefore(deadline)) {
             for (Message message : sqs.receiveMessage(request -> request.queueUrl(url).waitTimeSeconds(1)
                     .maxNumberOfMessages(10).visibilityTimeout(1).messageAttributeNames("All")).messages()) {
+                if (bodies.contains(message.body())) {
+                    sqs.deleteMessage(request -> request.queueUrl(url).receiptHandle(message.receiptHandle()));
+                    received.put(message.body(), message);
+                }
+            }
+        }
+        assertThat(received.keySet()).as("보낸 메시지가 모두 닿았다").isEqualTo(bodies);
+        return received;
+    }
+
+    private static Map<String, Message> receiveWithGroup(SqsClient sqs, Set<String> bodies) {
+        String url = sqs.getQueueUrl(request -> request.queueName("test-events")).queueUrl();
+        Map<String, Message> received = new HashMap<>();
+        Instant deadline = Instant.now().plusSeconds(10);
+        while (received.size() < bodies.size() && Instant.now().isBefore(deadline)) {
+            for (Message message : sqs.receiveMessage(request -> request.queueUrl(url).waitTimeSeconds(1)
+                    .maxNumberOfMessages(10).visibilityTimeout(1)
+                    .messageSystemAttributeNames(MessageSystemAttributeName.MESSAGE_GROUP_ID)).messages()) {
                 if (bodies.contains(message.body())) {
                     sqs.deleteMessage(request -> request.queueUrl(url).receiptHandle(message.receiptHandle()));
                     received.put(message.body(), message);
