@@ -122,9 +122,15 @@ public interface PreorderRepository extends JpaRepository<Preorder, UUID>, JpaSp
     /** 같은 접수 키의 기존 예약(재전송 판정). */
     Optional<Preorder> findByCustomerIdAndIdempotencyKey(UUID customerId, String idempotencyKey);
 
-    /** 회원의 그 모델 마지막 접수 시각(상태 무관). uq_preorder_active 의 앞부분(customer_id, product_id)으로 찾는다. */
-    @Query("select max(p.createdAt) from Preorder p where p.customerId = :customerId and p.productId = :productId")
-    Optional<Instant> findLastAcceptedAt(@Param("customerId") UUID customerId, @Param("productId") UUID productId);
+    /**
+     * 같은 접수 키의 예약과 그 모델의 예약을 한 문장으로. 두 조건 모두 회원이 앞이라(uq_preorder_idempotency · uq_preorder_active)
+     * 그 회원의 행만 읽는다 — 회원 · 모델당 몇 건이다.
+     */
+    @Query("""
+            select p, case when p.idempotencyKey = :idempotencyKey then true else false end from Preorder p
+             where p.customerId = :customerId and (p.idempotencyKey = :idempotencyKey or p.productId = :productId)""")
+    List<Object[]> findAcceptHistory(@Param("customerId") UUID customerId, @Param("productId") UUID productId,
+                                     @Param("idempotencyKey") String idempotencyKey);
 
     /** 같은 모델의 진행 중 예약(취소 완료 제외). 활성 예약 UNIQUE 충돌 때 기존 예약을 알려 주려고 쓴다. */
     Optional<Preorder> findFirstByCustomerIdAndProductIdAndStatusNot(UUID customerId, UUID productId,

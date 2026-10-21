@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.List;
@@ -84,16 +85,30 @@ public class Preorders {
         return preorders.findByCustomerIdAndIdempotencyKey(customerId, idempotencyKey).map(Preorder::toSnapshot);
     }
 
+    /**
+     * 같은 접수 키의 예약과 그 모델의 마지막 접수 시각 — 접수 잠금 안에서 두 번 읽지 않게 한 문장으로.
+     * 같은 키인지는 DB 가 비교한 결과로 가른다 — 칸의 콜레이션(끝 공백 무시)과 String.equals 가 다르다.
+     */
+    public AcceptHistory findAcceptHistory(UUID customerId, UUID productId, String idempotencyKey) {
+        List<Object[]> rows = preorders.findAcceptHistory(customerId, productId, idempotencyKey);
+        Optional<PreorderSnapshot> sameKey = rows.stream()
+                .filter(row -> (Boolean) row[1])
+                .map(row -> ((Preorder) row[0]).toSnapshot())
+                .findFirst();
+        Optional<Instant> lastAcceptedAt = rows.stream()
+                .map(row -> ((Preorder) row[0]).toSnapshot())
+                .filter(row -> row.productId().equals(productId))
+                .map(PreorderSnapshot::createdAt)
+                .max(Comparator.naturalOrder());
+        return new AcceptHistory(sameKey, lastAcceptedAt);
+    }
+
     /** 회원의 그 상품 진행 중(취소 완료가 아닌) 예약. */
     public Optional<PreorderSnapshot> findActive(UUID customerId, UUID productId) {
         return preorders.findFirstByCustomerIdAndProductIdAndStatusNot(customerId, productId, PreorderStatus.CANCELED)
                 .map(Preorder::toSnapshot);
     }
 
-    /** 회원의 그 모델 마지막 접수 시각(취소된 예약 포함). 접수한 적이 없으면 비어 있다. */
-    public Optional<Instant> findLastAcceptedAt(UUID customerId, UUID productId) {
-        return preorders.findLastAcceptedAt(customerId, productId);
-    }
 
     /** 상품의 그 상태 예약을 순번 순으로 최대 limit 건. */
     public List<PreorderSnapshot> findByProduct(UUID productId, Collection<PreorderStatus> statuses, int limit) {
