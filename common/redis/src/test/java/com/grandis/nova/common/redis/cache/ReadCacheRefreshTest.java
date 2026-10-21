@@ -132,17 +132,23 @@ class ReadCacheRefreshTest {
     }
 
     @Test
-    @DisplayName("돌 차례에 값을 못 읽어도 갱신하지 않는다 — 세대를 못 읽을 때와 같다")
+    @DisplayName("돌 차례에 값을 못 읽어도 갱신하지 않는다 — 세대를 못 읽을 때와 같고, 막아 두지 않아 복구 뒤 다음 히트가 다시 맡긴다")
     void refreshSkipsWhenValueUnreadable() {
         cache.entry(spec, "g", "k", () -> load("v1"));
         clock.advance(Duration.ofSeconds(24));
         cache.entry(spec, "g", "k", () -> load("v2"));
         String key = onlyKey();
+        String stored = redis.opsForValue().get(key);
         redis.delete(key);
         redis.opsForList().rightPush(key, "x");   // GET 이 WRONGTYPE 으로 실패한다
         tasks.runAll();
         assertThat(loads.get()).as("원천을 다시 읽지 않았다").isEqualTo(1);
         assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_UNAVAILABLE);
+
+        redis.delete(key);
+        redis.opsForValue().set(key, stored, Duration.ofSeconds(6));   // 복구 — 같은 값(읽은 시각 그대로)
+        cache.entry(spec, "g", "k", () -> load("v3"));
+        assertThat(tasks.pending()).as("막아 두지 않았다 — 다음 히트가 다시 맡긴다").isEqualTo(1);
     }
 
     @Test

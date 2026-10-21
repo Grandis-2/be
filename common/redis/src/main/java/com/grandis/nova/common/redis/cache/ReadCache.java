@@ -55,7 +55,8 @@ import java.util.function.Supplier;
  *       그 키는 다시 맡기지 않는다.
  *       갱신한 값은 읽기 시작할 때의 세대 키에 들어가, 그사이 세대가 올랐으면 새 세대 조회에는 안 보인다. 돌 차례가 왔을 때 Redis 의
  *       지금 세대가 맡길 때와 다르면(올랐거나 세대 키가 지워져 0 으로 돌아갔으면) 읽지 않는다. 돌 차례에 지금 세대나 값을 Redis 에서 못 읽으면(차단기 · 장애) 읽지 않는다 — 넣지 못할 값을 원천에 묻지 않게. 그 키는 막아 두지 않아 다음 히트가 다시
- *       맡긴다(한 번의 시간 초과로 만료까지 미리 갱신이 멈추지 않게). 인스턴스마다 따로라 같은 키를 인스턴스 수만큼
+ *       맡긴다(한 번의 시간 초과로 만료까지 미리 갱신이 멈추지 않게 — 간헐 실패에서는 히트마다 키당 하나씩 다시 맡긴다). 원천을 읽은 뒤 못 넣으면
+ *       (아래) 막는다 — 원천을 읽기 전에 Redis 를 못 쓰면 안 막고, 읽은 뒤 못 넣으면 막는다. 인스턴스마다 따로라 같은 키를 인스턴스 수만큼
  *       갱신할 수 있다(만료 때 인스턴스마다 한 번 읽던 것과 같다). 같은 세대 키에는 마지막에 넣은 쪽이 남는다(직접 읽기와 같다) — 세대가 덮지
  *       않는 데이터를 읽는 loader(배너가 읽는 상품 노출 · 홍보 기간)는 늦게 넣은 인스턴스의 값으로 되돌아갈 수 있고, 그 값의 나이도 읽은
  *       시각 + TTL 안이다. 큐에서 늦게 돈 갱신은 그사이 더 새 값이 들어왔으면 읽지 않는다. 갱신 결과를
@@ -553,7 +554,8 @@ public final class ReadCache {
                              long generationNumber) {
         // 지금 세대를 Redis 에서 다시 읽는다 — 이 인스턴스가 본 가장 큰 번호와 비교하면, 세대 키가 지워져(재시작 · 교체) 0 으로 돌아간 뒤
         // 세대가 옛 최대값을 넘을 때까지 갱신이 모두 건너뛰어진다. 못 읽으면 읽지 않는다 — Redis 를 못 쓰는 동안 넣지도 못할 값을 원천에 묻지 않게.
-        // 그 키는 막아 두지 않는다 — 한 번의 시간 초과로 값이 만료될 때까지 미리 갱신이 멈추지 않게(Redis 를 못 쓰는 동안은 조회가 우회라 히트가 없다)
+        // 그 키는 막아 두지 않는다 — 한 번의 시간 초과로 값이 만료될 때까지 미리 갱신이 멈추지 않게. 차단기가 열린 장애 동안은 조회가 우회라 히트가
+        // 없지만, 간헐 실패(차단기가 닫힌 채)에서는 히트마다 다시 맡긴다 — 키당 하나씩이고, 늘어나는 실행기 점유는 실패 횟수 × Redis 제한 시간이다
         Long current = call(() -> currentGeneration(generation));
         if (current == null) {
             events.refreshed(spec.name(), RefreshResult.SKIPPED_UNAVAILABLE);
@@ -566,6 +568,9 @@ public final class ReadCache {
         String held;
         try {
             held = breaker.executeSupplier(() -> redis.opsForValue().get(key));
+        } catch (CallNotPermittedException e) {
+            events.refreshed(spec.name(), RefreshResult.SKIPPED_UNAVAILABLE);   // 차단기가 열렸다 — call() 처럼 조용히
+            return;
         } catch (RuntimeException e) {
             log.warn("읽기 캐시 Redis 호출 실패 — 미리 갱신을 건너뛴다: {}", e.toString());
             events.refreshed(spec.name(), RefreshResult.SKIPPED_UNAVAILABLE);   // 세대를 못 읽을 때와 같다
