@@ -52,6 +52,8 @@ public class Campaigns {
 
     /**
      * 잠근 회차에서 순번 하나를 발급하고 그 순번의 차수를 정한다. {@link #lockForAccept} 와 같은 트랜잭션에서만 부른다.
+     * 차수는 오픈 뒤에 읽어 둔 원천 캐시에서 고르고, 없으면 DB 에서 읽는다 — 잠금 구간의 왕복을 하나 줄인다.
+     * 교체와 겹쳐 옛 차수를 골라도 예약의 차수 외래 키가 INSERT 를 막는다(교체는 차수 행을 지우고 새로 넣는다).
      *
      * @throws IllegalStateException 잠근 회차가 없거나 순번이 속한 차수가 없다(오픈 전 검사를 지나친 데이터)
      */
@@ -61,10 +63,12 @@ public class Campaigns {
         PreorderCampaign campaign = campaigns.findById(productId)
                 .orElseThrow(() -> new IllegalStateException("잠근 회차가 없다: productId=" + productId));
         long position = campaign.issueQueuePosition();
-        ShipmentBatch batch = batches.findCovering(productId, position)
+        ShipmentBatchSnapshot batch = cache.batchesLoadedSince(productId, campaign.getOpensAt())
+                .flatMap(cached -> cached.stream().filter(candidate -> candidate.covers(position)).findFirst())
+                .or(() -> batches.findCovering(productId, position).map(ShipmentBatch::toSnapshot))
                 .orElseThrow(() -> new IllegalStateException(
                         "순번이 속한 배송 차수가 없다: productId=" + productId + ", position=" + position));
-        return new IssuedPosition(position, batch.toSnapshot());
+        return new IssuedPosition(position, batch);
     }
 
     /** 지금 접수 중인(오픈 뒤 · 마감 전 · 공개 · 판매 중지 아님) 회차 수. */

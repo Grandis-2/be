@@ -9,6 +9,7 @@ import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.campaign.IssuedPosition;
 import com.grandis.nova.preorder.integration.catalog.OptionSnapshot;
 import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
+import com.grandis.nova.preorder.preorder.AcceptHistory;
 import com.grandis.nova.preorder.preorder.NewPreorder;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
@@ -35,7 +36,8 @@ import java.util.UUID;
  * 접수 트랜잭션. 순서를 바꾸지 않는다(ERD preorders Note).
  *
  * 1. 회차 행 잠금 — 같은 모델의 접수는 여기서 한 줄로 선다
- * 2. 같은 접수 키 재전송 확인 — 잠금 뒤라서 같은 키의 동시 재전송이 순번을 두 번 쓰지 않는다
+ * 2. 같은 접수 키 재전송 확인 — 잠금 뒤라서 같은 키의 동시 재전송이 순번을 두 번 쓰지 않는다.
+ *    마지막 접수 시각(입장권 확인)도 같은 문장에서 읽는다
  * 3. 상품 · 옵션 · 접수 기간 확인
  * 4. 순번 발급 · 차수 배정
  * 5. 예약 + 첫 이력 → REGISTER 작업 → 아웃박스(REGISTER_JOB_READY)
@@ -84,13 +86,13 @@ class PreorderAcceptTransaction {
         Optional<CampaignSchedule> campaign =
                 campaignLockWait.record(() -> campaigns.lockForAccept(command.productId()));
 
-        Optional<PreorderSnapshot> existing = preorders.findByIdempotencyKey(
-                command.customerId(), command.idempotencyKey());
-        if (existing.isPresent()) {
-            return replay(existing.get(), command);
+        AcceptHistory history = preorders.findAcceptHistory(command.customerId(), command.productId(),
+                command.idempotencyKey());
+        if (history.sameKey().isPresent()) {
+            return replay(history.sameKey().get(), command);
         }
 
-        requireTicketAfterLastAccept(command);
+        requireTicketAfterLastAccept(command, history.lastAcceptedAt());
         OptionSnapshot option = requireOnSale(command, product);
         requireAccepting(campaign, clock.instant());
         IssuedPosition issued = campaigns.issuePosition(command.productId());
@@ -171,14 +173,14 @@ class PreorderAcceptTransaction {
      * 입장권은 그 회원 · 그 모델의 마지막 접수 뒤에 발급된 것만 받는다 — 같은 입장에서 받은 다른 창의 입장권으로
      * 취소 뒤 줄을 다시 서지 않고 재접수하지 못하게. 회차 잠금 뒤라 동시 접수도 서로의 접수를 본다.
      */
-    private void requireTicketAfterLastAccept(AcceptCommand command) {
+    private static void requireTicketAfterLastAccept(AcceptCommand command, Optional<Instant> lastAcceptedAt) {
         AdmissionTicket ticket = command.admissionTicket();
         if (ticket == null) {
             return;
         }
-        preorders.findLastAcceptedAt(command.customerId(), command.productId())
-                .filter(lastAcceptedAt -> !lastAcceptedAt.isBefore(ticket.issuedNoEarlierThan()))
-                .ifPresent(lastAcceptedAt -> {
+        lastAcceptedAt
+                .filter(acceptedAt -> !acceptedAt.isBefore(ticket.issuedNoEarlierThan()))
+                .ifPresent(acceptedAt -> {
                     throw new BusinessException(PreorderErrorCode.ADMISSION_TICKET_STALE);
                 });
     }
