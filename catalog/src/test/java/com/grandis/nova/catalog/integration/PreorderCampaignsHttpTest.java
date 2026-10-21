@@ -152,7 +152,8 @@ class PreorderCampaignsHttpTest {
         mockMvc.perform(get("/api/v1/products/{id}", product).with(AccessTokens.customer(UUID.randomUUID()))).andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.campaign.status").value("OPEN"));
         assertThat(SEEN_PATHS).as("공개 회차 캐시를 끈 공개 상세는 preorder 의 회차 캐시로 답해도 된다")
-                .contains("/internal/preorders/campaigns?productIds=" + product + "&fresh=false");
+                .contains("/internal/preorders/campaigns?productIds=" + product + "&fresh=false")
+                .noneMatch(path -> path.endsWith("&fresh=true"));
         assertThat(SEEN_AUTHORIZATION).allMatch("null"::equals);
 
         failStatus = 503;
@@ -177,6 +178,9 @@ class PreorderCampaignsHttpTest {
         assertThat(cards).hasSize(1);
         assertThat(cards.get(0).get("productId").asString()).isEqualTo(withCampaign.toString());
         assertThat(cards.get(0).get("preorderStatus").asString()).isEqualTo("OPEN");
+        assertThat(SEEN_PATHS).as("공개 회차 캐시를 끈 홍보 카드는 preorder 의 회차 캐시로 답해도 된다")
+                .anyMatch(path -> path.contains(withCampaign.toString()) && path.endsWith("&fresh=false"))
+                .noneMatch(path -> path.endsWith("&fresh=true"));
 
         failStatus = 503;
         JsonNode degraded = promotionCards(promotion);
