@@ -42,6 +42,7 @@ class CatalogReaderTest {
     static final UUID PRODUCT_ID = UUID.fromString("00000000-0000-7000-8000-000000000007");
     static final UUID OPTION_ID = UUID.fromString("00000000-0000-7000-8000-000000000070");
     static final String TOKEN = "member-token";
+    static final CatalogCacheProperties PROPERTIES = CatalogCacheProperties.defaults();
 
     final MovableClock clock = new MovableClock();
     /** 다시 받기를 바로 돌리지 않고 모아 두었다가 시험이 정한 때에 돌린다. */
@@ -187,7 +188,7 @@ class CatalogReaderTest {
         signIn(TOKEN);
         reader.findOption(PRODUCT_ID, OPTION_ID);
         client.optionStatus = "PAUSED";
-        clock.advance(CatalogReader.REFRESH_AFTER);
+        clock.advance(PROPERTIES.refreshAfter());
 
         signIn("later-token");
         assertThat(reader.findOption(PRODUCT_ID, OPTION_ID)).get()
@@ -210,7 +211,7 @@ class CatalogReaderTest {
         FakeCatalogClient client = new FakeCatalogClient();
         CatalogReader reader = reader(client);
         reader.findOption(PRODUCT_ID, OPTION_ID);
-        clock.advance(CatalogReader.REFRESH_AFTER);
+        clock.advance(PROPERTIES.refreshAfter());
         reader.findOption(PRODUCT_ID, OPTION_ID);
         client.errorStatus = HttpStatus.UNAUTHORIZED;
 
@@ -225,13 +226,75 @@ class CatalogReaderTest {
         FakeCatalogClient client = new FakeCatalogClient();
         CatalogReader reader = reader(client);
         reader.findOption(PRODUCT_ID, OPTION_ID);
-        clock.advance(CatalogReader.REFRESH_AFTER);
+        clock.advance(PROPERTIES.refreshAfter());
         reader.findOption(PRODUCT_ID, OPTION_ID);
 
         reader.evict(PRODUCT_ID);
         refreshes.poll().run();
 
         assertThat(reader.cache().getIfPresent(PRODUCT_ID)).isNull();
+    }
+
+    @Test
+    void 오분이_지나면_그_요청에서_다시_받아_새_값으로_판정한다() {
+        FakeCatalogClient client = new FakeCatalogClient();
+        CatalogReader reader = reader(client);
+        signIn(TOKEN);
+        reader.findOption(PRODUCT_ID, OPTION_ID);
+        client.optionStatus = "PAUSED";
+        clock.advance(PROPERTIES.maxStale());
+
+        signIn("later-token");
+        assertThat(reader.findOption(PRODUCT_ID, OPTION_ID)).get()
+                .extracting(OptionSnapshot::isOnSale).isEqualTo(false);
+
+        assertThat(client.tokens).as("그 요청의 토큰으로").containsExactly(TOKEN, "later-token");
+        assertThat(refreshes).as("뒤에서 또 받지 않는다").isEmpty();
+    }
+
+    @Test
+    void 오분이_지나_다시_받기가_실패하면_가진_값을_주고_잠시_묻지_않는다() {
+        FakeCatalogClient client = new FakeCatalogClient();
+        CatalogReader reader = reader(client);
+        reader.findOption(PRODUCT_ID, OPTION_ID);
+        clock.advance(PROPERTIES.maxStale());
+        client.errorStatus = HttpStatus.SERVICE_UNAVAILABLE;
+
+        assertThat(reader.findOption(PRODUCT_ID, OPTION_ID)).as("가진 값").isPresent();
+        assertThat(reader.findOption(PRODUCT_ID, OPTION_ID)).isPresent();
+
+        assertThat(client.calls.get()).as("실패 뒤에는 잠시 묻지 않는다").isEqualTo(2);
+    }
+
+    @Test
+    void 오분이_지나_토큰이_거절되면_가진_값을_주되_다른_요청은_막지_않는다() {
+        FakeCatalogClient client = new FakeCatalogClient();
+        CatalogReader reader = reader(client);
+        reader.findOption(PRODUCT_ID, OPTION_ID);
+        clock.advance(PROPERTIES.maxStale());
+        client.errorStatus = HttpStatus.UNAUTHORIZED;
+
+        assertThat(reader.findOption(PRODUCT_ID, OPTION_ID)).isPresent();
+        client.errorStatus = null;
+        client.optionStatus = "PAUSED";
+
+        assertThat(reader.findOption(PRODUCT_ID, OPTION_ID)).get()
+                .extracting(OptionSnapshot::isOnSale).isEqualTo(false);
+    }
+
+    @Test
+    void 오분이_지나_동시에_몰려도_catalog_는_한_번만_부른다() throws Exception {
+        FakeCatalogClient client = new FakeCatalogClient();
+        CatalogReader reader = reader(client);
+        reader.findOption(PRODUCT_ID, OPTION_ID);
+        clock.advance(PROPERTIES.maxStale());
+        client.delayMillis = 200;
+
+        List<Outcome<Boolean>> outcomes = Concurrently.run(20, i -> () ->
+                reader.findOption(PRODUCT_ID, OPTION_ID).isPresent());
+
+        assertThat(outcomes).allMatch(o -> o.succeeded() && o.value());
+        assertThat(client.calls.get()).isEqualTo(2);
     }
 
     @AfterEach
@@ -252,7 +315,7 @@ class CatalogReaderTest {
     }
 
     private CatalogReader reader(FakeCatalogClient client) {
-        return new CatalogReader(client, DependencyGuards.passThrough(), refreshes::add, clock);
+        return new CatalogReader(client, DependencyGuards.passThrough(), refreshes::add, PROPERTIES, clock);
     }
 
     /** 시험이 시각을 옮기는 시계. */

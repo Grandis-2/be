@@ -20,15 +20,18 @@ import org.springframework.web.client.RestClientException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 접수에 쓸 상품 · 옵션 값을 상품 단위로 캐시한다 — 오픈 순간의 몰림이 catalog 로 번지지 않게(같은 상품의 첫 조회는 한 번만 부른다).
- * 1분 지난 값은 그대로 돌려주고, 조회한 요청의 보안 맥락(토큰)으로 뒤에서 한 번 다시 받는다. 실패하면 가진 값, 30분 뒤 버린다.
+ * 1분 지난 값은 그대로 돌려주고, 조회한 요청의 보안 맥락(토큰)으로 뒤에서 한 번 다시 받는다. 5분 지난 값은 그 요청에서 다시 받고
+ * (같은 상품은 한 번만), 실패하면 가진 값을 주고 잠시 묻지 않는다. 30분 뒤 버린다. 기준은 {@link CatalogCacheProperties}.
  * 판매 중지처럼 동결 뒤에도 바뀌는 것은 이벤트로 {@link #evict} 한다.
  */
 @Component
@@ -37,8 +40,6 @@ public class CatalogReader {
     static final String DEPENDENCY = Dependencies.CATALOG;
     static final String REFRESH_EXECUTOR = "catalogRefreshExecutor";
 
-    static final Duration REFRESH_AFTER = Duration.ofMinutes(1);
-    static final Duration EXPIRE_AFTER = Duration.ofMinutes(30);
     static final long MAXIMUM_PRODUCTS = 1_000;
 
     private static final Logger log = LoggerFactory.getLogger(CatalogReader.class);
@@ -46,22 +47,33 @@ public class CatalogReader {
     private final CatalogClient catalogClient;
     private final DependencyGuard dependencyGuard;
     private final TaskExecutor refreshExecutor;
+    private final CatalogCacheProperties properties;
     private final Clock clock;
     private final Cache<UUID, Loaded> products;
+    /** 그 요청에서 다시 받기가 실패해 잠시 묻지 않는 상품. */
+    private final Cache<UUID, Boolean> backingOff;
     /** 다시 받는 중인 상품. 같은 상품을 동시에 여러 번 다시 받지 않는다. */
     private final Set<UUID> refreshing = ConcurrentHashMap.newKeySet();
+    /** 그 요청에서 다시 받는 중인 상품과 그 결과. */
+    private final Map<UUID, CompletableFuture<Loaded>> refreshingNow = new ConcurrentHashMap<>();
 
     public CatalogReader(CatalogClient catalogClient, DependencyGuard dependencyGuard,
-                         @Qualifier(REFRESH_EXECUTOR) TaskExecutor refreshExecutor, Clock clock) {
+                         @Qualifier(REFRESH_EXECUTOR) TaskExecutor refreshExecutor, CatalogCacheProperties properties,
+                         Clock clock) {
         this.catalogClient = catalogClient;
         this.dependencyGuard = dependencyGuard;
         // 다시 받기는 다른 스레드에서 돈다. 맡긴 요청의 보안 맥락(토큰)을 옮겨 가야 catalog 가 받는다
         this.refreshExecutor = new DelegatingSecurityContextTaskExecutor(refreshExecutor);
+        this.properties = properties;
         this.clock = clock;
         this.products = Caffeine.newBuilder()
-                .expireAfterWrite(EXPIRE_AFTER)
+                .expireAfterWrite(properties.expireAfter())
                 .maximumSize(MAXIMUM_PRODUCTS)
                 .recordStats()
+                .build();
+        this.backingOff = Caffeine.newBuilder()
+                .expireAfterWrite(properties.failureBackoff())
+                .maximumSize(MAXIMUM_PRODUCTS)
                 .build();
     }
 
@@ -87,7 +99,10 @@ public class CatalogReader {
      */
     public Optional<ProductCatalog> findProduct(UUID productId) {
         Loaded loaded = get(productId);
-        if (loaded.isOlderThan(REFRESH_AFTER, clock.instant())) {
+        Instant now = clock.instant();
+        if (loaded.isOlderThan(properties.maxStale(), now)) {
+            loaded = refreshNow(productId, loaded);
+        } else if (loaded.isOlderThan(properties.refreshAfter(), now)) {
             refreshInBackground(productId, loaded);
         }
         return loaded.product();
@@ -115,6 +130,37 @@ public class CatalogReader {
             }
             throw dependencyGuard.callFailed(DEPENDENCY, "productId=" + productId, e);
         }
+    }
+
+    /**
+     * 그 요청에서 다시 받는다. 같은 상품을 동시에 다시 받는 요청은 앞 요청의 결과를 기다린다 — 캐시의 키 잠금을 잡은 채 부르지 않는다
+     * (같은 칸의 다른 상품까지 막는다). 실패하면 가진 값을 주고, 사용자 토큰 문제(401)가 아니면 그 상품을 잠시 묻지 않는다 —
+     * 한 사람의 토큰이 남을 막지 않게. 받는 사이 비워졌으면 덮지 않고 처음 받기로 간다.
+     */
+    private Loaded refreshNow(UUID productId, Loaded stale) {
+        if (backingOff.getIfPresent(productId) != null) {
+            return stale;
+        }
+        CompletableFuture<Loaded> mine = new CompletableFuture<>();
+        CompletableFuture<Loaded> running = refreshingNow.putIfAbsent(productId, mine);
+        if (running != null) {
+            Loaded refreshed = running.join();
+            return refreshed != null ? refreshed : get(productId);
+        }
+        Loaded refreshed = stale;
+        try {
+            Loaded fresh = load(productId);
+            refreshed = products.asMap().replace(productId, stale, fresh) ? fresh : products.getIfPresent(productId);
+        } catch (RuntimeException e) {
+            if (!(e instanceof HttpClientErrorException.Unauthorized)) {
+                backingOff.put(productId, Boolean.TRUE);
+            }
+            log.warn("catalog 상품을 다시 받지 못해 가진 값을 쓴다 productId={}: {}", productId, e.toString());
+        } finally {
+            refreshingNow.remove(productId, mine);
+            mine.complete(refreshed);
+        }
+        return refreshed != null ? refreshed : get(productId);
     }
 
     /**

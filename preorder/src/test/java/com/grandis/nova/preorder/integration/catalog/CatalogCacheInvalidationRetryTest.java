@@ -30,7 +30,7 @@ class CatalogCacheInvalidationRetryTest {
     final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
     final CatalogClient client = mock(CatalogClient.class);
     final CatalogReader reader = new CatalogReader(client, DependencyGuards.passThrough(), Runnable::run,
-            Clock.systemUTC());
+            CatalogCacheProperties.defaults(), Clock.systemUTC());
     final CatalogCacheInvalidation invalidation = new CatalogCacheInvalidation(reader, redis, Runnable::run,
             List.of(Duration.ZERO, Duration.ZERO, Duration.ZERO), meterRegistry);
 
