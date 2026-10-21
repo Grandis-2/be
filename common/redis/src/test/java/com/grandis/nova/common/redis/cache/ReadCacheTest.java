@@ -265,6 +265,61 @@ class ReadCacheTest {
     }
 
     @Test
+    @DisplayName("빈 캐시 · 끈 캐시 — loader 는 채우기(FILL)를 받아 넣고, 끈 캐시는 우회(BYPASS)를 받는다")
+    void loadPathFillAndOff() {
+        List<ReadCache.LoadPath> paths = new java.util.ArrayList<>();
+        cache.get(items, "products", "1", path -> { paths.add(path); return item("v", new AtomicInteger()); });
+        assertThat(paths).containsExactly(ReadCache.LoadPath.FILL);
+        assertThat(redis.keys("svc:cache:item:*")).hasSize(1);
+
+        ReadCache.off(redis, JSON, "offsvc").get(items, "products", "1", path -> { paths.add(path); return item("v", new AtomicInteger()); });
+        assertThat(paths).containsExactly(ReadCache.LoadPath.FILL, ReadCache.LoadPath.BYPASS);
+    }
+
+    @Test
+    @DisplayName("세대를 못 읽으면 우회 — loader 는 BYPASS 를 받고 넣지 않는다. 그 loader 가 도는 사이 Redis 가 돌아와도 넣지 않는다")
+    void generationReadFailureBypassesEvenIfRedisRecovers() {
+        redis.opsForValue().set("svc:cache:gen:products", "not-a-number");   // GET 은 되지만 번호로 못 읽는다 — 세대 조회 실패
+        List<ReadCache.LoadPath> paths = new java.util.ArrayList<>();
+        cache.get(items, "products", "1", path -> {
+            paths.add(path);
+            redis.delete("svc:cache:gen:products");   // 우회 조회 도중 복구
+            return item("v", new AtomicInteger());
+        });
+        assertThat(paths).containsExactly(ReadCache.LoadPath.BYPASS);
+        assertThat(redis.keys("svc:cache:item:*")).as("우회 결과는 넣지 않는다").isEmpty();
+
+        cache.get(items, "products", "1", path -> { paths.add(path); return item("v", new AtomicInteger()); });
+        assertThat(paths).as("복구 뒤 다음 조회는 채우기").containsExactly(ReadCache.LoadPath.BYPASS, ReadCache.LoadPath.FILL);
+    }
+
+    @Test
+    @DisplayName("세대는 읽었는데 값을 못 읽으면 우회 — 없음으로 보고 채우기로 가지 않는다")
+    void valueReadFailureBypasses() {
+        cache.get(items, "products", "1", () -> item("v", new AtomicInteger()));
+        String key = onlyKey("svc:cache:item:*");
+        redis.delete(key);
+        redis.opsForList().rightPush(key, "x");   // 같은 키를 목록으로 — GET 이 WRONGTYPE 으로 실패한다
+
+        List<ReadCache.LoadPath> paths = new java.util.ArrayList<>();
+        cache.get(items, "products", "1", path -> { paths.add(path); return item("v", new AtomicInteger()); });
+        assertThat(paths).containsExactly(ReadCache.LoadPath.BYPASS);
+        assertThat(redis.type(key).code()).as("우회 결과로 덮지 않는다").isEqualTo("list");
+    }
+
+    @Test
+    @DisplayName("차단기가 열려 있으면 우회 — loader 는 BYPASS 를 받고 넣지 않는다")
+    void openBreakerBypasses() {
+        cache.breaker().transitionToForcedOpenState();
+        List<ReadCache.LoadPath> paths = new java.util.ArrayList<>();
+        cache.get(items, "products", "1", path -> { paths.add(path); return item("v", new AtomicInteger()); });
+        cache.breaker().transitionToClosedState();
+
+        assertThat(paths).containsExactly(ReadCache.LoadPath.BYPASS);
+        assertThat(redis.keys("svc:cache:item:*")).isEmpty();
+    }
+
+    @Test
     @DisplayName("세대가 오르면 이 인스턴스가 옛 세대로 넣은 키를 지우고 저장 몫을 돌려준다 — 예산이 찬 캐시도 새 세대 값을 바로 넣는다")
     void bumpReleasesOldGenerationBudget() {
         ReadCache.Spec<Item> small = cache.spec("small", Item.class, Duration.ofSeconds(30), 500);   // 값 하나(약 360)만 들어간다

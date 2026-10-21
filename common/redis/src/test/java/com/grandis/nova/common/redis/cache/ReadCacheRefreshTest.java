@@ -101,6 +101,19 @@ class ReadCacheRefreshTest {
     }
 
     @Test
+    @DisplayName("미리 갱신의 loader 도 채우기(FILL)를 받는다 — 넣을 값을 원천에 지금 값으로 묻게")
+    void refreshLoadsWithFillPath() {
+        List<ReadCache.LoadPath> paths = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.function.Function<ReadCache.LoadPath, String> loader = path -> { paths.add(path); return load("v"); };
+        cache.entry(spec, "g", "k", loader, value -> true);
+        clock.advance(Duration.ofSeconds(24));
+        cache.entry(spec, "g", "k", loader, value -> true);
+        tasks.runAll();
+        assertThat(paths).containsExactly(ReadCache.LoadPath.FILL, ReadCache.LoadPath.FILL);
+        assertThat(events.refreshes).containsExactly(RefreshResult.STORED);
+    }
+
+    @Test
     @DisplayName("같은 키의 갱신은 이 인스턴스에서 하나만 맡긴다")
     void oneRefreshPerKey() {
         cache.entry(spec, "g", "k", () -> load("v1"));
