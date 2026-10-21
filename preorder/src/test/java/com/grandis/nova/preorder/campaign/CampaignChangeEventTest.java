@@ -221,6 +221,11 @@ class CampaignChangeEventTest {
         assertThat(events).extracting(event -> event.get("version")).containsExactly(1L, 2L);
         assertThat(events.getLast().get("closesAt")).isEqualTo(closesAt.toString());
         assertThat(utc(product.productId(), "closes_at")).isEqualTo(closesAt);
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM preorder_outbox_events
+                 WHERE event_type = 'PREORDER_CAMPAIGN_SCHEDULE_CHANGED' AND aggregate_id = ?
+                """, Long.class, (Object) UuidBinary.toBytes(product.productId())))
+                .as("catalog 알림은 기본 꺼짐").isZero();
     }
 
     /** 접수 · 마감처럼 회차 행을 잠근 트랜잭션이 끝나기 전에는 다시 열기가 판정하지 않고 기다린다. */
