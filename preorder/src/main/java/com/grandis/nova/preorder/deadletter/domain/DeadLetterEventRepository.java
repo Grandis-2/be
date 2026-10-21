@@ -83,11 +83,6 @@ public interface DeadLetterEventRepository extends JpaRepository<DeadLetterEvent
         return findWaitingIds(OPEN, REDRIVING, staleBefore, eventType, failureReason, Limit.of(limit));
     }
 
-    /** 기다리는 행을 종류 · 사유별로 센다(수와 가장 오래된 시각). 합계 · 가장 오래된 것도 이 한 문장에서 낸다. */
-    default List<WaitingGroup> countWaitingByKind(Instant staleBefore) {
-        return countWaitingByKind(OPEN, REDRIVING, staleBefore);
-    }
-
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("""
             update DeadLetterEvent d
@@ -135,50 +130,24 @@ public interface DeadLetterEventRepository extends JpaRepository<DeadLetterEvent
                               @Param("staleBefore") Instant staleBefore, @Param("eventType") String eventType,
                               @Param("failureReason") FailureReason failureReason, Limit limit);
 
-    @Query("""
-            select d.eventType as eventType, d.failureReason as failureReason, count(d) as count,
-                   min(d.createdAt) as oldestAt
-              from DeadLetterEvent d
-             where d.status = :open or (d.status = :redriving and d.redriveStartedAt < :staleBefore)
-             group by d.eventType, d.failureReason""")
-    List<WaitingGroup> countWaitingByKind(@Param("open") DeadLetterStatus open,
-                                          @Param("redriving") DeadLetterStatus redriving,
-                                          @Param("staleBefore") Instant staleBefore);
-
-    interface WaitingGroup {
-
-        /** 보낸 쪽이 적은 종류. 읽지 못한 메시지면 null 이다. */
-        String getEventType();
-
-        FailureReason getFailureReason();
-
-        long getCount();
-
-        Instant getOldestAt();
-    }
-
-    default long countWaitingOfProduct(UUID productId, Instant staleBefore) {
+    default WaitingTotal countWaitingOfProduct(UUID productId, Instant staleBefore) {
         return countWaitingOfProduct(OPEN, REDRIVING, staleBefore, productId);
     }
 
-    default Optional<Instant> findOldestWaitingCreatedAtOfProduct(UUID productId, Instant staleBefore) {
-        return findOldestWaitingCreatedAtOfProduct(OPEN, REDRIVING, staleBefore, productId);
+    /** 그 상품의 예약에 묶인 것만 센다 — 수와 가장 오래된 시각을 한 문장으로(같은 시점의 짝). 예약 표는 읽기만 한다. */
+    @Query("""
+            select count(d) as count, min(d.createdAt) as oldestAt from DeadLetterEvent d
+             where (d.status = :open or (d.status = :redriving and d.redriveStartedAt < :staleBefore))
+               and d.preorderId in (select p.id from Preorder p where p.productId = :productId)""")
+    WaitingTotal countWaitingOfProduct(@Param("open") DeadLetterStatus open,
+                                       @Param("redriving") DeadLetterStatus redriving,
+                                       @Param("staleBefore") Instant staleBefore, @Param("productId") UUID productId);
+
+    interface WaitingTotal {
+
+        long getCount();
+
+        /** 없으면 null. */
+        Instant getOldestAt();
     }
-
-    /** 그 상품의 예약에 묶인 것만 센다. 예약 표는 읽기만 한다. */
-    @Query("""
-            select count(d) from DeadLetterEvent d
-             where (d.status = :open or (d.status = :redriving and d.redriveStartedAt < :staleBefore))
-               and d.preorderId in (select p.id from Preorder p where p.productId = :productId)""")
-    long countWaitingOfProduct(@Param("open") DeadLetterStatus open, @Param("redriving") DeadLetterStatus redriving,
-                               @Param("staleBefore") Instant staleBefore, @Param("productId") UUID productId);
-
-    @Query("""
-            select min(d.createdAt) from DeadLetterEvent d
-             where (d.status = :open or (d.status = :redriving and d.redriveStartedAt < :staleBefore))
-               and d.preorderId in (select p.id from Preorder p where p.productId = :productId)""")
-    Optional<Instant> findOldestWaitingCreatedAtOfProduct(@Param("open") DeadLetterStatus open,
-                                                          @Param("redriving") DeadLetterStatus redriving,
-                                                          @Param("staleBefore") Instant staleBefore,
-                                                          @Param("productId") UUID productId);
 }

@@ -13,10 +13,11 @@ public enum FailureReason {
     PROCESSING_FAILED;
 
     /**
-     * 원문을 다시 읽지 않고 저장된 분류 · 종류로 본 되돌리기 가능 여부(목록 · 일괄 후보용). 모르는 종류는 지금 받게 됐으면 가능하다.
-     * 못 읽던 원문을 배포로 읽게 된 경우는 여기서 알 수 없다 — 상세 · 되돌리기가 원문을 다시 읽어 가른다.
+     * 원문을 다시 읽지 않고 저장된 분류 · 종류로 본 되돌리기 가능 여부(목록 · 일괄 후보용). 지금 받는 종류여야 한다 — 모르던 종류는
+     * 받게 됐으면 가능하고, 처리 실패였어도 그 뒤 받지 않게 된 종류면 되돌려도 거절된다. 못 읽던 원문을 배포로 읽게 된 경우는
+     * 여기서 알 수 없다 — 상세 · 되돌리기가 원문을 다시 읽어 가른다.
      */
     public boolean redrivableFor(String eventType) {
-        return this == PROCESSING_FAILED || (this == UNKNOWN_EVENT_TYPE && InboundEventType.isKnown(eventType));
+        return this != UNREADABLE_BODY && InboundEventType.isKnown(eventType);
     }
 }

@@ -4,7 +4,7 @@ import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.campaign.OpenAlertBacklog;
 import com.grandis.nova.preorder.campaign.OpenAlertBacklog.Pending;
 import com.grandis.nova.preorder.deadletter.DeadLetterBacklog;
-import com.grandis.nova.preorder.deadletter.DeadLetterSummary;
+import com.grandis.nova.preorder.deadletter.DeadLetterBreakdown;
 import com.grandis.nova.preorder.preorder.PaymentOverdue;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.preorder.Preorders;
@@ -108,7 +108,7 @@ class StateGauges {
         Map<PreorderStatus, Long> counts = preorders.countByStatus();
         // 새 값을 다 센 뒤에 바꾼다 — 먼저 0 으로 비우면 그사이 수집에 0 이 잡힌다
         statusCounts.forEach((status, count) -> count.set(counts.getOrDefault(status, 0L)));
-        DeadLetterSummary deadLetters = deadLetterBacklog.summary();
+        DeadLetterBreakdown deadLetters = deadLetterBacklog.breakdown();
         waitingDeadLetters.set(deadLetters.total().count());
         Instant oldestAt = deadLetters.total().oldestAt();
         oldestWaitingDeadLetterSeconds.set(oldestAt == null ? 0

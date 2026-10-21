@@ -1,9 +1,10 @@
 package com.grandis.nova.preorder.deadletter;
 
 import com.grandis.nova.preorder.deadletter.domain.DeadLetterEventRepository;
-import com.grandis.nova.preorder.deadletter.domain.DeadLetterEventRepository.WaitingGroup;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterEventRepository.WaitingTotal;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterWaitingQuery;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterWaitingQuery.WaitingGroup;
 import com.grandis.nova.preorder.deadletter.domain.DeadLetterStatus;
-import com.grandis.nova.preorder.event.InboundEventType;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -19,51 +20,41 @@ import java.util.UUID;
 @Service
 public class DeadLetterBacklog {
 
-    static final String OTHER = "OTHER";
-    static final String UNKNOWN = "UNKNOWN";
-
+    private final DeadLetterWaitingQuery waitingQuery;
     private final DeadLetterEventRepository events;
     private final Clock clock;
 
-    DeadLetterBacklog(DeadLetterEventRepository events, Clock clock) {
+    DeadLetterBacklog(DeadLetterWaitingQuery waitingQuery, DeadLetterEventRepository events, Clock clock) {
+        this.waitingQuery = waitingQuery;
         this.events = events;
         this.clock = clock;
     }
 
     /** 전체 합계 · 가장 오래된 것과 종류 · 사유별 수를 한 문장으로. */
-    public DeadLetterSummary summary() {
+    public DeadLetterBreakdown breakdown() {
         long total = 0;
         Instant oldestAt = null;
-        Map<DeadLetterSummary.Kind, Long> byKind = new HashMap<>();
-        for (WaitingGroup group : events.countWaitingByKind(staleBefore())) {
-            total += group.getCount();
-            if (oldestAt == null || group.getOldestAt().isBefore(oldestAt)) {
-                oldestAt = group.getOldestAt();
+        Map<DeadLetterBreakdown.Kind, Long> byKind = new HashMap<>();
+        for (WaitingGroup group : waitingQuery.countByKind(staleBefore())) {
+            total += group.count();
+            if (oldestAt == null || group.oldestAt().isBefore(oldestAt)) {
+                oldestAt = group.oldestAt();
             }
-            byKind.merge(new DeadLetterSummary.Kind(kindOf(group.getEventType()), group.getFailureReason().name()),
-                    group.getCount(), Long::sum);
+            byKind.put(new DeadLetterBreakdown.Kind(group.eventKind(), group.failureReason().name()), group.count());
         }
-        return new DeadLetterSummary(new DeadLetterWaiting(total, oldestAt), byKind);
+        return new DeadLetterBreakdown(new DeadLetterWaiting(total, oldestAt), byKind);
     }
 
-    /** 기다리는 수와 가장 오래된 것. productId 를 주면 그 상품의 예약에 묶인 것만, null 이면 전체를 본다. */
+    /** 기다리는 수와 가장 오래된 것(같은 문장의 짝). productId 를 주면 그 상품의 예약에 묶인 것만, null 이면 전체를 본다. */
     public DeadLetterWaiting waiting(UUID productId) {
         if (productId == null) {
-            return summary().total();
+            return breakdown().total();
         }
-        Instant staleBefore = staleBefore();
-        return new DeadLetterWaiting(events.countWaitingOfProduct(productId, staleBefore),
-                events.findOldestWaitingCreatedAtOfProduct(productId, staleBefore).orElse(null));
+        WaitingTotal found = events.countWaitingOfProduct(productId, staleBefore());
+        return new DeadLetterWaiting(found.getCount(), found.getOldestAt());
     }
 
     private Instant staleBefore() {
         return clock.instant().minus(DeadLetterStatus.STALE_REDRIVE);
-    }
-
-    private static String kindOf(String eventType) {
-        if (eventType == null) {
-            return UNKNOWN;
-        }
-        return InboundEventType.isKnown(eventType) ? eventType : OTHER;
     }
 }

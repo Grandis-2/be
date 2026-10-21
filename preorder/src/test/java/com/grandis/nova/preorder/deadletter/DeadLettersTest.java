@@ -7,6 +7,8 @@ import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.deadletter.domain.DeadLetterEvent;
 import com.grandis.nova.preorder.deadletter.domain.DeadLetterEventRepository;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterWaitingQuery;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterWaitingQuery.WaitingGroup;
 import com.grandis.nova.preorder.deadletter.domain.DeadLetterStatus;
 import com.grandis.nova.preorder.deadletter.domain.FailureReason;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
@@ -38,6 +40,9 @@ class DeadLettersTest {
 
     @Autowired
     DeadLetterEventRepository events;
+
+    @Autowired
+    DeadLetterWaitingQuery waitingQuery;
 
     @Autowired
     PreorderAcceptService acceptService;
@@ -233,6 +238,6 @@ class DeadLettersTest {
     }
 
     private long countWaiting(Instant staleBefore) {
-        return events.countWaitingByKind(staleBefore).stream().mapToLong(group -> group.getCount()).sum();
+        return waitingQuery.countByKind(staleBefore).stream().mapToLong(WaitingGroup::count).sum();
     }
 }
