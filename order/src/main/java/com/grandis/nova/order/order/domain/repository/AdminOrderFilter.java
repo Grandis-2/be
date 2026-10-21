@@ -25,6 +25,18 @@ public record AdminOrderFilter(OrderStatus status, OrderSource source, OrderIdPr
 
     public static final AdminOrderFilter NONE = new AdminOrderFilter(null, null, null, null, null, null, null, null, null, null, null);
 
+    /** 받는 분 이름 · 전화 뒤 4자리는 개인정보라 값 대신 있는지만 싣는다 — 조건을 로그에 찍어도 새지 않게(ShipTo 와 같다). */
+    @Override
+    public String toString() {
+        return "AdminOrderFilter[status=" + status + ", source=" + source + ", orderIdPrefix=" + orderIdPrefix + ", customerId=" + customerId
+                + ", shipToName=" + masked(shipToName) + ", shipToPhoneLast4=" + masked(shipToPhoneLast4) + ", preorderToken=" + preorderToken
+                + ", productId=" + productId + ", optionId=" + optionId + ", createdFrom=" + createdFrom + ", createdTo=" + createdTo + "]";
+    }
+
+    private static String masked(String value) {
+        return value == null ? "null" : "***";
+    }
+
     /**
      * 몇 건으로 좁히는 조건이 있는가 — 있으면 그 조건의 색인으로 고른 뒤 정렬한다(최신순 색인을 훑지 않는다). 상태 · 회원은 (상태 | 회원, 만든 시각)
      * 색인이 거르기와 정렬을 함께 해 넣지 않는다. 기간은 최신순 색인 그 자체의 범위다. 출처는 색인이 없어 어느 쪽이든 행을 훑는다 — 최신순 색인을

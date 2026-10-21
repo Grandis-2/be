@@ -245,6 +245,9 @@ class AdminOrderQueryApiTest {
         assertListed(list("customerId", customer.toString(), "from", secondAt.toString()), second);
         assertListed(list("customerId", customer.toString(), "to", secondAt.toString()), first);
         assertListed(list("customerId", customer.toString(), "from", after.toString()));
+        // 나노초 경계는 저장 정밀도(마이크로초)로 올린다 — 반올림이면 1나노초 뒤가 그 주문 시각으로 내려와 그 주문이 끼거나(from) 빠진다(to)
+        assertListed(list("customerId", customer.toString(), "from", secondAt.plusNanos(1).toString()));
+        assertListed(list("customerId", customer.toString(), "to", secondAt.plusNanos(1).toString()), second, first);
         // 오프셋이 있는 시각도 받는다
         assertListed(list("customerId", customer.toString(), "from", before.atOffset(ZoneOffset.ofHours(9)).toString()), second, first);
     }
@@ -316,6 +319,13 @@ class AdminOrderQueryApiTest {
         }
         assertBadRequest("shipToName", "가".repeat(51), "shipToName");
         mockMvc.perform(get("/api/v1/admin/orders").param("shipToName", "가".repeat(50)).with(admin()))
+                .andExpect(status().isOk());
+        // DATETIME 범위 밖 — 저장 정밀도로 올리면 10000 년이 되는 값도
+        for (String outside : List.of("0999-12-31T23:59:59Z", "+10000-01-01T00:00:00Z", "9999-12-31T23:59:59.9999995Z")) {
+            assertBadRequest("from", outside, "from");
+            assertBadRequest("to", outside, "to");
+        }
+        mockMvc.perform(get("/api/v1/admin/orders").param("to", "9999-12-31T23:59:59.999999Z").with(admin()))
                 .andExpect(status().isOk());
         Instant at = Instant.now();
         mockMvc.perform(get("/api/v1/admin/orders").param("from", at.toString()).param("to", at.toString()).with(admin()))

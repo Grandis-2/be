@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -31,6 +32,9 @@ public class AdminOrderQueryController {
     /** orders.ship_to_name 의 길이. 더 긴 이름은 없다. */
     static final int SHIP_TO_NAME_MAX = 50;
     private static final Pattern PHONE_LAST4 = Pattern.compile("[0-9]{4}");
+    /** orders.created_at(datetime(6))이 담을 수 있는 범위. */
+    private static final Instant CREATED_AT_MIN = Instant.parse("1000-01-01T00:00:00Z");
+    private static final Instant CREATED_AT_MAX_EXCLUSIVE = Instant.parse("+10000-01-01T00:00:00Z");
 
     private final OrderQueryService queryService;
     private final OrderStatusCounts statusCounts;
@@ -45,7 +49,7 @@ public class AdminOrderQueryController {
             + "status · source 정확히 일치, q 주문 번호 앞부분(하이픈 빼고 16진수 8~32자리, 전체 id 도 됨 — 약 65초 안에 만든 주문은 앞 8자리가 같다), "
             + "customerId 회원 · preorderId 예약 공개 UUID 정확히 일치, shipToName 받는 분 이름 일치(앞뒤 공백은 떼고, 대소문자 · 악센트는 가리지 않음, 공백뿐이면 조건 없음, "
             + "50자 이하), shipToPhoneLast4 받는 분 전화번호의 숫자 뒤 4자리, productId · optionId 그 상품 · 옵션이 든 주문(둘 다 주면 같은 주문상품, "
-            + "상품이 여럿인 주문도 한 줄), from 이상 · to 미만 주문 시각(ISO-8601, 오프셋 필수 — + 는 %2B 로). "
+            + "상품이 여럿인 주문도 한 줄), from 이상 · to 미만 주문 시각(ISO-8601, 오프셋 필수 — + 는 %2B 로, 1000-01-01 ~ 9999-12-31). "
             + "형식이 틀린 값 · 모르는 상태 · from 이 to 보다 앞서지 않으면 400. 줄의 preorderId 는 사전예약 주문만 있고 나머지는 null")
     public ApiResponse<OffsetPage<AdminOrderSummaryResponse>> list(
             @RequestParam(required = false) OrderStatus status,
@@ -62,11 +66,13 @@ public class AdminOrderQueryController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         int checkedSize = PageSizes.require(size);
-        if (from != null && to != null && !from.isBefore(to)) {
+        Instant createdFrom = createdBound("from", from);
+        Instant createdTo = createdBound("to", to);
+        if (createdFrom != null && createdTo != null && !createdFrom.isBefore(createdTo)) {
             throw ValidationFailures.of("from", "to 보다 앞서야 합니다.");
         }
         AdminOrderFilter filter = new AdminOrderFilter(status, source, orderIdPrefix(q), customerId, shipToName(shipToName),
-                phoneLast4(shipToPhoneLast4), preorderId == null ? null : preorderId.toString(), productId, optionId, from, to);
+                phoneLast4(shipToPhoneLast4), preorderId == null ? null : preorderId.toString(), productId, optionId, createdFrom, createdTo);
         return ApiResponse.ok(queryService
                 .findForAdmin(filter, PageSizes.requirePage(page, checkedSize), checkedSize)
                 .map(AdminOrderSummaryResponse::from));
@@ -84,6 +90,24 @@ public class AdminOrderQueryController {
     @Operation(summary = "주문 상세", description = "주문 번호가 정확히 일치할 때만. 없으면 404")
     public ApiResponse<AdminOrderDetailResponse> get(@PathVariable String orderId) {
         return ApiResponse.ok(AdminOrderDetailResponse.from(queryService.findOneForAdmin(orderId)));
+    }
+
+    /**
+     * 주문 시각 경계를 칼럼(datetime(6))의 정밀도로 올린다 — 저장된 시각은 마이크로초라 올려도 [from, to) 가 그대로다. 그대로 바인딩하면
+     * 드라이버가 반올림해 경계의 주문이 한쪽으로 쏠린다. 올린 값이 DATETIME 범위(1000-01-01 ~ 9999-12-31) 밖이면 DB 가 거부해 500 이 되므로 400.
+     */
+    private static Instant createdBound(String field, Instant value) {
+        if (value == null) {
+            return null;
+        }
+        Instant micros = value.truncatedTo(ChronoUnit.MICROS);
+        if (micros.isBefore(value)) {
+            micros = micros.plus(1, ChronoUnit.MICROS);
+        }
+        if (micros.isBefore(CREATED_AT_MIN) || !micros.isBefore(CREATED_AT_MAX_EXCLUSIVE)) {
+            throw ValidationFailures.of(field, "1000-01-01 ~ 9999-12-31 사이 시각이어야 합니다.");
+        }
+        return micros;
     }
 
     private static OrderIdPrefix orderIdPrefix(String q) {
