@@ -139,6 +139,12 @@ public final class OrderSpecifications {
                 : (root, query, builder) -> root.get("status").in(statuses);
     }
 
+    /** 이 출처들 중 하나. 비었으면 거르지 않는다. */
+    public static Specification<OrderJpaEntity> sourceIn(Set<OrderSource> sources) {
+        return sources.isEmpty() ? Specification.unrestricted()
+                : (root, query, builder) -> root.get("source").in(sources);
+    }
+
     public static Specification<OrderJpaEntity> source(OrderSource source) {
         return source == null ? Specification.unrestricted()
                 : (root, query, builder) -> builder.equal(root.get("source"), source);

@@ -81,6 +81,13 @@ public interface OrderReader {
      */
     List<Order> findByCustomer(UUID customerId, CustomerOrderFilter filter, OrderPosition after, int limit);
 
+    /**
+     * 회원의 배송 완료된 구매 주문(장바구니 · 바로 구매), 최신순((created_at, id) 내림차순).
+     *
+     * @param limit 최대 건수
+     */
+    List<Order> findDeliveredPurchases(UUID customerId, int limit);
+
     /** 관리자 목록, 최신순. 총계를 함께 센다. page 는 0 부터. */
     OffsetPage<Order> findForAdmin(AdminOrderFilter filter, int page, int size);
 

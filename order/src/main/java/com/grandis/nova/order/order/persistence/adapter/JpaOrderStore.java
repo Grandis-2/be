@@ -245,6 +245,17 @@ class JpaOrderStore implements OrderReader, OrderWriter {
                 .stream().map(OrderMapper::toDomain).toList();
     }
 
+    /** 총계를 세지 않는다. */
+    @Override
+    public List<Order> findDeliveredPurchases(UUID customerId, int limit) {
+        return orders.findBy(OrderSpecifications.allOf(
+                                OrderSpecifications.customer(customerId),
+                                OrderSpecifications.statusIn(Set.of(OrderStatus.DELIVERED)),
+                                OrderSpecifications.sourceIn(Set.of(OrderSource.CART, OrderSource.BUY_NOW))),
+                        query -> query.sortBy(OrderSpecifications.NEWEST_FIRST).limit(limit).all())
+                .stream().map(OrderMapper::toDomain).toList();
+    }
+
     @Override
     public OffsetPage<Order> findForAdmin(AdminOrderFilter filter, int page, int size) {
         Page<OrderJpaEntity> found = orders.findAll(OrderSpecifications.allOf(

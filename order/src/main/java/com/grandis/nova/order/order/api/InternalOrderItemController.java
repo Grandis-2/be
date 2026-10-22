@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.UUID;
 
 /**
- * 서비스 간 내부 API — 주문상품. catalog 가 회원의 리뷰 작성 때 그 회원의 토큰을 그대로 싣고(Authorization: Bearer) 부른다.
+ * 서비스 간 내부 API — 주문상품. catalog 가 회원의 리뷰 작성 · 리뷰를 쓸 수 있는 주문상품 목록 때 그 회원의 토큰을 그대로 싣고(Authorization: Bearer) 부른다.
  * 회원(USER)만 받는다 — 관리자 토큰은 403. 계약: contracts/order-internal.md.
  */
 @RestController
@@ -22,6 +22,12 @@ public class InternalOrderItemController {
 
     public InternalOrderItemController(OrderQueryService queryService) {
         this.queryService = queryService;
+    }
+
+    /** 토큰 주인의 배송 완료된 구매 주문(장바구니 · 바로 구매)의 주문상품. 리뷰를 쓸 수 있는 주문상품 목록이 쓴다. */
+    @GetMapping("/delivered")
+    public ApiResponse<InternalDeliveredItemsResponse> delivered(@CurrentCustomerId UUID customerId) {
+        return ApiResponse.ok(InternalDeliveredItemsResponse.from(queryService.findDeliveredPurchaseItems(customerId)));
     }
 
     /** 토큰 주인의 주문상품과 그 주문의 상태 · 출처. 없거나 남의 것이면 404 ORDER_ITEM_NOT_FOUND. */

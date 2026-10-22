@@ -33,6 +33,9 @@ import java.util.stream.Collectors;
 @Transactional(readOnly = true)
 public class OrderQueryService {
 
+    /** 배송 완료된 구매 주문을 한 번에 읽는 상한. 한 회원의 배송 완료 주문이 이보다 많으면 오래된 것은 빠진다. */
+    public static final int DELIVERED_PURCHASES_MAX = 500;
+
     private final OrderReader reader;
 
     public OrderQueryService(OrderReader reader) {
@@ -79,6 +82,26 @@ public class OrderQueryService {
                 .filter(found -> found.customerId().equals(customerId))
                 .orElseThrow(OrderQueryService::itemNotFound);
         return new OrderView.Item(order, item);
+    }
+
+    /**
+     * 내 배송 완료된 구매 주문(장바구니 · 바로 구매)의 주문상품. 주문은 최신순, 한 주문 안은 주문상품 id 순이다. 최근 {@link #DELIVERED_PURCHASES_MAX}
+     * 주문까지만 읽고, 그보다 많으면 truncated 다. catalog 가 리뷰를 쓸 수 있는 주문상품을 고를 때 묻는다 — 판정은 catalog 가 한다.
+     */
+    public DeliveredItems findDeliveredPurchaseItems(UUID customerId) {
+        List<Order> found = new ArrayList<>(reader.findDeliveredPurchases(customerId, DELIVERED_PURCHASES_MAX + 1));
+        boolean truncated = found.size() > DELIVERED_PURCHASES_MAX;
+        if (truncated) {
+            found.removeLast();
+        }
+        List<OrderView.Item> items = withItems(found).stream()
+                .flatMap(summary -> summary.items().stream().map(item -> new OrderView.Item(summary.order(), item)))
+                .toList();
+        return new DeliveredItems(items, truncated);
+    }
+
+    /** @param truncated 최근 {@link #DELIVERED_PURCHASES_MAX} 주문보다 오래된 주문이 더 있어 빠졌다 */
+    public record DeliveredItems(List<OrderView.Item> items, boolean truncated) {
     }
 
     public OffsetPage<OrderView.Summary> findForAdmin(AdminOrderFilter filter, int page, int size) {
