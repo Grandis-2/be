@@ -72,9 +72,13 @@ class AllocationRoundTest {
 
     /** 리더가 바뀌면 새 노드는 빈 기억으로 시작한다. */
     private AllocationRound newRound() {
+        return newRound(CapacityProperties.defaults());
+    }
+
+    private AllocationRound newRound(CapacityProperties capacity) {
         ControlMetrics metrics = new ControlMetrics(meters, leadership,
                 new SnapshotHolder(new RedisClock(Clock.systemUTC()), PROPERTIES));
-        return new AllocationRound(control, new AdmissionProperties(10L, 0.7), AdmissionTicket.of(TestJwts.TOKEN_SECRET, List.of(), null), PROPERTIES, metrics, leadership,
+        return new AllocationRound(control, new AdmissionProperties(10L, 0.7), AdmissionTicket.of(TestJwts.TOKEN_SECRET, List.of(), null), PROPERTIES, capacity, metrics, leadership,
                 new ScheduleResync(control, reason -> failNextResync.compareAndSet(true, false)
                         ? Mono.error(new IllegalStateException("sqs down"))
                         : Mono.fromRunnable(() -> resyncReasons.add(reason)), metrics,
@@ -184,6 +188,98 @@ class AllocationRoundTest {
         assertThat(admitted(productKey(101), 50)).isEqualTo(8);
         assertThat(snapshot.product(productKey(101)).orElseThrow().cap()).isEqualTo(8);
         assertThat(snapshot.meta().globalCredit()).isEqualTo(30);
+    }
+
+    /** preorder 태스크 하나의 용량 행. 마지막 시각은 지금, 처음 시각은 그만큼 전이다. */
+    private void preorderTask(String taskId, long perSecond, Duration upFor) {
+        long nowSec = now.getEpochSecond();
+        redis.opsForHash().put(CapacityProperties.defaults().key(), taskId,
+                nowSec + "|" + (nowSec - upFor.toSeconds()) + "|" + perSecond + "|15").block(WAIT);
+    }
+
+    @Test
+    void 운영값은_상한이고_preorder_용량_합을_넘지_않는다() {
+        schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
+        line(productKey(101), 50);
+        preorderTask("a", 3, Duration.ofMinutes(10));
+        preorderTask("b", 4, Duration.ofSeconds(10));
+
+        GatewaySnapshot snapshot = run(7, 0);
+
+        assertThat(snapshot.meta().globalCredit()).as("운영값(기본 10) 과 용량 합(3 + 갓 뜬 4 의 절반) 중 작은 쪽").isEqualTo(5);
+        assertThat(admitted(productKey(101), 50)).isEqualTo(5);
+        assertThat(snapshot.capacity()).isEqualTo(new CapacityStatus(10, 5, 1, 1));
+        assertThat(SnapshotCodec.decode(control.readSnapshot().block(WAIT).entries()).orElseThrow().capacity())
+                .as("모든 노드가 같은 값을 보이도록 재료에 싣는다").isEqualTo(snapshot.capacity());
+    }
+
+    @Test
+    void 용량_합이_운영값보다_크면_운영값을_쓰고_표시가_없으면_운영값만_쓴다() {
+        schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
+        preorderTask("a", 100, Duration.ofMinutes(10));
+        assertThat(run(7, 0).meta().globalCredit()).isEqualTo(10);
+
+        redis.delete(CapacityProperties.defaults().key()).block(WAIT);
+        GatewaySnapshot snapshot = run(7, 0);
+
+        assertThat(snapshot.meta().globalCredit()).isEqualTo(10);
+        assertThat(snapshot.capacity()).isEqualTo(CapacityStatus.unknown(10));
+    }
+
+    @Test
+    void 브레이크는_용량으로_자른_값을_줄인다() {
+        schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
+        preorderTask("a", 6, Duration.ofMinutes(10));
+        leadership.hold(7, leadership.nanoTime(), Duration.ofHours(1));
+        round.run(7, new ClusterView(1, 0, Map.of("a", new RelayOutcome(0, 0))), 0).block(WAIT);
+
+        GatewaySnapshot snapshot = round.run(7, new ClusterView(1, 0, Map.of("a", new RelayOutcome(30, 15))), 1)
+                .block(WAIT);
+
+        assertThat(snapshot.meta().globalCredit()).as("min(10, 6) × 0.5").isEqualTo(3);
+    }
+
+    @Test
+    void 용량을_읽지_못하면_유예_동안_직전_합을_쓰고_직전_값이_없으면_운영값을_쓴다() {
+        schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
+        preorderTask("a", 4, Duration.ofMinutes(10));
+        assertThat(run(7, 0).meta().globalCredit()).isEqualTo(4);
+        breakCapacity();
+
+        assertThat(run(7, 0).meta().globalCredit()).as("유예(15초) 안").isEqualTo(4);
+        assertThat(meters.get("waitingroom.control.failures").tag("loop", "capacity").counter().count()).isEqualTo(1);
+
+        round = newRound();
+        assertThat(run(7, 0).meta().globalCredit()).as("새 리더는 직전 값이 없다").isEqualTo(10);
+    }
+
+    @Test
+    void 용량을_읽지_못한_채_유예가_지나면_운영값으로_돌아간다() {
+        schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
+        preorderTask("a", 4, Duration.ofMinutes(10));
+        round = newRound(new CapacityProperties(null, null, null, null, Duration.ofMillis(1)));
+        assertThat(run(7, 0).meta().globalCredit()).isEqualTo(4);
+        breakCapacity();
+
+        // 유예는 Redis 시각으로 잰다 — 같은 호스트의 벽시계로 넉넉히 넘긴다
+        long until = System.currentTimeMillis() + 50;
+        await(() -> System.currentTimeMillis() >= until);
+
+        assertThat(run(7, 0).meta().globalCredit()).isEqualTo(10);
+    }
+
+    /** 해시가 아니면 HGETALL 이 실패한다. */
+    private void breakCapacity() {
+        redis.opsForValue().set(CapacityProperties.defaults().key(), "broken").block(WAIT);
+    }
+
+    @Test
+    void 끄면_용량_표시를_읽지_않는다() {
+        schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
+        preorderTask("a", 4, Duration.ofMinutes(10));
+        round = newRound(new CapacityProperties(false, null, null, null, null));
+
+        assertThat(run(7, 0).capacity()).isEqualTo(CapacityStatus.unknown(10));
     }
 
     @Test

@@ -30,6 +30,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 /**
@@ -45,6 +46,7 @@ class AllocationRound {
     private final FairShareAllocator allocator = new FairShareAllocator();
     private final AdmissionProperties admission;
     private final ControlPlaneProperties properties;
+    private final CapacityProperties capacity;
     private final ControlMetrics metrics;
     private final Leadership leadership;
     private final ScheduleResync resync;
@@ -61,28 +63,34 @@ class AllocationRound {
     private final AtomicBoolean tidyFailing = new AtomicBoolean();
     private final AtomicBoolean retireFailing = new AtomicBoolean();
     private final AtomicBoolean tombstoneFailing = new AtomicBoolean();
+    private final AtomicBoolean capacityFailing = new AtomicBoolean();
+    /** 마지막으로 읽은 preorder 용량. 읽기에 실패하면 유예 동안 이 값을 쓴다. */
+    private final AtomicReference<CapacityReading> lastCapacity =
+            new AtomicReference<>(new CapacityReading(Optional.empty(), Long.MIN_VALUE));
 
     AllocationRound(ControlStore store, AdmissionProperties admission, AdmissionTicket tickets,
-                    ControlPlaneProperties properties, ControlMetrics metrics, Leadership leadership, ScheduleResync resync,
-                    Brake brake) {
+                    ControlPlaneProperties properties, CapacityProperties capacity, ControlMetrics metrics,
+                    Leadership leadership, ScheduleResync resync, Brake brake) {
         this.brake = brake;
         this.retentionSec = GraceRetention.seconds(tickets.ttlSec());
         this.resync = resync;
         this.store = store;
         this.admission = admission;
         this.properties = properties;
+        this.capacity = capacity;
         this.metrics = metrics;
         this.leadership = leadership;
     }
 
     /** @return 옛 임기라 막혔으면 {@link LostLeadershipException} 으로 끝난다 */
     Mono<GatewaySnapshot> run(long fence, ClusterView cluster, long tick) {
-        return Mono.zip(store.readProducts(), store.readSettings())
+        return Mono.zip(store.readProducts(), store.readSettings(), capacityRows())
                 .flatMap(read -> {
                     TimedEntries products = read.getT1();
                     Instant readAt = Instant.ofEpochMilli(products.redisNowMillis());
                     OperationalSettings settings = OperationalSettings.from(read.getT2(), admission.globalCredit(),
                             admission.productCap(), admission.maxGlobalCredit());
+                    Optional<PreorderCapacity> preorder = capacity(read.getT3(), products.redisNowMillis());
                     Map<String, Schedule> schedules = schedules(products.entries());
                     // 쓸 수 있는 일정이 하나도 없으면(비었거나 깨진 값 · 은퇴 표식만) 놓친 회차가 있을 수 있다.
                     // 일정을 알아도 메시지 하나를 놓쳤을 수 있어 드물게는 다시 요청한다
@@ -101,16 +109,52 @@ class AllocationRound {
                                     ? Mono.just(new Row(key, schedules.get(key), RETIRED))
                                     : store.depth(key).map(depth -> new Row(key, schedules.get(key), depth)))
                             .collectList()
-                            .flatMap(rows -> allocate(fence, cluster, tick, products.redisNowMillis(), settings, rows))
+                            .flatMap(rows -> allocate(fence, cluster, tick, products.redisNowMillis(), settings, preorder, rows))
                             .flatMap(snapshot -> dropOldTombstones(products.entries(), readAt).thenReturn(snapshot));
                 });
     }
 
     private Mono<GatewaySnapshot> allocate(long fence, ClusterView cluster, long tick, long nowMillis,
-                                           OperationalSettings settings, List<Row> rows) {
+                                           OperationalSettings settings, Optional<PreorderCapacity> preorder,
+                                           List<Row> rows) {
         Instant now = Instant.ofEpochMilli(nowMillis);
         return brakeFactor(fence, cluster, now)
-                .flatMap(factor -> allocate(fence, cluster, tick, nowMillis, settings, rows, factor));
+                .flatMap(factor -> allocate(fence, cluster, tick, nowMillis, settings, preorder, rows, factor));
+    }
+
+    /** 읽기 실패는 빈 값 — 배분은 멈추지 않고 직전 용량이나 운영값으로 돈다. 꺼져 있으면 표시가 없는 것과 같다. */
+    private Mono<Optional<Map<String, String>>> capacityRows() {
+        if (!capacity.enabled()) {
+            return Mono.just(Optional.of(Map.of()));
+        }
+        return store.readCapacity(capacity.key()).map(Optional::of)
+                .onErrorResume(e -> {
+                    if (capacityFailing.compareAndSet(false, true)) {
+                        log.warn("preorder 용량을 읽지 못했다 — 마지막으로 읽은 지 {}초 안이면 그 값, 아니면 운영값으로 배분한다: {}",
+                                capacity.readFailureGrace().toSeconds(), e.toString());
+                    }
+                    return Mono.just(Optional.empty());
+                });
+    }
+
+    private Optional<PreorderCapacity> capacity(Optional<Map<String, String>> rows, long nowMillis) {
+        if (rows.isEmpty()) {
+            metrics.loopFailed("capacity");
+            CapacityReading last = lastCapacity.get();
+            return last.atMillis() != Long.MIN_VALUE && nowMillis - last.atMillis() <= capacity.readFailureGrace().toMillis()
+                    ? last.value() : Optional.empty();
+        }
+        if (capacityFailing.compareAndSet(true, false)) {
+            log.info("preorder 용량 읽기 회복");
+        }
+        Optional<PreorderCapacity> read = PreorderCapacity.of(rows.get(), nowMillis / 1000, capacity,
+                admission.maxGlobalCredit());
+        lastCapacity.set(new CapacityReading(read, nowMillis));
+        return read;
+    }
+
+    /** @param atMillis 읽은 Redis 시각. 아직 읽은 적이 없으면 Long.MIN_VALUE */
+    private record CapacityReading(Optional<PreorderCapacity> value, long atMillis) {
     }
 
     /** 새 임기면 Redis 에 발행된 판정 재료의 배율에서 이어 간다 — 이 노드가 아직 재료를 못 받았어도 풀지 않게. */
@@ -123,14 +167,16 @@ class AllocationRound {
     }
 
     private Mono<GatewaySnapshot> allocate(long fence, ClusterView cluster, long tick, long nowMillis,
-                                           OperationalSettings settings, List<Row> rows, double brakeFactor) {
+                                           OperationalSettings settings, Optional<PreorderCapacity> preorder,
+                                           List<Row> rows, double brakeFactor) {
         Instant now = Instant.ofEpochMilli(nowMillis);
         List<ProductDemand> demands = rows.stream()
                 .map(row -> new ProductDemand(row.key(), row.depth().waiting(), settings.capOf(row.key()),
                         row.schedule().visible() && row.schedule().window().phaseAt(now) == SalesPhase.OPEN))
                 .toList();
-        // 브레이크는 운영값을 줄이기만 한다. 노드들이 쓰는 전역 속도(meta)도 줄인 값이다
-        long globalCredit = Brake.apply(settings.globalCredit(), brakeFactor);
+        // 운영값은 상한이고 preorder 용량 합을 넘지 않는다. 브레이크는 그 값을 줄이기만 한다 — 노드들이 쓰는 전역 속도(meta)는 줄인 값이다
+        long ceiling = preorder.map(found -> Math.min(settings.globalCredit(), found.sum())).orElse(settings.globalCredit());
+        long globalCredit = Brake.apply(ceiling, brakeFactor);
         long pool = Math.max(0, globalCredit - cluster.idlePassSum());
         Map<String, Long> grants = allocator.allocate(pool, demands, tick).stream()
                 .collect(Collectors.toMap(Grant::productKey, Grant::credit));
@@ -142,7 +188,8 @@ class AllocationRound {
                 .flatMap(states -> {
                     GatewaySnapshot snapshot = new GatewaySnapshot(states,
                             new SnapshotMeta(globalCredit, cluster.aliveGateways(), settings.maxWait(),
-                                    settings.leaveGrace()), nowMillis, brakeFactor);
+                                    settings.leaveGrace()), nowMillis, brakeFactor,
+                            CapacityStatus.of(settings.globalCredit(), preorder));
                     return store.publishSnapshot(fence, properties.fenceTtl().toMillis(), SnapshotCodec.encode(snapshot))
                             .flatMap(published -> published ? Mono.just(snapshot) : Mono.error(new LostLeadershipException()));
                 })

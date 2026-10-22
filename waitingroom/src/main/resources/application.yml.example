@@ -24,6 +24,13 @@ waitingroom:
   # 관리자가 올릴 수 있는 입장 속도(초당 입장 인원)의 최댓값. 기본 1500, preorder 대수를 바꾸면 같이 바꾼다
   # admission:
   #   max-global-credit: 1500
+  # 전역 입장 속도는 운영값과 preorder 태스크 용량 합(contracts/preorder-capacity-heartbeat.md) 중 작은 쪽이다.
+  # 운영값은 "허용할 최대" 로 둔다 — 낮게 두면 preorder 를 늘려도 입장이 늘지 않는다. 아래는 기본값
+  # capacity:
+  #   enabled: true
+  #   warmup: 2m            # 갓 뜬 태스크로 보는 기간
+  #   warmup-share: 0.5     # 그동안 용량에 곱할 비율
+  #   read-failure-grace: 15s
   relay:
     # preorder 주소(VPC 안 Cloud Map). 접수 POST 만 이리로 전달한다
     preorder-uri: http://preorder.ureca.local:8083
