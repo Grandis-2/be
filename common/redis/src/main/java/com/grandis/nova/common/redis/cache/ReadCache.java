@@ -24,6 +24,7 @@ import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -293,23 +294,10 @@ public final class ReadCache {
             Instant start = clock.instant();
             return new Entry<>(loader.apply(LoadPath.BYPASS), start);
         }
-        // 본 번호는 세대를 읽기 전에 꺼낸다 — 읽은 뒤 꺼내면 그사이 다른 스레드가 더 큰 번호를 본 것과 섞여, 정상 올리기 뒤에도 되돌아간 것으로 본다
-        Long seenBefore = highestGenerations.get(generation);
-        Long current = call(() -> currentGeneration(generation));
+        Long current = readGeneration(generation);
         if (current == null) {
             return bypass(spec, generation, null, id, loader, storable);
         }
-        if (!pendingBumps.isEmpty() && retryPendingBumps(generation)) {
-            current = call(() -> currentGeneration(generation));   // 방금 올린 세대 — 새 번호로 읽는다
-            if (current == null) {
-                return bypass(spec, generation, null, id, loader, storable);
-            }
-        }
-        current = raiseIfRolledBack(generation, seenBefore, current);
-        if (current == null) {
-            return bypass(spec, generation, null, id, loader, storable);
-        }
-        highestGenerations.merge(generation, current, Math::max);
         releaseOlderGenerations(spec, generation, current);
         String key = prefix + spec.name() + ":" + FORMAT + "." + spec.fingerprint() + ":" + generation + "." + current + ":" + id;
         String cached;
@@ -348,6 +336,49 @@ public final class ReadCache {
     private <T> Entry<T> bypass(Spec<T> spec, String generation, Long current, String id, Function<LoadPath, T> loader, Predicate<T> storable) {
         String slot = "down|" + spec.name() + ":" + generation + (current == null ? "" : "." + current) + ":" + id;
         return load(slot, null, spec, loader, storable, generation, -1, false);
+    }
+
+    /**
+     * 그 세대의 지금 번호 — 조회({@link #entry})가 키에 넣는 번호와 같다(미룬 올리기 · 복원 감지를 같이 거친다). 이 클래스 밖에 두는 캐시(인스턴스 메모리)가
+     * 같은 비우기를 따를 때 키에 넣는다. 끈 캐시이거나 Redis 에서 못 읽으면(실패 · 차단기 열림) 비어 있다 — 그때는 캐시하지 않고 원천을 읽는다.
+     */
+    public OptionalLong generation(String generation) {
+        if (!enabled) {
+            return OptionalLong.empty();
+        }
+        Long current = readGeneration(generation);
+        return current == null ? OptionalLong.empty() : OptionalLong.of(current);
+    }
+
+    /**
+     * 이 인스턴스가 그 세대에서 본 가장 큰 번호 — Redis 를 부르지 않는다. 본 적 없으면 비어 있다. {@link #generation} 을 못 읽을 때 바깥 캐시가
+     * 마지막으로 본 키로만 찾을 때 쓴다(그동안의 올리기는 모른다 — 그 캐시의 TTL 이 늦게 보이는 상한이다).
+     */
+    public OptionalLong lastSeenGeneration(String generation) {
+        Long seen = highestGenerations.get(generation);
+        return seen == null ? OptionalLong.empty() : OptionalLong.of(seen);
+    }
+
+    /** 세대의 지금 번호를 읽는다 — 못 읽으면 null. 미룬 올리기를 먼저 해 보고, 본 번호보다 작으면(복원) 올려서 읽는다. */
+    private Long readGeneration(String generation) {
+        // 본 번호는 세대를 읽기 전에 꺼낸다 — 읽은 뒤 꺼내면 그사이 다른 스레드가 더 큰 번호를 본 것과 섞여, 정상 올리기 뒤에도 되돌아간 것으로 본다
+        Long seenBefore = highestGenerations.get(generation);
+        Long current = call(() -> currentGeneration(generation));
+        if (current == null) {
+            return null;
+        }
+        if (!pendingBumps.isEmpty() && retryPendingBumps(generation)) {
+            current = call(() -> currentGeneration(generation));   // 방금 올린 세대 — 새 번호로 읽는다
+            if (current == null) {
+                return null;
+            }
+        }
+        current = raiseIfRolledBack(generation, seenBefore, current);
+        if (current == null) {
+            return null;
+        }
+        highestGenerations.merge(generation, current, Math::max);
+        return current;
     }
 
     /**

@@ -465,6 +465,28 @@ class LocalReadCacheTest {
         }
     }
 
+    @Test
+    @DisplayName("peek 은 지금 든 값만 꺼낸다 — 원천을 부르지 않고 넣지 않는다. 없거나 · 비운 뒤(비우기 전 세대) · TTL 이 지났으면 null, 꺼 두면 늘 null")
+    void peekOnlyReadsWhatIsHeld() {
+        MutableClock clock = new MutableClock(NOW);
+        LocalReadCache<String, String> cache = new LocalReadCache<>("test", Duration.ofSeconds(5), 1024, String::length, clock, true);
+        assertThat(cache.peek("k")).as("없음").isNull();
+        assertThat(cache.peek("k")).as("peek 은 넣지 않는다").isNull();
+
+        cache.entry("k", () -> load("v"));
+        assertThat(cache.peek("k").value()).isEqualTo("v");
+        assertThat(loads.get()).as("원천은 entry 의 한 번뿐").isEqualTo(1);
+
+        clock.advance(Duration.ofSeconds(5));
+        assertThat(cache.peek("k")).as("TTL 이 지났다").isNull();
+
+        cache.invalidateAll();   // 세대 1
+        // 비우기 전(세대 0)에 시작한 조회가 늦게 넣은 값
+        cache.cache().put("k", new LocalReadCache.Loaded<>(new ReadCache.Entry<>("옛 세대", clock.instant()), 0, 1, Duration.ofSeconds(5).toNanos()));
+        assertThat(cache.peek("k")).as("비우기 전 세대").isNull();
+        assertThat(cache(false, 1024).peek("k")).as("꺼 둠").isNull();
+    }
+
     private LocalReadCache<String, String> cache(boolean enabled, long maximumWeight) {
         return new LocalReadCache<>("test", Duration.ofSeconds(5), maximumWeight, String::length, Clock.fixed(NOW, ZoneOffset.UTC), enabled);
     }

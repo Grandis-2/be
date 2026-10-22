@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 세대 키가 사라지거나 되돌아갈 때(스냅샷 복원 · 사람이 지움) — 옛 세대의 값을 다시 내지 않고, 옛 몫을 정리하는지.
@@ -293,6 +294,60 @@ class ReadCacheGenerationTest {
         thread.start();
         assertThat(template.read.await(10, TimeUnit.SECONDS)).as("세대 GET 에 이르렀다").isTrue();
         return thread;
+    }
+
+    @Test
+    @DisplayName("밖에서 읽는 세대 번호(generation)는 조회가 키에 넣는 번호와 같다 — 올리면 늘고, 되돌아가면 본 번호보다 크게, 끈 캐시 · Redis 실패면 비어 있다")
+    void generationMatchesWhatLookupsUse() {
+        redis.opsForValue().set(GENERATION, "5");
+        ReadCache cache = new ReadCache(redis, JSON, "svc");
+        ReadCache.Spec<Item> spec = cache.spec("item", Item.class, Duration.ofMinutes(10));
+        assertThat(cache.generation("products")).hasValue(5);
+        cache.get(spec, "products", "1", () -> new Item("v"));
+        assertThat(redis.keys("svc:cache:item:*")).singleElement().asString().contains(":products.5:");
+
+        cache.bumpNow("products");
+        assertThat(cache.generation("products")).as("올린 뒤").hasValue(6);
+
+        redis.opsForValue().set(GENERATION, "2");   // 복원으로 되돌아갔다
+        assertThat(cache.generation("products")).as("본 번호(6)보다 크게 올려 읽는다").hasValue(7);
+        assertThat(generation()).isEqualTo(7);
+
+        assertThat(ReadCache.off(redis, JSON, "svc").generation("products")).as("끈 캐시").isEmpty();
+        cache.breaker().transitionToForcedOpenState();
+        try {
+            assertThat(cache.generation("products")).as("차단기 열림").isEmpty();
+        } finally {
+            cache.breaker().transitionToClosedState();
+        }
+        redis.opsForValue().set(GENERATION, "not-a-number");
+        assertThat(cache.generation("products")).as("못 읽음").isEmpty();
+    }
+
+    @Test
+    @DisplayName("마지막으로 본 세대 번호는 Redis 를 부르지 않는다 — 본 적 없으면 비어 있고, 읽은 뒤에는 그 번호, Redis 를 못 써도 그대로다")
+    void lastSeenGenerationNeedsNoRedis() {
+        redis.opsForValue().set(GENERATION, "5");
+        ReadCache cache = new ReadCache(redis, JSON, "svc");
+        assertThat(cache.lastSeenGeneration("products")).as("본 적 없음").isEmpty();
+        assertThat(cache.generation("products")).hasValue(5);
+        assertThat(cache.lastSeenGeneration("products")).hasValue(5);
+
+        redis.opsForValue().set(GENERATION, "not-a-number");
+        assertThat(cache.generation("products")).as("지금은 못 읽는다").isEmpty();
+        assertThat(cache.lastSeenGeneration("products")).as("마지막으로 본 번호").hasValue(5);
+    }
+
+    @Test
+    @DisplayName("밖에서 세대 번호를 읽을 때도 미룬 올리기를 먼저 한다 — 올리지 못한 세대가 복구 뒤 첫 읽기에서 올라 그 번호를 준다")
+    void generationRetriesPendingBumps() {
+        redis.opsForValue().set(GENERATION, "not-a-number");   // INCR 이 실패한다
+        ReadCache cache = new ReadCache(redis, JSON, "svc");
+        assertThatThrownBy(() -> cache.bumpNow("products")).as("못 올리면 던지고 미룬다").isInstanceOf(IllegalStateException.class);
+
+        redis.opsForValue().set(GENERATION, "10");   // 복구
+        assertThat(cache.generation("products")).as("미룬 올리기가 먼저 돈다").hasValue(11);
+        assertThat(cache.generation("products")).as("한 번만").hasValue(11);
     }
 
     private static void resume(PausingRedisTemplate template, Thread thread) throws InterruptedException {

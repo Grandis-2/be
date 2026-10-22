@@ -48,6 +48,7 @@ class CatalogReadCacheApiTest {
     @Autowired StringRedisTemplate redis;
     @Autowired ProductReviewRepository reviews;
     @Autowired CatalogLocalCaches local;
+    @Autowired com.grandis.nova.common.redis.cache.ReadCache readCache;
     @Autowired java.util.List<com.grandis.nova.catalog.event.CatalogEventHandler> handlers;
 
     ShopFixtures fixtures;
@@ -66,6 +67,7 @@ class CatalogReadCacheApiTest {
         local.productList().invalidateAll();
         local.productRanking().invalidateAll();
         local.categoryTree().invalidateAll();
+        local.promotionCards().invalidateAll();
     }
 
     /** 메모리 캐시에 든 키 수(정리 뒤). */
@@ -256,7 +258,7 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
-    @DisplayName("홍보 — 본문은 캐시에서(DB 를 직접 고쳐도 옛 값), 관리자가 고치면 바로 새 값, 상품 카드(회차 · 할인가)는 요청마다 읽는다")
+    @DisplayName("홍보 — 본문은 캐시에서(DB 를 직접 고쳐도 옛 값), 관리자가 고치면 바로 새 값. 상품 카드(할인가)는 메모리에 5초, 접수 단계는 요청마다")
     void promotionBodyCachedCardsLive() throws Exception {
         java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
         UUID productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", "홍보 상품", "t");
@@ -280,9 +282,13 @@ class CatalogReadCacheApiTest {
 
         JsonNode second = data(mockMvc.perform(get("/api/v1/promotions/{id}", promotionId)).andExpect(status().isOk()));
         assertThat(second.get("name").asString()).as("본문은 캐시에서").isEqualTo("첫 이름");
-        assertThat(second.get("products").get(0).get("preorderStatus").asString()).isEqualTo("CLOSED");
-        assertThat(second.get("products").get(0).get("minPrice").decimalValue()).isEqualByComparingTo("500000");
+        assertThat(second.get("products").get(0).get("preorderStatus").asString()).as("회차는 카드 캐시 밖 — 조기 마감이 바로").isEqualTo("CLOSED");
+        assertThat(second.get("products").get(0).get("minPrice").decimalValue()).as("카드는 메모리에서 — DB 를 직접 고친 할인가는 TTL 안에서 옛 값")
+                .isEqualByComparingTo("1000000");
         assertThat(titlesOfPromotions()).contains("첫 이름");
+        Thread.sleep(CatalogReadCache.PRODUCT_TTL.toMillis() + 300);
+        assertThat(data(mockMvc.perform(get("/api/v1/promotions/{id}", promotionId))).get("products").get(0).get("minPrice").decimalValue())
+                .as("TTL 이 지나면 새 할인가").isEqualByComparingTo("500000");
 
         admin(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/v1/admin/promotions/{id}", promotionId),
                 body.replace("첫 이름", "고친 이름")).andExpect(status().isOk());
@@ -399,6 +405,159 @@ class CatalogReadCacheApiTest {
         assertThat(rankingTitles()).as("메모리의 옛 카드 — 캐시가 켜져 있다").containsExactlyInAnyOrder("랭킹 유지", "랭킹 숨김");
         admin(patch(ADMIN + "/{id}/visibility", hidden), "{ \"visible\": false }").andExpect(status().isOk());
         assertThat(rankingTitles()).as("숨긴 상품은 바로 빠지고, 다시 읽어 직접 고친 값도 보인다").containsExactly("직접 고침");
+    }
+
+    @Test
+    @DisplayName("홍보 카드는 인스턴스 메모리에서 — DB 를 직접 고쳐도 옛 카드, Redis 가 멈춰도(세대를 못 읽음) 마지막 세대의 카드. 관리자가 상품을 숨기면(JPA) 바로 빠진다")
+    void promotionCardsAreServedFromMemory() throws Exception {
+        java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
+        UUID productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", "홍보 카드", "t");
+        fixtures.registration(productId);
+        fixtures.option(productId, "ACTIVE");
+        Instant now = Instant.now();
+        fixtures.campaign(productId, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
+        String body = """
+                { "name": "카드 홍보", "startDate": "%s", "endDate": "%s", "thumbnailUrl": "https://img/t.jpg", "detailImageUrls": [], "productIds": ["%s"] }
+                """.formatted(today, today, productId);
+        UUID promotionId = UUID.fromString(data(admin(post("/api/v1/admin/promotions").header("Idempotency-Key", "k-" + ShopFixtures.unique()), body)
+                .andExpect(status().isCreated())).get("promotionId").asString());
+        long loaded = System.nanoTime();   // 첫 적재 전 — 마지막 조회까지 이 안이어야 만료가 아니라 세대로 빠진 것이다
+        assertThat(promotionCardTitles(promotionId)).containsExactly("홍보 카드");
+        jdbcTemplate.update("UPDATE products SET title = '직접 고침' WHERE id = ?", (Object) UuidBinary.toBytes(productId));
+
+        assertThat(promotionCardTitles(promotionId)).as("메모리의 옛 카드 — 캐시가 켜져 있다").containsExactly("홍보 카드");
+        RedisContainerConfig.pause();
+        try {
+            assertThat(promotionCardTitles(promotionId)).as("세대를 못 읽으면 마지막으로 본 세대의 메모리 카드 — DB 로 가지 않는다").containsExactly("홍보 카드");
+        } finally {
+            RedisContainerConfig.unpause();
+        }
+        // 대조 — Redis 가 돌아오면 같은 세대의 메모리 카드(멈추기 전 것)가 아직 나온다
+        assertThat(promotionCardTitles(promotionId)).as("같은 세대의 메모리 카드").containsExactly("홍보 카드");
+        admin(patch(ADMIN + "/{id}/visibility", productId), "{ \"visible\": false }").andExpect(status().isOk());
+        assertThat(promotionCardTitles(promotionId)).as("숨긴 상품은 바로 빠진다").isEmpty();
+        assertThat(Duration.ofNanos(System.nanoTime() - loaded)).as("첫 적재부터 TTL 안 — 만료가 아니라 세대로 빠졌다")
+                .isLessThan(CatalogReadCache.PRODUCT_TTL);
+    }
+
+    @Test
+    @DisplayName("다른 인스턴스가 상품을 숨겨도(상품 세대만 오름) 이 인스턴스의 메모리 카드에서 바로 빠진다 — 카드 키에 상품 세대 번호가 있다")
+    void promotionCardsFollowProductGenerationAcrossInstances() throws Exception {
+        UUID productId = preorderProduct("다른 인스턴스");
+        UUID promotionId = promotionOf(productId, "세대 홍보");
+        long loaded = System.nanoTime();   // 첫 적재 전 — 마지막 조회까지 이 안이어야 만료가 아니라 세대로 빠진 것이다
+        assertThat(promotionCardTitles(promotionId)).containsExactly("다른 인스턴스");
+        jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", (Object) UuidBinary.toBytes(productId));   // 이 인스턴스는 모른다
+        assertThat(promotionCardTitles(promotionId)).as("세대가 그대로면 메모리의 카드").containsExactly("다른 인스턴스");
+
+        readCache.bumpNow(CatalogReadCache.PRODUCTS);   // 숨긴 쪽 인스턴스가 커밋 뒤 올린 세대
+        assertThat(promotionCardTitles(promotionId)).as("세대가 오르면 바로 빠진다").isEmpty();
+        assertThat(Duration.ofNanos(System.nanoTime() - loaded)).as("첫 적재부터 TTL 안 — 만료가 아니라 세대로 빠졌다")
+                .isLessThan(CatalogReadCache.PRODUCT_TTL);
+    }
+
+    @Test
+    @DisplayName("Redis 장애 중에 관리자가 상품을 숨겨도(세대 올리기는 미뤄짐) 쓴 이 인스턴스의 홍보 카드에서는 바로 빠진다 — 마지막 세대의 카드도 버린다")
+    void hiddenDuringRedisOutageLeavesThisInstanceAtOnce() throws Exception {
+        UUID productId = preorderProduct("장애 중 숨김");
+        UUID promotionId = promotionOf(productId, "장애 중 홍보");
+        long loaded = System.nanoTime();   // 첫 적재 전 — 마지막 조회까지 이 안이어야 만료가 아니라 비우기로 빠진 것이다
+        assertThat(promotionCardTitles(promotionId)).containsExactly("장애 중 숨김");
+        RedisContainerConfig.pause();
+        try {
+            assertThat(promotionCardTitles(promotionId)).as("장애 중엔 마지막 세대의 메모리 카드").containsExactly("장애 중 숨김");
+            admin(patch(ADMIN + "/{id}/visibility", productId), "{ \"visible\": false }").andExpect(status().isOk());
+            assertThat(promotionCardTitles(promotionId)).as("쓴 인스턴스는 바로 빠진다").isEmpty();
+        } finally {
+            RedisContainerConfig.unpause();
+        }
+        assertThat(Duration.ofNanos(System.nanoTime() - loaded)).as("첫 적재부터 TTL 안 — 만료가 아니라 비우기로 빠졌다")
+                .isLessThan(CatalogReadCache.PRODUCT_TTL);
+    }
+
+    @Test
+    @DisplayName("빈 홍보 카드(묶은 상품이 모두 숨김)는 넣지 않는다 — DB 로 다시 공개하면 TTL 을 기다리지 않고 바로 보인다")
+    void emptyPromotionCardsAreNotCached() throws Exception {
+        java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
+        UUID productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", "숨긴 카드", "t");
+        fixtures.registration(productId);
+        fixtures.option(productId, "ACTIVE");
+        Instant now = Instant.now();
+        fixtures.campaign(productId, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
+        String body = """
+                { "name": "빈 홍보", "startDate": "%s", "endDate": "%s", "thumbnailUrl": "https://img/t.jpg", "detailImageUrls": [], "productIds": ["%s"] }
+                """.formatted(today, today, productId);
+        UUID promotionId = UUID.fromString(data(admin(post("/api/v1/admin/promotions").header("Idempotency-Key", "k-" + ShopFixtures.unique()), body)
+                .andExpect(status().isCreated())).get("promotionId").asString());
+        jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", (Object) UuidBinary.toBytes(productId));
+        assertThat(promotionCardTitles(promotionId)).isEmpty();
+
+        jdbcTemplate.update("UPDATE products SET visible = 1 WHERE id = ?", (Object) UuidBinary.toBytes(productId));
+        assertThat(promotionCardTitles(promotionId)).as("빈 결과는 캐시에 없다").containsExactly("숨긴 카드");
+    }
+
+    @Test
+    @DisplayName("홍보 목록 · 상세의 max-age 는 메모리에서 묵은 카드의 나이만큼 줄어든다 — 본문(10분)이 아니라 카드(5초) 기준이라 앞단과 합쳐도 5초를 넘지 않게")
+    void promotionMaxAgeFollowsCardAge() throws Exception {
+        UUID productId = preorderProduct("나이 카드");
+        UUID promotionId = promotionOf(productId, "나이 홍보");
+        assertThat(maxAge(get("/api/v1/promotions/{id}", promotionId))).isBetween(4L, 5L);
+        assertThat(maxAge(get("/api/v1/promotions"))).isBetween(4L, 5L);
+        Thread.sleep(2_100);
+        assertThat(maxAge(get("/api/v1/promotions/{id}", promotionId))).as("상세").isBetween(1L, 2L);
+        assertThat(maxAge(get("/api/v1/promotions"))).as("목록").isBetween(1L, 2L);
+    }
+
+    @Test
+    @DisplayName("홍보 목록(색상칩 없이)을 먼저 채워도 상세는 색상칩이 든 카드를 받는다 — 칩 여부가 키에 들어간다")
+    void promotionCardsKeyIncludesColors() throws Exception {
+        UUID productId = preorderProduct("칩 카드");
+        jdbcTemplate.update("UPDATE products SET options = ? WHERE id = ?", """
+                {"axes": [{"key": "color", "label": "색상", "values": [
+                  {"id": "c1", "value": "화이트", "normalized": "화이트", "hex": "#FFFFFF", "surcharge": 0, "images": [{"url": "https://img/w.jpg", "primary": true}]}]}]}
+                """, UuidBinary.toBytes(productId));
+        fixtures.optionWithAttributes(productId, "ACTIVE", new java.math.BigDecimal("1250000"), "화이트", "{\"color\": \"화이트\"}");
+        UUID promotionId = promotionOf(productId, "칩 홍보");
+        // 오늘 보이는 홍보를 이것 하나로 — 그래야 목록의 카드 키(오늘 홍보 전부의 상품)가 상세의 키(이 홍보의 상품)와 상품이 같아진다.
+        // 다른 시험이 남긴 홍보의 기간을 잠시 옮기고 끝에 되돌린다
+        java.util.List<java.util.Map<String, Object>> others = jdbcTemplate.queryForList(
+                "SELECT id, start_date, end_date FROM promotions WHERE id <> ?", (Object) UuidBinary.toBytes(promotionId));
+        jdbcTemplate.update("UPDATE promotions SET start_date = '2000-01-01', end_date = '2000-01-01' WHERE id <> ?", (Object) UuidBinary.toBytes(promotionId));
+        try {
+            mockMvc.perform(get("/api/v1/promotions")).andExpect(status().isOk());   // 색상칩 없는 카드로 먼저 채운다
+
+            JsonNode card = data(mockMvc.perform(get("/api/v1/promotions/{id}", promotionId)).andExpect(status().isOk())).get("products").get(0);
+            assertThat(card.get("colors").findValues("label").stream().map(JsonNode::asString).toList()).contains("화이트");
+        } finally {
+            for (java.util.Map<String, Object> row : others) {
+                jdbcTemplate.update("UPDATE promotions SET start_date = ?, end_date = ? WHERE id = ?", row.get("start_date"), row.get("end_date"), row.get("id"));
+            }
+        }
+    }
+
+    /** 공개 · 판매 준비된 사전예약(옵션 하나 · 지금 접수 중인 회차). */
+    private UUID preorderProduct(String title) {
+        UUID productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", title, "t");
+        fixtures.registration(productId);
+        fixtures.option(productId, "ACTIVE");
+        Instant now = Instant.now();
+        fixtures.campaign(productId, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
+        return productId;
+    }
+
+    /** 오늘 보이는 홍보 하나를 관리자 API 로 만든다. */
+    private UUID promotionOf(UUID productId, String name) throws Exception {
+        java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
+        String body = """
+                { "name": "%s", "startDate": "%s", "endDate": "%s", "thumbnailUrl": "https://img/t.jpg", "detailImageUrls": [], "productIds": ["%s"] }
+                """.formatted(name, today, today, productId);
+        return UUID.fromString(data(admin(post("/api/v1/admin/promotions").header("Idempotency-Key", "k-" + ShopFixtures.unique()), body)
+                .andExpect(status().isCreated())).get("promotionId").asString());
+    }
+
+    private java.util.List<String> promotionCardTitles(UUID promotionId) throws Exception {
+        return data(mockMvc.perform(get("/api/v1/promotions/{id}", promotionId)).andExpect(status().isOk())).get("products").findValues("title")
+                .stream().map(JsonNode::asString).toList();
     }
 
     private java.util.List<String> rankingTitles() throws Exception {
