@@ -24,4 +24,8 @@ public record CachedCampaign(CampaignSchedule schedule, boolean visible, Product
     public boolean accepting(Instant now) {
         return opened(now) && now.isBefore(schedule.closesAt());
     }
+
+    public CampaignForAccept forAccept() {
+        return CampaignForAccept.of(schedule, visible, productStatus);
+    }
 }

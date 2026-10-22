@@ -10,6 +10,7 @@ import com.grandis.nova.preorder.support.PreorderCancels;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 import com.grandis.nova.preorder.support.ShopFixtures;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -56,6 +57,9 @@ class AcceptPreorderApiTest {
 
     @Autowired
     TransactionTemplate transactionTemplate;
+
+    @Autowired
+    MeterRegistry meterRegistry;
 
     @MockitoBean
     CatalogClient catalogClient;
@@ -286,6 +290,44 @@ class AcceptPreorderApiTest {
                 ticket(product.productId(), customerId))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("PRODUCT_OPTION_NOT_FOUND"));
+    }
+
+    @Test
+    void catalog_캐시가_판매_중이라도_회차_행이_판매_중지_비공개면_404() throws Exception {
+        PreorderProduct paused = fixtures.openPreorderProduct();
+        catalogReturns(paused.productId(), "PREORDER", "ACTIVE", paused.optionId(), "ACTIVE");
+        fixtures.listing(paused.productId(), "모델", "PAUSED", true);
+        accept(customerId, paused.productId(), paused.optionId(), "key-row-paused",
+                ticket(paused.productId(), customerId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
+
+        PreorderProduct hidden = fixtures.openPreorderProduct();
+        catalogReturns(hidden.productId(), "PREORDER", "ACTIVE", hidden.optionId(), "ACTIVE");
+        fixtures.listing(hidden.productId(), "모델", "ACTIVE", false);
+        accept(customerId, hidden.productId(), hidden.optionId(), "key-row-hidden",
+                ticket(hidden.productId(), customerId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
+
+        assertThat(fixtures.nextQueuePosition(paused.productId())).isEqualTo(1L);
+        assertThat(fixtures.nextQueuePosition(hidden.productId())).isEqualTo(1L);
+    }
+
+    /** 오픈 전이면 잠그기 전(회차 캐시)에 거절한다 — 그때도 409 오픈 전이 아니라 404 로 존재를 알리지 않는다. */
+    @Test
+    void 오픈_전_회차_행이_비공개면_SALE_NOT_OPEN_이_아니라_404() throws Exception {
+        PreorderProduct hidden = fixtures.preorderProduct(Instant.now().plusSeconds(3600), Instant.now().plusSeconds(7200));
+        catalogReturns(hidden.productId(), "PREORDER", "ACTIVE", hidden.optionId(), "ACTIVE");
+        fixtures.listing(hidden.productId(), "모델", "ACTIVE", false);
+        long lockWaits = meterRegistry.get("preorder.campaign.lock.wait").timer().count();
+
+        accept(customerId, hidden.productId(), hidden.optionId(), "key-not-open-hidden",
+                ticket(hidden.productId(), customerId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
+        // 잠그지 않고 거절했다 — 잠금 뒤 판정이 대신 404 를 낸 것이 아니다
+        assertThat(meterRegistry.get("preorder.campaign.lock.wait").timer().count()).isEqualTo(lockWaits);
     }
 
     @Test
