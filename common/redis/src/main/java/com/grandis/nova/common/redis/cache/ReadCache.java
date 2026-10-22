@@ -142,8 +142,13 @@ public final class ReadCache {
     private final boolean enabled;
     /** 올리지 못한 세대 — Redis 를 다시 읽을 수 있게 되면 그때 올린다({@link #retryPendingBumps}). */
     private final Set<String> pendingBumps = ConcurrentHashMap.newKeySet();
-    /** 캐시(spec) · 세대마다 이 인스턴스가 본 번호 중 가장 큰 것 — 오른 것을 처음 보면 옛 세대로 넣은 키를 지우고 저장 몫을 돌려준다. 줄어든 것을 보면 복원으로 본다. */
+    /** 캐시(spec) · 세대마다 이 인스턴스가 본 번호 중 가장 큰 것 — 오른 것을 처음 보면 그 캐시가 옛 세대로 넣은 키를 지우고 저장 몫을 돌려준다. */
     private final ConcurrentHashMap<String, Long> seenGenerations = new ConcurrentHashMap<>();
+    /**
+     * 세대마다 이 인스턴스의 어느 캐시든 본 번호 중 가장 큰 것 — 복원 판정용. 한 세대를 여러 캐시가 나눠 쓰므로 캐시별 기록으로 판정하면, 그 캐시가 늦게
+     * 읽은 동안 다른 캐시가 더 큰 번호를 본 뒤 복원된 경우를 놓친다.
+     */
+    private final ConcurrentHashMap<String, Long> highestGenerations = new ConcurrentHashMap<>();
     /** 미리 갱신을 맡는 실행기 — null 이면 미리 갱신하지 않는다. */
     private final Executor refresher;
     private final ReadCacheEvents events;
@@ -287,7 +292,7 @@ public final class ReadCache {
             return new Entry<>(loader.apply(LoadPath.BYPASS), start);
         }
         // 본 번호는 세대를 읽기 전에 꺼낸다 — 읽은 뒤 꺼내면 그사이 다른 스레드가 더 큰 번호를 본 것과 섞여, 정상 올리기 뒤에도 되돌아간 것으로 본다
-        Long seenBefore = seenGenerations.get(spec.name() + "|" + generation);
+        Long seenBefore = highestGenerations.get(generation);
         Long current = call(() -> currentGeneration(generation));
         if (current == null) {
             return bypass(spec, generation, null, id, loader, storable);
@@ -302,6 +307,7 @@ public final class ReadCache {
         if (current == null) {
             return bypass(spec, generation, null, id, loader, storable);
         }
+        highestGenerations.merge(generation, current, Math::max);
         releaseOlderGenerations(spec, generation, current);
         String key = prefix + spec.name() + ":" + FORMAT + "." + spec.fingerprint() + ":" + generation + "." + current + ":" + id;
         String cached;
@@ -506,7 +512,7 @@ public final class ReadCache {
     }
 
     /**
-     * 세대를 읽기 전에 이 인스턴스가 본 번호(seen)보다 작은 세대를 읽었으면(스냅샷 복원 · 세대 키를 손댐) 본 번호 + 1 로 올리고 그 번호를 돌려준다 —
+     * 세대를 읽기 전에 이 인스턴스(어느 캐시든)가 그 세대에서 본 가장 큰 번호(seen)보다 작은 세대를 읽었으면(스냅샷 복원 · 세대 키를 손댐) 본 번호 + 1 로 올리고 그 번호를 돌려준다 —
      * 돌아온 옛 세대 키의 값을 내지 않게. 세대는 올리기로만 바뀌어 줄지 않으므로, 읽기 전에 본 번호보다 작으면 되돌아간 것이다. 다른 인스턴스와
      * 겹쳐도 줄지 않는다(작을 때만 올린다 — 본 번호가 더 큰 인스턴스는 다시 알아채 더 올린다). 못 올리면 null(우회).
      */

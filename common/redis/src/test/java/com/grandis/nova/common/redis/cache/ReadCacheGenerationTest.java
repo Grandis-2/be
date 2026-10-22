@@ -136,6 +136,35 @@ class ReadCacheGenerationTest {
     }
 
     @Test
+    @DisplayName("한 세대를 나눠 쓰는 캐시 중 늦게 읽은 캐시도 복원을 알아챈다 — 다른 캐시가 본 더 큰 번호로 판정해 스냅샷의 옛 값을 내지 않는다")
+    void sharedGenerationDetectsRestoreForLaggingCache() {
+        redis.opsForValue().set(GENERATION, "0");
+        ReadCache cache = new ReadCache(redis, JSON, "svc");
+        ReadCache.Spec<Item> detail = cache.spec("detail", Item.class, Duration.ofMinutes(10));
+        ReadCache.Spec<Item> list = cache.spec("list", Item.class, Duration.ofMinutes(10));
+        ReadCache other = new ReadCache(redis, JSON, "svc");   // 다른 인스턴스
+        ReadCache.Spec<Item> otherList = other.spec("list", Item.class, Duration.ofMinutes(10));
+        AtomicInteger loads = new AtomicInteger();
+
+        for (int i = 0; i < 5; i++) {
+            cache.bumpNow("products");
+        }
+        cache.get(list, "products", "1", () -> load("list-at-5", loads));   // 목록은 5 까지만 봤다
+        cache.bumpNow("products");
+        cache.bumpNow("products");
+        other.get(otherList, "products", "1", () -> load("list-at-7", loads));   // 다른 인스턴스가 세대 7 의 목록을 넣었다
+        Map<String, byte[]> snapshot = dump();   // 세대 7
+        cache.bumpNow("products");
+        cache.bumpNow("products");
+        cache.get(detail, "products", "1", () -> load("detail-at-9", loads));   // 상세는 9 를 봤다
+
+        restore(snapshot);
+
+        assertThat(cache.get(list, "products", "1", () -> load("fresh", loads)).name()).as("목록도 세대 7 의 옛 값을 내지 않는다").isEqualTo("fresh");
+        assertThat(generation()).isGreaterThan(9);
+    }
+
+    @Test
     @DisplayName("여러 인스턴스가 함께 알아채도 세대는 줄지 않고 각자 본 번호보다 커진다 — 모두 새 값을 낸다")
     void concurrentDetectionNeverLowersGeneration() throws Exception {
         redis.opsForValue().set(GENERATION, "0");
