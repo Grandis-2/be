@@ -128,6 +128,17 @@ class PublicCampaignsApiTest {
     }
 
     @Test
+    @DisplayName("장애 중 회차 사본을 믿는 시간은 1분(2026-10-22 결정) — 단건 · 묶음 모두")
+    void campaignCopiesAreHeldForOneMinute() {
+        for (String field : new String[]{"oneSpec", "manySpec"}) {
+            com.grandis.nova.common.redis.cache.ReadCache.Spec<?> spec = (com.grandis.nova.common.redis.cache.ReadCache.Spec<?>)
+                    org.springframework.test.util.ReflectionTestUtils.getField(publicCampaigns, field);
+            assertThat(spec.outage()).as(field).isNotNull();
+            assertThat(spec.outage().heldFor()).as(field).isEqualTo(Duration.ofMinutes(1));
+        }
+    }
+
+    @Test
     @DisplayName("Redis 가 멈추면 회원 상세 · 홍보 카드의 회차는 이 인스턴스의 사본 — preorder 에 묻지 않는다(그사이 조기 마감은 사본을 믿는 1분까지 늦다)")
     void redisOutageServesTheHeldCampaigns() throws Exception {
         UUID productId = openPreorder("장애 사본");

@@ -49,6 +49,7 @@ class CatalogReadCacheApiTest {
     @Autowired ProductReviewRepository reviews;
     @Autowired CatalogLocalCaches local;
     @Autowired com.grandis.nova.common.redis.cache.ReadCache readCache;
+    @Autowired CatalogReadCache catalogReadCache;
     @Autowired java.util.List<com.grandis.nova.catalog.event.CatalogEventHandler> handlers;
 
     ShopFixtures fixtures;
@@ -476,6 +477,18 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
+    @DisplayName("장애 중 사본을 믿는 시간 — 상품 상세 본문 · 홍보 본문은 TTL 과 같은 10분(2026-10-22 결정)")
+    void bodyCopiesAreHeldForTenMinutes(@Autowired com.grandis.nova.catalog.promotion.PromotionQueryService promotions) {
+        for (Object owner : new Object[]{catalogReadCache, promotions}) {
+            String field = owner instanceof CatalogReadCache ? "detailSpec" : "bodySpec";
+            com.grandis.nova.common.redis.cache.ReadCache.Spec<?> spec = (com.grandis.nova.common.redis.cache.ReadCache.Spec<?>)
+                    org.springframework.test.util.ReflectionTestUtils.getField(owner, field);
+            assertThat(spec.outage()).as(field).isNotNull();
+            assertThat(spec.outage().heldFor()).as(field).isEqualTo(Duration.ofMinutes(10));
+        }
+    }
+
+    @Test
     @DisplayName("Redis 가 멈춰도 상품 상세 · 홍보 본문은 이 인스턴스의 사본으로 답한다 — DB 를 직접 고친 값이 아니라 캐시에 있던 값. 이 인스턴스가 숨긴 상품은 바로 404")
     void bodiesAreServedFromCopiesDuringRedisOutage() throws Exception {
         UUID productId = registerInStock("사본폰");
@@ -769,6 +782,8 @@ class CatalogReadCacheApiTest {
         RedisContainerConfig.pause();
         try {
             assertThat(list("").findValues("title").stream().map(JsonNode::asString).toList()).as("Redis 와 상관없다").contains("메모리");
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> redis.opsForValue().get("catalog:cache:gen:products"))
+                    .as("대조군 — Redis 가 실제로 멈췄다").isInstanceOf(RuntimeException.class);
         } finally {
             RedisContainerConfig.unpause();
         }
