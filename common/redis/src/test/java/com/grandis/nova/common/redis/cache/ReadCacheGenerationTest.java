@@ -325,6 +325,20 @@ class ReadCacheGenerationTest {
     }
 
     @Test
+    @DisplayName("마지막으로 본 세대 번호는 Redis 를 부르지 않는다 — 본 적 없으면 비어 있고, 읽은 뒤에는 그 번호, Redis 를 못 써도 그대로다")
+    void lastSeenGenerationNeedsNoRedis() {
+        redis.opsForValue().set(GENERATION, "5");
+        ReadCache cache = new ReadCache(redis, JSON, "svc");
+        assertThat(cache.lastSeenGeneration("products")).as("본 적 없음").isEmpty();
+        assertThat(cache.generation("products")).hasValue(5);
+        assertThat(cache.lastSeenGeneration("products")).hasValue(5);
+
+        redis.opsForValue().set(GENERATION, "not-a-number");
+        assertThat(cache.generation("products")).as("지금은 못 읽는다").isEmpty();
+        assertThat(cache.lastSeenGeneration("products")).as("마지막으로 본 번호").hasValue(5);
+    }
+
+    @Test
     @DisplayName("밖에서 세대 번호를 읽을 때도 미룬 올리기를 먼저 한다 — 올리지 못한 세대가 복구 뒤 첫 읽기에서 올라 그 번호를 준다")
     void generationRetriesPendingBumps() {
         redis.opsForValue().set(GENERATION, "not-a-number");   // INCR 이 실패한다

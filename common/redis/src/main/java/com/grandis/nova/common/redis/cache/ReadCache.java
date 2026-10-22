@@ -350,6 +350,15 @@ public final class ReadCache {
         return current == null ? OptionalLong.empty() : OptionalLong.of(current);
     }
 
+    /**
+     * 이 인스턴스가 그 세대에서 본 가장 큰 번호 — Redis 를 부르지 않는다. 본 적 없으면 비어 있다. {@link #generation} 을 못 읽을 때 바깥 캐시가
+     * 마지막으로 본 키로만 찾을 때 쓴다(그동안의 올리기는 모른다 — 그 캐시의 TTL 이 늦게 보이는 상한이다).
+     */
+    public OptionalLong lastSeenGeneration(String generation) {
+        Long seen = highestGenerations.get(generation);
+        return seen == null ? OptionalLong.empty() : OptionalLong.of(seen);
+    }
+
     /** 세대의 지금 번호를 읽는다 — 못 읽으면 null. 미룬 올리기를 먼저 해 보고, 본 번호보다 작으면(복원) 올려서 읽는다. */
     private Long readGeneration(String generation) {
         // 본 번호는 세대를 읽기 전에 꺼낸다 — 읽은 뒤 꺼내면 그사이 다른 스레드가 더 큰 번호를 본 것과 섞여, 정상 올리기 뒤에도 되돌아간 것으로 본다
