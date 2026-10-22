@@ -7,8 +7,8 @@ spring:
     # socketTimeout — 드라이버가 DB 응답을 기다리는 상한(밀리초). 검사 제한 시간(run-timeout)은 DB 에 조회 취소를 보내는 방식이라
     # 네트워크가 응답 없이 끊기면 닿지 않는다. 그때도 무한정 기다리지 않게 run-timeout 과 같은 30분을 둔다
     url: jdbc:mysql://localhost:3306/shop?serverTimezone=UTC&characterEncoding=UTF-8&socketTimeout=1800000
-    # 정합성 전용 계정(운영 batch_reconciliation). 업무 표는 읽기만, 결과 표(reconciliation_runs · reconciliation_findings)에만 쓴다.
-    # 권한의 정본은 ReconciliationAccountTest 의 GRANT 다
+    # 운영은 당분간 사진 정리와 같은 batch 계정을 쓴다. 정합성 검사는 업무 표는 읽기만, 결과 표(reconciliation_runs ·
+    # reconciliation_findings)에만 쓴다 — 필요한 권한의 정본은 ReconciliationAccountTest 의 GRANT 다
     username: nova
     password: CHANGE_ME
     hikari:

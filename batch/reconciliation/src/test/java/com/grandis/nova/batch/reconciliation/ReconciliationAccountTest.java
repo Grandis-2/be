@@ -30,7 +30,8 @@ import org.testcontainers.mysql.MySQLContainer;
 
 /**
  * 정합성 검사가 써도 되는 것만 연 계정(업무 표 SELECT, 결과 표 쓰기)으로 검사를 끝까지 돌린다. 코드가 그 밖의 표에 쓰면 DB 가 막아
- * 이 시험이 깨진다. 시험 데이터는 root 로 넣는다. 운영 계정 batch_reconciliation 의 권한은 이 시험의 GRANT 와 같게 준다.
+ * 이 시험이 깨진다. 시험 데이터는 root 로 넣는다. 운영은 당분간 사진 정리와 batch 계정 하나를 같이 쓰므로, 그 계정에는 이 시험과
+ * ImageCleanupAccountTest 의 GRANT 를 합쳐 준다.
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -104,7 +105,7 @@ class ReconciliationAccountTest {
         assertThatThrownBy(() -> reconciliationAccount.sql("DELETE FROM reconciliation_runs").update())
                 .isInstanceOf(DataAccessException.class)
                 .rootCause().hasMessageContaining("DELETE command denied");
-        // 사진을 지우는 권한은 사진 정리 계정에만 있다
+        // 사진 삭제 권한은 이 계정에 주지 않는다
         assertThatThrownBy(() -> reconciliationAccount.sql("DELETE FROM images").update())
                 .isInstanceOf(DataAccessException.class)
                 .rootCause().hasMessageContaining("DELETE command denied");

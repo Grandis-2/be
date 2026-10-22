@@ -149,7 +149,7 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 ### 3.5 batch — 적용 경로: `batch/**`
 
 - desired 1 전제다. 동시 실행 방지(락 · 단일 실행 표식)가 없으면 지적한다.
-- 운영 계정 권한은 모듈별 계정 시험(ReconciliationAccountTest · ImageCleanupAccountTest)의 GRANT 와 같다. 쓰는 표가 늘면 시험의 GRANT 와 함께 운영 계정도 바꿔야 한다고 PR 설명에 적게 요청한다.
+- 운영은 당분간 두 서비스가 batch 계정 하나를 같이 쓰고, 그 권한은 모듈별 계정 시험(ReconciliationAccountTest · ImageCleanupAccountTest) GRANT 의 합으로 맞춘다. 쓰는 표가 늘면 시험의 GRANT 와 함께 운영 batch 계정도 바꿔야 한다고 PR 설명에 적게 요청한다.
 - 정합성 검사는 읽기 · 비교 · 결과 기록(reconciliation_runs, reconciliation_findings 는 INSERT 만)만 한다. 업무 표나 external_mock 에 쓰면 지적한다. 조치는 정상 업무 경로(관리자 → API · 이벤트)다.
 - 조회 실패 · 권한 오류가 난 실행을 "불일치 0"으로 집계하면 지적한다. 검사 미완료로 남긴다.
 - 검사 트랜잭션 안의 Mock 목록 받기(2.1 의 예외)는 목록 전체 기한(external.mock.max-duration)과 트랜잭션 제한 시간(run-timeout ≥ 목록 기한, 기동 때 검사) 안에서만 한다. 기한 없이 받거나 두 값의 관계 검사를 빼면 지적한다.

@@ -6,8 +6,8 @@ spring:
   datasource:
     # socketTimeout — 드라이버가 DB 응답을 기다리는 상한(밀리초). 네트워크가 응답 없이 끊겨도 정리가 무한정 서 있지 않게 30분을 둔다
     url: jdbc:mysql://localhost:3306/shop?serverTimezone=UTC&characterEncoding=UTF-8&socketTimeout=1800000
-    # 사진 정리 전용 계정(운영 batch_imagecleanup). 업무 표는 읽기만, images 삭제와 삭제 대기(image_deletions) 쓰기만 한다.
-    # 권한의 정본은 ImageCleanupAccountTest 의 GRANT 다
+    # 운영은 당분간 정합성 검사와 같은 batch 계정을 쓴다. 사진 정리는 업무 표는 읽기만, images 삭제와 삭제 대기(image_deletions)
+    # 쓰기만 한다 — 필요한 권한의 정본은 ImageCleanupAccountTest 의 GRANT 다
     username: nova
     password: CHANGE_ME
     hikari:
