@@ -1,5 +1,8 @@
 package com.grandis.nova.catalog.promotion;
 
+import com.grandis.nova.catalog.cache.CatalogLocalCaches;
+import com.grandis.nova.catalog.cache.CatalogReadCache;
+import com.grandis.nova.catalog.cache.LocalReadCache;
 import com.grandis.nova.catalog.integration.PublicCampaigns;
 import com.grandis.nova.catalog.listing.CampaignWindow;
 import com.grandis.nova.catalog.listing.ProductListItem;
@@ -27,8 +30,10 @@ import java.util.UUID;
 
 /**
  * 고객 사전예약 페이지의 홍보 목록 · 상세(로그인 없이). 오늘(한국 날짜)이 홍보 기간 안인 홍보만 보인다 — 밖이면 상세도 404.
- * 홍보 내용(이름 · 사진 · 기간 · 묶인 상품 id)은 읽기 캐시에 {@link #BODY_TTL} 두고 고치면 세대로 비운다. 상품 카드(가격 · 회차 · 재고)는 다른 서비스가
- * 바꾸는 값이 섞여 요청마다 읽는다 — 상품 상세와 같은 나눔이다. 사전예약 카드의 회차(준비 · 시각)는 상세와 같이 {@link PublicCampaigns} 로 본다 —
+ * 홍보 내용(이름 · 사진 · 기간 · 묶인 상품 id)은 읽기 캐시에 {@link #BODY_TTL} 두고 고치면 세대로 비운다. 상품 카드(가격 · 판매 준비 · 색상칩)는 상품 목록과
+ * 같은 카드라 같은 규칙으로 인스턴스 메모리에 {@link CatalogReadCache#PRODUCT_TTL} 둔다({@link CatalogLocalCaches#promotionCards}) — 상품이 바뀌면(관리자 수정 ·
+ * 판매 준비 이벤트) 그 인스턴스는 커밋 뒤 바로 버리고, 다른 인스턴스와 DB 를 직접 고친 값은 TTL 뒤에 보인다. 회차 · 품절은 카드 캐시 밖이라 요청마다 본다 —
+ * 사전예약 카드의 회차(준비 · 시각)는 상세와 같이 {@link PublicCampaigns} 로 보고 접수 단계는 지금 시각으로 계산한다 —
  * preorder 가 답하지 않으면 페이지는 그대로 내고 사전예약 카드의 시각 · 접수 단계만 비운다(2026-10-19 결정).
  */
 @Service
@@ -52,18 +57,20 @@ public class PromotionQueryService {
     private final SoldOutMarker soldOut;
     private final PublicCampaigns campaigns;
     private final ReadCache cache;
+    private final LocalReadCache<CatalogLocalCaches.CardsKey, List<ProductListItem>> cardCache;
     private final Clock clock;
     private final ReadCache.Spec<Body> bodySpec;
     private final ReadCache.Spec<List<Body>> shownSpec;
 
     public PromotionQueryService(PromotionRepository promotions, PromotionProducts links, ProductListingQueryRepository crossReads,
-                                 SoldOutMarker soldOut, PublicCampaigns campaigns, ReadCache cache, Clock clock) {
+                                 SoldOutMarker soldOut, PublicCampaigns campaigns, ReadCache cache, CatalogLocalCaches local, Clock clock) {
         this.promotions = promotions;
         this.links = links;
         this.crossReads = crossReads;
         this.soldOut = soldOut;
         this.campaigns = campaigns;
         this.cache = cache;
+        this.cardCache = local.promotionCards();   // 상품이 바뀌면 CatalogCacheInvalidation 이 비운다
         this.clock = clock;
         this.bodySpec = cache.spec("promotion-body", Body.class, BODY_TTL);
         this.shownSpec = cache.spec("promotion-shown", new TypeReference<List<Body>>() { }, BODY_TTL);
@@ -100,7 +107,9 @@ public class PromotionQueryService {
      * 시각 · 접수 단계를 비워 낸다.
      */
     private List<ProductListItem> cards(List<UUID> productIds, boolean withColors) {
-        List<ProductListItem> cards = crossReads.findCards(productIds, withColors);
+        // 빈 결과(묶은 상품이 모두 숨김 · 준비 전)는 넣지 않는다 — 준비되면 TTL 을 기다리지 않고 나오게
+        List<ProductListItem> cards = cardCache.entry(new CatalogLocalCaches.CardsKey(productIds, withColors),
+                () -> crossReads.findCards(productIds, withColors), found -> !found.isEmpty()).value();
         List<UUID> preorderIds = cards.stream().filter(card -> card.saleMode() == SaleMode.PREORDER).map(ProductListItem::productId).toList();
         Instant now = clock.instant();
         Map<UUID, CampaignWindow> windows;
