@@ -21,6 +21,8 @@ class PreorderDefaultsTest {
         assertThat(environment.getProperty("resilience4j.bulkhead.instances.order.base-config")).isEqualTo("default");
         assertThat(environment.getProperty("spring.http.serviceclient.catalog.read-timeout")).isEqualTo("1s");
         assertThat(environment.getProperty("spring.http.serviceclient.order.connect-timeout")).isEqualTo("300ms");
+        assertThat(environment.getProperty("spring.data.redis.timeout")).isEqualTo("300ms");
+        assertThat(environment.getProperty("spring.data.redis.connect-timeout")).isEqualTo("200ms");
         assertThat(environment.getProperty("spring.application.name")).isEqualTo("preorder");
         assertThat(environment.getProperty("spring.datasource.hikari.connection-timeout")).isEqualTo("2000");
         assertThat(environment.getProperty("spring.datasource.hikari.data-source-properties.readOnlyPropagatesToServer"))
