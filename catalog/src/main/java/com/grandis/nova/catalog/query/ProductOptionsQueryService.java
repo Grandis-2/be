@@ -47,7 +47,7 @@ public class ProductOptionsQueryService {
     }
 
     /**
-     * 옵션 여러 개를 그 상품의 사실과 함께 — 장바구니(order)가 부른다. 없는 옵션은 빠지고(삭제한 상품의 옵션도), 결과는 요청 순서(같은 id 는 한 번)다.
+     * 옵션 여러 개를 그 상품의 사실과 함께 — order(장바구니 · 바로 구매 · 사전예약 주문 사진 · 드로우 회차)가 부른다. 없는 옵션은 빠지고(삭제한 상품의 옵션도), 결과는 요청 순서(같은 id 는 한 번)다.
      * 호출자는 빠진 옵션을 판매 종료로 본다(contracts/order-internal.md).
      */
     public List<OptionLookupView> findOptions(Collection<UUID> optionIds) {

@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * 서비스 간 옵션 일괄 조회. order 의 장바구니(표시 · 주문 스냅샷)가 부른다. 계약: contracts/order-internal.md.
+ * 서비스 간 옵션 일괄 조회. order 의 장바구니(표시 · 주문 스냅샷) · 바로 구매 · 사전예약 주문(사진) · 드로우 회차 만들기가 부른다. 계약: contracts/order-internal.md.
  *
  * 호출자의 JWT 를 common:security 필터가 검증해 USER · ADMIN 둘 다 허용한다(/internal/** 규칙, SecurityConfig).
  * /internal/** 은 공개 라우팅에서 빠져야 한다 — USER 토큰으로 비공개 상품까지 돌려준다.
@@ -34,7 +34,7 @@ public class InternalOptionController {
         this.queryService = queryService;
     }
 
-    @Operation(summary = "옵션 일괄 조회(order 장바구니가 부른다)", description = "ids 1~50개(같은 id 는 한 번). 없는 옵션은 결과에서 빠진다")
+    @Operation(summary = "옵션 일괄 조회(order 가 부른다)", description = "ids 1~50개(같은 id 는 한 번). 없는 옵션은 결과에서 빠진다")
     @GetMapping
     public ApiResponse<Items<OptionLookupView>> options(@RequestParam List<UUID> ids) {
         // ids=a, 처럼 빈 원소는 null 로 들어온다 — 세지도 넘기지도 않고 400 이다
