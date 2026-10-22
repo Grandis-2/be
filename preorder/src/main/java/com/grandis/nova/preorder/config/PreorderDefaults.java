@@ -123,12 +123,16 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
         }
     }
 
-    /** 내부 호출의 연결 · 읽기 시간 상한. 없으면 HTTP 클라이언트가 응답을 끝없이 기다려 동시 호출 상한을 붙잡는다. */
+    /** 내부 호출 · Redis 의 연결 · 응답 시간 상한. 없으면 HTTP 클라이언트가 응답을 끝없이 기다려 동시 호출 상한을 붙잡는다. */
     private void dependencyTimeouts(Map<String, Object> defaults) {
         for (String dependency : Dependencies.ALL) {
             defaults.put("spring.http.serviceclient." + dependency + ".connect-timeout", "300ms");
             defaults.put("spring.http.serviceclient." + dependency + ".read-timeout", "1s");
         }
+        // Redis(토큰 폐기 확인 · 캐시 비우기 알림 · 하트비트)도 같다. 없으면 Lettuce 기본 60초라 Redis 가 멈추면 요청 · 커밋 뒤
+        // 알림 스레드가 그만큼 묶인다. 300ms 를 넘긴 응답은 쓸 이유가 없다
+        defaults.put("spring.data.redis.timeout", "300ms");
+        defaults.put("spring.data.redis.connect-timeout", "200ms");
     }
 
     /**
