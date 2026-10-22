@@ -240,20 +240,12 @@ class ReadCacheRefreshTest {
         assertThat(started.await(5, TimeUnit.SECONDS)).as("갱신이 시작됐다").isTrue();
         redis.delete(onlyKey());
         CompletableFuture<String> waiting = CompletableFuture.supplyAsync(() -> threaded.entry(s, "g", "k", () -> load("직접")).value());
-        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (!events.outcomes.contains(Outcome.WAIT) && System.nanoTime() < until) {
-            Thread.sleep(5);
-        }
-        assertThat(events.outcomes).as("갱신에 붙었다").contains(Outcome.WAIT);
+        assertThat(events.waiting.await(5, TimeUnit.SECONDS)).as("갱신에 붙었다").isTrue();
         release.countDown();
 
         assertThat(waiting).failsWithin(5, TimeUnit.SECONDS).withThrowableOfType(java.util.concurrent.ExecutionException.class)
                 .havingCause().isInstanceOf(IllegalStateException.class).withCause(failure);
-        long until2 = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (!events.refreshes.contains(RefreshResult.FAILED) && System.nanoTime() < until2) {
-            Thread.sleep(5);
-        }
-        assertThat(events.refreshes).contains(RefreshResult.FAILED);
+        assertThat(events.failed.await(5, TimeUnit.SECONDS)).as("갱신 실패로 셌다").isTrue();
     }
 
     @Test
@@ -490,15 +482,25 @@ class ReadCacheRefreshTest {
     static final class Events implements ReadCacheEvents {
         final List<Outcome> outcomes = Collections.synchronizedList(new ArrayList<>());
         final List<RefreshResult> refreshes = Collections.synchronizedList(new ArrayList<>());
+        /** 같은 키의 진행 중 조회에 붙은 요청(WAIT)이 생기면 연다. */
+        final CountDownLatch waiting = new CountDownLatch(1);
+        /** 실패한 갱신(FAILED)이 생기면 연다. */
+        final CountDownLatch failed = new CountDownLatch(1);
 
         @Override
         public void refreshed(String cache, RefreshResult result) {
             refreshes.add(result);
+            if (result == RefreshResult.FAILED) {
+                failed.countDown();
+            }
         }
 
         @Override
         public void served(String cache, Outcome outcome) {
             outcomes.add(outcome);
+            if (outcome == Outcome.WAIT) {
+                waiting.countDown();
+            }
         }
 
         @Override

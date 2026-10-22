@@ -389,6 +389,58 @@ class ReadCacheTest {
     }
 
     @Test
+    @DisplayName("다시 보기가 Redis 실패로 우회로 바뀌면 그 채우기 자리에 붙어 기다린 요청도 같은 우회 값을 받는다 — 원천은 한 번, 넣지 않는다")
+    void waiterOfBypassedRecheckGetsTheSameValue() throws Exception {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
+        WaitEvents events = new WaitEvents();
+        ReadCache failing = new ReadCache(template, JSON, "svc", io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.ofDefaults(), true,
+                java.time.Clock.systemUTC(), ReadCache.WAIT_FOR_LOAD, null, events);
+        ReadCache.Spec<Item> spec = failing.spec("item", Item.class, Duration.ofSeconds(30));
+        List<ReadCache.LoadPath> paths = java.util.Collections.synchronizedList(new ArrayList<>());
+        template.failWith = new org.springframework.data.redis.RedisSystemException("다시 보기 실패", null);
+        template.failAt = 2;
+        template.pauseAt = 2;   // 자리를 잡은 뒤의 GET 에서 멈췄다가 던진다
+        java.util.concurrent.atomic.AtomicReference<Object> owner = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Object> waiter = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread holder = new Thread(() -> {
+            template.pause.set(true);
+            template.fail.set(true);
+            try {
+                owner.set(failing.get(spec, "products", "1", path -> {
+                    paths.add(path);
+                    return item("우회", new AtomicInteger());
+                }));
+            } catch (Throwable e) {
+                owner.set(e);
+            }
+        });
+        holder.start();
+        assertThat(template.read.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        Thread joiner = new Thread(() -> {
+            try {
+                waiter.set(failing.get(spec, "products", "1", path -> {
+                    paths.add(path);
+                    return item("joiner", new AtomicInteger());
+                }));
+            } catch (Throwable e) {
+                waiter.set(e);
+            }
+        });
+        joiner.start();
+        assertThat(events.waiting.await(10, java.util.concurrent.TimeUnit.SECONDS)).as("같이 기다리는 쪽이 채우기 자리에 붙었다").isTrue();
+        template.resume.countDown();
+        holder.join(10_000);
+        joiner.join(10_000);
+        assertThat(holder.isAlive()).isFalse();
+        assertThat(joiner.isAlive()).isFalse();
+
+        assertThat(owner.get()).isInstanceOf(Item.class);
+        assertThat(waiter.get()).as("자리 주인의 우회 값을 그대로 받는다").isSameAs(owner.get());
+        assertThat(paths).containsExactly(ReadCache.LoadPath.BYPASS);
+        assertThat(redis.keys("svc:cache:item:*")).as("우회 결과는 넣지 않는다").isEmpty();
+    }
+
+    @Test
     @DisplayName("자리를 잡은 뒤 다시 보기가 Error 를 던져도 같이 기다린 요청은 그 Error 를 원인으로 받고, 자리가 비어 같은 키의 다음 조회는 기다리지 않는다")
     void recheckErrorReachesWaitersAndFreesTheSlot() throws Exception {
         PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
@@ -1004,9 +1056,10 @@ class ReadCacheTest {
         throw (E) e;
     }
 
+    /** 상한(10초)까지만 — 시험이 풀지 않는 변형에서도 스레드가 남지 않게. */
     private static void await(CountDownLatch latch) {
         try {
-            latch.await();
+            latch.await(10, java.util.concurrent.TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }

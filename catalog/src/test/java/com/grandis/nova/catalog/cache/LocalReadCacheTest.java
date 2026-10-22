@@ -228,8 +228,8 @@ class LocalReadCacheTest {
     }
 
     @Test
-    @DisplayName("다시 보기 동안 자리를 쥐고 있다 — 같은 키의 다른 요청은 그 자리를 기다리고 같은 값을 받는다")
-    void slotIsHeldWhileRechecking() throws Exception {
+    @DisplayName("다시 보기 전 훅은 자리를 쥔 채 돈다 — 그동안 같은 키의 다른 요청은 기다리고 같은 값을 받는다(다시 보기의 순서는 위 시험이 지킨다)")
+    void hookRunsWhileHoldingTheSlot() throws Exception {
         LocalReadCache<String, String> cache = cache(true, 1024);
         CountDownLatch inHook = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
