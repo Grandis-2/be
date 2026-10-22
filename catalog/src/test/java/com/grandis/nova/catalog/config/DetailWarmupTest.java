@@ -227,9 +227,15 @@ class DetailWarmupTest {
 
     /** 기동 때 넣은 홍보도 끝나면 지난 기간으로 — 같은 DB 를 쓰는 다른 시험 클래스의 홍보 목록에 남지 않게. */
     @org.junit.jupiter.api.AfterAll
-    static void retireSeededPromotion(@Autowired JdbcTemplate jdbcTemplate) {
+    static void retireSeededPromotion(@Autowired JdbcTemplate jdbcTemplate, @Autowired org.springframework.data.redis.core.StringRedisTemplate redis) {
         jdbcTemplate.update("UPDATE promotions SET start_date = CURDATE() - INTERVAL 4 DAY, end_date = CURDATE() - INTERVAL 3 DAY WHERE id = ?",
                 (Object) UuidBinary.toBytes(Seed.promotionId));
+        // 예열이 채운 홍보 목록 캐시도 비운다 — 같은 Redis 를 쓰는 다음 시험이 지난 홍보를 TTL 동안 받지 않게(세대 키는 둔다)
+        java.util.Set<String> keys = redis.keys("catalog:cache:*");
+        keys.removeIf(key -> key.contains(":gen:"));
+        if (!keys.isEmpty()) {
+            redis.delete(keys);
+        }
     }
 
     private static HttpResponse<String> get(int port, String path) throws Exception {
