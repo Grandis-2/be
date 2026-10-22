@@ -64,14 +64,14 @@ class PreorderCapacityTest {
 
     @Test
     void 예열_기간과_비율은_설정을_따르고_범위를_벗어나면_기동하지_않는다() {
-        CapacityProperties shortWarmup = new CapacityProperties(null, null, Duration.ofSeconds(30), 0.25, null);
+        CapacityProperties shortWarmup = new CapacityProperties(null, null, Duration.ofSeconds(30), 0.25);
         assertThat(PreorderCapacity.of(Map.of("a", row(0, 29, 100, 15), "b", row(0, 30, 100, 15)), NOW, shortWarmup, MAX))
                 .contains(new PreorderCapacity(125, 1, 1));
 
-        assertThatThrownBy(() -> new CapacityProperties(null, null, null, 0.0, null)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CapacityProperties(null, null, null, 1.5, null)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CapacityProperties(null, " ", null, null, null)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CapacityProperties(null, null, Duration.ofSeconds(-1), null, null))
+        assertThatThrownBy(() -> new CapacityProperties(null, null, null, 0.0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CapacityProperties(null, null, null, 1.5)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CapacityProperties(null, " ", null, null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CapacityProperties(null, null, Duration.ofSeconds(-1), null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

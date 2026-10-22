@@ -72,7 +72,7 @@ final class SnapshotCodec {
             });
             return Optional.of(new GatewaySnapshot(products, new SnapshotMeta(globalCredit, gateways, maxWait,
                     leaveGrace(fields.get(LEAVE_GRACE))), publishedAt, brakeFactor(fields.get(BRAKE)),
-                    capacity(fields.get(CAPACITY), globalCredit)));
+                    capacity(fields.get(CAPACITY))));
         } catch (RuntimeException e) {
             return Optional.empty();
         }
@@ -103,23 +103,23 @@ final class SnapshotCodec {
         }
     }
 
-    /** 없거나 깨졌으면 모르는 것으로 읽는다 — 이 필드를 모르는 옛 리더가 낸 재료다. 판정에는 쓰지 않고 보이기만 한다. */
-    private static CapacityStatus capacity(String value, long globalCredit) {
+    /** 없거나 깨졌으면 운영값도 용량도 모르는 것으로 읽는다 — 이 필드를 모르는 옛 리더가 낸 재료다. 판정에는 쓰지 않고 보이기만 한다. */
+    private static CapacityStatus capacity(String value) {
         String[] parts = value == null ? new String[0] : value.split("\\|", -1);
         if (parts.length != 4) {
-            return CapacityStatus.unknown(globalCredit);
+            return CapacityStatus.MISSING;
         }
         try {
             long operational = Long.parseLong(parts[0]);
             long sum = Long.parseLong(parts[1]);
             int ready = Integer.parseInt(parts[2]);
             int warming = Integer.parseInt(parts[3]);
-            if (operational < 0 || sum < CapacityStatus.UNKNOWN || ready < 0 || warming < 0) {
-                return CapacityStatus.unknown(globalCredit);
+            if (operational < CapacityStatus.UNKNOWN || sum < CapacityStatus.UNKNOWN || ready < 0 || warming < 0) {
+                return CapacityStatus.MISSING;
             }
             return new CapacityStatus(operational, sum, ready, warming);
         } catch (NumberFormatException e) {
-            return CapacityStatus.unknown(globalCredit);
+            return CapacityStatus.MISSING;
         }
     }
 

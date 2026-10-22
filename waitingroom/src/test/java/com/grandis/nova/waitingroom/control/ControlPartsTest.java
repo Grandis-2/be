@@ -77,12 +77,12 @@ class ControlPartsTest {
 
             assertThat(SnapshotCodec.decode(fields)).contains(withCapacity);
             fields.remove(SnapshotCodec.CAPACITY);
-            assertThat(SnapshotCodec.decode(fields).orElseThrow().capacity()).as("옛 리더가 낸 재료")
-                    .isEqualTo(CapacityStatus.unknown(100));
-            for (String broken : new String[]{"300|200|2", "300|many|2|1", "300|-5|2|1", "300|200|-1|1", "-1|200|2|1"}) {
+            assertThat(SnapshotCodec.decode(fields).orElseThrow().capacity()).as("옛 리더가 낸 재료 — 브레이크 뒤 전역 속도를 운영값으로 쓰지 않는다")
+                    .isEqualTo(CapacityStatus.MISSING);
+            for (String broken : new String[]{"300|200|2", "300|many|2|1", "300|-5|2|1", "300|200|-1|1", "-2|200|2|1"}) {
                 fields.put(SnapshotCodec.CAPACITY, broken);
                 assertThat(SnapshotCodec.decode(fields).orElseThrow().capacity()).as(broken)
-                        .isEqualTo(CapacityStatus.unknown(100));
+                        .isEqualTo(CapacityStatus.MISSING);
             }
         }
     }
@@ -240,7 +240,17 @@ class ControlPartsTest {
 
             holder.replace(new GatewaySnapshot(Map.of(), new SnapshotMeta(150, 1, MaxWait.unlimited()),
                     System.currentTimeMillis() + 1));
-            assertThat(registry.get("waitingroom.capacity.sum").gauge().value()).as("표시가 없다").isNaN();
+            assertThat(registry.get("waitingroom.capacity.sum").gauge().value()).as("옛 재료").isNaN();
+            assertThat(registry.get("waitingroom.capacity.tasks").tag("state", "ready").gauge().value()).as("0 이 아니라 모름").isNaN();
+            assertThat(registry.get("waitingroom.capacity.tasks").tag("state", "warming").gauge().value()).isNaN();
+            assertThat(registry.get("waitingroom.settings.operational.credit").gauge().value())
+                    .as("브레이크 뒤 전역 속도를 운영값으로 내지 않는다").isNaN();
+
+            holder.replace(new GatewaySnapshot(Map.of(), new SnapshotMeta(150, 1, MaxWait.unlimited()),
+                    System.currentTimeMillis() + 2, 1.0, CapacityStatus.unknown(300)));
+            assertThat(registry.get("waitingroom.settings.operational.credit").gauge().value()).as("표시가 없어도 운영값은 안다")
+                    .isEqualTo(300);
+            assertThat(registry.get("waitingroom.capacity.tasks").tag("state", "ready").gauge().value()).isNaN();
         }
     }
 

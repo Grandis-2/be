@@ -7,6 +7,7 @@ import io.micrometer.core.instrument.MultiGauge;
 import io.micrometer.core.instrument.Tags;
 import org.springframework.stereotype.Component;
 
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -45,20 +46,24 @@ public class ControlMetrics {
                         current -> current.current().map(GatewaySnapshot::brakeFactor).orElse(Double.NaN))
                 .description("운영값에 곱한 브레이크 배율. 1 은 걸리지 않음, 재료가 없으면 NaN").register(registry);
         Gauge.builder("waitingroom.settings.operational.credit", holder, current -> current.current()
-                        .map(snapshot -> (double) snapshot.capacity().operationalCredit()).orElse(Double.NaN))
-                .description("관리자 운영값(preorder 용량 상한 · 브레이크 전). 재료가 없으면 NaN").register(registry);
-        Gauge.builder("waitingroom.capacity.sum", holder, current -> current.current()
-                        .map(GatewaySnapshot::capacity).filter(CapacityStatus::known)
+                        .map(GatewaySnapshot::capacity).filter(CapacityStatus::operationalKnown)
+                        .map(capacity -> (double) capacity.operationalCredit()).orElse(Double.NaN))
+                .description("관리자 운영값(preorder 용량 상한 · 브레이크 전). 재료가 없거나 옛 재료면 NaN").register(registry);
+        Gauge.builder("waitingroom.capacity.sum", holder, current -> knownCapacity(current)
                         .map(capacity -> (double) capacity.sum()).orElse(Double.NaN))
                 .description("preorder 태스크 용량 합(갓 뜬 태스크는 줄여 셈). 표시가 없거나 읽지 못하면 NaN").register(registry);
-        Gauge.builder("waitingroom.capacity.tasks", holder, current -> current.current()
-                        .map(snapshot -> (double) snapshot.capacity().ready()).orElse(Double.NaN))
-                .tag("state", "ready").description("용량 합에 든 preorder 태스크 수").register(registry);
-        Gauge.builder("waitingroom.capacity.tasks", holder, current -> current.current()
-                        .map(snapshot -> (double) snapshot.capacity().warming()).orElse(Double.NaN))
-                .tag("state", "warming").description("용량 합에 든 preorder 태스크 수").register(registry);
+        Gauge.builder("waitingroom.capacity.tasks", holder, current -> knownCapacity(current)
+                        .map(capacity -> (double) capacity.ready()).orElse(Double.NaN))
+                .tag("state", "ready").description("용량 합에 든 preorder 태스크 수. 용량을 모르면 NaN").register(registry);
+        Gauge.builder("waitingroom.capacity.tasks", holder, current -> knownCapacity(current)
+                        .map(capacity -> (double) capacity.warming()).orElse(Double.NaN))
+                .tag("state", "warming").description("용량 합에 든 preorder 태스크 수. 용량을 모르면 NaN").register(registry);
         waiting = MultiGauge.builder("waitingroom.queue.waiting").description("모델별 대기 인원").register(registry);
         credit = MultiGauge.builder("waitingroom.queue.credit").description("모델별 초당 입장 몫").register(registry);
+    }
+
+    private static Optional<CapacityStatus> knownCapacity(SnapshotHolder holder) {
+        return holder.current().map(GatewaySnapshot::capacity).filter(CapacityStatus::known);
     }
 
     void observe(GatewaySnapshot snapshot) {

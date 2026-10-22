@@ -64,9 +64,9 @@ class AllocationRound {
     private final AtomicBoolean retireFailing = new AtomicBoolean();
     private final AtomicBoolean tombstoneFailing = new AtomicBoolean();
     private final AtomicBoolean capacityFailing = new AtomicBoolean();
-    /** 마지막으로 읽은 preorder 용량. 읽기에 실패하면 유예 동안 이 값을 쓴다. */
-    private final AtomicReference<CapacityReading> lastCapacity =
-            new AtomicReference<>(new CapacityReading(Optional.empty(), Long.MIN_VALUE));
+    private final AtomicBoolean capacityHeld = new AtomicBoolean();
+    /** 마지막으로 안 preorder 용량. 행이 모두 낡았거나 읽지 못하면 이 값을 그대로 쓴다. 표시가 없으면 빈 값이다. */
+    private final AtomicReference<Optional<PreorderCapacity>> lastCapacity = new AtomicReference<>(Optional.empty());
 
     AllocationRound(ControlStore store, AdmissionProperties admission, AdmissionTicket tickets,
                     ControlPlaneProperties properties, CapacityProperties capacity, ControlMetrics metrics,
@@ -122,7 +122,7 @@ class AllocationRound {
                 .flatMap(factor -> allocate(fence, cluster, tick, nowMillis, settings, preorder, rows, factor));
     }
 
-    /** 읽기 실패는 빈 값 — 배분은 멈추지 않고 직전 용량이나 운영값으로 돈다. 꺼져 있으면 표시가 없는 것과 같다. */
+    /** 읽기 실패는 빈 값 — 배분은 멈추지 않고 직전 용량으로 돈다. 꺼져 있으면 표시가 없는 것과 같다. */
     private Mono<Optional<Map<String, String>>> capacityRows() {
         if (!capacity.enabled()) {
             return Mono.just(Optional.of(Map.of()));
@@ -130,31 +130,47 @@ class AllocationRound {
         return store.readCapacity(capacity.key()).map(Optional::of)
                 .onErrorResume(e -> {
                     if (capacityFailing.compareAndSet(false, true)) {
-                        log.warn("preorder 용량을 읽지 못했다 — 마지막으로 읽은 지 {}초 안이면 그 값, 아니면 운영값으로 배분한다: {}",
-                                capacity.readFailureGrace().toSeconds(), e.toString());
+                        log.warn("preorder 용량을 읽지 못했다 — 직전 용량({})으로 배분한다: {}",
+                                describe(lastCapacity.get()), e.toString());
                     }
                     return Mono.just(Optional.empty());
                 });
     }
 
+    /**
+     * 표시가 없을 때만(행이 하나도 없음) 운영값으로 간다. 행이 모두 낡았거나 읽지 못하면 preorder 가 위태로울 때라
+     * 운영값(허용할 최대)으로 뛰지 않고 직전 용량을 그대로 쓴다. 직전 용량을 모르는 새 리더는 운영값으로 시작한다.
+     */
     private Optional<PreorderCapacity> capacity(Optional<Map<String, String>> rows, long nowMillis) {
         if (rows.isEmpty()) {
             metrics.loopFailed("capacity");
-            CapacityReading last = lastCapacity.get();
-            return last.atMillis() != Long.MIN_VALUE && nowMillis - last.atMillis() <= capacity.readFailureGrace().toMillis()
-                    ? last.value() : Optional.empty();
+            return lastCapacity.get();
         }
         if (capacityFailing.compareAndSet(true, false)) {
             log.info("preorder 용량 읽기 회복");
         }
+        if (rows.get().isEmpty()) {
+            capacityHeld.set(false);
+            lastCapacity.set(Optional.empty());
+            return Optional.empty();
+        }
         Optional<PreorderCapacity> read = PreorderCapacity.of(rows.get(), nowMillis / 1000, capacity,
                 admission.maxGlobalCredit());
-        lastCapacity.set(new CapacityReading(read, nowMillis));
+        if (read.isEmpty()) {
+            if (capacityHeld.compareAndSet(false, true)) {
+                log.warn("살아 있는 preorder 태스크 표시가 없다 — 직전 용량({})을 유지한다", describe(lastCapacity.get()));
+            }
+            return lastCapacity.get();
+        }
+        if (capacityHeld.compareAndSet(true, false)) {
+            log.info("preorder 태스크 표시 회복 — 용량 합 {}", read.get().sum());
+        }
+        lastCapacity.set(read);
         return read;
     }
 
-    /** @param atMillis 읽은 Redis 시각. 아직 읽은 적이 없으면 Long.MIN_VALUE */
-    private record CapacityReading(Optional<PreorderCapacity> value, long atMillis) {
+    private static String describe(Optional<PreorderCapacity> capacity) {
+        return capacity.map(found -> "합 " + found.sum()).orElse("모름 — 운영값");
     }
 
     /** 새 임기면 Redis 에 발행된 판정 재료의 배율에서 이어 간다 — 이 노드가 아직 재료를 못 받았어도 풀지 않게. */

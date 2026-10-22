@@ -19,13 +19,13 @@ public record GatewaySnapshot(Map<String, ProductState> products, SnapshotMeta m
 
     public GatewaySnapshot {
         products = Map.copyOf(products);
-        Objects.requireNonNull(capacity, "capacity 는 필수다. 모르면 CapacityStatus.unknown");
+        Objects.requireNonNull(capacity, "capacity 는 필수다. 모르면 CapacityStatus.MISSING");
     }
 
-    /** 용량을 모르는 재료. 운영값은 브레이크 전 값을 알 수 없어 적용된 전역 속도로 둔다. */
+    /** 운영값 · 용량을 모르는 재료. 적용된 전역 속도는 브레이크 뒤 값이라 운영값으로 쓰지 않는다. */
     public GatewaySnapshot(Map<String, ProductState> products, SnapshotMeta meta, long publishedAtMillis,
                            double brakeFactor) {
-        this(products, meta, publishedAtMillis, brakeFactor, CapacityStatus.unknown(meta.globalCredit()));
+        this(products, meta, publishedAtMillis, brakeFactor, CapacityStatus.MISSING);
     }
 
     public GatewaySnapshot(Map<String, ProductState> products, SnapshotMeta meta, long publishedAtMillis) {

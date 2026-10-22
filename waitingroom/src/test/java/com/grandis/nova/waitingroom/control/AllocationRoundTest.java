@@ -214,7 +214,7 @@ class AllocationRoundTest {
     }
 
     @Test
-    void 용량_합이_운영값보다_크면_운영값을_쓰고_표시가_없으면_운영값만_쓴다() {
+    void 용량_합이_운영값보다_크면_운영값을_쓰고_표시가_없어지면_운영값만_쓴다() {
         schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
         preorderTask("a", 100, Duration.ofMinutes(10));
         assertThat(run(7, 0).meta().globalCredit()).isEqualTo(10);
@@ -240,32 +240,36 @@ class AllocationRoundTest {
     }
 
     @Test
-    void 용량을_읽지_못하면_유예_동안_직전_합을_쓰고_직전_값이_없으면_운영값을_쓴다() {
+    void 용량을_읽지_못하면_직전_합을_계속_쓰고_직전_값이_없는_새_리더는_운영값을_쓴다() {
         schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
         preorderTask("a", 4, Duration.ofMinutes(10));
         assertThat(run(7, 0).meta().globalCredit()).isEqualTo(4);
         breakCapacity();
 
-        assertThat(run(7, 0).meta().globalCredit()).as("유예(15초) 안").isEqualTo(4);
-        assertThat(meters.get("waitingroom.control.failures").tag("loop", "capacity").counter().count()).isEqualTo(1);
+        assertThat(run(7, 0).meta().globalCredit()).isEqualTo(4);
+        assertThat(run(7, 0).meta().globalCredit()).as("오래 실패해도 운영값으로 뛰지 않는다").isEqualTo(4);
+        assertThat(meters.get("waitingroom.control.failures").tag("loop", "capacity").counter().count()).isEqualTo(2);
 
         round = newRound();
         assertThat(run(7, 0).meta().globalCredit()).as("새 리더는 직전 값이 없다").isEqualTo(10);
     }
 
     @Test
-    void 용량을_읽지_못한_채_유예가_지나면_운영값으로_돌아간다() {
+    void 표시가_모두_낡으면_직전_합을_유지하고_새_표시가_오면_따른다() {
         schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
         preorderTask("a", 4, Duration.ofMinutes(10));
-        round = newRound(new CapacityProperties(null, null, null, null, Duration.ofMillis(1)));
         assertThat(run(7, 0).meta().globalCredit()).isEqualTo(4);
-        breakCapacity();
+        long staleSec = now.getEpochSecond() - 60;
+        redis.opsForHash().put(CapacityProperties.defaults().key(), "a",
+                staleSec + "|" + (staleSec - 600) + "|4|15").block(WAIT);
 
-        // 유예는 Redis 시각으로 잰다 — 같은 호스트의 벽시계로 넉넉히 넘긴다
-        long until = System.currentTimeMillis() + 50;
-        await(() -> System.currentTimeMillis() >= until);
+        GatewaySnapshot held = run(7, 0);
 
-        assertThat(run(7, 0).meta().globalCredit()).isEqualTo(10);
+        assertThat(held.meta().globalCredit()).as("preorder 가 위태로울 때 운영값으로 뛰지 않는다").isEqualTo(4);
+        assertThat(held.capacity()).isEqualTo(new CapacityStatus(10, 4, 1, 0));
+
+        preorderTask("b", 6, Duration.ofMinutes(10));
+        assertThat(run(7, 0).meta().globalCredit()).isEqualTo(6);
     }
 
     /** 해시가 아니면 HGETALL 이 실패한다. */
@@ -277,7 +281,7 @@ class AllocationRoundTest {
     void 끄면_용량_표시를_읽지_않는다() {
         schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
         preorderTask("a", 4, Duration.ofMinutes(10));
-        round = newRound(new CapacityProperties(false, null, null, null, null));
+        round = newRound(new CapacityProperties(false, null, null, null));
 
         assertThat(run(7, 0).capacity()).isEqualTo(CapacityStatus.unknown(10));
     }
