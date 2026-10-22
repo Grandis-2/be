@@ -133,8 +133,8 @@ class ReadCacheOutageCopyTest {
 
         clock.advance(Duration.ofSeconds(59));
         assertThat(cache.get(body, "products", id, () -> new Item("db")).name()).as("읽은 지 9분 59초").isEqualTo("v1");
-        clock.advance(Duration.ofSeconds(2));
-        assertThat(cache.get(body, "products", id, () -> new Item("db")).name()).as("읽은 지 10분 1초 — 믿는 시간 안이어도 TTL 이 지났다").isEqualTo("db");
+        clock.advance(Duration.ofSeconds(1));
+        assertThat(cache.get(body, "products", id, () -> new Item("db")).name()).as("읽은 지 정확히 10분 — 믿는 시간 안이어도 TTL 이 다 됐다").isEqualTo("db");
         cache.breaker().transitionToClosedState();
     }
 
@@ -173,6 +173,20 @@ class ReadCacheOutageCopyTest {
 
         assertThat(served).isEqualTo("db");
         assertThat(loads).containsExactly(ReadCache.LoadPath.BYPASS);
+    }
+
+    @Test
+    @DisplayName("올리기와 같은 시각에 읽기 시작한 사본도 쓰지 않는다 — 그 값이 고치기 전인지 뒤인지 가를 수 없다")
+    void copyReadAtTheBumpInstantIsNotServed() {
+        get(cache, held, "v1");
+        cache.breaker().transitionToForcedOpenState();
+        loads.clear();
+
+        cache.bumpAfterCommit("products");   // 시계를 움직이지 않았다 — 사본의 읽은 시각과 같다
+        String served = get(cache, held, "db");
+        cache.breaker().transitionToClosedState();
+
+        assertThat(served).isEqualTo("db");
     }
 
     @Test
@@ -243,6 +257,104 @@ class ReadCacheOutageCopyTest {
     }
 
     @Test
+    @DisplayName("세대를 못 읽어도 다른 인스턴스가 올린 번호를 이 인스턴스가 이미 봤으면(다른 캐시 · 다른 키로) 옛 번호의 사본은 쓰지 않는다")
+    void bumpSeenThroughAnotherCacheRetiresTheCopy() {
+        get(cache, held, "v1");   // 세대 0 의 사본
+        instance(redis).bumpNow("products");   // 다른 인스턴스가 올렸다 — 세대 1
+        cache.get(plain, "products", "2", () -> new Item("other"));   // 사본을 켜지 않은 다른 캐시 · 다른 키로 세대 1 을 봤다
+        cache.breaker().transitionToForcedOpenState();
+        loads.clear();
+
+        String served = get(cache, held, "db");
+        cache.breaker().transitionToClosedState();
+
+        assertThat(served).as("세대 0 사본을 내지 않는다").isEqualTo("db");
+        assertThat(loads).containsExactly(ReadCache.LoadPath.BYPASS);
+    }
+
+    @Test
+    @DisplayName("다시 보기가 Redis 실패면 그 채우기 자리에 붙어 기다린 요청도 같은 사본을 받는다 — 원천은 부르지 않는다")
+    void waiterOfAFailedRecheckGetsTheCopy() throws Exception {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:held:"));
+        ReadCache failing = instance(template);
+        ReadCache.Spec<Item> spec = failing.spec("held", Item.class, TTL, HELD_FOR);
+        get(failing, spec, "v1");
+        redis.delete(redis.keys("svc:cache:held:*"));
+        loads.clear();
+        template.failWith = new RedisSystemException("다시 보기 실패", null);
+        template.failAt = 2;
+        template.pauseAt = 2;   // 자리를 잡은 뒤의 GET 에서 멈췄다가 던진다
+        java.util.concurrent.atomic.AtomicReference<Object> owner = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Object> waiter = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread holder = new Thread(() -> {
+            template.pause.set(true);
+            template.fail.set(true);
+            try {
+                owner.set(failing.entry(spec, "products", "1", () -> { loads.add(ReadCache.LoadPath.FILL); return new Item("db"); }));
+            } catch (Throwable e) {
+                owner.set(e);
+            }
+        });
+        holder.start();
+        assertThat(template.read.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        Thread joiner = new Thread(() -> {
+            try {
+                waiter.set(failing.entry(spec, "products", "1", () -> { loads.add(ReadCache.LoadPath.FILL); return new Item("db"); }));
+            } catch (Throwable e) {
+                waiter.set(e);
+            }
+        });
+        joiner.start();
+        assertThat(outcomes.waiting.await(10, java.util.concurrent.TimeUnit.SECONDS)).as("같이 기다리는 쪽이 자리에 붙었다").isTrue();
+        template.resume.countDown();
+        holder.join(10_000);
+        joiner.join(10_000);
+
+        assertThat(owner.get()).isInstanceOf(ReadCache.Entry.class);
+        assertThat(((ReadCache.Entry<?>) owner.get()).value()).isEqualTo(new Item("v1"));
+        assertThat(waiter.get()).as("자리 주인의 사본을 그대로 받는다").isSameAs(owner.get());
+        assertThat(loads).isEmpty();
+    }
+
+    @Test
+    @DisplayName("저장 상한에 걸려 Redis 에 넣지 못한 값도 사본은 남는다 — 이 세대의 지금 값이다")
+    void valueOverTheStoreBudgetIsStillCopied() {
+        // Redis 몫은 키 · 고정 비용 · 값의 1/4 까지 세어(값 하나 약 200) 하나만 들어가고, 사본은 JSON 글자 수(약 45)라 둘 다 남는다
+        ReadCache.Spec<Item> tight = cache.spec("tight", JSON.constructType(Item.class), TTL, 300, HELD_FOR);
+        cache.get(tight, "products", "1", () -> new Item("v1"));
+        cache.get(tight, "products", "2", () -> new Item("v2"));
+        assertThat(redis.keys("svc:cache:tight:*")).as("두 번째는 저장 상한에 걸려 Redis 에 없다").hasSize(1);
+        cache.breaker().transitionToForcedOpenState();
+
+        String served = cache.get(tight, "products", "2", () -> new Item("db")).name();
+        cache.breaker().transitionToClosedState();
+
+        assertThat(served).isEqualTo("v2");
+    }
+
+    @Test
+    @DisplayName("사본의 양은 JSON 글자 수 상한으로 묶인다 — 넘친 사본은 밀려나 원천으로 간다")
+    void copiesAreBoundedByTheirJsonLength() {
+        ReadCache.Spec<Item> small = cache.spec("small", JSON.constructType(Item.class), TTL, 300, HELD_FOR);   // 값 하나 약 45자 — 스무 개는 못 든다
+        for (int i = 0; i < 20; i++) {
+            String id = String.valueOf(i);
+            cache.get(small, "products", id, () -> new Item("v" + id));
+        }
+        small.outage().cleanUp();
+        cache.breaker().transitionToForcedOpenState();
+        int held = 0;
+        for (int i = 0; i < 20; i++) {
+            String id = String.valueOf(i);
+            if (cache.get(small, "products", id, () -> new Item("db")).name().startsWith("v")) {
+                held++;
+            }
+        }
+        cache.breaker().transitionToClosedState();
+
+        assertThat(held).as("상한 안의 사본만 남는다").isBetween(1, 19);
+    }
+
+    @Test
     @DisplayName("믿는 시간이 0 이하면 만들 때 거절한다")
     void heldForMustBePositive() {
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> cache.spec("x", Item.class, TTL, Duration.ZERO))
@@ -252,10 +364,14 @@ class ReadCacheOutageCopyTest {
     /** 캐시마다의 요청 결과. */
     static final class Outcomes implements ReadCacheEvents {
         private final List<String> served = Collections.synchronizedList(new ArrayList<>());
+        final java.util.concurrent.CountDownLatch waiting = new java.util.concurrent.CountDownLatch(1);
 
         @Override
         public void served(String cache, Outcome outcome) {
             served.add(cache + "|" + outcome.name());
+            if (outcome == Outcome.WAIT) {
+                waiting.countDown();
+            }
         }
 
         @Override
