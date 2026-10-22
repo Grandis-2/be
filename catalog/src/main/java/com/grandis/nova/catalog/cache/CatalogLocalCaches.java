@@ -16,8 +16,11 @@ import java.util.UUID;
  * 인스턴스 메모리에 두는 공개 조회 캐시 — 상품 목록 · 조회수 랭킹 · 카테고리 트리 · 홍보 카드. 나머지(상세 본문 · 리뷰 · 홍보 내용)는 Redis({@link CatalogReadCache})다.
  * 고른 기준(2026-10-16 실측 — Testcontainers MySQL 8.4 · Redis 8, p50): 목록 20개 한 쪽은 30.6KB · DB 4.2ms · Redis 적중 1.05ms · 메모리 적중 0.002ms,
  * 카테고리 트리는 4.7KB · DB 1.5ms · Redis 적중 0.40ms. 둘 다 다른 인스턴스가 늦어도 되는 조회다 — 목록은 TTL(5초)이 원래 지연이고, 카테고리는
- * 고치는 API 가 없다. 홍보 카드는 목록과 같은 카드(가격 · 판매 준비 · 색상칩)이고 같은 TTL 이다 — 홍보 상세가 몰리면 요청마다 카드 두 문장과 그 결과
- * 매핑이 1 vCPU 를 채워 Redis 응답이 밀렸다(2026-10-22 부하 시험). 메모리에 두면 Redis 를 부르지 않아 그때도 꺼낼 수 있다.
+ * 고치는 API 가 없다. 홍보 카드는 목록과 같은 카드(가격 · 판매 준비 · 색상칩)이고 같은 TTL 이다 — 2026-10-22 부하 시험에서 홍보 상세가 한 태스크(1 vCPU)에
+ * 몰려 CPU 가 찼고, 요청마다 읽던 카드 두 문장과 그 매핑의 몫이 컸다(그 밖에 막 뜬 JVM 의 JIT · GC). 로컬 재현(CPU 0.5 · 70 req/s · 3회)에서 카드를
+ * Redis 에 5초 두면 무너지지는 않았지만 Redis 시간 초과 때 같이 우회돼 p99 가 2초대로 남았다 — 메모리에 두면 꺼낼 때 Redis 값 읽기 · JSON 변환이 없다.
+ * 다만 숨김 · 판매 중지 · 삭제는 모든 인스턴스에서 바로 빠져야 해(사용자 결정 2026-10-22) 키에 상품 세대 번호를 넣는다 — 상품 상세와 같은 세대라
+ * 상품이 바뀌면 모든 인스턴스가 다음 조회부터 새로 읽는다. 세대를 못 읽으면(Redis 실패) 캐시 없이 DB 로 읽는다.
  * 상세 본문 · 리뷰 · 홍보 내용은 TTL 이 길거나 쓴 사람이 바로 봐야 해 모든 인스턴스를 같이 비우는 Redis 세대가 필요하다.
  * 무게는 JSON 바이트로 센다(넣을 때 한 번 직렬화한다) — 힙 점유가 아니라 Redis 판의 저장 상한과 같은 단위의 근사다.
  * 카테고리는 비우는 곳이 없다 — 마이그레이션이나 SQL 로 바꾸면 인스턴스마다 최대 TTL(10분) 뒤 또는 재기동 때 보인다(마이그레이션만 바뀐 배포는
@@ -34,7 +37,7 @@ public class CatalogLocalCaches {
     public static final Duration PRODUCT_RANKING_TTL = Duration.ofSeconds(30);
     /** 카테고리 트리는 키 하나(약 5KB). */
     static final long CATEGORY_TREE_MAX_BYTES = 1024 * 1024;
-    /** 홍보 카드의 인스턴스당 상한(JSON 바이트). 홍보 하나가 상품 20개까지(약 30KB) · 오늘 보이는 홍보 묶음 하나 — 약 130개. */
+    /** 홍보 카드의 인스턴스당 상한(JSON 바이트). 홍보 하나가 상품 20개까지다 — 상품 목록 한 쪽(카드 20개 · 색상칩, 10-16 실측 30.6KB) 기준으로 약 130개 근사. */
     static final long PROMOTION_CARDS_MAX_BYTES = 4L * 1024 * 1024;
 
     private final LocalReadCache<CatalogReadCache.ListKey, OffsetPage<ProductListItem>> productList;
@@ -75,11 +78,13 @@ public class CatalogLocalCaches {
     }
 
     /**
-     * 홍보 카드의 키 — 묶은 상품(보이는 순서)과 색상칩 여부. 홍보에 묶은 상품이 바뀌면 키가 바뀌므로 홍보 쪽 비우기가 따로 필요 없다.
+     * 홍보 카드의 키 — 묶은 상품(보이는 순서) · 색상칩 여부 · 상품 세대 번호. 홍보에 묶은 상품이 바뀌면 키가 바뀌므로 홍보 쪽 비우기가 따로 필요 없고,
+     * 상품이 바뀌면(세대가 오르면) 모든 인스턴스에서 키가 바뀐다. 옛 세대의 값은 아무도 읽지 않고 TTL 로 사라진다.
      *
-     * @param productIds 고정 목록이어야 한다(키가 바뀌지 않게)
+     * @param productIds         복사해 고정한다(넘긴 목록이 바뀌어도 키는 그대로)
+     * @param productsGeneration {@link CatalogReadCache#PRODUCTS} 세대의 지금 번호({@link com.grandis.nova.common.redis.cache.ReadCache#generation})
      */
-    public record CardsKey(List<UUID> productIds, boolean withColors) {
+    public record CardsKey(List<UUID> productIds, boolean withColors, long productsGeneration) {
 
         public CardsKey {
             productIds = List.copyOf(productIds);
