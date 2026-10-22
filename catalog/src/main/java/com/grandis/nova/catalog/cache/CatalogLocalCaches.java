@@ -86,6 +86,9 @@ public class CatalogLocalCaches {
      */
     public record CardsKey(List<UUID> productIds, boolean withColors, long productsGeneration) {
 
+        /** 세대를 못 읽었을 때의 자리 — 이 키로는 넣지 않고 같은 키의 동시 조회만 합친다. 실제 세대 번호는 0 이상이라 겹치지 않는다. */
+        public static final long UNREADABLE = Long.MIN_VALUE;
+
         public CardsKey {
             productIds = List.copyOf(productIds);
         }

@@ -127,12 +127,15 @@ public class PromotionQueryService {
      * 시각 · 접수 단계를 비워 낸다.
      */
     private ReadCache.Entry<List<ProductListItem>> cards(List<UUID> productIds, boolean withColors) {
-        // 빈 결과(묶은 상품이 모두 숨김 · 준비 전)는 넣지 않는다 — 준비되면 TTL 을 기다리지 않고 나오게. 읽은 시각은 응답의 max-age 에 쓴다
+        if (productIds.isEmpty()) {
+            return new ReadCache.Entry<>(List.of(), clock.instant());   // 오늘 보이는 홍보가 없다 — 세대도 읽지 않는다
+        }
+        // 빈 결과(묶은 상품이 모두 숨김 · 준비 전)는 넣지 않는다 — 준비되면 TTL 을 기다리지 않고 나오게. 읽은 시각은 응답의 max-age 에 쓴다.
+        // 세대를 못 읽으면(Redis 실패) 넣지 않되 같은 자리를 거친다 — 동시 요청이 DB 를 각자 읽지 않고 한 번을 나눠 받는다
         OptionalLong products = cache.generation(CatalogReadCache.PRODUCTS);
-        ReadCache.Entry<List<ProductListItem>> entry = products.isEmpty()
-                ? cache.uncached(() -> crossReads.findCards(productIds, withColors))
-                : cardCache.entry(new CatalogLocalCaches.CardsKey(productIds, withColors, products.getAsLong()),
-                        () -> crossReads.findCards(productIds, withColors), found -> !found.isEmpty());
+        long generation = products.orElse(CatalogLocalCaches.CardsKey.UNREADABLE);
+        ReadCache.Entry<List<ProductListItem>> entry = cardCache.entry(new CatalogLocalCaches.CardsKey(productIds, withColors, generation),
+                () -> crossReads.findCards(productIds, withColors), found -> products.isPresent() && !found.isEmpty());
         List<ProductListItem> cards = entry.value();
         List<UUID> preorderIds = cards.stream().filter(card -> card.saleMode() == SaleMode.PREORDER).map(ProductListItem::productId).toList();
         Instant now = clock.instant();
