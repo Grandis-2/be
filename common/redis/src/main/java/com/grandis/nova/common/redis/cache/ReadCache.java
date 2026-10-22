@@ -270,7 +270,7 @@ public final class ReadCache {
         return spec(name, type, ttl, budgetBytes, null);
     }
 
-    /** 시험용 — 저장 상한(사본 양 상한도 같은 수)을 정해 사본을 켠다. */
+    /** 모든 spec 이 거치는 구현 — 시험이 저장 상한(사본 양 상한도 같은 수)을 정해 사본을 켜려고 package-private 으로 연다. */
     <T> Spec<T> spec(String name, JavaType type, Duration ttl, long budgetBytes, Duration heldDuringOutage) {
         if (ttl.isNegative() || ttl.isZero()) {
             throw new IllegalArgumentException("ttl must be positive: " + ttl);
