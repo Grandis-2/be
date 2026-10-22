@@ -1,1 +1,2 @@
 com.grandis.nova.common.redis.RedisWarmupAutoConfiguration
+com.grandis.nova.common.redis.RedisTracingAutoConfiguration
