@@ -66,6 +66,7 @@ class CatalogReadCacheApiTest {
         local.productList().invalidateAll();
         local.productRanking().invalidateAll();
         local.categoryTree().invalidateAll();
+        local.promotionCards().invalidateAll();
     }
 
     /** 메모리 캐시에 든 키 수(정리 뒤). */
@@ -256,7 +257,7 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
-    @DisplayName("홍보 — 본문은 캐시에서(DB 를 직접 고쳐도 옛 값), 관리자가 고치면 바로 새 값, 상품 카드(회차 · 할인가)는 요청마다 읽는다")
+    @DisplayName("홍보 — 본문은 캐시에서(DB 를 직접 고쳐도 옛 값), 관리자가 고치면 바로 새 값. 상품 카드(할인가)는 메모리에 5초, 접수 단계는 요청마다")
     void promotionBodyCachedCardsLive() throws Exception {
         java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
         UUID productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", "홍보 상품", "t");
@@ -280,9 +281,13 @@ class CatalogReadCacheApiTest {
 
         JsonNode second = data(mockMvc.perform(get("/api/v1/promotions/{id}", promotionId)).andExpect(status().isOk()));
         assertThat(second.get("name").asString()).as("본문은 캐시에서").isEqualTo("첫 이름");
-        assertThat(second.get("products").get(0).get("preorderStatus").asString()).isEqualTo("CLOSED");
-        assertThat(second.get("products").get(0).get("minPrice").decimalValue()).isEqualByComparingTo("500000");
+        assertThat(second.get("products").get(0).get("preorderStatus").asString()).as("회차는 카드 캐시 밖 — 조기 마감이 바로").isEqualTo("CLOSED");
+        assertThat(second.get("products").get(0).get("minPrice").decimalValue()).as("카드는 메모리에서 — DB 를 직접 고친 할인가는 TTL 안에서 옛 값")
+                .isEqualByComparingTo("1000000");
         assertThat(titlesOfPromotions()).contains("첫 이름");
+        Thread.sleep(CatalogReadCache.PRODUCT_TTL.toMillis() + 300);
+        assertThat(data(mockMvc.perform(get("/api/v1/promotions/{id}", promotionId))).get("products").get(0).get("minPrice").decimalValue())
+                .as("TTL 이 지나면 새 할인가").isEqualByComparingTo("500000");
 
         admin(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/v1/admin/promotions/{id}", promotionId),
                 body.replace("첫 이름", "고친 이름")).andExpect(status().isOk());
@@ -399,6 +404,60 @@ class CatalogReadCacheApiTest {
         assertThat(rankingTitles()).as("메모리의 옛 카드 — 캐시가 켜져 있다").containsExactlyInAnyOrder("랭킹 유지", "랭킹 숨김");
         admin(patch(ADMIN + "/{id}/visibility", hidden), "{ \"visible\": false }").andExpect(status().isOk());
         assertThat(rankingTitles()).as("숨긴 상품은 바로 빠지고, 다시 읽어 직접 고친 값도 보인다").containsExactly("직접 고침");
+    }
+
+    @Test
+    @DisplayName("홍보 카드는 인스턴스 메모리에서 — DB 를 직접 고쳐도 옛 카드이고 Redis 가 멈춰도 그대로다. 관리자가 상품을 숨기면(JPA) 이 인스턴스는 바로 빠진다")
+    void promotionCardsAreServedFromMemory() throws Exception {
+        java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
+        UUID productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", "홍보 카드", "t");
+        fixtures.registration(productId);
+        fixtures.option(productId, "ACTIVE");
+        Instant now = Instant.now();
+        fixtures.campaign(productId, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
+        String body = """
+                { "name": "카드 홍보", "startDate": "%s", "endDate": "%s", "thumbnailUrl": "https://img/t.jpg", "detailImageUrls": [], "productIds": ["%s"] }
+                """.formatted(today, today, productId);
+        UUID promotionId = UUID.fromString(data(admin(post("/api/v1/admin/promotions").header("Idempotency-Key", "k-" + ShopFixtures.unique()), body)
+                .andExpect(status().isCreated())).get("promotionId").asString());
+        assertThat(promotionCardTitles(promotionId)).containsExactly("홍보 카드");
+        jdbcTemplate.update("UPDATE products SET title = '직접 고침' WHERE id = ?", (Object) UuidBinary.toBytes(productId));
+
+        assertThat(promotionCardTitles(promotionId)).as("메모리의 옛 카드 — 캐시가 켜져 있다").containsExactly("홍보 카드");
+        RedisContainerConfig.pause();
+        try {
+            assertThat(promotionCardTitles(promotionId)).as("Redis 와 상관없다 — 본문은 DB 로, 카드는 메모리에서").containsExactly("홍보 카드");
+        } finally {
+            RedisContainerConfig.unpause();
+        }
+        admin(patch(ADMIN + "/{id}/visibility", productId), "{ \"visible\": false }").andExpect(status().isOk());
+        assertThat(promotionCardTitles(promotionId)).as("숨긴 상품은 바로 빠진다").isEmpty();
+    }
+
+    @Test
+    @DisplayName("빈 홍보 카드(묶은 상품이 모두 숨김)는 넣지 않는다 — DB 로 다시 공개하면 TTL 을 기다리지 않고 바로 보인다")
+    void emptyPromotionCardsAreNotCached() throws Exception {
+        java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
+        UUID productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", "숨긴 카드", "t");
+        fixtures.registration(productId);
+        fixtures.option(productId, "ACTIVE");
+        Instant now = Instant.now();
+        fixtures.campaign(productId, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
+        String body = """
+                { "name": "빈 홍보", "startDate": "%s", "endDate": "%s", "thumbnailUrl": "https://img/t.jpg", "detailImageUrls": [], "productIds": ["%s"] }
+                """.formatted(today, today, productId);
+        UUID promotionId = UUID.fromString(data(admin(post("/api/v1/admin/promotions").header("Idempotency-Key", "k-" + ShopFixtures.unique()), body)
+                .andExpect(status().isCreated())).get("promotionId").asString());
+        jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", (Object) UuidBinary.toBytes(productId));
+        assertThat(promotionCardTitles(promotionId)).isEmpty();
+
+        jdbcTemplate.update("UPDATE products SET visible = 1 WHERE id = ?", (Object) UuidBinary.toBytes(productId));
+        assertThat(promotionCardTitles(promotionId)).as("빈 결과는 캐시에 없다").containsExactly("숨긴 카드");
+    }
+
+    private java.util.List<String> promotionCardTitles(UUID promotionId) throws Exception {
+        return data(mockMvc.perform(get("/api/v1/promotions/{id}", promotionId)).andExpect(status().isOk())).get("products").findValues("title")
+                .stream().map(JsonNode::asString).toList();
     }
 
     private java.util.List<String> rankingTitles() throws Exception {
