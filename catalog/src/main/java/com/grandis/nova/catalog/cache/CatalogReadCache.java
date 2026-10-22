@@ -39,7 +39,8 @@ import java.util.UUID;
  *   <li><b>앞단 HTTP 캐시</b>는 돌려준 {@link ReadCache.Entry#loadedAt()} 로 남은 시간만큼만 허용한다(PublicCache) — 두 단계를 합쳐도 TTL 을 넘지
  *       않게. 나이가 다른 값을 합친 응답(홍보 본문 · 카드)은 그중 짧은 쪽이다.</li>
  * </ul>
- * 상품 목록 · 조회수 랭킹 · 카테고리 트리 · 홍보 카드는 인스턴스 메모리({@link CatalogLocalCaches}), 나머지는 Redis 다. Redis 가 실패하면 캐시 없이 DB 로 답한다({@link ReadCache}).
+ * 상품 목록 · 조회수 랭킹 · 카테고리 트리 · 홍보 카드는 인스턴스 메모리({@link CatalogLocalCaches}), 나머지는 Redis 다. Redis 가 실패하면 캐시 없이 DB 로 답한다({@link ReadCache}) —
+ * 상품 상세 본문 · 홍보 본문 · 회차는 그 전에 이 인스턴스의 사본을 본다(ReadCache.OutageCopies).
  * 메모리 캐시의 비우기는 그 인스턴스에만 닿는다 — 다른 인스턴스는 TTL 이 지나야 새 값이다(그래서 TTL 이 짧거나 고치는 쪽이 없는 조회만 둔다).
  * 홍보 카드는 예외다 — 키에 {@link #PRODUCTS} 세대 번호가 있어 세대를 올린 쓰기는 모든 인스턴스가 다음 조회부터 새로 읽는다(올리기가 미뤄지거나 Redis 장애 중이면 TTL 이 상한).
  */
@@ -88,7 +89,9 @@ public class CatalogReadCache {
         this.listings = listings;
         this.categories = categories;
         this.reviews = reviews;
-        this.detailSpec = cache.spec("product-detail-body", ProductDetailBody.class, DETAIL_TTL);
+        // Redis 를 못 읽어도 이 인스턴스의 사본을 TTL 안에서 쓴다(ReadCache.OutageCopies) — 장애 중 다른 인스턴스의 숨김 · 가격 변경은 최대 이만큼
+        // 늦게 보인다(2026-10-22 결정). 이 인스턴스가 고친 상품은 바로 빠진다
+        this.detailSpec = cache.spec("product-detail-body", ProductDetailBody.class, DETAIL_TTL, DETAIL_TTL);
         this.reviewSpec = cache.spec("reviews", new TypeReference<OffsetPage<ReviewView>>() { }, REVIEW_TTL);
     }
 

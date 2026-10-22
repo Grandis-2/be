@@ -41,7 +41,9 @@ public interface ReadCacheEvents {
         /** 이 요청이 직접 DB 를 읽었다. */
         LOAD,
         /** 같은 키의 진행 중 조회(직접 읽기 또는 미리 갱신)를 기다렸다. */
-        WAIT
+        WAIT,
+        /** Redis 를 못 읽어(실패 · 시간 초과 · 차단기) 이 인스턴스의 사본으로 답했다({@link ReadCache.OutageCopies}). */
+        HELD
     }
 
     enum RefreshResult {

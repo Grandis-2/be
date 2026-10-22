@@ -4,6 +4,8 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.redis.cache.ReadCacheEvents.Outcome;
 import com.grandis.nova.common.redis.cache.ReadCacheEvents.RefreshResult;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
@@ -53,6 +55,8 @@ import java.util.function.Supplier;
  *       잡기 전에 앞 조회가 넣고 끝냈으면 그 값을 받는다(안 보면 원천을 한 번 더 읽는다). 다시 보기를 못 하면(Redis 실패 · 차단기) 없음으로 보지 않고
  *       우회한다 — 그때는 이미 그 채우기 자리에 붙어 기다린 요청도 우회 결과를 받는다(넣지 않는다). 그 밖에는 우회는 우회끼리만 같이 받는다(세대를
  *       읽었으면 그 번호까지 같은 것끼리) — 같은 키를 채우기와 우회가 동시에 찾으면 loader 를 각각 한 번 부른다.</li>
+ *   <li><b>장애 중 사본</b>: 사본을 켠 캐시({@link #spec(String, Class, Duration, Duration)})는 Redis 를 못 읽을 때 우회하기 전에 이 인스턴스의
+ *       사본({@link OutageCopies})으로 답한다 — Redis 가 잠깐 늦어 차단기가 열린 동안 요청이 모두 원천으로 몰려 줄을 서지 않게.</li>
  *   <li><b>미리 갱신</b>: 읽은 지 TTL 의 {@link #REFRESH_AFTER_PERCENT}% 가 지난 값을 꺼낸 요청은 그 값을 바로 받고, 같은 키(세대 번호 포함)의
  *       다시 읽기를 갱신 실행기에 이 인스턴스에서 하나만 맡긴다 — 만료 순간 모든 요청이 한 건의 읽기를 기다리지 않게(부하 시험에서 목록 · 리뷰의 캐시
  *       대상 요청이 그 대기로 목록 0.3~1.4초 · 리뷰 0.2~2.2초 걸렸다). 요청이 없는 키는 갱신하지 않는다. 갱신은 몰림의 "한 번만 읽기" 자리를 같이 써서, 갱신이 끝나기 전에
@@ -159,6 +163,10 @@ public final class ReadCache {
     private final Set<String> refreshing = ConcurrentHashMap.newKeySet();
     /** 갱신 결과를 넣지 못했거나 갱신을 맡기지 못한 키와 그때 들고 있던 값의 만료 시각 — 그때까지 다시 맡기지 않는다. */
     private final ConcurrentHashMap<String, Instant> notStoredUntil = new ConcurrentHashMap<>();
+    /** 세대마다 이 인스턴스가 Redis 에서 그 번호를 마지막으로 읽은 시각 — 장애 중 사본을 믿는 시간({@link OutageCopies})의 기준. */
+    private final ConcurrentHashMap<String, Instant> confirmedAt = new ConcurrentHashMap<>();
+    /** 세대마다 이 인스턴스가 마지막으로 올리려 한 시각 — 그 전에 읽기 시작한 사본은 쓰지 않는다(올리기가 미뤄져 번호가 그대로여도). */
+    private final ConcurrentHashMap<String, Instant> bumpedAt = new ConcurrentHashMap<>();
 
     /** @param service 키 앞에 붙는 서비스 이름(catalog · order) — 같은 Redis 를 나눠 쓰는 서비스끼리 키가 겹치지 않게 */
     public ReadCache(StringRedisTemplate redis, JsonMapper json, String service) {
@@ -244,11 +252,34 @@ public final class ReadCache {
         return spec(name, json.constructType(type), ttl, budgetBytes);
     }
 
+    /**
+     * 장애 중 사본을 켠 캐시 — Redis 를 못 읽으면 우회하기 전에 이 인스턴스의 사본으로 답한다({@link OutageCopies}). 사본의 양은 저장 상한
+     * ({@link #DEFAULT_BUDGET_BYTES})과 같은 수의 JSON 글자로 묶는다.
+     *
+     * @param heldDuringOutage 이 인스턴스가 Redis 에서 세대를 마지막으로 읽은 뒤 사본을 믿는 시간 — 장애 중 다른 인스턴스의 변경이 늦게 보이는 상한
+     */
+    public <T> Spec<T> spec(String name, Class<T> type, Duration ttl, Duration heldDuringOutage) {
+        return spec(name, json.constructType(type), ttl, DEFAULT_BUDGET_BYTES, Objects.requireNonNull(heldDuringOutage, "heldDuringOutage"));
+    }
+
+    public <T> Spec<T> spec(String name, tools.jackson.core.type.TypeReference<T> type, Duration ttl, Duration heldDuringOutage) {
+        return spec(name, json.constructType(type), ttl, DEFAULT_BUDGET_BYTES, Objects.requireNonNull(heldDuringOutage, "heldDuringOutage"));
+    }
+
     private <T> Spec<T> spec(String name, JavaType type, Duration ttl, long budgetBytes) {
+        return spec(name, type, ttl, budgetBytes, null);
+    }
+
+    /** 모든 spec 이 거치는 구현 — 시험이 저장 상한(사본 양 상한도 같은 수)을 정해 사본을 켜려고 package-private 으로 연다. */
+    <T> Spec<T> spec(String name, JavaType type, Duration ttl, long budgetBytes, Duration heldDuringOutage) {
         if (ttl.isNegative() || ttl.isZero()) {
             throw new IllegalArgumentException("ttl must be positive: " + ttl);
         }
-        return new Spec<>(name, type, Shape.fingerprint(type), ttl, new StoreBudget(budgetBytes, System::nanoTime));
+        if (heldDuringOutage != null && (heldDuringOutage.isNegative() || heldDuringOutage.isZero())) {
+            throw new IllegalArgumentException("heldDuringOutage must be positive: " + heldDuringOutage);
+        }
+        OutageCopies outage = heldDuringOutage == null ? null : new OutageCopies(heldDuringOutage, ttl, budgetBytes);
+        return new Spec<>(name, type, Shape.fingerprint(type), ttl, new StoreBudget(budgetBytes, System::nanoTime), outage);
     }
 
     /**
@@ -278,7 +309,7 @@ public final class ReadCache {
     /**
      * 세대 {@code generation} 의 키 {@code id} 값과 그 값을 DB 에서 읽은 시각. 없으면 loader 로 만들어 넣는다. loader 가 null 을 주면 넣지 않는다.
      * 세대 번호를 못 읽으면(Redis 장애) 캐시를 건너뛰고 loader 로 답한다 — 아무 번호나 쓰면 옛 값을 줄 수 있다. 세대는 읽었는데 값을 못 읽어도
-     * (실패 · 차단기 열림) 같다 — 없음으로 보지 않고 우회한다.
+     * (실패 · 차단기 열림) 같다 — 없음으로 보지 않고 우회한다. 사본을 켠 캐시는 그 전에 이 인스턴스가 마지막으로 본 번호의 사본을 본다({@link OutageCopies}).
      * 읽은 시각은 응답의 HTTP 캐시 시간({@link Entry#remaining})을 정하는 데 쓴다 — 앞단 캐시가 이 값을 TTL 넘게 들고 있지 않게.
      */
     public <T> Entry<T> entry(Spec<T> spec, String generation, String id, Supplier<T> loader, Predicate<T> storable) {
@@ -314,16 +345,17 @@ public final class ReadCache {
         if (cached != null) {
             Entry<T> entry = parseStored(cached, spec, key, false);
             if (entry != null) {
+                keepCopy(spec, generation, current, id, entry, cached.length());
                 boolean submitted = refresher != null
                         && !clock.instant().isBefore(entry.loadedAt().plus(spec.ttl().multipliedBy(REFRESH_AFTER_PERCENT).dividedBy(100)))
-                        && refreshAhead(key, spec, entry.loadedAt(), loader, storable, generation, current);
+                        && refreshAhead(key, id, spec, entry.loadedAt(), loader, storable, generation, current);
                 events.served(spec.name(), submitted ? Outcome.HIT_REFRESH : Outcome.HIT);
                 return entry;
             }
             warned = true;   // parseStored 는 있는 값을 못 읽으면 늘 경고하고 null 을 낸다 — 다시 보기가 같은 경고를 또 남기지 않게 넘긴다
         }
         // 완성된 키(세대 번호 포함)로 줄 세운다 — 세대가 오른 뒤 온 요청이 옛 세대의 진행 중 조회를 같이 받지 않게
-        return load(key, key, spec, loader, storable, generation, current, warned);
+        return load(key, key, id, spec, loader, storable, generation, current, warned);
     }
 
     /**
@@ -331,11 +363,77 @@ public final class ReadCache {
      * 채우기 자리를 잡은 뒤 다시 보기가 우회로 바뀐 경우는 이 메서드를 거치지 않고 그 채우기 자리에서 우회하므로, 그 자리의 대기자는 우회 결과를
      * 받는다(클래스 문서의 몰림). 세대를 읽었으면 그 번호까지 자리에 넣는다 — 옛 세대에서 시작한 우회를 새 세대를 읽은 요청이 같이 받지 않게.
      *
+     * 사본을 켠 캐시는 먼저 이 인스턴스의 사본을 본다({@link #heldCopy}) — 쓸 수 있으면 원천을 부르지 않는다.
+     *
      * @param current 읽은 세대 번호, 못 읽었으면 null
      */
     private <T> Entry<T> bypass(Spec<T> spec, String generation, Long current, String id, Function<LoadPath, T> loader, Predicate<T> storable) {
+        Entry<T> held = heldCopy(spec, generation, current, id);
+        if (held != null) {
+            return held;
+        }
         String slot = "down|" + spec.name() + ":" + generation + (current == null ? "" : "." + current) + ":" + id;
-        return load(slot, null, spec, loader, storable, generation, -1, false);
+        return load(slot, null, null, spec, loader, storable, generation, -1, false);
+    }
+
+    /**
+     * Redis 를 못 읽을 때 답할 사본 — 없거나 못 쓰면 null(우회). 쓸 수 있는 사본은 아래를 모두 지난 것이다.
+     * <ul>
+     *   <li>세대 번호가 맞다 — 세대를 읽었으면 그 번호, 못 읽었으면 이 인스턴스가 본 가장 큰 번호({@link #lastSeenGeneration}).
+     *       못 읽었을 때는 그 번호를 Redis 에서 마지막으로 읽은 지 사본을 믿는 시간(heldDuringOutage) 안이어야 한다 — 그 뒤의 올리기는 이 인스턴스가 모른다.</li>
+     *   <li>값의 TTL 안이다 — 평소 Redis 에 있었을 값보다 오래된 값을 내지 않는다(읽은 시각은 그대로 줘 max-age 도 줄어든다).</li>
+     *   <li>이 인스턴스가 그 세대를 마지막으로 올리려 한 뒤에 읽기 시작한 값이다 — 장애 중 이 인스턴스가 바꾼 것(올리기가 미뤄짐)은 바로 빠진다.</li>
+     * </ul>
+     */
+    @SuppressWarnings("unchecked")
+    private <T> Entry<T> heldCopy(Spec<T> spec, String generation, Long current, String id) {
+        OutageCopies outage = spec.outage();
+        if (outage == null) {
+            return null;
+        }
+        Instant now = clock.instant();
+        long number;
+        if (current != null) {
+            number = current;
+        } else {
+            Long seen = highestGenerations.get(generation);
+            Instant confirmed = confirmedAt.get(generation);
+            if (seen == null || confirmed == null || now.isAfter(confirmed.plus(outage.heldFor))) {
+                return null;
+            }
+            number = seen;
+        }
+        Copy copy = outage.copies.getIfPresent(generation + ":" + id);
+        if (copy == null || copy.generationNumber() != number || !readAfterBump(generation, copy.entry())
+                || !now.isBefore(copy.entry().loadedAt().plus(spec.ttl()))) {
+            return null;
+        }
+        events.served(spec.name(), Outcome.HELD);
+        return (Entry<T>) copy.entry();
+    }
+
+    /**
+     * 사본을 남긴다 — Redis 에서 읽은 값과 원천에서 읽어 넣으려 한 값(넣지 못했어도). 이 인스턴스가 그 세대를 올리려 하기 전에 읽기 시작한 값도
+     * 남지만 꺼낼 때 거른다({@link #heldCopy}) — 남긴 뒤에 올리기가 와도 같이 걸러지게 한 곳에서만 본다.
+     *
+     * @param weight 값의 JSON 글자 수 — 사본 양의 상한을 센다
+     */
+    private void keepCopy(Spec<?> spec, String generation, long number, String id, Entry<?> entry, int weight) {
+        OutageCopies outage = spec.outage();
+        if (outage == null || id == null) {
+            return;
+        }
+        String copyKey = generation + ":" + id;
+        Copy held = outage.copies.getIfPresent(copyKey);
+        if (held != null && held.generationNumber() == number && held.entry().loadedAt().equals(entry.loadedAt())) {
+            return;   // 같은 값 — 히트마다 다시 쓰지 않는다
+        }
+        outage.copies.put(copyKey, new Copy(number, entry, weight));
+    }
+
+    private boolean readAfterBump(String generation, Entry<?> entry) {
+        Instant bumped = bumpedAt.get(generation);
+        return bumped == null || entry.loadedAt().isAfter(bumped);
     }
 
     /**
@@ -363,6 +461,7 @@ public final class ReadCache {
     private Long readGeneration(String generation) {
         // 본 번호는 세대를 읽기 전에 꺼낸다 — 읽은 뒤 꺼내면 그사이 다른 스레드가 더 큰 번호를 본 것과 섞여, 정상 올리기 뒤에도 되돌아간 것으로 본다
         Long seenBefore = highestGenerations.get(generation);
+        Instant asked = clock.instant();   // 확인 시각은 읽기 전 — 늦게 끝난 읽기가 확인을 실제보다 새것으로 남기지 않게
         Long current = call(() -> currentGeneration(generation));
         if (current == null) {
             return null;
@@ -377,7 +476,11 @@ public final class ReadCache {
         if (current == null) {
             return null;
         }
-        highestGenerations.merge(generation, current, Math::max);
+        long highest = highestGenerations.merge(generation, current, Math::max);
+        if (current == highest) {
+            // 가장 큰 번호를 읽은 조회만 확인으로 센다 — 옛 번호를 읽은 조회가 늦게 끝나 새 번호의 확인 시각을 늘리지 않게
+            confirmedAt.merge(generation, asked, (before, now) -> now.isAfter(before) ? now : before);
+        }
         return current;
     }
 
@@ -458,6 +561,7 @@ public final class ReadCache {
      * @return 이번에 올렸으면 true, 미뤘으면 false
      */
     private boolean bump(String generation) {
+        bumpedAt.merge(generation, clock.instant(), (before, now) -> now.isAfter(before) ? now : before);
         if (!breaker.tryAcquirePermission()) {
             pendingBumps.add(generation);
             log.error("읽기 캐시 차단기가 열려 세대 올리기를 미룬다 — 그때까지 옛 값이 보일 수 있다 generation={}", generation);
@@ -568,8 +672,8 @@ public final class ReadCache {
      * @param warned 첫 조회에서 못 읽는 값을 보고 이미 경고했는가 — 그러면 다시 보기에서 못 읽어도(이유가 달라도) debug 로만 남긴다
      */
     @SuppressWarnings("unchecked")
-    private <T> Entry<T> load(String slot, String key, Spec<T> spec, Function<LoadPath, T> loader, Predicate<T> storable, String generation,
-                              long generationNumber, boolean warned) {
+    private <T> Entry<T> load(String slot, String key, String id, Spec<T> spec, Function<LoadPath, T> loader, Predicate<T> storable,
+                              String generation, long generationNumber, boolean warned) {
         CompletableFuture<Object> mine = new CompletableFuture<>();
         CompletableFuture<Object> running = loading.putIfAbsent(slot, mine);
         if (running != null) {
@@ -606,8 +710,17 @@ public final class ReadCache {
                     cached = null;
                     path = LoadPath.BYPASS;
                 }
+                if (path == LoadPath.BYPASS) {
+                    // 사본이 있으면 그것을 이 자리의 결과로 준다 — 붙어 기다린 요청도 원천을 기다리지 않는다
+                    Entry<T> held = heldCopy(spec, generation, generationNumber, id);
+                    if (held != null) {
+                        mine.complete(held);
+                        return held;
+                    }
+                }
                 Entry<T> stored = parseStored(cached, spec, key, warned);
                 if (stored != null) {
+                    keepCopy(spec, generation, generationNumber, id, stored, cached.length());
                     events.served(spec.name(), Outcome.HIT);
                     mine.complete(stored);
                     return stored;
@@ -618,7 +731,7 @@ public final class ReadCache {
             Entry<T> entry = new Entry<>(loader.apply(path), loadedAt);
             mine.complete(entry);
             if (path == LoadPath.FILL && entry.value() != null && storable.test(entry.value())) {
-                store(key, spec, entry, generation, generationNumber);
+                store(key, id, spec, entry, generation, generationNumber);
             }
             return entry;
         } catch (Throwable e) {   // 검사 예외를 몰래 던지는 loader 도 기다린 쪽에 알린다(LocalReadCache 와 같다)
@@ -667,8 +780,8 @@ public final class ReadCache {
      * @param seenLoadedAt 이 요청이 꺼낸 값의 읽은 시각 — 갱신이 돌 때 이보다 새 값이 들어와 있으면 읽지 않는다
      * @return 맡겼으면 true
      */
-    private <T> boolean refreshAhead(String key, Spec<T> spec, Instant seenLoadedAt, Function<LoadPath, T> loader, Predicate<T> storable, String generation,
-                                     long generationNumber) {
+    private <T> boolean refreshAhead(String key, String id, Spec<T> spec, Instant seenLoadedAt, Function<LoadPath, T> loader, Predicate<T> storable,
+                                     String generation, long generationNumber) {
         Instant blockedUntil = notStoredUntil.get(key);
         if (blockedUntil != null) {
             if (clock.instant().isBefore(blockedUntil)) {
@@ -682,7 +795,7 @@ public final class ReadCache {
         try {
             refresher.execute(() -> {
                 try {
-                    refresh(key, spec, seenLoadedAt, loader, storable, generation, generationNumber);
+                    refresh(key, id, spec, seenLoadedAt, loader, storable, generation, generationNumber);
                 } finally {
                     refreshing.remove(key);
                 }
@@ -710,8 +823,8 @@ public final class ReadCache {
      * 실행기에서 도는 다시 읽기 — "한 번만 읽기" 자리({@link #load} 의 slot = 완성된 키)를 같이 써서, 그사이 만료돼 들어온 요청은 이 결과를 기다린다.
      * 실패하면 기다린 쪽도 같은 예외를 받고(직접 읽기와 같다) Redis 의 값은 그대로 만료된다.
      */
-    private <T> void refresh(String key, Spec<T> spec, Instant seenLoadedAt, Function<LoadPath, T> loader, Predicate<T> storable, String generation,
-                             long generationNumber) {
+    private <T> void refresh(String key, String id, Spec<T> spec, Instant seenLoadedAt, Function<LoadPath, T> loader, Predicate<T> storable,
+                             String generation, long generationNumber) {
         // 지금 세대를 Redis 에서 다시 읽는다 — 맡길 때의 번호와 비교한다(이 인스턴스가 본 가장 큰 번호와 비교하면, 세대가 되돌아간 뒤
         // 다시 오른 번호를 조회가 쓰기 전까지 갱신이 모두 건너뛰어진다). 못 읽으면 읽지 않는다 — Redis 를 못 쓰는 동안 넣지도 못할 값을 원천에 묻지 않게.
         // 그 키는 막아 두지 않는다 — 한 번의 시간 초과로 값이 만료될 때까지 미리 갱신이 멈추지 않게. 차단기가 열린 장애 동안은 조회가 우회라 히트가
@@ -749,7 +862,7 @@ public final class ReadCache {
             Instant loadedAt = clock.instant();
             Entry<T> entry = new Entry<>(loader.apply(LoadPath.FILL), loadedAt);
             mine.complete(entry);
-            boolean stored = entry.value() != null && storable.test(entry.value()) && store(key, spec, entry, generation, generationNumber);
+            boolean stored = entry.value() != null && storable.test(entry.value()) && store(key, id, spec, entry, generation, generationNumber);
             if (stored) {
                 events.refreshed(spec.name(), RefreshResult.STORED);
             } else {
@@ -799,7 +912,7 @@ public final class ReadCache {
     }
 
     /** @return 보냈으면 true(결과를 모르는 시간 초과 포함) — JSON 실패 · 남은 시간 없음 · 저장 상한 · 차단기면 false */
-    private <T> boolean store(String key, Spec<T> spec, Entry<T> entry, String generation, long generationNumber) {
+    private <T> boolean store(String key, String id, Spec<T> spec, Entry<T> entry, String generation, long generationNumber) {
         String body;
         try {
             body = json.writeValueAsString(new Stored<>(entry.loadedAt().toEpochMilli(), entry.value()));
@@ -812,6 +925,8 @@ public final class ReadCache {
         if (left.toMillis() <= 0) {
             return false;
         }
+        // 넣지 못해도(저장 상한 · Redis 실패) 이 세대의 지금 값이다 — 사본은 남긴다
+        keepCopy(spec, generation, generationNumber, id, entry, body.length());
         // 이 인스턴스가 이 캐시로 들고 있는 양이 상한을 넘으면 넣지 않는다(DB 로 답한다) — 나눠 쓰는 Redis 의 다른 키(토큰 폐기 표식 · 대기열)를 덜 밀어내게
         long charge = StoreBudget.charge(key.getBytes(java.nio.charset.StandardCharsets.UTF_8).length,
                 body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
@@ -878,8 +993,53 @@ public final class ReadCache {
     /**
      * @param fingerprint 값 타입 모양의 지문 — 레코드 칸 이름 · 타입, enum 상수가 바뀌면 달라진다
      * @param budget      이 캐시가 이 인스턴스에서 Redis 에 동시에 들고 있는 양의 상한
+     * @param outage      장애 중 사본 — null 이면 끔(Redis 를 못 읽으면 늘 우회)
      */
-    public record Spec<T>(String name, JavaType type, String fingerprint, Duration ttl, StoreBudget budget) {
+    public record Spec<T>(String name, JavaType type, String fingerprint, Duration ttl, StoreBudget budget, OutageCopies outage) {
+    }
+
+    /**
+     * Redis 를 못 읽을 때(실패 · 시간 초과 · 차단기 열림) 우회 대신 답할 이 인스턴스의 사본 — 캐시 하나에 하나. 조회가 Redis 에서 읽은 값과 원천에서
+     * 읽어 넣으려 한 값을 세대 번호와 함께 키(세대 이름 · id)마다 하나 남긴다. 평소에는 남기기만 하고 Redis 호출 수는 그대로다.
+     * <ul>
+     *   <li><b>왜</b>: Redis 가 몇 초 늦어 차단기가 열리면 그 인스턴스의 조회가 {@link #OPEN_FOR} 동안 모두 우회해, 같은 키가 원천(DB · 다른 서비스)
+     *       한 건 뒤에 줄을 섰다(부하 시험 10-22: 홍보 상세가 한 인스턴스에서만 대기 3,654건 · 중앙값 0.5~0.75초, 다른 인스턴스는 p99 0.5초 이하).</li>
+     *   <li><b>늦게 보이는 상한</b>: 세대를 못 읽는 동안 다른 인스턴스가 올린 세대는 모른다 — 믿는 시간(heldDuringOutage)이 그 상한이다(Redis 에서 그 세대를
+     *       마지막으로 읽은 시각부터). 값 자체는 TTL 을 넘겨 쓰지 않는다. 이 인스턴스가 올리려 한 세대(장애 중이라 미뤄져도)의 사본은 바로 버린다.</li>
+     *   <li><b>양</b>: 값의 JSON 글자 수 합으로 묶는다(키와 Caffeine 자체의 몫은 세지 않는다 · 객체로 풀린 값의 힙은 재지 않았다). 넘으면 Caffeine 이
+     *       밀어낸다(W-TinyLFU — 자주 쓰이는 사본을 지키려고 새 사본이 바로 버려질 수도 있다). TTL 이 지나면 지운다.</li>
+     *   <li><b>복원</b>: 복원을 알아챈 인스턴스는 세대를 본 번호 + 1 로 올리므로 사본 번호가 맞지 않는다. 복원 전 번호를 본 적 없는 인스턴스는 지금처럼
+     *       알아채지 못하고, 세대는 읽고 값만 못 읽으면 그 번호의 사본을 TTL 까지 낸다 — 복원된 옛 값을 TTL 동안 내던 것과 같은 크기다.</li>
+     *   <li>세대를 읽었는데 값만 못 읽었으면 그 번호의 사본을 쓴다(믿는 시간과 상관없다 — 번호가 지금 것이다).</li>
+     * </ul>
+     */
+    public static final class OutageCopies {
+
+        private final Duration heldFor;
+        private final Cache<String, Copy> copies;
+
+        OutageCopies(Duration heldFor, Duration ttl, long maxChars) {
+            this.heldFor = heldFor;
+            this.copies = Caffeine.newBuilder()
+                    .maximumWeight(maxChars)
+                    .weigher((String key, Copy copy) -> copy.weight())
+                    .expireAfterWrite(ttl)
+                    .build();
+        }
+
+        /** 사본을 믿는 시간. */
+        public Duration heldFor() {
+            return heldFor;
+        }
+
+        /** 시험용 — 밀어내기 · 만료를 지금 처리한다(Caffeine 은 나중에 한다). */
+        void cleanUp() {
+            copies.cleanUp();
+        }
+    }
+
+    /** 사본 하나 — 그 값을 읽은 세대 번호와 함께. */
+    private record Copy(long generationNumber, Entry<?> entry, int weight) {
     }
 
     /**

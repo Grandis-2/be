@@ -10,6 +10,8 @@ dependencies {
     // 읽기 캐시: 값은 JSON(Jackson 3), Redis 장애 차단기는 resilience4j 코어만(스프링 연동 없이 코드로 만든다)
     implementation 'org.springframework.boot:spring-boot-starter-json'
     implementation "io.github.resilience4j:resilience4j-circuitbreaker:${rootProject.resilience4jVersion}"   // 버전은 루트 build.gradle
+    // Redis 장애 중에 쓰는 이 인스턴스의 사본(ReadCache.OutageCopies) — 버전은 Spring Boot 가 정한다
+    implementation 'com.github.ben-manes.caffeine:caffeine'
 
     testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
 }

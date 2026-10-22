@@ -53,7 +53,9 @@ import java.lang.annotation.Target;
         // 켠 채로 도는 캐시 시험(ReadCache · CatalogReadCache 시험)이 본다
         "nova.read-cache.enabled=false",
         // catalog-events 소비기는 운영 기본값(CatalogDefaults)으로 켜져 있다 — 시험은 끈다. 소비기를 보는 시험(CatalogEventConsumerFlowTest · InStockProductReadyFlowTest)이 켠다
-        "nova.sqs.consumer.enabled=false"
+        "nova.sqs.consumer.enabled=false",
+        // 기동 예열(DetailWarmup)은 끈다 — 웹 서버가 없는 MockMvc 시험에서는 어차피 돌지 않는다. 예열은 DetailWarmupTest 가 본다
+        "nova.warmup.budget=0s"
 })
 @Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class, ImageAttachmentsTestConfig.class,
         OrderStocksTestConfig.class, PreorderCampaignsTestConfig.class})
