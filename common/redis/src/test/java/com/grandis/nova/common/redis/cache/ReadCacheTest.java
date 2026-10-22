@@ -1056,10 +1056,12 @@ class ReadCacheTest {
         throw (E) e;
     }
 
-    /** 상한(10초)까지만 — 시험이 풀지 않는 변형에서도 스레드가 남지 않게. */
+    /** 상한(10초)까지만 — 시험이 풀지 않는 변형에서도 스레드가 남지 않게. 넘으면 그 자리에서 실패한다(엉뚱한 단언으로 번지지 않게). */
     private static void await(CountDownLatch latch) {
         try {
-            latch.await(10, java.util.concurrent.TimeUnit.SECONDS);
+            if (!latch.await(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                throw new AssertionError("10초 안에 풀리지 않았다");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }

@@ -211,10 +211,7 @@ class ReadCacheRefreshTest {
         assertThat(started.await(5, TimeUnit.SECONDS)).as("갱신이 시작됐다").isTrue();
         redis.delete(onlyKey());   // 만료(또는 밀려남) — 갱신은 아직 도는 중
         CompletableFuture<String> waiting = CompletableFuture.supplyAsync(() -> threaded.entry(s, "g", "k", () -> load("직접")).value());
-        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (!events.outcomes.contains(Outcome.WAIT) && System.nanoTime() < until) {
-            Thread.sleep(5);
-        }
+        assertThat(events.waiting.await(5, TimeUnit.SECONDS)).as("갱신에 붙었다").isTrue();
         release.countDown();
 
         assertThat(waiting.get(5, TimeUnit.SECONDS)).isEqualTo("v2");
