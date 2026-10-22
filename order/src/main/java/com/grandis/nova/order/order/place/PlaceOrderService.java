@@ -4,7 +4,6 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.order.OrderErrorCode;
-import com.grandis.nova.order.client.catalog.CatalogOption;
 import com.grandis.nova.order.client.catalog.CatalogReader;
 import com.grandis.nova.order.client.preorder.PreorderPayability;
 import com.grandis.nova.order.client.preorder.PreorderReader;
@@ -122,7 +121,8 @@ public class PlaceOrderService {
             throw new BusinessException(OrderErrorCode.PREORDER_NOT_PAYABLE);
         }
 
-        // 입력 검증은 트랜잭션 전에 끝낸다. 원장 안에서 던지면 트랜잭션이 rollback-only 가 된다.
+        // 입력 검증은 트랜잭션 전에 끝낸다. 원장 안에서 던지면 트랜잭션이 rollback-only 가 된다. 사진은 검증을 지난 뒤에 묻는다
+        toCommand(customerId, preorder, shipTo, null).toDraft();
         OrderDraft draft = toCommand(customerId, preorder, shipTo, optionImage(preorder.optionId(), sessionToken)).toDraft();
         EventCause cause = EventCause.user();
         for (int attempt = 1; ; attempt++) {
@@ -171,12 +171,12 @@ public class PlaceOrderService {
     /**
      * 주문 내역 썸네일로 남길 그 옵션의 사진(catalog 의 imageUrl — 장바구니 · 바로 구매와 같은 값). 예약 스냅샷에는 사진이 없어 주문을 만들 때
      * catalog 에 묻는다. 사진은 표시용이라 못 받아도 주문은 만든다 — catalog 가 응답하지 않거나 거절하면 비우고 WARN 만 남긴다.
-     * 주문을 새로 만들 때만 부른다(기존 주문을 돌려주는 재요청 · 거절되는 요청은 부르지 않는다).
+     * 기존 주문 확인 · 결제 가능 판정 · 입력 검증을 지난 요청만 부른다. 같은 예약의 재요청 둘이 함께 기존 주문 확인을 지나면 둘 다 부르고,
+     * 늦은 쪽은 중복 키로 기존 주문을 돌려준다.
      */
     private String optionImage(UUID optionId, String sessionToken) {
         try {
-            CatalogOption option = catalog.find(List.of(optionId), sessionToken).get(optionId);
-            return option == null ? null : option.imageUrl();
+            return catalog.findImage(optionId, sessionToken).orElse(null);
         } catch (RuntimeException e) {
             log.warn("사전예약 주문의 옵션 사진을 catalog 에서 받지 못해 비운다 optionId={}", optionId, e);
             return null;

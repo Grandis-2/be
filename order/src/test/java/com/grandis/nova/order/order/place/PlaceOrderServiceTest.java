@@ -4,8 +4,8 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.order.OrderErrorCode;
-import com.grandis.nova.order.client.catalog.CatalogOption;
 import com.grandis.nova.order.client.catalog.CatalogReader;
+import com.grandis.nova.order.order.command.PlaceOrderCommand;
 import com.grandis.nova.order.client.preorder.PreorderPayability;
 import com.grandis.nova.order.client.preorder.PreorderReader;
 import com.grandis.nova.order.order.OrderLedger;
@@ -115,11 +115,7 @@ class PlaceOrderServiceTest {
     @Test
     void preorderLineCarriesTheOptionImageFromCatalog() {
         payable();
-        given(catalog.find(any(), eq(SESSION))).willAnswer(invocation -> {
-            UUID optionId = invocation.<java.util.Collection<UUID>>getArgument(0).iterator().next();
-            return java.util.Map.of(optionId, new CatalogOption(optionId, TestIds.id(3), "상품", null, "옵션", "SKU", BigDecimal.ONE, "ACTIVE",
-                    "PREORDER", "ACTIVE", true, true, new CatalogOption.Warranty(false, BigDecimal.ZERO), "https://img/preorder.webp", BigDecimal.ONE));
-        });
+        given(catalog.findImage(any(), eq(SESSION))).willReturn(Optional.of("https://img/preorder.webp"));
         given(ledger.place(any(), any())).willReturn(order(OrderStatus.AWAITING_PAYMENT));
 
         service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS);
@@ -133,8 +129,8 @@ class PlaceOrderServiceTest {
     @Test
     void catalogFailureLeavesTheImageEmptyButPlacesTheOrder() {
         payable();
-        given(catalog.find(any(), any())).willThrow(new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE))
-                .willReturn(java.util.Map.of());
+        given(catalog.findImage(any(), any())).willThrow(new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE))
+                .willReturn(Optional.empty());
         given(ledger.place(any(), any())).willReturn(order(OrderStatus.AWAITING_PAYMENT));
 
         assertThat(service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS).created()).isTrue();
@@ -144,6 +140,16 @@ class PlaceOrderServiceTest {
         verify(ledger, times(2)).place(draft.capture(), any());
         assertThat(draft.getAllValues()).allSatisfy(placed ->
                 assertThat(placed.lines()).singleElement().satisfies(line -> assertThat(line.imageUrl()).isNull()));
+    }
+
+    // 사진은 입력 검증을 지난 뒤에 묻는다 — 거절될 요청은 catalog 를 부르지 않는다
+    @Test
+    void rejectedInputDoesNotAskCatalogForTheImage() {
+        payable();
+        PlaceOrderCommand.Address blankName = new PlaceOrderCommand.Address(" ", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null);
+
+        assertThatThrownBy(() -> service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, blankName)).isInstanceOf(IllegalArgumentException.class);
+        verify(catalog, never()).findImage(any(), any());
     }
 
     @Test
@@ -225,7 +231,7 @@ class PlaceOrderServiceTest {
 
         assertThat(result.created()).isFalse();
         assertThat(result.order()).isEqualTo(stored);
-        verify(catalog, never()).find(any(), any());
+        verify(catalog, never()).findImage(any(), any());
     }
 
     // 받은 토큰을 preorder 호출까지 그대로 넘긴다.

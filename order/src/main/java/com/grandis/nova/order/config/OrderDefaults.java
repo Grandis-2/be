@@ -31,7 +31,8 @@ class OrderDefaults implements EnvironmentPostProcessor, Ordered {
         defaults.put("management.endpoint.health.probes.enabled", "true");
         // readiness 는 앱의 준비 상태만 본다. DB · Redis 를 넣으면 공용 의존성 장애 한 번에 모든 태스크가 비정상이 된다
         defaults.put("management.endpoint.health.group.readiness.include", "readinessState");
-        catalogResilience(defaults);
+        catalogResilience(defaults, CatalogReader.DEPENDENCY);
+        catalogResilience(defaults, CatalogReader.IMAGE_DEPENDENCY);
         return Map.copyOf(defaults);
     }
 
@@ -39,9 +40,10 @@ class OrderDefaults implements EnvironmentPostProcessor, Ordered {
      * 장바구니의 catalog 호출 장애 대응(preorder 의 내부 호출과 같은 값). 서킷 브레이커(50건 중 실패 · 1초 넘는 호출이 절반이면 10초 열림)
      * → 동시 호출 상한(20, 기다리지 않음). 4xx(429 포함 — preorder 와 같은 정책)와 상한 초과는 상대 장애가 아니라 회로의 실패로 세지 않는다. 재시도는 하지 않는다 —
      * 화면 조회라 사용자가 다시 부르고, 읽기 1초에 재시도가 붙으면 응답이 그만큼 늘어난다. 값은 부하 실측으로 확정한다.
+     * 사전예약 주문의 사진 조회(CatalogReader.IMAGE_DEPENDENCY)는 같은 값의 별도 인스턴스다 — 칸과 회로를 장바구니와 나눈다.
      */
-    private static void catalogResilience(Map<String, Object> defaults) {
-        String circuitBreaker = "resilience4j.circuitbreaker.instances." + CatalogReader.DEPENDENCY + ".";
+    private static void catalogResilience(Map<String, Object> defaults, String instance) {
+        String circuitBreaker = "resilience4j.circuitbreaker.instances." + instance + ".";
         defaults.put(circuitBreaker + "sliding-window-size", 50);
         defaults.put(circuitBreaker + "minimum-number-of-calls", 20);
         defaults.put(circuitBreaker + "failure-rate-threshold", 50);
@@ -51,7 +53,7 @@ class OrderDefaults implements EnvironmentPostProcessor, Ordered {
         defaults.put(circuitBreaker + "permitted-number-of-calls-in-half-open-state", 5);
         defaults.put(circuitBreaker + "ignore-exceptions",
                 "org.springframework.web.client.HttpClientErrorException,io.github.resilience4j.bulkhead.BulkheadFullException");
-        String bulkhead = "resilience4j.bulkhead.instances." + CatalogReader.DEPENDENCY + ".";
+        String bulkhead = "resilience4j.bulkhead.instances." + instance + ".";
         defaults.put(bulkhead + "max-concurrent-calls", 20);
         defaults.put(bulkhead + "max-wait-duration", "0");
     }
