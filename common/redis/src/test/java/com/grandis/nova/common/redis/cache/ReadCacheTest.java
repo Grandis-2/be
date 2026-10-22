@@ -81,6 +81,10 @@ class ReadCacheTest {
     @BeforeEach
     void setUp() {
         redis.getConnectionFactory().getConnection().serverCommands().flushAll();
+        // 세대를 0 에서 세게 심어 둔다 — 없는 세대는 지금 시각으로 시작하므로(복원 · 삭제 대비) 몇 번 올렸는지 세는 시험은 시작점을 정해 둔다
+        for (String generation : List.of("svc:cache:gen:products", "svc:cache:gen:reviews", "svc:cache:gen:off", "other:cache:gen:products")) {
+            redis.opsForValue().set(generation, "0");
+        }
         cache = new ReadCache(redis, JSON, "svc");
         items = cache.spec("item", Item.class, Duration.ofSeconds(30));
     }
@@ -149,7 +153,7 @@ class ReadCacheTest {
             status.setRollbackOnly();
         });
         assertThat(redis.opsForValue().get("svc:cache:gen:products")).isEqualTo("1");
-        assertThat(redis.opsForValue().get("svc:cache:gen:reviews")).as("롤백된 바깥은 올리지 않는다").isNull();
+        assertThat(redis.opsForValue().get("svc:cache:gen:reviews")).as("롤백된 바깥은 올리지 않는다").isEqualTo("0");
     }
 
     @Test
@@ -161,7 +165,7 @@ class ReadCacheTest {
 
         cache.breaker().transitionToForcedOpenState();
         cache.bumpAfterCommit("products");
-        assertThat(redis.opsForValue().get("svc:cache:gen:products")).as("열린 동안은 부르지 않는다").isNull();
+        assertThat(redis.opsForValue().get("svc:cache:gen:products")).as("열린 동안은 부르지 않는다").isEqualTo("0");
         cache.breaker().transitionToClosedState();
 
         cache.get(items, "reviews", "x", () -> item("x", new AtomicInteger()));   // 다른 세대의 조회여도 미룬 것을 올린다
@@ -174,7 +178,7 @@ class ReadCacheTest {
     void successfulBumpClearsPending() {
         redis.opsForValue().set("svc:cache:gen:products", "not-a-number");
         cache.bumpAfterCommit("products");   // 실패 — 미룬다
-        redis.delete("svc:cache:gen:products");
+        redis.opsForValue().set("svc:cache:gen:products", "0");   // 복구
         cache.bumpAfterCommit("products");   // 성공
 
         cache.get(items, "products", "1", () -> item("v", new AtomicInteger()));
@@ -187,7 +191,7 @@ class ReadCacheTest {
         redis.opsForValue().set("svc:cache:gen:products", "not-a-number");
         cache.bumpAfterCommit("products");
         cache.get(items, "reviews", "x", () -> item("x", new AtomicInteger()));   // 다른 세대 조회 — 다시 해 보지만 또 실패
-        redis.delete("svc:cache:gen:products");
+        redis.opsForValue().set("svc:cache:gen:products", "0");   // 복구
 
         cache.get(items, "reviews", "x", () -> item("x", new AtomicInteger()));
         assertThat(redis.opsForValue().get("svc:cache:gen:products")).isEqualTo("1");
@@ -198,7 +202,7 @@ class ReadCacheTest {
     void pendingBumpRetriedOnceUnderConcurrency() throws Exception {
         redis.opsForValue().set("svc:cache:gen:products", "not-a-number");
         cache.bumpAfterCommit("products");
-        redis.delete("svc:cache:gen:products");
+        redis.opsForValue().set("svc:cache:gen:products", "0");   // 복구
 
         concurrently(32, () -> cache.get(items, "reviews", "x", () -> item("x", new AtomicInteger())));
         assertThat(redis.opsForValue().get("svc:cache:gen:products")).isEqualTo("1");
@@ -223,7 +227,7 @@ class ReadCacheTest {
         // INCR 이 확실히 실패하게(정수가 아닌 값). 멈춘 Redis(PAUSE)로는 못 잰다 — 시간 초과된 INCR 이 풀린 뒤 서버에서 실행돼 세대가 올라 버린다
         redis.opsForValue().set("svc:cache:gen:products", "not-a-number");
         cache.bumpAfterCommit("products");   // 던지지 않는다
-        redis.delete("svc:cache:gen:products");   // 복구 — 세대는 다시 0 이고 옛 값(0 세대 키)이 그대로 있다
+        redis.opsForValue().set("svc:cache:gen:products", "0");   // 복구 — 세대는 다시 0 이고 옛 값(0 세대 키)이 그대로 있다
 
         assertThat(cache.get(items, "products", "1", () -> item("new", new AtomicInteger())).name()).isEqualTo("new");
         assertThat(redis.opsForValue().get("svc:cache:gen:products")).isEqualTo("1");
@@ -241,7 +245,7 @@ class ReadCacheTest {
 
         redis.opsForValue().set("svc:cache:gen:products", "not-a-number");
         assertThatThrownBy(() -> cache.bumpNow("products")).isInstanceOf(IllegalStateException.class);
-        redis.delete("svc:cache:gen:products");
+        redis.opsForValue().set("svc:cache:gen:products", "0");   // 복구
         cache.get(items, "reviews", "x", () -> item("x", new AtomicInteger()));
         assertThat(redis.opsForValue().get("svc:cache:gen:products")).as("미룬 것").isEqualTo("1");
 
@@ -250,7 +254,7 @@ class ReadCacheTest {
         cache.breaker().transitionToClosedState();
 
         ReadCache.off(JSON, "svc").bumpNow("off");
-        assertThat(redis.opsForValue().get("svc:cache:gen:off")).as("Redis 없는 끈 캐시는 아무것도 안 한다").isNull();
+        assertThat(redis.opsForValue().get("svc:cache:gen:off")).as("Redis 없는 끈 캐시는 아무것도 안 한다").isEqualTo("0");
         ReadCache.off(redis, JSON, "svc").bumpNow("off");
         assertThat(redis.opsForValue().get("svc:cache:gen:off")).as("Redis 를 받은 끈 캐시는 올린다 — 같은 큐의 켠 인스턴스를 위해").isEqualTo("1");
 
@@ -359,6 +363,367 @@ class ReadCacheTest {
         Set<String> keys = redis.keys("svc:cache:small:*");
         assertThat(keys).hasSize(1);
         assertThat(keys.iterator().next()).contains(":products.1:");
+    }
+
+    @Test
+    @DisplayName("자리를 잡은 뒤 다시 보기가 Redis 실패면 없음으로 보지 않고 우회한다 — loader 는 BYPASS 를 받고 넣지 않는다")
+    void recheckRedisFailureBypasses() {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
+        ReadCache failing = new ReadCache(template, JSON, "svc");
+        ReadCache.Spec<Item> spec = failing.spec("item", Item.class, Duration.ofSeconds(30));
+        List<ReadCache.LoadPath> paths = new ArrayList<>();
+        template.failWith = new org.springframework.data.redis.RedisSystemException("다시 보기 실패", null);
+        template.failAt = 2;   // 첫 GET(조회)은 되고, 자리를 잡은 뒤의 GET 이 실패한다
+        template.fail.set(true);
+        try {
+            Item served = failing.get(spec, "products", "1", path -> {
+                paths.add(path);
+                return item("v", new AtomicInteger());
+            });
+            assertThat(served.name()).isEqualTo("v");
+        } finally {
+            template.fail.set(false);
+        }
+        assertThat(paths).containsExactly(ReadCache.LoadPath.BYPASS);
+        assertThat(redis.keys("svc:cache:item:*")).as("우회 결과는 넣지 않는다").isEmpty();
+    }
+
+    @Test
+    @DisplayName("다시 보기가 Redis 실패로 우회로 바뀌면 그 채우기 자리에 붙어 기다린 요청도 같은 우회 값을 받는다 — 원천은 한 번, 넣지 않는다")
+    void waiterOfBypassedRecheckGetsTheSameValue() throws Exception {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
+        WaitEvents events = new WaitEvents();
+        ReadCache failing = new ReadCache(template, JSON, "svc", io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.ofDefaults(), true,
+                java.time.Clock.systemUTC(), ReadCache.WAIT_FOR_LOAD, null, events);
+        ReadCache.Spec<Item> spec = failing.spec("item", Item.class, Duration.ofSeconds(30));
+        List<ReadCache.LoadPath> paths = java.util.Collections.synchronizedList(new ArrayList<>());
+        template.failWith = new org.springframework.data.redis.RedisSystemException("다시 보기 실패", null);
+        template.failAt = 2;
+        template.pauseAt = 2;   // 자리를 잡은 뒤의 GET 에서 멈췄다가 던진다
+        java.util.concurrent.atomic.AtomicReference<Object> owner = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Object> waiter = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread holder = new Thread(() -> {
+            template.pause.set(true);
+            template.fail.set(true);
+            try {
+                owner.set(failing.get(spec, "products", "1", path -> {
+                    paths.add(path);
+                    return item("우회", new AtomicInteger());
+                }));
+            } catch (Throwable e) {
+                owner.set(e);
+            }
+        });
+        holder.start();
+        assertThat(template.read.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        Thread joiner = new Thread(() -> {
+            try {
+                waiter.set(failing.get(spec, "products", "1", path -> {
+                    paths.add(path);
+                    return item("joiner", new AtomicInteger());
+                }));
+            } catch (Throwable e) {
+                waiter.set(e);
+            }
+        });
+        joiner.start();
+        assertThat(events.waiting.await(10, java.util.concurrent.TimeUnit.SECONDS)).as("같이 기다리는 쪽이 채우기 자리에 붙었다").isTrue();
+        template.resume.countDown();
+        holder.join(10_000);
+        joiner.join(10_000);
+        assertThat(holder.isAlive()).isFalse();
+        assertThat(joiner.isAlive()).isFalse();
+
+        assertThat(owner.get()).isInstanceOf(Item.class);
+        assertThat(waiter.get()).as("자리 주인의 우회 값을 그대로 받는다").isSameAs(owner.get());
+        assertThat(paths).containsExactly(ReadCache.LoadPath.BYPASS);
+        assertThat(redis.keys("svc:cache:item:*")).as("우회 결과는 넣지 않는다").isEmpty();
+    }
+
+    @Test
+    @DisplayName("자리를 잡은 뒤 다시 보기가 Error 를 던져도 같이 기다린 요청은 그 Error 를 원인으로 받고, 자리가 비어 같은 키의 다음 조회는 기다리지 않는다")
+    void recheckErrorReachesWaitersAndFreesTheSlot() throws Exception {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
+        WaitEvents events = new WaitEvents();
+        ReadCache failing = new ReadCache(template, JSON, "svc", io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.ofDefaults(), true,
+                java.time.Clock.systemUTC(), Duration.ofSeconds(2), null, events);
+        ReadCache.Spec<Item> spec = failing.spec("item", Item.class, Duration.ofSeconds(30));
+        template.failWith = new AssertionError("다시 보기에서 터짐");
+        template.failAt = 2;
+        template.pauseAt = 2;   // 자리를 잡은 뒤의 GET 에서 멈췄다가 던진다
+        java.util.concurrent.atomic.AtomicReference<Object> owner = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Object> waiter = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread holder = new Thread(() -> {
+            template.pause.set(true);
+            template.fail.set(true);
+            try {
+                owner.set(failing.get(spec, "products", "1", () -> item("never", new AtomicInteger())));
+            } catch (Throwable e) {
+                owner.set(e);
+            }
+        });
+        holder.start();
+        assertThat(template.read.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        Thread joiner = new Thread(() -> {
+            try {
+                waiter.set(failing.get(spec, "products", "1", () -> item("joiner", new AtomicInteger())));
+            } catch (Throwable e) {
+                waiter.set(e);
+            }
+        });
+        joiner.start();
+        assertThat(events.waiting.await(10, java.util.concurrent.TimeUnit.SECONDS)).as("같이 기다리는 쪽이 자리에 붙었다").isTrue();
+        template.resume.countDown();
+        holder.join(10_000);
+        joiner.join(10_000);
+        assertThat(holder.isAlive()).isFalse();
+        assertThat(joiner.isAlive()).isFalse();
+
+        assertThat(owner.get()).isInstanceOf(AssertionError.class);
+        assertThat(waiter.get()).as("같이 기다린 요청은 그 Error 를 원인으로 받는다(503 시간 초과가 아니라)").isInstanceOf(IllegalStateException.class);
+        assertThat(((Throwable) waiter.get()).getCause()).isSameAs(owner.get());
+        long started = System.nanoTime();
+        assertThat(failing.get(spec, "products", "1", () -> item("next", new AtomicInteger())).name()).isEqualTo("next");
+        // 자리가 남았다면 기다림 상한(2초) 뒤 503 이다 — 상한보다 작은 1.5초 안에 원천으로 답했으면 자리가 비었다
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).as("자리가 비어 기다리지 않는다").isLessThan(Duration.ofMillis(1500));
+    }
+
+    @Test
+    @DisplayName("loader 가 검사 예외를 몰래 던져도 같이 기다린 요청은 그 예외를 원인으로 받는다(503 시간 초과가 아니라) — 자리도 비운다")
+    void sneakyCheckedLoaderFailureReachesWaiters() throws Exception {
+        WaitEvents events = new WaitEvents();
+        ReadCache waiting = new ReadCache(redis, JSON, "svc", io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.ofDefaults(), true,
+                java.time.Clock.systemUTC(), Duration.ofSeconds(2), null, events);
+        ReadCache.Spec<Item> spec = waiting.spec("item", Item.class, Duration.ofSeconds(30));
+        java.io.IOException failure = new java.io.IOException("원천 실패");
+        java.util.concurrent.atomic.AtomicReference<Object> owner = new java.util.concurrent.atomic.AtomicReference<>();
+        CountDownLatch loading = new CountDownLatch(1);
+        Thread holder = new Thread(() -> {
+            try {
+                owner.set(waiting.get(spec, "products", "1", () -> {
+                    loading.countDown();
+                    await(events.waiting);   // 같이 기다리는 쪽이 붙은 뒤에 던진다
+                    return sneakyThrow(failure);
+                }));
+            } catch (Throwable e) {
+                owner.set(e);
+            }
+        });
+        holder.start();
+        assertThat(loading.await(10, java.util.concurrent.TimeUnit.SECONDS)).as("앞 요청이 자리를 잡고 원천을 읽는 중").isTrue();
+        Throwable waiter = null;
+        try {
+            waiting.get(spec, "products", "1", () -> item("joiner", new AtomicInteger()));
+        } catch (Throwable e) {
+            waiter = e;
+        }
+        holder.join(10_000);
+        assertThat(holder.isAlive()).isFalse();
+
+        assertThat(owner.get()).isSameAs(failure);
+        assertThat(waiter).isInstanceOf(IllegalStateException.class).hasCauseReference(failure);
+        assertThat(waiting.get(spec, "products", "1", () -> item("next", new AtomicInteger())).name()).isEqualTo("next");
+    }
+
+    @Test
+    @DisplayName("다시 보기는 자리를 잡은 뒤다 — 다시 보는 동안 같은 키의 다른 요청은 그 자리를 기다리고, 원천은 한 번만 읽는다")
+    void recheckHappensAfterTakingTheSlot() throws Exception {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
+        WaitEvents events = new WaitEvents();
+        ReadCache paused = new ReadCache(template, JSON, "svc", io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.ofDefaults(), true,
+                java.time.Clock.systemUTC(), ReadCache.WAIT_FOR_LOAD, null, events);
+        ReadCache.Spec<Item> spec = paused.spec("item", Item.class, Duration.ofSeconds(30));
+        AtomicInteger loads = new AtomicInteger();
+        template.pauseAt = 2;   // 두 번째 GET(다시 보기)에서 멈춘다
+        java.util.concurrent.atomic.AtomicReference<Object> first = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Object> second = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread holder = new Thread(() -> {
+            template.pause.set(true);
+            try {
+                first.set(paused.get(spec, "products", "1", () -> item("loaded", loads)));
+            } catch (Throwable e) {
+                first.set(e);
+            }
+        });
+        holder.start();
+        assertThat(template.read.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        Thread other = new Thread(() -> {
+            try {
+                second.set(paused.get(spec, "products", "1", () -> item("other", loads)));
+            } catch (Throwable e) {
+                second.set(e);
+            }
+        });
+        other.start();
+        // 자리를 잡기 전에 다시 보면 다른 요청이 자리를 잡아 먼저 읽고 끝난다(WAIT 없음 · 원천 두 번)
+        assertThat(events.waiting.await(10, java.util.concurrent.TimeUnit.SECONDS)).as("다시 보는 쪽이 자리를 쥐고 있어 기다린다").isTrue();
+        assertThat(second.get()).as("기다리는 동안은 답이 없다").isNull();
+        template.resume.countDown();
+        holder.join(10_000);
+        other.join(10_000);
+
+        assertThat(((Item) first.get()).name()).isEqualTo("loaded");
+        assertThat(((Item) second.get()).name()).as("기다린 쪽은 자리 주인의 값을 받는다").isEqualTo("loaded");
+        assertThat(events.outcomes).containsExactlyInAnyOrder(ReadCacheEvents.Outcome.LOAD, ReadCacheEvents.Outcome.WAIT);
+        assertThat(loads).hasValue(1);
+    }
+
+    @Test
+    @DisplayName("넣어 둔 값이 비었으면(JSON null · 값 null) 못 읽는 값으로 보고 다시 채운다 — null 을 내지 않는다")
+    void emptyStoredValueIsReloaded() {
+        AtomicInteger loads = new AtomicInteger();
+        cache.get(items, "products", "1", () -> item("v1", loads));
+        String key = onlyKey("svc:cache:item:*");
+        redis.opsForValue().set(key, "null");
+        assertThat(cache.get(items, "products", "1", () -> item("v2", loads)).name()).isEqualTo("v2");
+        redis.opsForValue().set(key, "{\"loadedAt\":1,\"value\":null}");
+        assertThat(cache.get(items, "products", "1", () -> item("v3", loads)).name()).isEqualTo("v3");
+        assertThat(cache.get(items, "products", "1", () -> item("v4", loads)).name()).as("다시 채운 값으로 덮어써 다음 조회는 원천에 가지 않는다").isEqualTo("v3");
+        assertThat(loads).hasValue(3);
+    }
+
+    @Test
+    @DisplayName("자리를 잡은 뒤 다시 보기를 차단기가 막으면 없음으로 보지 않고 우회한다 — loader 는 BYPASS 를 받고 넣지 않는다")
+    void recheckBreakerOpenBypasses() throws Exception {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
+        ReadCache paused = new ReadCache(template, JSON, "svc");
+        ReadCache.Spec<Item> spec = paused.spec("item", Item.class, Duration.ofSeconds(30));
+        List<ReadCache.LoadPath> paths = java.util.Collections.synchronizedList(new ArrayList<>());
+        java.util.concurrent.atomic.AtomicReference<Object> served = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread late = new Thread(() -> {
+            template.pause.set(true);
+            try {
+                served.set(paused.get(spec, "products", "1", path -> {
+                    paths.add(path);
+                    return item("v", new AtomicInteger());
+                }));
+            } catch (Throwable e) {
+                served.set(e);
+            }
+        });
+        late.start();
+        assertThat(template.read.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        paused.breaker().transitionToForcedOpenState();   // 다시 보기 전에 Redis 를 못 쓰게 됐다
+        try {
+            template.resume.countDown();
+            late.join(10_000);
+            assertThat(late.isAlive()).isFalse();
+        } finally {
+            paused.breaker().transitionToClosedState();
+        }
+
+        assertThat(served.get()).isInstanceOf(Item.class);
+        assertThat(paths).containsExactly(ReadCache.LoadPath.BYPASS);
+        assertThat(redis.keys("svc:cache:item:*")).as("우회 결과는 넣지 않는다").isEmpty();
+    }
+
+    @Test
+    @DisplayName("못 읽는 값의 경고는 요청마다 한 번 — 첫 조회에서 경고했으면 다시 보기의 같은 결과는 debug 로만 남긴다")
+    void unreadableValueWarnsOncePerRequest() {
+        cache.get(items, "products", "warn-once", () -> item("v1", new AtomicInteger()));
+        redis.opsForValue().set(onlyKey("svc:cache:item:*"), "{not json");
+        List<ch.qos.logback.classic.spi.ILoggingEvent> logged = captureLogs(() ->
+                assertThat(cache.get(items, "products", "warn-once", () -> item("v2", new AtomicInteger())).name()).isEqualTo("v2"));
+
+        assertThat(unreadableLogs(logged, ch.qos.logback.classic.Level.WARN, "warn-once")).as("첫 조회의 경고 하나")
+                .singleElement().asString().doesNotContain("이미 경고함");
+        assertThat(unreadableLogs(logged, ch.qos.logback.classic.Level.DEBUG, "warn-once")).as("다시 보기는 debug")
+                .singleElement().asString().contains("이미 경고함");
+    }
+
+    @Test
+    @DisplayName("첫 조회에서 값이 없다가 다시 보기에서 처음 못 읽는 값을 만나면 경고로 남긴다 — debug 로 묻히지 않게")
+    void unreadableValueFirstSeenOnRecheckWarns() throws Exception {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
+        ReadCache paused = new ReadCache(template, JSON, "svc");
+        ReadCache.Spec<Item> spec = paused.spec("item", Item.class, Duration.ofSeconds(30));
+        java.util.concurrent.atomic.AtomicReference<Object> served = new java.util.concurrent.atomic.AtomicReference<>();
+        List<ch.qos.logback.classic.spi.ILoggingEvent> logged = captureLogs(() -> {
+            Thread late = new Thread(() -> {
+                template.pause.set(true);   // 첫 GET(값 없음) 뒤에 멈춘다
+                try {
+                    served.set(paused.get(spec, "products", "warn-on-recheck", () -> item("loaded", new AtomicInteger())));
+                } catch (Throwable e) {
+                    served.set(e);
+                }
+            });
+            late.start();
+            try {
+                assertThat(template.read.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                redis.opsForValue().set(template.pausedKey, "{not json");   // 다시 보기 전에 밖에서 깨진 값을 썼다
+                template.resume.countDown();
+                late.join(10_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            assertThat(late.isAlive()).isFalse();
+        });
+
+        assertThat(served.get()).isInstanceOf(Item.class);
+        assertThat(((Item) served.get()).name()).isEqualTo("loaded");
+        assertThat(unreadableLogs(logged, ch.qos.logback.classic.Level.WARN, "warn-on-recheck")).singleElement().asString().doesNotContain("이미 경고함");
+        assertThat(unreadableLogs(logged, ch.qos.logback.classic.Level.DEBUG, "warn-on-recheck")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("자리를 잡은 뒤 다시 본 값이 비어(JSON null) 있어도 원천을 읽어 답하고 자리를 비운다 — 같은 키의 다음 조회가 막히지 않는다")
+    void recheckOfEmptyValueStillLoadsAndFreesTheSlot() throws Exception {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
+        ReadCache paused = new ReadCache(template, JSON, "svc");
+        ReadCache.Spec<Item> spec = paused.spec("item", Item.class, Duration.ofSeconds(30));
+        AtomicInteger loads = new AtomicInteger();
+        java.util.concurrent.atomic.AtomicReference<Object> served = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread late = new Thread(() -> {
+            template.pause.set(true);
+            try {
+                served.set(paused.get(spec, "products", "1", () -> item("loaded", loads)));
+            } catch (Throwable e) {
+                served.set(e);
+            }
+        });
+        late.start();
+        assertThat(template.read.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        redis.opsForValue().set(template.pausedKey, "null");   // 다시 보기 전에 키가 JSON null 이 됐다
+        template.resume.countDown();
+        late.join(10_000);
+        assertThat(late.isAlive()).isFalse();
+
+        assertThat(served.get()).as("원천으로 답했다").isInstanceOf(Item.class);
+        assertThat(((Item) served.get()).name()).isEqualTo("loaded");
+        assertThat(paused.get(spec, "products", "2", () -> item("next", loads)).name()).as("다른 키도 그대로 돈다").isEqualTo("next");
+        redis.delete(template.pausedKey);
+        int before = loads.get();
+        assertThat(paused.get(spec, "products", "1", () -> item("again", loads)).name()).as("같은 키의 자리가 비어 다음 조회가 원천으로 간다")
+                .isEqualTo("again");
+        assertThat(loads.get() - before).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("값이 없음을 본 뒤 다른 요청이 채우고 끝냈으면 원천을 다시 읽지 않는다 — 읽기 자리를 잡은 뒤 값을 한 번 더 확인한다")
+    void lateLoaderReadsValueStoredMeanwhile() throws Exception {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
+        ReadCache paused = new ReadCache(template, JSON, "svc");
+        ReadCache.Spec<Item> spec = paused.spec("item", Item.class, Duration.ofSeconds(30));
+        AtomicInteger loads = new AtomicInteger();
+        java.util.concurrent.atomic.AtomicReference<Object> served = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread late = new Thread(() -> {
+            template.pause.set(true);
+            try {
+                served.set(paused.get(spec, "products", "1", () -> item("late", loads)));
+            } catch (Throwable e) {
+                served.set(e);
+            }
+        });
+        late.start();
+        assertThat(template.read.await(10, java.util.concurrent.TimeUnit.SECONDS)).as("늦은 요청이 값 없음을 봤다").isTrue();
+        assertThat(paused.get(spec, "products", "1", () -> item("first", loads)).name()).as("다른 요청이 채우고 끝냈다").isEqualTo("first");
+        template.resume.countDown();
+        late.join(10_000);
+        assertThat(late.isAlive()).isFalse();
+
+        assertThat(served.get()).isInstanceOf(Item.class);
+        assertThat(((Item) served.get()).name()).as("넣어 둔 값을 받는다").isEqualTo("first");
+        assertThat(loads).as("원천은 한 번만").hasValue(1);
     }
 
     @Test
@@ -712,9 +1077,65 @@ class ReadCacheTest {
         }
     }
 
+    /** 요청 결과를 모으고, 같은 키의 진행 중 조회에 붙은 요청(WAIT)이 생기면 연다. */
+    static final class WaitEvents implements ReadCacheEvents {
+        final List<Outcome> outcomes = java.util.Collections.synchronizedList(new ArrayList<>());
+        final CountDownLatch waiting = new CountDownLatch(1);
+
+        @Override
+        public void served(String cache, Outcome outcome) {
+            outcomes.add(outcome);
+            if (outcome == Outcome.WAIT) {
+                waiting.countDown();
+            }
+        }
+
+        @Override
+        public void waited(String cache, Duration waited) {
+        }
+
+        @Override
+        public void refreshed(String cache, RefreshResult result) {
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T, E extends Throwable> T sneakyThrow(Throwable e) throws E {
+        throw (E) e;
+    }
+
+    /** ReadCache 의 로그를 모은다(그 동안 debug 까지). */
+    private static List<ch.qos.logback.classic.spi.ILoggingEvent> captureLogs(Runnable action) {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ReadCache.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender = new ch.qos.logback.core.read.ListAppender<>();
+        ch.qos.logback.classic.Level level = logger.getLevel();
+        appender.start();
+        logger.addAppender(appender);
+        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        try {
+            action.run();
+        } finally {
+            logger.detachAppender(appender);
+            logger.setLevel(level);
+        }
+        return new ArrayList<>(appender.list);
+    }
+
+    /** 그 id 의 키에 남은 "못 읽어 다시 채운다" 로그 — 앞 시험에서 남은 스레드의 로그가 섞이지 않게 id 로 거른다. */
+    private static List<String> unreadableLogs(List<ch.qos.logback.classic.spi.ILoggingEvent> logged, ch.qos.logback.classic.Level level, String id) {
+        return logged.stream()
+                .filter(event -> event.getLevel() == level && event.getFormattedMessage().startsWith("읽기 캐시 값을 못 읽어")
+                        && event.getFormattedMessage().contains(":" + id + ":"))
+                .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+                .toList();
+    }
+
+    /** 상한(10초)까지만 — 시험이 풀지 않는 변형에서도 스레드가 남지 않게. 넘으면 그 자리에서 실패한다(엉뚱한 단언으로 번지지 않게). */
     private static void await(CountDownLatch latch) {
         try {
-            latch.await();
+            if (!latch.await(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                throw new AssertionError("10초 안에 풀리지 않았다");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }

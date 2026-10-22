@@ -215,6 +215,60 @@ class LocalReadCacheTest {
     }
 
     @Test
+    @DisplayName("자리를 잡은 뒤 다시 본다 — 그사이 앞 조회가 넣은 값이 있으면 loader 를 부르지 않고 그 값을 준다")
+    void ownerRechecksAfterTakingTheSlot() {
+        LocalReadCache<String, String> cache = cache(true, 1024);
+        cache.afterSlotTaken = () -> {
+            cache.afterSlotTaken = null;
+            // 값이 없음을 본 뒤 앞 조회가 넣고 자리를 비웠다
+            cache.cache().put("k", new LocalReadCache.Loaded<>(new ReadCache.Entry<>("앞 조회", NOW), 0, 1, Duration.ofSeconds(5).toNanos()));
+        };
+        assertThat(cache.entry("k", () -> load("다시 읽음")).value()).isEqualTo("앞 조회");
+        assertThat(loads.get()).isZero();
+    }
+
+    @Test
+    @DisplayName("다시 보기 전 훅은 자리를 쥔 채 돈다 — 그동안 같은 키의 다른 요청은 기다리고 같은 값을 받는다(다시 보기의 순서는 위 시험이 지킨다)")
+    void hookRunsWhileHoldingTheSlot() throws Exception {
+        LocalReadCache<String, String> cache = cache(true, 1024);
+        CountDownLatch inHook = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        cache.afterSlotTaken = () -> {
+            cache.afterSlotTaken = null;
+            inHook.countDown();
+            await(release);
+        };
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<String> owner = pool.submit(() -> cache.entry("k", () -> load("v")).value());
+            assertThat(inHook.await(5, TimeUnit.SECONDS)).isTrue();
+            Future<String> other = pool.submit(() -> cache.entry("k", () -> load("다른 값")).value());
+            awaitWaiting(cache, "k", 1);
+            release.countDown();
+            assertThat(owner.get(5, TimeUnit.SECONDS)).isEqualTo("v");
+            assertThat(other.get(5, TimeUnit.SECONDS)).isEqualTo("v");
+            assertThat(loads.get()).isEqualTo(1);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("다시 볼 때도 비우기 전 세대의 값은 버린다 — 이 요청 세대보다 낮은 값을 주지 않고 loader 로 읽는다")
+    void recheckRejectsOlderGeneration() {
+        LocalReadCache<String, String> cache = cache(true, 1024);
+        cache.invalidateAll();   // 세대 1
+        cache.afterSlotTaken = () -> {
+            cache.afterSlotTaken = null;
+            // 비우기 전(세대 0)에 시작한 조회가 늦게 넣은 값
+            cache.cache().put("k", new LocalReadCache.Loaded<>(new ReadCache.Entry<>("옛 세대", NOW), 0, 1, Duration.ofSeconds(5).toNanos()));
+        };
+        assertThat(cache.entry("k", () -> load("새 값")).value()).isEqualTo("새 값");
+        assertThat(loads.get()).isEqualTo(1);
+    }
+
+    @Test
     @org.junit.jupiter.api.Timeout(10)
     @DisplayName("같은 키의 조회를 기다리는 쪽은 상한까지만 — 넘으면 503(다시 시도)")
     void waitingBeyondLimitIs503() throws Exception {

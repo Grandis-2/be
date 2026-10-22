@@ -47,9 +47,9 @@ class PreorderCampaignScheduleChangedReadCacheOffTest {
     @Test
     @DisplayName("읽기 캐시를 꺼도 일정 변경을 받으면 세대를 올린다 — 같은 큐를 받는 켠 인스턴스의 캐시를 비우게")
     void bumpsGenerationWithReadCacheOff() {
-        String before = redis.opsForValue().get(GENERATION);
+        redis.opsForValue().set(GENERATION, "0");   // 시작점을 정해 둔다 — 없는 세대는 지금 시각에서 시작한다
         handler.handle(UUID.randomUUID(), null);
-        assertThat(Long.parseLong(redis.opsForValue().get(GENERATION))).isEqualTo(before == null ? 1 : Long.parseLong(before) + 1);
+        assertThat(redis.opsForValue().get(GENERATION)).isEqualTo("1");
     }
 
     @Test

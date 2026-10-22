@@ -70,6 +70,7 @@ class ReadCacheRefreshTest {
     @BeforeEach
     void setUp() {
         redis.getConnectionFactory().getConnection().serverCommands().flushAll();
+        redis.opsForValue().set("svc:cache:gen:g", "0");   // 세대 시작점을 정해 둔다(없으면 지금 시각으로 시작한다)
         clock = new ReadCacheTest.MutableClock(Instant.now().truncatedTo(ChronoUnit.MILLIS));
         tasks = new Tasks();
         events = new Events();
@@ -126,7 +127,7 @@ class ReadCacheRefreshTest {
         assertThat(loads.get()).as("원천을 다시 읽지 않았다").isEqualTo(1);
         assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_UNAVAILABLE);
 
-        redis.delete("svc:cache:gen:g");   // 복구 — 세대 0, 값 키는 그대로
+        redis.opsForValue().set("svc:cache:gen:g", "0");   // 복구 — 세대 0, 값 키는 그대로
         cache.entry(spec, "g", "k", () -> load("v3"));
         assertThat(tasks.pending()).as("막아 두지 않았다 — 다음 히트가 다시 맡긴다").isEqualTo(1);
     }
@@ -210,15 +211,38 @@ class ReadCacheRefreshTest {
         assertThat(started.await(5, TimeUnit.SECONDS)).as("갱신이 시작됐다").isTrue();
         redis.delete(onlyKey());   // 만료(또는 밀려남) — 갱신은 아직 도는 중
         CompletableFuture<String> waiting = CompletableFuture.supplyAsync(() -> threaded.entry(s, "g", "k", () -> load("직접")).value());
-        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (!events.outcomes.contains(Outcome.WAIT) && System.nanoTime() < until) {
-            Thread.sleep(5);
-        }
+        assertThat(events.waiting.await(5, TimeUnit.SECONDS)).as("갱신에 붙었다").isTrue();
         release.countDown();
 
         assertThat(waiting.get(5, TimeUnit.SECONDS)).isEqualTo("v2");
         assertThat(loads.get()).as("처음 읽기 + 갱신 — 기다린 요청은 읽지 않았다").isEqualTo(2);
         assertThat(events.outcomes).contains(Outcome.WAIT);
+    }
+
+    @Test
+    @DisplayName("갱신의 loader 가 검사 예외를 몰래 던져도 그 갱신을 기다린 요청은 그 예외를 원인으로 받는다(503 시간 초과가 아니라)")
+    void sneakyCheckedRefreshFailureReachesWaiters() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        java.io.IOException failure = new java.io.IOException("원천 실패");
+        ReadCache threaded = cache(command -> new Thread(command).start());
+        ReadCache.Spec<String> s = threaded.spec("s", String.class, Duration.ofSeconds(30));
+        threaded.entry(s, "g", "k", () -> load("v1"));
+        clock.advance(Duration.ofSeconds(24));
+        threaded.entry(s, "g", "k", () -> {
+            started.countDown();
+            await(release);
+            return sneakyThrow(failure);
+        });
+        assertThat(started.await(5, TimeUnit.SECONDS)).as("갱신이 시작됐다").isTrue();
+        redis.delete(onlyKey());
+        CompletableFuture<String> waiting = CompletableFuture.supplyAsync(() -> threaded.entry(s, "g", "k", () -> load("직접")).value());
+        assertThat(events.waiting.await(5, TimeUnit.SECONDS)).as("갱신에 붙었다").isTrue();
+        release.countDown();
+
+        assertThat(waiting).failsWithin(5, TimeUnit.SECONDS).withThrowableOfType(java.util.concurrent.ExecutionException.class)
+                .havingCause().isInstanceOf(IllegalStateException.class).withCause(failure);
+        assertThat(events.failed.await(5, TimeUnit.SECONDS)).as("갱신 실패로 셌다").isTrue();
     }
 
     @Test
@@ -358,13 +382,13 @@ class ReadCacheRefreshTest {
     }
 
     @Test
-    @DisplayName("맡긴 뒤 세대 키가 지워져 지금 세대가 맡길 때보다 작아지면 갱신은 읽지 않는다 — 그 세대 키는 아무도 읽지 않는다")
-    void lateRefreshSkipsAfterGenerationKeyDeleted() {
+    @DisplayName("맡긴 뒤 세대가 맡길 때보다 작아지면(복원) 갱신은 읽지 않는다 — 그 세대 키는 아무도 읽지 않는다")
+    void lateRefreshSkipsAfterGenerationRolledBack() {
         cache.bumpAfterCommit("g");
         cache.entry(spec, "g", "k", () -> load("v1"));   // 세대 1
         clock.advance(Duration.ofSeconds(24));
         cache.entry(spec, "g", "k", () -> load("갱신"));   // 세대 1 로 맡김
-        redis.delete("svc:cache:gen:g");   // 지금 세대 0
+        redis.opsForValue().set("svc:cache:gen:g", "0");   // 지금 세대 0 — 맡길 때(1)보다 작다
         tasks.runAll();
         assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_NEWER);
         assertThat(loads.get()).as("갱신은 읽지 않았다").isEqualTo(1);
@@ -416,9 +440,20 @@ class ReadCacheRefreshTest {
         return keys.iterator().next();
     }
 
+    @SuppressWarnings("unchecked")
+    private static <T, E extends Throwable> T sneakyThrow(Throwable e) throws E {
+        throw (E) e;
+    }
+
+    /**
+     * 상한(10초)까지만 — 넘으면 AssertionError. 이 파일에서는 갱신 실행기 스레드의 loader 안에서 부르므로 시험을 바로 실패시키지 않고 loader 실패로
+     * 기다린 쪽에 전해진다. 주 스레드의 래치 단언(5초)이 먼저 판정하도록 그보다 길게 둔다.
+     */
     private static void await(CountDownLatch latch) {
         try {
-            latch.await(5, TimeUnit.SECONDS);
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new AssertionError("10초 안에 풀리지 않았다");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -450,15 +485,25 @@ class ReadCacheRefreshTest {
     static final class Events implements ReadCacheEvents {
         final List<Outcome> outcomes = Collections.synchronizedList(new ArrayList<>());
         final List<RefreshResult> refreshes = Collections.synchronizedList(new ArrayList<>());
+        /** 같은 키의 진행 중 조회에 붙은 요청(WAIT)이 생기면 연다. */
+        final CountDownLatch waiting = new CountDownLatch(1);
+        /** 실패한 갱신(FAILED)이 생기면 연다. */
+        final CountDownLatch failed = new CountDownLatch(1);
 
         @Override
         public void refreshed(String cache, RefreshResult result) {
             refreshes.add(result);
+            if (result == RefreshResult.FAILED) {
+                failed.countDown();
+            }
         }
 
         @Override
         public void served(String cache, Outcome outcome) {
             outcomes.add(outcome);
+            if (outcome == Outcome.WAIT) {
+                waiting.countDown();
+            }
         }
 
         @Override

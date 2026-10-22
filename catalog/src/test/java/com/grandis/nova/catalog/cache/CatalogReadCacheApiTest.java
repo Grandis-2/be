@@ -658,9 +658,15 @@ class CatalogReadCacheApiTest {
         return names;
     }
 
+    /**
+     * 지금 세대 — 없으면 0 으로 심는다(없는 세대는 첫 조회 · 올리기가 지금 시각으로 만들어, 앞뒤를 비교하는 시험이 순서에 따라 갈리지 않게).
+     * 심기는 쓰기다 — 컨텍스트의 캐시 빈은 앞 시험에서 지금 시각만 한 번호를 봤을 수 있어, 심은 뒤 공개 조회를 끼우면 복원으로 보고 올린다.
+     * 그래서 앞뒤 사이에 공개 조회가 없는 시험에서만 쓴다.
+     */
     private long generation(String name) {
-        String value = redis.opsForValue().get("catalog:cache:gen:" + name);
-        return value == null ? 0 : Long.parseLong(value);
+        String key = "catalog:cache:gen:" + name;
+        redis.opsForValue().setIfAbsent(key, "0");
+        return Long.parseLong(redis.opsForValue().get(key));
     }
 
     private static String body(ResultActions actions) throws Exception {

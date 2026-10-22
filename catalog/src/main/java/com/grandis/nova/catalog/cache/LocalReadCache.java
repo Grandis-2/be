@@ -40,7 +40,7 @@ import java.util.function.ToIntFunction;
  *   <li>같은 키 · 같은 세대를 동시에 찾으면 loader 는 이 인스턴스에서 한 번이고, 넣지 않는 값(storable 거짓)이든 예외든 기다린 쪽이 같은 결과를 받는다.
  *       세대가 오른 뒤 온 요청은 옛 세대의 진행 중 조회에 붙지 않고 새로 읽는다(Redis 판이 세대 번호를 넣은 키로 줄 세우는 것과 같다).
  *       런타임 예외는 같은 객체가 기다린 쪽에도 던져진다(스택은 처음 읽은 스레드의 것). 그 밖(Error · 몰래 던진 검사 예외)은 원인으로 감싼
- *       IllegalStateException 이다 — 이 경로만은 Redis 판과 다르다(Redis 판은 런타임 예외 · Error 만 넘겨, 몰래 던진 검사 예외면 기다린 쪽이 상한 뒤 503).
+ *       IllegalStateException 이다 — Redis 판과 같다.
  *       기다리는 쪽은 {@link #WAIT_FOR_LOAD} 까지만 — 넘으면 503(다시 시도). loader 는 Caffeine 의 계산 밖에서 돌아 다른 키를 막지 않는다.</li>
  *   <li>미리 갱신: 읽은 지 TTL 의 {@link #REFRESH_AFTER_PERCENT}% 가 지난 값을 꺼낸 요청은 그 값을 바로 받고, 같은 키 · 세대의 다시 읽기를 갱신
  *       실행기에 하나만 맡긴다(요청이 없는 키는 갱신하지 않는다). 갱신은 위의 "한 번만 읽기" 자리를 같이 써서, 갱신이 끝나기 전에 값이 만료되면 그 뒤
@@ -141,6 +141,9 @@ public final class LocalReadCache<K, V> {
         return cache;
     }
 
+    /** 시험용 — 자리를 잡은 뒤 다시 보기 전에 끼어든다(값이 없음을 본 뒤 앞 조회가 넣고 자리를 비운 경우를 만든다). 운영에서는 늘 null. */
+    volatile Runnable afterSlotTaken;
+
     /** 시험용 — 그 키(지금 세대)의 진행 중 조회를 기다리는 요청 수(추정). 진행 중인 조회가 없으면 0 — 비우기 전 세대의 조회는 세지 않는다. */
     int waiting(K key) {
         CompletableFuture<ReadCache.Entry<V>> running = loading.get(new Slot<>(key, generation.get()));
@@ -207,7 +210,7 @@ public final class LocalReadCache<K, V> {
         return clock.instant().isBefore(entry.loadedAt().plus(ttl));
     }
 
-    /** 같은 키의 loader 를 한 번만 부르고 나머지는 그 결과(또는 예외)를 같이 받는다 — Redis 읽기 캐시의 load 와 같은 모양. */
+    /** 같은 키의 loader 를 한 번만 부르고 나머지는 그 결과(또는 예외)를 같이 받는다 — Redis 읽기 캐시의 load 와 같은 모양(자리를 잡은 뒤 한 번 더 본다). */
     private ReadCache.Entry<V> load(K key, long current, Supplier<V> loader, Predicate<V> storable) {
         Slot<K> slot = new Slot<>(key, current);
         CompletableFuture<ReadCache.Entry<V>> mine = new CompletableFuture<>();
@@ -229,8 +232,19 @@ public final class LocalReadCache<K, V> {
                 events.waited(name, Duration.ofNanos(System.nanoTime() - started));
             }
         }
-        events.served(name, Outcome.LOAD);
         try {
+            Runnable hook = afterSlotTaken;
+            if (hook != null) {
+                hook.run();
+            }
+            // 자리를 잡기 전에 값이 없음을 봤어도, 그사이 앞 조회가 넣고 자리를 비웠을 수 있다 — loader 를 부르기 전에 한 번 더 본다
+            Loaded<V> found = cache.getIfPresent(key);
+            if (found != null && found.generation() >= current && fresh(found.entry())) {
+                events.served(name, Outcome.HIT);
+                mine.complete(found.entry());
+                return found.entry();
+            }
+            events.served(name, Outcome.LOAD);
             Instant loadedAt = clock.instant();   // 읽기 전 시각 — 응답의 나이를 짧게 잡지 않게
             ReadCache.Entry<V> entry = new ReadCache.Entry<>(loader.get(), loadedAt);
             mine.complete(entry);
