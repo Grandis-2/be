@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.preorder.domain;
 
 import com.grandis.nova.preorder.preorder.AdminPreorderSearch;
+import com.grandis.nova.preorder.preorder.StageCondition;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 
 import java.time.Instant;
@@ -9,10 +10,21 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 
-/** 진행 조건을 SQL 로 푼다(preorders 의 별칭은 p). */
+/** 진행 조건 · 단계 조건을 SQL 로 푼다(preorders 의 별칭은 p). 관리자 검색과 회원 목록이 같이 쓴다. */
 final class ProgressSql {
 
     private ProgressSql() {
+    }
+
+    /** 단계 하나를 괄호로 묶은 조건으로. 이름이 겹치지 않게 바인딩 이름 끝에 key 를 붙인다. */
+    static String stage(StageCondition stage, MapSqlParameterSource params, String key) {
+        List<String> conditions = new ArrayList<>();
+        conditions.add("p.status = :status" + key);
+        params.addValue("status" + key, stage.status().name());
+        if (stage.progress() != null) {
+            conditions.addAll(progress(stage.progress(), params, key));
+        }
+        return "(" + String.join(" AND ", conditions) + ")";
     }
 
     /** 진행 조건. 값이 없는 칸은 걸지 않는다. */

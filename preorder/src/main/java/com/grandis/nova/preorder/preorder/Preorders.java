@@ -5,6 +5,7 @@ import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.preorder.domain.AdminPreorderSearchQuery;
 import com.grandis.nova.preorder.preorder.domain.CustomerPreorderListQuery;
+import com.grandis.nova.preorder.preorder.domain.CustomerStageQuery;
 import com.grandis.nova.preorder.preorder.domain.Preorder;
 import com.grandis.nova.preorder.preorder.domain.PaymentOverdueQuery;
 import com.grandis.nova.preorder.preorder.domain.PreorderBacklogQuery;
@@ -42,15 +43,18 @@ public class Preorders {
     private final PreorderBacklogQuery backlog;
     private final PaymentOverdueQuery paymentOverdue;
     private final CustomerPreorderListQuery customerList;
+    private final CustomerStageQuery customerStages;
 
     Preorders(PreorderRepository preorders, PreorderEventRepository events, AdminPreorderSearchQuery adminSearch,
-              PreorderBacklogQuery backlog, PaymentOverdueQuery paymentOverdue, CustomerPreorderListQuery customerList) {
+              PreorderBacklogQuery backlog, PaymentOverdueQuery paymentOverdue, CustomerPreorderListQuery customerList,
+              CustomerStageQuery customerStages) {
         this.preorders = preorders;
         this.events = events;
         this.adminSearch = adminSearch;
         this.backlog = backlog;
         this.paymentOverdue = paymentOverdue;
         this.customerList = customerList;
+        this.customerStages = customerStages;
     }
 
     public Optional<PreorderSnapshot> findByToken(String preorderToken) {
@@ -175,6 +179,22 @@ public class Preorders {
         return customerList.findNewestFirst(specification, limit).stream()
                 .map(Preorder::toSnapshot)
                 .toList();
+    }
+
+    /** 회원의 예약 중 그 단계들 중 하나인 것(최신순)을 커서 자리 다음부터 최대 limit 건. 커서가 없으면 처음부터다. */
+    public List<PreorderSnapshot> findForCustomerInStages(UUID customerId, PreorderStatus status, UUID productId,
+                                                         List<StageCondition> anyOf, Instant afterCreatedAt, UUID afterId,
+                                                         int limit) {
+        List<UUID> ids = customerStages.findIds(Objects.requireNonNull(customerId), status, productId, anyOf,
+                afterCreatedAt, afterId, limit);
+        Map<UUID, Preorder> byId = (ids.isEmpty() ? List.<Preorder>of() : preorders.lookupAll(ids)).stream()
+                .collect(Collectors.toMap(Preorder::getId, Function.identity()));
+        return ids.stream().map(byId::get).map(Preorder::toSnapshot).toList();
+    }
+
+    /** 회원의 예약 중 단계마다 맞는 수. 받은 단계 순서대로 준다. */
+    public List<Long> countForCustomerByStage(UUID customerId, List<StageCondition> stages) {
+        return customerStages.countEach(Objects.requireNonNull(customerId), stages);
     }
 
     /** 회원의 진행 중인 예약(최신순)을 커서 자리 다음부터 최대 limit 건. 상품마다 많아야 한 건이다. */

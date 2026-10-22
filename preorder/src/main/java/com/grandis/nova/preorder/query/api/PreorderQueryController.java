@@ -4,6 +4,7 @@ import com.grandis.nova.common.CursorPage;
 import com.grandis.nova.common.security.CurrentCustomerId;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
+import com.grandis.nova.preorder.query.application.PreorderDisplayStatus;
 import com.grandis.nova.preorder.query.application.PreorderQueryService;
 import com.grandis.nova.preorder.web.CurrentViewer;
 import com.grandis.nova.preorder.web.Items;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /** 내 예약 조회. 목록은 본인 것만, 상세 · 이력은 본인과 관리자만 본다. */
@@ -32,16 +34,30 @@ class PreorderQueryController {
         this.queryService = queryService;
     }
 
-    @Operation(summary = "내 예약 목록(커서 페이지)")
+    @Operation(summary = "내 예약 목록(커서 페이지)",
+            description = "최신순. displayStatus 는 여러 번 줄 수 있고(그중 하나), 지금 시각으로 가른다 — 응답의 displayStatus 와 같다. "
+                    + "status(원장 상태) · productId 와는 AND 다. counts 는 이 조건과 상관없이 내 예약 전부의 화면 단계별 수다. "
+                    + "모르는 값은 400")
     @GetMapping
-    public ApiResponse<CursorPage<PreorderSummaryResponse>> list(
+    public ApiResponse<MyPreordersResponse> list(
             @CurrentCustomerId UUID customerId,
             @RequestParam(required = false) PreorderStatus status,
+            @RequestParam(required = false) Set<PreorderDisplayStatus> displayStatus,
             @RequestParam(required = false) UUID productId,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        return ApiResponse.ok(queryService.findMine(customerId, status, productId, cursor, PageSizes.require(size))
-                .map(PreorderSummaryResponse::from));
+        CursorPage<PreorderSummaryResponse> page = queryService.findMine(customerId, status,
+                        displayStatus == null ? Set.of() : displayStatus, productId, cursor, PageSizes.require(size))
+                .map(PreorderSummaryResponse::from);
+        return ApiResponse.ok(MyPreordersResponse.of(page, queryService.countMine(customerId)));
+    }
+
+    @Operation(summary = "내 예약의 화면 단계별 수",
+            description = "목록 없이 숫자만. 머리글 · 마이페이지 배지의 \"구매 확정 필요\"(PAYABLE + PAYMENT_IN_PROGRESS) 같은 수에 쓴다. "
+                    + "모든 단계가 들어 있고 없는 단계는 0")
+    @GetMapping("/counts")
+    public ApiResponse<PreorderCountsResponse> counts(@CurrentCustomerId UUID customerId) {
+        return ApiResponse.ok(new PreorderCountsResponse(queryService.countMine(customerId)));
     }
 
     @Operation(summary = "내 진행 중인 예약(상품마다 많아야 한 건)",

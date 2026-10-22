@@ -27,10 +27,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
+import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -311,6 +313,146 @@ class PreorderQueryApiTest {
         mockMvc.perform(get("/api/v1/preorders/active").param("cursor", "not-a-cursor").with(customer(customerId)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"));
+    }
+
+    /* 화면 단계 하나로 거르면 응답의 displayStatus 가 그 단계인 예약만 나온다 — 거르는 조건과 보이는 단계가 같은 규칙이다. */
+    @Test
+    void filtersByEachDisplayStatus() throws Exception {
+        Map<String, AcceptResult> byStage = acceptOnePerStage(customerId);
+        acceptOnePerStage(fixtures.customer());
+
+        for (Map.Entry<String, AcceptResult> stage : byStage.entrySet()) {
+            mockMvc.perform(get("/api/v1/preorders").param("displayStatus", stage.getKey()).with(customer(customerId)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.items[*].preorderId", contains(AcceptFixtures.tokenOf(stage.getValue()))))
+                    .andExpect(jsonPath("$.data.items[0].displayStatus").value(stage.getKey()));
+        }
+    }
+
+    /* 여러 번 주면 그중 하나 — 탭 하나가 단계 여럿을 묶는다. counts 는 조건과 상관없이 내 예약 전부다. */
+    @Test
+    void filtersByManyDisplayStatusesAndCountsAllMyPreorders() throws Exception {
+        Map<String, AcceptResult> byStage = acceptOnePerStage(customerId);
+        acceptOnePerStage(fixtures.customer());
+
+        mockMvc.perform(get("/api/v1/preorders").param("displayStatus", "PAYMENT_EXPIRED", "CANCELED").with(customer(customerId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[*].preorderId", contains(
+                        AcceptFixtures.tokenOf(byStage.get("CANCELED")), AcceptFixtures.tokenOf(byStage.get("PAYMENT_EXPIRED")))))
+                .andExpect(jsonPath("$.data.counts.length()").value(8))
+                .andExpect(jsonPath("$.data.counts.RECEIVED").value(1))
+                .andExpect(jsonPath("$.data.counts.PROCESSING").value(1))
+                .andExpect(jsonPath("$.data.counts.PAYABLE").value(1))
+                .andExpect(jsonPath("$.data.counts.PAYMENT_IN_PROGRESS").value(1))
+                .andExpect(jsonPath("$.data.counts.PAYMENT_EXPIRED").value(1))
+                .andExpect(jsonPath("$.data.counts.RESERVED").value(1))
+                .andExpect(jsonPath("$.data.counts.CANCELING").value(1))
+                .andExpect(jsonPath("$.data.counts.CANCELED").value(1));
+    }
+
+    /* 커서는 같은 조건 안에서 이어 읽고, 원장 상태와 함께 주면 AND 다. */
+    @Test
+    void displayStatusFilterPagesAndCombinesWithStatus() throws Exception {
+        Map<String, AcceptResult> byStage = acceptOnePerStage(customerId);
+
+        String firstPage = mockMvc.perform(get("/api/v1/preorders").param("displayStatus", "RECEIVED", "PROCESSING", "RESERVED", "CANCELING")
+                        .param("size", "3").with(customer(customerId)))
+                .andExpect(jsonPath("$.data.items[*].preorderId", contains(AcceptFixtures.tokenOf(byStage.get("CANCELING")),
+                        AcceptFixtures.tokenOf(byStage.get("RESERVED")), AcceptFixtures.tokenOf(byStage.get("PROCESSING")))))
+                .andReturn().getResponse().getContentAsString();
+        String cursor = JsonPath.read(firstPage, "$.data.nextCursor");
+        mockMvc.perform(get("/api/v1/preorders").param("displayStatus", "RECEIVED", "PROCESSING", "RESERVED", "CANCELING")
+                        .param("size", "3").param("cursor", cursor).with(customer(customerId)))
+                .andExpect(jsonPath("$.data.items[*].preorderId", contains(AcceptFixtures.tokenOf(byStage.get("RECEIVED")))))
+                .andExpect(jsonPath("$.data.nextCursor").doesNotExist());
+
+        mockMvc.perform(get("/api/v1/preorders").param("displayStatus", "PAYABLE", "PAYMENT_EXPIRED").param("status", "REGISTERED")
+                        .with(customer(customerId)))
+                .andExpect(jsonPath("$.data.items", hasSize(2)));
+        mockMvc.perform(get("/api/v1/preorders").param("displayStatus", "PAYABLE").param("status", "RESERVED")
+                        .with(customer(customerId)))
+                .andExpect(jsonPath("$.data.items", hasSize(0)));
+    }
+
+    /* 결제 기한이 지나면 같은 예약이 PAYABLE 에서 PAYMENT_EXPIRED 로 옮겨 가고, 목록 · 건수가 함께 따라간다. */
+    @Test
+    void expiredPaymentMovesBetweenStages() throws Exception {
+        AcceptResult accepted = accepts.accept(customerId);
+        UUID id = accepted.preorder().id();
+        fire(id, new PreorderFact.RegisterConfirmed("EXT-" + ShopFixtures.unique()));
+        mockMvc.perform(get("/api/v1/preorders/counts").with(customer(customerId)))
+                .andExpect(jsonPath("$.data.counts.PAYABLE").value(1))
+                .andExpect(jsonPath("$.data.counts.PAYMENT_EXPIRED").value(0));
+
+        jdbcTemplate.update("UPDATE preorders SET payable_from = payable_from - INTERVAL 25 HOUR WHERE id = ?",
+                (Object) UuidBinary.toBytes(id));
+        mockMvc.perform(get("/api/v1/preorders/counts").with(customer(customerId)))
+                .andExpect(jsonPath("$.data.counts.PAYABLE").value(0))
+                .andExpect(jsonPath("$.data.counts.PAYMENT_EXPIRED").value(1));
+        mockMvc.perform(get("/api/v1/preorders").param("displayStatus", "PAYABLE").with(customer(customerId)))
+                .andExpect(jsonPath("$.data.items", hasSize(0)));
+    }
+
+    @Test
+    void countsAloneMatchTheListCounts() throws Exception {
+        acceptOnePerStage(customerId);
+
+        String list = mockMvc.perform(get("/api/v1/preorders").with(customer(customerId)))
+                .andReturn().getResponse().getContentAsString();
+        String counts = mockMvc.perform(get("/api/v1/preorders/counts").with(customer(customerId)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        Map<String, Object> fromList = JsonPath.read(list, "$.data.counts");
+        Map<String, Object> alone = JsonPath.read(counts, "$.data.counts");
+        org.assertj.core.api.Assertions.assertThat(alone).isEqualTo(fromList).hasSize(8);
+    }
+
+    @Test
+    void unknownDisplayStatusIsBadRequestAndCountsNeedACustomer() throws Exception {
+        mockMvc.perform(get("/api/v1/preorders").param("displayStatus", "WAITING").with(customer(customerId)))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(get("/api/v1/preorders/counts")).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/v1/preorders/counts").with(admin())).andExpect(status().isForbidden());
+    }
+
+    /** 화면 단계마다 예약 하나. 순서대로 접수해 최신순은 CANCELED 가 맨 앞이다. */
+    private Map<String, AcceptResult> acceptOnePerStage(UUID owner) {
+        Map<String, AcceptResult> byStage = new java.util.LinkedHashMap<>();
+        byStage.put("RECEIVED", accepts.accept(owner));
+
+        AcceptResult processing = accepts.accept(owner);
+        jdbcTemplate.update("UPDATE preorder_sync_jobs SET status = 'RETRY_SCHEDULED' WHERE preorder_id = ?",
+                (Object) UuidBinary.toBytes(processing.preorder().id()));
+        byStage.put("PROCESSING", processing);
+
+        AcceptResult payable = accepts.accept(owner);
+        fire(payable.preorder().id(), new PreorderFact.RegisterConfirmed("EXT-" + ShopFixtures.unique()));
+        byStage.put("PAYABLE", payable);
+
+        AcceptResult paying = accepts.accept(owner);
+        fire(paying.preorder().id(), new PreorderFact.RegisterConfirmed("EXT-" + ShopFixtures.unique()));
+        fire(paying.preorder().id(), new PreorderFact.PaymentStarted(Instant.now()));
+        byStage.put("PAYMENT_IN_PROGRESS", paying);
+
+        AcceptResult expired = accepts.accept(owner);
+        fire(expired.preorder().id(), new PreorderFact.RegisterConfirmed("EXT-" + ShopFixtures.unique()));
+        jdbcTemplate.update("UPDATE preorders SET payable_from = payable_from - INTERVAL 25 HOUR WHERE id = ?",
+                (Object) UuidBinary.toBytes(expired.preorder().id()));
+        byStage.put("PAYMENT_EXPIRED", expired);
+
+        AcceptResult reserved = accepts.accept(owner);
+        fire(reserved.preorder().id(), new PreorderFact.RegisterConfirmed("EXT-" + ShopFixtures.unique()));
+        fire(reserved.preorder().id(), new PreorderFact.PaymentConfirmed(Instant.parse("2026-10-04T01:00:00Z")));
+        byStage.put("RESERVED", reserved);
+
+        AcceptResult canceling = accepts.accept(owner);
+        fire(canceling.preorder().id(), new PreorderFact.CancelRequested(EventActor.USER, null));
+        byStage.put("CANCELING", canceling);
+
+        AcceptResult canceled = accepts.accept(owner);
+        cancels.complete(canceled.preorder().id());
+        byStage.put("CANCELED", canceled);
+        return byStage;
     }
 
     private void fire(UUID preorderId, PreorderFact fact) {
