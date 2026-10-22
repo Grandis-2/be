@@ -180,6 +180,22 @@ public final class LocalReadCache<K, V> {
         return entry(key, loader, value -> true);
     }
 
+    /**
+     * 지금 든 값만 꺼낸다 — 원천을 부르지 않고, 넣지도 미리 갱신을 맡기지도 않는다. 없거나 만료됐거나 비우기 전 세대면 null. 꺼 두면 늘 null.
+     * 키를 정할 바깥 값(Redis 세대)을 못 읽어 마지막으로 본 키로만 찾을 때 쓴다.
+     */
+    public ReadCache.Entry<V> peek(K key) {
+        if (!enabled) {
+            return null;
+        }
+        Loaded<V> found = cache.getIfPresent(key);
+        if (found == null || found.generation() < generation.get() || !fresh(found.entry())) {
+            return null;
+        }
+        events.served(name, Outcome.HIT);
+        return found.entry();
+    }
+
     /** 지금 버린다 — 진행 중인 조회가 뒤에 넣는 값은 옛 세대라 꺼낼 때 버린다. */
     public void invalidateAll() {
         generation.incrementAndGet();
