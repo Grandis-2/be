@@ -67,9 +67,9 @@ public class WritableReviewQuery {
         return OffsetPage.of(items, page, size, writable.size());
     }
 
-    /** 고르기 · 쪽 나누기에 쓰는 칸이 다 있는가. 빈 칸을 그대로 쓰면 근거 없는 500 이 나므로 계약 위반으로 남긴다(쓰기의 대조와 같다). */
+    /** 고르는 데 쓰는 칸(주문상품 · 상품 id)과 화면이 주문으로 잇는 주문 id 가 다 있는가. 빈 칸을 그대로 내보내지 않고 계약 위반으로 남긴다(쓰기의 대조와 같다). */
     private static List<OrderClient.DeliveredItem> requireContract(OrderClient.DeliveredItems reply) {
-        if (reply == null || reply.items() == null || reply.items().stream().anyMatch(item ->
+        if (reply.items() == null || reply.items().stream().anyMatch(item ->
                 item == null || item.orderItemId() == null || item.orderId() == null || item.productId() == null)) {
             throw InternalCalls.contractViolation(Dependencies.ORDER, "배송 완료 주문상품 응답에 필수 칸이 비었다");
         }

@@ -167,13 +167,18 @@ class WritableReviewApiTest {
     }
 
     @Test
-    @DisplayName("order 응답에 고를 때 쓰는 칸(주문상품 · 주문 · 상품 id)이 비면 연동 오류(500)다")
+    @DisplayName("order 응답의 주문상품 · 주문 · 상품 id 가 비면 연동 오류(500)다")
     void missingFieldsAreAContractViolation() throws Exception {
         stubDelivered(new OrderClient.DeliveredItem(UUID.randomUUID(), UUID.randomUUID(), null, UUID.randomUUID(), "이름", "옵션", null, 1,
                 BigDecimal.ONE, Instant.parse("2026-10-06T06:00:00Z")));
         mockMvc.perform(get(PATH).with(AccessTokens.customer(customerId))).andExpect(status().isInternalServerError());
 
         given(orders.getDeliveredItems()).willReturn(ApiResponse.ok(new OrderClient.DeliveredItems(null, false)));
+        mockMvc.perform(get(PATH).with(AccessTokens.customer(customerId))).andExpect(status().isInternalServerError());
+
+        // 주문 id 는 고르는 데 쓰지 않아 대조하지 않으면 빈 채로 200 이 나간다
+        stubDelivered(new OrderClient.DeliveredItem(UUID.randomUUID(), null, productId, UUID.randomUUID(), "이름", "옵션", null, 1,
+                BigDecimal.ONE, Instant.parse("2026-10-06T06:00:00Z")));
         mockMvc.perform(get(PATH).with(AccessTokens.customer(customerId))).andExpect(status().isInternalServerError());
     }
 
