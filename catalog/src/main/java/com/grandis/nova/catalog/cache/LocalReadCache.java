@@ -141,6 +141,9 @@ public final class LocalReadCache<K, V> {
         return cache;
     }
 
+    /** 시험용 — 자리를 잡은 뒤 다시 보기 전에 끼어든다(값이 없음을 본 뒤 앞 조회가 넣고 자리를 비운 경우를 만든다). 운영에서는 늘 null. */
+    volatile Runnable afterSlotTaken;
+
     /** 시험용 — 그 키(지금 세대)의 진행 중 조회를 기다리는 요청 수(추정). 진행 중인 조회가 없으면 0 — 비우기 전 세대의 조회는 세지 않는다. */
     int waiting(K key) {
         CompletableFuture<ReadCache.Entry<V>> running = loading.get(new Slot<>(key, generation.get()));
@@ -230,6 +233,10 @@ public final class LocalReadCache<K, V> {
             }
         }
         try {
+            Runnable hook = afterSlotTaken;
+            if (hook != null) {
+                hook.run();
+            }
             // 자리를 잡기 전에 값이 없음을 봤어도, 그사이 앞 조회가 넣고 자리를 비웠을 수 있다 — loader 를 부르기 전에 한 번 더 본다
             Loaded<V> found = cache.getIfPresent(key);
             if (found != null && found.generation() >= current && fresh(found.entry())) {
