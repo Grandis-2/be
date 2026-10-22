@@ -7,6 +7,7 @@ import com.grandis.nova.preorder.admission.AdmissionTicket;
 import com.grandis.nova.preorder.campaign.CampaignSchedule;
 import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.campaign.IssuedPosition;
+import com.grandis.nova.preorder.campaign.LockedCampaign;
 import com.grandis.nova.preorder.integration.catalog.OptionSnapshot;
 import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
 import com.grandis.nova.preorder.preorder.AcceptHistory;
@@ -83,7 +84,7 @@ class PreorderAcceptTransaction {
      */
     @Transactional
     public AcceptResult accept(AcceptCommand command, Optional<ProductCatalog> product) {
-        Optional<CampaignSchedule> campaign =
+        Optional<LockedCampaign> campaign =
                 campaignLockWait.record(() -> campaigns.lockForAccept(command.productId()));
 
         AcceptHistory history = preorders.findAcceptHistory(command.customerId(), command.productId(),
@@ -94,7 +95,11 @@ class PreorderAcceptTransaction {
 
         requireTicketAfterLastAccept(command, history.lastAcceptedAt());
         OptionSnapshot option = requireOnSale(command, product);
-        requireAccepting(campaign, clock.instant());
+        // 판매 중지 · 비공개는 catalog 캐시가 늦어도 회차 행 사본으로 거절한다 — 공개 전 상품처럼 존재를 알리지 않는다
+        if (campaign.filter(locked -> !locked.onSale()).isPresent()) {
+            throw new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND);
+        }
+        requireAccepting(campaign.map(LockedCampaign::schedule), clock.instant());
         IssuedPosition issued = campaigns.issuePosition(command.productId());
 
         String preorderToken = UUID.randomUUID().toString();

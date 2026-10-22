@@ -289,6 +289,28 @@ class AcceptPreorderApiTest {
     }
 
     @Test
+    void catalog_캐시가_판매_중이라도_회차_행이_판매_중지_비공개면_404() throws Exception {
+        PreorderProduct paused = fixtures.openPreorderProduct();
+        catalogReturns(paused.productId(), "PREORDER", "ACTIVE", paused.optionId(), "ACTIVE");
+        fixtures.listing(paused.productId(), "모델", "PAUSED", true);
+        accept(customerId, paused.productId(), paused.optionId(), "key-row-paused",
+                ticket(paused.productId(), customerId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
+
+        PreorderProduct hidden = fixtures.openPreorderProduct();
+        catalogReturns(hidden.productId(), "PREORDER", "ACTIVE", hidden.optionId(), "ACTIVE");
+        fixtures.listing(hidden.productId(), "모델", "ACTIVE", false);
+        accept(customerId, hidden.productId(), hidden.optionId(), "key-row-hidden",
+                ticket(hidden.productId(), customerId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
+
+        assertThat(fixtures.nextQueuePosition(paused.productId())).isEqualTo(1L);
+        assertThat(fixtures.nextQueuePosition(hidden.productId())).isEqualTo(1L);
+    }
+
+    @Test
     void 공개_전_상품은_없는_상품으로_404() throws Exception {
         CatalogStubs.stubPreorderProduct(catalogClient, product.productId(), false, true,
                 CatalogStubs.activeOption(product.optionId()));

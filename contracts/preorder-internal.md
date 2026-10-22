@@ -77,7 +77,7 @@ preorder `CatalogReader` 는 401 을 사용자 토큰 문제(401)로, 404 외 �
 | 목적 | 조건 |
 | --- | --- |
 | 회차·차수 수정 | `saleMode = PREORDER`. **`status`·`visible`·`registrationCompleted` 는 보지 않는다** — 회차 행이 아직 없는 상품(등록 이벤트를 DLQ 에서 고치는 경우)도 설정할 수 있어야 한다. 등록 때의 회차 · 차수는 이 API 가 아니라 `PREORDER_PRODUCT_REGISTERED` 이벤트로 만든다 |
-| 사용자 접수 | `saleMode = PREORDER AND status = ACTIVE AND visible`, 그리고 선택한 `optionId` 가 이 상품의 `options` 에 있고 `options[].status = ACTIVE`. 등록이 끝났는지는 `registrationCompleted` 가 아니라 접수 트랜잭션이 잠근 회차 행으로 본다 — 없으면 404 `PRODUCT_NOT_FOUND`(공개 전처럼 숨긴다) |
+| 사용자 접수 | `saleMode = PREORDER AND status = ACTIVE AND visible`, 그리고 선택한 `optionId` 가 이 상품의 `options` 에 있고 `options[].status = ACTIVE`. 등록이 끝났는지는 `registrationCompleted` 가 아니라 접수 트랜잭션이 잠근 회차 행으로 본다 — 없으면 404 `PRODUCT_NOT_FOUND`(공개 전처럼 숨긴다). 판매 중지 · 비공개는 잠근 회차 행의 사본(`visible` · `product_status`, 같은 변경 이벤트가 갱신)으로도 거절한다 — 아래 캐시가 늦어도 같은 404 다 |
 
 preorder 는 dev(NV-281)에서 판정을 갈랐다 — 회차 설정은 `ProductCatalog.isPreorderProduct()`(`saleMode` 만), 접수는 `isOnPreorderSale()`(세 조건, NV-643 에서 `registrationCompleted` 를 뺐다). preorder 는 두 칸을 `Boolean` 래퍼로 받아 칸이 빠지거나 null 이면 숨기지 않는다. **catalog 는 두 칸을 primitive `boolean` 으로 늘 싣는다** — null 이 될 수 없고, `false` 도 빠지지 않고 실리는 것을 `InternalProductApiTest` 가 고정한다. 그래서 preorder 의 래퍼가 접수 판정을 비우지 않는다.
 
