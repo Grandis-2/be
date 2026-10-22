@@ -31,7 +31,7 @@ final class SnapshotCodec {
     static final String LEAVE_GRACE = "#leave-grace-sec";
     static final String PUBLISHED_AT = "#at";
     static final String BRAKE = "#brake";
-    /** "운영값|용량 합|다 뜬 태스크|갓 뜬 태스크|태스크당 용량". 용량을 모르면 합 · 태스크당 용량이 -1 이다. */
+    /** "운영값|용량 합|다 뜬 태스크|갓 뜬 태스크|닿는 용량|직전 값 유지(1/0)". 용량을 모르면 합 · 닿는 용량이 -1 이다. */
     static final String CAPACITY = "#capacity";
     /** 리더 브레이크 창의 "전달|나쁜 응답". 브레이크가 꺼졌으면 없다. */
     static final String RELAY = "#relay";
@@ -54,7 +54,7 @@ final class SnapshotCodec {
         fields.put(BRAKE, String.valueOf(snapshot.brakeFactor()));
         CapacityStatus capacity = snapshot.capacity();
         fields.put(CAPACITY, capacity.operationalCredit() + "|" + capacity.sum() + "|" + capacity.ready() + "|"
-                + capacity.warming() + "|" + capacity.perTask());
+                + capacity.warming() + "|" + capacity.reachable() + "|" + (capacity.held() ? 1 : 0));
         snapshot.relayWindow().ifPresent(relay -> fields.put(RELAY, relay.relayed() + "|" + relay.bad()));
         return fields;
     }
@@ -110,7 +110,7 @@ final class SnapshotCodec {
     /** 없거나 깨졌으면 운영값도 용량도 모르는 것으로 읽는다 — 이 필드를 모르는 옛 리더가 낸 재료다. 판정에는 쓰지 않고 보이기만 한다. */
     private static CapacityStatus capacity(String value) {
         String[] parts = value == null ? new String[0] : value.split("\\|", -1);
-        if (parts.length != 5) {
+        if (parts.length != 6 || !(parts[5].equals("0") || parts[5].equals("1"))) {
             return CapacityStatus.MISSING;
         }
         try {
@@ -118,12 +118,12 @@ final class SnapshotCodec {
             long sum = Long.parseLong(parts[1]);
             int ready = Integer.parseInt(parts[2]);
             int warming = Integer.parseInt(parts[3]);
-            long perTask = Long.parseLong(parts[4]);
+            long reachable = Long.parseLong(parts[4]);
             if (operational < CapacityStatus.UNKNOWN || sum < CapacityStatus.UNKNOWN || ready < 0 || warming < 0
-                    || perTask < CapacityStatus.UNKNOWN) {
+                    || reachable < CapacityStatus.UNKNOWN) {
                 return CapacityStatus.MISSING;
             }
-            return new CapacityStatus(operational, sum, ready, warming, perTask);
+            return new CapacityStatus(operational, sum, ready, warming, reachable, parts[5].equals("1"));
         } catch (NumberFormatException e) {
             return CapacityStatus.MISSING;
         }

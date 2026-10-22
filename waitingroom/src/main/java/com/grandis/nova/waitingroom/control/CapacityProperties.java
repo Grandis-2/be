@@ -13,7 +13,7 @@ import java.time.Duration;
  * @param key              preorder 가 적는 해시
  * @param warmup           갓 뜬 태스크로 보는 기간. 계약 예시(1~2분)의 긴 쪽 — JIT · 커넥션 풀 · 캐시가 덜 데워진 태스크에 몰지 않게
  * @param warmupShare      갓 뜬 태스크의 용량에 곱할 비율. 계약 예시(절반)
- * @param preorderMaxTasks preorder 가 늘 수 있는 최대 대수. 관리자 위험선(대수 × 태스크당 용량)에 쓴다 — 인프라 max 와 같게, 지금 5
+ * @param preorderMaxTasks preorder 가 늘 수 있는 최대 대수. 증설로 닿는 용량(관리자 위험선)에 쓴다 — 인프라 max 와 같게, 지금 5
  */
 @ConfigurationProperties("waitingroom.capacity")
 public record CapacityProperties(Boolean enabled, String key, Duration warmup, Double warmupShare,

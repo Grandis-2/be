@@ -144,7 +144,7 @@ class AllocationRound {
     private Optional<PreorderCapacity> capacity(Optional<Map<String, String>> rows, long nowMillis) {
         if (rows.isEmpty()) {
             metrics.loopFailed("capacity");
-            return lastCapacity.get();
+            return lastCapacity.get().map(PreorderCapacity::asHeld);
         }
         if (capacityFailing.compareAndSet(true, false)) {
             log.info("preorder 용량 읽기 회복");
@@ -160,7 +160,7 @@ class AllocationRound {
             if (capacityHeld.compareAndSet(false, true)) {
                 log.warn("살아 있는 preorder 태스크 표시가 없다 — 직전 용량({})을 유지한다", describe(lastCapacity.get()));
             }
-            return lastCapacity.get();
+            return lastCapacity.get().map(PreorderCapacity::asHeld);
         }
         if (capacityHeld.compareAndSet(true, false)) {
             log.info("preorder 태스크 표시 회복 — 용량 합 {}", read.get().sum());

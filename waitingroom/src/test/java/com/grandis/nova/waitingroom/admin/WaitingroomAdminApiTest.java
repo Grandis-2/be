@@ -69,8 +69,12 @@ class WaitingroomAdminApiTest {
 
     /** 운영값 300, preorder 3대(태스크당 100, 하나는 예열 중)로 용량 합 250, 최대 5대면 500. */
     private void capacityKnown() {
-        TestSnapshots.put(snapshots, new SnapshotMeta(200, 1, MaxWait.unlimited()), 0.8,
-                new CapacityStatus(300, 250, 2, 1, 100), Optional.of(new RelayOutcome(200, 30)));
+        capacity(new CapacityStatus(300, 250, 2, 1, 500, false));
+    }
+
+    private void capacity(CapacityStatus capacity) {
+        TestSnapshots.put(snapshots, new SnapshotMeta(200, 1, MaxWait.unlimited()), 0.8, capacity,
+                Optional.of(new RelayOutcome(200, 30)));
     }
 
     private WebTestClient.RequestHeadersSpec<?> put(String path, Map<String, Object> body) {
@@ -264,6 +268,17 @@ class WaitingroomAdminApiTest {
                 .jsonPath("$.data.capacity.readyTasks").isEmpty()
                 .jsonPath("$.data.capacity.relayBadRatio").isEmpty()
                 .jsonPath("$.data.capacity.scalingPending").isEqualTo(false);
+        put("/admission-rate", Map.of("globalCredit", 1_500)).exchange().expectStatus().isOk();
+    }
+
+    @Test
+    void 리더가_직전_용량을_유지하는_중이면_지금_잰_값이_아니라_구간을_나누지_않는다() {
+        capacity(new CapacityStatus(300, 250, 2, 1, 500, true));
+
+        get("/admission-rate").expectStatus().isOk().expectBody()
+                .jsonPath("$.data.capacity.recommendedMax").isEmpty()
+                .jsonPath("$.data.capacity.dangerLine").isEmpty()
+                .jsonPath("$.data.capacity.appliedCredit").isEqualTo(200);
         put("/admission-rate", Map.of("globalCredit", 1_500)).exchange().expectStatus().isOk();
     }
 
