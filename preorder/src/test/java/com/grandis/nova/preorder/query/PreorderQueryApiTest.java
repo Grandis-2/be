@@ -411,6 +411,12 @@ class PreorderQueryApiTest {
     void unknownDisplayStatusIsBadRequestAndCountsNeedACustomer() throws Exception {
         mockMvc.perform(get("/api/v1/preorders").param("displayStatus", "WAITING").with(customer(customerId)))
                 .andExpect(status().isBadRequest());
+        mockMvc.perform(get("/api/v1/preorders").param("displayStatus", "").with(customer(customerId))).andExpect(status().isOk());
+        for (String[] blank : List.of(new String[]{"PAYABLE", ""}, new String[]{"PAYABLE,"})) {
+            mockMvc.perform(get("/api/v1/preorders").param("displayStatus", blank).with(customer(customerId)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.details.violations[0].field").value("displayStatus"));
+        }
         mockMvc.perform(get("/api/v1/preorders/counts")).andExpect(status().isUnauthorized());
         mockMvc.perform(get("/api/v1/preorders/counts").with(admin())).andExpect(status().isForbidden());
     }

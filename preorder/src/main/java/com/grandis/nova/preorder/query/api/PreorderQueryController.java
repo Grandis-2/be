@@ -9,6 +9,7 @@ import com.grandis.nova.preorder.query.application.PreorderQueryService;
 import com.grandis.nova.preorder.web.CurrentViewer;
 import com.grandis.nova.preorder.web.Items;
 import com.grandis.nova.preorder.web.PageSizes;
+import com.grandis.nova.preorder.web.ValidationFailures;
 import com.grandis.nova.preorder.web.Viewer;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -36,7 +37,8 @@ class PreorderQueryController {
 
     @Operation(summary = "내 예약 목록(커서 페이지)",
             description = "최신순. displayStatus 는 여러 번 줄 수 있고(그중 하나), 지금 시각으로 가른다 — 응답의 displayStatus 와 같다. "
-                    + "status(원장 상태) · productId 와는 AND 다. counts 는 이 조건과 상관없이 내 예약 전부의 화면 단계별 수다. "
+                    + "status(원장 상태) · productId 와는 AND 다. 거른 뒤 예약을 다시 읽으므로 그사이 단계가 바뀐 예약은 바뀐 단계로 보인다. "
+                    + "counts 는 이 조건과 상관없이 내 예약 전부의 화면 단계별 수다. "
                     + "모르는 값은 400")
     @GetMapping
     public ApiResponse<MyPreordersResponse> list(
@@ -46,6 +48,10 @@ class PreorderQueryController {
             @RequestParam(required = false) UUID productId,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
+        // displayStatus=PAYABLE, 처럼 섞인 빈 원소는 null 로 들어온다 — 거르지 않고 400 이다. displayStatus= 하나뿐이면 보내지 않은 것과 같다
+        if (displayStatus != null && displayStatus.contains(null)) {
+            throw ValidationFailures.of("displayStatus", "빈 단계 값이 있습니다.");
+        }
         CursorPage<PreorderSummaryResponse> page = queryService.findMine(customerId, status,
                         displayStatus == null ? Set.of() : displayStatus, productId, cursor, PageSizes.require(size))
                 .map(PreorderSummaryResponse::from);

@@ -6,6 +6,7 @@ import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.repository.CustomerOrderFilter;
 import com.grandis.nova.order.order.query.OrderQueryService;
+import com.grandis.nova.order.web.ValidationFailures;
 import com.grandis.nova.order.web.PageSizes;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -44,6 +45,10 @@ public class OrderQueryController {
             @RequestParam(required = false) Instant from,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
+        // status=SHIPPED, 처럼 섞인 빈 원소는 null 로 들어온다 — 거르지 않고 400 이다. status= 하나뿐이면 보내지 않은 것과 같다
+        if (status != null && status.contains(null)) {
+            throw ValidationFailures.of("status", "빈 상태 값이 있습니다.");
+        }
         CustomerOrderFilter filter = new CustomerOrderFilter(status, CreatedAtBounds.of("from", from));
         CursorPage<OrderResponse> page = queryService.findMine(customerId, filter, cursor, PageSizes.require(size))
                 .map(view -> OrderResponse.of(view.order(), view.items()));

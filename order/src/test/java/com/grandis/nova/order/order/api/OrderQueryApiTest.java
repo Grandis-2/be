@@ -212,6 +212,13 @@ class OrderQueryApiTest {
     void unknownStatusOrOutOfRangeFromIsBadRequest() throws Exception {
         mockMvc.perform(get("/api/v1/orders").param("status", "SHIPPING").with(me()))
                 .andExpect(status().isBadRequest());
+        // 빈 원소가 섞이면 400. status= 하나뿐이면 보내지 않은 것과 같다(조건 없음)
+        mockMvc.perform(get("/api/v1/orders").param("status", "").with(me())).andExpect(status().isOk());
+        for (String[] blank : List.of(new String[]{"SHIPPED", ""}, new String[]{"SHIPPED,"})) {
+            mockMvc.perform(get("/api/v1/orders").param("status", blank).with(me()))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.details.violations[0].field").value("status"));
+        }
         mockMvc.perform(get("/api/v1/orders").param("from", "+10000-01-01T00:00:00Z").with(me()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.details.violations[0].field").value("from"));
