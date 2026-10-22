@@ -171,6 +171,8 @@ public class PlaceOrderService {
     /**
      * 주문 내역 썸네일로 남길 그 옵션의 사진(catalog 의 imageUrl — 장바구니 · 바로 구매와 같은 값). 예약 스냅샷에는 사진이 없어 주문을 만들 때
      * catalog 에 묻는다. 사진은 표시용이라 못 받아도 주문은 만든다 — catalog 가 응답하지 않거나 거절하면 비우고 WARN 만 남긴다.
+     * 이 호출만큼(최악 연결 300ms + 읽기 1s) 결제 가능 판정과 주문 생성 사이가 벌어져, 기한 직전 요청이 기한 뒤에 주문 · 결제 시작 알림을 낼 수 있다.
+     * 받아들인다 — 결제 승인은 PayabilityGate 가 기한을 다시 본다.
      * 기존 주문 확인 · 결제 가능 판정 · 입력 검증을 지난 요청만 부른다. 같은 예약의 재요청 둘이 함께 기존 주문 확인을 지나면 둘 다 부르고,
      * 늦은 쪽은 중복 키로 기존 주문을 돌려준다.
      */
@@ -178,7 +180,8 @@ public class PlaceOrderService {
         try {
             return catalog.findImage(optionId, sessionToken).orElse(null);
         } catch (RuntimeException e) {
-            log.warn("사전예약 주문의 옵션 사진을 catalog 에서 받지 못해 비운다 optionId={}", optionId, e);
+            // 원인과 스택은 CatalogReader 가 인스턴스 이름(catalogimage)으로 이미 남긴다 — 여기선 비웠다는 사실만
+            log.warn("사전예약 주문의 옵션 사진을 catalog 에서 받지 못해 비운다 optionId={} cause={}", optionId, e.toString());
             return null;
         }
     }

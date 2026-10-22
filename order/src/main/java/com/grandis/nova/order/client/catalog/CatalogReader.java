@@ -102,12 +102,12 @@ public class CatalogReader {
             throw new BusinessException(CommonErrorCode.UNAUTHENTICATED);
         } catch (HttpClientErrorException e) {
             // 400(계약 어긋남) · 403 · 404(경로 없음 · 배포 순서 어긋남)는 모두 연동 오류다 — 조용히 "없음" 으로 읽으면 모든 장바구니가 판매 종료로 보인다
-            throw InternalCallFailures.integrationError(DEPENDENCY, OPERATION, e);
+            throw InternalCallFailures.integrationError(circuitBreaker.getName(), OPERATION, e);
         } catch (RestClientException e) {
             if (InternalCallFailures.isUnreadableResponse(e)) {
-                throw InternalCallFailures.unreadableResponse(DEPENDENCY, OPERATION, e);
+                throw InternalCallFailures.unreadableResponse(circuitBreaker.getName(), OPERATION, e);
             }
-            throw InternalCallFailures.unavailable(DEPENDENCY, OPERATION, e);
+            throw InternalCallFailures.unavailable(circuitBreaker.getName(), OPERATION, e);
         }
         if (options != null) {
             options.items().forEach(option -> byId.put(requireReadable(optionIds, option), option));
