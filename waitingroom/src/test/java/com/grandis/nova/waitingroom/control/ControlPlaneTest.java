@@ -12,6 +12,8 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -93,6 +95,34 @@ class ControlPlaneTest {
         first.plane.renewLeadership().block(Duration.ofSeconds(5));
 
         assertThat(first.leadership.isLeader()).isFalse();
+    }
+
+    /** 리더였을 때 센 입장 누적은 늘지 않고 남는다. 지금 리더가 세므로 이 노드 것은 지운다. */
+    @Test
+    void 리더가_아닌_노드는_틱에서_입장_누적_지표를_지운다() {
+        first.metrics.admitted(productKey(101), 3);
+
+        first.plane.tick().block(Duration.ofSeconds(5));
+
+        assertThat(first.registry.find(ControlMetrics.ADMITTED).counters()).isEmpty();
+    }
+
+    /** 리더를 잃은 까닭이 Redis 장애면 하트비트도 실패한다. 그동안에도 옛 값을 내보내지 않는다. */
+    @Test
+    void 하트비트가_실패해도_리더가_아닌_노드는_입장_누적_지표를_지운다() {
+        LettuceConnectionFactory unreachable = new LettuceConnectionFactory(new RedisStandaloneConfiguration("127.0.0.1", 1));
+        unreachable.afterPropertiesSet();
+        unreachable.start();
+        try {
+            Node down = new Node(new ReactiveStringRedisTemplate(unreachable));
+            down.metrics.admitted(productKey(101), 3);
+
+            StepVerifier.create(down.plane.tick()).expectError().verify(Duration.ofSeconds(5));
+
+            assertThat(down.registry.find(ControlMetrics.ADMITTED).counters()).isEmpty();
+        } finally {
+            unreachable.destroy();
+        }
     }
 
     private static void await(BooleanSupplier condition) {
