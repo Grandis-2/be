@@ -92,8 +92,8 @@ class DetailWarmupTest {
     @DisplayName("기동 때 오늘 보이는 홍보의 상세와 그 카드의 상품 상세를 실제 HTTP 로 부른다")
     void warmsPromotionAndProductDetailsAtStartup() {
         // 같은 DB 의 다른 시험이 남긴 홍보가 많으면 넣은 홍보는 홍보 상한(20) 밖일 수 있다 — 넣은 홍보는 아래 상한 시험이 본다
-        assertThat(Seed.WARMED).anyMatch(path -> path.matches("/api/v1/promotions/[0-9a-f-]{36}"));
-        assertThat(Seed.WARMED).anyMatch(path -> path.startsWith("/api/v1/products/"));
+        assertThat(Seed.WARMED_AT_STARTUP).anyMatch(path -> path.matches("/api/v1/promotions/[0-9a-f-]{36}"));
+        assertThat(Seed.WARMED_AT_STARTUP).anyMatch(path -> path.startsWith("/api/v1/products/"));
     }
 
     @Test
@@ -116,7 +116,12 @@ class DetailWarmupTest {
             many.add(Seed.promotion(jdbcTemplate, product, "예열 많은 홍보 " + i));
         }
 
-        DetailWarmup.Result result = withPromotionsHidden(many, warmup::warm);
+        DetailWarmup.Result result;
+        try {
+            result = withPromotionsHidden(many, warmup::warm);
+        } finally {
+            retire(many);
+        }
 
         assertThat(result.paths().stream().filter(path -> path.startsWith("/api/v1/promotions/"))).hasSize(DetailWarmup.MAX_PROMOTIONS);
     }
@@ -131,12 +136,17 @@ class DetailWarmupTest {
         UUID promotion = Seed.promotion(jdbcTemplate, inStock, "예열 일반 홍보");
 
         int before = Seed.STOCK_CALLS.get();
-        DetailWarmup.Result result = withPromotionsHidden(List.of(promotion), warmup::warm);
+        DetailWarmup.Result result;
+        try {
+            result = withPromotionsHidden(List.of(promotion), warmup::warm);
+        } finally {
+            retire(List.of(promotion));
+        }
         int stockCalls = Seed.STOCK_CALLS.get() - before;
 
         assertThat(result.paths()).containsExactly("/api/v1/promotions/" + promotion, "/api/v1/products/" + inStock);
         assertThat(result.requests()).as("모든 대상이 다른 서비스를 묻는다 — 상한에서 멈춘다").isEqualTo(DetailWarmup.MAX_DEPENDENT_REQUESTS);
-        assertThat(stockCalls).as("예열 요청 + 대상을 고르며 읽은 홍보 상세 하나").isLessThanOrEqualTo(DetailWarmup.MAX_DEPENDENT_REQUESTS + 1);
+        assertThat(stockCalls).as("예열 요청 + 대상을 고르며 읽은 홍보 상세 하나").isBetween(1, DetailWarmup.MAX_DEPENDENT_REQUESTS + 1);
     }
 
     @Test
@@ -170,6 +180,15 @@ class DetailWarmupTest {
     @DisplayName("끈 예열(0 이하)은 아무것도 부르지 않는다")
     void zeroBudgetDoesNothing(@Autowired org.springframework.context.ApplicationContext context, @Autowired tools.jackson.databind.json.JsonMapper json) {
         assertThat(new DetailWarmup(context, json, Duration.ZERO).warm()).isEqualTo(DetailWarmup.Result.NONE);
+    }
+
+    /** 이 시험이 넣은 홍보를 지난 기간으로 — 같은 DB 를 쓰는 다른 시험의 홍보 목록에 남지 않게. */
+    private void retire(List<UUID> promotions) {
+        for (UUID id : promotions) {
+            jdbcTemplate.update("UPDATE promotions SET start_date = CURDATE() - INTERVAL 4 DAY, end_date = CURDATE() - INTERVAL 3 DAY WHERE id = ?",
+                    (Object) UuidBinary.toBytes(id));
+        }
+        clearCachedValues();
     }
 
     private ShopFixtures fixtures() {
@@ -216,6 +235,8 @@ class DetailWarmupTest {
         static final java.util.concurrent.atomic.AtomicBoolean STALL = new java.util.concurrent.atomic.AtomicBoolean();
         static final AtomicInteger STOCK_CALLS = new AtomicInteger();
         static final List<Integer> READINESS_DURING_WARMUP = new CopyOnWriteArrayList<>();
+        /** 기동 예열이 부른 경로 — ApplicationReadyEvent(러너가 끝난 뒤) 때 떠 둔다. 시험 메서드의 warm() 은 섞이지 않는다. */
+        static final List<String> WARMED_AT_STARTUP = new CopyOnWriteArrayList<>();
         static UUID promotionId;
         static UUID productId;
 
@@ -253,6 +274,11 @@ class DetailWarmupTest {
                 STOCK_CALLS.incrementAndGet();
                 return com.grandis.nova.common.web.ApiResponse.ok(new com.grandis.nova.catalog.integration.StockClient.Stocks(List.of()));
             };
+        }
+
+        @Bean
+        org.springframework.context.ApplicationListener<org.springframework.boot.context.event.ApplicationReadyEvent> snapshotStartupWarmup() {
+            return event -> WARMED_AT_STARTUP.addAll(WARMED);
         }
 
         @Bean
