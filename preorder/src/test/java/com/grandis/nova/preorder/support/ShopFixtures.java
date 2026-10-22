@@ -179,7 +179,13 @@ public class ShopFixtures {
                 utc(opensAt), utc(closesAt), UuidBinary.toBytes(productId));
     }
 
-    /** 회차의 다음 순번 카운터. */
+    /** 회차의 예상 방문자 수를 이벤트 없이 넣는다 — 오픈이 지난 회차처럼 관리자 API 로 넣을 수 없는 경우에 쓴다. */
+    public void expectedVisitors(UUID productId, Integer expectedVisitors) {
+        jdbcTemplate.update("UPDATE preorder_campaigns SET expected_visitors = ? WHERE product_id = ?", expectedVisitors,
+                UuidBinary.toBytes(productId));
+    }
+
+        /** 회차의 다음 순번 카운터. */
     public long nextQueuePosition(UUID productId) {
         return jdbcTemplate.queryForObject("SELECT next_queue_position FROM preorder_campaigns WHERE product_id = ?",
                 Long.class, (Object) UuidBinary.toBytes(productId));

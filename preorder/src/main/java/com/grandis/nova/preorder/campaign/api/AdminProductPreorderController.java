@@ -3,6 +3,7 @@ package com.grandis.nova.preorder.campaign.api;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.campaign.ShipmentBatchResponse;
 import com.grandis.nova.preorder.campaign.application.PreorderCampaignAdminService;
+import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatch;
 import com.grandis.nova.preorder.web.Items;
 import io.swagger.v3.oas.annotations.Operation;
@@ -41,7 +42,8 @@ class AdminProductPreorderController {
     @Operation(summary = "모집 일정 조회")
     @GetMapping("/campaign")
     public ApiResponse<PreorderCampaignResponse> getCampaign(@PathVariable UUID productId) {
-        return ApiResponse.ok(PreorderCampaignResponse.from(campaignService.findCampaign(productId), clock.instant()));
+        return ApiResponse.ok(PreorderCampaignResponse.from(campaignService.findCampaign(productId),
+                campaignService.countOpenAlertSubscribers(productId), clock.instant()));
     }
 
     /** 없으면 만들고 있으면 바꾼다. 오픈 뒤에는 409. */
@@ -49,8 +51,8 @@ class AdminProductPreorderController {
     @PutMapping("/campaign")
     public ApiResponse<PreorderCampaignResponse> putCampaign(@PathVariable UUID productId,
                                                              @Valid @RequestBody PreorderCampaignRequest request) {
-        return ApiResponse.ok(PreorderCampaignResponse.from(
-                campaignService.upsertCampaign(productId, request.opensAt(), request.closesAt()), clock.instant()));
+        return response(campaignService.upsertCampaign(productId, request.opensAt(), request.closesAt(),
+                request.expectedVisitors()));
     }
 
     /** 접수 중인 회차를 지금 마감한다. 새 접수만 막고 기존 예약은 그대로다. 다시 열기로 되돌린다. */
@@ -58,8 +60,7 @@ class AdminProductPreorderController {
             description = "새 접수만 막고 기존 예약은 그대로 둔다. 이미 마감이면 현재 일정을 그대로 준다. 다시 열기로 되돌린다")
     @PostMapping("/campaign/close")
     public ApiResponse<PreorderCampaignResponse> closeCampaign(@PathVariable UUID productId, Authentication admin) {
-        return ApiResponse.ok(PreorderCampaignResponse.from(
-                campaignService.closeCampaign(productId, admin.getName()), clock.instant()));
+        return response(campaignService.closeCampaign(productId, admin.getName()));
     }
 
     /** 마감된 회차를 새 마감 시각까지 다시 연다. 발급한 순번은 이어진다. */
@@ -71,8 +72,7 @@ class AdminProductPreorderController {
     public ApiResponse<PreorderCampaignResponse> reopenCampaign(@PathVariable UUID productId,
                                                                 @Valid @RequestBody ReopenCampaignRequest request,
                                                                 Authentication admin) {
-        return ApiResponse.ok(PreorderCampaignResponse.from(
-                campaignService.reopenCampaign(productId, request.closesAt(), admin.getName()), clock.instant()));
+        return response(campaignService.reopenCampaign(productId, request.closesAt(), admin.getName()));
     }
 
     @Operation(summary = "배송 차수 조회")
@@ -88,6 +88,11 @@ class AdminProductPreorderController {
                                                                 @Valid @RequestBody ShipmentBatchesRequest request) {
         return ApiResponse.ok(new Items<>(
                 toResponses(campaignService.replaceBatches(productId, request.toPlan()))));
+    }
+
+    /** 바꾼 뒤의 응답에는 신청 수를 세지 않는다 — 세다 실패하면 이미 반영된 변경이 오류로 보인다. */
+    private ApiResponse<PreorderCampaignResponse> response(PreorderCampaign campaign) {
+        return ApiResponse.ok(PreorderCampaignResponse.from(campaign, null, clock.instant()));
     }
 
     private List<ShipmentBatchResponse> toResponses(List<ShipmentBatch> batches) {

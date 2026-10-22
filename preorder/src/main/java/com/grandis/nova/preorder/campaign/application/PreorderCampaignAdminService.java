@@ -4,6 +4,7 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.campaign.ProductListing;
 import com.grandis.nova.preorder.campaign.ProductStatus;
+import com.grandis.nova.preorder.campaign.domain.OpenAlertStore;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatch;
@@ -43,13 +44,16 @@ public class PreorderCampaignAdminService {
     private final ShipmentBatchRepository batches;
     private final PreorderCampaignWriter writer;
     private final CatalogReader catalogReader;
+    private final OpenAlertStore openAlerts;
 
     PreorderCampaignAdminService(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
-                                        PreorderCampaignWriter writer, CatalogReader catalogReader) {
+                                        PreorderCampaignWriter writer, CatalogReader catalogReader,
+                                        OpenAlertStore openAlerts) {
         this.campaigns = campaigns;
         this.batches = batches;
         this.writer = writer;
         this.catalogReader = catalogReader;
+        this.openAlerts = openAlerts;
     }
 
     @Transactional(readOnly = true)
@@ -65,16 +69,28 @@ public class PreorderCampaignAdminService {
      * 새 트랜잭션에서 한 번 더 한다 — 그때는 행이 있으니 일정 변경으로 끝난다. 다른 제약 위반은 다시 하지 않는다.
      */
     public PreorderCampaign upsertCampaign(UUID productId, Instant opensAt, Instant closesAt) {
+        return upsertCampaign(productId, opensAt, closesAt, null);
+    }
+
+    /** @param expectedVisitors 예상 방문자 수. null 이면 그대로 둔다(새 회차는 비어 있다) */
+    public PreorderCampaign upsertCampaign(UUID productId, Instant opensAt, Instant closesAt,
+                                           Integer expectedVisitors) {
         requirePeriod(opensAt, closesAt);
         ProductListing listing = listingOf(requirePreorderProduct(productId));
         try {
-            return writer.upsert(productId, opensAt, closesAt, listing);
+            return writer.upsert(productId, opensAt, closesAt, expectedVisitors, listing);
         } catch (DataIntegrityViolationException e) {
             if (!isDuplicateKey(e)) {
                 throw e;
             }
-            return writer.upsert(productId, opensAt, closesAt, listing);
+            return writer.upsert(productId, opensAt, closesAt, expectedVisitors, listing);
         }
+    }
+
+    /** 오픈 알림을 신청한 회원 수 — 예상 방문자 수를 정할 때 참고한다. */
+    @Transactional(readOnly = true)
+    public long countOpenAlertSubscribers(UUID productId) {
+        return openAlerts.countSubscribers(productId);
     }
 
     /**

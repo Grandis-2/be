@@ -143,7 +143,7 @@ public abstract class QueuePoller implements SmartLifecycle {
                         .maxNumberOfMessages(limit)
                         .visibilityTimeout((int) settings.visibility().toSeconds())
                         .messageSystemAttributeNames(MessageSystemAttributeName.APPROXIMATE_RECEIVE_COUNT,
-                                MessageSystemAttributeName.SENT_TIMESTAMP)
+                                MessageSystemAttributeName.SENT_TIMESTAMP, MessageSystemAttributeName.MESSAGE_GROUP_ID)
                         .messageAttributeNames(messageAttributeNames)
                         .overrideConfiguration(config -> config.apiCallTimeout(receiveTimeout)))
                         .messages();

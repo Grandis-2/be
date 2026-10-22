@@ -27,6 +27,8 @@ public class OpenAlertStore {
 
     private static final String UNSUBSCRIBE = "DELETE FROM preorder_open_alerts WHERE product_id = ? AND customer_id = ?";
 
+    private static final String COUNT = "SELECT COUNT(*) FROM preorder_open_alerts WHERE product_id = ?";
+
     private static final String EXISTS = "SELECT COUNT(*) FROM preorder_open_alerts WHERE product_id = ? AND customer_id = ?";
 
     /** 공개된 오픈 전 회차만. 판매 중지는 보인다 — 신청을 끌 수 있게. */
@@ -62,6 +64,12 @@ public class OpenAlertStore {
 
     public void unsubscribe(UUID productId, UUID customerId) {
         jdbcTemplate.update(UNSUBSCRIBE, UuidBinary.toBytes(productId), UuidBinary.toBytes(customerId));
+    }
+
+    /** 그 상품의 신청 수. PK 앞부분(product_id)만 읽는다. */
+    public long countSubscribers(UUID productId) {
+        Long count = jdbcTemplate.queryForObject(COUNT, Long.class, (Object) UuidBinary.toBytes(productId));
+        return count == null ? 0 : count;
     }
 
     public boolean exists(UUID productId, UUID customerId) {

@@ -14,6 +14,7 @@ import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.MessageAttributeValue;
+import software.amazon.awssdk.services.sqs.model.MessageSystemAttributeName;
 
 import java.time.Duration;
 import java.util.List;
@@ -48,6 +49,8 @@ class RetryingQueueConsumerTest {
     final Queue<String> handled = new ConcurrentLinkedQueue<>();
     /** 처리 함수가 본 메시지 속성(본문 → mark 값). */
     final Map<String, String> marks = new ConcurrentHashMap<>();
+    /** 처리 함수가 본 묶음 id(본문 → MessageGroupId). */
+    final Map<String, String> groups = new ConcurrentHashMap<>();
     final CountDownLatch slowEntered = new CountDownLatch(1);
 
     @BeforeEach
@@ -66,6 +69,9 @@ class RetryingQueueConsumerTest {
             String body = message.body();
             if (message.messageAttributes().containsKey(MARK)) {
                 marks.put(body, message.messageAttributes().get(MARK).stringValue());
+            }
+            if (message.attributes().containsKey(MessageSystemAttributeName.MESSAGE_GROUP_ID)) {
+                groups.put(body, message.attributes().get(MessageSystemAttributeName.MESSAGE_GROUP_ID));
             }
             if (body.startsWith("fail-")) {
                 throw new IllegalStateException("처리 실패");
@@ -112,6 +118,19 @@ class RetryingQueueConsumerTest {
 
         await().atMost(TIMEOUT).until(() -> handled.contains(body));
         assertThat(marks).containsEntry(body, "42");
+    }
+
+    /** 지연 재전송이 묶음 id 를 이으려면 받을 때 함께 받아 와야 한다. */
+    @Test
+    void 받은_묶음_id_가_처리_함수에_닿는다() {
+        String body = "ok-" + UUID.randomUUID();
+
+        sqs.sendMessage(request -> request.queueUrl(sqs.getQueueUrl(r -> r.queueName(QUEUE)).queueUrl())
+                .messageBody(body)
+                .messageGroupId("product-a"));
+
+        await().atMost(TIMEOUT).until(() -> handled.contains(body));
+        assertThat(groups).containsEntry(body, "product-a");
     }
 
     @Test

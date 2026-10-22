@@ -13,6 +13,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -24,6 +25,7 @@ class AcceptBulkheadTest {
     static final UUID PRODUCT_B = UUID.fromString("00000000-0000-7000-8000-00000000000b");
     static final UUID PRODUCT_C = UUID.fromString("00000000-0000-7000-8000-00000000000c");
     static final Duration SHORT_WAIT = Duration.ofMillis(200);
+    static final Function<UUID, String> NO_PRODUCT_TAG = productId -> AcceptProductTags.OTHER;
 
     final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -50,6 +52,21 @@ class AcceptBulkheadTest {
     }
 
     @Test
+    void 거절_건수는_받은_상품_라벨로_센다() throws Exception {
+        AcceptBulkhead bulkhead = new AcceptBulkhead(properties(1, 10), 20, registry,
+                productId -> PRODUCT_A.equals(productId) ? productId.toString() : AcceptProductTags.OTHER);
+        holdUntilReleased(bulkhead, PRODUCT_A, 1);
+
+        assertThatThrownBy(() -> bulkhead.call(PRODUCT_A, () -> "late"))
+                .isInstanceOf(DependencyUnavailableException.class);
+        assertThat(registry.get(AcceptBulkhead.REJECTED_METRIC).tag("limit", "product")
+                .tag(AcceptProductTags.PRODUCT_TAG, PRODUCT_A.toString()).counter().count()).isEqualTo(1);
+        assertThat(registry.get(AcceptBulkhead.REJECTED_METRIC).tag("limit", "product")
+                .tag(AcceptProductTags.PRODUCT_TAG, AcceptProductTags.OTHER).counter().count())
+                .as("거절이 없어도 0 으로 있다").isZero();
+    }
+
+    @Test
     void 한_상품이_막혀도_다른_상품은_들어간다() throws Exception {
         AcceptBulkhead bulkhead = bulkhead(2, 10);
         holdUntilReleased(bulkhead, PRODUCT_A, 2);
@@ -72,7 +89,7 @@ class AcceptBulkheadTest {
     @Test
     void 상품_허가를_기다리는_요청은_전체_허가를_쥐지_않는다() throws Exception {
         AcceptBulkhead bulkhead = new AcceptBulkhead(new AcceptBulkheadProperties(1, 0.5, 2, Duration.ofSeconds(5),
-                Duration.ofSeconds(1), Duration.ofSeconds(3)), 10, registry);
+                Duration.ofSeconds(1), Duration.ofSeconds(3)), 10, registry, NO_PRODUCT_TAG);
         holdUntilReleased(bulkhead, PRODUCT_A, 1);
         // 상품 A 를 기다리는 요청이 여럿이어도 전체 허가 1 이 남아 상품 B 가 들어간다
         List<Thread> waiting = new ArrayList<>();
@@ -107,7 +124,7 @@ class AcceptBulkheadTest {
     @Test
     void 직접_준_전체_상한이_풀_크기보다_작지_않으면_기동에서_막는다() {
         assertThatThrownBy(() -> properties(2, 10).instanceLimit(10)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new AcceptBulkhead(properties(2, 11), 10, registry))
+        assertThatThrownBy(() -> new AcceptBulkhead(properties(2, 11), 10, registry, NO_PRODUCT_TAG))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -143,7 +160,7 @@ class AcceptBulkheadTest {
     }
 
     private AcceptBulkhead bulkhead(int productPermits, int instanceLimit) {
-        return new AcceptBulkhead(properties(productPermits, instanceLimit), 20, registry);
+        return new AcceptBulkhead(properties(productPermits, instanceLimit), 20, registry, NO_PRODUCT_TAG);
     }
 
     private static AcceptBulkheadProperties properties(int productPermits, int instanceLimit) {

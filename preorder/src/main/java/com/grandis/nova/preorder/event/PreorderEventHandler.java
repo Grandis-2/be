@@ -332,7 +332,8 @@ public class PreorderEventHandler {
         String payload = jsonMapper.writeValueAsString(new CancelRequestPayload(preorder.preorderToken(),
                 preorder.externalReference(), mockCancelReason(preorder.id())));
         UUID jobId = syncJobs.createCancel(preorder.id(), payload);
-        outboxWriter.append(new CancelJobReady(jobId, preorder.preorderToken(), payload, SyncActor.SYSTEM, 1));
+        outboxWriter.append(new CancelJobReady(jobId, preorder.preorderToken(), preorder.productId(), payload,
+                SyncActor.SYSTEM, 1));
     }
 
     /** 이력에 남길 거절 사유. order 가 사유를 주지 않았으면 결과만 남긴다. */
