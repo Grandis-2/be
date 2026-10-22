@@ -142,6 +142,24 @@ class PlaceOrderServiceTest {
                 assertThat(placed.lines()).singleElement().satisfies(line -> assertThat(line.imageUrl()).isNull()));
     }
 
+    // 사진 주소가 주문 줄이 담는 길이를 넘으면 사진만 비우고 주문은 만든다 — 경계 1,000자는 남긴다
+    @Test
+    void overlongImageIsDroppedButTheOrderIsPlaced() {
+        payable();
+        String longest = "h".repeat(PlaceOrderService.IMAGE_URL_MAX);
+        given(catalog.findImage(any(), any())).willReturn(Optional.of(longest + "x")).willReturn(Optional.of(longest))
+                .willThrow(new NullPointerException("예상 밖"));
+        given(ledger.place(any(), any())).willReturn(order(OrderStatus.AWAITING_PAYMENT));
+
+        service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS);
+        service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS);
+        assertThat(service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS).created()).as("예상 밖 오류도 주문은 만든다").isTrue();
+
+        ArgumentCaptor<OrderDraft> draft = ArgumentCaptor.forClass(OrderDraft.class);
+        verify(ledger, times(3)).place(draft.capture(), any());
+        assertThat(draft.getAllValues()).extracting(placed -> placed.lines().getFirst().imageUrl()).containsExactly(null, longest, null);
+    }
+
     // 사진은 입력 검증을 지난 뒤에 묻는다 — 거절될 요청은 catalog 를 부르지 않는다
     @Test
     void rejectedInputDoesNotAskCatalogForTheImage() {

@@ -71,6 +71,8 @@ public class PlaceOrderService {
     private static final Logger log = LoggerFactory.getLogger(PlaceOrderService.class);
 
     static final int MAX_ATTEMPTS = 3;
+    /** 주문 줄 사진 주소의 최대 글자 수(OrderLine · image_url_snapshot). */
+    static final int IMAGE_URL_MAX = 1000;
 
     private final PreorderReader preorderReader;
     private final CatalogReader catalog;
@@ -177,13 +179,23 @@ public class PlaceOrderService {
      * 늦은 쪽은 중복 키로 기존 주문을 돌려준다.
      */
     private String optionImage(UUID optionId, String sessionToken) {
+        String imageUrl;
         try {
-            return catalog.findImage(optionId, sessionToken).orElse(null);
-        } catch (RuntimeException e) {
-            // 원인과 스택은 CatalogReader 가 인스턴스 이름(catalogimage)으로 이미 남긴다 — 여기선 비웠다는 사실만
+            imageUrl = catalog.findImage(optionId, sessionToken).orElse(null);
+        } catch (BusinessException | IllegalStateException e) {
+            // CatalogReader 가 던지는 것들 — 원인은 거기서 인스턴스 이름(catalogimage)으로 이미 남겼다. 여기선 비웠다는 사실만
             log.warn("사전예약 주문의 옵션 사진을 catalog 에서 받지 못해 비운다 optionId={} cause={}", optionId, e.toString());
             return null;
+        } catch (RuntimeException e) {
+            log.warn("사전예약 주문의 옵션 사진을 catalog 에서 받다 예상 밖 오류가 나 비운다 optionId={}", optionId, e);
+            return null;
         }
+        // 주문 줄은 사진 주소를 1,000자까지 담는다(OrderLine). 더 길면 주문을 막지 않고 사진만 비운다
+        if (imageUrl != null && imageUrl.codePointCount(0, imageUrl.length()) > IMAGE_URL_MAX) {
+            log.warn("사전예약 주문의 옵션 사진 주소가 {}자를 넘어 비운다 optionId={}", IMAGE_URL_MAX, optionId);
+            return null;
+        }
+        return imageUrl;
     }
 
     /**
