@@ -36,9 +36,12 @@ import java.util.Set;
  *       대상을 고르는 조회(홍보 목록 1 · 홍보 상세 · 상품 목록 0~1)는 따로다. 요청마다 응답을 기다리는 시간을 마감까지 남은 시간으로 줄이고(응답
  *       헤더가 오기 전까지 막힌 요청으로 잰 것 — 연결 · 본문 읽기까지 덮는지는 재지 않았다), 마감이 지나면 보내지 않는다. 0 이하면 끈다.
  *       실패(대상 없음 · 오류 응답 · 다른 서비스 무응답 · 응답 모양이 다름)는 INFO/WARN 만 남기고 기동은 이어 간다 — 예열이 배포를 막지 않게.</li>
- *   <li><b>다른 서비스</b>: 캐시와 상관없이 요청마다 order 재고를 묻는 대상이 있다 — 상품 상세(일반 상품은 재고, 사전예약은 회차 캐시를 거쳐 preorder)와
- *       일반 상품 카드가 든 홍보 상세(품절 표시). 증설이 몰릴 때 그쪽에 더하는 양을 묶으려고 이런 요청은 합쳐 {@link #MAX_DEPENDENT_REQUESTS} 번까지만
- *       부른다(대상을 고르는 조회는 따로). 그쪽이 답하지 않으면 그 실패 로그도 그만큼 남는다.</li>
+ *   <li><b>다른 서비스</b>: 요청마다 다른 서비스를 묻는 대상이 있다 — 일반 상품 상세 · 일반 상품 카드가 든 홍보 상세는 캐시 없이 order 재고를
+ *       (품절 표시), 사전예약 상품 상세는 회차를 묻는다(회차 캐시에 있으면 preorder 를 부르지 않지만 보수적으로 센다). 증설이 몰릴 때 그쪽에 더하는 양을
+ *       묶으려고 이런 요청은 합쳐 {@link #MAX_DEPENDENT_REQUESTS} 번까지만 부른다(대상을 고르는 조회는 따로). 대상을 고를 때 상세를 못 읽은 홍보도 센다.
+ *       사전예약 카드만 든 홍보 상세는 세지 않는다 — 회차 묶음은 읽기 캐시(운영 30분)에 들어 첫 채우기 뒤엔 preorder 를 부르지 않는다. 다만 회차 없는
+ *       (판매 준비 전) 상품이 묶여 그 묶음을 넣지 않거나 회차 캐시를 끈 실행에서는 그 홍보 상세도 요청마다 preorder 에 묻는다. 그쪽이 답하지 않으면
+ *       그 실패 로그도 요청 수만큼 남는다.</li>
  *   <li><b>지표</b>: 요청은 user-agent {@value #USER_AGENT} 로 들어와 추적에서는 가를 수 있지만, 요청 지표(http_server_request_duration — 관측 에이전트가
  *       Tomcat 에서 잰다)에는 섞인다. 배포 · 증설 때마다 인스턴스당 최대 {@link #MAX_REQUESTS} 건과 대상을 고르는 조회가 막 뜬 JVM 의 요청으로
  *       홍보 · 상품 상세 경로의 지연 분포에 들어가므로, 그 직후 p99 는 예열 요청을 뺀 추적으로 다시 본다.</li>
@@ -61,7 +64,7 @@ public class DetailWarmup implements ApplicationRunner {
     static final int MAX_PROMOTIONS = 20;
     /** 상세를 부를 상품 수 상한 — 홍보가 많아도 한 상품을 여러 번 부르는 쪽이 JIT 에는 같다. */
     static final int MAX_PRODUCTS = 20;
-    /** 요청마다 다른 서비스(order 재고 · preorder 회차)를 묻는 예열 요청 수 상한(위 다른 서비스). */
+    /** 요청마다 다른 서비스를 묻는 예열 요청 수 상한(위 다른 서비스). */
     static final int MAX_DEPENDENT_REQUESTS = 150;
     /** 요청 하나가 응답을 기다리는 시간 상한 — 남은 시간이 더 짧으면 그만큼. */
     static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(3);
@@ -136,6 +139,7 @@ public class DetailWarmup implements ApplicationRunner {
     /**
      * @param requests          대상을 고르는 조회를 뺀 예열 요청 수
      * @param dependentRequests 그중 다른 서비스를 묻는 요청 수
+     * @param paths             고른 대상 — 마감이나 상한으로 모두 부르지 못했을 수 있다
      */
     record Result(int requests, int dependentRequests, int failed, List<String> paths) {
         static final Result NONE = new Result(0, 0, 0, List.of());
@@ -159,7 +163,7 @@ public class DetailWarmup implements ApplicationRunner {
             }
             String promotion = "/api/v1/promotions/" + id;
             JsonNode detail = read(calls, promotion);
-            boolean inStockCards = false;
+            boolean inStockCards = detail == null;   // 못 읽은 홍보는 무엇이 실렸는지 모른다 — 다른 서비스를 묻는 쪽으로 센다
             if (detail != null) {
                 for (JsonNode card : detail.path("data").path("products")) {
                     products.add(text(card.path("productId")));
