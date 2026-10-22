@@ -35,6 +35,9 @@ import java.util.Set;
  *       0 이하면 끈다. 실패(대상 없음 · 오류 응답 · 다른 서비스 무응답)는 INFO/WARN 만 남기고 기동은 이어 간다 — 예열이 배포를 막지 않게.</li>
  *   <li>웹 서버가 없는 실행(MockMvc 시험)에서는 하지 않는다.</li>
  * </ul>
+ * 로컬 재현(운영 이미지 · 관측 에이전트 포함 · CPU 0.5 · 막 뜬 catalog 에 홍보 상세 초당 120건 45초, 조건마다 3회)에서 예열을 끄면 1회가 무너졌고
+ * (CPU 상한에 내내 걸림 · Redis 시간 초과 438건) 시간 초과는 41 · 0 · 438건, 켜면 무너짐 없이 9 · 0 · 0건이었다. 그 CPU 에서 예열은 매번 10초 상한에
+ * 닿았다(158~483건). 요청 수 상한은 빠른 장비에서 10초를 다 쓰지 않게 둔다(시험 JVM 에서 600건이 2~3초).
  */
 @Component
 public class DetailWarmup implements ApplicationRunner {
@@ -43,7 +46,7 @@ public class DetailWarmup implements ApplicationRunner {
 
     static final String USER_AGENT = "nova-warmup";
     static final Duration DEFAULT_BUDGET = Duration.ofSeconds(10);
-    /** 예열 요청 수 상한. */
+    /** 예열 요청 수 상한 — 느린 장비는 시간 상한이 먼저 닿는다(위 실측). */
     static final int MAX_REQUESTS = 600;
     /** 상세를 부를 상품 수 상한 — 홍보가 많아도 한 상품을 여러 번 부르는 쪽이 JIT 에는 같다. */
     static final int MAX_PRODUCTS = 20;
