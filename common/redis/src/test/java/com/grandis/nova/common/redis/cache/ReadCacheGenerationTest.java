@@ -6,17 +6,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.connection.RedisConnection;
-import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
 import org.testcontainers.containers.GenericContainer;
 import tools.jackson.databind.json.JsonMapper;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -236,7 +232,7 @@ class ReadCacheGenerationTest {
     @DisplayName("세대를 읽은 사이 다른 스레드가 올린 세대를 먼저 봐도 되돌아간 것으로 보지 않는다 — 정상 올리기 한 번에 세대는 한 번만 오른다")
     void concurrentBumpIsNotMistakenForRollback() throws Exception {
         redis.opsForValue().set(GENERATION, "0");
-        PausingTemplate template = new PausingTemplate(connections);
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, GENERATION::equals);
         ReadCache cache = new ReadCache(template, JSON, "svc");
         ReadCache.Spec<Item> spec = cache.spec("item", Item.class, Duration.ofMinutes(10));
         AtomicInteger loads = new AtomicInteger();
@@ -258,7 +254,7 @@ class ReadCacheGenerationTest {
         redis.opsForValue().set(GENERATION, "0");
         ReadCache large = new ReadCache(redis, JSON, "svc");
         ReadCache.Spec<Item> largeSpec = large.spec("item", Item.class, Duration.ofMinutes(10));
-        PausingTemplate template = new PausingTemplate(connections);
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, GENERATION::equals);
         ReadCache small = new ReadCache(template, JSON, "svc");
         ReadCache.Spec<Item> smallSpec = small.spec("item", Item.class, Duration.ofMinutes(10));
         AtomicInteger loads = new AtomicInteger();
@@ -285,7 +281,7 @@ class ReadCacheGenerationTest {
     }
 
     /** 다른 스레드에서 조회를 시작해 세대 GET 직후 멈출 때까지 기다린다. 결과나 예외를 served 에 담는다 — 멈춘 뒤 던지는 구현을 놓치지 않게. */
-    private static Thread paused(PausingTemplate template, AtomicReference<Object> served, java.util.function.Supplier<Object> lookup) throws Exception {
+    private static Thread paused(PausingRedisTemplate template, AtomicReference<Object> served, java.util.function.Supplier<Object> lookup) throws Exception {
         Thread thread = new Thread(() -> {
             template.pause.set(true);
             try {
@@ -299,7 +295,7 @@ class ReadCacheGenerationTest {
         return thread;
     }
 
-    private static void resume(PausingTemplate template, Thread thread) throws InterruptedException {
+    private static void resume(PausingRedisTemplate template, Thread thread) throws InterruptedException {
         template.resume.countDown();
         thread.join(10_000);
         assertThat(thread.isAlive()).as("멈췄던 조회가 끝났다").isFalse();
@@ -339,41 +335,6 @@ class ReadCacheGenerationTest {
         try (RedisConnection connection = redis.getConnectionFactory().getConnection()) {
             connection.serverCommands().flushAll();
             dump.forEach((key, value) -> connection.keyCommands().restore(key.getBytes(StandardCharsets.UTF_8), 0, value, false));
-        }
-    }
-
-    /** 표시한 스레드가 세대 키를 GET 한 직후 멈추는 템플릿 — 세대를 읽은 뒤 판정 사이에 다른 스레드를 끼워 넣는다. */
-    static final class PausingTemplate extends StringRedisTemplate {
-
-        final ThreadLocal<Boolean> pause = ThreadLocal.withInitial(() -> false);
-        final CountDownLatch read = new CountDownLatch(1);
-        final CountDownLatch resume = new CountDownLatch(1);
-
-        PausingTemplate(RedisConnectionFactory connections) {
-            super(connections);
-        }
-
-        @Override
-        @SuppressWarnings("unchecked")
-        public ValueOperations<String, String> opsForValue() {
-            ValueOperations<String, String> real = super.opsForValue();
-            return (ValueOperations<String, String>) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[] {ValueOperations.class},
-                    (proxy, method, args) -> {
-                        Object result;
-                        try {
-                            result = method.invoke(real, args);
-                        } catch (InvocationTargetException e) {
-                            throw e.getCause();
-                        }
-                        if (method.getName().equals("get") && args != null && args.length == 1 && GENERATION.equals(args[0]) && pause.get()) {
-                            pause.set(false);
-                            read.countDown();
-                            if (!resume.await(10, TimeUnit.SECONDS)) {
-                                throw new IllegalStateException("시험이 멈춘 조회를 풀지 않았다");
-                            }
-                        }
-                        return result;
-                    });
         }
     }
 }

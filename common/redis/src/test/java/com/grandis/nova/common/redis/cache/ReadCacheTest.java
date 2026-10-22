@@ -366,6 +366,34 @@ class ReadCacheTest {
     }
 
     @Test
+    @DisplayName("값이 없음을 본 뒤 다른 요청이 채우고 끝냈으면 원천을 다시 읽지 않는다 — 읽기 자리를 잡은 뒤 값을 한 번 더 확인한다")
+    void lateLoaderReadsValueStoredMeanwhile() throws Exception {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
+        ReadCache paused = new ReadCache(template, JSON, "svc");
+        ReadCache.Spec<Item> spec = paused.spec("item", Item.class, Duration.ofSeconds(30));
+        AtomicInteger loads = new AtomicInteger();
+        java.util.concurrent.atomic.AtomicReference<Object> served = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread late = new Thread(() -> {
+            template.pause.set(true);
+            try {
+                served.set(paused.get(spec, "products", "1", () -> item("late", loads)));
+            } catch (Throwable e) {
+                served.set(e);
+            }
+        });
+        late.start();
+        assertThat(template.read.await(10, java.util.concurrent.TimeUnit.SECONDS)).as("늦은 요청이 값 없음을 봤다").isTrue();
+        assertThat(paused.get(spec, "products", "1", () -> item("first", loads)).name()).as("다른 요청이 채우고 끝냈다").isEqualTo("first");
+        template.resume.countDown();
+        late.join(10_000);
+        assertThat(late.isAlive()).isFalse();
+
+        assertThat(served.get()).isInstanceOf(Item.class);
+        assertThat(((Item) served.get()).name()).as("넣어 둔 값을 받는다").isEqualTo("first");
+        assertThat(loads).as("원천은 한 번만").hasValue(1);
+    }
+
+    @Test
     @DisplayName("같은 키를 동시에 20개가 찾으면 loader 는 한 번 — 나머지는 그 결과를 받는다. loader 의 예외도 같이 받는다")
     void concurrentMissesLoadOnce() throws Exception {
         AtomicInteger loads = new AtomicInteger();

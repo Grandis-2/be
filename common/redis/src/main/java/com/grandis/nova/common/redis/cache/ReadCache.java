@@ -48,7 +48,8 @@ import java.util.function.Supplier;
  *       인스턴스에 하나라 모든 캐시가 같이 쓰므로, 인기 키가 오염되면 차단기가 열려 그 인스턴스의 캐시 전체가 {@link #OPEN_FOR} 마다 우회할 수 있다.</li>
  *   <li><b>몰림</b>: 같은 키(세대 번호 포함)를 동시에 찾는 요청은 이 인스턴스 안에서 loader 를 한 번만 부르고 나머지는 그 결과를 받는다 —
  *       인기 키가 비는 순간(만료 · Redis 복구 직후) DB 로 한꺼번에 가지 않게. loader 의 예외(404 등)도 같이 받는다. 같이 받는 쪽은
- *       {@link #WAIT_FOR_LOAD} 까지만 기다린다(넘으면 503). 우회는 우회끼리만 같이 받는다(세대를 읽었으면 그 번호까지 같은 것끼리) — 같은 키를
+ *       {@link #WAIT_FOR_LOAD} 까지만 기다린다(넘으면 503). 자리를 잡은 요청은 원천을 부르기 전에 값을 한 번 더 본다 — 값이 없음을 본 뒤 자리를
+ *       잡기 전에 앞 조회가 넣고 끝냈으면 그 값을 받는다(안 보면 원천을 한 번 더 읽는다 — CI 의 50건 몰림 측정에서 원천 2번이 나왔다). 우회는 우회끼리만 같이 받는다(세대를 읽었으면 그 번호까지 같은 것끼리) — 같은 키를
  *       채우기와 우회가 동시에 찾으면 loader 를 각각 한 번 부른다.</li>
  *   <li><b>미리 갱신</b>: 읽은 지 TTL 의 {@link #REFRESH_AFTER_PERCENT}% 가 지난 값을 꺼낸 요청은 그 값을 바로 받고, 같은 키(세대 번호 포함)의
  *       다시 읽기를 갱신 실행기에 이 인스턴스에서 하나만 맡긴다 — 만료 순간 모든 요청이 한 건의 읽기를 기다리지 않게(부하 시험에서 목록 · 리뷰의 캐시
@@ -554,6 +555,16 @@ public final class ReadCache {
                 events.waited(spec.name(), Duration.ofNanos(System.nanoTime() - started));
             }
         }
+        if (key != null) {
+            // 자리를 잡기 전에 값이 없음을 봤어도, 그사이 앞 조회가 넣고 자리를 비웠을 수 있다 — 원천을 부르기 전에 한 번 더 본다
+            Entry<T> stored = readStored(key, spec);
+            if (stored != null) {
+                events.served(spec.name(), Outcome.HIT);
+                mine.complete(stored);
+                loading.remove(slot, mine);
+                return stored;
+            }
+        }
         events.served(spec.name(), Outcome.LOAD);
         try {
             Instant loadedAt = clock.instant();   // 읽기 전 시각 — 응답의 나이를 짧게 잡지 않게
@@ -568,6 +579,25 @@ public final class ReadCache {
             throw e;
         } finally {
             loading.remove(slot, mine);
+        }
+    }
+
+    /** 넣어 둔 값을 읽는다 — 없거나, 못 읽거나(Redis 실패 · 차단기), 모양이 다르면 null(원천을 읽는다). */
+    private <T> Entry<T> readStored(String key, Spec<T> spec) {
+        String cached;
+        try {
+            cached = breaker.executeSupplier(() -> redis.opsForValue().get(key));
+        } catch (RuntimeException e) {
+            return null;
+        }
+        if (cached == null) {
+            return null;
+        }
+        try {
+            Stored<T> stored = json.readValue(cached, json.getTypeFactory().constructParametricType(Stored.class, spec.type()));
+            return new Entry<>(stored.value(), Instant.ofEpochMilli(stored.loadedAt()));
+        } catch (JacksonException e) {
+            return null;
         }
     }
 
