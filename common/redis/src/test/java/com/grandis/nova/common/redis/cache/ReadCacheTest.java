@@ -620,14 +620,14 @@ class ReadCacheTest {
     @Test
     @DisplayName("못 읽는 값의 경고는 요청마다 한 번 — 첫 조회에서 경고했으면 다시 보기의 같은 결과는 debug 로만 남긴다")
     void unreadableValueWarnsOncePerRequest() {
-        cache.get(items, "products", "1", () -> item("v1", new AtomicInteger()));
+        cache.get(items, "products", "warn-once", () -> item("v1", new AtomicInteger()));
         redis.opsForValue().set(onlyKey("svc:cache:item:*"), "{not json");
         List<ch.qos.logback.classic.spi.ILoggingEvent> logged = captureLogs(() ->
-                assertThat(cache.get(items, "products", "1", () -> item("v2", new AtomicInteger())).name()).isEqualTo("v2"));
+                assertThat(cache.get(items, "products", "warn-once", () -> item("v2", new AtomicInteger())).name()).isEqualTo("v2"));
 
-        assertThat(unreadableLogs(logged, ch.qos.logback.classic.Level.WARN)).as("첫 조회의 경고 하나")
+        assertThat(unreadableLogs(logged, ch.qos.logback.classic.Level.WARN, "warn-once")).as("첫 조회의 경고 하나")
                 .singleElement().asString().doesNotContain("이미 경고함");
-        assertThat(unreadableLogs(logged, ch.qos.logback.classic.Level.DEBUG)).as("다시 보기는 debug")
+        assertThat(unreadableLogs(logged, ch.qos.logback.classic.Level.DEBUG, "warn-once")).as("다시 보기는 debug")
                 .singleElement().asString().contains("이미 경고함");
     }
 
@@ -642,7 +642,7 @@ class ReadCacheTest {
             Thread late = new Thread(() -> {
                 template.pause.set(true);   // 첫 GET(값 없음) 뒤에 멈춘다
                 try {
-                    served.set(paused.get(spec, "products", "1", () -> item("loaded", new AtomicInteger())));
+                    served.set(paused.get(spec, "products", "warn-on-recheck", () -> item("loaded", new AtomicInteger())));
                 } catch (Throwable e) {
                     served.set(e);
                 }
@@ -659,9 +659,10 @@ class ReadCacheTest {
             assertThat(late.isAlive()).isFalse();
         });
 
+        assertThat(served.get()).isInstanceOf(Item.class);
         assertThat(((Item) served.get()).name()).isEqualTo("loaded");
-        assertThat(unreadableLogs(logged, ch.qos.logback.classic.Level.WARN)).singleElement().asString().doesNotContain("이미 경고함");
-        assertThat(unreadableLogs(logged, ch.qos.logback.classic.Level.DEBUG)).isEmpty();
+        assertThat(unreadableLogs(logged, ch.qos.logback.classic.Level.WARN, "warn-on-recheck")).singleElement().asString().doesNotContain("이미 경고함");
+        assertThat(unreadableLogs(logged, ch.qos.logback.classic.Level.DEBUG, "warn-on-recheck")).isEmpty();
     }
 
     @Test
@@ -1120,9 +1121,11 @@ class ReadCacheTest {
         return new ArrayList<>(appender.list);
     }
 
-    private static List<String> unreadableLogs(List<ch.qos.logback.classic.spi.ILoggingEvent> logged, ch.qos.logback.classic.Level level) {
+    /** 그 id 의 키에 남은 "못 읽어 다시 채운다" 로그 — 앞 시험에서 남은 스레드의 로그가 섞이지 않게 id 로 거른다. */
+    private static List<String> unreadableLogs(List<ch.qos.logback.classic.spi.ILoggingEvent> logged, ch.qos.logback.classic.Level level, String id) {
         return logged.stream()
-                .filter(event -> event.getLevel() == level && event.getFormattedMessage().startsWith("읽기 캐시 값을 못 읽어"))
+                .filter(event -> event.getLevel() == level && event.getFormattedMessage().startsWith("읽기 캐시 값을 못 읽어")
+                        && event.getFormattedMessage().contains(":" + id + ":"))
                 .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
                 .toList();
     }

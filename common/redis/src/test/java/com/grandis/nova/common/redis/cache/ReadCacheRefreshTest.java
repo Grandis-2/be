@@ -445,9 +445,12 @@ class ReadCacheRefreshTest {
         throw (E) e;
     }
 
+    /** 상한(5초)까지만 — 넘으면 그 자리에서 실패한다(엉뚱한 단언으로 번지지 않게). */
     private static void await(CountDownLatch latch) {
         try {
-            latch.await(5, TimeUnit.SECONDS);
+            if (!latch.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("5초 안에 풀리지 않았다");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
