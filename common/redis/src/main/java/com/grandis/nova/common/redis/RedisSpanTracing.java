@@ -81,12 +81,15 @@ final class RedisSpanTracing implements Tracing {
             return new Captured(metrics.getTraceContext(), Context.current());
         }
 
+        /** 만든 때가 아니라 구독할 때의 맥락을 담는다 — reactive 명령은 구독할 때 보낸다. */
         @Override
         public Mono<TraceContext> getTraceContextLater() {
-            Context otel = Context.current();
-            return metrics.getTraceContextLater()
-                    .map(found -> (TraceContext) new Captured(found, otel))
-                    .defaultIfEmpty(new Captured(null, otel));
+            return Mono.defer(() -> {
+                Context otel = Context.current();
+                return metrics.getTraceContextLater()
+                        .map(found -> (TraceContext) new Captured(found, otel))
+                        .defaultIfEmpty(new Captured(null, otel));
+            });
         }
     }
 

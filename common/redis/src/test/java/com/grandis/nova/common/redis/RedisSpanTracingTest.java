@@ -5,8 +5,14 @@ import io.lettuce.core.RedisCommandExecutionException;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.sync.RedisCommands;
+import io.lettuce.core.codec.StringCodec;
+import io.lettuce.core.output.StatusOutput;
+import io.lettuce.core.protocol.AsyncCommand;
+import io.lettuce.core.protocol.Command;
+import io.lettuce.core.protocol.CommandType;
 import io.lettuce.core.resource.ClientResources;
 import io.lettuce.core.tracing.MicrometerTracing;
+import io.lettuce.core.tracing.TraceContext;
 import io.micrometer.core.instrument.observation.DefaultMeterObservationHandler;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.observation.ObservationRegistry;
@@ -25,7 +31,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.GenericContainer;
+import reactor.core.publisher.Mono;
 
+import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.List;
 
@@ -100,6 +108,39 @@ class RedisSpanTracingTest {
             assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.UNSET);
         });
         assertThat(commands.get(1).getAttributes().get(AttributeKey.stringKey("db.operation"))).isEqualTo("GET");
+    }
+
+    @Test
+    void reactive_명령은_만든_때가_아니라_구독한_때의_스팬_아래에_남는다() {
+        Mono<String> get = connection.reactive().get("span-key");
+        Span parent = tracer.spanBuilder("request").startSpan();
+        try (Scope ignored = parent.makeCurrent()) {
+            get.block(Duration.ofSeconds(5));
+        } finally {
+            parent.end();
+        }
+
+        assertThat(redisSpans(1).getFirst().getParentSpanId()).isEqualTo(parent.getSpanContext().getSpanId());
+    }
+
+    /** 맥락을 늦게 받는 Mono 를 먼저 만들어 둬도 구독한 때의 맥락을 담는다. */
+    @Test
+    void 늦게_받는_맥락은_구독할_때_읽는다() {
+        Mono<TraceContext> later = resources.tracing().initialTraceContextProvider().getTraceContextLater();
+        Span parent = tracer.spanBuilder("request").startSpan();
+        TraceContext context;
+        try (Scope ignored = parent.makeCurrent()) {
+            context = later.block(Duration.ofSeconds(5));
+        } finally {
+            parent.end();
+        }
+        AsyncCommand<String, String, String> ping =
+                new AsyncCommand<>(new Command<>(CommandType.PING, new StatusOutput<>(StringCodec.UTF8)));
+        resources.tracing().getTracerProvider().getTracer().nextSpan(context).name("PING")
+                .remoteEndpoint(resources.tracing().createEndpoint(new InetSocketAddress("localhost", 6379))).start(ping);
+        ping.complete();
+
+        assertThat(redisSpans(1).getFirst().getParentSpanId()).isEqualTo(parent.getSpanContext().getSpanId());
     }
 
     @Test
