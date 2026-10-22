@@ -7,6 +7,8 @@ import com.grandis.nova.catalog.product.Product;
 import com.grandis.nova.catalog.product.ProductRepository;
 import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.common.OffsetPage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.HashSet;
@@ -28,6 +30,8 @@ import java.util.stream.Collectors;
 @Service
 public class WritableReviewQuery {
 
+    private static final Logger log = LoggerFactory.getLogger(WritableReviewQuery.class);
+
     private final OrderClient orders;
     private final ProductReviewRepository reviews;
     private final ProductRepository products;
@@ -40,7 +44,11 @@ public class WritableReviewQuery {
 
     /** 주문 최신순, 한 주문 안은 주문상품 id 순. page 는 0 부터. */
     public OffsetPage<WritableItemView> find(UUID customerId, int page, int size) {
-        List<OrderClient.DeliveredItem> delivered = InternalCalls.call(Dependencies.ORDER, orders::getDeliveredItems).items();
+        OrderClient.DeliveredItems reply = InternalCalls.call(Dependencies.ORDER, orders::getDeliveredItems);
+        List<OrderClient.DeliveredItem> delivered = requireContract(reply);
+        if (reply.truncated()) {
+            log.info("배송 완료 주문이 order 의 상한보다 많아 오래된 주문상품은 리뷰 쓸 수 있는 목록에서 빠졌다 customerId={}", customerId);
+        }
         if (delivered.isEmpty()) {
             return OffsetPage.of(List.of(), page, size, 0);
         }
@@ -57,6 +65,15 @@ public class WritableReviewQuery {
         List<WritableItemView> items = from >= writable.size() ? List.of()
                 : writable.subList((int) from, (int) Math.min(writable.size(), from + size));
         return OffsetPage.of(items, page, size, writable.size());
+    }
+
+    /** 고르기 · 쪽 나누기에 쓰는 칸이 다 있는가. 빈 칸을 그대로 쓰면 근거 없는 500 이 나므로 계약 위반으로 남긴다(쓰기의 대조와 같다). */
+    private static List<OrderClient.DeliveredItem> requireContract(OrderClient.DeliveredItems reply) {
+        if (reply == null || reply.items() == null || reply.items().stream().anyMatch(item ->
+                item == null || item.orderItemId() == null || item.orderId() == null || item.productId() == null)) {
+            throw InternalCalls.contractViolation(Dependencies.ORDER, "배송 완료 주문상품 응답에 필수 칸이 비었다");
+        }
+        return reply.items();
     }
 
     /** 상품은 물리 삭제가 없다 — order 가 준 상품이 catalog 에 없으면 계약 위반이다(쓰기와 같다). */

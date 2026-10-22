@@ -166,6 +166,17 @@ class WritableReviewApiTest {
                 .andExpect(status().isInternalServerError());
     }
 
+    @Test
+    @DisplayName("order 응답에 고를 때 쓰는 칸(주문상품 · 주문 · 상품 id)이 비면 연동 오류(500)다")
+    void missingFieldsAreAContractViolation() throws Exception {
+        stubDelivered(new OrderClient.DeliveredItem(UUID.randomUUID(), UUID.randomUUID(), null, UUID.randomUUID(), "이름", "옵션", null, 1,
+                BigDecimal.ONE, Instant.parse("2026-10-06T06:00:00Z")));
+        mockMvc.perform(get(PATH).with(AccessTokens.customer(customerId))).andExpect(status().isInternalServerError());
+
+        given(orders.getDeliveredItems()).willReturn(ApiResponse.ok(new OrderClient.DeliveredItems(null, false)));
+        mockMvc.perform(get(PATH).with(AccessTokens.customer(customerId))).andExpect(status().isInternalServerError());
+    }
+
     private void stubDelivered(OrderClient.DeliveredItem... items) {
         given(orders.getDeliveredItems()).willReturn(ApiResponse.ok(new OrderClient.DeliveredItems(List.of(items), false)));
     }
