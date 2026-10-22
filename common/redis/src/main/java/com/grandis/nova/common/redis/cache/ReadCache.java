@@ -555,18 +555,18 @@ public final class ReadCache {
                 events.waited(spec.name(), Duration.ofNanos(System.nanoTime() - started));
             }
         }
-        if (key != null) {
-            // 자리를 잡기 전에 값이 없음을 봤어도, 그사이 앞 조회가 넣고 자리를 비웠을 수 있다 — 원천을 부르기 전에 한 번 더 본다
-            Entry<T> stored = readStored(key, spec);
-            if (stored != null) {
-                events.served(spec.name(), Outcome.HIT);
-                mine.complete(stored);
-                loading.remove(slot, mine);
-                return stored;
-            }
-        }
-        events.served(spec.name(), Outcome.LOAD);
         try {
+            if (key != null) {
+                // 자리를 잡기 전에 값이 없음을 봤어도, 그사이 앞 조회가 넣고 자리를 비웠을 수 있다 — 원천을 부르기 전에 한 번 더 본다.
+                // 자리를 잡은 뒤의 일은 모두 이 try 안이다 — 무엇이 던져도 같이 기다리는 쪽을 끝내고 자리를 비운다
+                Entry<T> stored = readStored(key, spec);
+                if (stored != null) {
+                    events.served(spec.name(), Outcome.HIT);
+                    mine.complete(stored);
+                    return stored;
+                }
+            }
+            events.served(spec.name(), Outcome.LOAD);
             Instant loadedAt = clock.instant();   // 읽기 전 시각 — 응답의 나이를 짧게 잡지 않게
             Entry<T> entry = new Entry<>(loader.apply(key == null ? LoadPath.BYPASS : LoadPath.FILL), loadedAt);
             mine.complete(entry);
@@ -582,7 +582,7 @@ public final class ReadCache {
         }
     }
 
-    /** 넣어 둔 값을 읽는다 — 없거나, 못 읽거나(Redis 실패 · 차단기), 모양이 다르면 null(원천을 읽는다). */
+    /** 넣어 둔 값을 읽는다 — 없거나, 못 읽거나(Redis 실패 · 차단기), 모양이 다르거나 비었으면(JSON null) null(원천을 읽는다). */
     private <T> Entry<T> readStored(String key, Spec<T> spec) {
         String cached;
         try {
@@ -595,7 +595,7 @@ public final class ReadCache {
         }
         try {
             Stored<T> stored = json.readValue(cached, json.getTypeFactory().constructParametricType(Stored.class, spec.type()));
-            return new Entry<>(stored.value(), Instant.ofEpochMilli(stored.loadedAt()));
+            return stored == null ? null : new Entry<>(stored.value(), Instant.ofEpochMilli(stored.loadedAt()));
         } catch (JacksonException e) {
             return null;
         }

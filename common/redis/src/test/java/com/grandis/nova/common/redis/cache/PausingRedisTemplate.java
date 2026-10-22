@@ -16,6 +16,8 @@ final class PausingRedisTemplate extends StringRedisTemplate {
     final ThreadLocal<Boolean> pause = ThreadLocal.withInitial(() -> false);
     final CountDownLatch read = new CountDownLatch(1);
     final CountDownLatch resume = new CountDownLatch(1);
+    /** 멈춘 GET 의 키. */
+    volatile String pausedKey;
     private final Predicate<String> pauseOn;
 
     PausingRedisTemplate(RedisConnectionFactory connections, Predicate<String> pauseOn) {
@@ -38,6 +40,7 @@ final class PausingRedisTemplate extends StringRedisTemplate {
                     if (method.getName().equals("get") && args != null && args.length == 1 && args[0] instanceof String key && pauseOn.test(key)
                             && pause.get()) {
                         pause.set(false);
+                        pausedKey = key;
                         read.countDown();
                         if (!resume.await(10, TimeUnit.SECONDS)) {
                             throw new IllegalStateException("시험이 멈춘 조회를 풀지 않았다");

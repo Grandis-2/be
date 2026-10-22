@@ -366,6 +366,37 @@ class ReadCacheTest {
     }
 
     @Test
+    @DisplayName("자리를 잡은 뒤 다시 본 값이 비어(JSON null) 있어도 원천을 읽어 답하고 자리를 비운다 — 같은 키의 다음 조회가 막히지 않는다")
+    void recheckOfEmptyValueStillLoadsAndFreesTheSlot() throws Exception {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
+        ReadCache paused = new ReadCache(template, JSON, "svc");
+        ReadCache.Spec<Item> spec = paused.spec("item", Item.class, Duration.ofSeconds(30));
+        AtomicInteger loads = new AtomicInteger();
+        java.util.concurrent.atomic.AtomicReference<Object> served = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread late = new Thread(() -> {
+            template.pause.set(true);
+            try {
+                served.set(paused.get(spec, "products", "1", () -> item("loaded", loads)));
+            } catch (Throwable e) {
+                served.set(e);
+            }
+        });
+        late.start();
+        assertThat(template.read.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        redis.opsForValue().set(template.pausedKey, "null");   // 다시 보기 전에 키가 JSON null 이 됐다
+        template.resume.countDown();
+        late.join(10_000);
+        assertThat(late.isAlive()).isFalse();
+
+        assertThat(served.get()).as("원천으로 답했다").isInstanceOf(Item.class);
+        assertThat(((Item) served.get()).name()).isEqualTo("loaded");
+        assertThat(paused.get(spec, "products", "2", () -> item("next", loads)).name()).as("다른 키도 그대로 돈다").isEqualTo("next");
+        redis.delete(template.pausedKey);
+        assertThat(paused.get(spec, "products", "1", () -> item("again", loads)).name()).as("같은 키의 자리가 비어 다음 조회가 막히지 않는다")
+                .isIn("loaded", "again");
+    }
+
+    @Test
     @DisplayName("값이 없음을 본 뒤 다른 요청이 채우고 끝냈으면 원천을 다시 읽지 않는다 — 읽기 자리를 잡은 뒤 값을 한 번 더 확인한다")
     void lateLoaderReadsValueStoredMeanwhile() throws Exception {
         PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
