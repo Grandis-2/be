@@ -52,9 +52,9 @@ public class Campaigns {
 
     /** 회차 행을 잠그고 일정 · 판매 상태를 읽는다. 잠금은 호출한 트랜잭션이 끝날 때까지다. 회차가 없으면 비어 있다. */
     @Transactional(propagation = Propagation.MANDATORY)
-    public Optional<LockedCampaign> lockForAccept(UUID productId) {
-        return campaigns.findForUpdate(productId).map(campaign -> new LockedCampaign(campaign.toSchedule(),
-                campaign.isVisible() && campaign.getProductStatus() != ProductStatus.PAUSED));
+    public Optional<CampaignForAccept> lockForAccept(UUID productId) {
+        return campaigns.findForUpdate(productId).map(campaign -> CampaignForAccept.of(campaign.toSchedule(),
+                campaign.isVisible(), campaign.getProductStatus()));
     }
 
     /**

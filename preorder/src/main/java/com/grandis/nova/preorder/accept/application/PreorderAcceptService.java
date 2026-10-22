@@ -5,7 +5,6 @@ import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.admission.AdmissionTicket;
 import com.grandis.nova.preorder.admission.AdmissionTicketVerifier;
 import com.grandis.nova.preorder.campaign.CachedCampaign;
-import com.grandis.nova.preorder.campaign.CampaignSchedule;
 import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.integration.catalog.CatalogReader;
 import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
@@ -192,7 +191,7 @@ public class PreorderAcceptService {
         Instant now = clock.instant();
         if (cached.filter(campaign -> campaign.opened(now)).isEmpty()) {
             Optional<AcceptResult> settled = transaction.settleBeforeLock(command, product,
-                    cached.map(CachedCampaign::schedule));
+                    cached.map(CachedCampaign::forAccept));
             if (settled.isPresent()) {
                 return settled.get();
             }
