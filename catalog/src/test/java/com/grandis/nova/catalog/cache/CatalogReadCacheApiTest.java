@@ -433,8 +433,12 @@ class CatalogReadCacheApiTest {
         } finally {
             RedisContainerConfig.unpause();
         }
+        // 대조 — Redis 가 돌아오면 같은 세대의 메모리 카드(멈추기 전 것)가 아직 나온다. 만료 전이라는 뜻이라 아래에서 빠지는 것은 세대 때문이다
+        assertThat(promotionCardTitles(promotionId)).as("만료 전 메모리 카드").containsExactly("홍보 카드");
+        long seen = System.nanoTime();
         admin(patch(ADMIN + "/{id}/visibility", productId), "{ \"visible\": false }").andExpect(status().isOk());
         assertThat(promotionCardTitles(promotionId)).as("숨긴 상품은 바로 빠진다").isEmpty();
+        assertThat(Duration.ofNanos(System.nanoTime() - seen)).as("대조 뒤 곧바로 — 만료로 빠진 것이 아니다").isLessThan(Duration.ofSeconds(2));
     }
 
     @Test
@@ -443,10 +447,13 @@ class CatalogReadCacheApiTest {
         UUID productId = preorderProduct("다른 인스턴스");
         UUID promotionId = promotionOf(productId, "세대 홍보");
         assertThat(promotionCardTitles(promotionId)).containsExactly("다른 인스턴스");
+        long loaded = System.nanoTime();
         jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", (Object) UuidBinary.toBytes(productId));   // 이 인스턴스는 모른다
         assertThat(promotionCardTitles(promotionId)).as("세대가 그대로면 메모리의 카드").containsExactly("다른 인스턴스");
 
         readCache.bumpNow(CatalogReadCache.PRODUCTS);   // 숨긴 쪽 인스턴스가 커밋 뒤 올린 세대
+        assertThat(Duration.ofNanos(System.nanoTime() - loaded)).as("TTL 안이어야 세대 때문에 빠진 것이다(만료가 아니라)")
+                .isLessThan(CatalogReadCache.PRODUCT_TTL);
         assertThat(promotionCardTitles(promotionId)).as("세대가 오르면 바로 빠진다").isEmpty();
     }
 
@@ -493,12 +500,21 @@ class CatalogReadCacheApiTest {
                 """, UuidBinary.toBytes(productId));
         fixtures.optionWithAttributes(productId, "ACTIVE", new java.math.BigDecimal("1250000"), "화이트", "{\"color\": \"화이트\"}");
         UUID promotionId = promotionOf(productId, "칩 홍보");
-        // 오늘 보이는 홍보를 이것 하나로 — 그래야 목록의 카드 키(오늘 홍보 전부의 상품)가 상세의 키(이 홍보의 상품)와 상품이 같아진다
+        // 오늘 보이는 홍보를 이것 하나로 — 그래야 목록의 카드 키(오늘 홍보 전부의 상품)가 상세의 키(이 홍보의 상품)와 상품이 같아진다.
+        // 다른 시험이 남긴 홍보의 기간을 잠시 옮기고 끝에 되돌린다
+        java.util.List<java.util.Map<String, Object>> others = jdbcTemplate.queryForList(
+                "SELECT id, start_date, end_date FROM promotions WHERE id <> ?", (Object) UuidBinary.toBytes(promotionId));
         jdbcTemplate.update("UPDATE promotions SET start_date = '2000-01-01', end_date = '2000-01-01' WHERE id <> ?", (Object) UuidBinary.toBytes(promotionId));
-        mockMvc.perform(get("/api/v1/promotions")).andExpect(status().isOk());   // 색상칩 없는 카드로 먼저 채운다
+        try {
+            mockMvc.perform(get("/api/v1/promotions")).andExpect(status().isOk());   // 색상칩 없는 카드로 먼저 채운다
 
-        JsonNode card = data(mockMvc.perform(get("/api/v1/promotions/{id}", promotionId)).andExpect(status().isOk())).get("products").get(0);
-        assertThat(card.get("colors").findValues("label").stream().map(JsonNode::asString).toList()).contains("화이트");
+            JsonNode card = data(mockMvc.perform(get("/api/v1/promotions/{id}", promotionId)).andExpect(status().isOk())).get("products").get(0);
+            assertThat(card.get("colors").findValues("label").stream().map(JsonNode::asString).toList()).contains("화이트");
+        } finally {
+            for (java.util.Map<String, Object> row : others) {
+                jdbcTemplate.update("UPDATE promotions SET start_date = ?, end_date = ? WHERE id = ?", row.get("start_date"), row.get("end_date"), row.get("id"));
+            }
+        }
     }
 
     /** 공개 · 판매 준비된 사전예약(옵션 하나 · 지금 접수 중인 회차). */
