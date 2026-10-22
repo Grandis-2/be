@@ -476,6 +476,29 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
+    @DisplayName("Redis 가 멈춰도 상품 상세 · 홍보 본문은 이 인스턴스의 사본으로 답한다 — DB 를 직접 고친 값이 아니라 캐시에 있던 값. 이 인스턴스가 숨긴 상품은 바로 404")
+    void bodiesAreServedFromCopiesDuringRedisOutage() throws Exception {
+        UUID productId = registerInStock("사본폰");
+        UUID promotionId = promotionOf(preorderProduct("사본 홍보 상품"), "사본 홍보");
+        assertThat(data(mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk())).get("title").asString()).isEqualTo("사본폰");
+        assertThat(data(mockMvc.perform(get("/api/v1/promotions/{id}", promotionId)).andExpect(status().isOk())).get("name").asString()).isEqualTo("사본 홍보");
+        jdbcTemplate.update("UPDATE products SET title = '직접 고침' WHERE id = ?", (Object) UuidBinary.toBytes(productId));
+        jdbcTemplate.update("UPDATE promotions SET name = '직접 고침' WHERE id = ?", (Object) UuidBinary.toBytes(promotionId));
+
+        RedisContainerConfig.pause();
+        try {
+            assertThat(data(mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk())).get("title").asString())
+                    .as("DB 로 가지 않고 사본").isEqualTo("사본폰");
+            assertThat(data(mockMvc.perform(get("/api/v1/promotions/{id}", promotionId)).andExpect(status().isOk())).get("name").asString())
+                    .as("DB 로 가지 않고 사본").isEqualTo("사본 홍보");
+            admin(patch(ADMIN + "/{id}/visibility", productId), "{ \"visible\": false }").andExpect(status().isOk());
+            mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isNotFound());
+        } finally {
+            RedisContainerConfig.unpause();
+        }
+    }
+
+    @Test
     @DisplayName("빈 홍보 카드(묶은 상품이 모두 숨김)는 넣지 않는다 — DB 로 다시 공개하면 TTL 을 기다리지 않고 바로 보인다")
     void emptyPromotionCardsAreNotCached() throws Exception {
         java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
@@ -719,11 +742,10 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
-    @DisplayName("Redis 가 멈춰도 공개 상세 · 목록은 DB 로 200 — 값은 DB 그대로")
+    @DisplayName("Redis 가 멈춰도 공개 상세 · 목록은 DB 로 200 — 이 인스턴스가 읽은 적 없는 상세(사본 없음)는 값이 DB 그대로")
     void redisDownServesFromDatabase() throws Exception {
         String tag = "d" + ShopFixtures.unique();
         UUID productId = registerInStock("장애", tag);
-        mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk());
         jdbcTemplate.update("UPDATE products SET title = '장애 중 DB 값' WHERE id = ?", (Object) UuidBinary.toBytes(productId));
 
         RedisContainerConfig.pause();
@@ -737,10 +759,9 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
-    @DisplayName("상품 목록은 인스턴스 메모리에서 — DB 를 직접 고쳐도(세대 안 올림) 옛 값이고, Redis 가 멈춰도 그대로다. 대조군: 상세는 Redis 가 멈추면 DB 값")
+    @DisplayName("상품 목록은 인스턴스 메모리에서 — DB 를 직접 고쳐도(세대 안 올림) 옛 값이고, Redis 가 멈춰도 그대로다")
     void productListIsServedFromMemory() throws Exception {
         UUID productId = registerInStock("메모리");
-        mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk());
         assertThat(list("").findValues("title").stream().map(JsonNode::asString).toList()).contains("메모리");
         jdbcTemplate.update("UPDATE products SET title = '직접 고침' WHERE id = ?", (Object) UuidBinary.toBytes(productId));
 
@@ -748,8 +769,6 @@ class CatalogReadCacheApiTest {
         RedisContainerConfig.pause();
         try {
             assertThat(list("").findValues("title").stream().map(JsonNode::asString).toList()).as("Redis 와 상관없다").contains("메모리");
-            assertThat(data(mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk())).get("title").asString())
-                    .as("대조군 — 상세는 Redis 캐시라 DB 로 답한다").isEqualTo("직접 고침");
         } finally {
             RedisContainerConfig.unpause();
         }

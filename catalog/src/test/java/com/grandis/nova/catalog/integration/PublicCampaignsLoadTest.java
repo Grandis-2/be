@@ -88,18 +88,28 @@ class PublicCampaignsLoadTest {
 
     @Test
     @DirtiesContext(methodMode = DirtiesContext.MethodMode.AFTER_METHOD)   // 실패가 이어져 차단기가 열린다 — 그 상태가 다른 시험에 남지 않게
-    @DisplayName("Redis 를 못 쓰면(세대를 못 읽음) 조회마다 fresh 없이 묻는다 — 50 건이면 50 번이고 preorder DB 로 가는 fresh 는 0 번")
+    @DisplayName("Redis 를 못 쓰면(세대를 못 읽음) 사본이 없는 상품은 조회마다 fresh 없이 묻는다 — 50 건이면 50 번이고 preorder DB 로 가는 fresh 는 0 번. 사본이 있는 상품은 묻지 않는다")
     void redisUnavailable() throws Exception {
+        UUID unseen = fixtures.product(fixtures.category(), "PREORDER", "ACTIVE", "부하 처음", "t");   // 이 인스턴스가 읽은 적 없다 — 사본 없음
+        fixtures.registration(unseen);
+        fixtures.option(unseen, "ACTIVE");
+        Instant now = Instant.now();
+        fixtures.campaign(unseen, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
         redis.opsForValue().set(GENERATION, "not-a-number");
         try {
             for (int i = 0; i < REQUESTS; i++) {
-                publicCampaigns.find(productId);
+                publicCampaigns.find(unseen);
+                assertThat(publicCampaigns.find(productId)).as("채워 둔 상품은 사본").isPresent();
             }
         } finally {
             redis.delete(GENERATION);
         }
         assertThat(calls(false)).isEqualTo(REQUESTS);
         assertThat(calls(true)).isZero();
+        assertThat(mockingDetails(client).getInvocations().stream()
+                .filter(invocation -> invocation.getMethod().getName().equals("getCampaigns"))
+                .allMatch(invocation -> invocation.getArgument(0).toString().contains(unseen.toString())))
+                .as("묻는 것은 사본이 없는 상품뿐").isTrue();
     }
 
     private void burst(int requests) throws Exception {

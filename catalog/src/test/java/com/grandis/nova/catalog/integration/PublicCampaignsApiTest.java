@@ -1,6 +1,7 @@
 package com.grandis.nova.catalog.integration;
 
 import com.grandis.nova.catalog.support.CatalogIntegrationTest;
+import com.grandis.nova.catalog.support.RedisContainerConfig;
 import com.grandis.nova.catalog.support.ShopFixtures;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
@@ -124,6 +125,26 @@ class PublicCampaignsApiTest {
             redis.delete(generation);
         }
         assertThat(redis.keys("catalog:cache:preorder-campaign*")).as("우회 결과는 넣지 않는다").isEmpty();
+    }
+
+    @Test
+    @DisplayName("Redis 가 멈추면 회원 상세 · 홍보 카드의 회차는 이 인스턴스의 사본 — preorder 에 묻지 않는다(그사이 조기 마감은 사본을 믿는 1분까지 늦다)")
+    void redisOutageServesTheHeldCampaigns() throws Exception {
+        UUID productId = openPreorder("장애 사본");
+        UUID promotionId = promotion(productId);
+        assertThat(detailStatus(productId)).isEqualTo("OPEN");
+        assertThat(cardStatuses(promotionId)).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(productId, "OPEN"));
+        closeNow(productId);
+        clearInvocations(client);
+
+        RedisContainerConfig.pause();
+        try {
+            assertThat(detailStatus(productId)).isEqualTo("OPEN");
+            assertThat(cardStatuses(promotionId)).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(productId, "OPEN"));
+        } finally {
+            RedisContainerConfig.unpause();
+        }
+        verify(client, never()).getCampaigns(any(), anyBoolean());
     }
 
     @Test
