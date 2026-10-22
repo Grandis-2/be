@@ -10,12 +10,15 @@ import tools.jackson.databind.json.JsonMapper;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
+import java.util.UUID;
 
 /**
- * 인스턴스 메모리에 두는 공개 조회 캐시 — 상품 목록 · 조회수 랭킹 · 카테고리 트리. 나머지(상세 본문 · 리뷰 · 홍보)는 Redis({@link CatalogReadCache})다.
+ * 인스턴스 메모리에 두는 공개 조회 캐시 — 상품 목록 · 조회수 랭킹 · 카테고리 트리 · 홍보 카드. 나머지(상세 본문 · 리뷰 · 홍보 내용)는 Redis({@link CatalogReadCache})다.
  * 고른 기준(2026-10-16 실측 — Testcontainers MySQL 8.4 · Redis 8, p50): 목록 20개 한 쪽은 30.6KB · DB 4.2ms · Redis 적중 1.05ms · 메모리 적중 0.002ms,
  * 카테고리 트리는 4.7KB · DB 1.5ms · Redis 적중 0.40ms. 둘 다 다른 인스턴스가 늦어도 되는 조회다 — 목록은 TTL(5초)이 원래 지연이고, 카테고리는
- * 고치는 API 가 없다. 상세 본문 · 리뷰 · 홍보는 TTL 이 길거나 쓴 사람이 바로 봐야 해 모든 인스턴스를 같이 비우는 Redis 세대가 필요하다.
+ * 고치는 API 가 없다. 홍보 카드는 목록과 같은 카드(가격 · 판매 준비 · 색상칩)이고 같은 TTL 이다 — 홍보 상세가 몰리면 요청마다 카드 두 문장과 그 결과
+ * 매핑이 1 vCPU 를 채워 Redis 응답이 밀렸다(2026-10-22 부하 시험). 메모리에 두면 Redis 를 부르지 않아 그때도 꺼낼 수 있다.
+ * 상세 본문 · 리뷰 · 홍보 내용은 TTL 이 길거나 쓴 사람이 바로 봐야 해 모든 인스턴스를 같이 비우는 Redis 세대가 필요하다.
  * 무게는 JSON 바이트로 센다(넣을 때 한 번 직렬화한다) — 힙 점유가 아니라 Redis 판의 저장 상한과 같은 단위의 근사다.
  * 카테고리는 비우는 곳이 없다 — 마이그레이션이나 SQL 로 바꾸면 인스턴스마다 최대 TTL(10분) 뒤 또는 재기동 때 보인다(마이그레이션만 바뀐 배포는
  * catalog 를 다시 띄우지 않는다).
@@ -31,10 +34,13 @@ public class CatalogLocalCaches {
     public static final Duration PRODUCT_RANKING_TTL = Duration.ofSeconds(30);
     /** 카테고리 트리는 키 하나(약 5KB). */
     static final long CATEGORY_TREE_MAX_BYTES = 1024 * 1024;
+    /** 홍보 카드의 인스턴스당 상한(JSON 바이트). 홍보 하나가 상품 20개까지(약 30KB) · 오늘 보이는 홍보 묶음 하나 — 약 130개. */
+    static final long PROMOTION_CARDS_MAX_BYTES = 4L * 1024 * 1024;
 
     private final LocalReadCache<CatalogReadCache.ListKey, OffsetPage<ProductListItem>> productList;
     private final LocalReadCache<String, List<CategoryNode>> categoryTree;
     private final LocalReadCache<String, List<ProductListItem>> productRanking;
+    private final LocalReadCache<CardsKey, List<ProductListItem>> promotionCards;
 
     /**
      * nova.read-cache.enabled=false 면 끈다(늘 DB) — Redis 캐시와 같은 설정이다. 미리 갱신은 {@link ReadCacheRefresher} 가 맡는다(크기를 묶은 실행기) —
@@ -48,6 +54,8 @@ public class CatalogLocalCaches {
                 value -> json.writeValueAsBytes(value).length, clock, enabled, refresher, metrics);
         this.productRanking = new LocalReadCache<>("catalog.product-ranking", PRODUCT_RANKING_TTL, PRODUCT_RANKING_MAX_BYTES,
                 value -> json.writeValueAsBytes(value).length, clock, enabled, refresher, metrics);
+        this.promotionCards = new LocalReadCache<>("catalog.promotion-cards", CatalogReadCache.PRODUCT_TTL, PROMOTION_CARDS_MAX_BYTES,
+                value -> json.writeValueAsBytes(value).length, clock, enabled, refresher, metrics);
     }
 
     public LocalReadCache<CatalogReadCache.ListKey, OffsetPage<ProductListItem>> productList() {
@@ -60,5 +68,21 @@ public class CatalogLocalCaches {
 
     public LocalReadCache<String, List<ProductListItem>> productRanking() {
         return productRanking;
+    }
+
+    public LocalReadCache<CardsKey, List<ProductListItem>> promotionCards() {
+        return promotionCards;
+    }
+
+    /**
+     * 홍보 카드의 키 — 묶은 상품(보이는 순서)과 색상칩 여부. 홍보에 묶은 상품이 바뀌면 키가 바뀌므로 홍보 쪽 비우기가 따로 필요 없다.
+     *
+     * @param productIds 고정 목록이어야 한다(키가 바뀌지 않게)
+     */
+    public record CardsKey(List<UUID> productIds, boolean withColors) {
+
+        public CardsKey {
+            productIds = List.copyOf(productIds);
+        }
     }
 }
