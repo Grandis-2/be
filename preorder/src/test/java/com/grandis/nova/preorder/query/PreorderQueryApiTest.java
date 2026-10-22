@@ -393,6 +393,34 @@ class PreorderQueryApiTest {
                 .andExpect(jsonPath("$.data.items", hasSize(0)));
     }
 
+    /* 결제를 시작했어도 기한이 지나면 PAYMENT_EXPIRED 하나에만 든다. 기한 1분 앞뒤로 PAYABLE · PAYMENT_EXPIRED 가 갈린다. */
+    @Test
+    void paymentWindowSplitsStagesEvenAfterPaymentStarted() throws Exception {
+        AcceptResult startedThenExpired = accepts.accept(customerId);
+        fire(startedThenExpired.preorder().id(), new PreorderFact.RegisterConfirmed("EXT-" + ShopFixtures.unique()));
+        fire(startedThenExpired.preorder().id(), new PreorderFact.PaymentStarted(Instant.now()));
+        setPayableFrom(startedThenExpired, "UTC_TIMESTAMP(6) - INTERVAL 24 HOUR - INTERVAL 1 MINUTE");
+        AcceptResult justBefore = accepts.accept(customerId);
+        fire(justBefore.preorder().id(), new PreorderFact.RegisterConfirmed("EXT-" + ShopFixtures.unique()));
+        setPayableFrom(justBefore, "UTC_TIMESTAMP(6) - INTERVAL 24 HOUR + INTERVAL 1 MINUTE");
+
+        mockMvc.perform(get("/api/v1/preorders").param("displayStatus", "PAYMENT_IN_PROGRESS").with(customer(customerId)))
+                .andExpect(jsonPath("$.data.items", hasSize(0)));
+        mockMvc.perform(get("/api/v1/preorders").param("displayStatus", "PAYMENT_EXPIRED").with(customer(customerId)))
+                .andExpect(jsonPath("$.data.items[*].preorderId", contains(AcceptFixtures.tokenOf(startedThenExpired))));
+        mockMvc.perform(get("/api/v1/preorders").param("displayStatus", "PAYABLE").with(customer(customerId)))
+                .andExpect(jsonPath("$.data.items[*].preorderId", contains(AcceptFixtures.tokenOf(justBefore))));
+        mockMvc.perform(get("/api/v1/preorders/counts").with(customer(customerId)))
+                .andExpect(jsonPath("$.data.counts.PAYMENT_IN_PROGRESS").value(0))
+                .andExpect(jsonPath("$.data.counts.PAYMENT_EXPIRED").value(1))
+                .andExpect(jsonPath("$.data.counts.PAYABLE").value(1));
+    }
+
+    private void setPayableFrom(AcceptResult accepted, String expression) {
+        jdbcTemplate.update("UPDATE preorders SET payable_from = " + expression + " WHERE id = ?",
+                (Object) UuidBinary.toBytes(accepted.preorder().id()));
+    }
+
     @Test
     void countsAloneMatchTheListCounts() throws Exception {
         acceptOnePerStage(customerId);
