@@ -34,8 +34,9 @@ import java.util.UUID;
  * 홍보 내용(이름 · 사진 · 기간 · 묶인 상품 id)은 읽기 캐시에 {@link #BODY_TTL} 두고 고치면 세대로 비운다. 상품 카드(가격 · 판매 준비 · 색상칩)는 상품 목록과
  * 같은 카드라 같은 TTL({@link CatalogReadCache#PRODUCT_TTL})로 인스턴스 메모리에 둔다({@link CatalogLocalCaches#promotionCards}). 키에 상품 세대 번호가 있어
  * 상품이 바뀌면(관리자 수정 · 판매 준비 이벤트) 모든 인스턴스가 다음 조회부터 새로 읽는다 — 숨김 · 판매 중지 · 삭제가 바로 빠진다. 세대를 올리지 않는 변경
- * (DB 를 직접 고침)은 TTL 뒤에 보인다. 세대를 못 읽으면(Redis 실패) 카드는 넣지 않고 DB 로 읽는다 — 같은 키의 동시 조회는 한 번으로 합치고, 그 조회가
- * 기다림 상한(5초)을 넘기면 기다린 쪽은 503 이다(Redis 판 우회의 합치기와 같다). 회차 · 품절은 카드 캐시 밖이라 요청마다 본다 —
+ * (DB 를 직접 고침)은 TTL 뒤에 보인다. 세대를 못 읽으면(Redis 실패) 이 인스턴스가 마지막으로 본 세대의 카드를 TTL 안에서 그대로 쓴다 — 그동안 다른 인스턴스의
+ * 숨김 · 삭제는 최대 TTL 늦다(사용자 결정 2026-10-22, 그때는 세대 올리기도 미뤄진다). 그런 카드가 없을 때만 넣지 않고 DB 로 읽는다 — 같은 키의 동시 조회는
+ * 한 번으로 합치고, 그 조회가 기다림 상한(5초)을 넘기면 기다린 쪽은 503 이다(Redis 판 우회의 합치기와 같다). 회차 · 품절은 카드 캐시 밖이라 요청마다 본다 —
  * 사전예약 카드의 회차(준비 · 시각)는 상세와 같이 {@link PublicCampaigns} 로 보고 접수 단계는 지금 시각으로 계산한다 —
  * preorder 가 답하지 않으면 페이지는 그대로 내고 사전예약 카드의 시각 · 접수 단계만 비운다(2026-10-19 결정).
  */
@@ -131,12 +132,21 @@ public class PromotionQueryService {
         if (productIds.isEmpty()) {
             return new ReadCache.Entry<>(List.of(), clock.instant());   // 오늘 보이는 홍보가 없다 — 세대도 읽지 않는다
         }
-        // 빈 결과(묶은 상품이 모두 숨김 · 준비 전)는 넣지 않는다 — 준비되면 TTL 을 기다리지 않고 나오게. 읽은 시각은 응답의 max-age 에 쓴다.
-        // 세대를 못 읽으면(Redis 실패) 넣지 않되 같은 자리를 거친다 — 동시 요청이 DB 를 각자 읽지 않고 한 번을 나눠 받는다
+        // 빈 결과(묶은 상품이 모두 숨김 · 준비 전)는 넣지 않는다 — 준비되면 TTL 을 기다리지 않고 나오게. 읽은 시각은 응답의 max-age 에 쓴다
         OptionalLong products = cache.generation(CatalogReadCache.PRODUCTS);
-        long generation = products.orElse(CatalogLocalCaches.CardsKey.UNREADABLE);
-        ReadCache.Entry<List<ProductListItem>> entry = cardCache.entry(new CatalogLocalCaches.CardsKey(productIds, withColors, generation),
-                () -> crossReads.findCards(productIds, withColors), found -> products.isPresent() && !found.isEmpty());
+        ReadCache.Entry<List<ProductListItem>> entry;
+        if (products.isPresent()) {
+            entry = cardCache.entry(new CatalogLocalCaches.CardsKey(productIds, withColors, products.getAsLong()),
+                    () -> crossReads.findCards(productIds, withColors), found -> !found.isEmpty());
+        } else {
+            // 세대를 못 읽으면(Redis 실패) 마지막으로 본 세대의 카드를 TTL 안에서 그대로 쓴다(사용자 결정 2026-10-22 — 장애 중 숨김은 최대 TTL 늦음).
+            // 없을 때만 DB 로 읽되 넣지 않고, 같은 자리를 거쳐 동시 요청이 한 번을 나눠 받는다
+            OptionalLong seen = cache.lastSeenGeneration(CatalogReadCache.PRODUCTS);
+            ReadCache.Entry<List<ProductListItem>> held = seen.isPresent()
+                    ? cardCache.peek(new CatalogLocalCaches.CardsKey(productIds, withColors, seen.getAsLong())) : null;
+            entry = held != null ? held : cardCache.entry(new CatalogLocalCaches.CardsKey(productIds, withColors, CatalogLocalCaches.CardsKey.UNREADABLE),
+                    () -> crossReads.findCards(productIds, withColors), found -> false);
+        }
         List<ProductListItem> cards = entry.value();
         List<UUID> preorderIds = cards.stream().filter(card -> card.saleMode() == SaleMode.PREORDER).map(ProductListItem::productId).toList();
         Instant now = clock.instant();
