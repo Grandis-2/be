@@ -6,13 +6,17 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.testcontainers.containers.GenericContainer;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -197,6 +201,66 @@ class ReadCacheGenerationTest {
         assertThat(generation()).as("이미 큰 세대는 줄이지 않는다").isEqualTo(now);
     }
 
+    @Test
+    @DisplayName("세대를 읽은 사이 다른 스레드가 올린 세대를 먼저 봐도 되돌아간 것으로 보지 않는다 — 정상 올리기 한 번에 세대는 한 번만 오른다")
+    void concurrentBumpIsNotMistakenForRollback() throws Exception {
+        redis.opsForValue().set(GENERATION, "0");
+        PausingTemplate template = new PausingTemplate(connections);
+        ReadCache cache = new ReadCache(template, JSON, "svc");
+        ReadCache.Spec<Item> spec = cache.spec("item", Item.class, Duration.ofMinutes(10));
+        AtomicInteger loads = new AtomicInteger();
+        cache.get(spec, "products", "1", () -> load("v0", loads));   // 본 번호 0
+
+        Thread reader = new Thread(() -> {
+            template.pause.set(true);
+            cache.get(spec, "products", "1", () -> load("late", loads));   // 세대 0 을 읽고 멈춘다
+        });
+        reader.start();
+        template.read.await();
+        cache.bumpNow("products");   // 세대 1
+        cache.get(spec, "products", "1", () -> load("v1", loads));   // 다른 스레드가 1 을 본다
+        template.resume.countDown();
+        reader.join(10_000);
+
+        assertThat(generation()).as("되돌아간 것으로 보고 더 올리지 않았다").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("본 번호가 작은 인스턴스가 늦게 올려도 세대는 줄지 않는다 — 큰 쪽이 먼저 올린 번호가 남는다")
+    void laterSmallerRaiseKeepsLargerGeneration() throws Exception {
+        redis.opsForValue().set(GENERATION, "0");
+        ReadCache large = new ReadCache(redis, JSON, "svc");
+        ReadCache.Spec<Item> largeSpec = large.spec("item", Item.class, Duration.ofMinutes(10));
+        PausingTemplate template = new PausingTemplate(connections);
+        ReadCache small = new ReadCache(template, JSON, "svc");
+        ReadCache.Spec<Item> smallSpec = small.spec("item", Item.class, Duration.ofMinutes(10));
+        AtomicInteger loads = new AtomicInteger();
+        large.get(largeSpec, "products", "1", () -> load("snapshot-time", loads));
+        Map<String, byte[]> snapshot = dump();   // 세대 0
+        large.bumpNow("products");
+        large.bumpNow("products");
+        small.get(smallSpec, "products", "1", () -> load("v2", loads));   // 작은 쪽은 2 까지 봤다
+        large.bumpNow("products");
+        large.bumpNow("products");
+        large.bumpNow("products");
+        large.get(largeSpec, "products", "1", () -> load("v5", loads));   // 큰 쪽은 5 까지 봤다
+
+        restore(snapshot);
+
+        Thread smallReader = new Thread(() -> {
+            template.pause.set(true);
+            small.get(smallSpec, "products", "1", () -> load("small", loads));   // 0 을 읽고, 올리기(3) 전에 멈춘다
+        });
+        smallReader.start();
+        template.read.await();
+        large.get(largeSpec, "products", "1", () -> load("large", loads));   // 큰 쪽이 6 으로 올린다
+        assertThat(generation()).isEqualTo(6);
+        template.resume.countDown();
+        smallReader.join(10_000);
+
+        assertThat(generation()).as("작은 쪽의 올리기(3)는 6 을 줄이지 않는다").isEqualTo(6);
+    }
+
     /** ReadCache 문서에 적은 복원 뒤 운영 절차 그대로 — 운영자가 valkey-cli 로 돌린다. */
     private static void procedure(String key, long epochMillis) throws Exception {
         var result = REDIS.execInContainer("valkey-cli", "EVAL",
@@ -231,6 +295,39 @@ class ReadCacheGenerationTest {
         try (RedisConnection connection = redis.getConnectionFactory().getConnection()) {
             connection.serverCommands().flushAll();
             dump.forEach((key, value) -> connection.keyCommands().restore(key.getBytes(StandardCharsets.UTF_8), 0, value, false));
+        }
+    }
+
+    /** 표시한 스레드가 세대 키를 GET 한 직후 멈추는 템플릿 — 세대를 읽은 뒤 판정 사이에 다른 스레드를 끼워 넣는다. */
+    static final class PausingTemplate extends StringRedisTemplate {
+
+        final ThreadLocal<Boolean> pause = ThreadLocal.withInitial(() -> false);
+        final CountDownLatch read = new CountDownLatch(1);
+        final CountDownLatch resume = new CountDownLatch(1);
+
+        PausingTemplate(RedisConnectionFactory connections) {
+            super(connections);
+        }
+
+        @Override
+        @SuppressWarnings("unchecked")
+        public ValueOperations<String, String> opsForValue() {
+            ValueOperations<String, String> real = super.opsForValue();
+            return (ValueOperations<String, String>) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[] {ValueOperations.class},
+                    (proxy, method, args) -> {
+                        Object result;
+                        try {
+                            result = method.invoke(real, args);
+                        } catch (InvocationTargetException e) {
+                            throw e.getCause();
+                        }
+                        if (method.getName().equals("get") && args != null && args.length == 1 && GENERATION.equals(args[0]) && pause.get()) {
+                            pause.set(false);
+                            read.countDown();
+                            resume.await();
+                        }
+                        return result;
+                    });
         }
     }
 }

@@ -56,7 +56,7 @@ import java.util.function.Supplier;
  *       값이 만료되면 그 뒤 요청은 기다리는 쪽이 된다(상한 그대로). 갱신이 실패해도 들고 있던 값의 만료는 늘지 않는다. 실행기가 차면 맡기지 않고, 그 값이 만료될 때까지
  *       그 키는 다시 맡기지 않는다.
  *       갱신한 값은 읽기 시작할 때의 세대 키에 들어가, 그사이 세대가 올랐으면 새 세대 조회에는 안 보인다. 돌 차례가 왔을 때 Redis 의
- *       지금 세대가 맡길 때와 다르면(올랐거나 세대 키가 지워져 0 으로 돌아갔으면) 읽지 않는다. 돌 차례에 지금 세대나 값을 Redis 에서 못 읽으면(차단기 · 장애) 읽지 않는다 — 넣지 못할 값을 원천에 묻지 않게. 그 키는 막아 두지 않아 다음 히트가 다시
+ *       지금 세대가 맡길 때와 다르면(올랐거나, 세대 키가 지워져 다시 만들어졌거나, 복원으로 되돌아갔으면) 읽지 않는다. 돌 차례에 지금 세대나 값을 Redis 에서 못 읽으면(차단기 · 장애) 읽지 않는다 — 넣지 못할 값을 원천에 묻지 않게. 그 키는 막아 두지 않아 다음 히트가 다시
  *       맡긴다(한 번의 시간 초과로 만료까지 미리 갱신이 멈추지 않게 — 간헐 실패에서는 히트마다 키당 하나씩 다시 맡긴다). 원천을 읽은 뒤 못 넣으면
  *       (아래) 막는다 — 원천을 읽기 전에 Redis 를 못 쓰면 안 막고, 읽은 뒤 못 넣으면 막는다. 인스턴스마다 따로라 같은 키를 인스턴스 수만큼
  *       갱신할 수 있다(만료 때 인스턴스마다 한 번 읽던 것과 같다). 같은 세대 키에는 마지막에 넣은 쪽이 남는다(직접 읽기와 같다) — 세대가 덮지
@@ -69,9 +69,11 @@ import java.util.function.Supplier;
  *       찾아 지우지 않는다. 올리기는 트랜잭션 커밋 뒤라 롤백된 수정으로 비우지 않는다. 올리기가 실패하거나 차단기가 열려 있으면 미뤄 두었다가 이 인스턴스가
  *       Redis 를 다시 읽는 첫 조회에서 올린다 — 미룬 것은 메모리에만 있어 그 전에 인스턴스가 내려가면 사라지고, 그때 최악은 그 캐시의 TTL 이다.
  *       커밋 전에 DB 를 읽은 요청의 옛 값은 그때 정한 옛 세대 키에 들어가 새 세대 조회에는 안 보인다.
- *       세대 키가 없으면(처음 · 지워짐 · 새 캐시) 0 이 아니라 지금 시각(epoch ms)으로 시작한다 — 사라졌다 다시 생긴 키가 늘 예전보다 큰 번호가
- *       되게(memcached 의 namespace 키 권장과 같다). 그래서 옛 세대의 값을 다시 집지 않는다.</li>
- *   <li><b>복원</b>: Redis 를 스냅샷으로 되돌리면 세대 키도 그때 번호로 돌아가고, 그 번호의 옛 값이 같이 돌아온다. 떠 있는 인스턴스는 본 번호보다 작은
+ *       세대 키가 없으면(처음 · 지워짐 · 새 캐시) 0 이 아니라 지금 시각(epoch ms)으로 시작한다 — 사라졌다 다시 생긴 키가 예전보다 큰 번호가
+ *       되게(memcached 의 namespace 키 권장과 같다). 그래서 옛 세대의 값을 다시 집지 않는다. 이 보장은 키를 만든 뒤 흐른 ms 가 그동안 올린 횟수와
+ *       인스턴스 사이 시계 차보다 클 때 선다. 키가 없을 때 조회는 키를 만드는 쓰기다 — 쓰기가 거부되면(메모리 부족 · 읽기 전용) 실패로 세어 이 캐시의
+ *       차단기가 열릴 수 있고, 그동안 이 서비스의 모든 세대가 우회한다. 키가 있으면 조회는 GET 뿐이다.</li>
+ *   <li><b>복원</b>: Redis 를 스냅샷으로 되돌리면(복제가 늦은 장애 조치도 같다) 세대 키도 그때 번호로 돌아가고, 그 번호의 옛 값이 같이 돌아온다. 떠 있는 인스턴스는 본 번호보다 작은
  *       세대를 보면 그 세대를 본 번호 + 1 로 올리고 그 번호로 읽는다(복원된 Redis 에는 그보다 큰 세대의 값이 없다) — 돌아온 옛 값을 내지 않고, 옛 세대로 넣은 몫도 정리한다.
  *       스냅샷보다 큰 번호를 본 적 없는 인스턴스(복원 뒤 새로 뜸 · 스냅샷 뒤 그 세대를 읽지 않음)는 알아채지 못하고 돌아온 옛 값을 TTL 동안 낸다. 그래서 복원(또는 세대 키를 손댄) 뒤에는 운영자가 세대 키를 지우지 말고 지금 시각보다
  *       작으면 지금 시각으로 올린다 — {@code <서비스>:cache:gen:*} 키마다
@@ -283,6 +285,8 @@ public final class ReadCache {
             Instant start = clock.instant();
             return new Entry<>(loader.apply(LoadPath.BYPASS), start);
         }
+        // 본 번호는 세대를 읽기 전에 꺼낸다 — 읽은 뒤 꺼내면 그사이 다른 스레드가 더 큰 번호를 본 것과 섞여, 정상 올리기 뒤에도 되돌아간 것으로 본다
+        Long seenBefore = seenGenerations.get(spec.name() + "|" + generation);
         Long current = call(() -> currentGeneration(generation));
         if (current == null) {
             return bypass(spec, generation, null, id, loader, storable);
@@ -293,7 +297,7 @@ public final class ReadCache {
                 return bypass(spec, generation, null, id, loader, storable);
             }
         }
-        current = raiseIfRolledBack(spec, generation, current);
+        current = raiseIfRolledBack(generation, seenBefore, current);
         if (current == null) {
             return bypass(spec, generation, null, id, loader, storable);
         }
@@ -501,11 +505,11 @@ public final class ReadCache {
     }
 
     /**
-     * 이 인스턴스가 본 번호보다 작은 세대(스냅샷 복원 · 세대 키를 손댐)를 보면 본 번호 + 1 로 올리고 그 번호를 돌려준다 — 돌아온 옛 세대 키의
-     * 값을 내지 않게. 다른 인스턴스와 겹쳐도 줄지 않는다(작을 때만 올린다 — 본 번호가 더 큰 인스턴스는 다시 알아채 더 올린다). 못 올리면 null(우회).
+     * 세대를 읽기 전에 이 인스턴스가 본 번호(seen)보다 작은 세대를 읽었으면(스냅샷 복원 · 세대 키를 손댐) 본 번호 + 1 로 올리고 그 번호를 돌려준다 —
+     * 돌아온 옛 세대 키의 값을 내지 않게. 세대는 올리기로만 바뀌어 줄지 않으므로, 읽기 전에 본 번호보다 작으면 되돌아간 것이다. 다른 인스턴스와
+     * 겹쳐도 줄지 않는다(작을 때만 올린다 — 본 번호가 더 큰 인스턴스는 다시 알아채 더 올린다). 못 올리면 null(우회).
      */
-    private Long raiseIfRolledBack(Spec<?> spec, String generation, long current) {
-        Long seen = seenGenerations.get(spec.name() + "|" + generation);
+    private Long raiseIfRolledBack(String generation, Long seen, long current) {
         if (seen == null || current >= seen) {
             return current;
         }
