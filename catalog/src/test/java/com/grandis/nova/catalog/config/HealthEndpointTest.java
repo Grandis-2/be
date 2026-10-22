@@ -51,7 +51,9 @@ import static org.assertj.core.api.Assertions.assertThat;
         "nova.upload.bucket=catalog-test-images",
         "nova.upload.cdn-base-url=https://img",
         "nova.upload.region=ap-northeast-2",
-        "management.server.port=0"
+        "management.server.port=0",
+        // 기동 예열(DetailWarmup)은 끈다 — 실제 포트라 돈다. 예열은 DetailWarmupTest 가 본다
+        "nova.warmup.budget=0s"
 })
 @Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class})
 @DisplayName("헬스 체크 — 관리 포트의 readiness · liveness 는 토큰 없이 200, 서비스 포트로는 익명에게 열리지 않는다")

@@ -53,7 +53,9 @@ import static org.assertj.core.api.Assertions.assertThat;
         "nova.upload.bucket=catalog-test-images",
         "nova.upload.cdn-base-url=https://img",
         "nova.upload.region=ap-northeast-2",
-        "management.server.port=0"
+        "management.server.port=0",
+        // 기동 예열(DetailWarmup)은 끈다 — 실제 포트라 돈다. 예열은 DetailWarmupTest 가 본다
+        "nova.warmup.budget=0s"
 })
 @Import({MySqlContainerConfig.class, RedisContainerConfig.class, SecurityTestConfig.class})
 @DisplayName("본문 크기 상한 — 실제 서버에서 413")
