@@ -618,6 +618,53 @@ class ReadCacheTest {
     }
 
     @Test
+    @DisplayName("못 읽는 값의 경고는 요청마다 한 번 — 첫 조회에서 경고했으면 다시 보기의 같은 결과는 debug 로만 남긴다")
+    void unreadableValueWarnsOncePerRequest() {
+        cache.get(items, "products", "1", () -> item("v1", new AtomicInteger()));
+        redis.opsForValue().set(onlyKey("svc:cache:item:*"), "{not json");
+        List<ch.qos.logback.classic.spi.ILoggingEvent> logged = captureLogs(() ->
+                assertThat(cache.get(items, "products", "1", () -> item("v2", new AtomicInteger())).name()).isEqualTo("v2"));
+
+        assertThat(unreadableLogs(logged, ch.qos.logback.classic.Level.WARN)).as("첫 조회의 경고 하나")
+                .singleElement().asString().doesNotContain("이미 경고함");
+        assertThat(unreadableLogs(logged, ch.qos.logback.classic.Level.DEBUG)).as("다시 보기는 debug")
+                .singleElement().asString().contains("이미 경고함");
+    }
+
+    @Test
+    @DisplayName("첫 조회에서 값이 없다가 다시 보기에서 처음 못 읽는 값을 만나면 경고로 남긴다 — debug 로 묻히지 않게")
+    void unreadableValueFirstSeenOnRecheckWarns() throws Exception {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
+        ReadCache paused = new ReadCache(template, JSON, "svc");
+        ReadCache.Spec<Item> spec = paused.spec("item", Item.class, Duration.ofSeconds(30));
+        java.util.concurrent.atomic.AtomicReference<Object> served = new java.util.concurrent.atomic.AtomicReference<>();
+        List<ch.qos.logback.classic.spi.ILoggingEvent> logged = captureLogs(() -> {
+            Thread late = new Thread(() -> {
+                template.pause.set(true);   // 첫 GET(값 없음) 뒤에 멈춘다
+                try {
+                    served.set(paused.get(spec, "products", "1", () -> item("loaded", new AtomicInteger())));
+                } catch (Throwable e) {
+                    served.set(e);
+                }
+            });
+            late.start();
+            try {
+                assertThat(template.read.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                redis.opsForValue().set(template.pausedKey, "{not json");   // 다시 보기 전에 밖에서 깨진 값을 썼다
+                template.resume.countDown();
+                late.join(10_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            assertThat(late.isAlive()).isFalse();
+        });
+
+        assertThat(((Item) served.get()).name()).isEqualTo("loaded");
+        assertThat(unreadableLogs(logged, ch.qos.logback.classic.Level.WARN)).singleElement().asString().doesNotContain("이미 경고함");
+        assertThat(unreadableLogs(logged, ch.qos.logback.classic.Level.DEBUG)).isEmpty();
+    }
+
+    @Test
     @DisplayName("자리를 잡은 뒤 다시 본 값이 비어(JSON null) 있어도 원천을 읽어 답하고 자리를 비운다 — 같은 키의 다음 조회가 막히지 않는다")
     void recheckOfEmptyValueStillLoadsAndFreesTheSlot() throws Exception {
         PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
@@ -1054,6 +1101,30 @@ class ReadCacheTest {
     @SuppressWarnings("unchecked")
     private static <T, E extends Throwable> T sneakyThrow(Throwable e) throws E {
         throw (E) e;
+    }
+
+    /** ReadCache 의 로그를 모은다(그 동안 debug 까지). */
+    private static List<ch.qos.logback.classic.spi.ILoggingEvent> captureLogs(Runnable action) {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ReadCache.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender = new ch.qos.logback.core.read.ListAppender<>();
+        ch.qos.logback.classic.Level level = logger.getLevel();
+        appender.start();
+        logger.addAppender(appender);
+        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        try {
+            action.run();
+        } finally {
+            logger.detachAppender(appender);
+            logger.setLevel(level);
+        }
+        return new ArrayList<>(appender.list);
+    }
+
+    private static List<String> unreadableLogs(List<ch.qos.logback.classic.spi.ILoggingEvent> logged, ch.qos.logback.classic.Level level) {
+        return logged.stream()
+                .filter(event -> event.getLevel() == level && event.getFormattedMessage().startsWith("읽기 캐시 값을 못 읽어"))
+                .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+                .toList();
     }
 
     /** 상한(10초)까지만 — 시험이 풀지 않는 변형에서도 스레드가 남지 않게. 넘으면 그 자리에서 실패한다(엉뚱한 단언으로 번지지 않게). */
