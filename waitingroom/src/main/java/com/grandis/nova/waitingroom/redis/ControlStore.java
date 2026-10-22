@@ -121,6 +121,19 @@ public class ControlStore {
         return swapSetting(field, "set", value);
     }
 
+    /**
+     * 읽은 때 값({@code expected}, 없었으면 빈 값)이 그대로일 때만 바꾼다.
+     *
+     * @return 바꿨으면 전 값(감사 로그용), 그사이 다른 값이 들어왔으면 빈 Mono
+     */
+    public Mono<Optional<String>> compareAndSetSetting(String field, Optional<String> expected, String value) {
+        return scripts.list(scripts.compareSetSetting, List.of(RedisKeys.SETTINGS),
+                        List.of(field, expected.isPresent() ? "present" : "absent", expected.orElse(""), value))
+                .filter(reply -> LuaScripts.number(reply, 0) == 1)
+                .map(reply -> reply.size() > 1 && reply.get(1) != null ? Optional.of(LuaScripts.text(reply, 1))
+                        : Optional.<String>empty());
+    }
+
     /** 운영값 한 칸을 지워 기본값으로 돌린다. @return 지운 값(감사 로그용) */
     public Mono<Optional<String>> clearSetting(String field) {
         return swapSetting(field, "clear", "");
@@ -141,6 +154,11 @@ public class ControlStore {
     public Mono<Map<String, String>> readSettings() {
         return redis.<String, String>opsForHash().entries(RedisKeys.SETTINGS)
                 .collectMap(Map.Entry::getKey, Map.Entry::getValue);
+    }
+
+    /** preorder 태스크 용량 행(태스크 ID → 값). preorder 가 적고 지운다 — 대기열은 읽기만 한다. */
+    public Mono<Map<String, String>> readCapacity(String key) {
+        return redis.<String, String>opsForHash().entries(key).collectMap(Map.Entry::getKey, Map.Entry::getValue);
     }
 
     public Mono<QueueDepth> depth(String productKey) {

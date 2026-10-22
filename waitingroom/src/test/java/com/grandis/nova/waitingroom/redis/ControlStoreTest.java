@@ -327,6 +327,19 @@ class ControlStoreTest {
         }
 
         @Test
+        void 읽은_때_값이_그대로일_때만_바꾸고_그사이_바뀌었으면_쓰지_않는다() {
+            assertThat(control.compareAndSetSetting("global-credit", Optional.empty(), "200").blockOptional(WAIT))
+                    .as("없던 칸 — 바꿨고 전 값은 없다").contains(Optional.empty());
+            assertThat(control.compareAndSetSetting("global-credit", Optional.empty(), "300").blockOptional(WAIT))
+                    .as("그사이 200 이 들어왔다").isEmpty();
+            assertThat(control.compareAndSetSetting("global-credit", Optional.of("100"), "300").blockOptional(WAIT)).isEmpty();
+            assertThat(control.compareAndSetSetting("global-credit", Optional.of("200"), "300").blockOptional(WAIT))
+                    .contains(Optional.of("200"));
+
+            assertThat(redis.opsForHash().get(RedisKeys.SETTINGS, "global-credit").block(WAIT)).isEqualTo("300");
+        }
+
+        @Test
         void 지우면_지운_값을_돌려주고_없던_칸은_빈_값이다() {
             control.writeSetting("max-wait-sec", "60").block(WAIT);
 

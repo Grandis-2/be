@@ -39,12 +39,13 @@ class WaitingroomAdminController {
         return settings.admissionRate().map(view -> ok(view, exchange));
     }
 
-    /** 0 은 입장 일시 정지(줄은 그대로). */
+    /** 0 은 입장 일시 정지(줄은 그대로). preorder 용량 합을 넘겨 늘리면 confirm: true 가 있어야 저장한다. */
     @PutMapping("/admission-rate")
     Mono<ApiResponse<AdmissionRateView>> setGlobalCredit(@RequestBody GlobalCreditRequest request,
                                                           @AuthenticationPrincipal Jwt jwt, ServerWebExchange exchange) {
         return settings.setGlobalCredit(jwt.getSubject(),
-                OperationalSettingsAdmin.integral(request.globalCredit(), "globalCredit")).map(view -> ok(view, exchange));
+                OperationalSettingsAdmin.integral(request.globalCredit(), "globalCredit"),
+                Boolean.TRUE.equals(request.confirm())).map(view -> ok(view, exchange));
     }
 
     @DeleteMapping("/admission-rate")
@@ -101,7 +102,7 @@ class WaitingroomAdminController {
     }
 
     /** 값은 JSON 그대로 받아 정수인지 직접 본다. */
-    record GlobalCreditRequest(JsonNode globalCredit) {
+    record GlobalCreditRequest(JsonNode globalCredit, Boolean confirm) {
     }
 
     record ProductCapRequest(JsonNode cap) {

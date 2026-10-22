@@ -10,6 +10,7 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * 관측 브레이크 — 리더가 회차마다 노드들이 본 접수 전달 결과(5xx · 실패 · 느림)로 전역 속도에 곱할 배율을 정한다.
@@ -121,6 +122,15 @@ class Brake {
 
     private static double quantize(double value) {
         return Math.round(value * RESOLUTION) / RESOLUTION;
+    }
+
+    /** 지금 창의 전달 · 나쁜 응답 합. 꺼져 있으면 빈 값이다. */
+    synchronized Optional<RelayOutcome> windowTotals() {
+        if (!properties.enabled()) {
+            return Optional.empty();
+        }
+        return Optional.of(new RelayOutcome(window.stream().mapToLong(sample -> sample.outcome().relayed()).sum(),
+                window.stream().mapToLong(sample -> sample.outcome().bad()).sum()));
     }
 
     /** 운영값에 배율을 곱한다. 운영값이 0(일시 정지)이 아니면 1 아래로는 내리지 않는다 — 브레이크가 입장을 멈추지는 않는다. */

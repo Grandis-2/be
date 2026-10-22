@@ -53,6 +53,7 @@ class AllocationRoundTest {
     private ControlStore control;
     private AllocationRound round;
     private final Leadership leadership = new Leadership();
+    private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
     /** 재발행 요청을 받은 순서대로 남긴다. failNextResync 가 켜져 있으면 한 번 실패한다. */
     private final List<String> resyncReasons = new CopyOnWriteArrayList<>();
     private final AtomicBoolean failNextResync = new AtomicBoolean();
@@ -71,9 +72,13 @@ class AllocationRoundTest {
 
     /** 리더가 바뀌면 새 노드는 빈 기억으로 시작한다. */
     private AllocationRound newRound() {
-        ControlMetrics metrics = new ControlMetrics(new SimpleMeterRegistry(), leadership,
+        return newRound(CapacityProperties.defaults());
+    }
+
+    private AllocationRound newRound(CapacityProperties capacity) {
+        ControlMetrics metrics = new ControlMetrics(meters, leadership,
                 new SnapshotHolder(new RedisClock(Clock.systemUTC()), PROPERTIES));
-        return new AllocationRound(control, new AdmissionProperties(10L, 0.7), AdmissionTicket.of(TestJwts.TOKEN_SECRET, List.of(), null), PROPERTIES, metrics, leadership,
+        return new AllocationRound(control, new AdmissionProperties(10L, 0.7), AdmissionTicket.of(TestJwts.TOKEN_SECRET, List.of(), null), PROPERTIES, capacity, metrics, leadership,
                 new ScheduleResync(control, reason -> failNextResync.compareAndSet(true, false)
                         ? Mono.error(new IllegalStateException("sqs down"))
                         : Mono.fromRunnable(() -> resyncReasons.add(reason)), metrics,
@@ -183,6 +188,104 @@ class AllocationRoundTest {
         assertThat(admitted(productKey(101), 50)).isEqualTo(8);
         assertThat(snapshot.product(productKey(101)).orElseThrow().cap()).isEqualTo(8);
         assertThat(snapshot.meta().globalCredit()).isEqualTo(30);
+    }
+
+    /** preorder 태스크 하나의 용량 행. 마지막 시각은 지금, 처음 시각은 그만큼 전이다. */
+    private void preorderTask(String taskId, long perSecond, Duration upFor) {
+        long nowSec = now.getEpochSecond();
+        redis.opsForHash().put(CapacityProperties.defaults().key(), taskId,
+                nowSec + "|" + (nowSec - upFor.toSeconds()) + "|" + perSecond + "|15").block(WAIT);
+    }
+
+    @Test
+    void 운영값은_상한이고_preorder_용량_합을_넘지_않는다() {
+        schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
+        line(productKey(101), 50);
+        preorderTask("a", 3, Duration.ofMinutes(10));
+        preorderTask("b", 4, Duration.ofSeconds(10));
+
+        GatewaySnapshot snapshot = run(7, 0);
+
+        assertThat(snapshot.meta().globalCredit()).as("운영값(기본 10) 과 용량 합(3 + 갓 뜬 4 의 절반) 중 작은 쪽").isEqualTo(5);
+        assertThat(admitted(productKey(101), 50)).isEqualTo(5);
+        assertThat(snapshot.capacity()).isEqualTo(new CapacityStatus(10, 5, 1, 1, 16, false));
+        assertThat(SnapshotCodec.decode(control.readSnapshot().block(WAIT).entries()).orElseThrow().capacity())
+                .as("모든 노드가 같은 값을 보이도록 재료에 싣는다").isEqualTo(snapshot.capacity());
+    }
+
+    @Test
+    void 용량_합이_운영값보다_크면_운영값을_쓰고_표시가_없어지면_운영값만_쓴다() {
+        schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
+        preorderTask("a", 100, Duration.ofMinutes(10));
+        assertThat(run(7, 0).meta().globalCredit()).isEqualTo(10);
+
+        redis.delete(CapacityProperties.defaults().key()).block(WAIT);
+        GatewaySnapshot snapshot = run(7, 0);
+
+        assertThat(snapshot.meta().globalCredit()).isEqualTo(10);
+        assertThat(snapshot.capacity()).isEqualTo(CapacityStatus.unknown(10));
+    }
+
+    @Test
+    void 브레이크는_용량으로_자른_값을_줄인다() {
+        schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
+        preorderTask("a", 6, Duration.ofMinutes(10));
+        leadership.hold(7, leadership.nanoTime(), Duration.ofHours(1));
+        round.run(7, new ClusterView(1, 0, Map.of("a", new RelayOutcome(0, 0))), 0).block(WAIT);
+
+        GatewaySnapshot snapshot = round.run(7, new ClusterView(1, 0, Map.of("a", new RelayOutcome(30, 15))), 1)
+                .block(WAIT);
+
+        assertThat(snapshot.meta().globalCredit()).as("min(10, 6) × 0.5").isEqualTo(3);
+    }
+
+    @Test
+    void 용량을_읽지_못하면_직전_합을_계속_쓰고_직전_값이_없는_새_리더는_운영값을_쓴다() {
+        schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
+        preorderTask("a", 4, Duration.ofMinutes(10));
+        assertThat(run(7, 0).meta().globalCredit()).isEqualTo(4);
+        breakCapacity();
+
+        GatewaySnapshot held = run(7, 0);
+        assertThat(held.meta().globalCredit()).isEqualTo(4);
+        assertThat(held.capacity().held()).as("지금 잰 값이 아니다").isTrue();
+        assertThat(run(7, 0).meta().globalCredit()).as("오래 실패해도 운영값으로 뛰지 않는다").isEqualTo(4);
+        assertThat(meters.get("waitingroom.control.failures").tag("loop", "capacity").counter().count()).isEqualTo(2);
+
+        round = newRound();
+        assertThat(run(7, 0).meta().globalCredit()).as("새 리더는 직전 값이 없다").isEqualTo(10);
+    }
+
+    @Test
+    void 표시가_모두_낡으면_직전_합을_유지하고_새_표시가_오면_따른다() {
+        schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
+        preorderTask("a", 4, Duration.ofMinutes(10));
+        assertThat(run(7, 0).meta().globalCredit()).isEqualTo(4);
+        long staleSec = now.getEpochSecond() - 60;
+        redis.opsForHash().put(CapacityProperties.defaults().key(), "a",
+                staleSec + "|" + (staleSec - 600) + "|4|15").block(WAIT);
+
+        GatewaySnapshot held = run(7, 0);
+
+        assertThat(held.meta().globalCredit()).as("preorder 가 위태로울 때 운영값으로 뛰지 않는다").isEqualTo(4);
+        assertThat(held.capacity()).isEqualTo(new CapacityStatus(10, 4, 1, 0, 20, true));
+
+        preorderTask("b", 6, Duration.ofMinutes(10));
+        assertThat(run(7, 0).meta().globalCredit()).isEqualTo(6);
+    }
+
+    /** 해시가 아니면 HGETALL 이 실패한다. */
+    private void breakCapacity() {
+        redis.opsForValue().set(CapacityProperties.defaults().key(), "broken").block(WAIT);
+    }
+
+    @Test
+    void 끄면_용량_표시를_읽지_않는다() {
+        schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
+        preorderTask("a", 4, Duration.ofMinutes(10));
+        round = newRound(new CapacityProperties(false, null, null, null, null));
+
+        assertThat(run(7, 0).capacity()).isEqualTo(CapacityStatus.unknown(10));
     }
 
     @Test
@@ -424,6 +527,27 @@ class AllocationRoundTest {
         assertThat(product(productKey(202))).as("7일 전이면 마감으로 남긴다").doesNotStartWith("retired|");
     }
 
+    /** 카운터는 갈아 끼울 수 없어 등록만 하면 끝난 모델의 시계열이 계속 쌓인다. */
+    @Test
+    void 일정에서_빠진_모델의_입장_누적_지표는_지우고_남은_모델은_이어_센다() {
+        schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
+        schedule(productKey(202), now.minusSeconds(60), now.plusSeconds(3_600));
+        line(productKey(101), 20);
+        line(productKey(202), 20);
+        run(7, 0, 1);
+        assertThat(admittedCount(productKey(101)) + admittedCount(productKey(202))).isEqualTo(10);
+
+        redis.opsForHash().put(RedisKeys.PRODUCTS, productKey(101), "retired|1|" + now.toEpochMilli()).block(WAIT);
+        run(7, 0, 2);
+
+        assertThat(meters.find(ControlMetrics.ADMITTED).tag("product", productKey(101)).counter()).isNull();
+        assertThat(admittedCount(productKey(202))).as("남은 모델은 지우지 않고 이어 센다").isEqualTo(admitted(productKey(202), 20));
+    }
+
+    private double admittedCount(String product) {
+        return meters.get(ControlMetrics.ADMITTED).tag("product", product).counter().count();
+    }
+
     @Test
     void 비공개_일정도_같은_값으로_읽어_은퇴시킨다() {
         control.applySchedule(productKey(101), new SalesWindow(now.minus(Duration.ofDays(9)),
@@ -469,6 +593,7 @@ class AllocationRoundTest {
 
         assertThat(snapshot.brakeFactor()).isEqualTo(0.5);
         assertThat(snapshot.meta().globalCredit()).as("운영값(기본 10) × 0.5").isEqualTo(5);
+        assertThat(snapshot.relayWindow()).as("관리자 화면에 보일 창의 전달 결과").contains(new RelayOutcome(30, 15));
         assertThat(SnapshotCodec.decode(control.readSnapshot().block(WAIT).entries()).orElseThrow().brakeFactor())
                 .as("다음 리더가 이어 받도록 판정 재료에 싣는다").isEqualTo(0.5);
     }

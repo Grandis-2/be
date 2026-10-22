@@ -2,6 +2,7 @@ package com.grandis.nova.waitingroom.admin;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.waitingroom.admin.AdmissionRateView.CapacityGuide;
 import com.grandis.nova.waitingroom.admin.AdmissionRateView.ProductRate;
 import com.grandis.nova.waitingroom.admin.AdmissionRateView.Setting;
 import com.grandis.nova.waitingroom.admin.AdmissionRateView.Source;
@@ -42,6 +43,8 @@ import java.util.concurrent.TimeoutException;
 class OperationalSettingsAdmin {
 
     static final long MAX_WAIT_SECONDS = Duration.ofDays(1).toSeconds();
+    /** 판정한 뒤 다른 관리자가 바꿔 다시 읽는 횟수. 넘으면 503 — 사람이 동시에 바꾸는 일이라 몇 번이면 충분하다. */
+    private static final int SETTING_RACE_RETRIES = 3;
     private static final Logger log = LoggerFactory.getLogger(OperationalSettingsAdmin.class);
 
     private final ControlStore store;
@@ -65,10 +68,21 @@ class OperationalSettingsAdmin {
         return store.readSettings().map(this::view).onErrorMap(OperationalSettingsAdmin::storeFailure, OperationalSettingsAdmin::unavailable);
     }
 
-    Mono<AdmissionRateView> setGlobalCredit(String actor, Long value) {
+    /**
+     * 늘려서 preorder 용량 합을 넘기면 confirm 이 있어야 저장한다. 증설로도 닿지 않는 값은 거절한다.
+     * 판정한 값이 그대로일 때만 쓴다 — 그사이 다른 관리자가 바꿨으면 다시 읽고 판정한다.
+     */
+    Mono<AdmissionRateView> setGlobalCredit(String actor, Long value, boolean confirmed) {
         long checked = checked("globalCredit", value, 0, defaults.maxGlobalCredit());
-        return change(actor, OperationalSettings.GLOBAL_CREDIT, store.writeSetting(OperationalSettings.GLOBAL_CREDIT,
-                String.valueOf(checked)), String.valueOf(checked));
+        Mono<Optional<String>> write = Mono.defer(() -> store.readSettings().flatMap(raw -> {
+                    long current = settings(raw).globalCredit();
+                    AdmissionRateGuide.check(checked, current, confirmed, guide(current));
+                    return store.compareAndSetSetting(OperationalSettings.GLOBAL_CREDIT,
+                            Optional.ofNullable(raw.get(OperationalSettings.GLOBAL_CREDIT)), String.valueOf(checked));
+                }))
+                .repeatWhenEmpty(SETTING_RACE_RETRIES, attempts -> attempts)
+                .switchIfEmpty(Mono.error(() -> new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE)));
+        return change(actor, OperationalSettings.GLOBAL_CREDIT, write, String.valueOf(checked));
     }
 
     Mono<AdmissionRateView> setProductCap(String actor, String productId, Long value) {
@@ -138,9 +152,18 @@ class OperationalSettingsAdmin {
                 .onErrorMap(OperationalSettingsAdmin::storeFailure, OperationalSettingsAdmin::unavailable);
     }
 
+    private OperationalSettings settings(Map<String, String> raw) {
+        return OperationalSettings.from(raw, defaults.globalCredit(), defaults.productCap(), defaults.maxGlobalCredit());
+    }
+
+    /** 낡은 재료로는 기준을 내지 않는다 — 리더가 멈췄으면 용량도 적용값도 지금 것이 아니다. */
+    private CapacityGuide guide(long operationalCredit) {
+        Optional<GatewaySnapshot> snapshot = snapshots.stale() ? Optional.empty() : snapshots.current();
+        return AdmissionRateGuide.of(snapshot, operationalCredit);
+    }
+
     private AdmissionRateView view(Map<String, String> raw) {
-        OperationalSettings settings = OperationalSettings.from(raw, defaults.globalCredit(), defaults.productCap(),
-                defaults.maxGlobalCredit());
+        OperationalSettings settings = settings(raw);
         // 출처는 리더가 실제로 받아들인 값인지로 정한다 — 깨진 값이 저장돼 있으면 리더는 기본값을 쓴다
         Setting globalCredit = new Setting(settings.globalCredit(),
                 OperationalSettings.acceptsGlobalCredit(raw.get(OperationalSettings.GLOBAL_CREDIT)) ? Source.OPERATIONAL : Source.DEFAULT);
@@ -156,7 +179,8 @@ class OperationalSettingsAdmin {
                 productIds.stream()
                         .map(productId -> new ProductRate(productId, cap(settings, productId),
                                 queueLimit(states.get(productId), maxWait)))
-                        .toList());
+                        .toList(),
+                guide(settings.globalCredit()));
     }
 
     private static Setting cap(OperationalSettings settings, String productId) {
