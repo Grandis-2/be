@@ -76,40 +76,59 @@ public class PromotionQueryService {
         this.shownSpec = cache.spec("promotion-shown", new TypeReference<List<Body>>() { }, BODY_TTL);
     }
 
+    /**
+     * 응답 값과 그 값을 더 들고 있어도 되는 시간 — 본문(TTL {@link #BODY_TTL})과 카드(TTL {@link CatalogReadCache#PRODUCT_TTL})의 남은 시간 중 짧은 쪽.
+     * 앞단 HTTP 캐시의 max-age 상한이다 — 메모리에서 묵은 카드에 max-age 를 통째로 더 주면 합쳐서 TTL 을 넘겨 옛 값이 보인다.
+     */
+    public record Served<T>(T value, Duration remaining) {
+    }
+
     /** 오늘 보이는 홍보 — 시작이 늦은 것부터. 키에 오늘 날짜가 들어가 날이 바뀌면 새로 읽는다. */
-    public ReadCache.Entry<List<PromotionViews.Summary>> shown() {
+    public Served<List<PromotionViews.Summary>> shown() {
         LocalDate today = LocalDate.ofInstant(clock.instant(), PromotionService.KOREA);
         ReadCache.Entry<List<Body>> bodies = cache.entry(shownSpec, PROMOTIONS, today.toString(), () -> loadShown(today));
         List<UUID> allIds = bodies.value().stream().flatMap(body -> body.productIds().stream()).toList();
+        ReadCache.Entry<List<ProductListItem>> found = cards(allIds, false);
         Map<UUID, ProductListItem> cards = new HashMap<>();
-        cards(allIds, false).forEach(card -> cards.put(card.productId(), card));
-        return bodies.map(list -> list.stream().map(body -> {
+        found.value().forEach(card -> cards.put(card.productId(), card));
+        List<PromotionViews.Summary> summaries = bodies.value().stream().map(body -> {
             List<ProductListItem> mine = body.productIds().stream().map(cards::get).filter(Objects::nonNull).toList();
             return new PromotionViews.Summary(body.promotionId(), body.name(), body.thumbnailUrl(), body.startDate(), body.endDate(),
                     earliestOpen(mine), latestClose(mine));
-        }).toList());
+        }).toList();
+        return served(summaries, bodies, found);
     }
 
     /** @throws BusinessException 404 — 없거나 오늘이 홍보 기간 밖 */
-    public ReadCache.Entry<PromotionViews.Detail> detail(UUID promotionId) {
+    public Served<PromotionViews.Detail> detail(UUID promotionId) {
         ReadCache.Entry<Body> body = cache.entry(bodySpec, PROMOTIONS, promotionId.toString(), () -> loadBody(promotionId));
         LocalDate today = LocalDate.ofInstant(clock.instant(), PromotionService.KOREA);
         if (today.isBefore(body.value().startDate()) || today.isAfter(body.value().endDate())) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND);
         }
-        List<ProductListItem> cards = soldOut.mark(cards(body.value().productIds(), true));
-        return body.map(b -> new PromotionViews.Detail(b.promotionId(), b.name(), b.thumbnailUrl(), b.detailImageUrls(), b.startDate(),
-                b.endDate(), earliestOpen(cards), latestClose(cards), cards));
+        ReadCache.Entry<List<ProductListItem>> found = cards(body.value().productIds(), true);
+        List<ProductListItem> cards = soldOut.mark(found.value());
+        Body b = body.value();
+        return served(new PromotionViews.Detail(b.promotionId(), b.name(), b.thumbnailUrl(), b.detailImageUrls(), b.startDate(),
+                b.endDate(), earliestOpen(cards), latestClose(cards), cards), body, found);
+    }
+
+    private <T> Served<T> served(T value, ReadCache.Entry<?> body, ReadCache.Entry<?> cards) {
+        Instant now = clock.instant();
+        Duration bodyLeft = body.remaining(BODY_TTL, now);
+        Duration cardsLeft = cards.remaining(CatalogReadCache.PRODUCT_TTL, now);
+        return new Served<>(value, bodyLeft.compareTo(cardsLeft) < 0 ? bodyLeft : cardsLeft);
     }
 
     /**
      * 홍보 카드에 사전예약 회차를 채운다 — 회차가 없는 사전예약 상품(판매 준비 전)은 뺀다. preorder 가 답하지 않으면 준비를 가르지 못하므로 빼지 않고,
      * 시각 · 접수 단계를 비워 낸다.
      */
-    private List<ProductListItem> cards(List<UUID> productIds, boolean withColors) {
-        // 빈 결과(묶은 상품이 모두 숨김 · 준비 전)는 넣지 않는다 — 준비되면 TTL 을 기다리지 않고 나오게
-        List<ProductListItem> cards = cardCache.entry(new CatalogLocalCaches.CardsKey(productIds, withColors),
-                () -> crossReads.findCards(productIds, withColors), found -> !found.isEmpty()).value();
+    private ReadCache.Entry<List<ProductListItem>> cards(List<UUID> productIds, boolean withColors) {
+        // 빈 결과(묶은 상품이 모두 숨김 · 준비 전)는 넣지 않는다 — 준비되면 TTL 을 기다리지 않고 나오게. 읽은 시각은 응답의 max-age 에 쓴다
+        ReadCache.Entry<List<ProductListItem>> entry = cardCache.entry(new CatalogLocalCaches.CardsKey(productIds, withColors),
+                () -> crossReads.findCards(productIds, withColors), found -> !found.isEmpty());
+        List<ProductListItem> cards = entry.value();
         List<UUID> preorderIds = cards.stream().filter(card -> card.saleMode() == SaleMode.PREORDER).map(ProductListItem::productId).toList();
         Instant now = clock.instant();
         Map<UUID, CampaignWindow> windows;
@@ -117,10 +136,10 @@ public class PromotionQueryService {
             windows = campaigns.find(preorderIds);
         } catch (BusinessException e) {
             log.warn("홍보 카드의 회차를 preorder 에 묻지 못했다 — 사전예약 카드의 시각을 비우고 보낸다 products={}", preorderIds.size(), e);
-            return cards.stream().map(card -> card.withCampaign(null, now)).toList();
+            return entry.map(found -> found.stream().map(card -> card.withCampaign(null, now)).toList());
         }
-        return cards.stream().filter(card -> card.saleMode() != SaleMode.PREORDER || windows.containsKey(card.productId()))
-                .map(card -> card.withCampaign(windows.get(card.productId()), now)).toList();
+        return entry.map(found -> found.stream().filter(card -> card.saleMode() != SaleMode.PREORDER || windows.containsKey(card.productId()))
+                .map(card -> card.withCampaign(windows.get(card.productId()), now)).toList());
     }
 
     // 홍보 · 묶음 두 문장 — 트랜잭션 없이 읽는다(늦게 묶인 상품이 이번 응답에 빠져도 다음 세대에서 보인다)
