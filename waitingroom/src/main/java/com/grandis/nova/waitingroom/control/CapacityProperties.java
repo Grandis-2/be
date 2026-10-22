@@ -13,20 +13,26 @@ import java.time.Duration;
  * @param key              preorder 가 적는 해시
  * @param warmup           갓 뜬 태스크로 보는 기간. 계약 예시(1~2분)의 긴 쪽 — JIT · 커넥션 풀 · 캐시가 덜 데워진 태스크에 몰지 않게
  * @param warmupShare      갓 뜬 태스크의 용량에 곱할 비율. 계약 예시(절반)
+ * @param preorderMaxTasks preorder 가 늘 수 있는 최대 대수. 증설로 닿는 용량(관리자 위험선)에 쓴다 — 인프라 max 와 같게, 지금 5
  */
 @ConfigurationProperties("waitingroom.capacity")
-public record CapacityProperties(Boolean enabled, String key, Duration warmup, Double warmupShare) {
+public record CapacityProperties(Boolean enabled, String key, Duration warmup, Double warmupShare,
+                                 Integer preorderMaxTasks) {
 
     public CapacityProperties {
         enabled = enabled == null || enabled;
         key = key == null ? "preorder:capacity:tasks" : key;
         warmup = warmup == null ? Duration.ofMinutes(2) : warmup;
         warmupShare = warmupShare == null ? 0.5 : warmupShare;
+        preorderMaxTasks = preorderMaxTasks == null ? 5 : preorderMaxTasks;
         if (key.isBlank()) {
             throw new IllegalArgumentException("waitingroom.capacity.key 가 비어 있다");
         }
         if (warmup.isNegative()) {
             throw new IllegalArgumentException("waitingroom.capacity.warmup 은 0 이상이어야 한다");
+        }
+        if (preorderMaxTasks < 1) {
+            throw new IllegalArgumentException("waitingroom.capacity.preorder-max-tasks 는 1 이상이어야 한다: " + preorderMaxTasks);
         }
         if (!(warmupShare > 0 && warmupShare <= 1)) {
             throw new IllegalArgumentException("waitingroom.capacity.warmup-share 는 0 초과 1 이하여야 한다: " + warmupShare);
@@ -35,6 +41,6 @@ public record CapacityProperties(Boolean enabled, String key, Duration warmup, D
 
     /** 모두 기본값. */
     public static CapacityProperties defaults() {
-        return new CapacityProperties(null, null, null, null);
+        return new CapacityProperties(null, null, null, null, null);
     }
 }

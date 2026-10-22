@@ -208,7 +208,7 @@ class AllocationRoundTest {
 
         assertThat(snapshot.meta().globalCredit()).as("운영값(기본 10) 과 용량 합(3 + 갓 뜬 4 의 절반) 중 작은 쪽").isEqualTo(5);
         assertThat(admitted(productKey(101), 50)).isEqualTo(5);
-        assertThat(snapshot.capacity()).isEqualTo(new CapacityStatus(10, 5, 1, 1));
+        assertThat(snapshot.capacity()).isEqualTo(new CapacityStatus(10, 5, 1, 1, 16, false));
         assertThat(SnapshotCodec.decode(control.readSnapshot().block(WAIT).entries()).orElseThrow().capacity())
                 .as("모든 노드가 같은 값을 보이도록 재료에 싣는다").isEqualTo(snapshot.capacity());
     }
@@ -246,7 +246,9 @@ class AllocationRoundTest {
         assertThat(run(7, 0).meta().globalCredit()).isEqualTo(4);
         breakCapacity();
 
-        assertThat(run(7, 0).meta().globalCredit()).isEqualTo(4);
+        GatewaySnapshot held = run(7, 0);
+        assertThat(held.meta().globalCredit()).isEqualTo(4);
+        assertThat(held.capacity().held()).as("지금 잰 값이 아니다").isTrue();
         assertThat(run(7, 0).meta().globalCredit()).as("오래 실패해도 운영값으로 뛰지 않는다").isEqualTo(4);
         assertThat(meters.get("waitingroom.control.failures").tag("loop", "capacity").counter().count()).isEqualTo(2);
 
@@ -266,7 +268,7 @@ class AllocationRoundTest {
         GatewaySnapshot held = run(7, 0);
 
         assertThat(held.meta().globalCredit()).as("preorder 가 위태로울 때 운영값으로 뛰지 않는다").isEqualTo(4);
-        assertThat(held.capacity()).isEqualTo(new CapacityStatus(10, 4, 1, 0));
+        assertThat(held.capacity()).isEqualTo(new CapacityStatus(10, 4, 1, 0, 20, true));
 
         preorderTask("b", 6, Duration.ofMinutes(10));
         assertThat(run(7, 0).meta().globalCredit()).isEqualTo(6);
@@ -281,7 +283,7 @@ class AllocationRoundTest {
     void 끄면_용량_표시를_읽지_않는다() {
         schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
         preorderTask("a", 4, Duration.ofMinutes(10));
-        round = newRound(new CapacityProperties(false, null, null, null));
+        round = newRound(new CapacityProperties(false, null, null, null, null));
 
         assertThat(run(7, 0).capacity()).isEqualTo(CapacityStatus.unknown(10));
     }
@@ -591,6 +593,7 @@ class AllocationRoundTest {
 
         assertThat(snapshot.brakeFactor()).isEqualTo(0.5);
         assertThat(snapshot.meta().globalCredit()).as("운영값(기본 10) × 0.5").isEqualTo(5);
+        assertThat(snapshot.relayWindow()).as("관리자 화면에 보일 창의 전달 결과").contains(new RelayOutcome(30, 15));
         assertThat(SnapshotCodec.decode(control.readSnapshot().block(WAIT).entries()).orElseThrow().brakeFactor())
                 .as("다음 리더가 이어 받도록 판정 재료에 싣는다").isEqualTo(0.5);
     }

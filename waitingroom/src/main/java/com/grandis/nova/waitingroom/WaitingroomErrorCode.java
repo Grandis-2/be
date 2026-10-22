@@ -13,7 +13,9 @@ public enum WaitingroomErrorCode implements ErrorCode {
     PRODUCT_NOT_FOUND(404, "상품을 찾을 수 없습니다."),
     SALE_NOT_OPEN(409, "아직 예약 오픈 전입니다."),
     SALE_CLOSED(409, "사전예약이 마감되었습니다."),
-    QUEUE_FULL(429, "대기열이 가득 찼습니다.");
+    QUEUE_FULL(429, "대기열이 가득 찼습니다."),
+    ADMISSION_RATE_UNREACHABLE(400, "사전예약 서버를 최대로 늘려도 받을 수 없는 입장 속도입니다."),
+    ADMISSION_RATE_NEEDS_CONFIRM(409, "사전예약 서버가 늘어난 뒤에 반영되는 입장 속도입니다. 확인 후 다시 요청해 주세요.");
 
     private final int status;
     private final String message;

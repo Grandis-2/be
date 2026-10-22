@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -72,18 +73,32 @@ class ControlPartsTest {
         @Test
         void 운영값과_preorder_용량은_실어_보내고_없거나_깨졌으면_재료를_버리지_않고_모르는_것으로_읽는다() {
             GatewaySnapshot withCapacity = new GatewaySnapshot(snapshot.products(), snapshot.meta(), 1_790_000_000_000L,
-                    0.5, new CapacityStatus(300, 200, 2, 1));
+                    0.5, new CapacityStatus(300, 200, 2, 1, 500, true));
             Map<String, String> fields = new HashMap<>(SnapshotCodec.encode(withCapacity));
 
             assertThat(SnapshotCodec.decode(fields)).contains(withCapacity);
             fields.remove(SnapshotCodec.CAPACITY);
             assertThat(SnapshotCodec.decode(fields).orElseThrow().capacity()).as("옛 리더가 낸 재료 — 브레이크 뒤 전역 속도를 운영값으로 쓰지 않는다")
                     .isEqualTo(CapacityStatus.MISSING);
-            for (String broken : new String[]{"300|200|2", "300|many|2|1", "300|-5|2|1", "300|200|-1|1", "-2|200|2|1"}) {
+            for (String broken : new String[]{"300|200|2|1|500", "300|many|2|1|500|0", "300|-5|2|1|500|0", "300|200|-1|1|500|0", "-2|200|2|1|500|0", "300|200|2|1|-2|0", "300|200|2|1|500|2"}) {
                 fields.put(SnapshotCodec.CAPACITY, broken);
                 assertThat(SnapshotCodec.decode(fields).orElseThrow().capacity()).as(broken)
                         .isEqualTo(CapacityStatus.MISSING);
             }
+        }
+
+        @Test
+        void 브레이크_창의_전달_결과는_실어_보내고_없거나_깨졌으면_모르는_것으로_읽는다() {
+            GatewaySnapshot withRelay = new GatewaySnapshot(snapshot.products(), snapshot.meta(), 1_790_000_000_000L,
+                    1.0, CapacityStatus.unknown(100), Optional.of(new RelayOutcome(200, 30)));
+            Map<String, String> fields = new HashMap<>(SnapshotCodec.encode(withRelay));
+
+            assertThat(SnapshotCodec.decode(fields)).contains(withRelay);
+            for (String broken : new String[]{"200", "200|many", "-1|0"}) {
+                fields.put(SnapshotCodec.RELAY, broken);
+                assertThat(SnapshotCodec.decode(fields).orElseThrow().relayWindow()).as(broken).isEmpty();
+            }
+            assertThat(SnapshotCodec.encode(snapshot)).as("브레이크가 꺼졌으면 싣지 않는다").doesNotContainKey(SnapshotCodec.RELAY);
         }
     }
 
@@ -232,7 +247,7 @@ class ControlPartsTest {
 
             assertThat(registry.get("waitingroom.capacity.sum").gauge().value()).as("재료 없음").isNaN();
             holder.replace(new GatewaySnapshot(Map.of(), new SnapshotMeta(150, 1, MaxWait.unlimited()),
-                    System.currentTimeMillis(), 1.0, new CapacityStatus(300, 150, 1, 1)));
+                    System.currentTimeMillis(), 1.0, new CapacityStatus(300, 150, 1, 1, 500, false)));
             assertThat(registry.get("waitingroom.settings.operational.credit").gauge().value()).isEqualTo(300);
             assertThat(registry.get("waitingroom.capacity.sum").gauge().value()).isEqualTo(150);
             assertThat(registry.get("waitingroom.capacity.tasks").tag("state", "ready").gauge().value()).isEqualTo(1);

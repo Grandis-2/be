@@ -23,23 +23,23 @@ class PreorderCapacityTest {
     @Test
     void 살아_있는_태스크의_초당_용량을_더한다() {
         assertThat(PreorderCapacity.of(Map.of("a", row(3, 600, 100, 15), "b", row(0, 300, 80, 15)), NOW, DEFAULTS, MAX))
-                .contains(new PreorderCapacity(180, 2, 0));
+                .contains(new PreorderCapacity(180, 2, 0, 420, false));
     }
 
     @Test
     void 갓_뜬_태스크는_예열_기간_동안_용량을_절반만_센다() {
         assertThat(PreorderCapacity.of(Map.of("a", row(0, 600, 100, 15), "b", row(0, 119, 100, 15)), NOW, DEFAULTS, MAX))
-                .contains(new PreorderCapacity(150, 1, 1));
+                .contains(new PreorderCapacity(150, 1, 1, 500, false));
         assertThat(PreorderCapacity.of(Map.of("b", row(0, 120, 100, 15)), NOW, DEFAULTS, MAX))
-                .as("예열 기간이 지나면 다 센다").contains(new PreorderCapacity(100, 1, 0));
+                .as("예열 기간이 지나면 다 센다").contains(new PreorderCapacity(100, 1, 0, 500, false));
         assertThat(PreorderCapacity.of(Map.of("b", row(0, 0, 1, 15)), NOW, DEFAULTS, MAX))
-                .as("줄여도 1 은 센다").contains(new PreorderCapacity(1, 0, 1));
+                .as("줄여도 1 은 센다").contains(new PreorderCapacity(1, 0, 1, 5, false));
     }
 
     @Test
     void 판정초가_지났거나_시각이_미래인_행은_버린다() {
         assertThat(PreorderCapacity.of(Map.of("dead", row(16, 600, 100, 15), "edge", row(15, 600, 100, 15),
-                "future", row(-1, 600, 100, 15)), NOW, DEFAULTS, MAX)).contains(new PreorderCapacity(100, 1, 0));
+                "future", row(-1, 600, 100, 15)), NOW, DEFAULTS, MAX)).contains(new PreorderCapacity(100, 1, 0, 500, false));
     }
 
     @Test
@@ -57,21 +57,33 @@ class PreorderCapacityTest {
     }
 
     @Test
+    void 닿는_용량은_지금_태스크를_다_센_합에_남은_대수만큼_가장_작은_태스크_용량을_더한다() {
+        assertThat(PreorderCapacity.of(Map.of("a", row(0, 600, 100, 15), "b", row(0, 10, 10, 15)), NOW, DEFAULTS, MAX))
+                .as("태스크마다 용량이 달라도 늘어날 태스크를 크게 잡지 않는다 — 100 + 10 + 3 × 10")
+                .contains(new PreorderCapacity(105, 1, 1, 140, false));
+        CapacityProperties twoTasks = new CapacityProperties(null, null, null, null, 2);
+        assertThat(PreorderCapacity.of(Map.of("a", row(0, 600, 100, 15), "b", row(0, 600, 100, 15),
+                "c", row(0, 600, 100, 15)), NOW, twoTasks, MAX)).as("최대 대수보다 많이 떠 있다")
+                .contains(new PreorderCapacity(300, 3, 0, 300, false));
+    }
+
+    @Test
     void 합은_운영_최댓값에서_자른다() {
         assertThat(PreorderCapacity.of(Map.of("a", row(0, 600, 1_000, 15), "b", row(0, 600, Long.MAX_VALUE, 15)),
-                NOW, DEFAULTS, MAX)).contains(new PreorderCapacity(MAX, 2, 0));
+                NOW, DEFAULTS, MAX)).contains(new PreorderCapacity(MAX, 2, 0, MAX, false));
     }
 
     @Test
     void 예열_기간과_비율은_설정을_따르고_범위를_벗어나면_기동하지_않는다() {
-        CapacityProperties shortWarmup = new CapacityProperties(null, null, Duration.ofSeconds(30), 0.25);
+        CapacityProperties shortWarmup = new CapacityProperties(null, null, Duration.ofSeconds(30), 0.25, null);
         assertThat(PreorderCapacity.of(Map.of("a", row(0, 29, 100, 15), "b", row(0, 30, 100, 15)), NOW, shortWarmup, MAX))
-                .contains(new PreorderCapacity(125, 1, 1));
+                .contains(new PreorderCapacity(125, 1, 1, 500, false));
 
-        assertThatThrownBy(() -> new CapacityProperties(null, null, null, 0.0)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CapacityProperties(null, null, null, 1.5)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CapacityProperties(null, " ", null, null)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CapacityProperties(null, null, Duration.ofSeconds(-1), null))
+        assertThatThrownBy(() -> new CapacityProperties(null, null, null, 0.0, null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CapacityProperties(null, null, null, 1.5, null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CapacityProperties(null, " ", null, null, null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CapacityProperties(null, null, null, null, 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CapacityProperties(null, null, Duration.ofSeconds(-1), null, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }
