@@ -366,6 +366,162 @@ class ReadCacheTest {
     }
 
     @Test
+    @DisplayName("자리를 잡은 뒤 다시 보기가 Redis 실패면 없음으로 보지 않고 우회한다 — loader 는 BYPASS 를 받고 넣지 않는다")
+    void recheckRedisFailureBypasses() {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
+        ReadCache failing = new ReadCache(template, JSON, "svc");
+        ReadCache.Spec<Item> spec = failing.spec("item", Item.class, Duration.ofSeconds(30));
+        List<ReadCache.LoadPath> paths = new ArrayList<>();
+        template.failWith = new org.springframework.data.redis.RedisSystemException("다시 보기 실패", null);
+        template.failAt = 2;   // 첫 GET(조회)은 되고, 자리를 잡은 뒤의 GET 이 실패한다
+        template.fail.set(true);
+        try {
+            Item served = failing.get(spec, "products", "1", path -> {
+                paths.add(path);
+                return item("v", new AtomicInteger());
+            });
+            assertThat(served.name()).isEqualTo("v");
+        } finally {
+            template.fail.set(false);
+        }
+        assertThat(paths).containsExactly(ReadCache.LoadPath.BYPASS);
+        assertThat(redis.keys("svc:cache:item:*")).as("우회 결과는 넣지 않는다").isEmpty();
+    }
+
+    @Test
+    @DisplayName("자리를 잡은 뒤 다시 보기가 Error 를 던져도 같이 기다린 요청은 그 Error 를 받고, 자리가 비어 같은 키의 다음 조회는 기다리지 않는다")
+    void recheckErrorReachesWaitersAndFreesTheSlot() throws Exception {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
+        ReadCache failing = new ReadCache(template, JSON, "svc", io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.ofDefaults(), true,
+                java.time.Clock.systemUTC(), Duration.ofSeconds(2));
+        ReadCache.Spec<Item> spec = failing.spec("item", Item.class, Duration.ofSeconds(30));
+        template.failWith = new AssertionError("다시 보기에서 터짐");
+        template.failAt = 2;
+        template.pauseAt = 2;   // 자리를 잡은 뒤의 GET 에서 멈췄다가 던진다
+        java.util.concurrent.atomic.AtomicReference<Object> owner = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Object> waiter = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread holder = new Thread(() -> {
+            template.pause.set(true);
+            template.fail.set(true);
+            try {
+                owner.set(failing.get(spec, "products", "1", () -> item("never", new AtomicInteger())));
+            } catch (Throwable e) {
+                owner.set(e);
+            }
+        });
+        holder.start();
+        assertThat(template.read.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        Thread joiner = new Thread(() -> {
+            try {
+                waiter.set(failing.get(spec, "products", "1", () -> item("joiner", new AtomicInteger())));
+            } catch (Throwable e) {
+                waiter.set(e);
+            }
+        });
+        joiner.start();
+        Thread.sleep(300);   // 같이 기다리는 쪽이 자리에 붙을 때까지
+        template.resume.countDown();
+        holder.join(10_000);
+        joiner.join(10_000);
+        assertThat(holder.isAlive()).isFalse();
+        assertThat(joiner.isAlive()).isFalse();
+
+        assertThat(owner.get()).isInstanceOf(AssertionError.class);
+        assertThat(waiter.get()).as("같이 기다린 요청도 같은 Error 를 받는다(503 시간 초과가 아니라)").isInstanceOf(IllegalStateException.class);
+        assertThat(((Throwable) waiter.get()).getCause()).isSameAs(owner.get());
+        long started = System.nanoTime();
+        assertThat(failing.get(spec, "products", "1", () -> item("next", new AtomicInteger())).name()).isEqualTo("next");
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).as("자리가 비어 기다리지 않는다").isLessThan(Duration.ofSeconds(1));
+    }
+
+    @Test
+    @DisplayName("다시 보기는 자리를 잡은 뒤다 — 다시 보는 동안 같은 키의 다른 요청은 그 자리를 기다리고, 원천은 한 번만 읽는다")
+    void recheckHappensAfterTakingTheSlot() throws Exception {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
+        ReadCache paused = new ReadCache(template, JSON, "svc");
+        ReadCache.Spec<Item> spec = paused.spec("item", Item.class, Duration.ofSeconds(30));
+        AtomicInteger loads = new AtomicInteger();
+        template.pauseAt = 2;   // 두 번째 GET(다시 보기)에서 멈춘다
+        java.util.concurrent.atomic.AtomicReference<Object> first = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Object> second = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread holder = new Thread(() -> {
+            template.pause.set(true);
+            try {
+                first.set(paused.get(spec, "products", "1", () -> item("loaded", loads)));
+            } catch (Throwable e) {
+                first.set(e);
+            }
+        });
+        holder.start();
+        assertThat(template.read.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        Thread other = new Thread(() -> {
+            try {
+                second.set(paused.get(spec, "products", "1", () -> item("other", loads)));
+            } catch (Throwable e) {
+                second.set(e);
+            }
+        });
+        other.start();
+        other.join(500);
+        assertThat(other.isAlive()).as("다시 보는 쪽이 자리를 쥐고 있어 기다린다(자리를 잡기 전에 다시 보면 이쪽이 먼저 읽고 끝난다)").isTrue();
+        template.resume.countDown();
+        holder.join(10_000);
+        other.join(10_000);
+
+        assertThat(((Item) first.get()).name()).isEqualTo("loaded");
+        assertThat(((Item) second.get()).name()).isEqualTo("loaded");
+        assertThat(loads).hasValue(1);
+    }
+
+    @Test
+    @DisplayName("넣어 둔 값이 비었으면(JSON null · 값 null) 못 읽는 값으로 보고 다시 채운다 — null 을 내지 않는다")
+    void emptyStoredValueIsReloaded() {
+        AtomicInteger loads = new AtomicInteger();
+        cache.get(items, "products", "1", () -> item("v1", loads));
+        String key = onlyKey("svc:cache:item:*");
+        redis.opsForValue().set(key, "null");
+        assertThat(cache.get(items, "products", "1", () -> item("v2", loads)).name()).isEqualTo("v2");
+        redis.opsForValue().set(key, "{\"loadedAt\":1,\"value\":null}");
+        assertThat(cache.get(items, "products", "1", () -> item("v3", loads)).name()).isEqualTo("v3");
+        assertThat(loads).hasValue(3);
+    }
+
+    @Test
+    @DisplayName("자리를 잡은 뒤 다시 보기를 차단기가 막으면 없음으로 보지 않고 우회한다 — loader 는 BYPASS 를 받고 넣지 않는다")
+    void recheckBreakerOpenBypasses() throws Exception {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
+        ReadCache paused = new ReadCache(template, JSON, "svc");
+        ReadCache.Spec<Item> spec = paused.spec("item", Item.class, Duration.ofSeconds(30));
+        List<ReadCache.LoadPath> paths = java.util.Collections.synchronizedList(new ArrayList<>());
+        java.util.concurrent.atomic.AtomicReference<Object> served = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread late = new Thread(() -> {
+            template.pause.set(true);
+            try {
+                served.set(paused.get(spec, "products", "1", path -> {
+                    paths.add(path);
+                    return item("v", new AtomicInteger());
+                }));
+            } catch (Throwable e) {
+                served.set(e);
+            }
+        });
+        late.start();
+        assertThat(template.read.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        paused.breaker().transitionToForcedOpenState();   // 다시 보기 전에 Redis 를 못 쓰게 됐다
+        try {
+            template.resume.countDown();
+            late.join(10_000);
+            assertThat(late.isAlive()).isFalse();
+        } finally {
+            paused.breaker().transitionToClosedState();
+        }
+
+        assertThat(served.get()).isInstanceOf(Item.class);
+        assertThat(paths).containsExactly(ReadCache.LoadPath.BYPASS);
+        assertThat(redis.keys("svc:cache:item:*")).as("우회 결과는 넣지 않는다").isEmpty();
+    }
+
+    @Test
     @DisplayName("자리를 잡은 뒤 다시 본 값이 비어(JSON null) 있어도 원천을 읽어 답하고 자리를 비운다 — 같은 키의 다음 조회가 막히지 않는다")
     void recheckOfEmptyValueStillLoadsAndFreesTheSlot() throws Exception {
         PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
@@ -392,8 +548,10 @@ class ReadCacheTest {
         assertThat(((Item) served.get()).name()).isEqualTo("loaded");
         assertThat(paused.get(spec, "products", "2", () -> item("next", loads)).name()).as("다른 키도 그대로 돈다").isEqualTo("next");
         redis.delete(template.pausedKey);
-        assertThat(paused.get(spec, "products", "1", () -> item("again", loads)).name()).as("같은 키의 자리가 비어 다음 조회가 막히지 않는다")
-                .isIn("loaded", "again");
+        int before = loads.get();
+        assertThat(paused.get(spec, "products", "1", () -> item("again", loads)).name()).as("같은 키의 자리가 비어 다음 조회가 원천으로 간다")
+                .isEqualTo("again");
+        assertThat(loads.get() - before).isEqualTo(1);
     }
 
     @Test

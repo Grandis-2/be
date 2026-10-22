@@ -33,7 +33,7 @@ import static org.mockito.Mockito.mockingDetails;
  * N 대면 N 배다(몰림 줄이기는 인스턴스 안에서만 한다). fresh=true 는 preorder 의 회차 캐시를 건너뛰어 preorder DB 를 읽는다.
  */
 @CatalogIntegrationTest
-// 시험 Redis 제한 시간(300ms)을 넘긴 호출은 캐시를 건너뛰어 fresh 없이 한 번 더 묻는다 — 느린 CI 에서 그 한 번이 섞이지 않게 넉넉히 둔다
+// Redis 제한 시간을 넘긴 호출은 캐시를 건너뛰어 fresh 없이 한 번 더 묻는다(우회) — 호출 수를 재는 이 시험에 그 경로가 섞이지 않게 시험 기본값(300ms)보다 넉넉히 둔다
 @TestPropertySource(properties = {"nova.read-cache.enabled=true", "nova.read-cache.preorder-campaign-ttl=3h", "spring.data.redis.timeout=5s"})
 class PublicCampaignsLoadTest {
 
