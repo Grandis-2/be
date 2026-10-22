@@ -24,7 +24,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * 장바구니에 쓸 옵션 정보. 부를 때마다 catalog 에 묻는다 — 가격 · 판매 상태가 바뀌므로 캐시하지 않는다.
+ * order 가 쓰는 catalog 옵션 정보(장바구니 · 바로 구매 · 사전예약 주문 사진 · 드로우 회차). 부를 때마다 catalog 에 묻는다 — 가격 · 판매 상태가 바뀌므로 캐시하지 않는다.
  * 트랜잭션 밖에서 부른다(DB 잠금을 catalog 응답 시간만큼 붙잡지 않게).
  *
  * 요청 스레드에서 부르므로 서킷 브레이커 → 동시 호출 상한을 거친다(설정 기본값은 OrderDefaults). 회로가 열렸거나 상한이 차면
@@ -41,9 +41,10 @@ public class CatalogReader {
     public static final String DEPENDENCY = "catalog";
     /**
      * 사전예약 주문의 사진 조회만 쓰는 장애 대응 이름. 장바구니 · 바로 구매와 회로 · 동시 호출 상한을 나눈다 — 사진은 표시용이라 못 받아도 주문을
-     * 만드는데, 같은 칸을 쓰면 결제가 몰릴 때 사진 조회가 장바구니의 칸을 차지하고 회로도 함께 연다.
+     * 만드는데, 같은 칸을 쓰면 결제가 몰릴 때 사진 조회가 장바구니의 칸을 차지하고 회로도 함께 연다. 이름에 하이픈을 넣지 않는다 — 환경 변수로
+     * 덮을 때(RESILIENCE4J_…_INSTANCES_CATALOGIMAGE_…) 하이픈을 나타낼 수 없다.
      */
-    public static final String IMAGE_DEPENDENCY = "catalog-image";
+    public static final String IMAGE_DEPENDENCY = "catalogimage";
     static final String OPERATION = "getOptions";
 
     private final CatalogClient catalogClient;

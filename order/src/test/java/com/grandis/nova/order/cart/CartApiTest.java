@@ -43,6 +43,7 @@ import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willReturn;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -73,6 +74,7 @@ class CartApiTest {
     @MockitoSpyBean CartStore store;
     @Autowired CircuitBreakerRegistry circuitBreakers;
     @Autowired BulkheadRegistry bulkheads;
+    @Autowired CatalogReader catalogReader;
 
     OrderFixtures fixtures;
     UUID customerId;
@@ -339,6 +341,38 @@ class CartApiTest {
             assertThat(breaker.getMetrics().getNumberOfFailedCalls()).as("5xx 는 실패").isEqualTo(1);
         } finally {
             breaker.reset();   // 같은 컨텍스트를 쓰는 다른 시험에 회로 상태를 남기지 않는다
+        }
+    }
+
+    @Test
+    @DisplayName("사전예약 주문의 사진 조회는 장바구니와 같은 기본값의 다른 회로 · 상한을 쓴다 — 장바구니 회로가 열려도 사진은 묻는다")
+    void imageLookupHasItsOwnResilience() {
+        CircuitBreaker cart = circuitBreakers.circuitBreaker(CatalogReader.DEPENDENCY);
+        CircuitBreaker image = circuitBreakers.circuitBreaker(CatalogReader.IMAGE_DEPENDENCY);
+        assertThat(image).isNotSameAs(cart);
+        assertThat(bulkheads.bulkhead(CatalogReader.IMAGE_DEPENDENCY)).isNotSameAs(bulkheads.bulkhead(CatalogReader.DEPENDENCY));
+        assertThat(image.getCircuitBreakerConfig().getMinimumNumberOfCalls()).isEqualTo(20);
+        assertThat(image.getCircuitBreakerConfig().getSlidingWindowSize()).isEqualTo(50);
+        assertThat(image.getCircuitBreakerConfig().getSlowCallDurationThreshold()).isEqualTo(java.time.Duration.ofSeconds(1));
+        assertThat(image.getCircuitBreakerConfig().getWaitIntervalFunctionInOpenState().apply(1)).isEqualTo(10_000L);
+        assertThat(image.getCircuitBreakerConfig().getIgnoreExceptionPredicate()
+                .test(HttpClientErrorException.create(HttpStatus.BAD_REQUEST, "Bad Request", null, null, null))).as("4xx 는 실패가 아니다").isTrue();
+        assertThat(bulkheads.bulkhead(CatalogReader.IMAGE_DEPENDENCY).getBulkheadConfig().getMaxConcurrentCalls()).isEqualTo(20);
+        assertThat(bulkheads.bulkhead(CatalogReader.IMAGE_DEPENDENCY).getBulkheadConfig().getMaxWaitDuration()).isZero();
+
+        UUID optionId = UUID.randomUUID();
+        // 앞에 건 willAnswer 대역이 null 인자로 불리지 않게 willReturn(…).given 꼴로 건다
+        willReturn(ApiResponse.ok(new CatalogOptions(List.of(new CatalogOption(optionId,
+                UUID.randomUUID(), "상품", null, "옵션", "SKU", BigDecimal.ONE, "ACTIVE", "PREORDER", "ACTIVE", true, true,
+                new CatalogOption.Warranty(false, BigDecimal.ZERO), "https://img/preorder.webp", BigDecimal.ONE)))))
+                .given(catalogClient).getOptions(any(), any());
+        cart.transitionToOpenState();
+        try {
+            assertThat(catalogReader.findImage(optionId, "token")).contains("https://img/preorder.webp");
+            assertThat(image.getState()).isEqualTo(CircuitBreaker.State.CLOSED);
+        } finally {
+            cart.reset();
+            image.reset();
         }
     }
 
