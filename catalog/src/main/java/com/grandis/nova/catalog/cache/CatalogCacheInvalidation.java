@@ -8,7 +8,7 @@ import jakarta.persistence.PostUpdate;
 import org.springframework.stereotype.Component;
 
 /**
- * 상품 · 옵션 · 리뷰 엔티티의 JPA 콜백(넣기 · 고치기 · 지우기)에서 읽기 캐시 세대를 올리고 메모리의 상품 목록 · 조회수 랭킹을 버린다. 둘 다 커밋 뒤에 한 번이다
+ * 상품 · 옵션 · 리뷰 엔티티의 JPA 콜백(넣기 · 고치기 · 지우기)에서 읽기 캐시 세대를 올리고 메모리의 상품 목록 · 조회수 랭킹 · 홍보 카드를 버린다. 둘 다 커밋 뒤에 한 번이다
  * ({@link ReadCache#bumpAfterCommit} · {@link LocalReadCache#invalidateAfterCommit}).
  * 서비스 메서드마다 부르지 않고 엔티티에 건다 — 쓰기 경로가 늘어도 빠지지 않게. 엔티티를 거치지 않는 상품 쓰기(판매 준비 처리기의 JDBC 갱신)는
  * {@link #productsChanged} 를 직접 부른다 — JDBC 쓰기를 더하면 같이 부른다.
@@ -46,6 +46,9 @@ public class CatalogCacheInvalidation {
         cache.bumpAfterCommit(CatalogReadCache.PRODUCTS);
         local.productList().invalidateAfterCommit();
         local.productRanking().invalidateAfterCommit();
+        // 홍보 카드는 키의 상품 세대로 모든 인스턴스가 따라가지만, Redis 장애 중에는 마지막으로 본 세대의 카드를 꺼낸다(세대 올리기도 미뤄진다) —
+        // 그때도 쓴 이 인스턴스에서는 바로 빠지게 버린다
+        local.promotionCards().invalidateAfterCommit();
         cache.bumpAfterCommit(CatalogReadCache.REVIEWS);
     }
 }
