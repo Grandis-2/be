@@ -79,6 +79,8 @@ class DetailWarmupTest {
 
     @Value("${local.management.port}") int managementPort;
     @Autowired DetailWarmup warmup;
+    @Autowired JdbcTemplate jdbcTemplate;
+    @Autowired org.springframework.data.redis.core.StringRedisTemplate redis;
 
     @Test
     @DisplayName("기동 예열 중에는 readiness 가 503 — 끝난 뒤에야 200(ALB 가 예열이 끝난 인스턴스에만 보낸다)")
@@ -88,15 +90,79 @@ class DetailWarmupTest {
     }
 
     @Test
-    @DisplayName("오늘 보이는 홍보의 상세와 그 카드의 상품 상세를 실제 HTTP 로 부른다 — 요청 수 상한까지, 실패 없이")
-    void warmsPromotionAndProductDetails() {
-        assertThat(Seed.WARMED).contains("/api/v1/promotions/" + Seed.promotionId, "/api/v1/products/" + Seed.productId);
+    @DisplayName("기동 때 오늘 보이는 홍보의 상세와 그 카드의 상품 상세를 실제 HTTP 로 부른다")
+    void warmsPromotionAndProductDetailsAtStartup() {
+        assertThat(Seed.WARMED).contains("/api/v1/promotions/" + Seed.promotionId);
+        assertThat(Seed.WARMED).anyMatch(path -> path.startsWith("/api/v1/products/"));
+    }
 
-        DetailWarmup.Result again = warmup.warm();
-        // 같은 DB 를 쓰는 다른 시험이 남긴 홍보도 대상이 될 수 있다 — 넣은 것이 들어 있는지만 본다
-        assertThat(again.paths()).contains("/api/v1/promotions/" + Seed.promotionId, "/api/v1/products/" + Seed.productId);
-        assertThat(again.requests()).isEqualTo(DetailWarmup.MAX_REQUESTS);
-        assertThat(again.failed()).isZero();
+    @Test
+    @DisplayName("요청 수 상한까지 돌고, 상품 상세(요청마다 order · preorder 를 묻는다)는 따로 정한 상한까지만 — 실패 없이")
+    void stopsAtTheRequestCaps() throws Exception {
+        DetailWarmup.Result result = onlyTheSeededPromotion(warmup::warm);
+
+        assertThat(result.paths()).containsExactly("/api/v1/promotions/" + Seed.promotionId, "/api/v1/products/" + Seed.productId);
+        assertThat(result.requests()).isEqualTo(DetailWarmup.MAX_REQUESTS);
+        assertThat(result.productRequests()).isEqualTo(DetailWarmup.MAX_PRODUCT_REQUESTS);
+        assertThat(result.failed()).isZero();
+    }
+
+    @Test
+    @DisplayName("오늘 보이는 홍보가 없으면 상품 목록 첫 쪽의 상세를 데운다 — 상품 상세 상한에서 멈춘다")
+    void fallsBackToTheProductList() throws Exception {
+        DetailWarmup.Result result = withPromotionsHidden(List.of(), warmup::warm);
+
+        assertThat(result.paths()).isNotEmpty().allMatch(path -> path.startsWith("/api/v1/products/"));
+        assertThat(result.requests()).isEqualTo(DetailWarmup.MAX_PRODUCT_REQUESTS);
+    }
+
+    @Test
+    @DisplayName("시간 상한을 넘기지 않는다 — 요청마다 제한 시간을 남은 시간으로 줄인다")
+    void stopsAtTheBudget(@Autowired org.springframework.context.ApplicationContext context, @Autowired tools.jackson.databind.json.JsonMapper json) {
+        DetailWarmup quick = new DetailWarmup(context, json, Duration.ofMillis(200));
+        long started = System.nanoTime();
+        DetailWarmup.Result result = quick.warm();
+
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(1));
+        assertThat(result.requests()).isLessThan(DetailWarmup.MAX_REQUESTS);
+    }
+
+    @Test
+    @DisplayName("끈 예열(0 이하)은 아무것도 부르지 않는다")
+    void zeroBudgetDoesNothing(@Autowired org.springframework.context.ApplicationContext context, @Autowired tools.jackson.databind.json.JsonMapper json) {
+        assertThat(new DetailWarmup(context, json, Duration.ZERO).warm()).isEqualTo(DetailWarmup.Result.NONE);
+    }
+
+    /** 넣은 홍보만 오늘 보이게 두고 부른다 — 같은 DB 를 쓰는 다른 시험이 남긴 홍보는 끝나면 되돌린다. */
+    private <T> T onlyTheSeededPromotion(java.util.concurrent.Callable<T> call) throws Exception {
+        return withPromotionsHidden(List.of(Seed.promotionId), call);
+    }
+
+    private <T> T withPromotionsHidden(List<UUID> keep, java.util.concurrent.Callable<T> call) throws Exception {
+        List<java.util.Map<String, Object>> saved = jdbcTemplate.queryForList("SELECT id, start_date, end_date FROM promotions");
+        try {
+            for (java.util.Map<String, Object> row : saved) {
+                if (!keep.contains(UuidBinary.fromBytes((byte[]) row.get("id")))) {
+                    jdbcTemplate.update("UPDATE promotions SET start_date = CURDATE() - INTERVAL 4 DAY, end_date = CURDATE() - INTERVAL 3 DAY WHERE id = ?",
+                            row.get("id"));
+                }
+            }
+            clearCachedValues();   // 홍보 목록 캐시를 비운다 — 세대는 올리지 않고 값만
+            return call.call();
+        } finally {
+            for (java.util.Map<String, Object> row : saved) {
+                jdbcTemplate.update("UPDATE promotions SET start_date = ?, end_date = ? WHERE id = ?", row.get("start_date"), row.get("end_date"), row.get("id"));
+            }
+            clearCachedValues();
+        }
+    }
+
+    private void clearCachedValues() {
+        java.util.Set<String> keys = redis.keys("catalog:cache:*");
+        keys.removeIf(key -> key.contains(":gen:"));
+        if (!keys.isEmpty()) {
+            redis.delete(keys);
+        }
     }
 
     private static HttpResponse<String> get(int port, String path) throws Exception {
