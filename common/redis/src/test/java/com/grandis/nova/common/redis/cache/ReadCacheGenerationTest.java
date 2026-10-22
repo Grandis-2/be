@@ -26,6 +26,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -211,17 +213,13 @@ class ReadCacheGenerationTest {
         AtomicInteger loads = new AtomicInteger();
         cache.get(spec, "products", "1", () -> load("v0", loads));   // 본 번호 0
 
-        Thread reader = new Thread(() -> {
-            template.pause.set(true);
-            cache.get(spec, "products", "1", () -> load("late", loads));   // 세대 0 을 읽고 멈춘다
-        });
-        reader.start();
-        template.read.await();
+        AtomicReference<Object> served = new AtomicReference<>();
+        Thread reader = paused(template, served, () -> cache.get(spec, "products", "1", () -> load("late", loads)));   // 세대 0 을 읽고 멈춘다
         cache.bumpNow("products");   // 세대 1
         cache.get(spec, "products", "1", () -> load("v1", loads));   // 다른 스레드가 1 을 본다
-        template.resume.countDown();
-        reader.join(10_000);
+        resume(template, reader);
 
+        assertThat(served.get()).as("멈췄던 조회도 끝까지 답했다").isInstanceOf(Item.class);
         assertThat(generation()).as("되돌아간 것으로 보고 더 올리지 않았다").isEqualTo(1);
     }
 
@@ -247,18 +245,35 @@ class ReadCacheGenerationTest {
 
         restore(snapshot);
 
-        Thread smallReader = new Thread(() -> {
-            template.pause.set(true);
-            small.get(smallSpec, "products", "1", () -> load("small", loads));   // 0 을 읽고, 올리기(3) 전에 멈춘다
-        });
-        smallReader.start();
-        template.read.await();
+        AtomicReference<Object> served = new AtomicReference<>();
+        Thread smallReader = paused(template, served, () -> small.get(smallSpec, "products", "1", () -> load("small", loads)));   // 0 을 읽고, 올리기(3) 전에 멈춘다
         large.get(largeSpec, "products", "1", () -> load("large", loads));   // 큰 쪽이 6 으로 올린다
         assertThat(generation()).isEqualTo(6);
-        template.resume.countDown();
-        smallReader.join(10_000);
+        resume(template, smallReader);
 
+        assertThat(served.get()).as("멈췄던 조회도 끝까지 답했다").isInstanceOf(Item.class);
         assertThat(generation()).as("작은 쪽의 올리기(3)는 6 을 줄이지 않는다").isEqualTo(6);
+    }
+
+    /** 다른 스레드에서 조회를 시작해 세대 GET 직후 멈출 때까지 기다린다. 결과나 예외를 served 에 담는다 — 멈춘 뒤 던지는 구현을 놓치지 않게. */
+    private static Thread paused(PausingTemplate template, AtomicReference<Object> served, java.util.function.Supplier<Object> lookup) throws Exception {
+        Thread thread = new Thread(() -> {
+            template.pause.set(true);
+            try {
+                served.set(lookup.get());
+            } catch (Throwable e) {
+                served.set(e);
+            }
+        });
+        thread.start();
+        assertThat(template.read.await(10, TimeUnit.SECONDS)).as("세대 GET 에 이르렀다").isTrue();
+        return thread;
+    }
+
+    private static void resume(PausingTemplate template, Thread thread) throws InterruptedException {
+        template.resume.countDown();
+        thread.join(10_000);
+        assertThat(thread.isAlive()).as("멈췄던 조회가 끝났다").isFalse();
     }
 
     /** ReadCache 문서에 적은 복원 뒤 운영 절차 그대로 — 운영자가 valkey-cli 로 돌린다. */
@@ -324,7 +339,9 @@ class ReadCacheGenerationTest {
                         if (method.getName().equals("get") && args != null && args.length == 1 && GENERATION.equals(args[0]) && pause.get()) {
                             pause.set(false);
                             read.countDown();
-                            resume.await();
+                            if (!resume.await(10, TimeUnit.SECONDS)) {
+                                throw new IllegalStateException("시험이 멈춘 조회를 풀지 않았다");
+                            }
                         }
                         return result;
                     });

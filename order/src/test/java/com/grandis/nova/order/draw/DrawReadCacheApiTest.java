@@ -98,7 +98,7 @@ class DrawReadCacheApiTest {
         create("하나", Instant.now().minusSeconds(60), Instant.now().plus(Duration.ofDays(1)));
         List<String> before = titles();
         assertThat(before).contains("하나");
-        long generation = Long.parseLong(redis.opsForValue().get("order:cache:gen:draws"));   // 첫 조회가 세대를 만들었다
+        long generation = Long.parseLong(redis.opsForValue().get("order:cache:gen:draws"));   // 회차를 만들 때(@PostPersist → 커밋 뒤 올리기) 세대가 생겼다
 
         create("둘", Instant.now().minusSeconds(60), Instant.now().plus(Duration.ofDays(1)));
 

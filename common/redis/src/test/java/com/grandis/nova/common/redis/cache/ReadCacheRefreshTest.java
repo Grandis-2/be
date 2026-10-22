@@ -359,8 +359,8 @@ class ReadCacheRefreshTest {
     }
 
     @Test
-    @DisplayName("맡긴 뒤 세대 키가 지워져 지금 세대가 맡길 때보다 작아지면 갱신은 읽지 않는다 — 그 세대 키는 아무도 읽지 않는다")
-    void lateRefreshSkipsAfterGenerationKeyDeleted() {
+    @DisplayName("맡긴 뒤 세대가 맡길 때보다 작아지면(복원) 갱신은 읽지 않는다 — 그 세대 키는 아무도 읽지 않는다")
+    void lateRefreshSkipsAfterGenerationRolledBack() {
         cache.bumpAfterCommit("g");
         cache.entry(spec, "g", "k", () -> load("v1"));   // 세대 1
         clock.advance(Duration.ofSeconds(24));
