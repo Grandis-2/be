@@ -75,10 +75,11 @@ public interface OrderReader {
     /**
      * 회원의 주문, 최신순((created_at, id) 내림차순). ix_order_member_created 를 탄다.
      *
-     * @param after 이 자리보다 뒤(더 오래된 것)만. 첫 페이지면 null
-     * @param limit 최대 건수. 다음 페이지가 있는지 보려면 한 건 더 달라고 한다
+     * @param filter 상태 · 기간 조건
+     * @param after  이 자리보다 뒤(더 오래된 것)만. 첫 페이지면 null
+     * @param limit  최대 건수. 다음 페이지가 있는지 보려면 한 건 더 달라고 한다
      */
-    List<Order> findByCustomer(UUID customerId, OrderPosition after, int limit);
+    List<Order> findByCustomer(UUID customerId, CustomerOrderFilter filter, OrderPosition after, int limit);
 
     /** 관리자 목록, 최신순. 총계를 함께 센다. page 는 0 부터. */
     OffsetPage<Order> findForAdmin(AdminOrderFilter filter, int page, int size);
@@ -95,4 +96,7 @@ public interface OrderReader {
 
     /** 그 상품이 든 주문의 상태별 수. 주문이 없는 상태는 빠진다. 트랜잭션 밖에서 부르면 트랜잭션을 열지 않는다. */
     Map<OrderStatus, Long> countByStatusOfProduct(UUID productId);
+
+    /** 그 회원의 상태별 주문 수. 주문이 없는 상태는 빠진다. 트랜잭션 밖에서 부르면 트랜잭션을 열지 않는다. */
+    Map<OrderStatus, Long> countByStatusOfCustomer(UUID customerId);
 }

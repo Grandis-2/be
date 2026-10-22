@@ -3,6 +3,7 @@ package com.grandis.nova.order.order.persistence.adapter;
 import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderEvent;
+import com.grandis.nova.order.order.domain.repository.CustomerOrderFilter;
 import com.grandis.nova.order.order.domain.repository.OrderPosition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.support.OrderFixtures;
@@ -94,7 +95,7 @@ class OrderReaderQueryTest {
         List<UUID> seen = new java.util.ArrayList<>();
         OrderPosition after = null;
         for (int page = 0; page < ids.size() + 1; page++) {
-            List<Order> found = reader.findByCustomer(customerId, after, 1);
+            List<Order> found = reader.findByCustomer(customerId, CustomerOrderFilter.NONE, after, 1);
             if (found.isEmpty()) {
                 break;
             }
@@ -110,6 +111,6 @@ class OrderReaderQueryTest {
     @Test
     void customerListWithoutCustomerFailsClosed() {
         org.assertj.core.api.Assertions.assertThatNullPointerException()
-                .isThrownBy(() -> reader.findByCustomer(null, null, 10));
+                .isThrownBy(() -> reader.findByCustomer(null, CustomerOrderFilter.NONE, null, 10));
     }
 }

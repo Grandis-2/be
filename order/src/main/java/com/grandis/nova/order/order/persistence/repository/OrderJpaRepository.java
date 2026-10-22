@@ -44,6 +44,10 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
              group by o.status""")
     List<StatusCountRow> countByStatusOfProduct(@Param("productId") UUID productId);
 
+    /** 그 회원의 상태별 주문 수. 트랜잭션은 {@link #countByStatusIn} 과 같다. */
+    @Query("select o.status as status, count(o) as count from OrderJpaEntity o where o.customerId = :customerId group by o.status")
+    List<StatusCountRow> countByStatusOfCustomer(@Param("customerId") UUID customerId);
+
     Optional<OrderJpaEntity> findByCustomerIdAndIdempotencyKey(UUID customerId, UUID idempotencyKey);
 
     List<OrderJpaEntity> findByCustomerIdAndSourceAndStatusIn(UUID customerId, OrderSource source, Collection<OrderStatus> statuses);

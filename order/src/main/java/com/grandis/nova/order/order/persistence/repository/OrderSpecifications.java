@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 /** 목록 조회 조건. 값이 없는 조건은 아무것도 거르지 않는다(Specification.unrestricted). */
@@ -130,6 +131,12 @@ public final class OrderSpecifications {
     public static Specification<OrderJpaEntity> status(OrderStatus status) {
         return status == null ? Specification.unrestricted()
                 : (root, query, builder) -> builder.equal(root.get("status"), status);
+    }
+
+    /** 이 상태들 중 하나. 비었으면 거르지 않는다. */
+    public static Specification<OrderJpaEntity> statusIn(Set<OrderStatus> statuses) {
+        return statuses.isEmpty() ? Specification.unrestricted()
+                : (root, query, builder) -> root.get("status").in(statuses);
     }
 
     public static Specification<OrderJpaEntity> source(OrderSource source) {

@@ -4,9 +4,11 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CursorPage;
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.order.OrderErrorCode;
+import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderItem;
 import com.grandis.nova.order.order.domain.repository.AdminOrderFilter;
+import com.grandis.nova.order.order.domain.repository.CustomerOrderFilter;
 import com.grandis.nova.order.order.domain.repository.OrderPosition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.OrderIds;
@@ -14,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -37,8 +40,8 @@ public class OrderQueryService {
     }
 
     /** 내 주문 목록(최신순). 한 건 더 읽어 다음 페이지가 있는지 본다. */
-    public CursorPage<OrderView.Summary> findMine(UUID customerId, String cursor, int size) {
-        List<Order> found = new ArrayList<>(reader.findByCustomer(customerId, OrderCursor.decode(cursor), size + 1));
+    public CursorPage<OrderView.Summary> findMine(UUID customerId, CustomerOrderFilter filter, String cursor, int size) {
+        List<Order> found = new ArrayList<>(reader.findByCustomer(customerId, filter, OrderCursor.decode(cursor), size + 1));
         boolean hasNext = found.size() > size;
         if (hasNext) {
             found.removeLast();
@@ -49,6 +52,16 @@ public class OrderQueryService {
         }
         Order last = found.getLast();
         return CursorPage.of(items, OrderCursor.encode(new OrderPosition(last.createdAt(), last.id())));
+    }
+
+    /** 내 상태별 주문 수. 모든 상태를 상태 선언 순서로, 주문이 없는 상태는 0 으로 준다. 목록의 조건과 상관없이 전부 센다. */
+    public Map<OrderStatus, Long> countMine(UUID customerId) {
+        Map<OrderStatus, Long> counts = reader.countByStatusOfCustomer(customerId);
+        Map<OrderStatus, Long> byStatus = new LinkedHashMap<>();
+        for (OrderStatus status : OrderStatus.values()) {
+            byStatus.put(status, counts.getOrDefault(status, 0L));
+        }
+        return byStatus;
     }
 
     /** 내 주문 하나. 남의 주문은 존재를 알리지 않는다(404). */

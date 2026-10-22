@@ -10,6 +10,7 @@ import com.grandis.nova.order.order.domain.model.OrderEvent;
 import com.grandis.nova.order.order.domain.model.OrderItem;
 import com.grandis.nova.order.order.domain.model.OrderLine;
 import com.grandis.nova.order.order.domain.repository.AdminOrderFilter;
+import com.grandis.nova.order.order.domain.repository.CustomerOrderFilter;
 import com.grandis.nova.order.order.domain.repository.ExpiredOrderPosition;
 import com.grandis.nova.order.order.domain.repository.OrderPosition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
@@ -234,9 +235,11 @@ class JpaOrderStore implements OrderReader, OrderWriter {
 
     /** 총계를 세지 않는다. findAll(Specification, Pageable) 은 쓰지 않는 COUNT 까지 돌린다. */
     @Override
-    public List<Order> findByCustomer(UUID customerId, OrderPosition after, int limit) {
+    public List<Order> findByCustomer(UUID customerId, CustomerOrderFilter filter, OrderPosition after, int limit) {
         return orders.findBy(OrderSpecifications.allOf(
                                 OrderSpecifications.customer(customerId),
+                                OrderSpecifications.statusIn(filter.statuses()),
+                                OrderSpecifications.createdBetween(filter.createdFrom(), null),
                                 OrderSpecifications.after(after)),
                         query -> query.sortBy(OrderSpecifications.NEWEST_FIRST).limit(limit).all())
                 .stream().map(OrderMapper::toDomain).toList();
@@ -276,6 +279,13 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     public Map<OrderStatus, Long> countByStatusOfProduct(UUID productId) {
         Map<OrderStatus, Long> counts = new EnumMap<>(OrderStatus.class);
         orders.countByStatusOfProduct(productId).forEach(row -> counts.put(row.getStatus(), row.getCount()));
+        return counts;
+    }
+
+    @Override
+    public Map<OrderStatus, Long> countByStatusOfCustomer(UUID customerId) {
+        Map<OrderStatus, Long> counts = new EnumMap<>(OrderStatus.class);
+        orders.countByStatusOfCustomer(customerId).forEach(row -> counts.put(row.getStatus(), row.getCount()));
         return counts;
     }
 
