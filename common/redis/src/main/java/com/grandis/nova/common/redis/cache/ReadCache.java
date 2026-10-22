@@ -270,7 +270,8 @@ public final class ReadCache {
         return spec(name, type, ttl, budgetBytes, null);
     }
 
-    private <T> Spec<T> spec(String name, JavaType type, Duration ttl, long budgetBytes, Duration heldDuringOutage) {
+    /** 시험용 — 저장 상한(사본 양 상한도 같은 수)을 정해 사본을 켠다. */
+    <T> Spec<T> spec(String name, JavaType type, Duration ttl, long budgetBytes, Duration heldDuringOutage) {
         if (ttl.isNegative() || ttl.isZero()) {
             throw new IllegalArgumentException("ttl must be positive: " + ttl);
         }
@@ -308,7 +309,7 @@ public final class ReadCache {
     /**
      * 세대 {@code generation} 의 키 {@code id} 값과 그 값을 DB 에서 읽은 시각. 없으면 loader 로 만들어 넣는다. loader 가 null 을 주면 넣지 않는다.
      * 세대 번호를 못 읽으면(Redis 장애) 캐시를 건너뛰고 loader 로 답한다 — 아무 번호나 쓰면 옛 값을 줄 수 있다. 세대는 읽었는데 값을 못 읽어도
-     * (실패 · 차단기 열림) 같다 — 없음으로 보지 않고 우회한다.
+     * (실패 · 차단기 열림) 같다 — 없음으로 보지 않고 우회한다. 사본을 켠 캐시는 그 전에 이 인스턴스가 마지막으로 본 번호의 사본을 본다({@link OutageCopies}).
      * 읽은 시각은 응답의 HTTP 캐시 시간({@link Entry#remaining})을 정하는 데 쓴다 — 앞단 캐시가 이 값을 TTL 넘게 들고 있지 않게.
      */
     public <T> Entry<T> entry(Spec<T> spec, String generation, String id, Supplier<T> loader, Predicate<T> storable) {
@@ -1001,7 +1002,10 @@ public final class ReadCache {
      *       한 건 뒤에 줄을 섰다(부하 시험 10-22: 홍보 상세가 한 인스턴스에서만 대기 3,654건 · 중앙값 0.5~0.75초, 다른 인스턴스는 p99 0.5초 이하).</li>
      *   <li><b>늦게 보이는 상한</b>: 세대를 못 읽는 동안 다른 인스턴스가 올린 세대는 모른다 — 믿는 시간(heldDuringOutage)이 그 상한이다(Redis 에서 그 세대를
      *       마지막으로 읽은 시각부터). 값 자체는 TTL 을 넘겨 쓰지 않는다. 이 인스턴스가 올리려 한 세대(장애 중이라 미뤄져도)의 사본은 바로 버린다.</li>
-     *   <li><b>양</b>: JSON 글자 수의 합으로 묶고(넘으면 오래 안 쓴 것부터 밀려난다) TTL 이 지나면 지운다. 객체로 풀린 값이라 실제 힙은 글자 수보다 크다.</li>
+     *   <li><b>양</b>: 값의 JSON 글자 수 합으로 묶는다(키와 Caffeine 자체의 몫은 세지 않는다 · 객체로 풀린 값의 힙은 재지 않았다). 넘으면 Caffeine 이
+     *       밀어낸다(W-TinyLFU — 자주 쓰이는 사본을 지키려고 새 사본이 바로 버려질 수도 있다). TTL 이 지나면 지운다.</li>
+     *   <li><b>복원</b>: 복원을 알아챈 인스턴스는 세대를 본 번호 + 1 로 올리므로 사본 번호가 맞지 않는다. 복원 전 번호를 본 적 없는 인스턴스는 지금처럼
+     *       알아채지 못하고, 세대는 읽고 값만 못 읽으면 그 번호의 사본을 TTL 까지 낸다 — 복원된 옛 값을 TTL 동안 내던 것과 같은 크기다.</li>
      *   <li>세대를 읽었는데 값만 못 읽었으면 그 번호의 사본을 쓴다(믿는 시간과 상관없다 — 번호가 지금 것이다).</li>
      * </ul>
      */
@@ -1017,6 +1021,16 @@ public final class ReadCache {
                     .weigher((String key, Copy copy) -> copy.weight())
                     .expireAfterWrite(ttl)
                     .build();
+        }
+
+        /** 사본을 믿는 시간. */
+        public Duration heldFor() {
+            return heldFor;
+        }
+
+        /** 시험용 — 밀어내기 · 만료를 지금 처리한다(Caffeine 은 나중에 한다). */
+        void cleanUp() {
+            copies.cleanUp();
         }
     }
 
