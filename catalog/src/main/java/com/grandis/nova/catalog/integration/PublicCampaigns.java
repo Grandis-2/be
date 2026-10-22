@@ -44,7 +44,8 @@ import java.util.stream.Collectors;
  *       "회차 없음" 캐시 최대 5초 — 그동안 막 생긴 회차의 상세가 404, 묶음 속 회차 있는 상품은 비우기를 놓친 preorder 인스턴스면 최대 30초).
  *       끄면 fresh 없이 한 번 묻는다. 켠 채 Redis 를 못 쓰면(세대 · 값을 못 읽음 · 차단기 열림 — ReadCache 의 우회) 넣지 않으므로 fresh 없이 한 번만
  *       묻는다 — 그동안 공개 조회는 요청마다 preorder 에 묻고, 받은 값은 위와 같이 옛 값일 수 있다. 채우는 자리를 잡은 뒤 다시 읽기에서 Redis 를
- *       못 쓰면 그 조회도 우회로 바뀌어 fresh 없이 묻고, 그 자리를 기다리던 요청도 같은 값을 받는다.</li>
+ *       못 쓰면 그 조회도 우회로 바뀌어 fresh 없이 묻고, 그 자리를 기다리던 요청도 같은 값을 받는다. 다만 이 인스턴스의 사본이 있으면 묻기 전에
+ *       그것으로 답한다({@link #HELD_DURING_OUTAGE}).</li>
  *   <li>접수 단계는 넣지 않는다 — 호출자가 꺼낸 시각으로 계산하므로 오픈 · 마감 시각이 지나는 것은 캐시와 상관없이 바로 보인다.</li>
  *   <li>preorder 가 답하지 않으면 넣지 않고 {@link PreorderCampaigns#find} 와 같이 던진다. 켜 두면 하나 더 — 같은 키를 이 인스턴스에서 먼저 묻고 있는
  *       요청을 기다리는 쪽은 ReadCache 의 기다림 상한(5초)을 넘으면 같은 DEPENDENCY_UNAVAILABLE 을 던진다(그것을 어떻게 답할지는 호출자 몫이다).</li>
@@ -55,6 +56,11 @@ public class PublicCampaigns {
 
     /** 회차가 바뀌면 올리는 세대. */
     public static final String CAMPAIGNS = "preorder-campaigns";
+    /**
+     * Redis 를 못 읽을 때 이 인스턴스의 회차 사본을 믿는 시간(ReadCache.OutageCopies) — 그동안 다른 인스턴스가 받은 조기 마감 · 다시 열기 · 일정 변경은
+     * 이만큼 늦게 보인다(2026-10-22 결정: 본문 10분, 회차 1분). 차단기가 열린 10초 · 몇 초짜리 Redis 지연은 덮고, 더 긴 장애는 지금처럼 preorder 에 묻는다.
+     */
+    public static final Duration HELD_DURING_OUTAGE = Duration.ofMinutes(1);
 
     private final PreorderCampaigns campaigns;
     private final ReadCache cache;
@@ -68,8 +74,8 @@ public class PublicCampaigns {
         this.campaigns = campaigns;
         this.cache = cache;
         boolean on = cacheEnabled && ttl.isPositive();
-        this.oneSpec = on ? cache.spec("preorder-campaign", CampaignWindow.class, ttl) : null;
-        this.manySpec = on ? cache.spec("preorder-campaign-set", new TypeReference<Map<UUID, CampaignWindow>>() { }, ttl) : null;
+        this.oneSpec = on ? cache.spec("preorder-campaign", CampaignWindow.class, ttl, HELD_DURING_OUTAGE) : null;
+        this.manySpec = on ? cache.spec("preorder-campaign-set", new TypeReference<Map<UUID, CampaignWindow>>() { }, ttl, HELD_DURING_OUTAGE) : null;
     }
 
     /** 한 상품의 회차. 없으면(판매 준비 전) 비어 있다 — 없음은 넣지 않는다. 실패는 위 목록의 마지막 항목. */
