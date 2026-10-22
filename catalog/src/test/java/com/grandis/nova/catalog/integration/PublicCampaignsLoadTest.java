@@ -6,9 +6,6 @@ import com.grandis.nova.common.redis.cache.ReadCache;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.springframework.boot.test.system.CapturedOutput;
-import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -34,11 +31,10 @@ import static org.mockito.Mockito.mockingDetails;
 /**
  * 공개 회차 캐시를 켰을 때 preorder 에 가는 호출 수 — 세대 한 번 올리기, 일정 변경이 잇따를 때, Redis 를 못 쓸 때. 인스턴스 하나 기준이고, 인스턴스가
  * N 대면 N 배다(몰림 줄이기는 인스턴스 안에서만 한다). fresh=true 는 preorder 의 회차 캐시를 건너뛰어 preorder DB 를 읽는다.
- * Redis 호출이 실패(시험 Redis 제한 시간 300ms 초과 등)한 조회는 캐시를 건너뛰어 fresh 없이 한 번 더 묻는다 — 그 수는 실패 경고로 세어 더한다.
  */
 @CatalogIntegrationTest
-@ExtendWith(OutputCaptureExtension.class)
-@TestPropertySource(properties = {"nova.read-cache.enabled=true", "nova.read-cache.preorder-campaign-ttl=3h"})
+// 시험 Redis 제한 시간(300ms)을 넘긴 호출은 캐시를 건너뛰어 fresh 없이 한 번 더 묻는다 — 느린 CI 에서 그 한 번이 섞이지 않게 넉넉히 둔다
+@TestPropertySource(properties = {"nova.read-cache.enabled=true", "nova.read-cache.preorder-campaign-ttl=3h", "spring.data.redis.timeout=5s"})
 class PublicCampaignsLoadTest {
 
     private static final int REQUESTS = 50;
@@ -71,32 +67,29 @@ class PublicCampaignsLoadTest {
 
     @Test
     @DisplayName("세대를 한 번 올린 직후 같은 상품에 50 건이 몰려도 preorder 에는 fresh 없이 1 번 · fresh 로 1 번만 묻는다")
-    void oneBumpUnderBurst(CapturedOutput output) throws Exception {
-        int before = redisFailures(output);
+    void oneBumpUnderBurst() throws Exception {
         readCache.bumpNow(PublicCampaigns.CAMPAIGNS);
         burst(REQUESTS);
-        assertThat(calls(false)).as("Redis 실패로 건너뛴 조회만큼 더한다").isEqualTo(1 + redisFailures(output) - before);
+        assertThat(calls(false)).isEqualTo(1);
         assertThat(calls(true)).isEqualTo(1);
     }
 
     @Test
     @DisplayName("일정 변경이 20 번 잇따르면(바뀔 때마다 10 건 조회) 변경마다 fresh 없이 1 번 · fresh 로 1 번 — 묻는 수는 변경 수에 비례하고 조회 수와는 무관하다")
-    void consecutiveBumps(CapturedOutput output) throws Exception {
-        int before = redisFailures(output);
+    void consecutiveBumps() throws Exception {
         int bumps = 20;
         for (int i = 0; i < bumps; i++) {
             readCache.bumpNow(PublicCampaigns.CAMPAIGNS);
             burst(10);
         }
-        assertThat(calls(false)).as("Redis 실패로 건너뛴 조회만큼 더한다").isEqualTo(bumps + redisFailures(output) - before);
+        assertThat(calls(false)).isEqualTo(bumps);
         assertThat(calls(true)).isEqualTo(bumps);
     }
 
     @Test
     @DirtiesContext(methodMode = DirtiesContext.MethodMode.AFTER_METHOD)   // 실패가 이어져 차단기가 열린다 — 그 상태가 다른 시험에 남지 않게
     @DisplayName("Redis 를 못 쓰면(세대를 못 읽음) 조회마다 fresh 없이 묻는다 — 50 건이면 50 번이고 preorder DB 로 가는 fresh 는 0 번")
-    void redisUnavailable(CapturedOutput output) throws Exception {
-        int before = redisFailures(output);
+    void redisUnavailable() throws Exception {
         redis.opsForValue().set(GENERATION, "not-a-number");
         try {
             for (int i = 0; i < REQUESTS; i++) {
@@ -107,8 +100,6 @@ class PublicCampaignsLoadTest {
         }
         assertThat(calls(false)).isEqualTo(REQUESTS);
         assertThat(calls(true)).isZero();
-        // 실패 경고를 세는 방법이 실제 실패를 잡는다(대조군) — 차단기가 열린 뒤의 우회는 경고 없이 지나가므로 요청 수보다 적다
-        assertThat(redisFailures(output) - before).isPositive();
     }
 
     private void burst(int requests) throws Exception {
@@ -130,11 +121,6 @@ class PublicCampaignsLoadTest {
         } finally {
             pool.shutdownNow();
         }
-    }
-
-    /** 지금까지 찍힌 읽기 캐시의 Redis 호출 실패 경고 수 — 그 조회는 캐시를 건너뛰어 fresh 없이 묻는다. */
-    private static int redisFailures(CapturedOutput output) {
-        return output.getAll().split("읽기 캐시 Redis 호출 실패", -1).length - 1;
     }
 
     private long calls(boolean fresh) {
