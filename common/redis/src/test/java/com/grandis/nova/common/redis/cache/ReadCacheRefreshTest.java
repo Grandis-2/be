@@ -445,11 +445,14 @@ class ReadCacheRefreshTest {
         throw (E) e;
     }
 
-    /** 상한(5초)까지만 — 넘으면 그 자리에서 실패한다(엉뚱한 단언으로 번지지 않게). */
+    /**
+     * 상한(10초)까지만 — 넘으면 AssertionError. 이 파일에서는 갱신 실행기 스레드의 loader 안에서 부르므로 시험을 바로 실패시키지 않고 loader 실패로
+     * 기다린 쪽에 전해진다. 주 스레드의 래치 단언(5초)이 먼저 판정하도록 그보다 길게 둔다.
+     */
     private static void await(CountDownLatch latch) {
         try {
-            if (!latch.await(5, TimeUnit.SECONDS)) {
-                throw new AssertionError("5초 안에 풀리지 않았다");
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new AssertionError("10초 안에 풀리지 않았다");
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
