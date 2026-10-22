@@ -123,7 +123,7 @@ jobs:
         run: |
           set -euo pipefail
           ./gradlew serviceGraph -q --no-daemon > /dev/null
-          jq -r '.services[] | ":" + . + ":bootJar"' build/service-graph.json | xargs -r ./gradlew --no-daemon
+          jq -r '.serviceModules[].path + ":bootJar"' build/service-graph.json | xargs -r ./gradlew --no-daemon
 
       - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a  # v4.3.1
         with:
@@ -162,17 +162,19 @@ jobs:
             | sha256sum | cut -d' ' -f1)
           echo '[]' > plan.json
           for s in $(jq -r '.services[]' "$graph"); do
+            dir=$(jq -er --arg s "$s" '.serviceModules[$s].dir' "$graph")
             jars=()
-            for f in "$s"/build/libs/*.jar; do [[ $f == *-plain.jar ]] || jars+=("$f"); done
+            for f in "$dir"/build/libs/*.jar; do [[ $f == *-plain.jar ]] || jars+=("$f"); done
             [ "${#jars[@]}" -eq 1 ] || { echo "::error::$s 의 jar 가 하나가 아니다: ${jars[*]}"; exit 1; }
             jar=${jars[0]}
             # 대입으로 먼저 받아 스크립트 실패가 set -e 에 걸리게 한다
             # 여기 jar 는 버전을 넣지 않았다 — MANIFEST 전제가 깨졌으면(Boot 업그레이드 등) 모든 버전이 오르기 전에 멈춘다
             jar_key=$(python3 .github/scripts/jar_content_key.py "$jar" "$base" --unversioned)
             key=$(printf '%s%s' "$jar_key" "$image_inputs" | sha256sum | cut -d' ' -f1)
-            # AOT 학습은 서비스 사이를 오가므로 올리지 않는 서비스의 jar 도 함께 넘긴다
+            # AOT 학습은 서비스 사이를 오가므로 올리지 않는 서비스의 jar 도 함께 넘긴다. 학습 컨테이너가 붙이는 설정도 같이(train.sh)
             mkdir -p "dist/$s"
             cp "$jar" "dist/$s/app.jar"
+            cp "$dir/src/main/resources/application.yml.example" "dist/$s/"
 
             aws ecr describe-images --repository-name "$ECR_NAMESPACE/$s" --output json > images.json
             mode=normal
@@ -227,14 +229,16 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          echo "$PUBLISH" | jq -r '.[] | ":" + .service + ":bootJar", "-PreleaseVersion." + .service + "=" + .version' \
+          echo "$PUBLISH" | jq -r --slurpfile g build/service-graph.json \
+            '.[] | $g[0].serviceModules[.service].path + ":bootJar", "-PreleaseVersion." + .service + "=" + .version' \
             | xargs ./gradlew --no-daemon
           base=$(jq -er .version build/service-graph.json)
           rows=$(echo "$PUBLISH" | jq -c '.[]')
           while read -r row; do
             s=$(echo "$row" | jq -r .service)
+            dir=$(jq -er --arg s "$s" '.serviceModules[$s].dir' build/service-graph.json)
             jars=()
-            for f in "$s"/build/libs/*.jar; do [[ $f == *-plain.jar ]] || jars+=("$f"); done
+            for f in "$dir"/build/libs/*.jar; do [[ $f == *-plain.jar ]] || jars+=("$f"); done
             [ "${#jars[@]}" -eq 1 ] || { echo "::error::$s 의 jar 가 하나가 아니다: ${jars[*]}"; exit 1; }
             jar_key=$(python3 .github/scripts/jar_content_key.py "${jars[0]}" "$base")
             [ "$jar_key" = "$(echo "$row" | jq -r .jar_key)" ] \
@@ -303,7 +307,7 @@ jobs:
   # ── 2단계: 이미지를 만들고 AOT 캐시를 학습해 얹는다 ──────────────────
   # 기반 이미지 빌드 · 학습 · 캐시 얹기 · 검증을 한 job 에서 한다. 캐시는 학습한 그 이미지 위에만 얹어야 한다 — JVM 은 jar 가
   # 학습 때와 같은지 보지 않아, 다시 빌드한 이미지와 짝지으면 옛 클래스가 돈다. 그래서 만든 이미지를 그대로 3단계로 넘긴다.
-  # 학습은 서비스 사이를 오가서 8개를 모두 띄우고, 올릴 서비스의 이미지만 넘긴다. 내용은 docker/aot-training/train.sh.
+  # 학습은 서비스 사이를 오가서 모두 띄우고, 올릴 서비스의 이미지만 넘긴다. 내용은 docker/aot-training/train.sh.
   # 빨간불의 의미: 학습 = 학습 환경 · 시나리오, 검증 = 캐시가 받아지지 않음(JDK · 캐시 경로 어긋남).
   image:
     needs: package

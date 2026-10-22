@@ -6,7 +6,7 @@ include 'common:web'        // HTTP 서비스 4개
 include 'common:message'    // preorder · order · payment · waitingroom · worker · member
 include 'common:redis'      // member · catalog · preorder · order · payment
 include 'common:security'   // HTTP 서비스 4개 · payment — JWT 검증
-include 'common:jpa'        // order — 저장 해상도 시계 · JPA Auditing (자동설정)
+include 'common:jpa'        // catalog · preorder · order · payment · batch 둘 — 저장 해상도 시계 · JPA Auditing (자동설정)
 include 'common:outbox'     // order — 트랜잭셔널 아웃박스 기록 · 발행 · 릴레이 (자동설정)
 include 'common:sqs'        // catalog · preorder · order · payment · waitingroom · worker · member — SQS 클라이언트 · 아웃박스 SQS 전송 · 큐 소비 폴러 (자동설정)
 include 'common:testing'    // order — 테스트 지원 (testImplementation 으로만)
@@ -25,4 +25,6 @@ include 'payment'     // 결제 — 토스 연동 · 결제 원장 · 복구 · 
 
 // 비 HTTP 진입점 — ECS 서비스
 include 'worker'      // SQS 소비 — 외부 예약 등록 · 드로우
-include 'batch'       // 정합성 검사 · 안 쓰는 사진 정리 (desired 1)
+// batch 는 소스 없는 묶음이다. 서비스 이름은 경로에서 나온다(:batch:reconciliation → batch-reconciliation, 루트 build.gradle)
+include 'batch:reconciliation' // 정합성 검사 (desired 1)
+include 'batch:imagecleanup'   // 안 쓰는 사진 정리 (Scheduler 가 매일 한 번 띄움)

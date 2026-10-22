@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # JVM AOT 캐시(JEP 483 · 514 · 515)를 만들어 서비스 이미지에 얹는다. CI(release · build)와 로컬이 같은 명령을 쓴다.
 #
-#   ./gradlew :<서비스>:bootJar … 후 dist/<서비스>/app.jar 를 놓고   docker/aot-training/train.sh
+#   bootJar 를 만들어 dist/<서비스>/ 에 app.jar 와 모듈의 application.yml.example 을 놓고   docker/aot-training/train.sh
+#   (서비스 이름 → 모듈 경로는 ./gradlew serviceGraph 의 serviceModules. CI 의 jar 만들기 단계가 같은 일을 한다)
 #
 # 1) 기반 이미지(docker/Dockerfile, 캐시 없음)를 서비스마다 만든다. 베이스는 다이제스트로 고정한다.
 # 2) MySQL(스키마 · 시드) · Redis · Floci(큐)를 띄운다(compose.yaml · seed.sql).
 # 3) 기반 이미지를 그대로 띄워 학습한다. 캐시는 -XX:AOTCacheOutput 으로 JVM 이 끝날 때 쓰인다.
 #      workload — 끝까지 띄워 대표 요청을 넣고(workload/*.js) 정상 종료한다. 기동 + 요청 경로의 클래스와 메서드 프로파일이 담긴다
-#      startup  — 빈을 모두 만든 뒤 lifecycle 시작 전에 끝낸다(-Dspring.context.exit=onRefresh). 요청이 없는 서비스(worker · batch)
+#      startup  — 빈을 모두 만든 뒤 lifecycle 시작 전에 끝낸다(-Dspring.context.exit=onRefresh). 요청이 없는 서비스(worker · batch 둘)
 # 4) 학습한 그 이미지에 캐시를 얹는다(docker/Dockerfile.aot → <FINAL_REPO>:<서비스>). 다시 빌드한 이미지에 얹으면 안 된다 —
 #    JVM 은 jar 가 학습 때와 같은지 보지 않아, 어긋나면 거절 대신 캐시의 옛 클래스를 실행한다(JDK 25 실측).
 # 5) 검증: 최종 이미지를 그 ENTRYPOINT 에 -XX:AOTMode=on 을 더해 띄운다 — JDK · 캐시 경로 · 모듈 구성이 어긋나 캐시를 받지 못하면
@@ -77,7 +78,7 @@ trap cleanup EXIT
 # 학습 방식별 서비스. 새 서비스는 둘 중 하나에 넣어야 학습이 돈다 — 빠지면 실패한다(캐시 없는 이미지가 조용히 나가지 않게).
 # 요청 학습은 서비스 사이를 오가므로 이 순서로 띄우고, 모두 있어야 한다.
 WORKLOAD_SERVICES="member catalog preorder order payment waitingroom"
-STARTUP_SERVICES="worker batch"
+STARTUP_SERVICES="worker batch-reconciliation batch-imagecleanup"
 mode_of() {
   case " $WORKLOAD_SERVICES " in *" $1 "*) echo workload; return ;; esac
   case " $STARTUP_SERVICES " in *" $1 "*) echo startup; return ;; esac
@@ -89,6 +90,8 @@ for jar in "$DIST"/*/app.jar; do
   [ -e "$jar" ] || { echo "dist/<서비스>/app.jar 가 없다" >&2; exit 1; }
   s=$(basename "$(dirname "$jar")")
   mode_of "$s" > /dev/null || { echo "학습 방식이 정해지지 않은 서비스: $s (train.sh 의 mode_of)" >&2; exit 1; }
+  # 없으면 docker 가 빈 디렉터리를 만들어 붙여, 예시 설정 없이 학습한다
+  [ -f "$DIST/$s/application.yml.example" ] || { echo "dist/$s/application.yml.example 가 없다" >&2; exit 1; }
   services+=("$s")
 done
 for s in $WORKLOAD_SERVICES; do
@@ -206,10 +209,7 @@ app_json() {
                 "spring.http.serviceclient.payment-confirm.base-url": url("payment")},
         payment: {"spring.http.serviceclient.toss.base-url": "http://127.0.0.1:\($toss)"},
         waitingroom: {"waitingroom.relay.preorder-uri": url("preorder")},
-        worker: {"spring.cloud.aws.sqs.endpoint": "http://floci:4566"},
-        batch: {"external-mock.datasource.url": "jdbc:mysql://mysql:3306/external_mock?serverTimezone=UTC",
-                "external-mock.datasource.username": $dbuser,
-                "external-mock.datasource.password": $dbpw}
+        worker: {"spring.cloud.aws.sqs.endpoint": "http://floci:4566"}
       }[$s] // {})'
 }
 
@@ -220,7 +220,7 @@ app_container() {
   shift 3
   docker run $how --name "$name" --label "$PROJECT" --network "$NETWORK" --network-alias "$s" \
     --cpus "$TRAIN_CPUS" --memory "$TRAIN_MEMORY" \
-    -v "$ROOT/$s/src/main/resources/application.yml.example:/config/application.yml:ro" \
+    -v "$DIST/$s/application.yml.example:/config/application.yml:ro" \
     -e SPRING_CONFIG_ADDITIONAL_LOCATION=file:/config/ \
     -e SPRING_APPLICATION_JSON="$(app_json "$s")" \
     -e WAITING_TOKEN_SECRET="$WAITING_SECRET" \

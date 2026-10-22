@@ -16,6 +16,10 @@ ext {
     resilience4jVersion = '2.4.0'
 }
 
+// 서비스(부트 모듈) 이름 — ECR 저장소 · ECS 서비스 · 이미지 태그 · -PreleaseVersion.<이름> 이 이 이름을 쓴다.
+// 경로에서 앞 콜론을 떼고 나머지 콜론을 하이픈으로 바꾼다(:order → order, :batch:reconciliation → batch-reconciliation).
+def serviceNameOf = { Project p -> p.path.substring(1).replace(':', '-') }
+
 subprojects {
     // common 처럼 소스가 없는 중간 컨테이너는 건너뛴다. 붙이면 빈 jar 가 만들어진다.
     if (!file('src').isDirectory()) {
@@ -56,12 +60,13 @@ subprojects {
         // MANIFEST 는 release 버전이 있을 때만 건드린다 — 지정하면 그 속성이 Boot 가 두는 자리(주 섹션 끝)가 아니라 앞쪽에 들어가,
         // 버전 없는 jar 까지 바이트가 바뀌고 jar 키가 흔들린다. 버전 없는 jar 는 Boot 가 프로젝트 버전을 넣은 그대로 둔다.
         // build-info 의 time 을 빼야 jar 가 재현 가능하게 남는다.
-        def releaseVersion = providers.gradleProperty("releaseVersion.${project.name}")
+        def releaseVersion = providers.gradleProperty("releaseVersion.${serviceNameOf(project)}")
         def serviceVersion = releaseVersion.orElse(project.version.toString())
         springBoot {
             buildInfo {
                 excludes = ['time']
                 properties {
+                    name = serviceNameOf(project)   // 중첩 모듈도 잎 이름이 아니라 서비스 이름으로 남긴다
                     version = serviceVersion
                     additional.put('commit', providers.environmentVariable('GIT_SHA'))
                 }
@@ -114,10 +119,15 @@ tasks.register('serviceGraph') {
         }
 
         // 서비스 = 부트 플러그인이 붙은 모듈. 목록을 손으로 적지 않는다.
-        def services = rootProject.subprojects
-                .findAll { it.plugins.hasPlugin('org.springframework.boot') }
-                .collect { it.name }
-                .toSorted()
+        // CI 는 이름으로 이미지 · 저장소를, serviceModules 의 path 로 bootJar 를, dir 로 jar · 예시 설정을 찾는다.
+        def bootProjects = rootProject.subprojects.findAll { it.plugins.hasPlugin('org.springframework.boot') }
+        def services = bootProjects.collect { serviceNameOf(it) }.toSorted()
+        if (services.toSet().size() != services.size()) {
+            throw new GradleException("서비스 이름이 겹친다(경로의 콜론을 하이픈으로 바꾼 이름): ${services}")
+        }
+        def serviceModules = new TreeMap(bootProjects.collectEntries { p ->
+            [(serviceNameOf(p)): [path: p.path, dir: dirs[p.path]]]
+        })
 
         // 테스트 매트릭스용. 소스가 있는 모듈만 — 빈 컨테이너는 돌릴 게 없다.
         def modules = rootProject.subprojects
@@ -141,7 +151,8 @@ tasks.register('serviceGraph') {
 
         // version 은 프로젝트 버전이다. release 의 jar 키가 MANIFEST 의 버전을 이 값으로 되돌려 해시한다(.github/scripts/jar_content_key.py).
         def json = groovy.json.JsonOutput.toJson(
-                [projects: dirs, services: services, modules: modules, closures: closures, version: rootProject.version.toString()])
+                [projects: dirs, services: services, serviceModules: serviceModules, modules: modules, closures: closures,
+                 version: rootProject.version.toString()])
         def out = new File(rootProject.buildDir, 'service-graph.json')
         out.parentFile.mkdirs()
         out.text = groovy.json.JsonOutput.prettyPrint(json)

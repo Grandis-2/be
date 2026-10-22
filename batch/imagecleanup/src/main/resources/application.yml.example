@@ -1,0 +1,41 @@
+spring:
+  application:
+    name: batch-imagecleanup
+  main:
+    web-application-type: none
+  datasource:
+    # socketTimeout — 드라이버가 DB 응답을 기다리는 상한(밀리초). 네트워크가 응답 없이 끊겨도 정리가 무한정 서 있지 않게 30분을 둔다
+    url: jdbc:mysql://localhost:3306/shop?serverTimezone=UTC&characterEncoding=UTF-8&socketTimeout=1800000
+    # 운영은 당분간 정합성 검사와 같은 batch 계정을 쓴다. 사진 정리는 업무 표는 읽기만, images 삭제와 삭제 대기(image_deletions)
+    # 쓰기만 한다 — 필요한 권한의 정본은 ImageCleanupAccountTest 의 GRANT 다
+    username: nova
+    password: CHANGE_ME
+    hikari:
+      # MySQL 서버 기본값은 REPEATABLE READ 다. 다른 서비스와 같게 READ COMMITTED 로 연다(행 삭제 트랜잭션은 코드에서도 지정한다)
+      transaction-isolation: TRANSACTION_READ_COMMITTED
+      maximum-pool-size: 10
+  jpa:
+    # 정본은 flyway-project/migrations. 최신 구조 덤프는 bash flyway-project/verify.sh 의 build/flyway/schema.sql.
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+    open-in-view: false
+
+# 안 쓰는 사진 정리 — 기준 시간이 지난 UNUSED 사진(images)의 행과 S3 객체를 지운다. 띄우면 한 번 정리하고 끝난다(실행 시각은
+# 인프라의 Scheduler, 매일 05:00 KST). 아래는 코드 기본값이라 바꿀 때만 적는다. 기본은 dry-run(대상을 세어 로그만 남김)이다.
+# catalog 가 드로우 생성 시간 예산을 확인했다고 알리면 운영 설정에서 끈다
+# nova:
+#   batch:
+#     image-cleanup:
+#       retention: 24h                 # 기준 시간. UNUSED 가 된 뒤 이만큼 지난 사진만 지운다. 1h 보다 짧으면 뜨지 않는다
+#       chunk-size: 500
+#       dry-run: true                  # 끄면 실제로 지운다. 끌 때는 아래 업로드 버킷이 있어야 한다(없으면 뜨지 않는다)
+#   # 지울 사진이 있는 업로드 버킷 — catalog 가 올리는 버킷이라 설정 이름도 같다. 배포 환경은 인프라가 넣고, 자격 증명은 태스크 역할
+#   # (업로드 버킷 DeleteObject 권한)을 쓴다. 로컬 에뮬레이터(Floci)에서 지워 볼 때만 연다
+#   upload:
+#     bucket: CHANGE_ME
+#     region: ap-northeast-2
+#     endpoint: http://localhost:4566

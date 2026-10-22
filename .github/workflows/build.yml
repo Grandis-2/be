@@ -66,9 +66,11 @@ jobs:
           [ "$(echo "$list" | jq 'length')" -gt 0 ] \
             && echo "any=true" >> "$GITHUB_OUTPUT" \
             || echo "any=false" >> "$GITHUB_OUTPUT"
-          # 영향받는 모듈 중 서비스(이미지가 되는 것)가 있는가 — AOT 학습 검증을 돌릴지 정한다
-          echo "services=$(jq -r --argjson m "$list" \
-            '[.services[] | ":" + .] - ([.services[] | ":" + .] - $m) | length > 0' build/service-graph.json)" >> "$GITHUB_OUTPUT"
+          # 영향받는 모듈 중 서비스(이미지가 되는 것)가 있는가 — AOT 학습 검증을 돌릴지 정한다.
+          # 대입으로 먼저 받아 jq 실패가 set -e 에 걸리게 한다(echo 인자 안이면 빈 값으로 aot · otel 잡을 조용히 건너뛴다)
+          services=$(jq -r --argjson m "$list" \
+            '[.serviceModules[].path] - ([.serviceModules[].path] - $m) | length > 0' build/service-graph.json)
+          echo "services=$services" >> "$GITHUB_OUTPUT"
 
           {
             echo "## 테스트 대상"
@@ -145,7 +147,11 @@ jobs:
           python3 - <<'PY'
           import glob, os, re, sys
           module = os.environ['MODULE']
+          # 경로 → 디렉터리는 기본 배치(serviceGraph 의 projects 와 같다). 모듈 디렉터리를 옮겨 틀리면 "테스트 없음" 으로 통과하지 않게 멈춘다
           d = module.strip(':').replace(':', '/')
+          if not os.path.isdir(d):
+              print(f'::error::{module} 의 디렉터리 {d} 가 없다 — projectDir 를 옮겼으면 이 단계가 serviceGraph 의 projects 를 읽게 고친다')
+              sys.exit(1)
           has_tests = os.path.isdir(os.path.join(d, 'src', 'test'))
           files = glob.glob(f'{d}/build/test-results/test/*.xml')
           tot = {'tests': 0, 'skipped': 0, 'failures': 0, 'errors': 0}
@@ -202,7 +208,7 @@ jobs:
 
   # 이미지의 AOT 캐시 학습(docker/aot-training)을 main 승격 전에 미리 돌려 본다. 이미지를 올리지 않는다.
   # 학습 시나리오는 실제 API 를 부르므로 API 가 바뀌면 깨진다 — release 가 운영 DB 를 마이그레이션한 뒤가 아니라 승격 전에 빨개지게 한다.
-  # 서비스 8개를 모두 띄워 10분 남짓 걸려 PR 에서는 돌리지 않고 promote.yml 이 부를 때만 돈다. 서비스가 영향받지 않으면 건너뛴다.
+  # 서비스를 모두 띄워 10분 남짓 걸려 PR 에서는 돌리지 않고 promote.yml 이 부를 때만 돈다. 서비스가 영향받지 않으면 건너뛴다.
   aot:
     needs: graph
     if: github.event_name != 'pull_request' && needs.graph.outputs.services == 'true'
@@ -225,11 +231,14 @@ jobs:
         run: |
           set -euo pipefail
           ./gradlew serviceGraph -q --no-daemon > /dev/null
-          jq -r '.services[] | ":" + . + ":bootJar"' build/service-graph.json | xargs -r ./gradlew --no-daemon
+          jq -r '.serviceModules[].path + ":bootJar"' build/service-graph.json | xargs -r ./gradlew --no-daemon
           for s in $(jq -r '.services[]' build/service-graph.json); do
-            jar=$(ls "$s"/build/libs/*.jar | grep -v -- '-plain.jar$')
+            dir=$(jq -er --arg s "$s" '.serviceModules[$s].dir' build/service-graph.json)
+            jar=$(ls "$dir"/build/libs/*.jar | grep -v -- '-plain.jar$')
             mkdir -p "dist/$s"
             cp "$jar" "dist/$s/app.jar"
+            # 학습 컨테이너가 붙이는 설정(train.sh)
+            cp "$dir/src/main/resources/application.yml.example" "dist/$s/"
           done
 
       - name: 학습 · 검증
@@ -260,9 +269,10 @@ jobs:
         run: |
           set -euo pipefail
           ./gradlew serviceGraph -q --no-daemon > /dev/null
-          jq -r '.services[] | ":" + . + ":bootJar"' build/service-graph.json | xargs -r ./gradlew --no-daemon
+          jq -r '.serviceModules[].path + ":bootJar"' build/service-graph.json | xargs -r ./gradlew --no-daemon
           for s in $(jq -r '.services[]' build/service-graph.json); do
-            jar=$(ls "$s"/build/libs/*.jar | grep -v -- '-plain.jar$')
+            dir=$(jq -er --arg s "$s" '.serviceModules[$s].dir' build/service-graph.json)
+            jar=$(ls "$dir"/build/libs/*.jar | grep -v -- '-plain.jar$')
             mkdir -p "dist/$s"
             cp "$jar" "dist/$s/app.jar"
           done

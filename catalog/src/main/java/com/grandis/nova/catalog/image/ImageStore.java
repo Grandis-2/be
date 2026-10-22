@@ -14,7 +14,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * 이미지 표(images). 행은 업로드가 UNUSED 로 넣고, 상품 · 홍보 저장이 붙이고(USED) 뗀다(UNUSED). 지우기는 정리 배치(batch)가 한다.
+ * 이미지 표(images). 행은 업로드가 UNUSED 로 넣고, 상품 · 홍보 저장이 붙이고(USED) 뗀다(UNUSED). 지우기는 사진 정리(batch-imagecleanup)가 한다.
  * 시각은 앱 시계의 UTC 로 넣는다 — 배치가 같은 기준으로 기준 시각을 계산한다.
  * 잠금 · 갱신은 전부 id(PRIMARY)로 건다 — object_key 로 걸면 id 로 지우는 배치와 다른 인덱스 순서로 잠가 교착한다(MySQL 8.4.11 실측).
  */
