@@ -295,6 +295,28 @@ class ReadCacheGenerationTest {
         return thread;
     }
 
+    @Test
+    @DisplayName("밖에서 읽는 세대 번호(generation)는 조회가 키에 넣는 번호와 같다 — 올리면 늘고, 되돌아가면 본 번호보다 크게, 끈 캐시 · Redis 실패면 비어 있다")
+    void generationMatchesWhatLookupsUse() {
+        redis.opsForValue().set(GENERATION, "5");
+        ReadCache cache = new ReadCache(redis, JSON, "svc");
+        ReadCache.Spec<Item> spec = cache.spec("item", Item.class, Duration.ofMinutes(10));
+        assertThat(cache.generation("products")).hasValue(5);
+        cache.get(spec, "products", "1", () -> new Item("v"));
+        assertThat(redis.keys("svc:cache:item:*")).singleElement().asString().contains(":products.5:");
+
+        cache.bumpNow("products");
+        assertThat(cache.generation("products")).as("올린 뒤").hasValue(6);
+
+        redis.opsForValue().set(GENERATION, "2");   // 복원으로 되돌아갔다
+        assertThat(cache.generation("products")).as("본 번호(6)보다 크게 올려 읽는다").hasValue(7);
+        assertThat(generation()).isEqualTo(7);
+
+        assertThat(ReadCache.off(redis, JSON, "svc").generation("products")).as("끈 캐시").isEmpty();
+        redis.opsForValue().set(GENERATION, "not-a-number");
+        assertThat(cache.generation("products")).as("못 읽음").isEmpty();
+    }
+
     private static void resume(PausingRedisTemplate template, Thread thread) throws InterruptedException {
         template.resume.countDown();
         thread.join(10_000);
