@@ -457,6 +457,25 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
+    @DisplayName("Redis 장애 중에 관리자가 상품을 숨겨도(세대 올리기는 미뤄짐) 쓴 이 인스턴스의 홍보 카드에서는 바로 빠진다 — 마지막 세대의 카드도 버린다")
+    void hiddenDuringRedisOutageLeavesThisInstanceAtOnce() throws Exception {
+        UUID productId = preorderProduct("장애 중 숨김");
+        UUID promotionId = promotionOf(productId, "장애 중 홍보");
+        long loaded = System.nanoTime();   // 첫 적재 전 — 마지막 조회까지 이 안이어야 만료가 아니라 비우기로 빠진 것이다
+        assertThat(promotionCardTitles(promotionId)).containsExactly("장애 중 숨김");
+        RedisContainerConfig.pause();
+        try {
+            assertThat(promotionCardTitles(promotionId)).as("장애 중엔 마지막 세대의 메모리 카드").containsExactly("장애 중 숨김");
+            admin(patch(ADMIN + "/{id}/visibility", productId), "{ \"visible\": false }").andExpect(status().isOk());
+            assertThat(promotionCardTitles(promotionId)).as("쓴 인스턴스는 바로 빠진다").isEmpty();
+        } finally {
+            RedisContainerConfig.unpause();
+        }
+        assertThat(Duration.ofNanos(System.nanoTime() - loaded)).as("첫 적재부터 TTL 안 — 만료가 아니라 비우기로 빠졌다")
+                .isLessThan(CatalogReadCache.PRODUCT_TTL);
+    }
+
+    @Test
     @DisplayName("빈 홍보 카드(묶은 상품이 모두 숨김)는 넣지 않는다 — DB 로 다시 공개하면 TTL 을 기다리지 않고 바로 보인다")
     void emptyPromotionCardsAreNotCached() throws Exception {
         java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
