@@ -365,7 +365,7 @@ class ReadCacheRefreshTest {
         cache.entry(spec, "g", "k", () -> load("v1"));   // 세대 1
         clock.advance(Duration.ofSeconds(24));
         cache.entry(spec, "g", "k", () -> load("갱신"));   // 세대 1 로 맡김
-        redis.delete("svc:cache:gen:g");   // 지금 세대 0
+        redis.opsForValue().set("svc:cache:gen:g", "0");   // 지금 세대 0 — 맡길 때(1)보다 작다
         tasks.runAll();
         assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_NEWER);
         assertThat(loads.get()).as("갱신은 읽지 않았다").isEqualTo(1);
