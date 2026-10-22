@@ -4,6 +4,7 @@ import com.grandis.nova.waitingroom.domain.product.ProductState;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
 
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -11,12 +12,20 @@ import java.util.Optional;
  *
  * @param publishedAtMillis 리더가 재료를 읽은 Redis 시각. 나이는 이 값으로 잰다
  * @param brakeFactor       운영값에 곱한 브레이크 배율(1 = 걸리지 않음). meta 의 전역 속도는 곱한 뒤 값이다
+ * @param capacity          전역 속도를 정할 때 본 운영값과 preorder 용량
  */
 public record GatewaySnapshot(Map<String, ProductState> products, SnapshotMeta meta, long publishedAtMillis,
-                              double brakeFactor) {
+                              double brakeFactor, CapacityStatus capacity) {
 
     public GatewaySnapshot {
         products = Map.copyOf(products);
+        Objects.requireNonNull(capacity, "capacity 는 필수다. 모르면 CapacityStatus.MISSING");
+    }
+
+    /** 운영값 · 용량을 모르는 재료. 적용된 전역 속도는 브레이크 뒤 값이라 운영값으로 쓰지 않는다. */
+    public GatewaySnapshot(Map<String, ProductState> products, SnapshotMeta meta, long publishedAtMillis,
+                           double brakeFactor) {
+        this(products, meta, publishedAtMillis, brakeFactor, CapacityStatus.MISSING);
     }
 
     public GatewaySnapshot(Map<String, ProductState> products, SnapshotMeta meta, long publishedAtMillis) {

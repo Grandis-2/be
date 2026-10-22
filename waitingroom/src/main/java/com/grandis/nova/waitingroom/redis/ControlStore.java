@@ -143,6 +143,11 @@ public class ControlStore {
                 .collectMap(Map.Entry::getKey, Map.Entry::getValue);
     }
 
+    /** preorder 태스크 용량 행(태스크 ID → 값). preorder 가 적고 지운다 — 대기열은 읽기만 한다. */
+    public Mono<Map<String, String>> readCapacity(String key) {
+        return redis.<String, String>opsForHash().entries(key).collectMap(Map.Entry::getKey, Map.Entry::getValue);
+    }
+
     public Mono<QueueDepth> depth(String productKey) {
         return scripts.list(scripts.depth, RedisKeys.depth(productKey), List.of())
                 .map(reply -> new QueueDepth(LuaScripts.number(reply, 0), Long.parseLong(LuaScripts.text(reply, 1))));

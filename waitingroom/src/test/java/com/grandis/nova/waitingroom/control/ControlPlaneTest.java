@@ -148,6 +148,7 @@ class ControlPlaneTest {
             ScheduleResync resync = new ScheduleResync(store, reason -> Mono.empty(), metrics,
                     new ScheduleResyncProperties(null), Clock.systemUTC());
             plane = new ControlPlane(store, leadership, new AllocationRound(store, new AdmissionProperties(10L, 0.7), AdmissionTicket.of(TestJwts.TOKEN_SECRET, List.of(), null), FAST,
+                    CapacityProperties.defaults(),
                     metrics, leadership, resync, new Brake(BrakeTest.DEFAULTS, metrics)),
                     holder, clock, new IdlePassCounter(), new RelayOutcomeCounter(), FAST, metrics, new LoopBeats());
         }

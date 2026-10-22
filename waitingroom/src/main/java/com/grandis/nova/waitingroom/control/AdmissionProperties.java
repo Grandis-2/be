@@ -5,9 +5,9 @@ import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 /**
  * 입장 속도 기본값 — 전 모델 합산 초당 입장 인원, 한산한 모델이 노드 몫에서 줄 없이 통과시킬 비율, 모델별 상한.
- * 운영 중에는 Redis 운영값이 이긴다(관리자 API). preorder 를 늘리면 전역 속도를 운영값으로 올리고, 최댓값을 넘으면 최댓값도 올려 배포한다.
+ * 운영 중에는 Redis 운영값이 이긴다(관리자 API). 전역 속도는 상한이라, preorder 용량 표시가 있으면 그 합을 넘지 않는다(CapacityProperties).
  *
- * @param maxGlobalCredit 운영값으로 정할 수 있는 입장 속도의 최댓값(전역 · 모델별). preorder 대수를 바꾸면 같이 바꾼다
+ * @param maxGlobalCredit 운영값으로 정할 수 있는 입장 속도의 최댓값(전역 · 모델별). preorder 용량 합도 이 값에서 자른다
  */
 @ConfigurationProperties("waitingroom.admission")
 public record AdmissionProperties(Long globalCredit, Double idleCreditRatio, Long productCap, Long maxGlobalCredit) {

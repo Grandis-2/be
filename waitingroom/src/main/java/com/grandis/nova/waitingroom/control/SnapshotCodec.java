@@ -30,6 +30,8 @@ final class SnapshotCodec {
     static final String LEAVE_GRACE = "#leave-grace-sec";
     static final String PUBLISHED_AT = "#at";
     static final String BRAKE = "#brake";
+    /** "운영값|용량 합|다 뜬 태스크|갓 뜬 태스크". 용량을 모르면 합이 -1 이다. */
+    static final String CAPACITY = "#capacity";
 
     private SnapshotCodec() {
     }
@@ -47,6 +49,9 @@ final class SnapshotCodec {
         fields.put(LEAVE_GRACE, String.valueOf(meta.leaveGrace().toSeconds()));
         fields.put(PUBLISHED_AT, String.valueOf(snapshot.publishedAtMillis()));
         fields.put(BRAKE, String.valueOf(snapshot.brakeFactor()));
+        CapacityStatus capacity = snapshot.capacity();
+        fields.put(CAPACITY, capacity.operationalCredit() + "|" + capacity.sum() + "|" + capacity.ready() + "|"
+                + capacity.warming());
         return fields;
     }
 
@@ -66,7 +71,8 @@ final class SnapshotCodec {
                 }
             });
             return Optional.of(new GatewaySnapshot(products, new SnapshotMeta(globalCredit, gateways, maxWait,
-                    leaveGrace(fields.get(LEAVE_GRACE))), publishedAt, brakeFactor(fields.get(BRAKE))));
+                    leaveGrace(fields.get(LEAVE_GRACE))), publishedAt, brakeFactor(fields.get(BRAKE)),
+                    capacity(fields.get(CAPACITY))));
         } catch (RuntimeException e) {
             return Optional.empty();
         }
@@ -94,6 +100,26 @@ final class SnapshotCodec {
             return LeaveGrace.accepts(seconds) ? Duration.ofSeconds(seconds) : LeaveGrace.MIN;
         } catch (NumberFormatException e) {
             return LeaveGrace.MIN;
+        }
+    }
+
+    /** 없거나 깨졌으면 운영값도 용량도 모르는 것으로 읽는다 — 이 필드를 모르는 옛 리더가 낸 재료다. 판정에는 쓰지 않고 보이기만 한다. */
+    private static CapacityStatus capacity(String value) {
+        String[] parts = value == null ? new String[0] : value.split("\\|", -1);
+        if (parts.length != 4) {
+            return CapacityStatus.MISSING;
+        }
+        try {
+            long operational = Long.parseLong(parts[0]);
+            long sum = Long.parseLong(parts[1]);
+            int ready = Integer.parseInt(parts[2]);
+            int warming = Integer.parseInt(parts[3]);
+            if (operational < CapacityStatus.UNKNOWN || sum < CapacityStatus.UNKNOWN || ready < 0 || warming < 0) {
+                return CapacityStatus.MISSING;
+            }
+            return new CapacityStatus(operational, sum, ready, warming);
+        } catch (NumberFormatException e) {
+            return CapacityStatus.MISSING;
         }
     }
 
