@@ -323,7 +323,7 @@ public final class ReadCache {
             return bypass(spec, generation, current, id, loader, storable);
         }
         if (cached != null) {
-            Entry<T> entry = parseStored(cached, spec, key);
+            Entry<T> entry = parseStored(cached, spec, key, false);
             if (entry != null) {
                 boolean submitted = refresher != null
                         && !clock.instant().isBefore(entry.loadedAt().plus(spec.ttl().multipliedBy(REFRESH_AFTER_PERCENT).dividedBy(100)))
@@ -571,7 +571,7 @@ public final class ReadCache {
                     cached = null;
                     path = LoadPath.BYPASS;
                 }
-                Entry<T> stored = parseStored(cached, spec, key);
+                Entry<T> stored = parseStored(cached, spec, key, true);
                 if (stored != null) {
                     events.served(spec.name(), Outcome.HIT);
                     mine.complete(stored);
@@ -596,22 +596,33 @@ public final class ReadCache {
 
     /**
      * 넣어 둔 값을 푼다 — 없거나, 모양이 다르거나, 비었으면(JSON null · 값 null) 못 읽는 값으로 보고 null(다시 채운다). 이 클래스는 null 값을 넣지
-     * 않으므로 null 은 밖에서 쓴 키다. 조회와 자리를 잡은 뒤의 다시 보기가 같이 쓴다 — 같은 값에 두 갈래가 다르게 답하지 않게.
+     * 않으므로 null 은 밖에서 쓴 키다. 조회와 자리를 잡은 뒤의 다시 보기가 같이 쓴다 — 같은 값에 두 갈래가 다르게 답하지 않게. 못 읽은 이유는
+     * 조회에서만 경고로 남긴다 — 다시 보기는 대개 같은 값을 한 번 더 읽은 것이라 같은 경고가 요청마다 두 번 남지 않게 debug 로 둔다.
+     *
+     * @param recheck 자리를 잡은 뒤의 다시 보기인가
      */
-    private <T> Entry<T> parseStored(String cached, Spec<T> spec, String key) {
+    private <T> Entry<T> parseStored(String cached, Spec<T> spec, String key, boolean recheck) {
         if (cached == null) {
             return null;
         }
         try {
             Stored<T> stored = json.readValue(cached, json.getTypeFactory().constructParametricType(Stored.class, spec.type()));
             if (stored == null || stored.value() == null) {
-                log.warn("읽기 캐시 값이 비어(null) 다시 채운다 key={}", key);
+                unreadable(recheck, key, "값이 비어 있다(null)");
                 return null;
             }
             return new Entry<>(stored.value(), Instant.ofEpochMilli(stored.loadedAt()));
         } catch (JacksonException e) {
-            log.warn("읽기 캐시 값을 읽지 못해 다시 채운다 key={}: {}", key, e.toString());
+            unreadable(recheck, key, e.toString());
             return null;
+        }
+    }
+
+    private static void unreadable(boolean recheck, String key, String reason) {
+        if (recheck) {
+            log.debug("읽기 캐시 값을 못 읽어 다시 채운다(자리를 잡은 뒤 다시 보기) key={}: {}", key, reason);
+        } else {
+            log.warn("읽기 캐시 값을 못 읽어 다시 채운다 key={}: {}", key, reason);
         }
     }
 
