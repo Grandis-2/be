@@ -322,6 +322,7 @@ public final class ReadCache {
             log.warn("읽기 캐시 Redis 호출 실패 — 캐시 없이 간다: {}", e.toString());
             return bypass(spec, generation, current, id, loader, storable);
         }
+        boolean warned = false;
         if (cached != null) {
             Entry<T> entry = parseStored(cached, spec, key, false);
             if (entry != null) {
@@ -331,10 +332,10 @@ public final class ReadCache {
                 events.served(spec.name(), submitted ? Outcome.HIT_REFRESH : Outcome.HIT);
                 return entry;
             }
+            warned = true;   // parseStored 는 있는 값을 못 읽으면 늘 경고하고 null 을 낸다 — 다시 보기가 같은 경고를 또 남기지 않게 넘긴다
         }
         // 완성된 키(세대 번호 포함)로 줄 세운다 — 세대가 오른 뒤 온 요청이 옛 세대의 진행 중 조회를 같이 받지 않게
-        // 여기까지 온 값이 있으면 못 읽는 값이었고 위에서 경고했다 — 다시 보기가 같은 경고를 또 남기지 않게 넘긴다
-        return load(key, key, spec, loader, storable, generation, current, cached != null);
+        return load(key, key, spec, loader, storable, generation, current, warned);
     }
 
     /**
@@ -533,7 +534,7 @@ public final class ReadCache {
      * 같이 받는 쪽은 {@link #WAIT_FOR_LOAD} 까지만 기다리고 넘으면 503(다시 시도) — 멈춘 조회 하나에 같은 상품 요청이 전부 묶이지 않게.
      * 넘었다고 각자 DB 로 가게 풀지 않는다(DB 가 느린 때 부하가 그만큼 는다). 진행 중인 조회는 그대로 두고 끝나면 자리가 빈다.
      *
-     * @param warned 첫 조회에서 못 읽는 값을 보고 이미 경고했는가 — 그러면 다시 보기의 같은 결과는 debug 로만 남긴다
+     * @param warned 첫 조회에서 못 읽는 값을 보고 이미 경고했는가 — 그러면 다시 보기에서 못 읽어도(이유가 달라도) debug 로만 남긴다
      */
     @SuppressWarnings("unchecked")
     private <T> Entry<T> load(String slot, String key, Spec<T> spec, Function<LoadPath, T> loader, Predicate<T> storable, String generation,
@@ -600,7 +601,7 @@ public final class ReadCache {
     /**
      * 넣어 둔 값을 푼다 — 없거나, 모양이 다르거나, 비었으면(JSON null · 값 null) 못 읽는 값으로 보고 null(다시 채운다). 이 클래스는 null 값을 넣지
      * 않으므로 null 은 밖에서 쓴 키다. 조회와 자리를 잡은 뒤의 다시 보기가 같이 쓴다 — 같은 값에 두 갈래가 다르게 답하지 않게. 못 읽은 이유는
-     * 요청마다 한 번 경고로 남긴다 — 첫 조회에서 이미 경고한 요청의 다시 보기는 debug 로, 첫 조회에서 값이 없다가 다시 보기에서 처음 못 읽으면 경고로.
+     * 요청마다 많아야 한 번 경고로 남긴다 — 첫 조회에서 이미 경고한 요청의 다시 보기는 debug 로, 첫 조회에서 값이 없다가 다시 보기에서 처음 못 읽으면 경고로.
      *
      * @param warned 이 요청에서 이미 경고했는가
      */
