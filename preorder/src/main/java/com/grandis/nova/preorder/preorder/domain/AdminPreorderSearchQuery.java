@@ -6,9 +6,6 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
 
-import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -59,11 +56,11 @@ public class AdminPreorderSearchQuery {
         }
         if (search.from() != null) {
             conditions.add("p.created_at >= :from");
-            params.addValue("from", utc(search.from()));
+            params.addValue("from", ProgressSql.utc(search.from()));
         }
         if (search.to() != null) {
             conditions.add("p.created_at < :to");
-            params.addValue("to", utc(search.to()));
+            params.addValue("to", ProgressSql.utc(search.to()));
         }
         if (search.registerJobStatus() != null) {
             conditions.add("""
@@ -87,33 +84,8 @@ public class AdminPreorderSearchQuery {
             params.addValue("batchNumber", search.batchNumber());
         }
         if (search.progress() != null) {
-            progress(search.progress(), conditions, params);
+            conditions.addAll(ProgressSql.progress(search.progress(), params, ""));
         }
         return conditions.isEmpty() ? "" : " WHERE " + String.join(" AND ", conditions);
-    }
-
-    private void progress(AdminPreorderSearch.Progress progress, List<String> conditions,
-                          MapSqlParameterSource params) {
-        if (progress.registerAttempted() != null) {
-            conditions.add((progress.registerAttempted() ? "" : "NOT ") + """
-                    EXISTS (SELECT 1 FROM preorder_sync_jobs j
-                             WHERE j.preorder_id = p.id AND j.job_type = 'REGISTER' AND j.status <> 'PENDING')""");
-        }
-        if (progress.payableAfter() != null) {
-            conditions.add("p.payable_from > :payableAfter");
-            params.addValue("payableAfter", utc(progress.payableAfter()));
-        }
-        if (progress.payableUntil() != null) {
-            conditions.add("p.payable_from <= :payableUntil");
-            params.addValue("payableUntil", utc(progress.payableUntil()));
-        }
-        if (progress.paymentStarted() != null) {
-            conditions.add("p.payment_started_at IS " + (progress.paymentStarted() ? "NOT NULL" : "NULL"));
-        }
-    }
-
-    /** DB 는 UTC 벽시계 시각을 담는다. Timestamp 로 주고받으면 JVM 시간대만큼 어긋난다. */
-    private static LocalDateTime utc(Instant instant) {
-        return LocalDateTime.ofInstant(instant, ZoneOffset.UTC);
     }
 }
