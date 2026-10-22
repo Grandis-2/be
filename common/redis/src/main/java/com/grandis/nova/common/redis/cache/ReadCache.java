@@ -461,6 +461,7 @@ public final class ReadCache {
     private Long readGeneration(String generation) {
         // 본 번호는 세대를 읽기 전에 꺼낸다 — 읽은 뒤 꺼내면 그사이 다른 스레드가 더 큰 번호를 본 것과 섞여, 정상 올리기 뒤에도 되돌아간 것으로 본다
         Long seenBefore = highestGenerations.get(generation);
+        Instant asked = clock.instant();   // 확인 시각은 읽기 전 — 늦게 끝난 읽기가 확인을 실제보다 새것으로 남기지 않게
         Long current = call(() -> currentGeneration(generation));
         if (current == null) {
             return null;
@@ -475,8 +476,11 @@ public final class ReadCache {
         if (current == null) {
             return null;
         }
-        highestGenerations.merge(generation, current, Math::max);
-        confirmedAt.put(generation, clock.instant());
+        long highest = highestGenerations.merge(generation, current, Math::max);
+        if (current == highest) {
+            // 가장 큰 번호를 읽은 조회만 확인으로 센다 — 옛 번호를 읽은 조회가 늦게 끝나 새 번호의 확인 시각을 늘리지 않게
+            confirmedAt.merge(generation, asked, (before, now) -> now.isAfter(before) ? now : before);
+        }
         return current;
     }
 
