@@ -145,8 +145,10 @@ class DetailWarmupTest {
         int stockCalls = Seed.STOCK_CALLS.get() - before;
 
         assertThat(result.paths()).containsExactly("/api/v1/promotions/" + promotion, "/api/v1/products/" + inStock);
-        assertThat(result.requests()).as("모든 대상이 다른 서비스를 묻는다 — 상한에서 멈춘다").isEqualTo(DetailWarmup.MAX_DEPENDENT_REQUESTS);
-        assertThat(stockCalls).as("예열 요청 + 대상을 고르며 읽은 홍보 상세 하나").isBetween(1, DetailWarmup.MAX_DEPENDENT_REQUESTS + 1);
+        assertThat(result.requests()).as("모든 대상이 다른 서비스를 묻는다 — 대상을 고르며 읽은 홍보 상세 하나를 빼고 상한에서 멈춘다")
+                .isEqualTo(DetailWarmup.MAX_DEPENDENT_REQUESTS - 1);
+        assertThat(result.dependentRequests()).isEqualTo(DetailWarmup.MAX_DEPENDENT_REQUESTS);
+        assertThat(stockCalls).as("대상 고르기를 포함해 상한까지").isBetween(1, DetailWarmup.MAX_DEPENDENT_REQUESTS);
     }
 
     @Test
@@ -156,7 +158,7 @@ class DetailWarmupTest {
         DetailWarmup.Result result = withPromotionsHidden(List.of(), warmup::warm);
 
         assertThat(result.paths()).isNotEmpty().allMatch(path -> path.startsWith("/api/v1/products/"));
-        assertThat(result.requests()).isEqualTo(DetailWarmup.MAX_DEPENDENT_REQUESTS);
+        assertThat(result.requests()).as("상품 목록 조회 하나를 빼고 상한까지").isEqualTo(DetailWarmup.MAX_DEPENDENT_REQUESTS - 1);
         assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(DetailWarmup.DEFAULT_BUDGET.dividedBy(2));
     }
 
@@ -221,6 +223,13 @@ class DetailWarmupTest {
         if (!keys.isEmpty()) {
             redis.delete(keys);
         }
+    }
+
+    /** 기동 때 넣은 홍보도 끝나면 지난 기간으로 — 같은 DB 를 쓰는 다른 시험 클래스의 홍보 목록에 남지 않게. */
+    @org.junit.jupiter.api.AfterAll
+    static void retireSeededPromotion(@Autowired JdbcTemplate jdbcTemplate) {
+        jdbcTemplate.update("UPDATE promotions SET start_date = CURDATE() - INTERVAL 4 DAY, end_date = CURDATE() - INTERVAL 3 DAY WHERE id = ?",
+                (Object) UuidBinary.toBytes(Seed.promotionId));
     }
 
     private static HttpResponse<String> get(int port, String path) throws Exception {
