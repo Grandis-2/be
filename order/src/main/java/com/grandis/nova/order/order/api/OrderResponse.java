@@ -44,7 +44,7 @@ public record OrderResponse(
      *
      * @param orderItemId       order_items.id — /internal/order-items/{orderItemId} 의 키와 같다
      * @param modelName         주문 때 상품 모델명. 사전예약 · 모델명을 남기기 전에 만든 주문은 null
-     * @param imageUrl          주문 때 그 옵션의 사진. 사전예약 · 사진을 남기기 전에 만든 주문 · 사진이 없는 옵션은 null
+     * @param imageUrl          주문 때 그 옵션의 사진. 사진을 남기기 전에 만든 주문 · 사진이 없는 옵션 · 사진을 못 받은 사전예약 주문은 null
      * @param warrantyQuantity  그중 보증을 산 수량(사전예약은 0)
      * @param warrantyUnitPrice 보증 1개 가격(보증을 사지 않았으면 0)
      * @param lineAmount        단가 × 수량 + 보증가 × 보증 수량

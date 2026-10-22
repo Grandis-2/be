@@ -4,7 +4,7 @@ order 와 catalog 가 서로 부르는 내부 API 를 담는다(preorder 가 부
 
 - catalog → order: `GET /internal/order-items/{orderItemId}` — 리뷰 작성용 주문상품. order 가 응답을 만들고(`InternalOrderItemController` · `OrderQueryService.findItem`), catalog 의 리뷰 작성이 소비한다.
 - catalog → order: `GET /internal/order-items/delivered` — 리뷰를 쓸 수 있는 주문상품 목록의 재료. order 가 응답을 만들고(`InternalOrderItemController` · `OrderQueryService.findDeliveredPurchaseItems`), catalog 의 리뷰 작성 가능 목록이 소비한다.
-- order → catalog: `GET /internal/options` — 장바구니용 옵션 일괄 조회. catalog 가 응답을 만들고(`InternalOptionController` · `ProductOptionsQueryService.findOptions`), order 의 장바구니가 소비한다.
+- order → catalog: `GET /internal/options` — 장바구니용 옵션 일괄 조회. catalog 가 응답을 만들고(`InternalOptionController` · `ProductOptionsQueryService.findOptions`), order 의 장바구니 · 바로 구매 · 사전예약 주문 생성(사진만) · 드로우 회차 만들기가 소비한다.
 - catalog → order: `GET /internal/draws/gift-products/{productId}` — 상품 삭제의 드로우 증정품 확인. order 가 응답을 만들고(`InternalDrawController` · `DrawQueryService.giftInProgress`), catalog 의 상품 삭제(`ProductDeleteService`)가 소비한다.
 - catalog → order: `GET /internal/stocks` — 옵션별 남은 수량. order 가 응답을 만들고(`InternalStockController` · `StockQueryService.findAvailable`), catalog 의 상품 목록(품절) · 상세(남은 수량) · 관리자 증정품 후보(수량)가 소비한다. **토큰 없이 부른다.** 판매 준비(재고 행 유무)는 이 API 가 아니라 이벤트로 받는다(`order-catalog-events.md`).
 
@@ -130,6 +130,7 @@ BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, �
 | --- | --- | --- | --- |
 | 장바구니 조회 · 담기 · 장바구니 주문 생성 | order 장바구니 | 회원(USER) | 줄마다 표시할 상품 · 옵션 정보와 "살 수 있는가" 를 가릴 사실, 주문 스냅샷(가격 · 이름 · 모델명 · 사진 · 보증) |
 | 바로 구매 주문 생성 | order 주문 | 회원(USER) | 장바구니 주문과 같은 판정 · 주문 스냅샷 |
+| 사전예약 주문 생성 | order 주문 | 회원(USER) | 주문 내역에 남길 그 옵션의 사진(`imageUrl`)만 쓴다. 이름 · 단가는 예약 스냅샷이고, 이 호출이 실패해도 주문은 만들고 사진만 비운다 |
 | 럭키 드로우 회차 만들기 | order 드로우(관리자) | 관리자(ADMIN) | 증정품 옵션이 줄 수 있는 것인가, 회차 스냅샷(이름 · 모델명 · 사진) |
 
 **인증.** 호출자가 받은 회원 토큰을 그대로 싣는다(`Authorization: Bearer {accessToken}`). catalog 는 `common:security` 필터로 검증하고 USER · ADMIN 을 받는다(`/internal/**` 규칙 — 그 밖의 역할은 403).

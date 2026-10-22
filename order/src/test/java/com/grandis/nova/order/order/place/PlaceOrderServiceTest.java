@@ -4,6 +4,8 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.order.OrderErrorCode;
+import com.grandis.nova.order.client.catalog.CatalogOption;
+import com.grandis.nova.order.client.catalog.CatalogReader;
 import com.grandis.nova.order.client.preorder.PreorderPayability;
 import com.grandis.nova.order.client.preorder.PreorderReader;
 import com.grandis.nova.order.order.OrderLedger;
@@ -37,6 +39,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -58,7 +61,8 @@ class PlaceOrderServiceTest {
     OrderReader orderReader = mock(OrderReader.class);
     OutboxWriter outboxWriter = mock(OutboxWriter.class);
     PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
-    PlaceOrderService service = new PlaceOrderService(preorderReader, ledger, orderReader, outboxWriter, transactionManager);
+    CatalogReader catalog = mock(CatalogReader.class);
+    PlaceOrderService service = new PlaceOrderService(preorderReader, catalog, ledger, orderReader, outboxWriter, transactionManager);
 
     @BeforeEach
     void setUp() {
@@ -105,6 +109,41 @@ class PlaceOrderServiceTest {
         ArgumentCaptor<OrderDraft> draft = ArgumentCaptor.forClass(OrderDraft.class);
         verify(ledger).place(draft.capture(), any());
         assertThat(draft.getValue().lines()).singleElement().satisfies(line -> assertThat(line.modelName()).isNull());
+    }
+
+    // 사진은 예약 스냅샷에 없어 주문 때 catalog 의 그 옵션 사진을 남긴다(장바구니 · 바로 구매와 같은 값)
+    @Test
+    void preorderLineCarriesTheOptionImageFromCatalog() {
+        payable();
+        given(catalog.find(any(), eq(SESSION))).willAnswer(invocation -> {
+            UUID optionId = invocation.<java.util.Collection<UUID>>getArgument(0).iterator().next();
+            return java.util.Map.of(optionId, new CatalogOption(optionId, TestIds.id(3), "상품", null, "옵션", "SKU", BigDecimal.ONE, "ACTIVE",
+                    "PREORDER", "ACTIVE", true, true, new CatalogOption.Warranty(false, BigDecimal.ZERO), "https://img/preorder.webp", BigDecimal.ONE));
+        });
+        given(ledger.place(any(), any())).willReturn(order(OrderStatus.AWAITING_PAYMENT));
+
+        service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS);
+
+        ArgumentCaptor<OrderDraft> draft = ArgumentCaptor.forClass(OrderDraft.class);
+        verify(ledger).place(draft.capture(), any());
+        assertThat(draft.getValue().lines()).singleElement().satisfies(line -> assertThat(line.imageUrl()).isEqualTo("https://img/preorder.webp"));
+    }
+
+    // 사진은 표시용이라 catalog 가 응답하지 않거나 옵션을 돌려주지 않아도 주문은 만든다 — 사진만 비운다
+    @Test
+    void catalogFailureLeavesTheImageEmptyButPlacesTheOrder() {
+        payable();
+        given(catalog.find(any(), any())).willThrow(new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE))
+                .willReturn(java.util.Map.of());
+        given(ledger.place(any(), any())).willReturn(order(OrderStatus.AWAITING_PAYMENT));
+
+        assertThat(service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS).created()).isTrue();
+        assertThat(service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS).created()).isTrue();
+
+        ArgumentCaptor<OrderDraft> draft = ArgumentCaptor.forClass(OrderDraft.class);
+        verify(ledger, times(2)).place(draft.capture(), any());
+        assertThat(draft.getAllValues()).allSatisfy(placed ->
+                assertThat(placed.lines()).singleElement().satisfies(line -> assertThat(line.imageUrl()).isNull()));
     }
 
     @Test
@@ -186,6 +225,7 @@ class PlaceOrderServiceTest {
 
         assertThat(result.created()).isFalse();
         assertThat(result.order()).isEqualTo(stored);
+        verify(catalog, never()).find(any(), any());
     }
 
     // 받은 토큰을 preorder 호출까지 그대로 넘긴다.

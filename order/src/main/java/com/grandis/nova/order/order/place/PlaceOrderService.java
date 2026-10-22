@@ -4,6 +4,8 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.order.OrderErrorCode;
+import com.grandis.nova.order.client.catalog.CatalogOption;
+import com.grandis.nova.order.client.catalog.CatalogReader;
 import com.grandis.nova.order.client.preorder.PreorderPayability;
 import com.grandis.nova.order.client.preorder.PreorderReader;
 import com.grandis.nova.order.order.OrderLedger;
@@ -33,7 +35,8 @@ import java.util.UUID;
  * 사전예약 주문 생성(source=PREORDER). 장바구니 · 바로 구매 주문은 {@link PlaceCartOrderService} · {@link PlaceBuyNowOrderService} 가 만든다.
  * PAYABLE 예약 하나에 주문 하나(uq_order_preorder)를 만든다. 예약 정보는 preorder 서비스에 HTTP 로 묻는다(client.preorder).
  *
- * 순서: 결제 가능 확인(preorder, 트랜잭션 밖) → 본인 재대조 → 기존 주문 확인 → preorder 판정 적용 → 원장 place + 결제 시작 알림(트랜잭션).
+ * 순서: 결제 가능 확인(preorder, 트랜잭션 밖) → 본인 재대조 → 기존 주문 확인 → preorder 판정 적용 → 옵션 사진(catalog, 트랜잭션 밖 · 실패하면 비움)
+ * → 원장 place + 결제 시작 알림(트랜잭션).
  *
  * 결제 시작 알림(PREORDER_PAYMENT_STARTED)은 주문을 새로 만든 트랜잭션에서만 아웃박스에 적는다 — 예약 화면의 "결제 진행 중" 단계다.
  * 기존 주문을 돌려준 재요청(먼저 확인했든 중복 키로 부딪혔든)에는 적지 않는다. 예약당 주문은 하나라 알림도 예약당 한 번이다.
@@ -71,15 +74,17 @@ public class PlaceOrderService {
     static final int MAX_ATTEMPTS = 3;
 
     private final PreorderReader preorderReader;
+    private final CatalogReader catalog;
     private final OrderLedger ledger;
     private final OrderReader orderReader;
     private final OutboxWriter outboxWriter;
     private final TransactionTemplate writeTransaction;
     private final TransactionTemplate readTransaction;
 
-    public PlaceOrderService(PreorderReader preorderReader, OrderLedger ledger, OrderReader orderReader,
+    public PlaceOrderService(PreorderReader preorderReader, CatalogReader catalog, OrderLedger ledger, OrderReader orderReader,
                              OutboxWriter outboxWriter, PlatformTransactionManager transactionManager) {
         this.preorderReader = preorderReader;
+        this.catalog = catalog;
         this.ledger = ledger;
         this.orderReader = orderReader;
         this.outboxWriter = outboxWriter;
@@ -118,7 +123,7 @@ public class PlaceOrderService {
         }
 
         // 입력 검증은 트랜잭션 전에 끝낸다. 원장 안에서 던지면 트랜잭션이 rollback-only 가 된다.
-        OrderDraft draft = toCommand(customerId, preorder, shipTo).toDraft();
+        OrderDraft draft = toCommand(customerId, preorder, shipTo, optionImage(preorder.optionId(), sessionToken)).toDraft();
         EventCause cause = EventCause.user();
         for (int attempt = 1; ; attempt++) {
             try {
@@ -164,14 +169,29 @@ public class PlaceOrderService {
     }
 
     /**
-     * 옵션 하나 · 수량 1. 이름 · 단가는 예약 접수 시점 스냅샷을 그대로 옮긴다(카탈로그를 다시 읽지 않는다).
+     * 주문 내역 썸네일로 남길 그 옵션의 사진(catalog 의 imageUrl — 장바구니 · 바로 구매와 같은 값). 예약 스냅샷에는 사진이 없어 주문을 만들 때
+     * catalog 에 묻는다. 사진은 표시용이라 못 받아도 주문은 만든다 — catalog 가 응답하지 않거나 거절하면 비우고 WARN 만 남긴다.
+     * 주문을 새로 만들 때만 부른다(기존 주문을 돌려주는 재요청 · 거절되는 요청은 부르지 않는다).
+     */
+    private String optionImage(UUID optionId, String sessionToken) {
+        try {
+            CatalogOption option = catalog.find(List.of(optionId), sessionToken).get(optionId);
+            return option == null ? null : option.imageUrl();
+        } catch (RuntimeException e) {
+            log.warn("사전예약 주문의 옵션 사진을 catalog 에서 받지 못해 비운다 optionId={}", optionId, e);
+            return null;
+        }
+    }
+
+    /**
+     * 옵션 하나 · 수량 1. 이름 · 단가는 예약 접수 시점 스냅샷을 그대로 옮긴다(카탈로그를 다시 읽지 않는다). 사진만 주문 때 catalog 값이다.
      * 예약 내부 id 와 공개 UUID 는 같은 응답에서 함께 옮긴다 — 둘이 같은 예약이라는 것을 DB 가 아니라 이것이 보장한다.
      */
     private static PlaceOrderCommand toCommand(UUID customerId, PreorderPayability preorder,
-                                               PlaceOrderCommand.Address shipTo) {
+                                               PlaceOrderCommand.Address shipTo, String imageUrl) {
         return new PlaceOrderCommand(customerId, OrderSource.PREORDER, preorder.preorderInternalId(),
                 preorder.preorderId(), null, shipTo, List.of(
                 new PlaceOrderCommand.Line(preorder.productId(), preorder.optionId(), 1, preorder.unitPrice(),
-                        0, BigDecimal.ZERO, preorder.productTitle(), null, preorder.optionTitle(), null)));
+                        0, BigDecimal.ZERO, preorder.productTitle(), null, preorder.optionTitle(), imageUrl)));
     }
 }
