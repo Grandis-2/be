@@ -5,6 +5,8 @@ import com.grandis.nova.catalog.review.ReviewCreateRequest;
 import com.grandis.nova.catalog.review.ReviewService;
 import com.grandis.nova.catalog.review.ReviewUpdateRequest;
 import com.grandis.nova.catalog.review.ReviewView;
+import com.grandis.nova.catalog.review.WritableItemView;
+import com.grandis.nova.catalog.review.WritableReviewQuery;
 import com.grandis.nova.catalog.web.StrictBodies;
 import com.grandis.nova.common.security.CurrentCustomerId;
 import com.grandis.nova.common.web.ApiResponse;
@@ -29,7 +31,7 @@ import java.time.Clock;
 import java.util.UUID;
 
 /**
- * 상품 리뷰. 쓰기(작성 · 수정 · 삭제)와 내 리뷰는 USER, 상품 리뷰 · 모아보기는 공개다(SecurityConfig).
+ * 상품 리뷰. 쓰기(작성 · 수정 · 삭제) · 내 리뷰 · 쓸 수 있는 주문상품은 USER, 상품 리뷰 · 모아보기는 공개다(SecurityConfig).
  * 쓰기 본문은 관리자 API 와 같은 엄격한 매퍼로 읽는다 — 모르는 칸 · 같은 키 두 번 · 소수 별점은 그 칸의 400.
  */
 @Tag(name = "상품 리뷰")
@@ -37,12 +39,14 @@ import java.util.UUID;
 public class ReviewController {
 
     private final ReviewService reviews;
+    private final WritableReviewQuery writable;
     private final CatalogReadCache cache;
     private final StrictBodies bodies;
     private final Clock clock;
 
-    public ReviewController(ReviewService reviews, CatalogReadCache cache, StrictBodies bodies, Clock clock) {
+    public ReviewController(ReviewService reviews, WritableReviewQuery writable, CatalogReadCache cache, StrictBodies bodies, Clock clock) {
         this.reviews = reviews;
+        this.writable = writable;
         this.cache = cache;
         this.bodies = bodies;
         this.clock = clock;
@@ -104,5 +108,18 @@ public class ReviewController {
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
         return ApiResponse.ok(ProductPageResponse.from(
                 reviews.myReviews(customerId, orderItemId, PageSizes.requirePage(page, PageSizes.require(size)), size)));
+    }
+
+    /** 마이페이지의 "리뷰 쓰기" 탭. total 은 탭 칩의 수다. */
+    @Operation(summary = "리뷰를 쓸 수 있는 내 주문상품",
+            description = "배송 완료된 장바구니 · 바로 구매 주문상품 중 아직 리뷰를 쓰지 않은 것(사전예약 · 드로우 당첨 증정 제외). 주문 최신순. "
+                    + "최근 배송 완료 주문 500건까지 본다. 쪽은 앞 10,000개 안에서 시작해야 한다(page × size < 10,000)")
+    @GetMapping("/api/v1/reviews/writable")
+    public ApiResponse<ProductPageResponse<WritableItemView>> writableItems(
+            @CurrentCustomerId UUID customerId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
+        return ApiResponse.ok(ProductPageResponse.from(
+                writable.find(customerId, PageSizes.requirePage(page, PageSizes.require(size)), size)));
     }
 }

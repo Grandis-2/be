@@ -30,6 +30,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -47,6 +48,8 @@ class ReviewInternalCallsTest {
     private static final Map<UUID, Reply> ORDER = new ConcurrentHashMap<>();
     private static final Map<UUID, Reply> MEMBER = new ConcurrentHashMap<>();
     private static final Map<String, String> SEEN_AUTHORIZATION = new ConcurrentHashMap<>();
+    /** /internal/order-items/delivered 의 답. */
+    private static final AtomicReference<Reply> DELIVERED = new AtomicReference<>();
     private static final HttpServer SERVER = start();
 
     @Autowired MockMvc mockMvc;
@@ -123,6 +126,33 @@ class ReviewInternalCallsTest {
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM product_reviews WHERE customer_id = ?", Long.class, UuidBinary.toBytes(customer))).isZero();
     }
 
+    @Test
+    @DisplayName("리뷰를 쓸 수 있는 주문상품 — order 에 회원 토큰을 싣고, 받은 시각 · 금액을 그대로 내보낸다. 503 은 503, 403 은 500")
+    void writableItemsRelayTheTokenAndReadTheReply() throws Exception {
+        UUID customer = UUID.randomUUID();
+        String token = AccessTokens.customerToken(customer);
+        UUID product = fixtures.product("IN_STOCK", "ACTIVE");
+        UUID orderItemId = UUID.randomUUID();
+        DELIVERED.set(Reply.json(200, ("{\"success\":true,\"data\":{\"items\":[{\"orderItemId\":\"%s\",\"orderId\":\"%s\",\"productId\":\"%s\","
+                + "\"optionId\":\"%s\",\"productTitle\":\"Nova 1\",\"optionTitle\":\"블랙 / 256GB\",\"imageUrl\":null,\"quantity\":2,"
+                + "\"lineAmount\":2500000,\"orderedAt\":\"2026-10-06T06:00:00Z\"}],\"truncated\":false}}")
+                .formatted(orderItemId, UUID.randomUUID(), product, UUID.randomUUID())));
+
+        mockMvc.perform(get("/api/v1/reviews/writable").with(AccessTokens.withToken(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.items[0].orderItemId").value(orderItemId.toString()))
+                .andExpect(jsonPath("$.data.items[0].quantity").value(2))
+                .andExpect(jsonPath("$.data.items[0].lineAmount").value(2500000))
+                .andExpect(jsonPath("$.data.items[0].orderedAt").value("2026-10-06T06:00:00Z"));
+        assertThat(SEEN_AUTHORIZATION.get("/internal/order-items/delivered")).isEqualTo("Bearer " + token);
+
+        DELIVERED.set(Reply.error(503, "DEPENDENCY_UNAVAILABLE"));
+        expect(mockMvc.perform(get("/api/v1/reviews/writable").with(AccessTokens.withToken(token))), 503, "DEPENDENCY_UNAVAILABLE");
+        DELIVERED.set(Reply.error(403, "FORBIDDEN"));
+        expect(mockMvc.perform(get("/api/v1/reviews/writable").with(AccessTokens.withToken(token))), 500, "INTERNAL_ERROR");
+    }
+
     // ── 도우미 ──────────────────────────────────────────────────────────────
 
     private UUID deliveredFor(UUID customer) {
@@ -161,6 +191,10 @@ class ReviewInternalCallsTest {
         try {
             HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
             AtomicReference<UUID> lastItem = new AtomicReference<>();
+            server.createContext("/internal/order-items/delivered", exchange -> {
+                SEEN_AUTHORIZATION.put(exchange.getRequestURI().getPath(), String.valueOf(exchange.getRequestHeaders().getFirst("Authorization")));
+                respond(exchange, DELIVERED.get());
+            });
             server.createContext("/internal/order-items/", exchange -> {
                 UUID id = UUID.fromString(exchange.getRequestURI().getPath().substring("/internal/order-items/".length()));
                 lastItem.set(id);
