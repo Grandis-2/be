@@ -421,6 +421,7 @@ class CatalogReadCacheApiTest {
                 """.formatted(today, today, productId);
         UUID promotionId = UUID.fromString(data(admin(post("/api/v1/admin/promotions").header("Idempotency-Key", "k-" + ShopFixtures.unique()), body)
                 .andExpect(status().isCreated())).get("promotionId").asString());
+        long loaded = System.nanoTime();   // 첫 적재 전 — 마지막 조회까지 이 안이어야 만료가 아니라 세대로 빠진 것이다
         assertThat(promotionCardTitles(promotionId)).containsExactly("홍보 카드");
         jdbcTemplate.update("UPDATE products SET title = '직접 고침' WHERE id = ?", (Object) UuidBinary.toBytes(productId));
 
@@ -433,12 +434,12 @@ class CatalogReadCacheApiTest {
         } finally {
             RedisContainerConfig.unpause();
         }
-        // 대조 — Redis 가 돌아오면 같은 세대의 메모리 카드(멈추기 전 것)가 아직 나온다. 만료 전이라는 뜻이라 아래에서 빠지는 것은 세대 때문이다
-        assertThat(promotionCardTitles(promotionId)).as("만료 전 메모리 카드").containsExactly("홍보 카드");
-        long seen = System.nanoTime();
+        // 대조 — Redis 가 돌아오면 같은 세대의 메모리 카드(멈추기 전 것)가 아직 나온다
+        assertThat(promotionCardTitles(promotionId)).as("같은 세대의 메모리 카드").containsExactly("홍보 카드");
         admin(patch(ADMIN + "/{id}/visibility", productId), "{ \"visible\": false }").andExpect(status().isOk());
         assertThat(promotionCardTitles(promotionId)).as("숨긴 상품은 바로 빠진다").isEmpty();
-        assertThat(Duration.ofNanos(System.nanoTime() - seen)).as("대조 뒤 곧바로 — 만료로 빠진 것이 아니다").isLessThan(Duration.ofSeconds(2));
+        assertThat(Duration.ofNanos(System.nanoTime() - loaded)).as("첫 적재부터 TTL 안 — 만료가 아니라 세대로 빠졌다")
+                .isLessThan(CatalogReadCache.PRODUCT_TTL);
     }
 
     @Test
@@ -446,15 +447,15 @@ class CatalogReadCacheApiTest {
     void promotionCardsFollowProductGenerationAcrossInstances() throws Exception {
         UUID productId = preorderProduct("다른 인스턴스");
         UUID promotionId = promotionOf(productId, "세대 홍보");
+        long loaded = System.nanoTime();   // 첫 적재 전 — 마지막 조회까지 이 안이어야 만료가 아니라 세대로 빠진 것이다
         assertThat(promotionCardTitles(promotionId)).containsExactly("다른 인스턴스");
-        long loaded = System.nanoTime();
         jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", (Object) UuidBinary.toBytes(productId));   // 이 인스턴스는 모른다
         assertThat(promotionCardTitles(promotionId)).as("세대가 그대로면 메모리의 카드").containsExactly("다른 인스턴스");
 
         readCache.bumpNow(CatalogReadCache.PRODUCTS);   // 숨긴 쪽 인스턴스가 커밋 뒤 올린 세대
-        assertThat(Duration.ofNanos(System.nanoTime() - loaded)).as("TTL 안이어야 세대 때문에 빠진 것이다(만료가 아니라)")
-                .isLessThan(CatalogReadCache.PRODUCT_TTL);
         assertThat(promotionCardTitles(promotionId)).as("세대가 오르면 바로 빠진다").isEmpty();
+        assertThat(Duration.ofNanos(System.nanoTime() - loaded)).as("첫 적재부터 TTL 안 — 만료가 아니라 세대로 빠졌다")
+                .isLessThan(CatalogReadCache.PRODUCT_TTL);
     }
 
     @Test

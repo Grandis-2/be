@@ -329,7 +329,7 @@ class ReadCacheGenerationTest {
     void generationRetriesPendingBumps() {
         redis.opsForValue().set(GENERATION, "not-a-number");   // INCR 이 실패한다
         ReadCache cache = new ReadCache(redis, JSON, "svc");
-        assertThatThrownBy(() -> cache.bumpNow("products")).as("못 올리면 던지고 미룬다").isInstanceOf(RuntimeException.class);
+        assertThatThrownBy(() -> cache.bumpNow("products")).as("못 올리면 던지고 미룬다").isInstanceOf(IllegalStateException.class);
 
         redis.opsForValue().set(GENERATION, "10");   // 복구
         assertThat(cache.generation("products")).as("미룬 올리기가 먼저 돈다").hasValue(11);

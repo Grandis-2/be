@@ -83,16 +83,18 @@ class PromotionCardsWithoutRedisTest {
         RedisContainerConfig.pause();
         try {
             CountDownLatch go = new CountDownLatch(1);
-            List<Future<Integer>> results = new ArrayList<>();
+            List<Future<org.springframework.mock.web.MockHttpServletResponse>> results = new ArrayList<>();
             for (int i = 0; i < requests; i++) {
                 results.add(pool.submit(() -> {
                     go.await();
-                    return mockMvc.perform(get("/api/v1/promotions/{id}", promotionId)).andReturn().getResponse().getStatus();
+                    return mockMvc.perform(get("/api/v1/promotions/{id}", promotionId)).andReturn().getResponse();
                 }));
             }
             go.countDown();
-            for (Future<Integer> result : results) {
-                assertThat(result.get(30, TimeUnit.SECONDS)).isEqualTo(200);
+            for (Future<org.springframework.mock.web.MockHttpServletResponse> result : results) {
+                org.springframework.mock.web.MockHttpServletResponse response = result.get(30, TimeUnit.SECONDS);
+                assertThat(response.getStatus()).isEqualTo(200);
+                assertThat(response.getContentAsString(java.nio.charset.StandardCharsets.UTF_8)).as("기다린 쪽도 실제 카드를 받는다").contains("장애 중 카드");
             }
             assertThat(loads).as("동시 요청은 DB 한 번을 나눠 받는다").hasValue(1);
 
