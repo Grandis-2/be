@@ -393,7 +393,7 @@ class PreorderQueryApiTest {
                 .andExpect(jsonPath("$.data.items", hasSize(0)));
     }
 
-    /* 결제를 시작했어도 기한이 지나면 PAYMENT_EXPIRED 하나에만 든다. 기한 1분 앞뒤로 PAYABLE · PAYMENT_EXPIRED 가 갈린다. */
+    /* 결제를 시작했어도 기한이 지나면 PAYMENT_EXPIRED 하나에만 든다(결제 시작 · 기한 1분 지남). 결제 전이고 기한 1분 앞이면 PAYABLE 이다. */
     @Test
     void paymentWindowSplitsStagesEvenAfterPaymentStarted() throws Exception {
         AcceptResult startedThenExpired = accepts.accept(customerId);

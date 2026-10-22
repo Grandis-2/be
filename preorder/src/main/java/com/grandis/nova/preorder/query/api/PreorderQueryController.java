@@ -48,7 +48,7 @@ class PreorderQueryController {
             @RequestParam(required = false) UUID productId,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        // displayStatus=PAYABLE, 처럼 섞인 빈 원소는 null 로 들어온다 — 거르지 않고 400 이다. displayStatus= 하나뿐이면 보내지 않은 것과 같다
+        // displayStatus=PAYABLE, 처럼 섞인 빈 원소는 null 로 들어온다 — 거르지 않고 400 이다. displayStatus= 하나뿐이면 빈 묶음이 되어 보내지 않은 것과 같다
         if (displayStatus != null && displayStatus.contains(null)) {
             throw ValidationFailures.of("displayStatus", "빈 단계 값이 있습니다.");
         }

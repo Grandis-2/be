@@ -45,7 +45,7 @@ public class OrderQueryController {
             @RequestParam(required = false) Instant from,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        // status=SHIPPED, 처럼 섞인 빈 원소는 null 로 들어온다 — 거르지 않고 400 이다. status= 하나뿐이면 보내지 않은 것과 같다
+        // status=SHIPPED, 처럼 섞인 빈 원소는 null 로 들어온다 — 거르지 않고 400 이다. status= 하나뿐이면 빈 묶음이 되어 보내지 않은 것과 같다
         if (status != null && status.contains(null)) {
             throw ValidationFailures.of("status", "빈 상태 값이 있습니다.");
         }
