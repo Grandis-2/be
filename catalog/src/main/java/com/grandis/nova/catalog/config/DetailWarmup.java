@@ -38,7 +38,7 @@ import java.util.Set;
  *       실패(대상 없음 · 오류 응답 · 다른 서비스 무응답 · 응답 모양이 다름)는 INFO/WARN 만 남기고 기동은 이어 간다 — 예열이 배포를 막지 않게.</li>
  *   <li><b>다른 서비스</b>: 요청마다 다른 서비스를 묻는 대상이 있다 — 일반 상품 상세 · 일반 상품 카드가 든 홍보 상세는 캐시 없이 order 재고를
  *       (품절 표시), 사전예약 상품 상세는 회차를 묻는다(회차 캐시에 있으면 preorder 를 부르지 않지만 보수적으로 센다). 증설이 몰릴 때 그쪽에 더하는 양을
- *       묶으려고 이런 요청은 합쳐 {@link #MAX_DEPENDENT_REQUESTS} 번까지만 부른다(대상을 고르는 조회는 따로). 대상을 고를 때 상세를 못 읽은 홍보도 센다.
+ *       묶으려고 이런 요청은 합쳐 {@link #MAX_DEPENDENT_REQUESTS} 번까지만 부른다 — 대상을 고르며 보낸 그런 요청(일반 상품 홍보 상세 · 상품 목록)도 같이 센다. 대상을 고를 때 상세를 못 읽은 홍보도 센다.
  *       사전예약 카드만 든 홍보 상세는 세지 않는다 — 회차 묶음은 읽기 캐시(운영 30분)에 들어 첫 채우기 뒤엔 preorder 를 부르지 않는다. 다만 회차 없는
  *       (판매 준비 전) 상품이 묶여 그 묶음을 넣지 않거나, 회차 캐시를 끈 실행이거나, Redis 를 못 읽는데 사본도 없으면(막 뜬 인스턴스) 그 홍보 상세도
  *       요청마다 preorder 에 묻는다 — 셈에 넣으면 흔한 경우(사전예약 홍보 하나 + 상품들)의 예열이 모두 이 상한에 걸려 데우는 양이 줄어 넣지 않는다. 그쪽이 답하지 않으면
@@ -101,7 +101,8 @@ public class DetailWarmup implements ApplicationRunner {
         }
         long started = System.nanoTime();
         try (Calls calls = new Calls(web.getWebServer().getPort(), started + budget.toNanos())) {
-            List<Target> targets = targets(calls);
+            Discovery discovery = targets(calls);
+            List<Target> targets = discovery.targets();
             if (targets.isEmpty()) {
                 log.info("상세 예열 대상이 없다 — 건너뛴다");
                 return Result.NONE;
@@ -109,7 +110,7 @@ public class DetailWarmup implements ApplicationRunner {
             boolean allDependent = targets.stream().allMatch(Target::dependent);
             int sent = 0;
             int failed = 0;
-            int dependentRequests = 0;
+            int dependentRequests = discovery.dependentRequests();   // 대상을 고르며 이미 보낸 몫도 같은 상한에 센다
             // 마감은 건너뛰는 반복에서도 본다 — 보내지 않고 넘기는 갈래만 남아도 시간 상한에서 끝나게
             for (int i = 0; sent < MAX_REQUESTS && !calls.expired(); i++) {
                 Target target = targets.get(i % targets.size());
@@ -139,7 +140,7 @@ public class DetailWarmup implements ApplicationRunner {
 
     /**
      * @param requests          대상을 고르는 조회를 뺀 예열 요청 수
-     * @param dependentRequests 그중 다른 서비스를 묻는 요청 수
+     * @param dependentRequests 다른 서비스를 물은 요청 수 — 대상을 고르며 보낸 것 포함
      * @param paths             고른 대상 — 마감이나 상한으로 모두 부르지 못했을 수 있다
      */
     record Result(int requests, int dependentRequests, int failed, List<String> paths) {
@@ -150,9 +151,16 @@ public class DetailWarmup implements ApplicationRunner {
     private record Target(String path, boolean dependent) {
     }
 
+    /**
+     * @param dependentRequests 대상을 고르며 보낸 요청 중 다른 서비스를 물은 수 — 일반 상품 카드가 든(또는 못 읽은) 홍보 상세 · 상품 목록(품절 표시)
+     */
+    private record Discovery(List<Target> targets, int dependentRequests) {
+    }
+
     /** 홍보 상세들과 그 상품 상세들 — 홍보가 없으면 상품 목록 첫 쪽의 상세. */
-    private List<Target> targets(Calls calls) {
+    private Discovery targets(Calls calls) {
         List<Target> targets = new ArrayList<>();
+        int dependentRequests = 0;
         Set<String> products = new LinkedHashSet<>();
         for (JsonNode summary : items(calls, "/api/v1/promotions")) {
             String id = text(summary.path("promotionId"));
@@ -172,12 +180,16 @@ public class DetailWarmup implements ApplicationRunner {
                 }
             }
             targets.add(new Target(promotion, inStockCards));
+            if (inStockCards) {
+                dependentRequests++;
+            }
         }
-        if (products.isEmpty()) {
+        if (products.isEmpty() && !calls.expired()) {
             items(calls, "/api/v1/products?size=" + MAX_PRODUCTS).forEach(card -> products.add(text(card.path("productId"))));
+            dependentRequests++;   // 목록도 담을 때 order 에 품절을 묻는다(메모리 캐시에 있으면 묻지 않지만 보수적으로)
         }
         products.stream().filter(id -> !id.isEmpty()).limit(MAX_PRODUCTS).forEach(id -> targets.add(new Target(PRODUCT_PREFIX + id, true)));
-        return targets;
+        return new Discovery(targets, dependentRequests);
     }
 
     /** 문자열 칸이면 그 값, 아니면(없음 · null · 객체 · 배열) 빈 문자열 — 응답 모양이 어긋나도 던지지 않는다. */
