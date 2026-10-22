@@ -95,6 +95,16 @@ class ControlPlaneTest {
         assertThat(first.leadership.isLeader()).isFalse();
     }
 
+    /** 리더였을 때 센 입장 누적은 늘지 않고 남는다. 지금 리더가 세므로 이 노드 것은 지운다. */
+    @Test
+    void 리더가_아닌_노드는_틱에서_입장_누적_지표를_지운다() {
+        first.metrics.admitted(productKey(101), 3);
+
+        first.plane.tick().block(Duration.ofSeconds(5));
+
+        assertThat(first.registry.find(ControlMetrics.ADMITTED).counters()).isEmpty();
+    }
+
     private static void await(BooleanSupplier condition) {
         StepVerifier.create(Flux.interval(Duration.ofMillis(50)).filter(tick -> condition.getAsBoolean()).next())
                 .expectNextCount(1)

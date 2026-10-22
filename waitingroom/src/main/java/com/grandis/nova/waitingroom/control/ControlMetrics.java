@@ -7,12 +7,17 @@ import io.micrometer.core.instrument.MultiGauge;
 import io.micrometer.core.instrument.Tags;
 import org.springframework.stereotype.Component;
 
+import java.util.Set;
+
 /**
  * 제어 평면 지표 — 리더 여부, 판정 재료 나이, 게이트웨이 수, 모델별 대기 · 몫, 입장 누적, 루프 실패.
- * 모델별 값은 판정 재료를 받을 때마다 통째로 갈아 끼운다(끝난 모델이 남지 않게).
+ * 모델별 값은 판정 재료를 받을 때마다 통째로 갈아 끼우고, 입장 누적은 일정에서 빠진 모델 것을 지운다(끝난 모델이 남지 않게).
  */
 @Component
 public class ControlMetrics {
+
+    static final String ADMITTED = "waitingroom.admitted";
+    private static final String PRODUCT = "product";
 
     private final MeterRegistry registry;
     private final MultiGauge waiting;
@@ -52,9 +57,19 @@ public class ControlMetrics {
                 .toList(), true);
     }
 
+    /**
+     * 입장 누적은 카운터라 갈아 끼울 수 없어, 이 모델들 밖의 것을 지운다 — 다시 들어오면 0 부터 센다.
+     * 세는 쪽(배분 회차)과 같은 루프에서 불러야 방금 센 값을 지우지 않는다.
+     */
+    void retainAdmitted(Set<String> productKeys) {
+        registry.find(ADMITTED).counters().stream()
+                .filter(counter -> !productKeys.contains(counter.getId().getTag(PRODUCT)))
+                .forEach(registry::remove);
+    }
+
     void admitted(String productKey, long entered) {
         if (entered > 0) {
-            Counter.builder("waitingroom.admitted").tag("product", productKey).register(registry).increment(entered);
+            Counter.builder(ADMITTED).tag(PRODUCT, productKey).register(registry).increment(entered);
         }
     }
 

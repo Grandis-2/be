@@ -53,6 +53,7 @@ class AllocationRoundTest {
     private ControlStore control;
     private AllocationRound round;
     private final Leadership leadership = new Leadership();
+    private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
     /** 재발행 요청을 받은 순서대로 남긴다. failNextResync 가 켜져 있으면 한 번 실패한다. */
     private final List<String> resyncReasons = new CopyOnWriteArrayList<>();
     private final AtomicBoolean failNextResync = new AtomicBoolean();
@@ -71,7 +72,7 @@ class AllocationRoundTest {
 
     /** 리더가 바뀌면 새 노드는 빈 기억으로 시작한다. */
     private AllocationRound newRound() {
-        ControlMetrics metrics = new ControlMetrics(new SimpleMeterRegistry(), leadership,
+        ControlMetrics metrics = new ControlMetrics(meters, leadership,
                 new SnapshotHolder(new RedisClock(Clock.systemUTC()), PROPERTIES));
         return new AllocationRound(control, new AdmissionProperties(10L, 0.7), AdmissionTicket.of(TestJwts.TOKEN_SECRET, List.of(), null), PROPERTIES, metrics, leadership,
                 new ScheduleResync(control, reason -> failNextResync.compareAndSet(true, false)
@@ -422,6 +423,27 @@ class AllocationRoundTest {
         assertThat(product(productKey(101))).startsWith("retired|");
         assertThat(run(7, 0).products()).as("은퇴한 모델은 발행하지 않는다").doesNotContainKey(productKey(101)).containsKey(productKey(202));
         assertThat(product(productKey(202))).as("7일 전이면 마감으로 남긴다").doesNotStartWith("retired|");
+    }
+
+    /** 카운터는 갈아 끼울 수 없어 등록만 하면 끝난 모델의 시계열이 계속 쌓인다. */
+    @Test
+    void 일정에서_빠진_모델의_입장_누적_지표는_지우고_남은_모델은_이어_센다() {
+        schedule(productKey(101), now.minusSeconds(60), now.plusSeconds(3_600));
+        schedule(productKey(202), now.minusSeconds(60), now.plusSeconds(3_600));
+        line(productKey(101), 20);
+        line(productKey(202), 20);
+        run(7, 0, 1);
+        assertThat(admittedCount(productKey(101)) + admittedCount(productKey(202))).isEqualTo(10);
+
+        redis.opsForHash().put(RedisKeys.PRODUCTS, productKey(101), "retired|1|" + now.toEpochMilli()).block(WAIT);
+        run(7, 0, 2);
+
+        assertThat(meters.find(ControlMetrics.ADMITTED).tag("product", productKey(101)).counter()).isNull();
+        assertThat(admittedCount(productKey(202))).as("남은 모델은 지우지 않고 이어 센다").isEqualTo(admitted(productKey(202), 20));
+    }
+
+    private double admittedCount(String product) {
+        return meters.get(ControlMetrics.ADMITTED).tag("product", product).counter().count();
     }
 
     @Test

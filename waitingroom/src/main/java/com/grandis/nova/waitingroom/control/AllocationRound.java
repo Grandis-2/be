@@ -95,6 +95,7 @@ class AllocationRound {
                     writtenMax.keySet().retainAll(schedules.keySet());
                     sweepCursors.keySet().retainAll(schedules.keySet());
                     cleaned.retainAll(schedules.keySet());
+                    metrics.retainAdmitted(schedules.keySet());
                     return Flux.fromIterable(schedules.keySet())
                             .concatMap(key -> retired(key, schedules.get(key), readAt)
                                     ? Mono.just(new Row(key, schedules.get(key), RETIRED))
