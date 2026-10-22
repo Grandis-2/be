@@ -389,11 +389,12 @@ class ReadCacheTest {
     }
 
     @Test
-    @DisplayName("자리를 잡은 뒤 다시 보기가 Error 를 던져도 같이 기다린 요청은 그 Error 를 받고, 자리가 비어 같은 키의 다음 조회는 기다리지 않는다")
+    @DisplayName("자리를 잡은 뒤 다시 보기가 Error 를 던져도 같이 기다린 요청은 그 Error 를 원인으로 받고, 자리가 비어 같은 키의 다음 조회는 기다리지 않는다")
     void recheckErrorReachesWaitersAndFreesTheSlot() throws Exception {
         PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
+        WaitEvents events = new WaitEvents();
         ReadCache failing = new ReadCache(template, JSON, "svc", io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.ofDefaults(), true,
-                java.time.Clock.systemUTC(), Duration.ofSeconds(2));
+                java.time.Clock.systemUTC(), Duration.ofSeconds(2), null, events);
         ReadCache.Spec<Item> spec = failing.spec("item", Item.class, Duration.ofSeconds(30));
         template.failWith = new AssertionError("다시 보기에서 터짐");
         template.failAt = 2;
@@ -419,7 +420,7 @@ class ReadCacheTest {
             }
         });
         joiner.start();
-        Thread.sleep(300);   // 같이 기다리는 쪽이 자리에 붙을 때까지
+        assertThat(events.waiting.await(10, java.util.concurrent.TimeUnit.SECONDS)).as("같이 기다리는 쪽이 자리에 붙었다").isTrue();
         template.resume.countDown();
         holder.join(10_000);
         joiner.join(10_000);
@@ -427,18 +428,58 @@ class ReadCacheTest {
         assertThat(joiner.isAlive()).isFalse();
 
         assertThat(owner.get()).isInstanceOf(AssertionError.class);
-        assertThat(waiter.get()).as("같이 기다린 요청도 같은 Error 를 받는다(503 시간 초과가 아니라)").isInstanceOf(IllegalStateException.class);
+        assertThat(waiter.get()).as("같이 기다린 요청은 그 Error 를 원인으로 받는다(503 시간 초과가 아니라)").isInstanceOf(IllegalStateException.class);
         assertThat(((Throwable) waiter.get()).getCause()).isSameAs(owner.get());
         long started = System.nanoTime();
         assertThat(failing.get(spec, "products", "1", () -> item("next", new AtomicInteger())).name()).isEqualTo("next");
-        assertThat(Duration.ofNanos(System.nanoTime() - started)).as("자리가 비어 기다리지 않는다").isLessThan(Duration.ofSeconds(1));
+        // 자리가 남았다면 기다림 상한(2초) 뒤 503 이다 — 상한보다 작은 1.5초 안에 원천으로 답했으면 자리가 비었다
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).as("자리가 비어 기다리지 않는다").isLessThan(Duration.ofMillis(1500));
+    }
+
+    @Test
+    @DisplayName("loader 가 검사 예외를 몰래 던져도 같이 기다린 요청은 그 예외를 원인으로 받는다(503 시간 초과가 아니라) — 자리도 비운다")
+    void sneakyCheckedLoaderFailureReachesWaiters() throws Exception {
+        WaitEvents events = new WaitEvents();
+        ReadCache waiting = new ReadCache(redis, JSON, "svc", io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.ofDefaults(), true,
+                java.time.Clock.systemUTC(), Duration.ofSeconds(2), null, events);
+        ReadCache.Spec<Item> spec = waiting.spec("item", Item.class, Duration.ofSeconds(30));
+        java.io.IOException failure = new java.io.IOException("원천 실패");
+        java.util.concurrent.atomic.AtomicReference<Object> owner = new java.util.concurrent.atomic.AtomicReference<>();
+        CountDownLatch loading = new CountDownLatch(1);
+        Thread holder = new Thread(() -> {
+            try {
+                owner.set(waiting.get(spec, "products", "1", () -> {
+                    loading.countDown();
+                    await(events.waiting);   // 같이 기다리는 쪽이 붙은 뒤에 던진다
+                    return sneakyThrow(failure);
+                }));
+            } catch (Throwable e) {
+                owner.set(e);
+            }
+        });
+        holder.start();
+        assertThat(loading.await(10, java.util.concurrent.TimeUnit.SECONDS)).as("앞 요청이 자리를 잡고 원천을 읽는 중").isTrue();
+        Throwable waiter = null;
+        try {
+            waiting.get(spec, "products", "1", () -> item("joiner", new AtomicInteger()));
+        } catch (Throwable e) {
+            waiter = e;
+        }
+        holder.join(10_000);
+        assertThat(holder.isAlive()).isFalse();
+
+        assertThat(owner.get()).isSameAs(failure);
+        assertThat(waiter).isInstanceOf(IllegalStateException.class).hasCauseReference(failure);
+        assertThat(waiting.get(spec, "products", "1", () -> item("next", new AtomicInteger())).name()).isEqualTo("next");
     }
 
     @Test
     @DisplayName("다시 보기는 자리를 잡은 뒤다 — 다시 보는 동안 같은 키의 다른 요청은 그 자리를 기다리고, 원천은 한 번만 읽는다")
     void recheckHappensAfterTakingTheSlot() throws Exception {
         PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.startsWith("svc:cache:item:"));
-        ReadCache paused = new ReadCache(template, JSON, "svc");
+        WaitEvents events = new WaitEvents();
+        ReadCache paused = new ReadCache(template, JSON, "svc", io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.ofDefaults(), true,
+                java.time.Clock.systemUTC(), ReadCache.WAIT_FOR_LOAD, null, events);
         ReadCache.Spec<Item> spec = paused.spec("item", Item.class, Duration.ofSeconds(30));
         AtomicInteger loads = new AtomicInteger();
         template.pauseAt = 2;   // 두 번째 GET(다시 보기)에서 멈춘다
@@ -462,14 +503,16 @@ class ReadCacheTest {
             }
         });
         other.start();
-        other.join(500);
-        assertThat(other.isAlive()).as("다시 보는 쪽이 자리를 쥐고 있어 기다린다(자리를 잡기 전에 다시 보면 이쪽이 먼저 읽고 끝난다)").isTrue();
+        // 자리를 잡기 전에 다시 보면 다른 요청이 자리를 잡아 먼저 읽고 끝난다(WAIT 없음 · 원천 두 번)
+        assertThat(events.waiting.await(10, java.util.concurrent.TimeUnit.SECONDS)).as("다시 보는 쪽이 자리를 쥐고 있어 기다린다").isTrue();
+        assertThat(second.get()).as("기다리는 동안은 답이 없다").isNull();
         template.resume.countDown();
         holder.join(10_000);
         other.join(10_000);
 
         assertThat(((Item) first.get()).name()).isEqualTo("loaded");
-        assertThat(((Item) second.get()).name()).isEqualTo("loaded");
+        assertThat(((Item) second.get()).name()).as("기다린 쪽은 자리 주인의 값을 받는다").isEqualTo("loaded");
+        assertThat(events.outcomes).containsExactlyInAnyOrder(ReadCacheEvents.Outcome.LOAD, ReadCacheEvents.Outcome.WAIT);
         assertThat(loads).hasValue(1);
     }
 
@@ -483,6 +526,7 @@ class ReadCacheTest {
         assertThat(cache.get(items, "products", "1", () -> item("v2", loads)).name()).isEqualTo("v2");
         redis.opsForValue().set(key, "{\"loadedAt\":1,\"value\":null}");
         assertThat(cache.get(items, "products", "1", () -> item("v3", loads)).name()).isEqualTo("v3");
+        assertThat(cache.get(items, "products", "1", () -> item("v4", loads)).name()).as("다시 채운 값으로 덮어써 다음 조회는 원천에 가지 않는다").isEqualTo("v3");
         assertThat(loads).hasValue(3);
     }
 
@@ -931,6 +975,33 @@ class ReadCacheTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    /** 요청 결과를 모으고, 같은 키의 진행 중 조회에 붙은 요청(WAIT)이 생기면 연다. */
+    static final class WaitEvents implements ReadCacheEvents {
+        final List<Outcome> outcomes = java.util.Collections.synchronizedList(new ArrayList<>());
+        final CountDownLatch waiting = new CountDownLatch(1);
+
+        @Override
+        public void served(String cache, Outcome outcome) {
+            outcomes.add(outcome);
+            if (outcome == Outcome.WAIT) {
+                waiting.countDown();
+            }
+        }
+
+        @Override
+        public void waited(String cache, Duration waited) {
+        }
+
+        @Override
+        public void refreshed(String cache, RefreshResult result) {
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T, E extends Throwable> T sneakyThrow(Throwable e) throws E {
+        throw (E) e;
     }
 
     private static void await(CountDownLatch latch) {

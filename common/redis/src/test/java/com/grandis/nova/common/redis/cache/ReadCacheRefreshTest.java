@@ -223,6 +223,40 @@ class ReadCacheRefreshTest {
     }
 
     @Test
+    @DisplayName("갱신의 loader 가 검사 예외를 몰래 던져도 그 갱신을 기다린 요청은 그 예외를 원인으로 받는다(503 시간 초과가 아니라)")
+    void sneakyCheckedRefreshFailureReachesWaiters() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        java.io.IOException failure = new java.io.IOException("원천 실패");
+        ReadCache threaded = cache(command -> new Thread(command).start());
+        ReadCache.Spec<String> s = threaded.spec("s", String.class, Duration.ofSeconds(30));
+        threaded.entry(s, "g", "k", () -> load("v1"));
+        clock.advance(Duration.ofSeconds(24));
+        threaded.entry(s, "g", "k", () -> {
+            started.countDown();
+            await(release);
+            return sneakyThrow(failure);
+        });
+        assertThat(started.await(5, TimeUnit.SECONDS)).as("갱신이 시작됐다").isTrue();
+        redis.delete(onlyKey());
+        CompletableFuture<String> waiting = CompletableFuture.supplyAsync(() -> threaded.entry(s, "g", "k", () -> load("직접")).value());
+        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!events.outcomes.contains(Outcome.WAIT) && System.nanoTime() < until) {
+            Thread.sleep(5);
+        }
+        assertThat(events.outcomes).as("갱신에 붙었다").contains(Outcome.WAIT);
+        release.countDown();
+
+        assertThat(waiting).failsWithin(5, TimeUnit.SECONDS).withThrowableOfType(java.util.concurrent.ExecutionException.class)
+                .havingCause().isInstanceOf(IllegalStateException.class).withCause(failure);
+        long until2 = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!events.refreshes.contains(RefreshResult.FAILED) && System.nanoTime() < until2) {
+            Thread.sleep(5);
+        }
+        assertThat(events.refreshes).contains(RefreshResult.FAILED);
+    }
+
+    @Test
     @DisplayName("실행기가 차면 맡기지 않는다 — 요청은 들고 있던 값을 받고, 그 값이 만료될 때까지 그 키는 다시 맡기지 않는다(거절을 요청마다 세지 않는다)")
     void rejectedRefreshIsSkipped() {
         boolean[] reject = {true};
@@ -415,6 +449,11 @@ class ReadCacheRefreshTest {
         Set<String> keys = redis.keys("svc:cache:s:*");
         assertThat(keys).hasSize(1);
         return keys.iterator().next();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T, E extends Throwable> T sneakyThrow(Throwable e) throws E {
+        throw (E) e;
     }
 
     private static void await(CountDownLatch latch) {
