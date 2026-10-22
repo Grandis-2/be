@@ -126,6 +126,10 @@ class ControlPlane implements SmartLifecycle {
     }
 
     Mono<Void> tick() {
+        // 리더였다면 센 입장 누적이 남는다 — 지금 리더가 세므로 지운다. 하트비트 전에 해야 Redis 장애 중에도 지운다
+        if (leadership.fence() <= 0) {
+            metrics.retainAdmitted(Set.of());
+        }
         long passes = idlePasses.lastSecond(redisClock.now().getEpochSecond());
         long reapAfter = properties.gatewayReapAfter().toSeconds();
         long fresh = ControlPlaneProperties.TICK.multipliedBy(2).toSeconds();
@@ -134,8 +138,6 @@ class ControlPlane implements SmartLifecycle {
                 .flatMap(view -> {
                     long fence = leadership.fence();
                     if (fence <= 0) {
-                        // 리더였다면 센 입장 누적이 남는다 — 지금 리더가 세므로 이 노드 것은 지운다
-                        metrics.retainAdmitted(Set.of());
                         return Mono.empty();
                     }
                     return round.run(fence, view, rounds.incrementAndGet())
