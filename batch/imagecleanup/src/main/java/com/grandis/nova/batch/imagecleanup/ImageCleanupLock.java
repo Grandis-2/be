@@ -49,12 +49,22 @@ class ImageCleanupLock {
         });
     }
 
-    /** 1 이면 잡았다. 0(다른 연결이 쥠) · NULL(오류)은 못 잡았다 — getInt 는 NULL 을 0 으로 읽는다 */
+    /**
+     * 1 이면 잡았고 0 이면 다른 연결이 쥐고 있다. NULL(잠금 오류) · 결과 없음은 던진다 — 건너뛴 것처럼 0 으로 끝나면 정리가 돌지 않았는데도
+     * 경보가 울리지 않는다.
+     */
     private static boolean acquire(Connection connection) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("SELECT GET_LOCK(?, 0)")) {
             statement.setString(1, NAME);
             try (ResultSet rs = statement.executeQuery()) {
-                return rs.next() && rs.getInt(1) == 1;
+                if (!rs.next()) {
+                    throw new IllegalStateException("사진 정리 잠금(GET_LOCK)이 결과를 돌려주지 않았다");
+                }
+                int result = rs.getInt(1);
+                if (rs.wasNull()) {
+                    throw new IllegalStateException("사진 정리 잠금(GET_LOCK)이 오류(NULL)를 돌려줬다");
+                }
+                return result == 1;
             }
         }
     }
