@@ -1,6 +1,6 @@
 apply plugin: 'org.springframework.boot'
 
-// 안 쓰는 사진 정리. ECS 에 1개만 띄운다 — 겹친 실행은 MySQL 이름 잠금이 막는다.
+// 안 쓰는 사진 정리. Scheduler 가 매일 태스크로 띄우면 한 번 돌고 끝난다 — 겹친 실행은 MySQL 이름 잠금이 막는다.
 dependencies {
     implementation project(':common:types')
     // 저장 시계(Clock)는 common:jpa 의 자동설정에서만 온다. 이 자동설정이 JPA Auditing 을 켜므로 엔티티가 없어도 data-jpa 를 둔다

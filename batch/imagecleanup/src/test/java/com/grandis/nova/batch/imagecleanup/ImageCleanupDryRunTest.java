@@ -59,4 +59,14 @@ class ImageCleanupDryRunTest extends ImageCleanupIntegrationTest {
                 .contains("UNUSED 가 된 사진 4건: 지울 대상 2 · 드로우 · 지난 주문이 가리켜 남김 2 · 지난 실행의 삭제 대기 1건 · 걸린 시간 ")
                 .contains("오래된 순 [" + oldest.key());
     }
+
+    /** 삭제 대기를 지우지 않으므로 오래 남아 있어도 막혔다고 하지 않는다 — 운영이 dry-run 인 동안 "막힘" 경보는 울리지 않는다 */
+    @Test
+    void dry_run_은_오래된_삭제_대기가_있어도_정리를_마친_것으로_끝난다(CapturedOutput output) {
+        data.pendingDeletion("products/stuck.jpg", NOW.minus(Duration.ofDays(4)));
+
+        assertThat(service.run()).isEqualTo(ImageCleanupService.Result.DONE);
+
+        assertThat(output).doesNotContain("사진 정리가 막혀 있다");
+    }
 }

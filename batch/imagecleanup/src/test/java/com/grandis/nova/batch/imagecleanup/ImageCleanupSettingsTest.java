@@ -6,7 +6,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 /**
- * 설정이 어긋나면 사진 정리가 뜨지 않는다 — 실행마다 조용히 실패하거나 짧은 기준 시간으로 지우는 대신 배포에서 드러난다.
+ * 설정이 어긋나면 사진 정리가 뜨지 않는다 — 실행마다 조용히 실패하거나 짧은 기준 시간으로 지우는 대신 기동 실패(0 이 아닌 종료 코드)로
+ * 경보가 울린다.
  * 설정 바인딩부터 S3 클라이언트 빈까지 실제 경로로 띄운다(DB 는 쓰지 않는다).
  */
 class ImageCleanupSettingsTest {
@@ -41,12 +42,10 @@ class ImageCleanupSettingsTest {
     }
 
     @Test
-    void 청크_크기가_1보다_작거나_cron_식이_아니면_뜨지_않는다() {
+    void 청크_크기가_1보다_작으면_뜨지_않는다() {
         runner.withPropertyValues("nova.batch.image-cleanup.chunk-size=0")
                 .run(context -> assertThat(context).hasFailed().getFailure().rootCause()
                         .hasMessage("nova.batch.image-cleanup.chunk-size 는 1 이상이어야 한다"));
-        runner.withPropertyValues("nova.batch.image-cleanup.cron=매일 5시")
-                .run(context -> assertThat(context).hasFailed());
     }
 
     @Test

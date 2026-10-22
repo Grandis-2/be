@@ -11,7 +11,7 @@ import org.testcontainers.mysql.MySQLContainer;
 
 /**
  * 통합 시험의 바탕 — 싱글턴 MySQL(마이그레이션 적용)에 붙는다. 시험마다 사진 · 업무 행을 비운다.
- * 주기 작업은 꺼져 있어(test 프로필) 시험이 ImageCleanupService 를 직접 부른다.
+ * 기동 실행(ImageCleanupRunner)은 꺼져 있어(test 프로필) 시험이 ImageCleanupService 를 직접 부른다.
  */
 @SpringBootTest
 @ActiveProfiles("test")

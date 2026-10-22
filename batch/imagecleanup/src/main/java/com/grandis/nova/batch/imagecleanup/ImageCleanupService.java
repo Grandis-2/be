@@ -27,8 +27,9 @@ import software.amazon.awssdk.core.exception.SdkException;
  * 채웠을 때 뒤의 사진에 닿지 못한다.
  *
  * S3 삭제가 재시도 뒤에도 실패하면 이번 실행을 멈춘다. S3 가 멈췄으면 남은 대상도 실패할 것이라, 한 건마다 시간 상한까지 기다려
- * 봐야 실행만 길어진다. 남은 대상은 다음 실행이 본다. 실패가 이어지면(삭제 대기가
- * {@link #STALE_PENDING} 넘게 남음) 실행마다 오류 로그를 따로 남긴다 — 한 번 실패와 며칠째 막힌 정리를 로그로 가른다.
+ * 봐야 실행만 길어진다. 남은 대상은 다음 실행이 보므로 한 번 실패는 정상으로 끝난다. 실패가 이어져 삭제 대기가
+ * {@link #STALE_PENDING} 넘게 남으면 오류 로그를 남기고 {@link Result#BLOCKED} 를 돌려준다 — 실행기가 0 이 아닌 종료 코드로 끝내 경보가
+ * 울린다.
  *
  * dry-run 은 같은 조건으로 대상을 세고 오래된 순 몇 건의 키를 로그로 남길 뿐, 행 · 삭제 대기 · S3 를 건드리지 않는다.
  */
@@ -37,7 +38,7 @@ public class ImageCleanupService {
 
     /** dry-run 로그에 남기는 오래된 순 키 수 */
     static final int PREVIEW_KEYS = 5;
-    /** 삭제 대기가 이만큼 남아 있으면 오류 로그를 남긴다. 하루 한 번 돌므로 세 번 연속 S3 삭제가 실패한 것이다 */
+    /** 삭제 대기가 이만큼 남아 있으면 정리가 막힌 것으로 본다. 하루 한 번 돌므로 세 번 연속 S3 삭제가 실패한 것이다 */
     static final Duration STALE_PENDING = Duration.ofDays(3);
 
     private static final Logger log = LoggerFactory.getLogger(ImageCleanupService.class);
@@ -66,19 +67,20 @@ public class ImageCleanupService {
         this.transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
     }
 
-    /** 정기 실행. 다른 실행이 잠금을 쥐고 있으면 건너뛴다 */
-    public void run() {
-        if (!lock.runExclusively(this::cleanUp)) {
+    /** 한 번 정리한다. 다른 실행이 잠금을 쥐고 있으면 건너뛴다 */
+    public Result run() {
+        return lock.runExclusively(this::cleanUp).orElseGet(() -> {
             log.info("사진 정리 건너뜀 — 다른 실행이 잠금을 쥐고 있다");
-        }
+            return Result.SKIPPED;
+        });
     }
 
-    private void cleanUp() {
+    private Result cleanUp() {
         long started = System.nanoTime();
         Instant cutoff = clock.instant().minus(properties.retention());
         if (properties.dryRun()) {
             preview(cutoff, started);
-            return;
+            return Result.DONE;
         }
         Tally tally = new Tally();
         boolean stopped = !deletePending(tally) || !deleteUnused(cutoff, tally);
@@ -86,16 +88,18 @@ public class ImageCleanupService {
                         + "그 사이 바뀌어 건너뜀 {} · 걸린 시간 {}{}",
                 tally.pendingDeleted, cutoff, tally.candidates, tally.deleted, tally.referenced, tally.changed, elapsed(started),
                 stopped ? " — S3 삭제 실패로 멈춤(남은 대상은 다음 실행에)" : "");
-        warnStalePending();
+        return reportStalePending() ? Result.BLOCKED : Result.DONE;
     }
 
-    /** 오래 남은 삭제 대기가 있으면 오류 로그 — S3 삭제가 며칠째 실패해 정리가 막혀 있다 */
-    private void warnStalePending() {
+    /** 오래 남은 삭제 대기가 있으면 오류 로그를 남기고 true — S3 삭제가 며칠째 실패해 정리가 막혀 있다 */
+    private boolean reportStalePending() {
         ImageCleanupStore.StalePending stale = store.stalePending(clock.instant().minus(STALE_PENDING));
-        if (stale.count() > 0) {
-            log.error("사진 정리가 막혀 있다 — 삭제 대기 {}건이 {} 부터 남아 있다({} 넘게 S3 삭제 실패). 업로드 버킷 · 리전 · 삭제 권한을 확인한다",
-                    stale.count(), stale.oldest(), STALE_PENDING);
+        if (stale.count() == 0) {
+            return false;
         }
+        log.error("사진 정리가 막혀 있다 — 삭제 대기 {}건이 {} 부터 남아 있다({} 넘게 S3 삭제 실패). 업로드 버킷 · 리전 · 삭제 권한을 확인한다",
+                stale.count(), stale.oldest(), STALE_PENDING);
+        return true;
     }
 
     /** 지난 실행이 남긴 삭제 대기의 S3 객체를 지운다. S3 가 실패하면 false */
@@ -191,6 +195,16 @@ public class ImageCleanupService {
     /** 실행에 걸린 시간 — 드로우 · 주문 줄을 훑는 확인 비용이 데이터와 함께 늘어나는지 로그로 본다 */
     private static String elapsed(long startedNanos) {
         return "%.1f초".formatted((System.nanoTime() - startedNanos) / 1_000_000_000.0);
+    }
+
+    /** 한 번 실행한 결과. 실행기(ImageCleanupRunner)가 종료 코드로 바꾼다 */
+    public enum Result {
+        /** 정리를 마쳤다. S3 삭제 실패로 중간에 멈춰도 남은 대상은 다음 실행이 이어 지우므로 여기에 든다. dry-run 도 여기다 */
+        DONE,
+        /** 다른 실행이 잠금을 쥐고 있어 건너뛰었다 */
+        SKIPPED,
+        /** 삭제 대기가 {@link ImageCleanupService#STALE_PENDING} 넘게 남아 정리가 막혀 있다. dry-run 은 삭제 대기를 보지 않는다 */
+        BLOCKED
     }
 
     /** 한 실행에서 센 건수 */

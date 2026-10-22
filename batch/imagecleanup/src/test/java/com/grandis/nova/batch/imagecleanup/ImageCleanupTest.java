@@ -2,6 +2,7 @@ package com.grandis.nova.batch.imagecleanup;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.grandis.nova.batch.imagecleanup.ImageCleanupService.Result;
 import com.grandis.nova.batch.imagecleanup.support.ImageCleanupIntegrationTest;
 import com.grandis.nova.batch.imagecleanup.support.FakeS3;
 import com.grandis.nova.batch.imagecleanup.support.MySqlTestContainer;
@@ -224,25 +225,25 @@ class ImageCleanupTest extends ImageCleanupIntegrationTest {
         assertThat(pending()).isZero();
     }
 
-    /** 하루 한 번 돌므로 3일이면 세 번 연속 실패다 — 한 번 실패(경고)와 며칠째 막힌 정리(오류)를 로그로 가른다 */
+    /** 하루 한 번 돌므로 3일이면 세 번 연속 실패다 — 한 번 실패(경고 · 정상 종료)와 며칠째 막힌 정리(오류 · BLOCKED)를 가른다 */
     @Test
-    void 삭제_대기가_3일_넘게_남으면_오류_로그를_남긴다(CapturedOutput output) {
+    void 삭제_대기가_3일_넘게_남으면_오류_로그를_남기고_막혔다고_알린다(CapturedOutput output) {
         String stuck = "products/" + UUID.randomUUID() + ".jpg";
         data.pendingDeletion(stuck, NOW.minus(Duration.ofDays(4)));
         S3.failDelete(stuck, 500, S3ImageObjects.MAX_ATTEMPTS);
 
-        service.run();
+        assertThat(service.run()).isEqualTo(Result.BLOCKED);
 
         assertThat(output).contains("사진 정리가 막혀 있다 — 삭제 대기 1건이 " + NOW.minus(Duration.ofDays(4)) + " 부터 남아 있다");
     }
 
     @Test
-    void 삭제_대기가_3일_안이면_오류_로그를_남기지_않는다(CapturedOutput output) {
+    void 삭제_대기가_3일_안이면_S3_삭제_실패로_멈춰도_정상으로_끝난다(CapturedOutput output) {
         String recent = "products/" + UUID.randomUUID() + ".jpg";
         data.pendingDeletion(recent, NOW.minus(Duration.ofDays(2)));
         S3.failDelete(recent, 500, S3ImageObjects.MAX_ATTEMPTS);
 
-        service.run();
+        assertThat(service.run()).isEqualTo(Result.DONE);
 
         assertThat(output).contains("그 사이 바뀌어 건너뜀 0 · 걸린 시간 ").contains("S3 삭제 실패로 멈춤").doesNotContain("사진 정리가 막혀 있다");
     }
@@ -274,14 +275,14 @@ class ImageCleanupTest extends ImageCleanupIntegrationTest {
              Statement statement = other.createStatement()) {
             assertThat(scalar(statement, "SELECT GET_LOCK('" + ImageCleanupLock.NAME + "', 0)")).isEqualTo(1);
 
-            service.run();
+            assertThat(service.run()).isEqualTo(Result.SKIPPED);
 
             assertThat(exists(image)).isTrue();
             assertThat(S3.requests()).isEmpty();
             statement.execute("SELECT RELEASE_LOCK('" + ImageCleanupLock.NAME + "')");
         }
 
-        service.run();
+        assertThat(service.run()).isEqualTo(Result.DONE);
 
         assertThat(exists(image)).isFalse();
     }

@@ -27,4 +27,4 @@ include 'payment'     // 결제 — 토스 연동 · 결제 원장 · 복구 · 
 include 'worker'      // SQS 소비 — 외부 예약 등록 · 드로우
 // batch 는 소스 없는 묶음이다. 서비스 이름은 경로에서 나온다(:batch:reconciliation → batch-reconciliation, 루트 build.gradle)
 include 'batch:reconciliation' // 정합성 검사 (desired 1)
-include 'batch:imagecleanup'   // 안 쓰는 사진 정리 (desired 1)
+include 'batch:imagecleanup'   // 안 쓰는 사진 정리 (Scheduler 가 매일 한 번 띄움)

@@ -4,6 +4,8 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Optional;
+import java.util.function.Supplier;
 import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,7 +15,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * 사진 정리를 한 번에 하나만 돌린다 — MySQL 이름 잠금(GET_LOCK). 같은 이름은 한 연결만 쥐고, 못 잡으면 이번 실행을 건너뛴다.
- * 사진 정리는 하나만 띄우지만 배포 중에는 옛 태스크와 새 태스크가 잠깐 함께 돌 수 있다. 겹쳐도 행 삭제가 조건부라 데이터는 맞지만 같은
+ * 사진 정리는 Scheduler 가 하루 한 번 띄우지만 손으로 띄운 태스크와 겹칠 수 있다. 겹쳐도 행 삭제가 조건부라 데이터는 맞지만 같은
  * 대상을 두 번 고르고 결과 로그가 둘로 나뉜다.
  *
  * 잠금은 잡은 연결(세션)에 붙는다 — 실행 동안 그 연결을 따로 쥐고, 끝나면 놓은 뒤 풀에 돌려준다. 정리의 조회 · 삭제는 다른 연결로 한다.
@@ -33,19 +35,18 @@ class ImageCleanupLock {
         this.jdbc = new JdbcTemplate(dataSource);
     }
 
-    /** 잠금을 잡으면 work 를 돌리고 true, 다른 연결이 쥐고 있으면 돌리지 않고 false. work 의 예외는 잠금을 놓은 뒤 그대로 나간다 */
-    boolean runExclusively(Runnable work) {
-        return Boolean.TRUE.equals(jdbc.execute((ConnectionCallback<Boolean>) connection -> {
+    /** 잠금을 잡으면 work 를 돌려 그 결과를, 다른 연결이 쥐고 있으면 돌리지 않고 빈 값을 돌려준다. work 의 예외는 잠금을 놓은 뒤 그대로 나간다 */
+    <T> Optional<T> runExclusively(Supplier<T> work) {
+        return jdbc.execute((ConnectionCallback<Optional<T>>) connection -> {
             if (!acquire(connection)) {
-                return false;
+                return Optional.empty();
             }
             try {
-                work.run();
-                return true;
+                return Optional.of(work.get());
             } finally {
                 release(connection);
             }
-        }));
+        });
     }
 
     /** 1 이면 잡았다. 0(다른 연결이 쥠) · NULL(오류)은 못 잡았다 — getInt 는 NULL 을 0 으로 읽는다 */
