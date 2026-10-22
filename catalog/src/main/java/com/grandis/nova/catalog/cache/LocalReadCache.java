@@ -207,7 +207,7 @@ public final class LocalReadCache<K, V> {
         return clock.instant().isBefore(entry.loadedAt().plus(ttl));
     }
 
-    /** 같은 키의 loader 를 한 번만 부르고 나머지는 그 결과(또는 예외)를 같이 받는다 — Redis 읽기 캐시의 load 와 같은 모양. */
+    /** 같은 키의 loader 를 한 번만 부르고 나머지는 그 결과(또는 예외)를 같이 받는다 — Redis 읽기 캐시의 load 와 같은 모양(자리를 잡은 뒤 한 번 더 본다). */
     private ReadCache.Entry<V> load(K key, long current, Supplier<V> loader, Predicate<V> storable) {
         Slot<K> slot = new Slot<>(key, current);
         CompletableFuture<ReadCache.Entry<V>> mine = new CompletableFuture<>();
@@ -229,8 +229,15 @@ public final class LocalReadCache<K, V> {
                 events.waited(name, Duration.ofNanos(System.nanoTime() - started));
             }
         }
-        events.served(name, Outcome.LOAD);
         try {
+            // 자리를 잡기 전에 값이 없음을 봤어도, 그사이 앞 조회가 넣고 자리를 비웠을 수 있다 — loader 를 부르기 전에 한 번 더 본다
+            Loaded<V> found = cache.getIfPresent(key);
+            if (found != null && found.generation() >= current && fresh(found.entry())) {
+                events.served(name, Outcome.HIT);
+                mine.complete(found.entry());
+                return found.entry();
+            }
+            events.served(name, Outcome.LOAD);
             Instant loadedAt = clock.instant();   // 읽기 전 시각 — 응답의 나이를 짧게 잡지 않게
             ReadCache.Entry<V> entry = new ReadCache.Entry<>(loader.get(), loadedAt);
             mine.complete(entry);
