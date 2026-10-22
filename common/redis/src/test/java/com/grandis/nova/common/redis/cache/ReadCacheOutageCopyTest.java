@@ -122,6 +122,36 @@ class ReadCacheOutageCopyTest {
     }
 
     @Test
+    @DisplayName("옛 번호를 읽은 조회가 늦게 끝나도 새 번호의 확인 시각을 늘리지 않는다 — 믿는 시간은 새 번호를 읽은 때부터")
+    void lateReadOfAnOlderGenerationDoesNotExtendTheTrust() throws Exception {
+        PausingRedisTemplate template = new PausingRedisTemplate(connections, key -> key.equals("svc:cache:gen:products"));
+        ReadCache paused = instance(template);
+        ReadCache.Spec<Item> spec = paused.spec("held", Item.class, TTL, HELD_FOR);
+        Thread late = new Thread(() -> {
+            template.pause.set(true);   // 세대 0 을 읽은 직후 멈춘다
+            paused.get(spec, "products", "old", () -> new Item("old"));
+        });
+        late.start();
+        assertThat(template.read.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        instance(redis).bumpNow("products");   // 다른 인스턴스가 올렸다 — 세대 1
+        paused.get(spec, "products", "1", () -> new Item("v1"));   // 세대 1 을 읽고 사본을 남겼다(확인 시각 지금)
+        clock.advance(Duration.ofSeconds(50));
+        template.resume.countDown();   // 세대 0 을 읽은 조회가 이제 끝난다
+        late.join(10_000);
+        paused.breaker().transitionToForcedOpenState();
+        clock.advance(Duration.ofSeconds(15));   // 세대 1 을 읽은 지 65초, 늦은 조회가 끝난 지 15초
+        loads.clear();
+
+        String served = paused.get(spec, "products", "1", path -> {
+            loads.add(path);
+            return new Item("db");
+        }).name();
+        paused.breaker().transitionToClosedState();
+
+        assertThat(served).as("믿는 시간(1분)이 지났다").isEqualTo("db");
+    }
+
+    @Test
     @DisplayName("사본도 값의 TTL 을 넘겨 쓰지 않는다 — 평소 Redis 에 있었을 값보다 오래된 값을 내지 않는다")
     void copyNeverOutlivesTheTtl() {
         ReadCache.Spec<Item> body = cache.spec("body", Item.class, TTL, TTL);
