@@ -94,7 +94,7 @@ nova:
   # 회차 변경은 preorder 의 일정 변경 이벤트(catalog-events)를 받아 비운다 — preorder 의 보내기(nova.campaign.schedule-notice.enabled)를 켠 뒤에 켠다.
   # 안 켠 채 켜면 조기 마감 · 다시 열기 · 일정 변경이 이만큼 늦게 보인다. 이벤트를 놓쳤을 때도 이만큼이 상한이다
   # read-cache:
-  #   preorder-campaign-ttl: 3h
+  #   preorder-campaign-ttl: 30m
   # 아웃박스 발행(common:outbox). transport 는 필수(없으면 기동 실패)이고 운영 값은 sqs 다.
   # log 는 보내지 않고 행을 발행 완료로 표시하는 로컬 · 테스트 전용 전송이라, log-transport-allowed: true 를 함께 적어야 뜬다.
   # 그 허용 줄은 이 예시에 적지 않는다 — 여기서 만든 운영 설정이 실수로 log 로 뜨지 않게
