@@ -205,7 +205,7 @@ class AllocationRound {
                     GatewaySnapshot snapshot = new GatewaySnapshot(states,
                             new SnapshotMeta(globalCredit, cluster.aliveGateways(), settings.maxWait(),
                                     settings.leaveGrace()), nowMillis, brakeFactor,
-                            CapacityStatus.of(settings.globalCredit(), preorder));
+                            CapacityStatus.of(settings.globalCredit(), preorder), brake.windowTotals());
                     return store.publishSnapshot(fence, properties.fenceTtl().toMillis(), SnapshotCodec.encode(snapshot))
                             .flatMap(published -> published ? Mono.just(snapshot) : Mono.error(new LostLeadershipException()));
                 })

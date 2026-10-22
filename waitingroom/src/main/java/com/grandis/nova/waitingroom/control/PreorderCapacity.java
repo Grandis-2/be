@@ -10,8 +10,9 @@ import java.util.Optional;
  * @param sum     용량 합(갓 뜬 태스크는 줄여 센 값). 운영 최댓값을 넘지 않는다
  * @param ready   다 뜬 태스크 수
  * @param warming 갓 뜬 태스크 수
+ * @param perTask 태스크 하나의 초당 용량(살아 있는 행 중 최댓값, 예열로 줄이기 전). 증설로 닿을 수 있는 속도를 셀 때 쓴다
  */
-record PreorderCapacity(long sum, int ready, int warming) {
+record PreorderCapacity(long sum, int ready, int warming, long perTask) {
 
     /**
      * 모양이 틀린 행, 판정초가 지난 행, 마지막 시각이 지금보다 뒤인 행은 버린다.
@@ -24,12 +25,14 @@ record PreorderCapacity(long sum, int ready, int warming) {
         long sum = 0;
         int ready = 0;
         int warming = 0;
+        long perTask = 0;
         for (String value : rows.values()) {
             Optional<Row> row = Row.parse(value);
             if (row.isEmpty() || !row.get().aliveAt(nowSec)) {
                 continue;
             }
             long capacity = Math.min(row.get().perSecond(), maxCredit);
+            perTask = Math.max(perTask, capacity);
             if (nowSec - row.get().first() < warmupSec) {
                 warming++;
                 capacity = Math.max(1, (long) Math.floor(capacity * properties.warmupShare()));
@@ -38,7 +41,7 @@ record PreorderCapacity(long sum, int ready, int warming) {
             }
             sum = Math.min(maxCredit, sum + capacity);
         }
-        return ready + warming == 0 ? Optional.empty() : Optional.of(new PreorderCapacity(sum, ready, warming));
+        return ready + warming == 0 ? Optional.empty() : Optional.of(new PreorderCapacity(sum, ready, warming, perTask));
     }
 
     private record Row(long last, long first, long perSecond, long staleAfter) {

@@ -23,23 +23,23 @@ class PreorderCapacityTest {
     @Test
     void 살아_있는_태스크의_초당_용량을_더한다() {
         assertThat(PreorderCapacity.of(Map.of("a", row(3, 600, 100, 15), "b", row(0, 300, 80, 15)), NOW, DEFAULTS, MAX))
-                .contains(new PreorderCapacity(180, 2, 0));
+                .contains(new PreorderCapacity(180, 2, 0, 100));
     }
 
     @Test
     void 갓_뜬_태스크는_예열_기간_동안_용량을_절반만_센다() {
         assertThat(PreorderCapacity.of(Map.of("a", row(0, 600, 100, 15), "b", row(0, 119, 100, 15)), NOW, DEFAULTS, MAX))
-                .contains(new PreorderCapacity(150, 1, 1));
+                .contains(new PreorderCapacity(150, 1, 1, 100));
         assertThat(PreorderCapacity.of(Map.of("b", row(0, 120, 100, 15)), NOW, DEFAULTS, MAX))
-                .as("예열 기간이 지나면 다 센다").contains(new PreorderCapacity(100, 1, 0));
+                .as("예열 기간이 지나면 다 센다").contains(new PreorderCapacity(100, 1, 0, 100));
         assertThat(PreorderCapacity.of(Map.of("b", row(0, 0, 1, 15)), NOW, DEFAULTS, MAX))
-                .as("줄여도 1 은 센다").contains(new PreorderCapacity(1, 0, 1));
+                .as("줄여도 1 은 센다").contains(new PreorderCapacity(1, 0, 1, 1));
     }
 
     @Test
     void 판정초가_지났거나_시각이_미래인_행은_버린다() {
         assertThat(PreorderCapacity.of(Map.of("dead", row(16, 600, 100, 15), "edge", row(15, 600, 100, 15),
-                "future", row(-1, 600, 100, 15)), NOW, DEFAULTS, MAX)).contains(new PreorderCapacity(100, 1, 0));
+                "future", row(-1, 600, 100, 15)), NOW, DEFAULTS, MAX)).contains(new PreorderCapacity(100, 1, 0, 100));
     }
 
     @Test
@@ -59,19 +59,20 @@ class PreorderCapacityTest {
     @Test
     void 합은_운영_최댓값에서_자른다() {
         assertThat(PreorderCapacity.of(Map.of("a", row(0, 600, 1_000, 15), "b", row(0, 600, Long.MAX_VALUE, 15)),
-                NOW, DEFAULTS, MAX)).contains(new PreorderCapacity(MAX, 2, 0));
+                NOW, DEFAULTS, MAX)).contains(new PreorderCapacity(MAX, 2, 0, MAX));
     }
 
     @Test
     void 예열_기간과_비율은_설정을_따르고_범위를_벗어나면_기동하지_않는다() {
-        CapacityProperties shortWarmup = new CapacityProperties(null, null, Duration.ofSeconds(30), 0.25);
+        CapacityProperties shortWarmup = new CapacityProperties(null, null, Duration.ofSeconds(30), 0.25, null);
         assertThat(PreorderCapacity.of(Map.of("a", row(0, 29, 100, 15), "b", row(0, 30, 100, 15)), NOW, shortWarmup, MAX))
-                .contains(new PreorderCapacity(125, 1, 1));
+                .contains(new PreorderCapacity(125, 1, 1, 100));
 
-        assertThatThrownBy(() -> new CapacityProperties(null, null, null, 0.0)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CapacityProperties(null, null, null, 1.5)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CapacityProperties(null, " ", null, null)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CapacityProperties(null, null, Duration.ofSeconds(-1), null))
+        assertThatThrownBy(() -> new CapacityProperties(null, null, null, 0.0, null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CapacityProperties(null, null, null, 1.5, null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CapacityProperties(null, " ", null, null, null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CapacityProperties(null, null, null, null, 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CapacityProperties(null, null, Duration.ofSeconds(-1), null, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

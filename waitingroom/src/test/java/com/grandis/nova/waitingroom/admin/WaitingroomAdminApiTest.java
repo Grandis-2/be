@@ -1,11 +1,13 @@
 package com.grandis.nova.waitingroom.admin;
 
+import com.grandis.nova.waitingroom.control.CapacityStatus;
 import com.grandis.nova.waitingroom.control.SnapshotHolder;
 import com.grandis.nova.waitingroom.control.TestSnapshots;
 import com.grandis.nova.waitingroom.domain.product.MaxWait;
 import com.grandis.nova.waitingroom.domain.product.ProductState;
 import com.grandis.nova.waitingroom.domain.product.SalesWindow;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
+import com.grandis.nova.waitingroom.redis.ControlStore.RelayOutcome;
 import com.grandis.nova.waitingroom.redis.RedisKeys;
 import com.grandis.nova.waitingroom.support.RedisContainer;
 import com.grandis.nova.waitingroom.support.TestJwts;
@@ -24,6 +26,7 @@ import java.math.BigInteger;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Optional;
 
 import static com.grandis.nova.waitingroom.support.TestIds.customerId;
 import static com.grandis.nova.waitingroom.support.TestIds.productKey;
@@ -60,6 +63,14 @@ class WaitingroomAdminApiTest {
         client = WebTestClient.bindToApplicationContext(context).build();
         redis = RedisContainer.fresh();
         now = Instant.now();
+        // 노드가 같은 판정 재료를 시험 사이에 들고 있다 — 용량을 모르는 재료로 되돌린다
+        TestSnapshots.put(snapshots, Map.of(), new SnapshotMeta(150, 1, MaxWait.unlimited()));
+    }
+
+    /** 운영값 300, preorder 3대(태스크당 100, 하나는 예열 중)로 용량 합 250, 최대 5대면 500. */
+    private void capacityKnown() {
+        TestSnapshots.put(snapshots, new SnapshotMeta(200, 1, MaxWait.unlimited()), 0.8,
+                new CapacityStatus(300, 250, 2, 1, 100), Optional.of(new RelayOutcome(200, 30)));
     }
 
     private WebTestClient.RequestHeadersSpec<?> put(String path, Map<String, Object> body) {
@@ -227,6 +238,56 @@ class WaitingroomAdminApiTest {
                 .jsonPath("$.data.maxWaitSeconds.value").isEmpty()
                 .jsonPath("$.data.products[0].queueLimit").isEmpty();
         assertThat(redis.opsForHash().size(RedisKeys.SETTINGS).block(WAIT)).isZero();
+    }
+
+    @Test
+    void 입장_속도_기준으로_권장_상한_위험선_적용값_감속_상태를_보여_준다() {
+        capacityKnown();
+        redis.opsForHash().put(RedisKeys.SETTINGS, "global-credit", "300").block(WAIT);
+
+        get("/admission-rate").expectStatus().isOk().expectBody()
+                .jsonPath("$.data.capacity.recommendedMax").isEqualTo(250)
+                .jsonPath("$.data.capacity.dangerLine").isEqualTo(500)
+                .jsonPath("$.data.capacity.appliedCredit").isEqualTo(200)
+                .jsonPath("$.data.capacity.readyTasks").isEqualTo(2)
+                .jsonPath("$.data.capacity.warmingTasks").isEqualTo(1)
+                .jsonPath("$.data.capacity.brakeFactor").isEqualTo(0.8)
+                .jsonPath("$.data.capacity.relayBadRatio").isEqualTo(0.15)
+                .jsonPath("$.data.capacity.scalingPending").isEqualTo(true);
+    }
+
+    @Test
+    void 용량을_모르면_기준은_비우고_최댓값까지_받는다() {
+        get("/admission-rate").expectStatus().isOk().expectBody()
+                .jsonPath("$.data.capacity.recommendedMax").isEmpty()
+                .jsonPath("$.data.capacity.dangerLine").isEmpty()
+                .jsonPath("$.data.capacity.readyTasks").isEmpty()
+                .jsonPath("$.data.capacity.relayBadRatio").isEmpty()
+                .jsonPath("$.data.capacity.scalingPending").isEqualTo(false);
+        put("/admission-rate", Map.of("globalCredit", 1_500)).exchange().expectStatus().isOk();
+    }
+
+    @Test
+    void 용량_합을_넘겨_늘리면_확인이_있어야_저장하고_위험선을_넘으면_거절한다() {
+        capacityKnown();
+        redis.opsForHash().put(RedisKeys.SETTINGS, "global-credit", "100").block(WAIT);
+
+        put("/admission-rate", Map.of("globalCredit", 250)).exchange().expectStatus().isOk();
+        put("/admission-rate", Map.of("globalCredit", 400)).exchange().expectStatus().isEqualTo(409).expectBody()
+                .jsonPath("$.error.code").isEqualTo("ADMISSION_RATE_NEEDS_CONFIRM")
+                .jsonPath("$.error.details.recommendedMax").isEqualTo(250)
+                .jsonPath("$.error.details.dangerLine").isEqualTo(500);
+        assertThat(setting("global-credit")).as("확인 전에는 쓰지 않는다").isEqualTo("250");
+        put("/admission-rate", Map.of("globalCredit", 501, "confirm", true)).exchange().expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.error.code").isEqualTo("ADMISSION_RATE_UNREACHABLE");
+        assertThat(setting("global-credit")).isEqualTo("250");
+
+        put("/admission-rate", Map.of("globalCredit", 400, "confirm", true)).exchange().expectStatus().isOk().expectBody()
+                .jsonPath("$.data.globalCredit.value").isEqualTo(400)
+                .jsonPath("$.data.capacity.scalingPending").isEqualTo(true);
+        // 줄이는 것은 용량 합보다 커도 확인 없이 받는다
+        put("/admission-rate", Map.of("globalCredit", 300)).exchange().expectStatus().isOk();
+        assertThat(setting("global-credit")).isEqualTo("300");
     }
 
     @Test

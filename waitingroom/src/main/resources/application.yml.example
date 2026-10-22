@@ -31,6 +31,7 @@ waitingroom:
   #   enabled: true
   #   warmup: 2m            # 갓 뜬 태스크로 보는 기간
   #   warmup-share: 0.5     # 그동안 용량에 곱할 비율
+  #   preorder-max-tasks: 5 # preorder 최대 대수(인프라 max 와 같게). 관리자 위험선 = 대수 × 태스크당 용량
   relay:
     # preorder 주소(VPC 안 Cloud Map). 접수 POST 만 이리로 전달한다
     preorder-uri: http://preorder.ureca.local:8083

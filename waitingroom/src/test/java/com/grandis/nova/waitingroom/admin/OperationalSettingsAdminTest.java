@@ -3,6 +3,7 @@ package com.grandis.nova.waitingroom.admin;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.waitingroom.control.AdmissionProperties;
+import com.grandis.nova.waitingroom.control.CapacityProperties;
 import com.grandis.nova.waitingroom.control.Leadership;
 import com.grandis.nova.waitingroom.control.RedisClock;
 import com.grandis.nova.waitingroom.control.TestSnapshots;
@@ -46,12 +47,13 @@ class OperationalSettingsAdminTest {
         }
     };
     private final OperationalSettingsAdmin admin = new OperationalSettingsAdmin(down, new AdmissionProperties(null, null),
+            CapacityProperties.defaults(),
             TestSnapshots.emptyHolder(), new RedisClock(Clock.systemUTC()), new Leadership(), registry);
 
     @Test
     void 저장소_장애면_조회_변경_기본값_복귀_현황_모두_503_이다() {
         unavailable(admin.admissionRate());
-        unavailable(admin.setGlobalCredit("admin", 10L));
+        unavailable(admin.setGlobalCredit("admin", 10L, false));
         unavailable(admin.clear("admin", "global-credit"));
         unavailable(admin.setMaxWait("admin", 60L));
         unavailable(admin.status());

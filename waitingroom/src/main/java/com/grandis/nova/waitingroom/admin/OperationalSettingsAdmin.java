@@ -2,11 +2,13 @@ package com.grandis.nova.waitingroom.admin;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.waitingroom.admin.AdmissionRateView.CapacityGuide;
 import com.grandis.nova.waitingroom.admin.AdmissionRateView.ProductRate;
 import com.grandis.nova.waitingroom.admin.AdmissionRateView.Setting;
 import com.grandis.nova.waitingroom.admin.AdmissionRateView.Source;
 import com.grandis.nova.waitingroom.admin.WaitingroomStatusView.ProductStatus;
 import com.grandis.nova.waitingroom.control.AdmissionProperties;
+import com.grandis.nova.waitingroom.control.CapacityProperties;
 import com.grandis.nova.waitingroom.control.GatewaySnapshot;
 import com.grandis.nova.waitingroom.control.Leadership;
 import com.grandis.nova.waitingroom.control.OperationalSettings;
@@ -46,15 +48,17 @@ class OperationalSettingsAdmin {
 
     private final ControlStore store;
     private final AdmissionProperties defaults;
+    private final CapacityProperties capacity;
     private final SnapshotHolder snapshots;
     private final RedisClock clock;
     private final Leadership leadership;
     private final MeterRegistry registry;
 
-    OperationalSettingsAdmin(ControlStore store, AdmissionProperties defaults, SnapshotHolder snapshots,
-                             RedisClock clock, Leadership leadership, MeterRegistry registry) {
+    OperationalSettingsAdmin(ControlStore store, AdmissionProperties defaults, CapacityProperties capacity,
+                             SnapshotHolder snapshots, RedisClock clock, Leadership leadership, MeterRegistry registry) {
         this.store = store;
         this.defaults = defaults;
+        this.capacity = capacity;
         this.snapshots = snapshots;
         this.clock = clock;
         this.leadership = leadership;
@@ -65,10 +69,17 @@ class OperationalSettingsAdmin {
         return store.readSettings().map(this::view).onErrorMap(OperationalSettingsAdmin::storeFailure, OperationalSettingsAdmin::unavailable);
     }
 
-    Mono<AdmissionRateView> setGlobalCredit(String actor, Long value) {
+    /** 늘려서 preorder 용량 합을 넘기면 confirm 이 있어야 저장한다. 증설로도 닿지 않는 값은 거절한다. */
+    Mono<AdmissionRateView> setGlobalCredit(String actor, Long value, boolean confirmed) {
         long checked = checked("globalCredit", value, 0, defaults.maxGlobalCredit());
-        return change(actor, OperationalSettings.GLOBAL_CREDIT, store.writeSetting(OperationalSettings.GLOBAL_CREDIT,
-                String.valueOf(checked)), String.valueOf(checked));
+        return store.readSettings()
+                .onErrorMap(OperationalSettingsAdmin::storeFailure, OperationalSettingsAdmin::unavailable)
+                .doOnNext(raw -> {
+                    long current = settings(raw).globalCredit();
+                    AdmissionRateGuide.check(checked, current, confirmed, guide(current));
+                })
+                .then(change(actor, OperationalSettings.GLOBAL_CREDIT, store.writeSetting(OperationalSettings.GLOBAL_CREDIT,
+                        String.valueOf(checked)), String.valueOf(checked)));
     }
 
     Mono<AdmissionRateView> setProductCap(String actor, String productId, Long value) {
@@ -138,9 +149,18 @@ class OperationalSettingsAdmin {
                 .onErrorMap(OperationalSettingsAdmin::storeFailure, OperationalSettingsAdmin::unavailable);
     }
 
+    private OperationalSettings settings(Map<String, String> raw) {
+        return OperationalSettings.from(raw, defaults.globalCredit(), defaults.productCap(), defaults.maxGlobalCredit());
+    }
+
+    /** 낡은 재료로는 기준을 내지 않는다 — 리더가 멈췄으면 용량도 적용값도 지금 것이 아니다. */
+    private CapacityGuide guide(long operationalCredit) {
+        Optional<GatewaySnapshot> snapshot = snapshots.stale() ? Optional.empty() : snapshots.current();
+        return AdmissionRateGuide.of(snapshot, operationalCredit, defaults.maxGlobalCredit(), capacity.preorderMaxTasks());
+    }
+
     private AdmissionRateView view(Map<String, String> raw) {
-        OperationalSettings settings = OperationalSettings.from(raw, defaults.globalCredit(), defaults.productCap(),
-                defaults.maxGlobalCredit());
+        OperationalSettings settings = settings(raw);
         // 출처는 리더가 실제로 받아들인 값인지로 정한다 — 깨진 값이 저장돼 있으면 리더는 기본값을 쓴다
         Setting globalCredit = new Setting(settings.globalCredit(),
                 OperationalSettings.acceptsGlobalCredit(raw.get(OperationalSettings.GLOBAL_CREDIT)) ? Source.OPERATIONAL : Source.DEFAULT);
@@ -156,7 +176,8 @@ class OperationalSettingsAdmin {
                 productIds.stream()
                         .map(productId -> new ProductRate(productId, cap(settings, productId),
                                 queueLimit(states.get(productId), maxWait)))
-                        .toList());
+                        .toList(),
+                guide(settings.globalCredit()));
     }
 
     private static Setting cap(OperationalSettings settings, String productId) {
