@@ -408,7 +408,7 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
-    @DisplayName("홍보 카드는 인스턴스 메모리에서 — DB 를 직접 고쳐도 옛 카드. Redis 가 멈추면(세대를 못 읽음) DB 로 읽는다. 관리자가 상품을 숨기면(JPA) 바로 빠진다")
+    @DisplayName("홍보 카드는 인스턴스 메모리에서 — DB 를 직접 고쳐도 옛 카드, Redis 가 멈춰도(세대를 못 읽음) 마지막 세대의 카드. 관리자가 상품을 숨기면(JPA) 바로 빠진다")
     void promotionCardsAreServedFromMemory() throws Exception {
         java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
         UUID productId = fixtures.product(categoryId, "PREORDER", "ACTIVE", "홍보 카드", "t");
@@ -428,9 +428,7 @@ class CatalogReadCacheApiTest {
         assertThat(promotionCardTitles(promotionId)).as("메모리의 옛 카드 — 캐시가 켜져 있다").containsExactly("홍보 카드");
         RedisContainerConfig.pause();
         try {
-            assertThat(promotionCardTitles(promotionId)).as("세대를 못 읽으면 캐시 없이 DB — 상세와 같다").containsExactly("직접 고침");
-            jdbcTemplate.update("UPDATE products SET title = '또 고침' WHERE id = ?", (Object) UuidBinary.toBytes(productId));
-            assertThat(promotionCardTitles(promotionId)).as("그동안 읽은 것도 넣지 않는다 — 다음 조회도 DB").containsExactly("또 고침");
+            assertThat(promotionCardTitles(promotionId)).as("세대를 못 읽으면 마지막으로 본 세대의 메모리 카드 — DB 로 가지 않는다").containsExactly("홍보 카드");
         } finally {
             RedisContainerConfig.unpause();
         }
