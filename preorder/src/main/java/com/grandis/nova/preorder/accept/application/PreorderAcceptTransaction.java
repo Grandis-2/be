@@ -94,7 +94,7 @@ class PreorderAcceptTransaction {
         }
 
         requireTicketAfterLastAccept(command, history.lastAcceptedAt());
-        OptionSnapshot option = requireOnSale(command, product);
+        OptionSnapshot option = requireOnSale(command, product, campaign);
         requireAccepting(campaign, clock.instant());
         IssuedPosition issued = campaigns.issuePosition(command.productId());
 
@@ -133,7 +133,7 @@ class PreorderAcceptTransaction {
         if (replay.isPresent()) {
             return replay;
         }
-        requireOnSale(command, product);
+        requireOnSale(command, product, cached);
         requireAccepting(cached, now);
         return Optional.empty();
     }
@@ -162,9 +162,12 @@ class PreorderAcceptTransaction {
         return new AcceptResult(existing, campaigns.getBatch(existing.shipmentBatchId()), true);
     }
 
-    private OptionSnapshot requireOnSale(AcceptCommand command, Optional<ProductCatalog> product) {
+    /** 회차 행의 판매 상태도 옵션보다 먼저 본다 — 판매 중지 · 비공개 상품이 옵션 오류로 존재를 알리지 않게. */
+    private OptionSnapshot requireOnSale(AcceptCommand command, Optional<ProductCatalog> product,
+                                         Optional<CampaignForAccept> campaign) {
         ProductCatalog found = product
                 .filter(ProductCatalog::isOnPreorderSale)
+                .filter(ignored -> campaign.filter(CampaignForAccept::onSale).isPresent())
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.PRODUCT_NOT_FOUND));
         return found.snapshot(command.optionId())
                 .filter(OptionSnapshot::isOnSale)

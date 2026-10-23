@@ -314,6 +314,26 @@ class AcceptPreorderApiTest {
         assertThat(fixtures.nextQueuePosition(hidden.productId())).isEqualTo(1L);
     }
 
+    /** 옵션까지 멈춘 경우에도 옵션 오류가 아니라 404 로 상품의 존재를 알리지 않는다 — 잠근 뒤 · 잠그기 전 모두. */
+    @Test
+    void 회차_행이_비공개면_옵션이_멈췄어도_PRODUCT_NOT_FOUND() throws Exception {
+        PreorderProduct open = fixtures.openPreorderProduct();
+        catalogReturns(open.productId(), "PREORDER", "ACTIVE", open.optionId(), "PAUSED");
+        fixtures.listing(open.productId(), "모델", "ACTIVE", false);
+        accept(customerId, open.productId(), open.optionId(), "key-hidden-paused-option",
+                ticket(open.productId(), customerId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
+
+        PreorderProduct notOpen = fixtures.preorderProduct(Instant.now().plusSeconds(3600), Instant.now().plusSeconds(7200));
+        catalogReturns(notOpen.productId(), "PREORDER", "ACTIVE", notOpen.optionId(), "PAUSED");
+        fixtures.listing(notOpen.productId(), "모델", "PAUSED", true);
+        accept(customerId, notOpen.productId(), notOpen.optionId(), "key-not-open-paused-option",
+                ticket(notOpen.productId(), customerId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("PRODUCT_NOT_FOUND"));
+    }
+
     /** 오픈 전이면 잠그기 전(회차 캐시)에 거절한다 — 그때도 409 오픈 전이 아니라 404 로 존재를 알리지 않는다. */
     @Test
     void 오픈_전_회차_행이_비공개면_SALE_NOT_OPEN_이_아니라_404() throws Exception {
