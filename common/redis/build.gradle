@@ -1,6 +1,7 @@
 // Redis 를 쓰는 모듈만 의존한다 (member · catalog · preorder · order · payment — catalog · preorder 는 common:security 를 거쳐).
 // worker · batch 는 쓰지 않고, waitingroom 은 전용 Redis 를 reactive 로 따로 쓴다.
 // 의존하면 기동 때 공유 연결을 미리 열고 PING 한다(RedisWarmupAutoConfiguration) — 첫 요청이 연결을 열다 실패하지 않게.
+// 명령마다 트레이스 스팬도 남긴다(RedisTracingAutoConfiguration) — lettuce_seconds 지표는 그대로다.
 // 읽기 캐시(ReadCache)는 쓰는 서비스가 빈으로 직접 만든다(catalog · order) — 자동설정으로 켜지 않는다.
 apply plugin: 'java-library'
 
@@ -12,6 +13,10 @@ dependencies {
     implementation "io.github.resilience4j:resilience4j-circuitbreaker:${rootProject.resilience4jVersion}"   // 버전은 루트 build.gradle
     // Redis 장애 중에 쓰는 이 인스턴스의 사본(ReadCache.OutageCopies) — 버전은 Spring Boot 가 정한다
     implementation 'com.github.ben-manes.caffeine:caffeine'
+    // Redis 명령 스팬(RedisTracingAutoConfiguration). API 만 싣는다 — 에이전트가 이 API 를 자기 것으로 잇고, 없으면 아무 일도 하지 않는다
+    implementation 'io.opentelemetry:opentelemetry-api'
 
     testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    testImplementation 'io.opentelemetry:opentelemetry-sdk-testing'
+    testImplementation 'io.micrometer:micrometer-core'
 }
