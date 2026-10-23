@@ -91,10 +91,12 @@ public class ProductOptionsQueryService {
     /** 사진은 표시용이라 판정에 쓰지 않는다 — 문서를 풀지 못하면 사진만 비우고 응답(접수 판정 재료)은 그대로 낸다. */
     private static ProductOptions documentOrEmpty(UUID productId, String document) {
         try {
-            return ProductOptions.parse(document);
+            ProductOptions parsed = ProductOptions.parse(document);
+            return parsed == null ? ProductOptions.parse(null) : parsed;   // 문서가 JSON null 이면 예외 없이 null 이 나온다
         } catch (RuntimeException e) {
             log.warn("상품 옵션 문서를 풀지 못해 옵션 사진을 비운다 productId={}", productId, e);
             return ProductOptions.parse(null);
         }
     }
+
 }
