@@ -55,14 +55,15 @@ class ProductOptionsQueryRepository {
     }
 
     /**
-     * 옵션들과 그 상품(상품 문서 포함). 없는 옵션은 빠진다. 순서는 정하지 않는다. 옵션 행마다 상품 문서가 다시 실려 오지만(호출자 상한 50개)
-     * 따로 읽으면 두 문장이 되어 한 시점이 깨지므로 받아들인다 — 푸는 것은 호출자가 상품마다 한 번 한다.
+     * 옵션들과 그 상품. 없는 옵션은 빠진다. 순서는 정하지 않는다. 결과 집합에는 상품 문서를 상품마다 한 행에만 싣는다(나머지 행은 null) — 같은 상품의
+     * 옵션이 여럿이면 문서가 행마다 다시 실려 왔다(실측: 문서 3,150바이트 상품 10개 · 옵션 50개의 결과 집합 157,500 → 31,500바이트). 따로 읽으면 두 문장이 되어
+     * 한 시점이 깨지므로 한 문장 안에서 창 함수로 고른다. 푸는 것은 호출자가 상품마다 한 번 한다.
      */
     List<OptionWithProduct> findOptionsWithProducts(Collection<UUID> optionIds) {
         if (optionIds.isEmpty()) {
             return List.of();
         }
-        return jdbc.query("SELECT " + PRODUCT_COLUMNS + ", p.options AS document,"
+        return jdbc.query("SELECT " + PRODUCT_COLUMNS + ", IF(ROW_NUMBER() OVER (PARTITION BY p.id ORDER BY o.id) = 1, p.options, NULL) AS document,"
                         + " o.id AS option_id, o.sku, o.title AS option_title, o.price, o.status AS option_status, o.combination_key"
                         + " FROM product_options o JOIN products p ON p.id = o.product_id WHERE o.id IN (:optionIds)",
                 new MapSqlParameterSource("optionIds", optionIds.stream().map(UuidBinary::toBytes).toList()),
@@ -89,7 +90,7 @@ class ProductOptionsQueryRepository {
     record ProductWithOptions(ProductRow product, List<OptionRow> options) {
     }
 
-    /** @param document 상품의 옵션 문서(JSON) — 보증 · 사진을 여기서 계산한다 */
+    /** @param document 상품의 옵션 문서(JSON) — 보증 · 사진을 여기서 계산한다. 상품마다 한 행에만 있고 나머지 행은 null 이다 */
     record OptionWithProduct(ProductRow product, String document, OptionRow option) {
     }
 }

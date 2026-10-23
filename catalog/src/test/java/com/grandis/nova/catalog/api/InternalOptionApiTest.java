@@ -97,6 +97,50 @@ class InternalOptionApiTest {
                 .andExpect(jsonPath("$.error").doesNotExist());
     }
 
+    @Test
+    @DisplayName("같은 상품의 옵션 여럿 — 문서는 상품마다 한 행에만 실려 오지만, 어느 순서로 물어도 모든 옵션이 그 상품의 보증 · 사진을 받는다")
+    void sameProductOptionsShareOneDocument() throws Exception {
+        UUID phone = fixtures.product("IN_STOCK", "ACTIVE");
+        fixtures.image(phone, "GALLERY", "블랙", 0, false, "https://img/same-0.jpg");
+        transaction.executeWithoutResult(status -> products.findForUpdate(phone).orElseThrow()
+                .setWarranty(true, new BigDecimal("199000")));
+        for (int i = 0; i < 3; i++) {
+            fixtures.option(phone, "ACTIVE", new BigDecimal("1000000"));
+        }
+        // 문서를 싣는 행은 옵션 id(BINARY 순서)가 가장 작은 행이다 — 큰 id 부터 물어 문서 없는 행이 먼저 오게 한다
+        List<UUID> descending = jdbcTemplate.query("SELECT id FROM product_options WHERE product_id = ? ORDER BY id DESC",
+                (rs, rowNum) -> UuidBinary.fromBytes(rs.getBytes(1)), (Object) UuidBinary.toBytes(phone));
+        var result = asUser(descending).andExpect(status().isOk()).andExpect(jsonPath("$.data.items", hasSize(3)));
+        for (int i = 0; i < 3; i++) {
+            result.andExpect(jsonPath("$.data.items[" + i + "].optionId").value(descending.get(i).toString()))
+                    .andExpect(jsonPath("$.data.items[" + i + "].warranty.offered").value(true))
+                    .andExpect(jsonPath("$.data.items[" + i + "].warranty.surcharge").value(199000))
+                    .andExpect(jsonPath("$.data.items[" + i + "].imageUrl").value("https://img/same-0.jpg"));
+        }
+    }
+
+    @Test
+    @DisplayName("상품 둘의 옵션을 섞어 물어도 — 옵션마다 자기 상품의 보증 · 사진을 받는다(문서는 상품마다 따로 고른다)")
+    void mixedProductsKeepTheirOwnDocuments() throws Exception {
+        UUID phone = fixtures.product("IN_STOCK", "ACTIVE");
+        fixtures.image(phone, "GALLERY", "블랙", 0, false, "https://img/phone-0.jpg");
+        transaction.executeWithoutResult(status -> products.findForUpdate(phone).orElseThrow().setWarranty(true, new BigDecimal("199000")));
+        UUID tablet = fixtures.product("IN_STOCK", "ACTIVE");
+        fixtures.image(tablet, "GALLERY", "실버", 0, false, "https://img/tablet-0.jpg");
+        transaction.executeWithoutResult(status -> products.findForUpdate(tablet).orElseThrow().setWarranty(true, new BigDecimal("99000")));
+        List<UUID> phoneOptions = List.of(fixtures.option(phone, "ACTIVE", new BigDecimal("1000000")), fixtures.option(phone, "ACTIVE", new BigDecimal("1000000")));
+        List<UUID> tabletOptions = List.of(fixtures.option(tablet, "ACTIVE", new BigDecimal("800000")), fixtures.option(tablet, "ACTIVE", new BigDecimal("800000")));
+        List<UUID> asked = List.of(tabletOptions.get(1), phoneOptions.get(0), tabletOptions.get(0), phoneOptions.get(1));
+
+        var result = asUser(asked).andExpect(status().isOk()).andExpect(jsonPath("$.data.items", hasSize(4)));
+        for (int i = 0; i < asked.size(); i++) {
+            boolean isPhone = phoneOptions.contains(asked.get(i));
+            result.andExpect(jsonPath("$.data.items[" + i + "].optionId").value(asked.get(i).toString()))
+                    .andExpect(jsonPath("$.data.items[" + i + "].warranty.surcharge").value(isPhone ? 199000 : 99000))
+                    .andExpect(jsonPath("$.data.items[" + i + "].imageUrl").value(isPhone ? "https://img/phone-0.jpg" : "https://img/tablet-0.jpg"));
+        }
+    }
+
     /** 첫 색상(블랙)의 대표가 둘째 장이라 "썸네일 · 대표 · 고른 색상의 첫 장" 셋이 서로 다른 값이 된다 — 어느 하나로 바꿔도 걸린다. */
     @Test
     @DisplayName("imageUrl 은 옵션이 고른 색상의 첫 장 — 그 색상에 사진이 없으면 상품 썸네일(첫 색상의 첫 장)이고, 대표 표시는 보지 않는다")
