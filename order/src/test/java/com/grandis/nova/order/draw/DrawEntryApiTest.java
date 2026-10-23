@@ -11,6 +11,7 @@ import com.grandis.nova.order.client.payment.PaymentClient;
 import com.grandis.nova.order.client.payment.PaymentConfirmClient;
 import com.grandis.nova.order.event.OrderEventDispatcher;
 import com.grandis.nova.order.outbox.OutboundEventType;
+import com.grandis.nova.order.support.GeneralLog;
 import com.grandis.nova.order.support.OrderFixtures;
 import com.grandis.nova.order.support.OrderIntegrationTest;
 import com.grandis.nova.order.support.TestAuth;
@@ -549,6 +550,25 @@ class DrawEntryApiTest {
 
         verify(confirmClient).confirm(eq(TOSS_ORDER_ID), argThat(ConfirmRequest::startAllowed), any());
         assertThat(statusOf(entry)).isEqualTo("PAID");
+    }
+
+    // ── 읽기 문장 ──
+
+    @Test
+    @DisplayName("응모 다시 하기 · 내 응모 목록 · 응모비 결제 준비는 읽기를 트랜잭션 없이 한다 — 준비 · 정리 문장(autocommit · 읽기 전용 전환)이 없다")
+    void entryReadsRunWithoutTransaction() throws Exception {
+        UUID draw = openDraw();
+        enter(customerId, draw, shipTo("홍길동")).andExpect(status().isCreated());
+        given(paymentClient.openCapture(any(), any())).willReturn(ApiResponse.ok(new PaymentAttempt(TOSS_ORDER_ID, FEE)));
+
+        List<String> again = GeneralLog.statements("%from draw_entries%", () -> enter(customerId, draw, shipTo("홍길동")).andExpect(status().isOk()));
+        List<String> mine = GeneralLog.statements("%draw_entries%", () ->
+                mockMvc.perform(get("/api/v1/draws/entries/me").with(TestAuth.customer(customerId))).andExpect(status().isOk()));
+        List<String> prepared = GeneralLog.statements("%from draw_entries%", () -> prepare(customerId, draw).andExpect(status().isCreated()));
+
+        assertThat(again).as("다시 하기 — 회차 · 응모").hasSize(2).noneMatch(GeneralLog::isTransactionHousekeeping);
+        assertThat(mine).as("내 응모 목록 — 건수 · 목록 · 회차").hasSize(3).noneMatch(GeneralLog::isTransactionHousekeeping);
+        assertThat(prepared).as("결제 준비 — 응모 · 회차").hasSize(2).noneMatch(GeneralLog::isTransactionHousekeeping);
     }
 
     // ── 도우미 ──

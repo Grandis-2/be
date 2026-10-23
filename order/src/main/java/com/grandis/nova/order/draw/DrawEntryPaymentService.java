@@ -187,8 +187,7 @@ public class DrawEntryPaymentService {
     }
 
     private DrawCampaign campaignOf(DrawEntry entry) {
-        return readTransaction.execute(status -> campaigns.findById(entry.campaignId()))
-                .orElseThrow(() -> new IllegalStateException("응모의 회차가 없다: entryId=" + entry.id()));
+        return campaigns.lookup(entry.campaignId()).orElseThrow(() -> new IllegalStateException("응모의 회차가 없다: entryId=" + entry.id()));
     }
 
     private boolean isOpen(DrawCampaign campaign) {

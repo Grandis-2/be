@@ -74,7 +74,7 @@ class DrawEntryPaymentUnitTest {
     void setUp() {
         given(slots.tryAcquire()).willReturn(true);
         given(entryService.mine(MEMBER, DRAW)).willReturn(ENTRY);
-        given(campaigns.findById(DRAW)).willReturn(Optional.of(CAMPAIGN));
+        given(campaigns.lookup(DRAW)).willReturn(Optional.of(CAMPAIGN));
         given(entries.findById(any())).willReturn(Optional.of(ENTRY));
         given(confirmer.check(any(), anyString(), anyString(), any())).willReturn(new PaymentConfirmation.Pending());
     }

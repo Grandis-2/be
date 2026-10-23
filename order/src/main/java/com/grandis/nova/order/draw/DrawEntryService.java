@@ -56,8 +56,7 @@ public class DrawEntryService {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("응모는 트랜잭션 밖에서 불러야 한다 — 유일 키 충돌 뒤 새 트랜잭션에서 다시 읽게");
         }
-        DrawCampaign campaign = readTransaction.execute(status -> campaigns.findById(drawId))
-                .orElseThrow(() -> new BusinessException(OrderErrorCode.DRAW_NOT_FOUND));
+        DrawCampaign campaign = campaigns.lookup(drawId).orElseThrow(() -> new BusinessException(OrderErrorCode.DRAW_NOT_FOUND));
         Optional<DrawEntry> existing = find(drawId, customerId);
         if (existing.isPresent()) {
             return new Entered(existing.get(), false, campaign);
@@ -108,23 +107,22 @@ public class DrawEntryService {
      * @param wonOnly 당첨 주문이 이어진 응모만
      */
     public MyEntries myEntries(UUID customerId, boolean wonOnly, int page, int size) {
-        return readTransaction.execute(status -> {
-            MyDrawEntryCounts counts = entries.countByCustomer(customerId);
-            List<MyDrawEntry> found = entries.findByCustomerNewestFirst(customerId, wonOnly, page * size, size);
-            Map<UUID, DrawCampaign> byId = new HashMap<>();
-            campaigns.findAllById(found.stream().map(MyDrawEntry::campaignId).distinct().toList()).forEach(c -> byId.put(c.id(), c));
-            // 응모가 회차를 외래 키로 가리키고 회차는 지우지 않으므로 응모가 있으면 회차도 있다
-            found.forEach(entry -> {
-                if (!byId.containsKey(entry.campaignId())) {
-                    throw new IllegalStateException("응모의 회차가 없다: drawId=" + entry.campaignId());
-                }
-            });
-            return new MyEntries(OffsetPage.of(found, page, size, wonOnly ? counts.won() : counts.all()), counts, byId);
+        MyDrawEntryCounts counts = entries.countByCustomer(customerId);
+        List<MyDrawEntry> found = entries.findByCustomerNewestFirst(customerId, wonOnly, page * size, size);
+        Map<UUID, DrawCampaign> byId = new HashMap<>();
+        campaigns.lookupAll(found.stream().map(MyDrawEntry::campaignId).distinct().toList()).forEach(c -> byId.put(c.id(), c));
+        // 응모가 회차를 외래 키로 가리키고 회차는 지우지 않으므로 응모가 있으면 회차도 있다
+        found.forEach(entry -> {
+            if (!byId.containsKey(entry.campaignId())) {
+                throw new IllegalStateException("응모의 회차가 없다: drawId=" + entry.campaignId());
+            }
         });
+        return new MyEntries(OffsetPage.of(found, page, size, wonOnly ? counts.won() : counts.all()), counts, byId);
     }
 
+    /** 파생 쿼리라 트랜잭션 밖에서 문장 하나다. */
     private Optional<DrawEntry> find(UUID drawId, UUID customerId) {
-        return readTransaction.execute(status -> entries.findByCampaignAndCustomer(drawId, customerId));
+        return entries.findByCampaignAndCustomer(drawId, customerId);
     }
 
     /** @param result 결과 반영 전이면 null */

@@ -33,8 +33,8 @@ public interface DrawCampaignStore {
      */
     Optional<DrawCampaign> lookup(UUID id);
 
-    /** 없는 id 는 빠진다. 순서는 정하지 않는다. */
-    List<DrawCampaign> findAllById(Collection<UUID> ids);
+    /** 여러 회차를 트랜잭션 없이 문장 하나로 읽는다({@link #lookup} 과 같은 이유). 없는 id 는 빠진다. 순서는 정하지 않는다. */
+    List<DrawCampaign> lookupAll(Collection<UUID> ids);
 
     /** 그 상품을 증정품으로 둔 회차 중 아직 반영(settled_at)되지 않은 것이 있는가 — 마감 뒤 추첨 · 반영 전도 진행 중이다. */
     boolean existsUnsettledByProductId(UUID productId);
