@@ -20,8 +20,10 @@ import java.util.UUID;
  * 리뷰 목록 읽기. catalog 표(product_reviews · products · categories)만 읽는다.
  * 정렬은 최신순(작성 시각 내림차순, 같으면 id 내림차순) 고정, 오프셋 페이징이다. 인덱스 ix_review_product · ix_review_customer
  * ((상품 · 회원, created_at) + PK)의 순서와 같아 따로 정렬하지 않는다(실측 EXPLAIN: id 만으로 정렬하면 Using filesort, 이 순서면
- * Backward index scan). 건수와 한 문장으로 읽는 쪽({@link #pageByProduct})은 안쪽이 이 인덱스 순서이고, 바깥이 쪽 크기만큼의 행만 같은 순서로
- * 다시 정렬한다(실측 EXPLAIN, 리뷰 2만: 안쪽 계획은 단독 문장과 같고 바깥은 Sort). 상품별 · 내 리뷰가 그렇고, 모아보기(공개 상품 전체 · 카테고리)는 정렬한다 — 상품 조건이 리뷰 표 밖에 있다.
+ * Backward index scan). 목록은 모두 건수와 한 문장으로 읽는다({@link #page}) — 안쪽은 단독 문장과 같은 계획이고, 바깥이 쪽 크기만큼의 행만 같은 순서로
+ * 다시 정렬한다(실측 EXPLAIN ANALYZE, 리뷰 2만: 상품별은 ix_review_product, 내 리뷰는 ix_review_customer 역순, 모아보기(공개 상품 전체 · 카테고리)는
+ * 상품을 훑어 ix_review_product 로 붙인 뒤 정렬한다 — 상품 조건이 리뷰 표 밖에 있다). DB 가 하는 일은 건수 · 쪽 두 문장의 합과 비슷하고, 줄어드는 것은 왕복과
+ * 트랜잭션 준비 · 정리 문장이다.
  * 시각은 datetime(6) UTC 벽시계라 UTC LocalDateTime 으로 읽는다. id 는 BINARY(16) 이라 {@link UuidBinary} 로 바인딩하고 읽는다.
  */
 @Repository

@@ -389,7 +389,7 @@ class ReviewApiTest {
     }
 
     @Test
-    @DisplayName("모아보기는 비로그인도 — 상위 카테고리는 하위 포함, 다른 카테고리 · 비공개 상품의 리뷰는 빠진다")
+    @DisplayName("모아보기는 비로그인도 — 상위 카테고리는 하위 포함, 다른 카테고리 · 비공개 상품의 리뷰는 빠진다. 주문상품 id 는 싣지 않고, 범위 밖 쪽도 건수는 그대로")
     void visibleReviewsFilterByCategory() throws Exception {
         UUID parent = fixtures.category();
         UUID child = fixtures.childCategory(parent, "삼성");
@@ -409,6 +409,18 @@ class ReviewApiTest {
         assertThat(bodies(byChild)).containsExactly("하위");
         JsonNode all = data(mockMvc.perform(get("/api/v1/reviews").param("size", "100")).andExpect(status().isOk()));
         assertThat(bodies(all)).contains("상위", "하위", "다른 곳").doesNotContain("숨김");
+        byParent.get("items").forEach(item -> assertThat(item.path("orderItemId").isMissingNode() || item.path("orderItemId").isNull())
+                .as("모아보기는 공개 응답이라 주문상품 id 를 싣지 않는다").isTrue());
+
+        // 범위 밖 쪽도 건수는 그대로 — 모아보기 · 내 리뷰 모두
+        JsonNode beyond = data(mockMvc.perform(get("/api/v1/reviews").param("categoryId", parent.toString()).param("size", "1").param("page", "5"))
+                .andExpect(status().isOk()));
+        assertThat(beyond.get("total").asLong()).isEqualTo(2);
+        assertThat(beyond.get("items")).isEmpty();
+        JsonNode mineBeyond = data(mockMvc.perform(get("/api/v1/reviews/mine").param("size", "1").param("page", "9")
+                .with(AccessTokens.customer(customerId))).andExpect(status().isOk()));
+        assertThat(mineBeyond.get("total").asLong()).isEqualTo(4);
+        assertThat(mineBeyond.get("items")).isEmpty();
     }
 
     @Test
