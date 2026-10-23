@@ -432,6 +432,8 @@ class ReadCacheOutageCopyTest {
         template.resume.countDown();
         holder.join(10_000);
         joiner.join(10_000);
+        assertThat(holder.isAlive()).as("자리 주인이 끝났다").isFalse();
+        assertThat(joiner.isAlive()).as("같이 기다린 조회가 끝났다").isFalse();
 
         assertThat(owner.get()).isInstanceOf(ReadCache.Entry.class);
         assertThat(((ReadCache.Entry<?>) owner.get()).value()).isEqualTo(new Item("v1"));

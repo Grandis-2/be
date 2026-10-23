@@ -567,6 +567,8 @@ class ReadCacheTest {
         template.resume.countDown();
         holder.join(10_000);
         other.join(10_000);
+        assertThat(holder.isAlive()).isFalse();
+        assertThat(other.isAlive()).isFalse();
 
         assertThat(((Item) first.get()).name()).isEqualTo("loaded");
         assertThat(((Item) second.get()).name()).as("기다린 쪽은 자리 주인의 값을 받는다").isEqualTo("loaded");
