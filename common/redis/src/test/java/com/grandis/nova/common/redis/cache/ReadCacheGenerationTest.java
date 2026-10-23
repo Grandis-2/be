@@ -40,7 +40,10 @@ class ReadCacheGenerationTest {
     private static final String GENERATION = "svc:cache:gen:products";
 
     static LettuceConnectionFactory connections;
+    static LettuceConnectionFactory fixtureConnections;
     static StringRedisTemplate redis;
+    /** 시험 준비(비우기 · 세대 심기)용. 제한 시간이 넉넉하다 — {@link TestRedis} */
+    static StringRedisTemplate fixture;
 
     record Item(String name) {
     }
@@ -53,17 +56,20 @@ class ReadCacheGenerationTest {
         connections.afterPropertiesSet();
         connections.start();
         redis = new StringRedisTemplate(connections);
+        fixtureConnections = TestRedis.fixtureConnections(REDIS);
+        fixture = new StringRedisTemplate(fixtureConnections);
     }
 
     @AfterAll
     static void stop() {
+        fixtureConnections.destroy();
         connections.destroy();
         REDIS.stop();
     }
 
     @BeforeEach
     void flush() {
-        redis.getConnectionFactory().getConnection().serverCommands().flushAll();
+        fixture.getConnectionFactory().getConnection().serverCommands().flushAll();
     }
 
     @Test

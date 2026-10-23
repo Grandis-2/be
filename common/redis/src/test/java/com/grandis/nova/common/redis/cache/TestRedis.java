@@ -1,11 +1,22 @@
 package com.grandis.nova.common.redis.cache;
 
+import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.testcontainers.containers.GenericContainer;
+
+import java.time.Duration;
 
 /**
  * 읽기 캐시 시험이 함께 쓰는 Redis 준비.
+ *
+ * <p>시험 대상 캐시는 운영 예시 설정과 같은 300ms 제한 연결로 Redis 를 쓴다. 시험 준비(비우기 · 세대 심기)까지 그 연결로 보내면, CI 가 잠깐
+ * 느릴 때 준비가 시간 초과로 깨져 시험이 시작도 못 한다. 그래서 준비는 {@link #fixtureConnections} 의 넉넉한 제한 연결로 보낸다.
  */
 final class TestRedis {
+
+    /** 준비 연결의 제한 시간. 서버가 잠깐 멈춰도 준비가 기다렸다 끝나게 크게 잡는다. */
+    private static final Duration FIXTURE_TIMEOUT = Duration.ofSeconds(10);
 
     private TestRedis() {
     }
@@ -19,4 +30,13 @@ final class TestRedis {
         return new GenericContainer<>("valkey/valkey:9").withCommand("valkey-server", "--save", "").withExposedPorts(6379);
     }
 
+    /** 시험 준비용 연결. 쓰고 나면 {@link LettuceConnectionFactory#destroy()} 로 닫는다. */
+    static LettuceConnectionFactory fixtureConnections(GenericContainer<?> redis) {
+        LettuceConnectionFactory connections = new LettuceConnectionFactory(
+                new RedisStandaloneConfiguration(redis.getHost(), redis.getMappedPort(6379)),
+                LettuceClientConfiguration.builder().commandTimeout(FIXTURE_TIMEOUT).build());
+        connections.afterPropertiesSet();
+        connections.start();
+        return connections;
+    }
 }

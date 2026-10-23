@@ -42,7 +42,10 @@ class ReadCacheRefreshTest {
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     static LettuceConnectionFactory connections;
+    static LettuceConnectionFactory fixtureConnections;
     static StringRedisTemplate redis;
+    /** 시험 준비(비우기 · 세대 심기)용. 제한 시간이 넉넉하다 — {@link TestRedis} */
+    static StringRedisTemplate fixture;
 
     ReadCacheTest.MutableClock clock;
     Tasks tasks;
@@ -59,18 +62,21 @@ class ReadCacheRefreshTest {
         connections.afterPropertiesSet();
         connections.start();
         redis = new StringRedisTemplate(connections);
+        fixtureConnections = TestRedis.fixtureConnections(REDIS);
+        fixture = new StringRedisTemplate(fixtureConnections);
     }
 
     @AfterAll
     static void stop() {
+        fixtureConnections.destroy();
         connections.destroy();
         REDIS.stop();
     }
 
     @BeforeEach
     void setUp() {
-        redis.getConnectionFactory().getConnection().serverCommands().flushAll();
-        redis.opsForValue().set("svc:cache:gen:g", "0");   // 세대 시작점을 정해 둔다(없으면 지금 시각으로 시작한다)
+        fixture.getConnectionFactory().getConnection().serverCommands().flushAll();
+        fixture.opsForValue().set("svc:cache:gen:g", "0");   // 세대 시작점을 정해 둔다(없으면 지금 시각으로 시작한다)
         clock = new ReadCacheTest.MutableClock(Instant.now().truncatedTo(ChronoUnit.MILLIS));
         tasks = new Tasks();
         events = new Events();
