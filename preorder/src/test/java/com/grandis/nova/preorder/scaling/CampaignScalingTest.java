@@ -18,6 +18,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.OptionalLong;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -110,6 +111,24 @@ class CampaignScalingTest {
         String next = lock.tryAcquire();
         assertThat(next).isNotNull();
         lock.release(next);
+    }
+
+    /** 없거나 0 이상 정수가 아니면 관리자가 정한 적이 없는 것으로 본다. 읽기만 하고 쓰지 않는다. */
+    @Test
+    void 관리자_입장_속도는_0_이상_정수만_읽는다() {
+        AdmissionCredit credit = new AdmissionCredit(redis);
+        try {
+            redis.delete(AdmissionCredit.KEY);
+            assertThat(credit.read()).isEmpty();
+            for (String broken : new String[]{"abc", "-5", ""}) {
+                redis.opsForHash().put(AdmissionCredit.KEY, AdmissionCredit.FIELD, broken);
+                assertThat(credit.read()).as(broken).isEmpty();
+            }
+            redis.opsForHash().put(AdmissionCredit.KEY, AdmissionCredit.FIELD, "250");
+            assertThat(credit.read()).isEqualTo(OptionalLong.of(250));
+        } finally {
+            redis.delete(AdmissionCredit.KEY);
+        }
     }
 
     private UUID campaign(Instant opensAt, Instant closesAt, Integer expectedVisitors) {

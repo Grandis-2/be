@@ -4,6 +4,7 @@ import com.grandis.nova.preorder.campaign.ScalingDemand;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.OptionalLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -11,29 +12,50 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ScalingFloorsTest {
 
     static final ScalingProperties PROPERTIES = properties(false, "", 10);
+    static final int ACCEPT_PER_SECOND = 100;
 
     @Test
     void 걸린_회차가_없으면_평소_대수() {
-        assertThat(ScalingFloors.of(new ScalingDemand(0, null), PROPERTIES)).isEqualTo(new ScalingFloors(1, 1, false));
+        assertThat(of(new ScalingDemand(0, null))).isEqualTo(new ScalingFloors(1, 1, false));
     }
 
     /** 겹친 회차 하나가 끝나도 다른 회차 몫을 내리지 않게 회차마다가 아니라 가장 큰 예상 방문자 수로 맞춘다. */
     @Test
     void 대기열은_가장_큰_예상_방문자_수로_preorder_는_고정_대수() {
-        assertThat(ScalingFloors.of(new ScalingDemand(3, 20_000), PROPERTIES))
+        assertThat(of(new ScalingDemand(3, 20_000)))
                 .isEqualTo(new ScalingFloors(3, 4, false));
-        assertThat(ScalingFloors.of(new ScalingDemand(1, 5_001), PROPERTIES)).isEqualTo(new ScalingFloors(3, 2, false));
+        assertThat(of(new ScalingDemand(1, 5_001))).isEqualTo(new ScalingFloors(3, 2, false));
     }
 
     @Test
     void 예상_방문자_수를_넣은_회차가_없으면_대기열은_평소대로() {
-        assertThat(ScalingFloors.of(new ScalingDemand(2, null), PROPERTIES)).isEqualTo(new ScalingFloors(3, 1, false));
+        assertThat(of(new ScalingDemand(2, null))).isEqualTo(new ScalingFloors(3, 1, false));
     }
 
     @Test
     void 최대_대수를_넘으면_최대로_자르고_알린다() {
-        assertThat(ScalingFloors.of(new ScalingDemand(1, 1_000_000), PROPERTIES))
+        assertThat(of(new ScalingDemand(1, 1_000_000)))
                 .isEqualTo(new ScalingFloors(3, 10, true));
+    }
+
+    @Test
+    void 회차가_없으면_관리자_입장_속도가_커도_평소_대수() {
+        assertThat(ScalingFloors.of(new ScalingDemand(0, null), OptionalLong.of(100_000), ACCEPT_PER_SECOND, PROPERTIES))
+                .isEqualTo(new ScalingFloors(1, 1, false));
+    }
+
+    /** 입장 속도는 살아 있는 preorder 용량의 합에 묶이므로, 관리자 값을 받을 대수(올림)까지 올린다. */
+    @Test
+    void 회차가_있으면_관리자_입장_속도를_받을_대수와_surge_중_큰_값() {
+        assertThat(of(new ScalingDemand(1, null), 250)).isEqualTo(new ScalingFloors(3, 1, false));
+        assertThat(of(new ScalingDemand(1, null), 401)).isEqualTo(new ScalingFloors(5, 1, false));
+        assertThat(of(new ScalingDemand(1, null), 0)).isEqualTo(new ScalingFloors(3, 1, false));
+    }
+
+    @Test
+    void 관리자_입장_속도가_최대_대수를_넘으면_최대로_자르고_알린다() {
+        assertThat(of(new ScalingDemand(1, null), 1_000)).isEqualTo(new ScalingFloors(5, 1, true));
+        assertThat(of(new ScalingDemand(1, null), Long.MAX_VALUE)).isEqualTo(new ScalingFloors(5, 1, true));
     }
 
     /** 클러스터 · 서비스 이름은 환경마다 달라(운영은 nova-prod-*) 기본값이 없다. */
@@ -54,6 +76,14 @@ class ScalingFloorsTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new ScalingProperties.Waitingroom("waitingroom", 3, 2, 5000))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private static ScalingFloors of(ScalingDemand demand) {
+        return ScalingFloors.of(demand, OptionalLong.empty(), ACCEPT_PER_SECOND, PROPERTIES);
+    }
+
+    private static ScalingFloors of(ScalingDemand demand, long admissionCredit) {
+        return ScalingFloors.of(demand, OptionalLong.of(admissionCredit), ACCEPT_PER_SECOND, PROPERTIES);
     }
 
     private static ScalingProperties properties(boolean enabled, String cluster, int waitingroomMax) {

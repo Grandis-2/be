@@ -2,6 +2,7 @@ package com.grandis.nova.preorder.scaling;
 
 import com.grandis.nova.preorder.campaign.CampaignScheduleTouched;
 import com.grandis.nova.preorder.campaign.Campaigns;
+import com.grandis.nova.preorder.campaign.ScalingDemand;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -14,10 +15,12 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.OptionalLong;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 회차 일정에 맞춰 대기열 · preorder 의 최소 대수를 맞춘다. 주기마다 지금 상태 전체로 다시 계산하므로 놓친 변경 · 실패한 호출은 다음 주기에
@@ -28,6 +31,7 @@ class CampaignScalingReconciler {
 
     static final String FLOOR_METRIC = "preorder.scaling.floor";
     static final String FAILURE_METRIC = "preorder.scaling.failures";
+    static final String ADMISSION_TARGET_METRIC = "preorder.scaling.admission-target";
     /** 다른 태스크가 맞추는 중이면 끝날 때까지 이 간격으로 다시 잡아 본다. 잠금 수명이 지나면 그만두고 다음 주기에 맞춘다. */
     static final Duration LOCK_RETRY = Duration.ofMillis(200);
 
@@ -37,26 +41,34 @@ class CampaignScalingReconciler {
     private final ScalingProperties properties;
     private final CapacityFloors floors;
     private final ScalingLock lock;
+    private final AdmissionCredit admissionCredit;
+    private final int acceptPerSecond;
     private final Clock clock;
     private final Counter failures;
     private final AtomicInteger preorderFloor = new AtomicInteger();
     private final AtomicInteger waitingroomFloor = new AtomicInteger();
+    private final AtomicLong admissionTarget = new AtomicLong();
     private final AtomicBoolean queued = new AtomicBoolean();
     private final ExecutorService executor =
             Executors.newSingleThreadExecutor(Thread.ofPlatform().name("campaign-scaling").daemon().factory());
 
     CampaignScalingReconciler(Campaigns campaigns, ScalingProperties properties, CapacityFloors floors,
-                              ScalingLock lock, Clock clock, MeterRegistry meterRegistry) {
+                              ScalingLock lock, AdmissionCredit admissionCredit, int acceptPerSecond, Clock clock,
+                              MeterRegistry meterRegistry) {
         this.campaigns = campaigns;
         this.properties = properties;
         this.floors = floors;
         this.lock = lock;
+        this.admissionCredit = admissionCredit;
+        this.acceptPerSecond = acceptPerSecond;
         this.clock = clock;
         this.failures = meterRegistry.counter(FAILURE_METRIC);
         Gauge.builder(FLOOR_METRIC, preorderFloor, AtomicInteger::get).tag("service", "preorder")
                 .register(meterRegistry);
         Gauge.builder(FLOOR_METRIC, waitingroomFloor, AtomicInteger::get).tag("service", "waitingroom")
                 .register(meterRegistry);
+        // 계산에 쓴 관리자 입장 속도. 걸린 회차가 없거나 값이 없으면 0
+        Gauge.builder(ADMISSION_TARGET_METRIC, admissionTarget, AtomicLong::get).register(meterRegistry);
     }
 
     @Scheduled(fixedDelayString = "${nova.scaling.interval:1m}", initialDelayString = "${nova.scaling.interval:1m}")
@@ -123,23 +135,37 @@ class CampaignScalingReconciler {
     }
 
     private void reconcile() {
-        ScalingFloors target;
+        ScalingDemand demand;
         try {
             Instant now = clock.instant();
-            target = ScalingFloors.of(campaigns.findScalingDemand(now, now.minus(properties.holdAfterOpen()),
-                    now.plus(properties.leadTime())), properties);
+            demand = campaigns.findScalingDemand(now, now.minus(properties.holdAfterOpen()),
+                    now.plus(properties.leadTime()));
         } catch (RuntimeException e) {
             failures.increment();
             log.warn("증설 대상 회차를 읽지 못했다 — 다음 주기에 다시 맞춘다", e);
             return;
         }
+        OptionalLong credit = demand.campaigns() == 0 ? OptionalLong.empty() : readAdmissionCredit();
+        ScalingFloors target = ScalingFloors.of(demand, credit, acceptPerSecond, properties);
         if (target.capped()) {
             log.warn("필요한 최소 대수가 최대 대수를 넘어 최대로 맞춘다 — 인프라의 max 와 nova.scaling.*.max 를 올려야 한다");
         }
         preorderFloor.set(target.preorder());
         waitingroomFloor.set(target.waitingroom());
+        admissionTarget.set(credit.orElse(0));
         apply(properties.preorder().service(), target.preorder());
         apply(properties.waitingroom().service(), target.waitingroom());
+    }
+
+    /** 읽지 못하면 이번 주기는 surge 만 쓴다 — 회차 몫은 그대로 맞춘다. */
+    private OptionalLong readAdmissionCredit() {
+        try {
+            return admissionCredit.read();
+        } catch (RuntimeException e) {
+            failures.increment();
+            log.warn("관리자 입장 속도를 읽지 못해 이번 주기는 surge 로 맞춘다", e);
+            return OptionalLong.empty();
+        }
     }
 
     /** 서비스마다 따로 — 한쪽이 실패해도 다른 쪽은 맞춘다. */
