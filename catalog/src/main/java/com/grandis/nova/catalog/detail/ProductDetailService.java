@@ -232,7 +232,7 @@ public class ProductDetailService {
 
     /** @param visible 응답에 실을 visible — 회원 상세는 노출 규칙을 지났으니 늘 true, 관리자 상세는 칸 그대로 */
     private ProductDetailView body(Product product, boolean visible) {
-        ProductOptions document = product.getOptions();
+        ProductOptions document = product.getOptions();   // 문서를 한 번만 푼다 — Product 의 보증 getter 는 부를 때마다 다시 푼다
         List<Variant> variants = new ArrayList<>();
         boolean sellable = false;
         for (ProductOption option : options.findByProductIdOrderByCreatedAtAscIdAsc(product.getId())) {
@@ -242,7 +242,7 @@ public class ProductDetailService {
         return new ProductDetailView(product.getId(), product.getCategoryId(), product.getSaleMode(), product.getTitle(),
                 product.getBrand(), product.getModelName(),
                 product.getDescription(), product.getThumbnailUrl(), product.getStatus(), visible,
-                product.getBasePrice(), product.getDiscountRate(), new Warranty(product.isWarrantyOffered(), product.getWarrantySurcharge()),
+                product.getBasePrice(), product.getDiscountRate(), new Warranty(document.warranty().offered(), document.warranty().surcharge()),
                 sellable, false, null, toAxes(document), variants, imagesOf(document));
     }
 

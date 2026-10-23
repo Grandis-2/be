@@ -14,6 +14,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import tools.jackson.databind.JsonNode;
@@ -30,6 +31,11 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -48,7 +54,7 @@ class ProductRankingApiTest {
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired StringRedisTemplate redis;
-    @Autowired ProductViewCounter counter;
+    @MockitoSpyBean ProductViewCounter counter;
     @Autowired io.micrometer.core.instrument.MeterRegistry meters;
 
     ShopFixtures fixtures;
@@ -134,7 +140,7 @@ class ProductRankingApiTest {
     }
 
     @Test
-    @DisplayName("앞 50개가 모두 목록에 안 나와도 그 아래 순위로 10개를 채운다")
+    @DisplayName("앞 50개가 모두 목록에 안 나와도 그 아래 순위로 10개를 채운다 — 순위는 한 번만 합쳐 읽는다(묶음마다 다시 합치지 않는다)")
     void fillsFromLaterCandidatesWhenTopOnesAreHidden() throws Exception {
         UUID hiddenCategory = fixtures.category();
         for (int i = 0; i < 55; i++) {
@@ -147,8 +153,10 @@ class ProductRankingApiTest {
             seed(product, 0, 100 - i);
             expected.add(product.toString());
         }
+        clearInvocations(counter);
 
         assertThat(ids(ranking())).containsExactlyElementsOf(expected);
+        verify(counter, times(1)).top(any(), anyInt());
     }
 
     @Test

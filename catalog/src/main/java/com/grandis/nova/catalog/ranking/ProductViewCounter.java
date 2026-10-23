@@ -48,13 +48,12 @@ public class ProductViewCounter {
             return added
             """, Long.class);
 
-    /** 날마다의 표를 합쳐 조회수가 많은 순으로 ARGV[1] 번째부터 ARGV[2]개. 같은 수면 상품 id 의 역순(ZREVRANGE). 합친 표는 그 자리에서 지운다. */
+    /** 날마다의 표를 합쳐 조회수가 많은 순으로 앞 ARGV[1]개. 같은 수면 상품 id 의 역순(ZREVRANGE). 합친 표는 그 자리에서 지운다. */
     private static final RedisScript<List> TOP = new DefaultRedisScript<>("""
             local days = {}
             for i = 2, #KEYS do days[#days + 1] = KEYS[i] end
             redis.call('ZUNIONSTORE', KEYS[1], #days, unpack(days))
-            local from = tonumber(ARGV[1])
-            local top = redis.call('ZREVRANGE', KEYS[1], from, from + tonumber(ARGV[2]) - 1)
+            local top = redis.call('ZREVRANGE', KEYS[1], 0, tonumber(ARGV[1]) - 1)
             redis.call('DEL', KEYS[1])
             return top
             """, List.class);
@@ -78,19 +77,14 @@ public class ProductViewCounter {
         return added != null && added == 1;
     }
 
-    /** 최근 {@link #WINDOW_DAYS}일 조회수 순으로 앞 limit 개의 상품 id. */
+    /** 최근 {@link #WINDOW_DAYS}일 조회수 순으로 앞 limit 개의 상품 id. 부를 때마다 날마다의 표를 다시 합친다. */
     public List<UUID> top(Instant now, int limit) {
-        return top(now, 0, limit);
-    }
-
-    /** 최근 {@link #WINDOW_DAYS}일 조회수 순으로 offset 번째(0 부터)부터 limit 개의 상품 id. 부를 때마다 날마다의 표를 다시 합친다. */
-    public List<UUID> top(Instant now, int offset, int limit) {
         List<String> keys = new ArrayList<>();
         keys.add(UNION_KEY);
         for (int i = 0; i < WINDOW_DAYS; i++) {
             keys.add(DAY_PREFIX + day(now, i));
         }
-        List<?> ids = redis.execute(TOP, keys, String.valueOf(offset), String.valueOf(limit));
+        List<?> ids = redis.execute(TOP, keys, String.valueOf(limit));
         return ids == null ? List.of() : ids.stream().map(id -> UUID.fromString(id.toString())).toList();
     }
 
