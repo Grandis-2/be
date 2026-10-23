@@ -9,6 +9,7 @@ import org.springframework.security.config.annotation.web.configurers.AuthorizeH
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.stereotype.Component;
 import org.springframework.web.cors.CorsConfigurationSource;
 import tools.jackson.databind.ObjectMapper;   // Boot 4 = Jackson 3 (tools.jackson)
@@ -25,6 +26,8 @@ import tools.jackson.databind.ObjectMapper;   // Boot 4 = Jackson 3 (tools.jacks
  * - CORS 켬. 프론트와 API 의 도메인이 갈렸다. 규칙은 common:cors 의 빈 하나 — 서비스마다 고치지 않는다.
  * - 401/403 은 JsonAuthFailureHandlers 가 api-spec 봉투로.
  * - JwtAuthenticationFilter 를 UsernamePasswordAuthenticationFilter 앞에. 필터 인스턴스는 여기서만 만든다(빈 아님).
+ * - 토큰을 보지 않는 공개 조회 경로는 서비스가 고른다(기본은 없음). 고른 경로는 여기서 permitAll 로 같이 연다 — 필터만 건너뛰고 인가가 막으면
+ *   토큰이 있어도 늘 401 이다. 고를 수 있는 것은 신원을 읽지 않는 핸들러뿐이다(@CurrentCustomerId 는 그 경로에서 401, 신원을 선택적으로 읽는 곳은 늘 익명).
  * - 메서드 보안(@EnableMethodSecurity)은 쓰지 않는다. 권한 규칙은 URL 로만 — api-spec 이 경로별로 권한을 적었고,
  *   두 군데에 규칙이 있으면 한쪽이 잊힌다.
  */
@@ -51,6 +54,25 @@ public class SecurityFilterChainSupport {
             HttpSecurity http,
             Customizer<AuthorizeHttpRequestsConfigurer<HttpSecurity>.AuthorizationManagerRequestMatcherRegistry> authorization)
             throws Exception {
+        return chain(http, request -> false, authorization);
+    }
+
+    /**
+     * @param anonymousReads 토큰을 보지 않는 공개 조회 경로 — 헤더가 있어도 파싱 · 폐기 조회를 하지 않는다. 인가 규칙의 맨 앞에서 permitAll 로 연다
+     */
+    public SecurityFilterChain build(
+            HttpSecurity http,
+            RequestMatcher anonymousReads,
+            Customizer<AuthorizeHttpRequestsConfigurer<HttpSecurity>.AuthorizationManagerRequestMatcherRegistry> authorization)
+            throws Exception {
+        return chain(http, anonymousReads, authorize -> authorization.customize(authorize.requestMatchers(anonymousReads).permitAll()));
+    }
+
+    private SecurityFilterChain chain(
+            HttpSecurity http,
+            RequestMatcher anonymousReads,
+            Customizer<AuthorizeHttpRequestsConfigurer<HttpSecurity>.AuthorizationManagerRequestMatcherRegistry> authorization)
+            throws Exception {
         return http
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(c -> c.configurationSource(cors))
@@ -61,7 +83,7 @@ public class SecurityFilterChainSupport {
                 .exceptionHandling(e -> e
                         .authenticationEntryPoint(handlers.entryPoint())
                         .accessDeniedHandler(handlers.accessDeniedHandler()))
-                .addFilterBefore(new JwtAuthenticationFilter(provider, revocationChecker, policy),
+                .addFilterBefore(new JwtAuthenticationFilter(provider, revocationChecker, policy, anonymousReads),
                         UsernamePasswordAuthenticationFilter.class)
                 .anonymous(Customizer.withDefaults())
                 .authorizeHttpRequests(authorization)

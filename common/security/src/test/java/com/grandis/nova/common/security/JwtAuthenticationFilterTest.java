@@ -205,4 +205,27 @@ class JwtAuthenticationFilterTest {
         assertThat(auth).isSameAs(existing);
         verifyNoInteractions(checker);
     }
+
+    @Test
+    @DisplayName("공개 조회 경로는 헤더가 있어도 보지 않는다 — 유효 · 폐기 토큰 모두 익명으로 넘기고 폐기 조회 · 실패 이유를 남기지 않는다. 밖의 경로는 그대로 인증한다")
+    void anonymousReadsSkipTheToken() throws Exception {
+        filter = new JwtAuthenticationFilter(provider, checker, policy,
+                request -> "GET".equals(request.getMethod()) && request.getServletPath().startsWith("/api/v1/products"));
+        when(checker.isRevoked(any())).thenReturn(true);
+        String token = access("101", Role.USER);
+
+        for (String header : new String[] {token, "not-a-jwt"}) {
+            MockHttpServletRequest read = new MockHttpServletRequest("GET", "/api/v1/products/1");
+            read.setServletPath("/api/v1/products/1");
+            read.addHeader(BearerTokens.HEADER, BearerTokens.value(header));
+            assertThat(run(read)).as(header).isNull();
+            assertThat(read.getAttribute(JwtAuthenticationFilter.ATTR_FAILURE_REASON)).as(header).isNull();
+        }
+        verifyNoInteractions(checker);
+
+        when(checker.isRevoked(any())).thenReturn(false);
+        MockHttpServletRequest write = request("/api/v1/products/1", token);   // 같은 경로라도 POST 는 밖이다
+        assertThat(run(write)).isNotNull();
+        verify(checker).isRevoked(any());
+    }
 }
