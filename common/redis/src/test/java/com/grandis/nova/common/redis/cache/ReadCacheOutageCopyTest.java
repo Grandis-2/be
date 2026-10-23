@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Redis 를 못 읽을 때 이 인스턴스의 사본으로 답하는 캐시(ReadCache.OutageCopies). */
 class ReadCacheOutageCopyTest {
 
-    private static final GenericContainer<?> REDIS = new GenericContainer<>("valkey/valkey:9").withExposedPorts(6379);
+    private static final GenericContainer<?> REDIS = TestRedis.container();
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final Duration TTL = Duration.ofMinutes(10);
     private static final Duration HELD_FOR = Duration.ofMinutes(1);

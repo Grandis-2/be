@@ -38,7 +38,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("Redis 읽기 캐시 — 미리 갱신")
 class ReadCacheRefreshTest {
 
-    private static final GenericContainer<?> REDIS = new GenericContainer<>("valkey/valkey:9").withExposedPorts(6379);
+    private static final GenericContainer<?> REDIS = TestRedis.container();
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     static LettuceConnectionFactory connections;

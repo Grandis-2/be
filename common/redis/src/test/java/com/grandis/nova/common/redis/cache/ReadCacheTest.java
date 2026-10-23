@@ -38,7 +38,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ReadCacheTest {
 
     /** 운영과 같은 Valkey 9 — 메모리 계산 기준(StoreBudget.charge)을 이 엔진으로 잰다. */
-    private static final GenericContainer<?> REDIS = new GenericContainer<>("valkey/valkey:9").withExposedPorts(6379);
+    private static final GenericContainer<?> REDIS = TestRedis.container();
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     static LettuceConnectionFactory connections;

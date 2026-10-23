@@ -35,7 +35,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DisplayName("Redis 읽기 캐시 — 세대 키가 사라지거나 되돌아갈 때")
 class ReadCacheGenerationTest {
 
-    private static final GenericContainer<?> REDIS = new GenericContainer<>("valkey/valkey:9").withExposedPorts(6379);
+    private static final GenericContainer<?> REDIS = TestRedis.container();
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final String GENERATION = "svc:cache:gen:products";
 
