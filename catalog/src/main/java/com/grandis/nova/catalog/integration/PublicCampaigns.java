@@ -40,15 +40,17 @@ import java.util.stream.Collectors;
  *   <li><b>회차가 빠진 묶음은 짧게 넣는다</b>({@link #PARTIAL_TTL}) — 홍보 목록은 그날 보이는 모든 홍보의 상품이 한 묶음이라, 회차 없는 사전예약 상품이
  *       어느 홍보에 하나만 묶여 있어도 넣지 않으면 목록 · 상세가 요청마다 preorder 에 묻는다. 회차를 만들면 preorder 가 그 이벤트를 보내 세대가 오르므로
  *       평소에는 다음 조회에 보이고, 이벤트를 놓쳤을 때 늦게 보이는 상한이 이 TTL 이다. 모든 상품에 회차가 있는 묶음은 지금처럼 TTL 동안 둔다.</li>
- *   <li><b>preorder 에 묻는 방식</b> — 먼저 fresh 없이(preorder 의 회차 캐시로) 묻고, 그 결과가 넣을 값(회차 있음 · 묶음이면 모든 상품에 회차)일 때만
- *       fresh(preorder 의 회차 캐시를 건너뛰고 DB)로 다시 물어 그 값을 넣는다. 이벤트를 받아 세대를 올린 직후, 아직 자기 캐시를 비우지 않은 preorder
- *       인스턴스가 옛 값을 주면 그 값을 TTL 동안 두게 되기 때문이다. 넣지 않을 값(회차 없는 상품 · 그런 상품이 든 묶음)은 이 요청에만 쓰므로 fresh 로
- *       묻지 않는다 — 요청마다 묻는 그 갈래를 preorder DB 로 보내지 않게. 그래서 넣지 않을 값은 preorder 캐시의 값이라 옛 값일 수 있다(preorder 의
- *       "회차 없음" 캐시 최대 5초 — 그동안 막 생긴 회차의 상세가 404, 묶음 속 회차 있는 상품은 비우기를 놓친 preorder 인스턴스면 최대 30초).
+ *   <li><b>preorder 에 묻는 방식</b> — 먼저 fresh 없이(preorder 의 회차 캐시로) 묻고, 그 결과를 넣을 쪽이 채우는 경로(FILL)일 때만 fresh(preorder 의
+ *       회차 캐시를 건너뛰고 DB)로 다시 물어 그 값을 넣는다 — 한 상품은 회차가 있을 때, 묶음은 모든 상품에 회차가 있으면 긴 쪽이, 빠졌으면 짧은 쪽이 넣는다.
+ *       묶음은 넣을 쪽마다 따로 본다 — 긴 쪽이 채우는 중에 짧은 쪽이 Redis 를 못 써 우회해도, 다 갖춘 묶음이면 긴 쪽 기준으로 fresh 로 묻는다.
+ *       이벤트를 받아 세대를 올린 직후, 아직 자기 캐시를 비우지 않은 preorder 인스턴스가 옛 값을 주면 그 값을 TTL 동안 두게 되기 때문이다.
+ *       넣지 않을 값(회차 없는 한 상품 · 우회 중인 쪽의 묶음)은 이 요청에만 쓰므로 fresh 로 묻지 않는다 — 요청마다 묻는 그 갈래를 preorder DB 로 보내지
+ *       않게. 그래서 넣지 않을 값은 preorder 캐시의 값이라 옛 값일 수 있다(preorder 의 "회차 없음" 캐시 최대 5초 — 그동안 막 생긴 회차의 상세가 404).
  *       끄면 fresh 없이 한 번 묻는다. 켠 채 Redis 를 못 쓰면(세대 · 값을 못 읽음 · 차단기 열림 — ReadCache 의 우회) 넣지 않으므로 fresh 없이 한 번만
  *       묻는다 — 그동안 공개 조회는 요청마다 preorder 에 묻고, 받은 값은 위와 같이 옛 값일 수 있다. 채우는 자리를 잡은 뒤 다시 읽기에서 Redis 를
  *       못 쓰면 그 조회도 우회로 바뀌어 fresh 없이 묻고, 그 자리를 기다리던 요청도 같은 값을 받는다. 다만 이 인스턴스의 사본이 있으면 묻기 전에
- *       그것으로 답한다({@link #HELD_DURING_OUTAGE}).</li>
+ *       그것으로 답한다({@link #HELD_DURING_OUTAGE}). 묶음은 긴 쪽이 우회해도 짧은 쪽을 거친다 — 짧은 쪽의 사본을 쓰려는 것이고, 그 대가로 Redis 가
+ *       느린 동안(차단기가 열리기 전) 짧은 쪽의 세대 · 값 읽기 시간이 더 붙는다.</li>
  *   <li>접수 단계는 넣지 않는다 — 호출자가 꺼낸 시각으로 계산하므로 오픈 · 마감 시각이 지나는 것은 캐시와 상관없이 바로 보인다.</li>
  *   <li>preorder 가 답하지 않으면 넣지 않고 {@link PreorderCampaigns#find} 와 같이 던진다. 켜 두면 하나 더 — 같은 키를 이 인스턴스에서 먼저 묻고 있는
  *       요청을 기다리는 쪽은 ReadCache 의 기다림 상한(5초)을 넘으면 같은 DEPENDENCY_UNAVAILABLE 을 던진다(그것을 어떻게 답할지는 호출자 몫이다).</li>
@@ -117,15 +119,19 @@ public class PublicCampaigns {
         // 모든 상품에 회차가 있는 묶음만 긴 쪽에 넣는다. 긴 쪽이 비면 짧은 쪽을 거쳐 묻는다 — 빠진 묶음은 짧은 쪽에만 들고, 다 갖춘 묶음은 짧은 쪽에 넣지 않고
         // 긴 쪽이 넣는다
         return cache.entry(manySpec, CAMPAIGNS, key,
-                (Function<LoadPath, Map<UUID, CampaignWindow>>) path -> cache.entry(partialSpec, CAMPAIGNS, key, partialPath -> ask(ids, partialPath),
+                (Function<LoadPath, Map<UUID, CampaignWindow>>) path -> cache.entry(partialSpec, CAMPAIGNS, key, partialPath -> ask(ids, path, partialPath),
                         found -> !found.keySet().containsAll(ids)).value(),
                 found -> found.keySet().containsAll(ids)).value();
     }
 
-    /** 채우기(넣을 값)면 fresh 로 다시 묻는다 — 우회는 이 요청에만 쓰므로 preorder DB 로 보내지 않는다. */
-    private Map<UUID, CampaignWindow> ask(List<UUID> ids, LoadPath path) {
+    /**
+     * 넣을 묶음일 때만 fresh 로 다시 묻는다 — 다 갖춘 묶음은 긴 쪽(full)이, 빠진 묶음은 짧은 쪽(partial)이 넣으므로 그 쪽이 채우는 경로(FILL)인지로 가른다.
+     * 우회 중인 쪽의 묶음은 이 요청에만 쓰므로 preorder DB 로 보내지 않는다.
+     */
+    private Map<UUID, CampaignWindow> ask(List<UUID> ids, LoadPath full, LoadPath partial) {
         Map<UUID, CampaignWindow> found = campaigns.find(ids, false);
-        return Map.copyOf(path == LoadPath.FILL ? campaigns.find(ids, true) : found);
+        LoadPath storing = found.keySet().containsAll(ids) ? full : partial;
+        return Map.copyOf(storing == LoadPath.FILL ? campaigns.find(ids, true) : found);
     }
 
     /** 정렬한 id 들의 SHA-256 — 홍보 하나에 상품 20개(전체 목록이면 더)라 그대로 이으면 키가 길다. */

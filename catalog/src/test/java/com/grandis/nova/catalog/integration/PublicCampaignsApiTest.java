@@ -60,7 +60,9 @@ class PublicCampaignsApiTest {
 
     @Autowired MockMvc mockMvc;
     @Autowired JdbcTemplate jdbcTemplate;
-    @Autowired StringRedisTemplate redis;
+    @MockitoSpyBean StringRedisTemplate redis;
+    /** null 이 아니면 이 문자열이 든 키의 값 GET 이 실패한다(읽기 캐시의 한쪽만 Redis 를 못 쓰는 경우) */
+    volatile String failValueGet;
     @MockitoSpyBean PreorderCampaignClient client;
     @Autowired PublicCampaigns publicCampaigns;
 
@@ -69,6 +71,9 @@ class PublicCampaignsApiTest {
 
     @BeforeEach
     void setUp() {
+        failValueGet = null;
+        org.mockito.Mockito.doAnswer(invocation -> failingGets((org.springframework.data.redis.core.ValueOperations<String, String>) invocation.callRealMethod()))
+                .when(redis).opsForValue();
         fixtures = new ShopFixtures(jdbcTemplate);
         categoryId = fixtures.category();
         Set<String> keys = redis.keys("catalog:cache:*");
@@ -130,7 +135,7 @@ class PublicCampaignsApiTest {
     @Test
     @DisplayName("장애 중 회차 사본을 믿는 시간은 1분(2026-10-22 결정) — 단건 · 묶음 모두")
     void campaignCopiesAreHeldForOneMinute() {
-        for (String field : new String[]{"oneSpec", "manySpec"}) {
+        for (String field : new String[]{"oneSpec", "manySpec", "partialSpec"}) {
             com.grandis.nova.common.redis.cache.ReadCache.Spec<?> spec = (com.grandis.nova.common.redis.cache.ReadCache.Spec<?>)
                     org.springframework.test.util.ReflectionTestUtils.getField(publicCampaigns, field);
             assertThat(spec.outage()).as(field).isNotNull();
@@ -198,6 +203,60 @@ class PublicCampaignsApiTest {
         redis.opsForValue().increment("catalog:cache:gen:" + PublicCampaigns.CAMPAIGNS);           // 그 이벤트를 받아 세대를 올렸다
         assertThat(cardStatuses(promotionId)).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(ready, "OPEN", pending, "OPEN"));
         assertThat(redis.keys("catalog:cache:preorder-campaign-set:*")).as("다 갖춘 묶음은 긴 쪽에").hasSize(1);
+        String generation = redis.opsForValue().get("catalog:cache:gen:" + PublicCampaigns.CAMPAIGNS);
+        assertThat(redis.keys("catalog:cache:preorder-campaign-set-partial:*" + PublicCampaigns.CAMPAIGNS + "." + generation + ":*"))
+                .as("다 갖춘 묶음은 짧은 쪽에 넣지 않는다").isEmpty();
+    }
+
+    @Test
+    @DisplayName("긴 쪽이 채우는 중에 짧은 쪽만 Redis 를 못 써도, 다 갖춘 묶음은 fresh 로 받아 넣는다 — preorder 캐시의 옛 값이 긴 TTL 로 남지 않게")
+    void completeSetIsStoredFreshEvenWhenPartialSideBypasses() throws Exception {
+        UUID first = openPreorder("긴 쪽 하나");
+        UUID second = openPreorder("긴 쪽 둘");
+        closeNow(second);   // preorder DB 는 마감
+        Instant now = Instant.now();   // 비우기를 놓친 preorder 인스턴스 — fresh 없이 물으면 마감 전 값
+        doReturn(ApiResponse.ok(new PreorderCampaignClient.Campaigns(List.of(
+                new PreorderCampaignClient.Campaign(first, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1))),
+                new PreorderCampaignClient.Campaign(second, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)))))))
+                .when(client).getCampaigns(any(), eq(false));
+        clearInvocations(client);
+        failValueGet = "preorder-campaign-set-partial:";
+
+        java.util.Map<UUID, com.grandis.nova.catalog.listing.CampaignWindow> found = publicCampaigns.find(List.of(first, second));
+
+        verify(client, times(1)).getCampaigns(any(), eq(true));
+        assertThat(found.get(second).closesAt()).as("넣은 값은 preorder DB 의 마감").isBefore(now.plus(Duration.ofMinutes(1)));
+        assertThat(redis.keys("catalog:cache:preorder-campaign-set:*")).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("긴 쪽이 우회하는 동안 다 갖춘 묶음은 아무도 넣지 않으므로 preorder DB(fresh)로 묻지 않는다")
+    void completeSetIsNotAskedFreshWhileFullSideBypasses() throws Exception {
+        UUID first = openPreorder("우회 하나");
+        UUID second = openPreorder("우회 둘");
+        clearInvocations(client);
+        failValueGet = "preorder-campaign-set:";
+
+        assertThat(publicCampaigns.find(List.of(first, second))).containsOnlyKeys(first, second);
+
+        verify(client, never()).getCampaigns(any(), eq(true));
+        assertThat(redis.keys("catalog:cache:preorder-campaign-set*")).as("긴 쪽은 우회, 짧은 쪽은 다 갖춘 묶음을 넣지 않는다").isEmpty();
+    }
+
+    @SuppressWarnings("unchecked")
+    private org.springframework.data.redis.core.ValueOperations<String, String> failingGets(org.springframework.data.redis.core.ValueOperations<String, String> real) {
+        return (org.springframework.data.redis.core.ValueOperations<String, String>) java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),
+                new Class<?>[] {org.springframework.data.redis.core.ValueOperations.class}, (proxy, method, args) -> {
+                    String fail = failValueGet;
+                    if (fail != null && method.getName().equals("get") && args != null && args.length == 1 && args[0] instanceof String key && key.contains(fail)) {
+                        throw new org.springframework.data.redis.RedisSystemException("시험 — 이 키의 값 GET 실패", null);
+                    }
+                    try {
+                        return method.invoke(real, args);
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                });
     }
 
     @Test
