@@ -22,6 +22,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -37,7 +38,7 @@ public class ProductRankingService {
     private static final Logger log = LoggerFactory.getLogger(ProductRankingService.class);
 
     static final int SIZE = 10;
-    /** 후보를 이만큼씩 읽어 노출 규칙으로 거른다 — {@link #SIZE}개가 찰 때까지 다음 묶음을 읽는다. */
+    /** 후보를 이만큼씩 노출 규칙으로 거른다 — {@link #SIZE}개가 찰 때까지 다음 묶음을 DB 에 묻는다. */
     static final int CANDIDATES = 50;
     /** 읽는 후보의 상한 — 조회수가 높은 상품이 한꺼번에 숨김 · 판매 중지 · 접수 마감이 돼도 그 아래에서 채우되, 끝없이 읽지 않는다. */
     static final int MAX_CANDIDATES = 500;
@@ -118,23 +119,21 @@ public class ProductRankingService {
         // 사전예약은 회원 목록처럼 지금 접수 중인 것만 — preorder 의 접수 중 · 곧 열릴 회차로 가른다(답하지 않으면 마지막 값, 오래됐으면 사전예약 없이)
         Map<UUID, CampaignWindow> open = campaigns.open();
         Set<UUID> accepting = CampaignWindow.acceptingAt(open, now);
-        // 묶음마다 날마다의 표를 다시 합치므로 그 사이 조회로 순위가 바뀌면 같은 상품이 두 묶음에 올 수 있다 — 상품 id 로 한 번만 담는다
-        java.util.Map<UUID, ProductListItem> byId = new java.util.LinkedHashMap<>();
-        for (int offset = 0; offset < MAX_CANDIDATES && byId.size() < SIZE; offset += CANDIDATES) {
-            List<UUID> candidates;
-            try {
-                candidates = counter.top(now, offset, CANDIDATES);
-            } catch (DataAccessException e) {
-                log.warn("조회수 랭킹을 읽지 못했다(Redis)", e);
-                throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
-            }
+        // 순위는 한 번만 합쳐 읽는다 — 묶음마다 다시 합치면 그 사이 조회로 순위가 바뀌어 한 상품이 두 묶음에 오거나, 이미 읽은 범위로 올라간 상품이 빠질 수 있다
+        List<UUID> ranked;
+        try {
+            ranked = counter.top(now, MAX_CANDIDATES);
+        } catch (DataAccessException e) {
+            log.warn("조회수 랭킹을 읽지 못했다(Redis)", e);
+            throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+        }
+        List<ProductListItem> listed = new ArrayList<>();
+        for (int from = 0; from < ranked.size() && listed.size() < SIZE; from += CANDIDATES) {
+            List<UUID> candidates = ranked.subList(from, Math.min(from + CANDIDATES, ranked.size()));
             readTransaction.execute(status -> listings.findListedCards(candidates, accepting))
-                    .forEach(card -> byId.putIfAbsent(card.productId(), card.withCampaign(open.get(card.productId()), now)));
-            if (candidates.size() < CANDIDATES) {
-                break;
-            }
+                    .forEach(card -> listed.add(card.withCampaign(open.get(card.productId()), now)));
         }
         // 품절은 순위를 정한 뒤 order 재고로 채운다(트랜잭션 밖). 이 결과째 캐시되므로, order 가 답하지 않아 품절 표시를 뺀 순위도 캐시 수명만큼 남는다
-        return soldOut.mark(byId.values().stream().limit(SIZE).toList());
+        return soldOut.mark(listed.stream().limit(SIZE).toList());
     }
 }
