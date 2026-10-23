@@ -452,6 +452,11 @@ class ReviewApiTest {
             assertThat(orderItems).containsExactlyInAnyOrder(written.toString(), alsoWritten.toString());
             assertThat(several.get("total").asLong()).isEqualTo(2);
         }
+        JsonNode mixed = data(mockMvc.perform(get("/api/v1/reviews/mine").param("orderItemId", written + "," + notWritten, alsoWritten.toString())
+                .with(AccessTokens.customer(customerId))).andExpect(status().isOk()));
+        assertThat(mixed.get("total").asLong()).as("여러 번 · 쉼표를 섞어도").isEqualTo(2);
+        mockMvc.perform(get("/api/v1/reviews/mine").param("orderItemId", "not-a-uuid").with(AccessTokens.customer(customerId)))
+                .andExpect(status().isBadRequest());
         mockMvc.perform(get("/api/v1/reviews/mine").param("orderItemId", written + ",").with(AccessTokens.customer(customerId)))
                 .andExpect(status().isBadRequest());
         String tooMany = java.util.stream.IntStream.range(0, 101).mapToObj(i -> UUID.randomUUID().toString()).collect(java.util.stream.Collectors.joining(","));
