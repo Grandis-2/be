@@ -56,7 +56,10 @@ import java.util.function.Supplier;
  *       우회한다 — 그때는 이미 그 채우기 자리에 붙어 기다린 요청도 우회 결과를 받는다(넣지 않는다). 그 밖에는 우회는 우회끼리만 같이 받는다(세대를
  *       읽었으면 그 번호까지 같은 것끼리) — 같은 키를 채우기와 우회가 동시에 찾으면 loader 를 각각 한 번 부른다.</li>
  *   <li><b>장애 중 사본</b>: 사본을 켠 캐시({@link #spec(String, Class, Duration, Duration)})는 Redis 를 못 읽을 때 우회하기 전에 이 인스턴스의
- *       사본({@link OutageCopies})으로 답한다 — Redis 가 잠깐 늦어 차단기가 열린 동안 요청이 모두 원천으로 몰려 줄을 서지 않게.</li>
+ *       사본({@link OutageCopies})으로 답한다 — Redis 가 잠깐 늦어 차단기가 열린 동안 요청이 모두 원천으로 몰려 줄을 서지 않게.
+ *       평소에도 세대를 읽은 뒤 그 번호의 사본이 미리 갱신 시점 전이면 Redis 값을 읽지 않고 사본으로 답한다 — 적중마다 값 GET 과 JSON 풀기를 하지 않게.
+ *       세대는 늘 Redis 에서 읽으므로 다른 인스턴스의 비우기는 지금처럼 다음 조회부터 보이고, 사본은 처음 읽은 시각 그대로라 TTL 을 넘기지 않는다.
+ *       미리 갱신 시점이 지나면 Redis 로 가 갱신을 맡기고 새 값으로 사본을 바꾼다.</li>
  *   <li><b>미리 갱신</b>: 읽은 지 TTL 의 {@link #REFRESH_AFTER_PERCENT}% 가 지난 값을 꺼낸 요청은 그 값을 바로 받고, 같은 키(세대 번호 포함)의
  *       다시 읽기를 갱신 실행기에 이 인스턴스에서 하나만 맡긴다 — 만료 순간 모든 요청이 한 건의 읽기를 기다리지 않게(부하 시험에서 목록 · 리뷰의 캐시
  *       대상 요청이 그 대기로 목록 0.3~1.4초 · 리뷰 0.2~2.2초 걸렸다). 요청이 없는 키는 갱신하지 않는다. 갱신은 몰림의 "한 번만 읽기" 자리를 같이 써서, 갱신이 끝나기 전에
@@ -330,6 +333,11 @@ public final class ReadCache {
             return bypass(spec, generation, null, id, loader, storable);
         }
         releaseOlderGenerations(spec, generation, current);
+        Entry<T> copy = freshCopy(spec, generation, current, id);
+        if (copy != null) {
+            events.served(spec.name(), Outcome.LOCAL);
+            return copy;
+        }
         String key = prefix + spec.name() + ":" + FORMAT + "." + spec.fingerprint() + ":" + generation + "." + current + ":" + id;
         String cached;
         try {
@@ -347,7 +355,7 @@ public final class ReadCache {
             if (entry != null) {
                 keepCopy(spec, generation, current, id, entry, cached.length());
                 boolean submitted = refresher != null
-                        && !clock.instant().isBefore(entry.loadedAt().plus(spec.ttl().multipliedBy(REFRESH_AFTER_PERCENT).dividedBy(100)))
+                        && !clock.instant().isBefore(refreshAt(spec, entry))
                         && refreshAhead(key, id, spec, entry.loadedAt(), loader, storable, generation, current);
                 events.served(spec.name(), submitted ? Outcome.HIT_REFRESH : Outcome.HIT);
                 return entry;
@@ -410,6 +418,29 @@ public final class ReadCache {
         }
         events.served(spec.name(), Outcome.HELD);
         return (Entry<T>) copy.entry();
+    }
+
+    /**
+     * 평소 적중에 답할 사본 — 방금 읽은 세대 번호의 사본이고, 이 인스턴스가 그 세대를 올리려 한 뒤에 읽기 시작한 값이고, 미리 갱신 시점 전이다. 아니면 null(Redis 로 간다).
+     * 사본은 넣기로 한 값만 남으므로({@link #keepCopy}) 넣지 않는 값(storable 이 거른 값)은 여기서도 나오지 않는다.
+     */
+    @SuppressWarnings("unchecked")
+    private <T> Entry<T> freshCopy(Spec<T> spec, String generation, long current, String id) {
+        OutageCopies outage = spec.outage();
+        if (outage == null) {
+            return null;
+        }
+        Copy copy = outage.copies.getIfPresent(generation + ":" + id);
+        if (copy == null || copy.generationNumber() != current || !readAfterBump(generation, copy.entry())
+                || !clock.instant().isBefore(refreshAt(spec, copy.entry()))) {
+            return null;
+        }
+        return (Entry<T>) copy.entry();
+    }
+
+    /** 이 시각부터 꺼낸 값은 미리 갱신을 맡긴다 — 읽은 지 TTL 의 {@link #REFRESH_AFTER_PERCENT}%. */
+    private static Instant refreshAt(Spec<?> spec, Entry<?> entry) {
+        return entry.loadedAt().plus(spec.ttl().multipliedBy(REFRESH_AFTER_PERCENT).dividedBy(100));
     }
 
     /**
@@ -1000,7 +1031,8 @@ public final class ReadCache {
 
     /**
      * Redis 를 못 읽을 때(실패 · 시간 초과 · 차단기 열림) 우회 대신 답할 이 인스턴스의 사본 — 캐시 하나에 하나. 조회가 Redis 에서 읽은 값과 원천에서
-     * 읽어 넣으려 한 값을 세대 번호와 함께 키(세대 이름 · id)마다 하나 남긴다. 평소에는 남기기만 하고 Redis 호출 수는 그대로다.
+     * 읽어 넣으려 한 값을 세대 번호와 함께 키(세대 이름 · id)마다 하나 남긴다. 평소에도 같은 세대의 사본이 미리 갱신 시점 전이면 Redis 값을 읽지 않고
+     * 그 사본으로 답한다({@link #freshCopy}) — 세대 GET 은 그대로다.
      * <ul>
      *   <li><b>왜</b>: Redis 가 몇 초 늦어 차단기가 열리면 그 인스턴스의 조회가 {@link #OPEN_FOR} 동안 모두 우회해, 같은 키가 원천(DB · 다른 서비스)
      *       한 건 뒤에 줄을 섰다(부하 시험 10-22: 홍보 상세가 한 인스턴스에서만 대기 3,654건 · 중앙값 0.5~0.75초, 다른 인스턴스는 p99 0.5초 이하).</li>

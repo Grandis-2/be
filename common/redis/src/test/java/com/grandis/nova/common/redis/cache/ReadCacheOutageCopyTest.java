@@ -30,6 +30,7 @@ class ReadCacheOutageCopyTest {
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final Duration TTL = Duration.ofMinutes(10);
     private static final Duration HELD_FOR = Duration.ofMinutes(1);
+    private static final int REFRESH_POINT = ReadCache.REFRESH_AFTER_PERCENT;
 
     static LettuceConnectionFactory connections;
     static StringRedisTemplate redis;
@@ -223,6 +224,7 @@ class ReadCacheOutageCopyTest {
     @DisplayName("이 인스턴스가 세대를 올리기 전에 읽기 시작한 값은 옛 번호로 남아도 사본으로 쓰지 않는다")
     void loadStartedBeforeOwnBumpIsNotServed() {
         get(cache, held, "warm");   // 세대 0 을 본다
+        clock.advance(TTL.multipliedBy(REFRESH_POINT).dividedBy(100));   // 사본이 미리 갱신 시점을 지나야 다음 조회가 Redis 로 간다
         redis.delete(redis.keys("svc:cache:held:*"));
         cache.get(held, "products", "1", () -> {
             clock.advance(Duration.ofSeconds(1));
@@ -237,6 +239,60 @@ class ReadCacheOutageCopyTest {
 
         assertThat(served).as("세대 0 사본(올리기 전에 읽음)을 내지 않는다").isEqualTo("db");
         assertThat(loads).containsExactly(ReadCache.LoadPath.BYPASS);
+    }
+
+    /** Redis 에 든 그 키의 값을 같은 세대 그대로 바꾼다 — 조회가 Redis 값을 읽었는지 사본으로 답했는지 가른다. */
+    private void overwriteInRedis(ReadCache.Spec<Item> spec, String name) {
+        java.util.Set<String> keys = redis.keys("svc:cache:" + spec.name() + ":*");
+        assertThat(keys).hasSize(1);
+        redis.opsForValue().set(keys.iterator().next(), "{\"loadedAt\":" + clock.millis() + ",\"value\":{\"name\":\"" + name + "\"}}");
+    }
+
+    @Test
+    @DisplayName("평소 적중도 같은 세대의 사본이 미리 갱신 시점 전이면 Redis 값을 읽지 않는다 — 읽은 시각 그대로, 켜지 않은 캐시는 Redis 값")
+    void freshCopyAnswersWithoutTheValueRead() {
+        Instant filledAt = clock.instant();
+        get(cache, held, "v1");
+        get(cache, plain, "p1");
+        overwriteInRedis(held, "in-redis");
+        overwriteInRedis(plain, "p-in-redis");
+        loads.clear();
+        clock.advance(TTL.multipliedBy(REFRESH_POINT - 1).dividedBy(100));
+
+        ReadCache.Entry<Item> served = cache.entry(held, "products", "1", () -> new Item("db"));
+
+        assertThat(served.value().name()).isEqualTo("v1");
+        assertThat(served.loadedAt()).as("TTL 은 처음 읽은 시각부터 — 사본을 꺼낸 때부터 다시 세지 않는다").isEqualTo(filledAt);
+        assertThat(outcomes.of("held")).endsWith(ReadCacheEvents.Outcome.LOCAL);
+        assertThat(get(cache, plain, "unused")).isEqualTo("p-in-redis");
+        assertThat(loads).isEmpty();
+    }
+
+    @Test
+    @DisplayName("미리 갱신 시점이 지나면 Redis 로 간다 — 그 뒤엔 Redis 에서 읽은 값이 새 사본이다")
+    void copyPastRefreshPointGoesToRedis() {
+        get(cache, held, "v1");
+        loads.clear();
+        clock.advance(TTL.multipliedBy(REFRESH_POINT).dividedBy(100));
+        overwriteInRedis(held, "in-redis");
+
+        assertThat(get(cache, held, "unused")).isEqualTo("in-redis");
+        assertThat(outcomes.of("held")).endsWith(ReadCacheEvents.Outcome.HIT);
+        assertThat(get(cache, held, "unused")).as("Redis 에서 읽은 값(읽은 시각이 지금)이 사본이 됐다").isEqualTo("in-redis");
+        assertThat(outcomes.of("held")).endsWith(ReadCacheEvents.Outcome.LOCAL);
+        assertThat(loads).isEmpty();
+    }
+
+    @Test
+    @DisplayName("다른 인스턴스가 세대를 올리면 사본은 쓰지 않는다 — 세대는 늘 Redis 에서 읽는다")
+    void otherInstanceBumpSkipsTheCopy() {
+        get(cache, held, "v1");
+        loads.clear();
+
+        instance(redis).bumpNow("products");
+
+        assertThat(get(cache, held, "v2")).isEqualTo("v2");
+        assertThat(loads).containsExactly(ReadCache.LoadPath.FILL);
     }
 
     @Test
@@ -309,6 +365,7 @@ class ReadCacheOutageCopyTest {
         ReadCache failing = instance(template);
         ReadCache.Spec<Item> spec = failing.spec("held", Item.class, TTL, HELD_FOR);
         get(failing, spec, "v1");
+        clock.advance(TTL.multipliedBy(REFRESH_POINT).dividedBy(100));   // 사본이 미리 갱신 시점을 지나야 다음 조회가 Redis 로 간다
         redis.delete(redis.keys("svc:cache:held:*"));
         loads.clear();
         template.failWith = new RedisSystemException("다시 보기 실패", null);
