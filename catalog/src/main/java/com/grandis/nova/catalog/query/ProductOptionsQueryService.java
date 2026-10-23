@@ -53,8 +53,13 @@ public class ProductOptionsQueryService {
     public List<OptionLookupView> findOptions(Collection<UUID> optionIds) {
         LinkedHashSet<UUID> requested = new LinkedHashSet<>(optionIds);
         Map<UUID, ProductOptionsQueryRepository.OptionWithProduct> found = new HashMap<>();
-        queries.findOptionsWithProducts(requested).forEach(row -> found.put(row.option().id(), row));
-        Map<UUID, ProductOptions> documents = new HashMap<>();   // 상품 문서(JSON)는 상품마다 한 번만 푼다
+        Map<UUID, ProductOptions> documents = new HashMap<>();   // 상품 문서(JSON)는 상품마다 한 행에만 실려 온다 — 그 행에서 한 번만 푼다
+        for (ProductOptionsQueryRepository.OptionWithProduct row : queries.findOptionsWithProducts(requested)) {
+            found.put(row.option().id(), row);
+            if (row.document() != null) {
+                documents.put(row.product().id(), ProductOptions.parse(row.document()));
+            }
+        }
 
         List<OptionLookupView> views = new ArrayList<>();
         for (UUID optionId : requested) {
@@ -64,7 +69,8 @@ public class ProductOptionsQueryService {
             }
             ProductOptionsQueryRepository.ProductRow product = row.product();
             ProductOptionsQueryRepository.OptionRow option = row.option();
-            ProductOptions document = documents.computeIfAbsent(product.id(), id -> ProductOptions.parse(row.document()));
+            // 칸이 비어 있는 상품은 문서가 실린 행이 없다 — 예전처럼 빈 문서다
+            ProductOptions document = documents.computeIfAbsent(product.id(), id -> ProductOptions.parse(null));
             ProductOptions.Warranty warranty = document.warranty();
             views.add(new OptionLookupView(option.id(), product.id(), product.title(), product.modelName(), option.title(), option.sku(),
                     Discount.apply(option.price(), product.discountRate()), option.price(), option.status(), product.saleMode(), product.status(),
