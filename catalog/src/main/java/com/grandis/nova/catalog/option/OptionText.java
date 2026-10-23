@@ -2,6 +2,7 @@ package com.grandis.nova.catalog.option;
 
 import java.text.Normalizer;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
  * 옵션 축 키 · 값의 저장 규칙. 등록 · 수정 · 목록 필터가 같은 규칙을 쓴다 — 저장과 비교가 갈리면 필터가 빗나간다.
@@ -11,6 +12,9 @@ public final class OptionText {
 
     public static final String COLOR = "color";
     public static final String STORAGE = "storage";
+
+    /** 공백 연속 — 목록 필터가 요청마다 부른다(String.replaceAll 은 부를 때마다 컴파일한다) */
+    private static final Pattern WHITESPACE = Pattern.compile("\\s+");
 
     private OptionText() {
     }
@@ -34,7 +38,7 @@ public final class OptionText {
         if (text == null) {
             throw new IllegalArgumentException("value must not be null");
         }
-        String normalized = Normalizer.normalize(text, Normalizer.Form.NFC).strip().replaceAll("\\s+", " ");
+        String normalized = WHITESPACE.matcher(Normalizer.normalize(text, Normalizer.Form.NFC).strip()).replaceAll(" ");
         if (normalized.isEmpty()) {
             throw new IllegalArgumentException("value must not be blank");
         }
