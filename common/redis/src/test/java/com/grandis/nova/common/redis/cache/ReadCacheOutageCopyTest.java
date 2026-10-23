@@ -110,7 +110,7 @@ class ReadCacheOutageCopyTest {
     void copyIsTrustedOnlyForHeldForSinceTheGenerationWasLastRead() {
         get(cache, held, "v1");
         clock.advance(Duration.ofSeconds(30));
-        get(cache, held, "unused");   // 히트 — 세대를 다시 읽었다(사본은 처음 값 그대로)
+        get(cache, held, "unused");   // 같은 세대의 사본으로 답했다(LOCAL) — 세대는 다시 읽었다(사본은 처음 값 그대로)
         cache.breaker().transitionToForcedOpenState();
         loads.clear();
 
@@ -176,11 +176,13 @@ class ReadCacheOutageCopyTest {
         ReadCache failing = instance(template);
         ReadCache.Spec<Item> spec = failing.spec("held", Item.class, TTL, HELD_FOR);
         get(failing, spec, "v1");
+        clock.advance(TTL.multipliedBy(REFRESH_POINT).dividedBy(100));   // 사본이 미리 갱신 시점을 지나야 값 GET 까지 간다
         loads.clear();
         template.failWith = new RedisSystemException("값 읽기 실패", null);
 
         template.fail.set(true);
         assertThat(get(failing, spec, "db")).isEqualTo("v1");
+        assertThat(outcomes.of("held")).as("값 GET 이 실패해 장애 사본으로 답했다").endsWith(ReadCacheEvents.Outcome.HELD);
         assertThat(loads).isEmpty();
 
         instance(redis).bumpNow("products");   // 다른 인스턴스가 올렸다
@@ -296,6 +298,31 @@ class ReadCacheOutageCopyTest {
     }
 
     @Test
+    @DisplayName("이 인스턴스가 미룬 올리기를 다시 하지 못해 옛 번호를 읽어도, 올리기 전에 읽은 사본으로 평소 답하지 않는다 — Redis 로 간다")
+    void deferredOwnBumpSkipsTheFreshCopy() {
+        java.util.concurrent.atomic.AtomicBoolean scriptsFail = new java.util.concurrent.atomic.AtomicBoolean();
+        StringRedisTemplate template = new StringRedisTemplate(connections) {
+            @Override
+            public <T> T execute(org.springframework.data.redis.core.script.RedisScript<T> script, List<String> keys, Object... args) {
+                if (scriptsFail.get()) {
+                    throw new RedisSystemException("올리기 실패", null);
+                }
+                return super.execute(script, keys, args);
+            }
+        };
+        ReadCache own = instance(template);
+        ReadCache.Spec<Item> spec = own.spec("held", Item.class, TTL, HELD_FOR);
+        get(own, spec, "v1");
+        clock.advance(Duration.ofSeconds(1));
+        scriptsFail.set(true);   // 세대 GET 은 되고 올리기(스크립트)만 실패한다
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> own.bumpNow("products")).isInstanceOf(IllegalStateException.class);
+
+        get(own, spec, "unused");   // 미룬 올리기를 다시 해 보다 또 실패 — 세대는 옛 번호 그대로다
+
+        assertThat(outcomes.of("held")).as("올리기 전에 읽은 사본은 평소 경로에서도 내지 않는다").last().isNotEqualTo(ReadCacheEvents.Outcome.LOCAL);
+    }
+
+    @Test
     @DisplayName("다른 인스턴스가 넣은 값을 Redis 에서 읽기만 해도 사본이 남는다")
     void hitKeepsACopy() {
         ReadCache other = instance(redis);
@@ -318,6 +345,7 @@ class ReadCacheOutageCopyTest {
         ReadCache failing = instance(template);
         ReadCache.Spec<Item> spec = failing.spec("held", Item.class, TTL, HELD_FOR);
         get(failing, spec, "v1");
+        clock.advance(TTL.multipliedBy(REFRESH_POINT).dividedBy(100));   // 사본이 미리 갱신 시점을 지나야 값 GET 까지 간다
         redis.delete(redis.keys("svc:cache:held:*"));   // Redis 에서 밀려났다 — 사본은 남아 있다
         loads.clear();
         template.failWith = new RedisSystemException("다시 보기 실패", null);
@@ -327,6 +355,7 @@ class ReadCacheOutageCopyTest {
         String served = get(failing, spec, "db");
 
         assertThat(served).isEqualTo("v1");
+        assertThat(outcomes.of("held")).as("다시 보기가 실패해 장애 사본으로 답했다").endsWith(ReadCacheEvents.Outcome.HELD);
         assertThat(loads).isEmpty();
     }
 

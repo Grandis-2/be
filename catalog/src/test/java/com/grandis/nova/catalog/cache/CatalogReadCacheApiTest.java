@@ -249,10 +249,14 @@ class CatalogReadCacheApiTest {
         String key = keys.iterator().next();
         assertThat(redis.getExpire(key)).isBetween(590L, 600L);
 
-        // 본문이 30초 묵어도 max-age 는 5초 상한 그대로 — 남은 시간은 본문 TTL(10분)로 센다(상품 TTL 5초로 세면 0)
+        // 본문이 30초 묵어도 max-age 는 5초 상한 그대로 — 남은 시간은 본문 TTL(10분)로 센다(상품 TTL 5초로 세면 0).
+        // 이 인스턴스의 사본(방금 읽음)을 피해 Redis 의 묵은 값을 읽게, 세대를 올린 키에 30초 묵은 값을 둔다(다른 인스턴스가 넣은 값과 같다)
         tools.jackson.databind.node.ObjectNode stored = (tools.jackson.databind.node.ObjectNode) JSON.readTree(redis.opsForValue().get(key));
         stored.put("loadedAt", System.currentTimeMillis() - 30_000);
-        redis.opsForValue().set(key, stored.toString(), Duration.ofMinutes(9));
+        long next = redis.opsForValue().increment("catalog:cache:gen:" + CatalogReadCache.PRODUCTS);
+        String staleKey = key.replaceFirst(":" + CatalogReadCache.PRODUCTS + "\\.\\d+:", ":" + CatalogReadCache.PRODUCTS + "." + next + ":");
+        assertThat(staleKey).isNotEqualTo(key);
+        redis.opsForValue().set(staleKey, stored.toString(), Duration.ofMinutes(9));
         assertThat(maxAge(get("/api/v1/products/{id}", productId))).isBetween(4L, 5L);
         UUID variantId = UUID.fromString(data(mockMvc.perform(get("/api/v1/products/{id}", productId))).get("variants").get(0).get("variantId").asString());
         assertThat(maxAge(get("/api/v1/products/{id}/variants/{v}", productId, variantId))).isBetween(4L, 5L);
