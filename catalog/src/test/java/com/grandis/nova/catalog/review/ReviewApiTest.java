@@ -424,7 +424,7 @@ class ReviewApiTest {
     }
 
     @Test
-    @DisplayName("내 리뷰는 로그인한 회원만 — orderItemId 로 그 주문상품의 리뷰를 고른다(주문 내역의 리뷰 쓰기 / 보기)")
+    @DisplayName("내 리뷰는 로그인한 회원만 — orderItemId 로 그 주문상품(여러 개 가능)의 리뷰를 고른다(주문 내역의 리뷰 쓰기 / 수정). 빈 원소 · 100개 초과는 400")
     void myReviewsByOrderItem() throws Exception {
         UUID written = deliveredItem(productId);
         UUID notWritten = deliveredItem(productId);
@@ -440,9 +440,30 @@ class ReviewApiTest {
         JsonNode others = data(mockMvc.perform(get("/api/v1/reviews/mine").with(AccessTokens.customer(nextId()))).andExpect(status().isOk()));
         assertThat(others.get("total").asLong()).as("남의 리뷰는 내 리뷰가 아니다").isZero();
 
+        // 여러 주문상품을 한 번에 — 여러 번 · 쉼표 모두, 쓴 것만 온다
+        UUID alsoWritten = deliveredItem(productId);
+        write(customerId, alsoWritten, 4, "또 쓴 리뷰").andExpect(status().isCreated());
+        for (var request : List.of(
+                get("/api/v1/reviews/mine").param("orderItemId", written.toString(), notWritten.toString(), alsoWritten.toString()),
+                get("/api/v1/reviews/mine").param("orderItemId", written + "," + notWritten + "," + alsoWritten))) {
+            JsonNode several = data(mockMvc.perform(request.with(AccessTokens.customer(customerId))).andExpect(status().isOk()));
+            List<String> orderItems = new java.util.ArrayList<>();
+            several.get("items").forEach(item -> orderItems.add(item.get("orderItemId").asString()));
+            assertThat(orderItems).containsExactlyInAnyOrder(written.toString(), alsoWritten.toString());
+            assertThat(several.get("total").asLong()).isEqualTo(2);
+        }
+        mockMvc.perform(get("/api/v1/reviews/mine").param("orderItemId", written + ",").with(AccessTokens.customer(customerId)))
+                .andExpect(status().isBadRequest());
+        String tooMany = java.util.stream.IntStream.range(0, 101).mapToObj(i -> UUID.randomUUID().toString()).collect(java.util.stream.Collectors.joining(","));
+        mockMvc.perform(get("/api/v1/reviews/mine").param("orderItemId", tooMany).with(AccessTokens.customer(customerId)))
+                .andExpect(status().isBadRequest());
+        JsonNode blank = data(mockMvc.perform(get("/api/v1/reviews/mine").param("orderItemId", "").with(AccessTokens.customer(customerId)))
+                .andExpect(status().isOk()));
+        assertThat(blank.get("total").asLong()).as("값이 통째로 비면 거르지 않는다").isEqualTo(2);
+
         jdbcTemplate.update("UPDATE products SET visible = 0 WHERE id = ?", UuidBinary.toBytes(productId));
         JsonNode afterHidden = data(mockMvc.perform(get("/api/v1/reviews/mine").with(AccessTokens.customer(customerId))).andExpect(status().isOk()));
-        assertThat(afterHidden.get("total").asLong()).as("내 리뷰는 상품이 비공개가 돼도 보인다").isEqualTo(1);
+        assertThat(afterHidden.get("total").asLong()).as("내 리뷰는 상품이 비공개가 돼도 보인다").isEqualTo(2);
     }
 
     @Test

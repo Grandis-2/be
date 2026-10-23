@@ -8,6 +8,7 @@ import com.grandis.nova.catalog.review.ReviewView;
 import com.grandis.nova.catalog.review.WritableItemView;
 import com.grandis.nova.catalog.review.WritableReviewQuery;
 import com.grandis.nova.catalog.web.StrictBodies;
+import com.grandis.nova.catalog.web.ValidationFailures;
 import com.grandis.nova.common.security.CurrentCustomerId;
 import com.grandis.nova.common.web.ApiResponse;
 import io.swagger.v3.oas.annotations.Operation;
@@ -28,6 +29,10 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Clock;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -98,16 +103,36 @@ public class ReviewController {
                 CatalogReadCache.REVIEW_TTL, PublicCache.REVIEW, clock);
     }
 
-    /** 내 리뷰. orderItemId 를 주면 그 주문상품의 리뷰만 — 주문 내역의 "리뷰 쓰기 / 내가 쓴 리뷰 보기" 를 가른다. */
-    @Operation(summary = "내 리뷰", description = "최신순. 쪽은 앞 10,000개 안에서 시작해야 한다(page × size < 10,000)")
+    /**
+     * 내 리뷰. orderItemId 를 주면(여러 번 · 쉼표, 최대 {@link PageSizes#MAX}개) 그 주문상품들의 리뷰만 — 주문 내역이 화면의 주문상품마다
+     * "리뷰 쓰기 / 리뷰 수정" 을 가른다(주문상품마다 리뷰는 0건 또는 1건이라, size 를 보낸 id 수 이상으로 주면 한 쪽에 다 온다).
+     */
+    @Operation(summary = "내 리뷰", description = "최신순. orderItemId 를 주면(여러 번 · 쉼표, 1~100개) 그 주문상품들의 리뷰만. "
+            + "쪽은 앞 10,000개 안에서 시작해야 한다(page × size < 10,000)")
     @GetMapping("/api/v1/reviews/mine")
     public ApiResponse<ProductPageResponse<ReviewView>> myReviews(
             @CurrentCustomerId UUID customerId,
-            @RequestParam(required = false) UUID orderItemId,
+            @RequestParam(required = false) List<UUID> orderItemId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
+        Set<UUID> orderItemIds = orderItemIds(orderItemId);
         return ApiResponse.ok(ProductPageResponse.from(
-                reviews.myReviews(customerId, orderItemId, PageSizes.requirePage(page, PageSizes.require(size)), size)));
+                reviews.myReviews(customerId, orderItemIds, PageSizes.requirePage(page, PageSizes.require(size)), size)));
+    }
+
+    /** 빈 원소(orderItemId=a, 처럼)는 400. 보내지 않았거나 값이 통째로 비면 거르지 않는다. */
+    private static Set<UUID> orderItemIds(List<UUID> requested) {
+        if (requested == null) {
+            return Set.of();
+        }
+        if (requested.stream().anyMatch(Objects::isNull)) {
+            throw ValidationFailures.of("orderItemId", "빈 주문상품 id 가 있습니다.");
+        }
+        Set<UUID> distinct = new LinkedHashSet<>(requested);
+        if (distinct.size() > PageSizes.MAX) {
+            throw ValidationFailures.of("orderItemId", "주문상품 id 는 %d개까지입니다.".formatted(PageSizes.MAX));
+        }
+        return distinct;
     }
 
     /** 마이페이지의 "리뷰 쓰기" 탭. total 은 탭 칩의 수다. */
