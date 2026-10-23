@@ -544,11 +544,24 @@ public final class ReadCache {
         for (int i = 0; i < generations.length; i++) {
             String generation = generations[i];
             String value = values == null ? null : values.get(i);
-            Long read = values == null ? null
-                    : value != null ? call(() -> Long.parseLong(value)) : call(() -> createGeneration(generation));
+            Long read = values == null ? null : value != null ? parsed(value) : call(() -> createGeneration(generation));
             numbers.put(generation, settle(generation, seenBefore.get(generation), asked, read));
         }
         return new Generations(numbers);
+    }
+
+    /**
+     * 묶어 읽은 세대 값 — 숫자가 아니면(키를 손댐) 못 읽은 것이고 차단기에 실패 하나로 센다(하나씩 읽을 때 GET · 파싱이 한 호출이라 실패로 세는 것과 같게).
+     * 정상 값의 파싱은 Redis 호출이 아니라 차단기에 세지 않는다 — 세면 묶음 경로만 성공이 부풀어 간헐 장애에서 차단기가 늦게 열린다.
+     */
+    private Long parsed(String value) {
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            return call(() -> {
+                throw e;
+            });
+        }
     }
 
     /** 한 요청이 먼저 읽은 세대 번호들({@link #generations}). 그 요청 안에서만 쓴다. */

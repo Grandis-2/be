@@ -419,6 +419,26 @@ class ReadCacheGenerationTest {
         assertThat(commandCalls().getOrDefault("get", 0L) - after.getOrDefault("get", 0L)).as("대조군 — 하나씩 읽으면 GET").isEqualTo(1);
     }
 
+    @Test
+    @DisplayName("묶어 읽기는 차단기에 MGET 성공 하나만 센다 — 정상 값의 파싱은 세지 않고, 숫자가 아닌 값은 실패 하나로 센다")
+    void generationsCountTheBreakerLikeSingleReads() {
+        redis.opsForValue().set(GENERATION, "5");
+        redis.opsForValue().set("svc:cache:gen:campaigns", "3");
+        redis.opsForValue().set("svc:cache:gen:promotions", "7");
+        ReadCache cache = new ReadCache(redis, JSON, "svc");
+        var metrics = cache.breaker().getMetrics();
+        int successful = metrics.getNumberOfSuccessfulCalls();
+        int failed = metrics.getNumberOfFailedCalls();
+
+        cache.generations("promotions", "products", "campaigns");
+        assertThat(metrics.getNumberOfSuccessfulCalls() - successful).as("MGET 하나").isEqualTo(1);
+        assertThat(metrics.getNumberOfFailedCalls() - failed).isZero();
+
+        redis.opsForValue().set(GENERATION, "not-a-number");
+        cache.generations("promotions", "products", "campaigns");
+        assertThat(metrics.getNumberOfFailedCalls() - failed).as("숫자 아님은 실패 하나").isEqualTo(1);
+    }
+
     /** Valkey 의 명령별 누적 호출 수(INFO commandstats). */
     private static java.util.Map<String, Long> commandCalls() {
         java.util.Map<String, Long> calls = new java.util.HashMap<>();
