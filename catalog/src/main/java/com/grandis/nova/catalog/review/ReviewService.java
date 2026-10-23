@@ -19,6 +19,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collection;
 import java.util.UUID;
 
 /**
@@ -136,9 +137,9 @@ public class ReviewService {
         return queries.pageVisible(categoryId, page, size);
     }
 
-    /** 내 리뷰. 목록 · 건수는 한 문장이다 — 트랜잭션을 열지 않는다. */
-    public OffsetPage<ReviewView> myReviews(UUID customerId, UUID orderItemId, int page, int size) {
-        return queries.pageMine(customerId, orderItemId, page, size);
+    /** 내 리뷰. orderItemIds 를 주면 그 주문상품들의 리뷰만(비었으면 전부). 목록 · 건수는 한 문장이다 — 트랜잭션을 열지 않는다. */
+    public OffsetPage<ReviewView> myReviews(UUID customerId, Collection<UUID> orderItemIds, int page, int size) {
+        return queries.pageMine(customerId, orderItemIds, page, size);
     }
 
     private ProductReview requireMine(UUID customerId, UUID reviewId) {

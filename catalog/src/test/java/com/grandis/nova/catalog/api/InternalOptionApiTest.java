@@ -143,7 +143,7 @@ class InternalOptionApiTest {
 
     /** 첫 색상(블랙)의 대표가 둘째 장이라 "썸네일 · 대표 · 고른 색상의 첫 장" 셋이 서로 다른 값이 된다 — 어느 하나로 바꿔도 걸린다. */
     @Test
-    @DisplayName("imageUrl 은 옵션이 고른 색상의 첫 장 — 그 색상에 사진이 없으면 상품 썸네일(첫 색상의 첫 장)이고, 대표 표시는 보지 않는다")
+    @DisplayName("imageUrl 은 옵션이 고른 색상의 첫 장 — 그 색상에 사진이 없으면 상품 썸네일(첫 색상의 첫 장)이고, 대표 표시는 보지 않는다. 상품 하나의 옵션 조회도 같다")
     void imageUrlIsTheChosenColorsFirstImage() throws Exception {
         String body = """
                 { "categoryId": "%s", "saleMode": "IN_STOCK", "title": "Watch", "brand": "SAMSUNG", "modelName": "SM-R1", "visible": true, "basePrice": 1000,
@@ -170,6 +170,13 @@ class InternalOptionApiTest {
                 .andExpect(jsonPath("$.data.items[1].imageUrl").value("https://img/silver-0.jpg"))
                 // 사진 없는 색상은 상품 썸네일
                 .andExpect(jsonPath("$.data.items[2].imageUrl").value("https://img/black-0.jpg"));
+        // 상품 하나의 옵션 전체(preorder 가 받는 내부 상품 조회)도 옵션마다 같은 사진이다
+        String options = "$.data.options[?(@.optionId=='%s')].imageUrl";
+        mockMvc.perform(get("/internal/products/{id}/options", productId).with(user("657").roles("USER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath(options.formatted(byTitle.get("블랙"))).value(org.hamcrest.Matchers.contains("https://img/black-0.jpg")))
+                .andExpect(jsonPath(options.formatted(byTitle.get("실버"))).value(org.hamcrest.Matchers.contains("https://img/silver-0.jpg")))
+                .andExpect(jsonPath(options.formatted(byTitle.get("레드"))).value(org.hamcrest.Matchers.contains("https://img/black-0.jpg")));
 
         // 색상 축이 없는 상품은 기본 묶음의 첫 장(대표가 둘째 장이어도)
         mockMvc.perform(post("/api/v1/admin/products").header("Idempotency-Key", "k-" + ShopFixtures.unique())

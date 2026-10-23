@@ -24,7 +24,7 @@ record AdminPreorderDetailResponse(
         PreorderSnapshot preorder = view.preorder();
         PreorderView.Summary summary = new PreorderView.Summary(preorder, view.shipmentBatch(), view.displayStatus());
         Map<UUID, List<SyncAttempt>> attempts = view.attempts();
-        return new AdminPreorderDetailResponse(PreorderDetailResponse.from(summary), preorder.customerId(),
+        return new AdminPreorderDetailResponse(PreorderDetailResponse.from(summary, null), preorder.customerId(),   // 관리자 상세는 사진을 싣지 않는다
                 preorder.admissionTicketId(), preorder.internalNote(),
                 view.syncJobs().stream()
                         .map(job -> SyncJobResponse.from(job, preorder.preorderToken(),

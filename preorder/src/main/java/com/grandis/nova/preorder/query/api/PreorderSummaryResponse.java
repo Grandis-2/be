@@ -23,6 +23,7 @@ record PreorderSummaryResponse(
         String productTitle,
         UUID optionId,
         String optionTitle,
+        String imageUrl,
         BigDecimal unitPrice,
         PreorderStatus status,
         PreorderDisplayStatus displayStatus,
@@ -35,10 +36,11 @@ record PreorderSummaryResponse(
         long version
 ) {
 
-    public static PreorderSummaryResponse from(PreorderView.Summary view) {
+    /** @param imageUrl 그 옵션의 사진(PreorderOptionImages). 모르면 null */
+    public static PreorderSummaryResponse from(PreorderView.Summary view, String imageUrl) {
         PreorderSnapshot preorder = view.preorder();
         return new PreorderSummaryResponse(preorder.preorderToken(), preorder.productId(),
-                preorder.productTitle(), preorder.optionId(), preorder.optionTitle(),
+                preorder.productTitle(), preorder.optionId(), preorder.optionTitle(), imageUrl,
                 preorder.unitPrice(), preorder.status(), view.displayStatus(), preorder.queuePosition(),
                 ShipmentBatchResponse.from(view.shipmentBatch()), preorder.createdAt(),
                 preorder.payableFrom(), preorder.paymentDueAt(), preorder.reservedAt(), preorder.eventSequence());

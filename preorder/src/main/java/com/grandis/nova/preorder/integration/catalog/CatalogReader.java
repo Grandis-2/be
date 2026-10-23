@@ -116,6 +116,23 @@ public class CatalogReader {
         return loaded.product();
     }
 
+    /**
+     * 표시용(예약 목록 · 상세의 사진) — 캐시에 있으면 나이와 상관없이 그 값을 바로 준다. 1분이 지났으면 뒤에서 다시 받기를 맡긴다(접수 판정과 달리
+     * 5분 지난 값을 그 자리에서 기다려 다시 받지 않는다 — catalog 가 느릴 때 목록이 상품 수만큼 기다리지 않게). 캐시에 없을 때만 지금 받는다.
+     *
+     * @throws BusinessException {@link #findProduct} 와 같다(캐시에 없을 때만)
+     */
+    public Optional<ProductCatalog> findProductForDisplay(UUID productId) {
+        Loaded cached = products.getIfPresent(productId);
+        if (cached == null) {
+            return findProduct(productId);
+        }
+        if (cached.isOlderThan(properties.refreshAfter(), clock.instant())) {
+            refreshInBackground(productId, cached);
+        }
+        return cached.product();
+    }
+
     /** 이벤트(판매 중지 등)로 값이 바뀐 상품을 비운다. 다음 조회가 catalog 에서 다시 받는다. */
     public void evict(UUID productId) {
         products.invalidate(productId);

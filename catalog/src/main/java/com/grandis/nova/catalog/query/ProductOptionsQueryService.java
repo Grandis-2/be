@@ -6,6 +6,8 @@ import com.grandis.nova.catalog.option.OptionCombination;
 import com.grandis.nova.catalog.option.ProductOptions;
 import com.grandis.nova.catalog.product.Discount;
 import com.grandis.nova.common.BusinessException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -27,6 +29,8 @@ import java.util.UUID;
 @Service
 public class ProductOptionsQueryService {
 
+    private static final Logger log = LoggerFactory.getLogger(ProductOptionsQueryService.class);
+
     private final ProductOptionsQueryRepository queries;
 
     public ProductOptionsQueryService(ProductOptionsQueryRepository queries) {
@@ -39,9 +43,10 @@ public class ProductOptionsQueryService {
                 .filter(candidate -> !candidate.product().deleted())
                 .orElseThrow(() -> new BusinessException(CatalogErrorCode.PRODUCT_NOT_FOUND));
         ProductOptionsQueryRepository.ProductRow product = found.product();
+        ProductOptions document = documentOrEmpty(product.id(), found.document());
         List<ProductOptionsView.Option> optionViews = found.options().stream()
                 .map(option -> new ProductOptionsView.Option(option.id(), option.sku(), option.title(), Discount.apply(option.price(), product.discountRate()),
-                        option.status()))
+                        option.status(), document.imageUrlOf(OptionCombination.valueIdsOf(option.combinationKey()))))
                 .toList();
         return new ProductOptionsView(product.id(), product.title(), product.saleMode(), product.status(), product.visible(), product.ready(), optionViews);
     }
@@ -82,4 +87,16 @@ public class ProductOptionsQueryService {
         }
         return views;
     }
+
+    /** 사진은 표시용이라 판정에 쓰지 않는다 — 문서를 풀지 못하면 사진만 비우고 응답(접수 판정 재료)은 그대로 낸다. */
+    private static ProductOptions documentOrEmpty(UUID productId, String document) {
+        try {
+            ProductOptions parsed = ProductOptions.parse(document);
+            return parsed == null ? ProductOptions.parse(null) : parsed;   // 문서가 JSON null 이면 예외 없이 null 이 나온다
+        } catch (RuntimeException e) {
+            log.warn("상품 옵션 문서를 풀지 못해 옵션 사진을 비운다 productId={}", productId, e);
+            return ProductOptions.parse(null);
+        }
+    }
+
 }

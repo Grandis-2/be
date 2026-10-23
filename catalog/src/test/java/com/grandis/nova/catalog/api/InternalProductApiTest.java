@@ -18,6 +18,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -88,6 +89,28 @@ class InternalProductApiTest {
         asUser(preorder)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.registrationCompleted").value(true));
+    }
+
+    @Test
+    @DisplayName("옵션 문서를 풀지 못해도(모양이 어긋남 · JSON null) 응답은 그대로 내고 옵션 사진만 비운다 — 사진은 표시용이라 접수 판정을 막지 않는다")
+    void unreadableDocumentOnlyDropsImages() throws Exception {
+        UUID productId = fixtures.product("PREORDER", "ACTIVE");
+        UUID option = fixtures.option(productId, "ACTIVE");
+        fixtures.image(productId, "GALLERY", "", 0, true, "https://img/default-0.jpg");
+        asUser(productId).andExpect(jsonPath("$.data.options[0].imageUrl").value("https://img/default-0.jpg"));   // 대조군 — 정상 문서면 사진이 있다
+        try {
+            for (String broken : List.of("JSON_OBJECT('axes', 'not-a-list')", "CAST('null' AS JSON)")) {   // 모양이 어긋남 · JSON null
+                jdbcTemplate.update("UPDATE products SET options = " + broken + " WHERE id = ?", (Object) UuidBinary.toBytes(productId));
+                asUser(productId)
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.options[0].optionId").value(option.toString()))
+                        .andExpect(jsonPath("$.data.options[0].status").value("ACTIVE"))
+                        .andExpect(jsonPath("$.data.options[0].imageUrl").doesNotExist());
+            }
+        } finally {
+            // 같은 DB 를 쓰는 다른 시험(사전예약 상품을 훑는 관리자 목록)이 이 문서를 풀다 깨지지 않게 되돌린다
+            jdbcTemplate.update("UPDATE products SET options = JSON_OBJECT() WHERE id = ?", (Object) UuidBinary.toBytes(productId));
+        }
     }
 
     @Test

@@ -5,7 +5,9 @@ import com.grandis.nova.common.security.CurrentCustomerId;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.query.application.PreorderDisplayStatus;
+import com.grandis.nova.preorder.query.application.PreorderOptionImages;
 import com.grandis.nova.preorder.query.application.PreorderQueryService;
+import com.grandis.nova.preorder.query.application.PreorderView;
 import com.grandis.nova.preorder.web.CurrentViewer;
 import com.grandis.nova.preorder.web.Items;
 import com.grandis.nova.preorder.web.PageSizes;
@@ -20,6 +22,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -30,9 +33,11 @@ import java.util.UUID;
 class PreorderQueryController {
 
     private final PreorderQueryService queryService;
+    private final PreorderOptionImages images;
 
-    PreorderQueryController(PreorderQueryService queryService) {
+    PreorderQueryController(PreorderQueryService queryService, PreorderOptionImages images) {
         this.queryService = queryService;
+        this.images = images;
     }
 
     @Operation(summary = "내 예약 목록(커서 페이지)",
@@ -52,9 +57,10 @@ class PreorderQueryController {
         if (displayStatus != null && displayStatus.contains(null)) {
             throw ValidationFailures.of("displayStatus", "빈 단계 값이 있습니다.");
         }
-        CursorPage<PreorderSummaryResponse> page = queryService.findMine(customerId, status,
-                        displayStatus == null ? Set.of() : displayStatus, productId, cursor, PageSizes.require(size))
-                .map(PreorderSummaryResponse::from);
+        CursorPage<PreorderView.Summary> found = queryService.findMine(customerId, status,
+                displayStatus == null ? Set.of() : displayStatus, productId, cursor, PageSizes.require(size));
+        Map<UUID, String> imageUrls = images.of(found.items().stream().map(PreorderView.Summary::preorder).toList());
+        CursorPage<PreorderSummaryResponse> page = found.map(view -> PreorderSummaryResponse.from(view, imageUrls.get(view.preorder().optionId())));
         return ApiResponse.ok(MyPreordersResponse.of(page, queryService.countMine(customerId)));
     }
 
@@ -78,7 +84,8 @@ class PreorderQueryController {
     @Operation(summary = "예약 상세(본인 · 관리자)")
     @GetMapping("/{preorderId}")
     public ApiResponse<PreorderDetailResponse> get(@CurrentViewer Viewer viewer, @PathVariable String preorderId) {
-        return ApiResponse.ok(PreorderDetailResponse.from(queryService.findOne(viewer, preorderId)));
+        PreorderView.Summary view = queryService.findOne(viewer, preorderId);
+        return ApiResponse.ok(PreorderDetailResponse.from(view, images.of(List.of(view.preorder())).get(view.preorder().optionId())));
     }
 
     @Operation(summary = "예약 이력(본인 · 관리자)")

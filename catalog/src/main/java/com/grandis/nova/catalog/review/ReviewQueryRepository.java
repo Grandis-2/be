@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
@@ -64,14 +65,18 @@ public class ReviewQueryRepository {
         return page(visibleWhere(categoryId), visibleParams(categoryId), page, size, false);
     }
 
-    /** 내 리뷰 — 상품 공개 여부와 상관없이 전부. orderItemId 를 주면 그 주문상품의 리뷰만(0건 또는 1건). 쪽과 건수를 한 문장으로({@link #page}). */
-    public OffsetPage<ReviewView> pageMine(UUID customerId, UUID orderItemId, int page, int size) {
-        return page(mineWhere(orderItemId), mineParams(customerId, orderItemId), page, size, true);
+    /**
+     * 내 리뷰 — 상품 공개 여부와 상관없이 전부. orderItemIds 를 주면 그 주문상품들의 리뷰만(주문상품마다 0건 또는 1건 — uq_review_order_item).
+     * 비었으면 거르지 않는다. 쪽과 건수를 한 문장으로({@link #page}).
+     */
+    public OffsetPage<ReviewView> pageMine(UUID customerId, Collection<UUID> orderItemIds, int page, int size) {
+        return page(mineWhere(orderItemIds), mineParams(customerId, orderItemIds), page, size, true);
     }
 
     /** 내 리뷰 한 쪽(건수 없이) — 방금 쓰거나 고친 리뷰를 다시 읽을 때. */
     public List<ReviewView> findMine(UUID customerId, UUID orderItemId, int page, int size) {
-        return find(mineWhere(orderItemId), mineParams(customerId, orderItemId), page, size, true);
+        List<UUID> orderItemIds = List.of(orderItemId);
+        return find(mineWhere(orderItemIds), mineParams(customerId, orderItemIds), page, size, true);
     }
 
     private static String visibleWhere(UUID categoryId) {
@@ -82,13 +87,13 @@ public class ReviewQueryRepository {
         return new MapSqlParameterSource("categoryId", UuidBinary.toBytes(categoryId));
     }
 
-    private static String mineWhere(UUID orderItemId) {
-        return " WHERE r.customer_id = :customerId" + (orderItemId == null ? "" : " AND r.order_item_id = :orderItemId");
+    private static String mineWhere(Collection<UUID> orderItemIds) {
+        return " WHERE r.customer_id = :customerId" + (orderItemIds.isEmpty() ? "" : " AND r.order_item_id IN (:orderItemIds)");
     }
 
-    private static MapSqlParameterSource mineParams(UUID customerId, UUID orderItemId) {
-        return new MapSqlParameterSource("customerId", UuidBinary.toBytes(customerId))
-                .addValue("orderItemId", UuidBinary.toBytes(orderItemId));
+    private static MapSqlParameterSource mineParams(UUID customerId, Collection<UUID> orderItemIds) {
+        MapSqlParameterSource params = new MapSqlParameterSource("customerId", UuidBinary.toBytes(customerId));
+        return orderItemIds.isEmpty() ? params : params.addValue("orderItemIds", orderItemIds.stream().map(UuidBinary::toBytes).toList());
     }
 
     /**

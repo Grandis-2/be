@@ -187,6 +187,24 @@ class CatalogReaderTest {
     }
 
     @Test
+    @org.junit.jupiter.api.DisplayName("표시용 조회는 5분 지난 사본도 기다리지 않고 바로 준다 — 다시 받기는 뒤로 맡기고, 캐시에 없을 때만 지금 받는다")
+    void displayLookupNeverWaitsOnStaleCopies() {
+        FakeCatalogClient client = new FakeCatalogClient();
+        CatalogReader reader = reader(client);
+        signIn(TOKEN);
+        assertThat(reader.findProductForDisplay(PRODUCT_ID)).as("캐시에 없으면 지금 받는다").isPresent();
+        assertThat(client.calls.get()).isEqualTo(1);
+        clock.advance(PROPERTIES.maxStale().plusSeconds(1));
+
+        assertThat(reader.findProductForDisplay(PRODUCT_ID)).as("5분 지난 사본을 그대로").isPresent();
+        assertThat(client.calls.get()).as("그 자리에서 다시 받지 않는다").isEqualTo(1);
+        assertThat(refreshes).as("뒤에서 한 번 다시 받기를 맡겼다").hasSize(1);
+        for (CatalogReader.StaleReason reason : CatalogReader.StaleReason.values()) {
+            assertThat(staleServed(reason)).as("기다린 끝에 묵은 값을 준 것이 아니다 " + reason).isZero();
+        }
+    }
+
+    @Test
     void 일분이_지나면_가진_값을_돌려주고_그_요청의_토큰으로_뒤에서_한_번_다시_받는다() {
         FakeCatalogClient client = new FakeCatalogClient();
         CatalogReader reader = reader(client);
