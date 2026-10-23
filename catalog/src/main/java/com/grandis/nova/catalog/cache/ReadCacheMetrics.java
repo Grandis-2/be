@@ -10,7 +10,7 @@ import java.time.Duration;
 import java.util.Locale;
 
 /**
- * 읽기 캐시 지표 — nova.read.cache.requests{cache, outcome}(요청마다 하나: 바로 받음 · 바로 받고 갱신 맡김 · 직접 읽음 · 기다림 · Redis 장애 중 사본),
+ * 읽기 캐시 지표 — nova.read.cache.requests{cache, outcome}(요청마다 하나: 바로 받음 · 바로 받고 갱신 맡김 · 직접 읽음 · 기다림 · Redis 장애 중 사본 · 같은 세대의 이 인스턴스 사본(local) — 적중률은 local 까지 더해 센다),
  * nova.read.cache.wait{cache}(같은 키의 진행 중 조회를 기다린 시간), nova.read.cache.refresh{cache, result}(갱신 작업마다 하나).
  * 미리 갱신 전후로 기다림의 비율 · 시간과 직접 읽음(DB 조회)의 수를 비교한다 — 캐시를 켠 동안 requests 의 outcome 을 다 더하면 캐시를 거친
  * 요청 수다(캐시를 끄면 지표가 남지 않는다). refresh 의 skipped_unavailable 은 Redis 를 못 읽어 건너뛴 갱신이라, Redis 간헐 실패 동안에는

@@ -77,7 +77,8 @@ public class PromotionQueryService {
         this.cardCache = local.promotionCards();   // 상품이 바뀌면 키의 상품 세대 번호가 바뀐다(모든 인스턴스)
         this.clock = clock;
         // Redis 를 못 읽어도 이 인스턴스의 사본을 TTL 안에서 쓴다(ReadCache.OutageCopies) — 홍보 상세가 몰릴 때 Redis 가 잠깐 늦어도 DB 로 줄 서지 않게.
-        // 장애 중 다른 인스턴스의 홍보 수정은 최대 이만큼 늦게 보인다(2026-10-22 결정). 숨긴 상품은 카드(상품 세대)에서 빠진다
+        // 장애 중 다른 인스턴스의 홍보 수정은 최대 이만큼 늦게 보인다(2026-10-22 결정). 숨긴 상품은 카드(상품 세대)에서 빠진다.
+        // 평소에도 같은 세대의 사본이 미리 갱신 시점 전이면 그것으로 답한다(세대는 Redis 에서 읽는다)
         this.bodySpec = cache.spec("promotion-body", Body.class, BODY_TTL, BODY_TTL);
         this.shownSpec = cache.spec("promotion-shown", new TypeReference<List<Body>>() { }, BODY_TTL);
     }

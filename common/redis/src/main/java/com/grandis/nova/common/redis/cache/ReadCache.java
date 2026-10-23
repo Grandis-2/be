@@ -56,7 +56,10 @@ import java.util.function.Supplier;
  *       우회한다 — 그때는 이미 그 채우기 자리에 붙어 기다린 요청도 우회 결과를 받는다(넣지 않는다). 그 밖에는 우회는 우회끼리만 같이 받는다(세대를
  *       읽었으면 그 번호까지 같은 것끼리) — 같은 키를 채우기와 우회가 동시에 찾으면 loader 를 각각 한 번 부른다.</li>
  *   <li><b>장애 중 사본</b>: 사본을 켠 캐시({@link #spec(String, Class, Duration, Duration)})는 Redis 를 못 읽을 때 우회하기 전에 이 인스턴스의
- *       사본({@link OutageCopies})으로 답한다 — Redis 가 잠깐 늦어 차단기가 열린 동안 요청이 모두 원천으로 몰려 줄을 서지 않게.</li>
+ *       사본({@link OutageCopies})으로 답한다 — Redis 가 잠깐 늦어 차단기가 열린 동안 요청이 모두 원천으로 몰려 줄을 서지 않게.
+ *       평소에도 세대를 읽은 뒤 그 번호의 사본이 미리 갱신 시점 전이면 Redis 값을 읽지 않고 사본으로 답한다 — 적중마다 값 GET 과 JSON 풀기를 하지 않게.
+ *       세대는 늘 Redis 에서 읽으므로 다른 인스턴스의 비우기는 지금처럼 다음 조회부터 보이고, 사본은 처음 읽은 시각 그대로라 TTL 을 넘기지 않는다.
+ *       미리 갱신 시점이 지나면 Redis 로 가 갱신을 맡기고 새 값으로 사본을 바꾼다.</li>
  *   <li><b>미리 갱신</b>: 읽은 지 TTL 의 {@link #REFRESH_AFTER_PERCENT}% 가 지난 값을 꺼낸 요청은 그 값을 바로 받고, 같은 키(세대 번호 포함)의
  *       다시 읽기를 갱신 실행기에 이 인스턴스에서 하나만 맡긴다 — 만료 순간 모든 요청이 한 건의 읽기를 기다리지 않게(부하 시험에서 목록 · 리뷰의 캐시
  *       대상 요청이 그 대기로 목록 0.3~1.4초 · 리뷰 0.2~2.2초 걸렸다). 요청이 없는 키는 갱신하지 않는다. 갱신은 몰림의 "한 번만 읽기" 자리를 같이 써서, 갱신이 끝나기 전에
@@ -86,7 +89,9 @@ import java.util.function.Supplier;
  *       스냅샷보다 큰 번호를 본 적 없는 인스턴스(복원 뒤 새로 뜸 · 스냅샷 뒤 그 세대를 읽지 않음)는 알아채지 못하고 돌아온 옛 값을 TTL 동안 낸다. 그래서 복원(또는 세대 키를 손댄) 뒤에는 운영자가 세대 키를 지우지 말고 지금 시각보다
  *       작으면 지금 시각으로 올린다 — {@code <서비스>:cache:gen:*} 키마다
  *       {@code EVAL "local v=tonumber(redis.call('GET',KEYS[1]) or '0') if v<tonumber(ARGV[1]) then redis.call('SET',KEYS[1],ARGV[1]) end" 1 <키> <epoch ms>}.
- *       값 키는 지우지 않아도 된다(새 세대에는 안 보이고 TTL 로 사라진다). 같은 Redis 의 다른 키(대기열 · 토큰 표식)는 건드리지 않는다.</li>
+ *       값 키는 지우지 않아도 된다(새 세대에는 안 보이고 TTL 로 사라진다). 같은 Redis 의 다른 키(대기열 · 토큰 표식)는 건드리지 않는다.
+ *       거꾸로 값 키만 지워 다시 채우게 하는 방법은 사본을 켠 캐시에는 통하지 않는다 — 같은 세대의 사본이 있는 인스턴스는 미리 갱신 시점까지 Redis 값을 읽지 않는다.
+ *       다시 읽히려면 세대를 올린다.</li>
  *   <li><b>시계</b>: 값의 만료는 앱 벽시계로 정한 절대 시각(PXAT)이다 — 앱 시계가 Redis 보다 빠르면 그만큼 더 살고, 느리면 덜 산다. 그래서 신선도의
  *       최악은 TTL + 앱 · Redis 시계 차다(둘 다 AWS 시간 동기화를 쓴다는 가정).</li>
  *   <li><b>배포</b>: 값은 JSON 이고 키에 그 타입 모양의 지문({@link Shape})을 넣는다. 모양이 다른 버전(blue/green 이 겹치는 동안)은 서로의 키를
@@ -330,6 +335,11 @@ public final class ReadCache {
             return bypass(spec, generation, null, id, loader, storable);
         }
         releaseOlderGenerations(spec, generation, current);
+        Entry<T> copy = freshCopy(spec, generation, current, id);
+        if (copy != null) {
+            events.served(spec.name(), Outcome.LOCAL);
+            return copy;
+        }
         String key = prefix + spec.name() + ":" + FORMAT + "." + spec.fingerprint() + ":" + generation + "." + current + ":" + id;
         String cached;
         try {
@@ -347,7 +357,7 @@ public final class ReadCache {
             if (entry != null) {
                 keepCopy(spec, generation, current, id, entry, cached.length());
                 boolean submitted = refresher != null
-                        && !clock.instant().isBefore(entry.loadedAt().plus(spec.ttl().multipliedBy(REFRESH_AFTER_PERCENT).dividedBy(100)))
+                        && !clock.instant().isBefore(refreshAt(spec, entry))
                         && refreshAhead(key, id, spec, entry.loadedAt(), loader, storable, generation, current);
                 events.served(spec.name(), submitted ? Outcome.HIT_REFRESH : Outcome.HIT);
                 return entry;
@@ -413,8 +423,31 @@ public final class ReadCache {
     }
 
     /**
+     * 평소 적중에 답할 사본 — 방금 읽은 세대 번호의 사본이고, 이 인스턴스가 그 세대를 올리려 한 뒤에 읽기 시작한 값이고, 미리 갱신 시점 전이다. 아니면 null(Redis 로 간다).
+     * 사본은 넣기로 한 값만 남으므로({@link #keepCopy}) 넣지 않는 값(storable 이 거른 값)은 여기서도 나오지 않는다.
+     */
+    @SuppressWarnings("unchecked")
+    private <T> Entry<T> freshCopy(Spec<T> spec, String generation, long current, String id) {
+        OutageCopies outage = spec.outage();
+        if (outage == null) {
+            return null;
+        }
+        Copy copy = outage.copies.getIfPresent(generation + ":" + id);
+        if (copy == null || copy.generationNumber() != current || !readAfterBump(generation, copy.entry())
+                || !clock.instant().isBefore(refreshAt(spec, copy.entry()))) {
+            return null;
+        }
+        return (Entry<T>) copy.entry();
+    }
+
+    /** 이 시각부터 꺼낸 값은 미리 갱신을 맡긴다 — 읽은 지 TTL 의 {@link #REFRESH_AFTER_PERCENT}%. */
+    private static Instant refreshAt(Spec<?> spec, Entry<?> entry) {
+        return entry.loadedAt().plus(spec.ttl().multipliedBy(REFRESH_AFTER_PERCENT).dividedBy(100));
+    }
+
+    /**
      * 사본을 남긴다 — Redis 에서 읽은 값과 원천에서 읽어 넣으려 한 값(넣지 못했어도). 이 인스턴스가 그 세대를 올리려 하기 전에 읽기 시작한 값도
-     * 남지만 꺼낼 때 거른다({@link #heldCopy}) — 남긴 뒤에 올리기가 와도 같이 걸러지게 한 곳에서만 본다.
+     * 남지만 꺼낼 때 거른다({@link #heldCopy} · {@link #freshCopy}) — 남긴 뒤에 올리기가 와도 같이 걸러지게 꺼내는 쪽에서만 본다.
      *
      * @param weight 값의 JSON 글자 수 — 사본 양의 상한을 센다
      */
@@ -1000,7 +1033,8 @@ public final class ReadCache {
 
     /**
      * Redis 를 못 읽을 때(실패 · 시간 초과 · 차단기 열림) 우회 대신 답할 이 인스턴스의 사본 — 캐시 하나에 하나. 조회가 Redis 에서 읽은 값과 원천에서
-     * 읽어 넣으려 한 값을 세대 번호와 함께 키(세대 이름 · id)마다 하나 남긴다. 평소에는 남기기만 하고 Redis 호출 수는 그대로다.
+     * 읽어 넣으려 한 값을 세대 번호와 함께 키(세대 이름 · id)마다 하나 남긴다. 평소에도 같은 세대의 사본이 미리 갱신 시점 전이면 Redis 값을 읽지 않고
+     * 그 사본으로 답한다({@link #freshCopy}) — 세대 GET 은 그대로다.
      * <ul>
      *   <li><b>왜</b>: Redis 가 몇 초 늦어 차단기가 열리면 그 인스턴스의 조회가 {@link #OPEN_FOR} 동안 모두 우회해, 같은 키가 원천(DB · 다른 서비스)
      *       한 건 뒤에 줄을 섰다(부하 시험 10-22: 홍보 상세가 한 인스턴스에서만 대기 3,654건 · 중앙값 0.5~0.75초, 다른 인스턴스는 p99 0.5초 이하).</li>
@@ -1009,7 +1043,9 @@ public final class ReadCache {
      *   <li><b>양</b>: 값의 JSON 글자 수 합으로 묶는다(키와 Caffeine 자체의 몫은 세지 않는다 · 객체로 풀린 값의 힙은 재지 않았다). 넘으면 Caffeine 이
      *       밀어낸다(W-TinyLFU — 자주 쓰이는 사본을 지키려고 새 사본이 바로 버려질 수도 있다). TTL 이 지나면 지운다.</li>
      *   <li><b>복원</b>: 복원을 알아챈 인스턴스는 세대를 본 번호 + 1 로 올리므로 사본 번호가 맞지 않는다. 복원 전 번호를 본 적 없는 인스턴스는 지금처럼
-     *       알아채지 못하고, 세대는 읽고 값만 못 읽으면 그 번호의 사본을 TTL 까지 낸다 — 복원된 옛 값을 TTL 동안 내던 것과 같은 크기다.</li>
+     *       알아채지 못하고, 세대는 읽고 값만 못 읽으면 그 번호의 사본을 TTL 까지 낸다 — 복원된 옛 값을 TTL 동안 내던 것과 같은 크기다.
+     *       평소 경로도 같다 — 알아챈 인스턴스가 올린 번호가 이 인스턴스가 이미 본 번호와 겹치면, 이 인스턴스는 그 번호의 사본을 미리 갱신 시점까지 낸다
+     *       (전에는 복원된 Redis 에 그 키가 없어 원천을 읽었다).</li>
      *   <li>세대를 읽었는데 값만 못 읽었으면 그 번호의 사본을 쓴다(믿는 시간과 상관없다 — 번호가 지금 것이다).</li>
      * </ul>
      */

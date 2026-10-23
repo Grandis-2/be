@@ -59,6 +59,7 @@ public class PublicCampaigns {
     /**
      * Redis 를 못 읽을 때 이 인스턴스의 회차 사본을 믿는 시간(ReadCache.OutageCopies) — 그동안 다른 인스턴스가 받은 조기 마감 · 다시 열기 · 일정 변경은
      * 이만큼 늦게 보인다(2026-10-22 결정: 본문 10분, 회차 1분). 차단기가 열린 10초 · 몇 초짜리 Redis 지연은 덮고, 더 긴 장애는 지금처럼 preorder 에 묻는다.
+     * 평소에도 같은 세대의 사본이 미리 갱신 시점 전이면 그것으로 답한다(세대는 Redis 에서 읽으므로 회차 변경 이벤트의 세대 올리기는 바로 따른다).
      */
     public static final Duration HELD_DURING_OUTAGE = Duration.ofMinutes(1);
 
