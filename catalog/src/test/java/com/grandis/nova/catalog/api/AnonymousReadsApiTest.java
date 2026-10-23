@@ -116,6 +116,9 @@ class AnonymousReadsApiTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
         mockMvc.perform(get("/internal/products/{id}/options", productId).with(AccessTokens.withToken(token))).andExpect(status().isUnauthorized());
+        clearInvocations(provider, revocationChecker);
         mockMvc.perform(get("/api/v1/reviews/writable").with(AccessTokens.withToken(token))).andExpect(status().isUnauthorized());
+        verify(provider).parse(token);   // 401 은 익명이어도 나므로 토큰을 봤는지로 가른다
+        verify(revocationChecker).isRevoked(any());
     }
 }
