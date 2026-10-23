@@ -243,6 +243,51 @@ class PublicCampaignsApiTest {
         assertThat(redis.keys("catalog:cache:preorder-campaign-set*")).as("긴 쪽은 우회, 짧은 쪽은 다 갖춘 묶음을 넣지 않는다").isEmpty();
     }
 
+    @Test
+    @DisplayName("사전예약 상품 상세 · 홍보 상세는 세대를 MGET 한 번으로 읽는다 — 캐시가 찬 뒤 요청당 Redis 는 MGET 하나뿐(값은 같은 세대의 사본)")
+    void detailsReadGenerationsInOneRoundTrip() throws Exception {
+        UUID productId = openPreorder("세대 한 번");
+        UUID promotionId = promotion(productId);
+        for (int i = 0; i < 2; i++) {   // 채운다
+            assertThat(detailStatus(productId)).isEqualTo("OPEN");
+            assertThat(cardStatuses(promotionId)).containsKey(productId);
+        }
+        int requests = 5;
+        java.util.Map<String, Long> before = commandCalls();
+        for (int i = 0; i < requests; i++) {
+            detailStatus(productId);
+        }
+        java.util.Map<String, Long> afterDetails = commandCalls();
+        for (int i = 0; i < requests; i++) {
+            cardStatuses(promotionId);
+        }
+        java.util.Map<String, Long> afterPromotions = commandCalls();
+
+        assertThat(delta(before, afterDetails, "mget")).as("상품 상세 — 요청당 MGET 하나").isEqualTo(requests);
+        assertThat(delta(before, afterDetails, "get")).as("상품 상세 — 세대 · 값 GET 없음").isZero();
+        assertThat(delta(afterDetails, afterPromotions, "mget")).as("홍보 상세 — 요청당 MGET 하나").isEqualTo(requests);
+        assertThat(delta(afterDetails, afterPromotions, "get")).as("홍보 상세 — 세대 · 값 GET 없음").isZero();
+    }
+
+    private static long delta(java.util.Map<String, Long> before, java.util.Map<String, Long> after, String command) {
+        return after.getOrDefault(command, 0L) - before.getOrDefault(command, 0L);
+    }
+
+    /** Redis 의 명령별 누적 호출 수(INFO commandstats). */
+    private java.util.Map<String, Long> commandCalls() {
+        java.util.Map<String, Long> calls = new java.util.HashMap<>();
+        try (org.springframework.data.redis.connection.RedisConnection connection = redis.getConnectionFactory().getConnection()) {
+            java.util.Properties info = connection.serverCommands().info("commandstats");
+            for (String name : info.stringPropertyNames()) {
+                java.util.regex.Matcher m = java.util.regex.Pattern.compile("calls=(\\d+)").matcher(info.getProperty(name));
+                if (name.startsWith("cmdstat_") && m.find()) {
+                    calls.put(name.substring("cmdstat_".length()), Long.parseLong(m.group(1)));
+                }
+            }
+        }
+        return calls;
+    }
+
     @SuppressWarnings("unchecked")
     private org.springframework.data.redis.core.ValueOperations<String, String> failingGets(org.springframework.data.redis.core.ValueOperations<String, String> real) {
         return (org.springframework.data.redis.core.ValueOperations<String, String>) java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),

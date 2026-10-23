@@ -93,14 +93,23 @@ public class PublicCampaigns {
 
     /** 한 상품의 회차. 없으면(판매 준비 전) 비어 있다 — 없음은 넣지 않는다. 실패는 위 목록의 마지막 항목. */
     public Optional<CampaignWindow> find(UUID productId) {
+        return find(productId, null);
+    }
+
+    /** {@link #find(UUID)} 와 같고, 회차 세대는 이 요청이 먼저 읽은 것({@link ReadCache#generations})을 쓴다. @param generations null 이면 직접 읽는다 */
+    public Optional<CampaignWindow> find(UUID productId, ReadCache.Generations generations) {
         if (oneSpec == null) {
             return campaigns.find(productId, false);
         }
         // loader 가 null(회차 없음)이면 ReadCache 는 넣지 않는다 — 채우기에서 넣을 값(회차 있음)일 때만 fresh 로 다시 묻는다
-        return Optional.ofNullable(cache.get(oneSpec, CAMPAIGNS, productId.toString(), path -> {
+        Function<LoadPath, CampaignWindow> loader = path -> {
             Optional<CampaignWindow> found = campaigns.find(productId, false);
             return path == LoadPath.FILL && found.isPresent() ? campaigns.find(productId, true).orElse(null) : found.orElse(null);
-        }));
+        };
+        String id = productId.toString();
+        return Optional.ofNullable(generations == null
+                ? cache.get(oneSpec, CAMPAIGNS, id, loader)
+                : cache.entry(oneSpec, generations, CAMPAIGNS, id, loader, found -> true).value());
     }
 
     /**
@@ -109,6 +118,11 @@ public class PublicCampaigns {
      * 긴 쪽이 비었을 때만 본다. 빈 목록이면 부르지 않는다. 실패는 위 목록의 마지막 항목.
      */
     public Map<UUID, CampaignWindow> find(Collection<UUID> productIds) {
+        return find(productIds, null);
+    }
+
+    /** {@link #find(Collection)} 와 같고, 회차 세대는 이 요청이 먼저 읽은 것({@link ReadCache#generations})을 쓴다(긴 쪽 · 짧은 쪽 모두). @param generations null 이면 직접 읽는다 */
+    public Map<UUID, CampaignWindow> find(Collection<UUID> productIds, ReadCache.Generations generations) {
         if (productIds.isEmpty()) {
             return Map.of();
         }
@@ -119,10 +133,17 @@ public class PublicCampaigns {
         String key = setKey(ids);
         // 모든 상품에 회차가 있는 묶음만 긴 쪽에 넣는다. 긴 쪽이 비면 짧은 쪽을 거쳐 묻는다 — 빠진 묶음은 짧은 쪽에만 들고, 다 갖춘 묶음은 짧은 쪽에 넣지 않고
         // 긴 쪽이 넣는다
-        return cache.entry(manySpec, CAMPAIGNS, key,
-                (Function<LoadPath, Map<UUID, CampaignWindow>>) path -> cache.entry(partialSpec, CAMPAIGNS, key, partialPath -> ask(ids, path, partialPath),
-                        found -> !found.keySet().containsAll(ids)).value(),
-                found -> found.keySet().containsAll(ids)).value();
+        Function<LoadPath, Map<UUID, CampaignWindow>> throughPartial = path -> setEntry(partialSpec, generations, key,
+                partialPath -> ask(ids, path, partialPath), found -> !found.keySet().containsAll(ids)).value();
+        return setEntry(manySpec, generations, key, throughPartial, found -> found.keySet().containsAll(ids)).value();
+    }
+
+    private ReadCache.Entry<Map<UUID, CampaignWindow>> setEntry(ReadCache.Spec<Map<UUID, CampaignWindow>> spec, ReadCache.Generations generations,
+                                                                String key, Function<LoadPath, Map<UUID, CampaignWindow>> loader,
+                                                                java.util.function.Predicate<Map<UUID, CampaignWindow>> storable) {
+        return generations == null
+                ? cache.entry(spec, CAMPAIGNS, key, loader, storable)
+                : cache.entry(spec, generations, CAMPAIGNS, key, loader, storable);
     }
 
     /**
