@@ -145,6 +145,7 @@ class ReadCacheOutageCopyTest {
         clock.advance(Duration.ofSeconds(50));
         template.resume.countDown();   // 세대 0 을 읽은 조회가 이제 끝난다
         late.join(10_000);
+        assertThat(late.isAlive()).as("늦은 조회가 끝났다").isFalse();
         paused.breaker().transitionToForcedOpenState();
         clock.advance(Duration.ofSeconds(15));   // 세대 1 을 읽은 지 65초, 늦은 조회가 끝난 지 15초
         loads.clear();

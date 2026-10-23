@@ -89,16 +89,18 @@ class ReadCacheRefreshTest {
     }
 
     /**
-     * 갱신은 기다리는 요청에 값을 먼저 넘긴 뒤 Redis 에 넣는다. 그래서 기다린 요청이 답을 받아 시험이 끝나도 갱신 스레드는 아직 넣는 중일 수 있고,
-     * 그 SET 이 다음 시험의 비우기 뒤에 들어가면 같은 키({@code s} · {@code g} · {@code k})의 값이 다음 시험에 남는다. 다음 시험이 시작되기 전에
-     * 이 시험이 띄운 갱신 스레드가 다 끝나게 한다.
+     * 갱신이 성공하면 기다리는 요청에 값을 먼저 넘긴 뒤 Redis 에 넣는다({@link ReadCache} 의 미리 갱신). 그래서 기다린 요청이 답을 받아 시험이
+     * 끝나도 갱신 스레드는 아직 넣는 중일 수 있고, 그 SET 이 다음 시험의 비우기 뒤에 들어가면 같은 키({@code s} · {@code g} · {@code k})의 값이
+     * 다음 시험에 남는다. 다음 시험이 시작되기 전에 이 시험이 띄운 갱신 스레드가 다 끝나게 한다. 기다리는 시간은 loader 안 {@link #await} 의
+     * 상한(10초)보다 길게 두어, 본문이 먼저 실패해 래치가 안 풀린 경우에도 스레드가 끝난 뒤 넘어간다.
      */
     @AfterEach
     void joinRefreshThreads() throws InterruptedException {
-        for (Thread thread : List.copyOf(refreshThreads)) {
-            thread.join(Duration.ofSeconds(5));
-            assertThat(thread.isAlive()).as("갱신 스레드가 5초 안에 끝났다").isFalse();
+        List<Thread> threads = List.copyOf(refreshThreads);
+        for (Thread thread : threads) {
+            thread.join(Duration.ofSeconds(15));
         }
+        assertThat(threads).as("갱신 스레드가 모두 끝났다").noneMatch(Thread::isAlive);
     }
 
     @Test
