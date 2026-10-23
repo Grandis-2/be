@@ -91,6 +91,24 @@ class InternalProductApiTest {
     }
 
     @Test
+    @DisplayName("옵션 문서를 풀지 못해도(모양이 어긋남) 응답은 그대로 내고 옵션 사진만 비운다 — 사진은 표시용이라 접수 판정을 막지 않는다")
+    void unreadableDocumentOnlyDropsImages() throws Exception {
+        UUID productId = fixtures.product("PREORDER", "ACTIVE");
+        UUID option = fixtures.option(productId, "ACTIVE");
+        jdbcTemplate.update("UPDATE products SET options = JSON_OBJECT('axes', 'not-a-list') WHERE id = ?", (Object) UuidBinary.toBytes(productId));
+        try {
+            asUser(productId)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.options[0].optionId").value(option.toString()))
+                    .andExpect(jsonPath("$.data.options[0].status").value("ACTIVE"))
+                    .andExpect(jsonPath("$.data.options[0].imageUrl").doesNotExist());
+        } finally {
+            // 같은 DB 를 쓰는 다른 시험(사전예약 상품을 훑는 관리자 목록)이 이 문서를 풀다 깨지지 않게 되돌린다
+            jdbcTemplate.update("UPDATE products SET options = JSON_OBJECT() WHERE id = ?", (Object) UuidBinary.toBytes(productId));
+        }
+    }
+
+    @Test
     @DisplayName("옵션이 없는 상품은 404 가 아니라 빈 목록이다")
     void productWithoutOptionsReturnsEmptyList() throws Exception {
         UUID productId = fixtures.product("IN_STOCK", "PAUSED");

@@ -37,19 +37,22 @@ class ProductOptionsQueryRepository {
 
     /**
      * 상품 하나와 그 옵션 전부(만든 순서), 상품 문서(사진을 여기서 계산한다). 상품이 없으면 비어 있다. 옵션이 없는 상품은 옵션 목록이 비어 있다(LEFT JOIN).
-     * 문서는 첫 행에서만 읽는다 — 상품 칸이라 행마다 같다.
+     * 문서는 첫 행에만 싣는다({@link #findOptionsWithProducts} 와 같은 창 함수) — 상품 칸이라 행마다 같은 문서가 옵션 수만큼 실려 왔다.
      */
     Optional<ProductWithOptions> findProductWithOptions(UUID productId) {
         ProductRow[] product = {null};
         String[] document = {null};
         List<OptionRow> options = new ArrayList<>();
-        jdbc.query("SELECT " + PRODUCT_COLUMNS + ", p.options AS document, o.id AS option_id, o.sku, o.title AS option_title, o.price,"
+        jdbc.query("SELECT " + PRODUCT_COLUMNS + ", IF(ROW_NUMBER() OVER (ORDER BY o.created_at, o.id) = 1, p.options, NULL) AS document,"
+                        + " o.id AS option_id, o.sku, o.title AS option_title, o.price,"
                         + " o.status AS option_status, o.combination_key"
                         + " FROM products p LEFT JOIN product_options o ON o.product_id = p.id"
                         + " WHERE p.id = :productId ORDER BY o.created_at, o.id",
                 new MapSqlParameterSource("productId", UuidBinary.toBytes(productId)), (RowCallbackHandler) rs -> {
                     if (product[0] == null) {
                         product[0] = product(rs);
+                    }
+                    if (document[0] == null) {
                         document[0] = rs.getString("document");
                     }
                     if (rs.getBytes("option_id") != null) {
