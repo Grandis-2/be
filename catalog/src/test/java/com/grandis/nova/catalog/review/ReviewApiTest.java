@@ -22,6 +22,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -335,27 +336,8 @@ class ReviewApiTest {
     @DisplayName("상품 리뷰 — 상품 확인 · 준비 한 문장, 후기 목록 · 건수 한 문장. 트랜잭션을 열지 않는다(격리 · 읽기 전용 전환 문장이 없다)")
     void productReviewsReadWithoutTransaction() throws Exception {
         write(customerId, deliveredItem(productId), 5, "한 문장").andExpect(status().isCreated());
-        var mysql = MySqlContainerConfig.get();
-        List<String> statements = new ArrayList<>();
-        try (Connection root = DriverManager.getConnection(mysql.getJdbcUrl(), "root", mysql.getPassword());
-             Statement statement = root.createStatement()) {
-            statement.execute("SET GLOBAL log_output = 'TABLE'");
-            statement.execute("SET GLOBAL general_log = 'ON'");
-            statement.execute("TRUNCATE TABLE mysql.general_log");
-            try {
-                mockMvc.perform(get("/api/v1/products/{id}/reviews", productId)).andExpect(status().isOk());
-            } finally {
-                statement.execute("SET GLOBAL general_log = 'OFF'");
-            }
-            // 노출 판정 · 후기 쪽 문장을 보낸 연결의 문장만 — 같은 서버를 쓰는 다른 작업의 문장을 섞지 않는다. 트랜잭션을 열었다면 준비 문장도 이 연결로 간다
-            try (ResultSet rs = statement.executeQuery("SELECT argument FROM mysql.general_log WHERE command_type = 'Query' AND thread_id IN"
-                    + " (SELECT thread_id FROM mysql.general_log WHERE argument LIKE 'SELECT p.sale_mode, p.visible%' OR argument LIKE '%LEFT JOIN LATERAL%')"
-                    + " ORDER BY event_time")) {
-                while (rs.next()) {
-                    statements.add(new String(rs.getBytes(1), StandardCharsets.UTF_8));
-                }
-            }
-        }
+        List<String> statements = statementsOf("argument LIKE 'SELECT p.sale_mode, p.visible%' OR argument LIKE '%LEFT JOIN LATERAL%'",
+                () -> mockMvc.perform(get("/api/v1/products/{id}/reviews", productId)).andExpect(status().isOk()));
 
         // 양성 대조군 — 로그가 이 조회를 잡았다
         assertThat(statements).as("상품 확인 · 준비").filteredOn(sql -> sql.contains("FROM products p WHERE p.id")).hasSize(1);
@@ -365,7 +347,49 @@ class ReviewApiTest {
     }
 
     @Test
-    @DisplayName("모아보기는 비로그인도 — 상위 카테고리는 하위 포함, 다른 카테고리 · 비공개 상품의 리뷰는 빠진다")
+    @DisplayName("모아보기 · 내 리뷰 — 목록 · 건수 한 문장. 트랜잭션을 열지 않는다(격리 · 읽기 전용 전환 문장이 없다)")
+    void visibleAndMyReviewsReadWithoutTransaction() throws Exception {
+        write(customerId, deliveredItem(productId), 5, "한 문장").andExpect(status().isCreated());
+        for (MockHttpServletRequestBuilder request : List.of(get("/api/v1/reviews"), get("/api/v1/reviews/mine").with(AccessTokens.customer(customerId)))) {
+            List<String> statements = statementsOf("argument LIKE '%LEFT JOIN LATERAL%'", () -> mockMvc.perform(request).andExpect(status().isOk()));
+
+            assertThat(statements).as("양성 대조군 — 목록 · 건수").filteredOn(sql -> sql.contains("product_reviews")).hasSize(1);
+            assertThat(statements).as("트랜잭션 준비 · 정리 문장")
+                    .noneMatch(sql -> sql.contains("TRANSACTION ISOLATION") || sql.contains("READ ONLY") || sql.startsWith("SET autocommit"));
+        }
+    }
+
+    /** MySQL 일반 로그로 한 호출이 보낸 문장 — whereMarker 에 걸린 문장을 보낸 연결의 문장만(같은 서버를 쓰는 다른 작업의 문장을 섞지 않는다). */
+    private List<String> statementsOf(String whereMarker, ThrowingCall call) throws Exception {
+        var mysql = MySqlContainerConfig.get();
+        List<String> statements = new ArrayList<>();
+        try (Connection root = DriverManager.getConnection(mysql.getJdbcUrl(), "root", mysql.getPassword());
+             Statement statement = root.createStatement()) {
+            statement.execute("SET GLOBAL log_output = 'TABLE'");
+            statement.execute("SET GLOBAL general_log = 'ON'");
+            statement.execute("TRUNCATE TABLE mysql.general_log");
+            try {
+                call.run();
+            } finally {
+                statement.execute("SET GLOBAL general_log = 'OFF'");
+            }
+            // 트랜잭션을 열었다면 준비 문장도 이 연결로 간다
+            try (ResultSet rs = statement.executeQuery("SELECT argument FROM mysql.general_log WHERE command_type = 'Query' AND thread_id IN"
+                    + " (SELECT thread_id FROM mysql.general_log WHERE " + whereMarker + ") ORDER BY event_time")) {
+                while (rs.next()) {
+                    statements.add(new String(rs.getBytes(1), StandardCharsets.UTF_8));
+                }
+            }
+        }
+        return statements;
+    }
+
+    private interface ThrowingCall {
+        void run() throws Exception;
+    }
+
+    @Test
+    @DisplayName("모아보기는 비로그인도 — 상위 카테고리는 하위 포함, 다른 카테고리 · 비공개 상품의 리뷰는 빠진다. 주문상품 id 는 싣지 않고, 범위 밖 쪽도 건수는 그대로")
     void visibleReviewsFilterByCategory() throws Exception {
         UUID parent = fixtures.category();
         UUID child = fixtures.childCategory(parent, "삼성");
@@ -385,6 +409,18 @@ class ReviewApiTest {
         assertThat(bodies(byChild)).containsExactly("하위");
         JsonNode all = data(mockMvc.perform(get("/api/v1/reviews").param("size", "100")).andExpect(status().isOk()));
         assertThat(bodies(all)).contains("상위", "하위", "다른 곳").doesNotContain("숨김");
+        byParent.get("items").forEach(item -> assertThat(item.path("orderItemId").isMissingNode() || item.path("orderItemId").isNull())
+                .as("모아보기는 공개 응답이라 주문상품 id 를 싣지 않는다").isTrue());
+
+        // 범위 밖 쪽도 건수는 그대로 — 모아보기 · 내 리뷰 모두
+        JsonNode beyond = data(mockMvc.perform(get("/api/v1/reviews").param("categoryId", parent.toString()).param("size", "1").param("page", "5"))
+                .andExpect(status().isOk()));
+        assertThat(beyond.get("total").asLong()).isEqualTo(2);
+        assertThat(beyond.get("items")).isEmpty();
+        JsonNode mineBeyond = data(mockMvc.perform(get("/api/v1/reviews/mine").param("size", "1").param("page", "9")
+                .with(AccessTokens.customer(customerId))).andExpect(status().isOk()));
+        assertThat(mineBeyond.get("total").asLong()).isEqualTo(4);
+        assertThat(mineBeyond.get("items")).isEmpty();
     }
 
     @Test
