@@ -319,7 +319,7 @@ class ReadCacheOutageCopyTest {
 
         get(own, spec, "unused");   // 미룬 올리기를 다시 해 보다 또 실패 — 세대는 옛 번호 그대로다
 
-        assertThat(outcomes.of("held")).as("올리기 전에 읽은 사본은 평소 경로에서도 내지 않는다").last().isNotEqualTo(ReadCacheEvents.Outcome.LOCAL);
+        assertThat(outcomes.of("held")).as("올리기 전에 읽은 사본은 평소 경로에서도 내지 않는다 — Redis 값을 읽었다").last().isEqualTo(ReadCacheEvents.Outcome.HIT);
     }
 
     @Test
