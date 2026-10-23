@@ -457,6 +457,22 @@ class ReviewApiTest {
         String tooMany = java.util.stream.IntStream.range(0, 101).mapToObj(i -> UUID.randomUUID().toString()).collect(java.util.stream.Collectors.joining(","));
         mockMvc.perform(get("/api/v1/reviews/mine").param("orderItemId", tooMany).with(AccessTokens.customer(customerId)))
                 .andExpect(status().isBadRequest());
+        // 같은 id 는 한 번 — 상한은 거른 뒤 센다
+        String sameTimes = java.util.stream.IntStream.range(0, 101).mapToObj(i -> written.toString()).collect(java.util.stream.Collectors.joining(","));
+        JsonNode same = data(mockMvc.perform(get("/api/v1/reviews/mine").param("orderItemId", sameTimes).with(AccessTokens.customer(customerId)))
+                .andExpect(status().isOk()));
+        assertThat(same.get("total").asLong()).isEqualTo(1);
+        String hundredAndDuplicate = java.util.stream.Stream.concat(java.util.stream.Stream.of(written.toString()),
+                java.util.stream.IntStream.range(0, 99).mapToObj(i -> UUID.randomUUID().toString())).collect(java.util.stream.Collectors.joining(",")) + "," + written;
+        mockMvc.perform(get("/api/v1/reviews/mine").param("orderItemId", hundredAndDuplicate).with(AccessTokens.customer(customerId)))
+                .andExpect(status().isOk());
+        // size 를 주지 않으면 보낸 id 수 — 기본 20 을 넘는 id 를 보내도 한 쪽에 다 온다
+        List<UUID> many = new java.util.ArrayList<>(List.of(written, alsoWritten));
+        java.util.stream.IntStream.range(0, 30).forEach(i -> many.add(UUID.randomUUID()));
+        JsonNode sized = data(mockMvc.perform(get("/api/v1/reviews/mine")
+                .param("orderItemId", many.stream().map(UUID::toString).collect(java.util.stream.Collectors.joining(",")))
+                .with(AccessTokens.customer(customerId))).andExpect(status().isOk()));
+        assertThat(sized.get("size").asInt()).isEqualTo(32);
         JsonNode blank = data(mockMvc.perform(get("/api/v1/reviews/mine").param("orderItemId", "").with(AccessTokens.customer(customerId)))
                 .andExpect(status().isOk()));
         assertThat(blank.get("total").asLong()).as("값이 통째로 비면 거르지 않는다").isEqualTo(2);
