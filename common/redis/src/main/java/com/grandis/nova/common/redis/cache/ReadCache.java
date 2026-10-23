@@ -530,12 +530,15 @@ public final class ReadCache {
             seenBefore.put(generation, highestGenerations.get(generation));
         }
         Instant asked = clock.instant();
+        // 묶어 읽을지는 한 번 정해 둔다 — 두 번 다 집합을 보면, 처음엔 미룬 올리기가 있어 MGET 을 건너뛰고 그사이 다른 스레드가 비워 두 번째엔
+        // 없다고 보아 세대마다 읽기도 건너뛴다(모든 세대가 못 읽음이 된다)
+        boolean batched = pendingBumps.isEmpty();
         List<String> values = null;
-        if (pendingBumps.isEmpty()) {
+        if (batched) {
             List<String> keys = Arrays.stream(generations).map(this::generationKey).toList();
             values = call(() -> redis.opsForValue().multiGet(keys));
         }
-        if (!pendingBumps.isEmpty()) {
+        if (!batched || !pendingBumps.isEmpty()) {
             // 미룬 올리기가 있으면(묶어 읽는 사이 생긴 것 포함) 묶지 않고 세대마다 읽는다(드문 갈래) — 한 세대를 읽다 다른 세대의 미룬 올리기를 해도,
             // 그 세대는 올린 뒤 번호로 읽게
             for (String generation : generations) {
