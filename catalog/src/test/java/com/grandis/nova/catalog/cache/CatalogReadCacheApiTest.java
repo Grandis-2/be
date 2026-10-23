@@ -153,6 +153,20 @@ class CatalogReadCacheApiTest {
     }
 
     @Test
+    @DisplayName("리뷰가 없는 상품의 후기 탭도 넣는다 — 빈 쪽이 두 번째부터 캐시에서 나오고, 리뷰를 쓰면 세대가 올라 다음 조회에 보인다")
+    void emptyProductReviewsAreStored() throws Exception {
+        UUID productId = registerInStock("후기 없음", "e" + ShopFixtures.unique());
+        String path = "/api/v1/products/" + productId + "/reviews";
+
+        assertThat(data(mockMvc.perform(get(path)).andExpect(status().isOk())).get("items")).isEmpty();
+        assertThat(redis.keys("catalog:cache:reviews:*")).as("빈 쪽도 넣었다").hasSize(1);
+        assertThat(data(mockMvc.perform(get(path)).andExpect(status().isOk())).get("items")).isEmpty();
+
+        reviews.saveAndFlush(ProductReview.write(productId, UUID.randomUUID(), UUID.randomUUID(), 5, "좋아요", "기본", "김**"));
+        assertThat(data(mockMvc.perform(get(path)).andExpect(status().isOk())).get("items")).hasSize(1);
+    }
+
+    @Test
     @DisplayName("max-age 는 그 값이 읽기 캐시에서 묵은 만큼 줄어든다(초는 버림) — 앞단 캐시와 합쳐도 TTL(5초)을 넘지 않게")
     void maxAgeShrinksWithAge() throws Exception {
         registerInStock("나이");

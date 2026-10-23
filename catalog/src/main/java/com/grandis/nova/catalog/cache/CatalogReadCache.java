@@ -146,16 +146,19 @@ public class CatalogReadCache {
         return local.categoryTree().entry("tree", categories::tree);
     }
 
-    /** 상품 리뷰. 앞 페이지 · 화면이 쓰는 size · 비지 않은 결과만 넣는다(없는 상품 id 는 빈 목록이라 넣지 않는다). */
+    /**
+     * 상품 리뷰. 앞 페이지 · 화면이 쓰는 size 만 넣는다. 빈 결과도 넣는다 — 상품이 없거나 보이지 않으면 조회가 404 를 던져 넣을 값이 없으므로, 빈 목록은
+     * 보이는 상품에 리뷰가 아직 없다는 뜻이다(사전예약 상품은 늘 그렇다). 리뷰를 쓰거나 상품이 바뀌면 리뷰 세대가 올라 다음 조회부터 새로 읽는다.
+     */
     public ReadCache.Entry<OffsetPage<ReviewView>> productReviews(UUID productId, int page, int size) {
         if (page >= CACHED_PAGES || !CACHED_REVIEW_SIZES.contains(size)) {
             return cache.uncached(() -> reviews.productReviews(productId, page, size));
         }
         return cache.entry(reviewSpec, REVIEWS, "product:" + productId + ":" + page + ":" + size,
-                () -> reviews.productReviews(productId, page, size), found -> !found.items().isEmpty());
+                () -> reviews.productReviews(productId, page, size));
     }
 
-    /** 구매후기 모아보기. 상품 리뷰와 같은 규칙(없는 카테고리 id 는 빈 목록이라 넣지 않는다). */
+    /** 구매후기 모아보기. 앞 페이지 · 화면이 쓰는 size · 비지 않은 결과만 넣는다(없는 카테고리 id 도 빈 목록이라 — 키를 끝없이 만들 수 있다). */
     public ReadCache.Entry<OffsetPage<ReviewView>> visibleReviews(UUID categoryId, int page, int size) {
         if (page >= CACHED_PAGES || !CACHED_REVIEW_SIZES.contains(size)) {
             return cache.uncached(() -> reviews.visibleReviews(categoryId, page, size));
