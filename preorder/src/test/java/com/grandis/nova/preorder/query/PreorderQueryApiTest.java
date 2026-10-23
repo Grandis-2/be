@@ -4,17 +4,20 @@ import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
+import com.grandis.nova.preorder.integration.catalog.CatalogReader;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.PreorderFact;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
 import com.grandis.nova.preorder.support.AcceptFixtures;
 import com.grandis.nova.preorder.support.AdmissionTickets;
+import com.grandis.nova.preorder.support.CatalogStubs;
 import com.grandis.nova.preorder.support.PreorderCancels;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -34,6 +37,10 @@ import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasSize;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -60,6 +67,9 @@ class PreorderQueryApiTest {
     @MockitoBean
     CatalogClient catalogClient;
 
+    @Autowired
+    CatalogReader catalogReader;
+
     ShopFixtures fixtures;
     AcceptFixtures accepts;
     PreorderCancels cancels;
@@ -85,6 +95,43 @@ class PreorderQueryApiTest {
                 .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(newer)))
                 .andExpect(jsonPath("$.data.items[1].preorderId").value(AcceptFixtures.tokenOf(older)))
                 .andExpect(jsonPath("$.data.nextCursor").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("목록 · 상세는 catalog 상품 사본에서 그 옵션의 사진을 싣는다 — 상품마다 사본을 한 번만 받고 상세는 그 사본을 쓴다")
+    void listAndDetailCarryTheOptionImage() throws Exception {
+        AcceptResult first = accepts.accept(customerId);
+        AcceptResult second = accepts.accept(customerId);
+        catalogReader.evict(first.preorder().productId());
+        catalogReader.evict(second.preorder().productId());
+        clearInvocations(catalogClient);
+
+        mockMvc.perform(get("/api/v1/preorders").with(customer(customerId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].imageUrl").value(CatalogStubs.imageUrl(second.preorder().optionId())))
+                .andExpect(jsonPath("$.data.items[1].imageUrl").value(CatalogStubs.imageUrl(first.preorder().optionId())));
+        mockMvc.perform(get("/api/v1/preorders/{id}", AcceptFixtures.tokenOf(first)).with(customer(customerId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.imageUrl").value(CatalogStubs.imageUrl(first.preorder().optionId())));
+        verify(catalogClient, times(1)).getProduct(first.preorder().productId());   // 상품 단위 사본 — 상세는 목록이 받은 사본을 쓴다
+        verify(catalogClient, times(1)).getProduct(second.preorder().productId());
+    }
+
+    @Test
+    @DisplayName("catalog 가 답하지 않으면 사진만 비우고 목록 · 상세는 그대로 낸다")
+    void catalogFailureLeavesTheImageEmpty() throws Exception {
+        AcceptResult accepted = accepts.accept(customerId);
+        catalogReader.evict(accepted.preorder().productId());
+        given(catalogClient.getProduct(accepted.preorder().productId()))
+                .willThrow(new org.springframework.web.client.HttpServerErrorException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE));
+
+        mockMvc.perform(get("/api/v1/preorders").with(customer(customerId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(accepted)))
+                .andExpect(jsonPath("$.data.items[0].imageUrl").doesNotExist());
+        mockMvc.perform(get("/api/v1/preorders/{id}", AcceptFixtures.tokenOf(accepted)).with(customer(customerId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.imageUrl").doesNotExist());
     }
 
     @Test

@@ -16,7 +16,7 @@ record AdminPreorderSummaryResponse(
     public static AdminPreorderSummaryResponse from(PreorderView.AdminSummary view) {
         return new AdminPreorderSummaryResponse(
                 PreorderSummaryResponse.from(
-                        new PreorderView.Summary(view.preorder(), view.shipmentBatch(), view.displayStatus())),
+                        new PreorderView.Summary(view.preorder(), view.shipmentBatch(), view.displayStatus()), null),   // 관리자 목록은 사진을 싣지 않는다
                 view.preorder().customerId(), view.registerJobStatus());
     }
 }

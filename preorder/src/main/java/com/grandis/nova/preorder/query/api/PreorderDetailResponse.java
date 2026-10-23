@@ -14,9 +14,9 @@ record PreorderDetailResponse(
         boolean cancelable
 ) {
 
-    public static PreorderDetailResponse from(PreorderView.Summary view) {
+    public static PreorderDetailResponse from(PreorderView.Summary view, String imageUrl) {
         PreorderSnapshot preorder = view.preorder();
-        return new PreorderDetailResponse(PreorderSummaryResponse.from(view),
+        return new PreorderDetailResponse(PreorderSummaryResponse.from(view, imageUrl),
                 preorder.externalReference(), preorder.isCancelable());
     }
 }

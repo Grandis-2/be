@@ -54,12 +54,22 @@ public record ProductCatalog(
                         option.optionId(), option.sku(), option.title(), option.price(), option.status()));
     }
 
+    /** 그 옵션의 사진(그 옵션이 고른 색상의 첫 장). 이 상품의 옵션이 아니거나 사진이 없으면(이 칸을 모르는 catalog 포함) 비어 있다. */
+    public Optional<String> imageUrlOf(UUID optionId) {
+        return options.stream()
+                .filter(option -> option.optionId().equals(optionId))
+                .findFirst()
+                .map(Option::imageUrl);
+    }
+
+    /** @param imageUrl 그 옵션이 고른 색상의 첫 장 — 표시용. 사진이 없거나 이 칸을 모르는 catalog 면 null */
     public record Option(
             UUID optionId,
             String sku,
             String title,
             BigDecimal price,
-            String status
+            String status,
+            String imageUrl
     ) {
     }
 }

@@ -27,7 +27,7 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 
 ### 2.1 정확성 · 결과 불명 · 시각 · 금액 · 로그
 - 사용자 요청 경로(@RestController → @Service)에서 외부 HTTP 응답을 기다리면 지적한다. 외부 등록 · 취소는 worker 몫이다. 허용된 동기 호출:
-  - 타임아웃 · 서킷 브레이커 · 동시 상한 필수: preorder → catalog 옵션(캐시 미스만) · order 취소 사전 확인 · Mock 키로 조회 · 취소(정합성 조치 `ExternalMock` — 관리자가 결과를 기다리고, 일괄은 마감 시간 안에서만 시작한다)(`DependencyGuard`), order → catalog 옵션 일괄 조회(`CatalogReader`).
+  - 타임아웃 · 서킷 브레이커 · 동시 상한 필수: preorder → catalog 옵션(캐시 미스만 — 접수, 그리고 예약 목록 · 상세의 사진 `PreorderOptionImages`, 2026-10-23 결정. 사진은 못 받으면 비운다) · order 취소 사전 확인 · Mock 키로 조회 · 취소(정합성 조치 `ExternalMock` — 관리자가 결과를 기다리고, 일괄은 마감 시간 안에서만 시작한다)(`DependencyGuard`), order → catalog 옵션 일괄 조회(`CatalogReader`).
   - 타임아웃만: catalog → order · member(리뷰 작성, 2026-10-06 결정 · 리뷰 쓸 수 있는 주문상품 목록 `WritableReviewQuery` → `OrderClient#getDeliveredItems`, 2026-10-23 결정 · 상품 삭제의 드로우 증정품 확인 `ProductDeleteService` → `DrawGiftClient`, `CatalogDefaults`), catalog → order 재고(`StockReader` — 목록 · 상세 · 증정품 후보) · preorder 회차 일정(`PreorderCampaigns` — 목록 · 상세 · 관리자 · 수정 판정, 2026-10-19 결정. 수정 판정도 트랜잭션 전에 받는다), order → preorder 결제 가능 확인 · payment 결제 준비, member → 카카오 로그인(`KakaoOAuthClient`).
   - 결제 승인: order → payment(읽기 70초, `PaymentConfirmSlots`), payment → 토스(3.3).
 - 차단급: @Transactional 안의 HTTP 호출 · SQS 전송 · Thread.sleep · 외부 락 대기. 예외는 batch 정합성 검사 하나다 — be 를 한 스냅샷으로 읽는 검사 트랜잭션 안에서 Mock 목록(읽기)을 받는다(3.5).

@@ -12,7 +12,7 @@ import java.util.UUID;
 import static org.mockito.BDDMockito.given;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 
-/** catalog 내부 API 응답 대역. 옵션 sku 는 "SKU-{옵션 id}", 가격은 1,250,000원으로 고정한다. */
+/** catalog 내부 API 응답 대역. 옵션 sku 는 "SKU-{옵션 id}", 가격은 1,250,000원, 사진은 {@link #imageUrl} 로 고정한다. */
 public final class CatalogStubs {
 
     public static final BigDecimal PRICE = new BigDecimal("1250000");
@@ -31,7 +31,12 @@ public final class CatalogStubs {
     }
 
     public static ProductCatalog.Option option(UUID optionId, String status) {
-        return new ProductCatalog.Option(optionId, "SKU-" + optionId, "블랙 / 256GB", PRICE, status);
+        return new ProductCatalog.Option(optionId, "SKU-" + optionId, "블랙 / 256GB", PRICE, status, imageUrl(optionId));
+    }
+
+    /** 대역이 옵션마다 주는 사진 주소. */
+    public static String imageUrl(UUID optionId) {
+        return "https://cdn.test/options/" + optionId + ".jpg";
     }
 
     public static ProductCatalog.Option activeOption(UUID optionId) {
