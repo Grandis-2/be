@@ -37,15 +37,12 @@ public class DrawEntryService {
     private final DrawCampaignStore campaigns;
     private final DrawEntryStore entries;
     private final TransactionTemplate writeTransaction;
-    private final TransactionTemplate readTransaction;
     private final Clock clock;
 
     public DrawEntryService(DrawCampaignStore campaigns, DrawEntryStore entries, PlatformTransactionManager transactionManager, Clock clock) {
         this.campaigns = campaigns;
         this.entries = entries;
         this.writeTransaction = new TransactionTemplate(transactionManager);
-        this.readTransaction = new TransactionTemplate(transactionManager);
-        this.readTransaction.setReadOnly(true);
         this.clock = clock;
     }
 
@@ -54,7 +51,7 @@ public class DrawEntryService {
      */
     public Entered enter(UUID customerId, UUID drawId, ShipTo shipTo) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
-            throw new IllegalStateException("응모는 트랜잭션 밖에서 불러야 한다 — 유일 키 충돌 뒤 새 트랜잭션에서 다시 읽게");
+            throw new IllegalStateException("응모는 트랜잭션 밖에서 불러야 한다 — 유일 키 충돌 뒤 롤백된 트랜잭션 밖에서(트랜잭션 없이) 다시 읽게");
         }
         DrawCampaign campaign = campaigns.lookup(drawId).orElseThrow(() -> new BusinessException(OrderErrorCode.DRAW_NOT_FOUND));
         Optional<DrawEntry> existing = find(drawId, customerId);
@@ -68,7 +65,7 @@ public class DrawEntryService {
             return new Entered(writeTransaction.execute(status ->
                     entries.insert(new NewDrawEntry(drawId, customerId, shipTo))), true, campaign);
         } catch (DrawEntryTakenException e) {
-            // 같은 회원의 응모가 동시에 왔다. 이 트랜잭션은 롤백됐으므로 새 트랜잭션에서 먼저 들어간 응모를 읽는다
+            // 같은 회원의 응모가 동시에 왔다. 이 트랜잭션은 롤백됐으므로 트랜잭션 없이 먼저 들어간 응모를 읽는다
             return new Entered(find(drawId, customerId)
                     .orElseThrow(() -> new IllegalStateException("응모 충돌인데 그 응모가 없다: drawId=" + drawId, e)), false, campaign);
         }
