@@ -26,6 +26,10 @@ public interface DrawCampaignJpaRepository extends JpaRepository<DrawCampaignJpa
     @Query("SELECT c FROM DrawCampaignJpaEntity c WHERE c.id = :id")
     Optional<DrawCampaignJpaEntity> lookup(@Param("id") UUID id);
 
+    /** 여러 회차 — {@link #lookup} 과 같이 직접 선언한 쿼리라 트랜잭션 밖에서 문장 하나다(상속한 findAllById 는 읽기 전용 트랜잭션을 연다). */
+    @Query("SELECT c FROM DrawCampaignJpaEntity c WHERE c.id IN :ids")
+    List<DrawCampaignJpaEntity> lookupAll(@Param("ids") Collection<UUID> ids);
+
     // 단계 필터 셋은 인덱스 없이 표를 훑는다 — 실측(MySQL 8.4, 회차 5,000 · 응모 중 30 · 예정 100): 목록 100건 1.7 ~ 2.9ms, 건수 0.75ms.
     // 거르지 않은 최신순 목록도 이 크기에서 표를 훑고 2.3ms 다. 회차는 관리자가 만드는 것이라 이 크기를 넘기 어렵다
 
