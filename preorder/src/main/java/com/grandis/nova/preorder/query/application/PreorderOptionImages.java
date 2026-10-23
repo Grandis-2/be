@@ -19,7 +19,9 @@ import java.util.UUID;
 /**
  * 예약 목록 · 상세의 옵션 사진. 예약은 접수 때 사진을 복사해 두지 않으므로, 접수가 쓰는 catalog 상품 사본({@link CatalogReader}, 상품 단위 캐시)에서
  * 그 옵션의 사진(그 옵션이 고른 색상의 첫 장 — 주문 사진과 같은 값)을 꺼낸다. 캐시에 있으면 catalog 를 부르지 않는다.
- * 사진은 표시용이라 catalog 가 답하지 않거나 거절해도 목록 · 상세는 그대로 내고 사진만 비운다. 상품이 없어졌거나 사진이 없는 옵션도 비어 있다.
+ * 사진은 표시용이라 catalog 가 답하지 않거나 거절하거나 읽을 수 없는 응답을 줘도 목록 · 상세는 그대로 내고 사진만 비운다 — 첫 실패 뒤에는 남은
+ * 상품을 부르지 않는다(캐시에 없는 상품마다 시간 초과를 기다리지 않게, 접수와 나눠 쓰는 catalog 동시 상한을 덜 차지하게). 상품이 없어졌거나 사진이
+ * 없는 옵션도 비어 있다. 관리자 전용 목록 · 상세는 이것을 부르지 않는다(사진 칸이 null).
  */
 @Component
 public class PreorderOptionImages {
@@ -37,16 +39,19 @@ public class PreorderOptionImages {
         Set<UUID> productIds = new LinkedHashSet<>();
         preorders.forEach(preorder -> productIds.add(preorder.productId()));
         Map<UUID, ProductCatalog> products = new HashMap<>();
-        int failed = 0;
         for (UUID productId : productIds) {
             try {
                 catalog.findProduct(productId).ifPresent(product -> products.put(productId, product));
             } catch (BusinessException e) {
-                failed++;
+                log.warn("예약 사진을 catalog 에서 받지 못해 비운다 — 남은 상품은 묻지 않는다 failedAt={} products={} cause={}",
+                        productId, productIds.size(), e.getMessage());
+                break;
+            } catch (RuntimeException e) {
+                // 연동 오류(401 · 404 밖의 4xx) · 읽을 수 없는 응답 — 계약이 어긋났다(InternalCallFailures 가 ERROR 와 스택을 이미 남겼다). 사진만 비운다
+                log.warn("예약 사진을 catalog 에서 읽지 못해 비운다(연동 오류) — 남은 상품은 묻지 않는다 failedAt={} products={} cause={}",
+                        productId, productIds.size(), e.toString());
+                break;
             }
-        }
-        if (failed > 0) {
-            log.warn("예약 사진을 catalog 에서 받지 못해 비운다 products={}/{}", failed, productIds.size());
         }
         Map<UUID, String> images = new HashMap<>();
         for (PreorderSnapshot preorder : preorders) {

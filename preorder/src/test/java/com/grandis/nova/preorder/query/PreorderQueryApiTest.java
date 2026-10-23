@@ -98,7 +98,7 @@ class PreorderQueryApiTest {
     }
 
     @Test
-    @DisplayName("목록 · 상세는 catalog 상품 사본에서 그 옵션의 사진을 싣는다 — 상품마다 사본을 한 번만 받고 상세는 그 사본을 쓴다")
+    @DisplayName("목록 · 상세는 catalog 상품 사본에서 그 옵션의 사진을 싣는다 — 상세는 목록이 받아 둔 사본(상품 단위 캐시)을 쓴다")
     void listAndDetailCarryTheOptionImage() throws Exception {
         AcceptResult first = accepts.accept(customerId);
         AcceptResult second = accepts.accept(customerId);
@@ -118,20 +118,45 @@ class PreorderQueryApiTest {
     }
 
     @Test
-    @DisplayName("catalog 가 답하지 않으면 사진만 비우고 목록 · 상세는 그대로 낸다")
+    @DisplayName("catalog 가 답하지 않거나(503) 거절하거나(403) 읽을 수 없는 응답을 줘도 사진만 비우고 목록 · 상세는 그대로 낸다")
     void catalogFailureLeavesTheImageEmpty() throws Exception {
-        AcceptResult accepted = accepts.accept(customerId);
-        catalogReader.evict(accepted.preorder().productId());
-        given(catalogClient.getProduct(accepted.preorder().productId()))
+        List<RuntimeException> failures = List.of(
+                new org.springframework.web.client.HttpServerErrorException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE),
+                org.springframework.web.client.HttpClientErrorException.create(org.springframework.http.HttpStatus.FORBIDDEN, "Forbidden", null, null, null),
+                new org.springframework.web.client.RestClientException("읽을 수 없음",
+                        new org.springframework.http.converter.HttpMessageNotReadableException("깨진 본문", (org.springframework.http.HttpInputMessage) null)));
+        for (RuntimeException failure : failures) {
+            UUID owner = fixtures.customer();
+            AcceptResult accepted = accepts.accept(owner);
+            catalogReader.evict(accepted.preorder().productId());
+            given(catalogClient.getProduct(accepted.preorder().productId())).willThrow(failure);
+
+            mockMvc.perform(get("/api/v1/preorders").with(customer(owner)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(accepted)))
+                    .andExpect(jsonPath("$.data.items[0].imageUrl").doesNotExist());
+            mockMvc.perform(get("/api/v1/preorders/{id}", AcceptFixtures.tokenOf(accepted)).with(customer(owner)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.imageUrl").doesNotExist());
+        }
+    }
+
+    @Test
+    @DisplayName("사진을 받다 한 상품에서 실패하면 남은 상품은 catalog 에 묻지 않는다 — 캐시에 없는 상품마다 시간 초과를 기다리지 않게")
+    void firstFailureStopsTheRemainingLookups() throws Exception {
+        AcceptResult older = accepts.accept(customerId);
+        AcceptResult newer = accepts.accept(customerId);   // 목록은 최신순이라 이 상품을 먼저 묻는다
+        catalogReader.evict(older.preorder().productId());
+        catalogReader.evict(newer.preorder().productId());
+        given(catalogClient.getProduct(newer.preorder().productId()))
                 .willThrow(new org.springframework.web.client.HttpServerErrorException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE));
+        clearInvocations(catalogClient);
 
         mockMvc.perform(get("/api/v1/preorders").with(customer(customerId)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(accepted)))
-                .andExpect(jsonPath("$.data.items[0].imageUrl").doesNotExist());
-        mockMvc.perform(get("/api/v1/preorders/{id}", AcceptFixtures.tokenOf(accepted)).with(customer(customerId)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.imageUrl").doesNotExist());
+                .andExpect(jsonPath("$.data.items", hasSize(2)))
+                .andExpect(jsonPath("$.data.items[1].imageUrl").doesNotExist());
+        verify(catalogClient, org.mockito.Mockito.never()).getProduct(older.preorder().productId());
     }
 
     @Test
