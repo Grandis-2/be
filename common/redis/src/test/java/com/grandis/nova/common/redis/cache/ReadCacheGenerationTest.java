@@ -350,6 +350,92 @@ class ReadCacheGenerationTest {
         assertThat(cache.generation("products")).as("한 번만").hasValue(11);
     }
 
+    @Test
+    @DisplayName("세대 여럿을 한 번에 읽어도(generations) 하나씩 읽는 것과 같다 — 없으면 만들고, 올리면 늘고, 되돌아가면 본 번호보다 크게, 끈 캐시 · Redis 실패 · 숫자 아님이면 비어 있다")
+    void generationsMatchSingleReads() {
+        redis.opsForValue().set(GENERATION, "5");
+        ReadCache cache = new ReadCache(redis, JSON, "svc");
+        ReadCache.Spec<Item> spec = cache.spec("item", Item.class, Duration.ofMinutes(10));
+        long before = System.currentTimeMillis();
+        ReadCache.Generations first = cache.generations("products", "campaigns");
+        assertThat(first.number("products")).hasValue(5);
+        assertThat(first.number("campaigns").getAsLong()).as("없는 세대는 지금 시각에서 시작").isGreaterThanOrEqualTo(before);
+        cache.entry(spec, first, "products", "1", () -> new Item("v"));
+        assertThat(redis.keys("svc:cache:item:*")).singleElement().asString().contains(":products.5:");
+        assertThatThrownBy(() -> first.number("reviews")).as("읽지 않은 세대").isInstanceOf(IllegalArgumentException.class);
+
+        cache.bumpNow("products");
+        assertThat(first.number("products")).as("읽어 둔 묶음은 그 요청의 번호 그대로").hasValue(5);
+        assertThat(cache.generations("products", "campaigns").number("products")).as("올린 뒤").hasValue(6);
+
+        redis.opsForValue().set(GENERATION, "2");   // 복원으로 되돌아갔다
+        assertThat(cache.generations("products", "campaigns").number("products")).as("본 번호(6)보다 크게 올려 읽는다").hasValue(7);
+        assertThat(generation()).isEqualTo(7);
+
+        assertThat(ReadCache.off(redis, JSON, "svc").generations("products").number("products")).as("끈 캐시").isEmpty();
+        cache.breaker().transitionToForcedOpenState();
+        try {
+            assertThat(cache.generations("products", "campaigns").number("products")).as("차단기 열림").isEmpty();
+        } finally {
+            cache.breaker().transitionToClosedState();
+        }
+        redis.opsForValue().set(GENERATION, "not-a-number");
+        ReadCache.Generations broken = cache.generations("products", "campaigns");
+        assertThat(broken.number("products")).as("못 읽음").isEmpty();
+        assertThat(broken.number("campaigns")).as("다른 세대는 읽힌다").isPresent();
+    }
+
+    @Test
+    @DisplayName("세대 여럿을 읽을 때도 미룬 올리기를 먼저 한다 — 올린 세대는 올린 뒤 번호로 읽는다")
+    void generationsRetryPendingBumps() {
+        redis.opsForValue().set(GENERATION, "not-a-number");   // INCR 이 실패한다
+        ReadCache cache = new ReadCache(redis, JSON, "svc");
+        assertThatThrownBy(() -> cache.bumpNow("products")).isInstanceOf(IllegalStateException.class);
+
+        redis.opsForValue().set(GENERATION, "10");   // 복구
+        redis.opsForValue().set("svc:cache:gen:campaigns", "3");
+        ReadCache.Generations read = cache.generations("campaigns", "products");   // 미룬 세대가 뒤에 있어도
+        assertThat(read.number("products")).as("미룬 올리기가 먼저 돈다").hasValue(11);
+        assertThat(read.number("campaigns")).hasValue(3);
+        assertThat(cache.generations("campaigns", "products").number("products")).as("한 번만").hasValue(11);
+    }
+
+    @Test
+    @DisplayName("세대 여럿은 Redis 왕복 하나(MGET)로 읽는다 — 세대마다 GET 하지 않는다")
+    void generationsUseOneRoundTrip() {
+        redis.opsForValue().set(GENERATION, "5");
+        redis.opsForValue().set("svc:cache:gen:campaigns", "3");
+        redis.opsForValue().set("svc:cache:gen:promotions", "7");
+        ReadCache cache = new ReadCache(redis, JSON, "svc");
+        java.util.Map<String, Long> before = commandCalls();
+
+        ReadCache.Generations read = cache.generations("promotions", "products", "campaigns");
+
+        java.util.Map<String, Long> after = commandCalls();
+        assertThat(read.number("promotions")).hasValue(7);
+        assertThat(after.getOrDefault("mget", 0L) - before.getOrDefault("mget", 0L)).as("MGET").isEqualTo(1);
+        assertThat(after.getOrDefault("get", 0L) - before.getOrDefault("get", 0L)).as("GET").isZero();
+        cache.generation("products");
+        assertThat(commandCalls().getOrDefault("get", 0L) - after.getOrDefault("get", 0L)).as("대조군 — 하나씩 읽으면 GET").isEqualTo(1);
+    }
+
+    /** Valkey 의 명령별 누적 호출 수(INFO commandstats). */
+    private static java.util.Map<String, Long> commandCalls() {
+        java.util.Map<String, Long> calls = new java.util.HashMap<>();
+        try (RedisConnection connection = redis.getConnectionFactory().getConnection()) {
+            java.util.Properties info = connection.serverCommands().info("commandstats");
+            for (String name : info.stringPropertyNames()) {
+                if (name.startsWith("cmdstat_")) {
+                    java.util.regex.Matcher m = java.util.regex.Pattern.compile("calls=(\\d+)").matcher(info.getProperty(name));
+                    if (m.find()) {
+                        calls.put(name.substring("cmdstat_".length()), Long.parseLong(m.group(1)));
+                    }
+                }
+            }
+        }
+        return calls;
+    }
+
     private static void resume(PausingRedisTemplate template, Thread thread) throws InterruptedException {
         template.resume.countDown();
         thread.join(10_000);
