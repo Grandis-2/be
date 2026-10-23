@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.scaling;
 
 import com.grandis.nova.preorder.campaign.Campaigns;
+import com.grandis.nova.preorder.capacity.CapacityHeartbeatProperties;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -23,10 +24,12 @@ class ScalingConfig {
 
     @Bean
     CampaignScalingReconciler campaignScalingReconciler(Campaigns campaigns, ScalingProperties properties,
-                                                        CapacityFloors floors, StringRedisTemplate redis, Clock clock,
+                                                        CapacityFloors floors, StringRedisTemplate redis,
+                                                        CapacityHeartbeatProperties capacity, Clock clock,
                                                         MeterRegistry meterRegistry) {
         return new CampaignScalingReconciler(campaigns, properties, floors,
-                new ScalingLock(redis, properties.lockTtl()), clock, meterRegistry);
+                new ScalingLock(redis, properties.lockTtl()), new AdmissionCredit(redis), capacity.acceptPerSecond(),
+                clock, meterRegistry);
     }
 
     @Bean

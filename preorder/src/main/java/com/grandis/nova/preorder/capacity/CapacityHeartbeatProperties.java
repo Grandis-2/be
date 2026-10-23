@@ -15,14 +15,14 @@ import java.time.Duration;
  *                        운영 실측으로 바꾼다
  */
 @ConfigurationProperties("nova.capacity.heartbeat")
-record CapacityHeartbeatProperties(
+public record CapacityHeartbeatProperties(
         @DefaultValue("true") boolean enabled,
         @DefaultValue("5s") Duration interval,
         @DefaultValue("15s") Duration staleAfter,
         @DefaultValue("100") int acceptPerSecond
 ) {
 
-    CapacityHeartbeatProperties {
+    public CapacityHeartbeatProperties {
         // 판정은 Redis 에 초로 적는다 — 소수 초를 받으면 내림돼 살아 있는 태스크가 판정보다 일찍 지워진다
         if (interval.toSeconds() < 1 || interval.toNanosPart() != 0 || staleAfter.toNanosPart() != 0) {
             throw new IllegalArgumentException(
