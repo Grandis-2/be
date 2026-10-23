@@ -36,7 +36,7 @@ import java.util.concurrent.TimeoutException;
  * 접수에 쓸 상품 · 옵션 값을 상품 단위로 캐시한다 — 오픈 순간의 몰림이 catalog 로 번지지 않게(같은 상품의 첫 조회는 한 번만 부른다).
  * 1분 지난 값은 그대로 돌려주고, 조회한 요청의 보안 맥락(토큰)으로 뒤에서 한 번 다시 받는다. 5분 지난 값은 그 요청에서 다시 받고
  * (같은 상품은 한 번만), 실패하면 가진 값을 주고 잠시 묻지 않는다. 30분 뒤 버린다. 기준은 {@link CatalogCacheProperties}.
- * 판매 중지처럼 동결 뒤에도 바뀌는 것은 이벤트로 {@link #evict} 한다.
+ * 판매 중지처럼 동결 뒤에도 바뀌는 것은 이벤트로 {@link #evict} 한다. 가진 값이 없는 상품의 받기가 실패하면 잠시 같은 실패로 답한다.
  */
 @Component
 public class CatalogReader {
@@ -59,6 +59,8 @@ public class CatalogReader {
     private final Cache<UUID, Loaded> products;
     /** 그 요청에서 다시 받기가 실패해 잠시 묻지 않는 상품. */
     private final Cache<UUID, Boolean> backingOff;
+    /** 가진 값이 없는데 받기가 실패한 상품과 그 실패. 실패 시각은 시계로 본다. */
+    private final Cache<UUID, ColdFailure> coldFailures;
     /** 다시 받는 중인 상품. 같은 상품을 동시에 여러 번 다시 받지 않는다. */
     private final Set<UUID> refreshing = ConcurrentHashMap.newKeySet();
     /** 그 요청에서 다시 받는 중인 상품과 그 결과. */
@@ -81,6 +83,10 @@ public class CatalogReader {
                 .build();
         this.backingOff = Caffeine.newBuilder()
                 .expireAfterWrite(properties.failureBackoff())
+                .maximumSize(MAXIMUM_PRODUCTS)
+                .build();
+        this.coldFailures = Caffeine.newBuilder()
+                .expireAfterWrite(properties.coldFailureTtl())
                 .maximumSize(MAXIMUM_PRODUCTS)
                 .build();
     }
@@ -119,12 +125,13 @@ public class CatalogReader {
     /** 이벤트(판매 중지 등)로 값이 바뀐 상품을 비운다. 다음 조회가 catalog 에서 다시 받는다. */
     public void evict(UUID productId) {
         products.invalidate(productId);
+        coldFailures.invalidate(productId);
     }
 
     /** 401 은 사용자 토큰 문제라 401, 404 외 4xx · 읽을 수 없는 응답은 연동 오류(500), 그 밖은 일시 장애(503). */
     private Loaded get(UUID productId) {
         try {
-            return products.get(productId, this::load);
+            return products.get(productId, this::loadCold);
         } catch (CompletionException | RestClientException e) {
             Throwable cause = e instanceof CompletionException && e.getCause() != null ? e.getCause() : e;
             if (cause instanceof HttpClientErrorException.Unauthorized) {
@@ -231,6 +238,25 @@ public class CatalogReader {
         }
     }
 
+    /**
+     * 가진 값이 없을 때의 받기. 같은 상품의 요청은 이 받기 하나를 기다리지만, 실패하면 기다리던 요청이 하나씩 다시 받는다 — 그래서 실패를
+     * 잠시 남겨 그 요청들이 부르지 않고 같은 실패로 끝나게 한다. 4xx 는 바로 오는 응답이고 401 은 그 토큰만의 문제라 남기지 않는다.
+     */
+    private Loaded loadCold(UUID productId) {
+        ColdFailure recent = coldFailures.getIfPresent(productId);
+        if (recent != null && recent.isActive(properties.coldFailureTtl(), clock.instant())) {
+            throw recent.cause();
+        }
+        try {
+            return load(productId);
+        } catch (HttpClientErrorException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            coldFailures.put(productId, new ColdFailure(e, clock.instant()));
+            throw e;
+        }
+    }
+
     private Loaded load(UUID productId) {
         Optional<ProductCatalog> product;
         try {
@@ -253,6 +279,13 @@ public class CatalogReader {
         REJECTED,
         /** catalog 가 토큰을 받지 않았다. */
         UNAUTHORIZED
+    }
+
+    private record ColdFailure(RuntimeException cause, Instant failedAt) {
+
+        boolean isActive(Duration ttl, Instant now) {
+            return failedAt.plus(ttl).isAfter(now);
+        }
     }
 
     /** 받은 값과 받은 시각. 없는 상품(404)도 비어 있는 값으로 둔다. */

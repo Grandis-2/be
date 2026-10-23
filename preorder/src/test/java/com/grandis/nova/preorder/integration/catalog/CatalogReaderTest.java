@@ -106,6 +106,52 @@ class CatalogReaderTest {
                 .isEqualTo(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
     }
 
+    /** 같은 상품을 기다리던 요청이 하나씩 차례로 다시 불러 호출 시간 초과를 줄줄이 기다리지 않게 한다. */
+    @Test
+    void 캐시에_없는_상품의_받기가_실패하면_몰린_요청은_다시_부르지_않고_503() throws Exception {
+        FakeCatalogClient client = new FakeCatalogClient();
+        client.unavailable = true;
+        client.delayMillis = 200;
+        CatalogReader reader = reader(client);
+
+        List<Outcome<Boolean>> outcomes = Concurrently.run(20, i -> () ->
+                reader.findOption(PRODUCT_ID, OPTION_ID).isPresent());
+
+        assertThat(outcomes).allMatch(o -> o.error() instanceof BusinessException failure
+                && failure.errorCode() == CommonErrorCode.DEPENDENCY_UNAVAILABLE);
+        assertThat(client.calls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void 받기_실패는_잠시만_남고_지나면_다시_부른다() {
+        FakeCatalogClient client = new FakeCatalogClient();
+        client.unavailable = true;
+        CatalogReader reader = reader(client);
+        assertThatThrownBy(() -> reader.findOption(PRODUCT_ID, OPTION_ID)).isInstanceOf(BusinessException.class);
+        client.unavailable = false;
+
+        assertThatThrownBy(() -> reader.findOption(PRODUCT_ID, OPTION_ID)).isInstanceOf(BusinessException.class);
+        assertThat(client.calls.get()).as("남은 실패로 답한다").isEqualTo(1);
+
+        clock.advance(PROPERTIES.coldFailureTtl());
+        assertThat(reader.findOption(PRODUCT_ID, OPTION_ID)).isPresent();
+        assertThat(client.calls.get()).isEqualTo(2);
+    }
+
+    /** 401 은 그 토큰만의 문제라 다른 요청까지 막지 않는다. */
+    @Test
+    void 토큰이_거절된_받기는_남기지_않는다() {
+        FakeCatalogClient client = new FakeCatalogClient();
+        client.rejectedToken = TOKEN;
+        CatalogReader reader = reader(client);
+        signIn(TOKEN);
+        assertThatThrownBy(() -> reader.findOption(PRODUCT_ID, OPTION_ID)).isInstanceOf(BusinessException.class);
+
+        signIn("other-token");
+        assertThat(reader.findOption(PRODUCT_ID, OPTION_ID)).isPresent();
+        assertThat(client.calls.get()).isEqualTo(2);
+    }
+
     @Test
     void 캐시에_없는데_catalog_가_5xx_면_503_으로_알린다() {
         FakeCatalogClient client = new FakeCatalogClient();
@@ -362,7 +408,7 @@ class CatalogReaderTest {
 
     private static CatalogCacheProperties waitFor(Duration refreshWait) {
         return new CatalogCacheProperties(PROPERTIES.refreshAfter(), PROPERTIES.maxStale(), refreshWait,
-                PROPERTIES.failureBackoff(), PROPERTIES.expireAfter());
+                PROPERTIES.failureBackoff(), PROPERTIES.expireAfter(), PROPERTIES.coldFailureTtl());
     }
 
     private double staleServed(StaleReason reason) {
