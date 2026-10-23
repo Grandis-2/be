@@ -493,6 +493,8 @@ class CatalogReaderTest {
                 throw HttpClientErrorException.create(HttpStatus.UNAUTHORIZED, "Unauthorized", null, null, null);
             }
             if (unavailable) {
+                // 응답하지 않는 catalog 처럼 기다린 뒤 실패한다 — 그 사이 같은 상품 요청이 이 받기를 함께 기다린다
+                sleep();
                 throw new ResourceAccessException("connection refused");
             }
             if (unreadable) {
