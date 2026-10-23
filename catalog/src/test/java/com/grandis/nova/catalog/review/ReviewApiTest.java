@@ -22,6 +22,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -335,6 +336,31 @@ class ReviewApiTest {
     @DisplayName("상품 리뷰 — 상품 확인 · 준비 한 문장, 후기 목록 · 건수 한 문장. 트랜잭션을 열지 않는다(격리 · 읽기 전용 전환 문장이 없다)")
     void productReviewsReadWithoutTransaction() throws Exception {
         write(customerId, deliveredItem(productId), 5, "한 문장").andExpect(status().isCreated());
+        List<String> statements = statementsOf("argument LIKE 'SELECT p.sale_mode, p.visible%' OR argument LIKE '%LEFT JOIN LATERAL%'",
+                () -> mockMvc.perform(get("/api/v1/products/{id}/reviews", productId)).andExpect(status().isOk()));
+
+        // 양성 대조군 — 로그가 이 조회를 잡았다
+        assertThat(statements).as("상품 확인 · 준비").filteredOn(sql -> sql.contains("FROM products p WHERE p.id")).hasSize(1);
+        assertThat(statements).as("후기 목록 · 건수").filteredOn(sql -> sql.contains("product_reviews")).hasSize(1);
+        assertThat(statements).as("트랜잭션 준비 · 정리 문장")
+                .noneMatch(sql -> sql.contains("TRANSACTION ISOLATION") || sql.contains("READ ONLY") || sql.startsWith("SET autocommit"));
+    }
+
+    @Test
+    @DisplayName("모아보기 · 내 리뷰 — 목록 · 건수 한 문장. 트랜잭션을 열지 않는다(격리 · 읽기 전용 전환 문장이 없다)")
+    void visibleAndMyReviewsReadWithoutTransaction() throws Exception {
+        write(customerId, deliveredItem(productId), 5, "한 문장").andExpect(status().isCreated());
+        for (MockHttpServletRequestBuilder request : List.of(get("/api/v1/reviews"), get("/api/v1/reviews/mine").with(AccessTokens.customer(customerId)))) {
+            List<String> statements = statementsOf("argument LIKE '%LEFT JOIN LATERAL%'", () -> mockMvc.perform(request).andExpect(status().isOk()));
+
+            assertThat(statements).as("양성 대조군 — 목록 · 건수").filteredOn(sql -> sql.contains("product_reviews")).hasSize(1);
+            assertThat(statements).as("트랜잭션 준비 · 정리 문장")
+                    .noneMatch(sql -> sql.contains("TRANSACTION ISOLATION") || sql.contains("READ ONLY") || sql.startsWith("SET autocommit"));
+        }
+    }
+
+    /** MySQL 일반 로그로 한 호출이 보낸 문장 — whereMarker 에 걸린 문장을 보낸 연결의 문장만(같은 서버를 쓰는 다른 작업의 문장을 섞지 않는다). */
+    private List<String> statementsOf(String whereMarker, ThrowingCall call) throws Exception {
         var mysql = MySqlContainerConfig.get();
         List<String> statements = new ArrayList<>();
         try (Connection root = DriverManager.getConnection(mysql.getJdbcUrl(), "root", mysql.getPassword());
@@ -343,25 +369,23 @@ class ReviewApiTest {
             statement.execute("SET GLOBAL general_log = 'ON'");
             statement.execute("TRUNCATE TABLE mysql.general_log");
             try {
-                mockMvc.perform(get("/api/v1/products/{id}/reviews", productId)).andExpect(status().isOk());
+                call.run();
             } finally {
                 statement.execute("SET GLOBAL general_log = 'OFF'");
             }
-            // 노출 판정 · 후기 쪽 문장을 보낸 연결의 문장만 — 같은 서버를 쓰는 다른 작업의 문장을 섞지 않는다. 트랜잭션을 열었다면 준비 문장도 이 연결로 간다
+            // 트랜잭션을 열었다면 준비 문장도 이 연결로 간다
             try (ResultSet rs = statement.executeQuery("SELECT argument FROM mysql.general_log WHERE command_type = 'Query' AND thread_id IN"
-                    + " (SELECT thread_id FROM mysql.general_log WHERE argument LIKE 'SELECT p.sale_mode, p.visible%' OR argument LIKE '%LEFT JOIN LATERAL%')"
-                    + " ORDER BY event_time")) {
+                    + " (SELECT thread_id FROM mysql.general_log WHERE " + whereMarker + ") ORDER BY event_time")) {
                 while (rs.next()) {
                     statements.add(new String(rs.getBytes(1), StandardCharsets.UTF_8));
                 }
             }
         }
+        return statements;
+    }
 
-        // 양성 대조군 — 로그가 이 조회를 잡았다
-        assertThat(statements).as("상품 확인 · 준비").filteredOn(sql -> sql.contains("FROM products p WHERE p.id")).hasSize(1);
-        assertThat(statements).as("후기 목록 · 건수").filteredOn(sql -> sql.contains("product_reviews")).hasSize(1);
-        assertThat(statements).as("트랜잭션 준비 · 정리 문장")
-                .noneMatch(sql -> sql.contains("TRANSACTION ISOLATION") || sql.contains("READ ONLY") || sql.startsWith("SET autocommit"));
+    private interface ThrowingCall {
+        void run() throws Exception;
     }
 
     @Test

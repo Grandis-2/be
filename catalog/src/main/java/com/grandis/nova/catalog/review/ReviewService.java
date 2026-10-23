@@ -17,7 +17,6 @@ import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.OffsetPage;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
@@ -132,16 +131,14 @@ public class ReviewService {
         return queries.pageByProduct(productId, page, size);
     }
 
-    /** 모아보기. 비공개 상품의 리뷰는 빠진다. */
-    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    /** 모아보기. 비공개 상품의 리뷰는 빠진다. 목록 · 건수는 한 문장이다 — 트랜잭션을 열지 않는다. */
     public OffsetPage<ReviewView> visibleReviews(UUID categoryId, int page, int size) {
-        return new OffsetPage<>(queries.findVisible(categoryId, page, size), page, size, queries.countVisible(categoryId));
+        return queries.pageVisible(categoryId, page, size);
     }
 
-    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    /** 내 리뷰. 목록 · 건수는 한 문장이다 — 트랜잭션을 열지 않는다. */
     public OffsetPage<ReviewView> myReviews(UUID customerId, UUID orderItemId, int page, int size) {
-        return new OffsetPage<>(queries.findMine(customerId, orderItemId, page, size), page, size,
-                queries.countMine(customerId, orderItemId));
+        return queries.pageMine(customerId, orderItemId, page, size);
     }
 
     private ProductReview requireMine(UUID customerId, UUID reviewId) {
