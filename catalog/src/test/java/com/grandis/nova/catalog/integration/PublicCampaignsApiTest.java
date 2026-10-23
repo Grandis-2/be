@@ -48,7 +48,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * 공개 회차 캐시를 켠 채 — 회원 상세 · 후기 · 조회 신호 · 홍보 카드는 회차를 캐시에서 꺼내고(preorder 를 다시 부르지 않는다), 세대를 올리면 다시 묻고,
- * 회차 없음은 넣지 않고,
+ * 한 상품의 회차 없음은 넣지 않고(회차 없는 상품이 든 묶음은 짧게 넣고),
  * 관리자 상세는 캐시를 거치지 않는다. preorder 의 회차 변경은 시험 DB 의 회차 행을 직접 고쳐 흉내 낸다(대역 클라이언트가 그 행을 읽는다).
  */
 @CatalogIntegrationTest
@@ -174,8 +174,8 @@ class PublicCampaignsApiTest {
     }
 
     @Test
-    @DisplayName("회차 없는 상품이 든 묶음은 넣지 않는다 — 그 상품의 회차가 생기면 세대를 올리지 않아도 홍보 카드에 바로 나온다")
-    void setWithMissingCampaignIsNotCached() throws Exception {
+    @DisplayName("회차 없는 상품이 든 묶음은 짧게(1분) 넣는다 — 다시 물어도 preorder 를 부르지 않고, 그 상품의 회차가 생겨 세대가 오르면 홍보 카드에 나온다")
+    void setWithMissingCampaignIsCachedBriefly() throws Exception {
         UUID ready = openPreorder("준비 끝");
         UUID pending = fixtures.product(categoryId, "PREORDER", "ACTIVE", "준비 전", "t");
         fixtures.registration(pending);
@@ -183,11 +183,21 @@ class PublicCampaignsApiTest {
         UUID promotionId = promotion(ready, pending);
         clearInvocations(client);
         assertThat(cardStatuses(promotionId)).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(ready, "OPEN"));
-        verify(client, never()).getCampaigns(any(), eq(true));   // 넣지 않을 묶음은 preorder DB 로 묻지 않는다
+        verify(client, times(1)).getCampaigns(any(), eq(true));   // 넣는 묶음이라 fresh 로 받는다
+        Set<String> partial = redis.keys("catalog:cache:preorder-campaign-set-partial:*");
+        assertThat(partial).hasSize(1);
+        assertThat(redis.getExpire(partial.iterator().next())).as("짧은 쪽 TTL").isBetween(1L, PublicCampaigns.PARTIAL_TTL.toSeconds());
+        assertThat(redis.keys("catalog:cache:preorder-campaign-set:*")).as("빠진 묶음은 긴 쪽에 넣지 않는다").isEmpty();
+
+        clearInvocations(client);
+        assertThat(cardStatuses(promotionId)).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(ready, "OPEN"));
+        verify(client, never()).getCampaigns(any(), anyBoolean());   // 짧은 쪽에서 나왔다
 
         Instant now = Instant.now();
-        fixtures.campaign(pending, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));
+        fixtures.campaign(pending, now.minus(Duration.ofHours(1)), now.plus(Duration.ofHours(1)));   // preorder 가 회차를 만들고
+        redis.opsForValue().increment("catalog:cache:gen:" + PublicCampaigns.CAMPAIGNS);           // 그 이벤트를 받아 세대를 올렸다
         assertThat(cardStatuses(promotionId)).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(ready, "OPEN", pending, "OPEN"));
+        assertThat(redis.keys("catalog:cache:preorder-campaign-set:*")).as("다 갖춘 묶음은 긴 쪽에").hasSize(1);
     }
 
     @Test
