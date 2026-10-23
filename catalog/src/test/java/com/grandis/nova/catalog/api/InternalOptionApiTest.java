@@ -119,6 +119,28 @@ class InternalOptionApiTest {
         }
     }
 
+    @Test
+    @DisplayName("상품 둘의 옵션을 섞어 물어도 — 옵션마다 자기 상품의 보증 · 사진을 받는다(문서는 상품마다 따로 고른다)")
+    void mixedProductsKeepTheirOwnDocuments() throws Exception {
+        UUID phone = fixtures.product("IN_STOCK", "ACTIVE");
+        fixtures.image(phone, "GALLERY", "블랙", 0, false, "https://img/phone-0.jpg");
+        transaction.executeWithoutResult(status -> products.findForUpdate(phone).orElseThrow().setWarranty(true, new BigDecimal("199000")));
+        UUID tablet = fixtures.product("IN_STOCK", "ACTIVE");
+        fixtures.image(tablet, "GALLERY", "실버", 0, false, "https://img/tablet-0.jpg");
+        transaction.executeWithoutResult(status -> products.findForUpdate(tablet).orElseThrow().setWarranty(true, new BigDecimal("99000")));
+        List<UUID> phoneOptions = List.of(fixtures.option(phone, "ACTIVE", new BigDecimal("1000000")), fixtures.option(phone, "ACTIVE", new BigDecimal("1000000")));
+        List<UUID> tabletOptions = List.of(fixtures.option(tablet, "ACTIVE", new BigDecimal("800000")), fixtures.option(tablet, "ACTIVE", new BigDecimal("800000")));
+        List<UUID> asked = List.of(tabletOptions.get(1), phoneOptions.get(0), tabletOptions.get(0), phoneOptions.get(1));
+
+        var result = asUser(asked).andExpect(status().isOk()).andExpect(jsonPath("$.data.items", hasSize(4)));
+        for (int i = 0; i < asked.size(); i++) {
+            boolean isPhone = phoneOptions.contains(asked.get(i));
+            result.andExpect(jsonPath("$.data.items[" + i + "].optionId").value(asked.get(i).toString()))
+                    .andExpect(jsonPath("$.data.items[" + i + "].warranty.surcharge").value(isPhone ? 199000 : 99000))
+                    .andExpect(jsonPath("$.data.items[" + i + "].imageUrl").value(isPhone ? "https://img/phone-0.jpg" : "https://img/tablet-0.jpg"));
+        }
+    }
+
     /** 첫 색상(블랙)의 대표가 둘째 장이라 "썸네일 · 대표 · 고른 색상의 첫 장" 셋이 서로 다른 값이 된다 — 어느 하나로 바꿔도 걸린다. */
     @Test
     @DisplayName("imageUrl 은 옵션이 고른 색상의 첫 장 — 그 색상에 사진이 없으면 상품 썸네일(첫 색상의 첫 장)이고, 대표 표시는 보지 않는다")

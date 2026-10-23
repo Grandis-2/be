@@ -56,7 +56,7 @@ public class ProductOptionsQueryService {
         Map<UUID, ProductOptions> documents = new HashMap<>();   // 상품 문서(JSON)는 상품마다 한 행에만 실려 온다 — 그 행에서 한 번만 푼다
         for (ProductOptionsQueryRepository.OptionWithProduct row : queries.findOptionsWithProducts(requested)) {
             found.put(row.option().id(), row);
-            if (row.document() != null) {
+            if (row.document() != null && !row.product().deleted()) {   // 삭제한 상품의 옵션은 빠지므로 풀지 않는다
                 documents.put(row.product().id(), ProductOptions.parse(row.document()));
             }
         }
@@ -69,8 +69,11 @@ public class ProductOptionsQueryService {
             }
             ProductOptionsQueryRepository.ProductRow product = row.product();
             ProductOptionsQueryRepository.OptionRow option = row.option();
-            // 칸이 비어 있는 상품은 문서가 실린 행이 없다 — 예전처럼 빈 문서다
-            ProductOptions document = documents.computeIfAbsent(product.id(), id -> ProductOptions.parse(null));
+            // 문서 칸은 NOT NULL 이라 결과에 나온 상품마다 문서가 실린 행이 하나 있다 — 없으면 문장이 틀린 것이다(빈 문서로 가리지 않는다)
+            ProductOptions document = documents.get(product.id());
+            if (document == null) {
+                throw new IllegalStateException("옵션 조회 결과에 상품 문서가 없다: productId=" + product.id());
+            }
             ProductOptions.Warranty warranty = document.warranty();
             views.add(new OptionLookupView(option.id(), product.id(), product.title(), product.modelName(), option.title(), option.sku(),
                     Discount.apply(option.price(), product.discountRate()), option.price(), option.status(), product.saleMode(), product.status(),
