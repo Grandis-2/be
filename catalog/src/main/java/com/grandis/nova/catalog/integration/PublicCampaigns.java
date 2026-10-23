@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HexFormat;
 import java.util.List;
@@ -90,6 +91,19 @@ public class PublicCampaigns {
         this.manySpec = on ? cache.spec("preorder-campaign-set", new TypeReference<Map<UUID, CampaignWindow>>() { }, ttl, HELD_DURING_OUTAGE) : null;
         this.partialSpec = on ? cache.spec("preorder-campaign-set-partial", new TypeReference<Map<UUID, CampaignWindow>>() { },
                 ttl.compareTo(PARTIAL_TTL) < 0 ? ttl : PARTIAL_TTL, HELD_DURING_OUTAGE) : null;
+    }
+
+    /**
+     * 함께 읽을 세대 이름 — 회차 캐시를 켰으면 {@link #CAMPAIGNS} 를 더한다. 끈 캐시는 회차 세대를 쓰지 않으므로 묶어 읽지도 않는다(쓰지 않는 세대 키가
+     * 손상돼 차단기에 실패가 쌓이지 않게).
+     */
+    public String[] withCampaignGeneration(String... generations) {
+        if (oneSpec == null) {
+            return generations;
+        }
+        String[] all = Arrays.copyOf(generations, generations.length + 1);
+        all[generations.length] = CAMPAIGNS;
+        return all;
     }
 
     /** 한 상품의 회차. 없으면(판매 준비 전) 비어 있다 — 없음은 넣지 않는다. 실패는 위 목록의 마지막 항목. */

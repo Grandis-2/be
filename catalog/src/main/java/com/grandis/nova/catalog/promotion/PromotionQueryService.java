@@ -93,7 +93,7 @@ public class PromotionQueryService {
     /** 오늘 보이는 홍보 — 시작이 늦은 것부터. 키에 오늘 날짜가 들어가 날이 바뀌면 새로 읽는다. */
     public Served<List<PromotionViews.Summary>> shown() {
         LocalDate today = LocalDate.ofInstant(clock.instant(), PromotionService.KOREA);
-        ReadCache.Generations generations = cache.generations(PROMOTIONS, CatalogReadCache.PRODUCTS, PublicCampaigns.CAMPAIGNS);
+        ReadCache.Generations generations = cache.generations(campaigns.withCampaignGeneration(PROMOTIONS, CatalogReadCache.PRODUCTS));
         ReadCache.Entry<List<Body>> bodies = cache.entry(shownSpec, generations, PROMOTIONS, today.toString(), () -> loadShown(today));
         List<UUID> allIds = bodies.value().stream().flatMap(body -> body.productIds().stream()).toList();
         ReadCache.Entry<List<ProductListItem>> found = cards(allIds, false, generations);
@@ -111,7 +111,7 @@ public class PromotionQueryService {
     public Served<PromotionViews.Detail> detail(UUID promotionId) {
         // 홍보 · 상품 · 회차 세대를 한 번에 읽는다(MGET) — 차례로 GET 하면 Redis 왕복이 세대 수만큼이다(회차 캐시를 끄면 둘).
         // 세대는 본문을 읽기 전에 읽으므로, 본문을 기다리는 사이 온 올리기(조기 마감 등)는 다음 요청부터 보인다
-        ReadCache.Generations generations = cache.generations(PROMOTIONS, CatalogReadCache.PRODUCTS, PublicCampaigns.CAMPAIGNS);
+        ReadCache.Generations generations = cache.generations(campaigns.withCampaignGeneration(PROMOTIONS, CatalogReadCache.PRODUCTS));
         ReadCache.Entry<Body> body = cache.entry(bodySpec, generations, PROMOTIONS, promotionId.toString(), () -> loadBody(promotionId));
         LocalDate today = LocalDate.ofInstant(clock.instant(), PromotionService.KOREA);
         if (today.isBefore(body.value().startDate()) || today.isAfter(body.value().endDate())) {
