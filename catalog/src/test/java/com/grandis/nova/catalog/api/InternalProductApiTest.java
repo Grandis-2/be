@@ -95,6 +95,8 @@ class InternalProductApiTest {
     void unreadableDocumentOnlyDropsImages() throws Exception {
         UUID productId = fixtures.product("PREORDER", "ACTIVE");
         UUID option = fixtures.option(productId, "ACTIVE");
+        fixtures.image(productId, "GALLERY", "", 0, true, "https://img/default-0.jpg");
+        asUser(productId).andExpect(jsonPath("$.data.options[0].imageUrl").value("https://img/default-0.jpg"));   // 대조군 — 정상 문서면 사진이 있다
         jdbcTemplate.update("UPDATE products SET options = JSON_OBJECT('axes', 'not-a-list') WHERE id = ?", (Object) UuidBinary.toBytes(productId));
         try {
             asUser(productId)

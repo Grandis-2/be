@@ -109,7 +109,7 @@ public class ReviewController {
      * (기본 20으로 두면 id 를 21개 넘게 보낸 화면이 뒤쪽을 "리뷰 쓰기" 로 잘못 보인다). 값이 통째로 빈 orderItemId 는 보내지 않은 것과 같다.
      */
     @Operation(summary = "내 리뷰", description = "최신순. orderItemId 를 주면(여러 번 · 쉼표, 1~100개, 같은 id 는 한 번) 그 주문상품들의 리뷰만 — "
-            + "이때 size 를 주지 않으면 보낸 id 수다. 값이 통째로 빈 orderItemId 는 보내지 않은 것과 같다. 빈 원소 · 100개 초과는 400. "
+            + "이때 size 를 주지 않으면 보낸 id 수다(orderItemId 가 없으면 20). 값이 통째로 빈 orderItemId 는 보내지 않은 것과 같다. 빈 원소 · 100개 초과는 400. "
             + "쪽은 앞 10,000개 안에서 시작해야 한다(page × size < 10,000)")
     @GetMapping("/api/v1/reviews/mine")
     public ApiResponse<ProductPageResponse<ReviewView>> myReviews(
