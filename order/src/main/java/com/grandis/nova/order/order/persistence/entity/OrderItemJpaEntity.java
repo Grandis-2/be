@@ -49,7 +49,7 @@ public class OrderItemJpaEntity {
     @Column(updatable = false, length = 40)
     private String modelNameSnapshot;
 
-    /** 주문 때 그 옵션의 사진. 사전예약 · 이 칸 전에 만든 주문 · 사진이 없는 옵션은 null 이다. */
+    /** 주문 때 그 옵션의 사진. 이 칸 전에 만든 주문 · 사진을 남기기 전에 만든 사전예약 주문 · 사진이 없는 옵션 · 사진을 못 받은 사전예약 주문은 null 이다. */
     @Column(updatable = false, length = 1000)
     private String imageUrlSnapshot;
 

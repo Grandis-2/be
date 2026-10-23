@@ -18,11 +18,13 @@ import org.springframework.web.client.RestClientException;
 
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
- * 장바구니에 쓸 옵션 정보. 부를 때마다 catalog 에 묻는다 — 가격 · 판매 상태가 바뀌므로 캐시하지 않는다.
+ * order 가 쓰는 catalog 옵션 정보(장바구니 · 바로 구매 · 사전예약 주문 사진 · 드로우 회차). 부를 때마다 catalog 에 묻는다 — 가격 · 판매 상태가 바뀌므로 캐시하지 않는다.
  * 트랜잭션 밖에서 부른다(DB 잠금을 catalog 응답 시간만큼 붙잡지 않게).
  *
  * 요청 스레드에서 부르므로 서킷 브레이커 → 동시 호출 상한을 거친다(설정 기본값은 OrderDefaults). 회로가 열렸거나 상한이 차면
@@ -37,16 +39,35 @@ public class CatalogReader {
 
     /** 장애 대응 설정(resilience4j.*.instances.catalog)과 같은 이름. */
     public static final String DEPENDENCY = "catalog";
+    /**
+     * 사전예약 주문의 사진 조회만 쓰는 장애 대응 이름. 장바구니 · 바로 구매와 회로 · 동시 호출 상한을 나눈다 — 사진은 표시용이라 못 받아도 주문을
+     * 만드는데, 같은 칸을 쓰면 결제가 몰릴 때 사진 조회가 장바구니의 칸을 차지하고 회로도 함께 연다. 이름에 하이픈을 넣지 않는다 — 환경 변수로
+     * 덮을 때(RESILIENCE4J_…_INSTANCES_CATALOGIMAGE_…) 하이픈을 나타낼 수 없다.
+     */
+    public static final String IMAGE_DEPENDENCY = "catalogimage";
     static final String OPERATION = "getOptions";
 
     private final CatalogClient catalogClient;
     private final CircuitBreaker circuitBreaker;
     private final Bulkhead bulkhead;
+    private final CircuitBreaker imageCircuitBreaker;
+    private final Bulkhead imageBulkhead;
 
     public CatalogReader(CatalogClient catalogClient, CircuitBreakerRegistry circuitBreakers, BulkheadRegistry bulkheads) {
         this.catalogClient = catalogClient;
         this.circuitBreaker = circuitBreakers.circuitBreaker(DEPENDENCY);
         this.bulkhead = bulkheads.bulkhead(DEPENDENCY);
+        this.imageCircuitBreaker = circuitBreakers.circuitBreaker(IMAGE_DEPENDENCY);
+        this.imageBulkhead = bulkheads.bulkhead(IMAGE_DEPENDENCY);
+    }
+
+    /**
+     * 그 옵션의 사진(catalog 의 imageUrl). 사전예약 주문이 주문 내역 썸네일로 남긴다. {@link #find} 와 같은 호출 · 같은 실패지만
+     * 회로 · 동시 호출 상한은 {@link #IMAGE_DEPENDENCY} 를 쓴다. 옵션이 없으면(삭제한 상품) 비어 있다.
+     */
+    public Optional<String> findImage(UUID optionId, String sessionToken) {
+        return Optional.ofNullable(find(List.of(optionId), sessionToken, imageCircuitBreaker, imageBulkhead).get(optionId))
+                .map(CatalogOption::imageUrl);
     }
 
     /**
@@ -58,6 +79,11 @@ public class CatalogReader {
      * @throws IllegalStateException 연동 오류(500) — 그 밖의 4xx(경로 없음 · 계약 어긋남), 읽을 수 없는 응답, 판정 칸이 빠진 옵션 · 묻지 않은 옵션
      */
     public Map<UUID, CatalogOption> find(Collection<UUID> optionIds, String sessionToken) {
+        return find(optionIds, sessionToken, circuitBreaker, bulkhead);
+    }
+
+    private Map<UUID, CatalogOption> find(Collection<UUID> optionIds, String sessionToken, CircuitBreaker circuitBreaker,
+                                          Bulkhead bulkhead) {
         Map<UUID, CatalogOption> byId = new LinkedHashMap<>();
         if (optionIds.isEmpty()) {
             return byId;
@@ -67,21 +93,21 @@ public class CatalogReader {
             options = CircuitBreaker.decorateSupplier(circuitBreaker, Bulkhead.decorateSupplier(bulkhead,
                     () -> catalogClient.getOptions(optionIds, authorization(sessionToken)).data())).get();
         } catch (CallNotPermittedException e) {
-            log.warn("{} 회로가 열려 호출하지 않는다", DEPENDENCY);
+            log.warn("{} 회로가 열려 호출하지 않는다", circuitBreaker.getName());
             throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
         } catch (BulkheadFullException e) {
-            log.warn("{} 동시 호출 상한이 찼다", DEPENDENCY);
+            log.warn("{} 동시 호출 상한이 찼다", bulkhead.getName());
             throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
         } catch (HttpClientErrorException.Unauthorized e) {
             throw new BusinessException(CommonErrorCode.UNAUTHENTICATED);
         } catch (HttpClientErrorException e) {
             // 400(계약 어긋남) · 403 · 404(경로 없음 · 배포 순서 어긋남)는 모두 연동 오류다 — 조용히 "없음" 으로 읽으면 모든 장바구니가 판매 종료로 보인다
-            throw InternalCallFailures.integrationError(DEPENDENCY, OPERATION, e);
+            throw InternalCallFailures.integrationError(circuitBreaker.getName(), OPERATION, e);
         } catch (RestClientException e) {
             if (InternalCallFailures.isUnreadableResponse(e)) {
-                throw InternalCallFailures.unreadableResponse(DEPENDENCY, OPERATION, e);
+                throw InternalCallFailures.unreadableResponse(circuitBreaker.getName(), OPERATION, e);
             }
-            throw InternalCallFailures.unavailable(DEPENDENCY, OPERATION, e);
+            throw InternalCallFailures.unavailable(circuitBreaker.getName(), OPERATION, e);
         }
         if (options != null) {
             options.items().forEach(option -> byId.put(requireReadable(optionIds, option), option));

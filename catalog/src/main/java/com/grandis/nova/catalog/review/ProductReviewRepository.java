@@ -6,10 +6,16 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 public interface ProductReviewRepository extends JpaRepository<ProductReview, UUID> {
+
+    /** 그 주문상품들 중 이 회원이 리뷰를 쓴 것. */
+    @Query("select r.orderItemId from ProductReview r where r.customerId = :customerId and r.orderItemId in :orderItemIds")
+    List<UUID> findReviewedOrderItemIds(@Param("customerId") UUID customerId, @Param("orderItemIds") Collection<UUID> orderItemIds);
 
     /** 작성자 본인의 리뷰만. 남의 리뷰는 없는 것과 같다(404). */
     Optional<ProductReview> findByIdAndCustomerId(UUID id, UUID customerId);

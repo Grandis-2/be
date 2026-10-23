@@ -12,6 +12,7 @@ import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.preorder.Preorders;
+import com.grandis.nova.preorder.preorder.StageCondition;
 import com.grandis.nova.preorder.syncjob.SyncAttemptReader;
 import com.grandis.nova.preorder.syncjob.SyncJobSnapshot;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
@@ -25,8 +26,11 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.EnumSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -55,18 +59,36 @@ public class PreorderQueryService {
         this.clock = clock;
     }
 
-    /** 내 예약 목록(최신순). 한 건 더 읽어 다음 페이지가 있는지 본다. */
-    public CursorPage<PreorderView.Summary> findMine(UUID customerId, PreorderStatus status, UUID productId,
+    /**
+     * 내 예약 목록(최신순). 한 건 더 읽어 다음 페이지가 있는지 본다.
+     *
+     * @param displayStatuses 이 화면 단계들 중 하나. 비었으면 거르지 않는다. 단계는 읽을 때의 시각으로 가른다 — 목록의 displayStatus 와 같다
+     */
+    public CursorPage<PreorderView.Summary> findMine(UUID customerId, PreorderStatus status,
+                                                     Set<PreorderDisplayStatus> displayStatuses, UUID productId,
                                                      String cursor, int size) {
         Position position = Position.of(cursor);
-        List<PreorderSnapshot> found = new ArrayList<>(preorders.findForCustomer(customerId, status, productId,
-                position.createdAt(), position.id(), size + 1));
+        Instant now = clock.instant();
+        List<PreorderSnapshot> found = new ArrayList<>(displayStatuses.isEmpty()
+                ? preorders.findForCustomer(customerId, status, productId, position.createdAt(), position.id(), size + 1)
+                : preorders.findForCustomerInStages(customerId, status, productId,
+                        stages(EnumSet.copyOf(displayStatuses), now), position.createdAt(), position.id(), size + 1));
         String nextCursor = trimToPage(found, size);
         Map<UUID, SyncJobStatus> registerStatuses = pendingRegisterStatuses(found);
-        Instant now = clock.instant();
         List<PreorderView.Summary> items = withBatches(found, (preorder, batch) -> new PreorderView.Summary(
                 preorder, batch, displayStatus(preorder, registerStatuses.get(preorder.id()), now)));
         return nextCursor == null ? CursorPage.last(items) : CursorPage.of(items, nextCursor);
+    }
+
+    /** 내 예약의 화면 단계별 수. 모든 단계를 단계 선언 순서로, 없는 단계는 0 으로 준다. 지금 시각으로 가르고, 문장 하나다. */
+    public Map<PreorderDisplayStatus, Long> countMine(UUID customerId) {
+        List<PreorderDisplayStatus> all = List.of(PreorderDisplayStatus.values());
+        List<Long> counts = preorders.countForCustomerByStage(customerId, stages(all, clock.instant()));
+        Map<PreorderDisplayStatus, Long> byStage = new LinkedHashMap<>();
+        for (int i = 0; i < all.size(); i++) {
+            byStage.put(all.get(i), counts.get(i));
+        }
+        return byStage;
     }
 
     /**
@@ -168,6 +190,12 @@ public class PreorderQueryService {
             case CANCELING -> PreorderDisplayStatus.CANCELING;
             case CANCELED -> PreorderDisplayStatus.CANCELED;
         };
+    }
+
+    private static List<StageCondition> stages(Collection<PreorderDisplayStatus> displayStatuses, Instant now) {
+        return displayStatuses.stream()
+                .map(displayStatus -> new StageCondition(statusOf(displayStatus), progressOf(displayStatus, now)))
+                .toList();
     }
 
     /** 그 화면 단계로 보이는 원장 상태. {@link #displayStatus} 를 거꾸로 푼 것이라 함께 고친다. */

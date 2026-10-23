@@ -4,9 +4,11 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CursorPage;
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.order.OrderErrorCode;
+import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderItem;
 import com.grandis.nova.order.order.domain.repository.AdminOrderFilter;
+import com.grandis.nova.order.order.domain.repository.CustomerOrderFilter;
 import com.grandis.nova.order.order.domain.repository.OrderPosition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.OrderIds;
@@ -14,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -30,6 +33,9 @@ import java.util.stream.Collectors;
 @Transactional(readOnly = true)
 public class OrderQueryService {
 
+    /** 배송 완료된 구매 주문을 한 번에 읽는 상한. 한 회원의 배송 완료 주문이 이보다 많으면 오래된 것은 빠진다. */
+    public static final int DELIVERED_PURCHASES_MAX = 500;
+
     private final OrderReader reader;
 
     public OrderQueryService(OrderReader reader) {
@@ -37,8 +43,8 @@ public class OrderQueryService {
     }
 
     /** 내 주문 목록(최신순). 한 건 더 읽어 다음 페이지가 있는지 본다. */
-    public CursorPage<OrderView.Summary> findMine(UUID customerId, String cursor, int size) {
-        List<Order> found = new ArrayList<>(reader.findByCustomer(customerId, OrderCursor.decode(cursor), size + 1));
+    public CursorPage<OrderView.Summary> findMine(UUID customerId, CustomerOrderFilter filter, String cursor, int size) {
+        List<Order> found = new ArrayList<>(reader.findByCustomer(customerId, filter, OrderCursor.decode(cursor), size + 1));
         boolean hasNext = found.size() > size;
         if (hasNext) {
             found.removeLast();
@@ -49,6 +55,16 @@ public class OrderQueryService {
         }
         Order last = found.getLast();
         return CursorPage.of(items, OrderCursor.encode(new OrderPosition(last.createdAt(), last.id())));
+    }
+
+    /** 내 상태별 주문 수. 모든 상태를 상태 선언 순서로, 주문이 없는 상태는 0 으로 준다. 목록의 조건과 상관없이 전부 센다. */
+    public Map<OrderStatus, Long> countMine(UUID customerId) {
+        Map<OrderStatus, Long> counts = reader.countByStatusOfCustomer(customerId);
+        Map<OrderStatus, Long> byStatus = new LinkedHashMap<>();
+        for (OrderStatus status : OrderStatus.values()) {
+            byStatus.put(status, counts.getOrDefault(status, 0L));
+        }
+        return byStatus;
     }
 
     /** 내 주문 하나. 남의 주문은 존재를 알리지 않는다(404). */
@@ -66,6 +82,26 @@ public class OrderQueryService {
                 .filter(found -> found.customerId().equals(customerId))
                 .orElseThrow(OrderQueryService::itemNotFound);
         return new OrderView.Item(order, item);
+    }
+
+    /**
+     * 내 배송 완료된 구매 주문(장바구니 · 바로 구매)의 주문상품. 주문은 최신순, 한 주문 안은 주문상품 id 순이다. 최근 {@link #DELIVERED_PURCHASES_MAX}
+     * 주문까지만 읽고, 그보다 많으면 truncated 다. catalog 가 리뷰를 쓸 수 있는 주문상품을 고를 때 묻는다 — 판정은 catalog 가 한다.
+     */
+    public DeliveredItems findDeliveredPurchaseItems(UUID customerId) {
+        List<Order> found = new ArrayList<>(reader.findDeliveredPurchases(customerId, DELIVERED_PURCHASES_MAX + 1));
+        boolean truncated = found.size() > DELIVERED_PURCHASES_MAX;
+        if (truncated) {
+            found.removeLast();
+        }
+        List<OrderView.Item> items = withItems(found).stream()
+                .flatMap(summary -> summary.items().stream().map(item -> new OrderView.Item(summary.order(), item)))
+                .toList();
+        return new DeliveredItems(items, truncated);
+    }
+
+    /** @param truncated 최근 {@link #DELIVERED_PURCHASES_MAX} 주문보다 오래된 주문이 더 있어 빠졌다 */
+    public record DeliveredItems(List<OrderView.Item> items, boolean truncated) {
     }
 
     public OffsetPage<OrderView.Summary> findForAdmin(AdminOrderFilter filter, int page, int size) {

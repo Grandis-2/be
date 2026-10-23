@@ -33,6 +33,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/promotions", "/api/v1/promotions/*").permitAll()     // 사전예약 홍보 목록 · 상세
                 .requestMatchers(HttpMethod.GET, "/api/v1/banners").permitAll()                                // 메인 배너
                 .requestMatchers(HttpMethod.GET, "/api/v1/reviews/mine").hasRole("USER")                        // 내 리뷰
+                .requestMatchers(HttpMethod.GET, "/api/v1/reviews/writable").hasRole("USER")                    // 리뷰를 쓸 수 있는 내 주문상품
                 .requestMatchers(HttpMethod.GET, "/api/v1/reviews").permitAll()                                 // 구매후기 모아보기
                 .requestMatchers("/api/v1/reviews", "/api/v1/reviews/*").hasRole("USER")                        // 리뷰 작성 · 수정 · 삭제 — 위 두 GET 규칙보다 뒤에 둔다
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")

@@ -4,6 +4,8 @@ import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.order.OrderErrorCode;
+import com.grandis.nova.order.client.catalog.CatalogReader;
+import com.grandis.nova.order.order.command.PlaceOrderCommand;
 import com.grandis.nova.order.client.preorder.PreorderPayability;
 import com.grandis.nova.order.client.preorder.PreorderReader;
 import com.grandis.nova.order.order.OrderLedger;
@@ -37,6 +39,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -58,7 +61,8 @@ class PlaceOrderServiceTest {
     OrderReader orderReader = mock(OrderReader.class);
     OutboxWriter outboxWriter = mock(OutboxWriter.class);
     PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
-    PlaceOrderService service = new PlaceOrderService(preorderReader, ledger, orderReader, outboxWriter, transactionManager);
+    CatalogReader catalog = mock(CatalogReader.class);
+    PlaceOrderService service = new PlaceOrderService(preorderReader, catalog, ledger, orderReader, outboxWriter, transactionManager);
 
     @BeforeEach
     void setUp() {
@@ -105,6 +109,65 @@ class PlaceOrderServiceTest {
         ArgumentCaptor<OrderDraft> draft = ArgumentCaptor.forClass(OrderDraft.class);
         verify(ledger).place(draft.capture(), any());
         assertThat(draft.getValue().lines()).singleElement().satisfies(line -> assertThat(line.modelName()).isNull());
+    }
+
+    // 사진은 예약 스냅샷에 없어 주문 때 catalog 의 그 옵션 사진을 남긴다(장바구니 · 바로 구매와 같은 값)
+    @Test
+    void preorderLineCarriesTheOptionImageFromCatalog() {
+        payable();
+        given(catalog.findImage(any(), eq(SESSION))).willReturn(Optional.of("https://img/preorder.webp"));
+        given(ledger.place(any(), any())).willReturn(order(OrderStatus.AWAITING_PAYMENT));
+
+        service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS);
+
+        ArgumentCaptor<OrderDraft> draft = ArgumentCaptor.forClass(OrderDraft.class);
+        verify(ledger).place(draft.capture(), any());
+        assertThat(draft.getValue().lines()).singleElement().satisfies(line -> assertThat(line.imageUrl()).isEqualTo("https://img/preorder.webp"));
+    }
+
+    // 사진은 표시용이라 catalog 가 응답하지 않거나 옵션을 돌려주지 않아도 주문은 만든다 — 사진만 비운다
+    @Test
+    void catalogFailureLeavesTheImageEmptyButPlacesTheOrder() {
+        payable();
+        given(catalog.findImage(any(), any())).willThrow(new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE))
+                .willReturn(Optional.empty());
+        given(ledger.place(any(), any())).willReturn(order(OrderStatus.AWAITING_PAYMENT));
+
+        assertThat(service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS).created()).isTrue();
+        assertThat(service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS).created()).isTrue();
+
+        ArgumentCaptor<OrderDraft> draft = ArgumentCaptor.forClass(OrderDraft.class);
+        verify(ledger, times(2)).place(draft.capture(), any());
+        assertThat(draft.getAllValues()).allSatisfy(placed ->
+                assertThat(placed.lines()).singleElement().satisfies(line -> assertThat(line.imageUrl()).isNull()));
+    }
+
+    // 사진 주소가 주문 줄이 담는 길이를 넘으면 사진만 비우고 주문은 만든다 — 경계 1,000자는 남긴다
+    @Test
+    void overlongImageIsDroppedButTheOrderIsPlaced() {
+        payable();
+        String longest = "h".repeat(PlaceOrderService.IMAGE_URL_MAX);
+        given(catalog.findImage(any(), any())).willReturn(Optional.of(longest + "x")).willReturn(Optional.of(longest))
+                .willThrow(new NullPointerException("예상 밖"));
+        given(ledger.place(any(), any())).willReturn(order(OrderStatus.AWAITING_PAYMENT));
+
+        service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS);
+        service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS);
+        assertThat(service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, OrderFixtures.ADDRESS).created()).as("예상 밖 오류도 주문은 만든다").isTrue();
+
+        ArgumentCaptor<OrderDraft> draft = ArgumentCaptor.forClass(OrderDraft.class);
+        verify(ledger, times(3)).place(draft.capture(), any());
+        assertThat(draft.getAllValues()).extracting(placed -> placed.lines().getFirst().imageUrl()).containsExactly(null, longest, null);
+    }
+
+    // 사진은 입력 검증을 지난 뒤에 묻는다 — 거절될 요청은 catalog 를 부르지 않는다
+    @Test
+    void rejectedInputDoesNotAskCatalogForTheImage() {
+        payable();
+        PlaceOrderCommand.Address blankName = new PlaceOrderCommand.Address(" ", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null);
+
+        assertThatThrownBy(() -> service.place(CUSTOMER_ID, SESSION, PREORDER_UUID, blankName)).isInstanceOf(IllegalArgumentException.class);
+        verify(catalog, never()).findImage(any(), any());
     }
 
     @Test
@@ -186,6 +249,7 @@ class PlaceOrderServiceTest {
 
         assertThat(result.created()).isFalse();
         assertThat(result.order()).isEqualTo(stored);
+        verify(catalog, never()).findImage(any(), any());
     }
 
     // 받은 토큰을 preorder 호출까지 그대로 넘긴다.

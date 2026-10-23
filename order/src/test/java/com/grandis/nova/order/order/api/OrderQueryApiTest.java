@@ -149,6 +149,83 @@ class OrderQueryApiTest {
         }
     }
 
+    /* 상태를 여러 번 주면 그중 하나인 주문만, 최신순으로. counts 는 조건과 상관없이 내 주문 전부다. */
+    @Test
+    void filtersByStatusesAndCountsAllMyOrders() throws Exception {
+        Order shipped = orders.place(customerId);
+        Order delivered = orders.place(customerId);
+        Order canceled = orders.place(customerId);
+        orders.place(customerId);
+        setStatus(shipped, "SHIPPED");
+        setStatus(delivered, "DELIVERED");
+        setStatus(canceled, "CANCELED");
+        setStatus(orders.place(fixtures.customer()), "DELIVERED");
+
+        mockMvc.perform(get("/api/v1/orders").param("status", "SHIPPED", "DELIVERED").with(me()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[*].orderId", contains(delivered.id().toString(), shipped.id().toString())))
+                .andExpect(jsonPath("$.data.counts.AWAITING_PAYMENT").value(1))
+                .andExpect(jsonPath("$.data.counts.SHIPPED").value(1))
+                .andExpect(jsonPath("$.data.counts.DELIVERED").value(1))
+                .andExpect(jsonPath("$.data.counts.CANCELED").value(1))
+                .andExpect(jsonPath("$.data.counts.READY_TO_SHIP").value(0))
+                .andExpect(jsonPath("$.data.counts.length()").value(9));
+    }
+
+    /* 커서는 같은 조건 안에서 이어 읽는다 — 조건 밖의 주문이 사이에 있어도 건너뛴다. */
+    @Test
+    void cursorContinuesWithinTheFilter() throws Exception {
+        Order oldest = orders.place(customerId);
+        orders.place(customerId);
+        Order middle = orders.place(customerId);
+        orders.place(customerId);
+        setStatus(oldest, "DELIVERED");
+        setStatus(middle, "DELIVERED");
+
+        String firstPage = mockMvc.perform(get("/api/v1/orders").param("status", "DELIVERED").param("size", "1").with(me()))
+                .andExpect(jsonPath("$.data.items[*].orderId", contains(middle.id().toString())))
+                .andReturn().getResponse().getContentAsString();
+        String cursor = JsonPath.read(firstPage, "$.data.nextCursor");
+
+        mockMvc.perform(get("/api/v1/orders").param("status", "DELIVERED").param("size", "1").param("cursor", cursor).with(me()))
+                .andExpect(jsonPath("$.data.items[*].orderId", contains(oldest.id().toString())))
+                .andExpect(jsonPath("$.data.nextCursor").isEmpty());
+    }
+
+    /* from 은 그 시각 이후(같은 시각 포함) 주문만. counts 는 기간과 상관없다. */
+    @Test
+    void fromKeepsOrdersAtOrAfterTheInstant() throws Exception {
+        Order old = orders.place(customerId);
+        Order atBoundary = orders.place(customerId);
+        Order recent = orders.place(customerId);
+        setCreatedAt(old, "2026-01-31T23:59:59.999999Z");
+        setCreatedAt(atBoundary, "2026-02-01T00:00:00Z");
+        setCreatedAt(recent, "2026-03-01T00:00:00Z");
+
+        mockMvc.perform(get("/api/v1/orders").param("from", "2026-02-01T00:00:00Z").with(me()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[*].orderId", contains(recent.id().toString(), atBoundary.id().toString())))
+                .andExpect(jsonPath("$.data.counts.AWAITING_PAYMENT").value(3));
+    }
+
+    @Test
+    void unknownStatusOrOutOfRangeFromIsBadRequest() throws Exception {
+        mockMvc.perform(get("/api/v1/orders").param("status", "SHIPPING").with(me()))
+                .andExpect(status().isBadRequest());
+        // 빈 원소가 섞이면 400. status= 하나뿐이면 빈 묶음이라 보내지 않은 것과 같다(조건 없음)
+        orders.place(customerId);
+        mockMvc.perform(get("/api/v1/orders").param("status", "").with(me())).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items", hasSize(1)));
+        for (String[] blank : List.of(new String[]{"SHIPPED", ""}, new String[]{"SHIPPED,"})) {
+            mockMvc.perform(get("/api/v1/orders").param("status", blank).with(me()))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.details.violations[0].field").value("status"));
+        }
+        mockMvc.perform(get("/api/v1/orders").param("from", "+10000-01-01T00:00:00Z").with(me()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.details.violations[0].field").value("from"));
+    }
+
     @Test
     void detailHasItemsAndHistoryButNoInternalFields() throws Exception {
         Order order = orders.place(customerId);
@@ -223,6 +300,16 @@ class OrderQueryApiTest {
     @Test
     void anonymousIsUnauthorized() throws Exception {
         mockMvc.perform(get("/api/v1/orders")).andExpect(status().isUnauthorized());
+    }
+
+    private void setStatus(Order order, String status) {
+        jdbcTemplate.update("UPDATE orders SET status = ? WHERE id = ?", status, bytes(order.id()));
+    }
+
+    /** DB 는 UTC 벽시계 시각을 담는다 — Timestamp 로 넣으면 JVM 시간대만큼 어긋난다. */
+    private void setCreatedAt(Order order, String createdAt) {
+        jdbcTemplate.update("UPDATE orders SET created_at = ? WHERE id = ?",
+                java.time.LocalDateTime.ofInstant(java.time.Instant.parse(createdAt), java.time.ZoneOffset.UTC), bytes(order.id()));
     }
 
     private RequestPostProcessor me() {

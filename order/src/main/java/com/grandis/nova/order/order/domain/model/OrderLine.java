@@ -19,7 +19,8 @@ import java.util.UUID;
  * 코드 포인트로 센다.
  *
  * @param modelName 주문 때 상품 모델명. 장바구니 · 바로 구매 · 드로우 당첨만 싣고, 사전예약 · 이 칸 전에 만든 주문은 null 이다
- * @param imageUrl  주문 때 그 옵션의 사진(catalog 의 imageUrl). 장바구니 · 바로 구매 · 드로우 당첨만 싣고, 사전예약 · 이 칸 전에 만든 주문 · 사진이 없는 옵션은 null 이다
+ * @param imageUrl  주문 때 그 옵션의 사진(catalog 의 imageUrl, 드로우 당첨은 회차 사진). 이 칸 전에 만든 주문 · 사진을 남기기 전에 만든 사전예약 주문 · 사진이 없는 옵션 ·
+ *                  catalog 에서 사진을 못 받은 사전예약 주문은 null 이다
  */
 public record OrderLine(
         UUID productId,

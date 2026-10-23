@@ -1,5 +1,9 @@
 package com.grandis.nova.order.order.api;
 
+import com.grandis.nova.common.web.ApiResponse;
+import com.grandis.nova.order.client.catalog.CatalogClient;
+import com.grandis.nova.order.client.catalog.CatalogOption;
+import com.grandis.nova.order.client.catalog.CatalogOptions;
 import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.order.client.preorder.PreorderClient;
 import com.grandis.nova.common.testing.Concurrently;
@@ -31,6 +35,8 @@ import java.util.UUID;
 
 import static com.grandis.nova.order.support.OrderFixtures.bytes;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -62,6 +68,9 @@ class PlaceOrderApiTest {
     @MockitoBean
     PreorderClient preorderClient;
 
+    @MockitoBean
+    CatalogClient catalogClient;
+
     OrderFixtures fixtures;
     PreorderProduct product;
     UUID customerId;
@@ -75,6 +84,12 @@ class PlaceOrderApiTest {
         customerId = fixtures.customer();
         preorderId = OrderFixtures.preorderId();
         token = OrderFixtures.unique();
+        given(catalogClient.getOptions(any(), any())).willAnswer(invocation -> {
+            UUID optionId = invocation.<java.util.Collection<UUID>>getArgument(0).iterator().next();
+            return ApiResponse.ok(new CatalogOptions(List.of(new CatalogOption(optionId, product.productId(), OrderFixtures.PRODUCT_TITLE, null,
+                    OrderFixtures.OPTION_TITLE, "SKU", OrderFixtures.UNIT_PRICE, "ACTIVE", "PREORDER", "ACTIVE", true, true,
+                    new CatalogOption.Warranty(false, java.math.BigDecimal.ZERO), "https://img/preorder-0.webp", OrderFixtures.UNIT_PRICE))));
+        });
     }
 
     @Test
@@ -92,8 +107,8 @@ class PlaceOrderApiTest {
                 .andExpect(jsonPath("$.data.items[0].productTitle").value(OrderFixtures.PRODUCT_TITLE))
                 .andExpect(jsonPath("$.data.items[0].unitPrice").value(1250000))
                 .andExpect(jsonPath("$.data.items[0].quantity").value(1))
-                // 사전예약은 접수 때의 preorder 스냅샷을 옮긴다 — 사진 칸이 없어 비운다(주문 때 catalog 사진을 섞지 않는다)
-                .andExpect(jsonPath("$.data.items[0].imageUrl").value(org.hamcrest.Matchers.nullValue()))
+                // 이름 · 단가는 접수 때의 preorder 스냅샷, 사진은 예약 스냅샷에 없어 주문 때 catalog 의 그 옵션 사진이다
+                .andExpect(jsonPath("$.data.items[0].imageUrl").value("https://img/preorder-0.webp"))
                 .andExpect(jsonPath("$.data.shipTo.name").value("홍길동"))
                 .andExpect(jsonPath("$.data.shipTo.line2").doesNotExist())
                 .andExpect(jsonPath("$.data.createdAt").isNotEmpty())

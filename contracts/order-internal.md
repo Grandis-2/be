@@ -3,7 +3,8 @@
 order 와 catalog 가 서로 부르는 내부 API 를 담는다(preorder 가 부르는 예약 취소 가능 여부는 여기 없다). 양쪽 구현의 기준이고, 문서와 어긋나는 쪽이 고친다.
 
 - catalog → order: `GET /internal/order-items/{orderItemId}` — 리뷰 작성용 주문상품. order 가 응답을 만들고(`InternalOrderItemController` · `OrderQueryService.findItem`), catalog 의 리뷰 작성이 소비한다.
-- order → catalog: `GET /internal/options` — 장바구니용 옵션 일괄 조회. catalog 가 응답을 만들고(`InternalOptionController` · `ProductOptionsQueryService.findOptions`), order 의 장바구니가 소비한다.
+- catalog → order: `GET /internal/order-items/delivered` — 리뷰를 쓸 수 있는 주문상품 목록의 재료. order 가 응답을 만들고(`InternalOrderItemController` · `OrderQueryService.findDeliveredPurchaseItems`), catalog 의 리뷰 작성 가능 목록이 소비한다.
+- order → catalog: `GET /internal/options` — 옵션 일괄 조회. catalog 가 응답을 만들고(`InternalOptionController` · `ProductOptionsQueryService.findOptions`), order 의 장바구니 · 바로 구매 · 사전예약 주문 생성(사진만) · 드로우 회차 만들기가 소비한다.
 - catalog → order: `GET /internal/draws/gift-products/{productId}` — 상품 삭제의 드로우 증정품 확인. order 가 응답을 만들고(`InternalDrawController` · `DrawQueryService.giftInProgress`), catalog 의 상품 삭제(`ProductDeleteService`)가 소비한다.
 - catalog → order: `GET /internal/stocks` — 옵션별 남은 수량. order 가 응답을 만들고(`InternalStockController` · `StockQueryService.findAvailable`), catalog 의 상품 목록(품절) · 상세(남은 수량) · 관리자 증정품 후보(수량)가 소비한다. **토큰 없이 부른다.** 판매 준비(재고 행 유무)는 이 API 가 아니라 이벤트로 받는다(`order-catalog-events.md`).
 
@@ -71,7 +72,55 @@ BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, �
 
 5xx 나 응답 지연은 catalog 가 회원에게 "잠시 후 다시" 로 답한다(catalog 쪽 읽기 1초).
 
-## `GET /internal/options` — 장바구니용 옵션 일괄 조회 (내부 전용)
+## `GET /internal/order-items/delivered` — 배송 완료된 구매 주문의 주문상품 (내부 전용)
+
+**노출 · 인증.** 위 주문상품 API 와 같다 — 회원(USER) 토큰을 그대로 싣고, ADMIN 은 403, 토큰이 없으면 401 이다. 토큰 주인의 것만 돌려준다.
+
+**호출 주체.**
+
+| 언제 | 누가 | 실린 JWT | 목적 |
+| --- | --- | --- | --- |
+| 회원이 "리뷰 쓰기" 목록을 볼 때마다(캐시하지 않음) | catalog 리뷰 작성 가능 목록 | 회원(USER) | 리뷰를 쓸 수 있는 주문상품 후보 |
+
+**요청.** 본문 · 파라미터 없음.
+
+**응답 200.**
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "orderItemId": "0199a3f3-1b20-7d40-a051-6f7081920a1b",
+        "orderId": "0199a3f3-1b1f-7d3f-a050-6f7081920a1a",
+        "productId": "0199a3f2-8a10-7b21-9c32-4d5e6f708192",
+        "optionId": "0199a3f2-8a11-7c22-8d33-5e6f70819203",
+        "productTitle": "갤럭시 S26",
+        "optionTitle": "블랙 / 256GB",
+        "imageUrl": "https://…/a.webp",
+        "quantity": 1,
+        "lineAmount": 1250000,
+        "orderedAt": "2026-10-06T06:00:00Z"
+      }
+    ],
+    "truncated": false
+  }
+}
+```
+
+| 칸 | 타입 | 뜻 |
+| --- | --- | --- |
+| `items` | array | 배송 완료(DELIVERED)된 장바구니 · 바로 구매(CART · BUY_NOW) 주문의 주문상품. 주문 최신순, 한 주문 안은 주문상품 id 순 |
+| `items[].productTitle` · `optionTitle` | string | 주문 당시 이름(스냅샷) |
+| `items[].imageUrl` | string \| null | 주문 때 그 옵션의 사진. 사진을 남기기 전에 만든 주문 · 사진이 없는 옵션은 null |
+| `items[].lineAmount` | number | 단가 × 수량 + 보증가 × 보증 수량 |
+| `items[].orderedAt` | string | 주문 시각(`orders.created_at`) |
+| `truncated` | boolean | 최근 500 주문까지만 읽는다. 배송 완료 주문이 그보다 많아 오래된 것이 빠졌으면 true |
+
+**판정은 catalog 가 한다.** 출처 · 상태로 거르는 것까지만 order 가 하고, 이미 리뷰를 쓴 주문상품 · 사전예약 상품을 빼는 것은 catalog 가 한다.
+
+## `GET /internal/options` — 옵션 일괄 조회 (내부 전용)
 
 **노출.** 위 주문상품 API 와 같은 조건이다 — `/internal/**` 는 공개 라우팅에 두지 않고, OpenAPI 문서에서도 기본으로 빠진다. 이 엔드포인트는 USER 토큰으로 **비공개 · 판매 중지 상품까지** 돌려주므로 공개 경로 차단은 운영 필수 조건이다.
 
@@ -81,6 +130,7 @@ BUY_NOW 는 상세페이지 바로 구매 주문이다(장바구니와 무관, �
 | --- | --- | --- | --- |
 | 장바구니 조회 · 담기 · 장바구니 주문 생성 | order 장바구니 | 회원(USER) | 줄마다 표시할 상품 · 옵션 정보와 "살 수 있는가" 를 가릴 사실, 주문 스냅샷(가격 · 이름 · 모델명 · 사진 · 보증) |
 | 바로 구매 주문 생성 | order 주문 | 회원(USER) | 장바구니 주문과 같은 판정 · 주문 스냅샷 |
+| 사전예약 주문 생성 | order 주문 | 회원(USER) | 주문 내역에 남길 그 옵션의 사진(`imageUrl`)만 쓴다. 이름 · 단가는 예약 스냅샷이고, 이 호출이 실패해도 주문은 만들고 사진만 비운다 |
 | 럭키 드로우 회차 만들기 | order 드로우(관리자) | 관리자(ADMIN) | 증정품 옵션이 줄 수 있는 것인가, 회차 스냅샷(이름 · 모델명 · 사진) |
 
 **인증.** 호출자가 받은 회원 토큰을 그대로 싣는다(`Authorization: Bearer {accessToken}`). catalog 는 `common:security` 필터로 검증하고 USER · ADMIN 을 받는다(`/internal/**` 규칙 — 그 밖의 역할은 403).
