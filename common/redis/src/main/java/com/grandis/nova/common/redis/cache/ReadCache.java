@@ -23,6 +23,7 @@ import tools.jackson.databind.json.JsonMapper;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -508,9 +509,11 @@ public final class ReadCache {
     }
 
     /**
-     * 한 요청이 쓰는 세대들의 지금 번호를 MGET 한 번으로 읽는다 — 홍보 상세처럼 세대 셋(홍보 · 상품 · 회차)을 차례로 GET 하던 왕복을 하나로 줄인다.
-     * 세대마다의 뒤처리(없으면 만들기 · 미룬 올리기 · 복원 감지 · 본 번호와 확인 시각)는 {@link #generation} 과 같다. 받은 묶음은 그 요청 안에서만 쓴다 —
-     * 요청을 넘겨 다시 쓰면 다른 인스턴스의 올리기를 놓친다. 끈 캐시이거나 Redis 에서 못 읽은 세대는 비어 있다(그 세대의 조회는 우회).
+     * 한 요청이 쓰는 세대들의 지금 번호를 MGET 한 번으로 읽는다 — 홍보 상세처럼 세대 여럿(홍보 · 상품 · 회차)을 차례로 GET 하던 왕복을 하나로 줄인다.
+     * 세대마다의 뒤처리(없으면 만들기 · 미룬 올리기 · 복원 감지 · 본 번호와 확인 시각)는 {@link #generation} 과 같고, 숫자가 아닌 값은 하나씩 읽을 때처럼
+     * 차단기 실패로 센다. 다른 점은 Redis 실패를 MGET 한 번으로 센다는 것뿐이다(하나씩 읽으면 세대 수만큼).
+     * 받은 묶음은 그 요청이 쓴다 — 요청을 넘겨 다시 쓰면 다른 인스턴스의 올리기를 놓친다. 예외로 그 요청이 맡긴 미리 갱신의 loader 가 묶음을 들고 가지만,
+     * 갱신은 돌기 전에 지금 세대를 다시 읽어 같을 때만 원천을 읽으므로 그 번호는 지금 번호와 같다. 끈 캐시이거나 Redis 에서 못 읽은 세대는 비어 있다(그 세대의 조회는 우회).
      */
     public Generations generations(String... generations) {
         Map<String, Long> numbers = new LinkedHashMap<>();
@@ -520,37 +523,32 @@ public final class ReadCache {
             }
             return new Generations(numbers);
         }
-        if (!pendingBumps.isEmpty()) {
-            // 미룬 올리기가 있으면 묶지 않고 세대마다 읽는다(드문 갈래) — 한 세대를 읽다 다른 세대의 미룬 올리기를 해도, 그 세대는 올린 뒤 번호로 읽게
-            for (String generation : generations) {
-                numbers.put(generation, readGeneration(generation));
-            }
-            return new Generations(numbers);
-        }
         Map<String, Long> seenBefore = new HashMap<>();
         for (String generation : generations) {
             seenBefore.put(generation, highestGenerations.get(generation));
         }
         Instant asked = clock.instant();
-        List<String> keys = java.util.Arrays.stream(generations).map(this::generationKey).toList();
-        List<String> values = call(() -> redis.opsForValue().multiGet(keys));
+        List<String> values = null;
+        if (pendingBumps.isEmpty()) {
+            List<String> keys = Arrays.stream(generations).map(this::generationKey).toList();
+            values = call(() -> redis.opsForValue().multiGet(keys));
+        }
+        if (!pendingBumps.isEmpty()) {
+            // 미룬 올리기가 있으면(묶어 읽는 사이 생긴 것 포함) 묶지 않고 세대마다 읽는다(드문 갈래) — 한 세대를 읽다 다른 세대의 미룬 올리기를 해도,
+            // 그 세대는 올린 뒤 번호로 읽게
+            for (String generation : generations) {
+                numbers.put(generation, readGeneration(generation));
+            }
+            return new Generations(numbers);
+        }
         for (int i = 0; i < generations.length; i++) {
             String generation = generations[i];
             String value = values == null ? null : values.get(i);
-            Long read = values == null ? null : value != null ? parsedGeneration(generation, value) : call(() -> createGeneration(generation));
+            Long read = values == null ? null
+                    : value != null ? call(() -> Long.parseLong(value)) : call(() -> createGeneration(generation));
             numbers.put(generation, settle(generation, seenBefore.get(generation), asked, read));
         }
         return new Generations(numbers);
-    }
-
-    /** 세대 값이 숫자가 아니면(키를 손댐) 못 읽은 것으로 본다 — 하나씩 읽을 때(call 안의 파싱 실패)와 같다. */
-    private Long parsedGeneration(String generation, String value) {
-        try {
-            return Long.parseLong(value);
-        } catch (NumberFormatException e) {
-            log.warn("읽기 캐시 Redis 호출 실패 — 캐시 없이 간다: 세대 값이 숫자가 아니다 generation={} value={}", generation, value);
-            return null;
-        }
     }
 
     /** 한 요청이 먼저 읽은 세대 번호들({@link #generations}). 그 요청 안에서만 쓴다. */
