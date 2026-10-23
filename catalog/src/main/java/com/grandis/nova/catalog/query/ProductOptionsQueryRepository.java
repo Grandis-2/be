@@ -35,23 +35,29 @@ class ProductOptionsQueryRepository {
         this.jdbc = jdbc;
     }
 
-    /** 상품 하나와 그 옵션 전부(만든 순서). 상품이 없으면 비어 있다. 옵션이 없는 상품은 옵션 목록이 비어 있다(LEFT JOIN). */
+    /**
+     * 상품 하나와 그 옵션 전부(만든 순서), 상품 문서(사진을 여기서 계산한다). 상품이 없으면 비어 있다. 옵션이 없는 상품은 옵션 목록이 비어 있다(LEFT JOIN).
+     * 문서는 첫 행에서만 읽는다 — 상품 칸이라 행마다 같다.
+     */
     Optional<ProductWithOptions> findProductWithOptions(UUID productId) {
         ProductRow[] product = {null};
+        String[] document = {null};
         List<OptionRow> options = new ArrayList<>();
-        jdbc.query("SELECT " + PRODUCT_COLUMNS + ", o.id AS option_id, o.sku, o.title AS option_title, o.price, o.status AS option_status"
+        jdbc.query("SELECT " + PRODUCT_COLUMNS + ", p.options AS document, o.id AS option_id, o.sku, o.title AS option_title, o.price,"
+                        + " o.status AS option_status, o.combination_key"
                         + " FROM products p LEFT JOIN product_options o ON o.product_id = p.id"
                         + " WHERE p.id = :productId ORDER BY o.created_at, o.id",
                 new MapSqlParameterSource("productId", UuidBinary.toBytes(productId)), (RowCallbackHandler) rs -> {
                     if (product[0] == null) {
                         product[0] = product(rs);
+                        document[0] = rs.getString("document");
                     }
                     if (rs.getBytes("option_id") != null) {
                         options.add(new OptionRow(UuidBinary.fromBytes(rs.getBytes("option_id")), rs.getString("sku"), rs.getString("option_title"),
-                                rs.getBigDecimal("price"), SaleStatus.valueOf(rs.getString("option_status")), null));
+                                rs.getBigDecimal("price"), SaleStatus.valueOf(rs.getString("option_status")), rs.getString("combination_key")));
                     }
                 });
-        return Optional.ofNullable(product[0]).map(found -> new ProductWithOptions(found, List.copyOf(options)));
+        return Optional.ofNullable(product[0]).map(found -> new ProductWithOptions(found, document[0], List.copyOf(options)));
     }
 
     /**
@@ -83,11 +89,11 @@ class ProductOptionsQueryRepository {
                       int discountRate) {
     }
 
-    /** @param combinationKey 옵션 하나 조회(findOptionsWithProducts)에서만 싣는다 */
     record OptionRow(UUID id, String sku, String title, BigDecimal price, SaleStatus status, String combinationKey) {
     }
 
-    record ProductWithOptions(ProductRow product, List<OptionRow> options) {
+    /** @param document 상품의 옵션 문서(JSON) — 옵션마다 사진을 여기서 계산한다 */
+    record ProductWithOptions(ProductRow product, String document, List<OptionRow> options) {
     }
 
     /** @param document 상품의 옵션 문서(JSON) — 보증 · 사진을 여기서 계산한다. 상품마다 한 행에만 있고 나머지 행은 null 이다 */

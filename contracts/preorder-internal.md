@@ -33,8 +33,8 @@
     "visible": false,
     "registrationCompleted": true,
     "options": [
-      { "optionId": "0199a3f2-8a11-7c22-8d33-5e6f70819203", "sku": "BLACK-256", "title": "블랙 / 256GB", "price": 1200000, "status": "ACTIVE" },
-      { "optionId": "0199a3f2-8a11-7c22-8d33-5e6f70819204", "sku": "BLACK-512", "title": "블랙 / 512GB", "price": 1400000, "status": "PAUSED" }
+      { "optionId": "0199a3f2-8a11-7c22-8d33-5e6f70819203", "sku": "BLACK-256", "title": "블랙 / 256GB", "price": 1200000, "status": "ACTIVE", "imageUrl": "https://cdn.example.com/products/black-0.png" },
+      { "optionId": "0199a3f2-8a11-7c22-8d33-5e6f70819204", "sku": "BLACK-512", "title": "블랙 / 512GB", "price": 1400000, "status": "PAUSED", "imageUrl": "https://cdn.example.com/products/black-0.png" }
     ]
   },
   "error": null,
@@ -56,6 +56,7 @@
 | `options[].title` | string | 옵션 표시명. 스냅샷 원본 |
 | `options[].price` | number(정수 원) | 회원이 내는 값 — 정가에 상품 할인율을 걸어 100원 단위로 버린 할인가(할인율 0 이면 정가). 스냅샷 원본 |
 | `options[].status` | `ACTIVE` \| `PAUSED` | 옵션 판매 상태 |
+| `options[].imageUrl` | string \| null | 그 옵션이 고른 색상의 첫 장(그 색상에 사진이 없으면 상품 썸네일) — 옵션 일괄 조회(contracts/order-internal.md)의 `imageUrl` 과 같은 값. 사진이 없으면 null. 표시용이라 판정에 쓰지 않는다. preorder 는 예약 목록 · 상세의 사진으로 쓴다(`PreorderOptionImages`) |
 
 `visible` · `status` · `registrationCompleted` 와 `options[]`(판매 상태 · 가격)는 **한 문장**으로 읽어 같은 시점에서 나온다(`ProductOptionsQueryRepository.findProductWithOptions` — 상품에 옵션을 붙인 조회, 트랜잭션 없음). 노출 칸과 옵션은 서로 다른 트랜잭션(관리자 공개 전환 · 판매 중지 · preorder/order 의 등록 이벤트 처리)이 바꾸지만, READ COMMITTED 에서 따로 읽으면 두 문장 사이에 커밋돼 한순간도 없던 조합(공개 · 준비 · 옵션 판매 중)이 나온다. 접수 판정이 노출 칸과 `options[].status` 를 같이 쓰므로 한 문장이어야 한다. 칸을 더할 때도 같은 문장에 더한다.
 

@@ -39,9 +39,10 @@ public class ProductOptionsQueryService {
                 .filter(candidate -> !candidate.product().deleted())
                 .orElseThrow(() -> new BusinessException(CatalogErrorCode.PRODUCT_NOT_FOUND));
         ProductOptionsQueryRepository.ProductRow product = found.product();
+        ProductOptions document = ProductOptions.parse(found.document());
         List<ProductOptionsView.Option> optionViews = found.options().stream()
                 .map(option -> new ProductOptionsView.Option(option.id(), option.sku(), option.title(), Discount.apply(option.price(), product.discountRate()),
-                        option.status()))
+                        option.status(), document.imageUrlOf(OptionCombination.valueIdsOf(option.combinationKey()))))
                 .toList();
         return new ProductOptionsView(product.id(), product.title(), product.saleMode(), product.status(), product.visible(), product.ready(), optionViews);
     }

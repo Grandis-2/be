@@ -32,7 +32,10 @@ public record ProductOptionsView(
         options = options == null ? List.of() : List.copyOf(options);
     }
 
-    /** @param price 회원이 내는 값(정수 원) — 정가에 상품 할인율을 건 할인가. 스냅샷 원본 */
-    public record Option(UUID optionId, String sku, String title, BigDecimal price, SaleStatus status) {
+    /**
+     * @param price    회원이 내는 값(정수 원) — 정가에 상품 할인율을 건 할인가. 스냅샷 원본
+     * @param imageUrl 그 옵션이 고른 색상의 첫 장(없으면 상품 썸네일) — 옵션 일괄 조회의 imageUrl 과 같은 값. 사진이 없으면 null
+     */
+    public record Option(UUID optionId, String sku, String title, BigDecimal price, SaleStatus status, String imageUrl) {
     }
 }
