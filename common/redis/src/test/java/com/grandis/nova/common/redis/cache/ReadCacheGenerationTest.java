@@ -35,12 +35,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DisplayName("Redis 읽기 캐시 — 세대 키가 사라지거나 되돌아갈 때")
 class ReadCacheGenerationTest {
 
-    private static final GenericContainer<?> REDIS = new GenericContainer<>("valkey/valkey:9").withExposedPorts(6379);
+    private static final GenericContainer<?> REDIS = TestRedis.container();
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final String GENERATION = "svc:cache:gen:products";
 
     static LettuceConnectionFactory connections;
+    static LettuceConnectionFactory fixtureConnections;
     static StringRedisTemplate redis;
+    /** {@code @BeforeEach} 의 비우기용. 제한 시간이 넉넉하다 — {@link TestRedis} */
+    static StringRedisTemplate fixture;
 
     record Item(String name) {
     }
@@ -53,17 +56,20 @@ class ReadCacheGenerationTest {
         connections.afterPropertiesSet();
         connections.start();
         redis = new StringRedisTemplate(connections);
+        fixtureConnections = TestRedis.fixtureConnections(REDIS);
+        fixture = new StringRedisTemplate(fixtureConnections);
     }
 
     @AfterAll
     static void stop() {
+        fixtureConnections.destroy();
         connections.destroy();
         REDIS.stop();
     }
 
     @BeforeEach
     void flush() {
-        redis.getConnectionFactory().getConnection().serverCommands().flushAll();
+        fixture.getConnectionFactory().getConnection().serverCommands().flushAll();
     }
 
     @Test

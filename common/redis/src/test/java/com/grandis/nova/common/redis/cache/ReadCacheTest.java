@@ -38,11 +38,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ReadCacheTest {
 
     /** 운영과 같은 Valkey 9 — 메모리 계산 기준(StoreBudget.charge)을 이 엔진으로 잰다. */
-    private static final GenericContainer<?> REDIS = new GenericContainer<>("valkey/valkey:9").withExposedPorts(6379);
+    private static final GenericContainer<?> REDIS = TestRedis.container();
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     static LettuceConnectionFactory connections;
+    static LettuceConnectionFactory fixtureConnections;
     static StringRedisTemplate redis;
+    /** {@code @BeforeEach} 의 준비(비우기 · 세대 심기)용. 제한 시간이 넉넉하다 — {@link TestRedis} */
+    static StringRedisTemplate fixture;
 
     ReadCache cache;
     ReadCache.Spec<Item> items;
@@ -70,20 +73,23 @@ class ReadCacheTest {
         connections.afterPropertiesSet();
         connections.start();
         redis = new StringRedisTemplate(connections);
+        fixtureConnections = TestRedis.fixtureConnections(REDIS);
+        fixture = new StringRedisTemplate(fixtureConnections);
     }
 
     @AfterAll
     static void stop() {
+        fixtureConnections.destroy();
         connections.destroy();
         REDIS.stop();
     }
 
     @BeforeEach
     void setUp() {
-        redis.getConnectionFactory().getConnection().serverCommands().flushAll();
+        fixture.getConnectionFactory().getConnection().serverCommands().flushAll();
         // 세대를 0 에서 세게 심어 둔다 — 없는 세대는 지금 시각으로 시작하므로(복원 · 삭제 대비) 몇 번 올렸는지 세는 시험은 시작점을 정해 둔다
         for (String generation : List.of("svc:cache:gen:products", "svc:cache:gen:reviews", "svc:cache:gen:off", "other:cache:gen:products")) {
-            redis.opsForValue().set(generation, "0");
+            fixture.opsForValue().set(generation, "0");
         }
         cache = new ReadCache(redis, JSON, "svc");
         items = cache.spec("item", Item.class, Duration.ofSeconds(30));
@@ -561,6 +567,8 @@ class ReadCacheTest {
         template.resume.countDown();
         holder.join(10_000);
         other.join(10_000);
+        assertThat(holder.isAlive()).isFalse();
+        assertThat(other.isAlive()).isFalse();
 
         assertThat(((Item) first.get()).name()).isEqualTo("loaded");
         assertThat(((Item) second.get()).name()).as("기다린 쪽은 자리 주인의 값을 받는다").isEqualTo("loaded");

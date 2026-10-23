@@ -26,14 +26,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Redis 를 못 읽을 때 이 인스턴스의 사본으로 답하는 캐시(ReadCache.OutageCopies). */
 class ReadCacheOutageCopyTest {
 
-    private static final GenericContainer<?> REDIS = new GenericContainer<>("valkey/valkey:9").withExposedPorts(6379);
+    private static final GenericContainer<?> REDIS = TestRedis.container();
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final Duration TTL = Duration.ofMinutes(10);
     private static final Duration HELD_FOR = Duration.ofMinutes(1);
     private static final int REFRESH_POINT = ReadCache.REFRESH_AFTER_PERCENT;
 
     static LettuceConnectionFactory connections;
+    static LettuceConnectionFactory fixtureConnections;
     static StringRedisTemplate redis;
+    /** {@code @BeforeEach} 의 준비(비우기 · 세대 심기)용. 제한 시간이 넉넉하다 — {@link TestRedis} */
+    static StringRedisTemplate fixture;
 
     ReadCacheTest.MutableClock clock;
     Outcomes outcomes;
@@ -53,18 +56,21 @@ class ReadCacheOutageCopyTest {
         connections.afterPropertiesSet();
         connections.start();
         redis = new StringRedisTemplate(connections);
+        fixtureConnections = TestRedis.fixtureConnections(REDIS);
+        fixture = new StringRedisTemplate(fixtureConnections);
     }
 
     @AfterAll
     static void stop() {
+        fixtureConnections.destroy();
         connections.destroy();
         REDIS.stop();
     }
 
     @BeforeEach
     void setUp() {
-        redis.getConnectionFactory().getConnection().serverCommands().flushAll();
-        redis.opsForValue().set("svc:cache:gen:products", "0");
+        fixture.getConnectionFactory().getConnection().serverCommands().flushAll();
+        fixture.opsForValue().set("svc:cache:gen:products", "0");
         clock = new ReadCacheTest.MutableClock(Instant.now().truncatedTo(ChronoUnit.MILLIS));
         outcomes = new Outcomes();
         cache = instance(redis);
@@ -139,6 +145,7 @@ class ReadCacheOutageCopyTest {
         clock.advance(Duration.ofSeconds(50));
         template.resume.countDown();   // 세대 0 을 읽은 조회가 이제 끝난다
         late.join(10_000);
+        assertThat(late.isAlive()).as("늦은 조회가 끝났다").isFalse();
         paused.breaker().transitionToForcedOpenState();
         clock.advance(Duration.ofSeconds(15));   // 세대 1 을 읽은 지 65초, 늦은 조회가 끝난 지 15초
         loads.clear();
@@ -425,6 +432,8 @@ class ReadCacheOutageCopyTest {
         template.resume.countDown();
         holder.join(10_000);
         joiner.join(10_000);
+        assertThat(holder.isAlive()).as("자리 주인이 끝났다").isFalse();
+        assertThat(joiner.isAlive()).as("같이 기다린 조회가 끝났다").isFalse();
 
         assertThat(owner.get()).isInstanceOf(ReadCache.Entry.class);
         assertThat(((ReadCache.Entry<?>) owner.get()).value()).isEqualTo(new Item("v1"));

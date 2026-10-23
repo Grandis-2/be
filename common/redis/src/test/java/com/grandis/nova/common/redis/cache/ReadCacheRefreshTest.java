@@ -4,6 +4,7 @@ import com.grandis.nova.common.redis.cache.ReadCacheEvents.Outcome;
 import com.grandis.nova.common.redis.cache.ReadCacheEvents.RefreshResult;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -38,11 +39,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("Redis 읽기 캐시 — 미리 갱신")
 class ReadCacheRefreshTest {
 
-    private static final GenericContainer<?> REDIS = new GenericContainer<>("valkey/valkey:9").withExposedPorts(6379);
+    private static final GenericContainer<?> REDIS = TestRedis.container();
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     static LettuceConnectionFactory connections;
+    static LettuceConnectionFactory fixtureConnections;
     static StringRedisTemplate redis;
+    /** {@code @BeforeEach} 의 준비(비우기 · 세대 심기)용. 제한 시간이 넉넉하다 — {@link TestRedis} */
+    static StringRedisTemplate fixture;
 
     ReadCacheTest.MutableClock clock;
     Tasks tasks;
@@ -50,6 +54,8 @@ class ReadCacheRefreshTest {
     ReadCache cache;
     ReadCache.Spec<String> spec;
     AtomicInteger loads;
+    /** {@link #threads()} 가 띄운 갱신 스레드. 시험이 끝날 때 다 끝났는지 본다 — {@link #joinRefreshThreads()} */
+    final List<Thread> refreshThreads = Collections.synchronizedList(new ArrayList<>());
 
     @BeforeAll
     static void start() {
@@ -59,24 +65,42 @@ class ReadCacheRefreshTest {
         connections.afterPropertiesSet();
         connections.start();
         redis = new StringRedisTemplate(connections);
+        fixtureConnections = TestRedis.fixtureConnections(REDIS);
+        fixture = new StringRedisTemplate(fixtureConnections);
     }
 
     @AfterAll
     static void stop() {
+        fixtureConnections.destroy();
         connections.destroy();
         REDIS.stop();
     }
 
     @BeforeEach
     void setUp() {
-        redis.getConnectionFactory().getConnection().serverCommands().flushAll();
-        redis.opsForValue().set("svc:cache:gen:g", "0");   // 세대 시작점을 정해 둔다(없으면 지금 시각으로 시작한다)
+        fixture.getConnectionFactory().getConnection().serverCommands().flushAll();
+        fixture.opsForValue().set("svc:cache:gen:g", "0");   // 세대 시작점을 정해 둔다(없으면 지금 시각으로 시작한다)
         clock = new ReadCacheTest.MutableClock(Instant.now().truncatedTo(ChronoUnit.MILLIS));
         tasks = new Tasks();
         events = new Events();
         loads = new AtomicInteger();
         cache = cache(tasks);
         spec = cache.spec("s", String.class, Duration.ofSeconds(30));
+    }
+
+    /**
+     * 갱신이 성공하면 기다리는 요청에 값을 먼저 넘긴 뒤 Redis 에 넣는다({@link ReadCache} 의 미리 갱신). 그래서 기다린 요청이 답을 받아 시험이
+     * 끝나도 갱신 스레드는 아직 넣는 중일 수 있고, 그 SET 이 다음 시험의 비우기 뒤에 들어가면 같은 키({@code s} · {@code g} · {@code k})의 값이
+     * 다음 시험에 남는다. 다음 시험이 시작되기 전에 이 시험이 띄운 갱신 스레드가 다 끝나게 한다. 기다리는 시간은 loader 안 {@link #await} 의
+     * 상한(10초)보다 길게 두어, 본문이 먼저 실패해 래치가 안 풀린 경우에도 스레드가 끝난 뒤 넘어간다.
+     */
+    @AfterEach
+    void joinRefreshThreads() throws InterruptedException {
+        List<Thread> threads = List.copyOf(refreshThreads);
+        for (Thread thread : threads) {
+            thread.join(Duration.ofSeconds(15));
+        }
+        assertThat(threads).as("갱신 스레드가 모두 끝났다").noneMatch(Thread::isAlive);
     }
 
     @Test
@@ -199,7 +223,7 @@ class ReadCacheRefreshTest {
     void missWhileRefreshingWaitsForIt() throws Exception {
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
-        ReadCache threaded = cache(command -> new Thread(command).start());
+        ReadCache threaded = cache(threads());
         ReadCache.Spec<String> s = threaded.spec("s", String.class, Duration.ofSeconds(30));
         threaded.entry(s, "g", "k", () -> load("v1"));
         clock.advance(Duration.ofSeconds(24));
@@ -225,7 +249,7 @@ class ReadCacheRefreshTest {
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         java.io.IOException failure = new java.io.IOException("원천 실패");
-        ReadCache threaded = cache(command -> new Thread(command).start());
+        ReadCache threaded = cache(threads());
         ReadCache.Spec<String> s = threaded.spec("s", String.class, Duration.ofSeconds(30));
         threaded.entry(s, "g", "k", () -> load("v1"));
         clock.advance(Duration.ofSeconds(24));
@@ -423,6 +447,15 @@ class ReadCacheRefreshTest {
         assertThat(events.refreshes).containsExactly(RefreshResult.SKIPPED_NEWER);
         assertThat(loads.get()).as("갱신은 읽지 않았다").isEqualTo(2);
         assertThat(cache.entry(spec, "g", "k", () -> load("다른 값")).value()).isEqualTo("직접");
+    }
+
+    /** 갱신을 진짜 스레드로 돌리는 실행기. 띄운 스레드는 {@link #joinRefreshThreads()} 가 끝까지 기다린다. */
+    private Executor threads() {
+        return command -> {
+            Thread thread = new Thread(command);
+            refreshThreads.add(thread);
+            thread.start();
+        };
     }
 
     private ReadCache cache(Executor refresher) {
