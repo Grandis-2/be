@@ -67,6 +67,7 @@ class AnonymousReadsApiTest {
                 () -> get("/api/v1/products"),
                 () -> get("/api/v1/products/{id}", productId),
                 () -> get("/api/v1/products/{id}", missing),
+                () -> get("/api/v1/products/{id}/variants/{variantId}", productId, missing),
                 () -> get("/api/v1/products/{id}/reviews", productId),
                 () -> get("/api/v1/products/ranking"),
                 () -> get("/api/v1/products/searches/popular"),
@@ -78,12 +79,12 @@ class AnonymousReadsApiTest {
     }
 
     @Test
-    @DisplayName("공개 조회 — 유효 · 폐기 · 만료 · 모르는 키 토큰 모두 토큰 없는 요청과 같은 상태이고, 파싱 · 폐기 조회를 한 번도 하지 않는다")
+    @DisplayName("공개 조회 — 유효 · 폐기 · 만료 · 모르는 키 · 모양이 깨진 토큰 모두 토큰 없는 요청과 같은 상태이고, 파싱 · 폐기 조회를 한 번도 하지 않는다")
     void anonymousReadsIgnoreTheToken() throws Exception {
         String revoked = AccessTokens.customerToken(CUSTOMER);
         redis.opsForValue().set(AuthRedisKeys.revokedSession(provider.parse(revoked).sessionId()), "1", Duration.ofMinutes(5));
         List<String> tokens = List.of(AccessTokens.customerToken(CUSTOMER), revoked, AccessTokens.expiredCustomerToken(CUSTOMER),
-                AccessTokens.foreignCustomerToken(CUSTOMER), AccessTokens.adminToken());
+                AccessTokens.foreignCustomerToken(CUSTOMER), AccessTokens.adminToken(), "not-a-jwt");
         clearInvocations(provider, revocationChecker);
 
         for (Supplier<MockHttpServletRequestBuilder> read : anonymousReads()) {
@@ -100,7 +101,7 @@ class AnonymousReadsApiTest {
     }
 
     @Test
-    @DisplayName("신원을 읽는 경로는 그대로 토큰을 본다 — 내 리뷰 · 내부 조회는 파싱 · 폐기 조회를 하고 폐기 토큰은 401, 조회 신호는 회원 토큰을 읽는다")
+    @DisplayName("신원을 읽는 경로는 그대로 토큰을 본다 — 내 리뷰 · 내부 조회는 파싱 · 폐기 조회를 하고 폐기 토큰은 401(쓸 수 있는 주문상품도), 조회 신호는 회원 토큰을 읽는다")
     void identityPathsStillCheckTheToken() throws Exception {
         String token = AccessTokens.customerToken(CUSTOMER);
         clearInvocations(provider, revocationChecker);
@@ -115,5 +116,6 @@ class AnonymousReadsApiTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"));
         mockMvc.perform(get("/internal/products/{id}/options", productId).with(AccessTokens.withToken(token))).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/v1/reviews/writable").with(AccessTokens.withToken(token))).andExpect(status().isUnauthorized());
     }
 }
