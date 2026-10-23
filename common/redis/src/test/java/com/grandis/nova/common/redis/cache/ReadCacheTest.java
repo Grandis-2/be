@@ -44,7 +44,7 @@ class ReadCacheTest {
     static LettuceConnectionFactory connections;
     static LettuceConnectionFactory fixtureConnections;
     static StringRedisTemplate redis;
-    /** 시험 준비(비우기 · 세대 심기)용. 제한 시간이 넉넉하다 — {@link TestRedis} */
+    /** {@code @BeforeEach} 의 준비(비우기 · 세대 심기)용. 제한 시간이 넉넉하다 — {@link TestRedis} */
     static StringRedisTemplate fixture;
 
     ReadCache cache;
