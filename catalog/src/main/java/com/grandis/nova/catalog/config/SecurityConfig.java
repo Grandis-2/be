@@ -9,6 +9,9 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
+import org.springframework.security.web.util.matcher.OrRequestMatcher;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 
 /**
  * 경로별 권한만 정한다. 토큰 검증(`Authorization: Bearer`, JWKS) · 폐기 조회 · 401/403 봉투는 common:security 의 체인이 맡는다(NV-139 채택).
@@ -16,26 +19,35 @@ import org.springframework.security.web.SecurityFilterChain;
  *
  * 공개 경로는 **명시한 것만** 연다 — 조회는 GET, 그 밖에는 집계 신호 POST 둘(조회 · 검색)(preorder 와 같은 규약). anyRequest().permitAll() 이면 /admin · /internal 밖에 새로 생기는
  * 엔드포인트가 기본으로 공개되는데 그걸 잡는 시험이 없다 — 공개로 열 엔드포인트는 여기 목록에 더한다.
- * 공개 조회는 토큰을 보지 않는다 — 관리자 미리보기는 관리자 상세(/api/v1/admin/products/{id})로 옮겼다(2026-09-29). 예외는 집계 신호(POST
- * /api/v1/products/{id}/views · /api/v1/products/searches)다 — 로그인 없이 받지만 회원 토큰이면 회원으로 센다(토큰이 무효면 비회원).
+ * 공개 조회는 토큰을 보지 않는다 — 관리자 미리보기는 관리자 상세(/api/v1/admin/products/{id})로 옮겼다(2026-09-29). 그래서 {@link #ANONYMOUS_READS} 는
+ * 헤더가 있어도 체인이 파싱 · 폐기 조회를 하지 않는다(프론트는 모든 요청에 토큰을 싣는다 — 쓰지 않을 토큰의 서명 검증 · Redis 폐기 조회를 요청마다 하지 않게). 예외는 집계 신호(POST
+ * /api/v1/products/{id}/views · /api/v1/products/searches)다 — 로그인 없이 받지만 회원 토큰이면 회원으로 센다(토큰이 무효면 비회원). 신원을 읽는
+ * GET(내 리뷰 · 리뷰 쓸 수 있는 주문상품)은 넣지 않는다.
  */
 @Configuration(proxyBeanMethods = false)
 public class SecurityConfig {
 
+    private static final PathPatternRequestMatcher.Builder PATHS = PathPatternRequestMatcher.withDefaults();
+
+    /** 토큰을 보지 않는 공개 조회 — 체인이 permitAll 로 연다 */
+    static final RequestMatcher ANONYMOUS_READS = new OrRequestMatcher(
+            PATHS.matcher(HttpMethod.GET, "/api/v1/products/**"),       // 상품 목록 · 상세 · 옵션 상세 · 상품 리뷰 · 랭킹 · 인기 검색어
+            PATHS.matcher(HttpMethod.GET, "/api/v1/categories/**"),     // 카테고리 트리
+            PATHS.matcher(HttpMethod.GET, "/api/v1/promotions"),        // 사전예약 홍보 목록
+            PATHS.matcher(HttpMethod.GET, "/api/v1/promotions/*"),      // 사전예약 홍보 상세
+            PATHS.matcher(HttpMethod.GET, "/api/v1/banners"),           // 메인 배너
+            PATHS.matcher(HttpMethod.GET, "/api/v1/reviews"));          // 구매후기 모아보기
+
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http, SecurityFilterChainSupport support) throws Exception {
-        return support.build(http, authorize -> authorize
+        return support.build(http, ANONYMOUS_READS, authorize -> authorize
                 .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()                                     // 오류 페이지 디스패치
                 .requestMatchers(EndpointRequest.to("health")).permitAll()                                    // 헬스 체크(관리 포트의 readiness · liveness)
-                .requestMatchers(HttpMethod.GET, "/api/v1/products/**", "/api/v1/categories/**").permitAll()   // 상품 목록 · 상세 · 옵션 상세 · 상품 리뷰 · 카테고리 트리
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/*/views").permitAll()                       // 상세 화면의 조회 신호 — 비회원도 보낸다(익명 id)
                 .requestMatchers(HttpMethod.POST, "/api/v1/products/searches").permitAll()                      // 검색 신호 — 비회원도 보낸다(익명 id)
-                .requestMatchers(HttpMethod.GET, "/api/v1/promotions", "/api/v1/promotions/*").permitAll()     // 사전예약 홍보 목록 · 상세
-                .requestMatchers(HttpMethod.GET, "/api/v1/banners").permitAll()                                // 메인 배너
                 .requestMatchers(HttpMethod.GET, "/api/v1/reviews/mine").hasRole("USER")                        // 내 리뷰
                 .requestMatchers(HttpMethod.GET, "/api/v1/reviews/writable").hasRole("USER")                    // 리뷰를 쓸 수 있는 내 주문상품
-                .requestMatchers(HttpMethod.GET, "/api/v1/reviews").permitAll()                                 // 구매후기 모아보기
-                .requestMatchers("/api/v1/reviews", "/api/v1/reviews/*").hasRole("USER")                        // 리뷰 작성 · 수정 · 삭제 — 위 두 GET 규칙보다 뒤에 둔다
+                .requestMatchers("/api/v1/reviews", "/api/v1/reviews/*").hasRole("USER")                        // 리뷰 작성 · 수정 · 삭제 — 위 두 GET 규칙보다 뒤에 둔다(모아보기 GET 은 ANONYMOUS_READS)
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                 // 내부 조회는 접수(USER)와 관리자 등록(ADMIN)이 같이 쓴다. 역할이 둘뿐이라 authenticated() 와 동작은 같지만 계약대로 적는다
                 .requestMatchers("/internal/**").hasAnyRole("USER", "ADMIN")
