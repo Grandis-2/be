@@ -23,8 +23,12 @@ import tools.jackson.databind.json.JsonMapper;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.Set;
@@ -330,7 +334,30 @@ public final class ReadCache {
             Instant start = clock.instant();
             return new Entry<>(loader.apply(LoadPath.BYPASS), start);
         }
-        Long current = readGeneration(generation);
+        return entryAt(spec, generation, readGeneration(generation), id, loader, storable);
+    }
+
+    /** {@link #entry(Spec, String, String, Supplier)} 와 같고, 세대 번호는 이 요청이 먼저 읽은 것({@link #generations})을 쓴다. */
+    public <T> Entry<T> entry(Spec<T> spec, Generations generations, String generation, String id, Supplier<T> loader) {
+        return entry(spec, generations, generation, id, path -> loader.get(), value -> true);
+    }
+
+    /**
+     * {@link #entry(Spec, String, String, Function, Predicate)} 와 같고, 세대 번호는 이 요청이 먼저 읽은 것({@link #generations})을 쓴다 — 한 요청이
+     * 여러 세대를 쓸 때 세대마다 GET 하지 않게. 그 묶음에 없는 세대 이름이면 던진다(호출자 실수).
+     */
+    public <T> Entry<T> entry(Spec<T> spec, Generations generations, String generation, String id, Function<LoadPath, T> loader,
+                              Predicate<T> storable) {
+        Long current = generations.read(generation);
+        if (!enabled) {
+            Instant start = clock.instant();
+            return new Entry<>(loader.apply(LoadPath.BYPASS), start);
+        }
+        return entryAt(spec, generation, current, id, loader, storable);
+    }
+
+    /** @param current 읽은 세대 번호, 못 읽었으면 null(우회) */
+    private <T> Entry<T> entryAt(Spec<T> spec, String generation, Long current, String id, Function<LoadPath, T> loader, Predicate<T> storable) {
         if (current == null) {
             return bypass(spec, generation, null, id, loader, storable);
         }
@@ -482,6 +509,90 @@ public final class ReadCache {
     }
 
     /**
+     * 한 요청이 쓰는 세대들의 지금 번호를 MGET 한 번으로 읽는다 — 홍보 상세처럼 세대 여럿(홍보 · 상품 · 회차)을 차례로 GET 하던 왕복을 하나로 줄인다.
+     * 세대마다의 뒤처리(없으면 만들기 · 미룬 올리기 · 복원 감지 · 본 번호와 확인 시각)는 {@link #generation} 과 같고, 숫자가 아닌 값은 하나씩 읽을 때처럼
+     * 차단기 실패로 센다. 다른 점은 Redis 호출의 성공 · 실패를 MGET 한 번으로 센다는 것이다(하나씩 읽으면 세대 수만큼, 없는 세대 만들기는 따로 하나).
+     * 그래서 손상된(숫자가 아닌) 세대 키가 하나라도 섞이면 요청 단위 실패율이 50% 이상이 되어 차단기가 하나씩 읽을 때보다 빨리 열린다 — 키 손상은 수동
+     * 조작이라 드물어 받아들인다.
+     * 받은 묶음은 그 요청이 쓴다 — 요청을 넘겨 다시 쓰면 다른 인스턴스의 올리기를 놓친다. 예외로 그 요청이 맡긴 미리 갱신의 loader 가 묶음을 들고 가지만,
+     * 갱신은 돌기 전에 지금 세대를 다시 읽어 같을 때만 원천을 읽으므로 그 번호는 지금 번호와 같다. 끈 캐시이거나 Redis 에서 못 읽은 세대는 비어 있다(그 세대의 조회는 우회).
+     */
+    public Generations generations(String... generations) {
+        Map<String, Long> numbers = new LinkedHashMap<>();
+        if (!enabled) {
+            for (String generation : generations) {
+                numbers.put(generation, null);
+            }
+            return new Generations(numbers);
+        }
+        Map<String, Long> seenBefore = new HashMap<>();
+        for (String generation : generations) {
+            seenBefore.put(generation, highestGenerations.get(generation));
+        }
+        Instant asked = clock.instant();
+        // 묶어 읽을지는 한 번 정해 둔다 — 두 번 다 집합을 보면, 처음엔 미룬 올리기가 있어 MGET 을 건너뛰고 그사이 다른 스레드가 비워 두 번째엔
+        // 없다고 보아 세대마다 읽기도 건너뛴다(모든 세대가 못 읽음이 된다)
+        boolean batched = pendingBumps.isEmpty();
+        List<String> values = null;
+        if (batched) {
+            List<String> keys = Arrays.stream(generations).map(this::generationKey).toList();
+            values = call(() -> redis.opsForValue().multiGet(keys));
+        }
+        if (!batched || !pendingBumps.isEmpty()) {
+            // 미룬 올리기가 있으면(묶어 읽는 사이 생긴 것 포함) 묶지 않고 세대마다 읽는다(드문 갈래) — 한 세대를 읽다 다른 세대의 미룬 올리기를 해도,
+            // 그 세대는 올린 뒤 번호로 읽게
+            for (String generation : generations) {
+                numbers.put(generation, readGeneration(generation));
+            }
+            return new Generations(numbers);
+        }
+        for (int i = 0; i < generations.length; i++) {
+            String generation = generations[i];
+            String value = values == null ? null : values.get(i);
+            Long read = values == null ? null : value != null ? parsed(value) : call(() -> createGeneration(generation));
+            numbers.put(generation, settle(generation, seenBefore.get(generation), asked, read));
+        }
+        return new Generations(numbers);
+    }
+
+    /**
+     * 묶어 읽은 세대 값 — 숫자가 아니면(키를 손댐) 못 읽은 것이고 차단기에 실패 하나로 센다(하나씩 읽을 때 GET · 파싱이 한 호출이라 실패로 세는 것과 같게).
+     * 정상 값의 파싱은 Redis 호출이 아니라 차단기에 세지 않는다 — 세면 묶음 경로만 성공이 부풀어 간헐 장애에서 차단기가 늦게 열린다.
+     */
+    private Long parsed(String value) {
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            return call(() -> {
+                throw e;
+            });
+        }
+    }
+
+    /** 한 요청이 먼저 읽은 세대 번호들({@link #generations}). 그 요청 안에서만 쓴다. */
+    public static final class Generations {
+
+        private final Map<String, Long> numbers;
+
+        private Generations(Map<String, Long> numbers) {
+            this.numbers = numbers;
+        }
+
+        /** 그 세대의 번호. 못 읽었으면(끈 캐시 · Redis 실패) 비어 있다 — {@link #generation} 과 같다. */
+        public OptionalLong number(String generation) {
+            Long number = read(generation);
+            return number == null ? OptionalLong.empty() : OptionalLong.of(number);
+        }
+
+        private Long read(String generation) {
+            if (!numbers.containsKey(generation)) {
+                throw new IllegalArgumentException("이 요청에서 읽지 않은 세대: " + generation);
+            }
+            return numbers.get(generation);
+        }
+    }
+
+    /**
      * 이 인스턴스가 그 세대에서 본 가장 큰 번호 — Redis 를 부르지 않는다. 본 적 없으면 비어 있다. {@link #generation} 을 못 읽을 때 바깥 캐시가
      * 마지막으로 본 키로만 찾을 때 쓴다(그동안의 올리기는 모른다 — 그 캐시의 TTL 이 늦게 보이는 상한이다).
      */
@@ -495,7 +606,15 @@ public final class ReadCache {
         // 본 번호는 세대를 읽기 전에 꺼낸다 — 읽은 뒤 꺼내면 그사이 다른 스레드가 더 큰 번호를 본 것과 섞여, 정상 올리기 뒤에도 되돌아간 것으로 본다
         Long seenBefore = highestGenerations.get(generation);
         Instant asked = clock.instant();   // 확인 시각은 읽기 전 — 늦게 끝난 읽기가 확인을 실제보다 새것으로 남기지 않게
-        Long current = call(() -> currentGeneration(generation));
+        return settle(generation, seenBefore, asked, call(() -> currentGeneration(generation)));
+    }
+
+    /**
+     * 읽은 세대 번호의 뒤처리 — 미룬 올리기를 해 보고(올렸으면 다시 읽는다), 본 번호보다 작으면(복원) 올리고, 본 번호 · 확인 시각을 남긴다.
+     * {@link #readGeneration} 과 {@link #generations} 가 같이 쓴다. read 가 null(못 읽음)이면 null.
+     */
+    private Long settle(String generation, Long seenBefore, Instant asked, Long read) {
+        Long current = read;
         if (current == null) {
             return null;
         }
@@ -669,16 +788,21 @@ public final class ReadCache {
     }
 
     private long currentGeneration(String generation) {
-        String key = prefix + "gen:" + generation;
-        String value = redis.opsForValue().get(key);
-        if (value == null) {
-            value = Objects.requireNonNull(redis.execute(CREATE_GENERATION, List.of(key), String.valueOf(clock.millis())), "generation");
-        }
-        return Long.parseLong(value);
+        String value = redis.opsForValue().get(generationKey(generation));
+        return value == null ? createGeneration(generation) : Long.parseLong(value);
+    }
+
+    private long createGeneration(String generation) {
+        return Long.parseLong(Objects.requireNonNull(
+                redis.execute(CREATE_GENERATION, List.of(generationKey(generation)), String.valueOf(clock.millis())), "generation"));
+    }
+
+    private String generationKey(String generation) {
+        return prefix + "gen:" + generation;
     }
 
     private void incrementGeneration(String generation) {
-        redis.execute(BUMP_GENERATION, List.of(prefix + "gen:" + generation), String.valueOf(clock.millis()));
+        redis.execute(BUMP_GENERATION, List.of(generationKey(generation)), String.valueOf(clock.millis()));
     }
 
     /**
@@ -691,7 +815,7 @@ public final class ReadCache {
             return current;
         }
         long floor = seen + 1;
-        Long raised = call(() -> redis.execute(RAISE_GENERATION, List.of(prefix + "gen:" + generation), String.valueOf(floor)));
+        Long raised = call(() -> redis.execute(RAISE_GENERATION, List.of(generationKey(generation)), String.valueOf(floor)));
         log.warn("읽기 캐시 세대가 본 번호보다 작다(복원 · 세대 키를 손댐) — 올려서 읽는다 generation={} seen={} current={} raised={}",
                 generation, seen, current, raised);
         return raised;

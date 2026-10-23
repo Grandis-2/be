@@ -27,6 +27,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -63,6 +64,8 @@ class PublicCampaignsApiTest {
     @MockitoSpyBean StringRedisTemplate redis;
     /** null 이 아니면 이 문자열이 든 키의 값 GET 이 실패한다(읽기 캐시의 한쪽만 Redis 를 못 쓰는 경우) */
     volatile String failValueGet;
+    /** 읽기 캐시 세대 키(…:cache:gen:…)를 하나씩 GET 한 수 — 묶어 읽기(MGET)는 세지 않는다 */
+    final java.util.concurrent.atomic.AtomicInteger generationGets = new java.util.concurrent.atomic.AtomicInteger();
     @MockitoSpyBean PreorderCampaignClient client;
     @Autowired PublicCampaigns publicCampaigns;
 
@@ -243,11 +246,90 @@ class PublicCampaignsApiTest {
         assertThat(redis.keys("catalog:cache:preorder-campaign-set*")).as("긴 쪽은 우회, 짧은 쪽은 다 갖춘 묶음을 넣지 않는다").isEmpty();
     }
 
+    @Test
+    @DisplayName("사전예약 상품 상세 · 홍보 목록 · 홍보 상세는 세대를 MGET 한 번으로 읽는다 — 캐시가 찬 뒤 세대 GET 이 없다(상세는 값도 같은 세대의 사본)")
+    void detailsReadGenerationsInOneRoundTrip() throws Exception {
+        UUID productId = openPreorder("세대 한 번");
+        UUID promotionId = promotion(productId);
+        for (int i = 0; i < 2; i++) {   // 채운다
+            assertThat(detailStatus(productId)).isEqualTo("OPEN");
+            assertThat(cardStatuses(promotionId)).containsKey(productId);
+            mockMvc.perform(get("/api/v1/promotions")).andExpect(status().isOk());
+        }
+        int requests = 5;
+        generationGets.set(0);
+        Map<String, Long> before = commandCalls();
+        for (int i = 0; i < requests; i++) {
+            detailStatus(productId);
+        }
+        Map<String, Long> afterDetails = commandCalls();
+        for (int i = 0; i < requests; i++) {
+            cardStatuses(promotionId);
+        }
+        Map<String, Long> afterPromotion = commandCalls();
+        for (int i = 0; i < requests; i++) {
+            mockMvc.perform(get("/api/v1/promotions")).andExpect(status().isOk());
+        }
+        Map<String, Long> afterShown = commandCalls();
+
+        assertThat(delta(before, afterDetails, "mget")).as("상품 상세 — 요청당 MGET 하나").isEqualTo(requests);
+        assertThat(delta(before, afterDetails, "get")).as("상품 상세 — 세대 · 값 GET 없음").isZero();
+        assertThat(delta(afterDetails, afterPromotion, "mget")).as("홍보 상세 — 요청당 MGET 하나").isEqualTo(requests);
+        assertThat(delta(afterDetails, afterPromotion, "get")).as("홍보 상세 — 세대 · 값 GET 없음").isZero();
+        assertThat(delta(afterPromotion, afterShown, "mget")).as("홍보 목록 — 요청당 MGET 하나").isEqualTo(requests);
+        // 목록은 그날 보이는 모든 홍보의 상품을 묶어 회차 값 GET 수가 데이터에 따라 다르다 — 세대를 따로 GET 하지 않았는지만 본다
+        assertThat(generationGets.get()).as("세 경로 모두 세대를 하나씩 GET 하지 않았다").isZero();
+    }
+
+    @Test
+    @DisplayName("회차가 빠진 묶음은 짧은 쪽도 넘겨받은 세대를 쓴다 — 긴 쪽이 비어 짧은 쪽을 거쳐도 회차 세대를 다시 GET 하지 않는다")
+    void partialSetUsesTheRequestGenerations() throws Exception {
+        UUID ready = openPreorder("짧은 쪽 세대");
+        UUID pending = fixtures.product(categoryId, "PREORDER", "ACTIVE", "준비 전", "t");
+        fixtures.registration(pending);
+        fixtures.option(pending, "ACTIVE");
+        UUID promotionId = promotion(ready, pending);
+        for (int i = 0; i < 2; i++) {   // 채운다
+            assertThat(cardStatuses(promotionId)).containsOnlyKeys(ready);
+        }
+        int requests = 5;
+        Map<String, Long> before = commandCalls();
+        for (int i = 0; i < requests; i++) {
+            cardStatuses(promotionId);
+        }
+        Map<String, Long> after = commandCalls();
+
+        assertThat(delta(before, after, "mget")).as("요청당 MGET 하나").isEqualTo(requests);
+        assertThat(delta(before, after, "get")).as("긴 쪽 값 GET(빈 키) · 다시 보기만 — 세대 GET 없음").isEqualTo(2L * requests);
+    }
+
+    private static long delta(Map<String, Long> before, Map<String, Long> after, String command) {
+        return after.getOrDefault(command, 0L) - before.getOrDefault(command, 0L);
+    }
+
+    /** Redis 의 명령별 누적 호출 수(INFO commandstats). */
+    private Map<String, Long> commandCalls() {
+        Map<String, Long> calls = new java.util.HashMap<>();
+        try (org.springframework.data.redis.connection.RedisConnection connection = redis.getConnectionFactory().getConnection()) {
+            java.util.Properties info = connection.serverCommands().info("commandstats");
+            for (String name : info.stringPropertyNames()) {
+                java.util.regex.Matcher m = java.util.regex.Pattern.compile("calls=(\\d+)").matcher(info.getProperty(name));
+                if (name.startsWith("cmdstat_") && m.find()) {
+                    calls.put(name.substring("cmdstat_".length()), Long.parseLong(m.group(1)));
+                }
+            }
+        }
+        return calls;
+    }
+
     @SuppressWarnings("unchecked")
     private org.springframework.data.redis.core.ValueOperations<String, String> failingGets(org.springframework.data.redis.core.ValueOperations<String, String> real) {
         return (org.springframework.data.redis.core.ValueOperations<String, String>) java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),
                 new Class<?>[] {org.springframework.data.redis.core.ValueOperations.class}, (proxy, method, args) -> {
                     String fail = failValueGet;
+                    if (method.getName().equals("get") && args != null && args.length == 1 && args[0] instanceof String read && read.contains(":cache:gen:")) {
+                        generationGets.incrementAndGet();
+                    }
                     if (fail != null && method.getName().equals("get") && args != null && args.length == 1 && args[0] instanceof String key && key.contains(fail)) {
                         throw new org.springframework.data.redis.RedisSystemException("시험 — 이 키의 값 GET 실패", null);
                     }

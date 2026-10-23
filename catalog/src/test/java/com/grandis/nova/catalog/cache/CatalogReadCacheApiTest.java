@@ -48,7 +48,7 @@ class CatalogReadCacheApiTest {
     @Autowired StringRedisTemplate redis;
     @Autowired ProductReviewRepository reviews;
     @Autowired CatalogLocalCaches local;
-    @Autowired com.grandis.nova.common.redis.cache.ReadCache readCache;
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean com.grandis.nova.common.redis.cache.ReadCache readCache;
     @Autowired CatalogReadCache catalogReadCache;
     @Autowired java.util.List<com.grandis.nova.catalog.event.CatalogEventHandler> handlers;
 
@@ -168,6 +168,18 @@ class CatalogReadCacheApiTest {
 
         reviews.saveAndFlush(ProductReview.write(productId, UUID.randomUUID(), UUID.randomUUID(), 5, "좋아요", "기본", "김**"));
         assertThat(data(mockMvc.perform(get(path)).andExpect(status().isOk())).get("items")).as("리뷰 쓰기는 세대를 올린다 — 둘 다 보인다").hasSize(2);
+    }
+
+    @Test
+    @DisplayName("회차 캐시를 끄면 상품 상세 · 홍보는 회차 세대를 묶어 읽지 않는다 — 쓰지 않는 세대 키가 손상돼도 차단기에 실패가 쌓이지 않게")
+    void campaignGenerationIsReadOnlyWhenTheCampaignCacheIsOn() throws Exception {
+        UUID productId = registerInStock("회차 세대 없음", "c" + ShopFixtures.unique());
+        org.mockito.Mockito.clearInvocations(readCache);
+        mockMvc.perform(get("/api/v1/products/{id}", productId)).andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/promotions")).andExpect(status().isOk());
+
+        org.mockito.Mockito.verify(readCache).generations(CatalogReadCache.PRODUCTS);
+        org.mockito.Mockito.verify(readCache).generations(com.grandis.nova.catalog.promotion.PromotionQueryService.PROMOTIONS, CatalogReadCache.PRODUCTS);
     }
 
     @Test

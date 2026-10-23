@@ -24,6 +24,7 @@ import com.grandis.nova.catalog.product.SaleMode;
 import com.grandis.nova.catalog.product.SaleStatus;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.redis.cache.ReadCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -123,9 +124,14 @@ public class ProductDetailService {
      * @throws BusinessException 사전예약인데 preorder 가 답하지 않으면 503 — 접수 단계를 가를 수 없다(2026-10-19 결정)
      */
     public ProductDetailView withLiveParts(ProductDetailBody body) {
+        return withLiveParts(body, null);
+    }
+
+    /** {@link #withLiveParts(ProductDetailBody)} 와 같고, 회차 세대는 이 요청이 먼저 읽은 것을 쓴다. @param generations null 이면 직접 읽는다 */
+    public ProductDetailView withLiveParts(ProductDetailBody body, ReadCache.Generations generations) {
         ProductDetailView view = body.view();
         if (view.saleMode() == SaleMode.PREORDER) {
-            CampaignWindow window = publicCampaigns.find(view.productId())
+            CampaignWindow window = publicCampaigns.find(view.productId(), generations)
                     .orElseThrow(() -> new BusinessException(CommonErrorCode.NOT_FOUND));
             return live(view, window, Map.of());
         }

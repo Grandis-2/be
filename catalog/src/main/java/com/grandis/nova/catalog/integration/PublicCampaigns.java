@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HexFormat;
 import java.util.List;
@@ -18,6 +19,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 /**
@@ -50,7 +52,7 @@ import java.util.stream.Collectors;
  *       묻는다 — 그동안 공개 조회는 요청마다 preorder 에 묻고, 받은 값은 위와 같이 옛 값일 수 있다. 채우는 자리를 잡은 뒤 다시 읽기에서 Redis 를
  *       못 쓰면 그 조회도 우회로 바뀌어 fresh 없이 묻고, 그 자리를 기다리던 요청도 같은 값을 받는다. 다만 이 인스턴스의 사본이 있으면 묻기 전에
  *       그것으로 답한다({@link #HELD_DURING_OUTAGE}). 묶음은 긴 쪽이 우회해도 짧은 쪽을 거친다 — 짧은 쪽의 사본을 쓰려는 것이고, 그 대가로 Redis 가
- *       느린 동안(차단기가 열리기 전) 짧은 쪽의 세대 · 값 읽기 시간이 더 붙는다.</li>
+ *       느린 동안(차단기가 열리기 전) 짧은 쪽의 값 읽기 시간이 더 붙는다(세대를 묶음으로 넘겨받지 않은 호출이면 세대 읽기도).</li>
  *   <li>접수 단계는 넣지 않는다 — 호출자가 꺼낸 시각으로 계산하므로 오픈 · 마감 시각이 지나는 것은 캐시와 상관없이 바로 보인다.</li>
  *   <li>preorder 가 답하지 않으면 넣지 않고 {@link PreorderCampaigns#find} 와 같이 던진다. 켜 두면 하나 더 — 같은 키를 이 인스턴스에서 먼저 묻고 있는
  *       요청을 기다리는 쪽은 ReadCache 의 기다림 상한(5초)을 넘으면 같은 DEPENDENCY_UNAVAILABLE 을 던진다(그것을 어떻게 답할지는 호출자 몫이다).</li>
@@ -91,16 +93,38 @@ public class PublicCampaigns {
                 ttl.compareTo(PARTIAL_TTL) < 0 ? ttl : PARTIAL_TTL, HELD_DURING_OUTAGE) : null;
     }
 
+    /**
+     * 함께 읽을 세대 이름 — 회차 캐시를 켰으면 {@link #CAMPAIGNS} 를 더한다. 끈 캐시는 회차 세대를 쓰지 않으므로 묶어 읽지도 않는다(쓰지 않는 세대 키가
+     * 손상돼 차단기에 실패가 쌓이지 않게).
+     */
+    public String[] withCampaignGeneration(String... generations) {
+        if (oneSpec == null) {
+            return generations;
+        }
+        String[] all = Arrays.copyOf(generations, generations.length + 1);
+        all[generations.length] = CAMPAIGNS;
+        return all;
+    }
+
     /** 한 상품의 회차. 없으면(판매 준비 전) 비어 있다 — 없음은 넣지 않는다. 실패는 위 목록의 마지막 항목. */
     public Optional<CampaignWindow> find(UUID productId) {
+        return find(productId, null);
+    }
+
+    /** {@link #find(UUID)} 와 같고, 회차 세대는 이 요청이 먼저 읽은 것({@link ReadCache#generations})을 쓴다. @param generations null 이면 직접 읽는다 */
+    public Optional<CampaignWindow> find(UUID productId, ReadCache.Generations generations) {
         if (oneSpec == null) {
             return campaigns.find(productId, false);
         }
         // loader 가 null(회차 없음)이면 ReadCache 는 넣지 않는다 — 채우기에서 넣을 값(회차 있음)일 때만 fresh 로 다시 묻는다
-        return Optional.ofNullable(cache.get(oneSpec, CAMPAIGNS, productId.toString(), path -> {
+        Function<LoadPath, CampaignWindow> loader = path -> {
             Optional<CampaignWindow> found = campaigns.find(productId, false);
             return path == LoadPath.FILL && found.isPresent() ? campaigns.find(productId, true).orElse(null) : found.orElse(null);
-        }));
+        };
+        String id = productId.toString();
+        return Optional.ofNullable(generations == null
+                ? cache.get(oneSpec, CAMPAIGNS, id, loader)
+                : cache.entry(oneSpec, generations, CAMPAIGNS, id, loader, found -> true).value());
     }
 
     /**
@@ -109,6 +133,11 @@ public class PublicCampaigns {
      * 긴 쪽이 비었을 때만 본다. 빈 목록이면 부르지 않는다. 실패는 위 목록의 마지막 항목.
      */
     public Map<UUID, CampaignWindow> find(Collection<UUID> productIds) {
+        return find(productIds, null);
+    }
+
+    /** {@link #find(Collection)} 와 같고, 회차 세대는 이 요청이 먼저 읽은 것({@link ReadCache#generations})을 쓴다(긴 쪽 · 짧은 쪽 모두). @param generations null 이면 직접 읽는다 */
+    public Map<UUID, CampaignWindow> find(Collection<UUID> productIds, ReadCache.Generations generations) {
         if (productIds.isEmpty()) {
             return Map.of();
         }
@@ -119,10 +148,17 @@ public class PublicCampaigns {
         String key = setKey(ids);
         // 모든 상품에 회차가 있는 묶음만 긴 쪽에 넣는다. 긴 쪽이 비면 짧은 쪽을 거쳐 묻는다 — 빠진 묶음은 짧은 쪽에만 들고, 다 갖춘 묶음은 짧은 쪽에 넣지 않고
         // 긴 쪽이 넣는다
-        return cache.entry(manySpec, CAMPAIGNS, key,
-                (Function<LoadPath, Map<UUID, CampaignWindow>>) path -> cache.entry(partialSpec, CAMPAIGNS, key, partialPath -> ask(ids, path, partialPath),
-                        found -> !found.keySet().containsAll(ids)).value(),
-                found -> found.keySet().containsAll(ids)).value();
+        Function<LoadPath, Map<UUID, CampaignWindow>> throughPartial = path -> setEntry(partialSpec, generations, key,
+                partialPath -> ask(ids, path, partialPath), found -> !found.keySet().containsAll(ids)).value();
+        return setEntry(manySpec, generations, key, throughPartial, found -> found.keySet().containsAll(ids)).value();
+    }
+
+    private ReadCache.Entry<Map<UUID, CampaignWindow>> setEntry(ReadCache.Spec<Map<UUID, CampaignWindow>> spec, ReadCache.Generations generations,
+                                                                String key, Function<LoadPath, Map<UUID, CampaignWindow>> loader,
+                                                                Predicate<Map<UUID, CampaignWindow>> storable) {
+        return generations == null
+                ? cache.entry(spec, CAMPAIGNS, key, loader, storable)
+                : cache.entry(spec, generations, CAMPAIGNS, key, loader, storable);
     }
 
     /**

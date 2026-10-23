@@ -5,6 +5,7 @@ import com.grandis.nova.catalog.category.CategoryTreeService;
 import com.grandis.nova.catalog.detail.ProductDetailBody;
 import com.grandis.nova.catalog.detail.ProductDetailService;
 import com.grandis.nova.catalog.detail.ProductDetailView;
+import com.grandis.nova.catalog.integration.PublicCampaigns;
 import com.grandis.nova.catalog.listing.ProductListFilter;
 import com.grandis.nova.catalog.listing.ProductListItem;
 import com.grandis.nova.catalog.listing.ProductListingService;
@@ -77,12 +78,13 @@ public class CatalogReadCache {
     private final ProductListingService listings;
     private final CategoryTreeService categories;
     private final ReviewService reviews;
+    private final PublicCampaigns campaigns;
 
     private final ReadCache.Spec<ProductDetailBody> detailSpec;
     private final ReadCache.Spec<OffsetPage<ReviewView>> reviewSpec;
 
     public CatalogReadCache(ReadCache cache, CatalogLocalCaches local, Clock clock, ProductDetailService details, ProductListingService listings,
-                            CategoryTreeService categories, ReviewService reviews) {
+                            CategoryTreeService categories, ReviewService reviews, PublicCampaigns campaigns) {
         this.cache = cache;
         this.local = local;
         this.clock = clock;
@@ -90,6 +92,7 @@ public class CatalogReadCache {
         this.listings = listings;
         this.categories = categories;
         this.reviews = reviews;
+        this.campaigns = campaigns;
         // Redis 를 못 읽어도 이 인스턴스의 사본을 TTL 안에서 쓴다(ReadCache.OutageCopies) — 장애 중 다른 인스턴스의 숨김 · 가격 변경은 최대 이만큼
         // 늦게 보인다(2026-10-22 결정). 이 인스턴스가 고친 상품은 바로 빠진다. 평소에도 같은 세대의 사본이 미리 갱신 시점 전이면 그것으로 답한다
         this.detailSpec = cache.spec("product-detail-body", ProductDetailBody.class, DETAIL_TTL, DETAIL_TTL);
@@ -106,11 +109,14 @@ public class CatalogReadCache {
     public ReadCache.Entry<ProductDetailView> product(UUID productId) {
         // 판매 준비 전인 일반 상품의 본문은 넣지 않는다 — 준비 이벤트의 세대 올리기가 실패해도 "목록에는 있는데 상세는 404" 가 TTL 동안 남지 않게
         // (준비는 되돌아가지 않으므로 넣은 본문의 준비는 낡지 않는다). 준비 전 상품의 상세는 요청마다 DB 로 간다
-        ReadCache.Entry<ProductDetailBody> body = cache.entry(detailSpec, PRODUCTS, productId.toString(), () -> details.findProductBody(productId),
-                found -> found.view().saleMode() != SaleMode.IN_STOCK || found.stockReady());
+        // 상품 · 회차 세대를 한 번에 읽는다(MGET) — 사전예약 상세는 본문 다음 회차를 읽어 세대 GET 이 둘이었다. 세대는 본문을 읽기 전에 읽으므로,
+        // 본문을 기다리는 사이 온 회차 올리기(조기 마감 등)는 다음 요청부터 보인다
+        ReadCache.Generations generations = cache.generations(campaigns.withCampaignGeneration(PRODUCTS));
+        ReadCache.Entry<ProductDetailBody> body = cache.entry(detailSpec, generations, PRODUCTS, productId.toString(),
+                path -> details.findProductBody(productId), found -> found.view().saleMode() != SaleMode.IN_STOCK || found.stockReady());
         // 실시간 칸은 loader 밖, 요청마다 자기 스레드에서 채운다 — 같이 기다린 요청도 여기서 채우므로, 준비 전 본문의 판매 준비 다시 읽기
         // (ProductDetailService#withLiveParts)가 커밋 뒤 요청에 새 값을 준다. loader 안으로 옮기면 그 다시 읽기가 무력해진다
-        return body.map(details::withLiveParts);
+        return body.map(found -> details.withLiveParts(found, generations));
     }
 
     /** 옵션 상세 — 상품 상세(같은 캐시)에서 꺼낸다. 그 상품의 옵션이 아니면 404(상세 서비스와 같은 판정). */
