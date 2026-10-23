@@ -160,10 +160,14 @@ class CatalogReadCacheApiTest {
 
         assertThat(data(mockMvc.perform(get(path)).andExpect(status().isOk())).get("items")).isEmpty();
         assertThat(redis.keys("catalog:cache:reviews:*")).as("빈 쪽도 넣었다").hasSize(1);
-        assertThat(data(mockMvc.perform(get(path)).andExpect(status().isOk())).get("items")).isEmpty();
+        jdbcTemplate.update("""
+                INSERT INTO product_reviews (id, product_id, customer_id, order_item_id, rating, body, option_title_snapshot, author_name, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 5, 'DB 직접', '기본', '김**', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))""",
+                UuidBinary.toBytes(UUID.randomUUID()), UuidBinary.toBytes(productId), UuidBinary.toBytes(UUID.randomUUID()), UuidBinary.toBytes(UUID.randomUUID()));
+        assertThat(data(mockMvc.perform(get(path)).andExpect(status().isOk())).get("items")).as("DB 를 직접 고쳐도(세대 안 올림) 캐시의 빈 쪽").isEmpty();
 
         reviews.saveAndFlush(ProductReview.write(productId, UUID.randomUUID(), UUID.randomUUID(), 5, "좋아요", "기본", "김**"));
-        assertThat(data(mockMvc.perform(get(path)).andExpect(status().isOk())).get("items")).hasSize(1);
+        assertThat(data(mockMvc.perform(get(path)).andExpect(status().isOk())).get("items")).as("리뷰 쓰기는 세대를 올린다 — 둘 다 보인다").hasSize(2);
     }
 
     @Test

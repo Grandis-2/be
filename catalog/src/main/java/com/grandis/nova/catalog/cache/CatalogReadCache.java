@@ -147,8 +147,9 @@ public class CatalogReadCache {
     }
 
     /**
-     * 상품 리뷰. 앞 페이지 · 화면이 쓰는 size 만 넣는다. 빈 결과도 넣는다 — 상품이 없거나 보이지 않으면 조회가 404 를 던져 넣을 값이 없으므로, 빈 목록은
-     * 보이는 상품에 리뷰가 아직 없다는 뜻이다(사전예약 상품은 늘 그렇다). 리뷰를 쓰거나 상품이 바뀌면 리뷰 세대가 올라 다음 조회부터 새로 읽는다.
+     * 상품 리뷰. 앞 페이지 · 화면이 쓰는 size 만 넣는다. 빈 결과도 넣는다 — 상품이 없거나 보이지 않으면 조회가 404 를 던져 넣을 값이 없으므로, 빈 쪽은
+     * 보이는 상품의 리뷰가 아직 없거나 리뷰 수를 넘은 앞 쪽이다(사전예약 상품은 늘 빈 쪽이다). 리뷰를 쓰거나 상품이 바뀌면 리뷰 세대가 올라 다음 조회부터 새로 읽는다.
+     * 사전예약의 준비(회차가 있는가)는 리뷰 세대를 올리지 않지만 되돌아가지 않는다 — preorder 는 회차를 지우지 않고, 회차 취소는 catalog 의 상품 쓰기라 세대가 오른다.
      */
     public ReadCache.Entry<OffsetPage<ReviewView>> productReviews(UUID productId, int page, int size) {
         if (page >= CACHED_PAGES || !CACHED_REVIEW_SIZES.contains(size)) {
