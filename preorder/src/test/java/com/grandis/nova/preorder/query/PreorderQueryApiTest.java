@@ -142,7 +142,35 @@ class PreorderQueryApiTest {
     }
 
     @Test
-    @DisplayName("사진을 받다 한 상품에서 실패하면 남은 상품은 catalog 에 묻지 않는다 — 캐시에 없는 상품마다 시간 초과를 기다리지 않게")
+    @DisplayName("연동 오류(403)는 그 상품만 비우고 남은 상품의 사진은 계속 받는다")
+    void integrationErrorOnlyDropsThatProduct() throws Exception {
+        AcceptResult older = accepts.accept(customerId);
+        AcceptResult newer = accepts.accept(customerId);   // 목록은 최신순이라 이 상품을 먼저 묻는다
+        catalogReader.evict(older.preorder().productId());
+        catalogReader.evict(newer.preorder().productId());
+        given(catalogClient.getProduct(newer.preorder().productId())).willThrow(
+                org.springframework.web.client.HttpClientErrorException.create(org.springframework.http.HttpStatus.FORBIDDEN, "Forbidden", null, null, null));
+
+        mockMvc.perform(get("/api/v1/preorders").with(customer(customerId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].imageUrl").doesNotExist())
+                .andExpect(jsonPath("$.data.items[1].imageUrl").value(CatalogStubs.imageUrl(older.preorder().optionId())));
+    }
+
+    @Test
+    @DisplayName("분류되지 않은 실패(빈 응답 본문)도 그 상품만 비우고 목록은 그대로 낸다")
+    void unexpectedFailureOnlyDropsThatProduct() throws Exception {
+        AcceptResult accepted = accepts.accept(customerId);
+        catalogReader.evict(accepted.preorder().productId());
+        given(catalogClient.getProduct(accepted.preorder().productId())).willReturn(null);
+
+        mockMvc.perform(get("/api/v1/preorders").with(customer(customerId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].imageUrl").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("일시 장애(503)로 한 상품에서 실패하면 남은 상품은 catalog 에 묻지 않는다 — 캐시에 없는 상품마다 시간 초과를 기다리지 않게")
     void firstFailureStopsTheRemainingLookups() throws Exception {
         AcceptResult older = accepts.accept(customerId);
         AcceptResult newer = accepts.accept(customerId);   // 목록은 최신순이라 이 상품을 먼저 묻는다
