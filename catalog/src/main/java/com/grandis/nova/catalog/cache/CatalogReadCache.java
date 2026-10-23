@@ -107,7 +107,8 @@ public class CatalogReadCache {
     public ReadCache.Entry<ProductDetailView> product(UUID productId) {
         // 판매 준비 전인 일반 상품의 본문은 넣지 않는다 — 준비 이벤트의 세대 올리기가 실패해도 "목록에는 있는데 상세는 404" 가 TTL 동안 남지 않게
         // (준비는 되돌아가지 않으므로 넣은 본문의 준비는 낡지 않는다). 준비 전 상품의 상세는 요청마다 DB 로 간다
-        // 상품 · 회차 세대를 한 번에 읽는다(MGET) — 사전예약 상세는 본문 다음 회차를 읽어 세대 GET 이 둘이었다
+        // 상품 · 회차 세대를 한 번에 읽는다(MGET) — 사전예약 상세는 본문 다음 회차를 읽어 세대 GET 이 둘이었다. 세대는 본문을 읽기 전에 읽으므로,
+        // 본문을 기다리는 사이 온 회차 올리기(조기 마감 등)는 다음 요청부터 보인다
         ReadCache.Generations generations = cache.generations(PRODUCTS, PublicCampaigns.CAMPAIGNS);
         ReadCache.Entry<ProductDetailBody> body = cache.entry(detailSpec, generations, PRODUCTS, productId.toString(),
                 path -> details.findProductBody(productId), found -> found.view().saleMode() != SaleMode.IN_STOCK || found.stockReady());

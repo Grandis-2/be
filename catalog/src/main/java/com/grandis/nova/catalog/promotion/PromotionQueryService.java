@@ -109,7 +109,8 @@ public class PromotionQueryService {
 
     /** @throws BusinessException 404 — 없거나 오늘이 홍보 기간 밖 */
     public Served<PromotionViews.Detail> detail(UUID promotionId) {
-        // 홍보 · 상품 · 회차 세대를 한 번에 읽는다(MGET) — 차례로 GET 하면 Redis 왕복이 셋이다
+        // 홍보 · 상품 · 회차 세대를 한 번에 읽는다(MGET) — 차례로 GET 하면 Redis 왕복이 세대 수만큼이다(회차 캐시를 끄면 둘).
+        // 세대는 본문을 읽기 전에 읽으므로, 본문을 기다리는 사이 온 올리기(조기 마감 등)는 다음 요청부터 보인다
         ReadCache.Generations generations = cache.generations(PROMOTIONS, CatalogReadCache.PRODUCTS, PublicCampaigns.CAMPAIGNS);
         ReadCache.Entry<Body> body = cache.entry(bodySpec, generations, PROMOTIONS, promotionId.toString(), () -> loadBody(promotionId));
         LocalDate today = LocalDate.ofInstant(clock.instant(), PromotionService.KOREA);
@@ -133,8 +134,9 @@ public class PromotionQueryService {
     /**
      * 홍보 카드에 사전예약 회차를 채운다 — 회차가 없는 사전예약 상품(판매 준비 전)은 뺀다. preorder 가 답하지 않으면 준비를 가르지 못하므로 빼지 않고,
      * 시각 · 접수 단계를 비워 낸다.
+     *
+     * @param generations 이 요청이 먼저 읽은 세대(상품 · 회차)
      */
-    /** @param generations 이 요청이 먼저 읽은 세대(상품 · 회차) */
     private ReadCache.Entry<List<ProductListItem>> cards(List<UUID> productIds, boolean withColors, ReadCache.Generations generations) {
         if (productIds.isEmpty()) {
             return new ReadCache.Entry<>(List.of(), clock.instant());   // 오늘 보이는 홍보가 없다

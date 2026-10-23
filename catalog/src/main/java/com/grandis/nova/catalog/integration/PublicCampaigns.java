@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 /**
@@ -50,7 +51,7 @@ import java.util.stream.Collectors;
  *       묻는다 — 그동안 공개 조회는 요청마다 preorder 에 묻고, 받은 값은 위와 같이 옛 값일 수 있다. 채우는 자리를 잡은 뒤 다시 읽기에서 Redis 를
  *       못 쓰면 그 조회도 우회로 바뀌어 fresh 없이 묻고, 그 자리를 기다리던 요청도 같은 값을 받는다. 다만 이 인스턴스의 사본이 있으면 묻기 전에
  *       그것으로 답한다({@link #HELD_DURING_OUTAGE}). 묶음은 긴 쪽이 우회해도 짧은 쪽을 거친다 — 짧은 쪽의 사본을 쓰려는 것이고, 그 대가로 Redis 가
- *       느린 동안(차단기가 열리기 전) 짧은 쪽의 세대 · 값 읽기 시간이 더 붙는다.</li>
+ *       느린 동안(차단기가 열리기 전) 짧은 쪽의 값 읽기 시간이 더 붙는다(세대를 묶음으로 넘겨받지 않은 호출이면 세대 읽기도).</li>
  *   <li>접수 단계는 넣지 않는다 — 호출자가 꺼낸 시각으로 계산하므로 오픈 · 마감 시각이 지나는 것은 캐시와 상관없이 바로 보인다.</li>
  *   <li>preorder 가 답하지 않으면 넣지 않고 {@link PreorderCampaigns#find} 와 같이 던진다. 켜 두면 하나 더 — 같은 키를 이 인스턴스에서 먼저 묻고 있는
  *       요청을 기다리는 쪽은 ReadCache 의 기다림 상한(5초)을 넘으면 같은 DEPENDENCY_UNAVAILABLE 을 던진다(그것을 어떻게 답할지는 호출자 몫이다).</li>
@@ -140,7 +141,7 @@ public class PublicCampaigns {
 
     private ReadCache.Entry<Map<UUID, CampaignWindow>> setEntry(ReadCache.Spec<Map<UUID, CampaignWindow>> spec, ReadCache.Generations generations,
                                                                 String key, Function<LoadPath, Map<UUID, CampaignWindow>> loader,
-                                                                java.util.function.Predicate<Map<UUID, CampaignWindow>> storable) {
+                                                                Predicate<Map<UUID, CampaignWindow>> storable) {
         return generations == null
                 ? cache.entry(spec, CAMPAIGNS, key, loader, storable)
                 : cache.entry(spec, generations, CAMPAIGNS, key, loader, storable);
