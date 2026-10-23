@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
@@ -16,6 +17,9 @@ import org.springframework.web.filter.OncePerRequestFilter;
  *
  * 이 필터는 401 을 직접 내지 않는다. 인증에 실패하면 컨텍스트를 비운 채 다음으로 넘기고, 보호 경로면 entry point 가 401 을 낸다.
  * 그래서 공개 경로에 잘못된 토큰이 와도 통과한다 — 401 은 인가 규칙이 보호 경로에서만 낸다. 실패 이유는 요청 속성과 WARN 로그에만 남는다.
+ *
+ * 서비스가 넘긴 공개 조회 경로({@link SecurityFilterChainSupport#build(org.springframework.security.config.annotation.web.builders.HttpSecurity,
+ * RequestMatcher, org.springframework.security.config.Customizer)})는 헤더가 있어도 보지 않는다 — 파싱 · 폐기 조회 · 실패 로그 없이 익명으로 넘긴다.
  *
  * 빈이 아니다. SecurityFilterChainSupport 가 체인 안에서 만든다 — 빈으로 두면 Boot 가 서블릿 필터로 한 번 더 등록한다.
  */
@@ -34,11 +38,24 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final JwtTokenProvider provider;
     private final RevocationChecker revocationChecker;
     private final RevocationFailurePolicy policy;
+    private final RequestMatcher anonymousReads;
 
     public JwtAuthenticationFilter(JwtTokenProvider provider, RevocationChecker revocationChecker, RevocationFailurePolicy policy) {
+        this(provider, revocationChecker, policy, request -> false);
+    }
+
+    /** @param anonymousReads 토큰을 보지 않는 경로. 인가 규칙에서 열린(permitAll) 경로여야 한다 — SecurityFilterChainSupport 가 같이 연다 */
+    public JwtAuthenticationFilter(JwtTokenProvider provider, RevocationChecker revocationChecker, RevocationFailurePolicy policy,
+                                   RequestMatcher anonymousReads) {
         this.provider = provider;
         this.revocationChecker = revocationChecker;
         this.policy = policy;
+        this.anonymousReads = anonymousReads;
+    }
+
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        return anonymousReads.matches(request);
     }
 
     @Override
