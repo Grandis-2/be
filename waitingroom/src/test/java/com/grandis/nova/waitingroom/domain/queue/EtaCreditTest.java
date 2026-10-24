@@ -1,4 +1,4 @@
-package com.grandis.nova.waitingroom.entry;
+package com.grandis.nova.waitingroom.domain.queue;
 
 import com.grandis.nova.waitingroom.domain.product.MaxWait;
 import com.grandis.nova.waitingroom.domain.product.ProductState;

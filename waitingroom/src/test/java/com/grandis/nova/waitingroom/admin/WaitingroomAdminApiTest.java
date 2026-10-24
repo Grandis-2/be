@@ -327,7 +327,40 @@ class WaitingroomAdminApiTest {
                 .jsonPath("$.data.products[0].phase").isEqualTo("OPEN")
                 .jsonPath("$.data.products[0].waiting").isEqualTo(10)
                 .jsonPath("$.data.products[0].credit").isEqualTo(5)
-                .jsonPath("$.data.products[0].cap").isEqualTo(7);
+                .jsonPath("$.data.products[0].cap").isEqualTo(7)
+                .jsonPath("$.data.products[0].estimatedWaitSeconds").isEqualTo(2)
+                .jsonPath("$.data.longWaitThresholdSeconds").isEqualTo(120);
+    }
+
+    @Test
+    void 현황의_맨_뒤_예상_대기는_사용자_화면과_같은_식으로_재고_모르면_비운다() {
+        SalesWindow open = new SalesWindow(now.minusSeconds(60), now.plusSeconds(3_600));
+        SalesWindow closed = new SalesWindow(now.minusSeconds(3_600), now.minusSeconds(60));
+        TestSnapshots.put(snapshots, Map.of(
+                productKey(101), ProductState.withQueue(3, 10, open, 150),
+                productKey(102), ProductState.withQueue(0, 10, open, 4),
+                productKey(103), ProductState.idle(open, 150),
+                productKey(104), ProductState.hidden(10, open, 150),
+                productKey(105), ProductState.withQueue(3, 10, closed, 150),
+                productKey(106), ProductState.closed(10, open, 150)), new SnapshotMeta(80, 1, MaxWait.unlimited()));
+
+        get("/status").expectStatus().isOk().expectBody()
+                .jsonPath("$.data.longWaitThresholdSeconds").isEmpty()
+                .jsonPath("$.data.products[0].estimatedWaitSeconds").isEqualTo(4)
+                // 몫을 아직 못 받았으면 전역 속도와 상품 상한 중 작은 쪽(4)으로 잰다
+                .jsonPath("$.data.products[1].estimatedWaitSeconds").isEqualTo(3)
+                .jsonPath("$.data.products[2].estimatedWaitSeconds").isEqualTo(0)
+                .jsonPath("$.data.products[3].estimatedWaitSeconds").isEmpty()
+                .jsonPath("$.data.products[4].estimatedWaitSeconds").isEmpty()
+                // 이 노드 시계로는 접수 중이어도 리더가 마감한 줄
+                .jsonPath("$.data.products[5].estimatedWaitSeconds").isEmpty();
+
+        TestSnapshots.put(snapshots, Map.of(productKey(101), ProductState.withQueue(0, 10, open, 150),
+                productKey(102), ProductState.idle(open, 150)), new SnapshotMeta(0, 1, MaxWait.unlimited()));
+        // 전체 입장 정지 — 줄이 비어도 바로 입장이 아니다
+        get("/status").expectStatus().isOk().expectBody()
+                .jsonPath("$.data.products[0].estimatedWaitSeconds").isEmpty()
+                .jsonPath("$.data.products[1].estimatedWaitSeconds").isEmpty();
     }
 
     @Test
