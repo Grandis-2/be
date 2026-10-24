@@ -17,22 +17,25 @@ import java.util.UUID;
 
 /**
  * 불일치 건 읽기와 조치 칸 바꾸기. batch 가 넣은 행에서 preorder 는 조치 칸(action_*)만 바꾼다(허용된 쓰기).
- * 실행 · 코드로 거르는 목록과 두 실행 비교는 uq_reconciliation_finding_target(run_id, check_code, target_key)로 읽는다.
+ * 실행 · 코드로 거르는 목록과 두 실행 비교는 uq_reconciliation_finding_target(run_id, check_code, target_key)로,
+ * 상품으로 거르는 목록은 ix_reconciliation_finding_product(run_id, product_id)로 읽는다.
  */
 @Component
 public class ReconciliationFindings {
 
     private static final String SELECT = """
-            SELECT id, run_id, check_code, target_key, be_snapshot, mock_snapshot, first_detected_at, action_status,
+            SELECT id, run_id, check_code, target_key, product_id, be_snapshot, mock_snapshot, first_detected_at,
+                   action_status,
                    action_type, action_requested_by, action_requested_at, action_note
               FROM reconciliation_findings
             """;
 
     private static final RowMapper<FindingRow> FINDING = (rs, rowNum) -> new FindingRow(
             UuidBinary.fromBytes(rs.getBytes(1)), UuidBinary.fromBytes(rs.getBytes(2)), rs.getString(3), rs.getString(4),
-            rs.getString(5), rs.getString(6), ReconciliationRuns.instant(rs, 7), ActionStatus.valueOf(rs.getString(8)),
-            rs.getString(9) == null ? null : ActionType.valueOf(rs.getString(9)), rs.getString(10),
-            ReconciliationRuns.instant(rs, 11), rs.getString(12));
+            rs.getBytes(5) == null ? null : UuidBinary.fromBytes(rs.getBytes(5)), rs.getString(6), rs.getString(7),
+            ReconciliationRuns.instant(rs, 8), ActionStatus.valueOf(rs.getString(9)),
+            rs.getString(10) == null ? null : ActionType.valueOf(rs.getString(10)), rs.getString(11),
+            ReconciliationRuns.instant(rs, 12), rs.getString(13));
 
     private static final RowMapper<FindingKey> KEY = (rs, rowNum) -> new FindingKey(rs.getString(1), rs.getString(2));
 
@@ -42,12 +45,19 @@ public class ReconciliationFindings {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    /** @param checkCode 이 코드만. null 이면 전부 */
-    public OffsetPage<FindingRow> findPage(UUID runId, String checkCode, int page, int size) {
-        String where = " WHERE run_id = ?" + (checkCode == null ? "" : " AND check_code = ?");
+    /**
+     * @param checkCode 이 코드만. null 이면 전부
+     * @param productId 이 상품만. null 이면 전부
+     */
+    public OffsetPage<FindingRow> findPage(UUID runId, String checkCode, UUID productId, int page, int size) {
+        String where = " WHERE run_id = ?" + (checkCode == null ? "" : " AND check_code = ?")
+                + (productId == null ? "" : " AND product_id = ?");
         List<Object> args = new ArrayList<>(List.of(UuidBinary.toBytes(runId)));
         if (checkCode != null) {
             args.add(checkCode);
+        }
+        if (productId != null) {
+            args.add(UuidBinary.toBytes(productId));
         }
         Long total = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM reconciliation_findings" + where, Long.class,
                 args.toArray());

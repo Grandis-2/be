@@ -34,29 +34,29 @@ class PreorderRowCheck implements Check {
         boolean registerSucceeded = BePreorder.SUCCEEDED.equals(be.registerJobStatus());
         if (be.registerJobStatus() == null) {
             // 접수가 예약 · 등록 작업 · 발행 이벤트를 한 트랜잭션에 넣는다. 작업이 없으면 worker 가 영영 모른다
-            findings.add(CheckCode.OUTBOX_MISSING, key, be, null);
+            findings.add(CheckCode.OUTBOX_MISSING, key, be.productId(), be, null);
         } else if (!REGISTER_JOB_BY_STATUS.getOrDefault(be.status(), Set.of()).contains(be.registerJobStatus())) {
-            findings.add(CheckCode.JOB_STATE_MISMATCH, key, be, null);
+            findings.add(CheckCode.JOB_STATE_MISMATCH, key, be.productId(), be, null);
         }
         if (registerSucceeded && be.externalReference() == null) {
-            findings.add(CheckCode.NUMBER_MISSING, key, be, null);
+            findings.add(CheckCode.NUMBER_MISSING, key, be.productId(), be, null);
         }
         if (be.externalReference() != null && !registerSucceeded) {
-            findings.add(CheckCode.NUMBER_WITHOUT_SUCCESS, key, be, null);
+            findings.add(CheckCode.NUMBER_WITHOUT_SUCCESS, key, be.productId(), be, null);
         }
         // 취소 완료는 취소 작업의 성공으로만 간다
         if (be.canceled() && !BePreorder.SUCCEEDED.equals(be.cancelJobStatus())) {
-            findings.add(CheckCode.CANCEL_JOB_INCOMPLETE, key, be, null);
+            findings.add(CheckCode.CANCEL_JOB_INCOMPLETE, key, be.productId(), be, null);
         }
         // 등록 · 취소 작업 DEAD_LETTER 는 멈춤이 아니라 관리자 대기다(실행 행의 건수). 포기되지 않은 처리 중만 기준 시간을 넘기면 멈춤이다
         if ((be.registering() || be.canceling()) && !be.changedAt().isAfter(scope.stuckBefore())) {
-            findings.add(CheckCode.STUCK, key, be, null);
+            findings.add(CheckCode.STUCK, key, be.productId(), be, null);
         }
         if (!be.status().equals(be.lastEventStatus())) {
-            findings.add(CheckCode.HISTORY_MISMATCH, key, be, null);
+            findings.add(CheckCode.HISTORY_MISMATCH, key, be.productId(), be, null);
         }
         if (be.queuePosition() < be.batchFrom() || (be.batchTo() != null && be.queuePosition() > be.batchTo())) {
-            findings.add(CheckCode.SHIPMENT_BATCH_MISMATCH, key, be, null);
+            findings.add(CheckCode.SHIPMENT_BATCH_MISMATCH, key, be.productId(), be, null);
         }
     }
 }

@@ -103,8 +103,9 @@ public class RunStore {
             ReconciliationRun run = runs.findById(runId).orElseThrow();
             Map<String, Instant> earlier = firstDetectedInPrevious(run);
             findings.saveAll(found.stream()
-                    .map(f -> new ReconciliationFinding(runId, f.checkCode(), f.targetKey(), f.beSnapshot(),
-                            f.mockSnapshot(), earlier.getOrDefault(key(f.checkCode(), f.targetKey()), run.getStartedAt())))
+                    .map(f -> new ReconciliationFinding(runId, f.checkCode(), f.targetKey(), f.productId(),
+                            f.beSnapshot(), f.mockSnapshot(),
+                            earlier.getOrDefault(key(f.checkCode(), f.targetKey()), run.getStartedAt())))
                     .toList());
         });
     }

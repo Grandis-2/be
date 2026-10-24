@@ -1,6 +1,5 @@
 package com.grandis.nova.preorder.reconciliation.application;
 
-import com.grandis.nova.preorder.reconciliation.domain.FindingRow;
 import java.util.UUID;
 
 /**
@@ -9,10 +8,10 @@ import java.util.UUID;
  * @param finding   조치한 뒤의 건. 거절됐으면 null
  * @param errorCode 거절 사유(RECONCILIATION_ACTION_NOT_ALLOWED 등). 조치했으면 null
  */
-public record ExternalCancelOutcome(UUID findingId, FindingRow finding, String errorCode, String errorMessage) {
+public record ExternalCancelOutcome(UUID findingId, FindingView finding, String errorCode, String errorMessage) {
 
-    static ExternalCancelOutcome done(FindingRow finding) {
-        return new ExternalCancelOutcome(finding.id(), finding, null, null);
+    static ExternalCancelOutcome done(FindingView finding) {
+        return new ExternalCancelOutcome(finding.finding().id(), finding, null, null);
     }
 
     static ExternalCancelOutcome rejected(UUID findingId, String errorCode, String errorMessage) {

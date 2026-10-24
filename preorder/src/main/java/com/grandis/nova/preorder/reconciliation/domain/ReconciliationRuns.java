@@ -55,6 +55,32 @@ public class ReconciliationRuns {
                 .findFirst();
     }
 
+    /**
+     * 실행마다 상품별 불일치 건수, 많은 순. 상품을 알 수 없는 건은 null 키로 센다.
+     * ix_reconciliation_finding_product(run_id, product_id)만 읽는다.
+     */
+    public Map<UUID, Map<UUID, Long>> countFindingsByProduct(Collection<UUID> runIds) {
+        Map<UUID, Map<UUID, Long>> counts = new HashMap<>();
+        if (runIds.isEmpty()) {
+            return counts;
+        }
+        String in = String.join(", ", runIds.stream().map(id -> "?").toList());
+        jdbcTemplate.query("""
+                        SELECT run_id, product_id, COUNT(*) AS findings
+                          FROM reconciliation_findings
+                         WHERE run_id IN (%s)
+                         GROUP BY run_id, product_id
+                         ORDER BY findings DESC, product_id
+                        """.formatted(in),
+                rs -> {
+                    byte[] product = rs.getBytes(2);
+                    counts.computeIfAbsent(UuidBinary.fromBytes(rs.getBytes(1)), id -> new LinkedHashMap<>())
+                            .put(product == null ? null : UuidBinary.fromBytes(product), rs.getLong(3));
+                },
+                runIds.stream().map(UuidBinary::toBytes).toArray());
+        return counts;
+    }
+
     /** 실행마다 코드별 불일치 건수. 불일치가 없는 실행은 빠진다. 코드 순서는 이름순이다 */
     public Map<UUID, Map<String, Long>> countFindings(Collection<UUID> runIds) {
         Map<UUID, Map<String, Long>> counts = new HashMap<>();

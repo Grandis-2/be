@@ -33,12 +33,15 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 관리자 정합성 화면. 검사는 batch 가 한다 — 여기서는 실행 요청을 남기고, 결과 표를 읽고, 불일치 건의 조치를 기존 업무 경로
@@ -116,25 +119,43 @@ public class ReconciliationAdminService {
             }
             throw new BusinessException(PreorderErrorCode.RECONCILIATION_RUN_ACTIVE);
         }
-        return new RunView(runs.find(runId).orElseThrow(), Map.of());
+        return new RunView(runs.find(runId).orElseThrow(), Map.of(),
+                productId == null ? null : campaigns.findTitles(List.of(productId)).get(productId), List.of());
     }
 
-    /** 최근 실행부터. 실행마다 코드별 불일치 건수를 함께 준다 */
+    /** 최근 실행부터. 실행마다 코드별 · 상품별 불일치 건수와 상품 이름을 함께 준다 */
     @Transactional(readOnly = true)
     public OffsetPage<RunView> findRuns(int page, int size) {
         OffsetPage<RunRow> found = runs.findPage(page, size);
-        Map<UUID, Map<String, Long>> counts = runs.countFindings(found.items().stream().map(RunRow::id).toList());
-        return found.map(run -> new RunView(run, counts.getOrDefault(run.id(), Map.of())));
+        List<UUID> runIds = found.items().stream().map(RunRow::id).toList();
+        Map<UUID, Map<String, Long>> counts = runs.countFindings(runIds);
+        Map<UUID, Map<UUID, Long>> byProduct = runs.countFindingsByProduct(runIds);
+        Set<UUID> productIds = new HashSet<>();
+        found.items().stream().map(RunRow::productId).filter(Objects::nonNull).forEach(productIds::add);
+        byProduct.values().forEach(products -> products.keySet().stream().filter(Objects::nonNull)
+                .forEach(productIds::add));
+        Map<UUID, String> titles = campaigns.findTitles(productIds);
+        return found.map(run -> new RunView(run, counts.getOrDefault(run.id(), Map.of()),
+                run.productId() == null ? null : titles.get(run.productId()),
+                byProduct.getOrDefault(run.id(), Map.of()).entrySet().stream()
+                        .map(entry -> new ProductFindingCount(entry.getKey(),
+                                entry.getKey() == null ? null : titles.get(entry.getKey()), entry.getValue()))
+                        .toList()));
     }
 
     /**
      * @param checkCode 이 코드만. null 이면 전부
+     * @param productId 이 상품만. null 이면 전부
      * @throws BusinessException RECONCILIATION_RUN_NOT_FOUND
      */
     @Transactional(readOnly = true)
-    public OffsetPage<FindingRow> findFindings(UUID runId, String checkCode, int page, int size) {
+    public OffsetPage<FindingView> findFindings(UUID runId, String checkCode, UUID productId, int page, int size) {
         requireRun(runId);
-        return findings.findPage(runId, checkCode, page, size);
+        OffsetPage<FindingRow> found = findings.findPage(runId, checkCode, productId, page, size);
+        Map<UUID, String> titles = campaigns.findTitles(found.items().stream().map(FindingRow::productId)
+                .filter(Objects::nonNull).collect(Collectors.toSet()));
+        return found.map(finding -> new FindingView(finding,
+                finding.productId() == null ? null : titles.get(finding.productId())));
     }
 
     /**
@@ -168,7 +189,7 @@ public class ReconciliationAdminService {
      *                           RECONCILIATION_ACTION_TAKEN · PREORDER_NOT_FOUND · SYNC_JOB_NOT_REPROCESSABLE
      */
     @Transactional
-    public FindingRow reprocess(UUID findingId, String requestedBy) {
+    public FindingView reprocess(UUID findingId, String requestedBy) {
         FindingRow finding = findings.findForUpdate(findingId)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.RECONCILIATION_FINDING_NOT_FOUND));
         requireActionable(finding, ActionType.REPROCESS);
@@ -178,7 +199,7 @@ public class ReconciliationAdminService {
         if (findings.markRequested(findingId, ActionType.REPROCESS, requestedBy, clock.instant()) != 1) {
             throw new IllegalStateException("잠근 불일치 건의 조치 상태가 바뀌었다: findingId=" + findingId);
         }
-        return findings.find(findingId).orElseThrow();
+        return named(findings.find(findingId).orElseThrow());
     }
 
     /**
@@ -189,17 +210,17 @@ public class ReconciliationAdminService {
      * @throws BusinessException RECONCILIATION_FINDING_NOT_FOUND · RECONCILIATION_ACTION_NOT_ALLOWED ·
      *                           RECONCILIATION_ACTION_TAKEN · PREORDER_NOT_FOUND · PREORDER_NOT_CANCELABLE
      */
-    public FindingRow cancel(UUID findingId, String reason, String requestedBy) {
+    public FindingView cancel(UUID findingId, String reason, String requestedBy) {
         FindingRow finding = findings.find(findingId)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.RECONCILIATION_FINDING_NOT_FOUND));
         requireActionable(finding, ActionType.ADMIN_CANCEL);
         adminCancel.cancel(finding.targetKey(), reason);
-        return transactionTemplate.execute(status -> {
+        return named(transactionTemplate.execute(status -> {
             if (findings.markRequested(findingId, ActionType.ADMIN_CANCEL, requestedBy, clock.instant()) != 1) {
                 throw actionTaken(findings.find(findingId).orElseThrow());
             }
             return findings.find(findingId).orElseThrow();
-        });
+        }));
     }
 
     /**
@@ -212,7 +233,7 @@ public class ReconciliationAdminService {
      * @throws BusinessException RECONCILIATION_FINDING_NOT_FOUND · RECONCILIATION_ACTION_NOT_ALLOWED(코드가 맞지 않거나 be 예약이
      *                           살아 있음) · RECONCILIATION_ACTION_TAKEN
      */
-    public FindingRow externalCancel(UUID findingId, String requestedBy) {
+    public FindingView externalCancel(UUID findingId, String requestedBy) {
         FindingRow finding = findings.find(findingId)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.RECONCILIATION_FINDING_NOT_FOUND));
         requireExternalCancelable(finding);
@@ -223,12 +244,17 @@ public class ReconciliationAdminService {
             throw actionTaken(findings.find(findingId).orElseThrow());
         }
         ExternalCancelResult result = cancelAtMock(finding);
-        return transactionTemplate.execute(status -> {
+        return named(transactionTemplate.execute(status -> {
             if (findings.finishExternalCancel(findingId, result.status(), result.note(), clock.instant()) != 1) {
                 throw new IllegalStateException("REQUESTED 로 표시한 불일치 건의 조치 상태가 바뀌었다: findingId=" + findingId);
             }
             return findings.find(findingId).orElseThrow();
-        });
+        }));
+    }
+
+    private FindingView named(FindingRow finding) {
+        return new FindingView(finding, finding.productId() == null ? null
+                : campaigns.findTitles(List.of(finding.productId())).get(finding.productId()));
     }
 
     /**

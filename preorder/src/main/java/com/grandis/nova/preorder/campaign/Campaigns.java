@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -130,6 +131,20 @@ public class Campaigns {
         }
         return batches.lookupAll(shipmentBatchIds).stream()
                 .collect(Collectors.toMap(ShipmentBatch::getId, ShipmentBatch::toSnapshot));
+    }
+
+    /** 상품 id → 회차 사본의 상품 이름. 회차가 없거나 이름을 아직 받지 못한 상품은 빠진다. 트랜잭션 없이 문장 하나다. */
+    public Map<UUID, String> findTitles(Collection<UUID> productIds) {
+        Map<UUID, String> titles = new HashMap<>();
+        if (productIds.isEmpty()) {
+            return titles;
+        }
+        for (PreorderCampaign campaign : campaigns.lookupAll(productIds)) {
+            if (campaign.getProductTitle() != null) {
+                titles.put(campaign.getProductId(), campaign.getProductTitle());
+            }
+        }
+        return titles;
     }
 
     /** 오픈한 지 window 가 안 된 회차가 있는가 — 신청이 몰리는 구간이다 */

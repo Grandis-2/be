@@ -22,7 +22,10 @@ class StuckRowsCheck implements InternalCheck {
     // 이벤트의 대상(aggregate)은 등록 · 취소 작업, 예약, 회차(상품) 셋이다. 미발행 행은 ix_preorder_outbox_unpublished 로 찾는다
     private static final String UNPUBLISHED = """
             SELECT e.event_id, e.event_type, e.publish_attempts, e.created_at,
-                   COALESCE(jp.preorder_token, pp.preorder_token, BIN_TO_UUID(e.aggregate_id)) AS target_key
+                   COALESCE(jp.preorder_token, pp.preorder_token, BIN_TO_UUID(e.aggregate_id)) AS target_key,
+                   BIN_TO_UUID(COALESCE(jp.product_id, pp.product_id,
+                                        CASE WHEN e.aggregate_type = 'PREORDER_CAMPAIGN' THEN e.aggregate_id END))
+                       AS product_id
               FROM preorder_outbox_events e
               LEFT JOIN preorder_sync_jobs j ON e.aggregate_type = 'PREORDER_SYNC_JOB' AND j.id = e.aggregate_id
               LEFT JOIN preorders jp ON jp.id = j.preorder_id
@@ -37,7 +40,8 @@ class StuckRowsCheck implements InternalCheck {
             """;
 
     private static final String UNFINISHED_ATTEMPTS = """
-            SELECT p.preorder_token, j.job_type, a.attempt_number, a.started_at
+            SELECT p.preorder_token, BIN_TO_UUID(p.product_id) AS product_id, j.job_type, a.attempt_number,
+                   a.started_at
               FROM preorder_sync_attempts a
               JOIN preorder_sync_jobs j ON j.id = a.sync_job_id
               JOIN preorders p ON p.id = j.preorder_id
@@ -56,14 +60,14 @@ class StuckRowsCheck implements InternalCheck {
         LocalDateTime at = LocalDateTime.ofInstant(scope.stuckBefore(), ZoneOffset.UTC);
         statement(UNPUBLISHED + (productId == null ? "" : UNPUBLISHED_IN_PRODUCT), at, productId)
                 .query(rs -> {
-                    findings.add(CheckCode.STUCK, rs.getString("target_key"),
+                    findings.add(CheckCode.STUCK, rs.getString("target_key"), rs.getString("product_id"),
                             new UnpublishedEvent(rs.getString("event_id"), rs.getString("event_type"),
                                     rs.getInt("publish_attempts"), BeSnapshot.utc(rs, "created_at")), null);
                 });
         statement(UNFINISHED_ATTEMPTS + (productId == null ? "" : " AND p.product_id = UUID_TO_BIN(:productId)"),
                 at, productId)
                 .query(rs -> {
-                    findings.add(CheckCode.STUCK, rs.getString("preorder_token"),
+                    findings.add(CheckCode.STUCK, rs.getString("preorder_token"), rs.getString("product_id"),
                             new UnfinishedAttempt(rs.getString("job_type"), rs.getInt("attempt_number"),
                                     BeSnapshot.utc(rs, "started_at")), null);
                 });

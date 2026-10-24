@@ -24,7 +24,7 @@ public class RecordingCheck implements Check {
     public void inspect(KeyPair pair, RunScope scope, FindingSink findings) {
         keys.add(pair.key());
         if (flagged.contains(pair.key())) {
-            findings.add(CODE, pair.key(), pair.be(), pair.mock());
+            findings.add(CODE, pair.key(), null, pair.be(), pair.mock());
         }
     }
 
