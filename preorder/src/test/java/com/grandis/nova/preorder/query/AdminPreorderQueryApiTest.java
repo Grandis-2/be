@@ -6,6 +6,7 @@ import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.integration.member.MemberClient;
+import com.grandis.nova.preorder.integration.member.MemberNames;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.PreorderFact;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
@@ -16,6 +17,7 @@ import com.grandis.nova.preorder.support.PreorderCancels;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -72,9 +74,15 @@ class AdminPreorderQueryApiTest {
     @MockitoBean
     CatalogClient catalogClient;
 
-    /** 회원 이름(member 내부 API) 자리. 그 앞의 캐시 · 회로(MemberNames)는 실제 빈이다. 정하지 않으면 null 을 돌려 이름이 비어 있다. */
+    /**
+     * 회원 이름(member 내부 API) 자리. 그 앞의 캐시 · 회로(MemberNames)는 실제 빈이다. 기본은 빈 응답이다 — 정하지 않은 null 응답은
+     * MemberNames 안에서 NPE 가 되어 member 회로의 실패로 쌓이고, 시험 순서에 따라 이름 시험이 열린 회로에서 돌게 된다.
+     */
     @MockitoBean
     MemberClient memberClient;
+
+    @Autowired
+    CircuitBreakerRegistry circuitBreakers;
 
     ShopFixtures fixtures;
     AcceptFixtures accepts;
@@ -85,6 +93,8 @@ class AdminPreorderQueryApiTest {
         fixtures = new ShopFixtures(jdbcTemplate);
         accepts = new AcceptFixtures(acceptService, fixtures, catalogClient);
         customerId = fixtures.customer();
+        when(memberClient.getNames(any())).thenReturn(ApiResponse.ok(new MemberClient.Names(List.of())));
+        circuitBreakers.circuitBreaker(MemberNames.DEPENDENCY).reset();
     }
 
     @Test
