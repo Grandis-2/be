@@ -355,10 +355,12 @@ class WaitingroomAdminApiTest {
                 // 이 노드 시계로는 접수 중이어도 리더가 마감한 줄
                 .jsonPath("$.data.products[5].estimatedWaitSeconds").isEmpty();
 
-        TestSnapshots.put(snapshots, Map.of(productKey(101), ProductState.withQueue(0, 10, open, 150)),
-                new SnapshotMeta(0, 1, MaxWait.unlimited()));
+        TestSnapshots.put(snapshots, Map.of(productKey(101), ProductState.withQueue(0, 10, open, 150),
+                productKey(102), ProductState.idle(open, 150)), new SnapshotMeta(0, 1, MaxWait.unlimited()));
+        // 전체 입장 정지 — 줄이 비어도 바로 입장이 아니다
         get("/status").expectStatus().isOk().expectBody()
-                .jsonPath("$.data.products[0].estimatedWaitSeconds").isEmpty(); // 전체 입장 정지
+                .jsonPath("$.data.products[0].estimatedWaitSeconds").isEmpty()
+                .jsonPath("$.data.products[1].estimatedWaitSeconds").isEmpty();
     }
 
     @Test

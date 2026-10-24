@@ -154,11 +154,11 @@ class OperationalSettingsAdmin {
     }
 
     /**
-     * 지금 줄을 서면 앞선 대기 인원이 다 빠지기까지의 시간. 접수 기간 밖이거나 리더가 마감으로 본 줄은 움직이지 않으니 모른다 —
-     * 이 노드의 시계로는 접수 중이어도 리더가 먼저 마감했을 수 있다.
+     * 지금 줄을 서면 앞선 대기 인원이 다 빠지기까지의 시간. 접수 기간 밖이거나 리더가 마감으로 본 줄, 멈춘 줄(비공개 · 전체 입장
+     * 정지)은 움직이지 않으니 모른다 — 줄이 비어도 0(바로 입장)이 아니다. 이 노드의 시계로는 접수 중이어도 리더가 먼저 마감했을 수 있다.
      */
     private static Long estimatedWait(ProductState state, SalesPhase phase, SnapshotMeta meta) {
-        if (phase != SalesPhase.OPEN || state.runtime() == RuntimeState.CLOSED) {
+        if (phase != SalesPhase.OPEN || state.runtime() == RuntimeState.CLOSED || EtaCredit.paused(state, meta)) {
             return null;
         }
         double eta = EtaCredit.etaSec(state.waiting(), state, meta);
