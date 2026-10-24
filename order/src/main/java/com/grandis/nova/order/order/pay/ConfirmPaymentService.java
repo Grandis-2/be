@@ -2,6 +2,7 @@ package com.grandis.nova.order.order.pay;
 
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.CommonErrorCode;
+import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.order.OrderErrorCode;
 import com.grandis.nova.order.client.payment.PaymentConfirmation;
 import com.grandis.nova.order.client.payment.PayableTarget;
@@ -13,6 +14,7 @@ import com.grandis.nova.order.order.domain.model.OrderTransition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
 import com.grandis.nova.order.order.vo.OrderIds;
+import com.grandis.nova.order.outbox.OrderPaymentAuthorizing;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -26,8 +28,8 @@ import java.util.UUID;
 /**
  * 결제 승인: 결제창 인증을 마친 결제를 payment 에 승인시키고 결과를 주문에 반영한다. 돈이 실제로 움직이는 단계다.
  *
- * 순서: 주문 확인(본인) → 금액 대조 → 동시 상한 → 결제 가능 재확인(트랜잭션 밖) → 결제창 확인(payment, 시작 금지)
- * → [tx] 승인 중 + 결제창 번호 → payment 승인(트랜잭션 밖) → [tx] 결과 반영({@link PaymentResults}).
+ * 순서: 주문 확인(본인) → 금액 대조 → 동시 상한 → 결제 가능 재확인(트랜잭션 밖) → 결제창 확인(payment, 시작 금지 + 확보)
+ * → [tx] 승인 중 + 결제창 번호 + 승인 중 알림(ORDER_PAYMENT_AUTHORIZING) → payment 승인(트랜잭션 밖) → [tx] 결과 반영({@link PaymentResults}).
  *
  * - 사용자가 보낸 금액은 기대값이 아니라 대조 대상이다(D15). 다르면 아무것도 바꾸지 않고 거절한다. payment 에는 주문의
  *   저장 총액이 간다(PayableTarget.of(order) — 금액을 따로 넘길 길이 없다).
@@ -36,14 +38,19 @@ import java.util.UUID;
  * - 승인 중인 주문에 같은 결제창으로 다시 오면 payment 에 다시 물어 결과를 회수한다. 결제창이 아직 시작 전이면 이 요청이 시작하므로
  *   결제 가능을 다시 확인하고, 결제할 수 없거나 확인하지 못하면 "시작 금지" 로 물어 결과만 받는다. 다른 결제창이면 확인 중이다.
  * - 승인 중으로 바꾸는 결제창은 payment 가 이 주문의 것으로 아는 번호뿐이다(결제창 확인). 그래서 승인 중인 주문은 payment 가 반드시
- *   결과를 낸다 — 시작 전에 멈춘 결제창은 payment 의 만료가 "결제창 만료" 거절을, 시작된 결제창은 복구가 확정 결과를 이벤트로 보낸다.
+ *   결과를 낸다 — 시작된 결제창은 복구가 확정 결과를 이벤트로 보낸다. 승인 요청이 payment 에 닿지 않아 시작 전으로 남은 결제창은 승인 중
+ *   알림(주문 총액을 싣는다)을 받은 payment 가 복구에 넘겨(확인 때 받은 결제 키로) 승인하고, 넘기지 못하면 만료가 "결제창 만료" 거절을 보낸다.
+ *   알림은 승인 중 전환과 같은 트랜잭션이라 전환이 되돌아가면 없다. 알림이 나간 뒤 주문이 결제 대기로 돌아가도 넘겨지지 않는 것은, 되돌림이
+ *   끝난 거래(거절 · 만료)나 payment 의 "시작될 수 없다" 확언(번호 없음 · 금액 불일치 — 넘김도 같은 대상 · 금액을 대조한다)에서만 일어나서다.
+ *   결제할 수 없게 된 승인 중 주문(예약 취소 · 마감)은 다르다 — 시작 금지 재요청이 payment 에 닿으면 넘김을 끄지만, 닿지 못했거나 판정과
+ *   끄기 사이에 넘겨지면 청구될 수 있다. 승인이 늦게 끝나는 경우와 같은 부류로, 청구 뒤에는 기존 흐름(예약 취소 보류 → 결제 뒤 환불)이 처리한다.
  *   확인에 답을 받지 못하면 아무것도 바꾸지 않고 오류로 답한다(모르는 번호로 승인 중이 되면 아무도 풀지 못한다).
  * - 이미 결제된 주문이면 APPROVED 로 답한다(주문당 성공 결제는 하나).
  * - 승인 호출은 payment 응답을 최대 70초 기다린다. 동시 상한(응모비 승인과 나눠 씀 — {@link PaymentConfirmSlots})을 넘으면 상태를 바꾸기 전에 503 으로 거절한다 — 토스가 느려져도
  *   결제와 무관한 주문 API 의 요청 스레드가 남는다.
  * - 외부 호출 동안 잠금을 쥐지 않도록 트랜잭션은 짧게 연다. 바깥 트랜잭션 안에서 부르면 들어올 때 거절한다.
  *
- * 결제 키는 로그 · 예외에 싣지 않는다.
+ * 결제 키는 로그 · 예외 · 이벤트에 싣지 않는다.
  */
 @Service
 public class ConfirmPaymentService {
@@ -55,14 +62,16 @@ public class ConfirmPaymentService {
     private final PayabilityGate payability;
     private final PaymentConfirmer confirmer;
     private final PaymentResults results;
+    private final OutboxWriter outboxWriter;
     private final TransactionTemplate writeTransaction;
     private final TransactionTemplate readTransaction;
     private final PaymentConfirmSlots slots;
 
     ConfirmPaymentService(OrderReader orderReader, OrderLedger ledger, PayabilityGate payability,
                           PaymentConfirmer confirmer, PaymentResults results, PaymentConfirmSlots slots,
-                          PlatformTransactionManager transactionManager) {
+                          OutboxWriter outboxWriter, PlatformTransactionManager transactionManager) {
         this.slots = slots;
+        this.outboxWriter = outboxWriter;
         this.orderReader = orderReader;
         this.ledger = ledger;
         this.payability = payability;
@@ -137,8 +146,14 @@ public class ConfirmPaymentService {
             case PaymentConfirmation.NotStartable notStartable -> throw notStartable.failure();
             case PaymentConfirmation.Unanswered unanswered -> throw unanswered.failure();
         }
-        OrderTransition requested = writeTransaction.execute(status ->
-                ledger.requestPayment(order.id(), providerOrderId, EventCause.user()));
+        OrderTransition requested = writeTransaction.execute(status -> {
+            OrderTransition transition = ledger.requestPayment(order.id(), providerOrderId, EventCause.user());
+            if (transition.applied()) {
+                outboxWriter.append(new OrderPaymentAuthorizing(order.id(), providerOrderId,
+                        PayableTarget.of(order).amount()));
+            }
+            return transition;
+        });
         if (!requested.applied()) {
             // 읽은 뒤 다른 요청이 먼저 승인을 시작했거나 주문이 바뀌었다 — 지금 상태로 다시 판정한다
             return proceed(reload(order.id()), sessionToken, providerOrderId, paymentKey, false);
@@ -148,8 +163,11 @@ public class ConfirmPaymentService {
 
     /**
      * 승인 중 재요청이 결제창을 처음 시작해도 되는가. 앞선 요청이 시작 전에 멈췄다면 이 요청이 청구하므로 결제 가능을 다시 묻는다.
-     * 결제할 수 없거나 확인하지 못하면(어떤 실패든) 시작하지 않고 결과만 회수한다 — 시작 금지는 돈을 움직이지 않으므로 늘 안전하다.
-     * 주문은 바꾸지 않는다 — 결제창이 이미 시작됐을 수 있다.
+     * 결제할 수 없거나 확인하지 못하면(어떤 실패든) 시작하지 않고 결과만 회수한다. 시작 금지 질의는 이 요청으로 결제를 시작하지 않고, payment 에
+     * 닿으면 아직 시작 전인 그 결제창의 넘김도 끈다. 확인이 일시 실패한 경우도 끈다(안전 우선, 그 결제창은 만료가 거절로 닫는다). 다만 청구를
+     * 막는 것은 아니다 — 이 질의가 닿지 못했거나 판정과 끄기 사이에 넘겨졌으면, 또는 이미 시작된 결제창이면 결제할 수 없다고 판정한 주문도
+     * 청구될 수 있다. 승인이 늦게 끝나는 경우와 같은 부류로 기존 흐름(예약 취소 보류 → 결제 뒤 환불)이 처리한다. 주문은 바꾸지 않는다 —
+     * 결제창이 이미 시작됐을 수 있다.
      */
     private boolean startAllowed(Order order, String sessionToken) {
         try {

@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -123,14 +124,64 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
             """, nativeQuery = true)
     int expire(@Param("id") UUID id, @Param("openedMicros") long openedMicros, @Param("now") Instant now);
 
-    /* 확보: 만료와 같은 PENDING 조건이라 둘이 겹치면 한쪽만 1행이다(행 잠금 뒤 조건을 다시 본다). */
+    /*
+     * 확보: 만료와 같은 PENDING 조건이라 둘이 겹치면 한쪽만 1행이다(행 잠금 뒤 조건을 다시 본다).
+     * 결제 키는 첫 확보(reserved_at 없음)에만 적는다. 다시 확보할 때 키가 다르면 지운다 — 어느 키가 승인 중 전환과 짝인지 모르면
+     * 넘기지 않는다. 지운 뒤에는 첫 확보가 아니라 다시 적히지 않는다. MySQL 은 SET 을 왼쪽부터 반영하므로 키를 reserved_at 보다 먼저 쓴다.
+     */
     @Modifying(flushAutomatically = true)
     @Query(value = """
             UPDATE payment_transactions
-               SET reserved_at = UTC_TIMESTAMP(6)
+               SET provider_payment_key = CASE
+                       WHEN reserved_at IS NULL THEN :paymentKey
+                       WHEN provider_payment_key = :paymentKey THEN provider_payment_key
+                       ELSE NULL END,
+                   reserved_at = UTC_TIMESTAMP(6)
              WHERE id = :id AND transaction_type = 'CAPTURE' AND status = 'PENDING' AND lease_token IS NULL
             """, nativeQuery = true)
-    int reserve(@Param("id") UUID id);
+    int reserve(@Param("id") UUID id, @Param("paymentKey") String paymentKey);
+
+    /*
+     * 넘김: 승인 요청이 닿지 않은 결제창을 "리스가 이미 끝난 PROCESSING" 으로 바꿔 복구가 첫 승인을 보내게 한다. 시작(start)과 같은
+     * PENDING 조건이라 겹치면 한쪽만 1행이다. 보낸 횟수 · 보낸 시각은 시작과 같이 적고(PROCESSING 의 규칙), 리스 만료를 지금(DB 시각)으로
+     * 둬 복구 후보(lockNextLeaseExpired)에 바로 든다. 키가 있고 금액이 알림의 금액(호출자의 저장 금액)과 같고 마지막 확보(없으면 연) 뒤
+     * after 이상 · within 미만일 때만이다 — 하한은 읽은 뒤 다시 확보된 결제창을 직접 승인 요청보다 먼저 넘기지 않게 한다. 상한(10분)은
+     * 만료 기준(35분)보다 짧아 둘이 겹치지 않는다.
+     */
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+            UPDATE payment_transactions
+               SET status = 'PROCESSING', requested_at = :now, attempt_count = attempt_count + 1,
+                   lease_token = :lease, lease_expires_at = UTC_TIMESTAMP(6)
+             WHERE id = :id AND transaction_type = 'CAPTURE' AND status = 'PENDING' AND lease_token IS NULL
+               AND provider_payment_key IS NOT NULL AND amount = :amount
+               AND COALESCE(reserved_at, created_at) <= UTC_TIMESTAMP(6) - INTERVAL :afterMicros MICROSECOND
+               AND COALESCE(reserved_at, created_at) > UTC_TIMESTAMP(6) - INTERVAL :withinMicros MICROSECOND
+            """, nativeQuery = true)
+    int handOver(@Param("id") UUID id, @Param("amount") BigDecimal amount, @Param("lease") String lease,
+                 @Param("afterMicros") long afterMicros, @Param("withinMicros") long withinMicros,
+                 @Param("now") Instant now);
+
+    /*
+     * 넘김 끄기: 시작 전 결제창의 키를 지운다. 키는 첫 확보에만 적히고 키가 있으면 이미 확보된 행이라, 지운 뒤에는 다시 적히지 않는다
+     * (reserve 의 CASE). 넘김(handOver)과 같은 PENDING 조건이라 겹치면 한쪽만 된다.
+     */
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+            UPDATE payment_transactions
+               SET provider_payment_key = NULL
+             WHERE id = :id AND transaction_type = 'CAPTURE' AND status = 'PENDING' AND lease_token IS NULL
+               AND provider_payment_key IS NOT NULL
+            """, nativeQuery = true)
+    int disableHandover(@Param("id") UUID id);
+
+    /* 확보(없으면 연) 뒤 지난 시간, 마이크로초(DB 시각). 만료와 같은 기준이다. */
+    @Query(value = """
+            SELECT TIMESTAMPDIFF(MICROSECOND, COALESCE(reserved_at, created_at), UTC_TIMESTAMP(6))
+              FROM payment_transactions
+             WHERE id = :id
+            """, nativeQuery = true)
+    Optional<Long> microsSinceReserved(@Param("id") UUID id);
 
     /*
      * 복구 후보. 준비 조건마다 그 조건의 인덱스(ix_payment_tx_next_retry · ix_payment_tx_recoverable)를 타도록 따로 묻는다 — OR 로

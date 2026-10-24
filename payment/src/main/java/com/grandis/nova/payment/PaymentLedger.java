@@ -186,13 +186,47 @@ public class PaymentLedger {
      * 호출자가 대상을 승인 중으로 바꾸기 전에 결제창을 확보한다 — 만료 기준을 지금부터 다시 잰다. 만료와 원자적으로 겨룬다: 만료가 먼저면
      * 0행이고 그 거래는 이미 EXPIRED 다(호출자는 지금 결과로 그것을 본다). 아무것도 결제사에 보내지 않는다.
      *
+     * 결제 키도 첫 확보에 함께 적는다 — 승인 요청이 닿지 않으면 넘김({@link #handOver})이 이 키로 승인한다. 금액은 여기서 보지 않는다 —
+     * 넘김이 알림의 저장 금액과 대조한다. 다시 확보할 때 다른 키가 오면 지운다(저장소 reserve). 시작은 그대로 받은 키로 한다.
+     *
      * @return 확보했으면 true. 시작 전 CAPTURE 가 아니거나 그사이 시작 · 만료됐으면 false
      */
-    public boolean reserve(PaymentTransaction seen) {
+    public boolean reserve(PaymentTransaction seen, ProviderPaymentKey paymentKey) {
         if (seen.expire().isEmpty()) {
             return false;
         }
-        return writer.reserve(seen.id()) == 1;
+        return writer.reserve(seen.id(), paymentKey) == 1;
+    }
+
+    /**
+     * 승인 요청이 닿지 않은 결제창을 복구에 넘긴다: PENDING → 리스가 이미 끝난 PROCESSING. 복구는 마지막 오류가 없는 거래로 보고 확보 때
+     * 적은 키 · 거래의 멱등 키로 첫 승인을 보낸다. 사용자 승인 요청의 시작과 같은 PENDING 조건이라 겹치면 한쪽만 된다. 결제사를 부르지 않는다.
+     * 키 · 금액 · 시각은 UPDATE 조건이 최종으로 판정한다(처리기의 같은 판정은 경고 로그용이다).
+     *
+     * @param expectedAmount 호출자의 저장 금액(알림에 실린 주문 총액). 결제창 금액이 다르면 넘기지 않는다 — 시작({@link #start})과 같은 대조다
+     * @param after  마지막 확보(없으면 연) 뒤 이만큼 지났을 때부터(DB 시각) — 그동안은 직접 승인 요청을 기다린다
+     * @param within 그 뒤 이만큼 안일 때까지(DB 시각)
+     * @return 넘겼으면 true. 시작 전 CAPTURE 가 아니거나 키가 없거나 금액이 다르거나 때가 아니거나 그사이 시작 · 만료 · 재확보됐으면 false
+     * @throws ActiveTransactionExistsException 그 대상에 진행 중 · 성공한 CAPTURE 가 이미 있다
+     */
+    public boolean handOver(PaymentTransaction seen, Money expectedAmount, Duration after, Duration within) {
+        if (seen.status().start(seen.type()).isEmpty()) {
+            return false;
+        }
+        return writer.handOver(seen, expectedAmount, LeaseToken.issue(), after, within, clock.instant()) == 1;
+    }
+
+    /**
+     * 시작 전 결제창의 넘김을 끈다(결제 키를 지운다). 호출자가 대상을 결제할 수 없다고 판정해 시작 금지로 물었을 때 쓴다 — 이미 나간 승인 중
+     * 알림이 그 결제창을 넘기지 않게. 넘김과 같은 PENDING 조건이라 겹치면 한쪽만 되고, 지운 뒤에는 다시 확보해도 키가 적히지 않는다.
+     *
+     * @return 지웠으면 true. 키가 없거나 시작 전이 아니면(이미 넘겨졌거나 시작됐으면) false
+     */
+    public boolean disableHandover(PaymentTransaction seen) {
+        if (seen.expire().isEmpty() || seen.providerPaymentKey() == null) {
+            return false;
+        }
+        return writer.disableHandover(seen.id()) == 1;
     }
 
     /**

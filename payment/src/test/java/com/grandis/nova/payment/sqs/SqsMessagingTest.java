@@ -1,5 +1,6 @@
 package com.grandis.nova.payment.sqs;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.outbox.MessageTransport;
 import com.grandis.nova.common.security.RevocationChecker;
 import com.grandis.nova.common.sqs.QueuePoller;
@@ -11,6 +12,7 @@ import com.grandis.nova.payment.client.toss.TossCommandResult;
 import com.grandis.nova.payment.client.toss.TossPayment;
 import com.grandis.nova.payment.client.toss.TossPaymentClient;
 import com.grandis.nova.payment.client.toss.TossPaymentStatus;
+import com.grandis.nova.payment.domain.enums.TransactionStatus;
 import com.grandis.nova.payment.domain.enums.TransactionType;
 import com.grandis.nova.payment.domain.model.Outcome;
 import com.grandis.nova.payment.domain.model.PaymentTransaction;
@@ -140,6 +142,22 @@ class SqsMessagingTest {
         assertThat(refunds()).isEmpty();
     }
 
+    /** 이른 승인 중 알림은 같은 큐에 남은 시간만큼 미뤄 다시 보내고, 다시 받았을 때 시작 전이면 복구에 넘긴다. */
+    @Test
+    void 이른_승인_중_알림은_미뤄_다시_받아_넘긴다() {
+        PaymentTransaction pending = transactionTemplate.execute(s -> ledger.openCapture(target, AMOUNT));
+        transactionTemplate.execute(s -> ledger.reserve(pending, paymentKey));
+        // 직접 승인 요청을 기다리는 시간(90초)을 5초 남긴다
+        jdbcTemplate.update("UPDATE payment_transactions SET reserved_at = UTC_TIMESTAMP(6) - INTERVAL 85 SECOND WHERE id = ?",
+                UuidBinary.toBytes(pending.id()));
+
+        queues.send(QUEUE, authorizing(target.id(), pending.providerOrderId().value()));
+
+        await().atMost(TIMEOUT.multipliedBy(2)).until(() ->
+                transactions.findById(pending.id()).orElseThrow().status() == TransactionStatus.PROCESSING);
+        assertThat(transactions.findById(pending.id()).orElseThrow().attemptCount()).isEqualTo(1);
+    }
+
     private void paid() {
         PaymentTransaction pending = transactionTemplate.execute(s -> ledger.openCapture(target, AMOUNT));
         ClaimedTransaction started = transactionTemplate.execute(s -> ledger.start(pending, target, paymentKey, AMOUNT))
@@ -157,5 +175,12 @@ class SqsMessagingTest {
         return """
                 {"eventId":"%s","eventType":"ORDER_REFUND_REQUESTED","aggregateType":"ORDER","aggregateId":"%s",\
                 "occurredAt":"2026-10-04T01:00:00Z","payload":{"amount":15000}}""".formatted(UUID.randomUUID(), orderId);
+    }
+
+    private static String authorizing(UUID orderId, String providerOrderId) {
+        return """
+                {"eventId":"%s","eventType":"ORDER_PAYMENT_AUTHORIZING","aggregateType":"ORDER","aggregateId":"%s",\
+                "occurredAt":"2026-10-23T01:00:00Z","payload":{"providerOrderId":"%s","amount":15000}}"""
+                .formatted(UUID.randomUUID(), orderId, providerOrderId);
     }
 }

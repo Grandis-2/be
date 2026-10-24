@@ -22,6 +22,9 @@ public interface PaymentTransactionReader {
     /** 결제창이 돌려준 결제사 주문 번호로 찾는다. CAPTURE 만 이 번호가 있다. */
     Optional<PaymentTransaction> findByProviderOrderId(ProviderOrderId providerOrderId);
 
+    /** 확보(없으면 연) 뒤 지난 시간(DB 시각 기준). 만료와 같은 기준이다. 거래가 없으면 empty. */
+    Optional<Duration> sinceReserved(UUID transactionId);
+
     /**
      * 대상의 거래, 만든 순(created_at, 같으면 id). uq_payment_tx_active 의 앞부분(대상)으로 찾고 대상별 몇 행만 정렬한다.
      * 둘 다 앱 시계라 서버 시계 차보다 가까이 만든 두 행은 뒤바뀔 수 있다. 마지막 REFUND 판정에는 문제없다 — 한 대상의 REFUND 는
