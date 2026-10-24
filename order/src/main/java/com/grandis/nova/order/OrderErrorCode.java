@@ -22,6 +22,12 @@ public enum OrderErrorCode implements ErrorCode {
     PAYMENT_AMOUNT_MISMATCH(409, "결제 금액이 주문 금액과 다릅니다."),
     /** 없는 결제창 · 다른 주문의 결제창. */
     PAYMENT_ATTEMPT_NOT_FOUND(404, "결제 시도를 찾을 수 없습니다."),
+    /** 관리자 결제 DLQ: payment 에 없는 행. 이름 · 상태 · 문구는 payment(preorder)의 같은 코드와 같고, payment 의 응답을 그대로 넘긴다. */
+    DEAD_LETTER_NOT_FOUND(404, "DLQ 메시지를 찾을 수 없습니다."),
+    /** 관리자 결제 DLQ: 되돌릴 수 없다(못 읽는 원문 · 되돌리기 대기가 아님). details.reason 은 payment 가 싣는다. */
+    DEAD_LETTER_NOT_REDRIVABLE(409, "되돌릴 수 없는 메시지입니다."),
+    /** 관리자 결제 DLQ: OPEN 이 아니라 버릴 수 없다. details.reason 은 payment 가 싣는다. */
+    DEAD_LETTER_NOT_DISCARDABLE(409, "버릴 수 없는 메시지입니다."),
     /** 예약당 주문은 평생 하나라(uq_order_preorder) 취소된 주문이 있으면 다시 주문할 수 없다. */
     ORDER_ALREADY_CANCELED(409, "이미 취소된 주문이 있어 다시 주문할 수 없습니다."),
     /** 지금 상태에서 그 배송 단계로 옮길 수 없다(앞 단계 건너뛰기 · 미결제 · 취소 중 등). details.status 에 지금 상태. */
