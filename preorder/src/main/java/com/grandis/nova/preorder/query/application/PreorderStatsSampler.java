@@ -1,6 +1,6 @@
 package com.grandis.nova.preorder.query.application;
 
-import com.grandis.nova.preorder.preorder.PreorderBacklog;
+import com.grandis.nova.preorder.preorder.PreorderStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -51,9 +51,9 @@ class PreorderStatsSampler {
         if (!store.claim(clock.instant())) {
             return false;
         }
-        SampledBacklogs sampled = counter.countForHistory(properties.maxProducts());
+        SampledCounts sampled = counter.countForHistory(properties.maxProducts());
         store.append(null, StatsSample.of(sampled.at(), sampled.total()));
-        for (Map.Entry<UUID, PreorderBacklog> product : sampled.products().entrySet()) {
+        for (Map.Entry<UUID, Map<PreorderStatus, Long>> product : sampled.products().entrySet()) {
             store.append(product.getKey(), StatsSample.of(sampled.at(), product.getValue()));
         }
         return true;

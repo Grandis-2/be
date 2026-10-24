@@ -1,9 +1,9 @@
 package com.grandis.nova.preorder.query.application;
 
-import com.grandis.nova.preorder.preorder.PreorderBacklog;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 
 import java.time.Instant;
+import java.util.Map;
 
 /**
  * 한 시각의 예약 수.
@@ -15,10 +15,10 @@ import java.time.Instant;
  */
 public record StatsSample(Instant at, long received, long pendingSync, long registered, long reserved) {
 
-    static StatsSample of(Instant at, PreorderBacklog backlog) {
-        return new StatsSample(at, backlog.byStatus().values().stream().mapToLong(Long::longValue).sum(),
-                backlog.byStatus().getOrDefault(PreorderStatus.PENDING_SYNC, 0L),
-                backlog.byStatus().getOrDefault(PreorderStatus.REGISTERED, 0L),
-                backlog.byStatus().getOrDefault(PreorderStatus.RESERVED, 0L));
+    static StatsSample of(Instant at, Map<PreorderStatus, Long> byStatus) {
+        return new StatsSample(at, byStatus.values().stream().mapToLong(Long::longValue).sum(),
+                byStatus.getOrDefault(PreorderStatus.PENDING_SYNC, 0L),
+                byStatus.getOrDefault(PreorderStatus.REGISTERED, 0L),
+                byStatus.getOrDefault(PreorderStatus.RESERVED, 0L));
     }
 }
