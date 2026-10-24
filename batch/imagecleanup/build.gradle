@@ -6,6 +6,9 @@ dependencies {
     // 저장 시계(Clock)는 common:jpa 의 자동설정에서만 온다. 이 자동설정이 JPA Auditing 을 켜므로 엔티티가 없어도 data-jpa 를 둔다
     implementation project(':common:jpa')
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    // 운영 설정(SPRING_APPLICATION_JSON)을 Jackson 으로 읽게 한다. 없으면 Spring 이 간단 파서로 읽어 jsonencode 가 쓴 & 이스케이프를
+    // 풀지 못하고 DB 주소가 깨진다(10-22 ~ 10-24 기동 실패). 다른 서비스는 웹 · restclient 스타터에 딸려 와 있었다 — ImageCleanupAppJsonTest
+    implementation 'org.springframework.boot:spring-boot-starter-json'
     // S3 객체 삭제. 버전은 루트의 AWS SDK BOM 이 정하고, HTTP 클라이언트는 catalog 업로드와 같은 동기 구현을 쓴다
     implementation('software.amazon.awssdk:s3') {
         exclude group: 'software.amazon.awssdk', module: 'apache-client'
@@ -25,4 +28,11 @@ dependencies {
 tasks.named('test') {
     // 모듈 작업 디렉터리에 기대지 않고 절대 경로로 넘긴다.
     systemProperty 'nova.migrations-path', rootProject.file('flyway-project/migrations').absolutePath
+    // 운영 실행 클래스패스 — 시험 클래스패스에는 시험용 의존성(Flyway 등)이 더 들어 있어, 운영에서만 빠지는 라이브러리를 시험이 못 본다.
+    // ImageCleanupAppJsonTest 가 이 클래스패스만으로 설정 JSON 을 읽는다
+    def runtimeClasspath = configurations.runtimeClasspath
+    inputs.files(runtimeClasspath)
+    doFirst {
+        systemProperty 'nova.runtime-classpath', runtimeClasspath.asPath
+    }
 }
