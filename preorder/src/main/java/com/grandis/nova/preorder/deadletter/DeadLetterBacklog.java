@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.deadletter;
 
 import com.grandis.nova.preorder.deadletter.domain.DeadLetterEventRepository;
+import com.grandis.nova.preorder.deadletter.domain.DeadLetterEventRepository.ProductWaitingTotal;
 import com.grandis.nova.preorder.deadletter.domain.DeadLetterEventRepository.WaitingTotal;
 import com.grandis.nova.preorder.deadletter.domain.DeadLetterWaitingQuery;
 import com.grandis.nova.preorder.deadletter.domain.DeadLetterWaitingQuery.WaitingGroup;
@@ -9,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -52,6 +54,18 @@ public class DeadLetterBacklog {
         }
         WaitingTotal found = events.countWaitingOfProduct(productId, staleBefore());
         return new DeadLetterWaiting(found.getCount(), found.getOldestAt());
+    }
+
+    /** {@link #waiting} 를 상품들에 문장 하나로. 모든 상품이 들고, 기다리는 것이 없으면 0 이다. */
+    public Map<UUID, DeadLetterWaiting> waiting(Collection<UUID> productIds) {
+        Map<UUID, DeadLetterWaiting> waiting = new HashMap<>();
+        productIds.forEach(productId -> waiting.put(productId, new DeadLetterWaiting(0, null)));
+        if (!productIds.isEmpty()) {
+            for (ProductWaitingTotal found : events.countWaitingOfProducts(productIds, staleBefore())) {
+                waiting.put(found.getProductId(), new DeadLetterWaiting(found.getCount(), found.getOldestAt()));
+            }
+        }
+        return waiting;
     }
 
     private Instant staleBefore() {

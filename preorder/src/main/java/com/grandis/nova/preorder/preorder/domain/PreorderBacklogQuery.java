@@ -9,7 +9,9 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.Collection;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -77,6 +79,47 @@ public class PreorderBacklogQuery {
                 + " WHERE p.status = :status AND j.status IN (:jobStatuses)" + product(productId, params),
                 params, LocalDateTime.class);
         return Optional.ofNullable(oldest).map(at -> at.toInstant(ZoneOffset.UTC));
+    }
+
+    /**
+     * 상품들의 상태별 수 · 가장 오래된 접수 시각 · 결제 가능 시작이 그 시각 이전인 수를 문장 하나로. 한 건도 없는 상태는 빠진다.
+     * ix_preorder_product_status(product_id, status, payable_from) 를 상품마다 탄다.
+     */
+    public List<StatusGroup> countByProductAndStatus(Collection<UUID> productIds, Instant payableUntil) {
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("productIds", productIds.stream().map(UuidBinary::toBytes).toList())
+                .addValue("payableUntil", utc(payableUntil));
+        return jdbcTemplate.query("SELECT p.product_id, p.status, COUNT(*), MIN(p.created_at),"
+                        + " SUM(CASE WHEN p.payable_from <= :payableUntil THEN 1 ELSE 0 END) FROM preorders p"
+                        + " WHERE p.product_id IN (:productIds) GROUP BY p.product_id, p.status", params,
+                (rs, rowNum) -> new StatusGroup(UuidBinary.fromBytes(rs.getBytes(1)),
+                        PreorderStatus.valueOf(rs.getString(2)), rs.getLong(3),
+                        rs.getObject(4, LocalDateTime.class).toInstant(ZoneOffset.UTC), rs.getLong(5)));
+    }
+
+    /** {@link #findOldestInFlightRegister} 를 상품들에 한 문장으로. 그런 예약이 없는 상품은 빠진다. */
+    public Map<UUID, Instant> findOldestInFlightRegisterByProduct(Collection<UUID> productIds) {
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("status", PreorderStatus.PENDING_SYNC.name())
+                .addValue("jobStatuses", IN_FLIGHT_JOB_STATUSES)
+                .addValue("productIds", productIds.stream().map(UuidBinary::toBytes).toList());
+        Map<UUID, Instant> oldest = new HashMap<>();
+        jdbcTemplate.query("SELECT p.product_id, MIN(p.created_at) FROM preorders p"
+                + " JOIN preorder_sync_jobs j ON j.preorder_id = p.id AND j.job_type = 'REGISTER'"
+                + " WHERE p.status = :status AND j.status IN (:jobStatuses) AND p.product_id IN (:productIds)"
+                + " GROUP BY p.product_id", params, rs -> {
+            oldest.put(UuidBinary.fromBytes(rs.getBytes(1)),
+                    rs.getObject(2, LocalDateTime.class).toInstant(ZoneOffset.UTC));
+        });
+        return oldest;
+    }
+
+    /**
+     * @param oldestCreatedAt 그 상태 예약 중 가장 오래된 접수 시각
+     * @param payableUntil    결제 가능 시작이 물은 시각 이전인 수
+     */
+    public record StatusGroup(UUID productId, PreorderStatus status, long count, Instant oldestCreatedAt,
+                              long payableUntil) {
     }
 
     private String product(UUID productId, MapSqlParameterSource params) {

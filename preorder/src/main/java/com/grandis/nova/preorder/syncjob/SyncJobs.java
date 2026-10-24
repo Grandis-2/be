@@ -125,6 +125,12 @@ public class SyncJobs {
         return unfinished.count(productId);
     }
 
+    /** {@link #countUnfinished} 를 상품들에 문장 하나로. 상품 → 종류 → 상태 → 수. */
+    @Transactional(readOnly = true)
+    public Map<UUID, Map<SyncJobType, Map<SyncJobStatus, Long>>> countUnfinished(Collection<UUID> productIds) {
+        return productIds.isEmpty() ? Map.of() : unfinished.countByProduct(productIds);
+    }
+
     /** 포기한(DEAD_LETTER) 작업 수. 종류 → 상품 → 수, 0 인 상품은 없다. 트랜잭션 없이 문장 하나다. */
     public Map<SyncJobType, Map<UUID, Long>> countDeadLetterByProduct() {
         return unfinished.countDeadLetterByProduct();

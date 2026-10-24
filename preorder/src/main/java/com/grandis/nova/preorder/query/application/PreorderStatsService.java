@@ -1,6 +1,8 @@
 package com.grandis.nova.preorder.query.application;
 
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.preorder.campaign.CampaignPhase;
+import com.grandis.nova.preorder.web.ValidationFailures;
 import org.springframework.stereotype.Service;
 
 import java.util.UUID;
@@ -14,10 +16,12 @@ public class PreorderStatsService {
 
     private final PreorderStatsCounter counter;
     private final PreorderStatsCache cache;
+    private final PreorderStatsProperties properties;
 
-    PreorderStatsService(PreorderStatsCounter counter, PreorderStatsCache cache) {
+    PreorderStatsService(PreorderStatsCounter counter, PreorderStatsCache cache, PreorderStatsProperties properties) {
         this.counter = counter;
         this.cache = cache;
+        this.properties = properties;
     }
 
     /**
@@ -28,6 +32,26 @@ public class PreorderStatsService {
         return cache.find(productId).orElseGet(() -> {
             PreorderStats counted = counter.count(productId);
             cache.put(productId, counted);
+            return counted;
+        });
+    }
+
+    /**
+     * 그 단계 상품들의 현황 한 페이지.
+     *
+     * @param size null 이면 기본 크기
+     * @throws BusinessException VALIDATION_FAILED — 크기가 범위 밖이거나 커서가 깨졌다
+     */
+    public ProductStatsPage findProducts(CampaignPhase phase, String cursor, Integer size) {
+        int pageSize = size == null ? properties.productPageSize() : size;
+        if (pageSize < 1 || pageSize > properties.productPageMaxSize()) {
+            throw ValidationFailures.of("size", "1~%d 이어야 합니다.".formatted(properties.productPageMaxSize()));
+        }
+        String key = cursor == null || cursor.isBlank() ? null : cursor;
+        PhaseCursor position = PhaseCursor.of(key);
+        return cache.findPage(phase, key, pageSize).orElseGet(() -> {
+            ProductStatsPage counted = counter.countProducts(phase, position, pageSize);
+            cache.putPage(phase, key, pageSize, counted);
             return counted;
         });
     }

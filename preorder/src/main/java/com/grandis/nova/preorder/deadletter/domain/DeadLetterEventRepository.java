@@ -143,6 +143,27 @@ public interface DeadLetterEventRepository extends JpaRepository<DeadLetterEvent
                                        @Param("redriving") DeadLetterStatus redriving,
                                        @Param("staleBefore") Instant staleBefore, @Param("productId") UUID productId);
 
+    default List<ProductWaitingTotal> countWaitingOfProducts(Collection<UUID> productIds, Instant staleBefore) {
+        return countWaitingOfProducts(OPEN, REDRIVING, staleBefore, productIds);
+    }
+
+    /** {@link #countWaitingOfProduct} 를 상품들에 문장 하나로. 기다리는 것이 없는 상품은 빠진다. */
+    @Query("""
+            select p.productId as productId, count(d) as count, min(d.createdAt) as oldestAt
+              from DeadLetterEvent d join Preorder p on p.id = d.preorderId
+             where (d.status = :open or (d.status = :redriving and d.redriveStartedAt < :staleBefore))
+               and p.productId in :productIds
+             group by p.productId""")
+    List<ProductWaitingTotal> countWaitingOfProducts(@Param("open") DeadLetterStatus open,
+                                                     @Param("redriving") DeadLetterStatus redriving,
+                                                     @Param("staleBefore") Instant staleBefore,
+                                                     @Param("productIds") Collection<UUID> productIds);
+
+    interface ProductWaitingTotal extends WaitingTotal {
+
+        UUID getProductId();
+    }
+
     interface WaitingTotal {
 
         long getCount();

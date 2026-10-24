@@ -1,6 +1,7 @@
 package com.grandis.nova.preorder.query.api;
 
 import com.grandis.nova.common.web.ApiResponse;
+import com.grandis.nova.preorder.campaign.CampaignPhase;
 import com.grandis.nova.preorder.query.application.PreorderStatsService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -29,5 +30,16 @@ class AdminPreorderStatsController {
     @GetMapping
     public ApiResponse<PreorderStatsResponse> stats(@RequestParam(required = false) UUID productId) {
         return ApiResponse.ok(PreorderStatsResponse.from(statsService.find(productId)));
+    }
+
+    /** 상품마다 따로 부르지 않게 한 페이지의 상품들을 한 번에 센다. 대기열이 아니라 회차 접수 기간으로 골라 오래된 마감 상품도 나온다. */
+    @Operation(summary = "상품별 운영 현황 — 접수 중(마감 임박순) · 마감(최근 마감순) 회차를 커서 페이지로",
+            description = "항목은 /stats 와 같은 칸에 opensAt · closesAt 이 붙는다. 판매 중지 · 비공개 회차도 든다. "
+                    + "마감이 같으면 상품 id 순(마감은 역순). size 는 기본 20, 1~100")
+    @GetMapping("/products")
+    public ApiResponse<ProductStatsPageResponse> products(@RequestParam CampaignPhase phase,
+                                                          @RequestParam(required = false) String cursor,
+                                                          @RequestParam(required = false) Integer size) {
+        return ApiResponse.ok(ProductStatsPageResponse.from(statsService.findProducts(phase, cursor, size)));
     }
 }

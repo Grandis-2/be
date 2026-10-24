@@ -7,6 +7,7 @@ import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatch;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatchRepository;
+import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -97,6 +99,20 @@ public class Campaigns {
     }
 
     /** 그 상품에 사전예약 회차가 있는가. */
+    /**
+     * 관리자 운영 현황의 상품 범위 — 그 단계의 회차를 단계 순서대로 (afterClosesAt, afterProductId) 다음부터 limit 건.
+     * 커서가 없으면(null) 처음부터다. 마감 시각 색인(ix_campaign_closes)을 탄다. 잠그지 않는다.
+     */
+    @Transactional(readOnly = true)
+    public List<CampaignSchedule> findPhasePage(CampaignPhase phase, Instant now, Instant afterClosesAt,
+                                                UUID afterProductId, int limit) {
+        List<PreorderCampaign> found = switch (phase) {
+            case OPEN -> campaigns.findOpenPage(now, afterClosesAt, afterProductId, Limit.of(limit));
+            case CLOSED -> campaigns.findClosedPage(now, afterClosesAt, afterProductId, Limit.of(limit));
+        };
+        return found.stream().map(PreorderCampaign::toSchedule).toList();
+    }
+
     @Transactional(readOnly = true)
     public boolean exists(UUID productId) {
         return campaigns.existsById(productId);
