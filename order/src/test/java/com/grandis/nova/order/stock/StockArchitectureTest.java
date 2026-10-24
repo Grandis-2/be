@@ -40,6 +40,7 @@ class StockArchitectureTest {
             "com.grandis.nova.order.order.place.PlaceCartOrderService",         // 장바구니 주문 생성 · 앞 주문 교체(확보 · 반환)
             "com.grandis.nova.order.order.place.PlaceBuyNowOrderService",       // 바로 구매 주문 생성(확보)
             "com.grandis.nova.order.order.cancel.UnpaidCartOrderRelease",       // 장바구니 · 바로 구매 미결제 취소 · 만료(반환)
+            "com.grandis.nova.order.order.cancel.UnconfirmedCartOrderRelease",  // 장바구니 · 바로 구매 결과 모른 승인 중 취소(반환)
             "com.grandis.nova.order.order.pay.CartOrderFulfillment",            // 장바구니 · 바로 구매 결제 승인(판매 확정)
             "com.grandis.nova.order.draw.AdminDrawService",                     // 드로우 회차 생성(당첨 인원 확보)
             "com.grandis.nova.order.draw.DrawSettlement",                       // 드로우 결과 반영(판매 확정 · 남은 확보 반납)

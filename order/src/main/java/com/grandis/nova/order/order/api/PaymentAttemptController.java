@@ -49,7 +49,8 @@ public class PaymentAttemptController {
     /**
      * 결제창 인증을 마친 결제를 승인한다. 결과는 200 이고 result 로 가른다(APPROVED · DECLINED · PENDING) — 응답 모양과
      * 프론트 처리(GET 폴링 · 승인 재요청 1회 · 503/500 의 뜻)는 {@link ConfirmPaymentResponse}.
-     * 승인 전에 거절되면 오류 봉투다(금액 불일치 · 결제할 수 없는 주문 · 예약 등).
+     * 그 밖은 오류 봉투다 — 승인 전 거절(금액 불일치 · 결제할 수 없는 주문 · 예약 등)과, 승인을 기다리는 사이 주문이 취소된 경우
+     * (409 ORDER_NOT_PAYABLE).
      */
     @PostMapping("/{tossOrderId}/confirm")
     public ApiResponse<ConfirmPaymentResponse> confirm(@CurrentCustomerId UUID customerId,

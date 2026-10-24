@@ -49,8 +49,8 @@ import java.util.UUID;
 @Transactional(propagation = Propagation.MANDATORY)
 public class OrderLedger {
 
-    private static final Set<OrderTrigger> PAYMENT_TRIGGERS = EnumSet.of(
-            OrderTrigger.PAYMENT_REQUESTED, OrderTrigger.PAYMENT_APPROVED, OrderTrigger.PAYMENT_DECLINED);
+    private static final Set<OrderTrigger> PAYMENT_TRIGGERS = EnumSet.of(OrderTrigger.PAYMENT_REQUESTED,
+            OrderTrigger.PAYMENT_APPROVED, OrderTrigger.PAYMENT_DECLINED, OrderTrigger.PAYMENT_UNCONFIRMED);
 
     private final OrderWriter writer;
     private final Clock clock;
@@ -83,8 +83,8 @@ public class OrderLedger {
      * applied = false 는 네 경우다: 전제와 다른 상태 · 중복(이미 반영) · 받아들일 수 없는 사건 · 결과 대기.
      * 원장은 구분하지 않는다 — 돌려준 status 를 보고 판단한다.
      *
-     * 결제 사건(요청 · 승인 · 거절)은 여기로 알리지 않는다 — 결제창 번호를 함께 다루는 {@link #requestPayment} ·
-     * {@link #settlePayment} 를 쓴다.
+     * 결제 사건(요청 · 승인 · 거절 · 결과 모름)은 여기로 알리지 않는다 — 결제창 번호를 함께 다루는 {@link #requestPayment} ·
+     * {@link #settlePayment} · {@link #cancelUnconfirmedReleasingStock} 를 쓴다.
      *
      * @param expectedFrom 비어 있으면 안 된다
      * @throws IllegalArgumentException 주문이 없다 · 결제 사건이다 — 호출하는 쪽의 잘못이다
@@ -191,16 +191,16 @@ public class OrderLedger {
     }
 
     /**
-     * 취소 중 환불이 확정 실패했다고 적는다 — 주문의 환불 실패 시각을 채우고 이력을 한 줄 남긴다. 상태는 그대로다(취소 중).
-     * 환불이 끝나지 않았으니 취소로 끝낼 수 없고, 다시 여는 것은 사람의 판단이다(U1). 이력 번호는 전이처럼 1 올린다.
-     * 취소 중이고 아직 적지 않았을 때만 적는다 — 같은 알림을 다시 받아도 한 번이다.
+     * 환불이 확정 실패했다고 적는다 — 주문의 환불 실패 시각을 채우고 이력을 한 줄 남긴다. 상태는 그대로다. 취소 중이면 환불이 끝나지 않아
+     * 취소로 끝낼 수 없고, 자동 환불을 요청한 취소된 주문이면 이미 취소다. 다시 여는 것은 사람의 판단이다(U1). 이력 번호는 전이처럼 1 올린다.
+     * 그 두 경우이고 아직 적지 않았을 때만 적는다 — 같은 알림을 다시 받아도 한 번이다.
      *
-     * @return 적었으면 true. 취소 중이 아니거나 이미 적었으면 false
+     * @return 적었으면 true. 그 두 경우가 아니거나 이미 적었으면 false
      * @throws IllegalArgumentException 주문이 없다
      */
     public boolean noteRefundFailed(UUID orderId) {
         OrderStatus from = lock(orderId);
-        if (from != OrderStatus.CANCELING) {
+        if (from != OrderStatus.CANCELING && from != OrderStatus.CANCELED) {
             return false;
         }
         Instant now = clock.instant();
@@ -233,6 +233,70 @@ public class OrderLedger {
         }
         writer.appendEvent(new OrderEvent(orderId, writer.eventSequence(orderId), from, to, cause, now));
         return new OrderTransition(true, to);
+    }
+
+    /**
+     * 결제 결과를 끝내 모르는 승인 중 일반 주문(장바구니 · 바로 구매)을 취소하고 재고 반환 표식을 적는다(취소와 같은 UPDATE). 그 결제창 번호는
+     * 늦은 승인을 가리기 위해 남긴다({@link #requestLateRefund}). 재고 행의 반환은 호출하는 쪽이 같은 트랜잭션에서 한다 — true 를 돌려준 때만.
+     *
+     * 승인 중이 아니면(그사이 결과가 왔다 · 이미 취소) 아무것도 바꾸지 않고 지금 상태를 돌려준다.
+     *
+     * @throws IllegalArgumentException 주문이 없다
+     * @throws IllegalStateException    승인 중인데 바꾸지 못했다 — 장바구니 · 바로 구매 주문이 아니거나(사전예약 · 드로우) 표식이 이미 있다
+     *                                  (호출하는 코드의 잘못 · 데이터 어긋남)
+     */
+    public OrderTransition cancelUnconfirmedReleasingStock(UUID orderId, EventCause cause) {
+        OrderStatus from = lock(orderId);
+        if (from != OrderStatus.AUTHORIZING) {
+            return new OrderTransition(false, from);
+        }
+        OrderStatus to = from.next(OrderTrigger.PAYMENT_UNCONFIRMED).orElseThrow();
+        Instant now = clock.instant();
+        if (writer.cancelUnconfirmedReleasingStock(orderId, now) != 1) {
+            throw new IllegalStateException("승인 중인 일반 주문을 취소 · 반환 표식하지 못했다: orderId=" + orderId);
+        }
+        writer.appendEvent(new OrderEvent(orderId, writer.eventSequence(orderId), from, to, cause, now));
+        return new OrderTransition(true, to);
+    }
+
+    /**
+     * 결과를 모른 채 취소한 주문에 그 결제창의 승인이 늦게 왔다 — 자동 환불을 요청했다고 적고 이력을 한 줄 남긴다(상태는 취소 그대로).
+     * 환불 요청 메시지는 호출하는 쪽이 같은 트랜잭션에서 아웃박스에 적는다 — {@link LateRefund#REQUESTED} 를 돌려준 때만, 그래서 한 번만.
+     *
+     * @param providerOrderId 승인된 결제창. 취소할 때 남긴 결제창과 같아야 한다
+     * @param amountMatches   승인 금액이 주문 총액과 같은가. 다르면 요청하지 않는다
+     * @throws IllegalArgumentException 주문이 없다
+     */
+    public LateRefund requestLateRefund(UUID orderId, String providerOrderId, boolean amountMatches, EventCause cause) {
+        OrderStatus from = lock(orderId);
+        if (from != OrderStatus.CANCELED) {
+            return LateRefund.NOT_ELIGIBLE;
+        }
+        if (!amountMatches) {
+            return writer.unconfirmedProviderOrderId(orderId).filter(providerOrderId::equals).isPresent()
+                    ? LateRefund.AMOUNT_MISMATCH : LateRefund.NOT_ELIGIBLE;
+        }
+        Instant now = clock.instant();
+        if (writer.markAutoRefundRequested(orderId, providerOrderId, now) == 0) {
+            // 같은 결제창의 승인을 다시 받았을 때만 중복이다. 결제창이 다르면 이미 요청했어도 이 승인은 자동 환불이 덮지 않는다
+            boolean sameAttempt = writer.unconfirmedProviderOrderId(orderId).filter(providerOrderId::equals).isPresent();
+            return sameAttempt && writer.autoRefundRequestedAt(orderId).isPresent()
+                    ? LateRefund.ALREADY_REQUESTED : LateRefund.NOT_ELIGIBLE;
+        }
+        writer.appendEvent(new OrderEvent(orderId, writer.eventSequence(orderId), from, from, cause, now));
+        return LateRefund.REQUESTED;
+    }
+
+    /** {@link #requestLateRefund} 의 결과. */
+    public enum LateRefund {
+        /** 이번에 요청했다 — 호출하는 쪽이 환불 요청을 적는다. */
+        REQUESTED,
+        /** 같은 결제창의 승인으로 이미 요청했다(같은 승인을 다시 받았다). */
+        ALREADY_REQUESTED,
+        /** 자동 환불 대상이 아니다 — 결과를 모른 채 취소한 주문이 아니거나, 취소할 때 남긴 결제창과 다르다(이미 요청했어도). */
+        NOT_ELIGIBLE,
+        /** 결과를 모른 채 취소한 주문의 그 결제창 승인인데 금액이 주문 총액과 다르다 — 요청하지 않고 사람이 본다. */
+        AMOUNT_MISMATCH
     }
 
     /**

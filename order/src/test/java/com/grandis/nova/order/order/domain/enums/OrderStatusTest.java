@@ -24,6 +24,7 @@ import static com.grandis.nova.order.order.domain.enums.OrderTrigger.PACKED;
 import static com.grandis.nova.order.order.domain.enums.OrderTrigger.PAYMENT_APPROVED;
 import static com.grandis.nova.order.order.domain.enums.OrderTrigger.PAYMENT_DECLINED;
 import static com.grandis.nova.order.order.domain.enums.OrderTrigger.PAYMENT_REQUESTED;
+import static com.grandis.nova.order.order.domain.enums.OrderTrigger.PAYMENT_UNCONFIRMED;
 import static com.grandis.nova.order.order.domain.enums.OrderTrigger.PREPARATION_STARTED;
 import static com.grandis.nova.order.order.domain.enums.OrderTrigger.REFUND_COMPLETED;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -38,7 +39,7 @@ class OrderStatusTest {
 
     static final Map<OrderStatus, Map<OrderTrigger, OrderStatus>> ALLOWED = Map.of(
             AWAITING_PAYMENT, Map.of(CANCEL_REQUESTED, CANCELED, PAYMENT_REQUESTED, AUTHORIZING),
-            AUTHORIZING, Map.of(PAYMENT_APPROVED, AWAITING_CONFIRMATION, PAYMENT_DECLINED, AWAITING_PAYMENT),
+            AUTHORIZING, Map.of(PAYMENT_APPROVED, AWAITING_CONFIRMATION, PAYMENT_DECLINED, AWAITING_PAYMENT, PAYMENT_UNCONFIRMED, CANCELED),
             AWAITING_CONFIRMATION, Map.of(CANCEL_REQUESTED, CANCELING, PREPARATION_STARTED, PREPARING_ITEMS),
             PREPARING_ITEMS, Map.of(CANCEL_REQUESTED, CANCELING, PACKED, READY_TO_SHIP),
             READY_TO_SHIP, Map.of(CANCEL_REQUESTED, CANCELING, OrderTrigger.SHIPPED, SHIPPED),

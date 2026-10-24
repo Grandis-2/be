@@ -9,6 +9,7 @@ import com.grandis.nova.order.client.payment.PayableTarget;
 import com.grandis.nova.order.client.payment.PaymentConfirmSlots;
 import com.grandis.nova.order.client.payment.PaymentConfirmer;
 import com.grandis.nova.order.order.OrderLedger;
+import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.model.OrderTransition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
@@ -192,9 +193,9 @@ public class ConfirmPaymentService {
                                   boolean startAllowed) {
         return switch (confirmer.confirm(PayableTarget.of(order), providerOrderId, paymentKey, sessionToken, startAllowed)) {
             case PaymentConfirmation.Approved approved ->
-                    ConfirmedPayment.approved(results.approved(order.id(), providerOrderId).status());
+                    ConfirmedPayment.approved(payableOrThrow(results.approved(order.id(), providerOrderId)));
             case PaymentConfirmation.Declined declined -> new ConfirmedPayment(ConfirmedPayment.Result.DECLINED,
-                    results.declined(order.id(), providerOrderId, declined.reason()).status(), declined.reason());
+                    payableOrThrow(results.declined(order.id(), providerOrderId, declined.reason())), declined.reason());
             case PaymentConfirmation.Pending pending -> ConfirmedPayment.pending();
             case PaymentConfirmation.NotStartable notStartable -> {
                 results.notStarted(order.id(), providerOrderId);
@@ -202,6 +203,18 @@ public class ConfirmPaymentService {
             }
             case PaymentConfirmation.Unanswered unanswered -> throw unanswered.failure();
         };
+    }
+
+    /**
+     * 승인 응답(승인 · 거절)을 반영한 뒤의 주문 상태. 승인을 기다리는 사이 주문이 취소 중 · 취소가 됐으면(만든 뒤 20분이 지나 결과를 몰라
+     * 취소 — 늦은 승인은 반영이 자동 환불을 요청했다) 승인 · 거절 어느 쪽으로도 답하지 않는다 — 취소된 주문의 결제 요청과 같은
+     * 409 ORDER_NOT_PAYABLE 이다. 프론트가 결제 완료나 "다시 결제" 로 읽지 않게 하고, 결과는 주문 조회(이력 사유)로 본다.
+     */
+    private static OrderStatus payableOrThrow(OrderTransition transition) {
+        if (transition.status() == OrderStatus.CANCELING || transition.status() == OrderStatus.CANCELED) {
+            throw new BusinessException(OrderErrorCode.ORDER_NOT_PAYABLE);
+        }
+        return transition.status();
     }
 
     /** 본인 주문. 남의 주문은 존재를 숨긴다. */

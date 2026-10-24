@@ -54,7 +54,23 @@ public interface OrderWriter {
     int cancelReleasingStock(UUID orderId, Instant now);
 
     /**
-     * 취소 중인 주문에 환불 실패 시각을 적는다(ck_order_refund_failed). 이력 번호를 1 올린다.
+     * 승인 중인 장바구니 · 바로 구매 주문을 취소로 바꾸며 재고 반환 표식을 같은 UPDATE 에서 적는다. 승인 중 결제창 번호는 "결과를 모른 결제창" 칸으로 옮긴다
+     * (ck_order_unconfirmed_attempt) — 늦게 온 승인이 그 결제창일 때만 자동 환불한다. 이력 번호를 1 올린다. 표식이 이미 있으면 바꾸지 않는다.
+     *
+     * @return 바뀐 행 수(0 또는 1)
+     */
+    int cancelUnconfirmedReleasingStock(UUID orderId, Instant now);
+
+    /**
+     * 결과를 모른 채 취소한 주문에, 그 결제창의 늦은 승인을 자동 환불하라고 요청한 시각을 적는다(ck_order_auto_refund). 이력 번호를 1 올린다.
+     * 취소됨 · 결제창 일치 · 아직 안 적음일 때만 — 같은 승인을 다시 받아도 한 번이다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다.
+     *
+     * @return 바뀐 행 수(0 또는 1)
+     */
+    int markAutoRefundRequested(UUID orderId, String providerOrderId, Instant now);
+
+    /**
+     * 취소 중인 주문 · 자동 환불을 요청한 취소된 주문에 환불 실패 시각을 적는다(ck_order_refund_failed). 이력 번호를 1 올린다.
      * 이미 적혀 있으면 바꾸지 않는다 — 같은 실패는 한 번만 적는다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다.
      *
      * @return 바뀐 행 수(0 또는 1)
@@ -87,6 +103,12 @@ public interface OrderWriter {
 
     /** 저장한 취소 시도 순번. 없으면 비어 있다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다. */
     Optional<Long> preorderCancelSequence(UUID orderId);
+
+    /** 결과를 모른 채 취소할 때 남긴 결제창. 그렇게 취소한 주문이 아니면 비어 있다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다. */
+    Optional<String> unconfirmedProviderOrderId(UUID orderId);
+
+    /** 자동 환불을 요청한 시각. 요청하지 않았으면 비어 있다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다. */
+    Optional<Instant> autoRefundRequestedAt(UUID orderId);
 
     /** 승인 중 결제창 번호. 승인 중이 아니면 비어 있다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다. */
     Optional<String> authorizingProviderOrderId(UUID orderId);

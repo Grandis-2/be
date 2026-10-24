@@ -34,7 +34,8 @@ public class NotificationReceiver {
      * 모르는 종류는 OTHER 로 센다. 저장은 종류와 상관없이 한다(새 종류를 member 배포 없이 더할 수 있다).
      */
     static final Set<String> KNOWN_KINDS =
-            Set.of("PREORDER_REGISTERED", "PREORDER_CANCELED", "DRAW_WON", "PREORDER_OPENED");
+            Set.of("PREORDER_REGISTERED", "PREORDER_CANCELED", "DRAW_WON", "PREORDER_OPENED", "PAYMENT_UNCONFIRMED",
+                    "PREORDER_PAYMENT_FAILED");
     static final String OTHER_KIND = "OTHER";
     /** 보낸 쪽 발생 시각부터 저장까지. 늘면 큐가 밀린 것이다(소비기 멈춤 · 처리량 부족) */
     static final String LAG_METRIC = "member.notifications.lag";
