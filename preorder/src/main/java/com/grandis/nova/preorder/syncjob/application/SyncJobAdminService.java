@@ -132,7 +132,7 @@ public class SyncJobAdminService {
     }
 
     /**
-     * 일괄 재처리 진행. 결과 수는 다룬 대상 작업의 지금 상태로 센다(아직 다루지 않은 대상은 기다리는 수).
+     * 일괄 재처리 진행. 결과 수는 요청을 남긴 작업의 지금 상태로 센다 — 남기지 못한 작업의 원래 상태를 결과로 세지 않는다.
      *
      * @throws BusinessException REPROCESS_BATCH_NOT_FOUND — 없거나 보관 시간이 지났다
      */
@@ -140,39 +140,49 @@ public class SyncJobAdminService {
     public BatchReprocessProgress findBatch(UUID batchId) {
         StoredBatch stored = batches.find(batchId)
                 .orElseThrow(() -> new BusinessException(PreorderErrorCode.REPROCESS_BATCH_NOT_FOUND));
-        List<UUID> attempted = stored.targets().subList(0, Math.min(stored.attempted(), stored.targets().size()));
-        Map<SyncJobStatus, Long> byStatus = attempted.isEmpty() ? Map.of() : syncJobs.findAllById(attempted).stream()
-                .collect(Collectors.groupingBy(PreorderSyncJob::getStatus, Collectors.counting()));
+        Map<SyncJobStatus, Long> byStatus = stored.sent().isEmpty() ? Map.of()
+                : syncJobs.findAllById(stored.sent()).stream()
+                        .collect(Collectors.groupingBy(PreorderSyncJob::getStatus, Collectors.counting()));
         int succeeded = byStatus.getOrDefault(SyncJobStatus.SUCCEEDED, 0L).intValue();
         int failed = byStatus.getOrDefault(SyncJobStatus.DEAD_LETTER, 0L).intValue();
         int canceled = byStatus.getOrDefault(SyncJobStatus.CANCELED, 0L).intValue();
-        return new BatchReprocessProgress(batchId, stored.targets().size(), stored.skipped(), stored.sent(),
-                succeeded, failed, canceled, stored.targets().size() - succeeded - failed - canceled,
+        int unsent = stored.attempted() - stored.sent().size();
+        return new BatchReprocessProgress(batchId, stored.targets().size(), stored.skipped(), stored.sent().size(),
+                unsent, succeeded, failed, canceled, stored.targets().size() - unsent - succeeded - failed - canceled,
                 stored.startedAt(), stored.lastProgressAt(), stored.finishedAt());
     }
 
     private void reprocessPaced(UUID batchId, List<UUID> targets, int ratePerSecond, String requestedBy) {
         Duration interval = Duration.ofNanos(Duration.ofSeconds(1).toNanos() / ratePerSecond);
-        for (UUID syncJobId : targets) {
-            boolean sent = false;
+        for (int i = 0; i < targets.size(); i++) {
+            if (i > 0 && !pause(interval, batchId)) {
+                return;
+            }
+            UUID syncJobId = targets.get(i);
+            UUID sent = null;
             try {
                 reprocessor.reprocess(syncJobId, requestedBy);
-                sent = true;
+                sent = syncJobId;
             } catch (BusinessException e) {
                 log.info("재처리 대상에서 빠졌다(그 사이 상태가 바뀜) syncJobId={} reason={}", syncJobId, e.details());
             } catch (RuntimeException e) {
                 log.warn("재처리 요청을 남기지 못했다 — 같은 요청을 다시 보내면 이어진다 syncJobId={}", syncJobId, e);
             }
             batches.progress(batchId, sent, clock.instant());
-            try {
-                Thread.sleep(interval);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.warn("일괄 재처리가 중단됐다 — 같은 요청을 다시 보내면 이어진다 batchId={}", batchId);
-                return;
-            }
         }
         batches.finish(batchId, clock.instant());
+    }
+
+    /** 대상 사이에만 쉰다 — 마지막 대상 뒤에 쉬다 중단돼 끝 시각을 놓치지 않게. */
+    private static boolean pause(Duration interval, UUID batchId) {
+        try {
+            Thread.sleep(interval);
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("일괄 재처리가 중단됐다 — 같은 요청을 다시 보내면 이어진다 batchId={}", batchId);
+            return false;
+        }
     }
 
     private Optional<SyncJobFilter> filter(SyncJobType jobType, SyncJobStatus status, String preorderToken) {

@@ -310,6 +310,7 @@ class AdminSyncJobApiTest {
                 .andExpect(jsonPath("$.data.targetCount").value(3))
                 .andExpect(jsonPath("$.data.skippedCount").value(1))
                 .andExpect(jsonPath("$.data.sent").value(3))
+                .andExpect(jsonPath("$.data.unsent").value(0))
                 .andExpect(jsonPath("$.data.pending").value(3))
                 .andExpect(jsonPath("$.data.startedAt").isNotEmpty())
                 .andExpect(jsonPath("$.data.lastProgressAt").isNotEmpty());

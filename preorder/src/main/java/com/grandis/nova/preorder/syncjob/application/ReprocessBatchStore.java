@@ -5,24 +5,26 @@ import com.grandis.nova.common.CommonErrorCode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
-import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
  * 일괄 재처리 진행을 Redis 해시 하나에 둔다. 보내는 인스턴스와 묻는 인스턴스가 달라도 같은 값을 본다.
+ * 기록은 스크립트 하나로 보관 시간까지 함께 걸고, 진행 · 끝 기록은 키가 있을 때만 해 반쪽 해시를 만들지 않는다.
  * 진행 기록이 실패해도 재처리는 멈추지 않는다 — 진행 조회만 늦거나 빠진다.
- * 기록할 때마다 보관 시간을 다시 걸어, 만료된 키를 증가가 보관 시간 없이 반쪽으로 되살리지 않게 한다.
  */
 @Component
 class ReprocessBatchStore {
@@ -33,9 +35,32 @@ class ReprocessBatchStore {
     private static final String SKIPPED = "skipped";
     private static final String STARTED_AT = "startedAt";
     private static final String ATTEMPTED = "attempted";
-    private static final String SENT = "sent";
     private static final String LAST_PROGRESS_AT = "lastProgressAt";
     private static final String FINISHED_AT = "finishedAt";
+    /** 요청을 남긴 작업마다 이 접두어 + 작업 id 칸을 둔다. */
+    private static final String SENT_PREFIX = "sent:";
+
+    /** ARGV[1] 보관 밀리초, 나머지는 칸 · 값 쌍. */
+    private static final RedisScript<Long> START = new DefaultRedisScript<>("""
+            redis.call('HSET', KEYS[1], unpack(ARGV, 2))
+            redis.call('PEXPIRE', KEYS[1], ARGV[1])
+            return 1""", Long.class);
+
+    /** ARGV[1] 보관 밀리초, ARGV[2] 시각, ARGV[3] 요청을 남긴 작업 id(못 남겼으면 빈 문자열). */
+    private static final RedisScript<Long> PROGRESS = new DefaultRedisScript<>("""
+            if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+            redis.call('HINCRBY', KEYS[1], 'attempted', 1)
+            redis.call('HSET', KEYS[1], 'lastProgressAt', ARGV[2])
+            if ARGV[3] ~= '' then redis.call('HSET', KEYS[1], 'sent:' .. ARGV[3], '1') end
+            redis.call('PEXPIRE', KEYS[1], ARGV[1])
+            return 1""", Long.class);
+
+    /** ARGV[1] 보관 밀리초, ARGV[2] 시각. */
+    private static final RedisScript<Long> FINISH = new DefaultRedisScript<>("""
+            if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+            redis.call('HSET', KEYS[1], 'finishedAt', ARGV[2])
+            redis.call('PEXPIRE', KEYS[1], ARGV[1])
+            return 1""", Long.class);
 
     private static final Logger log = LoggerFactory.getLogger(ReprocessBatchStore.class);
 
@@ -49,44 +74,37 @@ class ReprocessBatchStore {
 
     /** 대상이 없으면 시작과 함께 끝난 것으로 둔다. */
     void start(UUID batchId, List<UUID> targets, int skipped, Instant startedAt) {
-        Map<String, String> fields = new LinkedHashMap<>();
-        fields.put(TARGETS, targets.stream().map(UUID::toString).collect(Collectors.joining(",")));
-        fields.put(SKIPPED, String.valueOf(skipped));
-        fields.put(STARTED_AT, startedAt.toString());
-        fields.put(ATTEMPTED, "0");
-        fields.put(SENT, "0");
-        fields.put(LAST_PROGRESS_AT, startedAt.toString());
+        List<String> args = new ArrayList<>(List.of(ttlMillis(),
+                TARGETS, targets.stream().map(UUID::toString).collect(Collectors.joining(",")),
+                SKIPPED, String.valueOf(skipped),
+                STARTED_AT, startedAt.toString(),
+                ATTEMPTED, "0",
+                LAST_PROGRESS_AT, startedAt.toString()));
         if (targets.isEmpty()) {
-            fields.put(FINISHED_AT, startedAt.toString());
+            args.addAll(List.of(FINISHED_AT, startedAt.toString()));
         }
         try {
-            hash().putAll(key(batchId), fields);
-            redis.expire(key(batchId), ttl);
+            redis.execute(START, List.of(key(batchId)), args.toArray());
         } catch (DataAccessException e) {
-            log.warn("일괄 재처리 진행을 남기지 못했다 — 재처리는 이어간다 batchId={}: {}", batchId, e.toString());
+            log.warn("일괄 재처리 진행을 남기지 못했다 — 재처리는 이어간다 batchId={}", batchId, e);
         }
     }
 
-    /** 대상 하나를 다뤘다. sent 면 재처리 요청을 남겼고, 아니면 그 사이 상태가 바뀌었거나 남기지 못했다. */
-    void progress(UUID batchId, boolean sent, Instant at) {
+    /** 대상 하나를 다뤘다. sentJobId 는 재처리 요청을 남긴 작업, 그 사이 상태가 바뀌었거나 남기지 못했으면 null. */
+    void progress(UUID batchId, UUID sentJobId, Instant at) {
         try {
-            hash().increment(key(batchId), ATTEMPTED, 1);
-            if (sent) {
-                hash().increment(key(batchId), SENT, 1);
-            }
-            hash().put(key(batchId), LAST_PROGRESS_AT, at.toString());
-            redis.expire(key(batchId), ttl);
+            redis.execute(PROGRESS, List.of(key(batchId)), ttlMillis(), at.toString(),
+                    sentJobId == null ? "" : sentJobId.toString());
         } catch (DataAccessException e) {
-            log.warn("일괄 재처리 진행을 남기지 못했다 batchId={}: {}", batchId, e.toString());
+            log.warn("일괄 재처리 진행을 남기지 못했다 batchId={}", batchId, e);
         }
     }
 
     void finish(UUID batchId, Instant at) {
         try {
-            hash().put(key(batchId), FINISHED_AT, at.toString());
-            redis.expire(key(batchId), ttl);
+            redis.execute(FINISH, List.of(key(batchId)), ttlMillis(), at.toString());
         } catch (DataAccessException e) {
-            log.warn("일괄 재처리 끝을 남기지 못했다 batchId={}: {}", batchId, e.toString());
+            log.warn("일괄 재처리 끝을 남기지 못했다 batchId={}", batchId, e);
         }
     }
 
@@ -96,39 +114,45 @@ class ReprocessBatchStore {
      * @throws BusinessException DEPENDENCY_UNAVAILABLE — Redis 가 응답하지 않는다
      */
     Optional<StoredBatch> find(UUID batchId) {
-        Map<String, String> fields;
+        Map<Object, Object> fields;
         try {
-            fields = hash().entries(key(batchId));
+            fields = redis.opsForHash().entries(key(batchId));
         } catch (DataAccessException e) {
-            log.warn("일괄 재처리 진행을 읽지 못했다 batchId={}: {}", batchId, e.toString());
+            log.warn("일괄 재처리 진행을 읽지 못했다 batchId={}", batchId, e);
             throw new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
         }
         if (fields.isEmpty()) {
             return Optional.empty();
         }
-        String targets = fields.get(TARGETS);
+        String targets = (String) fields.get(TARGETS);
+        Set<UUID> sent = fields.keySet().stream()
+                .map(String.class::cast)
+                .filter(field -> field.startsWith(SENT_PREFIX))
+                .map(field -> UUID.fromString(field.substring(SENT_PREFIX.length())))
+                .collect(Collectors.toSet());
+        String finishedAt = (String) fields.get(FINISHED_AT);
         return Optional.of(new StoredBatch(
                 targets.isEmpty() ? List.of() : Arrays.stream(targets.split(",")).map(UUID::fromString).toList(),
-                Integer.parseInt(fields.get(SKIPPED)), Instant.parse(fields.get(STARTED_AT)),
-                Integer.parseInt(fields.get(ATTEMPTED)), Integer.parseInt(fields.get(SENT)),
-                Instant.parse(fields.get(LAST_PROGRESS_AT)),
-                fields.containsKey(FINISHED_AT) ? Instant.parse(fields.get(FINISHED_AT)) : null));
+                Integer.parseInt((String) fields.get(SKIPPED)), Instant.parse((String) fields.get(STARTED_AT)),
+                Integer.parseInt((String) fields.get(ATTEMPTED)), sent,
+                Instant.parse((String) fields.get(LAST_PROGRESS_AT)),
+                finishedAt == null ? null : Instant.parse(finishedAt)));
     }
 
     static String key(UUID batchId) {
         return KEY_PREFIX + batchId;
     }
 
-    private HashOperations<String, String, String> hash() {
-        return redis.opsForHash();
+    private String ttlMillis() {
+        return String.valueOf(ttl.toMillis());
     }
 
     /**
      * @param targets   보낼 작업 id(보내는 순서)
      * @param attempted 앞에서부터 다룬 대상 수
-     * @param sent      그중 재처리 요청을 남긴 수
+     * @param sent      그중 재처리 요청을 남긴 작업
      */
-    record StoredBatch(List<UUID> targets, int skipped, Instant startedAt, int attempted, int sent,
+    record StoredBatch(List<UUID> targets, int skipped, Instant startedAt, int attempted, Set<UUID> sent,
                        Instant lastProgressAt, Instant finishedAt) {
     }
 }
