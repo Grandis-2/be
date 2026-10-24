@@ -19,7 +19,7 @@
 # 학습 환경은 이번 실행에서만 쓰고 버린다. 비밀값(DB · 관리자 비밀번호 · JWT 키 · 입장권 · Toss 키)은 모두 매번 새로 만든다.
 #
 # 환경 변수
-#   BASE_IMAGE      베이스 이미지. 비우면 eclipse-temurin:25-jre 를 받아 다이제스트로 고정한다
+#   BASE_IMAGE      베이스 이미지. 비우면 docker/Dockerfile 의 기본값과 같은 태그를 받아 다이제스트로 고정한다
 #   FINAL_REPO      최종 이미지 저장소 이름(기본 release) — 태그는 서비스 이름
 #   TRAIN_CPUS · TRAIN_MEMORY   학습 · 측정 컨테이너 자원(기본 1 · 2g). 캐시는 GC · 힙이 달라도 받아지므로(JDK 25 실측) 정확성 조건이 아니라 측정 조건이다
 #   STEADY_SECONDS  요청 학습 2부의 길이(기본 90)
@@ -100,8 +100,9 @@ done
 
 # ── 1) 기반 이미지 ───────────────────────────────────────────────
 if [ -z "${BASE_IMAGE:-}" ]; then
-  docker pull -q eclipse-temurin:25-jre > /dev/null
-  BASE_IMAGE=$(docker image inspect --format '{{index .RepoDigests 0}}' eclipse-temurin:25-jre)
+  BASE_TAG=$(sed -n 's/^ARG BASE_IMAGE=//p' "$ROOT/docker/Dockerfile")
+  docker pull -q "$BASE_TAG" > /dev/null
+  BASE_IMAGE=$(docker image inspect --format '{{index .RepoDigests 0}}' "$BASE_TAG")
 fi
 log "베이스 $BASE_IMAGE"
 for s in "${services[@]}"; do
