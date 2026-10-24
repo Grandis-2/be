@@ -39,7 +39,7 @@ class PreorderStatsCacheTest {
         UUID productId = UUID.randomUUID();
         PreorderStats stats = new PreorderStats(productId,
                 new PreorderBacklog(Map.of(PreorderStatus.PENDING_SYNC, 3L, PreorderStatus.CANCELED, 0L), 2,
-                        Instant.parse("2026-10-13T01:02:11.123456Z")),
+                        Instant.parse("2026-10-13T01:02:11.123456Z"), Instant.parse("2026-10-13T01:05:00.654321Z")),
                 Map.of(SyncJobType.REGISTER, Map.of(SyncJobStatus.DEAD_LETTER, 1L)),
                 new DeadLetterWaiting(4, null), Instant.parse("2026-10-13T02:15:30Z"));
         PreorderStatsCache cache = cache(redis, Duration.ofSeconds(5));

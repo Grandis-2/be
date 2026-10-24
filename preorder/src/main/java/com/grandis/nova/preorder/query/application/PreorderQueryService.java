@@ -8,6 +8,7 @@ import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.campaign.ShipmentBatchSnapshot;
 import com.grandis.nova.preorder.preorder.AdminPreorderSearch;
+import com.grandis.nova.preorder.preorder.AdminPreorderSort;
 import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
@@ -121,7 +122,7 @@ public class PreorderQueryService {
         return preorders.history(require(viewer, preorderToken).id());
     }
 
-    /** @throws BusinessException VALIDATION_FAILED — 옵션 · 배송 차수를 상품 없이 물었다 */
+    /** @throws BusinessException VALIDATION_FAILED — 옵션 · 배송 차수 · 순번순을 상품 없이 물었다 */
     public OffsetPage<PreorderView.AdminSummary> findForAdmin(AdminPreorderFilter filter, int page, int size) {
         requireProductScope(filter);
         Instant now = clock.instant();
@@ -139,18 +140,24 @@ public class PreorderQueryService {
         OffsetPage<PreorderSnapshot> found = preorders.searchForAdmin(new AdminPreorderSearch(status,
                 filter.customerId(), filter.productId(), filter.from(), filter.to(),
                 jobStatus == null ? null : jobStatus.name(), filter.externalReference(), filter.optionId(),
-                filter.batchNumber(), progress), page, size);
-        Map<UUID, SyncJobStatus> registerStatuses = registerJobStatuses(found.items());
-        List<PreorderView.AdminSummary> items = withBatches(found.items(), (preorder, batch) ->
-                new PreorderView.AdminSummary(preorder, batch, registerStatuses.get(preorder.id()),
-                        displayStatus(preorder, registerStatuses.get(preorder.id()), now)));
+                filter.batchNumber(), progress), filter.sort(), page, size);
+        Map<UUID, SyncJobSnapshot> registerJobs = syncJobs.registerJobs(
+                found.items().stream().map(PreorderSnapshot::id).toList());
+        List<PreorderView.AdminSummary> items = withBatches(found.items(), (preorder, batch) -> {
+            SyncJobSnapshot registerJob = registerJobs.get(preorder.id());
+            return new PreorderView.AdminSummary(preorder, batch, registerJob,
+                    displayStatus(preorder, registerJob == null ? null : registerJob.status(), now));
+        });
         return OffsetPage.of(items, page, size, found.total());
     }
 
-    /** 옵션 · 차수 색인은 상품 id 로 시작하고, 차수 번호는 상품마다 따로 매긴다. */
+    /** 옵션 · 차수 색인은 상품 id 로 시작하고, 차수 번호 · 순번은 상품마다 따로 매긴다. */
     private void requireProductScope(AdminPreorderFilter filter) {
         if (filter.productId() != null) {
             return;
+        }
+        if (filter.sort() == AdminPreorderSort.QUEUE_POSITION) {
+            throw ValidationFailures.of("sort", "QUEUE_POSITION 은 productId 와 함께 보내야 합니다.");
         }
         if (filter.optionId() != null) {
             throw ValidationFailures.of("optionId", "productId 와 함께 보내야 합니다.");
@@ -246,14 +253,11 @@ public class PreorderQueryService {
         return found.stream().map(preorder -> mapper.map(preorder, byId.get(preorder.shipmentBatchId()))).toList();
     }
 
-    private Map<UUID, SyncJobStatus> registerJobStatuses(Collection<PreorderSnapshot> found) {
-        return syncJobs.registerStatuses(found.stream().map(PreorderSnapshot::id).toList());
-    }
-
     /** 화면 단계에 쓰는 등록 작업 상태 — {@link #displayStatus} 는 PENDING_SYNC 에서만 본다. 그런 행이 없으면 읽지 않는다. */
     private Map<UUID, SyncJobStatus> pendingRegisterStatuses(Collection<PreorderSnapshot> found) {
-        return registerJobStatuses(found.stream().filter(preorder -> preorder.status() == PreorderStatus.PENDING_SYNC)
-                .toList());
+        return syncJobs.registerStatuses(found.stream()
+                .filter(preorder -> preorder.status() == PreorderStatus.PENDING_SYNC)
+                .map(PreorderSnapshot::id).toList());
     }
 
     @FunctionalInterface

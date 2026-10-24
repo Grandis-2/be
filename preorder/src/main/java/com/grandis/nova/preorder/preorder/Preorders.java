@@ -156,7 +156,8 @@ public class Preorders {
     public PreorderBacklog backlog(UUID productId, Instant now) {
         return new PreorderBacklog(backlog.countByStatus(productId),
                 backlog.countRegisteredPayableUntil(now.minus(PreorderSnapshot.PAYMENT_WINDOW), productId),
-                backlog.findOldestCreatedAt(PreorderStatus.PENDING_SYNC, productId).orElse(null));
+                backlog.findOldestCreatedAt(PreorderStatus.PENDING_SYNC, productId).orElse(null),
+                backlog.findOldestInFlightRegister(productId).orElse(null));
     }
 
     /** 결제 기한이 지나 만료할 예약의 공개 UUID. 기한이 오래된 것부터 limit 건. */
@@ -209,9 +210,10 @@ public class Preorders {
                 .toList();
     }
 
-    /** 관리자 검색(최신순 오프셋 페이지). */
-    public OffsetPage<PreorderSnapshot> searchForAdmin(AdminPreorderSearch search, int page, int size) {
-        List<UUID> ids = adminSearch.findIds(search, page, size);
+    /** 관리자 검색(그 순서의 오프셋 페이지). */
+    public OffsetPage<PreorderSnapshot> searchForAdmin(AdminPreorderSearch search, AdminPreorderSort sort, int page,
+                                                       int size) {
+        List<UUID> ids = adminSearch.findIds(search, sort, page, size);
         Map<UUID, Preorder> byId = (ids.isEmpty() ? List.<Preorder>of() : preorders.lookupAll(ids)).stream()
                 .collect(Collectors.toMap(Preorder::getId, Function.identity()));
         List<PreorderSnapshot> items = ids.stream().map(byId::get).map(Preorder::toSnapshot).toList();

@@ -5,7 +5,6 @@ import com.grandis.nova.preorder.preorder.PreorderHistoryEntry;
 import com.grandis.nova.preorder.preorder.PreorderSnapshot;
 import com.grandis.nova.preorder.syncjob.SyncAttempt;
 import com.grandis.nova.preorder.syncjob.SyncJobSnapshot;
-import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 
 import java.util.List;
 import java.util.Map;
@@ -25,8 +24,8 @@ public final class PreorderView {
     public record Active(PreorderSnapshot preorder, PreorderDisplayStatus displayStatus) {
     }
 
-    /** 관리자 목록. 외부 등록 작업 상태가 더 붙는다(DEAD_LETTER 면 재처리 대기). */
-    public record AdminSummary(PreorderSnapshot preorder, ShipmentBatchSnapshot shipmentBatch, SyncJobStatus registerJobStatus,
+    /** 관리자 목록. 외부 등록 작업이 더 붙는다(DEAD_LETTER 면 재처리 대기). 작업이 없으면 null 이다. */
+    public record AdminSummary(PreorderSnapshot preorder, ShipmentBatchSnapshot shipmentBatch, SyncJobSnapshot registerJob,
                                PreorderDisplayStatus displayStatus) {
     }
 

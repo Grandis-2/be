@@ -14,6 +14,7 @@ import com.grandis.nova.preorder.support.PreorderCancels;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
+import com.grandis.nova.preorder.syncjob.SyncJobs;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,6 +23,8 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
@@ -58,6 +61,9 @@ class AdminPreorderQueryApiTest {
     @Autowired
     TransactionTemplate transactionTemplate;
 
+    @Autowired
+    SyncJobs syncJobs;
+
     @MockitoBean
     CatalogClient catalogClient;
 
@@ -90,7 +96,9 @@ class AdminPreorderQueryApiTest {
                 .andExpect(jsonPath("$.data.items", hasSize(1)))
                 .andExpect(jsonPath("$.data.items[0].preorderId").value(AcceptFixtures.tokenOf(mine)))
                 .andExpect(jsonPath("$.data.items[0].customerId").value(customerId.toString()))
-                .andExpect(jsonPath("$.data.items[0].registerJobStatus").value("PENDING"));
+                .andExpect(jsonPath("$.data.items[0].registerJobStatus").value("PENDING"))
+                .andExpect(jsonPath("$.data.items[0].registerSyncJobId")
+                        .value(syncJobs.findByPreorder(mine.preorder().id()).getFirst().id().toString()));
     }
 
     /** DB 를 다른 시험과 함께 쓰므로 이 시험이 만든 상품으로 좁혀 본다. */
@@ -241,6 +249,34 @@ class AdminPreorderQueryApiTest {
                 .andExpect(jsonPath("$.data.total").value(0));
     }
 
+    /** 기본은 최신순이고, 결제 기한순은 결제를 기다리는 예약을 기한 임박순으로 앞에 두고 나머지를 뒤에 둔다. */
+    @Test
+    void 정한_순서로_준다() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        AcceptResult first = accepts.accept(fixtures.customer(), product);
+        AcceptResult second = accepts.accept(fixtures.customer(), product);
+        AcceptResult third = accepts.accept(fixtures.customer(), product);
+        // 결제 가능 시작이 접수 순서와 반대가 되게 셋째를 먼저 등록한다
+        register(third.preorder().id());
+        register(first.preorder().id());
+        String productId = product.productId().toString();
+
+        assertOrder(productId, null, third, second, first);
+        assertOrder(productId, "NEWEST", third, second, first);
+        assertOrder(productId, "OLDEST", first, second, third);
+        assertOrder(productId, "QUEUE_POSITION", first, second, third);
+        assertOrder(productId, "PAYMENT_DUE", third, first, second);
+    }
+
+    @Test
+    void 모르는_순서나_상품_없는_순번순은_400_이다() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/preorders").param("sort", "PRICE").with(admin()))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(get("/api/v1/admin/preorders").param("sort", "QUEUE_POSITION").with(admin()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.details.violations[0].field").value("sort"));
+    }
+
     @Test
     void 옵션과_배송_차수는_상품_없이_물으면_400_이다() throws Exception {
         mockMvc.perform(get("/api/v1/admin/preorders").param("optionId", UUID.randomUUID().toString())
@@ -286,6 +322,19 @@ class AdminPreorderQueryApiTest {
         mockMvc.perform(get("/api/v1/admin/preorders").param("productId", productId)
                         .param("status", "PENDING_SYNC").param("displayStatus", "RECEIVED").with(admin()))
                 .andExpect(jsonPath("$.data.total").value(1));
+    }
+
+    private void assertOrder(String productId, String sort, AcceptResult... expected) throws Exception {
+        MockHttpServletRequestBuilder request = get("/api/v1/admin/preorders").param("productId", productId)
+                .with(admin());
+        if (sort != null) {
+            request.param("sort", sort);
+        }
+        ResultActions result = mockMvc.perform(request).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items", hasSize(expected.length)));
+        for (int i = 0; i < expected.length; i++) {
+            result.andExpect(jsonPath("$.data.items[" + i + "].preorderId").value(AcceptFixtures.tokenOf(expected[i])));
+        }
     }
 
     /** 접수 직후(RECEIVED)의 예약을 그 화면 단계까지 보낸다. */

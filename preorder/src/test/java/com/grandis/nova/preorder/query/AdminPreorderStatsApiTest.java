@@ -106,6 +106,23 @@ class AdminPreorderStatsApiTest {
                 .andExpect(jsonPath("$.data.countedAt").isNotEmpty());
     }
 
+    /** 재처리를 기다리는(DEAD_LETTER) 예약은 등록을 기다리는 시각에는 들고, 아직 도는 등록의 시각에는 들지 않는다. */
+    @Test
+    void 처리_중인_등록의_가장_오래된_시각은_재처리_대기를_빼고_센다() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+        AcceptResult deadLettered = accepts.accept(fixtures.customer(), product);
+        fixtures.deadLetter(deadLettered.preorder().id());
+        AcceptResult inFlight = accepts.accept(fixtures.customer(), product);
+        register(accepts.accept(fixtures.customer(), product).preorder().id());
+
+        mockMvc.perform(get(PATH).param("productId", product.productId().toString()).with(admin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.oldestPendingSyncAt")
+                        .value(deadLettered.preorder().createdAt().toString()))
+                .andExpect(jsonPath("$.data.oldestInFlightSyncAt")
+                        .value(inFlight.preorder().createdAt().toString()));
+    }
+
     @Test
     void 예약이_없는_상품은_모두_0_이고_가장_오래된_시각은_비어_있다() throws Exception {
         PreorderProduct product = fixtures.openPreorderProduct();
@@ -117,7 +134,8 @@ class AdminPreorderStatsApiTest {
                 .andExpect(jsonPath("$.data.deadLetters.waiting").value(0))
                 .andExpect(jsonPath("$.data.deadLetters.oldestWaitingAt").value(nullValue()))
                 .andExpect(jsonPath("$.data.paymentOverdue").value(0))
-                .andExpect(jsonPath("$.data.oldestPendingSyncAt").value(nullValue()));
+                .andExpect(jsonPath("$.data.oldestPendingSyncAt").value(nullValue()))
+                .andExpect(jsonPath("$.data.oldestInFlightSyncAt").value(nullValue()));
     }
 
     @Test

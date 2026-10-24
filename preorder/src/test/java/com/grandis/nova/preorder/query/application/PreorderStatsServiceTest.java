@@ -59,7 +59,7 @@ class PreorderStatsServiceTest {
     }
 
     static PreorderStats stats(UUID productId) {
-        return new PreorderStats(productId, new PreorderBacklog(Map.of(), 0, null), Map.of(),
+        return new PreorderStats(productId, new PreorderBacklog(Map.of(), 0, null, null), Map.of(),
                 new DeadLetterWaiting(0, null), Instant.parse("2026-10-13T02:15:30Z"));
     }
 }
