@@ -37,8 +37,9 @@ RUN java -Djarmode=tools -jar app.jar extract --destination /extracted
 FROM ${BASE_IMAGE}
 WORKDIR /app
 
-# 루트로 돌리지 않는다. Amazon Linux 베이스에는 groupadd · useradd 가 없어 shadow-utils 를 받아 쓴다.
-RUN dnf install -y shadow-utils && dnf clean all \
+# 루트로 돌리지 않는다. groupadd · useradd 가 없는 베이스(Amazon Linux)에서만 shadow-utils 를 받는다 —
+# BASE_IMAGE 로 Temurin(Ubuntu) 을 지정해도 그대로 빌드된다.
+RUN if ! command -v useradd > /dev/null; then dnf install -y shadow-utils && dnf clean all; fi \
     && groupadd --system spring && useradd --system --gid spring spring
 USER spring
 
