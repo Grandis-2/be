@@ -39,6 +39,7 @@ public class MemberSecurityConfig {
                 .requestMatchers(HttpMethod.DELETE, "/api/v1/session").permitAll()              // 로그아웃: 만료된 액세스로도 되어야 한다
                 .requestMatchers(HttpMethod.GET, OpenApiPaths.docs()).permitAll()                 // OpenAPI 문서(허브)
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.GET, "/internal/customers/names").hasRole("ADMIN")   // order · preorder 관리자 화면의 회원 이름(관리자 토큰을 싣는다)
                 .anyRequest().authenticated());                                                 // GET /session, /me/**, /notifications/**
     }
 
