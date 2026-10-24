@@ -28,6 +28,7 @@ import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -70,14 +71,14 @@ class InternalCustomerNamesApiTest {
     }
 
     @Test
-    @DisplayName("관리자 토큰만 — 익명 401, 회원 토큰 403(남의 이름을 물을 길을 만들지 않는다)")
+    @DisplayName("관리자 토큰만 — 익명 401, 회원 토큰 403(남의 이름을 물을 길을 만들지 않는다). HEAD 도 GET 핸들러로 가므로 같다")
     void onlyAdminTokens() throws Exception {
         Customer customer = customers.saveAndFlush(Customer.fromKakao(kakaoId(), "철수랑"));
         String ids = customer.getId().toString();
+        String user = BearerTokens.value(token(customer.getId().toString(), Role.USER));
         mvc.perform(get(PATH).param("ids", ids)).andExpect(status().isUnauthorized());
-        mvc.perform(get(PATH).param("ids", ids)
-                        .header(BearerTokens.HEADER, BearerTokens.value(token(customer.getId().toString(), Role.USER))))
-                .andExpect(status().isForbidden());
+        mvc.perform(get(PATH).param("ids", ids).header(BearerTokens.HEADER, user)).andExpect(status().isForbidden());
+        mvc.perform(head(PATH).param("ids", ids).header(BearerTokens.HEADER, user)).andExpect(status().isForbidden());
     }
 
     @Test
