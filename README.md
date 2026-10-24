@@ -282,7 +282,7 @@ batch 둘(정합성 검사 · 사진 정리)도 따로 띄운다 — 한쪽 설�
 | `catalog` | `categories` · `products` · `product_options` · `product_reviews` · `promotions` · `promotion_products` · `banners` · `catalog_outbox_events` · `images` |
 | `preorder` | `preorders` · `preorder_events` · `preorder_campaigns` · `shipment_batches` · `preorder_outbox_events` · `dead_letter_events`<br>`preorder_sync_jobs` · `preorder_sync_attempts` (외부 작업 · 시도 원장) · `preorder_open_alerts` · `preorder_open_alert_dispatches` (오픈 알림 신청 · 발송 진행) |
 | `order` | `orders` · `order_items` · `order_events` · `cart_items` · `option_inventories` · `draw_campaigns` · `draw_entries` |
-| `payment` | `payments` · `payment_transactions` |
+| `payment` | `payments` · `payment_transactions` · `payment_dead_letter_events` |
 | `worker` | (없음 — DB 를 쓰지 않는다. 결과는 이벤트로 preorder · order 에 알린다) |
 | `batch-reconciliation` | `reconciliation_runs` · `reconciliation_findings` (정합성 검사 결과. 업무 표는 읽기만) |
 | `batch-imagecleanup` | `image_deletions` (사진 정리의 S3 삭제 대기) |
