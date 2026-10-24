@@ -3,7 +3,9 @@ package com.grandis.nova.preorder.query;
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
+import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
+import com.grandis.nova.preorder.integration.member.MemberClient;
 import com.grandis.nova.preorder.preorder.EventActor;
 import com.grandis.nova.preorder.preorder.PreorderFact;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
@@ -23,8 +25,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.client.ResourceAccessException;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.UUID;
@@ -32,6 +37,12 @@ import java.util.UUID;
 import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -60,6 +71,10 @@ class AdminPreorderQueryApiTest {
 
     @MockitoBean
     CatalogClient catalogClient;
+
+    /** 회원 이름(member 내부 API) 자리. 그 앞의 캐시 · 회로(MemberNames)는 실제 빈이다. 정하지 않으면 null 을 돌려 이름이 비어 있다. */
+    @MockitoBean
+    MemberClient memberClient;
 
     ShopFixtures fixtures;
     AcceptFixtures accepts;
@@ -318,5 +333,69 @@ class AdminPreorderQueryApiTest {
 
     private void fire(UUID preorderId, PreorderFact fact) {
         transactionTemplate.executeWithoutResult(status -> ledger.fire(preorderId, fact));
+    }
+
+    @Test
+    void 목록은_그_쪽의_회원_이름을_member_에게_한_번에_묻는다() throws Exception {
+        // 같은 회원이 같은 상품에 다시 접수하려면 대기열을 다시 거쳐야 해 상품을 나눈다. 목록이 최신순이라 맨 앞 세 줄이 이 시험의 예약이다
+        UUID kim = fixtures.customer();
+        UUID lee = fixtures.customer();
+        accepts.accept(kim);
+        accepts.accept(lee);
+        accepts.accept(kim);
+        when(memberClient.getNames(any())).thenAnswer(invocation -> names(invocation.getArgument(0), kim, "김**", lee, "이**"));
+
+        mockMvc.perform(get("/api/v1/admin/preorders").param("size", "3").with(admin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items", hasSize(3)))
+                .andExpect(jsonPath("$.data.items[0].customerName").value("김**"))
+                .andExpect(jsonPath("$.data.items[1].customerName").value("이**"))
+                .andExpect(jsonPath("$.data.items[2].customerName").value("김**"));
+        verify(memberClient, times(1)).getNames(argThat(ids -> ids.size() == 2 && ids.containsAll(List.of(kim, lee))));
+    }
+
+    @Test
+    void 상세와_메모_변경도_회원_이름을_싣고_캐시에_있으면_다시_묻지_않는다() throws Exception {
+        UUID park = fixtures.customer();
+        AcceptResult accepted = accepts.accept(park);
+        when(memberClient.getNames(any())).thenAnswer(invocation -> names(invocation.getArgument(0), park, "박**"));
+
+        mockMvc.perform(get("/api/v1/admin/preorders/" + AcceptFixtures.tokenOf(accepted)).with(admin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.customerName").value("박**"));
+        clearInvocations(memberClient);
+        mockMvc.perform(patch("/api/v1/admin/preorders/" + AcceptFixtures.tokenOf(accepted))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"internalNote\":\"이름 확인\"}").with(admin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.customerName").value("박**"));
+        verify(memberClient, times(0)).getNames(any());
+    }
+
+    @Test
+    void member_가_답하지_않으면_목록과_상세는_그대로이고_이름만_비어_있다() throws Exception {
+        UUID choi = fixtures.customer();
+        AcceptResult accepted = accepts.accept(choi);
+        when(memberClient.getNames(any())).thenThrow(new ResourceAccessException("member 연결 실패"));
+
+        mockMvc.perform(get("/api/v1/admin/preorders").param("customerId", choi.toString()).with(admin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items", hasSize(1)))
+                .andExpect(jsonPath("$.data.items[0].customerId").value(choi.toString()))
+                .andExpect(jsonPath("$.data.items[0].customerName").doesNotExist());
+        mockMvc.perform(get("/api/v1/admin/preorders/" + AcceptFixtures.tokenOf(accepted)).with(admin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.customerName").doesNotExist());
+    }
+
+    /** 물은 id 중 아는 회원만 담은 member 응답. */
+    private static ApiResponse<MemberClient.Names> names(Collection<UUID> asked, Object... idAndNames) {
+        List<MemberClient.Name> items = new java.util.ArrayList<>();
+        for (int i = 0; i < idAndNames.length; i += 2) {
+            UUID id = (UUID) idAndNames[i];
+            if (asked.contains(id)) {
+                items.add(new MemberClient.Name(id, (String) idAndNames[i + 1]));
+            }
+        }
+        return ApiResponse.ok(new MemberClient.Names(items));
     }
 }

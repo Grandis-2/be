@@ -6,17 +6,22 @@ import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 
 import java.util.UUID;
 
-/** 관리자 목록 한 줄(openapi AdminPreorderSummary). 회원과 외부 등록 작업 상태가 더 붙는다. */
+/**
+ * 관리자 목록 한 줄(openapi AdminPreorderSummary). 회원과 외부 등록 작업 상태가 더 붙는다.
+ *
+ * @param customerName 회원 이름(member 가 가린 값, 예: 김**). member 에게 받지 못했으면 null
+ */
 record AdminPreorderSummaryResponse(
         @JsonUnwrapped PreorderSummaryResponse summary,
         UUID customerId,
+        String customerName,
         SyncJobStatus registerJobStatus
 ) {
 
-    public static AdminPreorderSummaryResponse from(PreorderView.AdminSummary view) {
+    public static AdminPreorderSummaryResponse from(PreorderView.AdminSummary view, String customerName) {
         return new AdminPreorderSummaryResponse(
                 PreorderSummaryResponse.from(
                         new PreorderView.Summary(view.preorder(), view.shipmentBatch(), view.displayStatus()), null),   // 관리자 목록은 사진을 싣지 않는다
-                view.preorder().customerId(), view.registerJobStatus());
+                view.preorder().customerId(), customerName, view.registerJobStatus());
     }
 }
