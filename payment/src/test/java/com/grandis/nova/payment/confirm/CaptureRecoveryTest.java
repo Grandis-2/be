@@ -18,6 +18,7 @@ import com.grandis.nova.payment.domain.model.Outcome;
 import com.grandis.nova.payment.domain.model.PaymentTransaction;
 import com.grandis.nova.payment.domain.repository.PaymentTransactionReader;
 import com.grandis.nova.payment.recovery.RecoveryWorker;
+import com.grandis.nova.payment.support.AttentionCounts;
 import com.grandis.nova.payment.support.PaymentFixtures;
 import com.grandis.nova.payment.support.PaymentIntegrationTest;
 import com.grandis.nova.payment.support.RecoveryCandidates;
@@ -25,6 +26,7 @@ import com.grandis.nova.payment.vo.Money;
 import com.grandis.nova.payment.vo.PaymentTarget;
 import com.grandis.nova.payment.vo.ProviderError;
 import com.grandis.nova.payment.vo.ProviderPaymentKey;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -50,6 +52,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.entry;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -101,6 +104,11 @@ class CaptureRecoveryTest {
     @MockitoBean
     TossPaymentClient toss;
 
+    @Autowired
+    MeterRegistry meters;
+
+    AttentionCounts attention;
+
     PaymentTarget target;
     ProviderPaymentKey paymentKey;
 
@@ -109,6 +117,7 @@ class CaptureRecoveryTest {
         target = PaymentFixtures.newOrderTarget();
         paymentKey = PaymentFixtures.newProviderPayment();
         RecoveryCandidates.parkOthers(jdbcTemplate);
+        attention = AttentionCounts.snapshot(meters);
     }
 
     // ---- 1단계: 같은 키 재전송 ----
@@ -203,9 +212,39 @@ class CaptureRecoveryTest {
 
         worker.recoverDue();
 
-        assertEscalated(unknown, TossOutcomes.AMOUNT_MISMATCH);
+        assertEscalated(unknown, TossOutcomes.AMOUNT_MISMATCH, "RESULT_MISMATCH");
         assertThat(paymentsOfTarget()).isZero();
         assertThat(output.getAll()).contains("사람 확인 필요");
+    }
+
+    // 같은 키 재전송이 승인이라는데 금액이 다르다 — 다시 보내도 같은 응답이라 사람이 본다
+    @Test
+    void resentSuccessWithOtherAmountIsEscalated() {
+        PaymentTransaction timedOut = startedThenLeaseExpired(TIMEOUT);
+        given(toss.confirm(any(), any())).willReturn(done(timedOut, Money.won(1)));
+
+        worker.recoverDue();
+
+        verify(toss, never()).findByPaymentKey(anyString());
+        assertEscalated(timedOut, TossOutcomes.AMOUNT_MISMATCH, "RESULT_MISMATCH");
+        assertThat(paymentsOfTarget()).isZero();
+    }
+
+    // 결제사 호출 사이에 다른 작업자가 리스를 가져갔다 — 에스컬레이션이 반영되지 않았으니 세지도 않는다(가져간 쪽이 센다)
+    @Test
+    void escalationThatLostItsLeaseIsNotCounted(CapturedOutput output) {
+        PaymentTransaction unknown = startedThenLeaseExpired(UNLISTED);
+        given(toss.findByPaymentKey(paymentKey.value())).willAnswer(invocation -> {
+            jdbcTemplate.update("UPDATE payment_transactions SET lease_token = UUID() WHERE id = ?", UuidBinary.toBytes(unknown.id()));
+            return found(unknown, TossPaymentStatus.CANCELED, AMOUNT);
+        });
+
+        worker.recoverDue();
+
+        verify(toss).findByPaymentKey(paymentKey.value());
+        assertThat(output.getAll()).contains("리스를 잃음 transactionId=" + unknown.id());
+        assertThat(transactions.findById(unknown.id()).orElseThrow().isEscalated()).isFalse();
+        assertThat(attention.delta()).isEmpty();
     }
 
     @Test
@@ -336,7 +375,7 @@ class CaptureRecoveryTest {
         expireLease(unknown.id());
         worker.recoverDue();
 
-        assertEscalated(unknown, TossOutcomes.LOOKUP + status.name());
+        assertEscalated(unknown, TossOutcomes.LOOKUP + status.name(), "UNEXPECTED_STATE");
         verify(toss).findByPaymentKey(anyString());
         assertThat(settledEvents()).isZero();
     }
@@ -349,7 +388,7 @@ class CaptureRecoveryTest {
 
         worker.recoverDue();
 
-        assertEscalated(unknown, CaptureRecovery.ORDER_MISMATCH);
+        assertEscalated(unknown, CaptureRecovery.ORDER_MISMATCH, "RESULT_MISMATCH");
         assertThat(paymentsOfTarget()).isZero();
     }
 
@@ -419,7 +458,7 @@ class CaptureRecoveryTest {
 
         worker.recoverDue();
 
-        assertEscalated(retry, TossOutcomes.LOOKUP + "PARTIAL_CANCELED");
+        assertEscalated(retry, TossOutcomes.LOOKUP + "PARTIAL_CANCELED", "UNEXPECTED_STATE");
         assertThat(settledEvents()).isZero();
     }
 
@@ -542,7 +581,7 @@ class CaptureRecoveryTest {
 
         verify(toss, never()).confirm(any(), any());
         verify(toss, never()).findByPaymentKey(anyString());
-        assertEscalated(unknown, CaptureRecovery.UNRESOLVED);
+        assertEscalated(unknown, CaptureRecovery.UNRESOLVED, "TIMED_OUT");
     }
 
     // 리뷰 High: 상한은 시각이다 — 창 안에서 일시 오류가 이어져 보낸 횟수가 많아도 스스로 끝나는 반복이라 에스컬레이션하지 않는다
@@ -558,6 +597,7 @@ class CaptureRecoveryTest {
         PaymentTransaction after = transactions.findById(retry.id()).orElseThrow();
         assertThat(after.isEscalated()).isFalse();
         assertThat(after.status()).isEqualTo(TransactionStatus.RETRY_SCHEDULED);
+        assertThat(attention.delta()).isEmpty();
     }
 
     // 리뷰 Medium: 결제 단위 "처리 중"은 이 키에 캐시된다 — 같은 키로는 끝나지 않고, 새 키는 진행 중인 요청과 겹친다. 조회로 기다린다
@@ -696,11 +736,13 @@ class CaptureRecoveryTest {
 
     // ---- 확인 ----
 
-    private void assertEscalated(PaymentTransaction transaction, String code) {
+    private void assertEscalated(PaymentTransaction transaction, String code, String reason) {
         PaymentTransaction after = transactions.findById(transaction.id()).orElseThrow();
         assertThat(after.isEscalated()).isTrue();
         assertThat(after.status()).as("에스컬레이션은 실패로 굳히지 않는다").isEqualTo(TransactionStatus.PROCESSING);
         assertThat(after.lastError().code()).isEqualTo(code);
+        assertThat(attention.delta()).as("사람 확인 지표는 이 거래 한 번").containsExactly(
+                entry(AttentionCounts.key("CAPTURE", "ORDER", reason), 1.0));
     }
 
     private TransactionStatus statusOf(PaymentTransaction transaction) {
