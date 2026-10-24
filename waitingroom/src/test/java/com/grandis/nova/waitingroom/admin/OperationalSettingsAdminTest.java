@@ -12,6 +12,8 @@ import com.grandis.nova.waitingroom.control.TestSnapshots;
 import com.grandis.nova.waitingroom.domain.product.MaxWait;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
 import com.grandis.nova.waitingroom.redis.ControlStore;
+import com.grandis.nova.waitingroom.redis.ControlStore.SettingAudit;
+import com.grandis.nova.waitingroom.redis.ControlStore.SettingChange;
 import com.grandis.nova.waitingroom.redis.LuaScripts;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
@@ -20,14 +22,18 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Redis 가 안 되면 관리자 요청은 503 이고 바꿨다는 감사 로그 · 지표를 남기지 않는다. */
+/** Redis 가 안 되면 관리자 요청(이력 조회 포함)은 503 이고 바꿨다는 감사 로그 · 지표를 남기지 않는다. */
 class OperationalSettingsAdminTest {
+
+    private static final ChangeLogProperties CHANGE_LOG = new ChangeLogProperties(null, null, null, null);
 
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     private final ControlStore down = new ControlStore(new LuaScripts(null), null) {
@@ -37,12 +43,12 @@ class OperationalSettingsAdminTest {
         }
 
         @Override
-        public Mono<Optional<String>> writeSetting(String field, String value) {
+        public Mono<Optional<String>> writeSetting(String field, String value, SettingAudit audit) {
             return Mono.error(new RedisConnectionFailureException("down"));
         }
 
         @Override
-        public Mono<Optional<String>> clearSetting(String field) {
+        public Mono<Optional<String>> clearSetting(String field, SettingAudit audit) {
             return Mono.error(new RedisConnectionFailureException("down"));
         }
 
@@ -50,9 +56,14 @@ class OperationalSettingsAdminTest {
         public Mono<String> readLeaderOwner() {
             return Mono.error(new RedisConnectionFailureException("down"));
         }
+
+        @Override
+        public Mono<List<SettingChange>> readSettingChanges(Instant from, Instant to, String before, int count) {
+            return Mono.error(new RedisConnectionFailureException("down"));
+        }
     };
     private final OperationalSettingsAdmin admin = new OperationalSettingsAdmin(down, new AdmissionProperties(null, null),
-            TestSnapshots.emptyHolder(), new RedisClock(Clock.systemUTC()), new Leadership(), registry);
+            TestSnapshots.emptyHolder(), new RedisClock(Clock.systemUTC()), new Leadership(), registry, CHANGE_LOG);
 
     @Test
     void 저장소_장애면_조회_변경_기본값_복귀_현황_모두_503_이다() {
@@ -61,6 +72,7 @@ class OperationalSettingsAdminTest {
         unavailable(admin.clear("admin", "global-credit"));
         unavailable(admin.setMaxWait("admin", 60L));
         unavailable(admin.status());
+        unavailable(new SettingChanges(down, CHANGE_LOG).read(null, null, null, null));
 
         assertThat(registry.find("waitingroom.admin.changes").counter())
                 .as("바꾸지 못했으니 변경을 세지 않는다").isNull();
@@ -77,7 +89,8 @@ class OperationalSettingsAdminTest {
             }
 
             @Override
-            public Mono<Optional<String>> compareAndSetSetting(String field, Optional<String> expected, String value) {
+            public Mono<Optional<String>> compareAndSetSetting(String field, Optional<String> expected, String value,
+                                                              SettingAudit audit) {
                 return Mono.defer(() -> {
                     if (stored.get(field).equals("400")) {
                         stored.put(field, "260");
@@ -93,7 +106,7 @@ class OperationalSettingsAdminTest {
         TestSnapshots.put(holder, new SnapshotMeta(250, 1, MaxWait.unlimited()), 1.0,
                 new CapacityStatus(400, 250, 3, 0, 500, false), Optional.empty());
         OperationalSettingsAdmin admin = new OperationalSettingsAdmin(racing, new AdmissionProperties(null, null), holder,
-                new RedisClock(Clock.systemUTC()), new Leadership(), registry);
+                new RedisClock(Clock.systemUTC()), new Leadership(), registry, CHANGE_LOG);
 
         StepVerifier.create(admin.setGlobalCredit("admin", 300L, false))
                 .expectErrorMatches(e -> e instanceof BusinessException business

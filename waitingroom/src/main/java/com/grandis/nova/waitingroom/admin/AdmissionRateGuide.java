@@ -33,10 +33,14 @@ final class AdmissionRateGuide {
                 recommended != null && operationalCredit > recommended);
     }
 
-    /** 줄이는 변경은 언제나 받는다. 늘릴 때만 구간을 본다. */
-    static void check(long requested, long current, boolean confirmed, CapacityGuide guide) {
+    /**
+     * 줄이는 변경은 언제나 받는다. 늘릴 때만 구간을 본다.
+     *
+     * @return 권장 상한을 넘겨 확인을 받고 받아들였으면 true — 변경 이력에 남긴다
+     */
+    static boolean check(long requested, long current, boolean confirmed, CapacityGuide guide) {
         if (requested <= current || guide.recommendedMax() == null || requested <= guide.recommendedMax()) {
-            return;
+            return false;
         }
         Map<String, Object> details = Map.of("recommendedMax", guide.recommendedMax(), "dangerLine", guide.dangerLine());
         if (requested > guide.dangerLine()) {
@@ -45,5 +49,6 @@ final class AdmissionRateGuide {
         if (!confirmed) {
             throw new BusinessException(WaitingroomErrorCode.ADMISSION_RATE_NEEDS_CONFIRM, details);
         }
+        return true;
     }
 }
