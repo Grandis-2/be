@@ -15,7 +15,8 @@ CREATE TABLE shop.payment_dead_letter_events (
     source_queue         varchar(80)  NOT NULL,
     message_id           varchar(100) COLLATE utf8mb4_bin NOT NULL,
     event_id             char(36)     COLLATE utf8mb4_bin NULL,
-    event_type           varchar(50)  NULL,
+    -- 받는 종류(enum 이름)와 대소문자까지 같아야 같은 종류다. 대기 게이지가 이 값을 태그로 쓴다.
+    event_type           varchar(50)  COLLATE utf8mb4_bin NULL,
     aggregate_type       varchar(30)  NULL,
     aggregate_id         binary(16)   NULL,
     -- SQS 본문 최대 256KB 를 담는다.

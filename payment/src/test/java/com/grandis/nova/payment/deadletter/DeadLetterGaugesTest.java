@@ -41,14 +41,16 @@ class DeadLetterGaugesTest {
 
         String oldest = record(event("ORDER_REFUND_REQUESTED"));
         record(event("SOMETHING_NEW_" + UUID.randomUUID().toString().substring(0, 8)));
-        record(event("SOMETHING_ELSE_" + UUID.randomUUID().toString().substring(0, 8)));
+        record(event("order_refund_requested"));
         record("not-json");
         jdbcTemplate.update("UPDATE payment_dead_letter_events SET created_at = created_at - INTERVAL 2 HOUR"
                 + " WHERE message_id = ?", oldest);
         gauges.refresh();
 
         assertThat(byType("ORDER_REFUND_REQUESTED", "PROCESSING_FAILED")).isEqualTo(refundBefore + 1);
-        assertThat(byType("OTHER", "UNKNOWN_EVENT_TYPE")).isEqualTo(otherBefore + 2);
+        assertThat(byType("OTHER", "UNKNOWN_EVENT_TYPE")).as("대소문자가 다른 종류도 OTHER").isEqualTo(otherBefore + 2);
+        assertThat(registry.find(DeadLetterGauges.WAITING_BY_TYPE_METRIC).tag("eventType", "order_refund_requested").gauge())
+                .isNull();
         assertThat(byType("UNKNOWN", "UNREADABLE_BODY")).isEqualTo(unknownBefore + 1);
         assertThat(registry.get(DeadLetterGauges.WAITING_METRIC).gauge().value()).as("합계")
                 .isEqualTo(totalBefore + 4);
