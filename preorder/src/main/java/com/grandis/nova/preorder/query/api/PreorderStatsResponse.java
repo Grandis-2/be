@@ -2,6 +2,7 @@ package com.grandis.nova.preorder.query.api;
 
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.query.application.PreorderStats;
+import com.grandis.nova.preorder.query.application.StatsRates;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 import com.grandis.nova.preorder.syncjob.SyncJobType;
 
@@ -20,6 +21,7 @@ import java.util.UUID;
  * @param oldestInFlightSyncAt 그중 등록 작업이 아직 도는(대기 · 처리 중 · 재시도 대기) 예약만의 가장 오래된 접수 시각 — 실패와 갈라
  *                             밀림을 본다. 없으면 null
  * @param countedAt           센 시각. 이미 받은 것보다 이전이면 늦게 온 응답이다
+ * @param rates               10초마다 쌓은 기록으로 서버가 잰 속도. 기록이 모자라거나(재시작 직후) 접수 중이 아닌 상품이면 null
  */
 public record PreorderStatsResponse(
         UUID productId,
@@ -29,7 +31,8 @@ public record PreorderStatsResponse(
         long paymentOverdue,
         Instant oldestPendingSyncAt,
         Instant oldestInFlightSyncAt,
-        Instant countedAt
+        Instant countedAt,
+        StatsRates rates
 ) {
 
     /**
@@ -39,10 +42,10 @@ public record PreorderStatsResponse(
     public record DeadLetters(long waiting, Instant oldestWaitingAt) {
     }
 
-    public static PreorderStatsResponse from(PreorderStats stats) {
+    public static PreorderStatsResponse from(PreorderStats stats, StatsRates rates) {
         return new PreorderStatsResponse(stats.productId(), stats.preorders().byStatus(), stats.syncJobs(),
                 new DeadLetters(stats.deadLetters().count(), stats.deadLetters().oldestAt()),
                 stats.preorders().paymentOverdue(), stats.preorders().oldestPendingSyncAt(),
-                stats.preorders().oldestInFlightSyncAt(), stats.countedAt());
+                stats.preorders().oldestInFlightSyncAt(), stats.countedAt(), rates);
     }
 }
