@@ -89,6 +89,13 @@ nova:
       visibility: 5m       # 처리 한 건보다 길게
       backoff-base: 30s    # 실패는 대개 DB 장애 — 재수신 5회(DLQ 전)가 장애 조치보다 길게(약 7분)
       backoff-max: 5m
+    # DLQ(payment-events-dlq)를 DB(payment_dead_letter_events)로 옮기는 소비기. 코드 기본값은 꺼짐이다(태스크 역할에 DLQ 권한이 있어야 한다).
+    # 이 예시는 운영처럼 켠다 — AOT 학습이 이 파일로 운영과 같은 빈을 띄운다
+    dead-letter:
+      enabled: true
+      queue: payment-events-dlq
+      wait-seconds: 20
+      visibility: 1m       # 적재가 실패하면 이 시간 뒤 다시 받는다
   # 아웃박스 발행(payment_outbox_events). transport 는 필수(없으면 기동 실패)이고 운영 값은 sqs 다.
   # log 는 로컬 · 테스트 전용 전송이라 log-transport-allowed: true 를 함께 적어야 뜬다 — 그 줄은 이 예시에 적지 않는다
   outbox:

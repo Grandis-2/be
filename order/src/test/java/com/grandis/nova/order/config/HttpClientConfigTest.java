@@ -8,6 +8,7 @@ import com.grandis.nova.order.client.payment.PaymentClient;
 import com.grandis.nova.order.client.payment.PaymentConfirmClient;
 import com.grandis.nova.order.client.payment.PaymentConfirmation;
 import com.grandis.nova.order.client.payment.PaymentConfirmer;
+import com.grandis.nova.order.client.payment.PaymentDeadLetterClient;
 import com.grandis.nova.order.client.preorder.PreorderClient;
 import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
@@ -52,6 +53,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * 내부 API 클라이언트의 HTTP 구현 고정(JDK)과 결제 승인 그룹(payment-confirm)의 시간 예산이 실제 HTTP 에서 설정대로 도는지.
+ * 관리자 결제 DLQ 는 자기 그룹(payment-admin)의 설정으로 나간다.
  * MockRestServiceServer 는 요청 팩토리를 바꿔 끼우므로 구현 · 타임아웃을 볼 수 없어 로컬 HTTP 서버를 쓴다.
  */
 class HttpClientConfigTest {
@@ -98,6 +100,7 @@ class HttpClientConfigTest {
                 .withBean(PaymentConfirmer.class)
                 .withPropertyValues(group("payment-confirm", baseUrl))
                 .withPropertyValues(group("payment", baseUrl))
+                .withPropertyValues(group("payment-admin", baseUrl))
                 .withPropertyValues(group("preorder", baseUrl))
                 .withPropertyValues(group("catalog", baseUrl));
     }
@@ -123,6 +126,9 @@ class HttpClientConfigTest {
                     .isInstanceOf(HttpTimeoutException.class);
             assertThat(rootCause(catchThrowable(() -> context.getBean(PaymentClient.class)
                     .openCapture(CaptureRequest.of(PayableTarget.of(ORDER)), null))))
+                    .isInstanceOf(HttpTimeoutException.class);
+            assertThat(rootCause(catchThrowable(() -> context.getBean(PaymentDeadLetterClient.class)
+                    .redrive(UUID.randomUUID(), null))))
                     .isInstanceOf(HttpTimeoutException.class);
             assertThat(rootCause(catchThrowable(() -> context.getBean(PreorderClient.class)
                     .getPayability("9f1c2d3e-0000-4000-8000-000000000001", null))))
