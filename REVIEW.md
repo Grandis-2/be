@@ -75,7 +75,7 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 
 **경계**
 - 상품은 `GET /internal/products/{productId}/options` 로 묻고 캐시한다. 이름 · 가격은 접수 때 예약 행에 복사한다 — 표시용 이름 · 가격을 매번 카탈로그 조회로 만들면 지적한다.
-- `/internal/**` · `/actuator/**` 는 공개 경로가 아니다. 사용자 기능을 두거나 `/internal/**` 이 토큰 주인 확인 없이 응답하면 지적. 예외는 member `/internal/customers/names` 하나다 — 관리자 토큰만 받는다(회원 토큰 403, 2026-10-24 결정).
+- `/internal/**` · `/actuator/**` 는 공개 경로가 아니다. 사용자 기능을 두거나 `/internal/**` 이 토큰 주인 확인 없이 응답하면 지적.
 
 ### 3.2 order — 적용 경로: `order/**`
 - 차단급: preorders · preorder_events 쓰기(결과는 PREORDER_PAYMENT_CONFIRMED 로 알림), payments · payment_transactions 접근(`PaymentClient` · `PaymentConfirmer`, 환불은 ORDER_REFUND_REQUESTED). 예약을 CANCELED 로 바꾸면 지적.
@@ -197,6 +197,7 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 - 카카오 응답을 그대로 엔티티에 매핑하면 지적한다. 필요한 필드만 옮긴다.
 - 인증 실패가 "없는 계정"과 "잘못된 자격"을 구분해 알리면 지적한다.
 - 관리자 로그인 시도 제한(AdminLoginLimit)을 bcrypt 뒤로 미루거나 빼면 지적한다.
+- `/internal/customers/names`(order · preorder 관리자 화면의 회원 이름)는 토큰 주인 확인 대신 관리자 토큰만 받는다(2026-10-24 결정). 관리자가 아닌 토큰에 열거나 메서드를 묶은 매처로 걸면 지적한다 — HEAD 가 GET 매처를 비켜 GET 핸들러로 간다.
 
 알림(contracts/notification-events.md)
 - 중복은 (event_id, customer_id) 유일 키로 막는다. 넣은 회원을 한 번 읽고 나머지를 여러 행 INSERT 한 번으로 넣는다(NotificationWriter). 회원마다 INSERT 하거나 INSERT IGNORE 를 쓰면 지적한다. 행 id 는 DB 연결을 얻은 뒤 만든다 — 먼저 만들면 NotificationTail 이 놓친다.
