@@ -12,6 +12,8 @@ import com.grandis.nova.payment.client.toss.UnknownReason;
 import com.grandis.nova.payment.domain.enums.TransactionType;
 import com.grandis.nova.payment.domain.model.Outcome;
 import com.grandis.nova.payment.domain.model.PaymentTransaction;
+import com.grandis.nova.payment.recovery.RecoveryAttention;
+import com.grandis.nova.payment.recovery.RecoveryAttention.Reason;
 import com.grandis.nova.payment.recovery.RecoveryHandler;
 import com.grandis.nova.payment.vo.ProviderError;
 import org.slf4j.Logger;
@@ -57,7 +59,8 @@ import java.time.Instant;
  * 결제 키 조회의 "없음"(404)도 미처리와 같은 규칙이다 — 처리 중인 결제가 잠시 404 로 보이더라도 정산 기한 전에는 실패로 확정하지 않는다.
  * 그래도 남는 방어는 "토스는 같은 paymentKey 를 두 번 승인하지 않는다(ALREADY_PROCESSED_PAYMENT)" 는 문서상 계약이다(실결제 미확인).
  *
- * 에스컬레이션은 상태를 그대로 두고 ERROR 로 남긴다 — 실패로 굳히지 않는다. 그 대상은 계속 막혀 있다(모르는 채 다시 청구하지 않는다).
+ * 에스컬레이션은 상태를 그대로 두고 ERROR 와 사람 확인 지표({@link RecoveryAttention})로 남긴다 — 실패로 굳히지 않는다. 그 대상은 계속
+ * 막혀 있다(모르는 채 다시 청구하지 않는다).
  * 결제 키는 로그 · 오류 칸에 싣지 않는다.
  */
 @Component
@@ -78,11 +81,13 @@ class CaptureRecovery implements RecoveryHandler {
 
     private final TossPaymentClient toss;
     private final CaptureSettlement settlement;
+    private final RecoveryAttention attention;
     private final Clock clock;
 
-    CaptureRecovery(TossPaymentClient toss, CaptureSettlement settlement, Clock clock) {
+    CaptureRecovery(TossPaymentClient toss, CaptureSettlement settlement, RecoveryAttention attention, Clock clock) {
         this.toss = toss;
         this.settlement = settlement;
+        this.attention = attention;
         this.clock = clock;
     }
 
@@ -96,7 +101,7 @@ class CaptureRecovery implements RecoveryHandler {
         PaymentTransaction held = claimed.transaction();
         Instant now = clock.instant();
         if (!now.isBefore(held.requestedAt().plus(GIVE_UP_AFTER))) {
-            escalate(claimed, new ProviderError(UNRESOLVED, "첫 전송 뒤 " + GIVE_UP_AFTER + " 동안 확정하지 못함"));
+            escalate(claimed, new ProviderError(UNRESOLVED, "첫 전송 뒤 " + GIVE_UP_AFTER + " 동안 확정하지 못함"), Reason.TIMED_OUT);
             return;
         }
         Phase phase = phase(held, now);
@@ -134,7 +139,7 @@ class CaptureRecovery implements RecoveryHandler {
         Outcome outcome = TossOutcomes.of(result, held);
         if (result instanceof TossCommandResult.Succeeded && outcome instanceof Outcome.Unknown unknown) {
             // 승인됐다는데 금액 · 승인 시각이 맞지 않는다 — 다시 물어도 같다. 사람이 본다
-            escalate(claimed, unknown.error());
+            escalate(claimed, unknown.error(), Reason.RESULT_MISMATCH);
             return;
         }
         switch (outcome) {
@@ -194,7 +199,7 @@ class CaptureRecovery implements RecoveryHandler {
         PaymentTransaction held = claimed.transaction();
         if (!held.providerOrderId().value().equals(payment.orderId())) {
             // 결제 키로 찾은 결제가 이 결제창의 것이 아니다 — 다른 결제의 결과를 붙이지 않는다
-            escalate(claimed, new ProviderError(ORDER_MISMATCH, "조회한 결제의 orderId 가 다르다"));
+            escalate(claimed, new ProviderError(ORDER_MISMATCH, "조회한 결제의 orderId 가 다르다"), Reason.RESULT_MISMATCH);
             return;
         }
         switch (payment.status()) {
@@ -202,7 +207,7 @@ class CaptureRecovery implements RecoveryHandler {
             case ABORTED, EXPIRED -> settle(claimed, check.failure(payment.status().name()), "조회");
             case READY, IN_PROGRESS -> unprocessed(claimed, check, payment.status().name());
             case CANCELED, PARTIAL_CANCELED, WAITING_FOR_DEPOSIT, UNRECOGNIZED -> escalate(claimed, new ProviderError(
-                    TossOutcomes.LOOKUP + payment.status().name(), "자동 확정하지 않는 조회 상태"));
+                    TossOutcomes.LOOKUP + payment.status().name(), "자동 확정하지 않는 조회 상태"), Reason.UNEXPECTED_STATE);
         }
     }
 
@@ -232,7 +237,7 @@ class CaptureRecovery implements RecoveryHandler {
     private void approve(ClaimedTransaction claimed, TossPayment payment) {
         Outcome outcome = TossOutcomes.approved(payment, claimed.transaction());
         if (outcome instanceof Outcome.Unknown unknown) {
-            escalate(claimed, unknown.error());
+            escalate(claimed, unknown.error(), Reason.RESULT_MISMATCH);
             return;
         }
         settle(claimed, outcome, "조회");
@@ -259,9 +264,10 @@ class CaptureRecovery implements RecoveryHandler {
                 held.providerOrderId().value(), how, outcome.getClass().getSimpleName());
     }
 
-    private void escalate(ClaimedTransaction claimed, ProviderError error) {
+    private void escalate(ClaimedTransaction claimed, ProviderError error, Reason reason) {
         settlement.escalate(claimed, error);
         PaymentTransaction held = claimed.transaction();
+        attention.record(TransactionType.CAPTURE, held.target().type(), reason);
         log.error("결제 복구 중단 — 사람 확인 필요(자동 확정하지 않음) transactionId={} orderId={} target={} attempts={} code={}",
                 held.id(), held.providerOrderId().value(), held.target(), held.attemptCount(), error.code());
     }

@@ -22,6 +22,7 @@ import com.grandis.nova.payment.domain.model.PaymentTransaction;
 import com.grandis.nova.payment.domain.repository.PaymentReader;
 import com.grandis.nova.payment.domain.repository.PaymentTransactionReader;
 import com.grandis.nova.payment.recovery.RecoveryWorker;
+import com.grandis.nova.payment.support.AttentionCounts;
 import com.grandis.nova.payment.support.PaymentFixtures;
 import com.grandis.nova.payment.support.PaymentIntegrationTest;
 import com.grandis.nova.payment.support.RecoveryCandidates;
@@ -29,6 +30,7 @@ import com.grandis.nova.payment.vo.Money;
 import com.grandis.nova.payment.vo.PaymentTarget;
 import com.grandis.nova.payment.vo.ProviderError;
 import com.grandis.nova.payment.vo.ProviderPaymentKey;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -54,6 +56,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -110,6 +113,11 @@ class RefundRecoveryTest {
     @MockitoBean
     TossPaymentClient toss;
 
+    @Autowired
+    MeterRegistry meters;
+
+    AttentionCounts attention;
+
     PaymentTarget target;
     ProviderPaymentKey paymentKey;
 
@@ -118,6 +126,7 @@ class RefundRecoveryTest {
         target = PaymentFixtures.newOrderTarget();
         paymentKey = PaymentFixtures.newProviderPayment();
         RecoveryCandidates.parkOthers(jdbcTemplate);
+        attention = AttentionCounts.snapshot(meters);
     }
 
     // ---- 첫 전송 ----
@@ -304,6 +313,7 @@ class RefundRecoveryTest {
 
         verify(toss, times(1)).cancel(any(), any());
         assertThat(statusOf(refund)).isEqualTo(TransactionStatus.FAILED);
+        assertThat(attention.delta()).containsExactly(entry(AttentionCounts.key("REFUND", "ORDER", "REFUND_REJECTED"), 1.0));
         assertThat(lastErrorOf(refund).code()).isEqualTo(NOT_CANCELABLE);
         assertThat(keyOf(refund)).isEqualTo(refund.idempotencyKey().value());
         assertThat(payments.findPaymentByTarget(target).orElseThrow().status()).isEqualTo(PaymentStatus.SUCCEEDED);
@@ -311,6 +321,25 @@ class RefundRecoveryTest {
         assertThat(settled.get("result").asString()).isEqualTo("FAILED");
         assertThat(settled.has("refundedAt") && !settled.get("refundedAt").isNull()).isFalse();
         assertThat(output.getAll()).contains("환불 실패 — 사람 확인 필요");
+    }
+
+    // 결제사 호출 사이에 다른 작업자가 리스를 가져갔다 — 거절 확정이 반영되지 않았으니 세지도 않는다
+    @Test
+    void rejectionThatLostItsLeaseIsNotCounted(CapturedOutput output) {
+        PaymentTransaction refund = refundOpened();
+        given(toss.cancel(any(), any())).willAnswer(invocation -> {
+            jdbcTemplate.update("UPDATE payment_transactions SET lease_token = UUID() WHERE id = ?", UuidBinary.toBytes(refund.id()));
+            return new TossCommandResult.Rejected(NOT_CANCELABLE, "취소할 수 없는 결제");
+        });
+        given(toss.findByPaymentKey(paymentKey.value())).willReturn(found(TossPaymentStatus.DONE));
+
+        worker.recoverDue();
+
+        verify(toss).cancel(any(), any());
+        verify(toss).findByPaymentKey(paymentKey.value());
+        assertThat(output.getAll()).contains("리스를 잃음 transactionId=" + refund.id());
+        assertThat(statusOf(refund)).isEqualTo(TransactionStatus.PROCESSING);
+        assertThat(attention.delta()).isEmpty();
     }
 
     // 첫 전송 한참 뒤의 교체도 같다 — 교체는 앞 키가 일시 오류로 답했거나 불명 뒤 여유가 지났을 때만 일어나므로, 교체한 키의 거절은 결론이다
@@ -325,6 +354,7 @@ class RefundRecoveryTest {
 
         assertThat(keyOf(refund)).isNotEqualTo(refund.idempotencyKey().value());
         assertThat(statusOf(refund)).isEqualTo(TransactionStatus.FAILED);
+        assertThat(attention.delta()).containsExactly(entry(AttentionCounts.key("REFUND", "ORDER", "REFUND_REJECTED"), 1.0));
     }
 
     // 앞 회차가 거절을 받고 조회가 불명이라 남긴 거절 표시를 이어 받는다
@@ -337,6 +367,7 @@ class RefundRecoveryTest {
 
         verify(toss, never()).cancel(any(), any());
         assertThat(statusOf(refund)).isEqualTo(TransactionStatus.FAILED);
+        assertThat(attention.delta()).containsExactly(entry(AttentionCounts.key("REFUND", "ORDER", "REFUND_REJECTED"), 1.0));
         assertThat(lastErrorOf(refund).code()).isEqualTo(NOT_CANCELABLE);
     }
 
@@ -349,6 +380,7 @@ class RefundRecoveryTest {
         worker.recoverDue();
 
         assertThat(statusOf(refund)).isEqualTo(TransactionStatus.SUCCEEDED);
+        assertThat(attention.delta()).as("돈이 이미 돌아갔으면 사람 확인이 아니다").isEmpty();
     }
 
     @Test
@@ -369,6 +401,7 @@ class RefundRecoveryTest {
 
         verify(toss, times(1)).cancel(any(), any());
         assertThat(statusOf(refund)).isEqualTo(TransactionStatus.FAILED);
+        assertThat(attention.delta()).containsExactly(entry(AttentionCounts.key("REFUND", "ORDER", "REFUND_REJECTED"), 1.0));
         assertThat(lastErrorOf(refund).code()).isEqualTo(NOT_CANCELABLE);
     }
 
@@ -383,7 +416,7 @@ class RefundRecoveryTest {
 
         worker.recoverDue();
 
-        assertEscalated(refund, "LOOKUP_" + status.name());
+        assertEscalated(refund, "LOOKUP_" + status.name(), "UNEXPECTED_STATE");
         assertThat(settledEvents()).isZero();
     }
 
@@ -394,7 +427,7 @@ class RefundRecoveryTest {
 
         worker.recoverDue();
 
-        assertEscalated(refund, "LOOKUP_NOT_FOUND");
+        assertEscalated(refund, "LOOKUP_NOT_FOUND", "UNEXPECTED_STATE");
     }
 
     // 전액 취소인데 잔액이 남았거나 금액이 다르다 — 돈이 다르게 움직였을 수 있다
@@ -407,7 +440,7 @@ class RefundRecoveryTest {
 
         worker.recoverDue();
 
-        assertEscalated(refund, RefundRecovery.REFUND_MISMATCH);
+        assertEscalated(refund, RefundRecovery.REFUND_MISMATCH, "RESULT_MISMATCH");
         assertThat(payments.findPaymentByTarget(target).orElseThrow().status()).isEqualTo(PaymentStatus.SUCCEEDED);
     }
 
@@ -419,7 +452,7 @@ class RefundRecoveryTest {
 
         worker.recoverDue();
 
-        assertEscalated(refund, RefundRecovery.MISSING_CANCELED_AT);
+        assertEscalated(refund, RefundRecovery.MISSING_CANCELED_AT, "RESULT_MISMATCH");
     }
 
     @Test
@@ -431,7 +464,7 @@ class RefundRecoveryTest {
 
         verify(toss, never()).cancel(any(), any());
         verify(toss, never()).findByPaymentKey(anyString());
-        assertEscalated(refund, RefundRecovery.UNRESOLVED);
+        assertEscalated(refund, RefundRecovery.UNRESOLVED, "TIMED_OUT");
         assertThat(output.getAll()).contains("결제 복구 중단 — 사람 확인 필요");
     }
 
@@ -566,11 +599,13 @@ class RefundRecoveryTest {
 
     // ---- 확인 ----
 
-    private void assertEscalated(PaymentTransaction transaction, String code) {
+    private void assertEscalated(PaymentTransaction transaction, String code, String reason) {
         PaymentTransaction after = transactions.findById(transaction.id()).orElseThrow();
         assertThat(after.isEscalated()).isTrue();
         assertThat(after.status()).as("에스컬레이션은 실패로 굳히지 않는다").isEqualTo(TransactionStatus.PROCESSING);
         assertThat(after.lastError().code()).isEqualTo(code);
+        assertThat(attention.delta()).as("사람 확인 지표는 이 거래 한 번").containsExactly(
+                entry(AttentionCounts.key("REFUND", "ORDER", reason), 1.0));
     }
 
     private TransactionStatus statusOf(PaymentTransaction transaction) {

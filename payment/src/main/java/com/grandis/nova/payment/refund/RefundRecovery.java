@@ -14,6 +14,8 @@ import com.grandis.nova.payment.confirm.TossOutcomes;
 import com.grandis.nova.payment.domain.enums.TransactionType;
 import com.grandis.nova.payment.domain.model.Outcome;
 import com.grandis.nova.payment.domain.model.PaymentTransaction;
+import com.grandis.nova.payment.recovery.RecoveryAttention;
+import com.grandis.nova.payment.recovery.RecoveryAttention.Reason;
 import com.grandis.nova.payment.recovery.RecoveryHandler;
 import com.grandis.nova.payment.vo.ProviderError;
 import org.slf4j.Logger;
@@ -55,7 +57,8 @@ import java.util.Optional;
  * 두 번 나가지 않는다. 결과를 모르는 응답도 리스(70초)를 그대로 두지 않고 재시도 시각을 둔다 — 일시 오류 · 처리 중 · 불명 · 조회 불명
  * 모두 시도마다 간격을 두 배로 늘린다({@link #retryAfter}). 상태는 RETRY_SCHEDULED 가 되지만 마지막 오류의 불명 사유로 푸는 방법은 그대로다.
  *
- * 확정 실패와 에스컬레이션은 ERROR 로 남긴다(경보). 결제 키는 로그 · 오류 칸에 싣지 않는다.
+ * 확정 실패와 에스컬레이션은 ERROR 와 사람 확인 지표({@link RecoveryAttention})로 남긴다 — 경보는 지표에 건다. 결제 키는 로그 · 오류 칸에
+ * 싣지 않는다.
  */
 @Component
 class RefundRecovery implements RecoveryHandler {
@@ -79,11 +82,13 @@ class RefundRecovery implements RecoveryHandler {
 
     private final TossPaymentClient toss;
     private final RefundSettlement settlement;
+    private final RecoveryAttention attention;
     private final Clock clock;
 
-    RefundRecovery(TossPaymentClient toss, RefundSettlement settlement, Clock clock) {
+    RefundRecovery(TossPaymentClient toss, RefundSettlement settlement, RecoveryAttention attention, Clock clock) {
         this.toss = toss;
         this.settlement = settlement;
+        this.attention = attention;
         this.clock = clock;
     }
 
@@ -96,7 +101,7 @@ class RefundRecovery implements RecoveryHandler {
     public void recover(PaymentTransaction seen, ClaimedTransaction claimed) {
         PaymentTransaction held = claimed.transaction();
         if (!clock.instant().isBefore(held.requestedAt().plus(GIVE_UP_AFTER))) {
-            escalate(claimed, new ProviderError(UNRESOLVED, "첫 전송 뒤 " + GIVE_UP_AFTER + " 동안 확정하지 못함"));
+            escalate(claimed, new ProviderError(UNRESOLVED, "첫 전송 뒤 " + GIVE_UP_AFTER + " 동안 확정하지 못함"), Reason.TIMED_OUT);
             return;
         }
         ProviderError last = seen.lastError();
@@ -145,7 +150,7 @@ class RefundRecovery implements RecoveryHandler {
             case TossLookupResult.Found found -> found(claimed, found.payment(), rejection);
             // 환불할 결제가 토스에 없다 — 우리 기록과 결제사가 어긋났다
             case TossLookupResult.NotFound notFound -> escalate(claimed,
-                    new ProviderError(TossOutcomes.LOOKUP + "NOT_FOUND", "환불할 결제가 결제사에 없다"));
+                    new ProviderError(TossOutcomes.LOOKUP + "NOT_FOUND", "환불할 결제가 결제사에 없다"), Reason.UNEXPECTED_STATE);
             case TossLookupResult.Unknown unknown ->
                     settle(claimed, new Outcome.InProgress(lookupUnknown(unknown, rejection), retryAfter(held)), "조회");
         }
@@ -157,7 +162,7 @@ class RefundRecovery implements RecoveryHandler {
             case DONE -> notCanceled(claimed, rejection);
             case READY, IN_PROGRESS, WAITING_FOR_DEPOSIT, PARTIAL_CANCELED, ABORTED, EXPIRED, UNRECOGNIZED ->
                     escalate(claimed, new ProviderError(TossOutcomes.LOOKUP + payment.status().name(),
-                            "자동 확정하지 않는 조회 상태"));
+                            "자동 확정하지 않는 조회 상태"), Reason.UNEXPECTED_STATE);
         }
     }
 
@@ -170,6 +175,7 @@ class RefundRecovery implements RecoveryHandler {
             return;
         }
         settle(claimed, rejection, "조회");
+        attention.record(TransactionType.REFUND, held.target().type(), Reason.REFUND_REJECTED);
         log.error("환불 실패 — 사람 확인 필요 transactionId={} target={} attempts={} code={}",
                 held.id(), held.target(), held.attemptCount(), rejection.error().code());
     }
@@ -178,7 +184,7 @@ class RefundRecovery implements RecoveryHandler {
         Outcome outcome = refunded(payment, claimed.transaction());
         if (outcome instanceof Outcome.Unknown unknown) {
             // 다시 물어도 같다. 사람이 본다
-            escalate(claimed, unknown.error());
+            escalate(claimed, unknown.error(), Reason.RESULT_MISMATCH);
             return;
         }
         settle(claimed, outcome, how);
@@ -236,9 +242,10 @@ class RefundRecovery implements RecoveryHandler {
                 outcome.getClass().getSimpleName());
     }
 
-    private void escalate(ClaimedTransaction claimed, ProviderError error) {
+    private void escalate(ClaimedTransaction claimed, ProviderError error, Reason reason) {
         settlement.escalate(claimed, error);
         PaymentTransaction held = claimed.transaction();
+        attention.record(TransactionType.REFUND, held.target().type(), reason);
         log.error("결제 복구 중단 — 사람 확인 필요(자동 확정하지 않음) type=REFUND transactionId={} target={} attempts={} code={}",
                 held.id(), held.target(), held.attemptCount(), error.code());
     }
