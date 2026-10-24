@@ -175,9 +175,9 @@ class RefundRecovery implements RecoveryHandler {
             return;
         }
         settle(claimed, rejection, "조회");
-        attention.record(TransactionType.REFUND, held.target().type(), Reason.REFUND_REJECTED);
         log.error("환불 실패 — 사람 확인 필요 transactionId={} target={} attempts={} code={}",
                 held.id(), held.target(), held.attemptCount(), rejection.error().code());
+        attention.record(TransactionType.REFUND, held.target().type(), Reason.REFUND_REJECTED);
     }
 
     private void confirm(ClaimedTransaction claimed, TossPayment payment, String how) {
@@ -245,8 +245,8 @@ class RefundRecovery implements RecoveryHandler {
     private void escalate(ClaimedTransaction claimed, ProviderError error, Reason reason) {
         settlement.escalate(claimed, error);
         PaymentTransaction held = claimed.transaction();
-        attention.record(TransactionType.REFUND, held.target().type(), reason);
         log.error("결제 복구 중단 — 사람 확인 필요(자동 확정하지 않음) type=REFUND transactionId={} target={} attempts={} code={}",
                 held.id(), held.target(), held.attemptCount(), error.code());
+        attention.record(TransactionType.REFUND, held.target().type(), reason);
     }
 }

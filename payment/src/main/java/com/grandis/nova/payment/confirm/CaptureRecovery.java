@@ -267,9 +267,9 @@ class CaptureRecovery implements RecoveryHandler {
     private void escalate(ClaimedTransaction claimed, ProviderError error, Reason reason) {
         settlement.escalate(claimed, error);
         PaymentTransaction held = claimed.transaction();
-        attention.record(TransactionType.CAPTURE, held.target().type(), reason);
         log.error("결제 복구 중단 — 사람 확인 필요(자동 확정하지 않음) transactionId={} orderId={} target={} attempts={} code={}",
                 held.id(), held.providerOrderId().value(), held.target(), held.attemptCount(), error.code());
+        attention.record(TransactionType.CAPTURE, held.target().type(), reason);
     }
 
     private enum Phase {
