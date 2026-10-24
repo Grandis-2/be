@@ -200,7 +200,7 @@ class UnconfirmedCartOrderExpiryTest {
     }
 
     @Test
-    @DisplayName("결제창 · 금액이 다르거나 결과를 모른 채 취소한 주문이 아니면 자동 환불하지 않고 경보한다")
+    @DisplayName("결제창 · 금액이 다르거나 결과를 모른 채 취소한 주문이 아니면 자동 환불하지 않고 경보한다 — 금액 불일치는 그 결제창의 늦은 승인일 때만")
     void ineligibleLateApprovalIsAlerted(CapturedOutput output) throws Exception {
         UUID phone = sellable(10);
         String otherAttempt = authorizingCartOrder(phone, 1, "p-own");
@@ -216,12 +216,13 @@ class UnconfirmedCartOrderExpiryTest {
         results.settle(approval(otherAttempt, "p-someone-else", PRICE));
         results.settle(approval(otherAmount, "p-amount", PRICE.add(BigDecimal.ONE)));
         results.settle(approval(userCanceled, "p-user", PRICE));
+        results.settle(approval(userCanceled, "p-user", PRICE.add(BigDecimal.ONE)));
 
         for (String order : List.of(otherAttempt, otherAmount, userCanceled)) {
             assertThat(outbox(order, "ORDER_REFUND_REQUESTED")).as(order).isEmpty();
             assertThat(column(order, "auto_refund_requested_at IS NULL", Boolean.class)).isTrue();
         }
-        assertThat(attention("UNMATCHED_APPROVAL")).as("결제창 · 상태 불일치").isEqualTo(unmatched + 2);
+        assertThat(attention("UNMATCHED_APPROVAL")).as("결제창 · 상태 불일치(금액도 다른 사용자 취소 주문 포함)").isEqualTo(unmatched + 3);
         assertThat(attention("AMOUNT_MISMATCH")).as("금액 불일치").isEqualTo(amountMismatch + 1);
         assertThat(output.getAll()).contains(UNRECEIVED_APPROVAL);
     }

@@ -264,12 +264,17 @@ public class OrderLedger {
      * 환불 요청 메시지는 호출하는 쪽이 같은 트랜잭션에서 아웃박스에 적는다 — {@link LateRefund#REQUESTED} 를 돌려준 때만, 그래서 한 번만.
      *
      * @param providerOrderId 승인된 결제창. 취소할 때 남긴 결제창과 같아야 한다
+     * @param amountMatches   승인 금액이 주문 총액과 같은가. 다르면 요청하지 않는다
      * @throws IllegalArgumentException 주문이 없다
      */
-    public LateRefund requestLateRefund(UUID orderId, String providerOrderId, EventCause cause) {
+    public LateRefund requestLateRefund(UUID orderId, String providerOrderId, boolean amountMatches, EventCause cause) {
         OrderStatus from = lock(orderId);
         if (from != OrderStatus.CANCELED) {
             return LateRefund.NOT_ELIGIBLE;
+        }
+        if (!amountMatches) {
+            return writer.unconfirmedProviderOrderId(orderId).filter(providerOrderId::equals).isPresent()
+                    ? LateRefund.AMOUNT_MISMATCH : LateRefund.NOT_ELIGIBLE;
         }
         Instant now = clock.instant();
         if (writer.markAutoRefundRequested(orderId, providerOrderId, now) == 0) {
@@ -289,7 +294,9 @@ public class OrderLedger {
         /** 같은 결제창의 승인으로 이미 요청했다(같은 승인을 다시 받았다). */
         ALREADY_REQUESTED,
         /** 자동 환불 대상이 아니다 — 결과를 모른 채 취소한 주문이 아니거나, 취소할 때 남긴 결제창과 다르다(이미 요청했어도). */
-        NOT_ELIGIBLE
+        NOT_ELIGIBLE,
+        /** 결과를 모른 채 취소한 주문의 그 결제창 승인인데 금액이 주문 총액과 다르다 — 요청하지 않고 사람이 본다. */
+        AMOUNT_MISMATCH
     }
 
     /**

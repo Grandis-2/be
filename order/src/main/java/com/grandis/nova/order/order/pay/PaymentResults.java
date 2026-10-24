@@ -126,9 +126,14 @@ public class PaymentResults {
             case ALREADY_REQUESTED -> log.info("자동 환불을 요청한 주문에 늦게 온 승인 — 중복으로 무시 orderId={} providerOrderId={}",
                     orderId, providerOrderId);
             case NOT_ELIGIBLE -> {
-                log.error("결제가 승인됐는데 주문이 받지 못했다 — 환불 확인 필요 orderId={} providerOrderId={} status={} amountMatches={}",
-                        orderId, providerOrderId, transition.status(), amountMatches);
-                attention.record(amountMatches ? PaymentAttention.Reason.UNMATCHED_APPROVAL : PaymentAttention.Reason.AMOUNT_MISMATCH);
+                log.error("결제가 승인됐는데 주문이 받지 못했다 — 환불 확인 필요 orderId={} providerOrderId={} status={}",
+                        orderId, providerOrderId, transition.status());
+                attention.record(PaymentAttention.Reason.UNMATCHED_APPROVAL);
+            }
+            case AMOUNT_MISMATCH -> {
+                log.error("결제 결과를 모른 채 취소한 주문에 늦게 온 승인의 금액이 주문 총액과 다르다 — 자동 환불하지 않음, 환불 확인 필요"
+                        + " orderId={} providerOrderId={}", orderId, providerOrderId);
+                attention.record(PaymentAttention.Reason.AMOUNT_MISMATCH);
             }
         }
         return transition;
@@ -175,8 +180,8 @@ public class PaymentResults {
      * 결과를 모른 채 취소한 주문에 늦게 온 승인 — 원장이 받으면(결제창이 같고 처음) 같은 트랜잭션에서 주문 총액 전액의 환불을 요청한다.
      * payment 는 그 주문의 하나뿐인 성공 결제를 환불한다(대상당 성공 결제 하나). 결과는 환불 결과 반영이 받는다(RefundResults).
      */
-    private OrderLedger.LateRefund requestLateRefund(UUID orderId, String providerOrderId) {
-        OrderLedger.LateRefund late = ledger.requestLateRefund(orderId, providerOrderId, LATE_REFUND);
+    private OrderLedger.LateRefund requestLateRefund(UUID orderId, String providerOrderId, boolean amountMatches) {
+        OrderLedger.LateRefund late = ledger.requestLateRefund(orderId, providerOrderId, amountMatches, LATE_REFUND);
         if (late == OrderLedger.LateRefund.REQUESTED) {
             Order canceled = orderReader.findById(orderId).orElseThrow(() -> new IllegalStateException("주문이 사라졌다: " + orderId));
             outboxWriter.append(new OrderRefundRequested(orderId, canceled.totalAmount().amount()));
@@ -203,7 +208,8 @@ public class PaymentResults {
      *
      * 늦은 승인의 자동 환불 판정도 이 트랜잭션 안에서 한다 — 원장이 잡은 주문 행 잠금 안이라, 그사이 다른 반영이 끼어들지 않는다.
      *
-     * @param refundIfLate   승인이 반영되지 못했을 때 자동 환불을 판정할지(승인 금액이 주문 총액과 같을 때만 true)
+     * @param refundIfLate   승인이 반영되지 못해 취소된 주문이면 자동 환불을 요청해도 되는가(승인 금액이 주문 총액과 같을 때만 true —
+     *                       false 면 요청하지 않고 금액 불일치로 가른다)
      * @param notifyDeclined 거절을 반영하면 사전예약 회원에게 알릴지(결과 이벤트의 거절만 true)
      */
     private Applied apply(UUID orderId, OrderTrigger result, String providerOrderId, Instant approvedAt, EventCause cause,
@@ -218,8 +224,8 @@ public class PaymentResults {
                     if (result == OrderTrigger.PAYMENT_APPROVED) {
                         if (settled.applied()) {
                             onApproved(orderId, providerOrderId);
-                        } else if (refundIfLate && settled.status() == OrderStatus.CANCELED) {
-                            late = requestLateRefund(orderId, providerOrderId);
+                        } else if (settled.status() == OrderStatus.CANCELED) {
+                            late = requestLateRefund(orderId, providerOrderId, refundIfLate);
                         }
                     } else if (settled.applied() && notifyDeclined) {
                         onDeclined(orderId);
