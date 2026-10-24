@@ -162,24 +162,23 @@ public class Preorders {
                 backlog.findOldestInFlightRegister(productId).orElse(null));
     }
 
-    /** {@link #backlog} 를 상품들에 문장 둘로. 모든 상품이 들고, 예약이 없는 상품은 모두 0 이다. */
+    /** {@link #backlog} 를 상품들에 문장 셋으로. 모든 상품이 들고, 예약이 없는 상품은 모두 0 이다. */
     public Map<UUID, PreorderBacklog> backlogs(Collection<UUID> productIds, Instant now) {
         if (productIds.isEmpty()) {
             return Map.of();
         }
         Map<UUID, Map<PreorderStatus, Long>> byStatus = new HashMap<>();
         Map<UUID, Long> overdue = new HashMap<>();
-        Map<UUID, Instant> oldestPending = new HashMap<>();
         Instant payableUntil = now.minus(PreorderSnapshot.PAYMENT_WINDOW);
         for (StatusGroup group : backlog.countByProductAndStatus(productIds, payableUntil)) {
             byStatus.computeIfAbsent(group.productId(), ignored -> new EnumMap<>(PreorderStatus.class))
                     .put(group.status(), group.count());
             if (group.status() == PreorderStatus.REGISTERED) {
                 overdue.put(group.productId(), group.payableUntil());
-            } else if (group.status() == PreorderStatus.PENDING_SYNC) {
-                oldestPending.put(group.productId(), group.oldestCreatedAt());
             }
         }
+        Map<UUID, Instant> oldestPending =
+                backlog.findOldestCreatedAtByProduct(PreorderStatus.PENDING_SYNC, productIds);
         Map<UUID, Instant> oldestInFlight = backlog.findOldestInFlightRegisterByProduct(productIds);
         Map<UUID, PreorderBacklog> backlogs = new HashMap<>();
         for (UUID productId : productIds) {
