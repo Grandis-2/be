@@ -16,6 +16,10 @@ import com.grandis.nova.waitingroom.control.SnapshotHolder;
 import com.grandis.nova.waitingroom.domain.admission.AdmissionDecider;
 import com.grandis.nova.waitingroom.domain.product.MaxWait;
 import com.grandis.nova.waitingroom.domain.product.ProductState;
+import com.grandis.nova.waitingroom.domain.product.RuntimeState;
+import com.grandis.nova.waitingroom.domain.product.SalesPhase;
+import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
+import com.grandis.nova.waitingroom.domain.queue.EtaCredit;
 import com.grandis.nova.waitingroom.domain.queue.LeaveGrace;
 import com.grandis.nova.waitingroom.redis.ControlStore;
 import com.grandis.nova.waitingroom.redis.ControlStore.SettingAudit;
@@ -130,6 +134,7 @@ class OperationalSettingsAdmin {
                             snapshot.map(GatewaySnapshot::brakeFactor).orElse(null),
                             snapshot.map(current -> current.meta().maxWait().duration()).map(Duration::toSeconds).orElse(null),
                             snapshot.map(current -> current.meta().leaveGrace().toSeconds()).orElse(null),
+                            snapshot.map(current -> current.meta().maxWait().duration()).map(Duration::toSeconds).orElse(null),
                             snapshot.map(this::products).orElse(List.of()));
                 });
     }
@@ -139,11 +144,25 @@ class OperationalSettingsAdmin {
                 .sorted(Map.Entry.comparingByKey())
                 .map(entry -> {
                     ProductState state = entry.getValue();
-                    return new ProductStatus(entry.getKey(), state.phaseAt(clock.now()).name(), state.runtime().name(),
+                    SalesPhase phase = state.phaseAt(clock.now());
+                    return new ProductStatus(entry.getKey(), phase.name(), state.runtime().name(),
                             state.waiting(), state.credit(), state.cap() == ProductState.UNLIMITED_CAP ? null : state.cap(),
-                            state.window().opensAt(), state.window().closesAt());
+                            state.window().opensAt(), state.window().closesAt(),
+                            estimatedWait(state, phase, snapshot.meta()));
                 })
                 .toList();
+    }
+
+    /**
+     * 지금 줄을 서면 앞선 대기 인원이 다 빠지기까지의 시간. 접수 기간 밖이거나 리더가 마감으로 본 줄은 움직이지 않으니 모른다 —
+     * 이 노드의 시계로는 접수 중이어도 리더가 먼저 마감했을 수 있다.
+     */
+    private static Long estimatedWait(ProductState state, SalesPhase phase, SnapshotMeta meta) {
+        if (phase != SalesPhase.OPEN || state.runtime() == RuntimeState.CLOSED) {
+            return null;
+        }
+        double eta = EtaCredit.etaSec(state.waiting(), state, meta);
+        return Double.isFinite(eta) && eta >= 0 ? (long) Math.ceil(eta) : null;
     }
 
     private Mono<AdmissionRateView> change(String actor, String field, Mono<Optional<String>> write, String after) {
