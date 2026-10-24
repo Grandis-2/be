@@ -4,9 +4,10 @@
 #
 # jar 를 풀어 둔 형태(app.jar + lib/)로 싣는다. fat jar 의 중첩 jar 에서 읽은 클래스는 JVM AOT 캐시에 들어가지 않는다.
 # 이 이미지는 캐시가 없는 기반이다. 학습(docker/aot-training/train.sh)이 이 이미지를 띄워 학습한 뒤 그 위에 Dockerfile.aot 로
-# 캐시를 얹는다 — 그래서 학습한 JDK 와 실행할 JDK 가 같다. BASE_IMAGE 는 train.sh 가 다이제스트로 고정해 넘겨, 한 번의 학습에서
-# 모든 서비스가 같은 베이스를 쓴다.
-ARG BASE_IMAGE=eclipse-temurin:25-jre
+# 캐시를 얹는다 — 그래서 학습한 JDK 와 실행할 JDK 가 같다. train.sh 가 아래 태그를 다이제스트로 고정해 넘겨, 한 번의 학습에서
+# 모든 서비스가 같은 베이스를 쓴다. 베이스가 Corretto 인 것은 CVE-2026-91403(JSSE) 수정 빌드를 Temurin 보다 먼저 냈기 때문이다 —
+# 런타임 버전은 25.0.5+9 로 찍히지만 OpenJDK 25.0.5.0.2 와 같은 수정(8395142)이 들어 있다.
+ARG BASE_IMAGE=amazoncorretto:25.0.5-al2023-headless
 
 # OpenTelemetry Java 에이전트 · 그 설정(docker/otel/agent.properties — 쓰지 않는 계측을 끈다) · Pyroscope 프로파일 확장을 싣는다.
 # 켜지는 않는다 — 켜는 쪽은 nova-infra 의 작업 정의다(에이전트는 JDK_JAVA_OPTIONS=-javaagent:/otel/javaagent.jar 와 OTEL_*,
@@ -36,8 +37,10 @@ RUN java -Djarmode=tools -jar app.jar extract --destination /extracted
 FROM ${BASE_IMAGE}
 WORKDIR /app
 
-# 루트로 돌리지 않는다.
-RUN groupadd --system spring && useradd --system --gid spring spring
+# 루트로 돌리지 않는다. groupadd · useradd 가 없는 베이스(Amazon Linux)에서만 shadow-utils 를 받는다 —
+# BASE_IMAGE 로 Temurin(Ubuntu) 을 지정해도 그대로 빌드된다.
+RUN if ! command -v useradd > /dev/null; then dnf install -y shadow-utils && dnf clean all; fi \
+    && groupadd --system spring && useradd --system --gid spring spring
 USER spring
 
 COPY --from=extract --chown=spring:spring /extracted/ /app/
