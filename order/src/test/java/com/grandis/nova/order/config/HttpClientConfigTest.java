@@ -1,6 +1,10 @@
 package com.grandis.nova.order.config;
 
+import com.grandis.nova.common.security.AuthenticatedPrincipal;
+import com.grandis.nova.common.security.NovaAuthentication;
+import com.grandis.nova.common.security.Role;
 import com.grandis.nova.order.client.catalog.CatalogClient;
+import com.grandis.nova.order.client.member.MemberClient;
 import com.grandis.nova.order.client.payment.CaptureRequest;
 import com.grandis.nova.order.client.payment.ConfirmRequest;
 import com.grandis.nova.order.client.payment.PayableTarget;
@@ -36,12 +40,14 @@ import org.springframework.boot.restclient.autoconfigure.RestClientObservationAu
 import org.springframework.boot.restclient.autoconfigure.service.HttpServiceClientAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.http.client.observation.ClientRequestObservationContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.http.HttpTimeoutException;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -102,7 +108,8 @@ class HttpClientConfigTest {
                 .withPropertyValues(group("payment", baseUrl))
                 .withPropertyValues(group("payment-admin", baseUrl))
                 .withPropertyValues(group("preorder", baseUrl))
-                .withPropertyValues(group("catalog", baseUrl));
+                .withPropertyValues(group("catalog", baseUrl))
+                .withPropertyValues(group("member", baseUrl));
     }
 
     private static String[] group(String name, String baseUrl) {
@@ -133,7 +140,43 @@ class HttpClientConfigTest {
             assertThat(rootCause(catchThrowable(() -> context.getBean(PreorderClient.class)
                     .getPayability("9f1c2d3e-0000-4000-8000-000000000001", null))))
                     .isInstanceOf(HttpTimeoutException.class);
+            assertThat(rootCause(catchThrowable(() -> context.getBean(MemberClient.class).getNames(List.of(UUID.randomUUID())))))
+                    .isInstanceOf(HttpTimeoutException.class);
         });
+    }
+
+    // 회원 이름(member)은 메서드 인자가 아니라 지금 요청한 관리자의 토큰을 인터셉터로 싣는다 — member 는 ADMIN 토큰만 받는다
+    @Test
+    void memberGroupRelaysTheRequestToken() throws IOException {
+        List<String> received = new CopyOnWriteArrayList<>();
+        HttpServer member = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        member.createContext("/", exchange -> {
+            received.add(exchange.getRequestURI().getPath() + " " + exchange.getRequestHeaders().getFirst("Authorization"));
+            byte[] body = "{\"success\":true,\"data\":{\"items\":[]}}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        member.start();
+        try {
+            runner("http://127.0.0.1:" + member.getAddress().getPort()).run(context -> {
+                SecurityContextHolder.getContext().setAuthentication(
+                        new NovaAuthentication(new AuthenticatedPrincipal("admin", Role.ADMIN), "admin-token"));
+                try {
+                    context.getBean(MemberClient.class).getNames(List.of(UUID.randomUUID()));
+                    context.getBean(CatalogClient.class).getOptions(List.of(UUID.randomUUID()), null);
+                } catch (RuntimeException ignored) {
+                    // catalog 응답 모양은 보지 않는다 — 헤더만 본다
+                } finally {
+                    SecurityContextHolder.clearContext();
+                }
+            });
+        } finally {
+            member.stop(0);
+        }
+
+        assertThat(received).containsExactly("/internal/customers/names Bearer admin-token", "/internal/options null");
     }
 
     // 승인 그룹의 읽기 기한이 설정에서 온다. 넘으면 실패가 아니라 결과 모름(주문은 승인 중으로 둔다)

@@ -26,6 +26,16 @@ class OrderDefaultsTest {
     }
 
     @Test
+    void 회원_이름_호출은_짧게_기다리고_catalog_와_다른_회로를_쓴다() {
+        StandardEnvironment empty = apply(new StandardEnvironment());
+        assertThat(empty.getProperty("spring.http.serviceclient.member.connect-timeout")).isEqualTo("300ms");
+        assertThat(empty.getProperty("spring.http.serviceclient.member.read-timeout")).isEqualTo("500ms");
+        assertThat(empty.getProperty("spring.http.serviceclient.member.base-url")).as("주소는 인프라가 준다").isNull();
+        assertThat(empty.getProperty("resilience4j.circuitbreaker.instances.member.wait-duration-in-open-state")).isEqualTo("10s");
+        assertThat(empty.getProperty("resilience4j.bulkhead.instances.member.max-wait-duration")).isEqualTo("0");
+    }
+
+    @Test
     void 관리_포트를_서비스_포트와_같게_두거나_끄면_기동을_막고_웹_없는_기동은_막지_않는다() {
         assertThatThrownBy(() -> apply(with(Map.of("server.port", "8084", "management.server.port", "8084"))))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("SAME");
