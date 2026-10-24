@@ -129,6 +129,8 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
             defaults.put("spring.http.serviceclient." + dependency + ".connect-timeout", "300ms");
             defaults.put("spring.http.serviceclient." + dependency + ".read-timeout", "1s");
         }
+        // 회원 이름은 표시용이라 못 받으면 이름 없이 응답한다 — 짧게 기다린다(member 는 기본키 조회 한 문장이다)
+        defaults.put("spring.http.serviceclient." + Dependencies.MEMBER + ".read-timeout", "500ms");
         // Redis(토큰 폐기 확인 · 캐시 비우기 알림 · 하트비트)도 같다. 없으면 Lettuce 기본 60초라 Redis 가 멈추면 요청 · 커밋 뒤
         // 알림 스레드가 그만큼 묶인다. 300ms 를 넘긴 응답은 쓸 이유가 없다
         defaults.put("spring.data.redis.timeout", "300ms");
@@ -136,8 +138,9 @@ class PreorderDefaults implements EnvironmentPostProcessor, Ordered {
     }
 
     /**
-     * 내부 호출(catalog · order) 장애 대응. 재시도(연결 실패 · 5xx 만 한 번) → 서킷 브레이커(50건 중 실패 · 1초 넘는 호출이 절반이면
+     * 내부 호출(catalog · order · member) 장애 대응. 재시도(연결 실패 · 5xx 만 한 번) → 서킷 브레이커(50건 중 실패 · 1초 넘는 호출이 절반이면
      * 10초 열림) → 동시 호출 상한(20, 기다리지 않음). 4xx 는 재시도하지도 실패로 세지도 않는다. 값은 부하 실측으로 확정한다.
+     * member(회원 이름)는 재시도를 쓰지 않고 회로 · 상한만 거친다(MemberNames).
      */
     private void dependencyResilience(Map<String, Object> defaults) {
         String clientError = "org.springframework.web.client.HttpClientErrorException";

@@ -1,5 +1,6 @@
 package com.grandis.nova.member;
 
+import com.grandis.nova.common.security.RevocationCheckProperties;
 import org.springframework.boot.EnvironmentPostProcessor;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.WebApplicationType;
@@ -9,7 +10,9 @@ import org.springframework.core.Ordered;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
 
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
 /**
  * 코드와 함께 배포하는 설정 기본값. 가장 낮은 우선순위라 yaml · 환경 변수가 같은 키를 주면 그 값이 이긴다.
@@ -18,6 +21,13 @@ import java.util.Map;
 class MemberDefaults implements EnvironmentPostProcessor, Ordered {
 
     static final String SOURCE_NAME = "memberDefaults";
+
+    /**
+     * 폐기 조회(Redis)가 실패할 때 401 로 닫는 경로 — 공통 기본값(관리자 · 재발급 · 내 정보)에 관리자 토큰만 받는 내부 경로를 더한다.
+     * 내부 주소로 바로 오는 요청은 부르는 쪽(order · preorder 의 /api/v1/admin/**)의 검사를 거치지 않는다. 메서드를 붙이지 않는다(HEAD 도 닫는다).
+     */
+    static final List<String> FAIL_CLOSED_PATHS = Stream.concat(RevocationCheckProperties.DEFAULT_FAIL_CLOSED_PATHS.stream(),
+            Stream.of("/internal/customers/names")).toList();
 
     static final Map<String, Object> DEFAULTS = Map.of(
             // 헬스는 서비스 포트(ALB 가 요청을 보내는 8080)와 나눈 관리 포트로만 내놓는다. ALB 헬스 체크는 이 포트의 readiness 를 본다
@@ -28,7 +38,8 @@ class MemberDefaults implements EnvironmentPostProcessor, Ordered {
             "management.endpoint.health.probes.enabled", "true",
             // readiness 는 앱의 준비 상태만 본다(Boot 기본 구성과 같지만 고정한다). DB · Redis 를 넣으면 공용 의존성 장애 한 번에 모든 태스크가
             // 비정상이 돼 ECS 가 태스크를 갈아 끼운다
-            "management.endpoint.health.group.readiness.include", "readinessState");
+            "management.endpoint.health.group.readiness.include", "readinessState",
+            "auth.revocation-check.fail-closed-paths", String.join(",", FAIL_CLOSED_PATHS));
 
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {

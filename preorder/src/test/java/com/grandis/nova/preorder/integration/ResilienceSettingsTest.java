@@ -57,7 +57,7 @@ class ResilienceSettingsTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {Dependencies.CATALOG, Dependencies.ORDER})
+    @ValueSource(strings = {Dependencies.CATALOG, Dependencies.ORDER, Dependencies.MEMBER})
     void 서킷은_50건_중_절반_실패_또는_1초_넘는_호출에_10초_열린다(String dependency) {
         CircuitBreakerConfig circuitBreaker = circuitBreakers.circuitBreaker(dependency).getCircuitBreakerConfig();
 
@@ -72,7 +72,7 @@ class ResilienceSettingsTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {Dependencies.CATALOG, Dependencies.ORDER})
+    @ValueSource(strings = {Dependencies.CATALOG, Dependencies.ORDER, Dependencies.MEMBER})
     void 동시_호출은_20_이고_기다리지_않는다(String dependency) {
         assertThat(bulkheads.bulkhead(dependency).getBulkheadConfig().getMaxConcurrentCalls()).isEqualTo(20);
         assertThat(bulkheads.bulkhead(dependency).getBulkheadConfig().getMaxWaitDuration()).isZero();

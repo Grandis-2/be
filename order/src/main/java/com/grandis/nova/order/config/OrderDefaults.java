@@ -1,6 +1,7 @@
 package com.grandis.nova.order.config;
 
 import com.grandis.nova.order.client.catalog.CatalogReader;
+import com.grandis.nova.order.client.member.MemberNames;
 import org.springframework.boot.EnvironmentPostProcessor;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.WebApplicationType;
@@ -33,6 +34,7 @@ class OrderDefaults implements EnvironmentPostProcessor, Ordered {
         defaults.put("management.endpoint.health.group.readiness.include", "readinessState");
         catalogResilience(defaults, CatalogReader.DEPENDENCY);
         catalogResilience(defaults, CatalogReader.IMAGE_DEPENDENCY);
+        memberNames(defaults);
         return Map.copyOf(defaults);
     }
 
@@ -56,6 +58,18 @@ class OrderDefaults implements EnvironmentPostProcessor, Ordered {
         String bulkhead = "resilience4j.bulkhead.instances." + instance + ".";
         defaults.put(bulkhead + "max-concurrent-calls", 20);
         defaults.put(bulkhead + "max-wait-duration", "0");
+    }
+
+    /**
+     * 관리자 주문 목록 · 상세의 회원 이름(MemberNames). 표시용이라 못 받으면 이름 없이 응답하므로 기다림을 짧게 둔다 — 읽기 500ms
+     * (member 는 기본키 조회 한 문장이다). 주소는 환경마다 달라 여기 두지 않는다(spring.http.serviceclient.member.base-url, 인프라 calls).
+     * 회로 · 동시 호출 상한은 catalog 와 같은 값의 별도 인스턴스다 — member 가 느려도 장바구니의 칸을 쓰지 않는다.
+     */
+    private static void memberNames(Map<String, Object> defaults) {
+        String client = "spring.http.serviceclient." + MemberNames.DEPENDENCY + ".";
+        defaults.put(client + "connect-timeout", "300ms");
+        defaults.put(client + "read-timeout", "500ms");
+        catalogResilience(defaults, MemberNames.DEPENDENCY);
     }
 
     @Override

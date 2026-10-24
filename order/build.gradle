@@ -24,6 +24,8 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-restclient'
     // 요청 경로의 내부 동기 호출(장바구니 → catalog)에 서킷 브레이커 · 동시 호출 상한을 건다. 설정 기본값은 OrderDefaults 에 있다
     implementation "io.github.resilience4j:resilience4j-spring-boot4:${rootProject.resilience4jVersion}"
+    // 관리자 화면의 회원 이름(member 내부 API) 로컬 캐시 — MemberNames
+    implementation 'com.github.ben-manes.caffeine:caffeine'
     runtimeOnly 'com.mysql:mysql-connector-j'
 
     // DB 동작은 MySQL 로만 검증한다(H2 없음).

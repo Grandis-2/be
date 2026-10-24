@@ -7,7 +7,9 @@ public final class Dependencies {
 
     public static final String CATALOG = "catalog";
     public static final String ORDER = "order";
-    public static final List<String> ALL = List.of(CATALOG, ORDER);
+    /** 관리자 예약 목록 · 상세의 회원 이름(MemberNames). 재시도 없이 회로 · 동시 호출 상한만 쓴다. */
+    public static final String MEMBER = "member";
+    public static final List<String> ALL = List.of(CATALOG, ORDER, MEMBER);
 
     private Dependencies() {
     }
