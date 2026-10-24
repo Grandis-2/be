@@ -53,14 +53,17 @@ CREATE TABLE shop.payment_dead_letter_events (
     CONSTRAINT ck_payment_dead_letter_reason
         CHECK (failure_reason IN ('UNREADABLE_BODY','UNKNOWN_EVENT_TYPE','PROCESSING_FAILED')),
     CONSTRAINT ck_payment_dead_letter_receive_count CHECK (receive_count >= 0),
-    -- 되돌리기를 시작한 상태만 누가 · 언제 시작했는지 갖는다.
+    -- 칸과 상태를 양방향으로 맞춘다. 시작 칸(redrive_started_at · redrive_requested_by)은 REDRIVING 부터, redriven_at 은 REDRIVEN 부터,
+    -- outcome_at 은 SUCCEEDED · REDRIVE_FAILED 에서만, 버리기 칸은 DISCARDED 에서만 채운다. OPEN 에서는 모두 비어 있다.
     CONSTRAINT ck_payment_dead_letter_redrive_started CHECK (
-        (status IN ('REDRIVING','REDRIVEN','SUCCEEDED','REDRIVE_FAILED'))
-            = (redrive_started_at IS NOT NULL AND redrive_requested_by IS NOT NULL)),
+        (status IN ('REDRIVING','REDRIVEN','SUCCEEDED','REDRIVE_FAILED')) = (redrive_started_at IS NOT NULL)
+        AND (status IN ('REDRIVING','REDRIVEN','SUCCEEDED','REDRIVE_FAILED')) = (redrive_requested_by IS NOT NULL)),
     CONSTRAINT ck_payment_dead_letter_redriven
-        CHECK (status NOT IN ('REDRIVEN','SUCCEEDED','REDRIVE_FAILED') OR redriven_at IS NOT NULL),
+        CHECK ((status IN ('REDRIVEN','SUCCEEDED','REDRIVE_FAILED')) = (redriven_at IS NOT NULL)),
     CONSTRAINT ck_payment_dead_letter_outcome
         CHECK ((status IN ('SUCCEEDED','REDRIVE_FAILED')) = (outcome_at IS NOT NULL)),
     CONSTRAINT ck_payment_dead_letter_discarded CHECK (
-        (status = 'DISCARDED') = (discarded_at IS NOT NULL AND discarded_by IS NOT NULL AND discard_note IS NOT NULL))
+        (status = 'DISCARDED') = (discarded_at IS NOT NULL)
+        AND (status = 'DISCARDED') = (discarded_by IS NOT NULL)
+        AND (status = 'DISCARDED') = (discard_note IS NOT NULL))
 ) ENGINE = InnoDB;
