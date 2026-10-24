@@ -3,6 +3,7 @@ package com.grandis.nova.preorder.query.api;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.preorder.campaign.CampaignPhase;
 import com.grandis.nova.preorder.query.application.PreorderStatsService;
+import com.grandis.nova.preorder.query.application.StatsHistory;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -25,11 +26,20 @@ class AdminPreorderStatsController {
     }
 
     /** 전체 또는 상품 하나의 현황. 잠깐 캐시한 값이라 센 시각(countedAt)을 함께 준다. */
-    @Operation(summary = "운영 현황 — 예약 상태별 수 · 끝나지 않은 동기화 작업 · DLQ 대기 · 결제 기한 초과",
-            description = "productId 를 주면 그 상품만 센다. 사전예약 상품이 아니면 404")
+    @Operation(summary = "운영 현황 — 예약 상태별 수 · 끝나지 않은 동기화 작업 · DLQ 대기 · 결제 기한 초과 · 속도",
+            description = "productId 를 주면 그 상품만 센다. 사전예약 상품이 아니면 404. rates 는 최근 1분 기록으로 잰다")
     @GetMapping
     public ApiResponse<PreorderStatsResponse> stats(@RequestParam(required = false) UUID productId) {
-        return ApiResponse.ok(PreorderStatsResponse.from(statsService.find(productId)));
+        return ApiResponse.ok(PreorderStatsResponse.from(statsService.find(productId), statsService.rates(productId)));
+    }
+
+    /** 서버가 10초마다 쌓은 기록. 화면이 직접 쌓지 않아 새로 고쳐도 지난 값을 본다. 상품은 접수 중일 때만 쌓인다. */
+    @Operation(summary = "예약 수 지난 기록 — 외부 등록 대기 · 등록 · 결제 완료",
+            description = "minutes 는 기본 30, 1~30. 사전예약 상품이 아니면 404, 기록을 읽을 수 없으면 503")
+    @GetMapping("/history")
+    public ApiResponse<StatsHistory> history(@RequestParam(required = false) UUID productId,
+                                             @RequestParam(required = false) Integer minutes) {
+        return ApiResponse.ok(statsService.history(productId, minutes));
     }
 
     /** 상품마다 따로 부르지 않게 한 페이지의 상품들을 한 번에 센다. 대기열이 아니라 회차 접수 기간으로 골라 오래된 마감 상품도 나온다. */

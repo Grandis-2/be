@@ -1,14 +1,18 @@
 package com.grandis.nova.preorder.query.application;
 
 import com.grandis.nova.common.BusinessException;
+import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.campaign.CampaignPhase;
+import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.deadletter.DeadLetterWaiting;
 import com.grandis.nova.preorder.preorder.PreorderBacklog;
 import org.junit.jupiter.api.Test;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -27,8 +31,30 @@ class PreorderStatsServiceTest {
 
     final PreorderStatsCounter counter = mock(PreorderStatsCounter.class);
     final PreorderStatsCache cache = mock(PreorderStatsCache.class);
+    final PreorderStatsHistoryStore history = mock(PreorderStatsHistoryStore.class);
+    final Campaigns campaigns = mock(Campaigns.class);
     final PreorderStatsService service = new PreorderStatsService(counter, cache,
-            new PreorderStatsProperties(Duration.ofSeconds(5), 20, 100));
+            new PreorderStatsProperties(Duration.ofSeconds(5), 20, 100), history,
+            new PreorderStatsHistoryProperties(Duration.ofSeconds(10), Duration.ofMinutes(30), Duration.ofMinutes(1),
+                    100), campaigns, Clock.fixed(Instant.parse("2026-10-25T01:00:00Z"), ZoneOffset.UTC));
+
+    @Test
+    void 지난_기록의_분은_1에서_보관_시간까지다() {
+        assertThatThrownBy(() -> service.history(null, 0)).isInstanceOfSatisfying(BusinessException.class,
+                e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.VALIDATION_FAILED));
+        assertThatThrownBy(() -> service.history(null, 31)).isInstanceOfSatisfying(BusinessException.class,
+                e -> assertThat(e.errorCode()).isEqualTo(CommonErrorCode.VALIDATION_FAILED));
+        given(history.since(null, Instant.parse("2026-10-25T00:30:00Z"))).willReturn(List.of());
+
+        assertThat(service.history(null, null).stepSeconds()).isEqualTo(10);
+    }
+
+    @Test
+    void 기록을_읽을_수_없으면_속도만_비우고_현황은_그대로_준다() {
+        given(history.since(any(), any())).willThrow(new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE));
+
+        assertThat(service.rates(null)).isNull();
+    }
 
     @Test
     void 캐시에_있으면_세지_않고_그_값을_준다() {

@@ -52,6 +52,15 @@ class PreorderStatsCounter {
                 deadLetters.waiting(productId), now);
     }
 
+    /** 기록용 전체와 접수 중 상품들(마감 임박순 maxProducts 개)의 상태별 수만 — 기록에 쓰지 않는 시각 · 기한 집계는 하지 않는다. */
+    @Transactional(readOnly = true)
+    public SampledCounts countForHistory(int maxProducts) {
+        Instant now = clock.instant();
+        List<UUID> open = maxProducts == 0 ? List.of() : campaigns.findPhasePage(CampaignPhase.OPEN, now, null, null,
+                maxProducts).stream().map(CampaignSchedule::productId).toList();
+        return new SampledCounts(now, preorders.countByStatus(null), preorders.countByStatus(open, now));
+    }
+
     /** 그 단계 회차 한 페이지와 그 상품들의 현황. 상품마다 따로 묻지 않고 숫자별로 문장 하나씩 묶어 센다. */
     @Transactional(readOnly = true)
     public ProductStatsPage countProducts(CampaignPhase phase, PhaseCursor cursor, int size) {

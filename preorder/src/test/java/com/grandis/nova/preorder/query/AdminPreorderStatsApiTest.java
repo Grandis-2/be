@@ -244,6 +244,31 @@ class AdminPreorderStatsApiTest {
     }
 
     @Test
+    void 지난_기록은_주기와_기록을_주고_분이_범위_밖이면_400_사전예약_상품이_아니면_404_다() throws Exception {
+        mockMvc.perform(get(PATH + "/history").with(admin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.stepSeconds").value(10))
+                .andExpect(jsonPath("$.data.samples").isArray());
+        mockMvc.perform(get(PATH + "/history").param("minutes", "0").with(admin()))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(get(PATH + "/history").param("minutes", "31").with(admin()))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(get(PATH + "/history").param("productId", UUID.randomUUID().toString()).with(admin()))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get(PATH + "/history").with(customer(fixtures.customer())))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void 기록이_없는_상품의_속도는_비어_있다() throws Exception {
+        PreorderProduct product = fixtures.openPreorderProduct();
+
+        mockMvc.perform(get(PATH).param("productId", product.productId().toString()).with(admin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.rates").value(nullValue()));
+    }
+
+    @Test
     void 관리자만_볼_수_있다() throws Exception {
         mockMvc.perform(get(PATH).with(customer(fixtures.customer()))).andExpect(status().isForbidden());
         mockMvc.perform(get(PATH)).andExpect(status().isUnauthorized());
