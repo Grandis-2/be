@@ -1,10 +1,12 @@
 package com.grandis.nova.preorder.syncjob.application;
 
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.SimpleAsyncTaskExecutor;
 
 @Configuration(proxyBeanMethods = false)
+@EnableConfigurationProperties(ReprocessBatchProperties.class)
 class SyncJobConfig {
 
     static final String REPROCESS_EXECUTOR = "syncJobReprocessExecutor";

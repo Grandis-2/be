@@ -9,6 +9,7 @@ import com.grandis.nova.preorder.preorder.domain.CustomerStageQuery;
 import com.grandis.nova.preorder.preorder.domain.Preorder;
 import com.grandis.nova.preorder.preorder.domain.PaymentOverdueQuery;
 import com.grandis.nova.preorder.preorder.domain.PreorderBacklogQuery;
+import com.grandis.nova.preorder.preorder.domain.PreorderBacklogQuery.StatusGroup;
 import com.grandis.nova.preorder.preorder.domain.PreorderEvent;
 import com.grandis.nova.preorder.preorder.domain.PreorderEventRepository;
 import com.grandis.nova.preorder.preorder.domain.PreorderRepository;
@@ -22,6 +23,7 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -156,7 +158,63 @@ public class Preorders {
     public PreorderBacklog backlog(UUID productId, Instant now) {
         return new PreorderBacklog(backlog.countByStatus(productId),
                 backlog.countRegisteredPayableUntil(now.minus(PreorderSnapshot.PAYMENT_WINDOW), productId),
-                backlog.findOldestCreatedAt(PreorderStatus.PENDING_SYNC, productId).orElse(null));
+                backlog.findOldestCreatedAt(PreorderStatus.PENDING_SYNC, productId).orElse(null),
+                backlog.findOldestInFlightRegister(productId).orElse(null));
+    }
+
+    /** {@link #backlog} 를 상품들에 문장 셋으로. 모든 상품이 들고, 예약이 없는 상품은 모두 0 이다. */
+    public Map<UUID, PreorderBacklog> backlogs(Collection<UUID> productIds, Instant now) {
+        if (productIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, Map<PreorderStatus, Long>> byStatus = new HashMap<>();
+        Map<UUID, Long> overdue = new HashMap<>();
+        Instant payableUntil = now.minus(PreorderSnapshot.PAYMENT_WINDOW);
+        List<StatusGroup> groups = backlog.countByProductAndStatus(productIds, payableUntil);
+        for (StatusGroup group : groups) {
+            if (group.status() == PreorderStatus.REGISTERED) {
+                overdue.put(group.productId(), group.payableUntil());
+            }
+        }
+        Map<UUID, Map<PreorderStatus, Long>> counts = zeroFilled(productIds, groups);
+        Map<UUID, Instant> oldestPending =
+                backlog.findOldestCreatedAtByProduct(PreorderStatus.PENDING_SYNC, productIds);
+        Map<UUID, Instant> oldestInFlight = backlog.findOldestInFlightRegisterByProduct(productIds);
+        Map<UUID, PreorderBacklog> backlogs = new HashMap<>();
+        for (UUID productId : productIds) {
+            backlogs.put(productId, new PreorderBacklog(counts.get(productId), overdue.getOrDefault(productId, 0L),
+                    oldestPending.get(productId), oldestInFlight.get(productId)));
+        }
+        return backlogs;
+    }
+
+    /** 상태별 수만. 색인만 읽는 문장 하나다. productId 가 null 이면 전체를 센다. */
+    public Map<PreorderStatus, Long> countByStatus(UUID productId) {
+        return backlog.countByStatus(productId);
+    }
+
+    /** 상품들의 상태별 수만 문장 하나로. 모든 상품이 들고, 한 건도 없는 상태는 0 이다. */
+    public Map<UUID, Map<PreorderStatus, Long>> countByStatus(Collection<UUID> productIds, Instant now) {
+        if (productIds.isEmpty()) {
+            return Map.of();
+        }
+        return zeroFilled(productIds, backlog.countByProductAndStatus(productIds, now));
+    }
+
+    private static Map<UUID, Map<PreorderStatus, Long>> zeroFilled(Collection<UUID> productIds,
+                                                                   List<StatusGroup> groups) {
+        Map<UUID, Map<PreorderStatus, Long>> counts = new HashMap<>();
+        for (UUID productId : productIds) {
+            Map<PreorderStatus, Long> zeros = new EnumMap<>(PreorderStatus.class);
+            for (PreorderStatus status : PreorderStatus.values()) {
+                zeros.put(status, 0L);
+            }
+            counts.put(productId, zeros);
+        }
+        for (StatusGroup group : groups) {
+            counts.get(group.productId()).put(group.status(), group.count());
+        }
+        return counts;
     }
 
     /** 결제 기한이 지나 만료할 예약의 공개 UUID. 기한이 오래된 것부터 limit 건. */
@@ -209,9 +267,10 @@ public class Preorders {
                 .toList();
     }
 
-    /** 관리자 검색(최신순 오프셋 페이지). */
-    public OffsetPage<PreorderSnapshot> searchForAdmin(AdminPreorderSearch search, int page, int size) {
-        List<UUID> ids = adminSearch.findIds(search, page, size);
+    /** 관리자 검색(그 순서의 오프셋 페이지). */
+    public OffsetPage<PreorderSnapshot> searchForAdmin(AdminPreorderSearch search, AdminPreorderSort sort, int page,
+                                                       int size) {
+        List<UUID> ids = adminSearch.findIds(search, sort, page, size);
         Map<UUID, Preorder> byId = (ids.isEmpty() ? List.<Preorder>of() : preorders.lookupAll(ids)).stream()
                 .collect(Collectors.toMap(Preorder::getId, Function.identity()));
         List<PreorderSnapshot> items = ids.stream().map(byId::get).map(Preorder::toSnapshot).toList();

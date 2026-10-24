@@ -30,6 +30,10 @@ public class ReconciliationFinding extends BaseEntity {
     @Column(nullable = false, updatable = false, length = 100)
     private String targetKey;
 
+    /** 불일치 대상의 상품. 알 수 없으면 비어 있다 */
+    @Column(updatable = false)
+    private UUID productId;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(updatable = false)
     private String beSnapshot;
@@ -48,14 +52,15 @@ public class ReconciliationFinding extends BaseEntity {
     protected ReconciliationFinding() {
     }
 
-    public ReconciliationFinding(UUID runId, String checkCode, String targetKey, String beSnapshot, String mockSnapshot,
-                                 Instant firstDetectedAt) {
+    public ReconciliationFinding(UUID runId, String checkCode, String targetKey, UUID productId, String beSnapshot,
+                                 String mockSnapshot, Instant firstDetectedAt) {
         if (beSnapshot == null && mockSnapshot == null) {
             throw new IllegalArgumentException("be · Mock 값이 둘 다 없는 결과는 남기지 않는다: " + checkCode + " " + targetKey);
         }
         this.runId = runId;
         this.checkCode = checkCode;
         this.targetKey = targetKey;
+        this.productId = productId;
         this.beSnapshot = beSnapshot;
         this.mockSnapshot = mockSnapshot;
         this.firstDetectedAt = firstDetectedAt;
@@ -72,6 +77,10 @@ public class ReconciliationFinding extends BaseEntity {
 
     public String getTargetKey() {
         return targetKey;
+    }
+
+    public UUID getProductId() {
+        return productId;
     }
 
     public String getBeSnapshot() {

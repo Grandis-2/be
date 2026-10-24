@@ -106,17 +106,29 @@ public class SyncJobs {
 
     /** 예약 id → 등록 작업 상태. 작업이 없는 예약은 빠진다. 트랜잭션 없이 문장 하나다(빈 목록이면 읽지 않는다). */
     public Map<UUID, SyncJobStatus> registerStatuses(Collection<UUID> preorderIds) {
+        return registerJobs(preorderIds).entrySet().stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue().status()));
+    }
+
+    /** 예약 id → 등록 작업. 작업이 없는 예약은 빠진다. 트랜잭션 없이 문장 하나다(빈 목록이면 읽지 않는다). */
+    public Map<UUID, SyncJobSnapshot> registerJobs(Collection<UUID> preorderIds) {
         if (preorderIds.isEmpty()) {
             return Map.of();
         }
         return syncJobs.findByPreorderIdInAndJobType(preorderIds, SyncJobType.REGISTER).stream()
-                .collect(Collectors.toMap(PreorderSyncJob::getPreorderId, PreorderSyncJob::getStatus));
+                .collect(Collectors.toMap(PreorderSyncJob::getPreorderId, PreorderSyncJob::toSnapshot));
     }
 
     /** 끝나지 않은(대기 · 처리 중 · 재시도 대기 · 포기) 작업 수. 종류 → 상태 → 수. productId 가 null 이면 전체를 센다. */
     @Transactional(readOnly = true)
     public Map<SyncJobType, Map<SyncJobStatus, Long>> countUnfinished(UUID productId) {
         return unfinished.count(productId);
+    }
+
+    /** {@link #countUnfinished} 를 상품들에 문장 하나로. 상품 → 종류 → 상태 → 수. */
+    @Transactional(readOnly = true)
+    public Map<UUID, Map<SyncJobType, Map<SyncJobStatus, Long>>> countUnfinished(Collection<UUID> productIds) {
+        return productIds.isEmpty() ? Map.of() : unfinished.countByProduct(productIds);
     }
 
     /** 포기한(DEAD_LETTER) 작업 수. 종류 → 상품 → 수, 0 인 상품은 없다. 트랜잭션 없이 문장 하나다. */

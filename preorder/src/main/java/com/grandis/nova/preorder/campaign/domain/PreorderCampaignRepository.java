@@ -50,6 +50,26 @@ public interface PreorderCampaignRepository extends JpaRepository<PreorderCampai
     List<PreorderCampaign> findNotClosedAfter(@Param("now") Instant now, @Param("afterProductId") UUID afterProductId,
                                               Limit limit);
 
+    /** 접수 중인 회차를 마감 임박순(같으면 상품 id 순)으로 (afterClosesAt, afterProductId) 다음부터. 커서가 없으면 처음부터. */
+    @Query("""
+            select c from PreorderCampaign c
+             where c.opensAt <= :now and c.closesAt > :now
+               and (:afterClosesAt is null or c.closesAt > :afterClosesAt
+                    or (c.closesAt = :afterClosesAt and c.productId > :afterProductId))
+             order by c.closesAt, c.productId""")
+    List<PreorderCampaign> findOpenPage(@Param("now") Instant now, @Param("afterClosesAt") Instant afterClosesAt,
+                                        @Param("afterProductId") UUID afterProductId, Limit limit);
+
+    /** 마감이 지난 회차를 최근 마감순(같으면 상품 id 역순)으로 (afterClosesAt, afterProductId) 다음부터. 커서가 없으면 처음부터. */
+    @Query("""
+            select c from PreorderCampaign c
+             where c.closesAt <= :now
+               and (:afterClosesAt is null or c.closesAt < :afterClosesAt
+                    or (c.closesAt = :afterClosesAt and c.productId < :afterProductId))
+             order by c.closesAt desc, c.productId desc""")
+    List<PreorderCampaign> findClosedPage(@Param("now") Instant now, @Param("afterClosesAt") Instant afterClosesAt,
+                                          @Param("afterProductId") UUID afterProductId, Limit limit);
+
     /** (since, now] 에 오픈한 회차가 있는가 */
     boolean existsByOpensAtGreaterThanAndOpensAtLessThanEqual(Instant since, Instant now);
 

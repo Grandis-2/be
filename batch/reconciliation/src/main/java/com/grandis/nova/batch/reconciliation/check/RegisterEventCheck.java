@@ -20,7 +20,8 @@ import org.springframework.stereotype.Component;
 class RegisterEventCheck implements InternalCheck {
 
     private static final String SQL = """
-            SELECT p.preorder_token, BIN_TO_UUID(j.id) AS job_id, j.run, j.updated_at
+            SELECT p.preorder_token, BIN_TO_UUID(p.product_id) AS product_id, BIN_TO_UUID(j.id) AS job_id, j.run,
+                   j.updated_at
               FROM preorder_sync_jobs j
               JOIN preorders p ON p.id = j.preorder_id
              WHERE j.job_type = 'REGISTER' AND j.status = 'PENDING' AND j.updated_at <= :cutoff
@@ -46,7 +47,7 @@ class RegisterEventCheck implements InternalCheck {
             statement = statement.param("productId", productId.toString());
         }
         statement.query(rs -> {
-            findings.add(CheckCode.OUTBOX_MISSING, rs.getString("preorder_token"),
+            findings.add(CheckCode.OUTBOX_MISSING, rs.getString("preorder_token"), rs.getString("product_id"),
                     new PendingJob(rs.getString("job_id"), rs.getInt("run"), BeSnapshot.utc(rs, "updated_at")), null);
         });
     }

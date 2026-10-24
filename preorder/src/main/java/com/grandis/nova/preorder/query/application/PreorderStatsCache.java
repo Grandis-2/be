@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.query.application;
 
+import com.grandis.nova.preorder.campaign.CampaignPhase;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -21,6 +22,8 @@ class PreorderStatsCache {
 
     static final String KEY_PREFIX = "preorder:stats:";
     private static final String ALL = "all";
+    private static final String PRODUCTS = "products:";
+    private static final String FIRST_PAGE = "first";
 
     private static final Logger log = LoggerFactory.getLogger(PreorderStatsCache.class);
 
@@ -36,30 +39,52 @@ class PreorderStatsCache {
 
     /** @param productId null 이면 전체 */
     Optional<PreorderStats> find(UUID productId) {
+        return read(key(productId), PreorderStats.class);
+    }
+
+    void put(UUID productId, PreorderStats stats) {
+        write(key(productId), stats);
+    }
+
+    /** 상품별 현황 한 페이지. 같은 단계 · 커서 · 크기로 물은 것끼리 나눠 쓴다. */
+    Optional<ProductStatsPage> findPage(CampaignPhase phase, String cursor, int size) {
+        return read(pageKey(phase, cursor, size), ProductStatsPage.class);
+    }
+
+    void putPage(CampaignPhase phase, String cursor, int size, ProductStatsPage page) {
+        write(pageKey(phase, cursor, size), page);
+    }
+
+    static String key(UUID productId) {
+        return KEY_PREFIX + (productId == null ? ALL : productId);
+    }
+
+    /** 커서는 URL 안전 Base64 라 키에 그대로 넣는다. */
+    static String pageKey(CampaignPhase phase, String cursor, int size) {
+        return KEY_PREFIX + PRODUCTS + phase + ":" + size + ":" + (cursor == null ? FIRST_PAGE : cursor);
+    }
+
+    private <T> Optional<T> read(String key, Class<T> type) {
         if (ttl.isZero()) {
             return Optional.empty();
         }
         try {
-            String cached = redis.opsForValue().get(key(productId));
-            return cached == null ? Optional.empty() : Optional.of(jsonMapper.readValue(cached, PreorderStats.class));
+            String cached = redis.opsForValue().get(key);
+            return cached == null ? Optional.empty() : Optional.of(jsonMapper.readValue(cached, type));
         } catch (DataAccessException | JacksonException e) {
             log.warn("운영 현황 캐시를 읽지 못해 바로 센다: {}", e.toString());
             return Optional.empty();
         }
     }
 
-    void put(UUID productId, PreorderStats stats) {
+    private void write(String key, Object value) {
         if (ttl.isZero()) {
             return;
         }
         try {
-            redis.opsForValue().set(key(productId), jsonMapper.writeValueAsString(stats), ttl);
+            redis.opsForValue().set(key, jsonMapper.writeValueAsString(value), ttl);
         } catch (DataAccessException | JacksonException e) {
             log.warn("운영 현황 캐시에 쓰지 못했다: {}", e.toString());
         }
-    }
-
-    static String key(UUID productId) {
-        return KEY_PREFIX + (productId == null ? ALL : productId);
     }
 }

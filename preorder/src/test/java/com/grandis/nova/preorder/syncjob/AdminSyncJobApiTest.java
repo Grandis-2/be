@@ -17,6 +17,7 @@ import com.grandis.nova.preorder.support.ShopFixtures;
 import com.grandis.nova.preorder.syncjob.application.SyncJobAdminService;
 import com.grandis.nova.preorder.syncjob.domain.ReprocessCandidate;
 import com.grandis.nova.preorder.syncjob.domain.ReprocessCandidateReader;
+import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.stubbing.Answer;
@@ -288,6 +289,58 @@ class AdminSyncJobApiTest {
         assertThat(reprocessRequests(pending)).isEmpty();
     }
 
+    /** 결과 수는 조회할 때 대상 작업의 지금 상태로 센다 — worker 결과를 흉내 내 작업 상태를 바꾸면 바로 따라 바뀐다. */
+    @Test
+    void 일괄_재처리_진행은_보낸_수와_대상_작업의_지금_상태를_준다() throws Exception {
+        UUID secondPreorderId = accepts.accept(fixtures.customer()).preorder().id();
+        UUID thirdPreorderId = accepts.accept(fixtures.customer()).preorder().id();
+        UUID first = fixtures.deadLetter(preorderId);
+        UUID second = fixtures.deadLetter(secondPreorderId);
+        UUID third = fixtures.deadLetter(thirdPreorderId);
+
+        String body = "{\"syncJobIds\":[\"%s\",\"%s\",\"%s\",\"%s\"],\"ratePerSecond\":200}"
+                .formatted(first, second, third, UUID.randomUUID());
+        String batchId = JsonPath.read(batch(body).andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.data.targetCount").value(3))
+                .andReturn().getResponse().getContentAsString(), "$.data.batchId");
+
+        await().atMost(Duration.ofSeconds(5)).until(() -> progress(batchId).contains("\"finishedAt\":\""));
+        progressOf(batchId)
+                .andExpect(jsonPath("$.data.batchId").value(batchId))
+                .andExpect(jsonPath("$.data.targetCount").value(3))
+                .andExpect(jsonPath("$.data.skippedCount").value(1))
+                .andExpect(jsonPath("$.data.sent").value(3))
+                .andExpect(jsonPath("$.data.unsent").value(0))
+                .andExpect(jsonPath("$.data.pending").value(3))
+                .andExpect(jsonPath("$.data.startedAt").isNotEmpty())
+                .andExpect(jsonPath("$.data.lastProgressAt").isNotEmpty());
+
+        fixtures.workerSucceeds(preorderId, "REGISTER");
+        fixtures.deadLetter(secondPreorderId);
+        progressOf(batchId)
+                .andExpect(jsonPath("$.data.sent").value(3))
+                .andExpect(jsonPath("$.data.succeeded").value(1))
+                .andExpect(jsonPath("$.data.failed").value(1))
+                .andExpect(jsonPath("$.data.canceled").value(0))
+                .andExpect(jsonPath("$.data.pending").value(1));
+    }
+
+    @Test
+    void 대상이_없는_일괄_재처리는_시작과_함께_끝나고_없는_진행은_404_다() throws Exception {
+        String batchId = JsonPath.read(batch("{\"syncJobIds\":[\"%s\"]}".formatted(UUID.randomUUID()))
+                .andExpect(status().isAccepted())
+                .andReturn().getResponse().getContentAsString(), "$.data.batchId");
+
+        progressOf(batchId)
+                .andExpect(jsonPath("$.data.targetCount").value(0))
+                .andExpect(jsonPath("$.data.skippedCount").value(1))
+                .andExpect(jsonPath("$.data.pending").value(0))
+                .andExpect(jsonPath("$.data.finishedAt").isNotEmpty());
+        asAdmin(get("/api/v1/admin/preorders/sync-jobs/reprocess-batches/{batchId}", UUID.randomUUID()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("REPROCESS_BATCH_NOT_FOUND"));
+    }
+
     @Test
     void 일괄_재처리를_오류_코드로_거른다() throws Exception {
         String code = "E-" + ShopFixtures.unique();
@@ -351,6 +404,15 @@ class AdminSyncJobApiTest {
     private ResultActions batch(String body) throws Exception {
         return asAdmin(post("/api/v1/admin/preorders/sync-jobs/reprocess-batch")
                 .contentType(MediaType.APPLICATION_JSON).content(body));
+    }
+
+    private ResultActions progressOf(String batchId) throws Exception {
+        return asAdmin(get("/api/v1/admin/preorders/sync-jobs/reprocess-batches/{batchId}", batchId))
+                .andExpect(status().isOk());
+    }
+
+    private String progress(String batchId) throws Exception {
+        return progressOf(batchId).andReturn().getResponse().getContentAsString();
     }
 
     private ResultActions asAdmin(MockHttpServletRequestBuilder request) throws Exception {

@@ -7,6 +7,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.util.Collection;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
@@ -32,12 +33,7 @@ public class UnfinishedJobCountQuery {
 
     /** 종류 → 상태 → 수. 한 건도 없는 칸은 0 이다. productId 가 null 이면 전체를 센다. */
     public Map<SyncJobType, Map<SyncJobStatus, Long>> count(UUID productId) {
-        Map<SyncJobType, Map<SyncJobStatus, Long>> counts = new EnumMap<>(SyncJobType.class);
-        for (SyncJobType jobType : SyncJobType.values()) {
-            Map<SyncJobStatus, Long> byStatus = new EnumMap<>(SyncJobStatus.class);
-            UNFINISHED.forEach(status -> byStatus.put(status, 0L));
-            counts.put(jobType, byStatus);
-        }
+        Map<SyncJobType, Map<SyncJobStatus, Long>> counts = zeros();
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("statuses", UNFINISHED.stream().map(Enum::name).toList());
         String join = "";
@@ -49,6 +45,32 @@ public class UnfinishedJobCountQuery {
                 + " WHERE j.status IN (:statuses) GROUP BY j.job_type, j.status", params, rs -> {
             counts.get(SyncJobType.valueOf(rs.getString(1))).put(SyncJobStatus.valueOf(rs.getString(2)), rs.getLong(3));
         });
+        return counts;
+    }
+
+    /** {@link #count} 를 상품들에 문장 하나로. 모든 상품이 들고, 한 건도 없는 칸은 0 이다. */
+    public Map<UUID, Map<SyncJobType, Map<SyncJobStatus, Long>>> countByProduct(Collection<UUID> productIds) {
+        Map<UUID, Map<SyncJobType, Map<SyncJobStatus, Long>>> counts = new HashMap<>();
+        productIds.forEach(productId -> counts.put(productId, zeros()));
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("statuses", UNFINISHED.stream().map(Enum::name).toList())
+                .addValue("productIds", productIds.stream().map(UuidBinary::toBytes).toList());
+        jdbcTemplate.query("SELECT p.product_id, j.job_type, j.status, COUNT(*) FROM preorder_sync_jobs j"
+                + " JOIN preorders p ON p.id = j.preorder_id AND p.product_id IN (:productIds)"
+                + " WHERE j.status IN (:statuses) GROUP BY p.product_id, j.job_type, j.status", params, rs -> {
+            counts.get(UuidBinary.fromBytes(rs.getBytes(1))).get(SyncJobType.valueOf(rs.getString(2)))
+                    .put(SyncJobStatus.valueOf(rs.getString(3)), rs.getLong(4));
+        });
+        return counts;
+    }
+
+    private static Map<SyncJobType, Map<SyncJobStatus, Long>> zeros() {
+        Map<SyncJobType, Map<SyncJobStatus, Long>> counts = new EnumMap<>(SyncJobType.class);
+        for (SyncJobType jobType : SyncJobType.values()) {
+            Map<SyncJobStatus, Long> byStatus = new EnumMap<>(SyncJobStatus.class);
+            UNFINISHED.forEach(status -> byStatus.put(status, 0L));
+            counts.put(jobType, byStatus);
+        }
         return counts;
     }
 

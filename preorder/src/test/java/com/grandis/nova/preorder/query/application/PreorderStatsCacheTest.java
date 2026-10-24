@@ -1,5 +1,7 @@
 package com.grandis.nova.preorder.query.application;
 
+import com.grandis.nova.preorder.campaign.CampaignPhase;
+import com.grandis.nova.preorder.campaign.CampaignSchedule;
 import com.grandis.nova.preorder.deadletter.DeadLetterWaiting;
 import com.grandis.nova.preorder.preorder.PreorderBacklog;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
@@ -14,6 +16,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -39,7 +42,7 @@ class PreorderStatsCacheTest {
         UUID productId = UUID.randomUUID();
         PreorderStats stats = new PreorderStats(productId,
                 new PreorderBacklog(Map.of(PreorderStatus.PENDING_SYNC, 3L, PreorderStatus.CANCELED, 0L), 2,
-                        Instant.parse("2026-10-13T01:02:11.123456Z")),
+                        Instant.parse("2026-10-13T01:02:11.123456Z"), Instant.parse("2026-10-13T01:05:00.654321Z")),
                 Map.of(SyncJobType.REGISTER, Map.of(SyncJobStatus.DEAD_LETTER, 1L)),
                 new DeadLetterWaiting(4, null), Instant.parse("2026-10-13T02:15:30Z"));
         PreorderStatsCache cache = cache(redis, Duration.ofSeconds(5));
@@ -50,6 +53,26 @@ class PreorderStatsCacheTest {
         assertThat(cache.find(productId)).contains(stats);
         assertThat(cache.find(UUID.randomUUID())).as("범위마다 따로 둔다").isEmpty();
         assertThat(redis.getExpire(PreorderStatsCache.key(productId), TimeUnit.MILLISECONDS)).isBetween(1L, 5000L);
+    }
+
+    @Test
+    void 상품별_현황_페이지도_그대로_꺼내고_단계_커서_크기마다_따로_둔다() {
+        UUID productId = UUID.randomUUID();
+        ProductStatsPage page = new ProductStatsPage(List.of(new ProductStats(
+                new CampaignSchedule(productId, Instant.parse("2026-10-13T01:00:00Z"),
+                        Instant.parse("2026-10-14T01:00:00Z")),
+                new PreorderBacklog(Map.of(PreorderStatus.REGISTERED, 7L), 1, null, null),
+                Map.of(SyncJobType.CANCEL, Map.of(SyncJobStatus.PENDING, 2L)),
+                new DeadLetterWaiting(0, null))), "다음-커서", Instant.parse("2026-10-13T02:15:30Z"));
+        PreorderStatsCache cache = cache(redis, Duration.ofSeconds(5));
+        String cursor = "c-" + productId;
+
+        cache.putPage(CampaignPhase.CLOSED, cursor, 20, page);
+
+        assertThat(cache.findPage(CampaignPhase.CLOSED, cursor, 20)).contains(page);
+        assertThat(cache.findPage(CampaignPhase.OPEN, cursor, 20)).isEmpty();
+        assertThat(cache.findPage(CampaignPhase.CLOSED, cursor, 21)).isEmpty();
+        assertThat(cache.findPage(CampaignPhase.CLOSED, null, 20)).isEmpty();
     }
 
     @Test
@@ -82,6 +105,6 @@ class PreorderStatsCacheTest {
     }
 
     private PreorderStatsCache cache(StringRedisTemplate template, Duration ttl) {
-        return new PreorderStatsCache(template, jsonMapper, new PreorderStatsProperties(ttl));
+        return new PreorderStatsCache(template, jsonMapper, new PreorderStatsProperties(ttl, 20, 100));
     }
 }

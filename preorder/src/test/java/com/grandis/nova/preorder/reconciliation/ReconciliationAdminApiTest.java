@@ -4,6 +4,7 @@ import static com.grandis.nova.preorder.support.AccessTokens.admin;
 import static com.grandis.nova.preorder.support.AccessTokens.customer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.BDDMockito.given;
@@ -212,6 +213,43 @@ class ReconciliationAdminApiTest {
         asAdmin(get(RUNS + "/{runId}/findings", UUID.randomUUID()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("RECONCILIATION_RUN_NOT_FOUND"));
+    }
+
+    @Test
+    void 불일치를_상품으로_거르고_상품_이름과_실행의_상품별_건수를_준다() throws Exception {
+        UUID phone = fixtures.openPreorderProduct().productId();
+        fixtures.listing(phone, "폰", "ACTIVE", true);
+        UUID watch = fixtures.openPreorderProduct().productId();
+        fixtures.listing(watch, "시계", "ACTIVE", true);
+        UUID runId = run("COMPLETED", null, TWO_HOURS_AGO);
+        finding(runId, "STUCK", "k-1", phone);
+        finding(runId, "REGISTERED_NOT_IN_MOCK", "k-2", phone);
+        finding(runId, "STUCK", "k-3", watch);
+        finding(runId, "MOCK_ONLY", "k-4", null);
+        UUID scoped = run("COMPLETED", phone, TWO_HOURS_AGO.plusSeconds(60));
+
+        asAdmin(get(RUNS + "/{runId}/findings", runId).param("productId", phone.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.items[*].targetKey").value(contains("k-2", "k-1")))
+                .andExpect(jsonPath("$.data.items[0].productId").value(phone.toString()))
+                .andExpect(jsonPath("$.data.items[0].productName").value("폰"));
+        asAdmin(get(RUNS + "/{runId}/findings", runId).param("checkCode", "MOCK_ONLY"))
+                .andExpect(jsonPath("$.data.items[0].productId").value(nullValue()))
+                .andExpect(jsonPath("$.data.items[0].productName").value(nullValue()));
+        String run = "$.data.items[?(@.runId == '%s')]";
+        asAdmin(get(RUNS))
+                .andExpect(jsonPath(run.formatted(runId) + ".findingCountsByProduct[0].productId")
+                        .value(contains(phone.toString())))
+                .andExpect(jsonPath(run.formatted(runId) + ".findingCountsByProduct[0].productName")
+                        .value(contains("폰")))
+                .andExpect(jsonPath(run.formatted(runId) + ".findingCountsByProduct[0].count").value(contains(2)))
+                .andExpect(jsonPath(run.formatted(runId) + ".findingCountsByProduct[*].count")
+                        .value(contains(2, 1, 1)))
+                .andExpect(jsonPath(run.formatted(runId) + ".findingCountsByProduct[?(@.productName == '시계')].count")
+                        .value(contains(1)))
+                .andExpect(jsonPath(run.formatted(scoped) + ".productName").value(contains("폰")))
+                .andExpect(jsonPath(run.formatted(scoped) + ".findingCountsByProduct").value(contains(empty())));
     }
 
     @Test
@@ -588,14 +626,20 @@ class ReconciliationAdminApiTest {
     }
 
     private UUID finding(UUID runId, String checkCode, String targetKey) {
+        return finding(runId, checkCode, targetKey, null);
+    }
+
+    private UUID finding(UUID runId, String checkCode, String targetKey, UUID productId) {
         UUID id = UUID.randomUUID();
         jdbcTemplate.update("""
-                        INSERT INTO reconciliation_findings (id, run_id, check_code, target_key, be_snapshot,
-                                                             first_detected_at, action_status, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, JSON_OBJECT('token', ?, 'status', 'REGISTERED'), UTC_TIMESTAMP(6),
+                        INSERT INTO reconciliation_findings (id, run_id, check_code, target_key, product_id,
+                                                             be_snapshot, first_detected_at, action_status,
+                                                             created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, JSON_OBJECT('token', ?, 'status', 'REGISTERED'), UTC_TIMESTAMP(6),
                                 'NOT_STARTED', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
                         """,
-                UuidBinary.toBytes(id), UuidBinary.toBytes(runId), checkCode, targetKey, targetKey);
+                UuidBinary.toBytes(id), UuidBinary.toBytes(runId), checkCode, targetKey,
+                productId == null ? null : UuidBinary.toBytes(productId), targetKey);
         return id;
     }
 

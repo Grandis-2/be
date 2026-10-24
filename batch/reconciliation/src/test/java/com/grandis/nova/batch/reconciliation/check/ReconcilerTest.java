@@ -79,8 +79,8 @@ class ReconcilerTest {
     @Test
     void 확인할_것이_남긴_결과는_같은_코드_대상이면_한_번만_남는다() {
         Reconciler twice = new Reconciler(List.of(
-                (pair, scope, findings) -> findings.add("MOCK_ONLY", pair.key(), null, pair.mock()),
-                (pair, scope, findings) -> findings.add("MOCK_ONLY", pair.key(), null, pair.mock())), List.of(),
+                (pair, scope, findings) -> findings.add("MOCK_ONLY", pair.key(), null, null, pair.mock()),
+                (pair, scope, findings) -> findings.add("MOCK_ONLY", pair.key(), null, null, pair.mock())), List.of(),
                 JsonMapper.builder().build());
 
         ReconcileResult result = twice.reconcile(List.<BePreorder>of().iterator(),
@@ -104,8 +104,8 @@ class ReconcilerTest {
 
     @Test
     void 불일치가_상한을_넘으면_더_모으지_않고_판정_불가로_던진다() {
-        Reconciler flagging = new Reconciler(List.of((pair, scope, findings) -> findings.add("MOCK_ONLY", pair.key(), null,
-                pair.mock())), List.of(), JsonMapper.builder().build());
+        Reconciler flagging = new Reconciler(List.of((pair, scope, findings) -> findings.add("MOCK_ONLY", pair.key(),
+                null, null, pair.mock())), List.of(), JsonMapper.builder().build());
 
         assertThatThrownBy(() -> flagging.reconcile(List.<BePreorder>of().iterator(),
                 List.of(mock("a", PRODUCT, BEFORE), mock("b", PRODUCT, BEFORE), mock("c", PRODUCT, BEFORE)).iterator(),

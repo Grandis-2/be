@@ -2,6 +2,7 @@ package com.grandis.nova.preorder.preorder.domain;
 
 import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.preorder.AdminPreorderSearch;
+import com.grandis.nova.preorder.preorder.AdminPreorderSort;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -23,14 +24,25 @@ public class AdminPreorderSearchQuery {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    /** 최신순(created_at · id 내림차순) 한 페이지의 id. */
-    public List<UUID> findIds(AdminPreorderSearch search, int page, int size) {
+    /** 그 순서로 한 페이지의 id. */
+    public List<UUID> findIds(AdminPreorderSearch search, AdminPreorderSort sort, int page, int size) {
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("limit", size)
                 .addValue("offset", (long) page * size);
         String sql = "SELECT p.id FROM preorders p" + where(search, params)
-                + " ORDER BY p.created_at DESC, p.id DESC LIMIT :limit OFFSET :offset";
+                + " ORDER BY " + orderBy(sort) + " LIMIT :limit OFFSET :offset";
         return jdbcTemplate.query(sql, params, (rs, rowNum) -> UuidBinary.fromBytes(rs.getBytes(1)));
+    }
+
+    private static String orderBy(AdminPreorderSort sort) {
+        return switch (sort) {
+            case NEWEST -> "p.created_at DESC, p.id DESC";
+            case OLDEST -> "p.created_at ASC, p.id ASC";
+            case QUEUE_POSITION -> "p.queue_position ASC, p.id ASC";
+            // 결제 기한(결제 가능 시작 + 24시간)은 REGISTERED 에만 있다. 나머지는 기한 없이 뒤에 둔다
+            case PAYMENT_DUE -> "CASE WHEN p.status = 'REGISTERED' THEN 0 ELSE 1 END,"
+                    + " CASE WHEN p.status = 'REGISTERED' THEN p.payable_from END ASC, p.id ASC";
+        };
     }
 
     public long count(AdminPreorderSearch search) {
