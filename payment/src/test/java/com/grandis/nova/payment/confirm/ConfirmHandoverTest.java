@@ -32,6 +32,7 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -46,6 +47,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.doCallRealMethod;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
@@ -77,7 +80,7 @@ class ConfirmHandoverTest {
     @Autowired
     PaymentLedger ledger;
 
-    @Autowired
+    @MockitoSpyBean
     PaymentTransactionReader transactions;
 
     @Autowired
@@ -308,6 +311,19 @@ class ConfirmHandoverTest {
                 .isGreaterThan(Duration.ofSeconds(55)).isLessThanOrEqualTo(Duration.ofSeconds(60)));
         assertThat(reload().status()).isEqualTo(TransactionStatus.PENDING);
         assertThat(count(UnreachedConfirmMetrics.Result.HANDED_OVER)).isEqualTo(handed);
+    }
+
+    // 확보 시각을 읽은 뒤 넘기기 전에 같은 키로 다시 확보되면, 넘김 UPDATE 는 0행이지만 알림을 끝내지 않고 남은 시간만큼 미룬다
+    @Test
+    void reservedAgainBeforeHandOverIsPostponedNotDropped() {
+        reserveCheck(paymentKey, AMOUNT);
+        doReturn(Optional.of(PAST_DIRECT_FIRST)).doCallRealMethod().when(transactions).sinceReserved(opened.id());
+
+        Optional<Duration> later = handover.handle(target, opened.providerOrderId(), AMOUNT);
+
+        assertThat(later).hasValueSatisfying(delay -> assertThat(delay)
+                .isPositive().isLessThanOrEqualTo(ConfirmHandover.DIRECT_FIRST));
+        assertThat(reload().status()).isEqualTo(TransactionStatus.PENDING);
     }
 
     @Test

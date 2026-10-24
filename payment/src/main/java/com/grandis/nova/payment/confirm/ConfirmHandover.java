@@ -26,7 +26,8 @@ import java.util.Optional;
  * 결과를 이벤트로 알린다.
  *
  * - 이미 시작했거나 끝났으면 아무것도 하지 않는다(대개 이렇다). 시작 전 상태로는 돌아오지 않는다.
- * - 이르면 남은 시간만큼 미루라고 돌려준다 — 받는 쪽이 같은 큐에 지연을 두고 다시 보낸다. 그동안 직접 승인 요청이 먼저 시작한다.
+ * - 이르면(넘기려던 사이 같은 키로 다시 확보돼 이른 때로 돌아온 경우도) 남은 시간만큼 미루라고 돌려준다 — 받는 쪽이 같은 큐에 지연을 두고
+ *   다시 보낸다. 그동안 직접 승인 요청이 먼저 시작한다.
  * - 키가 없으면(다른 키가 왔다 · 시작 금지 재요청이 넘김을 껐다) · 결제창 금액이 알림의 주문 총액과 다르면 · 토스 승인 창
  *   ({@link CaptureRecovery#APPROVAL_WINDOW}, 마지막 확보부터 잰다)이 지났으면 넘기지 않는다. 만료가 닫는다. 여기의 판정은 경고 로그 ·
  *   지표용이고, 최종 판정은 넘김 UPDATE 의 조건이다.
@@ -119,9 +120,30 @@ public class ConfirmHandover {
             metrics.record(UnreachedConfirmMetrics.Result.HANDED_OVER);
             log.warn("승인 요청이 닿지 않은 결제창 — 복구에 넘김 transactionId={} orderId={} since={}",
                     seen.id(), providerOrderId.value(), since);
-        } else {
-            log.info("승인 요청이 닿지 않은 결제창 — 그사이 시작 · 만료 · 다시 확보 · 넘김 꺼짐(키 지움)이라 넘기지 않음 transactionId={}", seen.id());
+            return Optional.empty();
         }
+        Optional<Duration> reserved = waitAfterReserveAgain(seen);
+        if (reserved.isPresent()) {
+            log.info("승인 요청이 닿지 않은 결제창 — 그사이 다시 확보돼 남은 시간만큼 미룸 transactionId={}", seen.id());
+            return reserved;
+        }
+        log.info("승인 요청이 닿지 않은 결제창 — 그사이 시작 · 만료 · 넘김 꺼짐(키 지움) 등으로 넘기지 않음 transactionId={}", seen.id());
         return Optional.empty();
+    }
+
+    /**
+     * 넘김 UPDATE 가 0행일 때. 그사이 같은 키로 다시 확보돼 직접 승인 요청을 기다리는 시간 안으로 돌아왔으면 남은 시간 — 여기서 끝내면 다시
+     * 확보한 뒤의 승인 요청마저 닿지 않을 때 넘길 알림이 남지 않는다. 그 밖(시작 · 만료 · 키 지움)은 끝이다.
+     */
+    private Optional<Duration> waitAfterReserveAgain(PaymentTransaction seen) {
+        boolean stillWaiting = reader.findById(seen.id())
+                .filter(now -> now.status() == TransactionStatus.PENDING && now.providerPaymentKey() != null)
+                .isPresent();
+        if (!stillWaiting) {
+            return Optional.empty();
+        }
+        return reader.sinceReserved(seen.id())
+                .filter(since -> since.compareTo(DIRECT_FIRST) < 0)
+                .map(DIRECT_FIRST::minus);
     }
 }
