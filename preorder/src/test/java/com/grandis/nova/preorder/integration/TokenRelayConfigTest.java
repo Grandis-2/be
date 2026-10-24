@@ -27,7 +27,7 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
-/** catalog · order 클라이언트 그룹에 토큰 릴레이가 붙어, 요청한 사용자의 토큰이 실제 요청에 실리는지. */
+/** catalog · order · member 클라이언트 그룹에 토큰 릴레이가 붙어, 요청한 사용자의 토큰이 실제 요청에 실리는지. */
 class TokenRelayConfigTest {
 
     @AfterEach
@@ -36,7 +36,7 @@ class TokenRelayConfigTest {
     }
 
     @Test
-    void catalog_와_order_그룹의_내부_호출에_요청한_사용자의_토큰을_싣는다() {
+    void catalog_order_member_그룹의_내부_호출에_요청한_사용자의_토큰을_싣는다() {
         RestClient.Builder builder = RestClient.builder().baseUrl("http://catalog");
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
         RecordingGroups groups = new RecordingGroups(builder);
@@ -55,7 +55,7 @@ class TokenRelayConfigTest {
 
         client.getProduct(productId);
 
-        assertThat(groups.names).containsExactlyInAnyOrder(Dependencies.CATALOG, Dependencies.ORDER);
+        assertThat(groups.names).containsExactlyInAnyOrder(Dependencies.CATALOG, Dependencies.ORDER, Dependencies.MEMBER);
         server.verify();
     }
 

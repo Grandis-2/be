@@ -2,12 +2,14 @@ package com.grandis.nova.preorder.query.api;
 
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.common.web.ApiResponse;
+import com.grandis.nova.preorder.integration.member.MemberNames;
 import com.grandis.nova.preorder.preorder.AdminPreorderSort;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.query.application.AdminPreorderFilter;
 import com.grandis.nova.preorder.query.application.PreorderDisplayStatus;
 import com.grandis.nova.preorder.query.application.PreorderNoteService;
 import com.grandis.nova.preorder.query.application.PreorderQueryService;
+import com.grandis.nova.preorder.query.application.PreorderView;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 import com.grandis.nova.preorder.web.PageSizes;
 import io.swagger.v3.oas.annotations.Operation;
@@ -22,10 +24,14 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/** 관리자 예약 조회. 권한은 보안 설정이 경로로 막는다(ADMIN). */
+/**
+ * 관리자 예약 조회. 권한은 보안 설정이 경로로 막는다(ADMIN).
+ * 회원 이름(customerName)은 예약을 읽은 뒤 member 에게 한 번에 묻는다({@link MemberNames}) — 받지 못하면 이름만 비우고 응답한다.
+ */
 @Tag(name = "관리자 · 예약")
 @RestController
 @RequestMapping("/api/v1/admin/preorders")
@@ -33,17 +39,20 @@ class AdminPreorderQueryController {
 
     private final PreorderQueryService queryService;
     private final PreorderNoteService noteService;
+    private final MemberNames memberNames;
 
-    AdminPreorderQueryController(PreorderQueryService queryService, PreorderNoteService noteService) {
+    AdminPreorderQueryController(PreorderQueryService queryService, PreorderNoteService noteService, MemberNames memberNames) {
         this.queryService = queryService;
         this.noteService = noteService;
+        this.memberNames = memberNames;
     }
 
     /** 상태 · 화면 단계 · 회원 · 상품 · 옵션 · 배송 차수 · 외부 예약 번호 · 기간 · 등록 작업 상태로 거른다. 전량을 내려주지 않는다. */
     @Operation(summary = "예약 목록 — 상태 · 화면 단계 · 회원 · 상품 · 옵션 · 배송 차수 · 외부 예약 번호 · 기간 · 등록 작업 상태로 거름",
             description = "optionId · batchNumber · sort=QUEUE_POSITION 은 productId 와 함께 보낸다(없으면 400). "
                     + "status 와 displayStatus 가 맞지 않으면 빈 목록. sort 는 NEWEST(기본) · OLDEST · QUEUE_POSITION · "
-                    + "PAYMENT_DUE(결제 대기를 기한 임박순으로 앞에) 이고, 같으면 예약 id 순이다")
+                    + "PAYMENT_DUE(결제 대기를 기한 임박순으로 앞에) 이고, 같으면 예약 id 순이다. "
+                    + "customerName 은 가린 회원 이름(예: 김**)이고, 회원 정보를 받지 못하면 null")
     @GetMapping
     public ApiResponse<OffsetPage<AdminPreorderSummaryResponse>> list(
             @RequestParam(required = false) PreorderStatus status,
@@ -63,15 +72,15 @@ class AdminPreorderQueryController {
         String reference = externalReference == null || externalReference.isBlank() ? null : externalReference.strip();
         AdminPreorderFilter filter = new AdminPreorderFilter(status, customerId, productId, from, to,
                 registerJobStatus, reference, displayStatus, optionId, batchNumber, sort);
-        return ApiResponse.ok(queryService
-                .findForAdmin(filter, PageSizes.requirePage(page), PageSizes.require(size))
-                .map(AdminPreorderSummaryResponse::from));
+        OffsetPage<PreorderView.AdminSummary> found = queryService.findForAdmin(filter, PageSizes.requirePage(page), PageSizes.require(size));
+        Map<UUID, String> names = memberNames.find(found.items().stream().map(view -> view.preorder().customerId()).toList());
+        return ApiResponse.ok(found.map(view -> AdminPreorderSummaryResponse.from(view, names.get(view.preorder().customerId()))));
     }
 
     @Operation(summary = "예약 상세 — 동기화 작업 · 시도 · 이력 포함")
     @GetMapping("/{preorderId}")
     public ApiResponse<AdminPreorderDetailResponse> get(@PathVariable String preorderId) {
-        return ApiResponse.ok(AdminPreorderDetailResponse.from(queryService.findOneForAdmin(preorderId)));
+        return ApiResponse.ok(detail(preorderId));
     }
 
     /**
@@ -83,6 +92,12 @@ class AdminPreorderQueryController {
     public ApiResponse<AdminPreorderDetailResponse> updateNote(@PathVariable String preorderId,
                                                                @RequestBody Map<String, Object> request) {
         noteService.changeInternalNote(preorderId, InternalNotes.require(request));
-        return ApiResponse.ok(AdminPreorderDetailResponse.from(queryService.findOneForAdmin(preorderId)));
+        return ApiResponse.ok(detail(preorderId));
+    }
+
+    private AdminPreorderDetailResponse detail(String preorderId) {
+        PreorderView.AdminDetail view = queryService.findOneForAdmin(preorderId);
+        UUID customerId = view.preorder().customerId();
+        return AdminPreorderDetailResponse.from(view, memberNames.find(List.of(customerId)).get(customerId));
     }
 }

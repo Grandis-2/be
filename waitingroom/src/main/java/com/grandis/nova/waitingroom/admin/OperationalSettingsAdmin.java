@@ -16,8 +16,13 @@ import com.grandis.nova.waitingroom.control.SnapshotHolder;
 import com.grandis.nova.waitingroom.domain.admission.AdmissionDecider;
 import com.grandis.nova.waitingroom.domain.product.MaxWait;
 import com.grandis.nova.waitingroom.domain.product.ProductState;
+import com.grandis.nova.waitingroom.domain.product.RuntimeState;
+import com.grandis.nova.waitingroom.domain.product.SalesPhase;
+import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
+import com.grandis.nova.waitingroom.domain.queue.EtaCredit;
 import com.grandis.nova.waitingroom.domain.queue.LeaveGrace;
 import com.grandis.nova.waitingroom.redis.ControlStore;
+import com.grandis.nova.waitingroom.redis.ControlStore.SettingAudit;
 import com.grandis.nova.waitingroom.redis.RedisKeys;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -36,7 +41,8 @@ import java.util.TreeSet;
 import java.util.concurrent.TimeoutException;
 
 /**
- * 운영값(초당 입장 인원 · 모델별 상한 · 최대 대기 시간 · 이탈 유예)을 Redis 에 쓰고 읽는다. 바꾼 사람 · 시각 · 전후 값을 남긴다.
+ * 운영값(초당 입장 인원 · 모델별 상한 · 최대 대기 시간 · 이탈 유예)을 Redis 에 쓰고 읽는다. 바꾼 사람 · 시각 · 전후 값을
+ * 변경 이력(값과 같은 스크립트)과 로그에 남긴다.
  * 전역 0 은 입장 일시 정지다(줄은 그대로). 상한을 낮춰도 이미 선 사람은 빼지 않는다.
  */
 @Component
@@ -53,15 +59,17 @@ class OperationalSettingsAdmin {
     private final RedisClock clock;
     private final Leadership leadership;
     private final MeterRegistry registry;
+    private final ChangeLogProperties changeLog;
 
     OperationalSettingsAdmin(ControlStore store, AdmissionProperties defaults, SnapshotHolder snapshots,
-                             RedisClock clock, Leadership leadership, MeterRegistry registry) {
+                             RedisClock clock, Leadership leadership, MeterRegistry registry, ChangeLogProperties changeLog) {
         this.store = store;
         this.defaults = defaults;
         this.snapshots = snapshots;
         this.clock = clock;
         this.leadership = leadership;
         this.registry = registry;
+        this.changeLog = changeLog;
     }
 
     Mono<AdmissionRateView> admissionRate() {
@@ -76,9 +84,10 @@ class OperationalSettingsAdmin {
         long checked = checked("globalCredit", value, 0, defaults.maxGlobalCredit());
         Mono<Optional<String>> write = Mono.defer(() -> store.readSettings().flatMap(raw -> {
                     long current = settings(raw).globalCredit();
-                    AdmissionRateGuide.check(checked, current, confirmed, guide(current));
+                    boolean overRecommended = AdmissionRateGuide.check(checked, current, confirmed, guide(current));
                     return store.compareAndSetSetting(OperationalSettings.GLOBAL_CREDIT,
-                            Optional.ofNullable(raw.get(OperationalSettings.GLOBAL_CREDIT)), String.valueOf(checked));
+                            Optional.ofNullable(raw.get(OperationalSettings.GLOBAL_CREDIT)), String.valueOf(checked),
+                            audit(actor, overRecommended));
                 }))
                 .repeatWhenEmpty(SETTING_RACE_RETRIES, attempts -> attempts)
                 .switchIfEmpty(Mono.error(() -> new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE)));
@@ -88,24 +97,25 @@ class OperationalSettingsAdmin {
     Mono<AdmissionRateView> setProductCap(String actor, String productId, Long value) {
         String field = RedisKeys.capField(checkedProduct(productId));
         long checked = checked("cap", value, 1, defaults.maxGlobalCredit());
-        return change(actor, field, store.writeSetting(field, String.valueOf(checked)), String.valueOf(checked));
+        return change(actor, field, store.writeSetting(field, String.valueOf(checked), audit(actor, false)),
+                String.valueOf(checked));
     }
 
     Mono<AdmissionRateView> setMaxWait(String actor, Long seconds) {
         long checked = checked("seconds", seconds, 1, MAX_WAIT_SECONDS);
         return change(actor, OperationalSettings.MAX_WAIT_SEC, store.writeSetting(OperationalSettings.MAX_WAIT_SEC,
-                String.valueOf(checked)), String.valueOf(checked));
+                String.valueOf(checked), audit(actor, false)), String.valueOf(checked));
     }
 
     /** 다음 조회부터 적용된다. 이미 써 둔 생존 신호는 그대로라 늘린 직후에는 옛 시간으로 걷힐 수 있다. */
     Mono<AdmissionRateView> setLeaveGrace(String actor, Long seconds) {
         long checked = checked("seconds", seconds, LeaveGrace.MIN.toSeconds(), LeaveGrace.MAX.toSeconds());
         return change(actor, OperationalSettings.LEAVE_GRACE_SEC, store.writeSetting(OperationalSettings.LEAVE_GRACE_SEC,
-                String.valueOf(checked)), String.valueOf(checked));
+                String.valueOf(checked), audit(actor, false)), String.valueOf(checked));
     }
 
     Mono<AdmissionRateView> clear(String actor, String field) {
-        return change(actor, field, store.clearSetting(field), null);
+        return change(actor, field, store.clearSetting(field, audit(actor, false)), null);
     }
 
     Mono<AdmissionRateView> clearProductCap(String actor, String productId) {
@@ -124,6 +134,7 @@ class OperationalSettingsAdmin {
                             snapshot.map(GatewaySnapshot::brakeFactor).orElse(null),
                             snapshot.map(current -> current.meta().maxWait().duration()).map(Duration::toSeconds).orElse(null),
                             snapshot.map(current -> current.meta().leaveGrace().toSeconds()).orElse(null),
+                            snapshot.map(current -> current.meta().maxWait().duration()).map(Duration::toSeconds).orElse(null),
                             snapshot.map(this::products).orElse(List.of()));
                 });
     }
@@ -133,15 +144,31 @@ class OperationalSettingsAdmin {
                 .sorted(Map.Entry.comparingByKey())
                 .map(entry -> {
                     ProductState state = entry.getValue();
-                    return new ProductStatus(entry.getKey(), state.phaseAt(clock.now()).name(), state.runtime().name(),
+                    SalesPhase phase = state.phaseAt(clock.now());
+                    return new ProductStatus(entry.getKey(), phase.name(), state.runtime().name(),
                             state.waiting(), state.credit(), state.cap() == ProductState.UNLIMITED_CAP ? null : state.cap(),
-                            state.window().opensAt(), state.window().closesAt());
+                            state.window().opensAt(), state.window().closesAt(),
+                            estimatedWait(state, phase, snapshot.meta()));
                 })
                 .toList();
     }
 
+    /**
+     * 지금 줄을 서면 앞선 대기 인원이 다 빠지기까지의 시간. 접수 기간 밖이거나 리더가 마감으로 본 줄, 멈춘 줄(비공개 · 전체 입장
+     * 정지)은 움직이지 않으니 모른다 — 줄이 비어도 0(바로 입장)이 아니다. 이 노드의 시계로는 접수 중이어도 리더가 먼저 마감했을 수 있다.
+     */
+    private static Long estimatedWait(ProductState state, SalesPhase phase, SnapshotMeta meta) {
+        if (phase != SalesPhase.OPEN || state.runtime() == RuntimeState.CLOSED || EtaCredit.paused(state, meta)) {
+            return null;
+        }
+        double eta = EtaCredit.etaSec(state.waiting(), state, meta);
+        return Double.isFinite(eta) && eta >= 0 ? (long) Math.ceil(eta) : null;
+    }
+
     private Mono<AdmissionRateView> change(String actor, String field, Mono<Optional<String>> write, String after) {
         return write
+                // 같은 값을 다시 보냈거나 없던 값을 지웠으면 바뀐 것이 아니다 — 이력과 같이 로그 · 지표도 남기지 않는다
+                .filter(before -> !before.equals(Optional.ofNullable(after)))
                 .doOnNext(before -> {
                     log.info("운영값 변경 actor={} field={} before={} after={}", actor, field, before.orElse("(기본값)"),
                             after == null ? "(기본값)" : after);
@@ -150,6 +177,10 @@ class OperationalSettingsAdmin {
                 })
                 .then(admissionRate())
                 .onErrorMap(OperationalSettingsAdmin::storeFailure, OperationalSettingsAdmin::unavailable);
+    }
+
+    private SettingAudit audit(String actor, boolean confirmed) {
+        return new SettingAudit(actor, confirmed, changeLog.maxEntries(), changeLog.retention());
     }
 
     private OperationalSettings settings(Map<String, String> raw) {
@@ -226,11 +257,11 @@ class OperationalSettingsAdmin {
         return productId;
     }
 
-    private static boolean storeFailure(Throwable e) {
+    static boolean storeFailure(Throwable e) {
         return e instanceof DataAccessException || e instanceof TimeoutException;
     }
 
-    private static BusinessException unavailable(Throwable cause) {
+    static BusinessException unavailable(Throwable cause) {
         log.warn("운영값 저장소를 쓰지 못했다: {}", cause.toString());
         return new BusinessException(CommonErrorCode.DEPENDENCY_UNAVAILABLE);
     }

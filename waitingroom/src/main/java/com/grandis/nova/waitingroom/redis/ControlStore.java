@@ -116,33 +116,70 @@ public class ControlStore {
         return redis.opsForValue().set(marker, "1", quietPeriod);
     }
 
-    /** 운영값 한 칸을 쓴다. 리더가 다음 회차에 읽는다. @return 쓰기 전 값(감사 로그용) */
-    public Mono<Optional<String>> writeSetting(String field, String value) {
-        return swapSetting(field, "set", value);
+    /** 운영값 한 칸을 쓰고 변경 이력을 남긴다. 리더가 다음 회차에 읽는다. @return 쓰기 전 값(감사 로그용) */
+    public Mono<Optional<String>> writeSetting(String field, String value, SettingAudit audit) {
+        return swapSetting(field, "set", value, audit);
     }
 
     /**
-     * 읽은 때 값({@code expected}, 없었으면 빈 값)이 그대로일 때만 바꾼다.
+     * 읽은 때 값({@code expected}, 없었으면 빈 값)이 그대로일 때만 바꾸고 변경 이력을 남긴다.
      *
      * @return 바꿨으면 전 값(감사 로그용), 그사이 다른 값이 들어왔으면 빈 Mono
      */
-    public Mono<Optional<String>> compareAndSetSetting(String field, Optional<String> expected, String value) {
-        return scripts.list(scripts.compareSetSetting, List.of(RedisKeys.SETTINGS),
-                        List.of(field, expected.isPresent() ? "present" : "absent", expected.orElse(""), value))
+    public Mono<Optional<String>> compareAndSetSetting(String field, Optional<String> expected, String value,
+                                                       SettingAudit audit) {
+        List<String> args = new ArrayList<>(List.of(field, expected.isPresent() ? "present" : "absent",
+                expected.orElse(""), value));
+        args.addAll(audit.args());
+        return scripts.list(scripts.compareSetSetting, List.of(RedisKeys.SETTINGS, RedisKeys.SETTING_CHANGES), args)
                 .filter(reply -> LuaScripts.number(reply, 0) == 1)
                 .map(reply -> reply.size() > 1 && reply.get(1) != null ? Optional.of(LuaScripts.text(reply, 1))
                         : Optional.<String>empty());
     }
 
-    /** 운영값 한 칸을 지워 기본값으로 돌린다. @return 지운 값(감사 로그용) */
-    public Mono<Optional<String>> clearSetting(String field) {
-        return swapSetting(field, "clear", "");
+    /** 운영값 한 칸을 지워 기본값으로 돌리고 변경 이력을 남긴다. @return 지운 값(감사 로그용) */
+    public Mono<Optional<String>> clearSetting(String field, SettingAudit audit) {
+        return swapSetting(field, "clear", "", audit);
     }
 
-    /** 바꾸기와 전 값 읽기를 한 번에 — 동시에 바꿔도 감사 로그의 전 값이 맞다. */
-    private Mono<Optional<String>> swapSetting(String field, String mode, String value) {
-        return redis.execute(scripts.swapSetting, List.of(RedisKeys.SETTINGS), List.of(field, mode, value))
+    /** 바꾸기와 전 값 읽기 · 이력 남기기를 한 번에 — 동시에 바꿔도 감사 로그의 전 값이 맞다. */
+    private Mono<Optional<String>> swapSetting(String field, String mode, String value, SettingAudit audit) {
+        List<String> args = new ArrayList<>(List.of(field, mode, value));
+        args.addAll(audit.args());
+        return redis.execute(scripts.swapSetting, List.of(RedisKeys.SETTINGS, RedisKeys.SETTING_CHANGES), args)
                 .next().map(Optional::of).defaultIfEmpty(Optional.empty());
+    }
+
+    /**
+     * 운영값 변경 이력을 최신부터 읽는다.
+     *
+     * @param from   이 시각 이후(포함). 없으면 처음부터
+     * @param to     이 시각까지(포함). 없으면 끝까지
+     * @param before 이 이력 id 보다 앞선 것만(제외). {@code to} 와 함께 오면 더 이른 쪽을 끝으로 쓴다
+     */
+    @SuppressWarnings("unchecked")
+    public Mono<List<SettingChange>> readSettingChanges(Instant from, Instant to, String before, int count) {
+        String end = to != null ? String.valueOf(to.toEpochMilli()) : "+";
+        if (before != null && (to == null || Long.parseLong(before.substring(0, before.indexOf('-'))) <= to.toEpochMilli())) {
+            end = "(" + before;
+        }
+        // 이력 id 는 밀리초다 — 밀리초 아래가 있는 시작 시각은 다음 밀리초부터 읽어야 그보다 이른 변경이 끼지 않는다
+        String start = from == null ? "-"
+                : String.valueOf(from.toEpochMilli() + (from.getNano() % 1_000_000 == 0 ? 0 : 1));
+        return scripts.list(scripts.readSettingChanges, List.of(RedisKeys.SETTING_CHANGES),
+                        List.of(end, start, String.valueOf(count)))
+                .map(reply -> reply.stream().map(row -> {
+                    List<Object> entry = (List<Object>) row;
+                    String id = LuaScripts.text(entry, 0);
+                    List<Object> pairs = (List<Object>) entry.get(1);
+                    Map<String, String> fields = new LinkedHashMap<>();
+                    for (int i = 0; i + 1 < pairs.size(); i += 2) {
+                        fields.put(LuaScripts.text(pairs, i), LuaScripts.text(pairs, i + 1));
+                    }
+                    return new SettingChange(id, Instant.ofEpochMilli(Long.parseLong(id.substring(0, id.indexOf('-')))),
+                            fields);
+                }).toList())
+                .defaultIfEmpty(List.of());
     }
 
     /** 지금 리더의 노드 ID. 없으면 빈 값. */
@@ -265,5 +302,23 @@ public class ControlStore {
     }
 
     public record SweepResult(long swept, String nextCursor, boolean fenced, long reaped) {
+    }
+
+    /**
+     * 운영값을 바꾼 사람과 이력 보존 한도.
+     *
+     * @param confirmed  권장 상한을 넘겨 확인을 받고 바꿨다
+     * @param maxEntries 이력을 이 건수까지만 남긴다
+     * @param retention  이력을 이 기간까지만 남긴다
+     */
+    public record SettingAudit(String actor, boolean confirmed, long maxEntries, Duration retention) {
+
+        List<String> args() {
+            return List.of(actor, confirmed ? "1" : "0", String.valueOf(maxEntries), String.valueOf(retention.toMillis()));
+        }
+    }
+
+    /** @param id 스트림 id — 다음 쪽을 읽을 커서로 쓴다. @param at 바꾼 Redis 시각 */
+    public record SettingChange(String id, Instant at, Map<String, String> fields) {
     }
 }

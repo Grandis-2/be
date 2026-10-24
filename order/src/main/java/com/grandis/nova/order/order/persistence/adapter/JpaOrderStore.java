@@ -126,6 +126,35 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     @Override
+    public int cancelUnconfirmedReleasingStock(UUID orderId, Instant now) {
+        int updated = orders.cancelUnconfirmedReleasingStock(orderId, now);
+        entityManager.detach(entityManager.getReference(OrderJpaEntity.class, orderId));
+        return updated;
+    }
+
+    @Override
+    public int markAutoRefundRequested(UUID orderId, String providerOrderId, Instant now) {
+        int updated = orders.markAutoRefundRequested(orderId, providerOrderId, now);
+        entityManager.detach(entityManager.getReference(OrderJpaEntity.class, orderId));
+        return updated;
+    }
+
+    @Override
+    public Optional<String> unconfirmedProviderOrderId(UUID orderId) {
+        return orders.findUnconfirmedProviderOrderId(orderId);
+    }
+
+    @Override
+    public Optional<Instant> autoRefundRequestedAt(UUID orderId) {
+        return orders.findAutoRefundRequestedAt(orderId);
+    }
+
+    @Override
+    public Optional<Instant> findAutoRefundRequestedAt(UUID orderId) {
+        return orders.findAutoRefundRequestedAt(orderId);
+    }
+
+    @Override
     public int markRefundFailed(UUID orderId, Instant now) {
         int updated = orders.markRefundFailed(orderId, now);
         entityManager.detach(entityManager.getReference(OrderJpaEntity.class, orderId));
@@ -176,6 +205,13 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     @Override
     public long eventSequence(UUID orderId) {
         return orders.findEventSequence(orderId);
+    }
+
+    @Override
+    public List<Order> findUnconfirmedAuthorizingOrders(Instant dueBefore, ExpiredOrderPosition after, int limit) {
+        return orders.findExpiredAfter(DUE_SOURCES, OrderStatus.AUTHORIZING, dueBefore, after.paymentDueAt(), after.id(),
+                        Limit.of(limit))
+                .stream().map(OrderMapper::toDomain).toList();
     }
 
     @Override

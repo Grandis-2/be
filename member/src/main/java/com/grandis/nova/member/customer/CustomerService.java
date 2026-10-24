@@ -58,10 +58,11 @@ public class CustomerService {
      * (PUT /me/profile 에 빈 값을 보내면 그 칸이 null 이 된다 — ProfileRequest).
      * 이름은 가려서 낸다 — 첫 글자(성)만 남기고 뒤는 길이와 상관없이 "**"(김철수 · 김철 → 김**). 리뷰 작성자명과 같은 모양(2026-10-14 결정).
      */
-    @Transactional(readOnly = true)
     public List<MemberName> names(Collection<UUID> customerIds) {
         LinkedHashSet<UUID> ordered = new LinkedHashSet<>(customerIds);
-        Map<UUID, Customer> found = customers.findAllById(ordered).stream().collect(Collectors.toMap(Customer::getId, Function.identity()));
+        // 트랜잭션을 열지 않는다 — 선언한 쿼리 한 문장({@link CustomerRepository#findNames})
+        Map<UUID, CustomerRepository.NameRow> found = customers.findNames(ordered).stream()
+                .collect(Collectors.toMap(CustomerRepository.NameRow::id, Function.identity()));
         return ordered.stream().filter(found::containsKey).map(id -> MemberName.of(found.get(id))).toList();
     }
 
@@ -70,10 +71,10 @@ public class CustomerService {
 
         private static final String MASK = "**";
 
-        static MemberName of(Customer customer) {
+        static MemberName of(CustomerRepository.NameRow row) {
             // 앱 쓰기 경로(ProfileRequest)는 빈 값을 null 로 바꾸지만 DB CHECK 는 없다 — 공백뿐인 실명도 없는 것으로 본다(catalog 와 같다)
-            String name = customer.profile().name();
-            return new MemberName(customer.getId(), mask(name != null && !name.isBlank() ? name : customer.getDisplayName()));
+            String name = row.name();
+            return new MemberName(row.id(), mask(name != null && !name.isBlank() ? name : row.displayName()));
         }
 
         /** 첫 글자(코드포인트) + "**". 비었으면 "***". catalog 리뷰 작성자명(ReviewService.mask)과 같은 규칙이다. */

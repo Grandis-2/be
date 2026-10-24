@@ -8,8 +8,9 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * 회원 알림(contracts/notification-events.md). member 가 받아 받는 회원마다 알림 표에 한 행씩 저장한다. member 에는 응모를 읽을 길이 없어
- * 화면에 보일 값(문구 · 갈 곳)을 여기서 완성해 싣는다. 계약은 한 메시지에 1~1,000명이지만 order 의 알림(당첨)은 응모마다 한 명이다.
+ * 회원 알림(contracts/notification-events.md). member 가 받아 받는 회원마다 알림 표에 한 행씩 저장한다. member 에는 응모 · 주문을 읽을 길이
+ * 없어 화면에 보일 값(문구 · 갈 곳)을 여기서 완성해 싣는다. 계약은 한 메시지에 1~1,000명이지만 order 의 알림(당첨 · 결제 실패)은 응모 · 주문마다
+ * 한 명이다.
  *
  * 길이를 넘거나 빈 값이면 member 가 거절한다(DLQ). 그때는 order 가 이미 커밋해 되돌릴 수 없으므로 만들 때 막는다.
  *
@@ -46,6 +47,25 @@ public record NotificationRequested(@JsonIgnore UUID aggregateId, List<UUID> rec
                 new Target(TargetType.DRAW, drawId.toString()));
     }
 
+    /** 장바구니 · 바로 구매 주문을 결제 결과를 끝내 몰라 취소했다 — 취소한 트랜잭션에서 한 건. */
+    public static NotificationRequested paymentUnconfirmed(UUID orderId, UUID customerId) {
+        Kind kind = Kind.PAYMENT_UNCONFIRMED;
+        return new NotificationRequested(orderId, List.of(customerId), kind, kind.title, kind.body,
+                new Target(TargetType.ORDER, orderId.toString()));
+    }
+
+    /**
+     * 사전예약 주문의 결제가 나중에 실패로 확정됐다(결과 이벤트로 받은 거절) — 결제 대기로 되돌린 트랜잭션에서 한 건. 승인 응답으로 바로 받은
+     * 거절은 고객이 화면에서 이미 봤으므로 보내지 않는다. 갈 곳은 예약(공개 UUID)이고, 비어 있으면(구버전이 만든 주문) 주문이다.
+     */
+    public static NotificationRequested preorderPaymentFailed(UUID orderId, UUID customerId, String preorderToken) {
+        Kind kind = Kind.PREORDER_PAYMENT_FAILED;
+        Target target = preorderToken == null || preorderToken.isBlank()
+                ? new Target(TargetType.ORDER, orderId.toString())
+                : new Target(TargetType.PREORDER, preorderToken);
+        return new NotificationRequested(orderId, List.of(customerId), kind, kind.title, kind.body, target);
+    }
+
     @Override
     public OutboundEventType eventType() {
         return OutboundEventType.NOTIFICATION_REQUESTED;
@@ -58,7 +78,10 @@ public record NotificationRequested(@JsonIgnore UUID aggregateId, List<UUID> rec
 
     /** order 가 보내는 알림 종류 · 원인 · 고정 문구. 계약의 표와 같아야 한다. */
     public enum Kind {
-        DRAW_WON(AggregateType.DRAW_ENTRY, "럭키 드로우 당첨", "축하해요! 럭키 드로우에 당첨됐어요.");
+        DRAW_WON(AggregateType.DRAW_ENTRY, "럭키 드로우 당첨", "축하해요! 럭키 드로우에 당첨됐어요."),
+        PAYMENT_UNCONFIRMED(AggregateType.ORDER, "결제 확인 실패",
+                "결제를 확인하지 못해 주문이 취소됐어요. 결제된 금액이 있으면 자동으로 환불돼요."),
+        PREORDER_PAYMENT_FAILED(AggregateType.ORDER, "결제 실패", "결제가 완료되지 않았어요. 내 예약에서 결제 상태를 확인해 주세요.");
 
         private final AggregateType aggregateType;
         private final String title;
@@ -73,7 +96,11 @@ public record NotificationRequested(@JsonIgnore UUID aggregateId, List<UUID> rec
 
     public enum TargetType {
         /** 회차 id — 드로우 상세 · 내 응모 결과 */
-        DRAW
+        DRAW,
+        /** 주문 id — 주문 상세 */
+        ORDER,
+        /** 예약 공개 UUID — 사전예약 상세 */
+        PREORDER
     }
 
     public record Target(TargetType type, String id) {

@@ -47,6 +47,13 @@ public class OrderJpaEntity extends BaseEntity {
     @Column(updatable = false, length = 64)
     private String authorizingProviderOrderId;
 
+    /**
+     * 결과를 끝내 몰라 취소한 장바구니 · 바로 구매 주문의 마지막 결제창(ck_order_unconfirmed_attempt). 늦게 온 승인이 이 결제창일 때만 자동 환불한다.
+     * 원장의 벌크 UPDATE 로만 적고 스칼라 조회 · UPDATE 조건으로만 쓴다. 도메인 주문에는 싣지 않는다.
+     */
+    @Column(updatable = false, length = 64)
+    private String unconfirmedProviderOrderId;
+
     @Column(nullable = false, updatable = false, precision = 12, scale = 0)
     private BigDecimal totalAmount;
 
@@ -58,6 +65,10 @@ public class OrderJpaEntity extends BaseEntity {
 
     @Column(updatable = false)
     private Instant refundFailedAt;
+
+    /** 위 결제창의 늦은 승인을 자동 환불하라고 요청한 시각(ck_order_auto_refund). 한 번만 적는다. 도메인 주문에는 싣지 않는다. */
+    @Column(updatable = false)
+    private Instant autoRefundRequestedAt;
 
     @Column(updatable = false)
     private Instant paidAt;

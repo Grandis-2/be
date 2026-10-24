@@ -39,7 +39,7 @@
 
 | 칸 | 뜻 |
 | --- | --- |
-| `aggregateType` · `aggregateId` | 알림이 생긴 원인(예약 · 회차 · 응모). member 는 추적용으로만 저장한다. `aggregateType` 은 30자 이하 |
+| `aggregateType` · `aggregateId` | 알림이 생긴 원인(예약 · 회차 · 응모 · 주문). member 는 추적용으로만 저장한다. `aggregateType` 은 30자 이하 |
 | `payload.recipientIds` | 받는 회원 id 목록(UUID 문자열) 1~1,000개, 겹치지 않게. 비었거나 1,000개를 넘거나 겹치면 거절한다 |
 | `payload.kind` | 알림 종류(아래 표). 화면의 아이콘 · 분류용이다. member 는 값을 검사하지 않는다 |
 | `payload.title` | 제목. 1~100자 |
@@ -58,6 +58,8 @@
 | `PREORDER_CANCELED` | preorder | 예약 취소가 끝나 `CANCELING → CANCELED` 가 될 때(아래 "취소 알림") | 예약한 회원 | `PREORDER`(예약 내부 id) | `PREORDER` · 예약 공개 토큰(`preorderToken`) |
 | `DRAW_WON` | order | 추첨 결과를 반영할 때 — 당첨 응모 | 응모한 회원 | `DRAW_ENTRY`(응모 id) | `DRAW` · 회차 id |
 | `PREORDER_OPENED` | preorder | 회차가 열릴 때(아래 "오픈 알림") | 그 상품에 오픈 알림을 신청한 회원 | `PREORDER_CAMPAIGN`(상품 id) | `PRODUCT` · 상품 id |
+| `PAYMENT_UNCONFIRMED` | order | 장바구니 · 바로 구매 주문을 결제 결과를 끝내 몰라 취소할 때(만든 뒤 20분, `AUTHORIZING → CANCELED`) | 주문한 회원 | `ORDER`(주문 id) | `ORDER` · 주문 id |
+| `PREORDER_PAYMENT_FAILED` | order | 사전예약 주문의 결제가 나중에 실패로 확정돼 결제 대기로 돌아갈 때(결과 이벤트의 거절 · 만료). 승인 응답으로 바로 받은 거절은 화면이 이미 보여 보내지 않는다 | 주문한 회원 | `ORDER`(주문 id) | `PREORDER` · 예약 공개 토큰(없으면 `ORDER` · 주문 id) |
 
 문구는 오픈 알림의 상품명과 취소 알림의 본문(취소 까닭 · 결제 여부)을 빼면 고정이다. 드로우는 당첨자에게만 보낸다 — 낙첨은 드로우 상세(내 응모 결과)에서 본다. 결과 반영 트랜잭션이 회차를 잠근 채 도는데, 낙첨까지 보내면 그 안의 INSERT 가 응모 수만큼 늘기 때문이다(당첨 인원만큼이면 당첨 주문을 만드는 수와 같다).
 
@@ -67,6 +69,8 @@
 | `PREORDER_CANCELED` | 사전예약 취소 | 사용자 취소: 사전예약 취소가 완료됐어요.<br>결제 기한 만료: 결제 기한이 지나 사전예약이 취소됐어요.<br>관리자 취소 · 회차 판매 중지: 사전예약이 취소됐어요.<br>결제된 예약이면 뒤에 ` 결제하신 금액은 환불됐어요.` 를 붙인다 |
 | `DRAW_WON` | 럭키 드로우 당첨 | 축하해요! 럭키 드로우에 당첨됐어요. |
 | `PREORDER_OPENED` | 사전예약 오픈 | 알림 신청하신 `{상품명}` 사전예약이 시작됐어요. |
+| `PAYMENT_UNCONFIRMED` | 결제 확인 실패 | 결제를 확인하지 못해 주문이 취소됐어요. 결제된 금액이 있으면 자동으로 환불돼요. |
+| `PREORDER_PAYMENT_FAILED` | 결제 실패 | 결제가 완료되지 않았어요. 내 예약에서 결제 상태를 확인해 주세요. |
 
 **`target.type` 과 프론트 화면.**
 
@@ -75,6 +79,7 @@
 | `PRODUCT` | 상품 id | 사전예약 상품 상세 | `GET /api/v1/products/{productId}` |
 | `PREORDER` | 예약 공개 토큰 | 내 예약 상세 | `GET /api/v1/preorders/{preorderId}` (공개 토큰) |
 | `DRAW` | 회차 id | 드로우 상세 · 내 응모 결과 | `GET /api/v1/draws/{drawId}` · `GET /api/v1/draws/{drawId}/entries/me` |
+| `ORDER` | 주문 id | 주문 상세 | `GET /api/v1/orders/{orderId}` |
 
 모르는 `type` 이 오면 프론트는 이동하지 않고 알림만 보인다(종류가 늘 수 있다).
 

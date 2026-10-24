@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
@@ -27,10 +28,12 @@ import java.time.Clock;
 class WaitingroomAdminController {
 
     private final OperationalSettingsAdmin settings;
+    private final SettingChanges changes;
     private final Clock clock;
 
-    WaitingroomAdminController(OperationalSettingsAdmin settings, Clock clock) {
+    WaitingroomAdminController(OperationalSettingsAdmin settings, SettingChanges changes, Clock clock) {
         this.settings = settings;
+        this.changes = changes;
         this.clock = clock;
     }
 
@@ -95,6 +98,15 @@ class WaitingroomAdminController {
     @GetMapping("/status")
     Mono<ApiResponse<WaitingroomStatusView>> status(ServerWebExchange exchange) {
         return settings.status().map(view -> ok(view, exchange));
+    }
+
+    /** 운영값 변경 이력, 최신부터. 다음 쪽은 응답의 nextCursor 를 cursor 로 보낸다. from · to 는 ISO-8601 시각(포함). */
+    @GetMapping("/changes")
+    Mono<ApiResponse<SettingChangesView>> changes(@RequestParam(required = false) String from,
+                                                  @RequestParam(required = false) String to,
+                                                  @RequestParam(required = false) String cursor,
+                                                  @RequestParam(required = false) String size, ServerWebExchange exchange) {
+        return changes.read(from, to, cursor, size).map(view -> ok(view, exchange));
     }
 
     private <T> ApiResponse<T> ok(T data, ServerWebExchange exchange) {

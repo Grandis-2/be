@@ -27,6 +27,8 @@ public class StockMismatches {
         CART_PAYMENT("cart-payment"),
         /** 결제 안 된 장바구니 · 바로 구매 주문 취소(사용자 · 만료)의 반환에서 확보가 모자람. 취소를 롤백한다. */
         UNPAID_CANCEL("unpaid-cancel"),
+        /** 결제 결과를 끝내 모른 승인 중 장바구니 · 바로 구매 주문 취소의 반환에서 확보가 모자람. 취소를 롤백한다. */
+        UNCONFIRMED_CANCEL("unconfirmed-cancel"),
         /** 새 장바구니 주문이 앞 주문을 바꿀 때 반환할 확보가 모자람. 새 주문을 만들지 않는다. */
         CART_REPLACE("cart-replace"),
         /** 드로우 결과 반영의 당첨분 판매 확정에서 확보가 모자람. 당첨 주문은 만든다. */

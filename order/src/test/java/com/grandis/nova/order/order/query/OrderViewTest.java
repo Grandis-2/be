@@ -19,15 +19,18 @@ class OrderViewTest {
 
     static final ShipTo SHIP_TO = new ShipTo("홍길동", "010-0000-0000", "04524", "서울시 중구 세종대로 110", null);
 
-    // 환불 실패 표시는 주문의 환불 실패 시각으로 정한다 — 마지막 이력이 무엇이든 같다
+    // 취소 중 주문은 환불 실패 시각으로 정한다 — 마지막 이력이 무엇이든 같다. 취소된 주문(자동 환불)은 실패 시각에 더해 마지막 이력이
+    // 환불 실패일 때만이다 — 그 뒤 해소 이력이 붙으면 실패로 보지 않는다
     @Test
-    void refundFailureFollowsOrderNotLastEvent() {
+    void refundFailureFollowsFailedAtAndForCanceledTheLastEvent() {
         OrderEvent refundFailure = event(EventCause.refundFailed());
         OrderEvent later = event(EventCause.system("ANY"));
 
         assertThat(detail(OrderStatus.CANCELING, Instant.EPOCH, later).refundFailed()).isTrue();
         assertThat(detail(OrderStatus.CANCELING, null, refundFailure).refundFailed()).isFalse();
-        assertThat(detail(OrderStatus.CANCELED, Instant.EPOCH, refundFailure).refundFailed()).isFalse();
+        assertThat(detail(OrderStatus.CANCELED, Instant.EPOCH, refundFailure).refundFailed()).as("자동 환불 실패").isTrue();
+        assertThat(detail(OrderStatus.CANCELED, Instant.EPOCH, later).refundFailed()).as("실패 뒤 해소").isFalse();
+        assertThat(detail(OrderStatus.CANCELED, null, refundFailure).refundFailed()).isFalse();
     }
 
     private static OrderView.Detail detail(OrderStatus status, Instant refundFailedAt, OrderEvent lastEvent) {

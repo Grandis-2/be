@@ -9,6 +9,8 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -22,6 +24,17 @@ public interface CustomerRepository extends JpaRepository<Customer, UUID> {
      */
     @Query("select c from Customer c where c.id = :id")
     Optional<Customer> lookup(@Param("id") UUID id);
+
+    /**
+     * 관리자 화면 이름에 쓰는 칸(id · 실명 · 표시명)만 읽는다. 직접 선언한 쿼리라 트랜잭션 밖에서 부르면 문장 하나다({@link #lookup} 과 같은 이유) —
+     * 연락처 · 배송지 칸은 읽지 않는다. 없는 id 는 결과에 없다.
+     */
+    @Query("select new com.grandis.nova.member.customer.CustomerRepository$NameRow(c.id, c.name, c.displayName) from Customer c where c.id in :ids")
+    List<NameRow> findNames(@Param("ids") Collection<UUID> ids);
+
+    /** @param name 실명. 프로필을 안 채웠으면 null */
+    record NameRow(UUID id, String name, String displayName) {
+    }
 
     /**
      * 회원 행을 SELECT … FOR UPDATE 로 읽는다. 내 정보 · 기본 배송지 쓰기는 이것부터 잡는다 — 바뀐 칸만 쓰는 UPDATE(@DynamicUpdate)는

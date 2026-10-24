@@ -5,6 +5,7 @@ import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.outbox.OutboxWriter;
 import com.grandis.nova.order.MySqlLockFailures;
 import com.grandis.nova.order.order.OrderLedger;
+import com.grandis.nova.order.order.PaymentAttention;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.enums.OrderTrigger;
 import com.grandis.nova.order.order.domain.model.OrderTransition;
@@ -39,7 +40,7 @@ class PaymentResultsRetryTest {
 
     final OrderLedger ledger = mock(OrderLedger.class);
     final PaymentResults results = new PaymentResults(ledger, mock(OrderReader.class), mock(CartOrderFulfillment.class),
-            mock(OutboxWriter.class), mock(PlatformTransactionManager.class));
+            mock(OutboxWriter.class), mock(PaymentAttention.class), mock(PlatformTransactionManager.class));
 
     @AfterEach
     void tearDown() {

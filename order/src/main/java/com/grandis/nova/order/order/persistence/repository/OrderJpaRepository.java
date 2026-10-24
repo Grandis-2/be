@@ -86,12 +86,38 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
             """)
     int cancelReleasingStock(@Param("id") UUID id, @Param("now") Instant now);
 
+    /** MySQL 은 SET 을 왼쪽부터 적용한다 — 결제창 번호를 옮겨 적은 뒤 지운다(순서를 바꾸면 빈 값이 옮겨진다). */
+    @Modifying(flushAutomatically = true)
+    @Query("""
+            update OrderJpaEntity o
+               set o.unconfirmedProviderOrderId = o.authorizingProviderOrderId, o.authorizingProviderOrderId = null,
+                   o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.CANCELED, o.stockReleasedAt = :now,
+                   o.eventSequence = o.eventSequence + 1, o.updatedAt = :now
+             where o.id = :id and o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.AUTHORIZING
+               and o.source in (com.grandis.nova.order.order.domain.enums.OrderSource.CART,
+                                com.grandis.nova.order.order.domain.enums.OrderSource.BUY_NOW)
+               and o.stockReleasedAt is null
+            """)
+    int cancelUnconfirmedReleasingStock(@Param("id") UUID id, @Param("now") Instant now);
+
+    @Modifying(flushAutomatically = true)
+    @Query("""
+            update OrderJpaEntity o
+               set o.autoRefundRequestedAt = :now, o.eventSequence = o.eventSequence + 1, o.updatedAt = :now
+             where o.id = :id and o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.CANCELED
+               and o.unconfirmedProviderOrderId = :providerOrderId and o.autoRefundRequestedAt is null
+            """)
+    int markAutoRefundRequested(@Param("id") UUID id, @Param("providerOrderId") String providerOrderId,
+                                @Param("now") Instant now);
+
     @Modifying(flushAutomatically = true)
     @Query("""
             update OrderJpaEntity o
                set o.refundFailedAt = :now, o.eventSequence = o.eventSequence + 1, o.updatedAt = :now
-             where o.id = :id and o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.CANCELING
-               and o.refundFailedAt is null
+             where o.id = :id and o.refundFailedAt is null
+               and (o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.CANCELING
+                    or (o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.CANCELED
+                        and o.autoRefundRequestedAt is not null))
             """)
     int markRefundFailed(@Param("id") UUID id, @Param("now") Instant now);
 
@@ -133,6 +159,14 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
              where o.id = :id and o.preorderCancelReportedAt is not null
             """)
     Optional<Long> findReportedPreorderCancelSequence(@Param("id") UUID id);
+
+    /** 스칼라 조회라 영속성 컨텍스트의 엔티티가 아니라 DB 값을 읽는다. 행을 잠근 트랜잭션에서 부른다. */
+    @Query("select o.unconfirmedProviderOrderId from OrderJpaEntity o where o.id = :id")
+    Optional<String> findUnconfirmedProviderOrderId(@Param("id") UUID id);
+
+    /** 스칼라 조회라 영속성 컨텍스트의 엔티티가 아니라 DB 값을 읽는다. */
+    @Query("select o.autoRefundRequestedAt from OrderJpaEntity o where o.id = :id")
+    Optional<Instant> findAutoRefundRequestedAt(@Param("id") UUID id);
 
     /** 스칼라 조회라 영속성 컨텍스트의 엔티티가 아니라 DB 값을 읽는다. 행을 잠근 트랜잭션에서 부른다. */
     @Query("select o.authorizingProviderOrderId from OrderJpaEntity o where o.id = :id")

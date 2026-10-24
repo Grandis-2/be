@@ -2,12 +2,14 @@ package com.grandis.nova.order.order.api;
 
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.common.web.ApiResponse;
+import com.grandis.nova.order.client.member.MemberNames;
 import com.grandis.nova.order.order.domain.enums.OrderSource;
 import com.grandis.nova.order.order.domain.enums.OrderStatus;
 import com.grandis.nova.order.order.domain.repository.AdminOrderFilter;
 import com.grandis.nova.order.order.domain.repository.OrderIdPrefix;
 import com.grandis.nova.order.order.query.OrderQueryService;
 import com.grandis.nova.order.order.query.OrderStatusCounts;
+import com.grandis.nova.order.order.query.OrderView;
 import com.grandis.nova.order.web.PageSizes;
 import com.grandis.nova.order.web.ValidationFailures;
 import io.swagger.v3.oas.annotations.Operation;
@@ -19,10 +21,15 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
-/** 관리자 주문 조회. 권한은 보안 설정이 경로로 막는다(ADMIN). */
+/**
+ * 관리자 주문 조회. 권한은 보안 설정이 경로로 막는다(ADMIN).
+ * 회원 이름(customerName)은 주문을 읽은 뒤 member 에게 한 번에 묻는다({@link MemberNames}) — 받지 못하면 이름만 비우고 응답한다.
+ */
 @RestController
 @RequestMapping("/api/v1/admin/orders")
 @Tag(name = "관리자 주문")
@@ -34,10 +41,12 @@ public class AdminOrderQueryController {
 
     private final OrderQueryService queryService;
     private final OrderStatusCounts statusCounts;
+    private final MemberNames memberNames;
 
-    public AdminOrderQueryController(OrderQueryService queryService, OrderStatusCounts statusCounts) {
+    public AdminOrderQueryController(OrderQueryService queryService, OrderStatusCounts statusCounts, MemberNames memberNames) {
         this.queryService = queryService;
         this.statusCounts = statusCounts;
+        this.memberNames = memberNames;
     }
 
     @GetMapping
@@ -46,7 +55,8 @@ public class AdminOrderQueryController {
             + "customerId 회원 · preorderId 예약 공개 UUID 정확히 일치, shipToName 받는 분 이름 일치(앞뒤 공백은 떼고, 대소문자 · 악센트는 가리지 않음, 공백뿐이면 조건 없음, "
             + "50자 이하), shipToPhoneLast4 받는 분 전화번호의 숫자 뒤 4자리, productId · optionId 그 상품 · 옵션이 든 주문(둘 다 주면 같은 주문상품, "
             + "상품이 여럿인 주문도 한 줄), from 이상 · to 미만 주문 시각(ISO-8601, 오프셋 필수 — + 는 %2B 로, 1000-01-01 ~ 9999-12-31). "
-            + "형식이 틀린 값 · 모르는 상태 · from 이 to 보다 앞서지 않으면 400. 줄의 preorderId 는 사전예약 주문만 있고 나머지는 null")
+            + "형식이 틀린 값 · 모르는 상태 · from 이 to 보다 앞서지 않으면 400. 줄의 preorderId 는 사전예약 주문만 있고 나머지는 null. "
+            + "customerName 은 가린 회원 이름(예: 김**)이고, 회원 정보를 받지 못하면 null")
     public ApiResponse<OffsetPage<AdminOrderSummaryResponse>> list(
             @RequestParam(required = false) OrderStatus status,
             @RequestParam(required = false) OrderSource source,
@@ -69,9 +79,9 @@ public class AdminOrderQueryController {
         }
         AdminOrderFilter filter = new AdminOrderFilter(status, source, orderIdPrefix(q), customerId, shipToName(shipToName),
                 phoneLast4(shipToPhoneLast4), preorderId == null ? null : preorderId.toString(), productId, optionId, createdFrom, createdTo);
-        return ApiResponse.ok(queryService
-                .findForAdmin(filter, PageSizes.requirePage(page, checkedSize), checkedSize)
-                .map(AdminOrderSummaryResponse::from));
+        OffsetPage<OrderView.Summary> found = queryService.findForAdmin(filter, PageSizes.requirePage(page, checkedSize), checkedSize);
+        Map<UUID, String> names = memberNames.find(found.items().stream().map(view -> view.order().customerId()).toList());
+        return ApiResponse.ok(found.map(view -> AdminOrderSummaryResponse.from(view, names.get(view.order().customerId()))));
     }
 
     @GetMapping("/stats")
@@ -83,9 +93,11 @@ public class AdminOrderQueryController {
     }
 
     @GetMapping("/{orderId}")
-    @Operation(summary = "주문 상세", description = "주문 번호가 정확히 일치할 때만. 없으면 404")
+    @Operation(summary = "주문 상세", description = "주문 번호가 정확히 일치할 때만. 없으면 404. customerName 은 목록과 같다")
     public ApiResponse<AdminOrderDetailResponse> get(@PathVariable String orderId) {
-        return ApiResponse.ok(AdminOrderDetailResponse.from(queryService.findOneForAdmin(orderId)));
+        OrderView.Detail view = queryService.findOneForAdmin(orderId);
+        UUID customerId = view.order().customerId();
+        return ApiResponse.ok(AdminOrderDetailResponse.from(view, memberNames.find(List.of(customerId)).get(customerId)));
     }
 
     private static OrderIdPrefix orderIdPrefix(String q) {

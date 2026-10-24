@@ -40,6 +40,10 @@ spring:
         base-url: http://localhost:8084
         connect-timeout: 300ms
         read-timeout: 1s
+      # 관리자 예약 목록 · 상세의 회원 이름(GET /internal/customers/names) — contracts/member-internal.md. 타임아웃은 코드 기본값
+      # (연결 300ms · 읽기 500ms, PreorderDefaults). 주소가 없거나 답이 없으면 이름(customerName)만 비우고 목록은 그대로 준다
+      member:
+        base-url: http://localhost:8080
   data:
     redis:
       host: localhost

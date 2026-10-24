@@ -8,7 +8,7 @@ import org.springframework.web.client.support.RestClientHttpServiceGroupConfigur
 @Configuration(proxyBeanMethods = false)
 class TokenRelayConfig {
 
-    /** catalog · order 내부 호출에 지금 요청한 사용자의 토큰을 싣는다. 받는 쪽이 토큰 주인을 확인한다. */
+    /** catalog · order · member 내부 호출에 지금 요청한 사용자의 토큰을 싣는다. 받는 쪽이 토큰 주인을 확인한다(member 는 관리자 토큰만 받는다). */
     @Bean
     RestClientHttpServiceGroupConfigurer tokenRelay() {
         BearerTokenRelayInterceptor interceptor = new BearerTokenRelayInterceptor();
