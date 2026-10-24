@@ -17,6 +17,7 @@ public enum PreorderErrorCode implements ErrorCode {
     PRODUCT_NOT_FOUND(404, "상품을 찾을 수 없습니다."),
     PRODUCT_OPTION_NOT_FOUND(404, "옵션을 찾을 수 없습니다."),
     SYNC_JOB_NOT_FOUND(404, "동기화 작업을 찾을 수 없습니다."),
+    REPROCESS_BATCH_NOT_FOUND(404, "일괄 재처리를 찾을 수 없습니다."),
     DEAD_LETTER_NOT_FOUND(404, "DLQ 메시지를 찾을 수 없습니다."),
     RECONCILIATION_RUN_NOT_FOUND(404, "정합성 검사 실행을 찾을 수 없습니다."),
     RECONCILIATION_FINDING_NOT_FOUND(404, "불일치 건을 찾을 수 없습니다."),
