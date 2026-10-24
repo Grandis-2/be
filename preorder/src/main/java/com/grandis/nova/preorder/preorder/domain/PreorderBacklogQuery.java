@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -20,6 +21,9 @@ import java.util.UUID;
  */
 @Component
 public class PreorderBacklogQuery {
+
+    /** 결과가 아직 나지 않은 등록 작업 상태. */
+    private static final List<String> IN_FLIGHT_JOB_STATUSES = List.of("PENDING", "PROCESSING", "RETRY_SCHEDULED");
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
 
@@ -57,6 +61,21 @@ public class PreorderBacklogQuery {
         MapSqlParameterSource params = new MapSqlParameterSource().addValue("status", status.name());
         LocalDateTime oldest = jdbcTemplate.queryForObject("SELECT MIN(p.created_at) FROM preorders p"
                 + " WHERE p.status = :status" + product(productId, params), params, LocalDateTime.class);
+        return Optional.ofNullable(oldest).map(at -> at.toInstant(ZoneOffset.UTC));
+    }
+
+    /**
+     * 외부 등록을 기다리는 예약 중 등록 작업이 아직 도는 것만의 가장 오래된 접수 시각. 재처리를 기다리는(DEAD_LETTER) 건을 빼
+     * 오픈 중 밀림을 실패와 가른다. 작업 표는 읽기만 한다.
+     */
+    public Optional<Instant> findOldestInFlightRegister(UUID productId) {
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("status", PreorderStatus.PENDING_SYNC.name())
+                .addValue("jobStatuses", IN_FLIGHT_JOB_STATUSES);
+        LocalDateTime oldest = jdbcTemplate.queryForObject("SELECT MIN(p.created_at) FROM preorders p"
+                + " JOIN preorder_sync_jobs j ON j.preorder_id = p.id AND j.job_type = 'REGISTER'"
+                + " WHERE p.status = :status AND j.status IN (:jobStatuses)" + product(productId, params),
+                params, LocalDateTime.class);
         return Optional.ofNullable(oldest).map(at -> at.toInstant(ZoneOffset.UTC));
     }
 

@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.query.application;
 
+import com.grandis.nova.preorder.preorder.AdminPreorderSort;
 import com.grandis.nova.preorder.preorder.PreorderStatus;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 
@@ -13,6 +14,7 @@ import java.util.UUID;
  * @param displayStatus     화면 단계. status 와 함께 주고 서로 맞지 않으면 아무것도 나오지 않는다
  * @param optionId          productId 와 함께 준다
  * @param batchNumber       배송 차수 번호. productId 와 함께 준다
+ * @param sort              목록 순서. 순번순은 productId 와 함께 준다
  */
 public record AdminPreorderFilter(
         PreorderStatus status,
@@ -24,6 +26,7 @@ public record AdminPreorderFilter(
         String externalReference,
         PreorderDisplayStatus displayStatus,
         UUID optionId,
-        Integer batchNumber
+        Integer batchNumber,
+        AdminPreorderSort sort
 ) {
 }

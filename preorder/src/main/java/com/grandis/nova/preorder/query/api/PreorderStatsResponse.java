@@ -16,7 +16,9 @@ import java.util.UUID;
  * @param preorders           원장 상태별 예약 수
  * @param syncJobs            끝나지 않은 동기화 작업 수(종류 → 상태). 성공 · 무효화한 작업은 세지 않는다
  * @param paymentOverdue      결제 기한이 지났는데 아직 만료 처리 전인 예약 수
- * @param oldestPendingSyncAt 외부 등록을 기다리는 예약 중 가장 오래된 접수 시각. 없으면 null
+ * @param oldestPendingSyncAt  외부 등록을 기다리는 예약 중 가장 오래된 접수 시각. 재처리를 기다리는(DEAD_LETTER) 예약도 든다. 없으면 null
+ * @param oldestInFlightSyncAt 그중 등록 작업이 아직 도는(대기 · 처리 중 · 재시도 대기) 예약만의 가장 오래된 접수 시각 — 실패와 갈라
+ *                             밀림을 본다. 없으면 null
  * @param countedAt           센 시각. 이미 받은 것보다 이전이면 늦게 온 응답이다
  */
 public record PreorderStatsResponse(
@@ -26,6 +28,7 @@ public record PreorderStatsResponse(
         DeadLetters deadLetters,
         long paymentOverdue,
         Instant oldestPendingSyncAt,
+        Instant oldestInFlightSyncAt,
         Instant countedAt
 ) {
 
@@ -39,6 +42,7 @@ public record PreorderStatsResponse(
     public static PreorderStatsResponse from(PreorderStats stats) {
         return new PreorderStatsResponse(stats.productId(), stats.preorders().byStatus(), stats.syncJobs(),
                 new DeadLetters(stats.deadLetters().count(), stats.deadLetters().oldestAt()),
-                stats.preorders().paymentOverdue(), stats.preorders().oldestPendingSyncAt(), stats.countedAt());
+                stats.preorders().paymentOverdue(), stats.preorders().oldestPendingSyncAt(),
+                stats.preorders().oldestInFlightSyncAt(), stats.countedAt());
     }
 }
