@@ -16,9 +16,6 @@ import java.util.UUID;
 @Component
 public class PaymentEventDispatcher {
 
-    /** 주문 이벤트의 aggregate. aggregateId 가 주문 id 라는 뜻이다. */
-    static final String ORDER_AGGREGATE = "ORDER";
-
     private final RefundRequests refundRequests;
     private final JsonMapper jsonMapper;
 
@@ -38,9 +35,9 @@ public class PaymentEventDispatcher {
 
     /** 대상은 봉투의 aggregateId 로 찾는다. 다른 aggregate 의 id 로 엉뚱한 결제를 환불하지 않게 종류를 확인한다. */
     private static UUID orderId(EventEnvelope envelope) {
-        if (!ORDER_AGGREGATE.equals(envelope.aggregateType()) || envelope.aggregateId() == null) {
+        if (!InboundEventType.ORDER_AGGREGATE.equals(envelope.aggregateType()) || envelope.aggregateId() == null) {
             throw new IllegalArgumentException("%s 이벤트가 아니다: eventId=%s, aggregateType=%s, aggregateId=%s"
-                    .formatted(ORDER_AGGREGATE, envelope.eventId(), envelope.aggregateType(), envelope.aggregateId()));
+                    .formatted(InboundEventType.ORDER_AGGREGATE, envelope.eventId(), envelope.aggregateType(), envelope.aggregateId()));
         }
         return envelope.aggregateId();
     }

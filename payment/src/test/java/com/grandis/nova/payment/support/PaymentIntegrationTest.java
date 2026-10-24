@@ -13,7 +13,8 @@ import java.lang.annotation.Target;
  * MySQL 8.4 + Flyway 마이그레이션 위에서 도는 통합 테스트. application.yml 은 커밋하지 않으므로 운영과 같아야 하는 값을 여기서 준다.
  *
  * 인증: JWT 서명 키는 {@link TestJwt} 가 실행마다 만든다. Redis 는 띄우지 않는다 — 토큰을 싣는 테스트는 RevocationChecker 를
- * 대역으로 바꾼다. 닫는 경로 목록은 application.yml.example 과 같다.
+ * 대역으로 바꾼다. 닫는 경로 목록은 application.yml.example 과 같다. DLQ 되돌리기는 큐로 보내지 않고 기록하는 대역이다
+ * ({@link DeadLetterTestConfig}).
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
@@ -50,7 +51,7 @@ import java.lang.annotation.Target;
         "auth.revocation-check.fail-closed-paths[2]=/api/v1/me/**",
         "auth.revocation-check.fail-closed-paths[3]=/internal/**"
 })
-@Import({MySqlContainerConfig.class, TestJwt.class})
+@Import({MySqlContainerConfig.class, TestJwt.class, DeadLetterTestConfig.class})
 public @interface PaymentIntegrationTest {
 
     /** 기본은 MockMvc(MOCK). 내장 톰캣을 실제로 띄워 HTTP 로 쳐야 하는 시험만 RANDOM_PORT 로 바꾼다. */

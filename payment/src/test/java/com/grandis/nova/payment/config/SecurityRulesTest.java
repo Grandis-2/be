@@ -35,6 +35,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class SecurityRulesTest {
 
     static final String ATTEMPTS = "/internal/payment-attempts";
+    static final String DEAD_LETTERS = "/internal/dead-letters";
 
     @Autowired
     MockMvc mockMvc;
@@ -85,6 +86,18 @@ class SecurityRulesTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error.code").value("UNAUTHENTICATED"))
                 .andExpect(jsonPath("$.error.details.retryable").value(true));
+    }
+
+    // ── /internal/dead-letters/** : 관리자 DLQ API — order 가 싣는 관리자 토큰만 ─────────────────────
+
+    @Test
+    void deadLetterApiNeedsAdminToken() throws Exception {
+        mockMvc.perform(get(DEAD_LETTERS)).andExpect(status().isUnauthorized());
+        perform(get(DEAD_LETTERS), user)
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
+        perform(post(DEAD_LETTERS + "/{id}/redrive", UUID.randomUUID()), user).andExpect(status().isForbidden());
+        perform(get(DEAD_LETTERS), admin).andExpect(status().isOk());
     }
 
     // ── 나머지 거부: 규칙 없이 추가된 경로가 열린 채 배포되지 않는다 ─────────────────────────

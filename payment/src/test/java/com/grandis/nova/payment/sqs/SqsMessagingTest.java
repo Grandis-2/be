@@ -2,6 +2,7 @@ package com.grandis.nova.payment.sqs;
 
 import com.grandis.nova.common.outbox.MessageTransport;
 import com.grandis.nova.common.security.RevocationChecker;
+import com.grandis.nova.common.sqs.QueuePoller;
 import com.grandis.nova.common.sqs.RetryingQueueConsumer;
 import com.grandis.nova.common.sqs.testing.TestQueues;
 import com.grandis.nova.payment.ClaimedTransaction;
@@ -44,7 +45,7 @@ import static org.mockito.BDDMockito.given;
 
 /**
  * payment 의 SQS 배선을 끝에서 끝으로 본다 — 실제 SQS 프로토콜(Floci)로 payment-events 의 환불 요청을 받아 환불을 열고, 워커가
- * 보낸 환불의 결과가 order-events 로 나가는지, 처리할 수 없는 요청이 DLQ 로 가는지. 받기 · 지우기 · 다시 보이기 자체는 common:sqs 시험이 본다.
+ * 보낸 환불의 결과가 order-events 로 나가는지, 처리할 수 없는 요청이 DLQ 를 거쳐 DB 로 옮겨지는지. 받기 · 지우기 · 다시 보이기 자체는 common:sqs 시험이 본다.
  */
 @SqsIntegrationTest
 class SqsMessagingTest {
@@ -94,11 +95,12 @@ class SqsMessagingTest {
         paymentKey = PaymentFixtures.newProviderPayment();
     }
 
-    /** 설정(nova.sqs.consumer.enabled · transport=sqs)이 공통 소비기 · SQS 전송으로 이어진다. */
+    /** 설정(nova.sqs.consumer.enabled · transport=sqs)이 공통 소비기 · SQS 전송으로 이어진다. DLQ 소비기는 nova.sqs.dead-letter.enabled 로 따로 켠다. */
     @Test
     void 소비기와_전송이_공통_SQS_모듈로_엮인다() {
         assertThat(context.getBean("paymentEventConsumer")).isInstanceOf(RetryingQueueConsumer.class);
         assertThat(context.getBean("paymentEventConsumer", RetryingQueueConsumer.class).isRunning()).isTrue();
+        assertThat(context.getBean("deadLetterConsumer", QueuePoller.class).isRunning()).isTrue();
         assertThat(context.getBean(MessageTransport.class).getClass().getSimpleName()).isEqualTo("SqsMessageTransport");
     }
 
@@ -125,14 +127,16 @@ class SqsMessagingTest {
         assertThat(settled.body()).doesNotContain(paymentKey.value());
     }
 
-    /** 결제 기록이 없는 환불 요청은 다시 받아도 같다 — 지우지 않아 DLQ 로 간다. */
+    /** 결제 기록이 없는 환불 요청은 다시 받아도 같다 — 지우지 않아 DLQ 로 가고, DLQ 소비기가 DB 로 옮긴다. */
     @Test
-    void 결제가_없는_환불_요청은_지우지_않아_DLQ_로_간다() {
+    void 결제가_없는_환불_요청은_지우지_않아_DLQ_를_거쳐_DB_로_옮겨진다() {
         String body = refundRequested(target.id());
 
         queues.send(QUEUE, body);
 
-        assertThat(queues.receive(QUEUE + "-dlq", m -> m.body().equals(body), TIMEOUT.multipliedBy(2))).isPresent();
+        await().atMost(TIMEOUT.multipliedBy(2)).until(() -> jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM payment_dead_letter_events WHERE body = ? AND source_queue = ?", Long.class,
+                body, QUEUE) == 1);
         assertThat(refunds()).isEmpty();
     }
 
