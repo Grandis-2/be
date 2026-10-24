@@ -3,12 +3,16 @@ package com.grandis.nova.order.client.member;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.github.resilience4j.bulkhead.Bulkhead;
+import io.github.resilience4j.bulkhead.BulkheadFullException;
 import io.github.resilience4j.bulkhead.BulkheadRegistry;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -82,9 +86,16 @@ public class MemberNames {
         try {
             response = CircuitBreaker.decorateSupplier(circuitBreaker,
                     Bulkhead.decorateSupplier(bulkhead, () -> memberClient.getNames(ids).data())).get();
+        } catch (CallNotPermittedException | BulkheadFullException e) {
+            log.warn("{} 이름 조회 안 함({}) — 이름 없이 응답한다", DEPENDENCY, e.getClass().getSimpleName());
+            return false;
+        } catch (RestClientException e) {
+            // 시간 초과 · 연결 실패 · 4xx · 5xx · 읽을 수 없는 응답. 메시지는 싣지 않는다 — 요청 URL 전체(ids 최대 100개)가 든다
+            log.warn("{} 이름 조회 실패 — 이름 없이 응답한다 ids={} {}", DEPENDENCY, ids.size(), describe(e));
+            return false;
         } catch (RuntimeException e) {
-            // 회로 열림 · 상한 초과 · 시간 초과 · 4xx · 5xx · 읽을 수 없는 응답 모두 이름 없이 응답한다. 원인 구분은 예외 종류로 남긴다
-            log.warn("{} 이름 조회 실패 — 이름 없이 응답한다 ids={}: {}", DEPENDENCY, ids.size(), e.toString());
+            // 우리 쪽 결함(계약과 다른 응답 모양 등)이다. 이름 없이 응답하되 스택을 남긴다
+            log.warn("{} 이름 조회 중 예상하지 못한 오류 — 이름 없이 응답한다 ids={}", DEPENDENCY, ids.size(), e);
             return false;
         }
         if (response == null || response.items() == null) {
@@ -103,5 +114,12 @@ public class MemberNames {
             name.ifPresent(value -> found.put(id, value));
         }
         return true;
+    }
+
+    /** 예외 종류 · 상태 코드 · 원인 종류(시간 초과 · 연결 거절 구분). */
+    private static String describe(RestClientException e) {
+        String status = e instanceof RestClientResponseException response ? " " + response.getStatusCode().value() : "";
+        Throwable cause = e.getCause();
+        return e.getClass().getSimpleName() + status + (cause == null ? "" : " cause=" + cause.getClass().getSimpleName());
     }
 }
