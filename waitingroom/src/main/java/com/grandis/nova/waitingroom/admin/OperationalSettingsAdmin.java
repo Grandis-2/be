@@ -148,6 +148,8 @@ class OperationalSettingsAdmin {
 
     private Mono<AdmissionRateView> change(String actor, String field, Mono<Optional<String>> write, String after) {
         return write
+                // 같은 값을 다시 보냈거나 없던 값을 지웠으면 바뀐 것이 아니다 — 이력과 같이 로그 · 지표도 남기지 않는다
+                .filter(before -> !before.equals(Optional.ofNullable(after)))
                 .doOnNext(before -> {
                     log.info("운영값 변경 actor={} field={} before={} after={}", actor, field, before.orElse("(기본값)"),
                             after == null ? "(기본값)" : after);

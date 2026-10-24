@@ -338,6 +338,8 @@ class WaitingroomAdminApiTest {
         put("/leave-grace", Map.of("seconds", 600)).exchange().expectStatus().isOk();
         delete("/max-wait").expectStatus().isOk();
         put("/max-wait", Map.of("seconds", 0)).exchange().expectStatus().isBadRequest();
+        put("/leave-grace", Map.of("seconds", 600)).exchange().expectStatus().isOk();
+        delete("/max-wait").expectStatus().isOk();
 
         String cursor = nextCursor(get("/changes?size=2").expectStatus().isOk().expectBody()
                 .jsonPath("$.data.items.length()").isEqualTo(2)
@@ -368,6 +370,26 @@ class WaitingroomAdminApiTest {
                 .jsonPath("$.data.nextCursor").isEmpty();
         get("/changes?from=" + now.minusSeconds(3_600) + "&to=" + now.plusSeconds(3_600) + "&cursor=")
                 .expectStatus().isOk().expectBody().jsonPath("$.data.items.length()").isEqualTo(5);
+    }
+
+    @Test
+    void 모르는_운영값의_이력은_건너뛰고_그_뒤의_변경까지_채워_준다() {
+        put("/max-wait", Map.of("seconds", 60)).exchange().expectStatus().isOk();
+        for (int i = 0; i < 3; i++) {
+            redis.opsForStream().add(RedisKeys.SETTING_CHANGES,
+                    Map.of("by", "admin", "field", "future-setting", "confirmed", "0", "to", String.valueOf(i))).block(WAIT);
+        }
+        put("/leave-grace", Map.of("seconds", 600)).exchange().expectStatus().isOk();
+
+        String cursor = nextCursor(get("/changes?size=1").expectStatus().isOk().expectBody()
+                .jsonPath("$.data.items[0].kind").isEqualTo("LEAVE_GRACE"));
+        get("/changes?size=1&cursor=" + cursor).expectStatus().isOk().expectBody()
+                .jsonPath("$.data.items.length()").isEqualTo(1)
+                .jsonPath("$.data.items[0].kind").isEqualTo("MAX_WAIT")
+                .jsonPath("$.data.nextCursor").isEmpty();
+        get("/changes?size=2").expectStatus().isOk().expectBody()
+                .jsonPath("$.data.items.length()").isEqualTo(2)
+                .jsonPath("$.data.nextCursor").isEmpty();
     }
 
     @Test

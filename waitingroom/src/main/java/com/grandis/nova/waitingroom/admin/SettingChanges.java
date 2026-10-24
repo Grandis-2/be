@@ -12,6 +12,7 @@ import reactor.core.publisher.Mono;
 
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -32,7 +33,6 @@ class SettingChanges {
         this.properties = properties;
     }
 
-    /** 한 건 더 읽어 다음 쪽이 있는지 본다. */
     Mono<SettingChangesView> read(String from, String to, String cursor, String size) {
         Instant fromAt = instant(blankToNull(from), "from");
         Instant toAt = instant(blankToNull(to), "to");
@@ -44,14 +44,29 @@ class SettingChanges {
             throw invalid("cursor", "cursor 가 올바르지 않습니다.");
         }
         int count = size(blankToNull(size));
-        return store.readSettingChanges(fromAt, toAt, before, count + 1)
-                .map(rows -> {
-                    List<SettingChange> page = rows.size() > count ? rows.subList(0, count) : rows;
-                    String next = rows.size() > count ? page.getLast().id() : null;
-                    return new SettingChangesView(page.stream().map(SettingChanges::change).flatMap(Optional::stream)
-                            .toList(), next);
-                })
+        return collect(fromAt, toAt, before, count, List.of())
                 .onErrorMap(OperationalSettingsAdmin::storeFailure, OperationalSettingsAdmin::unavailable);
+    }
+
+    /**
+     * 모르는 칸을 건너뛰고도 count 건이 모이거나 이력이 끝날 때까지 이어 읽는다 — 건너뛴 만큼 빈 쪽이 생기지 않게.
+     * 한 번에 count + 1 건을 읽어, 다 모은 뒤에 한 건이라도 남으면 다음 커서를 준다.
+     */
+    private Mono<SettingChangesView> collect(Instant from, Instant to, String before, int count, List<Change> found) {
+        int batch = count + 1;
+        return store.readSettingChanges(from, to, before, batch).flatMap(rows -> {
+            List<Change> items = new ArrayList<>(found);
+            for (int i = 0; i < rows.size(); i++) {
+                if (items.size() == count) {
+                    return Mono.just(new SettingChangesView(items, i == 0 ? before : rows.get(i - 1).id()));
+                }
+                change(rows.get(i)).ifPresent(items::add);
+            }
+            if (rows.size() < batch) {
+                return Mono.just(new SettingChangesView(items, null));
+            }
+            return collect(from, to, rows.getLast().id(), count, items);
+        });
     }
 
     /** 모르는 칸은 건너뛴다 — 이 노드보다 새 버전이 더한 운영값이다. */

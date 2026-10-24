@@ -160,7 +160,9 @@ public class ControlStore {
     @SuppressWarnings("unchecked")
     public Mono<List<SettingChange>> readSettingChanges(Instant from, Instant to, String before, int count) {
         String end = before != null ? "(" + before : to != null ? String.valueOf(to.toEpochMilli()) : "+";
-        String start = from != null ? String.valueOf(from.toEpochMilli()) : "-";
+        // 이력 id 는 밀리초다 — 밀리초 아래가 있는 시작 시각은 다음 밀리초부터 읽어야 그보다 이른 변경이 끼지 않는다
+        String start = from == null ? "-"
+                : String.valueOf(from.toEpochMilli() + (from.getNano() % 1_000_000 == 0 ? 0 : 1));
         return scripts.list(scripts.readSettingChanges, List.of(RedisKeys.SETTING_CHANGES),
                         List.of(end, start, String.valueOf(count)))
                 .map(reply -> reply.stream().map(row -> {

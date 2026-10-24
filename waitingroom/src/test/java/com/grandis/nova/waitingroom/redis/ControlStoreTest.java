@@ -354,10 +354,34 @@ class ControlStoreTest {
 
             assertThat(control.clearSetting("max-wait-sec", AUDIT).block(WAIT)).contains("60");
             assertThat(control.clearSetting("max-wait-sec", AUDIT).block(WAIT)).isEmpty();
-            assertThat(changes(10)).extracting(SettingChange::fields).containsExactly(
-                    Map.of("by", "admin", "field", "max-wait-sec", "confirmed", "0"),
+            assertThat(changes(10)).as("없던 칸을 지운 것은 바뀐 것이 아니다").extracting(SettingChange::fields).containsExactly(
                     Map.of("by", "admin", "field", "max-wait-sec", "confirmed", "0", "from", "60"),
                     Map.of("by", "admin", "field", "max-wait-sec", "confirmed", "0", "to", "60"));
+        }
+
+        @Test
+        void 같은_값으로_다시_쓰면_이력을_남기지_않는다() {
+            control.writeSetting("max-wait-sec", "60", AUDIT).block(WAIT);
+            assertThat(control.writeSetting("max-wait-sec", "60", AUDIT).block(WAIT)).contains("60");
+            assertThat(control.compareAndSetSetting("max-wait-sec", Optional.of("60"), "60", AUDIT).blockOptional(WAIT))
+                    .as("읽은 값 그대로라 성공으로 답한다").contains(Optional.of("60"));
+
+            assertThat(changes(10)).hasSize(1);
+        }
+
+        @Test
+        void 이력_키를_쓸_수_없으면_운영값도_바꾸지_않는다() {
+            control.writeSetting("max-wait-sec", "60", AUDIT).block(WAIT);
+            redis.delete(RedisKeys.SETTING_CHANGES).block(WAIT);
+            redis.opsForValue().set(RedisKeys.SETTING_CHANGES, "broken").block(WAIT);
+
+            assertThatThrownBy(() -> control.writeSetting("max-wait-sec", "120", AUDIT).block(WAIT))
+                    .hasRootCauseMessage("변경 이력 키가 스트림이 아니다: string");
+            assertThatThrownBy(() -> control.clearSetting("max-wait-sec", AUDIT).block(WAIT))
+                    .hasRootCauseMessage("변경 이력 키가 스트림이 아니다: string");
+            assertThatThrownBy(() -> control.compareAndSetSetting("max-wait-sec", Optional.of("60"), "120", AUDIT).block(WAIT))
+                    .hasRootCauseMessage("변경 이력 키가 스트림이 아니다: string");
+            assertThat(redis.opsForHash().get(RedisKeys.SETTINGS, "max-wait-sec").block(WAIT)).isEqualTo("60");
         }
 
         @Test
@@ -397,6 +421,9 @@ class ControlStoreTest {
                     .as("기간 양 끝 포함").extracting(SettingChange::id).containsExactly("3000-0", "2000-0");
             assertThat(control.readSettingChanges(Instant.ofEpochMilli(2_000), null, "3000-0", 10).block(WAIT))
                     .extracting(SettingChange::id).containsExactly("2000-0");
+            assertThat(control.readSettingChanges(Instant.ofEpochMilli(2_000).plusNanos(1), null, null, 10).block(WAIT))
+                    .as("밀리초 아래가 있는 시작 시각보다 이른 변경은 뺀다").extracting(SettingChange::id)
+                    .containsExactly("4000-0", "3000-0");
         }
 
         private void addChange(long millis, String to) {
