@@ -11,6 +11,8 @@ public enum OutboundEventType implements OutboxEventType {
     /** 사전예약 주문 결제 승인 — preorder 가 받아 예약을 확정한다(contracts/preorder-order-events.md). */
     PREORDER_PAYMENT_CONFIRMED("preorder-events"),
     ORDER_REFUND_REQUESTED("payment-events"),
+    /** 주문을 승인 중으로 바꿈 — payment 가 받아 승인 요청이 닿지 않았으면 복구에 넘긴다(contracts/order-payment-events.md). */
+    ORDER_PAYMENT_AUTHORIZING("payment-events"),
     /** 응모비를 결제한 응모 — worker 가 받아 Mock(추첨)에 넘긴다(contracts/draw-entry-sync.md). */
     DRAW_ENTRY_PAID("draw-register"),
     /** 회차의 추첨 요청 — worker 가 Mock 과 응모 수를 대조한 뒤 추첨을 맡긴다(contracts/draw-entry-sync.md). */

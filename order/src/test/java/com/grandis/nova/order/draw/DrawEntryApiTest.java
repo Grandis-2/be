@@ -341,6 +341,22 @@ class DrawEntryApiTest {
     }
 
     @Test
+    @DisplayName("응모비 결제는 승인 중으로 바꿔도 승인 중 알림(ORDER_PAYMENT_AUTHORIZING)을 남기지 않는다 — 주문 결제만 넘긴다")
+    void drawEntryAuthorizingLeavesNoOrderNotice() throws Exception {
+        UUID draw = openDraw();
+        UUID entry = insertEntry(draw, customerId, "AWAITING_PAYMENT", null);
+        paymentAnswers(reply(ConfirmReply.Result.PENDING, null));
+
+        confirm(customerId, draw, FEE).andExpect(status().isOk()).andExpect(jsonPath("$.data.result").value("PENDING"));
+
+        assertThat(statusOf(entry)).isEqualTo("AUTHORIZING");
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM order_outbox_events WHERE event_type = 'ORDER_PAYMENT_AUTHORIZING'
+                   AND (aggregate_id = ? OR JSON_UNQUOTE(JSON_EXTRACT(payload, '$.providerOrderId')) = ?)""",
+                Long.class, bytes(entry), TOSS_ORDER_ID)).isZero();
+    }
+
+    @Test
     @DisplayName("거절되면 결제 대기로 돌아가 다시 결제할 수 있다 — DECLINED · 사유")
     void declinedEntryReturnsToAwaitingPayment() throws Exception {
         UUID draw = openDraw();
