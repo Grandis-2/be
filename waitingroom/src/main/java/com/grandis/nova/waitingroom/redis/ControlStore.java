@@ -155,11 +155,14 @@ public class ControlStore {
      *
      * @param from   이 시각 이후(포함). 없으면 처음부터
      * @param to     이 시각까지(포함). 없으면 끝까지
-     * @param before 이 이력 id 보다 앞선 것만(제외). 있으면 {@code to} 대신 쓴다
+     * @param before 이 이력 id 보다 앞선 것만(제외). {@code to} 와 함께 오면 더 이른 쪽을 끝으로 쓴다
      */
     @SuppressWarnings("unchecked")
     public Mono<List<SettingChange>> readSettingChanges(Instant from, Instant to, String before, int count) {
-        String end = before != null ? "(" + before : to != null ? String.valueOf(to.toEpochMilli()) : "+";
+        String end = to != null ? String.valueOf(to.toEpochMilli()) : "+";
+        if (before != null && (to == null || Long.parseLong(before.substring(0, before.indexOf('-'))) <= to.toEpochMilli())) {
+            end = "(" + before;
+        }
         // 이력 id 는 밀리초다 — 밀리초 아래가 있는 시작 시각은 다음 밀리초부터 읽어야 그보다 이른 변경이 끼지 않는다
         String start = from == null ? "-"
                 : String.valueOf(from.toEpochMilli() + (from.getNano() % 1_000_000 == 0 ? 0 : 1));

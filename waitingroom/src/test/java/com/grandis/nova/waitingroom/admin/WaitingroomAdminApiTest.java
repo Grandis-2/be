@@ -451,8 +451,10 @@ class WaitingroomAdminApiTest {
         get("/changes?from=yesterday").expectStatus().isBadRequest().expectBody().jsonPath("$.error.details.field").isEqualTo("from");
         get("/changes?from=1969-12-31T23:59:59Z").expectStatus().isBadRequest().expectBody()
                 .jsonPath("$.error.details.field").isEqualTo("from");
-        get("/changes?to=+1000000000-01-01T00:00:00Z").expectStatus().isBadRequest().expectBody()
-                .jsonPath("$.error.details.field").isEqualTo("to");
+        // 값을 URI 변수로 넘겨 + 가 공백으로 풀리지 않게 한다 — 형식 오류가 아니라 상한 검사로 거절되는지 본다
+        client.get().uri(BASE + "/changes?to={to}", "+1000000000-01-01T00:00:00Z")
+                .headers(headers -> headers.setBearerAuth(TestJwts.admin(now))).exchange()
+                .expectStatus().isBadRequest().expectBody().jsonPath("$.error.details.field").isEqualTo("to");
         get("/changes?from=" + now + "&to=" + now.minusSeconds(1)).expectStatus().isBadRequest().expectBody()
                 .jsonPath("$.error.details.field").isEqualTo("from");
     }

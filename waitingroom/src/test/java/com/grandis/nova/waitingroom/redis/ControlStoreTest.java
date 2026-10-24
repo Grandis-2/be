@@ -421,6 +421,10 @@ class ControlStoreTest {
                     .as("기간 양 끝 포함").extracting(SettingChange::id).containsExactly("3000-0", "2000-0");
             assertThat(control.readSettingChanges(Instant.ofEpochMilli(2_000), null, "3000-0", 10).block(WAIT))
                     .extracting(SettingChange::id).containsExactly("2000-0");
+            assertThat(control.readSettingChanges(null, Instant.ofEpochMilli(2_000), "4000-0", 10).block(WAIT))
+                    .as("커서가 to 보다 늦으면 to 까지만").extracting(SettingChange::id).containsExactly("2000-0", "1000-0");
+            assertThat(control.readSettingChanges(null, Instant.ofEpochMilli(3_000), "3000-0", 10).block(WAIT))
+                    .as("같은 밀리초면 커서(제외)가 더 이르다").extracting(SettingChange::id).containsExactly("2000-0", "1000-0");
             assertThat(control.readSettingChanges(Instant.ofEpochMilli(2_000).plusNanos(1), null, null, 10).block(WAIT))
                     .as("밀리초 아래가 있는 시작 시각보다 이른 변경은 뺀다").extracting(SettingChange::id)
                     .containsExactly("4000-0", "3000-0");
