@@ -60,7 +60,7 @@ class PreorderPaymentFailureNoticeTest {
         JsonNode notice = notices.getFirst();
         assertThat(notice.get("kind").asString()).isEqualTo("PREORDER_PAYMENT_FAILED");
         assertThat(notice.get("title").asString()).isEqualTo("결제 실패");
-        assertThat(notice.get("body").asString()).isEqualTo("결제가 완료되지 않았어요. 결제 기한 안에 다시 결제해 주세요.");
+        assertThat(notice.get("body").asString()).isEqualTo("결제가 완료되지 않았어요. 내 예약에서 결제 상태를 확인해 주세요.");
         assertThat(notice.get("recipientIds").get(0).asString()).isEqualTo(customerId.toString());
         assertThat(notice.get("target").get("type").asString()).isEqualTo("PREORDER");
         assertThat(notice.get("target").get("id").asString()).isEqualTo(order.preorderToken());

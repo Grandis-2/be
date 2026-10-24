@@ -81,7 +81,7 @@ public record NotificationRequested(@JsonIgnore UUID aggregateId, List<UUID> rec
         DRAW_WON(AggregateType.DRAW_ENTRY, "럭키 드로우 당첨", "축하해요! 럭키 드로우에 당첨됐어요."),
         PAYMENT_UNCONFIRMED(AggregateType.ORDER, "결제 확인 실패",
                 "결제를 확인하지 못해 주문이 취소됐어요. 결제된 금액이 있으면 자동으로 환불돼요."),
-        PREORDER_PAYMENT_FAILED(AggregateType.ORDER, "결제 실패", "결제가 완료되지 않았어요. 결제 기한 안에 다시 결제해 주세요.");
+        PREORDER_PAYMENT_FAILED(AggregateType.ORDER, "결제 실패", "결제가 완료되지 않았어요. 내 예약에서 결제 상태를 확인해 주세요.");
 
         private final AggregateType aggregateType;
         private final String title;
