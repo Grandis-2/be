@@ -5,6 +5,7 @@ import com.grandis.nova.preorder.syncjob.SyncJobResponse;
 import com.grandis.nova.preorder.syncjob.SyncJobStatus;
 import com.grandis.nova.preorder.syncjob.SyncJobType;
 import com.grandis.nova.preorder.syncjob.application.BatchReprocess;
+import com.grandis.nova.preorder.syncjob.application.BatchReprocessProgress;
 import com.grandis.nova.preorder.syncjob.application.SyncJobAdminService;
 import com.grandis.nova.preorder.syncjob.application.SyncJobView;
 import com.grandis.nova.preorder.web.PageSizes;
@@ -68,6 +69,14 @@ class AdminSyncJobController {
             @Valid @RequestBody ReprocessBatchRequest request, Authentication admin) {
         return accepted(syncJobAdminService.reprocessBatch(request.syncJobIds(), request.jobTypeOrDefault(),
                 request.errorCodeFilter(), request.rateOrDefault(), admin.getName()));
+    }
+
+    @Operation(summary = "일괄 재처리 진행 — 보낸 수와 대상 작업의 지금 상태(성공 · 다시 포기 · 취소 · 기다림)",
+            description = "결과 수는 조회할 때 센다. finishedAt 이 비어 있는데 lastProgressAt 이 오래 그대로면 보내던 인스턴스가 "
+                    + "멈춘 것이다(같은 요청을 다시 보내면 이어진다). 하루 지나면 404")
+    @GetMapping("/reprocess-batches/{batchId}")
+    public ApiResponse<BatchReprocessProgress> batch(@PathVariable UUID batchId) {
+        return ApiResponse.ok(syncJobAdminService.findBatch(batchId));
     }
 
     private SyncJobResponse detail(SyncJobView view) {
