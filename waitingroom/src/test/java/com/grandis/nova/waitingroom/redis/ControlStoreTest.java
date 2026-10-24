@@ -9,12 +9,16 @@ import com.grandis.nova.waitingroom.redis.ControlStore.ApplyResult;
 import com.grandis.nova.waitingroom.redis.ControlStore.ClusterView;
 import com.grandis.nova.waitingroom.redis.ControlStore.LeaderLease;
 import com.grandis.nova.waitingroom.redis.ControlStore.RelayOutcome;
+import com.grandis.nova.waitingroom.redis.ControlStore.SettingAudit;
+import com.grandis.nova.waitingroom.redis.ControlStore.SettingChange;
 import com.grandis.nova.waitingroom.support.RedisContainer;
 import com.grandis.nova.waitingroom.support.TestJwts;
 import org.assertj.core.data.Offset;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.connection.stream.RecordId;
+import org.springframework.data.redis.connection.stream.StreamRecords;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import reactor.core.publisher.Flux;
 
@@ -37,6 +41,7 @@ class ControlStoreTest {
     static final String PRODUCT = productKey(101);
     static final Duration WAIT = Duration.ofSeconds(5);
     static final long FENCE_TTL = 60_000;
+    static final SettingAudit AUDIT = new SettingAudit("admin", false, 10_000, Duration.ofDays(30));
 
     private ReactiveStringRedisTemplate redis;
     private ControlStore control;
@@ -314,7 +319,7 @@ class ControlStoreTest {
             List<String> values = IntStream.rangeClosed(1, 16).mapToObj(String::valueOf).toList();
 
             List<Optional<String>> befores = Flux.fromIterable(values)
-                    .flatMap(value -> control.writeSetting("global-credit", value), values.size())
+                    .flatMap(value -> control.writeSetting("global-credit", value, AUDIT), values.size())
                     .collectList().block(WAIT);
             String last = (String) redis.opsForHash().get(RedisKeys.SETTINGS, "global-credit").block(WAIT);
 
@@ -328,23 +333,106 @@ class ControlStoreTest {
 
         @Test
         void 읽은_때_값이_그대로일_때만_바꾸고_그사이_바뀌었으면_쓰지_않는다() {
-            assertThat(control.compareAndSetSetting("global-credit", Optional.empty(), "200").blockOptional(WAIT))
+            assertThat(control.compareAndSetSetting("global-credit", Optional.empty(), "200", AUDIT).blockOptional(WAIT))
                     .as("없던 칸 — 바꿨고 전 값은 없다").contains(Optional.empty());
-            assertThat(control.compareAndSetSetting("global-credit", Optional.empty(), "300").blockOptional(WAIT))
+            assertThat(control.compareAndSetSetting("global-credit", Optional.empty(), "300", AUDIT).blockOptional(WAIT))
                     .as("그사이 200 이 들어왔다").isEmpty();
-            assertThat(control.compareAndSetSetting("global-credit", Optional.of("100"), "300").blockOptional(WAIT)).isEmpty();
-            assertThat(control.compareAndSetSetting("global-credit", Optional.of("200"), "300").blockOptional(WAIT))
+            assertThat(control.compareAndSetSetting("global-credit", Optional.of("100"), "300", AUDIT).blockOptional(WAIT)).isEmpty();
+            assertThat(control.compareAndSetSetting("global-credit", Optional.of("200"), "300",
+                    new SettingAudit("admin", true, 10_000, Duration.ofDays(30))).blockOptional(WAIT))
                     .contains(Optional.of("200"));
 
             assertThat(redis.opsForHash().get(RedisKeys.SETTINGS, "global-credit").block(WAIT)).isEqualTo("300");
+            assertThat(changes(10)).as("바꾸지 못한 시도는 이력에 남지 않는다").extracting(SettingChange::fields).containsExactly(
+                    Map.of("by", "admin", "field", "global-credit", "confirmed", "1", "from", "200", "to", "300"),
+                    Map.of("by", "admin", "field", "global-credit", "confirmed", "0", "to", "200"));
         }
 
         @Test
         void 지우면_지운_값을_돌려주고_없던_칸은_빈_값이다() {
-            control.writeSetting("max-wait-sec", "60").block(WAIT);
+            control.writeSetting("max-wait-sec", "60", AUDIT).block(WAIT);
 
-            assertThat(control.clearSetting("max-wait-sec").block(WAIT)).contains("60");
-            assertThat(control.clearSetting("max-wait-sec").block(WAIT)).isEmpty();
+            assertThat(control.clearSetting("max-wait-sec", AUDIT).block(WAIT)).contains("60");
+            assertThat(control.clearSetting("max-wait-sec", AUDIT).block(WAIT)).isEmpty();
+            assertThat(changes(10)).as("없던 칸을 지운 것은 바뀐 것이 아니다").extracting(SettingChange::fields).containsExactly(
+                    Map.of("by", "admin", "field", "max-wait-sec", "confirmed", "0", "from", "60"),
+                    Map.of("by", "admin", "field", "max-wait-sec", "confirmed", "0", "to", "60"));
+        }
+
+        @Test
+        void 같은_값으로_다시_쓰면_이력을_남기지_않는다() {
+            control.writeSetting("max-wait-sec", "60", AUDIT).block(WAIT);
+            assertThat(control.writeSetting("max-wait-sec", "60", AUDIT).block(WAIT)).contains("60");
+            assertThat(control.compareAndSetSetting("max-wait-sec", Optional.of("60"), "60", AUDIT).blockOptional(WAIT))
+                    .as("읽은 값 그대로라 성공으로 답한다").contains(Optional.of("60"));
+
+            assertThat(changes(10)).hasSize(1);
+        }
+
+        @Test
+        void 이력_키를_쓸_수_없으면_운영값도_바꾸지_않는다() {
+            control.writeSetting("max-wait-sec", "60", AUDIT).block(WAIT);
+            redis.delete(RedisKeys.SETTING_CHANGES).block(WAIT);
+            redis.opsForValue().set(RedisKeys.SETTING_CHANGES, "broken").block(WAIT);
+
+            assertThatThrownBy(() -> control.writeSetting("max-wait-sec", "120", AUDIT).block(WAIT))
+                    .hasRootCauseMessage("변경 이력 키가 스트림이 아니다: string");
+            assertThatThrownBy(() -> control.clearSetting("max-wait-sec", AUDIT).block(WAIT))
+                    .hasRootCauseMessage("변경 이력 키가 스트림이 아니다: string");
+            assertThatThrownBy(() -> control.compareAndSetSetting("max-wait-sec", Optional.of("60"), "120", AUDIT).block(WAIT))
+                    .hasRootCauseMessage("변경 이력 키가 스트림이 아니다: string");
+            assertThat(redis.opsForHash().get(RedisKeys.SETTINGS, "max-wait-sec").block(WAIT)).isEqualTo("60");
+        }
+
+        @Test
+        void 이력은_최대_건수를_넘으면_오래된_것부터_지운다() {
+            SettingAudit three = new SettingAudit("admin", false, 3, Duration.ofDays(30));
+            for (int value = 1; value <= 5; value++) {
+                control.writeSetting("global-credit", String.valueOf(value), three).block(WAIT);
+            }
+
+            assertThat(changes(10)).extracting(change -> change.fields().get("to")).containsExactly("5", "4", "3");
+        }
+
+        @Test
+        void 이력은_보존_기간이_지난_것을_다음_변경_때_지운다() {
+            addChange(Instant.now().minus(Duration.ofDays(31)).toEpochMilli(), "1");
+
+            control.writeSetting("global-credit", "2", AUDIT).block(WAIT);
+
+            List<SettingChange> left = changes(10);
+            assertThat(left).extracting(change -> change.fields().get("to")).containsExactly("2");
+            assertThat(Duration.between(left.getFirst().at(), Instant.now()).abs()).as("Redis 시각으로 남긴다")
+                    .isLessThan(Duration.ofSeconds(5));
+        }
+
+        @Test
+        void 이력은_최신부터_기간_안에서_커서_앞의_것만_읽는다() {
+            for (int value = 1; value <= 4; value++) {
+                addChange(value * 1_000L, String.valueOf(value));
+            }
+
+            assertThat(changes(10)).extracting(change -> change.fields().get("to")).containsExactly("4", "3", "2", "1");
+            assertThat(changes(2)).extracting(SettingChange::id).containsExactly("4000-0", "3000-0");
+            assertThat(changes(10).getFirst().at()).isEqualTo(Instant.ofEpochMilli(4_000));
+            assertThat(control.readSettingChanges(null, null, "3000-0", 10).block(WAIT))
+                    .as("커서는 빼고 그 앞부터").extracting(SettingChange::id).containsExactly("2000-0", "1000-0");
+            assertThat(control.readSettingChanges(Instant.ofEpochMilli(2_000), Instant.ofEpochMilli(3_000), null, 10).block(WAIT))
+                    .as("기간 양 끝 포함").extracting(SettingChange::id).containsExactly("3000-0", "2000-0");
+            assertThat(control.readSettingChanges(Instant.ofEpochMilli(2_000), null, "3000-0", 10).block(WAIT))
+                    .extracting(SettingChange::id).containsExactly("2000-0");
+            assertThat(control.readSettingChanges(Instant.ofEpochMilli(2_000).plusNanos(1), null, null, 10).block(WAIT))
+                    .as("밀리초 아래가 있는 시작 시각보다 이른 변경은 뺀다").extracting(SettingChange::id)
+                    .containsExactly("4000-0", "3000-0");
+        }
+
+        private void addChange(long millis, String to) {
+            redis.opsForStream().add(StreamRecords.string(Map.of("by", "admin", "field", "global-credit", "confirmed", "0", "to", to))
+                    .withStreamKey(RedisKeys.SETTING_CHANGES).withId(RecordId.of(millis, 0))).block(WAIT);
+        }
+
+        private List<SettingChange> changes(int count) {
+            return control.readSettingChanges(null, null, null, count).block(WAIT);
         }
     }
 
