@@ -22,6 +22,8 @@ public final class RedisKeys {
     public static final String PRODUCTS = "wr:products";
     /** 운영값(초당 입장 인원 · 모델별 상한 · 최대 대기 시간). 관리자 API 가 쓴다. */
     public static final String SETTINGS = "wr:settings";
+    /** 운영값 변경 이력(스트림). 태그 안 글자가 SETTINGS 와 같아 같은 슬롯이다 — 값과 이력을 한 스크립트에서 쓴다. */
+    public static final String SETTING_CHANGES = "{wr:settings}:changes";
     /** 일정 전체 재발행을 요청한 표식. 있으면 다시 요청하지 않는다(리더가 바뀌어도). */
     public static final String RESYNC_REQUESTED = "wr:resync-requested";
     /** 주기 재발행을 요청한 표식. 사라지면 일정을 아는 동안에도 한 번 더 요청한다. */

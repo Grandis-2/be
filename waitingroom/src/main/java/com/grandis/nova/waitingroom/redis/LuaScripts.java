@@ -35,6 +35,7 @@ public class LuaScripts {
     final RedisScript<Long> releaseResync = RedisScript.of(new ClassPathResource("redis/resync_release.lua"), Long.class);
     final RedisScript<String> swapSetting = RedisScript.of(new ClassPathResource("redis/setting_swap.lua"), String.class);
     final RedisScript<List> compareSetSetting = load("setting_compare_set");
+    final RedisScript<List> readSettingChanges = load("setting_changes_read");
 
     private final ReactiveStringRedisTemplate redis;
 

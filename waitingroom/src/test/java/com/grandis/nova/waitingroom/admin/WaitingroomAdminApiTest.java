@@ -27,6 +27,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.grandis.nova.waitingroom.support.TestIds.customerId;
 import static com.grandis.nova.waitingroom.support.TestIds.productKey;
@@ -104,6 +105,8 @@ class WaitingroomAdminApiTest {
                 .exchange().expectStatus().isForbidden();
         client.put().uri(BASE + "/leave-grace").headers(headers -> headers.setBearerAuth(TestJwts.user(customerId(1), now)))
                 .bodyValue(Map.of("seconds", 600)).exchange().expectStatus().isForbidden();
+        client.get().uri(BASE + "/changes").headers(headers -> headers.setBearerAuth(TestJwts.user(customerId(1), now)))
+                .exchange().expectStatus().isForbidden();
 
         assertThat(redis.opsForHash().size(RedisKeys.SETTINGS).block(WAIT)).isZero();
     }
@@ -324,6 +327,142 @@ class WaitingroomAdminApiTest {
                 .jsonPath("$.data.products[0].phase").isEqualTo("OPEN")
                 .jsonPath("$.data.products[0].waiting").isEqualTo(10)
                 .jsonPath("$.data.products[0].credit").isEqualTo(5)
-                .jsonPath("$.data.products[0].cap").isEqualTo(7);
+                .jsonPath("$.data.products[0].cap").isEqualTo(7)
+                .jsonPath("$.data.products[0].estimatedWaitSeconds").isEqualTo(2)
+                .jsonPath("$.data.longWaitThresholdSeconds").isEqualTo(120);
+    }
+
+    @Test
+    void 현황의_맨_뒤_예상_대기는_사용자_화면과_같은_식으로_재고_모르면_비운다() {
+        SalesWindow open = new SalesWindow(now.minusSeconds(60), now.plusSeconds(3_600));
+        SalesWindow closed = new SalesWindow(now.minusSeconds(3_600), now.minusSeconds(60));
+        TestSnapshots.put(snapshots, Map.of(
+                productKey(101), ProductState.withQueue(3, 10, open, 150),
+                productKey(102), ProductState.withQueue(0, 10, open, 4),
+                productKey(103), ProductState.idle(open, 150),
+                productKey(104), ProductState.hidden(10, open, 150),
+                productKey(105), ProductState.withQueue(3, 10, closed, 150),
+                productKey(106), ProductState.closed(10, open, 150)), new SnapshotMeta(80, 1, MaxWait.unlimited()));
+
+        get("/status").expectStatus().isOk().expectBody()
+                .jsonPath("$.data.longWaitThresholdSeconds").isEmpty()
+                .jsonPath("$.data.products[0].estimatedWaitSeconds").isEqualTo(4)
+                // 몫을 아직 못 받았으면 전역 속도와 상품 상한 중 작은 쪽(4)으로 잰다
+                .jsonPath("$.data.products[1].estimatedWaitSeconds").isEqualTo(3)
+                .jsonPath("$.data.products[2].estimatedWaitSeconds").isEqualTo(0)
+                .jsonPath("$.data.products[3].estimatedWaitSeconds").isEmpty()
+                .jsonPath("$.data.products[4].estimatedWaitSeconds").isEmpty()
+                // 이 노드 시계로는 접수 중이어도 리더가 마감한 줄
+                .jsonPath("$.data.products[5].estimatedWaitSeconds").isEmpty();
+
+        TestSnapshots.put(snapshots, Map.of(productKey(101), ProductState.withQueue(0, 10, open, 150),
+                productKey(102), ProductState.idle(open, 150)), new SnapshotMeta(0, 1, MaxWait.unlimited()));
+        // 전체 입장 정지 — 줄이 비어도 바로 입장이 아니다
+        get("/status").expectStatus().isOk().expectBody()
+                .jsonPath("$.data.products[0].estimatedWaitSeconds").isEmpty()
+                .jsonPath("$.data.products[1].estimatedWaitSeconds").isEmpty();
+    }
+
+    @Test
+    void 운영값_변경을_최신부터_남기고_커서로_이어_읽는다() {
+        put("/admission-rate", Map.of("globalCredit", 100)).exchange().expectStatus().isOk();
+        put("/products/" + productKey(101) + "/admission-rate", Map.of("cap", 7)).exchange().expectStatus().isOk();
+        put("/max-wait", Map.of("seconds", 60)).exchange().expectStatus().isOk();
+        put("/leave-grace", Map.of("seconds", 600)).exchange().expectStatus().isOk();
+        delete("/max-wait").expectStatus().isOk();
+        put("/max-wait", Map.of("seconds", 0)).exchange().expectStatus().isBadRequest();
+        put("/leave-grace", Map.of("seconds", 600)).exchange().expectStatus().isOk();
+        delete("/max-wait").expectStatus().isOk();
+
+        String cursor = nextCursor(get("/changes?size=2").expectStatus().isOk().expectBody()
+                .jsonPath("$.data.items.length()").isEqualTo(2)
+                .jsonPath("$.data.items[0].kind").isEqualTo("MAX_WAIT")
+                .jsonPath("$.data.items[0].from").isEqualTo(60)
+                .jsonPath("$.data.items[0].to").isEmpty()
+                .jsonPath("$.data.items[0].by").isEqualTo("admin")
+                .jsonPath("$.data.items[0].at").isNotEmpty()
+                .jsonPath("$.data.items[1].kind").isEqualTo("LEAVE_GRACE")
+                .jsonPath("$.data.items[1].from").isEmpty()
+                .jsonPath("$.data.items[1].to").isEqualTo(600));
+        cursor = nextCursor(get("/changes?size=2&cursor=" + cursor).expectStatus().isOk().expectBody()
+                .jsonPath("$.data.items[0].kind").isEqualTo("MAX_WAIT")
+                .jsonPath("$.data.items[0].to").isEqualTo(60)
+                .jsonPath("$.data.items[1].kind").isEqualTo("PRODUCT_CREDIT")
+                .jsonPath("$.data.items[1].productId").isEqualTo(productKey(101))
+                .jsonPath("$.data.items[1].to").isEqualTo(7));
+        get("/changes?size=2&cursor=" + cursor).expectStatus().isOk().expectBody()
+                .jsonPath("$.data.items.length()").isEqualTo(1)
+                .jsonPath("$.data.items[0].kind").isEqualTo("GLOBAL_CREDIT")
+                .jsonPath("$.data.items[0].productId").isEmpty()
+                .jsonPath("$.data.items[0].to").isEqualTo(100)
+                .jsonPath("$.data.items[0].confirmed").isEqualTo(false)
+                .jsonPath("$.data.nextCursor").isEmpty();
+
+        get("/changes?to=" + now.minusSeconds(3_600)).expectStatus().isOk().expectBody()
+                .jsonPath("$.data.items.length()").isEqualTo(0)
+                .jsonPath("$.data.nextCursor").isEmpty();
+        get("/changes?from=" + now.minusSeconds(3_600) + "&to=" + now.plusSeconds(3_600) + "&cursor=")
+                .expectStatus().isOk().expectBody().jsonPath("$.data.items.length()").isEqualTo(5);
+    }
+
+    @Test
+    void 모르는_운영값의_이력은_건너뛰고_그_뒤의_변경까지_채워_준다() {
+        put("/max-wait", Map.of("seconds", 60)).exchange().expectStatus().isOk();
+        for (int i = 0; i < 3; i++) {
+            redis.opsForStream().add(RedisKeys.SETTING_CHANGES,
+                    Map.of("by", "admin", "field", "future-setting", "confirmed", "0", "to", String.valueOf(i))).block(WAIT);
+        }
+        put("/leave-grace", Map.of("seconds", 600)).exchange().expectStatus().isOk();
+
+        String cursor = nextCursor(get("/changes?size=1").expectStatus().isOk().expectBody()
+                .jsonPath("$.data.items[0].kind").isEqualTo("LEAVE_GRACE"));
+        get("/changes?size=1&cursor=" + cursor).expectStatus().isOk().expectBody()
+                .jsonPath("$.data.items.length()").isEqualTo(1)
+                .jsonPath("$.data.items[0].kind").isEqualTo("MAX_WAIT")
+                .jsonPath("$.data.nextCursor").isEmpty();
+        get("/changes?size=2").expectStatus().isOk().expectBody()
+                .jsonPath("$.data.items.length()").isEqualTo(2)
+                .jsonPath("$.data.nextCursor").isEmpty();
+    }
+
+    @Test
+    void 권장_상한을_넘겨_확인을_받고_늘린_변경은_이력에_확인으로_남는다() {
+        capacityKnown();
+        put("/admission-rate", Map.of("globalCredit", 250)).exchange().expectStatus().isOk();
+        put("/admission-rate", Map.of("globalCredit", 400, "confirm", true)).exchange().expectStatus().isOk();
+        put("/admission-rate", Map.of("globalCredit", 300, "confirm", true)).exchange().expectStatus().isOk();
+
+        get("/changes").expectStatus().isOk().expectBody()
+                .jsonPath("$.data.items[0].from").isEqualTo(400)
+                .jsonPath("$.data.items[0].to").isEqualTo(300)
+                .jsonPath("$.data.items[0].confirmed").isEqualTo(false)
+                .jsonPath("$.data.items[1].to").isEqualTo(400)
+                .jsonPath("$.data.items[1].confirmed").isEqualTo(true)
+                .jsonPath("$.data.items[2].to").isEqualTo(250)
+                .jsonPath("$.data.items[2].confirmed").isEqualTo(false);
+    }
+
+    @Test
+    void 이력_조회의_기간_커서_크기가_올바르지_않으면_400_이다() {
+        get("/changes?size=0").expectStatus().isBadRequest().expectBody().jsonPath("$.error.details.field").isEqualTo("size");
+        get("/changes?size=101").expectStatus().isBadRequest().expectBody().jsonPath("$.error.details.field").isEqualTo("size");
+        get("/changes?size=1.5").expectStatus().isBadRequest().expectBody().jsonPath("$.error.details.field").isEqualTo("size");
+        get("/changes?cursor=abc").expectStatus().isBadRequest().expectBody().jsonPath("$.error.details.field").isEqualTo("cursor");
+        get("/changes?from=yesterday").expectStatus().isBadRequest().expectBody().jsonPath("$.error.details.field").isEqualTo("from");
+        get("/changes?from=1969-12-31T23:59:59Z").expectStatus().isBadRequest().expectBody()
+                .jsonPath("$.error.details.field").isEqualTo("from");
+        // 값을 URI 변수로 넘겨 + 가 공백으로 풀리지 않게 한다 — 형식 오류가 아니라 상한 검사로 거절되는지 본다
+        client.get().uri(BASE + "/changes?to={to}", "+1000000000-01-01T00:00:00Z")
+                .headers(headers -> headers.setBearerAuth(TestJwts.admin(now))).exchange()
+                .expectStatus().isBadRequest().expectBody().jsonPath("$.error.details.field").isEqualTo("to");
+        get("/changes?from=" + now + "&to=" + now.minusSeconds(1)).expectStatus().isBadRequest().expectBody()
+                .jsonPath("$.error.details.field").isEqualTo("from");
+    }
+
+    private static String nextCursor(WebTestClient.BodyContentSpec body) {
+        AtomicReference<String> cursor = new AtomicReference<>();
+        body.jsonPath("$.data.nextCursor").value(value -> cursor.set((String) value));
+        assertThat(cursor.get()).isNotBlank();
+        return cursor.get();
     }
 }

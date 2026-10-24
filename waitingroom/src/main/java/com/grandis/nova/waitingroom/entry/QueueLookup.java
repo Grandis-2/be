@@ -10,6 +10,7 @@ import com.grandis.nova.waitingroom.domain.product.ProductState;
 import com.grandis.nova.waitingroom.domain.product.RuntimeState;
 import com.grandis.nova.waitingroom.domain.product.SalesPhase;
 import com.grandis.nova.waitingroom.domain.product.SnapshotMeta;
+import com.grandis.nova.waitingroom.domain.queue.EtaCredit;
 import com.grandis.nova.waitingroom.domain.queue.EtaPolicy;
 import com.grandis.nova.waitingroom.domain.queue.PollIntervalPolicy;
 import com.grandis.nova.waitingroom.domain.queue.QueueEntry;
