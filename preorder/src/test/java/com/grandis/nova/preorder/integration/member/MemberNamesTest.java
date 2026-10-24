@@ -6,6 +6,9 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -32,6 +35,7 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
  * 관리자 화면의 회원 이름 — 계약(contracts/member-internal.md 의 GET /internal/customers/names)대로 묻고, 한 화면에 많아야 한 번 부르며,
  * 실패해도 예외 없이 이름만 비우는지. 아래 JSON 은 member AdminMembersResponse 를 ApiResponse 로 감싼 모양을 복제한 것이다.
  */
+@ExtendWith(OutputCaptureExtension.class)
 class MemberNamesTest {
 
     static final UUID KIM = UUID.fromString("0199a3f2-7c4e-7a10-8b2d-3f4e5a6b7c01");
@@ -94,6 +98,27 @@ class MemberNamesTest {
         assertThat(names.find(List.of(KIM, LEE))).containsOnlyKeys(KIM);
         assertThat(names.find(List.of(KIM, LEE))).containsOnlyKeys(KIM);
         assertThat(names.find(List.of(KIM, LEE))).containsOnlyKeys(KIM, LEE);
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("실패 로그에 요청 URL(ids)을 싣지 않고 종류 · 상태만 남긴다. 계약과 다른 응답(우리 쪽 결함)은 스택과 함께 남긴다")
+    void failureLogsCarryNoRequestUrl(CapturedOutput output) {
+        server.expect(queryParam("ids", KIM.toString())).andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+        server.expect(queryParam("ids", KIM.toString())).andRespond(request -> {
+            throw new java.net.SocketTimeoutException("read timed out");
+        });
+        server.expect(queryParam("ids", KIM.toString())).andRespond(request -> {
+            throw new IllegalStateException("우리 쪽 결함 자리");
+        });
+
+        names.find(List.of(KIM));
+        names.find(List.of(KIM));
+        names.find(List.of(KIM));
+
+        assertThat(output).contains("ServiceUnavailable 503", "ResourceAccessException cause=SocketTimeoutException")
+                .contains("예상하지 못한 오류").contains("IllegalStateException: 우리 쪽 결함 자리").contains("\tat ")
+                .doesNotContain(KIM.toString()).doesNotContain("http://member");
         server.verify();
     }
 

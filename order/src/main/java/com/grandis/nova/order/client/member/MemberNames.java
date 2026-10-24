@@ -94,7 +94,7 @@ public class MemberNames {
             log.warn("{} 이름 조회 실패 — 이름 없이 응답한다 ids={} {}", DEPENDENCY, ids.size(), describe(e));
             return false;
         } catch (RuntimeException e) {
-            // 우리 쪽 결함(계약과 다른 응답 모양 등)이다. 이름 없이 응답하되 스택을 남긴다
+            // 우리 쪽 결함(주소 설정 누락 · 계약과 다른 응답 모양 등)이다. 이름 없이 응답하되 스택을 남긴다
             log.warn("{} 이름 조회 중 예상하지 못한 오류 — 이름 없이 응답한다 ids={}", DEPENDENCY, ids.size(), e);
             return false;
         }
