@@ -27,7 +27,7 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 
 ### 2.1 정확성 · 결과 불명 · 시각 · 금액 · 로그
 - 사용자 요청 경로(@RestController → @Service)에서 외부 HTTP 응답을 기다리면 지적한다. 외부 등록 · 취소는 worker 몫이다. 허용된 동기 호출:
-  - 타임아웃 · 서킷 브레이커 · 동시 상한 필수: preorder → catalog 옵션(캐시 미스만 — 접수, 그리고 예약 목록 · 상세의 사진 `PreorderOptionImages`, 2026-10-23 결정. 사진은 못 받으면 비운다) · order 취소 사전 확인 · Mock 키로 조회 · 취소(정합성 조치 `ExternalMock` — 관리자가 결과를 기다리고, 일괄은 마감 시간 안에서만 시작한다)(`DependencyGuard`), order → catalog 옵션 일괄 조회(`CatalogReader`).
+  - 타임아웃 · 서킷 브레이커 · 동시 상한 필수: preorder → catalog 옵션(캐시 미스만 — 접수, 그리고 예약 목록 · 상세의 사진 `PreorderOptionImages`, 2026-10-23 결정. 사진은 못 받으면 비운다) · order 취소 사전 확인 · Mock 키로 조회 · 취소(정합성 조치 `ExternalMock` — 관리자가 결과를 기다리고, 일괄은 마감 시간 안에서만 시작한다)(`DependencyGuard`), order → catalog 옵션 일괄 조회(`CatalogReader`), preorder · order → member 회원 이름(관리자 예약 · 주문 목록 · 상세 `MemberNames` — 재시도 없음, 못 받으면 이름만 비운다, 2026-10-24 결정).
   - 타임아웃만: catalog → order · member(리뷰 작성, 2026-10-06 결정 · 리뷰 쓸 수 있는 주문상품 목록 `WritableReviewQuery` → `OrderClient#getDeliveredItems`, 2026-10-23 결정 · 상품 삭제의 드로우 증정품 확인 `ProductDeleteService` → `DrawGiftClient`, `CatalogDefaults`), catalog → order 재고(`StockReader` — 목록 · 상세 · 증정품 후보) · preorder 회차 일정(`PreorderCampaigns` — 목록 · 상세 · 관리자 · 수정 판정, 2026-10-19 결정. 수정 판정도 트랜잭션 전에 받는다), order → preorder 결제 가능 확인 · payment 결제 준비 · payment 관리자 결제 DLQ(`PaymentDeadLetters` — payment 를 ALB 에 열지 않고 order 가 중계, 읽기 5초 `payment-admin`, 2026-10-23 결정), member → 카카오 로그인(`KakaoOAuthClient`).
   - 결제 승인: order → payment(읽기 70초, `PaymentConfirmSlots`), payment → 토스(3.3).
 - 차단급: @Transactional 안의 HTTP 호출 · SQS 전송 · Thread.sleep · 외부 락 대기. 예외는 batch 정합성 검사 하나다 — be 를 한 스냅샷으로 읽는 검사 트랜잭션 안에서 Mock 목록(읽기)을 받는다(3.5).
@@ -75,7 +75,7 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 
 **경계**
 - 상품은 `GET /internal/products/{productId}/options` 로 묻고 캐시한다. 이름 · 가격은 접수 때 예약 행에 복사한다 — 표시용 이름 · 가격을 매번 카탈로그 조회로 만들면 지적한다.
-- `/internal/**` · `/actuator/**` 는 공개 경로가 아니다. 사용자 기능을 두거나 `/internal/**` 이 토큰 주인 확인 없이 응답하면 지적.
+- `/internal/**` · `/actuator/**` 는 공개 경로가 아니다. 사용자 기능을 두거나 `/internal/**` 이 토큰 주인 확인 없이 응답하면 지적. 예외는 member `/internal/customers/names` 하나다 — 관리자 토큰만 받는다(회원 토큰 403, 2026-10-24 결정).
 
 ### 3.2 order — 적용 경로: `order/**`
 - 차단급: preorders · preorder_events 쓰기(결과는 PREORDER_PAYMENT_CONFIRMED 로 알림), payments · payment_transactions 접근(`PaymentClient` · `PaymentConfirmer`, 환불은 ORDER_REFUND_REQUESTED). 예약을 CANCELED 로 바꾸면 지적.
