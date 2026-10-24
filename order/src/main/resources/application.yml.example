@@ -84,6 +84,13 @@ nova:
   # 결제 기한(10분)이 지난 결제 대기 장바구니 주문을 취소 · 재고 반환하는 주기(앞 실행이 끝난 뒤부터 잰다). 기본 30s
   # cart-order:
   #   expiry-interval: 30s
+  # 만든 뒤 after 가 지나도 결제 결과를 몰라 승인 중인 장바구니 · 바로 구매 주문을 취소 · 재고 반환한다(늦게 승인되면 자동 환불).
+  # 기본은 꺼짐 — 배포 뒤 켠다. after 는 결제 기한(10분)보다 길어야 한다. 사전예약 주문은 대상이 아니다
+  # order:
+  #   payment-unconfirmed:
+  #     enabled: false
+  #     after: 20m
+  #     interval: 30s
   # 재고 장부 대조(새벽 4시, 실패하면 5시에 한 번 더 — KST, "-" 면 끈다)와 대조 지표를 DB 에서 다시 읽는 주기
   # stock:
   #   reconcile:

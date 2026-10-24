@@ -17,6 +17,8 @@ public enum OrderTrigger {
     PAYMENT_APPROVED,
     /** 결제가 거절됐다. 다시 결제할 수 있다. */
     PAYMENT_DECLINED,
+    /** 장바구니 · 바로 구매: 생성 뒤 정한 시간(20분)이 지나도 결제 결과를 몰라 기다리기를 멈춘다. 늦게 승인되면 자동 환불한다. */
+    PAYMENT_UNCONFIRMED,
     /** 결제된 주문의 환불이 끝났다. */
     REFUND_COMPLETED,
     /** 관리자: 상품 준비 시작. */

@@ -37,6 +37,9 @@ public interface OrderReader {
      */
     Optional<Long> findReportedPreorderCancelSequence(UUID orderId);
 
+    /** 결과를 모른 채 취소한 주문의 늦은 승인을 자동 환불하라고 요청한 시각. 요청하지 않았으면 비어 있다. */
+    Optional<Instant> findAutoRefundRequestedAt(UUID orderId);
+
     /** 예약의 주문. 예약당 주문은 평생 하나라(uq_order_preorder) 0~1건이다. */
     Optional<Order> findByPreorderId(UUID preorderId);
 
@@ -63,6 +66,14 @@ public interface OrderReader {
      * @param after 직전 쪽의 마지막 (기한, id). 처음이면 {@link ExpiredOrderPosition#START}
      */
     List<Order> findExpiredAwaitingOrders(Instant now, ExpiredOrderPosition after, int limit);
+
+    /**
+     * 결제 기한이 dueBefore 이하인데 아직 승인 중인 주문(장바구니 · 바로 구매). 순서 · 이어 읽기 · 잠그지 않음은
+     * {@link #findExpiredAwaitingOrders} 와 같다. 사전예약 주문은 고르지 않는다(결과를 끝까지 기다린다).
+     *
+     * @param after 직전 쪽의 마지막 (기한, id). 처음이면 {@link ExpiredOrderPosition#START}
+     */
+    List<Order> findUnconfirmedAuthorizingOrders(Instant dueBefore, ExpiredOrderPosition after, int limit);
 
     /**
      * 여러 주문의 항목을 한 번에(주문마다 다시 묻지 않는다). 주문 id · 항목 id 순이다.

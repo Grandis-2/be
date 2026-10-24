@@ -8,6 +8,7 @@ import java.util.Optional;
  * <pre>
  * 결제   AWAITING_PAYMENT ─PAYMENT_REQUESTED─▶ AUTHORIZING ─PAYMENT_APPROVED─▶ AWAITING_CONFIRMATION
  *                      ◀──────PAYMENT_DECLINED──────┘
+ *        AUTHORIZING ─PAYMENT_UNCONFIRMED─▶ CANCELED   (장바구니 · 바로 구매만. 결과를 끝내 몰라 멈춘다 — 재고 반환)
  * 배송   AWAITING_CONFIRMATION ─PREPARATION_STARTED─▶ PREPARING_ITEMS ─PACKED─▶ READY_TO_SHIP
  *                              ─SHIPPED─▶ SHIPPED ─DELIVERED─▶ DELIVERED
  * 취소   AWAITING_PAYMENT ─CANCEL_REQUESTED─▶ CANCELED                    (미결제라 환불 없음)
@@ -46,50 +47,52 @@ public enum OrderStatus {
             case AWAITING_PAYMENT -> switch (trigger) {
                 case CANCEL_REQUESTED -> Optional.of(CANCELED);
                 case PAYMENT_REQUESTED -> Optional.of(AUTHORIZING);
-                case PAYMENT_APPROVED, PAYMENT_DECLINED, REFUND_COMPLETED,
+                case PAYMENT_APPROVED, PAYMENT_DECLINED, PAYMENT_UNCONFIRMED, REFUND_COMPLETED,
                      PREPARATION_STARTED, PACKED, SHIPPED, DELIVERED -> Optional.empty();
             };
-            // 결제 결과를 모르는 동안의 취소 요청은 받지 않는다. 결과가 나온 뒤 다시 판정한다.
+            // 결제 결과를 모르는 동안의 취소 요청은 받지 않는다. 결과가 나온 뒤 다시 판정한다. 결과를 끝내 모를 때만(PAYMENT_UNCONFIRMED)
+            // 기다리기를 멈추고 취소한다 — 사전예약 주문에는 쓰지 않는다(원장이 막는다).
             case AUTHORIZING -> switch (trigger) {
                 case PAYMENT_APPROVED -> Optional.of(AWAITING_CONFIRMATION);
                 case PAYMENT_DECLINED -> Optional.of(AWAITING_PAYMENT);
+                case PAYMENT_UNCONFIRMED -> Optional.of(CANCELED);
                 case CANCEL_REQUESTED, PAYMENT_REQUESTED, REFUND_COMPLETED,
                      PREPARATION_STARTED, PACKED, SHIPPED, DELIVERED -> Optional.empty();
             };
             case AWAITING_CONFIRMATION -> switch (trigger) {
                 case CANCEL_REQUESTED -> Optional.of(CANCELING);
                 case PREPARATION_STARTED -> Optional.of(PREPARING_ITEMS);
-                case PAYMENT_REQUESTED, PAYMENT_APPROVED, PAYMENT_DECLINED, REFUND_COMPLETED,
+                case PAYMENT_REQUESTED, PAYMENT_APPROVED, PAYMENT_DECLINED, PAYMENT_UNCONFIRMED, REFUND_COMPLETED,
                      PACKED, SHIPPED, DELIVERED -> Optional.empty();
             };
             case PREPARING_ITEMS -> switch (trigger) {
                 case CANCEL_REQUESTED -> Optional.of(CANCELING);
                 case PACKED -> Optional.of(READY_TO_SHIP);
-                case PAYMENT_REQUESTED, PAYMENT_APPROVED, PAYMENT_DECLINED, REFUND_COMPLETED,
+                case PAYMENT_REQUESTED, PAYMENT_APPROVED, PAYMENT_DECLINED, PAYMENT_UNCONFIRMED, REFUND_COMPLETED,
                      PREPARATION_STARTED, SHIPPED, DELIVERED -> Optional.empty();
             };
             case READY_TO_SHIP -> switch (trigger) {
                 case CANCEL_REQUESTED -> Optional.of(CANCELING);
                 case SHIPPED -> Optional.of(OrderStatus.SHIPPED);
-                case PAYMENT_REQUESTED, PAYMENT_APPROVED, PAYMENT_DECLINED, REFUND_COMPLETED,
+                case PAYMENT_REQUESTED, PAYMENT_APPROVED, PAYMENT_DECLINED, PAYMENT_UNCONFIRMED, REFUND_COMPLETED,
                      PREPARATION_STARTED, PACKED, DELIVERED -> Optional.empty();
             };
             case SHIPPED -> switch (trigger) {
                 case DELIVERED -> Optional.of(OrderStatus.DELIVERED);
-                case CANCEL_REQUESTED, PAYMENT_REQUESTED, PAYMENT_APPROVED, PAYMENT_DECLINED, REFUND_COMPLETED,
+                case CANCEL_REQUESTED, PAYMENT_REQUESTED, PAYMENT_APPROVED, PAYMENT_DECLINED, PAYMENT_UNCONFIRMED, REFUND_COMPLETED,
                      PREPARATION_STARTED, PACKED, SHIPPED -> Optional.empty();
             };
             case CANCELING -> switch (trigger) {
                 case REFUND_COMPLETED -> Optional.of(CANCELED);
-                case CANCEL_REQUESTED, PAYMENT_REQUESTED, PAYMENT_APPROVED, PAYMENT_DECLINED,
+                case CANCEL_REQUESTED, PAYMENT_REQUESTED, PAYMENT_APPROVED, PAYMENT_DECLINED, PAYMENT_UNCONFIRMED,
                      PREPARATION_STARTED, PACKED, SHIPPED, DELIVERED -> Optional.empty();
             };
             case DELIVERED -> switch (trigger) {
-                case CANCEL_REQUESTED, PAYMENT_REQUESTED, PAYMENT_APPROVED, PAYMENT_DECLINED, REFUND_COMPLETED,
+                case CANCEL_REQUESTED, PAYMENT_REQUESTED, PAYMENT_APPROVED, PAYMENT_DECLINED, PAYMENT_UNCONFIRMED, REFUND_COMPLETED,
                      PREPARATION_STARTED, PACKED, SHIPPED, DELIVERED -> Optional.empty();
             };
             case CANCELED -> switch (trigger) {
-                case CANCEL_REQUESTED, PAYMENT_REQUESTED, PAYMENT_APPROVED, PAYMENT_DECLINED, REFUND_COMPLETED,
+                case CANCEL_REQUESTED, PAYMENT_REQUESTED, PAYMENT_APPROVED, PAYMENT_DECLINED, PAYMENT_UNCONFIRMED, REFUND_COMPLETED,
                      PREPARATION_STARTED, PACKED, SHIPPED, DELIVERED -> Optional.empty();
             };
         };
@@ -98,7 +101,7 @@ public enum OrderStatus {
     /**
      * 이 상태의 주문이 재고 장부에서 쥐는 몫. 재고 장부 대조의 기대 수량이 이 분류로 센다.
      *
-     * 재고를 옮기는 전이는 미결제 취소(확보 반환)와 결제 승인(확보 → 판매) 둘뿐이다. 그 밖의 전이에서 분류가 바뀌면 재고는 그대로인데 기대
+     * 재고를 옮기는 전이는 미결제 취소 · 결과를 끝내 모른 승인 중 취소(확보 반환)와 결제 승인(확보 → 판매)뿐이다. 그 밖의 전이에서 분류가 바뀌면 재고는 그대로인데 기대
      * 수량만 바뀌어 대조가 어긋남으로 본다 — 상태를 더하거나 전이를 바꿀 때 OrderStatusStockHoldTest 가 맞물림을 본다.
      */
     public StockHold stockHold() {
