@@ -193,6 +193,16 @@ class ReconciliationChecksTest extends ReconciliationIntegrationTest {
                 tuple("STUCK", "c-3"),
                 tuple("QUEUE_GAP", data.product("빈틈").toString()),
                 tuple("PAID_BUT_REGISTERED", "c-6"));
+        // 예약 건은 그 예약의 상품, 순번 빈틈은 그 상품, Mock 에만 있는 건은 Mock 이 준 상품
+        assertThat(findingProducts()).allSatisfy(f -> {
+            Object expected = switch ((String) f.get("check_code")) {
+                case "QUEUE_GAP" -> f.get("target_key");
+                case "MOCK_ONLY" -> data.product("폰").toString();
+                default -> f.get("preorder_product_id");
+            };
+            assertThat(f.get("product_id")).as("%s %s", f.get("check_code"), f.get("target_key"))
+                    .isNotNull().isEqualTo(expected);
+        });
     }
 
     @Test
@@ -254,6 +264,17 @@ class ReconciliationChecksTest extends ReconciliationIntegrationTest {
         return jdbc.sql("SELECT status, held_count, pending_sync_count, dead_letter_count, error_message"
                         + " FROM reconciliation_runs")
                 .query().singleRow();
+    }
+
+    /** 결과의 상품과, 대상이 예약이면 그 예약의 상품 */
+    private List<Map<String, Object>> findingProducts() {
+        return jdbc.sql("""
+                        SELECT f.check_code, f.target_key, BIN_TO_UUID(f.product_id) AS product_id,
+                               BIN_TO_UUID(p.product_id) AS preorder_product_id
+                          FROM reconciliation_findings f
+                          LEFT JOIN preorders p ON p.preorder_token = f.target_key
+                        """)
+                .query().listOfRows();
     }
 
     private List<Map<String, Object>> findings() {

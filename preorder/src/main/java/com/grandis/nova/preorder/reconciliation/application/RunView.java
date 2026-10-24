@@ -2,14 +2,18 @@ package com.grandis.nova.preorder.reconciliation.application;
 
 import com.grandis.nova.preorder.reconciliation.domain.RunRow;
 
+import java.util.List;
 import java.util.Map;
 
 /**
  * 실행 한 줄과 코드별 불일치 건수. 판정(일치 · 불일치 · 판정 불가)은 상태와 건수로 정한다 — 저장하지 않는다.
  *
- * @param findingCounts 코드 → 건수. 불일치가 없거나 끝나지 않았으면 비어 있다
+ * @param findingCounts          코드 → 건수. 불일치가 없거나 끝나지 않았으면 비어 있다
+ * @param productName            검사 범위 상품의 이름. 전체 검사이거나 모르면 null
+ * @param findingCountsByProduct 상품별 건수, 많은 순. 불일치가 없거나 끝나지 않았으면 비어 있다
  */
-public record RunView(RunRow run, Map<String, Long> findingCounts) {
+public record RunView(RunRow run, Map<String, Long> findingCounts, String productName,
+                      List<ProductFindingCount> findingCountsByProduct) {
 
     public long findingCount() {
         return findingCounts.values().stream().mapToLong(Long::longValue).sum();

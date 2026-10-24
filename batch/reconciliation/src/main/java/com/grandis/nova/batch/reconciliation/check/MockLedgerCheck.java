@@ -33,21 +33,21 @@ class MockLedgerCheck implements Check {
         MockLedgerEntry mock = pair.mock();
         if (be == null) {
             if (mock.active()) {
-                findings.add(CheckCode.MOCK_ONLY, pair.key(), null, mock);
+                findings.add(CheckCode.MOCK_ONLY, pair.key(), mock.productId(), null, mock);
             }
         } else if (be.registered()) {
             registered(pair.key(), be, mock, findings);
         } else if (be.canceled()) {
             if (mock == null) {
-                findings.add(CheckCode.CANCELED_WITHOUT_MOCK_MARKER, pair.key(), be, null);
+                findings.add(CheckCode.CANCELED_WITHOUT_MOCK_MARKER, pair.key(), be.productId(), be, null);
             } else if (mock.active()) {
-                findings.add(CheckCode.CANCELED_BUT_MOCK_ACTIVE, pair.key(), be, mock);
+                findings.add(CheckCode.CANCELED_BUT_MOCK_ACTIVE, pair.key(), be.productId(), be, mock);
             }
         } else if (be.pendingSync() && mock != null) {
             if (mock.cancelMarker()) {
-                findings.add(CheckCode.PENDING_BUT_MOCK_CANCEL_MARKER, pair.key(), be, mock);
+                findings.add(CheckCode.PENDING_BUT_MOCK_CANCEL_MARKER, pair.key(), be.productId(), be, mock);
             } else if (mock.active() && be.registerDeadLettered()) {
-                findings.add(CheckCode.PENDING_BUT_MOCK_ACTIVE, pair.key(), be, mock);
+                findings.add(CheckCode.PENDING_BUT_MOCK_ACTIVE, pair.key(), be.productId(), be, mock);
             }
         }
     }
@@ -55,20 +55,20 @@ class MockLedgerCheck implements Check {
     /** 결제 가능 · 결제 완료 — Mock 에 같은 번호 · 같은 내용으로 활성이어야 한다 */
     private static void registered(String key, BePreorder be, MockLedgerEntry mock, FindingSink findings) {
         if (mock == null) {
-            findings.add(CheckCode.REGISTERED_NOT_IN_MOCK, key, be, null);
+            findings.add(CheckCode.REGISTERED_NOT_IN_MOCK, key, be.productId(), be, null);
             return;
         }
         if (!mock.active()) {
-            findings.add(CheckCode.REGISTERED_BUT_MOCK_CANCELED, key, be, mock);
+            findings.add(CheckCode.REGISTERED_BUT_MOCK_CANCELED, key, be.productId(), be, mock);
             return;
         }
         // 번호가 비었으면 NUMBER_MISSING(be 내부)이 잡는다
         if (be.externalReference() != null && !be.externalReference().equals(mock.externalNumber())) {
-            findings.add(CheckCode.NUMBER_MISMATCH, key, be, mock);
+            findings.add(CheckCode.NUMBER_MISMATCH, key, be.productId(), be, mock);
         }
         if (!Objects.equals(be.customerId(), mock.customerId()) || !Objects.equals(be.productId(), mock.productId())
                 || !Objects.equals(be.sku(), mock.sku())) {
-            findings.add(CheckCode.CONTENT_MISMATCH, key, be, mock);
+            findings.add(CheckCode.CONTENT_MISMATCH, key, be.productId(), be, mock);
         }
     }
 }

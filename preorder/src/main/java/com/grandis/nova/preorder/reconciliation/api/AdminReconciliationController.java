@@ -44,7 +44,7 @@ class AdminReconciliationController {
                 request == null ? null : request.productId(), admin.getName())));
     }
 
-    @Operation(summary = "실행 목록 — 최근 실행부터, 코드별 불일치 건수와 판정")
+    @Operation(summary = "실행 목록 — 최근 실행부터, 코드별 · 상품별 불일치 건수와 판정")
     @GetMapping("/runs")
     public ApiResponse<OffsetPage<RunResponse>> runs(@RequestParam(defaultValue = "0") int page,
                                                      @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
@@ -52,15 +52,16 @@ class AdminReconciliationController {
                 .map(RunResponse::from));
     }
 
-    @Operation(summary = "실행의 불일치 목록 — 코드 · 대상 순, 코드로 거르기")
+    @Operation(summary = "실행의 불일치 목록 — 코드 · 대상 순, 코드 · 상품으로 거르기")
     @GetMapping("/runs/{runId}/findings")
     public ApiResponse<OffsetPage<FindingResponse>> findings(
             @PathVariable UUID runId,
             @RequestParam(required = false) String checkCode,
+            @RequestParam(required = false) UUID productId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + PageSizes.DEFAULT) int size) {
-        return ApiResponse.ok(reconciliationAdminService.findFindings(runId, checkCode, PageSizes.requirePage(page),
-                PageSizes.require(size)).map(FindingResponse::from));
+        return ApiResponse.ok(reconciliationAdminService.findFindings(runId, checkCode, productId,
+                PageSizes.requirePage(page), PageSizes.require(size)).map(FindingResponse::from));
     }
 
     @Operation(summary = "두 실행 비교 — 신규 · 잔여 · 해소. 둘 다 완료이고 범위가 같을 때만")

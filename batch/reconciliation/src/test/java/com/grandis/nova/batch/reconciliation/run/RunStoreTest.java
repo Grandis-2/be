@@ -56,7 +56,7 @@ class RunStoreTest extends ReconciliationIntegrationTest {
         store.failUnfinished(Instant.now());
 
         assertThatThrownBy(() -> store.complete(runId, Instant.now(), RunCounts.ZERO,
-                List.of(new NewFinding("TEST_CODE", "k-1", null, "{}"))))
+                List.of(new NewFinding("TEST_CODE", "k-1", null, null, "{}"))))
                 .isInstanceOf(RunNotRunning.class);
         assertThat(jdbc.sql("SELECT status FROM reconciliation_runs").query(String.class).single()).isEqualTo("FAILED");
         assertThat(jdbc.sql("SELECT COUNT(*) FROM reconciliation_findings").query(Long.class).single()).isZero();

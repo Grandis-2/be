@@ -20,7 +20,8 @@ import org.springframework.stereotype.Component;
 class PaidButRegisteredCheck implements InternalCheck {
 
     private static final String SQL = """
-            SELECT p.preorder_token, BIN_TO_UUID(o.id) AS order_id, BIN_TO_UUID(pay.id) AS payment_id,
+            SELECT p.preorder_token, BIN_TO_UUID(p.product_id) AS product_id, BIN_TO_UUID(o.id) AS order_id,
+                   BIN_TO_UUID(pay.id) AS payment_id,
                    pay.approved_at, p.updated_at
               FROM payments pay
               JOIN orders o ON pay.target_type = 'ORDER' AND o.id = pay.target_id
@@ -45,7 +46,7 @@ class PaidButRegisteredCheck implements InternalCheck {
             statement = statement.param("productId", productId.toString());
         }
         statement.query(rs -> {
-            findings.add(CheckCode.PAID_BUT_REGISTERED, rs.getString("preorder_token"),
+            findings.add(CheckCode.PAID_BUT_REGISTERED, rs.getString("preorder_token"), rs.getString("product_id"),
                     new PaidOrder(rs.getString("order_id"), rs.getString("payment_id"),
                             BeSnapshot.utc(rs, "approved_at"), BeSnapshot.utc(rs, "updated_at")), null);
         });

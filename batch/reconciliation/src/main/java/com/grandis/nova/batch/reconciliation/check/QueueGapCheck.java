@@ -35,7 +35,7 @@ class QueueGapCheck implements InternalCheck {
         }
         statement.query(rs -> {
             String product = rs.getString("product_id");
-            findings.add(CheckCode.QUEUE_GAP, product,
+            findings.add(CheckCode.QUEUE_GAP, product, product,
                     new PositionCount(product, rs.getLong("max_position"), rs.getLong("preorders")), null);
         });
     }
