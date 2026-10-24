@@ -7,6 +7,7 @@ import com.grandis.nova.payment.ClaimedTransaction;
 import com.grandis.nova.payment.PaymentLedger;
 import com.grandis.nova.payment.client.toss.TossPaymentClient;
 import com.grandis.nova.payment.deadletter.application.DeadLetterAdminService;
+import com.grandis.nova.payment.domain.enums.TransactionStatus;
 import com.grandis.nova.payment.domain.enums.TransactionType;
 import com.grandis.nova.payment.domain.model.Outcome;
 import com.grandis.nova.payment.domain.model.PaymentTransaction;
@@ -44,6 +45,9 @@ class DeadLetterSqsFlowTest {
 
     @Autowired
     DeadLetterAdminService adminService;
+
+    @Autowired
+    DeadLetters deadLetters;
 
     @Autowired
     PaymentLedger ledger;
@@ -100,6 +104,34 @@ class DeadLetterSqsFlowTest {
         await().atMost(TIMEOUT).until(() -> jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM payment_dead_letter_events WHERE redriven_from_id = ? AND status = 'OPEN'",
                 Long.class, (Object) UuidBinary.toBytes(id)) == 1);
+    }
+
+    /** 되돌린 승인 중 알림이 일러 미뤄지면 그때는 남기지 않고, 사본을 처리해 넘긴 뒤에 SUCCEEDED 로 남긴다. */
+    @Test
+    void 되돌린_메시지가_미뤄지면_사본을_처리한_뒤_SUCCEEDED_다() {
+        PaymentTransaction pending = transactionTemplate.execute(s -> ledger.openCapture(target, AMOUNT));
+        transactionTemplate.execute(s -> ledger.reserve(pending, PaymentFixtures.newProviderPayment()));
+        // 직접 승인 요청을 기다리는 시간(90초)을 5초 남겨, 되돌린 알림이 한 번 미뤄지게 한다
+        jdbcTemplate.update("UPDATE payment_transactions SET reserved_at = UTC_TIMESTAMP(6) - INTERVAL 85 SECOND WHERE id = ?",
+                (Object) UuidBinary.toBytes(pending.id()));
+        String authorizing = """
+                {"eventId":"%s","eventType":"ORDER_PAYMENT_AUTHORIZING","aggregateType":"ORDER","aggregateId":"%s",\
+                "occurredAt":"2026-10-23T01:00:00Z","payload":{"providerOrderId":"%s","amount":15000}}"""
+                .formatted(UUID.randomUUID(), target.id(), pending.providerOrderId().value());
+        deadLetters.record(new IncomingDeadLetter("payment-events", UUID.randomUUID().toString(), authorizing, 5, null, null));
+        UUID id = jdbcTemplate.queryForObject("SELECT id FROM payment_dead_letter_events WHERE body = ?",
+                (rs, rowNum) -> UuidBinary.fromBytes(rs.getBytes(1)), authorizing);
+
+        adminService.redrive(id, "admin");
+
+        // 행 상태를 먼저 읽는다 — SUCCEEDED 인데 그 뒤에 읽은 거래가 아직 시작 전이면, 미룬 메시지를 처리 끝으로 남긴 것이다
+        await().atMost(TIMEOUT).until(() -> {
+            String row = status(id);
+            TransactionStatus transaction = transactions.findById(pending.id()).orElseThrow().status();
+            assertThat(row.equals("SUCCEEDED") && transaction == TransactionStatus.PENDING).as("미룬 동안 SUCCEEDED").isFalse();
+            return transaction == TransactionStatus.PROCESSING;
+        });
+        await().atMost(TIMEOUT).until(() -> "SUCCEEDED".equals(status(id)));
     }
 
     private void paid() {

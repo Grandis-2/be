@@ -33,7 +33,7 @@ import java.util.UUID;
  * @param id               저장 전이면 null
  * @param target           무엇에 대한 결제인가. 결제는 대상의 상태를 모른다
  * @param providerOrderId  CAPTURE 에만 있다
- * @param providerPaymentKey 시작 전 CAPTURE 에는 없다
+ * @param providerPaymentKey 시작 전 CAPTURE 에는 결제창 확인(확보) 때 받은 키만 있다(넘김용). 없을 수 있다
  * @param attemptCount     결제사에 보낸(선점한) 횟수
  * @param nextRetryAt      RETRY_SCHEDULED 에만
  * @param leaseToken       PROCESSING 에만

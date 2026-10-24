@@ -15,6 +15,7 @@ import com.grandis.nova.payment.persistence.repository.PaymentJpaRepository;
 import com.grandis.nova.payment.persistence.repository.PaymentTransactionJpaRepository;
 import com.grandis.nova.payment.vo.IdempotencyKey;
 import com.grandis.nova.payment.vo.LeaseToken;
+import com.grandis.nova.payment.vo.Money;
 import com.grandis.nova.payment.vo.PaymentTarget;
 import com.grandis.nova.payment.vo.ProviderError;
 import com.grandis.nova.payment.vo.ProviderOrderId;
@@ -27,6 +28,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -114,8 +116,24 @@ class JpaPaymentStore implements PaymentTransactionReader, PaymentTransactionWri
     }
 
     @Override
-    public int reserve(UUID transactionId) {
-        return detachAfter(transactionId, transactions.reserve(transactionId));
+    public int reserve(UUID transactionId, ProviderPaymentKey paymentKey) {
+        return detachAfter(transactionId, transactions.reserve(transactionId, paymentKey.value()));
+    }
+
+    @Override
+    public int handOver(PaymentTransaction seen, Money amount, LeaseToken lease, Duration after, Duration within,
+                        Instant now) {
+        try {
+            return detachAfter(seen.id(), transactions.handOver(seen.id(), amount.amount(), lease.value(), micros(after),
+                    micros(within), now));
+        } catch (DataIntegrityViolationException e) {
+            throw translateActive(e, seen);
+        }
+    }
+
+    @Override
+    public int disableHandover(UUID transactionId) {
+        return detachAfter(transactionId, transactions.disableHandover(transactionId));
     }
 
     @Override
@@ -142,6 +160,11 @@ class JpaPaymentStore implements PaymentTransactionReader, PaymentTransactionWri
                 .or(() -> transactions.lockNextLeaseExpired(type.name()))
                 .or(() -> type == TransactionType.REFUND ? transactions.lockNextPendingRefund() : Optional.empty());
         return next.map(PaymentMapper::toDomain);
+    }
+
+    @Override
+    public Optional<Duration> sinceReserved(UUID transactionId) {
+        return transactions.microsSinceReserved(transactionId).map(micros -> Duration.of(micros, ChronoUnit.MICROS));
     }
 
     @Override

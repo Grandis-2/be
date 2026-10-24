@@ -5,6 +5,7 @@ import com.grandis.nova.payment.domain.exception.ActiveTransactionExistsExceptio
 import com.grandis.nova.payment.domain.model.PaymentTransaction;
 import com.grandis.nova.payment.vo.IdempotencyKey;
 import com.grandis.nova.payment.vo.LeaseToken;
+import com.grandis.nova.payment.vo.Money;
 import com.grandis.nova.payment.vo.ProviderError;
 import com.grandis.nova.payment.vo.ProviderPaymentKey;
 
@@ -70,9 +71,23 @@ public interface PaymentTransactionWriter {
 
     /**
      * 확보: 한 번도 보내지 않은 CAPTURE(PENDING · 리스 없음)에 확보 시각(DB 시각)을 적는다 — 만료 기준이 그 시각부터 다시 잰다.
-     * 만료와 같은 PENDING 조건이라 겹치면 한쪽만 1행이다.
+     * 만료와 같은 PENDING 조건이라 겹치면 한쪽만 1행이다. 결제 키는 첫 확보에만 적고, 다시 확보할 때 다른 키가 오면 지운다.
+     *
+     * @param paymentKey 넘김({@link #handOver})이 쓸 결제 키
      */
-    int reserve(UUID transactionId);
+    int reserve(UUID transactionId, ProviderPaymentKey paymentKey);
+
+    /**
+     * 넘김: 한 번도 보내지 않은 CAPTURE(PENDING · 리스 없음)이고 확보 때 적은 결제 키가 있고 금액이 amount 와 같으며 마지막 확보(없으면 연) 뒤 after 이상 ·
+     * within 미만일 때만(DB 시각) PROCESSING 으로, 보낸 시각을 적고 보낸 횟수를 1 올리고 이미 끝난 리스를 적는다 — 복구가 곧 집어 첫 승인을
+     * 보낸다. 시작(start)과 같은 PENDING 조건이라 겹치면 한쪽만 1행이다.
+     *
+     * @throws ActiveTransactionExistsException 그 대상에 진행 중 · 성공한 CAPTURE 가 이미 있다
+     */
+    int handOver(PaymentTransaction seen, Money amount, LeaseToken lease, Duration after, Duration within, Instant now);
+
+    /** 넘김 끄기: 시작 전 CAPTURE(PENDING · 리스 없음)의 결제 키를 지운다. 지운 뒤에는 확보가 다시 적지 않는다. 넘김과 겹치면 한쪽만 된다. */
+    int disableHandover(UUID transactionId);
 
     /**
      * 에스컬레이션: 리스를 쥔 작업자가 스스로 끝낼 수 없다고 판단했다. 상태 · 리스는 그대로 두고 시각 · 마지막 오류를 적는다 —

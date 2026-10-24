@@ -41,12 +41,17 @@ import java.util.UUID;
  *
  * 응답 약속(호출자가 대상을 결제 전으로 되돌려도 되는지가 여기 달렸다):
  * - 시작 전 업무 오류(PaymentErrorCode)는 4xx 다. 그중 결제창 번호 없음 · 금액 불일치는 "이 결제창은 앞으로도 시작될 수
- *   없다" 는 확언이다 — 결제창의 대상 · 금액은 바뀌지 않는다.
+ *   없다" 는 확언이다 — 결제창의 대상 · 금액은 바뀌지 않는다. 넘김({@link ConfirmHandover})도 같은 대상 · 금액을 대조하므로 그 결제창을
+ *   시작하지 않는다.
  * - 시작한 뒤에는 업무 오류를 내지 않는다. 결과는 늘 200(불명 · 처리 중은 PENDING)이고, 예상 밖 실패는 5xx 다.
  *   확정하지 못한 거래는 리스가 끝나면 복구({@link CaptureRecovery})가 이어 받는다.
  *
  * 같은 결제창 번호로 다시 부르면 토스를 부르지 않고 그 거래의 지금 결과를 돌려준다. startAllowed=false 면 아직 시작하지 않은 거래도
- * 시작하지 않는다 — 호출자가 결제할 수 없다고 판정한 대상의 결과만 회수하는 길이다.
+ * 시작하지 않는다 — 호출자가 결제할 수 없다고 판정한 대상의 결과만 회수하는 길이다. 확보 없는 시작 금지(승인 중 재요청의 결과 회수)는
+ * 아직 시작 전인 결제창의 넘김도 끈다(결제 키를 지운다) — 이미 나간 승인 중 알림이 결제할 수 없게 된 대상을 청구할 여지를 줄인다. 결제
+ * 가능 확인이 일시 실패해 시작 금지가 된 경우도 끈다(안전 우선 — 그 결제창은 만료가 닫는다). 이 호출이 닿아야 끄므로 막는 것은 아니다:
+ * 이미 넘겨졌으면(PROCESSING) 아무것도 바꾸지 않고 지금 결과를 돌려주고, 닿지 못했으면 넘김이 그대로 청구할 수 있다 — 승인이 늦게 끝나는
+ * 경우와 같이 대상 쪽의 기존 흐름(예약 취소 보류 → 결제 뒤 환불)이 처리한다.
  * 결제 키는 로그 · 예외 · 이벤트에 싣지 않는다. 결제창 번호 · 거래 id 로 추적한다.
  */
 @Service
@@ -89,7 +94,8 @@ public class ConfirmPaymentService {
     /**
      * @param reserve startAllowed=false 일 때만: 아직 시작 전인 결제창을 확보한다(만료 기준을 지금부터). 호출자가 대상을 승인 중으로
      *                바꾸기 직전의 확인이다 — 확인과 그 전환 사이에 만료가 끼어 만료 결과를 대상이 먼저 받아 버리는 경합을 막는다.
-     *                확보와 만료는 같은 조건부 UPDATE 라 만료가 이겼으면 지금 결과가 그것(DECLINED · PAYMENT_EXPIRED)이다
+     *                확보와 만료는 같은 조건부 UPDATE 라 만료가 이겼으면 지금 결과가 그것(DECLINED · PAYMENT_EXPIRED)이다.
+     *                결제 키도 거래에 적는다(첫 확보에만) — 뒤이은 승인 요청이 닿지 않으면 {@link ConfirmHandover} 가 이 키로 넘긴다
      */
     public ConfirmResult confirm(ProviderOrderId providerOrderId, PaymentTarget target, ProviderPaymentKey paymentKey,
                                  Money amount, boolean startAllowed, boolean reserve) {
@@ -106,7 +112,9 @@ public class ConfirmPaymentService {
                 throw new BusinessException(PaymentErrorCode.PAYMENT_ATTEMPT_NOT_FOUND);
             }
             if (reserve) {
-                writeTransaction.execute(status -> ledger.reserve(seen));
+                writeTransaction.execute(status -> ledger.reserve(seen, paymentKey));
+            } else {
+                writeTransaction.execute(status -> ledger.disableHandover(seen));
             }
             return current(seen.id());
         }

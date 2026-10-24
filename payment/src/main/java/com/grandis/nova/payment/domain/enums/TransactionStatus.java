@@ -7,7 +7,8 @@ import java.util.Optional;
 /**
  * 결제 거래 상태와 그 전이. 전이는 네 갈래다.
  * <ul>
- *   <li>시작({@link #start}) — 사용자의 승인 요청이 CAPTURE 를 연다(PENDING → PROCESSING).</li>
+ *   <li>시작({@link #start}) — 사용자의 승인 요청이 CAPTURE 를 연다(PENDING → PROCESSING). 승인 요청이 닿지 않은 결제창을 복구에
+ *       넘길 때도 같은 전이다(리스가 이미 끝난 PROCESSING — PaymentLedger.handOver).</li>
  *   <li>선점({@link #claim}) — 워커가 재전송하려고 집는다. CAPTURE PENDING 은 집지 않는다(사용자가 결제창을 버렸을 수 있다).
  *       PROCESSING 은 리스가 만료된 것만, RETRY_SCHEDULED 는 재시도 시각이 된 것만 — 시각 조건은 저장소가 DB 시각으로 본다.</li>
  *   <li>반영({@link #resolve}) — 결제사 결과를 PROCESSING 에만 반영한다.</li>

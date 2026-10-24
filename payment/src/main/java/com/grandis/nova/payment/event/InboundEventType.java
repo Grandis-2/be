@@ -9,7 +9,9 @@ import java.util.Arrays;
 public enum InboundEventType {
 
     /** order: 결제된 주문을 취소 중으로 바꿨다. 그 주문의 결제를 전액 환불한다. */
-    ORDER_REFUND_REQUESTED;
+    ORDER_REFUND_REQUESTED,
+    /** order: 주문을 승인 중으로 바꿨다. 승인 요청이 닿지 않았으면 그 결제창을 복구에 넘긴다(confirm.ConfirmHandover). */
+    ORDER_PAYMENT_AUTHORIZING;
 
     /** 주문 이벤트의 aggregate. aggregateId 가 주문 id 라는 뜻이다(받는 종류는 모두 주문 이벤트다). */
     public static final String ORDER_AGGREGATE = "ORDER";

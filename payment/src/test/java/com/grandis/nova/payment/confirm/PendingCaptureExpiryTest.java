@@ -164,7 +164,8 @@ class PendingCaptureExpiryTest {
     @Test
     void reservedCaptureStillExpiresAfterReservation() {
         PaymentTransaction pending = open(target);
-        Boolean reserved = transactionTemplate.execute(s -> ledger.reserve(pending));
+        Boolean reserved = transactionTemplate.execute(s ->
+                ledger.reserve(pending, PaymentFixtures.newProviderPayment()));
         assertThat(reserved).isTrue();
         expiry.expireDue();
         assertThat(transactions.findById(pending.id()).orElseThrow().status()).isEqualTo(TransactionStatus.PENDING);
@@ -184,7 +185,8 @@ class PendingCaptureExpiryTest {
         age(pending, PAST_DUE);
 
         List<Concurrently.Outcome<Object>> outcomes = Concurrently.run(2, i -> () -> i == 0
-                ? transactionTemplate.execute(s -> ledger.reserve(pending))
+                ? transactionTemplate.execute(s ->
+                        ledger.reserve(pending, PaymentFixtures.newProviderPayment()))
                 : settlement.expire(pending, PendingCaptureExpiry.OPENED_FOR));
 
         assertThat(outcomes).allSatisfy(o -> assertThat(o.error()).isNull());
