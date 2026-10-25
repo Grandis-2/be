@@ -128,7 +128,7 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
              where o.id = :id and o.refundFailedAt is null
                and (o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.CANCELING
                     or (o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.CANCELED
-                        and o.autoRefundRequestedAt is not null))
+                        and o.autoRefundRequestedAt is not null and o.autoRefundCompletedAt is null))
             """)
     int markRefundFailed(@Param("id") UUID id, @Param("now") Instant now);
 

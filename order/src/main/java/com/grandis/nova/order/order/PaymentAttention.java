@@ -27,7 +27,9 @@ public class PaymentAttention {
         /** 결과를 모른 채 취소한 주문에 늦게 온 승인(결과 이벤트)의 금액이 주문 총액과 달라 자동 환불하지 않았다. 돈이 나간 채다. */
         AMOUNT_MISMATCH,
         /** 늦은 승인의 자동 환불이 확정 실패했다 — 취소된 주문의 돈이 돌아가지 않았다. */
-        AUTO_REFUND_FAILED
+        AUTO_REFUND_FAILED,
+        /** 관리자가 환불을 다시 보냈는데(payment 는 새 거래를 열었다) 주문에 적지 못했다 — 주문의 실패 표시 · 이력이 payment 와 다르다. */
+        REFUND_RETRY_UNRECORDED
     }
 
     private final Map<Reason, Counter> counters = new EnumMap<>(Reason.class);

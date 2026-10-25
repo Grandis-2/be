@@ -5,6 +5,7 @@ import com.grandis.nova.order.client.payment.PaymentRefundAdminRequest;
 import com.grandis.nova.order.client.payment.PaymentRefundAdminResult;
 import com.grandis.nova.order.client.payment.PaymentRefundIssue;
 import com.grandis.nova.order.order.OrderLedger;
+import com.grandis.nova.order.order.PaymentAttention;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.vo.EventCause;
@@ -64,14 +65,16 @@ public class RefundIssues {
     private final PaymentRefundAdmin payments;
     private final TransactionTemplate writeTransaction;
     private final Clock clock;
+    private final PaymentAttention attention;
 
     public RefundIssues(OrderReader orderReader, OrderLedger ledger, PaymentRefundAdmin payments,
-                        PlatformTransactionManager transactionManager, Clock clock) {
+                        PlatformTransactionManager transactionManager, Clock clock, PaymentAttention attention) {
         this.orderReader = orderReader;
         this.ledger = ledger;
         this.payments = payments;
         this.writeTransaction = new TransactionTemplate(transactionManager);
         this.clock = clock;
+        this.attention = attention;
     }
 
     /**
@@ -134,6 +137,7 @@ public class RefundIssues {
         } catch (RuntimeException e) {
             log.error("관리자 환불 다시 보내기 — payment 는 다시 열었는데 주문에 적지 못했다(주문 표시가 payment 와 다를 수 있다) orderId={}",
                     orderId, e);
+            attention.record(PaymentAttention.Reason.REFUND_RETRY_UNRECORDED);
         }
         return result;
     }
