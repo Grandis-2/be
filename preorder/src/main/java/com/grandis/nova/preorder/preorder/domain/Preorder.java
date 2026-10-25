@@ -41,11 +41,12 @@ public class Preorder extends BaseEntity {
     @Column(nullable = false, updatable = false)
     private UUID optionId;
 
-    @Column(nullable = false, updatable = false)
+    /** 순번 · 차수는 넣은 뒤 같은 트랜잭션에서 채운다({@link #place}). 커밋된 행은 늘 값이 있다. */
+    @Column(updatable = false)
     private UUID shipmentBatchId;
 
-    @Column(nullable = false, updatable = false)
-    private long queuePosition;
+    @Column(updatable = false)
+    private Long queuePosition;
 
     @Column(updatable = false, length = 64)
     private String admissionTicketId;
@@ -93,8 +94,6 @@ public class Preorder extends BaseEntity {
         this.customerId = draft.customerId();
         this.productId = draft.productId();
         this.optionId = draft.optionId();
-        this.shipmentBatchId = draft.shipmentBatchId();
-        this.queuePosition = draft.queuePosition();
         this.admissionTicketId = draft.admissionTicketId();
         this.idempotencyKey = draft.idempotencyKey();
         this.productTitleSnapshot = draft.productTitleSnapshot();
@@ -103,6 +102,15 @@ public class Preorder extends BaseEntity {
         this.internalNote = draft.internalNote();
         this.status = PreorderStatus.PENDING_SYNC;
         this.eventSequence = PreorderEvent.FIRST_SEQUENCE;
+    }
+
+    /**
+     * 회차가 발급한 순번 · 차수를 이 객체에 둔다. DB 에는 {@link PreorderLedger#place} 가 조건부 UPDATE 로 쓴다 —
+     * 두 칸은 updatable = false 라 변경 감지가 다시 쓰지 않는다.
+     */
+    public void place(UUID shipmentBatchId, long queuePosition) {
+        this.shipmentBatchId = shipmentBatchId;
+        this.queuePosition = queuePosition;
     }
 
     /** 관리자 전용 메모. 이력을 남기지 않는다. */

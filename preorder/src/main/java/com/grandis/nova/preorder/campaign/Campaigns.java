@@ -7,6 +7,7 @@ import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatch;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatchRepository;
+import jakarta.persistence.EntityManager;
 import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -25,7 +26,7 @@ import java.util.stream.Collectors;
 
 /**
  * 회차 · 배송 차수(모듈 공개 API). 값은 스냅샷으로만 내준다.
- * 접수는 한 트랜잭션에서 {@link #lockForAccept} → {@link #issuePosition} 순으로 부른다 — 순번을 빈틈 · 중복 없이 발급하는 잠금이다.
+ * 접수는 다른 쓰기를 마친 뒤 {@link #lockForAccept} → {@link #issuePosition} 순으로 부른다 — 순번을 빈틈 · 중복 없이 발급하는 잠금이다.
  */
 @Service
 public class Campaigns {
@@ -34,13 +35,16 @@ public class Campaigns {
     private final ShipmentBatchRepository batches;
     private final CampaignChangePublisher changePublisher;
     private final CampaignCache cache;
+    private final EntityManager entityManager;
 
     Campaigns(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
-              CampaignChangePublisher changePublisher, CampaignCache cache) {
+              CampaignChangePublisher changePublisher, CampaignCache cache,
+              EntityManager entityManager) {
         this.campaigns = campaigns;
         this.batches = batches;
         this.changePublisher = changePublisher;
         this.cache = cache;
+        this.entityManager = entityManager;
     }
 
     /** 이 인스턴스의 회차 캐시에서 그 상품을 비운다 — 캐시에서 고른 차수가 외래 키에 막혔을 때 다음 시도가 DB 에서 읽게. */
@@ -53,19 +57,34 @@ public class Campaigns {
         return cache.find(productId);
     }
 
-    /** 회차 행을 잠그고 일정 · 판매 상태를 읽는다. 잠금은 호출한 트랜잭션이 끝날 때까지다. 회차가 없으면 비어 있다. */
+    /**
+     * 잠그지 않고 회차 행에서 일정 · 판매 상태를 읽는다 — 접수가 잠그기 전에 판정한다.
+     * 읽은 뒤의 변경은 {@link #lockForAccept} 로 다시 본다. 회차가 없으면 비어 있다.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public Optional<CampaignForAccept> findForAccept(UUID productId) {
+        return campaigns.lookup(productId).map(Campaigns::forAccept);
+    }
+
+    /**
+     * 회차 행을 잠그고 지금 값으로 다시 읽는다. 잠금은 커밋까지라 접수의 다른 쓰기를 마친 뒤 부른다.
+     * 앞서 읽은 엔티티가 있으면 잠금 조회가 옛 값을 돌려줘 떼어 내고 읽는다. 저장소 조회라 잠금 실패가 Spring 예외로 온다.
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public Optional<CampaignForAccept> lockForAccept(UUID productId) {
-        return campaigns.findForUpdate(productId).map(campaign -> CampaignForAccept.of(campaign.toSchedule(),
-                campaign.isVisible(), campaign.getProductStatus()));
+        Optional.ofNullable(entityManager.find(PreorderCampaign.class, productId)).ifPresent(entityManager::detach);
+        return campaigns.findForUpdate(productId).map(Campaigns::forAccept);
+    }
+
+    private static CampaignForAccept forAccept(PreorderCampaign campaign) {
+        return CampaignForAccept.of(campaign.toSchedule(), campaign.isVisible(), campaign.getProductStatus());
     }
 
     /**
      * 잠근 회차에서 순번 하나를 발급하고 그 순번의 차수를 정한다. {@link #lockForAccept} 와 같은 트랜잭션에서만 부른다.
-     * 차수는 오픈 뒤에 읽어 둔 원천 캐시에서 고르고, 없으면 DB 에서 읽는다 — 잠금 구간의 왕복을 하나 줄인다.
-     * 교체와 겹쳐 옛 차수를 골라도 예약의 차수 외래 키가 INSERT 를 막는다(교체는 차수 행을 지우고 새로 넣는다).
+     * 차수는 오픈 뒤 캐시에서 고르고, 교체와 겹쳐 옛 차수를 골라도 예약의 차수 외래 키가 막는다.
      *
-     * @throws IllegalStateException 잠근 회차가 없거나 순번이 속한 차수가 없다(오픈 전 검사를 지나친 데이터)
+     * @throws IllegalStateException 잠근 회차가 없거나 순번이 속한 차수가 없다
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public IssuedPosition issuePosition(UUID productId) {

@@ -8,6 +8,7 @@ import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.preorder.PreorderErrorCode;
 import com.grandis.nova.preorder.accept.application.AcceptResult;
 import com.grandis.nova.preorder.accept.application.PreorderAcceptService;
+import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.campaign.application.PreorderCampaignAdminService;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.preorder.PreorderLedger;
@@ -58,6 +59,9 @@ import static org.mockito.BDDMockito.given;
 @PreorderIntegrationTest
 class PreorderAcceptConcurrencyTest {
 
+    /** 상품당 격벽 허가 수 기본값(nova.accept.bulkhead.product-permits). */
+    static final int PERMITS = 4;
+
     @Autowired
     PreorderAcceptService acceptService;
 
@@ -66,6 +70,9 @@ class PreorderAcceptConcurrencyTest {
 
     @Autowired
     PreorderLedger ledger;
+
+    @Autowired
+    Campaigns campaigns;
 
     @Autowired
     TransactionTemplate transactionTemplate;
@@ -279,7 +286,7 @@ class PreorderAcceptConcurrencyTest {
     }
 
     @RepeatedTest(3)
-    void 같은_입장에서_받은_입장권_두_장을_동시에_보내면_하나만_받고_나머지는_STALE() throws Exception {
+    void 같은_입장에서_받은_입장권_두_장을_동시에_보내면_하나만_받고_나머지는_거절된다() throws Exception {
         UUID customerId = fixtures.customer();
         List<String> tickets = List.of(
                 AdmissionTickets.issue(product.productId(), customerId, Instant.now()),
@@ -290,14 +297,17 @@ class PreorderAcceptConcurrencyTest {
                 product.productId(), product.productId(), product.optionId(), "same-admission-" + i, tickets.get(i)));
 
         assertThat(outcomes.stream().filter(Outcome::accepted)).hasSize(1);
+        // 겹쳐 들어오면 진 쪽은 활성 예약 UNIQUE 로, 앞 접수의 커밋 뒤에 들어오면 이전 발급 입장권으로 막힌다
         assertThat(outcomes.stream().filter(o -> !o.accepted()))
-                .singleElement().extracting(Outcome::error).isEqualTo(PreorderErrorCode.ADMISSION_TICKET_STALE);
+                .singleElement().extracting(Outcome::error)
+                .isIn(PreorderErrorCode.ACTIVE_PREORDER_EXISTS, PreorderErrorCode.ADMISSION_TICKET_STALE);
         assertThat(committedPositions()).containsExactly(1L);
+        assertThat(nextQueuePosition()).as("진 쪽은 순번을 쓰지 않는다").isEqualTo(2);
     }
 
     /** 대기열 교체 배포 중에는 옛 노드와 새 노드가 같은 입장에 발급 시각 칸이 없는 것 · 있는 것을 한 장씩 낼 수 있다. */
     @RepeatedTest(3)
-    void 같은_입장의_발급_시각이_없는_입장권과_있는_입장권을_동시에_보내면_하나만_받고_나머지는_STALE() throws Exception {
+    void 같은_입장의_발급_시각이_없는_입장권과_있는_입장권을_동시에_보내면_하나만_받고_나머지는_거절된다() throws Exception {
         UUID customerId = fixtures.customer();
         Instant admittedAt = Instant.now();
         List<String> tickets = List.of(
@@ -309,9 +319,12 @@ class PreorderAcceptConcurrencyTest {
                 product.productId(), product.productId(), product.optionId(), "mixed-admission-" + i, tickets.get(i)));
 
         assertThat(outcomes.stream().filter(Outcome::accepted)).hasSize(1);
+        // 겹쳐 들어오면 진 쪽은 활성 예약 UNIQUE 로, 앞 접수의 커밋 뒤에 들어오면 이전 발급 입장권으로 막힌다
         assertThat(outcomes.stream().filter(o -> !o.accepted()))
-                .singleElement().extracting(Outcome::error).isEqualTo(PreorderErrorCode.ADMISSION_TICKET_STALE);
+                .singleElement().extracting(Outcome::error)
+                .isIn(PreorderErrorCode.ACTIVE_PREORDER_EXISTS, PreorderErrorCode.ADMISSION_TICKET_STALE);
         assertThat(committedPositions()).containsExactly(1L);
+        assertThat(nextQueuePosition()).as("진 쪽은 순번을 쓰지 않는다").isEqualTo(2);
     }
 
     /** 접수와 마감은 같은 회차 행을 잠근다. 어느 쪽이 먼저 잠그든 마감 시각 뒤에 들어간 예약이 없어야 한다. */
@@ -343,7 +356,7 @@ class PreorderAcceptConcurrencyTest {
     }
 
     /**
-     * 회차 잠금이 오래 쥐어져도 같은 상품은 허가 수(2)만 트랜잭션에 들어가 커넥션을 쥔다. 나머지는 커넥션 없이 기다리다 상한 뒤 503 이고,
+     * 회차 잠금이 오래 쥐어져도 같은 상품은 허가 수(4)만 트랜잭션에 들어가 커넥션을 쥔다. 나머지는 커넥션 없이 기다리다 상한 뒤 503 이고,
      * 그동안 다른 상품은 접수된다 — 격벽이 없으면 12건이 풀(10)을 다 쥐어 다른 상품도 커넥션 대기 끝에 503 이다.
      */
     @Test
@@ -360,7 +373,7 @@ class PreorderAcceptConcurrencyTest {
         try (CampaignRowLock ignored = CampaignRowLock.hold(dataSource, product.productId())) {
             burst = CompletableFuture.supplyAsync(() -> concurrentlyUnchecked(requests,
                     i -> () -> acceptByCustomer(customers.get(i), "bulkhead-key-" + i)));
-            await().atMost(Duration.ofSeconds(10)).until(() -> bulkheadEntered() - enteredBefore == 2);
+            await().atMost(Duration.ofSeconds(10)).until(() -> bulkheadEntered() - enteredBefore == PERMITS);
 
             UUID otherCustomer = fixtures.customer();
             AcceptResult otherAccepted = acceptService.acceptByCustomer(otherCustomer, other.productId(),
@@ -368,16 +381,63 @@ class PreorderAcceptConcurrencyTest {
                     AdmissionTickets.issue(other.productId(), otherCustomer, Instant.now()));
             assertThat(otherAccepted.replayed()).isFalse();
 
-            await().atMost(Duration.ofSeconds(10)).until(() -> bulkheadRejected() - rejectedBefore == requests - 2);
+            await().atMost(Duration.ofSeconds(10))
+                    .until(() -> bulkheadRejected() - rejectedBefore == requests - PERMITS);
         }
 
         List<Outcome> outcomes = burst.get(30, TimeUnit.SECONDS);
-        assertThat(outcomes.stream().filter(Outcome::accepted)).hasSize(2);
+        assertThat(outcomes.stream().filter(Outcome::accepted)).hasSize(PERMITS);
         assertThat(outcomes.stream().filter(o -> !o.accepted()))
-                .hasSize(requests - 2)
+                .hasSize(requests - PERMITS)
                 .allMatch(o -> o.error() == CommonErrorCode.DEPENDENCY_UNAVAILABLE);
-        assertThat(committedPositions()).containsExactly(1L, 2L);
-        assertThat(nextQueuePosition()).isEqualTo(3);
+        assertThat(committedPositions()).containsExactlyElementsOf(LongStream.rangeClosed(1, PERMITS).boxed().toList());
+        assertThat(nextQueuePosition()).isEqualTo(PERMITS + 1);
+    }
+
+    /**
+     * 오픈 뒤 캐시에 든 차수가 비우기를 놓친 채 교체되면, 순번을 받은 뒤 예약에 채우다 차수 외래 키에 막힌다. 롤백이 카운터를 되돌리고
+     * 캐시를 비워 DB 의 차수로 한 번 더 접수하므로 순번은 1 이다.
+     */
+    @Test
+    void 캐시의_차수가_교체돼_외래_키에_막혀도_순번에_빈틈_없이_다시_접수한다() {
+        campaigns.findCached(product.productId());
+        UUID firstBatchId = fixtures.reissueBatches(product);
+
+        AcceptResult accepted = acceptByCustomer(fixtures.customer(), "stale-batch-key");
+
+        assertThat(accepted.shipmentBatch().id()).isEqualTo(firstBatchId);
+        assertThat(committedPositions()).containsExactly(1L);
+        assertThat(nextQueuePosition()).isEqualTo(2);
+    }
+
+    /**
+     * 접수가 회차 잠금을 기다리는 동안 판매 중지가 지금 시각으로 닫으면, 잠근 뒤의 시각으로 판정해 마감으로 거절한다.
+     * 순번을 쓰지 않고, 앞서 넣은 예약 · 작업도 롤백돼 남지 않는다.
+     */
+    @Test
+    void 잠금을_기다리는_동안_회차가_닫히면_순번을_쓰지_않고_마감으로_거절한다() throws Exception {
+        UUID customerId = fixtures.customer();
+        long enteredBefore = bulkheadEntered();
+
+        CompletableFuture<Outcome> waiting;
+        try (CampaignRowLock lock = CampaignRowLock.hold(dataSource, product.productId())) {
+            waiting = CompletableFuture.supplyAsync(
+                    () -> outcomeUnchecked(() -> acceptByCustomer(customerId, "closing-key")));
+            await().atMost(Duration.ofSeconds(10)).until(() -> bulkheadEntered() - enteredBefore == 1);
+            // 넣기를 마치고 회차 잠금에서 기다릴 때까지
+            await().atMost(Duration.ofSeconds(10)).until(() -> jdbcTemplate.queryForObject("""
+                    SELECT COUNT(*) FROM information_schema.PROCESSLIST
+                     WHERE ID <> CONNECTION_ID() AND INFO LIKE '%preorder_campaigns%for update%'
+                    """, Integer.class) > 0);
+            // 판매 중지처럼 지금 시각으로 닫는다 — 접수가 잠그기 전에 잡은 시각보다 늦다
+            lock.commitClosing(Instant.now());
+        }
+
+        assertThat(waiting.get(30, TimeUnit.SECONDS).error()).isEqualTo(PreorderErrorCode.SALE_CLOSED);
+        assertThat(committedPositions()).isEmpty();
+        assertThat(nextQueuePosition()).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM preorders WHERE product_id = ?", Integer.class,
+                (Object) UuidBinary.toBytes(product.productId()))).as("넣은 예약 · 작업도 롤백된다").isZero();
     }
 
     /** 오픈 전에 몰린 접수는 회차 캐시로 잠그기 전에 거절한다 — 회차 잠금이 쥐어져 있어도 그 뒤에 줄 서지 않는다. */
@@ -418,11 +478,11 @@ class PreorderAcceptConcurrencyTest {
     }
 
     /**
-     * 마감 직전 접수가 커밋되기 전에 마감 시각이 지나고 같은 키 재전송이 오면, 재전송은 잠금 뒤에 그 예약을 받아야 한다 —
-     * 마감은 잠그기 전에 판정하지 않는다(잠그지 않고 읽으면 커밋 전 예약이 안 보여 SALE_CLOSED 다).
+     * 마감 직전 접수가 커밋되기 전에 마감 시각이 지나고 같은 키 재전송이 오면, 재전송은 그 커밋 뒤에 그 예약을 받아야 한다 —
+     * 마감은 넣기 전에 판정하지 않는다(커밋 전 예약은 안 보여 SALE_CLOSED 가 된다). 재전송의 INSERT 가 접수 키 UNIQUE 에서 기다린다.
      */
     @Test
-    void 마감_직전_접수가_커밋되기_전_재전송은_잠금_뒤에_기존_예약을_받는다() throws Exception {
+    void 마감_직전_접수가_커밋되기_전_재전송은_그_커밋을_기다려_기존_예약을_받는다() throws Exception {
         Instant closesAt = Instant.now().plusSeconds(2);
         PreorderProduct closing = fixtures.preorderProduct(closesAt.minusSeconds(3600), closesAt);
         given(catalogClient.getProduct(closing.productId())).willReturn(
@@ -451,6 +511,14 @@ class PreorderAcceptConcurrencyTest {
         assertThat(replayed.replayed()).isTrue();
         assertThat(replayed.preorder().preorderToken())
                 .isEqualTo(first.get(30, TimeUnit.SECONDS).preorder().preorderToken());
+    }
+
+    private static Outcome outcomeUnchecked(Callable<AcceptResult> task) {
+        try {
+            return Outcome.of(task);
+        } catch (Exception e) {
+            throw new CompletionException(e);
+        }
     }
 
     private static void awaitQuietly(CountDownLatch latch) {

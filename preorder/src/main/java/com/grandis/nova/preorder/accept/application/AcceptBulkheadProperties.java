@@ -8,8 +8,8 @@ import java.time.Duration;
 /**
  * 접수 격벽. 같은 상품의 접수는 회차 행 잠금에 한 줄로 서고 기다리는 동안 커넥션을 쥔다 — 줄을 커넥션 밖(메모리)에 세운다.
  *
- * @param productPermits 상품마다 동시에 트랜잭션에 들어가는 접수 수. 잠금을 쥔 1 + 풀리면 바로 이어 받을 1 — 더 들여보내도
- *                       처리량은 그대로고 잠금을 기다리며 커넥션만 쥔다
+ * @param productPermits 상품마다 동시에 트랜잭션에 들어가는 접수 수. 잠금을 쥔 1 + 잠그기 전 쓰기(잠금 구간보다 길다) 2 + 이어 받을 1.
+ *                       더 들여보내도 처리량은 그대로고 커넥션만 쥔다
  * @param poolShare      인스턴스 전체 동시 접수 상한을 커넥션 풀의 이 비율로 정한다. 0.5 면 풀 10 중 5 — 나머지를 아웃박스 발행 ·
  *                       SQS 소비기 · 조회가 쓴다(풀은 하나다)
  * @param instanceLimit  전체 상한을 직접 준다. 0 이면 poolShare 로 계산한다. 풀 크기보다 작아야 한다 — 같거나 크면 접수가 풀을
@@ -21,7 +21,7 @@ import java.time.Duration;
  */
 @ConfigurationProperties("nova.accept.bulkhead")
 record AcceptBulkheadProperties(
-        @DefaultValue("2") int productPermits,
+        @DefaultValue("4") int productPermits,
         @DefaultValue("0.5") double poolShare,
         @DefaultValue("0") int instanceLimit,
         @DefaultValue("3s") Duration maxWait,

@@ -119,6 +119,16 @@ public interface PreorderRepository extends JpaRepository<Preorder, UUID>, JpaSp
                     @Param("now") Instant now,
                     @Param("from") PreorderStatus from, @Param("registered") PreorderStatus registered);
 
+    /**
+     * 접수가 넣은 예약에 회차가 발급한 순번 · 차수를 채운다 — 아직 비어 있는 행만. 바꾼 행 수(0 또는 1).
+     * 두 칸은 엔티티에서 updatable = false 라 이 문장만 쓴다. 영속성 컨텍스트는 비우지 않는다(넣은 객체를 계속 쓴다).
+     */
+    @Modifying
+    @Query(value = """
+            UPDATE preorders SET shipment_batch_id = :batchId, queue_position = :position
+             WHERE id = :id AND queue_position IS NULL""", nativeQuery = true)
+    int place(@Param("id") byte[] id, @Param("batchId") byte[] batchId, @Param("position") long position);
+
     /** 같은 접수 키의 기존 예약(재전송 판정). */
     Optional<Preorder> findByCustomerIdAndIdempotencyKey(UUID customerId, String idempotencyKey);
 

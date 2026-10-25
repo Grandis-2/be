@@ -20,6 +20,7 @@ import com.grandis.nova.preorder.syncjob.SyncActor;
 import com.grandis.nova.preorder.syncjob.SyncJobs;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import jakarta.persistence.EntityManager;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,17 +35,15 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * 접수 트랜잭션. 순서를 바꾸지 않는다(ERD preorders Note).
+ * 접수 트랜잭션. 쓰기를 먼저 마치고 맨 끝 순번 발급에서만 회차를 잠근다 — 순서를 바꾸지 않는다.
  *
- * 1. 회차 행 잠금 — 같은 모델의 접수는 여기서 한 줄로 선다
- * 2. 같은 접수 키 재전송 확인 — 잠금 뒤라서 같은 키의 동시 재전송이 순번을 두 번 쓰지 않는다.
- *    마지막 접수 시각(입장권 확인)도 같은 문장에서 읽는다
- * 3. 상품 · 옵션 · 접수 기간 확인
- * 4. 순번 발급 · 차수 배정
- * 5. 예약 + 첫 이력 → REGISTER 작업 → 아웃박스(REGISTER_JOB_READY)
+ * 1. 같은 접수 키 · 마지막 접수 시각 조회
+ * 2. 잠그지 않은 회차 행으로 상품 · 옵션 · 오픈 확인
+ * 3. 예약(순번 비움) · 이력 · REGISTER 작업 · 아웃박스 → flush
+ * 4. 회차 행 잠금(SELECT … FOR UPDATE) → 잠근 뒤 시각으로 판매 상태 · 접수 기간 판정
+ * 5. 순번 발급 · 예약에 순번 · 차수 채우기
  *
- * 외부 HTTP 는 없다. 상품 정보는 호출하는 쪽이 트랜잭션 밖에서 읽어 넘긴다(카탈로그 캐시).
- * SQS 발행도 없다 — 커밋 뒤 발행기가 아웃박스 알림을 받아 보낸다.
+ * 외부 HTTP · SQS 발행은 없다 — 상품 정보는 호출하는 쪽이 넘기고, 발행은 커밋 뒤 아웃박스가 한다.
  */
 @Component
 class PreorderAcceptTransaction {
@@ -53,6 +52,7 @@ class PreorderAcceptTransaction {
     private final Preorders preorders;
     private final PreorderLedger ledger;
     private final SyncJobs syncJobs;
+    private final EntityManager entityManager;
     private final OutboxWriter outboxWriter;
     private final JsonMapper jsonMapper;
     private final Clock clock;
@@ -62,7 +62,7 @@ class PreorderAcceptTransaction {
 
     PreorderAcceptTransaction(Campaigns campaigns,
                                      Preorders preorders, PreorderLedger ledger,
-                                     SyncJobs syncJobs, OutboxWriter outboxWriter,
+                                     SyncJobs syncJobs, EntityManager entityManager, OutboxWriter outboxWriter,
                                      JsonMapper jsonMapper, Clock clock,
                                      @Value("${nova.external-mock.scope:preorder}") String externalScope,
                                      MeterRegistry meterRegistry) {
@@ -70,6 +70,7 @@ class PreorderAcceptTransaction {
         this.preorders = preorders;
         this.ledger = ledger;
         this.syncJobs = syncJobs;
+        this.entityManager = entityManager;
         this.outboxWriter = outboxWriter;
         this.jsonMapper = jsonMapper;
         this.clock = clock;
@@ -84,8 +85,7 @@ class PreorderAcceptTransaction {
      */
     @Transactional
     public AcceptResult accept(AcceptCommand command, Optional<ProductCatalog> product) {
-        Optional<CampaignForAccept> campaign =
-                campaignLockWait.record(() -> campaigns.lockForAccept(command.productId()));
+        Optional<CampaignForAccept> campaign = campaigns.findForAccept(command.productId());
 
         AcceptHistory history = preorders.findAcceptHistory(command.customerId(), command.productId(),
                 command.idempotencyKey());
@@ -95,21 +95,28 @@ class PreorderAcceptTransaction {
 
         requireTicketAfterLastAccept(command, history.lastAcceptedAt());
         OptionSnapshot option = requireOnSale(command, product, campaign);
-        requireAccepting(campaign, clock.instant());
-        IssuedPosition issued = campaigns.issuePosition(command.productId());
+        Instant now = clock.instant();
+        requireOpened(campaign, now);
 
         String preorderToken = UUID.randomUUID().toString();
-        PreorderSnapshot preorder = ledger.accept(new NewPreorder(preorderToken, command.customerId(),
-                command.productId(), command.optionId(), issued.batch().id(), issued.position(), command.admissionTicketId(),
-                command.idempotencyKey(), option.productTitle(), option.optionTitle(), option.price(),
-                command.internalNote()), command.actor(), command.reason());
+        UUID preorderId = ledger.accept(new NewPreorder(preorderToken, command.customerId(), command.productId(),
+                command.optionId(), command.admissionTicketId(), command.idempotencyKey(), option.productTitle(),
+                option.optionTitle(), option.price(), command.internalNote()), command.actor(), command.reason());
 
         String payload = jsonMapper.writeValueAsString(RegisterRequestPayload.of(preorderToken,
                 command.customerId(), command.productId(), option.sku(), externalScope));
-        UUID jobId = syncJobs.createRegister(preorder.id(), payload);
+        UUID jobId = syncJobs.createRegister(preorderId, payload);
         outboxWriter.append(new RegisterJobReady(jobId, preorderToken, command.productId(), payload,
                 SyncActor.SYSTEM, 1));
+        // 잠그기 전에 모두 내보낸다 — 커밋 때 나가면 그 쓰기들이 회차 잠금 안으로 들어간다
+        entityManager.flush();
 
+        // 잠근 뒤의 시각으로 판정한다 — 잠금을 기다리는 동안 커밋된 마감 · 판매 중지를 본다
+        Optional<CampaignForAccept> locked =
+                campaignLockWait.record(() -> campaigns.lockForAccept(command.productId()));
+        requireAccepting(locked, clock.instant());
+        IssuedPosition issued = campaigns.issuePosition(command.productId());
+        PreorderSnapshot preorder = ledger.place(preorderId, issued.batch().id(), issued.position());
         return new AcceptResult(preorder, issued.batch(), false);
     }
 
@@ -176,7 +183,7 @@ class PreorderAcceptTransaction {
 
     /**
      * 입장권은 그 회원 · 그 모델의 마지막 접수 뒤에 발급된 것만 받는다 — 같은 입장에서 받은 다른 창의 입장권으로
-     * 취소 뒤 줄을 다시 서지 않고 재접수하지 못하게. 회차 잠금 뒤라 동시 접수도 서로의 접수를 본다.
+     * 취소 뒤 줄을 다시 서지 않고 재접수하지 못하게. 커밋 전의 동시 접수는 보지 못하지만 그 둘은 uq_preorder_active 가 막는다.
      */
     private static void requireTicketAfterLastAccept(AcceptCommand command, Optional<Instant> lastAcceptedAt) {
         AdmissionTicket ticket = command.admissionTicket();
@@ -187,6 +194,18 @@ class PreorderAcceptTransaction {
                 .filter(acceptedAt -> !acceptedAt.isBefore(ticket.issuedNoEarlierThan()))
                 .ifPresent(acceptedAt -> {
                     throw new BusinessException(PreorderErrorCode.ADMISSION_TICKET_STALE);
+                });
+    }
+
+    /**
+     * 오픈 전이면 넣기 전에 거절한다. 마감은 잠근 뒤에 본다 — 마감 직전 접수의 재전송이 그 커밋을 기다려 기존 예약을 받게.
+     */
+    private static void requireOpened(Optional<CampaignForAccept> campaign, Instant now) {
+        campaign.map(CampaignForAccept::schedule)
+                .filter(schedule -> now.isBefore(schedule.opensAt()))
+                .ifPresent(schedule -> {
+                    throw new BusinessException(PreorderErrorCode.SALE_NOT_OPEN,
+                            Map.of("reason", "opensAt=" + schedule.opensAt()));
                 });
     }
 

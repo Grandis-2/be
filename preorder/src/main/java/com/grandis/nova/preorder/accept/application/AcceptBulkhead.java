@@ -91,6 +91,11 @@ class AcceptBulkhead {
     private DependencyUnavailableException rejected(String limit, UUID productId, long started) {
         rejectedWait.record(System.nanoTime() - started, TimeUnit.NANOSECONDS);
         rejectedCounter(limit, productTag.apply(productId)).increment();
+        return retryLater();
+    }
+
+    /** 다시 보내라는 503 — 허가를 얻은 뒤 잠금 때문에 끝내지 못한 접수(교착 · 잠금 대기 시한)도 같은 Retry-After 범위로 돌려보낸다. */
+    DependencyUnavailableException retryLater() {
         long min = properties.retryAfterMin().toSeconds();
         long max = properties.retryAfterMax().toSeconds();
         return DependencyUnavailableException.overloaded(

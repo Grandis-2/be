@@ -64,7 +64,7 @@ class PreorderLedgerTest {
 
     @Test
     void 접수하면_PENDING_SYNC_와_첫_이력이_남고_활성으로_표시된다() {
-        PreorderSnapshot preorder = ledger.accept(draft(customerId), EventActor.USER, null);
+        PreorderSnapshot preorder = accept(draft(customerId), EventActor.USER, null);
 
         assertThat(preorder.id()).isNotNull();
         assertThat(row(preorder.id()))
@@ -76,7 +76,7 @@ class PreorderLedgerTest {
 
     @Test
     void 사건이_적용되면_이력_번호가_하나_오르고_이력이_남는다() {
-        UUID id = ledger.accept(draft(customerId), EventActor.USER, null).id();
+        UUID id = accept(draft(customerId), EventActor.USER, null).id();
 
         PreorderTransition result = ledger.fire(id, new CancelRequested(EventActor.USER, null));
 
@@ -87,7 +87,7 @@ class PreorderLedgerTest {
 
     @Test
     void 지금_상태에서_의미_없는_사건이면_아무것도_바꾸지_않는다() {
-        UUID id = ledger.accept(draft(customerId), EventActor.USER, null).id();
+        UUID id = accept(draft(customerId), EventActor.USER, null).id();
 
         PreorderTransition result = ledger.fire(id, new CancelCompleted(EventActor.SYSTEM, null));
 
@@ -98,7 +98,7 @@ class PreorderLedgerTest {
 
     @Test
     void 취소를_두_번_요청해도_한_번만_반영된다() {
-        UUID id = ledger.accept(draft(customerId), EventActor.USER, null).id();
+        UUID id = accept(draft(customerId), EventActor.USER, null).id();
         ledger.fire(id, new CancelRequested(EventActor.USER, null));
 
         PreorderTransition again = ledger.fire(id, new CancelRequested(EventActor.USER, null));
@@ -109,7 +109,7 @@ class PreorderLedgerTest {
 
     @Test
     void 등록_확인은_한_번만_되고_결제_기한_기준_시각을_찍는다() {
-        UUID id = ledger.accept(draft(customerId), EventActor.USER, null).id();
+        UUID id = accept(draft(customerId), EventActor.USER, null).id();
         String externalReference = "EXT-" + ShopFixtures.unique();
 
         assertThat(ledger.fire(id, new RegisterConfirmed(externalReference))).isEqualTo(new PreorderTransition(true, REGISTERED));
@@ -127,7 +127,7 @@ class PreorderLedgerTest {
 
     @Test
     void 취소_중인_예약에_늦게_온_등록_확인은_반영하지_않는다() {
-        UUID id = ledger.accept(draft(customerId), EventActor.USER, null).id();
+        UUID id = accept(draft(customerId), EventActor.USER, null).id();
         ledger.fire(id, new CancelRequested(EventActor.USER, null));
 
         assertThat(ledger.fire(id, new RegisterConfirmed("EXT-LATE"))).isEqualTo(new PreorderTransition(false, CANCELING));
@@ -137,7 +137,7 @@ class PreorderLedgerTest {
 
     @Test
     void REGISTERED_에서_시작한_취소가_거절되면_REGISTERED_로_되돌린다() {
-        UUID id = ledger.accept(draft(customerId), EventActor.USER, null).id();
+        UUID id = accept(draft(customerId), EventActor.USER, null).id();
         ledger.fire(id, new RegisterConfirmed("EXT-" + ShopFixtures.unique()));
         ledger.fire(id, new CancelRequested(EventActor.USER, null));
 
@@ -150,7 +150,7 @@ class PreorderLedgerTest {
 
     @Test
     void 관리자_취소는_주체와_사유가_이력에_남는다() {
-        UUID id = ledger.accept(draft(customerId), EventActor.USER, null).id();
+        UUID id = accept(draft(customerId), EventActor.USER, null).id();
 
         ledger.fire(id, new CancelRequested(EventActor.ADMIN, "고객 전화 요청"));
 
@@ -160,7 +160,7 @@ class PreorderLedgerTest {
 
     @Test
     void 결제_가능한_적이_없는_예약의_취소는_거절될_수_없다() {
-        UUID id = ledger.accept(draft(customerId), EventActor.USER, null).id();
+        UUID id = accept(draft(customerId), EventActor.USER, null).id();
         ledger.fire(id, new CancelRequested(EventActor.USER, null));
 
         assertThatThrownBy(() -> ledger.fire(id, new CancelRejected("SHIPPING_STARTED", null)))
@@ -176,9 +176,9 @@ class PreorderLedgerTest {
 
     @Test
     void 활성_예약이_있으면_같은_모델은_UNIQUE_로_막힌다() {
-        ledger.accept(draft(customerId), EventActor.USER, null);
+        accept(draft(customerId), EventActor.USER, null);
 
-        assertThatThrownBy(() -> ledger.accept(draft(customerId), EventActor.USER, null))
+        assertThatThrownBy(() -> accept(draft(customerId), EventActor.USER, null))
                 .isInstanceOf(DataIntegrityViolationException.class)
                 .hasMessageContaining("uq_preorder_active");
     }
@@ -208,11 +208,11 @@ class PreorderLedgerTest {
 
     @Test
     void 취소가_끝나면_활성_표식이_사라져_같은_모델을_다시_신청할_수_있다() {
-        UUID id = ledger.accept(draft(customerId), EventActor.USER, null).id();
+        UUID id = accept(draft(customerId), EventActor.USER, null).id();
         ledger.fire(id, new CancelRequested(EventActor.USER, null));
         ledger.fire(id, new CancelCompleted(EventActor.SYSTEM, null));
 
-        PreorderSnapshot again = ledger.accept(draft(customerId), EventActor.USER, null);
+        PreorderSnapshot again = accept(draft(customerId), EventActor.USER, null);
 
         assertThat(row(id)).containsEntry("status", "CANCELED").containsEntry("active_marker", null);
         assertThat(row(again.id())).containsEntry("active_marker", 1);
@@ -221,9 +221,9 @@ class PreorderLedgerTest {
     @Test
     void 같은_입장권으로는_두_번_접수할_수_없다() {
         String ticket = "a".repeat(64);
-        ledger.accept(draft(customerId, ticket), EventActor.USER, null);
+        accept(draft(customerId, ticket), EventActor.USER, null);
 
-        assertThatThrownBy(() -> ledger.accept(draft(fixtures.customer(), ticket), EventActor.USER, null))
+        assertThatThrownBy(() -> accept(draft(fixtures.customer(), ticket), EventActor.USER, null))
                 .isInstanceOf(DataIntegrityViolationException.class)
                 .hasMessageContaining("uq_preorder_admission");
     }
@@ -291,7 +291,7 @@ class PreorderLedgerTest {
 
     @Test
     void 등록_전_예약의_결제_사건은_무시한다() {
-        UUID id = ledger.accept(draft(customerId), EventActor.USER, null).id();
+        UUID id = accept(draft(customerId), EventActor.USER, null).id();
 
         assertThat(ledger.fire(id, new PaymentConfirmed(Instant.now()))).isEqualTo(new PreorderTransition(false, PENDING_SYNC));
         assertThat(ledger.fire(id, new PaymentStarted(Instant.now()))).isEqualTo(new PreorderTransition(false, PENDING_SYNC));
@@ -300,7 +300,7 @@ class PreorderLedgerTest {
 
     @Test
     void 관리자_전이는_사유가_없으면_거부하고_상태를_바꾸지_않는다() {
-        UUID id = ledger.accept(draft(customerId), EventActor.USER, null).id();
+        UUID id = accept(draft(customerId), EventActor.USER, null).id();
 
         assertThatThrownBy(() -> ledger.fire(id, new CancelRequested(EventActor.ADMIN, " ")))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -309,7 +309,7 @@ class PreorderLedgerTest {
 
     @Test
     void 관리자_대신_접수는_입장권_없이_사유와_함께_남는다() {
-        UUID id = ledger.accept(draft(customerId, null), EventActor.ADMIN, "전화 접수").id();
+        UUID id = accept(draft(customerId, null), EventActor.ADMIN, "전화 접수").id();
 
         assertThat(row(id)).containsEntry("admission_ticket_id", null);
         assertThat(history(id)).containsExactly("1:null>PENDING_SYNC:ADMIN");
@@ -327,15 +327,19 @@ class PreorderLedgerTest {
     }
 
     private NewPreorder draft(UUID customer, String admissionTicketId) {
-        long position = nextPosition.getAndIncrement();
         return new NewPreorder(ShopFixtures.unique(), customer, product.productId(), product.optionId(),
-                product.firstBatchId(), position, admissionTicketId, ShopFixtures.unique(),
-                "Nova 1", "블랙 / 256GB", new BigDecimal("1250000"));
+                admissionTicketId, ShopFixtures.unique(), "Nova 1", "블랙 / 256GB", new BigDecimal("1250000"));
+    }
+
+    /** 접수처럼 넣고 다음 순번 · 첫 차수를 채운다. */
+    private PreorderSnapshot accept(NewPreorder draft, EventActor actor, String reason) {
+        UUID id = ledger.accept(draft, actor, reason);
+        return ledger.place(id, product.firstBatchId(), nextPosition.getAndIncrement());
     }
 
     /** 이력은 커밋할 때 flush 된다. JDBC 로 읽기 전에 밀어 넣는다. */
     private UUID payable() {
-        UUID id = ledger.accept(draft(customerId), EventActor.USER, null).id();
+        UUID id = accept(draft(customerId), EventActor.USER, null).id();
         ledger.fire(id, new RegisterConfirmed("EXT-" + ShopFixtures.unique()));
         return id;
     }
