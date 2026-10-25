@@ -28,6 +28,8 @@ public enum OrderErrorCode implements ErrorCode {
     DEAD_LETTER_NOT_REDRIVABLE(409, "되돌릴 수 없는 메시지입니다."),
     /** 관리자 결제 DLQ: OPEN 이 아니라 버릴 수 없다. details.reason 은 payment 가 싣는다. */
     DEAD_LETTER_NOT_DISCARDABLE(409, "버릴 수 없는 메시지입니다."),
+    /** 관리자 결제 DLQ: 없거나 보관 시간(하루)이 지난 일괄 되돌리기. payment 의 같은 코드를 그대로 넘긴다. */
+    REDRIVE_BATCH_NOT_FOUND(404, "일괄 되돌리기를 찾을 수 없습니다."),
     /** 예약당 주문은 평생 하나라(uq_order_preorder) 취소된 주문이 있으면 다시 주문할 수 없다. */
     ORDER_ALREADY_CANCELED(409, "이미 취소된 주문이 있어 다시 주문할 수 없습니다."),
     /** 지금 상태에서 그 배송 단계로 옮길 수 없다(앞 단계 건너뛰기 · 미결제 · 취소 중 등). details.status 에 지금 상태. */

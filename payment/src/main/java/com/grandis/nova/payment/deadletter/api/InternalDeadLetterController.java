@@ -3,6 +3,7 @@ package com.grandis.nova.payment.deadletter.api;
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.payment.deadletter.application.BatchRedrive;
+import com.grandis.nova.payment.deadletter.application.BatchRedriveProgress;
 import com.grandis.nova.payment.deadletter.application.DeadLetterAdminService;
 import com.grandis.nova.payment.deadletter.domain.DeadLetterStatus;
 import com.grandis.nova.payment.deadletter.domain.FailureReason;
@@ -69,13 +70,19 @@ class InternalDeadLetterController {
                 DeadLetterSummaryResponse.from(deadLetterAdminService.redrive(deadLetterId, admin.getName()))));
     }
 
-    /** 조건으로 일괄 되돌린다. 초당 건수를 제한하고 시작만 알린다. */
+    /** 조건으로 일괄 되돌린다. 초당 건수를 제한해 이어서 보내고, 시작 응답의 batchId 로 진행을 본다. */
     @PostMapping("/redrive-batch")
     public ResponseEntity<ApiResponse<BatchRedrive>> redriveBatch(@Valid @RequestBody RedriveBatchRequest request,
                                                                   Authentication admin) {
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResponse.ok(deadLetterAdminService.redriveBatch(
                 request.deadLetterIds(), request.eventType(), request.failureReason(), request.rateOrDefault(),
                 admin.getName())));
+    }
+
+    /** 일괄 되돌리기 진행. 칸 뜻은 {@link BatchRedriveProgress} 에 있다. 하루 지나면 404(REDRIVE_BATCH_NOT_FOUND). */
+    @GetMapping("/redrive-batches/{batchId}")
+    public ApiResponse<BatchRedriveProgress> batch(@PathVariable UUID batchId) {
+        return ApiResponse.ok(deadLetterAdminService.findBatch(batchId));
     }
 
     /**

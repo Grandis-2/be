@@ -262,6 +262,7 @@ class InternalDeadLetterApiTest {
                 .content("{\"deadLetterIds\":[\"%s\",\"%s\",\"%s\",\"%s\"],\"ratePerSecond\":50}"
                         .formatted(first, second, unknown, UUID.randomUUID())))
                 .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.data.batchId").isNotEmpty())
                 .andExpect(jsonPath("$.data.targetCount").value(2))
                 .andExpect(jsonPath("$.data.skippedCount").value(2));
 

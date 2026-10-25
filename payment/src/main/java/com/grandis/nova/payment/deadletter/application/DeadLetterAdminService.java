@@ -3,6 +3,7 @@ package com.grandis.nova.payment.deadletter.application;
 import com.grandis.nova.common.BusinessException;
 import com.grandis.nova.common.OffsetPage;
 import com.grandis.nova.payment.PaymentErrorCode;
+import com.grandis.nova.payment.deadletter.application.RedriveBatchStore.StoredBatch;
 import com.grandis.nova.payment.deadletter.domain.DeadLetterEvent;
 import com.grandis.nova.payment.deadletter.domain.DeadLetterEventRepository;
 import com.grandis.nova.payment.deadletter.domain.DeadLetterStatus;
@@ -27,6 +28,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /** 관리자 DLQ 조회 · 되돌리기 · 버리기. 관리자 화면은 order 를 거쳐 온다(내부 API). */
 @Service
@@ -44,16 +46,19 @@ public class DeadLetterAdminService {
     private final DeadLetterBodyParser bodyParser;
     private final DeadLetterDiscards discards;
     private final TaskExecutor redriveExecutor;
+    private final RedriveBatchStore batches;
     private final Clock clock;
 
     DeadLetterAdminService(DeadLetterEventRepository events, DeadLetterRedrives redrives,
                            DeadLetterBodyParser bodyParser, DeadLetterDiscards discards,
-                           @Qualifier(DeadLetterConfig.REDRIVE_EXECUTOR) TaskExecutor redriveExecutor, Clock clock) {
+                           @Qualifier(DeadLetterConfig.REDRIVE_EXECUTOR) TaskExecutor redriveExecutor,
+                           RedriveBatchStore batches, Clock clock) {
         this.events = events;
         this.redrives = redrives;
         this.bodyParser = bodyParser;
         this.discards = discards;
         this.redriveExecutor = redriveExecutor;
+        this.batches = batches;
         this.clock = clock;
     }
 
@@ -105,6 +110,7 @@ public class DeadLetterAdminService {
      * 대상을 골라 바로 돌려주고, 이 인스턴스가 초당 ratePerSecond 건씩 되돌린다(한 번에 최대 MAX_BATCH_SIZE).
      * 조건으로 고를 때 failureReason 을 비우면 PROCESSING_FAILED 만 — 되돌려도 같은 결과인 행이 앞을 막지 않게.
      * 되돌리기를 기다리지 않거나 저장된 분류로 되돌릴 수 없는 행, 없는 id 는 건너뛴 수로 센다. 원문은 보낼 때 한 건씩 다시 읽는다.
+     * 진행은 batchId 로 {@link #findBatch} 에서 본다.
      */
     public BatchRedrive redriveBatch(List<UUID> ids, String eventType, FailureReason failureReason, int ratePerSecond,
                                      String requestedBy) {
@@ -124,31 +130,69 @@ public class DeadLetterAdminService {
                 .sorted(Comparator.comparing(DeadLetterSummary::getCreatedAt).thenComparing(DeadLetterSummary::getId))
                 .map(DeadLetterSummary::getId)
                 .toList();
+        int skipped = candidates.size() - targets.size();
+        UUID batchId = UUID.randomUUID();
+        batches.start(batchId, targets, skipped, clock.instant());
         if (!targets.isEmpty()) {
-            redriveExecutor.execute(() -> redrivePaced(targets, ratePerSecond, requestedBy));
+            redriveExecutor.execute(() -> redrivePaced(batchId, targets, ratePerSecond, requestedBy));
         }
-        return new BatchRedrive(targets.size(), candidates.size() - targets.size(),
+        return new BatchRedrive(batchId, targets.size(), skipped,
                 (targets.size() + ratePerSecond - 1L) / ratePerSecond);
     }
 
-    private void redrivePaced(List<UUID> targets, int ratePerSecond, String requestedBy) {
+    /**
+     * 일괄 되돌리기 진행. 결과 수는 큐로 보낸 원래 행의 지금 상태로 센다 — 보내지 못한 행의 상태와, 다시 실패해 새로 쌓인 행은 세지 않는다.
+     * 결제 DLQ 는 보낸 행을 버리는 길이 없어(버리기는 OPEN 만) canceled 는 늘 0 이다.
+     *
+     * @throws BusinessException REDRIVE_BATCH_NOT_FOUND — 없거나 보관 시간이 지났거나, 시작 때 진행 기록을 남기지 못했다(보내기는 이어진다)
+     */
+    @Transactional(readOnly = true)
+    public BatchRedriveProgress findBatch(UUID batchId) {
+        StoredBatch stored = batches.find(batchId)
+                .orElseThrow(() -> new BusinessException(PaymentErrorCode.REDRIVE_BATCH_NOT_FOUND));
+        Map<DeadLetterStatus, Long> byStatus = stored.sent().isEmpty() ? Map.of()
+                : events.findSummaries(stored.sent()).stream()
+                        .collect(Collectors.groupingBy(DeadLetterSummary::getStatus, Collectors.counting()));
+        int succeeded = byStatus.getOrDefault(DeadLetterStatus.SUCCEEDED, 0L).intValue();
+        int failed = byStatus.getOrDefault(DeadLetterStatus.REDRIVE_FAILED, 0L).intValue();
+        int canceled = 0;
+        int unsent = stored.attempted() - stored.sent().size();
+        return new BatchRedriveProgress(batchId, stored.targets().size(), stored.skipped(), stored.sent().size(),
+                unsent, succeeded, failed, canceled, stored.targets().size() - unsent - succeeded - failed - canceled,
+                stored.startedAt(), stored.lastProgressAt(), stored.finishedAt());
+    }
+
+    private void redrivePaced(UUID batchId, List<UUID> targets, int ratePerSecond, String requestedBy) {
         Duration interval = Duration.ofNanos(Duration.ofSeconds(1).toNanos() / ratePerSecond);
-        for (UUID id : targets) {
+        for (int i = 0; i < targets.size(); i++) {
+            if (i > 0 && !pause(interval, batchId)) {
+                return;
+            }
+            UUID id = targets.get(i);
+            UUID sent = null;
             try {
                 redrives.redrive(id, requestedBy);
+                sent = id;
             } catch (BusinessException e) {
                 log.info("되돌리기 대상에서 빠졌다(그 사이 상태가 바뀌었거나 보내지 못함) deadLetterId={} code={}",
                         id, e.errorCode());
             } catch (RuntimeException e) {
                 log.warn("되돌리지 못했다 — 같은 요청을 다시 보내면 이어진다 deadLetterId={}", id, e);
             }
-            try {
-                Thread.sleep(interval);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.warn("일괄 되돌리기가 중단됐다 — 같은 요청을 다시 보내면 이어진다");
-                return;
-            }
+            batches.progress(batchId, sent, clock.instant());
+        }
+        batches.finish(batchId, clock.instant());
+    }
+
+    /** 대상 사이에만 쉰다 — 마지막 대상 뒤에 쉬다 중단돼 끝 시각을 놓치지 않게. */
+    private static boolean pause(Duration interval, UUID batchId) {
+        try {
+            Thread.sleep(interval);
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("일괄 되돌리기가 중단됐다 — 같은 요청을 다시 보내면 이어진다 batchId={}", batchId);
+            return false;
         }
     }
 

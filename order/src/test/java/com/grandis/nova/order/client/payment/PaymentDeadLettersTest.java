@@ -40,7 +40,8 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 /**
  * 실제 계약(payment InternalDeadLetterController)의 경로 · 헤더 · 쿼리 · 본문 · 응답을 그대로 쓰고 읽는지, 실패를 어떻게 가르는지.
  *
- * 계약 대조: 아래 JSON 은 payment DeadLetterSummaryResponse · DeadLetterResponse · BatchRedrive(ApiResponse 봉투)를 복제한 것이다.
+ * 계약 대조: 아래 JSON 은 payment DeadLetterSummaryResponse · DeadLetterResponse · BatchRedrive · BatchRedriveProgress(ApiResponse
+ * 봉투)를 복제한 것이다.
  * payment 쪽 필드가 바뀌면 이 예시도 같이 바꾼다.
  */
 @ExtendWith(OutputCaptureExtension.class)
@@ -99,7 +100,11 @@ class PaymentDeadLettersTest {
                         {"deadLetterIds":["%s"],"eventType":null,"failureReason":null,"ratePerSecond":50}
                         """.formatted(ID), JsonCompareMode.STRICT))
                 .andRespond(withStatus(HttpStatus.ACCEPTED).contentType(MediaType.APPLICATION_JSON)
-                        .body(envelope("{\"targetCount\":1,\"skippedCount\":0,\"estimatedSeconds\":1}")));
+                        .body(envelope("{\"batchId\":\"%s\",\"targetCount\":1,\"skippedCount\":0,\"estimatedSeconds\":1}"
+                                .formatted(BATCH_ID))));
+        server.expect(requestTo(BASE_URL + "/redrive-batches/" + BATCH_ID)).andExpect(method(HttpMethod.GET))
+                .andExpect(forwardedToken())
+                .andRespond(ok(PROGRESS));
         server.expect(requestTo(BASE_URL + "/" + ID + "/discard")).andExpect(method(HttpMethod.POST))
                 .andExpect(forwardedToken())
                 .andExpect(content().json("{\"note\":\"재발행 요청\"}", JsonCompareMode.STRICT))
@@ -108,7 +113,10 @@ class PaymentDeadLettersTest {
         assertThat(deadLetters.get(ID, SESSION).body()).isEqualTo("{}");
         assertThat(deadLetters.redrive(ID, SESSION).deadLetterId()).isEqualTo(ID);
         assertThat(deadLetters.redriveBatch(new PaymentDeadLetterBatchRequest(List.of(ID), null, null, 50), SESSION))
-                .isEqualTo(new PaymentDeadLetterBatch(1, 0, 1));
+                .isEqualTo(new PaymentDeadLetterBatch(BATCH_ID, 1, 0, 1));
+        assertThat(deadLetters.redriveBatchProgress(BATCH_ID, SESSION)).isEqualTo(new PaymentDeadLetterBatchProgress(
+                BATCH_ID, 3, 1, 2, 1, 1, 0, 0, 1, Instant.parse("2026-10-04T01:00:00Z"),
+                Instant.parse("2026-10-04T01:00:01Z"), null));
         assertThat(deadLetters.discard(ID, new PaymentDeadLetterDiscardRequest("재발행 요청"), SESSION).sourceQueue())
                 .isEqualTo("payment-events");
         server.verify();
@@ -122,6 +130,8 @@ class PaymentDeadLettersTest {
                 .andRespond(rejection(HttpStatus.CONFLICT, "DEAD_LETTER_NOT_REDRIVABLE", "{\"reason\":\"status=REDRIVEN\"}"));
         server.expect(requestTo(BASE_URL + "/" + ID + "/discard"))
                 .andRespond(rejection(HttpStatus.CONFLICT, "DEAD_LETTER_NOT_DISCARDABLE", "{\"reason\":\"status=DISCARDED\"}"));
+        server.expect(requestTo(BASE_URL + "/redrive-batches/" + BATCH_ID))
+                .andRespond(rejection(HttpStatus.NOT_FOUND, "REDRIVE_BATCH_NOT_FOUND", "null"));
 
         assertThat(catchThrowable(() -> deadLetters.get(ID, SESSION))).isInstanceOfSatisfying(BusinessException.class,
                 e -> assertThat(e.errorCode()).isEqualTo(OrderErrorCode.DEAD_LETTER_NOT_FOUND));
@@ -131,6 +141,9 @@ class PaymentDeadLettersTest {
         });
         assertThat(catchThrowable(() -> deadLetters.discard(ID, new PaymentDeadLetterDiscardRequest("x"), SESSION))).isInstanceOfSatisfying(BusinessException.class,
                 e -> assertThat(e.errorCode()).isEqualTo(OrderErrorCode.DEAD_LETTER_NOT_DISCARDABLE));
+        assertThat(catchThrowable(() -> deadLetters.redriveBatchProgress(BATCH_ID, SESSION)))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.errorCode()).isEqualTo(OrderErrorCode.REDRIVE_BATCH_NOT_FOUND));
     }
 
     // order 의 필터가 방금 통과시킨 토큰이다 — payment 의 거절은 payment 쪽 사정으로 보고 다시 시도를 안내한다(PaymentPreparer 와 같다)
@@ -203,6 +216,13 @@ class PaymentDeadLettersTest {
              "orderId":"%s","failureReason":"PROCESSING_FAILED","receiveCount":5,"status":"OPEN","redrivable":true,
              "redrivenFromId":null,"sentAt":"2026-10-04T01:00:00Z","createdAt":"2026-10-04T01:10:00Z",
              "updatedAt":"2026-10-04T01:10:00Z"}""".formatted(ID, ORDER_ID);
+
+    static final UUID BATCH_ID = UUID.fromString("00000000-0000-7000-8000-0000000000b1");
+
+    static final String PROGRESS = """
+            {"batchId":"%s","targetCount":3,"skippedCount":1,"sent":2,"unsent":1,"succeeded":1,"failed":0,
+             "canceled":0,"pending":1,"startedAt":"2026-10-04T01:00:00Z","lastProgressAt":"2026-10-04T01:00:01Z",
+             "finishedAt":null}""".formatted(BATCH_ID);
 
     static final String DETAIL = """
             {"deadLetterId":"%s","sourceQueue":"payment-events","messageId":"m-1","eventId":"e-1",
