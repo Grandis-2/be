@@ -80,7 +80,9 @@ class AdminRefundIssueApiTest {
         Order refundedAtPayment = canceling();
         refundResults.settle(failed(refundedAtPayment));
         UUID paymentOnly = UUID.randomUUID();
-        given(payments.issues(eq(List.of()), anyInt(), any())).willReturn(List.of(issue(paymentOnly, "ESCALATED_MISMATCH")));
+        // 결제 쪽 후보의 환불 거래를 다른 후보보다 하루 먼저 열어, 오래 멈춘 순서가 같은 시각의 id 순서에 기대지 않게 한다
+        given(payments.issues(eq(List.of()), anyInt(), any()))
+                .willReturn(List.of(issue(paymentOnly, "ESCALATED_MISMATCH", Instant.parse("2026-10-23T01:00:00Z"))));
         given(payments.issues(argThat(ids -> !ids.isEmpty()), anyInt(), any())).willAnswer(invocation -> {
             List<UUID> ids = invocation.getArgument(0);
             return ids.stream().map(id -> id.equals(refundedAtPayment.id()) ? issue(id, "REFUNDED") : issue(id, "REFUND_REJECTED"))
@@ -199,11 +201,15 @@ class AdminRefundIssueApiTest {
     }
 
     private static PaymentRefundIssue issue(UUID orderId, String reason) {
+        return issue(orderId, reason, Instant.parse("2026-10-24T01:00:00Z"));
+    }
+
+    private static PaymentRefundIssue issue(UUID orderId, String reason, Instant refundCreatedAt) {
         boolean refunded = reason.equals("REFUNDED");
         return new PaymentRefundIssue(orderId, reason, refunded ? "REFUNDED" : "SUCCEEDED",
                 new PaymentRefundIssue.Refund(UUID.randomUUID(), refunded ? "SUCCEEDED" : "FAILED", 1,
                         Instant.parse("2026-10-24T01:00:00Z"), Instant.parse("2026-10-24T01:00:05Z"), null,
-                        "NOT_CANCELABLE_PAYMENT", null, Instant.parse("2026-10-24T01:00:00Z")),
+                        "NOT_CANCELABLE_PAYMENT", null, refundCreatedAt),
                 refunded ? List.of() : List.of("RETRY", "MANUAL_COMPLETE"));
     }
 
