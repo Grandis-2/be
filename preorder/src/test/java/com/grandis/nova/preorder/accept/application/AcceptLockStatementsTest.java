@@ -5,6 +5,7 @@ import com.grandis.nova.preorder.campaign.Campaigns;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
 import com.grandis.nova.preorder.preorder.EventActor;
+import com.grandis.nova.preorder.support.CampaignRowLock;
 import com.grandis.nova.preorder.support.CatalogStubs;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures;
@@ -12,17 +13,21 @@ import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import javax.sql.DataSource;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 
@@ -50,6 +55,9 @@ class AcceptLockStatementsTest {
 
     @Autowired
     EntityManager entityManager;
+
+    @Autowired
+    DataSource dataSource;
 
     @MockitoSpyBean
     Campaigns campaigns;
@@ -85,6 +93,26 @@ class AcceptLockStatementsTest {
 
         assertThat(statements[0]).as("잠그기 전").isEqualTo(BEFORE_LOCK);
         assertThat(statements[1]).as("잠금 구간").isEqualTo(LOCKED);
+    }
+
+    /** 잠금 대기 시한은 Spring 잠금 예외로 올라와야 접수가 500 이 아니라 503 + Retry-After 로 돌려보낸다. */
+    @Test
+    void 회차_잠금_대기_시한은_스프링_잠금_예외로_올라온다() throws SQLException {
+        PreorderProduct product = new ShopFixtures(jdbcTemplate).openPreorderProduct();
+        try (CampaignRowLock ignored = CampaignRowLock.hold(dataSource, product.productId())) {
+            transactionTemplate.executeWithoutResult(status -> {
+                // 트랜잭션의 커넥션에만 짧은 시한을 건다 — 풀로 돌아가기 전에 되돌린다
+                jdbcTemplate.execute("SET SESSION innodb_lock_wait_timeout = 1");
+                try {
+                    campaigns.findForAccept(product.productId());
+                    assertThatThrownBy(() -> campaigns.lockForAccept(product.productId()))
+                            .isInstanceOf(PessimisticLockingFailureException.class);
+                } finally {
+                    jdbcTemplate.execute("SET SESSION innodb_lock_wait_timeout = DEFAULT");
+                    status.setRollbackOnly();
+                }
+            });
+        }
     }
 
     private void accept(PreorderProduct product, Optional<ProductCatalog> catalog, UUID customerId) {

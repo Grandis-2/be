@@ -8,7 +8,6 @@ import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatch;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatchRepository;
 import jakarta.persistence.EntityManager;
-import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -69,14 +68,12 @@ public class Campaigns {
 
     /**
      * 회차 행을 잠그고 지금 값으로 다시 읽는다. 잠금은 커밋까지라 접수의 다른 쓰기를 마친 뒤 부른다.
-     * 앞서 읽은 엔티티는 잠금 조회로는 값이 바뀌지 않아 refresh 로 잠그며 읽는다. 회차가 없으면 비어 있다.
+     * 앞서 읽은 엔티티가 있으면 잠금 조회가 옛 값을 돌려줘 떼어 내고 읽는다. 저장소 조회라 잠금 실패가 Spring 예외로 온다.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public Optional<CampaignForAccept> lockForAccept(UUID productId) {
-        return Optional.ofNullable(entityManager.find(PreorderCampaign.class, productId)).map(campaign -> {
-            entityManager.refresh(campaign, LockModeType.PESSIMISTIC_WRITE);
-            return forAccept(campaign);
-        });
+        Optional.ofNullable(entityManager.find(PreorderCampaign.class, productId)).ifPresent(entityManager::detach);
+        return campaigns.findForUpdate(productId).map(Campaigns::forAccept);
     }
 
     private static CampaignForAccept forAccept(PreorderCampaign campaign) {
