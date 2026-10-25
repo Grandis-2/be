@@ -17,6 +17,7 @@ import com.grandis.nova.payment.domain.model.PaymentTransaction;
 import com.grandis.nova.payment.recovery.RecoveryAttention;
 import com.grandis.nova.payment.recovery.RecoveryAttention.Reason;
 import com.grandis.nova.payment.recovery.RecoveryHandler;
+import com.grandis.nova.payment.vo.Money;
 import com.grandis.nova.payment.vo.ProviderError;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -192,23 +193,32 @@ class RefundRecovery implements RecoveryHandler {
 
     /** 환불 완료라는 응답도 전액 취소(잔액 0 · 결제 금액 그대로)이고 취소 시각이 있어야 완료다. 아니면 불명으로 두고 사람이 본다. */
     static Outcome refunded(TossPayment payment, PaymentTransaction held) {
-        long amount = held.amount().amount().longValueExact();
-        if (payment.status() != TossPaymentStatus.CANCELED || payment.totalAmount() != amount
-                || payment.balanceAmount() != 0) {
+        if (!fullyCanceled(payment, held.amount())) {
             log.error("토스 환불 응답이 전액 취소와 맞지 않다 — 결과 불명으로 둔다 transactionId={} status={} totalAmount={} "
                     + "balanceAmount={} amount={}", held.id(), payment.status(), payment.totalAmount(),
-                    payment.balanceAmount(), amount);
+                    payment.balanceAmount(), held.amount().amount());
             return new Outcome.Unknown(ProviderError.unknown(REFUND_MISMATCH, UnknownReason.MISMATCHED_RESPONSE.name()));
         }
-        Optional<Instant> canceledAt = payment.cancels().stream()
-                .map(TossPayment.Cancel::canceledAt)
-                .filter(Objects::nonNull)
-                .max(Comparator.naturalOrder());
+        Optional<Instant> canceledAt = canceledAt(payment);
         if (canceledAt.isEmpty()) {
             log.error("토스 환불 응답에 취소 시각이 없다 — 결과 불명으로 둔다 transactionId={}", held.id());
             return new Outcome.Unknown(ProviderError.unknown(MISSING_CANCELED_AT, UnknownReason.UNREADABLE_RESPONSE.name()));
         }
         return new Outcome.Confirmed(canceledAt.get());
+    }
+
+    /** 전액 취소다: 취소 상태 · 처음 금액이 결제 금액 그대로 · 잔액 0. 관리자 직접 환불 기록도 이 판정을 쓴다. */
+    static boolean fullyCanceled(TossPayment payment, Money amount) {
+        return payment.status() == TossPaymentStatus.CANCELED && payment.totalAmount() == amount.amount().longValueExact()
+                && payment.balanceAmount() == 0;
+    }
+
+    /** 가장 늦은 취소 시각. 없으면 계약 위반이라 비어 있다. */
+    static Optional<Instant> canceledAt(TossPayment payment) {
+        return payment.cancels().stream()
+                .map(TossPayment.Cancel::canceledAt)
+                .filter(Objects::nonNull)
+                .max(Comparator.naturalOrder());
     }
 
     /**

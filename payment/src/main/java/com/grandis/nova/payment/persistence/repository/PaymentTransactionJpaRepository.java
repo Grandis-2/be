@@ -245,4 +245,18 @@ public interface PaymentTransactionJpaRepository extends JpaRepository<PaymentTr
             """, nativeQuery = true)
     int rotateIdempotencyKey(@Param("id") UUID id, @Param("lease") String lease,
                              @Param("idempotencyKey") String idempotencyKey, @Param("leaseMicros") long leaseMicros);
+
+    /*
+     * 관리자가 에스컬레이션된 행의 리스를 넘겨받는다. 에스컬레이션은 리스를 그대로 두므로 표식은 남아 있고 70초 안에 만료된다 — 만료된 뒤 ·
+     * 읽은 표식과 같을 때만이다. 워커의 선점(claim)은 escalated_at IS NULL 이라 겹치지 않는다.
+     */
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+            UPDATE payment_transactions
+               SET lease_token = :lease, lease_expires_at = UTC_TIMESTAMP(6) + INTERVAL :leaseMicros MICROSECOND
+             WHERE id = :id AND status = 'PROCESSING' AND escalated_at IS NOT NULL
+               AND lease_token <=> :seenLease AND lease_expires_at <= UTC_TIMESTAMP(6)
+            """, nativeQuery = true)
+    int takeOver(@Param("id") UUID id, @Param("seenLease") String seenLease, @Param("lease") String lease,
+                 @Param("leaseMicros") long leaseMicros);
 }

@@ -100,6 +100,17 @@ class SecurityRulesTest {
         perform(get(DEAD_LETTERS), admin).andExpect(status().isOk());
     }
 
+    // ── /internal/refund-issues · /internal/refunds/** : 관리자 환불 조치 API — order 가 싣는 관리자 토큰만 ─────────────
+
+    @Test
+    void refundAdminApiNeedsAdminToken() throws Exception {
+        mockMvc.perform(get("/internal/refund-issues")).andExpect(status().isUnauthorized());
+        perform(get("/internal/refund-issues"), user).andExpect(status().isForbidden());
+        perform(post("/internal/refunds/{id}/retry", UUID.randomUUID()), user).andExpect(status().isForbidden());
+        perform(post("/internal/refunds/{id}/manual-complete", UUID.randomUUID()), user).andExpect(status().isForbidden());
+        perform(get("/internal/refund-issues"), admin).andExpect(status().isOk());
+    }
+
     // ── 나머지 거부: 규칙 없이 추가된 경로가 열린 채 배포되지 않는다 ─────────────────────────
 
     @Test
