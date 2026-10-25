@@ -392,6 +392,10 @@ class InternalRefundAdminApiTest {
             executor.shutdownNow();
         }
         assertThat(actionCount()).isEqualTo(1);
+        // 자리를 돌려줬다 — 끝난 조치(완료 · 409) · 상한 거절(503) 뒤에도 새 조치가 상한에 걸리지 않는다. 한 경로라도 자리를 새면 둘째가 503 이다
+        for (int i = 0; i < 2; i++) {
+            asAdmin(manualComplete(rejected.id(), "다시")).andExpect(status().isConflict());
+        }
     }
 
     // ---- 직접 환불 기록 ----
