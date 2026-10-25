@@ -48,6 +48,17 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
     @Query("select o.status as status, count(o) as count from OrderJpaEntity o where o.customerId = :customerId group by o.status")
     List<StatusCountRow> countByStatusOfCustomer(@Param("customerId") UUID customerId);
 
+    /**
+     * 결제 확인 실패로 취소한 주문(unconfirmed_provider_order_id 가 있다)을 취소 시각(같은 UPDATE 에서 적는 stock_released_at)으로 센다.
+     * ix_order_released_unconfirmed 의 since24h 뒤 범위만 읽고 행은 읽지 않는다(EXPLAIN: range · Using index). 트랜잭션은
+     * {@link #countByStatusIn} 과 같다.
+     */
+    @Query("""
+            select count(o) as last24h, coalesce(sum(case when o.stockReleasedAt >= :since1h then 1 else 0 end), 0) as last1h
+              from OrderJpaEntity o
+             where o.stockReleasedAt >= :since24h and o.unconfirmedProviderOrderId is not null""")
+    PaymentUnconfirmedRow countPaymentUnconfirmed(@Param("since1h") Instant since1h, @Param("since24h") Instant since24h);
+
     Optional<OrderJpaEntity> findByCustomerIdAndIdempotencyKey(UUID customerId, UUID idempotencyKey);
 
     List<OrderJpaEntity> findByCustomerIdAndSourceAndStatusIn(UUID customerId, OrderSource source, Collection<OrderStatus> statuses);
@@ -196,5 +207,11 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
         OrderStatus getStatus();
 
         long getCount();
+    }
+
+    interface PaymentUnconfirmedRow {
+        long getLast1h();
+
+        long getLast24h();
     }
 }

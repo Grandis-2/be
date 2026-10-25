@@ -117,4 +117,11 @@ public interface OrderReader {
 
     /** 그 회원의 상태별 주문 수. 주문이 없는 상태는 빠진다. 트랜잭션 밖에서 부르면 트랜잭션을 열지 않는다. */
     Map<OrderStatus, Long> countByStatusOfCustomer(UUID customerId);
+
+    /**
+     * 결제 확인 실패로 취소한 주문 수 — since1h · since24h 이후(그 시각 포함)에 취소한 것. 트랜잭션 밖에서 부르면 트랜잭션을 열지 않는다.
+     *
+     * @param since1h since24h 와 같거나 늦은 시각
+     */
+    PaymentUnconfirmedCounts countPaymentUnconfirmed(Instant since1h, Instant since24h);
 }

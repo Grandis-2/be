@@ -86,7 +86,9 @@ public class AdminOrderQueryController {
 
     @GetMapping("/stats")
     @Operation(summary = "상태별 주문 수", description = "byStatus 에 모든 상태를 상태 순서로, 주문이 없는 상태는 0. productId 를 주면 그 상품이 든 "
-            + "주문만 센다(목록의 다른 조건은 받지 않는다). 전체 수는 최대 5초 늦게 바뀌고, countedAt 은 센 시각이다")
+            + "주문만 센다(목록의 다른 조건은 받지 않는다). paymentUnconfirmed 는 결제 결과를 끝내 몰라 취소한 장바구니 · 바로 구매 주문 수로, "
+            + "countedAt 기준 최근 1시간(last1h) · 24시간(last24h)이다(늦게 승인돼 자동 환불한 주문도 든다). 상품별 집계에서는 null. "
+            + "전체 수는 최대 5초 늦게 바뀌고, countedAt 은 센 시각이다")
     public ApiResponse<AdminOrderStatusCountsResponse> stats(@RequestParam(required = false) UUID productId) {
         return ApiResponse.ok(AdminOrderStatusCountsResponse.of(
                 productId == null ? statusCounts.all() : statusCounts.ofProduct(productId)));
