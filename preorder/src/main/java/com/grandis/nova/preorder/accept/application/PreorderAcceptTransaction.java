@@ -40,8 +40,8 @@ import java.util.UUID;
  * 1. 같은 접수 키 · 마지막 접수 시각 조회
  * 2. 잠그지 않은 회차 행으로 상품 · 옵션 · 오픈 확인
  * 3. 예약(순번 비움) · 이력 · REGISTER 작업 · 아웃박스 → flush
- * 4. 조건부 UPDATE 로 회차 잠금 · 순번 발급(판매 상태 · 접수 기간 재확인)
- * 5. 예약에 순번 · 차수 채우기
+ * 4. 회차 행 잠금(SELECT … FOR UPDATE) → 잠근 뒤 시각으로 판매 상태 · 접수 기간 판정
+ * 5. 순번 발급 · 예약에 순번 · 차수 채우기
  *
  * 외부 HTTP · SQS 발행은 없다 — 상품 정보는 호출하는 쪽이 넘기고, 발행은 커밋 뒤 아웃박스가 한다.
  */
@@ -57,7 +57,7 @@ class PreorderAcceptTransaction {
     private final JsonMapper jsonMapper;
     private final Clock clock;
     private final String externalScope;
-    /** 회차 행 잠금 · 순번 발급 문장이 걸린 시간(기다림 포함). 오픈 순간 접수가 이 한 행에 줄을 서므로 부하 시험의 핵심 지표다. */
+    /** 회차 행 잠금을 얻기까지 기다린 시간. 오픈 순간 접수가 이 한 행에 줄을 서므로 부하 시험의 핵심 지표다. */
     private final Timer campaignLockWait;
 
     PreorderAcceptTransaction(Campaigns campaigns,
@@ -111,10 +111,11 @@ class PreorderAcceptTransaction {
         // 잠그기 전에 모두 내보낸다 — 커밋 때 나가면 그 쓰기들이 회차 잠금 안으로 들어간다
         entityManager.flush();
 
-        // 판정을 지났으면 회차는 있다(requireOnSale)
-        CampaignSchedule schedule = campaign.orElseThrow().schedule();
-        IssuedPosition issued = campaignLockWait.record(() -> campaigns.issuePosition(schedule, now))
-                .orElseThrow(() -> notAccepting(command.productId(), now));
+        // 잠근 뒤의 시각으로 판정한다 — 잠금을 기다리는 동안 커밋된 마감 · 판매 중지를 본다
+        Optional<CampaignForAccept> locked =
+                campaignLockWait.record(() -> campaigns.lockForAccept(command.productId()));
+        requireAccepting(locked, clock.instant());
+        IssuedPosition issued = campaigns.issuePosition(command.productId());
         PreorderSnapshot preorder = ledger.place(preorderId, issued.batch().id(), issued.position());
         return new AcceptResult(preorder, issued.batch(), false);
     }
@@ -197,7 +198,7 @@ class PreorderAcceptTransaction {
     }
 
     /**
-     * 오픈 전이면 넣기 전에 거절한다. 마감은 순번 발급이 본다 — 마감 직전 접수의 재전송이 그 커밋을 기다려 기존 예약을 받게.
+     * 오픈 전이면 넣기 전에 거절한다. 마감은 잠근 뒤에 본다 — 마감 직전 접수의 재전송이 그 커밋을 기다려 기존 예약을 받게.
      */
     private static void requireOpened(Optional<CampaignForAccept> campaign, Instant now) {
         campaign.map(CampaignForAccept::schedule)
@@ -206,14 +207,6 @@ class PreorderAcceptTransaction {
                     throw new BusinessException(PreorderErrorCode.SALE_NOT_OPEN,
                             Map.of("reason", "opensAt=" + schedule.opensAt()));
                 });
-    }
-
-    /**
-     * 순번 발급이 거절된 사유(마감 · 판매 중지 등)를 회차 행을 다시 읽어 고른다. 앞서 넣은 행은 이 예외의 롤백이 지운다.
-     */
-    private RuntimeException notAccepting(UUID productId, Instant now) {
-        requireAccepting(campaigns.findCurrentForAccept(productId), now);
-        return new IllegalStateException("접수 중인 회차인데 순번을 발급하지 못했다: productId=" + productId);
     }
 
     /**

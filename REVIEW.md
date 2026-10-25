@@ -54,10 +54,10 @@ Qodo 리뷰 에이전트용 지시문이다. 0 · 1절은 모든 변경에, 2 ·
 ## 3. 모듈별 규칙
 
 ### 3.1 preorder — 적용 경로: `preorder/**`
-**접수 트랜잭션**(`PreorderAcceptTransaction`) — 순서를 벗어나면 차단급: 회차 행 읽기(잠금 없음) → 같은 접수 키(customer_id, idempotency_key) 확인 → 상품 · 오픈 확인 → preorders(순번 · 차수 비움) · preorder_events → preorder_sync_jobs(REGISTER) → preorder_outbox_events(REGISTER_JOB_READY) → flush → 조건부 UPDATE 로 회차 잠금 · 순번 발급(공개 · 판매 중지 · 기간 재확인) → 순번 · 배송 차수 채우기 → 커밋 후 응답. 순번 발급 뒤에 다른 쓰기가 오면 잠금 구간이 길어져 지적. 안에서 HTTP · SQS 발행이 있으면 차단급.
+**접수 트랜잭션**(`PreorderAcceptTransaction`) — 순서를 벗어나면 차단급: 회차 행 읽기(잠금 없음) → 같은 접수 키(customer_id, idempotency_key) 확인 → 상품 · 오픈 확인 → preorders(순번 · 차수 비움) · preorder_events → preorder_sync_jobs(REGISTER) → preorder_outbox_events(REGISTER_JOB_READY) → flush → 회차 행 잠금 → 잠근 뒤 시각으로 판매 상태 · 기간 확인 → 순번 · 배송 차수 채우기 → 커밋 후 응답. 회차 잠금 뒤에 다른 쓰기가 오면 잠금 구간이 길어져 지적. 안에서 HTTP · SQS 발행이 있으면 차단급.
 
 **불변식**
-- 순번은 preorder_campaigns.next_queue_position 을 조건부 UPDATE 로 잠그고 올린다(QueuePositionCounter). MAX+1 · AUTO_INCREMENT · 앱 카운터 · Redis INCR 대체는 차단급.
+- 순번은 preorder_campaigns.next_queue_position 을 잠그고 올린다. MAX+1 · AUTO_INCREMENT · 앱 카운터 · Redis INCR 대체는 차단급.
 - 모델당 활성 예약 1건은 uq_preorder_active 로 막는다. 조회 후 INSERT 로만 막으면 지적.
 - 같은 키 + 같은 내용 → 기존 예약 반환(새 순번 금지), 같은 키 + 다른 모델 · 옵션 → 거절. uq_preorder_idempotency 는 취소 행도 포함한다. 재신청은 새 키 · 새 순번이다.
 - 배송 차수는 접수 순번 구간으로 계산한다(외부 등록 순서 · 확정 시각 금지). 오픈 뒤 shipment_batches · 기존 배정 변경은 지적.

@@ -5,10 +5,10 @@ import com.grandis.nova.preorder.campaign.application.CampaignChange;
 import com.grandis.nova.preorder.campaign.application.CampaignChangePublisher;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository;
-import com.grandis.nova.preorder.campaign.domain.QueuePositionCounter;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatch;
 import com.grandis.nova.preorder.campaign.domain.ShipmentBatchRepository;
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -21,14 +21,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
  * 회차 · 배송 차수(모듈 공개 API). 값은 스냅샷으로만 내준다.
- * 접수는 다른 쓰기를 마친 뒤 {@link #issuePosition} 을 부른다 — 순번을 빈틈 · 중복 없이 발급하는 잠금이 거기서 커밋까지 걸린다.
+ * 접수는 다른 쓰기를 마친 뒤 {@link #lockForAccept} → {@link #issuePosition} 순으로 부른다 — 순번을 빈틈 · 중복 없이 발급하는 잠금이다.
  */
 @Service
 public class Campaigns {
@@ -37,17 +36,15 @@ public class Campaigns {
     private final ShipmentBatchRepository batches;
     private final CampaignChangePublisher changePublisher;
     private final CampaignCache cache;
-    private final QueuePositionCounter counter;
     private final EntityManager entityManager;
 
     Campaigns(PreorderCampaignRepository campaigns, ShipmentBatchRepository batches,
-              CampaignChangePublisher changePublisher, CampaignCache cache, QueuePositionCounter counter,
+              CampaignChangePublisher changePublisher, CampaignCache cache,
               EntityManager entityManager) {
         this.campaigns = campaigns;
         this.batches = batches;
         this.changePublisher = changePublisher;
         this.cache = cache;
-        this.counter = counter;
         this.entityManager = entityManager;
     }
 
@@ -56,14 +53,14 @@ public class Campaigns {
         cache.evict(productId);
     }
 
-    /** 회차 캐시의 회차 — 잠그기 전 판정용. 비우기를 놓쳤을 때만 캐시 수명만큼 늦으므로 최종 판정은 {@link #issuePosition} 의 조건이 한다. */
+    /** 회차 캐시의 회차 — 잠그기 전 판정용. 비우기를 놓쳤을 때만 캐시 수명만큼 늦으므로 최종 판정은 {@link #lockForAccept} 로 한다. */
     public Optional<CachedCampaign> findCached(UUID productId) {
         return cache.find(productId);
     }
 
     /**
      * 잠그지 않고 회차 행에서 일정 · 판매 상태를 읽는다 — 접수가 잠그기 전에 판정한다.
-     * 읽은 뒤의 변경은 {@link #issuePosition} 의 조건이 다시 본다. 회차가 없으면 비어 있다.
+     * 읽은 뒤의 변경은 {@link #lockForAccept} 로 다시 본다. 회차가 없으면 비어 있다.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public Optional<CampaignForAccept> findForAccept(UUID productId) {
@@ -71,12 +68,13 @@ public class Campaigns {
     }
 
     /**
-     * 순번 발급이 거절된 사유를 고를 때 쓴다. 앞서 읽은 엔티티는 다시 조회해도 Hibernate 가 새 값을 버려 refresh 로 읽는다.
+     * 회차 행을 잠그고 지금 값으로 다시 읽는다. 잠금은 커밋까지라 접수의 다른 쓰기를 마친 뒤 부른다.
+     * 앞서 읽은 엔티티는 잠금 조회로는 값이 바뀌지 않아 refresh 로 잠그며 읽는다. 회차가 없으면 비어 있다.
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    public Optional<CampaignForAccept> findCurrentForAccept(UUID productId) {
-        return campaigns.lookup(productId).map(campaign -> {
-            entityManager.refresh(campaign);
+    public Optional<CampaignForAccept> lockForAccept(UUID productId) {
+        return Optional.ofNullable(entityManager.find(PreorderCampaign.class, productId)).map(campaign -> {
+            entityManager.refresh(campaign, LockModeType.PESSIMISTIC_WRITE);
             return forAccept(campaign);
         });
     }
@@ -86,25 +84,23 @@ public class Campaigns {
     }
 
     /**
-     * 회차 행을 잠가 순번을 발급하고 그 순번의 차수를 고른다. 잠금은 커밋까지라 접수의 다른 쓰기를 마친 뒤 부른다.
-     * 판매 중 · 접수 기간이 아니면 비어 있다. 차수는 오픈 뒤 캐시에서 고르고, 교체와 겹치면 차수 외래 키가 막는다.
+     * 잠근 회차에서 순번 하나를 발급하고 그 순번의 차수를 정한다. {@link #lockForAccept} 와 같은 트랜잭션에서만 부른다.
+     * 차수는 오픈 뒤 캐시에서 고르고, 교체와 겹쳐 옛 차수를 골라도 예약의 차수 외래 키가 막는다.
      *
-     * @throws IllegalStateException 순번이 속한 차수가 없다
+     * @throws IllegalStateException 잠근 회차가 없거나 순번이 속한 차수가 없다
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    public Optional<IssuedPosition> issuePosition(CampaignSchedule schedule, Instant now) {
-        UUID productId = schedule.productId();
-        OptionalLong issued = counter.issue(productId, now);
-        if (issued.isEmpty()) {
-            return Optional.empty();
-        }
-        long position = issued.getAsLong();
-        ShipmentBatchSnapshot batch = cache.batchesLoadedSince(productId, schedule.opensAt())
+    public IssuedPosition issuePosition(UUID productId) {
+        // 잠근 회차는 영속성 컨텍스트에 있어 다시 조회하지 않는다
+        PreorderCampaign campaign = campaigns.findById(productId)
+                .orElseThrow(() -> new IllegalStateException("잠근 회차가 없다: productId=" + productId));
+        long position = campaign.issueQueuePosition();
+        ShipmentBatchSnapshot batch = cache.batchesLoadedSince(productId, campaign.getOpensAt())
                 .flatMap(cached -> cached.stream().filter(candidate -> candidate.covers(position)).findFirst())
                 .or(() -> batches.findCovering(productId, position).map(ShipmentBatch::toSnapshot))
                 .orElseThrow(() -> new IllegalStateException(
                         "순번이 속한 배송 차수가 없다: productId=" + productId + ", position=" + position));
-        return Optional.of(new IssuedPosition(position, batch));
+        return new IssuedPosition(position, batch);
     }
 
     /** 지금 접수 중인(오픈 뒤 · 마감 전 · 공개 · 판매 중지 아님) 회차 수. */

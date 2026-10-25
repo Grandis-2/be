@@ -175,7 +175,7 @@ public class PreorderAcceptService {
     /**
      * 회차 캐시가 회차 없음 · 오픈 전이라 하면 회차를 잠그지 않고 판정한다 — 오픈 직전에 몰린 접수가 트랜잭션을 열지 않게.
      * 캐시는 회차가 바뀌면 커밋 뒤 비우므로 비우기를 놓쳤을 때만 수명만큼 옛 판정이다.
-     * 그 밖(접수 중 · 마감, 또는 판정을 지나면)은 접수 트랜잭션이 회차 행으로 판정하고 순번 발급 조건이 마지막으로 본다.
+     * 그 밖(접수 중 · 마감, 또는 판정을 지나면)은 접수 트랜잭션이 회차 행으로 판정하고 잠근 뒤 마지막으로 본다.
      */
     private AcceptResult acceptOrResolve(AcceptCommand command) {
         Optional<ProductCatalog> product = catalogReader.findProduct(command.productId());

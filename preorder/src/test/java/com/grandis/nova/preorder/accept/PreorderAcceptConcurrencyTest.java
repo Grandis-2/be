@@ -411,7 +411,7 @@ class PreorderAcceptConcurrencyTest {
     }
 
     /**
-     * 판정을 지난 접수가 순번 발급에서 회차 잠금을 기다리는 동안 회차가 닫히면, 잠금을 얻은 순번 발급이 마감을 다시 보고 거절한다 —
+     * 접수가 회차 잠금을 기다리는 동안 판매 중지가 지금 시각으로 닫으면, 잠근 뒤의 시각으로 판정해 마감으로 거절한다.
      * 순번을 쓰지 않고, 앞서 넣은 예약 · 작업도 롤백돼 남지 않는다.
      */
     @Test
@@ -424,9 +424,13 @@ class PreorderAcceptConcurrencyTest {
             waiting = CompletableFuture.supplyAsync(
                     () -> outcomeUnchecked(() -> acceptByCustomer(customerId, "closing-key")));
             await().atMost(Duration.ofSeconds(10)).until(() -> bulkheadEntered() - enteredBefore == 1);
-            // 넣기를 마치고 순번 발급에서 기다릴 시간
-            Thread.sleep(300);
-            lock.commitClosing(Instant.now().minusSeconds(1));
+            // 넣기를 마치고 회차 잠금에서 기다릴 때까지
+            await().atMost(Duration.ofSeconds(10)).until(() -> jdbcTemplate.queryForObject("""
+                    SELECT COUNT(*) FROM information_schema.PROCESSLIST
+                     WHERE ID <> CONNECTION_ID() AND INFO LIKE '%preorder_campaigns%for update%'
+                    """, Integer.class) > 0);
+            // 판매 중지처럼 지금 시각으로 닫는다 — 접수가 잠그기 전에 잡은 시각보다 늦다
+            lock.commitClosing(Instant.now());
         }
 
         assertThat(waiting.get(30, TimeUnit.SECONDS).error()).isEqualTo(PreorderErrorCode.SALE_CLOSED);
