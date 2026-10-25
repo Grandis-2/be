@@ -156,6 +156,30 @@ class JpaOrderStore implements OrderReader, OrderWriter {
     }
 
     @Override
+    public Optional<Instant> findAutoRefundCompletedAt(UUID orderId) {
+        return orders.findAutoRefundCompletedAt(orderId);
+    }
+
+    @Override
+    public List<Order> findRefundStuckOrders(Instant staleBefore, int limit) {
+        return orders.findRefundStuck(staleBefore, Limit.of(limit)).stream().map(OrderMapper::toDomain).toList();
+    }
+
+    @Override
+    public int markRefundRetried(UUID orderId, Instant requestedAt, Instant now) {
+        int updated = orders.markRefundRetried(orderId, requestedAt, now);
+        entityManager.detach(entityManager.getReference(OrderJpaEntity.class, orderId));
+        return updated;
+    }
+
+    @Override
+    public int markAutoRefundCompleted(UUID orderId, Instant now) {
+        int updated = orders.markAutoRefundCompleted(orderId, now);
+        entityManager.detach(entityManager.getReference(OrderJpaEntity.class, orderId));
+        return updated;
+    }
+
+    @Override
     public int markRefundFailed(UUID orderId, Instant now) {
         int updated = orders.markRefundFailed(orderId, now);
         entityManager.detach(entityManager.getReference(OrderJpaEntity.class, orderId));

@@ -107,6 +107,7 @@ class HttpClientConfigTest {
                 .withPropertyValues(group("payment-confirm", baseUrl))
                 .withPropertyValues(group("payment", baseUrl))
                 .withPropertyValues(group("payment-admin", baseUrl))
+                .withPropertyValues(group("payment-refund-admin", baseUrl))
                 .withPropertyValues(group("preorder", baseUrl))
                 .withPropertyValues(group("catalog", baseUrl))
                 .withPropertyValues(group("member", baseUrl));

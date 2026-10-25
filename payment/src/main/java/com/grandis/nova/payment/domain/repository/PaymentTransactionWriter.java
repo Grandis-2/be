@@ -102,4 +102,10 @@ public interface PaymentTransactionWriter {
      * 리스를 leaseFor 로 새로 잡고 마지막 오류를 지운다 — 새 키 전송이 리스 안에 들고, 교체 뒤 멈추면 다음 작업자가 같은 키로 이어 간다.
      */
     int rotateIdempotencyKey(UUID transactionId, LeaseToken lease, IdempotencyKey key, Duration leaseFor);
+
+    /**
+     * 관리자 조치: 에스컬레이션된 PROCESSING 의 리스를 넘겨받는다. 리스가 끝났고 표식이 읽은 것과 같을 때만이다 — 워커는 에스컬레이션된 행을
+     * 집지 않고, 두 관리자가 함께 해도 한쪽만 1행이다. 에스컬레이션 표식은 그대로 둔다(조치 뒤에도 사람이 봤다는 기록이 남는다).
+     */
+    int takeOver(UUID transactionId, LeaseToken seenLease, LeaseToken lease, Duration leaseFor);
 }

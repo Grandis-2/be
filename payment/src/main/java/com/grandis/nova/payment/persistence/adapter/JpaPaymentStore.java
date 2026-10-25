@@ -149,6 +149,12 @@ class JpaPaymentStore implements PaymentTransactionReader, PaymentTransactionWri
     }
 
     @Override
+    public int takeOver(UUID transactionId, LeaseToken seenLease, LeaseToken lease, Duration leaseFor) {
+        return detachAfter(transactionId, transactions.takeOver(transactionId,
+                seenLease == null ? null : seenLease.value(), lease.value(), micros(leaseFor)));
+    }
+
+    @Override
     public List<PaymentTransaction> findExpirableCaptures(Duration openedFor, int limit) {
         return transactions.findExpirableCaptures(micros(openedFor), limit).stream()
                 .map(PaymentMapper::toDomain).toList();

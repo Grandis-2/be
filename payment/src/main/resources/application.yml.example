@@ -58,6 +58,10 @@ logging:
 
 nova:
   payment:
+    # 관리자 환불 조치(다시 보내기 · 직접 환불 기록)의 인스턴스당 동시 수. 조치마다 웹 스레드가 결제사 조회를 최대 약 63초 기다린다 —
+    # 넘으면 기다리지 않고 503 REFUND_PROVIDER_UNAVAILABLE 로 거절한다. 기본 2(RefundAdmin)
+    # refund-admin:
+    #   max-concurrent: 2
     toss:
       # 필수(없으면 기동 실패). 환경 변수 · 비밀 저장소로만 준다 — 이 파일 · 저장소에 값을 적지 않는다
       secret-key: ${TOSS_SECRET_KEY}

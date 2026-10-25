@@ -40,6 +40,15 @@ public interface OrderReader {
     /** 결과를 모른 채 취소한 주문의 늦은 승인을 자동 환불하라고 요청한 시각. 요청하지 않았으면 비어 있다. */
     Optional<Instant> findAutoRefundRequestedAt(UUID orderId);
 
+    /** 그 자동 환불이 끝난 시각. 끝나지 않았거나 요청하지 않았으면 비어 있다. */
+    Optional<Instant> findAutoRefundCompletedAt(UUID orderId);
+
+    /**
+     * 환불이 멈췄을 수 있는 주문(관리자 목록, 오래 바뀌지 않은 것부터): 취소 중인데 환불이 확정 실패했거나 staleBefore 뒤로 바뀌지 않았다 ·
+     * 자동 환불을 요청했는데 끝나지 않았고 확정 실패했거나 staleBefore 보다 앞서 요청했다.
+     */
+    List<Order> findRefundStuckOrders(Instant staleBefore, int limit);
+
     /** 예약의 주문. 예약당 주문은 평생 하나라(uq_order_preorder) 0~1건이다. */
     Optional<Order> findByPreorderId(UUID preorderId);
 

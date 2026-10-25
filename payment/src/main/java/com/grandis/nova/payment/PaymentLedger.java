@@ -9,6 +9,7 @@ import com.grandis.nova.payment.domain.exception.PaymentAlreadyRefundedException
 import com.grandis.nova.payment.domain.exception.PaymentAmountMismatchException;
 import com.grandis.nova.payment.domain.exception.PaymentTargetMismatchException;
 import com.grandis.nova.payment.domain.exception.RefundFailedException;
+import com.grandis.nova.payment.domain.exception.RefundStateChangedException;
 import com.grandis.nova.payment.domain.model.Outcome;
 import com.grandis.nova.payment.domain.model.Payment;
 import com.grandis.nova.payment.domain.model.PaymentTransaction;
@@ -94,6 +95,47 @@ public class PaymentLedger {
             throw new RefundFailedException(target);
         }
         return writer.insert(PaymentTransaction.openRefund(payment, clock.instant()));
+    }
+
+    /**
+     * 관리자 조치로 확정 실패한 환불을 다시 연다: 새 REFUND(PENDING, 새 멱등 키). 자동 경로({@link #openRefund})는 확정 실패 뒤 열지 않는다
+     * (결정 33) — 이것은 사람이 원인을 확인한 뒤의 길이다. 같은 행을 되살리지 않는 것은 결제사가 오류 응답도 멱등 키에 저장해, 같은 키로는
+     * 같은 거절만 돌아오기 때문이다. {@link #openRefund} 와 같이 결제 행을 잠그고 판정한다.
+     *
+     * @param expectedFailedId 관리자가 본 마지막 환불. 지금도 마지막이고 확정 실패여야 한다
+     * @throws IllegalStateException           대상에 결제가 없다
+     * @throws PaymentAlreadyRefundedException 이미 환불됐다
+     * @throws RefundStateChangedException     마지막 환불이 본 것과 다르거나 확정 실패가 아니다
+     */
+    public PaymentTransaction reopenRefund(PaymentTarget target, UUID expectedFailedId) {
+        Payment payment = paymentReader.lockPaymentByTarget(target)
+                .orElseThrow(() -> new IllegalStateException("환불할 결제가 없다: " + target));
+        if (payment.status() == PaymentStatus.REFUNDED) {
+            throw new PaymentAlreadyRefundedException(target);
+        }
+        boolean expectedFailed = lastRefund(target)
+                .filter(last -> last.id().equals(expectedFailedId) && last.status() == TransactionStatus.FAILED)
+                .isPresent();
+        if (!expectedFailed) {
+            throw new RefundStateChangedException(target, expectedFailedId);
+        }
+        return writer.insert(PaymentTransaction.openRefund(payment, clock.instant()));
+    }
+
+    /**
+     * 관리자 조치로 에스컬레이션된 거래의 리스를 넘겨받는다. 리스가 끝났고 읽은 표식과 같을 때만 — 워커는 에스컬레이션된 행을 집지 않고, 두
+     * 조치가 겹치면 한쪽만 된다. 넘겨받은 쪽이 같은 트랜잭션에서 결과를 반영한다({@link #resolve} · {@link #reopenRefund}).
+     * 대상의 결제 행을 먼저 잠근다 — 잠금 순서는 결제 행 → 거래 행이다({@link #openRefund} · {@link #resolve} 와 같다).
+     *
+     * @return 리스를 쥔 거래. 에스컬레이션된 PROCESSING 이 아니거나 리스가 아직 살아 있거나 그사이 바뀌었으면 empty
+     */
+    public Optional<ClaimedTransaction> takeOverEscalated(PaymentTransaction seen) {
+        if (seen.status() != TransactionStatus.PROCESSING || !seen.isEscalated()) {
+            return Optional.empty();
+        }
+        paymentReader.lockPaymentByTarget(seen.target());
+        int updated = writer.takeOver(seen.id(), seen.leaseToken(), LeaseToken.issue(), PaymentTransaction.LEASE);
+        return claimed(seen.id(), updated);
     }
 
     /**
@@ -256,13 +298,16 @@ public class PaymentLedger {
         return claimed(held.id(), updated).orElseThrow(() -> new LeaseLostException(held.id()));
     }
 
-    /** 대상의 마지막 REFUND(만든 순)가 FAILED 인가. 대상별 거래는 몇 행이라 다 읽는다. */
+    /** 대상의 마지막 REFUND(만든 순)가 FAILED 인가. */
     private boolean lastRefundFailed(PaymentTarget target) {
+        return lastRefund(target).map(last -> last.status() == TransactionStatus.FAILED).orElse(false);
+    }
+
+    /** 대상의 마지막 REFUND(만든 순). 대상별 거래는 몇 행이라 다 읽는다. */
+    private Optional<PaymentTransaction> lastRefund(PaymentTarget target) {
         return reader.findTransactionsByTarget(target).stream()
                 .filter(transaction -> transaction.type() == TransactionType.REFUND)
-                .reduce((earlier, later) -> later)
-                .map(last -> last.status() == TransactionStatus.FAILED)
-                .orElse(false);
+                .reduce((earlier, later) -> later);
     }
 
     private Optional<ClaimedTransaction> claimed(UUID transactionId, int updated) {

@@ -25,6 +25,8 @@ public class SecurityConfig {
         return support.build(http, authorize -> authorize
                 // 관리자 DLQ API. order 가 관리자 토큰을 그대로 싣는다 — 회원 토큰이 내부 경로로 들어와도 열리지 않게 역할까지 본다
                 .requestMatchers("/internal/dead-letters", "/internal/dead-letters/**").hasRole("ADMIN")
+                // 관리자 환불 조치 API. 같은 이유로 역할까지 본다
+                .requestMatchers("/internal/refund-issues", "/internal/refunds/**").hasRole("ADMIN")
                 // 서비스 간 내부 API. 호출자(order · draw)가 사용자 토큰을 Authorization: Bearer 로 그대로 싣는다 —
                 // 여기서는 토큰만 검증하고, 대상의 주인 · 결제할 수 있는 상태인지는 호출자가 확인한다.
                 .requestMatchers("/internal/**").authenticated()

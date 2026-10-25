@@ -31,8 +31,9 @@ import java.util.UUID;
  * 순번이 없으면(구버전이 취소 중으로 바꾼 주문) 알리지 않고, 그 결과는 다시 받은 요청이 적는다({@link SettlePreorderCancelService}).
  *
  * 늦은 승인의 자동 환불(결과를 모른 채 취소한 장바구니 · 바로 구매 주문, PaymentResults)은 주문이 이미 취소라 상태를 바꾸지 않는다 — 완료면
- * 기록만, 확정 실패면 환불 실패 시각과 이력을 남기고 ERROR · 지표({@link PaymentAttention})로 경보한다. 돈이 돌아가지 않은 채 주문은 끝나
- * 있어 사람이 해소해야 한다.
+ * 완료 시각과 이력(REFUND_COMPLETED, 취소 → 취소)을 한 번 남기고, 확정 실패면 환불 실패 시각과 이력을 남기고 ERROR · 지표
+ * ({@link PaymentAttention})로 경보한다. 돈이 돌아가지 않은 채 주문은 끝나 있어 사람이 해소한다 — 관리자가 다시 보내거나 직접 환불을 기록하면
+ * 그 완료가 여기로 와 실패 표시가 풀린다.
  *
  * 그 밖의 환불은 취소 중일 때만 요청되고 취소 중은 환불 완료로만 끝나므로, 완료가 왔는데 주문이 취소 중도 취소됨도 아니면 버그 · 수동 수정의
  * 신호다 — ERROR 로 경보하고 예외로 올리지 않는다(다시 받아도 같고 DLQ 만 채운다). 돈의 사실은 payment 쪽(payments REFUNDED)에 있다.
@@ -78,7 +79,10 @@ public class RefundResults {
         Refunded refunded = writeTransaction.execute(status -> {
             OrderTransition transition =
                     ledger.fire(order.id(), OrderTrigger.REFUND_COMPLETED, CANCELING, REFUND_COMPLETED);
-            return new Refunded(transition, transition.applied() && reportCanceled(order));
+            if (!transition.applied() && transition.status() == OrderStatus.CANCELED) {
+                return new Refunded(transition, false, ledger.noteAutoRefundCompleted(order.id(), REFUND_COMPLETED));
+            }
+            return new Refunded(transition, transition.applied() && reportCanceled(order), false);
         });
         OrderTransition transition = refunded.transition();
         if (!transition.applied() && transition.status() != OrderStatus.CANCELED) {
@@ -86,7 +90,7 @@ public class RefundResults {
             return;
         }
         if (!transition.applied() && autoRefunded(order.id())) {
-            log.info("환불 결과 반영 — 늦은 승인의 자동 환불 완료 orderId={}", order.id());
+            log.info("환불 결과 반영 — 늦은 승인의 자동 환불 완료 orderId={} recorded={}", order.id(), refunded.autoRefundCompleted());
             return;
         }
         log.info("환불 결과 반영 orderId={} result=REFUNDED applied={} status={}", order.id(), transition.applied(),
@@ -127,7 +131,7 @@ public class RefundResults {
         return orderReader.findAutoRefundRequestedAt(orderId).isPresent();
     }
 
-    /** 환불 완료 트랜잭션의 결과: 원장의 전이와, 그 안에서 preorder 에 취소 결과를 적었는지. */
-    private record Refunded(OrderTransition transition, boolean preorderReported) {
+    /** 환불 완료 트랜잭션의 결과: 원장의 전이와, 그 안에서 preorder 에 취소 결과를 적었는지 · 자동 환불 완료를 적었는지. */
+    private record Refunded(OrderTransition transition, boolean preorderReported, boolean autoRefundCompleted) {
     }
 }
