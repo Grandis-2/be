@@ -46,6 +46,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.times;
@@ -165,7 +166,7 @@ class CampaignCancelServiceTest {
         assertThat(closesAt()).as("다시 받아도 첫 마감 시각을 유지한다").isEqualTo(closedAt);
     }
 
-    /** 접수가 회차를 먼저 잠그면 판매 중지는 그 커밋을 기다렸다가, 방금 들어온 예약까지 취소한다. */
+    /** 접수가 순번을 받아 회차를 먼저 잠그면 판매 중지는 그 커밋을 기다렸다가, 방금 들어온 예약까지 취소한다. */
     @Test
     void 접수가_회차를_먼저_잠그면_판매_중지는_기다렸다가_그_예약까지_취소한다() throws Exception {
         accepts.stubCatalog(product);
@@ -177,7 +178,7 @@ class CampaignCancelServiceTest {
             acceptLocked.countDown();
             release.await(10, TimeUnit.SECONDS);
             return invocation.callRealMethod();
-        }).given(AopTestUtils.<PreorderLedger>getUltimateTargetObject(ledger)).accept(any(), any(), any());
+        }).given(AopTestUtils.<PreorderLedger>getUltimateTargetObject(ledger)).place(any(), any(), anyLong());
 
         try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
             Future<AcceptResult> accepting = executor.submit(() -> accepts.submit(customer, product));

@@ -22,7 +22,7 @@ import java.util.UUID;
  * 사전예약 회차. 사전예약 상품당 1행이고 상품 id 가 곧 PK 다(자기 id 를 만들지 않는다). 그래서 BaseEntity 대신
  * 생성 · 변경 시각만 직접 둔다.
  *
- * 접수는 이 행을 잠근다({@link PreorderCampaignRepository#findForUpdate}).
+ * 접수는 이 행을 잠근다 — 순번 카운터를 올리는 조건부 UPDATE({@link QueuePositionCounter})가 커밋까지 잠금을 쥔다.
  * 순번 카운터가 모집 일정과 같은 행에 있어서 접수 트랜잭션이 한 번만 잠그면 되고,
  * 순번의 유일성은 이 잠금에서 나온다. 상품 정보 수정은 products 를 바꾸므로 접수와 서로 막지 않는다.
  */
@@ -81,7 +81,8 @@ public class PreorderCampaign {
     @Column(length = 20)
     private ProductStatus productStatus;
 
-    @Column(nullable = false)
+    /** {@link QueuePositionCounter} 만 올린다. 이 객체로 회차를 고쳐도 카운터를 읽은 값으로 다시 쓰지 않게 updatable = false 다. */
+    @Column(nullable = false, updatable = false)
     private long nextQueuePosition;
 
     private Instant openNotifiedAt;
@@ -210,16 +211,6 @@ public class PreorderCampaign {
     /** 오픈 뒤에는 일정 · 배송 차수를 바꿀 수 없다. */
     public boolean isOpened(Instant now) {
         return !now.isBefore(opensAt);
-    }
-
-    /**
-     * 다음 순번을 발급하고 카운터를 올린다. 반드시 {@link PreorderCampaignRepository#findForUpdate} 로
-     * 잠근 행에서 부른다 — 잠그지 않은 행에서 부르면 두 트랜잭션이 같은 번호를 낸다.
-     */
-    public long issueQueuePosition() {
-        long position = nextQueuePosition;
-        nextQueuePosition = position + 1;
-        return position;
     }
 
     /** 다른 모듈에 넘기는 모집 일정. */

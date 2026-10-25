@@ -2,6 +2,7 @@ package com.grandis.nova.preorder.accept.application;
 
 import com.grandis.nova.preorder.admission.AdmissionTicket;
 import com.grandis.nova.preorder.campaign.Campaigns;
+import com.grandis.nova.preorder.campaign.domain.QueuePositionCounter;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.integration.catalog.ProductCatalog;
 import com.grandis.nova.preorder.preorder.EventActor;
@@ -14,23 +15,31 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 
 /**
- * 접수 트랜잭션은 처음부터 회차 행을 잠그므로 커밋 전까지의 문장 수가 곧 잠금 구간의 왕복 수다. 세션의 Questions 로 센다
- * (이 트랜잭션의 커넥션에서 보낸 문장 수, 재는 SHOW 자신 포함). 커밋 때 나갈 INSERT 는 flush 로 먼저 내보낸다.
+ * 접수 트랜잭션은 다른 쓰기를 모두 마친 뒤 순번 발급 문장에서 회차 행을 잠그므로, 그 문장부터 커밋 전까지의 문장 수가 잠금 구간의
+ * 왕복 수다(여기에 COMMIT 하나가 더해진다). 세션의 Questions 로 센다(이 트랜잭션의 커넥션에서 보낸 문장 수, 재는 SHOW 자신 포함).
+ * 커밋 때 나갈 쓰기가 남았으면 flush 가 내보내 잠금 구간에 세어진다.
  */
 @PreorderIntegrationTest
 class AcceptLockStatementsTest {
 
-    /** 회차 잠금 · 같은 접수 키와 마지막 접수 · 예약 · 순번 카운터 · 아웃박스 · 이력 · 작업. 차수는 원천 캐시에서 고른다. */
-    static final long STATEMENTS = 7;
+    /** 회차 행 읽기(판정) · 같은 접수 키와 마지막 접수 · 예약 · 이력 · 작업 · 아웃박스. */
+    static final long BEFORE_LOCK = 6;
+
+    /** 순번 발급(회차 잠금) · 예약에 순번 채우기. 차수는 원천 캐시에서 고른다. */
+    static final long LOCKED = 2;
 
     @Autowired
     PreorderAcceptTransaction acceptTransaction;
@@ -47,11 +56,14 @@ class AcceptLockStatementsTest {
     @Autowired
     Campaigns campaigns;
 
+    @MockitoSpyBean
+    QueuePositionCounter counter;
+
     @MockitoBean
     CatalogClient catalogClient;
 
     @Test
-    void 접수_한_건의_잠금_구간은_문장_일곱이다() {
+    void 접수_한_건은_다른_쓰기를_마친_뒤_잠그고_잠금_구간은_문장_둘이다() {
         ShopFixtures fixtures = new ShopFixtures(jdbcTemplate);
         PreorderProduct product = fixtures.openPreorderProduct();
         Optional<ProductCatalog> catalog = Optional.of(CatalogStubs.preorderProduct(product.productId(),
@@ -59,17 +71,24 @@ class AcceptLockStatementsTest {
         accept(product, catalog, fixtures.customer());
 
         UUID customerId = fixtures.customer();
-        // 접수 서비스는 잠그기 전에 원천 캐시를 읽는다(잠금 전 판정) — 그 뒤의 접수를 잰다
+        // 순번의 차수는 오픈 뒤에 읽어 둔 원천 캐시에서 고른다 — 캐시를 채운 뒤의 접수를 잰다
         campaigns.findCached(product.productId());
+        AtomicLong locking = new AtomicLong();
+        doAnswer(invocation -> {
+            locking.set(questions());
+            return invocation.callRealMethod();
+        }).when(counter).issue(any(), any());
 
-        long statements = transactionTemplate.execute(status -> {
+        long[] statements = transactionTemplate.execute(status -> {
             long before = questions();
             accept(product, catalog, customerId);
             entityManager.flush();
-            return questions() - before - 1;
+            long after = questions();
+            return new long[]{locking.get() - before - 1, after - locking.get() - 1};
         });
 
-        assertThat(statements).isEqualTo(STATEMENTS);
+        assertThat(statements[0]).as("잠그기 전").isEqualTo(BEFORE_LOCK);
+        assertThat(statements[1]).as("잠금 구간").isEqualTo(LOCKED);
     }
 
     private void accept(PreorderProduct product, Optional<ProductCatalog> catalog, UUID customerId) {

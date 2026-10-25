@@ -5,6 +5,7 @@ import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.preorder.campaign.application.PreorderCampaignAdminService;
+import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository;
 import com.grandis.nova.preorder.integration.catalog.CatalogClient;
 import com.grandis.nova.preorder.support.CatalogStubs;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
@@ -45,6 +46,9 @@ class CampaignChangeEventTest {
 
     @Autowired
     Campaigns campaigns;
+
+    @Autowired
+    PreorderCampaignRepository campaignRepository;
 
     @Autowired
     CampaignRepublisher republisher;
@@ -240,7 +244,7 @@ class CampaignChangeEventTest {
 
         try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
             Future<?> holding = executor.submit(() -> transactionTemplate.executeWithoutResult(status -> {
-                campaigns.lockForAccept(product.productId());
+                campaignRepository.findForUpdate(product.productId());
                 locked.countDown();
                 awaitQuietly(release);
             }));

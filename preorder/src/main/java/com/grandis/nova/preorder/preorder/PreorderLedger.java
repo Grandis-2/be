@@ -1,5 +1,6 @@
 package com.grandis.nova.preorder.preorder;
 
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.preorder.preorder.domain.PaymentAnomalyStore;
 import com.grandis.nova.preorder.preorder.domain.Preorder;
 import com.grandis.nova.preorder.preorder.domain.PreorderEvent;
@@ -46,15 +47,34 @@ public class PreorderLedger {
     }
 
     /**
-     * 새 예약과 첫 이력(번호 1, from 없음)을 저장한다.
+     * 새 예약(순번 · 차수 없음)과 첫 이력(번호 1, from 없음)을 저장하고 예약 id 를 돌려준다. 순번 · 차수는 같은 트랜잭션에서
+     * {@link #place} 로 채운다 — 비운 채 커밋하지 않는다.
      * UNIQUE 충돌(같은 모델 활성 예약 · 쓴 입장권 · 같은 접수 키)은 여기서 삼키지 않고 그대로 올려 보낸다 —
      * 어느 제약인지에 따라 응답이 달라서 접수 유스케이스가 판정한다.
      */
-    public PreorderSnapshot accept(NewPreorder draft, EventActor actor, String reason) {
+    public UUID accept(NewPreorder draft, EventActor actor, String reason) {
         actor.requireReason(reason);
         Preorder preorder = preorders.saveAndFlush(new Preorder(draft));
         entityManager.persist(new PreorderEvent(preorder.getId(), PreorderEvent.FIRST_SEQUENCE,
                 null, PreorderStatus.PENDING_SYNC, actor, reason, clock.instant()));
+        return preorder.getId();
+    }
+
+    /**
+     * {@link #accept} 로 넣은 예약에 회차가 발급한 순번 · 차수를 채운다(아직 비어 있는 행만). 저장소 쿼리로 쓴다 — 차수 외래 키 ·
+     * 순번 UNIQUE 위반이 DataIntegrityViolationException 으로 바뀌고 제약 이름이 남아 접수 유스케이스가 판정한다.
+     * 넣은 객체는 영속성 컨텍스트에 있어 다시 읽지 않는다.
+     *
+     * @throws IllegalStateException 채울 예약이 없다(같은 트랜잭션에서 넣지 않았거나 이미 채웠다)
+     */
+    public PreorderSnapshot place(UUID preorderId, UUID shipmentBatchId, long queuePosition) {
+        int placed = preorders.place(UuidBinary.toBytes(preorderId), UuidBinary.toBytes(shipmentBatchId),
+                queuePosition);
+        Preorder preorder = entityManager.find(Preorder.class, preorderId);
+        if (placed != 1 || preorder == null) {
+            throw new IllegalStateException("순번을 채울 예약이 없다: preorderId=" + preorderId);
+        }
+        preorder.place(shipmentBatchId, queuePosition);
         return preorder.toSnapshot();
     }
 

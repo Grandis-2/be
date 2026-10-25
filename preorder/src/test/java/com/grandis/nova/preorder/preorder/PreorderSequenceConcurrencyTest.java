@@ -44,7 +44,8 @@ class PreorderSequenceConcurrencyTest {
         ShopFixtures fixtures = new ShopFixtures(jdbcTemplate);
         PreorderProduct product = fixtures.openPreorderProduct();
         List<UUID> ids = LongStream.rangeClosed(1, PREORDERS).mapToObj(position -> transactionTemplate.execute(status -> {
-            UUID id = ledger.accept(draft(fixtures.customer(), product, position), EventActor.USER, null).id();
+            UUID id = ledger.accept(draft(fixtures.customer(), product), EventActor.USER, null);
+            ledger.place(id, product.firstBatchId(), position);
             ledger.fire(id, new RegisterConfirmed("EXT-" + ShopFixtures.unique()));
             return id;
         })).toList();
@@ -69,9 +70,9 @@ class PreorderSequenceConcurrencyTest {
         }
     }
 
-    private static NewPreorder draft(UUID customer, PreorderProduct product, long position) {
+    private static NewPreorder draft(UUID customer, PreorderProduct product) {
         return new NewPreorder(ShopFixtures.unique(), customer, product.productId(), product.optionId(),
-                product.firstBatchId(), position, ShopFixtures.unique().replace("-", "") + "00000000000000000000000000000000",
+                ShopFixtures.unique().replace("-", "") + "00000000000000000000000000000000",
                 ShopFixtures.unique(), "Nova 1", "블랙 / 256GB", new BigDecimal("1250000"));
     }
 }

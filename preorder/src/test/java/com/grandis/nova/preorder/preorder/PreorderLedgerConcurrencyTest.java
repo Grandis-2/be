@@ -44,7 +44,7 @@ class PreorderLedgerConcurrencyTest {
         int requests = 5;
 
         List<Outcome<UUID>> outcomes = Concurrently.run(requests, i -> () -> transactionTemplate.execute(status ->
-                ledger.accept(draft(product, customerId, i + 1), EventActor.USER, null).id()));
+                place(ledger.accept(draft(product, customerId), EventActor.USER, null), product, i + 1)));
 
         assertThat(outcomes.stream().filter(Outcome::succeeded)).hasSize(1);
         assertThat(outcomes.stream().filter(o -> !o.succeeded()))
@@ -63,9 +63,13 @@ class PreorderLedgerConcurrencyTest {
                 .isEqualTo(1);
     }
 
-    private static NewPreorder draft(PreorderProduct product, UUID customerId, long position) {
+    private static NewPreorder draft(PreorderProduct product, UUID customerId) {
         return new NewPreorder(ShopFixtures.unique(), customerId, product.productId(), product.optionId(),
-                product.firstBatchId(), position, null, ShopFixtures.unique(),
-                "Nova 1", "블랙 / 256GB", new BigDecimal("1250000"));
+                null, ShopFixtures.unique(), "Nova 1", "블랙 / 256GB", new BigDecimal("1250000"));
+    }
+
+    /** 접수처럼 순번 · 첫 차수를 채운다. */
+    private UUID place(UUID preorderId, PreorderProduct product, long position) {
+        return ledger.place(preorderId, product.firstBatchId(), position).id();
     }
 }

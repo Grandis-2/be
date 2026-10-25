@@ -64,6 +64,18 @@ public class ShopFixtures {
         return new PreorderProduct(productId, optionId, firstBatchId, lastBatchId);
     }
 
+    /**
+     * 차수를 새 id 로 다시 넣는다(구간은 같다) — 캐시 비우기를 놓친 채 차수가 교체된 상황. 예약이 아직 없는 상품에만 쓴다.
+     * 새 첫 차수의 id 를 돌려준다.
+     */
+    public UUID reissueBatches(PreorderProduct product) {
+        jdbcTemplate.update("DELETE FROM shipment_batches WHERE product_id = ?",
+                (Object) UuidBinary.toBytes(product.productId()));
+        UUID firstBatchId = batch(product.productId(), 1, 1, FIRST_BATCH_LAST_POSITION);
+        batch(product.productId(), 2, FIRST_BATCH_LAST_POSITION + 1, null);
+        return firstBatchId;
+    }
+
     public UUID product(String saleMode, String status) {
         UUID categoryId = insert("""
                 INSERT INTO categories (id, name, created_at, updated_at)

@@ -4,6 +4,7 @@ import com.grandis.nova.common.testing.Concurrently.Outcome;
 import com.grandis.nova.common.testing.Concurrently;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaign;
 import com.grandis.nova.preorder.campaign.domain.PreorderCampaignRepository;
+import com.grandis.nova.preorder.campaign.domain.QueuePositionCounter;
 import com.grandis.nova.preorder.support.PreorderIntegrationTest;
 import com.grandis.nova.preorder.support.ShopFixtures.PreorderProduct;
 import com.grandis.nova.preorder.support.ShopFixtures;
@@ -33,6 +34,9 @@ class PreorderCampaignRepositoryTest {
     PreorderCampaignRepository campaigns;
 
     @Autowired
+    QueuePositionCounter counter;
+
+    @Autowired
     TransactionTemplate transactionTemplate;
 
     @Autowired
@@ -51,7 +55,7 @@ class PreorderCampaignRepositoryTest {
         int requests = 20;
 
         List<Outcome<Long>> outcomes = Concurrently.run(requests, i -> () -> transactionTemplate.execute(status ->
-                campaigns.findForUpdate(product.productId()).orElseThrow().issueQueuePosition()));
+                counter.issue(product.productId(), Instant.now()).orElseThrow()));
 
         assertThat(outcomes).allMatch(Outcome::succeeded);
         assertThat(outcomes.stream().map(Outcome::value).toList()).containsExactlyInAnyOrderElementsOf(

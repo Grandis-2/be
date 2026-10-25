@@ -17,6 +17,7 @@ import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -161,12 +162,22 @@ public class PreorderAcceptService {
         }
     }
 
-    /**
-     * 회차 캐시가 회차 없음 · 오픈 전이라 하면 회차를 잠그지 않고 판정한다 — 오픈 직전에 몰린 접수가 잠금 줄에
-     * 서서 커넥션을 오래 쥐지 않게. 캐시는 회차가 바뀌면 커밋 뒤 비우므로 비우기를 놓쳤을 때만 수명만큼 옛 판정이다.
-     * 그 밖(접수 중 · 마감, 또는 판정을 지나면)은 잠근 뒤 회차 행으로 판정한다.
-     */
     private AcceptResult accept(AcceptCommand command) {
+        try {
+            return acceptOrResolve(command);
+        } catch (PessimisticLockingFailureException e) {
+            // 교착 · 잠금 대기 시한 — 트랜잭션은 롤백돼 순번도 쓰지 않았다. 같은 접수 키로 다시 보내면 한 번만 접수된다
+            log.warn("접수가 잠금을 얻지 못해 다시 보내게 한다 productId={}: {}", command.productId(), e.toString());
+            throw bulkhead.retryLater();
+        }
+    }
+
+    /**
+     * 회차 캐시가 회차 없음 · 오픈 전이라 하면 회차를 잠그지 않고 판정한다 — 오픈 직전에 몰린 접수가 트랜잭션을 열지 않게.
+     * 캐시는 회차가 바뀌면 커밋 뒤 비우므로 비우기를 놓쳤을 때만 수명만큼 옛 판정이다.
+     * 그 밖(접수 중 · 마감, 또는 판정을 지나면)은 접수 트랜잭션이 회차 행으로 판정하고 순번 발급 조건이 마지막으로 본다.
+     */
+    private AcceptResult acceptOrResolve(AcceptCommand command) {
         Optional<ProductCatalog> product = catalogReader.findProduct(command.productId());
         try {
             // 캐시 미스 · 잠금 전 판정의 DB 읽기도 격벽 몫이다 — 허가 하나로 판정부터 접수까지 한다
