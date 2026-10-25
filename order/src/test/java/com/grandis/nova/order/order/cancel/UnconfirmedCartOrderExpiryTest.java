@@ -9,6 +9,7 @@ import com.grandis.nova.order.client.catalog.CatalogOptions;
 import com.grandis.nova.order.order.OrderLedger;
 import com.grandis.nova.order.order.domain.model.Order;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
+import com.grandis.nova.order.order.domain.repository.PaymentUnconfirmedCounts;
 import com.grandis.nova.order.order.pay.PaymentResults;
 import com.grandis.nova.order.order.pay.PaymentSettlement;
 import com.grandis.nova.order.order.vo.EventCause;
@@ -112,6 +113,11 @@ class UnconfirmedCartOrderExpiryTest {
         assertThat(column(order, "unconfirmed_provider_order_id", String.class)).isEqualTo("p-stale");
         assertThat(lastEvent(order)).containsEntry("actor", "SYSTEM").containsEntry("reason", "PAYMENT_UNCONFIRMED")
                 .containsEntry("from_status", "AUTHORIZING").containsEntry("to_status", "CANCELED");
+        // 관리자 집계(countPaymentUnconfirmed)는 이 취소가 적은 시각으로 센다. 그 시각부터와 1µs 뒤부터를 한 문장으로 세어 차이를 본다 — 차이는
+        // 정확히 그 마이크로초에 적힌 결제 확인 실패 행이다. 그 뒤의 다른 행(다른 시험의 행 포함)은 양쪽에 같이 들어 상쇄된다
+        Instant canceledAt = orderReader.findById(UUID.fromString(order)).orElseThrow().stockReleasedAt();
+        PaymentUnconfirmedCounts fromCanceledAt = orderReader.countPaymentUnconfirmed(canceledAt.plusNanos(1_000), canceledAt);
+        assertThat(fromCanceledAt.last24h() - fromCanceledAt.last1h()).isEqualTo(1);
         assertThat(reserved(phone)).isZero();
         List<JsonNode> notices = outbox(order, "NOTIFICATION_REQUESTED");
         assertThat(notices).hasSize(1);

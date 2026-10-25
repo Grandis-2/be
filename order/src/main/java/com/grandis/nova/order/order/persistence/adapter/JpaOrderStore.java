@@ -15,6 +15,7 @@ import com.grandis.nova.order.order.domain.repository.ExpiredOrderPosition;
 import com.grandis.nova.order.order.domain.repository.OrderPosition;
 import com.grandis.nova.order.order.domain.repository.OrderReader;
 import com.grandis.nova.order.order.domain.repository.OrderWriter;
+import com.grandis.nova.order.order.domain.repository.PaymentUnconfirmedCounts;
 import com.grandis.nova.order.order.persistence.entity.OrderJpaEntity;
 import com.grandis.nova.order.order.persistence.mapper.OrderMapper;
 import com.grandis.nova.order.order.persistence.repository.OrderEventJpaRepository;
@@ -334,6 +335,12 @@ class JpaOrderStore implements OrderReader, OrderWriter {
         Map<OrderStatus, Long> counts = new EnumMap<>(OrderStatus.class);
         orders.countByStatusOfCustomer(customerId).forEach(row -> counts.put(row.getStatus(), row.getCount()));
         return counts;
+    }
+
+    @Override
+    public PaymentUnconfirmedCounts countPaymentUnconfirmed(Instant since1h, Instant since24h) {
+        OrderJpaRepository.PaymentUnconfirmedRow row = orders.countPaymentUnconfirmed(since1h, since24h);
+        return new PaymentUnconfirmedCounts(row.getLast1h(), row.getLast24h());
     }
 
     /**

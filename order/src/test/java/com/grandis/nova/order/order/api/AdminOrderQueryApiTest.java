@@ -342,6 +342,8 @@ class AdminOrderQueryApiTest {
         assertThat(JsonPath.<Map<String, Object>>read(body, "$.data.byStatus").keySet())
                 .containsExactly(Arrays.stream(OrderStatus.values()).map(Enum::name).toArray(String[]::new));
         assertThat(JsonPath.<Map<String, Integer>>read(body, "$.data.byStatus").values()).allSatisfy(n -> assertThat(n).isNotNegative());
+        assertThat(JsonPath.<Map<String, Integer>>read(body, "$.data.paymentUnconfirmed")).containsOnlyKeys("last1h", "last24h")
+                .allSatisfy((window, n) -> assertThat(n).isNotNegative());
         assertThat(Instant.parse(JsonPath.read(body, "$.data.countedAt"))).isBeforeOrEqualTo(Instant.now());
     }
 
@@ -358,6 +360,7 @@ class AdminOrderQueryApiTest {
         assertThat(byStatus.keySet()).containsExactly(Arrays.stream(OrderStatus.values()).map(Enum::name).toArray(String[]::new));
         assertThat(byStatus.values().stream().mapToInt(Integer::intValue).sum()).isEqualTo(2);
         assertThat(byStatus.get("SHIPPED")).isEqualTo(1);
+        assertThat(JsonPath.<Map<String, Object>>read(body, "$.data")).containsEntry("paymentUnconfirmed", null);
         assertThat(statusCount(UUID.randomUUID(), "SHIPPED")).isZero();
     }
 
